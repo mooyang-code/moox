@@ -30,16 +30,16 @@ func TestRunStorageMaintenanceBinaryDelegatesRepairView(t *testing.T) {
 func TestStorageRemoteArgsAddPathDefaultsAndDefaultToPreview(t *testing.T) {
 	repair := storageMaintenanceActions[0]
 	require.Equal(t, "repair-view", repair.Action)
-	args := storageRemoteArgs(repair, "/data/moox/storage/current", []string{"--space-id", "crypto", "--view-id", "v1"})
+	args := storageRemoteArgs(repair, "/data/moox", []string{"--space-id", "crypto", "--view-id", "v1"})
 	require.Equal(t, []string{
 		"--space-id", "crypto", "--view-id", "v1",
-		"--package-root", "/data/moox/storage/current",
-		"--storage-conf", "/data/moox/storage/current/storage-view/config/storage.yaml",
+		"--storage-conf", "/data/moox/config/storage-primary/storage.yaml",
+		"--view-conf", "/data/moox/config/storage-view/storage.yaml",
 		"--dry-run",
 	}, args, "没有 --yes 时默认预览")
 
-	args = storageRemoteArgs(repair, "/data/moox/storage/current", []string{"--storage-conf=/custom.yaml", "-package-root", "/custom", "--yes"})
-	require.Equal(t, []string{"--storage-conf=/custom.yaml", "-package-root", "/custom", "--yes"}, args, "用户给了的路径与 --yes 不改动")
+	args = storageRemoteArgs(repair, "/data/moox", []string{"--storage-conf=/custom.yaml", "-view-conf", "/custom-view.yaml", "--yes"})
+	require.Equal(t, []string{"--storage-conf=/custom.yaml", "-view-conf", "/custom-view.yaml", "--yes"}, args, "用户给了的路径与 --yes 不改动")
 
 	args = storageRemoteArgs(repair, "/r", []string{"--dry-run"})
 	require.NotContains(t, args[1:], "--dry-run", "已经有 --dry-run 不重复加")
@@ -53,23 +53,9 @@ func TestStorageDeleteViewHasNoImplicitDryRun(t *testing.T) {
 		}
 	}
 	require.Equal(t, "delete-view", deleteView.Action)
-	args := storageRemoteArgs(deleteView, "/data/moox/storage/current", []string{"--view", "crypto/v1"})
+	args := storageRemoteArgs(deleteView, "/data/moox", []string{"--view", "crypto/v1"})
 	require.NotContains(t, args, "--dry-run", "delete-view 没有 --dry-run，不带 --yes 由存储机上的程序拒绝")
-	require.Contains(t, args, "/data/moox/storage/current/storage-primary/var/storage/metadata/storage_metadata.db")
-}
-
-// reset-metadata 与 repair-view 一样补上 --storage-conf：存储机上的程序按它找元数据库。
-func TestStorageResetMetadataAddsStorageConf(t *testing.T) {
-	for _, action := range storageMaintenanceActions {
-		if action.Action != "reset-metadata" {
-			continue
-		}
-		args := storageRemoteArgs(action, "/data/moox/storage/current", []string{"--seed", "/seed.yaml", "--yes"})
-		require.Contains(t, args, "/data/moox/storage/current/storage-view/config/storage.yaml")
-		require.Contains(t, args, "--package-root")
-		return
-	}
-	t.Fatal("没有 reset-metadata 动作")
+	require.Contains(t, args, "/data/moox/data/storage-primary/metadata/storage_metadata.db")
 }
 
 func TestStorageMaintenanceRunsOnStorageHostWithLogScript(t *testing.T) {
@@ -91,7 +77,7 @@ func TestStorageMaintenanceRunsOnStorageHostWithLogScript(t *testing.T) {
 	argv := fake.ran[0]
 	require.Equal(t, []string{"sh", "-c"}, argv[:2])
 	require.Equal(t, storageRemoteScript, argv[2])
-	require.Equal(t, []string{"sh", "/data/moox/storage/maintenance", "repair-view", "/data/moox/storage/current/bin/moox-storage-cli", "repair-view"}, argv[3:8])
+	require.Equal(t, []string{"sh", "/data/moox/logs/storage-maintenance", "repair-view", "/data/moox/bin/moox-storage-cli", "repair-view"}, argv[3:8])
 	require.Contains(t, argv, "--dry-run")
 	require.NotContains(t, argv, "--host", "--host 由 moox-cli 取走，不传给存储机")
 	require.Equal(t, "{\"status\":\"dry_run\"}\n", out.String())

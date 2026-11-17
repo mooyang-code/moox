@@ -2,7 +2,8 @@ package bootstrap
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"time"
+
 	"github.com/mooyang-code/moox/packages/timerjob"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
@@ -12,8 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -21,7 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, runner probe.Runner, hook func(context.Context, domain.Check, domain.CheckResult), syncSystem func(context.Context) (int, error), metricsQuery *monmetrics.QueryService, doctorContext *monitordoctor.Builder, health *healthview.Builder) {
+func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store, doctorContext *monitordoctor.Builder, health *healthview.Builder) {
 	service := s.Service("trpc.moox.monitor.MonitorMgr")
 	if service == nil {
 		log.Warn("MonitorMgr service is not configured, skip register")
@@ -29,24 +28,16 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 	}
 	monitorpb.RegisterMonitorMgrService(service, monitorrpc.New(runtime.Repositories, monitorrpc.Options{
 		InstanceID:    cfg.Instance.InstanceID,
+		StartedAt:     runtime.StartedAt,
 		HostStore:     hostStore,
 		DoctorContext: doctorContext,
 		HealthView:    health,
-		HostWatchdog:  cfg.HostPolicy.Watchdog,
 		Lifecycle:     runtime.life.Load,
+		EvaluationStale: func() string {
+			_, reason := evaluationFresh(runtime, time.Now().UTC())
+			return reason
+		},
 	}))
-}
-
-func buildProbeRunner(cfg *config.Config, gateway *gatewayclient.Client) probe.MultiRunner {
-	runner := probe.DefaultRunner()
-	if cfg == nil {
-		return runner
-	}
-	runner.HTTP.HealthSigner = &probe.HealthSigner{Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey}
-	if gateway != nil {
-		runner.HTTP.Relay = gateway.DialRelay
-	}
-	return runner
 }
 
 func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
@@ -60,7 +51,8 @@ func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, dom
 	}
 }
 
-func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) func(context.Context) (int, error) {
+// monitorSyncFunc 注册部署拓扑的同步定时器（Admin 里登记的主机与部署、各主机网关状态），启动时先同步一次。
+func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime) func(context.Context) error {
 	if cfg == nil || runtime == nil {
 		return nil
 	}
@@ -68,19 +60,8 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitordeployment.NewSyncer(runtime.Repositories.Topology, monitordeployment.NewClientSource(runtime.Gateway), cfg.Deployment.HTTPS, runtime.Repositories.Gateways)
-	syncer.SetLocalHost(cfg.Deployment.LocalHostID)
-	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
-		count, err := syncer.Sync(syncCtx)
-		if err != nil {
-			return count, err
-		}
-		if err := ensureDefaultCheckAlertRules(syncCtx, runtime.Repositories); err != nil {
-			return count, err
-		}
-		return count, nil
-	})
-	handler := monitorSyncHandler(syncFunc)
+	syncer := monitordeployment.NewSyncer(runtime.Repositories.Topology, monitordeployment.NewClientSource(runtime.Gateway), runtime.Repositories.Gateways)
+	handler := monitorSyncHandler(serializedMonitorSync(syncer.Sync))
 	registerMonitorSyncTimer(s, handler)
 
 	// Preserve the previous startup behavior; subsequent runs are owned by the
@@ -88,7 +69,7 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 	runtime.Go(func() {
 		_ = handler(ctx)
 	})
-	return syncFunc
+	return handler
 }
 
 func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) error) {
@@ -107,28 +88,24 @@ func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) er
 	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_deployment_sync", handler))
 }
 
-func serializedMonitorSync(syncFunc func(context.Context) (int, error)) func(context.Context) (int, error) {
+func serializedMonitorSync(syncFunc func(context.Context) error) func(context.Context) error {
 	gate := make(chan struct{}, 1)
-	return func(ctx context.Context) (int, error) {
+	return func(ctx context.Context) error {
 		select {
 		case gate <- struct{}{}:
 			defer func() { <-gate }()
 			return syncFunc(ctx)
 		case <-ctx.Done():
-			return 0, ctx.Err()
+			return ctx.Err()
 		}
 	}
 }
 
-func monitorSyncHandler(syncFunc func(context.Context) (int, error)) func(context.Context) error {
+func monitorSyncHandler(syncFunc func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
-		n, err := syncFunc(ctx)
-		if err != nil {
+		if err := syncFunc(ctx); err != nil {
 			log.WarnContextf(ctx, "monitor deployment sync failed: %v", err)
 			return err
-		}
-		if n > 0 {
-			log.InfoContextf(ctx, "monitor deployment sync updated %d checks", n)
 		}
 		return nil
 	}

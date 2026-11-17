@@ -16,6 +16,8 @@ vi.mock("@/api/strategy", () => ({
   listReplays: ctx.listReplays,
   listStrategyTargets: ctx.listStrategyTargets
 }));
+// 交易账户也要替换：请求层不再在本地判断登录，不替换就会真的发出请求、一直等着。
+vi.mock("@/api/trade", () => ({ listLogicalAccounts: vi.fn().mockResolvedValue({ logical_accounts: [] }) }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push: ctx.push }) }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ({ selectedSpaceId: "crypto" }) }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => ctx.store }));

@@ -1,17 +1,18 @@
-# moox-factor-engine 配置：引擎只做出站连接，相对路径相对于安装根目录（config 的上一级）
+# moox-factor-engine 配置：引擎只做出站连接。这里是开发用的默认值，相对路径相对于工作目录；
+# 部署（moox-cli setup deploy）渲染时把身份、EventBus 与各状态文件换成这台主机的绝对路径。
 engine:
   # 稳定的引擎 ID；为空时取 factor-engine@<主机名>
   id: ""
   heartbeat_interval: 10s
 
-# Storage 与 Factor Manager 共用同一固定 Access 及外部身份。
-# key_file 相对本配置文件；其余运行文件相对安装根目录。
+# 引擎用所在主机的签名私钥，经本机网关取目录，再直连存储机与控制机的网关。
+# 这里是开发用的默认值：部署渲染时把主机 ID 与路径换成这台主机的实际值（绝对路径）。
 gateway_client:
-  access_address: access.example.test:11004
-  access_id: access@storage
   caller: factor-engine
-  key_id: ""
-  key_file: ../secrets/access-factor-engine.key
+  key_file: ../../secrets/host.key
+  host_id: ""
+  local_address: 127.0.0.1:11002
+  ca_file: ../../secrets/moox-ca.crt
 
 manager:
   timeout: 30s
@@ -21,10 +22,6 @@ catalog_sync:
   interval: 1m
   offset: 45s
   state_file: ./data/engine/catalog.json
-
-# Storage 请求体内的角色签名独立于 Access 身份。
-storage:
-  auth_secret_file: ./secrets/storage-primary-auth.secret
 
 eventbus:
   urls:
@@ -44,14 +41,14 @@ seriesstore:
   block_cache: 512MiB           # Pebble 块缓存，计入进程内存预算
 
 # 内存列式滑动窗口：每个数据源一份，保留任务内最大回看根数。max_memory 是所有窗口常驻内存的上限，
-# 新启用的任务会超出时拒绝启用；0 表示不限制。初始化（moox-cli setup）按探测到的内存写入。
+# 新启用的任务会超出时拒绝启用；0 表示不限制。moox-factor-engine tune 按本机内存给出建议值，线上要调就写进 moox.toml 的 [overrides]。
 window:
   lookback: 50000               # 7×24 市场的回看数量 N：任务内因子的回看都不能超过它（默认因子 EMA 最长 49995 根）
   session_lookback: 5000        # 有交易时段的市场（A 股等）的回看数量 N，要小于数据集保留期内的交易根数
   max_memory: 0
   headroom: 0                   # 每个序列数组的余量根数，0 取窗口长度的 1/4（至少 16）
 
-# 进程内存预算：常驻的窗口与块缓存先扣除，计算、重算向它预留；0 表示不限制。初始化按「总内存 × 60%」写入。
+# 进程内存预算：常驻的窗口与块缓存先扣除，计算、重算向它预留；0 表示不限制。tune 的建议值是「总内存 × 60%」。
 memory:
   total_budget: 0
 
@@ -87,6 +84,14 @@ watermark:
   task_ratios: {}                # 按任务 ID 覆盖阈值
   poll_interval: 10s            # 阻塞或落后时读回 Storage 继续推进的间隔（保底）
   max_periods: 30               # 一次推进最多处理的周期数
+
+# 系统暂停与恢复的本地状态：重启后按它决定继续暂停还是运行。
+lifecycle:
+  state_file: ./data/engine/lifecycle.json
+
+# 自定义函数（wasm 模块）的本地存储目录。
+udf:
+  dir: ./data/udf
 
 # 可变成员的取参：开算前向 FactorMgr 读取策略最近一次提交的参数，记成这一期的"进行中记录"并落盘后才开始计算，
 # 这一期的完成标记写成功后才清掉；FactorMgr 不可达时用本地缓存的最近一次读到的值。

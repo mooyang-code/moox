@@ -9,9 +9,8 @@ server:
     - masking
     - opentelemetry
     - prometheus
-  # FunctionInstance SCF inventory scans may inspect many functions across regions.
-  # Keep the Admin BFF envelope aligned with the 900s SCF budget plus transport
-  # headroom used by the FunctionInstance route.
+  # 各 RPC 服务的默认时限上限，与网关路由允许的最长超时（960 秒）一致。
+  # 浏览器入口（9527）不在这里：它由 Admin 自己用标准库监听，接口时限由控制台处理器按服务目录控制。
   timeout: 960000
   admin:
     ip: 127.0.0.1
@@ -19,14 +18,6 @@ server:
     read_timeout: 3000
     write_timeout: 960000
   service:
-    - name: trpc.moox.admin.Console
-      ip: 127.0.0.1
-      port: 11000
-      network: tcp
-      protocol: http_no_protocol
-      # The control gateway also carries long-running FunctionInstance previews.
-      # Keep its request deadline above the deployment route timeout.
-      timeout: 960000
     - name: trpc.moox.admin.Health
       ip: 127.0.0.1
       port: 11010
@@ -75,13 +66,6 @@ server:
       protocol: trpc
       transport: go-net
       timeout: 30000
-    - name: trpc.moox.admin.CollectorPublishLease
-      ip: 127.0.0.1
-      port: 11111
-      network: tcp
-      protocol: trpc
-      transport: go-net
-      timeout: 10000
     - name: trpc.moox.admin.ActivityLog
       ip: 127.0.0.1
       port: 11113
@@ -101,22 +85,11 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
-    - name: trpc.moox.admin.auth_cache_cleanup.timer
-      port: 11306
-      network: "0 */5 * * * *"
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.admin.certificates.timer
       port: 11307
       network: "0 0 0 * * *"
       protocol: timer
       timeout: 30000
-    # Daily system garbage collection, offset from midnight jobs and the top of the hour.
-    - name: trpc.moox.admin.garbage_collection.timer
-      port: 11308
-      network: "0 47 3 * * *"
-      protocol: timer
-      timeout: 900000
 
 client:
   filter:
@@ -139,11 +112,11 @@ plugins:
       - writer: file
         level: info
         writer_config:
-          # 框架日志按大小轮转，单个文件 10MB、保留 5 份、最多 7 天；标准输出/错误主要是崩溃信息和数据库（GORM）日志，由 moox-runtime 启动前按大小轮转，持续报错时仍可能增长。
+          # 框架日志按大小轮转：单个文件 50MB、保留 5 份、最多 7 天。标准输出与标准错误（崩溃信息、数据库日志）交给 journald。
           log_path: ./logs
           filename: trpc.log
           roll_type: size
           max_age: 7
-          max_size: 10
+          max_size: 50
           max_backups: 5
           compress: false

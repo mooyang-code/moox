@@ -25,11 +25,11 @@ const router = createRouter({
 });
 
 /**
- * 路由加载前需要判断用户是否登录
- * 1、去登录页，无token，放行
- * 2、没有token，直接重定向到登录页
- * 3、去登录页，有token，直接重定向到home页
- * 4、去非登录页，有token，用户信息是否存在，有则放行，否则重新获取路由信息、初始化路由
+ * 路由加载前判断用户是否登录。会话在 HttpOnly Cookie 里，页面读不到，是否登录以 GetUserInfo 的结果为准：
+ * 1、去登录页：已有账号信息就去首页，否则放行
+ * 2、去别的页面且还没有账号信息（刚打开或刷新）：请求一次 GetUserInfo 并初始化路由；失败就带着原地址去登录页。
+ *    失败时不调退出：可能只是限流或网络抖动，不能因此注销一个有效会话
+ * 3、已有账号信息：照常放行（会话过期时接口返回 401，请求层会清掉账号并回登录页）
  * 注意：
  * 全局routeTree不能持久化缓存
  * 页面刷新会导致addRoute动态添加的路由失效，需要重新初始化路由
@@ -37,94 +37,71 @@ const router = createRouter({
 router.beforeEach(async (to: any, _from: any, next: any) => {
   NProgress.start(); // 开启进度条
   const store = useUserInfoStore(pinia);
-  const { token, account } = storeToRefs(store);
-
-  if (token.value && !(await store.hasValidSession())) {
-    await store.logOut();
-  }
+  const { account } = storeToRefs(store);
 
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach
-  if (to.path === "/login" && !token.value) {
-    // 1、去登录页，无token，放行
-    next();
-  } else if (!token.value) {
-    // 2、没有token（含会话失效、刚被登出），带着原地址去登录页，登录后回来
-    next(loginLocation(to.fullPath));
-  } else if (to.path === "/login" && token.value) {
-    // 3、去登录页，有token，检查token是否有效
-    // 如果用户信息为空，说明token可能无效，允许进入登录页
+  if (to.path === "/login") {
     if (isEmptyObject(account.value.user)) {
       next();
       return;
     }
-    // 有token且有用户信息，直接重定向到home页
     next("/home");
     // 项目内的跳转，处理跳转路由高亮
     currentlyRoute(to);
-  } else {
-    // 4、去非登录页，有token，用户信息是否存在，有则放行，否则重新获取路由信息、初始化路由
-    const routeStore = useRoutesConfigStore(pinia);
+    return;
+  }
 
-    // 判断账号信息是否获取，先获取账号信息和路由信息，添加路由后再跳转(页面刷新时触发)
-    // 解决刷新页面404的问题
-    if (isEmptyObject(account.value.user)) {
-      try {
-        // 获取账号信息
-        await store.setAccount();
-        // 获取路由信息
-        await routeStore.initSetRouter();
-        // 判断是否是动态路由
-        const { isDynamicRoute } = useRoutingMethod();
-        if (isDynamicRoute(to.path)) {
-          next({ name: to.name, params: to.params, replace: true });
-        } else {
-          next({ path: to.path, query: to.query, replace: true });
-        }
-      } catch (error: any) {
-        if (error?.name === "StaleAccountRequestError") {
-          // 用户信息请求期间已重新登录：当前会话完好，按新会话重新进入守卫
-          next({ path: to.path, query: to.query, replace: true });
-          return;
-        }
-        console.error("路由守卫: 获取用户信息失败", error);
-
-        // 确保完全清除用户状态，避免死循环
-        await store.logOut();
-
-        // 跳转到登录页，带着原地址，登录后回来
-        next(loginLocation(to.fullPath));
-        return;
-      }
+  const routeStore = useRoutesConfigStore(pinia);
+  // 判断账号信息是否获取，先获取账号信息和路由信息，添加路由后再跳转(页面刷新时触发)
+  // 解决刷新页面404的问题
+  if (isEmptyObject(account.value.user)) {
+    try {
+      await store.setAccount();
+      await routeStore.initSetRouter();
+    } catch (error: any) {
+      console.error("路由守卫: 获取用户信息失败", error);
+      store.clearAccount();
+      // 跳转到登录页，带着原地址，登录后回来
+      next(loginLocation(to.fullPath));
+      return;
+    }
+    // 判断是否是动态路由
+    const { isDynamicRoute } = useRoutingMethod();
+    if (isDynamicRoute(to.path)) {
+      next({ name: to.name, params: to.params, replace: true });
     } else {
-      // 检查路由是否存在，如果不存在则重新初始化路由
-      if (!router.hasRoute(to.name as string) && to.name !== "not-found") {
-        try {
-          await routeStore.initSetRouter();
-          // 使用setTimeout确保路由已经添加完成
-          setTimeout(() => {
-            next({ ...to, replace: true });
-          }, 100);
-          return;
-        } catch (error) {
-          console.error("路由重新初始化失败:", error);
-          // 如果路由初始化失败，跳转到首页
-          next("/home");
-          return;
-        }
-      }
+      next({ path: to.path, query: to.query, replace: true });
+    }
+    return;
+  }
 
-      // 获取外链路由的处理函数
-      // 所有的路由正常放行，只不过额外判断是否是外链，如果是，则打开新窗口跳转外链
-      // 外链的页面依旧正常打开，只不过不进标签栏，符合路由跳转的直觉
-      const { openExternalLinks } = useRoutingMethod();
-      // 处理外链跳转
-      openExternalLinks(to);
-      // 动态路由添加过走这里，直接放行
-      next();
-      // 项目内的跳转，处理跳转路由高亮
-      currentlyRoute(to);
+  // 检查路由是否存在，如果不存在则重新初始化路由
+  if (!router.hasRoute(to.name as string) && to.name !== "not-found") {
+    try {
+      await routeStore.initSetRouter();
+      // 使用setTimeout确保路由已经添加完成
+      setTimeout(() => {
+        next({ ...to, replace: true });
+      }, 100);
+      return;
+    } catch (error) {
+      console.error("路由重新初始化失败:", error);
+      // 如果路由初始化失败，跳转到首页
+      next("/home");
+      return;
     }
   }
+
+  // 获取外链路由的处理函数
+  // 所有的路由正常放行，只不过额外判断是否是外链，如果是，则打开新窗口跳转外链
+  // 外链的页面依旧正常打开，只不过不进标签栏，符合路由跳转的直觉
+  const { openExternalLinks } = useRoutingMethod();
+  // 处理外链跳转
+  openExternalLinks(to);
+  // 动态路由添加过走这里，直接放行
+  next();
+  // 项目内的跳转，处理跳转路由高亮
+  currentlyRoute(to);
 });
 
 // 路由跳转错误

@@ -6,16 +6,13 @@ import (
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
 
-const (
-	maxResponseBytes      = 1 << 20
-	TradeGatewayHTTPSPort = 11001
-)
+const maxResponseBytes = 1 << 20
 
 type Client struct {
 	gateway gatewayclient.Invoker
@@ -82,33 +79,28 @@ func New(gateway gatewayclient.Invoker) *Client {
 	return &Client{gateway: gateway}
 }
 
-func (c *Client) Apply(ctx context.Context, snapshot *setupconfig.Snapshot) (ApplyResult, error) {
-	return c.ApplyWithSpaces(ctx, snapshot, nil)
+// Apply 把秘密文件里的初始秘密（管理员、腾讯云密钥、交易所密钥）写进管理台，规则都是只建不改。
+func (c *Client) Apply(ctx context.Context, secrets *topology.Secrets) (ApplyResult, error) {
+	return c.ApplyWithSpaces(ctx, secrets, nil)
 }
 
 func (c *Client) ApplyWithSpaces(
 	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
+	secrets *topology.Secrets,
 	spaces []Space,
 ) (ApplyResult, error) {
-	if snapshot == nil || c.gateway == nil {
+	if secrets == nil || c.gateway == nil {
 		return ApplyResult{}, fmt.Errorf("setup_client_invalid")
 	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		return ApplyResult{}, fmt.Errorf("config_changed")
-	}
-	request := applyRequest(snapshot.Manifest, spaces)
+	request := applyRequest(secrets, spaces)
 	response := &pb.ApplySetupRsp{}
 	if err := c.forwardedPost(ctx, "ApplySetup", request, response); err != nil {
 		return ApplyResult{}, err
 	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		return ApplyResult{}, fmt.Errorf("config_changed")
-	}
 	if err := checkRetInfo(response.GetRetInfo()); err != nil {
 		return ApplyResult{}, err
 	}
-	if err := checkExchangeKeysAnswered(snapshot.Manifest, response.GetExchangeKeys()); err != nil {
+	if err := checkExchangeKeysAnswered(secrets, response.GetExchangeKeys()); err != nil {
 		return ApplyResult{}, err
 	}
 	return ApplyResult{
@@ -120,33 +112,27 @@ func (c *Client) ApplyWithSpaces(
 	}, nil
 }
 
-func (c *Client) Status(ctx context.Context, snapshot *setupconfig.Snapshot) (StatusResult, error) {
-	return c.StatusWithSpaces(ctx, snapshot, nil)
+func (c *Client) Status(ctx context.Context, secrets *topology.Secrets) (StatusResult, error) {
+	return c.StatusWithSpaces(ctx, secrets, nil)
 }
 
 func (c *Client) StatusWithSpaces(
 	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
+	secrets *topology.Secrets,
 	spaces []Space,
 ) (StatusResult, error) {
-	if snapshot == nil || c.gateway == nil {
+	if secrets == nil || c.gateway == nil {
 		return StatusResult{}, fmt.Errorf("setup_client_invalid")
 	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		return StatusResult{}, fmt.Errorf("config_changed")
-	}
-	request := statusRequest(snapshot.Manifest, spaces)
+	request := statusRequest(secrets, spaces)
 	response := &pb.GetSetupStatusRsp{}
 	if err := c.forwardedPost(ctx, "GetSetupStatus", request, response); err != nil {
 		return StatusResult{}, err
 	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		return StatusResult{}, fmt.Errorf("config_changed")
-	}
 	if err := checkRetInfo(response.GetRetInfo()); err != nil {
 		return StatusResult{}, err
 	}
-	if err := checkExchangeKeysAnswered(snapshot.Manifest, response.GetExchangeKeys()); err != nil {
+	if err := checkExchangeKeysAnswered(secrets, response.GetExchangeKeys()); err != nil {
 		return StatusResult{}, err
 	}
 	return StatusResult{
@@ -189,7 +175,7 @@ func checkRetInfo(retInfo *pb.RetInfo) error {
 	}
 }
 
-func applyRequest(manifest setupconfig.Manifest, spaces []Space) *pb.ApplySetupReq {
+func applyRequest(manifest *topology.Secrets, spaces []Space) *pb.ApplySetupReq {
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
@@ -198,7 +184,7 @@ func applyRequest(manifest setupconfig.Manifest, spaces []Space) *pb.ApplySetupR
 	}
 }
 
-func statusRequest(manifest setupconfig.Manifest, spaces []Space) *pb.GetSetupStatusReq {
+func statusRequest(manifest *topology.Secrets, spaces []Space) *pb.GetSetupStatusReq {
 	return &pb.GetSetupStatusReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
@@ -207,7 +193,7 @@ func statusRequest(manifest setupconfig.Manifest, spaces []Space) *pb.GetSetupSt
 	}
 }
 
-func exchangeKeysToPB(keys []setupconfig.ExchangeKey) []*pb.SetupExchangeKey {
+func exchangeKeysToPB(keys []topology.ExchangeKey) []*pb.SetupExchangeKey {
 	result := make([]*pb.SetupExchangeKey, 0, len(keys))
 	for _, key := range keys {
 		result = append(result, &pb.SetupExchangeKey{
@@ -219,10 +205,10 @@ func exchangeKeysToPB(keys []setupconfig.ExchangeKey) []*pb.SetupExchangeKey {
 }
 
 // checkExchangeKeysAnswered 防止新 CLI 配没升级的 Admin：proto3 会静默丢掉不认识的字段，旧的 Admin 照常返回成功却一把交易所密钥都没写。
-// moox.toml 里有交易所密钥而响应里没有逐把结果（条数对不上）时报错，提示先升级管理后台。
-func checkExchangeKeysAnswered(manifest setupconfig.Manifest, answered []*pb.SetupExchangeKeyResult) error {
+// 秘密文件里有交易所密钥而响应里没有逐把结果（条数对不上）时报错，提示先升级管理后台。
+func checkExchangeKeysAnswered(manifest *topology.Secrets, answered []*pb.SetupExchangeKeyResult) error {
 	if len(manifest.ExchangeKeys) > 0 && len(answered) != len(manifest.ExchangeKeys) {
-		return fmt.Errorf("setup_admin_outdated: moox.toml 里有 %d 把交易所密钥，管理后台只返回了 %d 把的处理结果：它可能还是不认识 [[exchange_keys]] 的旧版本，没有写入任何密钥；请先升级管理后台（Admin）再运行 apply 或 init", len(manifest.ExchangeKeys), len(answered))
+		return fmt.Errorf("setup_admin_outdated: 秘密文件里有 %d 把交易所密钥，管理后台只返回了 %d 把的处理结果：它可能还是不认识 [[exchange_keys]] 的旧版本，没有写入任何密钥；请先升级管理后台（Admin）再运行 setup init", len(manifest.ExchangeKeys), len(answered))
 	}
 	return nil
 }

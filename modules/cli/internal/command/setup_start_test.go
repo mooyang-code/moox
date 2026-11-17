@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,9 +103,9 @@ func startClient() *fakeStartClient {
 }
 
 func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	client := startClient()
-	summary, err := runSetupStart(context.Background(), setupDeps{}, client, snapshot, t.TempDir(), startRepository(t), "crypto", time.Millisecond)
+	summary, err := runSetupStart(context.Background(), setupDeps{}, client, snapshot, startRepository(t), "crypto", time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, client.enabled)
 	require.Equal(t, 1, client.triggers)
@@ -116,46 +116,45 @@ func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
 func TestSetupStartSkipsManualStartTasks(t *testing.T) {
 	client := startClient()
 	client.tasks = append(client.tasks, adminclient.CollectionTaskSummary{TaskID: "m", TaskName: "手动任务"})
-	summary, err := runSetupStart(context.Background(), setupDeps{}, client, setupSnapshot(t), t.TempDir(), startRepository(t), "crypto", time.Millisecond)
+	summary, err := runSetupStart(context.Background(), setupDeps{}, client, testSetupSnapshot(t), startRepository(t), "crypto", time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, client.enabled, "start: manual 的任务不启用；别的空间的同名标记不影响")
 	require.Equal(t, 2, summary.TasksEnabled)
 	require.Contains(t, strings.Join(summary.Notes, "\n"), "手动任务（m）需手动启用")
 
 	// 读不到内置任务文件时不猜，直接报错。
-	_, err = runSetupStart(context.Background(), setupDeps{}, startClient(), setupSnapshot(t), t.TempDir(), t.TempDir(), "crypto", time.Millisecond)
+	_, err = runSetupStart(context.Background(), setupDeps{}, startClient(), testSetupSnapshot(t), t.TempDir(), "crypto", time.Millisecond)
 	require.ErrorContains(t, err, "请在产物包目录或源码仓库根目录运行")
 }
 
 func TestSetupStartWithoutTasksFails(t *testing.T) {
-	_, err := runSetupStart(context.Background(), setupDeps{}, &fakeStartClient{online: true}, setupSnapshot(t), t.TempDir(), t.TempDir(), "crypto", time.Millisecond)
+	_, err := runSetupStart(context.Background(), setupDeps{}, &fakeStartClient{online: true}, testSetupSnapshot(t), t.TempDir(), "crypto", time.Millisecond)
 	require.ErrorContains(t, err, "no_collection_tasks")
 }
 
-func TestSetupStartStrategyIsRepeatableAndRespectsUserInstance(t *testing.T) {
+func TestSetupStartStrategyIsRepeatableAndSharesTask(t *testing.T) {
 	repository := startRepository(t)
 	client := startClient()
-	summary := setupStartSummary{}
 	example := spaceExamples["crypto"]
-	status, err := setupStartStrategy(context.Background(), client, repository, "crypto", example, &summary)
+	status, err := setupStartStrategy(context.Background(), client, repository, "crypto", example)
 	require.NoError(t, err)
 	require.Equal(t, "created", status)
-	status, err = setupStartStrategy(context.Background(), client, repository, "crypto", example, &summary)
+	status, err = setupStartStrategy(context.Background(), client, repository, "crypto", example)
 	require.NoError(t, err)
 	require.Equal(t, "unchanged", status, "重复运行不重复创建")
 	require.Equal(t, 1, client.created)
 
-	bound := startClient()
-	bound.instances = []setupStartInstance{{InstanceID: "mine", FactorTasks: map[string]string{example.Market: example.FactorTask}}}
-	status, err = setupStartStrategy(context.Background(), bound, repository, "crypto", example, &summary)
+	// 默认示例不写 factor_params，不独占关联任务：用户自己的实例也引用这个任务时照常创建。
+	shared := startClient()
+	shared.instances = []setupStartInstance{{InstanceID: "mine", FactorTasks: map[string]string{example.Market: example.FactorTask}}}
+	status, err = setupStartStrategy(context.Background(), shared, repository, "crypto", example)
 	require.NoError(t, err)
-	require.Equal(t, "skipped", status, "因子任务已被用户实例绑定")
-	require.Zero(t, bound.created)
-	require.NotEmpty(t, summary.Notes)
+	require.Equal(t, "created", status)
+	require.Equal(t, 1, shared.created)
 }
 
 func TestSetupStartPrerequisitesDependOnSpace(t *testing.T) {
-	manifest := setupconfig.Manifest{}
+	manifest := &topology.Config{}
 	require.ErrorContains(t, setupStartPrerequisites(manifest, "crypto"), "start_prerequisite_missing")
 	require.ErrorContains(t, setupStartPrerequisites(manifest, "stockcn"), "scf_plan")
 }
@@ -181,10 +180,37 @@ func TestSetupStartEnableTaskDoesNotRetryOtherErrors(t *testing.T) {
 func TestSetupStartStockCNExampleUsesItsOwnTask(t *testing.T) {
 	repository := startRepository(t)
 	client := startClient()
-	summary := setupStartSummary{}
 	example := spaceExamples["stockcn"]
-	status, err := setupStartStrategy(context.Background(), client, repository, "stockcn", example, &summary)
+	status, err := setupStartStrategy(context.Background(), client, repository, "stockcn", example)
 	require.NoError(t, err)
 	require.Equal(t, "created", status)
 	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_cn_5m", StrategyID: "default_dual_ma_cn_5m", SpaceID: "stockcn", FactorTasks: map[string]string{"equity": "ftask_cn_5m"}, Enabled: true}}, client.instances)
+}
+
+// 有因子引擎时导入种子文件里这个空间的任务（别的空间的不导入，定义全部带上）；种子里没有默认示例用的任务时不建示例策略。
+func TestSetupStartImportsOnlyThisSpaceFromTheFactorSeed(t *testing.T) {
+	repository := startRepository(t)
+	seedDir := filepath.Join(repository, "config", "setup")
+	writeLibrary(t, filepath.Join(seedDir, "factors"), "lib.yaml")
+	require.NoError(t, os.WriteFile(filepath.Join(seedDir, "factor-tasks.yaml"), []byte(testSeed), 0o600))
+	snapshot := testSetupSnapshot(t)
+	snapshot.Manifest.Deployments["compute"] = []string{"factor-engine"}
+	factor := &fakeSetupInitFactor{}
+	deps := setupDeps{openInitFactor: func(context.Context, *setupSnapshot) (setupInitFactor, error) { return factor, nil }}
+	client := startClient()
+	summary, err := runSetupStart(context.Background(), deps, client, snapshot, repository, "crypto", time.Millisecond)
+	require.NoError(t, err)
+	require.Len(t, factor.plan.Tasks, 1)
+	require.True(t, factor.plan.ResumeDisabled, "setup start 导入默认种子时，上次加了没启用的成员要接着启用")
+	require.Equal(t, "ftask_prices_1m", factor.plan.Tasks[0].TaskID)
+	require.Len(t, factor.plan.Definitions, 2)
+	require.Equal(t, "skipped", summary.Strategy, "种子里没有 ftask_swap_1m，不建默认示例")
+	require.Zero(t, client.created)
+
+	empty := &fakeSetupInitFactor{}
+	deps.openInitFactor = func(context.Context, *setupSnapshot) (setupInitFactor, error) { return empty, nil }
+	summary, err = runSetupStart(context.Background(), deps, startClient(), snapshot, repository, "stockhk", time.Millisecond)
+	require.NoError(t, err)
+	require.Empty(t, empty.plan.Tasks, "种子里没有这个空间的任务时不导入")
+	require.Contains(t, strings.Join(summary.Notes, "\n"), "factor-tasks.yaml 里没有这个空间的因子任务")
 }

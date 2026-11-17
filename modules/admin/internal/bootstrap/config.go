@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	authcfg "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
+	"github.com/mooyang-code/moox/modules/admin/internal/webserver"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 
@@ -24,14 +25,16 @@ type Config struct {
 	Auth        *authcfg.Config
 	Console     *console.Config
 	AdminNodeID string
+	// Web 是浏览器入口（9527）的部署参数。
+	Web webserver.Config
 }
 
-// LoadConfigs 加载系统中各个模块配置
-func LoadConfigs(ctx context.Context) (*Config, error) {
+// LoadConfigs 加载系统中各个模块配置：configPath 是业务配置 app.yaml（-config），console.yaml 在同一目录。
+func LoadConfigs(ctx context.Context, configPath string) (*Config, error) {
 	log.Info("正在加载应用配置...")
 
 	// 1. 加载应用配置
-	appCfg, err := config.Load("./config/app.yaml")
+	appCfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -51,27 +54,26 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	if !servicecatalog.ValidHostID(adminNodeID) {
 		return nil, fmt.Errorf("MOOX_ADMIN_NODE_ID must be a canonical control host ID")
 	}
+	web, err := loadWebConfig(appCfg.Database.Path)
+	if err != nil {
+		return nil, err
+	}
 	log.Info("应用配置加载成功")
 
 	// 2. 加载认证配置
-	authCfg, err := authcfg.LoadConfig()
+	consolePath := filepath.Join(filepath.Dir(configPath), "console.yaml")
+	authCfg, err := authcfg.LoadConfig(consolePath)
 	if err != nil {
 		return nil, err
 	}
 	log.Info("认证配置加载成功")
 
 	// 3. 加载控制台配置
-	consoleCfg, err := console.LoadConfig()
+	consoleCfg, err := console.LoadConfig(consolePath)
 	if err != nil {
 		return nil, err
 	}
 	console.SetConfig(consoleCfg)
-	if len(strings.TrimSpace(consoleCfg.JWT.SecretKey)) < 32 {
-		return nil, fmt.Errorf("jwt.secret_key must contain at least 32 characters")
-	}
-	if err := validateConsoleCORS(consoleCfg); err != nil {
-		return nil, err
-	}
 	log.Info("控制台配置加载成功")
 
 	// 5. 创建配置对象
@@ -80,8 +82,23 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 		Auth:        authCfg,
 		Console:     consoleCfg,
 		AdminNodeID: adminNodeID,
+		Web:         web,
 	}
 	return cfg, nil
+}
+
+// loadWebConfig 读浏览器入口的部署参数：控制机地址 MOOX_ADMIN_WEB_ADDRESS（必填）、监听地址 MOOX_ADMIN_WEB_LISTEN
+// （默认 0.0.0.0:9527）；网页证书用 MooX CA 签，放在 Admin 数据目录（数据库所在目录）下的 web-cert/。
+func loadWebConfig(databasePath string) (webserver.Config, error) {
+	address := strings.TrimSpace(os.Getenv("MOOX_ADMIN_WEB_ADDRESS"))
+	if !servicecatalog.ValidHostAddress(address) {
+		return webserver.Config{}, fmt.Errorf("MOOX_ADMIN_WEB_ADDRESS 要写控制机地址（IP 或域名，不带端口），当前是 %q", address)
+	}
+	listen := strings.TrimSpace(os.Getenv("MOOX_ADMIN_WEB_LISTEN"))
+	if listen == "" {
+		listen = webserver.DefaultListen
+	}
+	return webserver.Config{Listen: listen, Address: address, PKIDir: adminPKIDir(), CertDir: filepath.Join(filepath.Dir(databasePath), "web-cert")}, nil
 }
 
 func validateGatewayControlListener(path string) error {
@@ -194,30 +211,4 @@ func loadEncryptionKey() error {
 		return fmt.Errorf("read admin encryption key file: %w", err)
 	}
 	return os.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", strings.TrimSpace(string(raw)))
-}
-
-func validateConsoleCORS(cfg *console.Config) error {
-	if cfg == nil {
-		return fmt.Errorf("console config is nil")
-	}
-	if len(cfg.CORS.AllowedOrigins) == 0 {
-		if cfg.Console.Debug {
-			log.Warn("cors.allowed_origins 未配置，非 debug 环境将无法设置 CORS 响应头")
-			return nil
-		}
-		return fmt.Errorf("cors.allowed_origins must not be empty when console.debug is false")
-	}
-	if !cfg.Console.Debug && consoleContainsWildcardOrigin(cfg.CORS.AllowedOrigins) {
-		log.Warn("生产环境 cors.allowed_origins 包含 '*'，建议改为具体前端域名")
-	}
-	return nil
-}
-
-func consoleContainsWildcardOrigin(origins []string) bool {
-	for _, origin := range origins {
-		if strings.TrimSpace(origin) == "*" {
-			return true
-		}
-	}
-	return false
 }

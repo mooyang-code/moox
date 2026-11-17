@@ -96,17 +96,15 @@ type HoldingBatch struct {
 	Entries map[string]StopEntry `json:"entries,omitempty"`
 }
 
-// RuleState 是一条规则下一期需要的理论状态：rank 规则记录本期持有（供 buffer 使用）与批次，
-// signal 规则记录理论持仓。它不包含任何真实账户信息。
+// RuleState 是一条规则下一期需要的理论状态：rank 规则记录本期持有（供 buffer 使用）与批次。
+// 它不包含任何真实账户信息。
 type RuleState struct {
 	Held    []string       `json:"held,omitempty"`
 	Batches []HoldingBatch `json:"batches,omitempty"`
-	// Entries 是 rank（无 holding）与 signal 规则持有标的的入场价与最有利价格；Cooldown 是冷却截止的 bar 序号（含）。
+	// Entries 是 rank（无 holding）规则持有标的的入场价与最有利价格；Cooldown 是冷却截止的 bar 序号（含）。
 	// 只在规则开了 stop 时记录（见 stop.go）。
 	Entries  map[string]StopEntry `json:"entries,omitempty"`
 	Cooldown map[string]int64     `json:"cooldown,omitempty"`
-	// Tranche 是 tranche 规则的开仓记录（见 tranche.go）。
-	Tranche *TrancheState `json:"tranche,omitempty"`
 	// Hold 是 rank 规则 hold 块的入场序号、冷却与上次判进出场的序号（见 hold.go）。
 	Hold *HoldState `json:"hold,omitempty"`
 	// MissingStreak 是写了 on_missing 的规则里，按缺数冻结保持的持有标的已连续缺数的根数（标的 → 根数）；数据恢复即清零。

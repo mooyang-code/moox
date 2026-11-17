@@ -1,8 +1,8 @@
 <template>
-  <!-- 从执行器页打开：外层用抽屉，里面还会再打开“上传”“代码包详情”弹窗，免得弹窗叠弹窗 -->
+  <!-- 外层用抽屉，里面还会再打开“上传”弹窗，免得弹窗叠弹窗 -->
   <a-drawer
     :visible="visible"
-    title="代码包版本管理"
+    title="代码包"
     width="min(1200px, 100vw)"
     :mask-closable="false"
     :footer="false"
@@ -10,25 +10,11 @@
     @cancel="handleCancel"
   >
     <div class="function-package-manage">
-      <!-- 搜索区域 -->
       <div class="package-toolbar">
-        <a-space class="package-filters" wrap>
-          <a-input v-model="searchForm.package_name" placeholder="搜索代码包名称" style="width: 200px" allow-clear />
-          <a-select v-model="searchForm.runtime" placeholder="运行时环境" style="width: 150px" allow-clear>
-            <a-option v-for="runtime in RUNTIME_OPTIONS" :key="runtime.value" :value="runtime.value">
-              {{ runtime.label }}
-            </a-option>
-          </a-select>
-          <a-select v-model="searchForm.status" placeholder="状态" style="width: 120px" allow-clear>
-            <a-option v-for="status in STATUS_OPTIONS" :key="status.value" :value="status.value">
-              {{ status.label }}
-            </a-option>
-          </a-select>
-          <a-button type="primary" @click="loadPackageList">
-            <template #icon><icon-search /></template>
-            搜索
-          </a-button>
-        </a-space>
+        <a-input v-model="keyword" placeholder="搜索包名或版本" style="width: 220px" allow-clear>
+          <template #prefix><icon-search /></template>
+        </a-input>
+        <span class="muted">对账器按 scf_plan 配置的包名取本空间最新的可用代码包；每个包名只保留最新 3 个。</span>
         <a-button class="package-upload-button" type="primary" @click="onAdd">
           <template #icon><icon-plus /></template>
           上传代码包
@@ -36,178 +22,80 @@
       </div>
 
       <a-table
-        row-key="id"
+        row-key="package_id"
         size="small"
-        :data="packageList"
+        :data="filteredPackages"
         :bordered="{ cell: true }"
         :loading="loading"
-        :pagination="pagination"
-        @page-change="handlePageChange"
-        @page-size-change="handlePageSizeChange"
+        :pagination="false"
       >
+        <template #empty>
+          <div class="empty-text">{{ loading ? "读取中…" : "本空间还没有代码包" }}</div>
+        </template>
         <template #columns>
-          <a-table-column title="代码包名称" data-index="package_name" :width="180">
+          <a-table-column title="包名" data-index="package_name" :width="180" />
+          <a-table-column title="版本" data-index="version" :width="120" />
+          <a-table-column title="运行时" data-index="runtime" :width="90" />
+          <a-table-column title="大小" :width="100" align="right">
+            <template #cell="{ record }">{{ formatFileSize(record.file_size) }}</template>
+          </a-table-column>
+          <a-table-column title="状态" :width="80">
             <template #cell="{ record }">
-              <a-button type="text" style="padding: 0; height: auto; color: #165dff" @click="onShowDetail(record)">
-                {{ record.package_name }}
-              </a-button>
+              <span :class="record.status === 'available' ? '' : 'warn-text'">{{ packageStatusLabel(record.status) }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="版本" data-index="version" :width="120"></a-table-column>
-          <a-table-column title="类型" data-index="package_type_label" :width="150">
+          <a-table-column title="云账号" :width="160">
+            <template #cell="{ record }">{{ accountName(record.cloud_account_id) }}</template>
+          </a-table-column>
+          <a-table-column title="COS 位置">
             <template #cell="{ record }">
-              <a-tag :color="getPackageTypeColor(record.package_type)">
-                {{ getPackageTypeLabel(record.package_type) }}
-              </a-tag>
+              <span class="mono-text single-line" :title="cosLocation(record)">{{ cosLocation(record) }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="运行时" data-index="runtime" :width="120"></a-table-column>
-          <a-table-column title="文件大小" data-index="file_size" :width="120">
+          <a-table-column title="MD5" :width="140">
             <template #cell="{ record }">
-              {{ formatFileSize(record.file_size) }}
+              <span class="mono-text single-line" :title="record.file_md5">{{ record.file_md5 || "-" }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="状态" data-index="status" :width="100">
-            <template #cell="{ record }">
-              <a-tag :color="getPackageStatusColor(record.status)">
-                {{ getPackageStatusLabel(record.status) }}
-              </a-tag>
-            </template>
+          <a-table-column title="上传时间" :width="190">
+            <template #cell="{ record }">{{ formatTime(record.create_time) }}</template>
           </a-table-column>
-          <a-table-column title="创建时间" data-index="created_time" :width="180">
+          <a-table-column title="操作" :width="80" align="center" fixed="right">
             <template #cell="{ record }">
-              {{ formatTime(record.created_time) }}
-            </template>
-          </a-table-column>
-          <a-table-column title="描述" data-index="description" :width="200">
-            <template #cell="{ record }">
-              <a-tooltip :content="record.description" position="top">
-                <span>{{
-                  record.description
-                    ? record.description.length > 20
-                      ? record.description.substring(0, 20) + "..."
-                      : record.description
-                    : "-"
-                }}</span>
-              </a-tooltip>
-            </template>
-          </a-table-column>
-          <a-table-column title="云账户" data-index="cloud_account_id" :width="120">
-            <template #cell="{ record }">
-              {{ record.cloud_account_id || "-" }}
-            </template>
-          </a-table-column>
-          <a-table-column title="COS地区" data-index="cos_region" :width="120">
-            <template #cell="{ record }">
-              {{ record.cos_region || "-" }}
-            </template>
-          </a-table-column>
-          <a-table-column title="文件MD5" data-index="file_md5" :width="180">
-            <template #cell="{ record }">
-              <a-tooltip :content="record.file_md5" position="top">
-                <span>{{
-                  record.file_md5
-                    ? record.file_md5.length > 16
-                      ? record.file_md5.substring(0, 16) + "..."
-                      : record.file_md5
-                    : "-"
-                }}</span>
-              </a-tooltip>
-            </template>
-          </a-table-column>
-          <a-table-column title="操作" :width="180" align="center" fixed="right">
-            <template #cell="{ record }">
-              <a-space>
-                <a-button
-                  type="primary"
-                  size="mini"
-                  status="success"
-                  @click="onDownload(record)"
-                  :disabled="Number(record.status) !== PACKAGE_STATUS_AVAILABLE"
-                  :loading="downloadProgress[record.package_id] !== undefined && downloadProgress[record.package_id] < 100"
-                >
-                  <template #icon>
-                    <icon-download />
-                  </template>
-                  <span v-if="downloadProgress[record.package_id] !== undefined && downloadProgress[record.package_id] < 100">
-                    下载中...
-                  </span>
-                  <span v-else>下载</span>
-                </a-button>
-                <a-popconfirm
-                  content="确定要删除该代码包吗？删除后无法恢复。"
-                  ok-text="确定"
-                  cancel-text="取消"
-                  @ok="() => onDelete(record)"
-                  position="tr"
-                >
-                  <a-button type="primary" size="mini" status="danger">
-                    <template #icon><icon-delete /></template>
-                    删除
-                  </a-button>
-                </a-popconfirm>
-              </a-space>
+              <a-popconfirm content="删除这个代码包（COS 对象一并删除）？" position="tr" @ok="onDelete(record)">
+                <a-button size="mini" status="danger">删除</a-button>
+              </a-popconfirm>
             </template>
           </a-table-column>
         </template>
       </a-table>
     </div>
 
-    <!-- 上传弹窗 -->
-    <a-modal
-      v-model:visible="uploadVisible"
-      title="上传云函数代码包"
-      :width="600"
-      :mask-closable="false"
-      @cancel="handleUploadCancel"
-    >
-      <a-form :model="uploadForm" layout="vertical" ref="uploadFormRef">
-        <a-form-item label="函数包类型">{{ getPackageTypeLabel(uploadForm.package_type) }}</a-form-item>
+    <a-modal v-model:visible="uploadVisible" title="上传代码包" :width="600" :mask-closable="false" @cancel="handleUploadCancel">
+      <a-form :model="uploadForm" layout="vertical">
+        <a-form-item field="package_name" label="包名" required>
+          <a-input v-model="uploadForm.package_name" placeholder="与 scf_plan 配置里的 package_name 一致" />
+        </a-form-item>
 
-        <a-form-item field="version" label="版本号" required :status="versionValidationStatus" :feedback="versionFeedback">
-          <a-input v-model="uploadForm.version" placeholder="将从上传的文件名中自动解析" readonly disabled />
+        <a-form-item field="version" label="版本" required>
+          <a-input v-model="uploadForm.version" placeholder="从文件名解析" readonly disabled />
           <template #extra>
-            <span style="color: #86909c; font-size: 12px"> 版本号将从上传的文件名中自动解析（格式：xxx-v1.0.45.zip） </span>
+            <span class="muted">从文件名解析，格式：xxx-v1.0.45.zip</span>
           </template>
         </a-form-item>
 
-        <a-form-item field="runtime" label="运行时环境" required>
-          <a-select v-model="uploadForm.runtime" placeholder="请选择运行时环境">
-            <a-option v-for="runtime in RUNTIME_OPTIONS" :key="runtime.value" :value="runtime.value">
-              {{ runtime.label }}
-            </a-option>
-          </a-select>
-        </a-form-item>
+        <a-form-item label="运行时">{{ uploadForm.runtime }}</a-form-item>
 
-        <a-form-item field="cloud_account_id" label="云账户" required>
-          <a-select v-model="uploadForm.cloud_account_id" placeholder="请选择云账户（COS存储）">
+        <a-form-item field="cloud_account_id" label="云账号" required>
+          <a-select v-model="uploadForm.cloud_account_id" placeholder="选择存放代码包的云账号（COS）">
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
-              {{ account.account_name }} ({{ getProviderName(account.provider) }})
+              {{ account.account_name || account.account_id }}
             </a-option>
           </a-select>
-          <template #extra>
-            <span style="color: #86909c; font-size: 12px">
-              仅支持COS方式上传，请选择云账户。上传由独立 cloudfunction 服务处理。
-            </span>
-          </template>
         </a-form-item>
 
-        <a-form-item field="description" label="描述（可选）">
-          <a-textarea
-            v-model="uploadForm.description"
-            placeholder="请输入代码包描述"
-            :rows="3"
-            :max-length="500"
-            show-word-limit
-          />
-          <template #extra>
-            <span style="color: #86909c; font-size: 12px"> 最多500个字符 ({{ uploadForm.description?.length || 0 }}/500) </span>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="file" label="代码包文件">
+        <a-form-item label="代码包文件">
           <a-upload
-            ref="uploadRef"
             :file-list="fileList"
             :auto-upload="false"
             :show-file-list="true"
@@ -217,158 +105,92 @@
           >
             <template #upload-button>
               <div class="upload-area">
-                <div>
-                  <icon-upload style="font-size: 48px; color: #c9cdd4" />
-                </div>
-                <div style="margin-top: var(--moox-space-2)">点击或拖拽上传ZIP文件</div>
-                <div style="color: #86909c; font-size: 12px; margin-top: var(--moox-space-1)">
-                  支持ZIP格式，文件大小不超过100MB
-                </div>
+                <div><icon-upload class="upload-icon" /></div>
+                <div>点击或拖拽上传 ZIP 文件</div>
+                <div class="muted">不超过 100MB</div>
               </div>
             </template>
           </a-upload>
         </a-form-item>
       </a-form>
 
-      <!-- 自定义footer -->
       <template #footer>
         <a-space>
           <a-button @click="handleUploadCancel">取消</a-button>
-          <a-button type="primary" :loading="uploading" @click="handleUploadOk">确定</a-button>
+          <a-button type="primary" :loading="uploading" @click="handleUploadOk">上传</a-button>
         </a-space>
       </template>
     </a-modal>
-
-    <!-- 代码包详情弹窗 -->
-    <FunctionPackageDetail v-model:visible="detailVisible" :package-id="detailPackageId" />
   </a-drawer>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, reactive, computed } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
+import type { FileItem } from "@arco-design/web-vue";
 import {
-  getFunctionPackageList,
-  uploadFunctionPackage,
   deleteFunctionPackage,
-  downloadPackageByURL,
-  RUNTIME_OPTIONS,
-  resolvePackageType,
-  STATUS_OPTIONS,
-  type FunctionPackage,
-  type PackageListRequest
+  formatFileSize,
+  listFunctionPackages,
+  packageStatusLabel,
+  uploadFunctionPackage,
+  type FunctionPackage
 } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
 import { useSpaceStore } from "@/store/modules/space";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import FunctionPackageDetail from "./function-package-detail.vue";
-import {
-  PACKAGE_STATUS_AVAILABLE,
-  formatDateTime,
-  formatFileSize,
-  getPackageStatusColor,
-  getPackageStatusLabel,
-  getPackageTypeColor,
-  getPackageTypeLabel,
-  getProviderName
-} from "./function-instance-model";
+import { formatInstant } from "@/utils/time-zone";
 
-// Props
-const props = defineProps<{
-  modelValue?: boolean;
-  packageType?: string | number; // 用于过滤代码包类型
-  workloadType?: string; // 用于过滤业务类型
-}>();
+const props = defineProps<{ modelValue?: boolean }>();
+const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
 
-// Emits
-const emit = defineEmits<{
-  "update:modelValue": [value: boolean];
-  refresh: [];
-}>();
+const MAX_PACKAGE_SIZE = 100 * 1024 * 1024;
+// 云函数一律用 Go1 运行时创建，代码包的运行时只是登记
+const PACKAGE_RUNTIME = "Go1";
 
-// 响应式数据
 const spaceStore = useSpaceStore();
 const listGuard = createLatestRequestGuard();
 // 上传提交序号：取消/关闭/重新打开上传弹窗、切换空间都会使进行中的提交失效
 let uploadSubmitToken = 0;
-const visible = ref(props.modelValue);
+const visible = ref(Boolean(props.modelValue));
 const loading = ref(false);
 const packageList = ref<FunctionPackage[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
+const keyword = ref("");
 const uploadVisible = ref(false);
 const uploading = ref(false);
-const uploadFormRef = ref();
-const uploadRef = ref();
-const fileList = ref<any[]>([]);
+const fileList = ref<FileItem[]>([]);
 
-// 详情弹窗
-const detailVisible = ref(false);
-const detailPackageId = ref("");
-
-// 版本验证状态
-const versionValidationStatus = ref<"error" | "warning" | "success" | undefined>(undefined);
-const versionFeedback = ref<string>("");
-const isCheckingVersion = ref(false);
-
-// 搜索表单
-const searchForm = reactive<PackageListRequest>({
-  page: 1,
-  page_size: 10,
-  workload_type: props.workloadType // 根据传入的 workloadType 初始化过滤条件
-});
-
-// 分页信息
-const pagination = computed(() => ({
-  current: searchForm.page || 1,
-  pageSize: searchForm.page_size || 10,
-  total: total.value,
-  showSizeChanger: true,
-  showJumper: true,
-  showTotal: true,
-  pageSizeOptions: ["10", "20", "50", "100"]
-}));
-
-const total = ref(0);
-
-// 上传表单数据
-const defaultUploadForm = {
-  package_name: "moox-collector",
-  version: "dev",
-  description: "",
-  runtime: "Python3.9",
-  package_type: 1,
-  workload_type: "",
-  cloud_account_id: ""
-};
-
+const defaultUploadForm = { package_name: "", version: "", runtime: PACKAGE_RUNTIME, cloud_account_id: "" };
 const uploadForm = reactive({ ...defaultUploadForm });
 
-// 监听属性变化
+const filteredPackages = computed(() => {
+  const text = keyword.value.trim().toLowerCase();
+  if (!text) return packageList.value;
+  return packageList.value.filter(item => `${item.package_name} ${item.version}`.toLowerCase().includes(text));
+});
+
 watch(
   () => props.modelValue,
-  async newVal => {
-    visible.value = newVal;
-    if (newVal) {
-      await initializePackageManage();
-    }
+  open => {
+    visible.value = Boolean(open);
+    if (open) void Promise.all([loadPackageList(), loadCloudAccounts()]);
   }
 );
 
-watch(visible, newVal => {
-  emit("update:modelValue", newVal);
-  if (!newVal) resetForSpace();
+watch(visible, open => {
+  emit("update:modelValue", open);
+  if (!open) resetForSpace();
 });
 
-// 关闭弹窗或切换空间：作废在途请求，清空列表与详情，避免组件常驻时重新打开看到其他空间的数据
+// 关闭抽屉或切换空间：作废在途请求，清空列表，避免组件常驻时重新打开看到其他空间的数据
 function resetForSpace() {
   uploadSubmitToken += 1;
   uploading.value = false;
   listGuard.invalidate();
   loading.value = false;
   packageList.value = [];
-  total.value = 0;
-  detailVisible.value = false;
 }
 
 watch(
@@ -376,467 +198,155 @@ watch(
   (spaceId, oldSpaceId) => {
     if (spaceId === oldSpaceId) return;
     resetForSpace();
-    searchForm.page = 1;
     if (visible.value) void loadPackageList();
   }
 );
 
-const handlePackageManageVisibleChange = (newVal: boolean) => {
-  visible.value = newVal;
+const handlePackageManageVisibleChange = (open: boolean) => {
+  visible.value = open;
 };
 
-const initializePackageManage = async () => {
-  if (props.workloadType) {
-    searchForm.workload_type = props.workloadType;
-  }
-  await Promise.all([loadPackageList(), loadCloudAccounts()]);
-};
-
-// 加载代码包列表
-const loadPackageList = async () => {
-  const spaceId = spaceStore.selectedSpaceId;
-  const request = listGuard.begin();
-  loading.value = true;
-  try {
-    // 构建查询参数，排除 package_type
-    const queryParams = { ...searchForm };
-    delete queryParams.package_type;
-    const response = await getFunctionPackageList(queryParams);
-    // 弹窗关闭、空间切换或有更新的请求后，旧响应丢弃
-    if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
-
-    if (response?.items) {
-      packageList.value = response.items || [];
-      total.value = response.total || 0;
-    } else {
-      packageList.value = [];
-      total.value = 0;
-    }
-  } catch (error) {
-    if (!request.isLatest()) return;
-    console.error("加载代码包列表失败:", error);
-    Message.error({
-      content: "加载代码包列表失败",
-      duration: 5000
-    });
-  } finally {
-    if (request.isLatest()) loading.value = false;
-  }
-};
-
-// 加载云账户列表
-const loadCloudAccounts = async () => {
-  try {
-    const accounts = await getCloudAccountList();
-    cloudAccountOptions.value = accounts || [];
-  } catch (error) {
-    console.error("加载云账户列表失败:", error);
-    cloudAccountOptions.value = [];
-    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudfunction 服务已部署");
-  }
-};
-
-// 分页处理
-const handlePageChange = (page: number) => {
-  searchForm.page = page;
-  loadPackageList();
-};
-
-const handlePageSizeChange = (pageSize: number) => {
-  searchForm.page_size = pageSize;
-  searchForm.page = 1;
-  loadPackageList();
-};
-
-// 新增
-const onAdd = () => {
-  // 根据传入的 packageType 和 workloadType 设置默认值
-  const defaultPackageType = resolvePackageType(props.packageType);
-  const defaultWorkloadType = props.workloadType || "";
-  Object.assign(uploadForm, {
-    ...defaultUploadForm,
-    package_type: defaultPackageType,
-    workload_type: defaultWorkloadType,
-    package_name: packageNameForType(defaultPackageType)
-  });
-  fileList.value = [];
-  // 清除版本验证状态
-  versionValidationStatus.value = undefined;
-  versionFeedback.value = "";
-  uploadSubmitToken += 1; // 重新打开视为新的提交，旧提交作废
-  uploading.value = false;
-  uploadVisible.value = true;
-};
-
-// 代码包类型对应的包名
-const packageNameForType = (packageType: number) => {
-  const map: Record<number, string> = {
-    1: "moox-collector",
-    2: "factor_calculator",
-    3: "custom_package"
-  };
-  return map[packageType] || "moox-collector";
-};
-
-// 检查版本是否已存在
-const checkVersionExists = async () => {
-  if (!uploadForm.version || !uploadForm.package_name || isCheckingVersion.value) {
-    return;
-  }
-
-  // 去除首尾空格
-  uploadForm.version = uploadForm.version.trim();
-
-  if (!uploadForm.version) {
-    versionValidationStatus.value = undefined;
-    versionFeedback.value = "";
-    return;
-  }
-
-  isCheckingVersion.value = true;
-  versionValidationStatus.value = undefined;
-  versionFeedback.value = "正在检查版本...";
-
-  try {
-    // 使用现有的列表查询API检查版本是否存在
-    const response = await getFunctionPackageList({
-      package_name: uploadForm.package_name,
-      page: 1,
-      page_size: 1000 // 获取所有匹配的包
-    });
-
-    if (response?.items) {
-      const existingPackages = response.items || [];
-
-      // 检查是否有相同版本的包（排除已删除的）
-      const duplicatePackage = existingPackages.find(
-        (pkg: FunctionPackage) =>
-          pkg.version === uploadForm.version && pkg.package_name === uploadForm.package_name && pkg.status !== 4 // 排除已删除状态
-      );
-
-      if (duplicatePackage) {
-        versionValidationStatus.value = "error";
-        versionFeedback.value = `版本 ${uploadForm.version} 已存在，请使用其他版本号`;
-      } else {
-        versionValidationStatus.value = "success";
-        versionFeedback.value = "版本号可用";
-      }
-    } else {
-      // 查询失败，不显示错误，允许用户继续
-      versionValidationStatus.value = undefined;
-      versionFeedback.value = "";
-    }
-  } catch (error) {
-    console.error("检查版本失败:", error);
-    // 查询失败，不显示错误，允许用户继续
-    versionValidationStatus.value = undefined;
-    versionFeedback.value = "";
-  } finally {
-    isCheckingVersion.value = false;
-  }
-};
-
-// 文件上传处理
-const onFileChange = (fileItemList: any[], fileItem: any) => {
-  fileList.value = fileItemList;
-  if (fileItem && fileItem.file) {
-    const fileName = fileItem.file.name;
-
-    // 检查文件类型
-    if (!fileName.toLowerCase().endsWith(".zip")) {
-      Message.error({
-        content: "只支持ZIP格式的文件",
-        duration: 5000
-      });
-      fileList.value = [];
-      uploadForm.version = "";
-      versionValidationStatus.value = undefined;
-      versionFeedback.value = "";
-      return;
-    }
-
-    // 从文件名解析版本号（格式：xxx-v1.0.45.zip）
-    const versionMatch = fileName.match(/-v(\d+\.\d+\.\d+)\.zip$/i);
-    if (!versionMatch) {
-      Message.error({
-        content: "文件名格式不正确，应为：xxx-v1.0.45.zip（例如：collector-scf-v1.0.45.zip）",
-        duration: 5000
-      });
-      fileList.value = [];
-      uploadForm.version = "";
-      versionValidationStatus.value = "error";
-      versionFeedback.value = "文件名格式不符合要求";
-      return;
-    }
-
-    // 提取版本号（包含 v 前缀）
-    const version = "v" + versionMatch[1];
-    uploadForm.version = version;
-
-    // 解析成功后自动检查版本是否存在
-    checkVersionExists();
-
-    // 检查文件大小（100MB限制）
-    const maxSize = 100 * 1024 * 1024;
-    if (fileItem.file.size > maxSize) {
-      Message.error({
-        content: "文件大小不能超过100MB",
-        duration: 5000
-      });
-      fileList.value = [];
-      uploadForm.version = "";
-      versionValidationStatus.value = undefined;
-      versionFeedback.value = "";
-      return;
-    }
-  } else {
-    uploadForm.version = "";
-    versionValidationStatus.value = undefined;
-    versionFeedback.value = "";
-  }
-};
-
-// 上传取消
-const handleUploadCancel = () => {
-  uploadSubmitToken += 1; // 取消即作废进行中的提交（版本检查、表单校验返回后不得再继续上传）
-  uploading.value = false;
-  // 清除版本验证状态
-  versionValidationStatus.value = undefined;
-  versionFeedback.value = "";
-  uploadVisible.value = false;
-};
-
-// 输入验证函数
-const validateUploadForm = () => {
-  const errors: string[] = [];
-
-  // 验证函数包类型
-  if (!uploadForm.package_type) {
-    errors.push("请选择函数包类型");
-  }
-
-  // 验证版本号
-  if (!uploadForm.version) {
-    errors.push("请输入版本号");
-  } else {
-    // 去除首尾空格
-    uploadForm.version = uploadForm.version.trim();
-
-    // 版本号格式验证 (支持 v1.0.0, 1.0.0, v1.0, 1.0 等格式)
-    const versionRegex = /^v?\d+(\.\d+){0,2}(-[a-zA-Z0-9]+)?$/;
-    if (!versionRegex.test(uploadForm.version)) {
-      errors.push("版本号格式不正确，请使用如 v1.0.0 或 1.0.0 的格式");
-    }
-
-    // 检查版本号长度
-    if (uploadForm.version.length > 20) {
-      errors.push("版本号长度不能超过20个字符");
-    }
-  }
-
-  // 验证运行时环境
-  if (!uploadForm.runtime) {
-    errors.push("请选择运行时环境");
-  }
-
-  // 验证云账户（必填）
-  if (!uploadForm.cloud_account_id) {
-    errors.push("请选择云账户，仅支持COS方式上传");
-  }
-
-  if (fileList.value.length === 0) {
-    errors.push("请选择要上传的ZIP文件");
-  } else {
-    const file = fileList.value[0];
-    if (!file.file) {
-      errors.push("文件读取失败，请重新选择文件");
-    } else {
-      if (!file.file.name.toLowerCase().endsWith(".zip")) {
-        errors.push("只支持ZIP格式的文件");
-      }
-      if (file.file.size > 100 * 1024 * 1024) {
-        errors.push("文件大小不能超过100MB");
-      }
-      if (file.file.size === 0) {
-        errors.push("文件不能为空");
-      }
-      if (file.file.name.length > 255) {
-        errors.push("文件名长度不能超过255个字符");
-      }
-    }
-  }
-
-  // 如果有描述，验证长度和内容
-  if (uploadForm.description) {
-    uploadForm.description = uploadForm.description.trim();
-    if (uploadForm.description.length > 500) {
-      errors.push("描述长度不能超过500个字符");
-    }
-  }
-
-  return errors;
-};
-
-// 上传确认
-const handleUploadOk = async () => {
-  // 点击时固定发起空间与代次：之后任何一步 await 返回时若空间已切换（含 A→B→A），整个提交作废，不能改传到新空间
-  const submitSpaceId = spaceStore.selectedSpaceId;
-  const submitGeneration = selectedSpaceGeneration();
-  const submitToken = ++uploadSubmitToken;
-  const submitStale = () =>
-    submitToken !== uploadSubmitToken ||
-    spaceStore.selectedSpaceId !== submitSpaceId ||
-    selectedSpaceGeneration() !== submitGeneration;
-  // 检查版本是否重复
-  if (versionValidationStatus.value === "error") {
-    Message.error({
-      content: versionFeedback.value || "版本已存在，请修改版本号",
-      duration: 5000
-    });
-    return;
-  }
-
-  // 如果还没有检查过版本，先检查一下
-  if (uploadForm.version && !versionValidationStatus.value) {
-    await checkVersionExists();
-    if (submitStale()) return;
-    // 检查后如果发现重复，阻止提交
-    if (versionValidationStatus.value === "error") {
-      Message.error({
-        content: versionFeedback.value || "版本已存在，请修改版本号",
-        duration: 5000
-      });
-      return;
-    }
-  }
-
-  // 表单验证
-  const errors = await uploadFormRef.value?.validate();
-  if (submitStale()) return;
-  if (errors) {
-    return; // 有验证错误，不继续执行
-  }
-
-  // 自定义验证
-  const validationErrors = validateUploadForm();
-  if (validationErrors.length > 0) {
-    Message.error({
-      content: validationErrors[0],
-      duration: 5000 // 显示第一个错误，停留5秒
-    });
-    return; // 有验证错误，不继续执行
-  }
-
-  uploading.value = true;
-
-  try {
-    await handleUpload(submitSpaceId, submitStale);
-  } catch (error: any) {
-    if (!submitStale()) {
-      console.error("上传代码包失败:", error);
-      Message.error({
-        content: error?.message || "上传代码包失败",
-        duration: 5000 // 错误消息显示5秒
-      });
-    }
-    // 出错时不关闭弹窗，让用户可以修改后重新提交
-  } finally {
-    // 已作废的提交（取消/重新打开/切换空间）不回写新弹窗的 loading；这几处自己会重置 uploading
-    if (!submitStale()) uploading.value = false;
-  }
-};
-
-// 统一上传处理（独立 cloudfunction 服务）
-const handleUpload = async (spaceId: string, isStale: () => boolean) => {
-  try {
-    const originalFilename = fileList.value[0]?.file?.name || "";
-    await uploadFunctionPackage(
-      {
-        ...uploadForm,
-        original_filename: originalFilename
-      },
-      fileList.value[0].file,
-      spaceId
-    );
-
-    Message.success("上传成功！");
-    // 上传已经成功；只有提交仍然有效时才操作当前弹窗，已作废的提交不能关闭用户重新打开、正在填写的新弹窗
-    if (!isStale()) uploadVisible.value = false;
-    await loadPackageList();
-    emit("refresh");
-  } catch (error: any) {
-    if (isStale()) return;
-    console.error("上传代码包失败:", error);
-
-    const errorMessage = error?.message || "上传代码包失败";
-
-    Message.error(errorMessage);
-    uploading.value = false;
-  }
-};
-
-// 下载进度状态（简化版）
-const downloadProgress = ref<{ [key: string]: number }>({});
-
-// 下载（新的URL下载方式）
-const onDownload = async (record: FunctionPackage) => {
-  try {
-    // 如果已经在下载中，则忽略
-    if (downloadProgress.value[record.package_id] !== undefined) {
-      return;
-    }
-
-    // 显示下载状态
-    downloadProgress.value[record.package_id] = 0;
-
-    // 使用新的URL下载方式
-    await downloadPackageByURL(record.package_id);
-
-    // 清理进度状态
-    delete downloadProgress.value[record.package_id];
-  } catch (error) {
-    console.error("下载失败:", error);
-    // 清除状态
-    delete downloadProgress.value[record.package_id];
-
-    const errorMessage = error instanceof Error ? error.message : "未知错误";
-    Message.error({
-      content: `下载失败: ${errorMessage}`,
-      duration: 5000
-    });
-  }
-};
-
-// 删除
-const onDelete = async (record: FunctionPackage) => {
-  try {
-    await deleteFunctionPackage(record.package_id);
-    Message.success("删除成功");
-    // 刷新代码包列表
-    await loadPackageList();
-    emit("refresh");
-  } catch (error) {
-    console.error("删除代码包失败:", error);
-    Message.error({
-      content: "删除代码包失败",
-      duration: 5000
-    });
-  }
-};
-
-// 关闭弹窗
 const handleCancel = () => {
   visible.value = false;
 };
 
-// 显示代码包详情
-const onShowDetail = (record: FunctionPackage) => {
-  detailPackageId.value = record.package_id;
-  detailVisible.value = true;
+async function loadPackageList() {
+  const spaceId = spaceStore.selectedSpaceId;
+  if (!spaceId) return;
+  const request = listGuard.begin();
+  loading.value = true;
+  try {
+    const packages = await listFunctionPackages(spaceId);
+    // 抽屉关闭、空间切换或有更新的请求后，旧响应丢弃
+    if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
+    packageList.value = packages;
+  } catch (error) {
+    if (request.isLatest()) Message.error(`加载代码包失败：${errorText(error)}`);
+  } finally {
+    if (request.isLatest()) loading.value = false;
+  }
+}
+
+async function loadCloudAccounts() {
+  try {
+    cloudAccountOptions.value = await getCloudAccountList();
+  } catch (error) {
+    cloudAccountOptions.value = [];
+    Message.error(`加载云账号失败：${errorText(error)}`);
+  }
+}
+
+const accountName = (accountId: string) => {
+  const account = cloudAccountOptions.value.find(item => item.account_id === accountId);
+  return account?.account_name || accountId || "-";
 };
 
-// 代码包、云账户是全局对象：时间按 UTC 带后缀
-const formatTime = (time: string | undefined) => formatDateTime(time, "UTC");
+const cosLocation = (record: FunctionPackage) =>
+  record.cos_path ? `${record.cos_bucket}/${record.cos_path}（${record.cos_region}）` : "-";
+
+function onAdd() {
+  Object.assign(uploadForm, {
+    ...defaultUploadForm,
+    // 与 scf_plan 的默认包名一致；配置里改过包名时手工改成配置里的值
+    package_name: `moox-collector-${spaceStore.selectedSpaceId}-plan`,
+    cloud_account_id: cloudAccountOptions.value.length === 1 ? cloudAccountOptions.value[0].account_id : ""
+  });
+  fileList.value = [];
+  uploadSubmitToken += 1; // 重新打开视为新的提交，旧提交作废
+  uploading.value = false;
+  uploadVisible.value = true;
+}
+
+/** 选文件时检查格式与大小，并从文件名（xxx-v1.0.45.zip）解析版本。 */
+function onFileChange(items: FileItem[], item: FileItem) {
+  fileList.value = items;
+  uploadForm.version = "";
+  const file = item?.file;
+  if (!file) return;
+  const problem = !file.name.toLowerCase().endsWith(".zip")
+    ? "只支持 ZIP 文件"
+    : file.size === 0
+      ? "文件不能为空"
+      : file.size > MAX_PACKAGE_SIZE
+        ? "文件不能超过 100MB"
+        : "";
+  const version = /-v(\d+\.\d+\.\d+)\.zip$/i.exec(file.name)?.[1];
+  if (problem || !version) {
+    Message.error(problem || "文件名格式不对，应为 xxx-v1.0.45.zip（例如 collector-scf-v1.0.45.zip）");
+    fileList.value = [];
+    return;
+  }
+  uploadForm.version = `v${version}`;
+}
+
+function handleUploadCancel() {
+  uploadSubmitToken += 1; // 取消即作废进行中的提交
+  uploading.value = false;
+  uploadVisible.value = false;
+}
+
+/** 上传前的检查，返回第一条问题；同包名同版本已存在时直接拦下。 */
+function uploadProblem(): string {
+  const name = uploadForm.package_name.trim();
+  if (!name) return "请填写包名";
+  if (!fileList.value[0]?.file || !uploadForm.version) return "请选择代码包文件";
+  if (!uploadForm.cloud_account_id) return "请选择云账号";
+  if (packageList.value.some(item => item.package_name === name && item.version === uploadForm.version)) {
+    return `${name} ${uploadForm.version} 已存在，请换一个版本`;
+  }
+  return "";
+}
+
+async function handleUploadOk() {
+  const problem = uploadProblem();
+  if (problem) {
+    Message.error(problem);
+    return;
+  }
+  // 点击时固定发起空间与代次：之后 await 返回时若空间已切换（含 A→B→A），整个提交作废，不能改传到新空间
+  const spaceId = spaceStore.selectedSpaceId;
+  const generation = selectedSpaceGeneration();
+  const token = ++uploadSubmitToken;
+  const stale = () =>
+    token !== uploadSubmitToken || spaceStore.selectedSpaceId !== spaceId || selectedSpaceGeneration() !== generation;
+  uploading.value = true;
+  try {
+    await uploadFunctionPackage(
+      {
+        package_name: uploadForm.package_name.trim(),
+        version: uploadForm.version,
+        runtime: uploadForm.runtime,
+        cloud_account_id: uploadForm.cloud_account_id
+      },
+      fileList.value[0].file as File,
+      spaceId
+    );
+    Message.success("上传成功");
+    // 已作废的提交不能关闭用户重新打开、正在填写的新弹窗
+    if (stale()) return;
+    uploadVisible.value = false;
+    void loadPackageList();
+  } catch (error) {
+    if (!stale()) Message.error(`上传代码包失败：${errorText(error)}`);
+  } finally {
+    if (!stale()) uploading.value = false;
+  }
+}
+
+async function onDelete(record: FunctionPackage) {
+  try {
+    await deleteFunctionPackage(record.space_id || spaceStore.selectedSpaceId, record.package_id);
+    Message.success("已删除");
+    void loadPackageList();
+  } catch (error) {
+    Message.error(`删除代码包失败：${errorText(error)}`);
+  }
+}
+
+const errorText = (error: unknown) => (error instanceof Error && error.message ? error.message : "未知原因");
+
+// 代码包的时间按 UTC 带后缀
+const formatTime = (time: string | undefined) => formatInstant(time, "UTC");
 </script>
 
 <style scoped>
@@ -849,53 +359,55 @@ const formatTime = (time: string | undefined) => formatDateTime(time, "UTC");
   flex-wrap: wrap;
   gap: var(--moox-space-2);
   align-items: center;
-  justify-content: space-between;
   margin-bottom: var(--moox-space-2);
 }
 
-.package-filters {
-  flex: 1 1 auto;
-}
-
 .package-upload-button {
-  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .upload-area {
-  border: 2px dashed #d0d0d0;
+  padding: var(--moox-space-6);
+  border: 1px dashed var(--color-border-3);
   border-radius: 6px;
-  padding: var(--moox-space-8);
+  color: var(--color-text-2);
   text-align: center;
-  background: #fafafa;
   cursor: pointer;
-  transition: border-color 0.3s;
 }
 
 .upload-area:hover {
-  border-color: #165dff;
+  border-color: rgb(var(--primary-6));
 }
 
-/* 版本验证样式 */
-:deep(.arco-form-item-status-error .arco-input-wrapper) {
-  border-color: #f53f3f;
-  box-shadow: 0 0 0 2px rgba(245, 63, 63, 0.1);
+.upload-icon {
+  color: var(--color-text-4);
+  font-size: 32px;
 }
 
-:deep(.arco-form-item-status-success .arco-input-wrapper) {
-  border-color: #00b42a;
-  box-shadow: 0 0 0 2px rgba(0, 180, 42, 0.1);
+.single-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-:deep(.arco-form-item-feedback) {
+.mono-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
-  margin-top: var(--moox-space-1);
 }
 
-:deep(.arco-form-item-status-error .arco-form-item-feedback) {
-  color: #f53f3f;
+.muted {
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
-:deep(.arco-form-item-status-success .arco-form-item-feedback) {
-  color: #00b42a;
+.warn-text {
+  color: rgb(var(--warning-6));
+}
+
+.empty-text {
+  padding: var(--moox-space-4) 0;
+  color: var(--color-text-3);
+  text-align: center;
 }
 </style>

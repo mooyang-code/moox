@@ -78,13 +78,11 @@ build_storage_cli() {
   build_go modules/storage ./cmd/cli moox-storage-cli 0
 }
 
-# web-host 内嵌的前端一律按当前源码现场生成，不用仓库里提交的 web-host/internal/statik/statik.go：
-# 那份文件只在有人手工更新时才变，直接拿它编译会把线上前端整体回退（2026-11-10 发生过）。
+# 管理台前端内嵌在 moox-admin 里（modules/admin/internal/webui），一律按当前源码现场构建：
 # 默认先用 build-web-docker.sh 从当前源码构建 web/dist；调用方已经构建好 web/dist 时设 MOOX_WEB_DIST_READY=1 跳过这一步。
-# statik 生成到临时目录，用 go build -overlay 替换内嵌包，不改动仓库文件（native-release.sh 要求工作区干净）。
-STATIK_VERSION="v0.1.7"
-build_web_host() {
-  echo "==> build moox-web-host"
+# 编译前把 web/dist 拷进 webui/dist，编译完删掉，只留占位的 .gitkeep，不改动任何已提交的文件，
+# 下一次不经本脚本的编译也不会带上过时的前端（2026-11-10 发生过按提交编译带上过时前端、线上整体回退）。
+build_admin_server() {
   if [[ "${MOOX_WEB_DIST_READY:-}" != "1" ]]; then
     bash "${ROOT}/scripts/build/build-web-docker.sh"
   fi
@@ -92,23 +90,15 @@ build_web_host() {
     echo "web/dist 不完整（没有 static/js）：先用 scripts/build/build-web-docker.sh 构建前端" >&2
     exit 1
   fi
-  local stage
-  stage="$(mktemp -d "${TMPDIR:-/tmp}/moox-web-statik.XXXXXX")"
+  local webui="${ROOT}/modules/admin/internal/webui/dist"
   (
-    trap 'rm -rf "${stage}"' EXIT
-    cd "${ROOT}/web-host"
-    # statik 工具要从 Go 模块代理下载一次；国内网络取不到 proxy.golang.org 时先设 GOPROXY=https://mirrors.tencent.com/go,direct。
-    if ! GOOS= GOARCH= go run "github.com/rakyll/statik@${STATIK_VERSION}" -src="${ROOT}/web/dist" -dest="${stage}" -f >/dev/null; then
-      echo "生成内嵌前端失败（go run statik）；国内网络先设 GOPROXY=https://mirrors.tencent.com/go,direct 再重试" >&2
-      exit 1
-    fi
-    printf '{"Replace":{"%s":"%s"}}\n' "${ROOT}/web-host/internal/statik/statik.go" "${stage}/statik/statik.go" > "${stage}/overlay.json"
-    GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build \
-      -overlay "${stage}/overlay.json" \
-      -ldflags "${LDFLAGS}" \
-      -o "${BIN_DIR}/$(binary_name moox-web-host)" .
+    clean_webui() { find "${webui}" -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +; }
+    trap clean_webui EXIT
+    clean_webui
+    cp -R "${ROOT}/web/dist/." "${webui}/"
+    build_go modules/admin ./cmd/server moox-admin 0
   )
-  echo "==> moox-web-host 内嵌前端：$(grep -o 'static/js/index-[^"]*\.js' "${ROOT}/web/dist/index.html" | head -1)"
+  echo "==> moox-admin 内嵌前端：$(grep -o 'static/js/index-[^"]*\.js' "${ROOT}/web/dist/index.html" | head -1)"
 }
 
 build_hostagent() {
@@ -129,16 +119,12 @@ build_collector_market_data_scf() {
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
-    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
-    build_go modules/admin ./cmd/server moox-admin 0
+    build_admin_server
     build_go modules/admin ./cmd/cli moox-admin-cli 0
     build_go modules/hostgateway ./cmd/server moox-host-gateway 0
     build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
     build_go modules/eventbus ./cmd/server moox-eventbus 0
-    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
     build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
-    build_web_host
-    build_go modules/cloudfunction ./cmd/server moox-cloudfunction 0
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
     build_go modules/collector ./cmd/stream moox-collector-stream 0
@@ -154,17 +140,12 @@ case "${TARGET_MODULE}" in
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
     build_storage_cli
-    build_go modules/access ./cmd/server moox-access 0
     ;;
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
     ;;
-  runtime)
-    [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-runtime supports linux only" >&2; exit 1; }
-    build_go modules/cli ./cmd/moox-runtime moox-runtime 0
-    ;;
   admin)
-    build_go modules/admin ./cmd/server moox-admin 0
+    build_admin_server
     build_go modules/admin ./cmd/cli moox-admin-cli 0
     ;;
   admin-cli)
@@ -173,19 +154,12 @@ case "${TARGET_MODULE}" in
   host-gateway)
     build_go modules/hostgateway ./cmd/server moox-host-gateway 0
     build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
-    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
     ;;
   eventbus)
     build_go modules/eventbus ./cmd/server moox-eventbus 0
     ;;
   egress-proxy)
     build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
-    ;;
-  console-proxy)
-    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
-    ;;
-  cloudfunction)
-    build_go modules/cloudfunction ./cmd/server moox-cloudfunction 0
     ;;
   collector)
     build_go modules/collector ./cmd/server moox-collector 0
@@ -238,9 +212,6 @@ case "${TARGET_MODULE}" in
   storage-cgo)
     build_storage
     ;;
-  access)
-    build_go modules/access ./cmd/server moox-access 0
-    ;;
   storage-primary)
     build_go modules/storage ./cmd/server moox-storage-primary 1
     ;;
@@ -252,9 +223,6 @@ case "${TARGET_MODULE}" in
     ;;
   hostagent)
     build_hostagent
-    ;;
-  web-host)
-    build_web_host
     ;;
   *)
     echo "unknown build target: ${TARGET_MODULE}" >&2

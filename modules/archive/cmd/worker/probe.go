@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
 // probe 用 worker 自己的身份读几页区间数据并打印每页耗时，用来排查读取为什么慢或超时（不写任何东西）。
@@ -35,11 +34,7 @@ func probe(args []string) error {
 		return err
 	}
 	defer gateway.Close()
-	secret, err := gatewayauth.ReadSigningSecret(cfg.StorageSecretPath())
-	if err != nil {
-		return err
-	}
-	client := source.New(gateway, secret)
+	client := source.New(gateway)
 	ctx := context.Background()
 	started := time.Now()
 	columns, err := client.Columns(ctx, *space, *dataset)

@@ -3,6 +3,7 @@ package command
 import (
 	"bytes"
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"os"
 	"os/exec"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorudf"
@@ -42,7 +42,7 @@ func (g *udfFakeGateway) Forward(context.Context, string, string, int, []byte) (
 func useUdfGateway(t *testing.T, g *udfFakeGateway) {
 	t.Helper()
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return g, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return g, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 }
 

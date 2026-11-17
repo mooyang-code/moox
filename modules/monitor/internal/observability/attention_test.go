@@ -110,14 +110,15 @@ func TestAttentionCheckNames(t *testing.T) {
 	for _, kind := range []string{
 		"target_rejected", "auto_paused", "target_blocked", "account_not_ready", "target_expired", "target_reversal",
 		"rate_limited", "turnover_high", "unknown_results", "margin_ratio_low", "inspection_blocked", "inspection_failing",
-		"transfer_shortfall", "transfer_failing", "valuation_degraded", "flatten_orders_unsettled", "release_orders_unverified",
+		"transfer_shortfall", "transfer_failing", "valuation_degraded", "flatten_orders_unsettled",
 		"release_orders_stuck", "orders_instrument_gone", "fill_ingest_failed", "clock_skew", "isolated_position",
 	} {
 		require.NotEmpty(t, AttentionCheckName("trade_attention", kind), kind)
 	}
 	require.Equal(t, "清仓结束时有子单没收拾掉，需人工核对", AttentionCheckName("trade_attention", "flatten_orders_unsettled"))
-	require.Equal(t, "释放会话时没能撤单，只按本地记录释放", AttentionCheckName("trade_attention", "release_orders_unverified"))
-	require.Equal(t, "释放会话持续失败，目标单没撤下", AttentionCheckName("trade_attention", "release_orders_stuck"))
+	// 释放归属的流程已删除，release_orders_unverified 不再上报，也不再登记中文名。
+	require.Empty(t, AttentionCheckName("trade_attention", "release_orders_unverified"))
+	require.Equal(t, "过期目标的挂单持续撤不下来", AttentionCheckName("trade_attention", "release_orders_stuck"))
 	require.Equal(t, "标的已下架的订单需人工核对成交", AttentionCheckName("trade_attention", "orders_instrument_gone"))
 	require.Equal(t, "成交没能记进账本，账户卡在同一笔", AttentionCheckName("trade_attention", "fill_ingest_failed"))
 	require.Equal(t, "本机时钟与交易所相差过大，请检查 NTP", AttentionCheckName("trade_attention", "clock_skew"))

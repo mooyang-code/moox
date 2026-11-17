@@ -19,7 +19,7 @@ func (g *unexpectedGatewayCall) Invoke(context.Context, string, string, any, any
 
 func TestGatewayStorageRejectsSDKTargetOverridesBeforeNetwork(t *testing.T) {
 	gateway := &unexpectedGatewayCall{}
-	storage := NewGatewayClient(gateway, nil)
+	storage := NewGatewayClient(gateway)
 	_, err := storage.metadata.GetDataset(t.Context(), &storagepb.GetDatasetReq{}, client.WithTarget("ip://192.0.2.99:20100"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
 	_, err = storage.primary.ReportDatasetPeriodCompleted(t.Context(), &storagepb.ReportDatasetPeriodCompletedReq{}, client.WithTimeout(1))

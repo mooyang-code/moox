@@ -36,11 +36,11 @@ moox-cli udf activate <名称>@<哈希>             # 默认只给影响清单�
 
 切换在**因子引擎模块暂停期间**进行（新 UDF 的首次 `activate` 没有引用方，不需要暂停）：
 
-1. `moox-cli lifecycle pause --endpoint <因子引擎健康检查地址>`，等本次暂停收敛（`GetStatus` 里引擎生命周期的 `quiesced` 为真）；
+1. `moox-cli lifecycle pause --module factor-engine`，等本次暂停收敛（`GetStatus` 里引擎生命周期的 `quiesced` 为真）；
 2. `moox-cli udf activate <名称>@<哈希>`（不带 `--yes` 只预览）：看影响清单（因子定义 → 成员 → 因子任务 → 策略实例）、新旧 `definition_hash` 与回看、前提检查；
    有已领取的补算作业先 `CancelRecalcJob`；回看变长时按提示核对源数据保留期与引擎配置（`window.lookback`、`window.max_memory`、`memory.total_budget`、`compute.max_memory`）；
 3. `moox-cli udf activate <名称>@<哈希>`；
-4. `moox-cli lifecycle resume --endpoint <因子引擎健康检查地址>`：先追赶（同步目录、备齐模块、用新版本补算暂停期间的周期），全部追平才放行；
+4. `moox-cli lifecycle resume --module factor-engine`：先追赶（同步目录、备齐模块、用新版本补算暂停期间的周期），全部追平才放行；
 5. 引用它的因子定义 `definition_hash` 变了，关联的策略实例会进入 `factor_changed`，重新启用；需要更早的历史一致时显式补算。
 
 回滚就是 `activate` 指回旧版本，步骤相同。`moox-cli udf show <名称>` 看各版本、引用关系与各引擎的模块状态（ready / fetching / fetch_failed / compile_failed）。

@@ -452,3 +452,71 @@ func TestLoadBarGroupBySourceColumn(t *testing.T) {
 		t.Fatalf("来源缺数的处理不符：%s，BTC=%s", targets(decision), reasonOf(decision, "BTC-USDT"))
 	}
 }
+
+// tunedSourceClient 是带来源的调参场景：主帧任务 ftask_1h 与来源任务 ftask_d1d 都有可变成员（bias__var、w__var）。
+func tunedSourceClient() *fakeClient {
+	client := newFakeClient("spot")
+	withDailySource(client, "spot", "")
+	client.factors["bias"] = FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
+	client.factors["w"] = FactorInfo{FactorID: "w", DefinitionHash: "sha256:w", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
+	for viewID, column := range map[string]ViewColumn{"view_factor_1h": memberColumn("bias__var", "bias__var", "bias", "var"), "view_factor_d1d": memberColumn("w__var", "w__var", "w", "var")} {
+		view := client.views[viewID]
+		view.Columns = append(append([]ViewColumn(nil), view.Columns...), column, paramsColumn())
+		client.views[viewID] = view
+	}
+	return client
+}
+
+// 关联是永久的，所以只在解析与市场核对都通过之后才关联（批 3 T9 审查）：来源任务有可变成员、factor_params 对不上时启用被拒，
+// 且没有调用 BindFactorTask。交叉登记（A：主帧 T1、来源 T2；B：主帧 T2、来源 T1，两个任务都有可变成员）时两边都启用失败，
+// 也都没有占住任务，之后两个实例都能删掉（删除侧见 rpc 的 TestDeleteCrossRegisteredInstances）。
+func TestTunedInstanceBindsOnlyAfterResolvePasses(t *testing.T) {
+	tunedSource := strings.Replace(sourceDSL, "rules:\n", "factor_params:\n  bias__var:\n    window: 20\nrules:\n", 1)
+	sets := &tasksFake{}
+	service := Service{Client: tunedSourceClient(), Sets: sets}
+	if _, _, err := service.ResolveInstance(context.Background(), "a", "space", sourceTasks(), parseStrategy(t, tunedSource)); err == nil || !strings.Contains(err.Error(), "来源任务不能有可变成员") {
+		t.Fatalf("来源任务有可变成员应被拒绝：%v", err)
+	}
+	if len(sets.binds) != 0 || len(sets.gets) != 2 {
+		t.Fatalf("解析没通过时不能关联任务，只读状态：binds=%v gets=%v", sets.binds, sets.gets)
+	}
+
+	// 交叉登记：两个实例的主帧与来源互换，两个 View 都有可变成员；两边都在关联之前被拒。
+	cross := tunedSourceClient()
+	crossSets := &tasksFake{}
+	crossService := Service{Client: cross, Sets: crossSets}
+	for instance, tasks := range map[string]map[string]string{
+		"a": {"spot": "ftask_1h", "daily:spot": "ftask_d1d"},
+		"b": {"spot": "ftask_d1d", "daily:spot": "ftask_1h"},
+	} {
+		if _, _, err := crossService.ResolveInstance(context.Background(), instance, "space", tasks, parseStrategy(t, tunedSource)); err == nil {
+			t.Fatalf("实例 %s 交叉登记应启用失败", instance)
+		}
+	}
+	if len(crossSets.binds) != 0 {
+		t.Fatalf("交叉登记的两个实例都不能占住任务：%v", crossSets.binds)
+	}
+
+	// factor_params 写了任务里没有的可变成员：同样在关联之前被拒。
+	wrong := &tasksFake{}
+	bad := strings.Replace(tunedDSL, "bias__var:\n    window", "ma__var:\n    window", 1)
+	if _, _, err := (Service{Client: tunedClient(), Sets: wrong}).ResolveInstance(context.Background(), "a", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, bad)); err == nil {
+		t.Fatal("factor_params 对不上应被拒绝")
+	}
+	if len(wrong.binds) != 0 {
+		t.Fatalf("DSL 写错时不能关联任务：%v", wrong.binds)
+	}
+
+	// 解析通过：关联主帧任务，来源任务不关联。
+	plainSource := tunedSourceClient()
+	view := plainSource.views["view_factor_d1d"]
+	view.Columns = view.Columns[:2]
+	plainSource.views["view_factor_d1d"] = view
+	ok := &tasksFake{}
+	if _, _, err := (Service{Client: plainSource, Sets: ok}).ResolveInstance(context.Background(), "a", "space", sourceTasks(), parseStrategy(t, tunedSource)); err != nil {
+		t.Fatalf("来源没有可变成员时应通过：%v", err)
+	}
+	if strings.Join(ok.binds, ",") != "ftask_1h@a" {
+		t.Fatalf("只关联主帧任务：%v", ok.binds)
+	}
+}

@@ -11,8 +11,10 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/udfhost"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorudf"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
@@ -237,7 +239,31 @@ func RunnersToPB(runners []domain.RunnerStatus) []*factorpb.FactorRunnerStatus {
 		out = append(out, &factorpb.FactorRunnerStatus{
 			TaskId: runner.TaskID, Queued: runner.Queued, Active: runner.Active,
 			WarmupState: runner.WarmupState, WarmSubjects: runner.WarmSubjects, ExpectedSubjects: runner.ExpectedSubjects, Paused: runner.Paused,
+			Checks: TaskChecksToPB(runner.Checks),
 		})
+	}
+	return out
+}
+
+// TaskChecksToPB 把任务检查的逐项结果换成线上格式（心跳与 EngineControl.CheckTask 共用）。
+func TaskChecksToPB(checks []domain.TaskCheck) []*factorpb.FactorTaskCheck {
+	if len(checks) == 0 {
+		return nil
+	}
+	out := make([]*factorpb.FactorTaskCheck, 0, len(checks))
+	for _, check := range checks {
+		out = append(out, &factorpb.FactorTaskCheck{Name: check.Name, Status: check.Status, Message: check.Message, Remedy: check.Remedy})
+	}
+	return out
+}
+
+func taskChecksFromPB(checks []*factorpb.FactorTaskCheck) []domain.TaskCheck {
+	if len(checks) == 0 {
+		return nil
+	}
+	out := make([]domain.TaskCheck, 0, len(checks))
+	for _, check := range checks {
+		out = append(out, domain.TaskCheck{Name: check.GetName(), Status: check.GetStatus(), Message: check.GetMessage(), Remedy: check.GetRemedy()})
 	}
 	return out
 }
@@ -248,6 +274,7 @@ func RunnersFromPB(runners []*factorpb.FactorRunnerStatus) []domain.RunnerStatus
 		out = append(out, domain.RunnerStatus{
 			TaskID: runner.GetTaskId(), Queued: runner.GetQueued(), Active: runner.GetActive(),
 			WarmupState: runner.GetWarmupState(), WarmSubjects: runner.GetWarmSubjects(), ExpectedSubjects: runner.GetExpectedSubjects(), Paused: runner.GetPaused(),
+			Checks: taskChecksFromPB(runner.GetChecks()),
 		})
 	}
 	return out
@@ -276,6 +303,7 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 		Runners: RunnersToPB(status.Runners), RecentRuns: runs,
 		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
 		Lifecycle: LifecycleToPB(status.Lifecycle), UdfModules: UDFModulesToPB(status.UDFModules),
+		Ready: status.Ready, NotReadyReason: status.NotReadyReason,
 	}
 }
 
@@ -299,23 +327,35 @@ func UDFModulesFromPB(modules []*factorpb.UdfModuleStatus) []domain.UDFModuleSta
 
 // LifecycleToPB 转换引擎模块级的生命周期状态。
 func LifecycleToPB(life domain.EngineLifecycle) *factorpb.EngineLifecycleStatus {
-	return &factorpb.EngineLifecycleStatus{
+	out := &factorpb.EngineLifecycleStatus{
 		Stage: life.Stage, PausedSince: FormatTime(life.PausedSince), QuiescedAt: FormatTime(life.QuiescedAt),
-		Quiesced: life.Quiesced, CatchupBlocked: life.CatchupBlocked,
+		Quiesced: life.Quiesced, CatchupBlocked: life.CatchupBlocked, PauseKind: life.PauseKind, PauseReason: life.PauseReason,
 	}
+	if c := life.Catchup; c != nil {
+		out.Catchup = &commonpb.CatchupProgress{Since: FormatTime(c.Since), Target: FormatTime(c.Target), Done: c.Done, Total: c.Total,
+			CaughtUp: c.CaughtUp, BlockedBy: c.BlockedBy, Unfillable: int32(c.Unfillable), Message: c.Message}
+	}
+	return out
 }
 
-// LifecycleFromPB 还原引擎模块级的生命周期状态；缺失（旧引擎或没有上报）时为零值，即“未收敛”。
+// LifecycleFromPB 还原引擎模块级的生命周期状态；缺失（没有上报）时为零值，即“未收敛”。
 func LifecycleFromPB(pb *factorpb.EngineLifecycleStatus) domain.EngineLifecycle {
 	if pb == nil {
 		return domain.EngineLifecycle{}
 	}
 	pausedSince, _ := ParseTime(pb.GetPausedSince())
 	quiescedAt, _ := ParseTime(pb.GetQuiescedAt())
-	return domain.EngineLifecycle{
+	out := domain.EngineLifecycle{
 		Stage: pb.GetStage(), PausedSince: pausedSince, QuiescedAt: quiescedAt,
-		Quiesced: pb.GetQuiesced(), CatchupBlocked: pb.GetCatchupBlocked(),
+		Quiesced: pb.GetQuiesced(), CatchupBlocked: pb.GetCatchupBlocked(), PauseKind: pb.GetPauseKind(), PauseReason: pb.GetPauseReason(),
 	}
+	if c := pb.GetCatchup(); c != nil {
+		since, _ := ParseTime(c.GetSince())
+		target, _ := ParseTime(c.GetTarget())
+		out.Catchup = &lifecycle.Catchup{Since: since, Target: target, Done: c.GetDone(), Total: c.GetTotal(), CaughtUp: c.GetCaughtUp(),
+			BlockedBy: c.GetBlockedBy(), Unfillable: int(c.GetUnfillable()), Message: c.GetMessage()}
+	}
+	return out
 }
 
 func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, error) {
@@ -339,6 +379,7 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
 		Runners: RunnersFromPB(pb.GetRunners()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
 		Lifecycle: LifecycleFromPB(pb.GetLifecycle()), UDFModules: UDFModulesFromPB(pb.GetUdfModules()),
+		Ready: pb.GetReady(), NotReadyReason: pb.GetNotReadyReason(),
 	}, nil
 }
 
@@ -400,25 +441,19 @@ func SnapshotFromPB(params map[string]*factorpb.ParamValue) domain.ParamSnapshot
 }
 
 // MemberParamStateToPB 转换一个可变成员最近一次被接受的提交。
-func MemberParamStateToPB(member domain.FactorTaskMember) *factorpb.MemberParamState {
+func MemberParamStateToPB(member domain.MemberParamState) *factorpb.MemberParamState {
 	state := &factorpb.MemberParamState{
-		MemberKey: member.MemberKey, Params: SnapshotToPB(member.LastSubmittedParams),
+		MemberKey: member.MemberKey, Params: SnapshotToPB(member.Params),
 		LastSubmittedPeriod: member.LastSubmittedPeriod, LastRequestId: member.LastRequestID,
 	}
-	if member.LastSubmittedAt != nil {
-		state.LastSubmittedAt = FormatTime(*member.LastSubmittedAt)
+	if !member.LastSubmittedAt.IsZero() {
+		state.LastSubmittedAt = FormatTime(member.LastSubmittedAt)
 	}
 	return state
 }
 
-// MemberParamState 是引擎和策略读到的可变成员的最近一次提交；LastSubmittedPeriod 为 0 表示从未提交过（Params 为空）。
-type MemberParamState struct {
-	MemberKey           string
-	Params              domain.ParamSnapshot
-	LastSubmittedPeriod int64
-	LastRequestID       string
-	LastSubmittedAt     time.Time
-}
+// MemberParamState 是引擎和策略读到的可变成员的最近一次提交。
+type MemberParamState = domain.MemberParamState
 
 // MemberParamStateFromPB 还原一个可变成员最近一次被接受的提交。
 func MemberParamStateFromPB(pb *factorpb.MemberParamState) (MemberParamState, error) {

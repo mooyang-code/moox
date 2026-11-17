@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -53,9 +54,7 @@ type TradeConsoleServiceService interface {
 
 	RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq) (*RemoveLogicalAccountMemberRsp, error)
 
-	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq) (*ClaimLogicalAccountOwnerRsp, error)
-
-	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error)
+	CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq) (*CloseTargetSessionRsp, error)
 
 	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error)
 
@@ -70,6 +69,8 @@ type TradeConsoleServiceService interface {
 	GetOperatorAction(ctx context.Context, req *GetOperatorActionReq) (*GetOperatorActionRsp, error)
 
 	GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq) (*GetLogicalAccountTargetRsp, error)
+
+	ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq) (*ListShadowTargetsRsp, error)
 
 	GetOrder(ctx context.Context, req *GetOrderReq) (*GetOrderRsp, error)
 
@@ -108,6 +109,10 @@ type TradeConsoleServiceService interface {
 	SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq) (*SummarizeAccountPnlRsp, error)
 
 	ListOperatorActions(ctx context.Context, req *ListOperatorActionsReq) (*ListOperatorActionsRsp, error)
+	// GetLifecycle GetLifecycle 读 Trade 模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行 Trade：暂停要等在途的订单提交结束（最长 30 秒），不撤单、不平仓。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func TradeConsoleServiceService_CreateTradingAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -416,32 +421,14 @@ func TradeConsoleServiceService_RemoveLogicalAccountMember_Handler(svr interface
 	return rsp, nil
 }
 
-func TradeConsoleServiceService_ClaimLogicalAccountOwner_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ClaimLogicalAccountOwnerReq{}
+func TradeConsoleServiceService_CloseTargetSession_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CloseTargetSessionReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).ClaimLogicalAccountOwner(ctx, reqbody.(*ClaimLogicalAccountOwnerReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReleaseLogicalAccountOwnerReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).ReleaseLogicalAccountOwner(ctx, reqbody.(*ReleaseLogicalAccountOwnerReq))
+		return svr.(TradeConsoleServiceService).CloseTargetSession(ctx, reqbody.(*CloseTargetSessionReq))
 	}
 
 	var rsp interface{}
@@ -568,6 +555,24 @@ func TradeConsoleServiceService_GetLogicalAccountTarget_Handler(svr interface{},
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).GetLogicalAccountTarget(ctx, reqbody.(*GetLogicalAccountTargetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ListShadowTargets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListShadowTargetsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ListShadowTargets(ctx, reqbody.(*ListShadowTargetsReq))
 	}
 
 	var rsp interface{}
@@ -920,6 +925,42 @@ func TradeConsoleServiceService_ListOperatorActions_Handler(svr interface{}, ctx
 	return rsp, nil
 }
 
+func TradeConsoleServiceService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.GetLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.ControlLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // TradeConsoleServiceServer_ServiceDesc descriptor for server.RegisterService.
 var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.TradeConsoleService",
@@ -994,12 +1035,8 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_RemoveLogicalAccountMember_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner",
-			Func: TradeConsoleServiceService_ClaimLogicalAccountOwner_Handler,
-		},
-		{
-			Name: "/trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner",
-			Func: TradeConsoleServiceService_ReleaseLogicalAccountOwner_Handler,
+			Name: "/trpc.moox.trade.TradeConsoleService/CloseTargetSession",
+			Func: TradeConsoleServiceService_CloseTargetSession_Handler,
 		},
 		{
 			Name: "/trpc.moox.trade.TradeConsoleService/PauseLogicalAccount",
@@ -1028,6 +1065,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.trade.TradeConsoleService/GetLogicalAccountTarget",
 			Func: TradeConsoleServiceService_GetLogicalAccountTarget_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ListShadowTargets",
+			Func: TradeConsoleServiceService_ListShadowTargets_Handler,
 		},
 		{
 			Name: "/trpc.moox.trade.TradeConsoleService/GetOrder",
@@ -1105,6 +1146,14 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.trade.TradeConsoleService/ListOperatorActions",
 			Func: TradeConsoleServiceService_ListOperatorActions_Handler,
 		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/GetLifecycle",
+			Func: TradeConsoleServiceService_GetLifecycle_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ControlLifecycle",
+			Func: TradeConsoleServiceService_ControlLifecycle_Handler,
+		},
 	},
 }
 
@@ -1170,11 +1219,8 @@ func (s *UnimplementedTradeConsoleService) AddLogicalAccountMember(ctx context.C
 func (s *UnimplementedTradeConsoleService) RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq) (*RemoveLogicalAccountMemberRsp, error) {
 	return nil, errors.New("rpc RemoveLogicalAccountMember of service TradeConsoleService is not implemented")
 }
-func (s *UnimplementedTradeConsoleService) ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq) (*ClaimLogicalAccountOwnerRsp, error) {
-	return nil, errors.New("rpc ClaimLogicalAccountOwner of service TradeConsoleService is not implemented")
-}
-func (s *UnimplementedTradeConsoleService) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error) {
-	return nil, errors.New("rpc ReleaseLogicalAccountOwner of service TradeConsoleService is not implemented")
+func (s *UnimplementedTradeConsoleService) CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq) (*CloseTargetSessionRsp, error) {
+	return nil, errors.New("rpc CloseTargetSession of service TradeConsoleService is not implemented")
 }
 func (s *UnimplementedTradeConsoleService) PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error) {
 	return nil, errors.New("rpc PauseLogicalAccount of service TradeConsoleService is not implemented")
@@ -1196,6 +1242,9 @@ func (s *UnimplementedTradeConsoleService) GetOperatorAction(ctx context.Context
 }
 func (s *UnimplementedTradeConsoleService) GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq) (*GetLogicalAccountTargetRsp, error) {
 	return nil, errors.New("rpc GetLogicalAccountTarget of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq) (*ListShadowTargetsRsp, error) {
+	return nil, errors.New("rpc ListShadowTargets of service TradeConsoleService is not implemented")
 }
 func (s *UnimplementedTradeConsoleService) GetOrder(ctx context.Context, req *GetOrderReq) (*GetOrderRsp, error) {
 	return nil, errors.New("rpc GetOrder of service TradeConsoleService is not implemented")
@@ -1255,6 +1304,16 @@ func (s *UnimplementedTradeConsoleService) ListOperatorActions(ctx context.Conte
 	return nil, errors.New("rpc ListOperatorActions of service TradeConsoleService is not implemented")
 }
 
+// GetLifecycle GetLifecycle 读 Trade 模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+func (s *UnimplementedTradeConsoleService) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("rpc GetLifecycle of service TradeConsoleService is not implemented")
+}
+
+// ControlLifecycle ControlLifecycle 暂停、恢复与放行 Trade：暂停要等在途的订单提交结束（最长 30 秒），不撤单、不平仓。
+func (s *UnimplementedTradeConsoleService) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("rpc ControlLifecycle of service TradeConsoleService is not implemented")
+}
+
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -1297,9 +1356,7 @@ type TradeConsoleServiceClientProxy interface {
 
 	RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq, opts ...client.Option) (rsp *RemoveLogicalAccountMemberRsp, err error)
 
-	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (rsp *ClaimLogicalAccountOwnerRsp, err error)
-
-	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (rsp *ReleaseLogicalAccountOwnerRsp, err error)
+	CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq, opts ...client.Option) (rsp *CloseTargetSessionRsp, err error)
 
 	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq, opts ...client.Option) (rsp *PauseLogicalAccountRsp, err error)
 
@@ -1314,6 +1371,8 @@ type TradeConsoleServiceClientProxy interface {
 	GetOperatorAction(ctx context.Context, req *GetOperatorActionReq, opts ...client.Option) (rsp *GetOperatorActionRsp, err error)
 
 	GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq, opts ...client.Option) (rsp *GetLogicalAccountTargetRsp, err error)
+
+	ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq, opts ...client.Option) (rsp *ListShadowTargetsRsp, err error)
 
 	GetOrder(ctx context.Context, req *GetOrderReq, opts ...client.Option) (rsp *GetOrderRsp, err error)
 
@@ -1352,6 +1411,10 @@ type TradeConsoleServiceClientProxy interface {
 	SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq, opts ...client.Option) (rsp *SummarizeAccountPnlRsp, err error)
 
 	ListOperatorActions(ctx context.Context, req *ListOperatorActionsReq, opts ...client.Option) (rsp *ListOperatorActionsRsp, err error)
+	// GetLifecycle GetLifecycle 读 Trade 模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行 Trade：暂停要等在途的订单提交结束（最长 30 秒），不撤单、不平仓。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type TradeConsoleServiceClientProxyImpl struct {
@@ -1703,40 +1766,20 @@ func (c *TradeConsoleServiceClientProxyImpl) RemoveLogicalAccountMember(ctx cont
 	return rsp, nil
 }
 
-func (c *TradeConsoleServiceClientProxyImpl) ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (*ClaimLogicalAccountOwnerRsp, error) {
+func (c *TradeConsoleServiceClientProxyImpl) CloseTargetSession(ctx context.Context, req *CloseTargetSessionReq, opts ...client.Option) (*CloseTargetSessionRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner")
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/CloseTargetSession")
 	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("trade")
 	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("ClaimLogicalAccountOwner")
+	msg.WithCalleeMethod("CloseTargetSession")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ClaimLogicalAccountOwnerRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (*ReleaseLogicalAccountOwnerRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("ReleaseLogicalAccountOwner")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReleaseLogicalAccountOwnerRsp{}
+	rsp := &CloseTargetSessionRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1877,6 +1920,26 @@ func (c *TradeConsoleServiceClientProxyImpl) GetLogicalAccountTarget(ctx context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetLogicalAccountTargetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ListShadowTargets(ctx context.Context, req *ListShadowTargetsReq, opts ...client.Option) (*ListShadowTargetsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListShadowTargets")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ListShadowTargets")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListShadowTargetsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -2257,6 +2320,46 @@ func (c *TradeConsoleServiceClientProxyImpl) ListOperatorActions(ctx context.Con
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListOperatorActionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/GetLifecycle")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("GetLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.GetLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ControlLifecycle")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ControlLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.ControlLifecycleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

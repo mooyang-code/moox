@@ -4,7 +4,9 @@ import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import type { RetInfo } from "./types";
-import { installSpaceAwareSignedClient, readPersistedAuth } from "../admin/signed-client";
+import { installSpaceAwareClient } from "../admin/space-client";
+import pinia from "@/store/index";
+import { useUserInfoStore } from "@/store/modules/user-info";
 import { StaleSpaceRequestError } from "../admin/stale-space";
 import { explainTransportError } from "../network-error";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "../admin/space-header";
@@ -41,13 +43,12 @@ const storageReadMethods = new Set([
 ]);
 
 function storageCacheKey(method: string, req: object): string {
-  const auth = readPersistedAuth();
   const spaceID = readSelectedSpaceId();
   return JSON.stringify({
     method,
     req,
-    sessionID: auth.sessionId || "",
-    token: auth.token || "",
+    // 会话在 HttpOnly Cookie 里读不到，按当前登录的用户名区分缓存
+    user: useUserInfoStore(pinia).account.user.userName || "",
     spaceID: spaceID || "",
     // 切走又切回同一空间后，旧代次被丢弃的在途请求不能再被复用
     spaceGeneration: selectedSpaceGeneration()
@@ -147,7 +148,7 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
 
 export { callStorage };
 
-installSpaceAwareSignedClient(storageClient);
+installSpaceAwareClient(storageClient);
 // 切换空间后旧代次的缓存与在途条目不会再被命中，立即回收，避免随浏览累计。
 onSpaceGenerationChange(invalidateStorageReadCache);
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -80,20 +79,18 @@ func newGatewayMethodsCommand() *cobra.Command {
 						continue
 					}
 					allowed := map[string]bool{}
-					for _, grant := range service.ACL {
-						if slices.Contains(grant.Callers, "moox-cli") {
-							for _, method := range grant.Methods {
-								allowed[method] = true
-							}
+					for _, method := range service.MethodNames() {
+						if catalog.Allowed(servicecatalog.OperatorMooxCLI, service.Path, method) {
+							allowed[method] = true
 						}
 					}
 					if len(allowed) == 0 {
 						continue
 					}
 					fmt.Fprintf(out, "%s（组件 %s）\n", service.Path, component.ID)
-					for _, method := range service.Methods {
+					for _, method := range service.MethodNames() {
 						kind := "写"
-						if slices.Contains(service.ReadOnlyMethods, method) {
+						if catalog.ReadOnly(service.Path, method) {
 							kind = "只读"
 						}
 						if !allowed[method] {
@@ -116,15 +113,14 @@ func gatewayMethodReadOnly(service, method string) (readOnly, known bool) {
 	if err != nil {
 		return false, false
 	}
-	for _, component := range catalog.Components {
-		for _, item := range component.Services {
-			if item.Path != service || !slices.Contains(item.Methods, method) {
-				continue
-			}
-			return slices.Contains(item.ReadOnlyMethods, method), true
-		}
+	item, ok := catalog.Service(service)
+	if !ok {
+		return false, false
 	}
-	return false, false
+	if _, declared := item.Method(method); !declared {
+		return false, false
+	}
+	return catalog.ReadOnly(service, method), true
 }
 
 func readGatewayCallBody(data string) ([]byte, error) {

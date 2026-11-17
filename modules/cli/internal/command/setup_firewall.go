@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -28,7 +28,7 @@ type setupFirewallSummary struct {
 }
 
 type setupFirewallTarget struct {
-	Host  setupconfig.Host
+	Host  topology.Host
 	Rules []cloudtencent.CreateFirewallRulesOptions
 }
 
@@ -55,9 +55,6 @@ func newSetupFirewallCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
 			return writeSetupJSON(cmd, result)
 		},
 	}
@@ -81,7 +78,7 @@ func setupFirewallPreview(targets []setupFirewallTarget) []map[string]any {
 
 // defaultSetupEnsureFirewall opens only ports used by the deployed runtime.
 // It is idempotent and is safe to run before or after any service deployment.
-func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) (setupFirewallSummary, error) {
+func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupSnapshot) (setupFirewallSummary, error) {
 	if snapshot == nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: setup configuration is missing")
 	}
@@ -89,17 +86,17 @@ func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snaps
 	if err != nil {
 		return setupFirewallSummary{}, err
 	}
-	return ensureFirewallTargets(ctx, snapshot.Manifest, targets)
+	return ensureFirewallTargets(ctx, snapshot, targets)
 }
 
 // setupEnsureRelayFirewall 在部署只能出站的主机之前，经腾讯云接口确认 control 的跨主机端口（反向连接）
 // 与 EventBus 主机上的 EventBus 端口（出站主机的 HostAgent 上报）对公网开放；出站主机的出口 IP 会变，只能按 0.0.0.0/0 放行，
 // 认证由 TLS 与签名完成。任何一条规则无法确认都返回错误，不让部署在网络不通的情况下继续。
-func setupEnsureRelayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) (setupFirewallSummary, error) {
+func setupEnsureRelayFirewall(ctx context.Context, snapshot *setupSnapshot) (setupFirewallSummary, error) {
 	if snapshot == nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: setup configuration is missing")
 	}
-	summary, err := ensureFirewallTargets(ctx, snapshot.Manifest, setupRelayFirewallTargets(snapshot.Manifest))
+	summary, err := ensureFirewallTargets(ctx, snapshot, setupRelayFirewallTargets(snapshot.Manifest))
 	if err != nil {
 		return summary, err
 	}
@@ -111,7 +108,7 @@ func setupEnsureRelayFirewall(ctx context.Context, snapshot *setupconfig.Snapsho
 
 // setupRelayFirewallTargets 是出站主机接入需要的端口：control 的网关端口，和 EventBus 所在主机的 EventBus 端口。
 // 两者是同一台主机时合并成一个目标。
-func setupRelayFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
+func setupRelayFirewallTargets(manifest *topology.Config) []setupFirewallTarget {
 	gateway := cloudtencent.CreateFirewallRulesOptions{Protocol: "TCP", Ports: fmt.Sprint(servicecatalog.HostGatewayRemotePort), CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"}
 	control, bus := manifest.ControlHost(), manifest.EventBusHost()
 	targets := []setupFirewallTarget{{Host: control, Rules: []cloudtencent.CreateFirewallRulesOptions{gateway}}}
@@ -123,11 +120,11 @@ func setupRelayFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTar
 	return append(targets, setupFirewallTarget{Host: bus, Rules: []cloudtencent.CreateFirewallRulesOptions{busRule}})
 }
 
-func ensureFirewallTargets(ctx context.Context, manifest setupconfig.Manifest, targets []setupFirewallTarget) (setupFirewallSummary, error) {
+func ensureFirewallTargets(ctx context.Context, snapshot *setupSnapshot, targets []setupFirewallTarget) (setupFirewallSummary, error) {
 	tencent, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
-		SecretID:  manifest.TencentCloud.SecretID,
-		SecretKey: manifest.TencentCloud.SecretKey,
-		Region:    manifest.TencentCloud.Region,
+		SecretID:  snapshot.Secrets.TencentCloud.SecretID,
+		SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
+		Region:    snapshot.Manifest.CloudRegion(),
 	})
 	if err != nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: %w", err)
@@ -140,7 +137,7 @@ func ensureFirewallTargets(ctx context.Context, manifest setupconfig.Manifest, t
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			results[i] = ensureFirewallHost(ctx, manifest, tencent, target)
+			results[i] = ensureFirewallHost(ctx, snapshot, tencent, target)
 		}()
 	}
 	workers.Wait()
@@ -167,7 +164,7 @@ type firewallHostResult struct {
 	err                           error
 }
 
-func ensureFirewallHost(ctx context.Context, manifest setupconfig.Manifest, tencent *cloudtencent.Client, target setupFirewallTarget) firewallHostResult {
+func ensureFirewallHost(ctx context.Context, snapshot *setupSnapshot, tencent *cloudtencent.Client, target setupFirewallTarget) firewallHostResult {
 	address, err := setupFirewallAddress(ctx, target.Host.Address)
 	if err != nil {
 		return firewallHostResult{err: fmt.Errorf("firewall %s: resolve address: %w", target.Host.Name, err)}
@@ -181,7 +178,7 @@ func ensureFirewallHost(ctx context.Context, manifest setupconfig.Manifest, tenc
 		// configured host. Resolve the actual Tencent region before
 		// falling back to a CVM security group or retrying Lighthouse.
 		var fallbackErr error
-		if result, fallbackErr = ensureFirewallRulesAtDiscoveredRegion(ctx, manifest, address, target.Rules); fallbackErr != nil {
+		if result, fallbackErr = ensureFirewallRulesAtDiscoveredRegion(ctx, snapshot, address, target.Rules); fallbackErr != nil {
 			fmt.Fprintf(os.Stderr, "firewall %s skipped: lighthouse=%v; discovered=%v\n", target.Host.Name, err, fallbackErr)
 			return firewallHostResult{skipped: len(target.Rules)}
 		}
@@ -193,17 +190,17 @@ func ensureFirewallHost(ctx context.Context, manifest setupconfig.Manifest, tenc
 // manifest's home region. Lighthouse rules and CVM security-group rules both
 // require the actual region in their signed request, so retrying with the
 // home-region client can never succeed for those hosts.
-func ensureFirewallRulesAtDiscoveredRegion(ctx context.Context, manifest setupconfig.Manifest, address string, rules []cloudtencent.CreateFirewallRulesOptions) (cloudtencent.EnsureFirewallRulesResult, error) {
+func ensureFirewallRulesAtDiscoveredRegion(ctx context.Context, snapshot *setupSnapshot, address string, rules []cloudtencent.CreateFirewallRulesOptions) (cloudtencent.EnsureFirewallRulesResult, error) {
 	network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
-		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
-		Region: manifest.TencentCloud.Region,
+		SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
+		Region: snapshot.Manifest.CloudRegion(),
 	})
 	if err != nil {
 		return cloudtencent.EnsureFirewallRulesResult{}, err
 	}
 	lighthouse, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
-		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
-		Region: manifest.TencentCloud.Region,
+		SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
+		Region: snapshot.Manifest.CloudRegion(),
 	})
 	if err != nil {
 		return cloudtencent.EnsureFirewallRulesResult{}, err
@@ -211,7 +208,7 @@ func ensureFirewallRulesAtDiscoveredRegion(ctx context.Context, manifest setupco
 	lookupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	instance, err := (tencenthost.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(
-		lookupCtx, address, cloudtencent.ProbeRegions(manifest.TencentCloud.Region),
+		lookupCtx, address, cloudtencent.ProbeRegions(snapshot.Manifest.CloudRegion()),
 	)
 	if err != nil {
 		return cloudtencent.EnsureFirewallRulesResult{}, err
@@ -221,7 +218,7 @@ func ensureFirewallRulesAtDiscoveredRegion(ctx context.Context, manifest setupco
 		return lighthouse.ForRegion(instance.Region).EnsureFirewallRules(ctx, address, rules)
 	case cloudtencent.KindCVM:
 		cvm, err := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
-			SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
+			SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey,
 			Region: instance.Region,
 		})
 		if err != nil {
@@ -244,10 +241,10 @@ func setupFirewallAddress(ctx context.Context, address string) (string, error) {
 	return eventBusFirewallIP(ctx, address, net.DefaultResolver.LookupIP)
 }
 
-func setupFirewallTargets(manifest setupconfig.Manifest) ([]setupFirewallTarget, error) {
+func setupFirewallTargets(manifest *topology.Config) ([]setupFirewallTarget, error) {
 	byAddress := make(map[string]int)
 	targets := make([]setupFirewallTarget, 0, len(manifest.Hosts()))
-	add := func(host setupconfig.Host, rules []cloudtencent.CreateFirewallRulesOptions) {
+	add := func(host topology.Host, rules []cloudtencent.CreateFirewallRulesOptions) {
 		// 只能出站的主机不接受入站连接，它的地址也不是可放行的公网地址。
 		if strings.TrimSpace(host.Address) == "" || len(rules) == 0 || host.Reachability == servicecatalog.ReachabilityOutbound {
 			return
@@ -272,66 +269,22 @@ func setupFirewallTargets(manifest setupconfig.Manifest) ([]setupFirewallTarget,
 	if setupconfigHostConfigured(manifest.StorageHost()) {
 		add(manifest.StorageHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
-	if setupconfigHostConfigured(manifest.ViewHost()) {
-		add(manifest.ViewHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
+	if setupconfigHostConfigured(manifest.HostByID(manifest.ComponentHost("storage-view"))) {
+		add(manifest.HostByID(manifest.ComponentHost("storage-view")), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
 	tradeNode := strings.TrimSpace(manifest.ComponentHost("trade"))
 	for _, host := range manifest.Hosts() {
 		if strings.EqualFold(strings.TrimSpace(host.Name), tradeNode) {
+			// Trade 的服务端口 11200 只听本机，经主机网关 11003 进入，不放行。
 			add(host, []cloudtencent.CreateFirewallRulesOptions{
 				{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"},
-				{Protocol: "TCP", Ports: "11200", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX Trade console"},
 			})
 		}
-	}
-	for _, host := range manifest.Hosts() {
-		rules, err := healthProbeFirewallRules(manifest, host)
-		if err != nil {
-			return nil, err
-		}
-		add(host, rules)
 	}
 	return targets, nil
 }
 
-// healthProbeFirewallRules 是 Monitor（在控制机上）探测其他直连主机上组件健康端口需要的规则：只放行控制机地址。
-// 健康端口本身还有签名鉴权；控制机自己的组件由本机探测，不需要放行。
-// 组件要按完整拓扑算：Host Gateway、Host Agent 是自动补入的，不在 manifest.Deployments 里，Monitor 一样会探测。
-func healthProbeFirewallRules(manifest setupconfig.Manifest, host setupconfig.Host) ([]cloudtencent.CreateFirewallRulesOptions, error) {
-	control := manifest.ControlHost()
-	if strings.EqualFold(strings.TrimSpace(host.Name), strings.TrimSpace(control.Name)) || !isPublicFirewallIP(control.Address) {
-		return nil, nil
-	}
-	// 与控制机同一地域且有私网地址的主机，Monitor 走私网探测，不经过公网防火墙（与 Monitor 部署同步的规则一致）。
-	if host.PrivateAddress != "" && host.Region != "" && host.Region == control.Region {
-		return nil, nil
-	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return nil, err
-	}
-	topology, err := manifest.Topology()
-	if err != nil {
-		return nil, err
-	}
-	var rules []cloudtencent.CreateFirewallRulesOptions
-	for _, deployment := range topology.Deployments {
-		if deployment.HostID != host.Name {
-			continue
-		}
-		component, ok := catalog.Component(deployment.ComponentID)
-		if !ok || component.Health.Kind != "readyz" || component.Health.Port <= 0 || component.Health.Loopback {
-			continue
-		}
-		rules = append(rules, cloudtencent.CreateFirewallRulesOptions{
-			Protocol: "TCP", Ports: fmt.Sprint(component.Health.Port), CidrBlock: control.Address + "/32",
-			Action: "ACCEPT", Description: "MooX Monitor health probe " + component.ID,
-		})
-	}
-	return rules, nil
-}
-
-func setupconfigHostConfigured(host setupconfig.Host) bool {
+func setupconfigHostConfigured(host topology.Host) bool {
 	return strings.TrimSpace(host.Name) != "" && strings.TrimSpace(host.Address) != ""
 }
 

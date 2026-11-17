@@ -3,24 +3,17 @@ package command
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"io"
-	"io/fs"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
-)
-
-const (
-	testSkillGatewaySecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testSkillPrimarySecret = "storage-primary-secret"
+	"gopkg.in/yaml.v3"
 )
 
 func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
@@ -38,34 +31,10 @@ func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
 	require.Empty(t, matches)
 }
 
-type localSkillSSH struct{}
-
-func (localSkillSSH) Check(context.Context) error { return nil }
-func (localSkillSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
-	return nil, errors.New("not implemented")
-}
-func (localSkillSSH) Download(context.Context, string, io.Writer) (int64, error) {
-	return 0, errors.New("not implemented")
-}
-func (localSkillSSH) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
-	return errors.New("not implemented")
-}
-func (localSkillSSH) Run(ctx context.Context, argv []string, stdin io.Reader) (setupssh.Result, error) {
-	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	command.Stdin = stdin
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err := command.Run()
-	return setupssh.Result{Stdout: stdout.String(), Stderr: stderr.String()}, err
-}
-func (localSkillSSH) Close() error { return nil }
-
 func testSkillDataAccessConfig() dataAccessConfig {
 	return dataAccessConfig{
-		GatewayClient: &gatewayclient.ExternalFileConfig{Address: "storage.example:11004", InstanceID: "access@storage", Caller: "moox-skill", KeyID: "assigned-skill-key-17", KeyFile: ".moox-skill-keys/fixture.key"}, SigningKey: testSkillGatewaySecret,
-		Version: 1,
-		Storage: dataStorageAuthConfig{AppID: "moox-skill", AppKey: security.HMACSHA256Hex(testSkillPrimarySecret, []byte("moox-skill"))},
+		GatewayClient: &gatewayclient.ExternalFileConfig{Address: "storage.example:11004", Host: "storage", Caller: "moox-skill", KeyFile: ".moox-skill-keys/moox-skill.key"},
+		Version:       1,
 		DataTypes: map[string]dataTypeConfig{
 			"crypto": {
 				DefaultExchange: "binance",
@@ -81,4 +50,126 @@ func testSkillDataAccessConfig() dataAccessConfig {
 			},
 		},
 	}
+}
+
+// identityHarness 记下登记公钥的调用，不连任何主机。
+type identityHarness struct {
+	deps       setupDeps
+	registered [][2]string
+}
+
+func newIdentityHarness(t *testing.T) *identityHarness {
+	t.Helper()
+	h := &identityHarness{}
+	snapshot := fourHostSnapshot(t)
+	h.deps = setupDeps{
+		load: func(string) (*setupSnapshot, error) { return snapshot, nil },
+		exportSkillConfig: func(context.Context, *setupSnapshot, string) (dataAccessConfig, error) {
+			return testSkillDataAccessConfig(), nil
+		},
+		registerIdentity: func(_ context.Context, _ *setupSnapshot, identity, publicKey string) error {
+			h.registered = append(h.registered, [2]string{identity, publicKey})
+			return nil
+		},
+	}
+	return h
+}
+
+func (h *identityHarness) run(t *testing.T, args ...string) (map[string]any, error) {
+	t.Helper()
+	cmd := newSetupCommand(h.deps)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result), out.String())
+	return result, nil
+}
+
+// moox-skill 的私钥只在这台电脑上生成、存在操作员身份目录里，登记的是它的公钥；导出时抄一份到输出文件旁边。
+// 反复导出（包括导出到别的目录、重新打包 Skill）用的是同一把，不会让已经发出去的 Skill 包失效。
+func TestExportSkillConfigGeneratesKeyLocallyAndRegistersPublicKey(t *testing.T) {
+	h := newIdentityHarness(t)
+	operator := filepath.Join(t.TempDir(), "moox")
+	output := filepath.Join(t.TempDir(), "data-access.yaml")
+	result, err := h.run(t, "export-skill-config", "--space-id", "crypto", "--output", output, "--operator-dir", operator)
+	require.NoError(t, err)
+	require.Equal(t, "exported", result["status"])
+	master, err := gatewayauth.ReadSigningKey(filepath.Join(operator, "moox-skill.key"))
+	require.NoError(t, err)
+	keyFile := filepath.Join(filepath.Dir(output), ".moox-skill-keys", "moox-skill.key")
+	key, err := gatewayauth.ReadSigningKey(keyFile)
+	require.NoError(t, err)
+	require.True(t, master.Equal(key))
+	directory, err := os.Stat(filepath.Dir(keyFile))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), directory.Mode().Perm())
+	require.Equal(t, [][2]string{{"moox-skill", identitybundle.PublicKey(key)}}, h.registered)
+	raw, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), gatewayauth.EncodeSigningKey(key), "配置文件里只有私钥的路径")
+	var config dataAccessConfig
+	require.NoError(t, yaml.Unmarshal(raw, &config))
+	require.Equal(t, ".moox-skill-keys/moox-skill.key", filepath.ToSlash(config.GatewayClient.KeyFile))
+	require.Equal(t, "moox-skill", config.GatewayClient.Caller)
+
+	// 导出到另一个目录：还是同一把私钥。
+	other := filepath.Join(t.TempDir(), "data-access.yaml")
+	_, err = h.run(t, "export-skill-config", "--space-id", "crypto", "--output", other, "--operator-dir", operator)
+	require.NoError(t, err)
+	require.Len(t, h.registered, 2)
+	require.Equal(t, h.registered[0], h.registered[1])
+	again, err := gatewayauth.ReadSigningKey(filepath.Join(filepath.Dir(other), ".moox-skill-keys", "moox-skill.key"))
+	require.NoError(t, err)
+	require.True(t, key.Equal(again))
+
+	// 登记失败时不留下指向没登记的私钥的配置。
+	h.deps.registerIdentity = func(context.Context, *setupSnapshot, string, string) error { return errors.New("control unreachable") }
+	failed := filepath.Join(t.TempDir(), "data-access.yaml")
+	_, err = h.run(t, "export-skill-config", "--space-id", "crypto", "--output", failed, "--operator-dir", operator)
+	require.ErrorContains(t, err, "control unreachable")
+	require.NoFileExists(t, failed)
+}
+
+func TestRegisterIdentityCommand(t *testing.T) {
+	h := newIdentityHarness(t)
+	keyFile := filepath.Join(t.TempDir(), "keys", "collector-operator.key")
+	result, err := h.run(t, "register-identity", "--identity", "collector-operator", "--key-file", keyFile)
+	require.NoError(t, err)
+	key, err := gatewayauth.ReadSigningKey(keyFile)
+	require.NoError(t, err)
+	require.Equal(t, [][2]string{{"collector-operator", identitybundle.PublicKey(key)}}, h.registered)
+	require.Equal(t, "registered", result["status"])
+	require.NotContains(t, result, "notes", "公钥随网关快照下发，登记完不用再推到哪台主机")
+	// 只能登记外部身份：组件名、moox-cli、scf-collector（它的私钥随控制机的身份包签发）都不行。
+	for _, identity := range []string{"moox-cli", "trade", "console", "scf-collector", "factor-engine"} {
+		_, err := h.run(t, "register-identity", "--identity", identity, "--key-file", keyFile)
+		require.Error(t, err, identity)
+	}
+	require.Len(t, h.registered, 1)
+}
+
+// setup operator：本机已有私钥就复用；--register 把这台电脑的公钥登记成 moox-cli 的公钥（换电脑）。
+func TestSetupOperatorReusesKeyAndRegistersOnRequest(t *testing.T) {
+	h := newIdentityHarness(t)
+	directory := filepath.Join(t.TempDir(), "moox")
+	first, err := h.run(t, "operator", "--operator-dir", directory)
+	require.NoError(t, err)
+	require.Equal(t, true, first["created"])
+	require.Equal(t, false, first["registered"])
+	require.Empty(t, h.registered, "不带 --register 不连任何主机")
+	key, err := identitybundle.ReadOperatorKey(directory)
+	require.NoError(t, err)
+	require.Equal(t, identitybundle.PublicKey(key), first["public_key"])
+
+	second, err := h.run(t, "operator", "--operator-dir", directory, "--register")
+	require.NoError(t, err)
+	require.Equal(t, false, second["created"])
+	require.Equal(t, true, second["registered"])
+	require.Equal(t, first["public_key"], second["public_key"])
+	require.Equal(t, [][2]string{{"moox-cli", identitybundle.PublicKey(key)}}, h.registered)
 }

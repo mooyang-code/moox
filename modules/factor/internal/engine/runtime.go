@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,8 +25,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/factorexpr"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -67,12 +68,15 @@ type Runtime struct {
 	preload  *preloader
 	series   *seriesstore.Store
 	data     *localdata.Data
-	admit    *memadmit.Admitter
-	health   *factorhealth.State
-	life     *lifecycle.Controller
-	writes   *inflight
-	udf      *udfModules
-	replays  *replayManager
+	// sources 判断数据源当前能不能计算，运行时就是本地数据层 data。
+	sources sourceGate
+	admit   *memadmit.Admitter
+	health  *factorhealth.State
+	life    *lifecycle.Controller
+	checks  taskChecks
+	writes  *inflight
+	udf     *udfModules
+	replays *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -93,8 +97,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if ctx == nil || s == nil || cfg == nil {
 		return nil, errors.New("factor engine context, server and config are required")
 	}
-	if s.Service(healthService) == nil {
-		return nil, fmt.Errorf("factor engine service %q is required", healthService)
+	for _, name := range []string{healthService, engineControlService} {
+		if s.Service(name) == nil {
+			return nil, fmt.Errorf("factor engine service %q is required", name)
+		}
 	}
 	bootID, err := randomHex(16)
 	if err != nil {
@@ -114,12 +120,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		}
 	}()
 
-	if r.gateway, err = cfg.GatewayClient.OpenExternal(cfg.sourcePath); err != nil {
+	if r.gateway, err = cfg.OpenGateway(); err != nil {
 		return nil, err
 	}
-	if r.storage, err = newStorageClient(r.gateway, cfg.Storage); err != nil {
-		return nil, err
-	}
+	r.storage = newStorageClient(r.gateway)
 	if r.manager, err = NewManagerClient(r.gateway, cfg.Manager.Timeout, r.identity); err != nil {
 		return nil, err
 	}
@@ -155,6 +159,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
 		Lookback: func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
 	})
+	r.sources = r.data
 	pipelineConfig := pipeline.Config{
 		WriteBatchRows: cfg.Pipeline.WriteBatchRows, WriteRetryBackoff: 300 * time.Millisecond,
 		ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
@@ -198,9 +203,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.data, clock, pipelineConfig)
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
-	r.preload = newPreloader(r.catalog, r.storage, r.data, r.active, func(string) { kickGap() })
+	r.preload = r.newGatedPreloader(r.storage, r.data, func(string) { kickGap() })
 	r.preload.onSubjects = synced.Update
-	r.preload.blocked = func() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
 	if r.life, err = r.newLifecycle(); err != nil {
 		return nil, fmt.Errorf("open factor lifecycle: %w", err)
 	}
@@ -233,14 +237,14 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)), recalcexec.WithHistory(r.data))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
-		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
+		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") },
 		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
 			_, err := r.data.BackfillTask(ctx, set, subjects, bars, nil)
 			return err
 		},
 		catchUp: r.data.CatchUp}
 	filler := &gapFiller{
-		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, unified: r.data.UnifiedTask, clock: clock,
+		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
 		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。
@@ -267,22 +271,19 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, r.preload.Run)
 	r.goRun(appCtx, follower.Run)
 	r.replays = newReplayManager(ReplayDeps{
-		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
-		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
-		Begin:   r.beginReplayWrite,
-		Pin:     r.pinTaskModules,
-		Synced:  synced.Subjects,
+		Sets: r.catalog, Source: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
+		ComputeReserve: int64(cfg.Compute.MaxMemory),
+		Pin:            r.pinTaskModules, Synced: synced.Subjects,
 	})
 	r.goRun(appCtx, r.replays.Run)
-	r.goRun(appCtx, func(ctx context.Context) {
-		r.life.Recover(ctx)
-		r.life.Run(ctx, cfg.Lifecycle.Interval)
-	})
+	r.goRun(appCtx, func(ctx context.Context) { r.life.Run(ctx, cfg.Lifecycle.Interval) })
+	r.goRun(appCtx, func(ctx context.Context) { r.runTaskChecks(ctx, cfg.Lifecycle.Interval) })
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health, append(append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...), r.replays.routes()...)...); err != nil {
+	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
+	factorpb.RegisterEngineControlService(s.Service(engineControlService), r.controlService())
 	r.health.SetReady(true)
 	log.InfoContextf(ctx, "factor_engine_started engine_id=%s boot_id=%s catalog_loaded=%t lease_conflict=%t",
 		r.identity.EngineID, bootID, r.catalog.Loaded(), r.lease.Conflict())
@@ -311,6 +312,8 @@ func (r *Runtime) reconcileConsumer() {
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
 			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
 			OnBackfilled: r.onBackfilled,
+			// 模块在运行、任务还没就绪（窗口载入中、检查未通过）时到达的周期只记追赶目标（算过的任务）；暂停期间不记。
+			NoteWhenClosed: func(string) bool { return r.moduleRunning() },
 			Begin: func(ctx context.Context, taskID string, live bool) (func(), bool) {
 				return r.beginWrite(ctx, taskID, true, !live)
 			},
@@ -374,8 +377,10 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 		}
 	}
 	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
-	markPausedRunners(status.Runners, r.life)
+	r.markRunners(status.Runners)
 	status.Lifecycle = r.lifecycleStatus()
+	// 引擎不经 packages/report 上报：就绪判断（与 /readyz 同一个）随心跳交给 factor-mgr 代报。
+	status.Ready, status.NotReadyReason = healthz.Readiness(r.healthSnapshot)(context.Background())
 	if r.udf != nil {
 		status.UDFModules = r.udf.Status()
 	}
@@ -471,10 +476,7 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	if lease.LastError != "" {
 		details["heartbeat_error"] = lease.LastError
 	}
-	if r.life != nil {
-		details["lifecycle"] = r.life.Compact()
-	}
-	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Time: time.Now().UTC(), Details: details}
+	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Reason: strings.Join(check.Reasons, "；"), Time: time.Now().UTC(), Details: details}
 }
 
 func (r *Runtime) goRun(ctx context.Context, run func(context.Context)) {
@@ -541,16 +543,8 @@ func realPeriod(axis periodclock.Axis, period time.Time) time.Time {
 }
 
 // newStorageClient 返回包装了换算边界的 Storage 客户端（引擎与离线维护命令共用）。
-func newStorageClient(gateway gatewayclient.Invoker, cfg StorageConfig) (*storageio.Axis, error) {
-	secret, err := gatewayauth.ReadSigningSecret(cfg.AuthSecretFile)
-	if err != nil {
-		return nil, fmt.Errorf("read Storage auth secret: %w", err)
-	}
-	requestID, err := randomHex(8)
-	if err != nil {
-		return nil, err
-	}
-	return storageio.NewAxis(storageio.NewGatewayClient(gateway, storageio.NewAuthInfo("factor-engine-"+requestID, secret))), nil
+func newStorageClient(gateway gatewayclient.Invoker) *storageio.Axis {
+	return storageio.NewAxis(storageio.NewGatewayClient(gateway))
 }
 
 func randomHex(n int) (string, error) {

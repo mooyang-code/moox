@@ -2,37 +2,28 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriessync"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
-// 本地写入接口（设计 7.1）：导入服务通过它把历史数据写进因子机的本地时序存储。本地存储同一时刻只能由引擎进程打开，
-// 所以写入只能经过引擎。接口挂在健康检查端口上（只监听本机，沿用健康检查的签名鉴权），引擎处于未就绪状态时也可以写入。
-//
-//	POST /v1/series/write    用一批行整段替换标的在 [from, to) 内的数据
-//	GET  /v1/series/fields   数据集的字段表（名称、类型），导入服务据此解析文件
-//	GET  /v1/series/subject  标的是否在数据集的标签范围内（导入不自动绑定标的）
-//	GET  /v1/series/bounds   标的在本地的最早与最新时间
-//	GET  /v1/series/sources  已准备的数据源及其状态
+// 本地写入（设计 7.1）：导入服务通过 EngineControl 的 WriteSeries、GetSeriesFields、CheckSeriesSubject、GetSeriesBounds
+// 把历史数据写进因子机的本地时序存储。本地存储同一时刻只能由引擎进程打开，所以写入只能经过引擎；引擎未就绪时也可以写入。
+// 失败都放在 ret_info 里：请求不合法、缺周期、字段对不上为 INVALID_PARAM，读不到数据集字段、写本地存储失败为 INNER_ERR。
 
-const (
-	maxWriteBody   = 64 << 20
-	fieldsCacheTTL = time.Minute
-)
+const fieldsCacheTTL = time.Minute
 
-// seriesStorage 是本地写入接口用到的 Storage 能力。
+// seriesStorage 是本地写入用到的 Storage 能力。
 type seriesStorage interface {
 	ListColumns(ctx context.Context, spaceID, datasetID string) ([]storageio.ColumnInfo, error)
 	ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error)
@@ -41,7 +32,6 @@ type seriesStorage interface {
 type localWriter struct {
 	data    *localdata.Data
 	storage seriesStorage
-	sets    interface{ TaskIDs() []string }
 	now     func() time.Time
 
 	mu     sync.Mutex
@@ -57,154 +47,108 @@ func newLocalWriter(data *localdata.Data, storage seriesStorage) *localWriter {
 	return &localWriter{data: data, storage: storage, now: time.Now, fields: map[seriesstore.Source]cachedFields{}}
 }
 
-// routes 返回要挂到健康检查端口上的路由。
-func (w *localWriter) routes() []factorhealth.Route {
-	return []factorhealth.Route{
-		{Path: "/v1/series/write", Handler: http.HandlerFunc(w.handleWrite)},
-		{Path: "/v1/series/fields", Handler: http.HandlerFunc(w.handleFields)},
-		{Path: "/v1/series/subject", Handler: http.HandlerFunc(w.handleSubject)},
-		{Path: "/v1/series/bounds", Handler: http.HandlerFunc(w.handleBounds)},
-		{Path: "/v1/series/sources", Handler: http.HandlerFunc(w.handleSources)},
+// writeError 是带返回码的失败。
+type writeError struct {
+	code commonpb.ErrorCode
+	err  error
+}
+
+func (e *writeError) Error() string { return e.err.Error() }
+
+func invalidWrite(format string, args ...any) error {
+	return &writeError{code: commonpb.ErrorCode_INVALID_PARAM, err: fmt.Errorf(format, args...)}
+}
+
+func innerWrite(err error) error { return &writeError{code: commonpb.ErrorCode_INNER_ERR, err: err} }
+
+// writeRetInfo 把本地写入的错误换成返回码：没有标明的按内部错误。
+func writeRetInfo(err error) *commonpb.RetInfo {
+	var failure *writeError
+	if errors.As(err, &failure) {
+		return &commonpb.RetInfo{Code: failure.code, Msg: failure.Error()}
 	}
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: err.Error()}
 }
 
-// WriteRequest 是 POST /v1/series/write 的请求体。每列按字段名给出：null 标记与按类型的值数组。
-type WriteRequest struct {
-	Space   string `json:"space"`
-	Dataset string `json:"dataset"`
-	Freq    string `json:"freq"`
-	Subject string `json:"subject"`
-	// From、To 是整段替换的区间（RFC3339，左闭右开）。
-	From string `json:"from"`
-	To   string `json:"to"`
-	// AllowMissing 允许中间缺的周期按字段填充规则写成缺失行；否则缺期时拒绝。
-	AllowMissing bool `json:"allow_missing"`
-	// RecordPending 把改变的区间记入失效重算待办（带 --recalc 的导入）。
-	RecordPending bool   `json:"record_pending"`
-	Reason        string `json:"reason"`
-	// Times 是各行的 UTC 秒；Tags 是各行的 series_tag。
-	Times []int64            `json:"times"`
-	Tags  []string           `json:"tags"`
-	Cols  map[string]WireCol `json:"cols"`
-}
-
-// WireCol 是一列的传输格式：F 用于 double，I 用于 int 与 bool，S 用于其余类型。
-type WireCol struct {
-	Null []bool    `json:"null,omitempty"`
-	F    []float64 `json:"f,omitempty"`
-	I    []int64   `json:"i,omitempty"`
-	S    []string  `json:"s,omitempty"`
-}
-
-// WriteResponse 是写入结果。
-type WriteResponse struct {
-	Written     int    `json:"written"`
-	Filled      int    `json:"filled"`
-	Removed     int    `json:"removed"`
-	ChangedFrom string `json:"changed_from,omitempty"`
-	ChangedTo   string `json:"changed_to,omitempty"`
-	Earliest    string `json:"earliest,omitempty"`
-	Latest      string `json:"latest,omitempty"`
-}
-
-func (w *localWriter) handleWrite(rw http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSONError(rw, http.StatusMethodNotAllowed, errors.New("POST only"))
-		return
-	}
-	var req WriteRequest
-	dec := json.NewDecoder(http.MaxBytesReader(rw, r.Body, maxWriteBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeJSONError(rw, http.StatusBadRequest, fmt.Errorf("解析请求：%w", err))
-		return
-	}
-	resp, status, err := w.write(r.Context(), req)
+// WriteSeries 用一批行整段替换标的在 [from, to) 内的数据。
+func (w *localWriter) WriteSeries(ctx context.Context, req *factorpb.WriteSeriesReq) (*factorpb.WriteSeriesRsp, error) {
+	rsp, err := w.write(ctx, req)
 	if err != nil {
-		writeJSONError(rw, status, err)
-		return
+		return &factorpb.WriteSeriesRsp{RetInfo: writeRetInfo(err)}, nil
 	}
-	writeJSON(rw, http.StatusOK, resp)
+	rsp.RetInfo = replaySuccess()
+	return rsp, nil
 }
 
-func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteResponse, int, error) {
-	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.Space), DatasetID: strings.TrimSpace(req.Dataset), Freq: strings.TrimSpace(req.Freq)}
-	subject := strings.TrimSpace(req.Subject)
+func (w *localWriter) write(ctx context.Context, req *factorpb.WriteSeriesReq) (*factorpb.WriteSeriesRsp, error) {
+	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFreq())}
+	subject := strings.TrimSpace(req.GetSubjectId())
 	if src.SpaceID == "" || src.DatasetID == "" || src.Freq == "" || subject == "" {
-		return WriteResponse{}, http.StatusBadRequest, errors.New("space、dataset、freq、subject 都是必填项")
+		return nil, invalidWrite("space_id、dataset_id、freq、subject_id 都是必填项")
 	}
 	// 本地写入接口是换算边界：请求里的区间与行时间是真实时间，本地存储是轴上时间。
 	axis, err := periodclock.AxisFor(src.SpaceID, src.Freq)
 	if err != nil {
-		return WriteResponse{}, http.StatusBadRequest, err
+		return nil, invalidWrite("%w", err)
 	}
-	from, err := time.Parse(time.RFC3339, req.From)
+	from, err := time.Parse(time.RFC3339, req.GetFrom())
 	if err == nil {
 		from, err = axis.ToAxis(from)
 	}
 	if err != nil {
-		return WriteResponse{}, http.StatusBadRequest, fmt.Errorf("from：%w", err)
+		return nil, invalidWrite("from：%w", err)
 	}
-	to, err := time.Parse(time.RFC3339, req.To)
+	to, err := time.Parse(time.RFC3339, req.GetTo())
 	if err == nil {
 		to, err = axis.EndToAxis(to)
 	}
 	if err != nil {
-		return WriteResponse{}, http.StatusBadRequest, fmt.Errorf("to：%w", err)
+		return nil, invalidWrite("to：%w", err)
 	}
 	fields, err := w.datasetFields(ctx, src)
 	if err != nil {
-		return WriteResponse{}, http.StatusBadGateway, err
+		return nil, innerWrite(err)
 	}
 	rows, err := columnsFromWire(fields, req)
 	if err != nil {
-		return WriteResponse{}, http.StatusBadRequest, err
+		return nil, invalidWrite("%w", err)
 	}
 	for i, at := range rows.Times {
 		x, err := axis.ToAxis(time.Unix(at, 0))
 		if err != nil {
-			return WriteResponse{}, http.StatusBadRequest, fmt.Errorf("第 %d 行的时间：%w", i, err)
+			return nil, invalidWrite("第 %d 行的时间：%w", i, err)
 		}
 		rows.Times[i] = x.Unix()
 	}
-	opts := seriesstore.WriteOptions{FillGaps: req.AllowMissing, RecordPending: req.RecordPending, PendingReason: req.Reason}
+	opts := seriesstore.WriteOptions{FillGaps: req.GetAllowMissing(), RecordPending: req.GetRecordPending(), PendingReason: req.GetReason()}
 	if opts.RecordPending && opts.PendingReason == "" {
 		opts.PendingReason = "import"
 	}
-	scoped, err := w.unifiedSubject(ctx, src)
+	scoped, err := w.data.UnifiedDataset(ctx, src)
 	if err != nil {
-		return WriteResponse{}, http.StatusInternalServerError, err
+		return nil, innerWrite(err)
 	}
 	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows, Scoped: scoped}}, opts)
 	if err != nil {
 		var gap *seriesstore.GapError
-		switch {
-		case errors.As(err, &gap):
-			return WriteResponse{}, http.StatusUnprocessableEntity, err
-		case errors.Is(err, seriesstore.ErrInvalidWrite), errors.Is(err, seriesstore.ErrSchema):
-			return WriteResponse{}, http.StatusBadRequest, err
+		if errors.As(err, &gap) || errors.Is(err, seriesstore.ErrInvalidWrite) || errors.Is(err, seriesstore.ErrSchema) {
+			return nil, invalidWrite("%w", err)
 		}
-		return WriteResponse{}, http.StatusInternalServerError, err
+		return nil, innerWrite(err)
 	}
 	res := results[0]
-	out := WriteResponse{Written: res.Written, Filled: res.Filled, Removed: res.Removed}
+	out := &factorpb.WriteSeriesRsp{Written: int32(res.Written), Filled: int32(res.Filled), Removed: int32(res.Removed)}
 	if !res.Changed.Empty() {
 		changedTo, err := axis.FromAxisEnd(res.Changed.To)
 		if err != nil {
-			return WriteResponse{}, http.StatusInternalServerError, err
+			return nil, innerWrite(err)
 		}
 		out.ChangedFrom, out.ChangedTo = axis.Format(res.Changed.From), changedTo.Format(time.RFC3339)
 	}
 	if !res.Earliest.IsZero() {
 		out.Earliest, out.Latest = axis.Format(res.Earliest), axis.Format(res.Latest)
 	}
-	return out, http.StatusOK, nil
-}
-
-// unifiedSubject 判断这次写入是不是统一数据集（数据集属性 market_type=multi，同一数据集里有现货、永续两个市场的序列）：
-// 是则只替换本批出现的 tag，现货、永续可以分两次导入互不覆盖；否则（单市场）保持原来的整段替换，标的的全部序列按这一批重写。
-func (w *localWriter) unifiedSubject(ctx context.Context, src seriesstore.Source) (bool, error) {
-	return w.data.UnifiedDataset(ctx, src)
+	return out, nil
 }
 
 // datasetFields 返回数据集的本地字段表（含类型与填充规则），缓存 1 分钟。
@@ -229,13 +173,14 @@ func (w *localWriter) datasetFields(ctx context.Context, src seriesstore.Source)
 	return fields, nil
 }
 
-// columnsFromWire 按数据集字段表把传输格式转成列式行；必须带全部字段。
-func columnsFromWire(fields []seriesstore.Field, req WriteRequest) (*seriesstore.Columns, error) {
-	n := len(req.Times)
-	if len(req.Tags) != n {
-		return nil, fmt.Errorf("tags 有 %d 项，times 有 %d 项", len(req.Tags), n)
+// columnsFromWire 按数据集字段表把请求里的列转成列式行；必须带全部字段。
+func columnsFromWire(fields []seriesstore.Field, req *factorpb.WriteSeriesReq) (*seriesstore.Columns, error) {
+	times, tags, cols := req.GetTimes(), req.GetTags(), req.GetCols()
+	n := len(times)
+	if len(tags) != n {
+		return nil, fmt.Errorf("tags 有 %d 项，times 有 %d 项", len(tags), n)
 	}
-	for name := range req.Cols {
+	for name := range cols {
 		known := false
 		for _, f := range fields {
 			known = known || f.Name == name
@@ -246,137 +191,95 @@ func columnsFromWire(fields []seriesstore.Field, req WriteRequest) (*seriesstore
 	}
 	out := seriesstore.NewColumns(fields, n)
 	for i := 0; i < n; i++ {
-		out.Times = append(out.Times, req.Times[i])
-		out.Tags = append(out.Tags, req.Tags[i])
+		out.Times = append(out.Times, times[i])
+		out.Tags = append(out.Tags, tags[i])
 		out.Filled = append(out.Filled, false)
 	}
 	for fi, f := range fields {
-		col, ok := req.Cols[f.Name]
+		col, ok := cols[f.Name]
 		if !ok {
 			return nil, fmt.Errorf("缺少数据集字段 %q（导入必须带全部字段）", f.Name)
 		}
-		if len(col.Null) != n {
-			return nil, fmt.Errorf("字段 %s 的 null 标记有 %d 项，期望 %d 项", f.Name, len(col.Null), n)
+		if len(col.GetNull()) != n {
+			return nil, fmt.Errorf("字段 %s 的 null 标记有 %d 项，期望 %d 项", f.Name, len(col.GetNull()), n)
 		}
 		dst := &out.Cols[fi]
-		dst.Null = append(dst.Null, col.Null...)
+		dst.Null = append(dst.Null, col.GetNull()...)
 		switch f.Type {
 		case seriesstore.TypeFloat64:
-			if len(col.F) != n {
-				return nil, fmt.Errorf("字段 %s 的 f 有 %d 项，期望 %d 项", f.Name, len(col.F), n)
+			if len(col.GetF()) != n {
+				return nil, fmt.Errorf("字段 %s 的 f 有 %d 项，期望 %d 项", f.Name, len(col.GetF()), n)
 			}
-			dst.F = append(dst.F, col.F...)
+			dst.F = append(dst.F, col.GetF()...)
 		case seriesstore.TypeInt64, seriesstore.TypeBool:
-			if len(col.I) != n {
-				return nil, fmt.Errorf("字段 %s 的 i 有 %d 项，期望 %d 项", f.Name, len(col.I), n)
+			if len(col.GetI()) != n {
+				return nil, fmt.Errorf("字段 %s 的 i 有 %d 项，期望 %d 项", f.Name, len(col.GetI()), n)
 			}
-			dst.I = append(dst.I, col.I...)
+			dst.I = append(dst.I, col.GetI()...)
 		case seriesstore.TypeString:
-			if len(col.S) != n {
-				return nil, fmt.Errorf("字段 %s 的 s 有 %d 项，期望 %d 项", f.Name, len(col.S), n)
+			if len(col.GetS()) != n {
+				return nil, fmt.Errorf("字段 %s 的 s 有 %d 项，期望 %d 项", f.Name, len(col.GetS()), n)
 			}
-			dst.S = append(dst.S, col.S...)
+			dst.S = append(dst.S, col.GetS()...)
 		}
 	}
 	return out, nil
 }
 
-func (w *localWriter) handleFields(rw http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	src := seriesstore.Source{SpaceID: q.Get("space"), DatasetID: q.Get("dataset"), Freq: q.Get("freq")}
+// GetSeriesFields 返回数据集的字段表（名称、Storage 字段类型、填充规则）。
+func (w *localWriter) GetSeriesFields(ctx context.Context, req *factorpb.GetSeriesFieldsReq) (*factorpb.GetSeriesFieldsRsp, error) {
+	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFreq())}
 	if src.SpaceID == "" || src.DatasetID == "" {
-		writeJSONError(rw, http.StatusBadRequest, errors.New("space、dataset 是必填项"))
-		return
+		return &factorpb.GetSeriesFieldsRsp{RetInfo: writeRetInfo(invalidWrite("space_id、dataset_id 是必填项"))}, nil
 	}
-	fields, err := w.datasetFields(r.Context(), src)
+	fields, err := w.datasetFields(ctx, src)
 	if err != nil {
-		writeJSONError(rw, http.StatusBadGateway, err)
-		return
+		return &factorpb.GetSeriesFieldsRsp{RetInfo: writeRetInfo(err)}, nil
 	}
-	type item struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-		Fill string `json:"fill"`
-	}
-	columns, err := w.storage.ListColumns(r.Context(), src.SpaceID, src.DatasetID)
+	columns, err := w.storage.ListColumns(ctx, src.SpaceID, src.DatasetID)
 	if err != nil {
-		writeJSONError(rw, http.StatusBadGateway, err)
-		return
+		return &factorpb.GetSeriesFieldsRsp{RetInfo: writeRetInfo(err)}, nil
 	}
 	valueTypes := seriessync.ValueTypes(columns)
 	fills := map[seriesstore.FillRule]string{seriesstore.FillPrev: "prev", seriesstore.FillPrevClose: "prev_close", seriesstore.FillZero: "zero"}
-	out := make([]item, 0, len(fields))
+	out := &factorpb.GetSeriesFieldsRsp{RetInfo: replaySuccess()}
 	for _, f := range fields {
-		out = append(out, item{Name: f.Name, Type: valueTypes[f.Name], Fill: fills[f.Fill]})
+		out.Fields = append(out.Fields, &factorpb.SeriesField{Name: f.Name, Type: valueTypes[f.Name], Fill: fills[f.Fill]})
 	}
-	writeJSON(rw, http.StatusOK, map[string]any{"fields": out})
+	return out, nil
 }
 
-func (w *localWriter) handleSubject(rw http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	space, dataset, subject := q.Get("space"), q.Get("dataset"), q.Get("subject")
+// CheckSeriesSubject 判断标的是否在数据集的标签范围内。
+func (w *localWriter) CheckSeriesSubject(ctx context.Context, req *factorpb.CheckSeriesSubjectReq) (*factorpb.CheckSeriesSubjectRsp, error) {
+	space, dataset, subject := strings.TrimSpace(req.GetSpaceId()), strings.TrimSpace(req.GetDatasetId()), strings.TrimSpace(req.GetSubjectId())
 	if space == "" || dataset == "" || subject == "" {
-		writeJSONError(rw, http.StatusBadRequest, errors.New("space、dataset、subject 都是必填项"))
-		return
+		return &factorpb.CheckSeriesSubjectRsp{RetInfo: writeRetInfo(invalidWrite("space_id、dataset_id、subject_id 都是必填项"))}, nil
 	}
-	subjects, err := w.storage.ListDatasetSubjects(r.Context(), space, dataset)
+	subjects, err := w.storage.ListDatasetSubjects(ctx, space, dataset)
 	if err != nil {
-		writeJSONError(rw, http.StatusBadGateway, err)
-		return
+		return &factorpb.CheckSeriesSubjectRsp{RetInfo: writeRetInfo(err)}, nil
 	}
 	in := false
 	for _, s := range subjects {
-		if s == subject {
-			in = true
-			break
-		}
+		in = in || s == subject
 	}
-	writeJSON(rw, http.StatusOK, map[string]any{"in_scope": in})
+	return &factorpb.CheckSeriesSubjectRsp{RetInfo: replaySuccess(), InScope: in}, nil
 }
 
-func (w *localWriter) handleBounds(rw http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	src := seriesstore.Source{SpaceID: q.Get("space"), DatasetID: q.Get("dataset"), Freq: q.Get("freq")}
-	subject := q.Get("subject")
+// GetSeriesBounds 返回标的在本地时序存储里的最早与最新时间。
+func (w *localWriter) GetSeriesBounds(_ context.Context, req *factorpb.GetSeriesBoundsReq) (*factorpb.GetSeriesBoundsRsp, error) {
+	src := seriesstore.Source{SpaceID: strings.TrimSpace(req.GetSpaceId()), DatasetID: strings.TrimSpace(req.GetDatasetId()), Freq: strings.TrimSpace(req.GetFreq())}
+	subject := strings.TrimSpace(req.GetSubjectId())
 	if src.SpaceID == "" || src.DatasetID == "" || src.Freq == "" || subject == "" {
-		writeJSONError(rw, http.StatusBadRequest, errors.New("space、dataset、freq、subject 都是必填项"))
-		return
+		return &factorpb.GetSeriesBoundsRsp{RetInfo: writeRetInfo(invalidWrite("space_id、dataset_id、freq、subject_id 都是必填项"))}, nil
 	}
 	b, ok, err := w.data.Store().Bounds(src, subject)
 	if err != nil {
-		writeJSONError(rw, http.StatusBadRequest, err)
-		return
+		return &factorpb.GetSeriesBoundsRsp{RetInfo: writeRetInfo(invalidWrite("%w", err))}, nil
 	}
-	out := map[string]any{"exists": ok}
+	out := &factorpb.GetSeriesBoundsRsp{RetInfo: replaySuccess(), Exists: ok}
 	if ok {
-		out["earliest"], out["latest"] = src.Format(b.Earliest), src.Format(b.Latest)
+		out.Earliest, out.Latest = src.Format(b.Earliest), src.Format(b.Latest)
 	}
-	writeJSON(rw, http.StatusOK, out)
-}
-
-func (w *localWriter) handleSources(rw http.ResponseWriter, _ *http.Request) {
-	type item struct {
-		Source  string `json:"source"`
-		TaskID  string `json:"task_id"`
-		Blocked string `json:"blocked,omitempty"`
-	}
-	var out []item
-	for _, info := range w.data.Sources() {
-		it := item{Source: info.Source.String(), TaskID: info.TaskID}
-		if err := w.data.Blocked(info.Source); err != nil {
-			it.Blocked = err.Error()
-		}
-		out = append(out, it)
-	}
-	writeJSON(rw, http.StatusOK, map[string]any{"sources": out})
-}
-
-func writeJSON(rw http.ResponseWriter, status int, v any) {
-	rw.Header().Set("Content-Type", "application/json")
-	rw.WriteHeader(status)
-	_ = json.NewEncoder(rw).Encode(v)
-}
-
-func writeJSONError(rw http.ResponseWriter, status int, err error) {
-	writeJSON(rw, status, map[string]string{"error": err.Error()})
+	return out, nil
 }

@@ -21,7 +21,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+# 端口探测用 bash 自带的 /dev/tcp：编译镜像和精简的 CI 环境里没有 nc。
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+if port_open "$PORT"; then
   echo "port ${PORT} is already in use" >&2
   exit 1
 fi
@@ -36,7 +39,7 @@ fi
 NATS_PID=$!
 
 for _ in $(seq 1 120); do
-  if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+  if port_open "$PORT"; then
     break
   fi
   if ! kill -0 "$NATS_PID" 2>/dev/null; then
@@ -45,7 +48,7 @@ for _ in $(seq 1 120); do
   fi
   sleep 0.1
 done
-if ! nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+if ! port_open "$PORT"; then
   cat "$WORK_DIR/nats.log" >&2
   echo "embedded NATS did not become ready" >&2
   exit 1
@@ -66,8 +69,8 @@ TRADE_TEST='TestExternalLogicalAccountTargetIsConsumedIntoTradeStore'
   CGO_ENABLED=1 go test -c -tags=e2e_external -o "$WORK_DIR/trade.test" ./test
 )
 
-# Trade 先认领账户与会话，Strategy 侧按启用时的校验确认授权后再求值。 Both test binaries share only the isolated broker and this
-# temporary coordination directory, not a database or hand-built event.
+# Trade 先建好策略控制的组合账户，Strategy 侧按启用时的只读核对（控制模式、市场）确认账户可用后再求值。
+# 两个测试进程只共用隔离的本机 NATS 与这个临时协调目录，不共用数据库，也不手工构造事件。
 "$WORK_DIR/trade.test" -test.v -test.timeout=60s -test.run="^${TRADE_TEST}$" \
   >"$WORK_DIR/trade-test.log" 2>&1 &
 TRADE_PID=$!

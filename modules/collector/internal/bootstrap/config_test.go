@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,31 +8,15 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/cnstock"
-	"github.com/mooyang-code/moox/packages/security"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
-func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
-	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
-
-	cfg := Default()
-	if cfg.Health.Addr != ":11412" {
-		t.Fatalf("Health.Addr = %q, want %q", cfg.Health.Addr, ":11412")
-	}
-
-	cfg.applyEnv()
-	if cfg.Health.Addr != "127.0.0.1:16012" {
-		t.Fatalf("Health.Addr = %q, want %q", cfg.Health.Addr, "127.0.0.1:16012")
-	}
-}
-
 func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_DB_PATH", "./override/collector.db")
-	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
 	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET", "ip://127.0.0.1:30100")
 	t.Setenv("MOOX_GATEWAY_CALLER", "collector")
 
@@ -45,7 +28,6 @@ database:
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
-	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
 	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
 }
 
@@ -105,18 +87,6 @@ event_bus:
 	assert.Equal(t, 200, cfg.KlineResample.FallbackMaxBuckets, "未写的项取默认值")
 	assert.Equal(t, 30*time.Second, cfg.KlineResample.ExecTimeout)
 	assert.True(t, cfg.EventBus.Enabled())
-}
-
-// 旧位置 kline_resample.event_bus 给出定向的中文报错，而不是笼统的“未知字段”。
-func TestLoadRejectsLegacyKlineResampleEventBusWithGuidance(t *testing.T) {
-	_, err := Load(writeCollectorConfig(t, `kline_resample:
-  enabled: true
-  event_bus:
-    urls: ["nats://127.0.0.1:4222"]
-`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "已经移到顶层 event_bus")
-	assert.Contains(t, err.Error(), "重新渲染配置")
 }
 
 func TestLoadKlineResampleDefaultsHaveNoEventBus(t *testing.T) {
@@ -260,14 +230,14 @@ func TestCollectorGatewayIdentityUsesStrictConfiguration(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_CALLER", "wrong-legacy-caller")
 	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID", "obsolete-key")
 	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE", "/nonexistent/obsolete-key")
-	cfg, err := Load(writeCollectorConfig(t, "gateway_client:\n  key_id: admin-assigned-collector-key\n"))
+	cfg, err := Load(writeCollectorConfig(t, "gateway_client:\n  host_id: control\n"))
 	require.NoError(t, err)
 	require.Equal(t, "collector", cfg.GatewayClient.Caller)
-	require.Equal(t, "admin-assigned-collector-key", cfg.GatewayClient.KeyID)
-	require.Equal(t, "../../secrets/caller-collector.key", cfg.GatewayClient.KeyFile)
+	require.Equal(t, "control", cfg.GatewayClient.HostID)
+	require.Equal(t, "../../secrets/host.key", cfg.GatewayClient.KeyFile)
 	for _, raw := range []string{
 		"gateway_client: {caller: monitor}\n",
-		"gateway_client: {key_id: 'bad key'}\n",
+		"gateway_client: {key_id: obsolete}\n",
 		"gateway_client: {target: 'ip://127.0.0.1:11003'}\n",
 		"gateway_client: {key_file: ''}\n",
 		"storage: {key_id: old}\n",
@@ -313,10 +283,10 @@ func TestLoadSubjectSyncFromCollectorConfig(t *testing.T) {
 func TestSCFPlanConfigValidation(t *testing.T) {
 	valid := func() *Config {
 		cfg := Default()
-		cfg.SCFRegions = map[string]marketfetch.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
-		cfg.SCFPlan.AccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
+		cfg.SCFRegions = map[string]fetchplan.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
+		cfg.SCFPlan.EntryRoutes = map[string]SCFEntryEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", Host: "storage"}}
 		cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-nanjing"}}}
-		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
+		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
 		return cfg
 	}
 	require.NoError(t, valid().validateSCFPlan())
@@ -330,14 +300,14 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	require.Equal(t, []string{"crypto", "stockcn"}, mergeSpaces([]string{"stockcn"}, []string{"crypto", "", "STOCKCN"}))
 
 	noRoute := valid()
-	noRoute.SCFPlan.AccessRoutes = nil
-	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region Access route")
+	noRoute.SCFPlan.EntryRoutes = nil
+	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region entry route")
 	noNetwork := valid()
 	noNetwork.SCFRegions = nil
 	require.ErrorContains(t, noNetwork.validateSCFPlan(), "VPC and subnet")
 	noDeploy := valid()
-	noDeploy.SCFPlan.PackageID = ""
-	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_id")
+	noDeploy.SCFPlan.PackageName = ""
+	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_name")
 	require.NoError(t, Default().validateSCFPlan(), "spaces without scf_markets keep the Invoke scheduler only")
 
 	shared := valid()
@@ -345,30 +315,28 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	require.ErrorContains(t, shared.validateSCFPlan(), "share code package")
 	own := valid()
 	own.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
-	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}
 	require.NoError(t, own.validateSCFPlan())
 }
 
 func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "env.json"), []byte(`{"MOOX_SPACE_ID":"crypto","OTHER":"x"}`), 0o600))
 	cfg := Default()
 	cfg.sourcePath = filepath.Join(dir, "app.yaml")
-	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "env.json"
-	cfg.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "env.json"
+	cfg.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}
 	deploy, err := cfg.fetchPlanDeploy("stockcn")
 	require.NoError(t, err)
 	require.Equal(t, "stockcn", deploy.BaseEnvironment["MOOX_SPACE_ID"])
-	require.Equal(t, "pkg-stockcn", deploy.PackageID)
+	require.Equal(t, "pkg-stockcn", deploy.PackageName)
 	cryptoDeploy, err := cfg.fetchPlanDeploy("crypto")
 	require.NoError(t, err)
 	require.Equal(t, "crypto", cryptoDeploy.BaseEnvironment["MOOX_SPACE_ID"])
-	require.Equal(t, "pkg", cryptoDeploy.PackageID)
+	require.Equal(t, "pkg", cryptoDeploy.PackageName)
 }
 
 func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	cfg := Default()
 	cfg.sourcePath = filepath.Join(t.TempDir(), "app.yaml")
 	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName = "acct", "moox-collector-crypto-plan"
@@ -376,32 +344,17 @@ func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
 	require.Equal(t, "moox-collector-crypto-plan", deploy.PackageName)
-	require.Empty(t, deploy.PackageID)
-	// Storage 应用密钥由主密钥按应用 ID 派生，密钥本身不进入配置文件。
-	var keys map[string]string
-	require.NoError(t, json.Unmarshal([]byte(deploy.BaseEnvironment["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]), &keys))
-	require.Equal(t, security.HMACSHA256Hex("test-storage-primary-secret", []byte("moox-collector")), keys["moox-collector"])
-	require.Len(t, keys, 1)
-
-	// 主密钥缺失时明确报错，不下发没有密钥的函数。
-	t.Setenv(storageAuthSecretEnv, "")
-	_, err = cfg.fetchPlanDeploy("crypto")
-	require.ErrorContains(t, err, storageAuthSecretEnv)
+	// 函数写 Storage 不需要口令：内置环境只有空间身份。
+	require.Equal(t, map[string]string{"MOOX_SPACE_ID": "crypto"}, deploy.BaseEnvironment)
 }
 
-func TestSCFPlanPackageSelectionRequiresExactlyOneOfNameAndID(t *testing.T) {
-	plan := SCFPlanConfig{PackageName: "pkg-name", Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-id"}}}
-	key, err := plan.packageKeyFor("crypto")
-	require.NoError(t, err)
-	require.Equal(t, "name:pkg-name", key)
-	key, err = plan.packageKeyFor("stockcn")
-	require.NoError(t, err)
-	require.Equal(t, "id:pkg-id", key)
-
-	_, err = (SCFPlanConfig{PackageName: "a", PackageID: "b"}).packageKeyFor("crypto")
-	require.ErrorContains(t, err, "both")
-	_, err = (SCFPlanConfig{}).packageKeyFor("crypto")
-	require.ErrorContains(t, err, "needs package_name")
+// 代码包只能按包名取最新；固定包 ID 的 package_id 已删除，旧配置里还写着它时严格解码直接报错。
+func TestSCFPlanPackageIsSelectedByNameOnly(t *testing.T) {
+	plan := SCFPlanConfig{PackageName: "pkg-name", Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {PackageName: "pkg-stockcn"}}}
+	require.Equal(t, "pkg-name", plan.packageNameFor("crypto"))
+	require.Equal(t, "pkg-stockcn", plan.packageNameFor("stockcn"))
+	_, err := Load(writeCollectorConfig(t, "scf_plan: {package_id: stale}\n"))
+	require.ErrorContains(t, err, "package_id")
 }
 
 // 部署渲染出的 Timer 配置经真实 Load（含 validateSCFPlan）：覆盖 crypto、仅 stockcn、多空间与关闭状态。
@@ -414,14 +367,13 @@ func renderedTimerPlan(markets, spaces string) string {
   cloud_account_id: acct
   memory_mb: 128
   symbols_per_function: 50
-  access_routes:
-    ap-nanjing: {access_address: "10.0.0.5:11004", access_id: access@storage}
+  entry_routes:
+    ap-nanjing: {entry_address: "10.0.0.5:11004", entry_host: storage}
   spaces:
 ` + spaces
 }
 
 func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	t.Run("crypto only", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
 		require.NoError(t, err)
@@ -439,7 +391,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
 		sizing := cfg.SCFPlan.autoSizing("stockcn")
 		require.NotNil(t, sizing, "A 股默认按配置估算每函数标的数")
-		require.Equal(t, marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, *sizing)
+		require.Equal(t, fetchplan.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, *sizing)
 		require.Equal(t, 800, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 0.8 秒取数")
 		balance := cfg.SCFPlan.Spaces["stockcn"].EgressBalance
 		require.NotNil(t, balance, "A 股默认新建函数后去重出口 IP")
@@ -538,10 +490,9 @@ func TestScfPlanFetchYAMLNotBeforeOverride(t *testing.T) {
 	require.Zero(t, fetch.StandbyMS)
 }
 
-// CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
+// CLI 渲染测试生成的真实产物（modules/cli/internal/setup/topology/testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
 func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
-	raw, err := os.ReadFile("../../../cli/internal/setup/config/testdata/scf_plan_rendered.yaml")
+	raw, err := os.ReadFile("../../../cli/internal/setup/topology/testdata/scf_plan_rendered.yaml")
 	require.NoError(t, err)
 	cfg, err := Load(writeCollectorConfig(t, string(raw)))
 	require.NoError(t, err)
@@ -553,7 +504,7 @@ func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 		require.Contains(t, deploy.Networks, "ap-hongkong")
 	}
 	require.NotNil(t, cfg.SCFPlan.autoSizing("stockcn"), "渲染产物里只有包名与命名空间，stockcn 的估算参数仍应补回")
-	route, err := cfg.scfPlanAccessEnvironmentRoute("ap-hongkong")
+	route, err := cfg.scfPlanEntryEnvironmentRoute("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", route.Address)
 }
@@ -578,7 +529,6 @@ func TestPerMarketFetchOverridesOnlyTheirMarket(t *testing.T) {
 }
 
 func TestPerMarketFetchYAMLIsStrictlyParsed(t *testing.T) {
-	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
 	cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n",
 		"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, markets: {swap: {fetch: {not_before_ms: 9000}, lateness_s: 25}}}\n")))
 	require.NoError(t, err)
@@ -590,9 +540,10 @@ func TestPerMarketFetchYAMLIsStrictlyParsed(t *testing.T) {
 	require.Error(t, err)
 }
 
-// 暂停要等在途补采分块结束、SCF 定时器停用确认（最长 collectorQuiesceTimeout），健康端口的请求时限必须大于它，
-// 否则线上会出现「已暂停，但在途操作没有结束」（请求在 3 秒时被截断，门禁已关、确认没做完）。
-func TestCollectorHealthRequestTimeoutCoversPauseQuiesce(t *testing.T) {
+// 暂停要等在途补采分块结束、SCF 定时器停用确认（最长 collectorQuiesceTimeout）：ControlLifecycle 在 CollectMgr 上，
+// 它的服务端请求时限必须大于收敛时限，否则线上会出现「已暂停，但在途操作没有结束」（请求先被截断，门禁已关、确认没做完）。
+// 路由超时与服务端超时的对齐由 servicecatalog 的 TestLifecycleMethodsAndTimeoutsCoverQuiesce 核对。
+func TestCollectMgrRequestTimeoutCoversPauseQuiesce(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
 	require.NoError(t, err)
 	var config struct {
@@ -605,12 +556,12 @@ func TestCollectorHealthRequestTimeoutCoversPauseQuiesce(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &config))
 	for _, service := range config.Server.Service {
-		if service.Name == "trpc.moox.collector.Health" {
+		if service.Name == "trpc.moox.collector.CollectMgr" {
 			require.Greater(t, time.Duration(service.Timeout)*time.Millisecond, collectorQuiesceTimeout)
 			return
 		}
 	}
-	t.Fatal("没有找到 trpc.moox.collector.Health 服务")
+	t.Fatal("没有找到 trpc.moox.collector.CollectMgr 服务")
 }
 
 // 空间固定了 symbols_per_function 时不再估算；auto_size 只写部分字段时其余沿用默认值。

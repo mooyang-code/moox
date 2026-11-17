@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -41,6 +42,8 @@ type StrategyMgrService interface {
 
 	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error)
 
+	ConfirmStrategyInstance(ctx context.Context, req *ConfirmStrategyInstanceReq) (*ConfirmStrategyInstanceRsp, error)
+
 	DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq) (*DeleteStrategyInstanceRsp, error)
 
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq) (*ListStrategyResultsRsp, error)
@@ -62,16 +65,10 @@ type StrategyMgrService interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq) (*GetStrategyDisplaySettingsRsp, error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error)
-
-	ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq) (*ListStrategyTemplatesRsp, error)
-
-	GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq) (*GetStrategyTemplateRsp, error)
-
-	SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq) (*SaveStrategyTemplateRsp, error)
-
-	DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq) (*DeleteStrategyTemplateRsp, error)
-
-	RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq) (*RenderStrategyTemplateRsp, error)
+	// GetLifecycle GetLifecycle 读策略模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行策略模块：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒）。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -262,6 +259,24 @@ func StrategyMgrService_SetStrategyInstanceEnabled_Handler(svr interface{}, ctx 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(StrategyMgrService).SetStrategyInstanceEnabled(ctx, reqbody.(*SetStrategyInstanceEnabledReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_ConfirmStrategyInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ConfirmStrategyInstanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).ConfirmStrategyInstance(ctx, reqbody.(*ConfirmStrategyInstanceReq))
 	}
 
 	var rsp interface{}
@@ -470,14 +485,14 @@ func StrategyMgrService_SetStrategyDisplaySettings_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
-func StrategyMgrService_ListStrategyTemplates_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListStrategyTemplatesReq{}
+func StrategyMgrService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.GetLifecycleReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).ListStrategyTemplates(ctx, reqbody.(*ListStrategyTemplatesReq))
+		return svr.(StrategyMgrService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
 	}
 
 	var rsp interface{}
@@ -488,68 +503,14 @@ func StrategyMgrService_ListStrategyTemplates_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func StrategyMgrService_GetStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetStrategyTemplateReq{}
+func StrategyMgrService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.ControlLifecycleReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).GetStrategyTemplate(ctx, reqbody.(*GetStrategyTemplateReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func StrategyMgrService_SaveStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SaveStrategyTemplateReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).SaveStrategyTemplate(ctx, reqbody.(*SaveStrategyTemplateReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func StrategyMgrService_DeleteStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DeleteStrategyTemplateReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).DeleteStrategyTemplate(ctx, reqbody.(*DeleteStrategyTemplateReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func StrategyMgrService_RenderStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RenderStrategyTemplateReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).RenderStrategyTemplate(ctx, reqbody.(*RenderStrategyTemplateReq))
+		return svr.(StrategyMgrService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
 	}
 
 	var rsp interface{}
@@ -610,6 +571,10 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: StrategyMgrService_SetStrategyInstanceEnabled_Handler,
 		},
 		{
+			Name: "/trpc.moox.strategy.StrategyMgr/ConfirmStrategyInstance",
+			Func: StrategyMgrService_ConfirmStrategyInstance_Handler,
+		},
+		{
 			Name: "/trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance",
 			Func: StrategyMgrService_DeleteStrategyInstance_Handler,
 		},
@@ -654,24 +619,12 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: StrategyMgrService_SetStrategyDisplaySettings_Handler,
 		},
 		{
-			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyTemplates",
-			Func: StrategyMgrService_ListStrategyTemplates_Handler,
+			Name: "/trpc.moox.strategy.StrategyMgr/GetLifecycle",
+			Func: StrategyMgrService_GetLifecycle_Handler,
 		},
 		{
-			Name: "/trpc.moox.strategy.StrategyMgr/GetStrategyTemplate",
-			Func: StrategyMgrService_GetStrategyTemplate_Handler,
-		},
-		{
-			Name: "/trpc.moox.strategy.StrategyMgr/SaveStrategyTemplate",
-			Func: StrategyMgrService_SaveStrategyTemplate_Handler,
-		},
-		{
-			Name: "/trpc.moox.strategy.StrategyMgr/DeleteStrategyTemplate",
-			Func: StrategyMgrService_DeleteStrategyTemplate_Handler,
-		},
-		{
-			Name: "/trpc.moox.strategy.StrategyMgr/RenderStrategyTemplate",
-			Func: StrategyMgrService_RenderStrategyTemplate_Handler,
+			Name: "/trpc.moox.strategy.StrategyMgr/ControlLifecycle",
+			Func: StrategyMgrService_ControlLifecycle_Handler,
 		},
 	},
 }
@@ -720,6 +673,9 @@ func (s *UnimplementedStrategyMgr) ListStrategyInstances(ctx context.Context, re
 func (s *UnimplementedStrategyMgr) SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error) {
 	return nil, errors.New("rpc SetStrategyInstanceEnabled of service StrategyMgr is not implemented")
 }
+func (s *UnimplementedStrategyMgr) ConfirmStrategyInstance(ctx context.Context, req *ConfirmStrategyInstanceReq) (*ConfirmStrategyInstanceRsp, error) {
+	return nil, errors.New("rpc ConfirmStrategyInstance of service StrategyMgr is not implemented")
+}
 func (s *UnimplementedStrategyMgr) DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq) (*DeleteStrategyInstanceRsp, error) {
 	return nil, errors.New("rpc DeleteStrategyInstance of service StrategyMgr is not implemented")
 }
@@ -753,20 +709,15 @@ func (s *UnimplementedStrategyMgr) GetStrategyDisplaySettings(ctx context.Contex
 func (s *UnimplementedStrategyMgr) SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error) {
 	return nil, errors.New("rpc SetStrategyDisplaySettings of service StrategyMgr is not implemented")
 }
-func (s *UnimplementedStrategyMgr) ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq) (*ListStrategyTemplatesRsp, error) {
-	return nil, errors.New("rpc ListStrategyTemplates of service StrategyMgr is not implemented")
+
+// GetLifecycle GetLifecycle 读策略模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+func (s *UnimplementedStrategyMgr) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("rpc GetLifecycle of service StrategyMgr is not implemented")
 }
-func (s *UnimplementedStrategyMgr) GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq) (*GetStrategyTemplateRsp, error) {
-	return nil, errors.New("rpc GetStrategyTemplate of service StrategyMgr is not implemented")
-}
-func (s *UnimplementedStrategyMgr) SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq) (*SaveStrategyTemplateRsp, error) {
-	return nil, errors.New("rpc SaveStrategyTemplate of service StrategyMgr is not implemented")
-}
-func (s *UnimplementedStrategyMgr) DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq) (*DeleteStrategyTemplateRsp, error) {
-	return nil, errors.New("rpc DeleteStrategyTemplate of service StrategyMgr is not implemented")
-}
-func (s *UnimplementedStrategyMgr) RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq) (*RenderStrategyTemplateRsp, error) {
-	return nil, errors.New("rpc RenderStrategyTemplate of service StrategyMgr is not implemented")
+
+// ControlLifecycle ControlLifecycle 暂停、恢复与放行策略模块：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒）。
+func (s *UnimplementedStrategyMgr) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("rpc ControlLifecycle of service StrategyMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -799,6 +750,8 @@ type StrategyMgrClientProxy interface {
 
 	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq, opts ...client.Option) (rsp *SetStrategyInstanceEnabledRsp, err error)
 
+	ConfirmStrategyInstance(ctx context.Context, req *ConfirmStrategyInstanceReq, opts ...client.Option) (rsp *ConfirmStrategyInstanceRsp, err error)
+
 	DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq, opts ...client.Option) (rsp *DeleteStrategyInstanceRsp, err error)
 
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq, opts ...client.Option) (rsp *ListStrategyResultsRsp, err error)
@@ -820,16 +773,10 @@ type StrategyMgrClientProxy interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *GetStrategyDisplaySettingsRsp, err error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *SetStrategyDisplaySettingsRsp, err error)
-
-	ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq, opts ...client.Option) (rsp *ListStrategyTemplatesRsp, err error)
-
-	GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq, opts ...client.Option) (rsp *GetStrategyTemplateRsp, err error)
-
-	SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq, opts ...client.Option) (rsp *SaveStrategyTemplateRsp, err error)
-
-	DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq, opts ...client.Option) (rsp *DeleteStrategyTemplateRsp, err error)
-
-	RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq, opts ...client.Option) (rsp *RenderStrategyTemplateRsp, err error)
+	// GetLifecycle GetLifecycle 读策略模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行策略模块：暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒）。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type StrategyMgrClientProxyImpl struct {
@@ -1061,6 +1008,26 @@ func (c *StrategyMgrClientProxyImpl) SetStrategyInstanceEnabled(ctx context.Cont
 	return rsp, nil
 }
 
+func (c *StrategyMgrClientProxyImpl) ConfirmStrategyInstance(ctx context.Context, req *ConfirmStrategyInstanceReq, opts ...client.Option) (*ConfirmStrategyInstanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ConfirmStrategyInstance")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("ConfirmStrategyInstance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ConfirmStrategyInstanceRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func (c *StrategyMgrClientProxyImpl) DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq, opts ...client.Option) (*DeleteStrategyInstanceRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1281,100 +1248,40 @@ func (c *StrategyMgrClientProxyImpl) SetStrategyDisplaySettings(ctx context.Cont
 	return rsp, nil
 }
 
-func (c *StrategyMgrClientProxyImpl) ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq, opts ...client.Option) (*ListStrategyTemplatesRsp, error) {
+func (c *StrategyMgrClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ListStrategyTemplates")
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/GetLifecycle")
 	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("strategy")
 	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("ListStrategyTemplates")
+	msg.WithCalleeMethod("GetLifecycle")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListStrategyTemplatesRsp{}
+	rsp := &commonpb.GetLifecycleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *StrategyMgrClientProxyImpl) GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq, opts ...client.Option) (*GetStrategyTemplateRsp, error) {
+func (c *StrategyMgrClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/GetStrategyTemplate")
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ControlLifecycle")
 	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("strategy")
 	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("GetStrategyTemplate")
+	msg.WithCalleeMethod("ControlLifecycle")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetStrategyTemplateRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *StrategyMgrClientProxyImpl) SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq, opts ...client.Option) (*SaveStrategyTemplateRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/SaveStrategyTemplate")
-	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("strategy")
-	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("SaveStrategyTemplate")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &SaveStrategyTemplateRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *StrategyMgrClientProxyImpl) DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq, opts ...client.Option) (*DeleteStrategyTemplateRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/DeleteStrategyTemplate")
-	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("strategy")
-	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("DeleteStrategyTemplate")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &DeleteStrategyTemplateRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *StrategyMgrClientProxyImpl) RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq, opts ...client.Option) (*RenderStrategyTemplateRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/RenderStrategyTemplate")
-	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("strategy")
-	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("RenderStrategyTemplate")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RenderStrategyTemplateRsp{}
+	rsp := &commonpb.ControlLifecycleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -18,20 +18,19 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const (
-	klineGatewayNode   = "gateway-kline-e2e"
-	klineGatewayKeyID  = "moox-skill-e2e"
-	klineGatewaySecret = "gateway-kline-e2e-secret-0123456789"
-	klineStorageAppID  = "moox-skill"
-	klineStorageAppKey = "storage-kline-e2e-app-key"
-)
+const klineGatewayNode = "gateway-kline-e2e"
 
-func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
+// klineGatewaySecret 是测试里 moox-cli 私钥文件的内容：任何输出里都不应出现它。
+var klineGatewaySecret = gatewayauth.EncodeSigningKey(authtest.Identity("moox-cli").Key)
+
+func TestKlineRPCUsesNativeGatewayHMACACL(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	storageAddress := startKlineStorage(t, storage)
 	gatewayTarget := startKlineNativeGateway(t, storageAddress)
@@ -53,9 +52,7 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	output, err := command.Output()
 	require.NoError(t, err, "kline CLI diagnostics: %s", diagnostics.String())
 	require.NotContains(t, diagnostics.String(), klineGatewaySecret)
-	require.NotContains(t, diagnostics.String(), klineStorageAppKey)
 	require.NotContains(t, string(output), klineGatewaySecret)
-	require.NotContains(t, string(output), klineStorageAppKey)
 	var response pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(output, &response))
 	require.Len(t, response.GetRows(), 1)
@@ -64,8 +61,6 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 
 	select {
 	case req := <-storage.requests:
-		require.Equal(t, klineStorageAppID, req.GetAuthInfo().GetAppId())
-		require.Equal(t, klineStorageAppKey, req.GetAuthInfo().GetAppKey())
 		require.Equal(t, "crypto", req.GetSpaceId())
 		require.Equal(t, "dataset_binance_kline_1m", req.GetDatasetId())
 		require.Len(t, req.GetSelectors(), 1)
@@ -75,15 +70,17 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 		t.Fatal("storage did not receive ReadTimeSeriesRows")
 	}
 
-	credentials := gatewayauth.Credentials{KeyID: klineGatewayKeyID, Caller: "moox-skill", Secret: klineGatewaySecret}
-	proxy := pb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(gatewayTarget, klineGatewayNode, credentials)...)
+	// 外部身份用自己的私钥直接到主机网关：网关上没有它的公钥，调不了任何方法，更借不到 moox-cli 的身份。
+	headers, err := gatewayauth.Sign(authtest.Identity("moox-skill"), gatewayauth.Request{TargetNode: klineGatewayNode, Callee: "trpc.moox.storage.PrimaryStore", Func: "UpsertFields"}, time.Now())
+	require.NoError(t, err)
+	options := []client.Option{client.WithTarget(gatewayTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+	for key, values := range headers {
+		options = append(options, client.WithMetaData(key, []byte(values[0])))
+	}
 	writeContext, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelWrite()
-	_, err = proxy.UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: klineStorageAppID, AppKey: klineStorageAppKey},
-	})
+	_, err = pb.NewPrimaryStoreClientProxy(options...).UpsertFields(writeContext, &pb.PrimaryUpsertFieldsReq{})
 	require.Error(t, err)
-	// An external principal cannot borrow the operator signing identity.
 	require.NotContains(t, err.Error(), klineGatewaySecret)
 	require.Equal(t, int32(0), storage.writeCalls.Load(), "write RPC must be rejected before reaching Storage")
 }
@@ -96,8 +93,6 @@ func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 		"--node-id", klineGatewayNode,
 		"--upstream-addr", "not-an-address",
 		"--ready-file", readyFile,
-		"--nonce-dir", filepath.Join(t.TempDir(), "nonces"),
-		"--key-id", klineGatewayKeyID,
 	)
 
 	select {
@@ -134,9 +129,6 @@ type klineStorageStub struct {
 
 func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	stub.requests <- req
-	if req.GetAuthInfo().GetAppId() != klineStorageAppID || req.GetAuthInfo().GetAppKey() != klineStorageAppKey {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NO_AUTH, Msg: "invalid storage auth"}}, nil
-	}
 	return &pb.ReadTimeSeriesRowsRsp{
 		RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
 		Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{
@@ -155,6 +147,12 @@ func startKlineStorage(t *testing.T, stub *klineStorageStub) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	return serveKlineStorage(t, stub, listener)
+}
+
+// serveKlineStorage 在给定的监听上起假 Storage。
+func serveKlineStorage(t *testing.T, stub *klineStorageStub, listener net.Listener) string {
+	t.Helper()
 	service := server.New(
 		server.WithNetwork("tcp"),
 		server.WithProtocol("trpc"),
@@ -185,8 +183,6 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 		"--node-id", klineGatewayNode,
 		"--upstream-addr", upstreamAddress,
 		"--ready-file", readyFile,
-		"--nonce-dir", filepath.Join(tempDir, "nonces"),
-		"--key-id", klineGatewayKeyID,
 	)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
@@ -221,11 +217,17 @@ type gatewayHelperProcess struct {
 
 func startGatewayHelperProcess(t *testing.T, helper string, args ...string) *gatewayHelperProcess {
 	t.Helper()
+	return startGatewayHelperProcessFor(t, helper, "moox-cli", args...)
+}
+
+// startGatewayHelperProcessFor 起夹具网关，并把 identity 这个非主机身份的测试公钥交给它登记。
+func startGatewayHelperProcessFor(t *testing.T, helper, identity string, args ...string) *gatewayHelperProcess {
+	t.Helper()
 	process := &gatewayHelperProcess{
 		command:  exec.Command(helper, args...),
 		waitDone: make(chan struct{}),
 	}
-	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+klineGatewaySecret)
+	process.command.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_PUBLIC_KEY="+gatewayauth.EncodePublicKey(authtest.Identity(identity).PublicKey()))
 	process.command.Stdout = &process.logs
 	process.command.Stderr = &process.logs
 	require.NoError(t, process.command.Start())
@@ -311,10 +313,7 @@ func (buffer *lockedBuffer) String() string {
 func writeKlineConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
-	content := fmt.Sprintf(`version: 1
-storage:
-  app_id: %q
-  app_key: %q
+	content := `version: 1
 data_types:
   crypto:
     default_exchange: binance
@@ -324,7 +323,7 @@ data_types:
         series_tag: venue:binance
         kline_datasets:
           1m: dataset_binance_kline_1m
-`, klineStorageAppID, klineStorageAppKey)
+`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
 }
@@ -338,10 +337,9 @@ func writeKlineOperator(t *testing.T, gatewayTarget string) (string, string) {
 	knownHosts := filepath.Join(directory, "known_hosts")
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0600))
 	host := testfixture.GatewaySSH(t, klineGatewayNode, strings.TrimPrefix(gatewayTarget, "ip://"), knownHosts)
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller-moox-cli.key"), []byte(klineGatewaySecret+"\n"), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: "+klineGatewayKeyID+"\nkey_file: caller-moox-cli.key\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "moox-cli.key"), []byte(klineGatewaySecret+"\n"), 0600))
 	manifest := filepath.Join(home, "moox.toml")
-	raw := fmt.Sprintf("[admin]\nusername='admin'\npassword='admin-test'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-test'\n[eventbus]\nport=4222\ntls_enabled=true\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\npassword='%s'\n[deployments]\n%s=['admin','console-proxy','web-host','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.Password, host.Name)
+	raw := fmt.Sprintf("[eventbus]\nport=4222\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\nprivate_key_file='%s'\n[deployments]\n%s=['admin','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.PrivateKeyFile, host.Name)
 	require.NoError(t, os.WriteFile(manifest, []byte(raw), 0600))
 	return home, manifest
 }

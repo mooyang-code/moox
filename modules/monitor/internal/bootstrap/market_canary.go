@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -133,15 +132,16 @@ func buildMonitorMarketCanary(
 	metricsStorage *monmetrics.StorageAdapter,
 	tagRuns TagSyncStatusSource,
 	hook func(context.Context, domain.Check, domain.CheckResult),
-) (func(context.Context) error, func(context.Context) error, error) {
+	halted func(context.Context) bool,
+) (func(context.Context) error, error) {
 	if cfg == nil || !cfg.MarketCanary.Enabled {
-		return nil, nil, nil
+		return nil, nil
 	}
 	if runtime == nil || runtime.Repositories == nil {
-		return nil, nil, fmt.Errorf("monitor market canary requires repositories")
+		return nil, fmt.Errorf("monitor market canary requires repositories")
 	}
 	if runtime.StorageGateway == nil {
-		return nil, nil, fmt.Errorf("monitor market canary requires the shared Storage gateway client")
+		return nil, fmt.Errorf("monitor market canary requires the shared Storage gateway client")
 	}
 	reader := runtime.StorageGateway
 	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
@@ -168,23 +168,27 @@ func buildMonitorMarketCanary(
 		case getErr == nil:
 			check.ID = existing.ID
 			if err := runtime.Repositories.Checks.Update(ctx, &check); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		case errors.Is(getErr, gorm.ErrRecordNotFound):
 			if err := runtime.Repositories.Checks.Create(ctx, &check); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		default:
-			return nil, nil, getErr
+			return nil, getErr
 		}
 		canaries = append(canaries, watchdog.MarketCanary{
-			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
+			Reader: reader, Config: canaryConfig,
 		})
 	}
 	if err := retireUnconfiguredMarketCanaries(ctx, runtime.Repositories, configuredCheckIDs); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	run := func(runCtx context.Context) error {
+		// Collector 模块暂停或恢复追赶时采集是有意停下的：本轮不跑探针，检查保持原状态。
+		if halted != nil && halted(runCtx) {
+			return nil
+		}
 		var errs []error
 		for _, canary := range canaries {
 			result := canary.Run(runCtx)
@@ -212,14 +216,6 @@ func buildMonitorMarketCanary(
 		}
 		return errors.Join(errs...)
 	}
-	probe := func(probeCtx context.Context) error {
-		for _, canary := range canaries {
-			if err := canary.ProbeStorageAuth(probeCtx); err != nil {
-				return fmt.Errorf("%s: %w", watchdog.MarketCanaryTarget(canary.Config), err)
-			}
-		}
-		return nil
-	}
 	if metricsStorage != nil && tagRuns != nil {
 		previousRun := run
 		run = func(runCtx context.Context) error {
@@ -227,7 +223,7 @@ func buildMonitorMarketCanary(
 			return errors.Join(err, runSubjectTagChecks(runCtx, runtime.Repositories, metricsStorage, tagRuns, hook, time.Now().UTC()))
 		}
 	}
-	return run, probe, nil
+	return run, nil
 }
 
 // ensureSubjectTagCheck 创建或修复标签检查：探针曾被关闭而退役（Enabled=false）后重新启用，必须恢复检查，

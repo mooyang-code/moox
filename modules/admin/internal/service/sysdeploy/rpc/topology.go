@@ -22,10 +22,6 @@ func (s *Service) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesReq) (
 	return s.svc.GetHostRoutes(ctx, req)
 }
 
-func (s *Service) GetDirectory(ctx context.Context, req *pb.GetDirectoryReq) (*pb.GetDirectoryRsp, error) {
-	return s.svc.GetDirectory(ctx, req)
-}
-
 func (s *Service) SetHostStatus(ctx context.Context, req *pb.SetHostStatusReq) (*pb.SetHostStatusRsp, error) {
 	return s.svc.SetHostStatus(ctx, req)
 }

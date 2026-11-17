@@ -3,9 +3,9 @@ package command
 import (
 	"bytes"
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +34,7 @@ func (g *subjectsFakeGateway) Forward(context.Context, string, string, int, []by
 func useSubjectsGateway(t *testing.T, gateway *subjectsFakeGateway) {
 	t.Helper()
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return gateway, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 }
 

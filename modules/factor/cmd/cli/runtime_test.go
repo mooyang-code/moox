@@ -15,14 +15,14 @@ import (
 func TestLoadRuntimeConfigReadsDatabaseAndStorage(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "app.yaml")
-	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  caller: factor-mgr\n  key_id: admin-assigned-factor-key\n  key_file: ../../secrets/caller-factor-mgr.key\n"
+	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  caller: factor-mgr\n  host_id: control\n  key_file: ../../secrets/host.key\n"
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(root, "state/factor.db"), cfg.DatabasePath)
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
-	require.Equal(t, "admin-assigned-factor-key", cfg.GatewayClient.KeyID)
+	require.Equal(t, "control", cfg.GatewayClient.HostID)
 	require.Equal(t, path, cfg.ConfigPath)
 }
 
@@ -38,7 +38,7 @@ func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/env/factor.db", cfg.DatabasePath)
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
-	require.Empty(t, cfg.GatewayClient.KeyID)
+	require.Empty(t, cfg.GatewayClient.HostID)
 }
 
 func TestValidateImportableTaskRejectsPending(t *testing.T) {

@@ -64,6 +64,13 @@
         >
       </a-form-item>
     </template>
+    <a-form-item label="因子数据来源">
+      <a-radio-group v-model="form.input" type="button" size="small">
+        <a-radio value="view" :disabled="tuned">结果 View</a-radio>
+        <a-radio value="compute" :disabled="pooled">因子现算</a-radio>
+      </a-radio-group>
+      <template #extra>{{ inputHint }}</template>
+    </a-form-item>
     <a-form-item label="区间" required>
       <!-- 表单项内容区是横向 flex：包一层纵向容器，选择器与说明上下排列。 -->
       <div class="range-block">
@@ -93,6 +100,10 @@
         }}</template
       >
     </a-form-item>
+    <a-form-item label="滑点（bps）">
+      <a-input-number v-model="form.slippage_bps" :min="0" :max="200" :step="1" />
+      <template #extra>成交价在收盘价上按方向加减这个比例：买入上浮、卖出下浮；0 表示按收盘价成交。</template>
+    </a-form-item>
     <a-form-item v-if="usesSwap && !pooled" label="资金费列（可选）">
       <a-input v-model="form.funding_column" placeholder="funding_rate" allow-clear />
       <template #extra>写了就按这一列（本根累计的资金费率）给永续持仓结算资金费：上一根收盘调仓之前的持仓乘本根费率。</template>
@@ -115,6 +126,7 @@ import {
   replayIsPool,
   replayMarkets,
   replayPool,
+  replayTuned,
   wholeDays
 } from "@/views/strategy/replay/replay-form-model";
 import { MARKET_ORDER, marketLabel, tasksText } from "@/views/strategy/market-mode";
@@ -132,6 +144,22 @@ const pooled = computed(() => replayIsPool(form.value, props.strategies));
 const declared = computed(() => replayDeclared(form.value, props.strategies));
 const driftHint = computed(() => replayDriftHint(form.value, props.strategies));
 const markets = computed(() => replayMarkets(form.value, props.strategies));
+// 声明了 factor_params 的策略只能用因子现算（可变成员的参数随策略逐期变化）：选中这种策略时自动切过去；策略池只能读结果 View。
+const tuned = computed(() => replayTuned(form.value, props.strategies));
+watch(
+  [tuned, pooled],
+  ([isTuned, isPool]) => {
+    if (isTuned) form.value.input = "compute";
+    else if (isPool) form.value.input = "view";
+  },
+  { immediate: true }
+);
+const inputHint = computed(() => {
+  if (tuned.value) return "策略声明了 factor_params：因子按回放中逐期求出的参数现算，只能用因子现算。";
+  if (form.value.input === "compute")
+    return "经主机网关调因子引擎，按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制；附加来源、参考市场仍读 View。只支持一个计算任务，不支持策略池与股票。";
+  return "读计算任务的结果 View：区间受 View 保留的根数限制。";
+});
 // 统一数据集上的任务同时覆盖现货与永续，永续费率也要填。
 const usesSwap = computed(() => markets.value.includes("swap") || markets.value.includes("multi"));
 

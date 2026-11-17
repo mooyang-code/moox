@@ -23,39 +23,20 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	var life *lifecycle.Controller
 	if runtime != nil && runtime.Store != nil {
 		var err error
-		if life, err = newMonitorLifecycle(runtime.Store, cfg.Database.Path, runtime.onLifecycleChange); err != nil {
+		if life, err = newMonitorLifecycle(cfg.Database.Path, runtime.onLifecycleChange); err != nil {
 			return fmt.Errorf("monitor lifecycle state failed to open: %w", err)
 		}
 		runtime.life.Store(life)
-		state.SnapshotFunc = withMonitorLifecycle(state.SnapshotFunc, life)
-		runtime.Go(func() {
-			life.Recover(ctx)
-			life.Run(ctx, monitorLifecycleRefresh)
-		})
+		runtime.Go(func() { life.Run(ctx, monitorLifecycleRefresh) })
 	}
-	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
-		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
-		ResetAccessKey: cfg.HealthAuth.ResetAccessKey, ResetSecretKey: cfg.HealthAuth.ResetSecretKey,
-		ClockSkew: time.Minute, NonceTTL: 2 * time.Minute,
-	})
-	if err != nil {
-		return fmt.Errorf("monitor health authentication is invalid: %w", err)
-	}
-	handler := healthz.NewMux()
-	handler.Handle("/healthz", healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)))
-	handler.Handle("/readyz", healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)))
-	handler.Handle("/metrics", healthAuth.Wrap(promhttp.Handler()))
-	if life != nil {
-		// 前缀路由不限方法：生命周期命令与重置都是 POST。
-		handler.HandlePrefix(lifecycle.StatusPath, healthAuth.Wrap(life.StatusHandler()))
-		handler.HandlePrefix(lifecycle.CommandPath, healthAuth.Wrap(life.CommandHandler()))
-		handler.HandlePrefix(lifecycle.CatchupPath, healthAuth.Wrap(life.CatchupHandler()))
-		handler.HandlePrefix(lifecycle.ResetPrefix, healthAuth.Wrap(life.ResetHandler()))
+	if runtime != nil {
+		// 上报带给 Monitor 自己的就绪与 /readyz 是同一个判断。
+		runtime.readiness = healthz.Readiness(state.Snapshot)
 	}
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")
 	}
-	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.monitor.Health"), handler); err != nil {
+	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.monitor.Health"), healthz.StandardMux(state.Snapshot, promhttp.Handler())); err != nil {
 		return fmt.Errorf("monitor health server failed to start: %w", err)
 	}
 	return nil
@@ -69,8 +50,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 			activeChecks, checksErr = runtime.Repositories.Checks.CountEnabled(ctx)
 		}
 		databaseReady := runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil && checksErr == nil
-		schedulerReady := runtime != nil && runtime.Scheduler != nil
-		ready := databaseReady && schedulerReady
+		ready := databaseReady
 		startedAt := time.Time{}
 		if runtime != nil {
 			startedAt = runtime.StartedAt
@@ -78,7 +58,6 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", startedAt, ready)
 		rsp.Details = map[string]any{
 			"database":           map[bool]string{true: "ok", false: "error"}[databaseReady],
-			"scheduler_ok":       schedulerReady,
 			"active_checks":      activeChecks,
 			"deployment_enabled": cfg.Deployment.Enabled,
 		}
@@ -106,7 +85,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 		if evaluationReason != "" {
 			rsp.Details["evaluation_error"] = evaluationReason
 		}
-		ready = databaseReady && schedulerReady && ingestReady && reporterReady && evaluationReady
+		ready = databaseReady && ingestReady && reporterReady && evaluationReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"
@@ -117,35 +96,35 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 		if checksErr != nil {
 			rsp.Details["database_checks_error"] = checksErr.Error()
 		}
-		rsp.Details["scheduler_ready"] = schedulerReady
 		return rsp
 	}
 }
 
-// evaluationStaleAfter 内没有一次完整成功的评估（检查结果写库失败、调度卡住，或业务评估一直失败），就判为未就绪：
-// 这时 Monitor 进程活着、/healthz 正常，但所有告警都会静默失效，主机守护据此推送“组件持续未就绪”。
-// 检查调度每 30 秒一轮，3 分钟相当于连续 6 轮失败；刚启动的 3 分钟内不判断。
+// evaluationStaleAfter 内没有一次完整成功的评估（检查结果写库失败、检查定时器卡住，或业务评估一直失败），就判为未就绪：
+// 这时 Monitor 进程活着、/healthz 正常，但所有告警都会静默失效。除了就绪位，GetHostPolicy 也据此返回失败，
+// 各主机 HostAgent 连续 3 次拉取失败后直推“控制机或 Monitor 不可达”。
+// 检查定时器每 30 秒一轮，3 分钟相当于连续 6 轮失败；刚启动的 3 分钟内不判断。
 const evaluationStaleAfter = 3 * time.Minute
 
 func evaluationFresh(runtime *Runtime, now time.Time) (bool, string) {
-	if runtime == nil || runtime.Scheduler == nil {
-		return false, "scheduler is not running"
+	if runtime == nil {
+		return false, "check timer is not running"
 	}
 	if now.Sub(runtime.StartedAt) < evaluationStaleAfter {
 		return true, ""
 	}
-	last := runtime.Scheduler.LastSuccessfulRound()
-	if last.IsZero() {
+	nanos := runtime.checkRoundAt.Load()
+	if nanos == 0 {
 		return false, "no check evaluation has completed since startup"
 	}
-	if age := now.Sub(last); age > evaluationStaleAfter {
+	if age := now.Sub(time.Unix(0, nanos)); age > evaluationStaleAfter {
 		return false, fmt.Sprintf("last complete check evaluation was %s ago", age.Truncate(time.Second))
 	}
 	return businessEvaluationFresh(runtime, now)
 }
 
 // businessEvaluationFresh 判断业务评估（数据集、网关、上报方等检查）最近是否成功过：它连续失败时这些检查都不产生结果、
-// 不告警，同样要让守护发现。没有业务评估时不判断。
+// 不告警，同样判为未就绪（并经 GetHostPolicy 失败由 HostAgent 直推告警）。没有业务评估时不判断。
 func businessEvaluationFresh(runtime *Runtime, now time.Time) (bool, string) {
 	if !runtime.businessEvaluation {
 		return true, ""

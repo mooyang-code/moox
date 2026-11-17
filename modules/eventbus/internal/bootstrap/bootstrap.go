@@ -32,8 +32,9 @@ type Runtime struct {
 	Health   *health.Server
 }
 
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
-	rt, err := Start(ctx, s, "./config/app.yaml")
+// Initialize 读 configPath 指向的业务配置（-config）并启动 broker。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*server.Server, error) {
+	rt, err := Start(ctx, s, configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +93,9 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 			log.Warn("EventBusMgr service is not configured, skip register")
 		}
 	}
-	registerMetricsReporter(s)
 	// 6. health/metrics; ready is set only after every previous stage succeeds.
 	hs := health.New(b, reg, nc)
+	registerMetricsReporter(s, hs.Readiness())
 	hs.SetReady(true)
 	if s != nil {
 		if err := hs.Register(s.Service("trpc.moox.eventbus.Health")); err != nil {
@@ -108,7 +109,7 @@ func Start(ctx context.Context, s *server.Server, configPath string) (*Runtime, 
 	return rt, nil
 }
 
-func registerMetricsReporter(s *server.Server) {
+func registerMetricsReporter(s *server.Server, readiness func(context.Context) (bool, string)) {
 	if s == nil {
 		return
 	}
@@ -119,6 +120,7 @@ func registerMetricsReporter(s *server.Server) {
 		log.Warnf("eventbus metrics reporter disabled: %v", err)
 		return
 	}
+	h.SetReadiness(readiness)
 	service := s.Service("trpc.moox.eventbus.metrics.timer")
 	if service == nil {
 		log.Warn("eventbus metrics timer service is not configured, skip register")
@@ -136,9 +138,10 @@ func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn
 			return nil, err
 		}
 		username, password = credentials.Username, credentials.Password
-		caFile = internalClientCAFile(cfg.InternalClient.TLSCAFile, credentials.CAFile, caFile)
-	} else if cfg.InternalClient.TLSCAFile != "" {
-		caFile = cfg.InternalClient.TLSCAFile
+		// 角色文件里写了根证书位置就用它；没写时用 broker 自己的 ca_file（部署时两者都是 MooX CA 根证书）。
+		if credentials.CAFile != "" {
+			caFile = credentials.CAFile
+		}
 	}
 	if username != "" || password != "" {
 		opts = append(opts, nats.UserInfo(username, password))
@@ -150,18 +153,6 @@ func connect(ctx context.Context, rawURL string, cfg *config.Config) (*nats.Conn
 		opts = append(opts, nats.Secure(), nats.TLSHandshakeFirst())
 	}
 	return nats.Connect(rawURL, opts...)
-}
-
-func internalClientCAFile(configuredCAFile, credentialCAFile, fallbackCAFile string) string {
-	if strings.TrimSpace(configuredCAFile) != "" {
-		// Deployments inject the absolute CA explicitly so it wins over the
-		// relative path retained in the credential bundle.
-		return configuredCAFile
-	}
-	if strings.TrimSpace(credentialCAFile) != "" {
-		return credentialCAFile
-	}
-	return fallbackCAFile
 }
 
 type internalCredentials struct {

@@ -10,14 +10,14 @@ import (
 func TestMatchesRequiresLiteralPattern(t *testing.T) {
 	_, err := Parse([]byte(`name: x
 rules:
-  - {id: r, type: signal, pool: [BTC-USDT], entry: "instrument_id matches instrument_id", exit: "close < 1", weight: 1}
+  - {id: r, type: rank, pool: [BTC-USDT], score: "0", select: {top: 10000}, hold: {entry: "instrument_id matches instrument_id", exit: "close < 1"}, weight: 1}
 `))
 	if err == nil || !strings.Contains(err.Error(), "matches 右边只能是字符串字面量") {
 		t.Fatalf("非字面量的正则应拒绝：%v", err)
 	}
 	_, err = Parse([]byte(`name: x
 rules:
-  - {id: r, type: signal, pool: [BTC-USDT], entry: "instrument_id matches \"((\"", exit: "close < 1", weight: 1}
+  - {id: r, type: rank, pool: [BTC-USDT], score: "0", select: {top: 10000}, hold: {entry: "instrument_id matches \"((\"", exit: "close < 1"}, weight: 1}
 `))
 	if err == nil || !strings.Contains(err.Error(), "正则表达式无效") || strings.Contains(err.Error(), "missing") {
 		t.Fatalf("写错的正则应在保存时给出中文原因：%v", err)

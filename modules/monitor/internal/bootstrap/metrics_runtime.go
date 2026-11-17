@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -46,6 +47,10 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 		}
 		log.WarnContextf(trpc.BackgroundContext(), "monitor metrics reporter disabled: %v", err)
 		return moduleMetrics
+	}
+	if runtime != nil {
+		h.SetReadiness(runtime.readiness)
+		h.SetLifecycle(func() *metricspb.ModuleLifecycle { return runtime.life.Load().ReportState() })
 	}
 	service := s.Service("trpc.moox.monitor.metrics.timer")
 	if service == nil {
@@ -121,6 +126,9 @@ func startObservabilityConsumer(
 					continue
 				}
 			}
+			// EventBus 停掉后 nats.go 会一直重连，消费循环不会返回错误；连接断开与重连要单独接到观测就绪状态上。
+			var stopped atomic.Bool
+			jc.ConnectionStateHandler = observabilityConnectionHandler(runtime, &stopped)
 			js, err := jetstream.Connect(ctx, jc)
 			if err != nil {
 				runtime.setObservabilityIngestState(false, err)
@@ -159,6 +167,7 @@ func startObservabilityConsumer(
 				continue
 			}
 			err = consumer.Run(ctx, func() { runtime.setObservabilityIngestState(true, nil) })
+			stopped.Store(true)
 			_ = consumer.Close()
 			_ = js.Close()
 			runtime.setObservabilityIngestState(false, err)
@@ -173,6 +182,24 @@ func startObservabilityConsumer(
 			}
 		}
 	})
+}
+
+// observabilityConnectionHandler 把观测消费者连接的断开与重连接到观测就绪状态：断开即未就绪（依赖观测输入的检查冻结），
+// 重连后置回就绪并重新开始恢复宽限期。stopped 置位后（本轮连接已收尾）不再改状态，避免迟到的回调覆盖外层循环的结论。
+func observabilityConnectionHandler(runtime *Runtime, stopped *atomic.Bool) func(bool, error) {
+	return func(connected bool, err error) {
+		if stopped.Load() {
+			return
+		}
+		if connected {
+			runtime.setObservabilityIngestState(true, nil)
+			return
+		}
+		if err == nil {
+			err = errors.New("observability eventbus connection lost")
+		}
+		runtime.setObservabilityIngestState(false, err)
+	}
 }
 
 func metricsObservabilityRoute(

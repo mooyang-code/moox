@@ -58,7 +58,7 @@ func newFactorResultService(t *testing.T, snapshot func() metadata.RequestSnapsh
 }
 
 func factorResultRequest(appID string, rows ...*pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsReq {
-	return &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space", DatasetId: "result", Rows: rows}
+	return &pb.PrimaryUpsertFieldsReq{SpaceId: "space", DatasetId: "result", Rows: rows}
 }
 
 // 请求的 space_id、dataset_id 原样交给存储层。

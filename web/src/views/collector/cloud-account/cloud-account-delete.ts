@@ -1,29 +1,14 @@
-import { listFunctionInstances } from "@/api/function-instance";
-
 /**
- * 云账户是全局的，执行器实例按空间存放：逐个空间查用这个云账户的实例数再相加。
- * 没有空间列表或任一空间查询失败时返回 null，确认框只写一般影响，不说“没有实例在用”。
+ * 删除云账号的确认正文。Collector 在账号还被 scf_plan 引用、还有代码包或云上还有它建的函数时会拒绝，
+ * 所以前端不再自己检查，被拒绝时显示 Collector 给的原因。
  */
-export async function instancesUsingAccount(accountId: string, spaceIds: readonly string[]): Promise<number | null> {
-  if (!spaceIds.length) return null;
-  try {
-    const totals = await Promise.all(
-      spaceIds.map(spaceId => listFunctionInstances({ cloud_account_id: accountId, page_size: 1 }, spaceId))
-    );
-    return totals.reduce((sum, item) => sum + item.total, 0);
-  } catch {
-    return null;
-  }
-}
+export const CLOUD_ACCOUNT_DELETE_TEXT =
+  "只删除这条登记，不会删除云上的函数。账号还被 scf_plan 引用、还有代码包，或配置过的地域里还有它建的函数时，Collector 会拒绝并说明原因。" +
+  "不再被 scf_plan 引用的旧账号，名下的函数 Collector 管不到，moox-cli collector function delete 也删不到：" +
+  "请用 moox-cli setup inspect-scf 查出这些函数，在腾讯云控制台手工删除后再删账号。";
 
-/**
- * 删除云账户的确认正文。后端是软删除、不检查引用：还在用它的执行器实例之后在管理台删不掉、
- * 不能部署和调用，云端函数也会留着，所以把在用的实例数（所有空间合计）写进正文。
- */
-export function cloudAccountDeleteText(inUse: number | null): string {
-  if (inUse && inUse > 0) {
-    return `所有空间里还有 ${inUse} 个执行器实例在用这个云账户：删除后这些实例在管理台删不掉、不能部署和调用，云端函数会留着。请先删除这些实例。`;
-  }
-  if (inUse === 0) return "所有空间里都没有执行器实例在用这个云账户。";
-  return "用这个云账户部署的执行器实例删除后在管理台删不掉、不能部署和调用，云端函数会留着。请先确认没有实例在用。";
+/** 删除失败的提示：优先用 Collector 返回的原因。 */
+export function cloudAccountDeleteError(error: unknown): string {
+  const reason = error instanceof Error && error.message ? error.message : "未知原因";
+  return `删除云账号失败：${reason}`;
 }

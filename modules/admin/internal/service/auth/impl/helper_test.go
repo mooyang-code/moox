@@ -2,7 +2,8 @@ package impl
 
 import (
 	"context"
-	"github.com/dgraph-io/badger/v4"
+	"testing"
+
 	"github.com/glebarez/sqlite"
 	authconfig "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
@@ -12,70 +13,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-	"time"
-	thttp "trpc.group/trpc-go/trpc-go/http"
 )
-
-func newAuthServiceForHelperTest(t *testing.T) *AuthServiceImpl {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
-	cache := openAuthTestCache(t)
-	return &AuthServiceImpl{
-		cfg: &authconfig.Config{
-			Security: authconfig.SecurityConfig{
-				MaxLoginAttempt: 2,
-				LockDuration:    time.Minute,
-				SaltExpired:     5 * time.Minute,
-			},
-		},
-		userDAO: dao.NewUserDAO(db, cache),
-	}
-}
-
-func openAuthTestCache(t *testing.T) *dao.CacheDB {
-	t.Helper()
-	db, err := badger.Open(badger.DefaultOptions(t.TempDir()).WithLogger(nil))
-	require.NoError(t, err)
-	cache, err := dao.NewCacheDBFromBadger(db)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = cache.Close() })
-	return cache
-}
-
-func TestExtractClientIPFromContext_XClientIP_ShouldPreferHeader(t *testing.T) {
-	svc := newAuthServiceForHelperTest(t)
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	req.Header.Set("X-Client-Ip", "10.1.2.3")
-	ctx := thttp.WithHeader(context.Background(), &thttp.Header{Request: req})
-	assert.Equal(t, "10.1.2.3", svc.extractClientIPFromContext(ctx, "fallback"))
-}
-
-func TestExtractClientIPFromContext_Fallback_ShouldUseRequestIP(t *testing.T) {
-	svc := newAuthServiceForHelperTest(t)
-	assert.Equal(t, "198.18.0.1", svc.extractClientIPFromContext(context.Background(), "198.18.0.1"))
-}
-
-func TestIsUserLocked_ExceedAttempts_ShouldReturnTrue(t *testing.T) {
-	svc := newAuthServiceForHelperTest(t)
-	ctx := context.Background()
-	svc.recordLoginAttempt(ctx, "alice", "1.1.1.1", false)
-	svc.recordLoginAttempt(ctx, "alice", "1.1.1.1", false)
-	assert.True(t, svc.isUserLocked(ctx, "alice", "1.1.1.1"))
-}
 
 func newAuthServiceForRegisterTest(t *testing.T) *AuthServiceImpl {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 共享内存库在最后一个连接关闭时才销毁；不关的话 -count=N 的下一轮会读到上一轮的数据。
+	if sqlDB, err := db.DB(); err == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	return &AuthServiceImpl{
 		cfg:     &authconfig.Config{},
-		userDAO: dao.NewUserDAO(db, nil),
+		userDAO: dao.NewUserDAO(db),
 	}
 }
 
@@ -88,7 +39,7 @@ func TestGetUserInfo_NoAuth_ShouldReturnNoAuth(t *testing.T) {
 
 func TestGetUserInfo_LoggedInUser_ShouldSucceed(t *testing.T) {
 	user := &model.User{UserID: "user-info-1", Username: "alice", PasswordHash: "unused"}
-	svc := newAuthServiceForUserTest(t, "secret", user)
+	svc := newAuthServiceForUserTest(t, user)
 	ctx := authCtx(user.UserID)
 
 	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{})

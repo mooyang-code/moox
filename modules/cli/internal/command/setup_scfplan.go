@@ -9,7 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 // setupSCFPlanSummary 是 Timer 采集计划在初始化里的结果：每个空间的代码包是否就绪。
@@ -33,28 +33,29 @@ type scfPlanPackages interface {
 	// Latest 返回空间下指定名称的最新可用代码包。
 	Latest(ctx context.Context, spaceID, name string) (string, bool, error)
 	// Upload 为空间构建并上传一个代码包，返回 package_id。
-	Upload(ctx context.Context, space setupconfig.SCFPlanSpace, cloudAccountID string) (string, error)
+	Upload(ctx context.Context, space topology.SCFPlanSpace, cloudAccountID string) (string, error)
 }
 
 // defaultSetupEnsureSCFPlan 保证每个参与 Timer 采集的空间都有可用的代码包：已有则沿用，没有则构建并上传。
 // 之后的代码升级用 `moox-cli collector function upload`：Collector 按包名取最新版本，函数自动升级，不需要改配置。
+// 代码包从 sourceRoot 下的 modules/collector 构建（产物包目录里按清单下载预编译的函数程序）。
 // 构建或上传失败不阻断初始化（例如本机没有源码或 Go 工具链），结果记入摘要，补齐后重跑即可。
-func defaultSetupEnsureSCFPlan(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupSCFPlanSummary, error) {
+func defaultSetupEnsureSCFPlan(ctx context.Context, snapshot *setupSnapshot, sourceRoot string) (*setupSCFPlanSummary, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("scf_plan: setup configuration is missing")
 	}
 	if !snapshot.Manifest.SCFPlan.Enabled {
 		return nil, nil
 	}
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return &setupSCFPlanSummary{Enabled: true, Status: "failed", Spaces: []setupSCFPlanSpaceResult{{Action: "failed", Warning: "open gateway failed"}}}, nil
 	}
 	defer gateway.Close()
-	return ensureSCFPlanPackages(ctx, snapshot.Manifest, adminSCFPlanPackages{gateway: gateway}), nil
+	return ensureSCFPlanPackages(ctx, snapshot.Manifest, adminSCFPlanPackages{gateway: gateway, collectorRoot: filepath.Join(sourceRoot, "modules", "collector")}), nil
 }
 
-func ensureSCFPlanPackages(ctx context.Context, manifest setupconfig.Manifest, packages scfPlanPackages) *setupSCFPlanSummary {
+func ensureSCFPlanPackages(ctx context.Context, manifest *topology.Config, packages scfPlanPackages) *setupSCFPlanSummary {
 	summary := &setupSCFPlanSummary{Enabled: true, Status: "ready"}
 	account := manifest.SCFCloudAccount()
 	for _, space := range manifest.SCFPlan.Spaces {
@@ -85,6 +86,8 @@ func ensureSCFPlanPackages(ctx context.Context, manifest setupconfig.Manifest, p
 
 type adminSCFPlanPackages struct {
 	gateway adminclient.GatewayForwarder
+	// collectorRoot 是构建代码包用的 Collector 模块目录，取自这次安装的源目录，不看当前目录。
+	collectorRoot string
 }
 
 func (a adminSCFPlanPackages) client(spaceID string) *adminclient.Client {
@@ -95,9 +98,9 @@ func (a adminSCFPlanPackages) Latest(ctx context.Context, spaceID, name string) 
 	return a.client(spaceID).LatestPackage(ctx, name)
 }
 
-func (a adminSCFPlanPackages) Upload(ctx context.Context, space setupconfig.SCFPlanSpace, cloudAccountID string) (string, error) {
+func (a adminSCFPlanPackages) Upload(ctx context.Context, space topology.SCFPlanSpace, cloudAccountID string) (string, error) {
 	version := "init-" + time.Now().UTC().Format("20060102T150405Z")
-	result, err := packageCollectorFunction(ctx, collectorPackageOptions{SpaceID: space.SpaceID, Version: version})
+	result, err := packageCollectorFunction(ctx, collectorPackageOptions{CollectorRoot: a.collectorRoot, SpaceID: space.SpaceID, Version: version})
 	if err != nil {
 		return "", err
 	}
@@ -108,13 +111,12 @@ func (a adminSCFPlanPackages) Upload(ctx context.Context, space setupconfig.SCFP
 	if err != nil {
 		return "", err
 	}
-	response, err := a.client(space.SpaceID).UploadPackage(ctx, adminclient.UploadPackageRequest{
-		PackageName: space.PackageName, Version: version, Runtime: "Go1",
-		PackageType: adminclient.ResolvePackageType("data_collector"), WorkloadType: "market_fetcher",
-		CloudAccountID: cloudAccountID, OriginalFilename: filepath.Base(result.Path),
+	pkg, err := a.client(space.SpaceID).UploadPackage(ctx, adminclient.UploadPackageRequest{
+		PackageName: space.PackageName, Version: version, Runtime: collectorFunctionRuntime,
+		CloudAccountID: cloudAccountID, Filename: filepath.Base(result.Path),
 	}, data)
 	if err != nil {
 		return "", err
 	}
-	return response.PackageID, nil
+	return pkg.PackageID, nil
 }

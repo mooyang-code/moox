@@ -2,18 +2,14 @@ package observability
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"gorm.io/gorm"
 )
 
 type ReporterInstance struct {
@@ -21,9 +17,18 @@ type ReporterInstance struct {
 	LastSeenAt                          time.Time
 }
 
-// buildServices joins all registered deployments with reporters by exact host
-// and component identity. Probe existence never determines registration.
-func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceStatus, []ServiceStatus, *domain.TopologySnapshot, error) {
+// 组件的上报来源（设计 3.8）：组件自己经 packages/report 上报；host-agent 的主机快照算作它的上报；
+// 因子引擎与归档 worker 由管理端按心跳代报。
+const (
+	SourceReporter     = "reporter"
+	SourceHostSnapshot = "host_snapshot"
+	SourceDelegated    = "delegated"
+)
+
+// buildServices 把每个登记的部署和它的上报对上：按主机加组件 ID 精确匹配；管理端代报的外部程序不带主机，
+// 按组件名对到这个组件唯一的部署上。组件健康只看上报（设计 3.8）：有上报且就绪为正常，上报了未就绪为未就绪，
+// 超过无数据时限没有上报为停止上报，从没上报过也算停止上报。
+func (b Builder) buildServices(ctx context.Context, now time.Time, hosts []HostStatus) ([]ServiceStatus, []ServiceStatus, *domain.TopologySnapshot, error) {
 	if b.Topology == nil {
 		return nil, nil, nil, nil
 	}
@@ -35,14 +40,18 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 	if err != nil {
 		return nil, nil, snapshot, err
 	}
+	boots, err := b.bootChanges(ctx, now)
+	if err != nil {
+		return nil, nil, snapshot, err
+	}
 	byDeployment := make(map[string][]monmetrics.MetricService)
 	for _, row := range rows {
 		key := deploymentKey(row.NodeID, row.ServiceName)
 		byDeployment[key] = append(byDeployment[key], row)
 	}
-	hosts := make(map[string]domain.TopologyHost, len(snapshot.Hosts))
+	topologyHosts := make(map[string]domain.TopologyHost, len(snapshot.Hosts))
 	for _, host := range snapshot.Hosts {
-		hosts[host.HostID] = host
+		topologyHosts[host.HostID] = host
 	}
 	registered := make(map[string]bool, len(snapshot.Deployments))
 	services := make([]ServiceStatus, 0, len(snapshot.Deployments))
@@ -51,64 +60,37 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 		registered[key] = true
 		component, _ := snapshot.Catalog.Component(deployment.ComponentID)
 		item := ServiceStatus{
-			NodeID: deployment.HostID, ServiceName: deployment.ComponentID,
-			Enabled: deployment.Status == servicecatalog.Enabled && hosts[deployment.HostID].Status == servicecatalog.Enabled,
-			Status:  "unknown", Reason: "health not checked", ProbeStatus: "unknown",
+			NodeID: deployment.HostID, ServiceName: deployment.ComponentID, Source: componentSource(component),
+			Enabled: deployment.Status == servicecatalog.Enabled && topologyHosts[deployment.HostID].Status == servicecatalog.Enabled,
 		}
-		reporterRows := byDeployment[key]
-		// 功能指标不适用（not_applicable）的组件不要求上报指标，与 doctor 诊断的豁免一致；它们没有上报行时不产生"缺失上报"告警。
-		if (component.Doctor.Transport == "reporter" && component.Doctor.FunctionalObservability != "not_applicable") || len(reporterRows) > 0 {
-			item = withReporters(item, reporterRows)
-		}
-
-		var latest *domain.CheckResult
-		if component.Health.Kind != "none" {
-			checkID := "deployment:" + deployment.HostID + ":" + deployment.ComponentID
-			if b.Checks != nil {
-				check, err := b.Checks.Get(ctx, "", checkID)
-				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-					return nil, nil, snapshot, err
-				}
-				if check != nil {
-					item.ProbeURL = check.URL
-					if check.Kind == domain.CheckKindTCP {
-						item.ProbeURL = "tcp://" + net.JoinHostPort(check.TCPHost, strconv.Itoa(check.TCPPort))
-					}
-				}
-			}
-			if b.Results != nil {
-				results, err := b.Results.Recent(ctx, "", checkID, 10)
-				if err != nil {
-					return nil, nil, snapshot, err
-				}
-				item.ProbeHistory = results
-				if len(results) > 0 {
-					latest = &results[0]
-				}
-			}
-		}
-		switch {
-		case !item.Enabled:
-			item.Status, item.Reason, item.ProbeStatus = "disabled", "部署已停用", "disabled"
-		case component.Health.Kind == "none":
-			item.ProbeStatus, item.ProbeReason, item.Status, item.Reason = "unchecked", "不探测", "unchecked", "不探测"
+		switch item.Source {
+		case SourceHostSnapshot:
+			item = withHostSnapshot(item, hosts)
+		case SourceDelegated:
+			// 代报的行不带主机：按组件名对到这条部署上，下面不再把它算成未登记的进程。
+			registered[deploymentKey("", deployment.ComponentID)] = true
+			item = withReporters(item, byDeployment[deploymentKey("", deployment.ComponentID)])
+			item.BootChanges = boots[deploymentKey("", deployment.ComponentID)]
 		default:
-			item = mergeServiceHealth(item, latest)
+			item = withReporters(item, byDeployment[key])
+			item.BootChanges = boots[key]
+		}
+		if !item.Enabled {
+			item.Status, item.Reason = "disabled", "部署已停用"
 		}
 		services = append(services, item)
 	}
-	// Catalog principals run outside host deployments (for example SCF). Their
-	// metrics remain available to business checks without inventing deployments.
-	external := make(map[string]bool, len(snapshot.Catalog.Principals))
-	for _, principal := range snapshot.Catalog.Principals {
-		external[principal.ID] = true
+	// 外部身份（如 SCF 函数）不在主机部署里：它们的上报照常给业务检查用，不算未登记的进程。
+	external := make(map[string]bool)
+	for _, principal := range snapshot.Catalog.ExternalIdentities() {
+		external[principal] = true
 	}
 	var unregistered []ServiceStatus
 	for _, row := range rows {
 		if registered[deploymentKey(row.NodeID, row.ServiceName)] || external[row.ServiceName] || row.IsStale || row.LastSeenAt.IsZero() {
 			continue
 		}
-		item := withReporters(ServiceStatus{NodeID: row.NodeID, ServiceName: row.ServiceName}, []monmetrics.MetricService{row})
+		item := withReporters(ServiceStatus{NodeID: row.NodeID, ServiceName: row.ServiceName, Source: SourceReporter}, []monmetrics.MetricService{row})
 		item.Status, item.Reason = "unregistered", "进程在上报，但没有部署记录"
 		unregistered = append(unregistered, item)
 	}
@@ -117,6 +99,21 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 		return strings.Join([]string{a.NodeID, a.ServiceName, a.InstanceID}, "\x00") < strings.Join([]string{z.NodeID, z.ServiceName, z.InstanceID}, "\x00")
 	})
 	return services, unregistered, snapshot, nil
+}
+
+// Services 只给出各登记部署按最近一次上报得到的状态（含模块级生命周期），不构建整份概览；主机快照类组件不带主机事实。
+func (b Builder) Services(ctx context.Context, now time.Time) ([]ServiceStatus, error) {
+	services, _, _, err := b.buildServices(ctx, now, nil)
+	return services, err
+}
+
+// componentSource 按目录里组件的上报方式（doctor.transport）给出它健康的来源。
+func componentSource(component servicecatalog.Component) string {
+	switch component.Doctor.Transport {
+	case SourceHostSnapshot, SourceDelegated:
+		return component.Doctor.Transport
+	}
+	return SourceReporter
 }
 
 func (b Builder) reporters(ctx context.Context, now time.Time) ([]monmetrics.MetricService, error) {
@@ -140,11 +137,23 @@ func (b Builder) reporters(ctx context.Context, now time.Time) ([]monmetrics.Met
 	return rows, nil
 }
 
+func (b Builder) bootChanges(ctx context.Context, now time.Time) (map[string]int, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	return b.Metrics.Catalog().BootChanges(ctx, now.Add(-monmetrics.RestartWindow))
+}
+
 func deploymentKey(hostID, componentID string) string { return hostID + "\x00" + componentID }
 
+// withReporters 按最近一次上报判断组件状态：上报新鲜时看就绪，未就绪记为 down 并带上原因，模块级生命周期也只在上报新鲜时挂上
+// （停止上报的模块不能显示成最后的暂停状态）。上报的新鲜度记在 ReporterStatus：missing（从未上报）、stale（停止上报）。
+// 已启用的部署从没上报或停止上报，组件状态记为 down：进程挂了与进程活着但未就绪一样严重（告警都是严重），
+// setup verify 也据此拦住没起来的组件；未启用的部署由调用方改成 disabled。
 func withReporters(item ServiceStatus, rows []monmetrics.MetricService) ServiceStatus {
-	item.ReporterStatus, item.Status, item.Reason = "missing", "unknown", "reporter missing"
-	for _, row := range rows {
+	item.ReporterStatus, item.Status, item.Reason = "missing", silentStatus(item, "unknown"), "reporter missing"
+	var latest *monmetrics.MetricService
+	for i, row := range rows {
 		status := "healthy"
 		if row.IsStale {
 			status = "stale"
@@ -152,42 +161,55 @@ func withReporters(item ServiceStatus, rows []monmetrics.MetricService) ServiceS
 		item.Instances = append(item.Instances, ReporterInstance{InstanceID: row.InstanceID, BootID: row.BootID, Version: row.Version, Status: status, LastSeenAt: row.LastSeenAt.UTC()})
 		if row.LastSeenAt.After(item.LastSeenAt) {
 			item.InstanceID, item.LastSeenAt, item.ReporterStatus = row.InstanceID, row.LastSeenAt.UTC(), status
+			latest = &rows[i]
 		}
 	}
-	if !item.LastSeenAt.IsZero() {
-		item.Status, item.Reason = item.ReporterStatus, "producer stale"
-		if item.ReporterStatus == "healthy" {
-			item.Reason = "reporter fresh"
+	if latest == nil {
+		return item
+	}
+	item.Readiness, item.NotReadyReason = latest.Readiness, latest.NotReadyReason
+	if item.ReporterStatus != "healthy" {
+		item.Status, item.Reason = silentStatus(item, item.ReporterStatus), "reporter stale"
+		return item
+	}
+	item.Status, item.Reason = "healthy", "reporter fresh"
+	if item.Readiness == monmetrics.ReadinessNotReady {
+		item.Status, item.Reason = "down", "未就绪："+firstNonEmptyText(item.NotReadyReason, "组件报告未就绪")
+	}
+	item.Lifecycle = lifecycleFromReport(monmetrics.DecodeLifecycle(latest.LifecycleJSON))
+	return item
+}
+
+// silentStatus 是没有新鲜上报时的组件状态：已启用的部署记为 down，否则保留 fallback（未启用的部署随后由调用方改成 disabled）。
+func silentStatus(item ServiceStatus, fallback string) string {
+	if item.Enabled {
+		return "down"
+	}
+	return fallback
+}
+
+// withHostSnapshot 用这台主机最近一次主机快照判断 host-agent：快照新鲜为正常，否则停止上报（已启用时状态同样记为 down）。
+// 主机失联、采集器停报由主机类检查告警，这里不另起上报检查。
+func withHostSnapshot(item ServiceStatus, hosts []HostStatus) ServiceStatus {
+	item.ReporterStatus, item.Status, item.Reason = "missing", silentStatus(item, "unknown"), "reporter missing"
+	for _, host := range hosts {
+		if host.HostID != item.NodeID || !host.LastSeenAt.After(item.LastSeenAt) {
+			continue
+		}
+		item.InstanceID, item.LastSeenAt = host.AgentID, host.LastSeenAt.UTC()
+		item.ReporterStatus, item.Status, item.Reason = "healthy", "healthy", "reporter fresh"
+		if host.Status != "healthy" {
+			item.ReporterStatus, item.Status, item.Reason = "stale", silentStatus(item, "stale"), "reporter stale"
 		}
 	}
 	return item
 }
 
-func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) ServiceStatus {
-	healthStatus, healthReason := "unknown", "health not checked"
-	if result != nil {
-		service.ProbeCheckedAt, service.ProbeRawError = result.CheckedAt.UTC(), result.RawError
-		service.Lifecycle = ParseLifecycle(result.BodyExcerpt)
-		switch {
-		case !result.Success:
-			healthStatus, healthReason = "down", strings.TrimSpace(result.ErrorMessage)
-			if healthReason == "" {
-				healthReason = "health check failed"
-			}
-		case result.Status == domain.CheckStatusDegraded:
-			healthStatus, healthReason = "degraded", "health check degraded"
-		default:
-			healthStatus, healthReason = "healthy", "health check ok"
+func firstNonEmptyText(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
 		}
 	}
-	service.ProbeStatus, service.ProbeReason = healthStatus, healthReason
-	if service.ReporterStatus == "" {
-		service.Status, service.Reason = healthStatus, healthReason
-		return service
-	}
-	if statusRank(healthStatus) < statusRank(service.Status) {
-		service.Status = healthStatus
-	}
-	service.Reason = strings.Join([]string{service.Reason, healthReason}, "; ")
-	return service
+	return ""
 }

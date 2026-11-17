@@ -3,7 +3,7 @@
 数据源（空间 + 数据集 + 频率）第一次接入时，把用户提供的历史 K 线一次灌进系统，让因子从第一期起就有完整的长回看（例如 EMA(50000)），
 而不是上线后再等实时数据慢慢积累。
 
-**两层写入：** 因子机本地存储写**全量**历史（不自动淘汰，显式 reset 可清空）；Storage Primary 只写每个文件**最后 6000 根**中仍在 Primary 保留期内的部分，
+**两层写入：** 因子机本地存储写**全量**历史（不自动淘汰；只有 `setup wipe` 或停掉引擎后删 `<部署根>/data/factor-engine` 才会清空）；Storage Primary 只写每个文件**最后 6000 根**中仍在 Primary 保留期内的部分，
 之后由实时采集与补采接上。View 写入时还会按自己的 `[storage_view.max_age]` 丢弃超期行，因此可能只包含导入尾部的一部分，甚至为空；默认 crypto 1m 的 View 上限为 7d，Primary 为 35d。导入**不触发**历史因子与策略结果的计算，也**不推送告警**（导入期间屏蔽 Monitor 告警推送）。
 
 Agent 按下面的步骤逐步执行，每一步的输出都要核对再进入下一步；任何一步出错先停下来向用户汇报，不要跳步。
@@ -12,7 +12,7 @@ Agent 按下面的步骤逐步执行，每一步的输出都要核对再进入�
 
 - 数据集与采集任务已建好（K 线数据集由采集任务创建，见 `moox-cli collector task create`），标签成员已就绪，实时采集（WS 或拉取）已在写入。
 - 该数据源**还没有启用的因子任务与策略实例**（初始导入期间本数据集的 View 会积压，追平之后再启用）。
-- 工具：`moox-cli` 必须是仓库当前版本（`go build -o <临时目录>/moox-cli ./cmd/moox-cli`，在 `modules/cli`）；`bin/` 里的旧版读不了新的 `moox.toml`。
+- 工具：`moox-cli` 必须是仓库当前版本（`go build -o <临时目录>/moox-cli ./cmd/moox-cli`，在 `modules/cli`），与线上部署的版本一致。
 - 代理是否保留以当前网络环境为准；下面的示例对 MooX 内网 / SSH 调用移除 HTTP(S) 代理，不代表其他工具只有 git 才能使用代理。
 
 ## 1. 导入包（用户按这个格式整理）
@@ -57,7 +57,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
   --tail-rows 6000 --allow-missing --file ./moox.toml > preflight.json
 ```
 
-`--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 8 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），用来确认窗口符合预期。
+`--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 7 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），用来确认窗口符合预期。
 有任何一项不合格就停下，把问题原文交给用户整理包；不要自己改包。回看数量查因子机 `/data/moox/factor-engine/config/engine.yaml` 的 `window.lookback`（7×24 市场）或 `window.session_lookback`（有交易时段的市场，未写时默认 5000），数据源有 `lookback_overrides` 的取覆盖值。
 
 ## 3. 核对 series_tag（操作机，只读）
@@ -82,7 +82,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor mute --for 3h --reason 初始�
 
 ## 5. 补缺口（操作机）
 
-文件最后一根到现在的缺口用 REST 补采。范围从**文件末根的下一期**到**实时写入的起点**（`ingest-mode get` 与第一批 WS 数据的时间可确认；已经在写入时取最近已收盘的一根）：
+文件最后一根到现在的缺口用 REST 补采。范围从**文件末根的下一期**到**实时写入的起点**（新数据集的实时写入起点就是 `moox-cli collector status --file ./moox.toml --space-id <空间>` 里该数据集的 `effective_from`，即首份采集计划的生效周期；也可以用第一批 WS 数据的时间核对。已经在写入时取最近已收盘的一根）：
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill --file ./moox.toml --space-id <空间> --dataset-id <数据集> --force --from <末根+1期> --to <实时起点>
@@ -94,55 +94,46 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline check --deep --file ./
 `check` 必须是 `missing: 0`，但**新数据集的采集计划生效点是创建当天，补采段在生效点之前时 `expected` 为 0，这时 `missing: 0` 不能说明任何事**，以行数为准：
 用几个标的 `data rows export`（`--page-size` 大于应有根数）数一下 `[末根+1期, 实时起点)` 的行数是否等于应有根数（按 5m 每天 288 根算）。
 
-## 6. 传文件到因子机（rsync）
+## 6. 因子机本地全量导入（操作机，经网关写因子机）
+
+`--target factor` 经操作员网关调因子引擎 `trpc.moox.factor.EngineControl` 的 `WriteSeries`（因子机只能出站时经 control 中转），
+文件留在操作机上，不传到因子机，也不在因子机上运行 moox-cli：导入由操作机上的 moox-cli 用操作员网关签名发出。
+（因子机上的进程只能以因子机上的组件身份签名，调不了只给 moox-cli 的方法，见[主机网关](../../../docs/模块/主机网关.md)。）
+
+数据从操作机经 control 绕到因子机，**中转没有限速**：control 的出口与采集写 Storage 走的是同一条跨地域公网，一路 TCP 就可能把它占满，挤占生产采集
+（先例：从海外机 rsync 一个 81 MB 的文件让 1m 因子晚了 8 分钟）。`xargs -P` 限制的是进程数，不是带宽。所以：
+
+- **先估体量**：行数 ×（数值列数 × 约 9 字节 + 时间与 tag 约 30 字节），批次经 zstd 压缩后再发，压缩能省一部分，但长历史的总量仍可能到 GB 级；
+  例如 500 个标的、每个 5 年 5m 线（约 52 万行）、20 列，约 500 × 52 万 × 210 字节 ≈ 55 GB 原始量。先用一个标的试跑并记下耗时，按耗时估算全量要多久、告诉用户。
+- **从 1 路开始**：导入时盯着采集延迟（告警已屏蔽，看首页的数据新鲜度与监控页数据链路的到达延迟），没有变慢再考虑加到 2 路；变慢就停下来，挑采集空闲的时段再导。
+
+一批（`--batch-rows`，默认一万行）编码后不能超过 4 MiB，超了按提示减小 `--batch-rows`。
 
 ```bash
-# 因子机地址与 SSH 用户按既有主机清单解析；不要输出凭据或改动部署配置。
-env -u HTTP_PROXY -u HTTPS_PROXY TARGET_GOOS=linux TARGET_GOARCH=amd64 scripts/build/build.sh cli   # 产出 linux 版 moox-cli，目录见脚本输出
-rsync -a --partial <包目录>/ <用户>@<因子机>:<导入目录>/pack/
-rsync -a <linux 版 moox-cli> <用户>@<因子机>:<导入目录>/moox-cli
-```
-
-SSH 只用公钥。因子机上的目录放在数据盘（例如 `/data/moox/import`），不要放在系统盘小分区。
-
-## 7. 因子机本地全量导入（在因子机上执行，不需要 moox.toml）
-
-引擎的本地写入接口鉴权密钥来自本机的 `secrets/health-auth.env`，只放进环境变量，不打印、不写入脚本或日志：
-
-```bash
-ssh <用户>@<因子机>
-cd <导入目录>
-set -a; . /data/moox/factor-engine/secrets/health-auth.env; set +a
-```
-
-**并发按本机配置算**：`P = clamp(核数 ÷ 2, 2, 32)`，再按“可用内存 ÷ 0.5 GiB”取下限（给引擎的实时计算留一半核）。先用一个标的试跑并记下耗时，再全量：
-
-```bash
-nproc; free -g
 # 试跑一个标的
-./moox-cli import --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> --series-tag '<series_tag>' --allow-missing \
-  --engine http://127.0.0.1:11417 --job-db ./one.db --path pack/<频率>/<标的>.csv
-# 全量：每个文件一个进程、各自独立的断点库，并发 P
-ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
-  --series-tag "<series_tag>" --allow-missing --engine http://127.0.0.1:11417 --job-db "./jobs/$(basename {}).db" --path {} > "./logs/$(basename {}).log" 2>&1 \
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --file ./moox.toml --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
+  --series-tag '<series_tag>' --allow-missing --job-db ./one.db --path <包目录>/<频率>/<标的>.csv
+# 全量：每个文件一个进程、各自独立的断点库；经 control 中转没有限速，从 1 路开始，盯着采集延迟再决定加不加
+ls <包目录>/<频率>/*.csv | xargs -P 1 -I{} sh -c 'env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --file ./moox.toml --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
+  --series-tag "<series_tag>" --allow-missing --job-db "./jobs/$(basename {}).db" --path {} > "./logs/$(basename {}).log" 2>&1 \
   && echo ok >> ok.txt || echo "{}" >> fail.txt'
 ```
 
 （`./jobs`、`./logs` 先 `mkdir`。）全部结束后 `wc -l ok.txt fail.txt`；`fail.txt` 里的文件看日志原因后重跑（导入是幂等的，整段替换）。
 
-## 8. Storage 窗口（操作机，可与第 7 步同时进行）
+## 7. Storage 窗口（操作机，可与第 6 步同时进行）
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing \
   --file ./moox.toml --job-db ./storage-import.db > storage-import.json
 ```
 
-输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 10 步的逐标的校验要用它。
+输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 9 步的逐标的校验要用它。
 
 只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 写入时按当前时钟进行的年龄过滤。Storage 写入在 storage-primary 的 Pebble 库内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
 `--job-db` 保留着，中断后原样重跑自动续传。失败的批（Storage 写超时）重跑即可。
 
-## 9. 等本数据集的 View 追平
+## 8. 等本数据集的 View 追平
 
 - `moox-cli doctor alerts --file ./moox.toml` 里该 View 不再报“等待中”（屏蔽期间告警仍照常评估与记录，只是不推送）；
 - 对比 View 与 Primary 的输出水位指标，或通过 DataView 查询目标 View；`data kline get --limit 1` 只读 Primary，不能证明 View 已追平。
@@ -150,10 +141,10 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 
 追不平就停下汇报，不要靠重启或重建 View 解决（`repair-view` 是破坏性运维，需要用户确认，见 `cli-operations.md`）。
 
-## 10. 校验（只比边界与行数）
+## 9. 校验（只比边界与行数）
 
 - **Storage Primary**：`collector kline check --from <末根+1期> --to <现在>` 为 `missing: 0`；**每个标的**在 `[tail_from, 文件末根]` 内的行数等于 CSV 在同一区间内的行数（不以 View 做这项全窗口核对）——
-  用脚本逐个核对（`tail_from` 取自第 8 步**实际导入**的输出 `storage-import.json`，已经包含了保留期截止点；不要用第 2 步的预检输出——截止点每次运行都重新计算，两步相隔久了会后移）：
+  用脚本逐个核对（`tail_from` 取自第 7 步**实际导入**的输出 `storage-import.json`，已经包含了保留期截止点；不要用第 2 步的预检输出——截止点每次运行都重新计算，两步相隔久了会后移）：
 
   ```bash
   python3 -I skills/moox/scripts/import_verify.py --pack <包目录> --preflight storage-import.json --moox-cli <moox-cli 路径> --moox-toml ./moox.toml
@@ -161,9 +152,9 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 
   退出码非零或有“行数不一致 / 读取失败”的标的就停下汇报（读取失败多半是 Storage 忙，稍后重跑脚本即可）。
 - **因子机本地**：每个标的本地最早一根等于 `manifest.json` 的 `first_utc`；因子机同步器接上之后本地最晚一根等于 Storage 最晚一根；
-  `[文件末根, 现在]` 内没有填充行（有说明缺口没补全）。本地边界用引擎接口：`GET http://127.0.0.1:11417/v1/series/bounds?space=…&dataset=…&freq=…&subject=…`（带健康鉴权，因子机上执行）。
+  `[文件末根, 现在]` 内没有填充行（有说明缺口没补全）。本地边界用引擎接口：`moox-cli gateway call trpc.moox.factor.EngineControl GetSeriesBounds --file ./moox.toml --data '{"space_id":"…","dataset_id":"…","freq":"…","subject_id":"…"}'`。
 
-## 11. 解除屏蔽
+## 10. 解除屏蔽
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
@@ -171,15 +162,15 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 
 到期也会自动解除；解除时若仍有未恢复的告警或期间触发后又恢复的，Monitor 补发一条汇总。
 
-## 12. 启用
+## 11. 启用
 
 建因子任务或策略实例。**启用不会自动补算历史**：因子从引擎同步到新目录之后的周期开始计算（目录每分钟第 45 秒同步一次，
-实际要等本地窗口就绪、任务进入试运行或运行，且该期输入与成员预热要求满足后才出结果）；启用到同步之间收盘的周期不会补算，预热期间跳过的周期由引擎的跳过账本尝试恢复，其余的需要时手动补算。
+实际要等本地窗口就绪、任务检查通过，且该期输入与成员预热要求满足后才出结果）；启用到同步之间收盘的周期不会补算，预热期间跳过的周期由引擎的跳过账本尝试恢复，其余的需要时手动补算。
 
-- **新建的因子任务由引擎自动推进**，不用在因子机手动执行 `lifecycle` 命令：引擎每 30 秒对目录里的任务自动 init、start（进入试运行，因子已经在算），
-  试运行之后有一期所有启用成员都完整算完时自动确认进入运行。时间线：任务建好后，引擎在每分钟第 45 秒同步目录，预加载本地窗口
-  （源数据有 5 万根历史时可达一两分钟），再等下一个源数据周期收盘出第一批结果，随后再完整算完一期转为运行。
-  在操作机上用 `moox-cli lifecycle status`（按 moox.toml 自动连因子引擎，不需要隧道或环境变量）查看阶段；在因子机上没有 moox.toml 时用 `--endpoint http://127.0.0.1:11417`（环境变量同第 7 步）；长时间停在“未初始化”或“未就绪”时看该命令给出的检查失败原因。
+- **新建的因子任务不需要任何生命周期命令**：引擎在计算前检查每个任务（窗口载入、本地序列覆盖最长回看、变更同步等），检查通过就计算，
+  不通过就不计算并写明哪一项没过；每 30 秒重查一次，窗口载入完成后立即重查。
+  时间线：任务建好后，引擎在每分钟第 45 秒同步目录，预加载本地窗口（源数据有 5 万根历史时可达一两分钟），检查通过后再等下一个源数据周期收盘出第一批结果。
+  在操作机上用 `moox-cli factor task status --task-id <任务>` 查看逐项检查与处理办法；长时间不计算时按给出的原因处理（例如导入历史）。
 - 同一个因子要用不同的固定参数算多组时，不要为参数新建因子定义：用同一个定义加多个成员，每个成员带自己的固定参数，成员键按参数生成
   （全部参数等于默认值时就是因子 ID，否则“因子ID__值1_值2…”）。例如 EMA20 用 5 万根预热：`ema` 成员 `span=20, warmup=50000`，成员键与结果列都是 `ema__20_50000`；
   固定参数加成员之后不再改。在 `moox.toml` 里写成员的 `{ factor = "ema", params = { span = 20, warmup = 50000 } }`，页面里是添加因子时填参数（页面会预览成员键和列名）。
@@ -192,7 +183,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 
 ## 常见问题
 
-- **导入后 View 长时间追不平**：先看 `storage-view` 慢日志（storage 主机 `/data/moox/storage/current/storage-view/logs/trpc.log`，关键词“较慢”；这个文件只留最近 10MB×5，更早的在 CLS 里查）与 CPU profile
+- **导入后 View 长时间追不平**：先看 `storage-view` 慢日志（storage 主机 `/data/moox/logs/storage-view/trpc.log`，关键词“较慢”；这个文件只留最近 10MB×5，更早的在 CLS 里查）与 CPU profile
   （storage-view 的 admin 端口 `localhost:20001/debug/pprof/profile`，只监听本机）。积压的主要原因是写进 View 的行数太多——所以 Storage 只写尾部窗口。
 - **Storage 写入超时**：Storage 主机只有 4 核时，同时有补算或大批量导入会超时；降低并发或错开。重跑是幂等的。
 - **保留期**：Storage 只需装下“尾部窗口 + 缺口 + 实时”，默认保留期够用，不必为导入临时调大。

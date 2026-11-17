@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -661,7 +662,7 @@ func newOperatorFixture(t *testing.T, market exchange.MarketType) *operatorFixtu
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -745,6 +746,12 @@ func (f *operatorFixture) instrumentID() string {
 func (f *operatorFixture) order(t *testing.T, record store.OrderRecord) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		// 目标单只能由组合当前目标行所属的实例落库：只想搭一笔目标单的用例补上这个前提。
+		if record.OwnerType == "TARGET" {
+			if err := storetest.EnsureCurrentTarget(tx, record.SpaceID, record.LogicalAccountID, record.RunnerID); err != nil {
+				return err
+			}
+		}
 		return tx.CreateOrder(record)
 	}))
 }

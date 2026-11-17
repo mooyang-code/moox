@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
@@ -43,9 +42,9 @@ func isPlanNamespace(name string) bool {
 	return index > 0 && name[index+3:] != "" && strings.Trim(name[index+3:], "0123456789") == ""
 }
 
-// defaultSetupRegionCloud 用 moox.toml 的凭据：Admin 里的云账号清除后就没了。
-func defaultSetupRegionCloud(manifest setupconfig.Manifest, region string) (setupFunctionCloud, error) {
-	return cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey, Region: region})
+// defaultSetupRegionCloud 用秘密文件里的腾讯云密钥：Admin 里的云账号清除后就没了。
+func defaultSetupRegionCloud(snapshot *setupSnapshot, region string) (setupFunctionCloud, error) {
+	return cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{SecretID: snapshot.Secrets.TencentCloud.SecretID, SecretKey: snapshot.Secrets.TencentCloud.SecretKey, Region: region})
 }
 
 // listSetupPlanFunctions 遍历所有地域：关闭 [scf_plan] 时不知道函数在哪。读不了的地域要报出来，否则会漏删。

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ func fixedSpaces(spaces ...string) func(context.Context) ([]string, error) {
 
 func openManagedDB(t *testing.T) *store.Store {
 	t.Helper()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
@@ -42,19 +43,6 @@ func TestManagedSpacesFollowEnabledTasksPlansScfAndPauses(t *testing.T) {
 	spaces, err = managedSpaces(ctx, cfg, db)
 	require.NoError(t, err)
 	require.Equal(t, []string{"crypto", "stockcn", "stockhk"}, spaces)
-}
-
-// 重置清空任务和计划表、保留暂停表：第一次 init 要能解除暂停，否则采集再也不恢复。
-func TestAfterResetClearsPauseWhenNoTasksOrPlansRemain(t *testing.T) {
-	db := openManagedDB(t)
-	ctx := context.Background()
-	cfg := &Config{}
-	require.NoError(t, db.FetchPlans().SetSystemPaused(ctx, "crypto", true))
-	control := &collectorControl{plans: db.FetchPlans(), spaces: func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, db) }}
-	control.afterReset(ctx)
-	paused, err := db.FetchPlans().PausedSpaces(ctx)
-	require.NoError(t, err)
-	require.Empty(t, paused)
 }
 
 // 运行中新增的空间也要被暂停。

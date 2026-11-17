@@ -1,5 +1,6 @@
-// Package listener opens the host gateway's remote TLS, local tRPC and health
-// sockets together. Failed startup closes all sockets opened so far.
+// Package listener opens the host gateway's remote TLS, local tRPC, health and
+// (on external entry hosts) plaintext external sockets together. Failed startup
+// closes all sockets opened so far.
 package listener
 
 import (
@@ -27,7 +28,9 @@ type Listeners struct {
 	Remote net.Listener
 	Local  net.Listener
 	Health net.Listener
-	cancel context.CancelFunc
+	// External 是外部入口（明文加签名），只有配置了 external_addr 的主机才有。
+	External net.Listener
+	cancel   context.CancelFunc
 }
 
 func Open(ctx context.Context, cfg hostgatewayconfig.Config, material *tlsconfig.Material) (_ *Listeners, resultErr error) {
@@ -45,14 +48,19 @@ func Open(ctx context.Context, cfg hostgatewayconfig.Config, material *tlsconfig
 		}
 	}()
 	var lc net.ListenConfig
-	for _, endpoint := range []struct {
+	type endpoint struct {
 		name, address string
 		destination   *net.Listener
-	}{
+	}
+	endpoints := []endpoint{
 		{"remote TLS", cfg.Server.RemoteAddr, &listeners.Remote},
 		{"local tRPC", cfg.Server.LocalAddr, &listeners.Local},
 		{"health", cfg.Server.HealthAddr, &listeners.Health},
-	} {
+	}
+	if cfg.Server.ExternalAddr != "" {
+		endpoints = append(endpoints, endpoint{"external entry", cfg.Server.ExternalAddr, &listeners.External})
+	}
+	for _, endpoint := range endpoints {
 		opened, err := lc.Listen(ctx, "tcp", endpoint.address)
 		if err != nil {
 			return nil, fmt.Errorf("listen %s endpoint: %w", endpoint.name, err)
@@ -78,7 +86,7 @@ func (l *Listeners) Close() error {
 		l.cancel()
 	}
 	var result error
-	for _, opened := range []net.Listener{l.Remote, l.Local, l.Health} {
+	for _, opened := range []net.Listener{l.Remote, l.Local, l.Health, l.External} {
 		if opened != nil {
 			if err := opened.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				result = errors.Join(result, err)

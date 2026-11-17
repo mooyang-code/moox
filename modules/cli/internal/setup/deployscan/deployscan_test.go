@@ -2,7 +2,6 @@ package deployscan
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,949 +10,337 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
-	_ "github.com/glebarez/sqlite"
-	"github.com/stretchr/testify/require"
-
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	"github.com/stretchr/testify/require"
 )
 
-// localClient 在本机执行命令代替 SSH，用临时的 HOME 和 PATH 隔离 crontab、systemctl。
-type localClient struct{ env []string }
-
-func (c localClient) Check(context.Context) error { return nil }
-func (c localClient) ForwardLocal(context.Context, string) (net.Listener, error) {
-	return nil, errors.New("unused")
-}
-func (c localClient) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error {
-	return errors.New("unused")
-}
-func (c localClient) Download(context.Context, string, io.Writer) (int64, error) {
-	return 0, errors.New("unused")
-}
-func (c localClient) Close() error { return nil }
-func (c localClient) Run(ctx context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
-	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	command.Env = c.env
-	var stdout, stderr strings.Builder
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
-	return setupssh.Result{Stdout: stdout.String(), Stderr: stderr.String()}, err
+// fakeSSH 只实现 Run：按主机返回预置的输出，并记下收到的命令行。
+type fakeSSH struct {
+	host   string
+	stdout map[string]string
+	err    error
+	mu     *sync.Mutex
+	argv   map[string][]string
 }
 
-type sandbox struct {
-	home, root string
-	client     localClient
-	dial       Dial
+func (f fakeSSH) Check(context.Context) error { return nil }
+func (f fakeSSH) ForwardLocal(context.Context, string) (net.Listener, error) {
+	return nil, errors.New("not used")
 }
-
-func script(t *testing.T, path, body string) {
-	t.Helper()
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755))
-}
-
-func newSandbox(t *testing.T) *sandbox {
-	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("需要 python3")
+func (f fakeSSH) Upload(context.Context, io.Reader, int64, string, fs.FileMode) error { return nil }
+func (f fakeSSH) Download(context.Context, string, io.Writer) (int64, error)          { return 0, nil }
+func (f fakeSSH) Close() error                                                        { return nil }
+func (f fakeSSH) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
+	f.mu.Lock()
+	f.argv[f.host] = argv
+	f.mu.Unlock()
+	if f.err != nil {
+		return setupssh.Result{Stderr: "Traceback\nValueError: boom", ExitCode: 1}, f.err
 	}
-	base, err := filepath.EvalSymlinks(t.TempDir())
+	return setupssh.Result{Stdout: f.stdout[f.host]}, nil
+}
+
+func testConfig(t *testing.T) *topology.Config {
+	t.Helper()
+	cfg, err := topology.Parse([]byte(`
+[paths]
+deploy_root = "/data/moox"
+
+[hosts.control]
+address = "203.0.113.10"
+ssh = { username = "ubuntu" }
+
+[hosts.storage]
+address = "203.0.113.11"
+ssh = { username = "ubuntu" }
+
+[deployments]
+control = ["admin", "monitor"]
+storage = ["storage-primary", "storage-view", "eventbus"]
+`))
 	require.NoError(t, err)
-	home := filepath.Join(base, "home")
-	bin := filepath.Join(base, "bin")
-	require.NoError(t, os.MkdirAll(bin, 0o755))
-	require.NoError(t, os.MkdirAll(home, 0o755))
-	cron := filepath.Join(base, "crontab.txt")
-	script(t, filepath.Join(bin, "crontab"), `f='`+cron+`'
-case "$1" in
--l) [ -f "$f" ] && cat "$f" || exit 1 ;;
--r) rm -f "$f" ;;
--) cat > "$f" ;;
-esac`)
-	script(t, filepath.Join(bin, "systemctl"), `echo "$@" >> '`+filepath.Join(base, "systemctl.log")+`'
-[ "$2" = is-active ] && exit 3
-exit 0`)
+	return &cfg
+}
+
+func fakeDial(stdout map[string]string, err error) (Dial, map[string][]string) {
+	argv := map[string][]string{}
+	mu := &sync.Mutex{}
+	return func(_ context.Context, host topology.Host) (setupssh.Client, error) {
+		return fakeSSH{host: host.Name, stdout: stdout, err: err, mu: mu, argv: argv}, nil
+	}, argv
+}
+
+func TestScanSendsRootAsJSONAndKeepsHostOrderAndVersionBytes(t *testing.T) {
+	version := `{"version":"v0.0.2",  "catalog_sha256":"sha256:abc"}`
+	encode := func(installed bool, text string, units ...string) string {
+		raw, _ := json.Marshal(map[string]any{
+			"root": "/data/moox", "root_exists": true, "entries": []string{"bin", "version.json"}, "installed": installed,
+			"version_text": text, "units": units, "active": units, "processes": 2, "archive_kb": -1, "seaweedfs_kb": -1,
+			"disk_free_kb": 1024, "linger": true, "journald": false,
+		})
+		return string(raw)
+	}
+	dial, argv := fakeDial(map[string]string{
+		"control": encode(true, version, "moox-admin.service"),
+		"storage": encode(true, "{broken", "moox-eventbus.service"),
+	}, nil)
+	reports, err := Scan(context.Background(), testConfig(t), dial, Options{Sizes: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"control", "storage"}, []string{reports[0].Host, reports[1].Host})
+	require.Equal(t, "203.0.113.10", reports[0].Address)
+	require.Equal(t, version, string(reports[0].Version), "version.json 原文逐字节保留")
+	require.Nil(t, reports[1].Version, "不是合法 JSON 的 version.json 不带回")
+	require.True(t, reports[1].Installed)
+	require.Equal(t, []string{"moox-admin.service"}, reports[0].Units)
+	require.True(t, reports[0].Linger)
+	require.Equal(t, RouteInstalled, Route(reports))
+
+	call := argv["control"]
+	require.Equal(t, []string{"python3", "-c"}, call[:2])
+	require.Equal(t, inspectScript, call[2])
+	var request map[string]any
+	require.NoError(t, json.Unmarshal([]byte(call[3]), &request))
+	require.Equal(t, map[string]any{"root": "/data/moox", "sizes": true}, request)
+
+	// 只查一台。
+	dial, argv = fakeDial(map[string]string{"storage": encode(false, "")}, nil)
+	reports, err = Scan(context.Background(), testConfig(t), dial, Options{Host: "storage"})
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Len(t, argv, 1)
+	require.Equal(t, RouteFresh, Route(reports))
+	_, err = Scan(context.Background(), testConfig(t), dial, Options{Host: "nobody"})
+	require.Error(t, err)
+}
+
+func TestScanRejectsUnreadableOutput(t *testing.T) {
+	dial, _ := fakeDial(map[string]string{"control": `{"root":"/data/moox","unknown":1}`, "storage": `{}`}, nil)
+	_, err := Scan(context.Background(), testConfig(t), dial, Options{})
+	require.ErrorContains(t, err, "无法解析")
+	dial, _ = fakeDial(nil, errors.New("exit 1"))
+	_, err = Scan(context.Background(), testConfig(t), dial, Options{})
+	require.ErrorContains(t, err, "ValueError: boom")
+}
+
+func TestBuildPlanListsOnlyHostsWithContentAndHasStableDigest(t *testing.T) {
+	reports := []HostReport{
+		{Host: "control", Root: "/data/moox", Entries: []string{"bin", "data"}, Units: []string{"moox-admin.service"}, ArchiveKB: -1, SeaweedFSKB: -1},
+		{Host: "storage", Root: "/data/moox", Entries: []string{}, Units: []string{}},
+		{Host: "factor", Root: "/data/moox", Entries: []string{"archive"}, Processes: 1, ArchiveKB: 4096, SeaweedFSKB: 128},
+	}
+	plan := BuildPlan(reports)
+	require.Equal(t, Notice, plan.Notice)
+	require.Equal(t, "管理台里改过的密钥只在线上有，清空前先在管理台导出", plan.Notice)
+	require.Len(t, plan.Hosts, 2)
+	require.Equal(t, []string{"control", "factor"}, []string{plan.Hosts[0].Host, plan.Hosts[1].Host})
+	require.Equal(t, int64(4096), plan.Hosts[1].ArchiveKB)
+	require.True(t, strings.HasPrefix(plan.Digest, "sha256:"))
+	require.Equal(t, plan.Digest, BuildPlan(reports).Digest)
+
+	// 大小与磁盘空间变化不改摘要；条目、单元、进程变化改摘要。
+	resized := slices.Clone(reports)
+	resized[2].ArchiveKB, resized[2].DiskFreeKB = 8192, 1
+	require.Equal(t, plan.Digest, BuildPlan(resized).Digest)
+	grown := slices.Clone(reports)
+	grown[1].Entries = []string{"bin"}
+	require.NotEqual(t, plan.Digest, BuildPlan(grown).Digest)
+	running := slices.Clone(reports)
+	running[0].Processes = 3
+	require.NotEqual(t, plan.Digest, BuildPlan(running).Digest)
+
+	empty := BuildPlan([]HostReport{{Host: "control", Root: "/data/moox"}})
+	require.Empty(t, empty.Hosts)
+	raw, err := json.Marshal(plan)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"seaweedfs_kb":128`)
+}
+
+func TestWipeParsesResult(t *testing.T) {
+	dial, argv := fakeDial(map[string]string{"control": `{"units":["moox-admin.service"],"killed":2,"removed":["bin","data"],"systemd_error":""}`}, nil)
+	host := testConfig(t).HostByID("control")
+	result, err := Wipe(context.Background(), dial, host, "/data/moox")
+	require.NoError(t, err)
+	require.Equal(t, HostResult{Host: "control", Units: []string{"moox-admin.service"}, Killed: 2, Removed: []string{"bin", "data"}}, result)
+	require.Equal(t, wipeScript, argv["control"][2])
+	require.JSONEq(t, `{"root":"/data/moox"}`, argv["control"][3])
+
+	dial, _ = fakeDial(nil, errors.New("exit 2"))
+	_, err = Wipe(context.Background(), dial, host, "/data/moox")
+	require.ErrorContains(t, err, "清空失败")
+}
+
+// 在本机用 python3 跑一遍目标机脚本：临时部署根加假的 HOME；PATH 里只有假的 systemctl、loginctl（或者都没有）。
+type scriptEnv struct {
+	python, root, home, bin, log string
+}
+
+func newScriptEnv(t *testing.T, withSystemd bool) scriptEnv {
+	t.Helper()
 	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("本机没有 python3")
+	}
+	base := t.TempDir()
+	env := scriptEnv{python: python, root: filepath.Join(base, "moox"), home: filepath.Join(base, "home"), bin: filepath.Join(base, "bin"), log: filepath.Join(base, "systemctl.log")}
+	for _, dir := range []string{env.root, filepath.Join(env.home, ".config", "systemd", "user", "default.target.wants"), env.bin} {
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+	}
+	if withSystemd {
+		write := func(name, body string) {
+			require.NoError(t, os.WriteFile(filepath.Join(env.bin, name), []byte("#!/bin/sh\n"+body), 0o755))
+		}
+		write("systemctl", `echo "$@" >> "`+env.log+`"
+if [ "$2" = is-active ]; then shift 2; for u in "$@"; do if [ "$u" = moox-admin.service ]; then echo active; else echo inactive; fi; done; fi
+if [ "$2" = is-enabled ]; then shift 2; for u in "$@"; do if [ "$u" = moox-admin.service ]; then echo enabled; else echo disabled; fi; done; fi
+exit 0
+`)
+		write("loginctl", "echo yes\n")
+	}
+	return env
+}
+
+func (e scriptEnv) run(t *testing.T, script string, request any) (string, error) {
+	t.Helper()
+	raw, err := json.Marshal(request)
 	require.NoError(t, err)
-	require.NoError(t, os.Symlink(python, filepath.Join(bin, "python3")))
-	// macOS 的系统 Python 会把字节码缓存写进 $HOME/Library/Caches，不算检测产生的文件。
-	env := []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE=1"}
-	client := localClient{env: env}
-	return &sandbox{home: home, root: filepath.Join(base, "moox"), client: client, dial: func(context.Context, setupconfig.Host) (setupssh.Client, error) { return client, nil }}
-}
-
-func (s *sandbox) cron(t *testing.T, content string) {
-	t.Helper()
-	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(s.home), "crontab.txt"), []byte(content), 0o644))
-}
-
-func (s *sandbox) cronContent() string {
-	raw, _ := os.ReadFile(filepath.Join(filepath.Dir(s.home), "crontab.txt"))
-	return string(raw)
-}
-
-func (s *sandbox) inspect(t *testing.T, request map[string]any) HostReport {
-	t.Helper()
-	report, err := inspect(context.Background(), s.dial, setupconfig.Host{Name: "control", Address: "198.51.100.10"}, request)
-	require.NoError(t, err)
-	return report
-}
-
-func write(t *testing.T, path, content string) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-}
-
-func deployment(t *testing.T, s *sandbox) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(s.root, 0o755))
-	release := filepath.Join(s.root, "prod/releases/r1")
-	write(t, filepath.Join(release, "stop.sh"), "#!/bin/sh\necho stopped >> '"+filepath.Join(filepath.Dir(s.home), "stop.log")+"'\n")
-	require.NoError(t, os.Chmod(filepath.Join(release, "stop.sh"), 0o755))
-	require.NoError(t, os.Symlink("releases/r1", filepath.Join(s.root, "prod/current")))
-	write(t, filepath.Join(s.root, "identity/runtime.json"), `{"version":1,"host_id":"control","sha256":"sha256:abc"}`)
-	write(t, filepath.Join(s.root, "import/history.bin"), "data")
-	write(t, filepath.Join(s.root, "run/host.json"), "{}")
-	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "run/x"), 0o755))
-	require.NoError(t, os.Chmod(release, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(release, 0o755) })
+	command := exec.Command(e.python, "-I", "-c", script, string(raw))
+	command.Env = []string{"HOME=" + e.home, "PATH=" + e.bin}
+	command.Dir = e.home
+	out, err := command.Output()
+	return string(out), err
 }
 
 func snapshotTree(t *testing.T, root string) []string {
 	t.Helper()
-	var names []string
-	require.NoError(t, filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
-		require.NoError(t, err)
-		names = append(names, name)
+	var entries []string
+	require.NoError(t, filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		entries = append(entries, path+" "+info.Mode().String())
 		return nil
 	}))
-	return names
+	return entries
 }
 
-func TestInspectEmptyMachine(t *testing.T) {
-	s := newSandbox(t)
-	report := s.inspect(t, map[string]any{"deploy_root": s.root, "archive_root": filepath.Join(s.root, "archive")})
-	require.False(t, report.RootExists)
-	require.True(t, report.Empty())
-	require.True(t, report.ParentWritable)
-	require.Equal(t, TradeNone, report.Trade)
-	require.Nil(t, report.RegisteredHosts)
-}
-
-func TestInspectReadsDeploymentWithoutWriting(t *testing.T) {
-	s := newSandbox(t)
-	deployment(t, s)
-	s.cron(t, "* * * * * run # moox-watchdog\n")
-	external := filepath.Join(s.home, "moox/factor-engine")
-	write(t, filepath.Join(external, "bin/moox-factor-engine"), "x")
-	write(t, filepath.Join(s.home, ".config/systemd/user/moox-factor-engine.service"), "[Service]\nWorkingDirectory="+external+"\nExecStart="+external+"/bin/moox-factor-engine serve\n")
-	archive := filepath.Join(filepath.Dir(s.home), "archive-data")
-	write(t, filepath.Join(archive, ".state/staging.db"), "x")
-	write(t, filepath.Join(external, "config/app.yaml"), "worker:\n  root_dir: "+archive+"\n")
-	before := snapshotTree(t, filepath.Dir(s.home))
-	report := s.inspect(t, map[string]any{"deploy_root": s.root, "archive_root": filepath.Join(s.root, "archive"), "sizes": true})
-	require.Equal(t, before, snapshotTree(t, filepath.Dir(s.home)), "检测不能产生文件")
-	require.False(t, report.Empty())
-	require.True(t, report.Markers)
-	require.True(t, report.Cron)
-	require.Equal(t, "sha256:abc", report.RuntimeSHA256)
-	require.Equal(t, map[string]string{"prod": "r1"}, report.Units)
-	require.Equal(t, external, report.ExternalDirs[0].Path)
-	require.True(t, report.ExternalDirs[0].Marked)
-	require.Contains(t, report.ArchiveDirs, DirReport{Path: archive, Marked: true})
-	require.Contains(t, report.SizesKB, s.root)
-}
-
-func tradeDB(t *testing.T, path, mode string) {
+func seedDeployment(t *testing.T, env scriptEnv) string {
 	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	db, err := sql.Open("sqlite", path)
-	require.NoError(t, err)
-	defer db.Close()
-	_, err = db.Exec(`CREATE TABLE t_trading_accounts (c_trading_account_id TEXT, c_execution_mode TEXT);
-		CREATE TABLE t_trading_positions (c_trading_account_id TEXT, c_signed_quantity TEXT);
-		CREATE TABLE t_trade_orders (c_trading_account_id TEXT, c_state TEXT);
-		INSERT INTO t_trading_accounts VALUES ('a', '` + mode + `');
-		INSERT INTO t_trading_positions VALUES ('a', '1.5');
-		INSERT INTO t_trade_orders VALUES ('a', 'OPEN');`)
-	require.NoError(t, err)
-}
-
-func tradeExec(t *testing.T, path, statement string) {
-	t.Helper()
-	db, err := sql.Open("sqlite", path)
-	require.NoError(t, err)
-	defer db.Close()
-	_, err = db.Exec(statement)
-	require.NoError(t, err)
-}
-
-func TestInspectTradeAndRegistry(t *testing.T) {
-	s := newSandbox(t)
-	deployment(t, s)
-	request := map[string]any{"deploy_root": s.root, "archive_root": filepath.Join(s.root, "archive")}
-	database := filepath.Join(s.root, "trade/current/trade/data/moox_trade.db")
-	tradeDB(t, database, "PAPER")
-	require.Equal(t, TradeClear, s.inspect(t, request).Trade, "纸面账户的持仓和订单不算")
-	tradeExec(t, database, `INSERT INTO t_trading_positions VALUES ('gone', '2')`)
-	require.Equal(t, TradeLive, s.inspect(t, request).Trade, "账户记录没了但还有持仓")
-	tradeExec(t, database, `DELETE FROM t_trading_positions WHERE c_trading_account_id = 'gone'; INSERT INTO t_trade_orders VALUES ('gone', 'SUBMIT_UNKNOWN')`)
-	require.Equal(t, TradeLive, s.inspect(t, request).Trade, "账户记录没了但还有未完成订单")
-	tradeExec(t, database, `DELETE FROM t_trade_orders WHERE c_trading_account_id = 'gone'; INSERT INTO t_trade_orders VALUES ('gone', 'FILLED'); INSERT INTO t_trading_positions VALUES ('gone', '0')`)
-	require.Equal(t, TradeClear, s.inspect(t, request).Trade, "已结束的订单和零持仓不算")
-	require.NoError(t, os.Remove(database))
-	tradeDB(t, database, "LIVE")
-	require.Equal(t, TradeLive, s.inspect(t, request).Trade)
-	require.NoError(t, os.WriteFile(database, []byte("broken"), 0o644))
-	require.Equal(t, TradeUnreadable, s.inspect(t, request).Trade)
-
-	admin := filepath.Join(s.root, "prod/admin.db")
-	require.NoError(t, os.Chmod(filepath.Join(s.root, "prod"), 0o755))
-	db, err := sql.Open("sqlite", admin)
-	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE t_hosts (c_host_id TEXT, c_address TEXT); INSERT INTO t_hosts VALUES ('old', '203.0.113.9')`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-	request["admin_db"] = admin
-	require.Equal(t, []RegisteredHost{{ID: "old", Address: "203.0.113.9"}}, s.inspect(t, request).RegisteredHosts)
-}
-
-func TestInspectFlagsUnsafeRootMode(t *testing.T) {
-	s := newSandbox(t)
-	require.NoError(t, os.MkdirAll(s.root, 0o755))
-	require.NoError(t, os.Chmod(s.root, 0o777))
-	report := s.inspect(t, map[string]any{"deploy_root": s.root})
-	require.False(t, report.ModeOK)
-	require.Equal(t, RouteBlocked, Decide([]HostReport{report}, "control", LocalState{}).Route)
-}
-
-func wipe(t *testing.T, s *sandbox, dirs ...string) {
-	t.Helper()
-	result, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, dirs, false)
-	require.NoError(t, err)
-	require.Empty(t, result.ProcessesOutside)
-}
-
-func TestWipeClearsEverythingAndIsRepeatable(t *testing.T) {
-	s := newSandbox(t)
-	deployment(t, s)
-	s.cron(t, "1 2 3 4 5 mine\n* * * * * run # moox-watchdog\n")
-	external := filepath.Join(s.home, "moox/factor-engine")
-	write(t, filepath.Join(external, "bin/moox-factor-engine"), "x")
-	service := filepath.Join(s.home, ".config/systemd/user/moox-factor-engine.service")
-	write(t, service, "[Service]\nWorkingDirectory="+external+"\n")
-	keep := filepath.Join(s.home, "moox-web/app.js")
-	write(t, keep, "用户自己的文件")
-	outsideTarget := filepath.Join(s.home, "linked.txt")
-	write(t, outsideTarget, "链接目标")
-	require.NoError(t, os.Symlink(outsideTarget, filepath.Join(s.root, "run/link")))
-	require.NoError(t, os.Symlink(s.home, filepath.Join(s.root, "run/homelink")))
-
-	wipe(t, s, external)
-
-	entries, err := os.ReadDir(s.root)
-	require.NoError(t, err)
-	require.Empty(t, entries, "部署根要清空，包括 import")
-	require.DirExists(t, s.root, "部署根本身要保留")
-	require.Equal(t, "1 2 3 4 5 mine\n", s.cronContent(), "只删看护这一行")
-	require.NoFileExists(t, service)
-	require.FileExists(t, keep)
-	require.FileExists(t, outsideTarget, "不能跟随符号链接删到目录外")
-	remaining, err := os.ReadDir(external)
-	require.NoError(t, err)
-	require.Empty(t, remaining)
-	log, err := os.ReadFile(filepath.Join(filepath.Dir(s.home), "systemctl.log"))
-	require.NoError(t, err)
-	for _, want := range []string{"stop moox-factor-engine.service", "disable moox-factor-engine.service", "daemon-reload"} {
-		require.Contains(t, string(log), want)
+	for _, dir := range []string{"bin", "config/admin", "data/seaweedfs/volume", "archive/2026", "secrets"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(env.root, dir), 0o700))
 	}
-
-	wipe(t, s, external) // 重跑：什么都没了也不能卡住
-	require.True(t, s.inspect(t, map[string]any{"deploy_root": s.root}).Empty())
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "archive/2026/part.csv"), make([]byte, 8192), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "data/seaweedfs/volume/1.dat"), make([]byte, 4096), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(env.root, "version.json"), []byte(`{"version":"dev"}`), 0o600))
+	units := filepath.Join(env.home, ".config", "systemd", "user")
+	for _, unit := range []string{"moox-admin.service", "moox-monitor.service"} {
+		require.NoError(t, os.WriteFile(filepath.Join(units, unit), []byte("[Unit]\n"), 0o644))
+		require.NoError(t, os.Symlink(filepath.Join(units, unit), filepath.Join(units, "default.target.wants", unit)))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(units, "other.service"), []byte("[Unit]\n"), 0o644))
+	// 部署根里指向外面的符号链接：清空只删链接，不跟随。
+	outside := filepath.Join(filepath.Dir(env.root), "outside")
+	require.NoError(t, os.MkdirAll(outside, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "keep.txt"), []byte("keep"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(env.root, "import")))
+	return outside
 }
 
-func TestWipeRemovesLastCronLine(t *testing.T) {
-	s := newSandbox(t)
-	require.NoError(t, os.MkdirAll(s.root, 0o755))
-	s.cron(t, "* * * * * run # moox-watchdog\n")
-	wipe(t, s)
-	require.NoFileExists(t, filepath.Join(filepath.Dir(s.home), "crontab.txt"))
-}
-
-func TestWipeSkipsSystemdWithoutServices(t *testing.T) {
-	s := newSandbox(t)
-	require.NoError(t, os.MkdirAll(s.root, 0o755))
-	wipe(t, s)
-	require.NoFileExists(t, filepath.Join(filepath.Dir(s.home), "systemctl.log"))
-}
-
-func TestWipeStopsWhenSystemdUnreachable(t *testing.T) {
-	s := newSandbox(t)
-	deployment(t, s)
-	write(t, filepath.Join(s.home, ".config/systemd/user/moox-archive-worker.service"), "[Service]\n")
-	bin := strings.TrimPrefix(strings.Split(s.client.env[1], ":")[0], "PATH=")
-	script(t, filepath.Join(bin, "systemctl"), "exit 1")
-	_, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, nil, false)
-	require.ErrorContains(t, err, "systemd_unreachable")
-	require.FileExists(t, filepath.Join(s.root, "import/history.bin"), "连不上 systemd 时不能往下删")
-}
-
-// TestHelperSleep 是 TestWipeKillsProcessesInsideRoot 启动的假进程，平时不做事。
-func TestHelperSleep(t *testing.T) {
-	if os.Getenv("MOOX_TEST_SLEEP") == "1" {
-		time.Sleep(time.Minute)
+func TestInspectScriptIsReadOnlyAndReportsLayout(t *testing.T) {
+	for _, withSystemd := range []bool{true, false} {
+		env := newScriptEnv(t, withSystemd)
+		seedDeployment(t, env)
+		// 只看部署根和 HOME：假的 systemctl 自己会在旁边写一份调用记录。
+		snapshot := func() []string { return append(snapshotTree(t, env.root), snapshotTree(t, env.home)...) }
+		before := snapshot()
+		out, err := env.run(t, inspectScript, map[string]any{"root": env.root, "sizes": true})
+		require.NoError(t, err)
+		require.Equal(t, before, snapshot(), "检测只读")
+		var result inspectResult
+		require.NoError(t, decode(out, &result))
+		require.True(t, result.RootExists)
+		require.Equal(t, []string{"archive", "bin", "config", "data", "import", "secrets", "version.json"}, result.Entries)
+		require.True(t, result.Installed)
+		require.Equal(t, `{"version":"dev"}`, result.VersionText)
+		require.Equal(t, []string{"moox-admin.service", "moox-monitor.service"}, result.Units)
+		require.GreaterOrEqual(t, result.ArchiveKB, int64(8))
+		require.GreaterOrEqual(t, result.SeaweedFSKB, int64(4))
+		require.Positive(t, result.DiskFreeKB)
+		if withSystemd {
+			require.Equal(t, []string{"moox-admin.service"}, result.Active)
+			require.Equal(t, []string{"moox-monitor.service"}, result.Disabled)
+			require.True(t, result.Linger)
+		} else {
+			require.Empty(t, result.Active)
+			require.False(t, result.Linger)
+		}
+		// 不统计大小时是 -1；部署根不存在时没有条目、没装过，可用空间取上级目录。
+		out, err = env.run(t, inspectScript, map[string]any{"root": env.root + "-missing"})
+		require.NoError(t, err)
+		require.NoError(t, decode(out, &result))
+		require.False(t, result.RootExists)
+		require.False(t, result.Installed)
+		require.Equal(t, int64(-1), result.ArchiveKB)
+		require.Positive(t, result.DiskFreeKB)
 	}
 }
 
-func TestWipeKillsProcessesInsideRoot(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("需要 /proc")
-	}
-	s := newSandbox(t)
-	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "run"), 0o755))
-	self, err := os.Executable()
-	require.NoError(t, err)
-	raw, err := os.ReadFile(self)
-	require.NoError(t, err)
-	binary := filepath.Join(s.root, "moox-fake")
-	require.NoError(t, os.WriteFile(binary, raw, 0o755))
-	command := exec.Command(binary, "-test.run=^TestHelperSleep$")
-	command.Env = append(os.Environ(), "MOOX_TEST_SLEEP=1")
-	require.NoError(t, command.Start())
-	t.Cleanup(func() { _ = command.Process.Kill() })
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
-	report := s.inspect(t, map[string]any{"deploy_root": s.root})
-	require.Equal(t, 1, report.ProcessesInside)
-	require.Empty(t, report.ProcessesOutside)
-	wipe(t, s)
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("部署根内的进程没有被终止")
-	}
-}
-
-func TestBlockersGiveCommandForEmptyForeignDirectory(t *testing.T) {
-	empty := HostReport{Host: "storage", ModeOK: true, ParentWritable: true}
-	require.Contains(t, strings.Join(blockers([]HostReport{empty}), ""), "sudo chown")
-	used := empty
-	used.Entries = []string{"host"}
-	require.NotContains(t, strings.Join(blockers([]HostReport{used}), ""), "sudo chown")
-}
-
-func TestDecideRoutes(t *testing.T) {
-	clean := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true}
-	installed := clean
-	installed.Entries, installed.Units, installed.RuntimeSHA256 = []string{"prod"}, map[string]string{"prod": "r1"}, "sha256:a"
-	uploaded := clean
-	uploaded.Entries = []string{"bootstrap-input"}
-	halfWiped := clean
-	halfWiped.Entries = []string{"storage"}
-	cronOnly := clean
-	cronOnly.Cron = true
-	archive := clean
-	archive.ArchiveDirs = []DirReport{{Path: "/data/x", Marked: true}}
-	running := clean
-	running.ProcessesInside = 3
-	userFiles := clean
-	userFiles.ArchiveDirs = []DirReport{{Path: "/data/x"}}
-	foreignArchive := clean
-	foreignArchive.ArchiveDirs = []DirReport{{Path: "/data/x", Marked: true, Foreign: true}}
-	foreign := installed
-	foreign.OwnerOK = false
-	outside := clean
-	outside.ProcessesOutside = []string{"/opt/moox-admin"}
-	ports := clean
-	ports.PortsOccupied = []int{9527}
-	matched := LocalState{RuntimeSHA256: "sha256:a"}
-	full := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, ControlReady: true, OperatorPin: true, UnitRecords: true}
-	noRecords := full
-	noRecords.UnitRecords = false
-	other := LocalState{RuntimeSHA256: "sha256:b", ControlReady: true}
-	tests := []struct {
-		name    string
-		reports []HostReport
-		local   LocalState
-		route   string
-	}{
-		{"全空机", []HostReport{clean}, LocalState{}, RouteFresh},
-		{"空机+本机遗留状态", []HostReport{clean}, full, RouteFresh},
-		{"新电脑+已部署", []HostReport{installed}, LocalState{}, RouteExisting},
-		{"部分已装", []HostReport{clean, {Host: "storage", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"storage"}}}, LocalState{}, RouteExisting},
-		{"半清的机器不算空机", []HostReport{halfWiped}, LocalState{}, RouteExisting},
-		{"只剩看护也不算空机", []HostReport{cronOnly}, LocalState{}, RouteExisting},
-		{"归档有内容也不算空机", []HostReport{archive}, LocalState{}, RouteExisting},
-		{"没有标记的归档目录是用户自己的", []HostReport{userFiles}, LocalState{}, RouteFresh},
-		{"归档里有删不掉的文件", []HostReport{foreignArchive}, LocalState{}, RouteBlocked},
-		{"还有进程在跑不算空机", []HostReport{running}, LocalState{}, RouteExisting},
-		{"首装做到一半", []HostReport{installed}, matched, RouteResume},
-		{"首装写绑定前失败", []HostReport{uploaded}, matched, RouteResume},
-		{"写绑定前失败但别处已部署", []HostReport{uploaded, {Host: "x", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"host"}, Units: map[string]string{"host": "r"}}}, matched, RouteExisting},
-		{"原电脑", []HostReport{installed}, full, RouteUpgrade},
-		{"本机缺部署记录", []HostReport{installed}, noRecords, RouteExisting},
-		{"哈希不一致", []HostReport{installed}, other, RouteExisting},
-		{"清除没做完", []HostReport{clean}, LocalState{WipePending: true}, RouteExisting},
-		{"属主不同", []HostReport{foreign}, LocalState{}, RouteBlocked},
-		{"目录外有进程", []HostReport{outside}, LocalState{}, RouteExisting},
-		{"端口被占", []HostReport{ports}, LocalState{}, RouteBlocked},
-		{"阻塞优先于未完成清除", []HostReport{ports}, LocalState{WipePending: true}, RouteBlocked},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			decision := Decide(test.reports, "control", test.local)
-			require.Equal(t, test.route, decision.Route)
-			if test.route == RouteBlocked {
-				require.NotEmpty(t, decision.Reasons)
-			}
-		})
-	}
-}
-
-func TestCheckDeleteTarget(t *testing.T) {
-	for _, target := range []string{"/", "/data", "/home", "/root", "/etc", "/usr", "/var", "/opt", "/home/ubuntu", "/home/other", "/home/ubuntu/", "relative", "/data/../etc", "/usr/local", "/var/lib", "/etc/systemd", "/home/ubuntu/.ssh", "/home/ubuntu/.local/share"} {
-		require.Error(t, CheckDeleteTarget(target, "/home/ubuntu"), target)
-	}
-	require.Error(t, CheckDeleteTarget("/srv/users", "/srv/users/ubuntu"), "家目录的上级")
-	for _, target := range []string{"/data/moox", "/home/ubuntu/moox", "/mnt/disk/moox"} {
-		require.NoError(t, CheckDeleteTarget(target, "/home/ubuntu"), target)
-	}
-}
-
-func planManifest() setupconfig.Manifest {
-	return setupconfig.Manifest{Paths: setupconfig.Paths{DeployRoot: "/data/moox"}}
-}
-
-func TestBuildPlan(t *testing.T) {
-	report := HostReport{Host: "h", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"host", "prod", "my-notes"}, Markers: true, Trade: TradeClear,
-		ExternalDirs:    []DirReport{{Path: "/home/ubuntu/moox/factor-engine", Marked: true}, {Path: "/home/ubuntu/projects"}},
-		ArchiveDirs:     []DirReport{{Path: "/mnt/archive", Marked: true}, {Path: "/mnt/empty", Empty: true}, {Path: "/mnt/photos"}},
-		RegisteredHosts: []RegisteredHost{{ID: "h"}, {ID: "old", Address: "203.0.113.9"}}, SizesKB: map[string]int64{"/data/moox": 1}}
-	manifest := planManifest()
-	plan, err := BuildPlan(manifest, []HostReport{report}, nil)
-	require.NoError(t, err)
-	require.Equal(t, []string{"my-notes"}, plan.Hosts[0].Unknown)
-	require.Equal(t, []string{"/home/ubuntu/moox/factor-engine", "/mnt/archive"}, plan.Hosts[0].Dirs, "空目录不列")
-	require.Equal(t, []string{"/home/ubuntu/projects", "/mnt/photos"}, plan.Hosts[0].Skipped, "没有 MooX 标记的目录绝不清除")
-	require.Equal(t, []RegisteredHost{{ID: "old", Address: "203.0.113.9"}}, plan.OtherHosts)
-	require.False(t, plan.RegistryUnread)
-	require.Equal(t, TradeClear, plan.Trade)
-	require.NotEmpty(t, plan.Digest)
-
-	report.SizesKB = map[string]int64{"/data/moox": 2}
-	same, err := BuildPlan(manifest, []HostReport{report}, nil)
-	require.NoError(t, err)
-	require.Equal(t, plan.Digest, same.Digest, "目录占用变化不算范围变化")
-	report.Entries = append(report.Entries, "new")
-	changed, err := BuildPlan(manifest, []HostReport{report}, nil)
-	require.NoError(t, err)
-	require.NotEqual(t, plan.Digest, changed.Digest)
-}
-
-func TestBuildPlanRejectsUnsafeRoot(t *testing.T) {
-	manifest := planManifest()
-	manifest.Paths.DeployRoot = "/home/ubuntu"
-	_, err := BuildPlan(manifest, []HostReport{{Host: "h", Home: "/home/ubuntu", Markers: true}}, nil)
-	require.ErrorContains(t, err, "delete_target_rejected")
-}
-
-func TestBuildPlanRejectsDangerousDirs(t *testing.T) {
-	base := HostReport{Host: "h", Home: "/home/ubuntu", Markers: true, Entries: []string{"host"}}
-	for _, dir := range []DirReport{
-		{Path: "/data", Marked: true},
-		{Path: "/usr/local", Marked: true},
-		{Path: "/home/ubuntu/.local", Marked: true},
-		{Path: "/mnt/link", Marked: true, Symlink: true},
-	} {
-		report := base
-		report.ExternalDirs = []DirReport{dir}
-		_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
-		require.ErrorContains(t, err, "delete_target_rejected", dir.Path)
-	}
-	manifest := planManifest()
-	manifest.Paths.DeployRoot = "/data/x/moox"
-	report := base
-	report.ExternalDirs = []DirReport{{Path: "/data/x", Marked: true}}
-	_, err := BuildPlan(manifest, []HostReport{report}, nil)
-	require.ErrorContains(t, err, "上级")
-}
-
-func TestBuildPlanRequiresMarker(t *testing.T) {
-	report := HostReport{Host: "h", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"storage"}}
-	_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
-	require.ErrorContains(t, err, "MooX 标记")
-	for name, pending := range map[string]*PendingRecord{
-		"标记读不出":   {},
-		"换了主机":    {Hosts: map[string]PendingHost{"h": {Address: "203.0.113.1", Root: "/data/moox"}}},
-		"换了部署目录":  {Hosts: map[string]PendingHost{"h": {Address: "198.51.100.1", Root: "/data/other"}}},
-		"别的主机的标记": {Hosts: map[string]PendingHost{"x": {Address: "198.51.100.1", Root: "/data/moox"}}},
-	} {
-		_, err := BuildPlan(planManifest(), []HostReport{report}, pending)
-		require.ErrorContains(t, err, "MooX 标记", name)
-	}
-	plan, err := BuildPlan(planManifest(), []HostReport{report}, &PendingRecord{Hosts: map[string]PendingHost{"h": {Address: "198.51.100.1", Root: "/data/moox", Dirs: []string{"/home/ubuntu/moox/old"}}}})
-	require.NoError(t, err)
-	require.Equal(t, []string{"/home/ubuntu/moox/old"}, plan.Hosts[0].Dirs, "重跑要沿用上次记录的目录")
-}
-
-func TestInterruptedUploadStillHasMarker(t *testing.T) {
-	s := newSandbox(t)
-	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "bootstrap-input"), 0o700))
-	report := s.inspect(t, map[string]any{"deploy_root": s.root})
-	report.Home = "/home/ubuntu"
-	_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
-	require.NoError(t, err, "上传阶段中断的机器也要能清")
-}
-
-func TestWipeWithoutCrontabCommand(t *testing.T) {
-	s := newSandbox(t)
-	require.NoError(t, os.MkdirAll(s.root, 0o755))
-	bin := strings.TrimPrefix(strings.Split(s.client.env[1], ":")[0], "PATH=")
-	require.NoError(t, os.Remove(filepath.Join(bin, "crontab")))
-	s.client.env[1] = "PATH=" + bin
-	wipe(t, s)
-}
-
-func TestMountedRootIsNotForeign(t *testing.T) {
-	s := newSandbox(t)
-	lost := filepath.Join(s.root, "lost+found")
-	require.NoError(t, os.MkdirAll(lost, 0o755))
-	require.NoError(t, os.Chmod(lost, 0))
-	t.Cleanup(func() { _ = os.Chmod(lost, 0o755) })
-	mountinfo := filepath.Join(s.home, "mountinfo")
-	write(t, mountinfo, "36 35 98:0 / "+s.root+" rw - ext4 /dev/vdb rw\n")
-	report := s.inspect(t, map[string]any{"deploy_root": s.root, "mountinfo": mountinfo})
-	require.False(t, report.ForeignFiles, "挂载点的 lost+found 不算别人的文件")
-	require.True(t, report.Empty())
-	require.Equal(t, RouteFresh, Decide([]HostReport{report}, "control", LocalState{}).Route)
-}
-
-func TestWipeKeepsNestedMountPoint(t *testing.T) {
-	s := newSandbox(t)
-	deployment(t, s)
-	mountinfo := filepath.Join(s.home, "mountinfo")
-	mounted := filepath.Join(s.root, "import")
-	write(t, mountinfo, "36 35 98:0 / "+mounted+" rw - ext4 /dev/vdc rw\n")
-	raw, err := json.Marshal(map[string]any{"deploy_root": s.root, "mountinfo": mountinfo})
-	require.NoError(t, err)
-	output, err := s.client.Run(context.Background(), []string{"python3", "-c", wipeScript, string(raw)}, nil)
-	require.NoError(t, err)
-	require.Contains(t, output.Stdout, `"done"`)
-	require.DirExists(t, mounted, "挂载点不能删")
-	require.NoFileExists(t, filepath.Join(mounted, "history.bin"))
-	report := s.inspect(t, map[string]any{"deploy_root": s.root, "mountinfo": mountinfo})
-	require.True(t, report.Empty(), "清空的挂载点不算残留")
-}
-
-func TestSymlinkArchiveIsReported(t *testing.T) {
-	s := newSandbox(t)
-	target := filepath.Join(s.home, "nas")
-	write(t, filepath.Join(target, ".state/staging.db"), "x")
-	link := filepath.Join(filepath.Dir(s.home), "archive-link")
-	require.NoError(t, os.Symlink(target, link))
-	report := s.inspect(t, map[string]any{"deploy_root": s.root, "archive_root": link})
-	require.Equal(t, []DirReport{{Path: link, Marked: true, Symlink: true}}, report.ArchiveDirs)
-	report.Home = "/home/ubuntu"
-	_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
-	require.ErrorContains(t, err, "符号链接")
-}
-
-func TestServiceWithoutWorkingDirectoryAddsNoDir(t *testing.T) {
-	s := newSandbox(t)
-	write(t, filepath.Join(s.home, ".config/systemd/user/moox-factor-engine.service"), "[Service]\nExecStart=/usr/local/bin/moox-factor-engine\n")
-	report := s.inspect(t, map[string]any{"deploy_root": s.root})
-	require.Empty(t, report.ExternalDirs)
-}
-
-func TestUnmarkedExternalDirIsLeftAlone(t *testing.T) {
-	s := newSandbox(t)
-	projects := filepath.Join(s.home, "projects")
-	write(t, filepath.Join(projects, "code.go"), "x")
-	write(t, filepath.Join(s.home, ".config/systemd/user/moox-factor-engine.service"), "[Service]\nWorkingDirectory="+projects+"\n")
-	report := s.inspect(t, map[string]any{"deploy_root": s.root})
-	require.False(t, report.ExternalDirs[0].Marked)
-	report.Home = "/home/ubuntu"
-	plan, err := BuildPlan(planManifest(), []HostReport{report}, nil)
-	require.NoError(t, err)
-	require.Empty(t, plan.Hosts[0].Dirs)
-	require.Equal(t, []string{projects}, plan.Hosts[0].Skipped)
-}
-
-func TestScriptsAreASCII(t *testing.T) {
-	for _, source := range []string{inspectScript, wipeScript} {
-		for _, r := range source {
-			require.Less(t, r, rune(128), "python3 -c 在 C 语言环境下可能读不了非 ASCII 内容")
+func TestWipeScriptClearsRootKeepsItAndRefusesUnsafeRoots(t *testing.T) {
+	for _, withSystemd := range []bool{true, false} {
+		env := newScriptEnv(t, withSystemd)
+		outside := seedDeployment(t, env)
+		out, err := env.run(t, wipeScript, map[string]any{"root": env.root})
+		require.NoError(t, err)
+		var result HostResult
+		require.NoError(t, decode(out, &result))
+		require.Equal(t, []string{"moox-admin.service", "moox-monitor.service"}, result.Units)
+		require.Equal(t, []string{"archive", "bin", "config", "data", "import", "secrets", "version.json"}, result.Removed)
+		entries, err := os.ReadDir(env.root)
+		require.NoError(t, err)
+		require.Empty(t, entries, "部署根清空")
+		info, err := os.Stat(env.root)
+		require.NoError(t, err)
+		require.True(t, info.IsDir(), "部署根本身保留")
+		require.FileExists(t, filepath.Join(outside, "keep.txt"), "不跟随符号链接删到部署根外面")
+		units := filepath.Join(env.home, ".config", "systemd", "user")
+		left, err := os.ReadDir(units)
+		require.NoError(t, err)
+		names := []string{}
+		for _, entry := range left {
+			names = append(names, entry.Name())
+		}
+		require.Equal(t, []string{"default.target.wants", "other.service"}, names, "只删 moox-* 单元")
+		wants, err := os.ReadDir(filepath.Join(units, "default.target.wants"))
+		require.NoError(t, err)
+		require.Empty(t, wants)
+		if withSystemd {
+			require.Empty(t, result.SystemdError)
+			logged, err := os.ReadFile(env.log)
+			require.NoError(t, err)
+			require.Contains(t, string(logged), "--user disable --now moox-admin.service")
+			require.Contains(t, string(logged), "--user daemon-reload")
+		} else {
+			require.NotEmpty(t, result.SystemdError, "没有 systemctl 时如实报告")
 		}
 	}
-}
-
-func TestWipeSurvivesNonUTF8Crontab(t *testing.T) {
-	s := newSandbox(t)
-	require.NoError(t, os.MkdirAll(s.root, 0o755))
-	s.cron(t, "1 2 3 4 5 \xff\n* * * * * run # moox-watchdog\n")
-	wipe(t, s)
-	require.Equal(t, "1 2 3 4 5 \xff\n", s.cronContent())
-}
-
-func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
-	base := t.TempDir()
-	operator, state := filepath.Join(base, "moox"), filepath.Join(base, "state", "abc")
-	for _, name := range []string{"config.key", "known_hosts", "gateway-client.yaml", "gateway-bootstrap.json", "caller-moox-cli.key", "storage-internal-auth.env", "notes.txt"} {
-		write(t, filepath.Join(operator, name), "x")
+	env := newScriptEnv(t, false)
+	for _, root := range []string{"/", "relative/moox", "/data/../moox", ""} {
+		_, err := env.run(t, wipeScript, map[string]any{"root": root})
+		require.Error(t, err, root)
+		_, err = env.run(t, inspectScript, map[string]any{"root": root})
+		require.Error(t, err, root)
 	}
-	write(t, filepath.Join(state, "admin-software.json"), "{}")
-	now := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
-	archived, err := ArchiveLocal(operator, state, "", now)
-	require.NoError(t, err)
-	require.Len(t, archived, 2)
-	entries, err := os.ReadDir(operator)
-	require.NoError(t, err)
-	names := []string{}
-	for _, entry := range entries {
-		names = append(names, entry.Name())
-	}
-	slices.Sort(names)
-	require.Equal(t, []string{".bak-20261031010203", "config.key", "known_hosts", "notes.txt"}, names)
-	require.FileExists(t, filepath.Join(operator, ".bak-20261031010203/gateway-client.yaml"))
-	require.NoDirExists(t, state)
-	require.DirExists(t, state+".bak-20261031010203")
-	_, err = ArchiveLocal(operator, state, "", now)
-	require.NoError(t, err, "重跑不能失败")
-}
-
-func TestPendingRoundTrip(t *testing.T) {
-	operator := filepath.Join(t.TempDir(), "moox")
-	require.Nil(t, ReadPending(operator))
-	require.NoError(t, MarkPending(operator, Plan{Hosts: []HostPlan{{Host: "h", Address: "a", DeployRoot: "/r", Dirs: []string{"/x/y"}}}}))
-	host, ok := ReadPending(operator).host("h", "a", "/r")
-	require.True(t, ok)
-	require.Equal(t, []string{"/x/y"}, host.Dirs)
-	require.NoError(t, ClearPending(operator))
-	require.NoError(t, ClearPending(operator))
-	require.Nil(t, ReadPending(operator))
-}
-
-func TestDecodeRejectsUnknownFields(t *testing.T) {
-	var out HostReport
-	raw, err := json.Marshal(map[string]any{"bogus": 1})
-	require.NoError(t, err)
-	require.Error(t, decode(string(raw), &out))
-}
-
-func TestInspectReportsDiskAndAttempt(t *testing.T) {
-	s := newSandbox(t)
-	deployment(t, s)
-	write(t, filepath.Join(s.root, "bootstrap/workflow.json"), `{"phase":"rolled-back"}`)
-	report := s.inspect(t, map[string]any{"deploy_root": s.root})
-	require.Greater(t, report.DiskFreeKB, int64(0))
-	require.Equal(t, "rolled-back", report.LastAttempt)
-	require.False(t, report.HelperRunning)
-}
-
-func TestInspectCountsOnlyFailedAttemptsAsReclaimable(t *testing.T) {
-	s := newSandbox(t)
-	current, previous, failed := filepath.Join(s.root, "prod/releases/bootstrap-r2"), filepath.Join(s.root, "prod/releases/bootstrap-r1"), filepath.Join(s.root, "prod/releases/bootstrap-r3")
-	big := strings.Repeat("x", 1<<20)
-	write(t, filepath.Join(current, "a"), big)
-	write(t, filepath.Join(previous, "a"), big)
-	write(t, filepath.Join(failed, "a"), big)
-	write(t, filepath.Join(s.root, "bootstrap/bootstrap-r2/a"), big)
-	write(t, filepath.Join(s.root, "bootstrap/bootstrap-r3/a"), big)
-	require.NoError(t, os.Symlink(current, filepath.Join(s.root, "prod/current")))
-	write(t, filepath.Join(s.root, "prod/activation.json"), `{"previous_directory":"`+previous+`"}`)
-	report := s.inspect(t, map[string]any{"deploy_root": s.root, "reclaim": true})
-	require.Greater(t, report.ReclaimableKB, int64(1000))
-	require.Less(t, report.ReclaimableKB, int64(2500), "只算失败的发布和失败的尝试")
-}
-
-func TestStaleBindingIsNotResume(t *testing.T) {
-	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, RootExists: true, Entries: []string{"host"}, Units: map[string]string{"host": "bootstrap-a"}, RuntimeSHA256: "sha256:a"}
-	stale := LocalState{RuntimeSHA256: "sha256:a", StaleBinding: true, BindingConfig: "/old/moox.toml"}
-	decision := Decide([]HostReport{report}, "control", stale)
-	require.Equal(t, RouteExisting, decision.Route)
-	require.Contains(t, decision.Reasons[0], "/old/moox.toml")
-	require.Equal(t, RouteResume, Decide([]HostReport{report}, "control", LocalState{RuntimeSHA256: "sha256:a"}).Route)
-}
-
-func TestStaleInstallIsNotReportedAsFinished(t *testing.T) {
-	local := LocalState{AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
-	reason := UnfinishedReason(stepsManifest(), RouteUpgrade, local)
-	require.Contains(t, reason, "/old/moox.toml")
-	require.Contains(t, reason, "host-registry.md", "装好后有意新增的不能被建议清空")
-	require.NotContains(t, reason, "彻底清空")
-	require.Contains(t, reason, "--profile collector-stream", "初始化之后才缺的单元也要说出来")
-	require.Empty(t, NextSteps(stepsManifest(), RouteUpgrade, local))
-	local.BindingConfig = ""
-	require.Empty(t, UnfinishedReason(stepsManifest(), RouteUpgrade, local), "早期部署没有记录，按正常升级走")
-}
-
-func TestRunningHelperBlocksEveryRoute(t *testing.T) {
-	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, HelperRunning: true}
-	decision := Decide([]HostReport{report}, "control", LocalState{})
-	require.Equal(t, RouteBlocked, decision.Route)
-	require.Contains(t, decision.Reasons[0], "还在运行")
-}
-
-func stepsManifest() setupconfig.Manifest {
-	return setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.10"}, "storage": {Address: "198.51.100.11"}, "overseas": {Address: "198.51.100.12"}, "factor": {Address: "192.0.2.30"}},
-		Deployments: map[string][]string{
-			"control":  {"admin", "monitor", "console-proxy"},
-			"storage":  {"storage-primary", "access", "eventbus"},
-			"overseas": {"access", "egress-proxy", "trade", "collector-stream"},
-			"factor":   {"factor-engine", "archive-worker"},
-		},
-	}
-}
-
-func TestNextStepsFollowReadinessOrder(t *testing.T) {
-	steps := NextSteps(stepsManifest(), RouteFresh, LocalState{})
-	position := func(text string) int {
-		index := slices.IndexFunc(steps, func(step string) bool { return strings.Contains(step, text) })
-		require.GreaterOrEqual(t, index, 0, "缺少步骤 %s：%v", text, steps)
-		return index
-	}
-	require.Less(t, position("--profile storage"), position("init --stage storage"))
-	require.Less(t, position("--profile access"), position("init --stage storage"), "Access 就绪只看目录，排在元数据之前")
-	require.Less(t, position("init --stage storage"), position("--stage control"), "系统元数据要在管理台之前")
-	require.Less(t, position("--host overseas --profile access"), position("--stage control"))
-	require.Less(t, position("--stage control"), position("setup init --config-dir"))
-	require.NotContains(t, strings.Join(steps, "\n"), "trust-browser", "信任要用户授权，不放进 next_steps")
-	require.Contains(t, strings.Join(ManualSteps(RouteFresh), "\n"), "setup trust-browser")
-	require.Empty(t, ManualSteps(RouteUpgrade))
-	require.Less(t, position("setup init --config-dir"), position("--profile collector-stream"))
-	require.Equal(t, "./bin/moox-cli setup start --space-id <空间>", steps[len(steps)-2], "选了空间才验收")
-	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-1])
-	require.NotContains(t, strings.Join(steps, "\n"), "setup verify", "没启动的空间不验收")
-	started := NextSteps(stepsManifest(), RouteResume, LocalState{RuntimeSHA256: "sha256:a", Started: map[string]bool{"crypto": true}})
-	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", started[len(started)-1])
-	for _, step := range steps {
-		require.NotContains(t, step, "--host control", "管理台机不走 deploy-host：%s", step)
-	}
-}
-
-func TestNextStepsFollowTopologyAndProgress(t *testing.T) {
-	manifest := stepsManifest()
-	delete(manifest.HostCatalog, "overseas")
-	delete(manifest.HostCatalog, "factor")
-	delete(manifest.Deployments, "overseas")
-	delete(manifest.Deployments, "factor")
-	steps := strings.Join(NextSteps(manifest, RouteFresh, LocalState{}), "\n")
-	require.NotContains(t, steps, "overseas")
-	require.NotContains(t, steps, "factor")
-
-	local := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, InitStorage: true, Units: map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true}}
-	resumed := NextSteps(manifest, RouteResume, local)
-	require.Equal(t, "./bin/moox-cli setup deploy-unit --host storage --profile access", resumed[0], "接着中断的步骤：%v", resumed)
-
-	done := local
-	done.ControlReady, done.InitReady = true, true
-	done.Units = map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true, "storage/access": true}
-	require.Empty(t, NextSteps(manifest, RouteUpgrade, done), "都做完了不再有步骤")
-	local.StaleBinding = true
-	require.Empty(t, NextSteps(manifest, RouteResume, local))
-	require.Empty(t, NextSteps(manifest, RouteExisting, LocalState{}))
-	require.Empty(t, NextSteps(manifest, RouteBlocked, LocalState{}))
-}
-
-func TestArchiveLocalTakesTheOldConsoleCert(t *testing.T) {
-	operator, state := filepath.Join(t.TempDir(), "operator"), filepath.Join(t.TempDir(), "state")
-	require.NoError(t, os.MkdirAll(operator, 0o700))
-	cert := filepath.Join(t.TempDir(), "moox-caddy-root-a.crt")
-	require.NoError(t, os.WriteFile(cert, []byte("old"), 0o600))
-	archived, err := ArchiveLocal(operator, state, cert, time.Unix(0, 0))
-	require.NoError(t, err)
-	require.Len(t, archived, 1)
-	_, err = os.Lstat(cert)
-	require.ErrorIs(t, err, os.ErrNotExist)
-	require.FileExists(t, filepath.Join(archived[0], filepath.Base(cert)))
-}
-
-func TestRedactLogHidesSecretFields(t *testing.T) {
-	text := RedactLog(`level=info password=abc123 "secret_key": "xyz" token: t0k3n api_key=k1 port=11425 ` +
-		`Authorization: Bearer bearer-value {\"password\":\"escaped-value\"} https://x/webhook/send?key=hook-value nats://u:url-value@host:4222 Password: 'a b c' ` +
-		"-----BEGIN PRIVATE KEY-----\npem-value\n-----END PRIVATE KEY-----")
-	for _, secret := range []string{"abc123", "xyz", "t0k3n", "k1", "bearer-value", "escaped-value", "hook-value", "url-value", "b c", "pem-value"} {
-		require.NotContains(t, text, secret)
-	}
-	require.Contains(t, text, "port=11425")
-}
-
-type logsClient struct {
-	setupssh.Client
-	output string
-}
-
-func (c logsClient) Run(context.Context, []string, io.Reader) (setupssh.Result, error) {
-	return setupssh.Result{Stdout: c.output}, nil
-}
-func (logsClient) Close() error { return nil }
-
-func TestRedactLogKeepsOtherLinesAndCoversEdgeCases(t *testing.T) {
-	text := RedactLog("token: \"open-value\nnext line keep\nAuthorization: TC3-HMAC-SHA256 Credential=AKID, Signature=sig-value\npassword=ab*cd password=ab,cd\n-----BEGIN KEY-----\nno-end-value")
-	require.Contains(t, text, "next line keep", "没闭合的引号不能吃掉下一行")
-	for _, secret := range []string{"open-value", "AKID", "sig-value", "cd", "no-end-value"} {
-		require.NotContains(t, text, secret)
-	}
-	require.Contains(t, RedactLog("tokens used: 123"), "123")
-	text = RedactLog("token:\nnext line keep\nsecret1=s1-value token_v2=s2-value\n{\"password\":\"ab\\\"tail-value\"}\npassword: \"abc-value\\\npassword=*star-value\n")
-	require.Contains(t, text, "next line keep", "空值不能遮到下一行")
-	for _, secret := range []string{"s1-value", "s2-value", "tail-value", "abc-value", "star-value"} {
-		require.NotContains(t, text, secret)
-	}
-	text = RedactLog("password=\\abc-value secret=\\u0041bc-value password=\\\\def-value\n{\\\"password\\\":\\\"ab\\\\\\\"nested-value\\\"}\n")
-	for _, secret := range []string{"abc-value", "bc-value", "def-value", "nested-value"} {
-		require.NotContains(t, text, secret)
-	}
-	text = RedactLog("keep1\n-----BEGIN KEY-----\nbody\n-----END KEY-----\nkeep2\n-----END KEY-----\nkeep3")
-	require.Contains(t, text, "keep1", "完整的 PEM 块不能把前面的内容一起吃掉")
-	require.Contains(t, text, "keep2")
-	require.NotContains(t, text, "body")
-	require.NotContains(t, RedactLog("half-pem-value\n-----END PRIVATE KEY-----\nafter"), "half-pem-value")
-	require.Contains(t, RedactLog("half\n-----END PRIVATE KEY-----\nafter"), "after")
-}
-
-func TestReadLogsRedactsOutput(t *testing.T) {
-	dial := func(context.Context, setupconfig.Host) (setupssh.Client, error) {
-		return logsClient{output: `[{"path":"/data/moox/run/logs/monitor.log","text":"password=abc"}]`}, nil
-	}
-	sections, err := ReadLogs(context.Background(), dial, setupconfig.Host{Name: "control"}, []string{"/data/moox"}, "monitor", "", 10)
-	require.NoError(t, err)
-	require.Len(t, sections, 1)
-	require.NotContains(t, sections[0].Text, "abc")
-}
-
-func TestStagingIsNotLeftover(t *testing.T) {
-	s := newSandbox(t)
-	write(t, filepath.Join(s.root, "staging/abc/host.tar.gz"), "package")
-	report := s.inspect(t, map[string]any{"deploy_root": s.root})
-	require.Empty(t, report.Entries, "只下载过的机器还是空机")
-	require.True(t, report.Empty())
-	require.Equal(t, RouteFresh, Decide([]HostReport{report}, "control", LocalState{}).Route)
-}
-
-func TestWipeKeepsDownloadedPackages(t *testing.T) {
-	s := newSandbox(t)
-	deployment(t, s)
-	write(t, filepath.Join(s.root, "staging/abc/host.tar.gz"), "package")
-	outsideDir := filepath.Join(filepath.Dir(s.root), "external")
-	write(t, filepath.Join(outsideDir, "staging/keep-out"), "old")
-	raw, err := json.Marshal(map[string]any{"deploy_root": s.root, "dirs": []string{outsideDir}})
-	require.NoError(t, err)
-	output, err := s.client.Run(context.Background(), []string{"python3", "-c", wipeScript, string(raw)}, nil)
-	require.NoError(t, err)
-	require.Contains(t, output.Stdout, `"done"`)
-	require.FileExists(t, filepath.Join(s.root, "staging/abc/host.tar.gz"))
-	require.NoDirExists(t, filepath.Join(s.root, "identity"))
-	require.NoDirExists(t, filepath.Join(outsideDir, "staging"), "外部目录里同名目录照常清除")
-}
-
-func TestWipeResumesWithConfirmedDigest(t *testing.T) {
-	manifest := stepsManifest()
-	home := "/home/ubuntu"
-	full := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"host", "identity"}, Markers: true, Units: map[string]string{"host": "r1"}, Trade: TradeNone}}
-	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
-	plan, err := BuildPlan(manifest, full, nil)
-	require.NoError(t, err)
-	operator := t.TempDir()
-	require.NoError(t, MarkPending(operator, plan))
-
-	partial := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"identity"}, Units: map[string]string{}, Trade: TradeNone}}
-	pending := ReadPending(operator)
-	resumed, err := BuildPlan(manifest, partial, pending)
-	require.NoError(t, err)
-	require.Equal(t, plan.Digest, resumed.Digest, "半清之后沿用用户确认过的摘要")
-
-	require.NoError(t, MarkPending(operator, resumed))
-	require.Equal(t, []string{"host", "identity"}, ReadPending(operator).Hosts["control"].Entries, "已有标记不能被半清的范围覆盖")
-
-	grown := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"identity", "newcomer"}, Units: map[string]string{}, Trade: TradeNone}}
-	_, err = BuildPlan(manifest, grown, pending)
-	require.ErrorContains(t, err, "wipe_scope_changed")
-}
-
-func TestWipeBadPendingFallsBackToCurrentDigest(t *testing.T) {
-	operator := t.TempDir()
-	require.NoError(t, os.WriteFile(PendingPath(operator), []byte("broken"), 0o600))
-	manifest := stepsManifest()
-	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
-	report := []HostReport{{Host: "control", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"host"}, Markers: true, Trade: TradeNone}}
-	first, err := BuildPlan(manifest, report, nil)
-	require.NoError(t, err)
-	second, err := BuildPlan(manifest, report, ReadPending(operator))
-	require.NoError(t, err)
-	require.Equal(t, first.Digest, second.Digest)
-}
-
-func TestOutsideProcessesEnterScope(t *testing.T) {
-	manifest := stepsManifest()
-	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
-	clean := HostReport{Host: "control", Address: "198.51.100.1", Home: "/home/ubuntu", Trade: TradeNone}
-	dirty := clean
-	dirty.ProcessesOutside = []string{"/opt/moox-admin"}
-	first, err := BuildPlan(manifest, []HostReport{clean}, nil)
-	require.NoError(t, err)
-	second, err := BuildPlan(manifest, []HostReport{dirty}, nil)
-	require.NoError(t, err)
-	require.NotEqual(t, first.Digest, second.Digest)
-	require.Equal(t, []string{"/opt/moox-admin"}, second.Hosts[0].Outside)
-}
-
-func TestWipeKillsRestartedProcesses(t *testing.T) {
-	if _, err := os.Stat("/proc/self/exe"); err != nil {
-		t.Skip("需要 /proc")
-	}
-	s := newSandbox(t)
-	deployment(t, s)
-	binary := filepath.Join(s.root, "host/moox-sleeper")
-	sleep, err := exec.LookPath("sleep")
-	require.NoError(t, err)
-	raw, err := os.ReadFile(sleep)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(binary), 0o755))
-	require.NoError(t, os.WriteFile(binary, raw, 0o755))
-	command := exec.Command(binary, "300")
-	require.NoError(t, command.Start())
-	t.Cleanup(func() { _ = command.Process.Kill() })
-	wipe(t, s)
-	require.Error(t, command.Wait(), "目录内的进程要被结束")
-}
-
-func TestPlanStepsGroupsParallelStepsAndFillsSpace(t *testing.T) {
-	steps := PlanSteps(stepsManifest(), RouteFresh, LocalState{}, "crypto")
-	find := func(kind, host, unit string) Step {
-		for _, step := range steps {
-			if step.Kind == kind && step.Host == host && step.Unit == unit {
-				return step
-			}
-		}
-		t.Fatalf("缺少步骤 %s %s %s", kind, host, unit)
-		return Step{}
-	}
-	require.Equal(t, find(StepUnit, "storage", "storage").Group, find(StepUnit, "overseas", "egress-proxy").Group, "存储机和海外机并行")
-	require.Less(t, find(StepUnit, "storage", "eventbus").Group, find(StepUnit, "storage", "storage").Group, "EventBus 先就绪")
-	require.Less(t, find(StepControl, "control", "").Group, find(StepUnit, "overseas", "collector-stream").Group)
-	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", steps[len(steps)-1].Command)
-	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-2].Command, "启动之后备份，再验收")
-	require.Equal(t, "./bin/moox-cli setup start --space-id crypto", steps[len(steps)-3].Command)
-	retried := PlanSteps(stepsManifest(), RouteUpgrade, LocalState{AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, Units: map[string]bool{}, Started: map[string]bool{"crypto": true}}, "crypto")
-	require.True(t, slices.ContainsFunc(retried, func(step Step) bool { return step.Kind == StepBackup }), "备份失败后重跑要补上")
-}
-
-func TestUnfinishedReasonIgnoresPostInstallSteps(t *testing.T) {
-	manifest := stepsManifest()
-	done := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
-	for _, step := range PlanSteps(manifest, RouteFresh, LocalState{}, "") {
-		if step.Kind == StepUnit || step.Kind == StepHost {
-			done.Units[step.Host+"/"+map[bool]string{true: "host", false: step.Unit}[step.Kind == StepHost]] = true
-		}
-	}
-	require.Empty(t, UnfinishedReason(manifest, RouteUpgrade, done), "部署全部完成时，备份和启动不算没做完")
+	link := filepath.Join(filepath.Dir(env.root), "link")
+	require.NoError(t, os.Symlink(env.root, link))
+	_, err := env.run(t, wipeScript, map[string]any{"root": link})
+	require.Error(t, err, "部署根是符号链接时拒绝")
 }

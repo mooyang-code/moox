@@ -10,7 +10,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/barclock"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -88,8 +87,7 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 		SeriesTag: stringPtr("venue:binance"),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05,
 	}
-	auth := &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "derived-key"}
-	result := (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.True(t, result.Success)
 	require.Equal(t, "market_canary:market_kline:BTC-USDT:1m:venue:binance", result.CheckID)
 	require.Equal(t, "crypto/market_kline/BTC-USDT/1m/venue:binance", MarketCanaryTarget(config))
@@ -103,13 +101,12 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Equal(t, now.Add(-24*time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[0].GetTimeSeries().GetDataTime())
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetTimeSeries().GetDataTime())
 	require.Equal(t, []string{"close"}, reader.request.GetColumnNames())
-	require.Equal(t, auth, reader.request.GetAuthInfo())
 
 	reader.rows = []*storagepb.TimeSeriesRow{
 		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
 		marketCanaryRow(now.Add(-time.Minute), 110, 12),
 	}
-	result = (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.False(t, result.Success)
 	require.Equal(t, "相邻K线收盘价从 100 变为 110，波动 10.00%，超过 5.00% 阈值", result.ErrorMessage)
 	var diagnostic marketCanaryThresholdDiagnostic
@@ -215,36 +212,6 @@ func TestMarketCanaryStorageRejectionKeepsValidUTF8(t *testing.T) {
 	got := storageRejectionError(&storagepb.RetInfo{Code: 7, Msg: message})
 	require.True(t, utf8.ValidString(got))
 	require.LessOrEqual(t, len([]rune(got)), len([]rune("storage_rejected_query:7:"))+160)
-}
-
-func TestMarketCanaryProbeDetectsPrimaryAuthRejection(t *testing.T) {
-	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	reader := &canaryReader{retInfo: &storagepb.RetInfo{Code: commonpb.ErrorCode_NO_PERMISSION, Msg: "invalid primary auth"}}
-	canary := MarketCanary{
-		Reader:   reader,
-		AuthInfo: &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "stale-key"},
-		Config: MarketCanaryConfig{
-			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
-			SeriesTag: stringPtr("venue:binance"),
-		},
-		Now: func() time.Time { return now },
-	}
-	err := canary.ProbeStorageAuth(t.Context())
-	require.Error(t, err)
-	require.True(t, IsStorageAuthError(err))
-	require.Contains(t, err.Error(), "invalid primary auth")
-}
-
-func TestMarketCanaryProbeAcceptsEmptyStorageResponse(t *testing.T) {
-	canary := MarketCanary{
-		Reader:   &canaryReader{retInfo: &storagepb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}},
-		AuthInfo: &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "key"},
-		Config: MarketCanaryConfig{
-			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
-			SeriesTag: stringPtr("venue:binance"),
-		},
-	}
-	require.NoError(t, canary.ProbeStorageAuth(t.Context()))
 }
 
 func TestMarketCanaryStorageRejectionRedactsSensitiveDetail(t *testing.T) {

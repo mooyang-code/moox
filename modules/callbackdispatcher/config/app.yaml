@@ -3,13 +3,17 @@
 
 gateway_client:
   caller: callback-dispatcher
-  key_id: ""
-  key_file: ../../secrets/caller-callback-dispatcher.key
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: ../../secrets/host.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: ""
+  local_address: 127.0.0.1:11002
+  ca_file: ../../secrets/moox-ca.crt
 
 database:
   path: ./data/moox_callback_dispatcher.db
 
-# EventBus 连接；安装时由 unitinstall 改写为实际地址和凭据路径。
+# EventBus 连接；部署渲染时改写为实际地址和凭据路径。
 eventbus:
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ~/.config/moox/eventbus/callback-dispatcher-eventbus.yaml

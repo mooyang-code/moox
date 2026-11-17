@@ -3,51 +3,43 @@ syntax = "proto3";
 package trpc.moox.admin;
 
 import "moox_common.proto";
-import "directory.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
-// One route represents exactly one method and its permitted callers.
-message HostGatewayRoute {
-  string component_id = 1;
-  string service_path = 2;
-  string method = 3;
-  string address = 4;
-  int64 timeout_ms = 5;
-  int64 max_body_bytes = 6;
-  repeated string callers = 7;
-  bool read_only = 8;
-}
-
-message GatewayVerificationKey {
-  string caller = 1;
-  string key_id = 2;
-  bytes secret = 3;
-  // Zero means valid until explicitly retired, including rotation overlap.
-  // A positive value limits verification to this Unix deadline.
-  int64 expires_at_unix = 4;
-}
-
-// 一台出站主机允许经 control 中转连接的端口与调用方，只出现在 control 的快照里。
-message HostGatewayRelayPort {
-  int32 port = 1;
-  repeated string callers = 2;
-}
-
-message HostGatewayRelay {
-  string host_id = 1;
-  repeated HostGatewayRelayPort ports = 2;
-}
-
+// 全部主机拿到同一份快照：登记的主机（连同签名公钥）、部署、不属于主机的身份的公钥。快照里没有秘密，也没有路由：
+// 各网关按内嵌的服务目录自己算本机路由、谁能调、出站主机的中转许可。
 message HostGatewaySnapshot {
   uint32 schema_version = 1;
-  string host_id = 2;
-  string hash = 3;
-  bool disabled = 4;
-  repeated HostGatewayRoute routes = 5;
-  trpc.moox.hostgateway.ServiceDirectory directory = 6;
-  repeated GatewayVerificationKey verification_keys = 7;
-  repeated HostGatewayRelay relays = 8;
+  string hash = 2;
+  repeated SnapshotHost hosts = 3;
+  repeated SnapshotDeployment deployments = 4;
+  repeated SnapshotIdentity identities = 5;
+}
+
+message SnapshotHost {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  // direct / outbound
+  string reachability = 4;
+  bool enabled = 5;
+  // 这台主机的网关是否开外部入口（11004）。别的网关只认它带来源头（X-Moox-Origin-Caller）转过来的请求。
+  bool external_entry = 6;
+  // ed25519 公钥，32 字节；还没签发过身份包的主机为空，它的请求在各网关上验不过。
+  bytes sign_public_key = 7;
+}
+
+message SnapshotDeployment {
+  string host_id = 1;
+  string component_id = 2;
+  bool enabled = 3;
+}
+
+// 不属于主机的身份：moox-cli、scf-collector、moox-skill、collector-operator。
+message SnapshotIdentity {
+  string identity = 1;
+  // ed25519 公钥，32 字节。
+  bytes sign_public_key = 2;
 }
 
 message PullSnapshotReq {
@@ -87,8 +79,8 @@ message ReportStatusRsp {
   common.RetInfo ret_info = 1;
 }
 
-// Only host-gateway@<host_id> may call these methods. The service validates
-// both the signed caller and the request host; key material never enters logs.
+// 只有各主机的网关能调：控制机网关验过签名后转给本机的 Admin，并把验过的签名主机 ID 放在 x-moox-verified-host
+// 元数据头里（控制机网关自己直连时也带上）；服务要求请求里的 host_id 与它一致。
 service GatewayControl {
   rpc PullSnapshot(PullSnapshotReq) returns (PullSnapshotRsp);
   rpc ReportStatus(ReportStatusReq) returns (ReportStatusRsp);

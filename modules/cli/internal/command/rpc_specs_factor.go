@@ -35,7 +35,7 @@ func init() {
 				listFlag("subject", "subjects", "展示的标的，可重复或逗号分隔"), intFlag("periods", "periods", "最近多少期"), strFlag("factor-id", "factor_id", "因子 ID"),
 				boolFlag("allow-partial-universe", "allow_partial_universe", "截面因子允许标的不完整"), jsonFlag("params", "params", "成员参数 JSON"), jsonFlag("udf-versions", "udf_versions", "自定义算子版本 JSON")}},
 		rpcSpec{Path: []string{"factor", "functions"}, Short: "列出表达式里可用的函数", Service: factorMgr, Method: "ListFactorFunctions"},
-		rpcSpec{Path: []string{"factor", "status"}, Short: "因子运行状态（各任务的预热、排队与暂停）", Service: factorMgr, Method: "GetStatus"},
+		rpcSpec{Path: []string{"factor", "status"}, Short: "因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status）", Service: factorMgr, Method: "GetStatus"},
 
 		rpcSpec{Path: []string{"factor", "category", "list"}, Short: "列出因子分类", Service: factorMgr, Method: "ListFactorCategories"},
 		rpcSpec{Path: []string{"factor", "category", "upsert"}, Short: "新建或修改因子分类", Service: factorMgr, Method: "UpsertFactorCategory",
@@ -49,7 +49,7 @@ func init() {
 			Flags: []rpcFlag{strFlag("status", "status", "按状态过滤：enabled、disabled")}},
 		rpcSpec{Path: []string{"factor", "task", "show"}, Short: "查看一个计算任务", Service: factorMgr, Method: "GetFactorTask",
 			Flags: []rpcFlag{reqFlag("task-id", "task_id", "任务 ID")}},
-		rpcSpec{Path: []string{"factor", "task", "create"}, Short: "创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写进 moox.toml 后用 setup factors", Service: factorMgr, Method: "CreateFactorTask",
+		rpcSpec{Path: []string{"factor", "task", "create"}, Short: "创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写成因子任务文件后用 factor task apply", Service: factorMgr, Method: "CreateFactorTask",
 			SpaceField: "factor_task.space_id",
 			Flags:      []rpcFlag{reqFlag("source-dataset-id", "factor_task.source_dataset_id", "源数据集 ID"), reqFlag("frequency", "factor_task.freq", "频率：1m、5m、1h……"), strFlag("name", "factor_task.name", "任务名称")}},
 		rpcSpec{Path: []string{"factor", "task", "enable"}, Short: "启用计算任务", Service: factorMgr, Method: "SetFactorTaskStatus", Fixed: map[string]any{"status": "enabled"},

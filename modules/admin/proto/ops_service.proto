@@ -11,10 +11,10 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;a
 //
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
-// 鉴权由网关 authorize filter 校验控制台 access_token 完成。
+// 鉴权由控制台按浏览器会话 Cookie 完成。
 //
 // 注意：WebSocket 终端、SFTP 流式上传/下载（multipart）不经本 RPC 服务，
-// 由统一网关 rawhandler 分派（session_id 鉴权），见 ssh/rpc/rawhandler。
+// 由控制台的裸 HTTP 路由分派（同样按会话 Cookie 鉴权），见 ssh/rpc/rawhandler。
 
 // ========== SSH 会话 ==========
 

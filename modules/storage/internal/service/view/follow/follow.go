@@ -61,8 +61,6 @@ type Key struct {
 // Options 是跟随器的公共参数。
 type Options struct {
 	Reader Reader
-	// Auth 返回调用 PrimaryStore 的身份。
-	Auth func() *pb.AuthInfo
 	// Wait 是单次读取在服务端等待新变更的时长，默认 DefaultWait，上限 30 秒。
 	Wait time.Duration
 	// PersistInterval 是只扫描、没有写入的前进落盘的间隔，默认 DefaultPersistInterval。
@@ -98,8 +96,8 @@ type viewKey struct{ spaceID, viewID string }
 
 // NewManager 创建跟随器管理器；Close 停止全部跟随器并落盘它们的进度。
 func NewManager(ctx context.Context, opts Options) (*Manager, error) {
-	if opts.Reader == nil || opts.Auth == nil {
-		return nil, errors.New("View 跟随变更日志需要 PrimaryStore 读取客户端与鉴权")
+	if opts.Reader == nil {
+		return nil, errors.New("View 跟随变更日志需要 PrimaryStore 读取客户端")
 	}
 	if opts.Wait <= 0 {
 		opts.Wait = DefaultWait
@@ -262,7 +260,7 @@ func (m *Manager) readHead(ctx context.Context, key Key) (viewindex.ChangeCursor
 	callCtx, cancel := context.WithTimeout(ctx, headReadTimeout)
 	defer cancel()
 	rsp, err := m.opts.Reader.ReadDatasetChanges(callCtx, &pb.ReadDatasetChangesReq{
-		AuthInfo: m.opts.Auth(), SpaceId: key.SpaceID, DatasetId: key.DatasetID, FromHead: true,
+		SpaceId: key.SpaceID, DatasetId: key.DatasetID, FromHead: true,
 	}, client.WithTimeout(headReadTimeout))
 	if err = responseError(rsp, err); err != nil {
 		return viewindex.ChangeCursor{}, fmt.Errorf("读取变更日志头部：%w", err)

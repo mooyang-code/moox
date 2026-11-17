@@ -1,10 +1,10 @@
-// 控制台代理在内置 CA 模式下公开的根证书与指纹（登录前可访问），换了主机的用户靠它安装信任。
+// Admin 的浏览器入口公开的 MooX CA 根证书与指纹（登录前可访问），换了电脑的用户靠它安装信任。
 export const ROOT_CA_CERT_URL = "/ca/root.crt";
 export const ROOT_CA_FINGERPRINT_URL = "/ca/root.sha256";
 /** 安装包：根证书、指纹、给 Agent 阅读的安装说明（AGENT-INSTALL.md）和各系统的安装脚本。 */
 export const ROOT_CA_BUNDLE_URL = "/ca/moox-root-ca.zip";
 export const ROOT_CA_BUNDLE_FILE_NAME = "moox-root-ca.zip";
-export const ROOT_CA_FILE_NAME = "moox-caddy-root.crt";
+export const ROOT_CA_FILE_NAME = "moox-ca.crt";
 
 export type RootCaGuideKey = "macos" | "linux" | "windows" | "ios" | "android" | "cli" | "firefox";
 

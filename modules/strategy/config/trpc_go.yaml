@@ -10,20 +10,20 @@ server:
     - prometheus
   timeout: 30000
   service:
+    # ControlLifecycle 暂停要等在途的求值结束、已落库的目标发布完（最长 30 秒），请求时限要大于它（与服务目录里这个方法的 60 秒一致）
     - name: trpc.moox.strategy.StrategyMgr
       ip: 127.0.0.1
       port: 11430
       network: tcp
       protocol: trpc
       transport: go-net
-      timeout: 30000
+      timeout: 60000
     - name: trpc.moox.strategy.Health
       ip: 127.0.0.1
       port: 11431
       network: tcp
       protocol: http_no_protocol
-      # 健康检查端口同时承载生命周期与逐期回放接口（/v1/lifecycle、/v1/replay）；固定回放绑定要读 Storage 元数据，比健康检查慢
-      timeout: 60000
+      timeout: 10000
     - name: trpc.moox.strategy.metrics.timer
       port: 11432
       network: "*/30 * * * * *?startAtOnce=1"
@@ -47,11 +47,11 @@ plugins:
       - writer: file
         level: info
         writer_config:
-          # 框架日志按大小轮转，单个文件 10MB、保留 5 份、最多 7 天；标准输出/错误主要是崩溃信息和数据库（GORM）日志，由 moox-runtime 启动前按大小轮转，持续报错时仍可能增长。
+          # 框架日志按大小轮转：单个文件 50MB、保留 5 份、最多 7 天。标准输出与标准错误（崩溃信息、数据库日志）交给 journald。
           log_path: ./logs
           filename: trpc.log
           roll_type: size
           max_age: 7
-          max_size: 10
+          max_size: 50
           max_backups: 5
           compress: false

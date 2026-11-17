@@ -48,7 +48,7 @@ type OperatorActionFailure struct {
 
 // OperatorWorkerSnapshot 是工作线程的状态。ActionErrors 按动作列出这一轮恢复失败的原因；只关乎单个动作的错误
 // （见 OperatorWorker.ActionScoped）不影响 Ready：一个动作反复失败（例如账户凭证失效）不能拖垮整个 Trade 的就绪，
-// 否则生命周期检查失败会自动暂停 Trade，所有组合都停止执行。
+// 否则 Monitor 一直报 Trade 未就绪，系统恢复时 Trade 的追赶也过不了“Trade 就绪”这一项、不能放行。
 type OperatorWorkerSnapshot struct {
 	Ready        bool
 	LastError    string

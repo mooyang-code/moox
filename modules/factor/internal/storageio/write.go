@@ -68,7 +68,7 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID string, rows 
 		})
 	}
 	rsp, err := c.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, Rows: upserts,
+		SpaceId: spaceID, DatasetId: datasetID, Rows: upserts,
 	})
 	if err != nil {
 		return rpcError("write factor rows", err)

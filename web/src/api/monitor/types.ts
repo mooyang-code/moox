@@ -18,30 +18,22 @@ export interface HealthComponent {
   name?: string;
   status?: HealthStatus;
   reason?: string;
-  probe?: HealthSignal;
+  /** 组件健康只看上报：上报是否新鲜。 */
   reporter?: HealthSignal;
   instances?: HealthReporter[];
   status_since?: string;
-  probe_url?: string;
-  recent_probes?: HealthSignal[];
-  /** 模块自己的生命周期状态；模块没有生命周期接口时没有这一项。 */
+  /** 模块自己的生命周期状态；模块没有生命周期接口或已停止上报时没有这一项。 */
   lifecycle?: HealthLifecycle;
+  /** 最近一次上报的就绪判断：ready、not_ready，空表示上报里没有；not_ready_reason 是未就绪的原因。 */
+  readiness?: "" | "ready" | "not_ready";
+  not_ready_reason?: string;
 }
-/** 生命周期阶段：未初始化、未就绪、就绪、预热、运行、暂停、恢复追赶、重置中、重置失败、故障。 */
-export type LifecycleStage =
-  | "uninitialized"
-  | "not_ready"
-  | "ready"
-  | "warming"
-  | "running"
-  | "paused"
-  | "resuming"
-  | "resetting"
-  | "reset_failed"
-  | "fault";
-export type LifecycleColor = "gray" | "red" | "blue" | "yellow" | "green" | "orange" | "cyan" | "purple";
-/** 暂停类型：手动（只有用户恢复）、系统（系统级暂停带下来的）、自动（检查失败触发，检查通过后自动恢复）。 */
-export type PauseKind = "manual" | "system" | "auto";
+/** 模块的生命周期状态：运行、暂停、恢复追赶。 */
+export type LifecycleStage = "running" | "paused" | "resuming";
+/** 首页圆点的颜色。 */
+export type LifecycleColor = "gray" | "red" | "yellow" | "green" | "orange" | "cyan";
+/** 暂停类型：手动（只有用户恢复）、系统（系统级暂停带下来的）。 */
+export type PauseKind = "manual" | "system";
 /** 暂停详情。 */
 export interface HealthPause {
   kind?: PauseKind;
@@ -55,58 +47,38 @@ export interface HealthCatchup {
   done?: number | string;
   total?: number | string;
   caught_up?: boolean;
-  /** 被谁阻塞（例如上游模块尚未追平）。 */
+  /** 被谁阻塞（例如某个任务、上游模块尚未追平）。 */
   blocked_by?: string;
   /** 暂停区间里确认无法补采的周期数。 */
   unfillable?: number;
   message?: string;
 }
-export interface HealthLifecycleObject {
-  kind?: string;
-  id?: string;
-  stage?: LifecycleStage;
-  /** 考虑模块自身状态后的有效阶段。 */
-  effective?: LifecycleStage;
-  color?: LifecycleColor;
-  reason?: string;
-  failed_checks?: string[];
-  pause?: HealthPause;
-  catchup?: HealthCatchup;
-}
+/** 模块上报的模块级生命周期状态。 */
 export interface HealthLifecycle {
   stage?: LifecycleStage;
-  color?: LifecycleColor;
-  /** 运行中，但有对象自动暂停、故障或未就绪（手动、系统暂停是用户意图，不算降级）。 */
-  degraded?: boolean;
   reason?: string;
-  self_stage?: LifecycleStage;
-  /** 模块自身的暂停详情、控制意图与恢复追赶进度。 */
+  /** 暂停详情（暂停或恢复追赶中）与恢复追赶进度。 */
   pause?: HealthPause;
-  hold?: "system_pause" | "post_reset" | "";
   catchup?: HealthCatchup;
-  counts?: Record<string, number>;
-  /** 暂停的对象（含模块自身）按类型计数。 */
-  pause_kinds?: Partial<Record<PauseKind, number>>;
-  attention?: HealthLifecycleObject[];
-  recovered?: number;
 }
-/** 系统状态：健康面（由各模块状态推导）与运行阶段（只由用户命令推进）。 */
+/** 系统状态：健康面（有生命周期的模块是否都在上报、都已就绪）与运行阶段（只由用户命令推进）。 */
 export interface HealthSystem {
   health?: "healthy" | "attention";
-  phase?: "uninitialized" | "ready" | "warming" | "running" | "paused" | "partially_paused" | "resuming" | "resetting";
+  phase?: "unknown" | "running" | "paused" | "partially_paused" | "resuming";
   color?: LifecycleColor;
-  degraded?: boolean;
-  /** 受影响的模块与原因，形如「因子引擎：crypto_1m 变更同步：变更日志断档」。 */
+  /** 受影响的模块与原因，形如「策略：系统暂停：切换行情源」。 */
   issues?: string[];
-  auto_recovered?: boolean;
   module_count?: number;
-  /** 暂停的模块与对象按类型计数，最早的暂停时间。 */
+  /** 暂停的模块按类型计数，最早的暂停时间。 */
   pause_kinds?: Partial<Record<PauseKind, number>>;
   paused_since?: string;
   /** 恢复追赶中的模块数与其中已追平（待放行）的模块数，以及各模块的进度文字。 */
   resuming_modules?: number;
   caught_up_modules?: number;
   catchup_notes?: string[];
+  /** 带生命周期的模块里上报了未就绪的个数、停止上报（或从未上报）的个数。 */
+  not_ready_modules?: number;
+  silent_modules?: number;
 }
 export interface HealthObject {
   type?: "component" | "dataset" | "host" | "business";

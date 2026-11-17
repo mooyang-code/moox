@@ -60,16 +60,10 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 		t.Fatal(err)
 	}
 	session := instanceID + "-session"
-	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: instanceID, DSLHash: "sha256:demo", ResolvedJSON: resolved, CreatedAt: seedTime}, "name: demo"); err != nil {
+	if err := repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: instanceID, DSLHash: "sha256:demo", ResolvedJSON: resolved, CreatedAt: seedTime}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	// 按启用流程先把会话写到停用的实例上，再启用。
-	if err := repo.SetInstanceEnabled(ctx, instanceID, false, &session, json.RawMessage(resolved), seedTime); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, instanceID, true, &session, json.RawMessage(resolved), seedTime); err != nil {
-		t.Fatal(err)
-	}
 }
 
 const resolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]}`
@@ -126,7 +120,7 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 	now := time.Now().UTC()
 	bar := timestamppb.New(now)
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
+		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", SessionStartedAt: 1_000, LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "r1", OccurredAt: now, SpaceID: "crypto", SubjectID: "acct"})
 	if err != nil {

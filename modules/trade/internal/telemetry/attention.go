@@ -39,11 +39,8 @@ const (
 	// AttentionFlattenOrdersUnsettled 是清仓、减仓、下架清仓结束时有子单没收拾掉（收尾满 30 分钟仍解析不出结果、
 	// 交易所确认标的不存在），动作照常结束，这些子单要人工到交易所核对。
 	AttentionFlattenOrdersUnsettled = "flatten_orders_unsettled"
-	// AttentionReleaseOrdersUnverified 是释放策略会话时凭证失效、交易账户已停用或异常、标的已不存在，目标单没能撤下或确认，
-	// 只按本地记录释放，这些单要人工到交易所核对。
-	AttentionReleaseOrdersUnverified = "release_orders_unverified"
-	// AttentionReleaseOrdersStuck 是释放策略会话连续失败超过 10 分钟（例如交易账户启用但会话一直建不起来）：目标单没撤下，
-	// 会话还没释放，策略仍在重试。
+	// AttentionReleaseOrdersStuck 是过期目标（含停用策略后关闭会话缩短了有效期的目标）的挂单连续撤不下来超过 10 分钟
+	// （例如交易账户会话一直建不起来、凭证失效）：执行器的过期路径仍在重试，撤下来即消除。
 	AttentionReleaseOrdersStuck = "release_orders_stuck"
 	// AttentionOrdersInstrumentGone 是账户同步发现订单的标的已下架、交易所查不到（币安 -1121、OKX 51001）：未结束的单
 	// 已按过期结束并释放资金预留；订单（含已结束的单）的累计成交领先已入账成交明细的，缺口已按已入账值收掉（成交明细缺失）。
@@ -64,7 +61,7 @@ var attentionKinds = []string{
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
-	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionReleaseOrdersStuck,
+	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersStuck,
 	AttentionOrdersInstrumentGone, AttentionFillIngestFailed, AttentionClockSkew, AttentionIsolatedPosition,
 }
 

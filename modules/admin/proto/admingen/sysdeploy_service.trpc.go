@@ -27,8 +27,6 @@ type SysDeployService interface {
 
 	GetHostRoutes(ctx context.Context, req *GetHostRoutesReq) (*GetHostRoutesRsp, error)
 
-	GetDirectory(ctx context.Context, req *GetDirectoryReq) (*GetDirectoryRsp, error)
-
 	SetHostStatus(ctx context.Context, req *SetHostStatusReq) (*SetHostStatusRsp, error)
 
 	SetDeploymentStatus(ctx context.Context, req *SetDeploymentStatusReq) (*SetDeploymentStatusRsp, error)
@@ -100,24 +98,6 @@ func SysDeployService_GetHostRoutes_Handler(svr interface{}, ctx context.Context
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(SysDeployService).GetHostRoutes(ctx, reqbody.(*GetHostRoutesReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func SysDeployService_GetDirectory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetDirectoryReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SysDeployService).GetDirectory(ctx, reqbody.(*GetDirectoryReq))
 	}
 
 	var rsp interface{}
@@ -222,10 +202,6 @@ var SysDeployServer_ServiceDesc = server.ServiceDesc{
 			Func: SysDeployService_GetHostRoutes_Handler,
 		},
 		{
-			Name: "/trpc.moox.ops.SysDeploy/GetDirectory",
-			Func: SysDeployService_GetDirectory_Handler,
-		},
-		{
 			Name: "/trpc.moox.ops.SysDeploy/SetHostStatus",
 			Func: SysDeployService_SetHostStatus_Handler,
 		},
@@ -267,9 +243,6 @@ func (s *UnimplementedSysDeploy) ListDeployments(ctx context.Context, req *ListD
 func (s *UnimplementedSysDeploy) GetHostRoutes(ctx context.Context, req *GetHostRoutesReq) (*GetHostRoutesRsp, error) {
 	return nil, errors.New("rpc GetHostRoutes of service SysDeploy is not implemented")
 }
-func (s *UnimplementedSysDeploy) GetDirectory(ctx context.Context, req *GetDirectoryReq) (*GetDirectoryRsp, error) {
-	return nil, errors.New("rpc GetDirectory of service SysDeploy is not implemented")
-}
 func (s *UnimplementedSysDeploy) SetHostStatus(ctx context.Context, req *SetHostStatusReq) (*SetHostStatusRsp, error) {
 	return nil, errors.New("rpc SetHostStatus of service SysDeploy is not implemented")
 }
@@ -298,8 +271,6 @@ type SysDeployClientProxy interface {
 	ListDeployments(ctx context.Context, req *ListDeploymentsReq, opts ...client.Option) (rsp *ListDeploymentsRsp, err error)
 
 	GetHostRoutes(ctx context.Context, req *GetHostRoutesReq, opts ...client.Option) (rsp *GetHostRoutesRsp, err error)
-
-	GetDirectory(ctx context.Context, req *GetDirectoryReq, opts ...client.Option) (rsp *GetDirectoryRsp, err error)
 
 	SetHostStatus(ctx context.Context, req *SetHostStatusReq, opts ...client.Option) (rsp *SetHostStatusRsp, err error)
 
@@ -393,26 +364,6 @@ func (c *SysDeployClientProxyImpl) GetHostRoutes(ctx context.Context, req *GetHo
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetHostRoutesRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SysDeployClientProxyImpl) GetDirectory(ctx context.Context, req *GetDirectoryReq, opts ...client.Option) (*GetDirectoryRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/GetDirectory")
-	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("SysDeploy")
-	msg.WithCalleeMethod("GetDirectory")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetDirectoryRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

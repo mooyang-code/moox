@@ -28,7 +28,7 @@ type EngineHub interface {
 
 // ParamAPI 是引擎用到的参数读取能力（由目录服务实现）。
 type ParamAPI interface {
-	GetParams(ctx context.Context, taskID string) ([]domain.FactorTaskMember, error)
+	GetParams(ctx context.Context, taskID string) ([]domain.MemberParamState, error)
 }
 
 // EngineService implements the internal FactorEngine contract used only by

@@ -3,32 +3,40 @@ import type { CatalogComponent, DeploymentHost, HostGatewayRoute, HostRoutesResp
 import { componentPorts, gatewayLabel, groupRoutes, loadHostRoutes, deploymentRows, routeSync } from "./model";
 const host: DeploymentHost = { host_id: "a", address: "example.test", status: "enabled" };
 const component: CatalogComponent = {
-  id: "access",
-  name: "外部接入",
-  binary: "moox-access",
+  id: "egress-proxy",
+  name: "出口代理",
+  binary: "moox-egress-proxy",
   scope: "any",
   replicas: "multi",
   protected: false,
-  health: { kind: "readyz", port: 11012 },
+  health: { port: 11012 },
   ports: [11011],
-  services: [{ path: "test.Service", port: 11011, methods: ["Read", "Write"], acl: [{ methods: ["Read"], callers: ["reader"] }] }]
+  services: [
+    {
+      path: "test.Service",
+      port: 11011,
+      methods: [
+        { name: "Read", callers: ["reader"], operators: [] },
+        { name: "Write", operators: [] }
+      ]
+    }
+  ]
 };
 const snapshot: HostRoutesResponse = {
   host_id: "a",
-  definition_hash: "definition",
   snapshot_schema_version: 1,
   compiled_at: "2026-10-09T12:00:00Z",
   gateway_status: { expected_hash: "new", applied_hash: "old", last_seen_at: "2026-10-09T12:00:00Z" }
 };
 describe("deployment presentation", () => {
   it("uses host plus component identity and never equates enablement with health", () => {
-    const rows = deploymentRows(host, [{ host_id: "a", component_id: "access", status: "enabled" }], [component], {
-      components: [{ host_id: "b", component_id: "access", status: "healthy" }]
+    const rows = deploymentRows(host, [{ host_id: "a", component_id: "egress-proxy", status: "enabled" }], [component], {
+      components: [{ host_id: "b", component_id: "egress-proxy", status: "healthy" }]
     });
     expect(rows[0].status).toBe("unknown");
     expect(
       deploymentRows({ ...host, status: "disabled" }, [rows[0].deployment], [component], {
-        components: [{ host_id: "a", component_id: "access", status: "healthy" }]
+        components: [{ host_id: "a", component_id: "egress-proxy", status: "healthy" }]
       })[0].status
     ).toBe("disabled");
     expect(componentPorts(component)).toEqual([11011, 11012]);
@@ -52,7 +60,7 @@ describe("deployment presentation", () => {
   });
   it("filters callers and methods on the same route and preserves each method ACL", () => {
     const base = {
-      component_id: "access",
+      component_id: "egress-proxy",
       service_path: "test.Service",
       address: "127.0.0.1:11011",
       timeout_ms: "5000",

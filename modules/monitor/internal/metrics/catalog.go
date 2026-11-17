@@ -63,7 +63,7 @@ func (c *MetricCatalog) ListServicesAt(ctx context.Context, spaceID string, offs
 	var rows []MetricService
 	listSQL := rankedSQL + `
 		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
-			c_last_seen_at, c_ctime, c_mtime
+			c_last_seen_at, c_readiness, c_not_ready_reason, c_lifecycle_json, c_ctime, c_mtime
 		FROM ranked_services
 		WHERE logical_rank = 1
 		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
@@ -119,7 +119,7 @@ func (c *MetricCatalog) ListServicesForAt(ctx context.Context, serviceNames []st
 	var rows []MetricService
 	listSQL := rankedSQL + `
 		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
-			c_last_seen_at, c_ctime, c_mtime
+			c_last_seen_at, c_readiness, c_not_ready_reason, c_lifecycle_json, c_ctime, c_mtime
 		FROM ranked_services
 		WHERE logical_rank = 1
 		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
@@ -166,6 +166,45 @@ func (c *MetricCatalog) CurrentBootIDs(ctx context.Context, now time.Time) (map[
 			continue
 		}
 		out[key] = bootID
+	}
+	return out, nil
+}
+
+// “反复重启”：RestartWindow 内启动标识变了 RestartChanges 次（每次启动换一个启动标识，变一次就是重启一次）。
+const (
+	RestartWindow  = 10 * time.Minute
+	RestartChanges = 3
+)
+
+// BootChanges 返回每个上报方（主机、服务）在 since 之后启动标识变了几次，键是 主机\x00服务（代报的外部程序主机为空）。
+// 每个启动标识一行、c_ctime 是它第一次上报的时间：窗口里第一次出现的启动标识，前面还有更早的启动时每个都算一次变化；
+// 前面没有更早的启动（全新部署）时，窗口里的第一个不算变化。
+func (c *MetricCatalog) BootChanges(ctx context.Context, since time.Time) (map[string]int, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	var rows []struct {
+		NodeID      string `gorm:"column:c_node_id"`
+		ServiceName string `gorm:"column:c_service_name"`
+		Recent      int    `gorm:"column:recent"`
+		Older       int    `gorm:"column:older"`
+	}
+	since = since.UTC()
+	if err := c.messageStore.db.WithContext(ctx).Model(&MetricService{}).
+		Select("c_node_id, c_service_name, SUM(CASE WHEN c_ctime >= ? THEN 1 ELSE 0 END) AS recent, SUM(CASE WHEN c_ctime < ? THEN 1 ELSE 0 END) AS older", since, since).
+		Group("c_node_id, c_service_name").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(rows))
+	for _, row := range rows {
+		changes := row.Recent
+		if row.Older == 0 && changes > 0 {
+			changes--
+		}
+		if changes > 0 {
+			out[row.NodeID+"\x00"+row.ServiceName] = changes
+		}
 	}
 	return out, nil
 }

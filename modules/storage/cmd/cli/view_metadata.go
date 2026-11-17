@@ -3,11 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -25,49 +22,18 @@ type removedViewsSummary struct {
 	RetiredIndexes []retainedIndex `json:"retired_indexes,omitempty"`
 }
 
-func ensureStorageViewStopped(packageRoot string) error {
-	packageRoot = strings.TrimSpace(packageRoot)
-	statusPath := filepath.Join(packageRoot, "status.sh")
-	if _, err := exec.LookPath(statusPath); err != nil {
-		return fmt.Errorf("storage status script is unavailable: %w", err)
-	}
-	// status.sh 转给 moox-runtime：不接受位置参数，用 --components 选择组件，输出是 JSON。
-	output, err := exec.Command(statusPath, "--components", "storage-view").Output()
-	if err != nil {
-		return fmt.Errorf("check storage-view status: %w", err)
-	}
-	state, err := storageViewState(output)
-	if err != nil {
-		return fmt.Errorf("storage-view status is indeterminate; refusing to change View metadata: %w", err)
-	}
-	switch state {
-	case "stopped", "paused":
-		// paused 是 moox-runtime pause 之后的状态：进程已停，主机守护也不会拉起。
+// ensureStorageViewStopped 确认 storage-view 的用户服务没在运行（systemctl --user is-active）；状态说不清时拒绝改元数据。
+func ensureStorageViewStopped(ctx context.Context) error {
+	// is-active 在服务没运行时退出码非 0，只看它打印的状态。
+	output, _ := systemctlUser(ctx, "is-active", storageViewUnit)
+	switch state := strings.TrimSpace(string(output)); state {
+	case "inactive", "failed":
 		return nil
-	case "running":
-		return errors.New("storage-view must be stopped before changing View metadata")
+	case "active", "activating", "deactivating", "reloading":
+		return errors.New("storage-view must be stopped before changing View metadata: moox-cli setup stop --host <storage host> --component storage-view --yes")
 	default:
 		return fmt.Errorf("storage-view state is %q; refusing to change View metadata", state)
 	}
-}
-
-// storageViewState 从 status.sh 的 JSON 输出里取出 storage-view 的状态。
-func storageViewState(output []byte) (string, error) {
-	var status struct {
-		Components []struct {
-			ID    string `json:"id"`
-			State string `json:"state"`
-		} `json:"components"`
-	}
-	if err := json.Unmarshal(output, &status); err != nil {
-		return "", fmt.Errorf("decode status output: %w", err)
-	}
-	for _, component := range status.Components {
-		if component.ID == "storage-view" {
-			return component.State, nil
-		}
-	}
-	return "", errors.New("status output has no storage-view component")
 }
 
 // viewRow 是 t_views 里和删除有关的几列。

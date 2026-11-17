@@ -64,6 +64,7 @@ func TestHTTPRequestHandler_ReadRequestBodyWithRaw_ReturnsExactBodyAndIgnoresQue
 	assert.Equal(t, raw, body)
 }
 
+// 透传给下游的请求头只有 trace、压缩与空间；用户、令牌、来源 IP 一律不从请求头取。
 func TestHTTPRequestHandler_ExtractGatewayHeaders_ShouldCollectHeaders(t *testing.T) {
 	h := NewHTTPRequestHandler()
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
@@ -75,33 +76,7 @@ func TestHTTPRequestHandler_ExtractGatewayHeaders_ShouldCollectHeaders(t *testin
 	req.Header.Set("X-Space-Id", "space-1")
 
 	headers := h.extractGatewayHeaders(req)
-	assert.Equal(t, "token-1", headers["access_token"])
-	assert.Equal(t, "trace-1", headers["trace_id"])
-	assert.Equal(t, "10.0.0.2", headers["client_ip"])
-	assert.Equal(t, "https://app.example.com", headers["origin"])
-	assert.Equal(t, "gzip", headers["accept_encoding"])
-	assert.Equal(t, "space-1", headers["space_id"])
-}
-
-func TestHTTPRequestHandler_GetClientIP_FromXRealIP_ShouldReturnIP(t *testing.T) {
-	h := NewHTTPRequestHandler()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Real-IP", "203.0.113.1")
-	assert.Equal(t, "203.0.113.1", h.getClientIP(req))
-}
-
-func TestHTTPRequestHandler_GetClientIP_FromXForwardedFor_ShouldReturnFirstIP(t *testing.T) {
-	h := NewHTTPRequestHandler()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Forwarded-For", "198.51.100.1, 10.0.0.1")
-	assert.Equal(t, "198.51.100.1", h.getClientIP(req))
-}
-
-func TestHTTPRequestHandler_GetClientIP_FromRemoteAddr_ShouldStripPort(t *testing.T) {
-	h := NewHTTPRequestHandler()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "192.0.2.1:12345"
-	assert.Equal(t, "192.0.2.1", h.getClientIP(req))
+	assert.Equal(t, map[string]string{"trace_id": "trace-1", "accept_encoding": "gzip", "space_id": "space-1"}, headers)
 }
 
 func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T) {
@@ -112,6 +87,13 @@ func TestHandleGatewayRequest_InvalidParams_ShouldReturnBadRequest(t *testing.T)
 	require.Error(t, err)
 }
 
-func TestGetConsoleHandleInstance_ShouldReturnSingleton(t *testing.T) {
-	assert.Same(t, GetConsoleHandleInstance(), GetConsoleHandleInstance())
+func TestNewHandlerRequiresConfigAndDependencies(t *testing.T) {
+	SetConfig(nil)
+	_, err := NewHandler(nil, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "控制台配置未初始化")
+	SetConfig(&Config{})
+	t.Cleanup(func() { SetConfig(nil) })
+	_, err = NewHandler(nil, nil, nil)
+	assert.Error(t, err)
 }

@@ -13,43 +13,44 @@ var (
 	identifier  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 	servicePath = regexp.MustCompile(`^trpc\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$`)
 	methodName  = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
-	unitName    = regexp.MustCompile(`^moox-[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	binaryName  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+	placeholder = regexp.MustCompile(`\{[a-z]+\}`)
 	hostLabel   = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 )
 
 func (c Catalog) Validate() error {
-	if c.Version != 1 || len(c.Components) == 0 || len(c.Components) > 64 {
-		return fmt.Errorf("catalog requires version 1 and 1..64 components")
+	if c.Version != 2 || len(c.Components) == 0 || len(c.Components) > 64 {
+		return fmt.Errorf("catalog requires version 2 and 1..64 components")
 	}
 	ids, binaries, paths := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	consoleRoutes := map[string]string{}
-	external := map[string]bool{}
+	components, external := map[string]bool{}, map[string]bool{}
 	for _, component := range c.Components {
-		external[component.ID] = component.ExternalProgram
+		components[component.ID], external[component.ID] = true, component.ExternalProgram
+	}
+	identities, err := c.validateIdentities(components)
+	if err != nil {
+		return err
 	}
 	for _, component := range c.Components {
-		if !identifier.MatchString(component.ID) || component.Name == "" || component.Binary != "moox-"+component.ID {
+		binaryOK := component.Binary == "moox-"+component.ID
+		if component.ThirdParty {
+			// 第三方程序的二进制保留原名（weed），只要求是一个普通文件名。
+			binaryOK = binaryName.MatchString(component.Binary) && !strings.HasPrefix(component.Binary, "moox-")
+		}
+		if !identifier.MatchString(component.ID) || component.Name == "" || !binaryOK {
 			return fmt.Errorf("component %q requires a canonical ID, name and binary", component.ID)
 		}
 		if ids[component.ID] || binaries[component.Binary] {
 			return fmt.Errorf("duplicate component %q", component.ID)
 		}
 		ids[component.ID], binaries[component.Binary] = true, true
-		if !slices.Contains([]string{ScopeHost, ScopeControl, ScopeAny}, component.Scope) || !slices.Contains([]string{Single, Multi}, component.Replicas) {
+		if !slices.Contains([]string{ScopeHost, ScopeControl, ScopeAny}, component.Scope) || component.Replicas != Single {
 			return fmt.Errorf("component %q has invalid scope or replicas", component.ID)
 		}
-		// Host components have one instance on each host. The single limit is
-		// per host for this scope, rather than one instance for the whole fleet.
-		if component.Scope == ScopeHost && component.Replicas != Single {
-			return fmt.Errorf("host component %q must be single per host", component.ID)
-		}
-		if !slices.Contains([]string{"readyz", "https", "none"}, component.Health.Kind) {
-			return fmt.Errorf("component %q has invalid health.kind", component.ID)
-		}
-		if component.ExternalProgram {
-			if len(component.Services) != 0 || len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
-				return fmt.Errorf("external program %q cannot declare services or ports and must use a readyz health port", component.ID)
-			}
+		// 外部程序可以声明服务（只监听本机，经所在主机的网关路由），但不能声明其他端口。
+		if component.ExternalProgram && len(component.Ports) != 0 {
+			return fmt.Errorf("external program %q cannot declare ports", component.ID)
 		}
 		ports := map[int]bool{}
 		addPort := func(port int) error {
@@ -59,9 +60,10 @@ func (c Catalog) Validate() error {
 			ports[port] = true
 			return nil
 		}
-		if component.Health.Kind == "none" {
-			if component.Health.Port != 0 {
-				return fmt.Errorf("health none cannot have a port")
+		// 每个组件都有健康端口；第三方程序没有 /healthz、/readyz，不声明健康端口，也不能声明服务。
+		if component.ThirdParty {
+			if component.Health.Port != 0 || len(component.Services) != 0 || component.ExternalProgram || component.RelayHTTP != nil || component.Scope != ScopeAny {
+				return fmt.Errorf("third-party component %q cannot declare health, services, relay or a non-any scope", component.ID)
 			}
 		} else if err := addPort(component.Health.Port); err != nil {
 			return err
@@ -98,33 +100,15 @@ func (c Catalog) Validate() error {
 			}
 			methods := map[string]bool{}
 			for _, method := range service.Methods {
-				if !methodName.MatchString(method) || methods[method] {
-					return fmt.Errorf("service %q has invalid or duplicate method %q", service.Path, method)
+				if !methodName.MatchString(method.Name) || methods[method.Name] {
+					return fmt.Errorf("service %q has invalid or duplicate method %q", service.Path, method.Name)
 				}
-				methods[method] = true
-			}
-			if err := declaredMethods(service.ReadOnlyMethods, methods); err != nil {
-				return fmt.Errorf("service %q read-only methods: %w", service.Path, err)
-			}
-			if err := declaredMethods(service.IdempotentMethods, methods); err != nil {
-				return fmt.Errorf("service %q idempotent methods: %w", service.Path, err)
-			}
-			for _, method := range service.IdempotentMethods {
-				if slices.Contains(service.ReadOnlyMethods, method) {
-					return fmt.Errorf("service %q method %q is declared both read-only and idempotent", service.Path, method)
+				methods[method.Name] = true
+				if method.ReadOnly && method.Idempotent {
+					return fmt.Errorf("service %q method %q is declared both read-only and idempotent", service.Path, method.Name)
 				}
-			}
-			for method, timeout := range service.MethodTimeoutsMS {
-				if !methods[method] || timeout <= 0 {
-					return fmt.Errorf("service %q has invalid method timeout for %q", service.Path, method)
-				}
-			}
-			for _, grant := range service.ACL {
-				if len(grant.Methods) == 0 || len(grant.Callers) == 0 {
-					return fmt.Errorf("service %q has empty ACL grant", service.Path)
-				}
-				if err := declaredMethods(grant.Methods, methods); err != nil {
-					return fmt.Errorf("service %q ACL: %w", service.Path, err)
+				if method.TimeoutMS < 0 || method.TimeoutMS > 960000 {
+					return fmt.Errorf("service %q has invalid method timeout for %q", service.Path, method.Name)
 				}
 			}
 			if service.ConsoleName != "" {
@@ -134,7 +118,13 @@ func (c Catalog) Validate() error {
 			}
 		}
 	}
+	if err := c.validateDeployFields(ids); err != nil {
+		return err
+	}
 	for _, component := range c.Components {
+		if component.ThirdParty {
+			continue
+		}
 		if err := validateDoctor(component, ids); err != nil {
 			return err
 		}
@@ -143,33 +133,18 @@ func (c Catalog) Validate() error {
 		}
 		for _, service := range component.Services {
 			consoleAllowed := false
-			for _, grant := range service.ACL {
-				seen := map[string]bool{}
-				for _, caller := range grant.Callers {
-					if seen[caller] {
-						return fmt.Errorf("duplicate ACL caller %q", caller)
-					}
-					seen[caller] = true
-					if caller == "host-gateway@*" {
-						if service.Path != GatewayControlPath {
-							return fmt.Errorf("host-gateway instance ACL is restricted to GatewayControl")
-						}
-					} else if !ids[caller] && caller != "console" && caller != "moox-cli" {
-						return fmt.Errorf("service %q has unknown caller %q", service.Path, caller)
-					} else if external[caller] {
-						return fmt.Errorf("service %q lists external program %q as an internal caller; grant it through principals", service.Path, caller)
-					}
-					if caller == "console" {
-						consoleAllowed = true
-					}
+			for _, method := range service.Methods {
+				if err := validateMethodCallers(service.Path, method, ids, identities); err != nil {
+					return err
 				}
+				consoleAllowed = consoleAllowed || slices.Contains(method.OperatorList(), OperatorConsole)
 			}
 			if service.ConsoleName != "" && !consoleAllowed {
 				return fmt.Errorf("console_name %q has no console method", service.ConsoleName)
 			}
 			if service.ConsoleName != "" {
-				for _, method := range service.Methods {
-					if !c.Allowed("console", service.Path, method) {
+				for _, method := range service.MethodNames() {
+					if !c.Allowed(OperatorConsole, service.Path, method) {
 						continue
 					}
 					key := service.ConsoleName + "/" + method
@@ -181,42 +156,65 @@ func (c Catalog) Validate() error {
 			}
 		}
 	}
-	principals := map[string]bool{}
-	for _, principal := range c.Principals {
-		// 外部身份不能和普通组件同名；只有声明了 external_program 的组件才和同名外部身份对应。
-		if !slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, principal.ID) || principals[principal.ID] || (ids[principal.ID] && !external[principal.ID]) || len(principal.Allow) == 0 {
-			return fmt.Errorf("invalid or duplicate external principal %q", principal.ID)
+	for _, id := range c.ExternalIdentities() {
+		if len(c.Grants(id)) == 0 {
+			return fmt.Errorf("external identity %q is not a caller of any method", id)
 		}
-		principals[principal.ID] = true
+	}
+	return nil
+}
+
+// validateIdentities 校验 identities：ID 合法、不重复，不能是人操作身份、保留的调用方写法或组件 ID
+// （组件用所在主机的密钥签名，同名的非主机身份会让持有身份私钥的人冒充组件）。目前只有外部身份。
+func (c Catalog) validateIdentities(components map[string]bool) (map[string]bool, error) {
+	identities := map[string]bool{}
+	for _, identity := range c.Identities {
+		reserved := slices.Contains([]string{OperatorConsole, OperatorMooxCLI, hostGatewayCaller}, identity.ID)
+		if !identifier.MatchString(identity.ID) || identities[identity.ID] || reserved || components[identity.ID] {
+			return nil, fmt.Errorf("invalid or duplicate identity %q", identity.ID)
+		}
+		if !identity.External {
+			return nil, fmt.Errorf("identity %q must be external", identity.ID)
+		}
+		identities[identity.ID] = true
+	}
+	return identities, nil
+}
+
+// validateMethodCallers 校验方法的 callers 与 operators。callers 只能是组件或 identities 里的身份，不重复；
+// 人操作的 console、moox-cli 只能写在 operators 里；host-gateway 只用于 GatewayControl。
+func validateMethodCallers(servicePath string, method Method, ids, identities map[string]bool) error {
+	seen := map[string]bool{}
+	for _, caller := range method.Callers {
+		if seen[caller] {
+			return fmt.Errorf("service %q method %q has duplicate caller %q", servicePath, method.Name, caller)
+		}
+		seen[caller] = true
+		switch {
+		case caller == hostGatewayCaller:
+			if servicePath != GatewayControlPath {
+				return fmt.Errorf("host-gateway callers are restricted to GatewayControl")
+			}
+		case caller == OperatorConsole || caller == OperatorMooxCLI:
+			return fmt.Errorf("service %q method %q lists %q in callers; use operators", servicePath, method.Name, caller)
+		case !ids[caller] && !identities[caller]:
+			return fmt.Errorf("service %q method %q has unknown caller %q", servicePath, method.Name, caller)
+		}
+	}
+	if method.Operators != nil {
 		seen := map[string]bool{}
-		for _, permission := range principal.Allow {
-			service, ok := c.Service(permission.Service)
-			if !ok || seen[permission.Service] || len(permission.Methods) == 0 {
-				return fmt.Errorf("principal %q references unknown or duplicate service %q", principal.ID, permission.Service)
+		for _, operator := range *method.Operators {
+			if seen[operator] || operator != OperatorConsole && operator != OperatorMooxCLI {
+				return fmt.Errorf("service %q method %q has invalid operator %q", servicePath, method.Name, operator)
 			}
-			seen[permission.Service] = true
-			declared := map[string]bool{}
-			for _, method := range service.Methods {
-				declared[method] = true
-			}
-			if err := declaredMethods(permission.Methods, declared); err != nil {
-				return fmt.Errorf("principal %q: %w", principal.ID, err)
-			}
+			seen[operator] = true
 		}
-	}
-	for _, component := range c.Components {
-		if component.ExternalProgram && !principals[component.ID] {
-			return fmt.Errorf("external program %q requires an external principal with the same ID", component.ID)
-		}
-	}
-	if len(c.Principals) != 0 && !ids["access"] {
-		return fmt.Errorf("external principals require the access component")
 	}
 	return nil
 }
 
 // validateRelayHTTP 校验外部程序的 relay_http：调用方只能是内置调用方（非外部组件、console、moox-cli），不重复；
-// 端口不能与目录里任何其他组件的端口相同，ValidRelay 只凭端口号区分健康端口与 relay_http 端口，撞上就有歧义。
+// 端口不能与目录里任何其他组件的端口相同：中转许可只凭端口号认 relay_http 端口，撞上就有歧义。
 func (c Catalog) validateRelayHTTP(component Component, ids, external map[string]bool) error {
 	relay := component.RelayHTTP
 	if relay == nil {
@@ -244,30 +242,13 @@ func (c Catalog) validateRelayHTTP(component Component, ids, external map[string
 	return nil
 }
 
-func declaredMethods(methods []string, declared map[string]bool) error {
-	seen := map[string]bool{}
-	for _, method := range methods {
-		if !declared[method] || seen[method] {
-			return fmt.Errorf("undeclared or duplicate method %q", method)
-		}
-		seen[method] = true
-	}
-	return nil
-}
-
 func validateDoctor(component Component, ids map[string]bool) error {
 	d := component.Doctor
 	if d.Role == "" || d.Description == "" || len(d.Duties) == 0 || len(d.Inputs) == 0 || len(d.Outputs) == 0 {
 		return fmt.Errorf("component %q has incomplete doctor metadata", component.ID)
 	}
-	if !slices.Contains([]string{"reporter", "host_snapshot", "health_only"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
+	if !slices.Contains([]string{"reporter", "host_snapshot", "delegated"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
 		return fmt.Errorf("component %q has invalid doctor transport or observability", component.ID)
-	}
-	if err := ValidateSupervisor(d.Supervisor, d.Unit); err != nil {
-		return fmt.Errorf("component %q: %w", component.ID, err)
-	}
-	if component.ExternalProgram && d.Supervisor != SupervisorSystemdUser {
-		return fmt.Errorf("external program %q must be supervised by systemd_user", component.ID)
 	}
 	seen := map[string]bool{}
 	for _, dep := range d.Dependencies {
@@ -286,23 +267,6 @@ func validateDoctor(component Component, ids map[string]bool) error {
 		if !slices.Contains(allowed, action) {
 			return fmt.Errorf("component %q has unknown recovery action %q", component.ID, action)
 		}
-	}
-	return nil
-}
-
-// ValidateSupervisor 校验进程托管方式与单元名的组合：systemd_user 必须带合法的单元名，其余托管方式不能带单元名。
-func ValidateSupervisor(supervisor, unit string) error {
-	switch supervisor {
-	case "", SupervisorMooxRuntime:
-		if unit != "" {
-			return fmt.Errorf("unit is only valid for supervisor %s", SupervisorSystemdUser)
-		}
-	case SupervisorSystemdUser:
-		if !unitName.MatchString(unit) {
-			return fmt.Errorf("supervisor %s requires a valid unit name", SupervisorSystemdUser)
-		}
-	default:
-		return fmt.Errorf("unknown supervisor %q", supervisor)
 	}
 	return nil
 }

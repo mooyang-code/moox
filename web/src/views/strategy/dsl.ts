@@ -19,10 +19,16 @@ rules:
 
   - id: btc_trend
     name: BTC 上穿均线
-    type: signal
+    type: rank
     pool: [BTC-USDT]
-    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
-    exit: "bars[0].bias < 1"
+    allow_empty: true
+    # 写了 allow_empty 后缺数不再整期跳过：BTC 偶尔缺数先冻结保持，连续超过 3 根才出场
+    on_missing: {keep_bars: 3}
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+      exit: "bars[0].bias < 1"
     weight: {total: 0.2}
 
 portfolio:
@@ -32,17 +38,20 @@ portfolio:
   max_missing: 0.2
 `;
 
-/** 固定池择时模板：BTC、ETH 站上 20 期均线时持有。 */
-export const signalTemplate = `name: majors_trend
+/** 固定标的择时模板：BTC、ETH 站上 20 期均线时持有。score 取常数、select.top 取足够大，表示池里满足进出场条件的都持有。 */
+export const timingTemplate = `name: majors_trend
 bar: 1m
 
 rules:
   - id: majors_trend
     name: 主流币均线择时
-    type: signal
+    type: rank
     pool: [BTC-USDT, ETH-USDT]
-    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
-    exit: "bars[0].bias < 1"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+      exit: "bars[0].bias < 1"
     weight: {total: 0.6}
 
 portfolio:
@@ -80,7 +89,7 @@ portfolio:
 /** 混合市场示例：market 写 {select: both, prefer: swap}，同一个币两边都有时优先永续下单；空头只走永续（现货不能做空）。 */
 export const mixedMarketTemplate = `# 混合市场示例：从现货与永续两边选币，空头只走永续。
 # 创建实例时绑定计算任务：现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务；
-# 混合市场不能用 tranche 规则与 factor_params。
+# 混合市场不能用 factor_params。
 name: mixed_market_momentum
 bar: 1h
 
@@ -162,8 +171,8 @@ export interface DSLRulePreview {
   id: string;
   name: string;
   type: string;
-  /** tranche 规则展开后的子策略数（参数表行数，没有参数表时为 1）；其他类型为 0。 */
-  subStrategies: number;
+  /** 固定标的择时（显式 pool 加 hold）；不是时不出现。 */
+  timing?: boolean;
   /** 规则级市场（spot 或 swap）；没写时不出现。 */
   market?: string;
 }
@@ -198,6 +207,8 @@ export interface DSLPreview {
   market: string;
   /** 策略池策略才有；此时 rules 为空。 */
   pool?: DSLPoolPreview;
+  /** 写了 factor_params（策略逐期求出可变成员下一期的参数）时为 true；回放只能用“因子现算”来源。没写时不出现。 */
+  tuned?: boolean;
 }
 
 /** 本地只做 YAML 与结构预检；字段、表达式与列的完整校验以服务端 ValidateStrategy 为准。 */
@@ -230,24 +241,19 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       const id = typeof rule?.id === "string" ? rule.id : "";
       const type = typeof rule?.type === "string" ? rule.type : "";
       if (!id) diagnostics.push({ message: `rules[${index}] 缺少 id` });
-      if (type !== "rank" && type !== "signal" && type !== "tranche")
-        diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank、signal 或 tranche` });
-      const rows = rule?.params?.rows;
-      const subStrategies = type === "tranche" ? (Array.isArray(rows) ? rows.length : 1) : 0;
+      if (type !== "rank") diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank` });
       const preview: DSLRulePreview = {
         id: id || `#${index + 1}`,
         name: typeof rule?.name === "string" ? rule.name : "",
-        type,
-        subStrategies
+        type
       };
+      if (rule?.pool !== undefined && rule?.hold !== undefined) preview.timing = true;
       if (rule?.market !== undefined) {
         if (rule.market in RULE_MARKET_LABELS) preview.market = rule.market;
         else diagnostics.push({ message: `rules[${index}] 的 market 只能是 spot 或 swap` });
       }
       rules.push(preview);
     });
-    if (rules.some(rule => rule.type === "tranche") && rules.some(rule => rule.type !== "tranche"))
-      diagnostics.push({ message: "含 tranche 规则的策略只能全部是 tranche 规则" });
   }
   const universe = [
     value.universe && typeof value.universe === "object" ? describeUniverse(value.universe) : "全部标的",
@@ -262,7 +268,8 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       leverage: value.portfolio?.leverage === undefined ? "1" : String(value.portfolio.leverage),
       // 策略池不写 market：池涉及的市场是各成员所需市场的并集，选币和下单按成员自己的 market
       market: hasPool ? "成员市场的并集（各成员按自己的 market）" : describeMarket(value.market),
-      ...(pool ? { pool } : {})
+      ...(pool ? { pool } : {}),
+      ...(value.factor_params !== undefined ? { tuned: true } : {})
     },
     diagnostics
   };
@@ -451,10 +458,7 @@ export function summarizeDSL(source: string): string {
   if (preview.pool) return `${preview.bar} · 策略池：${describePool(preview.pool)}`;
   if (!preview.rules.length) return "DSL 没有规则";
   const rules = preview.rules
-    .map(
-      rule =>
-        `${rule.name || rule.id}（${rule.type === "tranche" ? `tranche，${rule.subStrategies} 个子策略` : rule.type || "?"}${rule.market ? `，${RULE_MARKET_LABELS[rule.market]}` : ""}）`
-    )
+    .map(rule => `${rule.name || rule.id}（${rule.type || "?"}${rule.market ? `，${RULE_MARKET_LABELS[rule.market]}` : ""}）`)
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
 }

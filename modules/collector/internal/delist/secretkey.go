@@ -11,7 +11,7 @@ import (
 )
 
 // GatewayKeys 经网关向 SecretMgr 取币安只读 Key 的公开标识。
-// Collector 只被放行 GetReadonlyExchangeKey 这一个方法：拿不到任何密钥明文，也拿不到 Trade 的交易密钥。
+// 读只读 Key 时 Collector 只用 GetReadonlyExchangeKey（另一个放行的方法 GetCloudCredential 只读云账号密钥）：只拿到只读 Key 的公开标识，拿不到它的私钥，也拿不到 Trade 的交易密钥。
 type GatewayKeys struct {
 	Gateway gatewayclient.Invoker
 }

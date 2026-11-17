@@ -9,7 +9,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -17,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +29,7 @@ func writeCachedConsoleCA(t *testing.T, address string) string {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test Caddy Root"},
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test MooX Root"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
 	}
@@ -45,7 +46,7 @@ func writeCachedConsoleCA(t *testing.T, address string) string {
 
 func TestSetupInitSummaryReportsBrowserTrustForInternalCA(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	control := snapshot.Manifest.ControlHost()
 	want := writeCachedConsoleCA(t, control.Address)
 
@@ -74,10 +75,26 @@ func TestSetupBrowserTrustWithoutTerminalPrintsManualCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	refresh, terminal := refreshSetupConsoleCA, setupHasTerminal
 	t.Cleanup(func() { refreshSetupConsoleCA, setupHasTerminal = refresh, terminal })
-	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error { return nil }
+	refreshSetupConsoleCA = func(context.Context, *topology.Config) error { return nil }
 	setupHasTerminal = func() bool { return false }
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	err := ensureSetupBrowserCATrust(context.Background(), snapshot)
 	require.ErrorContains(t, err, "browser_trust_manual")
 	require.ErrorContains(t, err, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
+}
+
+// 浏览器信任每次都先经 SSH 从控制机取回内部 CA 根证书，取不回时报 browser_ca_trust_failed，不用本机残留的旧副本。
+func TestEnsureSetupBrowserCATrustRefreshesNativeControlCA(t *testing.T) {
+	original := refreshSetupConsoleCA
+	t.Cleanup(func() { refreshSetupConsoleCA = original })
+	calls := 0
+	refreshSetupConsoleCA = func(context.Context, *topology.Config) error {
+		calls++
+		return errors.New("ssh unavailable")
+	}
+
+	err := ensureSetupBrowserCATrust(context.Background(), testSetupSnapshot(t))
+	require.ErrorContains(t, err, "browser_ca_trust_failed")
+	require.True(t, strings.Contains(err.Error(), "ssh unavailable"))
+	require.Equal(t, 1, calls)
 }

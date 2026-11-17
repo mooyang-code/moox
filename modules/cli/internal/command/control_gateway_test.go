@@ -2,42 +2,46 @@ package command
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type cleanupGatewayWire struct {
-	cloudfunctionpb.UnimplementedCloudFunctionMgr
+	collectorpb.UnimplementedCollectMgr
 	directorypb.UnimplementedDirectory
 }
 
 func (cleanupGatewayWire) GetDirectory(context.Context, *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
-	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "unused.example.test"}}, Services: map[string][]string{"trpc.moox.cloudfunction.CloudFunctionMgr": {"control"}}}
-	version, err := directory.VersionHash()
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: version, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "unused.example.test"}}, Services: map[string]*directorypb.ServiceHosts{"trpc.moox.cloudfunction.CloudFunctionMgr": {HostIds: []string{"control"}}}}, err
+	// 目录只有主机与部署，CLI 按内嵌的服务目录自己展开出 CollectMgr 在 control 上。
+	return &directorypb.GetDirectoryRsp{Changed: true, Version: "v1",
+		Hosts:       []*directorypb.DirectoryHost{{HostId: "control", Address: "unused.example.test", Reachability: "direct", Enabled: true}},
+		Deployments: []*directorypb.DirectoryDeployment{{HostId: "control", ComponentId: "admin", Enabled: true}, {HostId: "control", ComponentId: "collector", Enabled: true}}}, nil
 }
-func (cleanupGatewayWire) GetFunctionJob(_ context.Context, req *cloudfunctionpb.GetFunctionJobReq) (*cloudfunctionpb.GetFunctionJobRsp, error) {
-	return &cloudfunctionpb.GetFunctionJobRsp{RetInfo: &cloudfunctionpb.RetInfo{}, Job: &cloudfunctionpb.FunctionJobSummary{JobId: req.GetJobId()}}, nil
+func (cleanupGatewayWire) ListCloudAccounts(context.Context, *collectorpb.ListCloudAccountsReq) (*collectorpb.ListCloudAccountsRsp, error) {
+	return &collectorpb.ListCloudAccountsRsp{RetInfo: &commonpb.RetInfo{}, Accounts: []*collectorpb.CloudAccount{{AccountId: "account-1", Provider: "tencent"}}}, nil
 }
 
-func TestCommandGatewaySurvivesCanceledOperationForFencedCleanupAndThenCloses(t *testing.T) {
+// 命令自己的网关：一次调用被取消不影响之后的调用（收尾调用用 WithoutCancel 的上下文），关闭之后调用失败。
+func TestCommandGatewaySurvivesCanceledOperationAndThenCloses(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	wire := &cleanupGatewayWire{}
-	cloudfunctionpb.RegisterCloudFunctionMgrService(service, wire)
+	collectorpb.RegisterCollectMgrService(service, wire)
 	directorypb.RegisterDirectoryService(service, wire)
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { _ = service.Close(nil) })
@@ -47,10 +51,9 @@ func TestCommandGatewaySurvivesCanceledOperationForFencedCleanupAndThenCloses(t 
 	require.NoError(t, os.MkdirAll(config, 0700))
 	knownHosts := filepath.Join(config, "known_hosts")
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0600))
-	snapshot := &setupconfig.Snapshot{}
-	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "console-proxy", "web-host", "eventbus")
-	require.NoError(t, os.WriteFile(filepath.Join(config, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: assigned-command-key\nkey_file: caller-moox-cli.key\n"), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(config, "caller-moox-cli.key"), []byte("command-fixture-secret-at-least-32-bytes"), 0600))
+	snapshot := &topology.Config{}
+	testfixture.SetHost(snapshot, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "eventbus")
+	require.NoError(t, os.WriteFile(filepath.Join(config, "moox-cli.key"), []byte(gatewayauth.EncodeSigningKey(authtest.Identity("moox-cli").Key)+"\n"), 0600))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	gateway, err := openCommandGateway(ctx, "", snapshot)
@@ -58,12 +61,12 @@ func TestCommandGatewaySurvivesCanceledOperationForFencedCleanupAndThenCloses(t 
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
 	client := &adminclient.Client{Gateway: gateway}
 	cancel()
-	_, err = client.GetFunctionJob(ctx, "job-1")
+	_, err = client.ListCloudAccounts(ctx, "")
 	require.Error(t, err)
-	status, err := client.GetFunctionJob(context.WithoutCancel(ctx), "job-1")
+	accounts, err := client.ListCloudAccounts(context.WithoutCancel(ctx), "")
 	require.NoError(t, err)
-	require.Equal(t, "job-1", status.Job.JobID)
+	require.Equal(t, "account-1", accounts[0].AccountID)
 	require.NoError(t, gateway.Close())
-	_, err = client.GetFunctionJob(context.WithoutCancel(ctx), "job-1")
+	_, err = client.ListCloudAccounts(context.WithoutCancel(ctx), "")
 	require.Error(t, err)
 }

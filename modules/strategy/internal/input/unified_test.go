@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // engineMarket 是一个市场的输入，测试里按值比较。
@@ -360,9 +361,9 @@ func TestRowsMemoKeyDistinguishesSubjects(t *testing.T) {
 	}
 }
 
-// 统一数据集某一期只有现货一个 series_tag（Storage 不生成序列名单）：按标的的失败名单经 ForMarket 原样带到两个市场。
-// 读完行之后，本期一行也没有的永续丢掉这些名单、按无行处理：现货有没有（与永续无关的）失败，永续的结论都一样，不会因为现货的失败被判成整体失败。
-func TestLoadBarUnifiedSingleTagFallbackDropsFailuresOnRowlessMarket(t *testing.T) {
+// 统一数据集某一期只有现货一个 series_tag：失败按序列归到现货，本期一行也没有的永续按无行处理，
+// 现货有没有失败，永续的结论都一样。
+func TestLoadBarUnifiedSingleTagPeriodKeepsRowlessMarketUnaffected(t *testing.T) {
 	load := func(failed []string) (spot, swap engineMarket) {
 		t.Helper()
 		client := newUnifiedClient()
@@ -373,9 +374,10 @@ func TestLoadBarUnifiedSingleTagFallbackDropsFailuresOnRowlessMarket(t *testing.
 		client.rows = func(Query) ([]Row, uint64, error) {
 			return unifiedRows(barStart, map[string]float64{"BTC-USDT": 1, "ETH-USDT": 2, "SOL-USDT": 3}, nil), 7, nil
 		}
-		unified := readiness.Result{FailedByFactor: map[string][]string{}}
-		if len(failed) > 0 {
-			unified.FailedByFactor["ma"] = failed
+		unified := readiness.Result{FailedByFactor: map[string][]string{}, FailedSeries: map[string][]seriesset.Series{}}
+		for _, subject := range failed {
+			unified.FailedByFactor["ma"] = append(unified.FailedByFactor["ma"], subject)
+			unified.FailedSeries["ma"] = append(unified.FailedSeries["ma"], seriesset.Series{SubjectID: subject, SeriesTag: spotTag})
 		}
 		universe := []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT"}
 		loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{

@@ -18,8 +18,6 @@ func TestObservabilityDeliveryPolicy(t *testing.T) {
 		{name: "invalid environment", document: "{}", env: "neww", invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-			t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 			t.Setenv("MOOX_OBSERVABILITY_DELIVER_POLICY", tc.env)
 			cfg, err := Load(writeConfig(t, tc.document))
 			if tc.invalid {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+
 	"github.com/mooyang-code/moox/modules/eventbus/internal/bootstrap"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
@@ -13,10 +15,12 @@ import (
 )
 
 func main() {
+	// 业务配置的位置；要在 trpc.NewServer 解析命令行之前定义。
+	configPath := flag.String("config", "config/app.yaml", "eventbus 业务配置")
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
 	trpclog.InstallServiceName("eventbus")
-	server, err := bootstrap.Initialize(ctx, s)
+	server, err := bootstrap.Initialize(ctx, s, *configPath)
 	if err != nil {
 		// Fatalf 写完会先把日志队列发完再退出。EventBus 自己起不来时这一条发不到 Monitor，只在本机文件里。
 		log.Fatalf("eventbus bootstrap failed: %v", err)

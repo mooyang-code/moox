@@ -14,17 +14,18 @@ import (
 const metricsTimerService = "trpc.moox.strategy.metrics.timer"
 
 // registerMetricsReporter 每个定时周期先刷新实例的期望数据集清单，再把指标快照发给 Monitor。
-func registerMetricsReporter(s *server.Server, observer *instanceObserver) error {
+// 返回的处理器在健康检查与生命周期建好之后接上就绪判断与生命周期（见 Initialize）。
+func registerMetricsReporter(s *server.Server, observer *instanceObserver) (*report.Handler, error) {
 	if s == nil {
-		return errors.New("策略指标上报需要 tRPC 服务")
+		return nil, errors.New("策略指标上报需要 tRPC 服务")
 	}
 	service := s.Service(metricsTimerService)
 	if service == nil {
-		return errors.New("策略指标定时服务 " + metricsTimerService + " 未配置")
+		return nil, errors.New("策略指标定时服务 " + metricsTimerService + " 未配置")
 	}
 	handler, err := report.NewHandler(report.DefaultConfig("strategy", "strategy"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// 策略结果的输出水位在每期运行完成时前进：立刻补报，Monitor 约 1 秒内看到，不等 30 秒定时上报。
 	handler.FlushOnOutputAdvance()
@@ -36,5 +37,5 @@ func registerMetricsReporter(s *server.Server, observer *instanceObserver) error
 		}
 		return handler.Handle(ctx)
 	}))
-	return nil
+	return handler, nil
 }

@@ -2,13 +2,13 @@
 # 交易模块测试网冒烟：在币安现货、币安合约、OKX 模拟盘现货、OKX 模拟盘永续上各挂一笔被动限价买单，
 # 走完提交、查询、私有流、同步、重启恢复和撤单清理。会向测试网下真实订单，由用户或维护者执行。
 #
-# 要在部署了 trade 单元的主机上跑：冒烟工具按 trade 单元的配置找网关客户端的 key_id 和签名密钥，
+# 要在部署了 trade 单元的主机上跑：冒烟工具按 trade 组件的配置找网关客户端的主机 ID 和主机签名私钥，
 # 按 <配置目录>/../../host-gateway/config/app.yaml 找本机 host-gateway，再经它读交易所密钥。
 #
 # 必填环境变量：
 #   MOOX_TRADE_TESTNET_CONFIRM=YES        确认允许向测试网下真实订单
 #   MOOX_TRADE_TESTNET_CONFIG             已部署 trade 单元的配置文件（<单元目录>/config/app.yaml）；
-#                                         仓库里的 modules/trade/config/app.yaml 没有 key_id，不能用
+#                                         仓库里的 modules/trade/config/app.yaml 没有主机 ID，不能用
 #   MOOX_BINANCE_TESTNET_SECRET_ID        币安现货测试网密钥的 Secret ID
 #   MOOX_BINANCE_TESTNET_SWAP_SECRET_ID   币安合约测试网密钥的 Secret ID
 #   MOOX_OKX_TESTNET_SECRET_ID            OKX 模拟盘密钥的 Secret ID（现货、永续共用）

@@ -245,10 +245,10 @@ button.ghost.away { visibility: hidden; }
         <div>
           <p class="vow">你在这里填写的所有内容，<b>不会发给 AI，也不会发给 MooX 开发者</b>。</p>
           <dl>
-            <dt>只留在这台电脑</dt><dd>密码、密钥和整份配置都在本机用 AES-256 加密后保存，文件只有你本人能读；解密密钥放在<span id="key-store">系统钥匙串</span>，不写进配置文件。</dd>
+            <dt>只留在这台电脑</dt><dd>配置分成两份文件：服务器与部署设置一份，不含秘密；密码和密钥单独一份，用 AES-256 加密后保存，只有你本人能读。解密密钥放在<span id="key-store">系统钥匙串</span>，不写进配置文件。</dd>
             <dt>SSH 密码不保存</dt><dd>只用来第一次开通免密登录，用完即丢。</dd>
             <dt>自己验证登录</dt><dd>MooX 用专用密钥，要写 <code>ssh -i ~/.ssh/moox_ed25519 用户@IP</code>；普通 ssh 询问密码不代表没开通。</dd>
-            <dt>换电脑能找回</dt><dd>部署完成后，整份配置会用你设的管理员密码再加密一次，备份到你自己的管理后台。</dd>
+            <dt>换电脑能找回</dt><dd>部署完成后，两份文件会用你设的管理员密码再加密一次，备份到你自己的管理后台。</dd>
           </dl>
         </div>
       </section>
@@ -350,7 +350,7 @@ button.ghost.away { visibility: hidden; }
     <section class="page finish" id="page-7" hidden>
       <div class="mark">✓</div>
       <h1>配置完成</h1>
-      <p class="lede">配置已加密保存在这台电脑上，可以关闭这个页面，回到 Agent 继续部署。</p>
+      <p class="lede">配置已保存在这台电脑上（密码和密钥加密保存），可以关闭这个页面，回到 Agent 继续部署。</p>
       <p class="lede">以后想查看或修改配置，对 Agent 说「打开配置页」。换了电脑，对 Agent 说「恢复配置」，再用管理员账号登录管理台即可取回。</p>
     </section>
   </main>

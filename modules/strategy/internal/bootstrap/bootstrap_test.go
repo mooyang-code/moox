@@ -21,9 +21,6 @@ func TestInitializeMarksInterruptedReplays(t *testing.T) {
 	t.Setenv("MOOX_INSTANCE_ID", "strategy-test")
 	t.Setenv("MOOX_NODE_ID", "strategy-node")
 	t.Setenv("MOOX_BOOT_ID", "strategy-boot")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "test-access")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "test-secret")
-	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "test-v1")
 	// 进程级默认注册表在多次初始化之间需要干净。
 	previous := prometheus.DefaultRegisterer
 	prometheus.DefaultRegisterer = prometheus.NewRegistry()

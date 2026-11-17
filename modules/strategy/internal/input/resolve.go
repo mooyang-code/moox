@@ -220,9 +220,12 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 			}
 		}
 	}
-	resolved.FactorParams = make(map[string][]ParamDecl, len(members))
-	for key, member := range members {
-		resolved.FactorParams[key] = member.Params
+	// 只有声明了 factor_params 的策略逐期提交参数，才固化参数声明；没有声明的策略只读可变成员的列，不提交参数。
+	if len(strategy.FactorParams) > 0 {
+		resolved.FactorParams = make(map[string][]ParamDecl, len(members))
+		for key, member := range members {
+			resolved.FactorParams[key] = member.Params
+		}
 	}
 	contracts := map[string]string{} // factor_id → definition_hash：同一定义的多个成员只读一次
 	bind := func(member, factorID, kind string) (string, error) {
@@ -730,6 +733,3 @@ func (r Resolved) ReadinessBinding() readiness.Binding {
 	}
 	return readiness.Binding{Factors: factors, PreviousFactors: append([]string(nil), r.PreviousFactors...)}
 }
-
-// ReferencedTags 返回 DSL 引用的全部标签（去重、排序），回放按它预取标签成员。
-func ReferencedTags(strategy dsl.Strategy) []string { return referencedTags(strategy) }

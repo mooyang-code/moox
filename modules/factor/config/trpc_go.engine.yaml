@@ -18,8 +18,16 @@ server:
       port: 11417
       network: tcp
       protocol: http_no_protocol
-      # 健康检查端口同时承载导入服务的本地写入接口（/v1/series/...），一批最多 64MiB，写入要比健康检查慢得多
-      timeout: 120000
+      timeout: 10000
+    # 入站服务：只监听本机，由因子机的主机网关转发。回放“因子现算”给策略服务；生命周期、任务检查与导入的本地写入给 moox-cli。
+    # 超时按最慢的 OpenReplay（读整段本地快照）设 10 分钟，与服务目录的路由超时一致；其余方法由路由按 120 秒截断。
+    - name: trpc.moox.factor.EngineControl
+      ip: 127.0.0.1
+      port: 11423
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 600000
 
 plugins:
   metrics:

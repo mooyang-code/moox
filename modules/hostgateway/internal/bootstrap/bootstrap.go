@@ -8,8 +8,8 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,6 +110,10 @@ func (r *Runtime) Refresh(ctx context.Context) error {
 
 func (r *Runtime) apply(view *snapshot.View) {
 	r.state.Apply(view)
+	// 每份新快照只在应用时记一次：Admin 比这台网关新时会出现，被忽略的组件要等网关升级后才有路由。
+	if unknown := view.Unknown(); len(unknown) != 0 {
+		r.warn("host gateway ignored components missing from its embedded catalog: host_id=" + r.hostID + " components=" + strings.Join(unknown, ","))
+	}
 	r.health.ApplyRoutes(view.Hash(), view.Count(), view.Disabled())
 }
 
@@ -181,10 +185,6 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		return err
 	}
 	health := health.NewState()
-	healthHandler, err := authenticatedHealthHandler(health.Handler())
-	if err != nil {
-		return err
-	}
 	// tRPC repairs process-wide codec/client configuration. Finish setup before
 	// creating any control connection or accepting requests.
 	timers := trpc.NewServer()
@@ -200,11 +200,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := cache.Prepare(); err != nil {
 		return err
 	}
-	nonces, err := store.OpenNonces(filepath.Join(cfg.Store.Path, "nonces"))
-	if err != nil {
-		return err
-	}
-	defer nonces.Close()
+	// 防重放记录只在内存里：早于本进程启动时间的签名一律拒绝，所以重启不会放过重放。
+	started := time.Now()
+	replay := gatewayauth.NewReplay(started)
 	runtime := New(Options{HostID: cfg.Host.ID, Snapshots: cache, Control: control, Health: health})
 	initialCtx, cancelInitial := context.WithTimeout(ctx, 15*time.Second)
 	err = runtime.Initialize(initialCtx)
@@ -212,8 +210,18 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err != nil {
 		return err
 	}
-	health.SetStorageCheck(func() error { return errors.Join(cache.Check(), nonces.Check()) })
-	proxy, err := router.NewService(router.ServiceOptions{State: runtime.State(), Nonces: nonces, Metrics: health})
+	health.SetStorageCheck(cache.Check)
+	serviceOptions := router.ServiceOptions{State: runtime.State(), Replay: replay, Metrics: health}
+	// 外部入口：只有配置了 external_addr 的主机才开（部署按主机登记的 external_entry 渲染）。
+	if cfg.Server.ExternalAddr != "" {
+		forwarder, err := openEntryForwarder(cfg, credentials, runtime.State())
+		if err != nil {
+			return err
+		}
+		defer forwarder.Close()
+		serviceOptions.Remote = forwarder
+	}
+	proxy, err := router.NewService(serviceOptions)
 	if err != nil {
 		return err
 	}
@@ -221,8 +229,14 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := registerRouteRefreshTimer(timers, runtime); err != nil {
 		return err
 	}
-	if err := registerMetricsReporter(timers); err != nil {
+	if err := registerMetricsReporter(timers, health.Readiness); err != nil {
 		return err
+	}
+	// 签名时间只精确到秒：等过了启动时刻所在的这一秒再开始监听（最多 1 秒）。这样监听之后才签的请求一定不早于启动时间，
+	// 启动前签好、监听后才到的请求被拒后，调用方立即重签的那一次也一定能过。
+	// 睡眠按单调时钟走，期间墙上时钟被回拨时会提前醒来，所以按墙上时钟复查。
+	for target := started.Truncate(time.Second).Add(time.Second); time.Now().Before(target); {
+		time.Sleep(time.Until(target))
 	}
 	opened, err := listener.Open(ctx, cfg, material)
 	if err != nil {
@@ -232,7 +246,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	relayCtx, stopRelay := context.WithCancel(ctx)
 	defer stopRelay()
 	if cfg.Host.ID == cfg.Control.HostID {
-		server, err := relay.NewServer(relay.ServerOptions{State: runtime.State(), Nonces: nonces})
+		server, err := relay.NewServer(relay.ServerOptions{State: runtime.State(), Replay: replay})
 		if err != nil {
 			return err
 		}
@@ -258,8 +272,19 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err := directory.Register(local, runtime.State()); err != nil {
 		return err
 	}
-	healthServer := newHealthHTTPServer(healthHandler)
-	results := make(chan serverResult, 4)
+	entries := []interface{ Close(chan struct{}) error }{remote, local}
+	healthServer := newHealthHTTPServer(health.Handler())
+	results := make(chan serverResult, 5)
+	servers := 4
+	if opened.External != nil {
+		external := listener.TRPC(opened.External, "trpc.moox.hostgateway.External", drain)
+		if err := proxy.RegisterExternal(external); err != nil {
+			return err
+		}
+		entries = append(entries, external)
+		servers++
+		go func() { results <- serverResult{"external tRPC", external.Serve()} }()
+	}
 	go func() { results <- serverResult{"remote tRPC", remote.Serve()} }()
 	go func() { results <- serverResult{"local tRPC", local.Serve()} }()
 	go func() {
@@ -288,9 +313,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	}
 	// 先拒绝新请求，再等待已接纳的请求。
 	drain.Begin()
-	// 两个入口并行排空，总等待不超过 DrainTimeout。
+	// 各入口并行排空，总等待不超过 DrainTimeout。
 	var draining sync.WaitGroup
-	for _, service := range []interface{ Close(chan struct{}) error }{remote, local} {
+	for _, service := range entries {
 		draining.Add(1)
 		go func() {
 			defer draining.Done()
@@ -299,7 +324,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	}
 	draining.Wait()
 	closeTimers()
-	for completed < 4 {
+	for completed < servers {
 		<-results
 		completed++
 	}
@@ -352,7 +377,7 @@ func startRelayClient(ctx context.Context, cfg config.Config, material *tlsconfi
 	return nil
 }
 
-// relayLocalPorts 返回出站主机允许 control 接入的本机端口：网关跨主机端口、组件健康端口与外部程序的 relay_http 端口。
+// relayLocalPorts 返回出站主机允许 control 接入的本机端口：网关跨主机端口与外部程序的 relay_http 端口（健康端口不中转）。
 func relayLocalPorts(catalog servicecatalog.Catalog, remotePort string) func(int) bool {
 	return func(port int) bool {
 		return strconv.Itoa(port) == remotePort || catalog.LocalRelayPort(port)
@@ -371,9 +396,6 @@ func relayStatusProto(items []relay.Status) []*pb.RelaySessionStatus {
 	return result
 }
 
-func authenticatedHealthHandler(next http.Handler) (http.Handler, error) {
-	return healthz.WrapFromEnv(next)
-}
 func newHealthHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 }

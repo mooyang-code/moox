@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -21,12 +22,26 @@ rules:
     weight: 1
 `
 
-// tasksFake 是 FactorMgr 任务关联接口的替身。
+// tasksFake 是 FactorMgr 任务关联接口的替身：binds 记关联调用，gets 记读取任务的调用；status 是读取时返回的任务状态（空表示 enabled）。
 type tasksFake struct {
 	bound  BoundTask
 	err    error
+	status string
 	binds  []string
+	gets   []string
 	submit []ParamSubmission
+}
+
+func (f *tasksFake) GetFactorTask(_ context.Context, taskID string) (FactorTaskRecord, error) {
+	f.gets = append(f.gets, taskID)
+	if f.err != nil {
+		return FactorTaskRecord{}, f.err
+	}
+	status := f.status
+	if status == "" {
+		status = "enabled"
+	}
+	return FactorTaskRecord{SpaceID: "space", Status: status}, nil
 }
 
 func (f *tasksFake) BindFactorTask(_ context.Context, taskID, instanceID string) (BoundTask, error) {
@@ -114,10 +129,16 @@ func TestResolveRejectsMismatchedFactorParams(t *testing.T) {
 	if err := resolve(strings.Replace(tunedDSL, "window: 20", "period: 20", 1)); err == nil || !strings.Contains(err.Error(), "factor_params.bias__var.period") || !strings.Contains(err.Error(), "window") {
 		t.Fatalf("应指出没有这个参数并列出可调参数：%v", err)
 	}
-	if err := resolve(strings.Replace(tunedDSL, "bias__var:\n    window", "ma__var:\n    window", 1)); err == nil || !strings.Contains(err.Error(), "成员 ma__var 不是关联任务的可变成员") {
+	if err := resolve(strings.Replace(tunedDSL, "bias__var:\n    window", "ma__var:\n    window", 1)); err == nil || !strings.Contains(err.Error(), "成员 ma__var 不是所选任务的可变成员") {
 		t.Fatalf("任务里没有的可变成员不能写 factor_params：%v", err)
 	}
-	if err := resolve(strings.Replace(tunedDSL, "factor_params:\n  bias__var:\n    window: 20\n", "", 1)); err == nil || !strings.Contains(err.Error(), "bias__var 在 factor_params 里没有输出") {
+	// 声明了 factor_params 的策略要驱动任务的全部可变成员：任务另有一个可变成员 ema__var 没有输出时拒绝。
+	twoVars := tunedClient()
+	twoVars.factors["ema"] = FactorInfo{FactorID: "ema", DefinitionHash: "sha256:ema", Params: []ParamDecl{{Name: "span", Type: "int", Min: 2, Max: 60, Default: 9}}}
+	view := twoVars.views["view_factor_i1"]
+	view.Columns = append(view.Columns, memberColumn("ema__var", "ema__var", "ema", "var"))
+	twoVars.views["view_factor_i1"] = view
+	if _, _, err := (Service{Client: twoVars, Sets: &tasksFake{}}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, tunedDSL)); err == nil || !strings.Contains(err.Error(), "ema__var 在 factor_params 里没有输出") {
 		t.Fatalf("可变成员没有输出应拒绝：%v", err)
 	}
 	withParams := strings.Replace(tunedDSL, "select: {top: 1}", `select: {top: 1}
@@ -160,6 +181,45 @@ func TestResolveInstanceChecksTaskBinding(t *testing.T) {
 	}
 	if _, _, err := (Service{Client: tunedClient(), Sets: &tasksFake{err: context.DeadlineExceeded}}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy); err == nil {
 		t.Fatal("关联失败应拒绝")
+	}
+}
+
+// 没有声明 factor_params 的实例不关联任务（批 3 T9）：任务带可变成员、甚至已关联到别的实例时，只读它的列；启用只核对任务已启用，
+// 绑定解析里不固化参数声明（不提交参数）。任务被停用时启用被拒。
+func TestResolveInstanceWithoutFactorParamsDoesNotBind(t *testing.T) {
+	plain := strings.Replace(tunedDSL, "factor_params:\n  bias__var:\n    window: 20\n", "", 1)
+	tasks := &tasksFake{bound: BoundTask{TaskID: "ftask_i1", Status: "enabled", BoundInstanceID: "i_tuned"}}
+	resolved, program, err := Service{Client: tunedClient(), Sets: tasks}.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, plain))
+	if err != nil {
+		t.Fatalf("不调参的实例应能读带可变成员的任务：%v", err)
+	}
+	if len(tasks.binds) != 0 || strings.Join(tasks.gets, ",") != "ftask_i1" {
+		t.Fatalf("不调参的实例不关联任务、只读任务状态：binds=%v gets=%v", tasks.binds, tasks.gets)
+	}
+	if len(resolved.FactorParams) != 0 || len(program.Params) != 0 {
+		t.Fatalf("不调参的实例不固化参数声明：%+v %+v", resolved.FactorParams, program.Params)
+	}
+	if got := resolved.Columns["bias__var"]; got.MemberKind != "var" || resolved.Factors["bias__var"] != readiness.Contract("sha256:bias", "var") {
+		t.Fatalf("可变成员的列照常绑定：%+v %v", got, resolved.Factors)
+	}
+	encoded, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "factor_params") || strings.Contains(string(encoded), "bound") {
+		t.Fatalf("不调参实例的 resolved_json 不带参数声明，也不记关联：%s", encoded)
+	}
+	// 两个不调参的实例引用同一个任务：都能启用，都不关联。
+	again := &tasksFake{}
+	if _, _, err := (Service{Client: tunedClient(), Sets: again}).ResolveInstance(context.Background(), "i2", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, plain)); err != nil || len(again.binds) != 0 {
+		t.Fatalf("第二个不调参的实例也应能启用且不关联：%v binds=%v", err, again.binds)
+	}
+	disabled := &tasksFake{status: "disabled"}
+	if _, _, err := (Service{Client: tunedClient(), Sets: disabled}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, plain)); err == nil || !strings.Contains(err.Error(), "已启用的任务") {
+		t.Fatalf("任务被停用时不调参的实例启用应被拒：%v", err)
+	}
+	if len(disabled.binds) != 0 {
+		t.Fatalf("任务被停用时也不关联：%v", disabled.binds)
 	}
 }
 

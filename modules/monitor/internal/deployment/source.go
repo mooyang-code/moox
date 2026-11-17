@@ -1,5 +1,4 @@
-// Package deployment discovers Monitor checks from the shared catalog and
-// SysDeploy v2. All RPCs borrow the process-owned gateway client.
+// Package deployment 从共享目录与 SysDeploy v2 同步部署拓扑（每台主机应该有哪些组件）。所有 RPC 借用进程的网关客户端。
 package deployment
 
 import (
@@ -28,8 +27,6 @@ type Snapshot struct {
 	Catalog     servicecatalog.Catalog
 	Hosts       []*adminpb.DeploymentHost
 	Deployments []*adminpb.ComponentDeployment
-	// LocalHostID 由同步器填入（Monitor 所在主机），不来自 Admin。
-	LocalHostID string
 }
 
 type Source interface {

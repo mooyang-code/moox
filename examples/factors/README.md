@@ -25,5 +25,5 @@
 
 导入方式：
 
-- `moox-cli setup factors`：在 `moox.toml` 的 `[[factors.definitions]]` 中写 `factor_id` 与 `file = "timeseries.yaml"`；
+- `moox-cli factor task apply --file <因子任务文件>`：在因子任务文件（格式同 `config/setup/factor-tasks.yaml`）的 `definitions` 里写 `{factor_id: bias, file: timeseries.yaml}`，`source_dir` 指向这个目录，任务的 `members` 里引用它；
 - `moox-factor-mgr-cli import --file timeseries.yaml --factor-id bias`，或 `import-catalog --dir <目录>` 导入目录下全部 `*.yaml`。

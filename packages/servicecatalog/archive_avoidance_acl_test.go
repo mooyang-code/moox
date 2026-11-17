@@ -10,7 +10,7 @@ func TestArchiveMgrOnlyReadsCollectorStatus(t *testing.T) {
 	if !ok {
 		t.Fatalf("目录里没有 %s", path)
 	}
-	for _, method := range service.Methods {
+	for _, method := range service.MethodNames() {
 		want := method == "GetCollectorStatus"
 		if got := c.Allowed("archive-mgr", path, method); got != want {
 			t.Errorf("archive-mgr 调用 CollectMgr.%s：allowed=%v，期望 %v", method, got, want)

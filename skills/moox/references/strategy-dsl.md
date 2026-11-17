@@ -1,7 +1,7 @@
 # 策略 DSL 语法与写入流程
 
 策略用一份 YAML（DSL）描述：怎么在截面上选标的、怎么配权。时序计算（均线、动量、分位）一律写成因子（见 [factor-dsl.md](factor-dsl.md)），
-策略只在截面上过滤、打分、配权。Go 代码只提供通用规则类型（`rank`、`signal`、`tranche`），新策略写配置即可，不改代码。
+策略只在截面上过滤、打分、配权。Go 代码只提供一种通用规则类型（`rank`），新策略写配置即可，不改代码。
 
 按功能讲写法、带例子与逐步推演的完整手册见 `docs/策略DSL手册.md`（含单标的上限、进出场持有、策略池漂移与组合约束的推演）。
 本文是 Agent 写策略时的语法速查；字段的完整语义、状态与明细以 `docs/模块/策略.md` 的第 3 节为准，解析与校验的源码在 `modules/strategy/internal/dsl/`。
@@ -23,7 +23,7 @@ sources: {daily: {bar: 1d}}    # 可选：附加列来源，规则里写 daily.�
 - 解析严格：重复键、未知字段、多文档一律拒绝，错误信息是中文。
 - 规则里引用的列名就是**因子任务结果数据集的列名**，由成员键推导：`因子ID[__参数段][__输出名]`，参数全为默认值时省略参数段，可变成员以 `__var` 结尾
   （例如成员 `ma` 窗口 5 的列是 `ma__5`）。创建实例选好因子任务后，页面和校验报错都会列出该任务的全部列。
-- 限制：DSL 文本 ≤ 64 KiB（含参数表的策略放宽到 1 MiB）；单条表达式 ≤ 1024 字符、≤ 256 个语法节点；`portfolio.leverage` ≤ 10。
+- 限制：DSL 文本 ≤ 64 KiB；单条表达式 ≤ 1024 字符、≤ 256 个语法节点；`portfolio.leverage` ≤ 10。
 
 ### market：市场模式
 
@@ -47,9 +47,9 @@ market:
 - 同一个币的现货和永续是两个独立的目标，不互相抵消；空头一律在永续。
 - 上期已持有正权重目标的币，本期沿用它所在的市场（避免永续偶尔缺数时来回倒仓），直到权重归零。
 - 一个市场的因子本期被跳过，或失败（时序因子在该市场整体晚到、读取的标的全部失败；失败的标的占比超过 `portfolio.max_missing`，已持仓的币即使年龄没通过也计入）时，这个市场的币本期不可用：已持仓的保持不动（包括永续空头），新开仓用另一个市场。选币市场、或所有市场都这样不可用时整期按 `market_failed` 跳过（数据类原因，不是“积累中”，持续出现要看数据集新鲜度告警）。只涉及单个市场的策略仍按普通缺数处理。
-- **两种输入方式**：同样的五种模式，因子数据可以是现货、永续各一个任务（`--factor-task spot=… --factor-task swap=…`），也可以是**统一数据集上的一个任务**（同一个数据集里放现货、永续两条序列，用 `series_tag` 区分；一个任务一个 View，`--factor-task multi=…`）。统一数据集上的任务必须显式写 `market`（没有可当默认值的市场），五种模式都能用，只绑这一个任务，不支持 `factor_params`、不能进策略池、不支持闭环回放（研究回放可以）；建实例时要把任务登记为 `multi`。两种方式的目标一致：现货、永续两条序列并存不算歧义，永续上失败的币现货照常，永续的因子被跳过时永续不可用、已持仓的永续保持不动。
+- **两种输入方式**：同样的五种模式，因子数据可以是现货、永续各一个任务（`--factor-task spot=… --factor-task swap=…`），也可以是**统一数据集上的一个任务**（同一个数据集里放现货、永续两条序列，用 `series_tag` 区分；一个任务一个 View，`--factor-task multi=…`）。统一数据集上的任务必须显式写 `market`（没有可当默认值的市场），五种模式都能用，只绑这一个任务，不支持 `factor_params`、不能进策略池（研究回放可以）；建实例时要把任务登记为 `multi`。两种方式的目标一致：现货、永续两条序列并存不算歧义，永续上失败的币现货照常，永续的因子被跳过时永续不可用、已持仓的永续保持不动。
 - **规则级市场**：模式含两个市场（`both/*`、`spot/swap`）时，规则可写 `market: spot` 或 `market: swap`，这条规则只用该市场的因子值选择、目标也落在该市场，同一个币在两条规则里可以落在不同市场（不互相抵消）；不沿用上期持仓市场，缺数与年龄按这个市场判断，这个市场不可用时只冻结它在这个市场的持仓。写了它的策略必须显式写 `market`；单市场模式下只能写与策略相同的市场；`market: spot` 的规则不能做空。
-- tranche 只能用在单市场模式（`spot/spot`、`swap/swap`）；纯现货的 tranche 不能做空且必须 `sizing.method: weight`；双市场模式（`both`、`spot/swap`）不支持 tranche。绑定两个任务的策略不支持 `factor_params`。
+- 绑定两个任务的策略不支持 `factor_params`。
 - 行为变化：现货权重之和超过 1、总敞口超过 `leverage` 时，现在按比例缩小并在摘要注明，不再整期跳过。
 
 - **参考市场**：单市场策略可写 `market: {select: swap, reference: [spot]}`，额外绑定另一个市场的任务（`--factor-task spot=…`），只用于 `age_markets: all` 的年龄判定，不参与选择与下单。只能写模式不涉及的市场；必须有规则写 `age_markets: all`；不支持 `factor_params`、池成员不能写、统一数据集上的任务不能再写。
@@ -72,7 +72,7 @@ rules:
 - 分组名额可以按来源列分组：`select: {top: 5, group: {by: daily.industry, max: 2}}`（来源名要已声明，列名部分是普通列名）。分组值取这一根主帧按 as-of 读到的来源值；读不到、缺一期或这一列为空的标的按缺数处理（`missing:daily.industry`），与主帧的分组列口径一致。
 - 主帧很快、来源很慢（如 5m 配 1d）时，日线可能比对齐后的一根主帧晚就绪，那几根来源列缺数：写了 `allow_empty` 的规则会清仓再买回，这类规则请配 `on_missing: {keep_bars: N}`。
 - A 股日线的时间键是交易日期的 UTC 零点（采集与策略一致）。启用 A 股来源之前，先确认 A 股日线采集任务（内置的是“A 股日线（复权、行业、财务、换手率、股本）”）与对应的 1d 因子任务已启用并补齐历史，步骤见 [`ashare-daily.md`](ashare-daily.md)。交易日 D 的日线在北京时间 D+1 日 08:00 才采集：D 日 15:00 那一根主帧要等到那时才求值，盘中各根读的是 D−1 日的日线。日线数据集的附加字段可以直接读，例如按申万一级行业分组 `group: {by: daily.sw_l1, max: 3}`。
-- 规则状态、持有计数、止损、冻结、缺数都只按主帧算。`bars[-1].daily.x`、`factor_params` 读来源列都不支持；池与池成员不能写 `sources`；闭环回放不支持（研究回放可以）。
+- 规则状态、持有计数、止损、冻结、缺数都只按主帧算。`bars[-1].daily.x`、`factor_params` 读来源列都不支持；池与池成员不能写 `sources`；写了 `sources` 的策略可以研究回放（两种来源下来源列都读 View）。
 
 ### strategy_pool：策略池
 
@@ -137,7 +137,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 - 实例要绑定的因子任务是成员所需市场的并集（现货、永续各最多一个）；View 要有 `close` 列，数据集保留期要装得下预热。
 - 启用后先在后台预热（用历史推进成员净值），预热完成前不求值（事件稍后重投）也不能 `confirm`；停用再启用时池的 DSL、绑定解析、成员都没变就沿用规则状态，只把停用期间漏掉的根用历史补上，变了（或停用太久、状态早于预热起点）才从头预热。
 - 成员净值、比例、择时与贡献写在每期结果的 `summary_json.pool`，页面在实例结果里显示。
-- 研究回放支持策略池（闭环回放不支持）：`factor_tasks` 给成员市场的并集；回放发起时固化成员（从实例发起取会话的成员快照，否则取成员的当前定义），排队期间改成员定义不影响；资金费只按池 DSL 的 `fees.funding_column`，回放任务上不能写 `funding_column`。drift 写了 `start` 或 `initial.at` 时回放起点必须等于它：写 `start` 的与同起点的预热逐期一致，写 `initial` 的只有 `at` 那一根的比例一致（预热会从 `at` 往前多推成员所需的期数）。每期记录的 `summary_json.decision.pool` 与 `decision.limits` 是池明细；`strategy_check.py targets --replay 名称=回放ID` 导出目标再用 `compare` 比对。
+- 研究回放支持策略池（只能用结果 View 来源，“因子现算”不支持）：`factor_tasks` 给成员市场的并集；回放发起时固化成员（从实例发起取会话的成员快照，否则取成员的当前定义），排队期间改成员定义不影响；资金费只按池 DSL 的 `fees.funding_column`，回放任务上不能写 `funding_column`。drift 写了 `start` 或 `initial.at` 时回放起点必须等于它：写 `start` 的与同起点的预热逐期一致，写 `initial` 的只有 `at` 那一根的比例一致（预热会从 `at` 往前多推成员所需的期数）。每期记录的 `summary_json.decision.pool` 与 `decision.limits` 是池明细；`strategy_check.py targets --replay 名称=回放ID` 导出目标再用 `compare` 比对。
 - 成员净值是模拟曲线（不模拟强平；写了 `fees.funding_column` 才计资金费：上一根收盘调仓之前的永续持仓乘本根费率，费率为正时多头付），只用来分配资金，不代表实盘收益。语义与计算顺序见 `docs/模块/策略.md` 的“策略池”。
 
 ### universe 与 portfolio
@@ -162,11 +162,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 | `type` | 用途 | 关键字段 |
 | --- | --- | --- |
-| `rank` | 截面选股 | `filter`、`score`、`select`、`weight`，可选 `holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing`、`market` |
-| `signal` | 固定池择时 | `pool`、`entry`、`exit`、`weight`，可选 `stop`、`scale`、`on_missing`、`market` |
-| `tranche` | 批次持仓：每根 K 线按本期选币新开一批，每批持有 h 期，多批叠加 | `tranche` 子策略模板、可选 `params` 参数表、`weight`，见第 4 节 |
-
-含 `tranche` 规则的策略只能全部是 `tranche` 规则，且不能写 `factor_params`；只能用在单个市场的策略（`spot/spot` 按权重持有且不做空，或 `swap/swap`），双市场模式启用被拒（S1 暂不支持双市场 tranche：市场不可用时无法冻结持仓）。
+| `rank` | 截面选股；配显式 `pool` 与 `hold` 也用来对固定标的择时 | `filter`、`score`、`select`、`weight`，可选 `pool`、`holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing`、`market` |
 
 ### rank 规则
 
@@ -181,24 +177,34 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 - 保存时要求 `cap × 选中数量 ≥ total`（预算分得完；写了 `then` 时选中数量取 `then` 的个数；个数要到运行时才知道的写法跳过这项检查，即 `then` 写比例，或没写 `then` 而 `top`/`bottom` 写比例，分不完的留现金）。`select.top` 写成大于标的数的值就等于全选。
 - `select` 的扩展：`top: 0.1`（(0, 1) 是比例，分母是通过 filter 且分数有效的样本数）配 `count_round: floor | ceil | round`、`count_min`；`range: [10, 13]` 名次闭区间（与 top/bottom、buffer 互斥）；`group: {by: 列, max: 3}` 或 `{by: 列, quotas: [2, 1], rest: 1}` 分组名额（分组值 NaN 的不入选）；`then: {score: "表达式", top: 5}` 在第一段结果上二次排序（与 buffer、hold 互斥；`top`、`bottom` 也可以写 (0, 1) 的比例，分母是第一段选中且分数有效的个数，配 `count_round`、`count_min`）。
-- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
+- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`offsets: all` 等于写出 0 到 `bars − 1`，即每根重建一个批次、每个批次持有 `bars` 根（批次最多 64 个，所以这时 `bars` 不能超过 64；要更长就放大 `bars`、`offsets` 取稀疏的几个）；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
 - `hold: {entry, exit, max_bars, cooldown_bars, allow_reentry}` 进出场持有：持有中 exit 为真、不满足 filter、持满 max_bars、止损、缺数即出场（stop 优先），空位按名次从 entry 为真且 exit 不为真的候选里补，目标数取 `select` 换算的个数（持有多于目标不裁减）。持有标的只缺 score、entry 的列时不出场。与 buffer、holding.bars/offsets、then、range、filter_after 互斥；可与 `holding.calendar`（只能一个 days）同写，只在建仓 bar 判进出场。；`allow_reentry: true` 让候选只看 entry（出场条件为真的标的也能入场、刚出场的标的当根可补回，要求 cooldown_bars 为 0），默认不写
-- `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}`（rank、signal；tranche 不支持）让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
+- `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}` 让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
+- rank 表达不了的写法（参数表式的大量子策略、按数量持有、过滤条件里用名次或分位等）见 `docs/模块/策略.md` 的“表达不了的写法（已知限制）”表；`filter_after` 是保留条件（条件为真的留下），与外部框架“成立就剔除”的后置过滤方向相反。
 - `side` 取 `long`（默认）或 `short`；空头只走永续，纯现货与股票不允许做空。
 - `market: spot | swap` 是规则级市场（见第 1 节“market：市场模式”）。
 
-### signal 规则
+### 固定标的择时
+
+不选股、只对固定的几个标的判断进出，写显式 `pool` 加 `hold`：
 
 ```yaml
 - id: btc_trend
-  type: signal
-  pool: [BTC-USDT]                          # 固定列表或 {tags: [...]}
-  entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
-  exit: "bars[0].bias < 1"
+  type: rank
+  pool: [BTC-USDT]                          # 固定列表，或 {tags: [...]}（标签池保存时不检查成员数，见下）
+  score: "0"                                # 不排序，写常数即可
+  select: {top: 10000}                      # 足够大的上限：池里满足条件的都持有
+  hold:
+    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+    exit: "bars[0].bias < 1"
   weight: {total: 0.2}
 ```
 
-先对旧理论持仓判 `exit`，再对候选判 `entry`，退出优先。
+- 每根先对持有的标的判 `exit`，再对其余标的判 `entry`；两者同根都成立不入场；持有的标的平分规则预算。
+- 它与其他 rank 规则一样参与整期跳过的检查：池里本期没有可评估的标的时整期跳过（`universe_too_small`），同策略的其他规则也不出目标——全部年龄不够，或池与本期基础集合没有交集（标的停用、退市，标签池没有成员，ID 写错）。不写 `allow_empty` 时，1～4 个标的的小池按默认 `max_missing: 0.2` 缺一个就整期跳过。
+- 池里的标的数少于 `portfolio.min_universe`：固定列表保存即拒；`{tags}` 池保存不拒，运行时成员少于 `min_universe` 就每根整期跳过。两种都要写 `allow_empty: true`；写了之后这条规则不参与整期跳过的检查，持有的标的普通缺数时出场（`exit_missing`；市场不可用、只缺上一根的仍冻结保持），建议同时写 `on_missing: {keep_bars: N}` 让缺数先冻结。
+- 有标的被冻结时，冻结的一份按上期权重保持，其余持有标的按含冻结的个数平分预算；冻结标的上期份额大于本期平分份额时规则合计会超过 `weight.total`（预算 0.5：上期 A 独占 0.5，本期 A 冻结、B 入场得 0.25，合计 0.75），只受 `portfolio.leverage` 封顶，冻结解除后恢复。
+- 止损等同出场，明细原因是 `exit_stop:<原因>`（例如 `exit_stop:stop_loss`）。
 
 ## 3. 表达式
 
@@ -218,60 +224,9 @@ portfolio: {leverage: 1, max_weight: 0.1}
 - 数字写法不超过 64 个字符、精度不超过 18 位小数、绝对值小于 10^9。
 - 通过 filter 的候选全部分数无效时整期 `skipped(config_error)`，不当作“选不出标的”清仓。
 
-## 4. tranche 规则（批次持仓）
+## 4. 止损止盈
 
-```yaml
-rules:
-  - id: main
-    type: tranche
-    weight: {total: 1}                      # 规则预算：各子策略按 stg_weight 归一化后乘以它
-    candidates: {require_volume: true}      # 规则级：候选是否要求 volume > 0，默认 true
-    tranche:                                # 子策略模板；"{列名}" 取参数表这一行的值，整段占位符保留数字类型
-      hold_period: "{h}"                    # 必填，1～2016
-      hold_count: candidate_rows
-      score: {method: rank_sum, missing: median}
-      sizing: {method: quantity, scale: 0.5}
-      long_factors: [{factor: "momentum__{n}", descending: true, weight: 1}]
-      short_factors: []
-      long_weight: 2
-      short_weight: 0
-      long_coin_num: 1                      # 整数是个数；0～1 之间是百分比
-      short_coin_num: 0
-      filter_before: []                     # 串联执行，符合条件的保留
-      filter_after:                         # 在选中的样本上一次判断，任一条件成立就剔除，不补位
-        - {direction: long, factor: "shadow__{m}", type: value, op: lte, value: "{p}"}
-      stg_weight: "{w}"
-      # stop: {loss: 0.08, cooldown_bars: 12}
-    params:                                 # 可选：每行展开为一个子策略
-      columns: [h, n, m, p, w]
-      rows:
-        - [1, 20, 24, 0.1, 0.0033333333333333335]
-portfolio:
-  leverage: 2                               # 按数量持有会让 Σw 略大于 1，留出上限；超过 leverage 时按比例缩小
-```
-
-| 选项 | 取值 | 默认 |
-| --- | --- | --- |
-| `hold_count` | `candidate_rows`：该标的本期是候选才计数；`bars`：每根 K 线都计数 | `bars` |
-| `score.method` | `rank_sum`：各因子平均名次 × 权重 × 方向求和；`raw_sum`：因子原值加权求和 | `rank_sum` |
-| `score.missing` | `median`：空值补同期名次中位数；`drop`：空值不参与本期排名 | `drop` |
-| `sizing.method` | `quantity`：开仓时定数量；`weight`：每批份额固定 | `weight` |
-| `sizing.scale` | (0, 10]，份额 = `scale × side_weight / h / 分母` | 1 |
-| `long_weight`、`short_weight` | 0～20，某侧为 0 时该侧不选币 | 1、0 |
-| `long_coin_num`、`short_coin_num` | 个数（分母固定）或 0～1 的比例（分母为实际选中数） | 1、0 |
-| `stg_weight` | > 0 | 1 |
-| 名单 | `long_white_list`、`long_black_list`、`short_white_list`、`short_black_list` | 空 |
-
-- **参数表**：每行一个子策略，一条规则最多 5000 行、全策略合计最多 10000 个；占位符 `{列名}` 只能整段替换。
-- **过滤条件**：`direction`（`long`/`short`）、`factor`、`type`（`value`/`rank`/`pct`）、`op`（`lt lte gt gte bt bte nbt nbte eq ne`，必填）、
-  `value`（数字，或 `bt` 一类的 `[下限, 上限]`）、`rank_ascending`；逻辑组合写成 `{logic: "1&(2|3)", items: [...]}`。
-- **要与外部框架逐值一致时**，把它的做法逐项显式写出，不要依赖默认值。
-- **去重**：打分方式、缺值处理、多空因子、名单、前置过滤、个数、哪一侧权重大于 0、`stop.price` 都相同的子策略共用一次选币（“排名签名”）；
-  后置过滤、定仓与止损逐个子策略计算。
-
-## 5. 止损止盈
-
-`rank`、`signal` 写在规则上，`tranche` 写在子策略模板里（可用参数表占位符）：
+写在规则上：
 
 ```yaml
 stop:
@@ -284,47 +239,40 @@ stop:
 
 至少写一项；`loss`、`trailing` 取值 (0, 1)，`profit` 取值 (0, 10]。按收盘判断，不是盘中触价；View 必须有 `close`（`extreme` 时还要 `high`、`low`）。
 
-## 6. 策略模板
-
-模板是命名的 DSL 骨架 + 变量定义 + 可选的参数表样例行，生成的策略是普通策略定义，之后与模板脱钩。示例在 `modules/strategy/templates/tranche_example.yaml`。
-
-- 只替换**值为完整 `"{{变量}}"`** 的 YAML 标量；键里、部分包含的占位符一律拒绝；`name` 是内置变量。
-- 骨架带参数表时 `rows` 必须为空、`sample_row` 必填；字符串值与参数表单元格不能含花括号。
-- 本地校验与渲染：
-
-  ```bash
-  moox-strategy-cli template check <模板.yaml>
-  moox-strategy-cli template render <模板.yaml> --name demo [--var leverage=3] --params params.csv > demo.yaml
-  ```
-
-- 保存模板：`moox-cli strategy template save --template-file 模板.yaml`；`strategy template list|show|render|delete` 查看、渲染与删除（删除默认只预览，`--yes` 执行）。
-
-## 7. 校验、创建与上线
+## 5. 校验、创建与上线
 
 写入生产的策略定义和实例属于外部写操作，每一步先告诉用户并等确认。
 
-1. **本地先看语法**：模板用 `moox-strategy-cli template check`；普通 DSL 用 `moox-cli strategy validate`（只校验语法与结构，并在选定因子任务的结果 View 最近一期上试算一次，结果不落库；引用了不存在的列时报错带最接近的列名和该任务的全部列）。
+1. **本地先看语法**：用 `moox-cli strategy validate`（只校验语法与结构，并在选定因子任务的结果 View 最近一期上试算一次，结果不落库；引用了不存在的列时报错带最接近的列名和该任务的全部列）。
 
    ```bash
    moox-cli strategy validate --dsl-file s.yaml --factor-task spot=<现货任务> [--factor-task swap=<永续任务>]
    ```
 
 2. **创建定义**：`moox-cli strategy create --dsl-file s.yaml`；已有定义用 `strategy update --strategy-id <ID> --dsl-file s.yaml` 修改；删除用 `strategy delete`（默认只预览）。创建后用 `strategy show --strategy-id <ID>` 读回 DSL 核对。
-3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给，或统一数据集上的一个任务 `multi=…`；股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务只能选本空间里运行中、还没被别的实例关联的任务，**创建后不能改**；已停用的实例可以用 `strategy instance delete --instance-id <实例>` 删除，绑定到它的因子任务和结果数据集一起删除、不可恢复（没绑定到它的公共任务保留）；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
+3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给，或统一数据集上的一个任务 `multi=…`；股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务要是本空间里运行中的任务（启用时核对），**创建后不能改**；一个任务可以被多个实例引用，只有 DSL 写了 `factor_params` 的实例启用时独占关联主帧任务：创建时不检查，主帧任务已关联到别的实例时启用被拒（“关联的是实例 X，不是本实例”）。已停用的实例可以用 `strategy instance delete --instance-id <实例>` 删除，关联到它的因子任务和结果数据集一起删除、不可恢复（还被别的实例引用时拒绝，先删引用方）；没关联到它的任务保留，只有固定成员的任务不随任何实例删除，不用了要手动停用；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
    不挂账户的是观察实例：只计算目标权重、不投递，适合先验证。
+   需要先看历史表现时用 `strategy replay start`（与 `validate` 同样给 `--factor-task`，加 `--from`、`--to`、费率与可选的 `--slippage-bps`）；声明了 `factor_params` 的策略只能加 `--input compute`（因子现算），它不支持策略池、现货加永续两个任务与股票。
 4. **启用**：`strategy instance enable --instance-id <ID>`（`disable` 停用；两者不带 `--yes` 只预览，确认后加 `--yes`）。启用时才解析列、成员契约和市场类型，列不存在或现货做空等问题在这一步被拒绝；
    任务刚建、结果 View 还没数据时可能因“还没有数据（覆盖范围未知）”被拒，等任务算出几个周期后再启用。
+   挂账户的实例停用后，Strategy 调一次 Trade 关闭会话，Trade 撤掉最后一份目标的挂单（持仓不动）。返回“实例已停用，但 Trade 未确认”时实例已经停用，
+   等 Trade 可用后对它再执行一次 `disable --yes` 重试；没确认期间最后一份目标最多执行到有效期结束（2 根 K 线），要立刻停手就请用户在管理台暂停这个组合账户的自动执行。
 5. **看结果**：`strategy result list --instance-id <ID>`、`strategy target list --instance-id <ID>`（当前会话最新的 ok 目标）；控制台 `/strategy/detail/<实例ID>`。
-   首次启用进入试运行（只发带影子标记的目标，Trade 不下单）；观察实例随后自动进入运行，挂账户的实例要用户执行 `confirm`。
+   挂账户的实例启用后先试运行（只发带影子标记的目标，Trade 不下单），观察实例启用即确认。确认实盘要用户决定：
+   1. 先 `trade shadow list --instance-id <ID>` 把影子目标给用户看；
+   2. `strategy instance confirm --instance-id <ID>` 预览，拿到预览里的 `session_id`；
+   3. 用户确认后执行 `strategy instance confirm --instance-id <ID> --session-id <预览里的 session_id> --yes`，也可以请用户在管理台点“确认实盘”。
+
+   `lifecycle` 命令只管模块级的暂停与恢复，不能确认实例。
 
 ### 修改已有策略
 
-- 启用时定义会写入会话快照；已启用的实例改了定义，按文档的说法，会话与定义版本不一致时挂会话与置为启用都会被拒绝，所以改定义后要停用再启用（这一步没有在线上逐项验证，改之前先在观察实例上试）。
-  **停用后重新启用会新建会话，但 DSL、绑定解析、成员都没变时规则状态（tranche 的开仓记录、持有计数、止损入场价与冷却）沿用**，停用的那几根算时间流逝。
+- 启用时定义会写入会话快照；被启用中的实例引用的定义不能修改，要先停用、改完再启用（启用期间定义被改，这次启用整体回滚，不留下会话）。
+  **停用后重新启用会新建会话，但 DSL、绑定解析、成员都没变时规则状态（持有集合、holding 批次、hold 的入场序号、止损入场价与冷却）沿用**，停用的那几根算时间流逝。
   修改实例（换账户或定义，原样提交也算）或改 DSL 文本（加一行注释也行）会清空，改 `id` 同理。人工平仓后要让策略从零开始，必须先清空再启用，否则启用后第一期会把平掉的标的买回来。
 - 清空规则状态（管理台不能改实例，只能用命令行），两条路任选其一：
     - 原样提交一次实例修改，只清这一个实例：
-        1. 停用后等实例详情页上“实例已经停用，但会话仍存在”的提示消失（`strategy instance show` 里 `session_id` 为空），否则 update 被拒绝；
+        1. 停用实例（停用的实例上没有会话，停用之后马上能 update）；
         2. `moox-cli strategy instance show --space-id <空间> --instance-id <ID>`，记下 `strategy_id` 和 `logical_account_id`；
         3. `moox-cli strategy instance update --space-id <空间> --instance-id <ID> --strategy-id <原值> --logical-account-id <原值>`。两条命令的 `--space-id` 默认是 `crypto`，别的空间的实例不写会报“实例不在当前空间”。
            **漏写 `--logical-account-id` 等于解绑组合账户**（这个参数是整体替换，留空表示观察实例）；原来就是观察实例的不写；
@@ -332,21 +280,20 @@ stop:
 - 引用的因子定义哈希变了（见 [factor-dsl.md](factor-dsl.md)“修改已有因子的定义”），引用它的实例同样要重新启用。
 - 改动较大时，优先新建一份策略定义和观察实例并行跑一段时间，再切换。
 
-## 8. 常见错误
+## 6. 常见错误
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段 | 按本文字段名核对 |
+| 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段（规则上的 `entry`、`exit`、`candidates`、`tranche`、`params` 都已删除） | 按本文字段名核对 |
+| 保存即拒绝，提示 type 只能是 rank | `signal`、`tranche` 规则类型已删 | 固定标的择时写成显式 `pool` 加 `hold`（第 2 节“固定标的择时”）；每根开一批写成 `holding: {bars, offsets: all}` |
+| 回放被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | View 里的历史因子值是按当时提交的参数算的 | 加 `--input compute`；策略池、现货加永续两个任务与股票不支持现算，这类调参策略不能回放 |
 | 池定义保存被拒，提示成员不存在或不能进池 | 成员是池、用了 `factor_params`、写了 `sources` 或 `market.reference`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
 | 池实例启用被拒，提示成员没有显式写 market | 现货、永续成员必须写 `market`；只有池绑定 `equity` 任务时，成员按股票成员处理、可以不写 | 给成员策略补上 `market` |
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |
 | 提示使用了 `max_age_bars` 必须写 `allow_empty: true` | 只保留新标的的规则经常没有候选，不写会让整期守门跳过 | 在这条规则上写 `allow_empty: true` |
 | 提示互斥（hold 与 buffer / then / range / filter_after / holding.bars，range 与 top、buffer，then 与 buffer，calendar 与 bars） | 这些写法语义冲突 | 按提示二选一 |
 | 启用被拒，提示 holding.anchor 不是 bar 起点 | 锚点要写某根 bar 的 bar_start（A 股日线是上海 0 点，可直接写交易日期） | 改成 bar 起点或交易日期 |
-| tranche 规则写 `on_missing` 被拒 | tranche 不走冻结保持 | 去掉 `on_missing` |
 | 规则写 `market` 被拒 | 策略没显式写 `market`；单市场策略写了不同的市场；`market: spot` 的规则做空；取值不是 spot、swap | 显式写策略的 `market`（双市场模式才能另选）；现货规则改成多头或改 `market: swap` |
 | 启用被拒，提示列不存在 | 规则引用的列不在因子任务结果里 | 按成员键推导列名；默认参数的成员省略参数段 |
 | 提示 `x 不是已声明的来源` 或不允许属性访问 | 表达式写了 `x.y`，但 `sources` 没有声明 `x` | 在 `sources` 里声明来源，或改回主帧的列名 |
 | 启用被拒，提示来源要按主帧的任务键各绑定一个任务、或周期不是整数倍 | 来源任务少给了市场，或来源周期与主帧对不齐 | 按 `来源名:市场=任务` 补齐；换成周期是主帧整数倍的任务 |
-| 含参数表的 DSL 被拒（超 64 KiB） | 参数表很大 | 含参数表的策略上限是 1 MiB，仍超出就拆成多条规则或多个策略 |
-| tranche 策略启用被拒 | 混用了 `rank` 规则、`factor_params`，用在双市场模式，或纯现货里做空 / 按数量持有 | tranche 只能全部是 tranche 规则、只用单市场模式；纯现货只能 `sizing.method: weight` 且不做空 |

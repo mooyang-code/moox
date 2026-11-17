@@ -47,5 +47,5 @@ declare namespace TabsMenu {
 /* viteEnv */
 interface ViteEnv {
   VITE_GLOB_APP_TITLE: string;
-  VITE_ADMIN_ORIGIN?: string;
+  VITE_ADMIN_PROXY_TARGET?: string;
 }

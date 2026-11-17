@@ -16,9 +16,7 @@ type ingestModeFlags struct {
 	File      string
 	SpaceID   string
 	DatasetID string
-	Mode      string
-	Executor  string
-	Force     bool
+	Ingest    string
 	Yes       bool
 	Wait      time.Duration
 }
@@ -28,11 +26,11 @@ var (
 	ingestModeSetFlags ingestModeFlags
 )
 
-var collectorIngestModeCmd = &cobra.Command{Use: "ingest-mode", Short: "按数据集查看与切换采集方式（stream WS 推送 / pull 定时拉取）"}
+var collectorIngestModeCmd = &cobra.Command{Use: "ingest-mode", Short: "查看与切换 K 线任务的采集方式（stream 推送 / scf 云函数拉取 / local 本地拉取）"}
 
 var collectorIngestModeGetCmd = &cobra.Command{
 	Use:   "get",
-	Short: "查看数据集的采集方式、执行端、交接中的生效周期与 collector-stream 实例状态",
+	Short: "查看各 K 线任务的采集方式、交接中的生效周期与 collector-stream 实例状态",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runIngestModeGet(cmd.Context(), cmd.OutOrStdout(), ingestModeGetFlags)
@@ -41,9 +39,10 @@ var collectorIngestModeGetCmd = &cobra.Command{
 
 var collectorIngestModeSetCmd = &cobra.Command{
 	Use:   "set",
-	Short: "切换数据集的采集方式（按生效周期交接；不带 --dataset-id 表示空间全部数据集）",
-	Long: "切到 stream 要求 collector-stream 在线；--executor 选拉取与补采的执行端（scf 云函数或 local 本地执行端；留空时 stream 默认 local，pull 默认 scf）。\n" +
-		"--force 用于旧执行端失联的极端故障：不等旧执行端确认，已打开的计划也不再等失联端。\n" +
+	Short: "切换采集方式（按生效周期交接；不带 --dataset-id 表示空间全部 K 线任务）",
+	Long: "--ingest 取 stream（collector-stream 接收推送，补采走它的本地执行端）、scf（云函数定时拉取与补采）或 local（collector-stream 本地定时拉取与补采）。\n" +
+		"切到 stream 或 local 要求 collector-stream 在线。没有强制开关：collector-stream 只是旧执行端且心跳超时（180 秒）时，交接计划不等它确认；\n" +
+		"Collector 启动不满 180 秒时仍会等。\n" +
 		"不带 --yes 时只打印当前状态；带 --yes 时保存并等待对账生成交接计划，打印每个数据集按频率选用的生效周期 P。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -60,11 +59,9 @@ func init() {
 	}{{collectorIngestModeGetCmd, &ingestModeGetFlags}, {collectorIngestModeSetCmd, &ingestModeSetFlags}} {
 		item.cmd.Flags().StringVar(&item.flags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 		item.cmd.Flags().StringVar(&item.flags.SpaceID, "space-id", "", "空间 ID")
-		item.cmd.Flags().StringVar(&item.flags.DatasetID, "dataset-id", "", "只处理指定数据集；留空表示空间全部数据集")
+		item.cmd.Flags().StringVar(&item.flags.DatasetID, "dataset-id", "", "只处理写这个数据集的任务；留空表示空间全部 K 线任务")
 	}
-	collectorIngestModeSetCmd.Flags().StringVar(&ingestModeSetFlags.Mode, "mode", "", "stream 或 pull")
-	collectorIngestModeSetCmd.Flags().StringVar(&ingestModeSetFlags.Executor, "executor", "", "scf 或 local；留空时 stream 用 local，pull 用 scf")
-	collectorIngestModeSetCmd.Flags().BoolVar(&ingestModeSetFlags.Force, "force", false, "旧执行端失联时不等它确认")
+	collectorIngestModeSetCmd.Flags().StringVar(&ingestModeSetFlags.Ingest, "ingest", "", "stream、scf 或 local")
 	collectorIngestModeSetCmd.Flags().BoolVar(&ingestModeSetFlags.Yes, "yes", false, "确认切换")
 	collectorIngestModeSetCmd.Flags().DurationVar(&ingestModeSetFlags.Wait, "wait", 3*time.Minute, "等待交接计划生成并打印生效周期的最长时间；0 表示不等")
 }
@@ -83,7 +80,7 @@ func ingestModeView(rsp interface {
 }) map[string]any {
 	modes := make([]map[string]any, 0, len(rsp.GetModes()))
 	for _, mode := range rsp.GetModes() {
-		item := map[string]any{"dataset_id": mode.GetDatasetId(), "mode": mode.GetMode(), "executor": mode.GetExecutor(), "updated_at": mode.GetUpdatedAt()}
+		item := map[string]any{"dataset_id": mode.GetDatasetId(), "task_id": mode.GetTaskId(), "ingest": mode.GetIngest()}
 		if len(mode.GetEffectivePeriods()) > 0 {
 			item["effective_periods"] = mode.GetEffectivePeriods()
 		}
@@ -119,9 +116,9 @@ func runIngestModeSet(ctx context.Context, out io.Writer, flags ingestModeFlags)
 	if strings.TrimSpace(flags.SpaceID) == "" {
 		return errors.New("--space-id is required")
 	}
-	mode := strings.ToLower(strings.TrimSpace(flags.Mode))
-	if mode != "stream" && mode != "pull" {
-		return errors.New("--mode 必须是 stream 或 pull")
+	ingest := strings.ToLower(strings.TrimSpace(flags.Ingest))
+	if ingest != "stream" && ingest != "scf" && ingest != "local" {
+		return errors.New("--ingest 必须是 stream、scf 或 local")
 	}
 	gateway, err := openCommandGateway(ctx, flags.File, nil)
 	if err != nil {
@@ -134,14 +131,14 @@ func runIngestModeSet(ctx context.Context, out io.Writer, flags ingestModeFlags)
 			return err
 		}
 		view := ingestModeView(current)
-		view["next"] = map[string]any{"mode": mode, "executor": flags.Executor, "force": flags.Force}
+		view["next"] = map[string]any{"ingest": ingest}
 		if err := printJSON(out, view); err != nil {
 			return err
 		}
 		return errors.New("确认后加 --yes 执行切换（建议在分钟第 20～40 秒执行）")
 	}
 	rsp := &collectorpb.SetIngestModeRsp{}
-	request := &collectorpb.SetIngestModeReq{SpaceId: flags.SpaceID, DatasetId: flags.DatasetID, Mode: mode, Executor: strings.ToLower(strings.TrimSpace(flags.Executor)), Force: flags.Force}
+	request := &collectorpb.SetIngestModeReq{SpaceId: flags.SpaceID, DatasetId: flags.DatasetID, Ingest: ingest}
 	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "SetIngestMode", request, rsp); err != nil {
 		return fmt.Errorf("set ingest mode: %w", err)
 	}
@@ -161,7 +158,7 @@ func runIngestModeSet(ctx context.Context, out io.Writer, flags ingestModeFlags)
 		}
 		pending := false
 		for _, item := range current.GetModes() {
-			if item.GetMode() == mode && len(item.GetEffectivePeriods()) == 0 {
+			if item.GetIngest() == ingest && len(item.GetEffectivePeriods()) == 0 {
 				pending = true
 			}
 		}

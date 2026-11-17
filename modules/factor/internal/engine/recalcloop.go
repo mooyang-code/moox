@@ -55,7 +55,7 @@ type recalcLoop struct {
 	poll     time.Duration
 	// prepare 在作业执行之前备齐它绑定的自定义算子模块；失败时作业报告失败，不写任何分块。
 	prepare func(ctx context.Context, set domain.EngineTask) (release func(), err error)
-	// leaseAllowed 非空时，模块级生命周期放行才领取作业（暂停、恢复追赶、重置期间不领取，也不续跑）。
+	// leaseAllowed 非空时，模块级生命周期放行才领取作业（暂停、恢复追赶期间不领取，也不续跑）。
 	leaseAllowed func() bool
 	// pulling 登记在途的领取请求：暂停的等待收敛要等它返回；领取回来的作业写分块时被门禁挡住，随即归还。
 	pulling func() func()
@@ -69,7 +69,7 @@ type recalcLoop struct {
 	catchUp func(ctx context.Context, set domain.EngineTask, subjects []string, end time.Time) (int, error)
 	// now 取当前时间（测试可替换）。
 	now func() time.Time
-	// gateWait、gateRetry：任务还没放行（刚建立、自动 init/start 还没走完）时任务会被门禁挡住；等放行的最长时间与重试间隔，
+	// gateWait、gateRetry：任务还没放行（刚建立、窗口还在载入、检查还没通过）时任务会被门禁挡住；等放行的最长时间与重试间隔，
 	// 为 0 时取默认值（5 分钟、10 秒）。等不到就归还作业，下一轮重新领取。
 	gateWait, gateRetry time.Duration
 }
@@ -116,7 +116,7 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	err = l.runJob(ctx, &job, axis)
 	switch {
 	case errors.Is(err, recalcexec.ErrGated):
-		// 任务被暂停（或在恢复追赶、重置）：不报失败，归还作业，放行后重新领取并从已上报的进度续跑；
+		// 任务被暂停（或在恢复追赶）：不报失败，归还作业，放行后重新领取并从已上报的进度续跑；
 		// 按没有任务处理，等一个轮询间隔再领取。
 		log.InfoContextf(ctx, "factor_recalc_gated job_id=%s task_id=%s", job.JobID, job.Set.Set.TaskID)
 		l.giveBack(ctx, axis, job)
@@ -284,7 +284,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodcloc
 	return l.runWhenOpen(ctx, func() error { return l.executor.Run(ctx, job.Window, source, report) })
 }
 
-// runWhenOpen 执行补算；被生命周期门禁挡住（任务刚建立，自动 init、start 还在路上）时在限定时间内重试，等任务放行后继续，
+// runWhenOpen 执行补算；被门禁挡住（任务刚建立、窗口还在载入、检查还没通过）时在限定时间内重试，等任务放行后继续，
 // 超时仍被挡住就按原样返回 ErrGated（任务被暂停等情况：不报失败，由调用方归还作业）。
 func (l *recalcLoop) runWhenOpen(ctx context.Context, run func() error) error {
 	wait, retry := l.gateWait, l.gateRetry

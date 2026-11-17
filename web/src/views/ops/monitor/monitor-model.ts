@@ -283,7 +283,7 @@ export interface LayerSummary {
   total: number;
   healthy: number;
   attention: number;
-  /** 已停用或不探测，不计入正常比例。 */
+  /** 已停用或不检查，不计入正常比例。 */
   inactive: number;
   tone: Tone;
 }
@@ -294,7 +294,7 @@ interface Classified {
   inactive: boolean;
 }
 
-/** 状态分类：异常、需关注、未知算需要关注；已停用、不探测不计入正常比例。 */
+/** 状态分类：异常、需关注、未知算需要关注；已停用、不检查不计入正常比例。 */
 export function classify(status?: string): Classified {
   switch (status) {
     case "healthy":
@@ -309,13 +309,6 @@ export function classify(status?: string): Classified {
     default:
       return { tone: "idle", attention: true, inactive: false };
   }
-}
-
-/** 组件状态：不探测的组件按指标上报判断；两者都不观测时不计入正常比例。 */
-export function componentClass(item: HealthComponent): Classified {
-  if (item.status !== "unchecked") return classify(item.status);
-  const reporter = item.reporter?.status;
-  return reporter && reporter !== "unchecked" ? classify(reporter) : classify("unchecked");
 }
 
 function summarize(key: LayerKey, title: string, unit: string, items: Classified[]): LayerSummary {
@@ -333,7 +326,8 @@ function summarize(key: LayerKey, title: string, unit: string, items: Classified
 }
 
 export function layerSummaries(overview: HealthOverview | undefined): LayerSummary[] {
-  const components = (overview?.components || []).map(componentClass);
+  // 组件健康只看上报：组件状态已经合并了上报新鲜度与就绪判断。
+  const components = (overview?.components || []).map(item => classify(item.status));
   const unregistered = (overview?.unregistered || []).map(() => classify("degraded"));
   const datasets = (overview?.pipeline || []).flatMap(stage => stage.datasets || []).map(item => classify(item.status));
   const business = (overview?.business_checks || []).map(item => classify(item.status));
@@ -346,12 +340,12 @@ export function layerSummaries(overview: HealthOverview | undefined): LayerSumma
   ];
 }
 
-/** 层的计数文案，例如“21 / 22 正常 · 1 项停用或不探测”。 */
+/** 层的计数文案，例如“21 / 22 正常 · 1 项已停用”。 */
 export function layerCountText(layer: LayerSummary): string {
   const active = layer.total - layer.inactive;
   if (!layer.total) return "暂无观测";
-  const base = active ? `${layer.healthy} / ${active} 正常` : "全部停用或不探测";
-  return layer.inactive && active ? `${base} · ${layer.inactive} 项停用或不探测` : base;
+  const base = active ? `${layer.healthy} / ${active} 正常` : "全部已停用";
+  return layer.inactive && active ? `${base} · ${layer.inactive} 项已停用` : base;
 }
 
 // ---------- 结论 ----------
@@ -535,27 +529,19 @@ export interface HostComponents {
   chips: ComponentChip[];
 }
 
-function componentStatusText(item: HealthComponent): string {
-  if (item.status === "unchecked") {
-    const reporter = item.reporter?.status;
-    return reporter && reporter !== "unchecked" ? `不探测 · 上报${statusLabel(reporter)}` : "不探测";
-  }
-  return statusLabel(item.status);
-}
-
 /** 组件按部署主机分组；每台主机内异常的排前面。 */
 export function componentsByHost(overview: HealthOverview | undefined): HostComponents[] {
   const hosts = new Map<string, ComponentChip[]>();
   for (const item of overview?.components || []) {
     const hostId = item.host_id || "未知主机";
-    const cls = componentClass(item);
+    const cls = classify(item.status);
     const chips = hosts.get(hostId) || [];
     chips.push({
       key: `${hostId}/${item.component_id}`,
       name: item.name || item.component_id || "",
       tone: cls.tone,
       attention: cls.attention,
-      status: componentStatusText(item),
+      status: statusLabel(item.status),
       reason: item.reason || "",
       item
     });
@@ -690,7 +676,6 @@ const KIND_LABELS: Record<string, string> = {
   trade_attention: "交易关注项",
   event_center_attention: "事件中心关注项",
   collector_attention: "采集关注项",
-  "console-page": "控制台页面",
   subject_tag: "标的标签巡检"
 };
 

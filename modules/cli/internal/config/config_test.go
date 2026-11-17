@@ -21,7 +21,7 @@ func TestConfig_LoadConfig_ValidYAML_ShouldParseFields(t *testing.T) {
 	path := filepath.Join(dir, "cli.yaml")
 	content := `doctor:
   node_id: fixture-node
-  release_root: /isolated/release
+  deploy_root: /isolated/moox
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
@@ -33,7 +33,7 @@ func TestConfig_LoadConfig_ValidYAML_ShouldParseFields(t *testing.T) {
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "fixture-node", cfg.Doctor.NodeID)
-	assert.Equal(t, "/isolated/release", cfg.Doctor.ReleaseRoot)
+	assert.Equal(t, "/isolated/moox", cfg.Doctor.DeployRoot)
 }
 
 func TestConfig_LoadConfig_MissingFile_ShouldReturnError(t *testing.T) {

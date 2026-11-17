@@ -33,43 +33,25 @@
 | `archive tasks run` | 立即运行一次（同复核） |
 | `archive tasks update` | 修改拉取间隔、回补起点或启停任务 |
 
-## cloud：云函数：云账户、函数实例、SCF 导入与代码包（调用 CloudFunctionMgr）
+## collector：采集：任务、运行状态、补采与合成、标的、采集方式、云函数、云账号与代码包
 
 | 命令 | 说明 |
 | --- | --- |
-| `cloud account delete` | 删除云账户登记（默认只预览，--yes 才执行） |
-| `cloud account list` | 列出云账户（不含密钥明文） |
-| `cloud account regions` | 列出云厂商可用的地域 |
-| `cloud function create` | 创建函数实例（请求体用 --data，字段 instances；创建后用 job 查看进度） |
-| `cloud function delete` | 删除函数实例（--instance-id 可重复；默认只预览，--yes 才执行） |
-| `cloud function deploy` | 把代码包部署到函数实例（线上切换版本；默认只预览，--yes 才执行） |
-| `cloud function invoke` | 调用一个函数实例（会真实执行函数；默认只预览事件内容，--yes 才执行） |
-| `cloud function job` | 查看函数作业进度 |
-| `cloud function list` | 列出函数实例 |
-| `cloud function update-config` | 修改函数实例的运行配置与定时器（默认只预览，--yes 才执行） |
-| `cloud package delete` | 删除代码包（默认只预览，--yes 才执行） |
-| `cloud package list` | 列出函数代码包 |
-| `cloud package show` | 查看代码包 |
-| `cloud package url` | 取代码包的下载地址 |
-| `cloud scf import` | 把云上已有的 SCF 函数导入登记（函数列表写在 --functions 里；默认只预览，--yes 才执行） |
-| `cloud scf preview` | 预览云上有哪些 SCF 函数可以导入 |
-
-## collector：采集：任务、运行状态、补采与合成、标的、采集方式与云函数包
-
-| 命令 | 说明 |
-| --- | --- |
+| `collector account delete` | 删除云账号登记（默认只预览，--yes 才执行；还被 scf_plan 引用、还有代码包或名下还有函数时拒绝。旧账号下建的函数 collector function delete 删不到，要用 setup inspect-scf 查出来再到腾讯云控制台手工删） |
+| `collector account list` | 列出云账号（不含密钥明文） |
+| `collector account regions` | 列出腾讯云函数可用的地域 |
 | `collector data-type list` | 列出采集数据类型 |
 | `collector data-type show` | 查看数据类型及其字段 |
 | `collector fetch-plan pause` | 暂停空间的采集：停用全部 SCF 定时器，并停止采集计划对账与补采（默认只预览，--yes 才执行） |
 | `collector fetch-plan reregister` | Storage 数据被清空后，让采集计划重新登记序列快照并重置补采状态 |
 | `collector fetch-plan resume` | 恢复空间的采集：重新启用 SCF 定时器并继续采集计划对账与补采 |
-| `collector function delete` | 异步删除当前 space 中全部 SCF 云函数 |
+| `collector function delete` | 按名字或前缀删除空间的云函数（计划里的函数删掉后下一轮对账会重建；默认只预览，--yes 才执行） |
+| `collector function list` | 列出空间的采集函数与补采函数：计划里应有的内容、云上读回的状态，计划外的函数单列（--drift 只看不一致的） |
 | `collector function package` | 构建数据采集器 SCF zip 包 |
-| `collector function probe-egress` | 逐个调用短时 SCF 诊断公网出口和 Provider 连通性 |
-| `collector function timer-inventory` | 只读盘点指定 SCF Timer fleet 并校验云侧 readback |
+| `collector function probe-egress` | 调用已生效计划里的各采集函数，取它们此刻的公网出口 IP |
 | `collector function upload` | 构建（或使用现成的）SCF 代码包并只上传，不创建函数 |
-| `collector ingest-mode get` | 查看数据集的采集方式、执行端、交接中的生效周期与 collector-stream 实例状态 |
-| `collector ingest-mode set` | 切换数据集的采集方式（按生效周期交接；不带 --dataset-id 表示空间全部数据集） |
+| `collector ingest-mode get` | 查看各 K 线任务的采集方式、交接中的生效周期与 collector-stream 实例状态 |
+| `collector ingest-mode set` | 切换采集方式（按生效周期交接；不带 --dataset-id 表示空间全部 K 线任务） |
 | `collector kline absences-clear` | 清掉数据集已确认的“行情源缺失”（行情源后来补上数据时），并让历史扫描重新进行 |
 | `collector kline backfill` | 补采缺失的 K 线（默认补检查出的缺口，--force 强制重拉整个范围） |
 | `collector kline backfill-cancel` | 取消补采作业（运行中的分块等其结束） |
@@ -77,6 +59,8 @@
 | `collector kline backfill-status` | 查看补采作业进度；不带 --job-id 时列出空间最近的作业 |
 | `collector kline check` | 按采集计划检查时间范围内的 K 线是否齐全，输出缺口 |
 | `collector kline history-confirm` | 按最近一次历史扫描发现的缺口补采；行情源本来没有的 K 线会被确认并不再报告 |
+| `collector package delete` | 删除代码包（先删 COS 对象再删记录；默认只预览，--yes 才执行） |
+| `collector package list` | 列出空间的云函数代码包（按上传先后倒序，每个包名保留最新 3 个） |
 | `collector resample backfill` | 提交历史合成作业：把时间范围内的目标 K 线按源数据重新合成 |
 | `collector resample cancel` | 取消排队或运行中的历史合成作业（已写入的保留） |
 | `collector resample jobs` | 查看历史合成作业；带 --job-id 查看单个作业，否则按任务、状态列出最近的作业 |
@@ -89,29 +73,26 @@
 | `collector subjects status` | 各标签最近一次标的同步的状态 |
 | `collector subjects sync` | 立即同步币安/东财的标的标签成员，不等整点定时任务 |
 | `collector subjects unexclude` | 解除排除：标的从新的生效周期起回到采集（期间的历史需要时用补采） |
-| `collector task create` | 创建 K 线采集任务（可直接指定 SCF 定时模式与每函数标的数） |
+| `collector task create` | 创建 K 线采集任务（可指定采集方式与每函数标的数） |
 | `collector task delete` | 删除采集任务及其结果（默认只预览，--yes 才执行） |
 | `collector task delete-result` | 删除没有任务引用的采集结果（View、行数据与数据集；默认只预览，--yes 才执行） |
 | `collector task disable` | 停用采集任务（默认只预览，--yes 才执行） |
 | `collector task inventory` | 查看采集结果清单（任务拥有的结果数据集与 View） |
 | `collector task list` | 列出采集任务 |
-| `collector task purge` | 清理 Collector 任务运行数据和结果引用 |
 | `collector task show` | 查看一个采集任务 |
 | `collector task update` | 修改采集任务的名称、说明或启用状态 |
 
-## config：管理本机的 moox.toml 与告警渠道
+## config：管理本机的 moox.toml 与 moox.secrets.toml
 
 | 命令 | 说明 |
 | --- | --- |
-| `config backup` | 把 moox.toml 加密备份到自己的管理后台 |
-| `config edit` | 在本机打开配置页，查看并修改 moox.toml |
-| `config encrypt` | 把明文保存的 moox.toml 加密保存 |
-| `config get` | 读取 moox.toml 里的配置（密钥类默认打码） |
-| `config init` | 在本机打开一次性表单，填写部署信息，生成 moox.toml |
-| `config migrate` | 把 moox.toml 改写成当前格式（默认只预览） |
-| `config notification` | 对比 moox.toml 与 Monitor 的告警渠道，确认后写入 Monitor，并显示各主机缓存版本 |
-| `config restore` | 换电脑时从管理台恢复 moox.toml |
-| `config set` | 修改 moox.toml 里一个已有的单值配置（默认只预览） |
+| `config backup` | 把 moox.toml 与 moox.secrets.toml 加密备份到自己的管理后台 |
+| `config edit` | 在本机打开配置页，查看并修改两份配置 |
+| `config encrypt` | 把明文保存的 moox.secrets.toml 加密保存 |
+| `config get` | 读取 moox.toml 或 moox.secrets.toml 里的配置（--file 指定哪一份，密钥类默认打码） |
+| `config init` | 在本机打开一次性表单，填写部署信息，生成 moox.toml 与 moox.secrets.toml |
+| `config restore` | 换电脑时从管理台恢复两份配置 |
+| `config set` | 修改 moox.toml 或 moox.secrets.toml 里一个已有的单值配置（默认只预览） |
 
 ## data：量化数据读写工具
 
@@ -133,6 +114,8 @@
 | `doctor alerts` | 读取 Monitor 的告警与不健康项，供 Agent 处理 |
 | `doctor bootstrap` | 检查新部署各模块的安装与配置 |
 | `doctor diagnose` | 按 Monitor 的事实诊断模块 |
+
+各组件的健康端口（`/healthz`、`/readyz`、`/metrics`）只听 127.0.0.1、不验签：`doctor bootstrap` 只查本机，直接请求本机端口；`doctor diagnose` 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 `/readyz`（SSH 连不上记为无法判断），`systemd` 用户服务的状态同样经 SSH 读取。因子机只能出站，SSH 只有在家里的局域网才连得上，所以因子机的 doctor 与 `/readyz` 检查只能在局域网里做；不在局域网时看 Monitor 的上报状态（`doctor alerts`）和 `moox-cli host agent status --host factor`。
 
 ## event：事件中心：事件规则（事件发生时通知你的接口）与执行记录（调用 CallbackDispatcherService）
 
@@ -182,14 +165,16 @@
 | `factor recalc show` | 查看一个补算作业 |
 | `factor recalc submit` | 提交历史补算（时间左闭右开；不给 --request-id 时自动生成） |
 | `factor show` | 查看一个因子定义 |
-| `factor status` | 因子运行状态（各任务的预热、排队与暂停） |
-| `factor task create` | 创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写进 moox.toml 后用 setup factors |
+| `factor status` | 因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status） |
+| `factor task apply` | 按因子任务文件新建因子定义、任务与成员（只建不改；线上已有且内容不同时逐项列出差异，一项都不写） |
+| `factor task create` | 创建计算任务（源数据集 + 频率 → 结果数据集）；批量配置优先写成因子任务文件后用 factor task apply |
 | `factor task delete` | 删除计算任务（--purge 连结果一起删，不可恢复；默认只预览，--yes 才执行） |
 | `factor task disable` | 停用计算任务（默认只预览，--yes 才执行） |
 | `factor task enable` | 启用计算任务 |
 | `factor task list` | 列出因子计算任务 |
 | `factor task params` | 查看计算任务各成员当前的参数 |
 | `factor task show` | 查看一个计算任务 |
+| `factor task status` | 查看因子任务能不能计算：引擎计算前的逐项检查（窗口载入、数据覆盖、变更同步、回看数量、自定义算子模块） |
 | `factor update` | 修改因子定义（被启用成员引用的定义不能改） |
 | `factor validate` | 线上校验因子表达式（不落库） |
 
@@ -209,7 +194,6 @@
 | `host agent status` | 主机代理的采集与上报状态 |
 | `host catalog` | 服务目录：组件、端口与服务 |
 | `host deployments` | 列出组件部署 |
-| `host directory` | 服务目录的路由视图：每个服务部署在哪些主机 |
 | `host exec` | 经 SSH 在 moox.toml 登记的主机上执行一条命令 |
 | `host get` | 把主机上的文件下载到本地（本地已存在时需要 --yes 覆盖） |
 | `host list` | 列出 Admin 登记的主机（moox.toml 里的候选主机用 setup hosts） |
@@ -222,23 +206,14 @@
 | --- | --- |
 | `import` | 导入历史时序数据（写 Storage 和因子机本地存储） |
 
-## lifecycle：查看和推进模块、对象的生命周期（未就绪 → 就绪 → 试运行 → 运行）
+## lifecycle：查看和控制模块的生命周期（运行、暂停、恢复追赶）
 
 | 命令 | 说明 |
 | --- | --- |
 | `lifecycle catchup` | 查看恢复追赶的进度 |
-| `lifecycle check` | 启动前检查：列出不通过的项和处理办法，不改变阶段 |
-| `lifecycle confirm` | 确认：试运行 → 运行 |
-| `lifecycle init` | 初始化：未就绪 → 就绪（准备本地状态与历史） |
-| `lifecycle pause` | 暂停：不再计算新周期（--for 可设定自动恢复） |
-| `lifecycle release` | 放行：追赶已追平的对象回到暂停前的阶段 |
-| `lifecycle reset-abort` | 放弃失败的重置：模块置为未初始化，已做的步骤不会回来 |
-| `lifecycle reset-apply` | 发起重置（--token --scope）或续做（--operation-id）；模块必须已暂停 |
-| `lifecycle reset-plan` | 重置计划：只读，列出每一步、保留什么、不备份什么，并给出一次性令牌（10 分钟） |
-| `lifecycle reset-status` | 查看重置状态与步骤日志 |
+| `lifecycle pause` | 暂停：不再计算新周期、不下单（--for 可设定自动恢复） |
+| `lifecycle release` | 放行：追赶已追平的模块回到运行 |
 | `lifecycle resume` | 恢复：先追赶暂停期间的周期，追平后放行 |
-| `lifecycle shadow` | 查看试运行中的策略实例的影子目标（固定连接 trade 模块） |
-| `lifecycle start` | 启动：就绪 → 试运行（完整计算，但不真实下单） |
 | `lifecycle status` | 查看生命周期状态 |
 
 ## metadata：存储元数据管理工具
@@ -313,12 +288,6 @@
 | `ops tencent lighthouse firewall add` | 添加轻量应用服务器防火墙规则 |
 | `ops tencent lighthouse firewall open` | 通过控制面云账户凭证开放轻量防火墙端口 |
 
-## replay：逐期回放：按实盘时序用历史数据验证因子、策略与成交（不产生实际下单）
-
-| 命令 | 说明 |
-| --- | --- |
-| `replay` | 逐期回放：按实盘时序用历史数据验证因子、策略与成交（不产生实际下单） |
-
 ## secret：密钥：只列清单与打码后的信息；新建、修改请用户在管理台“设置 › 密钥”填写
 
 | 命令 | 说明 |
@@ -330,44 +299,39 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `setup apply` | 写入初始用户、云凭据与交易所密钥（`[[exchange_keys]]`，只建不改）；Trade 已部署时逐把检测（只读和已在管理台删除的跳过，检测没完成只提示稍后重试，不影响退出码），没部署时提示部署后用 `trade inspect-credential` |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
-| `setup bootstrap` | 通过已核验 SSH 初始化核心或完整控制服务 |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
-| `setup deploy-host` | 通过已核验 SSH 部署指定主机的 Host Gateway 与 Host Agent |
-| `setup deploy-unit` | 通过已核验 SSH 部署业务单元 |
+| `setup deploy` | 把一台主机部署成 moox.toml 描述的样子：放二进制、渲染配置、按顺序重启有变化的组件，等它们就绪（`--component` 只部署个别组件） |
 | `setup deployment disable` | 停用部署：外部程序先停服务并核对已停止，再改登记；普通组件只改登记 |
 | `setup deployment enable` | 启用部署：外部程序要求主机已启用，先改登记再启动服务；普通组件只改登记 |
-| `setup export-skill-config` | 导出 Skill 使用的最小数据访问配置 |
-| `setup factors` | 按 moox.toml 的 [[factors.definitions]] 与 [[factors.tasks]] 补齐因子定义、任务与成员（只补缺不删除） |
+| `setup export-skill-config` | 导出 Skill 使用的最小数据访问配置（moox-skill 的签名私钥在本机生成，公钥登记到控制机） |
 | `setup firewall` | 初始化所有目标主机的腾讯云防火墙端口（默认只预览，--yes 才执行） |
 | `setup host disable` | 停用主机：先停掉它上面启用的外部程序，全部成功后才改登记（网关路由随之撤销） |
 | `setup host enable` | 启用主机：先改登记，再只启动启用部署的外部程序（单独停用的程序保持停用） |
 | `setup host-diagnostics` | 检查远端主机磁盘和服务进程 |
 | `setup hosts` | 列出可选的部署主机（不输出密码） |
-| `setup init` | 导入默认空间、数据集、字段和因子 |
+| `setup init` | 导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改） |
 | `setup verify` | 验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读 |
-| `setup logs` | 只读查看组件在主机上的日志，包括失败回滚的发布目录，密钥字段已遮掉 |
+| `setup logs` | 只读查看组件在主机上的日志：先看文件日志（logs/<组件>/），没有再看 journald 里这个服务的输出 |
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
-| `setup install` | 一条命令装完：预检、下载、清除旧部署、防火墙、部署、初始化、启动和验收（默认只预检） |
+| `setup install` | 一条命令装完：防火墙、逐台部署、初始化、启动和验收（默认只预检） |
 | `setup invoke-scf` | 直接调用腾讯云函数 |
 | `setup metadata-import` | 通过 Storage SSH 隧道导入选定业务空间 |
-| `setup package inspect` | 校验部署包的组件边界、平台、文件与摘要 |
+| `setup package-components` | 按服务目录把编译好的 Linux 二进制打成每个组件一个包（发布脚本用） |
+| `setup operator` | 准备这台电脑的操作身份：生成 moox-cli 的签名私钥；--register 把公钥登记到已经装好的控制机 |
 | `setup reboot-host` | 重启无响应的腾讯云主机（默认只预览，--yes 才重启） |
-| `setup release build` | 在本机构建并打包一个版本的全部纯 Go 单元 |
-| `setup release fetch` | 用当前产物包登记一个版本，目标机部署时下载 |
+| `setup register-identity` | 给不属于主机的外部身份准备签名私钥并登记公钥（如采集名单干预工具的 collector-operator） |
 | `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
-| `setup render-runtime-config` | 从 moox.toml 渲染 Egress/Collector 运行配置 |
-| `setup restart` | 重启主机上的单个组件（默认只预览，--yes 才重启） |
-| `setup start` | 启动一个空间：启用采集任务，导入因子，创建默认示例策略 |
-| `setup status` | 检查初始化记录状态 |
-| `setup storage-auth` | 把 Storage 内部写入身份保存到本机操作员目录（导入、导出数据用，只需一次） |
+| `setup restart` | 重启一个组件（systemctl --user restart；默认只预览，--yes 才执行） |
+| `setup start` | 启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略 |
+| `setup start-component` | 恢复一个被停掉的组件并开机自启（systemctl --user enable --now；默认只预览） |
+| `setup status` | 只读查看各主机的部署状态：version.json 里的版本，以及每个组件的用户服务是否在运行 |
+| `setup stop` | 停掉一个组件并不再开机自启（systemctl --user disable --now；之后的部署保持停用；默认只预览） |
 | `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |
 | `setup trust-browser` | 检查并安装管理台浏览器证书信任 |
 | `setup trust-host` | 确认并记录 SSH 主机指纹 |
-| `setup validate` | 校验初始化配置和连接，并报告目标机器的部署情况、发布路线（route）和接下来要运行的命令（next_steps） |
-| `setup watchdog` | 在各主机安装（或移除）主机级守护与告警策略种子 |
-| `setup wipe` | 彻底清除 moox.toml 所列主机上全部 MooX 旧程序和数据（默认只预览，不可恢复） |
+| `setup validate` | 校验两份配置和连接，并报告各主机的部署情况（route）和接下来要运行的命令（next_steps） |
+| `setup wipe` | 彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复） |
 
 ## space：空间：一组相互隔离的业务数据（调用 SpaceMgr）
 
@@ -379,15 +343,14 @@
 | `space show` | 查看 Storage 里一个空间的元数据 |
 | `space update` | 修改空间 |
 
-## storage：View 维护与元数据重置
+## storage：View 维护
 
 | 命令 | 说明 |
 | --- | --- |
 | `storage delete-view` | 离线删除一个 View 的元数据（不带 --yes 时存储机上的程序会拒绝执行） |
 | `storage repair-view` | 重建指定 View 的索引（默认只预览，--yes 才执行） |
-| `storage reset-metadata` | 备份后清空全部业务定义并重新导入种子（Storage 必须已停止；默认只预览，--yes 才执行） |
 
-## strategy：策略定义、实例、结果、历史回放与模板（调用 StrategyMgr）
+## strategy：策略定义、实例、结果、历史回放与展示设置（调用 StrategyMgr）
 
 | 命令 | 说明 |
 | --- | --- |
@@ -395,10 +358,11 @@
 | `strategy delete` | 删除策略定义（默认只预览，--yes 才执行） |
 | `strategy display get` | 查看实例的展示设置 |
 | `strategy display set` | 设置实例要隐藏的分类、成员与列 |
+| `strategy instance confirm` | 确认试运行中的实例转为实盘：下一期起按目标下单（先用 `trade shadow list` 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行；不给 --session-id 时预览里显示当前会话号） |
 | `strategy instance create` | 创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用） |
-| `strategy instance delete` | 删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（默认只预览，--yes 才执行） |
-| `strategy instance disable` | 停用策略实例（默认只预览，--yes 才执行） |
-| `strategy instance enable` | 启用策略实例（挂了账户的实例启用后会按目标下单；默认只预览，--yes 才执行） |
+| `strategy instance delete` | 删除已停用的策略实例，连同关联到它的因子任务和结果数据集（还被别的实例引用时拒绝；默认只预览，--yes 才执行） |
+| `strategy instance disable` | 停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行） |
+| `strategy instance enable` | 启用策略实例（挂了账户的实例启用后先试运行：目标只记为影子目标、不下单，确认实盘后才下单；默认只预览，--yes 才执行） |
 | `strategy instance list` | 列出策略实例（--space-id 过滤空间，默认 crypto） |
 | `strategy instance show` | 查看一个策略实例 |
 | `strategy instance update` | 修改停用中的策略实例绑定的策略定义与账户（因子任务创建时写定，不能改） |
@@ -407,16 +371,11 @@
 | `strategy replay cancel` | 取消回放 |
 | `strategy replay list` | 列出策略历史回放 |
 | `strategy replay show` | 查看一次回放 |
-| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场） |
+| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场）；`--input view` 读结果 View（默认），`--input compute` 由因子引擎现算（声明了 factor_params 的策略只能用它）；`--slippage-bps` 滑点 |
 | `strategy result list` | 列出实例每期的结果 |
 | `strategy result show` | 查看一期结果 |
 | `strategy show` | 查看一个策略定义 |
 | `strategy target list` | 查看实例当前的目标权重 |
-| `strategy template delete` | 删除模板（默认只预览，--yes 才执行） |
-| `strategy template list` | 列出策略模板 |
-| `strategy template render` | 用变量渲染模板，得到策略 DSL |
-| `strategy template save` | 保存模板 |
-| `strategy template show` | 查看一个模板 |
 | `strategy update` | 修改策略定义（引用它的实例要先停用） |
 | `strategy validate` | 试算策略 DSL（不落库） |
 
@@ -425,10 +384,6 @@
 | 命令 | 说明 |
 | --- | --- |
 | `system pause` | 系统暂停：下游到上游逐个暂停（默认只预览，--yes 才执行） |
-| `system reset abort` | 放弃未完成的系统重置（只标记日志，不撤销已做的步骤，不动各模块） |
-| `system reset apply` | 执行系统重置（--token）或续做（--operation-id） |
-| `system reset plan` | 系统重置计划（只读），给出令牌 |
-| `system reset status` | 查看系统重置日志 |
 | `system resume` | 系统恢复：先追赶补采，全部追平后统一放行 |
 | `system status` | 查看各模块的阶段与恢复追赶进度 |
 
@@ -456,6 +411,7 @@
 | `trade order show` | 查看订单 |
 | `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断） |
 | `trade positions` | 列出持仓 |
+| `trade shadow list` | 列出试运行中的策略实例最近的影子目标（权重、换算出的数量，从新到旧） |
 
 ## udf：自定义算子（wasm UDF）：new → build → publish → preview → activate
 

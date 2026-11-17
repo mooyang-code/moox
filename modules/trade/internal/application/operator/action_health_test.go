@@ -438,7 +438,8 @@ func TestSubmitWorkerLockTimeoutContinuesNextActionWithHealthyDiagnostics(t *tes
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 300 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, action store.OperatorActionRecord) error {
+			// 只看第一轮的结果：Interval 取很大，免得机器忙、第一轮超过默认的 1 秒间隔时，取消后又跑一轮，把结果盖成 context canceled。
+			worker := &traderuntime.OperatorWorker{Actions: f.store, Interval: time.Hour, ActionTimeout: 300 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, action store.OperatorActionRecord) error {
 				err := s.ResumeOperatorAction(ctx, action)
 				if action.ActionID == first.Action.ActionID {
 					unlock()

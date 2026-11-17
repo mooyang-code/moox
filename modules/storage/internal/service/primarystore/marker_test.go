@@ -19,11 +19,12 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 	store := openTestStore(t)
 	service, err := New(Options{Store: store, Snapshot: func() metadata.RequestSnapshot { return factorResultSnapshot{} }})
 	require.NoError(t, err)
-	auth := &pb.AuthInfo{AppId: "factor"}
 	marker := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "degraded", UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
-		CauseEventId: "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
+		UniverseSeries: []*pb.SeriesRef{{SubjectId: "ETH", SeriesTag: "default"}, {SubjectId: "BTC", SeriesTag: "default"}},
+		FailedSeries:   []*pb.SeriesRef{{SubjectId: "ETH", SeriesTag: "default"}},
+		CauseEventId:   "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
 		DetailType: "test.Detail.v1", Detail: []byte{0x0a, 0x00, 0xff, 0x7f},
 	}
 	row := &pb.RowFieldUpsert{
@@ -34,7 +35,7 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 	require.NoError(t, err)
 	var eventID string
 	for attempt := 0; attempt < 2; attempt++ {
-		appended, err := service.ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{AuthInfo: auth, SpaceId: "quant", Marker: marker})
+		appended, err := service.ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{SpaceId: "quant", Marker: marker})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_SUCCESS, appended.GetRetInfo().GetCode(), "ret_info=%v", appended.GetRetInfo())
 		if attempt == 0 {
@@ -42,7 +43,7 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 		}
 		require.Equal(t, eventID, appended.GetEventId())
 	}
-	got, err := service.GetDatasetPeriodCompleted(ctx, &pb.GetDatasetPeriodCompletedReq{AuthInfo: auth, SpaceId: "quant", DatasetId: "result", CauseEventId: "source-ready", PeriodTime: marker.GetPeriodTime()})
+	got, err := service.GetDatasetPeriodCompleted(ctx, &pb.GetDatasetPeriodCompletedReq{SpaceId: "quant", DatasetId: "result", CauseEventId: "source-ready", PeriodTime: marker.GetPeriodTime()})
 	require.NoError(t, err)
 	require.True(t, got.GetFound())
 	require.Equal(t, eventID, got.GetEventId())
@@ -65,11 +66,12 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 	require.Equal(t, marker.GetDetail(), payload.GetDetail(), "明细字节原样进入事件")
 	changed := proto.Clone(marker).(*pb.DatasetPeriodCompletedMarker)
 	changed.Detail = []byte("changed")
-	conflict, err := service.ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{AuthInfo: auth, SpaceId: "quant", Marker: changed})
+	conflict, err := service.ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{SpaceId: "quant", Marker: changed})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_CONFLICT, conflict.GetRetInfo().GetCode())
 }
 
+// 通不过事件校验的完成标记是无效请求（INVALID_PARAM），不是内部错误：写入方据此不重试；也不写出任何事件。
 func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -77,7 +79,7 @@ func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testin
 	require.NoError(t, err)
 	base := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
-		Status: "complete", UniverseSubjectIds: []string{"ETH"},
+		Status: "complete", UniverseSubjectIds: []string{"ETH"}, UniverseSeries: []*pb.SeriesRef{{SubjectId: "ETH", SeriesTag: "default"}},
 		CauseEventId: "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
 		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
 	}
@@ -92,13 +94,17 @@ func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testin
 			marker.FailedSubjects = []string{"BTC"}
 		}},
 		{name: "complete with failed subjects", mutate: func(marker *pb.DatasetPeriodCompletedMarker) { marker.FailedSubjects = []string{"ETH"} }},
+		{name: "missing universe_series", mutate: func(marker *pb.DatasetPeriodCompletedMarker) { marker.UniverseSeries = nil }},
+		{name: "empty series_tag", mutate: func(marker *pb.DatasetPeriodCompletedMarker) {
+			marker.UniverseSeries = []*pb.SeriesRef{{SubjectId: "ETH"}}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := proto.Clone(base).(*pb.DatasetPeriodCompletedMarker)
 			tc.mutate(marker)
-			rsp, err := service.ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "quant", Marker: marker})
+			rsp, err := service.ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{SpaceId: "quant", Marker: marker})
 			require.NoError(t, err)
-			require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "ret_info=%v", rsp.GetRetInfo())
 			page, err := store.ReadMarkerChanges(ctx, 0, 100)
 			require.NoError(t, err)
 			require.Empty(t, page.Markers)

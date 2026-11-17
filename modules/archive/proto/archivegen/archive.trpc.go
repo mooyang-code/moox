@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -52,6 +53,11 @@ type ArchiveMgrService interface {
 	ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq) (*ImportArchiveFileRsp, error)
 
 	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq) (*ClearArchiveUnrecoverableRsp, error)
+	// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+	//  暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复归档管理模块。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func ArchiveMgrService_GetArchiveOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -360,6 +366,42 @@ func ArchiveMgrService_ClearArchiveUnrecoverable_Handler(svr interface{}, ctx co
 	return rsp, nil
 }
 
+func ArchiveMgrService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.GetLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveMgrService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func ArchiveMgrService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.ControlLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveMgrService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // ArchiveMgrServer_ServiceDesc descriptor for server.RegisterService.
 var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.archive.ArchiveMgr",
@@ -432,6 +474,14 @@ var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
 			Func: ArchiveMgrService_ClearArchiveUnrecoverable_Handler,
+		},
+		{
+			Name: "/trpc.moox.archive.ArchiveMgr/GetLifecycle",
+			Func: ArchiveMgrService_GetLifecycle_Handler,
+		},
+		{
+			Name: "/trpc.moox.archive.ArchiveMgr/ControlLifecycle",
+			Func: ArchiveMgrService_ControlLifecycle_Handler,
 		},
 	},
 }
@@ -613,6 +663,18 @@ func (s *UnimplementedArchiveMgr) ClearArchiveUnrecoverable(ctx context.Context,
 	return nil, errors.New("rpc ClearArchiveUnrecoverable of service ArchiveMgr is not implemented")
 }
 
+// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+//
+//	暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
+func (s *UnimplementedArchiveMgr) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("rpc GetLifecycle of service ArchiveMgr is not implemented")
+}
+
+// ControlLifecycle ControlLifecycle 暂停、恢复归档管理模块。
+func (s *UnimplementedArchiveMgr) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("rpc ControlLifecycle of service ArchiveMgr is not implemented")
+}
+
 type UnimplementedArchiveWorker struct{}
 
 func (s *UnimplementedArchiveWorker) ArchiveWorkerHeartbeat(ctx context.Context, req *ArchiveWorkerHeartbeatReq) (*ArchiveWorkerHeartbeatRsp, error) {
@@ -669,6 +731,11 @@ type ArchiveMgrClientProxy interface {
 	ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq, opts ...client.Option) (rsp *ImportArchiveFileRsp, err error)
 
 	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq, opts ...client.Option) (rsp *ClearArchiveUnrecoverableRsp, err error)
+	// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+	//  暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复归档管理模块。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type ArchiveMgrClientProxyImpl struct {
@@ -1014,6 +1081,46 @@ func (c *ArchiveMgrClientProxyImpl) ClearArchiveUnrecoverable(ctx context.Contex
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ClearArchiveUnrecoverableRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveMgrClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/GetLifecycle")
+	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveMgr")
+	msg.WithCalleeMethod("GetLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.GetLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveMgrClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/ControlLifecycle")
+	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveMgr")
+	msg.WithCalleeMethod("ControlLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.ControlLifecycleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

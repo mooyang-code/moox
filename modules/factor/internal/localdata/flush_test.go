@@ -55,7 +55,7 @@ func TestSettleFlushRecoversWindowWhenFlushFailed(t *testing.T) {
 	for i := range values {
 		values[i] = seriesstore.Float(999)
 	}
-	extra.AppendRow(at(10), "", false, values...)
+	extra.AppendRow(at(10), plainTag, false, values...)
 	require.NoError(t, st.window.Append("A", extra))
 	latest, _ := st.window.Latest("A")
 	require.Equal(t, at(10), latest)
@@ -120,7 +120,7 @@ func TestWriteLocalClearsPulledRecords(t *testing.T) {
 	for i := range values {
 		values[i] = seriesstore.Float(1)
 	}
-	old.AppendRow(at(10), "", false, values...)
+	old.AppendRow(at(10), plainTag, false, values...)
 	_, err = fx.data.WriteLocal(context.Background(), startupSrc, []seriesstore.SubjectWrite{{Subject: "A", From: at(10), To: at(11), Rows: old}}, seriesstore.WriteOptions{})
 	require.NoError(t, err)
 	require.False(t, fx.data.syncer.HasPulled(startupSrc, "A"), "WriteLocal 之后拉取记录应已清除")

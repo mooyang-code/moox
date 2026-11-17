@@ -40,7 +40,7 @@ import { Message } from "@arco-design/web-vue";
 import { getErrorMessage } from "@/utils/error-handler";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 
-let userStores = useUserInfoStore();
+const userStores = useUserInfoStore();
 const routeStore = useRoutesConfigStore();
 const router = useRouter();
 const route = useRoute();
@@ -182,26 +182,10 @@ const onLogin = async () => {
       return;
     }
 
-    // 使用新的安全登录方法
-    let res = await loginAPI({
+    // 登录成功后会话在 HttpOnly Cookie 里，之后的请求由浏览器自动带上
+    await loginAPI({
       username: form.value.username,
       password: form.value.password
-    });
-
-    // 检查登录是否成功 - 使用新的ret_info协议格式
-    if (res.ret_info.code !== 0) {
-      throw new Error(res.ret_info.msg || "登录失败");
-    }
-
-    if (!res.access_token || !res.session_id || !res.request_signing_key || !res.expires_at) {
-      throw new Error("登录响应中缺少安全会话信息");
-    }
-
-    await userStores.setLoginSession({
-      token: res.access_token,
-      sessionId: res.session_id,
-      signingKey: res.request_signing_key,
-      expiresAt: res.expires_at
     });
 
     // 加载用户信息
@@ -215,10 +199,8 @@ const onLogin = async () => {
     // 会话过期被带到登录页时回到原页面，否则回首页
     void router.replace(safeRedirect(route.query.redirect) || "/home");
   } catch (error: unknown) {
-    console.error("❌ 登录失败:", error);
-
-    // 清理可能设置的无效token
-    await userStores.logOut();
+    console.error("登录失败:", error);
+    userStores.clearAccount();
 
     const loginErrorMessage = getErrorMessage(error, "登录失败");
     Message.error(loginErrorMessage);

@@ -297,10 +297,10 @@ func pickOrder(mode dsl.Market, id string, held heldIndex) []string {
 	return []string{mode.Prefer, otherMarket(mode, mode.Prefer)}
 }
 
-// filtersShortCandidates 报告这条规则是否做空头候选过滤：同时涉及现货与永续的模式下、非 tranche 的空头规则。
+// filtersShortCandidates 报告这条规则是否做空头候选过滤：同时涉及现货与永续的模式下的空头规则。
 // 写了规则级市场的规则不做这一步：它只用该市场的视图（见 rulemarket.go）。
 func filtersShortCandidates(mode dsl.Market, rule dsl.Rule) bool {
-	return !mode.Single() && mode.Has(dsl.MarketSwap) && rule.Type != dsl.RuleTypeTranche && rule.Side == dsl.SideShort && dsl.RuleMarket(mode, rule) == ""
+	return !mode.Single() && mode.Has(dsl.MarketSwap) && rule.Side == dsl.SideShort && dsl.RuleMarket(mode, rule) == ""
 }
 
 // marketUnavailable 报告这个市场本期整体不可用：帧里它的失败证据有 market_unavailable（input 对整个市场的每个标的都记这个原因）。

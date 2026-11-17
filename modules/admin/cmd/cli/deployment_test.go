@@ -18,8 +18,6 @@ func TestTopologyRecoveryProtectsControlAndRejectsInvalidOperations(t *testing.T
 	}{
 		{"host", "control", "", "disabled"},
 		{"deployment", "control", "admin", "disabled"},
-		{"deployment", "control", "web-host", "disabled"},
-		{"deployment", "control", "console-proxy", "disabled"},
 		{"deployment", "control", "host-gateway", "disabled"},
 		{"deployment", "control", "host-agent", "disabled"},
 		{"deployment", "control", "unknown", "enabled"},

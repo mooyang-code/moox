@@ -59,7 +59,6 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			OrderSettingsJSON: legacyOrderSettings,
 			SpaceID:           testSpace, LogicalAccountID: "logical-other", Name: "Other logical account",
-			OwnerInstanceID: "instance-other", OwnerSessionID: "session-other",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
@@ -83,7 +82,7 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested,
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: "other-target", LogicalAccountId: "logical-other",
-			InstanceId: "instance-other", SessionId: "session-other", StrategyId: "strategy-other",
+			InstanceId: "instance-other", SessionId: "session-other", SessionStartedAt: 1_000, StrategyId: "strategy-other",
 			BarEndTime: timestamppb.New(now),
 			ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		}, events.PublishOptions{EventID: "other-target", OccurredAt: now, SpaceID: testSpace, SubjectID: "logical-other"})

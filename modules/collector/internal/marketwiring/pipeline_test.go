@@ -213,7 +213,7 @@ func TestComposedHandlerRunsStockIndexAndConvertibleBondOnTheSingleSourcePipelin
 		var built *marketfetch.KlinePipeline
 		h := NewHandler()
 		h.Now = clock
-		h.NewStorage = func(string) (marketfetch.Storage, error) { return storage, nil }
+		h.NewStorage = func() (marketfetch.Storage, error) { return storage, nil }
 		h.NewKlinePipeline = func(s marketfetch.Storage, marketID string, instrument marketdata.InstrumentType, frequency, providerID string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
 			pipeline, err := NewKlinePipeline(s, marketID, instrument, frequency, providerID, limits)
 			if err != nil {

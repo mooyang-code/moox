@@ -110,10 +110,32 @@ func TestCriticalAlertLinesCountEachComponentOnce(t *testing.T) {
 	lines := criticalAlertLines([]doctorcli.AlertItem{
 		{Source: doctorcli.AlertSourceAlert, Severity: doctorcli.AlertSeverityCritical, Object: "component/storage/host-agent", Title: "健康检查超时"},
 		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityCritical, Object: "storage/host-agent", Title: "storage / host-agent"},
-		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityWarning, Object: "storage/access", Title: "storage / access"},
+		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityWarning, Object: "storage/storage-view", Title: "storage / storage-view"},
 		{Source: doctorcli.AlertSourceHost, Severity: doctorcli.AlertSeverityCritical, Object: "overseas", Title: "主机 overseas"},
 	})
 	require.Equal(t, []string{"storage/host-agent storage / host-agent", "overseas 主机 overseas"}, lines)
+}
+
+// 组件状态项不是 critical 时，它的 critical 告警（例如 reporter: 停止上报）不能被去重丢掉。
+func TestCriticalAlertLinesKeepCriticalAlertOfWarningComponent(t *testing.T) {
+	lines := criticalAlertLines([]doctorcli.AlertItem{
+		{Source: doctorcli.AlertSourceAlert, Severity: doctorcli.AlertSeverityCritical, Object: "component/storage/host-agent", Title: "停止上报"},
+		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityWarning, Object: "storage/host-agent", Title: "storage / host-agent"},
+	})
+	require.Equal(t, []string{"component/storage/host-agent 停止上报"}, lines)
+}
+
+// 已启用的部署从没上报或停止上报时 Monitor 把组件记为 down：验收看到 critical，不能算装好。
+func TestSetupVerifyFailsOnSilentComponents(t *testing.T) {
+	for _, reason := range []string{"从未收到监控上报", "监控上报已中断"} {
+		overview := &monitorpb.HealthOverview{Components: []*monitorpb.HealthComponent{
+			{HostId: "storage", ComponentId: "storage-view", Status: "down", Reason: reason},
+			{HostId: "storage", ComponentId: "storage-primary", Status: "disabled", Reason: "部署已停用"},
+		}}
+		lines := criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items)
+		require.Len(t, lines, 1, reason)
+		require.Contains(t, lines[0], "storage-view")
+	}
 }
 
 // 不配币安只读 Key 的全新安装：Monitor 把这一项报成 warning 告警和 degraded 业务检查，验收不把它当成故障。
@@ -132,6 +154,22 @@ func TestCriticalAlertLinesSkipReadonlyKeyMissing(t *testing.T) {
 	lines := criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items)
 	require.Len(t, lines, 1)
 	require.Contains(t, lines[0], "下架检测来源连续失败")
+}
+
+// 全新安装没有任何归档任务，Monitor 把“未归档的数据集”报成 critical：它是待办提醒，验收不能因此失败。
+func TestCriticalAlertLinesSkipArchiveCoverage(t *testing.T) {
+	overview := &monitorpb.HealthOverview{
+		Alerts: []*monitorpb.HealthAlert{
+			{Id: "archive_coverage:archive", Severity: "critical", Title: "未归档的数据集", Object: &monitorpb.HealthObject{Type: "business", Kind: "archive_coverage"}},
+		},
+		BusinessChecks: []*monitorpb.HealthBusinessCheck{
+			{CheckId: "archive_coverage:archive", Name: "未归档的数据集", Status: "down", Reason: "7 个有限保留期的时序数据集还没有归档任务"},
+			{CheckId: "archive_object_store:archive", Name: "归档对象存储", Status: "down", Reason: "连不上"},
+		},
+	}
+	lines := criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items)
+	require.Len(t, lines, 1)
+	require.Contains(t, lines[0], "归档对象存储")
 }
 
 func TestSetupVerifyMonitorErrorKeepsOtherChecks(t *testing.T) {

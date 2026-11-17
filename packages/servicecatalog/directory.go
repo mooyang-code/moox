@@ -6,13 +6,7 @@ import (
 	"slices"
 )
 
-// VersionHash hashes the directory contents without its version field, matching
-// the compiler. It does not mutate the supplied directory.
-func (d Directory) VersionHash() (string, error) {
-	d.Version = ""
-	return contentHash(d)
-}
-
+// Validate 检查目录的结构：主机与服务数量有上限，地址合法，服务只落在目录里的主机上。
 func (d Directory) Validate() error {
 	if len(d.Hosts) > 1024 || len(d.Services) > 4096 || d.Hosts == nil || d.Services == nil {
 		return fmt.Errorf("directory requires bounded host and service maps")
@@ -38,18 +32,11 @@ func (d Directory) Validate() error {
 			seen[id] = true
 		}
 	}
-	hash, err := d.VersionHash()
-	if err != nil {
-		return err
-	}
-	if d.Version != hash {
-		return fmt.Errorf("directory version does not match its contents")
-	}
 	return nil
 }
 
 func validDirectoryHost(id string, host DirectoryHost) bool {
-	return ValidHostID(id) && ValidHostAddress(host.Address) && (host.PrivateAddress == "" || ValidHostAddress(host.PrivateAddress)) && len(host.Region) <= 128 && (host.Relay == "" || ValidHostID(host.Relay) && host.Relay != id)
+	return ValidHostID(id) && ValidHostAddress(host.Address) && (host.PrivateAddress == "" || ValidHostAddress(host.PrivateAddress)) && (host.Relay == "" || ValidHostID(host.Relay) && host.Relay != id)
 }
 
 // ValidHostID checks the canonical host identity shared by topology and callers.

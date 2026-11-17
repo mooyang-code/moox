@@ -35,7 +35,6 @@ type metadataAPI interface {
 // dataset and its query View.
 type Catalog struct {
 	Metadata metadataAPI
-	Auth     *storagepb.AuthInfo
 	// View 用来等目标 View 的列建好。
 	View ViewWaiter
 }
@@ -70,7 +69,7 @@ func fieldsFor(tradeCount bool) []klineField {
 // bindings and View. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
 func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.Subject) error {
-	if c == nil || c.Metadata == nil || c.Auth == nil {
+	if c == nil || c.Metadata == nil {
 		return errors.New("resample catalog dependencies are required")
 	}
 	if params == nil {
@@ -112,7 +111,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		}
 		return original
 	}
-	target, getErr := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, DatasetId: targetDatasetID})
+	target, getErr := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: task.SpaceID, DatasetId: targetDatasetID})
 	if getErr != nil {
 		return fmt.Errorf("get target Dataset: %w", getErr)
 	}
@@ -122,7 +121,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	columns := targetDatasetColumns(tradeCount, params.OutputFields)
 	if target.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || target.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		// 数据集连同列在一次调用里建好，建好即可写入。
-		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: c.Auth, Dataset: &storagepb.Dataset{
+		created, createErr := c.Metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{Dataset: &storagepb.Dataset{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID,
 			// 数据集名称在空间内唯一且必须含中文：用目标 ID 派生一个稳定的短后缀，避免不同合成目标重名。
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
@@ -155,7 +154,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		// 已有的目标数据集按同一份列定义补齐：上一轮建数据集时缓存没发布成功，这里也会让 Storage 重新发布。
 		for _, column := range columns {
 			column.SpaceId, column.DatasetId = task.SpaceID, targetDatasetID
-			resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: column})
+			resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{Column: column})
 			if callErr != nil {
 				return fmt.Errorf("upsert target column %s: %w", column.GetColumnName(), callErr)
 			}
@@ -164,7 +163,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			}
 		}
 	}
-	viewResp, viewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
+	viewResp, viewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: task.SpaceID, ViewId: targetViewID})
 	if viewErr != nil {
 		return compensate(fmt.Errorf("get target View: %w", viewErr))
 	}
@@ -172,7 +171,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(errors.New("get target View: empty ret_info"))
 	}
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
-		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, CreateOnly: true, View: &storagepb.View{
+		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{CreateOnly: true, View: &storagepb.View{
 			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", Status: "active",
 			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse"},
@@ -191,7 +190,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(err)
 	}
 	// View 的列由 Storage 按目标数据集启用的列推出；重新读一次 View，按它现在的列（即目标数据集的列）等列建进索引。
-	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
+	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: task.SpaceID, ViewId: targetViewID})
 	if finalViewErr != nil {
 		return compensate(fmt.Errorf("reread target View: %w", finalViewErr))
 	}
@@ -202,7 +201,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if finalView == nil {
 		return compensate(errors.New("reread target View is empty"))
 	}
-	err = waitTargetViewColumns(ctx, c.View, c.Auth, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second)
+	err = waitTargetViewColumns(ctx, c.View, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second)
 	if err != nil && ctx.Err() == nil && task.PrepareState == domain.PrepareStateReady && !createdDataset && !createdView {
 		// 已经 Ready 的任务只在这里复核列：storage-view 不可达、恢复或重建期间 View 暂时查不到，不能让任务掉出 Ready，
 		// 否则触发、历史作业与兜底都停下，恢复后更早的桶补不回来。只记日志，下一轮再看。
@@ -242,7 +241,7 @@ func (c *Catalog) cleanupCreatedTarget(ctx context.Context, spaceID, datasetID, 
 	}
 	var cleanupErrors []error
 	if deleteView {
-		view, err := c.Metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID})
+		view, err := c.Metadata.DeleteView(ctx, &storagepb.DeleteViewReq{SpaceId: spaceID, ViewId: viewID})
 		if err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete newly-created target View: %w", err))
 		} else if view == nil || (view.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
@@ -250,7 +249,7 @@ func (c *Catalog) cleanupCreatedTarget(ctx context.Context, spaceID, datasetID, 
 		}
 	}
 	if deleteDataset {
-		dataset, err := c.Metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID})
+		dataset, err := c.Metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 		if err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete newly-created target Dataset: %w", err))
 		} else if dataset == nil || (dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
@@ -296,7 +295,7 @@ func uniqueResampleDisplayName(targetDatasetID string) string {
 
 // waitTargetViewColumns 等到 View 的活动索引建好、声明的列都已建进索引才放行采集。View 还没开始建索引
 // （VIEW_NOT_FOUND）或索引还在建（index_id 为空）都继续等，超时返回 ErrTargetViewNotReady，下一轮准备时再等。
-func waitTargetViewColumns(ctx context.Context, view ViewWaiter, auth *storagepb.AuthInfo, spaceID, viewID string, columns []*storagepb.ViewColumn, timeout time.Duration) error {
+func waitTargetViewColumns(ctx context.Context, view ViewWaiter, spaceID, viewID string, columns []*storagepb.ViewColumn, timeout time.Duration) error {
 	if view == nil {
 		return errors.New("合成需要 DataView 客户端")
 	}
@@ -306,7 +305,7 @@ func waitTargetViewColumns(ctx context.Context, view ViewWaiter, auth *storagepb
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {
-		response, err := view.GetViewState(waitCtx, &storagepb.GetViewStateReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
+		response, err := view.GetViewState(waitCtx, &storagepb.GetViewStateReq{SpaceId: spaceID, ViewId: viewID})
 		if err != nil {
 			if waitCtx.Err() != nil {
 				if ctx.Err() != nil {

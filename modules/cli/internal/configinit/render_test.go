@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 // sampleRequest 是三台独立的腾讯云服务器（存储、管理台、海外），不配因子计算机（地址用文档保留的测试网段）。
@@ -28,23 +28,45 @@ func sampleRequest() Request {
 	return request
 }
 
-func renderWith(t *testing.T, request Request, prober Prober) (setupconfig.Manifest, string) {
+// renderedManifest 把渲染出的两份文件放在一起看：拓扑字段来自 moox.toml，账号与密钥来自 moox.secrets.toml。
+type renderedManifest struct {
+	*topology.Config
+	Admin        topology.Admin
+	TencentCloud topology.TencentCloud
+	Notification topology.Notification
+	ExchangeKeys []topology.ExchangeKey
+}
+
+// parseRendered 用 CLI 自己的严格解码与校验解析两份文件。
+func parseRendered(t *testing.T, rendered Rendered) renderedManifest {
+	t.Helper()
+	pair, err := parsePair(rendered.Config, rendered.Secrets)
+	if err != nil {
+		t.Fatalf("渲染结果应通过 CLI 自己的校验: %v", err)
+	}
+	return renderedManifest{Config: &pair.Config, Admin: pair.Secrets.Admin, TencentCloud: pair.Secrets.TencentCloud, Notification: pair.Secrets.Notification, ExchangeKeys: pair.Secrets.ExchangeKeys}
+}
+
+func renderPair(t *testing.T, request Request, prober Prober) (renderedManifest, Rendered) {
 	t.Helper()
 	if prober == nil {
 		prober = &fakeProber{report: linuxReport()}
 	}
-	raw, err := Render(context.Background(), &request, testEnv(newFakeCloud(), prober))
+	rendered, err := Render(context.Background(), &request, testEnv(newFakeCloud(), prober))
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := setupconfig.Parse(raw)
-	if err != nil {
-		t.Fatalf("渲染结果应通过 CLI 自己的校验: %v", err)
-	}
-	return manifest, string(raw)
+	return parseRendered(t, rendered), rendered
 }
 
-func render(t *testing.T, request Request) setupconfig.Manifest {
+// renderWith 返回解析结果与 moox.toml 的文本。
+func renderWith(t *testing.T, request Request, prober Prober) (renderedManifest, string) {
+	t.Helper()
+	manifest, rendered := renderPair(t, request, prober)
+	return manifest, string(rendered.Config)
+}
+
+func render(t *testing.T, request Request) renderedManifest {
 	t.Helper()
 	manifest, _ := renderWith(t, request, nil)
 	return manifest
@@ -69,17 +91,17 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	if manifest.Notification.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc" {
 		t.Fatalf("通知 = %+v", manifest.Notification)
 	}
-	if len(manifest.HostCatalog) != 3 || manifest.HostCatalog["storage"].SSH.Password != "" || manifest.HostCatalog["storage"].SSH.PrivateKeyFile != sshKeyTOMLPath || manifest.HostCatalog["control"].Address != "198.51.100.10" {
+	if len(manifest.HostCatalog) != 3 || manifest.HostCatalog["storage"].SSH.PrivateKeyFile != sshKeyTOMLPath || manifest.HostCatalog["control"].Address != "198.51.100.10" {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
 	// 角色到组件的映射与示例模板的部署一致。
-	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"}) ||
-		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-view", "access", "eventbus"}) ||
-		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"}) {
+	if !slices.Equal(manifest.Deployments["control"], []string{"admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}) ||
+		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-view", "eventbus"}) ||
+		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "egress-proxy", "collector-stream", "callback-dispatcher"}) {
 		t.Fatalf("部署 = %+v", manifest.Deployments)
 	}
-	if manifest.EventBus.PublicAddress != manifest.HostCatalog["storage"].Address {
-		t.Fatalf("EventBus 地址应由 eventbus 所在主机推出，实际 %q", manifest.EventBus.PublicAddress)
+	if manifest.EventBusHost().Address != manifest.HostCatalog["storage"].Address {
+		t.Fatalf("EventBus 地址应由 eventbus 所在主机推出，实际 %q", manifest.EventBusHost().Address)
 	}
 	if _, ok := manifest.HostCatalog["factor"]; ok {
 		t.Fatal("没配因子机时不应登记 factor 主机")
@@ -95,12 +117,12 @@ func TestRegionsComeFromTheCloudNotTheUser(t *testing.T) {
 			t.Fatalf("%s：地域/云厂商 = %q/%q，应为 %q/tencent", id, host.Region, host.Provider, want)
 		}
 	}
-	if manifest.TencentCloud.Region != "ap-guangzhou" {
-		t.Fatalf("腾讯云默认地域应取管理台所在地域，实际 %q", manifest.TencentCloud.Region)
+	if manifest.CloudRegion() != "ap-guangzhou" {
+		t.Fatalf("腾讯云默认地域应取管理台所在地域，实际 %q", manifest.CloudRegion())
 	}
 	request := sampleRequest()
 	request.Servers.Control = &Server{SharedWith: RoleOverseas}
-	if got := render(t, request).TencentCloud.Region; got != "ap-hongkong" {
+	if got := render(t, request).CloudRegion(); got != "ap-hongkong" {
 		t.Fatalf("管理台和海外服务器共用时，默认地域应为香港，实际 %q", got)
 	}
 }
@@ -120,16 +142,41 @@ func TestServersOutsideTheAccountAreRejected(t *testing.T) {
 }
 
 func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
-	_, text := renderWith(t, sampleRequest(), nil)
-	for _, want := range []string{"[storage_retention]", "[egress_proxy]", "[local_logs]", "# 告警推送渠道。webhook_url 可以先留空", "# View 只按根数保留", "[factors]"} {
+	_, rendered := renderPair(t, sampleRequest(), nil)
+	text, secrets := string(rendered.Config), string(rendered.Secrets)
+	for _, want := range []string{"[storage_retention]", "[egress_proxy]", "# View 只按根数保留", "[logging.cls]", "# 手工调过的组件配置"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("应保留示例里的 %q", want)
+			t.Fatalf("moox.toml 应保留示例里的 %q", want)
 		}
 	}
-	for _, leftover := range []string{"203.0.113.", "192.0.2.30", "[hosts.factor]", "[factor_engine]", "factor-engine"} {
-		if strings.Contains(text, leftover) {
-			t.Fatalf("不应残留示例里的 %q", leftover)
+	for _, want := range []string{"# 告警渠道的初始值", "[logging.cls]", "# 交易所密钥（可选）"} {
+		if !strings.Contains(secrets, want) {
+			t.Fatalf("moox.secrets.toml 应保留示例里的 %q", want)
 		}
+	}
+	for _, leftover := range []string{"203.0.113.", "192.0.2.30", "[hosts.factor]", "[factor_engine]", `"factor-engine", "archive-worker"`, "[factors]", "[local_logs]", "[admin]"} {
+		if strings.Contains(text, leftover) {
+			t.Fatalf("moox.toml 不应残留 %q", leftover)
+		}
+	}
+}
+
+// 两份文件分开：页面提交的每个秘密值都只在 moox.secrets.toml 里，不出现在明文的 moox.toml。
+func TestRenderKeepsEverySecretOutOfTheTopologyFile(t *testing.T) {
+	request := sampleRequest()
+	request.Notification.ChannelType, request.Notification.WebhookURL, request.Notification.Secret = "feishu", "https://open.feishu.cn/open-apis/bot/v2/hook/feishu-hook-id", "feishu-sign-secret"
+	request.ExchangeKeys = []ExchangeKeyEntry{{Name: "main", Exchange: "okx", Environment: "production", APIKey: "okx-api-key", SecretKey: "okx-secret-key", Passphrase: "okx-passphrase"}}
+	manifest, rendered := renderPair(t, request, nil)
+	for _, secret := range []string{"Adm1n-P@ss", "AKIDexample", "key-example", "feishu-hook-id", "feishu-sign-secret", "okx-api-key", "okx-secret-key", "okx-passphrase"} {
+		if strings.Contains(string(rendered.Config), secret) {
+			t.Fatalf("moox.toml 里出现了秘密 %q", secret)
+		}
+		if !strings.Contains(string(rendered.Secrets), secret) {
+			t.Fatalf("moox.secrets.toml 里应有 %q", secret)
+		}
+	}
+	if manifest.ExchangeKeys[0].ID() != "exchange-okx-production-main" || manifest.Notification.ChannelType != "feishu" {
+		t.Fatalf("秘密文件解析结果不对: %+v %+v", manifest.ExchangeKeys, manifest.Notification)
 	}
 }
 
@@ -156,11 +203,11 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 		if len(manifest.HostCatalog) != 2 {
 			t.Fatalf("%s：应只有两台主机，实际 %v", target.role, manifest.HostCatalog)
 		}
-		if manifest.ComponentHost("admin") != target.host || manifest.ComponentHost("console-proxy") != target.host {
+		if manifest.ComponentHost("admin") != target.host || manifest.ComponentHost("monitor") != target.host {
 			t.Fatalf("%s：管理台组件应放到 %s，实际 %+v", target.role, target.host, manifest.Deployments)
 		}
 		// EventBus 是独立单元，默认放在存储机上（Storage 内部的事件流量最大），不跟着管理台组件走。
-		if manifest.ComponentHost("eventbus") != "storage" || manifest.EventBus.PublicAddress != manifest.HostCatalog["storage"].Address {
+		if manifest.ComponentHost("eventbus") != "storage" || manifest.EventBusHost().Address != manifest.HostCatalog["storage"].Address {
 			t.Fatalf("%s：EventBus 应在存储机上，地址是存储机的地址：%+v", target.role, manifest.Deployments)
 		}
 	}
@@ -172,7 +219,7 @@ func TestFactorMachineIsAnOutboundDeploymentHost(t *testing.T) {
 	request.Servers.Factor = &SSHTarget{Address: "192.168.0.103", SSHPort: 2222, SSHUser: "builder"}
 	manifest := render(t, request)
 	host := manifest.HostByID("factor")
-	if host.Port != 2222 || host.Password != "" || host.PrivateKeyFile != sshKeyTOMLPath || host.Reachability != "outbound" || host.Label != "因子机" {
+	if host.Port != 2222 || host.PrivateKeyFile != sshKeyTOMLPath || host.Reachability != "outbound" || host.Label != "因子机" {
 		t.Fatalf("因子机 = %+v", host)
 	}
 	if definition := manifest.HostCatalog["factor"]; definition.Region != "" || definition.Provider != "" || definition.Label != "因子机" {
@@ -280,7 +327,8 @@ func TestRenderEscapesSecretsAndRoundTrips(t *testing.T) {
 		request := sampleRequest()
 		request.Admin.Password = secret
 		request.Tencent.SecretKey = secret
-		_, raw := renderWith(t, request, nil)
+		_, rendered := renderPair(t, request, nil)
+		raw := string(rendered.Secrets)
 		var decoded struct {
 			Admin   struct{ Password string }
 			Tencent struct {
@@ -330,18 +378,20 @@ func TestRenderRejectsInputThatCouldBreakTheFile(t *testing.T) {
 	}
 }
 
-// 模板必须与仓库根目录的示例保持一致；示例改版而模板没同步时，这里先报警。
-func TestTemplateMatchesTheRepositoryExample(t *testing.T) {
-	root, err := filepath.Abs("../../../../moox.toml.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := os.ReadFile(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(want) != exampleTemplate {
-		t.Fatal("internal/configinit/moox.toml.example 与仓库根目录的 moox.toml.example 不一致：改了示例后要同步复制一份")
+// 两份模板必须与仓库根目录的示例保持一致；示例改版而模板没同步时，这里先报警。
+func TestTemplatesMatchTheRepositoryExamples(t *testing.T) {
+	for name, embedded := range map[string]string{"moox.toml.example": exampleTemplate, "moox.secrets.toml.example": secretsTemplate} {
+		root, err := filepath.Abs("../../../../" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := os.ReadFile(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(want) != embedded {
+			t.Fatalf("internal/configinit/%s 与仓库根目录的 %s 不一致：改了示例后要同步复制一份", name, name)
+		}
 	}
 }
 
@@ -367,8 +417,8 @@ func TestRenderAllowsEmptyWebhook(t *testing.T) {
 	}
 }
 
-// 配置页能生成的每种拓扑都要部署完整，否则新用户都会卡在 Access 未就绪。
-func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
+// 配置页能生成的每种拓扑都有外部入口（云函数、Skill 要从它进来），并且不会把只能出站的因子机标成入口。
+func TestEveryGeneratedTopologyHasAnExternalEntry(t *testing.T) {
 	factorServer := &SSHTarget{Address: "192.0.2.30", SSHUser: "builder"}
 	cases := map[string]func(*Request){
 		"全部":      func(r *Request) { r.Servers.Factor = factorServer },
@@ -380,36 +430,18 @@ func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
 	for name, change := range cases {
 		request := sampleRequest()
 		change(&request)
-		if err := setupvalidate.CheckDeployments(render(t, request)); err != nil {
-			t.Fatalf("%s: %v", name, err)
+		manifest := render(t, request)
+		if entry := manifest.EntryHost(); entry.Name != manifest.StorageHost().Name || entry.Name == "" {
+			t.Fatalf("%s: 默认外部入口应是存储机，得到 %q", name, entry.Name)
 		}
-	}
-}
-
-func TestFactorsTurnOnWithEngineAndKeepOnlyReachableSpaces(t *testing.T) {
-	full := sampleRequest()
-	full.Servers.Factor = &SSHTarget{Address: "192.168.0.20", SSHUser: "me"}
-	manifest := render(t, full)
-	if !manifest.Factors.Enabled || !slices.ContainsFunc(manifest.Factors.Tasks, func(task setupconfig.FactorSetupTask) bool { return task.SpaceID == "crypto" }) {
-		t.Fatal("有因子机和海外机时默认打开因子，保留 crypto 任务")
-	}
-	noOverseas := full
-	noOverseas.Servers.Overseas = nil
-	manifest = render(t, noOverseas)
-	if !manifest.Factors.Enabled {
-		t.Fatal("有因子机、没有海外机时仍打开因子（A 股走云函数）")
-	}
-	for _, task := range manifest.Factors.Tasks {
-		if task.SpaceID == "crypto" {
-			t.Fatalf("没有海外机时 crypto 采集不起来，不该保留任务 %s", task.ID)
+		for _, host := range manifest.Hosts() {
+			if host.ExternalEntry && host.Reachability != "" {
+				t.Fatalf("%s: 只能出站的主机 %s 被标成了外部入口", name, host.Name)
+			}
+			if slices.Contains(manifest.Deployments[host.Name], "access") {
+				t.Fatalf("%s: 生成的配置里还有已删除的 access 组件", name)
+			}
 		}
-	}
-	if !slices.ContainsFunc(manifest.Factors.Tasks, func(task setupconfig.FactorSetupTask) bool { return task.ID == "ftask_cn_5m" }) {
-		t.Fatal("没有海外机时保留 A 股因子任务")
-	}
-	noFactor := sampleRequest()
-	if render(t, noFactor).Factors.Enabled {
-		t.Fatal("没有因子机时不打开因子")
 	}
 }
 
@@ -418,14 +450,12 @@ func TestRenderPlansStockCNCloudFunctionsInTheStorageVPC(t *testing.T) {
 	cloud := newFakeCloud()
 	cloud.instances["198.51.100.11"] = Instance{Kind: "cvm", KindName: "云服务器", Region: "ap-nanjing", RegionName: "南京", Name: "storage",
 		VpcID: "vpc-abc", SubnetID: "subnet-def", PrivateIP: "10.0.0.5"}
-	raw, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
+	rendered, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := setupconfig.Parse(raw)
-	if err != nil {
-		t.Fatalf("渲染结果应通过 CLI 自己的校验: %v", err)
-	}
+	manifest := parseRendered(t, rendered)
+	raw := rendered.Config
 	if !manifest.SCFEnabled() {
 		t.Fatal("应打开 [scf_plan]")
 	}
@@ -434,7 +464,7 @@ func TestRenderPlansStockCNCloudFunctionsInTheStorageVPC(t *testing.T) {
 		t.Fatalf("云账号 = %+v", account)
 	}
 	region := manifest.SCFPlan.Regions["ap-nanjing"]
-	if region.VPCID != "vpc-abc" || region.SubnetID != "subnet-def" || region.AccessHost != "storage" {
+	if region.VPCID != "vpc-abc" || region.SubnetID != "subnet-def" || region.EntryHost != "storage" {
 		t.Fatalf("地域网络 = %+v", region)
 	}
 	if len(manifest.SCFPlan.Spaces) != 1 || manifest.SCFPlan.Spaces[0].SpaceID != "stockcn" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-nanjing"}) {
@@ -457,16 +487,12 @@ func ptr[T any](value T) *T { return &value }
 // 只给存储服务器写私网地址；管理台与存储同地域却不在同一个 VPC、或拿不到 AppId 时不生成云函数计划，也不写私网地址。
 func TestRenderCloudFunctionPlanGuards(t *testing.T) {
 	storageCVM := Instance{Kind: "cvm", KindName: "云服务器", Region: "ap-nanjing", Name: "storage", VpcID: "vpc-abc", SubnetID: "subnet-def", PrivateIP: "10.0.0.5"}
-	renderCloud := func(cloud *fakeCloud) (setupconfig.Manifest, string) {
-		raw, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
+	renderCloud := func(cloud *fakeCloud) (renderedManifest, string) {
+		rendered, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
 		if err != nil {
 			t.Fatal(err)
 		}
-		manifest, err := setupconfig.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return manifest, string(raw)
+		return parseRendered(t, rendered), string(rendered.Config)
 	}
 
 	cloud := newFakeCloud()
@@ -493,31 +519,27 @@ func TestRenderCloudFunctionPlanGuards(t *testing.T) {
 	}
 }
 
-// 入口主机优先选存储服务器（同地域走内网）；存储服务器是轻量服务器没有可用 VPC 时，退而选海外服务器的 Access。
+// 入口主机优先选存储服务器（同地域走内网）；存储服务器是轻量服务器没有可用 VPC 时，退而选海外服务器的外部入口。
 func TestRenderPrefersStorageRegionForCloudFunctions(t *testing.T) {
-	plan := func(cloud *fakeCloud) setupconfig.Manifest {
-		raw, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
+	plan := func(cloud *fakeCloud) renderedManifest {
+		rendered, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
 		if err != nil {
 			t.Fatal(err)
 		}
-		manifest, err := setupconfig.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return manifest
+		return parseRendered(t, rendered)
 	}
 	both := newFakeCloud()
 	both.instances["198.51.100.11"] = Instance{Kind: "cvm", Region: "ap-nanjing", Name: "storage", VpcID: "vpc-nj", SubnetID: "subnet-nj", PrivateIP: "10.0.0.5"}
 	both.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
 	manifest := plan(both)
-	if got := manifest.SCFPlan.Spaces[0].Markets["equity"]; !slices.Equal(got, []string{"ap-nanjing"}) || manifest.SCFPlan.Regions["ap-nanjing"].AccessHost != "storage" {
+	if got := manifest.SCFPlan.Spaces[0].Markets["equity"]; !slices.Equal(got, []string{"ap-nanjing"}) || manifest.SCFPlan.Regions["ap-nanjing"].EntryHost != "storage" {
 		t.Fatalf("存储服务器可用时应选它所在地域：%v", got)
 	}
 
 	fallback := newFakeCloud() // 存储服务器是轻量服务器（没有 VPC）
 	fallback.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
 	manifest = plan(fallback)
-	if !manifest.SCFEnabled() || manifest.SCFPlan.Regions["ap-hongkong"].AccessHost != "overseas" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-hongkong"}) {
+	if !manifest.SCFEnabled() || manifest.SCFPlan.Regions["ap-hongkong"].EntryHost != "overseas" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-hongkong"}) {
 		t.Fatalf("存储服务器不可用时应退到海外服务器：%+v", manifest.SCFPlan)
 	}
 }

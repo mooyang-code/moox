@@ -21,7 +21,7 @@ func maxAgeWrite(space, dataset, freq string, dataTime time.Time) viewindex.RowW
 
 func maxAgeService(t *testing.T) *Service {
 	t.Helper()
-	svc, err := New(t.TempDir(), "secret")
+	svc, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestDropExpiredWritesBoundaryAndFrequencies(t *testing.T) {
 }
 
 func TestDropExpiredWritesUnconfiguredKeepsEverything(t *testing.T) {
-	svc, err := New(t.TempDir(), "secret")
+	svc, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

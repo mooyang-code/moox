@@ -8,8 +8,8 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/netguard v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.12.1
@@ -68,8 +68,12 @@ replace (
 	github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 	github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
-	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/netguard => ../../packages/netguard
+	github.com/mooyang-code/moox/packages/events => ../../packages/events
+	github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
+	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
+	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+	github.com/mooyang-code/moox/packages/report => ../../packages/report
 	github.com/mooyang-code/moox/packages/security => ../../packages/security
 	github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 )

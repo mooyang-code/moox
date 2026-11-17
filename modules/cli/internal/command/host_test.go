@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"io/fs"
 	"net"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,11 +62,11 @@ func (h *hostFakeSSH) Close() error { h.closed = true; return nil }
 
 func useHostFake(t *testing.T, fake *hostFakeSSH) *hostRemote {
 	t.Helper()
-	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{
-		"storage": {Address: "198.51.100.20", SSH: setupconfig.SSHConfig{Port: 22, Username: "ubuntu"}},
+	manifest := &topology.Config{Paths: topology.Paths{DeployRoot: topology.DefaultDeployRoot}, HostCatalog: map[string]topology.HostDefinition{
+		"storage": {Address: "198.51.100.20", SSH: topology.SSHConfig{Port: 22, Username: "ubuntu"}},
 	}}
-	remote := newHostRemote(manifest, "", nil)
-	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) { return fake, nil }
+	remote := newHostRemote(manifest, "")
+	remote.dial = func(context.Context, topology.Host) (setupssh.Client, error) { return fake, nil }
 	previous := openHostRemoteForCommand
 	openHostRemoteForCommand = func(string) (*hostRemote, error) { return remote, nil }
 	t.Cleanup(func() { openHostRemoteForCommand = previous })
@@ -159,59 +159,4 @@ func TestHostGetWritesFileAndProtectsExisting(t *testing.T) {
 	require.NoError(t, err)
 	raw, _ = os.ReadFile(local)
 	assert.Equal(t, "new", string(raw))
-}
-
-func TestHostRemoteLocalEndpointForwardsOverSSHAndCaches(t *testing.T) {
-	fake := &hostFakeSSH{}
-	remote := useHostFake(t, fake)
-	first, err := remote.LocalEndpoint(context.Background(), "storage", 11417)
-	require.NoError(t, err)
-	second, err := remote.LocalEndpoint(context.Background(), "storage", 11417)
-	require.NoError(t, err)
-	assert.Equal(t, first, second)
-	assert.Equal(t, []string{"127.0.0.1:11417"}, fake.forwarded, "同一目标只转发一次")
-	host, _, err := net.SplitHostPort(first)
-	require.NoError(t, err)
-	assert.Equal(t, "127.0.0.1", host, "只监听回环地址")
-	remote.Close()
-	assert.True(t, fake.closed)
-	_, err = net.Dial("tcp", first)
-	assert.Error(t, err, "关闭后监听端口释放")
-}
-
-type relayConnGateway struct{ server net.Conn }
-
-func (g *relayConnGateway) DialRelay(context.Context, string, int) (net.Conn, error) {
-	client, server := net.Pipe()
-	g.server = server
-	return client, nil
-}
-
-func TestHostRemoteLocalEndpointRelaysOutboundHosts(t *testing.T) {
-	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{
-		"overseas": {Address: "203.0.113.5", Reachability: "outbound", SSH: setupconfig.SSHConfig{Port: 22, Username: "u"}},
-	}}
-	gateway := &relayConnGateway{}
-	remote := newHostRemote(manifest, "", gateway)
-	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) {
-		t.Fatal("出站主机不能走 SSH")
-		return nil, nil
-	}
-	defer remote.Close()
-	address, err := remote.LocalEndpoint(context.Background(), "overseas", 11210)
-	require.NoError(t, err)
-	conn, err := net.Dial("tcp", address)
-	require.NoError(t, err)
-	defer conn.Close()
-	_, err = conn.Write([]byte("ping"))
-	require.NoError(t, err)
-	buffer := make([]byte, 4)
-	require.Eventually(t, func() bool { return gateway.server != nil }, 2e9, 10e6)
-	_, err = io.ReadFull(gateway.server, buffer)
-	require.NoError(t, err)
-	assert.Equal(t, "ping", string(buffer), "本机端口的数据经中转到达目标")
-
-	noRelay := newHostRemote(manifest, "", struct{}{})
-	_, err = noRelay.LocalEndpoint(context.Background(), "overseas", 11210)
-	require.ErrorContains(t, err, "中转")
 }

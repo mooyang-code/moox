@@ -17,10 +17,12 @@ const MaxManifestComponents = 64
 
 type Transport string
 
+// Transport 是组件健康的上报来源（设计 3.8，组件健康只看上报）：reporter 是组件自己经 packages/report 上报；
+// host_snapshot 是 host-agent 的主机快照；delegated 是外部程序只给管理端发心跳，由管理端代报（因子引擎、归档 worker）。
 const (
 	TransportReporter     Transport = "reporter"
 	TransportHostSnapshot Transport = "host_snapshot"
-	TransportHealthOnly   Transport = "health_only"
+	TransportDelegated    Transport = "delegated"
 )
 
 type FunctionalObservability string
@@ -30,6 +32,9 @@ const (
 	FunctionalObservabilityDeferred      FunctionalObservability = "deferred"
 	FunctionalObservabilityNotApplicable FunctionalObservability = "not_applicable"
 )
+
+// ManifestVersion 是 Doctor 清单自己的格式版本，与服务目录的版本无关（目录改写调用权限不影响 doctor 段）。
+const ManifestVersion = 1
 
 type Manifest struct {
 	Version    int         `yaml:"version" json:"version"`
@@ -48,14 +53,11 @@ type Component struct {
 	Dependencies             []string                `yaml:"dependencies" json:"dependencies"`
 	Transport                Transport               `yaml:"transport" json:"transport"`
 	FunctionalObservability  FunctionalObservability `yaml:"functional_observability" json:"functional_observability"`
-	HealthPath               string                  `yaml:"health_path" json:"health_path"`
+	HealthPort               int                     `yaml:"health_port" json:"health_port"` // 只听本机的健康端口，doctor 在目标机上请求它
 	ConfigPaths              []string                `yaml:"config_paths" json:"config_paths"`
 	WritablePaths            []string                `yaml:"writable_paths" json:"writable_paths"`
 	RecoveryActionIDs        []string                `yaml:"recovery_action_ids" json:"recovery_action_ids"`
 	RequiredInDefaultProfile bool                    `yaml:"required_in_default_profile" json:"required_in_default_profile"`
-	// Supervisor 是进程托管方式：moox_runtime（moox-runtime 看护）或 systemd_user（systemd 用户服务，Unit 是单元名）。
-	Supervisor string `yaml:"supervisor" json:"supervisor"`
-	Unit       string `yaml:"unit,omitempty" json:"unit,omitempty"`
 }
 
 var allowedRecoveryActions = map[string]bool{
@@ -92,29 +94,21 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("decode %s: %w", source, err)
 	}
-	manifest := Manifest{Version: catalog.Version, Components: make([]Component, 0, len(catalog.Components))}
+	manifest := Manifest{Version: ManifestVersion, Components: make([]Component, 0, len(catalog.Components))}
 	for _, component := range catalog.Components {
+		// 第三方程序（内置 SeaweedFS）没有健康端口、不上报，不在诊断范围内。
+		if component.ThirdParty {
+			continue
+		}
 		metadata := component.Doctor
-		supervisor := metadata.Supervisor
-		if supervisor == "" {
-			supervisor = servicecatalog.SupervisorMooxRuntime
-		}
-		healthPath := ""
-		switch component.Health.Kind {
-		case "readyz":
-			healthPath = "/readyz"
-		case "https":
-			healthPath = "/"
-		}
 		manifest.Components = append(manifest.Components, Component{
 			ComponentID: component.ID, ServiceName: component.ID,
 			Role: metadata.Role, Description: metadata.Description,
 			Duties: metadata.Duties, Inputs: metadata.Inputs, Outputs: metadata.Outputs,
 			Dependencies: metadata.Dependencies, Transport: Transport(metadata.Transport),
 			FunctionalObservability: FunctionalObservability(metadata.FunctionalObservability),
-			HealthPath:              healthPath, ConfigPaths: metadata.ConfigPaths, WritablePaths: metadata.WritablePaths,
+			HealthPort:              component.Health.Port, ConfigPaths: metadata.ConfigPaths, WritablePaths: metadata.WritablePaths,
 			RecoveryActionIDs: metadata.RecoveryActionIDs, RequiredInDefaultProfile: metadata.RequiredInDefaultProfile,
-			Supervisor: supervisor, Unit: metadata.Unit,
 		})
 	}
 	sum := sha256.Sum256(raw)
@@ -126,7 +120,7 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 }
 
 func (m Manifest) Validate() error {
-	if m.Version != 1 {
+	if m.Version != ManifestVersion {
 		return fmt.Errorf("unsupported manifest version %d", m.Version)
 	}
 	if len(m.Components) == 0 {
@@ -174,7 +168,7 @@ func (c Component) validate() error {
 		return fmt.Errorf("service_name %q is not an independently deployed process", c.ServiceName)
 	}
 	switch c.Transport {
-	case TransportReporter, TransportHostSnapshot, TransportHealthOnly:
+	case TransportReporter, TransportHostSnapshot, TransportDelegated:
 	default:
 		return fmt.Errorf("invalid transport %q", c.Transport)
 	}
@@ -183,14 +177,11 @@ func (c Component) validate() error {
 	default:
 		return fmt.Errorf("invalid functional_observability %q", c.FunctionalObservability)
 	}
-	if err := servicecatalog.ValidateSupervisor(c.Supervisor, c.Unit); err != nil {
-		return err
-	}
 	if strings.HasPrefix(c.ServiceName, "storage-") && c.FunctionalObservability != FunctionalObservabilityDeferred {
 		return fmt.Errorf("storage service %q must remain deferred", c.ServiceName)
 	}
-	if c.HealthPath != "/readyz" && c.HealthPath != "/healthz" && c.HealthPath != "/" && c.HealthPath != "" {
-		return fmt.Errorf("unsupported health_path %q", c.HealthPath)
+	if c.HealthPort <= 0 || c.HealthPort > 65535 {
+		return fmt.Errorf("invalid health_port %d", c.HealthPort)
 	}
 	for _, candidate := range append(append([]string{}, c.ConfigPaths...), c.WritablePaths...) {
 		if err := validateRelativePath(candidate); err != nil {

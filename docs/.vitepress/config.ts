@@ -66,11 +66,9 @@ export default defineConfig({
         items: [
           { text: '管理后台', link: '/模块/管理后台' },
           { text: '主机网关', link: '/模块/主机网关' },
-          { text: '外部接入', link: '/模块/外部接入' },
           { text: '出口代理', link: '/模块/出口代理' },
           { text: '事件总线', link: '/模块/事件总线' },
           { text: '事件中心', link: '/模块/事件中心' },
-          { text: '控制台代理', link: '/模块/控制台代理' },
         ],
       },
       {
@@ -78,7 +76,6 @@ export default defineConfig({
         items: [
           { text: '存储', link: '/模块/存储' },
           { text: '采集', link: '/模块/采集' },
-          { text: '云函数管理', link: '/模块/云函数管理' },
           { text: '归档', link: '/模块/归档' },
         ],
       },

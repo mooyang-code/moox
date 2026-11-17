@@ -1,11 +1,9 @@
 package tencent
 
 import (
-	"encoding/hex"
-	"encoding/json"
-	"errors"
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
-	"io"
 	"net"
 	"net/url"
 	"regexp"
@@ -18,89 +16,38 @@ import (
 const SCFEnvironmentLimitBytes = 4096
 const CollectorTimerTimeoutSeconds = 60
 
-var accessInstanceName = regexp.MustCompile(`^access@[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+var entryHostName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
-// ValidateCollectorTimerEnvironment is shared by publication and merged
-// FunctionInstance deployment, so partial deploy patches cannot bypass create gates.
-func ValidateCollectorTimerEnvironment(values map[string]string) error {
-	return ValidateCollectorMarketFetchEnvironment(values)
-}
-
-// ValidateCollectorAccessEnvironment validates the five fields shared by
-// native Claim and Storage calls, without disclosing credential contents.
-func ValidateCollectorAccessEnvironment(values map[string]string) error {
-	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
+// ValidateCollectorEntryEnvironment 校验函数经外部入口访问系统用的五个变量，报错里不带私钥内容。
+// MOOX_CALLER_KEY 是 scf-collector 的 ed25519 私钥（base64 的 32 字节种子）；MOOX_CALLER_KEY_ID 是它的公钥指纹，
+// 只用来判断云上函数的环境是不是还是当前这把密钥，不参与签名。
+func ValidateCollectorEntryEnvironment(values map[string]string) error {
+	for _, key := range []string{"MOOX_ENTRY_ADDRESS", "MOOX_ENTRY_HOST", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if strings.TrimSpace(values[key]) == "" {
-			return fmt.Errorf("collector Access environment requires %s", key)
+			return fmt.Errorf("collector entry environment requires %s", key)
 		}
 	}
 	if values["MOOX_CALLER"] != "scf-collector" {
-		return fmt.Errorf("collector Access environment requires MOOX_CALLER=scf-collector")
+		return fmt.Errorf("collector entry environment requires MOOX_CALLER=scf-collector")
 	}
-	if len(values["MOOX_ACCESS_ID"]) > 135 || !accessInstanceName.MatchString(values["MOOX_ACCESS_ID"]) {
-		return fmt.Errorf("collector Access environment has invalid MOOX_ACCESS_ID")
+	if len(values["MOOX_ENTRY_HOST"]) > 128 || !entryHostName.MatchString(values["MOOX_ENTRY_HOST"]) {
+		return fmt.Errorf("collector entry environment has invalid MOOX_ENTRY_HOST")
 	}
-	if err := validateCollectorRuntimeEndpoint("MOOX_ACCESS_ADDRESS", "ip://"+values["MOOX_ACCESS_ADDRESS"], "ip"); err != nil {
+	if err := validateCollectorRuntimeEndpoint("MOOX_ENTRY_ADDRESS", "ip://"+values["MOOX_ENTRY_ADDRESS"], "ip"); err != nil {
 		return err
 	}
 	keyID := values["MOOX_CALLER_KEY_ID"]
 	if len(keyID) > 128 || strings.ContainsAny(keyID, "/\\") || strings.ContainsFunc(keyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY_ID")
+		return fmt.Errorf("collector entry environment has invalid MOOX_CALLER_KEY_ID")
 	}
-	key := values["MOOX_CALLER_KEY"]
-	if len(key) < 32 || len(key) > 4096 || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY")
+	if seed, err := base64.StdEncoding.DecodeString(values["MOOX_CALLER_KEY"]); err != nil || len(seed) != ed25519.SeedSize {
+		return fmt.Errorf("collector entry environment has invalid MOOX_CALLER_KEY")
 	}
 	return nil
 }
 
 // collectorPlanEnvironmentKey 是定时触发采集计划的环境变量名，必须与 marketfetch.PlanEnvName 一致。
 const collectorPlanEnvironmentKey = "MOOX_MARKET_FETCH_PLAN"
-
-// ValidateCollectorMarketFetchEnvironment checks common Invoke and Timer
-// dependencies. Claim and Storage use the same Access identity and connection.
-func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
-	// 采集计划函数与补采函数（MOOX_MARKET_FETCH_MODE=backfill，不带计划）都不连 EventBus。
-	if strings.TrimSpace(values[collectorPlanEnvironmentKey]) != "" || strings.TrimSpace(values["MOOX_MARKET_FETCH_MODE"]) == "backfill" {
-		return validateCollectorPlanEnvironment(values)
-	}
-	if err := ValidateSCFEnvironment(values); err != nil {
-		return err
-	}
-	for _, key := range []string{
-		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID",
-		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
-		"MOOX_CLS_ENABLED", "MOOX_CLS_ENDPOINT", "MOOX_CLS_TOPIC_ID", "MOOX_CLS_TIMEOUT_MS",
-		"MOOX_CLS_SECRET_ID", "MOOX_CLS_SECRET_KEY",
-		"MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_NATS_TLS_CA_FILE",
-	} {
-		if strings.TrimSpace(values[key]) == "" {
-			return fmt.Errorf("collector market-fetch runtime environment requires %s", key)
-		}
-	}
-	if err := validateStorageAppKeys(values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]); err != nil {
-		return fmt.Errorf("collector market-fetch runtime environment has invalid MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON: %w", err)
-	}
-	if err := ValidateCollectorAccessEnvironment(values); err != nil {
-		return err
-	}
-	if err := validateCollectorRuntimeEndpoint("MOOX_EVENTBUS_NATS_URL", values["MOOX_EVENTBUS_NATS_URL"], "tls"); err != nil {
-		return err
-	}
-	if enabled, err := strconv.ParseBool(values["MOOX_CLS_ENABLED"]); err != nil || !enabled {
-		return fmt.Errorf("collector market-fetch runtime environment requires MOOX_CLS_ENABLED=true")
-	}
-	if timeout, err := strconv.Atoi(values["MOOX_CLS_TIMEOUT_MS"]); err != nil || timeout <= 0 {
-		return fmt.Errorf("collector market-fetch runtime environment has invalid MOOX_CLS_TIMEOUT_MS")
-	}
-	if values["MOOX_EVENTBUS_NATS_TLS_CA_FILE"] != "certs/eventbus-ca.pem" {
-		return fmt.Errorf("collector market-fetch runtime environment requires packaged MOOX_EVENTBUS_NATS_TLS_CA_FILE")
-	}
-	if strings.TrimSpace(values["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"]) != "" {
-		return fmt.Errorf("collector market-fetch runtime environment cannot combine CA file with MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
-	}
-	return nil
-}
 
 func validateCollectorRuntimeEndpoint(key, value, scheme string) error {
 	parsed, err := url.Parse(strings.TrimSpace(value))
@@ -115,45 +62,6 @@ func validateCollectorRuntimeEndpoint(key, value, scheme string) error {
 	return nil
 }
 
-func validateStorageAppKeys(raw string) error {
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return fmt.Errorf("must be a JSON object")
-	}
-	seen := make(map[string]struct{})
-	for decoder.More() {
-		token, err := decoder.Token()
-		appID, ok := token.(string)
-		if err != nil || !ok || strings.TrimSpace(appID) == "" {
-			return fmt.Errorf("invalid app ID")
-		}
-		if _, duplicate := seen[appID]; duplicate {
-			return fmt.Errorf("duplicate app ID")
-		}
-		seen[appID] = struct{}{}
-		var key string
-		if err := decoder.Decode(&key); err != nil || len(key) != 64 {
-			return fmt.Errorf("app keys must be 64 hex characters")
-		}
-		if _, err := hex.DecodeString(key); err != nil {
-			return fmt.Errorf("app keys must be 64 hex characters")
-		}
-	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return fmt.Errorf("invalid app-key object")
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("trailing JSON data")
-	}
-	if len(seen) == 0 {
-		return fmt.Errorf("app keys must not be empty")
-	}
-	if _, ok := seen["moox-collector"]; !ok {
-		return fmt.Errorf("app keys must include the moox-collector binding")
-	}
-	return nil
-}
-
 func SCFEnvironmentBytes(values map[string]string) int {
 	total := 0
 	for key, value := range values {
@@ -162,12 +70,8 @@ func SCFEnvironmentBytes(values map[string]string) int {
 	return total
 }
 
-// ValidateSCFEnvironment checks the complete merged environment without exposing
-// credential values in a release or FunctionInstance error.
+// ValidateSCFEnvironment 校验合并后的完整环境，错误信息里不带任何密钥的值。
 func ValidateSCFEnvironment(values map[string]string) error {
-	if value, exists := values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"]; exists {
-		return fmt.Errorf("SCF environment must not contain MOOX_STORAGE_PRIMARY_AUTH_SECRET (value length: %d)", len(value))
-	}
 	size := SCFEnvironmentBytes(values)
 	if size <= SCFEnvironmentLimitBytes {
 		return nil
@@ -184,39 +88,37 @@ func ValidateSCFEnvironment(values map[string]string) error {
 	return fmt.Errorf("environment is %d bytes; limit is %d (value lengths: %s)", size, SCFEnvironmentLimitBytes, strings.Join(lengths, ", "))
 }
 
-// validateCollectorPlanEnvironment 校验定时触发采集函数的环境：携带采集计划，经 Access 访问
-// Storage，诊断写 CLS，不连接 EventBus，因此不得出现任何 EventBus 变量。
-func validateCollectorPlanEnvironment(values map[string]string) error {
+// ValidateCollectorMarketFetchEnvironment 校验采集函数的完整环境，定时采集函数（带采集计划）与补采函数用同一份规则，
+// 建函数与改环境（以云上环境为底合并后）都走它。函数经外部入口访问 Storage，诊断写 CLS，不连接 EventBus，
+// 所以环境里不得出现任何 EventBus 变量。
+func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
 	for key := range values {
 		if strings.HasPrefix(key, "MOOX_EVENTBUS_") || key == "MOOX_METRICS_EVENTBUS_URL" || key == "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE" || key == "NATS_URL" {
-			return fmt.Errorf("collector plan environment must not contain EventBus field %s", key)
+			return fmt.Errorf("collector market-fetch environment must not contain EventBus field %s", key)
 		}
 	}
 	if err := ValidateSCFEnvironment(values); err != nil {
 		return err
 	}
 	for _, key := range []string{
-		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
+		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID",
 		"MOOX_CLS_ENABLED", "MOOX_CLS_ENDPOINT", "MOOX_CLS_TOPIC_ID", "MOOX_CLS_TIMEOUT_MS", "MOOX_CLS_SECRET_ID", "MOOX_CLS_SECRET_KEY",
 	} {
 		if strings.TrimSpace(values[key]) == "" {
-			return fmt.Errorf("collector plan environment requires %s", key)
+			return fmt.Errorf("collector market-fetch environment requires %s", key)
 		}
 	}
-	if err := validateStorageAppKeys(values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]); err != nil {
-		return fmt.Errorf("collector plan environment has invalid MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON: %w", err)
-	}
-	if err := ValidateCollectorAccessEnvironment(values); err != nil {
+	if err := ValidateCollectorEntryEnvironment(values); err != nil {
 		return err
 	}
 	if enabled, err := strconv.ParseBool(values["MOOX_CLS_ENABLED"]); err != nil || !enabled {
-		return fmt.Errorf("collector plan environment requires MOOX_CLS_ENABLED=true")
+		return fmt.Errorf("collector market-fetch environment requires MOOX_CLS_ENABLED=true")
 	}
 	if timeout, err := strconv.Atoi(values["MOOX_CLS_TIMEOUT_MS"]); err != nil || timeout <= 0 {
-		return fmt.Errorf("collector plan environment has invalid MOOX_CLS_TIMEOUT_MS")
+		return fmt.Errorf("collector market-fetch environment has invalid MOOX_CLS_TIMEOUT_MS")
 	}
 	if len(values[collectorPlanEnvironmentKey]) > 64<<10 {
-		return fmt.Errorf("collector plan environment value exceeds 64 KiB")
+		return fmt.Errorf("collector market-fetch environment value exceeds 64 KiB")
 	}
 	return nil
 }

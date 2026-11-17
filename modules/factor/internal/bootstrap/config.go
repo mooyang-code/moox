@@ -63,7 +63,7 @@ func Load(path string) (*Config, error) {
 func Default() *Config {
 	return &Config{
 		Database:      DatabaseConfig{Path: "./data/factor/factor.db"},
-		GatewayClient: gatewayclient.FileConfig{Caller: "factor-mgr", KeyFile: "../../secrets/caller-factor-mgr.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "factor-mgr", KeyFile: "../../secrets/host.key"},
 		Engine:        EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
 	}
 }

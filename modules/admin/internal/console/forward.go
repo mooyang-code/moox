@@ -14,15 +14,9 @@ import (
 
 const minGzipForwardResponseBytes = 1024
 
-// setForwardCommonHeaders 设置透传响应的公共头（CORS + 暴露 trpc 错误头供前端读取）。
-func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
-	w.Header().Set("Content-Type", "application/json")
-	applyCORSHeaders(w, origin)
-}
-
-// writeForwardResponse 写入透传成功响应（原样返回 JSON body，暴露 trpc-ret header 供前端读取）。
+// writeForwardResponse 写入透传成功响应（原样返回 JSON body）。
 func writeForwardResponse(w http.ResponseWriter, respBody []byte, headers map[string]string) {
-	setForwardCommonHeaders(w, headers["origin"])
+	w.Header().Set("Content-Type", "application/json")
 	if traceID := headers["trace_id"]; traceID != "" {
 		w.Header().Set("X-Trace-Id", traceID)
 	}
@@ -42,9 +36,16 @@ func shouldGzipForwardResponse(respBody []byte, acceptEncoding string) bool {
 		return false
 	}
 	for _, encoding := range strings.Split(acceptEncoding, ",") {
-		if strings.EqualFold(strings.TrimSpace(strings.SplitN(encoding, ";", 2)[0]), "gzip") {
-			return true
+		coding, params, _ := strings.Cut(encoding, ";")
+		if !strings.EqualFold(strings.TrimSpace(coding), "gzip") {
+			continue
 		}
+		// gzip;q=0 表示客户端明确不接受 gzip。
+		if q, ok := strings.CutPrefix(strings.TrimSpace(params), "q="); ok {
+			value, err := strconv.ParseFloat(strings.TrimSpace(q), 64)
+			return err == nil && value > 0
+		}
+		return true
 	}
 	return false
 }
@@ -67,7 +68,7 @@ func addVaryHeader(w http.ResponseWriter, value string) {
 // 与 trpc-go 有协议 http 服务端错误协议一致：HTTP 200 + trpc-ret(框架码) + trpc-func-ret(业务码)，
 // 同时写入与业务错误同结构的 JSON body（ret_info），避免前端拿到空 body 无法识别错误。
 func writeForwardError(ctx context.Context, w http.ResponseWriter, err error, headers map[string]string) {
-	setForwardCommonHeaders(w, headers["origin"])
+	w.Header().Set("Content-Type", "application/json")
 	if traceID := headers["trace_id"]; traceID != "" {
 		w.Header().Set("X-Trace-Id", traceID)
 	}

@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 const maxHostWorkers = 4
@@ -31,7 +29,7 @@ type Result struct {
 }
 
 type SSHChecker interface {
-	Check(context.Context, setupconfig.Host) error
+	Check(context.Context, topology.Host) error
 }
 
 type Dependencies struct {
@@ -39,82 +37,27 @@ type Dependencies struct {
 	SSH      SSHChecker
 }
 
-func Run(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies) (Result, error) {
+func Run(ctx context.Context, cfg *topology.Config, deps Dependencies) (Result, error) {
 	result := Result{}
-	if snapshot == nil || deps.Identity == nil || deps.SSH == nil {
+	if cfg == nil || deps.Identity == nil || deps.SSH == nil {
 		return result, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
 	}
-	result, err := configResult(snapshot)
-	if err != nil {
-		return result, err
-	}
+	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
 
 	if _, err := deps.Identity.GetCallerIdentity(ctx); err != nil {
 		result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "invalid", Code: "tencent_auth_failed"})
 		return result, fmt.Errorf("%w: tencent_auth_failed", ErrValidationFailed)
 	}
 	result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "valid"})
-	return appendHostChecks(ctx, snapshot, deps.SSH, result, snapshot.Manifest.Hosts())
+	return appendHostChecks(ctx, deps.SSH, result, cfg.Hosts())
 }
 
-func configResult(snapshot *setupconfig.Snapshot) (Result, error) {
-	result := Result{}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		result.Checks = append(result.Checks, Check{Name: "config", Status: "invalid", Code: "config_changed"})
-		return result, fmt.Errorf("%w: config_changed", ErrValidationFailed)
-	}
-	result.Checks = append(result.Checks, Check{Name: "config", Status: "valid"})
-	if err := CheckDeployments(snapshot.Manifest); err != nil {
-		result.Checks = append(result.Checks, Check{Name: "deployments", Status: "invalid", Code: "deployment_incomplete", Detail: err.Error()})
-		return result, fmt.Errorf("%w: %w", ErrValidationFailed, err)
-	}
-	result.Checks = append(result.Checks, Check{Name: "deployments", Status: "valid"})
-	return result, nil
-}
-
-// controlComponents 是可以直接加到管理台主机上的组件；Storage 这类组件对放置有要求，不能这样补。
-var controlComponents = []string{"monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"}
-
-// CheckDeployments 确认配置里的部署完整：授权服务都有组件提供。这是纯配置检查，不连接任何主机，
-// 缺组件时部署到一半才会以“未就绪”的形式暴露，所以在动手之前就要报出来。
-func CheckDeployments(manifest setupconfig.Manifest) error {
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return err
-	}
-	deployed := []string{}
-	for _, components := range manifest.Deployments {
-		deployed = append(deployed, components...)
-	}
-	missing := catalog.MissingGrants(deployed)
-	if len(missing) == 0 {
-		return nil
-	}
-	control := manifest.ControlHost().Name
-	components := make([]string, 0, len(missing))
-	for _, item := range missing {
-		if !slices.Contains(components, item.Component) {
-			components = append(components, item.Component)
-		}
-	}
-	for _, id := range components {
-		if !slices.Contains(controlComponents, id) {
-			return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；把现有 moox.toml 改名后重新运行 config init 生成配置", strings.Join(components, "、"))
-		}
-	}
-	return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；运行 moox-cli config migrate --add-deployment %s=%s --yes 补上，再重新校验",
-		strings.Join(components, "、"), control, strings.Join(components, ","))
-}
-
-func appendHostChecks(ctx context.Context, snapshot *setupconfig.Snapshot, checker SSHChecker, result Result, hosts []setupconfig.Host) (Result, error) {
+func appendHostChecks(ctx context.Context, checker SSHChecker, result Result, hosts []topology.Host) (Result, error) {
 	hostChecks := checkHosts(ctx, checker, uniqueHosts(hosts))
 	result.Checks = append(result.Checks, hostChecks...)
 	failed := false
 	for _, check := range hostChecks {
 		failed = failed || check.Status != "valid"
-	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		return result, fmt.Errorf("%w: config_changed", ErrValidationFailed)
 	}
 	if failed {
 		return result, ErrValidationFailed
@@ -122,8 +65,8 @@ func appendHostChecks(ctx context.Context, snapshot *setupconfig.Snapshot, check
 	return result, nil
 }
 
-func uniqueHosts(hosts []setupconfig.Host) []setupconfig.Host {
-	result := make([]setupconfig.Host, 0, len(hosts))
+func uniqueHosts(hosts []topology.Host) []topology.Host {
+	result := make([]topology.Host, 0, len(hosts))
 	seen := make(map[string]struct{}, len(hosts))
 	for _, host := range hosts {
 		key := strings.ToLower(strings.TrimSpace(host.Name))
@@ -136,7 +79,7 @@ func uniqueHosts(hosts []setupconfig.Host) []setupconfig.Host {
 	return result
 }
 
-func checkHosts(ctx context.Context, checker SSHChecker, hosts []setupconfig.Host) []Check {
+func checkHosts(ctx context.Context, checker SSHChecker, hosts []topology.Host) []Check {
 	checks := make([]Check, len(hosts))
 	if len(hosts) == 0 {
 		return checks
@@ -164,7 +107,7 @@ func checkHosts(ctx context.Context, checker SSHChecker, hosts []setupconfig.Hos
 	return checks
 }
 
-func hostCheck(ctx context.Context, checker SSHChecker, host setupconfig.Host) Check {
+func hostCheck(ctx context.Context, checker SSHChecker, host topology.Host) Check {
 	check := Check{Name: "host:" + host.Name, Status: "valid"}
 	if err := checker.Check(ctx, host); err != nil {
 		check.Status = "invalid"

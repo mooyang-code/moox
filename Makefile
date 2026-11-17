@@ -1,4 +1,4 @@
-.PHONY: check-timer-startup build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-seed-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
+.PHONY: check-timer-startup build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-seed-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-moox-ca package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -41,9 +41,10 @@ test-event-contracts:
 test-eventbus-topology:
 	cd modules/eventbus && go test ./...
 
-.PHONY: test-host-gateway-control-e2e
-test-host-gateway-control-e2e:
-	bash scripts/test/gates/test-host-gateway-control-e2e.sh
+# 起真实进程的联调：编译产物后依次跑 scripts/test/gates/ 下的脚本。主机网关那一条要 Linux 的 127.0.0.2，别的系统上跳过。
+.PHONY: test-e2e-gates
+test-e2e-gates:
+	bash scripts/test/gates/run-e2e-gates.sh
 
 test-kline-resample:
 	bash scripts/test/e2e/test-kline-resample.sh
@@ -86,10 +87,6 @@ test-go:
 test-release-bundle-manifest:
 	./scripts/test/contract/test-release-bundle-manifest.sh
 
-.PHONY: test-console-proxy
-test-console-proxy:
-	cd modules/consoleproxy && go test -count=1 ./... && go vet ./...
-
 test-web:
 	CI=true pnpm --dir web install --frozen-lockfile
 	pnpm --dir web test
@@ -109,9 +106,9 @@ PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 
 # make verify 由下面几组检查组成，PR 上的 CI 按组并行运行（make verify-ci-<组>）；本机和自托管运行器的 make verify 仍然依次全跑。
 # 新增检查时放进某一组，verify 与各组自动保持一致。组之间互不依赖：需要前端依赖的检查都放在 web 组，由 test-web 先安装。
-VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-unit-admin
-VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest
-VERIFY_CORE_CHECKS := check-boundaries test-quality-gates test-docs-architecture test-caddy test-skill-contracts
+VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles check-go-module-graph $(PROTO_CHECK) test-greenfield-contract
+VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest test-e2e-gates
+VERIFY_CORE_CHECKS := check-boundaries test-quality-gates test-docs-architecture test-moox-ca test-skill-contracts
 VERIFY_STORAGE_CHECKS := test-storage-boundary test-storage-consistency
 
 verify-pr: $(VERIFY_PR_UNITS) $(VERIFY_PR_CONTRACTS)
@@ -133,9 +130,9 @@ verify-custom-setup:
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
 	bash skills/moox/scripts/test-private-network-contract.sh
 
-test-caddy:
-	bash scripts/test/contract/test-install-caddy-ca.sh
-	bash skills/moox/scripts/test-caddy-ca.sh
+test-moox-ca:
+	bash scripts/test/contract/test-install-moox-ca.sh
+	bash skills/moox/scripts/test-moox-ca.sh
 
 test-collector-scf-package-contract:
 	bash scripts/build/build-collector-scf-package_test.sh
@@ -148,7 +145,6 @@ test-skill-contracts:
 	bash skills/moox/scripts/test-data-query-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
-	bash skills/moox/scripts/test-native-release.sh
 	bash skills/moox/scripts/test-factor-convert-contract.sh
 	bash skills/moox/scripts/test-strategy-check-contract.sh
 	bash skills/moox/scripts/test-monitor-db-check.sh
@@ -176,7 +172,6 @@ proto:
 	$(MAKE) -C modules/collector/proto all
 	$(MAKE) -C modules/egressproxy/proto all
 	$(MAKE) -C modules/factor/proto all
-	$(MAKE) -C modules/cloudfunction/proto all
 	$(MAKE) -C modules/callbackdispatcher/proto all
 	$(MAKE) -C modules/monitor/proto all
 	$(MAKE) -C modules/eventbus/proto all
@@ -188,49 +183,15 @@ clean:
 	rm -rf bin release dist
 	find modules -type d \( -name bin -o -name release -o -name .cache \) -prune -exec rm -rf {} +
 
-.PHONY: test-deployment-packages test-unit-package-linux
+.PHONY: test-deployment-packages
 test-deployment-packages:
-	go test ./modules/cli/internal/setup/unitpackage ./modules/cli/internal/command -run 'TestUnit|TestSetupPackage'
-
-test-unit-package-linux:
-	bash scripts/test/gates/test-unit-package-linux.sh
+	go test ./modules/cli/internal/setup/bundle ./modules/cli/internal/setup/fetchunit ./modules/cli/internal/setup/deploy ./modules/cli/internal/setup/deployscan
 
 .PHONY: test-host-deployment
 test-host-deployment:
 	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostDeployments|TestDoctorDeployments'
 
-.PHONY: test-host-identity-bundles test-unit-bundle-linux
+.PHONY: test-host-identity-bundles
 test-host-identity-bundles:
 	go test ./modules/admin/cmd/cli ./modules/admin/internal/pki ./packages/gatewayclient ./packages/servicecatalog/hostgatewayconfig -run 'TestBootstrap|TestHostBundle|TestInfo|TestPersistentCA|TestFileConfig'
-	go test ./modules/cli/internal/setup/unitbundle
-
-test-unit-bundle-linux:
-	bash scripts/test/gates/test-unit-bundle-linux.sh
-
-.PHONY: test-unit-runtime test-unit-runtime-linux
-.PHONY: test-unit-install test-unit-install-linux
-.PHONY: test-unit-bootstrap test-unit-bootstrap-linux
-.PHONY: test-unit-admin test-unit-admin-linux
-test-unit-admin:
-	go test ./modules/cli/internal/setup/unitdeploy
-
-test-unit-admin-linux:
-	bash scripts/test/gates/test-unit-admin-linux.sh
-
-test-unit-bootstrap:
-	go test ./modules/cli/internal/setup/unitbootstrap
-
-test-unit-bootstrap-linux:
-	bash scripts/test/gates/test-unit-bootstrap-linux.sh
-
-test-unit-install:
-	go test ./modules/cli/internal/setup/unitinstall
-
-test-unit-install-linux:
-	bash scripts/test/gates/test-unit-install-linux.sh
-
-test-unit-runtime:
-	go test ./modules/cli/internal/setup/unitruntime ./modules/cli/cmd/moox-runtime
-
-test-unit-runtime-linux:
-	bash scripts/test/gates/test-unit-runtime-linux.sh
+	go test ./modules/cli/internal/setup/identitybundle

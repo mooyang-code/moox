@@ -2,8 +2,6 @@ package command
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,14 +14,10 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/proto"
 )
 
 const defaultSetupConfigDir = "./config/setup"
@@ -31,23 +25,6 @@ const defaultSetupConfigDir = "./config/setup"
 type setupInitBundle struct {
 	Spaces []setupclient.Space
 	Calls  []metadataImportCall
-	// ImportedSeed 是 setup init --stage storage 导入过的种子摘要，一致时不再重复导入。
-	ImportedSeed string
-}
-
-// metadataSeedDigest 是一组导入调用的摘要。
-func metadataSeedDigest(calls []metadataImportCall) (string, error) {
-	digest := sha256.New()
-	options := proto.MarshalOptions{Deterministic: true}
-	for _, call := range calls {
-		raw, err := options.Marshal(call.Request)
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(digest, "%s:%d:", call.Method, len(raw))
-		digest.Write(raw)
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 type setupInitStorage interface {
@@ -70,20 +47,22 @@ type setupCloudAccountSummary struct {
 }
 
 type setupInitSummary struct {
-	Status           string                    `json:"status"`
-	Firewall         setupFirewallSummary      `json:"firewall"`
-	BusinessSpaces   int                       `json:"business_spaces"`
-	BusinessSpaceIDs []string                  `json:"business_space_ids"`
-	Admin            setupclient.ApplyResult   `json:"admin"`
-	CloudAccounts    *setupCloudAccountSummary `json:"cloud_accounts,omitempty"`
-	CLS              *setupCLSSummary          `json:"cls,omitempty"`
-	SCFPlan          *setupSCFPlanSummary      `json:"scf_plan,omitempty"`
-	AdminState       string                    `json:"admin_state"`
-	LoginAPI         string                    `json:"login_api"`
-	LoginSkipped     string                    `json:"login_skipped,omitempty"`
-	Metadata         setupInitMetadataCounts   `json:"metadata"`
-	Verification     setupInitMetadataCounts   `json:"verification"`
-	BrowserTrust     *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
+	Status           string                  `json:"status"`
+	Firewall         setupFirewallSummary    `json:"firewall"`
+	BusinessSpaces   int                     `json:"business_spaces"`
+	BusinessSpaceIDs []string                `json:"business_space_ids"`
+	Admin            setupclient.ApplyResult `json:"admin"`
+	// Notification 是告警渠道初始值的处理结果：Monitor 没有任何渠道时才写入。
+	Notification  *setupNotificationSummary `json:"notification,omitempty"`
+	CloudAccounts *setupCloudAccountSummary `json:"cloud_accounts,omitempty"`
+	CLS           *setupCLSSummary          `json:"cls,omitempty"`
+	SCFPlan       *setupSCFPlanSummary      `json:"scf_plan,omitempty"`
+	AdminState    string                    `json:"admin_state"`
+	LoginAPI      string                    `json:"login_api"`
+	LoginSkipped  string                    `json:"login_skipped,omitempty"`
+	Metadata      setupInitMetadataCounts   `json:"metadata"`
+	Verification  setupInitMetadataCounts   `json:"verification"`
+	BrowserTrust  *setupBrowserTrustSummary `json:"browser_trust,omitempty"`
 }
 
 // setupInitStorageSummary 是 setup init --stage storage 的结果。
@@ -96,17 +75,27 @@ type setupInitStorageSummary struct {
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var file, configDir, storageHost, stage string
-	var options unitdeploy.DeployOptions
+	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "导入默认空间、数据集、字段和因子",
-		Long: `--stage storage 在装管理台之前运行：只写业务空间、导入元数据，管理台的服务要等这些就绪才能启动。
-不带 --stage 在管理台装好后运行：完成全部初始化，包括云账户和日志服务；因子任务由 setup start 导入，已经做过的步骤不会重复写入。`,
+		Short: "导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改）",
+		Long: `--stage storage 在控制机只装了 Admin、存储机装好之后运行：写业务空间与初始秘密、导入元数据，控制机上的 Collector 等要这些就绪才能启动。
+不带 --stage 在全部组件装好后运行：完成全部初始化。初始秘密取自秘密文件 moox.secrets.toml，规则都是只建不改：
+管理员、腾讯云密钥、交易所密钥在管理台已有时以管理台为准，已在管理台删除的交易所密钥不重建；
+告警渠道只在 Monitor 还没有任何渠道时写入一次（在管理台把渠道全删掉之后重跑，会把秘密文件里的渠道写回）。
+还会登记云账户、开通日志服务；因子任务由 setup start 导入。已经做过的步骤不会重复写入。
+云函数代码包从 --source-dir（默认当前目录）下的 modules/collector 构建，元数据种子默认读它下面的 config/setup：
+要装哪个分支或工作副本的代码，就把 --source-dir 指到那里，并和 setup deploy、setup start 用同一个目录。
+交易所密钥在 Trade 部署好之后用 moox-cli trade inspect-credential 检测。`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stage != "" && stage != "storage" {
 				return errors.New("setup init --stage 只支持 storage")
 			}
-			bundle, err := deps.loadInitBundle(configDir)
+			if err := source.resolve(); err != nil {
+				return err
+			}
+			bundle, err := deps.loadInitBundle(source.configDir(cmd, configDir))
 			if err != nil {
 				return err
 			}
@@ -115,47 +104,34 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			if err := resolveSetupUnitOptions(snapshot, "", &options); err != nil {
-				return err
+			if storageHost == "" {
+				storageHost = snapshot.Manifest.StorageHost().Name
 			}
 			if stage == "storage" {
 				result, err := deps.initMetadata(cmd.Context(), snapshot, storageHost, bundle)
 				if err != nil {
 					return err
 				}
-				seed, err := metadataSeedDigest(bundle.Calls)
-				if err != nil {
-					return err
-				}
-				if err := unitdeploy.MarkInitStorage(options.StateDirectory, seed); err != nil {
-					return err
-				}
 				return writeSetupJSON(cmd, result)
 			}
-			bundle.ImportedSeed = unitdeploy.ImportedSeed(options.StateDirectory)
-			result, err := deps.initStorage(cmd.Context(), snapshot, file, configDir, storageHost, bundle)
+			result, err := deps.initStorage(cmd.Context(), snapshot, storageHost, source.root, bundle)
 			if err != nil {
-				return err
-			}
-			if err := unitdeploy.MarkStep(options.StateDirectory, unitdeploy.StepInitReady); err != nil {
 				return err
 			}
 			return writeSetupJSON(cmd, result)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录")
-	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
-	cmd.Flags().StringVar(&stage, "stage", "", "只做哪个阶段：storage 在装管理台之前运行；不填做全部初始化")
-	cmd.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录（默认和 bootstrap 相同）")
-	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
-	_ = cmd.MarkFlagRequired("storage-host")
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径（同目录要有 moox.secrets.toml）")
+	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录（不写时取 --source-dir 下的 config/setup）")
+	cmd.Flags().StringVar(&source.sourceDir, "source-dir", "", "源码或产物包目录（默认当前目录）：云函数代码包和元数据种子从这里取")
+	cmd.Flags().StringVar(&storageHost, "storage-host", "", "部署了 Storage 的主机 ID（默认取 moox.toml 里 storage-primary 所在的主机）")
+	cmd.Flags().StringVar(&stage, "stage", "", "只做哪个阶段：storage 只写业务空间、初始秘密与元数据；不填做全部初始化")
 	return cmd
 }
 
 // runSetupInitMetadata 只做不依赖管理台服务的初始化：业务空间写进 Admin，元数据写进 Storage。
 // Admin 在 admin 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
-func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
+func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
 	if _, err := deps.applySpaces(ctx, snapshot, bundle.Spaces); err != nil {
 		return setupInitStorageSummary{}, err
 	}
@@ -178,21 +154,13 @@ func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupco
 }
 
 // applySetupMetadata 导入元数据并核对，重复运行结果不变；数据集建好即可写入，不用另外激活。
-func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (metadataImportSummary, metadataImportSummary, error) {
+func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, storageHost string, bundle setupInitBundle) (metadataImportSummary, metadataImportSummary, error) {
 	var empty metadataImportSummary
 	storage, err := deps.openInitStorage(ctx, snapshot, storageHost)
 	if err != nil {
 		return empty, empty, err
 	}
 	defer storage.Close()
-	imported, err := setupMetadataImported(ctx, storage, bundle)
-	if err != nil {
-		return empty, empty, err
-	}
-	if imported {
-		done := metadataImportSummary{Planned: len(bundle.Calls), Unchanged: len(bundle.Calls)}
-		return done, done, nil
-	}
 	metadata, err := storage.Apply(ctx, bundle.Calls)
 	if err != nil {
 		return empty, empty, err
@@ -207,30 +175,11 @@ func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupconf
 	return metadata, verification, nil
 }
 
-// setupMetadataImported 判断这份种子已经导入过，并且业务空间还在。
-func setupMetadataImported(ctx context.Context, storage setupInitStorage, bundle setupInitBundle) (bool, error) {
-	if bundle.ImportedSeed == "" {
-		return false, nil
-	}
-	seed, err := metadataSeedDigest(bundle.Calls)
-	if err != nil || seed != bundle.ImportedSeed {
-		return false, err
-	}
-	var spaces []metadataImportCall
-	for _, call := range bundle.Calls {
-		if call.Resource == "spaces" {
-			spaces = append(spaces, call)
-		}
-	}
-	probe, err := storage.Apply(ctx, spaces)
-	return err == nil && probe.Applied == 0, err
-}
-
 func runSetupInit(
 	ctx context.Context,
 	deps setupDeps,
-	snapshot *setupconfig.Snapshot,
-	file, configDir, storageHost string,
+	snapshot *setupSnapshot,
+	storageHost, sourceRoot string,
 	bundle setupInitBundle,
 ) (setupInitSummary, error) {
 	// Open the cloud ingress required by every configured public runtime endpoint
@@ -253,6 +202,10 @@ func runSetupInit(
 	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
 		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
 	}
+	notification, err := deps.ensureNotification(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, fmt.Errorf("notification: %w", err)
+	}
 	cloudAccounts, err := deps.registerCloudAccounts(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
@@ -265,16 +218,13 @@ func runSetupInit(
 	}
 	// Timer 采集计划：保证每个空间有可用代码包（没有则构建上传）。Collector 的采集计划配置由部署渲染，
 	// 代码包按名称取最新版本，所以这里不需要改任何配置；失败不阻断，记入摘要。
-	scfPlan, err := deps.ensureSCFPlan(ctx, snapshot)
+	scfPlan, err := deps.ensureSCFPlan(ctx, snapshot, sourceRoot)
 	if err != nil {
 		return setupInitSummary{}, err
 	}
 	login, loginSkipped, err := verifySetupLogin(ctx, deps, snapshot, admin.Kept)
 	if err != nil {
 		return setupInitSummary{}, err
-	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		return setupInitSummary{}, fmt.Errorf("config_changed")
 	}
 
 	metadata, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
@@ -288,12 +238,9 @@ func runSetupInit(
 	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
 		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
 	}
-	if err := snapshot.VerifyUnchanged(); err != nil {
-		return setupInitSummary{}, fmt.Errorf("config_changed")
-	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
+		Admin: admin, Notification: notification, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},
@@ -319,14 +266,14 @@ type setupCLSSummary struct {
 
 // defaultSetupProvisionCLS 用已登记的腾讯云账号幂等开通 CLS。账号凭证由 Admin 持有，这里只取用不落盘。
 // SCF 采集未启用时不做任何事；开通失败返回 status=failed 与脱敏的原因，不中断初始化。
-func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupCLSSummary, error) {
+func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupSnapshot) (*setupCLSSummary, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("cls: setup configuration is missing")
 	}
 	if !snapshot.Manifest.SCFEnabled() {
 		return nil, nil
 	}
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return &setupCLSSummary{Enabled: true, Status: "failed", Warning: "open gateway failed"}, nil
 	}
@@ -354,12 +301,9 @@ func provisionSetupCLS(ctx context.Context, source clsprepare.AccountSource, fac
 	}
 }
 
-// defaultSetupRegisterCloudAccounts makes the single declarative SCF account
-// in moox.toml a real FunctionInstance catalog record. The Tencent credential itself
-// is owned by Admin; FunctionInstance stores only its secret reference and COS
-// metadata, never the SecretKey. SCF regions are execution targets, not
-// separate cloud accounts.
-func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupCloudAccountSummary, error) {
+// defaultSetupRegisterCloudAccounts 把 moox.toml 里 scf_plan 的云账号登记进 Collector。腾讯云密钥本身在 Admin，
+// Collector 只存密钥 ID 与 COS 桶，不存 SecretKey。SCF 的各地域是执行目标，不是不同的云账号。
+func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupSnapshot) (*setupCloudAccountSummary, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("cloud_accounts: setup configuration is missing")
 	}
@@ -367,7 +311,7 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 		return nil, nil
 	}
 
-	gateway, err := openCommandGateway(ctx, "", snapshot)
+	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return nil, fmt.Errorf("cloud_accounts: open gateway: %w", err)
 	}
@@ -379,7 +323,7 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 	}
 	existing := make(map[string]adminclient.CloudAccount, len(existingAccounts))
 	for _, account := range existingAccounts {
-		if account.Provider == "tencent" && !account.IsDeleted && strings.TrimSpace(account.AccountID) != "" {
+		if account.Provider == "tencent" && strings.TrimSpace(account.AccountID) != "" {
 			existing[account.AccountID] = account
 		}
 	}
@@ -413,57 +357,6 @@ func sameSetupCloudAccount(account adminclient.CloudAccount, input adminclient.C
 	return account.AccountID == input.AccountID && account.AccountName == input.AccountName &&
 		account.Provider == input.Provider && account.CredentialSecretID == input.CredentialSecretID &&
 		account.AppID == input.AppID && account.COSRegion == input.COSRegion && account.COSBucket == input.COSBucket
-}
-
-// newSetupFactorsCommand imports the repository's YAML factor library definitions
-// without touching Storage metadata.  It is useful when metadata has already
-// been initialized (possibly from an older seed) and a full setup init would
-// correctly refuse to overwrite that existing contract.
-func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
-	var file string
-	cmd := &cobra.Command{
-		Use:   "factors",
-		Short: "按 moox.toml 的 [[factors.definitions]] 与 [[factors.tasks]] 补齐因子定义、任务与成员（只补缺不删除）",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			plan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
-			if err != nil {
-				return err
-			}
-			summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Tasks: len(plan.Tasks), Members: plan.memberCount()}
-			reportFactorWarnings(plan.Warnings)
-			if !plan.empty() {
-				service, openErr := deps.openInitFactor(cmd.Context(), snapshot)
-				if openErr != nil {
-					return openErr
-				}
-				var applyErr error
-				summary, applyErr = service.Apply(cmd.Context(), plan)
-				closeErr := service.Close()
-				summary.Warnings = plan.Warnings
-				if applyErr != nil {
-					// 冲突时也输出逐项结果，再以错误结束。
-					if len(summary.Items) > 0 {
-						_ = writeSetupJSON(cmd, map[string]any{"status": "failed", "factors": summary})
-					}
-					return applyErr
-				}
-				if closeErr != nil {
-					return closeErr
-				}
-			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
-			return writeSetupJSON(cmd, map[string]any{"status": "ready", "factors": summary})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	return cmd
 }
 
 func setupSpaceIDs(spaces []setupclient.Space) []string {
@@ -709,20 +602,19 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 }
 
 type remoteSetupInitStorage struct {
-	transport setupssh.Client
-	gateway   commandGateway
+	gateway commandGateway
 }
 
 func defaultOpenSetupInitStorage(
 	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
+	snapshot *setupSnapshot,
 	host string,
 ) (setupInitStorage, error) {
-	transport, gateway, err := openRemoteStorage(ctx, snapshot, host)
+	gateway, err := openRemoteStorage(ctx, snapshot, host)
 	if err != nil {
 		return nil, err
 	}
-	return &remoteSetupInitStorage{transport: transport, gateway: gateway}, nil
+	return &remoteSetupInitStorage{gateway: gateway}, nil
 }
 
 func (s *remoteSetupInitStorage) Apply(ctx context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
@@ -737,21 +629,15 @@ func (s *remoteSetupInitStorage) Verify(ctx context.Context, calls []metadataImp
 }
 
 func (s *remoteSetupInitStorage) Close() error {
-	if s == nil {
+	if s == nil || s.gateway == nil {
 		return nil
 	}
-	if s.gateway != nil {
-		_ = s.gateway.Close()
-	}
-	if s.transport != nil {
-		return s.transport.Close()
-	}
-	return nil
+	return s.gateway.Close()
 }
 
 var _ setupInitStorage = (*remoteSetupInitStorage)(nil)
 
-// setupBrowserTrustSummary 说明管理台内部 CA 的信任还要用户自己做：不做时管理台能打开，但浏览器有安全提示。
+// setupBrowserTrustSummary 说明 MooX CA 的信任还要用户自己做：不做时管理台能打开，但浏览器有安全提示。
 type setupBrowserTrustSummary struct {
 	Status        string `json:"status"`
 	CAPath        string `json:"ca_path"`
@@ -761,7 +647,7 @@ type setupBrowserTrustSummary struct {
 }
 
 // describeSetupBrowserTrust 返回信任摘要，status 是 pending，等用户在自己的终端运行 setup trust-browser。
-func describeSetupBrowserTrust(snapshot *setupconfig.Snapshot) *setupBrowserTrustSummary {
+func describeSetupBrowserTrust(snapshot *setupSnapshot) *setupBrowserTrustSummary {
 	if snapshot == nil {
 		return nil
 	}

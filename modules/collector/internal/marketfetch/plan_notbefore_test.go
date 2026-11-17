@@ -46,27 +46,3 @@ func TestPlanStartDelayHonoursNotBeforeFromTheClose(t *testing.T) {
 		}
 	}
 }
-
-// 现货与合约函数拿到各自市场的拉取参数与 SCF 截止；未写覆盖的市场用空间值。
-func TestBuildDesiredStateUsesPerMarketFetchAndLateness(t *testing.T) {
-	options := testPlanOptions()
-	options.MarketFetch = map[string]PlanFetch{"swap": {Concurrency: 5, RPS: 50, Burst: 50, FeedConcurrency: 10, NotBeforeMS: 8000}}
-	options.MarketLatenessS = map[string]int{"swap": 20}
-	groups := testGroups(10, "1m")
-	swap := testGroups(10, "1m")[0]
-	swap.MarketType, swap.InstrumentType, swap.DatasetID = "swap", "swap", "ds_swap_1m"
-	groups = append(groups, swap)
-	state, err := BuildDesiredState(options, groups, nil)
-	require.NoError(t, err)
-	for _, function := range state.Functions {
-		switch function.Plan.Market.MarketType {
-		case "swap":
-			require.Equal(t, 8000, function.Plan.Fetch.NotBeforeMS)
-			require.Equal(t, 20, function.Plan.Datasets[0].LatenessS)
-		case "spot":
-			require.Zero(t, function.Plan.Fetch.NotBeforeMS)
-			require.Equal(t, 15, function.Plan.Datasets[0].LatenessS)
-		}
-	}
-	require.Equal(t, 20, state.Datasets["ds_swap_1m|1m"].LatenessS)
-}

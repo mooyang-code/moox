@@ -22,10 +22,10 @@ import (
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -70,10 +70,6 @@ func runPrimaryRole() error {
 	metadataPath := os.Getenv("MOOX_STORAGE_METADATA_PATH")
 	if metadataPath == "" {
 		metadataPath = filepath.Join(root, "metadata", "storage_metadata.db")
-	}
-	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-	if primarySecret == "" {
-		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for primary role")
 	}
 	rawURL := os.Getenv("MOOX_STORAGE_EVENTBUS_URL")
 	if rawURL == "" {
@@ -123,12 +119,6 @@ func runPrimaryRole() error {
 	svc, err := primarystore.New(primarystore.Options{
 		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
 		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,
-		Authorizer: func(auth *pb.AuthInfo) error {
-			if auth == nil || auth.GetAppId() == "" || !serviceauth.Valid(primarySecret, auth.GetAppId(), auth.GetAppKey()) {
-				return errors.New("invalid primary auth")
-			}
-			return nil
-		},
 	})
 	if err != nil {
 		return err
@@ -163,10 +153,11 @@ func runPrimaryRole() error {
 	if listener := s.Service("trpc.moox.storage.Metadata.trpc"); listener != nil {
 		pb.RegisterMetadataService(listener, metadataSvc)
 	}
-	if err := storagebootstrap.RegisterMetricsReporter(s, "primary"); err != nil {
+	healthState, err := registerRoleHealth(s, "storage-primary")
+	if err != nil {
 		return err
 	}
-	if err := registerRoleHealth(s, "storage-primary"); err != nil {
+	if err := storagebootstrap.RegisterMetricsReporter(s, "primary", healthz.Readiness(healthState.Snapshot)); err != nil {
 		return err
 	}
 	return s.Serve()
@@ -268,11 +259,7 @@ func runViewRole() error {
 	if root == "" {
 		root = "./var/storage"
 	}
-	viewSecret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
-	if viewSecret == "" {
-		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for view role")
-	}
-	svc, err := viewservice.New(filepath.Join(root, "view-indexes"), viewSecret)
+	svc, err := viewservice.New(filepath.Join(root, "view-indexes"))
 	if err != nil {
 		return err
 	}
@@ -284,18 +271,14 @@ func runViewRole() error {
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
 	}
-	// 与 PrimaryStore 一样直连同机的 Metadata，服务签名由 View 密钥生成，不经网关。
-	metadataProxy := viewservice.NewDirectMetadataClient(pb.NewMetadataClientProxy(
+	// 与 PrimaryStore 一样直连同机的 Metadata，不经网关。
+	metadataProxy := pb.NewMetadataClientProxy(
 		client.WithTarget(envOrDefault("MOOX_STORAGE_METADATA_TARGET", "ip://127.0.0.1:20100")),
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
 		client.WithTransport(transport.DefaultClientTransport),
-	), viewSecret)
+	)
 	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20102")
-	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-	if primarySecret == "" {
-		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for view role")
-	}
 	// Primary history pages are key-only and bounded by the rebuild lookback,
 	// but a cold Pebble history index can still take longer than the ordinary
 	// 30s request budget while it is being compacted. Keep this timeout scoped
@@ -308,8 +291,6 @@ func runViewRole() error {
 		client.WithTransport(transport.DefaultClientTransport),
 		client.WithTimeout(5*time.Minute),
 	)
-	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key(primarySecret, "storage-view")})
-	svc.SetWriterAuthSecret(primarySecret)
 	svc.SetPrimaryReader(primaryProxy)
 	backfillPageSize, backfillRequestInterval, err := storageViewBackfillSettings()
 	if err != nil {
@@ -346,10 +327,11 @@ func runViewRole() error {
 		return errors.New("DataView 监听没有配置")
 	}
 	pb.RegisterDataViewService(listener, svc)
-	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
+	healthState, err := registerRoleHealth(s, "storage-view")
+	if err != nil {
 		return err
 	}
-	if err := registerRoleHealth(s, "storage-view"); err != nil {
+	if err := storagebootstrap.RegisterMetricsReporter(s, "view", healthz.Readiness(healthState.Snapshot)); err != nil {
 		return err
 	}
 	serveErr := make(chan error, 1)
@@ -581,15 +563,16 @@ func storageEventBusCredentialFile() (string, error) {
 	return jetstream.ExpandCredentialPath(strings.TrimSpace(runtimeConfig.Storage.EventBus.CredentialFile)), nil
 }
 
-func registerRoleHealth(s *server.Server, instance string) error {
+// registerRoleHealth 注册健康检查；返回的状态再交给指标上报，上报里的就绪与 /readyz 是同一个判断。
+func registerRoleHealth(s *server.Server, instance string) (*storagehealth.State, error) {
 	if s == nil {
-		return errors.New("storage health server is unavailable")
+		return nil, errors.New("storage health server is unavailable")
 	}
 	state := storagehealth.New("storage", instance, "", "")
 	state.SnapshotFunc = storagehealth.SnapshotForRole(instance, observability.DefaultViewMetrics)
 	state.SetReady(true)
 	if err := storagehealth.Register(s.Service("trpc.moox.storage.Health"), state); err != nil {
-		return fmt.Errorf("register storage health: %w", err)
+		return nil, fmt.Errorf("register storage health: %w", err)
 	}
-	return nil
+	return state, nil
 }

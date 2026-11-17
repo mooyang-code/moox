@@ -260,12 +260,10 @@ const initTerminal = async (tab: TerminalTab) => {
     term.writeln("\r\n\x1b[33m正在等待终端布局完成...\x1b[0m");
   }
 
-  // Build WebSocket URL and connect. Ticket issuance and WebSocket creation
-  // are both asynchronous and can fail before an actual socket exists.
+  // 建立 WebSocket（与页面同源，浏览器自动带上会话 Cookie）；创建本身也可能在连上之前失败。
   let ws: WebSocket;
   try {
-    const wsUrl = await getSSHWebSocketUrl(tab.id, width, height);
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket(getSSHWebSocketUrl(tab.id, width, height));
   } catch (error: any) {
     tab.connected = false;
     term.writeln(`\r\n\x1b[31m[连接失败] ${error?.message || "无法建立终端连接"}\x1b[0m`);

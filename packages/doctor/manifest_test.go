@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,14 +39,15 @@ func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Components) != len(catalog.Components) {
-		t.Fatalf("Doctor components %d, catalog components %d", len(manifest.Components), len(catalog.Components))
+	diagnosed := slices.DeleteFunc(slices.Clone(catalog.Components), func(c servicecatalog.Component) bool { return c.ThirdParty })
+	if len(manifest.Components) != len(diagnosed) {
+		t.Fatalf("Doctor components %d, catalog components %d", len(manifest.Components), len(diagnosed))
 	}
 	manifestServices := make(map[string]Component, len(manifest.Components))
 	for _, component := range manifest.Components {
 		manifestServices[component.ServiceName] = component
 	}
-	for _, component := range catalog.Components {
+	for _, component := range diagnosed {
 		got, ok := manifestServices[component.ID]
 		if !ok || got.ComponentID != component.ID {
 			t.Fatalf("canonical component %q is missing", component.ID)
@@ -57,8 +59,8 @@ func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 			t.Errorf("Doctor metadata differs from catalog for %s", component.ID)
 		}
 	}
-	if got := manifestServices["console-proxy"]; got.HealthPath != "/readyz" || got.Transport != TransportHealthOnly {
-		t.Fatalf("console proxy health contract: %+v", got)
+	if got := manifestServices["admin"]; got.HealthPort != 11010 || got.Transport != TransportReporter {
+		t.Fatalf("admin health contract: %+v", got)
 	}
 }
 
@@ -106,7 +108,7 @@ func TestManifestValidation(t *testing.T) {
 		Description:             "monitor",
 		Transport:               TransportReporter,
 		FunctionalObservability: FunctionalObservabilityActive,
-		HealthPath:              "/readyz",
+		HealthPort:              11409,
 		RecoveryActionIDs:       []string{"restart_service_manually"},
 	}
 	tests := []struct {
@@ -120,9 +122,7 @@ func TestManifestValidation(t *testing.T) {
 		{name: "unsafe path", mutate: func(m *Manifest) { m.Components[0].ConfigPaths = []string{"../secret"} }},
 		{name: "unknown dependency", mutate: func(m *Manifest) { m.Components[0].Dependencies = []string{"missing"} }},
 		{name: "unknown recovery", mutate: func(m *Manifest) { m.Components[0].RecoveryActionIDs = []string{"shell_anything"} }},
-		{name: "systemd without unit", mutate: func(m *Manifest) { m.Components[0].Supervisor = servicecatalog.SupervisorSystemdUser }},
-		{name: "unit without systemd", mutate: func(m *Manifest) { m.Components[0].Unit = "moox-monitor" }},
-		{name: "unknown supervisor", mutate: func(m *Manifest) { m.Components[0].Supervisor = "launchd" }},
+		{name: "missing health port", mutate: func(m *Manifest) { m.Components[0].HealthPort = 0 }},
 		{name: "storage active", mutate: func(m *Manifest) {
 			m.Components[0].ServiceName = "storage-primary"
 			m.Components[0].FunctionalObservability = FunctionalObservabilityActive
@@ -158,8 +158,8 @@ func TestManifestChecksumStable(t *testing.T) {
 	}
 }
 
-// 外部程序由 systemd 用户服务托管，其余组件默认由 moox-runtime 看护。
-func TestEmbeddedManifestSupervisors(t *testing.T) {
+// 全部组件都由 systemd 用户服务托管；第三方程序（内置 SeaweedFS）不进诊断清单，外部程序的健康由管理端代报。
+func TestEmbeddedManifestSkipsThirdPartyComponents(t *testing.T) {
 	t.Parallel()
 
 	manifest, err := LoadEmbeddedManifest()
@@ -167,18 +167,11 @@ func TestEmbeddedManifestSupervisors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, component := range manifest.Components {
-		switch component.ComponentID {
-		case "factor-engine", "archive-worker":
-			if component.Supervisor != servicecatalog.SupervisorSystemdUser || component.Unit != "moox-"+component.ComponentID {
-				t.Fatalf("%s supervisor = %q unit = %q", component.ComponentID, component.Supervisor, component.Unit)
-			}
-			if component.Transport != TransportHealthOnly {
-				t.Fatalf("%s transport = %q", component.ComponentID, component.Transport)
-			}
-		default:
-			if component.Supervisor != servicecatalog.SupervisorMooxRuntime || component.Unit != "" {
-				t.Fatalf("%s supervisor = %q unit = %q", component.ComponentID, component.Supervisor, component.Unit)
-			}
+		if component.ComponentID == "seaweedfs" {
+			t.Fatal("third-party seaweedfs must not be diagnosed")
+		}
+		if (component.ComponentID == "factor-engine" || component.ComponentID == "archive-worker") && component.Transport != TransportDelegated {
+			t.Fatalf("%s transport = %q", component.ComponentID, component.Transport)
 		}
 	}
 }

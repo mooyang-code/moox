@@ -1292,7 +1292,7 @@ func newTestServiceForMarket(
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: string(account.ExecutionMode),
+			ExecutionMode:   string(account.ExecutionMode),
 			SettlementAsset: account.SettlementAsset,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -1312,7 +1312,7 @@ func newTestServiceForMarket(
 		// 目标订单（setTestOwner 的 owner-1）需要当前会话的有效目标。
 		if _, _, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", TargetID: "owner-1",
-			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+			InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: orderSessionStartedAt("session-1"), StrategyID: "strategy-1",
 			BarEndTime: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 			Status: "PENDING", AcceptedAt: 1,
 			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-" + string(instrument.MarketType), Quantity: "1"}},

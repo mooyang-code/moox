@@ -22,9 +22,6 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	if req == nil || req.GetViewId() == "" {
 		return reject(pb.ErrorCode_INVALID_PARAM, errors.New("view_id is required"))
 	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
-		return reject(pb.ErrorCode_NO_PERMISSION, err)
-	}
 	if len(req.GetSelectors()) == 0 || len(req.GetSelectors()) > maxCountSelectors || req.GetTimeRange() == nil {
 		return reject(pb.ErrorCode_INVALID_PARAM, errors.New("count requires 1 to 2000 selectors and a time range"))
 	}

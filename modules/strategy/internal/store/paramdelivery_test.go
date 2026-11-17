@@ -85,7 +85,7 @@ func TestPendingParamDeliveriesSkipsDisabledInstance(t *testing.T) {
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
 	mustCommit(t, repo, withNextParams(t, okResult("r1", "i1", "session-1", 1, PublishNone)), nil, testNow)
-	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", "session-1", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if pending, err := repo.PendingParamDeliveries(ctx, 10); err != nil || len(pending) != 0 {

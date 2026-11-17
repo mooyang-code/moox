@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/wirecompress"
 	"github.com/stretchr/testify/require"
@@ -16,9 +16,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// 跨主机调用恒定压缩：远端网关、经 control 中转、SSH 隧道、Access 都压缩；本机回环从不压缩。
+// 跨主机调用恒定压缩：远端网关、经 control 中转、SSH 隧道、外部入口都压缩；本机回环从不压缩。
 func TestCrossHostEndpointsAlwaysCompress(t *testing.T) {
-	ca, _, _ := testCertificates(t)
 	directory := testDirectory(t, "a", "b")
 
 	// Tunnel：每个目标主机经 SSH 本地转发。
@@ -27,29 +26,37 @@ func TestCrossHostEndpointsAlwaysCompress(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ep.compress, "SSH 隧道经公网到达目标主机")
 
-	// External：经 Access。
-	external := newTestClient(t, Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: "k", Secret: "fixture-key"},
-		AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"})
+	// External：经外部入口。
+	external := newTestClient(t, Config{Mode: External, Credentials: authtest.Identity("scf-collector"),
+		EntryAddress: "entry.example.test:11004", EntryHost: "storage"})
 	ep, err = external.endpoint(context.Background(), secretService, "")
 	require.NoError(t, err)
-	require.True(t, ep.compress, "经 Access 的调用")
+	require.True(t, ep.compress, "经外部入口的调用")
 
-	// Internal：本机回环不压缩，远端主机与中转压缩。
-	internal := &Client{config: Config{Mode: Internal, LocalHostID: "a", LocalAddress: "127.0.0.1:11002", CAFile: ca}}
-	internal.directory = directory
+	// Internal：本机服务直连不压缩，远端主机与中转压缩。
+	internal := newTestClient(t, internalConfig(t, &sourceStub{directory: directory}, "a"))
 	ep, err = internal.endpoint(context.Background(), secretService, "")
 	require.NoError(t, err)
 	require.Equal(t, "a", ep.target)
-	require.False(t, ep.compress, "本机回环从不压缩")
+	require.False(t, ep.compress, "本机服务直连从不压缩")
 	ep, err = internal.endpoint(context.Background(), secretService, "a")
 	require.NoError(t, err)
 	require.Equal(t, "b", ep.target)
 	require.True(t, ep.compress, "远端主机网关")
 
-	relayed := directory.Clone()
-	relayed.Hosts["b"] = servicecatalog.DirectoryHost{Address: "b.example.test", Relay: "a"}
-	internal.directory = relayed
-	ep, err = internal.endpoint(context.Background(), secretService, "a")
+	// b 只能出站，由控制机 a 中转。
+	relayed := versioned(t, DirectoryUpdate{
+		Hosts: []servicecatalog.Host{
+			{ID: "a", Address: "a.example.test", Status: servicecatalog.Enabled},
+			{ID: "b", Address: "b.example.test", Status: servicecatalog.Enabled, Reachability: servicecatalog.ReachabilityOutbound},
+		},
+		Deployments: []servicecatalog.Deployment{
+			{HostID: "a", ComponentID: "admin", Status: servicecatalog.Enabled},
+			{HostID: "b", ComponentID: "monitor", Status: servicecatalog.Enabled},
+		},
+	})
+	internal = newTestClient(t, internalConfig(t, &sourceStub{directory: relayed}, "a"))
+	ep, err = internal.endpoint(context.Background(), monitorService, "")
 	require.NoError(t, err)
 	require.NotNil(t, ep.relay)
 	require.True(t, ep.compress, "经 control 中转")

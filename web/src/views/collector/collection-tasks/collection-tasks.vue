@@ -63,6 +63,9 @@
             <a-table-column title="频率" :width="90">
               <template #cell="{ record }">{{ taskFrequency(record) }}</template>
             </a-table-column>
+            <a-table-column title="采集方式" :width="110">
+              <template #cell="{ record }">{{ ingestLabel(record.ingest) }}</template>
+            </a-table-column>
             <a-table-column title="合成来源" :width="200">
               <template #cell="{ record }">{{ resampleSourceSummary(record) }}</template>
             </a-table-column>
@@ -285,6 +288,18 @@
           <a-alert v-else-if="editor.data_type !== 'kline_resample'" type="info" show-icon
             >当前执行任务类型没有标的范围，此项留空。</a-alert
           >
+          <a-form-item v-if="!editing && editor.data_type === 'kline'" label="采集方式">
+            <a-select v-model="ingest" placeholder="按市场默认">
+              <a-option value="">按市场默认</a-option>
+              <a-option v-for="option in INGEST_OPTIONS" :key="option.value" :value="option.value" :title="option.hint">{{
+                option.label
+              }}</a-option>
+            </a-select>
+            <span class="field-hint"
+              >推送由 collector-stream 接收交易所推送；云函数拉取由云函数定时取数；本地拉取由 collector-stream
+              定时取数。建好以后用命令行 collector ingest-mode set 切换。</span
+            >
+          </a-form-item>
 
           <template v-if="editor.data_type === 'kline_resample'">
             <div v-if="editing" class="readonly-summary">
@@ -471,6 +486,9 @@
           <a-descriptions :column="2" bordered>
             <a-descriptions-item label="频率">{{ taskFrequency(detailData) }}</a-descriptions-item>
             <a-descriptions-item label="来源 / 市场">{{ taskRouteSummary(detailData) }}</a-descriptions-item>
+            <a-descriptions-item v-if="detailData.data_type === 'kline'" label="采集方式" :span="2">{{
+              ingestLabel(detailData.ingest)
+            }}</a-descriptions-item>
             <a-descriptions-item label="数据范围标签" :span="2">{{ taskTagSummary(detailData) }}</a-descriptions-item>
           </a-descriptions>
           <a-descriptions v-if="detailData.data_type === 'kline_resample'" :column="2" bordered class="detail-resample-info">
@@ -586,6 +604,8 @@ import { storeToRefs } from "pinia";
 import {
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
+  INGEST_OPTIONS,
+  ingestLabel,
   collectionTaskResultLabel,
   collectionTaskNameError,
   isCrossMarketSelection,
@@ -657,6 +677,8 @@ const frequencyValue = ref("");
 const subjectTagIds = ref<string[]>([]);
 // 选了现货、永续两个市场的标签时，创建任务的组织方式：合并成一个统一数据集，或按市场拆成两个任务。
 const organization = ref<TaskOrganization>("unified");
+// 新建 K 线任务的采集方式；空表示按市场默认。
+const ingest = ref("");
 const selectedOutputFields = ref<string[]>([]);
 const outputFieldDraft = ref<string[]>([]);
 // 编辑已有任务时任务原来的输出字段：输出字段只能减少，不在这里面的不能勾。
@@ -1023,6 +1045,7 @@ function resetEditor() {
   frequencyValue.value = "";
   subjectTagIds.value = [];
   organization.value = "unified";
+  ingest.value = "";
   sourceTaskId.value = "";
   resamplePreview.value = null;
   resampleError.value = "";
@@ -1241,6 +1264,7 @@ function currentTaskInput(): CollectionTaskInput {
     frequency: frequencyValue.value,
     subjectTags: subjectTagIds.value.slice(),
     sourceTaskId: sourceTaskId.value,
+    ingest: ingest.value,
     // 提交前按条件再过滤一次：条件不满足的附加字段不带。
     outputFields: pruneUnavailableFields(selectedOutputFields.value, availableExtraFields.value, dropUnavailableFields.value)
   };

@@ -2,9 +2,6 @@ package bootstrap
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -34,11 +31,7 @@ type EventBusConfig struct {
 
 // RPCConfig 是经主机网关访问的依赖服务（Factor、Storage）的调用参数。
 type RPCConfig struct {
-	AppID  string `yaml:"app_id"`
-	AppKey string `yaml:"app_key"`
-	// ViewAppKey 是 DataView 的调用密钥；Storage 对 Metadata 与 DataView 使用不同的鉴权密钥。
-	ViewAppKey string        `yaml:"view_app_key"`
-	Timeout    time.Duration `yaml:"timeout"`
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 // EvaluationConfig 是求值的重试参数。
@@ -98,7 +91,7 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("解析策略配置路径失败：%w", err)
 	}
-	c := Config{sourcePath: absolute, GatewayClient: gatewayclient.FileConfig{Caller: "strategy", KeyFile: "../../secrets/caller-strategy.key"}}
+	c := Config{sourcePath: absolute, GatewayClient: gatewayclient.FileConfig{Caller: "strategy", KeyFile: "../../secrets/host.key"}}
 	// 严格解析：未知字段（例如已经删除的 gateway_url、target）直接报错，不静默忽略。
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
@@ -144,23 +137,6 @@ func Load(path string) (Config, error) {
 	}
 	if c.EventBus.ConsumerName == "" {
 		c.EventBus.ConsumerName = trigger.ViewDataReadyConsumerName
-	}
-	if c.Factor.AppID == "" {
-		c.Factor.AppID = "strategy"
-	}
-	if c.Storage.AppID == "" {
-		c.Storage.AppID = "strategy"
-	}
-	// Storage 按共享密钥校验调用方的 AppKey；密钥不进仓库，由部署注入环境变量后派生。
-	if c.Storage.AppKey == "" {
-		if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
-			c.Storage.AppKey = serviceAuthKey(secret, c.Storage.AppID)
-		}
-	}
-	if c.Storage.ViewAppKey == "" {
-		if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")); secret != "" {
-			c.Storage.ViewAppKey = serviceAuthKey(secret, c.Storage.AppID)
-		}
 	}
 	if c.Factor.Timeout == 0 {
 		c.Factor.Timeout = 5 * time.Second
@@ -221,8 +197,7 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// OpenGateway 打开访问 Storage、FactorMgr 与 Trade 的网关客户端。部署身份与 Storage 的两把角色密钥都必须具备；
-// 只加载配置（Load）不读取签名密钥，也不访问目录。
+// OpenGateway 打开访问 Storage、FactorMgr 与 Trade 的网关客户端；只加载配置（Load）不读取签名密钥，也不访问目录。
 func (c Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
 	if c.sourcePath == "" {
 		return nil, errors.New("strategy 网关客户端需要先加载模块配置")
@@ -230,17 +205,5 @@ func (c Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, 
 	if c.GatewayClient.Caller != "strategy" {
 		return nil, errors.New("gateway_client.caller 必须是 strategy")
 	}
-	if strings.TrimSpace(c.Storage.AppKey) == "" {
-		return nil, errors.New("必须提供 storage 的 app_key（或设置 MOOX_STORAGE_PRIMARY_AUTH_SECRET）")
-	}
-	if strings.TrimSpace(c.Storage.ViewAppKey) == "" {
-		return nil, errors.New("必须提供 storage 的 view_app_key（或设置 MOOX_STORAGE_VIEW_AUTH_SECRET）")
-	}
 	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database), onRefreshError)
-}
-
-func serviceAuthKey(secret, appID string) string {
-	h := hmac.New(sha256.New, []byte(secret))
-	_, _ = h.Write([]byte(appID))
-	return hex.EncodeToString(h.Sum(nil))
 }

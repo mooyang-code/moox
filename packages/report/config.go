@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/report/logsink"
 )
 
 const (
@@ -43,7 +44,7 @@ func DefaultConfig(module, serviceName string) Config {
 		ServiceName:          serviceName,
 		InstanceID:           firstEnv("MOOX_INSTANCE_ID"),
 		NodeID:               firstEnv("MOOX_NODE_ID"),
-		BootID:               firstEnv("MOOX_BOOT_ID"),
+		BootID:               processBootID(),
 		Version:              firstEnv("MOOX_VERSION", "MOOX_SERVICE_VERSION"),
 		EventBusURL:          firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_URL", "NATS_URL"),
 		CredentialFile:       firstEnv("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"),
@@ -125,7 +126,6 @@ func (c Config) validateIdentity() error {
 	for _, identity := range []struct{ name, value string }{
 		{name: "MOOX_INSTANCE_ID", value: c.InstanceID},
 		{name: "MOOX_NODE_ID", value: c.NodeID},
-		{name: "MOOX_BOOT_ID", value: c.BootID},
 	} {
 		if strings.TrimSpace(identity.value) == "" {
 			return fmt.Errorf("metrics reporter identity requires %s", identity.name)
@@ -133,6 +133,10 @@ func (c Config) validateIdentity() error {
 	}
 	return nil
 }
+
+// processBootID 是本进程的启动标识：部署注入了 MOOX_BOOT_ID 就用它，否则在进程内生成一次随机值。
+// 同一进程里的指标上报、日志上报与健康端口共用这一个值，Monitor 按它的变化数启动次数（“反复重启”检查）。
+func processBootID() string { return logsink.ProcessBootID() }
 
 func firstEnv(names ...string) string {
 	for _, name := range names {

@@ -103,7 +103,7 @@ describe("verdict without alerts", () => {
     topology_known: true,
     components: [
       { host_id: "control", component_id: "admin", status: "healthy" },
-      { host_id: "control", component_id: "host-agent", status: "unchecked", reporter: { status: "unchecked" } }
+      { host_id: "control", component_id: "archive-mgr", status: "disabled" }
     ],
     hosts: [{ host_id: "control", status: "healthy" }]
   };
@@ -127,9 +127,9 @@ describe("verdict without alerts", () => {
     expect(result.detail).toContain("不代表当前状态");
   });
 
-  it("keeps not-probed components out of the healthy ratio", () => {
+  it("keeps disabled components out of the healthy ratio", () => {
     const [components] = layerSummaries(healthy);
-    expect(layerCountText(components)).toBe("1 / 1 正常 · 1 项停用或不探测");
+    expect(layerCountText(components)).toBe("1 / 1 正常 · 1 项已停用");
   });
 });
 
@@ -245,14 +245,14 @@ describe("layers", () => {
       components: [
         { host_id: "storage", component_id: "storage-primary", name: "存储主服务", status: "healthy" },
         { host_id: "control", component_id: "admin", name: "管理后台", status: "healthy" },
-        { host_id: "control", component_id: "collector", name: "行情采集服务", status: "down", reason: "健康检查失败" },
-        { host_id: "control", component_id: "eventbus", name: "消息总线", status: "unchecked", reporter: { status: "degraded" } }
+        { host_id: "control", component_id: "collector", name: "行情采集服务", status: "down", reason: "未就绪：数据库不可用" },
+        { host_id: "control", component_id: "eventbus", name: "消息总线", status: "degraded", reporter: { status: "degraded" } }
       ]
     });
     expect(hosts.map(host => host.hostId)).toEqual(["control", "storage"]);
     expect(hosts[0].chips.map(chip => [chip.name, chip.tone, chip.status])).toEqual([
       ["行情采集服务", "bad", "异常"],
-      ["消息总线", "warn", "不探测 · 上报需关注"],
+      ["消息总线", "warn", "需关注"],
       ["管理后台", "ok", "正常"]
     ]);
   });

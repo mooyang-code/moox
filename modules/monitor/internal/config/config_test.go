@@ -8,40 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-
 	"gopkg.in/yaml.v3"
 )
 
-func TestHTTPSProbeConfigurationResolvesTrustRelativeToModuleConfig(t *testing.T) {
+// 探测删除后部署段只剩是否同步拓扑：旧的 https、local_host_id 键会被严格解码拒绝。
+func TestDeploymentConfigRejectsRemovedProbeKeys(t *testing.T) {
 	directory := t.TempDir()
-	path := filepath.Join(directory, "app.yaml")
-	raw := "deployment:\n  enabled: false\n  https:\n    console-proxy:\n      url: https://console.example.test:9527/\n      connect_address: 127.0.0.1:9527\n      server_name: console.example.test\n      trust_mode: internal\n      ca_file: ../../certs/caddy/root.crt\n      ca_baseline: ../../certs/caddy/root.sha256\n"
-	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := cfg.Deployment.HTTPS["console-proxy"]
-	if target.CAFile != filepath.Clean(filepath.Join(directory, "../../certs/caddy/root.crt")) || !filepath.IsAbs(target.CABaseline) {
-		t.Fatalf("unresolved HTTPS trust files: %+v", target)
-	}
-}
-
-func TestHTTPSProbeConfigurationRejectsAmbiguousTrust(t *testing.T) {
-	for _, target := range []domain.HTTPSConfig{
-		{URL: "http://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public"},
-		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "wrong.example.test", TrustMode: "public"},
-		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "internal", CAFile: "root.crt"},
-		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public", CAFile: "root.crt", CABaseline: "root.sha256"},
-	} {
-		cfg := Default()
-		cfg.Deployment.Enabled = false
-		cfg.Deployment.HTTPS = map[string]domain.HTTPSConfig{"console-proxy": target}
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("invalid HTTPS configuration accepted: %+v", target)
+	for _, raw := range []string{"deployment:\n  enabled: false\n  https: {}\n", "deployment:\n  enabled: false\n  local_host_id: control\n"} {
+		path := filepath.Join(directory, "app.yaml")
+		if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("removed probe key accepted: %q, err=%v", raw, err)
 		}
 	}
 }
@@ -52,17 +31,11 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Database.Path != "./data/monitor/monitor.db" {
 		t.Fatalf("database path = %q", cfg.Database.Path)
 	}
-	if cfg.Health.Addr != ":11409" {
-		t.Fatalf("health addr = %q", cfg.Health.Addr)
-	}
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
-	}
-	if cfg.Scheduler.MaxConcurrency != 16 {
-		t.Fatalf("max concurrency = %d", cfg.Scheduler.MaxConcurrency)
 	}
 	if !cfg.Deployment.Enabled {
 		t.Fatalf("deployment = %+v", cfg.Deployment)
@@ -86,8 +59,7 @@ func TestMonitorConfigDefaults(t *testing.T) {
 		t.Fatalf("market canary must come from deployment config, defaults = %+v", cfg.MarketCanary)
 	}
 	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
-		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
-		cfg.MarketHealth.TimerCoordinationLeaseGrace != 10*time.Minute {
+		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute {
 		t.Fatalf("market health defaults = %+v", cfg.MarketHealth)
 	}
 }
@@ -129,8 +101,6 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 
 func TestMonitorConfigEnvOverride(t *testing.T) {
 	t.Setenv("MOOX_MONITOR_DB_PATH", "/tmp/moox-monitor.db")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 
 	cfg, err := Load(writeConfig(t, `
 instance:
@@ -145,8 +115,6 @@ instance:
 }
 
 func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	cfg, err := Load(writeConfig(t, "observability:\n  credential_file: \"\"\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -160,17 +128,15 @@ func TestMonitorStorageUsesConfiguredIdentityInsteadOfLegacyEnvironment(t *testi
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
 	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
 	cfg, err := Load(writeConfig(t, `gateway_client:
   caller: monitor
-  key_id: admin-assigned-monitor-key
-  key_file: ../../secrets/caller-monitor.key
+  host_id: control
+  key_file: ../../secrets/host.key
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GatewayClient.Caller != "monitor" || cfg.GatewayClient.KeyID != "admin-assigned-monitor-key" || cfg.GatewayClient.KeyFile != "../../secrets/caller-monitor.key" {
+	if cfg.GatewayClient.Caller != "monitor" || cfg.GatewayClient.HostID != "control" || cfg.GatewayClient.KeyFile != "../../secrets/host.key" {
 		t.Fatalf("gateway identity was overridden: %+v", cfg.GatewayClient)
 	}
 
@@ -181,13 +147,11 @@ func TestMonitorRejectsOldAndInvalidGatewayConfiguration(t *testing.T) {
 		"metrics:\n  storage:\n    gateway_target: ip://127.0.0.1:11003\n",
 		"metrics:\n  host_storage:\n    hmac_key_file: legacy.key\n",
 		"gateway_client:\n  target: ip://127.0.0.1:11003\n",
-		"gateway_client:\n  key_id: first\n  key_id: second\n",
+		"gateway_client:\n  host_id: first\n  host_id: second\n",
 		"gateway_client:\n  caller: archive\n",
 		"gateway_client:\n  caller: monitor\n---\ngateway_client:\n  caller: archive\n",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-			t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
 			if _, err := Load(writeConfig(t, raw)); err == nil {
 				t.Fatal("invalid gateway configuration was accepted")
 			}
@@ -203,30 +167,6 @@ func TestMonitorRejectsOldCollectorGatewayConfiguration(t *testing.T) {
 		if _, err := Load(writeConfig(t, "kline_freshness:\n  "+old+"\n")); err == nil {
 			t.Fatalf("old Collector route was accepted: %s", old)
 		}
-	}
-}
-
-func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	cfg, err := Load(writeConfig(t, "{}\n"))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.HealthAuth.Version != "moox-health-v1" || cfg.HealthAuth.AccessKey != "monitor" || cfg.HealthAuth.SecretKey != "secret" {
-		t.Fatalf("health auth = %+v", cfg.HealthAuth)
-	}
-}
-
-func TestMonitorConfigRequiresHealthCredentialsWhenDeploymentEnabled(t *testing.T) {
-	cfg := Default()
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want health credential error")
-	}
-	cfg.Deployment.Enabled = false
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() with deployment disabled = %v", err)
 	}
 }
 
@@ -264,8 +204,6 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 }
 
 func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "app.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -323,8 +261,6 @@ func TestMonitorDefaultDatasetHealthPolicyPathExistsFromModuleWorkingDirectory(t
 }
 
 func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	for _, content := range []string{
 		"metrics:\n  eventbus_credential_file: old.yaml\n",
 		"metrics:\n  host_eventbus_credential_file: old.yaml\n",
@@ -417,8 +353,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 }
 
 func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	_, err := Load(writeConfig(t, "kline_freshness:\n  enabled: true\n  typo_interval: 30s\n"))
 	if err == nil {
 		t.Fatal("Load() accepted unknown kline freshness field")
@@ -440,32 +374,13 @@ func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
 		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
 	}
-
-	cfg = Default()
-	cfg.Deployment.Enabled = false
-	cfg.MarketHealth.TimerCoordinationLeaseGrace = -time.Second
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_lease_grace") {
-		t.Fatalf("Validate() error = %v, want lease grace error", err)
-	}
 }
 
-func TestMonitorConfigFillsTheLeaseGraceDefaultWhenTheFileOmitsIt(t *testing.T) {
-	// 线上配置文件不随二进制更新：旧文件没有 timer_coordination_lease_grace 时必须取默认值。
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	cfg, err := Load(writeConfig(t, "market_health:\n  timer_coordination_stale_after: 15m\n  timer_coordination_pending_grace: 5m\n"))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.MarketHealth.TimerCoordinationLeaseGrace != 10*time.Minute {
-		t.Fatalf("lease grace = %v, want 10m", cfg.MarketHealth.TimerCoordinationLeaseGrace)
-	}
-	cfg, err = Load(writeConfig(t, "market_health:\n  timer_coordination_lease_grace: 3m\n"))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.MarketHealth.TimerCoordinationLeaseGrace != 3*time.Minute {
-		t.Fatalf("lease grace = %v, want 3m", cfg.MarketHealth.TimerCoordinationLeaseGrace)
+// 发布租约已删除，宽限期配置项 timer_coordination_lease_grace 随之删除；严格解码下再写就报错。
+func TestMonitorConfigRejectsRemovedLeaseGrace(t *testing.T) {
+	_, err := Load(writeConfig(t, "market_health:\n  timer_coordination_lease_grace: 10m\n"))
+	if err == nil || !strings.Contains(err.Error(), "timer_coordination_lease_grace") {
+		t.Fatalf("Load() error = %v, want unknown field timer_coordination_lease_grace", err)
 	}
 }
 
@@ -478,8 +393,6 @@ func TestMonitorConfigRejectsRemovedHostStorage(t *testing.T) {
 }
 
 func TestMonitorConfigRejectsRemovedPeerConfiguration(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
 	_, err := Load(writeConfig(t, "peer:\n  enabled: false\n"))
 	if err == nil || !strings.Contains(err.Error(), "field peer not found") {
 		t.Fatalf("Load() error = %v, want removed peer field rejection", err)
@@ -497,8 +410,6 @@ func writeConfig(t *testing.T, content string) string {
 }
 
 func TestMonitorNewSeriesLimitsCanBeTunedOrDisabled(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
 	cfg, err := Load(writeConfig(t, "metrics:\n  max_new_series_per_hour: 50\n  max_new_series_per_day: -1\n"))
 	if err != nil {
 		t.Fatal(err)

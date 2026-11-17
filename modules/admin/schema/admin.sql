@@ -2,30 +2,6 @@
 
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS t_collector_publish_leases (
-    c_space_id TEXT NOT NULL PRIMARY KEY,
-    c_lease_id TEXT NOT NULL DEFAULT '',
-    c_holder_id TEXT NOT NULL DEFAULT '',
-    c_fencing_token INTEGER NOT NULL DEFAULT 0,
-    c_expires_at_unix_ms INTEGER NOT NULL DEFAULT 0,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_fencing_token >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS t_collector_publish_operations (
-    c_space_id TEXT NOT NULL,
-    c_operation_id TEXT NOT NULL,
-    c_lease_id TEXT NOT NULL,
-    c_fencing_token INTEGER NOT NULL,
-    c_expires_at_unix_ms INTEGER NOT NULL,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_operation_id),
-    CHECK (c_fencing_token > 0)
-);
-
-CREATE INDEX IF NOT EXISTS idx_collector_publish_operations_expiry
-ON t_collector_publish_operations (c_space_id, c_expires_at_unix_ms);
-
 -- ************ 平台空间表 ************
 CREATE TABLE IF NOT EXISTS t_spaces (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -81,16 +57,21 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     c_status TEXT NOT NULL DEFAULT 'enabled',
     -- direct：可直达；outbound：只能出站，经 control 网关反向连接中转
     c_reachability TEXT NOT NULL DEFAULT 'direct',
+    -- 1：这台主机的网关开外部入口（11004），外部身份从这里进来
+    c_external_entry INTEGER NOT NULL DEFAULT 0,
     c_description TEXT NOT NULL DEFAULT '',
     -- 0 表示控制台不能 SSH 到这台主机
     c_ssh_port INTEGER NOT NULL DEFAULT 0,
     c_ssh_user TEXT NOT NULL DEFAULT '',
     -- 首次连接记录的主机密钥指纹，格式为“地址:端口 指纹”，地址或端口变化后自然失效
     c_ssh_fingerprint TEXT NOT NULL DEFAULT '',
+    -- 这台主机的签名公钥（base64 的 32 字节 ed25519 公钥），本机全部组件共用；空表示还没签发过身份包。私钥只在主机上
+    c_sign_public_key TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('enabled', 'disabled')),
     CHECK (c_reachability IN ('direct', 'outbound')),
+    CHECK (c_external_entry IN (0, 1)),
     CHECK (c_ssh_port BETWEEN 0 AND 65535),
     UNIQUE (c_address)
 );
@@ -102,6 +83,13 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
 END;
+
+-- 不属于主机的签名身份的公钥：moox-cli、scf-collector、moox-skill、collector-operator。一个身份一把，没有新旧并存
+CREATE TABLE IF NOT EXISTS t_identity_keys (
+    c_identity TEXT NOT NULL PRIMARY KEY,
+    c_sign_public_key TEXT NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS t_deployments (
     c_host_id TEXT NOT NULL,

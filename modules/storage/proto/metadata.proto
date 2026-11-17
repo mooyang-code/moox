@@ -306,8 +306,6 @@ message DatasetColumn {
 
 // CreateSpaceReq 表示创建使用空间的请求。
 message CreateSpaceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space 是待创建的使用空间元数据。
   Space space = 2;
 }
@@ -322,8 +320,6 @@ message CreateSpaceRsp {
 
 // UpdateSpaceReq 表示更新使用空间的请求。
 message UpdateSpaceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space 是更新后的使用空间元数据。
   Space space = 2;
 }
@@ -338,7 +334,6 @@ message UpdateSpaceRsp {
 
 // DeleteSpaceReq 表示删除一个使用空间及其级联元数据。
 message DeleteSpaceReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
 }
 
@@ -349,8 +344,6 @@ message DeleteSpaceRsp {
 
 // GetSpaceReq 表示获取使用空间的请求。
 message GetSpaceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是使用空间 ID。
   string space_id = 2;
 }
@@ -365,8 +358,6 @@ message GetSpaceRsp {
 
 // ListSpacesReq 表示列出使用空间的请求。
 message ListSpacesReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // owner 是可选拥有者过滤条件。
   string owner = 2;
   // page 是分页参数。
@@ -385,8 +376,6 @@ message ListSpacesRsp {
 
 // CreateViewReq 表示创建查询视图的请求。
 message CreateViewReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // view 是待创建的查询视图元数据。
   View view = 2;
   // create_only 为 true 时要求 View ID 不存在，且由存储层原子保证。
@@ -403,7 +392,6 @@ message CreateViewRsp {
 
 // DeleteViewReq 表示物理删除一个查询视图及其依赖行。
 message DeleteViewReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string view_id = 3;
 }
@@ -415,8 +403,6 @@ message DeleteViewRsp {
 
 // UpdateViewReq 表示更新查询视图的请求。
 message UpdateViewReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // view 是更新后的查询视图元数据。
   View view = 2;
 }
@@ -431,8 +417,6 @@ message UpdateViewRsp {
 
 // GetViewReq 表示获取查询视图的请求。
 message GetViewReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是使用空间 ID。
   string space_id = 2;
   // view_id 是查询视图 ID。
@@ -449,8 +433,6 @@ message GetViewRsp {
 
 // ListViewsReq 表示列出查询视图的请求。
 message ListViewsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
   // dataset_id 是可选数据集过滤条件。
@@ -473,8 +455,6 @@ message ListViewsRsp {
 
 // ListViewColumnsReq 表示列出视图列的请求。
 message ListViewColumnsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是使用空间 ID。
   string space_id = 2;
   // view_id 是查询视图 ID。
@@ -495,8 +475,6 @@ message ListViewColumnsRsp {
 
 // CreateDataSourceReq 表示创建数据来源的请求。
 message CreateDataSourceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // data_source 是待创建的数据来源元数据。
   DataSource data_source = 2;
 }
@@ -511,8 +489,6 @@ message CreateDataSourceRsp {
 
 // UpdateDataSourceReq 表示更新数据来源的请求。
 message UpdateDataSourceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // data_source 是更新后的数据来源元数据。
   DataSource data_source = 2;
 }
@@ -527,7 +503,6 @@ message UpdateDataSourceRsp {
 
 // DeleteDataSourceReq 表示删除一个没有数据集引用的数据来源。
 message DeleteDataSourceReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string data_source_id = 3;
 }
@@ -539,8 +514,6 @@ message DeleteDataSourceRsp {
 
 // GetDataSourceReq 表示获取数据来源的请求。
 message GetDataSourceReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是使用空间 ID。
   string space_id = 2;
   // data_source_id 是数据来源 ID。
@@ -557,8 +530,6 @@ message GetDataSourceRsp {
 
 // ListDataSourcesReq 表示列出数据来源的请求。
 message ListDataSourcesReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
   // page 是分页参数。
@@ -579,8 +550,6 @@ message ListDataSourcesRsp {
 
 // UpsertSubjectReq 表示创建或更新数据对象的请求。
 message UpsertSubjectReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // subject 是待写入的数据对象元数据。
   Subject subject = 2;
 }
@@ -595,8 +564,6 @@ message UpsertSubjectRsp {
 
 // GetSubjectReq 表示获取数据对象的请求。
 message GetSubjectReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是使用空间 ID。
   string space_id = 2;
   // subject_id 是数据对象 ID。
@@ -613,8 +580,6 @@ message GetSubjectRsp {
 
 // ListSubjectsReq 表示列出数据对象的请求。
 message ListSubjectsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
   // subject_ids 是可选对象 ID 白名单。
@@ -636,7 +601,6 @@ message ListSubjectsRsp {
 }
 
 message UpsertTagReq {
-  common.AuthInfo auth_info = 1;
   Tag tag = 2;
   bool create_only = 3;
   // seed 标记种子导入（setup init、metadata import/apply）：新建标签（含 create_only）时保留 tag.builtin。
@@ -644,14 +608,13 @@ message UpsertTagReq {
   bool seed = 4;
 }
 message UpsertTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }
-message GetTagReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; }
+message GetTagReq { string space_id = 2; string tag_id = 3; }
 message GetTagRsp { common.RetInfo ret_info = 1; Tag tag = 2; }
-message ListTagsReq { common.AuthInfo auth_info = 1; string space_id = 2; common.Page page = 3; }
+message ListTagsReq { string space_id = 2; common.Page page = 3; }
 message ListTagsRsp { common.RetInfo ret_info = 1; repeated Tag tags = 2; common.PageResult page_result = 3; }
-message DeleteTagReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; }
+message DeleteTagReq { string space_id = 2; string tag_id = 3; }
 message DeleteTagRsp { common.RetInfo ret_info = 1; repeated TagReference references = 2; }
 message ListTagMembersReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string tag_id = 3;
   string status = 4;
@@ -659,20 +622,18 @@ message ListTagMembersReq {
   common.Page page = 6;
 }
 message ListTagMembersRsp { common.RetInfo ret_info = 1; repeated TagMember members = 2; common.PageResult page_result = 3; }
-message TagMembersReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; }
+message TagMembersReq { string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; }
 message TagMembersRsp { common.RetInfo ret_info = 1; uint32 affected = 2; }
-message SetTagMemberStatusReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; string status = 5; }
-message ApplyTagSnapshotReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated TagSnapshotItem items = 4; }
+message SetTagMemberStatusReq { string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; string status = 5; }
+message ApplyTagSnapshotReq { string space_id = 2; string tag_id = 3; repeated TagSnapshotItem items = 4; }
 message ApplyTagSnapshotRsp { common.RetInfo ret_info = 1; uint32 added = 2; uint32 activated = 3; uint32 inactivated = 4; }
-message UpdateSubjectAttributesReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated SubjectAttributes items = 3; }
+message UpdateSubjectAttributesReq { string space_id = 2; repeated SubjectAttributes items = 3; }
 message UpdateSubjectAttributesRsp { common.RetInfo ret_info = 1; uint32 updated = 2; uint32 skipped = 3; }
-message ResolveSubjectsReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated string tag_ids = 3; }
+message ResolveSubjectsReq { string space_id = 2; repeated string tag_ids = 3; }
 message ResolveSubjectsRsp { common.RetInfo ret_info = 1; repeated Subject subjects = 2; }
 
 // CreateDatasetReq 表示创建数据集的请求。
 message CreateDatasetReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // dataset 是待创建的数据集元数据。
   Dataset dataset = 2;
   // columns 是随数据集一起创建的列定义，与数据集在同一事务内写入；数据集建好即可写入。
@@ -689,8 +650,6 @@ message CreateDatasetRsp {
 
 // UpdateDatasetReq 表示更新数据集的请求。
 message UpdateDatasetReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // dataset 是更新后的数据集元数据。
   Dataset dataset = 2;
 }
@@ -705,7 +664,6 @@ message UpdateDatasetRsp {
 
 // DeleteDatasetReq 表示删除一个临时数据集及其依赖行。
 message DeleteDatasetReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string dataset_id = 3;
 }
@@ -717,8 +675,6 @@ message DeleteDatasetRsp {
 
 // GetDatasetReq 表示获取数据集的请求。
 message GetDatasetReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是使用空间 ID。
   string space_id = 2;
   // dataset_id 是数据集 ID。
@@ -737,8 +693,6 @@ message GetDatasetRsp {
 
 // ListDatasetsReq 表示列出数据集的请求。
 message ListDatasetsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
   // data_source_id 是可选数据来源 ID 过滤条件。
@@ -763,8 +717,6 @@ message ListDatasetsRsp {
 
 // ListDatasetSubjectsReq 表示列出 Dataset 覆盖对象的请求。
 message ListDatasetSubjectsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
   // dataset_id 是可选数据集 ID 过滤条件。
@@ -787,7 +739,6 @@ message ListDatasetSubjectsRsp {
 
 // CreateFieldGroupReq 表示创建字段组的请求。
 message CreateFieldGroupReq {
-  common.AuthInfo auth_info = 1;
   FieldGroup field_group = 2;
 }
 
@@ -797,7 +748,6 @@ message CreateFieldGroupRsp {
 }
 
 message UpdateFieldGroupReq {
-  common.AuthInfo auth_info = 1;
   FieldGroup field_group = 2;
 }
 
@@ -807,7 +757,6 @@ message UpdateFieldGroupRsp {
 }
 
 message GetFieldGroupReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string group_id = 3;
 }
@@ -818,7 +767,6 @@ message GetFieldGroupRsp {
 }
 
 message ListFieldGroupsReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string parent_group_id = 3;
   common.Page page = 4;
@@ -838,8 +786,6 @@ message ListFieldGroupsRsp {
 
 // CreateFieldReq 表示创建字段的请求。
 message CreateFieldReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // field 是待创建的字段元数据。
   Field field = 2;
 }
@@ -854,8 +800,6 @@ message CreateFieldRsp {
 
 // UpdateFieldReq 表示更新字段的请求。
 message UpdateFieldReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // field 是更新后的字段元数据。
   Field field = 2;
 }
@@ -870,8 +814,6 @@ message UpdateFieldRsp {
 
 // GetFieldReq 表示获取字段的请求。
 message GetFieldReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是使用空间 ID。
   string space_id = 2;
   // field_id 是字段 ID。
@@ -888,8 +830,6 @@ message GetFieldRsp {
 
 // ListFieldsReq 表示列出字段的请求。
 message ListFieldsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
   // value_type 是可选字段类型过滤条件。
@@ -924,7 +864,6 @@ message ListFieldsRsp {
 
 // BatchUpdateFieldsReq 表示一次事务内批量调整字段组或状态。
 message BatchUpdateFieldsReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   repeated string field_ids = 3;
   string target_group_id = 4;
@@ -939,7 +878,6 @@ message BatchUpdateFieldsRsp {
 
 // DeleteFieldGroupReq 表示删除一个没有子组和字段引用的空字段组。
 message DeleteFieldGroupReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string group_id = 3;
 }
@@ -950,8 +888,6 @@ message DeleteFieldGroupRsp {
 
 // UpsertDatasetColumnReq 表示创建或更新数据集列的请求。
 message UpsertDatasetColumnReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // column 是待写入的数据集列元数据。
   DatasetColumn column = 2;
 }
@@ -966,8 +902,6 @@ message UpsertDatasetColumnRsp {
 
 // ListDatasetColumnsReq 表示列出数据集列的请求。
 message ListDatasetColumnsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
   // dataset_id 是数据集 ID。

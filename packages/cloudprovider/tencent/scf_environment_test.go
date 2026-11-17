@@ -16,105 +16,67 @@ func TestValidateSCFEnvironmentIncludesAllCredentialsAndRedactsValues(t *testing
 	}
 }
 
-func TestValidateSCFEnvironmentRejectsPrimaryMasterSecret(t *testing.T) {
-	for _, secret := range []string{"", "test-master-secret"} {
-		err := ValidateSCFEnvironment(map[string]string{"MOOX_STORAGE_PRIMARY_AUTH_SECRET": secret})
-		if err == nil || !strings.Contains(err.Error(), "MOOX_STORAGE_PRIMARY_AUTH_SECRET") || strings.Contains(err.Error(), "test-master-secret") {
-			t.Fatalf("SCF must reject the master key without disclosure: %v", err)
-		}
-	}
-}
-
-func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *testing.T) {
+func TestCollectorMarketFetchEnvironmentRejectsIncompleteOrInvalidValues(t *testing.T) {
 	valid := map[string]string{
-		"MOOX_CALLER": "scf-collector", "MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64),
-		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
+		"MOOX_CALLER": "scf-collector", "MOOX_ENTRY_ADDRESS": "storage.example:11004", "MOOX_ENTRY_HOST": "storage", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 43) + "=",
 		"MOOX_SPACE_ID": "stockcn", "MOOX_CODE_PACKAGE_ID": "collector_dev_00000000-0000-0000-0000-000000000000",
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic", "MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
-		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret", "MOOX_EVENTBUS_NATS_TLS_CA_FILE": "certs/eventbus-ca.pem",
 	}
-	if err := ValidateCollectorTimerEnvironment(valid); err != nil {
+	clone := func() map[string]string {
+		copy := make(map[string]string, len(valid))
+		for k, v := range valid {
+			copy[k] = v
+		}
+		return copy
+	}
+	if err := ValidateCollectorMarketFetchEnvironment(valid); err != nil {
 		t.Fatal(err)
 	}
-	withLegacyCA := make(map[string]string)
-	for key, value := range valid {
-		withLegacyCA[key] = value
+	// 定时采集函数带采集计划，补采函数带运行方式，规则相同。
+	withPlan := clone()
+	withPlan["MOOX_MARKET_FETCH_PLAN"] = `{"plan_id":"p1"}`
+	if err := ValidateCollectorMarketFetchEnvironment(withPlan); err != nil {
+		t.Fatal(err)
 	}
-	withLegacyCA["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
-	if err := ValidateCollectorTimerEnvironment(withLegacyCA); err == nil || !strings.Contains(err.Error(), "CA") {
-		t.Fatalf("Timer must reject simultaneous CA file and embedded PEM, got %v", err)
-	}
-	invoke := make(map[string]string)
-	for key, value := range valid {
-		invoke[key] = value
-	}
-	invoke["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
-	if err := ValidateCollectorMarketFetchEnvironment(invoke); err != nil {
-		t.Fatalf("Invoke has its own timeout and shares Access: %v", err)
-	}
-	if err := ValidateCollectorTimerEnvironment(invoke); err != nil {
-		t.Fatalf("Timer shares the same Access connection: %v", err)
-	}
-	for _, test := range []struct {
-		name, appKeys string
-		wantError     bool
-	}{
-		{"other binding only", `{"other":"` + strings.Repeat("b", 64) + `"}`, true},
-		{"Collector binding with extra key", `{"other":"` + strings.Repeat("b", 64) + `","moox-collector":"` + strings.Repeat("a", 64) + `"}`, false},
-	} {
-		for _, validator := range []struct {
-			name     string
-			validate func(map[string]string) error
-		}{
-			{"Invoke", ValidateCollectorMarketFetchEnvironment},
-			{"Timer", ValidateCollectorTimerEnvironment},
-		} {
-			t.Run("Storage binding/"+validator.name+"/"+test.name, func(t *testing.T) {
-				values := make(map[string]string)
-				for key, value := range valid {
-					values[key] = value
-				}
-				values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = test.appKeys
-				err := validator.validate(values)
-				if test.wantError {
-					if err == nil || !strings.Contains(err.Error(), "moox-collector") || strings.Contains(err.Error(), strings.Repeat("b", 64)) {
-						t.Fatalf("missing Collector binding must fail without exposing keys: %v", err)
-					}
-				} else if err != nil {
-					t.Fatalf("Collector binding plus extra keys is valid: %v", err)
-				}
-			})
-		}
+	backfill := clone()
+	backfill["MOOX_MARKET_FETCH_MODE"] = "backfill"
+	if err := ValidateCollectorMarketFetchEnvironment(backfill); err != nil {
+		t.Fatal(err)
 	}
 	for key := range valid {
 		t.Run("missing "+key, func(t *testing.T) {
-			copy := make(map[string]string)
-			for k, v := range valid {
-				copy[k] = v
-			}
+			copy := clone()
 			delete(copy, key)
-			if err := ValidateCollectorTimerEnvironment(copy); err == nil {
+			if err := ValidateCollectorMarketFetchEnvironment(copy); err == nil {
 				t.Fatalf("missing %s must fail closed", key)
 			}
 		})
 	}
 	for _, test := range []struct{ key, value string }{
 		{"MOOX_CALLER", "collector"},
-		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{}`}, {"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"short"}`},
-		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("g", 64) + `"}`},
-		{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`},
-		{"MOOX_ACCESS_ADDRESS", "localhost:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:0"}, {"MOOX_ACCESS_ADDRESS", "ip://storage.example:11004"}, {"MOOX_ACCESS_ADDRESS", "storage.example:11004/path"},
-		{"MOOX_ACCESS_ID", "storage"}, {"MOOX_ACCESS_ID", "access@bad_node"}, {"MOOX_CALLER_KEY_ID", "bad key"}, {"MOOX_CALLER_KEY_ID", ""}, {"MOOX_CALLER_KEY", "short"}, {"MOOX_CALLER_KEY", strings.Repeat("a", 4097)}, {"MOOX_CALLER_KEY", strings.Repeat("a", 32) + "\n"},
-		{"MOOX_EVENTBUS_NATS_URL", "nats://eventbus.example:4222"}, {"MOOX_CLS_ENABLED", "false"}, {"MOOX_CLS_TIMEOUT_MS", "invalid"}, {"MOOX_EVENTBUS_NATS_TLS_CA_FILE", "/tmp/ca.pem"},
+		{"MOOX_ENTRY_ADDRESS", "localhost:11004"}, {"MOOX_ENTRY_ADDRESS", "storage.example:0"}, {"MOOX_ENTRY_ADDRESS", "ip://storage.example:11004"}, {"MOOX_ENTRY_ADDRESS", "storage.example:11004/path"},
+		{"MOOX_ENTRY_HOST", "access@storage"}, {"MOOX_ENTRY_HOST", "bad_node"}, {"MOOX_CALLER_KEY_ID", "bad key"}, {"MOOX_CALLER_KEY_ID", ""}, {"MOOX_CALLER_KEY", "short"}, {"MOOX_CALLER_KEY", strings.Repeat("a", 4097)}, {"MOOX_CALLER_KEY", strings.Repeat("a", 32) + "\n"},
+		{"MOOX_CLS_ENABLED", "false"}, {"MOOX_CLS_TIMEOUT_MS", "invalid"}, {"MOOX_MARKET_FETCH_PLAN", strings.Repeat("p", 64<<10+1)},
 	} {
-		t.Run("invalid "+test.key+" "+test.value, func(t *testing.T) {
-			copy := make(map[string]string)
-			for k, v := range valid {
-				copy[k] = v
-			}
+		t.Run("invalid "+test.key+" "+test.value[:min(len(test.value), 40)], func(t *testing.T) {
+			copy := clone()
 			copy[test.key] = test.value
-			if err := ValidateCollectorTimerEnvironment(copy); err == nil {
+			if err := ValidateCollectorMarketFetchEnvironment(copy); err == nil {
 				t.Fatalf("invalid %s must fail closed", test.key)
+			}
+		})
+	}
+	// 函数不连 EventBus：出现任何 EventBus 变量都拒绝，报错里带变量名、不带值。
+	for _, key := range []string{
+		"MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_NATS_TLS_CA_FILE", "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64",
+		"MOOX_METRICS_EVENTBUS_URL", "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE", "NATS_URL",
+	} {
+		t.Run("eventbus "+key, func(t *testing.T) {
+			copy := clone()
+			copy[key] = "bus-secret"
+			err := ValidateCollectorMarketFetchEnvironment(copy)
+			if err == nil || !strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "bus-secret") {
+				t.Fatalf("EventBus field %s must be rejected without its value, got %v", key, err)
 			}
 		})
 	}

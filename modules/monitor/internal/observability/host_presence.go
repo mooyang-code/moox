@@ -14,7 +14,7 @@ const (
 
 const (
 	hostOnlineReason       = "主机连接正常"
-	hostAgentStoppedReason = "主机采集代理（host-agent）超过 3 分钟没有上报，但主机网关心跳正常，主机仍在线；主机守护应在 1 分钟内把它拉起，持续未恢复请查看该主机的 run/logs/host-agent.log"
+	hostAgentStoppedReason = "主机采集代理（host-agent）超过 3 分钟没有上报，但主机网关心跳正常，主机仍在线；进程退出后 systemd 会在 5 秒后把它拉起，持续未恢复请执行 moox-cli setup logs --host <主机> --component host-agent"
 	hostLostReason         = "主机采集代理超过 3 分钟没有上报，主机网关心跳也已停止，主机可能宕机或断网"
 	hostLostUnsureReason   = "主机采集代理超过 3 分钟没有上报，主机网关心跳无法确认，主机可能宕机、断网，或采集代理已停止"
 )

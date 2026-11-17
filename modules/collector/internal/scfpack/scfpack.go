@@ -16,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const credentialNames = `(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)`
+const credentialNames = `(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)`
 
 var (
 	// 形如 MOOX_..._SECRET: xxx 或 MOOX_..._PASSWORD=xxx 的赋值（含带引号的键），只看键，值由 hasNonEmptyCredentialAssignment 判断。
@@ -255,7 +255,7 @@ func sensitiveField(name, fieldPath string) bool {
 			return true
 		}
 	}
-	for _, suffix := range []string{"api_key", "app_keys_json", "hmac_key_file", "_token", "_seed"} {
+	for _, suffix := range []string{"api_key", "hmac_key_file", "_token", "_seed"} {
 		if strings.HasSuffix(name, suffix) {
 			return true
 		}

@@ -48,7 +48,11 @@
       <template v-if="store.instance">
         <a-descriptions :column="{ xs: 1, md: 2, xl: 3 }" bordered size="small" class="summary">
           <a-descriptions-item label="实例状态"
-            ><StatusBadge :enabled="store.instance.enabled" :uncertain="controlUncertain" :health="store.instance.health"
+            ><StatusBadge
+              :enabled="store.instance.enabled"
+              :uncertain="controlUncertain"
+              :health="store.instance.health"
+              :trial="isTrialInstance(store.instance)"
           /></a-descriptions-item>
           <a-descriptions-item label="模式"
             ><a-tag :color="store.instance.logical_account_id ? 'orange' : 'blue'">{{
@@ -131,6 +135,7 @@ import OperationPanel from "@/views/strategy/components/strategy-operation-panel
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import { poolMembers } from "@/views/strategy/market-mode";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
+import { isTrialInstance } from "@/views/strategy/running/running-model";
 import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
 import { parseFactorBinding } from "@/views/strategy/factor-params-model";
 import { instancesLink, replayLink } from "@/views/strategy/links";

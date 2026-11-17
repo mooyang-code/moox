@@ -79,4 +79,18 @@ describe("strategy instance controls", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledTimes(1);
   });
+
+  it("停用的实例另有“再次停用”入口，确认后发停用请求", async () => {
+    const wrapper = mount(StrategyOperationPanel, { props: { instanceId: "i-1", enabled: false }, global: { stubs } });
+    const buttons = wrapper.findAll("button");
+    expect(buttons).toHaveLength(2);
+    expect(buttons[1].text()).toContain("再次停用");
+    await buttons[1].trigger("click");
+    expect(confirm.mock.calls[0][0].title).toContain("再次停用");
+    confirm.mock.calls[0][0].onOk();
+    await flushPromises();
+    expect(setInstanceEnabled).toHaveBeenCalledWith("i-1", false);
+    await wrapper.setProps({ enabled: true });
+    expect(wrapper.findAll("button")).toHaveLength(1);
+  });
 });

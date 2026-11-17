@@ -1,0 +1,9 @@
+version: 1
+identity_path: /data/moox/data/host-agent/identity.yaml
+eventbus_config: /data/moox/secrets/eventbus/hostagent-publisher.yaml
+# Optional deployment identity; standalone agents leave it empty.
+host_id: storage
+# Optional display name. Deployment association always uses host_id.
+host_name: ""
+host_policy_path: /data/moox/data/host-agent/host-policy.json
+gateway_client: {caller: host-agent, key_file: /data/moox/secrets/host.key, host_id: storage, local_address: '127.0.0.1:11002', ca_file: /data/moox/secrets/moox-ca.crt}

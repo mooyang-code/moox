@@ -3,12 +3,13 @@
 #
 #   moox-cli_<版本>_<系统>_<架构>.tar.gz（Windows 为 .zip）  五个平台的命令行
 #   moox-bundle_<版本>_linux_amd64.tar.gz                    部署产物包：该提交的仓库文件快照 + 附件清单，不含服务器程序
-#   moox-unit-<单元>_<版本>_linux_amd64.tar.gz               10 个部署单元包，目标机按需下载
+#   moox-<组件>_<版本>_linux_amd64.tar.gz                    每个组件一个包（服务目录里的全部组件，含内置对象存储 seaweedfs），
+#                                                            只有 bin/ 下的二进制与配套命令行，目标机按需下载
 #   moox-collector-scf_<版本>_linux_amd64                    云函数程序
 #   SHA256SUMS
 #
 # 用法：scripts/release/build-release.sh v0.2.0 [输出目录，默认 dist/<版本>]
-# 要求：工作区干净；本机有固定版本的 Go 与正在运行的 Docker（Storage 需要 CGO；web-host 编译时也在 Docker 里按当前源码构建前端，不用仓库里提交的内嵌资源）。
+# 要求：工作区干净；本机有固定版本的 Go 与正在运行的 Docker（Storage 需要 CGO；admin 编译时也在 Docker 里按当前源码构建前端并内嵌）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -34,14 +35,16 @@ OUT="$(cd "${OUT}" && pwd)"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/moox-release.XXXXXX")"
 trap 'rm -rf "${STAGE}"' EXIT
 
-# 1. 服务器二进制
+# 1. 服务器二进制。目标要覆盖服务目录里每个组件的 binary 与 tools（第 3 步按服务目录打包，缺文件会报出组件与文件名）：
+#    admin 带 moox-admin-cli，host-gateway 带 moox-host-gateway-cli，hostagent 带 moox-host-agent-cli，collector、factor-mgr、
+#    strategy、storage 各带自己的 CLI，archive-worker 在 Linux 上附带内置对象存储的 weed。
 BUNDLE="moox-${VERSION}"
 mkdir -p "${STAGE}/${BUNDLE}"
 git -C "${ROOT}" archive "${COMMIT}" | tar -x -C "${STAGE}/${BUNDLE}"
 
-server_targets=(admin host-gateway eventbus console-proxy egress-proxy web-host cloudfunction collector collector-stream collector-scf
+server_targets=(admin host-gateway eventbus egress-proxy collector collector-stream collector-scf
   factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor
-  hostagent access storage-cli storage)
+  hostagent storage-cli storage)
 VERSION="${VERSION}" GIT_COMMIT="${COMMIT:0:8}" \
   bash "${ROOT}/scripts/build/build-linux-local.sh" --out "${STAGE}/binaries" "${server_targets[@]}"
 
@@ -60,20 +63,17 @@ for platform in "${platforms[@]}"; do
   fi
 done
 
-# 3. 部署单元包：用本机的 moox-cli 打包，文件排序、时间戳为 0，同一提交结果相同
+# 3. 组件包：用本机的 moox-cli 按服务目录打包（每个组件一个包，组件到二进制的对应只从服务目录取），
+#    文件排序、时间戳为 0，同一提交结果相同。输出 {"catalog_sha256": ..., "components": {<组件>: 包}} 给第 4 步写清单。
 BINARIES="${STAGE}/binaries"
 LOCAL_CLI="${STAGE}/cli-$(go env GOOS)-$(go env GOARCH)/moox-cli"
-units=(host control eventbus storage access egress-proxy trade collector-stream callback-dispatcher factor-engine archive-worker)
-mkdir -p "${STAGE}/unit-results"
-for unit in "${units[@]}"; do
-  "${LOCAL_CLI}" setup package --repo-root "${ROOT}" --profile "${unit}" --binary-dir "${BINARIES}" --goos linux --goarch amd64 \
-    --output "${OUT}/moox-unit-${unit}_${VERSION}_linux_amd64.tar.gz" > "${STAGE}/unit-results/${unit}.json"
-done
+"${LOCAL_CLI}" setup package-components --repo-root "${ROOT}" --binary-dir "${BINARIES}" --output-dir "${OUT}" \
+  --version "${VERSION}" --goarch amd64 > "${STAGE}/components.json"
 cp "${BINARIES}/moox-collector-scf" "${OUT}/moox-collector-scf_${VERSION}_linux_amd64"
 
 # 4. 清单和产物包。bin/ 留空，用户把 moox-cli 解压到这里。
 git -C "${ROOT}" ls-files -z | python3 -I "${ROOT}/scripts/release/write-bundle-manifest.py" "${VERSION}" "${COMMIT}" \
-  "${STAGE}/unit-results" "${OUT}/moox-collector-scf_${VERSION}_linux_amd64" "${STAGE}/${BUNDLE}/moox-bundle.json"
+  "${STAGE}/components.json" "${OUT}" "${OUT}/moox-collector-scf_${VERSION}_linux_amd64" "${STAGE}/${BUNDLE}/moox-bundle.json"
 mkdir -p "${STAGE}/${BUNDLE}/bin"
 tar -C "${STAGE}" -czf "${OUT}/moox-bundle_${VERSION}_linux_amd64.tar.gz" "${BUNDLE}"
 

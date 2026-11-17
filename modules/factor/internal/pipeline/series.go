@@ -1,17 +1,16 @@
 package pipeline
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
-// 统一数据集（同一个数据集里同时放现货、永续两个 series_tag）按序列（标的、series_tag）判断期望全集、缺失、跳过与失败。
-// Plan.ExpectedSeries 为空表示单序列数据集：一切按标的处理，行为与引入序列之前逐位一致。
-
-// multi 报告计划是否按序列处理（有序列全集）。
-func (p Plan) multi() bool { return len(p.ExpectedSeries) > 0 }
+// 管线一律按序列（标的、series_tag）判断期望全集、缺失、跳过与失败：只有一个 series_tag 的数据集每个标的一条序列，
+// 统一数据集（同一个数据集里同时放现货、永续两个 series_tag）每个标的至多两条。
 
 // uniqueSeriesSorted 去掉空项与重复项，按（标的、series_tag）排序。
 func uniqueSeriesSorted(values []seriesset.Series) []seriesset.Series {
@@ -105,25 +104,47 @@ func seriesOfSubjects(values []seriesset.Series, subjects []string) []seriesset.
 	return out
 }
 
-// tagsBySubject 把序列按标的归组：标的 → 排好序的 series_tag。
+// tagsBySubject 把序列按标的归组：标的 → 排好序、去重的 series_tag。同一条序列出现两次时只留一个 tag：
+// 组装用 tag 在这里的位置作位图的位，重复的 tag 会让位图多要一位，对应的项就永远确认不了。
 func tagsBySubject(values []seriesset.Series) map[string][]string {
 	out := make(map[string][]string)
 	for _, value := range values {
 		out[value.SubjectID] = append(out[value.SubjectID], value.SeriesTag)
 	}
-	for subject := range out {
-		sort.Strings(out[subject])
+	for subject, tags := range out {
+		sort.Strings(tags)
+		out[subject] = slices.Compact(tags)
 	}
 	return out
 }
 
-// TagsBySubject 返回计划里每个标的期望的 series_tag（标的 → tag）；单序列数据集返回 nil。数据层据此按各序列自己的进度同步与判断。
-func (p Plan) TagsBySubject() map[string][]string {
-	if !p.multi() {
-		return nil
-	}
-	return tagsBySubject(p.ExpectedSeries)
-}
+// TagsBySubject 返回计划里每个标的期望的 series_tag（标的 → tag）。数据层据此按各序列自己的进度同步与判断。
+func (p Plan) TagsBySubject() map[string][]string { return tagsBySubject(p.ExpectedSeries) }
 
-// Multi 报告计划是否按序列处理（数据层用它在统一数据集上按序列判断可用性）。
-func (p Plan) Multi() bool { return p.multi() }
+// SubjectSeries 把按标的选定的范围换成序列：每个标的配上视图里它的各个 series_tag。给手里只有标的名单和已读入数据的调用方
+// （试算、回放）用，结果与“按标的判断”相同：标的缺数就是它的序列缺数。视图里没有数据的标的配上这些标的里最小的那个 tag
+// （它必然缺数，配哪个 tag 只影响记在哪个 tag 名下）；视图里一个 tag 都没有时这些标的没有序列。
+func SubjectSeries(view *serieswindow.View, subjects []string) []seriesset.Series {
+	var out []seriesset.Series
+	var empty []string
+	fallback := ""
+	for _, subject := range subjects {
+		list := view.Series(subject)
+		if len(list) == 0 {
+			empty = append(empty, subject)
+			continue
+		}
+		for _, sv := range list {
+			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
+			if fallback == "" || sv.Tag < fallback {
+				fallback = sv.Tag
+			}
+		}
+	}
+	if fallback != "" {
+		for _, subject := range empty {
+			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: fallback})
+		}
+	}
+	return uniqueSeriesSorted(out)
+}

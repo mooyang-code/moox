@@ -3,7 +3,6 @@ package console
 import (
 	"bytes"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -35,18 +34,6 @@ func TestReadRequestBodyWithRawPreservesPayloadTooLargeCause(t *testing.T) {
 	_, _, err := NewHTTPRequestHandler().readRequestBodyWithRaw(req)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errRequestBodyTooLarge)
-}
-
-func TestReadAndRestoreBodyPreservesExactBytes(t *testing.T) {
-	want := []byte("{\"message\":\"signed bytes\"}")
-	req := httptest.NewRequest("POST", "/api/admin/test/Write", bytes.NewReader(want))
-
-	signed, err := readAndRestoreBody(req)
-	require.NoError(t, err)
-	forwarded, err := io.ReadAll(req.Body)
-	require.NoError(t, err)
-	assert.Equal(t, want, signed)
-	assert.Equal(t, signed, forwarded)
 }
 
 func TestWriteRequestBodyErrorUsesPayloadTooLargeStatus(t *testing.T) {

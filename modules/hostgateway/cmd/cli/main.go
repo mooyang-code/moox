@@ -1,24 +1,19 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
-	"github.com/mooyang-code/moox/packages/requestauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
@@ -33,6 +28,8 @@ func run(arguments []string, output io.Writer) int {
 		err = checkConfig(arguments[1:], output)
 	case "routes":
 		err = printRoutes(arguments[1:], output)
+	case "sign-public-key":
+		err = printSignPublicKey(arguments[1:], output)
 	case "health":
 		err = checkHealth(arguments[1:], output)
 	default:
@@ -65,6 +62,26 @@ func checkConfig(arguments []string, output io.Writer) error {
 	return nil
 }
 
+// printSignPublicKey 打印一个签名私钥文件对应的公钥（base64）。部署用它核对目标机上的私钥和 Admin 登记的公钥是否一致，
+// 私钥本身不离开这台主机。
+func printSignPublicKey(arguments []string, output io.Writer) error {
+	flags := flag.NewFlagSet("sign-public-key", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	path := flags.String("key-file", "", "签名私钥文件")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *path == "" {
+		return errors.New("sign-public-key 需要 --key-file，不接受其他参数")
+	}
+	key, err := gatewayauth.ReadSigningKey(*path)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(output, gatewayauth.EncodePublicKey(gatewayauth.Credentials{Key: key}.PublicKey()))
+	return nil
+}
+
 func printRoutes(arguments []string, output io.Writer) error {
 	flags := flag.NewFlagSet("routes", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -85,7 +102,7 @@ func printRoutes(arguments []string, output io.Writer) error {
 	}
 	encoder := json.NewEncoder(output)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(map[string]any{"host_id": view.HostID(), "hash": view.Hash(), "disabled": view.Disabled(), "routes": view.Proto().Routes, "directory": view.Directory()})
+	return encoder.Encode(map[string]any{"host_id": view.HostID(), "hash": view.Hash(), "disabled": view.Disabled(), "routes": view.Routes(), "directory": view.Directory(), "unknown_components": view.Unknown()})
 }
 
 func checkHealth(arguments []string, output io.Writer) error {
@@ -104,14 +121,8 @@ func checkHealth(arguments []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		host, port, _ := net.SplitHostPort(cfg.Server.HealthAddr)
-		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-			host = "127.0.0.1"
-			if ip.To4() == nil {
-				host = "::1"
-			}
-		}
-		*endpoint = "http://" + net.JoinHostPort(host, port) + "/readyz"
+		// 健康端口只听本机（配置校验保证），直接按配置的地址请求。
+		*endpoint = "http://" + cfg.Server.HealthAddr + "/readyz"
 	}
 	parsed, err := url.Parse(*endpoint)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -120,9 +131,6 @@ func checkHealth(arguments []string, output io.Writer) error {
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	request, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
 	if err != nil {
-		return err
-	}
-	if err := signHealthRequest(request); err != nil {
 		return err
 	}
 	response, err := client.Do(request)
@@ -135,31 +143,6 @@ func checkHealth(arguments []string, output io.Writer) error {
 		return fmt.Errorf("gateway is not ready: HTTP %d", response.StatusCode)
 	}
 	_, _ = fmt.Fprintln(output, "ready")
-	return nil
-}
-
-func signHealthRequest(request *http.Request) error {
-	version := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION"))
-	accessKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"))
-	secretKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"))
-	if version == "" || accessKey == "" || secretKey == "" {
-		return errors.New("health authentication environment is required")
-	}
-	nonceBytes := make([]byte, 32)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return fmt.Errorf("generate health nonce: %w", err)
-	}
-	timestamp := time.Now().Unix()
-	nonce := hex.EncodeToString(nonceBytes)
-	signature, err := requestauth.Sign(secretKey, requestauth.Material{
-		Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: timestamp, Nonce: nonce,
-	})
-	if err != nil {
-		return fmt.Errorf("sign health request: %w", err)
-	}
-	request.Header.Set("X-Moox-Health-Auth", strings.Join([]string{
-		version, accessKey, strconv.FormatInt(timestamp, 10), nonce, signature,
-	}, "/"))
 	return nil
 }
 

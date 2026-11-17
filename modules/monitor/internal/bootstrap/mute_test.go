@@ -3,21 +3,39 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/stretchr/testify/require"
 )
 
+// newMuteTestEnv 打开一个空的 Monitor 库并建好生命周期控制器。
+func newMuteTestEnv(t *testing.T) (*lifecycle.Controller, *Runtime) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "monitor.db")
+	db, err := store.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.SQL()))
+	t.Cleanup(func() { _ = db.Close() })
+	life, err := newMonitorLifecycle(dbPath, nil)
+	require.NoError(t, err)
+	runtime := &Runtime{Store: db, Repositories: db.Repositories()}
+	runtime.life.Store(life)
+	return life, runtime
+}
+
 // 告警屏蔽：MuteAlerts 复用生命周期暂停，期间发送器为 nil（只记录、不推送），UnmuteAlerts 恢复。
 func TestMuteAlertsSilencesPushesUntilUnmuted(t *testing.T) {
-	_, _, runtime := newMonitorResetEnv(t)
+	_, runtime := newMuteTestEnv(t)
 	ctx := context.Background()
 	_, err := runtime.Repositories.Notifications.Add(ctx, "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234", "")
 	require.NoError(t, err)
@@ -64,9 +82,35 @@ func TestMuteAlertsSilencesPushesUntilUnmuted(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, idle.GetRetInfo().GetCode(), "没有屏蔽时解除是空操作")
 }
 
+// 系统暂停（moox-cli system pause）同样让告警静默：暂停与恢复追赶期间发送器为 nil，恢复完成后重新推送。
+// 原来由 T1 删掉的 TestMonitorPauseSilencesAlertsAndResetKeepsChannels 覆盖，批 4 T5 改生命周期时靠它保护。
+func TestSystemPauseSilencesAlertsUntilResumed(t *testing.T) {
+	life, runtime := newMuteTestEnv(t)
+	ctx := context.Background()
+	_, err := runtime.Repositories.Notifications.Add(ctx, "wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abcd1234", "")
+	require.NoError(t, err)
+	sender, err := runtime.alertSender(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, sender)
+
+	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: "系统维护"})
+	require.NoError(t, err)
+	sender, err = runtime.alertSender(ctx)
+	require.NoError(t, err)
+	require.Nil(t, sender, "系统暂停期间告警静默")
+
+	_, err = life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem})
+	require.NoError(t, err)
+	life.Refresh(ctx)
+	require.False(t, life.Halted(), "恢复完成：%+v", life.State())
+	sender, err = runtime.alertSender(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, sender, "系统恢复后重新推送")
+}
+
 // 不是屏蔽设置的暂停（例如系统暂停）不算屏蔽，也不能被 UnmuteAlerts 解除。
 func TestMuteStateIgnoresOtherPauses(t *testing.T) {
-	life, _, runtime := newMonitorResetEnv(t)
+	life, runtime := newMuteTestEnv(t)
 	ctx := context.Background()
 	service := monitorrpc.New(runtime.Repositories, monitorrpc.Options{Lifecycle: runtime.life.Load})
 	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: "系统维护"})
@@ -78,7 +122,7 @@ func TestMuteStateIgnoresOtherPauses(t *testing.T) {
 }
 
 func TestMuteSummaryListsOpenAndRecoveredAlerts(t *testing.T) {
-	_, _, runtime := newMonitorResetEnv(t)
+	_, runtime := newMuteTestEnv(t)
 	ctx := context.Background()
 	alerts := runtime.Repositories.Alerts
 	base := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
@@ -107,7 +151,7 @@ func TestMuteSummaryListsOpenAndRecoveredAlerts(t *testing.T) {
 }
 
 func TestMuteSummaryIsSkippedWhenNothingHappened(t *testing.T) {
-	_, _, runtime := newMonitorResetEnv(t)
+	_, runtime := newMuteTestEnv(t)
 	_, _, ok, err := runtime.buildMuteSummary(context.Background(), time.Now().Add(-time.Hour), time.Now())
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -123,23 +167,20 @@ func TestMuteTrackerKeepsTheEarliestStart(t *testing.T) {
 	require.True(t, tracker.leave().IsZero(), "取走后清空")
 }
 
-// 阶段回调：进入暂停时记下静默起点，回到放行阶段时取走（并异步汇总）；模块对象的阶段变化不处理。
+// 状态回调：进入暂停时记下静默起点，回到运行时取走（并异步汇总）。
 func TestLifecycleChangeTracksMuteWindow(t *testing.T) {
-	_, _, runtime := newMonitorResetEnv(t)
-	runtime.onLifecycleChange(lifecycle.Ref{Kind: "x", ID: "y"}, lifecycle.StageRunning, lifecycle.StagePaused, "")
-	require.True(t, runtime.mutes.leave().IsZero(), "对象的阶段变化不算模块静默")
-
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageRunning, lifecycle.StagePaused, "mute")
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StagePaused, lifecycle.StageResuming, "")
+	_, runtime := newMuteTestEnv(t)
+	runtime.onLifecycleChange(lifecycle.StageRunning, lifecycle.StagePaused, "mute")
+	runtime.onLifecycleChange(lifecycle.StagePaused, lifecycle.StageResuming, "")
 	require.False(t, runtime.mutes.since.Load() == 0, "恢复追赶仍在静默中，起点保留")
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageResuming, lifecycle.StageRunning, "")
-	require.Zero(t, runtime.mutes.since.Load(), "回到放行阶段后起点被取走")
+	runtime.onLifecycleChange(lifecycle.StageResuming, lifecycle.StageRunning, "")
+	require.Zero(t, runtime.mutes.since.Load(), "回到运行后起点被取走")
 	runtime.workers.Wait()
 }
 
 // 模块已经因为别的原因暂停（系统暂停等）时不能再设置屏蔽：否则手动暂停会覆盖已有的暂停，解除或到期时连别的暂停一起放行。
 func TestMuteIsRejectedWhileTheModuleIsPausedForAnotherReason(t *testing.T) {
-	life, _, runtime := newMonitorResetEnv(t)
+	life, runtime := newMuteTestEnv(t)
 	ctx := context.Background()
 	service := monitorrpc.New(runtime.Repositories, monitorrpc.Options{Lifecycle: runtime.life.Load})
 	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: "系统维护"})
@@ -148,33 +189,40 @@ func TestMuteIsRejectedWhileTheModuleIsPausedForAnotherReason(t *testing.T) {
 	rsp, err := service.MuteAlerts(ctx, &monitorpb.MuteAlertsReq{DurationSeconds: 60})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-	require.Equal(t, lifecycle.StagePaused, life.Snapshot().Self.Stage, "系统暂停原样保留")
-	require.Equal(t, lifecycle.PauseSystem, life.Snapshot().Self.Pause.Kind)
+	require.Equal(t, lifecycle.StagePaused, life.State().Stage, "系统暂停原样保留")
+	require.Equal(t, lifecycle.PauseSystem, life.State().Pause.Kind)
 
 	// 屏蔽的解除也不影响系统暂停。
 	un, err := service.UnmuteAlerts(ctx, &monitorpb.UnmuteAlertsReq{})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, un.GetRetInfo().GetCode())
-	require.Equal(t, lifecycle.StagePaused, life.Snapshot().Self.Stage)
+	require.Equal(t, lifecycle.StagePaused, life.State().Stage)
 }
 
-// 进入暂停时静默起点取生命周期持久化的暂停时间，而不是回调触发时的「现在」（Monitor 在静默期间重启时两者不同）。
-func TestLifecycleChangeUsesPersistedPauseStartAsMuteStart(t *testing.T) {
-	life, _, runtime := newMonitorResetEnv(t)
-	ctx := context.Background()
-	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseManual, Reason: "告警屏蔽"})
+// 静默期间重启：生命周期一开始运行就按载入的暂停通知一次，静默起点取持久化的暂停时间，而不是重启时刻。
+func TestRestartWhileMutedKeepsThePersistedMuteStart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "monitor.db")
+	first, err := newMonitorLifecycle(dbPath, nil)
 	require.NoError(t, err)
-	persisted := life.Snapshot().Self.PausedSince
+	_, err = first.Execute(context.Background(), lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseManual, Reason: "告警屏蔽"})
+	require.NoError(t, err)
+	persisted := first.State().PausedSince
 	require.False(t, persisted.IsZero())
 
 	time.Sleep(20 * time.Millisecond)
-	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageNotReady, lifecycle.StagePaused, "重启后回到暂停")
+	runtime := &Runtime{}
+	restarted, err := newMonitorLifecycle(dbPath, runtime.onLifecycleChange)
+	require.NoError(t, err)
+	runtime.life.Store(restarted)
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	restarted.Run(stopped, time.Hour)
 	require.Equal(t, persisted.UnixNano(), runtime.mutes.since.Load(), "起点应是持久化的暂停时间")
 }
 
 // 事件或触发态达到上限时，汇总正文写明只统计了最近的部分，不能悄悄少报。
 func TestMuteSummaryStatesWhenTruncated(t *testing.T) {
-	_, _, runtime := newMonitorResetEnv(t)
+	_, runtime := newMuteTestEnv(t)
 	ctx := context.Background()
 	base := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
 	for i := 0; i < muteSummaryEventLimit; i++ {

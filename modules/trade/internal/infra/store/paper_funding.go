@@ -33,7 +33,7 @@ type PaperSwapFill struct {
 }
 
 // PaperSwapActivity 是推算结算时刻持仓用的数据：当前的永续持仓，以及某个时刻起（含）的永续成交，按时间升序。
-// 模拟盘的持仓只由本地成交投影（重置时成交和持仓一起清），所以任一时刻的持仓都能由当前持仓减去之后的成交推出来。
+// 模拟盘的持仓只由本地成交投影（成交和持仓总是一起清），所以任一时刻的持仓都能由当前持仓减去之后的成交推出来。
 type PaperSwapActivity struct {
 	Positions map[string]shared.Decimal
 	Fills     []PaperSwapFill
@@ -185,7 +185,7 @@ func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountI
 		if account.ExecutionMode != string(exchange.ExecutionModePaper) || account.SettlementAsset == "" {
 			return fmt.Errorf("%w: paper funding account", ErrInvalidRecord)
 		}
-		// 重置运行数据后余额投影要按初始资金重建，先确认它存在。
+		// 余额投影被清掉后要按初始资金重建，先确认它存在。
 		if _, err := tx.GetPaperBalanceSnapshot(spaceID, tradingAccountID); err != nil {
 			return err
 		}

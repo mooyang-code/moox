@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -36,7 +36,7 @@ type StreamService struct {
 	pb.UnimplementedStreamCollector
 	persistence *store.Store
 	settings    StreamSettings
-	metrics     *marketfetch.StreamMetrics
+	metrics     *fetchplan.StreamMetrics
 	syncer      SubjectSyncer
 	now         func() time.Time
 
@@ -47,7 +47,7 @@ type StreamService struct {
 }
 
 // NewStreamService 构造服务；syncer 用于疑似下架时立即同步标签（可为空）。
-func NewStreamService(persistence *store.Store, settings StreamSettings, metrics *marketfetch.StreamMetrics, syncer SubjectSyncer) *StreamService {
+func NewStreamService(persistence *store.Store, settings StreamSettings, metrics *fetchplan.StreamMetrics, syncer SubjectSyncer) *StreamService {
 	if settings.HeartbeatTimeout <= 0 {
 		settings.HeartbeatTimeout = DefaultStreamHeartbeatTimeout
 	}
@@ -68,7 +68,7 @@ type streamWorkerStatus struct {
 func normalizeSpace(spaceID string) string { return strings.ToLower(strings.TrimSpace(spaceID)) }
 
 // planState 返回该空间此刻要求 collector-stream 应用的计划版本与各项。
-func (s *StreamService) planState(ctx context.Context, spaceID string) (int64, string, []marketfetch.StreamPlanItem, error) {
+func (s *StreamService) planState(ctx context.Context, spaceID string) (int64, string, []fetchplan.StreamPlanItem, error) {
 	plans := s.persistence.FetchPlans()
 	open, err := plans.Open(ctx, spaceID)
 	if err != nil {
@@ -82,7 +82,7 @@ func (s *StreamService) planState(ctx context.Context, spaceID string) (int64, s
 	if err != nil {
 		return 0, "", nil, err
 	}
-	return marketfetch.StreamPlanState(open, applied, paused[spaceID])
+	return fetchplan.StreamPlanState(open, applied, paused[spaceID])
 }
 
 // StreamHeartbeat 记录心跳与已应用的计划版本，返回最新版本。
@@ -97,7 +97,7 @@ func (s *StreamService) StreamHeartbeat(ctx context.Context, req *pb.StreamHeart
 		offset = time.UnixMilli(req.GetSentAtMs()).Sub(now)
 	}
 	status := streamWorkerStatus{Version: req.GetVersion(), ClockOffsetMS: offset.Milliseconds(), Conns: req.GetConns()}
-	applied := marketfetch.StreamApplied{ID: req.GetAppliedPlanId(), Stage: req.GetAppliedStage()}
+	applied := fetchplan.StreamApplied{ID: req.GetAppliedPlanId(), Stage: req.GetAppliedStage()}
 	if err := s.persistence.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: spaceID, InstanceID: req.GetInstanceId(), Applied: mustMarshal(applied), Status: mustMarshal(status), HeartbeatAt: now}); err != nil {
 		return &pb.StreamHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -152,7 +152,7 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 		} else {
 			s.streaks[key] = 0
 		}
-		s.metrics.ObservePeriod(spaceID, marketfetch.StreamPeriodObservation{
+		s.metrics.ObservePeriod(spaceID, fetchplan.StreamPeriodObservation{
 			Market: period.GetMarket(), DatasetID: period.GetDatasetId(), Frequency: period.GetFrequency(), Expected: int(period.GetExpected()), Arrived: int(period.GetArrived()),
 			Missing: int(period.GetMissing()), Suspected: int(period.GetSuspected()), Committed: period.GetCommitted(),
 			CommitDone: time.Duration(period.GetCommitDoneMs()) * time.Millisecond, FailedStreak: s.streaks[key],
@@ -216,7 +216,7 @@ func (s *StreamService) WorkerStatus(ctx context.Context, spaceID string) (*pb.S
 	}
 	online := s.now().Sub(worker.HeartbeatAt) <= s.settings.HeartbeatTimeout
 	s.metrics.ObserveOnline(spaceID, online)
-	var applied marketfetch.StreamApplied
+	var applied fetchplan.StreamApplied
 	_ = json.Unmarshal([]byte(worker.Applied), &applied)
 	var status streamWorkerStatus
 	_ = json.Unmarshal([]byte(worker.Status), &status)

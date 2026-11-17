@@ -283,7 +283,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions",
 		"ListFactorCategories", "UpsertFactorCategory", "DeleteFactorCategory", "SetFactorCategory",
 		"SubmitFactorParams", "GetFactorParams",
-		"PublishUdf", "ListUdfs", "GetUdf", "ActivateUdf",
+		"PublishUdf", "ListUdfs", "GetUdf", "ActivateUdf", "GetLifecycle", "ControlLifecycle",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {
@@ -306,7 +306,7 @@ type catalogFake struct {
 	submitPeriod      time.Time
 	submitRequest     string
 	submissions       []catalog.MemberSubmission
-	paramStates       []domain.FactorTaskMember
+	paramStates       []domain.MemberParamState
 	boundTask         string
 	boundInstance     string
 	addKind           string
@@ -401,7 +401,7 @@ func (f *catalogFake) SubmitParams(_ context.Context, writer, taskID string, per
 	}
 	return results, f.err
 }
-func (f *catalogFake) GetParams(context.Context, string) ([]domain.FactorTaskMember, error) {
+func (f *catalogFake) GetParams(context.Context, string) ([]domain.MemberParamState, error) {
 	return f.paramStates, f.err
 }
 
@@ -476,7 +476,7 @@ func TestListRecalcJobsFiltersByTaskAndPaginates(t *testing.T) {
 	require.True(t, rsp.GetPageResult().GetHasMore())
 }
 
-// 修改类接口受生命周期门禁约束：暂停、重置中时被拒绝；读接口不受影响。
+// 修改类接口受生命周期门禁约束：暂停、恢复追赶中时被拒绝；读接口不受影响。
 func TestMutationGateRejectsWritesButNotReads(t *testing.T) {
 	blocked := errors.New("因子管理已暂停")
 	gate := func() error { return blocked }

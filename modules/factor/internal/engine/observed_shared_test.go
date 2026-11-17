@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"math"
-	"net/http"
 	"sort"
 	"sync"
 	"testing"
@@ -16,8 +15,21 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
+
+// plainTag 是只有一个 series_tag 的测试数据集用的 tag（Storage 不接受空 tag）。
+const plainTag = "venue:binance"
+
+// plainSeries 把标的逐个配上 plainTag。
+func plainSeries(subjects ...string) []seriesset.Series {
+	out := make([]seriesset.Series, 0, len(subjects))
+	for _, subject := range subjects {
+		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: plainTag})
+	}
+	return out
+}
 
 // sharedStorage 是内存里的 Storage：源数据集 dataset_a 的 close/open（1m），同时接收结果行。
 type sharedStorage struct {
@@ -57,7 +69,7 @@ func (s *sharedStorage) ReadWindow(_ context.Context, req storageio.ReadRequest)
 			if t.Before(req.Start) || !t.Before(req.End) {
 				continue
 			}
-			row := []any{t, ""}
+			row := []any{t, plainTag}
 			for _, column := range req.Columns {
 				value := s.bars[subject][at]
 				if column == "open" {
@@ -175,7 +187,7 @@ func TestObservedSharedSourceIndependentOfOrder(t *testing.T) {
 		live := func(set domain.EngineTask, universe []string) {
 			period := now.Add(-time.Minute) // 本期是最新已收盘的一根
 			plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: set.Set, Members: set.Members,
-				PeriodTime: period, Universe: universe, CarryColumns: []string{"close"}})
+				PeriodTime: period, UniverseSeries: plainSeries(universe...), CarryColumns: []string{"close"}})
 			require.NoError(t, err)
 			outcome, err := runner.Run(ctx, plan)
 			require.NoError(t, err)
@@ -213,16 +225,13 @@ func TestObservedSharedSourceIndependentOfOrder(t *testing.T) {
 	// 回放走真实路径：本地存储与数据层的登记。
 	obs, _ := sharedTasks()
 	runner := pipeline.NewRunner(nil, nil, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
-	m := newReplayManager(ReplayDeps{Sets: replayTasks{set: obs}, Source: sharedReplaySource{}, Columns: &sharedStorage{}, Store: replayStore,
+	m := newReplayManager(ReplayDeps{Sets: replayTasks{set: obs}, Source: sharedReplaySource{}, Store: replayStore,
 		Synced: sharedSynced().Subjects, Runner: runner})
-	ctx := context.Background()
-	_, status, err := m.Open(ctx, ReplayOpenRequest{ReplayID: "shared", TaskID: obs.Set.TaskID,
-		From: rt0.Add(10 * time.Minute).Format(time.RFC3339), To: rt0.Add(11 * time.Minute).Format(time.RFC3339)})
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
-	step, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "shared", Period: rt0.Add(10 * time.Minute).Format(time.RFC3339)})
-	require.NoError(t, err)
-	require.Equal(t, math.Float64bits(values["obs-first"]), math.Float64bits(step.Subjects["A"].Factors["obs"]["obs"]), "回放")
+	open := replayOpenReq("shared", 10, 11, 0, "obs")
+	open.TaskId = obs.Set.TaskID
+	mustOpenReplay(t, m, open)
+	got := replayRowOf(mustStepOne(t, m, "shared", 10), "A", plainTag).GetValues()["obs"]
+	require.Equal(t, math.Float64bits(values["obs-first"]), math.Float64bits(got), "回放")
 }
 
 // sharedReplaySource 是回放的源数据集：在册的标的是 obs 任务的范围。
@@ -268,7 +277,7 @@ func TestObservedRestartTasksReadyOneByOne(t *testing.T) {
 	}
 	live := func(runner *pipeline.Runner, data *localdata.Data, set domain.EngineTask, universe []string) {
 		plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: set.Set, Members: set.Members,
-			PeriodTime: now.Add(-time.Minute), Universe: universe, CarryColumns: []string{"close"}})
+			PeriodTime: now.Add(-time.Minute), UniverseSeries: plainSeries(universe...), CarryColumns: []string{"close"}})
 		require.NoError(t, err)
 		_, err = runner.Run(ctx, plan)
 		require.NoError(t, err)
@@ -300,7 +309,7 @@ func TestObservedRestartTasksReadyOneByOne(t *testing.T) {
 	// wide 准备失败（NOPE 在本地与 Storage 都没有数据）：它的范围仍算正在同步，X 不进 obs 的历史截面，GONE 仍在。
 	require.Error(t, data.Prepare(ctx, wide, []string{"A", "B", "C", "X", "NOPE"}))
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: obs.Set, Members: obs.Members,
-		PeriodTime: rt0.Add(9 * time.Minute), Universe: []string{"A", "B", "C"}})
+		PeriodTime: rt0.Add(9 * time.Minute), UniverseSeries: plainSeries("A", "B", "C")})
 	require.NoError(t, err)
 	history, err := data.HistorySubjects(ctx, plan)
 	require.NoError(t, err)

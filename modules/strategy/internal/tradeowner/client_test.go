@@ -12,12 +12,12 @@ import (
 )
 
 type proxyStub struct {
-	getResponse     *tradepb.GetLogicalAccountRsp
-	getErr          error
-	claimResponse   *tradepb.ClaimLogicalAccountOwnerRsp
-	releaseResponse *tradepb.ReleaseLogicalAccountOwnerRsp
-	claimRequest    *tradepb.ClaimLogicalAccountOwnerReq
-	waitForContext  bool
+	getResponse    *tradepb.GetLogicalAccountRsp
+	getErr         error
+	closeResponse  *tradepb.CloseTargetSessionRsp
+	closeErr       error
+	closeRequests  []*tradepb.CloseTargetSessionReq
+	waitForContext bool
 }
 
 func (s *proxyStub) GetLogicalAccount(ctx context.Context, _ *tradepb.GetLogicalAccountReq, _ ...client.Option) (*tradepb.GetLogicalAccountRsp, error) {
@@ -28,100 +28,100 @@ func (s *proxyStub) GetLogicalAccount(ctx context.Context, _ *tradepb.GetLogical
 	return s.getResponse, s.getErr
 }
 
-func (s *proxyStub) ClaimLogicalAccountOwner(_ context.Context, req *tradepb.ClaimLogicalAccountOwnerReq, _ ...client.Option) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
-	s.claimRequest = req
-	return s.claimResponse, nil
-}
-
-func (s *proxyStub) ReleaseLogicalAccountOwner(_ context.Context, _ *tradepb.ReleaseLogicalAccountOwnerReq, _ ...client.Option) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
-	return s.releaseResponse, nil
-}
-
-func account(owner, session string) *tradepb.LogicalAccount {
-	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, SpaceId: "space-1", OwnerInstanceId: owner, OwnerSessionId: session, AuthFence: "fence-7"}
-}
-
-func TestClaimSessionCarriesAuthFenceAndChecksOwner(t *testing.T) {
-	stub := &proxyStub{
-		getResponse:   &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account("", "")},
-		claimResponse: &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account("instance-1", "session-1")},
+func (s *proxyStub) CloseTargetSession(ctx context.Context, req *tradepb.CloseTargetSessionReq, _ ...client.Option) (*tradepb.CloseTargetSessionRsp, error) {
+	s.closeRequests = append(s.closeRequests, req)
+	if s.waitForContext {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
-	owner := &Client{proxy: stub, timeout: time.Second}
-	if err := owner.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", []string{"swap"}); err != nil {
+	return s.closeResponse, s.closeErr
+}
+
+func strategyAccount() *tradepb.LogicalAccount {
+	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, SpaceId: "space-1", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
+}
+
+// 启用前只读账户：策略控制、市场在组合可交易的市场里才放行；人工控制、市场不符、账户不匹配都拒绝。
+func TestCheckAccountRequiresStrategyControlAndMarkets(t *testing.T) {
+	stub := &proxyStub{getResponse: &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: strategyAccount()}}
+	trade := &Client{proxy: stub, timeout: time.Second}
+	if err := trade.CheckAccount(context.Background(), "space-1", "logical-1", []string{"swap"}); err != nil {
 		t.Fatal(err)
 	}
-	if stub.claimRequest.GetExpectedAuthFence() != "fence-7" || stub.claimRequest.GetInstanceId() != "instance-1" || stub.claimRequest.GetSessionId() != "session-1" {
-		t.Fatalf("认领请求不符：%+v", stub.claimRequest)
+	if err := trade.CheckAccount(context.Background(), "space-1", "logical-1", []string{"spot"}); !errors.Is(err, ErrMarketMismatch) {
+		t.Fatalf("市场不在组合里应拒绝：%v", err)
 	}
-	stub.claimResponse = &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account("instance-other", "session-1")}
-	if err := owner.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "所有者") {
-		t.Fatalf("所有者不符应报错：%v", err)
+	manual := strategyAccount()
+	manual.ControlMode = tradepb.ControlMode_CONTROL_MODE_MANUAL
+	stub.getResponse = &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: manual}
+	if err := trade.CheckAccount(context.Background(), "space-1", "logical-1", []string{"swap"}); !errors.Is(err, ErrManualControl) {
+		t.Fatalf("人工控制的组合应拒绝：%v", err)
 	}
-}
-
-func TestValidateSessionDetectsRebind(t *testing.T) {
-	stub := &proxyStub{getResponse: &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account("instance-1", "session-1")}}
-	owner := &Client{proxy: stub, timeout: time.Second}
-	if err := owner.ValidateSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1"); err != nil {
-		t.Fatal(err)
+	stub.getResponse = &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: &tradepb.LogicalAccount{LogicalAccountId: "logical-other", SpaceId: "space-1"}}
+	if err := trade.CheckAccount(context.Background(), "space-1", "logical-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "不匹配的账户") {
+		t.Fatalf("账户不匹配应报错：%v", err)
 	}
-	if err := owner.ValidateSession(context.Background(), "space-1", "logical-1", "instance-1", "session-2"); err == nil {
-		t.Fatal("会话不符应报错")
-	}
-}
-
-func TestClientMapsBusinessErrors(t *testing.T) {
-	stub := &proxyStub{getResponse: &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_NOT_FOUND, Msg: "logical account missing"}}}
-	owner := &Client{proxy: stub, timeout: time.Second}
-	err := owner.ValidateSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1")
-	var coded *ResponseError
-	if !errors.As(err, &coded) || coded.StatusCode() != 5 || coded.Message != "logical account missing" || !strings.Contains(err.Error(), "账户不存在") || strings.Contains(err.Error(), "logical account missing") {
-		t.Fatalf("错误应携带 Trade 错误码与中文说明，Trade 原始消息只留在字段里：%v", err)
-	}
-	if !IsPermanentClaimError(err) || IsOwnerConflict(err) {
-		t.Fatalf("错误分类不符：permanent=%v conflict=%v", IsPermanentClaimError(err), IsOwnerConflict(err))
-	}
-	conflict := &ResponseError{Operation: "claim", Code: 14}
-	if !IsOwnerConflict(conflict) || !IsPermanentClaimError(conflict) {
-		t.Fatal("错误码 14 应视为所有权冲突")
-	}
-	if IsPermanentClaimError(errors.New("timeout")) {
-		t.Fatal("传输错误不应视为确定性拒绝")
-	}
-}
-
-func TestClientRejectsEmptyAndMismatchedResponses(t *testing.T) {
-	owner := &Client{proxy: &proxyStub{}, timeout: time.Second}
-	if err := owner.ValidateSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1"); err == nil || !strings.Contains(err.Error(), "没有返回状态") {
+	stub.getResponse = &tradepb.GetLogicalAccountRsp{}
+	if err := trade.CheckAccount(context.Background(), "space-1", "logical-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "没有返回状态") {
 		t.Fatalf("空响应应报错：%v", err)
 	}
-	mismatched := &tradepb.LogicalAccount{LogicalAccountId: "logical-other", SpaceId: "space-1"}
-	owner = &Client{proxy: &proxyStub{
-		getResponse:     &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account("", "")},
-		releaseResponse: &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: mismatched},
-	}, timeout: time.Second}
-	if err := owner.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1"); err == nil || !strings.Contains(err.Error(), "不匹配的账户") {
-		t.Fatalf("账户不匹配应报错：%v", err)
+}
+
+// Trade 的业务错误保留错误码，原始说明只留在字段里给日志。
+func TestCheckAccountKeepsTradeCode(t *testing.T) {
+	stub := &proxyStub{getResponse: &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_NOT_FOUND, Msg: "logical account missing"}}}
+	trade := &Client{proxy: stub, timeout: time.Second}
+	err := trade.CheckAccount(context.Background(), "space-1", "logical-1", []string{"swap"})
+	var coded *ResponseError
+	if !errors.As(err, &coded) || coded.Code != tradepb.ErrorCode_NOT_FOUND || !strings.Contains(err.Error(), "账户不存在") || strings.Contains(err.Error(), "logical account missing") || Detail(err) != "logical account missing" {
+		t.Fatalf("错误应携带 Trade 错误码与中文说明，原始消息只留在字段里：%v", err)
+	}
+}
+
+// 关闭会话带上会话的身份与开始时刻；账户不存在视为已关闭，其余失败原样返回。
+func TestCloseSessionCarriesStartedAt(t *testing.T) {
+	stub := &proxyStub{closeResponse: &tradepb.CloseTargetSessionRsp{RetInfo: &tradepb.RetInfo{}, ClosedThrough: 1700}}
+	trade := &Client{proxy: stub, timeout: time.Second}
+	if err := trade.CloseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", 1700); err != nil {
+		t.Fatal(err)
+	}
+	got := stub.closeRequests[0]
+	if got.GetLogicalAccountId() != "logical-1" || got.GetInstanceId() != "instance-1" || got.GetSessionId() != "session-1" || got.GetSessionStartedAt() != 1700 {
+		t.Fatalf("关闭请求不符：%+v", got)
+	}
+	stub.closeResponse = &tradepb.CloseTargetSessionRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_NOT_FOUND, Msg: "missing"}}
+	if err := trade.CloseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", 1700); err != nil {
+		t.Fatalf("账户不存在应视为已关闭：%v", err)
+	}
+	stub.closeResponse = &tradepb.CloseTargetSessionRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_INNER_ERR, Msg: "database locked"}}
+	if err := trade.CloseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", 1700); err == nil || !strings.Contains(err.Error(), "关闭会话失败") {
+		t.Fatalf("Trade 内部错误应返回：%v", err)
+	}
+	stub.closeResponse, stub.closeErr = nil, errors.New("dial tcp 10.0.0.1:443: connect refused")
+	err := trade.CloseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", 1700)
+	var transport *TransportError
+	if !errors.As(err, &transport) || strings.Contains(err.Error(), "10.0.0.1") {
+		t.Fatalf("传输失败应是结果未知，且不暴露网关地址：%v", err)
 	}
 }
 
 func TestClientEnforcesTimeoutAndIdentity(t *testing.T) {
-	owner := &Client{proxy: &proxyStub{waitForContext: true}, timeout: 20 * time.Millisecond}
+	trade := &Client{proxy: &proxyStub{waitForContext: true}, timeout: 20 * time.Millisecond}
 	started := time.Now()
-	if err := owner.ValidateSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1"); !errors.Is(err, context.DeadlineExceeded) {
+	if err := trade.CloseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", 1); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "超时") {
 		t.Fatalf("应超时：%v", err)
 	}
 	if time.Since(started) > time.Second {
 		t.Fatal("超时耗时过长")
 	}
-	if err := owner.ClaimSession(context.Background(), "", "logical-1", "instance-1", "session-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "space_id") {
+	if err := trade.CheckAccount(context.Background(), "", "logical-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "space_id") {
 		t.Fatalf("缺少 space_id 应在传输前报错：%v", err)
 	}
-	if err := owner.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", ""); err == nil || !strings.Contains(err.Error(), "session_id") {
-		t.Fatalf("缺少 session_id 应在传输前报错：%v", err)
+	if err := trade.CloseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", 0); err == nil || !strings.Contains(err.Error(), "开始时刻") {
+		t.Fatalf("缺少开始时刻应在传输前报错：%v", err)
 	}
 	unwired := New(Config{Timeout: time.Second}, nil)
-	if err := unwired.ValidateSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1"); err == nil || !strings.Contains(err.Error(), "不可用") {
+	if err := unwired.CheckAccount(context.Background(), "space-1", "logical-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "不可用") {
 		t.Fatalf("未接线时应报配置错误：%v", err)
 	}
 }
@@ -150,9 +150,8 @@ func TestCheckMarketsRequiresEveryMarketInLogicalAccountMarkets(t *testing.T) {
 		t.Fatalf("股票策略绑股票组合不应报错：%v", err)
 	}
 	// 混合市场策略只要有一个市场不在组合里就拒绝。
-	err := checkMarkets([]string{"spot", "swap"}, []tradepb.MarketType{spot})
-	if !errors.Is(err, ErrMarketMismatch) || !IsPermanentClaimError(err) {
-		t.Fatalf("有市场不在组合可交易的市场里应是永久拒绝：%v", err)
+	if err := checkMarkets([]string{"spot", "swap"}, []tradepb.MarketType{spot}); !errors.Is(err, ErrMarketMismatch) {
+		t.Fatalf("有市场不在组合可交易的市场里应拒绝：%v", err)
 	}
 	if err := checkMarkets([]string{"swap"}, nil); !errors.Is(err, ErrMarketMismatch) || !strings.Contains(err.Error(), "还没有启用的成员") {
 		t.Fatalf("组合没有启用的成员应有专门提示：%v", err)

@@ -120,7 +120,7 @@ func TestCheckGenerationRetriesWhileStorageViewRestores(t *testing.T) {
 	t.Cleanup(func() { rangeRetryBackoff = backoff })
 	notFound := &storagepb.GetViewStateRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_FOUND}}
 	state := &sequenceViewState{rsps: []*storagepb.GetViewStateRsp{notFound, notFound, builtState("idx_a", "store_1", 7)}}
-	rpc := &RPCClient{DataView: state, Auth: &commonpb.AuthInfo{AppId: "meta"}}
+	rpc := &RPCClient{DataView: state}
 	loader := &RangeLoader{Client: rpc, SpaceID: "space", View: ViewInfo{ViewID: "view_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@store_1#7"}}
 	if err := loader.checkGeneration(context.Background()); err != nil || state.calls != 3 {
 		t.Fatalf("恢复期间应重试并确认没有换代：calls=%d err=%v", state.calls, err)

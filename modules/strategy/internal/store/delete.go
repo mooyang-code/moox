@@ -24,8 +24,8 @@ const (
 	sqlDeleteInstanceReplays         = `DELETE FROM t_strategy_replays WHERE c_instance_id = ?`
 	sqlDeleteInstanceDisplaySettings = `DELETE FROM t_strategy_display_settings WHERE c_instance_id = ?`
 	sqlDeleteInstanceTasks           = `DELETE FROM t_strategy_instance_tasks WHERE c_instance_id = ?`
-	// sqlDeleteStoppedInstance 只删已停用、没有会话的实例。
-	sqlDeleteStoppedInstance = `DELETE FROM t_strategy_instances WHERE c_instance_id = ? AND c_enabled = 0 AND c_session_id IS NULL`
+	// sqlDeleteStoppedInstance 只删已停用的实例（停用的实例上没有会话）。
+	sqlDeleteStoppedInstance = `DELETE FROM t_strategy_instances WHERE c_instance_id = ? AND c_enabled = 0`
 	// sqlSelectActiveReplaysOfInstance 列出还在排队或执行、会读到实例数据的回放：从实例发起的，以及本空间里按定义或 DSL 发起、
 	// 但读取的因子任务（c_tasks_json 是 市场 → {factor_task_id, …}）在要删的任务（JSON 数组参数）里的。
 	sqlSelectActiveReplaysOfInstance = `
@@ -65,9 +65,9 @@ func (s *Store) ActiveReplaysOfInstance(ctx context.Context, instanceID, spaceID
 	return ids, err
 }
 
-// DeleteInstance 在一个事务里删除已停用、没有会话的实例在策略库里的全部记录：会话、结果与明细、规则状态、到达记录、回放、外显设置、
+// DeleteInstance 在一个事务里删除已停用的实例在策略库里的全部记录：会话、结果与明细、规则状态、到达记录、回放、外显设置、
 // 因子任务登记和实例本身；viewIDs 是实例结果数据集的 View，按 (空间, View) 存的年龄探针记录一并删除。
-// 实例不存在返回 ErrNotFound；实例已启用或还挂着会话时什么也不删。
+// 实例不存在返回 ErrNotFound；实例已启用时什么也不删。
 func (s *Store) DeleteInstance(ctx context.Context, instanceID, spaceID string, viewIDs []string) error {
 	instanceID = strings.TrimSpace(instanceID)
 	if instanceID == "" {
@@ -82,8 +82,8 @@ func (s *Store) DeleteInstance(ctx context.Context, instanceID, spaceID string, 
 		if err != nil {
 			return err
 		}
-		if current.Enabled == 1 || current.SessionID.Valid {
-			return errors.New("实例已启用或还有会话，不能删除")
+		if current.Enabled == 1 {
+			return errors.New("实例已启用，不能删除")
 		}
 		for _, statement := range instanceScopedDeletes {
 			if err := tx.Exec(statement, instanceID).Error; err != nil {

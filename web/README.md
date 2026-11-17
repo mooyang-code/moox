@@ -47,5 +47,5 @@ src/views/        页面
 
 ## 发布
 
-在仓库根目录执行 `scripts/build/build.sh web-host`：它先在 Docker 里按当前源码构建前端，再把 `dist/` 内嵌进 `moox-web-host`
-（不用仓库里提交的 `web-host/internal/statik/statik.go`）。原生部署（`setup bootstrap` / `setup release build`）会自动完成。
+在仓库根目录执行 `scripts/build/build.sh admin`：它先在 Docker 里按当前源码构建前端，再把 `dist/` 内嵌进 `moox-admin`
+（编译时临时拷到 `modules/admin/internal/webui/dist`，编译完删掉）。

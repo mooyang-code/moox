@@ -3,9 +3,9 @@ package command
 import (
 	"bytes"
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
@@ -60,7 +60,7 @@ func (g *deleteGateway) Close() error { return nil }
 func runStrategyDeleteCommand(t *testing.T, gateway *deleteGateway, args ...string) (string, error) {
 	t.Helper()
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return gateway, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 	cmd := newStrategyInstanceDeleteCommand()
 	var out bytes.Buffer
@@ -86,7 +86,7 @@ func TestStrategyInstanceDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	kept := preview["keep_factor_tasks"].([]any)
 	require.Len(t, kept, 1)
 	assert.Equal(t, "ftask_shared", kept[0].(map[string]any)["task_id"])
-	assert.Equal(t, "未绑定到此实例", kept[0].(map[string]any)["reason"])
+	assert.Equal(t, "未关联到此实例", kept[0].(map[string]any)["reason"])
 	assert.NotContains(t, gateway.methods, "DeleteStrategyInstance")
 }
 

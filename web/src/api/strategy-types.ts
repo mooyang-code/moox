@@ -41,6 +41,8 @@ export interface StrategyInstance {
   updated_at: string;
   /** 引用的、已在因子服务里不存在的任务（只对停用实例检查）：删除实例没做完，或任务被另外删掉；删除实例即可清理。 */
   missing_factor_tasks?: string[];
+  /** 确认实盘的时间；空表示试运行（挂了账户的实例启用后只发影子目标、不下单）。没挂账户的实例启用时写入，停用、修改都清空。 */
+  confirmed_at?: string;
 }
 
 /** 一个处理过的周期：ok 带目标，skipped 带原因。 */
@@ -122,6 +124,8 @@ export interface Replay {
   /** 现货与股票的单边手续费、永续的单边手续费（bps）。 */
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 滑点（bps）：成交价在收盘价上按方向加减这个比例，买入上浮、卖出下浮。 */
+  slippage_bps: number;
   /** 永续持仓结算资金费用的列（本根累计的资金费率）；空串表示不计。 */
   funding_column: string;
   status: "pending" | "running" | "done" | "failed" | "cancelled" | string;
@@ -137,7 +141,12 @@ export interface Replay {
   session_id: string;
   /** 回放所用的日历（crypto_24x7 | cn_stock）：cn_stock 日线的区间按上海日期解释。 */
   calendar: string;
+  /** 主帧的因子数据来源：view 读结果 View；compute 是因子现算（经主机网关调因子引擎，按因子机本地 K 线与回放中的参数现算）。 */
+  input: ReplayInput | string;
 }
+
+/** 回放主帧的因子数据来源。 */
+export type ReplayInput = "view" | "compute";
 
 /** 回放中一个周期的记录；brief 列表不含目标、持仓与摘要 JSON。 */
 export interface ReplayBar {
@@ -146,6 +155,8 @@ export interface ReplayBar {
   targets: InstrumentTarget[];
   positions_json: string;
   summary_json: string;
+  /** 这一期因子实际生效的、由回放逐期提交的可变成员参数（成员键 → 参数名 → {default, overrides}）；只有因子现算的调参策略有内容。 */
+  params_json: string;
   bar_return: number;
   equity: number;
   turnover: number;
@@ -171,8 +182,12 @@ export interface StartReplayRequest {
   end_time: string;
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 滑点（bps，0～200）：成交价在收盘价上按方向加减这个比例。 */
+  slippage_bps: number;
   /** 可选：永续持仓按这一列结算资金费；不写不计。 */
   funding_column?: string;
+  /** 主帧的因子数据来源，不写按 view；声明了 factor_params 的策略必须用 compute。 */
+  input?: ReplayInput;
 }
 
 /** 发起回放的结果：任务与实际回放的根数、首末根 bar_end。 */
@@ -184,18 +199,6 @@ export interface StartedReplay {
 }
 
 /** 实例外显设置里隐藏的内容（默认全部展示）：只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据。 */
-/** 策略模板：命名的 DSL 骨架、变量定义与参数表样例行（template_yaml 原文）；columns 为空表示没有参数表。 */
-export interface StrategyTemplate {
-  template_id: string;
-  name: string;
-  description: string;
-  template_yaml: string;
-  columns: string[];
-  variables: string[];
-  created_at: string;
-  updated_at: string;
-}
-
 export interface DisplayHidden {
   categories: string[];
   members: string[];

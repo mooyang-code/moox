@@ -80,7 +80,7 @@ assert_no_match 'FactKey|RowMarker|content_hash|FACT_VERSION_IMMUTABLE|node_sequ
 # View 进程只对外提供 DataView：没有 ViewIndex 服务与监听；错误码只按存储层错误类别映射，不按错误文字推断。
 assert_no_match 'service ViewIndex|trpc\.moox\.storage\.ViewIndex|MetadataStoreCode' modules/storage packages/gatewayroute packages/servicecatalog
 assert_no_match 'ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
-assert_no_match 'storage[_-]access|moox-access|internal/accessproxy|cmd/access' modules/storage/cmd modules/storage/internal packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
+assert_no_match 'storage[_-]access|moox-access|internal/accessproxy|cmd/access|modules/access' modules/storage/cmd modules/storage/internal packages/gatewayroute modules/admin modules/hostgateway web/src/api/storage examples
 # Standalone Admin/Storage CLIs and Storage's long-lived maintenance loops intentionally
 # create root contexts at process/lifecycle boundaries. Keep the boundary
 # check focused on request-serving code rather than those explicit roots.
@@ -115,6 +115,6 @@ write_batch=$(awk '/^type ViewIndexWriteBatch struct \{/{inside=1; next} inside 
 for field in 'ViewRevision +uint64' 'ViewSchemaHash +string'; do
   grep -Eq "^[[:space:]]+${field}$" <<<"${write_batch}" || fail "ViewIndexWriteBatch field is missing: ${field}"
 done
-rg -n 'AllowedCallers|allowed_callers|AllowsCaller' packages/gatewayroute modules/admin/internal/service/sysdeploy modules/hostgateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
+rg -n 'routeCallers|route\.Callers' packages/servicecatalog modules/hostgateway/internal >/dev/null || fail 'Gateway caller ACL is not present'
 
 echo 'storage boundary contract passed'

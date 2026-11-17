@@ -47,7 +47,6 @@ require (
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
@@ -108,7 +107,6 @@ replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wir
 
 replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter
 
-replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 

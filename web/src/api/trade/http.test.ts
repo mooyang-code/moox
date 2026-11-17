@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { client } = vi.hoisted(() => ({ client: { post: vi.fn(), interceptors: { response: { use: vi.fn() } } } }));
 vi.mock("axios", () => ({ default: { create: () => client } }));
 vi.mock("@/api/gateway", () => ({ gatewayOrigin: () => "http://localhost" }));
-vi.mock("../admin/signed-client", () => ({ installSpaceAwareSignedClient: vi.fn() }));
+vi.mock("../admin/space-client", () => ({ installSpaceAwareClient: vi.fn() }));
 const { messageError } = vi.hoisted(() => ({ messageError: vi.fn() }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: messageError } }));
 

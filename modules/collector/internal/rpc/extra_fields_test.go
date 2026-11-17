@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -71,7 +72,7 @@ func TestAddedOutputFields(t *testing.T) {
 }
 
 func TestUpdateTaskRejectsAddedOutputFields(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))

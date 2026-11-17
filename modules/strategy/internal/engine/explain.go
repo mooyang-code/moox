@@ -16,7 +16,7 @@ const (
 	StageFiltered = "filtered"
 	// StageScored：已打分但未被选中（含 select.where 淘汰）。
 	StageScored = "scored"
-	// StageIdle：signal 规则下未触发 entry，或 entry 与 exit 同时为真。
+	// StageIdle：标的本期没有参与求值，或 hold 规则的候选没有入场。
 	StageIdle = "idle"
 	// StageWeighted：进入目标权重。
 	StageWeighted = "weighted"

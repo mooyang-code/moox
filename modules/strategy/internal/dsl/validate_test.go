@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,10 +21,9 @@ func TestValidateRejectsSemanticErrors(t *testing.T) {
 		"id 非法":                      {rules: "  - {id: A-1, type: rank, score: close, select: {top: 1}, weight: 1}\n", want: "snake_case"},
 		"id 重复":                      {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 0.5}\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 0.5}\n", want: "重复"},
 		"type 未知":                    {rules: "  - {id: a, type: trend, score: close, select: {top: 1}, weight: 1}\n", want: "type"},
-		"signal 缺 pool":              {rules: "  - {id: a, type: signal, entry: \"close > 1\", exit: \"close < 1\", weight: 1}\n", want: "pool"},
-		"signal 带 score":             {rules: "  - {id: a, type: signal, pool: [BTC-USDT], score: close, entry: \"close > 1\", exit: \"close < 1\", weight: 1}\n", want: "只能使用"},
-		"signal 缺 exit":              {rules: "  - {id: a, type: signal, pool: [BTC-USDT], entry: \"close > 1\", weight: 1}\n", want: "entry 和 exit"},
-		"rank 带 entry":               {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, entry: \"close > 1\"}\n", want: "entry"},
+		"type 是 signal":              {rules: "  - {id: a, type: signal, pool: [BTC-USDT], score: \"0\", select: {top: 1}, weight: 1}\n", want: "只能是 rank"},
+		"规则级 entry":                  {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, entry: \"close > 1\"}\n", want: "未知字段"},
+		"规则级 exit":                   {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, exit: \"close < 1\"}\n", want: "未知字段"},
 		"cap 分不完":                    {rules: "  - {id: a, type: rank, score: close, select: {top: 2}, weight: {total: 0.8, cap: 0.3}}\n", want: "分不完"},
 		"cap 超过 total":               {rules: "  - {id: a, type: rank, score: close, select: {top: 2}, weight: {total: 0.5, cap: 0.6}}\n", want: "cap"},
 		"预算超过杠杆":                     {rules: "  - {id: a, type: rank, score: close, select: {top: 1}, weight: 0.7}\n  - {id: b, type: rank, score: close, select: {top: 1}, weight: 0.7}\n", want: "leverage"},
@@ -158,11 +158,11 @@ func TestValidationReportsStagesInFixedOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	strategy.Rules[1].Entry = "close >"
-	strategy.Rules[1].Exit = "close <"
+	strategy.Rules[1].Hold.Entry = "close >"
+	strategy.Rules[1].Hold.Exit = "close <"
 	for i := 0; i < 20; i++ {
-		if _, err := ReferencedColumns(strategy); err == nil || !strings.Contains(err.Error(), "的 entry 表达式无效") {
-			t.Fatalf("第 %d 次应报告 entry 阶段：%v", i, err)
+		if _, err := ReferencedColumns(strategy); err == nil || !strings.Contains(err.Error(), "的 hold.entry 表达式无效") {
+			t.Fatalf("第 %d 次应报告 hold.entry 阶段：%v", i, err)
 		}
 	}
 }
@@ -189,11 +189,11 @@ func TestNumericLiterals(t *testing.T) {
 // 标的与标签 ID 区分大小写：去重与匹配使用同一规则。
 func TestIdentifierListsAreCaseSensitive(t *testing.T) {
 	t.Parallel()
-	strategy, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: signal, pool: [BTC-USDT, btc-usdt], entry: \"close > 1\", exit: \"close < 1\", weight: 1}\n"))
+	strategy, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, pool: [BTC-USDT, btc-usdt], score: \"0\", select: {top: 10000}, weight: 1}\n"))
 	if err != nil || len(strategy.Rules[0].Pool.Fixed) != 2 {
 		t.Fatalf("大小写不同的两项都应保留：%+v err=%v", strategy.Rules, err)
 	}
-	if _, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: signal, pool: [BTC-USDT, BTC-USDT], entry: \"close > 1\", exit: \"close < 1\", weight: 1}\n")); err == nil || !strings.Contains(err.Error(), "重复") {
+	if _, err := Parse([]byte("name: x\nrules:\n  - {id: a, type: rank, pool: [BTC-USDT, BTC-USDT], score: \"0\", select: {top: 10000}, weight: 1}\n")); err == nil || !strings.Contains(err.Error(), "重复") {
 		t.Fatalf("完全相同的两项应拒绝：%v", err)
 	}
 }
@@ -386,6 +386,35 @@ func TestValidateHoldingCalendarOptions(t *testing.T) {
 	})
 }
 
+// holding.offsets: all 在解析时展开成 0 到 bars-1，与逐个写出相同；每根一批最多 64 个批次，只能与 bars 一起写。
+func TestHoldingOffsetsAll(t *testing.T) {
+	t.Parallel()
+	holding := func(body string) string { return rankRule("select: {top: 1}, weight: 1, holding: " + body) }
+	all, err := Parse([]byte(holding("{bars: 5, offsets: all}")))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	explicit, err := Parse([]byte(holding("{offsets: [0, 1, 2, 3, 4], bars: 5}")))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if got, want := all.Rules[0].Holding, explicit.Rules[0].Holding; !reflect.DeepEqual(got, want) {
+		t.Fatalf("offsets: all 应展开成全部 offset：%+v，应为 %+v", got, want)
+	}
+	// offsets 写在 bars 前面也一样；上限 64 根可以。
+	full, err := Parse([]byte(holding("{offsets: all, bars: 64}")))
+	if err != nil || len(full.Rules[0].Holding.Offsets) != 64 || full.Rules[0].Holding.Offsets[63] != 63 {
+		t.Fatalf("bars: 64 应展开成 64 个批次：%v", err)
+	}
+	runOptionCases(t, map[string]optionCase{
+		"all 超过 64 根":      {holding("{bars: 65, offsets: all}"), "bars 不能超过 64"},
+		"all 缺 bars":       {holding("{offsets: all}"), "holding.bars 必须大于 0"},
+		"all 配 calendar":   {holding("{calendar: week, days: [1], offsets: all}"), "calendar 与 bars、offsets 只能写一种"},
+		"offsets 写别的文字":    {holding("{bars: 4, offsets: every}"), "必须是整数列表"},
+		"all 与 buffer 仍互斥": {rankRule("select: {top: 1, buffer: 1}, weight: 1, holding: {bars: 4, offsets: all}"), "holding 和 select.buffer"},
+	})
+}
+
 // S5：正常写法保存通过。
 func TestValidateHoldingCalendarAccepted(t *testing.T) {
 	t.Parallel()
@@ -421,7 +450,6 @@ func TestValidateHoldOptions(t *testing.T) {
 		"allow_reentry 配冷却":       {rankRule("select: {top: 2}, weight: 1, hold: {allow_reentry: true, cooldown_bars: 2}"), "allow_reentry 不能与大于 0 的 cooldown_bars"},
 		"allow_reentry 不是布尔":      {rankRule("select: {top: 2}, weight: 1, hold: {allow_reentry: yes please}"), "allow_reentry"},
 		"hold.entry 用截面函数":        {rankRule("select: {top: 2}, weight: 1, hold: {entry: \"rank(close) > 0.5\"}"), "只能在 score"},
-		"signal 写 hold":           {"name: x\nrules:\n  - {id: a, type: signal, pool: [A], entry: \"close > 1\", exit: \"close < 1\", weight: 1, hold: {}}\n", "不能写 hold"},
 	})
 	strategy, err := Parse([]byte(rankRule("select: {top: 0.1, group: {by: ind, max: 2}}, weight: 1, hold: {entry: \"a > 0\", exit: \"b > 0\", max_bars: 720, cooldown_bars: 3}, holding: {calendar: week, days: [1]}")))
 	if err != nil {
@@ -480,15 +508,14 @@ func TestValidateRuleUniverseOptions(t *testing.T) {
 func TestValidateScaleOptions(t *testing.T) {
 	t.Parallel()
 	runOptionCases(t, map[string]optionCase{
-		"scale 缺 expr":         {rankRule("select: {top: 1}, weight: 1, scale: {max: 1}"), "缺少 expr"},
-		"scale.max 为 0":        {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 0}"), "max 必须在 (0, 10]"},
-		"scale.max 超过 10":      {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 11}"), "max 必须在 (0, 10]"},
-		"scale 用截面函数":          {rankRule("select: {top: 1}, weight: 1, scale: {expr: \"rank(c)\"}"), "只能在 score"},
-		"scale 未知字段":           {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, min: 0}"), "未知字段"},
-		"keep_bars 为 0":        {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 0}"), "keep_bars 必须在 1 到 1000"},
-		"keep_bars 超过上限":       {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 1001}"), "keep_bars 必须在 1 到 1000"},
-		"on_missing 未知字段":      {rankRule("select: {top: 1}, weight: 1, on_missing: {cash: true}"), "未知字段"},
-		"tranche 写 on_missing": {"name: x\nrules:\n  - id: t\n    type: tranche\n    weight: 1\n    on_missing: {keep_bars: 3}\n    tranche: {hold_period: 1, long_factors: [{column: close}], long_coin_num: 1, long_weight: 1, stg_weight: 1}\n", "不支持 on_missing"},
+		"scale 缺 expr":    {rankRule("select: {top: 1}, weight: 1, scale: {max: 1}"), "缺少 expr"},
+		"scale.max 为 0":   {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 0}"), "max 必须在 (0, 10]"},
+		"scale.max 超过 10": {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 11}"), "max 必须在 (0, 10]"},
+		"scale 用截面函数":     {rankRule("select: {top: 1}, weight: 1, scale: {expr: \"rank(c)\"}"), "只能在 score"},
+		"scale 未知字段":      {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, min: 0}"), "未知字段"},
+		"keep_bars 为 0":   {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 0}"), "keep_bars 必须在 1 到 1000"},
+		"keep_bars 超过上限":  {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 1001}"), "keep_bars 必须在 1 到 1000"},
+		"on_missing 未知字段": {rankRule("select: {top: 1}, weight: 1, on_missing: {cash: true}"), "未知字段"},
 	})
 	strategy, err := Parse([]byte(rankRule("select: {top: 1}, weight: 1, scale: {expr: \"coef\", max: 2}, on_missing: {keep_bars: 5}")))
 	if err != nil {

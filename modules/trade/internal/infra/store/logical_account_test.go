@@ -206,7 +206,7 @@ func TestLogicalAccountMembershipChangeRequiresPause(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
-func TestLogicalAccountOwnerAndAutomationRoundTrip(t *testing.T) {
+func TestLogicalAccountAutomationRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
@@ -217,18 +217,10 @@ func TestLogicalAccountOwnerAndAutomationRoundTrip(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		account, err := tx.GetLogicalAccount("space-1", "logical-1")
-		if err != nil {
-			return err
-		}
-		if _, _, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", account.AuthFence); err != nil {
-			return err
-		}
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
 	got, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "instance-1", got.OwnerInstanceID)
 	require.Equal(t, "ACTIVE", got.AutomationState)
 	require.Empty(t, got.PauseReason)
 }

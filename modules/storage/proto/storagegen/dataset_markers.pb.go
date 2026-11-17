@@ -95,8 +95,7 @@ type DatasetPeriodCompletedMarker struct {
 	CompletedAt        *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
 	DetailType         string                 `protobuf:"bytes,9,opt,name=detail_type,json=detailType,proto3" json:"detail_type,omitempty"`
 	Detail             []byte                 `protobuf:"bytes,10,opt,name=detail,proto3" json:"detail,omitempty"`
-	// universe_series、failed_series 是按序列的全集与失败名单：写入方的数据集含多个 series_tag 时才填，
-	// Storage 原样保存并带进周期完成事件。
+	// universe_series、failed_series 是按序列（标的、series_tag）的全集与失败名单，Storage 原样保存并带进周期完成事件。
 	UniverseSeries []*SeriesRef `protobuf:"bytes,11,rep,name=universe_series,json=universeSeries,proto3" json:"universe_series,omitempty"`
 	FailedSeries   []*SeriesRef `protobuf:"bytes,12,rep,name=failed_series,json=failedSeries,proto3" json:"failed_series,omitempty"`
 }

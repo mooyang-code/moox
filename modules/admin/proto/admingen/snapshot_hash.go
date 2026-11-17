@@ -8,11 +8,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// SnapshotHash covers the entire snapshot, including actual verifier key
-// material, while excluding its hash field. The control plane emits ordered
-// routes and keys; deterministic protobuf encoding also orders directory maps.
-// Receivers use the same function before accepting a snapshot. It never mutates
-// the supplied message and does not replace snapshot/schema validation.
+// SnapshotHash 对整份快照（含校验公钥，不含它自己的 hash 字段）算哈希。控制面按固定顺序给出路由与公钥，
+// 确定性的 protobuf 编码也会给目录里的 map 排序。接收方在接受快照之前用同一个函数核对。
+// 它不修改传入的消息，也不代替快照的结构校验。
 func SnapshotHash(snapshot *HostGatewaySnapshot) (string, error) {
 	if snapshot == nil {
 		return "", errors.New("gateway snapshot is nil")

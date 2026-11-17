@@ -1,36 +1,20 @@
-[admin]
-username = "admin"
-password = ""
+# moox.toml：拓扑与部署参数，明文保存，可以放进自己的私有仓库；不写任何秘密。
+# 秘密（管理员、腾讯云密钥、告警渠道、CLS 写入密钥、交易所密钥）写在同目录加密保存的 moox.secrets.toml 里（见 moox.secrets.toml.example）。
+# 两份文件都由 moox-cli config init 生成；拓扑直接编辑这份文件，改完重新部署对应主机生效。
+# 业务初值不在配置文件里：默认因子任务在 config/setup/factor-tasks.yaml（setup start 导入），自己的任务用 moox-cli factor task apply --file 导入。
 
-[tencent_cloud]
-secret_id = ""
-secret_key = ""
-region = "ap-guangzhou"
-
-[eventbus]
-port = 4222
-tls_enabled = true
-
-# 只支持 all / new，默认 all。
-[observability]
-# deliver_policy = "all"
-
-# 所有运行时目录使用云磁盘 /data 下的统一根目录。
+# 每台主机的部署根，放在挂载到 /data 的云盘上。
 [paths]
 deploy_root = "/data/moox"
-control_root = "/data/moox/prod"
-storage_root = "/data/moox/storage"
 
-# 每个本地 .log 文件达到上限后保留尾部并原地截断，避免 stdout/stderr
-# 或框架日志无限占用磁盘。健康检查每分钟执行一次滚动维护。
-[local_logs]
-max_size_mb = 50
-backup_count = 5
+# EventBus 部署在哪台主机看 [deployments]，总是走 TLS。
+[eventbus]
+port = 4222
 
 # View 只按根数保留：每个时序序列保留最近 view_rows_per_series 根已完成 K 线，历史不足时用已有数据激活，
 # 后续由实时事件补齐。
 # Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
-# 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据。
+# 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据。改完重新部署存储机生效。
 [storage_retention]
 view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；更旧的行每 2 分钟定时删除
 
@@ -127,34 +111,23 @@ maintenance_offset = "35s"
 maintenance_timeout = "20s"
 max_rows_per_pass = 50000
 
-# 告警推送渠道。webhook_url 可以先留空，部署后在管理台「监控 › 告警渠道」里添加；没有推送地址时监控只展示不通知。
-# channel_type：wecom（企业微信）、feishu（飞书）、dingtalk（钉钉）、webhook（通用 Webhook，任意公网 HTTPS 地址）。
-# webhook_url 是对应群机器人的地址；Monitor 首次建库时据此写入。
-# secret 选填：飞书机器人启用“签名校验”、钉钉机器人启用“加签”时填它的密钥；通用 Webhook 填了就带签名请求头。企业微信留空。
-[notification]
-channel_type = "wecom"
-webhook_url = ""
-secret = ""
-
 # 腾讯云日志服务里日志保留的天数（初始化时建的采集日志主题用它；服务日志的主题手工创建时填同样的天数），默认 2 天；保留越久存储费越高。
 # 只在创建日志主题时生效，已经建好的主题要到腾讯云控制台改。
 [logging]
 retention_days = 2
 
-# 服务日志上报腾讯云日志服务（CLS），可选。重要日志（Error 及以上、关键事件）总是发给 Monitor、在管理台“重要日志”里看，不需要这一段；
+# 服务日志上报腾讯云日志服务（CLS），可选。重要日志（Error 及以上、关键事件）总是发给 Monitor、在管理台“日志中心”里看，不需要这一段；
 # 这里配的是把各服务警告及以上的日志和关键事件另外上报到 CLS，方便检索。
 # 费用（腾讯云按量计费，中国大陆地域）：每个日志主题每天 0.04 元（约 1.2 元/月）是固定的，其余按量；按 MooX 的日志量、保留 2 天，每月合计几元以内。
 # endpoint 是上报域名（例如 ap-guangzhou.cls.tencentcs.com）；topic_id 是主题 moox-service 的 ID，
 # 用 moox-cli ops tencent cls bootstrap --topic-name moox-service --retention-days <[logging] 的 retention_days> 创建并取得。
-# writer_secret_id / writer_secret_key 填只有这个主题上传权限的子账号密钥：它会下发到每台主机，不要填云账号的管理密钥。
+# 写入密钥（只有这个主题上传权限的子账号密钥）是秘密，写在 moox.secrets.toml 的 [logging.cls] 里，部署时渲染进各组件的环境文件。
 # 上报走明文 HTTP，日志里不要写密钥。min_level 是上报的最低级别：info、warn、error，默认 warn；
 # 调成 info 会把各服务逐条处理的日志也报上去，量大约是 10 倍。关键事件（进程启动、暂停与恢复等）不论级别都上报。
 [logging.cls]
 enabled = false
 endpoint = ""
 topic_id = ""
-writer_secret_id = ""
-writer_secret_key = ""
 min_level = "warn"
 
 # 归档对象存储：归档 worker 导出分区后传一份到标准 S3 接口的对象存储。不写这一段时用因子机上内置的 SeaweedFS
@@ -170,178 +143,13 @@ min_level = "warn"
 # use_tls = true
 # storage_class = "STANDARD_IA"           # 低频；留空用桶的默认（标准）
 # secret_id = "<管理台密钥的 secret_id>"
-# 交易所密钥（可选）：每把写成一段 [[exchange_keys]]，setup apply 把它们写进密钥管理。下面是注释掉的样例，只有取消注释才会生效：
-# 取消注释前先换成真实密钥，否则占位值会被写进密钥管理。
-#   name         只允许小写字母、数字和连字符，同一交易所、环境下不能重复；固定 ID 是 exchange-<交易所>-<环境>-<名称>。
-#   exchange     binance 或 okx；environment 是 production 或 testnet。
-#   api_key、secret_key（OKX 还要 passphrase）  随整个文件加密保存，config get 默认打码。
-#   readonly     只读密钥设为 true：不能用来建交易账户，apply 后也不做交易账户检测。Collector 检测币安现货下架读的就是
-#                name = "readonly" 的币安生产只读 Key（固定 ID exchange-binance-production-readonly）。
-# 只建不改：密钥管理里已有这个 ID 时不覆盖（以管理台为准），已在管理台删除的不重建；删掉这里的条目也不会删除密钥管理里的密钥。
-# 只有配了海外服务器（Trade 所在主机）才用得上。写入后，Trade 部署完成再检测：moox-cli trade inspect-credential。
-# [[exchange_keys]]
-# name = "readonly"
-# exchange = "binance"
-# environment = "production"
-# api_key = "填入币安只读 API Key"
-# secret_key = "填入币安只读 Secret Key"
-# readonly = true
-#
-# [[exchange_keys]]
-# name = "main"
-# exchange = "okx"
-# environment = "production"
-# api_key = "填入 OKX API Key"
-# secret_key = "填入 OKX Secret Key"
-# passphrase = "填入 OKX Passphrase"
-
-# setup init 导入因子：先导入因子定义，再按任务建立因子任务并把成员加入任务、按 status 启用。
-# 定义（factors.definitions）引用 source_dir 下 YAML 因子库文件里的一个因子（factor_id + file），
-# 展示名与表达式都来自库文件，类型、输入列、输出列与回看由 FactorMgr 编译得到；定义是全局的，不含数据集、
-# 频率和状态。
-# 因子任务（factors.tasks）读一个源数据集的一个频率，一个源数据集可以有多个任务：
-#   id           任务 ID，ftask_ 加小写字母、数字、下划线组成的后缀；
-#   name         展示名，直接用作结果数据集的名称（含汉字、不超过 10 个字、空间内唯一）；
-#   members      任务的成员，内嵌在任务里：factor 引用定义；params 是固定成员的固定参数，没给的参数取定义的默认值；
-#                var = true 是可变成员，参数由关联的策略实例逐期提交，params 是它的默认参数；status 缺省为 enabled。
-# 成员键由参数推导，不在配置里写：参数全为默认值时就是因子 ID，否则是 因子ID__值1_值2…，可变成员是 因子ID__var。
-# 结果列名是成员键，多输出因子再加 __输出名；setup factors 会逐项打印已存在 / 新建 / 冲突，以及每个成员的成员键和列名。
-# 同一个因子可以用不同的固定参数多次加入同一个任务，固定参数加成员之后不再改，要换参数请另加一个成员。
-# 默认因子：xbx.yaml 里的 bias、cci、min_max、quote_volume_mean，以及 common.yaml 里的常用技术指标
-# （MA、EMA、MACD、RSI、ROC、BOLL、ATR、收益率波动、VWAP）。
-# 关闭默认因子导入请设置 factors.enabled = false（config init 在没有因子机时自动关闭；有因子机、没有海外机时去掉读 crypto 数据的任务，保留 A 股任务）；也可以在因子库里新增定义，或复制任务改成自己的数据集与频率。
-[factors]
-enabled = true
-source_dir = "./modules/factor/factors"
-
-# 每个采集任务独占一个结果数据集，ID 由任务 ID 派生为 dataset_<task_id>
-# （见 config/setup/collection-tasks.yaml）：下面的任务分别读币安现货、合约 1m 任务与 A 股 5m 任务的结果。
-# 固定参数、可变成员的写法示例（加进任务的 members 里即可，不要和任务里已有的同一成员重复）：
-#   { factor = "ema", params = { span = 20, warmup = 50000 } },   # 成员键 ema__20_50000
-#   { factor = "ma", var = true },                                 # 成员键 ma__var，参数由关联的策略实例逐期提交
-[[factors.tasks]]
-id = "ftask_spot_1m"
-name = "现货一分钟"
-space_id = "crypto"
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-members = [
-  { factor = "bias" },
-  { factor = "cci" },
-  { factor = "min_max" },
-  { factor = "quote_volume_mean" },
-  { factor = "ma" },
-  { factor = "ema" },
-  { factor = "macd" },
-  { factor = "rsi" },
-  { factor = "roc" },
-  { factor = "boll" },
-  { factor = "atr" },
-  { factor = "atr_pct" },
-  { factor = "return_std" },
-  { factor = "vwap" },
-]
-
-[[factors.tasks]]
-id = "ftask_swap_1m"
-name = "合约一分钟"
-space_id = "crypto"
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-members = [
-  { factor = "bias" },
-  { factor = "cci" },
-  { factor = "min_max" },
-  { factor = "quote_volume_mean" },
-  { factor = "ma" },
-  { factor = "ma", params = { window = 5 } },   # 成员键 ma__5、ma__10：默认展示策略 dual_ma_swap_1m 的快线与慢线
-  { factor = "ma", params = { window = 10 } },
-  { factor = "ema" },
-  { factor = "macd" },
-  { factor = "rsi" },
-  { factor = "roc" },
-  { factor = "boll" },
-  { factor = "atr" },
-  { factor = "atr_pct" },
-  { factor = "return_std" },
-  { factor = "vwap" },
-]
-
-[[factors.tasks]]
-# A 股 5m 任务：读 config/setup/collection-tasks.yaml 里“A 股 K 线 5m”任务的结果（沪深 300 成分股）。
-# 只放双均线示例（examples/strategies/dual_ma_cn_5m.yaml）用到的两个成员，最长只回看 10 根，上线当天就能出结果；
-# EMA 等长回看因子在 A 股 5m 上要几年的历史（默认 EMA 最大回看 49995 根，每个交易日只有 48 根），需要时再加，并同步调大保留期。
-id = "ftask_cn_5m"
-name = "A股五分钟"
-space_id = "stockcn"
-source_dataset_id = "dataset_dasftksvjhj2jom4vhh0"
-freq = "5m"
-members = [
-  { factor = "ma", params = { window = 5 } },
-  { factor = "ma", params = { window = 10 } },
-]
-
-[[factors.definitions]]
-factor_id = "bias"
-file = "xbx.yaml"
-
-[[factors.definitions]]
-factor_id = "cci"
-file = "xbx.yaml"
-
-[[factors.definitions]]
-factor_id = "min_max"
-file = "xbx.yaml"
-
-[[factors.definitions]]
-factor_id = "quote_volume_mean"
-file = "xbx.yaml"
-
-[[factors.definitions]]
-factor_id = "ma"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "ema"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "macd"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "rsi"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "roc"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "boll"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "atr"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "atr_pct"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "return_std"
-file = "common.yaml"
-
-[[factors.definitions]]
-factor_id = "vwap"
-file = "common.yaml"
 
 # SCF 定时触发采集（Timer 模式）：声明哪些空间、市场在哪些地域运行，以及这些地域的函数网络。
-# setup deploy 据此渲染 Collector 的 scf_regions / scf_markets / scf_plan；setup init 登记云账号、开通日志服务（CLS）、
+# 部署据此渲染 Collector 的 scf_regions / scf_markets / scf_plan；setup init 登记云账号、开通日志服务（CLS）、
 # 为每个空间上传代码包。函数的数量、标的分配与定时器由 Collector 按任务与标签成员自动创建和维护，
 # 代码包按名称取最新版本：升级时执行 `moox-cli collector function upload`，不需要改配置或重启。
-# 云账号在 [scf_plan.cloud_account] 声明（account_id、account_name、credential_secret_id、app_id、cos_region、cos_bucket）。
+# 云账号在 [scf_plan.cloud_account] 声明（account_id、account_name、credential_secret_id、app_id、cos_region、cos_bucket）；
+# credential_secret_id 引用管理台里那把腾讯云密钥的 ID（setup init 写入的是 tencent-default），这里不写密钥。
 [scf_plan]
 enabled = false
 # memory_mb = 128               # 每个函数内存，默认 128
@@ -351,37 +159,35 @@ enabled = false
 # [scf_plan.cloud_account]
 # account_id = "tencent-scf"
 # account_name = "Tencent SCF"
-# credential_secret_id = "AKID..."
+# credential_secret_id = "tencent-default"
 # app_id = "1255..."
 # cos_region = "ap-guangzhou"
 # cos_bucket = "moox-scf-guangzhou-<app_id>"
 
-# 函数在地域 VPC 内运行，通过同地域主机的私网地址访问 Access：
-# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address、并在 [deployments] 里带 access 组件。
+# 函数在地域 VPC 内运行，通过同地域主机的私网地址访问外部入口（主机网关的 11004）：
+# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address，并写了 external_entry = true。
 # [scf_plan.regions.ap-hongkong]
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
-# access_host = "overseas"   # 同地域有多台带私网地址的 access 主机时必须指定入口主机
+# entry_host = "overseas"   # 同地域有多台带私网地址的入口主机时必须指定
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"
 # # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
-# # 新数据集的采集方式初值：crypto 默认 default_ingest = "stream"、default_executor = "local"（WS 推送，补采走海外机本地执行端），
-# # 其他空间默认 "pull" + "scf"。之后以 Collector 库为准，用 moox-cli collector ingest-mode set 切换。
-# default_ingest = "stream"
-# default_executor = "local"
+# # 采集方式不在这里配置：它记在采集任务上（stream / scf / local），建任务不写时用市场默认值（crypto 是 stream，其余是 scf），
+# # 之后用 moox-cli collector ingest-mode set 切换。
 # [scf_plan.spaces.markets]
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
 
 # config init 会按第一步密钥的 AppId 与入口主机的 VPC、子网、私网 IP 自动生成下面 A 股这一套：入口优先选存储服务器所在地域（同地域走内网），
-# 存储服务器没有可用的私有网络时退而选其他带 Access 的主机（如海外服务器）。
-# A 股：沪深 300 成分股 5m K 线，函数优先放在存储机所在地域（该地域要有带 access 组件、配了 private_address 的主机），
+# 存储服务器没有可用的私有网络时退而选其他开了外部入口的主机（如海外服务器）。
+# A 股：沪深 300 成分股 5m K 线，函数优先放在存储机所在地域（该地域要有写了 external_entry = true、配了 private_address 的主机），
 # 每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回不采集。
 # [scf_plan.regions.ap-nanjing]
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
-# access_host = "storage"
+# entry_host = "storage"
 # [[scf_plan.spaces]]
 # space_id = "stockcn"
 # [scf_plan.spaces.markets]
@@ -406,21 +212,25 @@ enabled = false
 # 主机命名：英文 ID 全小写、按角色命名（control 控制机、storage 存储机、overseas 海外机、factor 因子机），
 # 同一角色有多台时才加序号（overseas-2）；label 是中文名，登记到管理台用于界面展示，不写时按 ID 生成（overseas-2 → 海外机 2）。
 # 机器的新增、部署、启停都通过 moox skill 完成，管理台只展示。
-# ssh 段：password 或 private_key_file（可加 private_key_passphrase）用于 moox-cli 登录；直达主机配了其中之一，
-# 才会同步给管理台作为终端登录信息（私钥优先），没配的主机在管理台里置灰。
+# ssh 段：只支持免密的密钥登录。private_key_file 是这台电脑上的私钥（config init 生成 ~/.ssh/moox_ed25519 并装到各服务器上），
+# 不写时用 ssh-agent 与 ~/.ssh 下的默认私钥；私钥不带口令（带口令的私钥交给 ssh-agent）。
+# 腾讯云接口的默认地域取控制机的 region。
 [hosts.control]
 label = "控制机"
 address = "203.0.113.10"
 region = "ap-guangzhou"
 provider = "tencent"
-ssh = { port = 22, username = "ubuntu" }
+ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
 
+# external_entry = true：这台主机的网关多开外部入口（11004，明文加签名），云函数、Skill、采集名单工具从这里进来；
+# 目标服务不在这台主机上时由网关转给目标主机。只能出站的主机不能开。
 [hosts.storage]
 label = "存储机"
 address = "203.0.113.11"
 region = "ap-nanjing"
 provider = "tencent"
-ssh = { port = 22, username = "ubuntu" }
+external_entry = true
+ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
 
 # 海外机：海外 IP 出口，运行交易执行与出口代理，建议放在香港。
 [hosts.overseas]
@@ -428,7 +238,8 @@ label = "海外机"
 address = "203.0.113.12"
 region = "ap-hongkong"
 provider = "tencent"
-ssh = { port = 22, username = "ubuntu" }
+external_entry = true
+ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
 
 # 因子机：运行因子引擎与归档 worker，只支持 Linux，可以是局域网或家里的机器。
 # 它只能出站连接，控制台与监控经管理台服务器的网关中转（reachability = "outbound"）；
@@ -437,19 +248,26 @@ ssh = { port = 22, username = "ubuntu" }
 label = "因子机"
 address = "192.0.2.30"
 reachability = "outbound"
-ssh = { port = 22, username = "builder" }
+ssh = { port = 22, username = "builder", private_key_file = "~/.ssh/moox_ed25519" }
 
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [deployments]
-control = ["console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"]
-# eventbus 是独立单元，可以放在任意一台直达主机上，用 setup deploy-unit --profile eventbus 安装；放在存储机上时 Storage 的周期完成与就绪事件走回环。
+control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
+# eventbus 可以放在任意一台直达主机上；放在存储机上时 Storage 的周期完成与就绪事件走回环。
 # 客户端与它同机时连回环地址，否则连它所在主机的对外地址。
-storage = ["storage-primary", "storage-view", "access", "eventbus"]
-# collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机；首次安装用 setup deploy-unit --profile collector-stream。
-# callback-dispatcher 是事件中心：接收事件并向你配置的接口发通知，部署主机必须能访问到你的接口；首次安装用 setup deploy-unit --profile callback-dispatcher。
-overseas = ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"]
-# factor-engine 与 archive-worker 是外部程序组件，由 setup deploy-unit 以 systemd 用户服务安装，停用主机或部署时 CLI 同时停掉服务。
+storage = ["storage-primary", "storage-view", "eventbus"]
+# collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机。
+# callback-dispatcher 是事件中心：接收事件并向你配置的接口发通知，部署主机必须能访问到你的接口。
+overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
+# factor-engine 与 archive-worker 是外部程序组件，以 systemd 用户服务运行。
 factor = ["factor-engine", "archive-worker"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
+
+# 手工调过的组件配置：[overrides."<组件>"."<配置文件名>"] 下每行“键路径 = 值”，部署渲染组件配置之后逐项覆盖，
+# 键路径不存在就报错；重新部署不会丢。值只能是字符串、整数、小数或布尔，不支持删键和数组元素。
+# 因子引擎的 tune 会打印建议值，照抄到这里即可。
+# [overrides."factor-engine"."engine.yaml"]
+# "window.lookback" = 50000
+# "compute.max_memory" = "8GiB"

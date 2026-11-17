@@ -48,7 +48,7 @@ func (c *Client) ReadDatasetChanges(ctx context.Context, spaceID, datasetID stri
 	if spaceID == "" || datasetID == "" {
 		return Changes{}, fmt.Errorf("space_id and dataset_id are required")
 	}
-	req := &storagepb.ReadDatasetChangesReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, FromHead: fromHead, Limit: uint32(max(limit, 0))}
+	req := &storagepb.ReadDatasetChangesReq{SpaceId: spaceID, DatasetId: datasetID, FromHead: fromHead, Limit: uint32(max(limit, 0))}
 	if cursor != nil {
 		req.Cursor = &storagepb.DatasetChangeCursor{StoreId: cursor.StoreID, Sequence: cursor.Sequence}
 	}

@@ -7,13 +7,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/systemspace"
 )
 
-// Gateway keyrings belong to the control plane, not the generic SecretMgr API.
-const (
-	GatewayKeyringType     = "gateway_keyring"
-	GatewayKeyringIDPrefix = "moox:gateway-keyring:"
-)
-
-// 主机的 SSH 登录凭据（密码或私钥）由 SSH 服务按主机维护，同样不经过通用的 SecretMgr API。
+// 主机的 SSH 登录凭据（密码或私钥）由 SSH 服务按主机维护，不经过通用的 SecretMgr API。
 // 秘钥 ID 为 SSHHostIDPrefix + 主机 ID，c_key_id 存登录用户名。
 const (
 	SSHHostIDPrefix = "moox:ssh-host:"
@@ -23,20 +17,19 @@ const (
 // SSHHostSecretID 返回主机 SSH 凭据的秘钥 ID。
 func SSHHostSecretID(hostID string) string { return SSHHostIDPrefix + hostID }
 
-// IsSystem 判断秘钥是否由系统内部服务维护（网关密钥环、主机 SSH 凭据），通用秘钥接口看不到也改不了。
+// IsSystem 判断秘钥是否由系统内部服务维护（主机 SSH 凭据），通用秘钥接口看不到也改不了。
 func (s *Secret) IsSystem() bool {
-	return s.SecretType == GatewayKeyringType ||
-		strings.HasPrefix(s.SecretID, GatewayKeyringIDPrefix) || strings.HasPrefix(s.SecretID, SSHHostIDPrefix)
+	return strings.HasPrefix(s.SecretID, SSHHostIDPrefix)
 }
 
 // ConfigBackupID 是配置备份（moox-cli 用管理员密码加密的 moox.toml）在 t_secrets 里的固定标识；整个系统只有一份，
 // 属于本环境，秘钥迁移不导出也不导入它。
 const ConfigBackupID = "moox-config-backup"
 
-// SystemSpacePrefix 是系统内部空间的前缀：网关密钥环、EventBus 内部凭据等由部署工具在系统空间（systemspace.ID）下生成，属于本环境。
+// SystemSpacePrefix 是系统内部空间的前缀：EventBus 内部凭据等由部署工具在系统空间（systemspace.ID）下生成，属于本环境。
 const SystemSpacePrefix = systemspace.ID
 
-// EventBus 内部凭据（TLS 证书与各角色令牌）的分类与提供方，由 eventbus-credentials ensure 生成，按 key_id 读取。
+// EventBus 内部凭据（各角色令牌）的分类与提供方，由 eventbus-credentials ensure 生成，按 key_id 读取。
 const (
 	EventBusCategory = "eventbus"
 	EventBusProvider = "moox_eventbus"

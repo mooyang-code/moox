@@ -42,7 +42,7 @@
             <article v-for="card in cards" :key="card.instanceId" class="task-card" :class="{ 'is-disabled': !card.enabled }">
               <header class="task-card__head">
                 <a-link class="task-card__title" @click="go(card.links.results)">{{ card.title }}</a-link>
-                <StatusBadge :enabled="card.enabled" :health="card.health" />
+                <StatusBadge :enabled="card.enabled" :health="card.health" :trial="card.trial" />
                 <a-tag v-if="card.enabled" size="small" :color="card.stateTag.color">{{ card.stateTag.label }}</a-tag>
                 <a-tag v-if="card.trading" size="small" color="orange">交易模式</a-tag>
               </header>

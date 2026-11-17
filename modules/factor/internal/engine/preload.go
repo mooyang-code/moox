@@ -18,7 +18,8 @@ import (
 
 // 窗口预载：引擎成为活动引擎（启动、接管租约）或者目录里出现新的因子任务之后，立刻为任务准备数据：
 // 读数据集字段、取同步基线或跟进变更、把本地补到最新已收盘的一根、载入内存窗口（设计 5.1）。
-// 载入完成之前该任务的实时周期按预热处理：本期不算、记入账本，载入完成后由跳过恢复补算（见 gapfill.go）。
+// 载入完成之前到达的实时周期不算；算过的任务（有连续水位记录，例如引擎重启后重新载入）只记下追赶目标，
+// 载入完成后由追赶循环从水位下一期依次补算。从没算过的新任务不记，从就绪后的第一条实时事件算起。
 
 const (
 	preloadInterval = time.Minute
@@ -42,8 +43,8 @@ type preloader struct {
 	source SourceDataset
 	data   preloadData
 	active func() bool
-	// blocked 非空且返回 true 时不预载：模块暂停、恢复追赶、重置期间预载循环不能自己把数据拉回本地
-	//（恢复追赶由生命周期的追赶钩子显式刷新，重置期间更不能把刚清掉的数据重新写进去）。
+	// blocked 非空且返回 true 时不预载：模块暂停、恢复追赶期间预载循环不能自己把数据拉回本地
+	//（恢复追赶由生命周期的追赶钩子显式刷新）。
 	blocked func() bool
 	// onReady 在一个任务预载成功后调用（唤醒跳过恢复补算预载期间跳过的周期）。
 	onReady func(taskID string)
@@ -206,13 +207,6 @@ func (p *preloader) Refresh(ctx context.Context, taskID string) error {
 
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
 	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]preparedState{}}
-}
-
-// Forget 忘掉所有任务的预载记录（重置清空本地数据之后，每个任务要重新预载）。
-func (p *preloader) Forget() {
-	p.mu.Lock()
-	p.prepared = map[string]preparedState{}
-	p.mu.Unlock()
 }
 
 // Kick 让预载循环尽快检查一次，不阻塞。引擎成为活动引擎、目录变化时调用。

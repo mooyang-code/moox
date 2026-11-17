@@ -7,7 +7,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testcert"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	protocol "github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
@@ -25,23 +26,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type memoryNonces struct {
-	mu   sync.Mutex
-	seen map[string]bool
-}
-
-func (n *memoryNonces) Consume(_ context.Context, namespace, nonce string, _ time.Duration) (bool, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.seen == nil {
-		n.seen = map[string]bool{}
+// credential 把测试里的调用方写法换成签名身份："host-gateway@{主机}" 是那台主机的网关，其余调用方算在 control 上。
+func credential(caller string) gatewayauth.Credentials {
+	if name, host, ok := strings.Cut(caller, "@"); ok {
+		return testsnapshot.Credential(name, host)
 	}
-	key := namespace + "/" + nonce
-	if n.seen[key] {
-		return false, nil
-	}
-	n.seen[key] = true
-	return true, nil
+	return testsnapshot.Credential(caller, "control")
 }
 
 type harness struct {
@@ -77,7 +67,7 @@ func newHarness(t *testing.T) *harness {
 	view, err := snapshot.Build("control", proto.Clone(h.raw).(*pb.HostGatewaySnapshot))
 	require.NoError(t, err)
 	h.state.Apply(view)
-	cfg := hostgatewayconfig.Default("control", "control", "127.0.0.1", "fixture-key")
+	cfg := hostgatewayconfig.Default("control", "control", "127.0.0.1")
 	cfg.TLS, cfg.Store.Path = testcert.Files(t, h.ca, "control", nil), filepath.Join(t.TempDir(), "cache")
 	cfg.Server.RemoteAddr, cfg.Server.LocalAddr, cfg.Server.HealthAddr = freeAddress(t), freeAddress(t), freeAddress(t)
 	material, err := tlsconfig.Load("control", cfg.TLS)
@@ -85,7 +75,7 @@ func newHarness(t *testing.T) *harness {
 	opened, err := listener.Open(t.Context(), cfg, material)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = opened.Close() })
-	h.server, err = relay.NewServer(relay.ServerOptions{State: h.state, Nonces: &memoryNonces{}})
+	h.server, err = relay.NewServer(relay.ServerOptions{State: h.state, Replay: gatewayauth.NewReplay(time.Now().Add(-time.Minute))})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = h.server.Close() })
 	opened.SetRelay(h.server)
@@ -132,7 +122,7 @@ func (h *harness) outbound(certHost, caller string, mutate func(*x509.Certificat
 	require.NoError(h.t, err)
 	config.Certificates = []tls.Certificate{pair}
 	client, err := relay.NewClient(relay.ClientOptions{
-		HostID: "home", ControlHost: "control", Target: h.address, TLS: config, Credentials: testsnapshot.Credential(caller),
+		HostID: "home", ControlHost: "control", Target: h.address, TLS: config, Credentials: credential(caller),
 		Active:     func() bool { return true },
 		Allowed:    func(port int) bool { return port == servicecatalog.HostGatewayRemotePort },
 		MinBackoff: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond,
@@ -162,7 +152,7 @@ func (h *harness) waitOnline(instance string) {
 func (h *harness) open(caller string, port int) (net.Conn, error) {
 	return protocol.Dial(h.t.Context(), protocol.OpenOptions{
 		Address: h.address, ControlHost: "control", TLS: &tls.Config{RootCAs: h.roots, MinVersion: tls.VersionTLS12},
-		Credentials: testsnapshot.Credential(caller), Target: protocol.Open{HostID: "home", Port: port},
+		Credentials: credential(caller), Target: protocol.Open{HostID: "home", Port: port},
 	})
 }
 
@@ -200,15 +190,13 @@ func TestRelayOpenStreamAllowlistAndReplay(t *testing.T) {
 	_, err = h.open("host-gateway@control", servicecatalog.HostGatewayRemotePort)
 	require.ErrorContains(t, err, "not allowed")
 	view := h.state.Load()
-	target, ok := view.Relay("home")
+	_, ok := view.Relay("home")
 	require.True(t, ok)
-	require.Greater(t, len(target.Ports), 1)
-	health := target.Ports[1].Port
-	_, err = h.open("console", health)
-	require.ErrorContains(t, err, "not allowed", "健康端口只对 Monitor 开放")
+	_, err = h.open("monitor", 11012)
+	require.ErrorContains(t, err, "not allowed", "组件健康端口不经中转（组件健康只看上报）")
 
 	// 同一份签名前导重放：第二次被拒绝。
-	signed, err := protocol.Sign(testsnapshot.Credential("monitor"), protocol.MethodOpen, "control", protocol.Open{HostID: "home", Port: servicecatalog.HostGatewayRemotePort}, time.Now())
+	signed, err := protocol.Sign(credential("monitor"), protocol.MethodOpen, "control", protocol.Open{HostID: "home", Port: servicecatalog.HostGatewayRemotePort}, time.Now())
 	require.NoError(t, err)
 	send := func() protocol.Reply {
 		raw, err := tls.Dial("tcp", h.address, &tls.Config{RootCAs: h.roots, ServerName: "control", NextProtos: []string{protocol.ALPNOpen}})

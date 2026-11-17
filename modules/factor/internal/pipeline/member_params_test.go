@@ -28,7 +28,7 @@ func paramMeanMembers(t *testing.T) []domain.MemberDef {
 	return []domain.MemberDef{build(domain.MemberKindFixed, nil), build(domain.MemberKindFixed, map[string]float64{"window": 5})}
 }
 
-// 同一个定义带不同固定参数，在一个任务里并行计算：各自的结果与直接写死窗口的表达式一致，__params 如实记录每个成员的参数。
+// 同一个定义带不同固定参数，在一个任务里并行计算：各自的结果与直接写死窗口的表达式一致；__params 只记可变成员，只有固定成员时不写这一列。
 func TestFixedParamMembersComputeIndependently(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	subjects := []string{"BTC", "ETH"}
@@ -49,7 +49,7 @@ func TestFixedParamMembersComputeIndependently(t *testing.T) {
 		base := float64(100 * (index + 1))
 		require.InDelta(t, base+9, row.Fields["pmean"], 1e-9, "窗口 3：最近三根的均值")
 		require.InDelta(t, base+8, row.Fields["pmean__5"], 1e-9, "窗口 5：最近五根的均值")
-		require.Equal(t, storageio.JSONText(`{"pmean":{"window":3},"pmean__5":{"window":5}}`), row.Fields[factorname.ParamsColumn])
+		require.NotContains(t, row.Fields, factorname.ParamsColumn, "只有固定成员的任务不写 __params")
 	}
 	kinds := map[string]string{}
 	for _, state := range store.markers[0].Factors {

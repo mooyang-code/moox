@@ -73,7 +73,6 @@ func Execute() {
 	// 先执行命令解析，这样可以检查是否使用了--version标志
 	mountCommands(rootCmd)
 	err := rootCmd.Execute()
-	closeModuleHealth()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		var coded interface{ ExitCode() int }
@@ -104,5 +103,10 @@ func mountCommands(root *cobra.Command) {
 			panic("命令组 strategy instance 不存在")
 		}
 		instance.AddCommand(newStrategyInstanceDeleteCommand())
+		task, _, err := root.Find([]string{"factor", "task"})
+		if err != nil || task == root {
+			panic("命令组 factor task 不存在")
+		}
+		task.AddCommand(newFactorTaskStatusCommand(), newFactorTaskApplyCommand())
 	})
 }

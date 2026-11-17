@@ -58,17 +58,10 @@ const singleSideFields = "allocation.method: drift、allocation.switch、exposur
 func (p StrategyPool) HasConstraints() bool { return p.Exposure != nil || p.Gross != nil }
 
 // Direction 返回策略的方向：规则全部做多为 long，全部做空为 short；混合方向或没有规则时为空串。
-// 规则的 side 默认 long；tranche 规则按子策略的 long_weight、short_weight 判断（它的 side 被固定写成 long）。
+// 规则的 side 默认 long。
 func (s Strategy) Direction() string {
 	long, short := false, false
 	for _, rule := range s.Rules {
-		if rule.Tranche != nil {
-			for _, sub := range rule.Tranche.Subs {
-				long = long || sub.LongWeight > 0
-				short = short || sub.ShortWeight > 0
-			}
-			continue
-		}
 		if rule.Side == SideShort {
 			short = true
 		} else {

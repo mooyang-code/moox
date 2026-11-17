@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
@@ -34,7 +33,12 @@ type Server struct {
 	RemoteAddr string `yaml:"remote_addr"`
 	LocalAddr  string `yaml:"local_addr"`
 	HealthAddr string `yaml:"health_addr"`
+	// ExternalAddr 是外部入口的明文监听地址；只有登记成外部入口的主机才写（部署渲染成 ExternalEntryAddr），不写就不开。
+	ExternalAddr string `yaml:"external_addr,omitempty"`
 }
+
+// ExternalEntryAddr 是外部入口主机上网关的外部入口监听地址。
+const ExternalEntryAddr = "0.0.0.0:11004"
 
 type TLS struct {
 	CertificateFile string `yaml:"cert_file"`
@@ -42,11 +46,10 @@ type TLS struct {
 	CAFile          string `yaml:"ca_file"`
 }
 
+// Control 是取快照的控制面：控制机上直连本机 Admin，其余主机经控制机的跨主机端口。KeyFile 是本机的主机签名私钥。
 type Control struct {
 	HostID  string `yaml:"host_id"`
 	Target  string `yaml:"target"`
-	Caller  string `yaml:"caller"`
-	KeyID   string `yaml:"key_id"`
 	KeyFile string `yaml:"key_file"`
 }
 
@@ -54,18 +57,17 @@ type Store struct {
 	Path string `yaml:"path"`
 }
 
-// Default uses the release directory layout. Relative paths are resolved from
-// host-gateway/config/app.yaml; all hosts share the same path contract.
-func Default(hostID, controlHostID, controlAddress, keyID string) Config {
+// Default 给出一台主机的网关配置，路径相对部署根下的 config/host-gateway/app.yaml；部署渲染时换成绝对路径。
+func Default(hostID, controlHostID, controlAddress string) Config {
 	target := net.JoinHostPort(controlAddress, "11003")
 	if hostID == controlHostID {
 		target = "127.0.0.1:11112"
 	}
 	return Config{
 		Host:    Host{ID: hostID},
-		Server:  Server{RemoteAddr: "0.0.0.0:11003", LocalAddr: "127.0.0.1:11002", HealthAddr: "0.0.0.0:11012"},
-		TLS:     TLS{CertificateFile: "../../certs/host-gateway/server.crt", KeyFile: "../../certs/host-gateway/server.key", CAFile: "../../certs/moox-ca.crt"},
-		Control: Control{HostID: controlHostID, Target: target, Caller: "host-gateway@" + hostID, KeyID: keyID, KeyFile: "../../secrets/caller-host-gateway.key"},
+		Server:  Server{RemoteAddr: "0.0.0.0:11003", LocalAddr: "127.0.0.1:11002", HealthAddr: "127.0.0.1:11012"},
+		TLS:     TLS{CertificateFile: "../../secrets/host.crt", KeyFile: "../../secrets/host.tls.key", CAFile: "../../secrets/moox-ca.crt"},
+		Control: Control{HostID: controlHostID, Target: target, KeyFile: "../../secrets/host.key"},
 		Store:   Store{Path: "../../data/host-gateway"},
 	}
 }
@@ -83,19 +85,24 @@ func endpoint(value string, listener bool) (string, int, error) {
 }
 
 func (c Config) Validate() error {
-	if !servicecatalog.ValidHostID(c.Host.ID) || !servicecatalog.ValidHostID(c.Control.HostID) || c.Control.Caller != "host-gateway@"+c.Host.ID {
-		return errors.New("host/control IDs must be canonical and control.caller must match this host")
+	if !servicecatalog.ValidHostID(c.Host.ID) || !servicecatalog.ValidHostID(c.Control.HostID) {
+		return errors.New("host/control IDs must be canonical")
 	}
 	ports := map[int]bool{}
-	for _, listener := range []struct{ name, address string }{
+	listeners := []struct{ name, address string }{
 		{"remote_addr", c.Server.RemoteAddr}, {"local_addr", c.Server.LocalAddr}, {"health_addr", c.Server.HealthAddr},
-	} {
+	}
+	if c.Server.ExternalAddr != "" {
+		listeners = append(listeners, struct{ name, address string }{"external_addr", c.Server.ExternalAddr})
+	}
+	for _, listener := range listeners {
 		host, port, err := endpoint(listener.address, true)
 		if err != nil {
 			return fmt.Errorf("server.%s: %w", listener.name, err)
 		}
-		if listener.name == "local_addr" && !net.ParseIP(host).IsLoopback() {
-			return errors.New("server.local_addr must bind a loopback IP")
+		// 本机入口和健康端口都只听回环地址：健康端口不验签，只给同机进程与经 SSH 的诊断用。
+		if (listener.name == "local_addr" || listener.name == "health_addr") && !net.ParseIP(host).IsLoopback() {
+			return fmt.Errorf("server.%s must bind a loopback IP", listener.name)
 		}
 		if ports[port] {
 			return errors.New("host gateway listener ports must be distinct")
@@ -108,9 +115,6 @@ func (c Config) Validate() error {
 	}
 	if c.Host.ID == c.Control.HostID && (net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() || port != 11112) {
 		return errors.New("control host must call GatewayControl directly on loopback port 11112")
-	}
-	if c.Control.KeyID == "" || len(c.Control.KeyID) > 128 || strings.ContainsAny(c.Control.KeyID, "/\\") || strings.ContainsFunc(c.Control.KeyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return errors.New("control.key_id is required and must be a bounded credential identifier")
 	}
 	for _, path := range []string{c.TLS.CertificateFile, c.TLS.KeyFile, c.TLS.CAFile, c.Control.KeyFile, c.Store.Path} {
 		if path == "" || path != strings.TrimSpace(path) || strings.ContainsAny(path, "\x00\r\n") {

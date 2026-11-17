@@ -19,15 +19,14 @@ func response(url string) *monitorpb.GetHostPolicyRsp {
 	return &monitorpb.GetHostPolicyRsp{
 		RetInfo:  &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
 		Channels: []*monitorpb.HostPolicyChannel{{ChannelType: "wecom", WebhookUrl: url}},
-		Watchdog: &monitorpb.HostWatchdogPolicy{MergeWindow: "15m0s"},
 	}
 }
 
-// 种子被中心的值覆盖；内容不变不重写；渠道变化时版本号加一；拉取失败保留旧文件。
-func TestSyncOverridesSeedAndKeepsCacheOnFailure(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "run", hostpolicy.FileName)
+// 已有的缓存被中心的值覆盖；内容不变不重写；渠道变化时版本号加一；拉取失败保留旧文件。
+func TestSyncOverridesCacheAndKeepsItOnFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host-agent", "host-policy.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	seed := hostpolicy.Policy{Source: hostpolicy.SourceSeed, Version: 3, NotificationChannels: []hostpolicy.Channel{{Type: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=seed"}}}
+	seed := hostpolicy.Policy{Version: 3, NotificationChannels: []hostpolicy.Channel{{Type: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=seed"}}}
 	require.NoError(t, hostpolicy.Write(path, seed))
 
 	current := response(wecom)
@@ -40,10 +39,8 @@ func TestSyncOverridesSeedAndKeepsCacheOnFailure(t *testing.T) {
 	require.Equal(t, Written, result)
 	saved, err := hostpolicy.Read(path)
 	require.NoError(t, err)
-	require.Equal(t, hostpolicy.SourceMonitor, saved.Source)
 	require.Equal(t, int64(4), saved.Version)
 	require.Equal(t, wecom, saved.NotificationChannels[0].WebhookURL)
-	require.Equal(t, "15m0s", saved.Watchdog.MergeWindow)
 
 	result, err = syncer.SyncOnce(t.Context())
 	require.NoError(t, err)
@@ -76,7 +73,7 @@ func TestSyncOverridesSeedAndKeepsCacheOnFailure(t *testing.T) {
 
 // Monitor 删光渠道时也同步（主机侧随之停止推送），缓存不存在时从版本 1 开始。
 func TestSyncWritesEmptyChannels(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "run", hostpolicy.FileName)
+	path := filepath.Join(t.TempDir(), "host-agent", "host-policy.json")
 	syncer, err := New(path, func(context.Context) (*monitorpb.GetHostPolicyRsp, error) {
 		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 	})

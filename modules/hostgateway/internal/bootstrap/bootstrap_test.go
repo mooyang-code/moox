@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -131,16 +130,8 @@ func TestHeartbeatFailureAndContinuousSyncWarning(t *testing.T) {
 	require.Len(t, warnings, 2)
 }
 
-func TestHealthAuthenticationAndServerTimeouts(t *testing.T) {
-	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "fixture")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "synthetic-health-secret")
-	handler, err := authenticatedHealthHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
-	require.NoError(t, err)
-	rsp := httptest.NewRecorder()
-	handler.ServeHTTP(rsp, httptest.NewRequest("GET", "/healthz", nil))
-	require.Equal(t, http.StatusUnauthorized, rsp.Code)
-	s := newHealthHTTPServer(handler)
+func TestHealthServerTimeouts(t *testing.T) {
+	s := newHealthHTTPServer(http.NotFoundHandler())
 	require.Positive(t, s.ReadHeaderTimeout)
 	require.Positive(t, s.ReadTimeout)
 	require.Positive(t, s.WriteTimeout)

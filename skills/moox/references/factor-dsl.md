@@ -88,7 +88,7 @@ cross_section_history: current     # 可选，只对截面因子有效：current
 | `boll`，window=30 | `boll__30` | `boll__30__mid` 等 |
 | `ma_fast`（可变） | `ma_fast__var` | `ma_fast__var` |
 
-策略规则里直接用列名；要读可变成员这一行**实际用的**参数，用 `params("成员键", "参数名")`（值来自结果行的系统列 `__params`，记录这一行所有成员实际用的参数，包括固定成员）：
+策略规则里直接用列名；要读可变成员这一行**实际用的**参数，用 `params("成员键", "参数名")`（值来自结果行的系统列 `__params`，只记录这一行各可变成员实际用的参数；固定成员不记，任务没有可变成员时这一列为空）：
 
 ```yaml
 rules:
@@ -100,7 +100,7 @@ rules:
     weight: {total: 1}
 ```
 
-完整规则（含长度上限、`__params` 的结构与可变成员的提交流程）见 `docs/模块/因子.md` 的「成员键与列名」「动态调参」两节与 `docs/模块/策略.md`；加成员时控制台和 `moox-cli setup factors` 都会直接打印成员键与列名。
+完整规则（含长度上限、`__params` 的结构与可变成员的提交流程）见 `docs/模块/因子.md` 的「成员键与列名」「动态调参」两节与 `docs/模块/策略.md`；加成员时控制台和 `moox-cli factor task apply` 都会直接打印成员键与列名。
 
 ### 函数清单
 
@@ -507,42 +507,35 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
 
 写入的是生产因子定义，属于外部写操作，每次都要用户确认。两种方式任选：
 
-### 方式 A：仓库因子库 + `moox-cli setup factors`（可重复执行，适合批量）
+### 方式 A：仓库因子库 + `moox-cli factor task apply`（可重复执行，适合批量）
 
 1. 把 7.2 的条目追加到 `modules/factor/factors/<库文件>.yaml`（同一文件里 `factor_id` 不能重复），再跑一次 `check` 确认整个库都能编译。
-2. 在用户的 `moox.toml` 里登记定义和成员：`[factors]` 必须是 `enabled = true`（否则命令什么也不导入，却照样返回成功）；
-   成员写在所属 `[[factors.tasks]]` 的 `members` 里（任务已有的不用重复写），先写 `status = "disabled"`，核对后再启用：
+2. 写一份因子任务文件（yaml，格式同仓库的 `config/setup/factor-tasks.yaml`，`source_dir` 相对这个文件所在的目录），登记定义和成员。
+   成员写在所属任务的 `members` 里（线上任务已有的成员也照写，内容相同算已存在），新成员先写 `status: disabled`：
 
-   ```toml
-   [factors]
-   enabled = true
-   source_dir = "./modules/factor/factors"
-
-   [[factors.definitions]]
-   factor_id = "zf_abs_mean"
-   file = "xbx.yaml"
-
-   [[factors.tasks]]
-   id = "ftask_spot_1m"
-   name = "现货一分钟"
-   space_id = "crypto"
-   source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-   freq = "1m"
-   members = [
-     { factor = "zf_abs_mean", status = "disabled" },   # → 列 zf_abs_mean
-   ]
+   ```yaml
+   source_dir: ./modules/factor/factors
+   tasks:
+     - id: ftask_spot_1m
+       name: 现货一分钟
+       space_id: crypto
+       source_dataset_id: dataset_dasftksvjhj2jom4vhd0
+       freq: 1m
+       members:
+         - {factor: zf_abs_mean, status: disabled}   # → 列 zf_abs_mean
+   definitions:
+     - {factor_id: zf_abs_mean, file: xbx.yaml}
    ```
 
-3. 执行（运维机，用户的 `moox.toml`）：
+3. 执行（运维机，仓库根目录）：
 
    ```bash
-   moox-cli setup factors --file ./moox.toml
+   moox-cli factor task apply --file ./my-factors.yaml
    ```
 
-   输出 JSON 的 `factors` 里先确认 `enabled` 为 true、`definitions` 等于登记的个数，再看每个任务与成员的结果：
-   逐项报告 `exists` / `created` / `conflict`（冲突不影响其余项），并打印每个成员的成员键与列名；配置里已去掉的成员只报告 `orphan`，不自动移除。FactorMgr 会重新编译定义，编不过会整体报错。
-   再次执行是幂等的：定义没变时记为 `unchanged`。
-4. 核对无误后把成员改成 `status = "enabled"` 再执行一次（启用不会自动补算历史；需要历史因子值时用 `moox-cli factor recalc submit` 指定范围）。
+   先只读核对线上已有的分类、定义、任务和成员：线上没有的新建，内容相同的记 `exists`；
+   有任何一项内容不同（`conflict`）就逐项列出差异、一项都不写，退出码非 0。每个成员打印成员键与列名；线上任务里多出来的成员只报告 `orphan`，不自动移除。FactorMgr 会重新编译定义，编不过会整体报错。
+4. 核对无误后用 `moox-cli factor member enable` 启用成员（启用不会自动补算历史；需要历史因子值时用 `moox-cli factor recalc submit` 指定范围），再把文件里的 `status` 改成 `enabled`，下次导入才不会报状态不同。
 5. 仓库里的因子库改动按项目规范提交。
 
 **同一个因子的多组参数**：定义里用 `params` 声明可调参数，一个定义可以用不同的固定参数多次加入同一个因子任务，
@@ -572,7 +565,7 @@ members = [
 
 | 想做的事 | 做法 |
 | --- | --- |
-| 多一组参数（如多一个窗口值） | 不改定义：往任务里加一个成员（`AddTaskMember`，或 `moox.toml` 里加成员后 `setup factors`），不影响正在跑的成员 |
+| 多一组参数（如多一个窗口值） | 不改定义：往任务里加一个成员（`AddTaskMember`，或在因子任务文件里加成员后 `factor task apply`），不影响正在跑的成员 |
 | 换表达式或算子，且不想中断现有结果 | 新建一个因子（新 `factor_id`，如 `xxx_v2`），任务里加新成员，策略切到新列后再停用旧成员 |
 | 原地改表达式、参数范围（`min`/`max`） | 走下面的流程（有一段空窗，会重新预热） |
 
@@ -582,7 +575,7 @@ members = [
 - 因子已被任务引用时，还要求定义兼容：**不能增删参数、改参数名、调参数顺序、改参数类型、改参数默认值**（成员键依赖默认值），**不能增删、改名、重排输出**。可以改的是表达式本身，以及参数的 `min` / `max`。
 - 已有成员的参数值必须仍满足新的范围，否则报“参数不再合法”；新定义让某个成员无法通过校验，整次更新失败。
 - 没有被任何任务引用的因子可以随便改（不受上面两条兼容限制）。
-- `moox-cli setup factors` 和 `moox-factor-mgr-cli import` 遇到“已存在但定义不同”只报 `conflict`，**不会替换**；改定义必须走 `factor update`。
+- `moox-cli factor task apply` 和 `moox-factor-mgr-cli import` 遇到“已存在但定义不同”只报 `conflict`，**不会替换**；改定义必须走 `factor update`。
 
 **流程**（运维机，用户的 `moox.toml`）：
 
@@ -603,7 +596,7 @@ members = [
 5. **重新启用成员**（`factor member enable`），等引擎下一次同步（最长约 1 分钟）并预热完成；预热依据回看窗口，长回看的因子要等本地序列重新就绪。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit`。
 6. **重新启用依赖它的策略实例**：定义哈希变了，引用它的策略实例要重新启用，不然继续停在旧状态。
 7. **验证**：按第 9 节核对定义、引擎同步和数值；确认结果列重新按期产出。
-8. **同步配置与库文件**：把改动同步到仓库因子库（或 `local/` 下的因子库）和用户的 `moox.toml` 登记；库文件与线上定义不一致，下次 `setup factors` 会报 `conflict`。
+8. **同步配置与库文件**：把改动同步到仓库因子库（或 `local/` 下的因子库）和用户的因子任务文件；库文件与线上定义不一致，下次 `factor task apply` 会报 `conflict`。
 
 **注意**：上线前不确定的改动，先用“新建因子 + 新成员”并行跑一段时间对比，再切换，比原地停用更安全；原地改只适合还没有策略依赖、或能接受空窗的场景。
 

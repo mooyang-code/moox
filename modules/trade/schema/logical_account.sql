@@ -2,10 +2,8 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
-    -- 当前归属的 Strategy 实例与会话
-    c_owner_instance_id TEXT,
-    c_owner_session_id TEXT,
-    c_auth_fence TEXT NOT NULL DEFAULT '',
+    -- 关闭到哪个会话为止（会话的开始时刻，毫秒）：开始时刻不大于它的会话的目标一律不再接受
+    c_closed_through INTEGER NOT NULL DEFAULT 0,
     c_execution_mode TEXT NOT NULL,
     c_settlement_asset TEXT NOT NULL,
     -- 下单设置与资金设置：空对象表示全部取默认值
@@ -59,10 +57,6 @@ CREATE TABLE IF NOT EXISTS t_logical_account_members (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_members_trading_account
 ON t_logical_account_members (c_space_id, c_trading_account_id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_instance
-ON t_logical_accounts (c_space_id, c_owner_instance_id)
-WHERE c_owner_instance_id IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
@@ -71,6 +65,8 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_command_sequence INTEGER NOT NULL,
     c_instance_id TEXT NOT NULL DEFAULT '',
     c_session_id TEXT NOT NULL DEFAULT '',
+    -- 目标所属会话的开始时刻（毫秒）：比较会话先后用
+    c_session_started_at INTEGER NOT NULL,
     c_strategy_id TEXT NOT NULL DEFAULT '',
     c_bar_end_time INTEGER NOT NULL DEFAULT 0,
     c_valid_until INTEGER NOT NULL DEFAULT 0,
@@ -87,6 +83,7 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
         ON DELETE CASCADE,
     CHECK (c_command_sequence > 0),
     CHECK (c_instance_id <> '' AND c_session_id <> '' AND
+           c_session_started_at > 0 AND
            c_strategy_id <> '' AND c_bar_end_time > 0 AND
            c_valid_until > c_bar_end_time),
     CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED', 'EXPIRED')),

@@ -68,18 +68,14 @@ type HistoryResult struct {
 // 标的第一根 K 线之前的缺失视为“尚无历史”（新上市）；范围内一根都没有的标的不报。
 // 数据集不在任何已登记的计划里时返回 nil。
 func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequencyName string) (*HistoryResult, error) {
-	if c == nil || c.Plans == nil || c.Rows == nil {
+	if c == nil || c.Timeline == nil || c.Rows == nil {
 		return nil, fmt.Errorf("kline checker is not initialized")
 	}
 	frequency, err := marketdata.ParseFrequency(frequencyName)
 	if err != nil {
 		return nil, err
 	}
-	records, err := c.Plans.ListAll(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := BuildTimeline(records)
+	timeline, err := loadTimeline(ctx, c.Timeline, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +150,7 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 			// 先比对根数：一根都没有的标的没有历史，根数齐全的标的没有缺口，只有其余的标的才读行定位缺口。
 			detail, complete := batch, 0
 			if counting {
-				counts, err := countPresent(ctx, counter, c.Auth, spaceID, datasetID, frequencyName, seriesTag, batch, bars[0], end)
+				counts, err := countPresent(ctx, counter, spaceID, datasetID, frequencyName, seriesTag, batch, bars[0], end)
 				if err != nil {
 					log.WarnContextf(ctx, "collector history count failed, falling back to row reads space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
 				} else {
@@ -274,11 +270,7 @@ func (b *Backfiller) ScanHistory(ctx context.Context, spaceID string) (*HistoryR
 	}
 	b.mu.Unlock()
 
-	records, err := b.Plans.ListAll(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := BuildTimeline(records)
+	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
 	if err != nil {
 		return nil, err
 	}

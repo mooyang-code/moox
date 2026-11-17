@@ -15,6 +15,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorexpr"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"gorm.io/gorm"
 )
 
@@ -43,7 +44,7 @@ type CatalogAPI interface {
 	DeleteCategory(ctx context.Context, categoryID string) error
 	SetFactorCategory(ctx context.Context, factorID, categoryID string) (domain.FactorDef, error)
 	SubmitParams(ctx context.Context, writer, taskID string, period time.Time, requestID string, submissions []catalog.MemberSubmission) ([]store.ParamSubmitOutcome, error)
-	GetParams(ctx context.Context, taskID string) ([]domain.FactorTaskMember, error)
+	GetParams(ctx context.Context, taskID string) ([]domain.MemberParamState, error)
 }
 
 // RecalcJob is the RPC-facing representation of one durable recalc request.
@@ -102,7 +103,7 @@ func WithEngineAPI(engine EngineAPI) ServiceOption {
 	return func(s *Service) { s.engine = engine }
 }
 
-// WithMutationGate 设置修改类接口的生命周期门禁：返回错误（暂停、恢复追赶、重置中）时，创建、修改、删除、启停因子与因子任务、
+// WithMutationGate 设置修改类接口的生命周期门禁：返回错误（暂停、恢复追赶中）时，创建、修改、删除、启停因子与因子任务、
 // 提交与取消重算都被拒绝；读接口与引擎的同步、心跳、领取任务不受影响。不设置表示一直放行。
 func WithMutationGate(gate func() error) ServiceOption {
 	return func(s *Service) { s.mutationGate = gate }
@@ -113,6 +114,11 @@ func (s *Service) mutationAllowed() error {
 		return nil
 	}
 	return s.mutationGate()
+}
+
+// WithLifecycle 设置模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它）；不设置时两个方法回答“还没有就绪”。
+func WithLifecycle(life *lifecycle.Controller) ServiceOption {
+	return func(s *Service) { s.life = life }
 }
 
 // WithPreviewer 启用 PreviewFactor；不设置时该接口返回错误。
@@ -129,6 +135,7 @@ type Service struct {
 	previewer Previewer
 	// mutationGate 是修改类接口的生命周期门禁（见 WithMutationGate）。
 	mutationGate func() error
+	life         *lifecycle.Controller
 }
 
 func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Service {
@@ -629,7 +636,7 @@ func invalid(err error) *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: err.Error()}
 }
 
-// unavailable 表示服务暂时不接受这个操作（暂停、重置中）。
+// unavailable 表示服务暂时不接受这个操作（暂停、恢复追赶中）。
 func unavailable(err error) *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: err.Error()}
 }

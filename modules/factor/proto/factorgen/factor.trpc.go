@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -84,6 +85,11 @@ type FactorMgrService interface {
 	GetUdf(ctx context.Context, req *GetUdfReq) (*GetUdfRsp, error)
 
 	ActivateUdf(ctx context.Context, req *ActivateUdfReq) (*ActivateUdfRsp, error)
+	// GetLifecycle GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+	//  暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复因子管理模块。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
 }
 
 func FactorMgrService_CreateFactorTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -680,6 +686,42 @@ func FactorMgrService_ActivateUdf_Handler(svr interface{}, ctx context.Context, 
 	return rsp, nil
 }
 
+func FactorMgrService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.GetLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.ControlLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorMgr",
@@ -816,6 +858,14 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.factor.FactorMgr/ActivateUdf",
 			Func: FactorMgrService_ActivateUdf_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/GetLifecycle",
+			Func: FactorMgrService_GetLifecycle_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ControlLifecycle",
+			Func: FactorMgrService_ControlLifecycle_Handler,
 		},
 	},
 }
@@ -989,6 +1039,267 @@ func RegisterFactorEngineService(s server.Service, svr FactorEngineService) {
 	}
 }
 
+// EngineControlService defines service.
+type EngineControlService interface {
+	// OpenReplay OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+	OpenReplay(ctx context.Context, req *OpenReplayReq) (*OpenReplayRsp, error)
+	// StepReplay StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+	//  一期就放不下时拒绝，要减少 columns。
+	StepReplay(ctx context.Context, req *StepReplayReq) (*StepReplayRsp, error)
+	// CloseReplay CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+	CloseReplay(ctx context.Context, req *CloseReplayReq) (*CloseReplayRsp, error)
+	// GetLifecycle GetLifecycle 读引擎模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行引擎模块。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error)
+	// CheckTask CheckTask 立即重查一个因子任务能不能计算（不等每 30 秒一轮），结果同时更新随心跳上报的检查结果。
+	CheckTask(ctx context.Context, req *CheckTaskReq) (*CheckTaskRsp, error)
+	// WriteSeries WriteSeries 是本地写入：导入服务用一批行整段替换标的在 [from, to) 内的本地数据。本地存储同一时刻只能由引擎进程打开，
+	//  所以写入只能经过引擎；引擎未就绪时也接受写入。
+	WriteSeries(ctx context.Context, req *WriteSeriesReq) (*WriteSeriesRsp, error)
+	// GetSeriesFields GetSeriesFields 返回数据集的字段表（名称、类型、填充规则），导入服务据此解析文件。
+	GetSeriesFields(ctx context.Context, req *GetSeriesFieldsReq) (*GetSeriesFieldsRsp, error)
+	// CheckSeriesSubject CheckSeriesSubject 判断标的是否在数据集的标签范围内（导入不自动绑定标的）。
+	CheckSeriesSubject(ctx context.Context, req *CheckSeriesSubjectReq) (*CheckSeriesSubjectRsp, error)
+	// GetSeriesBounds GetSeriesBounds 返回标的在本地的最早与最新时间。
+	GetSeriesBounds(ctx context.Context, req *GetSeriesBoundsReq) (*GetSeriesBoundsRsp, error)
+}
+
+func EngineControlService_OpenReplay_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &OpenReplayReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).OpenReplay(ctx, reqbody.(*OpenReplayReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_StepReplay_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &StepReplayReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).StepReplay(ctx, reqbody.(*StepReplayReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_CloseReplay_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CloseReplayReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).CloseReplay(ctx, reqbody.(*CloseReplayReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_GetLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.GetLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).GetLifecycle(ctx, reqbody.(*commonpb.GetLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_ControlLifecycle_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &commonpb.ControlLifecycleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).ControlLifecycle(ctx, reqbody.(*commonpb.ControlLifecycleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_CheckTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CheckTaskReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).CheckTask(ctx, reqbody.(*CheckTaskReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_WriteSeries_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &WriteSeriesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).WriteSeries(ctx, reqbody.(*WriteSeriesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_GetSeriesFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetSeriesFieldsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).GetSeriesFields(ctx, reqbody.(*GetSeriesFieldsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_CheckSeriesSubject_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CheckSeriesSubjectReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).CheckSeriesSubject(ctx, reqbody.(*CheckSeriesSubjectReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func EngineControlService_GetSeriesBounds_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetSeriesBoundsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(EngineControlService).GetSeriesBounds(ctx, reqbody.(*GetSeriesBoundsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// EngineControlServer_ServiceDesc descriptor for server.RegisterService.
+var EngineControlServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.factor.EngineControl",
+	HandlerType: ((*EngineControlService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.factor.EngineControl/OpenReplay",
+			Func: EngineControlService_OpenReplay_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/StepReplay",
+			Func: EngineControlService_StepReplay_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/CloseReplay",
+			Func: EngineControlService_CloseReplay_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/GetLifecycle",
+			Func: EngineControlService_GetLifecycle_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/ControlLifecycle",
+			Func: EngineControlService_ControlLifecycle_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/CheckTask",
+			Func: EngineControlService_CheckTask_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/WriteSeries",
+			Func: EngineControlService_WriteSeries_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/GetSeriesFields",
+			Func: EngineControlService_GetSeriesFields_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/CheckSeriesSubject",
+			Func: EngineControlService_CheckSeriesSubject_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.EngineControl/GetSeriesBounds",
+			Func: EngineControlService_GetSeriesBounds_Handler,
+		},
+	},
+}
+
+// RegisterEngineControlService registers service.
+func RegisterEngineControlService(s server.Service, svr EngineControlService) {
+	if err := s.Register(&EngineControlServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("EngineControl register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedFactorMgr struct{}
@@ -1095,6 +1406,18 @@ func (s *UnimplementedFactorMgr) ActivateUdf(ctx context.Context, req *ActivateU
 	return nil, errors.New("rpc ActivateUdf of service FactorMgr is not implemented")
 }
 
+// GetLifecycle GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+//
+//	暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
+func (s *UnimplementedFactorMgr) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("rpc GetLifecycle of service FactorMgr is not implemented")
+}
+
+// ControlLifecycle ControlLifecycle 暂停、恢复因子管理模块。
+func (s *UnimplementedFactorMgr) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("rpc ControlLifecycle of service FactorMgr is not implemented")
+}
+
 type UnimplementedFactorEngine struct{}
 
 func (s *UnimplementedFactorEngine) SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq) (*SyncEngineCatalogRsp, error) {
@@ -1116,6 +1439,62 @@ func (s *UnimplementedFactorEngine) GetTaskParams(ctx context.Context, req *GetT
 // GetUdfModule GetUdfModule 按版本哈希取一个自定义算子模块的 wasm 字节。
 func (s *UnimplementedFactorEngine) GetUdfModule(ctx context.Context, req *GetUdfModuleReq) (*GetUdfModuleRsp, error) {
 	return nil, errors.New("rpc GetUdfModule of service FactorEngine is not implemented")
+}
+
+type UnimplementedEngineControl struct{}
+
+// OpenReplay OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+func (s *UnimplementedEngineControl) OpenReplay(ctx context.Context, req *OpenReplayReq) (*OpenReplayRsp, error) {
+	return nil, errors.New("rpc OpenReplay of service EngineControl is not implemented")
+}
+
+// StepReplay StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+//
+//	一期就放不下时拒绝，要减少 columns。
+func (s *UnimplementedEngineControl) StepReplay(ctx context.Context, req *StepReplayReq) (*StepReplayRsp, error) {
+	return nil, errors.New("rpc StepReplay of service EngineControl is not implemented")
+}
+
+// CloseReplay CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+func (s *UnimplementedEngineControl) CloseReplay(ctx context.Context, req *CloseReplayReq) (*CloseReplayRsp, error) {
+	return nil, errors.New("rpc CloseReplay of service EngineControl is not implemented")
+}
+
+// GetLifecycle GetLifecycle 读引擎模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+func (s *UnimplementedEngineControl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("rpc GetLifecycle of service EngineControl is not implemented")
+}
+
+// ControlLifecycle ControlLifecycle 暂停、恢复与放行引擎模块。
+func (s *UnimplementedEngineControl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("rpc ControlLifecycle of service EngineControl is not implemented")
+}
+
+// CheckTask CheckTask 立即重查一个因子任务能不能计算（不等每 30 秒一轮），结果同时更新随心跳上报的检查结果。
+func (s *UnimplementedEngineControl) CheckTask(ctx context.Context, req *CheckTaskReq) (*CheckTaskRsp, error) {
+	return nil, errors.New("rpc CheckTask of service EngineControl is not implemented")
+}
+
+// WriteSeries WriteSeries 是本地写入：导入服务用一批行整段替换标的在 [from, to) 内的本地数据。本地存储同一时刻只能由引擎进程打开，
+//
+//	所以写入只能经过引擎；引擎未就绪时也接受写入。
+func (s *UnimplementedEngineControl) WriteSeries(ctx context.Context, req *WriteSeriesReq) (*WriteSeriesRsp, error) {
+	return nil, errors.New("rpc WriteSeries of service EngineControl is not implemented")
+}
+
+// GetSeriesFields GetSeriesFields 返回数据集的字段表（名称、类型、填充规则），导入服务据此解析文件。
+func (s *UnimplementedEngineControl) GetSeriesFields(ctx context.Context, req *GetSeriesFieldsReq) (*GetSeriesFieldsRsp, error) {
+	return nil, errors.New("rpc GetSeriesFields of service EngineControl is not implemented")
+}
+
+// CheckSeriesSubject CheckSeriesSubject 判断标的是否在数据集的标签范围内（导入不自动绑定标的）。
+func (s *UnimplementedEngineControl) CheckSeriesSubject(ctx context.Context, req *CheckSeriesSubjectReq) (*CheckSeriesSubjectRsp, error) {
+	return nil, errors.New("rpc CheckSeriesSubject of service EngineControl is not implemented")
+}
+
+// GetSeriesBounds GetSeriesBounds 返回标的在本地的最早与最新时间。
+func (s *UnimplementedEngineControl) GetSeriesBounds(ctx context.Context, req *GetSeriesBoundsReq) (*GetSeriesBoundsRsp, error) {
+	return nil, errors.New("rpc GetSeriesBounds of service EngineControl is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1191,6 +1570,11 @@ type FactorMgrClientProxy interface {
 	GetUdf(ctx context.Context, req *GetUdfReq, opts ...client.Option) (rsp *GetUdfRsp, err error)
 
 	ActivateUdf(ctx context.Context, req *ActivateUdfReq, opts ...client.Option) (rsp *ActivateUdfRsp, err error)
+	// GetLifecycle GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+	//  暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复因子管理模块。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
 }
 
 type FactorMgrClientProxyImpl struct {
@@ -1862,6 +2246,46 @@ func (c *FactorMgrClientProxyImpl) ActivateUdf(ctx context.Context, req *Activat
 	return rsp, nil
 }
 
+func (c *FactorMgrClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetLifecycle")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("GetLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.GetLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ControlLifecycle")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ControlLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.ControlLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorEngineClientProxy defines service client proxy
 type FactorEngineClientProxy interface {
 	SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq, opts ...client.Option) (rsp *SyncEngineCatalogRsp, err error)
@@ -2000,6 +2424,241 @@ func (c *FactorEngineClientProxyImpl) GetUdfModule(ctx context.Context, req *Get
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetUdfModuleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// EngineControlClientProxy defines service client proxy
+type EngineControlClientProxy interface {
+	// OpenReplay OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+	OpenReplay(ctx context.Context, req *OpenReplayReq, opts ...client.Option) (rsp *OpenReplayRsp, err error)
+	// StepReplay StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+	//  一期就放不下时拒绝，要减少 columns。
+	StepReplay(ctx context.Context, req *StepReplayReq, opts ...client.Option) (rsp *StepReplayRsp, err error)
+	// CloseReplay CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+	CloseReplay(ctx context.Context, req *CloseReplayReq, opts ...client.Option) (rsp *CloseReplayRsp, err error)
+	// GetLifecycle GetLifecycle 读引擎模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+	GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (rsp *commonpb.GetLifecycleRsp, err error)
+	// ControlLifecycle ControlLifecycle 暂停、恢复与放行引擎模块。
+	ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (rsp *commonpb.ControlLifecycleRsp, err error)
+	// CheckTask CheckTask 立即重查一个因子任务能不能计算（不等每 30 秒一轮），结果同时更新随心跳上报的检查结果。
+	CheckTask(ctx context.Context, req *CheckTaskReq, opts ...client.Option) (rsp *CheckTaskRsp, err error)
+	// WriteSeries WriteSeries 是本地写入：导入服务用一批行整段替换标的在 [from, to) 内的本地数据。本地存储同一时刻只能由引擎进程打开，
+	//  所以写入只能经过引擎；引擎未就绪时也接受写入。
+	WriteSeries(ctx context.Context, req *WriteSeriesReq, opts ...client.Option) (rsp *WriteSeriesRsp, err error)
+	// GetSeriesFields GetSeriesFields 返回数据集的字段表（名称、类型、填充规则），导入服务据此解析文件。
+	GetSeriesFields(ctx context.Context, req *GetSeriesFieldsReq, opts ...client.Option) (rsp *GetSeriesFieldsRsp, err error)
+	// CheckSeriesSubject CheckSeriesSubject 判断标的是否在数据集的标签范围内（导入不自动绑定标的）。
+	CheckSeriesSubject(ctx context.Context, req *CheckSeriesSubjectReq, opts ...client.Option) (rsp *CheckSeriesSubjectRsp, err error)
+	// GetSeriesBounds GetSeriesBounds 返回标的在本地的最早与最新时间。
+	GetSeriesBounds(ctx context.Context, req *GetSeriesBoundsReq, opts ...client.Option) (rsp *GetSeriesBoundsRsp, err error)
+}
+
+type EngineControlClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewEngineControlClientProxy = func(opts ...client.Option) EngineControlClientProxy {
+	return &EngineControlClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *EngineControlClientProxyImpl) OpenReplay(ctx context.Context, req *OpenReplayReq, opts ...client.Option) (*OpenReplayRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/OpenReplay")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("OpenReplay")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &OpenReplayRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) StepReplay(ctx context.Context, req *StepReplayReq, opts ...client.Option) (*StepReplayRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/StepReplay")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("StepReplay")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &StepReplayRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) CloseReplay(ctx context.Context, req *CloseReplayReq, opts ...client.Option) (*CloseReplayRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/CloseReplay")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("CloseReplay")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CloseReplayRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) GetLifecycle(ctx context.Context, req *commonpb.GetLifecycleReq, opts ...client.Option) (*commonpb.GetLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/GetLifecycle")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("GetLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.GetLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) ControlLifecycle(ctx context.Context, req *commonpb.ControlLifecycleReq, opts ...client.Option) (*commonpb.ControlLifecycleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/ControlLifecycle")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("ControlLifecycle")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &commonpb.ControlLifecycleRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) CheckTask(ctx context.Context, req *CheckTaskReq, opts ...client.Option) (*CheckTaskRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/CheckTask")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("CheckTask")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CheckTaskRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) WriteSeries(ctx context.Context, req *WriteSeriesReq, opts ...client.Option) (*WriteSeriesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/WriteSeries")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("WriteSeries")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &WriteSeriesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) GetSeriesFields(ctx context.Context, req *GetSeriesFieldsReq, opts ...client.Option) (*GetSeriesFieldsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/GetSeriesFields")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("GetSeriesFields")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetSeriesFieldsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) CheckSeriesSubject(ctx context.Context, req *CheckSeriesSubjectReq, opts ...client.Option) (*CheckSeriesSubjectRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/CheckSeriesSubject")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("CheckSeriesSubject")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CheckSeriesSubjectRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *EngineControlClientProxyImpl) GetSeriesBounds(ctx context.Context, req *GetSeriesBoundsReq, opts ...client.Option) (*GetSeriesBoundsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.EngineControl/GetSeriesBounds")
+	msg.WithCalleeServiceName(EngineControlServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("EngineControl")
+	msg.WithCalleeMethod("GetSeriesBounds")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetSeriesBoundsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,11 +22,11 @@ func parsePreview(t *testing.T, raw string) map[string]any {
 }
 
 func TestSetupFirewallOnlyPreviewsWithoutYes(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	called := 0
 	deps := setupDeps{
-		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
-		ensureFirewall: func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
+		load: func(string) (*setupSnapshot, error) { return snapshot, nil },
+		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			called++
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
@@ -45,30 +45,20 @@ func TestSetupFirewallOnlyPreviewsWithoutYes(t *testing.T) {
 	assert.Equal(t, "open_firewall_ports", preview["action"])
 	assert.NotEmpty(t, preview["targets"])
 
-	snapshot = setupSnapshot(t)
+	snapshot = testSetupSnapshot(t)
 	assert.Contains(t, run("--yes"), `"status":"ready"`)
 	assert.Equal(t, 1, called)
 }
 
-func TestSetupWatchdogRemoveOnlyPreviewsWithoutYes(t *testing.T) {
-	snapshot := setupSnapshot(t)
-	_, removes, out, err := runWatchdogCommand(t, snapshot, "--remove", "--host", "compute")
-	require.NoError(t, err)
-	assert.Empty(t, removes, "没有 --yes 不能移除守护")
-	preview := parsePreview(t, out)
-	assert.Equal(t, "remove_watchdog", preview["action"])
-	assert.Equal(t, []any{"compute"}, preview["hosts"])
-}
-
 func TestSetupSyncDeploymentsOnlyPreviewsWithoutYes(t *testing.T) {
-	snapshot := setupSnapshot(t)
+	snapshot := testSetupSnapshot(t)
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) {
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) {
 		t.Fatal("预览不能连接网关")
 		return nil, nil
 	}
 	t.Cleanup(func() { openCommandGateway = previous })
-	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupSnapshot, error) { return snapshot, nil }})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
@@ -124,7 +114,7 @@ func TestDestructiveCommandsNoLongerHaveLegacyConfirmFlags(t *testing.T) {
 		name string
 		flag func(string) bool
 	}{
-		{"collector task purge", func(n string) bool { return collectorTaskPurgeCmd.Flags().Lookup(n) != nil }},
+		{"collector task delete-result", func(n string) bool { return collectorResultDeleteCmd.Flags().Lookup(n) != nil }},
 		{"collector function delete", func(n string) bool { return collectorFunctionDeleteCmd.Flags().Lookup(n) != nil }},
 		{"firewall add", func(n string) bool { return lighthouseFirewallAddCmd.Flags().Lookup(n) != nil }},
 		{"firewall open", func(n string) bool { return lighthouseFirewallOpenCmd.Flags().Lookup(n) != nil }},

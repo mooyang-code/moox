@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/udfhost"
 	"github.com/mooyang-code/moox/packages/factorudf"
-	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -409,14 +408,14 @@ func (r *Runtime) loadModulesAtStart(ctx context.Context) {
 	}
 }
 
-// modulesCheck 是任务的生命周期检查项：引用的自定义算子模块必须就绪。任务不引用自定义算子时没有这一项。
-func (r *Runtime) modulesCheck(set domain.EngineTask) (lifecycle.Check, bool) {
+// modulesCheck 是任务的计算前检查项：引用的自定义算子模块必须就绪。任务不引用自定义算子时没有这一项。
+func (r *Runtime) modulesCheck(set domain.EngineTask) (domain.TaskCheck, bool) {
 	if r.udf == nil {
-		return lifecycle.Check{}, false
+		return domain.TaskCheck{}, false
 	}
 	refs := refsOfTasks([]domain.EngineTask{set})
 	if len(refs) == 0 {
-		return lifecycle.Check{}, false
+		return domain.TaskCheck{}, false
 	}
 	states := map[string]domain.UDFModuleStatus{}
 	for _, s := range r.udf.Status() {
@@ -433,13 +432,13 @@ func (r *Runtime) modulesCheck(set domain.EngineTask) (lifecycle.Check, bool) {
 				detail += "：" + s.Error
 			}
 		}
-		return lifecycle.Check{
-			Name: "自定义算子模块", Status: lifecycle.CheckFail,
+		return domain.TaskCheck{
+			Name: modulesCheckName, Status: domain.TaskCheckFail,
 			Message: fmt.Sprintf("udf.%s@%.12s 没有就绪（%s）", ref.name, ref.hash, detail),
 			Remedy:  "确认管理端可达（引擎按退避自动拉取），或在管理端检查该版本是否存在",
 		}, true
 	}
-	return lifecycle.Check{Name: "自定义算子模块", Status: lifecycle.CheckPass}, true
+	return domain.TaskCheck{Name: modulesCheckName, Status: domain.TaskCheckPass}, true
 }
 
 // observeUDF 记录一批自定义算子调用的指标；失败时打一行带原因的日志（一批调用一行，不随标的数放大）。

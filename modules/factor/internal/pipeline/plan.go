@@ -15,11 +15,9 @@ type LiveInput struct {
 	Set     domain.FactorTask
 	Members []domain.MemberDef
 	// Params 是这一期各成员用的参数（成员键 → 快照）。
-	Params         map[string]domain.ParamSnapshot
-	PeriodTime     time.Time
-	Universe       []string
-	UpstreamFailed []string
-	// UniverseSeries、UpstreamFailedSeries 是统一数据集事件里按序列的全集与失败名单；非空时按序列处理（见 Plan.ExpectedSeries）。
+	Params     map[string]domain.ParamSnapshot
+	PeriodTime time.Time
+	// UniverseSeries、UpstreamFailedSeries 是周期完成事件里按序列的全集与失败名单（所有数据集的事件都带）。
 	UniverseSeries       []seriesset.Series
 	UpstreamFailedSeries []seriesset.Series
 	CarryColumns         []string
@@ -60,32 +58,16 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	expected := uniqueSorted(input.Universe)
-	upstreamFailed := intersectLists(expected, input.UpstreamFailed)
-	failedTask := make(map[string]struct{}, len(upstreamFailed))
-	for _, subject := range upstreamFailed {
-		failedTask[subject] = struct{}{}
-	}
-	available := make([]string, 0, len(expected)-len(upstreamFailed))
-	for _, subject := range expected {
-		if _, failed := failedTask[subject]; !failed {
-			available = append(available, subject)
-		}
-	}
-	var expectedSeries, upstreamFailedSeries []seriesset.Series
-	if len(input.UniverseSeries) > 0 {
-		// 统一数据集：全集按序列。标的口径由序列推出：Available 是至少有一条序列没有上游失败的标的，
-		// 只有现货失败的标的、永续照常可算，所以不能因为标的出现在失败名单里就整体不读。
-		expectedSeries = uniqueSeriesSorted(input.UniverseSeries)
-		upstreamFailedSeries = intersectSeries(uniqueSeriesSorted(input.UpstreamFailedSeries), expectedSeries)
-		expected = seriesSubjects(expectedSeries)
-		upstreamFailed = seriesSubjects(upstreamFailedSeries)
-		available = seriesSubjects(differenceSeries(expectedSeries, upstreamFailedSeries))
-	}
+	// 全集按序列，标的口径由序列推出：Available 是至少有一条序列没有上游失败的标的，
+	// 只有现货失败的标的、永续照常可算，所以不能因为标的出现在失败名单里就整体不读。
+	expectedSeries := uniqueSeriesSorted(input.UniverseSeries)
+	upstreamFailedSeries := intersectSeries(uniqueSeriesSorted(input.UpstreamFailedSeries), expectedSeries)
 	return Plan{
 		Mode: ModeLive, Set: input.Set, Members: members, Params: input.Params, PeriodTime: target,
 		TargetStart: window[0], TargetEnd: target.Add(duration),
-		Expected: expected, Available: available, UpstreamFailed: upstreamFailed,
+		Expected:       seriesSubjects(expectedSeries),
+		Available:      seriesSubjects(differenceSeries(expectedSeries, upstreamFailedSeries)),
+		UpstreamFailed: seriesSubjects(upstreamFailedSeries),
 		ExpectedSeries: expectedSeries, UpstreamFailedSeries: upstreamFailedSeries,
 		CarryColumns: uniqueSorted(input.CarryColumns), WriteCarry: true,
 		TriggerEventID: strings.TrimSpace(input.TriggerEventID), Budget: input.Budget,

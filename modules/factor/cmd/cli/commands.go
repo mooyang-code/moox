@@ -418,10 +418,6 @@ func newRequestID() (string, error) {
 }
 
 func newStorageClient(cfg runtimeConfig) (*storageio.Client, func() error, error) {
-	requestID, err := newRequestID()
-	if err != nil {
-		return nil, nil, err
-	}
 	if cfg.GatewayClient.Caller != "factor-mgr" {
 		return nil, nil, errors.New("gateway_client.caller must be factor-mgr")
 	}
@@ -429,7 +425,7 @@ func newStorageClient(cfg runtimeConfig) (*storageio.Client, func() error, error
 	if err != nil {
 		return nil, nil, err
 	}
-	return storageio.NewGatewayClient(gateway, storageio.AuthInfo(requestID)), gateway.Close, nil
+	return storageio.NewGatewayClient(gateway), gateway.Close, nil
 }
 
 // addDefaultMember 把定义作为参数全取默认值的固定成员加入任务（成员键就是因子 ID）。

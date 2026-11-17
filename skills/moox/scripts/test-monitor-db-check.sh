@@ -73,15 +73,11 @@ db.close()
 EOF
 printf '%s\n' '2026-10-24 10:35:52.437	INFO	monitor_stale_checks_pruned count=1 checks=[dataset:old:1m]' 'other line' >"${LOG}"
 
-cat >"${TMP}/env" <<EOF
-MOOX_RELEASE_HOST_CONTROL=ubuntu@control.example.com
-EOF
-export MOOX_RELEASE_ENV="${TMP}/env"
 export PATH="${STUBS}:${PATH}"
 export MOOX_MONITOR_DB="${DB}" MOOX_MONITOR_LOG="${LOG}"
 before="$(shasum "${DB}" | cut -d' ' -f1)"
 
-out="$("${SCRIPT}" --host control)" || fail "脚本执行失败：${out}"
+out="$("${SCRIPT}" --host ubuntu@control.example.com)" || fail "脚本执行失败：${out}"
 grep -q "default:dataset:firing:1m \[firing\]" <<<"${out}" || fail "缺少未恢复告警：${out}"
 grep -q "最近一次检查：数据落后 3 根" <<<"${out}" || fail "缺少最近一次检查结果：${out}"
 grep -q "default:other:1m" <<<"${out}" && fail "ok 状态的告警不该列出"
@@ -94,10 +90,12 @@ grep -q "view_live_kline_1m" <<<"${out}" && fail "刚上报的视图不该列为
 grep -q "monitor_stale_checks_pruned count=1" <<<"${out}" || fail "缺少清理日志：${out}"
 [[ "$(shasum "${DB}" | cut -d' ' -f1)" == "${before}" ]] || fail "数据库被修改了"
 
-# 参数校验：未知主机别名、未配置、路径带危险字符。
-if out="$("${SCRIPT}" --host nope 2>&1)"; then fail "未配置的主机应报错"; fi
-grep -q "MOOX_RELEASE_HOST_NOPE" <<<"${out}" || fail "错误信息应指出缺少的变量：${out}"
-if out="$(MOOX_MONITOR_DB="/tmp/x;rm -rf /" "${SCRIPT}" 2>&1)"; then fail "危险路径应报错"; fi
+# 参数校验：没给主机、主机不是 user@host、路径带危险字符。
+if out="$("${SCRIPT}" 2>&1)"; then fail "没给主机应报错"; fi
+grep -q -- "--host" <<<"${out}" || fail "没给主机时应打印用法：${out}"
+if out="$("${SCRIPT}" --host 'control;id' 2>&1)"; then fail "不合法的主机应报错"; fi
+grep -q "user@host" <<<"${out}" || fail "主机格式的报错不对：${out}"
+if out="$(MOOX_MONITOR_DB="/tmp/x;rm -rf /" "${SCRIPT}" --host ubuntu@control.example.com 2>&1)"; then fail "危险路径应报错"; fi
 grep -q "绝对路径" <<<"${out}" || fail "危险路径的报错不对：${out}"
 
 echo "OK"

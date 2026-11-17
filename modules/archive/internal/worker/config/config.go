@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -63,14 +64,13 @@ func ParseBytes(raw string) (int64, error) {
 
 // Config 是 worker 的应用配置（config/app.yaml）。
 type Config struct {
-	GatewayClient   gatewayclient.ExternalFileConfig `yaml:"gateway_client"`
-	StorageAuthFile string                           `yaml:"storage_auth_file"`
-	Worker          WorkerSection                    `yaml:"worker"`
-	Staging         StagingSection                   `yaml:"staging"`
-	Pacing          PacingSection                    `yaml:"pacing"`
-	Health          HealthSection                    `yaml:"health"`
-	DataAPI         DataAPISection                   `yaml:"data_api"`
-	Maintenance     MaintenanceSection               `yaml:"maintenance"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	Worker        WorkerSection            `yaml:"worker"`
+	Staging       StagingSection           `yaml:"staging"`
+	Pacing        PacingSection            `yaml:"pacing"`
+	Health        HealthSection            `yaml:"health"`
+	DataAPI       DataAPISection           `yaml:"data_api"`
+	Maintenance   MaintenanceSection       `yaml:"maintenance"`
 	// ObjectStore 是导出文件的对象存储副本；整段省略（nil）表示不使用。
 	ObjectStore *objectstore.Config `yaml:"object_store"`
 	sourcePath  string
@@ -128,7 +128,6 @@ type MaintenanceSection struct {
 func Default() *Config {
 	host, _ := os.Hostname()
 	return &Config{
-		StorageAuthFile: "../secrets/storage-primary-auth.secret",
 		Worker: WorkerSection{
 			WorkerID: Caller + "@" + host, ExportFormat: "csv.gz", MinFreeBytes: ByteSize(5 << 30),
 			HeartbeatInterval: 10 * time.Second, PullInterval: 5 * time.Second,
@@ -178,9 +177,6 @@ func (c *Config) Validate() error {
 	}
 	if err := c.GatewayClient.Validate(); err != nil {
 		return err
-	}
-	if strings.TrimSpace(c.StorageAuthFile) == "" {
-		return fmt.Errorf("storage_auth_file 不能为空")
 	}
 	w := c.Worker
 	if strings.TrimSpace(w.WorkerID) == "" || strings.ContainsAny(w.WorkerID, " \t\r\n/\\") {
@@ -352,15 +348,13 @@ func (c *Config) StatePath() string {
 	return filepath.Join(c.Worker.RootDir, ".state", "staging.db")
 }
 
-// StorageSecretPath 返回 Storage 鉴权文件的绝对路径（相对配置文件所在目录）。
-func (c *Config) StorageSecretPath() string {
-	return c.resolve(c.StorageAuthFile)
-}
-
-// OpenGateway 打开经 Access 的外部网关客户端。
+// OpenGateway 打开 worker 的网关客户端：worker 和别的组件一样用所在主机的密钥签名，经本机网关取目录，
+// 再按目录直连存储机与控制机的网关。目录缓存放在暂存库旁边。
 func (c *Config) OpenGateway() (*gatewayclient.Client, error) {
 	if c.sourcePath == "" {
 		return nil, fmt.Errorf("worker 网关客户端需要先载入配置文件")
 	}
-	return c.GatewayClient.OpenExternal(c.sourcePath)
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.StatePath()), func(err error) {
+		log.Printf("archive-worker 刷新服务目录失败: %v", err)
+	})
 }

@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
 CREATE INDEX IF NOT EXISTS idx_t_factor_defs_category ON t_factor_defs (c_category_id);
 
 -- 因子任务成员：定义在某个因子任务中的运行实例，身份是任务内唯一的成员键（因子 ID 加参数段），启停状态属于成员。
--- 固定成员的参数在加成员时写定、之后不变；可变成员的默认参数写在 c_params，策略逐期提交的值记在 c_last_submitted_*。
+-- 固定成员的参数在加成员时写定、之后不变；可变成员的默认参数写在 c_params，策略逐期提交的值记在 t_factor_member_params。
 CREATE TABLE IF NOT EXISTS t_factor_task_members (
     c_task_id TEXT NOT NULL,
     c_member_key TEXT NOT NULL,
@@ -58,17 +58,10 @@ CREATE TABLE IF NOT EXISTS t_factor_task_members (
     c_status TEXT NOT NULL DEFAULT 'disabled',
     -- 固定参数，或可变成员的默认参数：加成员时的完整参数（规范 JSON），之后不变
     c_params TEXT NOT NULL DEFAULT '{}',
-    -- 以下四列是可变成员的运行状态，不属于配置：目录同步、目录指纹、成员变化检测都不看它们，提交时也不更新 c_mtime。
-    -- 各标的最近一次提交的参数（默认值加按标的覆盖的规范 JSON，按标的合并），最近一次被接受的目标期（Unix 秒）、请求 ID 与提交时间
-    c_last_submitted_params TEXT NOT NULL DEFAULT '{}',
-    c_last_submitted_period INTEGER NOT NULL DEFAULT 0,
-    c_last_request_id TEXT NOT NULL DEFAULT '',
-    c_last_submitted_at DATETIME,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_task_id, c_member_key),
     CHECK (c_kind IN ('fixed', 'var')),
-    CHECK (c_kind = 'var' OR (c_last_submitted_period = 0 AND c_last_submitted_params = '{}' AND c_last_request_id = '' AND c_last_submitted_at IS NULL)),
     CHECK (c_status IN ('enabled', 'disabled')),
     FOREIGN KEY (c_task_id) REFERENCES t_factor_tasks (c_task_id),
     FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT
@@ -80,6 +73,19 @@ CREATE INDEX IF NOT EXISTS idx_t_factor_task_members_factor ON t_factor_task_mem
 CREATE UNIQUE INDEX IF NOT EXISTS ux_t_factor_task_members_var
 ON t_factor_task_members (c_task_id, c_factor_id)
 WHERE c_kind = 'var';
+
+-- 可变成员最近一次被接受的提交：运行状态，不属于配置（目录同步、目录指纹都不看它），只有一格，不保留提交历史。
+-- c_params 是各标的最近一次提交的参数（默认值加按标的覆盖的规范 JSON，按标的合并），c_period 是目标期（Unix 秒）
+CREATE TABLE IF NOT EXISTS t_factor_member_params (
+    c_task_id TEXT NOT NULL,
+    c_member_key TEXT NOT NULL,
+    c_params TEXT NOT NULL DEFAULT '{}',
+    c_period INTEGER NOT NULL DEFAULT 0,
+    c_request_id TEXT NOT NULL DEFAULT '',
+    c_submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_task_id, c_member_key),
+    FOREIGN KEY (c_task_id, c_member_key) REFERENCES t_factor_task_members (c_task_id, c_member_key) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_job_id TEXT NOT NULL PRIMARY KEY,
@@ -101,6 +107,9 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_engine_id TEXT NOT NULL DEFAULT '',
     c_lease_token TEXT NOT NULL DEFAULT '',
     c_lease_expires_at INTEGER NOT NULL DEFAULT 0,
+    -- 首次领取时固化的自定义算子绑定（名称 → 版本哈希的 JSON）：续跑、租约过期后重新领取都用它，不再按当前启用版本解析。
+    -- NULL 表示还没固化（没被领取过），空对象表示固化过且没有引用自定义算子
+    c_udf_bindings TEXT,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('accepted', 'running', 'succeeded', 'failed', 'cancelled')),
@@ -138,15 +147,6 @@ CREATE TABLE IF NOT EXISTS t_factor_udf_versions (
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_udf_versions_name ON t_factor_udf_versions (c_name, c_ctime);
 
--- 补算作业首次领取时固化的自定义算子绑定（名称 → 版本哈希的 JSON）：续跑、租约过期后重新领取都用它，
--- 不再按当前启用版本解析；作业没有引用自定义算子时不写
-CREATE TABLE IF NOT EXISTS t_factor_recalc_job_bindings (
-    c_job_id TEXT NOT NULL PRIMARY KEY,
-    c_bindings TEXT NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (c_job_id) REFERENCES t_factor_recalc_jobs (c_job_id) ON DELETE CASCADE
-);
-
 -- 最近一次被接受的引擎心跳（单行）：引擎租约只有 45 秒，离线告警按最近心跳判断；
 -- 落库后管理端重启也能判定“引擎一直没回来”
 CREATE TABLE IF NOT EXISTS t_factor_engine_heartbeat (
@@ -174,9 +174,8 @@ BEGIN
     UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE c_factor_id = OLD.c_factor_id;
 END;
 
--- 只在配置列变化时更新 c_mtime；提交参数只写 c_last_* 运行状态列，不触发
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_task_members_mtime
-AFTER UPDATE OF c_factor_id, c_kind, c_status, c_params ON t_factor_task_members
+AFTER UPDATE ON t_factor_task_members
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN

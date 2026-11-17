@@ -48,7 +48,7 @@ func writeMarker(t *testing.T, store *pebble.Store, datasetID string, period tim
 	t.Helper()
 	raw, _, err := pebble.BuildProducerPeriodCompletedMessage("s", &pb.DatasetPeriodCompletedMarker{
 		DatasetId: datasetID, Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
-		UniverseSubjectIds: []string{"A"}, CauseEventId: fmt.Sprintf("cause-%d", period.Unix()), CompletedAt: timestamppb.New(period),
+		UniverseSubjectIds: []string{"A"}, UniverseSeries: []*pb.SeriesRef{{SubjectId: "A", SeriesTag: "default"}}, CauseEventId: fmt.Sprintf("cause-%d", period.Unix()), CompletedAt: timestamppb.New(period),
 	})
 	require.NoError(t, err)
 	_, err = store.AppendDatasetMarker(context.Background(), raw)
@@ -119,8 +119,8 @@ func (t *fakeTarget) snapshot() ([]string, viewindex.FollowState, int) {
 func newManager(t *testing.T, store *pebble.Store, persist time.Duration) *Manager {
 	t.Helper()
 	m, err := NewManager(context.Background(), Options{
-		Reader: storeReader{store}, Auth: func() *pb.AuthInfo { return &pb.AuthInfo{AppId: "storage-view"} },
-		Wait: 2 * time.Second, PersistInterval: persist,
+		Reader: storeReader{store},
+		Wait:   2 * time.Second, PersistInterval: persist,
 	})
 	require.NoError(t, err)
 	t.Cleanup(m.Close)
@@ -267,17 +267,28 @@ func TestFailingFollowerDoesNotBlockOthers(t *testing.T) {
 }
 
 // blockingReader 在 block 打开后让按游标的读取一直等到调用方的截止时间，模拟预扫描很慢。
+// 读取返回时再查一次：block 打开之前已经进入长轮询的读取（跟随器自己的那一次）也拿不到之后写入的变更，
+// 否则它被写入唤醒后先一步应用，等待方就会看到“已跟上”。
 type blockingReader struct {
 	inner storeReader
 	block *sync.Map
 }
 
 func (r blockingReader) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq, opts ...client.Option) (*pb.ReadDatasetChangesRsp, error) {
-	if on, _ := r.block.Load("on"); on == true && !req.GetFromHead() {
+	blocked := func() bool {
+		on, _ := r.block.Load("on")
+		return on == true && !req.GetFromHead()
+	}
+	if blocked() {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return r.inner.ReadDatasetChanges(ctx, req, opts...)
+	rsp, err := r.inner.ReadDatasetChanges(ctx, req, opts...)
+	if blocked() {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return rsp, err
 }
 
 // 等待时长用完时预扫描还没扫到头部：回答“还没跟上”，不是错误。
@@ -285,8 +296,8 @@ func TestWaitAppliedTimeoutDuringScanIsNotAnError(t *testing.T) {
 	store := openStore(t, filepath.Join(t.TempDir(), "db"))
 	block := &sync.Map{}
 	m, err := NewManager(context.Background(), Options{
-		Reader: blockingReader{inner: storeReader{store}, block: block}, Auth: func() *pb.AuthInfo { return &pb.AuthInfo{AppId: "storage-view"} },
-		Wait: 2 * time.Second, PersistInterval: time.Hour,
+		Reader: blockingReader{inner: storeReader{store}, block: block},
+		Wait:   2 * time.Second, PersistInterval: time.Hour,
 	})
 	require.NoError(t, err)
 	t.Cleanup(m.Close)

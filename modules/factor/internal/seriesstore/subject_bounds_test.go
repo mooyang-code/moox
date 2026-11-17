@@ -34,8 +34,4 @@ func TestSubjectBoundsScansAllSubjects(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, at(3), got["A"].Latest, "写入后立即反映")
 
-	require.NoError(t, s.Wipe())
-	got, err = s.SubjectBounds(testSrc)
-	require.NoError(t, err)
-	require.Empty(t, got)
 }

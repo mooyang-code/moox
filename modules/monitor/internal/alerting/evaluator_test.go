@@ -121,7 +121,9 @@ func TestNotificationSeverityFollowsAlertSeverity(t *testing.T) {
 		"gateway:control:status":      notification.SeverityCritical,
 		"host:agent-1:agent":          notification.SeverityWarning,
 		"host:agent-1:cpu":            notification.SeverityWarning,
-		"reporter:control:collector":  notification.SeverityWarning,
+		"reporter:control:collector":  notification.SeverityCritical,
+		"ready:control:strategy":      notification.SeverityCritical,
+		"restart:control:trade":       notification.SeverityCritical,
 		"metrics_ingest:series_limit": notification.SeverityWarning,
 	} {
 		for _, eventType := range []string{domain.AlertEventTriggered, domain.AlertEventReminder} {

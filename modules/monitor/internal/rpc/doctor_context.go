@@ -46,7 +46,7 @@ func validateDoctorResponseSize(rsp *monitorpb.GetDoctorContextRsp) error {
 func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 	rsp := &monitorpb.GetDoctorContextRsp{RetInfo: success(), GeneratedAt: value.GeneratedAt, ManifestChecksum: value.ManifestChecksum}
 	for _, item := range value.ExpectedComponents {
-		rsp.ExpectedComponents = append(rsp.ExpectedComponents, &monitorpb.DoctorExpectedComponent{ComponentId: item.ComponentID, ServiceName: item.ServiceName, NodeId: item.NodeID, Expected: item.Expected, DeploymentStatus: item.DeploymentStatus, Transport: item.Transport, FunctionalObservability: item.FunctionalObservability, HealthUrl: item.HealthURL})
+		rsp.ExpectedComponents = append(rsp.ExpectedComponents, &monitorpb.DoctorExpectedComponent{ComponentId: item.ComponentID, ServiceName: item.ServiceName, NodeId: item.NodeID, Expected: item.Expected, DeploymentStatus: item.DeploymentStatus, Transport: item.Transport, FunctionalObservability: item.FunctionalObservability})
 	}
 	for _, item := range value.HealthObservations {
 		rsp.HealthObservations = append(rsp.HealthObservations, observationToPB(item))

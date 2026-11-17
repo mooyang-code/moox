@@ -1,0 +1,13 @@
+database:
+  path: /data/moox/data/factor-mgr/factor.db
+gateway_client:
+  caller: factor-mgr
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: /data/moox/secrets/host.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: control
+  local_address: 127.0.0.1:11002
+  ca_file: /data/moox/secrets/moox-ca.crt
+engine:
+  lease_ttl: 45s
+  job_lease_ttl: 15m

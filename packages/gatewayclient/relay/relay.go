@@ -27,7 +27,7 @@ const (
 	ALPNAttach = "moox-relay-attach"
 	ALPNOpen   = "moox-relay-open"
 
-	// Service 只用于签名里的路径与被调方，不是可路由的 tRPC 服务。
+	// Service 只用于签名里的被调方，不是可路由的 tRPC 服务。
 	Service      = "trpc.moox.hostgateway.Relay"
 	MethodAttach = "Attach"
 	MethodOpen   = "Open"
@@ -71,7 +71,7 @@ func (s Signed) Request(method, controlHost string) gatewayauth.Request {
 }
 
 func request(method, controlHost string, body []byte) gatewayauth.Request {
-	return gatewayauth.Request{Method: "POST", Path: "/" + Service + "/" + method, TargetNode: controlHost, Callee: Service, Func: method, Body: body}
+	return gatewayauth.Request{TargetNode: controlHost, Callee: Service, Func: method, Body: body}
 }
 
 // Sign 生成签名前导。

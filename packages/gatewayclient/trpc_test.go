@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -78,7 +79,7 @@ func startWireServer(t *testing.T, listener net.Listener, credentials gatewayaut
 			}
 			body := input.(*codec.Body).Data
 			service, method, _ := strings.Cut(strings.TrimPrefix(message.ServerRPCName(), "/"), "/")
-			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: target, Callee: service, Func: method, Body: body}, headers, time.Now())
+			claims, err := authtest.Verify(credentials, gatewayauth.Request{TargetNode: target, Callee: service, Func: method, Body: body}, headers, time.Now())
 			if err != nil {
 				return nil, err
 			}
@@ -154,11 +155,11 @@ func TestRealTRPCTLSRejectsWrongCAAndHostAfterSuccessfulCall(t *testing.T) {
 	require.NoError(t, err)
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12})
 	require.NoError(t, err)
-	creds := gatewayauth.Credentials{Caller: "moox-cli", KeyID: "test", Secret: "secret"}
+	creds := authtest.Identity("moox-cli")
 	counted := &countingListener{Listener: listener}
 	startWireServer(t, counted, creds, "storage")
 	body := []byte(`{"id":1}`)
-	headers, err := gatewayauth.Sign(creds, gatewayauth.Request{Method: "POST", Path: "/" + secretService + "/GetSecret", TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
+	headers, err := gatewayauth.Sign(creds, gatewayauth.Request{TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -168,7 +169,7 @@ func TestRealTRPCTLSRejectsWrongCAAndHostAfterSuccessfulCall(t *testing.T) {
 	rsp, err := pool.invoke(ctx, ep, secretService, "GetSecret", codec.SerializationTypeJSON, body, headers)
 	require.NoError(t, err)
 	require.Equal(t, body, rsp)
-	headers, err = gatewayauth.Sign(creds, gatewayauth.Request{Method: "POST", Path: "/" + secretService + "/GetSecret", TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
+	headers, err = gatewayauth.Sign(creds, gatewayauth.Request{TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
 	require.NoError(t, err)
 	_, err = pool.invoke(ctx, ep, secretService, "GetSecret", codec.SerializationTypeJSON, body, headers)
 	require.NoError(t, err)
@@ -226,9 +227,9 @@ func TestRealTRPCZstdCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
 		base, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		listener := &byteCountingListener{Listener: base}
-		creds := gatewayauth.Credentials{Caller: "moox-cli", KeyID: "test", Secret: "secret"}
+		creds := authtest.Identity("moox-cli")
 		startWireServer(t, listener, creds, "storage")
-		headers, err := gatewayauth.Sign(creds, gatewayauth.Request{Method: "POST", Path: "/" + secretService + "/GetSecret", TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
+		headers, err := gatewayauth.Sign(creds, gatewayauth.Request{TargetNode: "storage", Callee: secretService, Func: "GetSecret", Body: body}, time.Now())
 		require.NoError(t, err)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -243,4 +244,63 @@ func TestRealTRPCZstdCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
 	zstdRead, zstdWritten := run(true)
 	require.Less(t, zstdRead*5, plainRead, "请求方向应显著缩小")
 	require.Less(t, zstdWritten*5, plainWritten, "响应方向应随请求压缩类型一并压缩")
+}
+
+// 真实 tRPC 链路上的本机直连：请求原样到达本机服务，线上没有任何签名头、不压缩，只带调用元数据；
+// 调用方不在方法名单里也能调（本机服务自己的端口本来就对同机进程开放）。
+func TestRealTRPCLocalDirectCallCarriesNoSignature(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	type received struct {
+		rpc      string
+		headers  http.Header
+		compress int
+	}
+	var mu sync.Mutex
+	var calls []received
+	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop), server.WithServiceName(secretService))
+	desc := &server.ServiceDesc{ServiceName: secretService, HandlerType: ((*interface{})(nil)), Methods: []server.Method{{Name: "*", Func: func(_ interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+		request := &codec.Body{}
+		filters, err := f(request)
+		if err != nil {
+			return nil, err
+		}
+		return filters.Filter(ctx, request, func(ctx context.Context, input interface{}) (interface{}, error) {
+			message := codec.Message(ctx)
+			headers := http.Header{}
+			for key, value := range message.ServerMetaData() {
+				headers.Set(key, string(value))
+			}
+			mu.Lock()
+			calls = append(calls, received{rpc: message.ServerRPCName(), headers: headers, compress: message.CompressType()})
+			mu.Unlock()
+			return &codec.Body{Data: input.(*codec.Body).Data}, nil
+		})
+	}}}}
+	require.NoError(t, svc.Register(desc, struct{}{}))
+	go func() { _ = svc.Serve() }()
+	t.Cleanup(func() { _ = svc.Close(nil) })
+
+	var ports []int
+	t.Cleanup(SetLocalServiceAddressForTest(func(port int) string {
+		ports = append(ports, port)
+		return listener.Addr().String()
+	}))
+	c := newTestClient(t, internalConfig(t, &sourceStub{directory: testDirectory(t, "storage")}, "storage"))
+	require.False(t, c.catalog.Allowed("monitor", secretService, "UpdateSecret"))
+	body := []byte(`{"rows":"` + strings.Repeat("kline-row-0123456789,", 400) + `"}`)
+	ctx := WithCallMetadata(context.Background(), CallMetadata{SpaceID: "space-1", UserID: "user-1", TraceID: "trace-1"})
+	response, err := c.Forward(ctx, secretService, "UpdateSecret", codec.SerializationTypeJSON, body)
+	require.NoError(t, err)
+	require.Equal(t, body, response)
+	require.Equal(t, []int{11108}, ports, "按服务目录里的服务端口取直连地址")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, calls, 1)
+	require.Equal(t, "/"+secretService+"/UpdateSecret", calls[0].rpc)
+	require.Empty(t, signatureHeaders(calls[0].headers), "本机直连的线上请求不带签名头")
+	require.Equal(t, "space-1", calls[0].headers.Get("X-Space-Id"))
+	require.Equal(t, "user-1", calls[0].headers.Get("X-User-Id"))
+	require.Equal(t, "trace-1", calls[0].headers.Get("X-Trace-Id"))
+	require.Equal(t, codec.CompressTypeNoop, calls[0].compress, "本机直连不压缩")
 }

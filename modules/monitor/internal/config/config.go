@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	watchdogpkg "github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -20,8 +19,6 @@ type Config struct {
 	GatewayClient  gatewayclient.FileConfig `yaml:"gateway_client"`
 	sourcePath     string                   `yaml:"-"`
 	Database       DatabaseConfig           `yaml:"database"`
-	Health         HealthConfig             `yaml:"health"`
-	HealthAuth     HealthAuthConfig         `yaml:"health_auth"`
 	Instance       InstanceConfig           `yaml:"instance"`
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
 	Deployment     DeploymentConfig         `yaml:"deployment"`
@@ -31,7 +28,6 @@ type Config struct {
 	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
 	MarketHealth   MarketHealthConfig       `yaml:"market_health"`
 	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
-	HostPolicy     HostPolicyConfig         `yaml:"host_policy"`
 }
 
 type DatabaseConfig struct {
@@ -43,51 +39,18 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
 }
 
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
-}
-
-type HealthAuthConfig struct {
-	Version   string `yaml:"version"`
-	AccessKey string `yaml:"access_key"`
-	SecretKey string `yaml:"secret_key"`
-	// ResetAccessKey 与 ResetSecretKey 是重置专用的第二对密钥（见 healthz.AuthConfig）：只配置在允许运维触发重置的进程上。
-	ResetAccessKey string `yaml:"reset_access_key"`
-	ResetSecretKey string `yaml:"reset_secret_key"`
-}
-
 type InstanceConfig struct {
 	InstanceID string `yaml:"instance_id"`
 }
 
+// SchedulerConfig 是检查结果的保留天数（检查由检查定时器每 30 秒评估，没有单独的调度并发）。
 type SchedulerConfig struct {
 	ResultRetentionDays int `yaml:"result_retention_days"`
-	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
+// DeploymentConfig 控制是否从 Admin 同步部署拓扑（每台主机应该有哪些组件）；组件健康只看上报，不做探测。
 type DeploymentConfig struct {
-	Enabled bool                          `yaml:"enabled"`
-	HTTPS   map[string]domain.HTTPSConfig `yaml:"https"`
-	// LocalHostID 是 Monitor 自己所在的部署主机 ID；该主机上的组件健康检查直接连 127.0.0.1。
-	// 主机没有私网地址时对外地址从本机访问常常不通（云厂商不回环公网 IP），会把健康的服务误报为超时。
-	LocalHostID string `yaml:"local_host_id"`
-}
-
-// HostPolicyConfig 是经 GetHostPolicy 下发给各主机的主机策略里，除告警渠道以外的部分。
-type HostPolicyConfig struct {
-	Watchdog HostWatchdogConfig `yaml:"watchdog"`
-}
-
-// HostWatchdogConfig 是主机守护（moox-runtime watch）参数；零值表示各主机用守护自己的默认值。
-type HostWatchdogConfig struct {
-	Disabled          bool          `yaml:"disabled"`
-	MergeWindow       time.Duration `yaml:"merge_window"`
-	CrashLoopFailures int           `yaml:"crash_loop_failures"`
-	CrashLoopWindow   time.Duration `yaml:"crash_loop_window"`
-	CrashLoopRetry    time.Duration `yaml:"crash_loop_retry"`
-	CrashLoopSlow     time.Duration `yaml:"crash_loop_slow"`
-	StableAfter       time.Duration `yaml:"stable_after"`
-	NotReadyAlert     time.Duration `yaml:"not_ready_alert"`
+	Enabled bool `yaml:"enabled"`
 }
 
 type AlertConfig struct {
@@ -127,9 +90,6 @@ type MarketCanaryConfig struct {
 type MarketHealthConfig struct {
 	TimerCoordinationStaleAfter   time.Duration `yaml:"timer_coordination_stale_after"`
 	TimerCoordinationPendingGrace time.Duration `yaml:"timer_coordination_pending_grace"`
-	// TimerCoordinationLeaseGrace 是「发布租约被占用」的宽限期：Admin 明确答复租约或在途操作占用仍被持有时，
-	// 在这段时间内按协调进行中处理；超过仍未恢复才告警。这是告警策略，不是恢复时间的上界。
-	TimerCoordinationLeaseGrace time.Duration `yaml:"timer_coordination_lease_grace"`
 }
 
 type KlineFreshnessConfig struct {
@@ -174,14 +134,6 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
-	for id, target := range cfg.Deployment.HTTPS {
-		for _, path := range []*string{&target.CAFile, &target.CABaseline} {
-			if *path != "" && !filepath.IsAbs(*path) {
-				*path = filepath.Join(filepath.Dir(absolutePath), *path)
-			}
-		}
-		cfg.Deployment.HTTPS[id] = target
-	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -190,7 +142,7 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
-		GatewayClient: gatewayclient.FileConfig{Caller: "monitor", KeyFile: "../../secrets/caller-monitor.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "monitor", KeyFile: "../../secrets/host.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/monitor/monitor.db",
@@ -199,16 +151,11 @@ func Default() *Config {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		Health: HealthConfig{
-			Addr: ":11409",
-		},
-		HealthAuth: HealthAuthConfig{Version: "moox-health-v1"},
 		Instance: InstanceConfig{
 			InstanceID: defaultInstanceID(),
 		},
 		Scheduler: SchedulerConfig{
 			ResultRetentionDays: 14,
-			MaxConcurrency:      16,
 		},
 		Deployment: DeploymentConfig{Enabled: true},
 		Alert: AlertConfig{
@@ -218,7 +165,7 @@ func Default() *Config {
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
-		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, TimerCoordinationLeaseGrace: 10 * time.Minute},
+		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute},
 		KlineFreshness: KlineFreshnessConfig{
 			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
@@ -247,20 +194,11 @@ func (c *Config) applyDefaults() {
 	if c.Database.ConnMaxIdleTime == 0 {
 		c.Database.ConnMaxIdleTime = defaults.Database.ConnMaxIdleTime
 	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = defaults.Health.Addr
-	}
-	if c.HealthAuth.Version == "" {
-		c.HealthAuth.Version = defaults.HealthAuth.Version
-	}
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = defaults.Instance.InstanceID
 	}
 	if c.Scheduler.ResultRetentionDays == 0 {
 		c.Scheduler.ResultRetentionDays = defaults.Scheduler.ResultRetentionDays
-	}
-	if c.Scheduler.MaxConcurrency == 0 {
-		c.Scheduler.MaxConcurrency = defaults.Scheduler.MaxConcurrency
 	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
@@ -296,9 +234,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace == 0 {
 		c.MarketHealth.TimerCoordinationPendingGrace = marketHealthDefaults.TimerCoordinationPendingGrace
-	}
-	if c.MarketHealth.TimerCoordinationLeaseGrace == 0 {
-		c.MarketHealth.TimerCoordinationLeaseGrace = marketHealthDefaults.TimerCoordinationLeaseGrace
 	}
 	klineDefaults := Default().KlineFreshness
 	if c.KlineFreshness.EvaluationInterval == 0 {
@@ -337,24 +272,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_MONITOR_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION")); v != "" {
-		c.HealthAuth.Version = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY")); v != "" {
-		c.HealthAuth.AccessKey = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY")); v != "" {
-		c.HealthAuth.SecretKey = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_RESET_ACCESS_KEY")); v != "" {
-		c.HealthAuth.ResetAccessKey = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_RESET_SECRET_KEY")); v != "" {
-		c.HealthAuth.ResetSecretKey = v
-	}
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v
 	}
@@ -382,15 +299,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Alert.SendTimeoutSeconds <= 0 || c.Alert.SendTimeoutSeconds > 300 {
 		return fmt.Errorf("alert.send_timeout_seconds must be between 1 and 300")
-	}
-	watchdog := c.HostPolicy.Watchdog
-	if watchdog.CrashLoopFailures < 0 {
-		return fmt.Errorf("host_policy.watchdog.crash_loop_failures must not be negative")
-	}
-	for _, d := range []time.Duration{watchdog.MergeWindow, watchdog.CrashLoopWindow, watchdog.CrashLoopRetry, watchdog.CrashLoopSlow, watchdog.StableAfter, watchdog.NotReadyAlert} {
-		if d < 0 {
-			return fmt.Errorf("host_policy.watchdog durations must not be negative")
-		}
 	}
 	if c.Observability.Enabled {
 		if len(c.Observability.EventBusURLs) == 0 {
@@ -439,17 +347,6 @@ func (c *Config) Validate() error {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
 		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
-	}
-	if c.MarketHealth.TimerCoordinationLeaseGrace <= 0 {
-		return fmt.Errorf("market_health.timer_coordination_lease_grace must be positive")
-	}
-	for id, target := range c.Deployment.HTTPS {
-		if err := target.Validate(); err != nil {
-			return fmt.Errorf("deployment.https.%s: %w", id, err)
-		}
-	}
-	if c.Deployment.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
-		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when deployment monitoring is enabled")
 	}
 	if c.GatewayClient.Caller != "monitor" {
 		return fmt.Errorf("gateway_client.caller must be monitor")

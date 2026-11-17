@@ -14,6 +14,7 @@ const { callControl, ControlRequestError } = vi.hoisted(() => ({
 vi.mock("@/api/admin/http", () => ({ callControl, ControlRequestError }));
 
 import {
+  confirmInstance,
   createInstance,
   getReplay,
   getStrategyDisplaySettings,
@@ -58,6 +59,23 @@ describe("strategy API", () => {
       undefined
     );
     expect(instance).toMatchObject({ instance_id: "i-1", factor_tasks: { swap: "ftask_a" }, resolved_json: "{}", health: "ok" });
+  });
+
+  it("confirms a trial instance for its session and keeps confirmed_at", async () => {
+    callControl.mockResolvedValueOnce({
+      instance: { instance_id: "i-1", enabled: true, logical_account_id: "la-1", confirmed_at: "2026-11-15T01:00:00Z" }
+    });
+    const instance = await confirmInstance("i-1", "session-1");
+    expect(callControl).toHaveBeenCalledWith(
+      "strategy",
+      "ConfirmStrategyInstance",
+      { instance_id: "i-1", session_id: "session-1" },
+      { silentError: true }
+    );
+    expect(instance.confirmed_at).toBe("2026-11-15T01:00:00Z");
+    callControl.mockResolvedValueOnce({ instances: [{ instance_id: "i-2", enabled: true }], total: 1 });
+    const page = await listInstances();
+    expect(page.items[0].confirmed_at).toBe("");
   });
 
   it("reads results with status, skip reason and explanation items", async () => {

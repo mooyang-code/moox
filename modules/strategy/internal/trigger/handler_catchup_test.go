@@ -121,3 +121,29 @@ func TestCatchupProgressReachesTheLatestClosedBar(t *testing.T) {
 		t.Fatalf("已处理到最新已收盘的 bar 就是追平：%+v", progress)
 	}
 }
+
+// 会话开始之后还没有任何一根 bar 收盘（收盘后才启用，下一期要等下个交易日）：没有应处理的期，算追平，不卡住系统恢复；
+// 会话开始之后有 bar 收盘而实例没处理（暂停期间漏掉的期），仍要求追赶。
+func TestCatchupProgressBeforeTheFirstDuePeriod(t *testing.T) {
+	h := newHarness(t, previousBarDSL, nil) // 会话在 bar0 开始
+	h.handler.Gate = func(string) Mode { return ModeCatchup }
+	ctx := context.Background()
+
+	// 最新已收盘的 bar 在 bar0 之前收盘。
+	progress, err := h.handler.CatchupProgress(ctx, "i1", bar0.Add(-30*time.Minute), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !progress.SessionStart.Equal(bar0) || !progress.Expected.Before(bar0) || !progress.Latest.IsZero() || !progress.CaughtUp() {
+		t.Fatalf("会话开始前收盘的 bar 不是应处理的期，应算追平：%+v", progress)
+	}
+
+	// 会话开始之后第一根 bar 收盘了，实例还没处理。
+	progress, err = h.handler.CatchupProgress(ctx, "i1", barStart(1).Add(30*time.Minute), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !progress.Expected.Equal(barStart(1)) || progress.CaughtUp() {
+		t.Fatalf("会话开始之后收盘的 bar 没处理，不能算追平：%+v", progress)
+	}
+}

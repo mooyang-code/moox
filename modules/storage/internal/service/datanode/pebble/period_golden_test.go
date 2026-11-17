@@ -11,6 +11,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/seriesset"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -25,6 +26,7 @@ const (
 	goldenDataset  = "bars"
 	goldenFreq     = "1m"
 	goldenLateness = 15
+	goldenTag      = "default" // 单市场数据集的 series_tag
 	goldenSpotTag  = "venue:binance|market:spot|source:spot_http"
 	goldenSwapTag  = "venue:binance|market:swap|source:swap_http"
 )
@@ -35,7 +37,7 @@ var goldenPeriod = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 const goldenDeadline = 75 * time.Second
 
 func goldenDefaultSeries() []seriesset.Series {
-	return []seriesset.Series{{SubjectID: "BTC-USDT"}, {SubjectID: "ETH-USDT"}}
+	return []seriesset.Series{{SubjectID: "BTC-USDT", SeriesTag: goldenTag}, {SubjectID: "ETH-USDT", SeriesTag: goldenTag}}
 }
 
 // goldenUnifiedSeries 是统一数据集的四条序列，规范顺序为 BTC 现货、BTC 永续、ETH 现货、ETH 永续。
@@ -85,14 +87,15 @@ type ledgerStep struct {
 }
 
 type ledgerCase struct {
-	name               string
-	unified            bool // 用统一数据集的四条序列
-	steps              []ledgerStep
-	wantPeriod         string // 账本里的最终状态，空串表示周期不存在
-	wantMarkers        int
-	wantMarkerStatus   string
-	wantUniverse       []string
-	wantFailed         []string
+	name             string
+	unified          bool // 用统一数据集的四条序列
+	steps            []ledgerStep
+	wantPeriod       string // 账本里的最终状态，空串表示周期不存在
+	wantMarkers      int
+	wantMarkerStatus string
+	wantUniverse     []string
+	wantFailed       []string
+	// 下面两项只有统一数据集的用例填；单市场用例的序列名单就是 wantUniverse、wantFailed 逐个配上 goldenTag。
 	wantUniverseSeries int
 	wantFailedSeries   []string // "标的|series_tag"
 	wantStored         map[uint32]float64
@@ -265,12 +268,29 @@ func TestGoldenLedgerJudgement(t *testing.T) {
 				require.Empty(t, marker.GetCauseEventId())
 				require.Equal(t, tc.wantUniverse, marker.GetUniverseSubjectIds())
 				require.Equal(t, tc.wantFailed, nilIfEmpty(marker.GetFailedSubjects()))
-				require.Len(t, marker.GetUniverseSeries(), tc.wantUniverseSeries)
+				var universeSeries []string
+				for _, ref := range marker.GetUniverseSeries() {
+					universeSeries = append(universeSeries, ref.GetSubjectId()+"|"+ref.GetSeriesTag())
+				}
+				wantFailedSeries := tc.wantFailedSeries
+				if tc.unified {
+					require.Len(t, universeSeries, tc.wantUniverseSeries)
+				} else {
+					// 单市场：序列全集与失败序列逐条等于标的配上 goldenTag。
+					var wantUniverseSeries []string
+					for _, subject := range tc.wantUniverse {
+						wantUniverseSeries = append(wantUniverseSeries, subject+"|"+goldenTag)
+					}
+					require.Equal(t, wantUniverseSeries, universeSeries)
+					for _, subject := range tc.wantFailed {
+						wantFailedSeries = append(wantFailedSeries, subject+"|"+goldenTag)
+					}
+				}
 				var failedSeries []string
 				for _, ref := range marker.GetFailedSeries() {
 					failedSeries = append(failedSeries, ref.GetSubjectId()+"|"+ref.GetSeriesTag())
 				}
-				require.Equal(t, tc.wantFailedSeries, failedSeries)
+				require.Equal(t, wantFailedSeries, failedSeries)
 				require.NotNil(t, marker.GetCompletedAt())
 			}
 			for index := range series {
@@ -299,7 +319,7 @@ func TestGoldenLedgerRejections(t *testing.T) {
 		noSnap    bool   // 不登记快照
 		frequency string // 周期频率，空串取 1m
 		prepare   string // 先把周期推到的状态：""（不建立）、waiting、complete
-		seriesTag string // 快照里两条序列共用的标签，空串表示默认序列
+		seriesTag string // 快照里两条序列共用的标签，空串表示用 goldenTag
 		mutate    func(exp *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem
 		wantErr   string
 	}
@@ -375,7 +395,9 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			store := newGoldenStore(t, clock)
 			input := goldenDefaultSeries()
 			for i := range input {
-				input[i].SeriesTag = tc.seriesTag
+				if tc.seriesTag != "" {
+					input[i].SeriesTag = tc.seriesTag
+				}
 			}
 			series := goldenSeries(t, input)
 			freq := goldenFreq
@@ -430,7 +452,7 @@ func TestGoldenLedgerConcurrentCommitsCompleteOnce(t *testing.T) {
 	store := newGoldenStore(t, clock)
 	input := make([]seriesset.Series, 32)
 	for i := range input {
-		input[i] = seriesset.Series{SubjectID: fmt.Sprintf("S%02d-USDT", i)}
+		input[i] = seriesset.Series{SubjectID: fmt.Sprintf("S%02d-USDT", i), SeriesTag: goldenTag}
 	}
 	series := goldenSeries(t, input)
 	exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, series, goldenPeriod, goldenLateness)
@@ -497,10 +519,10 @@ func TestGoldenLedgerMarkerSizeLimit(t *testing.T) {
 		store := openGoldenStore(t, path, clock, 0)
 		long := make([]seriesset.Series, 30)
 		for i := range long {
-			long[i] = seriesset.Series{SubjectID: fmt.Sprintf("LONG-ASSET-SYMBOL-%02d-ABCDEFGHIJKLMNOPQRSTUVWXYZ", i)}
+			long[i] = seriesset.Series{SubjectID: fmt.Sprintf("LONG-ASSET-SYMBOL-%02d-ABCDEFGHIJKLMNOPQRSTUVWXYZ", i), SeriesTag: goldenTag}
 		}
 		largeSeries := goldenSeries(t, long)
-		smallSeries := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT"}})
+		smallSeries := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT", SeriesTag: goldenTag}})
 		large := goldenRegister(t, store, clock, goldenSpace, "large", goldenFreq, largeSeries, goldenPeriod, goldenLateness)
 		small := goldenRegister(t, store, clock, goldenSpace, "small", goldenFreq, smallSeries, goldenPeriod, goldenLateness)
 		_, err := store.CommitTimeSeriesBatch(ctx, large, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow(goldenSpace, "large", goldenFreq, largeSeries[0], goldenPeriod, 1)}})
@@ -512,7 +534,10 @@ func TestGoldenLedgerMarkerSizeLimit(t *testing.T) {
 		now := goldenPeriod.Add(goldenDeadline)
 		smallRaw, _, err := BuildLedgerPeriodCompletedMessage(goldenSpace, &LedgerPeriodCompleted{
 			DatasetID: "small", Frequency: goldenFreq, PeriodTime: goldenPeriod.Unix(), Status: "degraded", SnapshotRef: small.SeriesHash,
-			UniverseSubjectIDs: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"}, CompletedAt: timestamppb.New(now),
+			UniverseSubjectIDs: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
+			UniverseSeries: []*storageeventpb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}},
+			FailedSeries:   []*storageeventpb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}},
+			CompletedAt:    timestamppb.New(now),
 		})
 		require.NoError(t, err)
 		clock.set(now)
@@ -532,7 +557,7 @@ func TestGoldenLedgerFrequencyIsPartOfPeriodIdentity(t *testing.T) {
 	period := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	clock := newGoldenClock(period.Add(61 * time.Second))
 	store := newGoldenStore(t, clock)
-	series := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT"}})
+	series := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT", SeriesTag: goldenTag}})
 	for _, frequency := range []string{"1m", "1mo"} {
 		exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, frequency, series, period, goldenLateness)
 		result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, frequency, series[0], period, 1)}})
@@ -550,7 +575,7 @@ func TestGoldenLedgerEquivalentTimestampNotation(t *testing.T) {
 	ctx := context.Background()
 	clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
 	store := newGoldenStore(t, clock)
-	series := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT"}})
+	series := goldenSeries(t, []seriesset.Series{{SubjectID: "BTC-USDT", SeriesTag: goldenTag}})
 	exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, series, goldenPeriod, goldenLateness)
 	row := goldenRow(goldenSpace, goldenDataset, goldenFreq, series[0], goldenPeriod, 1)
 	row.Key.GetTimeSeries().DataTime = goldenPeriod.In(time.FixedZone("UTC+8", 8*60*60)).Format(time.RFC3339Nano)
@@ -564,7 +589,8 @@ func goldenProducerMarker(cause string, periodTime int64, status string) *pb.Dat
 	return &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "factor_result", Frequency: goldenFreq, PeriodTime: periodTime, Status: status,
 		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, CauseEventId: cause,
-		CompletedAt: timestamppb.New(time.Unix(periodTime+30, 0)), DetailType: "factor.detail", Detail: []byte("detail-" + cause),
+		UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}, {SubjectId: "ETH-USDT", SeriesTag: goldenTag}},
+		CompletedAt:    timestamppb.New(time.Unix(periodTime+30, 0)), DetailType: "factor.detail", Detail: []byte("detail-" + cause),
 	}
 }
 

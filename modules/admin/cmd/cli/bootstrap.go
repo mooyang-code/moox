@@ -16,9 +16,9 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
 	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
-	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
@@ -27,6 +27,9 @@ import (
 
 type bootstrapOptions struct {
 	topologyFile, dbPath, masterFile, pkiDir, outputDir string
+	// operatorPublicKey 是操作电脑的 moox-cli 公钥：只在还没登记时写入，重复执行不改已有的。
+	operatorPublicKey string
+	current           currentKeys
 }
 
 func isBootstrapCommand(args []string) bool { return len(args) > 1 && args[1] == "bootstrap" }
@@ -49,7 +52,15 @@ func runBootstrapCommand(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&opts.masterFile, "encryption-key-file", "", "persistent 0600 Admin encryption key; generated only for an empty secret table")
 	fs.StringVar(&opts.pkiDir, "pki-dir", "", "persistent 0700 control CA directory")
 	fs.StringVar(&opts.outputDir, "output-dir", "", "0700 parent directory for a complete new bootstrap bundle")
+	fs.StringVar(&opts.operatorPublicKey, "operator-public-key", "", "操作电脑的 moox-cli 公钥（base64）；还没登记时写入")
+	registerCurrentKeyFlags(fs, &opts.current)
 	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if _, err := gatewayauth.ParsePublicKey(opts.operatorPublicKey); err != nil {
+		return errors.New("bootstrap 需要 --operator-public-key：操作电脑的 moox-cli 公钥（先运行 moox-cli setup operator）")
+	}
+	if err := opts.current.validate(); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
@@ -120,9 +131,6 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 	if err := db.Transaction(func(tx *gorm.DB) error { return tx.Exec(adminschema.AdminSQL()).Error }); err != nil {
 		return fmt.Errorf("apply Admin schema: %w", err)
 	}
-	var exported []keys.SigningKey
-	var access []keys.VerificationKey
-	var expectedHash string
 	var caInfo hostbundle.CAInfo
 	var ca *pki.Store
 	defer func() {
@@ -131,6 +139,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		}
 	}()
 	control := topology.Hosts[slices.IndexFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID })]
+	material := hostBundleMaterial{host: control, control: control}
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 主机的 SSH 凭据加密要用主密钥：同步校验通过、要写凭据时才取得（没有则创建），拓扑非法时不会创建它。
 		var master string
@@ -158,14 +167,13 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		if _, err := masterKey(); err != nil {
 			return err
 		}
-		store, err := keys.NewStore(tx, master)
+		store, err := keys.NewStore(tx)
 		if err != nil {
 			return err
 		}
-		// A database with established gateway keys cannot silently acquire a
-		// replacement trust root even if the entire PKI directory has been lost.
+		// 库里已经登记过签名公钥、CA 目录却没了：不能悄悄换一个新的信任根，要先把原来的 CA 恢复回来。
 		var previousKeys int64
-		if err := tx.Table("t_secrets").Where("c_secret_type = ?", secretmodel.GatewayKeyringType).Count(&previousKeys).Error; err != nil {
+		if err := tx.Table("t_hosts").Where("c_sign_public_key <> ''").Count(&previousKeys).Error; err != nil {
 			return err
 		}
 		if previousKeys > 0 {
@@ -173,25 +181,19 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 				return pki.ErrInvalidCA
 			}
 		}
-		all, err := store.EnsureAll(ctx)
-		if err != nil {
+		if material.operatorPublic, err = store.EnsureIdentity(ctx, servicecatalog.OperatorMooxCLI, opts.operatorPublicKey); err != nil {
 			return err
 		}
-		wanted := hostSigningCallers(control, true)
-		for _, key := range all {
-			if slices.Contains(wanted, key.Caller) {
-				exported = append(exported, key)
-			}
-		}
-		access, err = hostAccessVerification(ctx, store, control)
-		if err != nil {
+		if material.keys, err = ensureSigningKeys(ctx, store, control, opts.current, false); err != nil {
 			return err
 		}
-		_, snapshot, err := dao.CompileSnapshot(ctx, control.HostID, master)
-		if err != nil {
+		// 拓扑要合法、能算出控制机的路由，公钥要能拼出快照，否则不提交。
+		if _, err := dao.Compile(ctx, control.HostID); err != nil {
 			return err
 		}
-		expectedHash = snapshot.Hash
+		if _, err := dao.Snapshot(ctx); err != nil {
+			return err
+		}
 		ca, err = pki.Open(opts.pkiDir)
 		if err != nil {
 			return err
@@ -202,12 +204,9 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 	if err != nil {
 		return err
 	}
-	// The master and CA are persistent retry checkpoints. Publish a bundle only
-	// after the topology and all encrypted caller keys have committed together.
-	result, err := publishHostBundle(opts.outputDir, hostBundleMaterial{
-		host: control, control: control, signing: exported, access: access,
-		caInfo: caInfo, expectedHash: expectedHash, operator: true,
-	}, ca)
+	// 主密钥与 CA 留在控制机上；拓扑与公钥一起提交之后才发布身份包。
+	material.caInfo = caInfo
+	result, err := publishHostBundle(opts.outputDir, material, ca)
 	if err != nil {
 		return err
 	}
@@ -216,7 +215,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 
 // hostSpec 把离线拓扑里的主机转换成部署同步的输入；SSH 凭据随主机一起写入。
 func hostSpec(h hostbundle.Host) sysdeploy.HostSpec {
-	spec := sysdeploy.HostSpec{HostID: h.HostID, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, Description: h.Description, Components: h.Components}
+	spec := sysdeploy.HostSpec{HostID: h.HostID, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, ExternalEntry: h.ExternalEntry, Description: h.Description, Components: h.Components}
 	if h.SSH != nil && h.SSH.Port != 0 {
 		ssh := &sysdeploy.SSHSpec{Port: h.SSH.Port, User: h.SSH.User}
 		if h.SSH.AuthType == "private_key" {

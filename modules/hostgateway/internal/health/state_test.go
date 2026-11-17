@@ -121,7 +121,6 @@ func TestLivenessFailsWhenPersistentStorageIsUnavailable(t *testing.T) {
 func TestHealthJSONBindsRuntimeProcessAndSnapshotIdentity(t *testing.T) {
 	t.Setenv("MOOX_NODE_ID", "control")
 	t.Setenv("MOOX_INSTANCE_ID", "host-gateway@control")
-	t.Setenv("MOOX_BINARY_SHA256", strings.Repeat("a", 64))
 	t.Setenv("MOOX_BOOT_ID", strings.Repeat("b", 64))
 	state := NewState()
 	for _, path := range []string{"/healthz", "/readyz"} {
@@ -136,7 +135,7 @@ func TestHealthJSONBindsRuntimeProcessAndSnapshotIdentity(t *testing.T) {
 		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 			t.Fatal(err)
 		}
-		if recorder.Code != http.StatusOK || !payload.Ready || payload.BinarySHA256 != strings.Repeat("a", 64) || payload.BootID != strings.Repeat("b", 64) || payload.InstanceID != "host-gateway@control" {
+		if recorder.Code != http.StatusOK || !payload.Ready || len(payload.BinarySHA256) != 64 || payload.BootID != strings.Repeat("b", 64) || payload.InstanceID != "host-gateway@control" {
 			t.Fatalf("health identity mismatch: %+v", payload)
 		}
 		if path == "/readyz" && payload.Details["route_hash"] != "snapshot-hash" {

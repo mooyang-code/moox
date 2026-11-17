@@ -199,13 +199,7 @@ func newPoolHarness(t *testing.T, poolYaml string, memberIDs ...string) *harness
 	resolved, _ := json.Marshal(pooled.Resolved)
 	members, _ := pooled.MembersJSON()
 	session := "session-1"
-	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(resolved), MembersJSON: members, CreatedAt: origin}, poolYaml); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, resolved, origin); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, resolved, origin); err != nil {
+	if err := repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(resolved), MembersJSON: members, CreatedAt: origin}, poolYaml); err != nil {
 		t.Fatal(err)
 	}
 	h.manager = &Manager{Store: repo, Client: h.client, Now: func() time.Time { return origin.Add(100*time.Hour + 30*time.Minute) }, ChunkBars: 4,
@@ -374,7 +368,7 @@ func TestResumeRestartsPendingSessionsAfterRestart(t *testing.T) {
 
 func TestStaleSessionIsNotWarmed(t *testing.T) {
 	h := newHarness(t)
-	if err := h.repo.CloseSession(context.Background(), "session-1", origin); err != nil {
+	if err := h.repo.DisableInstance(context.Background(), "i1", "session-1", origin); err != nil {
 		t.Fatal(err)
 	}
 	h.manager.Start(context.Background(), "i1", "session-1")

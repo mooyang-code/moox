@@ -49,7 +49,7 @@ func Serve(t testing.TB, opened net.Listener, name string, handler func(context.
 }
 
 func Signed(credentials gatewayauth.Credentials, target, service, method string, body []byte) (http.Header, error) {
-	return gatewayauth.Sign(credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: target, Callee: service, Func: method, Body: body}, time.Now())
+	return gatewayauth.Sign(credentials, gatewayauth.Request{TargetNode: target, Callee: service, Func: method, Body: body}, time.Now())
 }
 
 func Call(parent context.Context, address string, trust *tls.Config, service, method string, serialization int, body []byte, headers http.Header) ([]byte, error) {

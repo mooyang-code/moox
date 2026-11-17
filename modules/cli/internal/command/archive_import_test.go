@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"io/fs"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -100,7 +100,7 @@ func useImportFakes(t *testing.T, runs ...string) (*importFakeGateway, *importFa
 	g := &importFakeGateway{calls: &calls, requests: map[string]proto.Message{}, runs: runs}
 	r := &importFakeRemote{calls: &calls}
 	previousGateway, previousRemote, previousSleep := openCommandGateway, openArchiveImportRemote, archiveSleep
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return g, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return g, nil }
 	openArchiveImportRemote = func(string) (archiveImportRemote, string, error) { return r, "factor", nil }
 	archiveSleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() {

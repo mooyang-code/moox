@@ -36,9 +36,13 @@ type Handler struct {
 	cfg      HandlerConfig
 	// continuity 非空时按连续水位逐期推进。
 	continuity *Continuity
-	// gate 非空时，任务没有处于预热或运行（生命周期门禁）就不计算：事件直接 ACK，水位不前进，
-	// 启动之后由下一个事件和追赶循环从水位下一期补算。
+	// gate 非空时，任务没有处于预热或运行就不计算：事件直接 ACK，水位不前进，
+	// 之后由下一个事件和追赶循环从水位下一期补算。
 	gate func(taskID string) bool
+	// noteWhenClosed 非空且返回 true 时，不计算的实时事件仍记下追赶目标（模块在运行、只是任务还没就绪，例如窗口载入中）：
+	// 就绪后追赶循环直接补算，不必等下一条实时事件。模块暂停时返回 false，目标由恢复追赶显式建立。
+	// 还没有水位记录的任务（从没算过）不记，见 Continuity.note。
+	noteWhenClosed func(taskID string) bool
 	// catchupGate 非空时，实时门禁关闭的任务在恢复追赶中仍可推进连续水位（只写历史周期）。
 	catchupGate func(taskID string) bool
 	// begin 非空时取代 gate/catchupGate 的二次检查：先登记在途、再检查门禁，返回的函数在这次计算结束后注销。
@@ -53,6 +57,9 @@ func (h *Handler) SetParamSelector(params trigger.ParamSelector) { h.params = pa
 
 // SetGate 设置生命周期门禁；必须在开始消费之前调用。
 func (h *Handler) SetGate(gate func(taskID string) bool) { h.gate = gate }
+
+// SetNoteWhenClosed 设置“不计算的实时事件是否仍记下追赶目标”的判断；必须在开始消费之前调用。
+func (h *Handler) SetNoteWhenClosed(note func(taskID string) bool) { h.noteWhenClosed = note }
 
 // SetBegin 设置登记式门禁；任务串行队列里的闭包在真正执行前用它再检查一次。必须在开始消费之前调用。
 func (h *Handler) SetBegin(begin func(ctx context.Context, taskID string, live bool) (func(), bool)) {
@@ -163,7 +170,6 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 
 	event := periodEvent{
 		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(), eventID: message.GetEventId(),
-		universe: payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
 		universeSeries: eventSeries(payload.GetUniverseSeries()), failedSeries: eventSeries(payload.GetFailedSeries()),
 	}
 	// 同一个源数据集可以有多个任务：事件同时分给每个启用的任务，各自在自己的串行通道里计算（同一任务内部的期次仍按顺序），
@@ -206,6 +212,11 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 				}
 				release, ok := h.enter(runnerCtx, set.TaskID, true)
 				if !ok {
+					// 本期不算；模块在运行、只是任务没就绪时记下追赶目标，就绪后由追赶循环补算。
+					if h.continuity != nil && h.noteWhenClosed != nil && h.noteWhenClosed(set.TaskID) {
+						_, noteErr := h.continuity.note(set, event, false)
+						return pipeline.Outcome{}, noteErr
+					}
 					return pipeline.Outcome{}, nil
 				}
 				defer release()
@@ -235,7 +246,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	if err == nil {
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
-	if errors.Is(err, storageio.ErrInfra) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if transient(err) {
 		log.WarnContextf(ctx, "factor_period_retry dataset_id=%s period_time=%d error=%v", payload.GetDatasetId(), payload.GetPeriodTime(), err)
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: h.cfg.NakDelay, Err: err}
 	}
@@ -243,25 +254,27 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 }
 
+// transient 报告错误是否只是暂时的（基础设施故障、超时、取消），值得重试；其余（例如 Storage 判为无效请求）重试也不会通过。
+func transient(err error) bool {
+	return errors.Is(err, storageio.ErrInfra) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
 // periodEvent 是一条周期完成事件里引擎需要的部分。
 type periodEvent struct {
 	periodTime time.Time
 	eventID    string
-	universe   []string
-	failed     []string
-	// universeSeries、failedSeries 是统一数据集（多个 series_tag）事件里按序列的全集与失败名单；单序列数据集为空。
+	// universeSeries、failedSeries 是事件里按序列的全集与失败名单（所有数据集的事件都带）。
 	universeSeries []seriesset.Series
 	failedSeries   []seriesset.Series
 }
 
-// periodScope 是一期要算的范围：期望全集与上游失败名单，按标的；统一数据集还带按序列的全集与失败名单（非空时按序列判断）。
+// periodScope 是一期要算的范围：按序列（标的、series_tag）的期望全集与上游失败名单。
 type periodScope struct {
-	universe, failed             []string
 	universeSeries, failedSeries []seriesset.Series
 }
 
 func (e periodEvent) scope() periodScope {
-	return periodScope{universe: e.universe, failed: e.failed, universeSeries: e.universeSeries, failedSeries: e.failedSeries}
+	return periodScope{universeSeries: e.universeSeries, failedSeries: e.failedSeries}
 }
 
 // eventSeries 把事件里的序列名单转成引擎内部的形式。
@@ -351,7 +364,7 @@ func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members [
 		return pipeline.Plan{}, budgetErr
 	}
 	return pipeline.BuildLivePlan(clock, pipeline.LiveInput{
-		Set: set, Members: members, Params: params, PeriodTime: period, Universe: scope.universe, UpstreamFailed: scope.failed,
+		Set: set, Members: members, Params: params, PeriodTime: period,
 		UniverseSeries: scope.universeSeries, UpstreamFailedSeries: scope.failedSeries,
 		CarryColumns: carryColumns, TriggerEventID: triggerEventID, Budget: budget,
 	})

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -92,6 +93,9 @@ func TestSyncAccountExternalErrorsCarryAccountIdentity(t *testing.T) {
 			seedSyncAccount(t, db)
 			if stage == "order" {
 				require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+					if err := storetest.EnsureCurrentTarget(tx, "space-1", "logical-1", "runner-1"); err != nil {
+						return err
+					}
 					return tx.CreateOrder(store.OrderRecord{
 						SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "account-1", ClientOrderID: "client-1",
 						ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",

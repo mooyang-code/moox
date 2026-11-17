@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
-// ExchangeKeyEntry 是录入页和「修改配置」表单里的一把交易所密钥，对应 moox.toml 的一条 [[exchange_keys]]。
+// ExchangeKeyEntry 是录入页和「修改配置」表单里的一把交易所密钥，对应 moox.secrets.toml 的一条 [[exchange_keys]]。
 // 字段名与配置里的键一致（api_key、secret_key、passphrase），config get 才会自动打码。
 type ExchangeKeyEntry struct {
 	Name        string `json:"name"`
@@ -19,8 +19,8 @@ type ExchangeKeyEntry struct {
 	ReadOnly    bool   `json:"readonly"`
 }
 
-// exchangeKeyEntries 从配置读出交易所密钥，顺序与配置里一致。
-func exchangeKeyEntries(m setupconfig.Manifest) []ExchangeKeyEntry {
+// exchangeKeyEntries 从秘密文件读出交易所密钥，顺序与文件里一致。
+func exchangeKeyEntries(m topology.Secrets) []ExchangeKeyEntry {
 	entries := make([]ExchangeKeyEntry, 0, len(m.ExchangeKeys))
 	for _, key := range m.ExchangeKeys {
 		entries = append(entries, ExchangeKeyEntry{
@@ -32,7 +32,7 @@ func exchangeKeyEntries(m setupconfig.Manifest) []ExchangeKeyEntry {
 }
 
 // normalizeExchangeKeyEntries 整理页面提交的交易所密钥：去掉首尾空白，交易所与环境小写化，拒绝控制字符与超长。
-// 语义校验（名称字符、重复、OKX 的 passphrase）交给 setupconfig.Parse；错误信息不含密钥值。
+// 语义校验（名称字符、重复、OKX 的 passphrase）交给 topology.ParseSecrets；错误信息不含密钥值。
 func normalizeExchangeKeyEntries(entries []ExchangeKeyEntry) ([]ExchangeKeyEntry, error) {
 	out := make([]ExchangeKeyEntry, 0, len(entries))
 	for i, entry := range entries {

@@ -32,14 +32,17 @@ const (
 type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
-	ReporterStatus                                  string
-	Enabled                                         bool
-	ProbeStatus, ProbeReason, ProbeRawError         string
-	ProbeCheckedAt                                  time.Time
-	Instances                                       []ReporterInstance
-	ProbeURL                                        string
-	ProbeHistory                                    []domain.CheckResult
-	// Lifecycle 是最近一次探测的健康响应里带的生命周期状态；模块没有上报时为 nil。
+	// Source 是健康的来源：reporter、host_snapshot、delegated（见 SourceReporter 等）。
+	Source string
+	// ReporterStatus 是上报的新鲜度：healthy、stale（停止上报）、missing（从未上报）。
+	ReporterStatus string
+	Enabled        bool
+	// Readiness 是最近一次上报的就绪判断（ready、not_ready，空表示上报里没有）；NotReadyReason 是未就绪的原因。
+	Readiness, NotReadyReason string
+	// BootChanges 是最近 10 分钟里这个组件的启动标识变了几次（“反复重启”检查用）。
+	BootChanges int
+	Instances   []ReporterInstance
+	// Lifecycle 是最近一次上报带的模块级生命周期；上报不新鲜或模块没有生命周期时为 nil。
 	Lifecycle *LifecycleStatus
 }
 
@@ -142,7 +145,6 @@ type InventorySource interface {
 type MarketFetchThresholds struct {
 	CoordinationStaleAfter time.Duration
 	PendingGrace           time.Duration
-	LeaseGrace             time.Duration
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -155,13 +157,13 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out := Overview{GeneratedAt: now}
 	var err error
-	if out.Services, out.Unregistered, out.Topology, err = b.buildServices(ctx, now); err != nil {
-		return Overview{}, err
-	}
-	out.TopologyKnown = out.Topology != nil
 	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
 		return Overview{}, err
 	}
+	if out.Services, out.Unregistered, out.Topology, err = b.buildServices(ctx, now, out.Hosts); err != nil {
+		return Overview{}, err
+	}
+	out.TopologyKnown = out.Topology != nil
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
 		return Overview{}, err
 	}
@@ -1135,7 +1137,7 @@ func parseOverviewFrequency(raw string) time.Duration {
 func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
 	out := make([]BusinessStatus, 0)
 	if b.Checks != nil && b.Results != nil {
-		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page"}, 1501)
+		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness"}, 1501)
 		if err != nil {
 			return nil, err
 		}
@@ -1188,28 +1190,27 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 
 // TradeAttentionNames 是 Trade 上报的需要人看的情况。
 var TradeAttentionNames = map[string]string{
-	"target_rejected":           "交易目标被拒绝",
-	"auto_paused":               "组合账户自动暂停",
-	"target_blocked":            "交易目标持续阻塞",
-	"account_not_ready":         "执行账户持续未就绪",
-	"target_expired":            "交易目标连续过期",
-	"target_reversal":           "同一目标内反向下单",
-	"rate_limited":              "交易所接口限流",
-	"turnover_high":             "组合账户成交额异常偏高",
-	"unknown_results":           "下单结果未知偏多",
-	"inspection_blocked":        "交易账户密钥检测发现阻断项",
-	"inspection_failing":        "交易账户密钥检测连续失败",
-	"transfer_shortfall":        "合约钱包可划转资金不足，现货买入被缩小",
-	"transfer_failing":          "钱包划转或归集出问题",
-	"margin_ratio_low":          "合约保证金率过低",
-	"valuation_degraded":        "估值降级（有持仓取不到价）",
-	"flatten_orders_unsettled":  "清仓结束时有子单没收拾掉，需人工核对",
-	"release_orders_unverified": "释放会话时没能撤单，只按本地记录释放",
-	"release_orders_stuck":      "释放会话持续失败，目标单没撤下",
-	"orders_instrument_gone":    "标的已下架的订单需人工核对成交",
-	"fill_ingest_failed":        "成交没能记进账本，账户卡在同一笔",
-	"clock_skew":                "本机时钟与交易所相差过大，请检查 NTP",
-	"isolated_position":         "交易所账户里有逐仓持仓，moox 只支持全仓单向",
+	"target_rejected":          "交易目标被拒绝",
+	"auto_paused":              "组合账户自动暂停",
+	"target_blocked":           "交易目标持续阻塞",
+	"account_not_ready":        "执行账户持续未就绪",
+	"target_expired":           "交易目标连续过期",
+	"target_reversal":          "同一目标内反向下单",
+	"rate_limited":             "交易所接口限流",
+	"turnover_high":            "组合账户成交额异常偏高",
+	"unknown_results":          "下单结果未知偏多",
+	"inspection_blocked":       "交易账户密钥检测发现阻断项",
+	"inspection_failing":       "交易账户密钥检测连续失败",
+	"transfer_shortfall":       "合约钱包可划转资金不足，现货买入被缩小",
+	"transfer_failing":         "钱包划转或归集出问题",
+	"margin_ratio_low":         "合约保证金率过低",
+	"valuation_degraded":       "估值降级（有持仓取不到价）",
+	"flatten_orders_unsettled": "清仓结束时有子单没收拾掉，需人工核对",
+	"release_orders_stuck":     "过期目标的挂单持续撤不下来",
+	"orders_instrument_gone":   "标的已下架的订单需人工核对成交",
+	"fill_ingest_failed":       "成交没能记进账本，账户卡在同一笔",
+	"clock_skew":               "本机时钟与交易所相差过大，请检查 NTP",
+	"isolated_position":        "交易所账户里有逐仓持仓，moox 只支持全仓单向",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。
@@ -1393,9 +1394,6 @@ type timerCoordinationState struct {
 	hasHealth       bool
 	staleSeries     bool
 	failureReasons  map[string]bool
-	// failureSince 是当前失败原因首次出现的时间（多个上报方时取最早的非零值）。
-	failureSince    float64
-	hasFailureSince bool
 }
 
 // A full Tencent runtime-config batch may touch dozens of functions. The
@@ -1407,13 +1405,6 @@ const timerCoordinationStaleAfter = 15 * time.Minute
 
 const timerCoordinationPendingGrace = 5 * time.Minute
 
-// timerCoordinationLeaseGrace 是「发布租约被占用」的宽限期。重启后旧作业的操作占用要等它结束或过期（每次续期到当前时间加
-// 6 分钟），实测通常 6 分钟左右；10 分钟之后仍被占用，说明作业卡住或有其他发布方，值得人工介入。
-const timerCoordinationLeaseGrace = 10 * time.Minute
-
-// publishLeaseHeldReason 是 Collector 上报的失败原因：Admin 明确答复发布租约或在途操作占用仍被持有。
-const publishLeaseHeldReason = "publish_lease_held"
-
 func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	thresholds := b.MarketFetchThresholds
 	if thresholds.CoordinationStaleAfter <= 0 {
@@ -1422,14 +1413,11 @@ func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	if thresholds.PendingGrace <= 0 {
 		thresholds.PendingGrace = timerCoordinationPendingGrace
 	}
-	if thresholds.LeaseGrace <= 0 {
-		thresholds.LeaseGrace = timerCoordinationLeaseGrace
-	}
 	return thresholds
 }
 
 // buildMarketFetchCoordination consumes the small Collector coordination
-// metric set. It deliberately does not call Tencent or FunctionInstance: Collector
+// metric set. It deliberately does not call Tencent: Collector
 // already reads the trigger readback and publishes it through the shared
 // reporter, while Monitor remains a pure consumer.
 func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
@@ -1515,14 +1503,6 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}); err != nil {
 		return nil, err
 	}
-	if err := load("moox_collector_market_fetch_coordination_failure_since_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		// 多个 Collector 上报同一空间时取最早的非零起始时间：最保守，不会因为另一个实例刚开始失败而延长宽限。
-		if value > 0 && (!state.hasFailureSince || value < state.failureSince) {
-			state.failureSince, state.hasFailureSince = value, true
-		}
-	}); err != nil {
-		return nil, err
-	}
 	if err := load("moox_collector_market_fetch_coordination_pending", func(state *timerCoordinationState, _ map[string]string, value float64) {
 		if value > state.pending {
 			state.pending = value
@@ -1543,29 +1523,12 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	for currentSpace, state := range states {
 		pendingGrace := state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
 			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace
-		// 发布租约被占用有自己的宽限期：只有在「被占用」是唯一失败原因、且起始时间已知并在宽限期内时才给宽限。
-		// 多个 Collector 实例上报时，另一个实例的真实故障不能被租约宽限掩盖；缺少起始时间无法证明在宽限期内。
-		leaseHeld := state.hasHealth && state.healthy <= 0 && state.failureReasons[publishLeaseHeldReason]
-		leaseWithinGrace := leaseHeld && len(state.failureReasons) == 1 && state.hasFailureSince && state.failureSince > 0 &&
-			now.Sub(unixTime(state.failureSince)) <= thresholds.LeaseGrace
-		// 普通的 pending 宽限不能盖过已超期（或无法证明在宽限期内）的租约失败。
-		if pendingGrace && !(leaseHeld && !leaseWithinGrace) {
+		if pendingGrace {
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "采集计划协调进行中", LastCheckedAt: now})
 			continue
 		}
 		if state.hasHealth && state.healthy <= 0 {
-			// 发布租约被占用是租约在正常工作（重启前的旧作业还在云端运行）：宽限期内按协调进行中处理。
-			// 缺少失败起始时间时无法证明还在宽限期内，按已超期处理。
-			if leaseWithinGrace {
-				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "发布租约被占用：等待在途云端作业结束，通常数分钟内自动恢复", LastCheckedAt: now})
-				continue
-			}
-			reason := coordinationFailureText(state.failureReasons)
-			if leaseHeld && len(state.failureReasons) == 1 {
-				// 租约冲突是唯一原因才用这条文案；与其他原因同时出现时，以真实故障的文案为准。
-				reason = "发布租约长时间被占用：请检查 FunctionInstance 批次作业是否卡住，以及是否有其他发布方（CLI 手工发布、补采）在运行"
-			}
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: coordinationFailureText(state.failureReasons), LastCheckedAt: now})
 			continue
 		}
 		if !state.hasLastSuccess || state.lastSuccess <= 0 {
@@ -1623,7 +1586,7 @@ func businessKind(check domain.Check) string {
 		return ""
 	}
 	switch kind {
-	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness", "console-page":
+	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness":
 		return kind
 	default:
 		return ""
@@ -1633,8 +1596,6 @@ func businessKind(check domain.Check) string {
 func businessModule(checkID string) string {
 	kind, id, _ := strings.Cut(checkID, ":")
 	switch kind {
-	case "console-page":
-		return "console-proxy"
 	case "market_canary", "subject_tag", "kline_freshness":
 		return "collector"
 	case "balance", "trade_attention":
@@ -1717,16 +1678,17 @@ func statusRank(status string) int {
 // coordinationFailureTexts 是 Collector 上报的协调失败原因对应的告警文案，按优先级排列：
 // 多个实例上报不同原因时取排在前面的。原因名与 Collector 的 assignmentFailureReasons 一一对应。
 var coordinationFailureTexts = []struct{ reason, text string }{
-	{"cloudfunction", "采集计划配置服务调用失败：请检查 FunctionInstance、网关连接和批处理队列"},
+	{"quota", "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function list --space-id <空间> --drift 找出计划外的函数（unplanned 一组），确认后按各行的 delete_command 删除（moox-cli collector function delete --space-id <空间> --name <函数名> --namespace <命名空间> --region <地域>，带上命名空间与地域才不会连同在用的同名函数一起删）；换过云账号的，旧账号下的函数用 moox-cli setup inspect-scf 查出来到腾讯云控制台手工删"},
+	{"cloud", "调用腾讯云失败：检查云账号密钥、限频和网络"},
 	{"environment", "函数运行环境生成失败：请检查环境变量大小"},
 	{"rules", "采集规则读取失败：请检查 Collector 规则配置和存储连接"},
 	{"store", "Collector 本地数据库读写失败：请检查 Collector 的 SQLite 数据库、磁盘空间和权限"},
 	{"storage", "标的快照登记失败：请检查 Storage 连接，以及 Collector 与 Storage 计算的快照哈希是否一致"},
-	{"package", "采集函数代码包解析失败：请检查代码包是否已上传，以及 FunctionInstance 是否可达"},
+	{"package", "采集函数代码包解析失败：用 moox-cli collector package list --space-id <空间> 检查代码包是否已上传、状态是否可用"},
 	{"dataset", "数据集属性（允许迟到）设置失败：请检查 Storage 连接和数据集配置"},
 	{"activity", "采集计划活动日志未写入，计划保持未生效：请检查 Admin 的活动日志服务"},
 	{"preflight", "创建新采集计划前的检查未通过：请检查数据源前置条件，例如 A 股交易日历的覆盖期"},
-	{"capacity", "采集计划无法放进函数：请检查每函数标的数（symbols_per_function）、环境变量大小和 Access 配置"},
+	{"capacity", "采集计划无法放进函数：请检查每函数标的数（symbols_per_function）、环境变量大小和外部入口配置"},
 }
 
 // coordinationFailureText 返回当前失败原因集合对应的告警文案；没有专属文案时给出通用提示。
@@ -1736,7 +1698,7 @@ func coordinationFailureText(reasons map[string]bool) string {
 			return item.text
 		}
 	}
-	return "采集计划协调失败：请检查 Collector 日志、FunctionInstance 和函数网络"
+	return "采集计划协调失败：请检查 Collector 日志、腾讯云调用和函数网络"
 }
 
 func unixTime(value float64) time.Time {
@@ -1818,7 +1780,7 @@ func (b Builder) buildCollectorStreamHealth(ctx context.Context, spaceID string,
 		if state.heartbeat > 0 {
 			status, reason := "healthy", "collector-stream 心跳正常"
 			if since := now.Sub(unixTime(state.heartbeat)); since > collectorStreamHeartbeatTimeout {
-				status, reason = "down", fmt.Sprintf("collector-stream 心跳已中断 %s（最后 %s）：推送采集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回", since.Truncate(time.Second), unixTime(state.heartbeat).Format(time.RFC3339))
+				status, reason = "down", fmt.Sprintf("collector-stream 心跳已中断 %s（最后 %s）：推送采集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --ingest scf 切回（心跳已超时，交接不等它确认）", since.Truncate(time.Second), unixTime(state.heartbeat).Format(time.RFC3339))
 			}
 			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream", Status: status, Reason: reason, LastCheckedAt: now})
 		}

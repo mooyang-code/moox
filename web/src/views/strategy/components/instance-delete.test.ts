@@ -43,9 +43,8 @@ describe("instance delete flow", () => {
   });
 
   it("only offers deletion for stopped instances without a session", () => {
-    expect(canDeleteInstance({ enabled: false, session_id: "" })).toBe(true);
-    expect(canDeleteInstance({ enabled: true, session_id: "s" })).toBe(false);
-    expect(canDeleteInstance({ enabled: false, session_id: "s" })).toBe(false);
+    expect(canDeleteInstance({ enabled: false })).toBe(true);
+    expect(canDeleteInstance({ enabled: true })).toBe(false);
   });
 
   it("lists deleted and kept tasks in two groups", () => {
@@ -66,8 +65,9 @@ describe("instance delete flow", () => {
     expect(lines).toContain("ftask_spot「现货因子」，结果数据集 dataset_factor_spot");
     expect(lines).toContain("ftask_swap（已删除）");
     expect(lines).toContain("保留的计算任务");
-    expect(lines).toContain("ftask_spot_1m，未绑定到此实例");
+    expect(lines).toContain("ftask_spot_1m，未关联到此实例");
     expect(lines).not.toContain("dataset_shared");
+    expect(lines).toContain("还被别的实例引用时不能删除");
     expect(lines).toContain("结果数据不可恢复");
   });
 
@@ -76,7 +76,7 @@ describe("instance delete flow", () => {
       { market: "spot", taskId: "ftask_spot_1m", factorTask: { bound_instance_id: "" } as never }
     ]);
     expect(lines[1]).toBe("无");
-    expect(lines.join("\n")).toContain("未绑定到此实例");
+    expect(lines.join("\n")).toContain("未关联到此实例");
   });
 
   it("confirms before deleting and reports success", async () => {

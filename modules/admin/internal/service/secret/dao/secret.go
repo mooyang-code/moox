@@ -209,8 +209,5 @@ func isSystemSecret(secret *model.Secret) bool {
 }
 
 func userSecrets(db *gorm.DB) *gorm.DB {
-	return db.Where("c_secret_type <> ? AND substr(c_secret_id, 1, ?) <> ? AND substr(c_secret_id, 1, ?) <> ?",
-		model.GatewayKeyringType,
-		len(model.GatewayKeyringIDPrefix), model.GatewayKeyringIDPrefix,
-		len(model.SSHHostIDPrefix), model.SSHHostIDPrefix)
+	return db.Where("substr(c_secret_id, 1, ?) <> ?", len(model.SSHHostIDPrefix), model.SSHHostIDPrefix)
 }

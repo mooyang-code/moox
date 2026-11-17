@@ -6,7 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 止损止盈（设计 4.1）：rank、signal 规则写在规则上，tranche 写在子策略模板里。按 K 线收盘判断，触发后平掉该持仓单位。
+// 止损止盈（设计 4.1）：写在规则上。按 K 线收盘判断，触发后平掉该持仓单位。
 const (
 	StopPriceClose   = "close"   // 判断与更新最有利价格都用本期 close
 	StopPriceExtreme = "extreme" // 止损看不利方向的极值、止盈与最有利价格看有利方向的极值（多头 low/high，空头 high/low）
@@ -94,13 +94,6 @@ func (r Rule) StopColumns() []string {
 	if r.Stop != nil {
 		for _, column := range r.Stop.Columns() {
 			set[column] = struct{}{}
-		}
-	}
-	if r.Tranche != nil {
-		for _, sub := range r.Tranche.Subs {
-			for _, column := range sub.Stop.Columns() {
-				set[column] = struct{}{}
-			}
 		}
 	}
 	return sortedKeys(set)

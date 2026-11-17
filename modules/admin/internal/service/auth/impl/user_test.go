@@ -16,16 +16,14 @@ import (
 )
 
 func TestGetUserInfoRequiresContextMetadata(t *testing.T) {
-	ctx := context.Background()
-	secretKey := "test-secret-for-get-user-info"
 	user := &model.User{
 		UserID:    "user-1",
 		Username:  "admin",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	svc := newAuthServiceForUserTest(t, secretKey, user)
-	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{})
+	svc := newAuthServiceForUserTest(t, user)
+	rsp, err := svc.GetUserInfo(context.Background(), &pb.GetUserInfoReq{})
 	if err != nil {
 		t.Fatalf("GetUserInfo() error = %v", err)
 	}
@@ -40,11 +38,15 @@ func authCtx(userID string) context.Context {
 	return ctx
 }
 
-func newAuthServiceForUserTest(t *testing.T, secretKey string, users ...*model.User) *AuthServiceImpl {
+func newAuthServiceForUserTest(t *testing.T, users ...*model.User) *AuthServiceImpl {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
+	}
+	// 共享内存库在最后一个连接关闭时才销毁；不关的话 -count=N 的下一轮会读到上一轮的数据。
+	if sqlDB, err := db.DB(); err == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
 	if err := db.Exec(schema.AdminSQL()).Error; err != nil {
 		t.Fatalf("apply schema: %v", err)
@@ -55,7 +57,7 @@ func newAuthServiceForUserTest(t *testing.T, secretKey string, users ...*model.U
 		}
 	}
 	return &AuthServiceImpl{
-		cfg:     &authconfig.Config{JWT: authconfig.JWTConfig{SecretKey: secretKey}},
-		userDAO: dao.NewUserDAO(db, nil),
+		cfg:     &authconfig.Config{},
+		userDAO: dao.NewUserDAO(db),
 	}
 }

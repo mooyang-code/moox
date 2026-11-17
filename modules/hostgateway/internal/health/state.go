@@ -2,6 +2,7 @@
 package health
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -121,6 +122,22 @@ func (state *State) Ready() bool {
 	return lastSync > 0 && lastReport > 0 && now >= lastSync && now-lastSync <= staleAfter && now >= lastReport && now-lastReport <= staleAfter
 }
 
+// Readiness 是 /readyz 用的就绪判断，也随指标上报带给 Monitor：本地状态存储可用，并且路由快照在时限内同步、上报过。
+func (state *State) Readiness(context.Context) (bool, string) {
+	if check := state.storage.Load(); check != nil {
+		if err := check.check(); err != nil {
+			return false, "网关本地状态存储不可用：" + err.Error()
+		}
+	}
+	if current := state.routes.Load(); current == nil || !current.ready {
+		return false, "还没有应用路由快照"
+	}
+	if !state.Ready() {
+		return false, "路由快照同步或上报已过期"
+	}
+	return true, ""
+}
+
 func (state *State) now() time.Time {
 	state.clockMu.RLock()
 	now := state.clock
@@ -185,12 +202,9 @@ func (state *State) Handler() http.Handler {
 		}
 		state.writeHealth(response, true)
 	})
-	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, _ *http.Request) {
-		if check := state.storage.Load(); check != nil && check.check() != nil {
-			state.writeHealth(response, false)
-			return
-		}
-		state.writeHealth(response, state.Ready())
+	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, request *http.Request) {
+		ready, _ := state.Readiness(request.Context())
+		state.writeHealth(response, ready)
 	})
 	mux.HandleFunc("GET /metrics", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

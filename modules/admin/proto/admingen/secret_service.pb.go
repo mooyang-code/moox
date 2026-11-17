@@ -1468,6 +1468,176 @@ func (x *GetReadonlyExchangeKeyRsp) GetKeyId() string {
 	return ""
 }
 
+// GetCloudCredential 是给 Collector 的专用方法：按秘钥 ID 返回调腾讯云用的云账号密钥。
+// 服务端校验这把秘钥类别是 cloud、厂商是 tencent、状态是 active，任何一项不满足都拒绝、不返回秘钥值。
+// 不在 GetSecretValue 里按调用方限定：网关转发会丢掉调用方元数据，所以用专用方法配合“按方法授权”，
+// Collector 只被放行这个方法，拿不到交易所等其他类别的密钥。
+type GetCloudCredentialReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SecretId string `protobuf:"bytes,1,opt,name=secret_id,json=secretId,proto3" json:"secret_id,omitempty"`
+}
+
+func (x *GetCloudCredentialReq) Reset() {
+	*x = GetCloudCredentialReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_secret_service_proto_msgTypes[22]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetCloudCredentialReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCloudCredentialReq) ProtoMessage() {}
+
+func (x *GetCloudCredentialReq) ProtoReflect() protoreflect.Message {
+	mi := &file_secret_service_proto_msgTypes[22]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCloudCredentialReq.ProtoReflect.Descriptor instead.
+func (*GetCloudCredentialReq) Descriptor() ([]byte, []int) {
+	return file_secret_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GetCloudCredentialReq) GetSecretId() string {
+	if x != nil {
+		return x.SecretId
+	}
+	return ""
+}
+
+// CloudCredential 是云账号密钥的明文。和带脱敏的 Secret 分开，脱敏过滤器不会改写它。
+type CloudCredential struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SecretId    string `protobuf:"bytes,1,opt,name=secret_id,json=secretId,proto3" json:"secret_id,omitempty"`
+	KeyId       string `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`                   // 腾讯云 SecretId
+	SecretValue string `protobuf:"bytes,3,opt,name=secret_value,json=secretValue,proto3" json:"secret_value,omitempty"` // 腾讯云 SecretKey
+}
+
+func (x *CloudCredential) Reset() {
+	*x = CloudCredential{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_secret_service_proto_msgTypes[23]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *CloudCredential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloudCredential) ProtoMessage() {}
+
+func (x *CloudCredential) ProtoReflect() protoreflect.Message {
+	mi := &file_secret_service_proto_msgTypes[23]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloudCredential.ProtoReflect.Descriptor instead.
+func (*CloudCredential) Descriptor() ([]byte, []int) {
+	return file_secret_service_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *CloudCredential) GetSecretId() string {
+	if x != nil {
+		return x.SecretId
+	}
+	return ""
+}
+
+func (x *CloudCredential) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *CloudCredential) GetSecretValue() string {
+	if x != nil {
+		return x.SecretValue
+	}
+	return ""
+}
+
+type GetCloudCredentialRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo    *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Credential *CloudCredential  `protobuf:"bytes,2,opt,name=credential,proto3" json:"credential,omitempty"`
+}
+
+func (x *GetCloudCredentialRsp) Reset() {
+	*x = GetCloudCredentialRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_secret_service_proto_msgTypes[24]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetCloudCredentialRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCloudCredentialRsp) ProtoMessage() {}
+
+func (x *GetCloudCredentialRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_secret_service_proto_msgTypes[24]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCloudCredentialRsp.ProtoReflect.Descriptor instead.
+func (*GetCloudCredentialRsp) Descriptor() ([]byte, []int) {
+	return file_secret_service_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetCloudCredentialRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *GetCloudCredentialRsp) GetCredential() *CloudCredential {
+	if x != nil {
+		return x.Credential
+	}
+	return nil
+}
+
 var File_secret_service_proto protoreflect.FileDescriptor
 
 var file_secret_service_proto_rawDesc = []byte{
@@ -1649,7 +1819,26 @@ var file_secret_service_proto_rawDesc = []byte{
 	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74,
 	0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x15, 0x0a,
 	0x06, 0x6b, 0x65, 0x79, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x6b,
-	0x65, 0x79, 0x49, 0x64, 0x32, 0xdb, 0x06, 0x0a, 0x09, 0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x4d,
+	0x65, 0x79, 0x49, 0x64, 0x22, 0x34, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x43, 0x6c, 0x6f, 0x75, 0x64,
+	0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x65, 0x71, 0x12, 0x1b, 0x0a,
+	0x09, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x08, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x49, 0x64, 0x22, 0x68, 0x0a, 0x0f, 0x43, 0x6c,
+	0x6f, 0x75, 0x64, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x12, 0x1b, 0x0a,
+	0x09, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x08, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x49, 0x64, 0x12, 0x15, 0x0a, 0x06, 0x6b, 0x65,
+	0x79, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x6b, 0x65, 0x79, 0x49,
+	0x64, 0x12, 0x21, 0x0a, 0x0c, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x5f, 0x76, 0x61, 0x6c, 0x75,
+	0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x56,
+	0x61, 0x6c, 0x75, 0x65, 0x22, 0x8d, 0x01, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x43, 0x6c, 0x6f, 0x75,
+	0x64, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x73, 0x70, 0x12, 0x34,
+	0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b,
+	0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d,
+	0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74,
+	0x49, 0x6e, 0x66, 0x6f, 0x12, 0x3e, 0x0a, 0x0a, 0x63, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69,
+	0x61, 0x6c, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1e, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
+	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6f, 0x70, 0x73, 0x2e, 0x43, 0x6c, 0x6f, 0x75, 0x64, 0x43, 0x72,
+	0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x0a, 0x63, 0x72, 0x65, 0x64, 0x65, 0x6e,
+	0x74, 0x69, 0x61, 0x6c, 0x32, 0xbd, 0x07, 0x0a, 0x09, 0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x4d,
 	0x67, 0x72, 0x12, 0x4b, 0x0a, 0x0b, 0x4c, 0x69, 0x73, 0x74, 0x53, 0x65, 0x63, 0x72, 0x65, 0x74,
 	0x73, 0x12, 0x1d, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6f, 0x70,
 	0x73, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x73, 0x52, 0x65, 0x71,
@@ -1703,11 +1892,18 @@ var file_secret_service_proto_rawDesc = []byte{
 	0x67, 0x65, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x71, 0x1a, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
 	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6f, 0x70, 0x73, 0x2e, 0x47, 0x65, 0x74, 0x52, 0x65, 0x61, 0x64,
 	0x6f, 0x6e, 0x6c, 0x79, 0x45, 0x78, 0x63, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x4b, 0x65, 0x79, 0x52,
-	0x73, 0x70, 0x42, 0x43, 0x5a, 0x41, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d,
-	0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x61, 0x64, 0x6d, 0x69, 0x6e,
-	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x67, 0x65, 0x6e, 0x3b,
-	0x61, 0x64, 0x6d, 0x69, 0x6e, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x73, 0x70, 0x12, 0x60, 0x0a, 0x12, 0x47, 0x65, 0x74, 0x43, 0x6c, 0x6f, 0x75, 0x64, 0x43, 0x72,
+	0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x12, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
+	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6f, 0x70, 0x73, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6c, 0x6f, 0x75,
+	0x64, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x65, 0x71, 0x1a, 0x24,
+	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6f, 0x70, 0x73, 0x2e, 0x47,
+	0x65, 0x74, 0x43, 0x6c, 0x6f, 0x75, 0x64, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61,
+	0x6c, 0x52, 0x73, 0x70, 0x42, 0x43, 0x5a, 0x41, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63,
+	0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f,
+	0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x61, 0x64, 0x6d,
+	0x69, 0x6e, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x67, 0x65,
+	0x6e, 0x3b, 0x61, 0x64, 0x6d, 0x69, 0x6e, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f,
+	0x33,
 }
 
 var (
@@ -1722,7 +1918,7 @@ func file_secret_service_proto_rawDescGZIP() []byte {
 	return file_secret_service_proto_rawDescData
 }
 
-var file_secret_service_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_secret_service_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_secret_service_proto_goTypes = []interface{}{
 	(*Secret)(nil),                    // 0: trpc.moox.ops.Secret
 	(*ListSecretsReq)(nil),            // 1: trpc.moox.ops.ListSecretsReq
@@ -1746,48 +1942,55 @@ var file_secret_service_proto_goTypes = []interface{}{
 	(*ImportSecretsRsp)(nil),          // 19: trpc.moox.ops.ImportSecretsRsp
 	(*GetReadonlyExchangeKeyReq)(nil), // 20: trpc.moox.ops.GetReadonlyExchangeKeyReq
 	(*GetReadonlyExchangeKeyRsp)(nil), // 21: trpc.moox.ops.GetReadonlyExchangeKeyRsp
-	(*commonpb.RetInfo)(nil),          // 22: trpc.moox.common.RetInfo
+	(*GetCloudCredentialReq)(nil),     // 22: trpc.moox.ops.GetCloudCredentialReq
+	(*CloudCredential)(nil),           // 23: trpc.moox.ops.CloudCredential
+	(*GetCloudCredentialRsp)(nil),     // 24: trpc.moox.ops.GetCloudCredentialRsp
+	(*commonpb.RetInfo)(nil),          // 25: trpc.moox.common.RetInfo
 }
 var file_secret_service_proto_depIdxs = []int32{
-	22, // 0: trpc.moox.ops.ListSecretsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 0: trpc.moox.ops.ListSecretsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,  // 1: trpc.moox.ops.ListSecretsRsp.secrets:type_name -> trpc.moox.ops.Secret
-	22, // 2: trpc.moox.ops.GetSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 2: trpc.moox.ops.GetSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,  // 3: trpc.moox.ops.GetSecretRsp.secret:type_name -> trpc.moox.ops.Secret
-	22, // 4: trpc.moox.ops.GetSecretValueRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 4: trpc.moox.ops.GetSecretValueRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	6,  // 5: trpc.moox.ops.GetSecretValueRsp.secret:type_name -> trpc.moox.ops.SecretMaterial
 	0,  // 6: trpc.moox.ops.CreateSecretReq.secret:type_name -> trpc.moox.ops.Secret
-	22, // 7: trpc.moox.ops.CreateSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	22, // 8: trpc.moox.ops.UpdateSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	22, // 9: trpc.moox.ops.DeleteSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	22, // 10: trpc.moox.ops.ToggleSecretStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	22, // 11: trpc.moox.ops.ExportSecretsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	22, // 12: trpc.moox.ops.ImportSecretsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	22, // 13: trpc.moox.ops.GetReadonlyExchangeKeyRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	1,  // 14: trpc.moox.ops.SecretMgr.ListSecrets:input_type -> trpc.moox.ops.ListSecretsReq
-	3,  // 15: trpc.moox.ops.SecretMgr.GetSecret:input_type -> trpc.moox.ops.GetSecretReq
-	5,  // 16: trpc.moox.ops.SecretMgr.GetSecretValue:input_type -> trpc.moox.ops.GetSecretValueReq
-	8,  // 17: trpc.moox.ops.SecretMgr.CreateSecret:input_type -> trpc.moox.ops.CreateSecretReq
-	10, // 18: trpc.moox.ops.SecretMgr.UpdateSecret:input_type -> trpc.moox.ops.UpdateSecretReq
-	12, // 19: trpc.moox.ops.SecretMgr.DeleteSecret:input_type -> trpc.moox.ops.DeleteSecretReq
-	14, // 20: trpc.moox.ops.SecretMgr.ToggleSecretStatus:input_type -> trpc.moox.ops.ToggleSecretStatusReq
-	16, // 21: trpc.moox.ops.SecretMgr.ExportSecrets:input_type -> trpc.moox.ops.ExportSecretsReq
-	18, // 22: trpc.moox.ops.SecretMgr.ImportSecrets:input_type -> trpc.moox.ops.ImportSecretsReq
-	20, // 23: trpc.moox.ops.SecretMgr.GetReadonlyExchangeKey:input_type -> trpc.moox.ops.GetReadonlyExchangeKeyReq
-	2,  // 24: trpc.moox.ops.SecretMgr.ListSecrets:output_type -> trpc.moox.ops.ListSecretsRsp
-	4,  // 25: trpc.moox.ops.SecretMgr.GetSecret:output_type -> trpc.moox.ops.GetSecretRsp
-	7,  // 26: trpc.moox.ops.SecretMgr.GetSecretValue:output_type -> trpc.moox.ops.GetSecretValueRsp
-	9,  // 27: trpc.moox.ops.SecretMgr.CreateSecret:output_type -> trpc.moox.ops.CreateSecretRsp
-	11, // 28: trpc.moox.ops.SecretMgr.UpdateSecret:output_type -> trpc.moox.ops.UpdateSecretRsp
-	13, // 29: trpc.moox.ops.SecretMgr.DeleteSecret:output_type -> trpc.moox.ops.DeleteSecretRsp
-	15, // 30: trpc.moox.ops.SecretMgr.ToggleSecretStatus:output_type -> trpc.moox.ops.ToggleSecretStatusRsp
-	17, // 31: trpc.moox.ops.SecretMgr.ExportSecrets:output_type -> trpc.moox.ops.ExportSecretsRsp
-	19, // 32: trpc.moox.ops.SecretMgr.ImportSecrets:output_type -> trpc.moox.ops.ImportSecretsRsp
-	21, // 33: trpc.moox.ops.SecretMgr.GetReadonlyExchangeKey:output_type -> trpc.moox.ops.GetReadonlyExchangeKeyRsp
-	24, // [24:34] is the sub-list for method output_type
-	14, // [14:24] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	25, // 7: trpc.moox.ops.CreateSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 8: trpc.moox.ops.UpdateSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 9: trpc.moox.ops.DeleteSecretRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 10: trpc.moox.ops.ToggleSecretStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 11: trpc.moox.ops.ExportSecretsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 12: trpc.moox.ops.ImportSecretsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 13: trpc.moox.ops.GetReadonlyExchangeKeyRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 14: trpc.moox.ops.GetCloudCredentialRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	23, // 15: trpc.moox.ops.GetCloudCredentialRsp.credential:type_name -> trpc.moox.ops.CloudCredential
+	1,  // 16: trpc.moox.ops.SecretMgr.ListSecrets:input_type -> trpc.moox.ops.ListSecretsReq
+	3,  // 17: trpc.moox.ops.SecretMgr.GetSecret:input_type -> trpc.moox.ops.GetSecretReq
+	5,  // 18: trpc.moox.ops.SecretMgr.GetSecretValue:input_type -> trpc.moox.ops.GetSecretValueReq
+	8,  // 19: trpc.moox.ops.SecretMgr.CreateSecret:input_type -> trpc.moox.ops.CreateSecretReq
+	10, // 20: trpc.moox.ops.SecretMgr.UpdateSecret:input_type -> trpc.moox.ops.UpdateSecretReq
+	12, // 21: trpc.moox.ops.SecretMgr.DeleteSecret:input_type -> trpc.moox.ops.DeleteSecretReq
+	14, // 22: trpc.moox.ops.SecretMgr.ToggleSecretStatus:input_type -> trpc.moox.ops.ToggleSecretStatusReq
+	16, // 23: trpc.moox.ops.SecretMgr.ExportSecrets:input_type -> trpc.moox.ops.ExportSecretsReq
+	18, // 24: trpc.moox.ops.SecretMgr.ImportSecrets:input_type -> trpc.moox.ops.ImportSecretsReq
+	20, // 25: trpc.moox.ops.SecretMgr.GetReadonlyExchangeKey:input_type -> trpc.moox.ops.GetReadonlyExchangeKeyReq
+	22, // 26: trpc.moox.ops.SecretMgr.GetCloudCredential:input_type -> trpc.moox.ops.GetCloudCredentialReq
+	2,  // 27: trpc.moox.ops.SecretMgr.ListSecrets:output_type -> trpc.moox.ops.ListSecretsRsp
+	4,  // 28: trpc.moox.ops.SecretMgr.GetSecret:output_type -> trpc.moox.ops.GetSecretRsp
+	7,  // 29: trpc.moox.ops.SecretMgr.GetSecretValue:output_type -> trpc.moox.ops.GetSecretValueRsp
+	9,  // 30: trpc.moox.ops.SecretMgr.CreateSecret:output_type -> trpc.moox.ops.CreateSecretRsp
+	11, // 31: trpc.moox.ops.SecretMgr.UpdateSecret:output_type -> trpc.moox.ops.UpdateSecretRsp
+	13, // 32: trpc.moox.ops.SecretMgr.DeleteSecret:output_type -> trpc.moox.ops.DeleteSecretRsp
+	15, // 33: trpc.moox.ops.SecretMgr.ToggleSecretStatus:output_type -> trpc.moox.ops.ToggleSecretStatusRsp
+	17, // 34: trpc.moox.ops.SecretMgr.ExportSecrets:output_type -> trpc.moox.ops.ExportSecretsRsp
+	19, // 35: trpc.moox.ops.SecretMgr.ImportSecrets:output_type -> trpc.moox.ops.ImportSecretsRsp
+	21, // 36: trpc.moox.ops.SecretMgr.GetReadonlyExchangeKey:output_type -> trpc.moox.ops.GetReadonlyExchangeKeyRsp
+	24, // 37: trpc.moox.ops.SecretMgr.GetCloudCredential:output_type -> trpc.moox.ops.GetCloudCredentialRsp
+	27, // [27:38] is the sub-list for method output_type
+	16, // [16:27] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_secret_service_proto_init() }
@@ -2060,6 +2263,42 @@ func file_secret_service_proto_init() {
 				return nil
 			}
 		}
+		file_secret_service_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetCloudCredentialReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_secret_service_proto_msgTypes[23].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*CloudCredential); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_secret_service_proto_msgTypes[24].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetCloudCredentialRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2067,7 +2306,7 @@ func file_secret_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_secret_service_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

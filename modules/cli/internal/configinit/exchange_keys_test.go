@@ -10,7 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 func exchangeKeyRequest() Request {
@@ -22,13 +23,14 @@ func exchangeKeyRequest() Request {
 	return request
 }
 
-// 示例里只有注释掉的样例：不填交易所密钥时渲染结果里没有 [[exchange_keys]]，占位值不会被 apply 进 SecretMgr。
+// 秘密文件的示例里只有注释掉的样例：不填交易所密钥时渲染结果里没有 [[exchange_keys]]，占位值不会被 setup init 写进 SecretMgr。
 func TestExampleHasOnlyCommentedExchangeKeySamples(t *testing.T) {
-	assert.Contains(t, exampleTemplate, "# [[exchange_keys]]")
-	for _, line := range strings.Split(exampleTemplate, "\n") {
+	assert.Contains(t, secretsTemplate, "# [[exchange_keys]]")
+	for _, line := range strings.Split(secretsTemplate, "\n") {
 		assert.NotEqual(t, "[[exchange_keys]]", strings.TrimSpace(line), "示例里的 [[exchange_keys]] 必须是注释")
 	}
-	manifest, text := renderWith(t, sampleRequest(), nil)
+	manifest, rendered := renderPair(t, sampleRequest(), nil)
+	text := string(rendered.Secrets)
 	assert.Empty(t, manifest.ExchangeKeys)
 	assert.NotContains(t, text, "\n[[exchange_keys]]")
 	// 样例注释原样留在生成的文件里，用户以后可以取消注释。
@@ -36,9 +38,10 @@ func TestExampleHasOnlyCommentedExchangeKeySamples(t *testing.T) {
 }
 
 func TestRenderWritesExchangeKeysAsAnArrayTable(t *testing.T) {
-	manifest, text := renderWith(t, exchangeKeyRequest(), nil)
+	manifest, rendered := renderPair(t, exchangeKeyRequest(), nil)
+	text := string(rendered.Secrets)
 	require.Len(t, manifest.ExchangeKeys, 2)
-	assert.Equal(t, setupconfig.ExchangeKey{Name: "readonly", Exchange: "binance", Environment: "production", APIKey: "ro-key", SecretKey: "ro-secret", ReadOnly: true}, manifest.ExchangeKeys[0])
+	assert.Equal(t, topology.ExchangeKey{Name: "readonly", Exchange: "binance", Environment: "production", APIKey: "ro-key", SecretKey: "ro-secret", ReadOnly: true}, manifest.ExchangeKeys[0])
 	// 交易所、环境小写化，passphrase 写进去。
 	assert.Equal(t, "okx", manifest.ExchangeKeys[1].Exchange)
 	assert.Equal(t, "testnet", manifest.ExchangeKeys[1].Environment)
@@ -48,9 +51,10 @@ func TestRenderWritesExchangeKeysAsAnArrayTable(t *testing.T) {
 	assert.Contains(t, text, "\napi_key = \"ro-key\"\nsecret_key = \"ro-secret\"\nreadonly = true\n")
 	assert.Contains(t, text, "passphrase = \"okx-pass\"")
 	assert.NotContains(t, text, "passphrase = \"\"")
-	// 其它内容不受影响：主机、示例里的下一段说明仍然在。
-	assert.Contains(t, text, "# setup init 导入因子")
+	// 其它内容不受影响：样例说明仍然在，密钥不出现在 moox.toml 里。
+	assert.Contains(t, text, "# 交易所密钥（可选）")
 	assert.True(t, strings.HasSuffix(text, "\n"))
+	assert.NotContains(t, string(rendered.Config), "ro-secret")
 }
 
 // 没配海外服务器（Trade 所在的主机）时交易所密钥没有用途，录入页隐藏这一步；服务端再拦一道。
@@ -179,8 +183,9 @@ func TestReplaceExchangeKeysWithNoExistingBlockAppendsAtTheEnd(t *testing.T) {
 
 // config get：路径用序号，api_key、secret_key、passphrase 自动打码，其余字段原样。
 func TestGetConfigMasksExchangeKeys(t *testing.T) {
-	_, text := renderWith(t, exchangeKeyRequest(), nil)
-	path, _, keys := migrateFixture(t, text)
+	_, rendered := renderPair(t, exchangeKeyRequest(), nil)
+	keys := &configcrypt.MemoryStore{}
+	path := topology.SecretsPathFor(writePairFiles(t, t.TempDir(), rendered, keys))
 
 	first, err := GetConfig(path, "exchange_keys.0", false, keys)
 	require.NoError(t, err)
@@ -214,8 +219,8 @@ func asJSON(t *testing.T, value any) string {
 }
 
 func TestEditorOverviewMasksAndRevealsExchangeKeysByIndex(t *testing.T) {
-	_, text := renderWith(t, exchangeKeyRequest(), nil)
-	h := startEditor(t, []byte(text))
+	_, rendered := renderPair(t, exchangeKeyRequest(), nil)
+	h := startEditor(t, &rendered)
 
 	status, reply, raw := h.call("config/overview", struct{}{}, nil)
 	require.Equal(t, http.StatusOK, status)
@@ -244,8 +249,8 @@ func TestEditorOverviewMasksAndRevealsExchangeKeysByIndex(t *testing.T) {
 }
 
 func TestEditorFormEditsExchangeKeysAsAWhole(t *testing.T) {
-	_, text := renderWith(t, exchangeKeyRequest(), nil)
-	h := startEditor(t, []byte(text))
+	_, rendered := renderPair(t, exchangeKeyRequest(), nil)
+	h := startEditor(t, &rendered)
 	_, reply, _ := h.call("config/form", struct{}{}, nil)
 	form := *reply.Form
 	require.Len(t, form.ExchangeKeys, 2)
@@ -258,15 +263,14 @@ func TestEditorFormEditsExchangeKeysAsAWhole(t *testing.T) {
 	}
 	status, saved, raw := h.call("config/update", form, nil)
 	require.Equal(t, http.StatusOK, status, raw)
-	manifest, err := setupconfig.Parse([]byte(h.plain()))
-	require.NoError(t, err)
+	manifest := h.pair().Secrets
 	require.Len(t, manifest.ExchangeKeys, 2)
 	assert.Equal(t, "ro-key-2", manifest.ExchangeKeys[0].APIKey)
 	assert.True(t, manifest.ExchangeKeys[0].ReadOnly)
 	assert.Equal(t, "trade", manifest.ExchangeKeys[1].Name)
 	require.Len(t, saved.Overview.ExchangeKeys, 2)
 	assert.NotContains(t, raw, "t-secret", "保存结果里不能有密钥值")
-	assert.Contains(t, h.plain(), "# setup init 导入因子", "整块替换不能删掉下一段的说明")
+	assert.Contains(t, h.plain(), "# 交易所密钥（可选）", "整块替换不能删掉样例说明")
 
 	// 校验不过时拒绝保存，文件不变。
 	before := h.plain()
@@ -282,17 +286,15 @@ func TestEditorFormEditsExchangeKeysAsAWhole(t *testing.T) {
 	form.ExchangeKeys = nil
 	status, _, _ = h.call("config/update", form, nil)
 	require.Equal(t, http.StatusOK, status)
-	manifest, err = setupconfig.Parse([]byte(h.plain()))
-	require.NoError(t, err)
+	manifest = h.pair().Secrets
 	assert.Len(t, manifest.ExchangeKeys, 2, "字段缺省时不能把密钥清掉")
 	form.ExchangeKeys = []ExchangeKeyEntry{}
 	status, _, _ = h.call("config/update", form, nil)
 	require.Equal(t, http.StatusOK, status)
-	manifest, err = setupconfig.Parse([]byte(h.plain()))
-	require.NoError(t, err)
+	manifest = h.pair().Secrets
 	assert.Empty(t, manifest.ExchangeKeys)
 	assert.Contains(t, h.plain(), "# [[exchange_keys]]", "注释样例还在")
-	_, err = os.Stat(h.path)
+	_, err := os.Stat(h.path)
 	require.NoError(t, err)
 }
 

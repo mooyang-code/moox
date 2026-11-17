@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -102,7 +101,7 @@ func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T
 		t.Fatal(err)
 	}
 	engine := &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}
-	svc, _ := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
 
 	newer := "2026-09-08T10:05:00Z"
@@ -129,7 +128,7 @@ func TestViewDatasetFreshnessIgnoresBuildingIndexAndMissingIdentity(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, _ := queryTestService(&existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}, false)
+	svc := queryTestService(&existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}, false)
 	configureDatasetFreshnessView(svc, metrics, "prices-next", "prices-next")
 	svc.observeViewWatermark("prices-next", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}, true)
 	assertNoViewSubjects(t, registry)
@@ -212,7 +211,7 @@ func mustGather(t *testing.T, registry *prometheus.Registry) []*dto.MetricFamily
 
 func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testing.T) {
 	engine := &queryEngine{}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 
 	cases := []struct {
 		name     string
@@ -227,9 +226,8 @@ func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			engine.rows = rowsForTags(tc.wantTags)
 			rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-				AuthInfo: auth,
-				SpaceId:  "space",
-				ViewId:   "prices",
+				SpaceId: "space",
+				ViewId:  "prices",
 				Selectors: []*pb.TimeSeriesSelector{{
 					SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: tc.tag,
 				}},
@@ -257,7 +255,7 @@ func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testi
 
 func TestQueryTimeSeriesRowsValidatesSelectorScope(t *testing.T) {
 	engine := &queryEngine{}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	cases := []struct {
 		name     string
 		selector *pb.TimeSeriesSelector
@@ -270,7 +268,7 @@ func TestQueryTimeSeriesRowsValidatesSelectorScope(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: "space", ViewId: "prices",
+				SpaceId: "space", ViewId: "prices",
 				Selectors: []*pb.TimeSeriesSelector{tc.selector},
 			})
 			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
@@ -307,9 +305,9 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := &queryEngine{rows: tc.rows, stats: tc.stats, statErr: tc.statErr}
-			svc, auth := queryTestService(engine, tc.active)
+			svc := queryTestService(engine, tc.active)
 			req := &pb.QueryTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: "space", ViewId: "prices",
+				SpaceId: "space", ViewId: "prices",
 				Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 				TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 			}
@@ -332,9 +330,9 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 
 func TestQueryTimeSeriesRowsRejectsActiveIndexMismatchBeforeQuery(t *testing.T) {
 	engine := &queryEngine{}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-old"},
+		SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-old"},
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -348,10 +346,10 @@ func TestQueryTimeSeriesRowsRejectsActiveIndexMismatchBeforeQuery(t *testing.T) 
 
 func TestQueryTimeSeriesRowsRejectsInPlaceRevisionMismatch(t *testing.T) {
 	engine := &queryEngine{}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	svc.indexRevision = map[string]uint64{"prices-index": 7}
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-index", Revision: 6},
+		SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-index", Revision: 6},
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -370,13 +368,13 @@ func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
 		IndexedTo:   "2026-07-29T00:01:00Z",
 	}
 	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: stats}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
 	runtime.statsIndexID = "prices-index"
 	runtime.stats = stats
 
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices", TotalMode: pb.TotalMode_NONE,
+		SpaceId: "space", ViewId: "prices", TotalMode: pb.TotalMode_NONE,
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -402,13 +400,13 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 		stats:   stats,
 		statErr: errors.New("stat failed"),
 	}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
 	runtime.statsIndexID = "prices-index"
 	runtime.stats = stats
 
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices",
+		SpaceId: "space", ViewId: "prices",
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -460,9 +458,9 @@ func TestQueryTimeSeriesRowsCoverageUsesHalfOpenNanosecondBoundary(t *testing.T)
 					IndexedTo:   "2026-07-29T00:00:00Z",
 				},
 			}
-			svc, auth := queryTestService(engine, true)
+			svc := queryTestService(engine, true)
 			rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-				AuthInfo: auth, SpaceId: "space", ViewId: "prices",
+				SpaceId: "space", ViewId: "prices",
 				Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 				TimeRange: tc.rng,
 			})
@@ -476,10 +474,8 @@ func TestQueryTimeSeriesRowsCoverageUsesHalfOpenNanosecondBoundary(t *testing.T)
 	}
 }
 
-func queryTestService(engine viewindex.Engine, active bool) (*Service, *pb.AuthInfo) {
-	const secret = "view-secret"
+func queryTestService(engine viewindex.Engine, active bool) *Service {
 	svc := &Service{
-		authSecret:  secret,
 		engines:     map[string]viewindex.Engine{"query-test": engine},
 		indexEngine: map[string]string{"prices-index": "query-test", "prices": "query-test"},
 		schemas: map[string]viewindex.ViewIndexSchema{
@@ -491,8 +487,7 @@ func queryTestService(engine viewindex.Engine, active bool) (*Service, *pb.AuthI
 	if active {
 		svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{active: "prices-index"}
 	}
-	auth := &pb.AuthInfo{AppId: "query-test", AppKey: serviceauth.Key(secret, "query-test")}
-	return svc, auth
+	return svc
 }
 
 func timeSeriesTestRowKey(tag string) *pb.RowKey {
@@ -523,12 +518,12 @@ func sameOptionalString(left, right *string) bool {
 // FORCE_EXACT 现算并缓存，之后的 NONE 查询也能拿到。
 func TestQueryTimeSeriesRowsServesCoverageProbe(t *testing.T) {
 	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, EntryCount: 1, IndexedFrom: "2026-07-29T00:00:00Z", IndexedTo: "2026-07-29T00:01:00Z", RowsPerSeries: 5000}}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	svc.seriesBars = 5000
 	probe := func(mode pb.TotalMode) *pb.QueryTimeSeriesRowsRsp {
 		t.Helper()
 		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: "space", ViewId: "prices", Limit: 1, TotalMode: mode,
+			SpaceId: "space", ViewId: "prices", Limit: 1, TotalMode: mode,
 			TimeRange: &pb.TimeRange{StartTime: "1970-01-01T00:00:00Z", EndTime: "1970-01-01T00:00:00.000000001Z"},
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {

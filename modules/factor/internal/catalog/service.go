@@ -178,7 +178,8 @@ func (s *Service) SetTaskStatus(ctx context.Context, taskID, status string) (dom
 }
 
 // BindTask 把任务与策略实例永久关联（任务独占，一个实例可以关联多个任务）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空。
-// 任务没有成员时拒绝：没有成员的任务不会产出任何列，关联没有意义（设计 S1）。
+// 只有声明了 factor_params 的实例才关联，关联是为了独占可变成员的参数提交：任务没有可变成员时拒绝（没有需要独占的东西；
+// 不调参的实例不关联，只读任务的列，一个任务可以被多个这样的实例引用）。
 func (s *Service) BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error) {
 	taskID, instanceID = strings.TrimSpace(taskID), strings.TrimSpace(instanceID)
 	if taskID == "" || instanceID == "" {
@@ -202,12 +203,16 @@ func (s *Service) BindTask(ctx context.Context, taskID, instanceID string) (doma
 	if task.Status == domain.TaskStatusPending {
 		return domain.FactorTask{}, errors.New("factor task is not ready")
 	}
-	count, err := s.db.CountMembers(ctx, taskID)
+	members, err := s.db.ListMembers(ctx, taskID, "")
 	if err != nil {
 		return domain.FactorTask{}, err
 	}
-	if count == 0 {
-		return domain.FactorTask{}, fmt.Errorf("factor task %q has no members; add at least one member before binding", taskID)
+	hasVar := false
+	for _, member := range members {
+		hasVar = hasVar || member.Kind == domain.MemberKindVar
+	}
+	if !hasVar {
+		return domain.FactorTask{}, fmt.Errorf("因子任务 %s 没有可变成员，不需要关联：只有声明了 factor_params 的实例才关联任务，其余实例直接读任务的列", taskID)
 	}
 	return s.db.BindTask(ctx, taskID, instanceID)
 }

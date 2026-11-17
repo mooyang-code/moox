@@ -3,6 +3,8 @@ package adminclient
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,11 +12,10 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -28,9 +29,10 @@ type collectorWire struct {
 }
 
 func (w *collectorWire) GetDirectory(_ context.Context, _ *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
-	d := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "public-must-not-be-dialed.example.test"}}, Services: map[string][]string{"trpc.moox.collector.CollectMgr": {"control"}}}
-	version, err := d.VersionHash()
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: version, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: d.Hosts["control"].Address}}, Services: map[string]*directorypb.ServiceHosts{"trpc.moox.collector.CollectMgr": {HostIds: []string{"control"}}}}, err
+	// 目录只有主机与部署，CLI 按内嵌的服务目录自己展开出 CollectMgr 在 control 上。
+	return &directorypb.GetDirectoryRsp{Changed: true, Version: "v1",
+		Hosts:       []*directorypb.DirectoryHost{{HostId: "control", Address: "public-must-not-be-dialed.example.test", Reachability: "direct", Enabled: true}},
+		Deployments: []*directorypb.DirectoryDeployment{{HostId: "control", ComponentId: "admin", Enabled: true}, {HostId: "control", ComponentId: "collector", Enabled: true}}}, nil
 }
 
 func (w *collectorWire) CreateTask(_ context.Context, req *pb.CreateTaskReq) (*pb.CreateTaskRsp, error) {
@@ -105,10 +107,9 @@ func TestCollectorTaskWorkflowUsesNativeGatewayJSONAndInventoryPB(t *testing.T) 
 	require.NoError(t, os.MkdirAll(operator, 0o700))
 	knownHosts := filepath.Join(operator, "known_hosts")
 	require.NoError(t, os.WriteFile(knownHosts, nil, 0o600))
-	snapshot := &setupconfig.Snapshot{}
-	testfixture.SetHost(&snapshot.Manifest, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "console-proxy", "web-host", "eventbus")
-	require.NoError(t, os.WriteFile(filepath.Join(operator, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: admin-assigned-cli-7\nkey_file: caller-moox-cli.key\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(operator, "caller-moox-cli.key"), []byte("operator-signing-secret-at-least-32-bytes"), 0o600))
+	snapshot := &topology.Config{}
+	testfixture.SetHost(snapshot, testfixture.GatewaySSH(t, "control", listener.Addr().String(), knownHosts), "admin", "eventbus")
+	require.NoError(t, os.WriteFile(filepath.Join(operator, "moox-cli.key"), []byte(gatewayauth.EncodeSigningKey(authtest.Identity("moox-cli").Key)+"\n"), 0o600))
 	gateway, err := gatewayio.Open(context.Background(), snapshot)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })

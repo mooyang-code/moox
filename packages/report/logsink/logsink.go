@@ -256,7 +256,7 @@ func Important(_ context.Context, event, format string, args ...any) {
 	log.GetDefaultLogger().With(log.Field{Key: EventField, Value: event}).Infof(format, args...)
 }
 
-// Audit 把一条生命周期审计记录（暂停、恢复、重置等，形如 "lifecycle_pause module=monitor ..."）写成关键事件，
+// Audit 把一条生命周期审计记录（暂停、恢复等，形如 "lifecycle_pause module=monitor ..."）写成关键事件，
 // 事件名取第一段。给 lifecycle.Options.Audit 用。
 func Audit(record string) {
 	name, _, _ := strings.Cut(strings.TrimSpace(record), " ")
@@ -300,7 +300,7 @@ func (l *lane) attach(identity Identity, deliver Deliver) bool {
 }
 
 // reportFailure 把发送失败写到标准错误，每分钟最多一行。这里不能用 tRPC 日志（会重新进队列）；
-// 标准错误由主机守护收进 run/logs/<组件>.log，配置错了（密钥、主题、权限）时至少在那里看得到。
+// 标准错误进 journald（journalctl --user -u moox-<组件>），配置错了（密钥、主题、权限）时至少在那里看得到。
 func (l *lane) reportFailure(err error, count int) {
 	now := time.Now()
 	if last := l.lastFailureReport.Load(); last != 0 && now.UnixNano()-last < int64(failureReportInterval) {
@@ -446,7 +446,7 @@ func (s *sink) write(entry zapcore.Entry, fields []zapcore.Field, event bool) {
 	if !important {
 		return
 	}
-	// 关键事件（暂停、恢复、重置等）本来就少，而且同一类事件都从同一行代码写出，不做同位置的限流；只限制普通的错误日志。
+	// 关键事件（暂停、恢复等）本来就少，而且同一类事件都从同一行代码写出，不做同位置的限流；只限制普通的错误日志。
 	if record.Event == "" {
 		merged, ok := s.admit(record.Caller, record.Time)
 		if !ok {

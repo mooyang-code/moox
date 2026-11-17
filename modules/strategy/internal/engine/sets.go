@@ -21,14 +21,11 @@ type ruleSets struct {
 	holdReason map[string]string
 	// waived 表示规则本期不守门（永续整体不可用时的空头规则，见 waivesShortGuard）：规则只保持冻结的持仓，holding 规则不重建批次。
 	waived bool
-	// inactive 是 tranche 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（require_volume 时只有 volume > 0 的行是候选）。
-	inactive []string
 }
 
 // partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列上游对该标的失败，都算缺数。
 // 年龄剔除只拦住新进入的标的：规则上期已持有的标的在建仓时已经满足 min_age_bars，不会因为探针窗口内恰好
-// 缺数（历史数据缺口）被当作新上市剔除。signal 规则的持仓只判 exit，只需要 exit 引用的列（含 bars[-1]）：
-// 只缺 entry 用到的输入（例如交叉入场的上一根）不能触发清仓；未持有的候选同时判 entry 与 exit，需要全部列。
+// 缺数（历史数据缺口）被当作新上市剔除。持有的标的只检查 heldColumns 给出的列（见 freeze.go）。
 func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen map[string]struct{}, holdReasons map[string]string) ruleSets {
 	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string), frozen: make(map[string]struct{}), holdReason: holdReasons}
 	heldSet := make(map[string]struct{}, len(held))
@@ -94,16 +91,9 @@ const (
 	ReasonAgeMarkets = "age_markets"
 )
 
-// reasonVolumeZero 是 tranche 规则里本期有行但 volume 为 0、不作为候选的标的的明细原因。
-const reasonVolumeZero = "volume_zero"
-
-// items 为年龄剔除、缺数、保持持仓与（tranche 规则）本期无成交的标的生成解释明细；其余标的的明细由各规则求值产生。
+// items 为年龄剔除、缺数与保持持仓的标的生成解释明细；其余标的的明细由各规则求值产生。
 func (s ruleSets) items(ruleID string) []Item {
-	items := make([]Item, 0, len(s.agedOut)+len(s.missing)+len(s.frozen)+len(s.inactive))
-	inactive := make(map[string]struct{}, len(s.inactive))
-	for _, id := range s.inactive {
-		inactive[id] = struct{}{}
-	}
+	items := make([]Item, 0, len(s.agedOut)+len(s.missing)+len(s.frozen))
 	for _, id := range s.expected {
 		if _, aged := s.agedOut[id]; aged {
 			reason := "min_age_bars"
@@ -123,10 +113,6 @@ func (s ruleSets) items(ruleID string) []Item {
 		}
 		if reason, missing := s.missing[id]; missing {
 			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageMissing, Reason: reason})
-			continue
-		}
-		if _, idle := inactive[id]; idle {
-			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageIdle, Reason: reasonVolumeZero})
 		}
 	}
 	return items

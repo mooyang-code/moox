@@ -3,7 +3,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -77,7 +76,7 @@ func (s *Store) ReadOnly() *Store {
 	return s.readOnly
 }
 
-// InvalidateCaches 清空内存缓存，用于绕过存储层直接改表之后（例如系统重置清表）。
+// InvalidateCaches 清空内存缓存，用于绕过存储层直接改表之后（例如测试直接改表）。
 func (s *Store) InvalidateCaches() {
 	if s == nil {
 		return
@@ -229,7 +228,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_logical_accounts":            {}, "t_logical_account_members": {},
 		"t_logical_account_targets": {}, "t_operator_actions": {},
 		"t_paper_account_configs": {}, "t_account_equity_points": {},
-		"t_paper_balance_projections": {}, "t_paper_asset_balances": {}, "t_shadow_targets": {}, "t_replay_sessions": {}, "t_replay_periods": {},
+		"t_paper_balance_projections": {}, "t_paper_asset_balances": {}, "t_shadow_targets": {},
 		"t_logical_account_equity_points":   {},
 		"t_logical_account_target_receipts": {},
 		"t_trade_wallet_transfers":          {},
@@ -406,14 +405,6 @@ func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
 
 func (s *Store) DBForTest() *gorm.DB {
 	return s.db
-}
-
-// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
-func (s *Store) SQLDB() (*sql.DB, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("trade store is not open")
-	}
-	return s.db.DB()
 }
 
 func writeError(err error) error {

@@ -3,37 +3,38 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 )
 
-func hostBundleArguments(opts bootstrapOptions, hostID string) []string {
-	return []string{"host-bundle", "--host-id", hostID, "--control-host-id", "control", "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir}
+type hostBundleRun struct {
+	hostID  string
+	current currentKeys
+	rotate  bool
 }
 
-func runHostBundleFixture(t *testing.T, opts bootstrapOptions, hostID string) hostbundle.Metadata {
+func hostBundleArguments(opts bootstrapOptions, run hostBundleRun) []string {
+	args := []string{"host-bundle", "--host-id", run.hostID, "--control-host-id", "control", "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir}
+	args = append(args, currentKeyArguments(run.current)...)
+	if run.rotate {
+		args = append(args, "--rotate-sign-key")
+	}
+	return args
+}
+
+func runHostBundleFixture(t *testing.T, opts bootstrapOptions, run hostBundleRun) hostbundle.Metadata {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	require.NoError(t, runHostBundleCommand(hostBundleArguments(opts, hostID), &stdout, &stderr), stderr.String())
+	require.NoError(t, runHostBundleCommand(hostBundleArguments(opts, run), &stdout, &stderr), stderr.String())
 	var result hostbundle.Metadata
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
 	metadata, err := os.ReadFile(filepath.Join(result.BundleDir, "bundle.json"))
@@ -41,349 +42,162 @@ func runHostBundleFixture(t *testing.T, opts bootstrapOptions, hostID string) ho
 	var saved hostbundle.Metadata
 	require.NoError(t, json.Unmarshal(metadata, &saved))
 	require.Equal(t, result, saved)
-	for _, name := range []string{opts.masterFile, filepath.Join(opts.pkiDir, "ca.key")} {
-		secret, err := os.ReadFile(name)
-		require.NoError(t, err)
-		require.NotContains(t, stdout.String()+stderr.String()+string(metadata), strings.TrimSpace(string(secret)))
-	}
-	for _, c := range result.Credentials {
-		secret, err := privatefiles.Read(filepath.Join(result.BundleDir, c.KeyFile), 8192)
-		require.NoError(t, err)
-		require.NotContains(t, string(metadata), strings.TrimSpace(string(secret)))
-	}
+	require.NotContains(t, stdout.String()+stderr.String(), "BEGIN")
 	return result
 }
 
-func TestHostBundleScopesPrivateIdentityReissuesLeafAndPreservesTopology(t *testing.T) {
+// 每台主机一把签名密钥：第一次签发时生成并登记公钥；之后目标机上的私钥和登记的一致就沿用，证书照常重签；拓扑不被改动。
+func TestHostBundleIssuesOneKeyPerHostAndReusesItOnRedeploy(t *testing.T) {
 	opts := newBootstrapFixture(t)
 	bootstrap := runBootstrapFixture(t, opts)
-	master, err := privatefiles.Read(opts.masterFile, 8192)
-	require.NoError(t, err)
 	db, err := openAdminCLIDB(opts.dbPath)
 	require.NoError(t, err)
-	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	require.NoError(t, dao.SetHostStatus(context.Background(), "storage", "disabled"))
-	require.NoError(t, dao.SetDeploymentStatus(context.Background(), "overseas", "access", "disabled"))
+	require.NoError(t, dao.SetDeploymentStatus(context.Background(), "overseas", "egress-proxy", "disabled"))
 	beforeHosts, beforePlacements, err := dao.Read(context.Background())
 	require.NoError(t, err)
-	for _, hostID := range []string{"control", "storage", "overseas"} {
-		t.Run(hostID, func(t *testing.T) {
-			first := runHostBundleFixture(t, opts, hostID)
-			again := runHostBundleFixture(t, opts, hostID)
-			require.Equal(t, hostID, first.HostID)
-			require.Equal(t, "control", first.ControlHostID)
-			require.False(t, first.CA.Created)
-			require.Equal(t, bootstrap.CA.CertificateInfo, first.CA.CertificateInfo)
-			require.Equal(t, first.Credentials, again.Credentials)
-			require.NotEqual(t, first.BundleDir, again.BundleDir)
-			require.NotEqual(t, first.Certificate.Serial, again.Certificate.Serial)
-			require.NotEqual(t, first.Certificate.SHA256, again.Certificate.SHA256)
-			_, snapshot, err := dao.CompileSnapshot(context.Background(), hostID, strings.TrimSpace(string(master)))
-			require.NoError(t, err)
-			require.Equal(t, snapshot.Hash, first.ExpectedHash)
-			config, err := hostgatewayconfig.Load(filepath.Join(first.BundleDir, first.ConfigFile))
-			require.NoError(t, err)
-			require.Equal(t, hostID, config.Host.ID)
-			expectedTarget := "192.0.2.1:11003"
-			if hostID == "control" {
-				expectedTarget = "127.0.0.1:11112"
-			}
-			require.Equal(t, expectedTarget, config.Control.Target)
-			pair, err := tls.LoadX509KeyPair(config.TLS.CertificateFile, config.TLS.KeyFile)
-			require.NoError(t, err)
-			leaf, err := x509.ParseCertificate(pair.Certificate[0])
-			require.NoError(t, err)
-			roots := x509.NewCertPool()
-			ca, err := os.ReadFile(config.TLS.CAFile)
-			require.NoError(t, err)
-			require.True(t, roots.AppendCertsFromPEM(ca))
-			host := beforeHosts[slices.IndexFunc(beforeHosts, func(h sysdeploy.HostRecord) bool { return h.HostID == hostID })]
-			for _, name := range []string{host.HostID, host.Address, host.PrivateAddress} {
-				if name != "" {
-					_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: name})
-					require.NoError(t, err)
-				}
-			}
-			require.Error(t, leaf.VerifyHostname("unrelated-host"))
-			want := []string{"host-agent", "host-gateway@" + hostID}
-			for _, p := range beforePlacements {
-				if p.HostID == hostID && p.ComponentID != "host-agent" && p.ComponentID != "host-gateway" {
-					want = append(want, p.ComponentID)
-				}
-			}
-			if hostID == "control" {
-				want = append(want, "console")
-			}
-			for _, p := range beforePlacements {
-				if p.HostID == hostID && p.ComponentID == "collector" {
-					want = append(want, "scf-collector")
-				}
-			}
-			var got []string
-			for _, c := range first.Credentials {
-				got = append(got, c.Caller)
-			}
-			require.ElementsMatch(t, want, got)
-			_, err = os.Lstat(filepath.Join(first.BundleDir, "operator"))
-			require.True(t, os.IsNotExist(err), "normal deployment never exports the operator identity")
-			fileCount := 0
-			require.NoError(t, filepath.WalkDir(first.BundleDir, func(path string, entry os.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				info, err := entry.Info()
-				require.NoError(t, err)
-				mode := os.FileMode(0o600)
-				if entry.IsDir() {
-					mode = 0o700
-				} else {
-					fileCount++
-				}
-				require.Equal(t, mode, info.Mode().Perm())
-				require.Zero(t, info.Mode()&os.ModeSymlink)
-				require.NotEqual(t, "ca.key", entry.Name())
-				require.NotEqual(t, "admin-encryption.key", entry.Name())
-				return nil
-			}))
-			require.Equal(t, fileCount-1, len(first.Files), "all payload files are hashed; bundle.json describes the inventory")
-			for _, file := range first.Files {
-				raw, err := os.ReadFile(filepath.Join(first.BundleDir, file.Path))
-				require.NoError(t, err)
-				digest := sha256.Sum256(raw)
-				require.Equal(t, hex.EncodeToString(digest[:]), file.SHA256)
-				require.EqualValues(t, len(raw), file.Size)
-			}
-			if hostID == "overseas" {
-				require.Equal(t, "secrets/access/access-verification.json", first.VerificationFile)
-			} else {
-				require.Empty(t, first.VerificationFile)
-			}
-		})
-	}
-	afterHosts, afterDeployments, err := dao.Read(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, beforeHosts, afterHosts)
-	require.Equal(t, beforePlacements, afterDeployments)
-}
+	closeAdminCLIDB(db)
+	issued := map[string]string{"control": bootstrap.SignPublicKey}
+	for _, hostID := range []string{"storage", "overseas"} {
+		first := runHostBundleFixture(t, opts, hostBundleRun{hostID: hostID})
+		require.Equal(t, hostID, first.HostID)
+		require.Equal(t, "control", first.ControlHostID)
+		require.False(t, first.CA.Created)
+		require.Equal(t, bootstrap.CA.CertificateInfo, first.CA.CertificateInfo)
+		require.True(t, first.SignKeyIssued)
+		require.Empty(t, first.SCFCollectorPublicKey, "只有部署了 collector 的主机有 scf-collector 的私钥")
+		require.Empty(t, first.OperatorPublicKey)
+		require.Equal(t, []string{"bundle.json", "host.crt", "host.key", "host.tls.key", "moox-ca.crt"}, bundleFiles(t, first))
+		require.Equal(t, first.SignPublicKey, bundleKeyPublic(t, first, hostbundle.HostKeyFile))
+		require.NotContains(t, issued, first.SignPublicKey)
+		issued[hostID] = first.SignPublicKey
 
-func TestHostBundleExportsOnlyExternalAccessKeysAcrossRotation(t *testing.T) {
-	opts := newBootstrapFixture(t)
-	runBootstrapFixture(t, opts)
-	master, err := privatefiles.Read(opts.masterFile, 8192)
-	require.NoError(t, err)
-	db, err := openAdminCLIDB(opts.dbPath)
-	require.NoError(t, err)
-	defer closeAdminCLIDB(db)
-	store, err := keys.NewStore(db, strings.TrimSpace(string(master)))
-	require.NoError(t, err)
-	old, err := store.Current(context.Background(), "scf-collector")
-	require.NoError(t, err)
-	current, err := store.Rotate(context.Background(), "scf-collector")
-	require.NoError(t, err)
-	first := runHostBundleFixture(t, opts, "overseas")
-	registryPath := filepath.Join(first.BundleDir, first.VerificationFile)
-	registry, err := gatewayauth.LoadCredentialRegistry(registryPath)
-	require.NoError(t, err)
-	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch", TargetNode: "access@overseas", Callee: "trpc.moox.storage.PrimaryStore", Func: "CommitTimeSeriesBatch"}
-	verify := func(registry *gatewayauth.CredentialRegistry, key keys.SigningKey) error {
-		header, err := gatewayauth.Sign(key.Credentials(), request, time.Now())
+		again := runHostBundleFixture(t, opts, hostBundleRun{hostID: hostID, current: currentKeys{host: first.SignPublicKey}})
+		require.False(t, again.SignKeyIssued)
+		require.Equal(t, first.SignPublicKey, again.SignPublicKey)
+		require.Equal(t, []string{"bundle.json", "host.crt", "host.tls.key", "moox-ca.crt"}, bundleFiles(t, again))
+		require.NotEqual(t, first.BundleDir, again.BundleDir)
+		require.NotEqual(t, first.Certificate.Serial, again.Certificate.Serial)
+
+		pair, err := tls.LoadX509KeyPair(filepath.Join(again.BundleDir, hostbundle.HostCertificateFile), filepath.Join(again.BundleDir, hostbundle.HostTLSKeyFile))
 		require.NoError(t, err)
-		_, err = registry.Verify(request, header, time.Now())
-		return err
+		leaf, err := x509.ParseCertificate(pair.Certificate[0])
+		require.NoError(t, err)
+		roots := x509.NewCertPool()
+		ca, err := os.ReadFile(filepath.Join(again.BundleDir, hostbundle.CAFile))
+		require.NoError(t, err)
+		require.True(t, roots.AppendCertsFromPEM(ca))
+		host := beforeHosts[slices.IndexFunc(beforeHosts, func(h sysdeploy.HostRecord) bool { return h.HostID == hostID })]
+		for _, name := range []string{host.HostID, host.Address} {
+			_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: name})
+			require.NoError(t, err)
+		}
+		require.Error(t, leaf.VerifyHostname("unrelated-host"))
 	}
-	require.NoError(t, verify(registry, old))
-	require.NoError(t, verify(registry, current))
-	internal, err := store.Current(context.Background(), "trade")
-	require.NoError(t, err)
-	require.Error(t, verify(registry, internal))
-	raw, err := os.ReadFile(registryPath)
-	require.NoError(t, err)
-	for _, caller := range []string{"console", "moox-cli", "host-gateway@", "trade"} {
-		require.NotContains(t, string(raw), caller)
-	}
-	require.NoError(t, store.Retire(context.Background(), "scf-collector", old.KeyID))
-	again := runHostBundleFixture(t, opts, "overseas")
-	registry, err = gatewayauth.LoadCredentialRegistry(filepath.Join(again.BundleDir, again.VerificationFile))
-	require.NoError(t, err)
-	require.Error(t, verify(registry, old))
-	require.NoError(t, verify(registry, current))
-}
-
-func TestHostBundleProvisionsNewlyRegisteredHostAndUsesPersistedAddresses(t *testing.T) {
-	opts := newBootstrapFixture(t)
-	runBootstrapFixture(t, opts)
-	db, err := openAdminCLIDB(opts.dbPath)
+	hosts, identities := registeredKeys(t, opts)
+	require.Equal(t, issued, hosts)
+	require.Len(t, identities, 2, "签发别的主机的身份包不动非主机身份")
+	db, err = openAdminCLIDB(opts.dbPath)
 	require.NoError(t, err)
 	defer closeAdminCLIDB(db)
+	dao, err = sysdeploy.NewTopologyDAO(db, "control")
+	require.NoError(t, err)
+	afterHosts, afterPlacements, err := dao.Read(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, beforePlacements, afterPlacements)
+	for i := range beforeHosts {
+		require.Equal(t, beforeHosts[i].Status, afterHosts[i].Status)
+		require.Equal(t, beforeHosts[i].Address, afterHosts[i].Address)
+	}
+}
+
+// 换密钥：显式要求，或目标机上的私钥丢了、和登记的对不上。新公钥直接替换旧的，别的主机的密钥不受影响。
+func TestHostBundleRotatesOnRequestOrWhenTargetKeyDiffers(t *testing.T) {
+	opts := newBootstrapFixture(t)
+	bootstrap := runBootstrapFixture(t, opts)
+	first := runHostBundleFixture(t, opts, hostBundleRun{hostID: "storage"})
+	current := first.SignPublicKey
+	for name, run := range map[string]hostBundleRun{
+		"显式要求":       {hostID: "storage", current: currentKeys{host: current}, rotate: true},
+		"目标机上没有私钥":   {hostID: "storage"},
+		"目标机上是别的私钥":  {hostID: "storage", current: currentKeys{host: identityPublicKey("another")}},
+		"拿别的主机的公钥来对": {hostID: "storage", current: currentKeys{host: bootstrap.SignPublicKey}},
+	} {
+		if run.rotate {
+			run.current.host = current
+		}
+		next := runHostBundleFixture(t, opts, run)
+		require.True(t, next.SignKeyIssued, name)
+		require.NotEqual(t, current, next.SignPublicKey, name)
+		require.Equal(t, next.SignPublicKey, bundleKeyPublic(t, next, hostbundle.HostKeyFile), name)
+		hosts, _ := registeredKeys(t, opts)
+		require.Equal(t, next.SignPublicKey, hosts["storage"], name)
+		require.Equal(t, bootstrap.SignPublicKey, hosts["control"], name)
+		require.NotContains(t, hosts, current)
+		current = next.SignPublicKey
+	}
+}
+
+// 控制机（部署了 collector）经 host-bundle 重新签发时，scf-collector 的私钥同样按“一致就沿用”处理。
+func TestHostBundleForControlKeepsOrReissuesSCFCollectorKey(t *testing.T) {
+	opts := newBootstrapFixture(t)
+	bootstrap := runBootstrapFixture(t, opts)
+	kept := runHostBundleFixture(t, opts, hostBundleRun{hostID: "control", current: currentKeys{host: bootstrap.SignPublicKey, scfCollector: bootstrap.SCFCollectorPublicKey}})
+	require.False(t, kept.SignKeyIssued)
+	require.False(t, kept.SCFCollectorKeyIssued)
+	require.Equal(t, bootstrap.SCFCollectorPublicKey, kept.SCFCollectorPublicKey)
+	reissued := runHostBundleFixture(t, opts, hostBundleRun{hostID: "control", current: currentKeys{host: bootstrap.SignPublicKey}})
+	require.False(t, reissued.SignKeyIssued)
+	require.True(t, reissued.SCFCollectorKeyIssued)
+	require.Equal(t, reissued.SCFCollectorPublicKey, bundleKeyPublic(t, reissued, hostbundle.SCFCollectorKeyFile))
+	_, identities := registeredKeys(t, opts)
+	require.Equal(t, reissued.SCFCollectorPublicKey, identities["scf-collector"])
+	require.Equal(t, opts.operatorPublicKey, identities["moox-cli"])
+}
+
+func TestHostBundleProvisionsNewlyRegisteredHostAndRejectsUnknownOnes(t *testing.T) {
+	opts := newBootstrapFixture(t)
+	runBootstrapFixture(t, opts)
+	require.Error(t, runHostBundleCommand(hostBundleArguments(opts, hostBundleRun{hostID: "factor"}), nil, nil), "没登记的主机不签发")
+	db, err := openAdminCLIDB(opts.dbPath)
+	require.NoError(t, err)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "192.0.2.90", PrivateAddress: "2001:db8::90"}))
-	first := runHostBundleFixture(t, opts, "compute-2")
-	require.Len(t, first.Credentials, 2)
-	require.NoError(t, dao.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "compute-2.example.test", PrivateAddress: "2001:db8::91"}))
-	again := runHostBundleFixture(t, opts, "compute-2")
-	require.Equal(t, first.Credentials, again.Credentials)
-	config, err := hostgatewayconfig.Load(filepath.Join(again.BundleDir, again.ConfigFile))
-	require.NoError(t, err)
-	pair, err := tls.LoadX509KeyPair(config.TLS.CertificateFile, config.TLS.KeyFile)
+	require.NoError(t, dao.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "factor", Address: "192.168.0.103", Reachability: "outbound", Components: []string{"factor-engine"}}))
+	closeAdminCLIDB(db)
+	result := runHostBundleFixture(t, opts, hostBundleRun{hostID: "factor"})
+	require.True(t, result.SignKeyIssued)
+	pair, err := tls.LoadX509KeyPair(filepath.Join(result.BundleDir, hostbundle.HostCertificateFile), filepath.Join(result.BundleDir, hostbundle.HostTLSKeyFile))
 	require.NoError(t, err)
 	leaf, err := x509.ParseCertificate(pair.Certificate[0])
 	require.NoError(t, err)
-	for _, name := range []string{"compute-2", "compute-2.example.test", "2001:db8::91"} {
-		require.NoError(t, leaf.VerifyHostname(name))
-	}
-	require.Error(t, leaf.VerifyHostname("192.0.2.90"))
+	require.Contains(t, leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth, "只能出站的主机要用证书建立反向连接")
 }
 
-func TestHostBundleRejectsMissingOrCorruptStateWithoutPublishingOrRegenerating(t *testing.T) {
-	for _, damage := range []string{"missing-db", "wrong-control", "unknown-host", "missing-master", "wrong-master", "unsafe-master", "symlink-master", "missing-ca", "corrupt-ca", "unsafe-output"} {
-		t.Run(damage, func(t *testing.T) {
-			opts := newBootstrapFixture(t)
-			runBootstrapFixture(t, opts)
-			opts.outputDir = filepath.Join(filepath.Dir(opts.outputDir), "target-bundles")
-			args := hostBundleArguments(opts, "storage")
-			switch damage {
-			case "missing-db":
-				require.NoError(t, os.Remove(opts.dbPath))
-			case "wrong-control":
-				args[4] = "storage"
-			case "unknown-host":
-				args[2] = "not-registered"
-			case "missing-master":
-				require.NoError(t, os.Remove(opts.masterFile))
-			case "wrong-master":
-				require.NoError(t, os.WriteFile(opts.masterFile, []byte("wrong-fixture-master-at-least-32-bytes"), 0o600))
-			case "unsafe-master":
-				require.NoError(t, os.Chmod(opts.masterFile, 0o644))
-			case "symlink-master":
-				require.NoError(t, os.Rename(opts.masterFile, opts.masterFile+".original"))
-				require.NoError(t, os.Symlink(opts.masterFile+".original", opts.masterFile))
-			case "missing-ca":
-				require.NoError(t, os.RemoveAll(opts.pkiDir))
-			case "corrupt-ca":
-				require.NoError(t, os.WriteFile(filepath.Join(opts.pkiDir, "ca.crt"), []byte("broken fixture"), 0o600))
-			case "unsafe-output":
-				require.NoError(t, os.Mkdir(opts.outputDir, 0o755))
-			}
-			var stdout bytes.Buffer
-			require.Error(t, runHostBundleCommand(args, &stdout, nil))
-			require.Empty(t, stdout.String())
-			files, err := os.ReadDir(opts.outputDir)
-			if !os.IsNotExist(err) {
-				require.NoError(t, err)
-				require.Empty(t, files)
-			}
-			if damage == "missing-ca" {
-				for _, name := range []string{"ca.crt", "ca.key"} {
-					_, err := os.Lstat(filepath.Join(opts.pkiDir, name))
-					require.True(t, os.IsNotExist(err))
-				}
-			}
-			if damage == "missing-master" || damage == "missing-db" {
-				path := opts.masterFile
-				if damage == "missing-db" {
-					path = opts.dbPath
-				}
-				_, err := os.Lstat(path)
-				require.True(t, os.IsNotExist(err))
-			}
-		})
-	}
-}
-
-func TestHostBundlePartialOutputFailureCleansStageAndRetriesCommittedIdentity(t *testing.T) {
+func TestHostBundleRejectsInvalidArgumentsAndMissingState(t *testing.T) {
 	opts := newBootstrapFixture(t)
-	runBootstrapFixture(t, opts)
-	// Force failure after certificate material has been staged, when its public
-	// watch inventory is written. The previous complete bootstrap stays intact.
-	path := filepath.Join(opts.pkiDir, "hosts", "storage.crt")
-	require.NoError(t, os.Mkdir(path, 0o700))
-	var stdout bytes.Buffer
-	require.Error(t, runHostBundleCommand(hostBundleArguments(opts, "storage"), &stdout, nil))
-	require.Empty(t, stdout.String())
-	files, err := os.ReadDir(opts.outputDir)
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-	require.NoError(t, os.Remove(path))
-	first := runHostBundleFixture(t, opts, "storage")
-	again := runHostBundleFixture(t, opts, "storage")
-	require.Equal(t, first.Credentials, again.Credentials)
-}
-
-func TestHostBundleRejectsInvalidArgumentsBeforeOpeningState(t *testing.T) {
-	opts := newBootstrapFixture(t)
-	valid := hostBundleArguments(opts, "storage")
 	for _, args := range [][]string{
-		nil,
-		{"bootstrap"},
+		{},
 		{"host-bundle"},
-		append(slices.Clone(valid), "unexpected"),
-		append(slices.Clone(valid), "--address", "192.0.2.1"),
-		append(slices.Clone(valid), "--host-id", "../storage"),
-		append(slices.Clone(valid), "--control-host-id", "Control"),
-		append(slices.Clone(valid), "--db-path", "file:invalid"),
-		append(slices.Clone(valid), "--output-dir", " target "),
-		append(slices.Clone(valid), "--encryption-key-file", opts.dbPath),
+		{"host-bundle", "--host-id", "Storage", "--control-host-id", "control", "--db-path", opts.dbPath, "--encryption-key-file", opts.masterFile, "--pki-dir", opts.pkiDir, "--output-dir", opts.outputDir},
+		append(hostBundleArguments(opts, hostBundleRun{hostID: "storage"}), "extra"),
+		append(hostBundleArguments(opts, hostBundleRun{hostID: "storage"}), "--current-sign-public-key", "bad"),
 	} {
-		var stdout bytes.Buffer
-		require.Error(t, runHostBundleCommand(args, &stdout, nil))
-		require.Empty(t, stdout.String())
-		for _, path := range []string{opts.dbPath, opts.masterFile, opts.pkiDir, opts.outputDir} {
-			_, err := os.Lstat(path)
-			require.True(t, os.IsNotExist(err), path)
-		}
+		require.Error(t, runHostBundleCommand(args, nil, nil), args)
 	}
-}
-
-func TestHostBundleConcurrentProcessesReuseKeysAndIssueDistinctLeaves(t *testing.T) {
-	opts := newBootstrapFixture(t)
-	runBootstrapFixture(t, opts)
-	executable, err := os.Executable()
-	require.NoError(t, err)
-	raw, err := json.Marshal(hostBundleArguments(opts, "overseas"))
-	require.NoError(t, err)
-	const writers = 3
-	var outputs [writers]bytes.Buffer
-	var errs [writers]error
-	var wait sync.WaitGroup
-	for i := range writers {
-		command := exec.Command(executable, "-test.run=^TestHostBundleSubprocess$")
-		command.Env = append(os.Environ(), "MOOX_TEST_HOST_BUNDLE_ARGS="+string(raw))
-		command.Stdout, command.Stderr = &outputs[i], &outputs[i]
-		wait.Go(func() { errs[i] = command.Run() })
+	// 还没 bootstrap：没有库、没有 CA，不签发也不新建任何东西。
+	require.Error(t, runHostBundleCommand(hostBundleArguments(opts, hostBundleRun{hostID: "storage"}), nil, nil))
+	for _, path := range []string{opts.dbPath, opts.pkiDir, opts.outputDir} {
+		_, err := os.Lstat(path)
+		require.True(t, os.IsNotExist(err), path)
 	}
-	wait.Wait()
-	var first hostbundle.Metadata
-	serials := map[string]bool{}
-	for i, err := range errs {
-		require.NoError(t, err, outputs[i].String())
-		var result hostbundle.Metadata
-		require.NoError(t, json.Unmarshal(outputs[i].Bytes(), &result))
-		if i == 0 {
-			first = result
-		}
-		require.Equal(t, first.CA, result.CA)
-		require.Equal(t, first.Credentials, result.Credentials)
-		require.Equal(t, first.ExpectedHash, result.ExpectedHash)
-		require.False(t, serials[result.Certificate.Serial])
-		serials[result.Certificate.Serial] = true
-	}
-}
-
-func TestHostBundleSubprocess(t *testing.T) {
-	raw := os.Getenv("MOOX_TEST_HOST_BUNDLE_ARGS")
-	if raw == "" {
-		return
-	}
-	var args []string
-	if json.Unmarshal([]byte(raw), &args) != nil {
-		os.Exit(2)
-	}
-	if err := runHostBundleCommand(args, os.Stdout, os.Stderr); err != nil {
-		printInitError(os.Stderr, err)
-		os.Exit(1)
-	}
-	os.Exit(0)
+	bootstrap := runBootstrapFixture(t, opts)
+	// CA 丢了：不签发，也不换掉已登记的公钥。
+	require.NoError(t, os.Rename(opts.pkiDir, opts.pkiDir+".lost"))
+	require.Error(t, runHostBundleCommand(hostBundleArguments(opts, hostBundleRun{hostID: "control"}), nil, nil))
+	hosts, _ := registeredKeys(t, opts)
+	require.Equal(t, bootstrap.SignPublicKey, hosts["control"])
+	require.True(t, isHostBundleCommand([]string{"admin-cli", "host-bundle"}))
 }

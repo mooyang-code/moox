@@ -5,41 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 
 	"github.com/gorilla/mux"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
 	"github.com/mooyang-code/moox/modules/admin/internal/spacecontext"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
-	"trpc.group/trpc-go/trpc-go/server"
 )
 
 // ============================================================================
 // 控制台处理器
 // ============================================================================
 
-var (
-	consoleHandleInstance *ConsoleHandle
-	consoleHandleOnce     sync.Once
-)
-
-// ConsoleHandle 控制台处理器（保留单例以承载 HTTPRequestHandler）。
+// ConsoleHandle 控制台处理器，承载 HTTPRequestHandler。
 type ConsoleHandle struct {
 	requestHandler *HTTPRequestHandler
-}
-
-// GetConsoleHandleInstance 返回控制台处理器的全局单例实例
-func GetConsoleHandleInstance() *ConsoleHandle {
-	consoleHandleOnce.Do(func() {
-		consoleHandleInstance = NewConsoleHandle()
-	})
-	return consoleHandleInstance
 }
 
 var NewConsoleHandle = func() *ConsoleHandle {
@@ -58,55 +42,58 @@ type HTTPRouter struct {
 	catalog         servicecatalog.Catalog
 	local           *LocalDispatcher
 	gateway         RPCForwarder
+	sessions        *session.Store
+	limiters        methodLimiters
+	allowedOrigins  []string
 	spaceAuthorizer SpaceAuthorizer
 }
 
-func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, authorizers ...SpaceAuthorizer) (*HTTPRouter, error) {
+// NewHTTPRouter 创建控制台路由；sessions 是与认证服务共用的会话表，限额与开发来源取 SetConfig 设置的配置。
+func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store, authorizers ...SpaceAuthorizer) (*HTTPRouter, error) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
 	}
-	if console == nil {
-		return nil, errors.New("console handle is required")
+	if console == nil || sessions == nil {
+		return nil, errors.New("console handle and session store are required")
 	}
 	var authorizer SpaceAuthorizer
 	if len(authorizers) > 0 {
 		authorizer = authorizers[0]
 	}
-	return &HTTPRouter{console: console, catalog: catalog, local: local, gateway: gateway, spaceAuthorizer: authorizer}, nil
+	cfg := GetConfig()
+	var allowedOrigins []string
+	if cfg != nil {
+		allowedOrigins = cfg.Console.AllowedOrigins
+	}
+	return &HTTPRouter{
+		console: console, catalog: catalog, local: local, gateway: gateway, sessions: sessions,
+		limiters: newMethodLimiters(cfg), allowedOrigins: allowedOrigins, spaceAuthorizer: authorizer,
+	}, nil
 }
 
-func RegisterConsoleHTTPHandlers(s *server.Server, local *LocalDispatcher, gateway RPCForwarder, authorizers ...SpaceAuthorizer) error {
-	router, err := NewHTTPRouter(GetConsoleHandleInstance(), local, gateway, authorizers...)
+// NewHandler 在两个分派器都就绪后建浏览器接口 /api/admin/{服务}/{方法} 的处理器，交给 Admin 的浏览器入口（9527）；
+// sessions 是与认证服务共用的会话表。
+func NewHandler(local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store, authorizers ...SpaceAuthorizer) (http.Handler, error) {
+	if GetConfig() == nil {
+		return nil, errors.New("控制台配置未初始化")
+	}
+	if local == nil || gateway == nil || sessions == nil {
+		return nil, errors.New("控制台需要本地分派器、网关客户端及会话表")
+	}
+	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, sessions, authorizers...)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return router.setupRoutes(s)
-}
-
-// setupRoutes 设置路由
-func (hr *HTTPRouter) setupRoutes(s *server.Server) error {
-	if err := healthz.RegisterNoProtocolServiceMux(s.Service("trpc.moox.admin.Console"), hr.buildControlRouter()); err != nil {
-		return err
-	}
-	return nil
+	return router.buildControlRouter(), nil
 }
 
 func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	router := mux.NewRouter()
 	router.MethodNotAllowedHandler = http.NotFoundHandler()
-	// 注册新控制台 API 路由: /api/admin/{service}/{method}
-	router.Handle(
-		"/api/admin/{service}/{method}",
-		corsMiddleware(http.HandlerFunc(hr.handleControlRequest))).
-		Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-
+	// 控制台 API 路由: /api/admin/{service}/{method}。RPC 只收 POST；GET 只给裸路由（终端握手、下载、预览）。
+	router.HandleFunc("/api/admin/{service}/{method}", hr.handleConsoleRequest).Methods(http.MethodGet, http.MethodPost)
 	return router
-}
-
-// handleControlRequest 处理控制台请求(中间件authorize通过之后，执行流才到本函数)
-func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {
-	hr.handleConsoleRequest(w, r)
 }
 
 func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Request) {
@@ -122,13 +109,14 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// 限流先于鉴权：免登录的 Login、GetLoginSalt 也必须受限。
-	if !getRateLimitManager().allowConfiguredMethod(ctx, apiAdminPathPrefix+serviceID+"/"+method) {
+	route := serviceID + "/" + method
+	// 限流先于鉴权：免会话的 Login 也必须受限。
+	if !hr.limiters.allow(ctx, apiAdminPathPrefix+route) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	// RPC 别名与权限只来自服务目录；SSH 流式路由与归档下载、最新数据是另一组固定的裸路由，绑定一次性 ticket。
-	_, rawRoute := rawRouteOperations[serviceID+"/"+method]
+	// RPC 别名与权限只来自服务目录；SSH 流式路由与归档下载、最新数据是另一组固定的裸路由。
+	rawRoute := rawRoutes[route]
 	spec, allowed := hr.catalog.ConsoleService(serviceID, method)
 	if rawRoute {
 		if _, registered := LookupRawHandler(serviceID, method); !registered {
@@ -138,45 +126,39 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	} else if !allowed {
 		http.NotFound(w, r)
 		return
+	} else if r.Method != http.MethodPost {
+		// GET 不带请求体也能触发写方法，同站页面的链接、图片就能借浏览器的 Cookie 发起，所以 RPC 只收 POST。
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if needsOriginCheck(r, route) && !originAllowed(r, hr.allowedOrigins) {
+		log.WarnContextf(ctx, "console request origin rejected route=%s origin=%q host=%q", route, r.Header.Get("Origin"), r.Host)
+		writeOriginRejected(w)
+		return
 	}
 
-	if rawRoute || !shouldSkipAdminRequestAuth(r.URL.EscapedPath()) {
-		if rawRoute {
-			claims, err := validateRawRouteTicket(r, serviceID, method)
-			if err != nil {
-				log.WarnContextf(ctx, "admin raw request authentication failed: %v", err)
-				writeAdminAuthFailure(w)
-				return
-			}
-			ctx = context.WithValue(ctx, authmodel.CtxUserID, claims.UserID)
-			r = r.WithContext(ctx)
-			trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte(claims.UserID))
-			trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(claims.SessionID))
-		} else {
-			rawBody, err := readAndRestoreBody(r)
-			if err != nil {
-				writeRequestBodyError(w, err)
-				return
-			}
-			claims, err := verifyAdminRequest(r, rawBody)
-			if err != nil {
-				log.WarnContextf(ctx, "admin request authentication failed sid=%s reason=%v", sessionIDForLog(r), err)
-				writeAdminAuthFailure(w)
-				return
-			}
-			ctx = context.WithValue(ctx, authmodel.CtxUserID, claims.UserID)
-			r = r.WithContext(ctx)
-			trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte(claims.UserID))
-			trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte(claims.Username))
-			trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(claims.SessionID))
+	var current session.Session
+	if route != loginRoute {
+		found, ok := hr.requestSession(r)
+		if !ok {
+			writeAdminAuthFailure(w)
+			return
 		}
+		current = found
+		ctx = context.WithValue(ctx, authmodel.CtxUserID, current.UserID)
+		r = r.WithContext(ctx)
+		trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte(current.UserID))
+		trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte(current.Username))
+		trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(current.ID))
 	}
-	// 提取HTTP头部信息
+	if rawRoute && serviceID == "ssh" && !rawSessionBelongsToUser(r.URL.Query().Get("session_id"), current.UserID) {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
 	headers := handler.extractGatewayHeaders(r)
-	// user_id 由 authorize filter 从 JWT 解析后写入 ctx（model.CtxUserID），
-	// 这里取出透传给下游 trade 等需要按用户隔离的服务。
-	if uid, ok := ctx.Value(authmodel.CtxUserID).(string); ok && uid != "" {
-		headers["user_id"] = uid
+	if current.UserID != "" {
+		// 透传给下游 trade 等需要按用户隔离的服务。
+		headers["user_id"] = current.UserID
 	}
 
 	ctx = spacecontext.InjectFromHeaders(ctx, headers)
@@ -231,26 +213,30 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		writeForwardError(ctx, w, errors.New("console gateway is unavailable"), headers)
 		return
 	}
-	if serviceID == "storage" {
-		spaceForBody := ""
-		if injectSpace {
-			spaceForBody = authorizedSpace
-		}
-		signed, err := signStorageBody(spec.Path, body, spaceForBody)
-		if errors.Is(err, errInvalidStorageBody) {
+	if serviceID == "storage" && injectSpace {
+		injected, err := injectStorageSpace(body, authorizedSpace)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err != nil {
-			writeForwardError(ctx, w, err, headers)
-			return
-		}
-		body = signed
+		body = injected
+	}
+	var login *session.Login
+	if route == loginRoute {
+		login = &session.Login{ClientIP: clientIP(r), UserAgent: r.UserAgent()}
+		ctx = session.WithLogin(ctx, login)
 	}
 	response, err := target.Forward(ctx, spec.Path, method, codec.SerializationTypeJSON, body)
+	if route == logoutRoute {
+		// 不管服务端删没删成，浏览器这边都退出。
+		clearSessionCookie(w)
+	}
 	if err != nil {
 		writeForwardError(ctx, w, err, headers)
 		return
+	}
+	if login != nil && login.Issued != nil {
+		setSessionCookie(w, *login.Issued, int(hr.sessions.TTL().Seconds()))
 	}
 	writeForwardResponse(w, response, headers)
 }
@@ -321,8 +307,7 @@ func (h *HTTPRequestHandler) parseRequestParams(r *http.Request) (serviceID, met
 	return serviceID, method, nil
 }
 
-// readRequestBodyWithRaw reads the exact RPC body. Query parameters are not
-// converted into RPC fields because doing so would create unsigned input.
+// readRequestBodyWithRaw 原样读取 RPC 请求体；query 参数不会变成 RPC 字段。
 func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []byte, error) {
 	body, err := readBoundedBody(r.Body)
 	if err != nil {
@@ -333,43 +318,11 @@ func (h *HTTPRequestHandler) readRequestBodyWithRaw(r *http.Request) ([]byte, []
 	return rawBody, body, nil
 }
 
-func signedGatewayHeaders(r *http.Request) map[string]string {
-	headers := make(map[string]string)
-	for _, name := range []string{requestauth.HeaderAppID, requestauth.HeaderAppKey, requestauth.HeaderSpaceID} {
-		if value := r.Header.Get(name); value != "" {
-			headers[name] = value
-		}
-	}
-	return headers
-}
-
-// extractGatewayHeaders 提取网关相关的HTTP头部信息
+// extractGatewayHeaders 取透传给下游与写响应要用的请求头。用户与会话只来自 Cookie，请求头里的一概不认。
 func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]string {
 	headers := make(map[string]string)
-
-	// 必需的认证信息
-	if appID := r.Header.Get("X-App-Id"); appID != "" {
-		headers["app_id"] = appID
-	}
-	if appKey := r.Header.Get("X-App-Key"); appKey != "" {
-		headers["app_key"] = appKey
-	}
-
-	// 可选的头部信息
-	if accessToken := r.Header.Get("X-Access-Token"); accessToken != "" {
-		headers["access_token"] = accessToken
-	}
 	if traceID := r.Header.Get("X-Trace-Id"); traceID != "" {
 		headers["trace_id"] = traceID
-	}
-	if clientIP := r.Header.Get("X-Client-Ip"); clientIP != "" {
-		headers["client_ip"] = clientIP
-	}
-	if userAgent := r.Header.Get("User-Agent"); userAgent != "" {
-		headers["user_agent"] = userAgent
-	}
-	if origin := r.Header.Get("Origin"); origin != "" {
-		headers["origin"] = origin
 	}
 	if acceptEncoding := r.Header.Get("Accept-Encoding"); acceptEncoding != "" {
 		headers["accept_encoding"] = acceptEncoding
@@ -378,43 +331,5 @@ func (h *HTTPRequestHandler) extractGatewayHeaders(r *http.Request) map[string]s
 	if spaceID := r.Header.Get("X-Space-Id"); spaceID != "" {
 		headers["space_id"] = spaceID
 	}
-
-	// 如果没有提供客户端IP，尝试从其他头部获取
-	if headers["client_ip"] == "" {
-		headers["client_ip"] = h.getClientIP(r)
-	}
 	return headers
-}
-
-// getClientIP 获取客户端IP
-// 优先级：X-Real-IP > X-Forwarded-For（第一个IP）> RemoteAddr
-func (h *HTTPRequestHandler) getClientIP(r *http.Request) string {
-	// 1. 优先使用X-Real-IP（通常由Nginx等反向代理设置，表示真实客户端IP）
-	if xRealIP := r.Header.Get("X-Real-IP"); xRealIP != "" {
-		return xRealIP
-	}
-
-	// 2. 使用X-Forwarded-For的第一个IP（客户端IP，后面是代理链）
-	if xForwardedFor := r.Header.Get("X-Forwarded-For"); xForwardedFor != "" {
-		// X-Forwarded-For 格式: client, proxy1, proxy2
-		// 我们只取第一个IP（真实客户端）
-		for idx := 0; idx < len(xForwardedFor); idx++ {
-			if xForwardedFor[idx] == ',' {
-				return xForwardedFor[:idx]
-			}
-		}
-		return xForwardedFor
-	}
-
-	// 3. 如果没有代理头，使用RemoteAddr（可能包含端口号，需要去除）
-	remoteAddr := r.RemoteAddr
-	// 去除端口号
-	if idx := len(remoteAddr) - 1; idx >= 0 {
-		for ; idx >= 0; idx-- {
-			if remoteAddr[idx] == ':' {
-				return remoteAddr[:idx]
-			}
-		}
-	}
-	return remoteAddr
 }

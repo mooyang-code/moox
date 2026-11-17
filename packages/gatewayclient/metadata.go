@@ -24,3 +24,16 @@ func CallMetadataFromContext(ctx context.Context) CallMetadata {
 	metadata, _ := ctx.Value(callMetadataKey{}).(CallMetadata)
 	return metadata
 }
+
+type originCallerKey struct{}
+
+// WithOriginCaller 只给入口主机的网关用：它验过外部身份的签名之后，以 host-gateway 的身份把请求转给别的主机，
+// 并用 X-Moox-Origin-Caller 头告诉目标网关原来是哪个外部身份。目标网关对这个头另有三条检查，别的调用方带上它只会被拒。
+func WithOriginCaller(ctx context.Context, identity string) context.Context {
+	return context.WithValue(ctx, originCallerKey{}, identity)
+}
+
+func originCallerFrom(ctx context.Context) string {
+	identity, _ := ctx.Value(originCallerKey{}).(string)
+	return identity
+}

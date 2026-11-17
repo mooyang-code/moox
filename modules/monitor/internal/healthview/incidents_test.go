@@ -37,10 +37,10 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 		}
 		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: string(rune('a' + seq)), SpaceID: space, RuleID: "default:" + check, CheckID: check, EventType: eventType, Status: "firing", Payload: payload, CreatedAt: at}))
 	}
-	reporter, strategy, webHost, fetch := "reporter:control:collector", "dataset:strategy:s1:1m", "deployment:control:web-host", "market_fetch:scf_timer"
+	reporter, strategy, strategyCheck, fetch := "reporter:control:collector", "dataset:strategy:s1:1m", "ready:control:strategy", "market_fetch:scf_timer"
 	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{SpaceID: "mooxsys", CheckID: reporter, Name: "行情采集服务（control 节点）· 运行指标上报", Kind: domain.CheckKindExternal, Enabled: true}))
-	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{CheckID: webHost, Name: "控制台前端（control）· 健康检查", Kind: domain.CheckKindHTTP, Enabled: true}))
+	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{CheckID: strategyCheck, Name: "控制台前端（control）· 就绪", Kind: domain.CheckKindExternal, Enabled: true}))
 
 	// 窗口内触发、通知失败、29 秒后恢复
 	event("mooxsys", reporter, domain.AlertEventTriggered, now.Add(-10*time.Hour), `{"reason":"运行指标已中断"}`)
@@ -52,9 +52,9 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 	event("crypto", strategy, domain.AlertEventReminder, now.Add(-46*time.Hour), "")
 	event("crypto", strategy, domain.AlertEventResolved, now.Add(-45*time.Hour), "")
 	// 仍在告警
-	event("", webHost, domain.AlertEventTriggered, now.Add(-time.Hour), `{"reason":"健康检查失败"}`)
-	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + webHost, CheckID: webHost, Enabled: true}))
-	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + webHost, CheckID: webHost, Status: domain.AlertStatusFiring, DedupeKey: webHost, TriggeredAt: ptr(now.Add(-time.Hour)), UpdatedAt: now}))
+	event("", strategyCheck, domain.AlertEventTriggered, now.Add(-time.Hour), `{"reason":"健康检查失败"}`)
+	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + strategyCheck, CheckID: strategyCheck, Enabled: true}))
+	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + strategyCheck, CheckID: strategyCheck, Status: domain.AlertStatusFiring, DedupeKey: strategyCheck, TriggeredAt: ptr(now.Add(-time.Hour)), UpdatedAt: now}))
 	// 检查停用后告警被撤销，没有恢复记录
 	event("crypto", fetch, domain.AlertEventTriggered, now.Add(-2*time.Hour), "")
 	// 主机失联与恢复
@@ -74,12 +74,12 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 		byCheck[item.Object.Kind] = item
 		order = append(order, item.Object.Kind)
 	}
-	require.Equal(t, []string{"deployment", "market_fetch", "presence", "reporter", "dataset"}, order, "newest trigger first")
+	require.Equal(t, []string{"ready", "market_fetch", "presence", "reporter", "dataset"}, order, "newest trigger first")
 
-	item := byCheck["deployment"]
+	item := byCheck["ready"]
 	require.True(t, item.Active)
 	require.Empty(t, item.ResolvedAt)
-	require.Equal(t, "控制台前端（control）· 健康检查", item.Title)
+	require.Equal(t, "控制台前端（control）· 就绪", item.Title)
 	require.Equal(t, "critical", item.Severity)
 
 	item = byCheck["market_fetch"]
@@ -94,7 +94,7 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 	item = byCheck["reporter"]
 	require.Equal(t, "行情采集服务（control 节点）· 运行指标上报", item.Title)
 	require.Equal(t, "运行指标已中断", item.Reason)
-	require.Equal(t, "warning", item.Severity)
+	require.Equal(t, "critical", item.Severity, "组件健康只看上报：停止上报就是组件不可用")
 	require.True(t, item.NotifyFailed)
 	require.Equal(t, stamp(now.Add(-10*time.Hour+29*time.Second)), item.ResolvedAt)
 
@@ -191,7 +191,7 @@ func TestIncidentsCarryProcessesRecordedAtTrigger(t *testing.T) {
 	repos := openRepositories(t)
 	ctx := t.Context()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
-	cpu, memory, old, other := "host:AGENT01:cpu", "host:AGENT01:memory", "host:AGENT02:cpu", "deployment:control:web-host"
+	cpu, memory, old, other := "host:AGENT01:cpu", "host:AGENT01:memory", "host:AGENT02:cpu", "deployment:control:strategy"
 	create := func(id, check, eventType, payload string, at time.Time) {
 		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: events.SystemSpaceID, RuleID: "default:" + check, CheckID: check, EventType: eventType, Payload: payload, CreatedAt: at}))
 	}

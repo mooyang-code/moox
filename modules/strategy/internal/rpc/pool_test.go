@@ -182,8 +182,8 @@ func TestPoolEnableFreezesMembers(t *testing.T) {
 	if session.WarmedThrough != nil {
 		t.Fatalf("预热结果在预热完成前为空：%+v", session)
 	}
-	if len(h.owner.claims) != 0 {
-		t.Fatalf("没有挂账户的观察实例不认领会话：%v", h.owner.claims)
+	if len(h.trade.checks) != 0 {
+		t.Fatalf("没有挂账户的观察实例不联系 Trade：%v", h.trade.checks)
 	}
 	// 成员定义之后再改，不影响已启用的池：重复启用沿用同一会话与固化的成员。
 	if _, err := h.service.UpdateStrategy(h.ctx, &strategypb.UpdateStrategyReq{StrategyId: "member_spot", DslYaml: strings.Replace(spotMemberDSL, "name: spot_member", "name: spot_member2", 1)}); err != nil {
@@ -217,7 +217,11 @@ func TestPoolIsReplayableButNotTrialled(t *testing.T) {
 type fakeWarmer struct {
 	started []string
 	stopped []string
+	// blocked 是实例 → 预热没完成或失败的说明。
+	blocked map[string]string
 }
+
+func (w *fakeWarmer) Blocked(instanceID string) string { return w.blocked[instanceID] }
 
 func (w *fakeWarmer) Start(_ context.Context, instanceID, sessionID string) {
 	w.started = append(w.started, instanceID+"@"+sessionID)
@@ -263,28 +267,27 @@ func TestPoolEnableStartsWarmUpAndDisableStopsIt(t *testing.T) {
 	}
 }
 
-// 认领结果未知时保留待定会话，之后沿用同一会话启用成功，也要开始预热（用会话里已有的成员快照判断，不重读会话）。
-func TestPoolReenableOfPendingSessionStartsWarmUp(t *testing.T) {
+// 启用前读账户核对失败时不写会话、不预热；之后重试启用成功，用新会话开始预热（用这次启用的成员快照判断，不重读会话）。
+func TestPoolEnableAfterAccountCheckFailureStartsWarmUp(t *testing.T) {
 	h := newHarness(t)
 	warmer := &fakeWarmer{}
 	h.service.Warmer = warmer
 	h.createStrategy("member_spot", spotMemberDSL)
 	h.createStrategy("member_swap", swapMemberDSL)
 	h.createStrategy("pool_1", poolDefDSL)
-	h.owner.claimErr = errors.New("claim timeout")
+	h.trade.checkErr = errors.New("Trade 账户读取超时，结果未知")
 	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "p1", StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, LogicalAccountId: "acct-1", Enabled: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "p1")
-	pending := rsp.GetInstance().GetSessionId()
-	if pending == "" || len(warmer.started) != 0 {
-		t.Fatalf("认领没成功时保留待定会话、不预热：%q %v", pending, warmer.started)
+	if rsp.GetInstance().GetSessionId() != "" || len(warmer.started) != 0 {
+		t.Fatalf("核对没过时不写会话、不预热：%q %v", rsp.GetInstance().GetSessionId(), warmer.started)
 	}
-	h.owner.claimErr = nil
+	h.trade.checkErr = nil
 	recovered := h.setEnabled("p1", true)
 	requireOK(t, int32(recovered.GetRetInfo().GetCode()), recovered.GetRetInfo().GetMsg())
-	if len(warmer.started) != 1 || warmer.started[0] != "p1@"+pending {
-		t.Fatalf("沿用待定会话启用成功后应开始预热：%v", warmer.started)
+	if len(warmer.started) != 1 || warmer.started[0] != "p1@"+recovered.GetInstance().GetSessionId() {
+		t.Fatalf("启用成功后应开始预热：%v", warmer.started)
 	}
 }

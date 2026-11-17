@@ -7,9 +7,9 @@ export interface InstanceTab {
   health: string;
 }
 
-/** 结果页的实例顺序：已启用在前，其次是需要处理的（降级、会话待核实），再按更新时间从新到旧。 */
+/** 结果页的实例顺序：已启用在前，其次是需要处理的（降级），再按更新时间从新到旧。 */
 export function sortInstancesForResults(instances: StrategyInstance[]): StrategyInstance[] {
-  const attention = (item: StrategyInstance) => (item.health === "degraded" || item.health === "session_unverified" ? 0 : 1);
+  const attention = (item: StrategyInstance) => (item.health === "degraded" ? 0 : 1);
   return [...instances].sort(
     (a, b) =>
       Number(b.enabled) - Number(a.enabled) ||

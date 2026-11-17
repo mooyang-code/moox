@@ -2,7 +2,6 @@ package collectorpb
 
 import commonpb "github.com/mooyang-code/moox/packages/commonpb"
 
-type AuthInfo = commonpb.AuthInfo
 type RetInfo = commonpb.RetInfo
 type Page = commonpb.Page
 type PageResult = commonpb.PageResult

@@ -102,9 +102,8 @@ type DatasetPeriodCompleted struct {
 	// detail_type、detail 是写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析。
 	DetailType string `protobuf:"bytes,12,opt,name=detail_type,json=detailType,proto3" json:"detail_type,omitempty"`
 	Detail     []byte `protobuf:"bytes,13,opt,name=detail,proto3" json:"detail,omitempty"`
-	// universe_series、failed_series 是按序列（标的、series_tag）的期望全集与失败名单：只有同一数据集含多个 series_tag
-	// （统一数据集）时才填；单序列数据集为空，消费方按 universe_subject_ids、failed_subjects 处理。
-	// 失败名单是全集的子集；原有的按标的字段口径不变（标的的任一序列失败，该标的记入 failed_subjects）。
+	// universe_series、failed_series 是按序列（标的、series_tag）的期望全集与失败名单，所有数据集都带。
+	// 失败名单是全集的子集；按标的字段的口径不变（标的的任一序列失败，该标的记入 failed_subjects）。
 	UniverseSeries []*SeriesRef `protobuf:"bytes,14,rep,name=universe_series,json=universeSeries,proto3" json:"universe_series,omitempty"`
 	FailedSeries   []*SeriesRef `protobuf:"bytes,15,rep,name=failed_series,json=failedSeries,proto3" json:"failed_series,omitempty"`
 }

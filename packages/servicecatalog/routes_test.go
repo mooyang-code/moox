@@ -3,6 +3,7 @@ package servicecatalog
 import (
 	"bytes"
 	"net"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -22,9 +23,9 @@ func productionTopology() Topology {
 		}
 	}
 	for host, ids := range map[string][]string{
-		"control":  {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"},
-		"storage":  {"storage-primary", "storage-view", "access"},
-		"overseas": {"access", "egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
+		"control":  {"admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"},
+		"storage":  {"storage-primary", "storage-view"},
+		"overseas": {"egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
 	} {
 		for _, id := range ids {
 			t.Deployments = append(t.Deployments, Deployment{HostID: host, ComponentID: id, Status: Enabled})
@@ -40,7 +41,7 @@ func TestTopologyRejectsInvalidDeploymentsAtomically(t *testing.T) {
 	}{
 		{"control component elsewhere", func(c *Catalog, p *Topology) {
 			for i := range p.Deployments {
-				if p.Deployments[i].ComponentID == "console-proxy" {
+				if p.Deployments[i].ComponentID == "admin" {
 					p.Deployments[i].HostID = "storage"
 				}
 			}
@@ -52,7 +53,7 @@ func TestTopologyRejectsInvalidDeploymentsAtomically(t *testing.T) {
 			p.Hosts[2].Status = Disabled
 			p.Deployments = append(p.Deployments, Deployment{HostID: "overseas", ComponentID: "collector", Status: Enabled})
 		}},
-		{"same-host port conflict", func(c *Catalog, p *Topology) { componentPtr(c, "access").Health.Port = 11012 }},
+		{"same-host port conflict", func(c *Catalog, p *Topology) { componentPtr(c, "trade").Health.Port = 11012 }},
 		{"unknown host", func(c *Catalog, p *Topology) { p.Deployments[0].HostID = "unknown" }},
 		{"unknown component", func(c *Catalog, p *Topology) { p.Deployments[0].ComponentID = "unknown" }},
 		{"duplicate deployment", func(c *Catalog, p *Topology) { p.Deployments = append(p.Deployments, p.Deployments[0]) }},
@@ -120,27 +121,49 @@ func TestRelayHTTPPortJoinsComponentPorts(t *testing.T) {
 	}
 }
 
-func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
+// routeCallers 返回一台主机全部路由调用方的并集（排序后）：这台主机的网关只接受这些调用方的请求。
+func routeCallerUnion(compiled CompiledHost) []string {
+	set := map[string]bool{}
+	for _, route := range compiled.Routes {
+		for _, caller := range route.Callers {
+			set[caller] = true
+		}
+	}
+	callers := make([]string, 0, len(set))
+	for caller := range set {
+		callers = append(callers, caller)
+	}
+	slices.Sort(callers)
+	return callers
+}
+
+func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
+	if err := c.ValidateTopology(p); err != nil {
+		t.Fatal(err)
+	}
 	want := map[string]struct {
 		routes  int
 		callers []string
-		hash    string
 	}{
-		"control":  {195, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "strategy", "trade"}, "bb4dfbf17b914166e8c94517faecaa00b1803003ad0f84188a298f3a5a3f18b7"},
-		"storage":  {65, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "6a8447172d02fb02b4961b5a450944f7b26f8e447f5a59d829e890b6ece50abb"},
-		"overseas": {62, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "ebedfde10149b679e88cad3f5f08ac8ddbf322e20a9f062c1954f0abfba27ea2"},
+		"control":  {179, []string{"archive-mgr", "collector", "collector-operator", "collector-stream", "console", "factor-engine", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"storage":  {65, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
+		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if compiled.Disabled || len(compiled.Hash) != 64 || len(compiled.Directory.Version) != 64 {
-			t.Fatalf("invalid snapshot for %s", host.ID)
+		if compiled.Disabled || compiled.HostID != host.ID || len(compiled.Unknown) != 0 || len(compiled.Relays) != 0 {
+			t.Fatalf("invalid compiled view for %s: %+v", host.ID, compiled)
 		}
-		if len(compiled.Routes) != want[host.ID].routes || !slices.Equal(compiled.VerificationCallers, want[host.ID].callers) || compiled.Hash != want[host.ID].hash {
-			t.Errorf("review snapshot change for %s: routes=%d callers=%v hash=%s", host.ID, len(compiled.Routes), compiled.VerificationCallers, compiled.Hash)
+		callers := routeCallerUnion(compiled)
+		if len(compiled.Routes) != want[host.ID].routes || !slices.Equal(callers, want[host.ID].callers) {
+			t.Errorf("review route change for %s: routes=%d callers=%v", host.ID, len(compiled.Routes), callers)
+		}
+		if err := compiled.Directory.Validate(); err != nil {
+			t.Fatalf("%s directory: %v", host.ID, err)
 		}
 		if !slices.Equal(compiled.Directory.Services["trpc.moox.storage.PrimaryStore"], []string{"storage"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.trade.TradeConsoleService"], []string{"overseas"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.hostagent.HostAgentMgr"], []string{"control", "overseas", "storage"}) {
 			t.Fatal("directory does not represent the topology")
@@ -164,26 +187,24 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 				t.Fatalf("route forwards to another host: %+v", route)
 			}
 			for _, caller := range route.Callers {
-				if !c.Allowed(caller, route.ServicePath, route.Method) {
+				// 外部身份在名单上，但只能从外部入口进来（PrincipalAllowed）；其余调用方按 Allowed。
+				if !c.Allowed(caller, route.ServicePath, route.Method) && !c.PrincipalAllowed(caller, route.ServicePath, route.Method) {
 					t.Fatalf("compiled ACL widened: %s %s/%s", caller, route.ServicePath, route.Method)
 				}
 			}
-			if route.ServicePath == GatewayControlPath && !slices.Equal(route.Callers, []string{"host-gateway@control", "host-gateway@overseas", "host-gateway@storage"}) {
+			if route.ServicePath == GatewayControlPath && !slices.Equal(route.Callers, []string{"host-gateway"}) {
 				t.Fatal("GatewayControl key scope is incorrect")
 			}
 		}
-		for _, caller := range compiled.VerificationCallers {
-			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, caller) {
-				t.Fatalf("unexpanded or external verification scope %q", caller)
+		for _, caller := range callers {
+			if strings.Contains(caller, "*") || strings.Contains(caller, "@") || caller == "access" {
+				t.Fatalf("unexpanded or removed caller scope %q", caller)
+			}
+			if host.ID == "overseas" && c.ExternalIdentity(caller) {
+				t.Fatalf("外部身份 %s 不该出现在海外机（Trade、出口代理）的名单上", caller)
 			}
 		}
-		if (host.ID == "overseas") && slices.Contains(compiled.VerificationCallers, "access") {
-			t.Fatal("access must not have permission to trade or egress")
-		}
-		if (host.ID == "storage" || host.ID == "control") && !slices.Contains(compiled.VerificationCallers, "access") {
-			t.Fatal("external whitelist did not add access")
-		}
-		t.Logf("%s routes=%d callers=%v hash=%s", host.ID, len(compiled.Routes), compiled.VerificationCallers, compiled.Hash)
+		t.Logf("%s routes=%d callers=%v", host.ID, len(compiled.Routes), callers)
 	}
 }
 
@@ -197,7 +218,7 @@ func TestCompilePreservesMethodSpecificPermissionBoundaries(t *testing.T) {
 		if route.ServicePath != "trpc.moox.trade.TradeConsoleService" {
 			continue
 		}
-		if slices.Contains(route.Callers, "strategy") != slices.Contains([]string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner"}, route.Method) {
+		if slices.Contains(route.Callers, "strategy") != slices.Contains([]string{"GetLogicalAccount", "CloseTargetSession"}, route.Method) {
 			t.Fatalf("strategy permission crossed method boundary: %+v", route)
 		}
 	}
@@ -214,17 +235,20 @@ func TestCompilationIsOrderIndependentAndDoesNotMutateInputs(t *testing.T) {
 		t.Fatal("compiler changed input")
 	}
 	slices.Reverse(c.Components)
-	slices.Reverse(c.Principals)
+	slices.Reverse(c.Identities)
 	slices.Reverse(p.Hosts)
 	slices.Reverse(p.Deployments)
 	for i := range c.Components {
 		for j := range c.Components[i].Services {
 			s := &c.Components[i].Services[j]
 			slices.Reverse(s.Methods)
-			slices.Reverse(s.ACL)
-			for k := range s.ACL {
-				slices.Reverse(s.ACL[k].Methods)
-				slices.Reverse(s.ACL[k].Callers)
+			for k := range s.Methods {
+				slices.Reverse(s.Methods[k].Callers)
+				if s.Methods[k].Operators != nil {
+					reversed := slices.Clone(*s.Methods[k].Operators)
+					slices.Reverse(reversed)
+					s.Methods[k].Operators = &reversed
+				}
 			}
 		}
 	}
@@ -237,7 +261,8 @@ func TestCompilationIsOrderIndependentAndDoesNotMutateInputs(t *testing.T) {
 	}
 }
 
-func TestHashTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
+// 别的主机改了地址：本机路由不变，目录里那台主机的地址跟着变。目录里放宽一个方法的调用方：只有这条路由变，目录不变。
+func TestCompileTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	first, err := c.Compile(p, "control")
 	if err != nil {
@@ -248,17 +273,33 @@ func TestHashTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Hash == changed.Hash || first.Directory.Version == changed.Directory.Version {
-		t.Fatal("remote address change did not invalidate snapshots")
+	if changed.Directory.Hosts["storage"].PrivateAddress != "10.206.0.6" || first.Directory.Hosts["storage"].PrivateAddress != "10.206.0.5" {
+		t.Fatalf("remote address change did not reach the directory: %+v", changed.Directory.Hosts["storage"])
+	}
+	if !reflect.DeepEqual(first.Routes, changed.Routes) || !reflect.DeepEqual(first.Directory.Services, changed.Directory.Services) {
+		t.Fatal("remote address change must not touch local routes or service placement")
 	}
 	p = productionTopology()
-	servicePtr(&c, "trpc.moox.cloudfunction.CloudFunctionMgr").ACL[1].Callers = append(servicePtr(&c, "trpc.moox.cloudfunction.CloudFunctionMgr").ACL[1].Callers, "monitor")
+	create := methodPtr(&c, "trpc.moox.collector.CollectMgr", "CreateTask")
+	if slices.Contains(c.routeCallers(*create), "monitor") {
+		t.Fatal("test precondition: monitor must not already call CreateTask")
+	}
+	create.Callers = append(create.Callers, "monitor")
 	changed, err = c.Compile(p, "control")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Hash == changed.Hash || first.Directory.Version != changed.Directory.Version {
-		t.Fatal("ACL should change route hash and preserve directory version")
+	if !reflect.DeepEqual(first.Directory, changed.Directory) || len(first.Routes) != len(changed.Routes) {
+		t.Fatal("ACL change must preserve the directory and the route set")
+	}
+	for i, route := range changed.Routes {
+		isCreate := route.ServicePath == "trpc.moox.collector.CollectMgr" && route.Method == "CreateTask"
+		if isCreate && (!slices.Contains(route.Callers, "monitor") || slices.Contains(first.Routes[i].Callers, "monitor")) {
+			t.Fatalf("ACL change did not reach the route: %+v", route)
+		}
+		if !isCreate && !reflect.DeepEqual(route, first.Routes[i]) {
+			t.Fatalf("ACL change widened another route: %+v", route)
+		}
 	}
 }
 
@@ -269,8 +310,8 @@ func TestDisabledHostAndDeploymentWithdrawRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !compiled.Disabled || len(compiled.Routes) != 0 || len(compiled.VerificationCallers) != 0 {
-		t.Fatal("disabled host retains routes or keys")
+	if !compiled.Disabled || len(compiled.Routes) != 0 || len(compiled.Relays) != 0 {
+		t.Fatal("disabled host retains routes or relays")
 	}
 	if _, exists := compiled.Directory.Hosts["overseas"]; exists {
 		t.Fatal("disabled host retained in directory")
@@ -282,8 +323,16 @@ func TestDisabledHostAndDeploymentWithdrawRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(control.VerificationCallers, "host-gateway@overseas") {
-		t.Fatal("disabled host cannot fetch disabled snapshot")
+	// 停用的主机仍要验签取到快照（才知道自己已停用）：control 上取快照的路由仍给 host-gateway，
+	// 它的网关还在签名调用方里，别的组件不在。
+	pull := slices.IndexFunc(control.Routes, func(route Route) bool {
+		return route.ServicePath == GatewayControlPath && route.Method == "PullSnapshot"
+	})
+	if pull < 0 || !slices.Equal(control.Routes[pull].Callers, []string{"host-gateway"}) || !slices.Equal(c.SigningCallers(p)["overseas"], []string{"host-gateway"}) {
+		t.Fatalf("disabled host cannot fetch its snapshot: %v", c.SigningCallers(p)["overseas"])
+	}
+	if signing := c.SigningCallers(p)["control"]; !slices.Contains(signing, "console") || !slices.Contains(signing, "admin") || slices.Contains(c.SigningCallers(p)["storage"], "console") {
+		t.Fatalf("console signs only on the host that runs admin: %v", signing)
 	}
 	p = productionTopology()
 	for i := range p.Deployments {
@@ -346,10 +395,14 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	if len(routes) != 17+4 {
-		t.Fatalf("archive-mgr routes = %d, want 21", len(routes))
+	// ArchiveMgr 19 个（含生命周期两个）、ArchiveWorker 4 个。
+	if len(routes) != 19+4 {
+		t.Fatalf("archive-mgr routes = %d, want 23", len(routes))
 	}
-	for _, method := range []string{"PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable"} {
+	if route := routes["trpc.moox.archive.ArchiveMgr/GetLifecycle"]; !slices.Equal(route.Callers, []string{"console", "moox-cli"}) || !route.ReadOnly {
+		t.Fatalf("GetLifecycle 给管理台与 moox-cli 读: %+v", route)
+	}
+	for _, method := range []string{"PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable", "ControlLifecycle"} {
 		if route := routes["trpc.moox.archive.ArchiveMgr/"+method]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
 			t.Fatalf("%s 只给 moox-cli: %+v", method, route)
 		}
@@ -362,27 +415,27 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 	if !slices.Equal(list.Callers, []string{"console", "monitor", "moox-cli", "strategy"}) || !list.ReadOnly {
 		t.Fatalf("ListArchiveTasks 只读方法允许 monitor 与 strategy: %+v", list)
 	}
-	// ArchiveWorker 的 acl 为空：只有外部身份 archive-worker（经 Access 白名单）能调用。
+	// ArchiveWorker 的方法只有归档 worker 能调：它用所在主机的密钥直接到网关，不是外部身份。
 	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]
-	if !slices.Equal(pull.Callers, []string{"access"}) {
+	if !slices.Equal(pull.Callers, []string{"archive-worker"}) {
 		t.Fatalf("PullArchiveRun callers = %v", pull.Callers)
 	}
-	if !c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
-		c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveMgr", "CreateArchiveTask") ||
-		c.PrincipalAllowed("archive-worker", "trpc.moox.storage.PrimaryStore", "UpsertFields") ||
-		c.PrincipalAllowed("factor-engine", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") {
-		t.Fatal("archive-worker 的外部白名单边界不对")
+	if !c.Allowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
+		c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
+		c.Allowed("archive-worker", "trpc.moox.archive.ArchiveMgr", "CreateArchiveTask") ||
+		c.Allowed("archive-worker", "trpc.moox.storage.PrimaryStore", "UpsertFields") ||
+		c.Allowed("factor-engine", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") {
+		t.Fatal("archive-worker 能调的方法边界不对")
 	}
 }
 
 // 出站主机：目录记录中转主机，control 快照列出该主机允许的中转端口与调用方；直达主机不带许可，control 不能是出站主机。
 func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
-	baseline, err := c.Compile(p, "storage")
-	if err != nil {
+	p.Hosts[2].Reachability = ReachabilityOutbound
+	if err := c.ValidateTopology(p); err != nil {
 		t.Fatal(err)
 	}
-	p.Hosts[2].Reachability = ReachabilityOutbound
 	control, err := c.Compile(p, "control")
 	if err != nil {
 		t.Fatal(err)
@@ -400,19 +453,14 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	if !relay.Allowed("monitor", HostGatewayRemotePort) || relay.Allowed("admin", HostGatewayRemotePort) || relay.Allowed("monitor", 1) {
 		t.Fatal("relay allowlist is wrong")
 	}
-	if len(relay.Ports) < 2 {
-		t.Fatal("component health ports are missing")
-	}
-	for _, port := range relay.Ports[1:] {
-		if !slices.Equal(port.Callers, []string{"monitor", "moox-cli"}) {
-			t.Fatalf("health port %d open to %v", port.Port, port.Callers)
-		}
+	if len(relay.Ports) != 1 {
+		t.Fatalf("组件健康端口不经中转（组件健康只看上报）: %+v", relay.Ports)
 	}
 	storage, err := c.Compile(p, "storage")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(storage.Relays) != 0 || storage.Directory.Hosts["overseas"].Relay != "control" || storage.Hash == baseline.Hash {
+	if len(storage.Relays) != 0 || storage.Directory.Hosts["overseas"].Relay != "control" {
 		t.Fatal("direct host must see the relay in its directory but carry no allowlist")
 	}
 	p.Hosts[2].Status = Disabled
@@ -422,18 +470,19 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 
 	p = productionTopology()
 	p.Hosts[0].Reachability = ReachabilityOutbound
-	if _, err := c.Compile(p, "control"); err == nil {
+	if err := c.ValidateTopology(p); err == nil {
 		t.Fatal("outbound control host accepted")
 	}
 	p = productionTopology()
 	p.Hosts[1].Reachability = "inbound"
-	if _, err := c.Compile(p, "control"); err == nil {
+	if err := c.ValidateTopology(p); err == nil {
 		t.Fatal("unknown reachability accepted")
 	}
 }
 
-// 因子机是只能出站的主机：外部程序没有网关路由，只通过 Access 访问系统；它们的健康端口进入中转许可，只对 Monitor 与 moox-cli 开放。
-func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
+// 因子机是只能出站的主机：组件健康只看上报，它们的健康端口不进中转许可。
+// 因子引擎声明的服务另见 TestExternalProgramServiceRoutesThroughItsHostGateway。
+func TestOutboundFactorHostDoesNotRelayHealthPorts(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	p.Hosts = append(p.Hosts, Host{ID: "factor", Address: "192.168.0.103", Status: Enabled, Reachability: ReachabilityOutbound})
 	for _, id := range []string{"host-gateway", "host-agent", "factor-engine", "archive-worker"} {
@@ -452,12 +501,12 @@ func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 			relay = &control.Relays[i]
 		}
 	}
-	if relay == nil || !c.ValidRelay(*relay) {
+	if relay == nil {
 		t.Fatalf("factor relay = %+v", control.Relays)
 	}
 	for _, port := range []int{11417, 11418, 11012, 11425} {
-		if !relay.Allowed("monitor", port) || !relay.Allowed("moox-cli", port) || relay.Allowed("collector", port) {
-			t.Fatalf("health port %d is not limited to monitor and moox-cli: %+v", port, relay.Ports)
+		if relay.Allowed("monitor", port) || relay.Allowed("moox-cli", port) || relay.Allowed("collector", port) {
+			t.Fatalf("health port %d must not be relayed: %+v", port, relay.Ports)
 		}
 	}
 	if relay.Allowed("moox-cli", 22) || relay.Allowed("monitor", 22) {
@@ -467,35 +516,13 @@ func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 	if !relay.Allowed("console", 11428) || relay.Allowed("monitor", 11428) || relay.Allowed("moox-cli", 11428) || relay.Allowed("console", 11418) {
 		t.Fatalf("archive data port relay is wrong: %+v", relay.Ports)
 	}
-	if !slices.Contains(control.VerificationCallers, "console") {
-		t.Fatalf("console must be verified by control: %v", control.VerificationCallers)
+	if callers, ok := c.RelayHTTPCallers(11428); !ok || !slices.Equal(callers, []string{"console"}) || !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(HostGatewayRemotePort) {
+		t.Fatalf("relay_http port declaration is wrong: %v", callers)
 	}
 	for i := 1; i < len(relay.Ports); i++ {
 		if relay.Ports[0].Port != HostGatewayRemotePort || i > 1 && relay.Ports[i-1].Port >= relay.Ports[i].Port {
 			t.Fatalf("relay ports are not ordered: %+v", relay.Ports)
 		}
-	}
-	// 中转许可只接受目录里声明的调用方：把数据端口开给 monitor 或多加调用方都不合法；没有数据端口的旧许可仍合法。
-	for _, callers := range [][]string{{"monitor", "moox-cli"}, {"console", "monitor"}, {"admin"}} {
-		changed := RelayTarget{HostID: relay.HostID}
-		for _, port := range relay.Ports {
-			if port.Port == 11428 {
-				port.Callers = callers
-			}
-			changed.Ports = append(changed.Ports, port)
-		}
-		if c.ValidRelay(changed) {
-			t.Fatalf("relay_http port opened to %v", callers)
-		}
-	}
-	legacy := RelayTarget{HostID: relay.HostID}
-	for _, port := range relay.Ports {
-		if port.Port != 11428 {
-			legacy.Ports = append(legacy.Ports, port)
-		}
-	}
-	if !c.ValidRelay(legacy) {
-		t.Fatalf("relay without the data port rejected: %+v", legacy)
 	}
 	// 装在可直达主机上时没有中转许可，但端口照样参与同主机端口冲突检查。
 	direct := productionTopology()
@@ -503,14 +530,13 @@ func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 	if err := c.ValidateTopology(direct); err != nil {
 		t.Fatal(err)
 	}
-	// 外部程序不是网关调用方：全部路由的调用方里没有它们，外部身份只经 access 进入。
+	// 外部程序是普通的网关调用方：只出现在 callers 里写了它的方法上。
 	for _, route := range control.Routes {
-		if slices.Contains(route.Callers, "factor-engine") || slices.Contains(route.Callers, "archive-worker") {
-			t.Fatalf("external program is a gateway caller: %+v", route)
+		for _, id := range []string{"factor-engine", "archive-worker"} {
+			if slices.Contains(route.Callers, id) != c.Allowed(id, route.ServicePath, route.Method) {
+				t.Fatalf("external program route callers differ from the catalog: %+v", route)
+			}
 		}
-	}
-	if slices.Contains(control.VerificationCallers, "factor-engine") || slices.Contains(control.VerificationCallers, "archive-worker") {
-		t.Fatalf("external program is a verification caller: %v", control.VerificationCallers)
 	}
 	// 停用主机后，中转许可随之撤销。
 	for i := range p.Hosts {
@@ -525,5 +551,190 @@ func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 		if relay.HostID == "factor" {
 			t.Fatalf("disabled factor host keeps relay: %+v", relay)
 		}
+	}
+}
+
+// 外部程序声明服务之后（因子引擎的 EngineControl）：所在主机算出它的路由（指向本机端口、回放方法只给 strategy）；
+// 因子机只能出站时，control 的中转许可让 strategy 打开到因子机网关端口的中转，
+// 服务端口本身不能直接中转。
+func TestExternalProgramServiceRoutesThroughItsHostGateway(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	p.Hosts = append(p.Hosts, Host{ID: "factor", Address: "192.168.0.103", Status: Enabled, Reachability: ReachabilityOutbound})
+	for _, id := range []string{"host-gateway", "host-agent", "factor-engine", "archive-worker"} {
+		p.Deployments = append(p.Deployments, Deployment{HostID: "factor", ComponentID: id, Status: Enabled})
+	}
+	factor, err := c.Compile(p, "factor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 回放三个方法只给 strategy；生命周期、任务检查与本地写入只给 moox-cli。
+	type want struct {
+		timeout  int64
+		readOnly bool
+		caller   string
+	}
+	wants := map[string]want{
+		"OpenReplay": {600000, false, "strategy"}, "StepReplay": {120000, false, "strategy"}, "CloseReplay": {120000, false, "strategy"},
+		"GetLifecycle": {120000, true, "moox-cli"}, "ControlLifecycle": {120000, false, "moox-cli"}, "CheckTask": {120000, true, "moox-cli"},
+		"WriteSeries": {120000, false, "moox-cli"}, "GetSeriesFields": {120000, true, "moox-cli"}, "CheckSeriesSubject": {120000, true, "moox-cli"},
+		"GetSeriesBounds": {120000, true, "moox-cli"},
+	}
+	got := map[string]Route{}
+	for _, route := range factor.Routes {
+		if route.ServicePath == "trpc.moox.factor.EngineControl" {
+			got[route.Method] = route
+		}
+	}
+	if len(got) != len(wants) {
+		t.Fatalf("factor host EngineControl routes = %+v", got)
+	}
+	for method, w := range wants {
+		route := got[method]
+		if route.ComponentID != "factor-engine" || route.Address != "127.0.0.1:11423" || route.TimeoutMS != w.timeout ||
+			route.MaxBodyBytes != DefaultMaxBodyBytes || route.ReadOnly != w.readOnly || !slices.Equal(route.Callers, []string{w.caller}) {
+			t.Fatalf("%s route = %+v", method, route)
+		}
+	}
+	// 外部程序用所在主机的密钥签名：因子机上能签名的是它启用的组件，strategy、moox-cli 这些调用方用各自主机的密钥。
+	if signing := c.SigningCallers(p)["factor"]; !slices.Equal(signing, []string{"archive-worker", "factor-engine", "host-agent", "host-gateway"}) {
+		t.Fatalf("factor host signing callers = %v", signing)
+	}
+	if !slices.Equal(factor.Directory.Services["trpc.moox.factor.EngineControl"], []string{"factor"}) {
+		t.Fatalf("directory = %v", factor.Directory.Services["trpc.moox.factor.EngineControl"])
+	}
+
+	control, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.Directory.Hosts["factor"].Relay != "control" {
+		t.Fatalf("factor host must be reached through control: %+v", control.Directory.Hosts["factor"])
+	}
+	for _, route := range control.Routes {
+		if route.ServicePath == "trpc.moox.factor.EngineControl" {
+			t.Fatalf("control must not route EngineControl locally: %+v", route)
+		}
+	}
+	var relay *RelayTarget
+	for i := range control.Relays {
+		if control.Relays[i].HostID == "factor" {
+			relay = &control.Relays[i]
+		}
+	}
+	if relay == nil {
+		t.Fatalf("factor relay = %+v", control.Relays)
+	}
+	if !relay.Allowed("strategy", HostGatewayRemotePort) || relay.Allowed("strategy", 11423) || relay.Allowed("console", 11423) {
+		t.Fatalf("strategy must reach EngineControl only through the factor gateway port: %+v", relay.Ports)
+	}
+
+	// 停用因子引擎的部署后，路由与中转许可里的 strategy 随之撤销（因子机上其他服务都没有给 strategy）。
+	for i := range p.Deployments {
+		if p.Deployments[i].ComponentID == "factor-engine" {
+			p.Deployments[i].Status = Disabled
+		}
+	}
+	if factor, err = c.Compile(p, "factor"); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range factor.Routes {
+		if route.ComponentID == "factor-engine" {
+			t.Fatalf("disabled factor-engine keeps a route: %+v", route)
+		}
+	}
+	if control, err = c.Compile(p, "control"); err != nil {
+		t.Fatal(err)
+	}
+	for _, relay := range control.Relays {
+		if relay.HostID == "factor" && relay.Allowed("strategy", HostGatewayRemotePort) {
+			t.Fatalf("disabled factor-engine keeps strategy in the relay: %+v", relay.Ports)
+		}
+	}
+}
+
+// 拓扑里有本进程内嵌目录不认识的组件（控制机与本机版本不一致时出现）：Compile 忽略它，其余路由、目录与中转许可照常生效，
+// Unknown 里列出它（排序、去重）。
+func TestCompileIgnoresUnknownComponents(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	p.Hosts[2].Reachability = ReachabilityOutbound
+	want := map[string]CompiledHost{}
+	for _, host := range p.Hosts {
+		compiled, err := c.Compile(p, host.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(compiled.Unknown) != 0 || len(compiled.Routes) == 0 {
+			t.Fatalf("%s baseline: unknown=%v routes=%d", host.ID, compiled.Unknown, len(compiled.Routes))
+		}
+		want[host.ID] = compiled
+	}
+	signing := c.SigningCallers(p)
+
+	p.Deployments = append([]Deployment{
+		{HostID: "storage", ComponentID: "next-version-b", Status: Enabled},
+		{HostID: "control", ComponentID: "next-version-a", Status: Enabled},
+	}, p.Deployments...)
+	p.Deployments = append(p.Deployments,
+		Deployment{HostID: "overseas", ComponentID: "next-version-a", Status: Enabled},
+		Deployment{HostID: "overseas", ComponentID: "next-version-c", Status: Disabled},
+	)
+	if err := c.ValidateTopology(p); err == nil {
+		t.Fatal("Admin 写入时仍要拒绝不认识的组件")
+	}
+	unknown := []string{"next-version-a", "next-version-b", "next-version-c"}
+	for _, host := range p.Hosts {
+		compiled, err := c.Compile(p, host.ID)
+		if err != nil {
+			t.Fatalf("%s: %v", host.ID, err)
+		}
+		if !slices.Equal(compiled.Unknown, unknown) {
+			t.Fatalf("%s unknown = %v", host.ID, compiled.Unknown)
+		}
+		compiled.Unknown = nil
+		if !reflect.DeepEqual(compiled, want[host.ID]) {
+			t.Fatalf("%s: 不认识的组件改变了其余路由、目录或中转许可", host.ID)
+		}
+		for _, route := range compiled.Routes {
+			if strings.HasPrefix(route.ComponentID, "next-version") {
+				t.Fatalf("unknown component got a route: %+v", route)
+			}
+		}
+	}
+	directory, resolved := c.Resolve(p)
+	if !slices.Equal(resolved, unknown) || !reflect.DeepEqual(directory, want["control"].Directory) {
+		t.Fatalf("Resolve unknown = %v", resolved)
+	}
+	if err := directory.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// 不认识的组件不能用主机密钥签名。
+	if !reflect.DeepEqual(c.SigningCallers(p), signing) {
+		t.Fatalf("unknown component became a signing caller: %v", c.SigningCallers(p))
+	}
+}
+
+// 快照与目录只下发主机和部署：控制机就是部署了 admin 的那台，拼出的拓扑与原拓扑算出同样的结果。
+func TestNewTopologyFindsControlByAdminDeployment(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	rebuilt := NewTopology(p.Hosts, p.Deployments)
+	if rebuilt.ControlHostID != "control" {
+		t.Fatalf("control host = %q", rebuilt.ControlHostID)
+	}
+	if err := c.ValidateTopology(rebuilt); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range p.Hosts {
+		want, err := c.Compile(p, host.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := c.Compile(rebuilt, host.ID)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: rebuilt topology compiles differently: %v", host.ID, err)
+		}
+	}
+	withoutAdmin := slices.DeleteFunc(slices.Clone(p.Deployments), func(d Deployment) bool { return d.ComponentID == "admin" })
+	if got := NewTopology(p.Hosts, withoutAdmin); got.ControlHostID != "" {
+		t.Fatalf("control host without admin = %q", got.ControlHostID)
 	}
 }

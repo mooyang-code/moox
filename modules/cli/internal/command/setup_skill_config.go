@@ -2,33 +2,29 @@ package command
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"unicode"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/security"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
-const skillConfigIdentity = "moox-skill"
-
-type skillSecretReader func(context.Context, setupconfig.Host, string) ([]byte, error)
-
 func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 	var file, space, output string
+	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "export-skill-config",
 		Short: "导出 Skill 使用的最小数据访问配置",
+		Long: `导出的文件固定包含 crypto（币安现货 K 线）与 stockcn（沪深 300 K 线）两类数据的读取配置，一次导出就够，
+不用按空间各导一份。--space-id 目前只接受 crypto。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			space = strings.TrimSpace(space)
 			output = strings.TrimSpace(output)
@@ -58,92 +54,129 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("encode skill config: %w", err)
 			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return fmt.Errorf("config_changed")
-			}
-			if err := writeSkillSigningKey(output, config); err != nil {
+			// moox-skill 的私钥只在这台电脑上：存在操作员身份目录里（已有就复用，所以反复导出、重新打包 Skill 都是同一把），
+			// 公钥登记到控制机；导出时把私钥抄一份到输出文件旁边的私有目录，随 Skill 包一起走。
+			if err := source.resolveOperatorDir(); err != nil {
 				return err
 			}
-			config.SigningKey = ""
+			master := filepath.Join(source.operatorDir, "moox-skill.key")
+			if err := ensureAndRegisterIdentity(cmd.Context(), deps, snapshot, "moox-skill", master); err != nil {
+				return err
+			}
+			keyFile := filepath.Join(filepath.Dir(output), config.GatewayClient.KeyFile)
+			if err := copySkillKey(master, keyFile); err != nil {
+				return err
+			}
 			if err := writeSkillConfigAtomic0600(output, raw, os.Rename); err != nil {
 				return fmt.Errorf("write skill config: %w", err)
 			}
-			return writeSetupJSON(cmd, map[string]string{"status": "exported", "output": output})
+			return writeSetupJSON(cmd, map[string]any{"status": "exported", "output": output, "key_file": keyFile})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&space, "space-id", "", "要导出的 SCF Space ID")
+	cmd.Flags().StringVar(&space, "space-id", "", "目前只接受 crypto；导出的文件里同时带 stockcn 的读取配置")
 	cmd.Flags().StringVar(&output, "output", "", "Skill 数据访问配置输出路径")
+	cmd.Flags().StringVar(&source.operatorDir, "operator-dir", "", "这台电脑的操作员身份目录（默认 ~/.config/moox），moox-skill 的私钥存在这里")
 	_ = cmd.MarkFlagRequired("space-id")
 	_ = cmd.MarkFlagRequired("output")
 	return cmd
 }
 
-func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Snapshot, space string) (dataAccessConfig, error) {
+// skillKeyFile 是 moox-skill 的私钥相对输出文件的位置。
+var skillKeyFile = filepath.Join(".moox-skill-keys", "moox-skill.key")
+
+// defaultSetupExportSkillConfig 组出 Skill 的数据访问配置：读哪些数据集、经哪台主机的外部入口、用哪把私钥签名。不连任何主机。
+func defaultSetupExportSkillConfig(_ context.Context, snapshot *setupSnapshot, space string) (dataAccessConfig, error) {
 	if snapshot == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: setup snapshot is required")
 	}
-	transports := make(map[string]setupssh.Client)
-	defer func() {
-		for _, transport := range transports {
-			_ = transport.Close()
-		}
-	}()
-	transportFor := func(ctx context.Context, host setupconfig.Host) (setupssh.Client, error) {
-		key := host.Name + "\x00" + host.Address
-		transport := transports[key]
-		if transport == nil {
-			var err error
-			transport, err = dialSetupHost(ctx, host)
-			if err != nil {
-				return nil, fmt.Errorf("connect deployment host: %w", err)
-			}
-			transports[key] = transport
-		}
-		return transport, nil
-	}
-	read := func(ctx context.Context, host setupconfig.Host, path string) ([]byte, error) {
-		transport, err := transportFor(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-		return readRemotePrivateFile(ctx, transport, path, nativeStorageEnvironmentLimit)
-	}
-
 	klineDatasets, err := loadSkillKlineDatasets(filepath.Join(defaultSetupConfigDir, "collection-tasks.yaml"))
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
 	}
-	config, err := buildSkillDataAccessConfig(ctx, snapshot, space, read, klineDatasets)
+	config, err := buildSkillDataAccessConfig(space, klineDatasets)
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
-	control, err := transportFor(ctx, snapshot.Manifest.ControlHost())
-	if err != nil {
-		return dataAccessConfig{}, err
+	host := snapshot.Manifest.EntryHost()
+	if host.Name == "" {
+		return dataAccessConfig{}, fmt.Errorf("skill_config: 没有主机开外部入口；在 moox.toml 里给存储机的 [hosts.<主机>] 加上 external_entry = true，重新部署那台主机后再导出")
 	}
-	credentials, err := exportRemoteExternalCaller(ctx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, snapshot.Manifest.Paths.Resolved().DeployRoot, "moox-skill")
-	if err != nil {
-		return dataAccessConfig{}, err
-	}
-	host := snapshot.Manifest.StorageHost()
-	if !snapshot.Manifest.HasStorageHost() {
-		host = snapshot.Manifest.ControlHost()
-	}
-	digest := sha256.Sum256([]byte(credentials.KeyID))
-	config.GatewayClient = &gatewayclient.ExternalFileConfig{Address: net.JoinHostPort(host.Address, "11004"), InstanceID: "access@" + host.Name, Caller: "moox-skill", KeyID: credentials.KeyID, KeyFile: filepath.Join(".moox-skill-keys", hex.EncodeToString(digest[:])+".key")}
-	config.SigningKey = credentials.Secret
+	config.GatewayClient = &gatewayclient.ExternalFileConfig{Address: net.JoinHostPort(host.Address, strconv.Itoa(servicecatalog.HostGatewayExternalPort)), Host: host.Name, Caller: "moox-skill", KeyFile: skillKeyFile}
 	return config, nil
 }
 
-func buildSkillDataAccessConfig(
-	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
-	spaceID string,
-	read skillSecretReader,
-	klineDatasets skillKlineDatasets,
-) (dataAccessConfig, error) {
-	if snapshot == nil || read == nil || klineDatasets == nil {
+// copySkillKey 把 moox-skill 的私钥抄到输出文件旁边的私有目录（0700 目录、0600 文件）。
+func copySkillKey(master, target string) error {
+	directory := filepath.Dir(target)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(directory); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("Skill 签名私钥所在的目录 %s 必须是权限 0700 的目录，不能是符号链接", directory)
+	}
+	key, err := gatewayauth.ReadSigningKey(master)
+	if err != nil {
+		return err
+	}
+	return writeSkillConfigAtomic0600(target, []byte(gatewayauth.EncodeSigningKey(key)+"\n"), os.Rename)
+}
+
+// ensureAndRegisterIdentity 给一个外部身份准备签名私钥并登记公钥：私钥文件已有就复用、没有才在本机生成（所在目录只有自己能进），
+// 公钥经 SSH 登记到控制机（替换原来登记的，一个身份只有一把）。公钥随网关快照下发，各台网关几秒内就认新公钥。
+func ensureAndRegisterIdentity(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, identity, keyFile string) error {
+	directory := filepath.Dir(keyFile)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(directory); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("签名私钥所在的目录 %s 必须是权限 0700 的目录，不能是符号链接", directory)
+	}
+	key, _, err := identitybundle.EnsureSigningKeyFile(keyFile)
+	if err != nil {
+		return err
+	}
+	return deps.registerIdentity(ctx, snapshot, identity, identitybundle.PublicKey(key))
+}
+
+func newSetupRegisterIdentityCommand(deps setupDeps) *cobra.Command {
+	var file, identity, keyFile string
+	cmd := &cobra.Command{
+		Use:   "register-identity",
+		Short: "给不属于主机的外部身份准备签名私钥并登记公钥（如采集名单干预工具的 collector-operator）",
+		Long: `外部身份（collector-operator、moox-skill）的私钥只在使用它的电脑上：这条命令在 --key-file 生成一把（已有就复用），
+经 SSH 把公钥登记到控制机，各台网关几秒内随快照认到。一个身份只有一把公钥，再登记一次就是替换，旧私钥随即不能用。
+moox-skill 平时用 setup export-skill-config（它会顺带登记）；moox-cli 自己的密钥用 setup operator。`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if identity != "collector-operator" && identity != "moox-skill" {
+				return fmt.Errorf("--identity 只能是 collector-operator 或 moox-skill")
+			}
+			path, err := filepath.Abs(strings.TrimSpace(keyFile))
+			if err != nil || strings.TrimSpace(keyFile) == "" {
+				return fmt.Errorf("--key-file is required")
+			}
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			if err := ensureAndRegisterIdentity(cmd.Context(), deps, snapshot, identity, path); err != nil {
+				return err
+			}
+			return writeSetupJSON(cmd, map[string]any{"status": "registered", "identity": identity, "key_file": path})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径")
+	cmd.Flags().StringVar(&identity, "identity", "", "外部身份：collector-operator 或 moox-skill")
+	cmd.Flags().StringVar(&keyFile, "key-file", "", "签名私钥文件（没有就生成；所在目录要只有自己能进）")
+	_ = cmd.MarkFlagRequired("identity")
+	_ = cmd.MarkFlagRequired("key-file")
+	return cmd
+}
+
+func buildSkillDataAccessConfig(spaceID string, klineDatasets skillKlineDatasets) (dataAccessConfig, error) {
+	if klineDatasets == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
@@ -151,24 +184,8 @@ func buildSkillDataAccessConfig(
 		spaceID = "crypto"
 	}
 	if spaceID != "crypto" {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q", spaceID)
+		return dataAccessConfig{}, fmt.Errorf("skill_config: unsupported space %q：--space-id 只接受 crypto，导出的文件里已经同时带 stockcn 的读取配置，不用按空间各导一份", spaceID)
 	}
-	storageHost := snapshot.Manifest.ControlHost()
-	if snapshot.Manifest.HasStorageHost() {
-		storageHost = snapshot.Manifest.StorageHost()
-	}
-	storageRoot := snapshot.Manifest.Paths.Resolved().StorageRoot
-
-	storageRaw, err := read(ctx, storageHost, nativeStorageEnvironmentPath(storageRoot))
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth unavailable")
-	}
-	secrets, err := parseNativeStorageRoleSecrets(storageRaw)
-	clear(storageRaw)
-	if err != nil {
-		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth invalid")
-	}
-	storageAppKey := security.HMACSHA256Hex(secrets.Primary, []byte(skillConfigIdentity))
 	binanceKline, err := klineDatasets("crypto", "binance_spot")
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
@@ -183,7 +200,6 @@ func buildSkillDataAccessConfig(
 
 	return dataAccessConfig{
 		Version: 1,
-		Storage: dataStorageAuthConfig{AppID: skillConfigIdentity, AppKey: storageAppKey},
 		DataTypes: map[string]dataTypeConfig{
 			"crypto": {
 				DefaultExchange: "binance",
@@ -248,39 +264,4 @@ func writeSkillConfigAtomic0600(path string, content []byte, rename func(string,
 		return err
 	}
 	return nil
-}
-
-// Publish the immutable key file first, and the referencing config last. A
-// failed config replacement leaves the previous config and key usable.
-func writeSkillSigningKey(output string, config dataAccessConfig) error {
-	if config.GatewayClient == nil {
-		return fmt.Errorf("Skill Access configuration is required")
-	}
-	key := config.SigningKey
-	if len(key) < 32 || len(key) > 4096 || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return fmt.Errorf("invalid Skill signing key")
-	}
-	relative := config.GatewayClient.KeyFile
-	if filepath.IsAbs(relative) || filepath.Dir(relative) != ".moox-skill-keys" || filepath.Base(relative) == "." {
-		return fmt.Errorf("Skill signing key must use its private adjacent directory")
-	}
-	directory := filepath.Join(filepath.Dir(output), ".moox-skill-keys")
-	if err := os.Mkdir(directory, 0o700); err != nil && !os.IsExist(err) {
-		return err
-	}
-	info, err := os.Lstat(directory)
-	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
-		return fmt.Errorf("Skill signing key directory must be a non-symlink directory with permission 0700")
-	}
-	path := filepath.Join(filepath.Dir(output), relative)
-	if _, err := os.Lstat(path); err == nil {
-		current, err := gatewayauth.ReadSigningSecret(path)
-		if err != nil || current != key {
-			return fmt.Errorf("Skill signing key for the assigned KeyID conflicts with existing file")
-		}
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return writeSkillConfigAtomic0600(path, []byte(key+"\n"), os.Rename)
 }

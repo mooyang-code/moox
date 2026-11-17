@@ -1,0 +1,255 @@
+# moox.toml：拓扑与部署参数，明文保存，可以放进自己的私有仓库；不写任何秘密。
+# 秘密（管理员、腾讯云密钥、告警渠道、CLS 写入密钥、交易所密钥）写在同目录加密保存的 moox.secrets.toml 里（见 moox.secrets.toml.example）。
+# 两份文件都由 moox-cli config init 生成；拓扑直接编辑这份文件，改完重新部署对应主机生效。
+# 业务初值不在配置文件里：默认因子任务在 config/setup/factor-tasks.yaml（setup start 导入），自己的任务用 moox-cli factor task apply --file 导入。
+
+# 每台主机的部署根，放在挂载到 /data 的云盘上。
+[paths]
+deploy_root = "/data/moox"
+
+# EventBus 部署在哪台主机看 [deployments]，总是走 TLS。
+[eventbus]
+port = 4222
+
+# View 只按根数保留：每个时序序列保留最近 view_rows_per_series 根已完成 K 线，历史不足时用已有数据激活，
+# 后续由实时事件补齐。
+# Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
+# 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据。改完重新部署存储机生效。
+[storage_retention]
+view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；更旧的行每 2 分钟定时删除
+
+# 7×24 小时交易的空间（crypto 等，以及没有单独配置的空间）
+[storage_retention.defaults]
+"30s" = "90h"
+"1m" = "35d"  # 要装得下默认因子 EMA 的最大回看 49995 根（约 34.7 天）
+"5m" = "35d"
+"15m" = "105d"
+"30m" = "210d"
+"1h" = "420d"
+"4h" = "1700d"
+"1d" = "forever"
+"1w" = "forever"
+"1mo" = "forever"
+
+# 有交易时段的市场同样根数需要更多自然日
+[storage_retention.spaces.stockcn]
+"1m" = "60d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.stockhk]
+"1m" = "45d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.stockus]
+"1m" = "40d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+# View 维护的检查节奏与单个 View 文件的告警线（超过只告警，不动数据）。
+[storage_view]
+maintenance_check_interval = "1m"
+max_view_file_bytes = 4294967296
+
+# View 按空间 × 频率限制最长历史：data_time 早于“当前时间 − 期限”的行不写入 View，
+# 补采、导入、因子历史重算带来的旧行同样丢弃（Dataset 与因子本地存储照常保留全部历史）。
+# 期限写法同 [storage_retention]；要装得下 view_rows_per_series 根（默认值恰好装下 1 万根）。
+# 已在 View 里的旧行由定时删除按每序列根数删掉。
+[storage_view.max_age.defaults]
+"30s" = "90h"
+"1m" = "7d"
+"5m" = "35d"
+"15m" = "105d"
+"30m" = "210d"
+"1h" = "420d"
+"4h" = "1700d"
+"1d" = "forever"
+"1w" = "forever"
+"1mo" = "forever"
+
+[storage_view.max_age.spaces.stockcn]
+"1m" = "60d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_view.max_age.spaces.stockhk]
+"1m" = "45d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_view.max_age.spaces.stockus]
+"1m" = "40d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+# Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
+# 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。
+# 清理在每个周期的 maintenance_offset 处开始，且必须在下一个整点前结束
+# （offset + timeout <= interval），避免与整点的 K 线调度争用 SQLite 连接。
+[collector_retention]
+maintenance_interval = "1m"
+maintenance_offset = "35s"
+maintenance_timeout = "20s"
+max_rows_per_pass = 50000
+
+# 腾讯云日志服务里日志保留的天数（初始化时建的采集日志主题用它；服务日志的主题手工创建时填同样的天数），默认 2 天；保留越久存储费越高。
+# 只在创建日志主题时生效，已经建好的主题要到腾讯云控制台改。
+[logging]
+retention_days = 2
+
+# 服务日志上报腾讯云日志服务（CLS），可选。重要日志（Error 及以上、关键事件）总是发给 Monitor、在管理台“日志中心”里看，不需要这一段；
+# 这里配的是把各服务警告及以上的日志和关键事件另外上报到 CLS，方便检索。
+# 费用（腾讯云按量计费，中国大陆地域）：每个日志主题每天 0.04 元（约 1.2 元/月）是固定的，其余按量；按 MooX 的日志量、保留 2 天，每月合计几元以内。
+# endpoint 是上报域名（例如 ap-guangzhou.cls.tencentcs.com）；topic_id 是主题 moox-service 的 ID，
+# 用 moox-cli ops tencent cls bootstrap --topic-name moox-service --retention-days <[logging] 的 retention_days> 创建并取得。
+# 写入密钥（只有这个主题上传权限的子账号密钥）是秘密，写在 moox.secrets.toml 的 [logging.cls] 里，部署时渲染进各组件的环境文件。
+# 上报走明文 HTTP，日志里不要写密钥。min_level 是上报的最低级别：info、warn、error，默认 warn；
+# 调成 info 会把各服务逐条处理的日志也报上去，量大约是 10 倍。关键事件（进程启动、暂停与恢复等）不论级别都上报。
+[logging.cls]
+enabled = false
+endpoint = ""
+topic_id = ""
+min_level = "warn"
+
+# 归档对象存储：归档 worker 导出分区后传一份到标准 S3 接口的对象存储。不写这一段时用因子机上内置的 SeaweedFS
+# （随 archive-worker 部署，只听 127.0.0.1，密钥在机器上生成；和归档文件同盘，不防整盘故障）。
+# 写这一段就改用外部 S3（COS、R2 等，可放到别的机器或云上）。这里不写密钥：secret_id 是管理台“设置 › 密钥”里那条（分类 其他、提供方 s3、类型 API 密钥对）的 ID，
+# 部署 archive-worker 时由 moox-cli 取出并投影成 worker 的凭据文件。第一次加这一段用 moox-cli config edit 的“归档对象存储”一组。
+# [archive_object_store]
+# endpoint = "cos.ap-nanjing.myqcloud.com"
+# region = "ap-nanjing"
+# bucket = "moox-archive-1250000000"     # COS 桶名带 APPID
+# prefix = "moox-archive/"
+# url_style = "virtual"                   # virtual 或 path；COS 新建的桶只接受 virtual
+# use_tls = true
+# storage_class = "STANDARD_IA"           # 低频；留空用桶的默认（标准）
+# secret_id = "<管理台密钥的 secret_id>"
+
+# SCF 定时触发采集（Timer 模式）：声明哪些空间、市场在哪些地域运行，以及这些地域的函数网络。
+# 部署据此渲染 Collector 的 scf_regions / scf_markets / scf_plan；setup init 登记云账号、开通日志服务（CLS）、
+# 为每个空间上传代码包。函数的数量、标的分配与定时器由 Collector 按任务与标签成员自动创建和维护，
+# 代码包按名称取最新版本：升级时执行 `moox-cli collector function upload`，不需要改配置或重启。
+# 云账号在 [scf_plan.cloud_account] 声明（account_id、account_name、credential_secret_id、app_id、cos_region、cos_bucket）；
+# credential_secret_id 引用管理台里那把腾讯云密钥的 ID（setup init 写入的是 tencent-default），这里不写密钥。
+[scf_plan]
+enabled = false
+# memory_mb = 128               # 每个函数内存，默认 128
+# symbols_per_function = 50     # 每个函数负责的标的数，默认 50
+# assumed_egress_ips = 1        # 函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警
+
+# [scf_plan.cloud_account]
+# account_id = "tencent-scf"
+# account_name = "Tencent SCF"
+# credential_secret_id = "tencent-default"
+# app_id = "1255..."
+# cos_region = "ap-guangzhou"
+# cos_bucket = "moox-scf-guangzhou-<app_id>"
+
+# 函数在地域 VPC 内运行，通过同地域主机的私网地址访问外部入口（主机网关的 11004）：
+# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address，并写了 external_entry = true。
+# [scf_plan.regions.ap-hongkong]
+# vpc_id = "vpc-xxxxxxxx"
+# subnet_id = "subnet-xxxxxxxx"
+# entry_host = "overseas"   # 同地域有多台带私网地址的入口主机时必须指定
+
+# [[scf_plan.spaces]]
+# space_id = "crypto"
+# # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
+# # 采集方式不在这里配置：它记在采集任务上（stream / scf / local），建任务不写时用市场默认值（crypto 是 stream，其余是 scf），
+# # 之后用 moox-cli collector ingest-mode set 切换。
+# [scf_plan.spaces.markets]
+# spot = ["ap-hongkong"]
+# swap = ["ap-hongkong"]
+
+# config init 会按第一步密钥的 AppId 与入口主机的 VPC、子网、私网 IP 自动生成下面 A 股这一套：入口优先选存储服务器所在地域（同地域走内网），
+# 存储服务器没有可用的私有网络时退而选其他开了外部入口的主机（如海外服务器）。
+# A 股：沪深 300 成分股 5m K 线，函数优先放在存储机所在地域（该地域要有写了 external_entry = true、配了 private_address 的主机），
+# 每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回不采集。
+# [scf_plan.regions.ap-nanjing]
+# vpc_id = "vpc-xxxxxxxx"
+# subnet_id = "subnet-xxxxxxxx"
+# entry_host = "storage"
+# [[scf_plan.spaces]]
+# space_id = "stockcn"
+# [scf_plan.spaces.markets]
+# equity = ["ap-nanjing"]
+
+# 港股：恒生指数成分股 5m K 线（东方财富），与 A 股共用南京的 [scf_plan.regions.ap-nanjing]。
+# 命名空间默认 moox-stockhk-plan，代码包默认 moox-collector-stockhk-plan；固定每函数 25 只标的（95 只共 4 个函数），
+# 每 5 分钟触发一次，午休、收市后、非交易日函数直接返回不采集。
+# [[scf_plan.spaces]]
+# space_id = "stockhk"
+# [scf_plan.spaces.markets]
+# equity = ["ap-nanjing"]
+
+# 美股：标普 500 或纳斯达克 100 成分股 5m K 线（东方财富），与 A 股、港股共用南京的 [scf_plan.regions.ap-nanjing]。
+# 命名空间默认 moox-stockus-plan，代码包默认 moox-collector-stockus-plan；固定每函数 50 只标的（标普 500 共 11 个函数），
+# 每 5 分钟触发一次，盘前、收市后、非交易日（含半日市 13:00 之后）函数直接返回不采集。
+# [[scf_plan.spaces]]
+# space_id = "stockus"
+# [scf_plan.spaces.markets]
+# equity = ["ap-nanjing"]
+
+# 主机命名：英文 ID 全小写、按角色命名（control 控制机、storage 存储机、overseas 海外机、factor 因子机），
+# 同一角色有多台时才加序号（overseas-2）；label 是中文名，登记到管理台用于界面展示，不写时按 ID 生成（overseas-2 → 海外机 2）。
+# 机器的新增、部署、启停都通过 moox skill 完成，管理台只展示。
+# ssh 段：只支持免密的密钥登录。private_key_file 是这台电脑上的私钥（config init 生成 ~/.ssh/moox_ed25519 并装到各服务器上），
+# 不写时用 ssh-agent 与 ~/.ssh 下的默认私钥；私钥不带口令（带口令的私钥交给 ssh-agent）。
+# 腾讯云接口的默认地域取控制机的 region。
+[hosts.control]
+label = "控制机"
+address = "198.51.100.10"
+region = "ap-guangzhou"
+provider = "tencent"
+ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
+
+[hosts.storage]
+label = "存储机"
+address = "198.51.100.11"
+external_entry = true
+region = "ap-nanjing"
+provider = "tencent"
+ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
+
+[hosts.overseas]
+label = "海外机"
+address = "198.51.100.12"
+external_entry = true
+region = "ap-hongkong"
+provider = "tencent"
+ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519" }
+
+# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
+[deployments]
+control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
+storage = ["storage-primary", "storage-view", "eventbus"]
+overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
+
+[egress_proxy]
+http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
+
+# 手工调过的组件配置：[overrides."<组件>"."<配置文件名>"] 下每行“键路径 = 值”，部署渲染组件配置之后逐项覆盖，
+# 键路径不存在就报错；重新部署不会丢。值只能是字符串、整数、小数或布尔，不支持删键和数组元素。
+# 因子引擎的 tune 会打印建议值，照抄到这里即可。
+# [overrides."factor-engine"."engine.yaml"]
+# "window.lookback" = 50000
+# "compute.max_memory" = "8GiB"

@@ -75,9 +75,9 @@ func TestSubmitParamsAcceptsMergesAndIsIdempotent(t *testing.T) {
 	require.Equal(t, "pmean__var", got.MemberKey)
 	require.Equal(t, base.Add(time.Minute).Unix(), got.LastSubmittedPeriod)
 	require.Equal(t, "req-3", got.LastRequestID)
-	require.Equal(t, 12.0, got.LastSubmittedParams.Value("window", "SOL"))
-	require.Equal(t, 8.0, got.LastSubmittedParams.Value("window", "BTC"), "本次带了的标的覆盖旧值")
-	require.Equal(t, 7.0, got.LastSubmittedParams.Value("window", "ETH"), "没带的标的保留旧值")
+	require.Equal(t, 12.0, got.Params.Value("window", "SOL"))
+	require.Equal(t, 8.0, got.Params.Value("window", "BTC"), "本次带了的标的覆盖旧值")
+	require.Equal(t, 7.0, got.Params.Value("window", "ETH"), "没带的标的保留旧值")
 }
 
 func TestSubmitParamsRejectsPeriodRegression(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 )
 
 var (
@@ -38,6 +39,8 @@ type ConsoleServer struct {
 	// Delist 是下架名单与持有者查询；FlattenInstrumentAction 发起单标的下架清仓。
 	Delist                  *delistapp.Service
 	FlattenInstrumentAction FlattenInstrumentFunc
+	// Lifecycle 是模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它，见 lifecycle.go）。
+	Lifecycle *lifecycle.Controller
 }
 
 type HoldingQueryService interface {

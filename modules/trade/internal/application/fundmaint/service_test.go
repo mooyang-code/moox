@@ -163,7 +163,7 @@ func newFixture(t *testing.T, fundSettings string, balances []store.AssetBalance
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "LIVE", SettlementAsset: "USDT",
-			OwnerInstanceID: "i1", OwnerSessionID: "s1", FundSettingsJSON: fundSettings, AutomationState: "PAUSED", PauseReason: "configure",
+			FundSettingsJSON: fundSettings, AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -352,8 +352,8 @@ func TestSystemTasksSkipPausedAndFlatteningAccounts(t *testing.T) {
 // 自主下单组合没有自动执行（一直是暂停状态）：资金维护不看暂停，照常下单；只在清仓、减仓进行中时不做。
 func TestSystemTasksRunForManualGroups(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL,
-		c_owner_session_id = NULL, c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
 	_, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "REDUCE", Reason: "保证金率",
 		RequestJSON: "{}", Status: "RUNNING",
@@ -418,7 +418,7 @@ func TestDustConvertsOnlyManagedNonTargetNonExcludedBelowFiveUSDT(t *testing.T) 
 	})
 	f.markManaged("DOGE", "LTC", "XRP", "ETH", "USDC")
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
-		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "t1", InstanceID: "i1", SessionID: "s1", StrategyID: "st",
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "t1", InstanceID: "i1", SessionID: "s1", SessionStartedAt: 1000, StrategyID: "st",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}}, Status: "PENDING", AcceptedAt: 2_000,
 	})

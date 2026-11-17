@@ -49,7 +49,7 @@ func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq st
 			})
 		}
 		rsp, callErr := c.primary.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-			AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
+			SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: "0001-01-01T00:00:00Z", EndTime: end.Format(time.RFC3339Nano)},
 			ColumnNames: columns,
 			Page:        &commonpb.Page{Size: 1},
@@ -132,7 +132,7 @@ func (c *Client) ReadWindow(ctx context.Context, req ReadRequest) (map[string]*F
 				pageCtx, cancel = context.WithTimeout(ctx, req.PageTimeout)
 			}
 			rsp, callErr := c.primary.ReadTimeSeriesRows(pageCtx, &storagepb.ReadTimeSeriesRowsReq{
-				AuthInfo: c.auth, SpaceId: req.SpaceID, DatasetId: req.DatasetID,
+				SpaceId: req.SpaceID, DatasetId: req.DatasetID,
 				Selectors: selectors, TimeRange: timeRange,
 				ColumnNames: columns, Page: &commonpb.Page{Size: readPageSize, Cursor: cursor},
 			})

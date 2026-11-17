@@ -8,24 +8,28 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
-	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	"github.com/mooyang-code/moox/modules/collector/internal/adminrpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -35,61 +39,48 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
+// collectorGatewayWire 同时充当本机网关的目录服务与本机上的 Storage、Admin 服务：采集器和它们同机，直连各自的服务端口。
 type collectorGatewayWire struct {
-	adminpb.UnimplementedCollectorPublishLease
-	cloudfunctionpb.UnimplementedCloudFunctionMgr
+	adminpb.UnimplementedSecretMgr
+	adminpb.UnimplementedActivityLog
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedPrimaryStore
 	directorypb.UnimplementedDirectory
-	credentials gatewayauth.Credentials
-	directory   servicecatalog.Directory
-	mu          sync.Mutex
-	nonces      map[string]bool
-	calls       map[string]int
+	mu    sync.Mutex
+	calls map[string]int
 }
 
+const collectorDirectoryVersion = "v1"
+
+// GetDirectory 只下发主机与部署，采集器按内嵌的服务目录自己展开。
 func (w *collectorGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
-	if req.GetCurrentVersion() == w.directory.Version {
-		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
+	if req.GetCurrentVersion() == collectorDirectoryVersion {
+		return &directorypb.GetDirectoryRsp{Version: collectorDirectoryVersion}, nil
 	}
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version, Services: map[string]*directorypb.ServiceHosts{
-		"trpc.moox.storage.Metadata":               {HostIds: []string{"control"}},
-		"trpc.moox.storage.PrimaryStore":           {HostIds: []string{"control"}},
-		"trpc.moox.storage.DataView":               {HostIds: []string{"control"}},
-		"trpc.moox.cloudfunction.CloudFunctionMgr": {HostIds: []string{"control"}},
-		"trpc.moox.admin.CollectorPublishLease":    {HostIds: []string{"control"}},
-	}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
+	rsp := &directorypb.GetDirectoryRsp{Changed: true, Version: collectorDirectoryVersion,
+		Hosts: []*directorypb.DirectoryHost{{HostId: "control", Address: "control.example.test", Reachability: "direct", Enabled: true}}}
+	for _, component := range []string{"admin", "collector", "storage-primary", "storage-view"} {
+		rsp.Deployments = append(rsp.Deployments, &directorypb.DirectoryDeployment{HostId: "control", ComponentId: component, Enabled: true})
+	}
+	return rsp, nil
 }
 
-func (w *collectorGatewayWire) verify(ctx context.Context, service, method string, request proto.Message) error {
+// verify 核对本机直连的请求：不带任何签名头，调用元数据照常带到。
+func (w *collectorGatewayWire) verify(ctx context.Context, service, method string, _ proto.Message) error {
 	headers := http.Header{}
 	for key, value := range codec.Message(ctx).ServerMetaData() {
 		headers.Set(key, string(value))
 	}
-	body, err := proto.Marshal(request)
-	if err != nil {
-		return err
-	}
-	claims, err := gatewayauth.Verify(w.credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
-	if err != nil {
-		return err
-	}
-	if service == "trpc.moox.cloudfunction.CloudFunctionMgr" || service == "trpc.moox.admin.CollectorPublishLease" {
-		if headers.Get("X-Space-Id") != "crypto" {
-			return errors.New("FunctionInstance space metadata changed")
+	for name := range headers {
+		if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+			return fmt.Errorf("direct local call carries signature header %s", name)
 		}
-	} else {
-		role, ok := request.(interface{ GetAuthInfo() *storagepb.AuthInfo })
-		if !ok || role.GetAuthInfo().GetAppId() != "moox-collector" || role.GetAuthInfo().GetAppKey() != "independent-storage-role-key" {
-			return errors.New("collector Storage role authentication changed")
-		}
+	}
+	if service == "trpc.moox.admin.ActivityLog" && headers.Get("X-Space-Id") != "crypto" {
+		return errors.New("activity log space metadata changed")
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.nonces[claims.Nonce] {
-		return errors.New("collector call reused a signing nonce")
-	}
-	w.nonces[claims.Nonce] = true
 	w.calls[method]++
 	if method == "GetDataset" && w.calls[method] == 1 || method == "ApplyTagSnapshot" {
 		return errs.NewFrameError(errs.RetServerNoService, "refresh read; never retry write")
@@ -246,14 +237,13 @@ func (w collectorDataViewWire) GetViewState(ctx context.Context, request *storag
 func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "collector", "config", "app.yaml")
-	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-collector.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
-	for _, path := range []string{configPath, hostPath, keyPath, caPath} {
+	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "collector", KeyID: "admin-assigned-collector-key-42", Secret: "collector-fixture-signing-key-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0600))
+	credentials := authtest.Component("collector", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -262,27 +252,35 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host := hostgatewayconfig.Default("control", "control", "192.0.2.1", "host-fixture-key")
-	host.Server.LocalAddr = listener.Addr().String()
-	host.TLS.CAFile = caPath
-	encoded, err := hostgatewayconfig.Encode(host)
+	wire := &collectorGatewayWire{calls: map[string]int{}}
+	// 采集器与 Storage、Admin 同机：直连服务目录里各服务的回环端口，这里把它们都指到同一个假服务上。
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostPath, encoded, 0600))
-	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.storage.DataView": {"control"}, "trpc.moox.cloudfunction.CloudFunctionMgr": {"control"}, "trpc.moox.admin.CollectorPublishLease": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
-	wire := &collectorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}, calls: map[string]int{}}
+	servicePorts := map[int]bool{}
+	for _, path := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.PrimaryStore", "trpc.moox.storage.DataView", "trpc.moox.ops.SecretMgr", "trpc.moox.admin.ActivityLog"} {
+		spec, ok := catalog.Service(path)
+		require.True(t, ok, path)
+		servicePorts[spec.Port] = true
+	}
+	var dialed sync.Map
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		dialed.Store(port, true)
+		return listener.Addr().String()
+	}))
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
 	storagepb.RegisterDataViewService(svc, &collectorDataViewWire{wire: wire})
-	cloudfunctionpb.RegisterCloudFunctionMgrService(svc, wire)
-	adminpb.RegisterCollectorPublishLeaseService(svc, wire)
+	adminpb.RegisterSecretMgrService(svc, wire)
+	adminpb.RegisterActivityLogService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "collector")
-	raw := "database:\n  path: " + filepath.Join(data, "collector.db") + "\ngateway_client:\n  caller: collector\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-collector.key\n"
+	raw := "database:\n  path: " + filepath.Join(data, "collector.db") + "\ngateway_client:\n  caller: collector\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0600))
 	cfg, err := Load(configPath)
 	require.NoError(t, err)
@@ -292,85 +290,84 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	runtime.gateway = gateway
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 	adapter := storageio.NewGatewayClient(gateway)
-	auth := &storagepb.AuthInfo{AppId: "moox-collector", AppKey: "independent-storage-role-key"}
 	t.Run("GetTag", func(t *testing.T) {
-		_, err := adapter.GetTag(t.Context(), &storagepb.GetTagReq{AuthInfo: auth})
+		_, err := adapter.GetTag(t.Context(), &storagepb.GetTagReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetDataset", func(t *testing.T) {
-		_, err := adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{AuthInfo: auth})
+		_, err := adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("CreateDataset", func(t *testing.T) {
-		_, err := adapter.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{AuthInfo: auth})
+		_, err := adapter.CreateDataset(t.Context(), &storagepb.CreateDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("UpdateDataset", func(t *testing.T) {
-		_, err := adapter.UpdateDataset(t.Context(), &storagepb.UpdateDatasetReq{AuthInfo: auth})
+		_, err := adapter.UpdateDataset(t.Context(), &storagepb.UpdateDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("DeleteDataset", func(t *testing.T) {
-		_, err := adapter.DeleteDataset(t.Context(), &storagepb.DeleteDatasetReq{AuthInfo: auth})
+		_, err := adapter.DeleteDataset(t.Context(), &storagepb.DeleteDatasetReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetView", func(t *testing.T) {
-		_, err := adapter.GetView(t.Context(), &storagepb.GetViewReq{AuthInfo: auth})
+		_, err := adapter.GetView(t.Context(), &storagepb.GetViewReq{})
 		require.NoError(t, err)
 	})
 	t.Run("CreateView", func(t *testing.T) {
-		_, err := adapter.CreateView(t.Context(), &storagepb.CreateViewReq{AuthInfo: auth})
+		_, err := adapter.CreateView(t.Context(), &storagepb.CreateViewReq{})
 		require.NoError(t, err)
 	})
 	t.Run("DeleteView", func(t *testing.T) {
-		_, err := adapter.DeleteView(t.Context(), &storagepb.DeleteViewReq{AuthInfo: auth})
+		_, err := adapter.DeleteView(t.Context(), &storagepb.DeleteViewReq{})
 		require.NoError(t, err)
 	})
 	t.Run("UpsertDatasetColumn", func(t *testing.T) {
-		_, err := adapter.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{AuthInfo: auth})
+		_, err := adapter.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ResolveSubjects", func(t *testing.T) {
-		_, err := adapter.ResolveSubjects(t.Context(), &storagepb.ResolveSubjectsReq{AuthInfo: auth})
+		_, err := adapter.ResolveSubjects(t.Context(), &storagepb.ResolveSubjectsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ListDatasetColumns", func(t *testing.T) {
-		_, err := adapter.ListDatasetColumns(t.Context(), &storagepb.ListDatasetColumnsReq{AuthInfo: auth})
+		_, err := adapter.ListDatasetColumns(t.Context(), &storagepb.ListDatasetColumnsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ListTags", func(t *testing.T) {
-		_, err := adapter.ListTags(t.Context(), &storagepb.ListTagsReq{AuthInfo: auth})
+		_, err := adapter.ListTags(t.Context(), &storagepb.ListTagsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ApplyTagSnapshot", func(t *testing.T) {
-		_, err := adapter.ApplyTagSnapshot(t.Context(), &storagepb.ApplyTagSnapshotReq{AuthInfo: auth})
+		_, err := adapter.ApplyTagSnapshot(t.Context(), &storagepb.ApplyTagSnapshotReq{})
 		require.Error(t, err)
 	})
 	t.Run("UpdateSubjectAttributes", func(t *testing.T) {
-		_, err := adapter.UpdateSubjectAttributes(t.Context(), &storagepb.UpdateSubjectAttributesReq{AuthInfo: auth})
+		_, err := adapter.UpdateSubjectAttributes(t.Context(), &storagepb.UpdateSubjectAttributesReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetDataSource", func(t *testing.T) {
-		_, err := adapter.GetDataSource(t.Context(), &storagepb.GetDataSourceReq{AuthInfo: auth})
+		_, err := adapter.GetDataSource(t.Context(), &storagepb.GetDataSourceReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ListSubjects", func(t *testing.T) {
-		_, err := adapter.ListSubjects(t.Context(), &storagepb.ListSubjectsReq{AuthInfo: auth})
+		_, err := adapter.ListSubjects(t.Context(), &storagepb.ListSubjectsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("CommitTimeSeriesBatch", func(t *testing.T) {
-		_, err := adapter.CommitTimeSeriesBatch(t.Context(), &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: auth})
+		_, err := adapter.CommitTimeSeriesBatch(t.Context(), &storagepb.PrimaryCommitTimeSeriesBatchReq{})
 		require.NoError(t, err)
 	})
 	t.Run("UpsertFields", func(t *testing.T) {
-		_, err := adapter.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{AuthInfo: auth})
+		_, err := adapter.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("ReadRows", func(t *testing.T) {
-		_, err := adapter.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{AuthInfo: auth})
+		_, err := adapter.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{})
 		require.NoError(t, err)
 	})
 	t.Run("GetViewState", func(t *testing.T) {
-		_, err := adapter.GetViewState(t.Context(), &storagepb.GetViewStateReq{AuthInfo: auth})
+		_, err := adapter.GetViewState(t.Context(), &storagepb.GetViewStateReq{})
 		require.NoError(t, err)
 	})
 	wire.mu.Lock()
@@ -378,86 +375,41 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
 	require.Len(t, wire.calls, 20)
 	wire.mu.Unlock()
-	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
-	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")
+	// 云账号密钥经网关读 Admin 的专用方法 GetCloudCredential。
+	credential, err := (&cloud.GatewayCredentials{Gateway: gateway}).Resolve(t.Context(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "secret-1"})
 	require.NoError(t, err)
-	require.EqualValues(t, 17, lease.FencingToken)
-	lease, err = invoker.RenewCollectorPublishLease(t.Context(), lease)
-	require.NoError(t, err)
-	require.NoError(t, invoker.ReleaseCollectorPublishLease(t.Context(), lease))
+	require.Equal(t, cloud.Credential{AccountID: "account-a", SecretID: "AKID-fixture", SecretKey: "fixture-secret-value"}, credential)
+	// 活动日志带上空间元数据。
+	require.NoError(t, adminrpc.New(gateway).AppendActivityLogs(t.Context(), "crypto", []adminrpc.ActivityEntry{{SpaceID: "crypto", Source: "collector", Title: "t"}}))
 	wire.mu.Lock()
-	for _, method := range []string{"AcquireCollectorPublishLease", "RenewCollectorPublishLease", "ReleaseCollectorPublishLease"} {
-		require.Equal(t, 1, wire.calls[method])
+	require.Equal(t, 1, wire.calls["GetCloudCredential"])
+	require.Equal(t, 1, wire.calls["AppendActivityLogs"])
+	wire.mu.Unlock()
+	for port := range servicePorts {
+		_, ok := dialed.Load(port)
+		require.True(t, ok, "服务端口 %d 应被直连", port)
 	}
-	wire.mu.Unlock()
-	nodes, err := invoker.ListMarketFetchers(t.Context(), "crypto")
-	require.NoError(t, err)
-	require.Len(t, nodes, 1)
-	result, err := invoker.Invoke(t.Context(), "crypto", "node-1", map[string]any{"action": "probe"}, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
-	require.NoError(t, err)
-	require.Equal(t, "request-1", result.RequestID)
-	job, err := invoker.GetRuntimeConfigBatchStatus(t.Context(), "crypto", "job-1")
-	require.NoError(t, err)
-	require.Equal(t, "job-1", job.GetJobId())
-	_, err = invoker.SubmitRuntimeConfigs(t.Context(), "crypto", []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{{InstanceId: "node-1"}})
-	require.ErrorIs(t, err, scfinvoker.ErrRuntimeConfigSubmissionUnknown)
-	wire.mu.Lock()
-	cloudCalls := wire.calls["SubmitUpdateFunctionInstanceRuntimeConfigs"]
-	wire.mu.Unlock()
-	require.Equal(t, 1, cloudCalls, "runtime config writes are sent once")
-	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{AuthInfo: auth}, client.WithTarget("ip://192.0.2.99:1"))
+	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{}, client.WithTarget("ip://192.0.2.99:1"))
 	require.Error(t, err)
 	cache := filepath.Join(data, "gatewayclient", "directory.json")
 	info, err := os.Stat(cache)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
 	require.NoError(t, runtime.Close())
-	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{AuthInfo: auth})
+	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{})
 	require.Error(t, err)
 }
 
-func (w *collectorGatewayWire) ListFunctionInstances(ctx context.Context, req *cloudfunctionpb.ListFunctionInstancesReq) (*cloudfunctionpb.ListFunctionInstancesRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "ListFunctionInstances", req); err != nil {
+func (w *collectorGatewayWire) GetCloudCredential(ctx context.Context, req *adminpb.GetCloudCredentialReq) (*adminpb.GetCloudCredentialRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.ops.SecretMgr", "GetCloudCredential", req); err != nil {
 		return nil, err
 	}
-	return &cloudfunctionpb.ListFunctionInstancesRsp{Items: []*cloudfunctionpb.FunctionInstance{{InstanceId: "node-1", PackageId: "package-1", DeploymentId: "deployment-1"}}}, nil
-}
-func (w *collectorGatewayWire) InvokeFunction(ctx context.Context, req *cloudfunctionpb.InvokeFunctionReq) (*cloudfunctionpb.InvokeFunctionRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "InvokeFunction", req); err != nil {
-		return nil, err
-	}
-	return &cloudfunctionpb.InvokeFunctionRsp{Scf: &cloudfunctionpb.ScfInvokeResult{RequestId: "request-1"}}, nil
-}
-func (w *collectorGatewayWire) GetFunctionJob(ctx context.Context, req *cloudfunctionpb.GetFunctionJobReq) (*cloudfunctionpb.GetFunctionJobRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "GetFunctionJob", req); err != nil {
-		return nil, err
-	}
-	return &cloudfunctionpb.GetFunctionJobRsp{Job: &cloudfunctionpb.FunctionJobSummary{JobId: req.GetJobId()}}, nil
-}
-func (w *collectorGatewayWire) SubmitUpdateFunctionInstanceRuntimeConfigs(ctx context.Context, req *cloudfunctionpb.SubmitUpdateFunctionInstanceRuntimeConfigsReq) (*cloudfunctionpb.SubmitFunctionJobRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "SubmitUpdateFunctionInstanceRuntimeConfigs", req); err != nil {
-		return nil, err
-	}
-	return nil, errs.NewFrameError(errs.RetServerSystemErr, "lost response after accepting write")
+	return &adminpb.GetCloudCredentialRsp{RetInfo: &adminpb.RetInfo{}, Credential: &adminpb.CloudCredential{SecretId: req.GetSecretId(), KeyId: "AKID-fixture", SecretValue: "fixture-secret-value"}}, nil
 }
 
-func (w *collectorGatewayWire) AcquireCollectorPublishLease(ctx context.Context, req *adminpb.AcquireCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease", req); err != nil {
+func (w *collectorGatewayWire) AppendActivityLogs(ctx context.Context, req *adminpb.AppendActivityLogsReq) (*adminpb.AppendActivityLogsRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.admin.ActivityLog", "AppendActivityLogs", req); err != nil {
 		return nil, err
 	}
-	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: "lease-1", FencingToken: 17, ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
-}
-
-func (w *collectorGatewayWire) RenewCollectorPublishLease(ctx context.Context, req *adminpb.RenewCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.admin.CollectorPublishLease", "RenewCollectorPublishLease", req); err != nil {
-		return nil, err
-	}
-	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: req.GetLeaseId(), FencingToken: req.GetFencingToken(), ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
-}
-
-func (w *collectorGatewayWire) ReleaseCollectorPublishLease(ctx context.Context, req *adminpb.ReleaseCollectorPublishLeaseReq) (*adminpb.ReleaseCollectorPublishLeaseRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.admin.CollectorPublishLease", "ReleaseCollectorPublishLease", req); err != nil {
-		return nil, err
-	}
-	return &adminpb.ReleaseCollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, Released: true}, nil
+	return &adminpb.AppendActivityLogsRsp{RetInfo: &adminpb.RetInfo{}}, nil
 }

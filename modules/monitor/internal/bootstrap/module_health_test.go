@@ -33,13 +33,13 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 		{"trade", report.ModuleMetricLastError, "trade-rebalance", now.Add(-10 * time.Minute)},
 		{"trade", report.ModuleMetricLastSuccess, "trade-rebalance", now.Add(-time.Minute)},
 		// factor's latest run failed, but within its MaxLag of a success.
-		{"factor", report.ModuleMetricLastSuccess, "factor-calculation", now.Add(-3 * time.Minute)},
-		{"factor", report.ModuleMetricLastError, "factor-calculation", now.Add(-time.Minute)},
+		{"factor", report.ModuleMetricLastSuccess, "test-within-lag", now.Add(-3 * time.Minute)},
+		{"factor", report.ModuleMetricLastError, "test-within-lag", now.Add(-time.Minute)},
 		// collector 最近一次失败在 2 小时前，之后再没有运行（闲置），判健康。
-		{"collector", report.ModuleMetricLastSuccess, "collector-market-data", now.Add(-3 * time.Hour)},
-		{"collector", report.ModuleMetricLastError, "collector-market-data", now.Add(-2 * time.Hour)},
-		// cloudfunction 从没成功过、50 分钟前失败：还在闲置判定窗口内，仍判失败（每小时跑一次的模块不能在两次运行之间恢复）。
-		{"cloudfunction", report.ModuleMetricLastError, "cloudfunction-jobs", now.Add(-50 * time.Minute)},
+		{"collector", report.ModuleMetricLastSuccess, "test-idle", now.Add(-3 * time.Hour)},
+		{"collector", report.ModuleMetricLastError, "test-idle", now.Add(-2 * time.Hour)},
+		// monitor 从没成功过、50 分钟前失败：还在闲置判定窗口内，仍判失败（每小时跑一次的模块不能在两次运行之间恢复）。
+		{"monitor", report.ModuleMetricLastError, "monitor-metrics", now.Add(-50 * time.Minute)},
 	}
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		for index, item := range samples {
@@ -53,7 +53,11 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	items, err := moduleHealthItems(context.Background(), query, report.BuiltInModuleHealthChecks(), now)
+	// 内置清单之外再加两项只在测试里用的检查，覆盖“失败但 MaxLag 内成功过”与“闲置”两种判定。
+	checks := append(report.BuiltInModuleHealthChecks(),
+		report.ModuleHealthCheck{ID: "test-within-lag", Module: "factor", MaxLag: 10 * time.Minute, Enabled: true},
+		report.ModuleHealthCheck{ID: "test-idle", Module: "collector", MaxLag: 5 * time.Minute, Enabled: true})
+	items, err := moduleHealthItems(context.Background(), query, checks, now)
 	require.NoError(t, err)
 	byID := map[string]businessFreshnessItem{}
 	for _, item := range items {
@@ -64,11 +68,11 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 	require.Equal(t, "策略目标生成", byID["module:strategy-targets"].name)
 	require.Contains(t, byID["module:strategy-targets"].reason, "已 1 小时没有成功运行")
 	require.True(t, byID["module:trade-rebalance"].success)
-	require.True(t, byID["module:factor-calculation"].success)
-	require.True(t, byID["module:collector-market-data"].success)
-	require.Contains(t, byID["module:collector-market-data"].reason, "之后已 2 小时没有新的运行，按闲置处理")
-	require.False(t, byID["module:cloudfunction-jobs"].success)
-	require.Contains(t, byID["module:cloudfunction-jobs"].reason, "且从未成功过")
+	require.True(t, byID["module:test-within-lag"].success)
+	require.True(t, byID["module:test-idle"].success)
+	require.Contains(t, byID["module:test-idle"].reason, "之后已 2 小时没有新的运行，按闲置处理")
+	require.False(t, byID["module:monitor-metrics"].success)
+	require.Contains(t, byID["module:monitor-metrics"].reason, "且从未成功过")
 }
 
 func TestKlineReasonTextForViewBehindCompletedPeriod(t *testing.T) {

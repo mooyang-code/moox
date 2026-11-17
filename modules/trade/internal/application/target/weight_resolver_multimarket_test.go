@@ -39,7 +39,7 @@ func newMixedResolverStore(t *testing.T, fundSettings string) *store.Store {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
 			FundSettingsJSON: fundSettings,
 		}); err != nil {

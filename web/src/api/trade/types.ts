@@ -97,8 +97,6 @@ export interface LogicalAccount {
   logical_account_id: string;
   space_id: string;
   name: string;
-  owner_instance_id?: string;
-  owner_session_id?: string;
   control_mode: ControlMode;
   execution_mode: ExecutionMode;
   /** 可交易的市场：启用成员已开通市场的并集（只读，由 Trade 计算）；策略要输出的市场必须都在里面。 */
@@ -198,6 +196,31 @@ export interface InstrumentTarget {
   instrument_id: string;
   quantity: string;
   hold?: boolean;
+}
+
+/** 影子目标里一个标的的目标权重；hold 表示保持当前持仓数量不动。 */
+export interface ShadowWeight {
+  instrument_id: string;
+  target_weight: string;
+  hold?: boolean;
+}
+
+/** 试运行中的策略实例（挂了账户、还没确认实盘）发来的影子目标：Trade 只换算成数量并记录，不下单。时间是毫秒。 */
+export interface ShadowTarget {
+  target_id: string;
+  logical_account_id: string;
+  instance_id: string;
+  session_id: string;
+  session_started_at?: number | string;
+  strategy_id: string;
+  bar_end_time: number | string;
+  valid_until?: number | string;
+  weights?: ShadowWeight[];
+  equity?: string;
+  equity_source_time?: number | string;
+  reference_prices?: Record<string, string>;
+  targets?: InstrumentTarget[];
+  recorded_at?: number | string;
 }
 
 export interface TradableInstrument {

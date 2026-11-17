@@ -175,9 +175,6 @@ export interface FactorMember {
   /** 固定成员的固定参数，或可变成员的默认参数（完整参数，加成员时给定，之后不变）。 */
   params?: Record<string, number>;
   kind: MemberKind;
-  /** 可变成员最近一次被接受的提交的目标期（Unix 秒，int64 可能是字符串）和提交时间；从未提交过为 0 和空。 */
-  last_submitted_period?: number | string;
-  last_submitted_at?: string;
 }
 
 export interface FactorPeriodState {

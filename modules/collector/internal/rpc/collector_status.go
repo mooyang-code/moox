@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -52,7 +54,8 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 			raise(klinecheck.HealthError, fmt.Sprintf("采集计划 #%d 下发失败：%s", source.ID, lastError))
 		}
 	}
-	if rsp.IngestModes, err = s.ingestModes(ctx, spaceID, ""); err != nil {
+	s.fillCloudReadbacks(spaceID, rsp)
+	if rsp.IngestModes, err = s.ingestModes(ctx, spaceID, "", true); err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	if s.stream != nil {
@@ -61,8 +64,8 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 	}
 	for _, mode := range rsp.IngestModes {
-		if mode.GetMode() == store.IngestStreaming && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
-			raise(klinecheck.HealthError, "collector-stream 不在线：推送采集的数据集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回")
+		if mode.GetIngest() != domain.IngestSCF && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
+			raise(klinecheck.HealthError, "collector-stream 不在线：采集方式是 stream 或 local 的数据集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --ingest scf 切回（它离线超过心跳超时后交接不等它确认）")
 			break
 		}
 	}
@@ -92,7 +95,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 	}
 
-	health, err := klinecheck.Health(ctx, plans, backfill, spaceID, now)
+	health, err := klinecheck.Health(ctx, s.persistence.SeriesTimeline(), backfill, spaceID, now)
 	if err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -132,7 +135,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 // 这期间数据集在时间线上没有计划段，数据集健康里看不到它们，实时提交又因快照缺失被拒绝，只能在这里报出来；
 // 通常是对账建不出新计划（例如预检失败、取不到标的）。applied 的更新时间就是重新登记的时间。
 func reregisterStalled(applied *store.FetchPlanRecord, now time.Time) (string, error) {
-	content, err := marketfetch.DecodeFetchPlanContent(applied.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(applied.Plan)
 	if err != nil {
 		return "", err
 	}
@@ -169,11 +172,11 @@ func datasetStatusToPB(item klinecheck.DatasetHealth, functions int) *pb.Collect
 
 // planFunctions 返回计划里每个函数的分配与状态，下发中的排前。
 func planFunctions(source *store.FetchPlanRecord) ([]*pb.CollectorFunctionStatus, error) {
-	content, err := marketfetch.DecodeFetchPlanContent(source.Plan)
+	content, err := fetchplan.DecodeFetchPlanContent(source.Plan)
 	if err != nil {
 		return nil, err
 	}
-	progress, err := marketfetch.DecodeFetchPlanProgress(source.Progress)
+	progress, err := fetchplan.DecodeFetchPlanProgress(source.Progress)
 	if err != nil {
 		return nil, err
 	}

@@ -32,7 +32,6 @@ func TestCheckedInConfigHasNoSamplingFrequency(t *testing.T) {
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cfg.Version)
-	assert.Equal(t, "127.0.0.1:11425", cfg.HealthAddr)
 	assert.True(t, strings.HasSuffix(cfg.IdentityPath, filepath.Join("moox", "hostagent", "identity.yaml")))
 	assert.True(t, strings.HasSuffix(cfg.EventBusConfig, filepath.Join("moox", "hostagent", "eventbus.yaml")))
 }
@@ -55,17 +54,6 @@ func TestLoad_HostNameOverride_ShouldTrimValue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "腾讯云-香港", cfg.HostName)
 	assert.Equal(t, "control", cfg.HostID)
-}
-
-func TestLoad_HealthAddressEnvironmentOverride(t *testing.T) {
-	t.Setenv("MOOX_HOST_AGENT_HEALTH_ADDR", " 0.0.0.0:11425 ")
-	path := filepath.Join(t.TempDir(), "hostagent.yaml")
-	content := "health_addr: 127.0.0.1:11425\nidentity_path: identity.yaml\neventbus_config: eventbus.yaml\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	assert.Equal(t, "0.0.0.0:11425", cfg.HealthAddr)
 }
 
 func TestLoad_MissingRequiredPaths_ShouldReturnError(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 // DefaultTimeout 是录入页的有效期：超时后令牌失效，进程退出。
@@ -32,7 +33,7 @@ var pageTemplate = template.Must(template.New("page").Parse(pageSource))
 
 // Options 控制一次录入。
 type Options struct {
-	// Output 是要写入的 moox.toml 路径；已存在时拒绝覆盖。
+	// Output 是要写入的 moox.toml 路径，秘密文件写在同一目录；两份任何一份已存在都拒绝覆盖。
 	Output string
 	// Timeout 为零时用 DefaultTimeout。
 	Timeout time.Duration
@@ -49,19 +50,22 @@ type Options struct {
 
 // Result 只含「写到哪里、有哪些主机」，不含任何值。
 type Result struct {
-	Path  string   `json:"path"`
-	Hosts []string `json:"hosts"`
+	Path        string   `json:"path"`
+	SecretsPath string   `json:"secrets_path"`
+	Hosts       []string `json:"hosts"`
 }
 
-// Run 起一个只绑回环地址的一次性页面，等用户提交，渲染并写出 moox.toml（0600，不覆盖已有文件）。
+// Run 起一个只绑回环地址的一次性页面，等用户提交，渲染并写出 moox.toml（明文）与 moox.secrets.toml（加密），都是 0600、不覆盖已有文件。
 // 令牌放在 URL 路径里，写出成功后立即失效；超时或取消时返回错误且不写任何文件。
 func Run(ctx context.Context, options Options) (Result, error) {
 	output, err := filepath.Abs(options.Output)
 	if err != nil || options.Output == "" {
 		return Result{}, errors.New("需要指定输出文件路径")
 	}
-	if err := checkOutput(output); err != nil {
-		return Result{}, err
+	for _, path := range []string{output, topology.SecretsPathFor(output)} {
+		if err := checkOutput(path); err != nil {
+			return Result{}, err
+		}
 	}
 	timeout := options.Timeout
 	if timeout <= 0 {
@@ -320,13 +324,14 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &request) {
 		return
 	}
-	raw, err := Render(r.Context(), &request, Environment{Verify: s.cloud.verify, Lookup: s.cloud.lookup, Login: s.login, Probe: s.probe})
+	rendered, err := Render(r.Context(), &request, Environment{Verify: s.cloud.verify, Lookup: s.cloud.lookup, Login: s.login, Probe: s.probe})
 	if err != nil {
 		// 校验没过不消耗令牌：用户改完可以直接再提交。
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
 		return
 	}
-	sealed, err := configcrypt.Encrypt(raw, s.keys)
+	sealed, err := configcrypt.Encrypt(rendered.Secrets, s.keys)
+	clear(rendered.Secrets)
 	if err != nil {
 		reply(w, http.StatusInternalServerError, response{Message: "加密配置失败：" + err.Error()})
 		return
@@ -337,7 +342,8 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusGone, response{Message: "页面已使用完毕"})
 		return
 	}
-	if err := writeNew(s.output, sealed); err != nil {
+	secretsPath := topology.SecretsPathFor(s.output)
+	if err := writePair(s.output, rendered.Config, secretsPath, sealed); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, os.ErrExist) {
 			status = http.StatusConflict
@@ -346,12 +352,24 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.done = true
-	result := Result{Path: s.output}
+	result := Result{Path: s.output, SecretsPath: secretsPath}
 	for _, host := range request.hosts {
 		result.Hosts = append(result.Hosts, host.ID)
 	}
 	reply(w, http.StatusOK, response{OK: true})
 	s.result <- result
+}
+
+// writePair 新建两份文件：先写秘密文件，再写 moox.toml；后一份写不成时删掉前一份，不留下只有一半的配置。
+func writePair(configPath string, config []byte, secretsPath string, secrets []byte) error {
+	if err := writeNew(secretsPath, secrets); err != nil {
+		return err
+	}
+	if err := writeNew(configPath, config); err != nil {
+		_ = os.Remove(secretsPath)
+		return err
+	}
+	return nil
 }
 
 // writeNew 创建新文件（已存在则失败）、权限 0600，写完落盘；写失败时删掉半截文件。

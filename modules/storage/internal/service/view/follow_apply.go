@@ -52,13 +52,13 @@ func (s *Service) StartFollowing(ctx context.Context, opts FollowOptions) (func(
 		return nil, errors.New("View 跟随变更日志需要变更日志读取、时序回读与就绪事件发布器")
 	}
 	s.mu.RLock()
-	missingPrimary := s.primary == nil || s.primaryAuth == nil
+	missingPrimary := s.primary == nil
 	s.mu.RUnlock()
 	if missingPrimary {
-		return nil, errors.New("View 跟随变更日志需要先设置 Primary 读取客户端与鉴权")
+		return nil, errors.New("View 跟随变更日志需要先设置 Primary 读取客户端")
 	}
 	manager, err := follow.NewManager(ctx, follow.Options{
-		Reader: opts.Changes, Auth: s.primaryAuthSnapshot, Wait: opts.Wait, PersistInterval: opts.PersistInterval,
+		Reader: opts.Changes, Wait: opts.Wait, PersistInterval: opts.PersistInterval,
 	})
 	if err != nil {
 		return nil, err
@@ -241,7 +241,6 @@ func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*p
 	if len(fields) == 0 {
 		return false, nil
 	}
-	auth := s.primaryAuthSnapshot()
 	datasetID := strings.TrimSpace(view.GetDatasetId())
 	var pending []viewindex.RowWrite
 	rows, persisted := 0, false
@@ -267,7 +266,7 @@ func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*p
 			return false, errors.New("回读时序行需要 Primary 时序读取客户端")
 		}
 		for _, read := range s.planFollowReads(view, changes) {
-			if err := readFollowRange(ctx, rangeReader, auth, view, read, fields, func(batch []viewindex.RowWrite) error {
+			if err := readFollowRange(ctx, rangeReader, view, read, fields, func(batch []viewindex.RowWrite) error {
 				pending = append(pending, batch...)
 				if len(pending) >= followWriteBatchRows {
 					return flush(false)
@@ -281,7 +280,7 @@ func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*p
 		if reader == nil {
 			return false, errors.New("回读记录行需要 Primary 读取客户端")
 		}
-		records, err := readFollowRecords(ctx, reader, auth, view, changes, fields)
+		records, err := readFollowRecords(ctx, reader, view, changes, fields)
 		if err != nil {
 			return false, err
 		}
@@ -423,7 +422,7 @@ func followRangeEnd(freq string, end time.Time) time.Time {
 }
 
 // readFollowRange 按页回读一个时间窗的行，逐页交给 emit。
-func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, auth *pb.AuthInfo, view *pb.View, read followRead, fields []string, emit func([]viewindex.RowWrite) error) error {
+func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, view *pb.View, read followRead, fields []string, emit func([]viewindex.RowWrite) error) error {
 	spaceID, datasetID, freq := view.GetSpaceId(), strings.TrimSpace(view.GetDatasetId()), view.GetFreq()
 	selectors := make([]*pb.TimeSeriesSelector, 0, len(read.subjects))
 	for _, subject := range read.subjects {
@@ -433,7 +432,7 @@ func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, auth *pb
 	for {
 		pageCtx, cancel := context.WithTimeout(ctx, followReadTimeout)
 		rsp, err := reader.ReadTimeSeriesRows(pageCtx, &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors, ColumnNames: fields,
+			SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors, ColumnNames: fields,
 			TimeRange: &pb.TimeRange{StartTime: read.start.Format(time.RFC3339Nano), EndTime: read.end.Format(time.RFC3339Nano)},
 			Page:      &pb.Page{Size: followReadPageSize, Cursor: cursor},
 		}, client.WithTimeout(followReadTimeout))
@@ -471,7 +470,7 @@ func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, auth *pb
 }
 
 // readFollowRecords 按记录键回读一组行变更里的记录（只返回仍存在的）。
-func readFollowRecords(ctx context.Context, reader FieldReader, auth *pb.AuthInfo, view *pb.View, changes []*pb.DatasetChange, fields []string) ([]viewindex.RowWrite, error) {
+func readFollowRecords(ctx context.Context, reader FieldReader, view *pb.View, changes []*pb.DatasetChange, fields []string) ([]viewindex.RowWrite, error) {
 	spaceID, datasetID := view.GetSpaceId(), strings.TrimSpace(view.GetDatasetId())
 	seen := make(map[[2]string]struct{})
 	var keys []*pb.RowKey
@@ -490,7 +489,7 @@ func readFollowRecords(ctx context.Context, reader FieldReader, auth *pb.AuthInf
 	for from := 0; from < len(keys); from += chunk {
 		to := min(from+chunk, len(keys))
 		readCtx, cancel := context.WithTimeout(ctx, followReadTimeout)
-		rsp, err := reader.ReadRows(readCtx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: keys[from:to], ColumnNames: fields}, client.WithTimeout(followReadTimeout))
+		rsp, err := reader.ReadRows(readCtx, &pb.PrimaryReadRowsReq{Keys: keys[from:to], ColumnNames: fields}, client.WithTimeout(followReadTimeout))
 		cancel()
 		if err == nil {
 			err = requireSuccess(rsp.GetRetInfo())

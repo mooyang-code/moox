@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -46,7 +46,7 @@ func TestCheckHistoryReportsHolesAfterEachSubjectsFirstBar(t *testing.T) {
 	markMissing(rows, "B-USDT", horizon, base.Add(-100*time.Minute)) // 新上市：前面没有数据
 	markMissing(rows, "C-USDT", horizon, base)                       // 范围内一根都没有
 	markMissing(rows, "D-USDT", base.Add(-10*time.Minute), base)     // 历史在生效点之前就断了
-	checker := &Checker{Plans: fakePlans{[]*store.FetchPlanRecord{
+	checker := &Checker{Timeline: fakePlans{[]*store.FetchPlanRecord{
 		record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT", "B-USDT", "C-USDT", "D-USDT", "E-USDT"),
 		record(t, 2, store.FetchPlanApplied, base.Add(time.Hour).Unix(), "A-USDT", "B-USDT", "C-USDT", "D-USDT", "E-USDT", "F-USDT"),
 	}}, Rows: rows, Now: func() time.Time { return base.Add(2 * time.Hour) }}
@@ -79,7 +79,7 @@ func TestScanHistoryScansOneDatasetPerSpacingAndOncePerInterval(t *testing.T) {
 	}
 	now := base.Add(48 * time.Hour)
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	first, err := backfiller.ScanHistory(ctx, "crypto")
@@ -123,7 +123,7 @@ func TestScanHistoryRetriesAfterAnHourWhenReadingFails(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT")}
 	now := base.Add(48 * time.Hour)
-	checker := &Checker{Plans: fakePlans{records}, Rows: failingRows{errors.New("read timeout")}, Now: func() time.Time { return now }}
+	checker := &Checker{Timeline: fakePlans{records}, Rows: failingRows{errors.New("read timeout")}, Now: func() time.Time { return now }}
 	repo := openBackfillStore(t)
 	backfiller := &Backfiller{Checker: checker, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
 	ctx := context.Background()
@@ -153,7 +153,7 @@ func TestConfirmHistoryCreatesAJobForTheScannedGaps(t *testing.T) {
 	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT")}
 	now := base.Add(48 * time.Hour)
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Plans: fakePlans{records}, Rows: rows, Absences: repo, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: rows, Absences: repo, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	empty, _, err := backfiller.ConfirmHistory(ctx, "crypto", "ds", "1m")
@@ -180,8 +180,8 @@ func TestConfirmHistoryCreatesAJobForTheScannedGaps(t *testing.T) {
 // goneRecord 构造把数据集移出采集计划的记录（任务删除后对账产生）。
 func goneRecord(t *testing.T, id int64, dataset string, p int64) *store.FetchPlanRecord {
 	t.Helper()
-	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
-	change := &marketfetch.PlanDatasetChange{Changed: true, Gone: true, P: p}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDatasetChange{Changed: true, Gone: true, P: p}
 	change.DatasetID, change.Frequency = dataset, "1m"
 	content.Datasets[dataset+"|1m"] = change
 	return &store.FetchPlanRecord{ID: id, SpaceID: "crypto", Status: store.FetchPlanApplied, Plan: mustJSON(content), Progress: "{}"}
@@ -194,13 +194,12 @@ func TestScansSkipDatasetsThatStoppedCollecting(t *testing.T) {
 		recordFor(t, 1, "removed", store.FetchPlanApplied, base.Unix(), "A-USDT"),
 		goneRecord(t, 2, "removed", base.Add(5*time.Minute).Unix()),
 	}
-	timeline, err := BuildTimeline(records)
-	require.NoError(t, err)
+	timeline := BuildTimeline(timelineRows(records))
 	require.False(t, timeline.Active("removed|1m"))
 
 	now := base.Add(48 * time.Hour)
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Plans: fakePlans{records}, Rows: failingRows{errors.New("dataset has no active view")}, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: failingRows{errors.New("dataset has no active view")}, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
 	result, err := backfiller.ScanHistory(context.Background(), "crypto")
 	require.NoError(t, err)
 	require.Nil(t, result)

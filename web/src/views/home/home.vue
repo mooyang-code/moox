@@ -20,7 +20,6 @@
             <div v-if="stage" class="banner-stage" :title="stage.issues.join('\n')">
               <span class="stage-dot" :class="`is-${stage.color}`" />
               <b>{{ stage.label }}</b>
-              <small v-if="stage.recovered" class="stage-recovered">已自动恢复</small>
               <small v-for="issue in stage.issues" :key="issue" class="stage-issue">{{ issue }}</small>
             </div>
             <nav class="banner-links" aria-label="常用入口">
@@ -269,7 +268,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { callControl } from "@/api/admin/http";
-import { listFunctionInstances } from "@/api/function-instance";
+import { getCollectorStatus } from "@/api/collector/runtime-status";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
@@ -389,7 +388,7 @@ const status = computed(() =>
     failed: failedCount.value
   })
 );
-const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value)));
+const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value, instances.value)));
 // 监控没有关注项时这一格的说明：别的格子读取失败时不能写“一切正常”
 const allClearText = computed(() => {
   if (monitorError.value) return "监控数据暂不可用";
@@ -435,7 +434,7 @@ const inventory = computed(() => [
   { label: "计算任务", value: counts.factorTasks, path: "/factor/tasks" },
   { label: "策略实例", value: counts.instances, path: "/strategy/tasks" },
   { label: "执行账户", value: counts.accounts, path: "/trading/paper?list=execution" },
-  { label: "云函数实例", value: counts.nodes, path: "/collector/tasks?tab=executors" }
+  { label: "云函数", value: counts.nodes, path: "/collector/tasks?tab=status" }
 ]);
 
 function fmt(value: number | null | undefined) {
@@ -505,8 +504,9 @@ async function loadSpaceScoped() {
     listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = Number(rsp.page_result?.total ?? rsp.accounts?.length ?? 0);
     }),
-    listFunctionInstances({ page: 1, page_size: 1 }).then(({ items, total }) => {
-      if (isCurrent()) counts.nodes = total || items.length;
+    // 云函数个数取采集计划里由 SCF 执行的函数（推送与本地执行端不算）
+    getCollectorStatus(spaceId, { silentError: true }).then(rsp => {
+      if (isCurrent()) counts.nodes = (rsp.functions || []).filter(item => (item.executor || "scf") === "scf").length;
     }),
     listStrategies({ page: 1, page_size: 200 }).then(rsp => {
       if (isCurrent()) catalog.value = rsp.items;
@@ -776,10 +776,6 @@ a {
   background: rgb(var(--cyan-6));
 }
 
-.stage-dot.is-purple {
-  background: rgb(var(--purple-6));
-}
-
 .stage-dot.is-orange {
   background: rgb(var(--orange-6));
 }
@@ -794,10 +790,6 @@ a {
 
 .stage-dot.is-green {
   background: rgb(var(--success-6));
-}
-
-.stage-recovered {
-  color: rgb(var(--success-6));
 }
 
 .stage-issue {

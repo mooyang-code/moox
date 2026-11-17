@@ -22,13 +22,13 @@ func (e *countingEngine) CountBySubject(_ context.Context, indexID string, spec 
 
 func TestCountTimeSeriesRowsCountsTheActiveIndex(t *testing.T) {
 	engine := &countingEngine{queryEngine: &queryEngine{}, counts: map[string]int64{"ETH-USDT": 58, "BTC-USDT": 60}}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	timeRange := &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T01:00:00Z"}
 	selectors := []*pb.TimeSeriesSelector{
 		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"},
 		{SpaceId: "space", DatasetId: "market", SubjectId: "ETH-USDT", Freq: "1m"},
 	}
-	rsp, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesViewRowsReq{AuthInfo: auth, SpaceId: "space", ViewId: "prices", Selectors: selectors, TimeRange: timeRange})
+	rsp, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesViewRowsReq{SpaceId: "space", ViewId: "prices", Selectors: selectors, TimeRange: timeRange})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
@@ -40,18 +40,14 @@ func TestCountTimeSeriesRowsCountsTheActiveIndex(t *testing.T) {
 	}
 
 	for name, req := range map[string]*pb.CountTimeSeriesViewRowsReq{
-		"no selectors":        {AuthInfo: auth, SpaceId: "space", ViewId: "prices", TimeRange: timeRange},
-		"no time range":       {AuthInfo: auth, SpaceId: "space", ViewId: "prices", Selectors: selectors},
-		"another dataset":     {AuthInfo: auth, SpaceId: "space", ViewId: "prices", TimeRange: timeRange, Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "other", SubjectId: "BTC-USDT", Freq: "1m"}}},
-		"selector incomplete": {AuthInfo: auth, SpaceId: "space", ViewId: "prices", TimeRange: timeRange, Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT"}}},
+		"no selectors":        {SpaceId: "space", ViewId: "prices", TimeRange: timeRange},
+		"no time range":       {SpaceId: "space", ViewId: "prices", Selectors: selectors},
+		"another dataset":     {SpaceId: "space", ViewId: "prices", TimeRange: timeRange, Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "other", SubjectId: "BTC-USDT", Freq: "1m"}}},
+		"selector incomplete": {SpaceId: "space", ViewId: "prices", TimeRange: timeRange, Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT"}}},
 	} {
 		rejected, err := svc.CountTimeSeriesRows(context.Background(), req)
 		if err != nil || rejected.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 			t.Fatalf("%s: rsp=%v err=%v", name, rejected, err)
 		}
-	}
-	denied, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesViewRowsReq{AuthInfo: &pb.AuthInfo{AppId: "query-test", AppKey: "wrong"}, SpaceId: "space", ViewId: "prices", Selectors: selectors, TimeRange: timeRange})
-	if err != nil || denied.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("denied rsp=%v err=%v", denied, err)
 	}
 }

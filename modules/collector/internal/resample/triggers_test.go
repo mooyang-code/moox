@@ -18,9 +18,18 @@ func TestPeriodTriggerResamplesBucketOnLastSourcePeriodOnly(t *testing.T) {
 	trigger := &PeriodTrigger{Index: &TaskIndex{Tasks: mgr.Tasks()}, Engine: &Engine{Primary: storage, State: mgr.Resample()}}
 
 	payload := func(period time.Time, status string, failed ...string) *storagepb.DatasetPeriodCompleted {
+		series := func(subjects ...string) []*storagepb.SeriesRef {
+			var refs []*storagepb.SeriesRef
+			for _, subject := range subjects {
+				refs = append(refs, &storagepb.SeriesRef{SubjectId: subject, SeriesTag: "venue:binance"})
+			}
+			return refs
+		}
 		return &storagepb.DatasetPeriodCompleted{
 			DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: status,
-			UniverseSubjectIds: []string{"BTC", "ETH", "SOL"}, FailedSubjects: failed, Source: "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
+			UniverseSubjectIds: []string{"BTC", "ETH", "SOL"}, FailedSubjects: failed,
+			UniverseSeries: series("BTC", "ETH", "SOL"), FailedSeries: series(failed...),
+			Source: "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
 		}
 	}
 	ctx := context.Background()

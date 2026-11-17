@@ -4,8 +4,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,8 +59,8 @@ portfolio: {max_missing: 1}
 	require.Equal(t, 1, decision.Summary.Rules["r"].Missing)
 }
 
-// holding 批次乘系数，批次的基准权重不变；signal 规则同样乘在输出权重上。
-func TestScaleOnHoldingBatchesAndSignal(t *testing.T) {
+// holding 批次乘系数，批次的基准权重不变；固定标的择时规则同样乘在输出权重上。
+func TestScaleOnHoldingBatchesAndHoldPool(t *testing.T) {
 	program := compile(t, `name: s
 rules:
   - id: r
@@ -73,10 +71,13 @@ rules:
     holding: {bars: 2, offsets: [0]}
     scale: {expr: "c", max: 2}
   - id: g
-    type: signal
+    type: rank
     pool: [B]
-    entry: "m > 0"
-    exit: "m < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "m < 0"
     weight: 0.4
     scale: {expr: "c", max: 2}
 portfolio: {max_missing: 1, leverage: 2}
@@ -171,15 +172,18 @@ portfolio: {max_missing: 1}
 	require.False(t, holdsTarget(second, "A"))
 }
 
-// signal 规则写 on_missing：持仓的 exit 输入缺失时冻结保持，不清仓。
-func TestOnMissingSignal(t *testing.T) {
+// 固定标的择时规则写 on_missing：持仓的出场条件输入缺失时冻结保持，不清仓。
+func TestOnMissingHoldPool(t *testing.T) {
 	program := compile(t, `name: o
 rules:
   - id: g
-    type: signal
+    type: rank
     pool: [A]
-    entry: "m > 0"
-    exit: "m < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "m < 0"
     weight: 1
     on_missing: {keep_bars: 1}
 portfolio: {max_missing: 1}
@@ -191,36 +195,6 @@ portfolio: {max_missing: 1}
 	require.Equal(t, []string{"A"}, second.State.Rules["g"].Held)
 	third := evaluate(t, program, frameOf(program, map[string]Row{"A": values("x", 1)}), second.State)
 	require.False(t, holdsTarget(third, "A"))
-}
-
-// tranche 规则的 scale：在 tranche 配好的权重上乘系数，开仓记录不变；scale 引用的列计入 tranche 的列。
-func TestScaleOnTranche(t *testing.T) {
-	bars := loadTrancheBars(t)
-	golden := loadGoldenCase(t, "multi_sub_merge")
-	strategy, err := dsl.Parse([]byte(golden.DSL))
-	require.NoError(t, err)
-	scaled := strategy
-	scaled.Rules = append([]dsl.Rule(nil), strategy.Rules...)
-	scaled.Rules[0].Scale = &dsl.Scale{Expr: "close * 0 + 0.5", Max: 1}
-	plain, err := compileMode(strategy, columnsOf(bars))
-	require.NoError(t, err)
-	program, err := compileMode(scaled, columnsOf(bars))
-	require.NoError(t, err)
-	require.Equal(t, plain.Rules[0].Columns(), program.Rules[0].Columns())
-	var before, after RuleState
-	half := quant.Must("0.5")
-	for i, bar := range bars {
-		frame := trancheFrame(bar, int64(i), program.Rules[0].Rule.ID)
-		a, err := evaluateTranche(&plain.Rules[0], frame, partitionTranche(&plain.Rules[0], frame, before.Held), before, noise)
-		require.NoError(t, err)
-		b, err := evaluateTranche(&program.Rules[0], frame, partitionTranche(&program.Rules[0], frame, after.Held), after, noise)
-		require.NoError(t, err)
-		applyScale(&program.Rules[0], frame, &b, noise)
-		for id, w := range a.weights {
-			require.Zero(t, w.Mul(half).Cmp(b.weights[id]), "第 %d 期 %s", i, id)
-		}
-		before, after = a.state, b.state
-	}
 }
 
 // holding 批次写 on_missing：成员本根缺数时冻结保持，份额留在批次里，恢复后继续。

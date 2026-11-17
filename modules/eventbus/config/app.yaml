@@ -20,10 +20,6 @@ broker:
 
 internal_client:
   credential_file: ""
-  tls_ca_file: ""
-
-health:
-  addr: "127.0.0.1:11419"
 
 streams:
   - name: MOOX_STORAGE

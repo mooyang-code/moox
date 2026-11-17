@@ -20,17 +20,15 @@ import { useSpaceStore } from "@/store/modules/space";
 import CollectionTasks from "@/views/collector/collection-tasks/collection-tasks.vue";
 import RuntimeStatus from "@/views/collector/runtime-status/runtime-status.vue";
 import BackfillJobs from "@/views/collector/backfill-jobs/index.vue";
-import FunctionInstance from "@/views/collector/cloud-function/function-instance.vue";
 import TaskResults from "@/views/collector/task-results/index.vue";
 
-type CollectorTaskTab = "tasks" | "status" | "backfills" | "executors" | "results";
+type CollectorTaskTab = "tasks" | "status" | "backfills" | "results";
 
-// 顺序与因子“计算任务 → 计算结果 → 补算”一致：先看任务和产出，再看运维（运行状态、执行器），补采放最后。
+// 顺序与因子“计算任务 → 计算结果 → 补算”一致：先看任务和产出，再看运行状态，补采放最后。
 const tabs = [
   { key: "tasks", label: "采集任务" },
   { key: "results", label: "采集结果" },
   { key: "status", label: "运行状态" },
-  { key: "executors", label: "执行器" },
   { key: "backfills", label: "补采" }
 ] as const;
 
@@ -56,18 +54,19 @@ const activeComponent = computed(
       tasks: CollectionTasks,
       status: RuntimeStatus,
       backfills: BackfillJobs,
-      executors: FunctionInstance,
       results: TaskResults
     })[activeTab.value]
 );
 
 function normalizeTab(value: unknown): CollectorTaskTab {
-  return value === "status" || value === "backfills" || value === "executors" || value === "results" ? value : "tasks";
+  // 执行器页签已经删除，旧链接落到运行状态（云账号、代码包从那里进入）
+  if (value === "executors") return "status";
+  return value === "status" || value === "backfills" || value === "results" ? value : "tasks";
 }
 
 /**
  * 各页签的参数都放在同一个 query 里、键不重叠（任务：keyword、dataType、enabled、page、detail；结果：resultTask；
- * 补采：segment、dataset、job；执行器没有地址参数）。切页签只改 tab，其余参数原样保留，切回来时状态还在。
+ * 补采：segment、dataset、job；运行状态没有地址参数）。切页签只改 tab，其余参数原样保留，切回来时状态还在。
  * 每个页签只在自己可见时写自己的键，见各页签的实现。
  */
 function onTabChange(value: string | number) {

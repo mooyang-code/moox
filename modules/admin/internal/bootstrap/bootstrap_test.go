@@ -16,33 +16,6 @@ func TestRegisterMetricsReporter_NilServer_ShouldNoPanic(t *testing.T) {
 	})
 }
 
-func TestAdminAuthCacheCleanupTimerConfig(t *testing.T) {
-	raw, err := os.ReadFile("../../config/trpc_go.yaml")
-	require.NoError(t, err)
-	var cfg struct {
-		Server struct {
-			Service []struct {
-				Name     string `yaml:"name"`
-				Port     int    `yaml:"port"`
-				Network  string `yaml:"network"`
-				Protocol string `yaml:"protocol"`
-				Timeout  int    `yaml:"timeout"`
-			} `yaml:"service"`
-		} `yaml:"server"`
-	}
-	require.NoError(t, yaml.Unmarshal(raw, &cfg))
-	for _, service := range cfg.Server.Service {
-		if service.Name == authCacheCleanupTimerService {
-			assert.Equal(t, 11306, service.Port)
-			assert.Equal(t, "0 */5 * * * *", service.Network)
-			assert.Equal(t, "timer", service.Protocol)
-			assert.Equal(t, 60000, service.Timeout)
-			return
-		}
-	}
-	t.Fatalf("timer service %q not found", authCacheCleanupTimerService)
-}
-
 func TestAdminCertificateWatchTimerConfig(t *testing.T) {
 	raw, err := os.ReadFile("../../config/trpc_go.yaml")
 	require.NoError(t, err)
@@ -68,31 +41,4 @@ func TestAdminCertificateWatchTimerConfig(t *testing.T) {
 		}
 	}
 	t.Fatalf("timer service %q not found", certificateWatchTimerService)
-}
-
-func TestAdminGarbageCollectionTimerConfig(t *testing.T) {
-	raw, err := os.ReadFile("../../config/trpc_go.yaml")
-	require.NoError(t, err)
-	var cfg struct {
-		Server struct {
-			Service []struct {
-				Name     string `yaml:"name"`
-				Port     int    `yaml:"port"`
-				Network  string `yaml:"network"`
-				Protocol string `yaml:"protocol"`
-				Timeout  int    `yaml:"timeout"`
-			} `yaml:"service"`
-		} `yaml:"server"`
-	}
-	require.NoError(t, yaml.Unmarshal(raw, &cfg))
-	for _, service := range cfg.Server.Service {
-		if service.Name == garbageCollectionTimerService {
-			assert.Equal(t, 11308, service.Port)
-			assert.Equal(t, "0 47 3 * * *", service.Network, "runs once a day, offset from midnight jobs")
-			assert.Equal(t, "timer", service.Protocol)
-			assert.Equal(t, int(garbageCollectionTimeout/time.Millisecond), service.Timeout)
-			return
-		}
-	}
-	t.Fatalf("timer service %q not found", garbageCollectionTimerService)
 }

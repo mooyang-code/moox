@@ -31,44 +31,47 @@ func TestExternalStrategyGatewayOwnerClient(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", host)
 	require.Equal(t, "11003", port)
-	credentials := gatewayauth.Credentials{Caller: "strategy", KeyID: read("caller-key-id"), Secret: read("caller-key")}
+	key, err := gatewayauth.ParseSigningKey(read("caller-key"))
+	require.NoError(t, err)
+	credentials := gatewayauth.Credentials{Caller: "strategy", Host: "control", Key: key}
 	open := func(caFile string, credentials gatewayauth.Credentials) (*gatewayclient.Client, error) {
 		return gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credentials, LocalHostID: "control", LocalAddress: read("directory-ready"), CAFile: caFile, CachePath: filepath.Join(t.TempDir(), "directory.json")})
 	}
 	gateway, err := open(filepath.Join(coord, "gateway-ca.pem"), credentials)
 	require.NoError(t, err)
 	defer gateway.Close()
-	owner := New(Config{Timeout: 3 * time.Second}, gateway)
+	trade := New(Config{Timeout: 3 * time.Second}, gateway)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	const space, instance, session = "space-gateway-e2e", "gateway-instance", "gateway-session"
+	const space, instance, session, startedAt = "space-gateway-e2e", "gateway-instance", "gateway-session", int64(1_700_000_000_000)
 	id := read("logical-id")
 	// 没有可信 CA、CA 不匹配或签名密钥错误时，调用都必须失败。
 	_, err = open("", credentials)
 	require.ErrorContains(t, err, "private CA")
 	untrusted, err := open(filepath.Join(coord, "unrelated-ca.pem"), credentials)
 	require.NoError(t, err)
-	require.Error(t, New(Config{}, untrusted).ClaimSession(ctx, space, id, instance, session, []string{"swap"}))
+	require.Error(t, New(Config{}, untrusted).CheckAccount(ctx, space, id, []string{"spot"}))
 	require.NoError(t, untrusted.Close())
 	wrongCredentials := credentials
-	wrongCredentials.Secret = "wrong-e2e-secret"
+	wrongCredentials.Key, err = gatewayauth.GenerateSigningKey()
+	require.NoError(t, err)
 	wrong, err := open(filepath.Join(coord, "gateway-ca.pem"), wrongCredentials)
 	require.NoError(t, err)
-	require.Error(t, New(Config{}, wrong).ClaimSession(ctx, space, id, instance, session, []string{"swap"}))
+	require.Error(t, New(Config{}, wrong).CloseSession(ctx, space, id, instance, session, startedAt))
 	require.NoError(t, wrong.Close())
-	// 认领、校验、释放，以及空间与会话隔离。
-	require.NoError(t, owner.ClaimSession(ctx, space, id, instance, session, []string{"swap"}))
-	require.NoError(t, owner.ValidateSession(ctx, space, id, instance, session))
-	require.Error(t, owner.ValidateSession(ctx, space, id, instance, "wrong-session"))
-	require.Error(t, owner.ClaimSession(ctx, "another-space", id, instance, session, []string{"swap"}))
-	// ACL：strategy 不能调用 Trade 的下单方法。
-	_, err = gateway.Forward(ctx, tradeService, "SubmitOrder", codec.SerializationTypePB, nil)
-	require.ErrorContains(t, err, "not allowed")
-	require.NoError(t, owner.ValidateSession(ctx, space, id, instance, session))
-	require.NoError(t, owner.ReleaseSession(ctx, space, id, instance, session))
-	require.Error(t, owner.ValidateSession(ctx, space, id, instance, session))
+	// 启用前读账户核对、停用后关闭会话（重复关闭幂等），以及空间隔离。
+	require.NoError(t, trade.CheckAccount(ctx, space, id, []string{"spot"}))
+	require.ErrorIs(t, trade.CheckAccount(ctx, space, id, []string{"swap"}), ErrMarketMismatch)
+	require.Error(t, trade.CheckAccount(ctx, "another-space", id, []string{"spot"}))
+	require.NoError(t, trade.CloseSession(ctx, space, id, instance, session, startedAt))
+	require.NoError(t, trade.CloseSession(ctx, space, id, instance, session, startedAt))
+	// ACL：strategy 只能读组合账户、关闭会话，不能调用 Trade 的下单与暂停、恢复。
+	for _, method := range []string{"SubmitOrder", "PauseLogicalAccount", "ResumeLogicalAccount"} {
+		_, err = gateway.Forward(ctx, tradeService, method, codec.SerializationTypePB, nil)
+		require.ErrorContains(t, err, "not allowed", method)
+	}
 	require.NoError(t, gateway.Close())
-	require.Error(t, owner.ClaimSession(ctx, space, id, instance, session, []string{"swap"}))
+	require.Error(t, trade.CloseSession(ctx, space, id, instance, session, startedAt))
 	require.NoError(t, os.WriteFile(filepath.Join(coord, "strategy-done"), []byte("passed"), 0600))
-	t.Log("shared production client -> Directory -> private TLS native gateway -> Trade: ownership, CA, secret, space, session, ACL and Close passed")
+	t.Log("shared production client -> Directory -> private TLS native gateway -> Trade: account check, close session, CA, secret, space, ACL and Close passed")
 }

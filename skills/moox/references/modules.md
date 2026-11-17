@@ -26,7 +26,7 @@
 ## 事件中心
 
 - **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓；处理器随交易计划 T27 之后上线）。管理台叫「事件中心」。
-- **在哪**：独立单元 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
+- **在哪**：组件 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
 - **常用**：
 
 ```bash
@@ -44,7 +44,7 @@
 ## 采集
 
 - **做什么**：按采集任务定时拉取或经 WebSocket 推送 K 线，写入 Storage；巡检缺口、补采、K 线合成（重采样）、每小时同步交易所标的。
-- **在哪**：Collector 在管理台机；`collector-stream`（WS 推送与本地执行端）在海外机；可选的腾讯云 SCF 函数按地域部署。
+- **在哪**：Collector 在管理台机，云账号、代码包与云函数也由它管理（没有单独的云函数进程）；`collector-stream`（WS 推送与本地执行端）在海外机；可选的腾讯云 SCF 函数按地域部署。
 - **常用**：
 
 ```bash
@@ -52,24 +52,25 @@
 ./bin/moox-cli collector task list|show|update|disable|inventory      # 任务查询、改名与启停
 ./bin/moox-cli collector task create --help                           # 新建 K 线采集任务
 # 币安永续 1h/1d 可选资金费率：--output-field 会替换默认字段，要把默认字段一起列出，例如
-# --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；建完用 ingest-mode get 确认是 stream 加 local
+# --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；采集方式不填用市场默认值（crypto 是 stream），要指定加 --ingest stream|scf|local；建完用 ingest-mode get 确认
 # 股票任务（A 股、港股、美股）不要用默认的 --output-field（那是现货、永续行的字段），带 --all-output-fields 输出股票行的全部字段
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
 ./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
 ./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
-./bin/moox-cli collector ingest-mode get|set                          # WS 推送 / 定时拉取
+./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）
 ./bin/moox-cli collector fetch-plan pause|resume                      # 暂停或恢复整个空间的采集（pause 默认只预览，--yes 才执行）
 ./bin/moox-cli collector data-type list|show                          # 可采集的数据类型
 ```
 
-- 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。`collector task purge` 清理 Collector 本机库里的任务运行数据与结果引用（默认只输出清单，`--yes` 才执行），属于重置前后的维护动作，先问用户。
-- Storage 数据被清空后，要让采集重新登记序列快照并重置补采状态：`collector fetch-plan reregister --space-id <空间> --yes`（系统重置后的必做步骤，见 [`fresh-deploy.md`](fresh-deploy.md)）。
-- SCF 函数包与发布：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，不创建函数）、`delete`（按条件异步删除函数，默认只列目标）、
-  `probe-egress`（逐个调用短时函数诊断公网出口与行情源连通性）、`timer-inventory`（只读盘点 Timer 函数并校验云侧读回）。
-- 云函数：`cloud function list|job|invoke|create|deploy|update-config|delete`、`cloud package list|show|url|delete`、`cloud scf preview|import`、`cloud account list|regions|delete`；
-  创建、部署、改配置、删除会自动持有采集发布租约；代码包上传用 `collector function upload`；云账户的新建与修改带密钥，请用户在管理台填写。
+- 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。
+- Storage 数据被清空后，要让采集重新登记序列快照并重置补采状态：`collector fetch-plan reregister --space-id <空间> --yes`（只清了 Storage、保留了 Collector 库时的必做步骤，见 [`fresh-deploy.md`](fresh-deploy.md)）。
+- 云函数由 Collector 的对账器按采集计划自动建、自动修，不需要手工创建或部署：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，落后的函数自动升级）、
+  `list`（现场读回计划里的函数与期望比对，`--drift` 只看不一致的；计划外的同前缀函数单列，定时器已被停掉）、`delete`（按名字或前缀删函数，默认只预览；`--namespace`、`--region` 只删这个命名空间、地域里的，删旧命名空间里的同名副本时必带，否则在用的同名函数也会被删；计划里的函数删掉后下一轮重建）、
+  `probe-egress`（取各采集函数此刻的公网出口 IP）。
+- 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台运行状态页的“云账号”对话框，初始账号由 `setup init` 登记。
+  换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `setup inspect-scf` 查出来再到腾讯云控制台手工删。
 - 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
 - **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `collector_attention:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。
@@ -81,48 +82,48 @@
 - **常用**：
   - 元数据：`metadata source|subject|tag|dataset|field|field-group|view list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
   - 读数据：`data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`。
-  - 维护：`storage repair-view|reset-metadata|delete-view`
+  - 维护：`storage repair-view|delete-view`
     （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）。
-- **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间；`setup storage-auth` 经 SSH 从存储机读一次 Primary 角色密钥存到本机操作员目录（`import`、`data rows export` 要用，只需一次，不打印）。
+- **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间。
 - **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重装对应单元才生效。
 - 协议与命名规则：[`protocol.md`](protocol.md)。
 
 ## 因子
 
 - **做什么**：用 YAML 表达式定义因子，按计算任务（源数据集 + 频率 → 结果数据集）在每个采集周期增量计算；支持历史补算和 Rust 写的 wasm 自定义算子。
-- **在哪**：因子管理（factor-mgr）在管理台机；因子引擎在因子机（systemd 用户服务）。
+- **在哪**：因子管理（factor-mgr）在管理台机；因子引擎在因子机（systemd 用户服务），另在本机 `11423` 上提供 EngineControl 服务，只给策略回放的“因子现算”调用（经因子机主机网关的反向中转，不需要另开端口）。
 - **常用**：写因子与转换 Python 因子按 [`factor-dsl.md`](factor-dsl.md)；
   - 定义与分类：`factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign`；
-  - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写进 `moox.toml` 的 `[factors]` 后 `./bin/moox-cli setup factors`；
+  - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写成因子任务文件后 `./bin/moox-cli factor task apply --file <文件>`；
   - 补算与状态：`factor recalc submit|list|show|cancel`（左闭右开）、`factor status`；
-  - 阶段控制 `./bin/moox-cli lifecycle status|check|init|start|confirm|pause|resume --task-id <任务>`（默认连因子引擎，`--module` 换模块）；
-  - 生命周期的其余命令：`lifecycle catchup`（恢复追赶进度）、`release`（追平后手动放行，配合 `resume --manual-release`）、`shadow --space-id <空间> --id <实例>`（读 Trade 为试运行实例记录的影子目标，固定连 trade 模块）；
-    单个模块的重置 `lifecycle reset-plan|reset-apply|reset-status|reset-abort`：先 `pause` 模块，`reset-plan --scope data|all` 只读列出每一步与阻止条件并给 10 分钟内有效、只能用一次的令牌，再 `reset-apply --token … --scope … --yes`；
-    会删除运行数据，必须先得到用户明确同意，整套系统的重置用 `system reset`；
+  - 任务能不能计算：`./bin/moox-cli factor task status [--task-id <任务>]`，列出引擎计算前的逐项检查与处理办法；任务不需要生命周期命令，检查通过就自动计算；
+  - 模块级生命周期：`./bin/moox-cli lifecycle status|pause|resume|release|catchup`，默认连因子引擎，`--module` 换模块；`resume --manual-release` 追平后停在待放行，等 `release`；
+  - 试运行实例的影子目标用 `trade shadow list --instance-id <实例>` 看，确认实盘用 `strategy instance confirm --instance-id <实例> --session-id <会话>`，见 [`strategy-dsl.md`](strategy-dsl.md)；
+    没有单个模块或整套系统的重置命令，清空数据只用 `setup wipe`（破坏性，必须先得到用户明确同意）；
   - 自定义算子 `./bin/moox-cli udf new|build|publish|preview|activate|list|show`（[`udf.md`](udf.md)；`activate` 默认只看影响清单，`--yes` 才切换）。
 - **注意**：被启用成员引用的定义不能改；长回看因子受保留期、`window.lookback`、`compute.max_memory` 三道限制。
 
 ## 策略
 
-- **做什么**：声明式 DSL（`rank` / `signal` / `tranche` 规则、止损止盈、模板），每个周期在因子结果上求值，输出截面目标权重；可历史回放。
+- **做什么**：声明式 DSL（`rank` 规则、止损止盈），每个周期在因子结果上求值，输出截面目标权重；可历史回放。
 - **在哪**：管理台机。
 - **常用**：写与校验 DSL、创建定义与实例按 [`strategy-dsl.md`](strategy-dsl.md)；
   `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、
-  `strategy template list|show|save|delete|render`、`strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
-  逐期回放（因子 → 策略 → 纸面成交）用 `./bin/moox-cli replay start|status|report …`。迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
+  `strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
+  迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
 - **市场模式**：DSL 顶层 `market` 的 `select`（从现货、永续还是两边选币）与 `prefer`（两边都能交易时优先在哪个市场下单）只有 5 种合法组合，
   决定实例要绑几个因子任务（[`strategy-dsl.md`](strategy-dsl.md) 的“market：市场模式”）。
 - **双任务与统一数据集**：同时涉及现货和永续时有两种绑法——现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
   一个市场的因子本期被跳过时只让这个市场不可用）；或绑统一数据集（同一数据集里放现货、永续两条序列）上的一个任务，写 `--factor-task multi=…`，只能单独绑定，到达即求值，
-  不支持 `factor_params`、不能进策略池、不支持闭环回放。
+  不支持 `factor_params`、不能进策略池。
 - **策略池**：定义里写 `strategy_pool`（与 `rules` 互斥），成员引用已有策略定义，各自在模拟账本里算净值，按 `fixed` 比例或 `rotation` 轮动分配资金；
-  启用后先预热，预热完成前不求值、不能 `confirm`；研究回放与闭环回放不支持（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
-- **注意**：一个因子任务只能关联一个实例，绑定在创建实例时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
+  启用后先预热，预热完成前不求值、不能 `confirm`；研究回放支持，只能用结果 View 来源（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
+- **注意**：一个因子任务可以被多个实例引用，只有写了 `factor_params` 的实例启用时独占关联它（一个任务只关联一个实例）；实例的任务在创建时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
 
 ## 交易（只读）
 
 - **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
-- **在哪**：独立单元 `trade`，默认海外机（`[deployments]` 决定）。
+- **在哪**：组件 `trade`，默认海外机（`[deployments]` 决定）。
 - **常用**（都是只读，写操作由用户在管理台做）：
 
 ```bash
@@ -142,12 +143,12 @@
 - **做什么**：组件健康、数据新鲜度、主机资源、告警推送（企业微信、飞书、钉钉、通用 Webhook）。管理台首页的“需要处理”来自这里。
 - **常用**：`./bin/moox-cli doctor alerts`（[`monitor-attention.md`](monitor-attention.md)）、`doctor bootstrap`、`doctor diagnose`；
   `monitor health|arrival|hosts|host-metrics` 看总览、数据到达历史与主机资源曲线；`monitor mute|unmute|mute-status` 临时屏蔽推送；
-  告警渠道以 `moox.toml` 为准，`config notification` 同步。
+  告警渠道以管理台「监控 › 告警渠道」为准；初始渠道由 `setup init` 在 Monitor 还没有渠道时从 `moox.secrets.toml` 写入一次。
 
 ## 网关与接入
 
 - **主机网关**：每台主机一个，校验签名和服务目录 ACL 后转发到本机服务；管理台与 CLI 的所有调用都经过它。
-- **Access**：外部签名调用入口（SCF、因子引擎、Skill 读数据），存储机与海外机各一个。
+- **外部入口**：主机网关在登记成外部入口的主机（默认存储机与海外机）上另开的 `11004`，SCF、Skill、采集名单工具的签名调用从这里进来；不是独立的组件。
 - **EventBus**：模块间异步事件（NATS JetStream），默认在存储机；`eventbus overview|streams|consumers|consumer|events` 只读查看。凭据轮换必须按 [`eventbus-credentials.md`](eventbus-credentials.md) 同步到所有客户端。
 - **出口代理**：海外机上为采集提供受限的 HTTPS 出口。
 - SCF 与私有网络：[`private-network.md`](private-network.md)。
@@ -156,10 +157,10 @@
 
 - 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
-- 升级已安装的单元：[`native-release.md`](native-release.md)；主机代理：[`host-agent.md`](host-agent.md)。
+- 部署、升级与回滚：[`source-deploy.md`](source-deploy.md)；主机代理：[`host-agent.md`](host-agent.md)。
 - 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
   `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
-- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup render-runtime-config` 从 `moox.toml` 渲染 Egress、Collector 运行配置；`setup package inspect <包>` 校验部署包的组件边界、平台与摘要。
+- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup status` 看各主机的版本与组件状态，`setup logs` 看组件日志。
 
 ## 归档
 
@@ -187,16 +188,13 @@ worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺�
 `archive partitions get` 的 `remote_state`（off / none / verified / failed / pending），`archive runs list` 的 `partitions_uploaded`。导出超过 24 小时没有已校验的远端副本算需关注、超过 3 天算异常。
 密钥、桶与权限的准备见 `docs/部署与运维.md` 的“归档对象存储”；worker 侧细节见 `docs/模块/归档.md` 第 9 节。
 
-## 系统暂停、恢复与重置（只有命令行）
+## 系统暂停与恢复（只有命令行）
 
 ```bash
 ./bin/moox-cli system status     # 按 moox.toml 自动连各模块，没有部署的模块跳过
 ./bin/moox-cli system pause      # 从下游到上游逐个暂停（默认只预览将要暂停的模块，--yes 才执行）
 ./bin/moox-cli system resume     # 先追赶补采，全部追平后统一放行
-./bin/moox-cli system reset plan|apply|status|abort   # 删除运行数据回到“刚部署完”的状态，破坏性，必须先得到用户明确确认
 ```
-
-只能出站的主机（如局域网因子机）读不到模块自己的重置专用密钥，`system reset` 需要用户提供环境变量 `MOOX_<模块>_HEALTH_RESET_ACCESS_KEY` / `_SECRET_KEY`。
 
 ## 空间、密钥与配置
 

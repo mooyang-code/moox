@@ -8,12 +8,9 @@ import (
 )
 
 // validateStateSeries 校验一个成员的按序列字段：失败序列在序列全集里，跳过的 tag 在序列全集里出现；
-// 没有序列全集（单序列数据集）时这些字段必须为空；complete 的成员不能有这些名单。
+// complete 的成员不能有这些名单。
 func validateStateSeries(state *factorpb.FactorPeriodState, universe map[seriesset.Series]struct{}, tags map[string]struct{}) error {
 	label := state.GetFactorId()
-	if len(universe) == 0 && (len(state.GetFailedSeries()) != 0 || len(state.GetSkippedSeriesTags()) != 0) {
-		return fmt.Errorf("factor period detail: factor %q has series lists but the period has no universe_series", label)
-	}
 	failed := make(map[seriesset.Series]struct{}, len(state.GetFailedSeries()))
 	for i, ref := range state.GetFailedSeries() {
 		item, err := seriesOf(ref, fmt.Sprintf("factor %q failed_series item %d", label, i))

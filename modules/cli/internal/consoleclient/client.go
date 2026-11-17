@@ -1,7 +1,7 @@
 // Package consoleclient 以管理员身份调用管理台的 HTTPS 接口（/api/admin/<服务>/<方法>）。
 //
 // 用于换电脑恢复配置这类「本机还没有 moox.toml、也没有操作员网关身份」的场景：
-// 和浏览器一样先取一次性盐值、加密密码登录，之后每个请求用登录下发的签名密钥签名。
+// 和浏览器一样用用户名和密码登录（HTTPS 保护），之后每个请求带上登录下发的会话 Cookie 和本站 Origin。
 package consoleclient
 
 import (
@@ -20,12 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/requestauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
-// DefaultPort 是管理台 HTTPS 入口（console-proxy）的端口。
+// DefaultPort 是管理台 HTTPS 入口（Admin 自己监听）的端口。
 const DefaultPort = 9527
 
 // UntrustedError 表示管理台的证书不被这台电脑信任（例如用的是 MooX 内部 CA）；
@@ -50,12 +47,14 @@ type Options struct {
 	HTTPClient *http.Client
 }
 
+// sessionCookie 是管理台的会话 Cookie 名（与 Admin 的 session.CookieName 一致）。
+const sessionCookie = "__Host-moox_session"
+
 // Client 是登录后的管理台会话。
 type Client struct {
-	base       string
-	http       *http.Client
-	token      string
-	signingKey string
+	base    string
+	http    *http.Client
+	session *http.Cookie
 }
 
 // New 校验地址并准备 HTTPS 客户端，还没有登录。
@@ -116,85 +115,56 @@ func Fingerprint(der []byte) string {
 	return strings.Join(parts, ":")
 }
 
-// Login 用管理员账号登录：先取一次性盐值，用它加密密码后登录，记下访问令牌与签名密钥。
+// Login 用管理员账号登录，记下管理台下发的会话 Cookie。
 func (c *Client) Login(ctx context.Context, username, password string) error {
-	var salt struct {
-		RetInfo   retInfo   `json:"ret_info"`
-		Salt      string    `json:"salt"`
-		Timestamp flexInt64 `json:"timestamp"`
-	}
-	if err := c.post(ctx, "auth", "GetLoginSalt", map[string]string{"username": username}, false, &salt); err != nil {
-		return err
-	}
-	if err := salt.RetInfo.err("获取登录盐值"); err != nil {
-		return err
-	}
-	encrypted, err := mooxsecurity.Encrypt(password, salt.Salt+strconv.FormatInt(int64(salt.Timestamp), 10))
-	if err != nil {
-		return err
-	}
 	var login struct {
-		RetInfo           retInfo `json:"ret_info"`
-		AccessToken       string  `json:"access_token"`
-		RequestSigningKey string  `json:"request_signing_key"`
+		RetInfo retInfo `json:"ret_info"`
 	}
-	request := map[string]any{
-		"username": username, "password_hash": encrypted, "salt": salt.Salt, "timestamp": int64(salt.Timestamp),
-		"device_id": "moox-cli", "user_agent": "moox-cli",
-	}
-	if err := c.post(ctx, "auth", "Login", request, false, &login); err != nil {
+	if err := c.post(ctx, "auth", "Login", map[string]string{"username": username, "password": password}, &login); err != nil {
 		return err
 	}
 	if err := login.RetInfo.err("登录管理台"); err != nil {
 		return err
 	}
-	if login.AccessToken == "" || login.RequestSigningKey == "" {
-		return errors.New("登录管理台失败：响应里没有会话信息")
+	if c.session == nil {
+		return errors.New("登录管理台失败：响应里没有会话 Cookie")
 	}
-	c.token, c.signingKey = login.AccessToken, login.RequestSigningKey
 	return nil
 }
 
 // Call 以登录后的身份调用 /api/admin/<service>/<method>，并检查 ret_info。
 func (c *Client) Call(ctx context.Context, service, method string, request, response any) error {
-	if c.token == "" {
+	if c.session == nil {
 		return errors.New("还没有登录管理台")
 	}
-	return c.post(ctx, service, method, request, true, response)
+	return c.post(ctx, service, method, request, response)
 }
 
-func (c *Client) post(ctx context.Context, service, method string, request any, signed bool, response any) error {
+func (c *Client) post(ctx context.Context, service, method string, request any, response any) error {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return err
 	}
-	path := "/api/admin/" + service + "/" + method
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/admin/"+service+"/"+method, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if signed {
-		timestamp := time.Now().Unix()
-		nonce, err := requestauth.NewNonce()
-		if err != nil {
-			return err
-		}
-		signature, err := requestauth.Sign(c.signingKey, requestauth.Material{Method: http.MethodPost, Path: path, Body: body, Timestamp: timestamp, Nonce: nonce})
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Authorization", c.token)
-		req.Header.Set("X-Access-Token", c.token)
-		req.Header.Set("X-Moox-Timestamp", strconv.FormatInt(timestamp, 10))
-		req.Header.Set("X-Moox-Nonce", nonce)
-		req.Header.Set("X-Moox-Signature", signature)
+	// 管理台要求非 GET 请求的 Origin 等于本站。
+	req.Header.Set("Origin", c.base)
+	if c.session != nil {
+		req.AddCookie(c.session)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return describeTransportError(err, c.base)
 	}
 	defer resp.Body.Close()
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == sessionCookie && cookie.Value != "" {
+			c.session = &http.Cookie{Name: cookie.Name, Value: cookie.Value}
+		}
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return fmt.Errorf("读取管理台响应失败：%w", err)

@@ -34,7 +34,7 @@ var lighthouseFirewallOpenCmd = &cobra.Command{
 控制面经 moox.toml 里的操作员 SSH 网关访问，不需要另外指定地址或密钥。
 
 示例：
-  moox-cli ops tencent lighthouse firewall open --public-ip <lighthouse-public-ip> --ports 11000,10080,20200
+  moox-cli ops tencent lighthouse firewall open --public-ip <lighthouse-public-ip> --ports 9527,11003
   moox-cli ops tencent lighthouse firewall open --cloud-account-id account_xxx --public-ip <lighthouse-public-ip> --ports 9527 --yes
 
 提示：lighthouse-public-ip 可从云厂商控制台获取。`,
@@ -82,9 +82,6 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 	}
 	var selected *adminclient.CloudAccount
 	for i := range accounts {
-		if accounts[i].IsDeleted {
-			continue
-		}
 		if accountID == "" || accounts[i].AccountID == accountID {
 			selected = &accounts[i]
 			accountID = accounts[i].AccountID

@@ -154,13 +154,14 @@ type UdfImpact struct {
 
 // ActivateResult 是 ActivateUdf 的结果。
 type ActivateResult struct {
-	Name          string
-	OldHash       string
-	NewHash       string
-	DryRun        bool
-	Applied       bool
-	Impacts       []UdfImpact
-	Tasks         []string
+	Name    string
+	OldHash string
+	NewHash string
+	DryRun  bool
+	Applied bool
+	Impacts []UdfImpact
+	Tasks   []string
+	// Instances 是受影响任务关联的策略实例：只有声明了 factor_params 的实例会关联任务，只读任务的实例 factor-mgr 不知道，不在其中。
 	Instances     []string
 	Prerequisites []Prerequisite
 	Notes         []string
@@ -400,7 +401,7 @@ func (s *Service) enginePaused(ctx context.Context, required, hadActive bool) Pr
 	case time.Since(info.LastHeartbeatAt) > engineStatusMaxAge:
 		p.Detail = fmt.Sprintf("引擎最近一次心跳是 %s 前，状态不够新", time.Since(info.LastHeartbeatAt).Round(time.Second))
 	case status.Lifecycle.Stage != "paused":
-		p.Detail = fmt.Sprintf("因子引擎模块处于 %q，不是暂停：先执行 moox-cli lifecycle pause --endpoint <因子引擎健康检查地址> 并等待收敛", status.Lifecycle.Stage)
+		p.Detail = fmt.Sprintf("因子引擎模块处于 %q，不是暂停：先执行 moox-cli lifecycle pause --module factor-engine 并等待收敛", status.Lifecycle.Stage)
 	case !status.Lifecycle.Quiesced:
 		p.Detail = "引擎已暂停，但本次暂停还没有收敛（在途的计算还没结束）：等待片刻再试"
 	default:

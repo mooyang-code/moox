@@ -42,6 +42,11 @@ func (s *Server) Handler() http.Handler {
 	return healthz.StandardMux(s.snapshot, http.HandlerFunc(s.metrics))
 }
 
+// Readiness 是 /readyz 用的同一个就绪判断，随指标上报带给 Monitor。
+func (s *Server) Readiness() func(context.Context) (bool, string) {
+	return healthz.Readiness(s.snapshot)
+}
+
 func (s *Server) Register(service server.Service) error {
 	if s == nil {
 		return fmt.Errorf("eventbus health server is nil")
@@ -53,11 +58,7 @@ func (s *Server) Register(service server.Service) error {
 		}
 		s.sub = sub
 	}
-	handler, err := healthz.WrapFromEnv(s.Handler())
-	if err != nil {
-		return err
-	}
-	return healthz.RegisterNoProtocolServiceMux(service, handler)
+	return healthz.RegisterNoProtocolServiceMux(service, s.Handler())
 }
 
 func (s *Server) snapshot(context.Context) healthz.Response {

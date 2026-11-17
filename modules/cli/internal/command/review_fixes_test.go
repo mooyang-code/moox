@@ -10,7 +10,7 @@ import (
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/spf13/cobra"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -135,7 +135,7 @@ func TestHostRequiredFlagRejectsMissingHost(t *testing.T) {
 func TestStateChangingSpecsOnlyPreviewWithoutYes(t *testing.T) {
 	for _, path := range [][]string{
 		{"strategy", "instance", "enable"}, {"strategy", "instance", "disable"}, {"collector", "task", "disable"},
-		{"factor", "task", "disable"}, {"factor", "member", "disable"}, {"cloud", "function", "invoke"},
+		{"factor", "task", "disable"}, {"factor", "member", "disable"}, {"collector", "account", "delete"}, {"collector", "package", "delete"},
 	} {
 		spec := specByPath(t, path...)
 		assert.True(t, spec.Destructive, "%v 应默认只预览", path)
@@ -149,10 +149,10 @@ func TestStateChangingSpecsOnlyPreviewWithoutYes(t *testing.T) {
 }
 
 func TestSystemPauseAndFetchPlanPauseOnlyPreviewWithoutYes(t *testing.T) {
-	gateway := &rpcFakeGateway{}
-	useRPCGateway(t, gateway)
-	systemFlags = systemOptions{Collector: "http://127.0.0.1:1", Strategy: "http://127.0.0.1:2"}
-	t.Cleanup(func() { systemFlags = systemOptions{} })
+	modules := newLifecycleGateway()
+	modules.add(t, "collector", lifecycle.Hooks{})
+	modules.add(t, "strategy", lifecycle.Hooks{})
+	modules.use(t)
 	pause, _, err := systemCmd.Find([]string{"pause"})
 	require.NoError(t, err)
 	var out, errOut bytes.Buffer
@@ -162,9 +162,11 @@ func TestSystemPauseAndFetchPlanPauseOnlyPreviewWithoutYes(t *testing.T) {
 	require.NoError(t, pause.RunE(pause, nil))
 	preview := parsePreview(t, out.String())
 	assert.Equal(t, "system_pause", preview["action"])
-	assert.Equal(t, []any{"strategy", "collector"}, preview["modules"], "预览列出将要暂停的模块（下游到上游）")
-	assert.Zero(t, gateway.calls)
+	assert.Equal(t, []any{"strategy", "collector"}, preview["modules"], "预览列出将要暂停的模块（下游到上游），没有部署的跳过")
+	assert.Empty(t, modules.snapshot(), "预览不发暂停命令")
 
+	gateway := &rpcFakeGateway{}
+	useRPCGateway(t, gateway)
 	out.Reset()
 	fetchPlanPauseFlags.SpaceID, fetchPlanPauseYes = "crypto", false
 	t.Cleanup(func() { fetchPlanPauseFlags.SpaceID = "" })
@@ -229,45 +231,24 @@ func TestHostPutRefusesToOverwriteWhenExistenceCannotBeConfirmed(t *testing.T) {
 	assert.Nil(t, fake.uploaded)
 }
 
-// ---- 多主机部署与回放缺模块 ----
-
-func TestResolveRejectsComponentDeployedOnSeveralHosts(t *testing.T) {
-	clearHealthEnv(t)
-	remote := healthTestRemote(t, &healthFilesSSH{})
-	remote.manifest.Deployments["factor"] = append(remote.manifest.Deployments["factor"], "strategy")
-	_, err := resolveModuleHealthWith(context.Background(), remote, moduleHealthRequest{Modules: []string{"strategy"}})
-	require.ErrorContains(t, err, "部署在多台主机上（control、factor）")
-}
-
-func TestReplayRequiresEveryModuleAndSurvivesEmptyArgs(t *testing.T) {
-	cmd := &cobra.Command{Use: "replay"}
-	args, err := prepareReplayEndpoints(cmd, []string{"--file", "x.toml"})
-	require.NoError(t, err, "只有 --file 没有子命令时不能 panic")
-	assert.Empty(t, args)
-
-	useFakeHealth(t, map[string]string{"factor-engine": "http://127.0.0.1:1", "strategy": "http://127.0.0.1:2"}, "trade")
-	_, err = prepareReplayEndpoints(cmd, []string{"start", "--instance-id", "i"})
-	require.ErrorContains(t, err, "没有部署 trade", "缺模块不能退回默认的本机地址")
-}
-
 // ---- 命令层把 --yes 映射成预览（之前只在内部函数层测过） ----
 
 func TestFunctionDeleteAndFirewallAndUdfPreviewAtCommandLevel(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"ListFunctionInstances":        `{"ret_info":{"code":0},"items":[{"instance_id":"f-1","function_type":"scf-event","workload_type":"market_fetcher","namespace":"default"}]}`,
-		"AcquireCollectorPublishLease": leaseResponse,
+		"DeleteCloudFunctions": `{"ret_info":{"code":0},"results":[{"name":"f-1","region":"ap-nanjing","namespace":"default"}]}`,
 	}}
 	useRPCGateway(t, gateway)
-	collectorDeleteFlags = collectorDeleteOptions{SpaceID: "crypto", Wait: true}
-	t.Cleanup(func() { collectorDeleteFlags = collectorDeleteOptions{} })
+	collectorFunctionDeleteFlags = collectorFunctionFlags{SpaceID: "crypto", Names: []string{"f-1"}}
+	t.Cleanup(func() { collectorFunctionDeleteFlags = collectorFunctionFlags{} })
 	var out bytes.Buffer
 	collectorFunctionDeleteCmd.SetOut(&out)
 	collectorFunctionDeleteCmd.SetErr(&bytes.Buffer{})
 	collectorFunctionDeleteCmd.SetContext(context.Background())
 	require.NoError(t, collectorFunctionDeleteCmd.RunE(collectorFunctionDeleteCmd, nil))
-	assert.Contains(t, out.String(), `"dry_run": true`)
-	assert.NotContains(t, gateway.methods, "AcquireCollectorPublishLease", "没有 --yes 不能获取租约更不能提交删除")
-	assert.NotContains(t, gateway.methods, "SubmitDeleteFunctionInstances")
+	assert.Equal(t, true, parsePreview(t, out.String())["preview"])
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
+	assert.Equal(t, true, body["dry_run"], "没有 --yes 只发预览，不删除")
 
 	var fwOut bytes.Buffer
 	lighthouseFirewallAddFlags = lighthouseFirewallAddOptions{InstanceID: "lhins-1", Ports: "20201", Protocol: "TCP", Cidr: "0.0.0.0/0", Action: "ACCEPT"}

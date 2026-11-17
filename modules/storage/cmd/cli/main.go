@@ -56,7 +56,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, repair-view, reset-metadata, or delete-view")
+		return fmt.Errorf("expected command: init, import-seed, repair-view, or delete-view")
 	}
 	switch args[0] {
 	case "init":
@@ -65,12 +65,10 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runImportSeed(args[1:], stdout, stderr)
 	case "repair-view":
 		return runRepairView(args[1:], stdout, stderr)
-	case "reset-metadata":
-		return runResetMetadata(args[1:], stdout, stderr)
 	case "delete-view":
 		return runDeleteView(args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, reset-metadata, or delete-view", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, or delete-view", args[0])
 	}
 }
 

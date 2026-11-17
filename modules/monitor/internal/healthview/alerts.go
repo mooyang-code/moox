@@ -25,10 +25,8 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 	object.Kind = parts[0]
 	if len(parts) == 3 {
 		switch parts[0] {
-		case "deployment", "reporter":
+		case "reporter", "ready", "restart":
 			object.Type, object.HostId, object.ComponentId = "component", parts[1], parts[2]
-		case "console-page":
-			object.HostId, object.ComponentId = parts[1], parts[2]
 		case "gateway":
 			object.Type, object.HostId, object.ComponentId, object.Kind = "host", parts[1], "host-gateway", parts[2]
 		case "host":
@@ -67,8 +65,6 @@ func fallbackTitle(checkID string, object *pb.HealthObject, facts observability.
 	switch {
 	case object.Type == "component":
 		return componentName(facts, object.ComponentId) + "（" + object.HostId + "）"
-	case object.Kind == "console-page":
-		return "控制台页面（" + object.HostId + "）"
 	case object.Type == "dataset":
 		return object.DatasetId + " · " + object.Freq
 	case object.Type == "host":

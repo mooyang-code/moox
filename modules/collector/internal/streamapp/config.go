@@ -22,7 +22,7 @@ type Config struct {
 	InstanceID string `yaml:"instance_id"`
 	// DataDir 保存网关目录缓存等本地状态。
 	DataDir string `yaml:"data_dir"`
-	// MarketConfig 是数据源配置（binance.yaml：WS 地址与限额、REST 端点、Storage 绑定）。
+	// MarketConfig 是数据源配置（binance.yaml：WS 地址与限额、REST 端点）。
 	MarketConfig string `yaml:"market_config"`
 	// StorageTimeoutMS 是本地执行端单次 Storage 写入的超时。
 	StorageTimeoutMS int `yaml:"storage_timeout_ms"`

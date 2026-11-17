@@ -17,7 +17,8 @@ message FactorTask {
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // bound_instance_id 是关联的策略实例：一个任务只关联一个实例，一个实例可以关联多个任务；写入后不能修改；为空表示还没有关联。
+  // bound_instance_id 是关联的策略实例：只有声明了 factor_params 的实例启用时关联（独占可变成员的参数提交），一个任务只关联一个实例，
+  // 一个实例可以关联多个任务；写入后不能修改；为空表示没有关联（不调参的实例只读任务的列，不关联）。
   string bound_instance_id = 11;
 }
 
@@ -105,9 +106,6 @@ message FactorMember {
   map<string, double> params = 11;
   // kind 是成员类型：fixed 或 var。
   string kind = 12;
-  // last_submitted_period、last_submitted_at 是可变成员最近一次被接受的提交的目标期（Unix 秒）和提交时间；从未提交过为 0 和空。
-  int64 last_submitted_period = 13;
-  string last_submitted_at = 14;
 }
 
 // SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
@@ -356,9 +354,22 @@ message FactorRunnerStatus {
   string warmup_state = 4; // warming | ready
   int32 warm_subjects = 5;
   int32 expected_subjects = 6;
-  // paused 表示任务被有意停下（手动、系统或自动暂停，以及放行前的恢复追赶）；故障不算。
+  // paused 表示引擎模块被有意停下（暂停，以及放行前的恢复追赶），任务因此不计算。
   // 管理端据此不再把它的结果数据集当作应当持续产出的数据，Monitor 也就不对暂停的任务做新鲜度检查。
   bool paused = 7;
+  // checks 是引擎计算前对任务做的检查（本地窗口、数据覆盖、变更同步、回看数量、自定义算子模块等）：有 FAIL 项的任务不计算，
+  // 引擎每 30 秒重查一次，窗口载入完成后立即重查。
+  repeated FactorTaskCheck checks = 8;
+}
+
+// FactorTaskCheck 是因子任务的一项计算前检查。
+message FactorTaskCheck {
+  string name = 1;
+  // PASS | WARN | FAIL；WARN 不挡计算。
+  string status = 2;
+  // message 是没通过的原因；remedy 是处理办法（例如要执行的命令）。
+  string message = 3;
+  string remedy = 4;
 }
 
 // EngineInfo describes the compute engine as last seen by moox-factor-mgr.
@@ -495,8 +506,8 @@ message SetFactorCategoryRsp {
   FactorDef factor = 2;
 }
 
-// BindFactorTask 把任务与策略实例关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空，
-// 只随 DeleteBoundTask 与任务一起删除。
+// BindFactorTask 把任务与策略实例关联（独占，只给声明了 factor_params 的实例）：同一个实例重复调用直接成功，换一个实例则拒绝；
+// 任务没有可变成员时拒绝；写入后不能修改或清空，只随 DeleteBoundTask 与任务一起删除。
 message BindFactorTaskReq {
   string task_id = 1;
   string instance_id = 2;
@@ -589,6 +600,11 @@ service FactorMgr {
   rpc ListUdfs(ListUdfsReq) returns (ListUdfsRsp);
   rpc GetUdf(GetUdfReq) returns (GetUdfRsp);
   rpc ActivateUdf(ActivateUdfReq) returns (ActivateUdfRsp);
+  // GetLifecycle 读因子管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+  // 暂停时修改类接口被拒绝，读接口与引擎的同步、心跳、领取任务照常；没有要追赶的数据，恢复即放行。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复因子管理模块。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
 }
 
 // ---- 自定义算子（wasm UDF）
@@ -676,6 +692,7 @@ message ActivateUdfRsp {
   bool applied = 6;
   repeated UdfImpact impacts = 7;
   repeated string tasks = 8;
+  // instances 是受影响任务关联的策略实例：只有声明了 factor_params 的实例会关联任务，只读任务的实例不在其中。
   repeated string instances = 9;
   repeated UdfPrerequisite prerequisites = 10;
   repeated string notes = 11;
@@ -736,8 +753,11 @@ message EngineRuntimeStatus {
   repeated TaskWatermarkStatus watermarks = 10;
   // udf_modules 是引擎当前目录引用的各自定义算子模块的状态。
   repeated UdfModuleStatus udf_modules = 12;
-  // lifecycle 是模块级生命周期状态：管理端切换自定义算子版本之前，据此确认本次暂停已收敛。
+  // lifecycle 是模块级生命周期状态：管理端切换自定义算子版本之前，据此确认本次暂停已收敛；factor-mgr 也把它代报给 Monitor。
   EngineLifecycleStatus lifecycle = 11;
+  // ready 与 not_ready_reason 是引擎自己 /readyz 用的同一个就绪判断：引擎不经 packages/report 上报，由 factor-mgr 代报给 Monitor。
+  bool ready = 13;
+  string not_ready_reason = 14;
 }
 
 // EngineLifecycleStatus 是引擎模块自身的生命周期状态。
@@ -752,13 +772,18 @@ message EngineLifecycleStatus {
   bool quiesced = 4;
   // catchup_blocked 是恢复追赶的前置条件尚未满足的原因，满足或不在恢复追赶中为空。
   string catchup_blocked = 5;
+  // pause_kind（manual、system）与 pause_reason 是本次暂停的类型与原因，未暂停为空。
+  string pause_kind = 6;
+  string pause_reason = 7;
+  // catchup 是恢复追赶的进度（恢复追赶中才有）。
+  common.CatchupProgress catchup = 8;
 }
 
 message TaskWatermarkStatus {
   string task_id = 1;
   string committed_through = 2;
   string target = 3;
-  // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe）。
+  // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe、compute_failed）。
   string blocked_since = 4;
   string blocked_period = 5;
   string blocked_reason = 6;
@@ -825,4 +850,264 @@ message GetUdfModuleRsp {
   common.RetInfo ret_info = 1;
   string name = 2;
   bytes wasm = 3;
+}
+
+// ---- 因子引擎的入站服务
+
+// EngineControl 是因子引擎自己的 tRPC 服务：只监听因子机本机，由因子机的主机网关转发（因子机只能出站时经 control 中转）。
+//   - 回放“因子现算”的三个方法只给策略服务调用：会话开始时从因子机本地存储取快照，之后按时间顺序逐步现算，
+//     每期走实时计算路径；回放不写结果、不发周期完成事件、不改连续水位。会话只在引擎内存里，闲置 6 小时清理，
+//     引擎重启后会话不存在（NOT_FOUND），要重新建立。
+//   - 模块生命周期、任务检查与本地写入只给 moox-cli（lifecycle、system、factor task status --recheck、import --target factor）。
+service EngineControl {
+  // OpenReplay 建立会话：核对本地数据、按预热区间读快照、预留内存。同一个 replay_id 重复打开时先释放旧会话。
+  rpc OpenReplay(OpenReplayReq) returns (OpenReplayRsp);
+  // StepReplay 从 period_time 起按顺序算最多 periods 期。单步响应不超过 3 MiB：放不下时只返回前面几期（至少 1 期），
+  // 一期就放不下时拒绝，要减少 columns。
+  rpc StepReplay(StepReplayReq) returns (StepReplayRsp);
+  // CloseReplay 结束会话并释放内存；会话不存在时 closed 为假。
+  rpc CloseReplay(CloseReplayReq) returns (CloseReplayRsp);
+  // GetLifecycle 读引擎模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复与放行引擎模块。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
+  // CheckTask 立即重查一个因子任务能不能计算（不等每 30 秒一轮），结果同时更新随心跳上报的检查结果。
+  rpc CheckTask(CheckTaskReq) returns (CheckTaskRsp);
+  // WriteSeries 是本地写入：导入服务用一批行整段替换标的在 [from, to) 内的本地数据。本地存储同一时刻只能由引擎进程打开，
+  // 所以写入只能经过引擎；引擎未就绪时也接受写入。
+  rpc WriteSeries(WriteSeriesReq) returns (WriteSeriesRsp);
+  // GetSeriesFields 返回数据集的字段表（名称、类型、填充规则），导入服务据此解析文件。
+  rpc GetSeriesFields(GetSeriesFieldsReq) returns (GetSeriesFieldsRsp);
+  // CheckSeriesSubject 判断标的是否在数据集的标签范围内（导入不自动绑定标的）。
+  rpc CheckSeriesSubject(CheckSeriesSubjectReq) returns (CheckSeriesSubjectRsp);
+  // GetSeriesBounds 返回标的在本地的最早与最新时间。
+  rpc GetSeriesBounds(GetSeriesBoundsReq) returns (GetSeriesBoundsRsp);
+}
+
+message OpenReplayReq {
+  string replay_id = 1;
+  string task_id = 2;
+  // from、to 是回放区间（RFC3339，左闭右开），按任务频率对齐：决策周期是 data_time 落在其中的每一根 K 线。
+  string from = 3;
+  string to = 4;
+  // extra_periods 是策略额外需要的回看根数（引用上一根的深度，0 或 1；年龄按本地数据里序列的第一根算，与快照长度无关，不用算进来）：
+  // 预热起点 = from −（因子最大回看 − 1 + extra_periods）× 周期。
+  int32 extra_periods = 5;
+  // columns 是每行要返回的列（结果数据集里的列名）：成员的输出列、源数据集的数值列，以及 __params（各成员本期实际用的参数）。
+  // 必填，不认识的列名拒绝。
+  repeated string columns = 6;
+  // allow_short_warmup 允许多数标的的本地数据不够预热区间（因子前段会是空值）；不允许时这种情况拒绝建立会话。
+  bool allow_short_warmup = 7;
+}
+
+// ReplayFactor 是回放固定下来的一个成员：outputs 是它在结果数据集里的列名。
+message ReplayFactor {
+  string member_key = 1;
+  string factor_id = 2;
+  // kind 是成员类型：fixed 或 var。
+  string kind = 3;
+  string definition_hash = 4;
+  repeated string outputs = 5;
+}
+
+message ReplayExcluded {
+  string subject_id = 1;
+  string reason = 2;
+}
+
+message OpenReplayRsp {
+  common.RetInfo ret_info = 1;
+  string replay_id = 2;
+  // subjects 是参与回放的标的；excluded 是被排除的标的及原因（本地没有数据、到不了回放的最后一期）。
+  repeated string subjects = 3;
+  repeated ReplayExcluded excluded = 4;
+  // period_times 是各决策周期的 data_time（真实时间的 Unix 秒，升序；有交易时段的市场跳过休市），可回放的区间就是它的首尾。
+  repeated int64 period_times = 5;
+  int64 step_seconds = 6;
+  // warmup_start 是预热起点（RFC3339）。
+  string warmup_start = 7;
+  // snapshot_bytes 是快照预留的内存（字节）。
+  int64 snapshot_bytes = 8;
+  repeated ReplayFactor factors = 9;
+  // source_fields 是源数据集的数值列，columns 可以引用它们。
+  repeated string source_fields = 10;
+  // short_warmup 是本地数据起点晚于预热起点的标的数（因子前段为空值），short_samples 是其中的前几个。
+  int32 short_warmup = 11;
+  repeated string short_samples = 12;
+}
+
+message StepReplayReq {
+  string replay_id = 1;
+  // period_time 是这一步第一期的 data_time（真实时间的 Unix 秒，必须是 OpenReplay 给出的某一期）。
+  int64 period_time = 2;
+  // periods 是这一步最多算几期，至少 1；到回放区间末尾为止。
+  int32 periods = 3;
+  // params 是这一步第一期各可变成员的参数（策略在上一期求值后产出）：只存在于会话里，不写成员行。
+  // 没给的成员沿用上一期实际用的参数，再没有就用成员自己的参数；这一步后面各期都沿用。
+  // 不合法的成员参数被拒绝并沿用上一期；成员键不存在时整步失败。
+  repeated MemberParams params = 4;
+}
+
+// ReplayParamValues 是一个成员本期实际用的参数：参数名 → 值。
+message ReplayParamValues {
+  map<string, double> values = 1;
+}
+
+// ReplayRow 是一条序列（标的, series_tag）本期的行：只含 OpenReplay 请求的列，没有数据、算不出的列不出现。
+// 本期在本地数据里没有这条序列的行时，这一行不出现。
+message ReplayRow {
+  string subject_id = 1;
+  string series_tag = 2;
+  map<string, double> values = 3;
+  // previous 是同一条序列上一期的同名列。
+  map<string, double> previous = 4;
+  // params 是这一期各成员实际用的参数（成员键 → 参数）；只在 columns 含 __params 时给。
+  map<string, ReplayParamValues> params = 5;
+  // age_bars 是本地数据里这条序列截至本期的根数（含本期），策略的年龄检查用。
+  int32 age_bars = 6;
+}
+
+// ReplayMemberState 是一个成员本期的状态。
+message ReplayMemberState {
+  // status：complete、degraded（部分标的失败）或 skipped（截面因子整体跳过）。
+  string status = 1;
+  string factor_id = 2;
+  string definition_hash = 3;
+  string kind = 4;
+  repeated string failed_subjects = 5;
+}
+
+message ReplayParamRejection {
+  string member_key = 1;
+  string reason = 2;
+}
+
+// ReplayPeriod 是一期的因子帧。
+message ReplayPeriod {
+  // period_time 是这一期的 data_time（真实时间的 Unix 秒）。
+  int64 period_time = 1;
+  repeated ReplayRow rows = 2;
+  // states 是各成员本期的状态（成员键 → 状态）。
+  map<string, ReplayMemberState> states = 3;
+  // applied_params 是这一期实际生效的、由请求带来（或沿用之前请求）的成员参数：策略以它为基础叠加下一期的新参数，
+  // 不合法的请求参数不会出现在这里。
+  repeated MemberParams applied_params = 4;
+  // rejected_params 是被拒绝的成员参数，只出现在一步的第一期。
+  repeated ReplayParamRejection rejected_params = 5;
+}
+
+message StepReplayRsp {
+  common.RetInfo ret_info = 1;
+  // periods 是实际算了的期：从请求的 period_time 起连续、按时间升序。少于请求的期数时，从下一期接着请求。
+  repeated ReplayPeriod periods = 2;
+  // compute_ms 是这一步的计算耗时。
+  int64 compute_ms = 3;
+}
+
+message CloseReplayReq {
+  string replay_id = 1;
+}
+message CloseReplayRsp {
+  common.RetInfo ret_info = 1;
+  bool closed = 2;
+}
+
+// CheckTaskReq 指定要重查的因子任务。
+message CheckTaskReq {
+  string task_id = 1;
+}
+
+message CheckTaskRsp {
+  // 任务不在引擎的目录里（没有启用，或目录还没同步）时 ret_info 是 NOT_FOUND。
+  common.RetInfo ret_info = 1;
+  // checks 是逐项结果：有 FAIL 项的任务不计算。
+  repeated FactorTaskCheck checks = 2;
+  // paused 表示引擎模块被有意停下（暂停、恢复追赶），检查通过也暂不计算。
+  bool paused = 3;
+}
+
+// SeriesColumn 是一列：null 标记与按类型的值，f 用于 double，i 用于 int 与 bool，s 用于其余类型；长度都等于行数。
+message SeriesColumn {
+  repeated bool null = 1;
+  repeated double f = 2;
+  repeated int64 i = 3;
+  repeated string s = 4;
+}
+
+// WriteSeriesReq 是一批要整段替换的行，必须带数据集的全部字段。
+message WriteSeriesReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string freq = 3;
+  string subject_id = 4;
+  // from、to 是整段替换的区间（RFC3339，左闭右开），行时间与区间都是真实时间。
+  string from = 5;
+  string to = 6;
+  // allow_missing 允许中间缺的周期按字段填充规则写成缺失行；否则缺期时拒绝。
+  bool allow_missing = 7;
+  // record_pending 把改变的区间记入失效重算待办（带 --recalc 的导入）；reason 是待办的原因，为空时是 import。
+  bool record_pending = 8;
+  string reason = 9;
+  // times 是各行的 UTC 秒；tags 是各行的 series_tag。
+  repeated int64 times = 10;
+  repeated string tags = 11;
+  // cols 按字段名给出每一列。
+  map<string, SeriesColumn> cols = 12;
+}
+
+message WriteSeriesRsp {
+  // 请求不合法、缺周期、字段对不上时 ret_info 是 INVALID_PARAM；读不到数据集字段、写本地存储失败时是 INNER_ERR。
+  common.RetInfo ret_info = 1;
+  int32 written = 2;
+  int32 filled = 3;
+  int32 removed = 4;
+  // changed_from、changed_to 是本地数据实际改变的区间；earliest、latest 是写入后标的在本地的边界。
+  string changed_from = 5;
+  string changed_to = 6;
+  string earliest = 7;
+  string latest = 8;
+}
+
+message GetSeriesFieldsReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string freq = 3;
+}
+
+// SeriesField 是数据集的一个字段：type 是 Storage 的字段类型，fill 是缺期时的填充规则（prev、prev_close、zero，空表示留空）。
+message SeriesField {
+  string name = 1;
+  string type = 2;
+  string fill = 3;
+}
+
+message GetSeriesFieldsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SeriesField fields = 2;
+}
+
+message CheckSeriesSubjectReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+}
+
+message CheckSeriesSubjectRsp {
+  common.RetInfo ret_info = 1;
+  bool in_scope = 2;
+}
+
+message GetSeriesBoundsReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string freq = 3;
+  string subject_id = 4;
+}
+
+message GetSeriesBoundsRsp {
+  common.RetInfo ret_info = 1;
+  // exists 为假表示本地没有这个标的的数据，earliest、latest 为空。
+  bool exists = 2;
+  string earliest = 3;
+  string latest = 4;
 }

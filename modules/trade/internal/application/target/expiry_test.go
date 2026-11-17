@@ -29,9 +29,6 @@ func (s expiryPriceSource) LatestPrice(context.Context, string, exchange.SymbolK
 func modernExpiryTarget(t *testing.T, f *targetFixture) {
 	t.Helper()
 	f.target(t, nil)
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts
-		SET c_owner_instance_id = 'instance-1', c_owner_session_id = 'session-1'
-		WHERE c_logical_account_id = 'logical-1'`).Error)
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_account_targets
 		SET c_instance_id = 'instance-1', c_session_id = 'session-1', c_strategy_id = 'strategy-1',
 		c_bar_end_time = 1000, c_valid_until = 2000

@@ -30,20 +30,16 @@ func usagesToPB(usages []domain.FactorUsage) []*factorpb.FactorUsage {
 func memberToPB(member domain.TaskMember, includeSpec bool) *factorpb.FactorMember {
 	def := member.Def()
 	pb := &factorpb.FactorMember{
-		TaskId:              member.TaskID,
-		MemberKey:           member.MemberKey,
-		FactorId:            member.FactorID,
-		Kind:                member.Kind,
-		Status:              member.Status,
-		Factor:              factorDefToPBListed(member.Factor, includeSpec),
-		OutputColumns:       def.OutputColumns(),
-		Params:              factorwire.CloneParams(member.Params),
-		LastSubmittedPeriod: member.LastSubmittedPeriod,
-		CreatedAt:           factorwire.FormatTime(member.CreatedAt),
-		UpdatedAt:           factorwire.FormatTime(member.UpdatedAt),
-	}
-	if member.LastSubmittedAt != nil {
-		pb.LastSubmittedAt = factorwire.FormatTime(*member.LastSubmittedAt)
+		TaskId:        member.TaskID,
+		MemberKey:     member.MemberKey,
+		FactorId:      member.FactorID,
+		Kind:          member.Kind,
+		Status:        member.Status,
+		Factor:        factorDefToPBListed(member.Factor, includeSpec),
+		OutputColumns: def.OutputColumns(),
+		Params:        factorwire.CloneParams(member.Params),
+		CreatedAt:     factorwire.FormatTime(member.CreatedAt),
+		UpdatedAt:     factorwire.FormatTime(member.UpdatedAt),
 	}
 	return pb
 }

@@ -8,11 +8,12 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,9 +21,10 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -35,49 +37,41 @@ type factorGatewayWire struct {
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedPrimaryStore
 	directorypb.UnimplementedDirectory
-	credentials gatewayauth.Credentials
-	directory   servicecatalog.Directory
-	mu          sync.Mutex
-	nonces      map[string]bool
-	reads       int
-	writes      int
-	refreshes   int
+	mu        sync.Mutex
+	calls     int
+	reads     int
+	writes    int
+	refreshes int
 }
+
+const factorDirectoryVersion = "v1"
 
 func (w *factorGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
 	w.mu.Lock()
 	w.refreshes++
 	w.mu.Unlock()
-	if req.GetCurrentVersion() == w.directory.Version {
-		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
+	if req.GetCurrentVersion() == factorDirectoryVersion {
+		return &directorypb.GetDirectoryRsp{Version: factorDirectoryVersion}, nil
 	}
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
-		Services: map[string]*directorypb.ServiceHosts{
-			"trpc.moox.storage.Metadata":     {HostIds: []string{"control"}},
-			"trpc.moox.storage.PrimaryStore": {HostIds: []string{"control"}},
-		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
+	// 目录只有主机与部署：factor-mgr 与 Storage 同机。
+	return &directorypb.GetDirectoryRsp{Changed: true, Version: factorDirectoryVersion,
+		Hosts: []*directorypb.DirectoryHost{{HostId: "control", Address: "control.example.test", Reachability: "direct", Enabled: true}},
+		Deployments: []*directorypb.DirectoryDeployment{
+			{HostId: "control", ComponentId: "factor-mgr", Enabled: true},
+			{HostId: "control", ComponentId: "storage-primary", Enabled: true},
+		}}, nil
 }
 
-func (w *factorGatewayWire) verify(ctx context.Context, service, method string, request proto.Message) error {
-	headers := http.Header{}
-	for key, value := range codec.Message(ctx).ServerMetaData() {
-		headers.Set(key, string(value))
-	}
-	body, err := proto.Marshal(request)
-	if err != nil {
-		return err
-	}
-	claims, err := gatewayauth.Verify(w.credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
-		TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
-	if err != nil {
-		return err
+// verify 核对同机直连的请求不带任何签名头。
+func (w *factorGatewayWire) verify(ctx context.Context, _, _ string, _ proto.Message) error {
+	for name := range codec.Message(ctx).ServerMetaData() {
+		if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+			return fmt.Errorf("direct local call carries signature header %s", name)
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.nonces[claims.Nonce] {
-		return errors.New("factor-mgr call reused a signing nonce")
-	}
-	w.nonces[claims.Nonce] = true
+	w.calls++
 	return nil
 }
 
@@ -102,7 +96,7 @@ func (w *factorGatewayWire) UpsertDatasetColumn(ctx context.Context, req *storag
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpsertDatasetColumn", req); err != nil {
 		return nil, err
 	}
-	if req.GetColumn().GetSpaceId() != "crypto" || req.GetColumn().GetDatasetId() != "bars" || req.GetColumn().GetColumnName() != "close" || !proto.Equal(req.GetAuthInfo(), storageio.AuthInfo("fixture-factor-request")) {
+	if req.GetColumn().GetSpaceId() != "crypto" || req.GetColumn().GetDatasetId() != "bars" || req.GetColumn().GetColumnName() != "close" {
 		return nil, errors.New("dataset column body changed")
 	}
 	w.mu.Lock()
@@ -115,9 +109,6 @@ func (w *factorGatewayWire) ReportDatasetPeriodCompleted(ctx context.Context, re
 	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReportDatasetPeriodCompleted", req); err != nil {
 		return nil, err
 	}
-	if !proto.Equal(req.GetAuthInfo(), storageio.AuthInfo("fixture-factor-request")) {
-		return nil, errors.New("Storage role authentication changed")
-	}
 	w.mu.Lock()
 	w.writes++
 	w.mu.Unlock()
@@ -125,21 +116,19 @@ func (w *factorGatewayWire) ReportDatasetPeriodCompleted(ctx context.Context, re
 }
 
 func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "fixture-storage-primary-role-secret")
 	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
 	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
 	t.Setenv("MOOX_FACTOR_STORAGE_KEY_ID", "obsolete-key")
 	t.Setenv("MOOX_FACTOR_STORAGE_HMAC_KEY_FILE", "/nonexistent/obsolete-factor.key")
 	root := t.TempDir()
 	configPath := filepath.Join(root, "factor-mgr", "config", "app.yaml")
-	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-factor-mgr.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
-	for _, path := range []string{configPath, hostPath, keyPath, caPath} {
+	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "factor-mgr", KeyID: "admin-assigned-factor-mgr-key-97", Secret: "factor-mgr-signing-fixture-key-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0o600))
+	credentials := authtest.Component("factor-mgr", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0o600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -148,18 +137,22 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host := hostgatewayconfig.Default("control", "control", "192.0.2.1", "host-fixture-key")
-	host.Server.LocalAddr = listener.Addr().String()
-	host.TLS.CAFile = caPath
-	encoded, err := hostgatewayconfig.Encode(host)
+	wire := &factorGatewayWire{}
+	// factor-mgr 与 Storage 同机：直连服务目录里 Storage 各服务的回环端口，这里都指到同一个假服务上。
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostPath, encoded, 0o600))
-	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"},
-	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
-	wire := &factorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}}
+	servicePorts := map[int]bool{}
+	for _, path := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.PrimaryStore"} {
+		spec, ok := catalog.Service(path)
+		require.True(t, ok, path)
+		servicePorts[spec.Port] = true
+	}
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
@@ -167,14 +160,14 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "factor-mgr")
-	raw := "database:\n  path: " + filepath.Join(data, "factor-mgr.db") + "\ngateway_client:\n  caller: factor-mgr\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-factor-mgr.key\n"
+	raw := "database:\n  path: " + filepath.Join(data, "factor-mgr.db") + "\ngateway_client:\n  caller: factor-mgr\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
 	cfg, err := Load(configPath)
 	require.NoError(t, err)
 	gateway, err := cfg.OpenGateway(nil)
 	require.NoError(t, err)
 	runtime := &Runtime{gateway: gateway}
-	storage := storageio.NewGatewayClient(gateway, storageio.AuthInfo("fixture-factor-request"))
+	storage := storageio.NewGatewayClient(gateway)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 	rsp, err := storage.GetDataset(t.Context(), "crypto", "bars")
 	require.NoError(t, err)
@@ -186,7 +179,7 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.reads)
 	require.Equal(t, 2, wire.writes)
-	require.Len(t, wire.nonces, 4)
+	require.Equal(t, 4, wire.calls)
 	require.GreaterOrEqual(t, wire.refreshes, 2)
 	wire.mu.Unlock()
 	cache, err := os.Stat(filepath.Join(data, "gatewayclient", "directory.json"))
@@ -196,6 +189,6 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	require.NoError(t, runtime.Close())
 	_, err = storage.GetDataset(t.Context(), "crypto", "bars")
 	require.Error(t, err)
-	_, err = storageio.NewGatewayClient(nil, nil).GetDataset(t.Context(), "crypto", "bars")
+	_, err = storageio.NewGatewayClient(nil).GetDataset(t.Context(), "crypto", "bars")
 	require.ErrorContains(t, err, "gateway client is required")
 }

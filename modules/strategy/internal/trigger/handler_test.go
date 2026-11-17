@@ -174,7 +174,7 @@ func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
-// newHarnessWith 用给定的会话快照搭建一个已启用的实例。
+// newHarnessWith 用给定的会话快照搭建一个已启用的实例（挂了账户时已确认实盘）。
 func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved input.Resolved) *harness {
 	t.Helper()
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
@@ -196,14 +196,14 @@ func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved inpu
 	}
 	raw, _ := json.Marshal(resolved)
 	session := "session-1"
-	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
+	if err := repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), CreatedAt: bar0}, dslYaml); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, raw, bar0); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, raw, bar0); err != nil {
-		t.Fatal(err)
+	// 挂了账户的实例默认已确认实盘，目标是正式目标；试运行的用例见 confirm_test.go。
+	if account != nil {
+		if err := repo.ConfirmInstance(ctx, "i1", session, bar0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	h := &harness{t: t, repo: repo, loader: &fakeLoader{frames: map[int64]map[string]map[string]float64{}}, observer: &recordingObserver{}, now: start, session: session}
 	h.handler = h.newHandler()
@@ -517,6 +517,14 @@ func TestHandleBuildsValidTargetEvent(t *testing.T) {
 	if len(target.GetTargets()) != 2 || !target.GetValidUntil().AsTime().Equal(barStart(1).Add(3*time.Hour)) || !target.GetBarEndTime().AsTime().Equal(barStart(1).Add(time.Hour)) {
 		t.Fatalf("事件时间或目标不符：%s", target.String())
 	}
+	// 事件带上会话开始时刻（Trade 用它比较会话先后），与会话行里记的一致。
+	session, err := h.repo.GetSession(context.Background(), h.session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.StartedAt <= 0 || target.GetSessionStartedAt() != session.StartedAt {
+		t.Fatalf("事件的 session_started_at = %d，会话的开始时刻 = %d", target.GetSessionStartedAt(), session.StartedAt)
+	}
 }
 
 // S18 / S19（处理器部分）：用了 bars[-1] 的实例首期 previous_version_unknown 并记录指纹，次期正常；漏掉一根后再次 unknown。
@@ -635,7 +643,7 @@ END;`); err != nil {
 	}
 }
 
-// ambiguous_series 同样需要人工处理，实例标记 degraded；ok 周期恢复 degraded，但不清除 session_unverified。
+// ambiguous_series 同样需要人工处理，实例标记 degraded；下一个 ok 周期恢复 ok。
 func TestHandleHealthTransitions(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	h.loader.errs = []error{&input.SkipError{Reason: input.SkipAmbiguousSeries, Detail: "两个序列"}}
@@ -644,14 +652,11 @@ func TestHandleHealthTransitions(t *testing.T) {
 	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthDegraded {
 		t.Fatalf("ambiguous_series 应标记 degraded：%+v", instance)
 	}
-	if err := h.repo.SetInstanceHealth(context.Background(), "i1", store.HealthSessionUnverified, bar0); err != nil {
-		t.Fatal(err)
-	}
 	h.frame(2, map[string]map[string]float64{"A": {"m": 1}})
 	h.now = barStart(2).Add(90 * time.Minute)
 	expectAck(t, h.deliver(2))
-	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthSessionUnverified {
-		t.Fatalf("ok 周期不能清除 session_unverified：%+v", instance)
+	if instance, _ := h.repo.GetInstance(context.Background(), "i1"); instance.Health != store.HealthOK {
+		t.Fatalf("ok 周期应恢复 ok：%+v", instance)
 	}
 }
 

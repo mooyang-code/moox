@@ -1,5 +1,5 @@
-// Package gatewaycontrol serves authenticated per-host configuration and
-// persists runtime heartbeats. Admin startup never seeds topology or keys here.
+// Package gatewaycontrol 给各主机的网关提供快照并记录它们的心跳。服务只听本机回环端口：别的主机的请求由控制机网关
+// 验签后转进来，并在 x-moox-verified-host 头里带上验过的签名主机；控制机网关自己直连时也带这个头。这里不再验第二遍。
 package gatewaycontrol
 
 import (
@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -23,38 +23,28 @@ import (
 
 var instancePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
-type NonceConsumer interface {
-	ConsumeGatewayControlNonce(context.Context, string, string, time.Duration) (bool, error)
-}
-
 type Service struct {
 	db            *gorm.DB
 	controlHostID string
-	master        string
-	keys          *keys.Store
-	nonces        NonceConsumer
 	now           func() time.Time
 }
 
-func (*Service) String() string     { return "GatewayControl{per-host authenticated snapshots}" }
+func (*Service) String() string     { return "GatewayControl{snapshots}" }
 func (s *Service) GoString() string { return s.String() }
 
-func NewService(db *gorm.DB, controlHostID, encryptionKey string, nonces NonceConsumer) (*Service, error) {
-	if !servicecatalog.ValidHostID(controlHostID) || nonces == nil {
-		return nil, errors.New("gateway control requires canonical control host and durable nonce store")
+func NewService(db *gorm.DB, controlHostID string) (*Service, error) {
+	if db == nil || !servicecatalog.ValidHostID(controlHostID) {
+		return nil, errors.New("gateway control requires the Admin database and a canonical control host")
 	}
-	store, err := keys.NewStore(db, encryptionKey)
-	if err != nil {
-		return nil, err
-	}
-	return &Service{db: db, controlHostID: controlHostID, master: encryptionKey, keys: store, nonces: nonces, now: time.Now}, nil
+	return &Service{db: db, controlHostID: controlHostID, now: time.Now}, nil
 }
 
-type verifiedCaller struct{}
+type verifiedHost struct{}
 
+// sameHost 要求请求里的主机就是网关验过签的那台：一台主机只能取自己的快照、报自己的心跳。
 func sameHost(ctx context.Context, hostID string) bool {
-	caller, _ := ctx.Value(verifiedCaller{}).(string)
-	return servicecatalog.ValidHostID(hostID) && caller == "host-gateway@"+hostID
+	host, _ := ctx.Value(verifiedHost{}).(string)
+	return servicecatalog.ValidHostID(hostID) && host == hostID
 }
 
 func validHash(value string) bool {
@@ -85,9 +75,13 @@ func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*p
 	if err != nil {
 		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
 	}
-	_, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId(), s.master)
+	snapshot, err := dao.Snapshot(ctx)
 	if err != nil {
 		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
+	}
+	// 快照对全部主机相同；没登记的主机拿不到。
+	if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
+		return &pb.PullSnapshotRsp{RetInfo: result(gorm.ErrRecordNotFound)}, nil
 	}
 	if snapshot.Hash == req.GetCurrentHash() {
 		return &pb.PullSnapshotRsp{RetInfo: success()}, nil
@@ -149,9 +143,12 @@ func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*p
 		if err != nil {
 			return err
 		}
-		_, snapshot, err := dao.CompileSnapshot(ctx, req.GetHostId(), s.master)
+		snapshot, err := dao.Snapshot(ctx)
 		if err != nil {
 			return err
+		}
+		if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
+			return gorm.ErrRecordNotFound
 		}
 		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId()}
 		err = tx.Where("c_host_id = ?", req.GetHostId()).First(&status).Error

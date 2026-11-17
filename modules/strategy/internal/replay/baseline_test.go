@@ -17,6 +17,8 @@ import (
 // 基线金样（第 0 期）：在现货金样（spot_golden.json）之外补永续、双市场（两个任务）与统一数据集（一个任务）的研究回放，
 // 包含 universe 的标签与黑白名单、规则的显式 pool、min_age_bars（双市场按市场分别判年龄）与永续逐期结算。
 // 每份金样导出每期的目标、账本（持仓快照与本期结算摘要）、权益与各市场市值，以及最终绩效，存为 testdata/baseline/<场景>.json。
+// 策略池回放另有 testdata/baseline/pool_<场景>.json（见 pool_replay_test.go 的 poolBaselineCompare）：导出同样的逐期记录
+// （summary_json 里含池明细 pool 与超限转移 limits）与最终绩效，守住回放读取、池级账本与绩效，不依赖“回放对预热”的互比。
 // 金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成（不会改动 spot_golden.json）。
 
 // baselineUpdate 报告本次是否重新生成基线金样。
@@ -151,7 +153,7 @@ func baselineHours(from, to int) map[int]bool {
 }
 
 // baselineSwapDSL：纯永续，universe 白名单是 majors 标签加 D，排除 meme 标签与 B（B、C 的动量最高，都被排除）；
-// 新上线的标的要满 3 根；signal 规则的显式 pool 只有 E（替代 universe，不受黑名单影响）。
+// 新上线的标的要满 3 根；规则 e 是固定标的择时，显式 pool 只有 E（替代 universe，不受黑名单影响）。
 const baselineSwapDSL = `name: baseline_swap
 market: {select: swap}
 universe:
@@ -167,10 +169,13 @@ rules:
     select: {top: 1}
     weight: {total: 1.5}
   - id: e
-    type: signal
+    type: rank
     pool: [E]
-    entry: "mom > 0"
-    exit: "mom < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "mom > 0"
+      exit: "mom < 0"
     weight: {total: 0.5}
 portfolio:
   leverage: 2
@@ -212,7 +217,7 @@ type baselineReplayScenario struct {
 
 func baselineReplayScenarios() []baselineReplayScenario {
 	return []baselineReplayScenario{
-		{name: "swap_universe_pool", dsl: baselineSwapDSL, hours: 16,
+		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, hours: 16,
 			client: func() input.Client { return newBaselineClient(baselineSwapClient()) },
 			tasks:  map[string]store.ReplayTask{"swap": swapTask}, check: baselineCheckSwap},
 		{name: "dual_two_tasks", dsl: baselineDualDSL, hours: 16,
@@ -284,14 +289,23 @@ func baselineReplayDump(t *testing.T, scenario baselineReplayScenario) (map[stri
 	done, err := repo.GetReplay(context.Background(), "b1")
 	require.NoError(t, err)
 	require.Equal(t, store.ReplayDone, done.Status, "场景 %s 应完成：%s", scenario.name, done.Error)
-	decode := func(raw []byte) any {
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		var value any
-		require.NoError(t, decoder.Decode(&value))
-		return value
-	}
 	bars := barsOf(t, repo, "b1")
+	return map[string]any{"dsl": scenario.dsl, "metrics": baselineDecode(t, done.MetricsJSON), "bars": baselineBarRecords(t, bars)}, bars
+}
+
+// baselineDecode 把库里存的 JSON 解成通用值，数值保留原文。
+func baselineDecode(t *testing.T, raw []byte) any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	require.NoError(t, decoder.Decode(&value))
+	return value
+}
+
+// baselineBarRecords 导出回放写出的逐期记录：状态、收益、权益、换手、费用、市值、持仓计数，以及目标、账本与完整的 summary_json。
+func baselineBarRecords(t *testing.T, bars []store.ReplayBar) []any {
+	t.Helper()
 	out := make([]any, 0, len(bars))
 	for _, bar := range bars {
 		out = append(out, map[string]any{
@@ -299,10 +313,10 @@ func baselineReplayDump(t *testing.T, scenario baselineReplayScenario) (map[stri
 			"return": bar.Return, "equity": bar.Equity, "turnover": bar.Turnover, "fee": bar.Fee,
 			"spot_value": bar.SpotValue, "swap_value": bar.SwapValue,
 			"holdings": bar.Holdings, "frozen": bar.Frozen, "unfilled": bar.Unfilled, "liquidated": bar.Liquidated,
-			"targets": decode(bar.TargetsJSON), "positions": decode(bar.PositionsJSON), "summary": decode(bar.SummaryJSON),
+			"targets": baselineDecode(t, bar.TargetsJSON), "positions": baselineDecode(t, bar.PositionsJSON), "summary": baselineDecode(t, bar.SummaryJSON),
 		})
 	}
-	return map[string]any{"dsl": scenario.dsl, "metrics": decode(done.MetricsJSON), "bars": out}, bars
+	return out
 }
 
 // baselineTargetsByHour 返回每期目标（标的|市场 → 权重），键是收盘价所在的小时。

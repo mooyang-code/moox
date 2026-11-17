@@ -276,7 +276,7 @@ func waitRebuilt(t *testing.T, env *followEnv, dataset readyBenchDataset, before
 	ctx := context.Background()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		rsp, err := env.view.GetViewState(ctx, &pb.GetViewStateReq{AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: dataset.viewID})
+		rsp, err := env.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: dataset.viewID})
 		if err == nil && rsp.GetIndexId() != "" && rsp.GetGeneration() != before {
 			break
 		}
@@ -310,7 +310,7 @@ func TestFollowRetriesFailedRebuild(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if rsp, _ := env.view.GetViewState(ctx, &pb.GetViewStateReq{AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: kline.viewID}); rsp.GetIndexId() != "" {
+	if rsp, _ := env.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: kline.viewID}); rsp.GetIndexId() != "" {
 		t.Fatalf("重建失败期间 View 不应可读：%v", rsp)
 	}
 	// 模拟进程重启：跟随器重新启动时，索引里没有进度、运行时仍是待重建。

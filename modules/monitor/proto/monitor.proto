@@ -93,44 +93,29 @@ message HealthComponent {
   string name = 3;
   string status = 4;
   string reason = 5;
-  HealthSignal probe = 6;
+  // reporter 是组件上报的新鲜度：组件健康只看上报（设计 3.8）。
   HealthSignal reporter = 7;
   repeated HealthReporter instances = 8;
   string status_since = 9;
-  string probe_url = 10;
-  repeated HealthSignal recent_probes = 11;
-  // 模块自己的生命周期状态（设计 6.1）；模块没有生命周期接口时为空。
+  // 模块自己的生命周期状态（设计 3.8），取最近一次新鲜的上报；模块没有生命周期或已停止上报时为空。
   HealthLifecycle lifecycle = 12;
+  // readiness 是最近一次上报的就绪判断：ready、not_ready，空表示上报里没有；not_ready_reason 是未就绪的原因。
+  string readiness = 13;
+  string not_ready_reason = 14;
 }
-// HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子任务、策略实例）。
+// HealthLifecycle 是模块上报的模块级生命周期状态（设计 3.8）。
 message HealthLifecycle {
-  // 汇总阶段：uninitialized | not_ready | ready | warming | running | paused | resuming | resetting | reset_failed | fault。
+  // running | paused | resuming。
   string stage = 1;
-  // 阶段对应的颜色：gray | red | blue | yellow | green | orange | cyan | purple。
-  string color = 2;
-  // 有对象自动暂停、故障或未就绪，而另一些对象在跑（手动、系统暂停是用户意图，不算降级）。
-  bool degraded = 3;
-  string reason = 4;
-  // 模块自身的阶段。
-  string self_stage = 5;
-  // 各阶段的对象数。
-  map<string, int32> counts = 6;
-  // 需要关注的对象（暂停、故障、未就绪）。
-  repeated HealthLifecycleObject attention = 7;
-  // 重启后自动回到原阶段的对象数。
-  int32 recovered = 8;
-  // 模块自身的暂停详情（模块暂停或恢复追赶中）。
-  HealthPause pause = 9;
-  // 控制意图：system_pause | post_reset | 空。
-  string hold = 10;
-  // 暂停的对象（含模块自身）按类型计数：manual | system | auto。
-  map<string, int32> pause_kinds = 11;
-  // 模块自身的恢复追赶进度（模块恢复追赶中）。
-  HealthCatchup catchup = 12;
+  string reason = 2;
+  // 暂停详情（暂停或恢复追赶中）。
+  HealthPause pause = 3;
+  // 恢复追赶进度（恢复追赶中）。
+  HealthCatchup catchup = 4;
 }
 // HealthPause 是暂停详情：类型、原因、操作者、开始时间。
 message HealthPause {
-  // manual | system | auto。
+  // manual | system。
   string kind = 1;
   string reason = 2;
   string by = 3;
@@ -142,50 +127,35 @@ message HealthCatchup {
   int64 done = 2;
   int64 total = 3;
   bool caught_up = 4;
-  // 被谁阻塞（例如上游模块尚未追平）。
+  // 被谁阻塞（例如某个任务、上游模块尚未追平）。
   string blocked_by = 5;
   // 暂停区间里确认无法补采的周期数。
   int32 unfillable = 6;
   string message = 7;
 }
-message HealthLifecycleObject {
-  string kind = 1;
-  string id = 2;
-  string stage = 3;
-  string color = 4;
-  string reason = 5;
-  // 失败的检查项（名称：原因；处理办法）。
-  repeated string failed_checks = 6;
-  // 暂停详情（暂停与恢复追赶阶段）；恢复追赶进度。
-  HealthPause pause = 7;
-  HealthCatchup catchup = 8;
-  // 考虑模块自身状态后的有效阶段。
-  string effective = 9;
-}
-// HealthSystem 是系统状态：健康面（由各模块状态推导）与运行阶段（只由用户命令推进）两个维度。
+// HealthSystem 是系统状态：健康面（有生命周期的模块是否都在上报、都已就绪）与运行阶段（只由用户命令推进）两个维度。
 message HealthSystem {
-  // 健康面：healthy（没有模块未就绪或故障）| attention。
+  // 健康面：healthy | attention（有带生命周期的模块停止上报或未就绪）。
   string health = 1;
-  // 运行阶段：uninitialized | ready | warming | running | paused | partially_paused | resuming | resetting；全部在跑时是 running。
+  // 运行阶段：running | paused | partially_paused | resuming。
   string phase = 2;
-  // 首页圆点的颜色：红（健康面异常）> 紫（重置中）> 青（恢复追赶）> 橙（降级或暂停）> 黄（预热）> 蓝（就绪）> 绿（运行）> 灰。
+  // 首页圆点的颜色：红（有模块停止上报或未就绪）> 青（恢复追赶）> 橙（暂停）> 绿（运行）。
   string color = 3;
-  // 运行中但有部分对象自动暂停、故障：首页显示「运行中 · 降级」；手动、系统暂停不算降级。
-  bool degraded = 4;
-  // 受影响的模块与原因，形如「因子引擎：crypto/spot_1m 变更日志断档」。
-  repeated string issues = 5;
-  // 有模块重启后自动回到原阶段。
-  bool auto_recovered = 6;
-  int32 module_count = 7;
-  // 暂停的模块与对象按类型计数：manual | system | auto。
-  map<string, int32> pause_kinds = 8;
+  // 受影响的模块与原因，形如「策略：系统暂停：切换行情源」。
+  repeated string issues = 4;
+  int32 module_count = 5;
+  // 暂停的模块按类型计数：manual | system。
+  map<string, int32> pause_kinds = 6;
   // 最早的暂停时间（RFC3339）。
-  string paused_since = 9;
+  string paused_since = 7;
   // 恢复追赶中的模块数与其中已追平（待放行）的模块数。
-  int32 resuming_modules = 10;
-  int32 caught_up_modules = 11;
+  int32 resuming_modules = 8;
+  int32 caught_up_modules = 9;
   // 恢复追赶的进度文字，形如「strategy 被 factor-engine 阻塞」「collector 补采 6/10」。
-  repeated string catchup_notes = 12;
+  repeated string catchup_notes = 10;
+  // 带生命周期的模块里上报了未就绪的个数、停止上报（或从未上报）的个数。
+  int32 not_ready_modules = 11;
+  int32 silent_modules = 12;
 }
 message HealthDataset {
   string producer = 1;
@@ -357,8 +327,8 @@ message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationCha
 message DeleteNotificationChannelReq { string channel_id = 1; }
 message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 
-// GetHostPolicyReq 由每台主机的 HostAgent 定期调用，拉取主机策略并缓存到 <部署根>/run/host-policy.json，
-// 供主机守护（moox-runtime watch）与证书巡检直接推送告警。只允许调用方 host-agent。
+// GetHostPolicyReq 由每台主机的 HostAgent 定期调用，拉取主机策略并缓存到 <部署根>/data/host-agent/host-policy.json，
+// 供 HostAgent 的对端检查与证书巡检直接推送告警。只允许调用方 host-agent。
 message GetHostPolicyReq {}
 // HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
 message HostPolicyChannel {
@@ -366,21 +336,11 @@ message HostPolicyChannel {
   string webhook_url = 2;
   string secret = 3;
 }
-// HostWatchdogPolicy 是主机守护参数，空值表示各主机使用守护自己的默认值；时长用 Go 的写法，例如 "10m"。
-message HostWatchdogPolicy {
-  bool disabled = 1;
-  string merge_window = 2;
-  int32 crash_loop_failures = 3;
-  string crash_loop_window = 4;
-  string crash_loop_retry = 5;
-  string crash_loop_slow = 6;
-  string stable_after = 7;
-  string not_ready_alert = 8;
-}
 message GetHostPolicyRsp {
   common.RetInfo ret_info = 1;
   repeated HostPolicyChannel channels = 2;
-  HostWatchdogPolicy watchdog = 3;
+  // monitor_started_at 是 Monitor 进程的启动时间（RFC3339Nano）：各主机采集器按它的变化发现 Monitor 反复重启。
+  string monitor_started_at = 3;
 }
 
 message HostAgentInfo {
@@ -465,7 +425,6 @@ message DoctorExpectedComponent {
   string deployment_status = 5;
   string transport = 6;
   string functional_observability = 7;
-  string health_url = 8;
 }
 message DoctorObservation {
   string kind = 1;
@@ -522,7 +481,7 @@ message GetDoctorContextRsp {
   repeated DoctorObservation missing_observations = 12;
 }
 
-// AlertMuteState 是告警屏蔽的当前状态。屏蔽只停推送：探测、入库、告警评估与记录照常，到期自动恢复。
+// AlertMuteState 是告警屏蔽的当前状态。屏蔽只停推送：入库、告警评估与记录照常，到期自动恢复。
 message AlertMuteState {
   bool muted = 1;
   // since 与 expires_at 为 RFC3339 UTC；未屏蔽时为空。

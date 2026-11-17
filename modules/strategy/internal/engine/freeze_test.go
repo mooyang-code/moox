@@ -23,10 +23,10 @@ func holdOf(decision Decision) map[string]bool {
 	return out
 }
 
-// signal：已持有的标的因所在市场不可用缺数时保持持仓（不判 exit、不清仓），预算先预留给它，其余标的在剩余额度里按比例缩小；
+// 固定标的择时：已持有的标的因所在市场不可用缺数时保持持仓（不判出场、不清仓），份额按上期权重保持，其余持有标的按含它在内的个数平分预算；
 // 市场恢复后照常延续。
-func TestSignalHoldsFrozenPositionAndReservesBudget(t *testing.T) {
-	program := compile(t, signalStrategy, "sig")
+func TestHoldPoolHoldsFrozenPositionAndReservesBudget(t *testing.T) {
+	program := compile(t, holdPoolStrategy, "sig")
 	first := evaluate(t, program, frameOf(program, map[string]Row{"A": values("sig", 1), "B": values("sig", 1)}), State{})
 	assertWeights(t, first, map[string]string{"A": "0.5", "B": "0.5"})
 
@@ -34,7 +34,7 @@ func TestSignalHoldsFrozenPositionAndReservesBudget(t *testing.T) {
 	down.FailedColumns = marketFailed("sig", "A")
 	second := evaluate(t, program, down, first.State)
 	assertOK(t, second)
-	// A 保持（预留 0.5），B 原本平分到 1，被缩到剩余的 0.5。
+	// A 保持上期的 0.5；B 按两个持有标的（含冻结的 A）平分预算，直接分到 0.5。
 	assertWeights(t, second, map[string]string{"A": "0.5", "B": "0.5"})
 	if holds := holdOf(second); len(holds) != 1 || !holds["A"] {
 		t.Fatalf("只有 A 应是保持目标：%v", second.Targets)
@@ -43,7 +43,7 @@ func TestSignalHoldsFrozenPositionAndReservesBudget(t *testing.T) {
 		t.Fatalf("A 应记为保持：%+v", item)
 	}
 	if held := second.State.Rules["s"].Held; len(held) != 2 || held[0] != "A" || held[1] != "B" {
-		t.Fatalf("理论持仓应仍包含 A：%v", held)
+		t.Fatalf("规则状态里的持有应仍包含 A：%v", held)
 	}
 	if second.State.Targets["A|swap"] != "0.5" {
 		t.Fatalf("保持标的的预留权重要写回状态，下一期才能继续保持：%v", second.State.Targets)
@@ -69,7 +69,7 @@ func TestSignalHoldsFrozenPositionAndReservesBudget(t *testing.T) {
 
 // 没有行但有市场不可用证据的已持仓标的同样保持；没有证据的无行按原有逻辑处理（缺数、清仓）。
 func TestFreezeNoRowRequiresMarketEvidence(t *testing.T) {
-	program := compile(t, signalStrategy, "sig")
+	program := compile(t, holdPoolStrategy, "sig")
 	first := evaluate(t, program, frameOf(program, map[string]Row{"A": values("sig", 1), "B": values("sig", 1)}), State{})
 
 	withEvidence := frameOf(program, map[string]Row{"B": values("sig", 1)})
@@ -86,14 +86,14 @@ func TestFreezeNoRowRequiresMarketEvidence(t *testing.T) {
 	if len(holdOf(cleared)) != 0 {
 		t.Fatalf("没有证据的无行不应保持：%v", cleared.Targets)
 	}
-	if item := findItem(t, cleared, "s", "A"); item.Stage != StageMissing || item.Reason != "no_row" {
-		t.Fatalf("A 应记为无行缺数：%+v", item)
+	if item := findItem(t, cleared, "s", "A"); item.Stage != StageMissing || item.Reason != reasonExitMissing+";no_row" {
+		t.Fatalf("A 应记为无行缺数出场：%+v", item)
 	}
 }
 
 // 失败原因是逐币的因子失败时完全按原有逻辑处理：缺数的持仓被清仓。
 func TestFreezeMixedCausesFallBackToExit(t *testing.T) {
-	program := compile(t, signalStrategy, "sig")
+	program := compile(t, holdPoolStrategy, "sig")
 	first := evaluate(t, program, frameOf(program, map[string]Row{"A": values("sig", 1), "B": values("sig", 1)}), State{})
 	frame := frameOf(program, map[string]Row{"A": {Values: map[string]float64{}}, "B": values("sig", 1)})
 	frame.FailedColumns = map[string]map[string]string{"sig": {"A": FailedFactor}}
@@ -107,7 +107,7 @@ func TestFreezeMixedCausesFallBackToExit(t *testing.T) {
 
 // 没有持仓的标的因市场不可用缺数只是缺数，不会凭空产生保持目标。
 func TestFreezeOnlyAppliesToHeldInstruments(t *testing.T) {
-	program := compile(t, signalStrategy, "sig")
+	program := compile(t, holdPoolStrategy, "sig")
 	frame := frameOf(program, map[string]Row{"A": {Values: map[string]float64{}}, "B": values("sig", 1)})
 	frame.FailedColumns = marketFailed("sig", "A")
 	decision := evaluate(t, program, frame, State{})
@@ -118,15 +118,18 @@ func TestFreezeOnlyAppliesToHeldInstruments(t *testing.T) {
 	}
 }
 
-// 已持有标的当期输入齐全、只缺上一根（bars[-1]）时保持，而不是按 exit 输入缺失清仓。
+// 已持有标的当期输入齐全、只缺上一根（bars[-1]）时保持，而不是按出场条件的输入缺失清仓。
 func TestFreezePreviousBarOnly(t *testing.T) {
 	program := compile(t, `name: prev
 rules:
   - id: s
-    type: signal
+    type: rank
     pool: [A, B]
-    entry: "sig > 0"
-    exit: "bars[-1].sig > 0 && bars[0].sig < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "sig > 0"
+      exit: "bars[-1].sig > 0 && bars[0].sig < 0"
     weight: {total: 1}
 portfolio:
   max_missing: 1
@@ -155,10 +158,13 @@ func TestFreezeCountsTowardMissingGuard(t *testing.T) {
 	program := compile(t, `name: guard
 rules:
   - id: s
-    type: signal
+    type: rank
     pool: [A, B]
-    entry: "sig > 0"
-    exit: "sig < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "sig > 0"
+      exit: "sig < 0"
     weight: {total: 1}
 portfolio:
   max_missing: 0.4

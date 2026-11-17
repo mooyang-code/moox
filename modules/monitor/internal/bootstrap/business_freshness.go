@@ -13,6 +13,7 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
@@ -49,8 +50,6 @@ func buildBusinessFreshnessReporterWithInterval(
 		klineInterval = 30 * time.Second
 	}
 	var lastKlineEvaluation time.Time
-	// 各出站主机反向连接首次被观察到断开的时间：断开持续 relayAlertAfter 才判定失败，避免出口 IP 变化等短暂重连误报。
-	relayDownSince := map[string]time.Time{}
 	// 上一次成功评估时被 K 线新鲜度覆盖的结果数据集与视图（键：空间\x00ID\x00频率）。评估按自己的间隔进行，
 	// 没到评估时间的轮次沿用它；评估失败或没有评估器时清空，dataset 新鲜度检查恢复兜底。
 	var lastCoveredDatasets, lastCoveredViews map[string]struct{}
@@ -84,19 +83,7 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		gatewayHosts := make(map[string]*gatewayHost)
 		gatewayNames := map[string]string{"heartbeat": "心跳", "instance_conflict": "实例", "route_sync": "路由同步"}
-		relaySeen := map[string]bool{}
 		for _, signal := range overview.GatewaySignals {
-			if signal.Kind == monitorobservability.RelaySignalKind {
-				relaySeen[signal.HostID] = true
-				key := events.SystemSpaceID + "\x00" + relayCheckID(signal.HostID)
-				item, frozen := relayItem(signal, relayDownSince, overview.GeneratedAt)
-				if frozen {
-					frozenChecks[key] = true
-				} else {
-					items[key] = item
-				}
-				continue
-			}
 			host := gatewayHosts[signal.HostID]
 			if host == nil {
 				host = &gatewayHost{}
@@ -111,11 +98,6 @@ func buildBusinessFreshnessReporterWithInterval(
 				if signal.RawError != "" {
 					host.raws = append(host.raws, signal.RawError)
 				}
-			}
-		}
-		for hostID := range relayDownSince {
-			if !relaySeen[hostID] {
-				delete(relayDownSince, hostID)
 			}
 		}
 		for hostID, host := range gatewayHosts {
@@ -142,7 +124,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		if len(klineEvaluators) == 0 || klineEvaluators[0] == nil {
 			coveredDatasets, coveredViews = nil, nil
 		}
-		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil &&
+		// Collector 模块暂停或恢复追赶时采集是有意停下的：本轮不评估 K 线结果，已有检查保持原状态（不新增告警，也不恢复）。
+		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil && !collectorHalted(overview.Services) &&
 			(lastKlineEvaluation.IsZero() || overview.GeneratedAt.Sub(lastKlineEvaluation) >= klineInterval) {
 			lastKlineEvaluation = overview.GeneratedAt
 			klineEvaluationRan = true
@@ -200,22 +183,13 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 		}
 		lastCoveredDatasets, lastCoveredViews = coveredDatasets, coveredViews
-		for _, service := range overview.Services {
-			if service.ReporterStatus == "" {
+		for _, item := range componentHealthItems(overview.Services) {
+			key := item.spaceID + "\x00" + item.checkID
+			if item.frozen {
+				frozenChecks[key] = true
 				continue
 			}
-			if !service.Enabled {
-				continue
-			}
-			checkID := strings.Join([]string{"reporter", service.NodeID, service.ServiceName}, ":")
-			item := businessFreshnessItem{
-				spaceID: events.SystemSpaceID,
-				checkID: checkID,
-				name:    reporterCheckName(service.ServiceName, service.NodeID),
-				success: service.ReporterStatus == "healthy",
-				reason:  reporterReasonText(service.ReporterStatus),
-			}
-			items[item.spaceID+"\x00"+item.checkID] = item
+			items[key] = item.businessFreshnessItem
 		}
 		factorExpected, factorExpectedKnown := false, false
 		storageScopes := make(map[string]struct{})
@@ -370,7 +344,7 @@ func buildBusinessFreshnessReporterWithInterval(
 				}
 				continue
 			}
-			if strings.HasPrefix(check.CheckID, "gateway:") || strings.HasPrefix(check.CheckID, "reporter:") {
+			if componentCheck(check.CheckID) {
 				if _, expected := items[key]; !expected {
 					if err := disableCheckAndDeleteRules(ctx, repositories, &check); err != nil {
 						return err
@@ -446,7 +420,7 @@ func writeCheckResults(
 				reenableKline := strings.HasPrefix(item.checkID, "kline_freshness:") && item.reason != noLongerExpected
 				// 数据集新鲜度检查因被 K 线新鲜度覆盖而停用，覆盖解除（K 线评估失败、规则移除）后需要恢复兜底。
 				reenableDataset := strings.HasPrefix(item.checkID, "dataset:") && item.reason != noLongerExpected
-				if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") || reenableKline || reenableDataset {
+				if componentCheck(item.checkID) || reenableKline || reenableDataset {
 					check.Enabled = true
 					if err := repositories.Checks.Update(ctx, check); err != nil {
 						return nil, err
@@ -535,6 +509,20 @@ func writeCheckResults(
 	return written, errors.Join(errs...)
 }
 
+// collectorHalted 报告 Collector 模块是否处于暂停或恢复追赶：按它最近一次新鲜上报带的生命周期判断，
+// 上报不新鲜或没有生命周期时算没有暂停。
+func collectorHalted(services []monitorobservability.ServiceStatus) bool {
+	for _, service := range services {
+		if service.ServiceName != "collector" || service.Lifecycle == nil {
+			continue
+		}
+		if stage := lifecycle.Stage(service.Lifecycle.Stage); stage == lifecycle.StagePaused || stage == lifecycle.StageResuming {
+			return true
+		}
+	}
+	return false
+}
+
 // observationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。
 const observationIngestCheckID = "observation:ingest"
 
@@ -586,37 +574,6 @@ func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepo
 
 // noLongerExpected resolves a check whose subject was disabled or removed.
 const noLongerExpected = domain.CheckReasonRetired
-
-// relayAlertAfter 是反向连接断开多久后告警。
-const relayAlertAfter = 3 * time.Minute
-
-// relayCheckID 沿用 gateway: 前缀，主机不再是出站主机时检查随之退役。
-func relayCheckID(hostID string) string { return "gateway:" + hostID + ":relay" }
-
-// relayItem 把一台出站主机的反向连接信号转换成检查结果；frozen 表示保持原状态（无法确认，或断开还没到告警时长）。
-func relayItem(signal monitorobservability.GatewaySignal, downSince map[string]time.Time, now time.Time) (businessFreshnessItem, bool) {
-	item := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: relayCheckID(signal.HostID), name: "主机网关反向连接（" + signal.HostID + "）"}
-	switch signal.Status {
-	case "healthy":
-		delete(downSince, signal.HostID)
-		item.success, item.reason = true, signal.Reason
-		return item, false
-	case "down":
-		since, ok := downSince[signal.HostID]
-		if !ok {
-			since = now
-			downSince[signal.HostID] = since
-		}
-		if now.Sub(since) < relayAlertAfter {
-			return item, true
-		}
-		item.reason = fmt.Sprintf("%s，已持续 %d 分钟。若该主机的 host-agent 仍在上报，说明主机在线、只是反向连接断开（检查它的出口网络与 host-gateway 日志）；"+
-			"若 host-agent 也停止上报，按主机失联处理", signal.Reason, int(now.Sub(since)/time.Minute))
-		item.rawError = signal.RawError
-		return item, false
-	}
-	return item, true
-}
 
 // businessCheckIdentity 返回业务检查在告警里的检查 ID 与名称。
 func businessCheckIdentity(business monitorobservability.BusinessStatus) (checkID, name string) {

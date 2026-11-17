@@ -89,7 +89,6 @@ func newBuildService(engine *primaryHistoryBackfillEngine) *Service {
 		views:        make(map[viewRef]*viewRuntime),
 		catalogViews: make(map[viewRef]*pb.View),
 		indexView:    make(map[string]viewRef),
-		authSecret:   "secret",
 	}
 }
 

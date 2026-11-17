@@ -1,13 +1,10 @@
 // moox-factor-engine consumes collector period events, computes factors with
 // the factorexpr expression engine and writes results to Storage. It only dials out: to
-// moox-factor-mgr through the service gateway, to EventBus and to
-// access.
+// moox-factor-mgr and Storage through the host gateways, and to EventBus.
 package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
@@ -118,8 +113,7 @@ func (v *listFlag) Set(raw string) error {
 	return nil
 }
 
-// health asks the local engine for readiness, signing the request with the
-// MOOX_HEALTH_AUTH_* environment the engine runs with.
+// health 询问本机引擎的就绪状态；健康端口只听本机、不验签。
 func health(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	url := fs.String("url", "http://127.0.0.1:11417/readyz", "engine health URL")
@@ -128,9 +122,6 @@ func health(args []string, out io.Writer) error {
 	}
 	request, err := http.NewRequest(http.MethodGet, *url, nil)
 	if err != nil {
-		return err
-	}
-	if err := signHealthRequest(request); err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
@@ -250,7 +241,7 @@ func backfill(args []string, out io.Writer) error {
 	return json.NewEncoder(out).Encode(summary)
 }
 
-// tune 按本机内存给出内存配置建议（设计第 8 节）；--write 把建议写进 engine.yaml（只写还没设置过的项，--force 覆盖）。
+// tune 按本机内存给出内存配置建议（设计第 8 节），只打印：建议值按 moox.toml 的覆盖表给出，由用户写进 moox.toml 后重新部署生效。
 func tune(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("tune", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
@@ -259,8 +250,6 @@ func tune(args []string, out io.Writer) error {
 	cpus := fs.Int("cpus", runtime.NumCPU(), "CPU 核数")
 	series := fs.Int("series", 0, "计划启用的序列总数（标的数 × series_tag 数，所有数据源合计）；给出后按回看数量 N 估算窗口内存并与建议的窗口上限比较")
 	fields := fs.Int("fields", 7, "数据集的数值字段数（用于窗口内存估算）")
-	write := fs.Bool("write", false, "把建议写进配置文件")
-	force := fs.Bool("force", false, "覆盖已经设置过的值")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -291,50 +280,6 @@ func tune(args []string, out io.Writer) error {
 			}
 		}
 	}
-	if !*write {
-		_, err = fmt.Fprintln(out, "加 --write 写入配置文件")
-		return err
-	}
-	changes, err := engine.TuneConfig(*app, plan, *force)
-	if err != nil {
-		return err
-	}
-	if len(changes) == 0 {
-		_, err = fmt.Fprintln(out, "配置里的相关项都已设置，没有改动（--force 可覆盖）")
-		return err
-	}
-	for _, change := range changes {
-		if _, err := fmt.Fprintf(out, "已写入 %s：%s → %s\n", change.Path, change.Old, change.New); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func signHealthRequest(request *http.Request) error {
-	version := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION"))
-	if version == "" {
-		version = "moox-health-v1"
-	}
-	accessKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"))
-	secretKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"))
-	if accessKey == "" || secretKey == "" {
-		return errors.New("MOOX_HEALTH_AUTH_ACCESS_KEY and MOOX_HEALTH_AUTH_SECRET_KEY are required")
-	}
-	nonceBytes := make([]byte, 32)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return fmt.Errorf("generate health nonce: %w", err)
-	}
-	timestamp := time.Now().Unix()
-	nonce := hex.EncodeToString(nonceBytes)
-	signature, err := requestauth.Sign(secretKey, requestauth.Material{
-		Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: timestamp, Nonce: nonce,
-	})
-	if err != nil {
-		return fmt.Errorf("sign health request: %w", err)
-	}
-	request.Header.Set("X-Moox-Health-Auth", strings.Join([]string{
-		version, accessKey, strconv.FormatInt(timestamp, 10), nonce, signature,
-	}, "/"))
-	return nil
+	_, err = fmt.Fprintf(out, "\n要采用这些值，把下面这段写进 moox.toml，再执行 moox-cli setup deploy --host <因子机> --component factor-engine：\n%s", plan.Overrides())
+	return err
 }

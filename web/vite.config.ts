@@ -75,7 +75,14 @@ export default defineConfig(({ mode }) => {
     server: {
       // host: "0.0.0.0",
       port: 9527,
-      open: false
+      open: false,
+      // 会话 Cookie 只发给同源请求：本机开发经开发服务器代理到控制机（终端 WebSocket 一起代理）
+      proxy: env.VITE_ADMIN_PROXY_TARGET
+        ? {
+            "/api/admin": { target: env.VITE_ADMIN_PROXY_TARGET, changeOrigin: true, ws: true },
+            "/ca": { target: env.VITE_ADMIN_PROXY_TARGET, changeOrigin: true }
+          }
+        : undefined
     }
   };
 });

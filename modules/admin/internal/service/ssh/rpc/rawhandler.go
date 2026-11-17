@@ -1,8 +1,8 @@
 // Package rpc 提供 ssh 直连端点（WebSocket 终端、SFTP 流式上传/下载）的裸 HTTP 处理器，
 // 经统一 HTTP 转发层 rawhandler 分派。
 //
-// 鉴权由 session_id 完成（session 由 CreateSession RPC 创建时已校验登录态），
-// 网关 authorize 对这些路径放行（no_auth_methods），rawhandler 内部校验 session_id 有效性。
+// 鉴权在控制台入口完成：按会话 Cookie 查登录用户，核对 session_id 是这个用户建的 SSH 会话；
+// WebSocket 握手另外要求 Origin 是本站。这里只用 session_id 找到 SSH 连接。
 package rpc
 
 import (
@@ -37,7 +37,7 @@ func WebSocketConnectHandler(svc ssh.Service) http.HandlerFunc {
 		}()
 
 		wsServer := websocket.Server{
-			// 跳过 Origin 检查，允许跨端口/跨源连接
+			// Origin 已在控制台入口按本站核对，这里不再重复检查。
 			Handshake: func(config *websocket.Config, req *http.Request) error {
 				log.Infof("[SSH WebSocket] 握手协议已通过: session=%s", req.URL.Query().Get("session_id"))
 				return nil
@@ -109,7 +109,8 @@ func SftpDownloadHandler(svc ssh.Service) http.HandlerFunc {
 }
 
 // SftpUploadHandler 返回 SFTP 文件上传处理器（multipart）。
-// form: session_id, path, file[] (multipart files)
+// query: session_id；form: path, file[]（multipart 文件）。
+// 会话 ID 只认地址栏参数：控制台入口核对归属的就是它，表单里的同名字段一概不看。
 func SftpUploadHandler(svc ssh.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -117,8 +118,8 @@ func SftpUploadHandler(svc ssh.Service) http.HandlerFunc {
 			writeRawError(w, http.StatusBadRequest, "获取上传文件失败")
 			return
 		}
-		sessionID := r.FormValue("session_id")
-		dstPath := r.FormValue("path")
+		sessionID := r.URL.Query().Get("session_id")
+		dstPath := r.PostFormValue("path")
 		if sessionID == "" || dstPath == "" {
 			writeRawError(w, http.StatusBadRequest, "session_id/path 不能为空")
 			return

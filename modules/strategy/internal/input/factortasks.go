@@ -14,8 +14,9 @@ import (
 	"github.com/mooyang-code/moox/packages/factorname"
 )
 
-// 策略实例与因子任务的关联、参数提交（设计 6.2、8.1、8.3）。实例创建时选定因子任务；第一次启用时调用 BindFactorTask
-// 与任务正式关联（独占、永久，幂等）；每期求出的下一期参数经结果表里的待投递记录异步提交。
+// 策略实例与因子任务的关联、参数提交（设计 6.2、8.1、8.3）。实例创建时选定因子任务；声明了 factor_params 的实例第一次启用时
+// 调用 BindFactorTask 与主帧任务正式关联（独占、永久，幂等），其余实例不关联、只读任务的列；每期求出的下一期参数经结果表里的
+// 待投递记录异步提交。
 
 // ParamDecl 是因子定义声明的一个可调参数。
 type ParamDecl = dsl.ParamDecl
@@ -68,9 +69,10 @@ type BoundTask struct {
 // ErrFactorTaskNotFound 表示因子任务在 Factor 里已经不存在（例如随实例删除到一半）。
 var ErrFactorTaskNotFound = errors.New("因子任务不存在")
 
-// FactorTaskRecord 是删除实例时要看的任务信息：所在空间、结果数据集与关联的实例。
+// FactorTaskRecord 是启用与删除实例时要看的任务信息：所在空间、状态、结果数据集与关联的实例。
 type FactorTaskRecord struct {
 	SpaceID         string
+	Status          string
 	ResultDatasetID string
 	BoundInstanceID string
 }
@@ -91,7 +93,7 @@ func (c *RPCClient) GetFactorTask(ctx context.Context, taskID string) (FactorTas
 		return FactorTaskRecord{}, err
 	}
 	task := rsp.GetFactorTask()
-	return FactorTaskRecord{SpaceID: task.GetSpaceId(), ResultDatasetID: task.GetResultDatasetId(), BoundInstanceID: task.GetBoundInstanceId()}, nil
+	return FactorTaskRecord{SpaceID: task.GetSpaceId(), Status: task.GetStatus(), ResultDatasetID: task.GetResultDatasetId(), BoundInstanceID: task.GetBoundInstanceId()}, nil
 }
 
 // factorTaskPageSize 与 factorTaskMaxPages 是列出全部因子任务时的每页条数与翻页上限。
@@ -156,9 +158,11 @@ func (c *RPCClient) deleteBoundTask(ctx context.Context, operation string, req *
 	return retError(operation, rsp.GetRetInfo())
 }
 
-// FactorTasks 是任务关联与参数提交用到的 FactorMgr 接口。
+// FactorTasks 是任务关联、启用前核对任务状态与参数提交用到的 FactorMgr 接口。
 type FactorTasks interface {
 	BindFactorTask(ctx context.Context, taskID, instanceID string) (BoundTask, error)
+	// GetFactorTask 读取任务；任务不存在时返回 ErrFactorTaskNotFound。
+	GetFactorTask(ctx context.Context, taskID string) (FactorTaskRecord, error)
 	SubmitFactorParams(ctx context.Context, submission ParamSubmission) ([]MemberSubmitResult, error)
 }
 
@@ -225,7 +229,8 @@ type VarMember struct {
 }
 
 // CheckFactorParams 对照任务的可变成员检查 DSL（设计 8.1、8.2）：factor_params 与 params() 引用的成员必须是任务的可变成员，
-// 参数名必须是该因子声明的参数；任务的每个可变成员都要在 factor_params 里有输出（可变成员与 factor_params 一一对应）。
+// 参数名必须是该因子声明的参数。声明了 factor_params 的策略会关联任务、逐期提交参数，所以任务的每个可变成员都要在 factor_params
+// 里有输出（可变成员与 factor_params 一一对应）；没有声明的策略不关联任务，只读可变成员的列，参数由关联它的实例提交（没有关联时用默认参数）。
 func CheckFactorParams(strategy dsl.Strategy, members map[string]VarMember, refs []dsl.ParamRef) error {
 	available := func() string {
 		keys := make([]string, 0, len(members))
@@ -249,7 +254,7 @@ func CheckFactorParams(strategy dsl.Strategy, members map[string]VarMember, refs
 	check := func(where, key, name string) error {
 		member, ok := members[key]
 		if !ok {
-			return fmt.Errorf("%s：成员 %s 不是关联任务的可变成员（%s）", where, key, available())
+			return fmt.Errorf("%s：成员 %s 不是所选任务的可变成员（%s）", where, key, available())
 		}
 		if !declared(member, name) {
 			names := make([]string, 0, len(member.Params))
@@ -271,6 +276,9 @@ func CheckFactorParams(strategy dsl.Strategy, members map[string]VarMember, refs
 		if err := check(fmt.Sprintf(`params("%s", "%s")`, ref.Member, ref.Name), ref.Member, ref.Name); err != nil {
 			return err
 		}
+	}
+	if len(strategy.FactorParams) == 0 {
+		return nil
 	}
 	for _, key := range sortedMapKeys(members) {
 		if _, ok := written[key]; !ok {

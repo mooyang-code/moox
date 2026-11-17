@@ -1,3 +1,4 @@
+import type { StrategyInstance } from "@/api/strategy-types";
 import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 
 export type EnabledFilter = "" | "true" | "false";
@@ -52,4 +53,14 @@ export function emptyKind(options: { loading: boolean; error: string; count: num
   if (options.loading || options.count > 0) return "none";
   if (options.error) return "error";
   return options.filtered ? "no-match" : "no-instances";
+}
+
+/**
+ * 实例是否在试运行：启用、挂了组合账户、还没确认实盘。试运行的目标只记为影子目标、不下单；
+ * 没挂账户的实例启用时就确认了，不会出现试运行。
+ */
+export function isTrialInstance(
+  instance: Pick<StrategyInstance, "enabled" | "logical_account_id" | "confirmed_at"> | null | undefined
+): boolean {
+  return Boolean(instance?.enabled && instance.logical_account_id && !instance.confirmed_at);
 }

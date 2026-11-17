@@ -214,7 +214,7 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "实盘组合", ExecutionMode: "LIVE", SettlementAsset: "USDT",
-			OwnerInstanceID: "i", OwnerSessionID: "s", FundSettingsJSON: fundSettings, AutomationState: "PAUSED", PauseReason: "configure",
+			FundSettingsJSON: fundSettings, AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -685,8 +685,8 @@ func TestPendingReasonBecomesUnreducedOnceTheRatioIsSafe(t *testing.T) {
 // 自主下单组合没有恢复这一步：减仓不暂停、不改写暂停原因；上一次风控减仓结束后比值再跌破阈值，照样再减一次。
 func TestManualGroupReducesAgainOnceTheLastReduceFinished(t *testing.T) {
 	f := newFixture(t, "", "400")
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL,
-		c_owner_session_id = NULL, c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
 	setEquity := func(equity string) {
 		t.Helper()
 		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_snapshot_json = json_set(c_snapshot_json, '$.exchange_equity', ?)`, equity).Error)

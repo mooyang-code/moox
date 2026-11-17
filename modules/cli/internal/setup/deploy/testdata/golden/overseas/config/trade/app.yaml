@@ -1,0 +1,22 @@
+# MooX Trade 服务应用配置
+# Trade 模块统一承载账户域与交易域，使用独立 SQLite 库。
+
+database:
+  path: /data/moox/data/trade/moox_trade.db
+gateway_client:
+  caller: trade
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: /data/moox/secrets/host.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: overseas
+  local_address: 127.0.0.1:11002
+  ca_file: /data/moox/secrets/moox-ca.crt
+eventbus:
+  enabled: true
+  urls:
+    - tls://203.0.113.11:4222
+  credential_file: /data/moox/secrets/eventbus/trade-eventbus.yaml
+runtime:
+  # Production order submission is disabled unless explicitly enabled.
+  # TESTNET and account synchronization are unaffected.
+  live_trading_enabled: false

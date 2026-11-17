@@ -38,7 +38,7 @@ type TargetWorker struct {
 	Now             func() time.Time
 	ConvergeTimeout time.Duration
 	Metrics         TargetRunMetrics
-	// Gate 非空时是生命周期门禁：返回 false（系统或手动暂停、恢复追赶、重置）时不再收敛任何目标，
+	// Gate 非空时是生命周期门禁：返回 false（系统或手动暂停、恢复追赶）时不再收敛任何目标，
 	// 已经提交的订单请求照常结束，由 Quiesce 等待。暂停不撤单、不平仓，未收敛的目标保持原状。
 	Gate func() bool
 	// inflight 是正在收敛（可能正在向交易所提交订单）的目标数。

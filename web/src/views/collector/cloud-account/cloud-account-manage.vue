@@ -1,17 +1,10 @@
 <template>
-  <a-modal
-    v-model:visible="visible"
-    title="云账户管理"
-    :width="960"
-    :mask-closable="false"
-    :footer="false"
-    @cancel="handleCancel"
-  >
+  <a-modal v-model:visible="visible" title="云账号" :width="960" :mask-closable="false" :footer="false" @cancel="handleCancel">
     <div class="cloud-account-manage">
       <a-row>
         <a-button type="primary" status="success" @click="onAdd">
           <template #icon><icon-plus /></template>
-          新建云账户
+          新建云账号
         </a-button>
       </a-row>
 
@@ -25,7 +18,7 @@
         style="margin-top: var(--moox-space-4)"
       >
         <template #columns>
-          <a-table-column title="账户名称" data-index="account_name" :width="180"></a-table-column>
+          <a-table-column title="账号名称" data-index="account_name" :width="180"></a-table-column>
           <a-table-column title="云厂商" data-index="provider" :width="120">
             <template #cell="{ record }">{{ providerName(record.provider) }}</template>
           </a-table-column>
@@ -49,9 +42,9 @@
               <span>{{ record.cos_bucket || "-" }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="创建时间" data-index="created_at" :width="180">
+          <a-table-column title="创建时间" data-index="create_time" :width="180">
             <template #cell="{ record }">
-              {{ formatTime(record.created_at || record.create_time) }}
+              {{ formatTime(record.create_time) }}
             </template>
           </a-table-column>
           <a-table-column title="操作" :width="160" align="center" fixed="right">
@@ -75,15 +68,15 @@
     <!-- 新增/编辑弹窗 -->
     <a-modal
       v-model:visible="formVisible"
-      :title="isEdit ? '编辑云账户' : '新建云账户'"
+      :title="isEdit ? '编辑云账号' : '新建云账号'"
       :width="600"
       :mask-closable="false"
       @cancel="handleFormCancel"
       :on-before-ok="handleFormOk"
     >
       <a-form :model="form" layout="vertical" ref="formRef">
-        <a-form-item field="account_name" label="账户名称" required>
-          <a-input v-model="form.account_name" placeholder="请输入账户名称" />
+        <a-form-item field="account_name" label="账号名称" required>
+          <a-input v-model="form.account_name" placeholder="请输入账号名称" />
         </a-form-item>
 
         <a-form-item field="provider" label="云厂商" required>
@@ -124,10 +117,6 @@
         <a-form-item field="cos_bucket" label="COS桶名">
           <a-input v-model="form.cos_bucket" placeholder="请输入COS桶名（可选）" />
         </a-form-item>
-
-        <a-form-item field="extra_config" label="额外配置（可选）">
-          <a-textarea v-model="form.extra_config" placeholder='JSON格式的额外配置，例如：{"region": "ap-guangzhou"}' :rows="4" />
-        </a-form-item>
       </a-form>
     </a-modal>
   </a-modal>
@@ -143,13 +132,11 @@ import {
   createCloudAccount,
   updateCloudAccount,
   deleteCloudAccount,
-  type CloudAccount
+  type CloudAccount,
+  type CloudAccountInput
 } from "@/api/cloud-account";
 import { listSecrets, type Secret } from "@/api/admin/secret";
-import { useSpaceStore } from "@/store/modules/space";
-import { cloudAccountDeleteText, instancesUsingAccount } from "./cloud-account-delete";
-
-const spaceStore = useSpaceStore();
+import { CLOUD_ACCOUNT_DELETE_TEXT, cloudAccountDeleteError } from "./cloud-account-delete";
 
 // Props
 const props = defineProps<{
@@ -159,7 +146,6 @@ const props = defineProps<{
 // Emits
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
-  refresh: [];
 }>();
 
 // 响应式数据
@@ -172,18 +158,17 @@ const isEdit = ref(false);
 const formRef = ref();
 
 // 表单数据
-const defaultForm = {
+const defaultForm: CloudAccountInput = {
   account_id: "",
   account_name: "",
   provider: "tencent",
   credential_secret_id: "",
   app_id: "",
   cos_region: "",
-  cos_bucket: "",
-  extra_config: ""
+  cos_bucket: ""
 };
 
-const form = reactive({ ...defaultForm });
+const form = reactive<CloudAccountInput>({ ...defaultForm });
 
 // COS URL 输入框
 const cosUrl = ref("");
@@ -211,8 +196,7 @@ const loadAccountList = async () => {
     const accounts = await getCloudAccountList();
     accountList.value = accounts || [];
   } catch (error) {
-    console.error("加载云账户列表失败:", error);
-    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudfunction 服务已部署");
+    Message.error(`加载云账号失败：${error instanceof Error && error.message ? error.message : "未知原因"}`);
   } finally {
     loading.value = false;
   }
@@ -256,22 +240,17 @@ const onEdit = (record: CloudAccount) => {
     credential_secret_id: record.credential_secret_id,
     app_id: record.app_id || "",
     cos_region: record.cos_region || "",
-    cos_bucket: record.cos_bucket || "",
-    extra_config: record.extra_config || ""
+    cos_bucket: record.cos_bucket || ""
   });
   cosUrl.value = "";
   formVisible.value = true;
 };
 
-// 删除：确认框写清账户名、在用的实例数和后果；失败时显示后端给的原因，确认框保持打开
-const confirmDelete = async (record: CloudAccount) => {
-  const inUse = await instancesUsingAccount(
-    record.account_id,
-    spaceStore.spaces.map(space => space.space_id)
-  );
+// 删除：是否还在用由 Collector 判断；被拒绝时显示它给的原因，确认框保持打开
+const confirmDelete = (record: CloudAccount) => {
   Modal.confirm({
-    title: `删除云账户「${record.account_name || record.account_id}」？`,
-    content: cloudAccountDeleteText(inUse),
+    title: `删除云账号「${record.account_name || record.account_id}」？`,
+    content: CLOUD_ACCOUNT_DELETE_TEXT,
     okText: "删除",
     okButtonProps: { status: "danger" },
     cancelText: "取消",
@@ -279,12 +258,11 @@ const confirmDelete = async (record: CloudAccount) => {
       try {
         await deleteCloudAccount(record.account_id);
       } catch (error) {
-        Message.error(`删除云账户失败：${error instanceof Error && error.message ? error.message : "未知原因"}`);
+        Message.error(cloudAccountDeleteError(error));
         return false;
       }
       Message.success("删除成功");
       await loadAccountList();
-      emit("refresh");
       return true;
     }
   });
@@ -342,51 +320,19 @@ const handleFormOk = async (): Promise<boolean> => {
   const errors = await formRef.value?.validate();
   if (errors) return false;
 
-  if (form.extra_config) {
-    try {
-      JSON.parse(form.extra_config);
-    } catch {
-      Message.error("额外配置必须是有效的 JSON");
-      return false;
-    }
-  }
-
   const submission = accountScope.begin();
   try {
-    if (isEdit.value) {
-      const updateData: any = {
-        account_id: form.account_id,
-        account_name: form.account_name,
-        provider: form.provider,
-        credential_secret_id: form.credential_secret_id,
-        app_id: form.app_id,
-        cos_region: form.cos_region,
-        cos_bucket: form.cos_bucket,
-        extra_config: form.extra_config || "{}"
-      };
-
-      await updateCloudAccount(form.account_id, updateData);
-    } else {
-      // 新增
-      await createCloudAccount({
-        account_id: form.account_id,
-        account_name: form.account_name,
-        provider: form.provider,
-        credential_secret_id: form.credential_secret_id,
-        app_id: form.app_id,
-        cos_region: form.cos_region,
-        cos_bucket: form.cos_bucket,
-        extra_config: form.extra_config || "{}"
-      });
-    }
+    // 创建与更新都是整行写入
+    const account: CloudAccountInput = { ...form };
+    if (isEdit.value) await updateCloudAccount(account);
+    else await createCloudAccount(account);
 
     Message.success(isEdit.value ? "编辑成功" : "新建成功");
     if (!submission.isCurrent()) return false;
     void loadAccountList();
-    emit("refresh");
     return true;
-  } catch (error: any) {
-    Message.error(error?.message || "保存云账户失败");
+  } catch (error) {
+    Message.error(`保存云账号失败：${error instanceof Error && error.message ? error.message : "未知原因"}`);
     return false;
   }
 };
@@ -399,7 +345,7 @@ const handleCancel = () => {
 // 云厂商只有腾讯云
 const providerName = (provider: string) => (provider === "tencent" ? "腾讯云" : provider);
 
-// 代码包、云账户是全局对象：时间按 UTC 带后缀
+// 云账号是全局对象：时间按 UTC 带后缀
 const formatTime = (time: string | undefined) => formatInstant(time, "UTC");
 
 // 提交作用域：重新打开表单会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单

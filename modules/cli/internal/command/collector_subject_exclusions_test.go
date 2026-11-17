@@ -3,10 +3,10 @@ package command
 import (
 	"bytes"
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +39,7 @@ func (g *exclusionFakeGateway) Forward(context.Context, string, string, int, []b
 func TestCollectorSubjectExclusionCommands(t *testing.T) {
 	gateway := &exclusionFakeGateway{}
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return gateway, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return gateway, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 	ctx := context.Background()
 	var out bytes.Buffer

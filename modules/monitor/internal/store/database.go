@@ -3,8 +3,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -31,14 +29,6 @@ var gormLogger = logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config
 
 type Store struct {
 	db *gorm.DB
-}
-
-// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
-func (s *Store) SQLDB() (*sql.DB, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("monitor store is not open")
-	}
-	return s.db.DB()
 }
 
 func Open(path string) (*Store, error) {

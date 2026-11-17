@@ -3,10 +3,6 @@ package doctor
 import (
 	"context"
 	"errors"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -59,12 +55,12 @@ func supervisorSnapshot(t *testing.T, node string) *monitorpb.GetDoctorContextRs
 	return &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum: embeddedManifestChecksum(t),
 		ExpectedComponents: []*monitorpb.DoctorExpectedComponent{
-			{ComponentId: "factor-engine", NodeId: node, Expected: true, Transport: "health_only", FunctionalObservability: "deferred", HealthUrl: "http://192.168.0.103:11417"},
+			{ComponentId: "factor-engine", NodeId: node, Expected: true, Transport: "delegated", FunctionalObservability: "deferred"},
 		},
 	}
 }
 
-func TestDiagnoseChecksTheSystemdSupervisorOfExternalPrograms(t *testing.T) {
+func TestDiagnoseChecksTheSystemdSupervisorOfEveryComponent(t *testing.T) {
 	snapshot := supervisorSnapshot(t, "factor")
 	var asked []string
 	options := DiagnoseOptions{
@@ -79,50 +75,19 @@ func TestDiagnoseChecksTheSystemdSupervisorOfExternalPrograms(t *testing.T) {
 	check := result.CheckByID("service.supervisor:factor-engine@factor")
 	require.NotNil(t, check)
 	assert.Equal(t, core.StatusFail, check.Status, "active 但 disabled 不通过")
-	assert.Equal(t, []string{"factor/moox-factor-engine"}, asked)
+	assert.Equal(t, []string{"factor/moox-factor-engine.service"}, asked)
 
 	options.Systemd = nil
 	result, err = RunDiagnose(t.Context(), options)
 	require.NoError(t, err)
 	assert.Equal(t, core.StatusUnknown, result.CheckByID("service.supervisor:factor-engine@factor").Status)
 
-	// 普通组件不产生托管检查。
+	// 普通组件同样由 systemd 托管；第三方程序与未知组件不在诊断清单里。
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
-	_, systemd := systemdUnit(manifest, "access")
+	unit, systemd := systemdUnit(manifest, "trade")
+	assert.True(t, systemd)
+	assert.Equal(t, "moox-trade.service", unit)
+	_, systemd = systemdUnit(manifest, "seaweedfs")
 	assert.False(t, systemd)
-}
-
-func TestDiagnoseProbesOutboundHostHealthThroughTheRelay(t *testing.T) {
-	snapshot := supervisorSnapshot(t, "factor")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/readyz" || r.Header.Get("X-Moox-Health-Auth") == "" {
-			http.Error(w, "unexpected", http.StatusBadRequest)
-			return
-		}
-		_, _ = w.Write([]byte(`{"ready":true}`))
-	}))
-	defer server.Close()
-	snapshot.ExpectedComponents[0].HealthUrl = "http://192.168.0.103:11417/readyz"
-	var dialed []string
-	relay := &RelayProber{
-		Auth:     HealthAuth{AccessKey: "access", SecretKey: strings.Repeat("s", 32)},
-		Outbound: func(node string) bool { return node == "factor" },
-		Dial: func(ctx context.Context, hostID string, port int) (net.Conn, error) {
-			dialed = append(dialed, hostID)
-			return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
-		},
-	}
-	options := DiagnoseOptions{NodeID: "factor", Client: contextClientStub{rsp: snapshot}, CheckIDs: []string{"service.health:factor-engine@factor"}, Relay: relay}
-	result, err := RunDiagnose(t.Context(), options)
-	require.NoError(t, err)
-	assert.Equal(t, core.StatusPass, result.CheckByID("service.health:factor-engine@factor").Status)
-	assert.Equal(t, []string{"factor"}, dialed, "只能出站的主机经中转拨号")
-
-	// 非出站节点不走中转：直连探测被默认策略拒绝（只允许本机）。
-	relay.Outbound = func(string) bool { return false }
-	result, err = RunDiagnose(t.Context(), options)
-	require.NoError(t, err)
-	assert.Equal(t, core.StatusFail, result.CheckByID("service.health:factor-engine@factor").Status)
-	assert.Len(t, dialed, 1)
 }

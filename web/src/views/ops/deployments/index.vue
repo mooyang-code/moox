@@ -32,7 +32,8 @@
                   <small v-if="group.host.label" class="host-id">{{ group.host.host_id }}</small>
                   <a-tag v-if="group.host.host_id === controlHostId">控制主机 · 受保护</a-tag
                   ><a-tag v-if="group.host.status === 'disabled'">已停用</a-tag
-                  ><a-tag v-if="group.host.reachability === 'outbound'">只能出站 · 经控制主机中转</a-tag>
+                  ><a-tag v-if="group.host.reachability === 'outbound'">只能出站 · 经控制主机中转</a-tag
+                  ><a-tag v-if="group.host.external_entry">外部入口 :11004</a-tag>
                 </h3>
                 <p>
                   {{ group.host.address }}
@@ -148,8 +149,8 @@
               >
             </p>
             <p class="hashes">
-              路由定义 {{ currentRoutes.definition_hash }}<br />期望快照 {{ currentRoutes.gateway_status?.expected_hash || "暂无"
-              }}<br />已应用快照 {{ currentRoutes.gateway_status?.applied_hash || "暂无" }}
+              期望快照 {{ currentRoutes.gateway_status?.expected_hash || "暂无" }}<br />已应用快照
+              {{ currentRoutes.gateway_status?.applied_hash || "暂无" }}
             </p>
             <p v-if="currentRoutes.gateway_status?.last_error" class="error">{{ currentRoutes.gateway_status.last_error }}</p>
           </div>
@@ -225,35 +226,27 @@
             <dd>{{ detail.row.definition?.scope }} / {{ detail.row.definition?.replicas }}</dd>
             <dt>端口</dt>
             <dd>{{ componentPorts(detail.row.definition).join(", ") || "无监听端口" }}</dd>
-            <dt>健康检查</dt>
-            <dd>
-              {{ detail.row.definition?.health.kind
-              }}<span v-if="detail.row.definition?.health.port"> :{{ detail.row.definition.health.port }}</span>
-              {{ detail.row.health?.probe_url }}
-            </dd>
+            <dt>健康端口</dt>
+            <dd>{{ detail.row.definition?.health.port ? `${detail.row.definition.health.port}（只听本机）` : "—" }}</dd>
             <dt>当前健康</dt>
-            <dd>{{ statusLabel(detail.row.status) }} · {{ detail.row.health?.reason || "暂无健康观测" }}</dd>
-            <dt>主动探测 / Reporter</dt>
-            <dd>{{ statusLabel(detail.row.health?.probe?.status) }} / {{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
+            <dd>{{ statusLabel(detail.row.status) }} · {{ detail.row.health?.reason || "暂无上报" }}</dd>
+            <dt>上报</dt>
+            <dd>{{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
             <dt>登记 / 更新</dt>
             <dd>
               {{ formatInstant(detail.row.deployment.created_at, displayZone) }} /
               {{ formatInstant(detail.row.deployment.updated_at, displayZone) }}
             </dd>
           </dl>
-          <section v-if="detail.row.health?.probe?.raw_error">
-            <h4>主动探测</h4>
-            <RawError :value="detail.row.health.probe.raw_error" />
-          </section>
           <section v-if="detail.row.health?.reporter?.raw_error">
-            <h4>Reporter</h4>
+            <h4>上报</h4>
             <RawError :value="detail.row.health.reporter.raw_error" />
           </section>
           <section v-for="service in detail.row.definition?.services || []" :key="service.path" class="service-detail">
             <h4>{{ service.path }} :{{ service.port }}</h4>
-            <p>方法：{{ service.methods.join(", ") }}</p>
-            <p v-for="(grant, index) in service.acl" :key="index">
-              {{ grant.methods.join(", ") }} → {{ grant.callers.join(", ") }}
+            <p v-for="method in service.methods" :key="method.name">
+              {{ method.name }}{{ method.read_only ? "（只读）" : "" }} →
+              {{ methodCallerIds(method).join(", ") || "无调用方" }}
             </p>
           </section>
           <h4>上报实例</h4>
@@ -272,7 +265,7 @@ import { computed, ref, watch } from "vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
 import { statusColor, statusLabel } from "@/views/ops/monitor/health-display";
-import { componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
+import { componentPorts, gatewayLabel, groupRoutes, methodCallerIds, routeSync } from "./model";
 import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
 import { formatInstant } from "@/utils/time-zone";

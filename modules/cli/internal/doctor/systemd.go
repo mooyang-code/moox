@@ -6,9 +6,10 @@ import (
 	"strings"
 
 	core "github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// SystemdState 是 systemd 用户服务的实际状态：外部程序要同时满足开机自启、正在运行和 linger 才算托管正常
+// SystemdState 是 systemd 用户服务的实际状态：组件要同时满足开机自启、正在运行和 linger 才算托管正常
 // （linger 关闭时用户登出后服务会被停掉）。
 type SystemdState struct {
 	Enabled bool
@@ -64,11 +65,12 @@ func supervisorResult(id, unit string, state SystemdState, err error) core.Check
 	return checkResult(id, core.StatusFail, summary, nil, "restart_service_manually")
 }
 
-// systemdUnit 返回组件的 systemd 用户服务名；不是 systemd_user 托管时 ok 为 false。
+// systemdUnit 返回组件的 systemd 用户服务名（moox-<组件>.service）：全部组件都由 systemd 用户服务托管，
+// 不在诊断清单里（未知组件、第三方程序）时 ok 为 false。
 func systemdUnit(manifest core.Manifest, componentID string) (string, bool) {
 	for _, component := range manifest.Components {
-		if component.ComponentID == componentID && component.Supervisor == "systemd_user" {
-			return component.Unit, true
+		if component.ComponentID == componentID {
+			return servicecatalog.UnitName(componentID), true
 		}
 	}
 	return "", false

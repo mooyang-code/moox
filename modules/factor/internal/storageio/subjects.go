@@ -4,33 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
-	"strings"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
-
-// AppID is the Storage identity of the factor module. moox-factor-mgr and
-// moox-factor-engine both write factor results under it.
-const AppID = "moox-factor"
-
-// AuthInfo signs the factor AppID with MOOX_STORAGE_PRIMARY_AUTH_SECRET when
-// the secret is configured.
-func AuthInfo(requestID string) *commonpb.AuthInfo {
-	return NewAuthInfo(requestID, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
-}
-
-// NewAuthInfo signs the factor AppID with an explicit Storage secret.
-func NewAuthInfo(requestID, secret string) *commonpb.AuthInfo {
-	auth := &commonpb.AuthInfo{AppId: AppID, Operator: AppID, RequestId: requestID}
-	if secret = strings.TrimSpace(secret); secret != "" {
-		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
-	}
-	return auth
-}
 
 const subjectPageSize = 1000
 
@@ -52,7 +30,7 @@ func (c *Client) listDatasetSubjects(ctx context.Context, spaceID, datasetID str
 	seen := make(map[string]struct{})
 	for page := uint32(1); ; page++ {
 		rsp, err := c.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
-			AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID,
+			SpaceId: spaceID, DatasetId: datasetID,
 			Page: &commonpb.Page{Page: page, Size: subjectPageSize},
 		})
 		if err != nil {

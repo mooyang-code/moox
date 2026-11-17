@@ -9,22 +9,16 @@ import (
 	"strings"
 )
 
-// TightenPrivate 把属于当前用户、别人不可写的目录收紧到 0700。其他情况不动目录，交给 OpenPhysicalRoot 报错。
-func TightenPrivate(name string) error {
-	info, err := os.Lstat(name)
-	if err != nil || !info.IsDir() || !Owned(info) || info.Mode().Perm()&0o022 != 0 || info.Mode().Perm() == 0o700 {
-		return nil
-	}
-	return os.Chmod(name, 0o700)
-}
-
 func OpenPhysicalRoot(name string, private bool) (*os.Root, error) {
 	if name == "" || !filepath.IsAbs(name) || filepath.Clean(name) != name || name == string(filepath.Separator) || strings.ContainsAny(name, "\x00\r\n") {
 		return nil, errors.New("private material requires an absolute clean directory")
 	}
 	physical, err := filepath.EvalSymlinks(name)
 	if err != nil || physical != name {
-		return nil, errors.New("private material directory must be physical")
+		if err == nil {
+			return nil, fmt.Errorf("private material directory must be physical: %s 的路径里有符号链接，请改用它的实际路径 %s", name, physical)
+		}
+		return nil, fmt.Errorf("private material directory must be physical: %s 不存在或无法解析", name)
 	}
 	info, err := os.Lstat(name)
 	if err != nil || !info.IsDir() || !Owned(info) || info.Mode().Perm()&0o022 != 0 || private && info.Mode().Perm() != 0o700 {

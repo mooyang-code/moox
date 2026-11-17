@@ -3,10 +3,10 @@ package command
 import (
 	"bytes"
 	"context"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +35,7 @@ func (g *archiveFakeGateway) Forward(context.Context, string, string, int, []byt
 func useArchiveGateway(t *testing.T, g *archiveFakeGateway) {
 	t.Helper()
 	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *setupconfig.Snapshot) (commandGateway, error) { return g, nil }
+	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) { return g, nil }
 	t.Cleanup(func() { openCommandGateway = previous })
 }
 

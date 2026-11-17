@@ -75,6 +75,16 @@ func (p MemoryPlan) CheckWindowEstimate(estimate int64) string {
 	return fmt.Sprintf("窗口内存估算 %s，超过建议的窗口上限 %s：调小 window.lookback、减少标的数，或加内存", formatBytes(estimate), formatBytes(p.Window))
 }
 
+// Overrides 把内存建议写成 moox.toml 的覆盖表：用户贴进 moox.toml 后重新部署因子引擎生效，重新部署不会丢。
+func (p MemoryPlan) Overrides() string {
+	var b strings.Builder
+	b.WriteString("[overrides.\"factor-engine\".\"engine.yaml\"]\n")
+	fmt.Fprintf(&b, "\"memory.total_budget\" = %q\n", ConfigValue(p.TotalBudget))
+	fmt.Fprintf(&b, "\"window.max_memory\" = %q\n", ConfigValue(p.Window))
+	fmt.Fprintf(&b, "\"compute.max_memory\" = %q\n", ConfigValue(p.Compute))
+	return b.String()
+}
+
 // Summary 是供人看的多行说明。
 func (p MemoryPlan) Summary() string {
 	var b strings.Builder

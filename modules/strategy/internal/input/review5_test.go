@@ -9,7 +9,6 @@ import (
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 )
 
 // stockDay 返回 A 股日线某个交易日期的行键：该日期的 UTC 零点（日期键）。
@@ -96,7 +95,7 @@ func TestPreviousFactorsOnlyForFactorColumns(t *testing.T) {
 	client := newFakeClient("spot")
 	klineOnly := parseStrategy(t, `name: x
 rules:
-  - {id: r, type: signal, pool: [BTC-USDT], entry: "bars[-1].close < bars[0].close && ma_20 > 0", exit: "close < 1", weight: 1}
+  - {id: r, type: rank, pool: [BTC-USDT], score: "0", select: {top: 10000}, hold: {entry: "bars[-1].close < bars[0].close && ma_20 > 0", exit: "close < 1"}, weight: 1}
 `)
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, klineOnly)
 	if err != nil || !program.UsesPreviousBar || len(resolved.PreviousFactors) != 0 || len(resolved.ReadinessBinding().PreviousFactors) != 0 {
@@ -165,19 +164,19 @@ func TestRangeLoaderReportsIndexChange(t *testing.T) {
 	}
 }
 
-// View 的活动索引与代次取自 DataView.GetViewState（用 DataView 的身份）：代次由索引 ID、store_id 与建成序号组成。
+// View 的活动索引与代次取自 DataView.GetViewState：代次由索引 ID、store_id 与建成序号组成。
 // 原地重建后索引 ID 不变、建成序号变，存储重建后 store_id 变，两种情况都算换代。索引还没建好或 storage-view 还没登记
 // 该 View 时活动索引与代次为空，不当作 View 被删；复核代次遇到还没登记返回可重试错误。
 func TestGetViewReadsGenerationFromViewState(t *testing.T) {
 	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active"}}
 	state := &viewStateStub{rsp: builtState("idx_a", "store_1", 7)}
-	client := &RPCClient{Metadata: metadata, DataView: state, Auth: &commonpb.AuthInfo{AppId: "meta"}, ViewAuth: &commonpb.AuthInfo{AppId: "view"}}
+	client := &RPCClient{Metadata: metadata, DataView: state}
 	info, err := client.GetView(context.Background(), "space", "view")
 	if err != nil || info.ActiveIndexID != "idx_a" || info.Generation != "idx_a@store_1#7" {
 		t.Fatalf("活动索引与代次应取自 GetViewState：%+v err=%v", info, err)
 	}
-	if got := state.stateReq[0]; got.GetAuthInfo().GetAppId() != "view" || got.GetSpaceId() != "space" || got.GetViewId() != "view" {
-		t.Fatalf("GetViewState 应带 DataView 的身份：%+v", got)
+	if got := state.stateReq[0]; got.GetSpaceId() != "space" || got.GetViewId() != "view" {
+		t.Fatalf("GetViewState 请求不符：%+v", got)
 	}
 
 	// 原地重建：索引 ID 不变，建成序号变。
@@ -206,11 +205,5 @@ func TestGetViewReadsGenerationFromViewState(t *testing.T) {
 	}
 	if info, err := client.GetView(context.Background(), "space", "view"); err != nil || info.ActiveIndexID != "" || info.DatasetID != "ds" {
 		t.Fatalf("VIEW_NOT_FOUND 时 GetView 仍以 Metadata 为准：%+v err=%v", info, err)
-	}
-	// 没有单独的 DataView 身份时沿用 Metadata 的身份。
-	client.ViewAuth = nil
-	state.rsp = builtState("idx_a", "store_1", 7)
-	if _, err := client.ViewGeneration(context.Background(), "space", "view"); err != nil || state.stateReq[len(state.stateReq)-1].GetAuthInfo().GetAppId() != "meta" {
-		t.Fatalf("应回退到 Metadata 的身份：err=%v", err)
 	}
 }

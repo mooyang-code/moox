@@ -71,12 +71,9 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 		ruleMarket := dsl.RuleMarket(mode, rule.Rule)
 		ruleFrame := frameFor(mode, rule.Rule, frame, views)
 		var sets ruleSets
-		switch {
-		case rule.Rule.Type == dsl.RuleTypeTranche:
-			sets = partitionTranche(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held)
-		case ruleMarket != "":
+		if ruleMarket != "" {
 			sets = partitionRule(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held, marketFrozen[ruleMarket], marketReasons[ruleMarket])
-		default:
+		} else {
 			sets = partitionRule(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held, frozen, holdReasons)
 		}
 		if ruleMarket != "" {
@@ -111,7 +108,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 		if rule.Rule.AllowEmpty {
 			continue
 		}
-		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets, guardedFrozen(mode, sets, previous.Rules[rule.Rule.ID].Held)); reason != "" {
+		if reason := guard(program.Strategy.Portfolio, sets, guardedFrozen(mode, sets, previous.Rules[rule.Rule.ID].Held)); reason != "" {
 			skipReason = reason
 			skipNote = fmt.Sprintf("规则 %s：预期 %d、年龄剔除 %d、可用 %d、缺数 %d", rule.Rule.ID, len(sets.expected), len(sets.agedOut), len(sets.available), len(sets.missing))
 		}
@@ -134,18 +131,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 		rule := &program.Rules[i]
 		ruleMarket := dsl.RuleMarket(mode, rule.Rule)
 		ruleFrame := frameFor(mode, rule.Rule, frame, views)
-		var result ruleResult
-		var err error
-		switch rule.Rule.Type {
-		case dsl.RuleTypeRank:
-			result, err = evaluateRank(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
-		case dsl.RuleTypeSignal:
-			result, err = evaluateSignal(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
-		case dsl.RuleTypeTranche:
-			result, err = evaluateTranche(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
-		default:
-			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
-		}
+		result, err := evaluateRank(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		if err != nil {
 			// 出错的规则与排在它后面的规则都还没有产出明细：补齐可用标的，使每条规则的解释仍覆盖全部 E(r)。
 			for j := i; j < len(program.Rules); j++ {
@@ -191,7 +177,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 	return decision
 }
 
-// mergeStopItems 追加规则的求值明细。止损的标的可能已经有集合划分给出的明细（例如 signal 持仓的 exit 因子缺失、
+// mergeStopItems 追加规则的求值明细。止损的标的可能已经有集合划分给出的明细（例如规则引用的因子缺失、
 // 但 close 已达止损线），hold 规则缺数出场的持仓也已经有缺数明细：这时改写那一条，原因附上原有原因，保证每个（规则, 标的）只有一条。
 func mergeStopItems(items, ruleItems []Item) []Item {
 	var index map[string]int
@@ -229,12 +215,11 @@ func skipped(decision Decision, previous State, reason, note string) Decision {
 }
 
 // guard 是规则的守门，任一规则不通过都整期跳过，空候选与大面积缺数不能当作"选不出标的"或"退出"去清仓：
-// rank 规则没有可评估的候选（预期集合为空或全部年龄剔除）、进入 filter 的可用标的少于 min_universe 时
-// 记 universe_too_small；rank 与 signal 规则的缺数占（预期 − 年龄剔除）的比例超过 max_missing 时记
-// too_many_missing。signal 规则的池是显式的，不受 min_universe 约束，池为空时不守门。frozen 是计入缺数的冻结标的数（见 guardedFrozen）。
-func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets, frozen int) string {
+// 规则没有可评估的候选（预期集合为空或全部年龄剔除）、进入 filter 的可用标的少于 min_universe 时
+// 记 universe_too_small；缺数占（预期 − 年龄剔除）的比例超过 max_missing 时记 too_many_missing。frozen 是计入缺数的冻结标的数（见 guardedFrozen）。
+func guard(portfolio dsl.Portfolio, sets ruleSets, frozen int) string {
 	denominator := len(sets.expected) - len(sets.agedOut)
-	if (ruleType == dsl.RuleTypeRank || ruleType == dsl.RuleTypeTranche) && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
+	if denominator <= 0 || len(sets.available) < portfolio.MinUniverse {
 		return SkipUniverseTooSmall
 	}
 	// 冻结（保持持仓）的标的仍计入缺数比例：保护中的标的不能伪装成可用。

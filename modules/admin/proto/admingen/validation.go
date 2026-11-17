@@ -22,8 +22,9 @@ func (r *LoginReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.Username) == "" {
 		return fmt.Errorf("username is required")
 	}
-	if strings.TrimSpace(r.PasswordHash) == "" || strings.TrimSpace(r.Salt) == "" {
-		return fmt.Errorf("password_hash and salt are required")
+	// 错误信息不带密码本身。
+	if r.Password == "" {
+		return fmt.Errorf("password is required")
 	}
 	return nil
 }

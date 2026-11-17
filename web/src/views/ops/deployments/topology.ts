@@ -1,17 +1,16 @@
 import type { ComponentCatalog, DeploymentHost } from "@/api/admin/types";
 import type { HealthStatus } from "@/api/monitor";
-import type { DeploymentRow } from "./model";
+import { methodCallerIds, type DeploymentRow } from "./model";
 
-// 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与部署推导，不凭印象补关系；
+// 服务拓扑：调用关系只依据组件目录（各方法的 callers 与 operators）、主机与部署推导，不凭印象补关系；
 // 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际部署落到节点上。
 // 坐标在这里一次算好，HTML 节点和 SVG 连线共用，刷新时不抖动，也能在无 DOM 环境下测试。
 
-export type TopologyLayer = "entry" | "control" | "business" | "storage" | "infra" | "other";
+export type TopologyLayer = "control" | "business" | "storage" | "infra" | "other";
 export type EdgeCategory = "business" | "entry" | "monitor" | "ops";
 export type EdgeRoute = "local" | "cross" | "relay" | "external";
 
 export const LAYERS: { key: TopologyLayer; label: string }[] = [
-  { key: "entry", label: "入口" },
   { key: "control", label: "控制面" },
   { key: "business", label: "业务服务" },
   { key: "storage", label: "数据存储" },
@@ -25,15 +24,11 @@ export const EDGE_CATEGORIES: { key: EdgeCategory; label: string }[] = [
   { key: "ops", label: "运维管控" }
 ];
 const LAYER_OF: Record<string, TopologyLayer> = {
-  "console-proxy": "entry",
-  "web-host": "entry",
-  access: "entry",
   admin: "control",
   monitor: "control",
   eventbus: "control",
   collector: "business",
   "collector-stream": "business",
-  cloudfunction: "business",
   "factor-mgr": "business",
   "factor-engine": "business",
   "archive-worker": "business",
@@ -44,10 +39,11 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "egress-proxy": "business",
   "storage-primary": "storage",
   "storage-view": "storage",
+  seaweedfs: "storage",
   "host-gateway": "infra",
   "host-agent": "infra"
 };
-// 外部调用方的展示名；目录里新增的 principal 没有登记时直接显示 ID。
+// 外部调用方的展示名；目录里新增的外部身份没有登记时直接显示 ID。
 const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   // 数据流向经过的外部节点排在一起，避免流向线横穿其他外部节点。
   market: { name: "行情源", note: "交易所 / 行情接口" },
@@ -57,16 +53,12 @@ const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   "collector-operator": { name: "采集运维", note: "外部调用方" },
   "moox-skill": { name: "Skill", note: "外部调用方" }
 };
-// 管理台入口由 console-proxy 固定分流：静态资源到 web-host，/api/admin/* 到 admin。
-const ENTRY_LINKS: { from: string; to: string; label: string }[] = [
-  { from: "ext:console", to: "console-proxy", label: "HTTPS :9527" },
-  { from: "console-proxy", to: "web-host", label: "静态资源 :9528" },
-  { from: "console-proxy", to: "admin", label: "/api/admin/*" }
-];
+// 管理台入口是 Admin 自己监听的 HTTPS 9527：静态页面、根证书下载与 /api/admin/* 都在这里。
+const ENTRY_LINKS: { from: string; to: string; label: string }[] = [{ from: "ext:console", to: "admin", label: "HTTPS :9527" }];
 
 // 数据流向：行情从源头进入存储，再驱动视图、因子、策略与交易。
 // kind：data 为同步调用/写入，event 经消息总线投递，control 为调度控制。
-// 端点是组件 ID 或 ext:<外部 ID>；near 指定多副本组件（如 access）优先取与哪个组件同主机的实例。
+// 端点是组件 ID 或 ext:<外部 ID>；near 指定每台主机都有的组件（如 host-gateway）优先取与哪个组件同主机的实例。
 export type FlowKind = "data" | "event" | "control";
 export interface FlowStep {
   from: string;
@@ -77,12 +69,18 @@ export interface FlowStep {
   near?: string;
 }
 export const DATA_FLOW: FlowStep[] = [
-  { from: "collector", to: "cloudfunction", kind: "control", stage: "采集调度", label: "规划采集计划，下发函数配置" },
-  { from: "cloudfunction", to: "ext:scf-collector", kind: "control", stage: "采集调度", label: "Timer / Invoke 触发采集" },
+  { from: "collector", to: "ext:scf-collector", kind: "control", stage: "采集调度", label: "按采集计划建函数、配定时器" },
   { from: "ext:market", to: "ext:scf-collector", kind: "data", stage: "SCF 采集", label: "拉取 K 线等行情" },
-  { from: "ext:scf-collector", to: "access", kind: "data", stage: "SCF 采集", label: "签名写入 :11004", near: "storage-primary" },
   {
-    from: "access",
+    from: "ext:scf-collector",
+    to: "host-gateway",
+    kind: "data",
+    stage: "SCF 采集",
+    label: "签名写入外部入口 :11004",
+    near: "storage-primary"
+  },
+  {
+    from: "host-gateway",
     to: "storage-primary",
     kind: "data",
     stage: "SCF 采集",
@@ -93,7 +91,7 @@ export const DATA_FLOW: FlowStep[] = [
   { from: "collector-stream", to: "storage-primary", kind: "data", stage: "WS 推送", label: "写入 K 线" },
   { from: "storage-primary", to: "storage-view", kind: "event", stage: "存储", label: "行变更与周期标记，构建 View" },
   { from: "storage-primary", to: "factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
-  { from: "factor-engine", to: "access", kind: "data", stage: "因子", label: "写回因子结果", near: "storage-primary" },
+  { from: "factor-engine", to: "storage-primary", kind: "data", stage: "因子", label: "写回因子结果" },
   { from: "storage-view", to: "strategy", kind: "event", stage: "策略交易", label: "View 数据就绪，计算目标权重" },
   { from: "strategy", to: "trade", kind: "event", stage: "策略交易", label: "目标权重请求，收敛下单" }
 ];
@@ -242,10 +240,9 @@ export function buildTopology(input: TopologyInput): Topology {
     height: hostsBottom - hostsTop
   }));
 
-  // 2. 由 ACL 与 principals 推导调用关系；同一对节点的多个服务合并成一条边。
+  // 2. 由各方法的调用方推导调用关系；同一对节点的多个服务合并成一条边。外部身份从入口主机网关的外部入口进来。
   const componentIds = new Set(components.map(item => item.id));
-  const owner = new Map<string, string>();
-  for (const component of components) for (const service of component.services || []) owner.set(service.path, component.id);
+  const external = externalIdentities(input.catalog);
   const placed = new Map<string, TopologyNode[]>();
   for (const node of nodes) if (node.componentId) placed.set(node.componentId, [...(placed.get(node.componentId) || []), node]);
   const nodeById = new Map(nodes.map(node => [node.id, node]));
@@ -269,21 +266,13 @@ export function buildTopology(input: TopologyInput): Topology {
   for (const component of components) {
     for (const service of component.services || []) {
       const targets = placed.get(component.id) || [];
-      const callers = [...new Set(service.acl.flatMap(grant => grant.callers))];
+      const callers = [...new Set(service.methods.flatMap(methodCallerIds))];
       for (const caller of callers) {
         const sources = sourcesOf(caller, placed, nodeById);
         const category = categoryOf(caller, componentIds.has(caller));
-        for (const target of targets) for (const source of sources) link(source, target, category, service.path, viaOf(caller));
+        const via = external.has(caller) ? "经入口主机网关的外部入口 :11004 进入" : viaOf(caller);
+        for (const target of targets) for (const source of sources) link(source, target, category, service.path, via);
       }
-    }
-  }
-  for (const principal of input.catalog?.principals || []) {
-    const sources = sourcesOf(principal.id, placed, nodeById);
-    const category = categoryOf(principal.id, componentIds.has(principal.id));
-    for (const grant of principal.allow) {
-      const componentId = owner.get(grant.service);
-      for (const target of (componentId && placed.get(componentId)) || [])
-        for (const source of sources) link(source, target, category, grant.service, "经外部接入 access :11004 转发");
     }
   }
   for (const entry of ENTRY_LINKS) {
@@ -307,14 +296,16 @@ export function buildTopology(input: TopologyInput): Topology {
   };
 }
 
+function externalIdentities(catalog?: ComponentCatalog) {
+  return new Set((catalog?.identities || []).filter(item => item.external).map(item => item.id));
+}
 function collectExternals(catalog?: ComponentCatalog) {
   const componentIds = new Set((catalog?.components || []).map(item => item.id));
   const ids = new Set<string>(["market", "console"]);
   for (const component of catalog?.components || [])
     for (const service of component.services || [])
-      for (const grant of service.acl)
-        for (const caller of grant.callers) if (!componentIds.has(caller) && caller !== "host-gateway@*") ids.add(caller);
-  for (const principal of catalog?.principals || []) if (!componentIds.has(principal.id)) ids.add(principal.id);
+      for (const method of service.methods)
+        for (const caller of methodCallerIds(method)) if (!componentIds.has(caller)) ids.add(caller);
   const order = Object.keys(EXTERNAL_LABELS);
   return [...ids]
     .sort((a, b) => rank(order, a) - rank(order, b) || a.localeCompare(b))
@@ -324,18 +315,18 @@ function rank(order: string[], id: string) {
   const index = order.indexOf(id);
   return index < 0 ? order.length : index;
 }
+// callers 里的 host-gateway 指每台主机的网关，正好是各主机上部署的 host-gateway 节点。
 function sourcesOf(caller: string, placed: Map<string, TopologyNode[]>, nodeById: Map<string, TopologyNode>) {
-  if (caller === "host-gateway@*") return placed.get("host-gateway") || [];
   return placed.get(caller) || [nodeById.get(`ext:${caller}`)].filter(isNode);
 }
 function categoryOf(caller: string, isComponent: boolean): EdgeCategory {
   if (caller === "monitor") return "monitor";
-  if (caller === "console" || caller === "moox-cli" || caller === "host-gateway@*") return "ops";
+  if (caller === "console" || caller === "moox-cli" || caller === "host-gateway") return "ops";
   return isComponent ? "business" : "entry";
 }
 function viaOf(caller: string) {
-  if (caller === "console") return "经 console-proxy → Admin 以 console 身份转发";
-  if (caller === "host-gateway@*") return "主机网关拉取路由快照";
+  if (caller === "console") return "经 Admin 的 9527 入口以 console 身份转发";
+  if (caller === "host-gateway") return "主机网关拉取路由快照";
   return "";
 }
 function routeOf(from: TopologyNode, to: TopologyNode, hosts: Map<string, DeploymentHost>): EdgeRoute {

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// Request 是录入页提交的内容。其中的密码和密钥只用来渲染 moox.toml，不写日志、不回显、不出现在错误信息里。
+// Request 是录入页提交的内容。其中的密码和密钥只用来渲染 moox.secrets.toml，不写日志、不回显、不出现在错误信息里。
 type Request struct {
 	Admin struct {
 		Username string `json:"username"`
@@ -63,9 +63,11 @@ type Host struct {
 	SSHPort  int
 	SSHUser  string
 	// Outbound 为 true 表示只能出站（因子机），经 control 网关的反向连接中转。
-	Outbound   bool
-	Components []string
-	// 以下是识别到的私有网络，只有存储服务器用到：A 股云函数在它的 VPC 里经私网地址访问它上面的 Access。
+	Outbound bool
+	// ExternalEntry 为 true 表示这台主机的网关开外部入口（11004）。
+	ExternalEntry bool
+	Components    []string
+	// 以下是识别到的私有网络，只有云函数的入口主机用到：A 股云函数在它的 VPC 里经私网地址访问它的外部入口。
 	PrivateAddress string
 	VpcID          string
 	SubnetID       string
@@ -95,7 +97,7 @@ func (env Environment) requireLogin(ctx context.Context, title string, target SS
 
 const maxFieldBytes = 512
 
-// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件部署；格式与拓扑的语义校验交给 config.Parse。
+// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件部署；格式与拓扑的语义校验交给 topology.Parse。
 // 秘密字段原样保留（密码里的空格是有意义的），只拒绝控制字符与超长。
 func (r *Request) normalize(ctx context.Context, env Environment) error {
 	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
@@ -117,7 +119,7 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 		}
 	}
 	if r.Logging.RetentionDays == 0 {
-		r.Logging.RetentionDays = setupconfig.DefaultLogRetentionDays
+		r.Logging.RetentionDays = topology.DefaultLogRetentionDays
 	}
 	if r.Logging.RetentionDays < 1 || r.Logging.RetentionDays > 3600 {
 		return errors.New("日志保留天数要在 1 到 3600 之间")
@@ -177,6 +179,7 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 			}
 			target := &r.hosts[index]
 			target.Components = append(target.Components, role.components...)
+			target.ExternalEntry = target.ExternalEntry || role.externalEntry
 			continue
 		}
 		host, err := item.server.host(ctx, env, r.Tencent, role, catalog)
@@ -251,7 +254,7 @@ func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role
 	return Host{
 		ID: role.hostID, Address: s.Address, Region: instance.Region, Provider: "tencent",
 		SSHPort: target.SSHPort, SSHUser: target.SSHUser, Components: append([]string(nil), role.components...),
-		PrivateAddress: instance.PrivateIP, VpcID: instance.VpcID, SubnetID: instance.SubnetID,
+		ExternalEntry: role.externalEntry, PrivateAddress: instance.PrivateIP, VpcID: instance.VpcID, SubnetID: instance.SubnetID,
 	}, nil
 }
 

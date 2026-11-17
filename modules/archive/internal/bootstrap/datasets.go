@@ -1,40 +1,23 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
-	"time"
-
-	"context"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/service"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
-
-// storageAppID 是 mgr 在 Storage 请求体角色认证里的 AppId，只用于识别调用方。
-const storageAppID = "archive"
 
 // gatewayDatasets 经网关调用 Storage 的 Metadata.GetDataset。
 type gatewayDatasets struct {
 	gateway gatewayclient.Invoker
-	secret  string
 }
 
 func newGatewayDatasets(gateway gatewayclient.Invoker) *gatewayDatasets {
-	return &gatewayDatasets{gateway: gateway, secret: strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))}
-}
-
-func (g *gatewayDatasets) auth() *commonpb.AuthInfo {
-	auth := &commonpb.AuthInfo{AppId: storageAppID, Operator: "archive-mgr", RequestId: fmt.Sprintf("archive-mgr-%d", time.Now().UnixNano())}
-	if g.secret != "" {
-		auth.AppKey = mooxsecurity.HMACSHA256Hex(g.secret, []byte(auth.AppId))
-	}
-	return auth
+	return &gatewayDatasets{gateway: gateway}
 }
 
 // GetDataset 读取数据集的频率、保留期、状态与元数据。
@@ -43,7 +26,7 @@ func (g *gatewayDatasets) GetDataset(ctx context.Context, spaceID, datasetID str
 		return service.Dataset{}, errors.New("archive Storage gateway client is required")
 	}
 	rsp := &storagepb.GetDatasetRsp{}
-	req := &storagepb.GetDatasetReq{AuthInfo: g.auth(), SpaceId: spaceID, DatasetId: datasetID}
+	req := &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID}
 	if err := g.gateway.Invoke(ctx, "trpc.moox.storage.Metadata", "GetDataset", req, rsp); err != nil {
 		return service.Dataset{}, fmt.Errorf("get dataset %s/%s: %w", spaceID, datasetID, err)
 	}

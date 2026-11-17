@@ -3,9 +3,7 @@ package collectorpackager
 import (
 	"archive/zip"
 	"bytes"
-	"crypto/x509"
 	"debug/elf"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
@@ -13,17 +11,15 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 // BuildSCFPackageOptions configures a Tencent SCF package build.
 type BuildSCFPackageOptions struct {
-	BinaryPath    string
-	ConfigDir     string
-	OutPath       string
-	EventBusCAPEM []byte
+	BinaryPath string
+	ConfigDir  string
+	OutPath    string
 }
 
 // BuildSCFPackageResult describes the created package.
@@ -52,12 +48,6 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	if configInfo.Mode()&os.ModeSymlink != 0 || !configInfo.IsDir() {
 		return nil, fmt.Errorf("config dir must be a directory and not a symlink")
 	}
-	// 函数不再连 EventBus：CA 可选，仅旧链路的函数包需要携带。
-	if len(opts.EventBusCAPEM) > 0 {
-		if err := validatePublicCA(opts.EventBusCAPEM); err != nil {
-			return nil, err
-		}
-	}
 	if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o755); err != nil {
 		return nil, err
 	}
@@ -75,12 +65,6 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	zw := zip.NewWriter(out)
 
 	var entries []string
-	if len(opts.EventBusCAPEM) > 0 {
-		if err := addZipBytes(zw, opts.EventBusCAPEM, "certs/eventbus-ca.pem", 0o644); err != nil {
-			return nil, err
-		}
-		entries = append(entries, "certs/eventbus-ca.pem")
-	}
 	addFile := func(src, dst string) error {
 		if err := addZipFile(zw, src, dst); err != nil {
 			return err
@@ -163,8 +147,7 @@ func ValidateSCFPackageZip(zipPath string) error {
 		if file.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("scf package symlinks are not permitted")
 		}
-		if name != "certs/eventbus-ca.pem" &&
-			!((strings.HasPrefix(name, "sources/") || strings.HasPrefix(name, "markets/")) && (strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml"))) {
+		if !((strings.HasPrefix(name, "sources/") || strings.HasPrefix(name, "markets/")) && (strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml"))) {
 			return fmt.Errorf("unexpected scf package payload %s", name)
 		}
 		rc, err := file.Open()
@@ -176,11 +159,7 @@ func ValidateSCFPackageZip(zipPath string) error {
 		if err != nil || len(content) > 4*1024*1024 {
 			return fmt.Errorf("cannot validate scf package entry %s", name)
 		}
-		if name == "certs/eventbus-ca.pem" {
-			if err := validatePublicCA(content); err != nil {
-				return err
-			}
-		} else if err := validateCredentialFreeYAML(content); err != nil {
+		if err := validateCredentialFreeYAML(content); err != nil {
 			return fmt.Errorf("scf package entry %s: %w", name, err)
 		}
 	}
@@ -191,10 +170,10 @@ func ValidateSCFPackageZip(zipPath string) error {
 }
 
 var scfBinaryPrivateMaterial = regexp.MustCompile(`-----BEGIN (?:(?:[A-Z0-9]+ )?PRIVATE KEY|NATS USER JWT|USER NKEY SEED)-----[\r\n]`)
-var scfBinaryCredentialAssignment = regexp.MustCompile(`(?mi)(?:^|[\x00\r\n])[ \t]*(?:MOOX_STORAGE_PRIMARY_AUTH_SECRET|MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON|MOOX_EVENTBUS_NATS_PASSWORD|MOOX_GATEWAY_SERVICE_SECRET_KEY|MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY|TENCENTCLOUD_SECRET_KEY|TENCENT_SECRET_KEY)[ \t]*[:=][ \t]*[^\x00\r\n \t]`)
+var scfBinaryCredentialAssignment = regexp.MustCompile(`(?mi)(?:^|[\x00\r\n])[ \t]*(?:MOOX_EVENTBUS_NATS_PASSWORD|MOOX_GATEWAY_SERVICE_SECRET_KEY|MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY|TENCENTCLOUD_SECRET_KEY|TENCENT_SECRET_KEY)[ \t]*[:=][ \t]*[^\x00\r\n \t]`)
 var scfYAMLNATSPrivateMaterial = regexp.MustCompile(`(?i)-----BEGIN (?:NATS USER JWT|USER NKEY SEED)-----`)
-var scfYAMLCredentialAssignment = regexp.MustCompile(`(?im)(^|[^A-Za-z0-9_])["']?(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))["']?[ \t]*[:=][ \t]*`)
-var scfYAMLCredentialEnvironmentName = regexp.MustCompile(`(?i)^(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEYS?_JSON|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))$`)
+var scfYAMLCredentialAssignment = regexp.MustCompile(`(?im)(^|[^A-Za-z0-9_])["']?(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))["']?[ \t]*[:=][ \t]*`)
+var scfYAMLCredentialEnvironmentName = regexp.MustCompile(`(?i)^(?:MOOX_[A-Z0-9_]*(?:SECRET(?:_KEY)?|PASSWORD|TOKEN|PRIVATE_KEY|APP_KEY|API_KEY|JWT|NKEY(?:_SEED)?|ACCESS_KEY)|TENCENTCLOUD_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN)|TENCENT_(?:SECRET_ID|SECRET_KEY|SESSION_TOKEN))$`)
 
 func validateSCFMain(file *zip.File) error {
 	if !file.Mode().IsRegular() || file.Mode().Perm()&0o111 == 0 {
@@ -235,46 +214,6 @@ func validateSCFMain(file *zip.File) error {
 		}
 	}
 	return fmt.Errorf("scf package main ELF entry point must be in an executable load segment")
-}
-
-func ValidateEventBusCAPEM(content []byte) error {
-	return validatePublicCA(content)
-}
-
-func validatePublicCA(content []byte) error {
-	count := 0
-	for remaining := bytes.TrimSpace(content); len(remaining) != 0; {
-		if !bytes.HasPrefix(remaining, []byte("-----BEGIN CERTIFICATE-----")) {
-			return fmt.Errorf("certs/eventbus-ca.pem must contain only public CA certificates")
-		}
-		endMarker := []byte("-----END CERTIFICATE-----")
-		end := bytes.Index(remaining, endMarker)
-		if end < 0 {
-			return fmt.Errorf("certs/eventbus-ca.pem contains a malformed certificate")
-		}
-		end += len(endMarker)
-		block, rest := pem.Decode(remaining[:end])
-		if block == nil || len(bytes.TrimSpace(rest)) != 0 || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
-			return fmt.Errorf("certs/eventbus-ca.pem must contain only public CA certificates")
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil || !cert.IsCA || !cert.BasicConstraintsValid {
-			return fmt.Errorf("certs/eventbus-ca.pem contains an invalid CA certificate")
-		}
-		if cert.KeyUsage != 0 && cert.KeyUsage&x509.KeyUsageCertSign == 0 {
-			return fmt.Errorf("certs/eventbus-ca.pem CA certificate must permit certificate signing")
-		}
-		now := time.Now()
-		if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-			return fmt.Errorf("certs/eventbus-ca.pem CA certificate is outside its validity period")
-		}
-		count++
-		remaining = bytes.TrimSpace(remaining[end:])
-	}
-	if count == 0 {
-		return fmt.Errorf("certs/eventbus-ca.pem requires a public CA certificate")
-	}
-	return nil
 }
 
 func validateCredentialFreeYAML(content []byte) error {
@@ -336,7 +275,7 @@ func validateCredentialFreeYAML(content []byte) error {
 						strings.Contains(name, "secret") || strings.Contains(name, "password") ||
 						strings.Contains(name, "jwt") || strings.Contains(name, "nkey") || strings.Contains(name, "credential") || name == "seed" || strings.HasSuffix(name, "_seed") ||
 						strings.Contains(name, "private_key") || strings.HasSuffix(name, "api_key") ||
-						strings.HasSuffix(name, "hmac_key_file") || strings.HasSuffix(name, "app_keys_json") ||
+						strings.HasSuffix(name, "hmac_key_file") ||
 						strings.HasSuffix(name, "_token") || (strings.HasSuffix(name, "access_key") && fieldPath != ".system.service_auth.access_key")
 					if sensitive && (value.Kind != yaml.ScalarNode || strings.TrimSpace(value.Value) != "" && value.Tag != "!!null") {
 						return fmt.Errorf("nonempty credential field %s is not permitted", key.Value)

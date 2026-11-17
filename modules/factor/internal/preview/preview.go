@@ -220,7 +220,8 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 	if err := pipeline.CheckChunkMemory([]domain.MemberDef{member}, len(computed)+len(history), periods, len(factor.InputColumns), MaxMemory); err != nil {
 		return Result{}, fmt.Errorf("试算范围太大，请减少期数或标的：%w", err)
 	}
-	loaded, err := s.runner.Load(ctx, plan)
+	// 试算按标的选范围：读入之后把期望序列补成“标的 × 读到的 series_tag”。
+	plan, loaded, err := s.runner.LoadSubjects(ctx, plan)
 	if err != nil {
 		return Result{}, fmt.Errorf("读取源数据：%w", err)
 	}

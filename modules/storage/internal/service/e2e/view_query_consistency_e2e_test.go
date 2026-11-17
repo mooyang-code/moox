@@ -10,13 +10,11 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 	ctx := context.Background()
-	const secret = "view-e2e-secret"
 	root := filepath.Join(t.TempDir(), "view")
 	columns := []*pb.ViewColumn{
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
@@ -28,19 +26,18 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 		viewRow("ETH", "2026-07-20T00:01:00Z", 200, 20),
 		viewRow("SOL", "2026-07-20T00:02:00Z", 50, 5),
 	})
-	service, err := viewservice.New(root, secret)
+	service, err := viewservice.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	auth := &pb.AuthInfo{AppId: "e2e", AppKey: serviceauth.Key(secret, "e2e")}
 	if err := service.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Status: "active"},
 		viewindex.ViewIndexStats{Exists: true, DatasetID: "prices", ViewVersion: 1, SchemaHash: "schema-1", Columns: columns}); err != nil {
 		t.Fatal(err)
 	}
 
 	rsp, err := service.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view",
+		SpaceId: "quant", ViewId: "prices-view",
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T00:03:00Z"},
 		Filter:    &pb.FilterSpec{Groups: []*pb.FilterGroup{{Conds: []*pb.FilterCond{{Column: "close", Op: pb.FilterOp_FILTER_OP_GTE, Values: []*pb.TypedValue{{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}}}}}},
 		Sorts:     []*pb.SortSpec{{FieldName: "close", Desc: true}}, ColumnNames: []string{"close"},

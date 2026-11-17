@@ -11,7 +11,7 @@
 - 输出是 JSON；`ret_info.code` 非 0 时先打印响应、再以非 0 退出。分页命令用 `--page`、`--page-size`（默认 1、50）。
 - **破坏性命令默认只预览**：不带 `--yes` 输出 `preview: true` 的 JSON（将要发出的请求），**把预览给用户看，确认后再加 `--yes`**。
 - 带 DSL、长文本的参数用文件：`--spec-file`、`--dsl-file`、`--template-file`（`-` 读标准输入），不要在命令行里拼多行 YAML。
-- 带 `--space-id` 的命令默认空间是 `crypto`；策略与云函数服务按请求头里的空间取上下文，这些命令也都带 `--space-id`。
+- 带 `--space-id` 的命令默认空间是 `crypto`；策略服务按请求头里的空间取上下文，这些命令也都带 `--space-id`。
 
 ## 对照表
 
@@ -26,10 +26,10 @@
 | 数据 › 浏览、导入 | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query`、`data records search`、`import` |
 | 采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
 | 采集 › 运行状态 | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
-| 采集 › 云账户、云函数、代码包 | 账户（只读与删除）、实例、作业、导入、代码包 | `cloud account list|regions|delete`、`cloud function list|job|invoke|create|deploy|update-config|delete`、`cloud scf preview|import`、`cloud package list|show|url|delete`、`collector function upload` |
+| 采集 › 运行状态 › 云账号、代码包、云上状态 | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
 | 因子 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
 | 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
-| 策略 | 定义、实例、结果、回放、模板 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy template list|show|save|delete|render`、`strategy display get|set` |
+| 策略 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |
 | 交易（只读） | 账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者 | `trade account list|show`、`trade logical list|show|target`、`trade order list|show`、`trade fills|positions|holdings|equity|capabilities|action|actions|pnl|holders`、`trade blocked list` |
 | 运维 › 监控 | 总览、到达历史、主机资源、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
 | 运维 › 主机、部署 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
@@ -71,7 +71,7 @@
 
 - 业务失败（`ret_info.code` 非 0，`0` 或 `SUCCESS` 才算成功）时先打印响应、再以非 0 退出。
 - **写方法不带 `--yes` 只预览**（输出将要发出的请求）：把预览给用户看，确认后再加 `--yes`；`gateway methods` 标为“写”的都算，只读方法不受影响。
-- **`gateway call` 不能调用返回密钥明文或完整 webhook 的方法**（`SecretMgr.GetSecretValue`、`MonitorMgr.ListNotificationChannels`），也拒绝密钥的新建、修改、启停、删除（`CreateSecret`、`UpdateSecret`、`ToggleSecretStatus`、`DeleteSecret`，由用户在管理台操作）：云账户凭证由专用命令在进程内使用，告警渠道用 `config notification` 查看（地址已打码）。
+- **`gateway call` 不能调用返回密钥明文或完整 webhook 的方法**（`SecretMgr.GetSecretValue`、`MonitorMgr.ListNotificationChannels`），也拒绝密钥的新建、修改、启停、删除（`CreateSecret`、`UpdateSecret`、`ToggleSecretStatus`、`DeleteSecret`，由用户在管理台操作）：云账户凭证由专用命令在进程内使用，告警渠道请用户到管理台「监控 › 告警渠道」查看。
 - 请求字段以 `modules/<模块>/proto/*.proto` 为准；分页字段因服务而异（策略用 `{"page":{"page":1,"page_size":50}}`，其余用 `{"page":{"page":1,"size":50}}`）。
 
 ### 人工结束钱包划转记录（`trpc.moox.trade.TradeConsoleService` 的 `ResolveWalletTransfer`）

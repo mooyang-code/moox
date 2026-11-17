@@ -67,7 +67,7 @@ type Result struct {
 	// FailedSubjects 是没有因子状态的 View（K 线 View）在 degraded 时声明失败的标的，所有列都视为缺数。
 	FailedSubjects []string
 
-	// 下面两项只有统一数据集（一个 View 里有多个 series_tag）才有，按序列给出结论，用 ForMarket 拆成各市场的结论。
+	// 下面两项按序列给出结论；统一数据集（一个 View 里有多个 series_tag）用 ForMarket 拆成各市场的结论。
 	// 统一数据集上不能读 FailedByFactor：它按标的折叠，永续上失败的币现货也会被一起算成失败。
 
 	// FailedSeries 是 degraded 因子对应的失败序列（成员完整的失败序列 = 周期级共享的 shared_failed_series ∪ 成员自己的 failed_series）。
@@ -75,26 +75,6 @@ type Result struct {
 	// SkippedTags 是 degraded 因子被跳过的 series_tag（例如截面因子在这个 tag 上缺数）：这些 tag 的序列结果是 NULL，对应市场本期不可用。
 	// 全部 tag 都跳过时因子状态是 skipped，按 ReasonFactorSkipped 处理。
 	SkippedTags map[string][]string
-	// UnattributedFactors 只由 ForMarket 填：这些因子在本市场的失败名单是“单 tag 回退”原样带过来的（这一期没有序列名单，
-	// 不知道失败归哪个市场）。读完行之后，本期一行也没有的市场用 DropUnattributed 丢掉这些名单。
-	UnattributedFactors map[string]struct{}
-}
-
-// DropUnattributed 去掉单 tag 回退带过来的失败名单。本期这个市场一行也没有时调用：只有一个 series_tag 的一期，
-// 失败只可能属于有行的那个市场，这个市场按“无行”处理，结论不随另一个市场有没有失败而变。
-func (r Result) DropUnattributed() Result {
-	if len(r.UnattributedFactors) == 0 {
-		return r
-	}
-	out := r
-	out.FailedByFactor = make(map[string][]string, len(r.FailedByFactor))
-	for factorID, subjects := range r.FailedByFactor {
-		if _, ok := r.UnattributedFactors[factorID]; !ok {
-			out.FailedByFactor[factorID] = subjects
-		}
-	}
-	out.UnattributedFactors = nil
-	return out
 }
 
 // Check 按设计文档 3.3 的表格顺序判定：因子缺失 → 事件指纹变化 → 上一根版本证据 → 因子跳过 → 降级标的。
@@ -177,14 +157,15 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 	return result
 }
 
-// EncodeDetail 把因子成员状态编码成 ViewDataReady 的 detail_type 与 detail（回放据此构造事件）。
+// EncodeDetail 把因子成员状态编码成 ViewDataReady 的 detail_type 与 detail，是解码的逆过程。
+// 生产路径上明细由因子模块写入，这里只供各包的测试构造带明细的就绪事件。
 func EncodeDetail(factors []*factorpb.FactorPeriodState) (string, []byte, error) {
 	raw, err := proto.Marshal(&factorpb.PeriodDetail{Factors: factors})
 	return PeriodDetailType, raw, err
 }
 
 // indexFactors 解码事件 detail 里的因子周期明细，按成员键索引因子状态（同一因子可以用不同参数出现多次），
-// 并返回周期级共享的失败序列（shared_failed_series，只有统一数据集才有）。不带因子明细的事件（K 线 View）返回空表。
+// 并返回周期级共享的失败序列（shared_failed_series）。不带因子明细的事件（K 线 View）返回空表。
 func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPeriodState, []seriesset.Series, error) {
 	if event.GetDetailType() != PeriodDetailType || len(event.GetDetail()) == 0 {
 		return map[string]*factorpb.FactorPeriodState{}, nil, nil
@@ -219,12 +200,7 @@ func seriesOf(refs []*factorpb.SeriesRef) []seriesset.Series {
 // ForMarket 把统一数据集（一个 View、多个 series_tag）上的一份就绪结论拆成某个市场的结论，其余字段与方式 A 里一个 View 的结论同口径：
 //   - 整期原因（Reason 非空：成员契约变了、因子整体被跳过等）原样带到每个市场；
 //   - 某个因子在这个市场的 series_tag 上被跳过（SkippedTags）：这个市场本期不可用，Reason 记 ReasonFactorSkipped（数据类原因），别的市场照常；
-//   - 失败只取这个市场的序列（按 seriesset.SeriesTagMarket 归市场），不读按标的折叠的字段；
-//   - 例外：某个因子有失败标的却没有任何失败序列，说明这一期 Storage 没有生成序列名单（期望快照里只剩一个 series_tag 时，
-//     周期完成事件不带 universe_series，因子按单序列处理，只给出按标的的名单）。事件里没有字段能确定这一期是哪个 tag、
-//     归哪个市场，只能先按标的的失败名单原样带到每个市场，并在 UnattributedFactors 里记下这些因子。
-//     读完行之后才知道这一期的 tag 属于哪个市场：本期一行也没有的市场用 DropUnattributed 丢掉这些名单、按无行处理，
-//     有行的市场照常按失败处理（宁可多算缺数，也不能把真实失败的标的当成可用）。
+//   - 失败只取这个市场的序列（按 seriesset.SeriesTagMarket 归市场），不读按标的折叠的字段。
 func (r Result) ForMarket(market string) Result {
 	out := Result{Reason: r.Reason, Detail: r.Detail, Hashes: r.Hashes, FailedSubjects: r.FailedSubjects,
 		FailedByFactor: map[string][]string{}}
@@ -244,17 +220,6 @@ func (r Result) ForMarket(market string) Result {
 		if subjects := subjectsInMarket(failed, market); len(subjects) > 0 {
 			out.FailedByFactor[factorID] = subjects
 		}
-	}
-	for factorID, subjects := range r.FailedByFactor {
-		if len(subjects) == 0 || len(r.FailedSeries[factorID]) > 0 {
-			continue
-		}
-		// 没有序列名单的一期：按标的的名单带到每个市场，记下来源，读完行之后零行的市场再丢掉（见上面的注释）。
-		out.FailedByFactor[factorID] = append([]string(nil), subjects...)
-		if out.UnattributedFactors == nil {
-			out.UnattributedFactors = map[string]struct{}{}
-		}
-		out.UnattributedFactors[factorID] = struct{}{}
 	}
 	return out
 }

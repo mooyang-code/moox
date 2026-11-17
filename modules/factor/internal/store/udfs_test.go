@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
@@ -220,4 +221,39 @@ func TestUdfReferencesFindCallsWrittenWithWhitespace(t *testing.T) {
 	refs, err := s.UdfReferences(ctx, v.Name)
 	require.NoError(t, err)
 	require.Equal(t, []string{"f_ws"}, refs)
+}
+
+// 补算作业的绑定记在作业行上：没固化过读不到；空绑定也算固化过；已经固化的不被覆盖。
+func TestJobBindingsArePinnedOnce(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	for _, id := range []string{"job-1", "job-2"} {
+		_, err := s.CreateRecalcJob(ctx, RecalcJob{JobID: id, RequestID: "req-" + id, TaskID: "task_prices", StartTime: 100, EndTime: 1000})
+		require.NoError(t, err)
+	}
+	_, found, err := s.JobBindings(ctx, "job-1")
+	require.NoError(t, err)
+	require.False(t, found)
+
+	pinned, err := s.SaveJobBindings(ctx, "job-1", map[string]string{})
+	require.NoError(t, err)
+	require.Empty(t, pinned)
+	pinned, found, err = s.JobBindings(ctx, "job-1")
+	require.NoError(t, err)
+	require.True(t, found, "空绑定也算固化过")
+	require.Empty(t, pinned)
+
+	before := time.Now().UTC()
+	_, err = s.SaveJobBindings(ctx, "job-2", map[string]string{"u": "h1"})
+	require.NoError(t, err)
+	saved, err := s.GetRecalcJob(ctx, "job-2")
+	require.NoError(t, err)
+	require.False(t, saved.UpdatedAt.Before(before), "固化时写入带小数秒的更新时间，不落到触发器的秒级时间上")
+	pinned, err = s.SaveJobBindings(ctx, "job-2", map[string]string{"u": "h2"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"u": "h1"}, pinned, "已经固化的不覆盖")
+
+	_, err = s.SaveJobBindings(ctx, "missing", map[string]string{})
+	require.Error(t, err)
 }

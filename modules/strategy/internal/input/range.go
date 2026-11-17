@@ -520,6 +520,10 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// GroupRows 按 bar_start 与标的整理一批行，规则与 RangeLoader 读回的行相同：market 非空时只留这个市场的序列（统一数据集），
+// 同一标的同一周期有多个序列时记入 Ambiguous。“因子现算”来源用它整理引擎返回的行，歧义判断与 View 来源一致。
+func GroupRows(rows []Row, market string) RangeRows { return groupRange(rows, market) }
+
 func groupRange(rows []Row, market string) RangeRows {
 	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]map[string]string)}
 	tags := make(map[int64]map[string]string)

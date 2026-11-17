@@ -50,14 +50,12 @@ type Observer interface {
 	ObservePeriod(ctx context.Context, instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string)
 }
 
-// Mode 是实例的生命周期模式（设计 6.1、6.3）。
+// Mode 是实例这一期怎么处理（设计 6.1、6.3）。实盘还是影子不在这里决定，看实例的确认列（store.Instance.Trial）。
 type Mode int
 
 const (
-	// ModeLive 正常求值，目标交给 Trade 执行。
+	// ModeLive 正常求值并发出目标：已确认的实例是正式目标，交给 Trade 执行；试运行的实例目标带影子标记，Trade 只换算并记录，不下单。
 	ModeLive Mode = iota
-	// ModeShadow 预热：正常求值，目标带影子标记，Trade 只换算并记录，不下单。
-	ModeShadow
 	// ModeOff 没有处于预热或运行（未启动、暂停、故障）：不求值、不发新目标，持仓不动。
 	ModeOff
 	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不发目标，但求值并推进规则状态。引用上一周期因子列的策略需要相邻周期的记录，
@@ -204,7 +202,7 @@ type period struct {
 	validUntil time.Time
 	input      store.InputRecord
 	timing     periodTiming
-	// shadow 为真表示实例在预热：目标事件带影子标记。
+	// shadow 为真表示实例在试运行（挂了账户、还没确认实盘）：目标事件带影子标记。取自本次事件读到的实例行，确认后的下一期就是正式目标。
 	shadow bool
 	// clearState 为真表示实例的规则状态无法解析：随本期的 skipped 记录同事务清掉。
 	clearState bool
@@ -307,7 +305,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		// 不晚于预热终点的周期已经在预热里推进过：事件直接去重。等待期间排队的事件大多落在预热终点以内，不会因为重投的先后变成乱序跳过。
 		return nil
 	}
-	p := &period{timing: periodTiming{start: h.now()}, shadow: h.mode(instance.InstanceID) == ModeShadow, loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
+	p := &period{timing: periodTiming{start: h.now()}, shadow: instance.Trial(), loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
 	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetViewId(): {EventID: message.GetEventId()}}}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
@@ -377,7 +375,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		ready = h.checkReady(p, adjacent)
 	}
 	if expired {
-		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（tranche 的开仓记录与持有计数、持仓集合），跳过会让后续周期的状态缺口。
+		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（holding 的批次、hold 的入场序号与冷却、持仓集合），跳过会让后续周期的状态缺口。
 		detail := fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil))
 		if ready.Reason != "" {
 			return h.commitSkipped(ctx, p, store.SkipExpired, detail)
@@ -661,7 +659,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 		InputJSON: inputJSON, TargetsJSON: targetsJSON, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
-		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow)
+		event, err := MarshalTargetEvent(p.instance, result, p.runtime.sessionStartedAt, targets, p.shadow)
 		if err != nil {
 			return store.Result{}, nil, nil, err
 		}
@@ -813,10 +811,18 @@ func advance(calendar, bar string, at time.Time, n int) (time.Time, error) {
 type CatchupProgress struct {
 	// Latest 是实例已处理到的最后一根（BarEnd），没有记录为零；Expected 是 now 之前最近一根已收盘的 bar。
 	Latest, Expected time.Time
+	// SessionStart 是实例当前会话的开始时刻。
+	SessionStart time.Time
 }
 
 // CaughtUp 报告实例已处理到最新已收盘的 bar（含追赶期间只记录的周期）。
-func (p CatchupProgress) CaughtUp() bool { return !p.Expected.IsZero() && !p.Latest.Before(p.Expected) }
+// 最新已收盘的 bar 在会话开始之前收盘时（比如收盘后才启用，下一期要等下个交易日），实例还没有任何应处理的期，也算追平。
+func (p CatchupProgress) CaughtUp() bool {
+	if p.Expected.IsZero() {
+		return false
+	}
+	return p.Expected.Before(p.SessionStart) || !p.Latest.Before(p.Expected)
+}
 
 // CatchupProgress 读取实例的追赶进度。追赶期间到达的因子完成事件都会作为 skipped(catchup) 记录下来，
 // 所以「已处理到最新已收盘的 bar」同时说明：输入因子已追平、策略自己的消费也没有积压，相邻周期的版本记录已补齐。
@@ -850,7 +856,7 @@ func (h *Handler) CatchupProgress(ctx context.Context, instanceID string, now ti
 	if err != nil {
 		return CatchupProgress{}, err
 	}
-	out := CatchupProgress{Expected: closed.BarEnd}
+	out := CatchupProgress{Expected: closed.BarEnd, SessionStart: time.UnixMilli(rt.sessionStartedAt).UTC()}
 	latest, has, err := h.Store.LatestProcessed(ctx, instanceID, rt.sessionID)
 	if err != nil {
 		return CatchupProgress{}, err

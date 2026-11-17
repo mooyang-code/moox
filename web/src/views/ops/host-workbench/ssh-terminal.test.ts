@@ -86,7 +86,7 @@ describe("ssh terminal by registered host id", () => {
     mocks.query = {};
     mocks.createSSHSession.mockReset().mockImplementation(async () => ({ session_id: `session-${++sessions}` }));
     mocks.disconnectSSHSession.mockReset().mockResolvedValue({});
-    mocks.getSSHWebSocketUrl.mockReset().mockResolvedValue("ws://gateway/ws");
+    mocks.getSSHWebSocketUrl.mockReset().mockReturnValue("ws://gateway/ws");
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal(
       "ResizeObserver",

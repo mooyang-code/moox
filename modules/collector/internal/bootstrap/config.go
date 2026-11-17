@@ -7,11 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
+	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
 	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -24,16 +27,15 @@ type Config struct {
 	GatewayClient gatewayclient.FileConfig         `yaml:"gateway_client"`
 	sourcePath    string                           `yaml:"-"`
 	Database      DatabaseConfig                   `yaml:"database"`
-	SCFAccess     gatewayclient.ExternalFileConfig `yaml:"scf_access"`
+	SCFEntry      gatewayclient.ExternalFileConfig `yaml:"scf_entry"`
 	// SCFRegions 是各地域的函数网络；SCFMarkets 是每个空间、市场使用的地域；SCFPlan 是函数部署参数。
-	SCFRegions         map[string]marketfetch.PlanNetwork `yaml:"scf_regions"`
-	SCFMarkets         map[string]map[string][]string     `yaml:"scf_markets"`
-	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
-	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
-	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
+	SCFRegions         map[string]fetchplan.PlanNetwork `yaml:"scf_regions"`
+	SCFMarkets         map[string]map[string][]string   `yaml:"scf_markets"`
+	SCFPlan            SCFPlanConfig                    `yaml:"scf_plan"`
+	CollectorRetention CollectorRetentionConfig         `yaml:"collector_retention"`
+	KlineResample      KlineResampleConfig              `yaml:"kline_resample"`
 	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
 	EventBus    eventbus.Config   `yaml:"event_bus"`
-	Health      HealthConfig      `yaml:"health"`
 	EgressProxy EgressProxyConfig `yaml:"egress_proxy"`
 	// Delist 是下架检测的开关，安装时按拓扑渲染：没有出口代理（没配海外机）时关掉自动检测。
 	Delist      DelistConfig       `yaml:"delist"`
@@ -42,6 +44,31 @@ type Config struct {
 	EgressLimits EgressLimitsConfig `yaml:"egress_limits"`
 	// Stream 是 WS 推送采集的 Collector 侧参数（截止、提交预留随计划下发给 collector-stream）。
 	Stream StreamConfig `yaml:"stream"`
+	// Cloud 是 Collector 直接调腾讯云的参数：云函数接口限频与日志服务（CLS）开通。
+	Cloud CloudConfig `yaml:"cloud"`
+}
+
+// CloudConfig 是 Collector 直接调腾讯云的参数。
+type CloudConfig struct {
+	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
+	// CLS 是创建或更新采集函数时自动开通日志服务、补齐上报环境的配置；开通失败只记日志，不影响函数创建。
+	CLS cloud.CLSConfig `yaml:"cls"`
+}
+
+// TencentSCFConfig 是云函数接口的参数。
+type TencentSCFConfig struct {
+	// APIRateLimits 按接口覆盖本地限频（次/秒），不能超过官方限频；不写时用官方默认值。
+	APIRateLimits map[string]float64 `yaml:"api_rate_limits"`
+}
+
+func (c CloudConfig) validate() error {
+	if err := tencentscf.ValidateRateLimits(c.TencentSCF.APIRateLimits); err != nil {
+		return fmt.Errorf("cloud.tencent_scf.api_rate_limits: %w", err)
+	}
+	if err := c.CLS.Validate(); err != nil {
+		return fmt.Errorf("cloud.%w", err)
+	}
+	return nil
 }
 
 // EgressLimitsConfig 是各外部数据源的限流参数。
@@ -85,11 +112,11 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
 }
 
-// SCFAccessEndpoint is the fixed endpoint selected for one function region.
+// SCFEntryEndpoint is the fixed endpoint selected for one function region.
 // The publisher supplies private endpoints only after verifying its VPC route.
-type SCFAccessEndpoint struct {
-	Address    string `yaml:"access_address"`
-	InstanceID string `yaml:"access_id"`
+type SCFEntryEndpoint struct {
+	Address string `yaml:"entry_address"`
+	Host    string `yaml:"entry_host"`
 }
 
 // CollectorRetentionConfig bounds the process-level execution-history cleanup.
@@ -131,15 +158,8 @@ type KlineResampleConfig struct {
 	// HistoryBucketsPerRound 是历史合成作业每轮最多推进的桶数；HistoryMaxJobs 是每轮最多推进的作业数。
 	HistoryBucketsPerRound int `yaml:"history_buckets_per_round"`
 	HistoryMaxJobs         int `yaml:"history_max_jobs"`
-	// LegacyEventBus 只用来识别旧配置：EventBus 连接已经移到顶层 event_bus，旧位置出现就给出明确的报错（见 validateKlineResample）。
-	LegacyEventBus any `yaml:"event_bus"`
 	// MaxReadKeys 是单次读取源/目标行的键数上限。
 	MaxReadKeys int `yaml:"max_read_keys"`
-}
-
-// HealthConfig controls the lightweight HTTP health endpoint.
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
 }
 
 // DelistConfig 控制下架检测。AutoDetect 为 false 时不轮询币安现货、币安 U 本位、OKX 永续三个来源，
@@ -192,10 +212,13 @@ func Load(path string) (*Config, error) {
 	if err := cfg.EgressLimits.Eastmoney.Validate(); err != nil {
 		return nil, fmt.Errorf("egress_limits.eastmoney: %w", err)
 	}
-	if err := cfg.validateSCFAccess(); err != nil {
+	if err := cfg.validateSCFEntry(); err != nil {
 		return nil, err
 	}
 	if err := cfg.Stream.validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Cloud.validate(); err != nil {
 		return nil, err
 	}
 	if err := cfg.validateSCFPlan(); err != nil {
@@ -214,21 +237,20 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
+	// 日志保留天数由部署工具按 moox.toml 的 [logging] retention_days 下发；只在创建日志主题时生效。
+	if v := strings.TrimSpace(os.Getenv("MOOX_CLS_RETENTION_DAYS")); v != "" {
+		if days, err := strconv.ParseInt(v, 10, 64); err == nil && days > 0 {
+			c.Cloud.CLS.RetentionDays = days
+		}
 	}
 }
 
-func (c *Config) validateSCFAccess() error {
-	if c.SCFAccess.Caller != "scf-collector" {
-		return fmt.Errorf("scf_access.caller must be scf-collector")
+func (c *Config) validateSCFEntry() error {
+	if c.SCFEntry.Caller != "scf-collector" {
+		return fmt.Errorf("scf_entry.caller must be scf-collector")
 	}
-	// Offline Collector configuration can precede Admin credential assignment.
-	if c.SCFAccess.KeyID == "" {
-		return nil
-	}
-	if err := c.SCFAccess.Validate(); err != nil {
-		return fmt.Errorf("scf_access: %w", err)
+	if err := c.SCFEntry.Validate(); err != nil {
+		return fmt.Errorf("scf_entry: %w", err)
 	}
 	return nil
 }
@@ -242,9 +264,6 @@ func (c *Config) validateEgressProxy() error {
 
 func (c *Config) validateKlineResample() error {
 	k := c.KlineResample
-	if k.LegacyEventBus != nil {
-		return fmt.Errorf("kline_resample.event_bus 已经移到顶层 event_bus：K 线合成与下架检测共用一条 EventBus 连接。请用新版 setup（unitinstall）重新渲染配置，或把这一段从 kline_resample 下移到顶层")
-	}
 	if k.ScanTimeout <= 0 || k.ExecTimeout <= 0 || k.FallbackGrace <= 0 {
 		return fmt.Errorf("kline_resample durations must be positive")
 	}
@@ -262,7 +281,7 @@ func (c *Config) validateCollectorRetention() error {
 	}
 	offset, offsetErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceOffset))
 	timeout, timeoutErr := time.ParseDuration(strings.TrimSpace(retention.MaintenanceTimeout))
-	if offsetErr != nil || timeoutErr != nil || marketfetch.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
+	if offsetErr != nil || timeoutErr != nil || fetchplan.ValidateMaintenanceSchedule(interval, offset, timeout) != nil {
 		return fmt.Errorf("collector_retention.maintenance_offset and maintenance_timeout must keep each pass inside one interval: 0 <= offset < interval and offset + timeout <= interval")
 	}
 	if retention.MaxRowsPerPass < 1 || retention.MaxRowsPerPass > 50000 {
@@ -274,7 +293,7 @@ func (c *Config) validateCollectorRetention() error {
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
-		GatewayClient: gatewayclient.FileConfig{Caller: "collector", KeyFile: "../../secrets/caller-collector.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "collector", KeyFile: "../../secrets/host.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_collector.db",
@@ -287,8 +306,9 @@ func Default() *Config {
 		SubjectSync:  subjectsync.DefaultConfig(),
 		EgressLimits: EgressLimitsConfig{Eastmoney: cnstock.DefaultRequestLimitConfig()},
 		Stream:       defaultStreamConfig(),
+		Cloud:        CloudConfig{CLS: cloud.DefaultCLSConfig()},
 		Delist:       DelistConfig{AutoDetect: true},
-		SCFAccess:    gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
+		SCFEntry:     gatewayclient.ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage", Caller: "scf-collector", KeyFile: "../../secrets/scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
 		},
@@ -296,9 +316,6 @@ func Default() *Config {
 			Enabled: false, ScanTimeout: 30 * time.Second, ExecTimeout: 30 * time.Second,
 			FallbackLookbackBars: 3, FallbackGrace: time.Minute, FallbackMaxBuckets: 200,
 			HistoryBucketsPerRound: 20, HistoryMaxJobs: 8, MaxReadKeys: 5000,
-		},
-		Health: HealthConfig{
-			Addr: ":11412",
 		},
 		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}},
 	}

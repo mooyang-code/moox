@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -771,10 +772,6 @@ func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testi
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
 		{
-			CheckID: "deployment:control:factor-mgr", Name: "factor-mgr@control",
-			Source: domain.CheckSourceDeployment, Enabled: false, IntervalSeconds: 30,
-		},
-		{
 			SpaceID: events.SystemSpaceID,
 			CheckID: "reporter:control:factor-mgr",
 			Name:    "Reporter factor-mgr control factor-mgr@control",
@@ -842,10 +839,6 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 	}
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
-		{
-			CheckID: "deployment:control:factor-mgr", Name: "factor-mgr@control",
-			Source: domain.CheckSourceDeployment, Enabled: false, IntervalSeconds: 30,
-		},
 		{
 			SpaceID: "crypto", CheckID: "dataset:factor:factor_output:1m",
 			Name: "Dataset factor factor_output 1m", Source: domain.CheckSourceObservability,
@@ -964,8 +957,12 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 		t.Fatal(err)
 	}
 	reporterCheckID := "reporter:node-a:collector"
-	if len(checks) != 1 || checks[0].CheckID != reporterCheckID {
-		t.Fatalf("checks = %+v", checks)
+	ids := make([]string, 0, len(checks))
+	for _, check := range checks {
+		ids = append(ids, check.CheckID)
+	}
+	if !slices.Equal(ids, []string{"restart:node-a:collector", "reporter:node-a:collector"}) && !slices.Equal(ids, []string{"reporter:node-a:collector", "restart:node-a:collector"}) {
+		t.Fatalf("只有停止上报与反复重启两条组件检查，数据集不重复告警: checks = %+v", checks)
 	}
 	results, err := repositories.Results.Recent(t.Context(), events.SystemSpaceID, reporterCheckID, 1)
 	if err != nil {
@@ -1014,7 +1011,7 @@ func seedBusinessTopology(t *testing.T, repositories *store.Repositories, hostID
 	if !enabled {
 		status = servicecatalog.Disabled
 	}
-	_, err = repositories.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Deployments: []domain.TopologyDeployment{{HostID: hostID, ComponentID: componentID, Status: status}}}, nil)
+	err = repositories.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Deployments: []domain.TopologyDeployment{{HostID: hostID, ComponentID: componentID, Status: status}}})
 	require.NoError(t, err)
 }
 
@@ -1235,10 +1232,10 @@ func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *t
 }
 
 func TestObservationIndependentChecksKeepRunning(t *testing.T) {
-	for _, id := range []string{"gateway:storage:status", "gateway:storage:relay", "kline_freshness:crypto:1m", "market_canary:binance", tagCheckPrefix + "x", observationIngestCheckID} {
+	for _, id := range []string{"gateway:storage:status", "kline_freshness:crypto:1m", "market_canary:binance", tagCheckPrefix + "x", observationIngestCheckID} {
 		require.True(t, observationIndependent(id), id)
 	}
-	for _, id := range []string{"reporter:node-a:collector", "dataset:storage:ds:1m", "balance:trade", "data_delivery:storage", "factor_watermark:x"} {
+	for _, id := range []string{"reporter:node-a:collector", "ready:node-a:collector", "restart:node-a:collector", "dataset:storage:ds:1m", "balance:trade", "data_delivery:storage", "factor_watermark:x"} {
 		require.False(t, observationIndependent(id), id)
 	}
 }

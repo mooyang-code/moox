@@ -345,7 +345,7 @@ func TestShellHarnessSkipsNonzeroWithoutConfirmationOrBothSecrets(t *testing.T) 
 		{name: "missing Binance futures testnet secret", env: []string{
 			"MOOX_TRADE_TESTNET_CONFIRM=YES", "MOOX_BINANCE_TESTNET_SECRET_ID=s", "MOOX_OKX_TESTNET_SECRET_ID=o",
 		}},
-		// 仓库里的 config/app.yaml 没有网关 key_id，必须指向已部署 trade 单元的配置。
+		// 仓库里的 config/app.yaml 没有主机 ID 与主机密钥，必须指向已部署 trade 组件的配置。
 		{name: "missing deployed trade config", env: []string{
 			"MOOX_TRADE_TESTNET_CONFIRM=YES", "MOOX_BINANCE_TESTNET_SECRET_ID=s",
 			"MOOX_BINANCE_TESTNET_SWAP_SECRET_ID=w", "MOOX_OKX_TESTNET_SECRET_ID=o",
@@ -414,7 +414,7 @@ func TestShellHarnessUsesSecretIDsAndTwoRestartPhases(t *testing.T) {
 		}
 	}
 	if strings.Contains(text, "modules/trade/config/app.yaml\"") {
-		t.Error("仓库里的 config/app.yaml 没有网关 key_id，脚本不能再用它")
+		t.Error("仓库里的 config/app.yaml 没有主机 ID 与主机密钥，脚本不能再用它")
 	}
 }
 

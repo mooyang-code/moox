@@ -3,8 +3,6 @@ package doctor
 import (
 	"context"
 	"fmt"
-	"net"
-	"strconv"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 
@@ -62,12 +60,11 @@ func (c *Client) GetHealthOverview(ctx context.Context, spaceID string) (*monito
 	return rsp.GetOverview(), nil
 }
 
-// Deployment contains catalog-derived health information for one canonical component.
+// Deployment 是一台主机上一个组件的部署登记；健康端口取自服务目录（只听本机），由探测层在目标机上请求。
 type Deployment struct {
-	HostID        string
-	ComponentID   string
-	Status        string
-	HealthAddress string
+	HostID      string
+	ComponentID string
+	Status      string
 }
 
 func (c *Client) ListDeployments(ctx context.Context, hostID string) ([]Deployment, error) {
@@ -118,15 +115,7 @@ func (c *Client) ListDeployments(ctx context.Context, hostID string) ([]Deployme
 			if host.GetStatus() != servicecatalog.Enabled {
 				status = servicecatalog.Disabled
 			}
-			address := host.GetAddress()
-			if component.Health.Loopback {
-				address = "127.0.0.1"
-			}
-			healthAddress := ""
-			if component.Health.Port != 0 {
-				healthAddress = "http://" + net.JoinHostPort(address, strconv.Itoa(component.Health.Port))
-			}
-			rows = append(rows, Deployment{HostID: hostID, ComponentID: component.ID, Status: status, HealthAddress: healthAddress})
+			rows = append(rows, Deployment{HostID: hostID, ComponentID: component.ID, Status: status})
 		}
 		if !rsp.GetPageResult().GetHasMore() {
 			return rows, nil

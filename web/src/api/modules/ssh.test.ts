@@ -9,22 +9,17 @@ vi.mock("@/api/gateway", () => ({
 
 import { createSSHSession, getSftpDownloadUrl, getSftpUploadUrl, getSSHWebSocketUrl } from "./ssh";
 
-describe("raw SSH ticket binding", () => {
-  beforeEach(() => callControl.mockReset().mockResolvedValue({ ticket: "ticket-1" }));
+// 终端与文件上传下载和页面同源，浏览器自动带会话 Cookie：地址里只有 SSH 会话，不再先取票据。
+describe("raw SSH URLs", () => {
+  beforeEach(() => callControl.mockReset());
 
-  it("passes the SSH session when issuing WebSocket and download tickets", async () => {
-    await getSSHWebSocketUrl("ssh-1", 80, 24);
-    expect(callControl).toHaveBeenCalledWith("auth", "IssueRawSessionTicket", { operation: "ssh_ws", session_id: "ssh-1" });
-    await getSftpDownloadUrl("ssh-2", "/tmp/a");
-    expect(callControl).toHaveBeenLastCalledWith("auth", "IssueRawSessionTicket", {
-      operation: "sftp_download",
-      session_id: "ssh-2"
-    });
-  });
-
-  it("passes the SSH session when issuing an upload ticket", async () => {
-    await getSftpUploadUrl("ssh-3");
-    expect(callControl).toHaveBeenCalledWith("auth", "IssueRawSessionTicket", { operation: "sftp_upload", session_id: "ssh-3" });
+  it("builds WebSocket, download and upload URLs without tickets or extra requests", () => {
+    expect(getSSHWebSocketUrl("ssh-1", 80, 24)).toBe("/api/admin/ssh/WsConnect?session_id=ssh-1&w=80&h=24");
+    expect(getSftpDownloadUrl("ssh-2", "/tmp/a b&c")).toBe(
+      "/api/admin/ssh/SftpDownload?session_id=ssh-2&path=%2Ftmp%2Fa%20b%26c"
+    );
+    expect(getSftpUploadUrl("ssh-3")).toBe("/api/admin/ssh/SftpUpload?session_id=ssh-3");
+    expect(callControl).not.toHaveBeenCalled();
   });
 });
 

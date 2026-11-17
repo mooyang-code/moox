@@ -5,7 +5,6 @@ package doctor
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
-	"gorm.io/gorm"
 )
 
 const (
@@ -29,8 +27,6 @@ const (
 
 type Builder struct {
 	Deployments         deployment.Source
-	Checks              *store.CheckRepository
-	Results             *store.ResultRepository
 	Alerts              *store.AlertRepository
 	Metrics             *monmetrics.QueryService
 	Hosts               *hostmetrics.Store
@@ -40,9 +36,9 @@ type Builder struct {
 }
 
 type ExpectedComponent struct {
-	ComponentID, ServiceName, NodeID, DeploymentStatus, Transport, FunctionalObservability, HealthURL string
-	Expected                                                                                          bool
-	DeploymentCreatedAt                                                                               time.Time
+	ComponentID, ServiceName, NodeID, DeploymentStatus, Transport, FunctionalObservability string
+	Expected                                                                               bool
+	DeploymentCreatedAt                                                                    time.Time
 }
 
 type Observation struct {
@@ -102,20 +98,11 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 				continue
 			}
 			found = true
-			healthURL := ""
-			if b.Checks != nil {
-				check, err := b.Checks.Get(ctx, "", deployment.CheckID(deployed.GetHostId(), component.ComponentID))
-				if err == nil {
-					healthURL = check.URL
-				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-					return Context{}, err
-				}
-			}
 			out.ExpectedComponents = append(out.ExpectedComponents, ExpectedComponent{
 				ComponentID: component.ComponentID, ServiceName: component.ServiceName, NodeID: deployed.GetHostId(),
 				Expected: hosts[deployed.GetHostId()] && deployed.GetStatus() == "enabled", DeploymentStatus: deployed.GetStatus(),
 				Transport: string(component.Transport), FunctionalObservability: string(component.FunctionalObservability),
-				HealthURL: healthURL, DeploymentCreatedAt: parseTimestamp(deployed.GetCreatedAt()),
+				DeploymentCreatedAt: parseTimestamp(deployed.GetCreatedAt()),
 			})
 		}
 		if !found {
@@ -196,73 +183,109 @@ func (b Builder) loadDeployments(ctx context.Context) (deployment.Snapshot, erro
 	return b.Deployments.Snapshot(ctx)
 }
 
+// addHealth 按各组件的上报生成健康观察项（组件健康只看上报，设计 3.8），来源跟目录里的 doctor.transport 一致：
+//   - reporter：组件自己的上报，按主机加组件名匹配；
+//   - delegated：管理端代报（因子引擎、归档 worker），代报行不带主机，按组件名匹配；
+//   - host_snapshot：host-agent 的主机快照，按主机匹配，快照新鲜为 OK。
+//
+// 上报里的就绪判断：就绪为 OK，未就绪为 DOWN，没有就绪判断为 UNKNOWN；上报超过两个间隔为过期；没有上报时记为缺失。
 func (b Builder) addHealth(ctx context.Context, components []doctor.Component, now time.Time, out *Context) error {
-	if b.Results == nil || b.Checks == nil {
-		return nil
-	}
 	componentByService := componentMap(components)
-	for _, expected := range out.ExpectedComponents {
-		if !expected.Expected || componentByService[expected.ServiceName].HealthPath == "" {
-			continue
+	names := make([]string, 0, len(components))
+	snapshots := false
+	for _, component := range components {
+		switch component.Transport {
+		case doctor.TransportReporter, doctor.TransportDelegated:
+			names = append(names, component.ServiceName)
+		case doctor.TransportHostSnapshot:
+			snapshots = true
 		}
-		checkID := deployment.CheckID(expected.NodeID, expected.ComponentID)
-		check, err := b.Checks.Get(ctx, "", checkID)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health check is not registered"})
-			continue
-		}
+	}
+	latest := map[string]monmetrics.MetricService{}
+	if b.Metrics != nil && b.Metrics.Catalog() != nil && len(names) > 0 {
+		services, err := b.Metrics.Catalog().ListServicesForAt(ctx, names, "", MaxObservations, now)
 		if err != nil {
 			return err
 		}
-		results, err := b.Results.Recent(ctx, "", checkID, 3)
-		if err != nil {
-			return err
-		}
-		if len(results) == 0 {
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health observation is missing"})
-			continue
-		}
-		latest := results[0]
-		interval := max(check.IntervalSeconds, 1)
-		age := observationAge(now, latest.CheckedAt)
-		status := strings.ToUpper(latest.Status)
-		if !latest.Success {
-			status = "DEGRADED"
-		}
-		if len(results) == 3 && !results[0].Success && !results[1].Success && !results[2].Success {
-			status = "DOWN"
-		}
-		observation := Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: status, ObservedAt: latest.CheckedAt, Stale: age > int64(2*interval), AgeSeconds: age, IntervalSeconds: interval, Summary: healthSummary(latest)}
-		var identity struct {
-			Service                 string `json:"service"`
-			InstanceID              string `json:"instance_id"`
-			NodeID                  string `json:"node_id"`
-			BootID                  string `json:"boot_id"`
-			DatasetHealthPolicyHash string `json:"dataset_health_policy_hash"`
-		}
-		component := componentByService[expected.ServiceName]
-		if json.Unmarshal([]byte(latest.BodyExcerpt), &identity) == nil {
-			observation.InstanceID, observation.NodeID, observation.BootID = identity.InstanceID, identity.NodeID, identity.BootID
-			wantInstance := expected.ServiceName + "@" + expected.NodeID
-			identityMismatch := identity.Service != expected.ServiceName ||
-				identity.InstanceID != wantInstance ||
-				identity.NodeID != expected.NodeID ||
-				identity.BootID == ""
-			policyMismatch := expected.ServiceName == "monitor" &&
-				b.DatasetHealthPolicy.Checksum != "" &&
-				identity.DatasetHealthPolicyHash != b.DatasetHealthPolicy.Checksum
-			if component.Transport == doctor.TransportReporter &&
-				component.FunctionalObservability != doctor.FunctionalObservabilityDeferred &&
-				component.FunctionalObservability != doctor.FunctionalObservabilityNotApplicable &&
-				(identityMismatch || policyMismatch) {
-				observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity does not match the deployment contract"
+		for _, service := range services {
+			key := service.ServiceName + "\x00" + service.NodeID
+			if current, ok := latest[key]; !ok || service.LastSeenAt.After(current.LastSeenAt) {
+				latest[key] = service
 			}
-		} else if component.Transport == doctor.TransportReporter && component.FunctionalObservability != doctor.FunctionalObservabilityDeferred && component.FunctionalObservability != doctor.FunctionalObservabilityNotApplicable {
-			observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity payload is missing or invalid"
 		}
-		out.HealthObservations = append(out.HealthObservations, observation)
+	}
+	var agents []hostmetrics.AgentView
+	var agentsErr error
+	if snapshots && b.Hosts != nil {
+		agents, agentsErr = b.Hosts.ListAgentsAt(ctx, now)
+	}
+	for _, expected := range out.ExpectedComponents {
+		component := componentByService[expected.ServiceName]
+		if !expected.Expected {
+			continue
+		}
+		missing := Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health observation is missing"}
+		switch component.Transport {
+		case doctor.TransportHostSnapshot:
+			if b.Hosts == nil || agentsErr != nil {
+				missing.Status, missing.Summary = "UNKNOWN", "host snapshots are unavailable"
+				out.MissingObservations = append(out.MissingObservations, missing)
+				continue
+			}
+			agent, ok := latestAgent(agents, expected.NodeID)
+			if !ok {
+				out.MissingObservations = append(out.MissingObservations, missing)
+				continue
+			}
+			seen := parseTimestamp(agent.LastSeenAt)
+			summary := "host snapshot is fresh"
+			if !agent.Reachable {
+				summary = "host snapshot is stale"
+			}
+			out.HealthObservations = append(out.HealthObservations, Observation{
+				Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: agent.AgentID,
+				NodeID: expected.NodeID, BootID: agent.BootID, Status: "OK", ObservedAt: seen, Stale: !agent.Reachable,
+				AgeSeconds: observationAge(now, seen), Summary: summary,
+			})
+		case doctor.TransportReporter, doctor.TransportDelegated:
+			node := expected.NodeID
+			if component.Transport == doctor.TransportDelegated {
+				node = ""
+			}
+			row, ok := latest[expected.ServiceName+"\x00"+node]
+			if !ok {
+				out.MissingObservations = append(out.MissingObservations, missing)
+				continue
+			}
+			status, summary := "UNKNOWN", "reporter carries no readiness"
+			switch row.Readiness {
+			case monmetrics.ReadinessReady:
+				status, summary = "OK", "reported ready"
+			case monmetrics.ReadinessNotReady:
+				status, summary = "DOWN", "reported not ready: "+row.NotReadyReason
+			}
+			age := observationAge(now, row.LastSeenAt)
+			out.HealthObservations = append(out.HealthObservations, Observation{
+				Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: row.InstanceID,
+				NodeID: expected.NodeID, BootID: row.BootID, Status: status, ObservedAt: row.LastSeenAt, Stale: age > 60,
+				AgeSeconds: age, IntervalSeconds: 30, Summary: summary,
+			})
+		}
 	}
 	return nil
+}
+
+// latestAgent 取这台主机最近一次主机快照。
+func latestAgent(agents []hostmetrics.AgentView, hostID string) (hostmetrics.AgentView, bool) {
+	var found hostmetrics.AgentView
+	ok := false
+	for _, agent := range agents {
+		if agent.HostID != hostID || (ok && parseTimestamp(agent.LastSeenAt).Before(parseTimestamp(found.LastSeenAt))) {
+			continue
+		}
+		found, ok = agent, true
+	}
+	return found, ok
 }
 
 func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, healthCheckIDs []string, now time.Time, out *Context) error {
@@ -472,16 +495,6 @@ func stringSelection(values []string) map[string]bool {
 func parseTimestamp(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
 	return parsed
-}
-
-func healthSummary(result domain.CheckResult) string {
-	if result.Success {
-		return "service health check passed"
-	}
-	if result.ErrorMessage != "" {
-		return result.ErrorMessage
-	}
-	return "service health check failed"
 }
 
 func observationAge(now, observedAt time.Time) int64 {

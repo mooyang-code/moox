@@ -2,8 +2,12 @@
 # 计划（订阅哪些标的、截止、提交预留）全部来自 Collector，这里只有进程级参数。
 gateway_client:
   caller: collector-stream
-  key_id: ""
-  key_file: ../../secrets/caller-collector-stream.key
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: ../../secrets/host.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: ""
+  local_address: 127.0.0.1:11002
+  ca_file: ../../secrets/moox-ca.crt
 
 # 服务的空间；部署时由 MOOX_SPACE_ID 给出时可以留空。
 space_id: ""

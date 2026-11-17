@@ -40,12 +40,10 @@ type gapFiller struct {
 	source   SourceDataset
 	exec     chunkWithRunner
 	universe universeReader
-	// unified 判断任务的源数据集是不是统一数据集（market_type=multi），为 nil 表示都不是：只有统一数据集的时序恢复才逐期读冻结的序列全集。
-	unified func(ctx context.Context, set domain.FactorTask) (bool, error)
-	clock   periodclock.Clock
-	active  func() bool
-	cfg     GapConfig
-	now     func() time.Time
+	clock    periodclock.Clock
+	active   func() bool
+	cfg      GapConfig
+	now      func() time.Time
 	// onGaveUp 在条目被记为 gave_up 时调用（指标用，可为 nil）。
 	onGaveUp func(entries int)
 	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil），在任务锁内。引擎据此把补齐的最新一期记入运行摘要。
@@ -422,10 +420,9 @@ func (g *gapFiller) span(set domain.FactorTask, entries []gapledger.Entry) (time
 }
 
 // fillSubjects 在 [start, end) 上一次恢复一个任务里若干标的的时间序列因子待办。
-// 统一数据集（同一数据集里有现货、永续两个市场的序列）按待办周期读结果数据集 marker 里冻结的 universe_series：
-// 每个周期的期望序列就是当期实际存在的序列，恢复时每条期望序列都要写成才确认（永续晚到、这一期只有现货行时记失败，待办保留），
-// 已下架的序列不在之后各期的冻结全集里，不会让现货的待办永远确认不了。冻结全集相同的相邻周期合并成一次运行；
-// 单序列数据集、读不到 marker 或 marker 里没有序列全集的周期，保持原来的一次运行，期望序列由数据层兜底推出。
+// 按待办周期读结果数据集 marker 里冻结的 universe_series：每个周期的期望序列就是当期实际存在的序列，恢复时每条期望序列都要写成才确认
+// （统一数据集里永续晚到、这一期只有现货行时记失败，待办保留），已下架的序列不在之后各期的冻结全集里，不会让现货的待办永远确认不了。
+// 冻结全集相同的相邻周期合并成一次运行；读不到 marker 或 marker 里没有序列全集的周期，期望序列由数据层给出（pipeline.SeriesExpecter）。
 func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, subjects []string, start, end time.Time) error {
 	taskID := set.Set.TaskID
 	pending := func() []gapledger.Entry { return g.ledger.PendingFor(taskID, subjects) }
@@ -477,18 +474,14 @@ func (g *gapFiller) fillRun(ctx context.Context, taskID string, pending func() [
 	return err
 }
 
-// frozenRuns 把 [start, end) 切成按冻结全集分段的运行。非统一数据集（或没有任何周期有冻结全集、也没有要保留的周期）返回原区间的一次运行。
+// frozenRuns 把 [start, end) 切成按冻结全集分段的运行。没有任何周期有冻结全集、也没有要保留的周期时返回原区间的一次运行。
 // 否则只覆盖有待办的周期：相邻的、冻结全集相同的周期合并（先按本批标的过滤全集再比较，别的标的上下架不切碎批次；不相邻的周期不合并），
 // 没有冻结全集的周期单独成段（期望序列由数据层兜底）。只处理时序成员的待办：截面成员由 fillCross 按周期恢复。
 // 某一期读 marker 失败，或读不到 marker 但待办刚记下不足 Settle（marker 可能还没写），这一期不运行、待办保留到下一轮，其余各期照常。
 func (g *gapFiller) frozenRuns(ctx context.Context, set domain.EngineTask, subjects []string, entries []gapledger.Entry, start, end time.Time) ([]fillRun, error) {
 	whole := []fillRun{{start: start, end: end}}
-	if g.unified == nil || g.universe == nil {
+	if g.universe == nil {
 		return whole, nil
-	}
-	multi, err := g.unified(ctx, set.Set)
-	if err != nil || !multi {
-		return whole, err
 	}
 	duration, err := g.clock.Duration(set.Set.Freq)
 	if err != nil {
@@ -667,7 +660,8 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		// 统一数据集：冻结全集按序列（标的、series_tag）判断，缺一个市场的币时只跳过那个市场。
+		// 冻结全集按序列（标的、series_tag）判断：统一数据集里缺一个市场的币时只跳过那个市场。
+		// 没有序列全集的 marker（不应出现）时 Series 为空，期望序列由数据层给出。
 		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe.Subjects, Series: universe.Series, Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use)}, nil
 	}

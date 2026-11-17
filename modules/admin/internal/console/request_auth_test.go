@@ -1,168 +1,135 @@
 package console
 
 import (
-	"context"
-	"fmt"
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	"github.com/mooyang-code/moox/packages/requestauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type fakeRequestAuthStore struct {
-	sessions map[string]authmodel.RequestSigningSession
-	nonces   map[string]bool
-	tickets  map[string]authmodel.RawSessionTicket
-}
+// 测试里管理台的地址：浏览器发来的 Host 带着 :9527，Origin 是 https://<Host>。
+const (
+	testHost   = "control.example:9527"
+	testOrigin = "https://" + testHost
+)
 
-func (s *fakeRequestAuthStore) GetSigningSession(_ context.Context, sid string) (*authmodel.RequestSigningSession, error) {
-	v, ok := s.sessions[sid]
-	if !ok {
-		return nil, fmt.Errorf("not found")
-	}
-	return &v, nil
-}
-func (s *fakeRequestAuthStore) ConsumeSessionNonce(_ context.Context, sid, nonce string, _ time.Duration) (bool, error) {
-	k := sid + ":" + nonce
-	if s.nonces[k] {
-		return false, nil
-	}
-	s.nonces[k] = true
-	return true, nil
-}
-
-func (s *fakeRequestAuthStore) ConsumeRawSessionTicket(_ context.Context, id string) (*authmodel.RawSessionTicket, error) {
-	v, ok := s.tickets[id]
-	if !ok {
-		return nil, fmt.Errorf("not found")
-	}
-	delete(s.tickets, id)
-	return &v, nil
-}
-
-func signedAdminRequest(t *testing.T, secret, key, sid, path string, body []byte, timestamp int64, nonce string) *http.Request {
+// setupSessionTest 建一张会话表并登录一个用户 u1。
+func setupSessionTest(t *testing.T) (*session.Store, session.Session) {
 	t.Helper()
-	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
+	SetConfig(&Config{})
+	store, err := session.NewStore(time.Hour)
 	require.NoError(t, err)
-	sig, err := requestauth.Sign(key, requestauth.Material{Method: http.MethodPost, Path: path, Body: body, Timestamp: timestamp, Nonce: nonce})
+	created, err := store.Create("u1", "admin")
 	require.NoError(t, err)
-	r := httptest.NewRequest(http.MethodPost, path, nil)
-	r.Header.Set("Authorization", token)
-	r.Header.Set("X-Moox-Timestamp", fmt.Sprint(timestamp))
-	r.Header.Set("X-Moox-Nonce", nonce)
-	r.Header.Set("X-Moox-Signature", sig)
+	return store, created
+}
+
+// browserRequest 是浏览器从管理台页面发出的 POST：同源 Origin，带会话 Cookie。
+func browserRequest(t *testing.T, current session.Session, path, space string, body []byte) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	r.Host = testHost
+	r.Header.Set("Origin", testOrigin)
+	if current.ID != "" {
+		r.AddCookie(&http.Cookie{Name: session.CookieName, Value: current.ID})
+	}
+	if space != "" {
+		r.Header.Set("X-Space-Id", space)
+	}
 	return r
 }
 
-func setupRequestAuthTest(t *testing.T) (*fakeRequestAuthStore, string, string, string) {
-	t.Helper()
-	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "encryption-key-for-tests")
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
-	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
-	secret, key, sid := "jwt-secret-for-request-auth", "signing-key", "sid-1"
-	encrypted, err := mooxsecurity.Encrypt(key, "encryption-key-for-tests")
-	require.NoError(t, err)
-	store := &fakeRequestAuthStore{sessions: map[string]authmodel.RequestSigningSession{sid: {SessionID: sid, UserID: "u1", EncryptedSecret: encrypted, ExpiresAt: time.Now().Add(time.Hour)}}, nonces: map[string]bool{}, tickets: map[string]authmodel.RawSessionTicket{}}
-	SetRequestAuthStore(store)
-	SetConfig(&Config{JWT: JWTConfig{SecretKey: secret}, Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/auth/GetLoginSalt", "/api/admin/auth/Login"}}})
-	return store, secret, key, sid
+func TestOriginAllowedRequiresExactlyOneSameSiteOrigin(t *testing.T) {
+	request := func(origins ...string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/admin/auth/Login", nil)
+		r.Host = testHost
+		for _, origin := range origins {
+			r.Header.Add("Origin", origin)
+		}
+		return r
+	}
+	assert.True(t, originAllowed(request(testOrigin), nil))
+	assert.True(t, originAllowed(request("HTTPS://CONTROL.EXAMPLE:9527"), nil), "大小写不敏感")
+	assert.False(t, originAllowed(request(), nil), "缺少 Origin 一律拒绝")
+	assert.False(t, originAllowed(request(""), nil))
+	assert.False(t, originAllowed(request("null"), nil))
+	assert.False(t, originAllowed(request("https://evil.example"), nil))
+	assert.False(t, originAllowed(request("http://"+testHost), nil), "协议不同也不是本站")
+	assert.False(t, originAllowed(request("https://control.example:9528"), nil), "端口不同也不是本站")
+	assert.False(t, originAllowed(request(testOrigin, testOrigin), nil), "多个 Origin 头拒绝")
+	assert.True(t, originAllowed(request("http://localhost:9527"), []string{"http://localhost:9527"}), "配置的开发来源")
 }
 
-func TestAdminRequestRequiresJWTAndSignature(t *testing.T) {
-	setupRequestAuthTest(t)
-	_, err := verifyAdminRequest(httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", nil), nil)
-	require.Error(t, err)
+func TestNeedsOriginCheckCoversWritesAndWebSocketHandshake(t *testing.T) {
+	post := httptest.NewRequest(http.MethodPost, "/", nil)
+	get := httptest.NewRequest(http.MethodGet, "/", nil)
+	upgrade := httptest.NewRequest(http.MethodGet, "/", nil)
+	upgrade.Header.Set("Upgrade", "websocket")
+	assert.True(t, needsOriginCheck(post, "auth/Login"))
+	assert.True(t, needsOriginCheck(upgrade, "archive/PartitionDownload"))
+	assert.True(t, needsOriginCheck(get, "ssh/WsConnect"), "终端握手按路由也要核对")
+	assert.False(t, needsOriginCheck(get, "archive/PartitionDownload"), "下载是普通 GET")
 }
 
-func TestAdminRequestRejectsExpiredSession(t *testing.T) {
-	store, secret, key, sid := setupRequestAuthTest(t)
-	v := store.sessions[sid]
-	v.ExpiresAt = time.Now().Add(-time.Second)
-	store.sessions[sid] = v
-	r := signedAdminRequest(t, secret, key, sid, "/api/admin/auth/GetUserInfo", nil, time.Now().Unix(), "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
-	_, err := verifyAdminRequest(r, nil)
-	require.Error(t, err)
+// 9527 由 Admin 直接监听：来源 IP 只取连接对端地址，请求头里的转发地址客户端自己就能写，一概不认。
+func TestClientIPUsesConnectionPeerOnly(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "203.0.113.9:50000"
+	r.Header.Set("X-Forwarded-For", "6.6.6.6, 198.51.100.4")
+	r.Header.Set("X-Client-Ip", "6.6.6.6")
+	r.Header.Set("X-Real-IP", "6.6.6.6")
+	assert.Equal(t, "203.0.113.9", clientIP(r))
+	r.RemoteAddr = "[2001:db8::9]:50000"
+	assert.Equal(t, "2001:db8::9", clientIP(r))
 }
 
-func TestAdminRequestRejectsTimestampOutsideWindow(t *testing.T) {
-	_, secret, key, sid := setupRequestAuthTest(t)
-	nonce := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	r := signedAdminRequest(t, secret, key, sid, "/api/admin/auth/GetUserInfo", nil, time.Now().Add(-2*time.Minute).Unix(), nonce)
-	_, err := verifyAdminRequest(r, nil)
-	require.Error(t, err)
+func TestSessionCookieAttributes(t *testing.T) {
+	rr := httptest.NewRecorder()
+	expires := time.Now().Add(24 * time.Hour)
+	setSessionCookie(rr, session.Session{ID: "sid-value", ExpiresAt: expires}, 86400)
+	cookie := rr.Result().Cookies()[0]
+	assert.Equal(t, "__Host-moox_session", cookie.Name, "__Host- 前缀：只认 Secure、Path=/、不带 Domain 的 Cookie")
+	assert.Empty(t, cookie.Domain)
+	assert.Equal(t, "sid-value", cookie.Value)
+	assert.True(t, cookie.HttpOnly)
+	assert.True(t, cookie.Secure)
+	assert.Equal(t, http.SameSiteStrictMode, cookie.SameSite)
+	assert.Equal(t, "/", cookie.Path)
+	assert.Equal(t, 86400, cookie.MaxAge)
+	assert.WithinDuration(t, expires, cookie.Expires, time.Second)
+
+	rr = httptest.NewRecorder()
+	clearSessionCookie(rr)
+	cleared := rr.Result().Cookies()[0]
+	assert.Equal(t, session.CookieName, cleared.Name)
+	assert.Empty(t, cleared.Value)
+	assert.Equal(t, -1, cleared.MaxAge, "Max-Age=0")
+	assert.True(t, cleared.HttpOnly)
+	assert.True(t, cleared.Secure)
+	assert.Equal(t, http.SameSiteStrictMode, cleared.SameSite)
+	assert.Equal(t, "/", cleared.Path)
 }
 
-func TestAdminRequestRejectsChangedBodyOrPath(t *testing.T) {
-	_, secret, key, sid := setupRequestAuthTest(t)
-	nonce := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	r := signedAdminRequest(t, secret, key, sid, "/api/admin/auth/GetUserInfo", []byte(`{"a":1}`), time.Now().Unix(), nonce)
-	_, err := verifyAdminRequest(r, []byte(`{"a":2}`))
-	require.Error(t, err)
-}
-
-func TestAdminRequestRejectsChangedSpaceHeader(t *testing.T) {
-	_, secret, key, sid := setupRequestAuthTest(t)
-	timestamp := time.Now().Unix()
-	nonce := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	path := "/api/admin/auth/GetUserInfo"
-	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
-	require.NoError(t, err)
-	sig, err := requestauth.Sign(key, requestauth.Material{
-		Method: http.MethodPost, Path: path, Headers: map[string]string{"X-Space-Id": "space-1"}, Timestamp: timestamp, Nonce: nonce,
-	})
-	require.NoError(t, err)
-	r := httptest.NewRequest(http.MethodPost, path, nil)
-	r.Header.Set("Authorization", token)
-	r.Header.Set("X-Moox-Timestamp", fmt.Sprint(timestamp))
-	r.Header.Set("X-Moox-Nonce", nonce)
-	r.Header.Set("X-Moox-Signature", sig)
-	r.Header.Set("X-Space-Id", "space-2")
-
-	_, err = verifyAdminRequest(r, nil)
-	require.Error(t, err)
-}
-
-func TestAdminRequestRejectsReplayedNonce(t *testing.T) {
-	_, secret, key, sid := setupRequestAuthTest(t)
-	nonce := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	r := signedAdminRequest(t, secret, key, sid, "/api/admin/auth/GetUserInfo", nil, time.Now().Unix(), nonce)
-	_, err := verifyAdminRequest(r, nil)
-	require.NoError(t, err)
-	_, err = verifyAdminRequest(r, nil)
-	require.Error(t, err)
-}
-
-func TestLoginRoutesRemainUnsigned(t *testing.T) {
-	setupRequestAuthTest(t)
-	assert.True(t, shouldSkipAdminRequestAuth("/api/admin/auth/Login"))
-	assert.True(t, shouldSkipAdminRequestAuth("/api/admin/auth/GetLoginSalt"))
-}
-
-func TestRawTicketRequiresMatchingOwnedSSHSession(t *testing.T) {
-	store, _, _, sid := setupRequestAuthTest(t)
-	SetRawSessionOwnerVerifier(func(sessionID, userID string) bool {
-		return sessionID == "ssh-owned" && userID == "u1"
-	})
-	t.Cleanup(func() { SetRawSessionOwnerVerifier(nil) })
-	store.tickets["matching"] = authmodel.RawSessionTicket{TicketID: "matching", SessionID: sid, UserID: "u1", Operation: "ssh_ws", ResourceSessionID: "ssh-owned", ExpiresAt: time.Now().Add(time.Minute)}
-
-	matching := httptest.NewRequest(http.MethodGet, "/api/admin/ssh/WsConnect?ticket=matching&session_id=ssh-owned", nil)
-	_, err := validateRawRouteTicket(matching, "ssh", "WsConnect")
-	require.NoError(t, err)
-
-	store.tickets["mismatch"] = authmodel.RawSessionTicket{TicketID: "mismatch", SessionID: sid, UserID: "u1", Operation: "ssh_ws", ResourceSessionID: "ssh-owned", ExpiresAt: time.Now().Add(time.Minute)}
-	mismatch := httptest.NewRequest(http.MethodGet, "/api/admin/ssh/WsConnect?ticket=mismatch&session_id=ssh-other", nil)
-	_, err = validateRawRouteTicket(mismatch, "ssh", "WsConnect")
-	require.Error(t, err)
-
-	store.tickets["unowned"] = authmodel.RawSessionTicket{TicketID: "unowned", SessionID: sid, UserID: "u1", Operation: "ssh_ws", ResourceSessionID: "ssh-unowned", ExpiresAt: time.Now().Add(time.Minute)}
-	unowned := httptest.NewRequest(http.MethodGet, "/api/admin/ssh/WsConnect?ticket=unowned&session_id=ssh-unowned", nil)
-	_, err = validateRawRouteTicket(unowned, "ssh", "WsConnect")
-	require.Error(t, err)
+func TestRequestSessionReadsOnlyTheCookie(t *testing.T) {
+	store, current := setupSessionTest(t)
+	router := newTestRouter(t, store, nil, nil)
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	_, ok := router.requestSession(r)
+	assert.False(t, ok)
+	r.Header.Set("Authorization", current.ID)
+	r.Header.Set("X-Access-Token", current.ID)
+	_, ok = router.requestSession(r)
+	assert.False(t, ok, "请求头里的令牌不再认")
+	r.AddCookie(&http.Cookie{Name: session.CookieName, Value: current.ID})
+	got, ok := router.requestSession(r)
+	require.True(t, ok)
+	assert.Equal(t, "u1", got.UserID)
+	store.Delete(current.ID)
+	_, ok = router.requestSession(r)
+	assert.False(t, ok, "服务端删掉的会话立即失效")
 }

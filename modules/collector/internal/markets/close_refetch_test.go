@@ -128,6 +128,6 @@ func TestParseConfigRefetchAfterClose(t *testing.T) {
 		require.Equal(t, minutes, config.RefetchAfterCloseMinutes, marketID)
 	}
 	var err error
-	_, err = parseConfig("demo", []byte("market_id: demo\nallowed_lateness_seconds: 60\nsubject_egress: direct\nrefetch_after_close_minutes: -1\n"))
+	_, err = parseConfig("demo", []byte("market_id: demo\ningest: scf\nallowed_lateness_seconds: 60\nsubject_egress: direct\nrefetch_after_close_minutes: -1\n"))
 	require.ErrorContains(t, err, "refetch_after_close_minutes")
 }

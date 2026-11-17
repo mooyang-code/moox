@@ -44,16 +44,15 @@ type RowCounter interface {
 	CountTimeSeriesRows(context.Context, *storagepb.CountTimeSeriesRowsReq, ...client.Option) (*storagepb.CountTimeSeriesRowsRsp, error)
 }
 
-// PlanHistory 返回空间的全部采集计划。
+// PlanHistory 返回空间的全部采集计划。只有补采用它：按历史计划找当时负责某个标的的函数与交易所符号映射（loadPlanHistory）。
 type PlanHistory interface {
 	ListAll(context.Context, string) ([]*store.FetchPlanRecord, error)
 }
 
-// Checker 按采集计划还原应有标的与时间点，读取 Storage 行比对出缺口。
+// Checker 按标的时间线得到应有标的与时间点，读取 Storage 行比对出缺口。
 type Checker struct {
-	Plans       PlanHistory
+	Timeline    TimelineSource
 	Rows        RowReader
-	Auth        *storagepb.AuthInfo
 	Now         func() time.Time
 	Concurrency int
 	// Calendar 非空时用于过滤非交易时间点（按市场的分桶时钟，交易时段市场只有交易桶应有 K 线）；为空表示连续交易。
@@ -115,17 +114,13 @@ func (c *Checker) now() time.Time {
 
 // Check 检查范围内每个数据集、标的的 K 线是否齐全。
 func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
-	if c == nil || c.Plans == nil || c.Rows == nil {
+	if c == nil || c.Timeline == nil || c.Rows == nil {
 		return nil, fmt.Errorf("kline checker is not initialized")
 	}
 	if strings.TrimSpace(request.SpaceID) == "" || request.From.IsZero() || request.To.IsZero() || !request.From.Before(request.To) {
 		return nil, fmt.Errorf("space_id and a non-empty time range are required")
 	}
-	records, err := c.Plans.ListAll(ctx, request.SpaceID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := BuildTimeline(records)
+	timeline, err := loadTimeline(ctx, c.Timeline, request.SpaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +324,7 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 		detail := subjects
 		if counter, ok := c.counter(request); ok {
 			// 先比对根数：根数正好等于“应有 - 已确认缺失”的标的没有缺口，不用读行。
-			if counts, err := countPresent(ctx, counter, c.Auth, request.SpaceID, datasetID, frequencyName, seriesTag, subjects, bars[0], end); err != nil {
+			if counts, err := countPresent(ctx, counter, request.SpaceID, datasetID, frequencyName, seriesTag, subjects, bars[0], end); err != nil {
 				// 计数失败（例如 Storage 还没升级）不影响检查，退回逐行比对。
 				log.WarnContextf(ctx, "collector kline count failed, falling back to row reads space=%s dataset=%s|%s: %v", request.SpaceID, datasetID, frequencyName, err)
 			} else {
@@ -377,13 +372,13 @@ func (c *Checker) counter(request Request) (RowCounter, bool) {
 
 // countPresent 按标的统计 [from, to) 内已存在的 K 线根数。seriesTag 为空时同一时间点多个 series_tag 只计一次；
 // 非空时只数这一条序列（Storage 的计数按标的合并，所以统一数据集每个 tag 单独请求）。
-func countPresent(ctx context.Context, counter RowCounter, auth *storagepb.AuthInfo, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) (map[string]int, error) {
+func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) (map[string]int, error) {
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
 	for _, subject := range subjects {
 		selectors = append(selectors, seriesSelector(spaceID, datasetID, subject, frequency, seriesTag))
 	}
 	rsp, err := counter.CountTimeSeriesRows(ctx, &storagepb.CountTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
+		SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
 		TimeRange: &storagepb.TimeRange{StartTime: from.Format(time.RFC3339), EndTime: to.Format(time.RFC3339)},
 	})
 	if err != nil {
@@ -517,7 +512,7 @@ func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency
 	cursor := ""
 	for {
 		rsp, err := c.Rows.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-			AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID,
+			SpaceId: spaceID, DatasetId: datasetID,
 			Selectors:   selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: from.Format(time.RFC3339), EndTime: to.Format(time.RFC3339)},
 			ColumnNames: columns, Page: &storagepb.Page{Size: rowPageSize, Cursor: cursor},

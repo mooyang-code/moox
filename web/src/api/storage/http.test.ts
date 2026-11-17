@@ -29,11 +29,7 @@ describe("Storage HTTP facade", () => {
   it("uses the fixed Admin Gateway Storage BFF path", async () => {
     await callStorage("ListDataSources", { space_id: "space-1" });
 
-    expect(mocks.post).toHaveBeenCalledWith(
-      "/api/admin/storage/ListDataSources",
-      // 调用方身份由 Admin 网关写入，前端不带 auth_info
-      { space_id: "space-1" }
-    );
+    expect(mocks.post).toHaveBeenCalledWith("/api/admin/storage/ListDataSources", { space_id: "space-1" });
   });
 
   it("deduplicates short-lived read requests and invalidates them on writes", async () => {

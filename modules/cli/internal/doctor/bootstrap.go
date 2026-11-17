@@ -12,11 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 type DeploymentClient interface {
@@ -28,18 +27,22 @@ type DoctorContextClient interface {
 }
 
 type BootstrapOptions struct {
-	NodeID, LocalNodeID, ReleaseRoot, DatasetHealthPolicyPath string
-	CheckIDs                                                  []string
-	Client                                                    DeploymentClient
-	MonitorClient                                             DoctorContextClient
-	Prober                                                    HTTPProber
-	Now                                                       func() time.Time
-	ProbeWritable                                             func(context.Context, string, string) error
-	ProcessAlive                                              func(string) bool
-	// Systemd 检查 systemd_user 托管的组件（外部程序）：开机自启、运行中与 linger 三项都满足才通过；为空时退回 PID 检查。
+	NodeID, LocalNodeID, DatasetHealthPolicyPath string
+	CheckIDs                                     []string
+	Client                                       DeploymentClient
+	MonitorClient                                DoctorContextClient
+	// Probe 请求组件只听本机的健康端口：查的是本机时直接请求 127.0.0.1，带远端 --node 时经 SSH 转发到目标机的 127.0.0.1。
+	// SSH 连不上时 bootstrap 把这一项记为失败并建议重启服务（diagnose 同样情况记为无法判断）。
+	Probe         HealthProbe
+	Now           func() time.Time
+	ProbeWritable func(context.Context, string, string) error
+	// Systemd 读组件 systemd 用户服务（moox-<组件>.service）的状态：开机自启、运行中与 linger 三项都满足才通过；
+	// 为空时自启动检查记为无法判断。全部组件都由 systemd 用户服务托管。
 	Systemd SystemdChecker
-	// DeployRoot 是部署根目录：外部程序的安装目录是 <部署根>/<组件>，它声明的路径相对部署根而不是发布目录。
+	// DeployRoot 是部署根（默认 /data/moox）：部署记录是 <部署根>/version.json，组件的数据目录是 <部署根>/data/<组件>。
 	DeployRoot string
+	// ReadFile 读节点上的一个文件（本机直接读，远端经 SSH）；为空时读本机文件。
+	ReadFile func(ctx context.Context, nodeID, path string) ([]byte, error)
 }
 
 type bootstrapRunner struct {
@@ -67,10 +70,10 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 		return core.Report{}, err
 	}
 	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]Deployment{}}
-	if options.ReleaseRoot == "" {
-		runner.manifestErr = fmt.Errorf("release root is required")
+	if options.DeployRoot == "" {
+		runner.manifestErr = fmt.Errorf("没有部署根，无法核对部署记录")
 	} else {
-		runner.manifestErr = verifyReleaseCatalog(options.ReleaseRoot, manifest.Checksum)
+		runner.manifestErr = verifyDeployedCatalog(ctx, options, manifest.Checksum)
 	}
 	if options.Client == nil {
 		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
@@ -151,7 +154,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if contractErr != nil {
 			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_deployments")
 		}
-		return checkResult(spec.ID, core.StatusPass, "release catalog, checksum, and Dataset health policy are available", nil)
+		return checkResult(spec.ID, core.StatusPass, "deployed catalog checksum matches and Dataset health policy is available", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
 			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_deployments")
@@ -159,7 +162,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		missing := []string{}
 		required := []string{"host-gateway", "host-agent"}
 		if _, control := r.deployments["admin"]; control {
-			required = append(required, "admin", "console-proxy", "web-host")
+			required = append(required, "admin")
 		}
 		for _, id := range required {
 			if _, exists := r.deployments[id]; !exists {
@@ -204,7 +207,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.Transport != core.TransportReporter {
 			return checkResult(spec.ID, core.StatusSkipped, "identity extension is not part of the active V1 contract", nil)
 		}
-		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, component.HealthPath))
+		probe, err := r.probe(ctx, component, "/readyz")
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service identity probe failed", err, "verify_service_identity")
 		}
@@ -230,56 +233,36 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			return checkResult(spec.ID, core.StatusFail, "service identity conflicts with canonical service@node identity", nil, "verify_service_identity")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service identity matches the canonical contract", nil)
-		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "signed identity response", Digest: probe.Digest}}
+		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "local identity response", Digest: probe.Digest}}
 		return result
 	case "network", "health":
-		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, component.HealthPath))
+		probe, err := r.probe(ctx, component, "/readyz")
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service health endpoint is unavailable", err, "restart_service_manually")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service health endpoint responded", nil)
-		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "signed health response", Digest: probe.Digest}}
+		result.Observations = []core.Observation{{Source: "health", ObservedAt: probe.ObservedAt, Summary: "local health response", Digest: probe.Digest}}
 		return result
 	case "path_permissions":
-		if len(component.WritablePaths) == 0 {
-			return checkResult(spec.ID, core.StatusSkipped, "component declares no writable paths", nil)
+		// 每个组件的可写目录固定是 <部署根>/data/<组件>（systemd 单元的 WorkingDirectory），不用声明。
+		if r.options.DeployRoot == "" {
+			return checkResult(spec.ID, core.StatusWarn, "无法确定部署根目录，没有检查数据目录", nil, "repair_path_permissions")
 		}
-		pathRoot := r.options.ReleaseRoot
-		if _, systemd := systemdUnit(r.manifest, component.ComponentID); systemd && r.options.DeployRoot != "" {
-			pathRoot = r.options.DeployRoot
+		probeWritable := r.options.ProbeWritable
+		if probeWritable == nil {
+			probeWritable = ProbeWritablePath
 		}
-		for _, path := range component.WritablePaths {
-			probeWritable := r.options.ProbeWritable
-			if probeWritable == nil {
-				probeWritable = ProbeWritablePath
-			}
-			if err := probeWritable(ctx, pathRoot, path); err != nil {
-				return checkResult(spec.ID, core.StatusFail, "writable path probe failed", err, "repair_path_permissions")
-			}
+		if err := probeWritable(ctx, r.options.DeployRoot, filepath.Join("data", component.ComponentID)); err != nil {
+			return checkResult(spec.ID, core.StatusFail, "data directory probe failed", err, "repair_path_permissions")
 		}
-		return checkResult(spec.ID, core.StatusPass, "declared writable paths accept bounded temporary probes", nil)
+		return checkResult(spec.ID, core.StatusPass, "data directory accepts bounded temporary probes", nil)
 	case "service_autostart":
-		if unit, systemd := systemdUnit(r.manifest, component.ComponentID); systemd && r.options.Systemd != nil {
-			state, err := r.options.Systemd(ctx, r.options.NodeID, unit)
-			return supervisorResult(spec.ID, unit, state, err)
+		unit := servicecatalog.UnitName(component.ComponentID)
+		if r.options.Systemd == nil {
+			return checkResult(spec.ID, core.StatusUnknown, "systemd state checker is unavailable for this run", nil, "restart_service_manually")
 		}
-		// 进程记录由运行助手写在部署根下，不在发布目录里；没有清单时从发布目录的 runtime.json 取部署根。
-		deployRoot := r.options.DeployRoot
-		if deployRoot == "" {
-			deployRoot, _ = unitruntime.ReleaseDeploymentRoot(r.options.ReleaseRoot)
-		}
-		if deployRoot == "" {
-			return checkResult(spec.ID, core.StatusWarn, "无法确定部署根目录，没有检查服务进程", nil, "restart_service_manually")
-		}
-		pidPath := unitruntime.PIDRecordPath(deployRoot, component.ComponentID)
-		isAlive := r.options.ProcessAlive
-		if isAlive == nil {
-			isAlive = processAlive
-		}
-		if isAlive(pidPath) {
-			return checkResult(spec.ID, core.StatusPass, "service process is running", nil)
-		}
-		return checkResult(spec.ID, core.StatusWarn, "service PID is not active; verify the configured service manager", nil, "restart_service_manually")
+		state, err := r.options.Systemd(ctx, r.options.NodeID, unit)
+		return supervisorResult(spec.ID, unit, state, err)
 	case "reporter_coverage":
 		if component.FunctionalObservability == core.FunctionalObservabilityDeferred || component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
 			if component.FunctionalObservability == core.FunctionalObservabilityNotApplicable {
@@ -290,7 +273,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if component.Transport != core.TransportReporter {
 			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
 		}
-		probe, err := r.options.Prober.Get(ctx, healthURL(deployment, "/metrics"))
+		probe, err := r.probe(ctx, component, "/metrics")
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "Reporter metrics endpoint is unavailable", err, "verify_eventbus_credentials")
 		}
@@ -357,19 +340,13 @@ func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, 
 	return core.Component{}, "", false
 }
 
-func validateManifestChecksumFile(path, want string) error {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read doctor manifest checksum: %w", err)
+// probe 请求 --node 所指节点上组件的健康端口（远端节点经 SSH 转发）。
+func (r *bootstrapRunner) probe(ctx context.Context, component core.Component, path string) (ProbeResult, error) {
+	if r.options.Probe == nil {
+		return ProbeResult{}, fmt.Errorf("health probe is unavailable")
 	}
-	value := strings.TrimSpace(string(raw))
-	if value != want && value != strings.TrimPrefix(want, "sha256:") {
-		return fmt.Errorf("doctor manifest checksum file contains %q, want %s", value, want)
-	}
-	return nil
+	return r.options.Probe(ctx, r.options.NodeID, component.HealthPort, path)
 }
-
-func healthURL(deployment Deployment, path string) string { return deployment.HealthAddress + path }
 
 func checkResult(id string, status core.CheckStatus, summary string, err error, actions ...string) core.CheckResult {
 	result := core.CheckResult{ID: id, Status: status, Summary: summary, RecoveryActionIDs: actions}
@@ -377,21 +354,6 @@ func checkResult(id string, status core.CheckStatus, summary string, err error, 
 		result.Error = err.Error()
 	}
 	return result
-}
-
-// processAlive 读运行助手写的进程记录（JSON，pid 字段）并判断该进程是否还在。
-func processAlive(path string) bool {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var record struct {
-		PID int `json:"pid"`
-	}
-	if json.Unmarshal(raw, &record) != nil || record.PID <= 0 {
-		return false
-	}
-	return pidAlive(record.PID)
 }
 
 func newRunID() string {
@@ -442,20 +404,29 @@ func selectSpecs(specs []core.CheckSpec, selected []string) ([]core.CheckSpec, e
 	return out, nil
 }
 
-// verifyReleaseCatalog 核对发布目录里的服务目录和内嵌的是否一致。产物包目录没有发布清单，直接用内嵌目录。
-func verifyReleaseCatalog(root, checksum string) error {
-	directory := filepath.Join(root, "config", "servicecatalog")
-	if _, isBundle, err := bundle.Load(root); err != nil {
-		return err
-	} else if _, statErr := os.Stat(directory); isBundle && os.IsNotExist(statErr) {
-		return nil
+// verifyDeployedCatalog 核对节点上 <部署根>/version.json 记的服务目录摘要与这个 moox-cli 内嵌的一致：
+// 不一致说明节点上的组件和这个 CLI 不是同一版本，按 CLI 的目录诊断会得出错误的结论。
+func verifyDeployedCatalog(ctx context.Context, options BootstrapOptions, checksum string) error {
+	path := filepath.Join(options.DeployRoot, "version.json")
+	read := options.ReadFile
+	if read == nil {
+		read = func(_ context.Context, _ string, path string) ([]byte, error) { return os.ReadFile(path) }
 	}
-	release, err := core.LoadManifestFile(filepath.Join(directory, "catalog.yaml"))
+	raw, err := read(ctx, options.NodeID, path)
 	if err != nil {
-		return err
+		return fmt.Errorf("读不到部署记录 %s（这台主机还没用 setup deploy 装过？）: %w", path, err)
 	}
-	if release.Checksum != checksum {
-		return fmt.Errorf("release manifest checksum %s does not match embedded checksum %s", release.Checksum, checksum)
+	if len(raw) > 64<<10 {
+		return fmt.Errorf("部署记录 %s 超过 64 KiB", path)
 	}
-	return validateManifestChecksumFile(filepath.Join(directory, "catalog.yaml.sha256"), checksum)
+	var version struct {
+		CatalogSHA256 string `json:"catalog_sha256"`
+	}
+	if err := json.Unmarshal(raw, &version); err != nil {
+		return fmt.Errorf("部署记录 %s 不是合法的 JSON: %w", path, err)
+	}
+	if version.CatalogSHA256 != checksum {
+		return fmt.Errorf("节点上部署的服务目录摘要 %q 与这个 moox-cli 内嵌的 %s 不一致：重新部署这台主机，或换成同一版本的 CLI", version.CatalogSHA256, checksum)
+	}
+	return nil
 }

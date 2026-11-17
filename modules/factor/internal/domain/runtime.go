@@ -3,6 +3,7 @@ package domain
 import (
 	"time"
 
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
@@ -16,7 +17,7 @@ type FactorPeriodState struct {
 	FailedSubjects []string
 	SpecHash       string
 	DefinitionHash string
-	// FailedSeries 是按序列（标的、series_tag）的失败名单，只有统一数据集才有，口径同 FailedSubjects。
+	// FailedSeries 是按序列（标的、series_tag）的失败名单，口径同 FailedSubjects。
 	FailedSeries []seriesset.Series
 	// SkippedSeriesTags 是被跳过的 series_tag（截面因子全集缺数）：这些序列的结果写 NULL。
 	// 全部 tag 都跳过时 Status 为 skipped；只跳过一部分时 Status 为 degraded，并在这里列出。
@@ -48,8 +49,36 @@ type RunnerStatus struct {
 	WarmupState      string
 	WarmSubjects     int32
 	ExpectedSubjects int32
-	// Paused 表示任务被有意停下（手动、系统或自动暂停，以及放行前的恢复追赶）；故障不算。
+	// Paused 表示引擎模块被有意停下（暂停，以及放行前的恢复追赶），任务因此不计算。
 	Paused bool
+	// Checks 是引擎计算前对任务做的检查；有不通过项的任务不计算，不通过的项写明原因和处理办法。
+	Checks []TaskCheck
+}
+
+// TaskCheck 是因子任务的一项计算前检查的结果。
+type TaskCheck struct {
+	Name   string
+	Status string // TaskCheckPass | TaskCheckWarn | TaskCheckFail
+	// Message 是没通过的原因；Remedy 是处理办法（例如要执行的命令）。
+	Message string
+	Remedy  string
+}
+
+// 检查结果：警告不挡计算，不通过的任务不计算。
+const (
+	TaskCheckPass = "PASS"
+	TaskCheckWarn = "WARN"
+	TaskCheckFail = "FAIL"
+)
+
+// TaskChecksPassed 报告检查里是否没有不通过项。
+func TaskChecksPassed(checks []TaskCheck) bool {
+	for _, check := range checks {
+		if check.Status == TaskCheckFail {
+			return false
+		}
+	}
+	return true
 }
 
 // EngineIdentity names one running moox-factor-engine process.
@@ -75,6 +104,9 @@ type EngineStatus struct {
 	Lifecycle EngineLifecycle
 	// UDFModules 是引擎当前目录引用的各自定义算子模块（版本）的状态。
 	UDFModules []UDFModuleStatus
+	// Ready 与 NotReadyReason 是引擎 /readyz 用的同一个就绪判断，factor-mgr 代报给 Monitor。
+	Ready          bool
+	NotReadyReason string
 }
 
 // 自定义算子模块在引擎上的状态。
@@ -100,6 +132,10 @@ type EngineLifecycle struct {
 	QuiescedAt     time.Time
 	Quiesced       bool
 	CatchupBlocked string
+	// PauseKind（manual、system）与 PauseReason 是本次暂停的类型与原因；Catchup 是恢复追赶的进度。factor-mgr 把它们代报给 Monitor。
+	PauseKind   string
+	PauseReason string
+	Catchup     *lifecycle.Catchup
 }
 
 // SetWatermark 是一个任务的连续水位：BlockedSince 非零表示阻塞在 BlockedPeriod（还没补到的周期）上。

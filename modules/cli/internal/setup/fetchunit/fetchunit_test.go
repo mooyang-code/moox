@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
 )
@@ -68,7 +69,7 @@ func deadServer(t *testing.T) *httptest.Server {
 func TestDownloadsWithRangeAndVerifies(t *testing.T) {
 	body, file := fixture(t, 40<<20)
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
 	raw, err := os.ReadFile(StagingPath(root, file.SHA256, file.Name))
 	require.NoError(t, err)
@@ -82,7 +83,7 @@ func TestExistingFileIsNotDownloadedAgain(t *testing.T) {
 	body, file := fixture(t, 1<<20)
 	root := t.TempDir()
 	var hits atomic.Int64
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, &hits).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, &hits).URL + "/{file}"}}
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
 	hits.Store(0)
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
@@ -94,7 +95,7 @@ func TestFallsBackToSecondSourceOnBadDigest(t *testing.T) {
 	corrupt := bytes.Clone(body)
 	corrupt[10] ^= 0xff
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{
 		rangeServer(t, corrupt, nil).URL + "/{file}", rangeServer(t, body, nil).URL + "/{file}",
 	}}
 	require.NoError(t, Run(t.Context(), localTransport{}, request))
@@ -106,27 +107,16 @@ func TestFallsBackToSecondSourceOnBadDigest(t *testing.T) {
 func TestAllSourcesFailing(t *testing.T) {
 	_, file := fixture(t, 1<<20)
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{deadServer(t).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{deadServer(t).URL + "/{file}"}}
 	require.ErrorIs(t, Run(t.Context(), localTransport{}, request), ErrNoSource)
 	require.NoFileExists(t, StagingPath(root, file.SHA256, file.Name))
-	require.False(t, Reachable(t.Context(), localTransport{}, request))
-}
-
-func TestProbeChangesNothingOnTarget(t *testing.T) {
-	body, file := fixture(t, 1<<20)
-	root := filepath.Join(t.TempDir(), "moox")
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
-	require.True(t, Reachable(t.Context(), localTransport{}, request))
-	require.NoDirExists(t, root, "预检不能改目标机")
-	require.True(t, LocalReachable(t.Context(), request.URLs, file.Name))
-	require.False(t, LocalReachable(t.Context(), []string{deadServer(t).URL + "/{file}"}, file.Name))
 }
 
 func TestWrongDigestNeverLandsInStaging(t *testing.T) {
 	body, file := fixture(t, 1<<20)
 	file.SHA256 = strings.Repeat("0", 64)
 	root := t.TempDir()
-	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	request := Request{StagingDir: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
 	require.ErrorIs(t, Run(t.Context(), localTransport{}, request), ErrNoSource)
 	require.NoFileExists(t, StagingPath(root, file.SHA256, file.Name))
 }
@@ -138,11 +128,11 @@ func TestKeepsOnlyTwoReleases(t *testing.T) {
 		body = append(body, release...)
 		digest := sha256.Sum256(body)
 		file.SHA256, file.Size = hex.EncodeToString(digest[:]), int64(len(body))
-		request := Request{DeployRoot: root, Release: release, Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+		request := Request{StagingDir: root, Release: release, Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
 		require.NoError(t, Run(t.Context(), localTransport{}, request))
 		time.Sleep(20 * time.Millisecond)
 	}
-	entries, err := os.ReadDir(filepath.Join(root, "staging"))
+	entries, err := os.ReadDir(root)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 }
@@ -169,4 +159,34 @@ func TestScriptIsASCII(t *testing.T) {
 	for _, r := range fetchScript {
 		require.Less(t, r, rune(128), "python3 -c 在 C 语言环境下可能读不了非 ASCII 内容")
 	}
+}
+
+// 下载只写进 StagingDir，而且必须是绝对路径。
+func TestStagingDirMustBeAbsolute(t *testing.T) {
+	body, file := fixture(t, 1<<20)
+	root := t.TempDir()
+	staging := filepath.Join(root, ".staging")
+	request := Request{StagingDir: staging, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	require.NoError(t, Run(t.Context(), localTransport{}, request))
+	raw, err := os.ReadFile(StagingPath(staging, file.SHA256, file.Name))
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(body, raw))
+	request.StagingDir = "relative/staging"
+	require.ErrorIs(t, Run(t.Context(), localTransport{}, request), ErrNoSource, "下载目录必须是绝对路径")
+}
+
+func TestComponentFilesFollowManifest(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	manifest := bundle.Manifest{Release: "v9.9.9", Components: map[string]bundle.Artifact{
+		"host-gateway": {File: "moox-host-gateway_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 3, Binaries: map[string]string{"moox-host-gateway": digest}},
+		"host-agent":   {File: "moox-host-agent_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 4, Binaries: map[string]string{"moox-host-agent": digest}},
+	}}
+	files, err := ComponentFiles(manifest, []string{"host-gateway", "host-agent", "host-gateway"})
+	require.NoError(t, err)
+	require.Equal(t, []File{
+		{Name: "moox-host-gateway_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 3},
+		{Name: "moox-host-agent_v9.9.9_linux_amd64.tar.gz", SHA256: digest, Size: 4},
+	}, files)
+	_, err = ComponentFiles(manifest, []string{"trade"})
+	require.ErrorContains(t, err, "bundle_incomplete")
 }

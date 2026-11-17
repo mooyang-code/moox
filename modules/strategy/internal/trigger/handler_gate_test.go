@@ -30,12 +30,12 @@ func shadowFlagOf(t *testing.T, result store.Result) bool {
 	return payload.(*tradeeventpb.LogicalAccountTargetWeightRequested).GetShadow()
 }
 
-// 门禁关闭：不求值、不留记录、不读输入；预热：求值并带影子标记；运行：正常目标。
+// 门禁关闭：不求值、不留记录、不读输入；门禁放行：求值，已确认实盘的实例发正式目标。
 func TestHandleGateModes(t *testing.T) {
 	account := "acct-1"
 	h := newHarness(t, rankDSL, &account)
 	rows := map[string]map[string]float64{"A": {"m": 2}, "B": {"m": 1}}
-	for n := 1; n <= 3; n++ {
+	for n := 1; n <= 2; n++ {
 		h.frame(n, rows)
 	}
 	mode := ModeOff
@@ -47,18 +47,11 @@ func TestHandleGateModes(t *testing.T) {
 		t.Fatalf("门禁关闭时不应读取输入：%d", h.loader.calls)
 	}
 
-	mode = ModeShadow
-	expectAck(t, h.deliver(2))
-	shadow := h.resultAt(2)
-	if shadow.Status != store.StatusOK || !shadowFlagOf(t, shadow) {
-		t.Fatalf("预热期的目标应带影子标记：%+v", shadow)
-	}
-
 	mode = ModeLive
-	expectAck(t, h.deliver(3))
-	live := h.resultAt(3)
+	expectAck(t, h.deliver(2))
+	live := h.resultAt(2)
 	if live.Status != store.StatusOK || shadowFlagOf(t, live) {
-		t.Fatalf("运行期的目标不应带影子标记：%+v", live)
+		t.Fatalf("已确认实盘的实例目标不应带影子标记：%+v", live)
 	}
 }
 

@@ -22,7 +22,6 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -33,7 +32,6 @@ import (
 )
 
 const (
-	followEnvSecret   = "view-follow-env-secret"
 	followEnvMaxBytes = 8 << 20
 	// followEnvPrefillBatch 是预填 View 时每次直接写入索引的行数。
 	followEnvPrefillBatch = 20000
@@ -47,7 +45,6 @@ type followEnv struct {
 	store   *pebble.Store
 	primary *primarystore.Service
 	view    *viewservice.Service
-	auth    *pb.AuthInfo
 	clock   atomic.Int64
 	watcher *readyWatcher
 	// metadata 是 View 的元数据：只有 View 的声明，已建状态在索引文件里。
@@ -61,7 +58,6 @@ type followEnv struct {
 }
 
 func (e *followEnv) Primary() readyBenchPrimary { return e.primary }
-func (e *followEnv) Auth() *pb.AuthInfo         { return e.auth }
 func (e *followEnv) Watcher() *readyWatcher     { return e.watcher }
 func (e *followEnv) SetPeriodClock(at time.Time) {
 	e.clock.Store(at.UnixNano())
@@ -69,7 +65,7 @@ func (e *followEnv) SetPeriodClock(at time.Time) {
 
 func (e *followEnv) CountViewRows(ctx context.Context, viewID, subject string, start, end time.Time) (uint64, error) {
 	req := &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: viewID,
+		SpaceId: readyBenchSpace, ViewId: viewID,
 		TimeRange: &pb.TimeRange{StartTime: start.UTC().Format(time.RFC3339), EndTime: end.UTC().Format(time.RFC3339)},
 		Page:      &pb.Page{Page: 1, Size: 1}, TotalMode: pb.TotalMode_FORCE_EXACT,
 	}
@@ -89,14 +85,16 @@ func (e *followEnv) CountViewRows(ctx context.Context, viewID, subject string, s
 // WaitApplied 等 View 跟上当前的日志头部。
 func (e *followEnv) WaitApplied(t *testing.T, ctx context.Context, viewID string) {
 	t.Helper()
-	rsp, err := e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: viewID, WaitTimeoutMs: 20000})
+	// 索引建好（GetViewState 能看到）到跟随器登记之间有一小段间隔，这期间服务回答 VIEW_NOT_READY，按契约重试。
+	deadline := time.Now().Add(30 * time.Second)
+	rsp, err := e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: viewID, WaitTimeoutMs: 20000})
+	for err == nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_VIEW_NOT_READY && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		rsp, err = e.view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: viewID, WaitTimeoutMs: 20000})
+	}
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || !rsp.GetApplied() {
 		t.Fatalf("等 View %s 跟上变更日志：rsp=%v err=%v", viewID, rsp, err)
 	}
-}
-
-func followEnvViewAuth() *pb.AuthInfo {
-	return &pb.AuthInfo{AppId: "storage-bench", AppKey: serviceauth.Key(followEnvSecret, "storage-bench")}
 }
 
 // followEnvOptions 选择 View 的建法：prebuilt 为真时在 View 进程启动前直接建好索引、预填历史并记下当前日志头部
@@ -118,7 +116,7 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	env := &followEnv{auth: &pb.AuthInfo{AppId: "storage-primary"}, datasets: make(map[string]string)}
+	env := &followEnv{datasets: make(map[string]string)}
 	env.SetPeriodClock(readyBenchBase.Add(-time.Hour))
 	for _, dataset := range datasets {
 		env.datasets[dataset.viewID] = dataset.datasetID
@@ -202,7 +200,7 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 		}
 		env.metadata.views = append(env.metadata.views, view)
 	}
-	env.view, err = viewservice.New(root, followEnvSecret)
+	env.view, err = viewservice.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +209,6 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 	if opts.rangeReader != nil {
 		rangeReader = opts.rangeReader(reader)
 	}
-	env.view.SetPrimaryAuth(env.auth)
 	env.view.SetPrimaryReader(reader)
 	eventClient, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.ClientURL()}, Name: "storage-view-follow-env"})
 	if err != nil {
@@ -251,7 +248,7 @@ func (e *followEnv) WaitBuilt(t *testing.T, ctx context.Context, viewID string) 
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		rsp, err := e.view.GetViewState(ctx, &pb.GetViewStateReq{AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: viewID})
+		rsp, err := e.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: viewID})
 		if err == nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && rsp.GetIndexId() != "" {
 			return rsp
 		}

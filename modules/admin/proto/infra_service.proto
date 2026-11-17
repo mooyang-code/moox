@@ -6,14 +6,14 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
-// Infra 域合并认证（Auth）与 DNS 代理（Dns）。
+// Infra 域只有认证（Auth）。
 // 由主机网关转发原生 tRPC；控制台通过生成的 handler 在 Admin 进程内调用。
 //
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
 //
-// 未鉴权接口（auth 的 GetLoginSalt/Login）由网关 no_auth_methods 配置放行；
-// 其余接口由网关 authorize filter 校验 JWT 并将 user_id/username 注入 ctx metadata。
+// 浏览器会话由控制台的 HTTP 层管理：Login 成功后下发 HttpOnly Cookie，之后每个请求按 Cookie 查会话，
+// 把 user_id、username、会话 ID 写进 ctx metadata。Login 是唯一不需要会话的接口。
 
 // ========== 认证（Auth）==========
 
@@ -26,54 +26,24 @@ message UserInfo {
   string last_login_ip = 5;
 }
 
-// ========== 登录盐值 ==========
-
-message GetLoginSaltReq {
-  string username = 1;  // 用户名/邮箱/手机号
-}
-
-message GetLoginSaltRsp {
-  common.RetInfo ret_info = 1;
-  string salt = 2;       // 随机盐值
-  int64 timestamp = 3;   // 服务器时间戳
-  int64 expires_in = 4;  // 盐值过期时间（秒）
-}
-
 // ========== 登录 ==========
 
+// LoginReq 的密码是明文，靠 HTTPS 保护；来源 IP 与浏览器标识由控制台的 HTTP 层取，不在请求体里。
 message LoginReq {
   string username = 1;
-  string password_hash = 2;  // 密码哈希值
-  string salt = 3;           // 从 GetLoginSalt 获取的盐值
-  int64 timestamp = 4;       // 从 GetLoginSalt 获取的时间戳
-  string device_id = 5;
-  string user_agent = 6;
-  string client_ip = 7;
+  string password = 2;
 }
 
+// LoginRsp 不带会话 ID：会话只在 HttpOnly Cookie 里，页面脚本读不到。
 message LoginRsp {
   common.RetInfo ret_info = 1;
-  string access_token = 2;  // 访问令牌
-  int64 expires_in = 3;     // 过期时间（秒）
-  UserInfo user_info = 4;
-  string session_id = 5;
-  string request_signing_key = 6;
-  int64 expires_at = 7;
+  UserInfo user_info = 2;
+  int64 expires_at = 3;  // 会话过期时间（Unix 秒）
 }
 
 message LogoutReq {}
 message LogoutRsp {
   common.RetInfo ret_info = 1;
-}
-
-message IssueRawSessionTicketReq {
-  string operation = 1;
-  string session_id = 2;
-}
-message IssueRawSessionTicketRsp {
-  common.RetInfo ret_info = 1;
-  string ticket = 2;
-  int64 expires_at = 3;
 }
 
 // ========== 用户信息 ==========
@@ -88,12 +58,10 @@ message GetUserInfoRsp {
 // ========== Services ==========
 
 service Auth {
-  // 获取登录盐值
-  rpc GetLoginSalt(GetLoginSaltReq) returns (GetLoginSaltRsp);
   // 用户登录
   rpc Login(LoginReq) returns (LoginRsp);
+  // 退出登录，删除当前会话
   rpc Logout(LogoutReq) returns (LogoutRsp);
-  rpc IssueRawSessionTicket(IssueRawSessionTicketReq) returns (IssueRawSessionTicketRsp);
   // 获取用户信息
   rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
 }

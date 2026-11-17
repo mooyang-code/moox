@@ -3,6 +3,8 @@
 market_id: stockus
 # 成交额的计价币种：K 线行的 amount_unit 写它的小写，标的属性 currency 写原值。
 currency: USD
+# K 线任务的默认采集方式：scf 是云函数定时拉取，补采也走云函数。
+ingest: scf
 # 结果数据集的允许迟到时间默认值（秒），任务没写时用它。
 allowed_lateness_seconds: 90
 # 固定的序列标签；不写表示按数据源生成。
@@ -27,8 +29,6 @@ scf_plan:
   # 函数内并发 16（等于东方财富限速的 max_concurrent），50 只 1 秒内取完。不按负载估算函数个数（不写 auto_size），
   # 也不做出口 IP 去重（不写 egress_balance）。
   symbols_per_function: 50
-  default_ingest: pull
-  default_executor: scf
   # 收盘后固定等 5 秒再取数（not_before_ms），与 route.yaml 的结算延迟 5 秒一致，生成计划时校验前者不小于后者。
   # 2026-11-12 实测两个边界（22:50、22:55）边界后 0.5～1.4 秒看到新一根、目标那根定稿；样本只有这两个边界，所以留足余量；
   # 截止时间是收盘后 90 秒，多等没有代价。边界实测后可调小，调小前先同步改 route.yaml 的 settle_delay_ms。

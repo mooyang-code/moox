@@ -65,9 +65,12 @@
               }}</a-tag></template
             ></a-table-column
           >
-          <a-table-column title="状态" :width="110"
+          <a-table-column title="状态" :width="120"
             ><template #cell="{ record }"
-              ><StatusBadge :enabled="record.enabled" :health="record.health" />
+              ><StatusBadge :enabled="record.enabled" :health="record.health" :trial="isTrialInstance(record)" />
+              <div v-if="isTrialInstance(record)" class="cell-sub">
+                <a-link @click="openConfirm(record)">确认实盘</a-link>
+              </div>
               <div v-if="record.missing_factor_tasks?.length" class="cell-sub delete-incomplete">
                 引用的计算任务已不存在<InfoTip text="删除实例即可清理；启用会失败。" /></div></template
           ></a-table-column>
@@ -85,6 +88,9 @@
                     <a-doption :disabled="togglingId === record.instance_id" @click="toggle(record)">{{
                       record.enabled ? "停用实例" : "启用实例"
                     }}</a-doption>
+                    <a-doption v-if="!record.enabled" :disabled="togglingId === record.instance_id" @click="redisable(record)"
+                      >再次停用</a-doption
+                    >
                     <a-doption
                       v-if="canDeleteInstance(record)"
                       :disabled="togglingId === record.instance_id"
@@ -127,6 +133,7 @@
         @created="created"
       />
       <InstanceEnableDialog ref="enableDialog" />
+      <InstanceConfirmDialog ref="confirmDialog" />
     </div>
   </div>
 </template>
@@ -141,8 +148,9 @@ import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
-import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
+import { confirmInstanceRedisable, confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
 import InstanceEnableDialog from "@/views/strategy/components/instance-enable-dialog.vue";
+import InstanceConfirmDialog from "@/views/strategy/components/instance-confirm-dialog.vue";
 import { canDeleteInstance, confirmInstanceDelete } from "@/views/strategy/components/instance-delete";
 import InfoTip from "@/components/info-tip/index.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
@@ -150,6 +158,7 @@ import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.
 import {
   buildRunningQuery,
   emptyKind,
+  isTrialInstance,
   listKey,
   parseRunningQuery,
   type RunningState
@@ -181,6 +190,7 @@ const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_S
 const readAt = ref("");
 const togglingId = ref("");
 const enableDialog = ref<InstanceType<typeof InstanceEnableDialog> | null>(null);
+const confirmDialog = ref<InstanceType<typeof InstanceConfirmDialog> | null>(null);
 const empty = computed(() =>
   emptyKind({
     loading: store.instancesLoading,
@@ -219,7 +229,7 @@ usePolling(
   30_000,
   () => Boolean(spaceStore.selectedSpaceId)
 );
-/** 手动刷新顺带重读策略目录：别处（如 CLI、模板新建）新建的定义也能出现在筛选和创建实例的下拉里。 */
+/** 手动刷新顺带重读策略目录：别处（如 CLI）新建的定义也能出现在筛选和创建实例的下拉里。 */
 function manualRefresh() {
   store.invalidateStrategyCatalog();
   void Promise.all([refresh(), loadCatalog()]);
@@ -289,6 +299,21 @@ function toggle(instance: StrategyInstance) {
   // 启用绑了组合账户的实例：确认框要写明账户和环境，生产要输入组合名称
   if (!instance.enabled && instance.logical_account_id) enableDialog.value?.open(instance, hooks);
   else confirmInstanceToggle(instance.instance_id, !instance.enabled, hooks);
+}
+/** 试运行中的实例确认实盘：对话框先列出本次启用的影子目标，确认后（或失败过再取消）重新读取列表。 */
+function openConfirm(instance: StrategyInstance) {
+  confirmDialog.value?.open(instance, { onSettled: () => void refresh() });
+}
+/** 对已停用的实例再停用一次：停用时 Trade 没确认关闭会话的重试入口，结束后（无论成败）重新读取列表。 */
+function redisable(instance: StrategyInstance) {
+  if (togglingId.value) return;
+  confirmInstanceRedisable(instance.instance_id, {
+    onStart: () => (togglingId.value = instance.instance_id),
+    onSettled: async () => {
+      await refresh();
+      togglingId.value = "";
+    }
+  });
 }
 /** 删除已停用的实例：确认框列出将要删除的计算任务与结果数据集；结束后（无论成败）重新读取列表。 */
 function remove(instance: StrategyInstance) {

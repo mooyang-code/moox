@@ -1,0 +1,116 @@
+gateway_client:
+  caller: collector
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: /data/moox/secrets/host.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: control
+  local_address: 127.0.0.1:11002
+  ca_file: /data/moox/secrets/moox-ca.crt
+# MooX Collector control-plane service configuration.
+
+database:
+  type: sqlite
+  path: /data/moox/data/collector/moox_collector.db
+  max_idle_conns: 1
+  max_open_conns: 1
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m
+collector_retention:
+  maintenance_interval: 1m
+  maintenance_offset: 35s
+  maintenance_timeout: 20s
+  max_rows_per_pass: 50000
+kline_resample:
+  # 默认关闭；部署后先在目标数据集与 View 就绪、小范围标的验证通过后再显式开启。
+  enabled: false
+  # 定时器每一步（准备、兜底检查）的预算。
+  scan_timeout: 30s
+  # 按桶执行（读源到写完）的硬超时；补采触发的合成作业会推迟 2 倍该时间再开始。
+  exec_timeout: 30s
+  # 兜底检查：每分钟第 5 秒，检查每个任务最近这么多根已收盘的目标 K 线，补上缺的标的。
+  fallback_lookback_bars: 3
+  fallback_grace: 60s
+  fallback_max_buckets: 200
+  # 历史合成作业：每个作业每轮最多推进的桶数、每轮最多推进的作业数。
+  history_buckets_per_round: 20
+  history_max_jobs: 8
+  max_read_keys: 5000
+# Collector 到 EventBus 的连接，K 线合成（订阅源数据集的周期完成事件与补采完成事件，发布补采完成事件）与下架检测
+# （发布标的即将下架事件）共用。不配置时不发布任何事件，合成只靠兜底检查，延迟约 1 分钟。
+# 连不上时每分钟重试，EventBus 晚于 Collector 启动也能自动连上。
+event_bus:
+  urls:
+    - tls://203.0.113.11:4222
+  credential_file: /data/moox/secrets/eventbus/collector-eventbus.yaml
+egress_proxy:
+  domains:
+    - '*.binance.com'
+    - data-api.binance.vision
+    - openapi.okx.com
+# 下架检测：安装时按拓扑渲染，没有出口代理（没配海外机）时为 false，只接受手工登记（collector delist register）。
+delist:
+  auto_detect: true
+# Collector 进程直连外部数据源时的主动限流与冷却。整段可以不写，每一项都有代码默认值（旧配置不会因为缺这一段而失败）。
+egress_limits:
+  # 东方财富：控制机进程内所有发往 *.eastmoney.com 的请求（A 股全部标的、沪深 300 成分、美股交易所对照，含重试与回退到 push2test）
+  # 合计受一个令牌桶和一个并发上限约束。云函数里取 K 线与附加字段的请求不在其内，那边按各数据源的 rate_limit 控制。
+  # 依据：2026-11-13 凌晨一个没有页数上限的临时脚本在控制机上连续翻列表约 40 分钟（估计每秒十几次），出口 IP 随后被限流，
+  # 对 push2、push2his 的请求立即被断开，8 小时以上没有恢复；程序自己不能把对方打到那个程度，被限流后也不能继续打。
+  eastmoney:
+    # 全局令牌桶：每秒请求数与突发数（所有东方财富主机合计）。默认每秒 2 个、突发 2；允许 (0, 20]，突发 1～50。
+    # 翻完约 55 页的 A 股列表约 30 秒，约 140 页的美股交易所对照约 70 秒。
+    requests_per_second: 2
+    burst: 2
+    # 同时在途的请求数上限，1～8。默认 1（顺序请求）。
+    max_concurrent: 1
+    # 连续多少次传输层失败（连接被断开、EOF、重置、拨号失败、超时）后进入冷却，成功一次清零；1～50。
+    # 一次 HTTP 429 或 403 立即进入冷却，不看这个次数。
+    cooldown_failures: 5
+    # 冷却：首次 cooldown_initial（1s～1h），之后每次再触发翻倍，最长 cooldown_max（不小于 cooldown_initial，最大 24h）。
+    # 冷却期间对该主机（push2、push2his、push2test 各自独立）的请求不发出去，立即失败，不重试；push2 冷却时 FetchClist 直接改用 push2test。
+    # 冷却结束后放一个探测请求，成功就恢复并清零，失败按翻倍后的时长重新冷却；429 带 Retry-After 时取较大者，同样不超过 cooldown_max。
+    cooldown_initial: 10m
+    cooldown_max: 1h
+subject_sync:
+  # 一次标签同步（含失败后的重试）的总时限。标普 500 的成分同步要翻东方财富列表约 140 页，2 分钟留给重试的余量不大；
+  # 手工同步经网关，服务端 170 秒后返回失败，所以取 150 秒，留出写入快照的时间，不要再大。
+  fetch_timeout: 150s
+  attributes:
+    - space_id: stockcn
+      sources: [eastmoney]
+      instrument_type: equity
+      cron: "10 8 * * *"
+      timezone: Asia/Shanghai
+    - space_id: crypto
+      sources: [binance]
+      instrument_type: spot
+      cron: "10 8 * * *"
+      timezone: Asia/Shanghai
+# 函数的签名身份 scf-collector：私钥随控制机的身份包签发，Collector 发布函数时写进函数环境；按地域的地址由发布器根据 VPC 路由生成。
+scf_entry:
+  caller: scf-collector
+  entry_address: 203.0.113.11:11004
+  entry_host: storage
+  key_file: /data/moox/secrets/scf-collector.key
+# Collector 直接调腾讯云（原 CloudFunction 服务的两段配置）。
+cloud:
+  tencent_scf:
+    # 按接口覆盖本地限频（次/秒），不能超过官方限频；不写时用官方默认值。
+    api_rate_limits: {}
+  # 日志服务（CLS）自动开通与下发：创建或更新采集函数时，幂等开通 CLS（服务、日志集、主题、采集日志字段索引），
+  # 并把上报所需的环境变量补进函数环境；开通失败只记日志，不影响函数创建。函数环境里已声明 MOOX_CLS_ENABLED 的保持不动。
+  # 日志保留天数由部署工具经环境变量 MOOX_CLS_RETENTION_DAYS 下发。
+  cls:
+    enabled: true
+    region: ap-guangzhou
+    api_endpoint: cls.tencentcloudapi.com
+    ingest_endpoint: ap-guangzhou.cls.tencentcs.com
+    logset_name: moox
+    topic_name: moox-application
+    retention_days: 2
+    partitions: 1
+    timeout_ms: 3000
+    # 函数上报日志使用的专用凭证（建议是只有该主题写入权限的 CAM 子账号密钥）；两项必须同时配置，密钥放在 0600 的文件里。
+    # 不配置时退回使用云账号的管理密钥（能工作，但函数环境泄露会扩大到云资源控制面），Collector 会记一次告警。
+    # writer_secret_id: ""
+    # writer_secret_key_file: ../../secrets/cls-writer.key

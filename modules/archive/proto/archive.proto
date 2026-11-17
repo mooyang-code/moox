@@ -425,6 +425,11 @@ service ArchiveMgr {
   rpc PrepareArchiveImport(PrepareArchiveImportReq) returns (PrepareArchiveImportRsp);
   rpc ImportArchiveFile(ImportArchiveFileReq) returns (ImportArchiveFileRsp);
   rpc ClearArchiveUnrecoverable(ClearArchiveUnrecoverableReq) returns (ClearArchiveUnrecoverableRsp);
+  // GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
+  // 暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复归档管理模块。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
 }
 
 // ---- ArchiveWorker：mgr 与 worker 之间的内部契约，只有外部身份 archive-worker 可以调用 ----

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""初始数据导入的 Storage 行数校验（流程见 references/initial-import.md 第 10 步）。
+"""初始数据导入的 Storage 行数校验（流程见 references/initial-import.md 第 9 步）。
 
 对导入包里的每个标的，比较 Storage 里 [尾部起点, 文件末根] 内的行数与 CSV 在同一区间内的行数。
 尾部起点取自导入命令输出里每个文件的 tail_from（用第 8 步实际导入的输出，不要用早先预检的输出：

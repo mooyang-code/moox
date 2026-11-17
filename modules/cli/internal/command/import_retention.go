@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 
@@ -20,16 +20,11 @@ import (
 
 // loadImportRetention 读取 moox.toml 解析目标数据集（空间 × 频率）的保留期；读不到配置时 ok 为 false（不影响导入）。
 var loadImportRetention = func(manifestPath, space, freq string) (storagepolicy.Period, bool) {
-	absolute, err := filepath.Abs(defaultFlag(manifestPath, "./moox.toml"))
+	cfg, err := topology.Load(defaultFlag(manifestPath, defaultSetupFile))
 	if err != nil {
 		return storagepolicy.Period{}, false
 	}
-	snapshot, err := setupconfig.Load(absolute, filepath.Dir(absolute))
-	if err != nil {
-		return storagepolicy.Period{}, false
-	}
-	defer clearSetupSecrets(snapshot)
-	period, _, err := snapshot.Manifest.StoragePolicy().Retention.Resolve(space, freq)
+	period, _, err := cfg.StoragePolicy().Retention.Resolve(space, freq)
 	if err != nil {
 		return storagepolicy.Period{}, false
 	}
@@ -66,8 +61,8 @@ func warnImportRetention(out io.Writer, paths []string, timeColumn, space, freq 
 		fmt.Fprintf(out, "警告：……另有 %d 个文件也有早于保留期的行\n", staleFiles-5)
 	}
 	fmt.Fprintf(out,
-		"警告：数据集 %s/%s 按 moox.toml 的 [storage_retention] 保留期是 %s（线上实际生效的是 Storage 单元里的 storage-policy.json，两者应一致），早于 %s 的行共 %d 行（%d 个文件）写入后会在下一次清理（每小时一次）时被删除。"+
-			"需要保留更久的历史，先在 moox.toml 的 [storage_retention] 调大 spaces.%s.%s（或 defaults.%s）并随 Storage 单元安装生效，再导入\n",
+		"警告：数据集 %s/%s 按 moox.toml 的 [storage_retention] 保留期是 %s（线上实际生效的是部署到存储机的 storage-policy.json，两者应一致），早于 %s 的行共 %d 行（%d 个文件）写入后会在下一次清理（每小时一次）时被删除。"+
+			"需要保留更久的历史，先在 moox.toml 的 [storage_retention] 调大 spaces.%s.%s（或 defaults.%s）并重新部署存储机生效，再导入\n",
 		space, freq, retention.String(), cutoff.Format(time.RFC3339), staleRows, staleFiles, space, freq, freq)
 }
 

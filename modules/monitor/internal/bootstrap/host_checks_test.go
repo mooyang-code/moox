@@ -85,9 +85,9 @@ func newHostCheckHarness(t *testing.T) *hostCheckHarness {
 
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	_, err = h.repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: h.clock,
+	err = h.repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: h.clock,
 		Hosts:       []domain.TopologyHost{{HostID: "storage", Address: "storage.example.test", Status: servicecatalog.Enabled}},
-		Deployments: []domain.TopologyDeployment{{HostID: "storage", ComponentID: "host-agent", Status: servicecatalog.Enabled}}}, nil)
+		Deployments: []domain.TopologyDeployment{{HostID: "storage", ComponentID: "host-agent", Status: servicecatalog.Enabled}}})
 	require.NoError(t, err)
 
 	now := func() time.Time { return h.clock }
@@ -375,7 +375,7 @@ func TestReplacedAgentResolvesTheOldPresenceAlert(t *testing.T) {
 	snapshot, err := h.repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	snapshot.Hosts[0].Status = servicecatalog.Disabled
-	_, err = h.repos.Topology.Reconcile(t.Context(), *snapshot, nil)
+	err = h.repos.Topology.Reconcile(t.Context(), *snapshot)
 	require.NoError(t, err)
 	h.advance(10 * time.Minute)
 	h.gateway(false)
@@ -432,7 +432,7 @@ func TestDisabledHostResolvesItsResourceAlert(t *testing.T) {
 	snapshot, err := h.repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	snapshot.Hosts[0].Status = servicecatalog.Disabled
-	_, err = h.repos.Topology.Reconcile(t.Context(), *snapshot, nil)
+	err = h.repos.Topology.Reconcile(t.Context(), *snapshot)
 	require.NoError(t, err)
 	h.advance(5 * time.Minute)
 	h.gateway(false)

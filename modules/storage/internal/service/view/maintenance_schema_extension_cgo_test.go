@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -77,7 +76,7 @@ func extensionView(columns ...string) *pb.View {
 // GetViewState 返回的已建列和查询都能看到新列，已有行的新列为空。
 func TestDatasetColumnAddExtendsIndexWithoutRebuild(t *testing.T) {
 	ctx := context.Background()
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +99,7 @@ func TestDatasetColumnAddExtendsIndexWithoutRebuild(t *testing.T) {
 	if schema := svc.schemas[indexID]; schema.ViewVersion != 2 || schema.SchemaHash != stats.SchemaHash {
 		t.Fatalf("内存契约 = %+v，应与索引文件一致", schema)
 	}
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
-	state, err := svc.GetViewState(ctx, &pb.GetViewStateReq{AuthInfo: auth, SpaceId: "space", ViewId: extensionViewID})
+	state, err := svc.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: "space", ViewId: extensionViewID})
 	if err != nil || state.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("GetViewState = %v err=%v", state, err)
 	}
@@ -121,7 +119,7 @@ func TestDatasetColumnAddExtendsIndexWithoutRebuild(t *testing.T) {
 func TestRestartRestoresContractFromIndexFile(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "views")
-	first, err := New(root, "view-secret")
+	first, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +134,7 @@ func TestRestartRestoresContractFromIndexFile(t *testing.T) {
 	extended := first.schemas[indexID]
 	closeServiceEngines(first)
 
-	restarted, err := New(root, "view-secret")
+	restarted, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}

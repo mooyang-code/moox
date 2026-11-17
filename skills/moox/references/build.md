@@ -18,4 +18,4 @@ bash scripts/build/build-linux-local.sh admin collector storage-primary
 - Go 版本以仓库根的 `.go-version` 为准，构建脚本要求完全一致；没有就运行 `bash scripts/build/install-go.sh`。
 - 构建目标即 `scripts/build/build.sh` 的参数，`build-linux-local.sh` 不支持 `all`，要逐个写明目标。
 - 边界检查：`make check-boundaries`；推送前的本地预检：`bash scripts/ci/local-verify.sh`。
-- 发布到线上见 [`native-release.md`](native-release.md)。
+- 发布到线上见 [`source-deploy.md`](source-deploy.md)。

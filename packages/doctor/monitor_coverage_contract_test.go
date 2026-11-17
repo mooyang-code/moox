@@ -42,15 +42,14 @@ func contains(values []string, want string) bool {
 }
 
 type coverageComponent struct {
-	ID     string `yaml:"id"`
-	Doctor struct {
+	ID         string `yaml:"id"`
+	ThirdParty bool   `yaml:"third_party"`
+	Doctor     struct {
 		Transport    string   `yaml:"transport"`
 		Dependencies []string `yaml:"dependencies"`
 	} `yaml:"doctor"`
 	Health struct {
-		Kind     string `yaml:"kind"`
-		Port     int    `yaml:"port"`
-		Loopback *bool  `yaml:"loopback"`
+		Port int `yaml:"port"`
 	} `yaml:"health"`
 }
 
@@ -71,7 +70,11 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 		components[component.ID] = component
 	}
 	for name, component := range components {
-		if !contains([]string{"reporter", "host_snapshot", "health_only"}, component.Doctor.Transport) {
+		if component.ThirdParty {
+			// 第三方程序（内置 SeaweedFS）不上报、没有健康端口，Monitor 不覆盖它。
+			continue
+		}
+		if !contains([]string{"reporter", "host_snapshot", "delegated"}, component.Doctor.Transport) {
 			t.Errorf("%s: unsupported transport %q", name, component.Doctor.Transport)
 		}
 		for _, dependency := range component.Doctor.Dependencies {
@@ -79,16 +82,16 @@ func TestMonitorCoverageComponentCatalog(t *testing.T) {
 				t.Errorf("%s: unknown component dependency %q", name, dependency)
 			}
 		}
-		if !contains([]string{"readyz", "https", "none"}, component.Health.Kind) {
-			t.Errorf("%s: unsupported health kind %q", name, component.Health.Kind)
+		if component.Health.Port <= 0 {
+			t.Errorf("%s: missing health port", name)
 		}
 	}
-	proxy, ok := components["console-proxy"]
+	admin, ok := components["admin"]
 	if !ok {
-		t.Fatal("console-proxy component is missing")
+		t.Fatal("admin component is missing")
 	}
-	if proxy.Doctor.Transport != "health_only" || proxy.Health.Kind != "readyz" || proxy.Health.Port != 19528 || proxy.Health.Loopback == nil || !*proxy.Health.Loopback {
-		t.Error("console-proxy diagnostics contract changed")
+	if admin.Doctor.Transport != "reporter" || admin.Health.Port != 11010 {
+		t.Error("admin diagnostics contract changed")
 	}
 }
 

@@ -71,7 +71,7 @@ echo "==> build moox-collector-scf for linux/amd64"
     -o "${BUILD_DIR}/package/main" "./cmd/scf/${SCF_ENTRYPOINT}"
 )
 
-# 市场数据文件（market.yaml、route.yaml、数据源运行参数）和交易日历都编在二进制里，包里只带存储访问配置。
+# 市场数据文件（market.yaml、route.yaml、数据源运行参数）和交易日历都编在二进制里，包里只带 sources 下的数据源配置。
 echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
 cp -R "${CONFIG_DIR}/sources" "${BUILD_DIR}/package/sources"
 

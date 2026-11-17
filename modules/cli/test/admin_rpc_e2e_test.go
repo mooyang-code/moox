@@ -12,7 +12,7 @@ import (
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,6 @@ import (
 type adminRPCWire struct {
 	monitorpb.UnimplementedMonitorMgr
 	adminpb.UnimplementedSecretMgr
-	adminpb.UnimplementedCollectorPublishLease
 	adminpb.UnimplementedSetup
 	adminpb.UnimplementedSysDeploy
 	adminpb.UnimplementedSpaceMgr
@@ -35,7 +34,6 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	service := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTimeout(time.Minute))
 	adminpb.RegisterSecretMgrService(service, wire)
 	monitorpb.RegisterMonitorMgrService(service, wire)
-	adminpb.RegisterCollectorPublishLeaseService(service, wire)
 	adminpb.RegisterSetupService(service, wire)
 	adminpb.RegisterSysDeployService(service, wire)
 	adminpb.RegisterSpaceMgrService(service, wire)
@@ -43,7 +41,7 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	t.Cleanup(func() { _ = service.Close(nil) })
 	temp := t.TempDir()
 	ready := filepath.Join(temp, "ready")
-	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "doctor-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready, "--nonce-dir", filepath.Join(temp, "nonces"), "--key-id", klineGatewayKeyID)
+	process := startGatewayHelperProcess(t, buildGatewayE2EHelper(t), "--mode", "doctor-native", "--node-id", klineGatewayNode, "--upstream-addr", listener.Addr().String(), "--ready-file", ready)
 	t.Cleanup(func() {
 		if process.stop(5 * time.Second) {
 			t.Errorf("Admin gateway required kill: %s", process.logs.String())
@@ -57,29 +55,24 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	target := startAdminGateway(t, &adminRPCWire{})
 	home, manifest := writeKlineOperator(t, target)
 	t.Setenv("HOME", home)
-	snapshot, err := setupconfig.Load(manifest, filepath.Dir(manifest))
+	cfg, err := topology.Load(manifest)
 	require.NoError(t, err)
-	gateway, err := gatewayio.Open(t.Context(), snapshot)
+	secrets := &topology.Secrets{Admin: topology.Admin{Username: "admin", Password: "admin-test"}, TencentCloud: topology.TencentCloud{SecretID: "AKID-test", SecretKey: "cloud-test"}}
+	gateway, err := gatewayio.Open(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
 	client := &adminclient.Client{Gateway: gateway, SpaceID: "crypto"}
 	secret, err := client.GetSecretValue(t.Context(), "secret-1")
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", secret.SecretValue)
-	lease, err := client.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")
-	require.NoError(t, err)
-	require.EqualValues(t, 17, lease.FencingToken)
-	lease, err = client.RenewCollectorPublishLease(t.Context(), lease)
-	require.NoError(t, err)
-	require.NoError(t, client.ReleaseCollectorPublishLease(t.Context(), lease))
 	setup := setupclient.New(gateway)
-	status, err := setup.Status(t.Context(), snapshot)
+	status, err := setup.Status(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "ready", status.State)
-	applied, err := setup.Apply(t.Context(), snapshot)
+	applied, err := setup.Apply(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
-	require.NoError(t, setup.SyncHostDeployments(t.Context(), snapshot, snapshot.Manifest.ControlHost().Name))
+	require.NoError(t, setup.SyncHostDeployments(t.Context(), cfg, cfg.ControlHost().Name))
 	doctor := doctorcli.New(gateway)
 	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
 	require.NoError(t, err)
@@ -90,9 +83,9 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	var space adminpb.CreateSpaceRsp
 	require.NoError(t, gateway.Invoke(t.Context(), "trpc.moox.admin.SpaceMgr", "CreateSpace", &adminpb.CreateSpaceReq{Space: &adminpb.Space{SpaceId: "fixture"}}, &space))
 	require.Equal(t, "fixture", space.GetSpace().GetSpaceId())
-	// Machine-only lease validation remains unavailable to the operator.
-	var forbidden adminpb.ValidateCollectorPublishLeaseRsp
-	require.Error(t, gateway.Invoke(t.Context(), "trpc.moox.admin.CollectorPublishLease", "ValidateCollectorPublishLease", &adminpb.ValidateCollectorPublishLeaseReq{}, &forbidden))
+	// 只给 Collector 的读云密钥方法，操作员调不到。
+	var forbidden adminpb.GetCloudCredentialRsp
+	require.Error(t, gateway.Invoke(t.Context(), "trpc.moox.ops.SecretMgr", "GetCloudCredential", &adminpb.GetCloudCredentialReq{SecretId: "secret-1"}, &forbidden))
 	require.NoError(t, gateway.Close())
 	_, err = client.GetSecretValue(t.Context(), "secret-1")
 	require.Error(t, err)
@@ -100,18 +93,6 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 
 func (w *adminRPCWire) GetSecretValue(_ context.Context, req *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
 	return &adminpb.GetSecretValueRsp{RetInfo: &adminpb.RetInfo{}, Secret: &adminpb.SecretMaterial{SecretId: req.GetSecretId(), Category: "cloud", Provider: "tencent", Status: "active", KeyId: "fixture-id", SecretValue: "fixture-secret"}}, nil
-}
-
-func (w *adminRPCWire) AcquireCollectorPublishLease(_ context.Context, req *adminpb.AcquireCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
-	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: "lease-1", FencingToken: 17, ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
-}
-
-func (w *adminRPCWire) RenewCollectorPublishLease(_ context.Context, req *adminpb.RenewCollectorPublishLeaseReq) (*adminpb.CollectorPublishLeaseRsp, error) {
-	return &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: req.GetSpaceId(), LeaseId: req.GetLeaseId(), FencingToken: req.GetFencingToken(), ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
-}
-
-func (w *adminRPCWire) ReleaseCollectorPublishLease(_ context.Context, req *adminpb.ReleaseCollectorPublishLeaseReq) (*adminpb.ReleaseCollectorPublishLeaseRsp, error) {
-	return &adminpb.ReleaseCollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, Released: true}, nil
 }
 
 func (w *adminRPCWire) GetSetupStatus(_ context.Context, req *adminpb.GetSetupStatusReq) (*adminpb.GetSetupStatusRsp, error) {

@@ -140,17 +140,11 @@ describe("compute task list model", () => {
     expect(memberPeriodState(value, "bias")?.status).toBe("skipped");
   });
 
-  it("only variable members have a last submission, and none until the first accepted one", () => {
-    expect(lastSubmission(member("a", "enabled"))).toBeNull();
-    const fresh = member("bias__var", "enabled", { kind: "var" });
-    expect(lastSubmission(fresh)).toBeNull();
-    const submitted = member("bias__var", "enabled", {
-      kind: "var",
-      last_submitted_period: "1760000000",
-      last_submitted_at: "2026-10-26T10:00:00Z"
-    });
+  it("has no last submission until the first accepted one", () => {
+    expect(lastSubmission(undefined)).toBeNull();
+    expect(lastSubmission({ last_submitted_period: 0 })).toBeNull();
+    const submitted = { last_submitted_period: "1760000000", last_submitted_at: "2026-10-26T10:00:00Z" };
     expect(lastSubmission(submitted)).toEqual({ period: 1760000000, at: "2026-10-26T10:00:00Z" });
-    expect(lastSubmission({ ...submitted, kind: "fixed" })).toBeNull();
   });
 });
 

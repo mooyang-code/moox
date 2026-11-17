@@ -11,7 +11,7 @@ import (
 // 也有全局运维接口，请求里没有空间时按全局运维处理。
 func requiresSpaceHeader(serviceID string) bool {
 	switch serviceID {
-	case "trade", "strategy", "collector", "cloudfunction", "archive":
+	case "trade", "strategy", "collector", "archive":
 		return true
 	}
 	return false
@@ -104,6 +104,23 @@ func requestBodySpace(header string, body []byte, canInject bool) (space string,
 		}
 	}
 	return ids[0], false, nil
+}
+
+// errInvalidStorageBody 表示请求体不是合法的 JSON 对象，应作为 400 返回。
+var errInvalidStorageBody = errors.New("request body must be a JSON object")
+
+// injectStorageSpace 把授权通过的请求头空间写进 Storage 请求体的顶层 space_id，只在 requestBodySpace 要求回填时调用。
+// ProtoJSON 同时接受 spaceId 别名（例如值为空串的 spaceId 不算声明了空间），先删掉别名，保证只输出一份。
+func injectStorageSpace(body []byte, space string) ([]byte, error) {
+	payload := make(map[string]json.RawMessage)
+	if len(strings.TrimSpace(string(body))) != 0 {
+		if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+			return nil, errInvalidStorageBody
+		}
+	}
+	delete(payload, "spaceId")
+	payload["space_id"], _ = json.Marshal(space)
+	return json.Marshal(payload)
 }
 
 // storageTopLevelSpaceMethods 是请求消息带顶层 space_id 的 Storage 方法，只有它们才能安全地回填请求头空间

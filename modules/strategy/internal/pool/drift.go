@@ -219,8 +219,9 @@ func checkFreeze(cfg Config, ids []string, series map[string][]float64, marks ma
 			enough = false
 			break
 		}
-		now += ratio * marks[id].EquityBefore
-		then += ratio * values[len(values)-window]
+		// 显式转换阻止编译器把乘加融合成一条 FMA 指令（arm64 会融合、amd64 不会），结果才与 CPU 架构无关。
+		now += float64(ratio * marks[id].EquityBefore)
+		then += float64(ratio * values[len(values)-window])
 	}
 	out := &engine.PoolFreeze{}
 	if enough && then > 0 {

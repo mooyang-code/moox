@@ -29,7 +29,6 @@ message ResultColumn {
 // 完整历史以 PrimaryStore KV/Pebble 为准。
 // CountTimeSeriesViewRowsReq 按标的统计 active View 索引里时间范围内的行数（同一时间点多个 series_tag 只计一次）。
 message CountTimeSeriesViewRowsReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string view_id = 3;
   // selectors 需要 subject_id 与 freq；time_range 是左闭右开时间范围。
@@ -38,8 +37,6 @@ message CountTimeSeriesViewRowsReq {
 }
 
 message QueryTimeSeriesRowsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是 View 所属空间 ID。
   string space_id = 2;
   // view_id 是已登记的查询入口。
@@ -99,8 +96,6 @@ message QueryTimeSeriesRowsRsp {
 // View 索引是可重建的近期派生结果，不是完整事实存储。
 // 完整历史以 PrimaryStore KV/Pebble 为准。
 message SearchRecordRowsReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
   // space_id 是 View 所属空间 ID。
   string space_id = 2;
   // view_id 是已登记的搜索入口。
@@ -159,7 +154,6 @@ service DataView {
 }
 
 message GetViewStateReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string view_id = 3;
 }
@@ -182,7 +176,6 @@ message GetViewStateRsp {
 }
 
 message WaitViewAppliedReq {
-  common.AuthInfo auth_info = 1;
   string space_id = 2;
   string view_id = 3;
   // wait_timeout_ms 是最多等待的毫秒数，0 取 10000，上限 30000。

@@ -22,9 +22,6 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	if req == nil || len(req.GetSeries()) == 0 {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("series snapshot is required"))}, nil
 	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
@@ -53,9 +50,6 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryCommitTimeSeriesBatchReq) (*pb.PrimaryCommitTimeSeriesBatchRsp, error) {
 	if req == nil || req.GetExpectation() == nil || len(req.GetItems()) == 0 {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("expectation and items are required"))}, nil
-	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	exp := req.GetExpectation()
 	if strings.TrimSpace(exp.GetSpaceId()) == "" || strings.TrimSpace(exp.GetDatasetId()) == "" {

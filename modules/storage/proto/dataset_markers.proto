@@ -25,8 +25,7 @@ message DatasetPeriodCompletedMarker {
   google.protobuf.Timestamp completed_at = 8;
   string detail_type = 9;
   bytes detail = 10;
-  // universe_series、failed_series 是按序列的全集与失败名单：写入方的数据集含多个 series_tag 时才填，
-  // Storage 原样保存并带进周期完成事件。
+  // universe_series、failed_series 是按序列（标的、series_tag）的全集与失败名单，Storage 原样保存并带进周期完成事件。
   repeated SeriesRef universe_series = 11;
   repeated SeriesRef failed_series = 12;
 }

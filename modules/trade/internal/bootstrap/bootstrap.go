@@ -56,8 +56,9 @@ var startedAt = time.Now()
 // maxChildNotional 是下单校验的单笔金额硬上限；目标拆单的单笔上限在组合的下单设置里，不能超过它。
 const maxChildNotional = ordersettings.MaxChildNotionalCeiling
 
-func Initialize(ctx context.Context, serverInstance *server.Server) (*server.Server, error) {
-	cfg, err := config.Load("./config/app.yaml")
+// Initialize 读 configPath 指向的业务配置（-config）并装配服务。
+func Initialize(ctx context.Context, serverInstance *server.Server, configPath string) (*server.Server, error) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +110,8 @@ func initialize(
 	if err := registerBuiltins(registry, ashareMarket); err != nil {
 		return nil, err
 	}
-	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
+	moduleMetrics, reporter := registerMetricsReporter(serverInstance)
+	tradeStore.SetModuleMetrics(moduleMetrics)
 
 	manager := &traderuntime.Manager{
 		Accounts: tradeStore, PollInterval: 5 * time.Second,
@@ -229,8 +231,8 @@ func initialize(
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
-		// 策略会话释放、重绑、认领删掉目标前，由执行器撤掉组合里还没结束的目标挂单。
-		TargetOrders: targetExecutor,
+		// 关闭策略会话之后唤醒执行器，由过期路径撤掉这份目标的挂单。
+		WakeTarget: targetWorker.WakeTarget,
 	}
 	inspectionWorker := &traderuntime.InspectionWorker{Store: tradeStore, Accounts: accounts, Logical: logicalAccounts}
 	// 资金维护（BNB 抵扣与补买、小额兑 BNB、稳定币调平）：每小时一次，资金设置变更后马上一次。
@@ -372,9 +374,8 @@ func initialize(
 		cfg.EventBus.Enabled, eventBus, &targetConsumerReady,
 	)
 	life, err := newLifecycle(
-		cfg.Database.Path, readiness, targetWorker.Quiesce,
-		tradeCatchup(tradeStore, targetWorker, time.Now),
-		tradeResetSpec(tradeStore, cfg.Database.Path, accountSyncer{service: syncService}.SyncAccount),
+		cfg.Database.Path, targetWorker.Quiesce,
+		tradeCatchup(readiness.Evaluate, tradeStore, targetWorker, time.Now),
 	)
 	if err != nil {
 		if eventBus != nil {
@@ -499,6 +500,7 @@ func initialize(
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore.ReadOnly(), Adapters: manager},
 			Adapters:           manager,
 			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry}},
+			Lifecycle:          life,
 			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
 				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
@@ -527,7 +529,7 @@ func initialize(
 			eventBus.Close()
 		}
 	}
-	if err := registerHealth(runtimeCtx, serverInstance, tradeStore, life, readiness); err != nil {
+	if err := registerHealth(runtimeCtx, serverInstance, life, readiness, reporter); err != nil {
 		stopWorkers()
 		return nil, err
 	}
@@ -857,9 +859,10 @@ func decimal(value string) shared.Decimal {
 	return parsed
 }
 
-func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetrics {
+// registerMetricsReporter 注册指标上报；返回的处理器在健康检查注册时接上就绪判断与生命周期（见 registerHealth）。
+func registerMetricsReporter(serverInstance *server.Server) (*report.ModuleMetrics, *report.Handler) {
 	if serverInstance == nil {
-		return nil
+		return nil, nil
 	}
 	moduleMetrics, err := report.NewModuleMetrics(
 		prometheus.DefaultRegisterer,
@@ -868,23 +871,23 @@ func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetric
 	)
 	if err != nil {
 		log.Warnf("trade module metrics disabled: %v", err)
-		return nil
+		return nil, nil
 	}
 	handler, err := report.NewHandler(report.DefaultConfig("trade", "trade"))
 	if err != nil {
 		log.Warnf("trade metrics reporter disabled: %v", err)
-		return moduleMetrics
+		return moduleMetrics, nil
 	}
 	service := serverInstance.Service("trpc.moox.trade.metrics.timer")
 	if service == nil {
 		log.Warn("trade metrics timer service is not configured")
-		return moduleMetrics
+		return moduleMetrics, nil
 	}
 	timer.RegisterHandlerService(
 		service,
 		handler.Handle,
 	)
-	return moduleMetrics
+	return moduleMetrics, handler
 }
 
 func registerEquitySamplerTimer(
@@ -931,17 +934,17 @@ func newReadiness(
 	}
 }
 
-// registerHealth 注册健康检查与生命周期路由，并启动生命周期的恢复和定时刷新。
+// registerHealth 注册健康检查，把就绪判断与生命周期接到指标上报，并启动生命周期的定时刷新（生命周期的接口在 TradeConsoleService 上）。
 // 控制器和就绪判定已在第一个工人启动之前建好、绑定到门禁。
 func registerHealth(
 	runtimeCtx context.Context,
 	serverInstance *server.Server,
-	tradeStore *store.Store,
 	life *lifecycle.Controller,
 	readiness health.Readiness,
+	reporter *report.Handler,
 ) error {
 	state := health.New("trade", "trade", "", "")
-	snapshot := health.SnapshotFunc(
+	state.SnapshotFunc = health.SnapshotFunc(
 		state,
 		readiness,
 		"trade",
@@ -950,23 +953,13 @@ func registerHealth(
 		"",
 		startedAt,
 	)
-	state.SnapshotFunc = func(ctx context.Context) healthz.Response {
-		response := snapshot(ctx)
-		if response.Details == nil {
-			response.Details = map[string]any{}
-		}
-		response.Details["lifecycle"] = life.Compact()
-		return response
+	if reporter != nil {
+		// 上报带给 Monitor 的就绪与 /readyz 是同一个判断；模块级生命周期也随上报，首页的系统状态读它。
+		reporter.SetReadiness(healthz.Readiness(state.Snapshot))
+		reporter.SetLifecycle(life.ReportState)
 	}
-	go func() {
-		life.Recover(runtimeCtx)
-		life.Run(runtimeCtx, lifecycleRefreshEvery)
-	}()
-	if err := health.Register(
-		serverInstance.Service("trpc.moox.trade.Health"),
-		state,
-		lifecycleRoutes(life, tradeStore)...,
-	); err != nil {
+	go life.Run(runtimeCtx, lifecycleRefreshEvery)
+	if err := health.Register(serverInstance.Service("trpc.moox.trade.Health"), state); err != nil {
 		return fmt.Errorf("trade health server failed to register: %w", err)
 	}
 	return nil

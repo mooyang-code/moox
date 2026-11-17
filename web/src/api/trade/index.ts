@@ -31,6 +31,7 @@ import type {
   PageResult,
   SubmitOrderReq,
   Position,
+  ShadowTarget,
   SummarizeAccountPnlReq,
   SummarizeAccountPnlRsp,
   TargetLane,
@@ -290,6 +291,16 @@ export function getLogicalAccountTarget(logical_account_id: string, options: { s
     "console",
     "GetLogicalAccountTarget",
     { logical_account_id },
+    options
+  );
+}
+
+/** 列出策略实例最近的影子目标（从新到旧）：确认实盘前先看它们。 */
+export function listShadowTargets(instance_id: string, limit = 20, options: { silent?: boolean } = {}) {
+  return callTrade<{ instance_id: string; limit: number }, { ret_info: RetInfo; targets?: ShadowTarget[] }>(
+    "console",
+    "ListShadowTargets",
+    { instance_id, limit },
     options
   );
 }

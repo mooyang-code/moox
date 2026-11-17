@@ -3,14 +3,11 @@ package validate
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	cloudprovider "github.com/mooyang-code/moox/packages/cloudprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,8 +25,8 @@ func TestRunReportsUnknownHostFingerprint(t *testing.T) {
 	}}
 	result, err := Run(context.Background(), snapshot, Dependencies{Identity: &fakeIdentity{}, SSH: checker})
 	require.Error(t, err)
-	assert.Equal(t, "host_key_unknown", result.Checks[3].Code)
-	assert.Equal(t, "SHA256:verified-out-of-band", result.Checks[3].Fingerprint)
+	assert.Equal(t, "host_key_unknown", result.Checks[2].Code)
+	assert.Equal(t, "SHA256:verified-out-of-band", result.Checks[2].Fingerprint)
 }
 
 func (f *fakeIdentity) GetCallerIdentity(context.Context) (cloudprovider.CallerIdentity, error) {
@@ -43,51 +40,29 @@ type fakeSSHChecker struct {
 	errs  map[string]error
 }
 
-func (f *fakeSSHChecker) Check(_ context.Context, host setupconfig.Host) error {
+func (f *fakeSSHChecker) Check(_ context.Context, host topology.Host) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, host.Name)
 	return f.errs[host.Name]
 }
 
-func validationSnapshot(t *testing.T) *setupconfig.Snapshot {
+func validationSnapshot(t *testing.T) *topology.Config {
 	t.Helper()
-	root := t.TempDir()
-	body := `[admin]
-username = "admin"
-password = "admin-password"
-
-[tencent_cloud]
-secret_id = "recognizable-secret-id"
-secret_key = "recognizable-secret-key"
-
-[eventbus]
-port = 4222
-tls_enabled = true
-
-[hosts.control]
+	cfg, err := topology.Parse([]byte(`[hosts.control]
 address = "eventbus.example.test"
-[hosts.control.ssh]
-port = 22
-username = "ubuntu"
-password = "recognizable-control-password"
+ssh = { port = 22, username = "ubuntu" }
 
 [hosts.overseas]
 address = "192.0.2.11"
-[hosts.overseas.ssh]
-port = 22
-username = "ubuntu"
-password = "recognizable-compute-password"
+ssh = { port = 22, username = "ubuntu" }
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
+control = ["admin", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
 overseas = []
-`
-	path := filepath.Join(root, "moox.toml")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	snapshot, err := setupconfig.Load(path, root)
+`))
 	require.NoError(t, err)
-	return snapshot
+	return &cfg
 }
 
 func TestRunChecksIdentityThenHosts(t *testing.T) {
@@ -99,7 +74,6 @@ func TestRunChecksIdentityThenHosts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},
-		{Name: "deployments", Status: "valid"},
 		{Name: "tencent_cloud", Status: "valid"},
 		{Name: "host:control", Status: "valid"},
 		{Name: "host:overseas", Status: "valid"},
@@ -117,7 +91,6 @@ func TestRunStopsBeforeSSHWhenIdentityFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},
-		{Name: "deployments", Status: "valid"},
 		{Name: "tencent_cloud", Status: "invalid", Code: "tencent_auth_failed"},
 	}, result.Checks)
 	assert.Empty(t, sshChecker.calls)
@@ -135,26 +108,9 @@ func TestRunPreservesHostOrderAndRedactsErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},
-		{Name: "deployments", Status: "valid"},
 		{Name: "tencent_cloud", Status: "valid"},
 		{Name: "host:control", Status: "valid"},
 		{Name: "host:overseas", Status: "invalid", Code: "ssh_validation_failed"},
 	}, result.Checks)
 	assert.NotContains(t, err.Error(), "recognizable-compute-password")
-}
-
-func TestRunRejectsIncompleteDeploymentsBeforeTouchingHosts(t *testing.T) {
-	snapshot := validationSnapshot(t)
-	components := snapshot.Manifest.Deployments["control"]
-	snapshot.Manifest.Deployments["control"] = slices.DeleteFunc(components, func(id string) bool { return id == "archive-mgr" })
-	identity := &fakeIdentity{}
-	sshChecker := &fakeSSHChecker{errs: map[string]error{}}
-
-	result, err := Run(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker})
-	require.ErrorIs(t, err, ErrValidationFailed)
-	assert.ErrorContains(t, err, "archive-mgr")
-	assert.ErrorContains(t, err, "--add-deployment control=archive-mgr --yes")
-	assert.Equal(t, "deployment_incomplete", result.Checks[1].Code)
-	assert.Empty(t, sshChecker.calls)
-	assert.Zero(t, identity.calls)
 }

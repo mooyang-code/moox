@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/prometheus/client_golang/prometheus"
@@ -28,9 +29,9 @@ func streamPlanContent(t *testing.T) string {
 	plan := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStreaming, Fetch: marketfetch.PlanFetch{Concurrency: 1},
 		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "ds1", Frequency: "1m", LatenessS: 5, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h", Count: 1, Subjects: []marketfetch.PlanSubject{{ID: "BTC-USDT", Index: 0}}}}}}}
-	content := marketfetch.FetchPlanContent{
-		Datasets:  map[string]*marketfetch.PlanDatasetChange{"ds1|1m": {PlanDatasetState: marketfetch.PlanDatasetState{DatasetID: "ds1", Frequency: "1m", Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}, Changed: true, P: 60}},
-		Functions: map[string]*marketfetch.PlanFunctionChange{"stream-crypto-spot": {Name: "stream-crypto-spot", Executor: "stream", Market: "m", New: plan}},
+	content := fetchplan.FetchPlanContent{
+		Datasets:  map[string]*fetchplan.PlanDatasetChange{"ds1|1m": {PlanDatasetState: fetchplan.PlanDatasetState{DatasetID: "ds1", Frequency: "1m", Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}, Changed: true, P: 60}},
+		Functions: map[string]*fetchplan.PlanFunctionChange{"stream-crypto-spot": {Name: "stream-crypto-spot", Executor: "stream", Market: "m", New: plan}},
 	}
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -41,7 +42,7 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	syncer := &recordingSyncer{filters: make(chan subjectsync.Filter, 1)}
-	stream := NewStreamService(db, StreamSettings{}, marketfetch.NewStreamMetrics(prometheus.NewRegistry()), syncer)
+	stream := NewStreamService(db, StreamSettings{}, fetchplan.NewStreamMetrics(prometheus.NewRegistry()), syncer)
 	service.SetStreamService(stream)
 
 	rsp, err := stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", SentAtMs: time.Now().UnixMilli()})
@@ -52,7 +53,7 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	applied := applyPlan(t, db, "crypto", streamPlanContent(t))
 	rsp, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
 	require.Equal(t, applied.ID, rsp.GetPlanId())
-	require.Equal(t, marketfetch.StreamStageFinal, rsp.GetStage())
+	require.Equal(t, fetchplan.StreamStageFinal, rsp.GetStage())
 	pull, err := stream.PullStreamPlan(ctx, &pb.PullStreamPlanReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Len(t, pull.GetItems(), 1)
@@ -63,18 +64,18 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	require.Equal(t, marketfetch.PlanExecutorStreaming, pull.GetItems()[0].GetExecutor())
 
 	// 心跳回报已应用的版本，Collector 据此确认。
-	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", AppliedPlanId: applied.ID, AppliedStage: marketfetch.StreamStageFinal,
+	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", AppliedPlanId: applied.ID, AppliedStage: fetchplan.StreamStageFinal,
 		Conns: []*pb.StreamConnStatus{{Market: "spot", Frequency: "1m", Streams: 1, Reconnects: 2}}})
 	worker, err := db.StreamWorkers().Get(ctx, "crypto")
 	require.NoError(t, err)
-	var confirmed marketfetch.StreamApplied
+	var confirmed fetchplan.StreamApplied
 	require.NoError(t, json.Unmarshal([]byte(worker.Applied), &confirmed))
-	require.Equal(t, marketfetch.StreamApplied{ID: applied.ID, Stage: marketfetch.StreamStageFinal}, confirmed)
+	require.Equal(t, fetchplan.StreamApplied{ID: applied.ID, Stage: fetchplan.StreamStageFinal}, confirmed)
 
 	// 暂停：下发空计划。
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "crypto", true))
 	rsp, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
-	require.Equal(t, marketfetch.StreamStagePaused, rsp.GetStage())
+	require.Equal(t, fetchplan.StreamStagePaused, rsp.GetStage())
 	pull, _ = stream.PullStreamPlan(ctx, &pb.PullStreamPlanReq{SpaceId: "crypto"})
 	require.Empty(t, pull.GetItems())
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "crypto", false))
@@ -96,41 +97,52 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	require.Equal(t, "stream", status.GetFunctions()[0].GetExecutor())
 }
 
-func TestSetIngestModeRequiresAnOnlineStreamAndMarksForce(t *testing.T) {
+func TestSetIngestModeSwitchesKlineTasksAndRequiresAnOnlineStream(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	stream := NewStreamService(db, StreamSettings{HeartbeatTimeout: time.Minute}, nil, nil)
 	service.SetStreamService(stream)
-	require.NoError(t, db.IngestModes().Initialize(ctx, []store.IngestMode{
-		{SpaceID: "crypto", DatasetID: "ds1", Mode: store.IngestPull, Executor: store.ExecutorSCF},
-		{SpaceID: "crypto", DatasetID: "ds2", Mode: store.IngestPull, Executor: store.ExecutorSCF},
-	}))
-	rsp, err := service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Mode: "stream"})
+	for _, id := range []string{"ds1", "ds2"} {
+		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_" + id, TaskName: id, DataType: domain.DataTypeKline, Ingest: domain.IngestSCF,
+			Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: id, ResultViewID: "view_" + id}))
+	}
+	rsp, err := service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "stream"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), "stream 离线时拒绝切到 stream")
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "local"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), "stream 离线时拒绝切到 local")
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "pull"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "旧取值 pull 不再接受")
 
 	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
-	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Mode: "stream"})
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Ingest: "stream"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Len(t, rsp.GetModes(), 2, "--space-id 表示该空间全部数据集")
-	require.Equal(t, "local", rsp.GetModes()[0].GetExecutor())
+	require.Len(t, rsp.GetModes(), 2, "--space-id 表示该空间全部 K 线任务")
+	require.Equal(t, "stream", rsp.GetModes()[0].GetIngest())
+	require.Equal(t, "task_ds1", rsp.GetModes()[0].GetTaskId())
 
-	// 切回 pull 不要求在线；--force 标记数据集并让已打开的计划不再等失联端。
+	// 切回 scf 不要求在线；只改写这个数据集的任务，已打开计划的进度不动。
 	open, err := db.FetchPlans().Create(ctx, "crypto", streamPlanContent(t), "{}")
 	require.NoError(t, err)
-	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds1", Mode: "pull", Force: true})
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds1", Ingest: "scf"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, open.ID, rsp.GetPlanId())
-	modes, _ := db.IngestModes().List(ctx, "crypto")
-	require.Equal(t, store.IngestMode{SpaceID: "crypto", DatasetID: "ds1", Mode: "pull", Executor: "scf", Force: true, UpdatedAt: modes["ds1"].UpdatedAt}, modes["ds1"])
+	require.Len(t, rsp.GetModes(), 1)
+	require.Equal(t, "scf", rsp.GetModes()[0].GetIngest())
 	record, _ := db.FetchPlans().Open(ctx, "crypto")
-	require.Equal(t, "{}", record.Progress, "--force 只写采集方式表，不改写已打开计划的进度")
+	require.Equal(t, "{}", record.Progress)
 
 	got, err := service.GetIngestMode(ctx, &pb.GetIngestModeReq{SpaceId: "crypto", DatasetId: "ds2"})
 	require.NoError(t, err)
 	require.Len(t, got.GetModes(), 1)
-	require.Equal(t, "stream", got.GetModes()[0].GetMode())
+	require.Equal(t, "stream", got.GetModes()[0].GetIngest())
 	require.True(t, got.GetStream().GetOnline())
+
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", DatasetId: "ds_missing", Ingest: "scf"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }

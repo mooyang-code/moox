@@ -36,14 +36,14 @@ func TestGatewaySamplingKeepsOtherHostsOnReadFailureAndSkipsDisabledHosts(t *tes
 	for _, hostID := range []string{"control", "storage"} {
 		source.statuses[hostID] = &adminpb.HostGatewayRuntimeStatus{InstanceId: hostID + "-first", ExpectedHash: "desired", AppliedHash: "old", LastSeenAt: now.Format(time.RFC3339Nano)}
 	}
-	syncer := NewSyncer(repos.Topology, source, testHTTPS(), repos.Gateways)
+	syncer := NewSyncer(repos.Topology, source, repos.Gateways)
 	syncer.now = func() time.Time { return now }
-	_, err = syncer.Sync(t.Context())
+	err = syncer.Sync(t.Context())
 	require.NoError(t, err)
 	first := now
 	now = now.Add(3 * time.Minute)
 	source.failures["storage"] = errors.New("GetHostRoutes temporarily unavailable")
-	_, err = syncer.Sync(t.Context())
+	err = syncer.Sync(t.Context())
 	require.ErrorContains(t, err, "storage")
 	rows, err := repos.Gateways.List(t.Context())
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestGatewaySamplingKeepsOtherHostsOnReadFailureAndSkipsDisabledHosts(t *tes
 	require.Contains(t, rows[1].ReadError, "temporarily unavailable")
 	source.snapshot.Hosts[1].Status = "disabled"
 	source.calls = nil
-	_, err = syncer.Sync(t.Context())
+	err = syncer.Sync(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, []string{"control"}, source.calls)
 	rows, err = repos.Gateways.List(t.Context())

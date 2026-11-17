@@ -25,7 +25,6 @@ func commitMetricsService(t *testing.T, commit commitFunc) (*Service, *recording
 		Snapshot: func() metadata.RequestSnapshot {
 			return collectorPeriodMetadataSnapshot("crypto", "market_kline", "1m")
 		},
-		Authorizer: func(*pb.AuthInfo) error { return nil },
 	})
 	require.NoError(t, err)
 	return svc, metrics
@@ -42,7 +41,6 @@ func commitRequest(times ...time.Time) *pb.PrimaryCommitTimeSeriesBatchReq {
 		}})
 	}
 	return &pb.PrimaryCommitTimeSeriesBatchReq{
-		AuthInfo:    &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"},
 		Expectation: &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "market_kline", Frequency: "1m", PeriodTime: 1, SeriesHash: "h", ExpectedCount: 1},
 		Items:       items,
 	}

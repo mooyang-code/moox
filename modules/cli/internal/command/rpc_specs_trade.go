@@ -11,6 +11,7 @@ func init() {
 	rpcGroupShort["trade logical"] = "逻辑账户"
 	rpcGroupShort["trade order"] = "订单"
 	rpcGroupShort["trade blocked"] = "下架名单"
+	rpcGroupShort["trade shadow"] = "试运行中的策略实例发来的影子目标（只换算、不下单）"
 
 	registerRPCSpecs(
 		rpcSpec{Path: []string{"trade", "account", "list"}, Short: "列出交易账户", Service: tradeConsole, Method: "ListTradingAccounts", Page: rpcPageSize,
@@ -25,6 +26,8 @@ func init() {
 			Flags: []rpcFlag{reqFlag("logical-account-id", "logical_account_id", "逻辑账户 ID")}},
 		rpcSpec{Path: []string{"trade", "logical", "target"}, Short: "查看逻辑账户当前的目标", Service: tradeConsole, Method: "GetLogicalAccountTarget",
 			Flags: []rpcFlag{reqFlag("logical-account-id", "logical_account_id", "逻辑账户 ID")}},
+		rpcSpec{Path: []string{"trade", "shadow", "list"}, Short: "列出试运行中的策略实例最近的影子目标（权重、换算出的数量，从新到旧）", Service: tradeConsole, Method: "ListShadowTargets",
+			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "策略实例 ID"), intFlag("limit", "limit", "最多列出的条数（默认 20，最多 200）")}},
 		rpcSpec{Path: []string{"trade", "order", "list"}, Short: "列出订单", Service: tradeConsole, Method: "ListOrders", Page: rpcPageSize,
 			Flags: []rpcFlag{strFlag("logical-account-id", "logical_account_id", "逻辑账户 ID"), strFlag("account-id", "trading_account_id", "交易账户 ID"), strFlag("instrument-id", "instrument_id", "合约或标的"),
 				strFlag("state", "state", "订单状态"), strFlag("owner-type", "owner_type", "按订单来源过滤：TARGET（策略目标）、OPERATOR（人工操作）、EXTERNAL（外部）、SYSTEM（BNB 补买、稳定币调平）"),

@@ -6,25 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-// 标签同步的运行结果取值。
-const (
-	TagSyncSuccess = "success"
-	TagSyncFailed  = "failed"
-)
-
-// TagSyncRun 是一个标签上一次标的同步的运行结果。LastSuccessAt 为零表示从未成功过。
-type TagSyncRun struct {
-	SpaceID       string
-	TagID         string
-	LastRunAt     time.Time
-	LastStatus    string
-	LastError     string
-	LastSuccessAt time.Time
-}
 
 type tagSyncRunRow struct {
 	SpaceID       string     `gorm:"column:c_space_id;primaryKey"`
@@ -38,8 +23,8 @@ type tagSyncRunRow struct {
 
 func (tagSyncRunRow) TableName() string { return "t_collector_tag_sync_runs" }
 
-func (row tagSyncRunRow) run() TagSyncRun {
-	run := TagSyncRun{SpaceID: row.SpaceID, TagID: row.TagID, LastRunAt: row.LastRunAt.UTC(), LastStatus: row.LastStatus, LastError: row.LastError}
+func (row tagSyncRunRow) run() domain.TagSyncRun {
+	run := domain.TagSyncRun{SpaceID: row.SpaceID, TagID: row.TagID, LastRunAt: row.LastRunAt.UTC(), LastStatus: row.LastStatus, LastError: row.LastError}
 	if row.LastSuccessAt != nil {
 		run.LastSuccessAt = row.LastSuccessAt.UTC()
 	}
@@ -61,7 +46,7 @@ func (r *TagSyncRunRepository) ready() error {
 }
 
 // Record 记录一次运行结果：成功时同时更新最近成功时间，失败时保留上一次成功时间。
-func (r *TagSyncRunRepository) Record(ctx context.Context, run TagSyncRun) error {
+func (r *TagSyncRunRepository) Record(ctx context.Context, run domain.TagSyncRun) error {
 	if err := r.ready(); err != nil {
 		return err
 	}
@@ -69,13 +54,13 @@ func (r *TagSyncRunRepository) Record(ctx context.Context, run TagSyncRun) error
 	if run.SpaceID == "" || run.TagID == "" {
 		return fmt.Errorf("tag sync run needs space_id and tag_id")
 	}
-	if run.LastStatus != TagSyncSuccess && run.LastStatus != TagSyncFailed {
+	if run.LastStatus != domain.TagSyncSuccess && run.LastStatus != domain.TagSyncFailed {
 		return fmt.Errorf("tag sync run status %q is invalid", run.LastStatus)
 	}
 	runAt := run.LastRunAt.UTC()
 	row := tagSyncRunRow{SpaceID: run.SpaceID, TagID: run.TagID, LastRunAt: runAt, LastStatus: run.LastStatus, LastError: run.LastError, MTime: time.Now().UTC()}
 	updates := []string{"c_last_run_at", "c_last_status", "c_last_error", "c_mtime"}
-	if run.LastStatus == TagSyncSuccess {
+	if run.LastStatus == domain.TagSyncSuccess {
 		row.LastSuccessAt = &runAt
 		updates = append(updates, "c_last_success_at")
 	}
@@ -86,7 +71,7 @@ func (r *TagSyncRunRepository) Record(ctx context.Context, run TagSyncRun) error
 }
 
 // List 返回空间里所有标签的运行结果；spaceID 为空表示所有空间。
-func (r *TagSyncRunRepository) List(ctx context.Context, spaceID string) ([]TagSyncRun, error) {
+func (r *TagSyncRunRepository) List(ctx context.Context, spaceID string) ([]domain.TagSyncRun, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
@@ -98,7 +83,7 @@ func (r *TagSyncRunRepository) List(ctx context.Context, spaceID string) ([]TagS
 	if err := query.Order("c_space_id").Order("c_tag_id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	out := make([]TagSyncRun, 0, len(rows))
+	out := make([]domain.TagSyncRun, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, row.run())
 	}

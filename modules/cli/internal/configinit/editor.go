@@ -1,6 +1,7 @@
 package configinit
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	_ "embed"
@@ -18,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 //go:embed editor.html
@@ -29,7 +30,7 @@ var editorTemplate = template.Must(template.New("editor").Parse(editorSource))
 
 // EditorOptions 控制一次配置查看与修改。
 type EditorOptions struct {
-	// File 是 moox.toml 的路径。
+	// File 是 moox.toml 的路径；秘密文件 moox.secrets.toml 在同一目录。
 	File string
 	// Timeout 为零时用 DefaultTimeout。
 	Timeout time.Duration
@@ -39,19 +40,19 @@ type EditorOptions struct {
 	Notice io.Writer
 	// KeyStore 为空时用本机的系统钥匙串（没有钥匙串时用仅本人可读的密钥文件）。
 	KeyStore configcrypt.KeyStore
-	// Backup 在每次保存后把配置备份到管理后台；为空时用 moox.toml 里的管理员账号登录管理台上传。
+	// Backup 在每次保存后把两份配置备份到管理后台；为空时用秘密文件里的管理员账号登录管理台上传。
 	// 测试里替换，避免连接真实的管理台。
-	Backup func(context.Context, []byte, setupconfig.Manifest) (BackupResult, error)
+	Backup func(context.Context, ConfigPair) (BackupResult, error)
 }
 
-// EditorResult 只说明发生了什么，不含任何配置值。
+// EditorResult 只说明发生了什么，不含任何配置值。Encrypted 说的是秘密文件。
 type EditorResult struct {
 	Path      string `json:"path"`
 	Saved     bool   `json:"saved"`
 	Encrypted bool   `json:"encrypted"`
 }
 
-// Overview 是配置页的概览：秘密只给出「有没有」，要看具体值时再单独取。
+// Overview 是配置页的概览：秘密只给出「有没有」，要看具体值时再单独取。Encrypted 说的是秘密文件。
 type Overview struct {
 	Encrypted  bool         `json:"encrypted"`
 	KeyStore   string       `json:"key_store"`
@@ -81,16 +82,15 @@ type ExchangeKeyView struct {
 
 // ServerView 是一台主机的概览。
 type ServerView struct {
-	ID          string   `json:"id"`
-	Uses        []string `json:"uses"`
-	Address     string   `json:"address"`
-	Region      string   `json:"region"`
-	SSHUser     string   `json:"ssh_user"`
-	SSHPort     int      `json:"ssh_port"`
-	HasPassword bool     `json:"has_password"`
+	ID      string   `json:"id"`
+	Uses    []string `json:"uses"`
+	Address string   `json:"address"`
+	Region  string   `json:"region"`
+	SSHUser string   `json:"ssh_user"`
+	SSHPort int      `json:"ssh_port"`
 }
 
-// RunEditor 在本机起配置页：查看当前配置（秘密默认隐藏）、修改并加密保存。用户点「完成」或超时后结束。
+// RunEditor 在本机起配置页：查看两份配置（秘密默认隐藏）、修改后保存（秘密文件重新加密）。用户点「完成」或超时后结束。
 func RunEditor(ctx context.Context, options EditorOptions) (EditorResult, error) {
 	path, err := filepath.Abs(options.File)
 	if err != nil || options.File == "" {
@@ -104,7 +104,7 @@ func RunEditor(ctx context.Context, options EditorOptions) (EditorResult, error)
 	if backup == nil {
 		backup = backupPlain
 	}
-	editor := &editorSession{path: path, keys: keys, backup: backup, result: make(chan EditorResult, 1)}
+	editor := &editorSession{path: path, secretsPath: topology.SecretsPathFor(path), keys: keys, backup: backup, result: make(chan EditorResult, 1)}
 	if _, err := editor.load(); err != nil {
 		return EditorResult{}, err
 	}
@@ -143,59 +143,51 @@ func RunEditor(ctx context.Context, options EditorOptions) (EditorResult, error)
 
 type editorSession struct {
 	*localPage
-	path   string
-	keys   configcrypt.KeyStore
-	backup func(context.Context, []byte, setupconfig.Manifest) (BackupResult, error)
-	result chan EditorResult
+	path, secretsPath string
+	keys              configcrypt.KeyStore
+	backup            func(context.Context, ConfigPair) (BackupResult, error)
+	result            chan EditorResult
 
-	// digest 是最近一次读到或写入的文件摘要；保存前核对，避免覆盖别处的改动。
-	digest [sha256.Size]byte
-	saved  bool
+	// digest、secretsDigest 是最近一次读到或写入的两份文件的摘要；保存前核对，避免覆盖别处的改动。
+	digest, secretsDigest [sha256.Size]byte
+	saved                 bool
 }
 
 // loaded 是一次读取的结果。
 type loaded struct {
-	plain     []byte
-	manifest  setupconfig.Manifest
+	ConfigPair
+	// encrypted 表示秘密文件是加密保存的。
 	encrypted bool
 }
 
-// load 读取并解开配置文件，记下摘要。调用方持有 mu（RunEditor 启动前除外）。
+// load 读取两份文件（秘密文件加密的先解开），记下摘要。调用方持有 mu（RunEditor 启动前除外）。
 func (e *editorSession) load() (loaded, error) {
-	raw, err := readConfigFile(e.path)
+	configRaw, err := readConfigFile(e.path, false)
 	if err != nil {
 		return loaded{}, err
 	}
-	out := loaded{plain: raw}
-	if configcrypt.IsEncrypted(raw) {
-		out.encrypted = true
-		if out.plain, err = configcrypt.Decrypt(raw, e.keys); err != nil {
+	secretsRaw, err := readConfigFile(e.secretsPath, true)
+	if err != nil {
+		return loaded{}, err
+	}
+	out := loaded{encrypted: configcrypt.IsEncrypted(secretsRaw)}
+	secrets := secretsRaw
+	if out.encrypted {
+		if secrets, err = configcrypt.Decrypt(secretsRaw, e.keys); err != nil {
 			return loaded{}, err
 		}
 	}
-	if out.manifest, err = setupconfig.Parse(out.plain); err != nil {
-		return loaded{}, fmt.Errorf("当前的 moox.toml 校验没有通过：%w", err)
+	if out.ConfigPair, err = parsePair(configRaw, secrets); err != nil {
+		return loaded{}, err
 	}
-	e.digest = sha256.Sum256(raw)
+	e.digest, e.secretsDigest = sha256.Sum256(configRaw), sha256.Sum256(secretsRaw)
 	return out, nil
 }
 
-// readConfigFile 只读普通文件，且只有本人可读（与 setup 命令的要求一致）。
-func readConfigFile(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("读不到 %s", path)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s 必须是普通文件", path)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-		return nil, fmt.Errorf("%s 的权限必须是 0600（只有本人可读写）", path)
-	}
-	if info.Size() > 1<<20 {
-		return nil, fmt.Errorf("%s 超过 1 MiB", path)
-	}
-	return os.ReadFile(path)
+// readConfigFile 与 CLI 读配置用同一套校验（topology.ReadFile）：只读普通文件、不跟随符号链接、不超过 1 MiB；
+// private 为 true（秘密文件）时还要求 0600 且属于本人、读取时没被替换。
+func readConfigFile(path string, private bool) ([]byte, error) {
+	return topology.ReadFile(path, private)
 }
 
 func (e *editorSession) current(w http.ResponseWriter, r *http.Request) (loaded, bool) {
@@ -218,7 +210,7 @@ func (e *editorSession) overview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view := describe(state.manifest, state.encrypted, e.keys.Where())
+	view := describe(state, e.keys.Where())
 	reply(w, http.StatusOK, response{OK: true, Overview: &view})
 }
 
@@ -228,7 +220,7 @@ func (e *editorSession) form(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	form := formFrom(state.manifest)
+	form := formFrom(state.ConfigPair)
 	reply(w, http.StatusOK, response{OK: true, Form: &form})
 }
 
@@ -247,7 +239,7 @@ func (e *editorSession) reveal(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
 		return
 	}
-	m := state.manifest
+	m := state.Secrets
 	var value string
 	switch field := request.Field; {
 	case field == "admin.password":
@@ -280,13 +272,6 @@ func (e *editorSession) reveal(w http.ResponseWriter, r *http.Request) {
 			reply(w, http.StatusNotFound, response{Message: "没有这一项"})
 			return
 		}
-	case strings.HasPrefix(field, "hosts.") && strings.HasSuffix(field, ".password"):
-		host, ok := m.HostCatalog[strings.TrimSuffix(strings.TrimPrefix(field, "hosts."), ".password")]
-		if !ok {
-			reply(w, http.StatusNotFound, response{Message: "没有这台主机"})
-			return
-		}
-		value = host.SSH.Password
 	default:
 		reply(w, http.StatusNotFound, response{Message: "没有这一项"})
 		return
@@ -307,50 +292,59 @@ func (e *editorSession) update(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
 		return
 	}
-	updated, err := applyForm(state.plain, state.manifest, form)
+	config, secrets, err := applyForm(state.ConfigPair, form)
 	if err == nil {
-		_, err = setupconfig.Parse(updated)
+		_, err = parsePair(config, secrets)
 	}
 	if err != nil {
 		reply(w, http.StatusUnprocessableEntity, response{Message: "修改没有通过校验，没有保存：" + err.Error()})
 		return
 	}
-	e.write(w, r, updated)
+	// 秘密文件只在内容有变化时重写（一律加密）；明文保存的秘密文件不顺手加密，由「加密保存」单独做。
+	e.write(w, r, state, config, secrets, !bytes.Equal(secrets, state.SecretsText))
 }
 
-// encrypt 把明文保存的配置原样加密保存。
+// encrypt 把明文保存的秘密文件原样加密保存。
 func (e *editorSession) encrypt(w http.ResponseWriter, r *http.Request) {
 	state, ok := e.current(w, r)
 	if !ok {
 		return
 	}
-	e.write(w, r, state.plain)
+	e.write(w, r, state, state.ConfigText, state.SecretsText, true)
 }
 
-func (e *editorSession) write(w http.ResponseWriter, r *http.Request, plain []byte) {
-	state, status, err := e.saveLocked(plain)
+func (e *editorSession) write(w http.ResponseWriter, r *http.Request, before loaded, config, secrets []byte, sealSecrets bool) {
+	state, status, err := e.saveLocked(before, config, secrets, sealSecrets)
 	if err != nil {
 		reply(w, status, response{Message: err.Error()})
 		return
 	}
-	view := describe(state.manifest, state.encrypted, e.keys.Where())
+	view := describe(state, e.keys.Where())
 	reply(w, http.StatusOK, response{OK: true, Overview: &view, Sync: e.sync(r.Context(), state)})
 }
 
-// saveLocked 在文件锁内核对、加密并替换文件，返回新读到的配置。
-func (e *editorSession) saveLocked(plain []byte) (loaded, int, error) {
+// saveLocked 在文件锁内核对两份文件没被别处改过，再替换有变化的那份（秘密文件加密后写），返回新读到的配置。
+func (e *editorSession) saveLocked(before loaded, config, secrets []byte, sealSecrets bool) (loaded, int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	raw, err := readConfigFile(e.path)
-	if err != nil || sha256.Sum256(raw) != e.digest {
-		return loaded{}, http.StatusConflict, errors.New("moox.toml 在别处被改动过，为避免覆盖没有保存；请刷新页面后重新修改")
+	configRaw, err := readConfigFile(e.path, false)
+	secretsRaw, secretsErr := readConfigFile(e.secretsPath, true)
+	if err != nil || secretsErr != nil || sha256.Sum256(configRaw) != e.digest || sha256.Sum256(secretsRaw) != e.secretsDigest {
+		return loaded{}, http.StatusConflict, errors.New("配置文件在别处被改动过，为避免覆盖没有保存；请刷新页面后重新修改")
 	}
-	sealed, err := configcrypt.Encrypt(plain, e.keys)
-	if err != nil {
-		return loaded{}, http.StatusInternalServerError, fmt.Errorf("加密失败：%w", err)
+	if sealSecrets {
+		sealed, err := configcrypt.Encrypt(secrets, e.keys)
+		if err != nil {
+			return loaded{}, http.StatusInternalServerError, fmt.Errorf("加密失败：%w", err)
+		}
+		if err := replaceFile(e.secretsPath, sealed); err != nil {
+			return loaded{}, http.StatusInternalServerError, err
+		}
 	}
-	if err := replaceFile(e.path, sealed); err != nil {
-		return loaded{}, http.StatusInternalServerError, err
+	if !bytes.Equal(config, before.ConfigText) {
+		if err := replaceFile(e.path, config); err != nil {
+			return loaded{}, http.StatusInternalServerError, err
+		}
 	}
 	e.saved = true
 	state, err := e.load()
@@ -365,7 +359,7 @@ func (e *editorSession) sync(ctx context.Context, state loaded) string {
 	if e.backup == nil {
 		return ""
 	}
-	if _, err := e.backup(ctx, state.plain, state.manifest); err != nil {
+	if _, err := e.backup(ctx, state.ConfigPair); err != nil {
 		return "本机已保存；暂时没能同步到管理后台（" + err.Error() + "）。管理台部署好后，再保存一次或让 Agent 运行一次同步即可。"
 	}
 	return "已同步到你的管理后台（用管理员密码加密备份，换电脑时可以恢复）。"
@@ -383,14 +377,14 @@ func (e *editorSession) close(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.done = true
-	raw, _ := readConfigFile(e.path)
+	raw, _ := readConfigFile(e.secretsPath, true)
 	reply(w, http.StatusOK, response{OK: true})
 	e.result <- EditorResult{Path: e.path, Saved: e.saved, Encrypted: configcrypt.IsEncrypted(raw)}
 }
 
 // replaceFile 先写同目录的临时文件（0600、落盘），再原子改名替换，中途失败不会留下半截配置。
 func replaceFile(path string, data []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".moox.toml.tmp-*")
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("无法写入 %s：%w", filepath.Dir(path), err)
 	}
@@ -420,12 +414,16 @@ func replaceFile(path string, data []byte) error {
 	return nil
 }
 
-// EncryptFile 把明文保存的 moox.toml 原样加密保存；已经加密的只核对能否解开，不改动。
+// EncryptFile 把明文保存的 moox.secrets.toml 原样加密保存；path 是 moox.toml 或秘密文件本身的路径。
+// 已经加密的只核对能否解开，不改动。
 func EncryptFile(path string, keys configcrypt.KeyStore) (alreadyEncrypted bool, err error) {
 	if keys == nil {
 		keys = configcrypt.Default()
 	}
-	raw, err := readConfigFile(path)
+	if filepath.Base(path) != topology.SecretsFileName {
+		path = topology.SecretsPathFor(path)
+	}
+	raw, err := readConfigFile(path, true)
 	if err != nil {
 		return false, err
 	}
@@ -433,8 +431,8 @@ func EncryptFile(path string, keys configcrypt.KeyStore) (alreadyEncrypted bool,
 		_, err := configcrypt.Decrypt(raw, keys)
 		return true, err
 	}
-	if _, err := setupconfig.Parse(raw); err != nil {
-		return false, fmt.Errorf("当前的 moox.toml 校验没有通过，先修好再加密：%w", err)
+	if _, err := topology.ParseSecrets(raw); err != nil {
+		return false, fmt.Errorf("当前的 moox.secrets.toml 校验没有通过，先修好再加密：%w", err)
 	}
 	sealed, err := configcrypt.Encrypt(raw, keys)
 	if err != nil {
@@ -446,28 +444,36 @@ func EncryptFile(path string, keys configcrypt.KeyStore) (alreadyEncrypted bool,
 // channelNames 是告警渠道类型在页面上的称呼，与录入页、编辑页的下拉选项一致。
 var channelNames = map[string]string{"wecom": "企业微信群机器人", "feishu": "飞书群机器人", "dingtalk": "钉钉群机器人", "webhook": "通用 Webhook"}
 
-// describe 把配置整理成给人看的概览，不含任何秘密值。
-func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
+// describe 把两份配置整理成给人看的概览，不含任何秘密值。
+func describe(state loaded, where string) Overview {
+	m, sec := state.Config, state.Secrets
 	view := Overview{
-		Encrypted: encrypted, KeyStore: where, SecretID: maskID(m.TencentCloud.SecretID),
-		Region: regionName(m.TencentCloud.Region), Admin: m.Admin.Username,
-		Channel: channelNames[m.Notification.ChannelType], HasWebhook: m.Notification.WebhookURL != "", HasNotifySecret: m.Notification.Secret != "",
+		Encrypted: state.encrypted, KeyStore: where, SecretID: maskID(sec.TencentCloud.SecretID),
+		Region: regionName(m.CloudRegion()), Admin: sec.Admin.Username,
+		Channel: channelNames[sec.Notification.ChannelType], HasWebhook: sec.Notification.WebhookURL != "", HasNotifySecret: sec.Notification.Secret != "",
 	}
-	view.ExchangeKeys = make([]ExchangeKeyView, 0, len(m.ExchangeKeys))
-	for i, key := range m.ExchangeKeys {
+	view.ExchangeKeys = make([]ExchangeKeyView, 0, len(sec.ExchangeKeys))
+	for i, key := range sec.ExchangeKeys {
 		view.ExchangeKeys = append(view.ExchangeKeys, ExchangeKeyView{
 			Index: i, Name: key.Name, Exchange: key.Exchange, Environment: key.Environment, ReadOnly: key.ReadOnly,
 			SecretID: key.ID(), APIKey: maskID(key.APIKey), HasPassphrase: key.Passphrase != "",
 		})
 	}
+	view.Servers = describeServers(m)
+	return view
+}
+
+// describeServers 按用途排序列出主机：管理台、数据存储、海外、因子机，其余在后。
+func describeServers(m topology.Config) []ServerView {
 	ids := make([]string, 0, len(m.HostCatalog))
 	for id := range m.HostCatalog {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	var servers []ServerView
 	for _, id := range ids {
 		host := m.HostCatalog[id]
-		server := ServerView{ID: id, Address: host.Address, SSHUser: host.SSH.Username, SSHPort: host.SSH.Port, HasPassword: host.SSH.Password != ""}
+		server := ServerView{ID: id, Address: host.Address, SSHUser: host.SSH.Username, SSHPort: host.SSH.Port}
 		if host.Region != "" {
 			server.Region = regionName(host.Region)
 		}
@@ -483,9 +489,8 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 				}
 			}
 		}
-		view.Servers = append(view.Servers, server)
+		servers = append(servers, server)
 	}
-	// 按用途排序：管理台、数据存储、海外、因子机，其余在后。
 	rank := func(server ServerView) int {
 		for i, use := range []string{"管理台", "数据存储", "海外接入与交易", "因子计算"} {
 			if slices.Contains(server.Uses, use) {
@@ -494,8 +499,8 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		}
 		return 9
 	}
-	sort.SliceStable(view.Servers, func(i, j int) bool { return rank(view.Servers[i]) < rank(view.Servers[j]) })
-	return view
+	sort.SliceStable(servers, func(i, j int) bool { return rank(servers[i]) < rank(servers[j]) })
+	return servers
 }
 
 // maskID 只露出 SecretId 的头尾，便于用户认出是哪一把。

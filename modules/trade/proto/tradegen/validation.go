@@ -302,16 +302,9 @@ func (r *RemoveLogicalAccountMemberReq) Validate() error {
 	return nil
 }
 
-func (r *ClaimLogicalAccountOwnerReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
-		return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
-	}
-	return nil
-}
-
-func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
-		return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
+func (r *CloseTargetSessionReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || r.SessionStartedAt <= 0 {
+		return fmt.Errorf("logical_account_id, instance_id, session_id and a positive session_started_at are required")
 	}
 	return nil
 }
@@ -450,6 +443,19 @@ func (r *GetOperatorActionReq) Validate() error {
 func (r *GetLogicalAccountTargetReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" {
 		return fmt.Errorf("logical_account_id is required")
+	}
+	return nil
+}
+
+// maxShadowTargets 是一次最多列出的影子目标条数。
+const maxShadowTargets = 200
+
+func (r *ListShadowTargetsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.InstanceId) == "" {
+		return fmt.Errorf("instance_id is required")
+	}
+	if r.Limit < 0 || r.Limit > maxShadowTargets {
+		return fmt.Errorf("limit must be between 0 and %d", maxShadowTargets)
 	}
 	return nil
 }

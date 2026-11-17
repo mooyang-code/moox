@@ -15,7 +15,7 @@ import (
 
 // ReportDatasetPeriodCompleted 追加写入方自己报告的周期完成（source=producer）；账本判定的完成由存储层在周期封口时生成。
 func (s *Service) ReportDatasetPeriodCompleted(ctx context.Context, req *pb.ReportDatasetPeriodCompletedReq) (*pb.ReportDatasetPeriodCompletedRsp, error) {
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
+	if err := validateMarkerScope(req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
 		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	ctx = s.requestContext(ctx)
@@ -36,9 +36,6 @@ func (s *Service) ReportDatasetPeriodCompleted(ctx context.Context, req *pb.Repo
 func (s *Service) GetDatasetPeriodCompleted(ctx context.Context, req *pb.GetDatasetPeriodCompletedReq) (*pb.GetDatasetPeriodCompletedRsp, error) {
 	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetCauseEventId() == "" || req.GetPeriodTime() <= 0 {
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, cause_event_id and period_time are required"))}, nil
-	}
-	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	ctx = s.requestContext(ctx)
 	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
@@ -79,27 +76,19 @@ func markerSeries(values []*storageeventpb.SeriesRef) []*pb.SeriesRef {
 	return out
 }
 
-func (s *Service) validateMarkerCaller(auth *pb.AuthInfo, spaceID, datasetID string) error {
+func validateMarkerScope(spaceID, datasetID string) error {
 	if spaceID == "" || datasetID == "" {
 		return markerValidationError{errors.New("space_id and dataset_id are required")}
-	}
-	if err := s.authorizeRequest(auth); err != nil {
-		return markerPermissionError{err}
 	}
 	return nil
 }
 
 type markerValidationError struct{ error }
-type markerPermissionError struct{ error }
 
 func markerError(err error) *pb.RetInfo {
 	var validation markerValidationError
 	if errors.As(err, &validation) {
 		return retinfo.Error(pb.ErrorCode_INVALID_PARAM, validation)
-	}
-	var permission markerPermissionError
-	if errors.As(err, &permission) {
-		return retinfo.Error(pb.ErrorCode_NO_PERMISSION, permission)
 	}
 	return retinfo.Error(pb.ErrorCode_INNER_ERR, err)
 }

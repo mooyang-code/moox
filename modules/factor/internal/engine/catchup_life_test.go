@@ -140,24 +140,21 @@ func TestCatchupSyncFailureIsReportedAndRetried(t *testing.T) {
 	require.Nil(t, r2.catchups.get("ftask_a", since), "失败后丢弃，下一次评估重新同步")
 }
 
-// 生命周期整体：暂停 → 恢复进入追赶（追赶门禁放行、实时门禁关闭）→ 追平后放行回到运行。
+// 生命周期整体：暂停 → 恢复进入追赶（追赶门禁放行、实时门禁关闭；没追平的任务挡住模块放行）→ 追平后放行回到运行。
 func TestEngineResumeCatchesUpThroughLifecycle(t *testing.T) {
-	r, store := newCatchupRuntime(t)
+	r, _ := newCatchupRuntime(t)
 	ctx := context.Background()
-	ref := setRef("ftask_a")
-	r.life.Refresh(ctx)
-	for _, cmd := range []lifecycle.Command{lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm} {
-		_, err := r.life.Command(ctx, cmd, ref)
-		require.NoError(t, err)
-	}
-	_, err := r.life.Command(ctx, lifecycle.CmdPause, ref)
+	require.NoError(t, r.preload.PrepareSet(ctx, "ftask_a"))
+	require.True(t, r.gate("ftask_a"))
+	_, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	require.NoError(t, err)
 	// 水位还没落后（没有记录）：同步完成即追平。同步先停住：否则后台同步可能抢在断言之前完成，直接回到运行。
 	release := make(chan struct{})
 	r.preload.data = blockingPrepare{release: release}
-	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: ref})
+	state, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume})
 	require.NoError(t, err)
-	require.Equal(t, lifecycle.StageResuming, r.life.Stage(ref), "同步本地数据期间不放行")
+	require.Equal(t, lifecycle.StageResuming, state.Stage, "同步本地数据期间不放行")
+	require.Equal(t, "因子任务 ftask_a", state.Catchup.BlockedBy, "没追平的任务挡住模块")
 	require.False(t, r.gate("ftask_a"))
 	require.True(t, r.catchupGate("ftask_a"))
 	require.True(t, r.writeGate("ftask_a"))
@@ -165,11 +162,74 @@ func TestEngineResumeCatchesUpThroughLifecycle(t *testing.T) {
 	close(release)
 	require.Eventually(t, func() bool {
 		r.life.Refresh(ctx)
-		return r.life.Stage(ref) == lifecycle.StageRunning
+		return r.life.Stage() == lifecycle.StageRunning
 	}, 15*time.Second, 20*time.Millisecond)
 	require.True(t, r.gate("ftask_a"))
 	require.False(t, r.catchupGate("ftask_a"))
-	_ = store
+}
+
+// 除本地窗口外还有不通过项的任务（这里是没有启用成员）不计算，也不参与恢复追赶、不挡住模块放行；
+// 只是窗口没载入的任务照常参与：追赶先载入窗口并重查，通过之前报未追平，载入后才追平放行。
+func TestTasksFailingChecksDoNotBlockTheModuleRelease(t *testing.T) {
+	r, _ := newLifecycleRuntime(t, engineTask("ftask_a", "dataset_a", true, "bias"), engineTask("ftask_b", "dataset_b", true))
+	ctx := context.Background()
+	r.refreshTaskChecks(ctx) // 两个任务的窗口都没载入；ftask_b 还没有启用的成员
+	_, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
+	require.NoError(t, err)
+	release := make(chan struct{})
+	r.preload.data = blockingPrepare{release: release}
+	state, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: true})
+	require.NoError(t, err)
+	require.False(t, state.Catchup.CaughtUp, "只是窗口没载入的任务参与追赶：载入之前不算追平")
+	require.Equal(t, "因子任务 ftask_a", state.Catchup.BlockedBy)
+	require.Nil(t, r.catchups.get("ftask_b", state.Catchup.Since), "除窗口外还有不通过项的任务不参与追赶")
+
+	close(release)
+	require.Eventually(t, func() bool { return r.life.Settled(ctx).CaughtUp() }, 15*time.Second, 10*time.Millisecond)
+	require.True(t, r.preload.Ready("ftask_a"), "追赶载入了窗口")
+	require.True(t, r.catchupGate("ftask_a"), "载入后立即重查，追赶门禁放行")
+	require.False(t, r.catchupGate("ftask_b"), "不参与追赶的任务不做追赶写")
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdRelease})
+	require.NoError(t, err)
+	require.True(t, r.gate("ftask_a"))
+	require.False(t, r.gate("ftask_b"))
+}
+
+// 系统暂停期间重启引擎（预载记录只在内存里，重启后所有任务的窗口都没载入；暂停、恢复追赶期间预载循环不运行），
+// 系统恢复时追赶负责载入窗口：窗口载入、检查通过、追平之后才放行，不会以 0/0 立即报追平（否则策略等不到暂停区间的因子结果）。
+func TestRestartDuringSystemPauseLoadsWindowsBeforeRelease(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "lifecycle.json")
+	before, _ := newLifecycleRuntimeAt(t, stateFile)
+	require.NoError(t, before.preload.PrepareSet(ctx, "ftask_a"))
+	require.True(t, before.gate("ftask_a"))
+	_, err := before.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
+	require.NoError(t, err)
+
+	r, fake := newLifecycleRuntimeAt(t, stateFile) // 重启
+	require.Equal(t, lifecycle.StagePaused, r.life.Stage(), "重启后仍是系统暂停")
+	r.refreshTaskChecks(ctx)
+	r.preload.once(ctx)
+	require.Empty(t, fake.prepared, "暂停期间预载循环不把数据拉回本地")
+	require.False(t, r.gate("ftask_a"))
+
+	release := make(chan struct{})
+	r.preload.data = blockingPrepare{release: release}
+	state, err := r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: true})
+	require.NoError(t, err)
+	require.Equal(t, lifecycle.StageResuming, state.Stage)
+	require.False(t, state.Catchup.CaughtUp, "窗口还没载入：不是 0/0 立即追平")
+	require.False(t, r.catchupGate("ftask_a"))
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdRelease})
+	require.Error(t, err, "没追平不能放行")
+
+	close(release)
+	require.Eventually(t, func() bool { return r.life.Settled(ctx).CaughtUp() }, 15*time.Second, 10*time.Millisecond)
+	require.True(t, r.preload.Ready("ftask_a"), "恢复追赶载入了窗口")
+	require.True(t, r.catchupGate("ftask_a"), "检查通过，任务开始追赶计算")
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdRelease})
+	require.NoError(t, err)
+	require.True(t, r.gate("ftask_a"), "放行后实时计算")
 }
 
 // 各任务的追赶并发进行：两个任务同时在推进时才都能结束；一个失败不影响另一个；全部结束后才返回。

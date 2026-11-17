@@ -82,11 +82,12 @@ func (r *Runtime) start(ctx context.Context, name string, run func(context.Conte
 }
 
 // Initialize 加载配置、打开数据库、注册 RPC 与健康检查，并启动后台循环。
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+// configPath 是业务配置（-config）。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*server.Server, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	cfg, err := config.Load("./config/app.yaml")
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +150,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	service := &rpc.Service{Store: dbStore, Sender: sender, Actions: actions}
 	pb.RegisterCallbackDispatcherServiceService(s.Service("trpc.moox.callbackdispatcher.CallbackDispatcherService"), service)
-	if err := registerMetricsReporter(s); err != nil {
+	healthState, err := registerHealth(s, dbStore, actions, &eventBusConnected, supervisor.Stalled)
+	if err != nil {
 		return nil, err
 	}
-	if err := registerHealth(s, dbStore, actions, &eventBusConnected); err != nil {
+	if err := registerMetricsReporter(s, healthz.Readiness(healthState.Snapshot)); err != nil {
 		return nil, err
 	}
 
@@ -173,11 +175,13 @@ func eventBusConfig(cfg *config.Config) (jetstream.Config, error) {
 	return clientConfig, nil
 }
 
-func registerMetricsReporter(s *server.Server) error {
+// registerMetricsReporter 注册指标上报；readiness 是 /readyz 用的同一个就绪判断，随上报带给 Monitor。
+func registerMetricsReporter(s *server.Server, readiness func(context.Context) (bool, string)) error {
 	handler, err := report.NewHandler(report.DefaultConfig(moduleName, "callback-dispatcher"))
 	if err != nil {
 		return fmt.Errorf("创建指标上报失败: %w", err)
 	}
+	handler.SetReadiness(readiness)
 	service := s.Service("trpc.moox.callbackdispatcher.metrics.timer")
 	if service == nil {
 		return fmt.Errorf("没有配置指标上报的定时服务")
@@ -186,21 +190,31 @@ func registerMetricsReporter(s *server.Server) error {
 	return nil
 }
 
-func registerHealth(s *server.Server, dbStore *store.Store, actions *action.Registry, eventBusConnected *atomic.Bool) error {
+// healthSnapshot 生成健康快照：数据库可用、事件消费者没有长时间停着才算就绪。收不到事件时进程和数据库都正常，
+// 但规则不会触发，必须体现在就绪位上（Monitor 据此告警）。
+func healthSnapshot(state *health.State, databaseReady, eventBusConnected bool, systemActions []string, stalled string) healthz.Response {
+	ready := databaseReady && stalled == ""
+	state.SetReady(ready)
+	response := healthz.Base("callback-dispatcher", "callback-dispatcher", "", "", state.StartedAt, ready)
+	response.Details = map[string]any{
+		"database":       databaseReady,
+		"eventbus":       eventBusConnected,
+		"system_actions": systemActions,
+	}
+	if stalled != "" {
+		response.Details["consumer_error"] = stalled
+	}
+	return response
+}
+
+// registerHealth 注册健康检查；consumersStalled 返回事件消费者长时间没有运行的说明（eventconsumer.Supervisor.Stalled），正常时为空。
+func registerHealth(s *server.Server, dbStore *store.Store, actions *action.Registry, eventBusConnected *atomic.Bool, consumersStalled func(time.Time) string) (*health.State, error) {
 	state := health.New("callback-dispatcher", "callback-dispatcher", "", "")
 	state.SnapshotFunc = func(ctx context.Context) healthz.Response {
-		databaseReady := dbStore.Ping(ctx) == nil
-		state.SetReady(databaseReady)
-		response := healthz.Base("callback-dispatcher", "callback-dispatcher", "", "", state.StartedAt, databaseReady)
-		response.Details = map[string]any{
-			"database":       databaseReady,
-			"eventbus":       eventBusConnected.Load(),
-			"system_actions": actions.Actions(),
-		}
-		return response
+		return healthSnapshot(state, dbStore.Ping(ctx) == nil, eventBusConnected.Load(), actions.Actions(), consumersStalled(time.Now()))
 	}
 	if err := health.Register(s.Service("trpc.moox.callbackdispatcher.Health"), state); err != nil {
-		return fmt.Errorf("注册健康检查失败: %w", err)
+		return nil, fmt.Errorf("注册健康检查失败: %w", err)
 	}
-	return nil
+	return state, nil
 }

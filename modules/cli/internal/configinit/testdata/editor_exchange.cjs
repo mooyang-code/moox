@@ -17,7 +17,7 @@ const form = {
     { name: 'readonly', exchange: 'binance', environment: 'production', api_key: 'ro-key', secret_key: 'ro-secret', passphrase: '', readonly: true },
     { name: 'main', exchange: 'okx', environment: 'testnet', api_key: 'okx-key', secret_key: 'okx-secret', passphrase: 'okx-pass', readonly: false },
   ],
-  hosts: [], retention: { view_rows_per_series: 1, max_view_file_bytes: 1, frequencies: [], defaults: {}, spaces: [], recommended: { defaults: {}, spaces: {} } }, logs: { max_size_mb: 50, backup_count: 5 },
+  hosts: [], retention: { view_rows_per_series: 1, max_view_file_bytes: 1, frequencies: [], defaults: {}, spaces: [], recommended: { defaults: {}, spaces: {} } },
 };
 const calls = [];
 const dom = new JSDOM(html, {

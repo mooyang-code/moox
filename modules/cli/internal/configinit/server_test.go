@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 type outcome struct {
@@ -221,7 +221,7 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 		t.Fatalf("角色顺序 = %v", keys)
 	}
 	// 用户只看到用途说明，不看到组件 ID（主机 ID 与角色键同名，会出现在页面脚本里）。
-	for _, id := range []string{"storage-primary", "console-proxy", "egress-proxy", "factor-mgr"} {
+	for _, id := range []string{"storage-primary", "archive-mgr", "egress-proxy", "factor-mgr"} {
 		if strings.Contains(body, id) {
 			t.Fatalf("页面不应展示组件 ID %q", id)
 		}
@@ -379,6 +379,28 @@ func TestInvalidContentIsExplainedWithoutEchoingSecretsAndKeepsTheTokenUsable(t 
 	h.wait()
 }
 
+// 金样：录入页提交后写出的两份文件（秘密文件解密后比较）。渲染或示例改了之后用 MOOX_UPDATE_GOLDEN=1 重新生成并逐行看一遍。
+var submitGolden = map[string]string{"config": "testdata/golden/moox.toml", "secrets": "testdata/golden/moox.secrets.toml"}
+
+func checkGolden(t *testing.T, path string, got []byte) {
+	t.Helper()
+	if os.Getenv("MOOX_UPDATE_GOLDEN") == "1" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(want) != string(got) {
+		t.Fatalf("%s 与金样不一致（确认改动无误后用 MOOX_UPDATE_GOLDEN=1 重新生成）", path)
+	}
+}
+
 func TestSubmitWritesTheFileAndEndsTheSession(t *testing.T) {
 	h := start(t, time.Minute)
 	resp, text := h.request(http.MethodPost, "submit", nil, validBody(t))
@@ -393,33 +415,41 @@ func TestSubmitWritesTheFileAndEndsTheSession(t *testing.T) {
 	if outcome.err != nil {
 		t.Fatal(outcome.err)
 	}
-	if outcome.result.Path != h.output || strings.Join(outcome.result.Hosts, ",") != "control,storage,overseas" {
+	secretsPath := topology.SecretsPathFor(h.output)
+	if outcome.result.Path != h.output || outcome.result.SecretsPath != secretsPath || strings.Join(outcome.result.Hosts, ",") != "control,storage,overseas" {
 		t.Fatalf("结果 = %+v", outcome.result)
 	}
-	raw, err := os.ReadFile(h.output)
+	config, err := os.ReadFile(h.output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 写出的文件是加密的：不含任何明文配置，用本机密钥能解开并通过 CLI 校验。
-	if !configcrypt.IsEncrypted(raw) {
-		t.Fatal("写出的 moox.toml 应加密保存")
+	raw, err := os.ReadFile(secretsPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, plain := range []string{"Adm1n-P@ss", "key-example", "pw-storage", "[admin]", "198.51.100.10"} {
-		if strings.Contains(string(raw), plain) {
-			t.Fatalf("加密文件里出现了明文 %q", plain)
+	// moox.toml 是明文、不含秘密；秘密文件是加密的，用本机密钥能解开。两份都通过 CLI 校验，并与金样一致。
+	if configcrypt.IsEncrypted(config) || !configcrypt.IsEncrypted(raw) {
+		t.Fatal("moox.toml 应明文保存，moox.secrets.toml 应加密保存")
+	}
+	for _, secret := range []string{"Adm1n-P@ss", "key-example", "AKIDexample", "webhook/send?key=abc", "[admin]"} {
+		if strings.Contains(string(config), secret) || strings.Contains(string(raw), secret) {
+			t.Fatalf("文件里出现了明文秘密 %q", secret)
 		}
 	}
 	plain, err := configcrypt.Decrypt(raw, h.keys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := setupconfig.Parse(plain); err != nil {
+	if _, err := parsePair(config, plain); err != nil {
 		t.Fatalf("写出的文件应通过 CLI 校验: %v", err)
 	}
+	checkGolden(t, submitGolden["config"], config)
+	checkGolden(t, submitGolden["secrets"], plain)
 	if runtime.GOOS != "windows" {
-		info, _ := os.Stat(h.output)
-		if info.Mode().Perm() != 0o600 {
-			t.Fatalf("权限 = %v，应为 0600", info.Mode().Perm())
+		for _, path := range []string{h.output, secretsPath} {
+			if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+				t.Fatalf("%s 的权限 = %v，应为 0600", path, info.Mode().Perm())
+			}
 		}
 	}
 	// 会话结束后服务关闭，令牌不能再用。
@@ -630,8 +660,24 @@ func TestFileCreatedWhileTheFormIsOpenIsNotOverwritten(t *testing.T) {
 	if got, _ := os.ReadFile(h.output); string(got) != "created meanwhile" {
 		t.Fatal("文件被覆盖了")
 	}
+	if _, err := os.Stat(topology.SecretsPathFor(h.output)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("moox.toml 写不成时不能留下只有一半的配置")
+	}
 	h.cancel()
 	h.wait()
+}
+
+// 已有秘密文件时同样不覆盖，也不打开页面。
+func TestExistingSecretsFileIsNeverOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, topology.SecretsFileName), []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := false
+	_, err := Run(context.Background(), Options{Output: filepath.Join(dir, "moox.toml"), Open: func(string) error { opened = true; return nil }})
+	if err == nil || !strings.Contains(err.Error(), "已存在") || opened {
+		t.Fatalf("err = %v opened = %v", err, opened)
+	}
 }
 
 func TestTimeoutAndCancellationWriteNothing(t *testing.T) {

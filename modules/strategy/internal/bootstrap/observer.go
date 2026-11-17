@@ -73,6 +73,9 @@ type instanceObserver struct {
 
 	mu       sync.Mutex
 	expected map[string]report.DatasetExpectation
+	// halted 非空且返回 true 时（模块暂停、恢复追赶中）期望清单带暂停标记：实例被有意停下，Monitor 不对它做新鲜度检查
+	//（与因子任务暂停时的做法一致）。
+	halted func() bool
 	// lastBarEnd 与 lastOkBarEnd 是每个实例最近处理的一根、最近一个 ok 的一根的 bar_end，是 A 股实例期望间隔的基准。
 	lastBarEnd   map[string]time.Time
 	lastOkBarEnd map[string]time.Time
@@ -195,6 +198,7 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	next := make(map[string]report.DatasetExpectation, len(instances))
+	halted := o.halted != nil && o.halted()
 	for _, instance := range instances {
 		resolved, err := input.ParseResolved(instance.ResolvedJSON)
 		if err != nil {
@@ -203,6 +207,7 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		if expectation, ok := datasetKey(instance, resolved.Bar); ok {
 			expectation.Interval = o.runIntervalLocked(instance.InstanceID, resolved.Calendar, resolved.Bar, expectation.Interval)
 			expectation.Name = instanceDisplayName(definitionNames[instance.StrategyID], instance.InstanceID)
+			expectation.Paused = halted
 			next[instance.InstanceID] = expectation
 		}
 	}
@@ -455,12 +460,6 @@ func (o *instanceObserver) warmingUp(ctx context.Context, instance store.Instanc
 	return err == nil && !found
 }
 
-// Alert 记录需要人工处理的实例事件：写告警日志，并把模块健康检查记一次失败。
-func (o *instanceObserver) Alert(instance store.Instance, reason string) {
-	o.log("实例 %s 需要人工处理：%s", instance.InstanceID, reason)
-	_ = o.module.ObserveRun(moduleStage, "error", moduleHealthCheck, o.now().UTC())
-}
-
 func (o *instanceObserver) log(format string, args ...any) {
 	if o.logf != nil {
 		o.logf(format, args...)
@@ -469,6 +468,13 @@ func (o *instanceObserver) log(format string, args ...any) {
 
 // paramStaleMetric 是参数投递滞后告警的指标名（设计 6.5、S7）。
 const paramStaleMetric = "moox_strategy_param_delivery_stale"
+
+// SetHalted 设置“模块是否被有意停下”的判断（生命周期控制器的 Halted）。
+func (o *instanceObserver) SetHalted(halted func() bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.halted = halted
+}
 
 // SetStaleAlertPeriods 设置触发参数投递滞后告警的连续未送达期数；0 表示不告警。
 func (o *instanceObserver) SetStaleAlertPeriods(periods int) { o.staleAlertPeriods = periods }

@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func TestSignedTLSControlProtocolAndProcessIdentity(t *testing.T) {
 	for _, hostID := range []string{"control", "storage"} {
 		t.Run(hostID, func(t *testing.T) {
 			ca := testcert.New(t, nil)
-			cfg := hostgatewayconfig.Default(hostID, "control", "127.0.0.1", testsnapshot.Credential("host-gateway@"+hostID).KeyID)
+			cfg := hostgatewayconfig.Default(hostID, "control", "127.0.0.1")
 			cfg.TLS = testcert.Files(t, ca, hostID, nil)
 			material, err := tlsconfig.Load(hostID, cfg.TLS)
 			require.NoError(t, err)
@@ -43,7 +44,7 @@ func TestSignedTLSControlProtocolAndProcessIdentity(t *testing.T) {
 				opened = tls.NewListener(opened, serverMaterial.Server())
 			}
 			cfg.Control.Target = address
-			credential := testsnapshot.Credential("host-gateway@" + hostID)
+			credential := testsnapshot.Credential("host-gateway", hostID)
 			raw := testsnapshot.New(t, hostID)
 			var mu sync.Mutex
 			seen := map[string]bool{}
@@ -55,15 +56,23 @@ func TestSignedTLSControlProtocolAndProcessIdentity(t *testing.T) {
 				for k, v := range message.ServerMetaData() {
 					headers.Add(k, string(v))
 				}
-				claims, err := gatewayauth.Verify(credential, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "control", Callee: servicecatalog.GatewayControlPath, Func: method, Body: body}, headers, time.Now())
-				if err != nil {
-					return nil, err
+				if hostID == "control" {
+					// 控制机网关直连本机的 Admin：不签名，自己带上签名主机头。
+					require.Equal(t, "control", headers.Get(gatewayauth.HeaderVerifiedHost))
+					require.Empty(t, headers.Get("X-Moox-Signature"))
+				} else {
+					// 其余主机发给控制机网关（这里的夹具）：用本机的主机密钥、以 host-gateway 的身份签名，每次一个新 nonce。
+					claims, err := authtest.Verify(credential, gatewayauth.Request{TargetNode: "control", Callee: servicecatalog.GatewayControlPath, Func: method, Body: body}, headers, time.Now())
+					if err != nil {
+						return nil, err
+					}
+					require.Empty(t, headers.Get(gatewayauth.HeaderVerifiedHost), "签名主机头只能由验签的网关写")
+					mu.Lock()
+					duplicate := seen[claims.Nonce]
+					seen[claims.Nonce] = true
+					mu.Unlock()
+					require.False(t, duplicate)
 				}
-				mu.Lock()
-				duplicate := seen[claims.Nonce]
-				seen[claims.Nonce] = true
-				mu.Unlock()
-				require.False(t, duplicate)
 				if method == "PullSnapshot" {
 					req := &pb.PullSnapshotReq{}
 					require.NoError(t, proto.Unmarshal(body, req))

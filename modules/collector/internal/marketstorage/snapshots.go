@@ -25,19 +25,14 @@ type SnapshotRegistration struct {
 // SnapshotRegistrar 把数据集的完整标的列表登记到 Storage，并声明从周期 P 起生效。
 type SnapshotRegistrar struct {
 	access storageio.Primary
-	auth   *storagepb.AuthInfo
 }
 
 // NewGatewaySnapshotRegistrar 通过进程网关创建登记客户端。
-func NewGatewaySnapshotRegistrar(gateway gatewayclient.Invoker, instType string) (*SnapshotRegistrar, error) {
+func NewGatewaySnapshotRegistrar(gateway gatewayclient.Invoker) (*SnapshotRegistrar, error) {
 	if gateway == nil {
 		return nil, fmt.Errorf("collector gateway client is required")
 	}
-	auth, err := ResolveStorageAuthInfo(instType)
-	if err != nil {
-		return nil, err
-	}
-	return &SnapshotRegistrar{access: storageio.NewGatewayClient(gateway), auth: auth}, nil
+	return &SnapshotRegistrar{access: storageio.NewGatewayClient(gateway)}, nil
 }
 
 // RegisterSeriesSnapshot 登记快照。结果不明（超时、断连）时返回原始错误，调用方重放同一请求即可（Storage 幂等）；
@@ -51,7 +46,7 @@ func (r *SnapshotRegistrar) RegisterSeriesSnapshot(ctx context.Context, spaceID,
 		entries[i] = &storagepb.SeriesSnapshotEntry{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag}
 	}
 	response, err := r.access.RegisterSeriesSnapshot(ctx, &storagepb.PrimaryRegisterSeriesSnapshotReq{
-		AuthInfo: r.auth, SpaceId: spaceID, DatasetId: datasetID, Frequency: frequency, Series: entries, EffectiveFrom: effectiveFrom,
+		SpaceId: spaceID, DatasetId: datasetID, Frequency: frequency, Series: entries, EffectiveFrom: effectiveFrom,
 	})
 	if err != nil {
 		return SnapshotRegistration{}, fmt.Errorf("register series snapshot: %w", err)

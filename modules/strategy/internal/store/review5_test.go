@@ -48,21 +48,18 @@ func TestTransitionPublishStatusAllowsSentAfterConcurrentCancel(t *testing.T) {
 	}
 }
 
-// 停用核对调用方看到的会话：不能关掉或清空一个之后才挂上的会话；挂会话只作用于停用的实例。
+// 停用核对调用方看到的会话：不能关掉或清空一个之后才换上的会话。
 func TestDisableInstanceComparesSession(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
-	if err := repo.DisableInstance(ctx, "i1", ptr("session-other"), nil, "", testNow); err == nil || !strings.Contains(err.Error(), "会话已变化") {
+	if err := repo.DisableInstance(ctx, "i1", "session-other", testNow); err == nil || !strings.Contains(err.Error(), "会话已变化") {
 		t.Fatalf("会话不符时不应停用：%v", err)
 	}
-	if err := repo.DisableInstance(ctx, "i1", nil, nil, "", testNow); err == nil {
-		t.Fatal("实例有会话时，不带会话的停用应被拒绝")
+	if err := repo.DisableInstance(ctx, "i1", "", testNow); err == nil {
+		t.Fatal("不带会话的停用应被拒绝")
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, ptr("session-1"), nil, testNow); err == nil || !strings.Contains(err.Error(), "已处于启用状态") {
-		t.Fatalf("启用中的实例不应再挂会话：%v", err)
-	}
-	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", "session-1", testNow); err != nil {
 		t.Fatal(err)
 	}
 	instance, err := repo.GetInstance(ctx, "i1")
@@ -72,10 +69,7 @@ func TestDisableInstanceComparesSession(t *testing.T) {
 	if session, err := repo.GetSession(ctx, "session-1"); err != nil || session.ClosedAt == nil {
 		t.Fatalf("停用应关闭会话：%+v err=%v", session, err)
 	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, nil, nil, testNow); err == nil {
-		t.Fatal("挂会话必须给出会话 ID")
-	}
-	if !errors.Is(repo.DisableInstance(ctx, "missing", nil, nil, "", testNow), ErrNotFound) {
+	if !errors.Is(repo.DisableInstance(ctx, "missing", "session-1", testNow), ErrNotFound) {
 		t.Fatal("不存在的实例应返回 ErrNotFound")
 	}
 }
@@ -98,7 +92,7 @@ func TestCancelObserverCountsReasons(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustCommit(t, repo, okResult("r4", "i1", "session-1", 4, PublishPending), nil, testNow)
-	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), ptr("session-1"), "", testNow); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", "session-1", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, valid, err := repo.PreparePendingResult(ctx, "r4", testNow); err != nil || valid {

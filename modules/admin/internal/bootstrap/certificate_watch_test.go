@@ -185,12 +185,10 @@ func TestCertificateWatchEnvironmentUsesLiveAllHostInventoryAndOnlyCurrentCAs(t 
 	watch, _ := certificateWatchFixture(t, 365*24*time.Hour, 180*24*time.Hour)
 	t.Setenv("MOOX_ADMIN_PKI_DIR", watch.PKIDir)
 	t.Setenv("MOOX_HOST_POLICY_FILE", "")
-	t.Setenv("MOOX_EVENTBUS_CA_FILE", "fixture-eventbus-ca.crt")
 	t.Setenv("MOOX_GATEWAY_CA_FILE", "obsolete-gateway-ca.crt")
 	t.Setenv("MOOX_SERVICE_GATEWAY_CA_FILE", "obsolete-service-gateway-ca.crt")
 	configured := newCertificateWatchFromEnvironment(db)
 	require.Equal(t, watch.PKIDir, configured.PKIDir)
-	require.Equal(t, []certificateWatchFile{{Name: "eventbus_ca", Path: "fixture-eventbus-ca.crt"}}, configured.Files)
 	require.Nil(t, configured.Senders, "没有主机策略缓存时只记录不推送")
 	require.NoError(t, db.Exec("INSERT INTO t_hosts (c_host_id, c_address, c_status) VALUES ('control', '192.0.2.1', 'enabled'), ('storage', '2001:db8::2', 'disabled')").Error)
 	hosts, err := configured.Hosts(context.Background())
@@ -210,24 +208,35 @@ func TestCertificateWatchMissingHostInventoryDoesNotBlockControlStartup(t *testi
 	require.NoError(t, os.Remove(filepath.Join(watch.PKIDir, "hosts", "storage.crt")))
 	s := &server.Server{}
 	s.AddService(certificateWatchTimerService, server.New(server.WithServiceName(certificateWatchTimerService), server.WithProtocol("timer")))
-	require.NoError(t, registerCertificateWatchTimer(context.Background(), s, watch))
+	require.NoError(t, registerCertificateWatchTimer(context.Background(), s, watch, nil))
 	require.Len(t, sender.messages, 1)
 	require.Contains(t, sender.messages[0].Body, "host_gateway@storage")
 	// Future timer runs continue to report the problem until issuance completes.
 	require.Error(t, watch.Validate(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	require.ErrorIs(t, registerCertificateWatchTimer(ctx, s, watch), context.Canceled)
+	require.ErrorIs(t, registerCertificateWatchTimer(ctx, s, watch, nil), context.Canceled)
 }
 
-func TestCertificateWatchRetainsSeparateEventBusCAAndBoundsNotifications(t *testing.T) {
+type countingRenewer struct{ calls int }
+
+func (r *countingRenewer) RefreshCertificate(context.Context) error {
+	r.calls++
+	return nil
+}
+
+// 网页证书的每日检查挂在证书巡检的定时器上：注册时先跑一次，之后每天跑。
+func TestCertificateWatchTimerAlsoRenewsWebCertificate(t *testing.T) {
+	watch, _ := certificateWatchFixture(t, 365*24*time.Hour, 180*24*time.Hour)
+	s := &server.Server{}
+	s.AddService(certificateWatchTimerService, server.New(server.WithServiceName(certificateWatchTimerService), server.WithProtocol("timer")))
+	web := &countingRenewer{}
+	require.NoError(t, registerCertificateWatchTimer(context.Background(), s, watch, web))
+	require.Equal(t, 1, web.calls)
+}
+
+func TestCertificateWatchBoundsNotifications(t *testing.T) {
 	watch, sender := certificateWatchFixture(t, 365*24*time.Hour, 180*24*time.Hour)
-	watch.Files = []certificateWatchFile{{Name: "eventbus_ca", Path: filepath.Join(watch.PKIDir, "missing-eventbus.crt")}}
-	require.Error(t, watch.Validate(context.Background()))
-	require.Contains(t, sender.messages[0].Body, "eventbus_ca")
-	require.NotContains(t, sender.messages[0].Body, "gateway_peer_ca")
-	require.NotContains(t, sender.messages[0].Body, "service_gateway_ca")
-	sender.messages = nil
 	findings := make([]certificateFinding, 1024)
 	for i := range findings {
 		findings[i] = certificateFinding{"host_gateway@" + strings.Repeat("a", 64), "host certificate does not match the MooX CA, server usage or registered SANs"}

@@ -1,5 +1,5 @@
 // Package archiveproxy 把控制台的分区副本下载与最新数据预览转给归档 worker 只听 127.0.0.1 的数据端口。
-// 浏览器的鉴权在 console 分派里用一次性 ticket 完成；这里只按拓扑找到 worker 所在主机并原样转发：
+// 浏览器的鉴权在 console 分派里按会话 Cookie 完成，space、dataset 由 worker 自己校验；这里只按拓扑找到 worker 所在主机并原样转发：
 // worker 在 control（本机）上就直连 127.0.0.1:<端口>，在只出站主机上就经 console 网关客户端打开 control 中转流，
 // 在其他可直达主机上不支持（数据端口不对外，也没有中转）。
 package archiveproxy
@@ -151,7 +151,7 @@ func (p *Proxy) RecentRows(w http.ResponseWriter, r *http.Request) {
 // passHeaders 是透传给浏览器的响应头。
 var passHeaders = []string{"Content-Type", "Content-Length", "Content-Disposition", "X-Moox-SHA256"}
 
-// forward 只转发白名单里的 query 参数（ticket 不发给 worker），原样透传状态码、几个响应头与响应体。
+// forward 只转发白名单里的 query 参数，原样透传状态码、几个响应头与响应体。
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, path string, params []string, timeout time.Duration) {
 	ctx := r.Context()
 	if r.Method != http.MethodGet {

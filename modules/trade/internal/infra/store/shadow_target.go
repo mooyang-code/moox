@@ -13,6 +13,7 @@ type ShadowTargetRecord struct {
 	LogicalAccountID    string
 	InstanceID          string
 	SessionID           string
+	SessionStartedAt    int64
 	StrategyID          string
 	BarEndTime          int64
 	ValidUntil          int64
@@ -30,6 +31,7 @@ type shadowTargetRow struct {
 	LogicalAccountID    string `gorm:"column:c_logical_account_id"`
 	InstanceID          string `gorm:"column:c_instance_id"`
 	SessionID           string `gorm:"column:c_session_id"`
+	SessionStartedAt    int64  `gorm:"column:c_session_started_at"`
 	StrategyID          string `gorm:"column:c_strategy_id"`
 	BarEndTime          int64  `gorm:"column:c_bar_end_time"`
 	ValidUntil          int64  `gorm:"column:c_valid_until"`
@@ -44,7 +46,7 @@ type shadowTargetRow struct {
 // RecordShadowTarget 记录一个影子目标；同一个 target_id 重复投递时忽略，返回是否新增。
 func (s *Store) RecordShadowTarget(ctx context.Context, record ShadowTargetRecord) (bool, error) {
 	if record.SpaceID == "" || record.TargetID == "" || record.LogicalAccountID == "" || record.InstanceID == "" ||
-		record.SessionID == "" || record.StrategyID == "" || record.BarEndTime <= 0 || record.RecordedAt <= 0 {
+		record.SessionID == "" || record.SessionStartedAt <= 0 || record.StrategyID == "" || record.BarEndTime <= 0 || record.RecordedAt <= 0 {
 		return false, fmt.Errorf("%w: incomplete shadow target", ErrInvalidRecord)
 	}
 	for name, raw := range map[string]string{"weights": record.WeightsJSON, "reference_prices": record.ReferencePricesJSON, "quantity_targets": record.QuantityTargetsJSON} {
@@ -52,7 +54,7 @@ func (s *Store) RecordShadowTarget(ctx context.Context, record ShadowTargetRecor
 			return false, fmt.Errorf("%w: invalid shadow target %s", ErrInvalidRecord, name)
 		}
 	}
-	result := s.db.WithContext(ctx).Exec(execInsertShadowTarget, record.SpaceID, record.TargetID, record.LogicalAccountID, record.InstanceID, record.SessionID, record.StrategyID,
+	result := s.db.WithContext(ctx).Exec(execInsertShadowTarget, record.SpaceID, record.TargetID, record.LogicalAccountID, record.InstanceID, record.SessionID, record.SessionStartedAt, record.StrategyID,
 		record.BarEndTime, record.ValidUntil, record.WeightsJSON, record.Equity, record.EquitySourceTime,
 		record.ReferencePricesJSON, record.QuantityTargetsJSON, record.RecordedAt)
 	if err := writeError(result.Error); err != nil {
@@ -93,10 +95,10 @@ func (s *Store) DeleteShadowTargetsBefore(ctx context.Context, before int64, lim
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
 	execInsertShadowTarget = `INSERT INTO t_shadow_targets (
-			c_space_id, c_target_id, c_logical_account_id, c_instance_id, c_session_id, c_strategy_id,
+			c_space_id, c_target_id, c_logical_account_id, c_instance_id, c_session_id, c_session_started_at, c_strategy_id,
 			c_bar_end_time, c_valid_until, c_weights_json, c_equity, c_equity_source_time,
 			c_reference_prices_json, c_quantity_targets_json, c_recorded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_target_id) DO NOTHING`
 	// 用 rowid 子查询限制每批行数：SQLite 默认不支持 DELETE ... LIMIT。c_valid_until 排在大 JSON 列之前，判断不用读溢出页。
 	execDeleteShadowTargetsBefore = `DELETE FROM t_shadow_targets WHERE rowid IN (

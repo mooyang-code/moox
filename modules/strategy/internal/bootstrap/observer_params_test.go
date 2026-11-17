@@ -113,7 +113,7 @@ func TestObserverExportsParamDeliveryStale(t *testing.T) {
 		t.Fatalf("再次连续未送达应告警：%v", got)
 	}
 	session := "i1-session"
-	if err := repo.DisableInstance(ctx, "i1", &session, nil, store.HealthOK, seedTime); err != nil {
+	if err := repo.DisableInstance(ctx, "i1", session, seedTime); err != nil {
 		t.Fatal(err)
 	}
 	if err := observer.refresh(ctx); err != nil {

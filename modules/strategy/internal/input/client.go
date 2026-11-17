@@ -20,9 +20,6 @@ type RPCClient struct {
 	Metadata MetadataClient
 	DataView DataViewClient
 	Factor   FactorClient
-	// Auth 是 Metadata 的调用身份；ViewAuth 是 DataView 的调用身份（Storage 用不同的密钥校验）。
-	Auth     *commonpb.AuthInfo
-	ViewAuth *commonpb.AuthInfo
 	PageSize uint32
 }
 
@@ -31,14 +28,6 @@ func (c *RPCClient) pageSize() uint32 {
 		return c.PageSize
 	}
 	return 500
-}
-
-// viewAuth 是 DataView 的调用身份，没有单独配置时沿用 Metadata 的身份。
-func (c *RPCClient) viewAuth() *commonpb.AuthInfo {
-	if c.ViewAuth != nil {
-		return c.ViewAuth
-	}
-	return c.Auth
 }
 
 // viewNotFound 是 View 已被删除的跳过：实时求值记 config_error（实例需要重新绑定），回放与启用直接报错。
@@ -54,7 +43,7 @@ func (c *RPCClient) viewState(ctx context.Context, spaceID, viewID string) (stri
 	if c == nil || c.DataView == nil {
 		return "", "", errors.New("Storage DataView 客户端未配置")
 	}
-	rsp, err := c.DataView.GetViewState(ctx, &storagepb.GetViewStateReq{AuthInfo: c.viewAuth(), SpaceId: spaceID, ViewId: viewID})
+	rsp, err := c.DataView.GetViewState(ctx, &storagepb.GetViewStateReq{SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
 		return "", "", transport("读取 View "+viewID+" 的索引状态", err)
 	}
@@ -89,7 +78,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 	if c == nil || c.Metadata == nil {
 		return ViewInfo{}, errors.New("Storage Metadata 客户端未配置")
 	}
-	rsp, err := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID})
+	rsp, err := c.Metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
 		return ViewInfo{}, transport("读取 View "+viewID, err)
 	}
@@ -109,7 +98,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 		return ViewInfo{}, err
 	}
 	for page := uint32(1); ; page++ {
-		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
+		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
 			return ViewInfo{}, transport("读取 View "+viewID+" 的列", err)
 		}
@@ -143,7 +132,6 @@ func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewI
 	if view.ActiveIndexID == "" || (view.Status != "" && view.Status != "active") {
 		return Coverage{}, nil
 	}
-	auth := c.viewAuth()
 	modes := []commonpb.TotalMode{commonpb.TotalMode_NONE}
 	if exact {
 		modes = append(modes, commonpb.TotalMode_FORCE_EXACT)
@@ -152,7 +140,7 @@ func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewI
 	var coverage Coverage
 	for _, mode := range modes {
 		rsp, err := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: spaceID, ViewId: view.ViewID,
+			SpaceId: spaceID, ViewId: view.ViewID,
 			TimeRange: &storagepb.TimeRange{StartTime: epoch.Format(time.RFC3339Nano), EndTime: epoch.Add(time.Nanosecond).Format(time.RFC3339Nano)},
 			Page:      &commonpb.Page{Page: 1, Size: 1}, Limit: 1, TotalMode: mode,
 			Pin: &storagepb.IndexVersion{IndexId: view.ActiveIndexID},
@@ -179,7 +167,7 @@ func (c *RPCClient) GetDataset(ctx context.Context, spaceID, datasetID string) (
 	if c == nil || c.Metadata == nil {
 		return DatasetInfo{}, errors.New("Storage Metadata 客户端未配置")
 	}
-	rsp, err := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID})
+	rsp, err := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return DatasetInfo{}, transport("读取数据集 "+datasetID, err)
 	}
@@ -202,7 +190,7 @@ func (c *RPCClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo,
 	if c == nil || c.Metadata == nil {
 		return TagInfo{}, errors.New("Storage Metadata 客户端未配置")
 	}
-	rsp, err := c.Metadata.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: c.Auth, SpaceId: spaceID, TagId: tagID})
+	rsp, err := c.Metadata.GetTag(ctx, &storagepb.GetTagReq{SpaceId: spaceID, TagId: tagID})
 	if err != nil {
 		return TagInfo{}, transport("读取标签 "+tagID, err)
 	}
@@ -227,7 +215,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 	bindings := make(map[string]bool)
 	order := make([]string, 0)
 	for page := uint32(1); ; page++ {
-		rsp, err := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
+		rsp, err := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
 			return nil, transport("读取数据集 "+datasetID+" 的标的绑定", err)
 		}
@@ -256,7 +244,7 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 			end = len(order)
 		}
 		for page := uint32(1); ; page++ {
-			rsp, err := c.Metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{AuthInfo: c.Auth, SpaceId: spaceID, SubjectIds: order[start:end], Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
+			rsp, err := c.Metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{SpaceId: spaceID, SubjectIds: order[start:end], Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 			if err != nil {
 				return nil, transport("读取标的详情", err)
 			}
@@ -299,7 +287,7 @@ func (c *RPCClient) ListTagMembers(ctx context.Context, spaceID, tagID string) (
 	}
 	members := make([]string, 0)
 	for page := uint32(1); ; page++ {
-		rsp, err := c.Metadata.ListTagMembers(ctx, &storagepb.ListTagMembersReq{AuthInfo: c.Auth, SpaceId: spaceID, TagId: tagID, Status: "active", Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
+		rsp, err := c.Metadata.ListTagMembers(ctx, &storagepb.ListTagMembersReq{SpaceId: spaceID, TagId: tagID, Status: "active", Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
 			return nil, transport("读取标签 "+tagID+" 的成员", err)
 		}
@@ -341,7 +329,6 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 		}
 		selectors = append(selectors, selector)
 	}
-	auth := c.viewAuth()
 	rows := make([]Row, 0, len(selectors))
 	revision := query.ExpectedRevision
 	size := c.pageSize()
@@ -350,7 +337,7 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 	}
 	for page := uint32(1); ; page++ {
 		rsp, err := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: spaceID, ViewId: query.ViewID, Selectors: selectors,
+			SpaceId: spaceID, ViewId: query.ViewID, Selectors: selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: query.Start.UTC().Format(time.RFC3339Nano), EndTime: query.End.UTC().Format(time.RFC3339Nano)},
 			ColumnNames: query.Columns, Page: &commonpb.Page{Page: page, Size: size}, TotalMode: commonpb.TotalMode_NONE,
 			Pin: &storagepb.IndexVersion{IndexId: query.ExpectedIndexID, Revision: revision},

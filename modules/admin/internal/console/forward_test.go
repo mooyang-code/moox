@@ -43,6 +43,19 @@ func TestWriteForwardResponseGzipsLargeJSONWhenAccepted(t *testing.T) {
 	}
 }
 
+// q 大于 0 的 gzip 照常压缩；q=0 表示不接受（见下一个用例）。
+func TestShouldGzipForwardResponseHonoursQuality(t *testing.T) {
+	body := []byte(strings.Repeat("x", 2048))
+	for header, want := range map[string]bool{
+		"gzip": true, "GZIP;q=0.5": true, "br, gzip;q=1": true,
+		"gzip;q=0": false, "gzip;q=0.000": false, "deflate": false, "": false,
+	} {
+		if got := shouldGzipForwardResponse(body, header); got != want {
+			t.Errorf("Accept-Encoding %q: gzip = %v, want %v", header, got, want)
+		}
+	}
+}
+
 func TestWriteForwardResponseKeepsSmallOrUnsupportedResponsesPlain(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -51,6 +64,8 @@ func TestWriteForwardResponseKeepsSmallOrUnsupportedResponsesPlain(t *testing.T)
 	}{
 		{name: "small", body: []byte(`{"ok":true}`), headers: map[string]string{"accept_encoding": "gzip"}},
 		{name: "unsupported", body: []byte(strings.Repeat("x", 2048)), headers: map[string]string{}},
+		{name: "gzip q=0 refused", body: []byte(strings.Repeat("x", 2048)), headers: map[string]string{"accept_encoding": "br, gzip;q=0"}},
+		{name: "gzip q=0.0 refused", body: []byte(strings.Repeat("x", 2048)), headers: map[string]string{"accept_encoding": "gzip; q=0.0, identity"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()

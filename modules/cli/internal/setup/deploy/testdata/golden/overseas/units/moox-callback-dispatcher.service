@@ -1,0 +1,22 @@
+# 由 moox-cli setup deploy 按服务目录渲染成 ~/.config/systemd/user/moox-callback-dispatcher.service；不要手工改，重新部署会覆盖。
+# 启动顺序只用 After= 排先后，不等就绪：依赖没起来时组件自己重试或退出，5 秒后再拉起。
+# After= 只写同一台主机上的组件；不等网络就绪的系统目标（用户单元里它不起作用）。
+[Unit]
+Description=MooX callback-dispatcher
+After=moox-host-gateway.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/data/moox/data/callback-dispatcher
+EnvironmentFile=/data/moox/secrets/env/callback-dispatcher.env
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+ExecStart=/data/moox/bin/moox-callback-dispatcher -config=/data/moox/config/callback-dispatcher/app.yaml -conf=/data/moox/config/callback-dispatcher/trpc_go.yaml
+Restart=always
+RestartSec=5
+TimeoutStopSec=120
+UMask=0077
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

@@ -36,14 +36,13 @@ func (g *deploymentsInvoker) Invoke(_ context.Context, service, method string, r
 	return nil
 }
 
-func TestDoctorDeploymentsUseCatalogHealthAndHostEnablement(t *testing.T) {
+func TestDoctorDeploymentsUseHostEnablement(t *testing.T) {
 	gateway := &deploymentsInvoker{hostStatus: "disabled", rows: []*pb.ComponentDeployment{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}
 	rows, err := New(gateway).ListDeployments(t.Context(), "control")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "admin", rows[0].ComponentID)
 	require.Equal(t, "disabled", rows[0].Status)
-	require.Contains(t, rows[0].HealthAddress, ":11010")
 	require.Equal(t, 2, gateway.calls)
 }
 

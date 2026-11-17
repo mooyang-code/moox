@@ -1,6 +1,5 @@
 import { callControl } from "@/api/admin/http";
 import { gatewayURL, gatewayWebSocketURL } from "@/api/gateway";
-import { issueRawSessionTicketAPI } from "@/api/modules/user";
 
 // ========== 类型定义 ==========
 
@@ -18,7 +17,7 @@ export interface PathBreadcrumb {
   dir: string;
 }
 
-// SSH 直连端点已并入统一网关 rawhandler，前端直连固定网关端口。
+// SSH 直连端点（终端 WebSocket、文件上传下载）是管理台的裸路由，与页面同源，浏览器自动带上会话 Cookie，不需要票据。
 
 // ========== SSH 会话 ==========
 
@@ -50,23 +49,13 @@ export const sftpMkdir = (sessionId: string, path: string) =>
 export const sftpDelete = (sessionId: string, path: string) =>
   callControl<{ session_id: string; path: string }, Record<string, never>>("ssh", "SftpDelete", { session_id: sessionId, path });
 
-// 文件下载/上传走统一网关 rawhandler（/api/admin/ssh/SftpDownload|SftpUpload）
-export const getSftpDownloadUrl = async (sessionId: string, path: string) => {
-  const { ticket } = await issueRawSessionTicketAPI("sftp_download", sessionId);
-  return gatewayURL(
-    `/api/admin/ssh/SftpDownload?ticket=${encodeURIComponent(ticket)}&session_id=${sessionId}&path=${encodeURIComponent(path)}`
-  );
-};
+// 文件下载/上传：/api/admin/ssh/SftpDownload|SftpUpload
+export const getSftpDownloadUrl = (sessionId: string, path: string) =>
+  gatewayURL(`/api/admin/ssh/SftpDownload?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`);
 
-export const getSftpUploadUrl = async (sessionId: string) => {
-  const { ticket } = await issueRawSessionTicketAPI("sftp_upload", sessionId);
-  return gatewayURL(`/api/admin/ssh/SftpUpload?ticket=${encodeURIComponent(ticket)}&session_id=${encodeURIComponent(sessionId)}`);
-};
+export const getSftpUploadUrl = (sessionId: string) =>
+  gatewayURL(`/api/admin/ssh/SftpUpload?session_id=${encodeURIComponent(sessionId)}`);
 
-// WebSocket 连接地址（统一网关 rawhandler，ws 协议使用固定网关端口）
-export const getSSHWebSocketUrl = async (sessionId: string, w: number, h: number) => {
-  const { ticket } = await issueRawSessionTicketAPI("ssh_ws", sessionId);
-  return gatewayWebSocketURL(
-    `/api/admin/ssh/WsConnect?ticket=${encodeURIComponent(ticket)}&session_id=${sessionId}&w=${w}&h=${h}`
-  );
-};
+// 终端 WebSocket 地址（wss 与页面同源）
+export const getSSHWebSocketUrl = (sessionId: string, w: number, h: number) =>
+  gatewayWebSocketURL(`/api/admin/ssh/WsConnect?session_id=${encodeURIComponent(sessionId)}&w=${w}&h=${h}`);

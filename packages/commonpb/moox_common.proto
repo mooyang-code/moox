@@ -4,18 +4,6 @@ package trpc.moox.common;
 
 option go_package = "github.com/mooyang-code/moox/packages/commonpb;commonpb";
 
-// AuthInfo 表示调用方身份和链路追踪信息。
-message AuthInfo {
-  // app_id 是调用方应用或服务 ID。
-  string app_id = 1;
-  // app_key 是调用方凭证，服务端应按敏感信息处理。
-  string app_key = 2;
-  // operator 是发起请求的用户、机器人或任务名。
-  string operator = 3;
-  // request_id 是调用方传入的链路追踪 ID，也可用于幂等检查。
-  string request_id = 4;
-}
-
 // RetInfo 表示通用接口返回状态。
 message RetInfo {
   // code 是机器可读的返回码。
@@ -116,4 +104,91 @@ enum ErrorCode {
   TRADE_SESSION_NOT_READY = 19;
   // TRADE_ADOPTION_REQUIRED 表示执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位。
   TRADE_ADOPTION_REQUIRED = 20;
+}
+
+// ---- 模块级生命周期（批 4 设计 3.7）
+//
+// 采集、因子引擎、策略、Trade、因子管理、归档管理的服务各有 GetLifecycle、ControlLifecycle 两个方法，请求与响应都用下面这组消息，
+// 服务端由 packages/lifecycle 的控制器实现，调用方（moox-cli lifecycle、system）经网关调用。前四个参与系统暂停，后两个不参与。
+// 时间都是 RFC3339（UTC），空串表示没有。
+
+// LifecyclePause 是暂停详情。
+message LifecyclePause {
+  // kind 是暂停类型：manual 手动暂停，只有用户 resume 才恢复；system 系统暂停，由 moox-cli system 带下来。
+  string kind = 1;
+  string reason = 2;
+  // by 是操作者（cli:主机名、monitor:mute……）。
+  string by = 3;
+  string since = 4;
+  // expires_at 非空表示到点自动恢复（只用于手动暂停）。
+  string expires_at = 5;
+}
+
+// CatchupProgress 是恢复追赶的进度。
+message CatchupProgress {
+  // since 是暂停起点（最早的那次暂停），追赶从这里开始核对。
+  string since = 1;
+  // target 是追赶目标（最新已完成周期）；追赶期间会前移。
+  string target = 2;
+  int64 done = 3;
+  int64 total = 4;
+  bool caught_up = 5;
+  // blocked_by 是被阻塞的原因（某个任务还没追平、上游模块尚未追平……）。
+  string blocked_by = 6;
+  // unfillable 是暂停区间里确认无法补采的周期数（源头确实没有）。
+  int32 unfillable = 7;
+  string message = 8;
+}
+
+// LifecycleSnapshot 是模块级生命周期的状态。
+message LifecycleSnapshot {
+  string module = 1;
+  // stage 只有三种：running 运行、paused 暂停、resuming 恢复追赶。
+  string stage = 2;
+  string reason = 3;
+  // since 是进入当前状态的时间。
+  string since = 4;
+  // pause 在暂停与恢复追赶时存在；paused_since 是最早一次暂停的时间，恢复追赶据此核对缺失区间。
+  LifecyclePause pause = 5;
+  string paused_since = 6;
+  // quiesced_at 是本次暂停收敛（在途操作结束）的时间，不早于 pause.since 才算本次暂停已收敛。
+  string quiesced_at = 7;
+  // released_at 是最近一次放行的时间。
+  string released_at = 8;
+  // catchup 是恢复追赶的进度（恢复追赶中才有）。
+  CatchupProgress catchup = 9;
+}
+
+// GetLifecycleReq 读模块的生命周期状态。
+message GetLifecycleReq {
+  // refresh_catchup 为真时先推进一次恢复追赶（重读追赶进度，追平且设为自动放行的模块就此放行），返回的进度是最新的；
+  // 为假时只读当前状态，不推进（追赶进度是最近一次推进的结果）。系统级恢复的栅栏读进度时为真。
+  bool refresh_catchup = 1;
+}
+
+message GetLifecycleRsp {
+  RetInfo ret_info = 1;
+  LifecycleSnapshot lifecycle = 2;
+}
+
+// ControlLifecycleReq 是生命周期命令。
+message ControlLifecycleReq {
+  // command：pause 暂停、resume 恢复（先恢复追赶，追平后放行）、release 放行（恢复追赶已追平的模块回到运行）。
+  string command = 1;
+  // pause_kind：pause 时是暂停类型（默认 manual）；resume 时只恢复这一类暂停（为空不过滤，系统恢复传 system）。
+  string pause_kind = 2;
+  string reason = 3;
+  string by = 4;
+  // manual_release 用于 resume：追平后不自动放行，停在待放行等 release（系统级恢复用）。
+  bool manual_release = 5;
+  // expires_at 用于手动 pause：到点自动恢复。
+  string expires_at = 6;
+}
+
+// ControlLifecycleRsp 是命令执行后的状态。命令在当前状态不允许时 ret_info 是 CONFLICT；暂停已生效、
+// 但在途操作没有在时限内结束时 ret_info 是 INNER_ERR，说明以“已暂停，但在途操作没有结束”开头。
+// 两种情况下 lifecycle 都是模块当前的状态。
+message ControlLifecycleRsp {
+  RetInfo ret_info = 1;
+  LifecycleSnapshot lifecycle = 2;
 }

@@ -2,7 +2,6 @@ package view
 
 import (
 	"context"
-	"crypto/hmac"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,32 +15,26 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	viewbleve "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/bleve"
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
-	"google.golang.org/protobuf/proto"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Service struct {
-	engines      map[string]viewindex.Engine
-	indexEngine  map[string]string
-	schemas      map[string]viewindex.ViewIndexSchema
-	views        map[viewRef]*viewRuntime
-	catalogViews map[viewRef]*pb.View
-	indexView    map[string]viewRef
-	authSecret   string
-	// writerAuthSecret 是 Primary 角色密钥：持写入身份的调用方（Collector、moox-cli 导入）也能查 View 状态、等 View 跟上自己的写入。
-	writerAuthSecret string
-	primaryAuth      *pb.AuthInfo
-	primary          FieldReader
-	mu               sync.RWMutex
-	metrics          *observability.ViewMetrics
-	metadataClient   MetadataClient
-	readyPublisher   ReadyEventPublisher
-	indexGatesMu     sync.Mutex
-	indexGates       map[string]*indexWriteGate
+	engines        map[string]viewindex.Engine
+	indexEngine    map[string]string
+	schemas        map[string]viewindex.ViewIndexSchema
+	views          map[viewRef]*viewRuntime
+	catalogViews   map[viewRef]*pb.View
+	indexView      map[string]viewRef
+	primary        FieldReader
+	mu             sync.RWMutex
+	metrics        *observability.ViewMetrics
+	metadataClient MetadataClient
+	readyPublisher ReadyEventPublisher
+	indexGatesMu   sync.Mutex
+	indexGates     map[string]*indexWriteGate
 	// indexRevision advances after every successful write to an index, so a
 	// reader that is paginating detects in-place corrections and deletions.
 	indexRevision   map[string]uint64
@@ -141,10 +134,7 @@ func (r *viewRuntime) queryState() runtimeReadState {
 	return runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats, hiddenColumns: r.hiddenColumns}
 }
 
-func New(root, authSecret string) (*Service, error) {
-	if strings.TrimSpace(authSecret) == "" {
-		return nil, errors.New("view auth secret is required")
-	}
+func New(root string) (*Service, error) {
 	bleveEngine, err := viewbleve.Open(viewbleve.Options{Path: filepath.Join(root, "bleve")})
 	if err != nil {
 		return nil, err
@@ -163,7 +153,6 @@ func New(root, authSecret string) (*Service, error) {
 		views:         make(map[viewRef]*viewRuntime),
 		catalogViews:  make(map[viewRef]*pb.View),
 		indexView:     make(map[string]viewRef),
-		authSecret:    authSecret,
 		indexGates:    make(map[string]*indexWriteGate),
 		indexRevision: make(map[string]uint64),
 		metrics:       observability.DefaultViewMetrics,
@@ -313,28 +302,6 @@ func (s *Service) runtimeOfIndex(indexID string) *viewRuntime {
 	return nil
 }
 
-func (s *Service) SetPrimaryAuth(auth *pb.AuthInfo) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if auth == nil {
-		s.primaryAuth = nil
-		return
-	}
-	s.primaryAuth = proto.Clone(auth).(*pb.AuthInfo)
-}
-
-func (s *Service) primaryAuthSnapshot() *pb.AuthInfo {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.primaryAuth == nil {
-		return nil
-	}
-	return proto.Clone(s.primaryAuth).(*pb.AuthInfo)
-}
-
 func (s *Service) SetPrimaryReader(reader FieldReader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -407,43 +374,4 @@ func (s *Service) forgetIndexLocked(id string) {
 	delete(s.indexEngine, id)
 	delete(s.schemas, id)
 	delete(s.indexView, id)
-}
-
-func (s *Service) authorize(auth *pb.AuthInfo) error {
-	if s == nil || strings.TrimSpace(s.authSecret) == "" {
-		return errors.New("view auth is not configured")
-	}
-	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
-		return errors.New("view auth is required")
-	}
-	expected := serviceauth.Key(s.authSecret, auth.GetAppId())
-	if !hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(expected)) {
-		return errors.New("invalid view HMAC")
-	}
-	return nil
-}
-
-// SetWriterAuthSecret 设置 Primary 角色密钥，GetViewState 与 WaitViewApplied 接受由它派生的写入身份。
-func (s *Service) SetWriterAuthSecret(secret string) {
-	s.mu.Lock()
-	s.writerAuthSecret = strings.TrimSpace(secret)
-	s.mu.Unlock()
-}
-
-// authorizeViewOrWriter 接受 View 角色身份，或由 Primary 角色密钥派生的写入身份：写入方只用它确认自己的写入已经可查。
-func (s *Service) authorizeViewOrWriter(auth *pb.AuthInfo) error {
-	viewErr := s.authorize(auth)
-	if viewErr == nil {
-		return nil
-	}
-	s.mu.RLock()
-	secret := s.writerAuthSecret
-	s.mu.RUnlock()
-	if secret == "" || auth == nil || strings.TrimSpace(auth.GetAppId()) == "" {
-		return viewErr
-	}
-	if hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(serviceauth.Key(secret, auth.GetAppId()))) {
-		return nil
-	}
-	return viewErr
 }

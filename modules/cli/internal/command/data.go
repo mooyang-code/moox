@@ -6,24 +6,22 @@ import (
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 var (
-	dataManifest        string
-	dataSpaceID         string
-	dataDatasetID       string
-	dataSubjectID       string
-	dataFreq            string
-	dataSeriesTag       string
-	dataOutputFile      string
-	dataStartTime       string
-	dataEndTime         string
-	dataPageSize        uint32
-	dataColumns         []string
-	dataStorageAuthFile string
+	dataManifest   string
+	dataSpaceID    string
+	dataDatasetID  string
+	dataSubjectID  string
+	dataFreq       string
+	dataSeriesTag  string
+	dataOutputFile string
+	dataStartTime  string
+	dataEndTime    string
+	dataPageSize   uint32
+	dataColumns    []string
 )
 
 var dataCmd = &cobra.Command{
@@ -44,10 +42,6 @@ var dataRowsExportCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		auth, err := dataPrimaryAuth(dataStorageAuthFile)
-		if err != nil {
-			return err
-		}
 		gateway, err := openCommandGateway(cmd.Context(), dataManifest, nil)
 		if err != nil {
 			return err
@@ -61,7 +55,7 @@ var dataRowsExportCmd = &cobra.Command{
 		}
 		selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
 		rsp, err := exportRowsPaged(cmd.Context(), gateway, &pb.ReadTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
+			SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
 			Selectors:   []*pb.TimeSeriesSelector{selector},
 			TimeRange:   &pb.TimeRange{StartTime: dataStartTime, EndTime: dataEndTime},
 			ColumnNames: dataColumns,
@@ -90,7 +84,6 @@ func init() {
 	dataRowsCmd.AddCommand(dataRowsExportCmd)
 
 	dataRowsExportCmd.Flags().StringVar(&dataManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
-	dataRowsExportCmd.Flags().StringVar(&dataStorageAuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space-id", "default", "Space ID")
 	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset-id", "", "Dataset ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID")
@@ -101,18 +94,6 @@ func init() {
 	dataRowsExportCmd.Flags().Uint32Var(&dataPageSize, "page-size", 1000, "最多导出行数；达到上限时停止并提示")
 	dataRowsExportCmd.Flags().StringSliceVar(&dataColumns, "columns", nil, "要导出的列，逗号分隔（必填）")
 	dataRowsExportCmd.Flags().StringVar(&dataOutputFile, "output", "", "输出 JSON 文件；为空则输出到 stdout")
-}
-
-func dataPrimaryAuth(path string) (*pb.AuthInfo, error) {
-	return storagePrimaryRoleAuth(path, "moox-cli-data-export")
-}
-
-func storagePrimaryRoleAuth(path, appID string) (*pb.AuthInfo, error) {
-	secret, err := resolveStoragePrimarySecret(path)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.AuthInfo{AppId: appID, AppKey: security.HMACSHA256Hex(secret, []byte(appID))}, nil
 }
 
 func writeRowsExport(rsp *pb.ReadTimeSeriesRowsRsp, outputFile string, source string, datasetID string, subjectID string) error {

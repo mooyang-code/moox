@@ -37,15 +37,12 @@ func Reconcile(ctx context.Context, cfg *Config, req ReconcileRequest) (Reconcil
 	if cfg == nil {
 		return ReconcileSummary{}, errors.New("factor engine config is required")
 	}
-	gateway, err := cfg.GatewayClient.OpenExternal(cfg.sourcePath)
+	gateway, err := cfg.OpenGateway()
 	if err != nil {
 		return ReconcileSummary{}, err
 	}
 	defer gateway.Close()
-	storage, err := newStorageClient(gateway, cfg.Storage)
-	if err != nil {
-		return ReconcileSummary{}, err
-	}
+	storage := newStorageClient(gateway)
 	cache, err := NewCatalogCache(cfg.CatalogSync.StateFile)
 	if err != nil {
 		return ReconcileSummary{}, err
@@ -95,15 +92,12 @@ func Backfill(ctx context.Context, cfg *Config, req BackfillRequest) (BackfillSu
 	if cfg == nil {
 		return BackfillSummary{}, errors.New("factor engine config is required")
 	}
-	gateway, err := cfg.GatewayClient.OpenExternal(cfg.sourcePath)
+	gateway, err := cfg.OpenGateway()
 	if err != nil {
 		return BackfillSummary{}, err
 	}
 	defer gateway.Close()
-	storage, err := newStorageClient(gateway, cfg.Storage)
-	if err != nil {
-		return BackfillSummary{}, err
-	}
+	storage := newStorageClient(gateway)
 	cache, err := NewCatalogCache(cfg.CatalogSync.StateFile)
 	if err != nil {
 		return BackfillSummary{}, err

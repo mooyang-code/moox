@@ -28,7 +28,8 @@ func computePlan(target time.Time, factors []domain.FactorDef, subjects []string
 	return Plan{
 		Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
 		Members: domain.AsMembers(factors...), TargetStart: target.Add(-time.Minute), TargetEnd: target.Add(time.Minute),
-		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
+		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), ExpectedSeries: singleSeries(subjects...),
+		CarryColumns: []string{"close"}, WriteCarry: true,
 	}
 }
 
@@ -259,5 +260,8 @@ func mustView(loaded LoadResult) LoadResult {
 		panic(err)
 	}
 	loaded.View = view
+	if loaded.AvailableSeries == nil {
+		loaded.AvailableSeries = SubjectSeries(view, loaded.Available)
+	}
 	return loaded
 }

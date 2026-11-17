@@ -11,10 +11,9 @@ import (
 )
 
 type deleteViewOptions struct {
-	metadataDB  string
-	packageRoot string
-	view        string
-	yes         bool
+	metadataDB string
+	view       string
+	yes        bool
 }
 
 // runDeleteView 离线删除一个 View 的元数据，用在没有别的入口（控制台没有删除视图的页面）时下线单个 View。
@@ -25,7 +24,6 @@ func runDeleteView(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(io.Discard)
 	opts := deleteViewOptions{}
 	fs.StringVar(&opts.metadataDB, "metadata-db", "", "Metadata SQLite database path")
-	fs.StringVar(&opts.packageRoot, "package-root", "", "Storage package root; the View process must be stopped")
 	fs.StringVar(&opts.view, "view", "", "View to delete, in space_id/view_id form")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent metadata deletion")
 	if err := fs.Parse(args); err != nil {
@@ -37,7 +35,7 @@ func runDeleteView(args []string, stdout, stderr io.Writer) error {
 	if err := validateDeleteViewOptions(opts); err != nil {
 		return err
 	}
-	if err := ensureStorageViewStopped(opts.packageRoot); err != nil {
+	if err := ensureStorageViewStopped(context.Background()); err != nil {
 		return err
 	}
 	summary, err := deleteView(context.Background(), opts)
@@ -53,9 +51,6 @@ func validateDeleteViewOptions(opts deleteViewOptions) error {
 	}
 	if strings.TrimSpace(opts.metadataDB) == "" {
 		return errors.New("--metadata-db is required")
-	}
-	if strings.TrimSpace(opts.packageRoot) == "" {
-		return errors.New("--package-root is required so delete-view can verify storage-view is stopped")
 	}
 	if _, _, err := splitViewRef(opts.view); err != nil {
 		return err

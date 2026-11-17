@@ -5,29 +5,31 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/stretchr/testify/require"
 )
 
 // hkPlanOptions 按 registerFetchPlanManager 里 Factory 的做法，由部署配置拼出港股的采集计划参数。
-func hkPlanOptions(plan SCFPlanConfig) marketfetch.PlanOptions {
-	options := marketfetch.PlanOptions{
+func hkPlanOptions(plan SCFPlanConfig) fetchplan.PlanOptions {
+	options := fetchplan.PlanOptions{
 		SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, SymbolsPerFunction: plan.symbolsPerFunction("stockhk"),
 		Fetch: plan.fetchFor("stockhk", ""), MarketFetch: plan.marketFetches("stockhk"), DefaultLatenessS: 90,
-		DeriveFetch: marketfetch.RouteFetchLimits("stockhk"),
+		DeriveFetch: fetchplan.RouteFetchLimits("stockhk"),
 	}
 	if sizing := plan.autoSizing("stockhk"); sizing != nil {
-		options.AutoSize = marketfetch.RouteAutoSize("stockhk", *sizing)
+		options.AutoSize = fetchplan.RouteAutoSize("stockhk", *sizing)
 	}
 	return options
 }
 
-func hkGroups(subjects int) []marketfetch.TaskGroup {
+func hkGroups(subjects int) []fetchplan.TaskGroup {
 	ids := make([]string, 0, subjects)
 	for i := 1; i <= subjects; i++ {
 		ids = append(ids, fmt.Sprintf("%05d.XHKG", i))
 	}
-	return []marketfetch.TaskGroup{{Provider: "eastmoney", SourceID: "stockhk_http", MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity",
+	return []fetchplan.TaskGroup{{Provider: "eastmoney", SourceID: "stockhk_http", MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity",
 		DatasetID: "ds_hk_5m", Frequency: "5m", Subjects: ids}}
 }
 
@@ -44,9 +46,9 @@ func TestStockHKPlanUsesFourFunctionsAndWaitsFiveSeconds(t *testing.T) {
 	require.Nil(t, plan.autoSizing("stockhk"), "港股不按负载估算函数个数")
 	require.Nil(t, plan.Spaces["stockhk"].EgressBalance, "港股不做出口 IP 去重")
 	require.Equal(t, 5000, plan.fetchFor("stockhk", "equity").NotBeforeMS)
-	require.Equal(t, marketfetch.DatasetMode{Mode: marketfetch.IngestPull, Executor: marketfetch.PlanExecutorSCF}, plan.defaultModeFor("stockhk"))
+	require.Equal(t, domain.IngestSCF, markets.DefaultIngest("stockhk"))
 
-	desired, err := marketfetch.BuildDesiredState(hkPlanOptions(plan), hkGroups(95), nil)
+	desired, err := fetchplan.BuildDesiredState(hkPlanOptions(plan), hkGroups(95), nil)
 	require.NoError(t, err)
 	require.Len(t, desired.Functions, 4)
 	total := 0
@@ -67,7 +69,7 @@ func TestStockHKPlanUsesFourFunctionsAndWaitsFiveSeconds(t *testing.T) {
 
 	// 100 只正好 4 个函数，101 只要第 5 个。
 	for subjects, want := range map[int]int{25: 1, 100: 4, 101: 5} {
-		desired, err = marketfetch.BuildDesiredState(hkPlanOptions(plan), hkGroups(subjects), nil)
+		desired, err = fetchplan.BuildDesiredState(hkPlanOptions(plan), hkGroups(subjects), nil)
 		require.NoError(t, err)
 		require.Len(t, desired.Functions, want, "%d 只标的", subjects)
 	}
@@ -79,6 +81,6 @@ func TestStockHKPlanRejectsNotBeforeBelowTheSettleDelay(t *testing.T) {
 	plan := SCFPlanConfig{Fetch: defaults.Fetch, SymbolsPerFunction: defaults.SymbolsPerFunction,
 		Spaces: map[string]SCFPlanSpaceConfig{"stockhk": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 800}}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
-	_, err := marketfetch.BuildDesiredState(hkPlanOptions(plan), hkGroups(95), nil)
+	_, err := fetchplan.BuildDesiredState(hkPlanOptions(plan), hkGroups(95), nil)
 	require.ErrorContains(t, err, "小于路由文件的结算延迟 5000 毫秒")
 }

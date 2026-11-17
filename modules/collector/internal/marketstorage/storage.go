@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -38,7 +37,6 @@ type ResampleMetadataClient struct {
 	Client storageio.Metadata
 	// View 读 storage-view 里 View 的已建状态（任务结果的覆盖范围取自这里）。
 	View storageio.View
-	Auth *storagepb.AuthInfo
 }
 
 type storageWriter struct {
@@ -46,35 +44,30 @@ type storageWriter struct {
 	view     storageio.View
 	period   periodStorageAccess
 	metadata storageio.Metadata
-	authInfo *storagepb.AuthInfo
 }
 
-func newGatewayWriter(gateway gatewayclient.Invoker, instType string) (*storageWriter, error) {
+func newGatewayWriter(gateway gatewayclient.Invoker) (*storageWriter, error) {
 	if gateway == nil {
 		return nil, fmt.Errorf("collector gateway client is required")
 	}
-	auth, err := ResolveStorageAuthInfo(instType)
-	if err != nil {
-		return nil, err
-	}
 	adapter := storageio.NewGatewayClient(gateway)
-	return &storageWriter{access: adapter, view: adapter, period: adapter, metadata: adapter, authInfo: auth}, nil
+	return &storageWriter{access: adapter, view: adapter, period: adapter, metadata: adapter}, nil
 }
 
-func NewGatewayBatchStorage(gateway gatewayclient.Invoker, instType string) (BatchStorage, error) {
-	return newGatewayWriter(gateway, instType)
+func NewGatewayBatchStorage(gateway gatewayclient.Invoker) (BatchStorage, error) {
+	return newGatewayWriter(gateway)
 }
 
-func NewGatewayResampleStorage(gateway gatewayclient.Invoker, instType string) (ResampleStorage, error) {
-	return newGatewayWriter(gateway, instType)
+func NewGatewayResampleStorage(gateway gatewayclient.Invoker) (ResampleStorage, error) {
+	return newGatewayWriter(gateway)
 }
 
-func NewGatewayResampleMetadataClient(gateway gatewayclient.Invoker, instType string) (*ResampleMetadataClient, error) {
-	writer, err := newGatewayWriter(gateway, instType)
+func NewGatewayResampleMetadataClient(gateway gatewayclient.Invoker) (*ResampleMetadataClient, error) {
+	writer, err := newGatewayWriter(gateway)
 	if err != nil {
 		return nil, err
 	}
-	return &ResampleMetadataClient{Client: writer.metadata, View: writer.view, Auth: writer.authInfo}, nil
+	return &ResampleMetadataClient{Client: writer.metadata, View: writer.view}, nil
 }
 
 func (w *storageWriter) runRPC(ctx context.Context, operation func() error) error {
@@ -96,7 +89,7 @@ func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowF
 		}
 	}
 	return w.runRPC(ctx, func() error {
-		response, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: w.authInfo, SpaceId: spaceID, DatasetId: datasetID, Rows: rows})
+		response, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{SpaceId: spaceID, DatasetId: datasetID, Rows: rows})
 		if err != nil {
 			return fmt.Errorf("write time-series rows: %w", err)
 		}
@@ -109,7 +102,7 @@ func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *
 		return fmt.Errorf("commit time-series batch: expectation and items are required")
 	}
 	return w.runRPC(ctx, func() error {
-		response, err := w.period.CommitTimeSeriesBatch(ctx, &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: w.authInfo, Expectation: expectation, Items: items})
+		response, err := w.period.CommitTimeSeriesBatch(ctx, &storagepb.PrimaryCommitTimeSeriesBatchReq{Expectation: expectation, Items: items})
 		if err != nil {
 			return fmt.Errorf("commit time-series batch: %w", err)
 		}
@@ -134,7 +127,7 @@ func (w *storageWriter) ReadRows(ctx context.Context, keys []*storagepb.RowKey, 
 	var response *storagepb.PrimaryReadRowsRsp
 	err := w.runRPC(ctx, func() error {
 		var err error
-		response, err = w.access.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{AuthInfo: w.authInfo, Keys: keys, ColumnNames: fieldIDs, AttributeKeys: attributeKeys})
+		response, err = w.access.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{Keys: keys, ColumnNames: fieldIDs, AttributeKeys: attributeKeys})
 		if err != nil {
 			return fmt.Errorf("read fields: %w", err)
 		}
@@ -172,7 +165,7 @@ func (w *storageWriter) ListInstrumentNames(ctx context.Context, spaceID string,
 		var response *storagepb.ListSubjectsRsp
 		err := w.runRPC(ctx, func() error {
 			var err error
-			response, err = w.metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{AuthInfo: w.authInfo, SpaceId: strings.TrimSpace(spaceID), SubjectIds: unique[start:end], Page: &storagepb.Page{Page: 1, Size: uint32(end - start)}})
+			response, err = w.metadata.ListSubjects(ctx, &storagepb.ListSubjectsReq{SpaceId: strings.TrimSpace(spaceID), SubjectIds: unique[start:end], Page: &storagepb.Page{Page: 1, Size: uint32(end - start)}})
 			if err != nil {
 				return fmt.Errorf("list instrument names: %w", err)
 			}
@@ -218,16 +211,12 @@ func expandResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []strin
 	return qualified
 }
 
-// GetViewState 查询 View 的索引状态，没带身份时补上写入身份。
+// GetViewState 查询 View 的索引状态（合成建目标时等 View 的列建好）。
 func (w *storageWriter) GetViewState(ctx context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
 	if req == nil {
 		return nil, fmt.Errorf("查询 View 状态：请求不能为空")
 	}
-	copyReq := proto.Clone(req).(*storagepb.GetViewStateReq)
-	if copyReq.AuthInfo == nil {
-		copyReq.AuthInfo = w.authInfo
-	}
-	return w.view.GetViewState(ctx, copyReq)
+	return w.view.GetViewState(ctx, req)
 }
 
 type storageResponseError struct{ message string }
@@ -266,15 +255,4 @@ func validateAcceptedSeriesIndexes(items []*storagepb.TimeSeriesBatchRow, accept
 		return fmt.Errorf("Storage accepted %d unique series indexes, want %d", len(seen), len(expected))
 	}
 	return nil
-}
-
-// StorageAuthInfo returns the metadata caller identity for a configured market
-// binding. The subject synchronizer uses the spot binding as its control-plane
-// identity for both crypto and stock metadata calls.
-func ResolveStorageAuthInfo(instType string) (*storagepb.AuthInfo, error) {
-	binding, err := ResolveStorageBinding(instType)
-	if err != nil {
-		return nil, err
-	}
-	return storageAuthInfo(binding)
 }

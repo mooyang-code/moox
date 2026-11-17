@@ -159,12 +159,12 @@ assert(
 );
 assert(routes.includes('path: "/archive/storage"'), "archive storage route must exist");
 assert(!staticMenu.includes('"data-archive"'), "retired data-archive menu must be absent");
-const collectorTabOrder = ["采集任务", "采集结果", "运行状态", "执行器", "补采"].map(label =>
+const collectorTabOrder = ["采集任务", "采集结果", "运行状态", "补采"].map(label =>
   collectorTaskWorkbench.indexOf(`label: "${label}"`)
 );
 assert(
   collectorTabOrder.every(position => position >= 0),
-  "collector task workbench must expose all five tabs"
+  "collector task workbench must expose all four tabs"
 );
 assert(
   collectorTabOrder.every((position, index) => index === 0 || position > collectorTabOrder[index - 1]),

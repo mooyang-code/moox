@@ -93,7 +93,7 @@ func TestDownloadOnControlDialsLoopbackAndPassesHeaders(t *testing.T) {
 	worker, seen := fakeWorker(t)
 	p, relay, local := newProxy(t, topology("control", ""), worker.Listener.Addr().String())
 	rec := httptest.NewRecorder()
-	p.PartitionDownload(rec, httptest.NewRequest(http.MethodGet, "/api/admin/archive/PartitionDownload?ticket=t-1&space=crypto&dataset=ds&partition=2026-10-15&extra=x", nil))
+	p.PartitionDownload(rec, httptest.NewRequest(http.MethodGet, "/api/admin/archive/PartitionDownload?space=crypto&dataset=ds&partition=2026-10-15&extra=x", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "gzip!", rec.Body.String())
 	require.Equal(t, "application/gzip", rec.Header().Get("Content-Type"))
@@ -103,12 +103,11 @@ func TestDownloadOnControlDialsLoopbackAndPassesHeaders(t *testing.T) {
 	require.Empty(t, rec.Header().Get("X-Internal"))
 	require.Equal(t, []string{"127.0.0.1:11428"}, *local)
 	require.Empty(t, relay.targets)
-	// 只转发白名单参数，ticket 不发给 worker。
+	// 只转发白名单参数。
 	require.Len(t, *seen, 1)
 	got := (*seen)[0].URL.Query()
 	require.Equal(t, "crypto", got.Get("space"))
 	require.Equal(t, "2026-10-15", got.Get("partition"))
-	require.Empty(t, got.Get("ticket"))
 	require.Empty(t, got.Get("extra"))
 }
 
@@ -116,7 +115,7 @@ func TestRecentOnOutboundHostUsesRelayAndPassesStatus(t *testing.T) {
 	worker, seen := fakeWorker(t)
 	p, relay, local := newProxy(t, topology("factor", ""), worker.Listener.Addr().String())
 	rec := httptest.NewRecorder()
-	p.RecentRows(rec, httptest.NewRequest(http.MethodGet, "/api/admin/archive/RecentRows?ticket=t&space=crypto&dataset=ds&subject=BTC&before=2026-10-15T00:00:00Z&limit=10", nil))
+	p.RecentRows(rec, httptest.NewRequest(http.MethodGet, "/api/admin/archive/RecentRows?space=crypto&dataset=ds&subject=BTC&before=2026-10-15T00:00:00Z&limit=10", nil))
 	require.Equal(t, http.StatusConflict, rec.Code)
 	body, _ := io.ReadAll(rec.Body)
 	require.Contains(t, string(body), "远端副本未就绪")

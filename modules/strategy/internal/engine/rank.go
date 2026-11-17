@@ -17,7 +17,7 @@ type ruleResult struct {
 	filtered int
 	scored   int
 	selected int
-	// notes 是写进本期摘要的说明（tranche 状态体积提示）。
+	// notes 是写进本期摘要的说明。
 	notes []string
 	// stops 是本期止损止盈触发的持仓单位数，按原因计。
 	stops map[string]int

@@ -16,9 +16,9 @@ import (
 
 func topologySpecs() []HostSpec {
 	return []HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
+		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "access"}},
+		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "egress-proxy"}},
 	}
 }
 
@@ -44,7 +44,7 @@ func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 	control.Components = append(control.Components, "monitor")
 	require.NoError(t, dao.SyncHostDeployments(ctx, control))
 	compute := topologySpecs()[2]
-	compute.Components = []string{"access"}
+	compute.Components = []string{"egress-proxy"}
 	require.NoError(t, dao.SyncHostDeployments(ctx, compute))
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
@@ -64,11 +64,16 @@ func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 	require.NoError(t, compiled.Directory.Validate())
 	require.NotContains(t, compiled.Directory.Hosts, "overseas")
 	require.NotContains(t, compiled.Directory.Services, "trpc.moox.collector.CollectMgr")
+	before, err := dao.Snapshot(ctx)
+	require.NoError(t, err)
 	// The same offline DAO is used to recover a disabled deployment.
 	require.NoError(t, dao.SetDeploymentStatus(ctx, "control", "collector", servicecatalog.Enabled))
 	recovered, err := dao.Compile(ctx, "control")
 	require.NoError(t, err)
-	require.NotEqual(t, compiled.Directory.Version, recovered.Directory.Version)
+	require.Equal(t, []string{"control"}, recovered.Directory.Services["trpc.moox.collector.CollectMgr"])
+	after, err := dao.Snapshot(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, before.Hash, after.Hash, "恢复部署要换快照哈希，网关与客户端据此重新取")
 	require.NoError(t, dao.SyncHosts(ctx, []HostSpec{control, compute}))
 }
 
@@ -79,9 +84,9 @@ func TestTopologyRejectsInvalidSynchronizationWithoutChangingDatabase(t *testing
 	}{
 		{"unknown component", func(s []HostSpec) []HostSpec { s[0].Components = append(s[0].Components, "unknown"); return s }},
 		{"protected removal", func(s []HostSpec) []HostSpec { s[0].Components = []string{"collector"}; return s }},
-		{"control scope", func(s []HostSpec) []HostSpec { s[1].Components = append(s[1].Components, "console-proxy"); return s }},
+		{"control scope", func(s []HostSpec) []HostSpec { s[1].Components = append(s[1].Components, "admin"); return s }},
 		{"replica limit", func(s []HostSpec) []HostSpec { s[2].Components = append(s[2].Components, "collector"); return s }},
-		{"duplicate component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"access", "access"}; return s }},
+		{"duplicate component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"egress-proxy", "egress-proxy"}; return s }},
 		{"automatic component", func(s []HostSpec) []HostSpec { s[2].Components = []string{"host-gateway"}; return s }},
 		{"duplicate address", func(s []HostSpec) []HostSpec { s[2].Address = s[0].Address; return s }},
 		{"region too long", func(s []HostSpec) []HostSpec { s[2].Region = strings.Repeat("r", 129); return s }},
@@ -154,7 +159,7 @@ func TestConcurrentTopologyWritersCannotEnableTwoSingleReplicas(t *testing.T) {
 	second, err := NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	specs := topologySpecs()
-	specs[0].Components = []string{"admin", "console-proxy", "web-host"}
+	specs[0].Components = []string{"admin"}
 	require.NoError(t, first.SyncHosts(context.Background(), specs))
 	start, results := make(chan struct{}), make(chan error, 2)
 	for _, item := range []struct {

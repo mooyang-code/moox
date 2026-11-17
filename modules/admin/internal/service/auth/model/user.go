@@ -1,9 +1,6 @@
 package model
 
-import (
-	"strings"
-	"time"
-)
+import "time"
 
 // User 用户数据模型 (对应 t_users 表)。系统只有一个超级用户，没有角色、状态与个人资料。
 type User struct {
@@ -20,51 +17,6 @@ type User struct {
 // TableName 表名
 func (u *User) TableName() string {
 	return "t_users"
-}
-
-// LoginSalt 登录盐值缓存 (用于BadgerDB)
-type LoginSalt struct {
-	Username  string    `json:"username"`
-	Salt      string    `json:"salt"`
-	Timestamp int64     `json:"timestamp"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-type RequestSigningSession struct {
-	SessionID       string    `json:"session_id"`
-	UserID          string    `json:"user_id"`
-	EncryptedSecret string    `json:"encrypted_secret"`
-	ExpiresAt       time.Time `json:"expires_at"`
-}
-
-type RawSessionTicket struct {
-	TicketID          string    `json:"ticket_id"`
-	SessionID         string    `json:"session_id"`
-	ResourceSessionID string    `json:"resource_session_id"`
-	UserID            string    `json:"user_id"`
-	Operation         string    `json:"operation"`
-	ExpiresAt         time.Time `json:"expires_at"`
-}
-
-// 归档的两个一次性 ticket 操作：下载分区副本、查看最新暂存行。ResourceSessionID 填 "<空间>/<数据集>"，
-// 使用时核对请求里的 space、dataset 与它一致（单用户，不另做空间授权）。
-const (
-	RawOperationArchiveDownload = "archive_download"
-	RawOperationArchiveRecent   = "archive_recent"
-)
-
-// ValidArchiveResourcePart 报告空间或数据集 ID 能否作为归档 ticket 资源的一段：非空、不含斜杠、不以点开头、不超过 128 字节。
-func ValidArchiveResourcePart(part string) bool {
-	return part != "" && len(part) <= 128 && !strings.ContainsAny(part, `/\`) && !strings.HasPrefix(part, ".")
-}
-
-// LoginAttempt 登录尝试记录 (用于BadgerDB)
-type LoginAttempt struct {
-	Username  string    `json:"username"`
-	IP        string    `json:"ip"`
-	Attempts  int       `json:"attempts"`
-	LockedAt  time.Time `json:"locked_at"`
-	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // 登录日志在活动日志里的来源与类别。

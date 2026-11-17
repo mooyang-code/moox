@@ -19,7 +19,7 @@ type FundMaintainer interface {
 type FundWorker struct {
 	Maintainer FundMaintainer
 	Interval   time.Duration
-	// Gate 非空时是生命周期门禁：返回 false（系统或手动暂停、恢复追赶、重置）时不运行。
+	// Gate 非空时是生命周期门禁：返回 false（系统或手动暂停、恢复追赶）时不运行。
 	Gate func() bool
 	// RunTimeout 是一次运行的最长时间，默认 5 分钟。
 	RunTimeout time.Duration

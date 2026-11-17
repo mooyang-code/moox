@@ -8,7 +8,7 @@
     <template v-else-if="overview">
       <div v-if="!worker" class="line is-warn">
         还没有归档执行器登记。在因子机部署 archive-worker：<code
-          >moox-cli setup deploy-unit --host &lt;主机&gt; --profile archive-worker</code
+          >moox-cli setup deploy --host &lt;主机&gt; --component archive-worker</code
         >
       </div>
       <div v-else class="line">

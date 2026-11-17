@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"gorm.io/gorm"
@@ -21,6 +22,9 @@ import (
 type hostBundleOptions struct {
 	hostID, controlHostID                 string
 	dbPath, masterFile, pkiDir, outputDir string
+	// current 是目标机上现有私钥的公钥；rotate 显式要求换掉主机签名密钥。
+	current currentKeys
+	rotate  bool
 }
 
 func isHostBundleCommand(args []string) bool { return len(args) > 1 && args[1] == "host-bundle" }
@@ -44,7 +48,12 @@ func runHostBundleCommand(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&opts.masterFile, "encryption-key-file", "", "existing persistent 0600 Admin encryption key")
 	fs.StringVar(&opts.pkiDir, "pki-dir", "", "existing persistent 0700 control CA directory")
 	fs.StringVar(&opts.outputDir, "output-dir", "", "0700 parent directory for a complete new host bundle")
+	registerCurrentKeyFlags(fs, &opts.current)
+	fs.BoolVar(&opts.rotate, "rotate-sign-key", false, "换掉这台主机的签名密钥（旧私钥立即作废，这台主机的全部组件要重启）")
 	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if err := opts.current.validate(); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || !servicecatalog.ValidHostID(opts.hostID) || !servicecatalog.ValidHostID(opts.controlHostID) {
@@ -66,6 +75,24 @@ func runHostBundleCommand(args []string, stdout, stderr io.Writer) error {
 	return exportHostBundle(context.Background(), opts, stdout)
 }
 
+// registerCurrentKeyFlags 注册“目标机上现有私钥的公钥”两个参数，bootstrap 与 host-bundle 共用。
+func registerCurrentKeyFlags(fs *flag.FlagSet, current *currentKeys) {
+	fs.StringVar(&current.host, "current-sign-public-key", "", "目标机上现有主机签名私钥的公钥（base64）；和登记的一致就沿用，不换密钥")
+	fs.StringVar(&current.scfCollector, "current-scf-collector-public-key", "", "目标机上现有 scf-collector 私钥的公钥（base64）")
+}
+
+func (c currentKeys) validate() error {
+	for _, value := range []string{c.host, c.scfCollector} {
+		if value == "" {
+			continue
+		}
+		if _, err := gatewayauth.ParsePublicKey(value); err != nil {
+			return keys.ErrInvalidPublicKey
+		}
+	}
+	return nil
+}
+
 func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Writer) error {
 	if err := validateExistingAdminDatabase(opts.dbPath); err != nil {
 		return err
@@ -75,21 +102,12 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 		return err
 	}
 	defer masterRoot.Close()
-	// Use the same OS lock as bootstrap. Live Admin writes remain coordinated
-	// through SQLite's writer reservation below.
+	// 和 bootstrap 用同一把进程间文件锁；运行中的 Admin 由下面的 SQLite 写锁协调。
 	lock, err := privatefiles.Lock(masterRoot, ".bootstrap-"+filepath.Base(opts.masterFile)+".lock")
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	raw, err := privatefiles.ReadAt(masterRoot, filepath.Base(opts.masterFile), 8192)
-	if err != nil {
-		return err
-	}
-	master := strings.TrimSpace(string(raw))
-	if len(master) < 32 || strings.ContainsAny(master, "\x00\r\n") {
-		return errors.New("Admin encryption key must contain at least 32 characters on one line")
-	}
 	ca, err := pki.Open(opts.pkiDir)
 	if err != nil {
 		return err
@@ -131,31 +149,16 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 				material.host.Components = append(material.host.Components, deployment.ComponentID)
 			}
 		}
-		// Validate the persisted fleet before provisioning any new identity.
+		// 先确认库里的整套拓扑合法，再动签名密钥。
 		if _, err := dao.Compile(ctx, h.HostID); err != nil {
 			return err
 		}
-		store, err := keys.NewStore(tx, master)
+		store, err := keys.NewStore(tx)
 		if err != nil {
 			return err
 		}
-		for _, caller := range hostSigningCallers(material.host, false) {
-			key, err := store.Ensure(ctx, caller)
-			if err != nil {
-				return err
-			}
-			material.signing = append(material.signing, key)
-		}
-		material.access, err = hostAccessVerification(ctx, store, material.host)
-		if err != nil {
-			return err
-		}
-		_, snapshot, err := dao.CompileSnapshot(ctx, h.HostID, master)
-		if err != nil {
-			return err
-		}
-		material.expectedHash = snapshot.Hash
-		return nil
+		material.keys, err = ensureSigningKeys(ctx, store, material.host, opts.current, opts.rotate)
+		return err
 	})
 	if err != nil {
 		return err
@@ -165,20 +168,4 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 		return err
 	}
 	return writeJSON(stdout, result)
-}
-
-func hostAccessVerification(ctx context.Context, store *keys.Store, host hostbundle.Host) ([]keys.VerificationKey, error) {
-	if !slices.Contains(host.Components, "access") {
-		return nil, nil
-	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return nil, err
-	}
-	for _, principal := range catalog.Principals {
-		if _, err := store.Ensure(ctx, principal.ID); err != nil {
-			return nil, err
-		}
-	}
-	return store.ExternalVerification(ctx)
 }

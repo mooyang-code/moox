@@ -8,17 +8,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/health"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report/logsink"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Collector 的生命周期（设计 2、2.2）：模块级，没有对象。
+// Collector 的生命周期（设计 2、2.2、3.8）：只有模块级的暂停、恢复追赶与放行。
 //
 //	暂停      ：每个采集计划空间都置为系统暂停（SCF 定时器停用、collector-stream 停止订阅、不再认领补采分块），
 //	           并等定时器停用确认、在途补采分块结束才算停下；
@@ -40,18 +38,16 @@ type collectorControl struct {
 	mu         sync.Mutex
 	plans      *store.FetchPlanRepository
 	backfiller *klinecheck.Backfiller
-	manager    *marketfetch.PlanManager
+	manager    *fetchplan.PlanManager
 	// spaces 返回管理集合，每次现取：运行中新增的空间也要能暂停、恢复和收敛。known 是最近一次读到的结果，读库失败时沿用。
 	spaces     func(context.Context) ([]string, error)
 	known      []string
 	recovering bool
-	// timerWait 是重置前等待 SCF 定时器停用的时限（默认 2 分钟，测试可缩短）。
-	timerWait time.Duration
 	// recoveryTo 是本次恢复的追赶目标：进入恢复追赶的时刻，固定不变（见 Backfiller.Catchup）。
 	recoveryTo time.Time
 }
 
-func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *marketfetch.PlanManager, spaces func(context.Context) ([]string, error)) {
+func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *fetchplan.PlanManager, spaces func(context.Context) ([]string, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.plans, c.backfiller, c.manager, c.spaces = plans, backfiller, manager, spaces
@@ -132,7 +128,8 @@ func (c *collectorControl) setPaused(ctx context.Context, paused bool) error {
 	return nil
 }
 
-// onChange 把模块阶段的变化落到采集上：进入暂停时关实时、清恢复模式；进入恢复追赶时开恢复模式；放行回到就绪时清系统暂停开关。
+// onChange 把模块状态的变化落到采集上：进入暂停时关实时、清恢复模式（重启后载入暂停时也落一遍）；进入恢复追赶时开恢复模式；
+// 放行回到运行时清系统暂停开关。
 func (c *collectorControl) onChange(ctx context.Context, from, to lifecycle.Stage) {
 	switch to {
 	case lifecycle.StagePaused:
@@ -145,8 +142,8 @@ func (c *collectorControl) onChange(ctx context.Context, from, to lifecycle.Stag
 		if err := c.setPaused(ctx, true); err != nil {
 			log.ErrorContextf(ctx, "collector_lifecycle_resume_failed error=%v", err)
 		}
-	case lifecycle.StageReady, lifecycle.StageWarming, lifecycle.StageRunning:
-		// 放行回到可工作的阶段才放开暂停开关；离开暂停去重置、未就绪、故障时必须保持暂停（采集不能自己重新开始）。
+	case lifecycle.StageRunning:
+		// 放行回到运行才放开暂停开关。
 		if from == lifecycle.StageResuming || from == lifecycle.StagePaused {
 			c.setRecovering(false)
 			if err := c.setPaused(ctx, false); err != nil {
@@ -252,53 +249,19 @@ func (c *collectorControl) runRecovery(ctx context.Context) {
 	}
 }
 
-func newCollectorLifecycle(dbPath string, control *collectorControl, ready func() bool, reset *lifecycle.ResetSpec) (*lifecycle.Controller, error) {
+func newCollectorLifecycle(dbPath string, control *collectorControl) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
 		Audit:          logsink.Audit,
 		Module:         "collector",
 		StateFile:      filepath.Join(filepath.Dir(dbPath), collectorLifecycleStateFile),
 		QuiesceTimeout: collectorQuiesceTimeout,
 		Hooks: lifecycle.Hooks{
-			CheckModule: func(context.Context) []lifecycle.Check {
-				if ready != nil && !ready() {
-					return []lifecycle.Check{{Name: "数据库", Status: lifecycle.CheckFail, Message: "Collector 数据库不可用"}}
-				}
-				return []lifecycle.Check{{Name: "数据库", Status: lifecycle.CheckPass}}
-			},
-			Quiesce:    func(ctx context.Context, _ lifecycle.Ref) error { return control.quiesce(ctx) },
-			Reset:      reset,
-			AfterReset: control.afterReset,
-			Catchup: func(ctx context.Context, ref lifecycle.Ref, since time.Time) (lifecycle.Catchup, error) {
-				if ref != (lifecycle.Ref{}) {
-					return lifecycle.Catchup{CaughtUp: true}, nil
-				}
-				return control.catchup(ctx, since)
-			},
-			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
+			Quiesce: control.quiesce,
+			Catchup: control.catchup,
+			OnChange: func(from, to lifecycle.Stage, reason string) {
 				log.Infof("collector_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
 				control.onChange(context.Background(), from, to)
 			},
 		},
 	})
-}
-
-func collectorLifecycleRoutes(c *lifecycle.Controller) []health.Route {
-	return []health.Route{
-		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
-		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
-		{Path: lifecycle.ResetPrefix, Handler: c.ResetHandler()},
-	}
-}
-
-// withCollectorLifecycle 把生命周期快照放进健康检查响应，生命周期的检查本身不改变就绪判定。
-func withCollectorLifecycle(snapshot healthz.SnapshotFunc, c *lifecycle.Controller) healthz.SnapshotFunc {
-	return func(ctx context.Context) healthz.Response {
-		rsp := snapshot(ctx)
-		if rsp.Details == nil {
-			rsp.Details = map[string]any{}
-		}
-		rsp.Details["lifecycle"] = c.Compact()
-		return rsp
-	}
 }

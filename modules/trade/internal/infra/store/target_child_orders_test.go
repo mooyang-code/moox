@@ -17,7 +17,7 @@ func seedTargetChildren(t *testing.T, s *Store, children map[string][2]string) s
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			ExecutionMode:   "PAPER",
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -25,6 +25,9 @@ func seedTargetChildren(t *testing.T, s *Store, children map[string][2]string) s
 		if err := tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,
 		}); err != nil {
+			return err
+		}
+		if err := seedCurrentTarget(tx, "runner-1"); err != nil {
 			return err
 		}
 		for orderID := range children {

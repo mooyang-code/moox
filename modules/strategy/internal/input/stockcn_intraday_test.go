@@ -252,12 +252,12 @@ func TestStockIntradayTradingDayBarsAndRetention(t *testing.T) {
 	}
 }
 
-// A 股（market_type=equity）按现货处理：不许 tranche、杠杆不大于 1、不许做空。
+// A 股（market_type=equity）按现货处理：杠杆不大于 1、不许做空。
 func TestResolveEquityFollowsSpotLimits(t *testing.T) {
 	client := newFakeClient("equity")
 	client.tagMarkets["binance_equity"] = "equity"
 	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
-	if err != nil || !resolved.SpotOnly() || resolved.Market.Select != "equity" {
+	if err != nil || resolved.Market.Select != "equity" {
 		t.Fatalf("equity 应按现货解析：%+v err=%v", resolved, err)
 	}
 	levered := parseStrategy(t, "name: levered\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: {total: 0.6}}\n  - {id: b, type: rank, score: volume, select: {top: 1}, weight: {total: 0.6}}\nportfolio:\n  leverage: 1.2\n")
@@ -268,36 +268,12 @@ func TestResolveEquityFollowsSpotLimits(t *testing.T) {
 	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, short); err == nil || !strings.Contains(err.Error(), "做空") {
 		t.Fatalf("equity 应拒绝做空：%v", err)
 	}
-	tranche := parseStrategy(t, `name: tranche_demo
-bar: 1h
-universe: {}
-rules:
-  - id: r
-    type: tranche
-    weight: {total: 1}
-    tranche:
-      hold_count: candidate_rows
-      score: {method: rank_sum, missing: median}
-      sizing: {method: quantity, scale: 0.5}
-      hold_period: 3
-      long_weight: 2
-      short_weight: 0
-      long_coin_num: 1
-      short_coin_num: 0
-      long_factors: [{factor: "close", descending: true, weight: 1.0}]
-      short_factors: []
-      filter_before: []
-      filter_after: []
-`)
-	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, tranche); err == nil || !strings.Contains(err.Error(), "tranche") {
-		t.Fatalf("equity 应拒绝 tranche：%v", err)
-	}
 	// 数据集属性直接声明 equity 也接受。
 	source := client.datasets["ds_kline"]
 	source.Attributes = map[string]string{"market_type": "equity"}
 	source.SubjectTags = nil
 	client.datasets["ds_kline"] = source
-	if resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil || !resolved.SpotOnly() {
+	if resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil || resolved.Market.Select != "equity" {
 		t.Fatalf("数据集属性 market_type=equity 应按现货解析：%+v err=%v", resolved, err)
 	}
 }
@@ -313,7 +289,7 @@ func TestResolveCNStockIntradayView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("A 股 5m View 应能解析：%v", err)
 	}
-	if resolved.Calendar != "cn_stock" || resolved.Bar != "5m" || !resolved.SpotOnly() {
+	if resolved.Calendar != "cn_stock" || resolved.Bar != "5m" || resolved.Market.Select != "equity" {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
 	strategy = parseStrategy(t, "name: cn_5m\nuniverse: {min_age_bars: 9601}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")

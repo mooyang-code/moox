@@ -13,10 +13,10 @@ import (
 
 type paramFake struct {
 	taskID  string
-	members []domain.FactorTaskMember
+	members []domain.MemberParamState
 }
 
-func (f *paramFake) GetParams(_ context.Context, taskID string) ([]domain.FactorTaskMember, error) {
+func (f *paramFake) GetParams(_ context.Context, taskID string) ([]domain.MemberParamState, error) {
 	f.taskID = taskID
 	return f.members, nil
 }
@@ -31,9 +31,9 @@ func TestGetTaskParamsRequiresLease(t *testing.T) {
 
 func TestGetTaskParamsReturnsLastSubmitted(t *testing.T) {
 	at := time.Unix(100, 0).UTC()
-	params := &paramFake{members: []domain.FactorTaskMember{{
-		TaskID: "s", MemberKey: "fast__var", LastSubmittedPeriod: 120, LastRequestID: "r1", LastSubmittedAt: &at,
-		LastSubmittedParams: domain.ParamSnapshot{"window": {Default: 30}},
+	params := &paramFake{members: []domain.MemberParamState{{
+		MemberKey: "fast__var", LastSubmittedPeriod: 120, LastRequestID: "r1", LastSubmittedAt: at,
+		Params: domain.ParamSnapshot{"window": {Default: 30}},
 	}}}
 	svc := NewEngineService(&hubFake{}, params)
 	rsp, err := svc.GetTaskParams(context.Background(), &factorpb.GetTaskParamsReq{Engine: testEngine, TaskId: "s"})

@@ -33,15 +33,13 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
 	listener, err := net.Listen("tcp4", "127.0.0.1:11200")
 	require.NoError(t, err)
-	var submits, claims, releases atomic.Int32
+	var submits, closes atomic.Int32
 	svc := server.New(server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTransport(transport.NewServerTransport()), server.WithServiceName("trpc.moox.trade.TradeConsoleService"), server.WithListener(listener), server.WithFilter(filter.GetServer(spacecontext.SpaceFilterName)), server.WithFilter(func(ctx context.Context, req interface{}, next filter.ServerHandleFunc) (interface{}, error) {
 		switch req.(type) {
 		case *tradepb.SubmitOrderReq:
 			submits.Add(1)
-		case *tradepb.ClaimLogicalAccountOwnerReq:
-			claims.Add(1)
-		case *tradepb.ReleaseLogicalAccountOwnerReq:
-			releases.Add(1)
+		case *tradepb.CloseTargetSessionReq:
+			closes.Add(1)
 		}
 		return next(ctx, req)
 	}))
@@ -62,11 +60,9 @@ func TestExternalGatewayOwnerTrade(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(coord, "trade-ready"), []byte(listener.Addr().String()), 0600))
 	require.Eventually(t, func() bool { _, e := os.Stat(filepath.Join(coord, "gateway-done")); return e == nil }, 45*time.Second, 25*time.Millisecond)
 	require.Zero(t, submits.Load(), "SubmitOrder must never reach Trade")
-	require.Positive(t, claims.Load())
-	require.Positive(t, releases.Load())
+	require.Positive(t, closes.Load())
 	account, err := db.GetLogicalAccount(context.Background(), "space-gateway-e2e", id)
 	require.NoError(t, err)
-	require.Empty(t, account.OwnerInstanceID)
-	require.Empty(t, account.OwnerSessionID)
-	t.Logf("real native RPC -> Paper Store: account=%s claims=%d releases=%d SubmitOrder=%d; owner released", id, claims.Load(), releases.Load(), submits.Load())
+	require.Equal(t, int64(1_700_000_000_000), account.ClosedThrough, "关闭会话推进了组合的关闭到")
+	t.Logf("real native RPC -> Paper Store: account=%s closes=%d SubmitOrder=%d; closed_through=%d", id, closes.Load(), submits.Load(), account.ClosedThrough)
 }

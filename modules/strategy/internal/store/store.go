@@ -29,7 +29,7 @@ const sqliteConstraint = 19
 // FriendlyMessage 把错误链中的 SQLite 驱动错误替换为中文概述，避免把表名、列名等内部细节返回给接口调用方；
 // replaced 为 true 时调用方应把原始错误写入日志。
 func FriendlyMessage(err error) (message string, replaced bool) {
-	// 取消、超时与数据库关闭只替换错误链里的英文原文，保留前面的中文上下文（例如“已停用但 Trade 释放未确认”）。
+	// 取消、超时与数据库关闭只替换错误链里的英文原文，保留前面的中文上下文（例如“实例已停用，但 Trade 未确认关闭会话”）。
 	for _, known := range []struct {
 		match    bool
 		raw      []string
@@ -175,14 +175,6 @@ func (s *Store) Ping(ctx context.Context) error {
 		return errors.New("策略数据库未打开")
 	}
 	return s.db.WithContext(ctx).Exec(sqlPing).Error
-}
-
-// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
-func (s *Store) SQLDB() (*sql.DB, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("策略数据库未打开")
-	}
-	return s.db.DB()
 }
 
 // ApplySchema 执行建表 SQL 并校验结果。

@@ -49,12 +49,11 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := viewservice.New(filepath.Join(t.TempDir(), "view"), followEnvSecret)
+	view, err := viewservice.New(filepath.Join(t.TempDir(), "view"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader := primaryFieldReader{service: primary}
-	view.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-primary"})
 	view.SetPrimaryReader(reader)
 	stop, err := view.StartFollowing(ctx, viewservice.FollowOptions{Changes: reader, Range: reader, Publisher: discardReadyPublisher{}, Wait: time.Second})
 	if err != nil {
@@ -71,7 +70,7 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 	defer stopMaintainer()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		rsp, _ := view.GetViewState(ctx, &pb.GetViewStateReq{AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: "notes_view"})
+		rsp, _ := view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: "notes_view"})
 		if rsp.GetIndexId() != "" {
 			break
 		}
@@ -86,16 +85,16 @@ func TestRecordViewFollowsRecordWrites(t *testing.T) {
 			Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: title}}}},
 		}
 	}
-	rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "storage-primary"}, SpaceId: readyBenchSpace, DatasetId: "notes",
+	rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{SpaceId: readyBenchSpace, DatasetId: "notes",
 		Rows: []*pb.RowFieldUpsert{record("r1", "1", "first note"), record("r2", "1", "second note")}})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("写入记录：rsp=%v err=%v", rsp, err)
 	}
-	applied, err := view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: "notes_view", WaitTimeoutMs: 10000})
+	applied, err := view.WaitViewApplied(ctx, &pb.WaitViewAppliedReq{SpaceId: readyBenchSpace, ViewId: "notes_view", WaitTimeoutMs: 10000})
 	if err != nil || !applied.GetApplied() {
 		t.Fatalf("等记录型 View 跟上：rsp=%v err=%v", applied, err)
 	}
-	search, err := view.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{AuthInfo: followEnvViewAuth(), SpaceId: readyBenchSpace, ViewId: "notes_view", TextQuery: "note", Page: &pb.Page{Page: 1, Size: 10}})
+	search, err := view.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{SpaceId: readyBenchSpace, ViewId: "notes_view", TextQuery: "note", Page: &pb.Page{Page: 1, Size: 10}})
 	if err != nil || search.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(search.GetRows()) != 2 {
 		t.Fatalf("检索记录：rsp=%v err=%v", search, err)
 	}

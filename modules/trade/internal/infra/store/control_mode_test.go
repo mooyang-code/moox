@@ -35,10 +35,6 @@ func TestManualControlModeRejectsStrategyMutations(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "MANUAL", before.ControlMode)
 	cases := map[string]func(*Tx) error{
-		"claim session": func(tx *Tx) error {
-			_, _, err := tx.ClaimLogicalAccountSession("space", "manual", "instance", "session", before.AuthFence)
-			return err
-		},
 		"activate": func(tx *Tx) error { return tx.SetLogicalAccountAutomation("space", "manual", "ACTIVE", "") },
 	}
 	for name, operation := range cases {
@@ -86,20 +82,4 @@ func TestCreateControlModesPersistAndRejectUnknown(t *testing.T) {
 		}
 		require.Equal(t, want, got.ControlMode)
 	}
-}
-
-func TestManualControlRejectsIdempotentStrategyFallbacks(t *testing.T) {
-	s := openTestStore(t)
-	seedLogicalAccount(t, s, "runner-1")
-	ctx := context.Background()
-	require.NoError(t, s.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = 'instance', c_owner_session_id = 'session'").Error)
-	before, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Error(t, s.Transaction(ctx, func(tx *Tx) error {
-		_, _, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance", "session", before.AuthFence)
-		return err
-	}))
-	after, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, before, after)
 }

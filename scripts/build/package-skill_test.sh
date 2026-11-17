@@ -52,7 +52,7 @@ printf '%s\n' "$@" >"${ARGS_LOG:?}"
 [[ "$5" == --space && "$6" == crypto ]]
 [[ "$7" == --output ]]
 mkdir -p "$(dirname "$8")"
-printf '%s\n' 'version: 1' 'gateway_client:' '  access_address: access.example:11004' '  access_id: access@storage' '  caller: moox-skill' '  key_id: assigned-skill-key-17' '  key_file: .moox-skill-keys/fixture.key' >"$8"
+printf '%s\n' 'version: 1' 'gateway_client:' '  entry_address: entry.example:11004' '  entry_host: storage' '  caller: moox-skill' '  key_file: .moox-skill-keys/fixture.key' >"$8"
 mkdir -m 0700 "$(dirname "$8")/.moox-skill-keys"
 printf '%s\n' 'TEST_ONLY_EXPORTED_ACCESS_SIGNING_KEY_32_BYTES' >"$(dirname "$8")/.moox-skill-keys/fixture.key"
 chmod 0600 "$8" "$(dirname "$8")/.moox-skill-keys/fixture.key"

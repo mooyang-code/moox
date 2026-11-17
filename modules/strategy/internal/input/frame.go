@@ -365,16 +365,9 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			}
 		}
 	}
-	// 统一数据集只有一个 series_tag 的一期，按标的的失败名单被原样带到了每个市场（见 readiness.Result.ForMarket），其实只属于有行的那个市场：
-	// 读完行之后，本期一行也没有的市场丢掉这些名单，按无行处理。否则这个市场会因为另一个市场的失败被判成整体失败，
-	// 而另一个市场没有失败时它又按无行处理，结论随无关的失败而变。
 	ready := make(map[string]readiness.Result, len(loads))
 	for _, load := range loads {
-		result := bar.Readiness[load.market]
-		if load.unavailable == "" && len(load.current) == 0 {
-			result = result.DropUnattributed()
-		}
-		ready[load.market] = result
+		ready[load.market] = bar.Readiness[load.market]
 	}
 	// 多个市场时，某个因子在一个市场本期的标的上全部失败（例如时序因子在永续整体晚到），与这个市场的因子被整体跳过没有区别：按这个市场
 	// 不可用处理，已持仓的冻结。否则逐币的 factor_failed 不冻结，缺数比例又被另一个市场的行摊薄，持有的永续会被卖成现货。

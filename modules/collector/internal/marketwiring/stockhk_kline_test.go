@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
@@ -195,7 +196,7 @@ func TestSingleSourceRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
 		require.NoError(t, err)
 		return pipeline.Router.BreakerThreshold()
 	}
-	planned := marketfetch.RouteFetchLimits("stockhk")(marketfetch.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
+	planned := fetchplan.RouteFetchLimits("stockhk")(fetchplan.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
 	require.Equal(t, 16, planned.FeedConcurrency, "采集计划给港股的源并发")
 	require.Equal(t, 16, planned.Concurrency, "一个函数内同时处理的标的数")
 	limits := &marketfetch.FeedLimits{FeedConcurrency: planned.FeedConcurrency}

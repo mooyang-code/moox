@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -299,7 +300,7 @@ func TestDeleteTaskRetainsResultMetadataWhenRequested(t *testing.T) {
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-retain", TaskName: "retain", Enabled: true}
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(taskresult.ResultIDs(task.SpaceID, task.TaskID), task.TaskID)
-	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
 	require.NoError(t, err)
@@ -317,7 +318,7 @@ func TestDeleteTaskPhysicallyDeletesOwnedResultAndManagerDeleteIsIdempotent(t *t
 	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
-	manager := taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})
+	manager := taskresult.NewManagerWithAPI(metadata)
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: manager}
 
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID, DeleteResultData: true})
@@ -341,7 +342,7 @@ func TestDeleteTaskResultFailureLeavesDisabledTaskRetryable(t *testing.T) {
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
 	metadata.failDeleteDataset = true
-	manager := taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})
+	manager := taskresult.NewManagerWithAPI(metadata)
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: manager}
 
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID, DeleteResultData: true})
@@ -362,7 +363,7 @@ func TestDeleteTaskResultFailureLeavesDisabledTaskRetryable(t *testing.T) {
 
 func openCollectorTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
@@ -391,7 +392,7 @@ func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T)
 	}
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 	}
 
 	list, err := service.GetTaskList(ctx, &pb.GetTaskListReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: taskCount}})
@@ -446,7 +447,7 @@ func TestGetTaskDetailDistinguishesResultContractFailureFromStorageFailure(t *te
 			test.prepare(metadata, ids)
 			service := &Service{
 				taskRepo:      db.Tasks(),
-				resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+				resultManager: taskresult.NewManagerWithAPI(metadata),
 			}
 			response, err := service.GetTaskDetail(context.Background(), &pb.GetTaskDetailReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
 			require.NoError(t, err)
@@ -519,7 +520,7 @@ func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 	ctx := context.Background()
 	metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
 	service := &Service{
-		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc: acceptingKlineDatasetSource{},
 	}
 	var datasets []string
@@ -673,7 +674,7 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	require.NoError(t, err)
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc:    acceptingKlineDatasetSource{},
 	}
 
@@ -732,7 +733,7 @@ func TestUpdateTaskRejectsChangingSubjectTags(t *testing.T) {
 	require.NoError(t, err)
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc: validationDatasetSource{
 			ids.DatasetID: {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", SubjectTags: []string{"old_tag"}, Attributes: map[string]string{"market_type": "spot"}},
 		},
@@ -761,7 +762,7 @@ func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 	require.NoError(t, err)
 	service := &Service{
 		taskRepo:      db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
+		resultManager: taskresult.NewManagerWithAPI(metadata),
 		datasetSrc:    failingDatasetSource{},
 	}
 
@@ -780,7 +781,7 @@ func TestCreateTaskCompensatesResultWhenDatasetValidationFails(t *testing.T) {
 }
 
 func TestCreateTaskRejectsDuplicateNameWithinSpace(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
@@ -805,7 +806,7 @@ func TestCreateTaskRejectsDuplicateNameWithinSpace(t *testing.T) {
 }
 
 func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db"), DefaultIngest: markets.DefaultIngest})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
@@ -1014,7 +1015,7 @@ func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T
 	require.NoError(t, sqlErr)
 
 	metadata := newTaskResultMetadataFake(ids, owner.TaskID)
-	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}
+	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 	rsp, err := service.DeleteTask(ctx, &pb.DeleteTaskReq{SpaceId: owner.SpaceID, TaskId: owner.TaskID, DeleteResultData: true})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
@@ -1129,4 +1130,53 @@ func TestValidateCollectionTaskTagRoutesFundingRate(t *testing.T) {
 	// 不选这个字段时行为不变。
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"1m"}`
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
+}
+
+// 建任务不填采集方式时等于市场默认值（crypto 是 stream）；填了就用填的；旧取值与任务参数里的旧字段都被拒绝。
+func TestCreateTaskIngestDefaultsToTheMarketValue(t *testing.T) {
+	ctx := context.Background()
+	create := func(t *testing.T, dataType, ingest string, extra map[string]any) (*Service, *taskResultMetadataFake, *pb.CreateTaskRsp) {
+		t.Helper()
+		metadata := &taskResultMetadataFake{datasets: map[string]*storagepb.Dataset{}, views: map[string]*storagepb.View{}}
+		service := &Service{
+			taskRepo:      openCollectorTestStore(t).Tasks(),
+			resultManager: taskresult.NewManagerWithAPI(metadata),
+			datasetSrc:    acceptingKlineDatasetSource{},
+		}
+		values := map[string]any{"provider": "binance", "market_type": "spot", "subject_tags": []any{"binance_spot"}, "frequency": "1m"}
+		for key, value := range extra {
+			values[key] = value
+		}
+		params, err := structpb.NewStruct(values)
+		require.NoError(t, err)
+		rsp, err := service.CreateTask(ctx, &pb.CreateTaskReq{Task: &pb.CollectionTask{SpaceId: "crypto", TaskName: "现货 K 线", DataType: dataType, Ingest: ingest, CollectParams: params}})
+		require.NoError(t, err)
+		return service, metadata, rsp
+	}
+	ingestOf := func(t *testing.T, service *Service, rsp *pb.CreateTaskRsp) string {
+		t.Helper()
+		require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+		detail, err := service.GetTaskDetail(ctx, &pb.GetTaskDetailReq{SpaceId: "crypto", TaskId: rsp.GetTaskId()})
+		require.NoError(t, err)
+		return detail.GetTask().GetIngest()
+	}
+
+	service, _, rsp := create(t, "kline", "", nil)
+	require.Equal(t, "stream", ingestOf(t, service, rsp), "不填用 crypto 的市场默认值")
+	service, _, rsp = create(t, "kline", " SCF ", nil)
+	require.Equal(t, "scf", ingestOf(t, service, rsp))
+	// 数据类型大小写不一样也是 K 线任务：存成小写，采集方式照样取市场默认值。
+	service, _, rsp = create(t, " Kline ", "", nil)
+	require.Equal(t, "stream", ingestOf(t, service, rsp))
+	stored, err := service.taskRepo.GetByTaskID(ctx, "crypto", rsp.GetTaskId())
+	require.NoError(t, err)
+	require.Equal(t, domain.DataTypeKline, stored.DataType)
+	require.Equal(t, domain.IngestStreaming, stored.Ingest)
+
+	_, metadata, rsp := create(t, "kline", "pull", nil)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "旧取值 pull 不再接受")
+	require.Empty(t, metadata.datasets, "被拒绝的请求不准备结果数据集")
+	_, metadata, rsp = create(t, "kline", "", map[string]any{"ingest": "stream", "executor": "scf"})
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), "“推送加云函数补采”无法表达")
+	require.Empty(t, metadata.datasets)
 }

@@ -111,7 +111,7 @@ func (e *fakeManagedEngine) ListManagedIndexes(context.Context) ([]string, error
 
 func newCleanupService(t *testing.T, engine *fakeManagedEngine) *Service {
 	t.Helper()
-	svc, err := New(t.TempDir(), "view-secret")
+	svc, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

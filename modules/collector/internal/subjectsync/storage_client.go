@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -24,18 +23,13 @@ type metadataClient interface {
 // independently testable and prevents accidental writes outside metadata.
 type StorageClient struct {
 	client metadataClient
-	auth   *storagepb.AuthInfo
 }
 
 func NewStorageClient(gateway gatewayclient.Invoker) (*StorageClient, error) {
-	auth, err := marketstorage.ResolveStorageAuthInfo(marketstorage.InstTypeSPOT)
-	if err != nil {
-		return nil, fmt.Errorf("resolve storage auth: %w", err)
-	}
 	if gateway == nil {
 		return nil, fmt.Errorf("collector gateway client is required")
 	}
-	return &StorageClient{client: storageio.NewGatewayClient(gateway), auth: auth}, nil
+	return &StorageClient{client: storageio.NewGatewayClient(gateway)}, nil
 }
 
 func (c *StorageClient) ListTags(ctx context.Context) ([]*storagepb.Tag, error) {
@@ -44,7 +38,7 @@ func (c *StorageClient) ListTags(ctx context.Context) ([]*storagepb.Tag, error) 
 	}
 	all := make([]*storagepb.Tag, 0)
 	for page := uint32(1); ; page++ {
-		rsp, err := c.client.ListTags(ctx, &storagepb.ListTagsReq{AuthInfo: c.auth, Page: &storagepb.Page{Page: page, Size: storagePageSize}})
+		rsp, err := c.client.ListTags(ctx, &storagepb.ListTagsReq{Page: &storagepb.Page{Page: page, Size: storagePageSize}})
 		if err != nil {
 			return nil, fmt.Errorf("list tags: %w", err)
 		}
@@ -64,7 +58,7 @@ func (c *StorageClient) ApplyTagSnapshot(ctx context.Context, spaceID, tagID str
 	if err := c.checkReady(); err != nil {
 		return err
 	}
-	rsp, err := c.client.ApplyTagSnapshot(ctx, &storagepb.ApplyTagSnapshotReq{AuthInfo: c.auth, SpaceId: spaceID, TagId: tagID, Items: items})
+	rsp, err := c.client.ApplyTagSnapshot(ctx, &storagepb.ApplyTagSnapshotReq{SpaceId: spaceID, TagId: tagID, Items: items})
 	if err != nil {
 		return fmt.Errorf("apply tag snapshot %s/%s: %w", spaceID, tagID, err)
 	}
@@ -75,7 +69,7 @@ func (c *StorageClient) UpdateSubjectAttributes(ctx context.Context, spaceID str
 	if err := c.checkReady(); err != nil {
 		return 0, 0, err
 	}
-	rsp, err := c.client.UpdateSubjectAttributes(ctx, &storagepb.UpdateSubjectAttributesReq{AuthInfo: c.auth, SpaceId: spaceID, Items: items})
+	rsp, err := c.client.UpdateSubjectAttributes(ctx, &storagepb.UpdateSubjectAttributesReq{SpaceId: spaceID, Items: items})
 	if err != nil {
 		return 0, 0, fmt.Errorf("update subject attributes %s: %w", spaceID, err)
 	}
@@ -86,7 +80,7 @@ func (c *StorageClient) UpdateSubjectAttributes(ctx context.Context, spaceID str
 }
 
 func (c *StorageClient) checkReady() error {
-	if c == nil || c.client == nil || c.auth == nil {
+	if c == nil || c.client == nil {
 		return fmt.Errorf("storage metadata client is not initialized")
 	}
 	return nil

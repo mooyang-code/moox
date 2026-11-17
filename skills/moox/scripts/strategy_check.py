@@ -11,7 +11,7 @@
   task-lag   因子任务从收盘到完成的耗时，按是否落在边界分钟分组（对照其他任务有没有被拖慢）
 
 数据来源：
-  - 策略库：--db 指定本地 SQLite；不指定时经 SSH 只读打开控制机上的生产库（主机取 --control 或 ~/.moox-release.env 的 MOOX_RELEASE_HOST_CONTROL）。
+  - 策略库：--db 指定本地 SQLite；不指定时经 SSH 只读打开控制机上的生产库（主机用 --control 指定）。
   - 日志：--engine-log / --strategy-log 指定本地文件；不指定时经 SSH 只抓取相关行（因子机用 --factor-host，控制机同上）。
   - 日志时间戳是主机本地时间，用 --log-tz 指定时区（生产为 +08:00）。
 """
@@ -19,16 +19,15 @@ import argparse
 import csv
 import datetime as dt
 import json
-import os
 import re
 import subprocess
 import sys
 from collections import Counter
 from decimal import ROUND_DOWN, Decimal
 
-REMOTE_DB = '$(readlink -f /data/moox/prod/current)/strategy/data/strategy.sqlite'
-ENGINE_LOG = '/data/moox/factor-engine/logs/factor-engine.log'
-STRATEGY_LOG = '/data/moox/prod/current/strategy/logs/trpc.log'
+REMOTE_DB = '/data/moox/data/strategy/strategy.sqlite'
+ENGINE_LOG = '/data/moox/logs/factor-engine/trpc.log'
+STRATEGY_LOG = '/data/moox/logs/strategy/trpc.log'
 UTC = dt.timezone.utc
 
 # 在策略库上执行的只读查询；本地直接执行，远程经 SSH 交给控制机上的 python3。
@@ -69,18 +68,9 @@ def fail(message):
     raise SystemExit(f'strategy_check: {message}')
 
 
-def release_host(name):
-    path = os.path.expanduser('~/.moox-release.env')
-    if os.path.exists(path):
-        for line in open(path, encoding='utf-8'):
-            if line.startswith(name + '='):
-                return line.split('=', 1)[1].strip().strip('"\'')
-    return ''
-
-
 def ssh(host, command, stdin=None):
     if not host:
-        fail('没有主机：用参数指定，或在 ~/.moox-release.env 里配置')
+        fail('没有主机：用 --control（控制机）或 --factor-host（因子机）指定 SSH 目标')
     done = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', host, command],
                           input=stdin, capture_output=True, text=True)
     if done.returncode not in (0, 1):  # grep 没有匹配时返回 1
@@ -106,7 +96,7 @@ def query_db(args, mode, ids):
         if done.returncode:
             fail(f'读取 {args.db} 失败：{done.stderr.strip()}')
         return json.loads(done.stdout)
-    host = args.control or release_host('MOOX_RELEASE_HOST_CONTROL')
+    host = args.control
     quoted = ' '.join("'%s'" % i for i in ids)
     return json.loads(ssh(host, f'python3 - "{REMOTE_DB}" {mode} {quoted}', stdin=DB_SCRIPT))
 
@@ -322,7 +312,7 @@ def cmd_latency(args):
         text = open(args.strategy_log, encoding='utf-8', errors='replace').read()
     else:
         ids = '|'.join(re.escape(i) for i, _ in pairs.values())
-        text = ssh(args.control or release_host('MOOX_RELEASE_HOST_CONTROL'),
+        text = ssh(args.control,
                    f"grep -a '耗时：' {args.strategy_log_path} | grep -a -E '{ids}'")
     timing = {}
     for line in text.splitlines():
@@ -407,12 +397,12 @@ def main():
     def db_args(p):
         p.add_argument('--instance', action='append', help='名称=实例ID，可重复')
         p.add_argument('--db', help='本地策略库 SQLite；不给时经 SSH 只读打开生产库')
-        p.add_argument('--control', help='控制机 SSH 目标；默认取 ~/.moox-release.env')
+        p.add_argument('--control', help='控制机 SSH 目标（user@host）')
 
     def log_args(p):
         p.add_argument('--engine-log', help='本地因子引擎日志；不给时经 SSH 从 --factor-host 抓取')
         p.add_argument('--engine-log-path', default=ENGINE_LOG)
-        p.add_argument('--factor-host', help='因子机 SSH 目标（因子机不在发布主机清单里，要显式给）')
+        p.add_argument('--factor-host', help='因子机 SSH 目标（user@host；只在局域网可达）')
         p.add_argument('--log-tz', default='+08:00', help='日志时间戳的时区')
         p.add_argument('--bar-minutes', type=int, default=5, help='周期长度（分钟）；bar_end = period_time + 周期')
 

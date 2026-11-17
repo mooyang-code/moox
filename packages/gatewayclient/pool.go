@@ -12,7 +12,7 @@ import (
 // PoolConfig 是内部网关客户端连接池的可调参数，零值表示使用默认。
 type PoolConfig struct {
 	// MinIdle 是每个地址保持的最少打开连接数（预热）：不足时由后台协程补齐，请求路径上复用现成连接。
-	// 默认 0；整分钟并发写入的 Access 设置为 16。
+	// 默认 0；整分钟并发写入的调用方可以调大。
 	MinIdle int `yaml:"min_idle"`
 	// MaxIdle 是每个（地址，协议）子池保留的空闲连接上限，不是客户端的总连接数上限。默认 32。
 	MaxIdle int `yaml:"max_idle"`

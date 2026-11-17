@@ -1,5 +1,7 @@
 PRAGMA foreign_keys = ON;
 
+-- c_ingest 是 K 线任务的采集方式：stream（collector-stream 接收推送，补采走它的本地执行端）、
+-- scf（云函数定时拉取，补采走云函数）、local（collector-stream 本地定时拉取与补采）；合成任务为空。
 CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -7,6 +9,7 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_task_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
+    c_ingest TEXT NOT NULL DEFAULT '',
     c_definition_hash TEXT NOT NULL DEFAULT '',
     c_collect_params TEXT NOT NULL DEFAULT '{}',
     c_enabled INTEGER NOT NULL DEFAULT 1,
@@ -16,7 +19,9 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_result_dataset_id TEXT NOT NULL DEFAULT '',
     c_result_view_id TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_ingest IN ('', 'stream', 'scf', 'local')),
+    CHECK ((c_data_type = 'kline') = (c_ingest <> ''))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_task ON t_collector_tasks (c_space_id, c_task_id);
@@ -78,6 +83,25 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+-- 标的时间线：一个采集数据集的一个频率从 c_effective_from（K 线开始时间，Unix 秒）起应有的序列。
+-- c_series 是登记给 Storage 的那份序列（标的加序列标签）；'[]' 表示从这一刻起不再采集。
+-- 行与采集计划记录在同一个事务里写入：序列行在 Storage 确认登记之后，停止行在计划建立时。
+-- 按写入先后（c_id）重放：一段的结束时间是同一数据集同一频率后一行的生效点；同一生效点后写的覆盖先写的；
+-- 重新登记时整个空间的行一起删除。合成目标数据集不在这张表里。
+CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_effective_from INTEGER NOT NULL,
+    c_series_hash TEXT NOT NULL DEFAULT '',
+    c_series TEXT NOT NULL DEFAULT '[]',
+    c_lateness_s INTEGER NOT NULL DEFAULT 0,
+    c_output_fields TEXT NOT NULL DEFAULT '[]',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_space_id, c_dataset_id, c_frequency, c_effective_from)
+);
 
 -- 空间的采集暂停开关：暂停期间 Collector 不对账、不推进补采，并已停用该空间的 SCF 定时器；重启后保持。
 -- c_paused 是手工暂停，c_system_paused 是模块生命周期的系统暂停，任一个为 1 空间就是暂停的，两者各自恢复、互不覆盖。
@@ -209,21 +233,6 @@ CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (
     c_scanned_until DATETIME NOT NULL,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
-);
-
--- 每个数据集的采集方式：stream（WS 推送）或 pull（定时拉取）；executor 是拉取与补采的执行端（scf 云函数或 local 本地执行端）。
--- c_force 为 1 表示最近一次切换用了 --force：交接计划不等失联的推送或本地执行端确认，计划生效后清零。
-CREATE TABLE IF NOT EXISTS t_collector_ingest_modes (
-    c_space_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_mode TEXT NOT NULL,
-    c_executor TEXT NOT NULL,
-    c_force INTEGER NOT NULL DEFAULT 0,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_dataset_id),
-    CHECK (c_mode IN ('stream', 'pull')),
-    CHECK (c_executor IN ('scf', 'local')),
-    CHECK (c_force IN (0, 1))
 );
 
 -- collector-stream 实例的心跳与已应用的计划：c_applied 是已应用的计划记录 ID 与阶段，c_status 是连接状态；
@@ -376,3 +385,45 @@ CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
+
+-- 云账号：Collector 调腾讯云用的账号，密钥本身在 Admin 的 SecretMgr（c_credential_secret_id 指向它，类别 cloud、厂商 tencent）。
+-- c_cos_region、c_cos_bucket 是代码包上传用的 COS 桶。重置时保留。
+CREATE TABLE IF NOT EXISTS t_collector_cloud_accounts (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_account_id TEXT NOT NULL,
+    c_account_name TEXT NOT NULL DEFAULT '',
+    c_provider TEXT NOT NULL DEFAULT 'tencent',
+    c_credential_secret_id TEXT NOT NULL,
+    c_app_id TEXT NOT NULL DEFAULT '',
+    c_cos_region TEXT NOT NULL DEFAULT '',
+    c_cos_bucket TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_account_id)
+);
+
+-- 云函数代码包：每次上传一行，c_status 从 pending（已发上传地址）变成 available（COS 对象已核对）。
+-- 函数总是滚动到同一包名的最新可用包；每个（空间、包名）只留最新 3 个可用包，更早的连同 COS 对象删除，
+-- 超过 6 小时仍是 pending 的也删除。重置时保留。
+CREATE TABLE IF NOT EXISTS t_collector_function_packages (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_package_id TEXT NOT NULL,
+    c_package_name TEXT NOT NULL,
+    c_version TEXT NOT NULL DEFAULT '',
+    c_runtime TEXT NOT NULL DEFAULT '',
+    c_file_size INTEGER NOT NULL DEFAULT 0,
+    c_file_md5 TEXT NOT NULL DEFAULT '',
+    c_cloud_account_id TEXT NOT NULL,
+    c_cos_region TEXT NOT NULL DEFAULT '',
+    c_cos_bucket TEXT NOT NULL DEFAULT '',
+    c_cos_path TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('pending', 'available')),
+    UNIQUE (c_space_id, c_package_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_function_packages_name
+ON t_collector_function_packages (c_space_id, c_package_name, c_id);

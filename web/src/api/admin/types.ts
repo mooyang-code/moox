@@ -44,6 +44,8 @@ export interface DeploymentHost {
   status: DeploymentStatus;
   /** direct：可直达；outbound：只能出站，经控制主机网关反向连接中转 */
   reachability?: "direct" | "outbound";
+  /** 这台主机的网关是否开外部入口（11004），云函数、Skill 等外部身份从这里进来 */
+  external_entry?: boolean;
   description?: string;
   created_at?: string;
   updated_at?: string;
@@ -55,19 +57,22 @@ export interface ComponentDeployment {
   created_at?: string;
   updated_at?: string;
 }
-export interface CatalogGrant {
-  methods: string[];
-  callers: string[];
+/** 服务目录里的一个方法：callers 是能调它的机器身份，operators 收窄 console 与 moox-cli（省略表示两者都能调，[] 表示都不能调）。 */
+export interface CatalogMethod {
+  name: string;
+  read_only?: boolean;
+  idempotent?: boolean;
+  timeout_ms?: number;
+  callers?: string[];
+  operators?: string[];
 }
 export interface CatalogService {
   path: string;
   port: number;
-  methods: string[];
-  acl: CatalogGrant[];
+  methods: CatalogMethod[];
   timeout_ms?: number;
   max_body_bytes?: number;
   console_name?: string;
-  read_only_methods?: string[];
 }
 export interface CatalogComponent {
   id: string;
@@ -79,14 +84,16 @@ export interface CatalogComponent {
   /** 外部程序（因子引擎、归档 worker）：由 systemd 用户服务托管，不经主机网关路由 */
   external_program?: boolean;
   ports?: number[];
-  health: { kind: string; port?: number; loopback?: boolean; ready_body?: string };
+  /** 健康端口只听本机（/healthz、/readyz、/metrics），组件健康看上报 */
+  health: { port: number };
   services?: CatalogService[];
   doctor?: Record<string, unknown>;
 }
 export interface ComponentCatalog {
   version: number;
+  /** 不对应部署的调用身份；external 为真的从入口主机网关的外部入口（11004）进入。 */
+  identities: { id: string; external: boolean }[];
   components: CatalogComponent[];
-  principals: { id: string; allow: { service: string; methods: string[] }[] }[];
 }
 export interface CatalogResponse {
   catalog_yaml: string;
@@ -118,14 +125,8 @@ export interface HostGatewayRoute {
 }
 export interface HostRoutesResponse {
   host_id: string;
-  definition_hash: string;
   routes?: HostGatewayRoute[];
   gateway_status?: HostGatewayRuntimeStatus;
   snapshot_schema_version: number;
   compiled_at: string;
-}
-export interface ServiceDirectory {
-  version?: string;
-  services?: Record<string, { host_ids?: string[] }>;
-  hosts?: Record<string, { address?: string; private_address?: string; region?: string; relay?: string }>;
 }

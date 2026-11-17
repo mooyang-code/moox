@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
 const (
@@ -24,10 +23,6 @@ const (
 	probePrefix   = ".moox-doctor-probe-"
 )
 
-type HealthAuth struct {
-	Version, AccessKey, SecretKey string
-}
-
 type ProbeResult struct {
 	StatusCode int
 	Body       []byte
@@ -35,17 +30,36 @@ type ProbeResult struct {
 	ObservedAt time.Time
 }
 
+// HealthProbe 在节点上请求组件只听本机的健康端口：本节点直接请求 127.0.0.1，
+// 其他主机经 SSH 转发到目标机的 127.0.0.1（健康端口不监听网卡地址、不验签）。
+type HealthProbe func(ctx context.Context, nodeID string, port int, path string) (ProbeResult, error)
+
+// ErrNodeUnreachable 表示 SSH 连不上节点，诊断无法在目标机上请求本机端口（结论记为无法判断，不算组件故障）。
+var ErrNodeUnreachable = errors.New("无法经 SSH 连到节点")
+
+// LoopbackURL 是本机回环地址上健康端口的地址。
+func LoopbackURL(port int, path string) string {
+	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) + path
+}
+
+// LocalHealthProbe 只探测本节点：没有 moox.toml（无法 SSH）时用它，其他节点一律报不可达。
+func LocalHealthProbe(localNodeID string) HealthProbe {
+	return func(ctx context.Context, nodeID string, port int, path string) (ProbeResult, error) {
+		if nodeID != localNodeID {
+			return ProbeResult{}, fmt.Errorf("%w %s：读不到 moox.toml，只能探测本机", ErrNodeUnreachable, nodeID)
+		}
+		return HTTPProber{}.Get(ctx, LoopbackURL(port, path))
+	}
+}
+
+// HTTPProber 请求本机回环地址上的 /healthz、/readyz、/metrics：不跟随重定向、不走代理、响应有大小上限。
 type HTTPProber struct {
 	Client    *http.Client
-	Auth      HealthAuth
 	Now       func() time.Time
 	AllowHost func(string) bool
 }
 
 func (p HTTPProber) Get(ctx context.Context, rawURL string) (ProbeResult, error) {
-	if p.Auth.SecretKey == "" || p.Auth.AccessKey == "" {
-		return ProbeResult{}, fmt.Errorf("health probe HMAC credentials are required")
-	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return ProbeResult{}, fmt.Errorf("probe URL must be an absolute HTTP URL without query or fragment")
@@ -70,22 +84,10 @@ func (p HTTPProber) Get(ctx context.Context, rawURL string) (ProbeResult, error)
 	if p.Now != nil {
 		now = p.Now().UTC()
 	}
-	nonce, err := requestauth.NewNonce()
-	if err != nil {
-		return ProbeResult{}, err
-	}
-	signature, err := requestauth.Sign(p.Auth.SecretKey, requestauth.Material{Method: http.MethodGet, Path: parsed.EscapedPath(), Timestamp: now.Unix(), Nonce: nonce})
-	if err != nil {
-		return ProbeResult{}, err
-	}
-	version := p.Auth.Version
-	if version == "" {
-		version = "moox-health-v1"
-	}
-	req.Header.Set("X-Moox-Health-Auth", strings.Join([]string{version, p.Auth.AccessKey, strconv.FormatInt(now.Unix(), 10), nonce, signature}, "/"))
 	client := p.Client
 	if client == nil {
-		client = &http.Client{Timeout: probeTimeout}
+		// 不复用连接：经 SSH 转发时每次探测的本地端口都不同，留着空闲连接只会占住转发通道。
+		client = &http.Client{Timeout: probeTimeout, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 	}
 	clientCopy := *client
 	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {

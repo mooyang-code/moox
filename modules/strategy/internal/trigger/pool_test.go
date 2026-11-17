@@ -81,13 +81,7 @@ func newPoolHarness(t *testing.T, poolYaml string, members []input.PoolMember, a
 		t.Fatal(err)
 	}
 	session := "session-1"
-	if err := repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), MembersJSON: string(membersJSON), CreatedAt: bar0}, poolYaml); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", false, &session, raw, bar0); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, raw, bar0); err != nil {
+	if err := repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: hash, ResolvedJSON: string(raw), MembersJSON: string(membersJSON), CreatedAt: bar0}, poolYaml); err != nil {
 		t.Fatal(err)
 	}
 	h := &harness{t: t, repo: repo, loader: &fakeLoader{frames: map[int64]map[string]map[string]float64{}, prices: map[int64]map[string]float64{}}, observer: &recordingObserver{}, now: start, session: session}

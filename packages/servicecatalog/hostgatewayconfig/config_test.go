@@ -9,7 +9,7 @@ import (
 
 func TestConfigRoundTripAndReleaseRelativePaths(t *testing.T) {
 	for _, host := range []string{"control", "overseas"} {
-		config := Default(host, "control", "2001:db8::1", "fixture-key-id")
+		config := Default(host, "control", "2001:db8::1")
 		raw, err := Encode(config)
 		if err != nil {
 			t.Fatal(err)
@@ -27,7 +27,7 @@ func TestConfigRoundTripAndReleaseRelativePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		base := filepath.Dir(filepath.Dir(dir))
-		if loaded.Host != config.Host || loaded.Control.KeyID != config.Control.KeyID || loaded.Control.KeyFile != filepath.Join(base, "secrets", "caller-host-gateway.key") || loaded.TLS.CAFile != filepath.Join(base, "certs", "moox-ca.crt") || loaded.Store.Path != filepath.Join(base, "data", "host-gateway") {
+		if loaded.Host != config.Host || loaded.Control.KeyFile != filepath.Join(base, "secrets", "host.key") || loaded.TLS.CAFile != filepath.Join(base, "secrets", "moox-ca.crt") || loaded.Store.Path != filepath.Join(base, "data", "host-gateway") {
 			t.Fatalf("incorrect release path resolution: %+v", loaded)
 		}
 		want := "[2001:db8::1]:11003"
@@ -44,19 +44,19 @@ func TestConfigRejectsInvalidIdentityListenersAndControlEndpoint(t *testing.T) {
 	for _, change := range []func(*Config){
 		func(c *Config) { c.Host.ID = "Control" },
 		func(c *Config) { c.Control.HostID = "../control" },
-		func(c *Config) { c.Control.Caller = "host-gateway@storage" },
-		func(c *Config) { c.Control.KeyID = "" },
-		func(c *Config) { c.Control.KeyID = "key\x01" },
 		func(c *Config) { c.Server.LocalAddr = "0.0.0.0:11002" },
+		func(c *Config) { c.Server.HealthAddr = "0.0.0.0:11012" },
 		func(c *Config) { c.Server.RemoteAddr = "localhost:11003" },
 		func(c *Config) { c.Server.HealthAddr = c.Server.RemoteAddr },
+		func(c *Config) { c.Server.ExternalAddr = "localhost:11004" },
+		func(c *Config) { c.Server.ExternalAddr = c.Server.RemoteAddr },
 		func(c *Config) { c.Control.Target = "https://control:11003" },
 		func(c *Config) { c.Control.Target = "127.0.0.1:11003" },
 		func(c *Config) { c.Control.Target = "192.0.2.1:11112" },
 		func(c *Config) { c.TLS.CAFile = "" },
 		func(c *Config) { c.Control.KeyFile = "bad\npath" },
 	} {
-		config := Default("control", "control", "192.0.2.1", "fixture-key")
+		config := Default("control", "control", "192.0.2.1")
 		change(&config)
 		if err := config.Validate(); err == nil {
 			t.Fatalf("accepted invalid configuration: %+v", config)
@@ -65,7 +65,7 @@ func TestConfigRejectsInvalidIdentityListenersAndControlEndpoint(t *testing.T) {
 }
 
 func TestConfigStrictBoundedYAMLNeverEchoesUnknownValues(t *testing.T) {
-	raw, err := Encode(Default("control", "control", "192.0.2.1", "fixture-key"))
+	raw, err := Encode(Default("control", "control", "192.0.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,5 +80,23 @@ func TestConfigStrictBoundedYAMLNeverEchoesUnknownValues(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "fixture-do-not-echo") {
 			t.Fatalf("expected redacted validation error, got %v", err)
 		}
+	}
+}
+
+// 外部入口的监听地址可选：不写就不开；入口主机上部署写成 0.0.0.0:11004，经编码、载入后原样保留。
+func TestExternalEntryAddressIsOptionalAndRoundTrips(t *testing.T) {
+	config := Default("storage", "control", "192.0.2.1")
+	raw, err := Encode(config)
+	if err != nil || strings.Contains(string(raw), "external_addr") {
+		t.Fatalf("没开外部入口时不该写 external_addr：%v\n%s", err, raw)
+	}
+	config.Server.ExternalAddr = ExternalEntryAddr
+	raw, err = Encode(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Decode(strings.NewReader(string(raw)))
+	if err != nil || loaded.Server.ExternalAddr != "0.0.0.0:11004" {
+		t.Fatalf("external_addr = %q, err = %v", loaded.Server.ExternalAddr, err)
 	}
 }

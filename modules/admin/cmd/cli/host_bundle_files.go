@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,45 +10,84 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
 	"github.com/mooyang-code/moox/modules/admin/internal/privatefiles"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/keys"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
-	"gopkg.in/yaml.v3"
 )
+
+// currentKeys 是目标机上现有私钥对应的公钥（由部署命令在目标机上算出后传来）；没有私钥时为空。
+type currentKeys struct{ host, scfCollector string }
+
+// signingKeys 是一台主机这次身份包里的签名材料。私钥只在新签发时有，写进身份包后 Admin 不再保留。
+type signingKeys struct {
+	hostPublic, scfCollectorPublic string
+	hostKey, scfCollectorKey       []byte
+}
 
 type hostBundleMaterial struct {
 	host, control hostbundle.Host
-	signing       []keys.SigningKey
-	access        []keys.VerificationKey
-	caInfo        hostbundle.CAInfo
-	expectedHash  string
-	operator      bool
+	keys          signingKeys
+	// operatorPublic 是登记着的 moox-cli 公钥，只有 bootstrap 填。
+	operatorPublic string
+	caInfo         hostbundle.CAInfo
 }
 
-func hostSigningCallers(host hostbundle.Host, operator bool) []string {
-	callers := append([]string{"host-agent", "host-gateway@" + host.HostID}, host.Components...)
-	if slices.Contains(host.Components, "console-proxy") {
-		callers = append(callers, "console")
+func newSigningKey() (public string, file []byte, err error) {
+	key, err := gatewayauth.GenerateSigningKey()
+	if err != nil {
+		return "", nil, err
 	}
-	if slices.Contains(host.Components, "collector") {
-		callers = append(callers, "scf-collector")
-	}
-	if operator {
-		callers = append(callers, "moox-cli")
-	}
-	callers = slices.DeleteFunc(callers, func(caller string) bool { return caller == "host-gateway" })
-	slices.Sort(callers)
-	return slices.Compact(callers)
+	return gatewayauth.EncodePublicKey(gatewayauth.Credentials{Key: key}.PublicKey()), []byte(gatewayauth.EncodeSigningKey(key) + "\n"), nil
 }
 
-// publishHostBundle is shared by offline bootstrap and normal deployments.
-// A fresh private directory is the publication boundary; no partial directory
-// is advertised and neither the Admin master key nor CA private key is copied.
+// ensureSigningKeys 决定这台主机的签名密钥：目标机上现有私钥的公钥和登记的一致就原样沿用（例行升级、续证书都不换密钥）；
+// 不一致、目标机上没有私钥，或显式要求（rotate）时新生成一把并登记公钥，旧私钥随即作废，没有新旧并存。
+// 部署了 collector 的主机另管 scf-collector 的私钥，规则相同（rotate 只换主机密钥）。
+func ensureSigningKeys(ctx context.Context, store *keys.Store, host hostbundle.Host, current currentKeys, rotate bool) (signingKeys, error) {
+	var result signingKeys
+	registered, err := store.HostPublicKey(ctx, host.HostID)
+	if err != nil {
+		return result, err
+	}
+	if rotate || current.host == "" || current.host != registered {
+		public, file, err := newSigningKey()
+		if err != nil {
+			return result, err
+		}
+		if err := store.SetHostPublicKey(ctx, host.HostID, public); err != nil {
+			return result, err
+		}
+		registered, result.hostKey = public, file
+	}
+	result.hostPublic = registered
+	if !slices.Contains(host.Components, "collector") {
+		return result, nil
+	}
+	registered, err = store.Identity(ctx, "scf-collector")
+	if err != nil && !errors.Is(err, keys.ErrNotRegistered) {
+		return result, err
+	}
+	if current.scfCollector == "" || current.scfCollector != registered {
+		public, file, err := newSigningKey()
+		if err != nil {
+			return result, err
+		}
+		if err := store.SetIdentity(ctx, "scf-collector", public); err != nil {
+			return result, err
+		}
+		registered, result.scfCollectorKey = public, file
+	}
+	result.scfCollectorPublic = registered
+	return result, nil
+}
+
+// publishHostBundle 把一台主机的身份包写到一个新的私有目录：主机签名私钥（新签发时）、主机证书、根证书，
+// 控制机另有 scf-collector 的私钥（新签发时）。目录先写在点开头的临时名下，写全了才改名，不会留下半个包。
+// Admin 主密钥与 CA 私钥不进包。
 func publishHostBundle(parentDir string, material hostBundleMaterial, ca *pki.Store) (hostbundle.Metadata, error) {
 	parent, err := privatefiles.OpenRoot(parentDir)
 	if err != nil {
@@ -68,82 +108,22 @@ func publishHostBundle(parentDir string, material hostBundleMaterial, ca *pki.St
 		return hostbundle.Metadata{}, err
 	}
 	defer stage.Close()
-	stageDir := filepath.Join(parentDir, stageName)
 	result := hostbundle.Metadata{
-		Version: 1, HostID: material.host.HostID, ControlHostID: material.control.HostID,
-		BundleDir: filepath.Join(parentDir, finalName), ConfigFile: "host-gateway/config/app.yaml",
-		CA: material.caInfo, ExpectedHash: material.expectedHash,
+		Version: 2, HostID: material.host.HostID, ControlHostID: material.control.HostID,
+		BundleDir:     filepath.Join(parentDir, finalName),
+		SignPublicKey: material.keys.hostPublic, SignKeyIssued: material.keys.hostKey != nil,
+		SCFCollectorPublicKey: material.keys.scfCollectorPublic, SCFCollectorKeyIssued: material.keys.scfCollectorKey != nil,
+		OperatorPublicKey: material.operatorPublic, CA: material.caInfo,
 	}
-	wanted := hostSigningCallers(material.host, material.operator)
-	var gatewayKeyID string
-	for _, key := range material.signing {
-		if !slices.Contains(wanted, key.Caller) || slices.ContainsFunc(result.Credentials, func(c hostbundle.Credential) bool { return c.Caller == key.Caller }) {
-			return hostbundle.Metadata{}, errors.New("host bundle contains an unrelated or duplicate signing identity")
+	for name, raw := range map[string][]byte{hostbundle.HostKeyFile: material.keys.hostKey, hostbundle.SCFCollectorKeyFile: material.keys.scfCollectorKey} {
+		if raw == nil {
+			continue
 		}
-		caller, directory := key.Caller, "secrets"
-		if caller == "moox-cli" {
-			directory = "operator"
-		}
-		if caller == "host-gateway@"+material.host.HostID {
-			caller, gatewayKeyID = "host-gateway", key.KeyID
-		}
-		root, err := privatefiles.OpenSubRoot(stage, directory)
-		if err != nil {
+		if err := privatefiles.Write(stage, name, raw); err != nil {
 			return hostbundle.Metadata{}, err
 		}
-		name := "caller-" + caller + ".key"
-		err = privatefiles.Write(root, name, []byte(key.Credentials().Secret+"\n"))
-		if err == nil && key.Caller == "moox-cli" {
-			var config []byte
-			config, err = yaml.Marshal(hostbundle.OperatorConfig{Caller: "moox-cli", KeyID: key.KeyID, KeyFile: name})
-			if err == nil {
-				err = privatefiles.Write(root, "gateway-client.yaml", config)
-			}
-		}
-		root.Close()
-		if err != nil {
-			return hostbundle.Metadata{}, err
-		}
-		result.Credentials = append(result.Credentials, hostbundle.Credential{Caller: key.Caller, KeyID: key.KeyID, KeyFile: filepath.ToSlash(filepath.Join(directory, name))})
 	}
-	if gatewayKeyID == "" || len(result.Credentials) != len(wanted) {
-		return hostbundle.Metadata{}, errors.New("host bundle signing identities are incomplete")
-	}
-	slices.SortFunc(result.Credentials, func(a, b hostbundle.Credential) int {
-		return strings.Compare(a.Caller, b.Caller)
-	})
-	if slices.Contains(material.host.Components, "access") {
-		if len(material.access) == 0 {
-			return hostbundle.Metadata{}, errors.New("Access requires external verification keys")
-		}
-		if err := writeAccessKeys(material.access, filepath.Join(stageDir, "secrets", "access")); err != nil {
-			return hostbundle.Metadata{}, err
-		}
-		result.VerificationFile = "secrets/access/access-verification.json"
-	}
-	config, err := hostgatewayconfig.Encode(hostgatewayconfig.Default(material.host.HostID, material.control.HostID, material.control.Address, gatewayKeyID))
-	if err != nil {
-		return hostbundle.Metadata{}, err
-	}
-	gateway, err := privatefiles.OpenSubRoot(stage, "host-gateway")
-	if err != nil {
-		return hostbundle.Metadata{}, err
-	}
-	defer gateway.Close()
-	configRoot, err := privatefiles.OpenSubRoot(gateway, "config")
-	if err != nil {
-		return hostbundle.Metadata{}, err
-	}
-	defer configRoot.Close()
-	if err := privatefiles.Write(configRoot, "app.yaml", config); err != nil {
-		return hostbundle.Metadata{}, err
-	}
-	certs, err := privatefiles.OpenSubRoot(stage, "certs")
-	if err != nil {
-		return hostbundle.Metadata{}, err
-	}
-	defer certs.Close()
-	issued, err := ca.Issue(pki.HostIdentity{HostID: material.host.HostID, Address: material.host.Address, PrivateAddress: material.host.PrivateAddress, Outbound: material.host.Reachability != ""}, filepath.Join(stageDir, "certs", "host-gateway"))
+	issued, err := ca.Issue(pki.HostIdentity{HostID: material.host.HostID, Address: material.host.Address, PrivateAddress: material.host.PrivateAddress, Outbound: material.host.Reachability != ""}, filepath.Join(parentDir, stageName, "tls"))
 	if err != nil {
 		return hostbundle.Metadata{}, err
 	}
@@ -151,15 +131,19 @@ func publishHostBundle(parentDir string, material hostBundleMaterial, ca *pki.St
 		return hostbundle.Metadata{}, errors.New("MooX CA changed while issuing the host certificate")
 	}
 	result.Certificate = issued.CertificateInfo
-	if err := certs.Rename("host-gateway/moox-ca.crt", "moox-ca.crt"); err != nil {
+	for from, to := range map[string]string{"tls/server.crt": hostbundle.HostCertificateFile, "tls/server.key": hostbundle.HostTLSKeyFile, "tls/moox-ca.crt": hostbundle.CAFile} {
+		if err := stage.Rename(from, to); err != nil {
+			return hostbundle.Metadata{}, err
+		}
+	}
+	if err := stage.Remove("tls"); err != nil {
 		return hostbundle.Metadata{}, err
 	}
 	result.Files, err = hostBundleInventory(stage)
 	if err != nil {
 		return hostbundle.Metadata{}, err
 	}
-	// Public identities, paths and hashes only. The separate operator directory
-	// is present only during control bootstrap and must not become a service key.
+	// 清单里只有公开的身份、路径与摘要。
 	metadata, err := json.Marshal(result)
 	if err != nil {
 		return hostbundle.Metadata{}, err
@@ -167,10 +151,8 @@ func publishHostBundle(parentDir string, material hostBundleMaterial, ca *pki.St
 	if err := privatefiles.Write(stage, "bundle.json", append(metadata, '\n')); err != nil {
 		return hostbundle.Metadata{}, err
 	}
-	for _, root := range []*os.Root{configRoot, gateway, certs, stage} {
-		if err := root.Close(); err != nil {
-			return hostbundle.Metadata{}, err
-		}
+	if err := stage.Close(); err != nil {
+		return hostbundle.Metadata{}, err
 	}
 	if err := parent.Rename(stageName, finalName); err != nil {
 		return hostbundle.Metadata{}, err

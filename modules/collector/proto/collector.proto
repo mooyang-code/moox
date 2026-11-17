@@ -33,6 +33,9 @@ message CollectionTask {
   string prepare_state = 13;  // pending/waiting_view/ready/error
   string last_error = 14;
   TaskResult result = 15;
+  // ingest 是 K 线任务的采集方式：stream（collector-stream 接收推送）、scf（云函数定时拉取）、local（collector-stream 本地定时拉取）。
+  // 创建时不填用市场默认值；创建后只能用 SetIngestMode 切换。合成任务为空。
+  string ingest = 16;
 }
 
 // TaskResult 是采集任务唯一结果的用户可读摘要。
@@ -629,6 +632,13 @@ message CollectorFunctionStatus {
   repeated CollectorFunctionDataset dataset_subjects = 8;
   // executor 是执行端：scf（云函数）、stream（WS 推送）、local（本地执行端）。
   string executor = 9;
+  // 以下四项是 Collector 内存里最近一次云上读回（只对 scf 函数；Collector 重启后到下一次读回之前为空）。
+  // cloud_exists：云上有这个函数；cloud_timer_matches：定时器与期望一致；cloud_package_latest：代码包是最新的可用包。
+  bool cloud_exists = 10;
+  bool cloud_timer_matches = 11;
+  bool cloud_package_latest = 12;
+  // cloud_read_at 是读回时间（RFC3339），没有读回时为空。
+  string cloud_read_at = 13;
 }
 
 message GetCollectorStatusRsp {
@@ -647,8 +657,18 @@ message GetCollectorStatusRsp {
   string generated_at = 10;
   // stream 是该空间 collector-stream 实例的状态（心跳、连接、最近周期），没有实例时为空。
   StreamWorkerStatus stream = 11;
-  // ingest_modes 是各数据集的采集方式与执行端。
+  // ingest_modes 是各启用的 K 线任务的采集方式。
   repeated IngestMode ingest_modes = 12;
+  // unplanned_functions 是对账器最近一次读回时找到的计划外函数（Collector 内存里的结果，重启后到下一次读回之前为空）。
+  repeated CollectorUnplannedFunction unplanned_functions = 13;
+}
+
+// CollectorUnplannedFunction 是符合本空间命名格式、但不在计划里的云函数：对账器已停用它的定时器，
+// 不会自动删除，等人工用 moox-cli collector function delete 删除。
+message CollectorUnplannedFunction {
+  string name = 1;
+  string region = 2;
+  string namespace = 3;
 }
 
 // ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
@@ -693,17 +713,17 @@ message ReregisterFetchPlanRsp {
   int32 backfill_jobs = 3;
 }
 
-// ===== 采集方式（按数据集）与 WS 推送采集 =====
+// ===== 采集方式（记在 K 线任务上）与 WS 推送采集 =====
 
-// IngestMode 是一个数据集的采集方式：stream（WS 推送）或 pull（定时拉取）；executor 是拉取与补采的执行端（scf 或 local）。
+// IngestMode 是一个 K 线任务（及它的结果数据集）的采集方式：stream（collector-stream 接收推送，补采走它的本地执行端）、
+// scf（云函数定时拉取，补采走云函数）、local（collector-stream 本地定时拉取与补采）。
 message IngestMode {
   string space_id = 1;
   string dataset_id = 2;
-  string mode = 3;
-  string executor = 4;
-  string updated_at = 5;
+  string task_id = 3;
+  string ingest = 4;
   // effective_periods 是正在交接的数据集按频率选定的生效周期 P（RFC3339，K 线开始时间），没有交接时为空。
-  map<string, string> effective_periods = 6;
+  map<string, string> effective_periods = 5;
 }
 
 message GetIngestModeReq {
@@ -718,15 +738,13 @@ message GetIngestModeRsp {
   StreamWorkerStatus stream = 3;
 }
 
-// SetIngestMode 按数据集切换采集方式：dataset_id 为空表示 space_id 的全部数据集。切到 stream 要求 collector-stream 在线；
-// force 用于旧执行端失联的极端故障：不等旧执行端确认，已打开的计划也不再等失联端确认。
+// SetIngestMode 按数据集切换采集方式：dataset_id 为空表示 space_id 的全部 K 线任务。切到 stream 或 local 要求 collector-stream 在线。
+// collector-stream 只是旧执行端且心跳超时时，交接计划不等它确认（固定规则，没有强制开关）。
 message SetIngestModeReq {
   string space_id = 1;
   string dataset_id = 2;
-  string mode = 3;
-  // executor 为空时：stream 默认 local（补采走同进程的本地执行端），pull 默认 scf。
-  string executor = 4;
-  bool force = 5;
+  // ingest 取值 stream、scf、local。
+  string ingest = 3;
 }
 
 message SetIngestModeRsp {
@@ -989,4 +1007,254 @@ service CollectMgr {
 
   // ----- 下架检测 -----
   rpc RegisterDelistNotice(RegisterDelistNoticeReq) returns (RegisterDelistNoticeRsp);
+
+  // ----- 云账号（密钥本身在 Admin 的 SecretMgr，这里只登记密钥 ID 与 COS 桶） -----
+  rpc ListCloudAccounts(ListCloudAccountsReq) returns (ListCloudAccountsRsp);
+  rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);
+  rpc UpdateCloudAccount(UpdateCloudAccountReq) returns (UpdateCloudAccountRsp);
+  // DeleteCloudAccount 在账号还被 scf_plan 引用、还有代码包、云上还有它建的函数时拒绝（CONFLICT），msg 是原因。
+  rpc DeleteCloudAccount(DeleteCloudAccountReq) returns (DeleteCloudAccountRsp);
+  rpc ListCloudRegions(ListCloudRegionsReq) returns (ListCloudRegionsRsp);
+
+  // ----- 云函数代码包（COS 预签名直传） -----
+  rpc InitPackageUpload(InitPackageUploadReq) returns (InitPackageUploadRsp);
+  rpc CompletePackageUpload(CompletePackageUploadReq) returns (CompletePackageUploadRsp);
+  rpc ListFunctionPackages(ListFunctionPackagesReq) returns (ListFunctionPackagesRsp);
+  rpc DeleteFunctionPackage(DeleteFunctionPackageReq) returns (DeleteFunctionPackageRsp);
+
+  // ----- 云函数 -----
+  // ListCloudFunctions 读回空间的采集函数与补采函数：计划里应有的内容、云上读回的状态、是否在计划外。不返回函数环境与任何密钥。
+  rpc ListCloudFunctions(ListCloudFunctionsReq) returns (ListCloudFunctionsRsp);
+  // DeleteCloudFunctions 按名字或前缀删函数；计划里的函数删掉后，下一轮对账立即读回并重建。
+  rpc DeleteCloudFunctions(DeleteCloudFunctionsReq) returns (DeleteCloudFunctionsRsp);
+  // ProbeFunctionEgress 取已生效计划里各采集函数此刻的公网出口 IP（只调用函数，不改云上状态）。
+  rpc ProbeFunctionEgress(ProbeFunctionEgressReq) returns (ProbeFunctionEgressRsp);
+
+  // ----- 模块生命周期（设计 3.7，请求与响应见 moox_common.proto）-----
+  // GetLifecycle 读采集模块的暂停与恢复追赶状态（追赶进度是暂停区间的补采）。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复与放行采集模块：暂停要等每个空间的 SCF 定时器停用确认、在途补采分块结束（最长 5 分钟）。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
+}
+
+// ===== 云账号 =====
+
+// CloudAccount 是一个云账号。credential_secret_id 是 SecretMgr 里类别 cloud、厂商 tencent 的密钥 ID，不是密钥本身。
+message CloudAccount {
+  string account_id = 1;
+  string account_name = 2;
+  // provider 只支持 tencent。
+  string provider = 3;
+  string credential_secret_id = 4;
+  string app_id = 5;
+  string cos_region = 6;
+  string cos_bucket = 7;
+  string create_time = 8; // RFC3339
+  string modify_time = 9; // RFC3339
+}
+
+message ListCloudAccountsReq {}
+
+message ListCloudAccountsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudAccount accounts = 2;
+}
+
+// CreateCloudAccountReq 与 UpdateCloudAccountReq 都是整行写入；create_time、modify_time 不用填。
+message CreateCloudAccountReq {
+  CloudAccount account = 1;
+}
+
+message CreateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+  CloudAccount account = 2;
+}
+
+message UpdateCloudAccountReq {
+  CloudAccount account = 1;
+}
+
+message UpdateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+  CloudAccount account = 2;
+}
+
+message DeleteCloudAccountReq {
+  string account_id = 1;
+}
+
+message DeleteCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message CloudRegion {
+  string code = 1;
+  string name = 2;
+  string tag = 3;
+  int32 max_instances = 4;
+  int32 max_namespaces_per_region = 5;
+  int32 max_functions_per_namespace = 6;
+}
+
+message ListCloudRegionsReq {}
+
+message ListCloudRegionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudRegion regions = 2;
+}
+
+// ===== 云函数代码包 =====
+
+// FunctionPackage 是一次上传的代码包。status 是 pending（已发上传地址）或 available（COS 对象已核对）。
+message FunctionPackage {
+  string space_id = 1;
+  string package_id = 2;
+  string package_name = 3;
+  string version = 4;
+  string runtime = 5;
+  int64 file_size = 6;
+  string file_md5 = 7;
+  string cloud_account_id = 8;
+  string cos_region = 9;
+  string cos_bucket = 10;
+  string cos_path = 11;
+  string status = 12;
+  string create_time = 13; // RFC3339
+  string modify_time = 14; // RFC3339
+}
+
+// InitPackageUploadReq 登记一个待上传的代码包并返回 COS 预签名上传地址；filename 为空时用“包名-版本.zip”。
+message InitPackageUploadReq {
+  string space_id = 1;
+  string package_name = 2;
+  string version = 3;
+  string runtime = 4;
+  string cloud_account_id = 5;
+  string filename = 6;
+}
+
+message InitPackageUploadRsp {
+  common.RetInfo ret_info = 1;
+  FunctionPackage package = 2;
+  string upload_url = 3;
+  string expires_at = 4; // RFC3339
+}
+
+// CompletePackageUploadReq 在上传完成后核对 COS 对象的大小与 MD5，通过后代码包变成可用。
+message CompletePackageUploadReq {
+  string space_id = 1;
+  string package_id = 2;
+  int64 file_size = 3;
+  string file_md5 = 4;
+}
+
+message CompletePackageUploadRsp {
+  common.RetInfo ret_info = 1;
+  FunctionPackage package = 2;
+}
+
+// ListFunctionPackagesReq 的 space_id 为空时返回全部空间的代码包；按上传先后倒序。
+message ListFunctionPackagesReq {
+  string space_id = 1;
+}
+
+message ListFunctionPackagesRsp {
+  common.RetInfo ret_info = 1;
+  repeated FunctionPackage packages = 2;
+}
+
+// DeleteFunctionPackageReq 先删 COS 对象再删记录；代码包不存在时也返回成功。
+message DeleteFunctionPackageReq {
+  string space_id = 1;
+  string package_id = 2;
+}
+
+message DeleteFunctionPackageRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// ===== 云函数 =====
+
+message ListCloudFunctionsReq {
+  string space_id = 1;
+}
+
+// CloudFunction 是 ListCloudFunctions 的一项：期望、云上读回与两者的比对。不含函数环境与任何密钥。
+message CloudFunction {
+  string name = 1;
+  string region = 2;
+  string namespace = 3;
+  // kind 是 timer（定时采集函数）或 backfill（补采函数）。
+  string kind = 4;
+  // unplanned 表示符合本空间命名格式、但不在计划里：定时器已被停用，等人工用 moox-cli collector function delete 删除。
+  bool unplanned = 5;
+  // expected_cron 为空表示定时器应当停用；expected_package_id 是最新的可用代码包。
+  string expected_cron = 6;
+  string expected_assignment_hash = 7;
+  string expected_package_id = 8;
+  // operation 是正在跑的云端操作的用途，没有为空。
+  string operation = 9;
+  // 以下是这次的云上读回；read_error 不为空表示这次没读到。
+  bool exists = 10;
+  string status = 11;
+  string package_id = 12;
+  string assignment_hash = 13;
+  string timer_cron = 14;
+  bool timer_enabled = 15;
+  string timer_available_status = 16;
+  string read_at = 17; // RFC3339
+  string read_error = 18;
+  // 读回与期望的比对。
+  bool timer_matches = 19;
+  bool package_latest = 20;
+  bool environment_matches = 21;
+}
+
+message ListCloudFunctionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudFunction functions = 2;
+}
+
+// DeleteCloudFunctionsReq 的 names 与 prefix 至少给一个；prefix 必须是本空间的函数名前缀。
+// namespace、region 非空时只删这个命名空间、这个地域里的（同名函数在旧命名空间的副本与在用的函数分得开）；
+// dry_run 为 true 时只返回会删哪些（done 为 false、error 为空的项），不删，匹配规则与实际删除相同。
+message DeleteCloudFunctionsReq {
+  string space_id = 1;
+  repeated string names = 2;
+  string prefix = 3;
+  string namespace = 4;
+  string region = 5;
+  bool dry_run = 6;
+}
+
+// CloudFunctionDeletion 是一个函数的删除结果：done 为 false 且 error 为空表示还在删，稍后用 ListCloudFunctions 查看。
+// namespace 区分同名函数在不同命名空间里的副本（例如命名空间配置改过之后留下的）；云上没有这个函数时为空。
+message CloudFunctionDeletion {
+  string name = 1;
+  string region = 2;
+  bool done = 3;
+  string error = 4;
+  string namespace = 5;
+}
+
+message DeleteCloudFunctionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudFunctionDeletion results = 2;
+}
+
+// ProbeFunctionEgressReq 的 names 为空时探测已生效计划里的全部采集函数。
+message ProbeFunctionEgressReq {
+  string space_id = 1;
+  repeated string names = 2;
+}
+
+message FunctionEgress {
+  string name = 1;
+  string ip = 2;
+  string error = 3;
+}
+
+message ProbeFunctionEgressRsp {
+  common.RetInfo ret_info = 1;
+  repeated FunctionEgress probes = 2;
 }

@@ -87,7 +87,7 @@ func (s *Service) InspectCredential(
 }
 
 // inspectTimeout 是一次检测的总时限，要小于 TradeConsoleService 的服务端超时（config/trpc_go.yaml 的 15000ms）；
-// 服务目录里两个检测方法的 method_timeouts_ms 与服务端超时一致（15000）。正常检测一两秒完成，到点按没有结论处理。
+// 服务目录里两个检测方法上写的 timeout_ms 与服务端超时一致（15000）。正常检测一两秒完成，到点按没有结论处理。
 const inspectTimeout = 12 * time.Second
 
 func (s *Service) inspect(ctx context.Context, name exchange.Exchange, request exchange.InspectRequest) (exchange.Inspection, error) {

@@ -24,9 +24,7 @@ type State struct {
 	CommittedThrough time.Time `json:"committed_through"`
 	// Target 是已知的最新收盘周期（收到的事件里最大的周期）。
 	Target time.Time `json:"target"`
-	// Universe 是最近一次事件的期望标的：读回判断没有事件可用的周期时使用。
-	Universe []string `json:"universe,omitempty"`
-	// UniverseSeries 是最近一次事件按序列（标的、series_tag）的期望全集：统一数据集才有，读回时按序列判断哪些已经到了。
+	// UniverseSeries 是最近一次事件按序列（标的、series_tag）的期望全集：读回判断没有事件可用的周期时，按序列看哪些已经到了。
 	UniverseSeries []seriesset.Series `json:"universe_series,omitempty"`
 	// BlockedSince 是当前阻塞开始的时刻，没有阻塞为零。
 	BlockedSince time.Time `json:"blocked_since,omitempty"`
@@ -78,7 +76,6 @@ func (s *Store) Get(taskID string) (State, bool) {
 	defer s.mu.Unlock()
 	state, ok := s.states[taskID]
 	if ok {
-		state.Universe = append([]string(nil), state.Universe...)
 		state.UniverseSeries = append([]seriesset.Series(nil), state.UniverseSeries...)
 	}
 	return state, ok
@@ -88,17 +85,8 @@ func (s *Store) Get(taskID string) (State, bool) {
 func (s *Store) Put(state State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state.Universe = append([]string(nil), state.Universe...)
 	state.UniverseSeries = append([]seriesset.Series(nil), state.UniverseSeries...)
 	s.states[state.TaskID] = state
-	return s.flushLocked()
-}
-
-// Reset 清空全部状态并写盘（重置时用）：数据被清空后，旧的连续水位指向已不存在的数据。
-func (s *Store) Reset() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.states = map[string]State{}
 	return s.flushLocked()
 }
 

@@ -238,7 +238,7 @@ func TestKlineRowsMatchGolden(t *testing.T) {
 		{"crypto", domain.CollectionItem{Provider: "binance", SourceID: "swap_http", MarketType: "swap"}},
 		{"crypto", domain.CollectionItem{}},
 	} {
-		fmt.Fprintf(&out, "space=%s provider=%s source=%s market_type=%s => %q\n", item.space, item.item.Provider, item.item.SourceID, item.item.MarketType, collectionItemSeriesTag(item.space, item.item))
+		fmt.Fprintf(&out, "space=%s provider=%s source=%s market_type=%s => %q\n", item.space, item.item.Provider, item.item.SourceID, item.item.MarketType, CollectionItemSeriesTag(item.space, item.item))
 	}
 
 	if os.Getenv("MOOX_UPDATE_GOLDEN") == "1" {

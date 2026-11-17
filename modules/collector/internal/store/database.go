@@ -19,8 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Store owns the Collector SQLite connection and repositories.
-// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+// SQLDB 返回底层数据库连接（测试直接改写运行态时用）。
 func (s *Store) SQLDB() (*sql.DB, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("collector store is not open")
@@ -28,18 +27,21 @@ func (s *Store) SQLDB() (*sql.DB, error) {
 	return s.db.DB()
 }
 
+// Store owns the Collector SQLite connection and repositories.
 type Store struct {
 	db         *gorm.DB
 	path       string
 	taskRepo   *TaskRepository
 	fetchPlans *FetchPlanRepository
-	ingest     *IngestModeRepository
+	timeline   *SeriesTimelineRepository
 	workers    *StreamWorkerRepository
 	exclusions *SubjectExclusionRepository
 	tagRuns    *TagSyncRunRepository
 	backfill   *BackfillRepository
 	resample   *ResampleStateRepository
 	delist     *DelistNoticeRepository
+	accounts   *CloudAccountRepository
+	packages   *FunctionPackageRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -50,7 +52,8 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	}
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 合成任务的目标快照与历史作业属于任务本身。
+		// 合成任务的目标快照与历史作业属于任务本身。标的时间线不在这里清：任务删掉后，下一份采集计划会给它的数据集
+		// 写一行“停止采集”，在那之前检查与补采仍会碰这个数据集。
 		if err := tx.Exec(`DELETE FROM t_collector_resample_snapshots WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
 			return err
 		}
@@ -81,11 +84,21 @@ func (s *Store) HasOtherDatasetWriteTargets(ctx context.Context, spaceID, datase
 
 // Options configures the Collector SQLite store.
 type Options struct {
-	Path            string
+	Path string
+	// DefaultIngest 按空间返回 K 线任务的默认采集方式（市场 market.yaml 的 ingest），空间没有登记时返回空串。
+	// 建任务没写采集方式时用它；为 nil 时每个 K 线任务都必须自己写明采集方式。
+	DefaultIngest   func(spaceID string) string
 	MaxIdleConns    int
 	MaxOpenConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+}
+
+func (o *Options) defaultIngest() func(string) string {
+	if o == nil {
+		return nil
+	}
+	return o.DefaultIngest
 }
 
 // Open opens the Collector SQLite store. Schema creation is handled by bootstrap.
@@ -104,15 +117,17 @@ func Open(opts *Options) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	s := &Store{db: db, path: dbPath}
-	s.taskRepo = NewTaskRepository(db)
+	s.taskRepo = NewTaskRepository(db, opts.defaultIngest())
 	s.fetchPlans = NewFetchPlanRepository(db)
-	s.ingest = NewIngestModeRepository(db)
+	s.timeline = NewSeriesTimelineRepository(db)
 	s.workers = NewStreamWorkerRepository(db)
 	s.exclusions = NewSubjectExclusionRepository(db)
 	s.tagRuns = NewTagSyncRunRepository(db)
 	s.backfill = NewBackfillRepository(db)
 	s.resample = NewResampleStateRepository(db)
 	s.delist = NewDelistNoticeRepository(db)
+	s.accounts = NewCloudAccountRepository(db)
+	s.packages = NewFunctionPackageRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -134,12 +149,12 @@ func (s *Store) FetchPlans() *FetchPlanRepository {
 	return s.fetchPlans
 }
 
-// IngestModes returns the per-dataset ingest mode repository.
-func (s *Store) IngestModes() *IngestModeRepository {
+// SeriesTimeline 返回标的时间线仓库。
+func (s *Store) SeriesTimeline() *SeriesTimelineRepository {
 	if s == nil {
 		return nil
 	}
-	return s.ingest
+	return s.timeline
 }
 
 // StreamWorkers returns the collector-stream heartbeat repository.
@@ -180,6 +195,22 @@ func (s *Store) DelistNotices() *DelistNoticeRepository {
 		return nil
 	}
 	return s.delist
+}
+
+// CloudAccounts 返回云账号仓库。
+func (s *Store) CloudAccounts() *CloudAccountRepository {
+	if s == nil {
+		return nil
+	}
+	return s.accounts
+}
+
+// FunctionPackages 返回云函数代码包仓库。
+func (s *Store) FunctionPackages() *FunctionPackageRepository {
+	if s == nil {
+		return nil
+	}
+	return s.packages
 }
 
 // Backfill returns the K-line backfill job repository.

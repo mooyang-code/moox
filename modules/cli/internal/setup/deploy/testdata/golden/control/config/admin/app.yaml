@@ -1,0 +1,8 @@
+# MooX Admin 配置文件
+
+database:
+  path: /data/moox/data/admin/admin.db
+  max_idle_conns: 4
+  max_open_conns: 8
+  conn_max_lifetime: 1h
+  conn_max_idle_time: 10m

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,8 +14,9 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/eastmoneylimit"
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
@@ -28,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -38,8 +41,9 @@ import (
 
 var collectorStartedAt = time.Now()
 
-// Initialize loads config, initializes persistence, and registers RPC services.
-func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
+// Initialize 读 configPath 指向的业务配置（-config），初始化存储并注册 RPC 服务。
+// 内置采集任务种子 collection-tasks.yaml 与业务配置在同一目录。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runtime, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -53,13 +57,14 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}()
 	log.InfoContextf(ctx, "开始初始化 moox-collector...")
 
-	cfg, err := Load("./config/app.yaml")
+	cfg, err := Load(configPath)
 	if err != nil {
 		log.ErrorContextf(ctx, "加载 collector 配置失败: %v", err)
 		return nil, err
 	}
 	dbm, err := store.Open(&store.Options{
 		Path:            cfg.Database.Path,
+		DefaultIngest:   markets.DefaultIngest,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
 		MaxOpenConns:    cfg.Database.MaxOpenConns,
 		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
@@ -74,7 +79,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
 	}
-	if err := seedBuiltinTasks(ctx, dbm.Tasks(), builtinTasksPath); err != nil {
+	if err := seedBuiltinTasks(ctx, dbm.Tasks(), filepath.Join(filepath.Dir(configPath), builtinTasksFile)); err != nil {
 		log.ErrorContextf(ctx, "写入内置采集任务失败: %v", err)
 		return nil, err
 	}
@@ -94,35 +99,22 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
 	}
-	moduleMetrics, err := report.NewModuleMetrics(
-		prometheus.DefaultRegisterer,
-		"collector",
-		report.HealthCheckIDsForModule("collector"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialize collector module metrics: %w", err)
-	}
-	datasetRunObserver, err := report.NewDatasetModuleObserver(
-		datasetMetrics,
-		moduleMetrics,
-		"collect",
-		"collector-market-data",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialize collector run metrics: %w", err)
-	}
 	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.Tasks(), datasetMetrics)
 	realtimeInventory.SetResampleEnabled(cfg.KlineResample.Enabled)
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
 	}
-	resultMetadata, resultMetadataErr := marketstorage.NewGatewayResampleMetadataClient(process.gateway, marketstorage.InstTypeSPOT)
+	resultMetadata, resultMetadataErr := marketstorage.NewGatewayResampleMetadataClient(process.gateway)
 	if resultMetadataErr != nil {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
-	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View, resultMetadata.Auth)
+	resultManager := collectorresult.NewManager(resultMetadata.Client, resultMetadata.View)
 	resultManager.SetFieldOffers(marketwiring.FieldOffers())
-	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager); err != nil {
+	// 启动时要连 Storage 核对内置任务的元数据。安装顺序保证首装时它已就绪；以后重启时 Storage 恰好不可用，
+	// 就在进程内每 5 秒重试，不退出。
+	if err := retryUntilDone(ctx, taskResultMetadataRetryInterval, func(ctx context.Context) error {
+		return ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager)
+	}); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
@@ -133,15 +125,14 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		FieldOffers: marketwiring.FieldOffers(),
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
-	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
-	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
+	marketFetchMetrics := fetchplan.NewControlMetrics(prometheus.DefaultRegisterer)
 	subjectSyncer, err := registerSubjectSyncRuntime(s, cfg, process, dbm.TagSyncRuns())
 	if err != nil {
 		return nil, err
 	}
 	svc.SetSubjectSyncer(subjectSyncer)
 	streamService := collectsvc.NewStreamService(dbm, collectsvc.StreamSettings{HeartbeatTimeout: time.Duration(cfg.Stream.HeartbeatTimeoutSeconds) * time.Second, CommitReserveMS: cfg.Stream.CommitReserveMS},
-		marketfetch.NewStreamMetrics(prometheus.DefaultRegisterer), subjectSyncer)
+		fetchplan.NewStreamMetrics(prometheus.DefaultRegisterer), subjectSyncer)
 	streamServer := s.Service("trpc.moox.collector.StreamCollector")
 	if streamServer == nil {
 		return nil, fmt.Errorf("trpc_go.yaml 缺少 trpc.moox.collector.StreamCollector 服务")
@@ -161,14 +152,36 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus); err != nil {
 		return nil, err
 	}
-	if err := registerHealth(s, cfg, dbm, process, control); err != nil {
+	healthState, life, err := registerHealth(s, cfg, dbm, process, control, svc)
+	if err != nil {
 		return nil, err
 	}
-	registerMetricsReporter(s, realtimeInventory)
+	registerMetricsReporter(s, realtimeInventory, healthState, life)
 
 	keepRuntime = true
 	log.InfoContextf(ctx, "moox-collector 初始化完成")
 	return process, nil
+}
+
+// taskResultMetadataRetryInterval 是启动时核对任务元数据失败后的重试间隔。
+const taskResultMetadataRetryInterval = 5 * time.Second
+
+// retryUntilDone 反复执行 do，直到成功或 ctx 结束（返回最后一次的错误）；每次失败记一条警告。
+func retryUntilDone(ctx context.Context, interval time.Duration, do func(context.Context) error) error {
+	for attempt := 1; ; attempt++ {
+		err := do(ctx)
+		if err == nil {
+			return nil
+		}
+		log.WarnContextf(ctx, "核对任务元数据失败（第 %d 次，%s 后重试）：%v", attempt, interval, err)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, manager *collectorresult.Manager) error {
@@ -278,7 +291,8 @@ type metricsReporter interface {
 	Handle(context.Context) error
 }
 
-func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler) {
+// registerMetricsReporter 注册指标上报；上报带上与 /readyz 同一个就绪判断和模块级生命周期（首页的系统状态读它）。
+func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler, state *health.State, life *lifecycle.Controller) {
 	if s == nil {
 		return
 	}
@@ -286,6 +300,12 @@ func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconc
 	if err != nil {
 		log.Warnf("collector metrics reporter disabled: %v", err)
 		return
+	}
+	if state != nil {
+		h.SetReadiness(healthz.Readiness(state.Snapshot))
+	}
+	if life != nil {
+		h.SetLifecycle(life.ReportState)
 	}
 	service := s.Service("trpc.moox.collector.metrics.timer")
 	if service == nil {
@@ -306,34 +326,35 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 	}
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl) error {
+// registerHealth 注册健康检查，并建好生命周期控制器交给 CollectMgr（GetLifecycle、ControlLifecycle）；
+// 返回的健康状态与控制器再交给指标上报。
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl, svc *collectsvc.Service) (*health.State, *lifecycle.Controller, error) {
 	if cfg == nil {
-		return nil
+		return nil, nil, nil
 	}
 	state := health.New("collector", "collector", "", "")
 	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state)
 	if s == nil {
-		return fmt.Errorf("collector health service is unavailable")
+		return nil, nil, fmt.Errorf("collector health service is unavailable")
 	}
-	var routes []health.Route
+	var life *lifecycle.Controller
 	if control != nil && process != nil {
-		life, err := newCollectorLifecycle(cfg.Database.Path, control, func() bool { return dbm != nil }, collectorResetSpec(dbm, cfg.Database.Path, control))
+		var err error
+		life, err = newCollectorLifecycle(cfg.Database.Path, control)
 		if err != nil {
-			return fmt.Errorf("collector lifecycle state failed to open: %w", err)
+			return nil, nil, fmt.Errorf("collector lifecycle state failed to open: %w", err)
 		}
-		state.SnapshotFunc = withCollectorLifecycle(state.SnapshotFunc, life)
-		routes = collectorLifecycleRoutes(life)
-		if !process.launch(func() {
-			life.Recover(process.ctx)
-			life.Run(process.ctx, collectorLifecycleRefresh)
-		}) {
-			return fmt.Errorf("collector runtime is closing")
+		if svc != nil {
+			svc.SetLifecycle(life)
+		}
+		if !process.launch(func() { life.Run(process.ctx, collectorLifecycleRefresh) }) {
+			return nil, nil, fmt.Errorf("collector runtime is closing")
 		}
 	}
-	if err := health.Register(s.Service("trpc.moox.collector.Health"), state, routes...); err != nil {
-		return fmt.Errorf("collector health server failed to start: %w", err)
+	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
+		return nil, nil, fmt.Errorf("collector health server failed to start: %w", err)
 	}
-	return nil
+	return state, life, nil
 }
 
 func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
@@ -356,7 +377,7 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 // registerCollectorBackground 启动 Collector 的后台任务：K 线重采样与保留期清理。
 // 维护与清理每轮现取管理集合（managedSpaces，与采集计划同一份名单）；合成覆盖 barclock 登记的全部市场。
 // 实时行情采集已全部由 SCF 定时器按采集计划触发（见 registerFetchPlanManager），这里不再有任何行情调度。
-func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *marketfetch.Metrics, process *Runtime, bus *eventBusRuntime) {
+func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *fetchplan.ControlMetrics, process *Runtime, bus *eventBusRuntime) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -373,7 +394,7 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	}
 	maintenanceSpaceCursor := 0
 	retentionConfig := cfg.CollectorRetention
-	maintenanceRunner := marketfetch.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
+	maintenanceRunner := fetchplan.NewMaintenanceRunner(retentionConfig.interval(), retentionConfig.offset(), retentionConfig.timeout(), func(passCtx context.Context) error {
 		now := time.Now().UTC()
 		var passErrors []error
 		// 先封存搁置的补写通知再清理：合成关闭时没有合成定时器来封存，补采作业结束时那一次失败的话只剩这里兜底，
@@ -447,7 +468,7 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	}
 }
 
-func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *marketfetch.Metrics, spaceID string, now time.Time, deleted map[string]int64) error {
+func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metrics *fetchplan.ControlMetrics, spaceID string, now time.Time, deleted map[string]int64) error {
 	metrics.ObserveMaintenanceDeletes(spaceID, deleted)
 	statsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

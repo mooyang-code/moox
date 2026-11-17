@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/stretchr/testify/require"
 )
@@ -44,12 +45,12 @@ func TestPlanPeriodValidStockHK(t *testing.T) {
 	}
 }
 
-// 云函数在这些时刻被定时器触发时直接返回 no_work，不连 Access、不取数。
+// 云函数在这些时刻被定时器触发时直接返回 no_work，不连外部入口、不取数。
 func TestStockHKTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "stockhk")
-	options := marketfetch.PlanOptions{SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,
+	options := fetchplan.PlanOptions{SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,
 		Fetch: marketfetch.PlanFetch{Concurrency: 16, NotBeforeMS: 5000}}
-	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 		Provider: "eastmoney", SourceID: "stockhk_http", MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity",
 		DatasetID: "ds_hk_5m", Frequency: "5m", Subjects: []string{"00005.XHKG", "00700.XHKG"},
 	}}, nil)
@@ -61,7 +62,7 @@ func TestStockHKTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 		name, plan = functionName, function.Plan
 	}
 	// 计划份的生效起点设在这些时刻之前，返回 no_work 只可能是因为周期不是交易桶。
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkPeriodTime(t, "2026-11-10 09:30").Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkPeriodTime(t, "2026-11-10 09:30").Unix(), nil })
 	require.NoError(t, err)
 	plan = content.FinalPlan(content.Functions[name])
 	require.NotNil(t, plan)

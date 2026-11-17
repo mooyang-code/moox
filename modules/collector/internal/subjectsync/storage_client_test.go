@@ -2,54 +2,24 @@ package subjectsync
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-func TestStorageClientHostAuthPreservesMasterSecretDerivation(t *testing.T) {
-	setSubjectSyncStorageConfig(t)
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "")
-	require.NoError(t, os.Unsetenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"))
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "subject-sync-test-secret")
+// 构造只要网关；请求原样发给 Storage，不需要任何存储口令配置。
+func TestStorageClientRequiresOnlyGateway(t *testing.T) {
+	_, err := NewStorageClient(nil)
+	require.Error(t, err)
 	storage, err := NewStorageClient(subjectGatewayFunc(func(context.Context, string, string, any, any) error { return nil }))
 	require.NoError(t, err)
-	require.Equal(t, "moox-collector", storage.auth.AppId)
-	require.Equal(t, mooxsecurity.HMACSHA256Hex("subject-sync-test-secret", []byte("moox-collector")), storage.auth.AppKey)
 	storage.client = &fakeMetadataClient{listTags: func(_ context.Context, req *storagepb.ListTagsReq) (*storagepb.ListTagsRsp, error) {
-		require.Equal(t, storage.auth, req.AuthInfo)
 		return &storagepb.ListTagsRsp{RetInfo: storageSuccess()}, nil
 	}}
 	_, err = storage.ListTags(context.Background())
 	require.NoError(t, err)
-}
-
-func TestStorageClientManagedAuthErrorsBeforeProxyCreation(t *testing.T) {
-	setSubjectSyncStorageConfig(t)
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "subject-sync-test-secret")
-	proxyCalls := 0
-	gateway := subjectGatewayFunc(func(context.Context, string, string, any, any) error { proxyCalls++; return nil })
-	for _, raw := range []string{"", "null", `{"moox-collector":"` + strings.Repeat("a", 64) + `","moox-collector":"` + strings.Repeat("b", 64) + `"}`} {
-		t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", raw)
-		storage, err := NewStorageClient(gateway)
-		require.Error(t, err)
-		require.Nil(t, storage)
-		require.NotContains(t, err.Error(), "subject-sync-test-secret")
-	}
-	require.Zero(t, proxyCalls)
-}
-
-func setSubjectSyncStorageConfig(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "binance.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("storage:\n  bindings:\n    spot:\n      auth_info:\n        app_id: moox-collector\n        app_key: host-config-key\n"), 0600))
-	t.Setenv("MOOX_STORAGE_MARKET_CONFIG", path)
 }
 
 type fakeMetadataClient struct {
@@ -94,7 +64,7 @@ func TestStorageClientListTagsContinuesWhenPageIsFull(t *testing.T) {
 		}, nil
 	}}
 
-	storage := &StorageClient{client: client, auth: &storagepb.AuthInfo{AppId: "test"}}
+	storage := &StorageClient{client: client}
 	tags, err := storage.ListTags(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +87,6 @@ func TestStorageClientListTagsStopsAtExactFullPage(t *testing.T) {
 				PageResult: &storagepb.PageResult{Page: 1, Size: storagePageSize, Total: storagePageSize},
 			}, nil
 		}},
-		auth: &storagepb.AuthInfo{AppId: "test"},
 	}
 
 	tags, err := storage.ListTags(context.Background())

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -219,7 +220,9 @@ func pipelineSelection(factors ...recalcMember) Selection {
 
 			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 		},
-		Members: domain.AsMembers(defs...), Subjects: []string{"BTC"}, Columns: []string{"close"},
+		// 序列与 recalcPipelineStore 给的行一致：这些测试用直接读 Storage 的数据层，它不给期望序列。
+		Members: domain.AsMembers(defs...), Subjects: []string{"BTC"}, Series: []seriesset.Series{{SubjectID: "BTC", SeriesTag: "source"}},
+		Columns: []string{"close"},
 	}
 }
 

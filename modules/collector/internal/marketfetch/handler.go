@@ -22,7 +22,7 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage func(string) (Storage, error)
+	NewStorage func() (Storage, error)
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
@@ -37,7 +37,6 @@ type Handler struct {
 	PlanPeriodValid func(market PlanMarket, frequency string, period time.Time) bool
 	Reporter        ItemReporter
 	CLSReserve      time.Duration
-	Metrics         *Metrics
 	MetricsReporter MetricsReporter
 }
 
@@ -68,18 +67,18 @@ func (h *Handler) spaceID() string {
 	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 }
 
-// prepareInvocation 为这次调用建立一条到 Access 的连接给 Storage 适配器使用；注入的适配器由调用方负责。
+// prepareInvocation 为这次调用建立一条到外部入口的连接给 Storage 适配器使用；注入的适配器由调用方负责。
 func (h *Handler) prepareInvocation() (*Handler, func(), error) {
 	invocation := *h
 	if invocation.NewStorage != nil {
 		return &invocation, func() {}, nil
 	}
-	gateway, err := newSCFAccessClient()
+	gateway, err := newSCFEntryClient()
 	if err != nil {
 		return nil, nil, err
 	}
-	invocation.NewStorage = func(market string) (Storage, error) {
-		return NewMarketStorageForMarket(gateway, market)
+	invocation.NewStorage = func() (Storage, error) {
+		return NewMarketStorage(gateway)
 	}
 	return &invocation, func() { _ = gateway.Close() }, nil
 }
@@ -159,7 +158,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storage, err := h.NewStorage(req.MarketType)
+	storage, err := h.NewStorage()
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +181,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
 		instrumentType := marketdata.InstrumentType(strings.ToLower(strings.TrimSpace(req.InstrumentType)))
 		if instrumentType == "" {
-			if instrumentType, err = defaultInstrumentType(marketID, req.MarketType); err != nil {
+			if instrumentType, err = DefaultInstrumentType(marketID, req.MarketType); err != nil {
 				return nil, err
 			}
 		}
@@ -199,7 +198,6 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 		}
 		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
-		pipeline.Metrics = h.Metrics
 		pipeline.Reporter = h.Reporter
 		pipeline.FunctionName = req.FunctionName
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)

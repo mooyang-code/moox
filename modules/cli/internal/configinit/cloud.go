@@ -49,7 +49,7 @@ type Instance struct {
 	CPU        int    `json:"cpu,omitempty"`
 	MemoryGB   int    `json:"memory_gb,omitempty"`
 	DiskGB     int    `json:"disk_gb,omitempty"`
-	// VpcID、SubnetID、PrivateIP 是服务器所在的私有网络，A 股云函数（SCF）在同一 VPC 里经它的私网地址访问 Access。
+	// VpcID、SubnetID、PrivateIP 是服务器所在的私有网络，A 股云函数（SCF）在同一 VPC 里经它的私网地址访问外部入口。
 	// 只用于渲染 moox.toml，不回传页面。
 	VpcID     string `json:"-"`
 	SubnetID  string `json:"-"`

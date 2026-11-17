@@ -31,7 +31,7 @@ func (c *Client) EnsureResultView(ctx context.Context, spaceID, datasetID string
 		return err
 	}
 	viewID := DefaultResultViewID(datasetID)
-	existing, err := c.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.auth, SpaceId: spaceID, ViewId: viewID})
+	existing, err := c.metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: viewID})
 	if err != nil {
 		return rpcError("get result view", err)
 	}
@@ -54,7 +54,7 @@ func (c *Client) EnsureResultView(ctx context.Context, spaceID, datasetID string
 	if dataset.DataKind != DataKindTimeSeries || dataset.Freq == "" {
 		return errors.New("结果数据集必须是带频率的时序数据集才能建默认 View")
 	}
-	created, err := c.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.auth, CreateOnly: true, View: &storagepb.View{
+	created, err := c.metadata.CreateView(ctx, &storagepb.CreateViewReq{CreateOnly: true, View: &storagepb.View{
 		SpaceId: spaceID, ViewId: viewID, Name: dataset.Name, DatasetId: datasetID,
 		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Freq: dataset.Freq,
 		Engine: "duckdb", Status: "active", MaintenancePriority: resultViewMaintenancePriority,
@@ -81,7 +81,7 @@ func (c *Client) DeleteResultView(ctx context.Context, spaceID, datasetID string
 	if err := c.metadataReady("delete result view"); err != nil {
 		return err
 	}
-	rsp, err := c.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{AuthInfo: c.auth, SpaceId: spaceID, ViewId: DefaultResultViewID(datasetID)})
+	rsp, err := c.metadata.DeleteView(ctx, &storagepb.DeleteViewReq{SpaceId: spaceID, ViewId: DefaultResultViewID(datasetID)})
 	if err != nil {
 		return rpcError("delete result view", err)
 	}

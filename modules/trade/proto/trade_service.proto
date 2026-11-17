@@ -148,11 +148,6 @@ message LogicalAccount {
   repeated string readiness_reasons = 12;
   int64 created_at = 13;
   int64 updated_at = 14;
-  // Strategy lifecycle identity of the current owner.
-  string owner_instance_id = 16;
-  string owner_session_id = 17;
-  // Strategy 生命周期调用的比较并交换令牌，只返回给内部调用方。
-  string auth_fence = 18;
   ControlMode control_mode = 19;
   // 只读：当前生效的下单设置和资金设置（没写的项已填上默认值）。
   OrderSettings order_settings = 20;
@@ -561,26 +556,19 @@ message RemoveLogicalAccountMemberRsp {
   LogicalAccount logical_account = 2;
 }
 
-message ClaimLogicalAccountOwnerReq {
+// 关闭策略会话（Strategy 停用实例后调用，幂等）：组合的“关闭到”时刻推进到 session_started_at，开始时刻不大于它的会话的目标一律不再接受；
+// 这个会话还没过期的当前目标的有效期缩短到现在（不早于 bar_end_time 加 1 毫秒），由执行器的过期路径撤掉它的挂单。
+message CloseTargetSessionReq {
   string logical_account_id = 1;
-  string instance_id = 3;
-  string session_id = 4;
-  string expected_auth_fence = 5;
+  string instance_id = 2;
+  string session_id = 3;
+  // 会话的开始时刻（毫秒），与目标事件的 session_started_at 相同。
+  int64 session_started_at = 4;
 }
-message ClaimLogicalAccountOwnerRsp {
+message CloseTargetSessionRsp {
   common.RetInfo ret_info = 1;
-  LogicalAccount logical_account = 2;
-}
-
-message ReleaseLogicalAccountOwnerReq {
-  string logical_account_id = 1;
-  string instance_id = 3;
-  string session_id = 4;
-  string expected_auth_fence = 5;
-}
-message ReleaseLogicalAccountOwnerRsp {
-  common.RetInfo ret_info = 1;
-  LogicalAccount logical_account = 2;
+  // 关闭之后组合的“关闭到”时刻（毫秒）。
+  int64 closed_through = 2;
 }
 
 message PauseLogicalAccountReq {
@@ -704,6 +692,46 @@ message GetLogicalAccountTargetRsp {
   // 执行器整项跳过的标的（下架名单里已不能交易的、正在做下架清仓的）、被排除的持仓（套利底仓的对冲腿、不受管的现货）没有。
   // 目标已收敛（CONVERGED）时不算，为空；成员或设置读不出来时也为空。没有列出的标的按未知处理。
   repeated TargetLane lanes = 3;
+}
+
+// ShadowWeight 是影子目标里一个标的的目标权重；hold 为 true 表示保持当前持仓数量不动（权重只是预留的预算占用）。
+message ShadowWeight {
+  string instrument_id = 1;
+  string target_weight = 2;
+  bool hold = 3;
+}
+
+// ShadowTarget 是试运行中的策略实例（挂了组合账户、还没确认实盘）发来的影子目标：Trade 只把权重换算成数量并记录，
+// 不接受为正式目标，不预留资金，不下单。按有效期截止清理，保留 7 天。
+message ShadowTarget {
+  string target_id = 1;
+  string logical_account_id = 2;
+  string instance_id = 3;
+  string session_id = 4;
+  // 目标所属会话的开始时刻。
+  int64 session_started_at = 5;
+  string strategy_id = 6;
+  int64 bar_end_time = 7;
+  int64 valid_until = 8;
+  repeated ShadowWeight weights = 9;
+  // 换算用的组合权益与它的取数时间；目标全是保持或为空时不换算，权益为 0。
+  string equity = 10;
+  int64 equity_source_time = 11;
+  // 换算用的参考价：标的 → 价格。
+  map<string, string> reference_prices = 12;
+  // 换算出的数量；保持的标的 hold 为 true、不带数量。
+  repeated InstrumentTarget targets = 13;
+  int64 recorded_at = 14;
+}
+
+// ListShadowTargetsReq 按周期时间从新到旧列出策略实例最近的影子目标（空间取请求头）。limit 不填为 20，最多 200。
+message ListShadowTargetsReq {
+  string instance_id = 1;
+  int32 limit = 2;
+}
+message ListShadowTargetsRsp {
+  common.RetInfo ret_info = 1;
+  repeated ShadowTarget targets = 2;
 }
 
 message GetOrderReq {
@@ -894,8 +922,7 @@ service TradeConsoleService {
   rpc UpdateLogicalAccountFundSettings(UpdateLogicalAccountFundSettingsReq) returns (UpdateLogicalAccountFundSettingsRsp);
   rpc AddLogicalAccountMember(AddLogicalAccountMemberReq) returns (AddLogicalAccountMemberRsp);
   rpc RemoveLogicalAccountMember(RemoveLogicalAccountMemberReq) returns (RemoveLogicalAccountMemberRsp);
-  rpc ClaimLogicalAccountOwner(ClaimLogicalAccountOwnerReq) returns (ClaimLogicalAccountOwnerRsp);
-  rpc ReleaseLogicalAccountOwner(ReleaseLogicalAccountOwnerReq) returns (ReleaseLogicalAccountOwnerRsp);
+  rpc CloseTargetSession(CloseTargetSessionReq) returns (CloseTargetSessionRsp);
   rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
   rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);
@@ -903,6 +930,7 @@ service TradeConsoleService {
   rpc CancelOrder(CancelOrderReq) returns (CancelOrderRsp);
   rpc GetOperatorAction(GetOperatorActionReq) returns (GetOperatorActionRsp);
   rpc GetLogicalAccountTarget(GetLogicalAccountTargetReq) returns (GetLogicalAccountTargetRsp);
+  rpc ListShadowTargets(ListShadowTargetsReq) returns (ListShadowTargetsRsp);
   rpc GetOrder(GetOrderReq) returns (GetOrderRsp);
   rpc ListOrders(ListOrdersReq) returns (ListOrdersRsp);
   rpc ListFills(ListFillsReq) returns (ListFillsRsp);
@@ -922,6 +950,10 @@ service TradeConsoleService {
   rpc FlattenInstrument(FlattenInstrumentReq) returns (FlattenInstrumentRsp);
   rpc SummarizeAccountPnl(SummarizeAccountPnlReq) returns (SummarizeAccountPnlRsp);
   rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
+  // GetLifecycle 读 Trade 模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
+  rpc GetLifecycle(common.GetLifecycleReq) returns (common.GetLifecycleRsp);
+  // ControlLifecycle 暂停、恢复与放行 Trade：暂停要等在途的订单提交结束（最长 30 秒），不撤单、不平仓。
+  rpc ControlLifecycle(common.ControlLifecycleReq) returns (common.ControlLifecycleRsp);
 }
 
 // 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用（模拟盘由本地成交和资金费记录生成），按时间倒序。

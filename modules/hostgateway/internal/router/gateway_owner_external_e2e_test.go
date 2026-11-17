@@ -18,14 +18,14 @@ import (
 	"testing"
 	"time"
 
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/listener"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
-	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testrpc"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -36,18 +36,24 @@ import (
 const ownerTradePath = "trpc.moox.trade.TradeConsoleService"
 const ownerHostID = "gateway-owner-e2e"
 
+// ownerDirectory 像真实网关的本机目录那样下发快照里的主机与部署，调用方按内嵌的服务目录自己展开。
 type ownerDirectory struct {
 	directorypb.UnimplementedDirectory
-	directory servicecatalog.Directory
+	snapshot *adminpb.HostGatewaySnapshot
 }
 
 func (s *ownerDirectory) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
-	if req.GetCurrentVersion() == s.directory.Version {
-		return &directorypb.GetDirectoryRsp{Version: s.directory.Version}, nil
+	rsp := &directorypb.GetDirectoryRsp{Version: s.snapshot.Hash, Changed: req.GetCurrentVersion() != s.snapshot.Hash}
+	if !rsp.Changed {
+		return rsp, nil
 	}
-	return &directorypb.GetDirectoryRsp{Version: s.directory.Version, Changed: true,
-		Services: map[string]*directorypb.ServiceHosts{ownerTradePath: {HostIds: []string{ownerHostID}}},
-		Hosts:    map[string]*directorypb.DirectoryHost{ownerHostID: {Address: "127.0.0.1"}}}, nil
+	for _, host := range s.snapshot.Hosts {
+		rsp.Hosts = append(rsp.Hosts, &directorypb.DirectoryHost{HostId: host.HostId, Address: host.Address, PrivateAddress: host.PrivateAddress, Reachability: host.Reachability, Enabled: host.Enabled})
+	}
+	for _, deployment := range s.snapshot.Deployments {
+		rsp.Deployments = append(rsp.Deployments, &directorypb.DirectoryDeployment{HostId: deployment.HostId, ComponentId: deployment.ComponentId, Enabled: deployment.Enabled})
+	}
+	return rsp, nil
 }
 
 func ownerCertificates(t *testing.T) ([]byte, tls.Certificate) {
@@ -84,20 +90,23 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 	write("gateway-ca.pem", caPEM)
 	unrelated, _ := ownerCertificates(t)
 	write("unrelated-ca.pem", unrelated)
-	credentials := testsnapshot.Credential("strategy")
-	write("caller-key-id", []byte(credentials.KeyID))
-	write("caller-key", []byte(credentials.Secret))
+	// 策略服务在 control 上，用 control 的主机密钥签名；Trade 在另一台主机（本测试的网关）上，所以调用经它的 11003。
+	write("caller-key", []byte(gatewayauth.EncodeSigningKey(testsnapshot.HostKey("control"))))
+	credentials := testsnapshot.Credential("strategy", "control")
 	raw := testsnapshot.New(t, ownerHostID, "trade")
+	// 三个进程都在本机：把被测网关所在主机的地址登记成回环地址，调用方按目录连到它的 11003。
+	testsnapshot.Host(t, raw, ownerHostID).Address = "127.0.0.1"
 	require.Equal(t, "127.0.0.1:11200", string(read("trade-ready")))
 	testsnapshot.Rehash(t, raw)
 	view, err := snapshot.Build(ownerHostID, raw)
 	require.NoError(t, err)
 	state := &snapshot.State{}
 	state.Apply(view)
-	nonces, err := store.OpenNonces(filepath.Join(t.TempDir(), "nonces"))
-	require.NoError(t, err)
-	defer nonces.Close()
-	proxy, err := NewService(ServiceOptions{State: state, Nonces: nonces})
+	// 路由由网关按快照自己算：Trade 的上游就是本机回环上服务目录里的端口。
+	route, ok := view.Resolve(ownerTradePath, "GetLogicalAccount")
+	require.True(t, ok)
+	require.Equal(t, "127.0.0.1:11200", route.Address)
+	proxy, err := NewService(ServiceOptions{State: state, Replay: gatewayauth.NewReplay(time.Now().Add(-time.Minute))})
 	require.NoError(t, err)
 	defer proxy.Close()
 	opened, err := tls.Listen("tcp", "127.0.0.1:11003", &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12})
@@ -117,13 +126,11 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 		})
 	}
 	serve(svc)
-	directory := servicecatalog.Directory{Services: map[string][]string{ownerTradePath: {ownerHostID}}, Hosts: map[string]servicecatalog.DirectoryHost{ownerHostID: {Address: "127.0.0.1"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
+	require.Equal(t, []string{ownerHostID}, view.Directory().Services[ownerTradePath])
 	local, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	directoryService := server.New(server.WithListener(local), server.WithAddress(local.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTransport(transport.NewServerTransport()))
-	directorypb.RegisterDirectoryService(directoryService, &ownerDirectory{directory: directory})
+	directorypb.RegisterDirectoryService(directoryService, &ownerDirectory{snapshot: view.Proto()})
 	serve(directoryService)
 	write("directory-ready", []byte(local.Addr().String()))
 	write("gateway-ready", []byte(opened.Addr().String()))
@@ -135,18 +142,18 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 	headers, err := testrpc.Signed(credentials, ownerHostID, ownerTradePath, "SubmitOrder", nil)
 	require.NoError(t, err)
 	_, err = testrpc.Call(ctx, opened.Addr().String(), trust, ownerTradePath, "SubmitOrder", codec.SerializationTypePB, nil, headers)
-	require.ErrorContains(t, err, "not allowed", "server must reject a caller that bypasses the client ACL")
+	requireRejected(t, err, "绕过客户端名单直接到网关的调用方由网关拒绝")
 	headers, err = testrpc.Signed(credentials, "wrong-node", ownerTradePath, "GetLogicalAccount", nil)
 	require.NoError(t, err)
 	_, err = testrpc.Call(ctx, opened.Addr().String(), trust, ownerTradePath, "GetLogicalAccount", codec.SerializationTypePB, nil, headers)
-	require.ErrorContains(t, err, "authentication failed")
+	requireRejected(t, err, "签名里的目标主机不是本机")
 	headers, err = testrpc.Signed(credentials, ownerHostID, ownerTradePath, "GetLogicalAccount", nil)
 	require.NoError(t, err)
 	headers.Set("X-Space-Id", "space-gateway-e2e")
 	_, err = testrpc.Call(ctx, opened.Addr().String(), trust, ownerTradePath, "GetLogicalAccount", codec.SerializationTypePB, nil, headers)
 	require.NoError(t, err)
 	_, err = testrpc.Call(ctx, opened.Addr().String(), trust, ownerTradePath, "GetLogicalAccount", codec.SerializationTypePB, nil, headers)
-	require.ErrorContains(t, err, "replayed")
+	requireRejected(t, err, "同一个签名第二次出现")
 	wrongTrust := trust.Clone()
 	wrongTrust.ServerName = "wrong-node"
 	_, err = testrpc.Call(ctx, opened.Addr().String(), wrongTrust, ownerTradePath, "GetLogicalAccount", codec.SerializationTypePB, nil, headers)
@@ -154,7 +161,7 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 	// Exercise the CLI deployment probe's JSON-over-native contract against
 	// the actual Trade handler, including ambiguous space metadata.
 	checkPermission := func(method string, body []byte, ambiguousSpace bool) {
-		headers, err := testrpc.Signed(testsnapshot.Credential("moox-cli"), ownerHostID, ownerTradePath, method, body)
+		headers, err := testrpc.Signed(testsnapshot.Credential("moox-cli", ""), ownerHostID, ownerTradePath, method, body)
 		require.NoError(t, err)
 		if ambiguousSpace {
 			headers["X-Space-Id"] = []string{"space-gateway-e2e"}
@@ -177,5 +184,5 @@ func TestExternalGatewayOwnerHandler(t *testing.T) {
 	require.NoError(t, err)
 	checkPermission("GetLogicalAccount", body, true)
 	write("gateway-done", []byte("passed"))
-	t.Log("production native router -> Trade: method ACL, target signature, durable nonce replay and TLS host identity passed")
+	t.Log("production native router -> Trade: method ACL, target signature, in-memory replay guard and TLS host identity passed")
 }

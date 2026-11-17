@@ -9,7 +9,7 @@ while IFS= read -r -d '' file; do
   if [[ -f "${file}" ]]; then
     go_files+=("${file}")
   fi
-done < <(git ls-files -z -- '*.go' ':!web-host/internal/statik/statik.go')
+done < <(git ls-files -z -- '*.go')
 
 unformatted="$(printf '%s\0' "${go_files[@]}" | xargs -0 -r gofmt -l)"
 if [[ -n "${unformatted}" ]]; then

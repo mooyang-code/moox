@@ -7,13 +7,14 @@ import (
 	"strconv"
 	"strings"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 
 // ConfigForm 是配置页「修改配置」里可以改的项：只放常用设置，用中文表单呈现，不暴露配置文件原文。
-// 其余高级设置（因子、云函数计划、出口代理、路径等）保存时原样保留。
+// 账号、云密钥、告警渠道与交易所密钥写回 moox.secrets.toml，其余写回 moox.toml；
+// 其余高级设置（云函数计划、出口代理、路径、覆盖项等）保存时原样保留。
 type ConfigForm struct {
 	Admin struct {
 		Username string `json:"username"`
@@ -34,10 +35,6 @@ type ConfigForm struct {
 	ExchangeKeys []ExchangeKeyEntry `json:"exchange_keys"`
 	Hosts        []FormHost         `json:"hosts"`
 	Retention    FormRetention      `json:"retention"`
-	Logs         struct {
-		MaxSizeMB   int `json:"max_size_mb"`
-		BackupCount int `json:"backup_count"`
-	} `json:"logs"`
 }
 
 // FormObjectStore 是归档对象存储一组：标准 S3 接口的连接参数与管理台密钥的 secret_id（不含密钥值）。
@@ -56,15 +53,14 @@ type FormObjectStore struct {
 // archiveObjectStoreSection 是 moox.toml 里归档对象存储的段名。
 const archiveObjectStoreSection = "archive_object_store"
 
-// FormHost 是一台主机的 SSH 登录方式；用途、地址、地域只读（改这些需要重新部署）。
+// FormHost 是一台主机的 SSH 登录方式（只支持密钥登录，私钥文件原样保留）；用途、地址、地域只读（改这些需要重新部署）。
 type FormHost struct {
-	ID          string   `json:"id"`
-	Uses        []string `json:"uses,omitempty"`
-	Address     string   `json:"address,omitempty"`
-	Region      string   `json:"region,omitempty"`
-	SSHUser     string   `json:"ssh_user"`
-	SSHPort     int      `json:"ssh_port"`
-	SSHPassword string   `json:"ssh_password"`
+	ID      string   `json:"id"`
+	Uses    []string `json:"uses,omitempty"`
+	Address string   `json:"address,omitempty"`
+	Region  string   `json:"region,omitempty"`
+	SSHUser string   `json:"ssh_user"`
+	SSHPort int      `json:"ssh_port"`
 }
 
 // FormRetention 是数据保留期。取值为 <n>h、<n>d 或 forever；空间里留空表示跟随默认。
@@ -99,12 +95,13 @@ var retentionFrequencies = frequencypkg.StandardStrings()
 
 var spaceNames = map[string]string{"crypto": "加密货币", "stockcn": "A 股", "stockhk": "港股", "stockus": "美股"}
 
-// formFrom 从当前配置读出表单的值。
-func formFrom(m setupconfig.Manifest) ConfigForm {
+// formFrom 从当前的两份配置读出表单的值。
+func formFrom(pair ConfigPair) ConfigForm {
 	var form ConfigForm
-	form.Admin.Username, form.Admin.Password = m.Admin.Username, m.Admin.Password
-	form.Tencent.SecretID, form.Tencent.SecretKey = m.TencentCloud.SecretID, m.TencentCloud.SecretKey
-	form.Notification.ChannelType, form.Notification.WebhookURL, form.Notification.Secret = m.Notification.ChannelType, m.Notification.WebhookURL, m.Notification.Secret
+	m, sec := pair.Config, pair.Secrets
+	form.Admin.Username, form.Admin.Password = sec.Admin.Username, sec.Admin.Password
+	form.Tencent.SecretID, form.Tencent.SecretKey = sec.TencentCloud.SecretID, sec.TencentCloud.SecretKey
+	form.Notification.ChannelType, form.Notification.WebhookURL, form.Notification.Secret = sec.Notification.ChannelType, sec.Notification.WebhookURL, sec.Notification.Secret
 	// 没配时给出常用的默认值（低频存储、虚拟主机风格、HTTPS），开关关着。
 	form.ArchiveObjectStore = FormObjectStore{Prefix: "moox-archive/", URLStyle: "virtual", UseTLS: true, StorageClass: "STANDARD_IA"}
 	if s := m.ArchiveObjectStore; s != nil {
@@ -113,13 +110,12 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 			UseTLS: s.TLS(), StorageClass: s.StorageClass, SecretID: s.SecretID,
 		}
 	}
-	form.ExchangeKeys = exchangeKeyEntries(m)
-	view := describe(m, false, "")
-	for _, server := range view.Servers {
+	form.ExchangeKeys = exchangeKeyEntries(sec)
+	for _, server := range describeServers(m) {
 		host := m.HostCatalog[server.ID]
 		form.Hosts = append(form.Hosts, FormHost{
 			ID: server.ID, Uses: server.Uses, Address: host.Address, Region: server.Region,
-			SSHUser: host.SSH.Username, SSHPort: host.SSH.Port, SSHPassword: host.SSH.Password,
+			SSHUser: host.SSH.Username, SSHPort: host.SSH.Port,
 		})
 	}
 	form.Retention.ViewBars = m.StorageRetention.ViewBars
@@ -128,7 +124,7 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 	form.Retention.Defaults = copyMap(m.StorageRetention.Defaults)
 	recommended := storagepolicy.Default()
 	form.Retention.Recommended = FormRecommended{ViewBars: recommended.View.Bars, ViewFileBytes: recommended.View.MaxViewFileBytes, Defaults: copyMap(recommended.Retention.Defaults), Spaces: map[string]map[string]string{}}
-	recommendedSpaces := setupconfig.RecommendedSpaceRetention()
+	recommendedSpaces := topology.RecommendedSpaceRetention()
 	for id, values := range recommendedSpaces {
 		form.Retention.Recommended.Spaces[id] = copyMap(values)
 	}
@@ -160,7 +156,6 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 	for _, id := range ids {
 		form.Retention.Spaces = append(form.Retention.Spaces, FormSpace{ID: id, Name: firstNonEmpty(spaceNames[id], id), Values: copyMap(m.StorageRetention.Spaces[id])})
 	}
-	form.Logs.MaxSizeMB, form.Logs.BackupCount = m.LocalLogs.MaxSizeMB, m.LocalLogs.BackupCount
 	return form
 }
 
@@ -172,9 +167,10 @@ func copyMap(in map[string]string) map[string]string {
 	return out
 }
 
-// applyForm 把表单的值逐项写回配置文本，返回新的配置；结果由调用方再做严格校验。
+// applyForm 把表单的值逐项写回两份配置的文本，返回新的 moox.toml 与 moox.secrets.toml；结果由调用方再做严格校验。
 // 只认当前配置里已有的主机与空间，表单里多出来的一律拒绝。
-func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]byte, error) {
+func applyForm(pair ConfigPair, form ConfigForm) (config, secrets []byte, err error) {
+	current := pair.Config
 	for _, field := range []struct{ name, value string }{
 		{"管理员用户名", form.Admin.Username}, {"管理员密码", form.Admin.Password},
 		{"腾讯云 SecretId", form.Tencent.SecretID}, {"腾讯云 SecretKey", form.Tencent.SecretKey},
@@ -182,47 +178,49 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 		{"告警渠道的密钥", form.Notification.Secret},
 	} {
 		if err := checkText(field.name, field.value, false); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	lines := strings.Split(string(plain), "\n")
+	secretLines := strings.Split(string(pair.SecretsText), "\n")
+	setSecret := func(section, key, value string) { secretLines = putKey(secretLines, section, key, value) }
+	setSecret("admin", "username", tomlString(strings.TrimSpace(form.Admin.Username)))
+	setSecret("admin", "password", tomlString(form.Admin.Password))
+	setSecret("tencent_cloud", "secret_id", tomlString(strings.TrimSpace(form.Tencent.SecretID)))
+	setSecret("tencent_cloud", "secret_key", tomlString(form.Tencent.SecretKey))
+	setSecret("notification", "channel_type", tomlString(strings.TrimSpace(form.Notification.ChannelType)))
+	setSecret("notification", "webhook_url", tomlString(strings.TrimSpace(form.Notification.WebhookURL)))
+	setSecret("notification", "secret", tomlString(strings.TrimSpace(form.Notification.Secret)))
+	// 表单没有带交易所密钥列表（nil）时保持原样；带了空列表（[]）才表示全部删除，免得漏传字段把密钥清掉。
+	if form.ExchangeKeys != nil {
+		entries, err := normalizeExchangeKeyEntries(form.ExchangeKeys)
+		if err != nil {
+			return nil, nil, err
+		}
+		secretLines = replaceExchangeKeys(secretLines, entries)
+	}
+
+	lines := strings.Split(string(pair.ConfigText), "\n")
 	set := func(section, key, value string) { lines = putKey(lines, section, key, value) }
-	set("admin", "username", tomlString(strings.TrimSpace(form.Admin.Username)))
-	set("admin", "password", tomlString(form.Admin.Password))
-	set("tencent_cloud", "secret_id", tomlString(strings.TrimSpace(form.Tencent.SecretID)))
-	set("tencent_cloud", "secret_key", tomlString(form.Tencent.SecretKey))
-	set("notification", "channel_type", tomlString(strings.TrimSpace(form.Notification.ChannelType)))
-	set("notification", "webhook_url", tomlString(strings.TrimSpace(form.Notification.WebhookURL)))
-	set("notification", "secret", tomlString(strings.TrimSpace(form.Notification.Secret)))
-	var err error
 	if lines, err = applyObjectStore(lines, form.ArchiveObjectStore); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	for _, host := range form.Hosts {
 		if _, ok := current.HostCatalog[host.ID]; !ok {
-			return nil, fmt.Errorf("配置里没有主机 %q", host.ID)
+			return nil, nil, fmt.Errorf("配置里没有主机 %q", host.ID)
 		}
 		user := strings.TrimSpace(host.SSHUser)
-		for _, field := range []struct{ name, value string }{{"SSH 用户名", user}, {"SSH 密码", host.SSHPassword}} {
-			if err := checkText(host.ID+" 的"+field.name, field.value, false); err != nil {
-				return nil, err
-			}
+		if err := checkText(host.ID+" 的 SSH 用户名", user, false); err != nil {
+			return nil, nil, err
 		}
 		port, err := sshPort(host.ID, host.SSHPort)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		ssh := "{ port = " + strconv.Itoa(port) + ", username = " + tomlString(user)
-		if host.SSHPassword != "" {
-			ssh += ", password = " + tomlString(host.SSHPassword)
-		}
-		// 表单不编辑私钥登录方式，原样保留。
+		// 表单不编辑私钥文件，原样保留。
 		if existing := current.HostCatalog[host.ID].SSH; existing.PrivateKeyFile != "" {
 			ssh += ", private_key_file = " + tomlString(existing.PrivateKeyFile)
-			if existing.PrivateKeyPassphrase != "" {
-				ssh += ", private_key_passphrase = " + tomlString(existing.PrivateKeyPassphrase)
-			}
 		}
 		set("hosts."+host.ID, "ssh", ssh+" }")
 	}
@@ -233,7 +231,7 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 	}
 	for freq := range form.Retention.Defaults {
 		if err := retentionCell(freq, ""); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	for _, freq := range retentionFrequencies {
@@ -242,20 +240,20 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 			continue
 		}
 		if err := retentionCell(freq, value); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		set("storage_retention.defaults", freq, tomlString(strings.TrimSpace(value)))
 	}
 	for _, space := range form.Retention.Spaces {
 		_, inCurrent := current.StorageRetention.Spaces[space.ID]
-		_, inRecommended := setupconfig.RecommendedSpaceRetention()[space.ID]
+		_, inRecommended := topology.RecommendedSpaceRetention()[space.ID]
 		if !inCurrent && !inRecommended {
-			return nil, fmt.Errorf("配置里没有空间 %q 的保留期", space.ID)
+			return nil, nil, fmt.Errorf("配置里没有空间 %q 的保留期", space.ID)
 		}
 		section := "storage_retention.spaces." + space.ID
 		for freq := range space.Values {
 			if err := retentionCell(freq, ""); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		for _, freq := range retentionFrequencies {
@@ -264,7 +262,7 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 				continue
 			}
 			if err := retentionCell(freq, value); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if strings.TrimSpace(value) == "" {
 				// 留空表示这个空间跟随默认值。
@@ -274,17 +272,7 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 			set(section, freq, tomlString(strings.TrimSpace(value)))
 		}
 	}
-	set("local_logs", "max_size_mb", strconv.Itoa(form.Logs.MaxSizeMB))
-	set("local_logs", "backup_count", strconv.Itoa(form.Logs.BackupCount))
-	// 表单没有带交易所密钥列表（nil）时保持原样；带了空列表（[]）才表示全部删除，免得漏传字段把密钥清掉。
-	if form.ExchangeKeys != nil {
-		entries, err := normalizeExchangeKeyEntries(form.ExchangeKeys)
-		if err != nil {
-			return nil, err
-		}
-		lines = replaceExchangeKeys(lines, entries)
-	}
-	return []byte(strings.Join(lines, "\n")), nil
+	return []byte(strings.Join(lines, "\n")), []byte(strings.Join(secretLines, "\n")), nil
 }
 
 // applyObjectStore 写回归档对象存储一组：关闭时整段删除（连同段的说明注释）；打开时按必填规则校验后逐键写入。
@@ -301,7 +289,7 @@ func applyObjectStore(lines []string, s FormObjectStore) ([]string, error) {
 		}
 	}
 	useTLS := s.UseTLS
-	store := setupconfig.ArchiveObjectStore{Endpoint: s.Endpoint, Region: s.Region, Bucket: s.Bucket, Prefix: s.Prefix, URLStyle: s.URLStyle,
+	store := topology.ArchiveObjectStore{Endpoint: s.Endpoint, Region: s.Region, Bucket: s.Bucket, Prefix: s.Prefix, URLStyle: s.URLStyle,
 		UseTLS: &useTLS, StorageClass: s.StorageClass, SecretID: s.SecretID}
 	if err := store.Validate(); err != nil {
 		return nil, errors.New(strings.TrimPrefix(err.Error(), "config_invalid: "))

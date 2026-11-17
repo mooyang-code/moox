@@ -12,14 +12,14 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,14 +34,13 @@ import (
 func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "trade", "config", "app.yaml")
-	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-trade.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
-	for _, path := range []string{configPath, hostPath, keyPath, caPath} {
+	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "trade", KeyID: "admin-assigned-trade-key-42", Secret: "trade-fixture-signing-key-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0600))
+	credentials := authtest.Component("trade", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -50,18 +49,25 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host := hostgatewayconfig.Default("control", "control", "192.0.2.1", "host-fixture-key")
-	host.Server.LocalAddr = listener.Addr().String()
-	host.TLS.CAFile = caPath
-	encoded, err := hostgatewayconfig.Encode(host)
+	// Trade 与 Admin 同机：直连服务目录里 SecretMgr 的回环端口，这里指到假服务上。
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostPath, encoded, 0600))
-	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.ops.SecretMgr": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
+	servicePorts := map[int]bool{}
+	for _, path := range []string{"trpc.moox.ops.SecretMgr"} {
+		spec, ok := catalog.Service(path)
+		require.True(t, ok, path)
+		servicePorts[spec.Port] = true
+	}
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
+	const directoryVersion = "v1"
 
 	var mu sync.Mutex
-	nonces := map[string]bool{}
+	secretCalls := 0
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithCurrentSerializationType(codec.SerializationTypeNoop))
 	descriptor := &server.ServiceDesc{ServiceName: "trpc.moox.hostgateway.ServiceGateway", HandlerType: ((*interface{})(nil)), Methods: []server.Method{{Name: "*", Func: func(_ any, ctx context.Context, decode server.FilterFunc) (any, error) {
 		raw := &codec.Body{}
@@ -77,11 +83,11 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 				if err := proto.Unmarshal(body, &req); err != nil {
 					return nil, err
 				}
-				rsp := &directorypb.GetDirectoryRsp{Version: directory.Version}
-				if req.GetCurrentVersion() != directory.Version {
+				rsp := &directorypb.GetDirectoryRsp{Version: directoryVersion}
+				if req.GetCurrentVersion() != directoryVersion {
 					rsp.Changed = true
-					rsp.Services = map[string]*directorypb.ServiceHosts{"trpc.moox.ops.SecretMgr": {HostIds: []string{"control"}}}
-					rsp.Hosts = map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}
+					rsp.Hosts = []*directorypb.DirectoryHost{{HostId: "control", Address: "control.example.test", Reachability: "direct", Enabled: true}}
+					rsp.Deployments = []*directorypb.DirectoryDeployment{{HostId: "control", ComponentId: "admin", Enabled: true}, {HostId: "control", ComponentId: "trade", Enabled: true}}
 				}
 				encoded, err := proto.Marshal(rsp)
 				return &codec.Body{Data: encoded}, err
@@ -89,13 +95,11 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 			if message.ServerRPCName() != "/trpc.moox.ops.SecretMgr/GetSecretValue" || message.SerializationType() != codec.SerializationTypeJSON {
 				return nil, errors.New("unexpected Trade secret call")
 			}
-			headers := http.Header{}
-			for name, value := range message.ServerMetaData() {
-				headers.Set(name, string(value))
-			}
-			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "control", Callee: "trpc.moox.ops.SecretMgr", Func: "GetSecretValue", Body: body}, headers, time.Now())
-			if err != nil {
-				return nil, err
+			// 同机直连的请求不带任何签名头。
+			for name := range message.ServerMetaData() {
+				if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+					return nil, errors.New("direct local call carries signature header " + name)
+				}
 			}
 			var req struct {
 				SecretID string `json:"secret_id"`
@@ -105,10 +109,7 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if nonces[claims.Nonce] {
-				return nil, errors.New("nonce reused")
-			}
-			nonces[claims.Nonce] = true
+			secretCalls++
 			encoded, err := json.Marshal(map[string]any{"ret_info": map[string]any{"code": 0}, "secret": map[string]any{"secret_id": req.SecretID, "category": "exchange", "pro" + "vider": "binance", "status": "active", "key_id": "exchange-key", "secret_value": "exchange-secret"}})
 			return &codec.Body{Data: encoded}, err
 		})
@@ -117,7 +118,7 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "trade")
-	raw := "database:\n  path: " + filepath.Join(data, "trade.db") + "\ngateway_client:\n  caller: trade\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-trade.key\n"
+	raw := "database:\n  path: " + filepath.Join(data, "trade.db") + "\ngateway_client:\n  caller: trade\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: " + listener.Addr().String() + "\n  ca_file: " + caPath + "\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0600))
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
@@ -131,7 +132,7 @@ func TestTradeSecretsUseProcessIdentityOverNativeRPC(t *testing.T) {
 		require.Equal(t, "exchange-key", secret.KeyID)
 	}
 	mu.Lock()
-	require.Len(t, nonces, 2)
+	require.Equal(t, 2, secretCalls)
 	mu.Unlock()
 	require.NoError(t, gateway.Close())
 	_, err = client.GetExchangeSecret(t.Context(), "secret-1")

@@ -61,7 +61,6 @@ tasks:
   collect_params:
     frequency: 1d
 # 附加字段只能在建任务时选全，所以这个任务一次带齐复权、行业、财务、换手率、股本的全部字段；基础字段与 A 股默认输出一致。
-# 任务 ID 在加入换手率与股本字段时换过（已有任务不能新增输出字段）：旧任务 dasftksvjhj2jom4vhhg 不再是内置任务。
 - space_id: stockcn
   task_id: dasftksvjhj2jom4vhj0
   task_name: A 股日线（复权、行业、财务、换手率、股本）

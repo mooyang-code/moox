@@ -75,7 +75,7 @@ import { recentCellText } from "../shared/archive-model";
 
 /**
  * 最新数据页签：某个标的在执行器暂存库里最近的行，按 data_time 倒序，每页 200 行，“更早”用当前页最后一行的时间翻页。
- * 标的在 URL 里（?subject=）；每次读取都要重新取一次性 ticket（接口封装里做）。不轮询，换标的、翻页、点刷新时读取。
+ * 标的在 URL 里（?subject=）；同源请求自动带会话 Cookie。不轮询，换标的、翻页、点刷新时读取。
  */
 const PAGE_SIZE = 200;
 

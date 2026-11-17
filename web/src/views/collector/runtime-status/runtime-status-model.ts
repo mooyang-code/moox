@@ -257,6 +257,41 @@ export function executorText(fn: { executor?: string; region?: string }) {
   }
 }
 
+export interface CloudStateInfo {
+  text: string;
+  /** muted 不适用或还没读回，ok 一致，warn 有差异 */
+  tone: "muted" | "ok" | "warn";
+}
+
+/**
+ * “云上状态”列：只对 scf 函数；推送与本地执行端写“—”。
+ * 还没读回写“未读回”；云上没有写“不存在”；定时器、代码包不一致分别写出（两项都不一致时用顿号连起来）；都一致写“一致”。
+ */
+export function cloudStateInfo(
+  fn: Pick<
+    CollectorFunctionStatus,
+    "executor" | "cloud_exists" | "cloud_timer_matches" | "cloud_package_latest" | "cloud_read_at"
+  >
+): CloudStateInfo {
+  if ((fn.executor || "scf") !== "scf") return { text: "—", tone: "muted" };
+  if (!fn.cloud_read_at) return { text: "未读回", tone: "muted" };
+  if (!fn.cloud_exists) return { text: "不存在", tone: "warn" };
+  const problems = [...(fn.cloud_timer_matches ? [] : ["定时器不一致"]), ...(fn.cloud_package_latest ? [] : ["代码包落后"])];
+  return problems.length ? { text: problems.join("、"), tone: "warn" } : { text: "一致", tone: "ok" };
+}
+
+/** “云上状态”列的说明。 */
+export const CLOUD_STATE_TIP =
+  "对账器定期读回云上的函数，比对定时器和代码包，不一致时自动修复。Collector 重启后，到下一次读回（最长 1 小时）之前显示“未读回”。";
+
+/**
+ * 计划外函数的删除命令：可以直接复制到命令行执行。一定带上命名空间与地域：命名空间改过之后，
+ * 旧命名空间里的副本与在用的函数同名，只按名字删会把在用的也删掉。
+ */
+export function unplannedDeleteCommand(spaceId: string, fn: { name?: string; namespace?: string; region?: string }) {
+  return `moox-cli collector function delete --space-id ${spaceId} --name ${fn.name || ""} --namespace ${fn.namespace || ""} --region ${fn.region || ""}`;
+}
+
 /** 推送周期一行的展示：到达/期望、缺失（含疑似下架）、写入完成相对收盘。 */
 export function streamPeriodText(stat: {
   arrived?: number;

@@ -72,20 +72,17 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		return nil, fmt.Errorf("open factor database: %w", err)
 	}
 	runtime.store = db
-	life, err := newMgrLifecycle(db, cfg.Database.Path)
+	life, err := newMgrLifecycle(cfg.Database.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open factor-mgr lifecycle: %w", err)
 	}
-	go func() {
-		life.Recover(appCtx)
-		life.Run(appCtx, lifecycleRefreshEvery)
-	}()
+	go life.Run(appCtx, lifecycleRefreshEvery)
 
 	runtime.gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(appCtx, "factor-mgr gateway directory refresh: %v", err) })
 	if err != nil {
 		return nil, fmt.Errorf("open factor Storage gateway client: %w", err)
 	}
-	storage := storageio.NewGatewayClient(runtime.gateway, storageio.AuthInfo(fmt.Sprintf("factor-mgr-%d", time.Now().UnixNano())))
+	storage := storageio.NewGatewayClient(runtime.gateway)
 
 	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL), enginehub.WithHeartbeatStore(db))
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
@@ -125,16 +122,16 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopCatalog = stopCatalog
 
-	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)),
+	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)), factorrpc.WithLifecycle(life),
 		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService))
 
-	runtime.health.SnapshotFunc = withLifecycle(runtime.healthSnapshot(db), life)
-	if err := registerMetricsReporter(s, hub); err != nil {
+	runtime.health.SnapshotFunc = runtime.healthSnapshot(db)
+	if err := registerMetricsReporter(s, hub, healthz.Readiness(runtime.health.Snapshot), life); err != nil {
 		return nil, err
 	}
-	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health, lifecycleRoutes(life)...); err != nil {
+	if err := factorhealth.Register(s.Service(factorHealthService), runtime.health); err != nil {
 		return nil, fmt.Errorf("register factor health service: %w", err)
 	}
 	runtime.health.SetReady(true)

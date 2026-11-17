@@ -19,7 +19,6 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
@@ -28,13 +27,14 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
+// Initialize 读 configPath 指向的业务配置（-config，部署时是 config/monitor/app.yaml 的绝对路径）并装配服务。
+func Initialize(ctx context.Context, s *server.Server, configPath string) (*server.Server, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
 	log.InfoContextf(ctx, "开始初始化 moox-monitor...")
 
-	cfg, err := config.Load("./config/app.yaml")
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.ErrorContextf(ctx, "加载 monitor 配置失败: %v", err)
 		return nil, err
@@ -112,33 +112,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	resultHook := monitorResultHook(runtime)
-	probeRunner := buildProbeRunner(cfg, runtime.Gateway)
 	collectorStatus, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook)
+	// 行情探针先于业务评估执行，拿不到本轮概览：直接读各服务最近一次上报判断 Collector 是否暂停，读不到时照常跑探针。
+	canaryHalted := func(ctx context.Context) bool {
+		services, err := (monitorobservability.Builder{Metrics: metricsQuery, Topology: runtime.Repositories.Topology}).Services(ctx, time.Now().UTC())
+		return err == nil && collectorHalted(services)
+	}
+	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook, canaryHalted)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
-	}
-	if marketCanaryProbe != nil {
-		probeCtx, cancelProbe := context.WithTimeout(runtimeCtx, 10*time.Second)
-		probeErr := marketCanaryProbe(probeCtx)
-		cancelProbe()
-		if probeErr != nil {
-			if watchdog.IsStorageAuthError(probeErr) {
-				// 监控进程不能因为被监控对象的问题起不来：这里只记错误日志，之后周期行情探针
-				// 每轮都会产出失败的检查结果并告警。密钥只在启动时读取，修复后要重启 Monitor。
-				log.ErrorContextf(ctx, "Monitor 启动时 Storage 认证被拒绝，继续启动；请同步 storage-internal-auth.env 后重启 Monitor，在此之前行情探针会持续失败: %v", probeErr)
-			} else {
-				// Primary 可能还在启动，或数据集还是空的，这些情况由周期行情探针上报。
-				log.WarnContextf(ctx, "monitor storage primary auth preflight deferred: %v", probeErr)
-			}
-		} else {
-			log.InfoContextf(ctx, "monitor storage primary auth preflight passed")
-		}
 	}
 	if err := retireObsoleteBusinessChecks(runtimeCtx, runtime.Repositories, cfg); err != nil {
 		_ = runtime.Close()
@@ -148,21 +135,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
+	monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	datasetHealthPolicy, policyErr := loadMonitorDatasetHealthPolicy(cfg)
 	if policyErr != nil {
 		_ = runtime.Close()
 		return nil, policyErr
 	}
 	doctorContext := &monitordoctor.Builder{
-		Deployments: monitordeployment.NewClientSource(runtime.Gateway), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
+		Deployments: monitordeployment.NewClientSource(runtime.Gateway),
+		Alerts:      runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}
 	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
 		CoordinationStaleAfter: cfg.MarketHealth.TimerCoordinationStaleAfter,
 		PendingGrace:           cfg.MarketHealth.TimerCoordinationPendingGrace,
-		LeaseGrace:             cfg.MarketHealth.TimerCoordinationLeaseGrace,
 	}
 	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {
@@ -189,7 +175,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Datasets:                   archivableDatasets(storageMetadata),
 	}
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(factsBuilder, runtime.Repositories, resultHook, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
-	// 主机类检查在检查定时器每一轮的最前面执行（见 checkRound），先于部署探测、行情探针和业务评估。
+	// 主机类检查在检查定时器每一轮的最前面执行（见 checkRound），先于行情探针和业务评估。
 	hostChecksRun := buildHostCheckReporter(factsBuilder, runtime.Repositories, resultHook, observation)
 	runtime.businessEvaluation = businessFreshness != nil
 	watchdogRun := func(watchdogCtx context.Context) error {
@@ -204,18 +190,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		// Timer-triggered market SCFs intentionally do not publish a per-batch
 		// completion event. Their health is derived from Storage/Dataset freshness
-		// and the FunctionInstance/Collector coordination checks, so an EventBus outage
+		// and the Collector coordination checks, so an EventBus outage
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
 	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata)}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
-	registerMonitorService(s, cfg, runtime, hostStore, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
+	registerMonitorService(s, cfg, runtime, hostStore, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, hostChecksRun, watchdogRun); err != nil {
+	if err := registerMonitorScheduleTimers(s, cfg, runtime, hostChecksRun, watchdogRun); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}

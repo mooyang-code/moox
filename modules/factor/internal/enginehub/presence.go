@@ -6,7 +6,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/packages/lifecycle"
+	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
+	"google.golang.org/protobuf/proto"
 )
 
 // heartbeatPersistInterval 是同一引擎心跳落库的最小间隔：引擎每 10 秒一次心跳，离线判定按分钟计，不需要每次都写库。
@@ -78,4 +81,38 @@ func (h *Hub) Presence(ctx context.Context) (state int, engineID string, lastHea
 		return 0, "", time.Time{}, err
 	}
 	return report.EvaluatePresence(required, lastHeartbeat, h.now().UTC(), report.DefaultPresenceTimeout), engineID, lastHeartbeat, nil
+}
+
+// DelegatedReport 是 factor-mgr 代因子引擎上报给 Monitor 的一行（设计 3.8）：引擎只给管理端发心跳，Monitor 按最近一次被接受的
+// 心跳时间判断它是否停止上报，就绪判断与模块级生命周期取自那次心跳。管理端重启后、引擎还没回来时只有落库的心跳时间。
+// 从没心跳过时返回 nil。
+func (h *Hub) DelegatedReport(ctx context.Context) (*metricspb.DelegatedReport, error) {
+	h.mu.Lock()
+	state := h.engine
+	h.mu.Unlock()
+	if state != nil {
+		life := state.status.Lifecycle
+		return &metricspb.DelegatedReport{
+			ServiceName: "factor-engine", InstanceId: state.identity.EngineID, BootId: state.identity.BootID, ServiceVersion: state.identity.Version,
+			LastHeartbeatUnix: state.lastSeen.Unix(), Ready: proto.Bool(state.status.Ready), NotReadyReason: state.status.NotReadyReason,
+			Lifecycle: engineLifecycleReport(life),
+		}, nil
+	}
+	engineID, last, err := h.lastHeartbeat(ctx)
+	if err != nil || last.IsZero() {
+		return nil, err
+	}
+	return &metricspb.DelegatedReport{ServiceName: "factor-engine", InstanceId: engineID, LastHeartbeatUnix: last.Unix()}, nil
+}
+
+// engineLifecycleReport 把心跳里的引擎生命周期转成上报格式；引擎没有上报生命周期时为 nil。
+func engineLifecycleReport(life domain.EngineLifecycle) *metricspb.ModuleLifecycle {
+	if life.Stage == "" {
+		return nil
+	}
+	state := lifecycle.State{Stage: lifecycle.Stage(life.Stage), Catchup: life.Catchup}
+	if life.PauseKind != "" || !life.PausedSince.IsZero() {
+		state.Pause = &lifecycle.PauseInfo{Kind: lifecycle.PauseKind(life.PauseKind), Reason: life.PauseReason, Since: life.PausedSince}
+	}
+	return state.Report()
 }

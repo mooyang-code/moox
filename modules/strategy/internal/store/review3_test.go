@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// 启动校验比较规范化后的建表语句：列名相同但约束不同（例如旧版的 c_health CHECK 不含 session_unverified）的库
+// 启动校验比较规范化后的建表语句：列名相同但约束不同（例如旧版的 c_health CHECK 还含 session_unverified）的库
 // 必须被拒绝，否则要到运行期写入新状态时才失败；纯格式差异（注释、空白）不影响判断。
 func TestOpenRejectsChangedConstraints(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "strategy.sqlite")
@@ -22,7 +22,7 @@ func TestOpenRejectsChangedConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := strings.Replace(schema.AllSQL(), "CHECK (c_health IN ('ok', 'degraded', 'session_unverified'))", "CHECK (c_health IN ('ok', 'degraded'))", 1)
+	old := strings.Replace(schema.AllSQL(), "CHECK (c_health IN ('ok', 'degraded'))", "CHECK (c_health IN ('ok', 'degraded', 'session_unverified'))", 1)
 	if old == schema.AllSQL() {
 		t.Fatal("测试未能改写约束")
 	}
@@ -39,7 +39,7 @@ func TestOpenRejectsChangedConstraints(t *testing.T) {
 	}
 }
 
-// 健康标记只作用于仍以该会话启用的实例；对账自动停用时在同一事务里标记 degraded。
+// 健康标记只作用于仍以该会话启用的实例：停用之后并发提交的周期不改健康状态。
 func TestInstanceHealthIsScopedToCurrentSession(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
@@ -54,15 +54,14 @@ func TestInstanceHealthIsScopedToCurrentSession(t *testing.T) {
 	if err := repo.MarkInstanceDegraded(ctx, "i1", "session-old", testNow); err != nil || health() != HealthOK {
 		t.Fatalf("其他会话的结论不应标记实例：%s err=%v", health(), err)
 	}
-	session := "session-1"
-	if err := repo.DisableInstance(ctx, "i1", &session, nil, HealthDegraded, testNow); err != nil || health() != HealthDegraded {
-		t.Fatalf("自动停用应同时标记 degraded：%s err=%v", health(), err)
+	if err := repo.MarkInstanceDegraded(ctx, "i1", "session-1", testNow); err != nil || health() != HealthDegraded {
+		t.Fatalf("当前会话的结论应标记 degraded：%s err=%v", health(), err)
+	}
+	if err := repo.DisableInstance(ctx, "i1", "session-1", testNow); err != nil {
+		t.Fatal(err)
 	}
 	if err := repo.RecoverInstanceHealth(ctx, "i1", "session-1", testNow); err != nil || health() != HealthDegraded {
 		t.Fatalf("已停用实例的 degraded 不能被并发提交的 ok 周期抹掉：%s err=%v", health(), err)
-	}
-	if err := repo.DisableInstance(ctx, "i1", nil, nil, "broken", testNow); err == nil {
-		t.Fatal("非法的健康状态应被拒绝")
 	}
 }
 

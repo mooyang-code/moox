@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -31,25 +32,25 @@ func closeRefetchFixture(t *testing.T) (*Backfiller, *store.Store, *time.Time) {
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
 
-	options := marketfetch.PlanOptions{SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,
+	options := fetchplan.PlanOptions{SpaceID: "stockhk", Markets: map[string][]string{"equity": {"ap-nanjing"}}, DefaultLatenessS: 90,
 		Fetch: marketfetch.PlanFetch{Concurrency: 5, NotBeforeMS: 5000}}
-	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 		Provider: "eastmoney", SourceID: "stockhk_http", MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity", DatasetID: "ds_hk_5m", Frequency: "5m",
 		Subjects: []string{"00005.XHKG", "00700.XHKG"},
 	}}, nil)
 	require.NoError(t, err)
 	effective := hkt(t, "2026-11-10 09:30:00")
-	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return effective.Unix(), nil })
+	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return effective.Unix(), nil })
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
 	record, err := db.FetchPlans().Create(context.Background(), "stockhk", string(raw), "{}")
 	require.NoError(t, err)
-	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", ""))
+	require.NoError(t, db.FetchPlans().Update(context.Background(), record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("stockhk", string(raw))...))
 
 	now := new(time.Time)
 	clock := func() time.Time { return *now }
-	checker := &Checker{Plans: db.FetchPlans(), Rows: &fakeRows{}, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
+	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: &fakeRows{}, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	backfiller := &Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), BaseCtx: context.Background(), Now: clock,
 		CloseRefetch: markets.CloseRefetchDay,

@@ -71,7 +71,7 @@ plugins:
           filename: trpc.log
           roll_type: size
           max_age: 7
-          max_size: 10
+          max_size: 50
           max_backups: 5
           compress: false
 
@@ -94,5 +94,3 @@ storage:
     backfill_request_interval: 100ms
     # 定时删除最旧数据（每分钟第 10 秒触发、偶数分钟执行）：每个序列只保留最新的 bars 根，每批最多删除这么多行最旧数据。
     delete_oldest_batch_size: 2000
-  health:
-    addr: ":20211"

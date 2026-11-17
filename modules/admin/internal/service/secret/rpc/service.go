@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"reflect"
 	"strings"
 	"time"
@@ -16,8 +17,10 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"gorm.io/gorm"
 
+	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -55,6 +58,9 @@ func NewService(svc secret.Service) *Service {
 
 // ========== 秘钥 CRUD ==========
 
+// defaultListSecretsLimit 是 ListSecrets 不带条数时的每页条数。
+const defaultListSecretsLimit = 50
+
 // ListSecrets 列出秘钥。
 func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.ListSecretsRsp, error) {
 	filters := &dao.SecretFilters{
@@ -63,7 +69,12 @@ func (s *Service) ListSecrets(ctx context.Context, req *pb.ListSecretsReq) (*pb.
 		Provider: req.GetProvider(),
 		Status:   req.GetStatus(),
 	}
-	secrets, total, err := s.svc.ListSecrets(ctx, int(req.GetOffset()), int(req.GetLimit()), filters)
+	// 不带条数时返回第一页，而不是空列表。
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = defaultListSecretsLimit
+	}
+	secrets, total, err := s.svc.ListSecrets(ctx, int(req.GetOffset()), limit, filters)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Secret] ListSecrets failed: %v", err)
 		return &pb.ListSecretsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥列表失败")}, nil
@@ -111,7 +122,22 @@ func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq)
 	if secretRecord.Status != "" && secretRecord.Status != "active" {
 		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥未启用")}, nil
 	}
+	if componentCaller(ctx) != "" && secretRecord.Category != "exchange" {
+		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "组件只能读取类别为 exchange 的秘钥")}, nil
+	}
 	return &pb.GetSecretValueRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
+}
+
+// componentCaller 返回经主机网关以组件身份调用时网关验过签的调用方名字（目前只有 trade 在 GetSecretValue 的名单上）；
+// 控制台、moox-cli（没有签名主机，网关不写头）与控制机上的同机直连没有这个头，返回空。头由本机网关在验签后写入，外面带进来的同名头在网关入口被剥掉。
+// 组件调用方只给交易所密钥：别的主机上的进程拿着主机密钥以 trade 的身份签名，也取不走云账号等其他类别的密钥。
+func componentCaller(ctx context.Context) string {
+	for key, value := range codec.Message(ctx).ServerMetaData() {
+		if http.CanonicalHeaderKey(key) == gatewayauth.HeaderVerifiedCaller {
+			return string(value)
+		}
+	}
+	return ""
 }
 
 // ReadonlyExchangeKeyID 返回只读交易所 Key 的固定秘钥 ID：exchange-<交易所>-production-readonly（setup apply 按 moox.toml 的
@@ -121,8 +147,7 @@ func ReadonlyExchangeKeyID(exchange string) string {
 }
 
 // GetReadonlyExchangeKey 只返回只读交易所 Key 的公开标识 key_id，不返回秘钥值与额外配置。
-// 它是给 Collector 的专用方法：网关转发会丢掉调用方元数据，不能在 GetSecretValue 里按调用方限定，
-// 所以靠服务目录“按方法授权”，Collector 只被放行这一个方法，拿不到 Trade 的交易密钥。
+// 它是给 Collector 的专用方法：靠服务目录“按方法授权”，Collector 只被放行这一个方法，拿不到 Trade 的交易密钥。
 func (s *Service) GetReadonlyExchangeKey(ctx context.Context, req *pb.GetReadonlyExchangeKeyReq) (*pb.GetReadonlyExchangeKeyRsp, error) {
 	exchange := req.GetExchange()
 	if exchange != "binance" && exchange != "okx" {
@@ -140,6 +165,31 @@ func (s *Service) GetReadonlyExchangeKey(ctx context.Context, req *pb.GetReadonl
 		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "没有配置只读 Key")}, nil
 	}
 	return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retOK(), KeyId: record.KeyID}, nil
+}
+
+// GetCloudCredential 按秘钥 ID 返回调腾讯云用的云账号密钥明文，只放行类别 cloud、厂商 tencent、状态 active 的秘钥。
+// 它是给 Collector 的专用方法：网关转发会丢掉调用方元数据，不能在 GetSecretValue 里按调用方限定，
+// 所以靠服务目录“按方法授权”只放行 Collector，再由这里在服务端校验类别，Collector 拿不到交易所等其他密钥。
+func (s *Service) GetCloudCredential(ctx context.Context, req *pb.GetCloudCredentialReq) (*pb.GetCloudCredentialRsp, error) {
+	if strings.TrimSpace(req.GetSecretId()) == "" {
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
+	}
+	record, err := s.svc.GetSecret(ctx, req.GetSecretId())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
+		}
+		log.ErrorContextf(ctx, "[Secret] GetCloudCredential failed: %v", err)
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
+	}
+	// 状态必须明确是 active：空状态不当作启用。
+	if record.Category != "cloud" || record.Provider != "tencent" || record.Status != "active" {
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "只能读取类别为 cloud、厂商为 tencent 且已启用的秘钥")}, nil
+	}
+	if strings.TrimSpace(record.KeyID) == "" || record.SecretValue == "" {
+		return &pb.GetCloudCredentialRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "云账号秘钥不完整：缺少 key_id 或秘钥值")}, nil
+	}
+	return &pb.GetCloudCredentialRsp{RetInfo: retOK(), Credential: &pb.CloudCredential{SecretId: record.SecretID, KeyId: record.KeyID, SecretValue: record.SecretValue}}, nil
 }
 
 // CreateSecret 创建秘钥。
@@ -170,7 +220,7 @@ func (s *Service) CreateSecret(ctx context.Context, req *pb.CreateSecretReq) (*p
 	if secretRecord.Status == "" {
 		secretRecord.Status = "active"
 	}
-	// 从 JWT 自动填充 creator，忽略客户端传入值
+	// 从会话自动填充 creator，忽略客户端传入值
 	if userID, username, err := utils.GetUserInfoFromCtx(ctx); err == nil && username != "" {
 		secretRecord.Creator = username
 	} else if userID != "" {

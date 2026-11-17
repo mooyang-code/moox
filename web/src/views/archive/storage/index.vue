@@ -20,7 +20,7 @@
           <h3>执行器</h3>
           <div v-if="!worker" class="is-warn">
             还没有归档执行器登记。在因子机部署 archive-worker：<code
-              >moox-cli setup deploy-unit --host &lt;主机&gt; --profile archive-worker</code
+              >moox-cli setup deploy --host &lt;主机&gt; --component archive-worker</code
             >
           </div>
           <a-descriptions v-else :column="{ xs: 1, sm: 1, md: 2 }" size="small" bordered>

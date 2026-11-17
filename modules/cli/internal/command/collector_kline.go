@@ -133,7 +133,7 @@ var fetchPlanReregisterFlags struct {
 var collectorFetchPlanReregisterCmd = &cobra.Command{
 	Use:   "reregister",
 	Short: "Storage 数据被清空后，让采集计划重新登记序列快照并重置补采状态",
-	Long: "Storage 的数据被整体清空（system reset 删掉 Pebble 目录）后，已登记的序列快照也没了，\n" +
+	Long: "Storage 的数据被整体清空（例如删掉存储机上的 Pebble 目录）后，已登记的序列快照也没了，\n" +
 		"采集函数的周期提交会因“快照缺失”被拒绝；而对账只在数据集标的集合变化时才重新登记。本命令把最近一份已生效计划里的\n" +
 		"全部数据集标记为“快照未登记”，下一轮对账（约 1 分钟内）会生成新计划、重新登记快照并选新的生效周期，\n" +
 		"1m 数据集约 2 分钟后恢复写入，1h 数据集等下一个整点。同时清掉该空间的补采作业，并把自动补采水位推到现在\n" +
@@ -609,6 +609,6 @@ func runFetchPlanPause(ctx context.Context, out io.Writer, flags klineRangeFlags
 	return printJSON(out, map[string]any{
 		"status": "paused", "space_id": flags.SpaceID, "timers_disabled": rsp.GetTimersDisabled(),
 		"note":        "已触发、仍在执行的采集调用不在其内：再等过 SCF 函数的执行超时，并确认 Storage 不再有该空间的写入",
-		"factor_note": "该空间上若有启用的因子任务，请同时对这些任务执行 moox-cli lifecycle pause --task-id <因子任务 ID>：否则下一次系统暂停恢复会卡在因子追赶（卡住后暂停这些任务即可放开）",
+		"factor_note": "该空间上若有启用的因子任务，下一次系统暂停恢复会卡在因子追赶：恢复前先停用这些任务（moox-cli factor task disable --task-id <因子任务 ID> --yes），放行后再启用",
 	})
 }

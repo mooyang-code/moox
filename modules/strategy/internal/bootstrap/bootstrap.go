@@ -1,4 +1,4 @@
-// Package bootstrap 装配策略进程：数据库、投递、事件消费、管理接口、指标、对账与保留清理。
+// Package bootstrap 装配策略进程：数据库、投递、事件消费、管理接口、指标与保留清理。
 package bootstrap
 
 import (
@@ -25,7 +25,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/warmup"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -35,16 +34,12 @@ import (
 )
 
 const (
-	reconcileInterval = 30 * time.Second
 	retentionInterval = 6 * time.Hour
-	// startupReconcileTimeout 限制启动时对账联系 Trade 的总时长：Trade 不可达时不让启动按实例数线性变慢，
-	// 剩下的由对账循环继续。
-	startupReconcileTimeout = 20 * time.Second
 	// outboxStallThreshold 是待投递结果最长允许的等待：投递正常时 1 秒内发出，超过它说明投递已停滞，健康检查报未就绪。
 	outboxStallThreshold = 5 * time.Minute
 )
 
-// Initialize 打开数据库、对账未完成的启停握手、启动投递与事件消费，并在服务监听前注册 StrategyMgr。
+// Initialize 打开数据库、启动投递与事件消费，并在服务监听前注册 StrategyMgr。
 func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Server, func() error, error) {
 	db, err := store.Open(cfg.Database)
 	if err != nil {
@@ -64,17 +59,23 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := db.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, nil, fmt.Errorf("应用策略 schema 失败：%w", err)
 	}
-	if interrupted, err := db.MarkRunningReplaysInterrupted(ctx, time.Now()); err != nil {
-		return nil, nil, fmt.Errorf("标记中断的回放失败：%w", err)
-	} else if interrupted > 0 {
-		log.Infof("进程重启：%d 个运行中的回放已标记为 failed(interrupted)", interrupted)
-	}
 	// 访问 Storage、FactorMgr 与 Trade 统一经本机主机网关（strategy 身份）；网关客户端由本进程持有，各适配器只借用。
 	gateway, err := cfg.OpenGateway(func(err error) { log.Warnf("strategy 网关目录刷新失败：%v", err) })
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开 strategy 的网关客户端：%w", err)
 	}
 	closers = append(closers, gateway.Close)
+	// “因子现算”来源经同一个网关客户端调因子引擎的 EngineControl：不套 factor.timeout，超时按服务目录的路由超时。
+	engineClient := input.NewEngineClient(gateway)
+	// 先关掉上次运行中途退出的“因子现算”回放留在因子引擎上的会话，再把遗留的运行中回放标成 interrupted。
+	if err := replay.CloseInterruptedSessions(ctx, db, engineClient, log.Warnf); err != nil {
+		return nil, nil, fmt.Errorf("读取运行中的回放失败：%w", err)
+	}
+	if interrupted, err := db.MarkRunningReplaysInterrupted(ctx, time.Now()); err != nil {
+		return nil, nil, fmt.Errorf("标记中断的回放失败：%w", err)
+	} else if interrupted > 0 {
+		log.Infof("进程重启：%d 个运行中的回放已标记为 failed(interrupted)", interrupted)
+	}
 	eventRuntime, err := newEventBusRuntime(db, cfg)
 	if err != nil {
 		return nil, nil, err
@@ -88,7 +89,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	ranged.PageSize = uint32(cfg.Replay.PageSize)
 	var replayClient input.Client = &ranged
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}}
-	service.Owner = tradeowner.New(cfg.Trade, gateway)
+	// 启用绑了组合账户的实例前读一次 Trade 的账户；停用后通知 Trade 关闭会话（批 3 的 3.6）。
+	service.Trade = tradeowner.New(cfg.Trade, gateway)
 	// 删除实例：经 Factor 删除关联的任务，删除前经 archive-mgr 确认结果数据集没有归档任务。
 	service.Tasks = live
 	service.Archives = &archivetasks.Client{Gateway: gateway}
@@ -99,27 +101,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil
 	})
 	service.Warmer = warm
-	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
+	runner := &replay.Runner{Store: db, Client: replayClient, Engine: engineClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
 	observer, err := newInstanceObserver(db, prometheus.DefaultRegisterer, log.Warnf)
 	if err != nil {
 		return nil, nil, err
 	}
-	service.Alerts = observer
 	observer.SetStaleAlertPeriods(cfg.Params.StaleAlertPeriods)
 
-	// 先尝试完成崩溃或网络中断留下的启停握手，再开始消费事件。Trade 暂不可达或个别实例不一致只告警：
-	// 停用侧由对账循环继续重试；启用侧被 Trade 拒绝的实例自动停用，结果未知的标记 session_unverified，
-	// 进程与接口照常启动以便人工修复。启动对账限时，超时未完成的实例由对账循环继续。
-	reconcileCtx, cancelReconcile := context.WithTimeout(ctx, startupReconcileTimeout)
-	if err := service.ReconcileDisabledInstances(reconcileCtx); err != nil {
-		log.Warnf("启动对账：已停用实例的 Trade 释放未完成，稍后自动重试：%v%s", err, tradeDetail(err))
-	}
-	if err := service.ReconcileEnabledInstances(reconcileCtx); err != nil {
-		log.Warnf("启动对账：%v%s", err, tradeDetail(err))
-	}
-	cancelReconcile()
 	// 进程在预热中途重启：会话里还没有预热结果的池实例重新开始预热（带着沿用状态的从状态之后接着推进，否则从头；先于开始消费事件，门禁立刻拦住它们的事件）。
 	if err := warm.Resume(ctx); err != nil {
 		return nil, nil, fmt.Errorf("恢复策略池预热失败：%w", err)
@@ -127,23 +117,23 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
-	if err := registerMetricsReporter(s, observer); err != nil {
+	reporter, err := registerMetricsReporter(s, observer)
+	if err != nil {
 		return nil, nil, err
 	}
 
 	var consumer *eventconsumer.Consumer
 	var handlerRef atomic.Pointer[trigger.Handler]
-	life, err := newLifecycle(cfg.Database, lifecycleDeps{
-		db: db, eventConnected: eventRuntime.Connected, consumerReady: func() bool { return consumer == nil || consumer.Ready() },
-		handler: &handlerRef, warm: warm,
-	})
+	ready := newModuleCheck(db, eventRuntime.Connected, func() bool { return consumer == nil || consumer.Ready() })
+	life, err := newLifecycle(cfg.Database, lifecycleDeps{db: db, handler: &handlerRef, warm: warm, ready: ready})
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
 	}
+	observer.SetHalted(life.Halted)
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
 		handlerRef.Store(handler)
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
@@ -169,7 +159,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil
 	})
 	loops.Add(5)
-	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life, warm)), OnResult: observer.ParamSubmitted,
+	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life, ready, warm)), OnResult: observer.ParamSubmitted,
 		OnError: func(requestID string, err error) { log.Warnf("因子参数提交 %s 未完成：%v", requestID, err) }}
 	go func() {
 		defer loops.Done()
@@ -181,16 +171,14 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}()
 	go func() {
 		defer loops.Done()
-		reconcileLoop(background, service)
-	}()
-	go func() {
-		defer loops.Done()
 		retentionLoop(background, db, cfg.Retention)
 	}()
 	go func() {
 		defer loops.Done()
-		life.Recover(background)
-		refreshUntilReady(background, life, lifecycleStartupRefreshEvery, lifecycleStartupWindow)
+		runModuleCheck(background, ready)
+	}()
+	go func() {
+		defer loops.Done()
 		life.Run(background, lifecycleRefreshEvery)
 	}()
 
@@ -199,11 +187,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if strategyMgr == nil {
 		return nil, nil, errors.New("缺少 tRPC 服务 trpc.moox.strategy.StrategyMgr")
 	}
+	service.Lifecycle = life
 	strategypb.RegisterStrategyMgrService(strategyMgr, service)
 	healthState := health.New("strategy", "strategy", "", "")
-	healthState.SnapshotFunc = withLifecycle(strategyHealthSnapshot(db, eventRuntime, healthState, consumer), life)
+	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, healthState, consumer)
+	// 上报带给 Monitor 的就绪与 /readyz 是同一个判断；模块级生命周期也随上报，首页的系统状态读它。
+	reporter.SetReadiness(healthz.Readiness(healthState.Snapshot))
+	reporter.SetLifecycle(life.ReportState)
 	healthState.SetReady(true)
-	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState, append(lifecycleRoutes(life, warm), (&trigger.ReplayEvaluator{Store: db, Client: inputClient}).Routes()...)...); err != nil {
+	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
 	}
 	keep = true
@@ -223,29 +215,11 @@ const (
 	factorTaskReadyStep = 3 * time.Second
 )
 
-// paramSubmitAllowed 把触发闸门转成参数提交的闸门：模块暂停、实例暂停时不提交（ModeOff），模块暂时未就绪时也不提交（ModeWait），其余模式照常。
+// paramSubmitAllowed 把触发门禁转成参数提交的门禁：模块暂停时不提交（ModeOff），模块自检没通过、策略池预热中也不提交（ModeWait），其余模式照常。
 func paramSubmitAllowed(gate func(string) trigger.Mode) func(string) bool {
 	return func(instanceID string) bool {
 		mode := gate(instanceID)
 		return mode != trigger.ModeOff && mode != trigger.ModeWait
-	}
-}
-
-func reconcileLoop(ctx context.Context, service *rpc.Service) {
-	ticker := time.NewTicker(reconcileInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		if err := service.ReconcileDisabledInstances(ctx); err != nil {
-			log.Warnf("已停用实例的 Trade 释放仍未完成：%v%s", err, tradeDetail(err))
-		}
-		if err := service.ReconcileEnabledInstances(ctx); err != nil {
-			log.Warnf("启用实例的 Trade 会话复核：%v%s", err, tradeDetail(err))
-		}
 	}
 }
 
@@ -317,14 +291,6 @@ func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (
 	}
 }
 
-// tradeDetail 把 Trade 业务错误附带的原始说明拼到日志后面。
-func tradeDetail(err error) string {
-	if detail := tradeowner.Detail(err); detail != "" {
-		return "；Trade 的说明：" + detail
-	}
-	return ""
-}
-
 // eventBusConfig 是出站投递与事件消费共用的连接配置：环境变量给出的凭据优先，否则用配置的凭据文件。
 func eventBusConfig(cfg Config, name string) (jetstream.Config, error) {
 	jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, name)
@@ -361,10 +327,7 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 
 // newInputClient 构造 Storage（Metadata、DataView）与 Factor 的窄适配，调用经 gatewayclient 发往本机主机网关。
 func newInputClient(cfg Config, gateway gatewayclient.Invoker) *input.RPCClient {
-	client := input.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
-	client.Auth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.AppKey, Operator: "strategy"}
-	client.ViewAuth = &commonpb.AuthInfo{AppId: cfg.Storage.AppID, AppKey: cfg.Storage.ViewAppKey, Operator: "strategy"}
-	return client
+	return input.NewGatewayClient(gateway, cfg.Storage.Timeout, cfg.Factor.Timeout)
 }
 
 func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, state *health.State, consumer *eventconsumer.Consumer) func(context.Context) healthz.Response {
@@ -384,6 +347,20 @@ func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtim
 		calendarWarning, calendarExpired := stockCalendarWarning(ctx, db, time.Now())
 		ready := databaseReady && state.Ready() && eventBusConnected && consumerReady && statsErr == nil && !outboxStalled && !calendarExpired
 		rsp := healthz.Base("strategy", "strategy", "", "", state.StartedAt, ready)
+		switch {
+		case !databaseReady:
+			rsp.Reason = "数据库不可用"
+		case !eventBusConnected:
+			rsp.Reason = "出站 EventBus 未连接"
+		case !consumerReady:
+			rsp.Reason = "就绪事件消费者未连接"
+		case statsErr != nil:
+			rsp.Reason = "读取待投递目标失败：" + statsErr.Error()
+		case outboxStalled:
+			rsp.Reason = "目标投递停滞"
+		case calendarExpired:
+			rsp.Reason = calendarWarning
+		}
 		rsp.Details = map[string]any{
 			"database_ready": databaseReady, "eventbus_connected": eventBusConnected,
 			"ready_consumer_connected": consumerReady, "outbox_pending_count": stats.PendingCount,

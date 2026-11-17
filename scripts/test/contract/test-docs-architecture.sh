@@ -32,7 +32,7 @@ done
 python3 - <<'PY'
 import os, re, sys
 
-roots = ["docs", "README.md", "modules", "packages", "web/README.md", "web-host/README.md"]
+roots = ["docs", "README.md", "modules", "packages", "web/README.md"]
 files = []
 for root in roots:
     if os.path.isfile(root):

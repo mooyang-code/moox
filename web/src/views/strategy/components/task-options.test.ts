@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { FactorMember, FactorTask, FactorTaskInfo } from "@/api/factor/types";
-import { availableTasks, isUnifiedTask, taskColumns, varMemberBlockReason } from "./task-options";
+import {
+  declaresFactorParams,
+  enabledTasks,
+  isUnifiedTask,
+  selectableTask,
+  taskColumns,
+  varMemberBlockReason
+} from "./task-options";
 
 const task = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "ftask_a",
@@ -30,9 +37,9 @@ const info = (patch: Partial<FactorTask> = {}, members: FactorMember[] = []): Fa
   members
 });
 
-describe("availableTasks", () => {
-  it("lists only running, unbound tasks of the space, sorted by name", () => {
-    const options = availableTasks(
+describe("enabledTasks", () => {
+  it("lists running tasks of the space (bound ones too), sorted by name", () => {
+    const options = enabledTasks(
       [
         info({ task_id: "ftask_b", name: "B 任务" }),
         info({ task_id: "ftask_a", name: "A 任务" }),
@@ -43,11 +50,12 @@ describe("availableTasks", () => {
       ],
       "crypto"
     );
-    expect(options.map(item => item.taskId)).toEqual(["ftask_a", "ftask_b"]);
+    expect(options.map(item => item.taskId)).toEqual(["ftask_a", "ftask_b", "ftask_bound"]);
+    expect(options.find(item => item.taskId === "ftask_bound")?.boundInstanceId).toBe("i1");
   });
 
   it("carries every column of the task and the variable members the strategy has to parameterise", () => {
-    const [option] = availableTasks(
+    const [option] = enabledTasks(
       [
         info({}, [
           member("ma", "fixed", ["ma"]),
@@ -63,10 +71,7 @@ describe("availableTasks", () => {
   });
 
   it("falls back to the task id as the name and tolerates members without columns", () => {
-    const [option] = availableTasks(
-      [info({ name: "" }, [{ ...member("ma", "fixed", []), output_columns: undefined }])],
-      "crypto"
-    );
+    const [option] = enabledTasks([info({ name: "" }, [{ ...member("ma", "fixed", []), output_columns: undefined }])], "crypto");
     expect(option.name).toBe("ftask_a");
     expect(taskColumns({ members: [] })).toEqual([]);
     expect(option.columns).toEqual([]);
@@ -75,7 +80,7 @@ describe("availableTasks", () => {
 
 describe("isUnifiedTask", () => {
   it("is true only when the source dataset of the task is a unified dataset", () => {
-    const [unified, split] = availableTasks(
+    const [unified, split] = enabledTasks(
       [
         info({ task_id: "ftask_u", name: "A", source_dataset_id: "ds_uni" }),
         info({ task_id: "ftask_s", name: "B", source_dataset_id: "ds_spot" })
@@ -90,10 +95,28 @@ describe("isUnifiedTask", () => {
 });
 
 describe("varMemberBlockReason", () => {
-  it("策略池、统一数据集、双市场不能写 factor_params，带可变成员的任务不能用；单市场可以", () => {
-    expect(varMemberBlockReason({ pool: false, unified: false, marketCount: 1 })).toBe("");
-    expect(varMemberBlockReason({ pool: true, unified: false, marketCount: 1 })).toContain("策略池");
-    expect(varMemberBlockReason({ pool: false, unified: true, marketCount: 2 })).toContain("统一数据集");
-    expect(varMemberBlockReason({ pool: false, unified: false, marketCount: 2 })).toContain("双市场");
+  it("只拦附加来源的任务；主帧任务（含策略池、统一数据集、双市场，不写 factor_params 时只读）都能选", () => {
+    expect(varMemberBlockReason("")).toBe("");
+    expect(varMemberBlockReason("daily")).toContain("附加来源的任务不能有可变成员");
+  });
+});
+
+describe("declaresFactorParams", () => {
+  it("is true only when the DSL writes factor_params", () => {
+    expect(declaresFactorParams("name: a\nfactor_params:\n  bias__var:\n    window: 20\n")).toBe(true);
+    expect(declaresFactorParams("name: a\nrules: []\n")).toBe(false);
+    expect(declaresFactorParams("name: a\nfactor_params: {}\n")).toBe(false);
+    expect(declaresFactorParams("name: a\nfactor_params:\n")).toBe(false);
+    expect(declaresFactorParams("name: [")).toBe(false);
+  });
+});
+
+describe("selectableTask", () => {
+  it("hides tasks bound to another instance only for the main frame of a factor_params definition", () => {
+    const bound = { boundInstanceId: "i1" };
+    expect(selectableTask(bound, true, "")).toBe(false);
+    expect(selectableTask(bound, true, "daily")).toBe(true);
+    expect(selectableTask(bound, false, "")).toBe(true);
+    expect(selectableTask({ boundInstanceId: "" }, true, "")).toBe(true);
   });
 });

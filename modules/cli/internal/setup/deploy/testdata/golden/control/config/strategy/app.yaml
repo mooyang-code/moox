@@ -1,0 +1,43 @@
+database: /data/moox/data/strategy/strategy.sqlite
+# 调用 Trade 的逻辑账户归属方法经 gateway_client（strategy 身份）发送
+trade:
+  timeout: 3s
+instance_id: strategy-1
+eventbus:
+  urls:
+    - tls://203.0.113.11:4222
+  credential_file: /data/moox/secrets/eventbus/strategy-eventbus.yaml
+  relay_interval: 1s
+  relay_batch_size: 100
+  reconnect_interval: 1s
+  connect_timeout: 3s
+  publish_timeout: 10s
+  consumer_name: strategy_view_data_ready_v1
+# 访问 Storage、FactorMgr 与 Trade 统一经本机主机网关（strategy 身份）
+gateway_client:
+  caller: strategy
+  # 本机的主机签名私钥，这台主机上的组件共用。
+  key_file: /data/moox/secrets/host.key
+  # 以下三项由部署渲染：本机主机 ID、本机网关地址与 MooX CA 根证书（相对本文件所在目录）。
+  host_id: control
+  local_address: 127.0.0.1:11002
+  ca_file: /data/moox/secrets/moox-ca.crt
+factor:
+  timeout: 5s
+storage:
+  # 跨主机经公网读 View，行数多时 5s 偶发超时；路由预算为 25s
+  timeout: 20s
+evaluation:
+  attempt_budget: 5
+# 可变成员参数的投递告警：实例最近连续这么多期的结果都没有把参数送达因子侧时，导出 moox_strategy_param_delivery_stale=1
+params:
+  stale_alert_periods: 10
+retention:
+  result_items_days: 90
+  replays_days: 90
+  replays_max: 50
+  ready_events_days: 7
+replay:
+  chunk_bars: 50
+  page_size: 2000
+  missing_price_liquidate_bars: 3

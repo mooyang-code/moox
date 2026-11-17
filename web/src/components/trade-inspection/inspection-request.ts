@@ -38,7 +38,7 @@ export function canTestConnection(secret: { category?: string; provider?: string
 }
 
 /**
- * 从密钥 ID 里读环境：setup apply 写入的交易所密钥固定为 exchange-<交易所>-<环境>-<名称>，
+ * 从密钥 ID 里读环境：setup init 写入的交易所密钥固定为 exchange-<交易所>-<环境>-<名称>，
  * 环境段是 production 或 testnet，对应 Trade 的 2、1。不符合这个格式（例如管理台手工录入的）时返回 0，表示看不出来。
  */
 export function secretEnvironmentOf(secretId: string | undefined): 0 | 1 | 2 {

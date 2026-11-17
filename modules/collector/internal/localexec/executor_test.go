@@ -39,7 +39,7 @@ func backfillEvent(t *testing.T) []byte {
 func recordingHandler(observed *[]marketfetch.Request, mu *sync.Mutex) func() *marketfetch.Handler {
 	return func() *marketfetch.Handler {
 		return &marketfetch.Handler{
-			NewStorage: func(string) (marketfetch.Storage, error) { return nopStorage{}, nil },
+			NewStorage: func() (marketfetch.Storage, error) { return nopStorage{}, nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				mu.Lock()
 				*observed = append(*observed, request)
@@ -91,7 +91,7 @@ func TestLocalExecutorLimitsConcurrency(t *testing.T) {
 	var running, peak atomic.Int32
 	executor := New("crypto", 2, func() *marketfetch.Handler {
 		return &marketfetch.Handler{
-			NewStorage: func(string) (marketfetch.Storage, error) { return nopStorage{}, nil },
+			NewStorage: func() (marketfetch.Storage, error) { return nopStorage{}, nil },
 			Execute: func(context.Context, marketfetch.Request, marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				current := running.Add(1)
 				for {

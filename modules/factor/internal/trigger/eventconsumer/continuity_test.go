@@ -2,6 +2,7 @@ package eventconsumer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -43,7 +44,7 @@ func (p *periodRows) ReadWindow(_ context.Context, req storageio.ReadRequest) (m
 	for _, subject := range req.Subjects {
 		frame := &storageio.Frame{SubjectID: subject}
 		if p.present[req.Start.Unix()][subject] {
-			frame.Rows = [][]any{{req.Start, "default", 1.0}}
+			frame.Rows = [][]any{{req.Start, testSeriesTag, 1.0}}
 		}
 		frames[subject] = frame
 	}
@@ -74,6 +75,18 @@ func minus(all []string, drop ...string) []string {
 	return out
 }
 
+// testSeriesTag 是单序列数据集测试用的 series_tag。
+const testSeriesTag = "venue:binance"
+
+// singleTagRefs 把标的配上 testSeriesTag，作为事件里的序列名单。
+func singleTagRefs(subjects []string) []*storagepb.SeriesRef {
+	refs := make([]*storagepb.SeriesRef, 0, len(subjects))
+	for _, subject := range subjects {
+		refs = append(refs, &storagepb.SeriesRef{SubjectId: subject, SeriesTag: testSeriesTag})
+	}
+	return refs
+}
+
 func periodDelivery(t *testing.T, eventID string, period time.Time, universe, failed []string) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
@@ -84,7 +97,8 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 	}
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: status, Source: "ledger", SnapshotRef: "scope-1",
-		UniverseSubjectIds: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(period.Add(time.Minute)),
+		UniverseSubjectIds: universe, FailedSubjects: failed, UniverseSeries: singleTagRefs(universe), FailedSeries: singleTagRefs(failed),
+		CompletedAt: timestamppb.New(period.Add(time.Minute)),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars"})
 	require.NoError(t, err)
@@ -209,6 +223,39 @@ func TestContinuityBlocksAboveTheThresholdAndRecomputesAfterBackfill(t *testing.
 	require.Len(t, h.runner.plans, 2)
 	require.Equal(t, []string{"S00"}, h.runner.plans[1].UpstreamFailed)
 	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
+}
+
+// 报告完成标记遇到重试也不会通过的错误（例如标记超过体积上限、Storage 判为无效请求）：水位停在这一期并记成阻塞
+// （compute_failed），水位阻塞的监控能看到；基础设施错误不记阻塞，照常重试。问题排除后追赶算完这一期，阻塞清除。
+func TestContinuityMarksNonTransientComputeFailureAsBlocked(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.event(0, universe, nil)
+
+	h.runner.err = fmt.Errorf("%w: storage unavailable", storageio.ErrInfra)
+	require.Equal(t, jetstream.RETRY, h.event(1, universe, nil).Decision)
+	require.True(t, h.state().BlockedSince.IsZero(), "基础设施错误只重试，不记阻塞")
+
+	h.runner.err = errors.New("report factor period computed: 因子周期完成标记超过体积上限")
+	require.Equal(t, jetstream.TERM, h.event(1, universe, nil).Decision)
+	state := h.state()
+	require.Equal(t, minuteAt(0), state.CommittedThrough)
+	require.Equal(t, minuteAt(1), state.BlockedPeriod)
+	require.Equal(t, "compute_failed", state.BlockedReason)
+	require.Equal(t, h.now, state.BlockedSince)
+
+	// 追赶（这一期读回齐全）时仍失败：阻塞开始的时刻不变。
+	h.rows.set(minuteAt(1), universe...)
+	h.now = h.now.Add(time.Minute)
+	require.Error(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Equal(t, h.now.Add(-time.Minute), h.state().BlockedSince)
+	require.Equal(t, "compute_failed", h.state().BlockedReason)
+
+	h.runner.err = nil
+	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
+	require.True(t, h.state().BlockedSince.IsZero())
+	require.Empty(t, h.state().BlockedReason)
 }
 
 // 补采确认行情源没有的标的不计入缺失、不阻塞，也不作为上游失败记账。
@@ -336,4 +383,45 @@ func TestAdvanceFollowsCatchupGateWhenRealtimeGateClosed(t *testing.T) {
 	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
 	require.Greater(t, len(h.runner.plans), computed, "追赶门禁放行：只靠追赶补算历史周期")
 	require.Equal(t, minuteAt(4), h.state().CommittedThrough)
+}
+
+// 模块在运行、任务还没就绪（引擎重启后窗口载入中）时到达的周期：本期不算，但记下追赶目标；就绪后追赶循环直接补算，不等下一条实时事件。
+// 模块暂停时（noteWhenClosed 返回 false）不记目标；从没算过的任务不建水位记录。
+func TestNotReadyEventIsNotedAndCaughtUpAfterReady(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	ready, running := false, false
+	h.handler.SetGate(func(string) bool { return ready })
+	h.handler.SetNoteWhenClosed(func(string) bool { return running })
+
+	running = true
+	require.Equal(t, jetstream.ACK, h.event(0, universe, nil).Decision)
+	_, noted := h.store.Get(h.taskID)
+	require.False(t, noted, "从没算过的任务不建水位记录：连续性从就绪后的第一条实时事件起保证")
+
+	// 任务算过一期（有水位记录）之后引擎重启、窗口重新载入：载入期间到达的周期只记目标。
+	ready = true
+	require.Equal(t, jetstream.ACK, h.event(0, universe, nil).Decision)
+	require.Equal(t, []time.Time{minuteAt(0)}, h.computed())
+	ready = false
+	h.rows.set(minuteAt(1), universe...)
+	h.rows.set(minuteAt(2), universe...)
+	h.rows.set(minuteAt(3), universe...)
+	require.Equal(t, jetstream.ACK, h.event(1, universe, nil).Decision)
+	require.Equal(t, jetstream.ACK, h.event(2, universe, nil).Decision)
+	require.Len(t, h.runner.plans, 1, "任务没就绪：本期不算")
+	require.Equal(t, minuteAt(2), h.state().Target)
+	require.Equal(t, minuteAt(0), h.state().CommittedThrough)
+
+	running = false
+	require.Equal(t, jetstream.ACK, h.event(3, universe, nil).Decision)
+	require.Equal(t, minuteAt(2), h.state().Target, "模块暂停：不记追赶目标，由恢复追赶显式建立")
+	running = true
+	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Len(t, h.runner.plans, 1, "没就绪时追赶循环也不算")
+
+	ready = true
+	require.NoError(t, h.handler.Advance(context.Background(), h.taskID))
+	require.Equal(t, []time.Time{minuteAt(0), minuteAt(1), minuteAt(2)}, h.computed(), "就绪后追赶循环补算载入期间到达的周期")
+	require.Equal(t, minuteAt(2), h.state().CommittedThrough)
 }

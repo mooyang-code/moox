@@ -55,8 +55,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 12 {
-		t.Fatalf("eventbus records=%d, want 12（10 个角色令牌 + CA + 服务端证书）", count)
+	if count != 10 {
+		t.Fatalf("eventbus records=%d, want 10（只有 10 个角色令牌，没有证书）", count)
 	}
 }
 
@@ -146,8 +146,10 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	out.Reset()
 	require.NoError(t, runEventBusCredentialsCommand(exportArgs, &out, &bytes.Buffer{}))
 	assert.FileExists(t, filepath.Join(exportDir, "users.yaml"))
-	assert.FileExists(t, filepath.Join(exportDir, "ca.pem"))
-	assert.FileExists(t, filepath.Join(exportDir, "server.pem"))
+	// 导出里没有任何证书：服务端用所在主机的主机证书，角色文件指向身份包里的 MooX CA 根证书。
+	for _, name := range []string{"ca.pem", "server.pem", "server-key.pem"} {
+		assert.NoFileExists(t, filepath.Join(exportDir, name))
+	}
 	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "metrics-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-observability.yaml"))
@@ -172,6 +174,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		credential, loadErr := jetstream.LoadCredentialFile(filepath.Join(exportDir, name))
 		require.NoError(t, loadErr, name)
 		require.Equal(t, []string{wantURL}, credential.URLs, name)
+		require.Equal(t, "../moox-ca.crt", credential.CAFile, name)
 	}
 
 	yaml := usersYAML(map[string]string{
@@ -261,12 +264,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		}
 	}
 
-	bundle, err := makeTLSBundle("203.0.113.10")
-	require.NoError(t, err)
-	assert.Contains(t, bundle.CA, "BEGIN CERTIFICATE")
-	assert.Contains(t, bundle.Cert, "BEGIN CERTIFICATE")
-	assert.Contains(t, bundle.Key, "BEGIN RSA PRIVATE KEY")
-
 	rotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "hostagent-publisher"}
 	err = runEventBusCredentialsCommand(rotateArgs, &bytes.Buffer{}, &bytes.Buffer{})
 	require.Error(t, err)
@@ -284,7 +281,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
-	assert.GreaterOrEqual(t, count, int64(11))
+	assert.EqualValues(t, 10, count)
 }
 
 func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
@@ -325,7 +322,7 @@ func seedEventBusDeployment(t *testing.T, dbPath string) {
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host", "eventbus"}}}))
+	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "eventbus"}}}))
 }
 
 func eventBusACLBlock(yaml, username string) string {
@@ -570,7 +567,7 @@ func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) 
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host"}},
+		{HostID: "control", Address: "control.example.test", Components: []string{"admin"}},
 		{HostID: "bus", Address: "bus.example.test", Components: []string{"eventbus"}},
 	}))
 	address, err := eventBusNATSURL(db, "control")
@@ -581,9 +578,8 @@ func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) 
 	require.ErrorContains(t, err, "active EventBus deployment not found")
 }
 
-// EventBus 换主机之后：旧 TLS 身份绑定的是旧地址，ensure、export、export-clients 都必须拒绝，
-// 轮换之后全部通过；角色令牌不变，CA 与服务端证书换新。
-func TestEventBusCredentialsRotateTLSAfterEventBusMoves(t *testing.T) {
+// EventBus 换主机之后不用轮换任何东西：它没有自己的证书（用新主机的主机证书），导出的地址跟着部署记录走，角色令牌不变。
+func TestEventBusExportFollowsEventBusMoveWithoutRotation(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "admin.db")
 	keyPath := filepath.Join(dir, "key")
@@ -602,71 +598,32 @@ func TestEventBusCredentialsRotateTLSAfterEventBusMoves(t *testing.T) {
 	oldDir := filepath.Join(dir, "old")
 	_, err = run("export", "--output-dir", oldDir)
 	require.NoError(t, err)
-	oldCA, err := os.ReadFile(filepath.Join(oldDir, "ca.pem"))
-	require.NoError(t, err)
 	oldUsers, err := os.ReadFile(filepath.Join(oldDir, "users.yaml"))
 	require.NoError(t, err)
 
-	// EventBus 从控制机搬到存储机：先去掉控制机上的登记，同一次同步里加上存储机的登记。
+	// EventBus 从控制机搬到存储机。
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	topology, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
 	require.NoError(t, topology.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host"}},
+		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin"}},
 		{HostID: "storage-1", Address: "203.0.113.20", Components: []string{"eventbus"}},
 	}))
 	closeAdminCLIDB(db)
-
-	for _, sub := range []string{"ensure", "export"} {
-		args := []string{sub}
-		if sub == "export" {
-			args = append(args, "--output-dir", filepath.Join(dir, "stale"))
-		}
-		_, err = run(args...)
-		require.Error(t, err, sub)
-		assert.Contains(t, err.Error(), "explicit identity rotation is required", sub)
-	}
-	_, err = run("export-clients", "--output-dir", filepath.Join(dir, "stale-clients"), "--roles", "strategy-eventbus")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "explicit identity rotation is required")
-
-	_, err = run("rotate-tls")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--confirm")
-	out, err := run("rotate-tls", "--confirm")
-	require.NoError(t, err)
-	assert.Contains(t, out, `"rotated":"tls"`)
-	assert.Contains(t, out, "tls://203.0.113.20:4222")
 
 	_, err = run("ensure")
 	require.NoError(t, err)
 	newDir := filepath.Join(dir, "new")
 	_, err = run("export", "--output-dir", newDir)
 	require.NoError(t, err)
-	newCA, err := os.ReadFile(filepath.Join(newDir, "ca.pem"))
-	require.NoError(t, err)
 	newUsers, err := os.ReadFile(filepath.Join(newDir, "users.yaml"))
 	require.NoError(t, err)
-	assert.NotEqual(t, string(oldCA), string(newCA), "CA 必须换新")
 	assert.Equal(t, string(oldUsers), string(newUsers), "角色令牌不变")
 	credential, err := jetstream.LoadCredentialFile(filepath.Join(newDir, "strategy-eventbus.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"tls://203.0.113.20:4222"}, credential.URLs)
 
-	clientsParent := filepath.Join(dir, "clients-parent")
-	require.NoError(t, os.Mkdir(clientsParent, 0o700))
-	clientsDir := filepath.Join(clientsParent, "clients")
-	_, err = run("export-clients", "--output-dir", clientsDir, "--roles", "strategy-eventbus")
-	require.NoError(t, err)
-	assert.FileExists(t, filepath.Join(clientsDir, "clients.json"))
-
-	// 没有 TLS 身份时没有可轮换的东西。
-	emptyDB := filepath.Join(dir, "empty.db")
-	require.NoError(t, applySchema(emptyDB, adminschema.AdminSQL()))
-	seedEventBusDeployment(t, emptyDB)
-	var buf bytes.Buffer
-	err = runEventBusCredentialsCommand([]string{"eventbus-credentials", "rotate-tls", "--db-path", emptyDB, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1", "--confirm"}, &buf, &bytes.Buffer{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run ensure first")
+	_, err = run("rotate-tls", "--confirm")
+	require.ErrorContains(t, err, "unknown eventbus-credentials subcommand")
 }

@@ -87,15 +87,18 @@ portfolio:
 	assertWeights(t, decision, map[string]string{"A": "0.4999"})
 }
 
-// signal 的解释明细与目标、Allocated 使用同一精度，明细可以复算已分配金额。
-func TestSignalItemsFollowWeightPrecision(t *testing.T) {
+// 固定标的择时的解释明细与目标、Allocated 使用同一精度，明细可以复算已分配金额。
+func TestHoldPoolItemsFollowWeightPrecision(t *testing.T) {
 	program := compile(t, `name: sig_precision
 rules:
   - id: s
-    type: signal
+    type: rank
     pool: [A, B, C]
-    entry: "m > 0"
-    exit: "m < 0"
+    score: "0"
+    select: {top: 10000}
+    hold:
+      entry: "m > 0"
+      exit: "m < 0"
     weight: {total: 1}
 portfolio:
   max_missing: 1

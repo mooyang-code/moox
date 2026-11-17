@@ -9,17 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
-	collectorstore "github.com/mooyang-code/moox/modules/collector/internal/store"
-
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
@@ -27,7 +24,7 @@ import (
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -76,10 +73,18 @@ func (l *fixtureListener) Close() error {
 	return err
 }
 
-type egressFixture struct{ calls atomic.Int32 }
+type egressFixture struct {
+	calls  atomic.Int32
+	signed atomic.Int32
+}
 
-func (f *egressFixture) Do(_ context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, error) {
+func (f *egressFixture) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, error) {
 	f.calls.Add(1)
+	for name := range codec.Message(ctx).ServerMetaData() {
+		if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+			f.signed.Add(1)
+		}
+	}
 	if req.Host != "data-api.binance.vision" && !strings.HasSuffix(req.Host, ".binance.com") {
 		return &egresspb.DoRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NO_PERMISSION}}, nil
 	}
@@ -92,10 +97,17 @@ func (f *egressFixture) Do(_ context.Context, req *egresspb.DoReq) (*egresspb.Do
 	return &egresspb.DoRsp{RetInfo: &commonpb.RetInfo{}, Status: 200, Body: []byte(`{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","contractType":"PERPETUAL","baseAsset":"BTC","quoteAsset":"USDT"}]}`)}, nil
 }
 
-type directoryFixture struct{ directory servicecatalog.Directory }
+// directoryFixture 下发的目录：采集器与 egress-proxy 部署在同一台主机上。
+type directoryFixture struct{}
 
-func (s directoryFixture) Fetch(_ context.Context, version string) (gatewayclient.DirectoryUpdate, error) {
-	return gatewayclient.DirectoryUpdate{Changed: version != s.directory.Version, Directory: s.directory.Clone()}, nil
+func (directoryFixture) Fetch(_ context.Context, version string) (gatewayclient.DirectoryUpdate, error) {
+	const current = "v1"
+	return gatewayclient.DirectoryUpdate{Changed: version != current, Version: current,
+		Hosts: []servicecatalog.Host{{ID: "overseas", Address: "overseas.example.test", Status: servicecatalog.Enabled}},
+		Deployments: []servicecatalog.Deployment{
+			{HostID: "overseas", ComponentID: "collector", Status: servicecatalog.Enabled},
+			{HostID: "overseas", ComponentID: "egress-proxy", Status: servicecatalog.Enabled},
+		}}, nil
 }
 
 type tagSnapshotFixture struct {
@@ -111,34 +123,31 @@ func (f *tagSnapshotFixture) ApplyTagSnapshot(_ context.Context, _, tag string, 
 
 // memoryRuns 在内存里保存标签的同步运行结果。
 type memoryRuns struct {
-	runs map[string]collectorstore.TagSyncRun
+	runs map[string]domain.TagSyncRun
 }
 
-func (m *memoryRuns) List(context.Context, string) ([]collectorstore.TagSyncRun, error) {
-	out := make([]collectorstore.TagSyncRun, 0, len(m.runs))
+func (m *memoryRuns) List(context.Context, string) ([]domain.TagSyncRun, error) {
+	out := make([]domain.TagSyncRun, 0, len(m.runs))
 	for _, run := range m.runs {
 		out = append(out, run)
 	}
 	return out, nil
 }
 
-func (m *memoryRuns) Record(_ context.Context, run collectorstore.TagSyncRun) error {
+func (m *memoryRuns) Record(_ context.Context, run domain.TagSyncRun) error {
 	m.runs[run.TagID] = run
 	return nil
 }
 
-// This opt-in test uses the production gateway router and shared client. The
-// loopback upstream supplies deterministic responses; Egress's own suite tests
-// real TLS and DNS connections separately.
-func TestEgressTransportNativeGatewayE2E(t *testing.T) {
-	binary := os.Getenv("MOOX_EGRESS_E2E_GATEWAY_HELPER_BINARY")
-	if binary == "" {
-		t.Skip("set MOOX_EGRESS_E2E_GATEWAY_HELPER_BINARY to a native helper built on this platform")
-	}
+// 采集器经共享的网关客户端调 Egress。两者同机，客户端直连 egress-proxy 的回环端口（这里用测试缝指到假 Egress 的临时端口），
+// 请求不带签名头。假上游给出确定的响应；真实的 TLS 与 DNS 连接由 Egress 自己的测试覆盖。
+// 跨主机经网关调 Egress 的链路（TLS、验签）在这里测不到，由网关与网关客户端各自的测试覆盖。
+func TestEgressTransportNativeLocalDirect(t *testing.T) {
 	root := t.TempDir()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(&fixtureListener{Listener: listener}), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName(fixtureService))
+	fixture := &fixtureListener{Listener: listener}
+	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(fixture), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithServiceName(fixtureService))
 	backend := &egressFixture{}
 	require.NoError(t, service.Register(&egresspb.ProxyServer_ServiceDesc, backend))
 	served := make(chan error, 1)
@@ -154,46 +163,24 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 			t.Error("native upstream did not stop")
 		}
 	})
-	ready := filepath.Join(root, "gateway.ready")
-	credential := gatewayauth.Credentials{Caller: "collector", KeyID: "assigned-egress-collector-13", Secret: "fixture-egress-collector-key-at-least-32-bytes"}
-	cmd := exec.Command(binary, "-mode=egress-native", "-node-id=overseas", "-upstream-addr="+listener.Addr().String(), "-ready-file="+ready, "-nonce-dir="+filepath.Join(root, "nonces"), "-key-id="+credential.KeyID)
-	cmd.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+credential.Secret)
-	logFile, err := os.Create(filepath.Join(root, "gateway.log"))
+	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	cmd.Stdout, cmd.Stderr = logFile, logFile
-	require.NoError(t, cmd.Start())
-	stopped := make(chan error, 1)
-	go func() { stopped <- cmd.Wait() }()
-	t.Cleanup(func() {
-		_ = cmd.Process.Signal(syscall.SIGINT)
-		select {
-		case err := <-stopped:
-			require.NoError(t, err)
-		case <-time.After(5 * time.Second):
-			_ = cmd.Process.Kill()
-			<-stopped
-			t.Error("gateway helper did not stop")
+	spec, ok := catalog.Service(fixtureService)
+	require.True(t, ok)
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if port != spec.Port {
+			return "127.0.0.1:1"
 		}
-		_ = logFile.Close()
-	})
-	var address string
-	require.Eventually(t, func() bool {
-		raw, err := os.ReadFile(ready)
-		if err == nil {
-			address = strings.TrimPrefix(strings.TrimSpace(string(raw)), "ip://")
-		}
-		return address != ""
-	}, 10*time.Second, 20*time.Millisecond)
+		return listener.Addr().String()
+	}))
+	credential := authtest.Component("collector", "overseas")
 	ca := httptest.NewTLSServer(http.NotFoundHandler())
 	defer ca.Close()
 	caFile := filepath.Join(root, "ca.crt")
 	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Certificate().Raw}), 0600))
-	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"overseas": {Address: "127.0.0.1"}}, Services: map[string][]string{fixtureService: {"overseas"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
 	for _, serialization := range []int{codec.SerializationTypePB, codec.SerializationTypeJSON} {
 		t.Run(fmt.Sprint(serialization), func(t *testing.T) {
-			gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credential, LocalHostID: "overseas", LocalAddress: address, CAFile: caFile, Source: directoryFixture{directory}, Serialization: serialization})
+			gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credential, LocalHostID: "overseas", CAFile: caFile, Source: directoryFixture{}, Serialization: serialization})
 			require.NoError(t, err)
 			defer gateway.Close()
 			client, err := httpclient.NewEgressHTTPClient(gateway, []string{"*.binance.com", "data-api.binance.vision"})
@@ -222,7 +209,7 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 			listers, _, err := marketwiring.NewSubjectListers(client)
 			require.NoError(t, err)
 			store := &tagSnapshotFixture{applied: map[string][]*storagepb.TagSnapshotItem{}}
-			runs := &memoryRuns{runs: map[string]collectorstore.TagSyncRun{}}
+			runs := &memoryRuns{runs: map[string]domain.TagSyncRun{}}
 			for _, kind := range []string{"spot", "swap"} {
 				store.tags = append(store.tags, &storagepb.Tag{SpaceId: "crypto", TagId: kind, Mode: "auto", Attributes: map[string]string{"sync.source": "binance", "market_type": kind, "sync.cron": "0 * * * *", "sync.timezone": "UTC"}})
 			}
@@ -240,14 +227,17 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 			if serialization == codec.SerializationTypeJSON {
 				require.NoError(t, service.Close(nil))
 				backendClosed = true
+				// 显式关掉监听和已建立的连接：不依赖服务关闭时是否及时关监听，下一次调用一定连不上。
+				require.NoError(t, fixture.Close())
 				now = now.Add(time.Hour)
 				failureCtx, cancelFailure := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancelFailure()
 				require.Error(t, runner.RunOnce(failureCtx), "stopped Egress must fail without direct fallback")
-				require.Equal(t, collectorstore.TagSyncFailed, runs.runs["spot"].LastStatus, "proxy failure must be recorded in the Collector database")
+				require.Equal(t, domain.TagSyncFailed, runs.runs["spot"].LastStatus, "proxy failure must be recorded in the Collector database")
 				require.Equal(t, before, backend.calls.Load())
 			}
 		})
 	}
 	require.Equal(t, int32(10), backend.calls.Load(), "HTTP status errors, snapshot IPs and skipped tags must not duplicate requests")
+	require.Zero(t, backend.signed.Load(), "同机直连 Egress 的请求不带签名头")
 }

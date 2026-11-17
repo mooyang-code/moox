@@ -51,7 +51,7 @@ type Continuity struct {
 
 type absentEntry struct {
 	subjects map[string]struct{}
-	// series 是统一数据集里按序列确认没有的（标的、series_tag）：只扣这一条序列，同标的的另一个市场照常算。
+	// series 是按序列确认没有的（标的、series_tag）：只扣这一条序列，统一数据集里同标的的另一个市场照常算。
 	series map[seriesset.Series]struct{}
 	until  time.Time
 }
@@ -138,18 +138,33 @@ func (c *Continuity) ratioFor(taskID string) float64 {
 
 // onEvent 记下事件带来的最新周期与期望标的，然后推进。
 func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, event periodEvent) error {
+	step, err := c.note(set, event, true)
+	if err != nil {
+		return err
+	}
+	return c.advance(ctx, h, set, members, step, &event)
+}
+
+// note 只记下事件带来的最新周期（追赶目标）与期望序列，不推进；返回任务的周期步长。
+// 任务还没就绪（例如引擎重启后窗口载入中）时到达的实时事件只调用它（create 为 false）：就绪之后由追赶循环从水位下一期补算，
+// 不必等下一条实时事件。create 为 false 时不给还没有水位记录的任务建立记录（与 NoteTarget 同一条规则）：
+// 从没算过的任务，连续性从它就绪后的第一条实时事件起保证，之前的历史用补算作业。
+func (c *Continuity) note(set domain.FactorTask, event periodEvent, create bool) (time.Duration, error) {
 	// 连续水位全部在轴上：事件周期在入口已换到轴上，轴是连续的。
 	clock := periodclock.Continuous{}
 	step, err := clock.Duration(set.Freq)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	period, err := clock.Align(event.periodTime, set.Freq)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	state, ok := c.cfg.Store.Get(set.TaskID)
 	if !ok || state.CommittedThrough.IsZero() {
+		if !create {
+			return step, nil
+		}
 		// 第一次见到这个任务：从这一期起保证连续，不回头补历史（历史用补算作业）。
 		state = watermark.State{TaskID: set.TaskID, CommittedThrough: period.Add(-step)}
 	}
@@ -157,14 +172,13 @@ func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorT
 	if period.After(state.Target) {
 		state.Target = period
 	}
-	if len(event.universe) > 0 && !period.Before(state.Target) {
-		state.Universe = append([]string(nil), event.universe...)
+	if len(event.universeSeries) > 0 && !period.Before(state.Target) {
 		state.UniverseSeries = append([]seriesset.Series(nil), event.universeSeries...)
 	}
 	if err := c.cfg.Store.Put(state); err != nil {
-		return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
+		return 0, fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 	}
-	return c.advance(ctx, h, set, members, step, &event)
+	return step, nil
 }
 
 // NoteTarget 显式把任务的追赶目标推到 period（取已有目标与 period 中较晚的）。
@@ -205,26 +219,20 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 	state, _ := c.cfg.Store.Get(set.TaskID)
 	for processed := 0; state.Behind() && processed < c.cfg.MaxPeriods; processed++ {
 		period := state.CommittedThrough.Add(step)
-		scope, triggerID := periodScope{universe: state.Universe, universeSeries: state.UniverseSeries}, CatchupEventID(set.TaskID, period)
+		scope, triggerID := periodScope{universeSeries: state.UniverseSeries}, CatchupEventID(set.TaskID, period)
 		if event != nil && event.periodTime.Equal(period) {
 			scope, triggerID = event.scope(), event.eventID
-		} else if len(scope.universeSeries) > 0 {
+		} else {
 			missing, err := c.readbackSeries(ctx, h, set, members, period, scope.universeSeries)
 			if err != nil {
 				return err
 			}
 			scope.failedSeries = missing
-		} else {
-			missing, err := c.readback(ctx, h, set, members, period, scope.universe)
-			if err != nil {
-				return err
-			}
-			scope.failed = missing
 		}
 		if state.InFlightTrigger != "" && state.InFlightPeriod.Equal(period) {
 			triggerID = state.InFlightTrigger
 		}
-		// 有序列全集（统一数据集）时，期望与缺失按序列数计：一个市场整体晚到不会让整期按标的全部缺失而阻塞水位。
+		// 期望与缺失按序列数计：统一数据集里一个市场整体晚到不会让整期按标的全部缺失而阻塞水位。
 		counts, confirmed, scope := c.scoped(set, period, scope)
 		expected, unconfirmed := counts.expected, counts.unconfirmed
 		if reason := c.invalid(set.TaskID, counts.judgeExpected, counts.judgeMissing, confirmed); reason != "" {
@@ -248,6 +256,20 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 				return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 			}
 			if _, err := h.computePeriod(ctx, set, members, period, scope, triggerID); err != nil {
+				if !transient(err) {
+					// 重试也不会通过的错误（例如完成标记超过体积上限、被 Storage 判为无效请求）：水位停在这一期，
+					// 记成阻塞，让水位阻塞的监控看得到；之后的追赶照常重试，问题排除后自动解除。
+					if state.BlockedSince.IsZero() || !state.BlockedPeriod.Equal(period) {
+						if state.BlockedSince.IsZero() {
+							state.BlockedSince = c.cfg.Now().UTC()
+						}
+						log.ErrorContextf(ctx, "factor_watermark_blocked task_id=%s period=%s reason=compute_failed error=%v", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
+					}
+					state.BlockedPeriod, state.BlockedReason = period, "compute_failed"
+					if putErr := c.cfg.Store.Put(state); putErr != nil {
+						return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, putErr)
+					}
+				}
 				return err
 			}
 		}
@@ -263,27 +285,23 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 	return nil
 }
 
-// periodCounts 是一期的期望与缺失数：expected、unconfirmed 是总数（标的数，统一数据集是序列数）；
-// judgeExpected、judgeMissing 是判断这一期有没有效的数：单序列数据集就是总数，统一数据集取缺失比例最低的那个 series_tag 的数。
+// periodCounts 是一期的期望与缺失数，都按序列计：expected、unconfirmed 是总数；
+// judgeExpected、judgeMissing 是判断这一期有没有效的数，取缺失比例最低的那个 series_tag 的数（只有一个 tag 时就是总数）。
 type periodCounts struct {
 	expected, unconfirmed       int
 	judgeExpected, judgeMissing int
 }
 
-// scoped 整理一期的范围：扣除补采确认没有的标的，返回期望数与缺失数、确认没有的标的，以及真正要算的范围。
-// 单序列数据集按标的计数（原有口径）；有序列全集（统一数据集）时按序列计数，要算的范围里也带按序列的全集与失败名单，
-// 并且按 series_tag 分别看缺失比例：只要有一个市场的缺失在阈值以内，这一期就有效，另一个市场整体晚到不会连累它
-// （晚到的序列已经列在失败名单里，记进空洞账本，补齐后由只填充补算补上）。
+// scoped 整理一期的范围：扣除补采确认没有的标的与序列，返回期望数与缺失数、确认没有的标的，以及真正要算的范围。
+// 都按序列计数，并且按 series_tag 分别看缺失比例：统一数据集里只要有一个市场的缺失在阈值以内，这一期就有效，
+// 另一个市场整体晚到不会连累它（晚到的序列已经列在失败名单里，记进空洞账本，补齐后由只填充补算补上）。
 func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope periodScope) (counts periodCounts, confirmed map[string]struct{}, out periodScope) {
-	subjects, missing, confirmed := c.missing(set, period, scope.universe, scope.failed)
-	out = periodScope{universe: withoutSubjects(scope.universe, confirmed), failed: missing}
-	if len(scope.universeSeries) == 0 {
-		return periodCounts{len(subjects), len(missing), len(subjects), len(missing)}, confirmed, out
-	}
-	// 按序列确认没有的（例如永续没有、现货有）只扣这一条序列；同标的的另一条序列仍在范围内。
-	_, absentSeries := c.absentAt(set.TaskID, period)
+	// 按标的确认没有的扣掉它的全部序列；按序列确认没有的（例如永续没有、现货有）只扣这一条，同标的的另一条序列仍在范围内。
+	absentSubjects, absentSeries := c.absentAt(set.TaskID, period)
+	confirmed = map[string]struct{}{}
 	for _, item := range scope.universeSeries {
-		if _, absent := confirmed[strings.TrimSpace(item.SubjectID)]; absent {
+		if _, absent := absentSubjects[strings.TrimSpace(item.SubjectID)]; absent {
+			confirmed[item.SubjectID] = struct{}{}
 			continue
 		}
 		if _, absent := absentSeries[item]; absent {
@@ -292,22 +310,18 @@ func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope perio
 		}
 		out.universeSeries = append(out.universeSeries, item)
 	}
-	out.universe = seriesSubjectList(out.universeSeries)
 	inScope := make(map[seriesset.Series]struct{}, len(out.universeSeries))
 	expectedByTag, missingByTag := map[string]int{}, map[string]int{}
 	for _, item := range out.universeSeries {
 		inScope[item] = struct{}{}
 		expectedByTag[item.SeriesTag]++
 	}
-	var failedSubjects []string
 	for _, item := range scope.failedSeries {
 		if _, ok := inScope[item]; ok {
 			out.failedSeries = append(out.failedSeries, item)
-			failedSubjects = append(failedSubjects, item.SubjectID)
 			missingByTag[item.SeriesTag]++
 		}
 	}
-	out.failed = uniqueStrings(failedSubjects)
 	counts = periodCounts{expected: len(out.universeSeries), unconfirmed: len(out.failedSeries)}
 	first := true
 	for tag, expected := range expectedByTag {
@@ -324,55 +338,7 @@ func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope perio
 	return counts, confirmed, out
 }
 
-// missing 返回该期期望的标的（该期事件的全集，扣除确认没有的）、未确认缺失的失败标的与确认没有的标的。
-func (c *Continuity) missing(set domain.FactorTask, period time.Time, universe, failed []string) ([]string, []string, map[string]struct{}) {
-	absent, _ := c.absentAt(set.TaskID, period)
-	var expected []string
-	confirmed := map[string]struct{}{}
-	for _, subject := range uniqueStrings(universe) {
-		if _, ok := absent[subject]; ok {
-			confirmed[subject] = struct{}{}
-			continue
-		}
-		expected = append(expected, subject)
-	}
-	inExpected := make(map[string]struct{}, len(expected))
-	for _, subject := range expected {
-		inExpected[subject] = struct{}{}
-	}
-	var unconfirmed []string
-	for _, subject := range uniqueStrings(failed) {
-		if _, ok := inExpected[subject]; ok {
-			unconfirmed = append(unconfirmed, subject)
-		}
-	}
-	return expected, unconfirmed, confirmed
-}
-
-// seriesSubjectList 返回序列涉及的标的（去重、排序）。
-func seriesSubjectList(values []seriesset.Series) []string {
-	subjects := make([]string, 0, len(values))
-	for _, item := range values {
-		subjects = append(subjects, item.SubjectID)
-	}
-	return uniqueStrings(subjects)
-}
-
-// withoutSubjects 返回去掉给定标的后的列表。
-func withoutSubjects(values []string, drop map[string]struct{}) []string {
-	if len(drop) == 0 {
-		return values
-	}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := drop[strings.TrimSpace(value)]; !ok {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-// invalid 判断一期是否无效：不知道期望数量、零提交（全部缺失）、缺失超过阈值。数量是标的数，统一数据集是序列数。
+// invalid 判断一期是否无效：不知道期望数量、零提交（全部缺失）、缺失超过阈值。数量按序列计（见 periodCounts）。
 // 范围内的标的全部确认没有时不算无效（没有可算的，直接推进）。
 func (c *Continuity) invalid(taskID string, expected, missing int, confirmed map[string]struct{}) string {
 	switch {
@@ -388,36 +354,7 @@ func (c *Continuity) invalid(taskID string, expected, missing int, confirmed map
 	return ""
 }
 
-// readback 读回一期源数据，返回还没有行的期望标的。
-func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, period time.Time, universe []string) ([]string, error) {
-	subjects := uniqueStrings(universe)
-	if len(subjects) == 0 {
-		return nil, nil
-	}
-	column := "close"
-	for _, member := range members {
-		if len(member.Factor.InputColumns) > 0 {
-			column = member.Factor.InputColumns[0]
-			break
-		}
-	}
-	step := periodStep(set)
-	readCtx, cancel := context.WithTimeout(ctx, h.cfg.ReadColumnTimeout)
-	defer cancel()
-	frames, err := c.cfg.Reader.ReadWindow(readCtx, storageio.ReadRequest{SpaceID: set.SpaceID, DatasetID: set.SourceDatasetID, Freq: set.Freq, Subjects: subjects, Start: period, End: period.Add(step), Columns: []string{column}})
-	if err != nil {
-		return nil, fmt.Errorf("%w: read back period %s: %v", storageio.ErrInfra, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
-	}
-	var missing []string
-	for _, subject := range subjects {
-		if frame := frames[subject]; frame == nil || len(frame.Rows) == 0 {
-			missing = append(missing, subject)
-		}
-	}
-	return missing, nil
-}
-
-// readbackSeries 读回一期源数据，返回还没有行的期望序列（统一数据集按序列判断：永续没到、现货到了，只有永续算缺失）。
+// readbackSeries 读回一期源数据，返回还没有行的期望序列（统一数据集里永续没到、现货到了，只有永续算缺失）。
 func (c *Continuity) readbackSeries(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, period time.Time, universe []seriesset.Series) ([]seriesset.Series, error) {
 	var subjects []string
 	for _, item := range universe {

@@ -3,10 +3,9 @@ package impl
 import (
 	"context"
 	"fmt"
-	"time"
+	"sync"
 
-	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/session"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
@@ -14,225 +13,79 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Login 用户登录
+// 用户不存在与密码错误给同一句话，不让人借提示判断用户名是否存在。
+const wrongCredentials = "用户名或密码错误"
+
+// placeholderPasswordHash 是用户不存在时拿来做一次 bcrypt 校验的固定哈希（与真实密码同一种哈希、同一代价），
+// 让“用户不存在”和“密码错误”耗时一致，不能借响应时间判断用户名是否存在。服务初始化时先算好。
+var placeholderPasswordHash = sync.OnceValue(func() string {
+	hash, err := mooxsecurity.HashPassword("moox-login-timing-placeholder")
+	if err != nil {
+		panic(fmt.Sprintf("生成登录占位哈希失败: %v", err))
+	}
+	return hash
+})
+
+// verifyPassword 在测试里替换，用来确认用户不存在时也做了一次校验。
+var verifyPassword = mooxsecurity.VerifyPassword
+
+// Login 用户登录：密码是明文（HTTPS 保护），bcrypt 校验通过后新建会话。会话 ID 交给控制台写进 Cookie，不进响应体。
 func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
-	log.InfoContextf(ctx, "[Auth] Login username=%s", req.Username)
+	login := session.LoginFrom(ctx)
+	if login == nil {
+		return loginRejected(pb.ErrorCode_INNER_ERR, "登录只能经管理台网页入口"), nil
+	}
+	log.InfoContextf(ctx, "[Auth] Login username=%s ip=%s", req.GetUsername(), login.ClientIP)
 
-	// 从HTTP头中获取真实客户端IP（优先级：X-Client-Ip > X-Forwarded-For > X-Real-IP > req.ClientIp）
-	req.ClientIp = s.extractClientIPFromContext(ctx, req.ClientIp)
-	log.InfoContextf(ctx, "[Auth] 提取到的客户端IP: %s", req.ClientIp)
-
-	// 0. 验证用户名和密码格式
-	if err := s.validateCredentialFormat(req.Username, req.PasswordHash); err != nil {
-		return &pb.LoginRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INVALID_PARAM,
-				Msg:  err.Error(),
-			},
-		}, nil
+	if err := validateCredentialFormat(req.GetUsername(), req.GetPassword()); err != nil {
+		return loginRejected(pb.ErrorCode_INVALID_PARAM, err.Error()), nil
+	}
+	now := s.now()
+	if s.failures.locked(req.GetUsername(), login.ClientIP, s.cfg.Security.MaxLoginAttempt, now) {
+		return loginRejected(pb.ErrorCode_NO_AUTH, "账户已被锁定，请稍后再试"), nil
 	}
 
-	// Consume before password decryption so every login salt is one-time,
-	// including failed password attempts.
-	loginSalt, err := s.userDAO.ConsumeLoginSalt(ctx, req.Username)
-	if err != nil || loginSalt.Salt != req.Salt || loginSalt.Timestamp != req.Timestamp || !time.Now().Before(loginSalt.ExpiresAt) {
-		return &pb.LoginRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INVALID_PARAM,
-				Msg:  "盐值或时间戳无效，请刷新页面重新登录",
-			},
-		}, nil
+	user, err := s.userDAO.GetUserByUsername(ctx, req.GetUsername())
+	hash := placeholderPasswordHash()
+	if err == nil {
+		hash = user.PasswordHash
 	}
-
-	// 2. 检查登录尝试次数
-	if s.isUserLocked(ctx, req.Username, req.ClientIp) {
-		return &pb.LoginRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_NO_AUTH,
-				Msg:  "账户已被锁定，请稍后再试",
-			},
-		}, nil
+	if !verifyPassword(req.GetPassword(), hash) || err != nil {
+		s.failures.fail(req.GetUsername(), login.ClientIP, s.cfg.Security, now)
+		return loginRejected(pb.ErrorCode_NO_AUTH, wrongCredentials), nil
 	}
+	s.failures.clear(req.GetUsername(), login.ClientIP)
 
-	// 3. 查询用户信息
-	user, err := s.userDAO.GetUserByUsername(ctx, req.Username)
+	created, err := s.sessions.Create(user.UserID, user.Username)
 	if err != nil {
-		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
-		return &pb.LoginRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_NO_AUTH,
-				Msg:  "用户名或密码错误。",
-			},
-		}, nil
+		log.ErrorContextf(ctx, "[Auth] 新建会话失败: %v", err)
+		return loginRejected(pb.ErrorCode_INNER_ERR, "登录失败"), nil
 	}
-	log.InfoContextf(ctx, "[Auth] user loaded: user_id=%s username=%s", user.UserID, user.Username)
-
-	// 4. 验证密码哈希
-	if !validateEncryptedPassword(ctx, user.PasswordHash, req.Salt, req.Timestamp, req.PasswordHash) {
-		s.recordLoginAttempt(ctx, req.Username, req.ClientIp, false)
-		return &pb.LoginRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_NO_AUTH,
-				Msg:  "用户名或密码错误",
-			},
-		}, nil
+	login.Issued = &created
+	if err := s.userDAO.UpdateUserLoginInfo(ctx, user.UserID, login.ClientIP); err != nil {
+		log.WarnContextf(ctx, "[Auth] 更新登录信息失败: %v", err)
 	}
-
-	// 5. 登录成功处理
-	s.recordLoginAttempt(ctx, req.Username, req.ClientIp, true)
-
-	// 更新用户登录信息
-	s.userDAO.UpdateUserLoginInfo(ctx, user.UserID, req.ClientIp)
-
-	sessionID, err := mooxsecurity.RandomHex(16)
-	if err != nil {
-		return loginInternalError(), nil
-	}
-	signingKey, err := mooxsecurity.RandomHex(32)
-	if err != nil {
-		return loginInternalError(), nil
-	}
-	encryptionKey, err := adminsecurity.GetEncryptionKey()
-	if err != nil {
-		return loginInternalError(), nil
-	}
-	encryptedSigningKey, err := mooxsecurity.Encrypt(signingKey, encryptionKey)
-	if err != nil {
-		return loginInternalError(), nil
-	}
-	expiresAt := time.Now().Add(s.cfg.Security.SessionTTL)
-	if err := s.userDAO.SetSigningSession(ctx, model.RequestSigningSession{
-		SessionID: sessionID, UserID: user.UserID, EncryptedSecret: encryptedSigningKey, ExpiresAt: expiresAt,
-	}); err != nil {
-		return loginInternalError(), nil
-	}
-
-	// 生成API访问令牌
-	accessToken, err := mooxsecurity.SignToken(map[string]any{
-		"user_id":    user.UserID,
-		"username":   user.Username,
-		"token_type": "access",
-		"sid":        sessionID,
-	}, s.cfg.JWT.SecretKey, "moox-admin", time.Until(expiresAt))
-	if err != nil {
-		_ = s.userDAO.DeleteSigningSession(ctx, sessionID)
-		log.ErrorContextf(ctx, "[Auth] 生成JWT令牌失败: %v", err)
-		return &pb.LoginRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INNER_ERR,
-				Msg:  "登录失败",
-			},
-		}, nil
-	}
-
-	// 会话与令牌都签发成功后才写入全局活动日志，登录失败不留“登录成功”记录
-	s.recordLoginLog(ctx, user, req)
-
-	// 构造用户信息（安全转义）
-	userInfo := authutils.BuildSafeUserInfo(user)
+	// 会话建好后才写全局活动日志，登录失败不留“登录”记录
+	s.recordLoginLog(ctx, user, login)
 
 	return &pb.LoginRsp{
-		RetInfo: &pb.RetInfo{
-			Code: pb.ErrorCode_SUCCESS,
-			Msg:  "登录成功",
-		},
-		AccessToken:       accessToken,
-		ExpiresIn:         int64(s.cfg.Security.SessionTTL.Seconds()),
-		UserInfo:          userInfo,
-		SessionId:         sessionID,
-		RequestSigningKey: signingKey,
-		ExpiresAt:         expiresAt.Unix(),
+		RetInfo:   &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "登录成功"},
+		UserInfo:  authutils.BuildSafeUserInfo(user),
+		ExpiresAt: created.ExpiresAt.Unix(),
 	}, nil
 }
 
-func loginInternalError() *pb.LoginRsp {
-	return &pb.LoginRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "登录失败"}}
+func loginRejected(code pb.ErrorCode, msg string) *pb.LoginRsp {
+	return &pb.LoginRsp{RetInfo: &pb.RetInfo{Code: code, Msg: msg}}
 }
 
-// GetLoginSalt 获取登录盐值（前端在请求Login接口前调用本接口）
-func (s *AuthServiceImpl) GetLoginSalt(ctx context.Context, req *pb.GetLoginSaltReq) (*pb.GetLoginSaltRsp, error) {
-	log.InfoContextf(ctx, "[Auth] **** GetLoginSalt called for username: %s ****", req.Username)
-
-	// 先尝试获取现有的有效盐值
-	existingSalt, err := s.userDAO.GetLoginSalt(ctx, req.Username)
-	if err == nil && time.Now().Before(existingSalt.ExpiresAt) {
-		// 检查盐值剩余时间，如果太短则重新生成
-		remainingTime := time.Until(existingSalt.ExpiresAt)
-		minRemainingTime := s.cfg.Security.SaltExpired / 3 // 剩余时间少于1/3时重新生成
-
-		if remainingTime > minRemainingTime {
-			// 如果现有盐值还有足够时间，直接返回
-			log.InfoContextf(ctx, "[Auth] 返回现有有效盐值 for username: %s, 剩余时间: %v", req.Username, remainingTime)
-			return &pb.GetLoginSaltRsp{
-				RetInfo: &pb.RetInfo{
-					Code: pb.ErrorCode_SUCCESS,
-					Msg:  "获取盐值成功",
-				},
-				Salt:      existingSalt.Salt,
-				Timestamp: existingSalt.Timestamp,
-				ExpiresIn: int64(remainingTime.Seconds()),
-			}, nil
-		}
-		log.InfoContextf(ctx, "[Auth] 现有盐值剩余时间不足，重新生成 for username: %s", req.Username)
-	}
-
-	// 生成新的随机盐值和时间戳
-	salt, err := mooxsecurity.NewSalt()
-	if err != nil {
-		return &pb.GetLoginSaltRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "获取登录盐值失败"}}, nil
-	}
-	timestamp := time.Now().Unix()
-
-	// 创建盐值对象
-	loginSalt := model.LoginSalt{
-		Username:  req.Username,
-		Salt:      salt,
-		Timestamp: timestamp,
-		ExpiresAt: time.Now().Add(s.cfg.Security.SaltExpired),
-	}
-
-	// 存储到缓存
-	err = s.userDAO.SetLoginSalt(ctx, req.Username, loginSalt)
-	if err != nil {
-		log.ErrorContextf(ctx, "[Auth] 存储登录盐值失败: %v", err)
-		return &pb.GetLoginSaltRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_INNER_ERR,
-				Msg:  "获取登录盐值失败",
-			},
-		}, nil
-	}
-
-	log.InfoContextf(ctx, "[Auth] 生成新登录盐值 username=%s expires_in=%d",
-		req.Username, int64(s.cfg.Security.SaltExpired.Seconds()))
-	return &pb.GetLoginSaltRsp{
-		RetInfo: &pb.RetInfo{
-			Code: pb.ErrorCode_SUCCESS,
-			Msg:  "获取盐值成功",
-		},
-		Salt:      salt,
-		Timestamp: timestamp,
-		ExpiresIn: int64(s.cfg.Security.SaltExpired.Seconds()),
-	}, nil
-}
-
-// validateCredentialFormat 验证用户名和密码格式
-func (s *AuthServiceImpl) validateCredentialFormat(username, passwordHash string) error {
-	// 验证用户名格式
+// validateCredentialFormat 校验用户名格式与密码非空；密码长度不限（bcrypt 只看前 72 字节，由设定密码时把关）。
+func validateCredentialFormat(username, password string) error {
 	if err := authutils.ValidateStringFormat(username, "用户名"); err != nil {
 		return err
 	}
-
-	// 验证密码哈希格式（这里验证的是客户端传来的密码哈希）
-	// 密码哈希通常是固定长度的十六进制字符串，但为了安全起见，也做基本格式检查
-	if passwordHash == "" {
+	if password == "" {
 		return fmt.Errorf("密码不能为空")
-	}
-
-	// AES-GCM 密文至少包含 nonce、认证标签和一个明文字节。
-	// 不设置上限，避免把合法的长密码限制在密文编码长度之外。
-	if len(passwordHash) < 32 {
-		return fmt.Errorf("密码格式无效")
 	}
 	return nil
 }

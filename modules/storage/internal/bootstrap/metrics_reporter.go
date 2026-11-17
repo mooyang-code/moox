@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/mooyang-code/moox/packages/report"
@@ -28,7 +29,8 @@ func MetricsReporterSpecForRole(role string) (MetricsReporterSpec, error) {
 	}
 }
 
-func RegisterMetricsReporter(s *server.Server, role string) error {
+// RegisterMetricsReporter 注册指标上报；readiness 是这个进程 /readyz 用的就绪判断，随上报带给 Monitor。
+func RegisterMetricsReporter(s *server.Server, role string, readiness func(context.Context) (bool, string)) error {
 	if s == nil {
 		return fmt.Errorf("storage metrics reporter server is required")
 	}
@@ -40,6 +42,7 @@ func RegisterMetricsReporter(s *server.Server, role string) error {
 	if err != nil {
 		return fmt.Errorf("initialize %s metrics reporter: %w", spec.ServiceName, err)
 	}
+	handler.SetReadiness(readiness)
 	service := s.Service(spec.TimerService)
 	if service == nil {
 		return fmt.Errorf("%s metrics timer service is not configured", spec.ServiceName)

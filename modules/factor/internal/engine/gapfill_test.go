@@ -351,7 +351,13 @@ type repairedCall struct {
 // 每批补齐后按周期回调，账本里这一期没有待办了才算补齐。
 func TestGapFillerRepairsWarmingSkipsOnceTaskIsWarm(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
-	f := newGapFixture(t, fakeUniverse{}, factor)
+	// 这一期的 marker 已经写好（冻结全集是全部标的 × 唯一的 tag）：恢复不必等 marker。
+	frozen := fakeUniverse{found: true}
+	for i := 0; i < maxFillSubjects+1; i++ {
+		frozen.subjects = append(frozen.subjects, fmt.Sprintf("S%03d", i))
+		frozen.series = append(frozen.series, seriesset.Series{SubjectID: fmt.Sprintf("S%03d", i), SeriesTag: gapSpotTag})
+	}
+	f := newGapFixture(t, frozen, factor)
 	state := pipeline.WarmupWarming
 	f.filler.warmup = func() []pipeline.WarmupStatus {
 		return []pipeline.WarmupStatus{{TaskID: "fset", State: state}, {TaskID: "other", State: pipeline.WarmupReady}}

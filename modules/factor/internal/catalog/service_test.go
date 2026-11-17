@@ -198,10 +198,10 @@ func TestDeleteTaskRejectsBoundTask(t *testing.T) {
 	ctx := context.Background()
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
-	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusDisabled)
+	addVarMember(t, svc, testTaskID(), domain.MemberStatusDisabled)
 	_, err := svc.BindTask(ctx, testTaskID(), "inst-1")
 	require.NoError(t, err)
-	require.NoError(t, svc.RemoveTaskMember(ctx, testTaskID(), "momentum"))
+	require.NoError(t, svc.RemoveTaskMember(ctx, testTaskID(), "pmean__var"))
 	_, err = svc.SetTaskStatus(ctx, testTaskID(), domain.TaskStatusDisabled)
 	require.NoError(t, err)
 
@@ -706,6 +706,22 @@ func addMember(t *testing.T, svc *Service, taskID, factorID, status string) {
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
 		_, err = svc.SetTaskMemberStatus(ctx, taskID, factorID, domain.MemberStatusEnabled)
+		require.NoError(t, err)
+	}
+}
+
+// addVarMember 给任务加一个可变成员 pmean__var（因子 pmean 带可调参数 window）；只有带可变成员的任务能关联实例。
+func addVarMember(t *testing.T, svc *Service, taskID, status string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := svc.db.GetFactor(ctx, "pmean"); err != nil {
+		_, err = svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
+		require.NoError(t, err)
+	}
+	member, err := svc.AddTaskMember(ctx, taskID, "pmean", domain.MemberKindVar, nil)
+	require.NoError(t, err)
+	if status == domain.MemberStatusEnabled {
+		_, err = svc.SetTaskMemberStatus(ctx, taskID, member.MemberKey, domain.MemberStatusEnabled)
 		require.NoError(t, err)
 	}
 }

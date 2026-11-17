@@ -30,7 +30,11 @@ vi.mock("@/api/admin/activity", () => ({
     ]
   }))
 }));
-vi.mock("@/api/function-instance", () => ({ listFunctionInstances: vi.fn(async () => ({ items: [], total: 46 })) }));
+vi.mock("@/api/collector/runtime-status", () => ({
+  getCollectorStatus: vi.fn(async () => ({
+    functions: [{ executor: "scf" }, { executor: "scf" }, { executor: "scf" }, { executor: "stream" }, { executor: "local" }]
+  }))
+}));
 vi.mock("@/api/factor", () => ({
   listFactorTasks: vi.fn(async () => ({
     factor_tasks: [
@@ -179,7 +183,7 @@ describe("home page", () => {
     expect(wrapper.findAll(".weights .meter")).toHaveLength(2);
     expect(text).toContain("现货K线 · 1m");
     expect(text).toContain("现货K线 1h：新增 1 个");
-    expect(text).toContain("云函数实例 46");
+    expect(text).toContain("云函数 3");
   });
 
   it("lists problems in a fixed-size tile and links each one to where it is handled", async () => {

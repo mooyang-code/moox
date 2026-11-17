@@ -12,7 +12,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
@@ -45,7 +44,7 @@ func TestViewBarsComeFromThePolicyForTimeSeriesViews(t *testing.T) {
 }
 
 func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +136,7 @@ func TestInitialBuildClearsStaleRuntimeActive(t *testing.T) {
 
 // 索引文件不见了：维护流程重新建索引（先停掉跟随器、清掉内存里的活动索引），不需要元数据参与。
 func TestMaintenanceRebuildsMissingIndex(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +160,7 @@ func TestMaintenanceRebuildsMissingIndex(t *testing.T) {
 
 // 跟随器正在原地重建时（期间文件可能暂时不存在），维护流程不另建。
 func TestMaintenanceLeavesRebuildToFollower(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +180,7 @@ func TestMaintenanceLeavesRebuildToFollower(t *testing.T) {
 
 // 文件超过告警线只告警：不改动索引，也不触发任何重建。
 func TestViewFileOverLimitOnlyAlerts(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +208,7 @@ func TestViewFileOverLimitOnlyAlerts(t *testing.T) {
 
 // 维护在锁外读到的索引契约早于定时任务刚提交的加列时，不能把写入契约改回旧修订。
 func TestAttachActiveViewIgnoresStaleRevision(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +230,7 @@ func TestAttachActiveViewIgnoresStaleRevision(t *testing.T) {
 }
 
 func TestRestoreActiveViewsAttachesBuiltIndexFile(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +269,7 @@ func TestRestoreActiveViewsSkipsUnbuiltIndexFiles(t *testing.T) {
 		"recreated_view": recreated,
 	} {
 		t.Run(name, func(t *testing.T) {
-			svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+			svc, err := New(filepath.Join(t.TempDir(), "views"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -287,7 +286,7 @@ func TestRestoreActiveViewsSkipsUnbuiltIndexFiles(t *testing.T) {
 }
 
 func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,12 +307,12 @@ func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 	key := timeSeriesTestRowKey("")
 	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close"}, {FieldId: "old"}}}}}
-	svc, auth := queryTestService(engine, true)
+	svc := queryTestService(engine, true)
 	view := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market", Engine: "query-test", HiddenColumns: []string{"old"}}
 	query := func() []*pb.FieldValue {
 		t.Helper()
 		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: "space", ViewId: "prices",
+			SpaceId: "space", ViewId: "prices",
 			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
@@ -344,7 +343,7 @@ func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 // Bleve 索引建到一半进程退出（目录在、meta.json 不在）：启动不失败、不挂接，维护流程删掉重建。
 func TestHalfPreparedBleveIndexIsRebuiltAfterRestart(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "views")
-	svc, err := New(root, "view-secret")
+	svc, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +379,7 @@ func TestHalfPreparedBleveIndexIsRebuiltAfterRestart(t *testing.T) {
 
 // 一个 View 的索引读不出来：启动不失败，跳过这个 View。
 func TestRestoreActiveViewsSkipsUnreadableIndex(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +392,7 @@ func TestRestoreActiveViewsSkipsUnreadableIndex(t *testing.T) {
 
 // 元数据里已删除的 View：维护后不再挂接，GetViewState 返回 VIEW_NOT_FOUND，索引文件当场删除。
 func TestMaintenanceForgetsDeletedViews(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,18 +402,17 @@ func TestMaintenanceForgetsDeletedViews(t *testing.T) {
 	if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "hash")); err != nil {
 		t.Fatal(err)
 	}
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
-	state, _ := svc.GetViewState(context.Background(), &pb.GetViewStateReq{AuthInfo: auth, SpaceId: "space", ViewId: "prices"})
+	state, _ := svc.GetViewState(context.Background(), &pb.GetViewStateReq{SpaceId: "space", ViewId: "prices"})
 	if state.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("删除前 = %v", state.GetRetInfo())
 	}
 	// 停用的 View 仍在元数据里：不摘掉。
-	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Status: "disabled"}}, svc.internalAuth())
+	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Status: "disabled"}})
 	if active, _ := svc.activeIndex("space", "prices"); active == "" || len(engine.removed) != 0 {
 		t.Fatalf("停用的 View 不应摘掉，也不删文件：removed=%v", engine.removed)
 	}
-	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}}, svc.internalAuth())
-	state, _ = svc.GetViewState(context.Background(), &pb.GetViewStateReq{AuthInfo: auth, SpaceId: "space", ViewId: "prices"})
+	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}})
+	state, _ = svc.GetViewState(context.Background(), &pb.GetViewStateReq{SpaceId: "space", ViewId: "prices"})
 	if state.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_FOUND {
 		t.Fatalf("删除后 = %v，想要 VIEW_NOT_FOUND", state.GetRetInfo())
 	}
@@ -422,7 +420,7 @@ func TestMaintenanceForgetsDeletedViews(t *testing.T) {
 		t.Fatalf("删除的索引 = %v，期望 %v", engine.removed, want)
 	}
 	// 再跑一轮不重复删。
-	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}}, svc.internalAuth())
+	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}})
 	if len(engine.removed) != 1 {
 		t.Fatalf("重复删除：%v", engine.removed)
 	}
@@ -463,7 +461,7 @@ func TestForgetDeletedViewsKeepsViewsOnIncompletePages(t *testing.T) {
 	}
 	for name, pages := range cases {
 		t.Run(name, func(t *testing.T) {
-			svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+			svc, err := New(filepath.Join(t.TempDir(), "views"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -472,7 +470,7 @@ func TestForgetDeletedViewsKeepsViewsOnIncompletePages(t *testing.T) {
 			if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "hash")); err != nil {
 				t.Fatal(err)
 			}
-			svc.forgetDeletedViews(context.Background(), &pageMetadata{pages: pages}, svc.internalAuth())
+			svc.forgetDeletedViews(context.Background(), &pageMetadata{pages: pages})
 			if active, _ := svc.activeIndex("space", "prices"); active == "" {
 				t.Fatal("分页信息不完整时不应摘掉 View")
 			}

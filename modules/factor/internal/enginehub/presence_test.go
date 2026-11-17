@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/stretchr/testify/require"
 )
@@ -75,4 +76,40 @@ func TestHeartbeatPersistenceIsThrottled(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "factor-engine@m2", saved.EngineID)
 	require.Equal(t, clock.Now(), saved.At)
+}
+
+// factor-mgr 代引擎上报给 Monitor 的一行：心跳里的就绪判断、暂停类型与原因、追赶进度原样带上；管理端重启后、引擎还没回来时只有落库的心跳时间。
+func TestDelegatedReportCarriesEngineReadinessAndLifecycle(t *testing.T) {
+	hub, db, _ := newTestHub(t)
+	hub.heartbeats = db
+	ctx := context.Background()
+	delegated, err := hub.DelegatedReport(ctx)
+	require.NoError(t, err)
+	require.Nil(t, delegated, "从没心跳过不代报")
+
+	since := time.Date(2026, 11, 15, 1, 0, 0, 0, time.UTC)
+	id := domain.EngineIdentity{EngineID: "factor-engine@m1", BootID: "b1", Version: "v1"}
+	_, err = hub.Heartbeat(ctx, id, domain.EngineStatus{Ready: false, NotReadyReason: "catalog is not ready",
+		Lifecycle: domain.EngineLifecycle{Stage: "resuming", PausedSince: since, PauseKind: "system", PauseReason: "切换行情源",
+			Catchup: &lifecycle.Catchup{Since: since, Done: 2, Total: 5, BlockedBy: "任务 ftask_a"}}})
+	require.NoError(t, err)
+	delegated, err = hub.DelegatedReport(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "factor-engine", delegated.GetServiceName())
+	require.Equal(t, "factor-engine@m1", delegated.GetInstanceId())
+	require.Equal(t, "b1", delegated.GetBootId())
+	require.False(t, delegated.GetReady())
+	require.Equal(t, "catalog is not ready", delegated.GetNotReadyReason())
+	require.Equal(t, "resuming", delegated.GetLifecycle().GetStage())
+	require.Equal(t, "system", delegated.GetLifecycle().GetPauseKind())
+	require.Equal(t, "切换行情源", delegated.GetLifecycle().GetPauseReason())
+	require.Equal(t, int64(5), delegated.GetLifecycle().GetCatchup().GetTotal())
+	require.Equal(t, "任务 ftask_a", delegated.GetLifecycle().GetCatchup().GetBlockedBy())
+
+	restarted := New(db, WithHeartbeatStore(db))
+	delegated, err = restarted.DelegatedReport(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "factor-engine@m1", delegated.GetInstanceId())
+	require.Nil(t, delegated.Ready, "只有落库的心跳时间，不带就绪判断")
+	require.NotZero(t, delegated.GetLastHeartbeatUnix())
 }

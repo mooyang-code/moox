@@ -1,12 +1,11 @@
-// Command moox-archive-worker 是归档 worker：经 Access 领取运行，读取 Storage 的时间区间数据，
+// Command moox-archive-worker 是归档 worker：作为普通调用方（所在主机的密钥、archive-worker 的身份）从本机网关取目录，
+// 直连控制机的主机网关领取运行，读取 Storage 的时间区间数据，
 // 写入本地 SQLite 暂存区，导出 CSV 分区文件，配置了对象存储时再把文件传一份到标准 S3 接口的对象存储。
-// 它只出站，可以部署在任何能访问 Access 的 Linux 或 macOS 机器上。
+// 它只出站，部署在能访问控制机与存储机 11003 的登记主机上。
 package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,9 +27,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -85,10 +81,6 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 		return fmt.Errorf("open gateway client: %w", err)
 	}
 	defer func() { err = errors.Join(err, gateway.Close()) }()
-	secret, err := gatewayauth.ReadSigningSecret(cfg.StorageSecretPath())
-	if err != nil {
-		return fmt.Errorf("read storage auth file: %w", err)
-	}
 	store, err := staging.Open(cfg.StatePath(), staging.Options{CacheBytes: int64(cfg.Staging.CacheSize)})
 	if err != nil {
 		return fmt.Errorf("open staging database: %w", err)
@@ -109,7 +101,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	files := export.Files{Root: cfg.Worker.RootDir, Format: cfg.Worker.ExportFormat}
 	worker := app.New(app.Options{
 		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, Version: Version,
-		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
+		Runner:    &runner.Runner{Source: source.New(gateway), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
 		DiskUsage: app.StatfsDiskUsage, Remote: remote, Pacer: pacer,
 	})
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
@@ -132,7 +124,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	return worker.Run(ctx)
 }
 
-// serveHealth 在本机地址上提供 /healthz /readyz /metrics，接受 MOOX_HEALTH_AUTH_* 环境配置的签名校验。
+// serveHealth 在本机地址上提供 /healthz /readyz /metrics，不验签（只给同机进程与经 SSH 的诊断用）。
 func serveHealth(addr string, worker *app.App) (func() error, error) {
 	state := healthz.NewState("archive-worker", "archive-worker", Version, GitCommit)
 	state.SnapshotFunc = func(context.Context) healthz.Response {
@@ -156,10 +148,7 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		}
 	}
 	state.SetReady(true)
-	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
-	if err != nil {
-		return nil, err
-	}
+	handler := healthz.StandardMux(state.Snapshot, promhttp.Handler())
 	server := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -196,7 +185,7 @@ func serveData(addr string, handler http.Handler) (func() error, error) {
 	}, nil
 }
 
-// checkConfig 完整载入并校验配置，再读一遍凭据文件（Storage 签名密钥、对象存储凭据），不连网。
+// checkConfig 完整载入并校验配置，再读一遍对象存储凭据，不连网。
 // 部署脚本在重启服务之前先跑它：配置不对就不重启，旧进程继续跑。
 func checkConfig(args []string) error {
 	fs := flag.NewFlagSet("check-config", flag.ContinueOnError)
@@ -208,9 +197,6 @@ func checkConfig(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := gatewayauth.ReadSigningSecret(cfg.StorageSecretPath()); err != nil {
-		return fmt.Errorf("read storage auth file: %w", err)
-	}
 	if _, err := cfg.OpenObjectStore(); err != nil {
 		return err
 	}
@@ -218,7 +204,7 @@ func checkConfig(args []string) error {
 	return nil
 }
 
-// health 询问本机 worker 的就绪状态，请求用 MOOX_HEALTH_AUTH_* 环境变量签名。
+// health 询问本机 worker 的就绪状态；健康端口只听本机、不验签。
 func health(args []string) error {
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	url := fs.String("url", "http://127.0.0.1:11418/readyz", "worker health URL")
@@ -227,9 +213,6 @@ func health(args []string) error {
 	}
 	request, err := http.NewRequest(http.MethodGet, *url, nil)
 	if err != nil {
-		return err
-	}
-	if err := signHealthRequest(request); err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
@@ -243,29 +226,5 @@ func health(args []string) error {
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("archive worker is not ready: HTTP %d", response.StatusCode)
 	}
-	return nil
-}
-
-func signHealthRequest(request *http.Request) error {
-	version := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION"))
-	if version == "" {
-		version = "moox-health-v1"
-	}
-	accessKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"))
-	secretKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"))
-	if accessKey == "" || secretKey == "" {
-		return errors.New("MOOX_HEALTH_AUTH_ACCESS_KEY and MOOX_HEALTH_AUTH_SECRET_KEY are required")
-	}
-	nonceBytes := make([]byte, 32)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return fmt.Errorf("generate health nonce: %w", err)
-	}
-	timestamp := time.Now().Unix()
-	nonce := hex.EncodeToString(nonceBytes)
-	signature, err := requestauth.Sign(secretKey, requestauth.Material{Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: timestamp, Nonce: nonce})
-	if err != nil {
-		return fmt.Errorf("sign health request: %w", err)
-	}
-	request.Header.Set("X-Moox-Health-Auth", strings.Join([]string{version, accessKey, strconv.FormatInt(timestamp, 10), nonce, signature}, "/"))
 	return nil
 }

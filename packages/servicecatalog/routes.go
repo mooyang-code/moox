@@ -1,9 +1,6 @@
 package servicecatalog
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
 	"slices"
@@ -20,6 +17,8 @@ type Host struct {
 	Status         string `json:"status"`
 	// Reachability 为空表示可直达；ReachabilityOutbound 表示只能出站（家庭网络等），进入它的连接经 control 网关中转。
 	Reachability string `json:"reachability,omitempty"`
+	// ExternalEntry 表示这台主机的网关开外部入口（11004）：外部身份从这里进来，目标不在本机时由它转给目标主机。
+	ExternalEntry bool `json:"external_entry,omitempty"`
 }
 
 // ReachabilityOutbound 标记只能出站的主机：它的网关主动与 control 网关保持反向连接。
@@ -50,6 +49,12 @@ func ReachabilityName(value string) string {
 // HostGatewayRemotePort 是主机网关的跨主机 TLS 端口。
 const HostGatewayRemotePort = 11003
 
+// HostGatewayExternalPort 是主机网关的外部入口端口（明文加签名），只有标了外部入口的主机才监听。
+const HostGatewayExternalPort = 11004
+
+// adminComponent 只部署在控制机上：按它认控制机，部署了它的主机另有 console 这个调用方。
+const adminComponent = "admin"
+
 type Deployment struct {
 	HostID      string `json:"host_id"`
 	ComponentID string `json:"component_id"`
@@ -62,22 +67,34 @@ type Topology struct {
 	Deployments   []Deployment `json:"deployments"`
 }
 
+// NewTopology 用快照或目录下发的主机与部署拼出拓扑。控制机不随快照下发：它就是部署了 admin 的那台。
+func NewTopology(hosts []Host, deployments []Deployment) Topology {
+	t := Topology{Hosts: hosts, Deployments: deployments}
+	for _, deployment := range deployments {
+		if deployment.ComponentID == adminComponent {
+			t.ControlHostID = deployment.HostID
+		}
+	}
+	return t
+}
+
+// DirectoryHost 是目录里一台启用的主机。
 type DirectoryHost struct {
 	Address        string `json:"address"`
 	PrivateAddress string `json:"private_address,omitempty"`
-	Region         string `json:"region,omitempty"`
 	// Relay 非空时该主机只能出站，调用方要经这台主机（control）的网关打开中转流再连接它。
 	Relay string `json:"relay,omitempty"`
 }
 
+// Directory 是主机与部署按内嵌目录展开后的结果：每个服务在哪些主机上、主机怎么连。Version 由下发方给出，只用来判断有没有变化。
 type Directory struct {
 	Version  string                   `json:"version"`
 	Services map[string][]string      `json:"services"`
 	Hosts    map[string]DirectoryHost `json:"hosts"`
 }
 
-// Route grants callers to exactly one service and method. Merging ACL groups
-// into separate method/caller sets would accidentally widen permissions.
+// Route 是一个方法和名单上的调用方，各主机的网关按拓扑与内嵌目录自己算，不随快照下发。
+// Callers 里的外部身份不能直接到 11002、11003：它们从外部入口进来，或由入口主机的网关带着来源头转过来。
 type Route struct {
 	ComponentID  string   `json:"component_id"`
 	ServicePath  string   `json:"service_path"`
@@ -89,18 +106,16 @@ type Route struct {
 	Callers      []string `json:"callers"`
 }
 
-// CompiledHost is a definition, not the final signed-key snapshot. The control
-// plane must hash the actual verification key IDs/material along with this
-// definition so a key rotation changes the snapshot even without route changes.
+// CompiledHost 是一台主机按拓扑与内嵌目录算出的本机视图。
 type CompiledHost struct {
-	HostID              string    `json:"host_id"`
-	Disabled            bool      `json:"disabled"`
-	Routes              []Route   `json:"routes"`
-	Directory           Directory `json:"directory"`
-	VerificationCallers []string  `json:"verification_callers"`
-	// Relays 只出现在 control 的快照里：每台已启用的出站主机允许打开中转流的端口与调用方。没有出站主机时为空、不参与序列化。
-	Relays []RelayTarget `json:"relays,omitempty"`
-	Hash   string        `json:"hash"`
+	HostID    string
+	Disabled  bool
+	Routes    []Route
+	Directory Directory
+	// Relays 只有 control 才有：每台已启用的出站主机允许打开中转流的端口与调用方。
+	Relays []RelayTarget
+	// Unknown 是拓扑里本进程的内嵌目录不认识的组件（两边版本不一致时出现），它们被忽略，其余照常生效。
+	Unknown []string
 }
 
 // RelayTarget 是一台出站主机的中转许可。
@@ -130,7 +145,7 @@ func (c Catalog) ValidateTopology(t Topology) error {
 		if ip := net.ParseIP(host.Address); ip != nil {
 			key = ip.String()
 		}
-		if !validDirectoryHost(host.ID, DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}) || !validStatus(host.Status) || host.Reachability != "" && host.Reachability != ReachabilityOutbound {
+		if !validDirectoryHost(host.ID, DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress}) || len(host.Region) > 128 || !validStatus(host.Status) || host.Reachability != "" && host.Reachability != ReachabilityOutbound {
 			return fmt.Errorf("invalid host %q", host.ID)
 		}
 		if _, exists := hosts[host.ID]; exists || addresses[key] {
@@ -144,6 +159,12 @@ func (c Catalog) ValidateTopology(t Topology) error {
 	}
 	if control.Reachability == ReachabilityOutbound {
 		return fmt.Errorf("control host must be directly reachable")
+	}
+	for _, host := range t.Hosts {
+		// 外部入口要能从外面连进来。
+		if host.ExternalEntry && host.Reachability == ReachabilityOutbound {
+			return fmt.Errorf("outbound-only host %q cannot be an external entry", host.ID)
+		}
 	}
 	deployments := map[string]Deployment{}
 	singles := map[string]string{}
@@ -204,9 +225,6 @@ func (c Catalog) ValidateTopology(t Topology) error {
 
 func validStatus(status string) bool { return status == Enabled || status == Disabled }
 
-// AllPorts 返回组件占用的全部监听端口。
-func (c Component) AllPorts() []int { return componentPorts(c) }
-
 func componentPorts(component Component) []int {
 	ports := slices.Clone(component.Ports)
 	if component.Health.Port != 0 {
@@ -221,66 +239,68 @@ func componentPorts(component Component) []int {
 	return ports
 }
 
-func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
-	if err := c.ValidateTopology(t); err != nil {
-		return CompiledHost{}, err
-	}
-	var current Host
-	directory := Directory{Services: map[string][]string{}, Hosts: map[string]DirectoryHost{}}
-	hosts := map[string]Host{}
+// Resolve 把主机与部署展开成目录：只算启用主机上启用的部署，出站主机由控制机中转。不认识的组件跳过，随 unknown 返回（排序、去重）。
+func (c Catalog) Resolve(t Topology) (directory Directory, unknown []string) {
+	directory = Directory{Services: map[string][]string{}, Hosts: map[string]DirectoryHost{}}
 	for _, host := range t.Hosts {
-		hosts[host.ID] = host
-		if host.ID == hostID {
-			current = host
-		}
-		if host.Status == Enabled {
-			entry := DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
-			if host.Reachability == ReachabilityOutbound {
-				entry.Relay = t.ControlHostID
-			}
-			directory.Hosts[host.ID] = entry
-		}
-	}
-	if current.ID == "" {
-		return CompiledHost{}, fmt.Errorf("unknown host %q", hostID)
-	}
-	compiled := CompiledHost{HostID: hostID, Disabled: current.Status != Enabled, Routes: []Route{}, VerificationCallers: []string{}}
-	verification := map[string]bool{}
-	for _, deployment := range t.Deployments {
-		if deployment.Status != Enabled || hosts[deployment.HostID].Status != Enabled {
+		if host.Status != Enabled {
 			continue
 		}
-		component, _ := c.Component(deployment.ComponentID)
+		entry := DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress}
+		if host.Reachability == ReachabilityOutbound {
+			entry.Relay = t.ControlHostID
+		}
+		directory.Hosts[host.ID] = entry
+	}
+	for _, deployment := range t.Deployments {
+		component, ok := c.Component(deployment.ComponentID)
+		if !ok {
+			unknown = append(unknown, deployment.ComponentID)
+			continue
+		}
+		if _, enabled := directory.Hosts[deployment.HostID]; !enabled || deployment.Status != Enabled {
+			continue
+		}
 		for _, service := range component.Services {
 			directory.Services[service.Path] = append(directory.Services[service.Path], deployment.HostID)
-			if deployment.HostID != hostID {
-				continue
-			}
-			for _, method := range service.Methods {
-				callers := c.routeCallers(service, method, t.Hosts)
-				if len(callers) == 0 {
-					continue
-				}
-				timeout, limit := service.TimeoutFor(method), service.MaxBodyBytes
-				if limit == 0 {
-					limit = DefaultMaxBodyBytes
-				}
-				compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: timeout, MaxBodyBytes: limit, ReadOnly: slices.Contains(service.ReadOnlyMethods, method), Callers: callers})
-				for _, caller := range callers {
-					verification[caller] = true
-				}
-			}
 		}
 	}
 	for _, ids := range directory.Services {
 		sort.Strings(ids)
 	}
-	version, err := contentHash(directory)
-	if err != nil {
-		return CompiledHost{}, err
+	sort.Strings(unknown)
+	return directory, slices.Compact(unknown)
+}
+
+// Compile 算出一台主机的本机视图。拓扑的合法性由 Admin 在写入时校验（ValidateTopology），这里不再校验；
+// 不认识的组件忽略，其余路由照常生效。
+func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
+	current := slices.IndexFunc(t.Hosts, func(host Host) bool { return host.ID == hostID })
+	if current < 0 {
+		return CompiledHost{}, fmt.Errorf("unknown host %q", hostID)
 	}
-	directory.Version = version
-	compiled.Directory = directory
+	compiled := CompiledHost{HostID: hostID, Disabled: t.Hosts[current].Status != Enabled, Routes: []Route{}}
+	compiled.Directory, compiled.Unknown = c.Resolve(t)
+	if compiled.Disabled {
+		return compiled, nil
+	}
+	for _, deployment := range t.Deployments {
+		component, ok := c.Component(deployment.ComponentID)
+		if !ok || deployment.HostID != hostID || deployment.Status != Enabled {
+			continue
+		}
+		for _, service := range component.Services {
+			limit := service.MaxBodyBytes
+			if limit == 0 {
+				limit = DefaultMaxBodyBytes
+			}
+			for _, method := range service.Methods {
+				if callers := c.routeCallers(method); len(callers) > 0 {
+					compiled.Routes = append(compiled.Routes, Route{ComponentID: component.ID, ServicePath: service.Path, Method: method.Name, Address: net.JoinHostPort("127.0.0.1", strconv.Itoa(service.Port)), TimeoutMS: service.TimeoutFor(method.Name), MaxBodyBytes: limit, ReadOnly: method.ReadOnly, Callers: callers})
+				}
+			}
+		}
+	}
 	sort.Slice(compiled.Routes, func(i, j int) bool {
 		left, right := compiled.Routes[i], compiled.Routes[j]
 		if left.ServicePath != right.ServicePath {
@@ -289,28 +309,15 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 		return left.Method < right.Method
 	})
 	if hostID == t.ControlHostID {
-		compiled.Relays = c.relayTargets(t, hosts)
-		// control 要校验打开中转流的签名，所以这些调用方也要在 control 的校验名单里。
-		for _, relay := range compiled.Relays {
-			for _, port := range relay.Ports {
-				for _, caller := range port.Callers {
-					verification[caller] = true
-				}
-			}
-		}
+		compiled.Relays = c.relayTargets(t)
 	}
-	for caller := range verification {
-		compiled.VerificationCallers = append(compiled.VerificationCallers, caller)
-	}
-	sort.Strings(compiled.VerificationCallers)
-	compiled.Hash, err = contentHash(compiled)
-	return compiled, err
+	return compiled, nil
 }
 
 // relayTargets 计算各台已启用出站主机的中转许可：跨主机端口的调用方是该主机上全部路由调用方的并集，
-// 组件健康端口只允许 Monitor 与 moox-cli（部署与诊断要等外部程序就绪），relay_http 端口只允许声明的调用方。
+// relay_http 端口只允许声明的调用方。组件健康端口不经中转（组件健康只看上报，设计 3.8）。
 // 跨主机端口在前，其余端口按端口号升序。
-func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
+func (c Catalog) relayTargets(t Topology) []RelayTarget {
 	var relays []RelayTarget
 	for _, host := range t.Hosts {
 		if host.Reachability != ReachabilityOutbound || host.Status != Enabled {
@@ -322,16 +329,17 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 			if deployment.HostID != host.ID || deployment.Status != Enabled {
 				continue
 			}
-			component, _ := c.Component(deployment.ComponentID)
-			if component.Health.Port > 0 {
-				local[component.Health.Port] = healthRelayCallers
-			}
+			component, _ := c.Component(deployment.ComponentID) // 不认识的组件是零值：没有端口，也没有服务
 			if component.RelayHTTP != nil {
 				local[component.RelayHTTP.Port] = relayHTTPCallers(*component.RelayHTTP)
 			}
 			for _, service := range component.Services {
 				for _, method := range service.Methods {
-					for _, caller := range c.routeCallers(service, method, t.Hosts) {
+					for _, caller := range c.routeCallers(method) {
+						// 外部身份自己不连出站主机：入口主机的网关以 host-gateway 身份替它打开中转流。
+						if c.ExternalIdentity(caller) {
+							caller = hostGatewayCaller
+						}
 						gateway[caller] = true
 					}
 				}
@@ -359,56 +367,11 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 	return relays
 }
 
-// healthRelayCallers 是能经中转连接出站主机组件健康端口的调用方：Monitor 探测，moox-cli 部署与诊断。
-var healthRelayCallers = []string{"monitor", "moox-cli"}
-
-// relayHTTPCallers 返回 relay_http 端口的中转调用方（排序后的副本），编译与 ValidRelay 用同一个顺序。
+// relayHTTPCallers 返回 relay_http 端口的中转调用方（排序后的副本）。
 func relayHTTPCallers(relay RelayHTTP) []string {
 	callers := slices.Clone(relay.Callers)
 	sort.Strings(callers)
 	return callers
-}
-
-// ValidRelay 校验一条中转许可：端口不重复，跨主机端口的调用方是合法 ID 且不重复；
-// 其余端口要么是服务目录里某个组件的健康端口并且只对 Monitor 与 moox-cli 开放，
-// 要么是某个外部程序的 relay_http 端口并且只对它声明的调用方开放。没有 relay_http 端口的许可（旧版 Admin 编译的）照样接受。
-func (c Catalog) ValidRelay(r RelayTarget) bool {
-	if !ValidHostID(r.HostID) || len(r.Ports) > 64 {
-		return false
-	}
-	seen := map[int]bool{}
-	for _, port := range r.Ports {
-		if seen[port.Port] || len(port.Callers) == 0 || len(port.Callers) > 2048 {
-			return false
-		}
-		seen[port.Port] = true
-		if port.Port != HostGatewayRemotePort {
-			health := slices.Equal(port.Callers, healthRelayCallers) && c.HealthPort(port.Port)
-			callers, relayHTTP := c.RelayHTTPCallers(port.Port)
-			if !health && !(relayHTTP && slices.Equal(port.Callers, callers)) {
-				return false
-			}
-			continue
-		}
-		callers := map[string]bool{}
-		for _, caller := range port.Callers {
-			if caller == "" || len(caller) > 128 || callers[caller] {
-				return false
-			}
-			callers[caller] = true
-		}
-	}
-	return true
-}
-
-// HealthPort 报告端口是否是服务目录里某个组件的健康端口。
-func (c Catalog) HealthPort(port int) bool {
-	for _, component := range c.Components {
-		if component.Health.Port == port && port > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // RelayHTTPCallers 返回端口作为某个外部程序 relay_http 端口时的中转调用方（排序后）；不是时 ok 为假。
@@ -421,10 +384,10 @@ func (c Catalog) RelayHTTPCallers(port int) (callers []string, ok bool) {
 	return nil, false
 }
 
-// LocalRelayPort 报告出站主机的网关能否把中转流接到本机这个端口：组件健康端口或外部程序的 relay_http 端口。
+// LocalRelayPort 报告出站主机的网关能否把中转流接到本机这个端口：只有外部程序的 relay_http 端口。
 func (c Catalog) LocalRelayPort(port int) bool {
 	_, relayHTTP := c.RelayHTTPCallers(port)
-	return relayHTTP || c.HealthPort(port)
+	return relayHTTP
 }
 
 // Allowed 报告调用方能否经中转连接出站主机的指定端口。
@@ -437,26 +400,14 @@ func (r RelayTarget) Allowed(caller string, port int) bool {
 	return false
 }
 
-func (c Catalog) routeCallers(service Service, method string, hosts []Host) []string {
+// routeCallers 是网关上这条路由的调用方：人操作身份按 operators，其余照 callers（含外部身份）。
+func (c Catalog) routeCallers(method Method) []string {
 	set := map[string]bool{}
-	for _, grant := range service.ACL {
-		if !slices.Contains(grant.Methods, method) {
-			continue
-		}
-		for _, caller := range grant.Callers {
-			if caller == "host-gateway@*" {
-				// Disabled hosts must still authenticate to obtain their disabled
-				// snapshot. Removed hosts disappear from this scope immediately.
-				for _, host := range hosts {
-					set["host-gateway@"+host.ID] = true
-				}
-			} else {
-				set[caller] = true
-			}
-		}
+	for _, operator := range method.OperatorList() {
+		set[operator] = true
 	}
-	if c.externallyAllowed(service.Path, method) {
-		set["access"] = true
+	for _, caller := range method.Callers {
+		set[caller] = true
 	}
 	callers := make([]string, 0, len(set))
 	for caller := range set {
@@ -466,11 +417,29 @@ func (c Catalog) routeCallers(service Service, method string, hosts []Host) []st
 	return callers
 }
 
-func contentHash(value any) (string, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return "", fmt.Errorf("hash catalog definition: %w", err)
+// SigningCallers 返回每台已登记主机上可以用主机密钥签名的调用方（排序后）：这台主机上启用的组件（第三方程序不签名），
+// 部署了 admin 的主机另有 console（管理台代浏览器调用时的身份）。每台主机的网关都在内：停用的主机没有别的调用方，
+// 但它的网关仍要验签取到“已停用”的快照。
+func (c Catalog) SigningCallers(t Topology) map[string][]string {
+	enabled := map[string]bool{}
+	callers := map[string][]string{}
+	for _, host := range t.Hosts {
+		enabled[host.ID] = host.Status == Enabled
+		callers[host.ID] = []string{hostGatewayCaller}
 	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
+	for _, deployment := range t.Deployments {
+		component, ok := c.Component(deployment.ComponentID)
+		if !ok || component.ThirdParty || deployment.Status != Enabled || !enabled[deployment.HostID] {
+			continue
+		}
+		callers[deployment.HostID] = append(callers[deployment.HostID], component.ID)
+		if component.ID == adminComponent {
+			callers[deployment.HostID] = append(callers[deployment.HostID], OperatorConsole)
+		}
+	}
+	for id := range callers {
+		sort.Strings(callers[id])
+		callers[id] = slices.Compact(callers[id])
+	}
+	return callers
 }

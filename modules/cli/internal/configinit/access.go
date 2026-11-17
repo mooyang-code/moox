@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -13,8 +14,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
 
 // MaskedValue 是密钥类配置在 config get 里的替身。
@@ -22,7 +23,11 @@ const MaskedValue = "***"
 
 var secretKeyPattern = regexp.MustCompile(`(?i)(password|passphrase|secret|token|api_key|access_key|private_key)`)
 
-// isSecretKey 判断键名是不是密钥类（路径类的 *_file、*_path 不算）。
+// secretsVisibleKeys 是秘密文件里默认就能看到的键：都不是秘密，用来辨认是哪一项。其余的值（密码、密钥、Webhook 地址等）
+// 在秘密文件里一律打码，加 --reveal 才明文。
+var secretsVisibleKeys = map[string]bool{"username": true, "channel_type": true, "name": true, "exchange": true, "environment": true, "readonly": true}
+
+// isSecretKey 判断 moox.toml 里的键名是不是密钥类（路径类的 *_file、*_path 不算）。
 func isSecretKey(key string) bool {
 	k := strings.ToLower(key)
 	if strings.HasSuffix(k, "_file") || strings.HasSuffix(k, "_path") {
@@ -31,12 +36,27 @@ func isSecretKey(key string) bool {
 	return secretKeyPattern.MatchString(k)
 }
 
-// loadPlain 在本机读取 moox.toml；加密的先解开。
+// isSecretsFile 判断路径指向的是不是秘密文件：只有它加密保存、按秘密文件的格式校验。
+func isSecretsFile(path string) bool { return filepath.Base(path) == topology.SecretsFileName }
+
+// secretSectionHint 是在 moox.toml 里找秘密段时的提示：这些段在同目录的秘密文件里。
+func secretSectionHint(path, target string) string {
+	if isSecretsFile(path) {
+		return ""
+	}
+	switch strings.SplitN(target, ".", 2)[0] {
+	case "admin", "tencent_cloud", "notification", "exchange_keys":
+		return "；它在同目录的 " + topology.SecretsFileName + " 里，加 --file " + topology.SecretsPathFor(path)
+	}
+	return ""
+}
+
+// loadPlain 在本机读取 moox.toml 或 moox.secrets.toml；加密的先解开。
 func loadPlain(path string, keys configcrypt.KeyStore) (raw, plain []byte, err error) {
 	if keys == nil {
 		keys = configcrypt.Default()
 	}
-	if raw, err = readConfigFile(path); err != nil {
+	if raw, err = readConfigFile(path, isSecretsFile(path)); err != nil {
 		return nil, nil, err
 	}
 	if !configcrypt.IsEncrypted(raw) {
@@ -48,7 +68,7 @@ func loadPlain(path string, keys configcrypt.KeyStore) (raw, plain []byte, err e
 	return raw, plain, nil
 }
 
-// GetConfig 读取 moox.toml 里某个路径（点号分隔，数组用序号，空路径取整份）的值。
+// GetConfig 读取 moox.toml 或 moox.secrets.toml 里某个路径（点号分隔，数组用序号，空路径取整份）的值。
 // 密钥类的键默认返回 "***"，reveal 为 true 才返回明文。
 func GetConfig(path, target string, reveal bool, keys configcrypt.KeyStore) (any, error) {
 	_, plain, err := loadPlain(path, keys)
@@ -57,7 +77,7 @@ func GetConfig(path, target string, reveal bool, keys configcrypt.KeyStore) (any
 	}
 	var doc map[string]any
 	if _, err := toml.Decode(string(plain), &doc); err != nil {
-		return nil, fmt.Errorf("moox.toml 不是合法的 TOML：%w", err)
+		return nil, fmt.Errorf("%s 不是合法的 TOML", filepath.Base(path))
 	}
 	var node any = doc
 	target = strings.TrimSpace(target)
@@ -67,7 +87,7 @@ func GetConfig(path, target string, reveal bool, keys configcrypt.KeyStore) (any
 			case map[string]any:
 				next, ok := cur[seg]
 				if !ok {
-					return nil, fmt.Errorf("moox.toml 里没有 %s（可用的键：%s）", target, strings.Join(sortedKeys(cur), "、"))
+					return nil, fmt.Errorf("%s 里没有 %s（可用的键：%s）%s", filepath.Base(path), target, strings.Join(sortedKeys(cur), "、"), secretSectionHint(path, target))
 				}
 				node = next
 			case []map[string]any:
@@ -94,7 +114,7 @@ func GetConfig(path, target string, reveal bool, keys configcrypt.KeyStore) (any
 	if i := strings.LastIndex(target, "."); i >= 0 {
 		last = target[i+1:]
 	}
-	return maskSecrets(node, last), nil
+	return maskSecrets(node, last, isSecretsFile(path)), nil
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -106,28 +126,34 @@ func sortedKeys(m map[string]any) []string {
 	return keys
 }
 
-func maskSecrets(node any, key string) any {
+// maskSecrets 给值打码：秘密文件（secretsFile）里除 secretsVisibleKeys 外一律打码；moox.toml 里只给密钥类键名打码。
+// 空值不打码（看得出没填）。
+func maskSecrets(node any, key string, secretsFile bool) any {
 	switch v := node.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for k, child := range v {
-			out[k] = maskSecrets(child, k)
+			out[k] = maskSecrets(child, k, secretsFile)
 		}
 		return out
 	case []map[string]any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = maskSecrets(child, key)
+			out[i] = maskSecrets(child, key, secretsFile)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = maskSecrets(child, key)
+			out[i] = maskSecrets(child, key, secretsFile)
 		}
 		return out
 	default:
-		if isSecretKey(key) && fmt.Sprint(v) != "" {
+		secret := isSecretKey(key)
+		if secretsFile {
+			secret = !secretsVisibleKeys[strings.ToLower(key)]
+		}
+		if secret && fmt.Sprint(v) != "" {
 			return MaskedValue
 		}
 		return node
@@ -145,9 +171,9 @@ type SetConfigReport struct {
 	NextAction string `json:"next_action,omitempty"`
 }
 
-// SetConfig 改 moox.toml 里一个已有的单值键。target 写成 表名.键（根部的键直接写键），
+// SetConfig 改 moox.toml 或 moox.secrets.toml 里一个已有的单值键。target 写成 表名.键（根部的键直接写键），
 // 值按 true/false、整数、小数识别，其余按字符串。只改那一行，注释与其余内容原样保留；
-// 改后按当前格式校验，通过且 write 为 true 才备份并重新加密写回。
+// 改后按这份文件的格式校验，通过且 write 为 true 才备份并写回：moox.toml 是普通的明文读写，秘密文件重新加密。
 func SetConfig(path, target, value string, write bool, keys configcrypt.KeyStore, now func() time.Time) (SetConfigReport, error) {
 	report := SetConfigReport{Path: path, Key: target}
 	if now == nil {
@@ -165,14 +191,19 @@ func SetConfig(path, target, value string, write bool, keys configcrypt.KeyStore
 		table, key = key[:i], key[i+1:]
 	}
 	if key == "" {
-		return report, errors.New("config set 需要写成 表名.键=值，例如 admin.username=ops 或 factors.enabled=true")
+		return report, errors.New("config set 需要写成 表名.键=值，例如 hosts.storage.label=存储机")
 	}
 	edited, err := setScalarKey(plain, table, key, value)
 	if err != nil {
-		return report, err
+		return report, fmt.Errorf("%w%s", err, secretSectionHint(path, target))
 	}
 	report.Changed = !bytes.Equal(edited, plain)
-	if _, err := setupconfig.Parse(edited); err != nil {
+	if isSecretsFile(path) {
+		_, err = topology.ParseSecrets(edited)
+	} else {
+		_, err = topology.Parse(edited)
+	}
+	if err != nil {
 		return report, fmt.Errorf("改写后的配置校验没有通过，未写回：%w", err)
 	}
 	report.Valid = true
@@ -182,7 +213,7 @@ func SetConfig(path, target, value string, write bool, keys configcrypt.KeyStore
 		}
 		return report, nil
 	}
-	backup, err := sealAndReplace(path, raw, edited, keys, now)
+	backup, err := backupAndReplace(path, raw, edited, keys, now)
 	if err != nil {
 		return report, err
 	}
@@ -191,24 +222,26 @@ func SetConfig(path, target, value string, write bool, keys configcrypt.KeyStore
 	return report, nil
 }
 
-// sealAndReplace 备份原文件，把新内容加密后替换回去；写回前确认文件没被别人改过。
-func sealAndReplace(path string, raw, edited []byte, keys configcrypt.KeyStore, now func() time.Time) (string, error) {
-	current, err := readConfigFile(path)
+// backupAndReplace 备份原文件，再把新内容写回（秘密文件加密后写）；写回前确认文件没被别人改过。
+func backupAndReplace(path string, raw, edited []byte, keys configcrypt.KeyStore, now func() time.Time) (string, error) {
+	current, err := readConfigFile(path, isSecretsFile(path))
 	if err != nil {
 		return "", err
 	}
 	if sha256.Sum256(current) != sha256.Sum256(raw) {
-		return "", errors.New("moox.toml 在修改过程中被改动过，未写回；请重新运行")
+		return "", fmt.Errorf("%s 在修改过程中被改动过，未写回；请重新运行", filepath.Base(path))
 	}
 	backup := fmt.Sprintf("%s.bak-%s", path, now().Format("20060102150405"))
 	if err := writeExclusive(backup, raw); err != nil {
 		return "", err
 	}
-	sealed, err := configcrypt.Encrypt(edited, keys)
-	if err != nil {
-		return "", fmt.Errorf("加密失败：%w", err)
+	data := edited
+	if isSecretsFile(path) {
+		if data, err = configcrypt.Encrypt(edited, keys); err != nil {
+			return "", fmt.Errorf("加密失败：%w", err)
+		}
 	}
-	if err := replaceFile(path, sealed); err != nil {
+	if err := replaceFile(path, data); err != nil {
 		return "", err
 	}
 	return backup, nil
@@ -246,7 +279,7 @@ func setScalarKey(plain []byte, table, key, value string) ([]byte, error) {
 		}
 	}
 	if !found {
-		return nil, fmt.Errorf("moox.toml 里没有 [%s]；config set 只改已有的表", table)
+		return nil, fmt.Errorf("文件里没有 [%s]；config set 只改已有的表", table)
 	}
 	return nil, fmt.Errorf("[%s] 里没有 %s；config set 只改已有的键", table, key)
 }

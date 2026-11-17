@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 )
@@ -218,12 +219,11 @@ func TestBaseIncludesOptionalRuntimeIdentityFields(t *testing.T) {
 	t.Setenv("MOOX_BUILD_TIME", "2026-07-19T00:00:00Z")
 	t.Setenv("MOOX_CONFIG_HASH", "sha256:config")
 	t.Setenv("MOOX_DATASET_HEALTH_POLICY_HASH", "sha256:dataset-health")
-	t.Setenv("MOOX_BINARY_SHA256", "sha256:binary")
 	t.Setenv("MOOX_VERSION", "release-20260827")
 	t.Setenv("MOOX_GIT_COMMIT", "deadbeef")
 
 	rsp := Base("test", "test@node-a", "", "", time.Now(), true)
-	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.DatasetHealthPolicyHash != "sha256:dataset-health" || rsp.BinarySHA256 != "sha256:binary" || rsp.Version != "release-20260827" || rsp.GitCommit != "deadbeef" {
+	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.DatasetHealthPolicyHash != "sha256:dataset-health" || len(rsp.BinarySHA256) != 64 || rsp.Version != "release-20260827" || rsp.GitCommit != "deadbeef" {
 		t.Fatalf("runtime identity fields = %+v", rsp)
 	}
 }
@@ -231,14 +231,13 @@ func TestBaseIncludesOptionalRuntimeIdentityFields(t *testing.T) {
 func TestStateSnapshotUsesRuntimeBuildIdentityWhenModuleLeavesItEmpty(t *testing.T) {
 	t.Setenv("MOOX_VERSION", "release-20260827")
 	t.Setenv("MOOX_GIT_COMMIT", "cafebabe")
-	t.Setenv("MOOX_BINARY_SHA256", "sha256:running")
 	state := NewState("test", "test-1", "", "")
 	state.SetReady(true)
 	state.SnapshotFunc = func(context.Context) Response {
 		return Response{Module: "test", Ready: true, Status: "ok"}
 	}
 	rsp := state.Snapshot(context.Background())
-	if rsp.Version != "release-20260827" || rsp.GitCommit != "cafebabe" || rsp.BinarySHA256 != "sha256:running" {
+	if rsp.Version != "release-20260827" || rsp.GitCommit != "cafebabe" || len(rsp.BinarySHA256) != 64 {
 		t.Fatalf("snapshot build identity = %+v", rsp)
 	}
 }
@@ -250,4 +249,16 @@ func jsonContains(body []byte, field string) bool {
 		}
 	}
 	return false
+}
+
+// 部署不注入启动标识与二进制摘要：启动标识没有时进程自己生成一次（写回环境变量，和上报用同一个值），二进制摘要对自己的可执行文件算。
+func TestProcessIdentityIsGeneratedInProcess(t *testing.T) {
+	t.Setenv("MOOX_BOOT_ID", "")
+	first := Base("test", "test-1", "", "", time.Now(), true)
+	if first.BootID == "" || os.Getenv("MOOX_BOOT_ID") != first.BootID {
+		t.Fatalf("boot id = %q, env = %q", first.BootID, os.Getenv("MOOX_BOOT_ID"))
+	}
+	if second := NewState("test", "test-1", "", ""); second.BootID != first.BootID || second.BinarySHA256 != first.BinarySHA256 || len(first.BinarySHA256) != 64 {
+		t.Fatalf("process identity changed: %+v vs %+v", first, second)
+	}
 }

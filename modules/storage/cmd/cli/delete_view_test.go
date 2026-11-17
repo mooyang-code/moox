@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -66,16 +68,12 @@ func TestDeleteViewMissingViewChangesNothing(t *testing.T) {
 }
 
 func TestValidateDeleteViewOptions(t *testing.T) {
-	ok := deleteViewOptions{metadataDB: "m.db", packageRoot: "/tmp/storage", view: "mooxsys/view_a", yes: true}
+	ok := deleteViewOptions{metadataDB: "m.db", view: "mooxsys/view_a", yes: true}
 	require.NoError(t, validateDeleteViewOptions(ok))
 
 	noYes := ok
 	noYes.yes = false
 	require.ErrorContains(t, validateDeleteViewOptions(noYes), "--yes")
-
-	noRoot := ok
-	noRoot.packageRoot = " "
-	require.ErrorContains(t, validateDeleteViewOptions(noRoot), "--package-root")
 
 	for _, bad := range []string{"", "view_only", "/view", "space/", "a/b/c"} {
 		invalid := ok
@@ -84,25 +82,43 @@ func TestValidateDeleteViewOptions(t *testing.T) {
 	}
 }
 
+// fakeStorageViewState 让 systemctl --user is-active 回答给定的状态，并记下收到的调用。
+func fakeStorageViewState(t *testing.T, state string) *[]string {
+	t.Helper()
+	var calls []string
+	previous := systemctlUser
+	systemctlUser = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "is-active" && state != "active" {
+			return []byte(state + "\n"), errors.New("exit status 3")
+		}
+		return []byte(state + "\n"), nil
+	}
+	t.Cleanup(func() { systemctlUser = previous })
+	return &calls
+}
+
 func TestDeleteViewRefusesWhileStorageViewRuns(t *testing.T) {
-	root := t.TempDir()
-	script := "#!/bin/sh\necho '{\"components\":[{\"id\":\"storage-view\",\"state\":\"running\"}]}'\n"
-	require.NoError(t, os.WriteFile(filepath.Join(root, "status.sh"), []byte(script), 0o755))
+	calls := fakeStorageViewState(t, "active")
 	path := newDeleteViewFixture(t)
-	err := runDeleteView([]string{"--metadata-db", path, "--package-root", root, "--view", "mooxsys/view_mooxsys_service_metrics", "--yes"}, os.Stdout, os.Stderr)
+	err := runDeleteView([]string{"--metadata-db", path, "--view", "mooxsys/view_mooxsys_service_metrics", "--yes"}, os.Stdout, os.Stderr)
 	require.ErrorContains(t, err, "must be stopped")
+	require.Equal(t, []string{"is-active moox-storage-view.service"}, *calls)
 	require.Equal(t, 2, countRows(t, path, `SELECT COUNT(*) FROM t_views`), "storage-view 在运行时不能动元数据")
 }
 
-func TestDeleteViewAcceptsPausedStorageView(t *testing.T) {
-	for _, state := range []string{"stopped", "paused"} {
-		root := t.TempDir()
-		script := "#!/bin/sh\necho '{\"components\":[{\"id\":\"storage-view\",\"state\":\"" + state + "\"}]}'\n"
-		require.NoError(t, os.WriteFile(filepath.Join(root, "status.sh"), []byte(script), 0o755))
-		require.NoError(t, ensureStorageViewStopped(root), state)
+// 停着（inactive、failed）才放行；正在启动、正在停止或状态说不清都拒绝。
+func TestDeleteViewOnlyAcceptsStoppedStorageView(t *testing.T) {
+	for _, state := range []string{"inactive", "failed"} {
+		fakeStorageViewState(t, state)
+		require.NoError(t, ensureStorageViewStopped(t.Context()), state)
 	}
-	root := t.TempDir()
-	script := "#!/bin/sh\necho '{\"components\":[{\"id\":\"storage-view\",\"state\":\"starting\"}]}'\n"
-	require.NoError(t, os.WriteFile(filepath.Join(root, "status.sh"), []byte(script), 0o755))
-	require.ErrorContains(t, ensureStorageViewStopped(root), "refusing")
+	for _, state := range []string{"activating", "deactivating"} {
+		fakeStorageViewState(t, state)
+		require.ErrorContains(t, ensureStorageViewStopped(t.Context()), "must be stopped", state)
+	}
+	for _, state := range []string{"", "unknown", "Failed to connect to bus"} {
+		fakeStorageViewState(t, state)
+		require.ErrorContains(t, ensureStorageViewStopped(t.Context()), "refusing", state)
+	}
 }

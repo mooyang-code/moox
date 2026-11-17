@@ -12,9 +12,9 @@ import (
 	"maps"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,9 +26,10 @@ import (
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -37,91 +38,126 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// strategyGatewayWire 模拟主机网关背后的 Storage、Factor 与 Trade：校验调用方签名、服务目录里的 ACL 与 Storage 角色鉴权。
+// strategyGatewayWire 同时充当本机网关的目录服务与同机的 Storage、Factor、Trade：策略直连它们的服务端口，
+// 这里核对请求不带签名头、调用的方法都在服务目录的名单里（跨主机时由网关按名单把关）、请求空间没有变。
 type strategyGatewayWire struct {
 	factorpb.UnimplementedFactorMgr
+	factorpb.UnimplementedEngineControl
 	tradepb.UnimplementedTradeConsoleService
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedDataView
 	directorypb.UnimplementedDirectory
-	credentials gatewayauth.Credentials
-	directory   servicecatalog.Directory
-	catalog     servicecatalog.Catalog
-	mu          sync.Mutex
-	nonces      map[string]bool
-	calls       map[string]int
-	refreshes   int
-	owner       *tradepb.LogicalAccount
+	catalog   servicecatalog.Catalog
+	mu        sync.Mutex
+	calls     map[string]int
+	refreshes int
+	// closedThrough 是 Trade 替身记下的“关闭到”时刻。
+	closedThrough int64
+	// deadlines 记下 EngineControl 各方法收到的剩余超时：回放“因子现算”不能被 factor.timeout（5 秒）掐断。
+	deadlines map[string]time.Duration
+}
+
+// 这个替身同时充当 FactorMgr、EngineControl 与 TradeConsoleService，三个服务都有生命周期方法：在这里显式实现一次消除歧义，本测试不调用它们。
+func (w *strategyGatewayWire) GetLifecycle(context.Context, *commonpb.GetLifecycleReq) (*commonpb.GetLifecycleRsp, error) {
+	return nil, errors.New("not used")
+}
+
+func (w *strategyGatewayWire) ControlLifecycle(context.Context, *commonpb.ControlLifecycleReq) (*commonpb.ControlLifecycleRsp, error) {
+	return nil, errors.New("not used")
 }
 
 func (w *strategyGatewayWire) GetDirectory(_ context.Context, req *directorypb.GetDirectoryReq) (*directorypb.GetDirectoryRsp, error) {
 	w.mu.Lock()
 	w.refreshes++
 	w.mu.Unlock()
-	if req.GetCurrentVersion() == w.directory.Version {
-		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
+	if req.GetCurrentVersion() == strategyDirectoryVersion {
+		return &directorypb.GetDirectoryRsp{Version: strategyDirectoryVersion}, nil
 	}
-	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version,
-		Services: map[string]*directorypb.ServiceHosts{
-			"trpc.moox.trade.TradeConsoleService": {HostIds: []string{"control"}},
-			"trpc.moox.factor.FactorMgr":          {HostIds: []string{"control"}},
-			"trpc.moox.storage.Metadata":          {HostIds: []string{"control"}},
-			"trpc.moox.storage.DataView":          {HostIds: []string{"control"}},
-		}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
+	// 目录只有主机与部署：策略与 Trade、Factor、Storage 同机。
+	rsp := &directorypb.GetDirectoryRsp{Changed: true, Version: strategyDirectoryVersion,
+		Hosts: []*directorypb.DirectoryHost{{HostId: "control", Address: "control.example.test", Reachability: "direct", Enabled: true}}}
+	for _, component := range []string{"strategy", "trade", "factor-mgr", "factor-engine", "storage-primary", "storage-view"} {
+		rsp.Deployments = append(rsp.Deployments, &directorypb.DirectoryDeployment{HostId: "control", ComponentId: component, Enabled: true})
+	}
+	return rsp, nil
 }
 
-func (w *strategyGatewayWire) verify(ctx context.Context, service, method string, request proto.Message) (gatewayauth.Claims, error) {
+const strategyDirectoryVersion = "v1"
+
+func (w *strategyGatewayWire) verify(ctx context.Context, service, method string, _ proto.Message) error {
 	if !w.catalog.Allowed("strategy", service, method) {
-		return gatewayauth.Claims{}, fmt.Errorf("strategy 调用 %s/%s 不在服务目录的 ACL 里", service, method)
+		return fmt.Errorf("strategy 调用 %s/%s 不在服务目录的 ACL 里", service, method)
 	}
-	headers := http.Header{}
-	for key, value := range codec.Message(ctx).ServerMetaData() {
-		headers.Set(key, string(value))
-	}
-	body, err := proto.Marshal(request)
-	if err != nil {
-		return gatewayauth.Claims{}, err
-	}
-	claims, err := gatewayauth.Verify(w.credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
-		TargetNode: "control", Callee: service, Func: method, Body: body}, headers, time.Now())
-	if err != nil {
-		return gatewayauth.Claims{}, err
+	for name := range codec.Message(ctx).ServerMetaData() {
+		if strings.HasPrefix(strings.ToLower(name), "x-moox-") {
+			return fmt.Errorf("同机直连的请求带了签名头 %s", name)
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.nonces[claims.Nonce] {
-		return gatewayauth.Claims{}, errors.New("strategy 签名 nonce 被重放")
-	}
-	w.nonces[claims.Nonce] = true
 	w.calls[service+"/"+method]++
-	return claims, nil
+	return nil
 }
 
 type strategyStorageRequest interface {
 	proto.Message
-	GetAuthInfo() *commonpb.AuthInfo
 	GetSpaceId() string
 }
 
 func (w *strategyGatewayWire) verifyStorage(ctx context.Context, service, method string, req strategyStorageRequest) error {
-	if _, err := w.verify(ctx, "trpc.moox.storage."+service, method, req); err != nil {
+	if err := w.verify(ctx, "trpc.moox.storage."+service, method, req); err != nil {
 		return err
 	}
-	key := "fixture-primary-role-key"
-	if service == "DataView" {
-		key = "fixture-view-role-key"
-	}
-	if req.GetSpaceId() != "crypto" || !proto.Equal(req.GetAuthInfo(), &commonpb.AuthInfo{AppId: "strategy", AppKey: key, Operator: "strategy"}) {
-		return errors.New("strategy 的 Storage 空间或角色鉴权发生了变化")
+	if req.GetSpaceId() != "crypto" {
+		return errors.New("strategy 的 Storage 请求空间发生了变化")
 	}
 	return nil
 }
 
 func (w *strategyGatewayWire) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*factorpb.GetFactorRsp, error) {
-	if _, err := w.verify(ctx, "trpc.moox.factor.FactorMgr", "GetFactor", req); err != nil {
+	if err := w.verify(ctx, "trpc.moox.factor.FactorMgr", "GetFactor", req); err != nil {
 		return nil, err
 	}
 	return &factorpb.GetFactorRsp{RetInfo: &commonpb.RetInfo{}, Factor: &factorpb.FactorDef{FactorId: req.GetFactorId(), DefinitionHash: "sha256:fixture"}}, nil
+}
+
+// engineCall 校验 EngineControl 的调用并记下剩余超时。
+func (w *strategyGatewayWire) engineCall(ctx context.Context, method string, req proto.Message) error {
+	if err := w.verify(ctx, "trpc.moox.factor.EngineControl", method, req); err != nil {
+		return err
+	}
+	remaining := time.Duration(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.deadlines == nil {
+		w.deadlines = map[string]time.Duration{}
+	}
+	w.deadlines[method] = remaining
+	return nil
+}
+
+func (w *strategyGatewayWire) OpenReplay(ctx context.Context, req *factorpb.OpenReplayReq) (*factorpb.OpenReplayRsp, error) {
+	if err := w.engineCall(ctx, "OpenReplay", req); err != nil {
+		return nil, err
+	}
+	return &factorpb.OpenReplayRsp{RetInfo: &commonpb.RetInfo{}, ReplayId: req.GetReplayId(), PeriodTimes: []int64{3600}}, nil
+}
+
+func (w *strategyGatewayWire) StepReplay(ctx context.Context, req *factorpb.StepReplayReq) (*factorpb.StepReplayRsp, error) {
+	if err := w.engineCall(ctx, "StepReplay", req); err != nil {
+		return nil, err
+	}
+	return &factorpb.StepReplayRsp{RetInfo: &commonpb.RetInfo{}, Periods: []*factorpb.ReplayPeriod{{PeriodTime: req.GetPeriodTime()}}}, nil
+}
+
+func (w *strategyGatewayWire) CloseReplay(ctx context.Context, req *factorpb.CloseReplayReq) (*factorpb.CloseReplayRsp, error) {
+	if err := w.engineCall(ctx, "CloseReplay", req); err != nil {
+		return nil, err
+	}
+	return &factorpb.CloseReplayRsp{RetInfo: &commonpb.RetInfo{}, Closed: true}, nil
 }
 
 func (w *strategyGatewayWire) GetView(ctx context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
@@ -191,9 +227,9 @@ func (w *strategyGatewayWire) QueryTimeSeriesRows(ctx context.Context, req *stor
 		Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SubjectId: "BTC", DataTime: req.GetTimeRange().GetStartTime()}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "123.45"}}}}}}}, nil
 }
 
-// verifyTrade 校验 Trade 调用：签名、ACL，以及网关转发的可信空间。
+// verifyTrade 校验 Trade 调用：不带签名头、在名单里，并带着调用方给出的空间。
 func (w *strategyGatewayWire) verifyTrade(ctx context.Context, method string, req proto.Message) error {
-	if _, err := w.verify(ctx, "trpc.moox.trade.TradeConsoleService", method, req); err != nil {
+	if err := w.verify(ctx, "trpc.moox.trade.TradeConsoleService", method, req); err != nil {
 		return err
 	}
 	if space := string(codec.Message(ctx).ServerMetaData()["X-Space-Id"]); space != "crypto" {
@@ -202,56 +238,36 @@ func (w *strategyGatewayWire) verifyTrade(ctx context.Context, method string, re
 	return nil
 }
 
-func (w *strategyGatewayWire) account() *tradepb.LogicalAccount {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.owner == nil {
-		w.owner = &tradepb.LogicalAccount{LogicalAccountId: "acct-1", SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1"}
-	}
-	return proto.Clone(w.owner).(*tradepb.LogicalAccount)
-}
-
 func (w *strategyGatewayWire) GetLogicalAccount(ctx context.Context, req *tradepb.GetLogicalAccountReq) (*tradepb.GetLogicalAccountRsp, error) {
 	if err := w.verifyTrade(ctx, "GetLogicalAccount", req); err != nil {
 		return nil, err
 	}
-	return &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: w.account()}, nil
+	account := &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
+	return &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account}, nil
 }
 
-func (w *strategyGatewayWire) ClaimLogicalAccountOwner(ctx context.Context, req *tradepb.ClaimLogicalAccountOwnerReq) (*tradepb.ClaimLogicalAccountOwnerRsp, error) {
-	if err := w.verifyTrade(ctx, "ClaimLogicalAccountOwner", req); err != nil {
+func (w *strategyGatewayWire) CloseTargetSession(ctx context.Context, req *tradepb.CloseTargetSessionReq) (*tradepb.CloseTargetSessionRsp, error) {
+	if err := w.verifyTrade(ctx, "CloseTargetSession", req); err != nil {
 		return nil, err
 	}
 	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1", OwnerInstanceId: req.GetInstanceId(), OwnerSessionId: req.GetSessionId()}
-	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
+	w.closedThrough = max(w.closedThrough, req.GetSessionStartedAt())
+	closed := w.closedThrough
 	w.mu.Unlock()
-	return &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
-}
-
-func (w *strategyGatewayWire) ReleaseLogicalAccountOwner(ctx context.Context, req *tradepb.ReleaseLogicalAccountOwnerReq) (*tradepb.ReleaseLogicalAccountOwnerRsp, error) {
-	if err := w.verifyTrade(ctx, "ReleaseLogicalAccountOwner", req); err != nil {
-		return nil, err
-	}
-	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, AuthFence: "fence-1"}
-	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
-	w.mu.Unlock()
-	return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
+	return &tradepb.CloseTargetSessionRsp{RetInfo: &tradepb.RetInfo{}, ClosedThrough: closed}, nil
 }
 
 func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGatewayWire) {
 	t.Helper()
 	root := t.TempDir()
 	configPath := filepath.Join(root, "strategy", "config", "app.yaml")
-	hostPath := filepath.Join(root, "host-gateway", "config", "app.yaml")
-	keyPath := filepath.Join(root, "secrets", "caller-strategy.key")
+	keyPath := filepath.Join(root, "secrets", "host.key")
 	caPath := filepath.Join(root, "pki", "ca.crt")
-	for _, path := range []string{configPath, hostPath, keyPath, caPath} {
+	for _, path := range []string{configPath, keyPath, caPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	}
-	credentials := gatewayauth.Credentials{Caller: "strategy", KeyID: "admin-assigned-strategy-key-48", Secret: "strategy-signing-fixture-secret-at-least-32-bytes"}
-	require.NoError(t, os.WriteFile(keyPath, []byte(credentials.Secret+"\n"), 0o600))
+	credentials := authtest.Component("strategy", "control")
+	require.NoError(t, os.WriteFile(keyPath, []byte(gatewayauth.EncodeSigningKey(credentials.Key)+"\n"), 0o600))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
@@ -260,29 +276,32 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	host := hostgatewayconfig.Default("control", "control", "192.0.2.1", "host-fixture-key")
-	host.Server.LocalAddr = listener.Addr().String()
-	host.TLS.CAFile = caPath
-	encoded, err := hostgatewayconfig.Encode(host)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(hostPath, encoded, 0o600))
-	directory := servicecatalog.Directory{Services: map[string][]string{
-		"trpc.moox.trade.TradeConsoleService": {"control"}, "trpc.moox.factor.FactorMgr": {"control"}, "trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.DataView": {"control"},
-	}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
-	directory.Version, err = directory.VersionHash()
-	require.NoError(t, err)
+	// 策略与这些服务同机：直连服务目录里各服务的回环端口，这里都指到同一个假服务上。
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	wire := &strategyGatewayWire{credentials: credentials, directory: directory, catalog: catalog, nonces: map[string]bool{}, calls: map[string]int{}}
+	servicePorts := map[int]bool{}
+	for _, path := range []string{"trpc.moox.trade.TradeConsoleService", "trpc.moox.factor.FactorMgr", "trpc.moox.factor.EngineControl", "trpc.moox.storage.Metadata", "trpc.moox.storage.DataView"} {
+		spec, ok := catalog.Service(path)
+		require.True(t, ok, path)
+		servicePorts[spec.Port] = true
+	}
+	t.Cleanup(gatewayclient.SetLocalServiceAddressForTest(func(port int) string {
+		if !servicePorts[port] {
+			return "127.0.0.1:1"
+		}
+		return listener.Addr().String()
+	}))
+	wire := &strategyGatewayWire{catalog: catalog, calls: map[string]int{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	factorpb.RegisterFactorMgrService(svc, wire)
+	factorpb.RegisterEngineControlService(svc, wire)
 	tradepb.RegisterTradeConsoleServiceService(svc, wire)
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterDataViewService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
-	raw := fmt.Sprintf("database: %q\ngateway_client:\n  caller: strategy\n  key_id: %s\n  key_file: ../../secrets/caller-strategy.key\nstorage:\n  app_id: strategy\n  app_key: fixture-primary-role-key\n  view_app_key: fixture-view-role-key\n", filepath.Join(root, "data", "strategy", "strategy.db"), credentials.KeyID)
+	raw := fmt.Sprintf("database: %q\ngateway_client:\n  caller: strategy\n  key_file: ../../secrets/host.key\n  host_id: control\n  local_address: "+listener.Addr().String()+"\n  ca_file: "+caPath+"\n", filepath.Join(root, "data", "strategy", "strategy.db"))
 	if natsURL != "" {
 		raw += fmt.Sprintf("eventbus:\n  urls: [%q]\n", natsURL)
 	}
@@ -292,7 +311,7 @@ func strategyGatewayFixture(t *testing.T, natsURL string) (Config, *strategyGate
 	return cfg, wire
 }
 
-// Storage、Factor 与 Trade 的全部调用都经共享的部署网关：签名、服务目录的 ACL、Storage 角色鉴权与可信空间都由网关桩校验。
+// Storage、Factor 与 Trade 的全部调用都经共享的网关客户端：同机时直连服务端口、不带签名头；调用的方法都在服务目录的名单里，空间照常带到。
 func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	for _, name := range []string{"MOOX_SERVICE_GATEWAY_TARGET", "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET"} {
 		t.Setenv(name, "ip://192.0.2.99:11003")
@@ -330,10 +349,28 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "sha256:fixture", factor.DefinitionHash)
 
-	owner := tradeowner.New(cfg.Trade, gateway)
-	require.NoError(t, owner.ClaimSession(ctx, "crypto", "acct-1", "instance-1", "session-1", []string{"swap"}))
-	require.NoError(t, owner.ValidateSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
-	require.NoError(t, owner.ReleaseSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
+	// 回放“因子现算”经同一个网关客户端调因子引擎：超时按服务目录（OpenReplay 10 分钟、其余 2 分钟），不套 factor.timeout。
+	engineClient := input.NewEngineClient(gateway)
+	_, err = engineClient.OpenReplay(ctx, &factorpb.OpenReplayReq{ReplayId: "r1", TaskId: "ftask", From: "1970-01-01T01:00:00Z", To: "1970-01-01T02:00:00Z", Columns: []string{"close"}})
+	require.NoError(t, err)
+	_, err = engineClient.StepReplay(ctx, &factorpb.StepReplayReq{ReplayId: "r1", PeriodTime: 3600, Periods: 1})
+	require.NoError(t, err)
+	_, err = engineClient.CloseReplay(ctx, &factorpb.CloseReplayReq{ReplayId: "r1"})
+	require.NoError(t, err)
+	wire.mu.Lock()
+	deadlines := maps.Clone(wire.deadlines)
+	wire.mu.Unlock()
+	require.Greater(t, deadlines["OpenReplay"], 9*time.Minute, "OpenReplay 用目录的 10 分钟超时")
+	require.Greater(t, deadlines["StepReplay"], 100*time.Second, "StepReplay 用目录的 2 分钟超时")
+	require.Less(t, deadlines["StepReplay"], 3*time.Minute)
+	require.Greater(t, deadlines["CloseReplay"], 100*time.Second)
+
+	trade := tradeowner.New(cfg.Trade, gateway)
+	require.NoError(t, trade.CheckAccount(ctx, "crypto", "acct-1", []string{"swap"}))
+	require.NoError(t, trade.CloseSession(ctx, "crypto", "acct-1", "instance-1", "session-1", 1_700_000_000_000))
+	wire.mu.Lock()
+	require.Equal(t, int64(1_700_000_000_000), wire.closedThrough)
+	wire.mu.Unlock()
 
 	// 网关调用的参数由 ctx 与服务目录决定，不接受 tRPC 客户端选项。
 	_, err = reader.Metadata.GetView(ctx, &storagepb.GetViewReq{}, client.WithTarget("ip://192.0.2.99:20100"))
@@ -348,8 +385,8 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 		"trpc.moox.storage.Metadata/GetView", "trpc.moox.storage.Metadata/ListViewColumns", "trpc.moox.storage.Metadata/GetDataset",
 		"trpc.moox.storage.Metadata/GetTag", "trpc.moox.storage.Metadata/ListDatasetSubjects", "trpc.moox.storage.Metadata/ListSubjects",
 		"trpc.moox.storage.Metadata/ListTagMembers", "trpc.moox.storage.DataView/QueryTimeSeriesRows", "trpc.moox.storage.DataView/GetViewState", "trpc.moox.factor.FactorMgr/GetFactor",
-		"trpc.moox.trade.TradeConsoleService/GetLogicalAccount", "trpc.moox.trade.TradeConsoleService/ClaimLogicalAccountOwner",
-		"trpc.moox.trade.TradeConsoleService/ReleaseLogicalAccountOwner",
+		"trpc.moox.factor.EngineControl/OpenReplay", "trpc.moox.factor.EngineControl/StepReplay", "trpc.moox.factor.EngineControl/CloseReplay",
+		"trpc.moox.trade.TradeConsoleService/GetLogicalAccount", "trpc.moox.trade.TradeConsoleService/CloseTargetSession",
 	} {
 		require.Positive(t, calls[want], want)
 	}

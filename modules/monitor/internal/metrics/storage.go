@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorname"
@@ -28,7 +27,6 @@ type MetadataClient interface {
 // StorageAdapter 只读 Storage 元数据：数据集的有效标的、展示名称和标签，带短期缓存。
 type StorageAdapter struct {
 	metadata         MetadataClient
-	auth             *commonpb.AuthInfo
 	subjectMu        sync.Mutex
 	subjectRefreshMu sync.Mutex
 	subjects         map[string]cachedSubjectCatalog
@@ -64,7 +62,7 @@ type cachedSubjectCatalog struct {
 }
 
 func NewStorageAdapter(metadata MetadataClient) *StorageAdapter {
-	return &StorageAdapter{metadata: metadata, auth: storageauth.Primary("monitor"), subjects: make(map[string]cachedSubjectCatalog), datasetInfos: make(map[string]cachedDatasetInfo), datasetGone: make(map[string]cachedDatasetGone)}
+	return &StorageAdapter{metadata: metadata, subjects: make(map[string]cachedSubjectCatalog), datasetInfos: make(map[string]cachedDatasetInfo), datasetGone: make(map[string]cachedDatasetGone)}
 }
 
 func isActive(status string) bool { return strings.EqualFold(strings.TrimSpace(status), "active") }
@@ -102,8 +100,7 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 	ids := make(map[string]struct{})
 	rowCount := 0
 	for page := uint32(1); ; page++ {
-		rsp, err := a.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
-			AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID,
+		rsp, err := a.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{SpaceId: spaceID, DatasetId: datasetID,
 			Page: &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
 		})
 		if err != nil {
@@ -163,7 +160,7 @@ func (a *StorageAdapter) datasetInfo(ctx context.Context, spaceID, datasetID str
 	if ok && now.Sub(cached.loadedAt) < datasetInfoTTL {
 		return cached
 	}
-	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID})
+	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil || storageOK("get dataset", rsp.GetRetInfo()) != nil {
 		return cached
 	}
@@ -191,7 +188,7 @@ func (a *StorageAdapter) DatasetGone(ctx context.Context, spaceID, datasetID str
 	if ok && now.Sub(cached.loadedAt) < datasetGoneTTL {
 		return cached.gone
 	}
-	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID})
+	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil || rsp == nil || rsp.GetRetInfo() == nil {
 		return cached.gone && ok
 	}
@@ -217,9 +214,8 @@ func (a *StorageAdapter) ListTags(ctx context.Context, spaceID string) ([]*stora
 	items := make([]*storagepb.Tag, 0)
 	for page := uint32(1); ; page++ {
 		rsp, err := a.metadata.ListTags(ctx, &storagepb.ListTagsReq{
-			AuthInfo: a.auth,
-			SpaceId:  strings.TrimSpace(spaceID),
-			Page:     &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
+			SpaceId: strings.TrimSpace(spaceID),
+			Page:    &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("list monitored tags: %w", err)
@@ -259,7 +255,7 @@ func (a *StorageAdapter) ListArchivableDatasets(ctx context.Context) ([]string, 
 	}
 	var out []string
 	for page := uint32(1); page <= maxArchivableScans; page++ {
-		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{AuthInfo: a.auth, Page: &commonpb.Page{Page: page, Size: factorResultPageSize}})
+		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{Page: &commonpb.Page{Page: page, Size: factorResultPageSize}})
 		if err != nil {
 			return nil, fmt.Errorf("list archivable datasets: %w", err)
 		}
@@ -300,8 +296,7 @@ func (a *StorageAdapter) ListFactorResultDatasets(ctx context.Context, spaceID, 
 	}
 	var out []FactorResultDataset
 	for page := uint32(1); page <= maxFactorResultScans; page++ {
-		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{
-			AuthInfo: a.auth, SpaceId: spaceID, Freq: freq,
+		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{SpaceId: spaceID, Freq: freq,
 			Page: &commonpb.Page{Page: page, Size: factorResultPageSize},
 		})
 		if err != nil {

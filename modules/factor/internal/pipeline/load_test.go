@@ -25,14 +25,15 @@ func TestLoadMergesDataFailuresAndWarming(t *testing.T) {
 		read: func(_ context.Context, plan Plan, _ time.Time) (map[string]*storageio.Frame, error) {
 			frames := map[string]*storageio.Frame{}
 			for _, subject := range plan.Available {
-				frames[subject] = &storageio.Frame{SubjectID: subject, Columns: []string{"data_time", "series_tag", "close"}, Rows: [][]any{{plan.TargetEnd.Add(-time.Minute), "", 1.0}}}
+				frames[subject] = &storageio.Frame{SubjectID: subject, Columns: []string{"data_time", "series_tag", "close"}, Rows: [][]any{{plan.TargetEnd.Add(-time.Minute), singleTag, 1.0}}}
 			}
 			return frames, nil
 		},
 		failed: []string{"B"}, warming: []string{"C"},
 	}
-	plan := loadPlan([]string{"A", "B", "C", "D"})
-	plan.UpstreamFailed = []string{"E"}
+	plan := loadPlan([]string{"A", "B", "C", "D", "E"})
+	plan.Available = []string{"A", "B", "C", "D"}
+	plan.UpstreamFailed, plan.UpstreamFailedSeries = []string{"E"}, singleSeries("E")
 	loaded, err := NewRunner(&fakeStore{}, data, periodclock.Continuous{}, Config{}).Load(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, []string{"A", "D"}, loaded.Available)
@@ -47,8 +48,9 @@ func TestLoadSkipsDataLayerWithoutAvailableSubjects(t *testing.T) {
 		t.Fatal("没有可用标的时不应读取")
 		return nil, nil
 	}}
-	plan := loadPlan(nil)
-	plan.UpstreamFailed = []string{"X"}
+	plan := loadPlan([]string{"X"})
+	plan.Available = nil
+	plan.UpstreamFailed, plan.UpstreamFailedSeries = []string{"X"}, singleSeries("X")
 	loaded, err := NewRunner(&fakeStore{}, data, periodclock.Continuous{}, Config{}).Load(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, []string{"X"}, loaded.FailedSubjects)
@@ -65,7 +67,7 @@ func TestLoadRecalcReadsFromLookbackStart(t *testing.T) {
 
 	live, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set:     domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled},
-		Members: domain.AsMembers(domain.FactorDef{FactorID: "short", LookbackPeriods: 5}, domain.FactorDef{FactorID: "long", LookbackPeriods: 20}), PeriodTime: start, Universe: []string{"BTC"}, CarryColumns: []string{"close"},
+		Members: domain.AsMembers(domain.FactorDef{FactorID: "short", LookbackPeriods: 5}, domain.FactorDef{FactorID: "long", LookbackPeriods: 20}), PeriodTime: start, UniverseSeries: singleSeries("BTC"), CarryColumns: []string{"close"},
 	})
 	require.NoError(t, err)
 	got, err = ReadStart(periodclock.Continuous{}, live)
@@ -77,7 +79,8 @@ func loadPlan(subjects []string) Plan {
 	return Plan{
 		Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
 		TargetStart: time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC), TargetEnd: time.Date(2026, 10, 4, 0, 1, 0, 0, time.UTC),
-		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"},
+		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), ExpectedSeries: singleSeries(subjects...),
+		CarryColumns: []string{"close"},
 	}
 }
 
@@ -104,7 +107,7 @@ func TestRunRecordsUnavailableAndWarmingSubjects(t *testing.T) {
 	sink := &recordingSink{}
 	runner := NewRunner(store, data, clock, Config{ComputeWorkers: 1, GapSink: sink})
 	input := e2eLiveInput(target, subjects, []domain.FactorDef{e2eMean()})
-	input.UpstreamFailed = []string{"XRP"}
+	input.UpstreamFailedSeries = singleSeries("XRP")
 	plan, err := BuildLivePlan(clock, input)
 	require.NoError(t, err)
 

@@ -42,7 +42,6 @@ type KlinePipeline struct {
 	// SettleDelay 是结算延迟（路由文件的 settle_delay_ms）：实时批只写“收盘时刻 + 结算延迟”已经过去的 K 线。
 	SettleDelay time.Duration
 	Now         func() time.Time
-	Metrics     *Metrics
 	// Reporter 非空时，把失败项明细与批次摘要上报 CLS；FunctionName 是上报用的函数名。
 	Reporter     ItemReporter
 	FunctionName string
@@ -72,7 +71,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	// 流水线没绑定品种时用市场的默认品种。
 	instrumentType := p.InstrumentType
 	if instrumentType == "" {
-		fallback, err := defaultInstrumentType(marketID, "")
+		fallback, err := DefaultInstrumentType(marketID, "")
 		if err != nil {
 			return nil, err
 		}
@@ -413,7 +412,7 @@ func periodCommitForDataset(req Request, datasetID string, rows []*storagepb.Row
 	}
 	bindings := make(map[string]binding)
 	for _, item := range req.Items {
-		seriesTag := collectionItemSeriesTag(req.SpaceID, item)
+		seriesTag := CollectionItemSeriesTag(req.SpaceID, item)
 		if len(req.Targets) == 0 {
 			if item.DatasetID == datasetID && item.SeriesHash != "" && item.ExpectedCount > 0 {
 				bindings[periodRowBindingKey(datasetID, item.SubjectID, seriesTag)] = binding{index: item.SeriesIndex, hash: item.SeriesHash, count: item.ExpectedCount, targetTime: item.TargetDataTime}
@@ -628,7 +627,7 @@ func klineRouteID(marketID string, instrumentType marketdata.InstrumentType, pro
 		return "", err
 	}
 	if instrumentType == "" {
-		if instrumentType, err = defaultInstrumentType(marketID, ""); err != nil {
+		if instrumentType, err = DefaultInstrumentType(marketID, ""); err != nil {
 			return "", err
 		}
 	}

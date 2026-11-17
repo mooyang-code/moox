@@ -1,8 +1,5 @@
 <template>
   <div class="instance-results">
-    <a-alert v-if="!instance.enabled && instance.session_id" type="warning" show-icon class="results-alert"
-      >实例已经停用，但会话仍存在。后台账户释放可能尚未完成，请不要将旧目标当作当前有效仓位。</a-alert
-    >
     <a-alert v-if="instance.health === 'degraded'" type="error" show-icon class="results-alert">{{
       skipAdvice(latestSkip?.skip_reason)
     }}</a-alert>

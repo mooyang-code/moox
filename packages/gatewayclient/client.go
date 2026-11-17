@@ -1,5 +1,5 @@
 // Package gatewayclient provides signed object calls and raw tRPC forwarding
-// through the host gateway, fixed external access, or SSH tunnels.
+// through the host gateway, a fixed external entry, or SSH tunnels.
 package gatewayclient
 
 import (
@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	// 注册原生 tRPC 帧的压缩与包体上限；所有经网关的客户端都要用同一套。
+	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
 	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -29,7 +31,7 @@ import (
 
 const (
 	Internal = "local"
-	External = "access"
+	External = "entry"
 	Tunnel   = "tunnel"
 )
 
@@ -51,17 +53,18 @@ type Invoker interface {
 }
 
 type Config struct {
-	Mode             string
-	Credentials      gatewayauth.Credentials
-	LocalHostID      string
-	LocalAddress     string
-	CAFile           string
-	Source           DirectorySource
-	CachePath        string
-	Tunnels          TunnelResolver
-	AccessAddress    string
-	AccessInstanceID string
-	Serialization    int
+	Mode         string
+	Credentials  gatewayauth.Credentials
+	LocalHostID  string
+	LocalAddress string
+	CAFile       string
+	Source       DirectorySource
+	CachePath    string
+	Tunnels      TunnelResolver
+	// EntryAddress、EntryHost 是外部身份用的固定入口：入口主机网关的外部入口地址（11004）与这台主机的 ID。
+	EntryAddress  string
+	EntryHost     string
+	Serialization int
 	// Pool 调整连接本机/跨主机网关的连接池（Internal 与 Tunnel 模式）；零值使用默认。
 	Pool             PoolConfig
 	Timeout          time.Duration
@@ -87,6 +90,8 @@ type CallFailure struct {
 type endpoint struct {
 	address, target, caFile, serverName string
 	compress                            bool
+	// direct 表示目标服务在本机：直接连它的回环端口，不签名、不压缩，也不查方法名单。
+	direct bool
 	// relay 非空时经 control 网关中转：address 是只在本进程内使用的合成地址，拨号时先连 control 再连目标。
 	relay *relayRoute
 }
@@ -137,10 +142,12 @@ func (c *Client) DialRelay(ctx context.Context, hostID string, port int) (net.Co
 type invokeFunc func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error)
 
 type Client struct {
-	config      Config
-	catalog     servicecatalog.Catalog
-	mu          sync.RWMutex
-	directory   servicecatalog.Directory
+	config    Config
+	catalog   servicecatalog.Catalog
+	mu        sync.RWMutex
+	directory servicecatalog.Directory
+	// source 是 directory 展开之前的那一份，落盘缓存写它。
+	source      DirectoryUpdate
 	refresh     chan struct{}
 	invoke      invokeFunc
 	pool        *rpcPool
@@ -173,8 +180,12 @@ func New(config Config) (*Client, error) {
 	if config.Credentials.Caller == "" {
 		return nil, fmt.Errorf("gateway caller is required")
 	}
-	if _, err := gatewayauth.Sign(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/validate", TargetNode: "bootstrap"}, time.Now()); err != nil {
+	if _, err := gatewayauth.Sign(config.Credentials, gatewayauth.Request{TargetNode: "bootstrap"}, time.Now()); err != nil {
 		return nil, err
+	}
+	// 组件用所在主机的密钥签名，签名主机就是本机；不属于主机的身份（moox-cli 与外部身份）不带签名主机。
+	if (config.Mode == Internal) != (config.Credentials.Host != "") || config.Mode == Internal && config.Credentials.Host != config.LocalHostID {
+		return nil, fmt.Errorf("gateway client signing host does not match its mode")
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
@@ -215,7 +226,7 @@ func New(config Config) (*Client, error) {
 		}
 		// 隧道模式平时不需要 CA；连接出站主机时要用它校验 control 与目标网关的证书。
 	case External:
-		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.AccessAddress, config.AccessInstanceID); err != nil {
+		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.EntryAddress, config.EntryHost); err != nil {
 			return nil, err
 		}
 		if config.Source != nil || config.CachePath != "" || config.Tunnels != nil {
@@ -233,7 +244,9 @@ func New(config Config) (*Client, error) {
 	if config.Mode != External {
 		if config.CachePath != "" {
 			if cached, err := readCache(config.CachePath); err == nil {
-				c.directory = cached
+				if directory, err := resolve(catalog, cached); err == nil {
+					c.directory, c.source = directory, cached
+				}
 			}
 		}
 		err := c.Refresh(context.Background())
@@ -282,33 +295,35 @@ func (c *Client) Refresh(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	current := c.Directory().Version
+	c.mu.RLock()
+	current, source := c.directory.Version, c.source
+	c.mu.RUnlock()
 	update, err := c.config.Source.Fetch(ctx, current)
 	if err != nil {
 		return err
 	}
 	if !update.Changed {
-		if current == "" || update.Directory.Version != current {
+		if current == "" || update.Version != current {
 			return fmt.Errorf("unchanged directory has an unexpected version")
 		}
 		// 上次落盘失败时，目录版本不变也要补写，否则缓存会一直停留在旧版本。
 		if c.unpersisted {
-			if err := writeCache(c.config.CachePath, c.Directory()); err != nil {
+			if err := writeCache(c.config.CachePath, source); err != nil {
 				return fmt.Errorf("persist directory: %w", err)
 			}
 			c.unpersisted = false
 		}
 		return nil
 	}
-	if err := update.Directory.Validate(); err != nil {
+	directory, err := resolve(c.catalog, update)
+	if err != nil {
 		return err
 	}
-	directory := update.Directory.Clone()
 	c.mu.Lock()
-	c.directory = directory
+	c.directory, c.source = directory, update
 	c.mu.Unlock()
 	// A disk failure must not keep a disabled host in the active in-memory map.
-	if err := writeCache(c.config.CachePath, directory); err != nil {
+	if err := writeCache(c.config.CachePath, update); err != nil {
 		c.unpersisted = true
 		return fmt.Errorf("persist directory: %w", err)
 	}
@@ -382,11 +397,13 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 		return nil, fmt.Errorf("forward requires PB or JSON serialization")
 	}
 	allowed := c.catalog.Allowed(c.config.Credentials.Caller, service, method)
-	if c.config.Mode == External {
+	origin := originCallerFrom(ctx)
+	switch {
+	case c.config.Mode == External:
 		allowed = c.catalog.PrincipalAllowed(c.config.Credentials.Caller, service, method)
-	}
-	if !allowed {
-		return nil, fmt.Errorf("gateway caller is not allowed for this method")
+	case origin != "":
+		// 入口主机的网关替外部身份转发：能不能调看的是那个外部身份。
+		allowed = c.catalog.PrincipalAllowed(origin, service, method)
 	}
 	spec, _ := c.catalog.Service(service)
 	limit := spec.MaxBodyBytes
@@ -403,15 +420,24 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	failedHost := ""
-	connectRetried := false
+	connectRetried, resigned := false, false
 	for attempt := 0; attempt < 2; attempt++ {
 		ep, err := c.endpoint(ctx, service, failedHost)
 		if err != nil {
 			return nil, err
 		}
-		headers, err := gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: ep.target, Caller: c.config.Credentials.Caller, Callee: service, Func: method, Body: body}, time.Now())
-		if err != nil {
-			return nil, err
+		// 目标在本机时直连服务的回环端口：不签名，也不查方法名单（同一台主机、同一个系统用户，本来就能连这些端口）。
+		headers := http.Header{}
+		if !ep.direct {
+			if !allowed {
+				return nil, fmt.Errorf("gateway caller is not allowed for this method")
+			}
+			if headers, err = gatewayauth.Sign(c.config.Credentials, gatewayauth.Request{TargetNode: ep.target, Callee: service, Func: method, Body: body}, time.Now()); err != nil {
+				return nil, err
+			}
+			if origin != "" {
+				headers.Set(gatewayauth.HeaderOriginCaller, origin)
+			}
 		}
 		metadata := CallMetadataFromContext(ctx)
 		for name, value := range map[string]string{
@@ -448,8 +474,26 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 			continue
 		}
 		code := errs.Code(err)
-		// 服务撤离后旧目录的调用方可能先在验签处失败（撤离同时撤销了调用方验证密钥），也需要刷新目录。
-		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService || code == errs.RetServerAuthFail
+		// 网关（或外部入口）自己拒签：验签在转发之前，请求没有到达服务，对所有方法（包括写）都重新签名重发一次。
+		// 常见原因是网关刚重启（早于它启动时间的签名被拒）或部署刚变、快照还没跟上，所以先刷新目录。
+		// 只认网关自己发的拒签：它是框架错误，客户端解出来是“被调方框架错误”；下游服务透传回来的同码错误经网关编码后是业务错误，
+		// 那时请求已经到过服务，不能重发。直连本机服务的调用没有签名，也不走这里。
+		if !ep.direct && rejectedByGateway(err) {
+			giveUp := resigned || ctx.Err() != nil || noRetry(ctx) || remainingBudget(ctx) < minRetryRemaining
+			c.reportFailure(CallFailure{Service: service, Method: method, Target: ep.target, Attempt: attempt, Retrying: !giveUp, Remaining: remainingBudget(ctx), Err: err})
+			if giveUp {
+				return nil, err
+			}
+			if c.config.Mode != External {
+				if refreshErr := c.Refresh(ctx); refreshErr != nil {
+					c.report(refreshErr)
+				}
+			}
+			resigned = true
+			attempt = -1
+			continue
+		}
+		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService
 		// 响应读取阶段失败（连接已被对端关闭或重置）与超时、网络错误一样，请求可能已经发出。
 		retry := refresh || code == errs.RetClientTimeout || code == errs.RetClientReadFrameErr
 		if refresh && c.config.Mode != External {
@@ -473,7 +517,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 
 func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoint, error) {
 	if c.config.Mode == External {
-		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: true}, nil
+		return endpoint{address: c.config.EntryAddress, target: c.config.EntryHost, compress: true}, nil
 	}
 	c.mu.RLock()
 	// Published directory maps are immutable. Keep one coherent snapshot without
@@ -501,7 +545,11 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 	if chosen == previous && len(hosts) > 1 {
 		chosen = hosts[1]
 	}
-	if relayHost := directory.Hosts[chosen].Relay; relayHost != "" && chosen != c.config.LocalHostID {
+	if chosen == c.config.LocalHostID {
+		spec, _ := c.catalog.Service(service)
+		return endpoint{address: localServiceAddress(spec.Port), target: chosen, direct: true}, nil
+	}
+	if relayHost := directory.Hosts[chosen].Relay; relayHost != "" {
 		return c.relayEndpoint(ctx, directory, chosen, relayHost)
 	}
 	if c.config.Mode == Tunnel {
@@ -514,9 +562,6 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 		}
 		// 隧道的本地端口只是 SSH 转发入口，实际经公网到达目标主机，按跨主机调用压缩。
 		return endpoint{address: address, target: chosen, compress: true}, nil
-	}
-	if chosen == c.config.LocalHostID {
-		return endpoint{address: c.config.LocalAddress, target: chosen}, nil
 	}
 	host := directory.Hosts[chosen]
 	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: true}, nil
@@ -554,6 +599,12 @@ func (c *Client) relayEndpoint(ctx context.Context, directory servicecatalog.Dir
 		route.controlAddress = net.JoinHostPort(control.Address, port)
 	}
 	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: true, relay: route}, nil
+}
+
+// rejectedByGateway 报告错误是不是网关（或外部入口）自己拒签。
+func rejectedByGateway(err error) bool {
+	var frame *errs.Error
+	return errors.As(err, &frame) && frame.Type == errs.ErrorTypeCalleeFramework && int(frame.Code) == gatewayauth.RetRejected
 }
 
 func validAddress(address string) bool {

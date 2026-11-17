@@ -17,6 +17,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
+	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var (
@@ -74,6 +77,9 @@ type Executor struct {
 	lastBatch map[string]time.Time
 	// warned 记录已经告警过的事项（见 warnOnce）。
 	warned map[string]struct{}
+	// expiryFailures 按“空间/组合”记过期路径撤挂单连续失败的计时（见 noteExpiryFailure），只在内存里。
+	expiryMu       sync.Mutex
+	expiryFailures map[string]expiryFailure
 }
 
 const (
@@ -208,9 +214,12 @@ func (e *Executor) Converge(
 			// 先释放待提交子单再置为过期：释放失败时目标不变，下一轮重试。
 			if err := e.releaseExpiredTargetOrders(persistCtx, spaceID, target); err != nil {
 				// 撤挂单失败：目标保持原状，过一会儿再来一次，不能等定时器（已收敛、已阻塞的目标不被扫描）。
+				// 连续撤不下来超过 10 分钟记关注项 release_orders_stuck。
+				e.noteExpiryFailure(ctx, spaceID, target, err)
 				result, resultErr = Result{RetryAfter: expiryRetryDelay}, accountExecutionError(err)
 				return
 			}
+			e.clearExpiryFailure(spaceID, target.LogicalAccountID)
 			target.Status = StatusExpired
 			target.LastError = ""
 			updated, err := e.Store.UpdateLogicalAccountTargetState(persistCtx, target)
@@ -238,9 +247,6 @@ func (e *Executor) Converge(
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return e.stopWhenInactive(ctx, spaceID, logicalAccountID, logicalAccount, &target)
-	}
-	if target.InstanceID == "" || logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
-		return Result{}, ErrTargetSession
 	}
 	// 快速路径：只在等当前目标已发出的子单结束时，不加载成员、不逐个标的计算。每笔成交都会唤醒收敛，
 	// 这段等待如果每次都走完整计算，会和成交入账抢 SQLite 连接。
@@ -1093,13 +1099,8 @@ func (e *Executor) submitCandidate(
 ) (placement, bool, error) {
 	accountID := candidate.member.account.TradingAccountID
 	quote, quantity, oddFull := check.quote, check.quantity, check.oddFull
-	if target.InstanceID != "" {
-		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
-			SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID,
-			OwnerInstanceID: target.InstanceID, OwnerSessionID: target.SessionID,
-		}, target); err != nil {
-			return placement{}, true, err
-		}
+	if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
+		return placement{}, true, err
 	}
 	// 单笔上限：拆单时每笔的名义金额不超过设置的上限；开了随机化，每笔取上限的 50%～100%。
 	// 同一目标、同一标的已发出的子单（所有执行账户），按提交先后：伪市价单的尝试次数按标的统计（换成员不重新计数），
@@ -1292,18 +1293,23 @@ func (e *Executor) checkTargetExecutable(
 	if now.Before(time.UnixMilli(target.BarEndTime).UTC()) {
 		return errTargetNotEffective
 	}
-	// Always re-read the authorization immediately before an order can be
-	// submitted. The initial Converge snapshot protects the read path; this
-	// second read closes the authorization-change window during quote/prepare.
+	// 下单前总要重读一次：Converge 开头读到的只是当时的快照，报价、准备期间组合可能改成人工控制，
+	// 当前目标行也可能换成了新会话的目标。目标仍属当前会话，是指它的实例、会话与组合当前目标行的一致。
 	fresh, err := e.Store.GetLogicalAccount(ctx, logicalAccount.SpaceID, logicalAccount.LogicalAccountID)
 	if err != nil {
 		return err
 	}
-	logicalAccount = fresh
-	if logicalAccount.ControlMode != "STRATEGY" {
+	if fresh.ControlMode != "STRATEGY" {
 		return ErrTargetSession
 	}
-	if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
+	current, err := e.Store.GetCurrentTarget(ctx, logicalAccount.SpaceID, logicalAccount.LogicalAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrTargetSession
+	}
+	if err != nil {
+		return err
+	}
+	if current.InstanceID != target.InstanceID || current.SessionID != target.SessionID {
 		return ErrTargetSession
 	}
 	return nil
@@ -1463,22 +1469,76 @@ func (e *Executor) releaseExpiredTargetOrders(
 	return e.releaseTargetOrders(ctx, spaceID, target.LogicalAccountID, "")
 }
 
-// ReleaseTargetOrders 在策略会话释放、重绑、认领（删掉目标）时撤掉组合里所有还没结束的目标单，调用方持有组合锁：
-// 待提交的丢弃；结果未知的（限价 GTC、市价、IOC 都算）先解析一次，退回待提交的丢弃；簿上的挂单撤掉；撤单中的等它自己结束。
-// 撤完之后每个撤过单的账户同步一次确认撤单结果（不是每笔都同步）。
-// 限价 GTC 单没撤下来（撤单失败、结果解析不出来）时返回错误，调用方稍后重试，不能把挂单留在簿上没人管；
-// 市价、IOC 单解析不出来不挡释放，它们提交出去也会自己结束。
-func (e *Executor) ReleaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string) error {
-	if e == nil || e.Store == nil || e.Orders == nil {
-		return ErrExecutorConfig
+// expiryStuckAfter 是过期目标的挂单连续撤不下来多久之后记关注项 release_orders_stuck。
+const expiryStuckAfter = 10 * time.Minute
+
+// expiryFailure 是一个组合撤过期目标挂单连续失败的计时：targetID 是在撤哪一份过期目标的单，since 是这一串失败的起点，
+// reported 表示已经写过日志（之后每次失败只刷新关注项，不再写日志）。
+type expiryFailure struct {
+	targetID string
+	since    time.Time
+	reported bool
+}
+
+func expiryFailureKey(spaceID, logicalAccountID string) string {
+	return spaceID + "/" + logicalAccountID
+}
+
+// expiryStuckDetail 是过期目标的挂单持续撤不下来的关注项详情：文字固定、不带错误原文，同一组合只占一条，原因写在日志里。
+func expiryStuckDetail(logicalAccountID string) string {
+	return "组合 " + logicalAccountID + "：过期目标的挂单连续撤不下来超过 10 分钟（执行器在重试），检查执行账户的会话与凭证"
+}
+
+// noteExpiryFailure 记下过期路径撤挂单失败：同一份过期目标从第一次失败算起超过 expiryStuckAfter 仍在失败，就记关注项。
+// 过期路径失败后每 expiryRetryDelay 重试一次，所以同一份目标的失败是连续的；换了一份目标（新会话的目标覆盖了它）就重新计时。
+// 计时只在内存里，重启后重新算。
+func (e *Executor) noteExpiryFailure(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, cause error) {
+	now := e.now()
+	key := expiryFailureKey(spaceID, target.LogicalAccountID)
+	e.expiryMu.Lock()
+	if e.expiryFailures == nil {
+		e.expiryFailures = make(map[string]expiryFailure)
 	}
-	return e.releaseTargetOrders(ctx, spaceID, logicalAccountID, "")
+	failure, found := e.expiryFailures[key]
+	if !found || failure.targetID != target.TargetID {
+		failure = expiryFailure{targetID: target.TargetID, since: now}
+	}
+	stuck := now.Sub(failure.since) >= expiryStuckAfter
+	firstReport := stuck && !failure.reported
+	failure.reported = failure.reported || stuck
+	e.expiryFailures[key] = failure
+	e.expiryMu.Unlock()
+	if !stuck {
+		return
+	}
+	detail := expiryStuckDetail(target.LogicalAccountID)
+	telemetry.Note(telemetry.AttentionReleaseOrdersStuck, detail, now)
+	if firstReport {
+		log.WarnContextf(ctx, "交易关注项：%s（目标 %s，从 %s 起）：%v", detail, target.TargetID, failure.since.Format(time.RFC3339), cause)
+	}
+}
+
+// clearExpiryFailure 在过期路径撤下挂单之后清掉计时和关注项。
+func (e *Executor) clearExpiryFailure(spaceID, logicalAccountID string) {
+	key := expiryFailureKey(spaceID, logicalAccountID)
+	e.expiryMu.Lock()
+	_, found := e.expiryFailures[key]
+	delete(e.expiryFailures, key)
+	e.expiryMu.Unlock()
+	if found {
+		telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, expiryStuckDetail(logicalAccountID))
+	}
 }
 
 // errTargetOrderUnresolved 表示目标挂单的提交结果还不知道，撤不了，稍后再试。
 var errTargetOrderUnresolved = errors.New("挂单的提交结果还不知道，稍后再撤")
 
-// releaseTargetOrders 释放组合里还没结束的目标单；keepTargetID 非空时跳过这份目标自己的单（第 1 阶段只处理旧目标留下的）。
+// releaseTargetOrders 释放组合里还没结束的目标单，调用方持有组合锁；keepTargetID 非空时跳过这份目标自己的单（第 1 阶段只处理旧目标留下的），
+// 为空时（过期路径）处理组合里全部的目标单：
+// 待提交的丢弃；结果未知的（限价 GTC、市价、IOC 都算）先解析一次，退回待提交的丢弃；簿上的挂单撤掉；撤单中的等它自己结束。
+// 撤完之后每个撤过单的账户同步一次确认撤单结果（不是每笔都同步）。
+// 限价 GTC 单没撤下来（撤单失败、结果解析不出来）时返回错误，调用方稍后重试，不能把挂单留在簿上没人管；
+// 市价、IOC 单解析不出来不挡，它们提交出去也会自己结束。
 func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAccountID, keepTargetID string) error {
 	var open []store.OrderRecord
 	const pageSize = 1000
