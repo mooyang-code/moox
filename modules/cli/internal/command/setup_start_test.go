@@ -194,7 +194,7 @@ func TestSetupStartStockHKExampleUsesItsOwnTask(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(example.DSL)))
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "name: dual_ma_hk_5m")
-	require.Contains(t, string(raw), "holding: {bars: 12, offsets: [0, 6]}")
+	require.Contains(t, string(raw), "holding: {bars: 66, offsets: [0, 33]}")
 	require.Contains(t, string(raw), "total: 0.98")
 	require.NotContains(t, string(raw), "top: 10000", "港股默认策略不能照搬每根全体重选的写法")
 
