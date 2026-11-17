@@ -29,6 +29,8 @@ while read -r module package output; do
   case "${output}" in *-cli | moox-cli) continue ;; esac
   checked=$((checked + 1))
   if (cd "${ROOT}/${module}" && go list -deps "${package}" 2>/dev/null | grep -Fxq "${report_pkg}"); then continue; fi
+  # go list 在缺依赖缓存或关了 cgo 的机器上会失败（Storage 依赖 cgo）：退回按源码里的 import 判断。
+  if grep -rIlF --include='*.go' --exclude='*_test.go' "\"${report_pkg}\"" "${ROOT}/${module}" >/dev/null 2>&1; then continue; fi
   grep -Eqs '^[[:space:]]*(var[[:space:]]+)?Version[[:space:]]*=[[:space:]]*"dev"' "${ROOT}/${module}/${package#./}"/*.go \
     || fail "${output}（${module} ${package}）既没有链接 ${report_pkg}，main 包里也没有 Version 变量：发布后会上报 dev"
 done < <(
