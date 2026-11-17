@@ -34,8 +34,8 @@ func TestHKDefaultStrategyIsLowTurnover(t *testing.T) {
 		t.Fatal(err)
 	}
 	rule := strategy.Rules[0]
-	if strategy.Bar != "5m" || rule.Holding == nil || rule.Holding.Bars != 12 || len(rule.Holding.Offsets) != 2 {
-		t.Fatalf("应是 5m、每 12 根重选、两个批次：bar=%s holding=%+v", strategy.Bar, rule.Holding)
+	if strategy.Bar != "5m" || rule.Holding == nil || rule.Holding.Bars != 66 || len(rule.Holding.Offsets) != 2 {
+		t.Fatalf("应是 5m、每 66 根重选、两个批次：bar=%s holding=%+v", strategy.Bar, rule.Holding)
 	}
 	if rule.Weight.Total.String() != "0.98" || rule.Weight.Cap.String() != "0.05" {
 		t.Fatalf("预算 0.98（留 2%% 现金）、单只上限 0.05：%+v", rule.Weight)

@@ -144,7 +144,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 港股的采集上线步骤（`[scf_plan]` 加 stockhk、上传代码包、建标签与任务）见 `docs/模块/采集.md` 第 4c 节。`setup start --space-id stockhk` 在启用采集之后：
 
 1. 导入因子任务 `ftask_hk_5m`（只有 `ma__5`、`ma__10`）；
-2. 创建观察实例 `default_dual_ma_hk_5m`（[`examples/strategies/dual_ma_hk_5m.yaml`](../../../examples/strategies/dual_ma_hk_5m.yaml)，不挂账户）。这个策略分两批、每批每小时重选一次（两批错开半小时），预算 0.98（留 2% 现金），
+2. 创建观察实例 `default_dual_ma_hk_5m`（[`examples/strategies/dual_ma_hk_5m.yaml`](../../../examples/strategies/dual_ma_hk_5m.yaml)，不挂账户）。这个策略分两批、每批每个交易日重选一次（两批错开半天），预算 0.98（留 2% 现金），
    可以直接挂港股模拟账户；crypto 的默认 1m 双均线每根全体重选，挂上账户后一天会下十几万单，只适合当观察实例。
 
 港股按交易时段推进：完整交易日 66 期（09:30～11:55、13:00～15:55），半日市（圣诞前夕、新年前夕、农历新年前夕）只有上午 30 期。港股实例可以挂港股模拟账户（交易模块新建账户时选“港股”，按港元结算）：
