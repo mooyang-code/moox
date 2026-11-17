@@ -84,7 +84,7 @@ func TestStockDeciderChargesMinimumCommissionAndTransferFee(t *testing.T) {
 	require.Equal(t, "10", decision.Fill.Price.String())
 	require.Equal(t, "5.01", decision.Fill.Fee.String(), "佣金 0.25 不足 5 元按 5 元，过户费 0.01")
 	require.Equal(t, "CNY", decision.Fill.FeeAsset)
-	require.Equal(t, order.RemainingReservedQuantity, exchange.StockBuyCost(shared.MustDecimal("1000"), shared.MustDecimal("0.00025")).String(),
+	require.Equal(t, order.RemainingReservedQuantity, exchange.RuleAt(exchange.ExchangeAShare, exchange.MarketTypeStock).BuyCost(shared.MustDecimal("1000"), shared.MustDecimal("0.00025")).String(),
 		"下单预留和撮合扣费是同一个函数")
 }
 
@@ -231,7 +231,7 @@ func TestApplyT1SubtractsTodayBuys(t *testing.T) {
 	adapter := &Adapter{Store: source, Now: func() time.Time { return beijingTime("2026-11-06 10:00:00") }}
 	rows := paperBalances(map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("300"), "CNY": shared.MustDecimal("100")},
 		map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("50")})
-	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Markets: []string{"STOCK"}}, rows))
+	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "ASHARE", Markets: []string{"STOCK"}}, rows))
 	byAsset := map[string]exchange.AssetBalance{}
 	for _, row := range rows {
 		byAsset[row.Asset] = row
@@ -240,6 +240,14 @@ func TestApplyT1SubtractsTodayBuys(t *testing.T) {
 	require.Equal(t, "300", byAsset["600519.XSHG"].Total.String(), "持仓仍按总额算")
 	require.Equal(t, "100", byAsset["CNY"].Available.String())
 	require.Equal(t, beijingTime("2026-11-06 00:00:00").UnixMilli(), source.since)
+
+	// 港股 T+0：当日买入可卖，不读当日买入、也不扣。
+	hkSource := &t1Store{bought: map[string]shared.Decimal{"00700.XHKG": shared.MustDecimal("200")}}
+	hkAdapter := &Adapter{Store: hkSource, Now: func() time.Time { return beijingTime("2026-11-06 10:00:00") }}
+	hkRows := paperBalances(map[string]shared.Decimal{"00700.XHKG": shared.MustDecimal("300")}, nil)
+	require.NoError(t, hkAdapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "HKEX", Markets: []string{"STOCK"}}, hkRows))
+	require.Equal(t, "300", hkRows[0].Available.String())
+	require.Zero(t, hkSource.since, "T+0 的场所不查当日买入")
 
 	// 加密货币账户不查当日买入。
 	source.since = 0

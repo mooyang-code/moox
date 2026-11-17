@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
@@ -32,6 +34,8 @@ type TargetOptions struct {
 	ResolveTimeout time.Duration
 	// Intake 返回 false（暂停、恢复追赶）时延迟重投真实目标；影子目标只是记录，不受影响。
 	Intake func() bool
+	// Exchanges 提供场所的标的范围说明（港股模拟盘只收录恒生指数成分）：目标里的标的没有成员能交易时写进原因；可以为空。
+	Exchanges execution.ExchangeCatalog
 }
 
 // TargetWeightResolver converts the strategy-owned target weights into the
@@ -241,7 +245,7 @@ func acceptTarget(
 		return retryTarget(lockErr)
 	}
 	defer unlockAccount()
-	request, checked, done := checkTargetInstruments(ctx, opts.Store, message.GetSpaceId(), request)
+	request, checked, done := checkTargetInstruments(ctx, opts.Store, opts.Exchanges, message.GetSpaceId(), request)
 	if done {
 		return checked
 	}
@@ -337,7 +341,7 @@ func handleShadowTarget(
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 	now time.Time,
 ) jetstream.HandlerResult {
-	request, checked, done := checkTargetInstruments(ctx, opts.Store, spaceID, request)
+	request, checked, done := checkTargetInstruments(ctx, opts.Store, opts.Exchanges, spaceID, request)
 	if done {
 		return checked
 	}
@@ -453,6 +457,7 @@ func holdTargets(request *tradeeventpb.LogicalAccountTargetWeightRequested, inst
 func checkTargetInstruments(
 	ctx context.Context,
 	tradeStore *store.Store,
+	exchanges execution.ExchangeCatalog,
 	spaceID string,
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 ) (*tradeeventpb.LogicalAccountTargetWeightRequested, jetstream.HandlerResult, bool) {
@@ -464,7 +469,8 @@ func checkTargetInstruments(
 		return nil, retryTarget(err), true
 	}
 	if unsupported != "" {
-		err = fmt.Errorf("%w: 没有启用的成员支持标的 %s", store.ErrInvalidRecord, unsupported)
+		err = fmt.Errorf("%w: 没有启用的成员支持标的 %s%s", store.ErrInvalidRecord, unsupported,
+			instrumentScopeNote(ctx, tradeStore, exchanges, spaceID, request.GetLogicalAccountId()))
 		if membersReady {
 			return nil, targetRejection("unsupported_instrument", err), true
 		}
@@ -555,6 +561,33 @@ func unsupportedLogicalTargetInstrument(
 		}
 	}
 	return "", delisted, membersReady, nil
+}
+
+// instrumentScopeNote 返回组合启用成员所在场所的标的范围说明，写在“没有成员支持标的”后面，例如
+// “（港股模拟盘只收录恒生指数成分里取得到每手股数的标的）”；场所的标的表就是全市场（没有登记说明）时为空串。
+// 只在拒绝目标时调用，读不到成员时不加说明。
+func instrumentScopeNote(ctx context.Context, tradeStore *store.Store, exchanges execution.ExchangeCatalog, spaceID, logicalAccountID string) string {
+	if exchanges == nil {
+		return ""
+	}
+	members, err := tradeStore.ListLogicalAccountMembers(ctx, spaceID, logicalAccountID, false)
+	if err != nil {
+		return ""
+	}
+	var scopes []string
+	for _, member := range members {
+		account, err := tradeStore.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil || account.Status != "ENABLED" {
+			continue
+		}
+		if scope := execution.InstrumentScope(exchanges, account.Exchange); scope != "" && !slices.Contains(scopes, scope) {
+			scopes = append(scopes, scope)
+		}
+	}
+	if len(scopes) == 0 {
+		return ""
+	}
+	return "（" + strings.Join(scopes, "；") + "）"
 }
 
 // pausedTargetDelay 是暂停期间目标的重投间隔：暂停是人为的、可能持续很久，不需要每秒重试。

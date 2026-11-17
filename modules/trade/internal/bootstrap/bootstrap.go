@@ -30,8 +30,10 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/hkex"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/stockfeed"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
@@ -95,19 +97,23 @@ func initialize(
 	}()
 	secrets := secretclient.New(gateway)
 	registry := execution.NewRegistry()
-	// A 股公共行情整个进程一份：快照缓存、标的列表都共用；列表加载完之前用库里已有的标的。
-	ashareMarket := ashare.NewMarket(nil, func(seedCtx context.Context) ([]exchange.Instrument, error) {
-		records, listErr := tradeStore.ListInstruments(seedCtx, string(exchange.ExchangeAShare), string(exchange.MarketTypeStock))
-		if listErr != nil {
-			return nil, listErr
+	// 股票场所（A 股、港股）的公共行情整个进程各一份：快照缓存、标的列表都共用；列表加载完之前用库里已有的标的。
+	stockSeed := func(name exchange.Exchange) stockfeed.Seed {
+		return func(seedCtx context.Context) ([]exchange.Instrument, error) {
+			records, listErr := tradeStore.ListInstruments(seedCtx, string(name), string(exchange.MarketTypeStock))
+			if listErr != nil {
+				return nil, listErr
+			}
+			instruments := make([]exchange.Instrument, 0, len(records))
+			for _, record := range records {
+				instruments = append(instruments, instrumentFromRecord(name, exchange.MarketTypeStock, record))
+			}
+			return instruments, nil
 		}
-		instruments := make([]exchange.Instrument, 0, len(records))
-		for _, record := range records {
-			instruments = append(instruments, instrumentFromRecord(exchange.ExchangeAShare, exchange.MarketTypeStock, record))
-		}
-		return instruments, nil
-	})
-	if err := registerBuiltins(registry, ashareMarket); err != nil {
+	}
+	ashareMarket := ashare.NewMarket(nil, stockSeed(exchange.ExchangeAShare))
+	hkexMarket := hkex.NewMarket(nil, stockSeed(exchange.ExchangeHKEX))
+	if err := registerBuiltins(registry, ashareMarket, hkexMarket); err != nil {
 		return nil, err
 	}
 	moduleMetrics, reporter := registerMetricsReporter(serverInstance)
@@ -398,10 +404,12 @@ func initialize(
 		}()
 	}
 	runWorker(manager.Run)
-	runWorker(func(workerCtx context.Context) error {
-		ashareMarket.RunListRefresh(workerCtx)
-		return workerCtx.Err()
-	})
+	for _, market := range []*stockfeed.Market{ashareMarket, hkexMarket} {
+		runWorker(func(workerCtx context.Context) error {
+			market.RunListRefresh(workerCtx)
+			return workerCtx.Err()
+		})
+	}
 	runWorker(targetWorker.Run)
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
@@ -411,7 +419,7 @@ func initialize(
 	runWorker(marginWorker.Run)
 	runWorker(targetHistoryWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
-	// 收盘撤单：A 股日收盘后先全量同步，再把收盘前提交、仍在途的订单按已撤结束；重启后第一轮就补做。
+	// 收盘撤单：有日收盘的场所（A 股、港股）日收盘后先全量同步，再把收盘前提交、仍在途的订单按已撤结束；重启后第一轮就补做。
 	sessionCloser := &orderapp.SessionCloser{
 		Store: tradeStore, Exchanges: registry,
 		Sync: func(syncCtx context.Context, tradingAccountID string) error {
@@ -431,6 +439,7 @@ func initialize(
 				SetReady:       targetConsumerReady.Store,
 				WeightResolver: weightResolver,
 				Intake:         lifeGate.Open,
+				Exchanges:      registry,
 			})
 		})
 	}
@@ -543,7 +552,7 @@ func initialize(
 	return serverInstance, nil
 }
 
-// sessionCloseInterval 是收盘撤单的扫描间隔：没有要撤的单时每轮只读一次各 A 股账户的在途订单。
+// sessionCloseInterval 是收盘撤单的扫描间隔：没有要撤的单时每轮只读一次各股票账户的在途订单。
 const sessionCloseInterval = 30 * time.Second
 
 // runSessionClose 定时跑收盘撤单；生命周期门禁关着（暂停、恢复追赶）时跳过这一轮。
@@ -567,7 +576,7 @@ func runSessionClose(ctx context.Context, closer *orderapp.SessionCloser, gate f
 }
 
 // registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
-func registerBuiltins(registry *execution.Registry, ashareMarket *ashare.Market) error {
+func registerBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *stockfeed.Market) error {
 	cryptoExchange := func(name exchange.Exchange, inspect exchange.Inspector) execution.ExchangeDescriptor {
 		return execution.ExchangeDescriptor{
 			Exchange:     name,
@@ -632,13 +641,37 @@ func registerBuiltins(registry *execution.Registry, ashareMarket *ashare.Market)
 		if config.ExecutionMode == exchange.ExecutionModeLive {
 			return nil, errASharePending
 		}
-		return ashare.NewAdapter(ashareMarket), nil
+		return stockfeed.NewAdapter(ashareMarket), nil
+	})
+	// 港股：只有模拟盘，用腾讯实时快照做行情、由 Trade 撮合；没有实盘通道，建实盘账户和绑定都直接报错。
+	hkSession, err := hkex.NewSession()
+	if err != nil {
+		return fmt.Errorf("港股交易时段：%w", err)
+	}
+	registry.Register(execution.ExchangeDescriptor{
+		Exchange:         exchange.ExchangeHKEX,
+		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
+		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
+		Markets:          []exchange.MarketType{exchange.MarketTypeStock},
+		SettlementAssets: []string{hkex.SettlementAsset},
+		LiveUnavailable:  errHKEXPaperOnly.Error(),
+		Session:          hkSession,
+		SessionHours:     hkex.SessionHours,
+		InstrumentScope:  hkex.InstrumentScope,
+	}, func(config exchange.AccountConfig, _ exchange.Credential) (execution.ExecutionAdapter, error) {
+		if config.ExecutionMode == exchange.ExecutionModeLive {
+			return nil, errHKEXPaperOnly
+		}
+		return stockfeed.NewAdapter(hkexMarket), nil
 	})
 	return nil
 }
 
 // errASharePending 是 A 股实盘还不能用的原因：下单要经 QMT 执行端（第 4 批）。
 var errASharePending = errors.New("A 股实盘要通过 QMT 执行端下单，QMT 执行端尚未接入")
+
+// errHKEXPaperOnly 是港股不能建实盘账户的原因：只做了模拟盘，没有接任何券商。
+var errHKEXPaperOnly = errors.New("港股只支持模拟盘，没有实盘下单通道")
 
 // 模拟盘用空凭据绑定公共行情，只有实盘才要求密钥。
 func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential) error {

@@ -111,7 +111,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ### `setup start` 的已知限制
 
-`setup start` 会逐项导入 `config/setup/factor-tasks.yaml` 里这个空间的因子任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有三个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m` 与 A 股的 `ftask_cn_5m`（源数据集都由 Collector 的默认采集任务创建）；没有因子机时跳过因子；crypto 要海外机，没有海外机时 `setup start --space-id crypto` 本来就不能运行。
+`setup start` 会逐项导入 `config/setup/factor-tasks.yaml` 里这个空间的因子任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有四个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m`、A 股的 `ftask_cn_5m` 与港股的 `ftask_hk_5m`（源数据集都由 Collector 的默认采集任务创建）；没有因子机时跳过因子；crypto 要海外机，没有海外机时 `setup start --space-id crypto` 本来就不能运行。
 导入中断（成员加进去了、还没启用）后重跑 `setup start` 会接着启用。已知差别：它分不清“导入中断”和“人工停用”，在管理台手工停用的默认因子成员，重跑 `setup start` 后会被重新启用，要停用的重跑后再停一次；手动的 `factor task apply --file` 不会替你启用线上停用的成员，仍按差异报出来。
 自己的因子任务文件里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据；建好对应采集任务后再 `factor task apply --file` 导入。
 
@@ -138,6 +138,20 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14:55），11:25 那根之后是 13:00 那根；午休、隔夜、周末 Monitor 不报停滞。
 数据是不复权 5m（通达信、东方财富按权重 4:2 对股票固定分配，每家最多试 3 次，失败时依次换下一家，新浪、腾讯只做备源——它们收盘后头几秒给未定稿值，理由见 `docs/模块/采集.md`；腾讯成交额由收盘价 × 成交量估算），除权日前后跨越除权的均线会有一次跳变。A 股实例可以挂 A 股模拟账户（交易模块新建账户时选“A 股”）；A 股实盘的 QMT 执行端还没接入。
+
+### 港股空间（stockhk）
+
+港股的采集上线步骤（`[scf_plan]` 加 stockhk、上传代码包、建标签与任务）见 `docs/模块/采集.md` 第 4c 节。`setup start --space-id stockhk` 在启用采集之后：
+
+1. 导入因子任务 `ftask_hk_5m`（只有 `ma__5`、`ma__10`）；
+2. 创建观察实例 `default_dual_ma_hk_5m`（[`examples/strategies/dual_ma_hk_5m.yaml`](../../../examples/strategies/dual_ma_hk_5m.yaml)，不挂账户）。这个策略分两批、每批每个交易日重选一次（两批错开半天），预算 0.98（留 2% 现金），
+   可以直接挂港股模拟账户；crypto 的默认 1m 双均线每根全体重选，挂上账户后一天会下十几万单，只适合当观察实例。
+
+港股按交易时段推进：完整交易日 66 期（09:30～11:55、13:00～15:55），半日市（圣诞前夕、新年前夕、农历新年前夕）只有上午 30 期。港股实例可以挂港股模拟账户（交易模块新建账户时选“港股”，按港元结算）：
+整手（每手股数逐只不同，取自腾讯实时快照）、当日买入可卖、没有涨跌停、港股费用；只有模拟盘，没有实盘通道。规则与已知差别见 `docs/模块/交易.md` 的“港股模拟盘”一节。
+
+新建的因子任务（`setup start` 导入的和 `factor task apply` 建的都一样）的结果数据集没有归档任务，装了数据归档时 `doctor alerts` 会报“未归档的数据集”：命令结束时会逐个打出
+`moox-cli archive tasks create --space-id <空间> --dataset-id <结果数据集>`，要归档就执行它（归档任务由用户决定建不建，不代建）。
 
 ### 交易日历的年度更新
 
@@ -210,7 +224,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     cd $WT/modules/collector && go list -deps ./cmd/scf/market_data ./cmd/stream | grep -E 'sqlite|gorm|internal/store|internal/fetchplan|moox/modules/cloud|scfinvoker'; echo "exit=$?"
     ```
     没有输出，`exit=1`。不要直接 grep `cloudfunction`：云函数程序引的第三方包 `scf-go-lib/cloudfunction` 是正常依赖。
-14. **策略定义**：`examples/strategies/` 的 5 个示例各用头部注释里说的因子任务试算一次（默认部署只有 `ftask_spot_1m`、`ftask_swap_1m`、`ftask_cn_5m`，其余按注释先建任务；`ma_var_5m` 写了 `factor_params`，试算只校验 DSL）：
+14. **策略定义**：`examples/strategies/` 的 6 个示例各用头部注释里说的因子任务试算一次（默认部署只有 `ftask_spot_1m`、`ftask_swap_1m`、`ftask_cn_5m`、`ftask_hk_5m`，其余按注释先建任务；`ma_var_5m` 写了 `factor_params`，试算只校验 DSL）：
     ```bash
     $CLI strategy validate --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml --factor-task swap=ftask_swap_1m
     ```

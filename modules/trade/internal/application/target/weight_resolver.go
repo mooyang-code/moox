@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -451,6 +452,8 @@ func validateWeightRisk(weights []orderedWeight) error {
 func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID string, members []store.LogicalAccountMemberRecord, instrumentID string) (store.InstrumentRecord, string, error) {
 	// 读库出错的成员和不支持该标的的成员一样跳过（行为不变），只是都没找到时消息要区分，不能把读库错误说成“不支持”。
 	var readErr error
+	// scopes 是就绪成员所在场所的标的范围说明（港股模拟盘只收录恒生指数成分里取得到每手股数的标的），都没找到时写进原因。
+	var scopes []string
 	for _, member := range members {
 		account, accountErr := r.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
 		if accountErr != nil {
@@ -458,6 +461,9 @@ func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID strin
 		}
 		if account.Status != string(exchange.AccountStatusEnabled) || !account.Ready {
 			continue
+		}
+		if scope := execution.InstrumentScope(r.Exchanges, account.Exchange); scope != "" && !slices.Contains(scopes, scope) {
+			scopes = append(scopes, scope)
 		}
 		instrument, err := r.Store.GetInstrumentByIDForAccount(ctx, spaceID, member.TradingAccountID, instrumentID)
 		if err == nil {
@@ -475,6 +481,9 @@ func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID strin
 	}
 	if readErr != nil {
 		return store.InstrumentRecord{}, "", fmt.Errorf("读取标的失败：%s：%w", instrumentID, readErr)
+	}
+	if len(scopes) > 0 {
+		return store.InstrumentRecord{}, "", fmt.Errorf("没有就绪的组合成员支持标的 %s（%s）", instrumentID, strings.Join(scopes, "；"))
 	}
 	return store.InstrumentRecord{}, "", fmt.Errorf("没有就绪的组合成员支持标的 %s", instrumentID)
 }

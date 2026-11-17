@@ -84,7 +84,7 @@ func ClampToPriceBand(price, reference shared.Decimal, side exchange.Side, instr
 	// 比例带和价位数都按精确值。其余市场照旧只用允许偏离的 90%。
 	headroom := priceBandHeadroom
 	tickBand := shared.Zero()
-	if ticks := exchange.RuleFor(instrument.MarketType).PriceCageTicks; ticks > 0 {
+	if ticks := exchange.RuleAt(instrument.Exchange, instrument.MarketType).PriceCageTicks; ticks > 0 {
 		headroom = shared.MustDecimal("1")
 		if validTick {
 			tickBand = tick.Mul(shared.MustDecimal(strconv.Itoa(ticks)))

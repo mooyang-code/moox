@@ -63,13 +63,15 @@ func anchorBoundaries(calendarID, frequency, text string) (PeriodBoundaries, err
 	}
 	at := anchor.At
 	if !anchor.Date.IsZero() {
-		// A 股日内的 bar_start 是真实的开盘时刻：从该日的上海零点起找第一根。A 股日线的 bar_start 是日期键，
+		// 股票市场日内的 bar_start 是真实的开盘时刻：从该日当地的零点起找第一根。日线的 bar_start 是日期键，
 		// 与 crypto 一样就是该日期的 UTC 零点。
 		location := time.UTC
 		if stockIntraday(calendarID, frequency) {
-			if _, location, err = stockCalendar(); err != nil {
-				return PeriodBoundaries{}, err
+			market, _, marketErr := sessionMarketFor(calendarID)
+			if marketErr != nil {
+				return PeriodBoundaries{}, marketErr
 			}
+			location = market.location
 		}
 		midnight := time.Date(anchor.Date.Year(), anchor.Date.Month(), anchor.Date.Day(), 0, 0, 0, 0, location)
 		if at, err = CeilStorageStart(calendarID, frequency, midnight); err != nil {

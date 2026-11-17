@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -259,36 +260,42 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 // calendarWarningWindow 是 A 股内嵌日历到期前的提醒窗口。
 const calendarWarningWindow = 30 * 24 * time.Hour
 
-// stockCalendarWarning 在有启用实例使用 A 股日历时检查内嵌日历：将到期时给出提醒，已过期时报未就绪
-// （之后的周期无法换算，会被丢弃）。
+// stockCalendarWarning 在有启用实例使用股票市场日历（A 股、港股等）时检查对应的内嵌日历：将到期时给出提醒，
+// 已过期时报未就绪（之后的周期无法换算，会被丢弃）。多份日历都有问题时合并说明。
 func stockCalendarWarning(ctx context.Context, db *store.Store, now time.Time) (string, bool) {
 	enabled := true
 	instances, err := db.ListInstances(ctx, "", &enabled)
 	if err != nil {
 		return "", false
 	}
-	uses := false
+	var calendars []string
 	for _, instance := range instances {
 		var resolved struct {
 			Calendar string `json:"calendar"`
 		}
-		if json.Unmarshal(instance.ResolvedJSON, &resolved) == nil && strings.EqualFold(resolved.Calendar, "cn_stock") {
-			uses = true
-			break
+		if json.Unmarshal(instance.ResolvedJSON, &resolved) != nil {
+			continue
+		}
+		calendar := strings.ToLower(strings.TrimSpace(resolved.Calendar))
+		if input.SessionCalendar(calendar) && !slices.Contains(calendars, calendar) {
+			calendars = append(calendars, calendar)
 		}
 	}
-	if !uses {
-		return "", false
+	slices.Sort(calendars)
+	var messages []string
+	down := false
+	for _, calendar := range calendars {
+		err := input.StockCalendarReadiness(calendar, now, calendarWarningWindow, trigger.ValidBars)
+		switch {
+		case err == nil:
+		case errors.Is(err, input.ErrCalendarExpiring):
+			messages = append(messages, err.Error())
+		default:
+			messages = append(messages, err.Error()+"；使用日历 "+calendar+" 的实例无法求值")
+			down = true
+		}
 	}
-	err = input.StockCalendarReadiness(now, calendarWarningWindow, trigger.ValidBars)
-	switch {
-	case err == nil:
-		return "", false
-	case errors.Is(err, input.ErrCalendarExpiring):
-		return err.Error(), false
-	default:
-		return err.Error() + "；使用 A 股日历的实例无法求值", true
-	}
+	return strings.Join(messages, "；"), down
 }
 
 // eventBusConfig 是出站投递与事件消费共用的连接配置：环境变量给出的凭据优先，否则用配置的凭据文件。

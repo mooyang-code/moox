@@ -15,7 +15,8 @@ export interface PageResult {
   has_more?: boolean;
 }
 
-export type Exchange = 0 | 1 | 2 | 3;
+/** 1 币安、2 OKX、3 A 股、4 港股 */
+export type Exchange = 0 | 1 | 2 | 3 | 4;
 /** 1 现货、2 永续、3 股票 */
 export type MarketType = 0 | 1 | 2 | 3;
 export type ExecutionMode = 0 | 1 | 2;

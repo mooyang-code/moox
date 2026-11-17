@@ -97,14 +97,15 @@ export function replaySourceLabel(replay: { strategy_id: string }, catalog: { st
 }
 
 /**
- * 回放区间的写法：A 股日线的区间两端是空间时区的零点，按日期写（含起始日、不含结束日）；其余写时刻。
- * 回放记录只带日历不带周期，A 股日内的区间是真实时刻，不是零点时按时刻写。
+ * 回放区间的写法：股票市场（A 股 cn_stock、港股 hk_stock 等，即不是加密货币 24 小时日历）日线的区间两端是空间时区的零点，
+ * 按日期写（含起始日、不含结束日）；其余写时刻。回放记录只带日历不带周期，股票日内的区间是真实时刻，不是零点时按时刻写。
  */
 export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }, zone: string): string {
   const start = toInstantMs(replay.start_time);
   const end = toInstantMs(replay.end_time);
   const midnight = (ms: number) => msToWallClock(ms, zone, "clock") === "00:00:00";
-  if (replay.calendar === "cn_stock" && start !== null && end !== null && midnight(start) && midnight(end)) {
+  const stockCalendar = Boolean(replay.calendar) && replay.calendar !== "crypto_24x7";
+  if (stockCalendar && start !== null && end !== null && midnight(start) && midnight(end)) {
     return `${formatInstant(start, zone, "date")} → ${formatInstant(end, zone, "date")}（不含结束日）`;
   }
   return `${formatInstant(replay.start_time, zone, "minute")} → ${formatInstant(replay.end_time, zone, "minute")}`;

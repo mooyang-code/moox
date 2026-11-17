@@ -334,7 +334,7 @@ import {
   logicalEnvironment
 } from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
-import { instrumentName, isAShareLogical, marketLabel, marketsTotalText } from "../shared/markets";
+import { instrumentName, isStockLogical, marketLabel, marketsTotalText } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
 import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
 import { useActionTracker } from "./action-tracker";
@@ -428,11 +428,11 @@ const coinRows = computed(() =>
   })
 );
 const snapshotCount = computed(() => positionCount(snapshot.value));
-// 成员全停用时市场并集为空，按结算币判断是不是 A 股；都判断不了就不显示
+// 成员全停用时市场并集为空，按结算币判断是不是股票组合（A 股、港股）；都判断不了就不显示
 const positionTotalText = computed(() => {
   const current = logical.value;
   if (!current) return "";
-  return marketsTotalText(current.markets) || (isAShareLogical(current) ? "股票合计" : "");
+  return marketsTotalText(current.markets) || (isStockLogical(current) ? "股票合计" : "");
 });
 const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
 const offCount = computed(() => coinRows.value.filter(row => row.state !== "ok").length);

@@ -13,6 +13,8 @@ enum Exchange {
   EXCHANGE_BINANCE = 1;
   EXCHANGE_OKX = 2;
   EXCHANGE_ASHARE = 3;
+  // 港股（香港交易所），只有模拟盘
+  EXCHANGE_HKEX = 4;
 }
 
 enum MarketType {

@@ -49,7 +49,7 @@ rules:
 	if err := CheckCalendar("crypto_24x7", "15m"); err != nil {
 		t.Fatalf("crypto 支持定长周期：%v", err)
 	}
-	if err := StockCalendarReadiness(time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), 0, 2); err != nil {
+	if err := StockCalendarReadiness("cn_stock", time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), 0, 2); err != nil {
 		t.Fatalf("内嵌日历在有效期内应可用：%v", err)
 	}
 }

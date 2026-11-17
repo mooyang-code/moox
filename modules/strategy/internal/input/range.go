@@ -17,25 +17,27 @@ import (
 // DefaultReplayMaxBars 是一次回放允许的最多 bar 数。
 const DefaultReplayMaxBars = 20000
 
-// ReplayRange 把回放区间换成日历的口径：A 股日线按上海日期回放，两端各取所在上海日期的零点，[起始日期, 结束日期)
-// 内的交易日都包含在内。页面按上海时区选日期，传来的两端是上海零点（前一日 16:00 UTC）；A 股日线的 bar_start 是
-// 日期键（交易日期 D 的 UTC 零点，即上海 D 日 08:00），落在 [起始日期的上海零点, 结束日期的上海零点) 内当且仅当
-// 起始日期 ≤ D < 结束日期，所以区间仍按上海零点记录。A 股日内的 bar_start 是真实的开盘时刻，与 crypto 一样原样返回。
+// ReplayRange 把回放区间换成日历的口径：股票市场的日线按市场当地日期回放（A 股是上海日期），两端各取所在当地日期的零点，
+// [起始日期, 结束日期) 内的交易日都包含在内。页面按上海时区选日期，传来的两端是上海零点（前一日 16:00 UTC）；A 股日线的
+// bar_start 是日期键（交易日期 D 的 UTC 零点，即上海 D 日 08:00），落在 [起始日期的上海零点, 结束日期的上海零点) 内当且仅当
+// 起始日期 ≤ D < 结束日期，所以区间仍按上海零点记录。港股与上海同一时区，口径相同；美股日线的日期选择页面还没有适配。
+// 日内的 bar_start 是真实的开盘时刻，与 crypto 一样原样返回。
 func ReplayRange(calendar, bar string, start, end time.Time) (time.Time, time.Time, error) {
 	if !stockDaily(calendar, bar) {
 		return start, end, nil
 	}
-	_, location, err := stockCalendar()
+	market, _, err := sessionMarketFor(calendar)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
+	location := market.location
 	floor := func(at time.Time) time.Time {
 		local := at.In(location)
 		return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC()
 	}
 	start, end = floor(start), floor(end)
 	if !end.After(start) {
-		return time.Time{}, time.Time{}, errors.New("A 股日线按上海日期回放：结束日期必须晚于起始日期")
+		return time.Time{}, time.Time{}, fmt.Errorf("%s日线按%s日期回放：结束日期必须晚于起始日期", market.name(), market.market.ZoneName)
 	}
 	return start, end, nil
 }
@@ -88,7 +90,7 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 			return current, err
 		}
 		if current.NextEnd.IsZero() {
-			return PeriodBoundaries{}, beyondCalendarError(at)
+			return PeriodBoundaries{}, beyondCalendarError(calendar, at)
 		}
 		return FromBarEnd(calendar, bar, current.NextEnd)
 	}
@@ -104,14 +106,15 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 	return current, nil
 }
 
-// beyondCalendarError 说明 at 之后的周期超出了 A 股内嵌日历；时间按上海时间写，与其余 A 股报错一致。
-func beyondCalendarError(at time.Time) error {
+// beyondCalendarError 说明 at 之后的周期超出了市场的内嵌日历；时间按市场当地时间写，与其余股票市场的报错一致。
+func beyondCalendarError(calendar string, at time.Time) error {
 	label := at.UTC().Format(time.RFC3339) + " UTC"
-	if _, location, err := stockCalendar(); err == nil {
-		label = shanghaiLabel(at, location)
+	market := loadedSessionMarket(calendar)
+	if market != nil {
+		label = market.label(at)
 	}
 	return &describedError{
-		message: fmt.Sprintf("%s 之后的周期%s", label, translateCalendarError(marketcalendar.ErrNoNextTradingDay).Error()),
+		message: fmt.Sprintf("%s 之后的周期%s", label, translateCalendarError(market, marketcalendar.ErrNoNextTradingDay).Error()),
 		cause:   marketcalendar.ErrNoNextTradingDay,
 	}
 }
@@ -143,7 +146,7 @@ type EarlyStartError struct {
 	// History 是起点之前需要的根数，Source 是要求的来源（min_age_bars、bars[-1]）。
 	History int
 	Source  string
-	// Calendar 与 Bar 决定时间的写法：A 股日线写上海日期。
+	// Calendar 与 Bar 决定时间的写法：股票市场日线写当地日期（A 股是上海日期）。
 	Calendar string
 	Bar      string
 }
@@ -156,34 +159,32 @@ func (e *EarlyStartError) Error() string {
 	return fmt.Sprintf("回放起点 %s 太早：View 的活跃序列从 %s 起才有数据，%s 要求起点之前还有 %d 根历史；可用起点为 %s", label(e.First), label(e.Coverage), e.Source, e.History, label(e.Earliest))
 }
 
-// PeriodLabel 是给用户看的 bar 标识：A 股日线写上海日期（bar_start 是日期键，即上海当日 08:00，日期就是交易日期；
-// 回放区间的端点是上海零点，按上海时区取日期两者都对），A 股日内写 bar_start 的上海时间，其余写 bar_start 的 UTC 时间。
+// PeriodLabel 是给用户看的 bar 标识：股票市场日线写当地日期（A 股是上海日期：bar_start 是日期键，即上海当日 08:00，
+// 日期就是交易日期；回放区间的端点是上海零点，按上海时区取日期两者都对），日内写 bar_start 的当地时间，其余写 bar_start 的 UTC 时间。
 func PeriodLabel(calendar, bar string, storageStart time.Time) string {
-	if stockDaily(calendar, bar) {
-		if _, location, err := stockCalendar(); err == nil {
-			return storageStart.In(location).Format("2006-01-02") + "（上海日期）"
+	if market := loadedSessionMarket(calendar); market != nil {
+		zone := market.market.ZoneName
+		if stockDaily(calendar, bar) {
+			return storageStart.In(market.location).Format("2006-01-02") + "（" + zone + "日期）"
 		}
-	}
-	if stockIntraday(calendar, bar) {
-		if _, location, err := stockCalendar(); err == nil {
-			return storageStart.In(location).Format("2006-01-02 15:04") + "（上海时间）"
+		if stockIntraday(calendar, bar) {
+			return storageStart.In(market.location).Format("2006-01-02 15:04") + "（" + zone + "时间）"
 		}
 	}
 	return storageStart.UTC().Format(time.RFC3339)
 }
 
-// BarEndLabel 是给用户看的 bar_end：UTC 时间（与回放表格的“K 线结束（UTC）”一致），A 股日线再注明上海的交易日收盘，
-// A 股日内再注明上海时间。
+// BarEndLabel 是给用户看的 bar_end：UTC 时间（与回放表格的“K 线结束（UTC）”一致），股票市场日线再注明当地的交易日收盘，
+// 日内再注明当地时间。
 func BarEndLabel(calendar, bar string, barEnd time.Time) string {
 	label := barEnd.UTC().Format(time.RFC3339)
-	if stockDaily(calendar, bar) {
-		if _, location, err := stockCalendar(); err == nil {
-			label += "（上海 " + barEnd.In(location).Format("2006-01-02") + " 收盘）"
+	if market := loadedSessionMarket(calendar); market != nil {
+		zone := market.market.ZoneName
+		if stockDaily(calendar, bar) {
+			label += "（" + zone + " " + barEnd.In(market.location).Format("2006-01-02") + " 收盘）"
 		}
-	}
-	if stockIntraday(calendar, bar) {
-		if _, location, err := stockCalendar(); err == nil {
-			label += "（上海 " + barEnd.In(location).Format("2006-01-02 15:04") + "）"
+		if stockIntraday(calendar, bar) {
+			label += "（" + zone + " " + barEnd.In(market.location).Format("2006-01-02 15:04") + "）"
 		}
 	}
 	return label
@@ -211,7 +212,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	}
 	coverage := coverageStart(bounds, view, resolved, time.Time{})
 	if coverage.After(bounds.To) {
-		return time.Time{}, fmt.Errorf("View %s 的数据已超出 A 股内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", view.ViewID, label(bounds.To), bounds.Beyond, view.SeriesBars)
+		return time.Time{}, fmt.Errorf("View %s 的数据已超出%s内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", view.ViewID, loadedSessionMarket(resolved.Calendar).spacedName(), label(bounds.To), bounds.Beyond, view.SeriesBars)
 	}
 	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, bounds.To)
 	if err != nil {

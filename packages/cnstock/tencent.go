@@ -60,6 +60,8 @@ type Quote struct {
 	// Halted 为真表示停牌；Delisted 为真表示已退市（含北交所旧代码已换号）。两者都不能交易。
 	Halted   bool
 	Delisted bool
+	// LotSize 是每手股数，只有港股快照带（逐只不同）；A 股按板块定整手规则，这里为 0。
+	LotSize int64
 }
 
 // ParseTencent 解析一次快照响应。上游对不认识的代码返回 v_pv_none_match="1"; 这类行跳过。

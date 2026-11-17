@@ -139,7 +139,7 @@ export interface Replay {
   /** 从实例发起时的来源实例与固化 DSL 的会话。 */
   instance_id: string;
   session_id: string;
-  /** 回放所用的日历（crypto_24x7 | cn_stock）：cn_stock 日线的区间按上海日期解释。 */
+  /** 回放所用的日历（crypto_24x7 | cn_stock | hk_stock | us_stock）：股票日线的区间按市场当地日期解释（A 股是上海日期）。 */
   calendar: string;
   /** 主帧的因子数据来源：view 读结果 View；compute 是因子现算（经主机网关调因子引擎，按因子机本地 K 线与回放中的参数现算）。 */
   input: ReplayInput | string;

@@ -45,9 +45,9 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	if accountErr != nil {
 		return Decision{}, storageError(accountErr)
 	}
-	rule := exchange.RuleFor(candidate.MarketType)
-	if rule.PriceLimits {
-		// 有涨跌停的市场（A 股）：停牌，或没有对手价（涨停没有卖一、跌停没有买一）时成交不了。吃单整笔撤掉，
+	rule := exchange.RuleAt(account.Exchange, candidate.MarketType)
+	if rule.QuoteGuards {
+		// 报价带停牌和涨跌停的市场（股票）：停牌，或没有对手价（涨停没有卖一、跌停没有买一）时成交不了。吃单整笔撤掉，
 		// 执行器按现有逻辑提高滑点后重试；GTC 限价单继续挂着。首次撮合用的是下单时记下的价格，这里也要看实时盘口。
 		quote, quoteErr := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
 		if quoteErr != nil {
@@ -149,13 +149,14 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	}
 	notional := price.Mul(shared.MustDecimal(candidate.Quantity))
 	fee = notional.Mul(feeRate)
-	if rule.StockFees {
-		// A 股：佣金按 taker 费率字段、最低 5 元，卖出加印花税，双向过户费；和下单预留、下单容量用同一个函数。
+	if rule.Fee != nil {
+		// 场所有自己的费用函数（A 股：最低佣金、卖出印花税、过户费；港股：最低佣金、双边印花税、交易费、征费、股份交收费）：
+		// 佣金比例取 taker 费率字段，和下单预留、下单容量用同一个函数。
 		takerRate, rateErr := shared.ParseDecimal(paperConfig.TakerFeeRate)
 		if rateErr != nil || takerRate.IsNegative() {
 			return Decision{}, fmt.Errorf("paper: invalid fee rate %q", paperConfig.TakerFeeRate)
 		}
-		fee = exchange.StockFee(exchange.Side(candidate.Side), notional, takerRate)
+		fee = rule.Fee(exchange.Side(candidate.Side), notional, takerRate)
 	}
 	realizedPnL := shared.Zero()
 	if rule.PositionFromBalance {

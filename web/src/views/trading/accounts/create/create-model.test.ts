@@ -50,7 +50,53 @@ describe("A 股模拟账户", () => {
     expect(validateStep({ ...form, markets: [1] }, 2)).toContain("只能开通股票");
     expect(validateStep({ ...form, settlementAsset: "USDT" }, 2)).toContain("CNY");
     expect(validateStep({ ...form, kind: "testnet", secretId: "s" }, 1)).toContain("QMT");
-    expect(validateStep({ ...createDefaultForm(), name: "b", markets: [3] }, 2)).toContain("只能在 A 股场所开通");
+    expect(validateStep({ ...createDefaultForm(), name: "b", markets: [3] }, 2)).toContain("只能在 A 股、港股场所开通");
+  });
+});
+
+describe("港股模拟账户", () => {
+  it("选港股后市场固定为股票、港元结算、默认 1000 万港元、佣金 0.03%，换成 A 股、加密货币各用各的默认值", () => {
+    const form = createDefaultForm();
+    form.exchange = 4;
+    applyExchangeDefaults(form);
+    expect(form.markets).toEqual([3]);
+    expect(form.settlementAsset).toBe("HKD");
+    expect(form.initialBalance).toBe("10000000");
+    expect(form.makerFeeRate).toBe("0.0003");
+    expect(form.takerFeeRate).toBe("0.0003");
+    expect(defaultFees([3], 4)).toEqual({ maker: "0.0003", taker: "0.0003" });
+    form.exchange = 3;
+    applyExchangeDefaults(form);
+    expect(form.settlementAsset).toBe("CNY");
+    expect(form.takerFeeRate).toBe("0.00025");
+    form.exchange = 2;
+    applyExchangeDefaults(form);
+    expect(form.markets).toEqual([2]);
+    expect(form.settlementAsset).toBe("USDT");
+  });
+
+  it("请求带港股场所、股票市场、HKD，挂单、吃单用同一个佣金", () => {
+    const form = { ...createDefaultForm(), name: "港股模拟", exchange: 4 as const };
+    applyExchangeDefaults(form);
+    expect(validateStep(form, 1)).toBe("");
+    expect(validateStep(form, 2)).toBe("");
+    expect(buildPaperRequest(form)).toMatchObject({
+      exchange: 4,
+      markets: [3],
+      settlement_asset: "HKD",
+      margin_mode: "",
+      initial_balance: "10000000",
+      maker_fee_rate: "0.0003",
+      taker_fee_rate: "0.0003"
+    });
+  });
+
+  it("港股只开股票、按 HKD 结算、只能模拟盘", () => {
+    const form = { ...createDefaultForm(), name: "hk", exchange: 4 as const };
+    applyExchangeDefaults(form);
+    expect(validateStep({ ...form, markets: [1] }, 2)).toContain("港股只能开通股票");
+    expect(validateStep({ ...form, settlementAsset: "CNY" }, 2)).toContain("港股按港元（HKD）结算");
+    expect(validateStep({ ...form, kind: "prod", secretId: "s" }, 1)).toContain("港股只支持模拟盘");
   });
 });
 

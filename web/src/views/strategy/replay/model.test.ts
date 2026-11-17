@@ -233,6 +233,13 @@ describe("replay model helpers", () => {
     expect(
       replayRangeLabel({ calendar: "crypto_24x7", start_time: "2026-09-01T00:00:00Z", end_time: "2026-09-02T00:00:00Z" }, "UTC")
     ).toBe("2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC");
+    // 港股日线同样按日期写（空间时区 Asia/Hong_Kong）。
+    expect(
+      replayRangeLabel(
+        { calendar: "hk_stock", start_time: "2026-10-31T16:00:00Z", end_time: "2026-11-17T16:00:00Z" },
+        "Asia/Hong_Kong"
+      )
+    ).toBe("2026-11-01 UTC+8 → 2026-11-18 UTC+8（不含结束日）");
     // A 股日内的区间是真实时刻，按空间时区写时刻。
     expect(
       replayRangeLabel({ calendar: "cn_stock", start_time: "2026-10-08T03:00:00Z", end_time: "2026-10-08T05:30:00Z" }, sh)

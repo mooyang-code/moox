@@ -147,7 +147,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	) && !oddLotSell(account, market, instrument, spec) {
 		return Validation{}, ErrQuantityRule
 	}
-	if !capacity && exchange.RuleFor(market).PriceLimits {
+	if !capacity && exchange.RuleFor(market).QuoteGuards {
 		if err := v.checkPriceLimits(ctx, account, instrument, spec); err != nil {
 			return Validation{}, err
 		}
@@ -300,16 +300,16 @@ func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.Orde
 	return nil
 }
 
-// buyReservation 是买入要预留的结算资产：成交额加费用。模拟盘的 A 股按 StockFee 算（佣金复用 taker 费率字段，最低 5 元），
-// 和撮合扣费、下单容量是同一个函数；其余按费率比例加缓冲。
+// buyReservation 是买入要预留的结算资产：成交额加费用。模拟盘里有自己费用函数的场所（A 股、港股）按场所的费用函数算
+// （佣金复用 taker 费率字段，有最低佣金），和撮合扣费、下单容量是同一个函数；其余按费率比例加缓冲。
 func buyReservation(account tradingaccount.Account, market exchange.MarketType, notional, feeRate shared.Decimal) shared.Decimal {
-	if account.ExecutionMode == exchange.ExecutionModePaper && account.Paper != nil && exchange.RuleFor(market).StockFees {
-		return exchange.StockBuyCost(notional, account.Paper.TakerFeeRate)
+	if rule := exchange.RuleAt(account.Exchange, market); account.ExecutionMode == exchange.ExecutionModePaper && account.Paper != nil && rule.Fee != nil {
+		return rule.BuyCost(notional, account.Paper.TakerFeeRate)
 	}
 	return withFeeBuffer(notional, feeRate)
 }
 
-// oddLotSell 报告一笔不满足整手规则的卖单是不是合规的零股卖出：只对整手交易的市场（A 股），
+// oddLotSell 报告一笔不满足整手规则的卖单是不是合规的零股卖出：只对整手交易的市场（股票），
 // 卖出后余下的持仓要么为 0，要么本身满足整手规则——也就是不足一手的零股一次卖完。
 func oddLotSell(account tradingaccount.Account, market exchange.MarketType, instrument exchange.Instrument, spec orderdomain.OrderSpec) bool {
 	if !exchange.RuleFor(market).BoardLot || spec.Side != exchange.SideSell || spec.Quantity.Cmp(shared.Zero()) <= 0 ||
@@ -334,7 +334,8 @@ func totalBalance(snapshot exchange.AccountSnapshot, asset string) shared.Decima
 	return total
 }
 
-// checkPriceLimits 给有涨跌停的市场查实时报价：停牌返回 ErrInstrumentHalted，限价超出涨跌停价返回 ErrPriceLimit。
+// checkPriceLimits 给报价带停牌和涨跌停的市场（股票）查实时报价：停牌返回 ErrInstrumentHalted，限价超出涨跌停价返回 ErrPriceLimit
+// （港股的报价没有涨跌停价，只查停牌）。
 func (v Validator) checkPriceLimits(ctx context.Context, account tradingaccount.Account, instrument exchange.Instrument, spec orderdomain.OrderSpec) error {
 	if v.Quotes == nil {
 		return nil

@@ -25,7 +25,7 @@ type ExchangeDescriptor struct {
 	Exchange     exchange.Exchange
 	OrderTypes   []exchange.OrderType
 	FillPolicies []exchange.FillPolicy
-	// Markets 是场所支持开通的市场，建账户时校验；BINANCE、OKX 是现货和永续，ASHARE 只有股票。
+	// Markets 是场所支持开通的市场，建账户时校验；BINANCE、OKX 是现货和永续，ASHARE、HKEX 只有股票。
 	Markets []exchange.MarketType
 	// SettlementAssets 是场所允许的结算资产；为空表示不限制（由市场规则自己校验）。
 	SettlementAssets []string
@@ -35,6 +35,9 @@ type ExchangeDescriptor struct {
 	Session TradingSession
 	// SessionHours 是给人看的下单时段说明，手动下单不在时段内时写进提示。
 	SessionHours string
+	// InstrumentScope 是给人看的标的范围说明：场所的标的表不是全市场时填（港股模拟盘只收录恒生指数成分），
+	// 目标里的标的在各成员的标的表里都找不到时写进原因；为空表示标的表就是场所的全部标的。
+	InstrumentScope string
 	// Inspect 检测这个场所的密钥（账户类型、权限）；nil 表示不支持检测（券商、模拟盘）。
 	Inspect exchange.Inspector
 	// WholeAccount 报告某个账户配置是否由一个适配器同时服务全部市场（币安统一账户：一个余额接口、一条私有流），

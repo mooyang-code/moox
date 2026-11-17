@@ -38,6 +38,11 @@ type Config struct {
 	MaxLabelValueBytes   int
 }
 
+// BuildVersion 是构建时写进二进制的版本号：scripts/build/build.sh 用
+// -ldflags "-X github.com/mooyang-code/moox/packages/report.BuildVersion=vX.Y.Z" 注入。各组件上报的版本取自这里
+// （环境变量 MOOX_VERSION 优先）：tRPC 服务的 main 包里没有 Version 变量，只注入 main.Version 时它们一律上报 dev。
+var BuildVersion string
+
 func DefaultConfig(module, serviceName string) Config {
 	c := Config{
 		Module:               module,
@@ -68,6 +73,9 @@ func DefaultConfig(module, serviceName string) Config {
 	}
 	if c.SpaceID == "" {
 		c.SpaceID = DefaultSpace
+	}
+	if c.Version == "" {
+		c.Version = BuildVersion
 	}
 	if c.Version == "" {
 		c.Version = "dev"

@@ -156,6 +156,7 @@ var exchangePBNames = map[tradepb.Exchange]exchange.Exchange{
 	tradepb.Exchange_EXCHANGE_BINANCE: exchange.ExchangeBinance,
 	tradepb.Exchange_EXCHANGE_OKX:     exchange.ExchangeOKX,
 	tradepb.Exchange_EXCHANGE_ASHARE:  exchange.ExchangeAShare,
+	tradepb.Exchange_EXCHANGE_HKEX:    exchange.ExchangeHKEX,
 }
 
 func exchangeFromPB(value tradepb.Exchange) exchange.Exchange {

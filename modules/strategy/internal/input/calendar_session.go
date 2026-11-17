@@ -11,60 +11,74 @@ import (
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
-// stockMarketID 是 A 股在 barclock 里登记的市场（空间）ID。
-const stockMarketID = "stockcn"
-
-// stockSessionClock 是 A 股日内周期：桶由 barclock 按交易时段切分（不跨午休），bar_start 是真实的开盘时刻（UTC），
-// bar_end 是 bar_start + 周期；BarIndex 是 barclock 的交易序号，午休、隔夜、休市不占根数，与因子的交易序号轴一致。
+// stockSessionClock 是股票市场的日内周期：桶由 barclock 按交易时段切分（不跨午休），bar_start 是真实的开盘时刻（UTC），
+// bar_end 是 bar_start + 周期；BarIndex 是 barclock 的交易序号，午休、隔夜、休市不占根数，半日市收市之后也没有根，
+// 与因子的交易序号轴一致。
 type stockSessionClock struct {
+	market    *sessionMarket
 	clock     barclock.Clock
 	frequency string
 	period    time.Duration
 	calendar  marketcalendar.TradingCalendar
 	location  *time.Location
-	perDay    int
+	// perDay 是完整交易日的根数，只用于估算；半日市当天更少，精确换算用 dayBars。
+	perDay int
 }
 
-// stockSessionClocks 缓存各日内周期的时钟（频率 → *stockSessionClock）：时钟不可变，构造时要扫一遍交易时段。
+// sessionClockKey 是日内周期时钟的缓存键：日历加周期，各市场互不串用。
+type sessionClockKey struct{ calendarID, frequency string }
+
+// stockSessionClocks 缓存各市场各日内周期的时钟（sessionClockKey → *stockSessionClock）：时钟不可变，构造时要扫一遍交易时段。
 var stockSessionClocks sync.Map
 
-// stockSessionClockFor 返回 A 股日内周期的时钟；周期不在 barclock 允许的日内周期之内时返回 ErrUnsupportedCalendar。
-func stockSessionClockFor(frequency string) (periodClock, error) {
-	if cached, ok := stockSessionClocks.Load(frequency); ok {
+// stockSessionClockFor 返回市场某个日内周期的时钟；周期不在 barclock 允许的日内周期之内时返回 ErrUnsupportedCalendar。
+func stockSessionClockFor(market *sessionMarket, frequency string) (periodClock, error) {
+	key := sessionClockKey{calendarID: market.calendarID, frequency: frequency}
+	if cached, ok := stockSessionClocks.Load(key); ok {
 		return cached.(*stockSessionClock), nil
 	}
-	market, err := barclock.MarketFor(stockMarketID)
-	if err != nil {
-		return nil, err
-	}
-	if !slices.Contains(market.AllowedIntraday(), frequency) {
-		return nil, fmt.Errorf("%w：日历 \"cn_stock\" 不支持频率 %q（日内周期须整除每个交易时段：%v）", ErrUnsupportedCalendar, frequency, market.Sessions)
+	if !slices.Contains(market.market.AllowedIntraday(), frequency) {
+		return nil, fmt.Errorf("%w：日历 %q 不支持频率 %q（日内周期须整除每个交易时段：%v）", ErrUnsupportedCalendar, market.calendarID, frequency, market.market.Sessions)
 	}
 	period, err := parseBarDuration(frequency)
 	if err != nil {
 		return nil, err
 	}
-	calendar, location, err := stockCalendar()
+	clock, err := barclock.NewSession(market.calendar, market.location, market.market.Sessions, period)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s %s 的交易时段时钟无法构造：%w", market.name(), frequency, err)
 	}
-	clock, err := barclock.NewSession(calendar, location, market.Sessions, period)
-	if err != nil {
-		return nil, fmt.Errorf("A 股 %s 的交易时段时钟无法构造：%w", frequency, err)
+	perDay := market.market.FullDayBuckets(period)
+	if perDay <= 0 {
+		return nil, fmt.Errorf("%s %s 每个交易日的根数无法计算", market.name(), frequency)
 	}
-	// 每个交易日的根数：A 股没有半日市，数日历第一个交易日的桶即可。
-	first := calendar.FirstDate()
-	dayStart := time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, location)
-	buckets, err := clock.Between(dayStart, dayStart.Add(24*time.Hour), 24*60)
-	if err != nil || len(buckets) == 0 {
-		return nil, fmt.Errorf("A 股 %s 每个交易日的根数无法计算：%v", frequency, err)
-	}
-	value := &stockSessionClock{clock: clock, frequency: frequency, period: period, calendar: calendar, location: location, perDay: len(buckets)}
-	actual, _ := stockSessionClocks.LoadOrStore(frequency, value)
+	value := &stockSessionClock{market: market, clock: clock, frequency: frequency, period: period, calendar: market.calendar, location: market.location, perDay: perDay}
+	actual, _ := stockSessionClocks.LoadOrStore(key, value)
 	return actual.(*stockSessionClock), nil
 }
 
-// stockIntraday 报告日历与周期是否是受支持的 A 股日内周期。
+// dayBars 返回第 index 个交易日（日历首个交易日为 0）第一根与最后一根的交易序号：半日市当天的根数比完整交易日少，
+// 不能按“交易日序号 × 每日根数”折算。序号越过日历首尾时 ok 为假。
+func (c *stockSessionClock) dayBars(index int64) (first, last int64, ok bool) {
+	if index < 0 {
+		return 0, 0, false
+	}
+	day, err := c.calendar.TradingDayAt(int(index))
+	if err != nil {
+		return 0, 0, false
+	}
+	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, c.location)
+	buckets, err := c.clock.Between(start, start.Add(24*time.Hour), 24*60)
+	if err != nil || len(buckets) == 0 {
+		return 0, 0, false
+	}
+	if first, err = c.clock.Ordinal(buckets[0]); err != nil {
+		return 0, 0, false
+	}
+	return first, first + int64(len(buckets)) - 1, true
+}
+
+// stockIntraday 报告日历与周期是否是受支持的股票市场日内周期。
 func stockIntraday(calendarID, frequency string) bool {
 	clock, err := clockFor(calendarID, frequency)
 	if err != nil {
@@ -80,8 +94,8 @@ func (c *stockSessionClock) sessionError(at time.Time, err error) error {
 	if errors.Is(err, barclock.ErrOutOfCoverage) {
 		err = marketcalendar.ErrOutOfCoverage
 	}
-	translated := translateCalendarError(err)
-	return &describedError{message: fmt.Sprintf("A 股 %s 周期 %s：%s", c.frequency, shanghaiLabel(at, c.location), translated.Error()), cause: err}
+	translated := translateCalendarError(c.market, err)
+	return &describedError{message: fmt.Sprintf("%s %s 周期 %s：%s", c.market.name(), c.frequency, c.market.label(at), translated.Error()), cause: err}
 }
 
 // shiftError 说明从 at 移动到交易序号 target 时越过了内嵌日历的首尾：与日线一致，用“之前 / 之后没有交易日”的哨兵错误，
@@ -91,7 +105,7 @@ func (c *stockSessionClock) shiftError(at time.Time, target int64) error {
 	if target < 0 {
 		sentinel = marketcalendar.ErrNoPreviousTradingDay
 	}
-	return &describedError{message: fmt.Sprintf("A 股 %s 周期 %s：%s", c.frequency, shanghaiLabel(at, c.location), translateCalendarError(sentinel).Error()), cause: sentinel}
+	return &describedError{message: fmt.Sprintf("%s %s 周期 %s：%s", c.market.name(), c.frequency, c.market.label(at), translateCalendarError(c.market, sentinel).Error()), cause: sentinel}
 }
 
 // bucketAt 返回交易序号 n 的桶；越过日历首尾时返回 shiftError。
@@ -147,7 +161,7 @@ func (c *stockSessionClock) fromStorageStart(start time.Time) (PeriodBoundaries,
 		return PeriodBoundaries{}, c.sessionError(start, err)
 	}
 	if !ok || !bucket.Start.Equal(start) {
-		return PeriodBoundaries{}, fmt.Errorf("Storage 周期 %s 不是 A 股交易时段内 %s bar 的起点", shanghaiLabel(start, c.location), c.frequency)
+		return PeriodBoundaries{}, fmt.Errorf("Storage 周期 %s 不是%s交易时段内 %s bar 的起点", c.market.label(start), c.market.spacedName(), c.frequency)
 	}
 	return c.boundaries(bucket)
 }
@@ -159,7 +173,7 @@ func (c *stockSessionClock) fromBarEnd(end time.Time) (PeriodBoundaries, error) 
 		return PeriodBoundaries{}, c.sessionError(end, err)
 	}
 	if !ok || !bucket.Start.Equal(start) {
-		return PeriodBoundaries{}, fmt.Errorf("bar_end %s 不是 A 股交易时段内 %s bar 的终点", shanghaiLabel(end, c.location), c.frequency)
+		return PeriodBoundaries{}, fmt.Errorf("bar_end %s 不是%s交易时段内 %s bar 的终点", c.market.label(end), c.market.spacedName(), c.frequency)
 	}
 	return c.boundaries(bucket)
 }
@@ -192,7 +206,7 @@ func (c *stockSessionClock) floor(at time.Time) (time.Time, error) {
 		return time.Time{}, err
 	}
 	if day.Before(c.calendar.FirstDate()) {
-		return time.Time{}, stockDayError(day, marketcalendar.ErrOutOfCoverage)
+		return time.Time{}, stockDayError(c.market, day, marketcalendar.ErrOutOfCoverage)
 	}
 	if last := c.calendar.LastDate(); day.After(last) {
 		at = time.Date(last.Year(), last.Month(), last.Day(), 23, 59, 0, 0, c.location)
