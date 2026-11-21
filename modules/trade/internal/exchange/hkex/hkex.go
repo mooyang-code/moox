@@ -42,7 +42,7 @@ func NewMarket(client *http.Client, seed stockfeed.Seed) *stockfeed.Market {
 
 // NewMarketFrom 用给定的快照来源和标的范围来源构造港股公共行情（NewMarket 用腾讯的两个接口；测试换成替身）。
 func NewMarketFrom(quotes stockfeed.QuoteSource, constituents ConstituentSource, seed stockfeed.Seed) *stockfeed.Market {
-	market := &stockfeed.Market{Exchange: exchange.ExchangeHKEX, Label: "港股", FillEmptyBook: true, Quotes: quotes, Seed: seed}
+	market := &stockfeed.Market{Exchange: exchange.ExchangeHKEX, Label: "港股", FillEmptyBook: true, QuoteTimeIsLastTrade: true, Quotes: quotes, Seed: seed}
 	market.List = func(ctx context.Context) ([]exchange.Instrument, error) {
 		at := time.Now().UTC()
 		if market.Now != nil {

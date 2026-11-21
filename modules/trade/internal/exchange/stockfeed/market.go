@@ -43,13 +43,17 @@ type Market struct {
 	// Exchange 是场所；Label 是写进报错和日志的市场名（“A 股”“港股”）。
 	Exchange exchange.Exchange
 	Label    string
-	// FillEmptyBook 为真时，快照里没有买一或卖一就用现价补上，不当作没有对手价。港股用：买一卖一的字段位置只在收市后
-	// 核对过，盘中取不到时按现价撮合。有涨跌停的市场（A 股）不能开：没有卖一就是涨停。
+	// FillEmptyBook 为真时，快照里没有买一或卖一就用现价补上，不当作没有对手价。港股用：腾讯 r_hk 没有真实盘口，
+	// 盘中买一、卖一字段都等于现价（2026-11-18 实测），为空时同样按现价撮合。有涨跌停的市场（A 股）不能开：没有卖一就是涨停。
 	FillEmptyBook bool
-	Quotes        QuoteSource
-	List          ListSource
-	Seed          Seed
-	Now           func() time.Time
+	// QuoteTimeIsLastTrade 为真时，快照里的时间是这只标的最后一笔成交的时间，不是报价时间：报价时间改按取到这批快照的
+	// 时刻算。港股用：腾讯 r_hk 第 30 字段是最后成交时间，成交稀疏的标的几十秒不变，按它判新鲜度会让换算、下单、估值都报过期
+	// （2026-11-18 盘中实测）。A 股的同名字段随快照每 3 秒刷新，不能开。
+	QuoteTimeIsLastTrade bool
+	Quotes               QuoteSource
+	List                 ListSource
+	Seed                 Seed
+	Now                  func() time.Time
 
 	quoteMu sync.Mutex
 	quotes  map[string]cachedQuote
@@ -240,10 +244,10 @@ func (m *Market) GetQuote(ctx context.Context, key exchange.SymbolKey) (executio
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
-	return marketQuote(cached, m.FillEmptyBook)
+	return marketQuote(cached, m.FillEmptyBook, m.QuoteTimeIsLastTrade)
 }
 
-func marketQuote(cached cachedQuote, fillEmptyBook bool) (execution.MarketQuote, error) {
+func marketQuote(cached cachedQuote, fillEmptyBook, quoteTimeIsLastTrade bool) (execution.MarketQuote, error) {
 	quote := cached.quote
 	parse := func(raw string) (shared.Decimal, error) {
 		if raw == "" {
@@ -262,6 +266,9 @@ func marketQuote(cached cachedQuote, fillEmptyBook bool) (execution.MarketQuote,
 	result := execution.MarketQuote{
 		Bid: values[0], Ask: values[1], Last: values[2], SourceTime: quote.Time,
 		LimitUp: values[4], LimitDown: values[5], Halted: quote.Halted || quote.Delisted,
+	}
+	if quoteTimeIsLastTrade {
+		result.SourceTime = cached.fetchedAt.UTC()
 	}
 	if result.Last.IsZero() {
 		// 当天还没有成交（开盘前）时现价为空，用昨收。
