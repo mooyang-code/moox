@@ -21,6 +21,7 @@ func frame(total int, rng *rand.Rand) []byte {
 		buf[i] = byte(rng.IntN(256))
 	}
 	binary.BigEndian.PutUint16(buf[0:2], 0x930)
+	buf[2], buf[3] = 0, 0 // 一元调用帧
 	binary.BigEndian.PutUint32(buf[4:8], uint32(total))
 	return buf
 }
@@ -62,6 +63,11 @@ func TestGrowingFramerRejectsBadFrames(t *testing.T) {
 	binary.BigEndian.PutUint32(header[4:8], frameHeadLen-1)
 	_, err = growingFramerBuilder{}.New(bytes.NewReader(header)).ReadFrame()
 	require.ErrorContains(t, err, "invalid")
+
+	stream := frame(frameHeadLen+8, rng)
+	stream[2] = 1 // 流式帧
+	_, err = growingFramerBuilder{}.New(bytes.NewReader(stream)).ReadFrame()
+	require.ErrorContains(t, err, "not unary", "网关没有流式调用，流式帧在读帧时就拒绝")
 
 	binary.BigEndian.PutUint16(header[0:2], 0x1234)
 	_, err = growingFramerBuilder{}.New(bytes.NewReader(header)).ReadFrame()

@@ -19,8 +19,9 @@ const (
 	initialFrameBuffer = 64 << 10
 )
 
-// withGrowingFramer 换掉 tRPC 默认的帧读取器：默认实现读完 16 字节帧头就按声明的长度（最大 10MB）一次分配，
-// 对端只发帧头不发包体，每个连接就白占 10MB；这里只按实际到达的字节分配，输出的帧与默认实现逐字节相同。
+// withGrowingFramer 换掉 tRPC 默认的帧读取器：默认实现读完 16 字节帧头就按声明的长度一次分配（网关进程的帧上限 64MB），
+// 对端只发帧头不发包体，每个连接就白占这么多；这里只按实际到达的字节分配，输出的帧与默认实现逐字节相同。
+// 只收一元调用帧：网关没有流式调用，而 tRPC 收到流式 INIT 帧会在验签之前把元数据存进全局表、连接关闭也不清，可被无凭据的对端撑爆内存。
 // 必须排在 server.WithProtocol("trpc") 之后：两者都设置帧读取器，后设置的生效。
 func withGrowingFramer() server.Option {
 	return func(o *server.Options) {
@@ -37,13 +38,16 @@ type growingFramer struct {
 	header [frameHeadLen]byte
 }
 
-// ReadFrame 的校验与默认实现相同：魔数、总长不小于帧头、不超过 trpc.DefaultMaxFrameSize。
+// ReadFrame 的校验与默认实现相同：魔数、总长不小于帧头、不超过 trpc.DefaultMaxFrameSize；另外拒绝非一元调用帧。
 func (f *growingFramer) ReadFrame() ([]byte, error) {
 	if _, err := io.ReadFull(f.reader, f.header[:]); err != nil {
 		return nil, err
 	}
 	if magic := binary.BigEndian.Uint16(f.header[:2]); magic != uint16(trpcpb.TrpcMagic_TRPC_MAGIC_VALUE) {
 		return nil, fmt.Errorf("trpc framer: read framer head magic %d != %d, not match", magic, uint16(trpcpb.TrpcMagic_TRPC_MAGIC_VALUE))
+	}
+	if frameType := f.header[2]; frameType != byte(trpcpb.TrpcDataFrameType_TRPC_UNARY_FRAME) {
+		return nil, fmt.Errorf("trpc framer: frame type %d is not unary, host gateway serves unary calls only", frameType)
 	}
 	total := int(binary.BigEndian.Uint32(f.header[4:8]))
 	if total < frameHeadLen {
