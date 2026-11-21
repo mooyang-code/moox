@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
@@ -226,15 +227,19 @@ func TestAttackFramesAreRejectedBeforeAllocation(t *testing.T) {
 		require.Error(t, err, name)
 		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(1<<20), "%s：拒绝前不应分配大块内存", name)
 	}
-	// 声明长度合法（等于上限）但实际内容短得多的帧：按声明分配是设计上的上界（单次调用最多 limit），
-	// 解压后长度对不上被拒绝；分配量不能超过上限加常数。
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	_, err := decoder.Decode(rawFrame(limit, rleBlock(128<<10, false), rleBlock(128<<10, true)))
-	runtime.ReadMemStats(&after)
-	require.Error(t, err)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(limit+(4<<20)), "单次调用最多分配上限加常数")
+	// 声明长度等于上限、块数却不够输出这么多的帧：形状检查直接拒绝，不按声明长度分配。
+	for name, frame := range map[string][]byte{
+		"两个 RLE 块":   rawFrame(limit, rleBlock(128<<10, false), rleBlock(128<<10, true)),
+		"一个 1 字节压缩块": rawFrame(limit, compressedRLEBlock(1, true)),
+	} {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		_, err := decoder.Decode(frame)
+		runtime.ReadMemStats(&after)
+		require.ErrorIs(t, err, ErrCorrupt, name)
+		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(1<<20), "%s：块数不足的帧不应按声明长度分配", name)
+	}
 
 	// 合法的最小帧不受影响
 	got, err := decoder.Decode(rawFrame(4, rawBlock([]byte("abcd"), true)))
@@ -412,4 +417,55 @@ default: default-v1
 	require.Equal(t, uint32(0x4D580002), h.DictionaryID)
 	require.Equal(t, 32, before.current.compressType)
 	require.Equal(t, 34, after.current.compressType)
+}
+
+// 额度用满时后来的取用等待，释放后放行；超过总额的取用按总额计，空闲时直接取到。
+func TestBudgetBlocksUntilReleased(t *testing.T) {
+	b := newBudget(100)
+	first := b.acquire(60)
+	done := make(chan int)
+	go func() { done <- b.acquire(60) }()
+	select {
+	case <-done:
+		t.Fatal("额度不够时应当等待")
+	case <-time.After(50 * time.Millisecond):
+	}
+	b.release(first)
+	second := <-done
+	require.Equal(t, 60, second)
+	b.release(second)
+
+	whole := b.acquire(1000)
+	require.Equal(t, 100, whole, "超过总额按总额计")
+	b.release(whole)
+	require.Zero(t, b.used)
+}
+
+// 解码在分配之前取额度：额度被占满时 Decode 等待，释放后解出；最大帧在空闲时直接解出，不会卡住。
+func TestDecodeWaitsForBudget(t *testing.T) {
+	decoder := NewDecoder(UseTRPC, MaxFrameBytes)
+	decoder.budget = newBudget(inflightBytes)
+	held := decoder.budget.acquire(inflightBytes)
+	frame := Encode(UseTRPC, sample(500))
+	done := make(chan error)
+	go func() {
+		_, err := decoder.Decode(frame)
+		done <- err
+	}()
+	select {
+	case <-done:
+		t.Fatal("额度用满时解码应当等待")
+	case <-time.After(50 * time.Millisecond):
+	}
+	decoder.budget.release(held)
+	require.NoError(t, <-done)
+
+	blocks := make([][]byte, 0, 512)
+	for i := 0; i < 512; i++ {
+		blocks = append(blocks, rleBlock(maxBlock, i == 511))
+	}
+	got, err := decoder.Decode(rawFrame(MaxFrameBytes, blocks...))
+	require.NoError(t, err)
+	require.Len(t, got, MaxFrameBytes)
+	require.Zero(t, decoder.budget.used)
 }
