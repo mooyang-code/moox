@@ -669,16 +669,17 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	rows := bars(chunk) - check.Absent
 	if check.Missing > 0 {
 		missing := missingKey(check.Gaps)
-		if bars(chunk) > 1 && missing != chunk.Missing {
-			// 函数已成功执行，但复查仍缺一部分：可能是行情源没有，也可能是暂时缺失。记下这次缺的 K 线退回重跑，
-			// 连续两次缺的完全一样才认定是行情源没有；超过最大尝试次数仍不一致时由下一次认领标记失败。
+		if missing != chunk.Missing {
+			// 函数已成功执行，但复查仍缺：可能是行情源没有，也可能是上游晚出数、暂时缺失。记下这次缺的 K 线退回重跑，
+			// 连续两次缺的完全一样才认定是行情源没有（单根分块也一样：缺失记录是永久的，只有港美股收市后整天重取会补回）；
+			// 超过最大尝试次数仍不一致时由下一次认领标记失败。
 			note = fmt.Sprintf("%d bars are still missing after the backfill", check.Missing)
 			if err := b.Store.RequeueChunk(ctx, chunk.ID, chunk.Attempts, missing, note); err != nil {
 				log.WarnContextf(ctx, "collector backfill chunk requeue failed chunk=%s: %v", chunk.ChunkID, err)
 			}
 			return finished
 		}
-		// 单根分块、或连续两次缺的一样：这些 K 线是行情源本身没有的（没有成交的分钟、停牌等）。
+		// 连续两次缺的一样：这些 K 线是行情源本身没有的（没有成交的分钟、停牌等）。
 		// 写进已确认缺失，检查与补采以后都扣除它们；分块按成功结束，缺口数写进说明。
 		if err := b.Store.AddAbsences(ctx, absencesOf(spaceID, check.Gaps)); err != nil {
 			fail(fmt.Errorf("record source absences: %w", err))

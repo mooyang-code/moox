@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -466,14 +467,30 @@ type paramRows struct {
 	byPeriod map[int64]map[string]map[string]map[string]float64
 }
 
+// newParamRows 按期次和标的整理已有行的 __params。参数按标的给，统一数据集同一标的的几条序列（tag）各存一份：
+// 按成员合并，某个 tag 当期失败或被跳过时写的是 {}，不能盖掉另一个 tag 记下的参数；按 tag 排序后合并，结果与遍历顺序无关。
 func newParamRows(rows map[pipeline.RowKey]map[string]map[string]float64) paramRows {
+	keys := make([]pipeline.RowKey, 0, len(rows))
+	for key := range rows {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Tag < keys[j].Tag })
 	byPeriod := make(map[int64]map[string]map[string]map[string]float64)
-	for key, members := range rows {
+	for _, key := range keys {
 		at := key.At.UTC().Unix()
 		if byPeriod[at] == nil {
 			byPeriod[at] = make(map[string]map[string]map[string]float64)
 		}
-		byPeriod[at][key.Subject] = members
+		merged := byPeriod[at][key.Subject]
+		if merged == nil {
+			merged = make(map[string]map[string]float64, len(rows[key]))
+			byPeriod[at][key.Subject] = merged
+		}
+		for member, params := range rows[key] {
+			if _, ok := merged[member]; !ok {
+				merged[member] = params
+			}
+		}
 	}
 	return paramRows{rows: rows, byPeriod: byPeriod}
 }

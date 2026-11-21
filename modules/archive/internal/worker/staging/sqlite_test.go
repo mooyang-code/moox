@@ -2,6 +2,7 @@ package staging
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -128,5 +129,47 @@ func TestFloatsUseFixedNotationBelow1e21(t *testing.T) {
 		if err != nil || back.(float64) != v {
 			t.Fatalf("%q 读回 = %v err=%v", got, back, err)
 		}
+	}
+}
+
+// 宽表读回：80 个值列 × 450 行（含键共 83 列，一批 500 行时 3.7 万个参数），固定行数分批时一条 INSERT 的参数会超过 SQLite 上限（too many SQL variables）。
+func TestReopenFinalHandlesWideTables(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	task := Task{SpaceID: "crypto", DatasetID: "wide"}
+	for i := range 80 {
+		task.Columns = append(task.Columns, Column{fmt.Sprintf("f%02d", i), TypeDouble})
+	}
+	if err := s.EnsureTable(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	var rows []Row
+	for i := range 450 {
+		values := make([]any, len(task.Columns))
+		for j := range values {
+			values[j] = float64(i*100 + j)
+		}
+		rows = append(rows, row(fmt.Sprintf("S%03d", i), day0.Add(time.Hour), "", values...))
+	}
+	if _, err := s.Stage(ctx, task, rows, utcDay, now0, StageReplace); err != nil {
+		t.Fatal(err)
+	}
+	p, _, _ := s.Partition(ctx, "crypto", "wide", "2026-10-15")
+	file := filepath.Join(t.TempDir(), "wide.csv.gz")
+	exportFile(t, s, task, p, file)
+	if err := s.MarkExported(ctx, "crypto", "wide", p.Key, now0.Add(time.Hour), "rel.csv", fileSHA(t, file)); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizeAll(ctx, s, task, []string{p.Key}, now0, now0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReopenFinal(ctx, task, p.Key, file); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.Stage(ctx, task, rows, utcDay, now0.Add(2*time.Hour), StageReplace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Added != 0 || res.Changed != 0 {
+		t.Fatalf("读回后重复写入应没有变化: %+v", res)
 	}
 }

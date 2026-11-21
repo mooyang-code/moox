@@ -326,9 +326,6 @@ func (c closers) Close() error {
 	return first
 }
 
-// reopenBatchRows 是读回时每条 INSERT 的行数上限。
-const reopenBatchRows = 500
-
 // ReopenFinal 把已定稿分区的原文件（path 是绝对路径，调用方先校验 sha256）按列名读回暂存表，分区标回 exported：
 // 文件里没有的新列为 NULL，同键以文件里的值为准。读回的行与导出时一致，所以 last_changed_at 置为 exported_at，
 // 不会因为重新打开就触发重写。
@@ -359,6 +356,8 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 	}
 	insert := fmt.Sprintf(`INSERT OR REPLACE INTO %s (%s) VALUES `, quote(task.Table()), strings.Join(names, ", "))
 	placeholder := "(" + strings.TrimSuffix(strings.Repeat("?,", len(names)), ",") + ")"
+	// 每条 INSERT 的参数个数是行数 × 列数，按 maxParams 折算行数：宽表（例如几百个成员的因子结果）不能固定行数。
+	batchRows := max(maxParams/len(names), 1)
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		var placeholders []string
 		var args []any
@@ -389,7 +388,7 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 				args = append(args, value)
 			}
 			placeholders = append(placeholders, placeholder)
-			if len(placeholders) >= reopenBatchRows {
+			if len(placeholders) >= batchRows {
 				if err := flush(); err != nil {
 					return fmt.Errorf("读回归档文件 %s: %w", path, err)
 				}

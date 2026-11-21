@@ -403,6 +403,21 @@ func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario, withSeries
 	return records
 }
 
+// withoutPreListing 去掉 S4 上市（第 46 分钟）之前的分块记录与 S4 的逐项结果，用于比较两种接线：数据层给期望序列时，
+// 区间结束时还没上市的 S4 不在期望里；随 Selection 带上的序列整个窗口都含 S4（真实的冻结全集不会含还没上市的标的）。
+func withoutPreListing(records [][]string) [][]string {
+	listed := at(46).UTC().Format(time.RFC3339)
+	var out [][]string
+	for _, record := range records {
+		kind, subject, dataTime := record[1], record[2], record[4]
+		if (kind == "chunk" || kind == "member") && dataTime <= listed || kind == "item" && subject == "S4" && dataTime < listed {
+			continue
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
 // baselineRecalcFind 取一条记录的值；没有时第二个返回值为 false。
 func baselineRecalcFind(records [][]string, scenario, kind, subject, dataTime, column string) (string, bool) {
 	for _, record := range records {
@@ -417,7 +432,7 @@ func TestBaselineSingleSeriesRecalc(t *testing.T) {
 	var records [][]string
 	for _, scenario := range baselineRecalcScenarios() {
 		got := baselineRecalcRun(t, scenario, false)
-		require.Equal(t, got, baselineRecalcRun(t, scenario, true), "场景 %s：期望序列由数据层给出与随 Selection 带上，结果不同", scenario.name)
+		require.Equal(t, withoutPreListing(got), withoutPreListing(baselineRecalcRun(t, scenario, true)), "场景 %s：期望序列由数据层给出与随 Selection 带上，结果不同", scenario.name)
 		records = append(records, got...)
 	}
 	// 与金样无关的硬断言：确认场景标注的特性真的发生了。

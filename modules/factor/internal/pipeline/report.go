@@ -108,6 +108,12 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 			return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望序列: %w", err)
 		}
 		plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, derived
+		if !derived {
+			// 只有一个 tag 的数据集：数据层排除了区间结束时还没上市的标的，期望标的随之收窄，
+			// 按标的与按序列的名单保持一致（这些标的不读、不算缺数、不进周期标记的全集）。
+			plan.Expected = seriesSubjects(series)
+			plan.Available = intersectLists(plan.Available, plan.Expected)
+		}
 	}
 	if plan.Observed() && plan.HistorySubjects == nil {
 		// observed 成员的历史截面要用本地存储里本期不可用的标的：在内存预检之前取得，预检按扩大后的序列数估算。

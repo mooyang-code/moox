@@ -160,7 +160,7 @@ func (r *Runtime) catchupModulesPending(tasks []domain.EngineTask) string {
 //   - 窗口没载入（例如暂停期间引擎重启，载入记录只在内存里）：追赶会先同步本地数据，载入窗口并立即重查；
 //   - 引用的自定义算子模块还没开始拉取、正在拉取或编译：模块就绪后重查通过；拉取失败、编译失败要人工处理，才排除。
 //
-// 还没检查过的任务也参与，同步之后的重查决定它去留。数据源不能计算（本地数据、回看数量、变更日志断档，见 sourceBlocked）
+// 还没检查过的任务也参与，同步之后的重查决定它去留。任务不能计算（本地数据、回看数量、变更日志断档，见 taskError）
 // 按当时的状态直接判断，不等下一次重查：这些任务不能再建追赶目标、推进水位。
 func (r *Runtime) catchupMembers() []domain.EngineTask {
 	if r.catalog == nil {
@@ -169,7 +169,7 @@ func (r *Runtime) catchupMembers() []domain.EngineTask {
 	var members []domain.EngineTask
 	for _, set := range r.catalog.Sets() {
 		checks, _ := r.checks.get(set.Set.TaskID)
-		if failsBeyondWindow(checks) || r.modulesFailed(set) || r.sourceBlocked(set) {
+		if failsBeyondWindow(checks) || r.modulesFailed(set) || r.taskError(set) != nil {
 			continue
 		}
 		members = append(members, set)
@@ -177,24 +177,25 @@ func (r *Runtime) catchupMembers() []domain.EngineTask {
 	return members
 }
 
-// sourceBlocked 报告任务的数据源当前能不能计算，与 blockedCheck 用同一个判断（sourceError 非空）：
-// 零数据标的（“本地数据”）、因子回看超过窗口（“回看数量”）、窗口内存超过预算与变更日志断档（这两种检查项名都是“变更同步”）。
-func (r *Runtime) sourceBlocked(set domain.EngineTask) bool {
-	return r.sourceError(seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}) != nil
-}
-
-// sourceGate 判断数据源当前能不能计算：零数据标的、因子回看超过窗口、窗口内存超过预算、变更日志断档时返回原因。
-// 运行时由本地数据层（*localdata.Data）实现。
-type sourceGate interface {
-	Blocked(seriesstore.Source) error
-}
-
-// sourceError 返回数据源当前不能计算的原因，能计算时为 nil。
-func (r *Runtime) sourceError(src seriesstore.Source) error {
+// taskError 返回任务当前不能计算的原因，能计算时为 nil；与 blockedCheck 用同一个判断：
+// 任务自己的因子回看超过 N（“回看数量”，只影响这个任务），或数据源不能计算——零数据标的（“本地数据”）、
+// 窗口内存超过预算与变更日志断档（这两种检查项名都是“变更同步”）。
+func (r *Runtime) taskError(set domain.EngineTask) error {
 	if r.sources == nil {
 		return nil
 	}
-	return r.sources.Blocked(src)
+	if err := r.sources.LookbackError(set); err != nil {
+		return err
+	}
+	return r.sources.Blocked(seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq})
+}
+
+// sourceGate 判断任务与数据源当前能不能计算。运行时由本地数据层（*localdata.Data）实现。
+type sourceGate interface {
+	// Blocked 返回数据源不能计算的原因：零数据标的、窗口内存超过预算、变更日志断档。
+	Blocked(seriesstore.Source) error
+	// LookbackError 返回任务里因子回看超过数据源回看数量 N 的错误。
+	LookbackError(domain.EngineTask) error
 }
 
 // failsBeyondWindow 报告检查结果里除“本地窗口”“自定义算子模块”外还有没有不通过的项。这两项可能只是暂时不通过：
@@ -336,7 +337,7 @@ func (r *Runtime) checkTask(ctx context.Context, taskID string) []domain.TaskChe
 	if ready {
 		checks = append(checks, r.coverageCheck(ctx, src))
 	}
-	checks = append(checks, r.blockedCheck(src, taskID))
+	checks = append(checks, r.blockedCheck(set, src))
 	if check, ok := r.modulesCheck(set); ok {
 		checks = append(checks, check)
 	}
@@ -358,9 +359,10 @@ func gapMessage(count int, first localdata.LongGap) string {
 	return fmt.Sprintf("%d 个标的的窗口里有长缺口（例如 %s 连续填充 %d 根、约 %s），填充值仍参与计算", count, first.Subject, first.Rows, first.Duration.Round(time.Minute))
 }
 
-// blockedCheck 把数据源当前不能计算的原因翻成检查项：零数据标的要导入或移除，因子回看超过 N 要调 N，变更日志断档要对账。
-func (r *Runtime) blockedCheck(src seriesstore.Source, taskID string) domain.TaskCheck {
-	err := r.sourceError(src)
+// blockedCheck 把任务当前不能计算的原因翻成检查项：零数据标的要导入或移除，因子回看超过 N 要调 N，变更日志断档要对账。
+func (r *Runtime) blockedCheck(set domain.EngineTask, src seriesstore.Source) domain.TaskCheck {
+	taskID := set.Set.TaskID
+	err := r.taskError(set)
 	if err == nil {
 		return domain.TaskCheck{Name: "变更同步", Status: domain.TaskCheckPass}
 	}

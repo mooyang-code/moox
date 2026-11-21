@@ -98,7 +98,7 @@ type FactorTaskMember struct {
 	UpdatedAt time.Time          `json:"updated_at" gorm:"column:c_mtime"`
 }
 
-// MemberParamState 是可变成员最近一次被接受的提交。Params 是各标的的参数（按标的合并后的结果）；
+// MemberParamState 是可变成员最近一次被接受的提交。Params 是各标的的参数；
 // LastSubmittedPeriod 是目标期（Unix 秒），0 表示从未提交过（Params 为空、LastSubmittedAt 为零值）。
 type MemberParamState struct {
 	MemberKey           string

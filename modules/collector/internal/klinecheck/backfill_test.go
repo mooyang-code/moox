@@ -348,10 +348,16 @@ func TestBackfillTreatsASingleBarMissingAtTheSourceAsDoneAndDoesNotResubmitIt(t 
 	backfiller, invoker, _, base := newBackfillFixture(t)
 	ctx := context.Background()
 	invoker.noWrite = true
-	// 单根缺口（ETH 第 10 分钟）：函数成功而仍然缺失，说明行情源没有这根 K 线。
+	// 单根缺口（ETH 第 10 分钟）：函数成功而仍然缺失，可能是上游晚出数；第一次只记下缺的区间退回重跑，不写缺失记录。
 	request := JobRequest{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}
 	jobID, _, err := backfiller.Submit(ctx, request, "manual")
 	require.NoError(t, err)
+	step(t, backfiller, 1)
+	first, err := backfiller.Check(ctx, Request{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)})
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Missing, "第一次复查仍缺时只退回重跑")
+	require.Zero(t, first.Absent)
+	// 连续两次缺的一样，才说明行情源没有这根 K 线。
 	step(t, backfiller, 2)
 	status, err := backfiller.Status(ctx, jobID)
 	require.NoError(t, err)
@@ -453,8 +459,8 @@ func TestBackfillTreatsSourceEmptyFailureOfASingleBarAsAbsent(t *testing.T) {
 	request := JobRequest{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}
 	jobID, _, err := backfiller.Submit(ctx, request, "manual")
 	require.NoError(t, err)
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
-	backfiller.Wait()
+	// 两次执行缺的一样才记缺失，第三次调度结算作业。
+	step(t, backfiller, 2)
 	require.NoError(t, backfiller.Tick(ctx, "crypto"))
 	status, err := backfiller.Status(ctx, jobID)
 	require.NoError(t, err)

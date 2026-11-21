@@ -34,11 +34,10 @@ type ParamSubmitOutcome struct {
 // SubmitMemberParams 在一个事务里处理一次提交（每个成员一份）。对每个成员：
 //  1. 目标期不能倒退：小于该成员最近一次被接受的目标期则拒绝；
 //  2. 同一目标期下，同一个 requestID 重复提交按幂等成功，不同 requestID 拒绝；
-//  3. 按标的合并（domain.MergeSnapshots）后，交给 check 校验合并结果；通过就写入 t_factor_member_params。
+//  3. 本次提交是完整快照（调用方已校验），整份替换上一期写入 t_factor_member_params：没带覆盖的标的用默认值，与现算回放一致。
 //
 // 提交不碰成员行，也就不改变目录指纹。成员不存在、或不是可变成员时该成员被拒绝，不影响其他成员。
-func (s *Store) SubmitMemberParams(ctx context.Context, taskID string, period int64, requestID string, submissions []ParamSubmission,
-	check func(memberKey string, merged domain.ParamSnapshot) error) ([]ParamSubmitOutcome, error) {
+func (s *Store) SubmitMemberParams(ctx context.Context, taskID string, period int64, requestID string, submissions []ParamSubmission) ([]ParamSubmitOutcome, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
@@ -50,7 +49,7 @@ func (s *Store) SubmitMemberParams(ctx context.Context, taskID string, period in
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		outcomes = outcomes[:0]
 		for _, submission := range submissions {
-			outcome, err := submitOne(tx, taskID, period, requestID, submission, check)
+			outcome, err := submitOne(tx, taskID, period, requestID, submission)
 			if err != nil {
 				return err
 			}
@@ -64,8 +63,7 @@ func (s *Store) SubmitMemberParams(ctx context.Context, taskID string, period in
 	return outcomes, nil
 }
 
-func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submission ParamSubmission,
-	check func(string, domain.ParamSnapshot) error) (ParamSubmitOutcome, error) {
+func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submission ParamSubmission) (ParamSubmitOutcome, error) {
 	outcome := ParamSubmitOutcome{MemberKey: submission.MemberKey}
 	reject := func(format string, args ...any) (ParamSubmitOutcome, error) {
 		outcome.Result, outcome.Reason = SubmitRejected, fmt.Sprintf(format, args...)
@@ -97,17 +95,7 @@ func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submi
 	case period == row.Period:
 		return reject("目标期 %s 已被另一次提交（request_id %s）接受", formatPeriod(period), row.RequestID)
 	}
-	previous, err := domain.ParseParamSnapshot(row.Params)
-	if err != nil {
-		return outcome, err
-	}
-	merged := domain.MergeSnapshots(previous, submission.Snapshot)
-	if check != nil {
-		if err := check(submission.MemberKey, merged); err != nil {
-			return reject("%v", err)
-		}
-	}
-	encoded, err := json.Marshal(merged)
+	encoded, err := json.Marshal(submission.Snapshot)
 	if err != nil {
 		return outcome, err
 	}

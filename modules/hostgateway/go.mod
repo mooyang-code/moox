@@ -86,7 +86,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f // indirect
-	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
+	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1
 )
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth

@@ -474,3 +474,42 @@ func TestFillOnlySingleSeriesUnchanged(t *testing.T) {
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
 	require.Equal(t, pipeline.ItemFailed, fillItems(t, fx, "mean", 9, 10, nil)[9])
 }
+
+// 单 tag 数据集补算上市前的区间：SOL 第 12 分钟才有本地数据，补算 [5,10) 时它还没上市，不按缺数处理；
+// 否则严格截面因子整段跳过，BTC、ETH 已有的排名被写成 NULL（自动失效重算同样走这里）。
+func TestSingleTagRecalcBeforeListingKeepsExistingRanks(t *testing.T) {
+	fx := newFixture(t, strictRank())
+	fx.st.put("BTC", 100, minutesBetween(0, 9)...)
+	fx.st.put("ETH", 110, minutesBetween(0, 9)...)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "ETH"}))
+	for _, s := range []string{"BTC", "ETH"} {
+		fx.putLocalEarly(t, s, plainTag, minutesBetween(0, 9)...)
+	}
+	fx.putLocalEarly(t, "SOL", plainTag, 12, 13, 14)
+	for _, m := range []int{7, 8, 9} {
+		for i, s := range []string{"BTC", "ETH"} {
+			fx.st.mu.Lock()
+			fx.st.results[s+at(m).Format(time.RFC3339)+plainTag] = storageio.ResultRow{SubjectID: s, DataTime: at(m), SeriesTag: plainTag, Fields: map[string]any{"rank": 0.25 + 0.5*float64(i)}}
+			fx.st.mu.Unlock()
+		}
+	}
+	subjects := []string{"BTC", "ETH", "SOL"}
+	series, derived, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: subjects, TargetStart: at(5), TargetEnd: at(10)})
+	require.NoError(t, err)
+	require.False(t, derived)
+	require.Equal(t, plainSeries("BTC", "ETH"), series, "区间结束时还没上市的 SOL 不在期望序列里")
+
+	executor := recalcexec.NewExecutor(fx.runner)
+	source := func(context.Context) (recalcexec.Selection, error) {
+		return recalcexec.Selection{Set: fx.set.Set, Members: fx.set.Members, Subjects: subjects, Columns: []string{"close", "volume"}}, nil
+	}
+	require.NoError(t, executor.Run(context.Background(), recalcexec.Window{Start: at(5), End: at(10)}, source,
+		func(context.Context, time.Time, pipeline.Outcome) (bool, error) { return false, nil }))
+	for _, m := range []int{7, 8, 9} {
+		for _, s := range []string{"BTC", "ETH"} {
+			r, ok := fx.rawResult(s, plainTag, m)
+			require.True(t, ok, "%s 第 %d 分钟", s, m)
+			require.NotNil(t, r.rank, "%s 第 %d 分钟的排名不能被写成 NULL", s, m)
+		}
+	}
+}

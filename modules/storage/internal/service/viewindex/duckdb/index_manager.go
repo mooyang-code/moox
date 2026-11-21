@@ -1485,6 +1485,9 @@ func dbToTypedValue(value any, valueType pb.FieldValueType) (*pb.TypedValue, err
 		return &pb.TypedValue{Value: &pb.TypedValue_TimeValue{TimeValue: value}}, nil
 	case pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:
 		return &pb.TypedValue{Value: &pb.TypedValue_BytesValue{BytesValue: append([]byte(nil), value.([]byte)...)}}, nil
+	case pb.FieldValueType_FIELD_VALUE_TYPE_JSON:
+		// 查询时 JSON 列已 CAST 成文本（见 Query）；按 JSON 返回，调用方用 GetJsonValue 读（策略的 __params 就是这样读的）。
+		return &pb.TypedValue{Value: &pb.TypedValue_JsonValue{JsonValue: valueString(value)}}, nil
 	default:
 		return &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: valueString(value)}}, nil
 	}

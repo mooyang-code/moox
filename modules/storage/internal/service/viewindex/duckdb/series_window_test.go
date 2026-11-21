@@ -33,7 +33,7 @@ func TestQueryJSONPreservesTextAndDistinguishesJSONNull(t *testing.T) {
 			if row.Key.GetTimeSeries().SubjectId == "BTC" {
 				want = payload
 			}
-			require.Equal(t, want, row.Fields[0].Value.GetStringValue())
+			require.Equal(t, want, row.Fields[0].Value.GetJsonValue())
 		}
 	}
 }

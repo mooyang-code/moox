@@ -57,29 +57,6 @@ func TestValidateSnapshotRejects(t *testing.T) {
 	}
 }
 
-// 按标的合并：默认值取本次的；本次带了的标的覆盖旧值，没带的标的保留旧值。
-func TestMergeSnapshots(t *testing.T) {
-	previous := ParamSnapshot{
-		"n": {Default: 20, Overrides: map[string]float64{"BTC": 10, "ETH": 15}},
-		"k": {Default: 1},
-	}
-	submitted := ParamSnapshot{
-		"n": {Default: 30, Overrides: map[string]float64{"BTC": 12, "SOL": 8}},
-		"k": {Default: 2},
-	}
-	merged := MergeSnapshots(previous, submitted)
-	require.Equal(t, ParamSnapshot{
-		"n": {Default: 30, Overrides: map[string]float64{"BTC": 12, "ETH": 15, "SOL": 8}},
-		"k": {Default: 2},
-	}, merged)
-	// 不改动入参。
-	require.Equal(t, 10.0, previous["n"].Overrides["BTC"])
-	require.Len(t, submitted["n"].Overrides, 2)
-	// 旧快照里本次没有的参数被丢弃；从空开始合并就是本次提交本身。
-	require.Equal(t, submitted.Canonical(), MergeSnapshots(nil, submitted).Canonical())
-	require.NotContains(t, MergeSnapshots(ParamSnapshot{"gone": {Default: 1}}, submitted), "gone")
-}
-
 func TestCheckDefinitionCompatible(t *testing.T) {
 	spec := func(span, k string) string {
 		return "params:\n  span: " + span + "\n  k: " + k + "\noutput: ts_mean(close, span) * k\n"

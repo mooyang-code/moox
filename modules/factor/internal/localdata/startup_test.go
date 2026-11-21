@@ -6,6 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/stretchr/testify/require"
 )
@@ -112,4 +116,33 @@ func TestReaddedSubjectIsResynced(t *testing.T) {
 	got, err := fx.data.Store().ReadRange(context.Background(), startupSrc, []string{"B"}, at(5), at(6))
 	require.NoError(t, err)
 	require.Equal(t, 905.0, got["B"].ValueAt(got["B"].FieldIndex("close"), 0).F, "重新加入时补上了被移出期间的修正")
+}
+
+// 新任务回看超限只拒绝它自己：同一数据源上已就绪的任务照常计算，不被打回预热；撤掉坏任务后也不用重启引擎。
+func TestLookbackBeyondNDoesNotStallOtherTasksOnTheSource(t *testing.T) {
+	fx := newFixture(t, mean3())
+	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	fx.data = New(Config{Store: store, Storage: fx.st, Admit: memadmit.New(0), Workers: 2, BatchSubjects: 2,
+		Now: func() time.Time { return fx.now }, Lookback: func(seriesstore.Source) int { return 5 }})
+	fx.runner = pipeline.NewRunner(fx.st, fx.data, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
+	fx.st.put("BTC", 100, minutesBetween(0, 12)...)
+	fx.now = at(10)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	require.Equal(t, "complete", fx.live(t, at(9), []string{"BTC"}).Status)
+
+	bad := domain.EngineTask{Set: fx.set.Set, Members: domain.AsMembers(domain.MustDefinition("long", "long", "output: ts_mean(close, 10)\n"))}
+	bad.Set.TaskID, bad.Set.ResultDatasetID = "set_bad", "factor_bad"
+	var over *LookbackExceededError
+	require.ErrorAs(t, fx.data.Prepare(context.Background(), bad, []string{"BTC"}), &over)
+	require.ErrorAs(t, fx.data.LookbackError(bad), &over)
+	require.NoError(t, fx.data.LookbackError(fx.set))
+	require.NoError(t, fx.data.Blocked(sourceOf(fx.set.Set)), "回看超限不记在数据源上")
+	for _, m := range []int{10, 11} {
+		fx.now = at(m + 1)
+		o := fx.live(t, at(m), []string{"BTC"})
+		require.Equal(t, "complete", o.Status, "第 %d 分钟", m)
+		require.Zero(t, o.Warming, "第 %d 分钟", m)
+	}
 }

@@ -26,12 +26,14 @@ const (
 	legacyMaxIdle       = 8
 
 	// clientIdleTimeout 是客户端回收空闲连接的时间，必须大于最长的调用间隔（采集函数每分钟一次）。
-	// 网关服务端不回收空闲连接，连接是否还活着靠 TCP keepalive 和调用时的重试兜底。
+	// 连接是否还活着靠 TCP keepalive 和调用时的重试兜底。
 	clientIdleTimeout = 8 * time.Minute
 	// clientMaxLifetime 定期轮换老连接，避免长期持有被中间设备悄悄丢弃的连接。
+	// 网关服务端 40 分钟没有收到帧才关闭连接（hostgateway listener 的 serverIdleTimeout），这个值必须比它小：
+	// 预热会清零空闲计时，所以以寿命为准。
 	clientMaxLifetime = 30 * time.Minute
 
-	// 预热：每 warmInterval 检查一次，只在某个地址的打开连接数低于 min_idle 时才补，不触碰已有连接（不重置它们的空闲计时）；
+	// 预热：每 warmInterval 检查一次，只在某个地址的打开连接数低于 min_idle 时才补；补的时候会把空闲连接取出再放回，它们的空闲计时随之清零（服务端空闲超时因此以连接寿命为准）；
 	// 超过 warmWatchLimit 没有被请求使用的地址不再预热；整分钟的前后几秒是业务突发窗口，避开它。
 	warmInterval     = 10 * time.Second
 	warmDialTimeout  = 3 * time.Second

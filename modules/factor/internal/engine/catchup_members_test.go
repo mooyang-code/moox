@@ -44,7 +44,7 @@ func TestPendingModuleKeepsTaskInCatchup(t *testing.T) {
 	require.Empty(t, r.catchupMembers(), "拉取失败要人工处理，才排除出追赶")
 }
 
-// 数据源不能计算（零数据标的、回看超过窗口、窗口内存超过预算、变更日志断档）的任务不参与追赶；
+// 数据源不能计算（零数据标的、窗口内存超过预算、变更日志断档）的任务不参与追赶；
 // 排除与任务检查用的是同一个判断（sourceError）：检查项给出对应的名字。
 func TestBlockedSourceExcludesTaskFromCatchup(t *testing.T) {
 	for _, tc := range []struct {
@@ -52,7 +52,6 @@ func TestBlockedSourceExcludesTaskFromCatchup(t *testing.T) {
 		err         error
 	}{
 		{"零数据标的", "本地数据", &localdata.NoDataError{Subjects: []string{"GHOST"}}},
-		{"回看超过窗口", "回看数量", &localdata.LookbackExceededError{}},
 		{"窗口内存超过预算", "变更同步", errors.New("窗口内存估算超过 window.max_memory")},
 		{"变更日志断档", "变更同步", localdata.ErrChangeGap},
 	} {
@@ -79,3 +78,31 @@ func TestBlockedSourceExcludesTaskFromCatchup(t *testing.T) {
 type sourcesFunc func(seriesstore.Source) error
 
 func (f sourcesFunc) Blocked(src seriesstore.Source) error { return f(src) }
+
+func (f sourcesFunc) LookbackError(domain.EngineTask) error { return nil }
+
+// 回看超过 N 只排除这个任务：同一数据源上的其他任务照常参与追赶、检查照常通过。
+func TestLookbackBeyondNExcludesOnlyThatTask(t *testing.T) {
+	r, _ := newLifecycleRuntime(t, engineTask("ftask_a", "dataset_a", true, "bias"), engineTask("ftask_b", "dataset_a", true, "bias"))
+	r.sources = taskLookbackGate{bad: "ftask_b"}
+	r.refreshTaskChecks(context.Background())
+	bad, _ := r.checks.get("ftask_b")
+	require.Equal(t, domain.TaskCheckFail, checkStatus(bad, "回看数量"))
+	good, _ := r.checks.get("ftask_a")
+	require.Equal(t, domain.TaskCheckPass, checkStatus(good, "变更同步"))
+	members := r.catchupMembers()
+	require.Len(t, members, 1)
+	require.Equal(t, "ftask_a", members[0].Set.TaskID)
+}
+
+// taskLookbackGate 是测试里替代本地数据层的判断：只有 bad 这个任务回看超限。
+type taskLookbackGate struct{ bad string }
+
+func (taskLookbackGate) Blocked(seriesstore.Source) error { return nil }
+
+func (g taskLookbackGate) LookbackError(set domain.EngineTask) error {
+	if set.Set.TaskID == g.bad {
+		return &localdata.LookbackExceededError{N: 5, Factors: []string{"bias"}, Max: 10}
+	}
+	return nil
+}
