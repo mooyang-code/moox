@@ -108,10 +108,15 @@ func TRPC(opened net.Listener, serviceName string, gates ...*healthz.DrainGate) 
 		server.WithMaxCloseWaitTime(DrainTimeout),
 		server.WithTransport(transport.NewServerTransport()),
 		server.WithListener(opened), server.WithAddress(opened.Addr().String()),
-		server.WithNetwork("tcp"), server.WithProtocol("trpc"),
+		server.WithNetwork("tcp"), server.WithProtocol("trpc"), withGrowingFramer(),
+		// 代码里建服务时 tRPC 没有默认空闲超时：不设的话，不再发请求的连接永远占着连接配额。
+		// 必须大于网关客户端回收空闲连接的时间（gatewayclient.clientIdleTimeout，8 分钟），否则客户端会取到已被关掉的连接。
+		server.WithIdleTimeout(serverIdleTimeout),
 		server.WithServiceName(serviceName), server.WithCurrentSerializationType(codec.SerializationTypeNoop),
 	)...)
 }
+
+const serverIdleTimeout = 10 * time.Minute
 
 // RelayHandler 接管已完成握手的反向连接；只有 control 网关提供。
 type RelayHandler interface {
