@@ -73,8 +73,8 @@ var urlPattern = regexp.MustCompile(`"?https?://[^\s"]+"?:?`)
 // StableReason 去掉错误里的地址和时间戳：错误原文可能带签名参数，每次都不同，会让指标序列不断增长。
 func StableReason(reason string) string {
 	reason = urlPattern.ReplaceAllString(reason, "")
-	if runes := []rune(reason); len(runes) > 60 {
-		reason = string(runes[:60])
+	if runes := []rune(reason); len(runes) > 96 {
+		reason = string(runes[:96])
 	}
 	return reason
 }

@@ -148,5 +148,45 @@ func TestMarketIsHKEXWithFilledBook(t *testing.T) {
 	market := NewMarket(nil, nil)
 	require.Equal(t, exchange.ExchangeHKEX, market.Exchange)
 	require.True(t, market.FillEmptyBook)
+	require.True(t, market.QuoteTimeIsLastTrade)
 	require.Equal(t, exchange.ExchangeHKEX, stockfeed.NewAdapter(market).Exchange())
+}
+
+// 腾讯 r_hk 第 30 字段是最后一笔成交的时间（2026-11-18 盘中实测：00027 相隔 22 秒两次都是 09:42:43）。
+// 报价时间按取到快照的时刻算：成交稀疏的标的盘中不判过期，午休、收市后也照样新鲜；停牌照旧。
+func TestQuoteTimeIsFetchTimeNotLastTrade(t *testing.T) {
+	session, err := NewSession()
+	require.NoError(t, err)
+	exchanges := catalog{exchange.ExchangeHKEX: {Exchange: exchange.ExchangeHKEX, Session: session}}
+	var now time.Time
+	quotes := func(_ context.Context, ids []string) (map[string]cnstock.Quote, error) {
+		result := map[string]cnstock.Quote{}
+		for _, id := range ids {
+			switch id {
+			case "00027.XHKG":
+				// 最后一笔成交在 5 分钟前，盘口字段等于现价。
+				result[id] = cnstock.Quote{InstrumentID: id, Last: "33.660", PrevClose: "33.440", Bid: "33.660", Ask: "33.660",
+					Time: now.Add(-5 * time.Minute)}
+			case "00204.XHKG":
+				result[id] = cnstock.Quote{InstrumentID: id, Last: "0.320", PrevClose: "0.320", Time: now.Add(-48 * time.Hour), Halted: true}
+			}
+		}
+		return result, nil
+	}
+	market := NewMarketFrom(quotes, nil, nil)
+	market.Now = func() time.Time { return now }
+	thin := exchange.NewSymbolKey(exchange.MarketTypeStock, "00027.XHKG")
+	halted := exchange.NewSymbolKey(exchange.MarketTypeStock, "00204.XHKG")
+	for _, at := range []string{"2026-11-18 09:47:43", "2026-11-18 12:30:00", "2026-11-18 13:00:30", "2026-11-18 16:30:00"} {
+		now = hkt(at)
+		quote, err := market.GetQuote(context.Background(), thin)
+		require.NoError(t, err)
+		require.Equal(t, now, quote.SourceTime, at)
+		require.True(t, execution.QuoteFresh(exchanges, "HKEX", quote.SourceTime, now, 10*time.Second), at)
+		require.Equal(t, "33.66", quote.Last.String())
+		stopped, err := market.GetQuote(context.Background(), halted)
+		require.NoError(t, err)
+		require.True(t, stopped.Halted)
+		require.Equal(t, now, stopped.SourceTime, at)
+	}
 }
