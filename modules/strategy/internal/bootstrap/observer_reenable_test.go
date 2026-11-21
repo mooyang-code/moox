@@ -85,3 +85,69 @@ func TestReenabledStockInstanceAdvancesWatermarkToSessionStart(t *testing.T) {
 		t.Fatalf("本次会话已处理过周期，不应再记宽限：%v", got)
 	}
 }
+
+// 同一进程里停用、重新启用，启用时模块正在暂停（Monitor 不收暂停中的运行）：宽限留到放行后的刷新补上，不会丢。
+func TestReenableGraceRetriedAfterModuleResumes(t *testing.T) {
+	repo := openStore(t)
+	ctx := context.Background()
+	hkJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"5m","calendar":"hk_stock","columns":{},"view_columns":["close"]}`
+	seedEnabled(t, repo, "i1", nil, hkJSON)
+	hongKong := time.FixedZone("HKT", 8*3600)
+	wednesday := time.Date(2026, 11, 18, 10, 0, 0, 0, hongKong)
+	record, _ := json.Marshal(store.InputRecord{Views: map[string]store.ViewInput{"view_a": {}}, Bar: "5m", Calendar: "hk_stock", BarStart: wednesday.Add(-5 * time.Minute)})
+	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: "i1-session", BarEndTime: wednesday, ValidUntil: wednesday.Add(time.Hour), Status: store.StatusOK, DSLHash: "sha256:demo",
+		InputJSON: record, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: wednesday.Add(5 * time.Second)}
+	if _, _, err := repo.CommitResult(ctx, store.CommitRequest{Result: result, Now: wednesday.Add(5 * time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saturday := time.Date(2026, 11, 21, 9, 27, 0, 0, hongKong)
+	observer.now = func() time.Time { return saturday.Add(3 * time.Minute) }
+	halted := false
+	observer.SetHalted(func() bool { return halted })
+	refresh := func() {
+		t.Helper()
+		if err := observer.refresh(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	watermark := func() float64 {
+		t.Helper()
+		families, err := registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() == "moox_strategy_dataset_output_watermark_timestamp_seconds" && len(family.GetMetric()) > 0 {
+				return family.GetMetric()[0].GetGauge().GetValue()
+			}
+		}
+		return 0
+	}
+	refresh()
+	if err := repo.DisableInstance(ctx, "i1", "i1-session", wednesday.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	refresh()
+	instance, err := repo.GetInstance(ctx, "i1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.EnableInstance(ctx, store.Session{SessionID: "i1-session-2", InstanceID: "i1", DSLHash: "sha256:demo", ResolvedJSON: string(instance.ResolvedJSON), CreatedAt: saturday}, "name: demo"); err != nil {
+		t.Fatal(err)
+	}
+	halted = true
+	refresh()
+	if got := watermark(); got != 0 {
+		t.Fatalf("暂停中不应记宽限：%v", got)
+	}
+	halted = false
+	refresh()
+	if got, want := int64(watermark()), time.Date(2026, 11, 20, 15, 55, 0, 0, hongKong).Unix(); got != want {
+		t.Fatalf("放行后应补上宽限、输出水位推到周五 15:55：%d，期望 %d", got, want)
+	}
+}
