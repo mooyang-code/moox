@@ -72,8 +72,9 @@ func encodeWith(use Use, v *version, src []byte) []byte {
 func windowLimit(limit int) int { return max(limit, 1024) }
 
 // inflightBytes 是全进程同时在解压的输出缓冲总量上限，所有解码器共用：放得下两个最大帧。
-// 解压发生在验签之前（tRPC 先解压请求体再进过滤器），几十字节的合法帧就能解出几十 MB，
-// 不加总量限制时，并发的未认证请求能让网关同时占住许多份最大缓冲。
+// 解压发生在验签之前（tRPC 先解压请求体再进过滤器），约 2KB 的合法帧就能解出 64MB，
+// 不加总量限制时，并发的未认证请求能让网关同时解压许多份最大缓冲。
+// 额度只管解压这一段：解完即还，网关拿解出的正文去验签的那段时间不计额度（已知差别，见 docs/模块/主机网关.md）。
 const inflightBytes = 2 * (MaxFrameBytes + maxBlock + 256)
 
 var inflight = newBudget(inflightBytes)
@@ -175,9 +176,7 @@ func (d *Decoder) Decode(src []byte) ([]byte, error) {
 	// 一个块最多输出 128KB，所以输出缓冲永远不会越过这个容量、也就不会触发 append 扩容（扩容会一次多分配约 25%，
 	// 并在新旧缓冲同时存在时翻倍占用）；压缩块里的序列执行另受剩余容量限制。声明长度为 0 的帧也有非零容量。
 	size := int(header.FrameContentSize) + maxBlock + 256
-	held := d.budget.acquire(size)
-	out, err := d.dec.DecodeAll(src, make([]byte, 0, size))
-	d.budget.release(held)
+	out, err := d.decodeWithin(src, size)
 	if err != nil {
 		reason := "corrupt"
 		switch {
@@ -195,6 +194,12 @@ func (d *Decoder) Decode(src []byte) ([]byte, error) {
 	}
 	recordDecode(d.use, dictName, len(src), len(out))
 	return out, nil
+}
+
+// decodeWithin 取 size 字节额度后分配缓冲并解压，返回时归还额度。
+func (d *Decoder) decodeWithin(src []byte, size int) ([]byte, error) {
+	defer d.budget.release(d.budget.acquire(size))
+	return d.dec.DecodeAll(src, make([]byte, 0, size))
 }
 
 func (d *Decoder) fail(reason string, err error) error {
