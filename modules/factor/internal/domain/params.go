@@ -164,26 +164,6 @@ func ValidateReferenceSubjects(member MemberDef, inScope func(subject string) bo
 // 所以总是为空；以后增加收参数的截面算子时在这里识别。
 func crossSectionParams(MemberDef) []string { return nil }
 
-// MergeSnapshots 按标的合并两次提交：默认值取本次提交的；按标的的覆盖里，本次带了的标的覆盖旧值，没带的标的保留旧值。
-// 两份快照的参数集合应相同（提交前已校验）；旧快照里本次没有的参数被丢弃。
-func MergeSnapshots(previous, submitted ParamSnapshot) ParamSnapshot {
-	merged := make(ParamSnapshot, len(submitted))
-	for name, value := range submitted {
-		overrides := make(map[string]float64, len(value.Overrides)+len(previous[name].Overrides))
-		for subject, old := range previous[name].Overrides {
-			overrides[subject] = old
-		}
-		for subject, override := range value.Overrides {
-			overrides[subject] = override
-		}
-		if len(overrides) == 0 {
-			overrides = nil
-		}
-		merged[name] = ParamValue{Default: value.Default, Overrides: overrides}
-	}
-	return merged
-}
-
 // finite 报告取值是否为有限数。
 func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 

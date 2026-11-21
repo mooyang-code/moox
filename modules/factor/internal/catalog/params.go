@@ -35,7 +35,7 @@ type MemberSubmission struct {
 // SubmitParams 接受关联实例 writer 为任务的可变成员提交的参数（设计 6.2）。period 是参数从哪一期起生效的目标期。
 // 整体先判定：写入方必须是任务关联的实例；目标期必须在网格上。之后每个成员独立判定并返回各自的结果：
 // 成员必须是已启用的可变成员；快照必须合法（声明的参数、范围、整数、联合约束，覆盖的标的在源数据集里）；
-// 目标期不能倒退；同期同 request_id 幂等，同期不同 request_id 拒绝；按标的合并后的结果再校验一次。
+// 目标期不能倒退；同期同 request_id 幂等，同期不同 request_id 拒绝；接受的快照整份替换上一期。
 func (s *Service) SubmitParams(ctx context.Context, writer, taskID string, period time.Time, requestID string,
 	submissions []MemberSubmission) ([]store.ParamSubmitOutcome, error) {
 	writer, taskID, requestID = strings.TrimSpace(writer), strings.TrimSpace(taskID), strings.TrimSpace(requestID)
@@ -97,11 +97,7 @@ func (s *Service) SubmitParams(ctx context.Context, writer, taskID string, perio
 		accepted = append(accepted, store.ParamSubmission{MemberKey: submission.MemberKey, Snapshot: submission.Snapshot})
 	}
 	if len(accepted) > 0 {
-		stored, err := s.db.SubmitMemberParams(ctx, taskID, period.UTC().Unix(), requestID, accepted,
-			func(memberKey string, merged domain.ParamSnapshot) error {
-				// 合并后保留下来的旧覆盖和本次的默认值可能组合出不合法的取值，所以对合并结果再校验一次。
-				return domain.ValidateSnapshot(byKey[memberKey].Def(), merged, inScope)
-			})
+		stored, err := s.db.SubmitMemberParams(ctx, taskID, period.UTC().Unix(), requestID, accepted)
 		if err != nil {
 			return nil, err
 		}

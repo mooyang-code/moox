@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -29,7 +28,7 @@ func snapshot(defaultSpan float64, overrides map[string]float64) domain.ParamSna
 func submit(t *testing.T, s *Store, period int64, requestID string, key string, snap domain.ParamSnapshot) ParamSubmitOutcome {
 	t.Helper()
 	outcomes, err := s.SubmitMemberParams(context.Background(), "task_prices", period, requestID,
-		[]ParamSubmission{{MemberKey: key, Snapshot: snap}}, nil)
+		[]ParamSubmission{{MemberKey: key, Snapshot: snap}})
 	require.NoError(t, err)
 	require.Len(t, outcomes, 1)
 	return outcomes[0]
@@ -89,8 +88,8 @@ func TestSubmitMemberParamsPeriodAndIdempotency(t *testing.T) {
 	require.Equal(t, 50.0, states[0].Params.Value("span", "BTC"))
 }
 
-// 按标的合并：默认值取本次提交的；本次带了的标的覆盖旧值，没带的标的保留旧值。
-func TestSubmitMemberParamsMergesBySubject(t *testing.T) {
+// 整份替换：这次没带覆盖的标的回到默认值，不保留上一期的覆盖。
+func TestSubmitMemberParamsReplacesWholeSnapshot(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
@@ -103,37 +102,9 @@ func TestSubmitMemberParamsMergesBySubject(t *testing.T) {
 	require.NoError(t, err)
 	got := states[0].Params
 	require.Equal(t, 12.0, got.Value("span", "BTC"))
-	require.Equal(t, 15.0, got.Value("span", "ETH"))
+	require.Equal(t, 40.0, got.Value("span", "ETH"))
 	require.Equal(t, 8.0, got.Value("span", "SOL"))
 	require.Equal(t, 40.0, got.Value("span", "XRP"))
-}
-
-// 合并结果由调用方校验：校验失败的成员被拒绝，其他成员照常接受，被拒绝的成员状态不变。
-func TestSubmitMemberParamsChecksMergedSnapshotPerMember(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
-	a := addVarMember(t, s, "task_prices", "ema")
-	b := addVarMember(t, s, "task_prices", "wma")
-
-	outcomes, err := s.SubmitMemberParams(ctx, "task_prices", 1000, "req-1", []ParamSubmission{
-		{MemberKey: a, Snapshot: snapshot(30, nil)},
-		{MemberKey: b, Snapshot: snapshot(99, nil)},
-	}, func(memberKey string, merged domain.ParamSnapshot) error {
-		if merged.Value("span", "") > 50 {
-			return errors.New("span 超过上限")
-		}
-		return nil
-	})
-	require.NoError(t, err)
-	require.Equal(t, []ParamSubmitOutcome{
-		{MemberKey: a, Result: SubmitAccepted},
-		{MemberKey: b, Result: SubmitRejected, Reason: "span 超过上限"},
-	}, outcomes)
-	states, err := s.ListMemberParamStates(ctx, "task_prices")
-	require.NoError(t, err)
-	require.Equal(t, int64(1000), states[0].LastSubmittedPeriod)
-	require.Equal(t, int64(0), states[1].LastSubmittedPeriod)
 }
 
 // 提交只写参数表，不碰成员行的 c_mtime，所以不改变目录指纹；改成员行（状态）才更新 c_mtime。

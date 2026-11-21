@@ -5412,7 +5412,7 @@ func (x *MemberParams) GetParams() map[string]*ParamValue {
 
 // SubmitFactorParams 由关联的策略实例为可变成员提交参数。period_time 是参数从哪一期起生效的目标期（Unix 秒）：
 // 目标期不能倒退；同一目标期下同一个 request_id 重复提交按幂等成功，不同 request_id 拒绝。
-// 按标的合并：默认值取本次提交的，本次带了的标的覆盖旧值，没带的标的保留旧值。
+// 每次提交都是完整快照，整份替换上一期：这次没带覆盖的标的用默认值。
 type SubmitFactorParamsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -5610,7 +5610,7 @@ func (x *SubmitFactorParamsRsp) GetResults() []*MemberSubmitResult {
 	return nil
 }
 
-// MemberParamState 是可变成员最近一次被接受的提交（按标的合并后的结果）。
+// MemberParamState 是可变成员最近一次被接受的提交。
 type MemberParamState struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
