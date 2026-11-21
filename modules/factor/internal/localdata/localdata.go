@@ -301,6 +301,11 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 		return fmt.Errorf("源数据集 %s/%s 没有可用的字段", src.SpaceID, src.DatasetID)
 	}
 	setLookback := d.lookbackFor(src, set.Members)
+	// 回看超限只拒绝这个任务：在登记之前检查，并撤掉它原有的登记（定义改长的情况），不动数据源共用的就绪状态。
+	if err := d.LookbackError(set); err != nil {
+		d.ReleaseTask(set.Set)
+		return err
+	}
 	numeric := serieswindow.NumericFields(fields)
 
 	d.mu.Lock()
@@ -347,12 +352,6 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	st.subjects = append([]string(nil), subjects...)
 	st.covered = nil
 
-	// 因子的回看都不能超过回看数量 N（设计 8.1）。
-	if over := factorsOverLookback(set.Members, lookback); over != nil {
-		st.ready.Store(false)
-		st.blocked = over
-		return over
-	}
 	// 数据集保留期决定 N 能不能从 Storage 补齐，也决定新上市豁免是否成立。
 	info, err := d.cfg.Storage.GetDataset(ctx, src.SpaceID, src.DatasetID)
 	if err != nil {
@@ -594,6 +593,15 @@ func factorsOverLookback(members []domain.MemberDef, n int) *LookbackExceededErr
 	return &LookbackExceededError{N: n, Factors: names, Max: most}
 }
 
+// LookbackError 报告任务里有没有因子的回看超过数据源的回看数量 N（设计 8.1）。只看这个任务：
+// 同一数据源上的其他任务照常计算，引擎按任务把它排除出追赶并给出“回看数量”检查项。
+func (d *Data) LookbackError(set domain.EngineTask) error {
+	if over := factorsOverLookback(set.Members, d.lookbackFor(sourceOf(set.Set), set.Members)); over != nil {
+		return over
+	}
+	return nil
+}
+
 // axisNow 是当前时刻在数据源轴上的排他终点：最新已收盘一根的下一期。
 func (d *Data) axisNow(src seriesstore.Source) (time.Time, error) {
 	axis, err := periodclock.AxisFor(src.SpaceID, src.Freq)
@@ -768,8 +776,10 @@ func seriesDelisted(latest, targetStart, reference time.Time, step time.Duration
 // ExpectedSeries 实现 pipeline.SeriesExpecter：没有带序列全集的补算类计划（人工补算、失效重算、读不到 marker 的待办）
 // 的期望序列；带着冻结的 universe_series 的恢复路径不走这里。两种数据集的分界是数据集属性 market_type=multi，不看某一期实际出现了几个 tag。
 //
-// 只有一个 series_tag 的数据集：期望序列是“期望标的 × 这个数据集唯一的 tag”，不做任何推测（derived 为假），
-// 缺数、失败的处理与按标的判断相同。唯一的 tag 的取法见 singleTag；本地没有数据的期望标的同样配上它，按缺数处理。
+// 只有一个 series_tag 的数据集：期望序列是“期望标的 × 这个数据集唯一的 tag”（derived 为假），缺数、失败的处理与按标的判断相同；
+// 只排除本地最早一根不早于计划区间终点的标的（区间结束时还没上市，与统一数据集的“应存在”同一口径），否则补算上市前的区间时
+// 新股被当成缺数，严格截面因子整段跳过，老标的已有的值被写成 NULL。不做下架推测。
+// 唯一的 tag 的取法见 singleTag；本地完全没有数据的期望标的同样配上它，按缺数处理。
 //
 // 统一数据集：取本地存储里这些标的“应存在”的每条序列（标的、series_tag），derived 为真。
 // 应存在 = 计划区间结束之前已有数据，并且没有下架（见 seriesDelisted）：下架判断的参照点是“数据源最新一根已经沉默多久”，
@@ -793,6 +803,13 @@ func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]series
 		}
 		out := make([]seriesset.Series, 0, len(plan.Expected))
 		for _, subject := range plan.Expected {
+			bounds, has, err := d.cfg.Store.Bounds(src, subject)
+			if err != nil {
+				return nil, false, err
+			}
+			if has && bounds.Earliest.Unix() >= plan.TargetEnd.Unix() {
+				continue
+			}
 			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: tag})
 		}
 		return out, false, nil
