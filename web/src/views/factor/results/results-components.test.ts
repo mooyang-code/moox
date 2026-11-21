@@ -173,7 +173,7 @@ describe("因子值弹窗", () => {
           key: rowKey,
           fields: [
             { field_id: "f0", value: { double_value: 1.5 } },
-            { field_id: "__params", value: { string_value: '{"m0":{"k":2,"window":20}}' } }
+            { field_id: "__params", value: { json_value: '{"m0":{"k":2,"window":20}}' } }
           ].filter(field => request.column_names.includes(field.field_id))
         }
       ]

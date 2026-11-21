@@ -67,7 +67,7 @@ func (s *Service) SubmitParams(ctx context.Context, writer, taskID string, perio
 	if err != nil {
 		return nil, err
 	}
-	// 先在存储之外挡掉成员不存在、未启用和快照本身不合法的提交，其余交给存储在事务里判定期次、幂等和合并。
+	// 先在存储之外挡掉成员不存在、未启用和快照本身不合法的提交，其余交给存储在事务里判定期次与幂等，接受的快照整份替换上一期。
 	outcomes := make(map[string]store.ParamSubmitOutcome, len(submissions))
 	var accepted []store.ParamSubmission
 	for _, submission := range submissions {

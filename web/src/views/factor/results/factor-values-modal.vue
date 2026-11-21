@@ -161,7 +161,7 @@ async function load() {
 function fieldText(value: unknown) {
   if (!value || typeof value !== "object") return "";
   const typed = value as Record<string, unknown>;
-  const raw = typed.double_value ?? typed.int_value ?? typed.string_value ?? typed.bool_value;
+  const raw = typed.double_value ?? typed.int_value ?? typed.string_value ?? typed.json_value ?? typed.bool_value;
   return raw === undefined || raw === null ? "" : String(raw);
 }
 
