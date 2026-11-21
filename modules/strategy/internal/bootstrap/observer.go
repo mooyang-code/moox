@@ -243,22 +243,28 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 	return nil
 }
 
-// graceNewInstancesLocked 给新启用、从未处理过任何周期的实例一个首期等待宽限：登记期望后 Monitor 里还没有这个数据集的运行，
+// graceNewInstancesLocked 给刚启用、本次会话还没处理过周期的实例一个首期等待宽限：登记期望后 Monitor 里还没有这个数据集的运行，
 // 会立即判为“尚未上报”并生成告警，而它的首个事件要等到下一个 bar 收线之后才到。这里以本次启用（会话创建）的时刻记一次
-// “空”运行（只刷新最近运行与最近成功时间，不推进任何水位），Monitor 的运行与成功新鲜度检查从启用时刻起算，超过容忍的间隔数
-// 仍没有首期结果才告警。起点固定在启用时刻而不是当前时间：进程重启后再次登记不会把宽限重新开始，反复重启也延后不了告警。
-// 已经处理过周期的实例（含停用后重新启用）不再给宽限，调用方持有 o.mu。
+// “空”运行（刷新最近运行与最近成功时间），Monitor 的运行与成功新鲜度检查从启用时刻起算，超过容忍的间隔数仍没有首期结果才告警。
+// 起点固定在启用时刻而不是当前时间：进程重启后再次登记不会把宽限重新开始，反复重启也延后不了告警。
+//
+// 停用后重新启用的实例，Monitor 里的输出水位还停在停用前最后处理的那根；停用期间的周期不会补跑，Monitor 却会把它们都数成
+// 应到未到，休市时（股票市场周末重新启用）也照样报运行过期，一直到下次开盘处理完第一根。所以这类实例同时把输出水位推到
+// 启用时刻已收线的最近一根（bar_start，与 ObservePeriod 同一口径）：Monitor 只等启用之后收线的根。本次会话已处理到
+// 或越过那一根的（实例早已在跑、只是进程重启）不再处理。调用方持有 o.mu。
 func (o *instanceObserver) graceNewInstancesLocked(ctx context.Context, instances []store.Instance, expected map[string]report.DatasetExpectation) {
 	for _, instance := range instances {
 		id := instance.InstanceID
-		if !o.lastBarEnd[id].IsZero() || instance.SessionID == nil {
+		if instance.SessionID == nil {
 			continue
 		}
-		if processed, _, err := o.store.LatestBarEnds(ctx, id); err != nil {
+		processed, _, err := o.store.LatestBarEnds(ctx, id)
+		if err != nil {
 			o.log("读取实例 %s 最近处理的周期失败，跳过首期宽限：%v", id, err)
 			continue
-		} else if !processed.IsZero() {
-			continue
+		}
+		if o.lastBarEnd[id].After(processed) {
+			processed = o.lastBarEnd[id]
 		}
 		session, err := o.store.GetSession(ctx, *instance.SessionID)
 		if err != nil {
@@ -266,6 +272,21 @@ func (o *instanceObserver) graceNewInstancesLocked(ctx context.Context, instance
 			continue
 		}
 		observation := report.DatasetObservation{Key: expected[id].Key, Result: "empty", FinishedAt: session.CreatedAt.UTC()}
+		if !processed.IsZero() {
+			resolved, err := input.ParseResolved(instance.ResolvedJSON)
+			if err != nil {
+				continue
+			}
+			period, err := input.ClosedPeriod(resolved.Calendar, resolved.Bar, session.CreatedAt)
+			if err != nil {
+				o.log("计算实例 %s 启用时刻的周期失败，跳过首期宽限：%v", id, err)
+				continue
+			}
+			if !period.BarEnd.After(processed) {
+				continue
+			}
+			observation.OutputWatermark = period.StorageStart
+		}
 		if err := o.datasets.ObserveRun(observation); err != nil {
 			o.log("记录实例 %s 的首期等待宽限失败：%v", id, err)
 		}
