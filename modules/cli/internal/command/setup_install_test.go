@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -76,6 +77,8 @@ type installHarness struct {
 	source   string
 	// seedDirs 是读种子用过的目录，initSources 是完整初始化收到的源目录。
 	seedDirs, initSources []string
+	// stderr 是最近一次 run 的标准错误（进度行在这里）。
+	stderr string
 }
 
 func newInstallHarness(t *testing.T) *installHarness {
@@ -173,6 +176,7 @@ func (h *installHarness) run(args ...string) (string, error) {
 	}
 	cmd.SetArgs(args)
 	err := cmd.Execute()
+	h.stderr = stderr.String()
 	return out.String(), err
 }
 
@@ -409,6 +413,13 @@ func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
 	out, err := h.run("update", "--yes")
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"updated"`)
+	// 进度按整个流程计数：备份配置单独执行，也是最后一步，不另起一个总数。
+	progress := slices.DeleteFunc(strings.Split(strings.TrimSpace(h.stderr), "\n"), func(line string) bool { return !strings.HasPrefix(line, "[") })
+	require.Len(t, progress, 9)
+	for i, line := range progress {
+		require.True(t, strings.HasPrefix(line, fmt.Sprintf("[%d/9] ", i+1)), line)
+	}
+	require.Equal(t, "[9/9] moox-cli config backup", progress[8])
 	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
 	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
 	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })

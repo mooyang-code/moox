@@ -202,17 +202,18 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot
 		}
 	}
 	started := time.Now()
-	if err := runSetupSteps(cmd, deps, snapshot, options, steps, "install_step_failed"); err != nil {
+	if err := runSetupSteps(cmd, deps, snapshot, options, steps, len(steps), "install_step_failed"); err != nil {
 		return err
 	}
 	return writeSetupJSON(cmd, map[string]any{"status": "installed", "space_id": options.spaceID, "seconds": time.Since(started).Round(time.Second).Seconds()})
 }
 
-// runSetupSteps 按顺序执行安装或覆盖更新的步骤，进度逐行写到标准错误；一步失败就停下，报错带错误码和单独重跑这一步的命令。
-func runSetupSteps(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot, options setupInstallOptions, steps []setupInstallStep, code string) error {
+// runSetupSteps 按顺序执行安装或覆盖更新的步骤，进度逐行写到标准错误（[第几步/total]，total 是整个流程的步数，
+// 调用方只交给它前面几步时也按整个流程计数）；一步失败就停下，报错带错误码和单独重跑这一步的命令。
+func runSetupSteps(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot, options setupInstallOptions, steps []setupInstallStep, total int, code string) error {
 	progress := &lockedWriter{out: cmd.ErrOrStderr()}
 	for i, step := range steps {
-		fmt.Fprintf(progress, "[%d/%d] %s\n", i+1, len(steps), step.Command)
+		fmt.Fprintf(progress, "[%d/%d] %s\n", i+1, total, step.Command)
 		if err := executeSetupInstallStep(cmd, deps, snapshot, options, step); err != nil {
 			return fmt.Errorf("%s: 第 %d 步（%s）失败：%w。修好后重跑同一条命令，每一步都可以重做；单独重跑这一步：%s", code, i+1, step.Kind, err, step.Command)
 		}

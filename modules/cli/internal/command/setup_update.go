@@ -137,7 +137,7 @@ func newSetupUpdateCommand(deps setupDeps) *cobra.Command {
 			started := time.Now()
 			// 最后一步是备份配置：它用秘密文件里的管理员密码登录，用户在管理台改过密码时会失败，这不影响已经部署好的主机，只提醒。
 			last := len(steps) - 1
-			if err := runSetupSteps(cmd, deps, snapshot, options, steps[:last], "update_step_failed"); err != nil {
+			if err := runSetupSteps(cmd, deps, snapshot, options, steps[:last], len(steps), "update_step_failed"); err != nil {
 				return err
 			}
 			result := map[string]any{"status": "updated"}
