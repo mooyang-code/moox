@@ -1,3 +1,0 @@
-[submodule "server/proto/xData-mini"]
-	path = server/proto/xData-mini
-	url = https://github.com/mooyang-code/xData-mini.git

@@ -97,11 +97,12 @@ func findDecl(decls []dsl.ParamDecl, name string) (dsl.ParamDecl, bool) {
 	return dsl.ParamDecl{}, false
 }
 
-// evaluateParam 求出一个参数的统一值与覆盖。不引用任何列的表达式只求值一次；引用列的表达式在各标的上求值，
+// evaluateParam 求出一个参数的统一值与覆盖。不引用任何列与 params() 的表达式只求值一次；引用了的表达式在各标的上求值，
 // 统一值取有效值的中位数。
 func evaluateParam(param dsl.CompiledParam, ids []string, rows map[string]Row, failed map[string]map[string]string) (ParamValue, string, bool) {
 	value := ParamValue{}
-	constant := len(param.Default.AllColumns()) == 0 && len(param.Default.AllPreviousColumns()) == 0 && len(param.Default.Normalizers) == 0
+	constant := len(param.Default.AllColumns()) == 0 && len(param.Default.AllPreviousColumns()) == 0 &&
+		len(param.Default.AllParamRefs()) == 0 && len(param.Default.Normalizers) == 0
 	if constant {
 		result := evaluateNumeric(param.Default, []string{""}, map[string]Row{"": {Values: map[string]float64{}}})
 		number, ok := result.values[""]

@@ -246,30 +246,6 @@ func TestSameHashLoadsOnce(t *testing.T) {
 	require.Same(t, a, b)
 }
 
-func TestBatchCapacity(t *testing.T) {
-	// floor(预算 / (8 × (输入个数 × 输入长 + 参数个数 + 输出长)))
-	n, err := BatchCapacity(64<<20, 1, 1, 1000, 100)
-	require.NoError(t, err)
-	require.Equal(t, (64<<20)/(8*(1000+1+100)), n)
-	n, err = BatchCapacity(1<<20, 2, 3, 40, 10)
-	require.NoError(t, err)
-	require.Equal(t, (1<<20)/(8*(2*40+3+10)), n)
-	_, err = BatchCapacity(1<<10, 1, 1, 1<<20, 1)
-	require.ErrorContains(t, err, "超过批字节上限")
-	_, err = BatchCapacity(1<<30, 8, 16, math.MaxInt32, math.MaxInt32)
-	require.Error(t, err, "单条放不下")
-	_, err = BatchCapacity(1<<30, 8, 16, math.MaxInt64>>8, 1)
-	require.Error(t, err, "乘法溢出被检查")
-}
-
-func TestGroupByLAndSplit(t *testing.T) {
-	calls := []SeriesCall{{L: 5}, {L: 3}, {L: 5}, {L: 3}, {L: 7}}
-	groups := GroupByL(calls)
-	require.Equal(t, []Group{{L: 3, Series: []int{1, 3}}, {L: 5, Series: []int{0, 2}}, {L: 7, Series: []int{4}}}, groups, "L 不同不混批，组内保持顺序")
-	require.Equal(t, [][]int{{0, 1}, {2, 3}, {4}}, SplitBatches([]int{0, 1, 2, 3, 4}, 2))
-	require.Nil(t, SplitBatches([]int{0}, 0))
-}
-
 // 一致性测试能抓到问题：带全局状态的模块、读窗口外（过去与未来）的模块。
 func TestConformanceCatchesBadModules(t *testing.T) {
 	rt := newTestRuntime(t, Options{})

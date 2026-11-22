@@ -101,7 +101,11 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 		snapshot.UsedMargin = margin.String()
 		snapshot.UnrealizedPnL = unrealized.String()
 		snapshot.ExchangeUpdatedAt = valuedAt
-		snapshot.Equity = equity.String()
+		// 带现货市场的账户，净值里还有现货持仓按最后报价的市值，关闭时取不到报价，保留快照里已有的净值（与纯现货账户一致）；
+		// 只有合约的账户净值就是现金加浮盈亏。
+		if !account.HasBalanceMarket() {
+			snapshot.Equity = equity.String()
+		}
 		snapshot.AvailableFunds = equity.Sub(margin).String()
 		// 单一资金池：结算币这一行是现货买单看的，扣保证金和浮亏、浮盈不能花在现货上，与模拟盘适配器的快照一致。
 		spotAvailable := cash.Sub(margin)
