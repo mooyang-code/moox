@@ -279,6 +279,10 @@ func initialize(
 	targetHistoryWorker := &traderuntime.FundWorker{
 		Maintainer: &traderuntime.TargetHistoryPruner{Store: tradeStore}, Interval: 6 * time.Hour, Name: "目标回执与影子目标清理",
 	}
+	// 结束超过 5 天的订单与成交的清理（只清纯合约模拟账户，见 OrderHistoryPruner）：启动时一次，之后每小时一次，每轮量小、分批让出连接。
+	orderHistoryWorker := &traderuntime.FundWorker{
+		Maintainer: &traderuntime.OrderHistoryPruner{Store: tradeStore}, Interval: time.Hour, Name: "历史订单清理",
+	}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 		ActionScoped: operatorapp.ActionScopedError,
@@ -418,6 +422,7 @@ func initialize(
 	runWorker(fundWorker.Run)
 	runWorker(marginWorker.Run)
 	runWorker(targetHistoryWorker.Run)
+	runWorker(orderHistoryWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	// 收盘撤单：有日收盘的场所（A 股、港股）日收盘后先全量同步，再把收盘前提交、仍在途的订单按已撤结束；重启后第一轮就补做。
 	sessionCloser := &orderapp.SessionCloser{
