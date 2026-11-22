@@ -158,6 +158,12 @@ func TestBudgetAdmissionAndRelease(t *testing.T) {
 	ctx := context.Background()
 	m, err := rt.Load(ctx, testWasm(t, "ts_mean"))
 	require.NoError(t, err)
+	// 先串行跑一次，留一个已扩容的空闲实例：并发新建的实例若都在首次扩容时撞上预算（先通过准入的几个同时扩容），
+	// 会全部被丢弃，结束时占用为 0，下面“空闲实例仍占用预算”的断言就会偶发失败。
+	small := func() *Batch {
+		return &Batch{NSeries: 1, InLen: 4, OutLen: 2, Inputs: [][]float64{{1, 2, 3, 4}}, Params: []float64{3}, Out: make([]float64, 2)}
+	}
+	require.NoError(t, m.Eval(ctx, small()))
 
 	var wg sync.WaitGroup
 	var rejected atomic.Int32
@@ -165,7 +171,7 @@ func TestBudgetAdmissionAndRelease(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			b := &Batch{NSeries: 1, InLen: 4, OutLen: 2, Inputs: [][]float64{{1, 2, 3, 4}}, Params: []float64{3}, Out: make([]float64, 2)}
+			b := small()
 			if err := m.Eval(ctx, b); err != nil {
 				require.ErrorIs(t, err, ErrBudget)
 				rejected.Add(1)
