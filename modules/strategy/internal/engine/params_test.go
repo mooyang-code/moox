@@ -88,6 +88,22 @@ func TestEvaluateParamsSkipsSubjectsMissingReferencedColumns(t *testing.T) {
 	}
 }
 
+// 只引用 params()、不引用任何列的参数表达式按各标的这一行实际用的参数求值，不能当成常数在空行上求值（取到 NaN 报错）；
+// 行里没有参数的标的不参与中位数。
+func TestEvaluateParamsDefaultReadingOnlyParams(t *testing.T) {
+	program := paramProgram(t, "  bias__var:\n    window:\n      default: params(\"bias__var\", \"window\") + 4\n")
+	frame := paramFrame(map[string]float64{"A": 1, "B": 1, "C": 1, "D": 1})
+	for id, window := range map[string]float64{"A": 20, "B": 30, "C": 40} {
+		row := frame.Rows[id]
+		row.Params = map[string]map[string]float64{"bias__var": {"window": window}}
+		frame.Rows[id] = row
+	}
+	outcome := EvaluateParams(program, inMarket(program, frame), biasDecls)
+	if got := outcome.Params["bias__var"]["window"].Default; got != 34 {
+		t.Fatalf("统一值应为 24、34、44 的中位数：%v（说明：%v）", got, outcome.Notes)
+	}
+}
+
 // params() 读取这一行的 __params：filter 里按各标的实际用的参数筛选；行里缺参数（新标的、旧行）读成缺失，
 // 条件为假，不会被当成 0 或默认值放行。
 func TestParamsFunctionReadsRowParams(t *testing.T) {

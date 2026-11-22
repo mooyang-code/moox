@@ -72,3 +72,28 @@ func TestPaperCancelWritesMillisecondFinishedAt(t *testing.T) {
 		})
 	}
 }
+
+// 现货加永续的模拟账户关闭时，净值保留快照里含现货市值的值；只有永续的账户按现金加浮盈亏重算。
+func TestClosePaperSimulationKeepsSpotValueInEquity(t *testing.T) {
+	for _, tc := range []struct {
+		markets, want string
+	}{
+		{markets: "SPOT,SWAP", want: "150000"},
+		{markets: "SWAP", want: "100000"},
+	} {
+		t.Run(tc.markets, func(t *testing.T) {
+			s := openTestStore(t)
+			fill := seedPaperBalanceOrder(t, s)
+			ctx := context.Background()
+			require.NoError(t, s.db.Exec(`UPDATE t_trading_accounts SET c_markets = ?, c_snapshot_json = '{"equity":"150000"}'`, tc.markets).Error)
+			account, err := s.GetTradingAccount(ctx, fill.SpaceID, fill.TradingAccountID)
+			require.NoError(t, err)
+			require.Equal(t, "150000", account.Snapshot.Equity, "快照里的净值字段名")
+			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.ClosePaperSimulation(fill.SpaceID, fill.TradingAccountID) }))
+			closed, err := s.GetTradingAccount(ctx, fill.SpaceID, fill.TradingAccountID)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, closed.Snapshot.Equity)
+			require.Equal(t, "100000", closed.Snapshot.AvailableFunds)
+		})
+	}
+}
