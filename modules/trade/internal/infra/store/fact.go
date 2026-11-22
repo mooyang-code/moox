@@ -1617,12 +1617,12 @@ type positionKeyJSON struct {
 // 持仓快照替换：删除（并留墓碑）账户里不晚于边界、且不在快照保留键里的持仓。参数依次是
 // 空间、执行账户、边界时间、保留键 JSON 数组（空数组表示不保留）；留墓碑的语句前面多一个覆盖时间。
 const (
+	// 保留键用不相关子查询：SQLite 只展开一次 JSON 并建临时索引；写成逐行相关的 NOT EXISTS 时每行都要把整个
+	// 数组重新解析一遍，五百多行持仓的账户每轮同步要四百多毫秒，期间占住唯一的写连接。
 	replacedPositionsFilter = `c_space_id = ? AND c_trading_account_id = ? AND c_exchange_updated_at <= ?
-		AND NOT EXISTS (
-			SELECT 1 FROM json_each(?) AS kept
-			WHERE json_extract(kept.value, '$.m') = t_trading_positions.c_market_type
-				AND json_extract(kept.value, '$.s') = t_trading_positions.c_exchange_symbol
-				AND json_extract(kept.value, '$.p') = t_trading_positions.c_position_side
+		AND (c_market_type, c_exchange_symbol, c_position_side) NOT IN (
+			SELECT json_extract(value, '$.m'), json_extract(value, '$.s'), json_extract(value, '$.p')
+			FROM json_each(?)
 		)`
 	execTombstoneReplacedPositions = `INSERT INTO t_trading_position_tombstones (c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol, c_position_side, c_covered_until)
 		SELECT c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol, c_position_side, MAX(c_snapshot_covered_until, ?)
