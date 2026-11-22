@@ -6,6 +6,7 @@ package wirecompress
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -70,13 +71,56 @@ func encodeWith(use Use, v *version, src []byte) []byte {
 // windowLimit 是解码允许的最大窗口。单段帧的窗口等于声明的原始长度，所以窗口上限不能小于解压上限；zstd 要求至少 1KB。
 func windowLimit(limit int) int { return max(limit, 1024) }
 
+// inflightBytes 是全进程同时在解压的输出缓冲总量上限，所有解码器共用：放得下两个最大帧。
+// 解压发生在验签之前（tRPC 先解压请求体再进过滤器），约 2KB 的合法帧就能解出 64MB，
+// 不加总量限制时，并发的未认证请求能让网关同时解压许多份最大缓冲。
+// 额度只管解压这一段：解完即还，网关拿解出的正文去验签的那段时间不计额度（已知差别，见 docs/模块/主机网关.md）。
+const inflightBytes = 2 * (MaxFrameBytes + maxBlock + 256)
+
+var inflight = newBudget(inflightBytes)
+
+// budget 是按字节计的额度：用满时后来的解码排队等待，解码只要毫秒级，不直接拒绝，免得合法大请求在并发时失败。
+// 不保证先来先得：小解码持续涌入时大解码可能一直排不上（已知差别，见 docs/模块/主机网关.md）。
+type budget struct {
+	mu    sync.Mutex
+	cond  sync.Cond
+	used  int
+	limit int
+}
+
+func newBudget(limit int) *budget {
+	b := &budget{limit: limit}
+	b.cond.L = &b.mu
+	return b
+}
+
+// acquire 取 n 字节额度，不够时等待；超过总额的请求按总额计，保证总能取到。
+func (b *budget) acquire(n int) int {
+	n = min(n, b.limit)
+	b.mu.Lock()
+	for b.used+n > b.limit {
+		b.cond.Wait()
+	}
+	b.used += n
+	b.mu.Unlock()
+	return n
+}
+
+func (b *budget) release(n int) {
+	b.mu.Lock()
+	b.used -= n
+	b.mu.Unlock()
+	b.cond.Broadcast()
+}
+
 // Decoder 是固定解压上限的解码器：按帧头里的字典 ID 自动选字典。
 // 每个使用点按自己的上限在初始化时构造一个，进程内复用，可并发调用。
 type Decoder struct {
-	use   Use
-	limit int
-	reg   *registry
-	dec   *zstd.Decoder
+	use    Use
+	limit  int
+	reg    *registry
+	dec    *zstd.Decoder
+	budget *budget
 }
 
 // NewDecoder 创建解压上限为 limit 字节的解码器。
@@ -98,11 +142,11 @@ func newDecoder(reg *registry, use Use, limit int) *Decoder {
 	if err != nil {
 		panic(fmt.Sprintf("wirecompress: 创建解码器：%v", err))
 	}
-	return &Decoder{use: use, limit: limit, reg: reg, dec: dec}
+	return &Decoder{use: use, limit: limit, reg: reg, dec: dec, budget: inflight}
 }
 
 // Decode 解压一个 zstd 帧。必须是声明了原始长度、且不超过上限的单帧；
-// 先按声明长度分配缓冲，再解压，所以单次调用最多分配 limit 字节。
+// 先按声明长度分配缓冲，再解压，所以单次调用最多分配 limit 字节；分配之前先取全进程的解压额度，解完即还。
 func (d *Decoder) Decode(src []byte) ([]byte, error) {
 	if len(src) == 0 {
 		return nil, nil
@@ -131,8 +175,8 @@ func (d *Decoder) Decode(src []byte) ([]byte, error) {
 	// 容量 = 声明长度 + 一个块（128KB）的余量。库在每个块解完之后检查累计输出是否超过声明长度（超过即报错），
 	// 一个块最多输出 128KB，所以输出缓冲永远不会越过这个容量、也就不会触发 append 扩容（扩容会一次多分配约 25%，
 	// 并在新旧缓冲同时存在时翻倍占用）；压缩块里的序列执行另受剩余容量限制。声明长度为 0 的帧也有非零容量。
-	buffer := make([]byte, 0, int(header.FrameContentSize)+maxBlock+256)
-	out, err := d.dec.DecodeAll(src, buffer)
+	size := int(header.FrameContentSize) + maxBlock + 256
+	out, err := d.decodeWithin(src, size)
 	if err != nil {
 		reason := "corrupt"
 		switch {
@@ -152,6 +196,12 @@ func (d *Decoder) Decode(src []byte) ([]byte, error) {
 	return out, nil
 }
 
+// decodeWithin 取 size 字节额度后分配缓冲并解压，返回时归还额度。
+func (d *Decoder) decodeWithin(src []byte, size int) ([]byte, error) {
+	defer d.budget.release(d.budget.acquire(size))
+	return d.dec.DecodeAll(src, make([]byte, 0, size))
+}
+
 func (d *Decoder) fail(reason string, err error) error {
 	recordError(d.use, "decode", reason)
 	return err
@@ -162,9 +212,11 @@ func (d *Decoder) fail(reason string, err error) error {
 // 库的 WithDecodeAllCapLimit 只在压缩块里按剩余容量限制输出；原始块与 RLE 块是直接追加到输出缓冲的，
 // 追加越过容量时先扩容、之后才报错，一个几 KB 的输入就能让缓冲在拒绝之前翻倍。块头只有 3 字节、
 // 块的输出大小能直接读出（原始块和 RLE 块），所以这里先把形状查清，库只会看到不会越界的单帧。
+// 每个压缩块最多输出一个块（128KB），块数不够填满声明长度的帧也在这里拒绝，不按声明长度分配。
 func checkFrameShape(src []byte, header *zstd.Header) error {
 	pos := header.HeaderSize
-	var literal uint64 // 原始块与 RLE 块的输出字节数
+	var literal uint64    // 原始块与 RLE 块的输出字节数
+	var compressed uint64 // 压缩块个数
 	for {
 		if pos+3 > len(src) {
 			return fmt.Errorf("%w: 块头被截断", ErrCorrupt)
@@ -180,6 +232,7 @@ func checkFrameShape(src []byte, header *zstd.Header) error {
 			literal += uint64(size)
 			pos++
 		case 2: // 压缩块
+			compressed++
 			pos += size
 		default:
 			return fmt.Errorf("%w: 保留的块类型", ErrCorrupt)
@@ -199,6 +252,9 @@ func checkFrameShape(src []byte, header *zstd.Header) error {
 	}
 	if pos != len(src) {
 		return fmt.Errorf("%w: 帧之后还有数据（拼接帧）", ErrCorrupt)
+	}
+	if literal+compressed*maxBlock < header.FrameContentSize {
+		return fmt.Errorf("%w: 块数不足以输出声明的原始长度", ErrCorrupt)
 	}
 	return nil
 }
