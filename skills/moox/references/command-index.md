@@ -330,8 +330,9 @@
 | `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |
 | `setup trust-browser` | 检查并安装管理台浏览器证书信任 |
 | `setup trust-host` | 确认并记录 SSH 主机指纹 |
-| `setup validate` | 校验两份配置和连接，并报告各主机的部署情况（route）和接下来要运行的命令（next_steps） |
-| `setup wipe` | 彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复） |
+| `setup update` | 覆盖更新已装好的系统：按安装顺序把这个版本的程序和配置重新部署到全部主机，数据保留（默认只预览） |
+| `setup validate` | 校验两份配置和连接，检测每台主机上各组件是否已部署，给出可选的部署方式（modes）和接下来要运行的命令（next_steps） |
+| `setup wipe` | 卸载：彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复） |
 
 ## space：空间：一组相互隔离的业务数据（调用 SpaceMgr）
 

@@ -24,11 +24,12 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "wipe",
-		Short: "彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复）",
-		Long: `逐台停用并删除全部 moox-* 用户服务，杀掉可执行文件在部署根里的全部进程，清空部署根下的内容（保留目录本身），
+		Short: "卸载：彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复）",
+		Long: `卸载 MooX：逐台停用并删除全部 moox-* 用户服务，杀掉可执行文件在部署根里的全部进程，清空部署根下的内容（保留目录本身），
 再删掉这台电脑上的操作员身份。归档文件（archive/）和内置对象存储的数据（data/seaweedfs/）都在部署根下，会一起清掉，预览里单独列出它们的大小。
 不带 --yes 只预览；执行要带 --yes --expect <预览里的 digest>，范围变了会拒绝。
-云函数默认不清理（--clean-functions 才清）；不在 moox.toml 里的主机也不清理。中途失败后再运行一次会接着清。`,
+云函数默认不清理（--clean-functions 才清）；不在 moox.toml 里的主机也不清理。中途失败后再运行一次会接着清。
+预览的 left_behind 列出卸载不会动的东西（防火墙规则、日志服务、SSH 密钥、本机配置等）。卸载后要重新安装用 setup install。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if yes && expect == "" {
@@ -59,7 +60,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 				}
 			}
 			if !yes {
-				preview := map[string]any{"action": "wipe", "route": deployscan.Route(reports), "plan": plan}
+				preview := map[string]any{"action": "wipe", "route": deployscan.Route(reports), "plan": plan, "left_behind": wipeLeftBehind(snapshot.Manifest, cleanFunctions)}
 				if note := wipeTradeNote(snapshot.Manifest, plan); note != "" {
 					preview["note"] = note
 				}
@@ -92,6 +93,22 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().BoolVar(&cleanFunctions, "clean-functions", false, "同时清理云上的采集计划函数：预览单列，同一云账号可能有其他环境，要用户单独确认")
 	cmd.Flags().StringVar(&expectFunctions, "expect-functions", "", "预览输出的 functions_digest，清单变了会拒绝")
 	return cmd
+}
+
+// wipeLeftBehind 列出卸载不会动的东西，让用户知道还要不要自己处理。
+func wipeLeftBehind(manifest *topology.Config, cleanFunctions bool) []string {
+	left := []string{
+		"各主机的部署根目录本身（" + manifest.Paths.DeployRoot + "，已清空）与部署用户的 linger 设置",
+		"setup firewall 在腾讯云加的端口放行规则（轻量应用服务器的防火墙、CVM 的安全组）",
+		"腾讯云日志服务（CLS）里 setup init 开通的日志集与日志主题",
+		"这台电脑的 MooX SSH 密钥（~/.ssh/moox_ed25519）和各主机 authorized_keys 里它的公钥",
+		"这台电脑上的 moox.toml、moox.secrets.toml 与解密它的密钥",
+		"系统钥匙串里已信任的管理台根证书（setup trust-browser 或手工信任的）",
+	}
+	if !cleanFunctions {
+		left = append(left, "云上的采集计划函数（moox-fetch-plan- 开头；要删加 --clean-functions）")
+	}
+	return left
 }
 
 // wipeTradeNote 在清空范围里有装着 Trade 的主机时给出提醒；只是提示，不检查持仓。

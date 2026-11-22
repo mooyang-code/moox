@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
@@ -77,6 +78,15 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	require.Contains(t, validated.Deployment.ManualSteps[0], "sudo loginctl enable-linger ubuntu")
 	require.Len(t, validated.Deployment.Warnings, 2)
 	require.NotEmpty(t, validated.Deployment.NextSteps)
+	// 装过时让用户在覆盖更新与卸载之间选；按组件报告是否已部署，没装过的主机单独提醒。
+	require.Equal(t, []string{setupModeUpdate, setupModeUninstall}, validated.Deployment.Modes)
+	require.Len(t, validated.Deployment.Components, 2)
+	require.Contains(t, validated.Deployment.Components[0].Components, deploy.ComponentStatus{ID: "admin", State: "active", Installed: true})
+	require.Contains(t, validated.Deployment.Components[0].Components, deploy.ComponentStatus{ID: "collector", State: "missing"})
+	require.Len(t, validated.Deployment.Notes, 1)
+	require.Contains(t, validated.Deployment.Notes[0], "主机 compute 还没装过")
+	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup update")
+	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup wipe")
 
 	// status：读 version.json 与各组件的用户服务状态。
 	var status setupStatusOutput
@@ -94,7 +104,7 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"install", "operator", "register-identity", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "metadata-import", "export-skill-config", "firewall"} {
+	for _, name := range []string{"install", "update", "operator", "register-identity", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "metadata-import", "export-skill-config", "firewall"} {
 		require.Contains(t, output.String(), "  "+name+" ")
 	}
 	// 已删除的命令：初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染；

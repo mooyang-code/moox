@@ -297,7 +297,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 32. **升级与重跑**：
     - 改一行日志后重新构建，`$CLI setup deploy $SRC --host overseas --component trade`：只重启 Trade，`version.json` 更新，数据目录没动。
     - 给某个服务加一个方法后只部署该组件：这台主机的 `host-gateway` 被一起升级并重启。
-    - 再跑一次 `$CLI setup install $SRC --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变（它会再执行一次 `setup start`，手工停用过的内置采集任务与默认因子任务成员会被重新启用；只升级用逐台 `setup deploy`）。
+    - 再跑一次 `$CLI setup install $SRC --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变（它会再执行一次 `setup start`，手工停用过的内置采集任务与默认因子任务成员会被重新启用；只升级用 `setup update`）。
     - 在控制机第一次装完、存储机装到一半时中断安装，重跑同一条命令能接着装完。
 33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥（在系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`；带不过去就用 `config restore` 取回配置），`$CLI setup operator --register` 再 `$CLI setup deploy $SRC --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
     `$CLI setup wipe` 的预览单独列出归档文件与 SeaweedFS 数据的大小，并提醒先导出管理台里的密钥。

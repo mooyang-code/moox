@@ -165,10 +165,10 @@ func (h *installHarness) run(args ...string) (string, error) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
 	args = append(args, "--file", "moox.toml")
-	if slices.Contains([]string{"install", "deploy", "wipe"}, args[0]) {
+	if slices.Contains([]string{"install", "update", "deploy", "wipe"}, args[0]) {
 		args = append(args, "--operator-dir", h.operator)
 	}
-	if slices.Contains([]string{"install", "deploy"}, args[0]) {
+	if slices.Contains([]string{"install", "update", "deploy"}, args[0]) {
 		args = append(args, "--source-dir", h.source)
 	}
 	cmd.SetArgs(args)
@@ -359,6 +359,78 @@ func TestSetupInstallFailsWhenComponentsNeverBecomeReady(t *testing.T) {
 	require.NotContains(t, h.calls, "init")
 }
 
+// 覆盖更新：没装过时拒绝；预览按主机列出要更新、新装、删掉的组件，不动任何东西。
+func TestSetupUpdatePreviewsPerHostComponents(t *testing.T) {
+	h := newInstallHarness(t)
+	_, err := h.run("update")
+	require.ErrorContains(t, err, "update_not_installed")
+	_, err = h.run("update", "--yes")
+	require.ErrorContains(t, err, "update_not_installed")
+	require.Empty(t, h.calls)
+
+	h.markInstalled()
+	// 因子机是新加的主机；控制机上还留着 moox.toml 里已经去掉的组件。
+	*h.report("factor") = deployscan.HostReport{Host: "factor", Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20, ArchiveKB: -1, SeaweedFSKB: -1}
+	control := h.report("control")
+	control.Version = json.RawMessage(`{"version":"v0.0.1","components":{"admin":{},"host-gateway":{}}}`)
+	control.Units = []string{"moox-admin.service", "moox-host-gateway.service", "moox-old.service"}
+	out, err := h.run("update")
+	require.NoError(t, err)
+	require.Empty(t, h.calls, "预览不改任何东西")
+	preview := parsePreview(t, out)
+	require.Equal(t, "update", preview["action"])
+	hosts := map[string]map[string]any{}
+	for _, host := range preview["hosts"].([]any) {
+		hosts[host.(map[string]any)["host"].(string)] = host.(map[string]any)
+	}
+	require.Equal(t, "v0.0.1", hosts["control"]["version"])
+	require.Contains(t, hosts["control"]["update"], "admin")
+	require.Contains(t, hosts["control"]["install"], "monitor")
+	require.Equal(t, []any{"old"}, hosts["control"]["remove"])
+	require.Empty(t, hosts["factor"]["update"])
+	require.Contains(t, hosts["factor"]["install"], "factor-engine")
+	require.Contains(t, preview["notes"].([]any)[0], "主机 factor 还没装过")
+	for _, step := range preview["steps"].([]any) {
+		kind := step.(map[string]any)["kind"]
+		require.Contains(t, updateStepKinds, kind, "覆盖更新不初始化、不启动空间、不验收")
+	}
+}
+
+// 覆盖更新的执行顺序与安装一致，但没有初始化、启动空间与验收，也不清空。
+func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	out, err := h.run("update", "--yes")
+	require.NoError(t, err)
+	require.Contains(t, out, `"status":"updated"`)
+	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
+	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
+	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })
+	require.Equal(t, []string{
+		"firewall",
+		"deploy:control:admin,host-gateway,host-agent",
+		"deploy:storage",
+		"deploy:control",
+		"deploy:overseas",
+		"deploy:factor",
+		"backup",
+	}, sequence)
+
+	// 一步失败时停下，报错带错误码和单独重跑这一步的命令。
+	h.calls, h.fail = nil, "deploy:overseas"
+	_, err = h.run("update", "--yes")
+	require.ErrorContains(t, err, "update_step_failed")
+	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas")
+	require.NotContains(t, h.calls, "deploy:factor")
+
+	// 没开 linger 时什么都不做。
+	h.calls, h.fail = nil, ""
+	h.report("storage").Linger = false
+	_, err = h.run("update", "--yes")
+	require.ErrorContains(t, err, "manual_steps_required")
+	require.Empty(t, h.calls)
+}
+
 func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	h := newInstallHarness(t)
 	h.markInstalled()
@@ -382,6 +454,7 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	require.EqualValues(t, 4096, factor["seaweedfs_kb"], "预览里单独列出内置对象存储数据的大小")
 	require.Empty(t, h.calls, "预览不清空")
 	require.Contains(t, preview["note"], "主机 overseas 上有 Trade：清空会删除 Trade 库，先确认没有持仓和挂单")
+	require.Contains(t, preview["left_behind"], "云上的采集计划函数（moox-fetch-plan- 开头；要删加 --clean-functions）", "预览列出卸载不会动的东西")
 	require.FileExists(t, filepath.Join(h.operator, identitybundle.OperatorKeyFile))
 
 	_, err = h.run("wipe", "--yes")
