@@ -13,7 +13,7 @@ import (
 )
 
 // 纯合约模拟账户里结束超过保留天数（默认 5 天）的订单分批删掉，之内（含正好到边界）的保留；现货模拟账户、实盘账户一律不清理。
-// 保留天数按账户各自的配置：0 天不清理，1 天的按 1 天算边界。
+// 保留天数按账户各自的配置：0 天不清理，1 天的按 1 天算边界；边界不晚于模拟资金费补算的起点。
 func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *testing.T) {
 	ctx := context.Background()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
@@ -26,7 +26,7 @@ func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *t
 		cutoff, now.Add(-time.Hour), // 保留
 	}
 	accounts := map[string][]string{"swap-paper": {"SWAP"}, "spot-paper": {"SPOT"}, "mixed-paper": {"SPOT", "SWAP"},
-		"swap-keep": {"SWAP"}, "swap-short": {"SWAP"}}
+		"swap-keep": {"SWAP"}, "swap-short": {"SWAP"}, "swap-funded": {"SWAP"}}
 	retention := map[string]int{"swap-keep": 0, "swap-short": 1}
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		for id, markets := range accounts {
@@ -57,9 +57,14 @@ func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *t
 		return nil
 	}))
 
+	// swap-funded 最近一次资金费结算在边界前 2 小时：补算从那个整点前一小时读成交，边界收紧到那里，只删得掉更早的 1 单。
+	require.NoError(t, tradeStore.DBForTest().Exec(`INSERT INTO t_paper_funding_fees (c_space_id, c_trading_account_id, c_exchange_symbol,
+		c_settled_at, c_funding_rate, c_mark_price, c_quantity, c_amount, c_asset) VALUES ('space-1', 'swap-funded', 'BTCUSDT', ?, '0', '100', '0', '0', 'USDT')`,
+		cutoff.Add(-2*time.Hour).UnixMilli()).Error)
+
 	pruner := &OrderHistoryPruner{Store: tradeStore, Now: func() time.Time { return now }, batch: 2}
 	require.NoError(t, pruner.RunAll(ctx))
-	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 5, "mixed-paper": 5, "swap-keep": 5, "swap-short": 1} {
+	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 5, "mixed-paper": 5, "swap-keep": 5, "swap-short": 1, "swap-funded": 4} {
 		_, total, err := tradeStore.ListOrders(ctx, "space-1", store.OrderQuery{TradingAccountID: id})
 		require.NoError(t, err)
 		require.Equal(t, want, total, id)

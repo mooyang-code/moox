@@ -30,8 +30,8 @@ type FillSummaryQuery struct {
 }
 
 // 原始成交和清理时累加进小时汇总表的成交合在一条语句里读（同一个快照，清理事务提交在两次读之间也不会重复计数）。
-// 每笔成交只在其中一处，直接相加；汇总行按整点取舍（c_bucket_time 落在区间内的整个小时都算），区间两端不在整点时
-// 已清理的那部分成交会多算或少算不足一小时，这是已知差别。原始成交每行算一笔，汇总行带笔数。
+// 每笔成交只在其中一处，直接相加；汇总行按整点取舍（c_bucket_time 落在区间内的整个小时都算），所以调用方要把区间
+// 对齐到整点（起点取整、终点为所在小时末，见 rpc.SummarizeAccountPnl），否则两端已清理的成交会多算或少算。原始成交每行算一笔，汇总行带笔数。
 const (
 	sqlSummarizeFillsByAccount = `
 		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl, 1 AS c_fill_count

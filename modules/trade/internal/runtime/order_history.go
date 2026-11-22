@@ -60,6 +60,18 @@ func (p *OrderHistoryPruner) RunAll(ctx context.Context) error {
 			continue
 		}
 		before := now.Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
+		if account.SupportsMarket(string(exchange.MarketTypeSwap)) {
+			// 模拟资金费补算从最近一次结算所在整点的前一小时起，用之后的成交倒推结算时刻的持仓（paper.Adapter.SettleFunding），
+			// 这段成交不能删：边界不晚于补算起点。订单结束时间不早于它的成交时间，按结束时间删就不会删到补算要读的成交。
+			latest, err := p.Store.LatestPaperFundingSettlement(ctx, account.SpaceID, account.TradingAccountID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("读取执行账户 %s/%s 的最近资金费结算：%w", account.SpaceID, account.TradingAccountID, err))
+				continue
+			}
+			if latest > 0 {
+				before = min(before, time.UnixMilli(latest).UTC().Truncate(time.Hour).Add(-time.Hour).UnixMilli())
+			}
+		}
 		var fills int64
 		orders, deleteErr := deleteInBatches(ctx, batch, func(limit int) (int64, error) {
 			deletedOrders, deletedFills, err := p.Store.DeleteFinishedOrdersBefore(ctx, account.SpaceID, account.TradingAccountID, before, limit)

@@ -68,6 +68,7 @@ func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.Su
 	if req.GetStartTime() > 0 {
 		start = time.UnixMilli(req.GetStartTime()).UTC()
 	}
+	start, end = alignPnlWindow(start, end)
 	query.StartTime, query.EndTime = start.UnixMilli(), end.UnixMilli()
 	summary, err := st.SummarizeFills(ctx, spaceID, query)
 	if err != nil {
@@ -80,6 +81,12 @@ func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.Su
 	}
 	s.summarizeFunding(ctx, st, accounts, start, end, rsp)
 	return rsp, nil
+}
+
+// alignPnlWindow 把收益拆解的区间两端对齐到整点（起点向前取整、终点延到所在小时末）：已清理的成交只剩小时汇总，
+// 按整小时计入，对齐后原始成交和汇总行落在同一个区间里，清理前后结果一致。资金费也用这个区间，合计口径一致。
+func alignPnlWindow(start, end time.Time) (time.Time, time.Time) {
+	return start.Truncate(time.Hour), end.Truncate(time.Hour).Add(time.Hour - time.Millisecond)
 }
 
 func pnlAmountsToPB(values []store.AssetAmount) []*tradepb.PnlAmount {
