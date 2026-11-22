@@ -59,7 +59,7 @@ func DefaultFill(name string) seriesstore.FillRule {
 	switch strings.ToLower(name) {
 	case "open", "high", "low", "close":
 		return seriesstore.FillPrevClose
-	case "volume", "quote_volume", "amount", "turnover", "turnover_rate", "trades", "trade_count", "num_trades", "count",
+	case "volume", "quote_volume", "amount", "turnover", "turnover_rate", "trades", "trade_num", "trade_count", "num_trades", "count",
 		"taker_buy_volume", "taker_buy_quote_volume", "taker_buy_base_volume":
 		return seriesstore.FillZero
 	}
