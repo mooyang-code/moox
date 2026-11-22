@@ -168,7 +168,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	return nil
 }
 
-// graceNewTasksLocked 给刚进入期望清单、还没有任何一期结果的任务一个首期等待宽限（照搬策略侧的 graceNewInstancesLocked）：
+// graceNewTasksLocked 给刚进入期望清单、还没有任何一期结果的任务一个首期等待宽限（与策略侧 restoreObservations 的首期等待宽限同一做法）：
 // 结果数据集建好就进入期望清单，Monitor 看到它没有任何运行会立即判为“尚未上报”，而这个判断排在休市豁免之前；
 // 第一次运行要等第一根 K 线收盘，A 股收盘后、周末建的任务会整夜告警。这里以当前时刻记一次“空”运行（只刷新最近运行
 // 与最近成功时间，不推进产出水位），之后由 Monitor 的休市豁免与新鲜度检查接管。

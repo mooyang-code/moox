@@ -10,7 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// 重启后第一批积压事件先于第一次刷新到达：ObservePeriod 先写入的基准不能让 loadBases 认为已载入，成功口径的基准仍要从库里补，
+// 重启后第一批积压事件先于第一次刷新到达：ObservePeriod 先写入的基准不能让观察器认为已从库里恢复，成功口径的基准仍要从库里补，
 // 否则周五 ok、周一重启后第一条跳过会让期望间隔退回 24 小时，周一 15:10 就报 success stale。
 func TestStockBasesLoadedAfterEventsArrivedFirst(t *testing.T) {
 	repo := openStore(t)
@@ -49,7 +49,7 @@ func TestStockBasesLoadedAfterEventsArrivedFirst(t *testing.T) {
 	if !observer.lastOkBarEnd["i1"].IsZero() {
 		t.Fatalf("已载入过基准的实例不应再读库：%s", observer.lastOkBarEnd["i1"])
 	}
-	if !observer.basesLoaded["i1"] {
+	if observer.restored["i1"] != "i1-session" {
 		t.Fatal("成功读库后应记为已载入")
 	}
 	// 实例停用、移出启用清单后清除标记，重新启用时再载入。
@@ -60,7 +60,7 @@ func TestStockBasesLoadedAfterEventsArrivedFirst(t *testing.T) {
 	if err := observer.refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if observer.basesLoaded["i1"] {
+	if _, ok := observer.restored["i1"]; ok {
 		t.Fatal("停用后应清除已载入的标记")
 	}
 }

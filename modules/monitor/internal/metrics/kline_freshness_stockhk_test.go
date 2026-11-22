@@ -98,3 +98,36 @@ func TestKlineFreshnessEvaluatorUsesTheStockHKCalendar(t *testing.T) {
 	require.False(t, report.Success)
 	require.Equal(t, 5*time.Minute, report.StaleAge)
 }
+
+// Storage 周末重启后没有新写入，View 摘要指标缺失：用采集结果清单里 View 已建索引的上界判断。周末停在周五最后一根算正常，
+// 也不会算出缺失对象；周一开盘第一根收线加允许迟到之后仍停在周五，照常判过期；两个值都没有时仍报无输出。
+func TestKlineFreshnessFallsBackToIndexedUpperBoundWithoutViewSummary(t *testing.T) {
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockhk", DatasetID: "dataset", ViewID: "view", Frequency: "5m", MarketID: "stockhk", CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: stockHKSessions, Lateness: 90 * time.Second}
+	evaluate := func(rule KlineFreshnessRule, now time.Time) KlineFreshnessReport {
+		query := newViewSummaryQuery(t, nil)
+		query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("00700.XHKG")})
+		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		return reports[0]
+	}
+	indexed := rule
+	indexed.ViewLastDataTime = hkAt(t, "2026-11-20", "15:55:00")
+
+	weekend := evaluate(indexed, hkAt(t, "2026-11-22", "12:00:00"))
+	require.True(t, weekend.Success, "reason=%s diagnostic=%s", weekend.Reason, weekend.Diagnostic)
+	require.Equal(t, "fresh", weekend.Reason)
+	require.Zero(t, weekend.StaleCount)
+	require.Zero(t, weekend.MissingCount)
+
+	// 周一 09:30 那根 09:35 收线，到 09:40 已逾期 5 分钟，超过 90 秒的允许迟到。
+	monday := evaluate(indexed, hkAt(t, "2026-11-23", "09:40:00"))
+	require.False(t, monday.Success)
+	require.Equal(t, "business_data_stale", monday.Reason)
+	require.True(t, monday.ViewStale)
+	require.Equal(t, 5*time.Minute, monday.StaleAge)
+
+	none := evaluate(rule, hkAt(t, "2026-11-22", "12:00:00"))
+	require.False(t, none.Success)
+	require.Equal(t, "no_observation", none.Reason)
+}
