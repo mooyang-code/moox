@@ -7,23 +7,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
-// 纯合约模拟账户里结束超过 5 天的订单分批删掉，5 天内（含正好 5 天）的保留；现货模拟账户、实盘账户一律不清理。
-func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanFiveDays(t *testing.T) {
+// 纯合约模拟账户里结束超过保留天数（默认 5 天）的订单分批删掉，之内（含正好到边界）的保留；现货模拟账户、实盘账户一律不清理。
+// 保留天数按账户各自的配置：0 天不清理，1 天的按 1 天算边界。
+func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *testing.T) {
 	ctx := context.Background()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	now := time.Date(2026, 11, 22, 8, 0, 0, 0, time.UTC)
-	cutoff := now.Add(-orderHistoryRetention)
+	cutoff := now.Add(-time.Duration(tradingaccount.DefaultOrderRetentionDays) * 24 * time.Hour)
 	finished := []time.Time{
 		cutoff.Add(-30 * 24 * time.Hour), cutoff.Add(-time.Hour), cutoff.Add(-time.Millisecond), // 要删
 		cutoff, now.Add(-time.Hour), // 保留
 	}
-	accounts := map[string][]string{"swap-paper": {"SWAP"}, "spot-paper": {"SPOT"}, "mixed-paper": {"SPOT", "SWAP"}}
+	accounts := map[string][]string{"swap-paper": {"SWAP"}, "spot-paper": {"SPOT"}, "mixed-paper": {"SPOT", "SWAP"},
+		"swap-keep": {"SWAP"}, "swap-short": {"SWAP"}}
+	retention := map[string]int{"swap-keep": 0, "swap-short": 1}
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		for id, markets := range accounts {
 			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
@@ -32,6 +36,11 @@ func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanFiveDays(t *te
 				SettlementAsset: "USDT", Status: "ENABLED",
 			}); err != nil {
 				return err
+			}
+			if days, found := retention[id]; found {
+				if err := tx.SetPaperOrderRetentionDays("space-1", id, days); err != nil {
+					return err
+				}
 			}
 			for i, at := range finished {
 				orderID := fmt.Sprintf("%s-%d", id, i)
@@ -50,7 +59,7 @@ func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanFiveDays(t *te
 
 	pruner := &OrderHistoryPruner{Store: tradeStore, Now: func() time.Time { return now }, batch: 2}
 	require.NoError(t, pruner.RunAll(ctx))
-	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 5, "mixed-paper": 5} {
+	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 5, "mixed-paper": 5, "swap-keep": 5, "swap-short": 1} {
 		_, total, err := tradeStore.ListOrders(ctx, "space-1", store.OrderQuery{TradingAccountID: id})
 		require.NoError(t, err)
 		require.Equal(t, want, total, id)
@@ -62,4 +71,17 @@ func TestOrderHistoryPrunableOnlyPaperWithoutBalanceMarket(t *testing.T) {
 	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"STOCK"}}))
 	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"SPOT", "SWAP"}}))
 	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "LIVE", Markets: []string{"SWAP"}}))
+}
+
+// 改订单保留天数不重建会话：会话配置比较不看保留天数，别的模拟配置照常比较。
+func TestSessionConfigIgnoresOrderRetentionDays(t *testing.T) {
+	left := store.TradingAccountRecord{TradingAccountID: "paper-1", ExecutionMode: "PAPER",
+		PaperConfig: &store.PaperAccountConfigRecord{InitialBalance: "1000", SlippageBPS: "0", OrderRetentionDays: 5}}
+	right := left
+	config := *left.PaperConfig
+	config.OrderRetentionDays = 0
+	right.PaperConfig = &config
+	require.True(t, sameSessionConfig(left, right))
+	config.SlippageBPS = "1"
+	require.False(t, sameSessionConfig(left, right))
 }

@@ -19,8 +19,11 @@ var (
 	ErrAccountConflict       = errors.New("交易账户已存在或正被修改")
 	ErrInvalidCredential     = errors.New("交易所密钥不正确")
 	ErrLiveTradingDisabled   = errors.New("生产环境实盘交易未开启")
-	ErrPaperAccountImmutable = errors.New("模拟账户的名称、杠杆、启停等配置创建后不能修改；要换参数请新建一个模拟账户")
+	ErrPaperAccountImmutable = errors.New("模拟账户的名称、杠杆、启停等配置创建后不能修改（订单保留天数除外）；要换参数请新建一个模拟账户")
 	ErrServiceNotConfigured  = errors.New("交易账户服务未配置")
+	// ErrOrderRetentionPaperOnly：订单保留天数是模拟账户的配置，实盘账户的订单与成交不清理。
+	ErrOrderRetentionPaperOnly = errors.New("订单保留天数只有模拟账户能设置，实盘账户的订单与成交不清理")
+	ErrInvalidOrderRetention   = fmt.Errorf("订单保留天数要在 0～%d 之间（0 表示不清理）", tradingaccount.MaxOrderRetentionDays)
 	// ErrAccountInLogicalAccount：停用后没有会话、同步必然失败，账户就移不出组合了，所以要先移出再停用。
 	ErrAccountInLogicalAccount = errors.New("执行账户还在组合账户里，先把它移出组合账户再停用")
 )
@@ -83,6 +86,8 @@ type UpdateCommand struct {
 	SettlementAsset    *string
 	MarginMode         *exchange.MarginMode
 	Status             *exchange.AccountStatus
+	// OrderRetentionDays 是模拟账户的订单保留天数（0 表示不清理），模拟账户创建后唯一能改的配置；实盘账户给了就拒绝。
+	OrderRetentionDays *int
 	// AccountMode、InspectionJSON 只由检测写入（换密钥或重新启用时），调用方不用设置。
 	AccountMode    *exchange.AccountMode
 	InspectionJSON *string
@@ -143,6 +148,14 @@ func (s *Service) Update(
 			command.SettlementAsset != nil || command.MarginMode != nil ||
 			command.Status != nil) {
 		return tradingaccount.Account{}, ErrPaperAccountImmutable
+	}
+	if command.OrderRetentionDays != nil {
+		if current.ExecutionMode != exchange.ExecutionModePaper {
+			return tradingaccount.Account{}, ErrOrderRetentionPaperOnly
+		}
+		if !tradingaccount.ValidOrderRetentionDays(*command.OrderRetentionDays) {
+			return tradingaccount.Account{}, ErrInvalidOrderRetention
+		}
 	}
 	projected := current
 	applyUpdate(&projected, command)
@@ -329,6 +342,11 @@ func applyUpdate(value *tradingaccount.Account, command UpdateCommand) {
 	}
 	if command.Status != nil {
 		value.Status = *command.Status
+	}
+	if command.OrderRetentionDays != nil && value.Paper != nil {
+		paper := *value.Paper
+		paper.OrderRetentionDays = *command.OrderRetentionDays
+		value.Paper = &paper
 	}
 	if command.AccountMode != nil {
 		value.AccountMode = *command.AccountMode

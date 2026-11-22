@@ -107,6 +107,7 @@ func (h *AccountServer) UpdateTradingAccount(
 		status := exchange.AccountStatus(value)
 		command.Status = &status
 	}
+	command.OrderRetentionDays = optionalInt(req.OrderRetentionDays)
 	if _, err := h.Accounts.Update(ctx, command); err != nil {
 		return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}

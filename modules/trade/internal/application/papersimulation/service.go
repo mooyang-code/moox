@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -34,6 +35,8 @@ type CreateCommand struct {
 	MakerFeeRate    shared.Decimal
 	TakerFeeRate    shared.Decimal
 	SlippageBPS     shared.Decimal
+	// OrderRetentionDays 是订单保留天数（0 表示不清理）；nil 时取默认 5 天。
+	OrderRetentionDays *int
 }
 
 type Result struct {
@@ -48,6 +51,10 @@ type Service struct {
 }
 
 func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, error) {
+	retentionDays := tradingaccount.DefaultOrderRetentionDays
+	if command.OrderRetentionDays != nil {
+		retentionDays = *command.OrderRetentionDays
+	}
 	if s == nil || s.Store == nil {
 		return Result{}, fmt.Errorf("paper simulation: store is not configured")
 	}
@@ -112,6 +119,7 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 			SpaceID: command.SpaceID, TradingAccountID: accountID,
 			InitialBalance: command.InitialBalance.String(), MakerFeeRate: command.MakerFeeRate.String(),
 			TakerFeeRate: command.TakerFeeRate.String(), SlippageBPS: command.SlippageBPS.String(),
+			OrderRetentionDays: retentionDays,
 		},
 	}
 	// 加入已有组合：账户和成员关系在同一个事务里写入。刚建的模拟账户不可能有持仓，不需要先同步、也不用等会话建立。

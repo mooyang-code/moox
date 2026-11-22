@@ -78,6 +78,13 @@ func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 	}
 	applyUpdate(&value, command)
 	return r.Store.Transaction(ctx, func(tx *store.Tx) error {
+		// 模拟账户创建后只能改订单保留天数（Service.Update 已拒绝别的字段）。
+		if value.ExecutionMode == exchange.ExecutionModePaper {
+			if command.OrderRetentionDays == nil {
+				return nil
+			}
+			return tx.SetPaperOrderRetentionDays(value.SpaceID, value.ID, *command.OrderRetentionDays)
+		}
 		if err := tx.UpdateTradingAccountConfiguration(
 			value.SpaceID,
 			value.ID,
@@ -163,9 +170,9 @@ func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 	if value.ExecutionMode == exchange.ExecutionModePaper {
 		paper := value.Paper
 		if paper == nil {
-			paper = &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("100000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero()}
+			paper = defaultPaperConfig()
 		}
-		record.PaperConfig = &store.PaperAccountConfigRecord{SpaceID: value.SpaceID, TradingAccountID: value.ID, InitialBalance: paper.InitialBalance.String(), MakerFeeRate: paper.MakerFeeRate.String(), TakerFeeRate: paper.TakerFeeRate.String(), SlippageBPS: paper.SlippageBPS.String()}
+		record.PaperConfig = &store.PaperAccountConfigRecord{SpaceID: value.SpaceID, TradingAccountID: value.ID, InitialBalance: paper.InitialBalance.String(), MakerFeeRate: paper.MakerFeeRate.String(), TakerFeeRate: paper.TakerFeeRate.String(), SlippageBPS: paper.SlippageBPS.String(), OrderRetentionDays: paper.OrderRetentionDays}
 	}
 	return record
 }
@@ -216,7 +223,7 @@ func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, e
 
 func loadPaperConfig(record store.TradingAccountRecord) (*tradingaccount.PaperConfig, error) {
 	if record.PaperConfig == nil {
-		return &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("100000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero()}, nil
+		return defaultPaperConfig(), nil
 	}
 	initial, err := shared.ParseDecimal(record.PaperConfig.InitialBalance)
 	if err != nil {
@@ -234,7 +241,13 @@ func loadPaperConfig(record store.TradingAccountRecord) (*tradingaccount.PaperCo
 	if err != nil {
 		return nil, err
 	}
-	return &tradingaccount.PaperConfig{InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slip}, nil
+	return &tradingaccount.PaperConfig{InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slip,
+		OrderRetentionDays: record.PaperConfig.OrderRetentionDays}, nil
+}
+
+func defaultPaperConfig() *tradingaccount.PaperConfig {
+	return &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("100000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(),
+		SlippageBPS: shared.Zero(), OrderRetentionDays: tradingaccount.DefaultOrderRetentionDays}
 }
 
 func cloneLeverage(values store.LeverageSettings) store.LeverageSettings {

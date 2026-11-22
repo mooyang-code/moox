@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
@@ -377,7 +378,8 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	}
 	if record.ExecutionMode == "PAPER" {
 		if record.PaperConfig == nil {
-			record.PaperConfig = &PaperAccountConfigRecord{SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID, InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBPS: "0"}
+			record.PaperConfig = &PaperAccountConfigRecord{SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID, InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBPS: "0",
+				OrderRetentionDays: tradingaccount.DefaultOrderRetentionDays}
 		}
 		record.Environment = ""
 		record.CredentialSecretID = ""
@@ -834,24 +836,14 @@ func loadPaperConfig(db *gorm.DB, ctx context.Context, record *TradingAccountRec
 	if record == nil || record.ExecutionMode != "PAPER" {
 		return nil
 	}
-	var row struct {
-		SpaceID          string `gorm:"column:c_space_id"`
-		TradingAccountID string `gorm:"column:c_trading_account_id"`
-		InitialBalance   string `gorm:"column:c_initial_balance"`
-		MakerFeeRate     string `gorm:"column:c_maker_fee_rate"`
-		TakerFeeRate     string `gorm:"column:c_taker_fee_rate"`
-		SlippageBPS      string `gorm:"column:c_slippage_bps"`
-	}
+	var row paperAccountConfigRow
 	if err := db.WithContext(ctx).Table("t_paper_account_configs").
 		Where("c_space_id = ? AND c_trading_account_id = ?", record.SpaceID, record.TradingAccountID).
 		Take(&row).Error; err != nil {
 		return err
 	}
-	record.PaperConfig = &PaperAccountConfigRecord{
-		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
-		InitialBalance: row.InitialBalance, MakerFeeRate: row.MakerFeeRate,
-		TakerFeeRate: row.TakerFeeRate, SlippageBPS: row.SlippageBPS,
-	}
+	config := row.record()
+	record.PaperConfig = &config
 	return nil
 }
 

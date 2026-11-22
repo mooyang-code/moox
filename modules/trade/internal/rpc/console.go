@@ -91,6 +91,7 @@ func (s *ConsoleServer) CreatePaperSimulation(
 		Exchange:    exchangeFromPB(req.GetExchange()), Markets: marketsFromPB(req.GetMarkets()),
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
+		OrderRetentionDays: optionalInt(req.OrderRetentionDays),
 	})
 	rsp := &tradepb.CreatePaperSimulationRsp{RetInfo: errorInfo(err), Account: accountToPB(result.Account)}
 	if result.LogicalAccount.LogicalAccountID != "" {
@@ -361,7 +362,8 @@ func domainAccountForCapabilities(record store.TradingAccountRecord) tradingacco
 		if config == nil {
 			config = &store.PaperAccountConfigRecord{}
 		}
-		value.Paper = &tradingaccount.PaperConfig{InitialBalance: decimalValue(config.InitialBalance), MakerFeeRate: decimalValue(config.MakerFeeRate), TakerFeeRate: decimalValue(config.TakerFeeRate), SlippageBPS: decimalValue(config.SlippageBPS)}
+		value.Paper = &tradingaccount.PaperConfig{InitialBalance: decimalValue(config.InitialBalance), MakerFeeRate: decimalValue(config.MakerFeeRate), TakerFeeRate: decimalValue(config.TakerFeeRate), SlippageBPS: decimalValue(config.SlippageBPS),
+			OrderRetentionDays: config.OrderRetentionDays}
 	} else {
 		value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironment(record.Environment), CredentialSecretID: record.CredentialSecretID}
 	}

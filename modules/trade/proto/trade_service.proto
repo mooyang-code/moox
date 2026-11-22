@@ -98,6 +98,9 @@ message PaperConfig {
   string maker_fee_rate = 2;
   string taker_fee_rate = 3;
   string slippage_bps = 4;
+  // 已结束订单与成交保留的天数：0 表示不清理，1～365 天，默认 5。所有模拟账户都能设置，
+  // 但只有纯合约模拟账户（没开通现货、股票）会被清理；收益拆解的手续费、已实现盈亏和笔数另有小时汇总，不受清理影响。
+  optional int32 order_retention_days = 5;
 }
 
 message TradingAccount {
@@ -352,6 +355,9 @@ message UpdateTradingAccountReq {
   string settlement_asset = 4;
   string margin_mode = 5;
   string status = 6;
+  // 模拟账户的订单保留天数：0 表示不清理，1～365 天；不传表示不改。只有模拟账户能改（创建后唯一能改的模拟配置），
+  // 实盘账户传了会被拒绝；只有纯合约模拟账户会被清理（见 PaperConfig）。
+  optional int32 order_retention_days = 7;
 }
 message UpdateTradingAccountRsp {
   common.RetInfo ret_info = 1;
@@ -806,6 +812,8 @@ message CreatePaperSimulationReq {
   string logical_account_id = 12;
   // 加入已有组合时的优先级；不填就排在现有成员之后。
   int32 priority = 13;
+  // 订单保留天数：0 表示不清理，1～365 天，不传取 5。只有纯合约模拟账户会被清理（见 PaperConfig）。
+  optional int32 order_retention_days = 14;
 }
 
 message CreatePaperSimulationRsp {

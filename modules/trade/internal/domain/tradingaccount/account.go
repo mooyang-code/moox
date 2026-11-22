@@ -21,11 +21,26 @@ type LiveConfig struct {
 	CredentialSecretID string
 }
 
+const (
+	// DefaultOrderRetentionDays 是模拟账户已结束订单与成交默认保留的天数（创建时没给就取它）。
+	DefaultOrderRetentionDays = 5
+	// MaxOrderRetentionDays 是保留天数的上限；0 表示不清理。
+	MaxOrderRetentionDays = 365
+)
+
+// ValidOrderRetentionDays 报告保留天数是否在 0～365 之间。
+func ValidOrderRetentionDays(days int) bool {
+	return days >= 0 && days <= MaxOrderRetentionDays
+}
+
 type PaperConfig struct {
 	InitialBalance shared.Decimal
 	MakerFeeRate   shared.Decimal
 	TakerFeeRate   shared.Decimal
 	SlippageBPS    shared.Decimal
+	// OrderRetentionDays 是已结束订单与成交保留的天数，0 表示不清理。所有模拟账户都能存，
+	// 但只有纯合约模拟账户会被清理（见 runtime.OrderHistoryPruner）。
+	OrderRetentionDays int
 }
 
 type Account struct {
@@ -76,7 +91,7 @@ func (a Account) Validate() error {
 		a.Live = &LiveConfig{Environment: a.Environment, CredentialSecretID: a.CredentialSecretID}
 	}
 	if a.Paper == nil && a.ExecutionMode == exchange.ExecutionModePaper && a.Environment == exchange.AccountEnvironmentPaper {
-		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero()}
+		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
 	}
 	if (a.Live == nil) == (a.Paper == nil) {
 		return invalidAccount("exactly one of LIVE and PAPER config is required")
@@ -86,10 +101,10 @@ func (a Account) Validate() error {
 			return invalidAccount("LIVE requires environment and credential")
 		}
 	} else if a.Paper == nil && a.Environment == exchange.AccountEnvironmentPaper {
-		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero()}
+		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
 	} else if a.Paper == nil {
 		return invalidAccount("PAPER requires paper config")
-	} else if a.Paper.InitialBalance.Cmp(shared.Zero()) <= 0 || a.Paper.MakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.TakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 {
+	} else if a.Paper.InitialBalance.Cmp(shared.Zero()) <= 0 || a.Paper.MakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.TakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 || !ValidOrderRetentionDays(a.Paper.OrderRetentionDays) {
 		return invalidAccount("invalid paper config")
 	}
 	switch {

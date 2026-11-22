@@ -193,6 +193,38 @@ ON t_order_fills (c_space_id, c_trading_account_id, c_traded_at, c_fill_id);
 CREATE INDEX IF NOT EXISTS idx_order_fills_logical_time
 ON t_order_fills (c_space_id, c_logical_account_id, c_traded_at, c_fill_id);
 
+-- 被历史订单清理删掉的成交按小时汇总在这里，收益拆解的手续费、已实现盈亏和成交笔数靠它永久保留。
+-- 每笔成交只在成交表或这张表之一：清理在删成交的同一个事务里把它们累加进来。
+-- c_bucket_time 是成交时间所在整点（毫秒）；c_logical_account_id 为空串表示成交不属于任何组合；
+-- 金额是十进制字符串，由程序累加，不用 SQL 求和。
+CREATE TABLE IF NOT EXISTS t_order_fill_hourly_summaries (
+    c_space_id TEXT NOT NULL,
+    c_trading_account_id TEXT NOT NULL,
+    c_bucket_time INTEGER NOT NULL,
+    c_logical_account_id TEXT NOT NULL DEFAULT '',
+    c_fee_asset TEXT NOT NULL DEFAULT '',
+    c_settlement_asset TEXT NOT NULL DEFAULT '',
+    c_fee TEXT NOT NULL DEFAULT '0',
+    c_realized_pnl TEXT NOT NULL DEFAULT '0',
+    c_fill_count INTEGER NOT NULL DEFAULT 0,
+    CHECK (c_bucket_time >= 0),
+    CHECK (c_fill_count > 0),
+    PRIMARY KEY (
+        c_space_id,
+        c_trading_account_id,
+        c_bucket_time,
+        c_logical_account_id,
+        c_fee_asset,
+        c_settlement_asset
+    ),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+);
+
+-- 按组合汇总收益（含已移出成员的历史成交）走这条。
+CREATE INDEX IF NOT EXISTS idx_order_fill_hourly_summaries_logical
+ON t_order_fill_hourly_summaries (c_space_id, c_logical_account_id, c_bucket_time);
+
 CREATE TABLE IF NOT EXISTS t_trading_positions (
     c_space_id TEXT NOT NULL,
     c_trading_account_id TEXT NOT NULL,

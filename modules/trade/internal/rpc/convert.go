@@ -29,6 +29,20 @@ func success() *tradepb.RetInfo {
 	return retInfo(tradepb.ErrorCode_SUCCESS, "")
 }
 
+// optionalInt 把 proto 的 optional int32 换成 *int：没传是 nil，传了 0 是指向 0 的指针。
+func optionalInt(value *int32) *int {
+	if value == nil {
+		return nil
+	}
+	converted := int(*value)
+	return &converted
+}
+
+func int32Pointer(value int) *int32 {
+	converted := int32(value)
+	return &converted
+}
+
 // internalErrorMessage 是兜底分支对外的固定文案：原始错误可能带 SQL、路径、交易所原文，只写日志，不回给前端。
 const internalErrorMessage = "交易服务内部错误，请查看日志"
 
@@ -49,6 +63,8 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, accountapp.ErrInspectionUnavailable),
 		errors.Is(err, accountapp.ErrLiveTradingDisabled),
 		errors.Is(err, accountapp.ErrPaperAccountImmutable),
+		errors.Is(err, accountapp.ErrOrderRetentionPaperOnly),
+		errors.Is(err, accountapp.ErrInvalidOrderRetention),
 		errors.Is(err, operatorapp.ErrCancelUnconfirmed),
 		errors.Is(err, orderapp.ErrExternalConflict),
 		errors.Is(err, orderapp.ErrAutomationPaused),
@@ -384,6 +400,7 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 		account.ExecutionConfig = &tradepb.TradingAccount_Paper{Paper: &tradepb.PaperConfig{
 			InitialBalance: config.InitialBalance, MakerFeeRate: config.MakerFeeRate,
 			TakerFeeRate: config.TakerFeeRate, SlippageBps: config.SlippageBPS,
+			OrderRetentionDays: int32Pointer(config.OrderRetentionDays),
 		}}
 	} else {
 		account.ExecutionConfig = &tradepb.TradingAccount_Live{Live: &tradepb.LiveConfig{

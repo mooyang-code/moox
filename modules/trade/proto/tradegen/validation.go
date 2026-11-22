@@ -34,12 +34,26 @@ func (r *CreateTradingAccountReq) Validate() error {
 }
 
 func (r *UpdateTradingAccountReq) Validate() error {
-	return requireID(r != nil, value(func() string {
+	if err := requireID(r != nil, value(func() string {
 		if r == nil {
 			return ""
 		}
 		return r.TradingAccountId
-	}), "trading_account_id")
+	}), "trading_account_id"); err != nil {
+		return err
+	}
+	return validateOrderRetentionDays(r.OrderRetentionDays)
+}
+
+// maxOrderRetentionDays 与交易模块 tradingaccount.MaxOrderRetentionDays 一致。
+const maxOrderRetentionDays = 365
+
+// validateOrderRetentionDays 检查订单保留天数：不传不检查，传了要在 0～365 之间（0 表示不清理）。
+func validateOrderRetentionDays(days *int32) error {
+	if days != nil && (*days < 0 || *days > maxOrderRetentionDays) {
+		return fmt.Errorf("order_retention_days 要在 0～%d 之间（0 表示不清理）", maxOrderRetentionDays)
+	}
+	return nil
 }
 
 func (r *GetTradingAccountReq) Validate() error {
@@ -133,6 +147,9 @@ func (r *CreatePaperSimulationReq) Validate() error {
 	}
 	if r.Priority < 0 {
 		return fmt.Errorf("priority must not be negative")
+	}
+	if err := validateOrderRetentionDays(r.OrderRetentionDays); err != nil {
+		return err
 	}
 	if !isCanonicalPositiveDecimal(r.InitialBalance) || !canonicalUnsignedDecimalPattern.MatchString(r.MakerFeeRate) ||
 		!canonicalUnsignedDecimalPattern.MatchString(r.TakerFeeRate) || !canonicalUnsignedDecimalPattern.MatchString(r.SlippageBps) {
