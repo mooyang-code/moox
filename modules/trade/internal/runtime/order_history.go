@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -69,7 +70,9 @@ func (p *OrderHistoryPruner) RunAll(ctx context.Context) error {
 				continue
 			}
 			if latest > 0 {
-				before = min(before, time.UnixMilli(latest).UTC().Truncate(time.Hour).Add(-time.Hour).UnixMilli())
+				// 补算最多回看 paper.FundingBackfillLimit：资金费长期结算失败时边界也只停在那里，不让库一直涨。
+				start := time.UnixMilli(latest).UTC().Truncate(time.Hour).Add(-time.Hour).UnixMilli()
+				before = min(before, max(start, now.Add(-paper.FundingBackfillLimit).UnixMilli()))
 			}
 		}
 		var fills int64

@@ -26,7 +26,7 @@ func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *t
 		cutoff, now.Add(-time.Hour), // 保留
 	}
 	accounts := map[string][]string{"swap-paper": {"SWAP"}, "spot-paper": {"SPOT"}, "mixed-paper": {"SPOT", "SWAP"},
-		"swap-keep": {"SWAP"}, "swap-short": {"SWAP"}, "swap-funded": {"SWAP"}}
+		"swap-keep": {"SWAP"}, "swap-short": {"SWAP"}, "swap-funded": {"SWAP"}, "swap-stale": {"SWAP"}}
 	retention := map[string]int{"swap-keep": 0, "swap-short": 1}
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		for id, markets := range accounts {
@@ -61,10 +61,14 @@ func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *t
 	require.NoError(t, tradeStore.DBForTest().Exec(`INSERT INTO t_paper_funding_fees (c_space_id, c_trading_account_id, c_exchange_symbol,
 		c_settled_at, c_funding_rate, c_mark_price, c_quantity, c_amount, c_asset) VALUES ('space-1', 'swap-funded', 'BTCUSDT', ?, '0', '100', '0', '0', 'USDT')`,
 		cutoff.Add(-2*time.Hour).UnixMilli()).Error)
+	// swap-stale 的资金费 20 天前就没再结算过：补算最多回看 7 天，边界停在 7 天前，30 天前那单照删。
+	require.NoError(t, tradeStore.DBForTest().Exec(`INSERT INTO t_paper_funding_fees (c_space_id, c_trading_account_id, c_exchange_symbol,
+		c_settled_at, c_funding_rate, c_mark_price, c_quantity, c_amount, c_asset) VALUES ('space-1', 'swap-stale', 'BTCUSDT', ?, '0', '100', '0', '0', 'USDT')`,
+		now.Add(-20*24*time.Hour).UnixMilli()).Error)
 
 	pruner := &OrderHistoryPruner{Store: tradeStore, Now: func() time.Time { return now }, batch: 2}
 	require.NoError(t, pruner.RunAll(ctx))
-	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 5, "mixed-paper": 5, "swap-keep": 5, "swap-short": 1, "swap-funded": 4} {
+	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 5, "mixed-paper": 5, "swap-keep": 5, "swap-short": 1, "swap-funded": 4, "swap-stale": 4} {
 		_, total, err := tradeStore.ListOrders(ctx, "space-1", store.OrderQuery{TradingAccountID: id})
 		require.NoError(t, err)
 		require.Equal(t, want, total, id)
