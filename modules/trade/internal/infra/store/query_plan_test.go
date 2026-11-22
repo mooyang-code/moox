@@ -44,6 +44,10 @@ func TestHotQueriesUseIntendedIndexes(t *testing.T) {
 			"USING INDEX idx_trade_orders_account_submitted (c_space_id=? AND c_trading_account_id=? AND c_submitted_at>?)"},
 		{"按组合汇总成交", sqlSummarizeFillsByLogical, []any{"space-1", "logical-1", int64(0), int64(1)},
 			"USING INDEX idx_order_fills_logical_time (c_space_id=? AND c_logical_account_id=? AND c_traded_at>? AND c_traded_at<?)"},
+		{"历史订单清理选单", queryFinishedOrdersBefore, []any{"space-1", "account-1", int64(1), activeOrderStatesJSON, 300},
+			"USING INDEX idx_trade_orders_account_finished (c_space_id=? AND c_trading_account_id=? AND c_finished_at>? AND c_finished_at<?)"},
+		{"历史订单清理删成交", execDeleteFillsOfOrders, []any{"space-1", `["order-1"]`}, "idx_order_fills_order_time (c_space_id=? AND c_order_id=?)"},
+		{"历史订单清理删订单", execDeleteOrdersByID, []any{"space-1", `["order-1"]`}, "sqlite_autoindex_t_trade_orders_1 (c_space_id=? AND c_order_id=?)"},
 	} {
 		plan := queryPlan(t, s, c.query, c.args...)
 		require.Contains(t, plan, c.want, c.name)
