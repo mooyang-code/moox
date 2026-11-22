@@ -130,4 +130,18 @@ func TestKlineFreshnessFallsBackToIndexedUpperBoundWithoutViewSummary(t *testing
 	none := evaluate(rule, hkAt(t, "2026-11-22", "12:00:00"))
 	require.False(t, none.Success)
 	require.Equal(t, "no_observation", none.Reason)
+
+	// 已建索引的上界在未来（时钟或数据异常）：和摘要一样不收，仍报无输出。
+	future := rule
+	future.ViewLastDataTime = hkAt(t, "2026-11-22", "13:00:00")
+	got := evaluate(future, hkAt(t, "2026-11-22", "12:00:00"))
+	require.Equal(t, "no_observation", got.Reason)
+
+	// 有摘要、但最新一根为零（Storage 跟踪的序列超过上限）：不是重启丢了摘要，不兜底。
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockhk", DatasetID: "dataset", Freq: "5m", ObservedAt: hkAt(t, "2026-11-22", "11:59:30")}})
+	query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("00700.XHKG")})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{indexed}, 20).Evaluate(context.Background(), hkAt(t, "2026-11-22", "12:00:00"))
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, "no_observation", reports[0].Reason)
 }

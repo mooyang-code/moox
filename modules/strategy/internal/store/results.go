@@ -158,9 +158,9 @@ const (
 	sqlSelectResultAtBar = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`
 	// sqlCancelSupersededResults 把本会话更早周期的待投递结果标记为 cancelled。
 	sqlCancelSupersededResults = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`
-	// sqlSelectLatestMark、sqlSelectLatestOKMark 读取实例（不分会话）最近处理的一条与最近一条 ok 的周期、写入时间与跳过原因。
-	sqlSelectLatestMark   = `SELECT c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
-	sqlSelectLatestOKMark = `SELECT c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? AND c_status = 'ok' ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
+	// sqlSelectLatestMark、sqlSelectLatestOKMark 读取实例（不分会话）最近处理的一条与最近一条 ok 的会话、周期、写入时间与跳过原因。
+	sqlSelectLatestMark   = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
+	sqlSelectLatestOKMark = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? AND c_status = 'ok' ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
 	// sqlSelectResultsAtBarAnySession 读取实例某一根 bar 的全部记录：当前会话优先，其次创建时间最新。
 	sqlSelectResultsAtBarAnySession = `
 		SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results
@@ -422,8 +422,9 @@ func (s *Store) LatestOk(ctx context.Context, instanceID, sessionID string) (Res
 	return row.result(), true, nil
 }
 
-// ResultMark 是一条结果的周期（bar_end）、写入时间与跳过原因；没有记录时为零值。
+// ResultMark 是一条结果所属的会话、周期（bar_end）、写入时间与跳过原因；没有记录时为零值。
 type ResultMark struct {
+	SessionID  string
 	BarEnd     time.Time
 	CreatedAt  time.Time
 	SkipReason string
@@ -443,6 +444,7 @@ func (s *Store) LatestMarks(ctx context.Context, instanceID string) (processed, 
 
 func (s *Store) latestMark(ctx context.Context, query, instanceID string) (ResultMark, error) {
 	var rows []struct {
+		SessionID  string    `gorm:"column:c_session_id"`
 		BarEndTime int64     `gorm:"column:c_bar_end_time"`
 		CreatedAt  time.Time `gorm:"column:c_ctime"`
 		SkipReason string    `gorm:"column:c_skip_reason"`
@@ -453,7 +455,7 @@ func (s *Store) latestMark(ctx context.Context, query, instanceID string) (Resul
 	if len(rows) == 0 {
 		return ResultMark{}, nil
 	}
-	return ResultMark{BarEnd: fromMillis(rows[0].BarEndTime), CreatedAt: rows[0].CreatedAt.UTC(), SkipReason: rows[0].SkipReason}, nil
+	return ResultMark{SessionID: rows[0].SessionID, BarEnd: fromMillis(rows[0].BarEndTime), CreatedAt: rows[0].CreatedAt.UTC(), SkipReason: rows[0].SkipReason}, nil
 }
 
 // ResultAtBar 返回本会话某个周期的记录。

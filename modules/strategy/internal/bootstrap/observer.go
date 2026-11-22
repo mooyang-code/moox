@@ -244,7 +244,7 @@ type restorePoint struct {
 	enabledAt time.Time
 	processed store.ResultMark
 	ok        store.ResultMark
-	// seenBar 是合并库里的基准之前，本进程 ObservePeriod 已经记下的最近一根的 bar_end（零表示本进程还没上报过这个实例）。
+	// seenBar 是合并库里的基准之前，本进程 ObservePeriod 已经记下的最近一根的 bar_end（零表示本进程还没处理过这个实例）。
 	seenBar time.Time
 }
 
@@ -258,6 +258,14 @@ func (o *instanceObserver) loadRestorePoints(ctx context.Context, instances []st
 	points := make(map[string]*restorePoint)
 	for _, instance := range instances {
 		if instance.SessionID == nil {
+			continue
+		}
+		// 解析不了或标识不合法的实例不会进入期望清单，也就不需要恢复：跳过，免得每次刷新都重读一次库。
+		resolved, err := input.ParseResolved(instance.ResolvedJSON)
+		if err != nil {
+			continue
+		}
+		if _, valid := datasetKey(instance, resolved.Bar); !valid {
 			continue
 		}
 		id, session := instance.InstanceID, *instance.SessionID
@@ -333,10 +341,14 @@ func (o *instanceObserver) restoreLocked(instances []store.Instance, points map[
 //   - 停用后重新启用、本次会话还没处理到启用时刻已收线的那一根：Monitor 里的输出水位还停在停用前，停用期间的周期不会补跑，
 //     却会被数成应到未到（股票市场周末重新启用也照样报运行过期）。同样以启用时刻记一次空运行，并把输出水位推到启用时刻已收线的
 //     最近一根（bar_start），Monitor 只等启用之后收线的根。
-//   - 其余是实例早已在跑、只是进程重启：按 ObservePeriod 的口径补报库里的记录。最近一个 ok 的一根记 success（输入、输出水位都是
-//     这根的 bar_start）；最近处理的一根更晚时再记一次非成功运行（输入水位是它的 bar_start，跳过原因属于积累类时记 partial，
-//     其余记 incomplete）。完成时间取记录的写入时间，拿不到时用这根的收线时间。本进程已经上报过这个实例（积压事件先于第一次
-//     刷新到达）时不补：DatasetMetrics 的最近运行、最近成功按每次上报直接覆盖，补报更早的记录会把时间往回拨。
+//   - 其余是实例早已在跑、只是进程重启：按重启前的上报顺序补报库里的记录，让最近运行、最近成功、最近部分成功与输出水位和重启前
+//     一致。最近一个 ok 的一根记 success（输入、输出水位都是这根的 bar_start）；本会话还没有 ok（新实例在预热、或重新启用后只有
+//     跳过）时，重启前在它之后还有启用时刻的那次空运行，照样补上（库里的 ok 来自旧会话、启用时刻已收线的那一根更晚时，带上那根的
+//     输出水位）；最近处理的一根更晚时再记一次非成功运行（输入水位是它的 bar_start；跳过原因属于积累类，或本会话还没有 ok 时的
+//     too_many_missing（与 warmingUp 一致），记 partial，其余记 incomplete）。完成时间取记录的写入时间，拿不到时用这根的收线时间。
+//     本进程处理过比库里最近一条更晚的周期时不补（ObservePeriod 都在结果写入成功之后调用，正常情况下库里最近一条不会更早）。
+//     本进程处理过的就是库里最近一条（积压事件先到、或恢复追赶期间处理过而 Monitor 没收）时照常补：补报的时间是那条记录的写入时间，
+//     与进程内上报的时间只差这一期的处理耗时。
 func (o *instanceObserver) restoreObservations(id string, point *restorePoint, key report.DatasetKey, calendar, bar string) []report.DatasetObservation {
 	processed := point.processed.BarEnd
 	if point.seenBar.After(processed) {
@@ -355,9 +367,10 @@ func (o *instanceObserver) restoreObservations(id string, point *restorePoint, k
 		grace.OutputWatermark = period.StorageStart
 		return []report.DatasetObservation{grace}
 	}
-	if !point.seenBar.IsZero() {
+	if point.seenBar.After(point.processed.BarEnd) {
 		return nil
 	}
+	okInSession := !point.ok.BarEnd.IsZero() && point.ok.SessionID == point.session
 	var out []report.DatasetObservation
 	mark := func(item store.ResultMark, result string) {
 		boundary, err := input.FromBarEnd(calendar, bar, item.BarEnd)
@@ -378,9 +391,15 @@ func (o *instanceObserver) restoreObservations(id string, point *restorePoint, k
 	if !point.ok.BarEnd.IsZero() {
 		mark(point.ok, "success")
 	}
+	if !okInSession {
+		if !point.ok.BarEnd.IsZero() && period.BarEnd.After(point.ok.BarEnd) {
+			grace.OutputWatermark = period.StorageStart
+		}
+		out = append(out, grace)
+	}
 	if point.processed.BarEnd.After(point.ok.BarEnd) {
 		result := "incomplete"
-		if accumulatingReasons[point.processed.SkipReason] {
+		if accumulatingReasons[point.processed.SkipReason] || (!okInSession && point.processed.SkipReason == engine.SkipTooManyMissing) {
 			result = "partial"
 		}
 		mark(point.processed, result)
