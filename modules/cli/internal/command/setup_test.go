@@ -89,6 +89,22 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup update")
 	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup wipe")
 
+	// 没装过时只有新安装；没有 version.json 的残留单独提醒。
+	fresh := setupDeps{load: deps.load, validate: deps.validate, scanDeployment: func(context.Context, *setupSnapshot, deployscan.Options) ([]deployscan.HostReport, error) {
+		return []deployscan.HostReport{{Host: "control", Entries: []string{"bin"}, Linger: true, Journald: true}, {Host: "compute", Linger: true, Journald: true}}, nil
+	}}
+	cmd := newSetupCommand(fresh)
+	var freshOut bytes.Buffer
+	cmd.SetOut(&freshOut)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"validate", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
+	var freshValidated setupValidateOutput
+	require.NoError(t, json.Unmarshal(freshOut.Bytes(), &freshValidated))
+	require.Equal(t, []string{setupModeInstall}, freshValidated.Deployment.Modes)
+	require.Len(t, freshValidated.Deployment.Notes, 1)
+	require.Contains(t, freshValidated.Deployment.Notes[0], "主机 control 没有 version.json")
+
 	// status：读 version.json 与各组件的用户服务状态。
 	var status setupStatusOutput
 	require.NoError(t, json.Unmarshal([]byte(outputs["status"]), &status))
