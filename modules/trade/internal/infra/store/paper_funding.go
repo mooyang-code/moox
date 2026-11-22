@@ -33,7 +33,8 @@ type PaperSwapFill struct {
 }
 
 // PaperSwapActivity 是推算结算时刻持仓用的数据：当前的永续持仓，以及某个时刻起（含）的永续成交，按时间升序。
-// 模拟盘的持仓只由本地成交投影（成交和持仓总是一起清），所以任一时刻的持仓都能由当前持仓减去之后的成交推出来。
+// 模拟盘的持仓只由本地成交投影，所以任一时刻的持仓都能由当前持仓减去之后的成交推出来；前提是那之后的成交都还在：
+// 纯合约模拟账户结束超过 5 天的订单连同成交会被清理（runtime.OrderHistoryPruner），读取起点早于清理边界时推出来的持仓会偏。
 type PaperSwapActivity struct {
 	Positions map[string]shared.Decimal
 	Fills     []PaperSwapFill
