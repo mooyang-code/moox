@@ -182,6 +182,23 @@ type setupStatusOutput struct {
 	Hosts []deploy.HostStatus `json:"hosts"`
 }
 
+// setupHostStatuses 把只读检测的结果整理成每台主机上各组件是否部署过、是否在运行；setup status 与 setup validate、setup update 共用。
+func setupHostStatuses(manifest *topology.Config, reports []deployscan.HostReport) ([]deploy.HostStatus, error) {
+	hosts := []deploy.HostStatus{}
+	for _, report := range reports {
+		expected, err := manifest.HostComponents(report.Host)
+		if err != nil {
+			return nil, err
+		}
+		version, err := deploy.ParseVersion(report.Version)
+		if err != nil {
+			return nil, fmt.Errorf("version_invalid: 主机 %s 的 version.json 无法解析", report.Host)
+		}
+		hosts = append(hosts, deploy.Status(report.Host, expected, version, report.Units, report.Active))
+	}
+	return hosts, nil
+}
+
 func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 	var file, host string
 	cmd := &cobra.Command{
@@ -198,19 +215,11 @@ func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			output := setupStatusOutput{Route: deployscan.Route(reports), Hosts: []deploy.HostStatus{}}
-			for _, report := range reports {
-				expected, err := snapshot.Manifest.HostComponents(report.Host)
-				if err != nil {
-					return err
-				}
-				version, err := deploy.ParseVersion(report.Version)
-				if err != nil {
-					return fmt.Errorf("version_invalid: 主机 %s 的 version.json 无法解析", report.Host)
-				}
-				output.Hosts = append(output.Hosts, deploy.Status(report.Host, expected, version, report.Units, report.Active))
+			hosts, err := setupHostStatuses(snapshot.Manifest, reports)
+			if err != nil {
+				return err
 			}
-			return writeSetupJSON(cmd, output)
+			return writeSetupJSON(cmd, setupStatusOutput{Route: deployscan.Route(reports), Hosts: hosts})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径")
@@ -387,14 +396,26 @@ type setupValidateOutput struct {
 	Deployment *setupDeployment `json:"deployment,omitempty"`
 }
 
-// setupDeployment 是目标机器的部署情况。Route：fresh（都没装过）或 installed（至少一台装过）。
+// 部署方式：没装过只能新安装；装过时由用户在覆盖更新与卸载之间选一个（对整套部署统一选择，不逐台选）。
+const (
+	setupModeInstall   = "install"
+	setupModeUpdate    = "update"
+	setupModeUninstall = "uninstall"
+)
+
+// setupDeployment 是目标机器的部署情况。Route：fresh（都没装过）或 installed（至少一台装过）；Modes 是可选的部署方式。
 type setupDeployment struct {
-	Route string `json:"route"`
+	Route string   `json:"route"`
+	Modes []string `json:"modes"`
+	// Components 是每台主机上 moox.toml 要求的组件（以及多出来的组件）是否已部署、是否在运行。
+	Components []deploy.HostStatus `json:"components"`
 	// NextSteps 是接下来要运行的命令；ManualSteps 是要用户在目标机上自己做的事（需要 sudo），做完再继续。
-	NextSteps   []string                `json:"next_steps"`
-	ManualSteps []string                `json:"manual_steps,omitempty"`
-	Warnings    []string                `json:"warnings,omitempty"`
-	Hosts       []deployscan.HostReport `json:"hosts"`
+	NextSteps   []string `json:"next_steps"`
+	ManualSteps []string `json:"manual_steps,omitempty"`
+	Warnings    []string `json:"warnings,omitempty"`
+	// Notes 是判断部署方式时要告诉用户的情况：部分主机没装过、主机上有没装完的残留。
+	Notes []string                `json:"notes,omitempty"`
+	Hosts []deployscan.HostReport `json:"hosts"`
 }
 
 // minDeployDiskKB 是部署前每台主机至少要有的可用空间：放得下全部二进制的新旧两份和下载的组件包。
@@ -406,8 +427,30 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 	if err != nil {
 		return nil, err
 	}
-	status := &setupDeployment{Route: deployscan.Route(reports), Hosts: reports, NextSteps: []string{}}
-	for _, report := range reports {
+	components, err := setupHostStatuses(snapshot.Manifest, reports)
+	if err != nil {
+		return nil, err
+	}
+	status := &setupDeployment{Route: deployscan.Route(reports), Components: components, Hosts: reports, NextSteps: []string{}}
+	var empty []string
+	for i, report := range reports {
+		switch {
+		case report.Installed:
+			var lacking []string
+			for _, component := range components[i].Components {
+				if !component.Extra && !component.Deployed() {
+					lacking = append(lacking, component.ID)
+				}
+			}
+			if len(lacking) != 0 {
+				status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 装过，但缺这些组件：%s。如果是上次 setup install 没做完，重跑同一条 setup install；如果是 moox.toml 里新加的组件，覆盖更新会装上", report.Host, strings.Join(lacking, "、")))
+			}
+		case len(report.Entries) != 0 || len(report.Units) != 0 || report.Processes != 0:
+			status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 没有 version.json，但部署根或用户服务里已有东西（失败的部署尝试或别的文件）：部署会直接装在上面、覆盖同名文件；不清楚这些是什么时先让用户确认（setup wipe 会清空 moox.toml 里的全部主机，不能只清这一台）", report.Host))
+			empty = append(empty, report.Host)
+		default:
+			empty = append(empty, report.Host)
+		}
 		host := snapshot.Manifest.HostByID(report.Host)
 		if !report.Linger {
 			status.ManualSteps = append(status.ManualSteps, fmt.Sprintf("在主机 %s 上执行（没开 linger 时登出后服务会被停掉，部署会停下）：%s", report.Host, deploy.LingerCommand(host.Username)))
@@ -420,16 +463,23 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 		}
 	}
 	if status.Route == deployscan.RouteFresh {
-		status.NextSteps = append(status.NextSteps, "moox-cli setup install --space-id <空间>（先不带 --yes 看预览）")
-	} else {
-		status.NextSteps = append(status.NextSteps, "moox-cli setup status（看各主机的版本与组件状态）", "moox-cli setup deploy --host <主机>（升级或改配置后重新部署一台主机）")
+		status.Modes = []string{setupModeInstall}
+		status.NextSteps = append(status.NextSteps, "新安装：moox-cli setup install --space-id <空间>（先不带 --yes 看预检）")
+		return status, nil
 	}
+	status.Modes = []string{setupModeUpdate, setupModeUninstall}
+	if len(empty) != 0 {
+		status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 还没装过：如果是上次 setup install 没做完，重跑同一条 setup install；如果是新加的主机，覆盖更新会把它装上", strings.Join(empty, "、")))
+	}
+	status.NextSteps = append(status.NextSteps,
+		"覆盖更新（数据保留）：moox-cli setup update（先不带 --yes 看预览）",
+		"卸载（删除全部数据，不可恢复）：moox-cli setup wipe（先不带 --yes 看清空范围）")
 	return status, nil
 }
 
 func newSetupValidateCommand(deps setupDeps) *cobra.Command {
 	var file string
-	cmd := &cobra.Command{Use: "validate", Short: "校验两份配置和连接，并报告各主机的部署情况（route）和接下来要运行的命令（next_steps）", Args: cobra.NoArgs,
+	cmd := &cobra.Command{Use: "validate", Short: "校验两份配置和连接，检测每台主机上各组件是否已部署，给出可选的部署方式（modes）和接下来要运行的命令（next_steps）", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {

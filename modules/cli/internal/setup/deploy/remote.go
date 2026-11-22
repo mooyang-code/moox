@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -112,14 +113,19 @@ type HostStatus struct {
 }
 
 // ComponentStatus 是一个组件的状态：State 是 active（在运行）、inactive（单元在但没运行）或 missing（没有单元文件）。
+// Installed 表示 version.json 里记着它；Extra 表示它已不属于这台主机（moox.toml 里去掉了），下一次整台部署会停掉并删除它。
 type ComponentStatus struct {
 	ID        string `json:"id"`
 	State     string `json:"state"`
 	Installed bool   `json:"installed"`
+	Extra     bool   `json:"extra,omitempty"`
 }
 
+// Deployed 报告组件在这台主机上是否部署过：version.json 里有记录，或者还有它的单元文件。
+func (c ComponentStatus) Deployed() bool { return c.Installed || c.State != "missing" }
+
 // Status 由一次只读检测的结果（version.json、moox-* 单元与其中在运行的）整理出一台主机上各组件的状态。
-// expected 是 moox.toml 里这台主机该有的组件；多出来的单元也列出。
+// expected 是 moox.toml 里这台主机该有的组件；多出来的单元和 version.json 里多出来的记录也列出（Extra）。
 func Status(host string, expected []string, version *Version, units, active []string) HostStatus {
 	status := HostStatus{Host: host, Installed: version != nil, Components: []ComponentStatus{}}
 	if version != nil {
@@ -132,8 +138,15 @@ func Status(host string, expected []string, version *Version, units, active []st
 			ids = append(ids, id)
 		}
 	}
+	if version != nil {
+		for _, id := range slices.Sorted(maps.Keys(version.Components)) {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
 	for _, id := range ids {
-		component := ComponentStatus{ID: id, State: "missing", Installed: version.known(id)}
+		component := ComponentStatus{ID: id, State: "missing", Installed: version.known(id), Extra: !slices.Contains(expected, id)}
 		if slices.Contains(units, UnitName(id)) {
 			component.State = "inactive"
 		}

@@ -382,7 +382,12 @@ func TestStatusAndVersionChange(t *testing.T) {
 	require.Equal(t, "v0.0.2", status.Version)
 	require.Equal(t, []ComponentStatus{
 		{ID: "host-gateway", State: "inactive"}, {ID: "admin", State: "active", Installed: true},
-		{ID: "monitor", State: "missing"}, {ID: "old", State: "inactive"},
+		{ID: "monitor", State: "missing"}, {ID: "old", State: "inactive", Extra: true},
 	}, status.Components)
+	// 已部署：version.json 里有记录或还有单元文件；version.json 里记着、但已不属于这台主机的组件也列出来（Extra）。
+	require.True(t, status.Components[0].Deployed())
+	require.False(t, status.Components[2].Deployed())
+	moved := Status("control", []string{"host-gateway"}, version, nil, nil)
+	require.Equal(t, []ComponentStatus{{ID: "host-gateway", State: "missing"}, {ID: "admin", State: "missing", Installed: true, Extra: true}}, moved.Components)
 	require.False(t, Status("storage", []string{"eventbus"}, nil, nil, nil).Installed)
 }
