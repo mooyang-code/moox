@@ -505,18 +505,23 @@ func TestPlanManagerDisablesConfiguredSpacesThatAreInactiveAtStartup(t *testing.
 			reconciler.Now = time.Now
 			return reconciler, nil
 		},
-		Interval: 40 * time.Millisecond, Offset: 5 * time.Millisecond, Timeout: time.Second,
+		// 单轮超时要比 roundWait 预留的 5 秒长：这样 DisableAll 在本轮内等自己起的停用操作并读回，操作失败会打日志。
+		// 超时只有 1 秒时 roundWait 为负，每轮都不等操作，要靠后面几轮收结果，失败的结果在下一轮被静默丢弃重起，卡住时一行日志都没有。
+		Interval: 40 * time.Millisecond, Offset: 5 * time.Millisecond, Timeout: 10 * time.Second,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})
 	go func() { manager.Run(ctx); close(finished) }()
-	require.Eventually(t, func() bool { return manager.TimersDisabled("crypto") }, 5*time.Second, 10*time.Millisecond, "timers of the inactive space are disabled after a restart")
+	// 断言失败时也要停掉管理器：否则它会一直跑进后面的测试，库已关闭，每轮都刷 database is closed。
+	stop := func() { cancel(); <-finished }
+	t.Cleanup(stop)
+	// 正常几十毫秒就完成；放宽到 20 秒，只为扛住 CI 高负载时的调度停顿。
+	require.Eventually(t, func() bool { return manager.TimersDisabled("crypto") }, 20*time.Second, 10*time.Millisecond, "timers of the inactive space are disabled after a restart")
 	for _, name := range h.cloudTimers() {
 		require.False(t, h.timerEnabled(name), name)
 	}
 	time.Sleep(200 * time.Millisecond)
-	cancel()
-	<-finished
+	stop()
 	mu.Lock()
 	defer mu.Unlock()
 	require.Equal(t, 1, created, "a space that is already disabled is not wound down again")
