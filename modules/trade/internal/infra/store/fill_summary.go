@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sort"
 
@@ -30,18 +29,29 @@ type FillSummaryQuery struct {
 	EndTime          int64
 }
 
+// 原始成交和清理时累加进小时汇总表的成交合在一条语句里读（同一个快照，清理事务提交在两次读之间也不会重复计数）。
+// 每笔成交只在其中一处，直接相加；汇总行按整点取舍（c_bucket_time 落在区间内的整个小时都算），所以调用方要把区间
+// 对齐到整点（起点取整、终点为所在小时末，见 rpc.SummarizeAccountPnl），否则两端已清理的成交会多算或少算。原始成交每行算一笔，汇总行带笔数。
 const (
 	sqlSummarizeFillsByAccount = `
-		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl
+		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl, 1 AS c_fill_count
 		FROM t_order_fills
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_traded_at >= ? AND c_traded_at <= ?`
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_traded_at >= ? AND c_traded_at <= ?
+		UNION ALL
+		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl, c_fill_count
+		FROM t_order_fill_hourly_summaries
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_bucket_time >= ? AND c_bucket_time <= ?`
 	sqlSummarizeFillsByLogical = `
-		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl
+		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl, 1 AS c_fill_count
 		FROM t_order_fills
-		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_traded_at >= ? AND c_traded_at <= ?`
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_traded_at >= ? AND c_traded_at <= ?
+		UNION ALL
+		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl, c_fill_count
+		FROM t_order_fill_hourly_summaries
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_bucket_time >= ? AND c_bucket_time <= ?`
 )
 
-// SummarizeFills 逐行读成交，用十进制累加（成交表里的金额是字符串，不能让数据库按浮点求和）。
+// SummarizeFills 逐行读成交与小时汇总，用十进制累加（金额是字符串，不能让数据库按浮点求和）。
 // 只有管理台的收益拆解用，经只读视图调用。
 func (s *Store) SummarizeFills(ctx context.Context, spaceID string, query FillSummaryQuery) (FillSummary, error) {
 	if (query.TradingAccountID == "") == (query.LogicalAccountID == "") {
@@ -51,13 +61,11 @@ func (s *Store) SummarizeFills(ctx context.Context, spaceID string, query FillSu
 	if end <= 0 {
 		end = 1<<62 - 1
 	}
-	var rows *sql.Rows
-	var err error
-	if query.TradingAccountID != "" {
-		rows, err = s.db.WithContext(ctx).Raw(sqlSummarizeFillsByAccount, spaceID, query.TradingAccountID, query.StartTime, end).Rows()
-	} else {
-		rows, err = s.db.WithContext(ctx).Raw(sqlSummarizeFillsByLogical, spaceID, query.LogicalAccountID, query.StartTime, end).Rows()
+	statement, owner := sqlSummarizeFillsByAccount, query.TradingAccountID
+	if query.LogicalAccountID != "" {
+		statement, owner = sqlSummarizeFillsByLogical, query.LogicalAccountID
 	}
+	rows, err := s.db.WithContext(ctx).Raw(statement, spaceID, owner, query.StartTime, end, spaceID, owner, query.StartTime, end).Rows()
 	if err != nil {
 		return FillSummary{}, err
 	}
@@ -66,23 +74,20 @@ func (s *Store) SummarizeFills(ctx context.Context, spaceID string, query FillSu
 	var count int64
 	for rows.Next() {
 		var fee, feeAsset, settlementAsset, realized string
-		if err := rows.Scan(&fee, &feeAsset, &settlementAsset, &realized); err != nil {
+		var fills int64
+		if err := rows.Scan(&fee, &feeAsset, &settlementAsset, &realized, &fills); err != nil {
 			return FillSummary{}, err
 		}
-		feeValue, err := shared.ParseDecimal(fee)
+		value, err := parseFillSummaryValue(fee, realized, fills)
 		if err != nil {
-			return FillSummary{}, fmt.Errorf("成交手续费 %q 不是合法数字：%w", fee, err)
+			return FillSummary{}, err
 		}
-		pnlValue, err := shared.ParseDecimal(realized)
-		if err != nil {
-			return FillSummary{}, fmt.Errorf("成交已实现盈亏 %q 不是合法数字：%w", realized, err)
+		count += value.Count
+		if !value.Fee.IsZero() {
+			fees[feeAsset] = fees[feeAsset].Add(value.Fee)
 		}
-		count++
-		if !feeValue.IsZero() {
-			fees[feeAsset] = fees[feeAsset].Add(feeValue)
-		}
-		if !pnlValue.IsZero() {
-			pnls[settlementAsset] = pnls[settlementAsset].Add(pnlValue)
+		if !value.RealizedPnL.IsZero() {
+			pnls[settlementAsset] = pnls[settlementAsset].Add(value.RealizedPnL)
 		}
 	}
 	if err := rows.Err(); err != nil {

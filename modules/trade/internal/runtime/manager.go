@@ -375,7 +375,17 @@ func sameSessionConfig(
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
-		reflect.DeepEqual(left.PaperConfig, right.PaperConfig)
+		reflect.DeepEqual(paperSessionConfig(left.PaperConfig), paperSessionConfig(right.PaperConfig))
+}
+
+// paperSessionConfig 去掉与会话无关的模拟配置（订单保留天数只影响历史订单清理）：改它不重建会话。
+func paperSessionConfig(config *store.PaperAccountConfigRecord) *store.PaperAccountConfigRecord {
+	if config == nil {
+		return nil
+	}
+	copied := *config
+	copied.OrderRetentionDays = 0
+	return &copied
 }
 
 // stableSessionRun 是会话被视为正常运行过的时长，超过后断开重连不再沿用翻倍后的退避。

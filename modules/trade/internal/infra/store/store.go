@@ -234,6 +234,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_trade_wallet_transfers":          {},
 		"t_trade_blocked_instruments":       {},
 		"t_paper_funding_fees":              {},
+		"t_order_fill_hourly_summaries":     {},
 	}
 	for _, table := range tables {
 		if _, found := approved[table]; !found {

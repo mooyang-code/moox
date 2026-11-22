@@ -48,17 +48,34 @@ afterAll(() => new Promise(resolve => setTimeout(resolve, 100)));
 const mountIt = (account: TradingAccount) => mount(MemberSettings, { props: { account }, global: { plugins: [ArcoVue] } });
 
 describe("执行账户设置", () => {
-  it("模拟账户的名称、参数、杠杆只读展示，没有保存和设杠杆的控件", async () => {
+  it("模拟账户的名称、参数、杠杆只读展示，只有订单保留天数能改，没有设杠杆的控件", async () => {
     const wrapper = mountIt(paperAccount);
     await flushPromises();
     expect(wrapper.text()).toContain("币安模拟");
     expect(wrapper.text()).toContain("初始资金");
     expect(wrapper.text()).toContain("创建后都不能改");
-    expect(wrapper.find("input").exists()).toBe(false);
-    expect(wrapper.findAll("button").map(item => item.text())).not.toContain("保存");
+    expect(wrapper.text()).toContain("当前5 天");
+    expect(wrapper.text()).toContain("只有纯永续模拟账户");
+    expect(wrapper.findAll("input")).toHaveLength(1);
+    expect(wrapper.findAll("button").map(item => item.text())).toContain("保存");
     expect(wrapper.findAll("button").map(item => item.text())).not.toContain("设置");
     expect(wrapper.text()).toContain("1×");
     expect(wrapper.text()).not.toContain("检测");
+  });
+
+  it("模拟账户改订单保留天数：越界不提交，0 提交为不清理", async () => {
+    api.updateTradingAccount.mockClear();
+    const wrapper = mountIt(paperAccount);
+    const save = () => wrapper.findAll("button").find(item => item.text() === "保存")!;
+    expect(save().attributes("disabled")).toBeDefined();
+    await wrapper.find("input").setValue("366");
+    await save().trigger("click");
+    expect(api.updateTradingAccount).not.toHaveBeenCalled();
+    await wrapper.find("input").setValue("0");
+    await save().trigger("click");
+    await flushPromises();
+    expect(api.updateTradingAccount).toHaveBeenCalledWith({ trading_account_id: "p1", order_retention_days: 0 });
+    api.updateTradingAccount.mockClear();
   });
 
   it("实盘账户可以改名、选密钥和设杠杆", () => {

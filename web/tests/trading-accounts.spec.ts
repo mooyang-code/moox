@@ -107,7 +107,8 @@ test("新建模拟账户四步，测试网和生产环境也可选，请求带�
     exchange: 1,
     markets: [1, 2],
     margin_mode: "CROSS",
-    settlement_asset: "USDT"
+    settlement_asset: "USDT",
+    order_retention_days: 5
   });
 });
 

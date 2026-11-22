@@ -1,6 +1,7 @@
 import type { CreatePaperSimulationReq, CreateTradingAccountReq, Exchange, MarketType } from "@/api/trade/types";
 import { isTradeSessionNotReady } from "@/api/trade/http";
 import type { Environment } from "@/components/trade-confirm/environment";
+import { DEFAULT_ORDER_RETENTION_DAYS, orderRetentionError } from "../shared/order-retention";
 
 export const createKinds: readonly { key: Environment; label: string; desc: string; open: boolean }[] = [
   { key: "paper", label: "模拟盘", desc: "用真实行情在本地撮合，不连交易所，不需要密钥。", open: true },
@@ -22,6 +23,8 @@ export interface CreateForm {
   makerFeeRate: string;
   takerFeeRate: string;
   slippageBps: string;
+  /** 订单保留天数，0 表示不清理 */
+  orderRetentionDays: string;
   /** 费率被手工改过后，换市场不再覆盖 */
   feesEdited: boolean;
   join: "new" | "exist";
@@ -135,6 +138,7 @@ export function createDefaultForm(kind: Environment = "paper"): CreateForm {
     makerFeeRate: fees.maker,
     takerFeeRate: fees.taker,
     slippageBps: "0",
+    orderRetentionDays: String(DEFAULT_ORDER_RETENTION_DAYS),
     feesEdited: false,
     join: "new",
     logicalName: "",
@@ -203,6 +207,8 @@ export function validateStep(form: CreateForm, step: number): string {
         if (!nonNegativeDecimal.test(value.trim())) return "费率和滑点必须是非负数字";
       }
       if (Number(form.slippageBps) >= 10000) return "滑点必须小于 10000 基点";
+      const retention = orderRetentionError(form.orderRetentionDays);
+      if (retention) return retention;
     }
     if (form.kind === "prod" && !form.ack) return "请确认密钥没有提现权限";
     return "";
@@ -227,7 +233,8 @@ export function buildPaperRequest(form: CreateForm): CreatePaperSimulationReq {
     // 股票场所只有一个佣金比例：挂单、吃单相同
     maker_fee_rate: stockExchangeOf(form) ? form.takerFeeRate.trim() : form.makerFeeRate.trim(),
     taker_fee_rate: form.takerFeeRate.trim(),
-    slippage_bps: form.slippageBps.trim()
+    slippage_bps: form.slippageBps.trim(),
+    order_retention_days: Number(form.orderRetentionDays.trim())
   };
 }
 

@@ -86,6 +86,8 @@ export interface PaperConfig {
   maker_fee_rate: string;
   taker_fee_rate: string;
   slippage_bps: string;
+  /** 已结束订单与成交保留的天数，0 表示不清理；只有纯永续模拟账户（没开现货、股票）会被清理 */
+  order_retention_days?: number;
 }
 
 export interface LogicalAccountMember {
@@ -339,6 +341,8 @@ export interface UpdateTradingAccountReq {
   settlement_asset?: string;
   margin_mode?: string;
   status?: string;
+  /** 模拟账户的订单保留天数（0～365，0 表示不清理），不传表示不改；实盘账户传了会被拒绝 */
+  order_retention_days?: number;
 }
 
 export interface ListTradingAccountsReq {
@@ -440,6 +444,8 @@ export interface CreatePaperSimulationReq {
   logical_account_id?: string;
   /** 加入已有组合时的优先级；不填排在现有成员之后 */
   priority?: number;
+  /** 订单保留天数（0～365，0 表示不清理），不传取 5；只有纯永续模拟账户会被清理 */
+  order_retention_days?: number;
 }
 
 export interface EquityPoint {
