@@ -15,7 +15,7 @@
             </a-select>
           </a-form-item>
         </template>
-        <!-- 后端不允许改模拟账户的名称、杠杆和启停，只读展示 -->
+        <!-- 后端不允许改模拟账户的名称、杠杆和启停，只读展示；只有订单保留天数能改 -->
         <a-descriptions v-else :column="1" size="small" :label-style="{ width: '80px' }">
           <a-descriptions-item label="名称">{{ account.name }}</a-descriptions-item>
           <template v-if="account.paper">
@@ -27,10 +27,17 @@
             <a-descriptions-item label="滑点">{{ account.paper.slippage_bps }} 基点</a-descriptions-item>
           </template>
         </a-descriptions>
-        <p v-if="paper" class="hint">模拟账户的名称、费率、滑点、杠杆创建后都不能改；要换参数就新建一个模拟账户。</p>
+        <a-form-item v-if="paper" label="订单保留天数" :extra="orderRetentionHint">
+          <a-input v-model="retention" :placeholder="`0～${MAX_ORDER_RETENTION_DAYS}，0 表示不清理`" />
+        </a-form-item>
+        <p v-if="paper" class="hint">
+          模拟账户的名称、费率、滑点、杠杆创建后都不能改，要换参数就新建一个模拟账户；订单保留天数可以随时改，当前{{
+            fmtOrderRetention(orderRetentionDaysOf(account))
+          }}。
+        </p>
       </a-form>
       <a-space>
-        <a-button v-if="!paper" type="primary" size="small" :loading="saving" :disabled="!dirty" @click="save">保存</a-button>
+        <a-button type="primary" size="small" :loading="saving" :disabled="!dirty" @click="save">保存</a-button>
         <slot name="actions" />
       </a-space>
     </div>
@@ -89,6 +96,13 @@ import AccountInspectionPanel from "@/components/trade-inspection/account-inspec
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "./format";
+import {
+  MAX_ORDER_RETENTION_DAYS,
+  fmtOrderRetention,
+  orderRetentionDaysOf,
+  orderRetentionError,
+  orderRetentionHint
+} from "./order-retention";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "./exchange-secrets";
 import {
   leverageConfirm,
@@ -104,6 +118,7 @@ const emit = defineEmits<{ changed: [] }>();
 const paper = computed(() => props.account.execution_mode === 1);
 const name = ref(props.account.name);
 const secretId = ref(props.account.live?.credential_secret_id ?? "");
+const retention = ref(String(orderRetentionDaysOf(props.account)));
 const secrets = ref<ExchangeSecretOption[]>([]);
 const secretsLoading = ref(false);
 const saving = ref(false);
@@ -115,11 +130,12 @@ const env = computed(() => accountEnvironment(props.account));
 const confirmVisible = ref(false);
 const pending = ref<(RiskyConfirm & { name: string; run: () => Promise<void> }) | null>(null);
 
-const dirty = computed(
-  () =>
-    name.value.trim() !== "" &&
-    (name.value.trim() !== props.account.name ||
-      (props.account.execution_mode === 2 && secretId.value !== (props.account.live?.credential_secret_id ?? "")))
+const dirty = computed(() =>
+  paper.value
+    ? retention.value.trim() !== String(orderRetentionDaysOf(props.account))
+    : name.value.trim() !== "" &&
+      (name.value.trim() !== props.account.name ||
+        (props.account.execution_mode === 2 && secretId.value !== (props.account.live?.credential_secret_id ?? "")))
 );
 const leverageRows = computed(() =>
   Object.entries(props.account.leverage_settings || {}).map(([key, value]) => ({
@@ -140,6 +156,12 @@ watch(
   () => props.account.live?.credential_secret_id ?? "",
   value => {
     secretId.value = value;
+  }
+);
+watch(
+  () => orderRetentionDaysOf(props.account),
+  value => {
+    retention.value = String(value);
   }
 );
 
@@ -168,7 +190,33 @@ async function runPending() {
   await pending.value?.run();
 }
 
+// 模拟账户只能改订单保留天数，不用确认。
+function saveRetention() {
+  const invalid = orderRetentionError(retention.value);
+  if (invalid) {
+    Message.warning(invalid);
+    return;
+  }
+  saving.value = true;
+  updateTradingAccount({
+    trading_account_id: props.account.trading_account_id,
+    order_retention_days: Number(retention.value.trim())
+  })
+    .then(() => {
+      Message.success("已保存");
+      emit("changed");
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      saving.value = false;
+    });
+}
+
 function save() {
+  if (paper.value) {
+    saveRetention();
+    return;
+  }
   const accountId = props.account.trading_account_id;
   const nextName = name.value.trim() !== props.account.name ? name.value.trim() : undefined;
   const fromSecret = props.account.live?.credential_secret_id ?? "";

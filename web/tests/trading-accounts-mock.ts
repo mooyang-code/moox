@@ -27,7 +27,13 @@ const baseAccount = {
   created_at: "1",
   updated_at: "1"
 };
-const paperConfig = { initial_balance: "100000", maker_fee_rate: "0.0002", taker_fee_rate: "0.0005", slippage_bps: "1" };
+const paperConfig = {
+  initial_balance: "100000",
+  maker_fee_rate: "0.0002",
+  taker_fee_rate: "0.0005",
+  slippage_bps: "1",
+  order_retention_days: 5
+};
 const accounts = [
   {
     ...baseAccount,

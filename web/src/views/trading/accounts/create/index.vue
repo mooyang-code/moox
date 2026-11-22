@@ -95,6 +95,11 @@
           <a-form-item label="初始资金"><a-input v-model="form.initialBalance" /></a-form-item>
           <a-form-item label="滑点（基点）"><a-input v-model="form.slippageBps" /></a-form-item>
         </div>
+        <div class="row">
+          <a-form-item label="订单保留天数" :extra="orderRetentionHint"
+            ><a-input v-model="form.orderRetentionDays"
+          /></a-form-item>
+        </div>
         <div v-if="stockExchange" class="row">
           <a-form-item label="佣金"><a-input v-model="form.takerFeeRate" @input="form.feesEdited = true" /></a-form-item>
         </div>
@@ -102,9 +107,9 @@
           <a-form-item label="挂单费率"><a-input v-model="form.makerFeeRate" @input="form.feesEdited = true" /></a-form-item>
           <a-form-item label="吃单费率"><a-input v-model="form.takerFeeRate" @input="form.feesEdited = true" /></a-form-item>
         </div>
-        <p v-if="stockExchange" class="hint">这些参数创建后不能改。{{ stockExchange.feeHint }}</p>
+        <p v-if="stockExchange" class="hint">除订单保留天数外，这些参数创建后不能改。{{ stockExchange.feeHint }}</p>
         <p v-else class="hint">
-          这些参数创建后不能改。费率默认按普通用户的水平给出，可以按自己的实际费率修改。模拟账户用一个资金池同时撮合开通的各个市场。
+          除订单保留天数外，这些参数创建后不能改。费率默认按普通用户的水平给出，可以按自己的实际费率修改。模拟账户用一个资金池同时撮合开通的各个市场。
         </p>
       </template>
       <template v-else-if="form.kind === 'prod'">
@@ -197,6 +202,7 @@ import type { Environment } from "@/components/trade-confirm/environment";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "../shared/exchange-secrets";
 import { joinableLogicals, nextPriority } from "../shared/membership";
 import { ADOPT_EFFECT_TEXT } from "../shared/risky-actions";
+import { orderRetentionHint } from "../shared/order-retention";
 import { accountMapOf } from "../account-list";
 import type { TradingAccount } from "@/api/trade";
 import {

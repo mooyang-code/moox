@@ -142,6 +142,8 @@ describe("新建账户", () => {
     expect(request.logical_account_name).toBe("");
     expect(request.logical_account_id).toBe("l");
     expect(request.margin_mode).toBe("");
+    expect(request.order_retention_days).toBe(5);
+    expect(buildPaperRequest({ ...form, orderRetentionDays: " 0 " }).order_retention_days).toBe(0);
   });
 
   it("实盘请求带环境和密钥", () => {
@@ -162,6 +164,8 @@ describe("新建账户", () => {
     expect(validateStep({ ...form, markets: [] }, 2)).toBe("至少开通一个市场");
     expect(validateStep({ ...form, initialBalance: "0" }, 2)).toContain("初始资金");
     expect(validateStep({ ...form, slippageBps: "10000" }, 2)).toContain("滑点");
+    expect(validateStep({ ...form, orderRetentionDays: "366" }, 2)).toContain("订单保留天数");
+    expect(validateStep({ ...form, orderRetentionDays: "0" }, 2)).toBe("");
     expect(validateStep({ ...form, settlementAsset: "BUSD" }, 2)).toContain("USDT");
     expect(validateStep({ ...form, kind: "prod", ack: false }, 2)).toContain("提现权限");
     expect(validateStep({ ...form, join: "exist" }, 3)).toContain("选择");
