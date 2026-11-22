@@ -374,6 +374,8 @@ func TestSetupUpdatePreviewsPerHostComponents(t *testing.T) {
 	control := h.report("control")
 	control.Version = json.RawMessage(`{"version":"v0.0.1","components":{"admin":{},"host-gateway":{}}}`)
 	control.Units = []string{"moox-admin.service", "moox-host-gateway.service", "moox-old.service"}
+	// collector 从存储机挪到了控制机。
+	h.report("storage").Units = append(h.report("storage").Units, "moox-collector.service")
 	out, err := h.run("update")
 	require.NoError(t, err)
 	require.Empty(t, h.calls, "预览不改任何东西")
@@ -389,7 +391,11 @@ func TestSetupUpdatePreviewsPerHostComponents(t *testing.T) {
 	require.Equal(t, []any{"old"}, hosts["control"]["remove"])
 	require.Empty(t, hosts["factor"]["update"])
 	require.Contains(t, hosts["factor"]["install"], "factor-engine")
-	require.Contains(t, preview["notes"].([]any)[0], "主机 factor 还没装过")
+	require.Contains(t, hosts["storage"]["remove"], "collector")
+	require.Equal(t, []any{map[string]any{"component": "collector", "from": "storage", "to": "control"}}, preview["moves"], "换主机的组件单列：数据不迁移")
+	notes := preview["notes"].([]any)
+	require.Contains(t, notes[len(notes)-1], "主机 factor 还没装过")
+	require.Contains(t, preview["note"], "setup init")
 	for _, step := range preview["steps"].([]any) {
 		kind := step.(map[string]any)["kind"]
 		require.Contains(t, updateStepKinds, kind, "覆盖更新不初始化、不启动空间、不验收")
@@ -423,6 +429,23 @@ func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
 	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas")
 	require.NotContains(t, h.calls, "deploy:factor")
 
+	// 备份配置失败只提醒：主机都已更新好。
+	h.calls, h.fail = nil, "backup"
+	out, err = h.run("update", "--yes")
+	require.NoError(t, err)
+	require.Contains(t, out, `"status":"updated"`)
+	require.Contains(t, out, "备份配置失败")
+
+	// 存储机没装过：是安装没做完，不覆盖更新。
+	h.calls, h.fail = nil, ""
+	storage := *h.report("storage")
+	*h.report("storage") = deployscan.HostReport{Host: "storage", Root: "/data/moox", Linger: true, Journald: true, DiskFreeKB: 50 << 20}
+	_, err = h.run("update", "--yes")
+	require.ErrorContains(t, err, "update_not_installed")
+	require.ErrorContains(t, err, "setup install")
+	require.Empty(t, h.calls)
+	*h.report("storage") = storage
+
 	// 没开 linger 时什么都不做。
 	h.calls, h.fail = nil, ""
 	h.report("storage").Linger = false
@@ -455,6 +478,7 @@ func TestSetupWipePreviewsThenClearsEveryHostAndOperatorIdentity(t *testing.T) {
 	require.Empty(t, h.calls, "预览不清空")
 	require.Contains(t, preview["note"], "主机 overseas 上有 Trade：清空会删除 Trade 库，先确认没有持仓和挂单")
 	require.Contains(t, preview["left_behind"], "云上的采集计划函数（moox-fetch-plan- 开头；要删加 --clean-functions）", "预览列出卸载不会动的东西")
+	require.Contains(t, preview["left_behind"], "COS 桶里的云函数代码包（带 --clean-functions 也不删）")
 	require.FileExists(t, filepath.Join(h.operator, identitybundle.OperatorKeyFile))
 
 	_, err = h.run("wipe", "--yes")

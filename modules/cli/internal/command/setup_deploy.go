@@ -433,9 +433,18 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 	}
 	status := &setupDeployment{Route: deployscan.Route(reports), Components: components, Hosts: reports, NextSteps: []string{}}
 	var empty []string
-	for _, report := range reports {
+	for i, report := range reports {
 		switch {
 		case report.Installed:
+			var lacking []string
+			for _, component := range components[i].Components {
+				if !component.Extra && !component.Deployed() {
+					lacking = append(lacking, component.ID)
+				}
+			}
+			if len(lacking) != 0 {
+				status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 装过，但缺这些组件：%s。如果是上次 setup install 没做完，重跑同一条 setup install；如果是 moox.toml 里新加的组件，覆盖更新会装上", report.Host, strings.Join(lacking, "、")))
+			}
 		case len(report.Entries) != 0 || len(report.Units) != 0 || report.Processes != 0:
 			status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 没有 version.json，但部署根或用户服务里已有东西（失败的部署尝试或别的文件）：部署会直接装在上面；要先清掉用 setup wipe", report.Host))
 			empty = append(empty, report.Host)

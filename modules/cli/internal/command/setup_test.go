@@ -83,8 +83,9 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 	require.Len(t, validated.Deployment.Components, 2)
 	require.Contains(t, validated.Deployment.Components[0].Components, deploy.ComponentStatus{ID: "admin", State: "active", Installed: true})
 	require.Contains(t, validated.Deployment.Components[0].Components, deploy.ComponentStatus{ID: "collector", State: "missing"})
-	require.Len(t, validated.Deployment.Notes, 1)
-	require.Contains(t, validated.Deployment.Notes[0], "主机 compute 还没装过")
+	require.Len(t, validated.Deployment.Notes, 2)
+	require.Contains(t, validated.Deployment.Notes[0], "主机 control 装过，但缺这些组件：", "装过的主机缺组件时提醒：可能是上次安装没做完")
+	require.Contains(t, validated.Deployment.Notes[1], "主机 compute 还没装过")
 	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup update")
 	require.Contains(t, strings.Join(validated.Deployment.NextSteps, "\n"), "setup wipe")
 

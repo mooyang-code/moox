@@ -142,7 +142,7 @@ cd moox-${VER}
 | `modes` = `["install"]` | 每台机器的部署根（默认 `/data/moox`）下都没有 `version.json`，没装过（`route` = `fresh`） | 走**新安装**（第 4 节），不用询问清空 |
 | `modes` = `["update", "uninstall"]` | 至少一台机器装过（`route` = `installed`） | 把检测结果列给用户，让用户选**覆盖更新**或**卸载** |
 | `components` | 每台主机：`version`（这台装的版本）、`components`（`moox.toml` 要求的每个组件：`installed` 为 `version.json` 里有记录，`state` 为 `active` / `inactive` / `missing`；`extra: true` 是已不属于这台主机的组件） | 一个组件 `installed` 为 true 或 `state` 不是 `missing` 就算已部署 |
-| `notes` | 部分主机没装过（上次安装没做完，或新加的主机）；主机上有东西但没有 `version.json`（失败的部署尝试或别的文件） | 原样告诉用户 |
+| `notes` | 部分主机没装过、装过的主机缺组件（上次安装没做完，或 `moox.toml` 新加的主机、组件）；主机上有东西但没有 `version.json`（失败的部署尝试或别的文件） | 原样告诉用户 |
 | `manual_steps` | 要用户在目标机上自己做的事（需要 sudo），最常见的是开 linger | 把命令原样交给用户，做完再继续；没做完时安装和覆盖更新都会停下 |
 | `warnings` | journald 没有持久化、磁盘余量小 | 告诉用户，不拦安装 |
 
@@ -159,7 +159,8 @@ cd moox-${VER}
 
 - 用户选**覆盖更新**：走第 4 节的“覆盖更新”。
 - 用户选**卸载**：先取预览，按下面的话术确认后执行；执行完问用户要不要接着新安装，要的话回到第 4 节“新安装”（或者一开始就用 `setup install --wipe` 把卸载和新安装合成一次确认）。
-- `notes` 说部分主机没装过时，先问用户是不是**上次 `setup install` 没做完**：是的话重跑同一条 `setup install --space-id <空间> --yes`（见第 4 节），不走覆盖更新——覆盖更新不做初始化和启动空间，会留下一套没装完的系统。
+- `notes` 说部分主机没装过或缺组件时，先问用户是不是**上次 `setup install` 没做完**：是的话重跑同一条 `setup install --space-id <空间> --yes`（见第 4 节），不走覆盖更新——覆盖更新不做初始化和启动空间，会留下一套没装完的系统。
+  控制机或存储机没装过时 `setup update` 直接拒绝（`update_not_installed`）；所有主机都装全了、但安装停在初始化或启动空间之前的，覆盖更新之后的 `setup verify` 会报 `collection_not_started`，那时同样改为重跑 `setup install`。
 - 这个选择只在开始时问一次；同一次安装中途失败后照旧重跑同一条 `setup install`，不重新检测、不再问。
 
 ### 卸载
@@ -173,7 +174,7 @@ cd moox-${VER}
 再这样问用户，不能只问“要覆盖吗”。主机来自预览的 `plan.hosts`，其中 `archive_kb`、`seaweedfs_kb` 是归档文件与内置对象存储数据的大小（-1 表示没有）；不会动的东西来自 `left_behind`：
 
 > 卸载会停掉并删除这些机器上全部 MooX 服务：`<主机、IP>`，删除部署目录里的全部内容：程序、配置、K 线、因子、策略、任务、交易记录、管理台账号与操作记录、配置备份，
-> 以及归档文件（`<大小>`）和内置对象存储里的归档副本（`<大小>`）。删除后无法恢复。
+> 以及归档文件（`<大小>`）和内置对象存储里的归档副本（`<大小>`；配了 `[archive_object_store]` 外部对象存储时，那里的归档不删）。删除后无法恢复。
 > 管理台里后来改过或新加的密钥（交易所密钥、告警渠道、云账号）只在线上有，卸载前请先在管理台里导出或记下来。
 > 如果启用过云函数采集，请你到腾讯云控制台删除 `moox-fetch-plan-` 开头的函数（或者让我带 `--clean-functions` 一起删）；不删会继续运行并产生费用，以后启用云函数时同名函数也会创建失败。
 > 卸载不会动这些：`<left_behind>`，需要时你自己处理。
@@ -223,10 +224,13 @@ cd moox-${VER}
 ```
 
 - 预览的 `hosts` 按主机列出组件：`update` 是已部署、这次重新部署的；`install` 是 `moox.toml` 里新加的组件或新主机上的组件；`remove` 是 `moox.toml` 里已经去掉、这次会停掉并删除的。
-  把它和 `steps`、`note` 一起作为更新计划给用户确认；`remove` 不为空时单独说明这些组件会被删除。
+  `moves` 是换了主机的组件：旧主机上停掉删除，新主机上从空数据开始，**数据不迁移**。把它们和 `steps`、`note` 一起作为更新计划给用户确认；`remove`、`moves` 不为空时单独说明。
 - 步骤和新安装的部署顺序相同：准备操作身份、放行防火墙、控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，然后控制机其余组件和其余主机（因子机最后），统一等一次全部就绪，最后备份配置。
 - 不做初始化（不写业务空间、元数据、初始秘密和告警渠道），不启动空间（手工停用的任务保持停用，不重建云函数），数据目录（`data/`）不碰；每台主机只重启二进制或配置有变化的组件，`setup stop` 停掉的保持停用。
-- 中途失败（`update_step_failed`）修好后重跑同一条 `setup update --yes`，报错里也有单独重跑那一步的命令；目标机都没装过时报 `update_not_installed`，改走新安装。
+- 新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位；`moox.toml` 里新开了云函数采集（`[scf_plan]`）、日志服务或换了云账号也不会生效。需要时再运行一次 `setup init`（只建不改；告警渠道的规则见第 2 节）。
+- 最后一步备份配置用秘密文件里的管理员密码登录，用户在管理台改过密码时会失败：这时结果仍是 `updated`，`warnings` 里有原因，告诉用户即可。
+- 更新后对用户启动的空间跑一次 `setup verify --space-id <空间>` 验收；报 `collection_not_started` 说明之前的安装没做完（见第 3 节）。
+- 中途失败（`update_step_failed`）修好后重跑同一条 `setup update --yes`，报错里也有单独重跑那一步的命令；目标机都没装过，或控制机、存储机没装过时报 `update_not_installed`，改走（重跑）`setup install`。
 
 **分步命令用于修复和日常运维：**
 
@@ -303,7 +307,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 ./bin/moox-cli setup validate                     # 看各主机现在的版本与组件
 ./bin/moox-cli setup update                       # 预览，给用户确认
 ./bin/moox-cli setup update --yes
-./bin/moox-cli setup status
+./bin/moox-cli setup verify --space-id <空间>
 ```
 
 - 只想更新一台主机时用 `setup deploy --host <主机>`（控制机先）。
@@ -334,7 +338,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `config_invalid: [overrides…]` | `[overrides]` 写错：组件没有这个配置文件，或键路径不存在 | 按报错改 `moox.toml`；键路径以渲染出的配置为准（目标机 `<部署根>/config/<组件>/`） |
 | `install_step_failed` | `setup install` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑同一条 `setup install` |
 | `update_step_failed` | `setup update` 的某一步失败，后面是那一步的原因和单独重跑它的命令 | 按原因处理后重跑同一条 `setup update --yes` |
-| `update_not_installed` | 目标机都没装过，没有可以覆盖更新的部署 | 走新安装 `setup install` |
+| `update_not_installed` | 目标机都没装过，或控制机、存储机没装过（上次安装没做完） | 走新安装或重跑同一条 `setup install` |
 | `start_prerequisite_missing` | crypto 缺 collector-stream 或出口代理，其他空间没配 `[scf_plan]` | 告诉用户缺什么，按 `setup validate` 处理 |
 | `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |
 | `verify_read_failed` | 到超时还读不到验收数据，组件没起来或连接不通 | 看错误里的组件，用 `setup logs` 查 |

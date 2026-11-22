@@ -108,6 +108,10 @@ func wipeLeftBehind(manifest *topology.Config, cleanFunctions bool) []string {
 	if !cleanFunctions {
 		left = append(left, "云上的采集计划函数（moox-fetch-plan- 开头；要删加 --clean-functions）")
 	}
+	left = append(left, "COS 桶里的云函数代码包（带 --clean-functions 也不删）")
+	if manifest.ArchiveObjectStore != nil {
+		left = append(left, "[archive_object_store] 配置的外部对象存储里的归档文件")
+	}
 	return left
 }
 
