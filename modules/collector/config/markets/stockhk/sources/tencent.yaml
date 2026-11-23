@@ -1,0 +1,20 @@
+provider:
+  id: tencent
+  market: stockhk
+  # 只做港股 5m K 线的备源：请求当天分时（hkMinute，一次一只、约 14KB），合成 5m。
+  # 恒生指数成分也来自腾讯，但那是另一个来源（index_constituent_http），不读这个文件。
+  enabled_feeds: [kline]
+  hosts: [ifzq.gtimg.cn]
+  kline:
+    # 一次返回当天全部分钟，最多合成 66 根。
+    max_bars_per_request: 66
+    volume_unit: shares
+    amount_unit: HKD
+  rate_limit:
+    scope: egress_ip
+    # 沿用 A 股腾讯的值。港股每个函数约 25 只，东方财富整期失败时 5 秒左右取完，在 90 秒迟到上限内。
+    requests_per_second: 5
+    burst: 2
+    max_concurrent: 1
+    cooldown: 1s
+    request_timeout: 5s

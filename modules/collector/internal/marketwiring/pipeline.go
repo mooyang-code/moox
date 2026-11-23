@@ -39,8 +39,9 @@ func NewKlinePipeline(storage marketfetch.Storage, marketID string, instrumentTy
 // 失败后按候选链依次兜底。数据源的限速等运行参数来自各自的数据源配置文件，结算延迟取路由文件；不传 HTTP 客户端，各数据源用自己的。
 //
 // 熔断阈值（单次调用内同一数据源的连续失败上限，同时是它的在途请求上限）：候选链有多个数据源时是候选链长度 × 每源尝试次数，
-// 一家连续失败就尽快换下一家；候选链只有一个数据源时没有别家可换，按单一来源的口径算（每源尝试次数 × 并发，见
-// singleSourceBreakerThreshold），否则开头几次断连就会让整批其余标的不发请求直接失败。
+// 一家连续失败就尽快换下一家；只有一个主源时（不论有没有备源）没有同级的来源可换，阈值不低于单一来源的口径（每源尝试次数 × 并发，
+// 见 singleSourceBreakerThreshold）：否则开头几次断连就会让整批其余标的不再请求主源，没有备源时直接失败，有备源时全部落到备源
+// （港股的备源是腾讯分时合成的近似值）。
 func newRoutedKlinePipeline(storage marketfetch.Storage, marketID string, instrumentType marketdata.InstrumentType, frequency string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
 	route, found, err := marketfetch.RouteFor(marketID, instrumentType)
 	if err != nil {
@@ -73,8 +74,8 @@ func newRoutedKlinePipeline(storage marketfetch.Storage, marketID string, instru
 		}
 	}
 	threshold := len(chain) * marketfetch.RuntimeKlineProviderAttemptBudget()
-	if len(chain) == 1 {
-		threshold = singleSourceBreakerThreshold(limits)
+	if len(kline.PrimarySources()) == 1 {
+		threshold = max(threshold, singleSourceBreakerThreshold(limits))
 	}
 	router, err := marketdata.NewRouter(registry, threshold, nil, nil)
 	if err != nil {

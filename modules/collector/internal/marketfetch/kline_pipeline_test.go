@@ -731,6 +731,43 @@ func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T)
 	require.Equal(t, []marketdata.NormalizedKline{valid}, rows)
 }
 
+// 主源确认没有这根（ErrNoClosedBar）、备源只是取不了这个区间时，最终错误保留主源的：补采据此记“行情源确认没有”。
+func TestFetchKlinesFromChainKeepsPrimaryErrorOverRangeErrors(t *testing.T) {
+	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC)
+	for name, fallbackErr := range map[string]error{
+		"覆盖不到":  marketdata.ErrHistoryCoverage,
+		"超出回看":  marketdata.ErrHistoryOutOfRange,
+		"没有这个源": marketdata.ErrProviderNotFound,
+	} {
+		t.Run(name, func(t *testing.T) {
+			registry := marketdata.NewRegistry()
+			require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrNoClosedBar}))
+			require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: fallbackErr}))
+			router, err := marketdata.NewRouter(registry, 6, pipelineClock{now}, func(time.Duration) {})
+			require.NoError(t, err)
+			_, _, _, _, err = fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+				MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
+				SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1,
+				StartTime: start, EndTime: start.Add(time.Minute), Now: now, RequestID: "keep-primary",
+			}, []string{"sina", "tencent"}, 0)
+			require.ErrorIs(t, err, marketdata.ErrNoClosedBar)
+		})
+	}
+	// 后面的来源是真正的取数失败（超时）时照旧报最后的错误。
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrNoClosedBar}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrTimeout}))
+	router, err := marketdata.NewRouter(registry, 6, pipelineClock{now}, func(time.Duration) {})
+	require.NoError(t, err)
+	_, _, _, _, err = fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+		MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
+		SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1,
+		StartTime: start, EndTime: start.Add(time.Minute), Now: now, RequestID: "keep-primary",
+	}, []string{"sina", "tencent"}, 0)
+	require.ErrorIs(t, err, marketdata.ErrTimeout)
+}
+
 // 请求不带来源时按路由给每个标的固定分配 primary；分到的来源失败时按候选链回落，不再把它重试第二轮。
 // 写入行的 source_provider / provider_id / source_id 是实际取到数据的来源，series_tag 不随来源变化。
 func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
@@ -792,4 +829,32 @@ func TestOnlyLongRunningBatchesUseTheAdaptiveRate(t *testing.T) {
 	for _, kind := range []domain.BatchKind{domain.BatchKindBackfill, domain.BatchKindCatchup, domain.BatchKindGapRepair} {
 		require.True(t, adaptiveBatch(kind), kind)
 	}
+}
+
+// 强制补采只去掉开高低收不完整的来源，完整的备源照常回落（A 股日线超出通达信回看的部分由东方财富补）。
+func TestCompleteChainDropsOnlyIncompleteSources(t *testing.T) {
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(specProvider{id: "tdx", complete: true}))
+	require.NoError(t, registry.Register(specProvider{id: "eastmoney", complete: true}))
+	require.NoError(t, registry.Register(specProvider{id: "tencent", complete: false}))
+	router, err := marketdata.NewRouter(registry, 6, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"tdx", "eastmoney"}, completeChain(router.NewSession(), []string{"tdx", "tencent", "eastmoney", "missing"}))
+}
+
+type specProvider struct {
+	id       string
+	complete bool
+}
+
+func (p specProvider) Descriptor() marketdata.ProviderDescriptor {
+	return marketdata.ProviderDescriptor{ID: p.id, SourceID: "test", DisplayName: p.id, Hosts: []string{p.id + ".test"}}
+}
+
+func (p specProvider) KlineSpec() marketdata.KlineSpec {
+	return marketdata.KlineSpec{Markets: []string{"stockcn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1d"}, MaxBarsPerRequest: 1, CompleteOHLCV: p.complete}
+}
+
+func (p specProvider) FetchKlines(context.Context, marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
+	return nil, marketdata.ErrNoClosedBar
 }
