@@ -359,6 +359,24 @@ func AttemptsText(attempts []TraceAttempt) string {
 	return strings.Join(parts, ";")
 }
 
+// TraceRequest 让自建 http.Client 的数据源（东方财富等）也把一次请求记进上下文里的 Trace：返回挂了回调的上下文，
+// 请求结束（失败，或读完响应体）后调用 finish，resp 为 nil 表示没有收到响应。上下文里没有 Trace 时原样返回，finish 什么也不做。
+func TraceRequest(ctx context.Context, domain string) (context.Context, func(resp *http.Response, err error)) {
+	trace := traceFrom(ctx)
+	if trace == nil {
+		return ctx, func(*http.Response, error) {}
+	}
+	ctx, rt := trace.begin(ctx, domain)
+	return ctx, func(resp *http.Response, err error) {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+			rt.response(resp.Header)
+		}
+		rt.done(status, err)
+	}
+}
+
 // TraceFromContext 返回上下文里的 Trace，没有则为 nil；备援请求用它登记触发与获胜。
 func TraceFromContext(ctx context.Context) *Trace { return traceFrom(ctx) }
 

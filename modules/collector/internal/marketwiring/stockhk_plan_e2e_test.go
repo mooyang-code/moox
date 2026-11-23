@@ -40,7 +40,7 @@ func TestStockHKPlanToFunctionRequests(t *testing.T) {
 		require.NotNil(t, plan, name)
 		require.Equal(t, marketfetch.PlanMarket{MarketID: "stockhk", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockhk_http", MarketType: "equity"}, plan.Market, name)
 		require.Equal(t, 5000, plan.Fetch.NotBeforeMS, name)
-		require.Equal(t, 16, plan.Fetch.Concurrency, name)
+		require.Equal(t, 4, plan.Fetch.Concurrency, name)
 		require.Equal(t, 5*time.Second, plan.StartDelay(scheduled, scheduled), "定时器准点触发时等 5 秒再取数")
 		require.Contains(t, name, "nanjing", "函数名带地域")
 

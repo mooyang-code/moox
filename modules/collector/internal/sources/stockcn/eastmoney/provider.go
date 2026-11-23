@@ -58,7 +58,7 @@ func New(cfg Config) *Provider {
 	if cfg.HTTPClient == nil {
 		// Keep the HTTP transport at least as patient as the instrument page
 		// guard; otherwise a configured 15-second guard is silently truncated.
-		cfg.HTTPClient = &http.Client{Timeout: cfg.InstrumentRequestTimeout}
+		cfg.HTTPClient = eastmoneykline.NewHTTPClient(cfg.InstrumentRequestTimeout)
 	}
 	instrumentRateLimit := cfg.RateLimit
 	instrumentRateLimit.RequestTimeout = cfg.InstrumentRequestTimeout

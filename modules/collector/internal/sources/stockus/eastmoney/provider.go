@@ -89,8 +89,8 @@ func New(cfg Config) *Provider {
 		cfg.RateLimit = eastmoneykline.DefaultRateLimit()
 	}
 	if cfg.HTTPClient == nil {
-		// 与 A 股、港股的东方财富相同：自己建一个客户端，用 Go 默认的连接池。
-		cfg.HTTPClient = &http.Client{Timeout: httpTimeout}
+		// 与 A 股、港股的东方财富相同：自己建一个客户端，用东方财富共用的连接池设置。
+		cfg.HTTPClient = eastmoneykline.NewHTTPClient(httpTimeout)
 	}
 	klines := eastmoneykline.New(eastmoneykline.Config{
 		BaseURL: cfg.BaseURL, Endpoint: cfg.KlineEndpoint, ProviderID: providerID, SourceID: cfg.SourceID,
