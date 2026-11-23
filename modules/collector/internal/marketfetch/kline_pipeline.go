@@ -101,6 +101,9 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	if routeErr != nil {
 		return nil, routeErr
 	}
+	if req.PrimaryOnly && assignSource {
+		chain = primaryChain(chain, primarySources)
+	}
 	if p.SourceID != "" {
 		if req.Provider != "" && !strings.EqualFold(strings.TrimSpace(req.Provider), strings.TrimSpace(chain[0])) {
 			return nil, fmt.Errorf("kline pipeline provider binding differs: pipeline=%s request=%s", chain[0], req.Provider)
@@ -476,8 +479,17 @@ func periodRowBindingKey(datasetID, subjectID, seriesTag string) string {
 	return strings.Join([]string{strings.TrimSpace(datasetID), strings.ToUpper(strings.TrimSpace(subjectID)), strings.TrimSpace(seriesTag)}, "\x00")
 }
 
+// 链上某个来源只是取不了这个区间（没登记、超出回看、返回证明不了覆盖）时，它的错误不盖掉前面来源的错误：
+// 补采按最终错误判断“行情源确认没有这根”（ErrNoClosedBar），主源确认没有、而只能取当天的备源（港股腾讯）取不了时，
+// 要保留主源的结论，否则这类分块每轮都记失败，自动补采的水位停住。
 func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, int, error) {
 	var lastErr error
+	// noteRangeErr 记下“取不了这个区间”的错误，前面已经有错误时不覆盖。
+	noteRangeErr := func(err error) {
+		if lastErr == nil {
+			lastErr = err
+		}
+	}
 	lastProvider := "none"
 	if len(chain) == 0 {
 		return nil, lastProvider, 0, 0, fmt.Errorf("kline candidate chain is empty")
@@ -519,11 +531,11 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 					break
 				}
 				if coverageErr := spec.HistoryFor(req.Frequency).ValidateCoverage(rows, req.StartTime); coverageErr != nil {
-					lastErr = coverageErr
+					noteRangeErr(coverageErr)
 					break
 				}
 				if !hasRowsWithinCoverage(rows, req.StartTime, req.EndTime) {
-					lastErr = fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider)
+					noteRangeErr(fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider))
 					break
 				}
 				return rows, provider, startIndex, attempts, nil
@@ -532,7 +544,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 				err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
 			}
 			if errors.Is(err, marketdata.ErrProviderNotFound) || errors.Is(err, marketdata.ErrHistoryOutOfRange) || errors.Is(err, marketdata.ErrHistoryCoverage) {
-				lastErr = err
+				noteRangeErr(err)
 				break
 			}
 			if !marketdata.CanFallback(ctx, err) {
@@ -806,6 +818,20 @@ func loadInstrumentNames(ctx context.Context, storage Storage, spaceID string, i
 		return nil
 	}
 	return names
+}
+
+// primaryChain 从候选链里只留主源，顺序不变。
+func primaryChain(chain []string, primarySources []RouteSource) []string {
+	out := make([]string, 0, len(chain))
+	for _, provider := range chain {
+		for _, source := range primarySources {
+			if strings.EqualFold(source.Provider, provider) {
+				out = append(out, provider)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func normalizeCandidateChain(configured []string, primary string) []string {

@@ -343,3 +343,46 @@ func TestStockHKFallsBackToTencentWhenEastMoneyDisconnects(t *testing.T) {
 	require.EqualValues(t, 9, eastmoney.Load(), "每只先在东方财富试满 3 次")
 	require.EqualValues(t, 3, tencent.Load())
 }
+
+// 强制补采（收市后整天重取、手工 --force）只用主源：东方财富失败时分块失败、等退回重试，不用腾讯的近似值覆盖已写好的行；
+// 补缺口的补采照常回落到腾讯。
+func TestStockHKForcedBackfillUsesOnlyThePrimarySource(t *testing.T) {
+	const dataset = "dataset_stockhk_equity_kline_5m"
+	minutes := `"0930 10.000 1000 10000.0","0935 10.100 1100 11010.0","0940 10.200 1200 12030.0","0941 10.200 1210 12132.0"`
+	for _, primaryOnly := range []bool{true, false} {
+		var eastmoney, tencent atomic.Int64
+		storage := &capturedStorage{}
+		limits := &marketfetch.FeedLimits{FeedConcurrency: 4}
+		pipeline := stockHKPipelineWithFallback(t, storage, hkTime("2026-11-23 16:15:10"), limits, func(w http.ResponseWriter, _ *http.Request) {
+			eastmoney.Add(1)
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+		}, func(w http.ResponseWriter, _ *http.Request) {
+			tencent.Add(1)
+			_, _ = fmt.Fprintf(w, `{"code":0,"msg":"","data":{"hk00700":{"data":{"date":"20261123","data":[%s]}}}}`, minutes)
+		})
+		from := hkTime("2026-11-23 09:30:00")
+		payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
+			BatchID: "force", BatchKind: domain.BatchKindBackfill, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+			DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "force", Concurrency: 1, FetchLimits: limits, PlanRequest: true,
+			PrimaryOnly: primaryOnly,
+			Items: []domain.CollectionItem{{
+				SubjectID: "00700.XHKG", Symbol: "00700", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
+				StartTime: from.Format(time.RFC3339Nano), EndTime: from.Add(10 * time.Minute).Format(time.RFC3339Nano), BarLimit: 2,
+			}},
+		})
+		require.NoError(t, err)
+		require.EqualValues(t, 3, eastmoney.Load())
+		if primaryOnly {
+			require.Equal(t, "failed", payload.GetStatus())
+			require.Empty(t, storage.rows)
+			require.Zero(t, tencent.Load(), "强制补采不请求备源")
+			continue
+		}
+		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+		require.Len(t, storage.rows, 2)
+		require.EqualValues(t, 1, tencent.Load())
+	}
+}

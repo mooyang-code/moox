@@ -73,6 +73,9 @@ type Request struct {
 	Targets []domain.WriteTarget `json:"targets,omitempty"`
 	// PlanRequest 表示由采集计划（或补采）构造的请求：标的上限为 MaxPlanItems，否则为 MaxRealtimeItems。
 	PlanRequest bool `json:"plan_request,omitempty"`
+	// PrimaryOnly 表示只用路由里的主源、不回落到备源：强制补采（收市后整天重取、手工 --force）重写的是已经写好的行，
+	// 备源是近似值（港股腾讯），用它覆盖主源写好的行是降级；主源失败时分块退回重试，保留原来的行。
+	PrimaryOnly bool `json:"primary_only,omitempty"`
 }
 
 func bindRequestTargetPeriodIdentity(request *Request) {

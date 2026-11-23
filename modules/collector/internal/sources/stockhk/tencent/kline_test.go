@@ -187,3 +187,31 @@ func TestKlineRejectsUnsupportedRequest(t *testing.T) {
 	require.False(t, spec.CompleteOHLCV)
 	require.Equal(t, KlineSourceID, provider.Descriptor().SourceID)
 }
+
+// testdata/minute_hk00204_suspended_20261123.json、minute_hk00232_suspended_since_20261012.json 是 2026-11-23 16:3x（香港时间）
+// 对两只停牌标的的实际返回：00204 当天给满 332 行、成交量全是 0；00232（长期停牌）返回的是最后交易日 10-12 的分时。
+func TestKlineSuspendedSubjects(t *testing.T) {
+	now := hkTime(t, "2026-11-23 16:30")
+	req := klineRequest("00204.XHKG", "00204")
+	req.StartTime, req.EndTime = hkTime(t, "2026-11-23 09:30"), hkTime(t, "2026-11-23 16:00")
+	provider := newKlineProvider(t, fixture(t, "minute_hk00204_suspended_20261123.json"), http.StatusOK, now, nil)
+	_, err := provider.FetchKlines(context.Background(), req)
+	require.ErrorIs(t, err, marketdata.ErrNoClosedBar, "当天没有成交：与东方财富一样不出 K 线")
+
+	req = klineRequest("00232.XHKG", "00232")
+	req.StartTime, req.EndTime = hkTime(t, "2026-11-23 09:30"), hkTime(t, "2026-11-23 16:00")
+	provider = newKlineProvider(t, fixture(t, "minute_hk00232_suspended_since_20261012.json"), http.StatusOK, now, nil)
+	_, err = provider.FetchKlines(context.Background(), req)
+	require.ErrorIs(t, err, marketdata.ErrHistoryCoverage, "返回的是别的交易日，证明不了请求的那天")
+	require.NotErrorIs(t, err, marketdata.ErrNoClosedBar)
+}
+
+// 开盘前补上一交易日的缺口时，接口已经换成当天、还没有行：报覆盖不到，不能让补采当成行情源确认没有。
+func TestKlineEarlierDayIsCoverageError(t *testing.T) {
+	body := []byte(`{"code":0,"msg":"","data":{"hk00700":{"data":{"date":"20261124","data":[]}}}}`)
+	provider := newKlineProvider(t, body, http.StatusOK, hkTime(t, "2026-11-24 09:05"), nil)
+	req := klineRequest("00700.XHKG", "00700")
+	req.StartTime, req.EndTime = hkTime(t, "2026-11-23 14:00"), hkTime(t, "2026-11-23 14:05")
+	_, err := provider.FetchKlines(context.Background(), req)
+	require.ErrorIs(t, err, marketdata.ErrHistoryCoverage)
+}

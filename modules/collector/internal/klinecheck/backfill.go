@@ -519,8 +519,9 @@ func (h *planHistory) datasetMarket(datasetID, frequency, subjectID, seriesTag s
 	return nil, fmt.Errorf("subject %s of dataset %s %s is not part of any fetch plan", subjectID, datasetID, frequency)
 }
 
-// chunkRequest 构造补采分块的调用请求：一个标的、一段连续时间，只写行，不涉及周期。
-func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk store.BackfillChunk) (marketfetch.Request, error) {
+// chunkRequest 构造补采分块的调用请求：一个标的、一段连续时间，只写行，不涉及周期。force 是强制重拉作业的分块：
+// 只用路由的主源（见 marketfetch.Request.PrimaryOnly）。
+func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk store.BackfillChunk, force bool) (marketfetch.Request, error) {
 	frequency, err := marketdata.ParseFrequency(chunk.Frequency)
 	if err != nil {
 		return marketfetch.Request{}, err
@@ -553,7 +554,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 		BatchID: chunk.ChunkID, BatchKind: domain.BatchKindBackfill, SpaceID: spaceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
 		DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, Provider: provider, SourceID: sourceID, MarketType: plan.Market.MarketType,
 		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, PlanRequest: true, Concurrency: 1, FetchLimits: plan.Fetch.Limits(),
-		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
+		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target}, PrimaryOnly: force,
 	}, nil
 }
 
@@ -618,7 +619,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			return
 		}
 	}
-	request, err := chunkRequest(spaceID, functionName, plan, chunk)
+	request, err := chunkRequest(spaceID, functionName, plan, chunk, force)
 	if err != nil {
 		fail(err)
 		return

@@ -123,7 +123,7 @@ func (p *KlineProvider) FetchKlines(ctx context.Context, req marketdata.KlineReq
 	if !isCode(code) {
 		return nil, fmt.Errorf("%w: 港股代码 %q 不是五位数字", marketdata.ErrUnsupportedSymbol, req.ProviderSymbol)
 	}
-	rows, err := p.fetchMinutes(ctx, "hk"+code)
+	day, rows, err := p.fetchMinutes(ctx, "hk"+code)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +138,11 @@ func (p *KlineProvider) FetchKlines(ctx context.Context, req marketdata.KlineReq
 	}
 	out := make([]marketdata.NormalizedKline, 0, len(bars))
 	for _, bar := range bars {
+		// 没有成交的根不返回，与东方财富一致（东方财富要等这一根第一笔成交才出这一根）：腾讯对没有成交的分钟照样按上一价格给一行，
+		// 停牌的标的当天也给满 332 行、成交量全是 0（2026-11-23 实测 00204），不能当成真实的 K 线写入。
+		if bar.volume <= 0 {
+			continue
+		}
 		row := marketdata.NormalizedKline{
 			SubjectID: req.SubjectID, ProviderID: providerID, SourceID: p.sourceID, ProviderSymbol: code, Frequency: string(frequency),
 			BarStart: bar.bucket.Start.UTC(), BarEnd: bar.bucket.End.UTC(),
@@ -150,49 +155,61 @@ func (p *KlineProvider) FetchKlines(ctx context.Context, req marketdata.KlineReq
 		out = append(out, row)
 	}
 	if len(out) == 0 {
+		// 返回的是别的交易日（长期停牌的标的返回最后交易日的分时，2026-11-23 实测 00232 返回 10-12；开盘前补上一交易日时
+		// 已经换成当天）：证明不了请求的那天有没有成交，报覆盖不到，不报“没有已收盘的根”——后者会被补采当成行情源确认没有。
+		if !req.StartTime.IsZero() && !sameDay(req.StartTime, day) {
+			return nil, fmt.Errorf("%w: 腾讯港股分时 %s 返回的是 %s，不是请求的那天", marketdata.ErrHistoryCoverage, code, day.Format("2006-01-02"))
+		}
 		return nil, marketdata.ErrNoClosedBar
 	}
 	return out, nil
 }
 
-// fetchMinutes 请求一只标的的当天分时（接口一次只认一个代码）。
-func (p *KlineProvider) fetchMinutes(ctx context.Context, symbol string) ([]minuteRow, error) {
+// sameDay 报告 t 与 day（香港时间零点）是不是香港时间的同一天。
+func sameDay(t, day time.Time) bool {
+	y1, m1, d1 := t.In(hongKong).Date()
+	y2, m2, d2 := day.In(hongKong).Date()
+	return y1 == y2 && m1 == m2 && d1 == d2
+}
+
+// fetchMinutes 请求一只标的的分时（接口一次只认一个代码），返回分时所属的交易日（香港时间零点）和各行。
+func (p *KlineProvider) fetchMinutes(ctx context.Context, symbol string) (time.Time, []minuteRow, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+minutePath+"?"+url.Values{"code": {symbol}}.Encode(), nil)
 	if err != nil {
-		return nil, err
+		return time.Time{}, nil, err
 	}
 	request.Header.Set("User-Agent", "moox-collector/1.0")
 	response, err := p.client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
+		return time.Time{}, nil, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
 	}
 	defer response.Body.Close()
 	switch {
 	case response.StatusCode == http.StatusTooManyRequests:
-		return nil, marketdata.ErrRateLimited
+		return time.Time{}, nil, marketdata.ErrRateLimited
 	case response.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, response.StatusCode)
+		return time.Time{}, nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, response.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
-		return nil, fmt.Errorf("%w: 读返回内容：%v", marketdata.ErrProtocol, err)
+		return time.Time{}, nil, fmt.Errorf("%w: 读返回内容：%v", marketdata.ErrProtocol, err)
 	}
 	return parseMinutes(body, symbol)
 }
 
 // parseMinutes 解析 hkMinute 的返回：{"code":0,"data":{"hk00700":{"data":{"date":"20261123","data":["0930 335.000 1261051 422889153.600",...]}}}}。
 // 时刻按香港时间解释（与北京时间相同）；行必须按时刻递增、累计值不减，否则按协议错误处理。
-func parseMinutes(body []byte, symbol string) ([]minuteRow, error) {
+func parseMinutes(body []byte, symbol string) (time.Time, []minuteRow, error) {
 	var payload struct {
 		Code *int            `json:"code"`
 		Msg  string          `json:"msg"`
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+		return time.Time{}, nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
 	if payload.Code == nil || *payload.Code != 0 {
-		return nil, fmt.Errorf("%w: 腾讯港股分时 %s 返回失败 code=%v msg=%q", marketdata.ErrProtocol, symbol, codeValue(payload.Code), payload.Msg)
+		return time.Time{}, nil, fmt.Errorf("%w: 腾讯港股分时 %s 返回失败 code=%v msg=%q", marketdata.ErrProtocol, symbol, codeValue(payload.Code), payload.Msg)
 	}
 	var data map[string]struct {
 		Data struct {
@@ -201,21 +218,21 @@ func parseMinutes(body []byte, symbol string) ([]minuteRow, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(payload.Data, &data); err != nil {
-		return nil, fmt.Errorf("%w: 腾讯港股分时 %s 的 data：%v", marketdata.ErrProtocol, symbol, err)
+		return time.Time{}, nil, fmt.Errorf("%w: 腾讯港股分时 %s 的 data：%v", marketdata.ErrProtocol, symbol, err)
 	}
 	item, ok := data[symbol]
 	if !ok {
-		return nil, fmt.Errorf("%w: 腾讯港股分时没有返回 %s", marketdata.ErrProtocol, symbol)
+		return time.Time{}, nil, fmt.Errorf("%w: 腾讯港股分时没有返回 %s", marketdata.ErrProtocol, symbol)
 	}
 	day, err := time.ParseInLocation("20060102", strings.TrimSpace(item.Data.Date), hongKong)
 	if err != nil {
-		return nil, fmt.Errorf("%w: 腾讯港股分时 %s 的日期 %q：%v", marketdata.ErrProtocol, symbol, item.Data.Date, err)
+		return time.Time{}, nil, fmt.Errorf("%w: 腾讯港股分时 %s 的日期 %q：%v", marketdata.ErrProtocol, symbol, item.Data.Date, err)
 	}
 	rows := make([]minuteRow, 0, len(item.Data.Data))
 	for _, line := range item.Data.Data {
 		fields := strings.Fields(line)
 		if len(fields) < 4 || len(fields[0]) != 4 {
-			return nil, fmt.Errorf("%w: 腾讯港股分时 %s 的行 %q 格式不对", marketdata.ErrProtocol, symbol, line)
+			return time.Time{}, nil, fmt.Errorf("%w: 腾讯港股分时 %s 的行 %q 格式不对", marketdata.ErrProtocol, symbol, line)
 		}
 		hour, hourErr := strconv.Atoi(fields[0][:2])
 		minute, minuteErr := strconv.Atoi(fields[0][2:])
@@ -223,18 +240,18 @@ func parseMinutes(body []byte, symbol string) ([]minuteRow, error) {
 		volume, volumeErr := strconv.ParseFloat(fields[2], 64)
 		amount, amountErr := strconv.ParseFloat(fields[3], 64)
 		if hourErr != nil || minuteErr != nil || priceErr != nil || volumeErr != nil || amountErr != nil || hour > 23 || minute > 59 || price <= 0 || volume < 0 || amount < 0 {
-			return nil, fmt.Errorf("%w: 腾讯港股分时 %s 的行 %q 数值不对", marketdata.ErrProtocol, symbol, line)
+			return time.Time{}, nil, fmt.Errorf("%w: 腾讯港股分时 %s 的行 %q 数值不对", marketdata.ErrProtocol, symbol, line)
 		}
 		row := minuteRow{At: day.Add(time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute).UTC(), Price: price, Volume: volume, Amount: amount}
 		if n := len(rows); n > 0 {
 			prev := rows[n-1]
 			if !row.At.After(prev.At) || row.Volume < prev.Volume || row.Amount < prev.Amount {
-				return nil, fmt.Errorf("%w: 腾讯港股分时 %s 的行 %q 时刻不递增或累计值变小", marketdata.ErrProtocol, symbol, line)
+				return time.Time{}, nil, fmt.Errorf("%w: 腾讯港股分时 %s 的行 %q 时刻不递增或累计值变小", marketdata.ErrProtocol, symbol, line)
 			}
 		}
 		rows = append(rows, row)
 	}
-	return rows, nil
+	return day, rows, nil
 }
 
 func codeValue(code *int) any {
