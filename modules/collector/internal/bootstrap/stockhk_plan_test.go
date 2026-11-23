@@ -57,8 +57,8 @@ func TestStockHKPlanUsesFourFunctionsAndWaitsFiveSeconds(t *testing.T) {
 		require.Equal(t, "ap-nanjing", function.Region, name)
 		require.Equal(t, 5000, function.Plan.Fetch.NotBeforeMS, name)
 		// 函数内并发由东方财富的限速配置推导：只有一个主源，等于它的 max_concurrent。
-		require.Equal(t, 16, function.Plan.Fetch.Concurrency, name)
-		require.Equal(t, 16, function.Plan.Fetch.FeedConcurrency, name)
+		require.Equal(t, 4, function.Plan.Fetch.Concurrency, name)
+		require.Equal(t, 4, function.Plan.Fetch.FeedConcurrency, name)
 		subjects := len(function.Plan.Datasets[0].Copies[0].Subjects)
 		sizes = append(sizes, subjects)
 		total += subjects
