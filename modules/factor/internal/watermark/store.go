@@ -81,12 +81,30 @@ func (s *Store) Get(taskID string) (State, bool) {
 	return state, ok
 }
 
-// Put 保存任务的状态并写盘。
+// Put 保存任务的状态并写盘。Target 只往后推：已存的目标比传入的晚时保留已存的——追赶循环拿着开始时的副本逐期写回，
+// 期间别处（K 线补写事件、恢复追赶）推上去的目标不能被它盖回旧值。
 func (s *Store) Put(state State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state.UniverseSeries = append([]seriesset.Series(nil), state.UniverseSeries...)
+	if existing, ok := s.states[state.TaskID]; ok && existing.Target.After(state.Target) {
+		state.Target = existing.Target
+	}
 	s.states[state.TaskID] = state
+	return s.flushLocked()
+}
+
+// RaiseTarget 在锁内把任务的追赶目标推到 period（只往后推），不动其余字段；没有记录或从没提交过的任务不建立记录。
+// 不经 Get、Put：读出整份再写回会把这期间追赶循环提交的位置写回旧值。
+func (s *Store) RaiseTarget(taskID string, period time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.states[taskID]
+	if !ok || state.CommittedThrough.IsZero() || !period.After(state.Target) {
+		return nil
+	}
+	state.Target = period
+	s.states[taskID] = state
 	return s.flushLocked()
 }
 
