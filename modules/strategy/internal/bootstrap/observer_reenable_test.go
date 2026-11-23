@@ -74,15 +74,15 @@ func TestReenabledStockInstanceAdvancesWatermarkToSessionStart(t *testing.T) {
 			t.Fatalf("%s 登记后最近运行应是启用时刻：%v ok=%v", now, got, ok)
 		}
 	}
-	// 周一处理完第一根后进程重启：本次会话已越过启用时刻的那根，不再记宽限。
+	// 周一处理完第一根后进程重启：本次会话已越过启用时刻的那根，不再记宽限，改为补报库里那根的观测。
 	monday := time.Date(2026, 11, 23, 9, 35, 0, 0, hongKong)
 	commit("r2", "i1-session-2", monday)
 	value := register(monday.Add(time.Minute))
-	if got, ok := value("moox_strategy_dataset_output_watermark_timestamp_seconds"); ok && got != 0 {
-		t.Fatalf("本次会话已处理过周期，不应再推输出水位：%v", got)
+	if got, ok := value("moox_strategy_dataset_output_watermark_timestamp_seconds"); !ok || int64(got) != monday.Add(-5*time.Minute).Unix() {
+		t.Fatalf("本次会话已处理过周期，输出水位应是库里那根的 bar_start：%v ok=%v", got, ok)
 	}
-	if got, ok := value("moox_strategy_dataset_last_run_timestamp_seconds"); ok && got != 0 {
-		t.Fatalf("本次会话已处理过周期，不应再记宽限：%v", got)
+	if got, ok := value("moox_strategy_dataset_last_run_timestamp_seconds"); !ok || int64(got) != monday.Add(5*time.Second).Unix() {
+		t.Fatalf("本次会话已处理过周期，最近运行应是那根的写入时间，而不是启用时刻：%v ok=%v", got, ok)
 	}
 }
 
@@ -140,10 +140,11 @@ func TestReenableGraceRetriedAfterModuleResumes(t *testing.T) {
 	if err := repo.EnableInstance(ctx, store.Session{SessionID: "i1-session-2", InstanceID: "i1", DSLHash: "sha256:demo", ResolvedJSON: string(instance.ResolvedJSON), CreatedAt: saturday}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
+	// 第一次刷新补报了周三那根：输出水位是它的 bar_start。
 	halted = true
 	refresh()
-	if got := watermark(); got != 0 {
-		t.Fatalf("暂停中不应记宽限：%v", got)
+	if got, want := int64(watermark()), wednesday.Add(-5*time.Minute).Unix(); got != want {
+		t.Fatalf("暂停中不应记宽限，输出水位应停在周三那根：%d，期望 %d", got, want)
 	}
 	halted = false
 	refresh()

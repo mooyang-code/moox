@@ -79,12 +79,10 @@ type instanceObserver struct {
 	// lastBarEnd 与 lastOkBarEnd 是每个实例最近处理的一根、最近一个 ok 的一根的 bar_end，是 A 股实例期望间隔的基准。
 	lastBarEnd   map[string]time.Time
 	lastOkBarEnd map[string]time.Time
-	// basesLoaded 记录已经成功从结果库载入过基准的 A 股实例（实例移出启用清单时清除，重新启用后再载入）：处理周期时
-	// 写入的基准只是库里基准的一部分，不能据此认为已载入。
-	basesLoaded map[string]bool
-	// graced 是每个实例已经处理过首期等待宽限的会话 ID（记下了，或判定不需要）：登记失败（模块暂停中 Monitor 不收、读库失败）
-	// 时不记，下一次刷新再试；实例移出启用清单时清除。
-	graced map[string]string
+	// restored 是每个实例在本进程里已经从库里恢复过的会话 ID：载入了期望间隔的基准并补报了观测（见 restoreLocked）。
+	// 处理周期时写入的基准只是库里基准的一部分，不能据此认为已恢复。模块暂停中、读库失败时不记，下一次刷新再试；
+	// 实例移出启用清单时清除，重新启用（换了会话）后重新恢复。
+	restored map[string]string
 	// accumulatingSince 是每个实例本轮“数据积累中”的起点（第一次因积累类原因跳过的时刻，出现 ok 即清除）：
 	// 只在进程内记录，重启后重新计时，所以积累期上限最长随重启顺延——上限是兜底，不是精确的计时器。
 	accumulatingSince map[string]time.Time
@@ -130,7 +128,7 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 	if err := registerer.Register(paramStale); err != nil {
 		return nil, fmt.Errorf("注册因子参数投递滞后指标失败：%w", err)
 	}
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, paramSubmits: paramSubmits, paramStale: paramStale, staleExported: map[string]string{}, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}, graced: map[string]string{}, accumulatingSince: map[string]time.Time{}}, nil
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, paramSubmits: paramSubmits, paramStale: paramStale, staleExported: map[string]string{}, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, restored: map[string]string{}, accumulatingSince: map[string]time.Time{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。数据集标识只接受小写：实例 ID 区分大小写，
@@ -195,13 +193,16 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		o.datasets.ObserveInventoryRefreshError()
 		return fmt.Errorf("读取启用实例：%w", err)
 	}
-	o.loadBases(ctx, instances)
+	o.mu.Lock()
+	halted := o.halted != nil && o.halted()
+	o.mu.Unlock()
+	points := o.loadRestorePoints(ctx, instances, halted)
 	o.observeParamDelivery(ctx, instances)
 	definitionNames := o.definitionNames(ctx)
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.mergeBasesLocked(points)
 	next := make(map[string]report.DatasetExpectation, len(instances))
-	halted := o.halted != nil && o.halted()
 	for _, instance := range instances {
 		resolved, err := input.ParseResolved(instance.ResolvedJSON)
 		if err != nil {
@@ -218,7 +219,7 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		return err
 	}
 	o.expected = next
-	o.graceNewInstancesLocked(ctx, instances, next)
+	o.restoreLocked(instances, points, next)
 	for id := range o.lastBarEnd {
 		if _, ok := next[id]; !ok {
 			delete(o.lastBarEnd, id)
@@ -229,106 +230,181 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 			delete(o.lastOkBarEnd, id)
 		}
 	}
-	for id := range o.basesLoaded {
+	for id := range o.restored {
 		if _, ok := next[id]; !ok {
-			delete(o.basesLoaded, id)
-		}
-	}
-	for id := range o.graced {
-		if _, ok := next[id]; !ok {
-			delete(o.graced, id)
+			delete(o.restored, id)
 		}
 	}
 	return nil
 }
 
-// graceNewInstancesLocked 给刚启用、本次会话还没处理过周期的实例一个首期等待宽限：登记期望后 Monitor 里还没有这个数据集的运行，
-// 会立即判为“尚未上报”并生成告警，而它的首个事件要等到下一个 bar 收线之后才到。这里以本次启用（会话创建）的时刻记一次
-// “空”运行（刷新最近运行与最近成功时间），Monitor 的运行与成功新鲜度检查从启用时刻起算，超过容忍的间隔数仍没有首期结果才告警。
-// 起点固定在启用时刻而不是当前时间：进程重启后再次登记不会把宽限重新开始，反复重启也延后不了告警。
-//
-// 停用后重新启用的实例，Monitor 里的输出水位还停在停用前最后处理的那根；停用期间的周期不会补跑，Monitor 却会把它们都数成
-// 应到未到，休市时（股票市场周末重新启用）也照样报运行过期，一直到下次开盘处理完第一根。所以这类实例同时把输出水位推到
-// 启用时刻已收线的最近一根（bar_start，与 ObservePeriod 同一口径）：Monitor 只等启用之后收线的根。本次会话已处理到
-// 或越过那一根的（实例早已在跑、只是进程重启）不再处理。
-//
-// 每个会话只处理一次（graced）；模块暂停中（期望带暂停标记，Monitor 不收它的运行）或读库失败时留到下一次刷新。调用方持有 o.mu。
-func (o *instanceObserver) graceNewInstancesLocked(ctx context.Context, instances []store.Instance, expected map[string]report.DatasetExpectation) {
+// restorePoint 是实例在本进程、本会话第一次刷新时从库里读到的处理记录（不分会话）与会话的启用时刻。
+type restorePoint struct {
+	session   string
+	enabledAt time.Time
+	processed store.ResultMark
+	ok        store.ResultMark
+	// seenBar 是合并库里的基准之前，本进程 ObservePeriod 已经记下的最近一根的 bar_end（零表示本进程还没处理过这个实例）。
+	seenBar time.Time
+}
+
+// loadRestorePoints 为本进程、本会话还没恢复过的实例读库，供 mergeBasesLocked 与 restoreLocked 使用；读库不占观察器的锁。
+// 模块暂停中（期望带暂停标记，Monitor 不收它的运行）整体留到下一次刷新：暂停期间不需要期望间隔，基准也一并推迟载入。
+// 读取失败的实例留到下一次刷新再试。
+func (o *instanceObserver) loadRestorePoints(ctx context.Context, instances []store.Instance, halted bool) map[string]*restorePoint {
+	if halted {
+		return nil
+	}
+	points := make(map[string]*restorePoint)
 	for _, instance := range instances {
-		id := instance.InstanceID
-		expectation, ok := expected[id]
-		if !ok || expectation.Paused || instance.SessionID == nil || o.graced[id] == *instance.SessionID {
+		if instance.SessionID == nil {
 			continue
 		}
-		processed, _, err := o.store.LatestBarEnds(ctx, id)
+		// 解析不了或标识不合法的实例不会进入期望清单，也就不需要恢复：跳过，免得每次刷新都重读一次库。
+		resolved, err := input.ParseResolved(instance.ResolvedJSON)
 		if err != nil {
-			o.log("读取实例 %s 最近处理的周期失败，跳过首期宽限：%v", id, err)
 			continue
 		}
-		if o.lastBarEnd[id].After(processed) {
-			processed = o.lastBarEnd[id]
+		if _, valid := datasetKey(instance, resolved.Bar); !valid {
+			continue
 		}
-		session, err := o.store.GetSession(ctx, *instance.SessionID)
+		id, session := instance.InstanceID, *instance.SessionID
+		o.mu.Lock()
+		done := o.restored[id] == session
+		o.mu.Unlock()
+		if done {
+			continue
+		}
+		processed, ok, err := o.store.LatestMarks(ctx, id)
 		if err != nil {
-			o.log("读取实例 %s 的会话失败，跳过首期宽限：%v", id, err)
+			o.log("读取实例 %s 最近处理的周期失败，下一次刷新再试：%v", id, err)
 			continue
 		}
-		observation := report.DatasetObservation{Key: expectation.Key, Result: "empty", FinishedAt: session.CreatedAt.UTC()}
-		if !processed.IsZero() {
-			resolved, err := input.ParseResolved(instance.ResolvedJSON)
-			if err != nil {
-				o.graced[id] = *instance.SessionID
-				continue
-			}
-			period, err := input.ClosedPeriod(resolved.Calendar, resolved.Bar, session.CreatedAt)
-			if err != nil {
-				o.log("计算实例 %s 启用时刻的周期失败，跳过首期宽限：%v", id, err)
-				continue
-			}
-			if !period.BarEnd.After(processed) {
-				o.graced[id] = *instance.SessionID
-				continue
-			}
-			observation.OutputWatermark = period.StorageStart
-		}
-		if err := o.datasets.ObserveRun(observation); err != nil {
-			o.log("记录实例 %s 的首期等待宽限失败，下一次刷新再试：%v", id, err)
+		record, err := o.store.GetSession(ctx, session)
+		if err != nil {
+			o.log("读取实例 %s 的会话失败，下一次刷新再试：%v", id, err)
 			continue
 		}
-		o.graced[id] = *instance.SessionID
+		points[id] = &restorePoint{session: session, enabledAt: record.CreatedAt.UTC(), processed: processed, ok: ok}
+	}
+	return points
+}
+
+// mergeBasesLocked 把库里最近处理的一根与最近一个 ok 的一根并入期望间隔的基准（股票市场实例的期望间隔以它们计算，否则周末
+// 重启后周一跳过一根就会报 success stale）。与进程内已记下的取较晚者：重启后第一批积压事件可能先于第一次刷新到达。
+// 合并前先记下进程内的值，restoreLocked 据此判断本进程是否已经上报过这个实例。调用方持有 o.mu。
+func (o *instanceObserver) mergeBasesLocked(points map[string]*restorePoint) {
+	for id, point := range points {
+		point.seenBar = o.lastBarEnd[id]
+		if point.processed.BarEnd.After(point.seenBar) {
+			o.lastBarEnd[id] = point.processed.BarEnd
+		}
+		if point.ok.BarEnd.After(o.lastOkBarEnd[id]) {
+			o.lastOkBarEnd[id] = point.ok.BarEnd
+		}
 	}
 }
 
-// loadBases 为还没有载入过基准的股票市场实例从库里取最近处理的一根与最近一个 ok 的一根（不分会话）：进程重启或重新启用后，
-// Monitor 里上次运行与成功的时间仍在，期望间隔要以同样的基准计算，否则周末重启后周一跳过一根就会报 success stale。
-// 与进程内已记下的基准取较晚者（重启后第一批积压事件可能先于第一次刷新到达）；读取失败时留到下一次刷新。
-func (o *instanceObserver) loadBases(ctx context.Context, instances []store.Instance) {
+// restoreLocked 在实例于本进程、本会话第一次刷新时给 Monitor 补一次观测。Monitor 的最近运行、最近成功与输出水位只来自生产者
+// 进程内存里的指标，策略进程重启或实例刚启用后都是空的；休市期间（股票市场周末）又没有周期可跑，不补就一直是“尚未上报”。
+// 每个实例每个会话只处理一次（restored），上报失败只记日志：期望刚登记成功，失败只可能是观测本身不合法，重试也不会成功。
+// 调用方持有 o.mu，期望清单已登记。
+func (o *instanceObserver) restoreLocked(instances []store.Instance, points map[string]*restorePoint, expected map[string]report.DatasetExpectation) {
 	for _, instance := range instances {
+		id := instance.InstanceID
+		point := points[id]
+		if point == nil {
+			continue
+		}
+		o.restored[id] = point.session
+		expectation, ok := expected[id]
+		if !ok {
+			continue
+		}
 		resolved, err := input.ParseResolved(instance.ResolvedJSON)
-		if err != nil || !input.SessionCalendar(resolved.Calendar) {
-			continue
-		}
-		o.mu.Lock()
-		loaded := o.basesLoaded[instance.InstanceID]
-		o.mu.Unlock()
-		if loaded {
-			continue
-		}
-		processed, ok, err := o.store.LatestBarEnds(ctx, instance.InstanceID)
 		if err != nil {
-			o.log("读取实例 %s 最近处理的周期失败：%v", instance.InstanceID, err)
 			continue
 		}
-		o.mu.Lock()
-		if processed.After(o.lastBarEnd[instance.InstanceID]) {
-			o.lastBarEnd[instance.InstanceID] = processed
+		for _, observation := range o.restoreObservations(id, point, expectation.Key, resolved.Calendar, resolved.Bar) {
+			if err := o.datasets.ObserveRun(observation); err != nil {
+				o.log("补报实例 %s 的观测失败：%v", id, err)
+			}
 		}
-		if ok.After(o.lastOkBarEnd[instance.InstanceID]) {
-			o.lastOkBarEnd[instance.InstanceID] = ok
-		}
-		o.basesLoaded[instance.InstanceID] = true
-		o.mu.Unlock()
 	}
+}
+
+// restoreObservations 返回要补报的观测，分三种情况：
+//
+//   - 从没处理过周期（刚启用）：首期等待宽限。登记期望后 Monitor 里还没有这个数据集的运行，会立即判为“尚未上报”，而首个事件
+//     要等下一个 bar 收线之后才到。以启用（会话创建）时刻记一次“空”运行，Monitor 的运行与成功新鲜度从启用时刻起算。起点固定在
+//     启用时刻而不是当前时间：反复重启延后不了告警。
+//   - 停用后重新启用、本次会话还没处理到启用时刻已收线的那一根：Monitor 里的输出水位还停在停用前，停用期间的周期不会补跑，
+//     却会被数成应到未到（股票市场周末重新启用也照样报运行过期）。同样以启用时刻记一次空运行，并把输出水位推到启用时刻已收线的
+//     最近一根（bar_start），Monitor 只等启用之后收线的根。
+//   - 其余是实例早已在跑、只是进程重启：按重启前的上报顺序补报库里的记录，让最近运行、最近成功、最近部分成功与输出水位和重启前
+//     一致。最近一个 ok 的一根记 success（输入、输出水位都是这根的 bar_start）；本会话还没有 ok（新实例在预热、或重新启用后只有
+//     跳过）时，重启前在它之后还有启用时刻的那次空运行，照样补上（库里的 ok 来自旧会话、启用时刻已收线的那一根更晚时，带上那根的
+//     输出水位）；最近处理的一根更晚时再记一次非成功运行（输入水位是它的 bar_start；跳过原因属于积累类，或本会话还没有 ok 时的
+//     too_many_missing（与 warmingUp 一致），记 partial，其余记 incomplete）。完成时间取记录的写入时间，拿不到时用这根的收线时间。
+//     本进程处理过比库里最近一条更晚的周期时不补（ObservePeriod 都在结果写入成功之后调用，正常情况下库里最近一条不会更早）。
+//     本进程处理过的就是库里最近一条（积压事件先到、或恢复追赶期间处理过而 Monitor 没收）时照常补：补报的时间是那条记录的写入时间，
+//     与进程内上报的时间只差这一期的处理耗时。
+func (o *instanceObserver) restoreObservations(id string, point *restorePoint, key report.DatasetKey, calendar, bar string) []report.DatasetObservation {
+	processed := point.processed.BarEnd
+	if point.seenBar.After(processed) {
+		processed = point.seenBar
+	}
+	grace := report.DatasetObservation{Key: key, Result: "empty", FinishedAt: point.enabledAt}
+	if processed.IsZero() {
+		return []report.DatasetObservation{grace}
+	}
+	period, err := input.ClosedPeriod(calendar, bar, point.enabledAt)
+	if err != nil {
+		o.log("计算实例 %s 启用时刻的周期失败，不补报观测：%v", id, err)
+		return nil
+	}
+	if period.BarEnd.After(processed) {
+		grace.OutputWatermark = period.StorageStart
+		return []report.DatasetObservation{grace}
+	}
+	if point.seenBar.After(point.processed.BarEnd) {
+		return nil
+	}
+	okInSession := !point.ok.BarEnd.IsZero() && point.ok.SessionID == point.session
+	var out []report.DatasetObservation
+	mark := func(item store.ResultMark, result string) {
+		boundary, err := input.FromBarEnd(calendar, bar, item.BarEnd)
+		if err != nil {
+			o.log("计算实例 %s 周期 %s 的起点失败，不补报：%v", id, item.BarEnd.Format(time.RFC3339), err)
+			return
+		}
+		finishedAt := item.CreatedAt
+		if finishedAt.IsZero() {
+			finishedAt = item.BarEnd
+		}
+		observation := report.DatasetObservation{Key: key, Result: result, FinishedAt: finishedAt.UTC(), InputWatermark: boundary.StorageStart}
+		if result == "success" {
+			observation.OutputWatermark = boundary.StorageStart
+		}
+		out = append(out, observation)
+	}
+	if !point.ok.BarEnd.IsZero() {
+		mark(point.ok, "success")
+	}
+	if !okInSession {
+		if !point.ok.BarEnd.IsZero() && period.BarEnd.After(point.ok.BarEnd) {
+			grace.OutputWatermark = period.StorageStart
+		}
+		out = append(out, grace)
+	}
+	if point.processed.BarEnd.After(point.ok.BarEnd) {
+		result := "incomplete"
+		if accumulatingReasons[point.processed.SkipReason] || (!okInSession && point.processed.SkipReason == engine.SkipTooManyMissing) {
+			result = "partial"
+		}
+		mark(point.processed, result)
+	}
+	return out
 }
 
 // 与 config/setup/dataset-health-policy.yaml 一致：Monitor 在最近一次运行之后 run_missed_intervals 个间隔没有新的运行

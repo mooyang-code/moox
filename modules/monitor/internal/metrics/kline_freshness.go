@@ -263,6 +263,13 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			reports = append(reports, report)
 			continue
 		}
+		if summary.latest.IsZero() && summary.snapshotAt.IsZero() && !rule.ViewLastDataTime.IsZero() && !rule.ViewLastDataTime.After(now.Add(klineFutureTolerance)) {
+			// Storage 只在进程内存里记每个 View 的最新输出，重启后要等这个 View 再提交写入才重新上报；休市期间重启（周末、长假）
+			// 就一直读不到这个 View 的摘要。这时用采集结果清单里 View 已建索引的上界当作最新一根（和摘要一样不收未来时间），
+			// 照常按交易日历判逾期：没有对象明细（对象数为 0、跟踪起点为零），只判 View 整体是否停更，不会算出缺失或过期对象。
+			// 有摘要但最新一根为零（例如跟踪的序列超过上限）不是重启，不兜底，仍按无输出报出。
+			summary.latest = rule.ViewLastDataTime
+		}
 		if summary.latest.IsZero() {
 			// 刚建好的数据集在第一根应到的 K 线收线（加允许迟到）之前没有输出是正常的：A 股收盘后、周末启用要等下一个交易时段。
 			if until, waiting := e.firstBarPending(ctx, rule, clock, freq, now); waiting {

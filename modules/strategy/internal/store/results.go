@@ -158,8 +158,9 @@ const (
 	sqlSelectResultAtBar = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`
 	// sqlCancelSupersededResults 把本会话更早周期的待投递结果标记为 cancelled。
 	sqlCancelSupersededResults = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`
-	// sqlSelectLatestBarEnds 读取实例（不分会话）最近处理的一根与最近一个 ok 的一根的 bar_end。
-	sqlSelectLatestBarEnds = `SELECT MAX(c_bar_end_time) AS processed, MAX(CASE WHEN c_status = 'ok' THEN c_bar_end_time END) AS ok FROM t_strategy_results WHERE c_instance_id = ?`
+	// sqlSelectLatestMark、sqlSelectLatestOKMark 读取实例（不分会话）最近处理的一条与最近一条 ok 的会话、周期、写入时间与跳过原因。
+	sqlSelectLatestMark   = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
+	sqlSelectLatestOKMark = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? AND c_status = 'ok' ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
 	// sqlSelectResultsAtBarAnySession 读取实例某一根 bar 的全部记录：当前会话优先，其次创建时间最新。
 	sqlSelectResultsAtBarAnySession = `
 		SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results
@@ -421,23 +422,40 @@ func (s *Store) LatestOk(ctx context.Context, instanceID, sessionID string) (Res
 	return row.result(), true, nil
 }
 
-// LatestBarEnds 返回实例（不分会话）最近处理的一根与最近一个 ok 的一根的 bar_end；没有记录时为零值。Monitor 的
-// 期望间隔以它们为基准，进程重启或重新启用后从库里恢复，而不是退回偏宽或偏紧的估计。
-func (s *Store) LatestBarEnds(ctx context.Context, instanceID string) (processed, ok time.Time, err error) {
-	var row struct {
-		Processed sql.NullInt64 `gorm:"column:processed"`
-		OK        sql.NullInt64 `gorm:"column:ok"`
+// ResultMark 是一条结果所属的会话、周期（bar_end）、写入时间与跳过原因；没有记录时为零值。
+type ResultMark struct {
+	SessionID  string
+	BarEnd     time.Time
+	CreatedAt  time.Time
+	SkipReason string
+}
+
+// LatestMarks 返回实例（不分会话）最近处理的一条与最近一条 ok 的结果标记。进程重启或重新启用后，Monitor 的期望间隔
+// 以它们的周期为基准，上次的运行、成功时间与输出水位也按它们补报。
+func (s *Store) LatestMarks(ctx context.Context, instanceID string) (processed, ok ResultMark, err error) {
+	if processed, err = s.latestMark(ctx, sqlSelectLatestMark, instanceID); err != nil {
+		return ResultMark{}, ResultMark{}, err
 	}
-	if err := s.db.WithContext(ctx).Raw(sqlSelectLatestBarEnds, instanceID).Scan(&row).Error; err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	if row.Processed.Valid {
-		processed = fromMillis(row.Processed.Int64)
-	}
-	if row.OK.Valid {
-		ok = fromMillis(row.OK.Int64)
+	if ok, err = s.latestMark(ctx, sqlSelectLatestOKMark, instanceID); err != nil {
+		return ResultMark{}, ResultMark{}, err
 	}
 	return processed, ok, nil
+}
+
+func (s *Store) latestMark(ctx context.Context, query, instanceID string) (ResultMark, error) {
+	var rows []struct {
+		SessionID  string    `gorm:"column:c_session_id"`
+		BarEndTime int64     `gorm:"column:c_bar_end_time"`
+		CreatedAt  time.Time `gorm:"column:c_ctime"`
+		SkipReason string    `gorm:"column:c_skip_reason"`
+	}
+	if err := s.db.WithContext(ctx).Raw(query, instanceID).Scan(&rows).Error; err != nil {
+		return ResultMark{}, err
+	}
+	if len(rows) == 0 {
+		return ResultMark{}, nil
+	}
+	return ResultMark{SessionID: rows[0].SessionID, BarEnd: fromMillis(rows[0].BarEndTime), CreatedAt: rows[0].CreatedAt.UTC(), SkipReason: rows[0].SkipReason}, nil
 }
 
 // ResultAtBar 返回本会话某个周期的记录。
