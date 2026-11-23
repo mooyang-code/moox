@@ -65,9 +65,9 @@ func TestForcedChunkSucceedsOnALaterAttempt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
 	require.Len(t, invoker.events, 3)
-	// 强制重拉只用路由的主源：备源的近似值不能覆盖主源已经写好的行。
+	// 强制重拉只用开高低收完整的来源：近似值不能覆盖已经写好的行。
 	for _, event := range invoker.events {
-		require.Equal(t, true, event["data"].(map[string]any)["primary_only"])
+		require.Equal(t, true, event["data"].(map[string]any)["complete_only"])
 	}
 }
 
@@ -88,7 +88,7 @@ func TestGapChunkStillFailsOnTheFirstFunctionFailure(t *testing.T) {
 		require.Len(t, status.Failed, 2, source)
 		require.Len(t, invoker.events, 2, "%s：每个分块只调用一次", source)
 		for _, event := range invoker.events {
-			require.NotContains(t, event["data"].(map[string]any), "primary_only", "%s：补缺口照常回落到备源", source)
+			require.NotContains(t, event["data"].(map[string]any), "complete_only", "%s：补缺口照常回落到备源", source)
 		}
 		for _, chunk := range status.Failed {
 			require.Equal(t, 1, chunk.Attempts, source)

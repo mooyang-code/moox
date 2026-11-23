@@ -830,3 +830,31 @@ func TestOnlyLongRunningBatchesUseTheAdaptiveRate(t *testing.T) {
 		require.True(t, adaptiveBatch(kind), kind)
 	}
 }
+
+// 强制补采只去掉开高低收不完整的来源，完整的备源照常回落（A 股日线超出通达信回看的部分由东方财富补）。
+func TestCompleteChainDropsOnlyIncompleteSources(t *testing.T) {
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(specProvider{id: "tdx", complete: true}))
+	require.NoError(t, registry.Register(specProvider{id: "eastmoney", complete: true}))
+	require.NoError(t, registry.Register(specProvider{id: "tencent", complete: false}))
+	router, err := marketdata.NewRouter(registry, 6, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"tdx", "eastmoney"}, completeChain(router.NewSession(), []string{"tdx", "tencent", "eastmoney", "missing"}))
+}
+
+type specProvider struct {
+	id       string
+	complete bool
+}
+
+func (p specProvider) Descriptor() marketdata.ProviderDescriptor {
+	return marketdata.ProviderDescriptor{ID: p.id, SourceID: "test", DisplayName: p.id, Hosts: []string{p.id + ".test"}}
+}
+
+func (p specProvider) KlineSpec() marketdata.KlineSpec {
+	return marketdata.KlineSpec{Markets: []string{"stockcn"}, Exchanges: []string{"XSHG"}, Frequencies: []string{"1d"}, MaxBarsPerRequest: 1, CompleteOHLCV: p.complete}
+}
+
+func (p specProvider) FetchKlines(context.Context, marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
+	return nil, marketdata.ErrNoClosedBar
+}

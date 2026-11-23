@@ -101,8 +101,10 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	if routeErr != nil {
 		return nil, routeErr
 	}
-	if req.PrimaryOnly && assignSource {
-		chain = primaryChain(chain, primarySources)
+	if req.CompleteOnly {
+		if chain = completeChain(p.Router.NewSession(), chain); len(chain) == 0 {
+			return nil, fmt.Errorf("kline pipeline has no candidate provider with complete OHLCV")
+		}
 	}
 	if p.SourceID != "" {
 		if req.Provider != "" && !strings.EqualFold(strings.TrimSpace(req.Provider), strings.TrimSpace(chain[0])) {
@@ -820,15 +822,12 @@ func loadInstrumentNames(ctx context.Context, storage Storage, spaceID string, i
 	return names
 }
 
-// primaryChain 从候选链里只留主源，顺序不变。
-func primaryChain(chain []string, primarySources []RouteSource) []string {
+// completeChain 从候选链里只留开高低收完整的来源，顺序不变。
+func completeChain(session *marketdata.RouterSession, chain []string) []string {
 	out := make([]string, 0, len(chain))
 	for _, provider := range chain {
-		for _, source := range primarySources {
-			if strings.EqualFold(source.Provider, provider) {
-				out = append(out, provider)
-				break
-			}
+		if spec, err := session.KlineSpec(provider); err == nil && spec.CompleteOHLCV {
+			out = append(out, provider)
 		}
 	}
 	return out

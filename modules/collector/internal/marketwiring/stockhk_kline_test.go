@@ -344,12 +344,12 @@ func TestStockHKFallsBackToTencentWhenEastMoneyDisconnects(t *testing.T) {
 	require.EqualValues(t, 3, tencent.Load())
 }
 
-// 强制补采（收市后整天重取、手工 --force）只用主源：东方财富失败时分块失败、等退回重试，不用腾讯的近似值覆盖已写好的行；
-// 补缺口的补采照常回落到腾讯。
-func TestStockHKForcedBackfillUsesOnlyThePrimarySource(t *testing.T) {
+// 强制补采（收市后整天重取、手工 --force）只用开高低收完整的来源：东方财富失败时分块失败、等退回重试，
+// 不用腾讯的近似值覆盖已写好的行；补缺口的补采照常回落到腾讯。
+func TestStockHKForcedBackfillSkipsTheApproximateFallback(t *testing.T) {
 	const dataset = "dataset_stockhk_equity_kline_5m"
 	minutes := `"0930 10.000 1000 10000.0","0935 10.100 1100 11010.0","0940 10.200 1200 12030.0","0941 10.200 1210 12132.0"`
-	for _, primaryOnly := range []bool{true, false} {
+	for _, completeOnly := range []bool{true, false} {
 		var eastmoney, tencent atomic.Int64
 		storage := &capturedStorage{}
 		limits := &marketfetch.FeedLimits{FeedConcurrency: 4}
@@ -367,7 +367,7 @@ func TestStockHKForcedBackfillUsesOnlyThePrimarySource(t *testing.T) {
 		payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
 			BatchID: "force", BatchKind: domain.BatchKindBackfill, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
 			DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "force", Concurrency: 1, FetchLimits: limits, PlanRequest: true,
-			PrimaryOnly: primaryOnly,
+			CompleteOnly: completeOnly,
 			Items: []domain.CollectionItem{{
 				SubjectID: "00700.XHKG", Symbol: "00700", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
 				StartTime: from.Format(time.RFC3339Nano), EndTime: from.Add(10 * time.Minute).Format(time.RFC3339Nano), BarLimit: 2,
@@ -375,7 +375,7 @@ func TestStockHKForcedBackfillUsesOnlyThePrimarySource(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.EqualValues(t, 3, eastmoney.Load())
-		if primaryOnly {
+		if completeOnly {
 			require.Equal(t, "failed", payload.GetStatus())
 			require.Empty(t, storage.rows)
 			require.Zero(t, tencent.Load(), "强制补采不请求备源")
