@@ -40,7 +40,7 @@ func TestStockHKKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"5m"}, spec.Frequencies)
 	require.Equal(t, 1205, spec.MaxBarsPerRequest)
-	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: 5 * time.Second}, spec.RateLimit)
+	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 4, Cooldown: time.Second, RequestTimeout: 5 * time.Second}, spec.RateLimit)
 
 	// 只有 5m 的路由。
 	for _, frequency := range []string{"1m", "1d"} {
@@ -186,8 +186,8 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 }
 
 // 候选链只有一个数据源时没有别家可换，熔断阈值（同时是在途请求上限）按单一来源的口径算：每源尝试次数 × 并发。
-// 港股的采集计划按东方财富的 max_concurrent 给出并发 16，阈值是 3 × 16 = 48；实际同时在途的请求数由数据源自己的
-// max_concurrent（16）限制。候选链有多个数据源的（A 股）仍是候选链长度 × 每源尝试次数，不随并发变。
+// 港股的采集计划按东方财富的 max_concurrent 给出并发 4，阈值是 3 × 4 = 12；实际同时在途的请求数由数据源自己的
+// max_concurrent（4）限制。候选链有多个数据源的（A 股）仍是候选链长度 × 每源尝试次数，不随并发变。
 func TestSingleSourceRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
 	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "")
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
@@ -197,10 +197,10 @@ func TestSingleSourceRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
 		return pipeline.Router.BreakerThreshold()
 	}
 	planned := fetchplan.RouteFetchLimits("stockhk")(fetchplan.TaskGroup{Frequency: "5m"}, marketfetch.PlanFetch{})
-	require.Equal(t, 16, planned.FeedConcurrency, "采集计划给港股的源并发")
-	require.Equal(t, 16, planned.Concurrency, "一个函数内同时处理的标的数")
+	require.Equal(t, 4, planned.FeedConcurrency, "采集计划给港股的源并发")
+	require.Equal(t, 4, planned.Concurrency, "一个函数内同时处理的标的数")
 	limits := &marketfetch.FeedLimits{FeedConcurrency: planned.FeedConcurrency}
-	require.Equal(t, 48, threshold("stockhk", "5m", limits))
+	require.Equal(t, 12, threshold("stockhk", "5m", limits))
 	require.Equal(t, 3, threshold("stockhk", "5m", nil), "请求没带限速、进程环境也没设并发时按 1")
 	// A 股各周期的候选链都不止一个数据源，阈值与请求带不带限速无关。
 	for frequency, want := range map[string]int{"1m": 12, "5m": 12, "1d": 6} {
