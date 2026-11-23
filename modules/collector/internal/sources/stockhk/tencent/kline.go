@@ -154,6 +154,13 @@ func (p *KlineProvider) FetchKlines(ctx context.Context, req marketdata.KlineReq
 		}
 		out = append(out, row)
 	}
+	// 请求的区间在返回的这一天里、分时已经走过区间的终点，区间里却没有有成交的根：腾讯证明了这段时间没有成交，
+	// 报“没有已收盘的根”，与东方财富对没有成交的根的结论一致。否则候选链按“区间内没有根”判覆盖不到，
+	// 补采拿到的是主源的断连错误，记不了“行情源确认没有”，这一块每轮失败、自动补采的水位停住（2026-11-23 00002 的 13:10）。
+	if len(out) > 0 && !req.StartTime.IsZero() && !req.EndTime.IsZero() && sameDay(req.StartTime, day) &&
+		!rows[len(rows)-1].At.Before(req.EndTime) && !now.Before(req.EndTime) && !hasBarIn(out, req.StartTime, req.EndTime) {
+		return nil, fmt.Errorf("%w: 腾讯港股分时 %s 在 %s～%s 没有成交", marketdata.ErrNoClosedBar, code, req.StartTime.Format(time.RFC3339), req.EndTime.Format(time.RFC3339))
+	}
 	if len(out) == 0 {
 		// 返回的是别的交易日（长期停牌的标的返回最后交易日的分时，2026-11-23 实测 00232 返回 10-12；开盘前补上一交易日时
 		// 已经换成当天）：证明不了请求的那天有没有成交，报覆盖不到，不报“没有已收盘的根”——后者会被补采当成行情源确认没有。
@@ -163,6 +170,16 @@ func (p *KlineProvider) FetchKlines(ctx context.Context, req marketdata.KlineReq
 		return nil, marketdata.ErrNoClosedBar
 	}
 	return out, nil
+}
+
+// hasBarIn 报告 rows 里有没有开始时刻落在 [start, end) 的根。
+func hasBarIn(rows []marketdata.NormalizedKline, start, end time.Time) bool {
+	for _, row := range rows {
+		if !row.BarStart.Before(start) && row.BarStart.Before(end) {
+			return true
+		}
+	}
+	return false
 }
 
 // sameDay 报告 t 与 day（香港时间零点）是不是香港时间的同一天。

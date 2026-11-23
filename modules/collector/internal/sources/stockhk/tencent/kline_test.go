@@ -215,3 +215,29 @@ func TestKlineEarlierDayIsCoverageError(t *testing.T) {
 	_, err := provider.FetchKlines(context.Background(), req)
 	require.ErrorIs(t, err, marketdata.ErrHistoryCoverage)
 }
+
+// testdata/minute_hk00002_no_trade_1310_20261123.json 是 2026-11-23 17:57（香港时间）对 00002 的实际返回：13:10～13:15
+// 这一根累计成交量不变（没有成交）。补这一根时腾讯要报“没有已收盘的根”，补采才能记“行情源确认没有”；补别的根照常返回。
+func TestKlineNoTradeBarInRequestedIntervalIsNoClosedBar(t *testing.T) {
+	now := hkTime(t, "2026-11-23 17:57")
+	provider := newKlineProvider(t, fixture(t, "minute_hk00002_no_trade_1310_20261123.json"), http.StatusOK, now, nil)
+	req := klineRequest("00002.XHKG", "00002")
+	req.StartTime, req.EndTime = hkTime(t, "2026-11-23 13:10"), hkTime(t, "2026-11-23 13:15")
+	_, err := provider.FetchKlines(context.Background(), req)
+	require.ErrorIs(t, err, marketdata.ErrNoClosedBar)
+
+	req.StartTime, req.EndTime = hkTime(t, "2026-11-23 13:05"), hkTime(t, "2026-11-23 13:20")
+	rows, err := provider.FetchKlines(context.Background(), req)
+	require.NoError(t, err, "区间里有成交的根时照常返回")
+	bars := barsByStart(t, rows)
+	require.Contains(t, bars, "1305")
+	require.NotContains(t, bars, "1310")
+	require.Contains(t, bars, "1315")
+
+	// 分时还没走到区间终点时不下结论。
+	provider = newKlineProvider(t, fixture(t, "minute_hk00700_20261123.json"), http.StatusOK, hkTime(t, "2026-11-23 15:53"), nil)
+	req = klineRequest("00700.XHKG", "00700")
+	req.StartTime, req.EndTime = hkTime(t, "2026-11-23 15:55"), hkTime(t, "2026-11-23 16:00")
+	_, err = provider.FetchKlines(context.Background(), req)
+	require.NotErrorIs(t, err, marketdata.ErrNoClosedBar)
+}
