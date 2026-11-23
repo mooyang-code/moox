@@ -136,13 +136,19 @@ func build() *marketdata.Catalog {
 		entry(stockcn, marketdata.InstrumentIndex, "cni", "index_cni_http", fixed(func() marketdata.MarketProvider { return cni.New(cni.Config{}) })),
 		entry(stockcn, marketdata.InstrumentIndex, "sw", "index_sw_http", fixed(func() marketdata.MarketProvider { return indexsw.New(indexsw.Config{}) })),
 		entry(stockcn, marketdata.InstrumentIndex, "csindex", "index_http", fixed(func() marketdata.MarketProvider { return csindex.New(csindex.Config{}) })),
-		// 港股股票：K 线来源按 config/markets/stockhk/route.yaml 分配，只有东方财富一家，只取 K 线。
+		// 港股股票：K 线来源按 config/markets/stockhk/route.yaml 分配，东方财富是主源，只取 K 线；腾讯备源在下面。
 		routedEntry(stockhk, marketdata.InstrumentEquity, "eastmoney", hkeastmoney.DefaultSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return hkeastmoney.New(hkeastmoney.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
 		// 港股：恒生指数成分来源（腾讯），只取指数成分，不取 K 线、不取全部标的。
 		entry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.DefaultSourceID, fixed(func() marketdata.MarketProvider { return hktencent.New(hktencent.Config{}) })),
+		// 港股 5m K 线的备源（腾讯分时合成）。必须登记在指数成分来源之后：按路由分配的登记项查找时不比 source_id，
+		// 登记在前会把按 index_constituent_http 查找的指数成分来源也接走。
+		routedEntry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.KlineSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+			s := deps.Settings
+			return hktencent.NewKline(hktencent.KlineConfig{BaseURL: s.BaseURL, SourceID: deps.SourceID, RateLimit: s.RateLimit}), nil
+		}),
 		// 美股：纳斯达克 100（纳斯达克官网）和标普 500（datahub 的 CSV）的成分来源，只取指数成分，不取 K 线、不取全部标的。
 		entry(stockus, marketdata.InstrumentEquity, "nasdaq", usnasdaq.DefaultSourceID, fixed(func() marketdata.MarketProvider { return usnasdaq.New(usnasdaq.Config{}) })),
 		entry(stockus, marketdata.InstrumentEquity, "datahub", usdatahub.DefaultSourceID, fixed(func() marketdata.MarketProvider { return usdatahub.New(usdatahub.Config{}) })),

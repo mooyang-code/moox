@@ -216,7 +216,7 @@
     "auto_bind_source": true,
     "series_tag": "",
     "settle_delay_ms": 800,
-    "breaker_threshold": 6,
+    "breaker_threshold": 12,
     "field_sources": 5,
     "extra_field_ids": [
       "adj_factor",

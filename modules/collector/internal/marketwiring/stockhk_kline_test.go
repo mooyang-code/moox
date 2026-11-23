@@ -16,15 +16,16 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
+	hktencent "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/tencent"
 	"github.com/stretchr/testify/require"
 )
 
-// 港股股票的 K 线按路由装配：候选链只有东方财富，source_id、限速、单次根数来自路由与数据源配置文件，结算延迟 5 秒。
+// 港股股票的 K 线按路由装配：候选链是东方财富、腾讯（备源），source_id、限速、单次根数来自路由与数据源配置文件，结算延迟 5 秒。
 func TestStockHKKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	// 请求里写别的数据源也不影响：来源按路由分配。
 	pipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockhk", marketdata.InstrumentEquity, "5m", "tencent", nil)
 	require.NoError(t, err)
-	require.Equal(t, []string{"eastmoney"}, pipeline.CandidateChain)
+	require.Equal(t, []string{"eastmoney", "tencent"}, pipeline.CandidateChain)
 	require.True(t, pipeline.AutoBindSource)
 	require.Empty(t, pipeline.SourceID)
 	require.Equal(t, 5*time.Second, pipeline.SettleDelay)
@@ -42,6 +43,16 @@ func TestStockHKKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	require.Equal(t, 1205, spec.MaxBarsPerRequest)
 	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 4, Cooldown: time.Second, RequestTimeout: 5 * time.Second}, spec.RateLimit)
 
+	// 备源是腾讯分时合成的 K 线，不是恒生指数成分的那个腾讯来源。
+	fallback, err := pipeline.Router.Provider("tencent")
+	require.NoError(t, err)
+	require.Equal(t, "*tencent.KlineProvider tencent/stockhk_minute_http", fmt.Sprintf("%T %s", fallback, fallback.Descriptor().SourceKey()))
+	fallbackSpec, err := pipeline.Router.NewSession().KlineSpec("tencent")
+	require.NoError(t, err)
+	require.Equal(t, []string{"5m"}, fallbackSpec.Frequencies)
+	require.False(t, fallbackSpec.CompleteOHLCV)
+	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1, Cooldown: time.Second, RequestTimeout: 5 * time.Second}, fallbackSpec.RateLimit)
+
 	// 只有 5m 的路由。
 	for _, frequency := range []string{"1m", "1d"} {
 		_, err = NewKlinePipeline(timerHandlerStorage{}, "stockhk", marketdata.InstrumentEquity, frequency, "", nil)
@@ -52,18 +63,34 @@ func TestStockHKKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 
 // stockHKPipeline 装一条港股 5m 流水线，只把连网的那一段换掉：数据源仍是港股的东方财富（限速、单次根数与装配出来的相同），
 // 熔断阈值沿用装配出来的，请求交给 handler，时钟固定在 now。limits 是请求带的限速，可以为空。
+// 备源腾讯的请求一律回 502（要它返回数据的用 stockHKPipelineWithFallback）。
 func stockHKPipeline(t *testing.T, storage marketfetch.Storage, now time.Time, limits *marketfetch.FeedLimits, handler http.HandlerFunc) *marketfetch.KlinePipeline {
+	t.Helper()
+	return stockHKPipelineWithFallback(t, storage, now, limits, handler, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+}
+
+// stockHKPipelineWithFallback 与 stockHKPipeline 相同，备源腾讯的请求交给 fallback。
+func stockHKPipelineWithFallback(t *testing.T, storage marketfetch.Storage, now time.Time, limits *marketfetch.FeedLimits, handler, fallback http.HandlerFunc) *marketfetch.KlinePipeline {
 	t.Helper()
 	pipeline, err := NewKlinePipeline(storage, "stockhk", marketdata.InstrumentEquity, "5m", "", limits)
 	require.NoError(t, err)
 	spec, err := pipeline.Router.NewSession().KlineSpec("eastmoney")
 	require.NoError(t, err)
+	fallbackSpec, err := pipeline.Router.NewSession().KlineSpec("tencent")
+	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
+	fallbackServer := httptest.NewServer(fallback)
+	t.Cleanup(fallbackServer.Close)
 	clock := func() time.Time { return now }
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(hkeastmoney.New(hkeastmoney.Config{
 		BaseURL: server.URL, HTTPClient: server.Client(), Now: clock, RateLimit: spec.RateLimit, MaxBarsPerRequest: spec.MaxBarsPerRequest,
+	})))
+	require.NoError(t, registry.Register(hktencent.NewKline(hktencent.KlineConfig{
+		BaseURL: fallbackServer.URL, HTTPClient: fallbackServer.Client(), Now: clock, RateLimit: fallbackSpec.RateLimit,
 	})))
 	router, err := marketdata.NewRouter(registry, pipeline.Router.BreakerThreshold(), nil, nil)
 	require.NoError(t, err)
@@ -185,10 +212,11 @@ func TestStockHKBackfillRequestWritesEveryBarInTheRange(t *testing.T) {
 	require.Equal(t, []string{"2026-11-11T05:00:00Z", "2026-11-11T05:05:00Z", "2026-11-11T05:10:00Z"}, run("2026-11-11 13:00:00", "2026-11-11 13:15:00"))
 }
 
-// 候选链只有一个数据源时没有别家可换，熔断阈值（同时是在途请求上限）按单一来源的口径算：每源尝试次数 × 并发。
-// 港股的采集计划按东方财富的 max_concurrent 给出并发 4，阈值是 3 × 4 = 12；实际同时在途的请求数由数据源自己的
-// max_concurrent（4）限制。候选链有多个数据源的（A 股）仍是候选链长度 × 每源尝试次数，不随并发变。
-func TestSingleSourceRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
+// 只有一个主源时没有同级的来源可换，熔断阈值（同时是在途请求上限）不低于单一来源的口径：每源尝试次数 × 并发。
+// 港股的采集计划按东方财富的 max_concurrent 给出并发 4，阈值是 max(2 × 3, 3 × 4) = 12；实际同时在途的请求数由数据源自己的
+// max_concurrent（4）限制。有多个主源的（A 股 1m、5m）仍是候选链长度 × 每源尝试次数，不随并发变；A 股 1d 只有通达信一个主源，
+// 与港股同一口径。
+func TestSinglePrimaryRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
 	t.Setenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS", "")
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
 	threshold := func(marketID, frequency string, limits *marketfetch.FeedLimits) int {
@@ -201,12 +229,14 @@ func TestSingleSourceRouteUsesTheSingleSourceBreakerThreshold(t *testing.T) {
 	require.Equal(t, 4, planned.Concurrency, "一个函数内同时处理的标的数")
 	limits := &marketfetch.FeedLimits{FeedConcurrency: planned.FeedConcurrency}
 	require.Equal(t, 12, threshold("stockhk", "5m", limits))
-	require.Equal(t, 3, threshold("stockhk", "5m", nil), "请求没带限速、进程环境也没设并发时按 1")
-	// A 股各周期的候选链都不止一个数据源，阈值与请求带不带限速无关。
-	for frequency, want := range map[string]int{"1m": 12, "5m": 12, "1d": 6} {
+	require.Equal(t, 6, threshold("stockhk", "5m", nil), "请求没带限速、进程环境也没设并发时按 1，不低于候选链长度 × 尝试次数")
+	// A 股 1m、5m 有两个主源，阈值与请求带不带限速无关；1d 只有一个主源。
+	for frequency, want := range map[string]int{"1m": 12, "5m": 12} {
 		require.Equal(t, want, threshold("stockcn", frequency, limits), frequency)
 		require.Equal(t, want, threshold("stockcn", frequency, nil), frequency)
 	}
+	require.Equal(t, 12, threshold("stockcn", "1d", limits))
+	require.Equal(t, 6, threshold("stockcn", "1d", nil))
 	// 云函数里并发来自计划下发的环境变量。
 	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "16")
 	require.Equal(t, 48, threshold("stockhk", "5m", nil))
@@ -257,4 +287,59 @@ func TestStockHKDisconnectsAtTheStartDoNotFailTheWholeBatch(t *testing.T) {
 	}
 	require.Len(t, subjects, 25, "25 只都取到")
 	require.EqualValues(t, 28, requests.Load(), "25 只各一次，加上断连的 3 次重试")
+}
+
+// 东方财富整期断开（2026-11-23 的情形）：每只在东方财富重试完后回落到腾讯分时合成的 5m，照常写入，
+// 行上记来源是腾讯、route_rank=2、quality_status=fallback。
+func TestStockHKFallsBackToTencentWhenEastMoneyDisconnects(t *testing.T) {
+	const dataset = "dataset_stockhk_equity_kline_5m"
+	var eastmoney, tencent atomic.Int64
+	storage := &capturedStorage{}
+	limits := &marketfetch.FeedLimits{FeedConcurrency: 4}
+	pipeline := stockHKPipelineWithFallback(t, storage, hkTime("2026-11-23 10:05:06"), limits, func(w http.ResponseWriter, _ *http.Request) {
+		eastmoney.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}, func(w http.ResponseWriter, r *http.Request) {
+		tencent.Add(1)
+		code := r.URL.Query().Get("code")
+		_, _ = fmt.Fprintf(w, `{"code":0,"msg":"","data":{"%s":{"data":{"date":"20261123","data":[`+
+			`"0959 10.000 1000 10000.0","1000 10.100 1100 11010.0",`+
+			`"1001 10.200 1200 12030.0","1002 9.900 1300 13020.0","1003 10.000 1400 14020.0","1004 10.000 1450 14520.0","1005 10.300 1500 15035.0",`+
+			`"1006 10.300 1510 15138.0"]}}}}`, code)
+	})
+	require.Equal(t, 12, pipeline.Router.BreakerThreshold())
+	target := hkTime("2026-11-23 10:00:00")
+	items := make([]domain.CollectionItem, 0, 3)
+	for _, code := range []string{"00700", "00005", "09988"} {
+		items = append(items, domain.CollectionItem{
+			SubjectID: code + ".XHKG", Symbol: code, Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: dataset, Frequency: "5m",
+			StartTime: target.Format(time.RFC3339Nano), EndTime: target.Add(5 * time.Minute).Format(time.RFC3339Nano), BarLimit: 1,
+		})
+	}
+	payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
+		BatchID: "fallback", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+		DatasetID: dataset, Frequency: "5m", MarketType: "equity", RequestID: "fallback", Concurrency: 4, FetchLimits: limits, Items: items,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Len(t, storage.rows, 3)
+	for _, row := range storage.rows {
+		require.Equal(t, "2026-11-23T02:00:00Z", row.GetKey().GetTimeSeries().GetDataTime())
+		fields := rowFields(row)
+		require.Equal(t, "tencent", fields["source_provider"].GetStringValue())
+		require.Equal(t, "stockhk_minute_http", fields["source_id"].GetStringValue())
+		require.Equal(t, "fallback", fields["quality_status"].GetStringValue())
+		require.EqualValues(t, 2, fields["route_rank"].GetIntValue())
+		require.Equal(t, 10.1, fields["open"].GetDoubleValue())
+		require.Equal(t, 10.3, fields["high"].GetDoubleValue())
+		require.Equal(t, 9.9, fields["low"].GetDoubleValue())
+		require.Equal(t, 10.3, fields["close"].GetDoubleValue())
+		require.Equal(t, 400.0, fields["volume"].GetDoubleValue())
+		require.Equal(t, "reported", fields["amount_quality"].GetStringValue())
+	}
+	require.EqualValues(t, 9, eastmoney.Load(), "每只先在东方财富试满 3 次")
+	require.EqualValues(t, 3, tencent.Load())
 }
