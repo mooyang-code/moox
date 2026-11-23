@@ -53,7 +53,8 @@ Agent 会按 [安装与初始化](skills/moox/references/install.md) 执行部�
 
 - **云账号**：云资源编排目前基于腾讯云 API 实现。需创建腾讯云子用户 API 密钥，并授予 `QcloudSCFFullAccess`、`QcloudCOSFullAccess`、`QcloudCLSFullAccess`、`QcloudLighthouseFullAccess`、`QcloudCVMFullAccess`、`QcloudVPCFullAccess` 六项策略。
 
-- **目标服务器**（Linux `x86_64`；控制机、存储机与海外机需为上述腾讯云账号下的轻量应用服务器或 CVM，以便自动识别地域规格并配置防火墙）：
+- **目标服务器**（Linux `x86_64`；控制机、存储机与海外机需为上述腾讯云账号下的轻量应用服务器或 CVM，以便自动识别地域规格并配置防火墙。
+  要采股票行情（云函数）时，云函数所在地域要有一台 CVM 做入口，一般就是存储机；轻量服务器做不了入口，适合管理台。详见[安装与初始化](skills/moox/references/install.md)里的“轻量应用服务器还是云服务器”）：
 
   | 角色 | 是否必需 | 建议配置 |
   | --- | --- | --- |
