@@ -34,11 +34,15 @@ const (
 	// 一波并发请求结束后多出的连接被关掉，后面的请求和重试又要新建。东方财富从南京出口新建连接时断开 40%～70%，
 	// 复用连接只有 2%～4%（2026-11-12 港股实测）。
 	maxIdleConnsPerHost = 32
+	// rotateAfterFailures 是当前域名连续多少次网络错误（中间没有一次成功）才换下一个域名：部分请求被断开时成功与失败
+	// 交替出现，计数清零、不换，已经建好的连接继续复用（换域名就要在新域名上重新建连接，而被断开的正是新建连接）；
+	// 整个域名都不通时，两只标的各试 3 次都失败就换。
+	rotateAfterFailures = 6
 )
 
 // defaultHosts 是没配地址时轮换使用的域名：push2his 与它的两个编号子域名。三者是同一个接口，经 trafficmanager 调度到
 // 不同的后端（东方财富网页自己也随机挑编号子域名取行情）；2026-11-12 开发机出口被 push2his 限流时，33、72 两个仍可用。
-// 一次请求遇到网络错误（连接被断开、EOF、重置、拨号失败、超时）就换下一个，之后的请求留在新域名上。
+// 当前域名连续网络错误（连接被断开、EOF、重置、拨号失败、超时）达到 rotateAfterFailures 次就换下一个，之后的请求留在新域名上。
 var defaultHosts = []string{Host, "33." + Host, "72." + Host}
 
 // NewHTTPClient 返回东方财富数据源默认用的 HTTP 客户端：独立的连接池，空闲连接数见 maxIdleConnsPerHost。
@@ -96,9 +100,11 @@ type Config struct {
 // Client 按请求取一只标的的一段 K 线。
 type Client struct {
 	cfg Config
-	// baseURLs 是轮换使用的地址；current 是当前用的那个的序号，网络错误时前进一位（并发的失败只前进一次）。
+	// baseURLs 是轮换使用的地址；current 是当前用的那个的序号；failures 是当前地址连续网络错误的次数，成功一次清零，
+	// 达到 rotateAfterFailures 时前进一位并清零（并发的失败只前进一次）。
 	baseURLs []string
 	current  atomic.Uint32
+	failures atomic.Int32
 }
 
 func New(cfg Config) *Client {
@@ -206,8 +212,8 @@ func (c *Client) FetchKlines(ctx context.Context, req marketdata.KlineRequest) (
 	return rows, nil
 }
 
-// get 向当前地址发一次请求并读回响应体。请求记进上下文里的 Trace（阶段耗时、新建还是复用连接、对端地址），
-// 网络错误时把当前地址换成下一个，同一只标的的下一次尝试与之后的请求都用新地址。
+// get 向当前地址发一次请求并读回响应体。请求记进上下文里的 Trace（阶段耗时、新建还是复用连接、对端地址）；
+// 网络错误计入当前地址的连续失败（见 networkFailure），收到响应（含状态码错误，说明连接是通的）清零。
 func (c *Client) get(ctx context.Context, pathAndQuery string) ([]byte, error) {
 	index := c.current.Load()
 	baseURL := c.baseURLs[int(index)%len(c.baseURLs)]
@@ -224,35 +230,38 @@ func (c *Client) get(ctx context.Context, pathAndQuery string) ([]byte, error) {
 	resp, err := c.cfg.HTTPClient.Do(httpReq)
 	if err != nil {
 		finish(nil, err)
-		c.rotate(ctx, index)
+		c.networkFailure(ctx, index)
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		finish(resp, marketdata.ErrRateLimited)
-		return nil, marketdata.ErrRateLimited
-	}
 	if resp.StatusCode >= 400 {
-		err := fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
-		finish(resp, err)
-		return nil, err
+		c.failures.Store(0)
+		// Trace 按 StatusError 归类，CLS 的 attempt_trace 里才是 status_<码>。
+		finish(resp, &httpclient.StatusError{StatusCode: resp.StatusCode})
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, marketdata.ErrRateLimited
+		}
+		return nil, fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	finish(resp, err)
 	if err != nil {
-		c.rotate(ctx, index)
+		c.networkFailure(ctx, index)
 		return nil, fmt.Errorf("%w: 读取返回内容：%v", marketdata.ErrProtocol, err)
 	}
+	c.failures.Store(0)
 	return body, nil
 }
 
-// rotate 在网络错误后换到下一个地址（超时也换：后端卡住时留在原地址只会一直卡住）；调用方主动取消（备援请求另一路
-// 先成功）不是地址的问题，不换。只从出错时用的那个序号前进，并发的几次失败只换一次。
-func (c *Client) rotate(ctx context.Context, failed uint32) {
-	if len(c.baseURLs) < 2 || errors.Is(ctx.Err(), context.Canceled) {
+// networkFailure 记一次网络错误（超时也算：后端卡住时留在原地址只会一直卡住）。调用方取消不算；出错时用的已经不是
+// 当前地址（别的请求刚换过）也不算。当前地址连续失败达到 rotateAfterFailures 次就换下一个，并发的几次失败只换一次。
+func (c *Client) networkFailure(ctx context.Context, failed uint32) {
+	if len(c.baseURLs) < 2 || errors.Is(ctx.Err(), context.Canceled) || c.current.Load() != failed {
 		return
 	}
-	c.current.CompareAndSwap(failed, failed+1)
+	if c.failures.Add(1) >= rotateAfterFailures && c.current.CompareAndSwap(failed, failed+1) {
+		c.failures.Store(0)
+	}
 }
 
 // UTCDateRange 是默认的日期区间规则：beg 取请求起点的 UTC 日期（没有起点就不带），end 取请求终点的 UTC 日期，

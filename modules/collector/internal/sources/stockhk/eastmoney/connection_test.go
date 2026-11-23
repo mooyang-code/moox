@@ -26,9 +26,9 @@ func targetRequest() marketdata.KlineRequest {
 
 const targetLine = "2026-11-12 14:50,20.460,20.420,20.460,20.420,24000,490280.000"
 
-// 东方财富把新建连接断开时（EOF），下一次尝试换到 push2his 的编号子域名，之后的请求留在新域名上；
-// 新域名也断开就再换下一个，三个用完回到 push2his。
-func TestFetchKlinesRotatesHostsOnNetworkErrors(t *testing.T) {
+// 当前域名连续 6 次网络错误（中间没有成功）才换到下一个编号子域名，之后的请求留在新域名上；
+// 新域名也整个不通就再换，三个用完回到 push2his。
+func TestFetchKlinesRotatesHostsAfterConsecutiveNetworkErrors(t *testing.T) {
 	var hosts []string
 	down := map[string]bool{"push2his.eastmoney.com": true}
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -41,32 +41,60 @@ func TestFetchKlinesRotatesHostsOnNetworkErrors(t *testing.T) {
 		return recorder.Result(), nil
 	})}
 	provider := New(Config{HTTPClient: client, Now: func() time.Time { return hkt("2026-11-12", "14:50:05") }})
+	fetch := func() error {
+		_, err := provider.FetchKlines(context.Background(), targetRequest())
+		return err
+	}
+	failTimes := func(n int) {
+		for range n {
+			require.ErrorIs(t, fetch(), marketdata.ErrTimeout, "网络错误仍按超时类报出，流水线照常重试")
+		}
+	}
+	repeat := func(host string, n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = host
+		}
+		return out
+	}
 
-	_, err := provider.FetchKlines(context.Background(), targetRequest())
-	require.ErrorIs(t, err, marketdata.ErrTimeout, "网络错误仍按超时类报出，流水线照常重试")
-	rows, err := provider.FetchKlines(context.Background(), targetRequest())
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	_, err = provider.FetchKlines(context.Background(), targetRequest())
-	require.NoError(t, err)
-	require.Equal(t, []string{"push2his.eastmoney.com", "33.push2his.eastmoney.com", "33.push2his.eastmoney.com"}, hosts)
+	failTimes(6)
+	require.NoError(t, fetch())
+	require.NoError(t, fetch())
+	require.Equal(t, append(repeat("push2his.eastmoney.com", 6), "33.push2his.eastmoney.com", "33.push2his.eastmoney.com"), hosts)
 
-	down["33.push2his.eastmoney.com"] = true
+	down = map[string]bool{"33.push2his.eastmoney.com": true, "72.push2his.eastmoney.com": true}
 	hosts = nil
-	_, err = provider.FetchKlines(context.Background(), targetRequest())
-	require.Error(t, err)
-	_, err = provider.FetchKlines(context.Background(), targetRequest())
-	require.NoError(t, err)
-	down = map[string]bool{"72.push2his.eastmoney.com": true}
-	_, err = provider.FetchKlines(context.Background(), targetRequest())
-	require.Error(t, err)
-	_, err = provider.FetchKlines(context.Background(), targetRequest())
-	require.NoError(t, err)
-	require.Equal(t, []string{"33.push2his.eastmoney.com", "72.push2his.eastmoney.com", "72.push2his.eastmoney.com", "push2his.eastmoney.com"}, hosts)
+	failTimes(12)
+	require.NoError(t, fetch())
+	require.Equal(t, append(append(repeat("33.push2his.eastmoney.com", 6), repeat("72.push2his.eastmoney.com", 6)...), "push2his.eastmoney.com"), hosts)
 }
 
-// 调用方主动取消（备援请求另一路先成功）不是域名的问题，不换；HTTP 状态码错误说明连接是通的，也不换。
-func TestFetchKlinesKeepsHostOnCancelAndHTTPStatus(t *testing.T) {
+// 部分请求被断开、成功与失败交替时不换域名：换了就要在新域名上重新建连接，而被断开的正是新建连接。
+func TestFetchKlinesKeepsHostWhileSomeRequestsSucceed(t *testing.T) {
+	var hosts []string
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Host)
+		calls++
+		if calls%4 != 0 {
+			return nil, io.EOF
+		}
+		recorder := httptest.NewRecorder()
+		_, _ = recorder.Write(klinesBody(targetLine))
+		return recorder.Result(), nil
+	})}
+	provider := New(Config{HTTPClient: client, Now: func() time.Time { return hkt("2026-11-12", "14:50:05") }})
+	for range 20 {
+		_, _ = provider.FetchKlines(context.Background(), targetRequest())
+	}
+	for _, host := range hosts {
+		require.Equal(t, "push2his.eastmoney.com", host, "每 4 次有 1 次成功，连续失败到不了 6 次")
+	}
+}
+
+// 调用方取消不是域名的问题，不计入连续失败；HTTP 状态码错误说明连接是通的，清零。Trace 里状态码错误记成 status_<码>。
+func TestFetchKlinesIgnoresCancelAndHTTPStatusForRotation(t *testing.T) {
 	var hosts []string
 	status := 0
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -85,15 +113,25 @@ func TestFetchKlinesKeepsHostOnCancelAndHTTPStatus(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := provider.FetchKlines(ctx, targetRequest())
-	require.True(t, errors.Is(err, marketdata.ErrTimeout))
+	for range 10 {
+		_, err := provider.FetchKlines(ctx, targetRequest())
+		require.True(t, errors.Is(err, marketdata.ErrTimeout))
+	}
+	trace := &httpclient.Trace{}
 	status = http.StatusServiceUnavailable
-	_, err = provider.FetchKlines(context.Background(), targetRequest())
+	_, err := provider.FetchKlines(httpclient.WithTrace(context.Background(), trace), targetRequest())
 	require.ErrorIs(t, err, marketdata.ErrHTTPStatus)
+	require.Equal(t, "status_503", trace.Snapshot().Attempts[0].Kind)
+	status = http.StatusTooManyRequests
+	_, err = provider.FetchKlines(context.Background(), targetRequest())
+	require.ErrorIs(t, err, marketdata.ErrRateLimited)
 	status = 0
 	_, err = provider.FetchKlines(context.Background(), targetRequest())
 	require.NoError(t, err)
-	require.Equal(t, []string{"push2his.eastmoney.com", "push2his.eastmoney.com", "push2his.eastmoney.com"}, hosts)
+	for _, host := range hosts {
+		require.Equal(t, "push2his.eastmoney.com", host)
+	}
+	require.Len(t, hosts, 13)
 }
 
 // 东方财富的请求记进流水线挂的 Trace：CLS 的逐项上报才有阶段、连接与对端地址；失败的那次记下 eof。
@@ -119,7 +157,7 @@ func TestFetchKlinesRecordsRequestsInTrace(t *testing.T) {
 	snap := trace.Snapshot()
 	require.Equal(t, 2, snap.Requests)
 	require.Equal(t, http.StatusOK, snap.LastStatus)
-	require.Equal(t, "33.push2his.eastmoney.com", snap.LastDomain)
+	require.Equal(t, "push2his.eastmoney.com", snap.LastDomain, "一次失败不换域名")
 	require.Len(t, snap.Attempts, 2)
 	require.Equal(t, "push2his.eastmoney.com", snap.Attempts[0].Domain)
 	require.Equal(t, "eof", snap.Attempts[0].Kind)
