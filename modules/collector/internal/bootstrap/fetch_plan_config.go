@@ -118,6 +118,8 @@ type SCFPlanSpaceConfig struct {
 	PackageName         string `yaml:"package_name"`
 	Namespace           string `yaml:"namespace"`
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
+	// BackfillRegion 是补采函数所在的地域；为空时用各市场的第一个地域。
+	BackfillRegion string `yaml:"backfill_region"`
 	// Markets 是按市场的覆盖项（现货、合约的取数时刻与截止不同）。
 	Markets map[string]SCFPlanMarketConfig `yaml:"markets"`
 }
@@ -345,6 +347,14 @@ func (c *Config) validateSCFPlan() error {
 		packages[name] = space
 	}
 	for space, override := range plan.Spaces {
+		if region := override.BackfillRegion; region != "" {
+			if network, ok := c.SCFRegions[region]; !ok || network.VPCID == "" || network.SubnetID == "" {
+				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s has no VPC and subnet in scf_regions", space, region)
+			}
+			if _, ok := plan.EntryRoutes[region]; !ok {
+				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s has no same-region entry route in scf_plan.entry_routes", space, region)
+			}
+		}
 		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
 			return fmt.Errorf("scf_plan.spaces[%s].auto_size 超出范围：target_fetch_ms 500～10000，request_ms 50～target_fetch_ms，min_functions 1～50", space)
 		}

@@ -347,6 +347,11 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return err
 	}
+	// 强制重拉的作业排在最后分名额：它重写的是已有的行，不急；行情源不可用时它的分块每块都失败、退回重试，
+	// 排在前面会每轮占满名额，补缺口的作业只能捡空档（2026-11-23 港股收市后整天重取拖慢了自动补采）。
+	sort.SliceStable(jobs, func(i, j int) bool {
+		return jobs[i].Kind != store.BackfillKindForce && jobs[j].Kind == store.BackfillKindForce
+	})
 	// 采集计划记录每轮只读一次（第一次认领到分块时），本轮各作业认领的分块共用。
 	var history *planHistory
 	var historyErr error

@@ -58,6 +58,8 @@ type SCFPlanSpace struct {
 	// Namespace 是函数所在命名空间，默认 moox-<space>-plan。
 	Namespace          string `toml:"namespace"`
 	SymbolsPerFunction int    `toml:"symbols_per_function"`
+	// BackfillRegion 是补采函数所在的地域，不写时用各市场的第一个地域。写了要在 [scf_plan.regions] 里配好它的网络。
+	BackfillRegion string `toml:"backfill_region"`
 }
 
 const (
@@ -102,6 +104,7 @@ func (p *SCFPlan) Normalize() {
 		space.Markets = markets
 		space.PackageName = strings.TrimSpace(space.PackageName)
 		space.Namespace = strings.TrimSpace(space.Namespace)
+		space.BackfillRegion = strings.ToLower(strings.TrimSpace(space.BackfillRegion))
 		if space.PackageName == "" && space.SpaceID != "" {
 			space.PackageName = "moox-collector-" + space.SpaceID + "-plan"
 		}
@@ -162,6 +165,12 @@ func (c *Config) CheckSCFPlan() error {
 		}
 		if len(space.Markets) == 0 {
 			return fmt.Errorf("config_invalid: %s.markets must not be empty", path)
+		}
+		if space.BackfillRegion != "" {
+			if !tencent.IsSCFRegion(space.BackfillRegion) {
+				return fmt.Errorf("config_invalid: %s.backfill_region %q is not supported", path, space.BackfillRegion)
+			}
+			used[space.BackfillRegion] = struct{}{}
 		}
 		for market, regions := range space.Markets {
 			if !scfPlanNamePattern.MatchString(market) || len(regions) == 0 {
@@ -247,6 +256,9 @@ func (c *Config) SCFPlanRegionNames() []string {
 			for _, region := range regions {
 				set[region] = struct{}{}
 			}
+		}
+		if space.BackfillRegion != "" {
+			set[space.BackfillRegion] = struct{}{}
 		}
 	}
 	names := make([]string, 0, len(set))

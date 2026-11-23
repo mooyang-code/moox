@@ -630,3 +630,32 @@ func TestDeleteByNamespaceKeepsTheFunctionInUse(t *testing.T) {
 	require.Contains(t, missing[0].Error, "云上没有符合条件的这个函数")
 	require.True(t, h.timerEnabled(name))
 }
+
+// 配置了 backfill_region 时补采函数放在那个地域：计划内的函数、清点的地域都包含它；
+// 原来放在市场第一个地域的补采函数仍认得出是本空间的（列为计划外，可以删）。
+func TestBackfillRegionOverride(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	market := ""
+	for name := range r.Options.Markets {
+		market = name
+	}
+	first, ok := r.BackfillRegion(market)
+	require.True(t, ok)
+	require.Equal(t, r.Options.Markets[market][0], first)
+
+	r.Options.BackfillRegion = "ap-guangzhou"
+	region, ok := r.BackfillRegion(market)
+	require.True(t, ok)
+	require.Equal(t, "ap-guangzhou", region)
+	_, ok = r.BackfillRegion("no-such-market")
+	require.False(t, ok, "没配置的市场仍然没有补采函数")
+	require.Contains(t, r.planRegions(), "ap-guangzhou")
+	require.Contains(t, r.planRegions(), first)
+	planned, err := r.plannedNames(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, planned, refKey(r.backfillRef(market, "ap-guangzhou")))
+	require.NotContains(t, planned, refKey(r.backfillRef(market, first)))
+	require.True(t, r.ownsBackfillName(BackfillFunctionName(r.SpaceID, market, "ap-guangzhou")))
+	require.True(t, r.ownsBackfillName(BackfillFunctionName(r.SpaceID, market, first)))
+}

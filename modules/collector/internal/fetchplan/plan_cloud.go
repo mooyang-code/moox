@@ -347,7 +347,7 @@ func (r *PlanReconciler) ownsFunctionName(name string) bool {
 
 // ownsBackfillName 判断函数名是本空间配置里某个市场、某个地域的补采函数名，并且不是其他已配置空间的补采函数名。
 func (r *PlanReconciler) ownsBackfillName(name string) bool {
-	if !matchesBackfillName(r.SpaceID, r.Options.Markets, name) {
+	if !matchesBackfillName(r.SpaceID, r.Options.Markets, name) && !r.isConfiguredBackfillName(name) {
 		return false
 	}
 	for space, markets := range r.OtherSpaces {
@@ -364,6 +364,19 @@ func matchesBackfillName(spaceID string, markets map[string][]string, name strin
 			if BackfillFunctionName(spaceID, market, region) == name {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// isConfiguredBackfillName 判断 name 是不是本空间某个市场在 backfill_region 里的补采函数名。
+func (r *PlanReconciler) isConfiguredBackfillName(name string) bool {
+	if r.Options.BackfillRegion == "" {
+		return false
+	}
+	for market := range r.Options.Markets {
+		if BackfillFunctionName(r.SpaceID, market, r.Options.BackfillRegion) == name {
+			return true
 		}
 	}
 	return false
@@ -389,10 +402,14 @@ func matchesFleetName(spaceID string, markets map[string][]string, name string) 
 	return false
 }
 
-// planRegions 返回本空间配置涉及的全部地域。
+// planRegions 返回本空间配置涉及的全部地域（各市场的地域，加上补采函数的地域）。
 func (r *PlanReconciler) planRegions() []string {
 	seen := map[string]struct{}{}
 	var regions []string
+	if r.Options.BackfillRegion != "" {
+		seen[r.Options.BackfillRegion] = struct{}{}
+		regions = append(regions, r.Options.BackfillRegion)
+	}
 	for _, list := range r.Options.Markets {
 		for _, region := range list {
 			if _, ok := seen[region]; !ok {
