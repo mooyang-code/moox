@@ -185,12 +185,7 @@ func (c *Continuity) note(set domain.FactorTask, event periodEvent, create bool)
 // 暂停期间的实时事件在连续水位目标更新之前就被 ACK，目标会停在暂停前；恢复追赶时由这里显式建立目标，
 // 不等下一条实时事件。任务还没有水位记录（从未跑过实时周期）时不建立：连续性从第一次实时事件起保证。
 func (c *Continuity) NoteTarget(taskID string, period time.Time) error {
-	state, ok := c.cfg.Store.Get(taskID)
-	if !ok || state.CommittedThrough.IsZero() || !period.After(state.Target) {
-		return nil
-	}
-	state.Target = period
-	if err := c.cfg.Store.Put(state); err != nil {
+	if err := c.cfg.Store.RaiseTarget(taskID, period); err != nil {
 		return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 	}
 	return nil

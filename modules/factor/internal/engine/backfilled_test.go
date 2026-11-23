@@ -66,7 +66,7 @@ func TestOnBackfilledRaisesTheCatchupTargetUpToTheLatestClosedBar(t *testing.T) 
 	require.NoError(t, marks.Put(watermark.State{TaskID: "ftask_a", SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m", CommittedThrough: start.Add(-time.Minute), Target: start.Add(-time.Minute)}))
 	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Reader: struct{ eventconsumer.PeriodReader }{}})
 	require.NoError(t, err)
-	now := start.Add(30*time.Minute + 20*time.Second)
+	now := start.Add(30*time.Minute + 40*time.Second)
 	r := &Runtime{catalog: cache, continuity: continuity, advanceKick: make(chan string, 4), filled: newFilledPeriods(func() time.Time { return now }), kickGap: func() {}}
 
 	backfilled := func(from, to time.Time) {
@@ -85,7 +85,12 @@ func TestOnBackfilledRaisesTheCatchupTargetUpToTheLatestClosedBar(t *testing.T) 
 
 	backfilled(start, start.Add(24*time.Hour))
 	state, _ = marks.Get("ftask_a")
-	require.Equal(t, start.Add(29*time.Minute), state.Target, "不越过当前最后一根已收盘的根（10:29 那根在 10:30 收盘）")
+	require.Equal(t, start.Add(29*time.Minute), state.Target, "不越过当前最后一根已收盘、过了采集宽限的根（10:29 那根在 10:30 收盘，宽限 30 秒）")
+
+	now = start.Add(31*time.Minute + 10*time.Second)
+	backfilled(start, start.Add(24*time.Hour))
+	state, _ = marks.Get("ftask_a")
+	require.Equal(t, start.Add(29*time.Minute), state.Target, "10:30 那根 10:31 收盘，10:31:10 还在宽限内，不算")
 
 	_, ok = marks.Get("ftask_b")
 	require.False(t, ok, "没有水位记录的任务不建立记录")

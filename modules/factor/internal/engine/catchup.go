@@ -81,8 +81,9 @@ func (r *Runtime) onBackfilled(spaceID string, payload *storagepb.CollectorKline
 		// 把追赶目标推到补齐范围的最后一期（不超过当前最后一根已收盘的根）：实时取数整期失败时 Storage 不发周期事件，
 		// 目标停在最后一次有事件的那一期；补采把后面补齐之后要靠这里把目标推上去，否则要等下一条实时事件
 		// （港股收市后整期失败，2026-11-23 因子停在 15:00 那根，次日开盘才会补算）。整天重取的范围到次日零点，所以要设上限。
-		if nowEnd, err := axis.AxisEnd(r.filled.now().UTC()); err == nil {
-			if last := minTime(to, nowEnd).Add(-axis.Step()); !last.Before(from) {
+		// 上限与恢复追赶相同（catchupTarget）：扣掉采集宽限，刚收盘、还在结算的那根不算。
+		if latest, err := catchupTarget(axis, r.filled.now().UTC()); err == nil {
+			if last := minTime(to.Add(-axis.Step()), latest); !last.Before(from) {
 				if err := r.continuity.NoteTarget(set.TaskID, last); err != nil {
 					log.Warnf("factor_kline_backfilled_target_failed task_id=%s error=%v", set.TaskID, err)
 				}
