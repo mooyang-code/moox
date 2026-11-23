@@ -111,6 +111,9 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 		if space.SymbolsPerFunction > 0 {
 			override["symbols_per_function"] = space.SymbolsPerFunction
 		}
+		if space.BackfillRegion != "" {
+			override["backfill_region"] = space.BackfillRegion
+		}
 		spaces[space.SpaceID] = override
 	}
 	if rendered, err = replaceYAMLMapping(rendered, "scf_regions", valueNode(regions)); err != nil {

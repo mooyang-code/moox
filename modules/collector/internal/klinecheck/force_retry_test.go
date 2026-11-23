@@ -95,3 +95,29 @@ func TestGapChunkStillFailsOnTheFirstFunctionFailure(t *testing.T) {
 		}
 	}
 }
+
+// 强制重拉的作业排在最后分名额：先提交的强制作业不会占住名额，后提交的补缺口作业先执行。
+func TestGapJobsAreClaimedBeforeForcedJobs(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	backfiller.MaxInFlight = 2
+	ctx := context.Background()
+	forceID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(2500 * time.Minute), Force: true}, "manual")
+	require.NoError(t, err)
+	require.Equal(t, 3, chunks)
+	gapID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.Equal(t, 2, chunks)
+
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.Len(t, invoker.events, 2)
+	for _, event := range invoker.events {
+		require.Contains(t, event["data"].(map[string]any)["batch_id"], gapID, "两个名额都先给补缺口的作业")
+	}
+	step(t, backfiller, 3)
+	for _, jobID := range []string{gapID, forceID} {
+		status, err := backfiller.Status(ctx, jobID)
+		require.NoError(t, err)
+		require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	}
+}

@@ -1549,11 +1549,15 @@ func BackfillFunctionName(spaceID, marketType, region string) string {
 		planNameSanitizer.Replace(strings.ToLower(marketType)), planNameSanitizer.Replace(region))
 }
 
-// BackfillRegion 返回某市场补采函数所在的地域（市场白名单中的第一个地域）。
+// BackfillRegion 返回某市场补采函数所在的地域：配置了 backfill_region 就用它（与定时函数分开地域，补采重发不占定时函数
+// 那批出口地址），否则是市场白名单中的第一个地域。
 func (r *PlanReconciler) BackfillRegion(marketType string) (string, bool) {
 	regions := r.Options.Markets[strings.ToLower(marketType)]
 	if len(regions) == 0 {
 		return "", false
+	}
+	if r.Options.BackfillRegion != "" {
+		return r.Options.BackfillRegion, true
 	}
 	return regions[0], true
 }

@@ -25,7 +25,9 @@ type PlanNetwork struct {
 type PlanOptions struct {
 	SpaceID string
 	// Markets 是每个市场类型使用的地域白名单（市场类型小写，如 spot、swap）。
-	Markets            map[string][]string
+	Markets map[string][]string
+	// BackfillRegion 是补采函数所在的地域；为空时用各市场白名单中的第一个地域。
+	BackfillRegion     string
 	SymbolsPerFunction int
 	Fetch              marketfetch.PlanFetch
 	// MarketFetch 是按市场类型（小写）覆盖的拉取参数，没有的市场用 Fetch。

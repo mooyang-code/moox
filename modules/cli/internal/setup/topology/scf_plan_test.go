@@ -71,12 +71,14 @@ func TestSCFPlanDisabledRemovesTheRenderedBlocks(t *testing.T) {
 
 func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) {
 	cases := map[string]func(*Config){
-		"no cloud account":   func(m *Config) { m.SCFPlan.CloudAccount = SCFCloudAccountConfig{} },
-		"no spaces":          func(m *Config) { m.SCFPlan.Spaces = nil },
-		"no markets":         func(m *Config) { m.SCFPlan.Spaces[0].Markets = nil },
-		"missing vpc":        func(m *Config) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },
-		"unused region":      func(m *Config) { m.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "v", SubnetID: "s"} },
-		"unsupported region": func(m *Config) { m.SCFPlan.Spaces[0].Markets["spot"] = []string{"mars-1"} },
+		"no cloud account":               func(m *Config) { m.SCFPlan.CloudAccount = SCFCloudAccountConfig{} },
+		"no spaces":                      func(m *Config) { m.SCFPlan.Spaces = nil },
+		"no markets":                     func(m *Config) { m.SCFPlan.Spaces[0].Markets = nil },
+		"missing vpc":                    func(m *Config) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },
+		"unused region":                  func(m *Config) { m.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "v", SubnetID: "s"} },
+		"unsupported region":             func(m *Config) { m.SCFPlan.Spaces[0].Markets["spot"] = []string{"mars-1"} },
+		"unsupported backfill region":    func(m *Config) { m.SCFPlan.Spaces[0].BackfillRegion = "mars-1" },
+		"backfill region has no network": func(m *Config) { m.SCFPlan.Spaces[0].BackfillRegion = "ap-nanjing" },
 		"no entry host": func(m *Config) {
 			definition := m.HostCatalog["overseas"]
 			definition.ExternalEntry = false
@@ -162,4 +164,23 @@ func TestSCFPlanRenderedCollectorConfigMatchesTheSharedFixture(t *testing.T) {
 	expected, err := os.ReadFile(scfPlanRenderedFixture)
 	require.NoError(t, err)
 	require.Equal(t, string(expected), string(rendered))
+}
+
+// backfill_region：补采函数单独放的地域，要有自己的 [scf_plan.regions]，渲染进 Collector 的 scf_regions、entry_routes 与空间配置。
+func TestSCFPlanBackfillRegionIsRendered(t *testing.T) {
+	manifest := scfPlanTestConfig()
+	manifest.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "vpc-nj", SubnetID: "subnet-nj"}
+	manifest.SCFPlan.Spaces[0].BackfillRegion = " AP-Nanjing "
+	require.NoError(t, manifest.CheckSCFPlan())
+	require.Equal(t, []string{"ap-hongkong", "ap-nanjing"}, manifest.SCFPlanRegionNames())
+
+	rendered, err := RenderCollectorRuntimeConfig(manifest, []byte("database: {path: keep.db}\n"))
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &got))
+	require.Contains(t, got["scf_regions"], "ap-nanjing")
+	plan := got["scf_plan"].(map[string]any)
+	require.Equal(t, map[string]any{"entry_address": "10.206.0.5:11004", "entry_host": "storage"}, plan["entry_routes"].(map[string]any)["ap-nanjing"])
+	require.Equal(t, "ap-nanjing", plan["spaces"].(map[string]any)["crypto"].(map[string]any)["backfill_region"])
+	require.Equal(t, map[string]any{"crypto": map[string]any{"spot": []any{"ap-hongkong"}, "swap": []any{"ap-hongkong"}}}, got["scf_markets"], "定时函数的地域不变")
 }

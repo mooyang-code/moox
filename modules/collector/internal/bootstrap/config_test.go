@@ -309,6 +309,14 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	noDeploy.SCFPlan.PackageName = ""
 	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_name")
 	require.NoError(t, Default().validateSCFPlan(), "spaces without scf_markets keep the Invoke scheduler only")
+	// 补采地域要有自己的网络与入口。
+	backfill := valid()
+	backfill.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"crypto": {BackfillRegion: "ap-nanjing"}}
+	require.NoError(t, backfill.validateSCFPlan())
+	backfill.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"crypto": {BackfillRegion: "ap-hongkong"}}
+	require.ErrorContains(t, backfill.validateSCFPlan(), "backfill_region ap-hongkong has no VPC and subnet")
+	backfill.SCFRegions["ap-hongkong"] = fetchplan.PlanNetwork{VPCID: "vpc-2", SubnetID: "subnet-2"}
+	require.ErrorContains(t, backfill.validateSCFPlan(), "backfill_region ap-hongkong has no same-region entry route")
 
 	shared := valid()
 	shared.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
