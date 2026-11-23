@@ -7,6 +7,9 @@
 
 - `[scf_plan.spaces.markets]` 列出每个市场使用的 SCF 地域。
 - 用到的每个地域都要有一台主机：`[hosts.<id>]` 配置了 `region` 与 `private_address`，并写了 `external_entry = true`（这台主机的网关开外部入口）。
+- 入口主机必须是**普通云服务器（CVM）**，它所在的 VPC 就是 `scf_plan.regions.<region>` 里的 `vpc_id`。轻量应用服务器的内网在腾讯云内部单独的网络里，
+  云函数绑不上（建函数报 `ResourceNotFound.Vpc`），要打通只能用云联网，而这里禁止云联网。2026-11-23 试过把广州的控制机（轻量服务器）开成入口，走不通。
+  判断办法：按公网 IP 查 `DescribeInstances` 查得到就是 CVM，查不到多半是轻量服务器。
 - `[scf_plan.regions.<region>]` 写该地域的 `vpc_id`、`subnet_id`；同地域有多台带私网地址的入口主机时，用 `entry_host` 指定。
 - 用不到的地域不要写进 `scf_plan.regions`，校验会拒绝。
 
