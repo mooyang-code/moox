@@ -175,10 +175,10 @@ func TestNotifyPermanentFailureDoesNotRetry(t *testing.T) {
 
 	// 失败且没确认的记录出现在关注项里，确认后消失。
 	require.NoError(t, (&AttentionWorker{Store: s, Now: c.Now}).Publish(ctx))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionExecutionFailed, "规则 r1：对方返回状态码 404")))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionExecutionFailed, "规则 r1：对方返回状态码 404")))
 	require.NoError(t, s.AcknowledgeExecution(ctx, seeded.ExecutionID, c.now.UnixMilli()))
 	require.NoError(t, (&AttentionWorker{Store: s, Now: c.Now}).Publish(ctx))
-	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionExecutionFailed, "")))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionExecutionFailed, "")))
 }
 
 func TestCancelDuringDeliveryKeepsCanceled(t *testing.T) {
@@ -352,14 +352,14 @@ func TestSystemTransientFailuresRaiseActionFailedAfterFifteenMinutes(t *testing.
 		require.Equal(t, 1, worker.RunOnce(ctx), "第 %d 分钟", minute)
 		require.NoError(t, attention.Publish(ctx))
 		if minute < 15 {
-			require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, want)), "第 %d 分钟还不告警", minute)
+			require.Equal(t, 0.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, want)), "第 %d 分钟还不告警", minute)
 		}
 	}
 	got, err := s.GetExecution(ctx, seeded.ExecutionID)
 	require.NoError(t, err)
 	require.Equal(t, 16, got.Failures)
 	require.Equal(t, baseTime.UnixMilli(), got.FirstFailedAt)
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, want)))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, want)))
 
 	// 恢复：一次推进没有问题说明，计数清零，关注项消失。
 	handler.mu.Lock()
@@ -368,8 +368,8 @@ func TestSystemTransientFailuresRaiseActionFailedAfterFifteenMinutes(t *testing.
 	c.now = c.now.Add(time.Minute)
 	require.Equal(t, 1, worker.RunOnce(ctx))
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, want)))
-	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")), "没有别的关注项")
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, want)))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, "")), "没有别的关注项")
 }
 
 // 通知类的记录读不到规则时放回去，不计入失败次数：它的失败次数决定重试间隔和期限。
@@ -410,12 +410,12 @@ func TestSystemFailureRaisesActionFailedAttention(t *testing.T) {
 	attention := &AttentionWorker{Store: s, Now: c.Now}
 	telemetry.NoteDelistDetected("binance:SPOT:FOOUSDT 有策略持有", c.now)
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "系统规则：平仓用完重试")))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionDelistDetected, "binance:SPOT:FOOUSDT 有策略持有")))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, "系统规则：平仓用完重试")))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionDelistDetected, "binance:SPOT:FOOUSDT 有策略持有")))
 	// delist_detected 只持续约 3 分钟。
 	c.now = c.now.Add(telemetry.DelistDetectedWindow + time.Second)
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionDelistDetected, "")))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionDelistDetected, "")))
 }
 
 // 已取消但善后（解除禁止买入）没做成的系统动作记录，算作 action_failed，做成之后恢复。
@@ -429,11 +429,11 @@ func TestUnfinishedCancelCleanupRaisesActionFailedAttention(t *testing.T) {
 
 	attention := &AttentionWorker{Store: s, Now: c.Now}
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "系统规则（binance:SPOT:FOOUSDT）：取消后的善后未完成，请在执行记录里点“重试善后”")))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, "系统规则（binance:SPOT:FOOUSDT）：取消后的善后未完成，请在执行记录里点“重试善后”")))
 
 	finishCleanup(t, s, seeded.ExecutionID, c.now.UnixMilli())
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, "")))
 }
 
 // 善后未完成的关注项：同一规则、同一标的多条记录只报一条，不同标的各报一条。
@@ -457,7 +457,7 @@ func TestUnfinishedCancelCleanupAttentionIsDedupedPerSubject(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.NoError(t, (&AttentionWorker{Store: s, Now: c.Now}).Publish(ctx))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed,
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed,
 		"系统规则（binance:SPOT:FOOUSDT）：取消后的善后未完成，请在执行记录里点“重试善后”；系统规则（okx:SWAP:BAR-USDT-SWAP）：取消后的善后未完成，请在执行记录里点“重试善后”")))
 }
 
@@ -486,7 +486,7 @@ func TestUnfinishedExecutionWithFailedStepRaisesActionFailedAttention(t *testing
 	}))
 	attention := &AttentionWorker{Store: s, Now: c.Now}
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed,
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed,
 		"系统规则（binance:SPOT:FOOUSDT）：下架处理有步骤失败或只完成一部分，请在执行记录里看各步结果")))
 
 	_, err := s.CancelExecution(ctx, seeded.ExecutionID, c.now.UnixMilli())
@@ -494,10 +494,10 @@ func TestUnfinishedExecutionWithFailedStepRaisesActionFailedAttention(t *testing
 	finishCleanup(t, s, seeded.ExecutionID, c.now.UnixMilli())
 	telemetry.Note(telemetry.AttentionActionFailed, "binance:SPOT:FOOUSDT 下架后留有零头", c.now)
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "binance:SPOT:FOOUSDT 下架后留有零头")))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, "binance:SPOT:FOOUSDT 下架后留有零头")))
 	c.now = c.now.Add(telemetry.DelistDetectedWindow + time.Second)
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.AttentionSample(telemetry.AttentionActionFailed, "")))
 }
 
 // finishCleanup 按当前序号记下善后做完。

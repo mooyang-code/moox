@@ -38,7 +38,9 @@ export function hostHref(hostID?: string) {
 const COLLECTOR_RESULTS = { href: "#/collector/tasks?tab=results", label: "查看采集结果" };
 
 function readonlyKeyMissing(object?: HealthObject): boolean {
-  return object?.kind === "collector_attention" && object.attention_kind === "delist_readonly_key_missing";
+  return (
+    object?.kind === "attention" && object.component_id === "collector" && object.attention_kind === "delist_readonly_key_missing"
+  );
 }
 
 /** 告警的处理说明：几段文字，外加可选的处理入口。 */
@@ -98,7 +100,7 @@ function collectorDatasetLink(object: HealthObject): AlertLink {
   return { href: `#/collector/tasks?${query}`, label: "查看采集结果", ...(object.space_id ? { spaceId: object.space_id } : {}) };
 }
 
-/** 告警对象的处理入口：页面地址与链接文字。同一类关注项里的具体情况按 Monitor 给出的 attention_kind 区分。 */
+/** 告警对象的处理入口：页面地址与链接文字。关注项按 Monitor 给出的服务名（component_id）与种类（attention_kind）区分。 */
 export function alertLink(object?: HealthObject): AlertLink {
   // 读不到的情况有三种、多半要在命令行里处理：首页跳到监控告警页，那里显示三种情况的处理说明（alertNote）。
   if (readonlyKeyMissing(object)) return { href: "#/ops/monitor", label: "查看处理办法" };
@@ -127,10 +129,11 @@ export function alertLink(object?: HealthObject): AlertLink {
         label: "查看服务"
       };
     case "balance":
-    case "trade_attention":
       return { href: "#/trading/live", label: "查看交易账户" };
-    case "event_center_attention":
-      return eventCenterLink(object.attention_kind);
+    case "attention":
+      if (object.component_id === "trade") return { href: "#/trading/live", label: "查看交易账户" };
+      if (object.component_id === "callback-dispatcher") return eventCenterLink(object.attention_kind);
+      break;
   }
   return {
     href:

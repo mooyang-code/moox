@@ -2,11 +2,10 @@
 package telemetry
 
 import (
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -23,39 +22,44 @@ const (
 // DelistDetectedWindow 是 delist_detected 持续的时间。
 const DelistDetectedWindow = 3 * time.Minute
 
-// attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
-var attentionKinds = []string{AttentionExecutionFailed, AttentionDelistDetected, AttentionActionFailed}
-
-// maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
-const maxAttentionDetail = 480
+// attentionKinds 是事件中心声明的全部关注项：名称是告警标题，全部是故障级。
+var attentionKinds = []report.AttentionKind{
+	{Kind: AttentionExecutionFailed, Name: "事件通知失败", Severity: report.AttentionCritical},
+	{Kind: AttentionDelistDetected, Name: "发现标的即将下架", Severity: report.AttentionCritical},
+	{Kind: AttentionActionFailed, Name: "系统动作处理失败", Severity: report.AttentionCritical},
+}
 
 var (
-	// Attention 是关注项：值为 1 表示该种类当前有需要处理的情况，detail 里列出它们。
-	Attention = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_callbackdispatcher_attention_active", Help: "Event center conditions that need a person, with rule and reason in the detail label."}, []string{"kind", "detail"})
+	// Attention 是关注项（moox_attention_active）：值为 1 表示该种类当前有需要处理的情况，detail 里列出它们。
+	Attention = mustNewAttention()
 	// EventErrors 统计收到后无法处理的事件（解码失败等），这类消息会被终止，不再重投。
 	EventErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_callbackdispatcher_event_errors_total", Help: "Events that could not be decoded or handled and were terminated."}, []string{"reason"})
 )
 
 func init() {
-	prometheus.MustRegister(Attention, EventErrors)
+	prometheus.MustRegister(EventErrors)
+}
+
+func mustNewAttention() *report.Attention {
+	attention, err := report.NewAttention(prometheus.DefaultRegisterer, attentionKinds)
+	if err != nil {
+		panic(err)
+	}
+	return attention
 }
 
 // PublishAttention 用本轮结果替换上报值，items 按 kind 列出每条详情。
 func PublishAttention(items map[string][]string) {
-	Attention.Reset()
-	for _, kind := range attentionKinds {
-		details := append([]string(nil), items[kind]...)
-		if len(details) == 0 {
-			Attention.WithLabelValues(kind, "").Set(0)
-			continue
-		}
-		sort.Strings(details)
-		detail := strings.Join(details, "；")
-		if len(detail) > maxAttentionDetail {
-			detail = strings.ToValidUTF8(detail[:maxAttentionDetail], "") + "…"
-		}
-		Attention.WithLabelValues(kind, detail).Set(1)
+	Attention.Set("dispatch", items)
+}
+
+// AttentionSample 返回某个种类、某条 detail 当前的值（测试用）：正在上报这条 detail 时为 1，否则为 0。
+func AttentionSample(kind, detail string) prometheus.Gauge {
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "attention_sample"})
+	if detail != "" && Attention.Active()[kind] == detail {
+		gauge.Set(1)
 	}
+	return gauge
 }
 
 // 没有落库状态的关注项（delist_detected）记在这里，在窗口内持续上报。

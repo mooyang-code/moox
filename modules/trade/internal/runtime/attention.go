@@ -143,7 +143,7 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		}
 	}
 	items[telemetry.AttentionUnknownResults] = telemetry.Recent(telemetry.AttentionUnknownResults, now, rejectionWindow)
-	telemetry.PublishAttention(items)
+	telemetry.Attention.Set("runtime", items)
 	return errors.Join(scanErrors...)
 }
 

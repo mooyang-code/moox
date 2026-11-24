@@ -244,6 +244,14 @@ func buildBusinessFreshnessReporterWithInterval(
 		for _, item := range moduleItems {
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
+		// 关注项：检查 ID、名称、级别都由生产者在指标里给出（attention:<服务名>:<kind>），不经上面的种类白名单。
+		for _, business := range overview.BusinessChecks {
+			if business.Kind != monitorobservability.AttentionCheckKind {
+				continue
+			}
+			item := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: business.CheckID, name: business.Name, success: business.Status == "healthy", reason: business.Reason}
+			items[item.spaceID+"\x00"+item.checkID] = item
+		}
 		enabled := true
 		existing := make([]domain.Check, 0, 500)
 		for page := 1; len(existing) < maxFreshnessChecks; page++ {
@@ -548,8 +556,6 @@ func businessCheckIdentity(business monitorobservability.BusinessStatus) (checkI
 		case "collector_stream_missing":
 			name = "行情推送连续缺失"
 		}
-	} else if attention := monitorobservability.AttentionCheckName(business.Kind, business.Module); attention != "" {
-		checkID, name = business.Kind+":"+business.Module, attention
 	} else if business.Kind == "storage_rejection" {
 		checkID, name = "storage_rejection:"+business.Module, "存储截止拒绝"
 	} else if business.Kind == "factor_watermark" {

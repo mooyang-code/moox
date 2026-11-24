@@ -175,7 +175,12 @@ describe("monitor page", () => {
           title: "下架检测缺少币安只读 Key",
           reason: "币安现货：没有读到只读 Key",
           triggered_at: "2026-10-16T02:58:20Z",
-          object: { type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" }
+          object: {
+            type: "business",
+            kind: "attention",
+            component_id: "collector",
+            attention_kind: "delist_readonly_key_missing"
+          }
         }
       ]
     });

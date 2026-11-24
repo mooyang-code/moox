@@ -39,7 +39,7 @@
 - 手工登记下架的后果：登记后立即禁止买入，到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。管理台「事件中心」“事件”页签里“标的即将下架”一行的“手工登记”效果相同。
 
 - 库文件没有迁移：事件中心启动时发现表结构是旧的（报“数据库是旧版本的结构”）就拒绝启动，要先停服务、删库文件（部署根下的 `data/callback-dispatcher/moox_callback_dispatcher.db*`）再启动，和用户确认后再做。
-- 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`event_center_attention`）见 [`monitor-attention.md`](monitor-attention.md)。
+- 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`attention:callback-dispatcher:*`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 采集
 
@@ -75,7 +75,7 @@
 - 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里的“云账号”对话框，初始账号由 `setup init` 登记。
   换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `setup inspect-scf` 查出来再到腾讯云控制台手工删。
 - 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
-- **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `collector_attention:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
+- **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `attention:collector:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。
 
 ## 存储（Storage）
@@ -140,7 +140,7 @@
 ```
 
 - **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台“交易管理 › 下架名单”里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
-- 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`trade_attention`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
+- 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`attention:trade:*`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控
 
