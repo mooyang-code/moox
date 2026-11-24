@@ -272,7 +272,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     ```bash
     systemctl --user list-units 'moox-*' --no-legend     # 只有这台主机该有的组件，全部 active
     cat /data/moox/version.json                          # 版本与提交是这次的，四台一致
-    ls /data/moox                                        # bin config secrets data logs version.json（因子机另有 archive import）
+    ls /data/moox                                        # bin config secrets data logs version.json（因子机另有 archive）
     ss -ltn | grep -v 127.0.0.1                          # control: 9527 11003；storage: 11003 11004 4222；overseas: 11003 11004；factor: 只有 11003
     ls /data/moox/secrets                                # storage、factor 上只有本机密钥、主机证书、根证书、EventBus 角色文件（及本机的对象存储凭据）
     ```

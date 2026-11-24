@@ -132,6 +132,12 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 写入时按当前时钟进行的年龄过滤。Storage 写入在 storage-primary 的 Pebble 库内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
 `--job-db` 保留着，中断后原样重跑自动续传。失败的批（Storage 写超时）重跑即可。
 
+### 7a. 长历史进归档（可选）
+
+保留期内的数据写进 Storage 后会被归档每分钟跟随；**需要保留期之外的长历史进归档时**，在第 6 步或单独一次导入里加 `--target archive`（可与 `storage,factor` 组合，也可只写归档）。前提：数据集已有归档任务、归档 worker 在线；`series_tag` 必须非空（导入包清单或 `--series-tag` 给出）。
+导入要先在 worker 暂存库里装下整次导入：按约 `(40 + 10 × 值列数) × 1.5` 字节/行估算，再加上时间范围内已登记分区的行数（落在已定稿分区的批次会把整个分区读回）。预检超过 worker 可用空间减 `min_free_bytes` 就拒绝，这时按时间拆成几次导入。
+因子机只出站时行经 control 中转写进 worker，较慢；导入期间该任务的分钟跟随暂停，结束后接着读。
+
 ## 8. 等本数据集的 View 追平
 
 - `moox-cli doctor alerts --file ./moox.toml` 里该 View 不再报“等待中”（屏蔽期间告警仍照常评估与记录，只是不推送）；
