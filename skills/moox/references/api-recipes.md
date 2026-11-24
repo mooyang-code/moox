@@ -32,7 +32,7 @@
 | 因子 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
 | 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
 | 策略 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |
-| 交易（只读） | 账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者 | `trade account list|show`、`trade logical list|show|target`、`trade order list|show`、`trade fills|positions|holdings|equity|capabilities|action|actions|pnl|holders`、`trade blocked list` |
+| 交易 | 账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者；写操作默认只预览 | `trade account list|show|create|update|leverage|sync|reinspect|flatten`、`trade logical list|show|target|create|update|order-settings|fund-settings|add-member|remove-member|pause|resume|flatten`、`trade order list|show|submit|cancel`、`trade paper create|close`、`trade fills|positions|holdings|equity|capabilities|action|actions|pnl|holders`、`trade blocked list` |
 | 运维 › 监控 | 总览、到达历史、主机资源、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
 | 运维 › 主机、部署 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
 | 运维 › 活动日志 | 活动日志 | `activity list` |

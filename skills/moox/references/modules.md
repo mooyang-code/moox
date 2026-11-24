@@ -135,7 +135,7 @@
 ./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
 ```
 
-- **注意**：Agent 不创建实盘账户、不下单、不清仓、不解除下架禁止（用户在管理台交易页的下架名单里查看与解除）；保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后在管理台手动恢复。
+- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台交易页的下架名单里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
 - 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`trade_attention`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控
