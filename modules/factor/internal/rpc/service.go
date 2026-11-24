@@ -62,7 +62,6 @@ type RecalcJob struct {
 	Status       string
 	ProgressTime time.Time
 	Error        string
-	EngineID     string
 	// DefaultFilled 是按默认参数新补的期次（成员键 → 闭区间）。
 	DefaultFilled map[string][]store.TimeRange
 	CreatedAt     time.Time
@@ -75,7 +74,7 @@ func JobFromStore(job store.RecalcJob) RecalcJob {
 		JobID: job.JobID, RequestID: job.RequestID, TaskID: job.TaskID,
 		Members: append([]string(nil), job.Members...), Subjects: append([]string(nil), job.Subjects...),
 		StartTime: unixTime(job.StartTime), EndTime: unixTime(job.EndTime), ProgressTime: unixTime(job.ProgressTime),
-		Status: job.Status, Error: job.Error, EngineID: job.EngineID, DefaultFilled: job.DefaultFilled, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
+		Status: job.Status, Error: job.Error, DefaultFilled: job.DefaultFilled, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 	}
 }
 

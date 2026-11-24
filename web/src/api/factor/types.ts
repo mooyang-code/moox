@@ -261,8 +261,6 @@ export interface RecalcJob {
   status: RecalcJobStatus;
   progress_time: string;
   error: string;
-  /** 领取并执行该任务的计算引擎；尚未被领取时为空。 */
-  engine_id?: string;
   /** 按默认参数新补的期次：原行不存在、或原行的 __params 里没有这个成员，与当时的实时结果不保证一致。 */
   default_filled?: MemberRanges[];
   created_at: string;

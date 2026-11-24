@@ -63,11 +63,11 @@ func TestPausedModuleRejectsWritesAndLeases(t *testing.T) {
 	_, ok := r.beginWrite(ctx, "ftask_a", true, true)
 	require.False(t, ok)
 	require.Zero(t, r.writes.count(""), "被拒绝的操作不留登记")
-	require.False(t, r.leaseAllowed())
+	require.False(t, r.pullAllowed())
 
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	loop := &recalcLoop{client: client, executor: recalcexec.NewExecutor(&planRecorder{}), source: &sourceFake{}, poll: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") }}
+		pullAllowed: r.pullAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") }}
 	found, err := loop.RunOnce(ctx)
 	require.NoError(t, err)
 	require.False(t, found)
@@ -87,7 +87,7 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 		}))
 	loop := &recalcLoop{client: client, executor: executor, source: &sourceFake{}, poll: time.Millisecond,
 		gateWait: 5 * time.Second, gateRetry: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") }}
+		pullAllowed: r.pullAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") }}
 
 	// 第一块跑完后暂停模块，再下一块被门禁挡住；作业不能等到“门禁重开”。
 	var chunks int
@@ -134,7 +134,7 @@ func TestJobPulledBeforePauseDoesNotContinueDuringCatchup(t *testing.T) {
 	inHistory, unblock := make(chan struct{}), make(chan struct{})
 	loop := &recalcLoop{client: client, executor: executor, source: &sourceFake{}, poll: time.Millisecond,
 		gateWait: 5 * time.Second, gateRetry: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") },
+		pullAllowed: r.pullAllowed, moduleOpen: r.moduleRunning, pulling: func() func() { return r.writes.enter("") },
 		history: func(context.Context, domain.EngineTask, []string, int) error {
 			close(inHistory)
 			<-unblock
@@ -156,7 +156,7 @@ func TestJobPulledBeforePauseDoesNotContinueDuringCatchup(t *testing.T) {
 	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, ManualRelease: true})
 	require.NoError(t, err)
 	require.True(t, r.catchupGate("ftask_a"), "追赶门禁放行分块")
-	require.False(t, r.leaseAllowed())
+	require.False(t, r.pullAllowed())
 
 	started := time.Now()
 	close(unblock)

@@ -22,7 +22,7 @@ type EngineHub interface {
 	Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, error)
 	Heartbeat(ctx context.Context, id domain.EngineIdentity, status domain.EngineStatus) (time.Duration, error)
 	Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJob, domain.EngineTask, bool, error)
-	Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error)
+	Report(ctx context.Context, id domain.EngineIdentity, jobID string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error)
 	HoldsLease(id domain.EngineIdentity) bool
 }
 
@@ -106,20 +106,19 @@ func (s *EngineService) PullRecalcJob(ctx context.Context, req *factorpb.PullRec
 		return &factorpb.PullRecalcJobRsp{RetInfo: success()}, nil
 	}
 	return &factorpb.PullRecalcJobRsp{
-		RetInfo: success(), Found: true, Job: recalcJobToPB(JobFromStore(job)),
-		LeaseToken: job.LeaseToken, Task: factorwire.EngineTaskToPB(set),
+		RetInfo: success(), Found: true, Job: recalcJobToPB(JobFromStore(job)), Task: factorwire.EngineTaskToPB(set),
 	}, nil
 }
 
 func (s *EngineService) ReportRecalcProgress(ctx context.Context, req *factorpb.ReportRecalcProgressReq) (*factorpb.ReportRecalcProgressRsp, error) {
-	if strings.TrimSpace(req.GetJobId()) == "" || strings.TrimSpace(req.GetLeaseToken()) == "" {
-		return &factorpb.ReportRecalcProgressRsp{RetInfo: invalid(fmt.Errorf("job_id and lease_token are required"))}, nil
+	if strings.TrimSpace(req.GetJobId()) == "" {
+		return &factorpb.ReportRecalcProgressRsp{RetInfo: invalid(fmt.Errorf("job_id is required"))}, nil
 	}
 	progress, err := factorwire.ParseTime(req.GetProgressTime())
 	if err != nil || progress.IsZero() {
 		return &factorpb.ReportRecalcProgressRsp{RetInfo: invalid(fmt.Errorf("progress_time must be an RFC3339 timestamp"))}, nil
 	}
-	job, err := s.hub.Report(ctx, factorwire.EngineIdentityFromPB(req.GetEngine()), req.GetJobId(), req.GetLeaseToken(), progress, req.GetStatus(), req.GetError(), defaultFilledFromPB(req.GetDefaultFilled()))
+	job, err := s.hub.Report(ctx, factorwire.EngineIdentityFromPB(req.GetEngine()), req.GetJobId(), progress, req.GetStatus(), req.GetError(), defaultFilledFromPB(req.GetDefaultFilled()))
 	if err != nil {
 		return &factorpb.ReportRecalcProgressRsp{RetInfo: engineError(err)}, nil
 	}

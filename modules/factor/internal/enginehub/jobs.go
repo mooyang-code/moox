@@ -13,7 +13,7 @@ import (
 // gives up for this round.
 const maxPullAttempts = 16
 
-// Pull leases the next runnable recalc job to the engine holding the lease.
+// Pull 把下一个可运行的补算作业交给当前登记的引擎进程（运行中的作业优先，同时只有一条运行中，见 store.PullRecalcJob）。
 // Jobs of enabled sets whose result dataset is not ready are left queued; jobs
 // whose set is no longer enabled or whose selected factors are no longer all
 // enabled fail immediately, as they could never run.
@@ -27,7 +27,7 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 		return store.RecalcJob{}, domain.EngineTask{}, false, err
 	}
 	for attempt := 0; attempt < maxPullAttempts; attempt++ {
-		job, found, err := h.store.PullRecalcJob(ctx, id.EngineID, now, h.jobTTL, skip, h.maxRunningJobs)
+		job, found, err := h.store.PullRecalcJob(ctx, now, skip)
 		if err != nil || !found {
 			return store.RecalcJob{}, domain.EngineTask{}, false, err
 		}
@@ -35,8 +35,8 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 		// 所以一个作业从头到尾用的是同一份定义。
 		set, err := h.runnableTask(ctx, job)
 		if err != nil {
-			if _, failErr := h.store.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, job.ProgressTime,
-				store.RecalcStatusFailed, err.Error(), nil, now, h.jobTTL); failErr != nil {
+			if _, failErr := h.store.ReportRecalcProgress(ctx, job.JobID, job.ProgressTime,
+				store.RecalcStatusFailed, err.Error(), nil, now); failErr != nil {
 				return store.RecalcJob{}, domain.EngineTask{}, false, failErr
 			}
 			continue
@@ -47,8 +47,8 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 }
 
 // Report 记录已领取作业的一个分块并返回作业的当前状态；status 为 accepted 时是引擎归还作业（回到待领取）。
-// 只有当前登记的引擎进程可以上报：被重启后的新进程顶替的旧进程不能再给作业续租。
-func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
+// 只有当前登记的引擎进程可以上报：被重启后的新进程顶替的旧进程不能再推进作业。
+func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
 	now := h.now().UTC()
 	if !h.holdsLease(id, now) {
 		return store.RecalcJob{}, ErrLeaseConflict
@@ -59,13 +59,13 @@ func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, lease
 		if err != nil {
 			return store.RecalcJob{}, err
 		}
-		if job.LeaseToken == leaseToken && job.Status == store.RecalcStatusRunning {
+		if job.Status == store.RecalcStatusRunning {
 			if _, runnableErr := h.runnableTask(ctx, job); runnableErr != nil {
-				return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), nil, now, h.jobTTL)
+				return h.store.ReportRecalcProgress(ctx, jobID, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), nil, now)
 			}
 		}
 	}
-	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, defaultFilled, now, h.jobTTL)
+	return h.store.ReportRecalcProgress(ctx, jobID, progress.Unix(), status, errText, defaultFilled, now)
 }
 
 func (h *Hub) runnableTask(ctx context.Context, job store.RecalcJob) (domain.EngineTask, error) {

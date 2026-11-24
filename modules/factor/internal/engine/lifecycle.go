@@ -251,8 +251,8 @@ func (r *Runtime) beginWrite(_ context.Context, taskID string, live, catchup boo
 // quiesce 是生命周期的 Quiesce 钩子：门禁已经关闭，等在途的写结果操作（实时计算、补算分块、追赶推进、补算领取）结束。
 func (r *Runtime) quiesce(ctx context.Context) error { return r.writes.wait(ctx, "") }
 
-// leaseAllowed 报告是否可以领取补算作业：模块在运行、因子目录已载入才领取。不用 active()，它还服务于消费者、预载与数据同步。
-func (r *Runtime) leaseAllowed() bool {
+// pullAllowed 报告是否可以领取补算作业：模块在运行、因子目录已载入才领取。不用 active()，它还服务于消费者、预载与数据同步。
+func (r *Runtime) pullAllowed() bool {
 	return (r.life == nil || r.life.Running()) && r.catalog.Loaded()
 }
 

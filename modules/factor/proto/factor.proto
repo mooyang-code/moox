@@ -174,7 +174,6 @@ message RecalcJob {
   string error = 10;
   string created_at = 11;
   string updated_at = 12;
-  string engine_id = 13;
   // default_filled 是按默认参数新补的期次：原行不存在、或原行的 __params 里没有这个成员，只能用默认参数算出来，
   // 与当时的实时结果不保证一致。
   repeated MemberRanges default_filled = 14;
@@ -822,14 +821,12 @@ message PullRecalcJobRsp {
   common.RetInfo ret_info = 1;
   bool found = 2;
   RecalcJob job = 3;
-  string lease_token = 4;
   EngineTask task = 5;
 }
 
 message ReportRecalcProgressReq {
   EngineIdentity engine = 1;
   string job_id = 2;
-  string lease_token = 3;
   string progress_time = 4;
   string status = 5;
   string error = 6;

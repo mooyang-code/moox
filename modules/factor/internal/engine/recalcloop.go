@@ -14,8 +14,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// errReportFailed marks a job abandoned because its progress could not be
-// reported; the job lease expires and the job resumes from its last progress.
+// errReportFailed 表示分块进度没能上报、作业被放弃：作业在管理端仍是运行中，下一次领取（一个轮询间隔之后）
+// 拿回它并从管理端记下的进度续跑。
 var errReportFailed = errors.New("recalc progress report failed")
 
 // giveBackTimeout 是归还作业的上报超时（引擎停止时上下文已取消，归还用单独的超时）。
@@ -32,7 +32,7 @@ const (
 // JobClient is the manager surface of the recalc loop.
 type JobClient interface {
 	PullRecalcJob(ctx context.Context) (PulledJob, bool, error)
-	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error)
+	ReportRecalcProgress(ctx context.Context, jobID string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error)
 }
 
 // SourceDataset reads the source dataset facts a recalc chunk needs.
@@ -45,8 +45,7 @@ type ChunkExecutor interface {
 	Run(ctx context.Context, window recalcexec.Window, source recalcexec.SelectionSource, report recalcexec.ProgressFunc) error
 }
 
-// recalcLoop pulls leased jobs from the manager and runs them chunk by chunk,
-// reporting every chunk (which also renews the job lease).
+// recalcLoop 向管理端领取补算作业并逐个分块执行，每个分块都上报进度。
 type recalcLoop struct {
 	client   JobClient
 	executor ChunkExecutor
@@ -55,8 +54,8 @@ type recalcLoop struct {
 	poll     time.Duration
 	// prepare 在作业执行之前备齐它绑定的自定义算子模块；失败时作业报告失败，不写任何分块。
 	prepare func(ctx context.Context, set domain.EngineTask) (release func(), err error)
-	// leaseAllowed 非空时，模块级生命周期放行才领取作业（暂停、恢复追赶期间不领取，也不续跑）。
-	leaseAllowed func() bool
+	// pullAllowed 非空时，模块级生命周期放行才领取作业（暂停、恢复追赶期间不领取，也不续跑）。
+	pullAllowed func() bool
 	// pulling 登记在途的领取请求：暂停的等待收敛要等它返回；领取回来的作业写分块时被门禁挡住，随即归还。
 	pulling func() func()
 	// moduleOpen 报告模块级生命周期是否放行；为空时视为一直放行。runWhenOpen 据此区分“任务刚建立、门禁稍后放行”（可以等）
@@ -92,7 +91,7 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	if l.pulling != nil {
 		done = l.pulling()
 	}
-	if l.leaseAllowed != nil && !l.leaseAllowed() {
+	if l.pullAllowed != nil && !l.pullAllowed() {
 		done()
 		return false, nil
 	}
@@ -108,7 +107,7 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	axis, err := jobToAxis(&job)
 	if err != nil {
 		log.ErrorContextf(ctx, "factor_recalc_failed job_id=%s error=%v", job.JobID, err)
-		if _, reportErr := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, realProgress, jobStatusFailed, err.Error(), nil); reportErr != nil {
+		if _, reportErr := l.client.ReportRecalcProgress(ctx, job.JobID, realProgress, jobStatusFailed, err.Error(), nil); reportErr != nil {
 			log.ErrorContextf(ctx, "factor_recalc_report_failed job_id=%s error=%v", job.JobID, reportErr)
 		}
 		return true, nil
@@ -124,11 +123,13 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	case err == nil:
 		log.InfoContextf(ctx, "factor_recalc_done job_id=%s", job.JobID)
 	case ctx.Err() != nil:
-		// 引擎停止（排在上报失败之前：停止时正在上报的分块也会因上下文取消而失败）：归还作业，
-		// 重启后立刻重新领取并从已上报的进度续跑；归还失败则等作业租约过期。
+		// 引擎停止（排在上报失败之前：停止时正在上报的分块也会因上下文取消而失败）：归还作业。
+		// 归还失败作业仍是运行中，重启后的引擎领取时同样先拿到它，从已上报的进度续跑。
 		l.giveBack(ctx, axis, job)
 	case errors.Is(err, ErrLeaseConflict), errors.Is(err, errReportFailed):
+		// 作业在管理端仍是运行中，下一次领取会立刻拿回它：按没有作业处理，等一个轮询间隔再领，不连续重试。
 		log.WarnContextf(ctx, "factor_recalc_abandoned job_id=%s error=%v", job.JobID, err)
+		return false, nil
 	default:
 		log.ErrorContextf(ctx, "factor_recalc_failed job_id=%s error=%v", job.JobID, err)
 		if _, reportErr := l.report(ctx, axis, job, job.Window.Progress, jobStatusFailed, err.Error(), nil); reportErr != nil {
@@ -177,11 +178,11 @@ func (l *recalcLoop) report(ctx context.Context, axis periodclock.Axis, job Pull
 	if err != nil {
 		return "", err
 	}
-	return l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, realProgress, status, errText, realFilled)
+	return l.client.ReportRecalcProgress(ctx, job.JobID, realProgress, status, errText, realFilled)
 }
 
-// giveBack 把放弃的作业归还给管理端（回到待领取、进度保留），下一轮领取立刻能拿到，不用等作业租约过期。
-// 归还失败只记日志：作业租约过期后照旧会被重新领取。
+// giveBack 把放弃的作业归还给管理端（回到待领取、进度保留），让排在后面的作业先跑。
+// 归还失败只记日志：作业仍是运行中，下一次领取照旧拿回它。
 func (l *recalcLoop) giveBack(ctx context.Context, axis periodclock.Axis, job PulledJob) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), giveBackTimeout)
 	defer cancel()
@@ -259,8 +260,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodcloc
 		}
 		job.Window.Progress = progress
 		if l.active != nil && !l.active() {
-			// Another engine took the lease: stop at this chunk boundary and let
-			// the job lease expire so the lease holder resumes it.
+			// 另一个引擎登记了：停在这个分块边界，作业留在运行中，由登记的引擎领取后续跑。
 			return true, nil
 		}
 		return current != jobStatusRunning, nil
@@ -268,7 +268,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodcloc
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
 		// 领取之后的准备（备模块、补历史、分块重试的等待）不在在途登记里，期间模块可能已经暂停、收敛并进入恢复追赶；
 		// 恢复追赶的门禁会放行分块，所以这里按领取的条件再查一次：模块没有放行就不续跑，由调用方归还作业。
-		if l.leaseAllowed != nil && !l.leaseAllowed() {
+		if l.pullAllowed != nil && !l.pullAllowed() {
 			return recalcexec.Selection{}, recalcexec.ErrGated
 		}
 		subjects, err := setSubjects(ctx, l.source, set, job.Subjects)

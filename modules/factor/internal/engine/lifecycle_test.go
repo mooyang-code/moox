@@ -162,11 +162,11 @@ func TestRecalcIsNotLeasedBeforeTheCatalogIsLoaded(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, r.life.Running())
 	require.False(t, r.catalog.Loaded())
-	require.False(t, r.leaseAllowed(), "目录未载入不领取")
+	require.False(t, r.pullAllowed(), "目录未载入不领取")
 
 	client := &jobClientFake{job: testJob("BTC"), found: true}
 	loop := &recalcLoop{client: client, executor: recalcexec.NewExecutor(&planRecorder{}), source: &sourceFake{}, poll: time.Millisecond,
-		leaseAllowed: r.leaseAllowed, moduleOpen: r.moduleRunning}
+		pullAllowed: r.pullAllowed, moduleOpen: r.moduleRunning}
 	found, err := loop.RunOnce(ctx)
 	require.NoError(t, err)
 	require.False(t, found)
@@ -174,10 +174,10 @@ func TestRecalcIsNotLeasedBeforeTheCatalogIsLoaded(t *testing.T) {
 
 	_, err = cache.Apply(CatalogSnapshot{Hash: "h", Sets: []domain.EngineTask{uncompiled(engineTask("ftask_a", "dataset_a", true, "bias"))}})
 	require.NoError(t, err)
-	require.True(t, r.leaseAllowed(), "目录载入后领取")
+	require.True(t, r.pullAllowed(), "目录载入后领取")
 	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause})
 	require.NoError(t, err)
-	require.False(t, r.leaseAllowed(), "模块暂停后不领取")
+	require.False(t, r.pullAllowed(), "模块暂停后不领取")
 }
 
 // 模块暂停、恢复追赶期间预载循环不运行，不会自己把数据拉回本地；放行后恢复。
