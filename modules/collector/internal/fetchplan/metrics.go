@@ -14,15 +14,15 @@ import (
 // ControlMetrics 是 Collector 主进程的采集控制面指标：对账健康度、库与维护任务的运维统计、周期上报。
 // 执行面（云函数程序、collector-stream）不注册这些指标。
 type ControlMetrics struct {
-	storeBytes               *prometheus.GaugeVec
-	storeRows                *prometheus.GaugeVec
-	storeRowsCapped          *prometheus.GaugeVec
-	storeStatsHealthy        *prometheus.GaugeVec
-	storeStatsLastSuccess    *prometheus.GaugeVec
-	maintenanceDeleted       *prometheus.GaugeVec
-	maintenanceDuration      *prometheus.GaugeVec
-	maintenancePasses        *prometheus.CounterVec
-	maintenanceLastSuccess   *prometheus.GaugeVec
+	storeBytes             *prometheus.GaugeVec
+	storeRows              *prometheus.GaugeVec
+	storeRowsCapped        *prometheus.GaugeVec
+	storeStatsHealthy      *prometheus.GaugeVec
+	storeStatsLastSuccess  *prometheus.GaugeVec
+	maintenanceDeleted     *prometheus.GaugeVec
+	maintenanceDuration    *prometheus.GaugeVec
+	maintenancePasses      *prometheus.CounterVec
+	maintenanceLastSuccess *prometheus.GaugeVec
 	// coordination 是各空间的采集计划协调状态，判断关注项 fetch_coordination_failing 用（见 coordination_attention.go）。
 	coordination             coordinationStates
 	assignmentErrors         *prometheus.CounterVec
