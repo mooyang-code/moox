@@ -1,4 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { registerFixtureDefinitions } from "../../../../tests/strategy-requirement";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, reactive } from "vue";
 
@@ -17,6 +18,10 @@ const api = vi.hoisted(() => ({
   chartSpecs: [] as any[],
   charts: [] as any[],
   space: null as null | { selectedSpaceId: string; selectedSpace?: { timezone: string } }
+}));
+// 要绑定的任务由后端按 DSL 推出：测试里按 DSL 与登记的定义模拟
+vi.mock("@/views/strategy/use-task-requirement", async () => ({
+  useTaskRequirement: (await import("../../../../tests/strategy-requirement")).useFixtureTaskRequirement
 }));
 vi.mock("@/api/strategy", () => ({
   getInstance: api.getInstance,
@@ -208,6 +213,12 @@ function listText(wrapper: ReturnType<typeof mountPage>) {
 }
 
 describe("strategy replay page", () => {
+  // 页面按定义 ID 向后端读要绑定的任务：把假目录里的定义登记给模拟
+  registerFixtureDefinitions([
+    { strategy_id: "s1", dsl_yaml: "name: a\n" },
+    { strategy_id: "s2", dsl_yaml: "name: m\nmarket: {select: both, prefer: spot}\n" }
+  ]);
+
   beforeEach(() => {
     vi.useFakeTimers();
     api.chartSpecs.length = 0;
@@ -1611,6 +1622,8 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.tasks = { spot: "ftask_a" };
     vm.form.strategy_id = "s1";
     vm.form.range = [Date.parse("2026-09-02T00:00:00Z"), Date.parse("2026-09-01T00:00:00Z")];
+    // 等表单按定义读回要绑定的任务
+    await flushPromises();
     await click(wrapper, "开始回放");
     expect(api.startReplay).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain("结束时间必须晚于开始时间");
@@ -1629,6 +1642,7 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.strategy_id = "s1";
     // 区间是毫秒时刻（选择器按空间时区换算），提交时写成不带毫秒的 UTC RFC3339
     vm.form.range = [Date.parse("2026-09-01T01:30:00Z"), Date.parse("2026-09-01T07:00:00Z")];
+    await flushPromises();
     await click(wrapper, "开始回放");
     expect(api.startReplay).toHaveBeenCalledTimes(1);
     expect(api.startReplay.mock.calls[0][0]).toMatchObject({

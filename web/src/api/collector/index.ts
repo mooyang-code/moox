@@ -219,6 +219,14 @@ export interface DataTypeConfigDetail {
   fields?: DataTypeFieldConfig[];
   /** K 线任务可选的附加字段，默认都不选 */
   extra_fields?: ExtraFieldOption[];
+  /** K 线任务可选的基础输出字段（结果数据集能建的列，按建列顺序）；其他任务类型为空 */
+  base_output_fields?: OutputFieldOption[];
+}
+
+/** K 线任务可以选的一个基础输出字段。 */
+export interface OutputFieldOption {
+  field_id: string;
+  display_name: string;
 }
 
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {

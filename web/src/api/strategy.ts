@@ -15,6 +15,7 @@ import type {
   StrategyResultDetail,
   StrategyResultItem,
   StrategyTargetSnapshot,
+  StrategyTaskRequirement,
   ValidateStrategyResult
 } from "./strategy-types";
 
@@ -26,6 +27,17 @@ function normalizeStrategy(value: any): Strategy {
     dsl_hash: value?.dsl_hash ?? "",
     created_at: value?.created_at ?? "",
     updated_at: value?.updated_at ?? ""
+  };
+}
+
+function normalizeRequirement(value: any): StrategyTaskRequirement | null {
+  if (!value) return null;
+  return {
+    pool: Boolean(value.pool),
+    marketDeclared: Boolean(value.market_declared),
+    taskKeys: (value.task_keys ?? []).map(String),
+    sources: (value.sources ?? []).map((item: any) => ({ name: String(item?.name ?? ""), bar: String(item?.bar ?? "") })),
+    problems: (value.problems ?? []).map(String)
   };
 }
 
@@ -167,8 +179,15 @@ export async function updateStrategy(strategy_id: string, dsl_yaml: string) {
 }
 
 export async function getStrategy(strategy_id: string) {
-  const response = await callStrategy<{ strategy_id: string }, { strategy?: Strategy }>("GetStrategy", { strategy_id });
-  return normalizeStrategy(response.strategy);
+  return (await getStrategyWithRequirement(strategy_id)).strategy;
+}
+
+/** 读取定义，连同后端按 DSL 推出的、建实例要绑定的因子任务。 */
+export async function getStrategyWithRequirement(strategy_id: string) {
+  const response = await callStrategy<{ strategy_id: string }, { strategy?: Strategy; requirement?: unknown }>("GetStrategy", {
+    strategy_id
+  });
+  return { strategy: normalizeStrategy(response.strategy), requirement: normalizeRequirement(response.requirement) };
 }
 
 export async function deleteStrategy(strategy_id: string) {
@@ -214,14 +233,16 @@ export async function validateStrategy(
       diagnostics: messages.length ? messages : [error.message],
       resolved_json: "",
       trial: null,
-      trial_items: []
+      trial_items: [],
+      requirement: normalizeRequirement(rejected?.requirement)
     };
   }
   return {
     diagnostics: response?.diagnostics ?? [],
     resolved_json: response?.resolved_json ?? "",
     trial: response?.trial ? normalizeResult(response.trial) : null,
-    trial_items: (response?.trial_items ?? []).map(normalizeItem)
+    trial_items: (response?.trial_items ?? []).map(normalizeItem),
+    requirement: normalizeRequirement(response?.requirement)
   };
 }
 

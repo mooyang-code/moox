@@ -88,7 +88,7 @@
           <a-tab-pane key="binding" title="当时的绑定"
             ><ResolvedTable
               :resolved-json="detail.resolved_json"
-              :pool="poolMembers(detail.dsl_yaml || '') !== null"
+              :pool="isPoolDsl(detail.dsl_yaml || '')"
               empty-text="会话快照缺失"
           /></a-tab-pane>
           <a-tab-pane key="dsl" title="当时的 DSL">
@@ -105,7 +105,7 @@ import { computed, defineComponent, h, ref } from "vue";
 import type { InstrumentTarget, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
 import { getStrategyResult } from "@/api/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
-import { poolMembers } from "@/views/strategy/market-mode";
+import { isPoolDsl } from "@/views/strategy/dsl";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import ResultOverview from "@/views/strategy/components/strategy-result-overview.vue";
 import { marketLabel } from "@/views/strategy/market-mode";

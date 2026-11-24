@@ -1,20 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { Strategy } from "@/api/strategy-types";
-import {
-  type ReplayFormState,
-  replayDateOnly,
-  replayFactorTasks,
-  replayDeclared,
-  replayDriftHint,
-  replayFundingColumn,
-  replayIsPool,
-  replayMarkets,
-  replayPool,
-  replaySourceOf,
-  replayTuned,
-  validateReplayForm,
-  wholeDays
-} from "./replay-form-model";
+import { fixtureRequirement } from "../../../../tests/strategy-requirement";
+import * as model from "./replay-form-model";
+import { replaySourceOf, wholeDays, type ReplayFormState } from "./replay-form-model";
+
+// 页面会把后端按定义或 DSL 草稿推出的要求写进 form.requirement；这里按同样的规则模拟，测试仍按（表单, 定义列表）调用。
+function withRequirement(form: ReplayFormState, list: Strategy[]): ReplayFormState {
+  if (form.instance_id) return form;
+  const dsl = model.replayDslText(form, list);
+  const lookup = (id: string) => list.find(item => item.strategy_id === id)?.dsl_yaml ?? null;
+  return { ...form, requirement: dsl ? fixtureRequirement(dsl, lookup) : null };
+}
+const replayPool = (form: ReplayFormState, list: Strategy[]) => model.replayPool(withRequirement(form, list));
+const replayDeclared = (form: ReplayFormState, list: Strategy[]) => model.replayDeclared(withRequirement(form, list));
+const replayMarkets = (form: ReplayFormState, list: Strategy[]) => model.replayMarkets(withRequirement(form, list));
+const replayFactorTasks = (form: ReplayFormState, list: Strategy[]) => model.replayFactorTasks(withRequirement(form, list));
+const replayDateOnly = (form: ReplayFormState, list: Strategy[], tasks: Parameters<typeof model.replayDateOnly>[1]) =>
+  model.replayDateOnly(withRequirement(form, list), tasks);
+const replayFundingColumn = (form: ReplayFormState, list: Strategy[] = []) =>
+  model.replayFundingColumn(withRequirement(form, list), list);
+const validateReplayForm = (form: ReplayFormState, list: Strategy[] = []) =>
+  model.validateReplayForm(withRequirement(form, list), list);
+const replayIsPool = (form: ReplayFormState, list: Strategy[]) => model.replayIsPool(withRequirement(form, list), list);
+const { replayDriftHint, replayTuned } = model;
 
 const strategies = [
   { strategy_id: "s1", dsl_yaml: "name: a\nmarket: {select: both, prefer: spot}\n" },
@@ -155,7 +163,7 @@ describe("策略池回放表单", () => {
 
   it("策略池读成员所需市场的并集，不用先选任务所属的市场", () => {
     const catalog = [...members, both];
-    expect(replayPool(form(both), catalog)).toEqual({ markets: ["spot", "swap"], problems: [] });
+    expect(replayPool(form(both), catalog)).toMatchObject({ pool: true, taskKeys: ["spot", "swap"], problems: [] });
     expect(replayDeclared(form(both), catalog)).toBe(true);
     expect(replayMarkets(form(both), catalog)).toEqual(["spot", "swap"]);
     expect(replayFactorTasks(form(both), catalog)).toEqual({ spot: "ftask_spot", swap: "ftask_swap" });
@@ -169,7 +177,7 @@ describe("策略池回放表单", () => {
     const ghost = pool("    - {id: a, strategy: m_spot}\n    - {id: b, strategy: ghost}\n");
     expect(validateReplayForm(form(ghost), [...members, ghost])).toContain("成员 b 引用的策略 ghost 不存在");
     const mixed = pool("    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_stock}\n");
-    expect(validateReplayForm(form(mixed), [...members, mixed])).toContain("策略池的成员还不能回放");
+    expect(validateReplayForm(form(mixed), [...members, mixed])).toContain("这份定义还不能回放");
   });
 
   it("策略池的资金费写在池 DSL 里，表单里的资金费列不提交", () => {

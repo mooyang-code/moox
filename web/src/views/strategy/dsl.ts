@@ -89,7 +89,7 @@ portfolio:
 /** 混合市场示例：market 写 {select: both, prefer: swap}，同一个币两边都有时优先永续下单；空头只走永续（现货不能做空）。 */
 export const mixedMarketTemplate = `# 混合市场示例：从现货与永续两边选币，空头只走永续。
 # 创建实例时绑定计算任务：现货、永续各一个（两个任务的列名要一致）；
-# 混合市场不能用 factor_params。
+# 需要逐期调因子参数时也可以写 factor_params。
 name: mixed_market_momentum
 bar: 1h
 
@@ -212,6 +212,11 @@ export interface DSLPreview {
 }
 
 /** 本地只做 YAML 与结构预检；字段、表达式与列的完整校验以服务端 ValidateStrategy 为准。 */
+/** DSL 是不是策略池（写了 strategy_pool）：只用于展示（绑定表按池的样式显示）；解析不了按不是处理。 */
+export function isPoolDsl(source: string): boolean {
+  return Boolean(parseDSL(source).preview?.pool);
+}
+
 export function parseDSL(source: string): { preview: DSLPreview | null; diagnostics: DSLDiagnostic[] } {
   const document = parseDocument(source, { uniqueKeys: true });
   const diagnostics: DSLDiagnostic[] = [...document.errors, ...document.warnings].map(item => ({ message: item.message }));

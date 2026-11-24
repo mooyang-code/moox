@@ -1,6 +1,6 @@
-import type { ReplayInput, Strategy } from "@/api/strategy-types";
+import type { ReplayInput, Strategy, StrategyTaskRequirement } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
-import { MARKET_ORDER, marketRequirement, poolRequirement, type PoolRequirement } from "@/views/strategy/market-mode";
+import { MARKET_ORDER, requirementTaskKeys, taskKeyMarkets } from "@/views/strategy/market-mode";
 import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
@@ -28,6 +28,8 @@ export interface ReplayFormState {
   input: ReplayInput;
   /** 从实例发起时实例引用的策略定义（页面按实例 ID 读回）；只用来判断是不是策略池，没读到时为空。 */
   instance_strategy_id?: string;
+  /** 后端按定义或 DSL 草稿推出的要绑定的任务（页面读回）；从实例发起或还没读到时为空。 */
+  requirement?: StrategyTaskRequirement | null;
 }
 
 /** 回放对象三选一：实例会话固化的版本、已保存的定义，或未保存的 DSL 文本；都没选返回 null。 */
@@ -45,12 +47,9 @@ export function replayDslText(form: ReplayFormState, strategies: Strategy[]): st
   return form.source === "dsl" ? form.dsl_yaml : (strategies.find(item => item.strategy_id === form.strategy_id)?.dsl_yaml ?? "");
 }
 
-/** 回放对象是策略池时，池要绑定的计算任务（成员所需市场的并集，成员在定义列表里查）；不是策略池或从实例发起时返回 null。 */
-export function replayPool(form: ReplayFormState, strategies: Strategy[]): PoolRequirement | null {
-  return poolRequirement(
-    replayDslText(form, strategies),
-    id => strategies.find(item => item.strategy_id === id)?.dsl_yaml ?? null
-  );
+/** 回放对象是策略池时，后端推出的要绑定的任务；不是策略池、从实例发起或还没读到时返回 null。 */
+export function replayPool(form: ReplayFormState): StrategyTaskRequirement | null {
+  return !form.instance_id && form.requirement?.pool ? form.requirement : null;
 }
 
 /**
@@ -58,7 +57,7 @@ export function replayPool(form: ReplayFormState, strategies: Strategy[]): PoolR
  * 只用来决定资金费列与说明（池的资金费写在池 DSL 里），不用来校验成员：实例回放的成员取会话快照，由后端校验。
  */
 export function replayIsPool(form: ReplayFormState, strategies: Strategy[]): boolean {
-  if (!form.instance_id) return Boolean(replayPool(form, strategies));
+  if (!form.instance_id) return Boolean(replayPool(form));
   const text = strategies.find(item => item.strategy_id === form.instance_strategy_id)?.dsl_yaml ?? "";
   return Boolean(form.instance_strategy_id && parseDSL(text).preview?.pool);
 }
@@ -75,21 +74,17 @@ export function replayTuned(form: ReplayFormState, strategies: Strategy[]): bool
 }
 
 /** 要读的市场是否由 DSL 决定：写了 market，或是策略池（成员市场的并集）；否则要先选任务所属的市场。 */
-export function replayDeclared(form: ReplayFormState, strategies: Strategy[]): boolean {
-  return Boolean(replayPool(form, strategies)) || marketRequirement(replayDslText(form, strategies)).declared;
+export function replayDeclared(form: ReplayFormState): boolean {
+  return Boolean(form.requirement?.marketDeclared);
 }
 
 /**
- * 回放要读取任务的市场（现货、永续、股票先后）：从实例发起时就是预填的实例任务的键；策略池取成员市场的并集；
- * 否则按策略 DSL 的 market 读出，没写 market 时只读一个任务，市场取用户选的。
+ * 回放要读取任务的市场（现货、永续、股票先后）：从实例发起时就是预填的实例任务的键；其余按后端推出的要求，
+ * 没写 market 时只读一个任务，市场取用户选的。
  */
-export function replayMarkets(form: ReplayFormState, strategies: Strategy[]): string[] {
+export function replayMarkets(form: ReplayFormState): string[] {
   if (form.instance_id) return MARKET_ORDER.filter(market => form.tasks[market]);
-  const pool = replayPool(form, strategies);
-  if (pool) return pool.markets;
-  const requirement = marketRequirement(replayDslText(form, strategies));
-  if (requirement.declared) return requirement.markets;
-  return form.single_market ? [form.single_market] : [];
+  return taskKeyMarkets(requirementTaskKeys(form.requirement, form.single_market));
 }
 
 /** drift 池的回放起点说明：写了漂移起点时起点必须选它，没写时漂移从区间的第一根开始；不是 drift 池时为空串。 */
@@ -102,16 +97,16 @@ export function replayDriftHint(form: ReplayFormState, strategies: Strategy[]): 
 }
 
 /** 提交用的 factor_tasks：只含回放要读的市场；从实例发起且没有预填任务时为空，由后端读实例关联的任务。 */
-export function replayFactorTasks(form: ReplayFormState, strategies: Strategy[]): Record<string, string> {
-  return Object.fromEntries(replayMarkets(form, strategies).map(market => [market, form.tasks[market] ?? ""]));
+export function replayFactorTasks(form: ReplayFormState): Record<string, string> {
+  return Object.fromEntries(replayMarkets(form).map(market => [market, form.tasks[market] ?? ""]));
 }
 
 /** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的计算任务、区间、两个手续费与滑点的范围。 */
 export function validateReplayForm(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
-  const pool = replayPool(form, strategies);
-  if (pool?.problems.length) return `策略池的成员还不能回放：${pool.problems.join("；")}`;
-  const markets = replayMarkets(form, strategies);
+  const problems = form.instance_id ? [] : (form.requirement?.problems ?? []);
+  if (problems.length) return `这份定义还不能回放：${problems.join("；")}`;
+  const markets = replayMarkets(form);
   // 从实例发起且入口没有带任务：不给 factor_tasks，后端读实例关联的任务。
   const omitted = Boolean(form.instance_id) && !markets.length;
   if (!omitted && !markets.length) return "请选择策略的计算任务（策略没写 market 时先选任务所属的市场）";
@@ -144,18 +139,14 @@ function replayInputError(form: ReplayFormState, strategies: Strategy[], markets
 /** 提交用的资金费列：只在回放读取永续时带上，表单里隐藏的旧值不提交；策略池的资金费写在池 DSL 里，不提交；没写时为空串。 */
 export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (replayIsPool(form, strategies)) return "";
-  const markets = replayMarkets(form, strategies);
+  const markets = replayMarkets(form);
   if (!markets.includes("swap")) return "";
   return (form.funding_column ?? "").trim();
 }
 
 /** 选的计算任务都是日线时区间只选日期（按空间时区的整天）；没选任务或有日内任务时选到分钟。 */
-export function replayDateOnly(
-  form: ReplayFormState,
-  strategies: Strategy[],
-  tasks: Pick<FactorTask, "task_id" | "freq">[]
-): boolean {
-  const chosen = Object.values(replayFactorTasks(form, strategies)).filter(Boolean);
+export function replayDateOnly(form: ReplayFormState, tasks: Pick<FactorTask, "task_id" | "freq">[]): boolean {
+  const chosen = Object.values(replayFactorTasks(form)).filter(Boolean);
   if (!chosen.length) return false;
   return chosen.every(id => freqSeconds(tasks.find(task => task.task_id === id)?.freq ?? "") === 86_400);
 }

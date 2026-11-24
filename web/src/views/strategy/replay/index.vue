@@ -826,7 +826,7 @@ async function start() {
   try {
     const started = await startReplay({
       ...source,
-      factor_tasks: replayFactorTasks(form, strategyStore.strategyCatalog),
+      factor_tasks: replayFactorTasks(form),
       start_time: startTime,
       end_time: endTime,
       spot_fee_bps: Number(form.spot_fee_bps) || 0,

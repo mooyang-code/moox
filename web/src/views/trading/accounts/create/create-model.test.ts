@@ -11,11 +11,10 @@ import {
   validateStep
 } from "./create-model";
 import { RequestError } from "@/api/http";
-import { tradeErrorText } from "@/api/trade/error-text";
 
-// 交易服务的业务失败：消息按请求层的规则换成中文，响应体原样带上
+// 交易服务的业务失败：消息就是 ret_info.msg，响应体原样带上
 const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
-  new RequestError(tradeErrorText(response.ret_info), response);
+  new RequestError(response.ret_info.msg, response);
 
 describe("A 股模拟账户", () => {
   it("选 A 股后市场固定为股票、人民币结算、默认 5000 万元、佣金 0.025%，换回加密货币恢复默认", () => {

@@ -129,6 +129,7 @@ import {
   wholeDays
 } from "@/views/strategy/replay/replay-form-model";
 import { MARKET_ORDER, marketLabel, tasksText } from "@/views/strategy/market-mode";
+import { useTaskRequirement } from "@/views/strategy/use-task-requirement";
 
 // 表单状态由页面持有（提交与预填都在页面里），这里直接编辑同一个响应式对象。
 const form = defineModel<ReplayFormState>({ required: true });
@@ -136,13 +137,30 @@ const props = defineProps<{ strategies: Strategy[]; tasks: FactorTask[]; tasksLo
 // 区间按当前空间登记的时区选择
 const zone = useDisplayZone();
 
-// 策略的 market 决定要读哪些市场的任务（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
-const pool = computed(() => replayPool(form.value, props.strategies));
+// 要读哪些市场的任务由后端按定义或 DSL 草稿推出（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
+// 从实例发起时任务已预填，不用读。
+const { requirement } = useTaskRequirement(
+  computed(() =>
+    form.value.instance_id
+      ? {}
+      : form.value.source === "dsl"
+        ? { dsl: form.value.dsl_yaml }
+        : { strategyId: form.value.strategy_id }
+  )
+);
+watch(
+  requirement,
+  next => {
+    form.value.requirement = next;
+  },
+  { immediate: true }
+);
+const pool = computed(() => replayPool(form.value));
 // 资金费列与说明看回放对象是不是策略池（从池实例发起时按实例引用的定义判断）：池的资金费写在池 DSL 里。
 const pooled = computed(() => replayIsPool(form.value, props.strategies));
-const declared = computed(() => replayDeclared(form.value, props.strategies));
+const declared = computed(() => replayDeclared(form.value));
 const driftHint = computed(() => replayDriftHint(form.value, props.strategies));
-const markets = computed(() => replayMarkets(form.value, props.strategies));
+const markets = computed(() => replayMarkets(form.value));
 // 声明了 factor_params 的策略只能用因子现算（可变成员的参数随策略逐期变化）：选中这种策略时自动切过去；策略池只能读结果 View。
 const tuned = computed(() => replayTuned(form.value, props.strategies));
 watch(
@@ -168,7 +186,7 @@ function taskChoices(market: string) {
 }
 
 // 选的任务都是日线时只选日期（按空间时区的整天）
-const dateOnly = computed(() => replayDateOnly(form.value, props.strategies, props.tasks));
+const dateOnly = computed(() => replayDateOnly(form.value, props.tasks));
 // 换成日线任务时，把已有的区间（默认的整点区间，或先按分钟选好的）吸附成显示的那几个整天
 watch(
   [dateOnly, () => form.value.range, zone],

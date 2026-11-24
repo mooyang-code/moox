@@ -62,11 +62,9 @@ describe("call：请求层不弹提示，失败抛给页面", () => {
     await expect(call("trade", "ListOrders", {})).rejects.toBeInstanceOf(StaleSpaceRequestError);
   });
 
-  it("交易服务的英文错误换成中文，原文保留在响应体里；缺 ret_info 时报错", async () => {
-    transport.post.mockResolvedValue({ data: { ret_info: { code: 1, msg: "trade: invalid trading account" } } });
-    const error = await call("trade", "UpdateTradingAccount", {}).catch(cause => cause);
-    expect(error.message).toBe("执行账户的参数不合法");
-    expect(error.response.ret_info.msg).toBe("trade: invalid trading account");
+  it("业务失败的提示就是 ret_info.msg，没有消息时写错误码；缺 ret_info 时报错", async () => {
+    transport.post.mockResolvedValue({ data: { ret_info: { code: 13, msg: "" } } });
+    await expect(call("trade", "ListOrders", {})).rejects.toThrow("trade/ListOrders 请求失败（错误码 13）");
     transport.post.mockResolvedValue({ data: {} });
     await expect(call("trade", "SubmitOrder", {})).rejects.toThrow("缺少 ret_info");
   });

@@ -20,6 +20,10 @@ vi.mock("@/api/strategy", () => ({
   listInstances: api.listInstances,
   validateStrategy: api.validateStrategy
 }));
+// 要绑定的任务由后端按 DSL 推出：测试里按登记的定义模拟
+vi.mock("@/views/strategy/use-task-requirement", async () => ({
+  useTaskRequirement: (await import("../../../../tests/strategy-requirement")).useFixtureTaskRequirement
+}));
 vi.mock("@/api/factor", async () => {
   const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
   return { listFactorTasks: api.listFactorTasks, listAllFactorTasks: allFactorTasksFrom(api.listFactorTasks) };
@@ -98,6 +102,10 @@ describe("strategy instance creation behavior", () => {
 
   async function open(overrides: Record<string, unknown> = {}) {
     const { flushPromises, mount } = await import("@vue/test-utils");
+    const { fixtureDefinitions } = await import("../../../../tests/strategy-requirement");
+    fixtureDefinitions.clear();
+    for (const item of (overrides.strategies ?? strategies) as { strategy_id: string; dsl_yaml: string }[])
+      fixtureDefinitions.set(item.strategy_id, item.dsl_yaml);
     const Create = (await import("./strategy-instance-create.vue")).default;
     const wrapper = mount(Create, {
       props: { visible: false, strategies, spaceId: "crypto", ...overrides } as never,
@@ -175,7 +183,6 @@ describe("strategy instance creation behavior", () => {
       updated_at: ""
     };
     const { wrapper, flushPromises } = await open({ strategies: [withSources], presetStrategyId: "s2" });
-    expect(wrapper.text()).toContain("参考市场 现货 的计算任务只用于 age_markets: all 的年龄判定");
     expect(wrapper.text()).toContain("附加来源 daily（1d）");
     expect(wrapper.text()).toContain("按主帧的市场各绑一个计算任务");
     const selects = wrapper.findAll("select");
@@ -699,21 +706,13 @@ describe("strategy instance creation behavior", () => {
       expect(accountSelect.findAll("option").map(item => item.attributes("value"))).toEqual(["", "acc_both"]);
     });
 
-    it("成员定义不在目录里时按需读取；读取成功后按它的市场解析", async () => {
-      api.getStrategy.mockResolvedValue(spotMember);
-      const { wrapper } = await open({ presetStrategyId: "pool", strategies: [pool("s_spot")] });
-      expect(api.getStrategy).toHaveBeenCalledWith("s_spot");
-      expect(wrapper.text()).not.toContain("暂不能创建");
-      expect(wrapper.findAll("select")).toHaveLength(2);
-    });
-
     it("成员定义缺失时给出中文提示并禁止提交", async () => {
       const { wrapper, flushPromises } = await open({ presetStrategyId: "pool", strategies: [pool("s_gone")] });
       expect(wrapper.text()).toContain("成员 m0 引用的策略 s_gone 不存在（定义已删除，或读取失败）");
       expect(wrapper.findAll("select")).toHaveLength(1);
       await create(wrapper).trigger("click");
       await flushPromises();
-      expect(wrapper.text()).toContain("策略池的成员还不能用");
+      expect(wrapper.text()).toContain("这份定义暂不能建实例");
       expect(api.createInstance).not.toHaveBeenCalled();
       expect(api.validateStrategy).not.toHaveBeenCalled();
     });

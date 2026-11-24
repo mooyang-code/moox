@@ -1,10 +1,15 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { registerFixtureDefinitions } from "../../../../tests/strategy-requirement";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { validateStrategy, listFactorTasks, getStrategy } = vi.hoisted(() => ({
   validateStrategy: vi.fn(),
   listFactorTasks: vi.fn(),
   getStrategy: vi.fn()
+}));
+// 要绑定的任务由后端按 DSL 推出：测试里按 DSL 与登记的定义模拟
+vi.mock("@/views/strategy/use-task-requirement", async () => ({
+  useTaskRequirement: (await import("../../../../tests/strategy-requirement")).useFixtureTaskRequirement
 }));
 vi.mock("@/api/strategy", () => ({ validateStrategy, getStrategy }));
 vi.mock("@/api/factor", async () => {
@@ -50,23 +55,16 @@ describe("strategy trial panel", () => {
   });
 
   it("策略池按成员所需市场的并集选任务：成员一个现货、一个永续时两个市场都要选", async () => {
-    vi.useFakeTimers();
-    try {
-      getStrategy.mockReset().mockImplementation(async (id: string) => ({
-        dsl_yaml: id === "m_spot" ? "name: a\nmarket: {select: spot}\n" : "name: b\nmarket: {select: swap}\n"
-      }));
-      const source =
-        "name: p\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_swap}\n";
-      const wrapper = mount(TrialPanel, { props: { source, spaceId: "s1" }, global: { stubs } });
-      expect(wrapper.text()).toContain("成员定义读到后才能确定");
-      await vi.advanceTimersByTimeAsync(500);
-      await flushPromises();
-      expect(getStrategy).toHaveBeenCalledTimes(2);
-      expect(wrapper.text()).toContain("策略池要绑定各成员所需市场的并集：现货、永续");
-      expect(wrapper.findAll("select")).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    registerFixtureDefinitions([
+      { strategy_id: "m_spot", dsl_yaml: "name: a\nmarket: {select: spot}\n" },
+      { strategy_id: "m_swap", dsl_yaml: "name: b\nmarket: {select: swap}\n" }
+    ]);
+    const source =
+      "name: p\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_swap}\n";
+    const wrapper = mount(TrialPanel, { props: { source, spaceId: "s1" }, global: { stubs } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("策略池要绑定各成员所需市场的并集：现货、永续");
+    expect(wrapper.findAll("select")).toHaveLength(2);
   });
 
   it("drops a response that arrives after the DSL changed", async () => {

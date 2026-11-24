@@ -6,7 +6,7 @@
     </div>
     <div class="trial-bar">
       <a-select
-        v-if="!requirement.declared"
+        v-if="requirement && !requirement.marketDeclared"
         v-model="singleMarket"
         class="trial-market"
         allow-clear
@@ -34,19 +34,17 @@
       }}</a-button>
     </div>
     <p class="muted">
-      <template v-if="pool">
-        策略池要绑定各成员所需市场的并集：{{
-          pool.markets.length ? pool.markets.map(marketLabel).join("、") : "成员定义读到后才能确定"
-        }}；不选任务时只校验 DSL。
-      </template>
-      <template v-else>
-        策略的市场模式需要绑定：{{
-          requirement.declared ? requirement.markets.map(marketLabel).join("、") : "一个计算任务（先选它的市场）"
-        }}；不选任务时只校验 DSL。
-      </template>
+      {{ pool ? "策略池要绑定各成员所需市场的并集：" : "策略的市场模式需要绑定："
+      }}{{
+        !requirement
+          ? "按 DSL 读取中"
+          : requirement.marketDeclared
+            ? activeMarkets.map(marketLabel).join("、") || "成员定义读到后才能确定"
+            : "一个计算任务（先选它的市场）"
+      }}；不选任务时只校验 DSL。
     </p>
-    <div v-if="pool?.problems.length" class="muted">
-      <div v-for="item in pool.problems" :key="item">{{ item }}</div>
+    <div v-if="requirement?.problems.length" class="muted">
+      <div v-for="item in requirement.problems" :key="item">{{ item }}</div>
     </div>
     <a-alert v-if="tasksError" type="error" show-icon class="block">计算任务列表加载失败：{{ tasksError }}</a-alert>
     <template v-if="result">
@@ -74,7 +72,7 @@
           <ResultItems :result="result.trial" :items="result.trial_items" />
         </a-tab-pane>
         <a-tab-pane v-if="result.resolved_json" key="binding" title="绑定解析"
-          ><ResolvedTable :resolved-json="result.resolved_json" :pool="Boolean(pool)"
+          ><ResolvedTable :resolved-json="result.resolved_json" :pool="pool"
         /></a-tab-pane>
       </a-tabs>
     </template>
@@ -82,14 +80,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { listAllFactorTasks } from "@/api/factor";
-import { getStrategy, validateStrategy } from "@/api/strategy";
+import { validateStrategy } from "@/api/strategy";
 import type { ValidateStrategyResult } from "@/api/strategy-types";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { enabledTasks, type TaskOption } from "@/views/strategy/components/task-options";
-import { marketLabel, marketRequirement, poolMembers, poolRequirement, targetKey } from "@/views/strategy/market-mode";
+import { marketLabel, requirementTaskKeys, targetKey, taskKeyMarkets } from "@/views/strategy/market-mode";
+import { useTaskRequirement } from "@/views/strategy/use-task-requirement";
 import { percent, skipReasonLabel } from "@/views/strategy/model";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
@@ -114,41 +113,11 @@ let loadedSpace = "";
 let tasksRequest = 0;
 let runRequest = 0;
 
-// 策略池：要绑定的市场是成员所需市场的并集，成员定义按需读取（null 表示不存在或读取失败）。
-const memberDefinitions = reactive<Record<string, string | null>>({});
-const pool = computed(() => poolRequirement(props.source, id => (id in memberDefinitions ? memberDefinitions[id] : undefined)));
-const requirement = computed(() =>
-  pool.value ? { declared: true, markets: pool.value.markets } : marketRequirement(props.source)
-);
-let memberRequest = 0;
-let memberTimer: ReturnType<typeof setTimeout> | undefined;
-// 编辑 DSL 时每次按键都会变，停下 400 毫秒后再读新出现的成员，避免把输入到一半的 ID 都读一遍。
-function scheduleMemberLoad() {
-  clearTimeout(memberTimer);
-  memberTimer = setTimeout(() => void loadMissingMembers(), 400);
-}
-async function loadMissingMembers() {
-  const requestId = memberRequest;
-  const missing = (poolMembers(props.source) ?? [])
-    .map(member => member.strategyId)
-    .filter(id => id && !(id in memberDefinitions));
-  await Promise.all(
-    [...new Set(missing)].map(async id => {
-      let definition: string | null = null;
-      try {
-        definition = (await getStrategy(id)).dsl_yaml || null;
-      } catch {
-        // 读取失败按“不存在或读取失败”提示
-      }
-      if (requestId === memberRequest) memberDefinitions[id] = definition;
-    })
-  );
-}
-watch(() => props.source, scheduleMemberLoad, { immediate: true });
-onBeforeUnmount(() => clearTimeout(memberTimer));
-const activeMarkets = computed(() =>
-  requirement.value.declared ? requirement.value.markets : singleMarket.value ? [singleMarket.value] : []
-);
+// 要绑定的市场由后端按 DSL 推出（ValidateStrategy 的 requirement），编辑时停下 400 毫秒再读。
+const { requirement, reload: reloadRequirement } = useTaskRequirement(computed(() => ({ dsl: props.source })));
+const pool = computed(() => Boolean(requirement.value?.pool));
+// 试算只绑主帧（与参考）市场的任务，附加来源读 View 时由后端按需处理
+const activeMarkets = computed(() => taskKeyMarkets(requirementTaskKeys(requirement.value, singleMarket.value || "")));
 const tasksChosen = computed(() => activeMarkets.value.some(market => selected[market]));
 // 选了任务就要把需要的市场都选全；一个都不选只校验 DSL。
 const complete = computed(() => !tasksChosen.value || activeMarkets.value.every(market => selected[market]));
@@ -197,7 +166,8 @@ async function run() {
         diagnostics: [err instanceof Error ? err.message : "试算失败"],
         resolved_json: "",
         trial: null,
-        trial_items: []
+        trial_items: [],
+        requirement: null
       };
   } finally {
     if (requestId === runRequest) running.value = false;
@@ -231,10 +201,8 @@ watch(
     runRequest += 1;
     loadedSpace = "";
     tasks.value = [];
-    // 成员定义属于原来的空间，换空间后重读
-    memberRequest += 1;
-    for (const key of Object.keys(memberDefinitions)) delete memberDefinitions[key];
-    scheduleMemberLoad();
+    // 策略池成员属于原来的空间，换空间后重读要绑定的任务
+    reloadRequirement();
     singleMarket.value = undefined;
     for (const key of Object.keys(selected)) delete selected[key];
     result.value = null;

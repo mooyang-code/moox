@@ -1,36 +1,9 @@
-import type { CollectorTask, CollectionTaskPayload, ExtraFieldOption } from "@/api/collector";
+import type { CollectorTask, CollectionTaskPayload, ExtraFieldOption, OutputFieldOption } from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
 import { marketLabel } from "@/views/data/shared/series-market";
 import { getTaskResultState, getTaskResultViewIds } from "@/views/collector/task-results/task-results-model";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
-// K 线采集结果后端（taskresult.ensureColumns 的时序数据集）支持的全部输出字段；字段目录里的其他字段选了会被拒绝。
-export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
-  "open",
-  "high",
-  "low",
-  "close",
-  "volume",
-  "quote_volume",
-  "trade_num",
-  "amount",
-  "instrument_name",
-  "provider_id",
-  "source_id",
-  "provider_symbol",
-  "volume_unit",
-  "amount_unit",
-  "trade_date",
-  "close_time",
-  "provider_timestamp",
-  "fetched_at",
-  "request_id",
-  "route_id",
-  "route_rank",
-  "source_provider",
-  "quality_status",
-  "amount_quality"
-]);
 
 /** 附加字段的可选条件：任务类型、所在空间（市场）、频率、所选标签的品种，以及接口给出的附加字段清单。 */
 export interface ExtraFieldCondition {
@@ -66,43 +39,50 @@ export function availableExtraFieldIds(condition: ExtraFieldCondition): Set<stri
   return available;
 }
 
-/** 输出字段清单里是否显示这个字段：基础 K 线字段总是显示，其余只有当前可选的附加字段才显示。 */
-export function outputFieldVisible(fieldId: string, available: ReadonlySet<string>): boolean {
-  return KLINE_OUTPUT_FIELD_IDS.has(fieldId) || available.has(foldText(fieldId));
+/** 基础输出字段的 ID 集合：来自 GetDataTypeConfigWithFields 的 base_output_fields（结果数据集能建的列）。 */
+export function baseOutputFieldIds(options: ReadonlyArray<OutputFieldOption> | undefined): Set<string> {
+  return new Set((options || []).map(option => option.field_id));
+}
+
+/** 输出字段清单里是否显示这个字段：基础输出字段总是显示，其余只有当前可选的附加字段才显示。 */
+export function outputFieldVisible(fieldId: string, available: ReadonlySet<string>, base: ReadonlySet<string>): boolean {
+  return base.has(fieldId) || available.has(foldText(fieldId));
 }
 
 /**
- * 条件不满足时是否去掉已选的附加字段。编辑已有任务时，标签为空（还没读到或读取失败）或附加字段清单还没读到，
- * 都判断不了条件，保留；其余情况去掉。提交前的过滤与条件变化时的清理用同一个判断。
+ * 条件不满足时是否去掉已选的不可选字段。字段清单（基础与附加）还没读到时判断不了，保留；编辑已有任务时标签为空
+ * （还没读到或读取失败）同样保留；其余情况去掉。提交前的过滤与条件变化时的清理用同一个判断。
  */
 export function shouldDropUnavailableFields(editing: boolean, routeCount: number, optionsLoaded: boolean): boolean {
-  return !(editing && (routeCount === 0 || !optionsLoaded));
-}
-
-/**
- * 响应里有没有带附加字段清单。旧版 Collector 的响应没有 extra_fields，这时不能当成“清单为空”：
- * 否则编辑已有任务时会把已选的附加字段（例如 funding_rate）当成不可选去掉再提交。
- */
-export function extraFieldOptionsPresent(detail: { extra_fields?: unknown } | null | undefined): boolean {
-  return Array.isArray(detail?.extra_fields);
+  return optionsLoaded && !(editing && routeCount === 0);
 }
 
 /**
  * 去掉已选字段里当前不可选的附加字段：确实有要去掉的才返回新数组，否则原样返回同一个数组
  * （调用方据此判断要不要赋值，避免监听已选字段时反复触发）。
  */
-export function pruneUnavailableFields(fields: string[], available: ReadonlySet<string>, drop: boolean): string[] {
-  if (!drop || fields.every(id => outputFieldVisible(id, available))) return fields;
-  return fields.filter(id => outputFieldVisible(id, available));
+export function pruneUnavailableFields(
+  fields: string[],
+  available: ReadonlySet<string>,
+  drop: boolean,
+  base: ReadonlySet<string>
+): string[] {
+  if (!drop || fields.every(id => outputFieldVisible(id, available, base))) return fields;
+  return fields.filter(id => outputFieldVisible(id, available, base));
 }
 
 /**
  * 这个字段现在能不能勾上。新建任务都可以；编辑已有任务时输出字段只能减少：只有任务原来就有的字段可以重新勾上，
  * 原来没有显式选择（用默认字段）时可以收窄到基础字段，但不能勾附加字段。与后端改任务的校验一致。
  */
-export function outputFieldSelectable(fieldId: string, editing: boolean, originalFields: ReadonlyArray<string>): boolean {
+export function outputFieldSelectable(
+  fieldId: string,
+  editing: boolean,
+  originalFields: ReadonlyArray<string>,
+  base: ReadonlySet<string>
+): boolean {
   if (!editing) return true;
-  if (!originalFields.length) return KLINE_OUTPUT_FIELD_IDS.has(fieldId);
+  if (!originalFields.length) return base.has(fieldId);
   return originalFields.some(id => foldText(id) === foldText(fieldId));
 }
 

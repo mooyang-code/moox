@@ -161,8 +161,8 @@ describe("collector task workbench", () => {
     expect(source).not.toContain('<section v-if="!editing" class="editor-section editor-section--output">');
     expect(source).toContain("detailOutputFieldLabels");
     expect(source).toContain("selectedOutputFields.value = input.outputFields || []");
-    expect(source).toContain("outputFields: pruneUnavailableFields(selectedOutputFields.value");
-    expect(source).toContain("extraFieldOptionsLoaded.value = extraFieldOptionsPresent(response.detail);");
+    expect(source).toMatch(/outputFields: pruneUnavailableFields\(\s*selectedOutputFields.value/);
+    expect(source).toContain("baseOutputFields.value = baseOutputFieldIds(response.detail?.base_output_fields);");
     // 编辑已有任务：输出字段只能减少，不能新增的字段勾选框禁用，并给一句说明。
     expect(source).toContain(':disabled="!canSelectOutputField(field.field_id)"');
     expect(source).toContain("输出字段只能减少，要新增请新建任务。");

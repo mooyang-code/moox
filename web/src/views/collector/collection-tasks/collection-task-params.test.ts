@@ -7,7 +7,7 @@ import {
   parseKlineResampleParams,
   collectionTaskNameError,
   availableExtraFieldIds,
-  extraFieldOptionsPresent,
+  baseOutputFieldIds,
   outputFieldSelectable,
   outputFieldVisible,
   pruneUnavailableFields,
@@ -262,59 +262,53 @@ describe("附加输出字段", () => {
     expect(available("crypto", "1h", [swap], "kline_resample")).toEqual([]);
   });
 
-  it("字段清单只显示基础 K 线字段和当前可选的附加字段", () => {
+  // 基础输出字段来自 GetDataTypeConfigWithFields 的 base_output_fields
+  const base = baseOutputFieldIds([
+    { field_id: "open", display_name: "开盘价" },
+    { field_id: "close", display_name: "收盘价" },
+    { field_id: "volume", display_name: "成交量" }
+  ]);
+
+  it("字段清单只显示基础输出字段和当前可选的附加字段", () => {
     const now = new Set(["adj_factor"]);
-    expect(outputFieldVisible("close", now)).toBe(true);
-    expect(outputFieldVisible("adj_factor", now)).toBe(true);
-    expect(outputFieldVisible("sw_l1", now)).toBe(false);
-    expect(outputFieldVisible("funding_rate", new Set())).toBe(false);
+    expect(outputFieldVisible("close", now, base)).toBe(true);
+    expect(outputFieldVisible("adj_factor", now, base)).toBe(true);
+    expect(outputFieldVisible("sw_l1", now, base)).toBe(false);
+    expect(outputFieldVisible("funding_rate", new Set(), base)).toBe(false);
+    expect(baseOutputFieldIds(undefined).size).toBe(0);
   });
 
   it("条件不满足时去掉已选的附加字段", () => {
     const selected = ["close", "adj_factor", "sw_l1"];
     // 频率从 1d 改成 5m：两个附加字段都去掉
-    expect(pruneUnavailableFields(selected, new Set(available("stockcn", "5m", [equity])), true)).toEqual(["close"]);
+    expect(pruneUnavailableFields(selected, new Set(available("stockcn", "5m", [equity])), true, base)).toEqual(["close"]);
     // 只剩一个可选
-    expect(pruneUnavailableFields(selected, new Set(["adj_factor"]), true)).toEqual(["close", "adj_factor"]);
+    expect(pruneUnavailableFields(selected, new Set(["adj_factor"]), true, base)).toEqual(["close", "adj_factor"]);
     // 没有要去掉的、或不该去掉时原样返回同一个数组
-    expect(pruneUnavailableFields(selected, new Set(["adj_factor", "sw_l1"]), true)).toBe(selected);
-    expect(pruneUnavailableFields(selected, new Set(), false)).toBe(selected);
+    expect(pruneUnavailableFields(selected, new Set(["adj_factor", "sw_l1"]), true, base)).toBe(selected);
+    expect(pruneUnavailableFields(selected, new Set(), false, base)).toBe(selected);
     const plain = ["close"];
-    expect(pruneUnavailableFields(plain, new Set(), true)).toBe(plain);
+    expect(pruneUnavailableFields(plain, new Set(), true, base)).toBe(plain);
   });
 
-  it("旧版 Collector 的响应没有 extra_fields 时不算读到附加字段清单", () => {
-    expect(extraFieldOptionsPresent({ extra_fields: [] })).toBe(true);
-    expect(extraFieldOptionsPresent({ extra_fields: [{ field_id: "funding_rate" }] })).toBe(true);
-    expect(extraFieldOptionsPresent({})).toBe(false);
-    expect(extraFieldOptionsPresent({ extra_fields: null })).toBe(false);
-    expect(extraFieldOptionsPresent(undefined)).toBe(false);
-    // 编辑带 funding_rate 的任务：旧版响应下保留这一列，新版响应明确给出空清单时才去掉
-    const selected = ["close", "funding_rate"];
-    const drop = (detail: { extra_fields?: unknown }) => shouldDropUnavailableFields(true, 1, extraFieldOptionsPresent(detail));
-    expect(pruneUnavailableFields(selected, new Set(), drop({}))).toBe(selected);
-    expect(pruneUnavailableFields(selected, new Set(), drop({ extra_fields: [] }))).toEqual(["close"]);
-  });
-
-  it("编辑任务时标签或附加字段清单还没读到就不去掉已选项", () => {
+  it("字段清单没读到、或编辑任务时标签没读到，就不去掉已选项", () => {
     expect(shouldDropUnavailableFields(true, 0, true)).toBe(false);
     expect(shouldDropUnavailableFields(true, 1, false)).toBe(false);
+    expect(shouldDropUnavailableFields(false, 1, false)).toBe(false);
     expect(shouldDropUnavailableFields(true, 1, true)).toBe(true);
-    // 新建时没有要保护的已选项，照常清理
-    expect(shouldDropUnavailableFields(false, 0, false)).toBe(true);
-    expect(shouldDropUnavailableFields(false, 1, true)).toBe(true);
+    expect(shouldDropUnavailableFields(false, 0, true)).toBe(true);
   });
 
   it("编辑任务时不能新增字段，只能取消或重新勾上原有的", () => {
     // 新建：都能勾
-    expect(outputFieldSelectable("adj_factor", false, [])).toBe(true);
+    expect(outputFieldSelectable("adj_factor", false, [], base)).toBe(true);
     // 编辑：原来有的可以重新勾上，原来没有的（基础字段也一样）不能勾
-    expect(outputFieldSelectable("adj_factor", true, ["close", "adj_factor"])).toBe(true);
-    expect(outputFieldSelectable("sw_l1", true, ["close", "adj_factor"])).toBe(false);
-    expect(outputFieldSelectable("volume", true, ["close", "adj_factor"])).toBe(false);
+    expect(outputFieldSelectable("adj_factor", true, ["close", "adj_factor"], base)).toBe(true);
+    expect(outputFieldSelectable("sw_l1", true, ["close", "adj_factor"], base)).toBe(false);
+    expect(outputFieldSelectable("volume", true, ["close", "adj_factor"], base)).toBe(false);
     // 原来没有显式选择（默认字段）：可以收窄到基础字段，不能勾附加字段
-    expect(outputFieldSelectable("close", true, [])).toBe(true);
-    expect(outputFieldSelectable("adj_factor", true, [])).toBe(false);
+    expect(outputFieldSelectable("close", true, [], base)).toBe(true);
+    expect(outputFieldSelectable("adj_factor", true, [], base)).toBe(false);
   });
 });
 

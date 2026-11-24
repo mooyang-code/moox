@@ -602,7 +602,7 @@ import {
   collectionTaskNameError,
   isCrossMarketSelection,
   availableExtraFieldIds,
-  extraFieldOptionsPresent,
+  baseOutputFieldIds,
   outputFieldSelectable,
   outputFieldVisible,
   pruneUnavailableFields,
@@ -674,7 +674,9 @@ const outputFieldDraft = ref<string[]>([]);
 const originalOutputFields = ref<string[]>([]);
 // 接口给出的附加字段清单（随执行任务类型读取）；读到之前不能判断已选的附加字段是否还可选。
 const extraFieldOptions = ref<ExtraFieldOption[]>([]);
+// 字段清单（基础输出字段与附加字段）读到了才按它清理已选字段
 const extraFieldOptionsLoaded = ref(false);
+const baseOutputFields = ref<Set<string>>(new Set());
 const outputFieldsVisible = ref(false);
 const outputFieldCatalog = ref<Field[]>([]);
 const outputFieldGroups = ref<FieldGroup[]>([]);
@@ -688,7 +690,7 @@ let taskTypeFieldRequestToken = 0;
 const outputFieldSections = computed(() => {
   const grouped = new Map<string, Field[]>();
   for (const field of outputFieldCatalog.value) {
-    if (!outputFieldVisible(field.field_id, availableExtraFields.value)) continue;
+    if (!outputFieldVisible(field.field_id, availableExtraFields.value, baseOutputFields.value)) continue;
     const groupID = field.group_id || "";
     const list = grouped.get(groupID) || [];
     list.push(field);
@@ -806,9 +808,9 @@ const dropUnavailableFields = computed(() =>
 watch(
   [dropUnavailableFields, availableExtraFields, selectedOutputFields, outputFieldDraft],
   ([drop, available]) => {
-    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop);
+    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop, baseOutputFields.value);
     if (selected !== selectedOutputFields.value) selectedOutputFields.value = selected;
-    const draft = pruneUnavailableFields(outputFieldDraft.value, available, drop);
+    const draft = pruneUnavailableFields(outputFieldDraft.value, available, drop, baseOutputFields.value);
     if (draft !== outputFieldDraft.value) outputFieldDraft.value = draft;
   },
   { immediate: true }
@@ -1186,7 +1188,7 @@ function setOutputField(fieldID: string, checked: boolean | string | number) {
 
 /** 编辑已有任务时输出字段只能减少：不在任务原有字段里的不能勾。 */
 function canSelectOutputField(fieldID: string): boolean {
-  return outputFieldSelectable(fieldID, editing.value, originalOutputFields.value);
+  return outputFieldSelectable(fieldID, editing.value, originalOutputFields.value, baseOutputFields.value);
 }
 
 /** 一组里能勾上的字段（编辑任务时不含不能新增的那些）。 */
@@ -1219,6 +1221,7 @@ async function loadTaskTypeFields() {
   const dataType = editor.data_type;
   extraFieldOptions.value = [];
   extraFieldOptionsLoaded.value = false;
+  baseOutputFields.value = new Set();
   taskTypeFields.value = [];
   if (!dataType) return;
   try {
@@ -1226,7 +1229,8 @@ async function loadTaskTypeFields() {
     if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
     taskTypeFields.value = [...(response.detail?.fields || [])].sort((a, b) => a.sort_order - b.sort_order);
     extraFieldOptions.value = response.detail?.extra_fields || [];
-    extraFieldOptionsLoaded.value = extraFieldOptionsPresent(response.detail);
+    baseOutputFields.value = baseOutputFieldIds(response.detail?.base_output_fields);
+    extraFieldOptionsLoaded.value = true;
   } catch (error) {
     if (token === taskTypeFieldRequestToken) {
       taskTypeFields.value = [];
@@ -1253,7 +1257,12 @@ function currentTaskInput(): CollectionTaskInput {
     sourceTaskId: sourceTaskId.value,
     ingest: ingest.value,
     // 提交前按条件再过滤一次：条件不满足的附加字段不带。
-    outputFields: pruneUnavailableFields(selectedOutputFields.value, availableExtraFields.value, dropUnavailableFields.value)
+    outputFields: pruneUnavailableFields(
+      selectedOutputFields.value,
+      availableExtraFields.value,
+      dropUnavailableFields.value,
+      baseOutputFields.value
+    )
   };
 }
 

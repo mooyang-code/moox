@@ -10,7 +10,6 @@ import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration }
 import { AuthSessionExpiredError } from "./admin/auth-errors";
 import { StaleSpaceRequestError } from "./admin/stale-space";
 import { explainTransportError } from "./network-error";
-import { tradeErrorText } from "./trade/error-text";
 
 /**
  * 管理台唯一的请求入口：call(服务, 方法, 请求体) 发到 /api/admin/<服务>/<方法>。
@@ -167,8 +166,7 @@ async function send<TRsp>(service: string, method: string, req: object, options:
   const retInfo = body?.ret_info;
   if (!retInfo) throw new RequestError(`${service}/${method} 的响应缺少 ret_info`);
   if (!isRetInfoSuccess(retInfo.code)) {
-    const message =
-      service === "trade" ? tradeErrorText(retInfo) : retInfo.msg || `${service}/${method} 请求失败（错误码 ${retInfo.code}）`;
+    const message = retInfo.msg || `${service}/${method} 请求失败（错误码 ${retInfo.code}）`;
     throw new RequestError(message, body);
   }
   return body;

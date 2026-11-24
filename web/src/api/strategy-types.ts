@@ -98,11 +98,28 @@ export interface StrategyTargetSnapshot {
   result_id: string;
 }
 
+/**
+ * 建实例要绑定的因子任务，由后端按 DSL 推出（管理台不自己解析 DSL）。
+ * marketDeclared 为 false 时只绑一个主帧任务、市场由用户选；附加来源的任务键按所选市场拼成 来源名:市场。
+ */
+export interface StrategyTaskRequirement {
+  pool: boolean;
+  marketDeclared: boolean;
+  /** 要绑定的任务键（市场确定时才有）：主帧市场（现货在前）、参考市场、附加来源的 来源名:市场 */
+  taskKeys: string[];
+  /** 附加来源（声明顺序） */
+  sources: { name: string; bar: string }[];
+  /** 据此建不了实例的问题（中文） */
+  problems: string[];
+}
+
 export interface ValidateStrategyResult {
   diagnostics: string[];
   resolved_json: string;
   trial: StrategyResult | null;
   trial_items: StrategyResultItem[];
+  /** DSL 能解析时给出 */
+  requirement: StrategyTaskRequirement | null;
 }
 
 /** 回放在一个市场读取的计算任务与它的结果 View。 */

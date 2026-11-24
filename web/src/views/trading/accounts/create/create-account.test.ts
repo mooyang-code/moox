@@ -18,11 +18,10 @@ vi.mock("@/api/trade", async () => ({
 vi.mock("../shared/exchange-secrets", () => ({ loadExchangeSecrets: vi.fn(async () => []) }));
 import CreateAccount from "./index.vue";
 import { RequestError } from "@/api/http";
-import { tradeErrorText } from "@/api/trade/error-text";
 
-// 交易服务的业务失败：消息按请求层的规则换成中文，响应体原样带上
+// 交易服务的业务失败：消息就是 ret_info.msg，响应体原样带上
 const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
-  new RequestError(tradeErrorText(response.ret_info), response);
+  new RequestError(response.ret_info.msg, response);
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
