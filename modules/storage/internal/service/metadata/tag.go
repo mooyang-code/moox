@@ -16,6 +16,23 @@ const (
 	TagMemberInactive = "inactive"
 )
 
+// 标签成员的交易状态（t_subject_tags.c_trading_status）：只有 trading 的成员算可交易，ResolveSubjects 与 ListDatasetSubjects
+// 的活跃判断都要求它；suspended 是停牌（可能恢复），delisted 是退市。
+const (
+	TradingStatusTrading   = "trading"
+	TradingStatusSuspended = "suspended"
+	TradingStatusDelisted  = "delisted"
+)
+
+// ValidTradingStatus 报告取值是否是三种交易状态之一。
+func ValidTradingStatus(status string) bool {
+	switch status {
+	case TradingStatusTrading, TradingStatusSuspended, TradingStatusDelisted:
+		return true
+	}
+	return false
+}
+
 var (
 	ErrTagInvalid       = storeerr.New(storeerr.Invalid, "invalid tag")
 	ErrTagBuiltin       = storeerr.New(storeerr.Invalid, "builtin tag cannot be deleted")
@@ -68,5 +85,7 @@ type TagStore interface {
 	SetTagMemberStatus(context.Context, string, string, []string, string) (int, error)
 	ApplyTagSnapshot(context.Context, string, string, []*pb.TagSnapshotItem) (TagSnapshotResult, error)
 	UpdateSubjectAttributes(context.Context, string, []*pb.SubjectAttributes) (int, int, error)
+	// SetTagMemberTradingStatus 只改成员的交易状态，值没变的不写；返回改动数与跳过数（值没变或不是成员）。
+	SetTagMemberTradingStatus(context.Context, string, string, []*pb.TagMemberTradingStatus) (int, int, error)
 	ResolveSubjects(context.Context, string, []string) ([]*pb.Subject, error)
 }

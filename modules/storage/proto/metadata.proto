@@ -128,6 +128,9 @@ message TagMember {
   string inactive_at = 4;
   Subject subject = 5;
   repeated string tag_ids = 6;
+  // trading_status 是成员在这个标签（即这个市场）上的交易状态：trading、suspended 或 delisted，由 Collector 的交易状态检测写入。
+  // 按标签成员记录，因为 crypto 的现货、永续共用同一个 Subject，可能只有一边停牌。
+  string trading_status = 7;
 }
 
 message TagSnapshotItem {
@@ -218,6 +221,9 @@ message DatasetSubject {
   // subject_id 是业务对象 ID。
   string subject_id = 3;
   string status = 4;
+  // suspended 表示没有“成员与标的都 active、而且可交易”的绑定，但至少有一个绑定只因 trading_status = suspended 才不活跃。
+  // 策略靠它区分“停牌”与“停牌后又被移出标签”；delisted 不算。
+  bool suspended = 5;
 }
 
 // FieldGroup 是 Space 内普通字段的两级分类目录。
@@ -629,6 +635,12 @@ message ApplyTagSnapshotReq { string space_id = 2; string tag_id = 3; repeated T
 message ApplyTagSnapshotRsp { common.RetInfo ret_info = 1; uint32 added = 2; uint32 activated = 3; uint32 inactivated = 4; }
 message UpdateSubjectAttributesReq { string space_id = 2; repeated SubjectAttributes items = 3; }
 message UpdateSubjectAttributesRsp { common.RetInfo ret_info = 1; uint32 updated = 2; uint32 skipped = 3; }
+// TagMemberTradingStatus 是一个成员的交易状态。
+message TagMemberTradingStatus { string subject_id = 1; string trading_status = 2; }
+// SetTagMemberTradingStatusReq 只改成员的 trading_status；值与已存的相同时不写库（不递增标的修订号）。
+message SetTagMemberTradingStatusReq { string space_id = 2; string tag_id = 3; repeated TagMemberTradingStatus items = 4; }
+// updated 是实际改动的成员数；skipped 是值没变、或不是这个标签成员的条数。
+message SetTagMemberTradingStatusRsp { common.RetInfo ret_info = 1; uint32 updated = 2; uint32 skipped = 3; }
 message ResolveSubjectsReq { string space_id = 2; repeated string tag_ids = 3; }
 message ResolveSubjectsRsp { common.RetInfo ret_info = 1; repeated Subject subjects = 2; }
 
@@ -973,6 +985,8 @@ service Metadata {
   rpc SetTagMemberStatus(SetTagMemberStatusReq) returns (TagMembersRsp);
   rpc ApplyTagSnapshot(ApplyTagSnapshotReq) returns (ApplyTagSnapshotRsp);
   rpc UpdateSubjectAttributes(UpdateSubjectAttributesReq) returns (UpdateSubjectAttributesRsp);
+  // 写标签成员的交易状态（只有 Collector 的交易状态检测调用）。
+  rpc SetTagMemberTradingStatus(SetTagMemberTradingStatusReq) returns (SetTagMemberTradingStatusRsp);
   rpc ResolveSubjects(ResolveSubjectsReq) returns (ResolveSubjectsRsp);
 
   // 创建数据集。

@@ -147,6 +147,20 @@ func (s *Service) UpdateSubjectAttributes(ctx context.Context, req *pb.UpdateSub
 	return &pb.UpdateSubjectAttributesRsp{RetInfo: retinfo.Success("success"), Updated: uint32(updated), Skipped: uint32(skipped)}, nil
 }
 
+func (s *Service) SetTagMemberTradingStatus(ctx context.Context, req *pb.SetTagMemberTradingStatusReq) (*pb.SetTagMemberTradingStatusRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetTagId()) == "" {
+		return &pb.SetTagMemberTradingStatusRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and tag_id are required"))}, nil
+	}
+	updated, skipped, err := s.metadata.SetTagMemberTradingStatus(ctx, req.GetSpaceId(), req.GetTagId(), req.GetItems())
+	if err != nil {
+		return &pb.SetTagMemberTradingStatusRsp{RetInfo: retinfo.FromError(err)}, nil
+	}
+	if updated > 0 {
+		s.refreshMetadataCacheAfterCommit(ctx, "SetTagMemberTradingStatus")
+	}
+	return &pb.SetTagMemberTradingStatusRsp{RetInfo: retinfo.Success("success"), Updated: uint32(updated), Skipped: uint32(skipped)}, nil
+}
+
 func (s *Service) ResolveSubjects(ctx context.Context, req *pb.ResolveSubjectsReq) (*pb.ResolveSubjectsRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" {
 		return &pb.ResolveSubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
