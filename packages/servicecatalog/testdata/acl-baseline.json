@@ -3,7 +3,7 @@
   "summary": {
     "components": 18,
     "services": 25,
-    "methods": 331,
+    "methods": 328,
     "read_only_methods": 149,
     "retryable_methods": 151,
     "callers": 22,
@@ -1269,12 +1269,6 @@
       "console_name": "sysdeploy",
       "methods": [
         {
-          "name": "DeleteHost",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetCatalog",
           "read_only": true,
           "retryable": true,
@@ -1299,19 +1293,7 @@
           "timeout_ms": 5000
         },
         {
-          "name": "SetDeploymentStatus",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "SetHostStatus",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "SyncHostDeployments",
+          "name": "SyncTopology",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -2766,14 +2748,11 @@
       "trpc.moox.ops.SecretMgr/ListSecrets",
       "trpc.moox.ops.SecretMgr/ToggleSecretStatus",
       "trpc.moox.ops.SecretMgr/UpdateSecret",
-      "trpc.moox.ops.SysDeploy/DeleteHost",
       "trpc.moox.ops.SysDeploy/GetCatalog",
       "trpc.moox.ops.SysDeploy/GetHostRoutes",
       "trpc.moox.ops.SysDeploy/ListDeployments",
       "trpc.moox.ops.SysDeploy/ListHosts",
-      "trpc.moox.ops.SysDeploy/SetDeploymentStatus",
-      "trpc.moox.ops.SysDeploy/SetHostStatus",
-      "trpc.moox.ops.SysDeploy/SyncHostDeployments",
+      "trpc.moox.ops.SysDeploy/SyncTopology",
       "trpc.moox.storage.DataView/CountTimeSeriesRows",
       "trpc.moox.storage.DataView/GetViewState",
       "trpc.moox.storage.DataView/QueryTimeSeriesRows",

@@ -34,7 +34,7 @@ func TestLocalDispatcherRejectsMachineMethodBeforeDecodingOrExecuting(t *testing
 	_, err = d.Forward(context.Background(), "trpc.moox.ops.SecretMgr", "GetSecretValue", codec.SerializationTypeJSON, []byte(`invalid JSON`))
 	require.Equal(t, errs.RetServerAuthFail, errs.Code(err))
 	require.Zero(t, implementation.calls)
-	_, err = d.Forward(context.Background(), "trpc.moox.ops.SysDeploy", "SyncHostDeployments", codec.SerializationTypeJSON, []byte(`{}`))
+	_, err = d.Forward(context.Background(), "trpc.moox.ops.SysDeploy", "SyncTopology", codec.SerializationTypeJSON, []byte(`{}`))
 	require.Equal(t, errs.RetServerAuthFail, errs.Code(err))
 }
 

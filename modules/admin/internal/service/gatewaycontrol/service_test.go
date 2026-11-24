@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,8 @@ import (
 )
 
 type controlFixture struct {
+	// specs 是当前声明的全部主机：改了之后 declare 整份覆盖登记。
+	specs    []sysdeploy.HostSpec
 	service  *Service
 	db       *gorm.DB
 	path     string
@@ -50,11 +53,12 @@ func newControlFixture(t *testing.T) *controlFixture {
 	var err error
 	f.topology, err = sysdeploy.NewTopologyDAO(f.db, "control")
 	require.NoError(t, err)
-	require.NoError(t, f.topology.SyncHosts(context.Background(), []sysdeploy.HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
-		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
-		{HostID: "overseas", Address: "compute.example.test", Components: []string{"egress-proxy", "trade"}},
-	}))
+	f.specs = []sysdeploy.HostSpec{
+		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin", "collector"}},
+		{HostID: "storage", Enabled: true, Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
+		{HostID: "overseas", Enabled: true, Address: "compute.example.test", Components: []string{"egress-proxy", "trade"}},
+	}
+	require.NoError(t, f.declare())
 	f.keys, err = keys.NewStore(f.db)
 	require.NoError(t, err)
 	// 三台主机都签发过身份包，操作电脑登记了 moox-cli。
@@ -66,6 +70,31 @@ func newControlFixture(t *testing.T) *controlFixture {
 	f.clock.Store(time.Now().UnixNano())
 	f.service.now = func() time.Time { return time.Unix(0, f.clock.Load()) }
 	return f
+}
+
+func (f *controlFixture) declare() error {
+	_, err := f.topology.ReplaceTopology(context.Background(), f.specs)
+	return err
+}
+
+// declareHost 改一台主机的声明（没有就新加，按启用处理），整份覆盖登记。
+func (f *controlFixture) declareHost(spec sysdeploy.HostSpec) error {
+	spec.Enabled = true
+	if i := slices.IndexFunc(f.specs, func(s sysdeploy.HostSpec) bool { return s.HostID == spec.HostID }); i >= 0 {
+		previous := f.specs[i]
+		f.specs[i] = spec
+		if err := f.declare(); err != nil {
+			f.specs[i] = previous
+			return err
+		}
+		return nil
+	}
+	f.specs = append(f.specs, spec)
+	if err := f.declare(); err != nil {
+		f.specs = f.specs[:len(f.specs)-1]
+		return err
+	}
+	return nil
 }
 
 func (f *controlFixture) newService(t *testing.T, db *gorm.DB) *Service {
@@ -221,11 +250,11 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	// 外部入口的登记随快照下发；只能出站的主机不能登记成外部入口。
 	require.False(t, snapshotHost(f.snapshot(t, "storage"), "storage").ExternalEntry)
 	entry := sysdeploy.HostSpec{HostID: "storage", Address: "storage.example.test", ExternalEntry: true, Components: []string{"storage-primary", "storage-view"}}
-	require.NoError(t, f.topology.SyncHostDeployments(ctx, entry))
+	require.NoError(t, f.declareHost(entry))
 	require.True(t, snapshotHost(f.snapshot(t, "storage"), "storage").ExternalEntry)
 	require.False(t, snapshotHost(f.snapshot(t, "storage"), "overseas").ExternalEntry)
 	entry.Reachability = servicecatalog.ReachabilityOutbound
-	require.ErrorIs(t, f.topology.SyncHostDeployments(ctx, entry), sysdeploy.ErrInvalidTopology)
+	require.ErrorIs(t, f.declareHost(entry), sysdeploy.ErrInvalidTopology)
 	// 还没签发过身份包的主机没有公钥，但主机本身仍在快照里。
 	require.NoError(t, f.db.Exec("UPDATE t_hosts SET c_sign_public_key = '' WHERE c_host_id = 'overseas'").Error)
 	require.Empty(t, snapshotHost(f.snapshot(t, "storage"), "overseas").SignPublicKey)
@@ -233,7 +262,8 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 
 	// 停用的主机：它仍能取到快照（从中得知自己已停用），部署原样保留；网关算出它只剩 host-gateway 这一个调用方，它上面的组件不能再签名。
 	before := f.snapshot(t, "storage")
-	require.NoError(t, f.topology.SetHostStatus(ctx, "storage", servicecatalog.Disabled))
+	f.specs[1].Enabled = false
+	require.NoError(t, f.declare())
 	disabled := f.snapshot(t, "storage")
 	require.NotEqual(t, before.Hash, disabled.Hash)
 	require.False(t, snapshotHost(disabled, "storage").Enabled)
@@ -379,7 +409,7 @@ func TestNewHostWithoutKeyDoesNotBlockSnapshots(t *testing.T) {
 	f := newControlFixture(t)
 	ctx := context.Background()
 	before := f.snapshot(t, "control")
-	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
+	require.NoError(t, f.declareHost(sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
 	pending := f.snapshot(t, "control")
 	require.NotEqual(t, before.Hash, pending.Hash)
 	require.NotNil(t, snapshotHost(pending, "new-host"))

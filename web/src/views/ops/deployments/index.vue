@@ -6,7 +6,7 @@
         <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh()">刷新</a-button>
       </div>
       <p class="muted">
-        主机与组件的新增、部署、启停和移除都通过 moox skill 操作（让 Agent 使用 moox skill
+        主机与组件的新增、部署、启停和移除都写在 moox.toml 里，通过 moox skill 部署生效（让 Agent 使用 moox skill
         完成），控制台只展示。停用会撤下路由和健康检查。
       </p>
       <a-alert v-if="error" type="error">{{ error }}。以下保留上次数据，健康状态未知。</a-alert>

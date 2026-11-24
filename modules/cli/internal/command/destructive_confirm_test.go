@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,25 +48,6 @@ func TestSetupFirewallOnlyPreviewsWithoutYes(t *testing.T) {
 	snapshot = testSetupSnapshot(t)
 	assert.Contains(t, run("--yes"), `"status":"ready"`)
 	assert.Equal(t, 1, called)
-}
-
-func TestSetupSyncDeploymentsOnlyPreviewsWithoutYes(t *testing.T) {
-	snapshot := testSetupSnapshot(t)
-	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) {
-		t.Fatal("预览不能连接网关")
-		return nil, nil
-	}
-	t.Cleanup(func() { openCommandGateway = previous })
-	cmd := newSetupCommand(setupDeps{load: func(string) (*setupSnapshot, error) { return snapshot, nil }})
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"sync-deployments", "--file", "moox.toml", "--host", "control"})
-	require.NoError(t, cmd.Execute())
-	preview := parsePreview(t, out.String())
-	assert.Equal(t, "sync_deployments", preview["action"])
-	assert.Equal(t, "control", preview["host"])
 }
 
 func TestCollectorTaskDeleteOnlyPreviewsWithoutYes(t *testing.T) {

@@ -218,7 +218,6 @@ type identityFixture struct {
 	admin    *fakeAdmin
 	control  *fakeHost
 	operator string
-	synced   []string
 }
 
 func newIdentityFixture(t *testing.T) *identityFixture {
@@ -239,8 +238,7 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 
 func (f *identityFixture) options(host string) Options {
 	return Options{Config: f.cfg, Secrets: &topology.Secrets{Admin: topology.Admin{Username: "admin", Password: "fixture-password-123"}}, HostID: host, OperatorDirectory: f.operator,
-		Dial:     func(context.Context, topology.Host) (setupssh.Client, error) { return f.control, nil },
-		SyncHost: func(_ context.Context, hostID string) error { f.synced = append(f.synced, hostID); return nil }}
+		Dial: func(context.Context, topology.Host) (setupssh.Client, error) { return f.control, nil }}
 }
 
 // run 取一台主机的身份材料。选哪些组件只决定要不要一并取 EventBus 角色文件；
@@ -325,7 +323,6 @@ func TestHostIdentityIsIssuedByControlAndVerifiedAgainstPinnedCA(t *testing.T) {
 	identity, issued, err := f.run(f.options("storage"), storage, true)
 	require.NoError(t, err)
 	require.True(t, issued.hostKey)
-	require.Equal(t, []string{"storage"}, f.synced, "先把这台主机的登记同步到 Admin")
 	require.Equal(t, f.admin.hosts["storage"], identity.SignPublicKey)
 	require.Empty(t, identity.SCFCollectorPublicKey)
 	require.NotEqual(t, f.admin.hosts[f.cfg.ControlHost().Name], identity.SignPublicKey, "每台主机一把")
@@ -356,4 +353,27 @@ func TestHostIdentityIsIssuedByControlAndVerifiedAgainstPinnedCA(t *testing.T) {
 	f.control.admin = other
 	_, _, err = f.run(f.options("storage"), storage, false)
 	require.ErrorContains(t, err, "identity_invalid")
+}
+
+// 停用的主机：先把整份登记写进 Admin，再尽力停单元；主机连不上只记警告，不报错（登记已经生效）。
+func TestDisabledHostWritesRegistryEvenWhenUnreachable(t *testing.T) {
+	cfg := exampleConfig(t, "")
+	definition := cfg.HostCatalog["factor"]
+	disabled := false
+	definition.Enabled = &disabled
+	cfg.HostCatalog["factor"] = definition
+	synced := 0
+	result, err := Deploy(context.Background(), Options{
+		Config: cfg, HostID: "factor", RepositoryRoot: t.TempDir(),
+		SyncTopology: func(context.Context) error { synced++; return nil },
+		Dial: func(context.Context, topology.Host) (setupssh.Client, error) {
+			require.Equal(t, 1, synced, "连目标机之前先写登记")
+			return nil, errors.New("connection refused")
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, synced)
+	require.Len(t, result.Warnings, 1)
+	require.Contains(t, result.Warnings[0], "登记已写入 Admin")
+	require.Empty(t, result.Components)
 }

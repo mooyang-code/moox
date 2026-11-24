@@ -212,8 +212,8 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"moox-cli", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", true},
 		{"console", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
 		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", true},
-		{"console", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
-		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", true},
+		{"console", "trpc.moox.ops.SysDeploy", "SyncTopology", false},
+		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncTopology", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskList", false},
 		{"monitor", "trpc.moox.collector.CollectMgr", "CreateTask", false},
@@ -225,9 +225,7 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListHosts", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListDeployments", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "GetHostRoutes", false},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SetHostStatus", false},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", false},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
+		{"monitor", "trpc.moox.ops.SysDeploy", "SyncTopology", false},
 		{"strategy", "trpc.moox.factor.EngineControl", "OpenReplay", true},
 		{"strategy", "trpc.moox.factor.EngineControl", "StepReplay", true},
 		{"strategy", "trpc.moox.factor.EngineControl", "CloseReplay", true},
@@ -562,10 +560,7 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	c := mustCatalog(t)
 	for _, tc := range []struct{ path, method string }{
-		{"trpc.moox.ops.SysDeploy", "SetHostStatus"},
-		{"trpc.moox.ops.SysDeploy", "SetDeploymentStatus"},
-		{"trpc.moox.ops.SysDeploy", "SyncHostDeployments"},
-		{"trpc.moox.ops.SysDeploy", "DeleteHost"},
+		{"trpc.moox.ops.SysDeploy", "SyncTopology"},
 		{"trpc.moox.archive.ArchiveMgr", "PrepareArchiveImport"},
 		{"trpc.moox.archive.ArchiveMgr", "ImportArchiveFile"},
 		{"trpc.moox.archive.ArchiveMgr", "ClearArchiveUnrecoverable"},

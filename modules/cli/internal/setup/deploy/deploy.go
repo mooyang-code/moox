@@ -64,8 +64,9 @@ type Options struct {
 	// Version、Commit 写进 version.json。
 	Version, Commit string
 	Dial            Dial
-	// SyncHost 把这台主机的登记与部署行同步到 Admin；控制机由 bootstrap 做，不调用它。
-	SyncHost func(ctx context.Context, hostID string) error
+	// SyncTopology 把 moox.toml 的整份主机与部署声明（含启停）写进 Admin；部署控制机时由 bootstrap 做，不调用它。
+	// 部署其他主机时最先调用，不依赖目标机：主机连不上也照常写登记（只出站主机的暂停接入靠这一点）。
+	SyncTopology func(ctx context.Context) error
 	// ObjectStoreSecret 读归档 worker 外部对象存储的凭据文件内容（配了 [archive_object_store] 时）。
 	ObjectStoreSecret func(ctx context.Context, secretID string) ([]byte, error)
 	// Log 接收进度；ReadyTimeout 为 0 用默认值。
@@ -73,7 +74,8 @@ type Options struct {
 	ReadyTimeout time.Duration
 }
 
-// ComponentResult 是一个组件这次部署的结果。Action：started（新装或原来没在运行）、restarted、unchanged、paused（已被停用，只装了文件）。
+// ComponentResult 是一个组件这次部署的结果。Action：started（新装或原来没在运行）、restarted、unchanged、
+// disabled（moox.toml 声明停用：只装文件，单元停掉且不开机自启）。
 type ComponentResult struct {
 	ID     string `json:"id"`
 	Action string `json:"action"`
@@ -140,6 +142,17 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 	selected, full, err := options.scope(host.Name, hostComponents)
 	if err != nil {
 		return result, err
+	}
+	if host.Name != control.Name {
+		if options.SyncTopology == nil {
+			return result, errors.New("部署控制机之外的主机要先把 moox.toml 的主机与部署同步到 Admin")
+		}
+		if err := options.SyncTopology(ctx); err != nil {
+			return result, fmt.Errorf("把 moox.toml 的主机与部署同步到 Admin: %w", err)
+		}
+	}
+	if !host.Enabled {
+		return stopDisabledHost(ctx, options, host, selected, result)
 	}
 
 	// 预检：linger 没开就停下；journald 没持久化只提醒。
@@ -238,7 +251,7 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 			}
 			return "0"
 		}
-		fmt.Fprintf(&list, "%s %s %s\n", id, flag(existing.changed(id, component)), flag(existing.known(id)))
+		fmt.Fprintf(&list, "%s %s %s\n", id, flag(existing.changed(id, component)), flag(cfg.UnitEnabled(host.Name, id)))
 		next.Components[id] = component
 	}
 	versionRaw, err := json.MarshalIndent(next, "", "  ")
@@ -284,11 +297,34 @@ func Deploy(ctx context.Context, options Options) (Result, error) {
 	return result, waitComponents(ctx, target, catalog, host.Name, &result, options.ReadyTimeout)
 }
 
+// stopDisabledHost 处理 moox.toml 里停用的主机：登记已经写进 Admin（网关随之只认它的 host-gateway），
+// 这里只尽力停掉除 host-gateway 外的单元，不装文件。主机连不上只记警告：登记已经生效，进程等主机能连上后再部署一次停掉。
+func stopDisabledHost(ctx context.Context, options Options, host topology.Host, selected []string, result Result) (Result, error) {
+	target, err := options.Dial(ctx, host)
+	if err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("主机 %s 已停用，登记已写入 Admin；它现在连不上（%v），上面的进程没有停，能连上后再部署一次", host.Name, err))
+		return result, nil
+	}
+	defer target.Close()
+	for _, id := range selected {
+		if id == "host-gateway" {
+			continue
+		}
+		if _, err := Operate(ctx, target, id, OperationStop); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("主机 %s 已停用，停 %s 失败：%v", host.Name, id, err))
+			continue
+		}
+		result.Components = append(result.Components, ComponentResult{ID: id, Action: "disabled"})
+		options.logf("%s %s: disabled", host.Name, id)
+	}
+	return result, nil
+}
+
 // waitComponents 等这次装的、没被停用的组件就绪，把结果写回 result；到时限还有没就绪的返回错误。
 func waitComponents(ctx context.Context, target setupssh.Client, catalog servicecatalog.Catalog, host string, result *Result, timeout time.Duration) error {
 	ids := []string{}
 	for _, component := range result.Components {
-		if component.Action != "paused" {
+		if component.Action != "disabled" {
 			ids = append(ids, component.ID)
 		}
 	}
@@ -303,7 +339,7 @@ func waitComponents(ctx context.Context, target setupssh.Client, catalog service
 			component.Detail = detail
 			failed = append(failed, component.ID+"（"+detail+"）")
 		} else {
-			component.Ready = component.Action != "paused"
+			component.Ready = component.Action != "disabled"
 		}
 	}
 	if len(failed) != 0 {
@@ -652,11 +688,6 @@ func (o Options) identity(ctx context.Context, target setupssh.Client, catalog s
 		pin, err := identitybundle.ReadOperatorPin(o.OperatorDirectory)
 		if err != nil || pin.ControlHostID != control.Name {
 			return fail(fmt.Errorf("control_not_ready: 这台电脑没有控制机 %s 的根证书指纹，先运行 moox-cli setup deploy --host %s", control.Name, control.Name))
-		}
-		if o.SyncHost != nil {
-			if err := o.SyncHost(ctx, host.Name); err != nil {
-				return fail(fmt.Errorf("同步主机 %s 的登记到 Admin: %w", host.Name, err))
-			}
 		}
 		if metadata, err = exportHostBundle(ctx, source, cfg, host.Name, current, o.RotateHostKey, stage); err != nil {
 			return fail(err)

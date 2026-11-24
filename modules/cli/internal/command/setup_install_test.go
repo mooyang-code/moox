@@ -526,7 +526,7 @@ func TestSetupDeployPassesHostComponentsAndSources(t *testing.T) {
 	require.Equal(t, []string{"monitor", "collector"}, got.Components)
 	require.Equal(t, binaries, got.BinaryDirectory)
 	require.Equal(t, h.operator, got.OperatorDirectory)
-	require.NotNil(t, got.SyncHost)
+	require.NotNil(t, got.SyncTopology)
 	require.NotNil(t, got.Dial)
 	require.Nil(t, got.Bundle, "源码目录里没有产物包清单")
 
@@ -615,13 +615,14 @@ func TestSetupInitPassesSourceDirectory(t *testing.T) {
 	require.Equal(t, "seeds", h.seedDirs[len(h.seedDirs)-1])
 }
 
-// 统一等就绪按是否停用排除组件：崩溃后正在自动重启的（单元在、没在运行、没被停用）也要等；被停用的不等。
+// 统一等就绪按 moox.toml 的声明排除组件：[deployments_disabled] 里的不等，停用的主机整台不等；其余的（含崩溃后正在自动重启的）都要等。
 func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	h := newInstallHarness(t)
-	overseas := h.report("overseas")
-	overseas.Units = []string{"moox-trade.service", "moox-egress-proxy.service", "moox-callback-dispatcher.service"}
-	overseas.Active = []string{"moox-egress-proxy.service"}
-	overseas.Disabled = []string{"moox-callback-dispatcher.service"}
+	h.snapshot.Manifest.DeploymentsDisabled = map[string][]string{"overseas": {"callback-dispatcher"}}
+	factor := h.snapshot.Manifest.HostCatalog["factor"]
+	disabled := false
+	factor.Enabled = &disabled
+	h.snapshot.Manifest.HostCatalog["factor"] = factor
 	waited := map[string][]string{}
 	h.deps.waitReady = func(_ context.Context, host topology.Host, components []string, _ time.Duration) (map[string]string, error) {
 		h.mu.Lock()
@@ -630,7 +631,8 @@ func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 		return nil, nil
 	}
 	require.NoError(t, waitSetupAllReady(context.Background(), h.deps, h.snapshot))
-	require.Contains(t, waited["overseas"], "trade", "没在运行但没被停用的组件要等")
+	require.Contains(t, waited["overseas"], "trade")
 	require.Contains(t, waited["overseas"], "egress-proxy")
-	require.NotContains(t, waited["overseas"], "callback-dispatcher", "被停用的组件不等")
+	require.NotContains(t, waited["overseas"], "callback-dispatcher", "声明停用的组件不等")
+	require.NotContains(t, waited, "factor", "停用的主机整台不等")
 }

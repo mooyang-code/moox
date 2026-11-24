@@ -165,13 +165,8 @@ components:
             callers: [monitor]
           - name: GetHostRoutes
             read_only: true
-          - name: SetHostStatus
-            operators: [moox-cli]
-          - name: SetDeploymentStatus
-            operators: [moox-cli]
-          - name: SyncHostDeployments
-            operators: [moox-cli]
-          - name: DeleteHost
+          # 按 moox.toml 整份覆盖主机与部署的登记（setup deploy、setup update 部署每台主机前调用）。
+          - name: SyncTopology
             operators: [moox-cli]
       - path: trpc.moox.admin.Setup
         port: 11110

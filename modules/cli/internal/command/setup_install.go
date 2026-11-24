@@ -12,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 )
@@ -269,14 +268,15 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 	return fmt.Errorf("unknown install step %s", step.Kind)
 }
 
-// waitSetupAllReady 统一等一次全部主机上的全部组件就绪（已被停用的不等）。
-// 按是否停用（is-enabled）排除，不按当时是否在运行：崩溃后正在自动重启的组件也要等到就绪。
+// waitSetupAllReady 统一等一次全部主机上的全部组件就绪：按 moox.toml 的声明，停用的组件不等，停用的主机整台不等
+// （它只留 host-gateway 在跑，而且可能连不上）。崩溃后正在自动重启的组件也要等到就绪。
 func waitSetupAllReady(ctx context.Context, deps setupDeps, snapshot *setupSnapshot) error {
-	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
-	if err != nil {
-		return err
+	var hosts []topology.Host
+	for _, host := range snapshot.Manifest.Hosts() {
+		if host.Enabled {
+			hosts = append(hosts, host)
+		}
 	}
-	hosts := snapshot.Manifest.Hosts()
 	failures := make([]string, len(hosts))
 	errs := make([]error, len(hosts))
 	var workers sync.WaitGroup
@@ -289,11 +289,7 @@ func waitSetupAllReady(ctx context.Context, deps setupDeps, snapshot *setupSnaps
 				errs[i] = err
 				return
 			}
-			// 用户停用的组件不等，其余的都要等到就绪。
-			at := slices.IndexFunc(reports, func(report deployscan.HostReport) bool { return report.Host == host.Name })
-			if at >= 0 {
-				components = slices.DeleteFunc(components, func(id string) bool { return slices.Contains(reports[at].Disabled, deploy.UnitName(id)) })
-			}
+			components = slices.DeleteFunc(components, func(id string) bool { return !snapshot.Manifest.UnitEnabled(host.Name, id) })
 			pending, err := deps.waitReady(ctx, host, components, setupReadyTimeout)
 			if err != nil {
 				errs[i] = err

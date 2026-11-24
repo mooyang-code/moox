@@ -102,8 +102,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupStartComponentCommand(deps),
 		newSetupWipeCommand(deps),
 		newSetupHostsCommand(deps),
-		newSetupSyncDeploymentsCommand(deps),
-		newSetupRemoveHostCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupTrustBrowserCommand(deps),
 		newSetupBuildLinuxCommand(deps),
@@ -115,8 +113,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInvokeSCFCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
-		newSetupHostStatusCommand(deps, defaultStatusEnv),
-		newSetupDeploymentStatusCommand(deps, defaultStatusEnv),
 	)
 	return cmd
 }

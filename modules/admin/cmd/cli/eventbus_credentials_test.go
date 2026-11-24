@@ -311,7 +311,8 @@ func seedEventBusDeployment(t *testing.T, dbPath string) {
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "eventbus"}}}))
+	_, err = dao.ReplaceTopology(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Enabled: true, Address: "203.0.113.10", Components: []string{"admin", "eventbus"}}})
+	require.NoError(t, err)
 }
 
 func eventBusACLBlock(yaml, username string) string {
@@ -574,14 +575,18 @@ func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) 
 	require.NoError(t, db.Exec(adminschema.AdminSQL()).Error)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin"}},
-		{HostID: "bus", Address: "bus.example.test", Components: []string{"eventbus"}},
-	}))
+	specs := []sysdeploy.HostSpec{
+		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin"}},
+		{HostID: "bus", Enabled: true, Address: "bus.example.test", Components: []string{"eventbus"}},
+	}
+	_, err = dao.ReplaceTopology(t.Context(), specs)
+	require.NoError(t, err)
 	address, err := eventBusNATSURL(db, "control")
 	require.NoError(t, err)
 	require.Equal(t, "tls://bus.example.test:4222", address)
-	require.NoError(t, dao.SetHostStatus(t.Context(), "bus", "disabled"))
+	specs[1].Enabled = false
+	_, err = dao.ReplaceTopology(t.Context(), specs)
+	require.NoError(t, err)
 	_, err = eventBusNATSURL(db, "control")
 	require.ErrorContains(t, err, "active EventBus deployment not found")
 }
@@ -614,10 +619,11 @@ func TestEventBusExportFollowsEventBusMoveWithoutRotation(t *testing.T) {
 	require.NoError(t, err)
 	topology, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	require.NoError(t, topology.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin"}},
-		{HostID: "storage-1", Address: "203.0.113.20", Components: []string{"eventbus"}},
-	}))
+	_, err = topology.ReplaceTopology(t.Context(), []sysdeploy.HostSpec{
+		{HostID: "gateway-node-1", Enabled: true, Address: "203.0.113.10", Components: []string{"admin"}},
+		{HostID: "storage-1", Enabled: true, Address: "203.0.113.20", Components: []string{"eventbus"}},
+	})
+	require.NoError(t, err)
 	closeAdminCLIDB(db)
 
 	_, err = run("ensure")

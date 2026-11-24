@@ -193,7 +193,7 @@ test-deployment-packages:
 
 .PHONY: test-host-deployment
 test-host-deployment:
-	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostDeployments|TestDoctorDeployments'
+	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncTopology|TestDoctorDeployments'
 
 .PHONY: test-host-identity-bundles
 test-host-identity-bundles:

@@ -95,13 +95,13 @@ func (s setupSource) deployOptions(cmd *cobra.Command, snapshot *setupSnapshot, 
 		Config: snapshot.Manifest, Secrets: snapshot.Secrets, HostID: host, Components: components,
 		RepositoryRoot: s.root, BinaryDirectory: s.binaryDir, Bundle: s.bundle, OperatorDirectory: s.operatorDir,
 		Version: Version, Commit: GitCommit, Dial: dialSetupHost, Log: cmd.ErrOrStderr(),
-		SyncHost: func(ctx context.Context, hostID string) error {
+		SyncTopology: func(ctx context.Context) error {
 			gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
 			if err != nil {
 				return err
 			}
 			defer gateway.Close()
-			return setupclient.New(gateway).SyncHostDeployments(ctx, snapshot.Manifest, hostID)
+			return setupclient.New(gateway).SyncTopology(ctx, snapshot.Manifest)
 		},
 		ObjectStoreSecret: func(ctx context.Context, secretID string) ([]byte, error) {
 			gateway, err := openCommandGateway(ctx, file, snapshot.Manifest)
@@ -139,9 +139,10 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 		Use:   "deploy",
 		Short: "把一台主机部署成 moox.toml 描述的样子：放二进制、渲染配置、按顺序重启有变化的组件，等它们就绪",
 		Long: `部署一台主机上的全部组件，或用 --component 只部署其中几个。每个组件是一个 systemd 用户服务 moox-<组件>。
-重跑同一条命令就是再做一遍：没有变化的组件不重启；上次装好之后被停用（setup stop）的组件只更新文件、保持停用。
-控制机每次部署都会先执行 moox-admin-cli bootstrap（建库、CA、主密钥、管理员、登记这台电脑的 moox-cli 公钥，这些只建不改；主机与部署按 moox.toml 同步，已停用的保持停用）；
-其余主机先把登记同步到 Admin，再向控制机要身份材料。只部署个别组件时，服务目录变了会把这台主机的主机网关一起升级。
+重跑同一条命令就是再做一遍：没有变化的组件不重启；组件按 moox.toml 的声明启停：[deployments_disabled] 里的组件只更新文件、单元停掉，
+其余组件确保在运行（setup stop 临时停掉的也会被重新拉起）。停用的主机（enabled = false）只留 host-gateway 在跑，连不上也照常写登记。
+主机与部署的登记每次都按 moox.toml 整份覆盖 Admin（多出的主机与部署删除，签名公钥与 SSH 指纹保留）：控制机由 moox-admin-cli bootstrap 写
+（建库、CA、主密钥、管理员、登记这台电脑的 moox-cli 公钥，这些只建不改），其余主机部署前先经 Admin 的 SyncTopology 写，再向控制机要身份材料。只部署个别组件时，服务目录变了会把这台主机的主机网关一起升级。
 每台主机有一把签名私钥（secrets/host.key），本机全部组件共用，Admin 只登记公钥。例行部署不换它：目标机上的私钥和登记的公钥一致就沿用，
 只重新签发主机证书；私钥丢了或对不上时会签发新的。--rotate-host-key 显式换掉它：旧私钥立即作废，这台主机上的组件全部重启。
 换密钥（显式要求，或发现私钥丢了、对不上）时按整台部署处理，--component 不起作用。
@@ -232,7 +233,7 @@ func newSetupRestartCommand(deps setupDeps) *cobra.Command {
 }
 
 func newSetupStopCommand(deps setupDeps) *cobra.Command {
-	return newSetupOperateCommand(deps, "stop", deploy.OperationStop, "停掉一个组件并不再开机自启（systemctl --user disable --now）；之后的部署只更新它的文件、保持停用")
+	return newSetupOperateCommand(deps, "stop", deploy.OperationStop, "临时停掉一个组件并不再开机自启（systemctl --user disable --now）；不改登记，下次部署按 moox.toml 的声明重新拉起，长期停用写进 [deployments_disabled]")
 }
 
 func newSetupStartComponentCommand(deps setupDeps) *cobra.Command {

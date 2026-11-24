@@ -35,25 +35,6 @@ func controlAdminPaths(layout Layout) adminPaths {
 	}
 }
 
-// bootstrapTopology 是写进空库的全部主机与部署（含管理台终端用的 SSH 登录信息，所以按私有文件处理）。
-func bootstrapTopology(cfg *topology.Config) (hostbundle.Topology, error) {
-	result := hostbundle.Topology{Version: 1, ControlHostID: cfg.ControlHost().Name}
-	for _, host := range cfg.Hosts() {
-		components := slices.Clone(cfg.Deployments[host.Name])
-		slices.Sort(components)
-		entry := hostbundle.Host{HostID: host.Name, Label: host.Label, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Components: components, Reachability: host.Reachability, ExternalEntry: host.ExternalEntry}
-		ssh, err := host.ConsoleSSH()
-		if err != nil {
-			return result, err
-		}
-		if ssh != nil {
-			entry.SSH = &hostbundle.SSH{Port: ssh.Port, User: ssh.User, AuthType: "private_key", Secret: ssh.PrivateKey}
-		}
-		result.Hosts = append(result.Hosts, entry)
-	}
-	return result, nil
-}
-
 // runAdmin 在控制机上执行一条 moox-admin-cli 命令，把标准输出的一个 JSON 文档解到 out。
 func runAdmin(ctx context.Context, control setupssh.Client, what string, argv []string, stdin io.Reader, out any) error {
 	output, err := control.Run(ctx, argv, stdin)
@@ -109,7 +90,7 @@ func bootstrapControl(ctx context.Context, control setupssh.Client, cfg *topolog
 	var metadata hostbundle.Metadata
 	layout := Layout{Root: cfg.Paths.DeployRoot}
 	paths := controlAdminPaths(layout)
-	plan, err := bootstrapTopology(cfg)
+	plan, err := cfg.Declared()
 	if err != nil {
 		return metadata, err
 	}

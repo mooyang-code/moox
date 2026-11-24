@@ -105,23 +105,8 @@ message GetHostRoutesRsp {
   string compiled_at = 6;
 }
 
-message SetHostStatusReq {
-  string host_id = 1;
-  string status = 2;
-}
-message SetHostStatusRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-}
-message SetDeploymentStatusReq {
-  string host_id = 1;
-  string component_id = 2;
-  string status = 3;
-}
-message SetDeploymentStatusRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-}
-
-message SyncHostDeploymentsReq {
+// SyncTopologyHost 是 moox.toml 里一台主机的完整声明，含启停状态。
+message SyncTopologyHost {
   string host_id = 1;
   string address = 2;
   string private_address = 3;
@@ -141,15 +126,18 @@ message SyncHostDeploymentsReq {
   string ssh_passphrase = 13;
   // 这台主机的网关是否开外部入口（11004）；只能出站的主机不能开。
   bool external_entry = 14;
-}
-message SyncHostDeploymentsRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
+  // [hosts.<ID>].enabled；停用的主机只剩 host-gateway 能签名。
+  bool enabled = 15;
+  // component_ids 里记为停用的组件（[deployments_disabled]）。
+  repeated string disabled_component_ids = 16;
 }
 
-message DeleteDeploymentHostReq {
-  string host_id = 1;
+// SyncTopologyReq 是 moox.toml 的整份主机与部署声明：Admin 按它覆盖登记，多出的主机与部署删除，
+// 签名公钥与 SSH 指纹保留。setup deploy、setup update 部署每台主机前都发一次。
+message SyncTopologyReq {
+  repeated SyncTopologyHost hosts = 1;
 }
-message DeleteDeploymentHostRsp {
+message SyncTopologyRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
@@ -158,8 +146,5 @@ service SysDeploy {
   rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
   rpc ListDeployments(ListDeploymentsReq) returns (ListDeploymentsRsp);
   rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
-  rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
-  rpc SetDeploymentStatus(SetDeploymentStatusReq) returns (SetDeploymentStatusRsp);
-  rpc SyncHostDeployments(SyncHostDeploymentsReq) returns (SyncHostDeploymentsRsp);
-  rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
+  rpc SyncTopology(SyncTopologyReq) returns (SyncTopologyRsp);
 }

@@ -36,7 +36,7 @@
 | 数据归档 | 归档任务、运行、分区、CSV 导入 | `archive overview`、`archive tasks list|prepare|preview|create|update|run|backfill|delete|clear-unrecoverable`、`archive runs list|get|cancel`、`archive partitions list|get`、`archive import`、`archive import template` |
 | 事件中心 | 可配置的事件、事件规则、执行记录 | `event catalog`、`event rules list|get|update|delete|test`、`event executions list|get|retry|cancel|ack`；新建规则请用户在管理台操作（会返回验证密钥明文） |
 | 资源与运维 › 监控告警 | 总览、到达历史、主机资源、重要日志、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|logs|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
-| 资源与运维 › 主机工作台、服务管理 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
+| 资源与运维 › 主机工作台、服务管理 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host`、`setup hosts|deploy …`（启停与移除改 `moox.toml` 后部署） |
 | 资源与运维 › 日志中心（“活动日志”页签） | 活动日志 | `activity list` |
 
 常用写法：

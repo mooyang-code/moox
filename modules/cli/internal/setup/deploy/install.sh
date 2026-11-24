@@ -6,7 +6,7 @@
 #   bash -s -- apply    <部署根> <包>            换配置、写秘密文件与单元文件，按启动顺序重启有变化的组件，写 version.json
 #
 # <包> 是 moox-cli 上传到部署根下的 .deploy-*.tar.gz，用完就删。binaries、apply 持 <部署根>/.deploy.lock，同一台主机不会同时装两次。
-# 组件都是 systemd 用户服务 moox-<组件>.service；上次装好之后被停用（disable）的组件只装文件、不启动。
+# 组件都是 systemd 用户服务 moox-<组件>.service；moox.toml 声明停用的组件只装文件，单元停掉且不开机自启。
 set -euo pipefail
 umask 077
 
@@ -202,16 +202,17 @@ gateway_wait() {
 }
 
 # ---------------------------------------------------------------- 按启动顺序启动
-# components.list 每行：<组件> <是否有变化 0|1> <上次部署记录里有没有它 0|1>，已按启动顺序排好。
-while read -r component changed known; do
+# components.list 每行：<组件> <是否有变化 0|1> <moox.toml 声明启用 0|1>，已按启动顺序排好。
+while read -r component changed wanted; do
   [[ -n "${component}" ]] || continue
   unit="moox-${component}.service"
   [[ -f "${units_dir}/${unit}" ]] || fail "缺单元文件 ${unit}"
   mkdir -p "${root}/data/${component}" "${root}/logs/${component}"
   [[ "${component}" != "seaweedfs" ]] || seaweedfs_prepare
-  # 上次已经装好、之后被停用（systemctl --user disable）的组件保持停用：只装文件。上次没装完的不算，照常启用。
-  if [[ "${known}" == "1" && "$(systemctl_user is-enabled "${unit}" 2>/dev/null || true)" == "disabled" ]]; then
-    echo "component ${component} paused"
+  # 声明停用的组件只装文件：停掉单元、不开机自启。声明启用的照常启用，setup stop 临时停掉的也在这里重新拉起。
+  if [[ "${wanted}" != "1" ]]; then
+    systemctl_user disable --now "${unit}" >/dev/null 2>&1 || true
+    echo "component ${component} disabled"
     continue
   fi
   active=0

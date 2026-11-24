@@ -46,10 +46,11 @@ type HostGatewayStatus struct {
 
 func (HostGatewayStatus) TableName() string { return "t_host_gateway_status" }
 
-// HostSpec contains deployment input, not runtime status. Synchronization keeps
-// the existing host and deployment enablement values.
+// HostSpec 是 moox.toml 里一台主机的完整声明，含启停状态：部署时整份覆盖 Admin 的主机与部署。
 type HostSpec struct {
-	HostID         string
+	HostID string
+	// Enabled 为 false 时主机记为停用。
+	Enabled        bool
 	Label          string
 	Address        string
 	PrivateAddress string
@@ -60,6 +61,8 @@ type HostSpec struct {
 	Region        string
 	Description   string
 	Components    []string
+	// DisabledComponents 是 Components 里记为停用的组件（[deployments_disabled]）。
+	DisabledComponents []string
 	// SSH 为空表示控制台不能 SSH 到这台主机，已存的凭据同时被清除。
 	SSH *SSHSpec
 }

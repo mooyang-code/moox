@@ -97,7 +97,7 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
 		"secret/GetCloudCredential", "SecretMgr/getcloudcredential", "trpc.moox.ops.SecretMgr/GetCloudCredential",
-		"sysdeploy/SyncHostDeployments", "sysdeploy/DeleteHost",
+		"sysdeploy/SyncTopology",
 		"trade/CloseTargetSession", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",
 		"storage-primary/ListFields", "storage-view/QueryTimeSeriesRows", "storage/ApplyReplica",
@@ -593,10 +593,7 @@ func TestStorageTopLevelSpaceMethodsMatchProto(t *testing.T) {
 // 部署与归档 worker 的写操作只留给 moox-cli：控制台没有这些路由，一律 404。
 func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 	for _, path := range []string{
-		"/api/admin/sysdeploy/SetHostStatus",
-		"/api/admin/sysdeploy/SetDeploymentStatus",
-		"/api/admin/sysdeploy/SyncHostDeployments",
-		"/api/admin/sysdeploy/DeleteHost",
+		"/api/admin/sysdeploy/SyncTopology",
 		"/api/admin/archive/PrepareArchiveImport",
 		"/api/admin/archive/ImportArchiveFile",
 		"/api/admin/archive/ClearArchiveUnrecoverable",

@@ -248,7 +248,7 @@ cd moox-${VER}
 - 预览的 `hosts` 按主机列出组件：`update` 是已部署、这次重新部署的；`install` 是 `moox.toml` 里新加的组件或新主机上的组件；`remove` 是 `moox.toml` 里已经去掉、这次会停掉并删除的。
   `moves` 是换了主机的组件：旧主机上停掉删除，新主机上从空数据开始，**数据不迁移**。把它们和 `steps`、`note` 一起作为更新计划给用户确认；`remove`、`moves` 不为空时单独说明。
 - 步骤和新安装的部署顺序相同：准备操作身份、放行防火墙、控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，然后控制机其余组件和其余主机（因子机最后），统一等一次全部就绪。
-- 不做初始化（不写业务空间、元数据、初始秘密和告警渠道），不启动空间（手工停用的任务保持停用，不重建云函数），数据目录（`data/`）不碰；每台主机只重启二进制或配置有变化的组件，`setup stop` 停掉的保持停用。
+- 不做初始化（不写业务空间、元数据、初始秘密和告警渠道），不启动空间（手工停用的任务保持停用，不重建云函数），数据目录（`data/`）不碰；每台主机只重启二进制或配置有变化的组件，组件按 `moox.toml` 的声明启停（`setup stop` 临时停掉的会被重新拉起）。
 - 新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位；`moox.toml` 里新开了云函数采集（`[scf_plan]`）、日志服务或换了云账号也不会生效。需要时再运行一次 `setup init`（只建不改；告警渠道的规则见第 2 节）。
 - 更新后对用户启动的空间跑一次 `setup verify --space-id <空间>` 验收；报 `collection_not_started` 说明之前的安装没做完（见第 3 节）。
 - 中途失败（`update_step_failed`）修好后重跑同一条 `setup update --yes`，报错里也有单独重跑那一步的命令；目标机都没装过，或控制机、存储机没装过时报 `update_not_installed`，改走（重跑）`setup install`。
@@ -262,7 +262,7 @@ cd moox-${VER}
 | `setup logs --host <主机> [--component <组件>] [--journal] [--grep <文字>]` | 只读：先看文件日志，没有再看 journald；`--journal` 只看标准输出与标准错误 |
 | `setup restart / stop / start-component --host <主机> --component <组件> --yes` | 重启；停掉并不再开机自启；恢复。不带 `--yes` 只预览 |
 
-- `setup stop` 停掉的组件，之后的部署只更新它的文件、保持停用（结果里是 `paused`），要 `setup start-component` 才恢复。
+- `setup stop` 只是临时停：之后的部署按 `moox.toml` 的声明把它重新拉起。要长期停用写进 `[deployments_disabled]`，部署结果里是 `disabled`。
 - 只部署个别组件时，如果服务目录变了，这台主机的主机网关会一起升级并重启（路由是网关按内嵌的服务目录算的）。
 - 手工调过的组件配置写在 `moox.toml` 的 `[overrides."<组件>"."<配置文件名>"]` 里，每行是 `"键路径" = 值`，部署渲染之后逐项覆盖，重新部署不会丢；
   键路径不存在会报错。例如因子引擎的回看根数与内存上限（`moox-factor-engine tune` 给出建议值）：
@@ -347,7 +347,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `operator_key_mismatch` | 控制机上登记的 `moox-cli` 公钥不是这台电脑的 | 问用户是不是换了电脑；是的话 `setup operator --register`（原电脑随即不能用） |
 | `rotate_unsupported` | 对控制机用了 `--rotate-host-key` | 控制机的签名密钥不单独换，按报错的做法 |
 | `operator_trust_failed` | 这台电脑上记着另一套部署的控制机根证书（线上清空重装过，CA 变了） | 确认线上确实是重装的之后，按报错删掉 `~/.config/moox` 下列出的两个文件再重跑 |
-| `identity_invalid` | 从控制机取回的身份材料校验没通过（主机地址、组件和 Admin 里登记的不一致，或 CA 对不上） | 核对 `moox.toml` 里这台主机的地址和 `[deployments]`，`setup sync-deployments --host <主机> --yes` 后重跑 |
+| `identity_invalid` | 从控制机取回的身份材料校验没通过（主机地址、组件和 Admin 里登记的不一致，或 CA 对不上） | 核对 `moox.toml` 里这台主机的地址和 `[deployments]` 后重跑 `setup deploy --host <主机>`（部署开头会先把 `moox.toml` 的登记写进 Admin） |
 | `component_not_on_host` | `--component` 写的组件不在这台主机上 | 按报错列出的组件改 |
 | `binary_dir_required`、`binary_missing` | 在源码目录里部署，没给或缺编译好的 Linux 二进制 | 用户安装应在产物包目录里运行；维护者见 [`source-deploy.md`](source-deploy.md) |
 | `version_invalid` | 目标机的 `version.json` 损坏 | 告诉用户；确认后删掉它重跑（会把全部组件当成有变化重启一遍） |
