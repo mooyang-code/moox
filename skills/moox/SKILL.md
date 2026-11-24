@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 新安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/validate/deploy/init/status/logs, 检测是否已部署), upgrading, overwriting, uninstalling or rolling back production hosts (发布, 上线, 升级, 覆盖更新, 卸载, 回滚, setup update, setup wipe, setup deploy, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ENTRY_ADDRESS, 外部入口, external_entry, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
+description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 新安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/validate/deploy/init/status/logs, 检测是否已部署), upgrading, overwriting, uninstalling or rolling back production hosts (发布, 上线, 升级, 覆盖更新, 卸载, 回滚, setup update, setup wipe, setup deploy, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ENTRY_ADDRESS, 外部入口, external_entry, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易查询与写操作, host exec, 命令覆盖).
 ---
 
 # MooX
@@ -19,7 +19,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **本机身份和线上密钥不碰**：不读取、不打印、不手工拷贝或恢复 `~/.config/moox/` 下的操作员身份，也不读线上部署根的 `secrets/`；不在目标机器上手动执行 `moox-admin-cli bootstrap`、手工改 `version.json` 或单元文件；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
 - **部署方式由检测决定**：`config init` 填完机器后立即 `setup validate`，`deployment.modes` 只有 `install` 就走新安装；有 `update`、`uninstall` 就把每台主机已部署、没部署的组件列给用户，让用户选覆盖更新或卸载（[`references/install.md`](references/install.md) 第 3 节），不替用户选。
-- 交易模块已支持现货、永续多市场执行（按策略目标自动下单，管理台上人工下单、撤单、清仓；保证金率风控触发时系统自动减仓），但人工写操作由用户在管理台自己做：Agent 只用 `trade …` 查询，不代用户创建或修改实盘账户、下单、撤单、清仓或解除下架禁止（下架名单由用户在管理台交易页查看与解除），也不向交易所下真实订单。实盘前必须先跑测试网冒烟（`modules/trade/scripts/testnet-smoke.sh`，由用户或维护者执行，Agent 不执行）；币安统一账户的现货买单资金来源等未核对项要等用户本人小额实测（见 `docs/模块/交易.md` 第 12 节）。
+- 交易模块已支持现货、永续多市场执行（按策略目标自动下单，管理台上人工下单、撤单、清仓；保证金率风控触发时系统自动减仓），写操作也有 `trade …` 命令（账户与组合的创建修改、杠杆、成员、暂停恢复、人工下单撤单、清仓、模拟账户开关），默认只预览，`--yes` 才执行；实盘账户上的写操作（下单、撤单、清仓、暂停恢复、改设置、改杠杆）执行前要先得到用户在对话里的明确同意，模拟账户可以直接做。解除下架禁止仍由用户在管理台交易页操作。实盘前必须先跑测试网冒烟（`modules/trade/scripts/testnet-smoke.sh`，由用户或维护者执行，Agent 不执行）；币安统一账户的现货买单资金来源等未核对项要等用户本人小额实测（见 `docs/模块/交易.md` 第 12 节）。
 
 ## 按场景找文档
 
@@ -51,7 +51,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 - 用户解压的产物包目录（`moox-<版本>/`，或源码仓库根目录）就是工作目录：命令写成 `./bin/moox-cli …`，默认读取当前目录的 `moox.toml`。
 - 产物包里有 `moox-bundle.json`：`setup` 命令自动使用包内预编译的 linux/amd64 程序，不需要 git、Go、Docker 或 Node。
-- 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`（含云账号、代码包与云函数）、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
+- 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`（含云账号、代码包与云函数）、`monitor`、`eventbus`、`host`、`secret`、`trade`（查询与写操作）等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
 - 没有专用命令的底层接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用；业务失败时退出码非 0。
 - 命令按 `moox.toml` 里的 SSH 配置连接各台主机，以 `moox-cli` 的身份签名调各模块的 RPC；`lifecycle`、`system`、`import` 也一样，隧道由命令自己建。要在某台主机上执行命令或传文件用 `host exec|get|put`。
 - 带 `--space-id` 的命令默认空间是 `crypto`；时间范围用 `--from` / `--to`（RFC3339，左闭右开）。

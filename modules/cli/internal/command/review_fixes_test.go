@@ -272,3 +272,22 @@ func TestUdfActivateWithoutYesAsksServerForDryRunOnly(t *testing.T) {
 	require.NotNil(t, g.req)
 	assert.True(t, g.req.(*factorpb.ActivateUdfReq).GetDryRun(), "没有 --yes 时请求必须带 dry_run")
 }
+
+// 参数的默认值（如下单的市价、原因）不能覆盖 --data 里给的字段；没给时才用默认值，显式传参照常优先。
+func TestFlagDefaultsDoNotOverrideData(t *testing.T) {
+	gateway := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
+	useRPCGateway(t, gateway)
+	spec := rpcSpec{Path: []string{"x", "submit"}, Short: "t", Service: "trpc.moox.trade.TradeConsoleService", Method: "SubmitOrder",
+		Flags: []rpcFlag{{Name: "order-type", Field: "order_type", Kind: rpcString, Default: "ORDER_TYPE_MARKET"}, {Name: "reason", Field: "reason", Kind: rpcString, Default: "默认原因"}}}
+	_, _, err := runSpecCommand(t, spec, "--data", `{"order_type":"ORDER_TYPE_LIMIT","reason":"原始原因"}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"order_type":"ORDER_TYPE_LIMIT","reason":"原始原因"}`, string(gateway.body))
+
+	_, _, err = runSpecCommand(t, spec, "--data", `{"order_type":"ORDER_TYPE_LIMIT"}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"order_type":"ORDER_TYPE_LIMIT","reason":"默认原因"}`, string(gateway.body), "--data 没给的字段用默认值")
+
+	_, _, err = runSpecCommand(t, spec, "--data", `{"order_type":"ORDER_TYPE_LIMIT"}`, "--order-type", "ORDER_TYPE_MARKET")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"order_type":"ORDER_TYPE_MARKET","reason":"默认原因"}`, string(gateway.body), "显式传的参数照常优先")
+}

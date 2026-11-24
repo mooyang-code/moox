@@ -388,7 +388,7 @@
 | `system resume` | 系统恢复：先追赶补采，全部追平后统一放行 |
 | `system status` | 查看各模块的阶段与恢复追赶进度 |
 
-## trade：交易：只读查询（账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单）；写操作不提供命令
+## trade：交易：账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单；写操作默认只预览，--yes 才执行
 
 | 命令 | 说明 |
 | --- | --- |
@@ -413,6 +413,25 @@
 | `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断） |
 | `trade positions` | 列出持仓 |
 | `trade shadow list` | 列出试运行中的策略实例最近的影子目标（权重、换算出的数量，从新到旧） |
+| `trade account create` | 新建实盘或测试网交易账户（`--environment`、`--credential-secret-id`；默认只预览，--yes 才执行） |
+| `trade account update` | 修改交易账户：只改给出的字段（名称、密钥、状态、模拟账户订单保留天数等；默认只预览，--yes 才执行） |
+| `trade account leverage` | 设置杠杆（`--instrument-id '*'` 是账户默认值；默认只预览，--yes 才执行） |
+| `trade account sync` | 立即同步交易账户的余额与持仓 |
+| `trade account reinspect` | 重新检测交易账户的类型与权限（检测出问题时可能连带暂停所在组合） |
+| `trade account flatten` | 平掉交易账户的全部持仓（默认只预览，--yes 才执行） |
+| `trade logical create` | 新建逻辑账户（默认只预览，--yes 才执行） |
+| `trade logical update` | 修改逻辑账户名称（默认只预览，--yes 才执行） |
+| `trade logical order-settings` | 修改组合的下单设置：先取回已有设置，只改给出的字段（默认只预览，--yes 才执行） |
+| `trade logical fund-settings` | 修改组合的资金设置，如 `--reserve-ratio 0.05`：先取回已有设置，只改给出的字段（默认只预览，--yes 才执行） |
+| `trade logical add-member` | 把交易账户加进组合或修改已有成员：每次整条覆盖，`--enabled` 与 `--priority` 都要给（默认只预览，--yes 才执行） |
+| `trade logical remove-member` | 把交易账户移出组合（默认只预览，--yes 才执行） |
+| `trade logical pause` | 暂停组合的自动执行（默认只预览，--yes 才执行） |
+| `trade logical resume` | 恢复组合的自动执行（默认只预览，--yes 才执行） |
+| `trade logical flatten` | 清仓整个组合（默认只预览，--yes 才执行） |
+| `trade order submit` | 人工下单（默认市价；限价单要给 `--limit-price` 与 `--fill-policy`；超时后先查 `trade actions` 再用 `--data` 带原 ID 重试；默认只预览，--yes 才执行） |
+| `trade order cancel` | 撤单（默认只预览，--yes 才执行） |
+| `trade paper create` | 新建模拟账户，并新建或加入一个组合（默认只预览，--yes 才执行） |
+| `trade paper close` | 关闭模拟账户（默认只预览，--yes 才执行） |
 
 ## udf：自定义算子（wasm UDF）：new → build → publish → preview → activate
 

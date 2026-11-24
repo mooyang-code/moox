@@ -3,7 +3,7 @@
 每个模块列出：做什么、在哪台机器、常用命令、细节文档。管理台上的操作和各模块的主要操作都有专用命令；
 没有专用命令的底层接口才用 `moox-cli gateway call`，请求写法见 [`api-recipes.md`](api-recipes.md)。
 命令都在产物包（或仓库）根目录执行，默认读取当前目录的 `moox.toml`（`--file` 指定），不需要手工建隧道或设置环境变量。
-交易模块已支持现货、永续多市场执行与人工下单，但 Agent 只用 `trade …` 查询：不代用户创建或修改账户、下单、撤单、清仓或解除下架禁止，也不向交易所下真实订单；实盘前须先跑测试网冒烟，币安统一账户的现货买单资金来源等要等用户本人小额实测（`docs/模块/交易.md` 第 12 节）。
+交易模块已支持现货、永续多市场执行与人工下单，`trade …` 命令覆盖查询与写操作（写操作默认只预览，`--yes` 才执行；实盘账户上的写操作（下单、撤单、清仓、暂停恢复、改设置、改杠杆）执行前要先得到用户在对话里的明确同意，模拟账户可以直接做）；实盘前须先跑测试网冒烟，币安统一账户的现货买单资金来源等要等用户本人小额实测（`docs/模块/交易.md` 第 12 节）。
 
 **通用约定**
 
@@ -120,11 +120,11 @@
   启用后先预热，预热完成前不求值、不能 `confirm`；研究回放支持，只能用结果 View 来源（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
 - **注意**：一个因子任务可以被多个实例引用，只有写了 `factor_params` 的实例启用时独占关联它（一个任务只关联一个实例）；实例的任务在创建时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
 
-## 交易（只读）
+## 交易
 
 - **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘（币安、OKX、A 股、港股；A 股与港股只有模拟盘，港股按港元结算、每手股数逐只不同、当日买入可卖）；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
 - **在哪**：组件 `trade`，默认海外机（`[deployments]` 决定）。
-- **常用**（都是只读，写操作由用户在管理台做）：
+- **常用**（查询；写操作见 `command-index.md` 的 trade 一节，默认只预览，`--yes` 才执行）：
 
 ```bash
 ./bin/moox-cli trade logical list|show|target                      # 组合账户与当前策略目标
@@ -133,9 +133,11 @@
 ./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
 ./bin/moox-cli trade blocked list                                  # 下架名单（全局）
 ./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+./bin/moox-cli trade logical fund-settings --logical-account-id <ID> --reserve-ratio 0.05 --yes   # 改资金预留比例（先取回已有设置再合并）
+./bin/moox-cli trade logical pause|resume --logical-account-id <ID> --yes   # 暂停、恢复组合的自动执行
 ```
 
-- **注意**：Agent 不创建实盘账户、不下单、不清仓、不解除下架禁止（用户在管理台交易页的下架名单里查看与解除）；保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后在管理台手动恢复。
+- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台交易页的下架名单里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
 - 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`trade_attention`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控
