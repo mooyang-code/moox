@@ -1,16 +1,16 @@
 package command
 
-// 交易（TradeConsoleService）只读查询。账户创建与修改、下单、撤单、平仓、纸面模拟、下架名单的写入与解除等写操作由用户在管理台自己做，
-// 不提供命令；Agent 也不代用户创建实盘账户、下单、清仓或解除下架禁止。
+// 交易（TradeConsoleService）只读查询。写操作见 rpc_specs_trade_write.go。
 
 const tradeConsole = "trpc.moox.trade.TradeConsoleService"
 
 func init() {
-	rpcGroupShort["trade"] = "交易：只读查询（账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单）；写操作不提供命令"
+	rpcGroupShort["trade"] = "交易：账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单；写操作默认只预览，--yes 才执行"
 	rpcGroupShort["trade account"] = "交易账户"
 	rpcGroupShort["trade logical"] = "逻辑账户"
 	rpcGroupShort["trade order"] = "订单"
 	rpcGroupShort["trade blocked"] = "下架名单"
+	rpcGroupShort["trade paper"] = "模拟账户"
 	rpcGroupShort["trade shadow"] = "试运行中的策略实例发来的影子目标（只换算、不下单）"
 
 	registerRPCSpecs(
