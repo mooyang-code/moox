@@ -2,7 +2,7 @@
 
 Trade 应用层只依赖统一 `execution.ExecutionAdapter`；行情和账户事件分别通过
 `execution.MarketDataSource`、`execution.AccountEventSource` 注入。Binance 和 OKX 的
-REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文记录当前仓库的调用映射，不声明交易所最新接口规范；实现分别在 `internal/exchange/binance/` 与 `internal/exchange/okx/`。
+REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文记录当前仓库的调用映射，不声明交易所最新接口规范；实现分别在 `internal/exchange/binance/` 与 `internal/exchange/okx/`。A 股、港股只有模拟盘：`internal/exchange/ashare/`、`hkex/`、`stockfeed/` 只提供公共行情（腾讯快照）、交易时段和标的列表，没有下单接口，不在本文范围。
 
 ## 公共能力
 
@@ -10,7 +10,7 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 | --- | --- | --- |
 | SPOT instrument | `/api/v3/exchangeInfo` | `/api/v5/public/instruments?instType=SPOT` |
 | USDT 线性 SWAP instrument | `/fapi/v1/exchangeInfo` | `/api/v5/public/instruments?instType=SWAP` |
-| 目标换算参考价 | `/api/v3/ticker/price` 或 `/fapi/v1/ticker/price` 的 `price` | `/api/v5/market/ticker` 的 `last` |
+| 目标换算参考价 | `/api/v3/ticker/price` 或 `/fapi/v1/ticker/price` 的 `price` | `/api/v5/market/ticker` 的 `last`（全市场价格用 `/api/v5/market/tickers`） |
 | 撮合报价 | `ticker/price` 加 `ticker/bookTicker`（现货 `/api/v3`，合约 `/fapi/v1`），时间取本地收到时间 | `/api/v5/market/ticker`，时间取本地收到时间 |
 | MARKET / LIMIT 下单 | `POST /api/v3/order` 或 `/fapi/v1/order` | `POST /api/v5/trade/order` |
 | 按 client order ID 查询 | origClientOrderId | clOrdId |
@@ -89,7 +89,7 @@ sapi 接口在现货域名上，统一账户和普通账户共用，签名与其
 
 明确的参数、余额或权限拒绝是终态错误。网络 EOF、超时、HTTP 408 和 HTTP 5xx 表示
 提交结果未知：订单保持 `SUBMIT_UNKNOWN`，下一步必须按 client order ID 查询。
-订单号重复说明原单可能已被受理，不能当拒单：币安现货 -2010（msg 含 `Duplicate order`）、合约 -4116、OKX 51016 归结果未知（保留原错误码），按 client order ID 查询认领。-1000（未知错误）、-1001（内部错误）官方没有保证订单未被受理，同样归结果未知；-1016 是确定未受理，保留拒单。-2010 其余按 msg 细分：含 `insufficient balance` 的归余额不足，其余归拒单。
+订单号重复说明原单可能已被受理，不能当拒单：币安现货 -2010（msg 含 `Duplicate order`）、合约 -4116、OKX 51016 归结果未知（保留原错误码），按 client order ID 查询认领。-1000（未知错误）、-1001（内部错误）官方没有保证订单未被受理，-1006、-1007（后端响应异常或超时）官方说明执行状态未知，同样归结果未知；-1016 是确定未受理，保留拒单。-2010 其余按 msg 细分：含 `insufficient balance` 的归余额不足，其余归拒单。
 限流类错误确定未受理，这类下单回到 `PENDING` 并清空提交时间，不计入拒单。两家的口径不同：
 
 - 币安：HTTP 429、-1003 是 IP 级限流，418 是 IP 封禁，WAF 403 是网关拦截，三者都暂停同一域名（没有 `Retry-After` 时分别暂停 10 秒、2 分钟、30 秒，有则按它）；-1015 是账户下单限流，只暂停该账户下单（默认 10 秒）；-1008 是系统限流，只暂停该账户下单 2 秒。

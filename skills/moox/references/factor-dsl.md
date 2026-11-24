@@ -52,7 +52,7 @@ cross_section_history: current     # 可选，只对截面因子有效：current
 
 - 输入列就是表达式里出现的源数据列名（`open`、`high`、`low`、`close`、`volume`、`quote_volume` 等，以源数据集实际的列为准），不用声明。
 - 名字（因子 ID、输出名、参数名）一律小写：`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`，名字内部用单下划线，不能连续下划线（双下划线留给成员键与列名的分段）；
-  因子 ID 最长 24 个字符，输出名与参数名最长 16 个字符。`params`、`let` 的名字也不能与函数、系统列（`subject_id`、`freq`、`data_time`、`series_tag`）或 `true`/`false`/`nil`/`nan` 重名。
+  因子 ID 最长 24 个字符，输出名与参数名最长 16 个字符。`let` 的名字是小写字母开头、只含小写字母、数字和下划线，最长 32 个字符。`params`、`let` 的名字也不能与函数、系统列（`subject_id`、`freq`、`data_time`、`series_tag`）或 `true`/`false`/`nil`/`nan` 重名。
 - 输出：单输出因子写 `output: <表达式>`，没有输出名，列名就是成员键；多输出因子写 `outputs`（至少两个），输出名不能等于因子 ID、不能是 `var`、不能匹配参数值语法（如 `n5`），也不带因子前缀（写 `mid`，不写 `boll_mid`）。
   只有确实共用同一组参数的输出才放在一个因子里；不共用参数的拆成独立因子，引擎同一期合并公共子表达式，不会多算。
 - 语法：数字、`true`/`false`、空值常量 `nan`、标识符、`+ - * / % **`、比较 `== != < <= > >=`、`and`/`or`/`not`、`c ? a : b` 和函数调用；
@@ -65,7 +65,7 @@ cross_section_history: current     # 可选，只对截面因子有效：current
 - 回看由编译推导：`ts_*` 为 L(x)+n−1，`delay`/`delta`/`pct_change` 为 L(x)+k，嵌套相加（`ts_rank(ts_mean(x, 20), 20)` 是 39）；
   `ema`/`sma` 截断到起点权重低于 1e−9 的 K 根（`ema(x, 20)` 为 208）；`ema(x, n, k)` 显式指定预热总根数 K=k（含起点那一根，窗口里最老的一根作为递推初值）：`ema(close, 20, 50000)` 是 EMA20 用 5 万根预热，k 不写或为 0 按通常方式；`ema(close, 50000, 50000)` 的起点权重约 13%，是近似值。
 - 用到任何截面函数（`cs_*`、`gs_*`、`gx_*`）的因子是截面因子，否则是时序因子。
-- 限制：spec 64 KiB，单条表达式 4096 字符、512 个节点，最多 16 个参数，展开后最多 64 个输出，窗口 1～100000，回看不超过 100000；实际可用的回看还受数据源回看数量、保留期与引擎 `window.lookback` 的限制。
+- 限制：spec 64 KiB，单条表达式 4096 字符、512 个节点，一个因子内联 `let` 之后全部输出合计不超过 4096 个节点，最多 16 个参数、64 个输出，窗口 1～100000，回看不超过 100000；实际可用的回看还受数据源回看数量、保留期与引擎 `window.lookback` 的限制。
 
 ### 成员键与列名
 
@@ -381,7 +381,7 @@ n 按最长的缺值间隔取，验收时统计窗口内没有有效值的点数
 | 离散跳变 | 排名类列（`--discrete`）超出容差 | 不超过双方有值点的 1%（`--max-discrete-ratio`）时允许 |
 | 超差 | 其余超出容差 | 失败 |
 
-另外，两份结果里都不能有身份重复的行，比较区间（`--start`、`--end`）内的行集合必须一致，输出列名必须与原因子相同（只在用户同意改名时用 `--rename`）。
+另外，两份结果里都不能有身份重复的行，比较区间（`--start`、`--end`）内的行集合必须一致，原因子的每个输出列都要在 DSL 结果里有对应的列（列名不同时用 `--rename 原列名=DSL 列名`，见第 6 节第 5 条）。
 回看从 `--check`（`factor-expr.sh check` 的输出）读取：因子回看用于空洞判定，每个输出的回看用于暖机判定；没有它时用 `--lookback` 手填，所有输出共用。
 方差、标准差、z 分数类在价格量级上可以放宽到 `--column-rtol 列名=1e-7`（pandas 在线算法自身的误差）。
 排名类（`ts_rank`、`cs_rank` 及以它们为最外层的输出）标为 `--discrete`：pandas 的滑动和在内容相同的窗口上会差末位，打破本该存在的并列，DSL 用精确求和保住并列。
@@ -400,9 +400,10 @@ n 按最长的缺值间隔取，验收时统计窗口内没有有效值的点数
    主验收用连续且与生产实际输入一致的数据；带空洞的原始 CSV 只验证离线工具行为（`synthetic --gaps N`），不能证明与生产结果等价。
    空洞会让一致样本变少，排名类的跳变比例可能超过 1%，这不代表写法错误。
 4. **公式照抄，不“修正”**：例如旧 Bias 是 `close / 均值`（没有减 1），转写时保持 `close / ts_mean(close, window)`；要改公式是另一件事，必须用户明确要求。
-5. **输出列名不变**：结果列按名字落盘，改名等于新因子，历史数据接不上。`output_names` 的取值要原样写进列名模板或单独的输出里。
+5. **输出列名**：列名由成员键推导（因子 ID、参数段、输出名，见第 3 节“成员键与列名”），不能另起别名，也没有列名模板。旧列名里带参数值的（例如 `bias_20`）写不出原名，转写后是 `bias`（默认参数）或 `bias__30` 这类名字；
+   结果列按名字落盘，列名变了历史数据接不上，要告诉用户。`compare` 用 `--rename 原列名=DSL 列名` 对应两边的列。
 6. **参数默认值**：旧代码 `params.get("window", 20)` 的默认值要写成显式 `params`；目录里的 `params` 才是生产实际用的值。
-7. **分母为 0**：pandas 得 ±Inf 再归一为 null，DSL 直接为 NaN，结果一样；但 `0/0` 之外的退化（如窗口内常数导致 std=0）会在 DSL 里稳定为空，归入“其后新空”时要逐条确认。
+7. **分母为 0**：pandas 得 ±Inf 再归一为 null，DSL 直接为 NaN，结果一样；但 `0/0` 之外的退化（如窗口内常数导致 std=0）会在 DSL 里稳定为空，归入“其余新空”时要逐条确认。
 8. **`lookback_periods`**：旧目录里是手填的，DSL 以 `check` 推导的为准；两者不一致时在汇报里说明（推导值偏大说明原来手填偏小，原因子在窗口不满时其实在用不完整的数据）。
 9. **截面因子**：确认原因子是按 `(data_time, series_tag)` 分组，还是只按 `data_time`；DSL 固定按 `(data_time, series_tag)`。原来跨 series_tag 混排的写法需要和用户确认。
 10. **`context`**：旧 worker 传入 `period_time`（目标周期的 Unix 秒）、`frequency`、`period_times`（本次输入覆盖的周期），时序因子另有 `subject_id`，
@@ -421,7 +422,7 @@ n 按最长的缺值间隔取，验收时统计窗口内没有有效值的点数
 在工作目录（例如 `./factor-convert/<factor_id>/`）新建 `lib.yaml`，内容与正式因子库格式相同：
 
 ```yaml
-- factor_id: zf_abs_mean         # 小写 snake_case（原 zf_abs_mean）
+- factor_id: zf_abs_mean         # 小写 snake_case（原 ZfAbsMean）
   name: 上涨振幅均值分位          # 展示名
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
@@ -440,7 +441,7 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 "$SKILL_ROOT/scripts/factor-expr.sh" check --library ./factor-convert/zf_abs_mean/lib.yaml
 ```
 
-必须 `"ok":true`，并核对：`outputs` 与原输出列完全相同；`input_columns` 都在源数据集里；`factor_type` 与原来一致；记下 `lookback`。
+必须 `"ok":true`，并核对：`outputs` 与原输出列一一对应（列名不同的逐个记下，比较时用 `--rename`，见第 6 节第 5 条）；`input_columns` 都在源数据集里；`factor_type` 与原来一致；记下 `lookback`。
 失败时按 `error.path` 与行列修改后重试。
 
 ### 7.4 准备数据
@@ -489,8 +490,11 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 W=./factor-convert/zf_abs_mean
 "$SKILL_ROOT/scripts/factor-expr.sh" check --library "$W/lib.yaml" > "$W/check.jsonl"
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" --actual "$W/dsl.csv" \
-  --freq 1m --check "$W/check.jsonl" --factor-id zf_abs_mean --discrete zf_abs_mean --report "$W/report.json"
+  --freq 1m --check "$W/check.jsonl" --factor-id zf_abs_mean --rename zf_abs_mean_20=zf_abs_mean \
+  --discrete zf_abs_mean --report "$W/report.json"
 ```
+
+原因子的输出列是 `zf_abs_mean_20`，DSL 的列是 `zf_abs_mean`，所以要 `--rename`；`--discrete` 写 DSL 的列名。
 
 真实数据和合成数据都要通过（退出码 0）。未通过时：
 
@@ -540,13 +544,12 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
 
 **同一个因子的多组参数**：定义里用 `params` 声明可调参数，一个定义可以用不同的固定参数多次加入同一个因子任务，
 每个成员带自己的参数，成员键按参数生成（全默认就是因子 ID，否则“因子ID__值1_值2…”，按声明顺序写全部参数值）。
-不要为了换参数新建把参数写死的定义（例如 `ema20_warmup50000`）。`moox.toml` 里的写法：
+不要为了换参数新建把参数写死的定义（例如 `ema20_warmup50000`）。因子任务文件里的写法（写在任务的 `members` 下；`moox.toml` 里不写因子任务）：
 
-```toml
-members = [
-  { factor = "ema", params = { span = 20, warmup = 50000 } },   # 没给的参数取定义的默认值 → 成员键、列名 ema__20_50000
-  { factor = "ma_fast", var = true },                             # 可变成员，由关联的策略逐期提交参数 → ma_fast__var
-]
+```yaml
+members:
+  - {factor: ema, params: {span: 20, warmup: 50000}}   # 没给的参数取定义的默认值 → 成员键、列名 ema__20_50000
+  - {factor: ma_fast, var: true}                       # 可变成员，由关联的策略逐期提交参数 → ma_fast__var
 ```
 
 固定参数加成员之后不再改，要换参数就另加一个成员；可变成员的 `params`（可省略）是默认参数，策略还没提交过时用它。
@@ -589,7 +592,8 @@ members = [
 3. **停用引用它的成员**：对 `usages` 里每个状态为 `enabled` 的成员执行 `factor member disable`。停用期间该成员的结果列不再产出，依赖它的策略实例拿不到这一列（实际表现未逐项验证），所以先告诉用户，并按需先停用相关策略实例。
 
    ```bash
-   moox-cli factor member disable --task-id ftask_xxx --member-key upper_shadow__12
+   moox-cli factor member disable --task-id ftask_xxx --member-key upper_shadow__12          # 只预览
+   moox-cli factor member disable --task-id ftask_xxx --member-key upper_shadow__12 --yes    # 确认后执行
    ```
 
 4. **更新定义**：先用 `factor show` 读回原定义，只改 `spec`，把整个 `factor` 对象原样放进 `--data @update.json`（`{"factor": {…}}`）再 `factor update --data @update.json`，避免丢字段；返回的 `definition_hash` 应与第 2 步一致。

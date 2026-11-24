@@ -79,7 +79,7 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 - 每台主机的 `secrets/moox-ca.crt` 的 SHA-256 与控制机的根证书一致。
 - Host Agent：Monitor 收到新样本，日志没有 `Authorization Violation` / `certificate signature failure`。
 - EventBus `ss`：`FIN-WAIT-2` 不因某一客户端 IP 持续堆积。
-- Storage View：日志里没有 `delivery ack failed: nats: connection closed`。
+- Storage View（只向 EventBus 发布就绪事件，不消费）：日志里没有 `View 就绪事件发布器重连 EventBus 失败`。
 - Monitor：Host snapshot 与 View 水位在轮换后继续前进。
 
 ## 常见借口

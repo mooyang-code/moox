@@ -118,7 +118,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 ## 5. 默认初始化的范围
 
 “系统默认配置”取字面意思：仓库 `config/setup/*.yaml` 的种子（Space、元数据、默认采集任务、数据集健康策略、默认因子任务 `factor-tasks.yaml`）。Collector 首次启动会把随部署放到 `<部署根>/config/collector/collection-tasks.yaml` 的种子写成默认采集任务
-（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认有币安现货 1m、币安合约 1m（crypto 空间）、A 股 5m 和两条 A 股日线（stockcn，沪深 300 成分股；一条纯日线，一条带复权、申万行业、财务的附加字段，见 [`ashare-daily.md`](ashare-daily.md)），都是停用状态，`setup start --space-id <空间>` 才启用（会启用这个空间里停用的 K 线任务；两条日线任务标了 `start: manual`，`setup start` 跳过并在输出里提示，要用 `collector task update --enabled=true` 显式启用），安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 的内置任务采集方式是 `stream`（由 collector-stream 推送采集并补采，市场默认值），A 股与港美股是 `scf`，不需要手工切换；crypto 不依赖云函数，首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认。`ingest-mode get` 建好任务就能查到。
+（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认有币安现货 1m、币安合约 1m（crypto 空间）、A 股 5m 和两条 A 股日线（stockcn，沪深 300 成分股；一条纯日线，一条带复权、申万行业、财务的附加字段，见 [`ashare-daily.md`](ashare-daily.md)）、港股 5m（stockhk，恒指成分 `hk_hsi`）和美股 5m（stockus，标普 500 成分 `us_spx`），都是停用状态，`setup start --space-id <空间>` 才启用（会启用这个空间里停用的 K 线任务；两条日线任务标了 `start: manual`，`setup start` 跳过并在输出里提示，要用 `collector task update --enabled=true` 显式启用），安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 的内置任务采集方式是 `stream`（由 collector-stream 推送采集并补采，市场默认值），A 股与港美股是 `scf`，不需要手工切换；crypto 不依赖云函数，首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认。`ingest-mode get` 建好任务就能查到。
 
 ### 默认展示策略（合约双均线）
 
@@ -141,7 +141,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ### 港股空间（stockhk）
 
-港股的采集上线步骤（`[scf_plan]` 加 stockhk、上传代码包、建标签与任务）见 `docs/模块/采集.md` 第 4c 节。`setup start --space-id stockhk` 在启用采集之后：
+全新部署时标签 `hk_hsi` 与任务“港股 K 线 5m”已由种子建好（默认停用）；其余采集上线步骤（`[scf_plan]` 加 stockhk、上传代码包）见 `docs/模块/采集.md` 第 4c 节。`setup start --space-id stockhk` 在启用采集之后：
 
 1. 导入因子任务 `ftask_hk_5m`（只有 `ma__5`、`ma__10`）；
 2. 创建观察实例 `default_dual_ma_hk_5m`（[`examples/strategies/dual_ma_hk_5m.yaml`](../../../examples/strategies/dual_ma_hk_5m.yaml)，不挂账户）。这个策略分两批、每批每个交易日重选一次（两批错开半天），预算 0.98（留 2% 现金），

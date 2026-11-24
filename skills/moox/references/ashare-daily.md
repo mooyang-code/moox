@@ -13,7 +13,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 - **换手率有完整历史，股本这一组只有开通以后的值。** 股本、每股股利、是否 ST 来自只有当日值的接口，补历史时这些列是空的（只有最近一个交易日可能写上）；所以市值、市盈率这类因子只能从开通日起用。平日某天没采到，那一天的股本也补不回来（内置的市值、估值因子会沿用最近 20 个交易日里的值）。
 - **沪深 300 里没有 ST 股**，`is_st` 在这个股票池里基本恒为 0。
 
-全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`，下面带这个参数的命令（`collector`、`factor`、`strategy`、`metadata field list`）都要写 `--space-id stockcn`；`metadata import`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
+全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`（`collector kline`、`collector status`、`collector fetch-plan`、`collector task create/delete` 没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`、`metadata field list`）都要写 `--space-id stockcn`；`metadata import`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
 
 ## 0. 前提
 
@@ -240,7 +240,7 @@ portfolio: {max_missing: 0.2}
   --factor-task equity=<5m 因子任务> --factor-task daily:equity=<日线因子任务>
 ```
 
-- A 股的来源只能是 `1d`，主帧必须是日内周期。一个因子任务只能绑给一个实例，创建后不能改。
+- A 股的来源只能是 `1d`，主帧必须是日内周期。一个因子任务可以被多个实例引用；实例绑定的因子任务创建后不能改。
 - 申万行业只有代码（`sw_l1` 如 `480000`），没有中文名。没有申万记录的股票分组列为空，按缺数处理，计入 `max_missing`。
 - 日线实时采集失败时，要到再下一天 08:00 之后才自动补上，这期间来源列按缺数处理；不想因此清仓的规则配 `on_missing: {keep_bars: N}`，或者按第 3 节手工补采那一天。
 - 完整的创建、启用、试运行流程见 [`strategy-dsl.md`](strategy-dsl.md)；例子的逐条说明见 `docs/策略DSL手册.md` 12.11。

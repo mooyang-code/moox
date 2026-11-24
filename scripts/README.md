@@ -4,11 +4,12 @@
 
 | 目录 | 职责 |
 | --- | --- |
-| `build/` | 编译二进制、构建运行时包和服务包 |
+| `build/` | 编译二进制、构建前端与云函数代码包、打包 skill、检查构建环境 |
 | `check/` | 静态检查、架构检查和事件契约检查 |
 | `ci/` | CI 环境辅助逻辑 |
 | `deploy/` | 在本机安装 MooX CA 根证书信任（`install-moox-ca.sh`） |
 | `marketdata/` | 行情日历维护和校验 |
+| `release/` | 生成发布产物、发布到 CNB |
 | `test/contract/` | 源码、配置和打包契约测试 |
 | `test/e2e/` | 需要真实进程或外部依赖的端到端测试 |
 | `test/gates/` | 用预先编译的产物起真实进程联调：主机网关与 Admin（要 Linux）、EventBus 用主机证书 |

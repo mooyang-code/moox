@@ -31,7 +31,7 @@ Never pass `--config`, rely on the CLI's relative default config path, or use `M
 - Always provide `--data-type`. Map 加密货币 or crypto to `crypto`, and A 股 to `stockcn`.
 - Add `--exchange` when the user names one. Otherwise omit it so the data type's configured default is used; `crypto` currently defaults to `binance`.
 - Pass the user's `--symbol` unchanged. Do not rewrite `BTC-USDT` as `BTCUSDT`, change case, or guess a pair.
-- Pass the requested `--interval` and use the packaged catalog exactly. The current seed exports Binance spot `1m` and `1h`, and A-share `1m`; an older package can have fewer entries. Regenerate the package after changing collection tasks.
+- Pass the requested `--interval` and use the packaged catalog exactly. The current seed exports Binance spot `1m`, and A-share (`stockcn`, CSI 300) `5m` and `1d`; an older package can have fewer entries. Regenerate the package after changing collection tasks.
 - A unified dataset (one dataset holding both the spot and the swap series of a symbol) is read with `--market spot|swap`. The CLI first probes which series the dataset has for the symbol, picks the one whose `series_tag` belongs to that market (`market:spot` / `market:swap` segment; a tag without a `market:` segment counts as spot), then reads it, so `--limit` and the time range apply to that one market. Without `--market` the exchange's configured `series_tag` is used (one read, unchanged). It fails when the dataset has no series of that market for the symbol or more than one.
 - Use `--limit` for a requested count (`1..1000`); otherwise the CLI default is `100`.
 - Use RFC3339 `--from` and `--to` only when the user supplies a time range. The start must be strictly before the end.

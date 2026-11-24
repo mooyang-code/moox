@@ -19,7 +19,7 @@ go test -count=1 ./modules/admin/...
 ## 离线初始化与恢复
 
 `moox-admin-cli bootstrap` 不依赖运行中的服务，参数为 `--topology-file`、`--db-path`、`--encryption-key-file`、`--pki-dir`、`--output-dir`、`--operator-public-key`，
-以及可选的 `--current-sign-public-key`、`--current-scf-collector-public-key`（目标机上现有私钥的公钥）。拓扑输入是部署 CLI 提取的 0600 JSON（版本 1），只含 `control_host_id` 和 `hosts`；每台主机包含 `host_id`、`address`、可选的 `private_address`、`region`、`description` 及完整业务 `components` 列表。主机组件由 DAO 自动维护，不能出现在该列表中。
+以及可选的 `--current-sign-public-key`、`--current-scf-collector-public-key`（目标机上现有私钥的公钥）。拓扑输入是部署 CLI 提取的 0600 JSON（版本 1），只含 `control_host_id` 和 `hosts`；每台主机包含 `host_id`、`label`、`address`、可选的 `private_address`、`region`、`description`、可选的 `reachability`（`outbound` 表示只能出站）、`external_entry`（网关开外部入口）、`ssh`（控制台终端登录信息）及完整业务 `components` 列表。主机组件由 DAO 自动维护，不能出现在该列表中。
 
 命令建立 schema，按与在线 API 相同的校验在一个事务内写入拓扑、登记操作电脑的 `moox-cli` 公钥（只在还没登记时写入，重复执行不改）、决定控制机的签名密钥，验证或生成 MooX CA，提交后发布控制机的身份包。
 签名密钥的规则：目标机上现有私钥的公钥和登记的一致就原样沿用，包里没有私钥；不一致或没有时生成一把新的 ed25519 私钥、登记公钥，私钥只写进这一次的身份包，Admin 不保留。
@@ -33,7 +33,7 @@ Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密�
 该命令只使用现有数据库和 CA，从持久拓扑读取目标地址与完整部署，按上面的规则决定这台主机的签名密钥（`--rotate-sign-key` 显式更换），再为本次部署重签主机证书并发布新的 0700 包；所有文件为 0600。
 停用主机的材料也可签发，启停状态保持不变。未登记主机、错误控制主机、丢失或损坏的 CA 都会失败，不发布任何包。
 
-身份包里只有：`host.key`（新签发时）、`host.crt`、`host.tls.key`、`moox-ca.crt`，控制机另有 `scf-collector.key`（新签发时），以及清单 `bundle.json`。
+身份包里只有：`host.key`（新签发时）、`host.crt`、`host.tls.key`、`moox-ca.crt`，部署了 collector 的主机另有 `scf-collector.key`（新签发时），以及清单 `bundle.json`。
 CA 私钥和 Admin 主密钥不进入任何输出包。`bundle.json` 的 `files` 覆盖全部载荷文件（自身除外），记录 SHA256 与长度，供部署端传输时核对。
 `moox-admin-cli keys set|list|delete` 登记、列出、删除不属于主机的身份的公钥（`moox-cli`、`scf-collector`、`moox-skill`、`collector-operator`）；组件名与 `console` 不能登记成身份。
 

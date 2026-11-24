@@ -21,14 +21,14 @@ Use this skill for MooX production-like debugging that crosses local code, remot
 - Do not print Tencent SecretKey, service access secret, SSH password, or signed headers in final answers.
 - Prefer `moox-cli` commands and bundled MooX scripts over manually repeating fragile Tencent API calls.
 - For destructive operations, confirm the target resource name, region, namespace, account, and package version before acting.
-- Treat old standalone collector repository paths as historical only; current collector code and SCF package build logic live under `modules/collector`.
+- Collector code and SCF package build logic live under `modules/collector`.
 - For frontend requests, management APIs must go through `/api/admin`; service-to-service calls are signed tRPC through the local host gateway (`packages/gatewayclient`, loopback `11002`, cross-host TLS `11003`), and external callers (SCF, Skill, the collector-operator tool) enter through the external entry (`11004`) of an entry host's gateway with their own signed identity; the factor engine and archive worker are ordinary components that sign with the factor host key and use `11003`.
 
 ## Boundary Checklist
 
 Use this order unless evidence points elsewhere:
 
-1. Local build: the SCF package contains `main`, `sources/` and (for stockcn) market assets.
+1. Local build: the SCF package contains `main` and `sources/` (market files and trading calendars are compiled into the binary).
 2. Package upload: COS object exists and region/bucket/key match the publish request.
 3. SCF function: exists in the expected region and namespace, with the latest package and the managed environment (`collector function list --drift`).
 4. Timer path: the trigger is enabled with the expected cron (same command; unplanned functions are listed separately with their timers stopped).
@@ -50,6 +50,5 @@ Use this order unless evidence points elsewhere:
 ## Common Mistakes
 
 - Assuming a Timer fired because the function exists; check the Timer readback, effective fetch plan, and invocation logs.
-- Rebuilding collector code from an old standalone checkout instead of `modules/collector`.
 - Looking only at Storage rows without checking the period state (`complete`/`degraded`) and the downstream period event.
 - Debugging frontend 404s against service paths when the frontend must use `/api/admin`.

@@ -43,14 +43,14 @@ market:
 | both | swap | 两边选，永续优先 | 现货、永续各 1 个 |
 | spot | swap | 现货选币，有永续就用永续下单 | 现货、永续各 1 个 |
 
-- 不写 `market` 时按实例唯一绑定的因子任务的市场取默认值（现货任务就是 spot/spot）；绑定了两个任务必须写。`select` 为 spot 或 swap 时可省略 `prefer`。股票（A 股）不允许写 `market`。
+- 不写 `market` 时按实例唯一绑定的因子任务的市场取默认值（现货任务就是 spot/spot）；绑定了两个任务必须写。`select` 为 spot 或 swap 时可省略 `prefer`。股票（A 股、港股）不允许写 `market`。
 - 同一个币的现货和永续是两个独立的目标，不互相抵消；空头一律在永续。
 - 上期已持有正权重目标的币，本期沿用它所在的市场（避免永续偶尔缺数时来回倒仓），直到权重归零。
 - 一个市场的因子本期被跳过，或失败（时序因子在该市场整体晚到、读取的标的全部失败；失败的标的占比超过 `portfolio.max_missing`，已持仓的币即使年龄没通过也计入）时，这个市场的币本期不可用：已持仓的保持不动（包括永续空头），新开仓用另一个市场。选币市场、或所有市场都这样不可用时整期按 `market_failed` 跳过（数据类原因，不是“积累中”，持续出现要看数据集新鲜度告警）。只涉及单个市场的策略仍按普通缺数处理。
 - **两种输入方式**：同样的五种模式，因子数据可以是现货、永续各一个任务（`--factor-task spot=… --factor-task swap=…`），也可以是**统一数据集上的一个任务**（同一个数据集里放现货、永续两条序列，用 `series_tag` 区分；一个任务一个 View，`--factor-task multi=…`）。统一数据集上的任务必须显式写 `market`（没有可当默认值的市场），五种模式都能用，只绑这一个任务，不支持 `factor_params`、不能进策略池（研究回放可以）；建实例时要把任务登记为 `multi`。两种方式的目标一致：现货、永续两条序列并存不算歧义，永续上失败的币现货照常，永续的因子被跳过时永续不可用、已持仓的永续保持不动。
 - **规则级市场**：模式含两个市场（`both/*`、`spot/swap`）时，规则可写 `market: spot` 或 `market: swap`，这条规则只用该市场的因子值选择、目标也落在该市场，同一个币在两条规则里可以落在不同市场（不互相抵消）；不沿用上期持仓市场，缺数与年龄按这个市场判断，这个市场不可用时只冻结它在这个市场的持仓。写了它的策略必须显式写 `market`；单市场模式下只能写与策略相同的市场；`market: spot` 的规则不能做空。
 - 绑定两个任务的策略不支持 `factor_params`。
-- 行为变化：现货权重之和超过 1、总敞口超过 `leverage` 时，现在按比例缩小并在摘要注明，不再整期跳过。
+- 现货权重之和超过 1、总敞口超过 `leverage` 时，按比例缩小并在摘要注明，不会整期跳过。
 
 - **参考市场**：单市场策略可写 `market: {select: swap, reference: [spot]}`，额外绑定另一个市场的任务（`--factor-task spot=…`），只用于 `age_markets: all` 的年龄判定，不参与选择与下单。只能写模式不涉及的市场；必须有规则写 `age_markets: all`；不支持 `factor_params`、池成员不能写、统一数据集上的任务不能再写。
 
@@ -66,7 +66,7 @@ rules:
   - {id: pick, type: rank, filter: "daily.close > daily.ma__20", score: "rank(daily.mom__20)", select: {top: 5}, weight: 1}
 ```
 
-- 实例为每个来源按主帧的任务键各绑一个任务：`--factor-task daily:spot=…`（双市场主帧给 `daily:spot` 与 `daily:swap`，统一数据集写 `daily:multi`）。来源任务的周期要等于来源的 `bar`、是主帧周期的整数倍（A 股只能是 `1d`，主帧必须是日内周期），不能有可变成员。
+- 实例为每个来源按主帧的任务键各绑一个任务：`--factor-task daily:spot=…`（双市场主帧给 `daily:spot` 与 `daily:swap`，统一数据集写 `daily:multi`）。来源任务的周期要等于来源的 `bar`、是主帧周期的整数倍（股票，即 A 股、港股，只能是 `1d`，主帧必须是日内周期），不能有可变成员。
 - 每根主帧读来源里收盘时刻不晚于这根收盘时刻的最新一根（as-of）；读不到或缺了一期按缺数处理。收盘时刻对齐的那一根（如 00:00、A 股 15:00）等主帧与来源都到齐，其余时刻只等主帧；来源指纹变化在对齐的那一根触发 `factor_changed`。
 - 每个来源至少要被一个表达式或 `select.group.by` 引用，否则保存即拒绝。
 - 分组名额可以按来源列分组：`select: {top: 5, group: {by: daily.industry, max: 2}}`（来源名要已声明，列名部分是普通列名）。分组值取这一根主帧按 as-of 读到的来源值；读不到、缺一期或这一列为空的标的按缺数处理（`missing:daily.industry`），与主帧的分组列口径一致。
@@ -110,7 +110,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
     exposure:                               # 净敞口 = 多头 − 空头，各段按顺序执行
       bands:
         - {min: -0.1, max: 0.3, adjust: auto, pivot: 1.0}   # adjust：reduce_larger / raise_smaller / auto（auto 必须写 pivot）
-        - {when_gross_below: 1.0, min: 0, max: 0, adjust: raise_smaller}
+        - {when_gross_below: 1.0, min: 0, max: 0, adjust: raise_smaller}   # 条件也可以写 when_gross_above
     gross: {min: 1.0, max: 1.8}             # 总敞口区间（min、max 至少写一个）；第一根不放大；min、max 都不超过 portfolio.leverage
   ```
   超出区间按超出方向修正：净敞口高于 `max` 时 `reduce_larger` 缩多头、`raise_smaller` 放大空头；低于 `min` 时反过来。三者只改合成用的比例，步长仍按约束之前的比例算。
@@ -177,9 +177,10 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 - 保存时要求 `cap × 选中数量 ≥ total`（预算分得完；写了 `then` 时选中数量取 `then` 的个数；个数要到运行时才知道的写法跳过这项检查，即 `then` 写比例，或没写 `then` 而 `top`/`bottom` 写比例，分不完的留现金）。`select.top` 写成大于标的数的值就等于全选。
 - `select` 的扩展：`top: 0.1`（(0, 1) 是比例，分母是通过 filter 且分数有效的样本数）配 `count_round: floor | ceil | round`、`count_min`；`range: [10, 13]` 名次闭区间（与 top/bottom、buffer 互斥）；`group: {by: 列, max: 3}` 或 `{by: 列, quotas: [2, 1], rest: 1}` 分组名额（分组值 NaN 的不入选）；`then: {score: "表达式", top: 5}` 在第一段结果上二次排序（与 buffer、hold 互斥；`top`、`bottom` 也可以写 (0, 1) 的比例，分母是第一段选中且分数有效的个数，配 `count_round`、`count_min`）。
-- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`offsets: all` 等于写出 0 到 `bars − 1`，即每根重建一个批次、每个批次持有 `bars` 根（批次最多 64 个，所以这时 `bars` 不能超过 64；要更长就放大 `bars`、`offsets` 取稀疏的几个）；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
+- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`offsets: all` 等于写出 0 到 `bars − 1`，即每根重建一个批次、每个批次持有 `bars` 根（批次最多 64 个，所以这时 `bars` 不能超过 64；要更长就放大 `bars`、`offsets` 取稀疏的几个）；`anchor: "<RFC3339 的 bar_start>"`（也可写交易日期 `YYYY-MM-DD`，取该日第一根）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
 - `hold: {entry, exit, max_bars, cooldown_bars, allow_reentry}` 进出场持有：持有中 exit 为真、不满足 filter、持满 max_bars、止损、缺数即出场（stop 优先），空位按名次从 entry 为真且 exit 不为真的候选里补，目标数取 `select` 换算的个数（持有多于目标不裁减）。持有标的只缺 score、entry 的列时不出场。与 buffer、holding.bars/offsets、then、range、filter_after 互斥；可与 `holding.calendar`（只能一个 days）同写，只在建仓 bar 判进出场。；`allow_reentry: true` 让候选只看 entry（出场条件为真的标的也能入场、刚出场的标的当根可补回，要求 cooldown_bars 为 0），默认不写
 - `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}` 让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
+- 已持有的标的停牌时自动冻结，保持上期目标（明细 `held(suspended_hold)`），不用配置：不计入缺数比例，同批次其他标的照常换仓，复牌后解除；退市的持仓照常清零。回放不做停牌冻结，与实盘不同。
 - rank 表达不了的写法（参数表式的大量子策略、按数量持有、过滤条件里用名次或分位等）见 `docs/模块/策略.md` 的“表达不了的写法（已知限制）”表；`filter_after` 是保留条件（条件为真的留下），与外部框架“成立就剔除”的后置过滤方向相反。
 - `side` 取 `long`（默认）或 `short`；空头只走永续，纯现货与股票不允许做空。
 - `market: spot | swap` 是规则级市场（见第 1 节“market：市场模式”）。
@@ -218,7 +219,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 禁用与注意：
 
-- 内置函数一律禁用，只开放 `rank`、`zscore`（仅 `score` 中可用）。`rank` 同分取平均名次、单样本记 0.5；`zscore` 零方差记 0。
+- 内置函数一律禁用，只开放 `rank`、`zscore`（仅 `score` 与 `select.then.score` 中可用）和 `params`。`rank` 同分取平均名次、单样本记 0.5；`zscore` 零方差记 0。
 - `matches` 右边只能是字符串字面量的正则；`??`、范围 `..`、`in` 不可用。
 - 三元表达式 `a ? b : c` 两个分支类型必须一致。
 - 数字写法不超过 64 个字符、精度不超过 18 位小数、绝对值小于 10^9。
@@ -284,8 +285,8 @@ stop:
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段（规则上的 `entry`、`exit`、`candidates`、`tranche`、`params` 都已删除） | 按本文字段名核对 |
-| 保存即拒绝，提示 type 只能是 rank | `signal`、`tranche` 规则类型已删 | 固定标的择时写成显式 `pool` 加 `hold`（第 2 节“固定标的择时”）；每根开一批写成 `holding: {bars, offsets: all}` |
+| 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段（进出场条件写在 `hold` 下，规则上没有 `entry`、`exit`） | 按本文字段名核对 |
+| 保存即拒绝，提示 type 只能是 rank | 规则类型只有 `rank` | 固定标的择时写成显式 `pool` 加 `hold`（第 2 节“固定标的择时”）；每根开一批写成 `holding: {bars, offsets: all}` |
 | 回放被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | View 里的历史因子值是按当时提交的参数算的 | 加 `--input compute`；策略池、现货加永续两个任务与股票不支持现算，这类调参策略不能回放 |
 | 池定义保存被拒，提示成员不存在或不能进池 | 成员是池、用了 `factor_params`、写了 `sources` 或 `market.reference`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
 | 池实例启用被拒，提示成员没有显式写 market | 现货、永续成员必须写 `market`；只有池绑定 `equity` 任务时，成员按股票成员处理、可以不写 | 给成员策略补上 `market` |

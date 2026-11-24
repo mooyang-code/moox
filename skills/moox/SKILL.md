@@ -69,7 +69,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
   办法是换更大的机器、减少根数、缩短年龄上限或减少 View，不要建议调高单个 DuckDB 的内存上限。
 - **配置变更**：`moox.toml` 的改动（保留期、View 设置等）要重新部署对应主机才生效（`setup deploy --host <主机>`，配置每次部署都重新渲染）；个别组件要调的值写在 `[overrides]` 里。
   缩短保留期会在下次清理时删数据，先跟用户确认。不要手改主机上的配置文件，下次部署会被覆盖。
-- **View 与因子恢复**：先分别量 Primary、View、Factor 三层水位；不要手删 View 索引或 Factor 的 durable consumer，用 `moox-cli` 的对应命令（先 dry-run）；View 跟随变更日志，没有 consumer。
+- **View 与因子恢复**：先分别量 Primary、View、Factor 三层水位；不要手删 View 索引或 Factor 的 durable consumer，用 `moox-cli` 的对应命令（不带 `--yes` 先预览）；View 跟随变更日志，没有 consumer。
 - **主机与部署**：`t_hosts` / `t_deployments` 是唯一登记处，增删启停只走 `moox-cli setup …`，管理台只读。
 - **监控告警**：先判断是真问题、已删除对象的残留，还是重启造成的瞬时现象；不要手改 `monitor.db`，不要把重启当修复手段。
 - **采集或计划有问题**：不删任务、不用 `host exec` 改数据库、不用维护者脚本。先看 `collector status --space-id <空间>` 和 `setup verify` 给出的原因，走不通就停下来汇报。

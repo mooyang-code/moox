@@ -1,7 +1,7 @@
 # 管理台操作与命令对照（专用命令优先，gateway call 兜底）
 
 管理台上的每个操作都有对应的 `moox-cli` 专用命令（下面按页面列出）。专用命令把参数映射到请求字段，帮你省去拼 JSON，并对破坏性操作默认只预览。
-只有底层接口（Storage 数据面）没有专用命令，才用 `moox-cli gateway call` 直接调用内部服务（见文末）。
+只有少数接口（Storage 数据面的底层读写、人工结束钱包划转记录）没有专用命令，才用 `moox-cli gateway call` 直接调用内部服务（见文末）。
 交易模块已支持现货、永续多市场执行与人工下单。`trade` 命令覆盖查询和写操作，写操作默认只预览，`--yes` 才执行；实盘账户上的写操作（下单、撤单、清仓、暂停恢复、改设置、改杠杆）执行前要先得到用户在对话里的明确同意，模拟账户可以直接做。解除下架禁止仍由用户在管理台操作。
 
 改组合的资金预留比例（换算目标时从权益里扣掉的比例）：`moox-cli trade logical fund-settings --logical-account-id <组合> --reserve-ratio 0.05 --yes`。命令先取回已有资金设置再合并，其余设置不变。
@@ -12,7 +12,7 @@
 - 每个命令的 `--help` 写明对应的服务与方法。**字段名就是 proto 字段名（`snake_case`）**；字段多的写操作用 `--data @文件` 给出完整请求（`-` 读标准输入），各参数优先于 `--data`。
 - 输出是 JSON；`ret_info.code` 非 0 时先打印响应、再以非 0 退出。分页命令用 `--page`、`--page-size`（默认 1、50）。
 - **破坏性命令默认只预览**：不带 `--yes` 输出 `preview: true` 的 JSON（将要发出的请求），**把预览给用户看，确认后再加 `--yes`**。
-- 带 DSL、长文本的参数用文件：`--spec-file`、`--dsl-file`、`--template-file`（`-` 读标准输入），不要在命令行里拼多行 YAML。
+- 带 DSL、长文本的参数用文件：`--spec-file`、`--dsl-file`（`-` 读标准输入），不要在命令行里拼多行 YAML。
 - 带 `--space-id` 的命令默认空间是 `crypto`；策略服务按请求头里的空间取上下文，这些命令也都带 `--space-id`。
 
 ## 对照表
@@ -25,16 +25,18 @@
 | 数据 › 标的 | 标的、标签与成员 | `metadata subject list|show|upsert|resolve`、`metadata tag list|show|upsert|delete|list-members|member-status`、`metadata tag members|clone` |
 | 数据 › 字段 | 字段与分组 | `metadata field list|show|create|update|batch-update`、`metadata field-group list|show|create|update|delete` |
 | 数据 › 数据集、View | 数据集、列、View | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`、`metadata view list|show|columns|create|update|delete` |
-| 数据 › 浏览、导入 | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query`、`data records search`、`import` |
+| 数据 › 浏览、导入 | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`、`import` |
 | 采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
 | 采集 › 运行状态 | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
 | 采集 › 运行状态 › 云账号、代码包、云上状态 | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
 | 因子 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
-| 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
-| 策略 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |
-| 交易 | 账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者；写操作默认只预览 | `trade account list|show|create|update|leverage|sync|reinspect|flatten`、`trade logical list|show|target|create|update|order-settings|fund-settings|add-member|remove-member|pause|resume|flatten`、`trade order list|show|submit|cancel`、`trade paper create|close`、`trade fills|positions|holdings|equity|capabilities|action|actions|pnl|holders`、`trade blocked list` |
-| 运维 › 监控 | 总览、到达历史、主机资源、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
-| 运维 › 主机、部署 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
+| 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params|status|apply`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
+| 策略 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable|confirm|delete`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |
+| 交易 | 账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者；写操作默认只预览 | `trade account list|show|create|update|leverage|sync|reinspect|flatten`、`trade logical list|show|target|create|update|order-settings|fund-settings|add-member|remove-member|pause|resume|flatten`、`trade order list|show|submit|cancel`、`trade paper create|close`、`trade fills|positions|holdings|equity|ledger|instruments|capabilities|inspect-credential|action|actions|pnl|holders`、`trade shadow list`、`trade blocked list` |
+| 数据归档 | 归档任务、运行、分区、CSV 导入 | `archive overview`、`archive tasks list|prepare|preview|create|update|run|backfill|delete|clear-unrecoverable`、`archive runs list|get|cancel`、`archive partitions list|get`、`archive import`、`archive import template` |
+| 事件中心 | 可配置的事件、事件规则、执行记录 | `event catalog`、`event rules list|get|update|delete|test`、`event executions list|get|retry|cancel|ack`；新建规则请用户在管理台操作（会返回验证密钥明文） |
+| 运维 › 监控 | 总览、到达历史、主机资源、重要日志、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|logs|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
+| 运维 › 主机、部署 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
 | 运维 › 活动日志 | 活动日志 | `activity list` |
 
 常用写法：
@@ -60,7 +62,7 @@
 
 ## gateway call（兜底）
 
-没有专用命令的底层接口，用 `gateway call` 直接调用。目前只剩 Storage 数据面（`trpc.moox.storage.PrimaryStore` 的 `ReadRows`、`ReadDatasetChanges`、`CountTimeSeriesRows` 等底层读写）：
+没有专用命令的底层接口，用 `gateway call` 直接调用。目前是 Storage 数据面（`trpc.moox.storage.PrimaryStore` 的 `ReadRows`、`ReadDatasetChanges`、`CountTimeSeriesRows` 等底层读写）和下面的人工结束钱包划转记录：
 
 ```bash
 # 列出可调用的服务与方法（读内嵌服务目录，不连网），可带关键字过滤；会标出只读/写、moox-cli 是否有权调用、是否被 gateway call 禁用

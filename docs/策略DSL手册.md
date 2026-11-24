@@ -25,7 +25,7 @@
 
 **分工原则**：时序计算（均线、动量、波动、分位、滞后）一律写成因子，策略只在截面上用这些列做过滤、打分、配权。所以策略里没有函数库，只有 `rank`、`zscore` 两个截面函数；想要“k 根之前的排名”这类需求，在因子里写 `delay(x, k)`，策略直接引用那一列。
 
-规则里引用的列名就是因子任务结果数据集的列名，由成员键推导：`因子ID[__参数段][__输出名]`，参数全为默认值时省略参数段，否则带参数段（例如窗口取 20 的成员 `ma` 的列是 `ma__20`）。创建实例选好因子任务后，页面和校验报错都会列出这个任务的全部列。
+规则里引用的列名就是因子任务结果数据集的列名，由成员键推导：`因子ID[__参数段][__输出名]`，参数全为默认值时省略参数段，否则带参数段（例如内置因子 `ma` 的默认窗口是 20：默认成员的列是 `ma`，窗口取 10 的成员的列是 `ma__10`）。创建实例选好因子任务后，页面和校验报错都会列出这个任务的全部列。
 
 ## 1. 功能地图
 
@@ -261,7 +261,7 @@ select: {top: 10, buffer: 2}
 weight: {total: 0.8, method: equal, cap: 0.1}
 ```
 
-- `total`：这条规则的预算（占权益的比例）。各规则的 `total` 之和不能超过 `portfolio.leverage`。
+- `total`：这条规则的预算（占权益的比例）。各规则的 `total` 之和不能超过 `portfolio.leverage`。只写预算时可以简写成 `weight: 0.8`。
 - `method: equal`（默认）平分；`method: rank` 按名次线性配权（最优 N 份、最差 1 份）。
 - `cap`：规则内单标的上限。超过 `cap` 的权重被裁到 `cap`，**多出来的部分在规则内按原权重比例分给还没封顶的标的**，迭代到没有新的超限，仍分不出去的留现金。
 - 保存时要求 `cap × 选中数量 ≥ total`（预算分得完）。
@@ -356,7 +356,7 @@ holding:
 ```
 
 - `days` 的每个值是一个批次，预算按批次数均分；周（月）的交易日不够指定序号时，这一期该批次不重建。
-- 加密按 UTC 自然日（每天都是交易日，周从周一、月从 1 日开始）；A 股按内嵌交易日历。
+- 加密按 UTC 自然日（每天都是交易日，周从周一、月从 1 日开始）；股票（A 股、港股）按各自的内嵌交易日历。
 - 建仓那一根没有结果（被整期跳过、停机漏掉）时，在之后第一根有结果的 bar 补建；到下一个建仓日仍没补上，就按下一个建仓日正常重建。
 - 例子：`{calendar: week, days: [1]}` 每周一重选；`{calendar: month, days: [1, -1]}` 月初、月末各一个批次，各占一半预算。
 
@@ -496,7 +496,7 @@ on_missing: {keep_bars: 3}     # 持有标的连续缺数不超过 3 根时冻�
 | 层次 | 做法 |
 | --- | --- |
 | 单个标的缺数 | 没有持有：这根不入选。持有中：移出持有；写了 `on_missing` 则冻结 |
-| 持仓冻结 | 市场本期整体不可用，或只缺上一根（`bars[-1]`）而当期输入齐全：持有的标的**不判出场、不调仓**，保持上期目标权重，明细阶段 `held` |
+| 持仓冻结 | 市场本期整体不可用，只缺上一根（`bars[-1]`）而当期输入齐全，或持有的标的停牌（明细 `held(suspended_hold)`，见策略模块文档“停牌持仓冻结”）：持有的标的**不判出场、不调仓**，保持上期目标权重，明细阶段 `held` |
 | 整期跳过 | 缺数的标的占比超过 `portfolio.max_missing`（默认 0.2），或可用标的少于 `portfolio.min_universe`：这一根不产出新目标，已有目标继续有效 |
 
 常见的整期跳过原因（`skipped(原因)`，页面“结果”里可见）：
@@ -834,7 +834,7 @@ freeze: {watch: short, window_bars: 1, threshold: 0.10, bars: 4}
 
 ## 10. 表达式
 
-表达式用 Expr 语法编写，在 `filter`、`score`、`select.where`、`select.then.score`、`filter_after`、`entry`、`exit`、`hold.entry`、`hold.exit`、`scale.expr` 里使用。
+表达式用 Expr 语法编写，在 `filter`、`score`、`select.where`、`select.then.score`、`filter_after`、`hold.entry`、`hold.exit`、`scale.expr` 里使用。
 
 **能引用什么**
 
@@ -857,11 +857,11 @@ freeze: {watch: short, window_bars: 1, threshold: 0.10, bars: 4}
 **常见写法**
 
 ```yaml
-filter: "volume_mean > 20000 && close > ma__20"             # 两个条件同时满足
+filter: "volume_mean > 20000 && close > ma__60"             # 两个条件同时满足
 filter: "instrument_id matches '^[A-Z]+-USDT$'"             # 只要 USDT 计价
 hold: {entry: "bars[-1].bias <= 1 && bars[0].bias > 1"}     # 上穿（entry 写在 hold 里）
 score: "rank(mom__20) - rank(vol__24)"                      # 综合名次
-scale: {expr: "close > ma__200 ? 1 : 0.5"}                  # 年线上方满仓，下方半仓
+scale: {expr: "close > ma__120 ? 1 : 0.5"}                  # 长均线上方满仓，下方半仓
 ```
 
 ## 11. 校验、回放与上线
@@ -884,7 +884,7 @@ moox-cli strategy replay start --dsl-file s.yaml --factor-task swap=<永续因�
 moox-cli strategy replay show --replay-id <回放ID>
 ```
 
-- 回放默认在 View 的历史数据上逐期求值；`--input compute`（因子现算）改为调因子引擎按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制，声明了 `factor_params` 的策略只能这样回放（每期求出的参数交给下一期的因子计算，逐期记录里有生效的参数），不支持策略池、现货加永续两个任务与股票。其余与 View 来源相同，用理论账本按收盘价成交；`--slippage-bps` 让成交价在收盘价上按方向加减这个比例（买入上浮、卖出下浮），不写为 0。**默认不计资金费，不模拟强平与保证金率**；用 `funding_column` 才计资金费（策略池写在池的 `fees` 里）。
+- 回放默认在 View 的历史数据上逐期求值；`--input compute`（因子现算）改为调因子引擎按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制，声明了 `factor_params` 的策略只能这样回放（每期求出的参数交给下一期的因子计算，逐期记录里有生效的参数），不支持策略池、现货加永续两个任务与股票。其余与 View 来源相同，用理论账本按收盘价成交；`--slippage-bps` 让成交价在收盘价上按方向加减这个比例（买入上浮、卖出下浮），不写为 0。**默认不计资金费，不模拟强平与保证金率**；加 `--funding-column <列名>` 才计资金费（策略池写在池的 `fees.funding_column` 里）。
 - 回放只用已闭合的 K 线，终点截到最新一根之前，根数不超过 20000。起点要留够 `min_age_bars` 与 `bars[-1]` 所需的历史，否则提交时提示可用起点。
 - 回放用来比较策略版本，不承诺复现历史上的实时结果；与实时的差别见 [策略模块](模块/策略.md)“回放与实时的已知差别”。
 - 每期记录里有解释明细：每个标的的最终阶段与原因，以及 `decision.limits`、`decision.pool`。
@@ -901,7 +901,7 @@ moox-cli strategy instance enable --instance-id <实例ID> --yes
 
 ## 12. 示例配方
 
-下面每个例子都是完整的策略，列名换成你的因子任务里的列即可。
+下面每个例子都是完整的策略，列名换成你的因子任务里的列即可。仓库的 `examples/strategies/` 里另有几份可以直接创建的策略，`setup start` 给各空间建的默认双均线策略就取自那里。
 
 ### 12.1 动量 Top N，现货做多
 
@@ -1106,7 +1106,7 @@ portfolio: {max_missing: 0.2}
 
 A 股日线可以带复权因子、申万行业、财务、换手率和股本字段（见[采集](模块/采集.md)第 4b 节）。这些列随日线因子任务进入结果数据集，策略写 `sources` 后用 `daily.列名` 读取。
 
-先在日线因子任务里加两个因子（因子表达式的写法见 `skills/moox/references/factor-dsl.md`）：
+先在日线因子任务里加两个因子（内置因子库 `stockcn_daily.yaml` 里已有，定义如下；因子表达式的写法见 `skills/moox/references/factor-dsl.md`）：
 
 ```yaml
 # 因子 roe_ttm：滚动十二个月的净资产收益率
@@ -1161,8 +1161,8 @@ portfolio: {max_missing: 0.2}
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 保存即拒绝，提示“包含未知字段” | 解析严格，拼错键名或写了不存在的字段；规则上的 `entry`、`exit`、`candidates`、`tranche`、`params` 都已不存在 | 按本手册字段名核对；进出场条件写进 `hold`，每根开一批用 `holding: {bars, offsets: all}`（5.1） |
-| 保存即拒绝，提示 type “不受支持，只能是 rank” | 规则类型只有 `rank`，`signal`、`tranche` 已删 | 固定几个标的按信号进出写成显式 `pool` 加 `hold`（第 6 节）；每根开一批、各批持有固定根数写成 `holding: {bars, offsets: all}`（5.1） |
+| 保存即拒绝，提示“包含未知字段” | 解析严格，拼错键名或写了不存在的字段；规则上没有 `entry`、`exit`、`candidates`、`tranche`、`params` 这些字段 | 按本手册字段名核对；进出场条件写进 `hold`，每根开一批用 `holding: {bars, offsets: all}`（5.1） |
+| 保存即拒绝，提示 type “不受支持，只能是 rank” | 规则类型只有 `rank`，没有 `signal`、`tranche` 这类类型 | 固定几个标的按信号进出写成显式 `pool` 加 `hold`（第 6 节）；每根开一批、各批持有固定根数写成 `holding: {bars, offsets: all}`（5.1） |
 | 回放提交被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | 可变成员的参数随策略逐期变化，View 里的历史值不能复用 | `strategy replay start` 加 `--input compute`（第 11 节） |
 | 回放提交被拒，提示“因子现算”只支持一个主帧任务、不支持策略池或股票市场 | 这几种只能读结果 View | 去掉 `--input compute`；现货加永续要现算时改用统一数据集上的任务 |
 | `hold.allow_reentry 不能与大于 0 的 cooldown_bars 同时使用` | 允许当根补回与冷却语义冲突 | 去掉冷却，或不写 `allow_reentry` |

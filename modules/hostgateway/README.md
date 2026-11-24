@@ -13,7 +13,7 @@ go test -count=1 ./modules/hostgateway/...
 
 `config/app.yaml` 使用 `packages/servicecatalog/hostgatewayconfig` 的共享配置结构；`config/trpc_go.yaml` 配置刷新与指标定时器。`app.yaml` 由部署按拓扑渲染；MooX CA 根证书、主机证书和主机签名私钥来自控制机签发的身份包，运行端只读取已有身份文件。
 
-- `11003`：TLS tRPC，用 MooX CA 签的主机证书，客户端按主机 ID 校验；服务请求仍须调用方签名。
+- `11003`：TLS tRPC，用 MooX CA 签的主机证书，客户端按主机 ID 校验；服务请求仍须调用方签名。只能出站的主机（登记为 `outbound`）在同一端口上向 control 保持反向连接，别的主机访问它时由 control 中转字节，TLS 与签名仍是调用方到目标网关端到端的。
 - `127.0.0.1:11002`：只读 Directory（登记的主机与部署）与 SSH 隧道进来的 `moox-cli` 请求。同机组件互调不经网关，直连服务的回环端口。
 - `11004`：外部入口，明文 tRPC 加签名，只有 `server.external_addr` 写了才监听（部署按主机登记的 `external_entry` 渲染）。只接组件目录里的外部身份调名单上的方法；
   目标服务在本机就转本机，在别的主机就以 `host-gateway` 的身份带 `X-Moox-Origin-Caller` 头转到目标主机的 `11003`。
@@ -42,6 +42,7 @@ bash scripts/test/gates/test-host-gateway-control-e2e.sh
 moox-host-gateway-cli check-config --config host-gateway/config/app.yaml
 moox-host-gateway-cli routes --config host-gateway/config/app.yaml
 moox-host-gateway-cli health --config host-gateway/config/app.yaml
+moox-host-gateway-cli sign-public-key --key-file secrets/host.key
 ```
 
-`routes` 输出按落盘快照算出的本机路由、目录与不认识的组件，不含公钥。`health` 请求配置里本机的 `/readyz` 地址；也可用 `--url` 指定地址。
+`routes` 输出按落盘快照算出的本机路由、目录与不认识的组件，不含公钥。`health` 请求配置里本机的 `/readyz` 地址；也可用 `--url` 指定地址。`sign-public-key` 输出签名私钥对应的公钥，部署时用它核对目标机上现有的密钥。
