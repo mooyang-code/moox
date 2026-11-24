@@ -24,11 +24,8 @@ const (
 // 保留天数是各模拟账户自己的配置（t_paper_account_configs.c_order_retention_days，默认 5 天，0 表示不清理），
 // 每轮按账户分别算边界。删掉的成交的手续费、已实现盈亏和笔数先按小时汇总，收益拆解不受影响（见 store.DeleteFinishedOrdersBefore）。
 //
-// 只清理没开通现货、股票市场的模拟账户（例如纯永续模拟盘）：
-//   - 现货、股票账户靠历史成交判断哪些资产归 MooX 管理（ManagedAssets），持仓均价也由全部成交现算，删了会改变行为；
-//   - 实盘账户的成交按交易所成交号去重，成交游标回退时已删的成交会被重新入账。
-//
-// 这两类账户不清理（见交易模块文档的已知差别）。实现 FundMaintainer，由 FundWorker 定时运行；清理不是交易行为，不受暂停影响。
+// 所有模拟账户都清理：受管判断、持仓均价和取不到价时的最近成交价读标的汇总（t_account_instrument_summaries），
+// 不依赖成交历史。实盘账户不清理：订单与成交是账务记录，而且实盘成交按交易所成交号去重，成交游标回退时已删的成交会被重新入账。实现 FundMaintainer，由 FundWorker 定时运行；清理不是交易行为，不受暂停影响。
 type OrderHistoryPruner struct {
 	Store *store.Store
 	Now   func() time.Time
@@ -91,9 +88,9 @@ func (p *OrderHistoryPruner) RunAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// orderHistoryPrunable 报告账户的历史订单能否清理：只有模拟盘，且没开通持仓来自余额的市场。
+// orderHistoryPrunable 报告账户的历史订单能否清理：只有模拟盘。
 func orderHistoryPrunable(account store.TradingAccountRecord) bool {
-	return account.ExecutionMode == string(exchange.ExecutionModePaper) && !account.HasBalanceMarket()
+	return account.ExecutionMode == string(exchange.ExecutionModePaper)
 }
 
 // orderRetentionDays 取账户配置的保留天数；读不到模拟配置时按默认值。

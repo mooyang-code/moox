@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// seedManagedFixture 建一个同时开通现货和合约的账户，并让几类标的各有一笔已成交的订单。
+// seedManagedFixture 建一个同时开通现货和合约的账户，并让几类标的各有一笔已成交的订单和它的成交。
 func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder) *Store {
 	t.Helper()
 	s := openTestStore(t)
@@ -61,6 +61,11 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 				Quantity: "1", FilledQuantity: "1", ReferencePrice: "100",
 				OwnerType: order.owner, OwnerID: id, State: "FILLED", Version: 1,
 			}); err != nil {
+				return err
+			}
+			// 受管由成交置位（标的汇总），不看订单上的成交量。
+			if _, err := tx.InsertFill(FillRecord{SpaceID: "space-1", FillID: id + "-fill", ExchangeTradeID: id, OrderID: id,
+				Price: "100", Quantity: "1", Fee: "0", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: int64(index + 1)}); err != nil {
 				return err
 			}
 		}

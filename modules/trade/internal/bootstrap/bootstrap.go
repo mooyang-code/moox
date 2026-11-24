@@ -279,7 +279,7 @@ func initialize(
 	targetHistoryWorker := &traderuntime.FundWorker{
 		Maintainer: &traderuntime.TargetHistoryPruner{Store: tradeStore}, Interval: 6 * time.Hour, Name: "目标回执与影子目标清理",
 	}
-	// 结束超过保留天数（模拟账户配置，默认 5 天）的订单与成交的清理（只清纯合约模拟账户，见 OrderHistoryPruner）：启动时一次，之后每小时一次，分批让出连接（积压清完后每轮只有一小时的量）。
+	// 结束超过保留天数（模拟账户配置，默认 5 天）的订单与成交的清理（所有模拟账户，见 OrderHistoryPruner）：启动时一次，之后每小时一次，分批让出连接（积压清完后每轮只有一小时的量）。
 	orderHistoryWorker := &traderuntime.FundWorker{
 		Maintainer: &traderuntime.OrderHistoryPruner{Store: tradeStore}, Interval: time.Hour, Name: "历史订单清理",
 	}

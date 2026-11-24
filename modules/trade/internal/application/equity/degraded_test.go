@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
@@ -81,7 +82,7 @@ func seedDelistingAccount(t *testing.T, haltStatus string) *store.Store {
 			}); err != nil {
 				return err
 			}
-			if err := tx.CreateOrder(store.OrderRecord{
+			if err := storetest.CreateFilledOrder(tx, store.OrderRecord{
 				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought-" + asset, ClientOrderID: "bought-" + asset,
 				Exchange: string(exchange.ExchangeBinance), MarketType: "SPOT",
 				ExchangeSymbol: asset + "USDT", InstrumentID: asset + "-USDT-SPOT", OrderType: "MARKET", Side: "BUY",
@@ -109,14 +110,16 @@ func latestEquity(t *testing.T, tradeStore *store.Store) (string, string) {
 	return points[len(points)-1].Equity, logical[len(logical)-1].Equity
 }
 
-// haltFill 给 HALT 记一笔成交（价格 7）：标的停止交易后按它估值。
+// haltFill 给 HALT 记一笔成交（价格 7，写进标的汇总）：标的停止交易后按它估值。
 func haltFill(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
-	require.NoError(t, tradeStore.DBForTest().Exec(`INSERT INTO t_order_fills (
-		c_space_id, c_fill_id, c_exchange_trade_id, c_order_id, c_trading_account_id, c_exchange, c_market_type,
-		c_instrument_id, c_exchange_symbol, c_side, c_price, c_quantity, c_traded_at
-	) VALUES ('space-1', 'fill-halt', 'trade-halt', 'bought-HALT', 'account-1', 'BINANCE', 'SPOT',
-		'HALT-USDT-SPOT', 'HALTUSDT', 'BUY', '7', '1', 1)`).Error)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SeedInstrumentSummaryForTest(store.InstrumentSummaryRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT",
+			InstrumentID: "HALT-USDT-SPOT", Managed: true, Quantity: shared.MustDecimal("1"), Cost: shared.MustDecimal("7"),
+			LastPrice: shared.MustDecimal("7"), LastTradedAt: 1,
+		})
+	}))
 }
 
 // 受管资产取不到价时的降级（计划 4.6，总审查第 2 轮收窄）：
@@ -156,6 +159,13 @@ func TestSampleAccountDegradesUnvaluableManagedAssets(t *testing.T) {
 // 停止交易、不在下架名单里、没有最后已知价也没有成交记录：照旧报错，不按 0 计。
 func TestSampleAccountFailsOnHaltedAssetWithoutAnyPrice(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "BREAK")
+	// HALT 受管但没有可用的成交价（汇总里的最近成交价为 0）。
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SeedInstrumentSummaryForTest(store.InstrumentSummaryRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT",
+			InstrumentID: "HALT-USDT-SPOT", Managed: true, Quantity: shared.Zero(), Cost: shared.Zero(), LastPrice: shared.Zero(),
+		})
+	}))
 	adapter := &delistingPriceAdapter{at: time.UnixMilli(sourceMillisDegraded + 1)}
 	service := &Service{Store: tradeStore, Adapters: equityTestAdapters{adapter: adapter}, Now: func() time.Time { return time.UnixMilli(sourceMillisDegraded + 2) }}
 	err := service.SampleAccount(context.Background(), "account-1")

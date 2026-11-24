@@ -38,8 +38,7 @@ type PaperConfig struct {
 	MakerFeeRate   shared.Decimal
 	TakerFeeRate   shared.Decimal
 	SlippageBPS    shared.Decimal
-	// OrderRetentionDays 是已结束订单与成交保留的天数，0 表示不清理。所有模拟账户都能存，
-	// 但只有纯合约模拟账户会被清理（见 runtime.OrderHistoryPruner）。
+	// OrderRetentionDays 是已结束订单与成交保留的天数，0 表示不清理。所有模拟账户都按它清理（见 runtime.OrderHistoryPruner）。
 	OrderRetentionDays int
 }
 

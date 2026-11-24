@@ -28,7 +28,7 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 		if err := tx.UpsertInstrument(swap); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
 			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "2", FilledQuantity: "2", ReferencePrice: "100",
@@ -294,7 +294,7 @@ func TestSingleInstrumentRemainingIgnoresOtherDelistedSpotAsset(t *testing.T) {
 		if err := tx.UpsertInstrument(eth); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought-eth", ClientOrderID: "bought-eth",
 			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "ETHUSDT", InstrumentID: "ETH-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "4", FilledQuantity: "4", ReferencePrice: "100",

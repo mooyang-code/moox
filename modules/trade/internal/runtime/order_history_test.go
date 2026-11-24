@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 纯合约模拟账户里结束超过保留天数（默认 5 天）的订单分批删掉，之内（含正好到边界）的保留；现货模拟账户、实盘账户一律不清理。
+// 模拟账户（现货、合约、混合）里结束超过保留天数（默认 5 天）的订单分批删掉，之内（含正好到边界）的保留；实盘账户不清理（见 TestOrderHistoryPrunableOnlyPaper）。
 // 保留天数按账户各自的配置：0 天不清理，1 天的按 1 天算边界；边界不晚于模拟资金费补算的起点。
-func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *testing.T) {
+func TestOrderHistoryPrunerDeletesPaperOrdersOlderThanRetention(t *testing.T) {
 	ctx := context.Background()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
@@ -68,17 +68,18 @@ func TestOrderHistoryPrunerDeletesOnlyPaperContractOrdersOlderThanRetention(t *t
 
 	pruner := &OrderHistoryPruner{Store: tradeStore, Now: func() time.Time { return now }, batch: 2}
 	require.NoError(t, pruner.RunAll(ctx))
-	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 5, "mixed-paper": 5, "swap-keep": 5, "swap-short": 1, "swap-funded": 4, "swap-stale": 4} {
+	for id, want := range map[string]int64{"swap-paper": 2, "spot-paper": 2, "mixed-paper": 2, "swap-keep": 5, "swap-short": 1, "swap-funded": 4, "swap-stale": 4} {
 		_, total, err := tradeStore.ListOrders(ctx, "space-1", store.OrderQuery{TradingAccountID: id})
 		require.NoError(t, err)
 		require.Equal(t, want, total, id)
 	}
 }
 
-func TestOrderHistoryPrunableOnlyPaperWithoutBalanceMarket(t *testing.T) {
+func TestOrderHistoryPrunableOnlyPaper(t *testing.T) {
 	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"SWAP"}}))
-	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"STOCK"}}))
-	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"SPOT", "SWAP"}}))
+	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"STOCK"}}))
+	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"SPOT", "SWAP"}}))
+	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "LIVE", Markets: []string{"SPOT"}}))
 	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "LIVE", Markets: []string{"SWAP"}}))
 }
 
