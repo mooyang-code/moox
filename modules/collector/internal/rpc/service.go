@@ -1226,7 +1226,7 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		}
 		for _, frequency := range params.Collector.Intervals {
 			if err := s.checkKlineFrequency(marketID, route.market, route.source, frequency); err != nil {
-				return fmt.Errorf("标签 %s 的来源 %s 采不了这个任务：%w", route.id, route.source, err)
+				return fmt.Errorf("标签 %s 采不了这个任务：%w", route.id, err)
 			}
 		}
 	}
