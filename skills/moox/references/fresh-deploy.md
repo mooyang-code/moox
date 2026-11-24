@@ -38,7 +38,7 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 # 全部组件的 Linux 二进制（纯 Go 交叉编译；Storage 与前端在本机 Docker 里，macOS 先 colima start），产物在 $WT/bin-linux
 cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.sh --out $WT/bin-linux \
   admin host-gateway hostagent eventbus egress-proxy collector collector-stream factor-mgr factor-engine \
-  archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor storage-cli storage
+  archive-mgr archive-worker strategy strategy-cli trade monitor storage-cli storage
 ```
 
 - 目标清单和 `scripts/release/build-release.sh` 里的 `server_targets` 一致（去掉 `collector-scf`）；`archive-worker` 这个目标会带上内置对象存储的 `weed`。
@@ -84,7 +84,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 3 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
 | 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
-| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream、事件中心，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
+| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
 | 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验（这些要等 Collector、Monitor 起来） |
 | 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |

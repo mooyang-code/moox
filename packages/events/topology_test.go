@@ -67,21 +67,14 @@ func TestTopologyIsConsistent(t *testing.T) {
 	}
 }
 
-func TestCallbackDispatcherConsumers(t *testing.T) {
-	registry, err := DefaultRegistry()
-	require.NoError(t, err)
-	role, ok := RoleByUsername("callback-dispatcher-eventbus")
+// Trade 有两个消费者：目标权重（MOOX_TRADE）与下架事件（MOOX_COLLECTOR）。
+func TestTradeRoleConsumesTargetsAndDelists(t *testing.T) {
+	role, ok := RoleByUsername("trade-eventbus")
 	require.True(t, ok)
-	require.Len(t, role.Consumers, len(CallbackDispatcherEvents))
-	for i, event := range CallbackDispatcherEvents {
-		_, ok := registry.Lookup(event.Name(), event.Version())
-		require.True(t, ok, event.Name())
-		// MOOX_TRADE 是工作队列，不能开放订阅。
-		require.NotEqual(t, StreamTrade, event.Stream())
-		require.Equal(t, CallbackDispatcherConsumerName(event), role.Consumers[i].Name())
-	}
-	require.Equal(t, "callback_dispatcher_collector_instrument_delist_scheduled_v1", CallbackDispatcherConsumerName(InstrumentDelistScheduled))
-	require.Equal(t, "callback_dispatcher_storage_view_data_ready_v2", CallbackDispatcherConsumerName(ViewDataReady))
+	require.Equal(t, []DurableConsumer{TradeTargetConsumer, TradeDelistConsumer}, role.Consumers)
+	require.Equal(t, "trade_instrument_delist_v1", TradeDelistConsumer.Name())
+	require.Equal(t, StreamCollector, InstrumentDelistScheduled.Stream())
+	require.Len(t, Roles, 8, "内置管理、指标、Monitor、Storage、因子、策略、Trade、Collector 八个账号")
 }
 
 func TestPerSpaceConsumerNames(t *testing.T) {

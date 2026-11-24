@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepb"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -209,12 +208,12 @@ func TestHookFailureRaisesAttentionAfterThreshold(t *testing.T) {
 		if i >= 3 { // 之后继续失败，detail 不变，不会一分钟多一条新序列
 			want = 1.0
 		}
-		require.Equal(t, want, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindConsumerFailed, detail)), "第 %d 次失败后", i)
+		require.Equal(t, want, attention.Value(attn, attention.KindConsumerFailed, detail), "第 %d 次失败后", i)
 		now = now.Add(2 * time.Minute)
 	}
 	require.NoError(t, hub.Ensure(context.Background()))
 	require.Equal(t, 6, calls)
-	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindConsumerFailed, "")), "成功之后恢复")
+	require.Equal(t, 0.0, attention.Value(attn, attention.KindConsumerFailed, ""), "成功之后恢复")
 }
 
 // 无效事件不堵住后面的：标成死信并上报关注项，后面的事件照常发布。
@@ -251,7 +250,7 @@ func TestInvalidOutboxEventIsParkedAndDoesNotBlockTheRest(t *testing.T) {
 	dead, err := db.Resample().DeadEvents(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, dead)
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindOutboxStuck, "事件发件箱有无效事件被搁置，需要人工查看")))
+	require.Equal(t, 1.0, attention.Value(attn, attention.KindOutboxStuck, "事件发件箱有无效事件被搁置，需要人工查看"))
 }
 
 // 发件箱里最老的事件超过 10 分钟没发布出去：上报关注项；发布出去之后恢复。
@@ -270,9 +269,9 @@ func TestRelayReportsStuckOutboxAndRecovers(t *testing.T) {
 	relay.Now = func() time.Time { return now }
 
 	require.Error(t, relay.Flush(context.Background()))
-	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindOutboxStuck, "")), "刚写入的事件不算积压")
+	require.Equal(t, 0.0, attention.Value(attn, attention.KindOutboxStuck, ""), "刚写入的事件不算积压")
 
 	now = now.Add(StuckAfter + time.Minute)
 	require.Error(t, relay.Flush(context.Background()))
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindOutboxStuck, "事件发件箱有事件超过 10 分钟没发布出去（EventBus 连不上或发布被拒）")))
+	require.Equal(t, 1.0, attention.Value(attn, attention.KindOutboxStuck, "事件发件箱有事件超过 10 分钟没发布出去（EventBus 连不上或发布被拒）"))
 }

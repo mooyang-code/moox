@@ -42,7 +42,7 @@ echo "下载源: $SRC"
   | --- | --- | --- | --- |
   | 存储机 | 是 | 4 核 16G、100G 磁盘 | Storage、EventBus，网关开外部入口 |
   | 管理台 | 是，可与存储机或海外机共用 | 2 核 4G | Admin、管理台、Monitor、Collector、因子管理、归档管理、策略 |
-  | 海外机 | 采集加密货币行情时需要（建议香港） | 2 核 4G | WS 行情推送、出口代理、交易执行、事件中心 |
+  | 海外机 | 采集加密货币行情时需要（建议香港） | 2 核 4G | WS 行情推送、出口代理、交易执行 |
   | 因子机 | 可选，可以是家里或局域网的 Linux 机器 | 8 核 16G | 因子引擎、归档 Worker（systemd 用户服务） |
 
   **轻量应用服务器还是云服务器（CVM）**：区别只在云函数能不能接进来。股票行情（A 股、港股、美股）由云函数采集，
@@ -137,7 +137,7 @@ cd moox-${VER}
 - 之后要看或改配置用 `./bin/moox-cli config edit`（同样由用户在浏览器里操作）。
 - 填了交易所密钥的：`setup install` 把它们写进密钥管理（只建不改，管理台里已有或已删除的不动），安装结束后逐把检测：`moox-cli trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-<名称>`（`readonly = true` 的不检测）。输出里有阻断项就告诉用户原因，由用户在交易所或管理台处理；`检测没有完成` 是交易所接口暂时不可用，稍后重试。
 - 币安只读 Key（可选）：Collector 的下架检测用它读币安现货下架计划，固定读名称为 `readonly` 的币安生产环境只读密钥（`exchange = "binance"`、`environment = "production"`、`name = "readonly"`、`readonly = true`，ID `exchange-binance-production-readonly`）。
-  不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台「事件中心」“事件”页签里“标的即将下架”一行的“手工登记”。
+  不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台“交易管理 › 下架名单”页的“手工登记下架”。
   登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。
   要补就让用户 `config edit` 加上，再 `setup init` 写入，下一轮检测自动恢复。
   注意 `setup init`（以及 `setup install` 里写告警渠道的那一步）对告警渠道的规则是“Monitor 一个渠道都没有就写入秘密文件里的 `[notification]`”：

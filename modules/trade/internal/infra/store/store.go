@@ -233,6 +233,8 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_logical_account_target_history": {},
 		"t_trade_wallet_transfers":         {},
 		"t_trade_blocked_instruments":      {},
+		"t_trade_delists":                  {},
+		"t_trade_delist_flattens":          {},
 		"t_paper_funding_fees":             {},
 		"t_order_fill_hourly_summaries":    {},
 		"t_account_instrument_summaries":   {},

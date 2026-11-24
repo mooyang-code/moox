@@ -1,17 +1,13 @@
-// Package attention 上报 Collector 需要人看的情况：指标 moox_collector_attention_active{kind,detail}。
-// 下架检测、事件发件箱等多个来源各自报告自己的那部分，这里合并后一起上报。
+// Package attention 声明 Collector 需要人看的情况（关注项）：指标 moox_attention_active，由 report.Attention 上报。
+// 下架检测、事件发件箱等多个来源各自报告自己的那部分，report.Attention 合并后一起上报。
 package attention
 
 import (
-	"errors"
-	"sort"
-	"strings"
-	"sync"
-
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// 需要人看的情况。Monitor 按 kind 生成检查，detail 是来源和原因。
+// 需要人看的情况。Monitor 按 kind 生成检查 attention:collector:<kind>，名称与级别在 Kinds 里，detail 是来源和原因。
 const (
 	// KindSourceFailed 是某个下架来源连续失败了几次。
 	KindSourceFailed = "delist_source_failed"
@@ -26,60 +22,33 @@ const (
 	KindEastMoneyCooling = "eastmoney_cooling_down"
 )
 
-var kinds = []string{KindSourceFailed, KindReadonlyKeyMissing, KindOutboxStuck, KindConsumerFailed, KindEastMoneyCooling}
-
-// maxDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
-const maxDetail = 480
-
-// Attention 合并各来源的关注项并上报：每种关注项一个值，1 表示当前有需要处理的情况，detail 里列出来源和原因。
-type Attention struct {
-	gauge *prometheus.GaugeVec
-
-	mu      sync.Mutex
-	sources map[string]map[string][]string
+// Kinds 是 Collector 声明的全部关注项。warning 只需提醒、不算故障：缺币安只读 Key 时只是现货下架改为手工登记；
+// 东方财富冷却时只是标的列表同步暂缓（云函数采集不受影响），冷却结束探测成功后自动恢复。
+var Kinds = []report.AttentionKind{
+	{Kind: KindSourceFailed, Name: "下架检测来源连续失败", Severity: report.AttentionCritical},
+	{Kind: KindReadonlyKeyMissing, Name: "下架检测缺少币安只读 Key", Severity: report.AttentionWarning},
+	{Kind: KindOutboxStuck, Name: "Collector 事件发件箱积压", Severity: report.AttentionCritical},
+	{Kind: KindConsumerFailed, Name: "Collector EventBus 消费者启动失败", Severity: report.AttentionCritical},
+	{Kind: KindEastMoneyCooling, Name: "东方财富请求被限流，Collector 已暂停访问", Severity: report.AttentionWarning},
 }
 
-// New 注册关注项指标。
+// Attention 是 Collector 的关注项上报器。
+type Attention = report.Attention
+
+// New 注册关注项指标；同一个注册器上已注册过时返回已有的那份。
 func New(registerer prometheus.Registerer) *Attention {
-	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_attention_active", Help: "Collector conditions that need a person, with source and reason in the detail label."}, []string{"kind", "detail"})
-	if registerer != nil {
-		if err := registerer.Register(gauge); err != nil {
-			var already prometheus.AlreadyRegisteredError
-			if errors.As(err, &already) {
-				gauge = already.ExistingCollector.(*prometheus.GaugeVec)
-			}
-		}
+	attention, err := report.NewAttention(registerer, Kinds)
+	if err != nil {
+		// 只有声明本身写错才会失败，属于编程错误。
+		panic(err)
 	}
-	return &Attention{gauge: gauge, sources: map[string]map[string][]string{}}
+	return attention
 }
 
-// Gauge 返回底层指标（测试读取用）。
-func (a *Attention) Gauge() *prometheus.GaugeVec { return a.gauge }
-
-// Set 用本轮结果替换某个来源报告的全部关注项（items 按 kind 列出每条详情），再重新上报合并后的结果；
-// 恢复后值回到 0，Monitor 才看得到恢复。
-func (a *Attention) Set(source string, items map[string][]string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.sources[source] = items
-	merged := map[string][]string{}
-	for _, items := range a.sources {
-		for kind, details := range items {
-			merged[kind] = append(merged[kind], details...)
-		}
+// Value 返回某个种类、某条 detail 当前的值（测试用）：正在上报这条 detail 时为 1，否则为 0。
+func Value(a *Attention, kind, detail string) float64 {
+	if detail != "" && a.Active()[kind] == detail {
+		return 1
 	}
-	a.gauge.Reset()
-	for _, kind := range kinds {
-		details := append([]string(nil), merged[kind]...)
-		if len(details) == 0 {
-			a.gauge.WithLabelValues(kind, "").Set(0)
-			continue
-		}
-		sort.Strings(details)
-		detail := strings.Join(details, "；")
-		if len(detail) > maxDetail {
-			detail = strings.ToValidUTF8(detail[:maxDetail], "") + "…"
-		}
-		a.gauge.WithLabelValues(kind, detail).Set(1)
-	}
+	return 0
 }

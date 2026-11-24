@@ -33,9 +33,9 @@ func alertObject(spaceID, checkID string) *pb.HealthObject {
 			object.Type, object.HostId, object.Kind = "host", parts[1], parts[2]
 		}
 	}
-	// 关注项检查按登记过的种类给出 attention_kind，前端不用再从告警编号里截取。
-	if len(parts) == 2 && observability.AttentionCheckName(parts[0], parts[1]) != "" {
-		object.AttentionKind = parts[1]
+	// 关注项检查（attention:<服务名>:<kind>）给出服务名与种类，前端不用再从告警编号里截取。
+	if service, kind, ok := observability.ParseAttentionCheckID(checkID); ok {
+		object.ComponentId, object.AttentionKind = service, kind
 	}
 	if len(parts) >= 4 && parts[0] == "dataset" {
 		object.Type, object.Producer, object.DatasetId, object.Freq = "dataset", parts[1], strings.Join(parts[2:len(parts)-1], ":"), parts[len(parts)-1]

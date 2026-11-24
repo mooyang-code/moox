@@ -10,6 +10,7 @@ func init() {
 	rpcGroupShort["trade logical"] = "逻辑账户"
 	rpcGroupShort["trade order"] = "订单"
 	rpcGroupShort["trade blocked"] = "下架名单"
+	rpcGroupShort["trade delist"] = "下架记录与时间线"
 	rpcGroupShort["trade paper"] = "模拟账户"
 	rpcGroupShort["trade shadow"] = "试运行中的策略实例发来的影子目标（只换算、不下单）"
 
@@ -64,5 +65,7 @@ func init() {
 		rpcSpec{Path: []string{"trade", "holders"}, Short: "列出策略持有某个标的的执行账户（跨空间，全局；零头和模拟盘有标记）", Service: tradeConsole, Method: "ListInstrumentHolders",
 			Flags: []rpcFlag{reqFlag("exchange", "exchange", "交易所（写 EXCHANGE_BINANCE 或 EXCHANGE_OKX）"), reqFlag("market-type", "market_type", "市场（写 MARKET_TYPE_SPOT 或 MARKET_TYPE_SWAP）"),
 				reqFlag("exchange-symbol", "exchange_symbol", "交易所代码，例如 FOOUSDT、FOO-USDT-SWAP"), boolFlag("paper-only", "paper_only", "只看模拟盘")}},
+		rpcSpec{Path: []string{"trade", "delist", "list"}, Short: "列出下架记录（全局，按创建时间倒序）：状态、已规划轮次、各轮各组合的清仓动作", Service: tradeConsole, Method: "ListDelists", NoSpace: true,
+			Flags: []rpcFlag{boolFlag("active-only", "active_only", "只列进行中的"), intFlag("limit", "limit", "最多返回几条（默认 100，最多 500）")}},
 	)
 }

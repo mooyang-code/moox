@@ -38,7 +38,9 @@ export function hostHref(hostID?: string) {
 const COLLECTOR_RESULTS = { href: "#/collector/tasks?tab=results", label: "查看采集结果" };
 
 function readonlyKeyMissing(object?: HealthObject): boolean {
-  return object?.kind === "collector_attention" && object.attention_kind === "delist_readonly_key_missing";
+  return (
+    object?.kind === "attention" && object.component_id === "collector" && object.attention_kind === "delist_readonly_key_missing"
+  );
 }
 
 /** 告警的处理说明：几段文字，外加可选的处理入口。 */
@@ -60,24 +62,10 @@ export function alertNote(object?: HealthObject): AlertNote | null {
       "已有这把 Key 但被禁用：到密钥管理页把“Binance production readonly”启用。",
       "还没有这把 Key：运行 moox-cli config edit，在“交易所密钥”里添加一把币安、正式环境的密钥，名称填 readonly，勾选“只读密钥”，再运行 moox-cli setup init 写入。",
       "在管理台删除过这把 Key：setup init 不会重建删除过的密钥，换一个名称也不行（Collector 只读固定 ID exchange-binance-production-readonly），目前补不回来。",
-      "补上之前，现货下架只能手工登记：运行 moox-cli collector delist register，或在事件中心“事件”页签的“标的即将下架”一行点“手工登记”。"
+      "补上之前，现货下架只能手工登记：运行 moox-cli collector delist register，或在交易 → 下架名单页点“手工登记下架”。"
     ],
     link: { href: "#/settings/secrets", label: "已禁用的话到密钥管理页启用" }
   };
-}
-
-/**
- * 事件中心关注项按种类跳转：通知失败看失败的执行记录；其余（含发现下架）看全部执行记录。
- * 系统动作处理失败不带失败筛选：它还包括记录未结束时有步骤失败、连续暂时失败、取消后善后未完成、下架后留有零头，
- * 这些记录的状态不是“失败”。
- */
-function eventCenterLink(kind?: string): { href: string; label: string } {
-  switch (kind) {
-    case "execution_failed":
-      return { href: "#/events?tab=executions&status=failed", label: "查看失败的执行记录" };
-    default:
-      return { href: "#/events?tab=executions", label: "查看执行记录" };
-  }
 }
 
 /** 告警的处理入口。spaceId：对象所在的空间，和当前空间不同时先切过去再打开（数据集属于某个空间）。 */
@@ -98,7 +86,7 @@ function collectorDatasetLink(object: HealthObject): AlertLink {
   return { href: `#/collector/tasks?${query}`, label: "查看采集结果", ...(object.space_id ? { spaceId: object.space_id } : {}) };
 }
 
-/** 告警对象的处理入口：页面地址与链接文字。同一类关注项里的具体情况按 Monitor 给出的 attention_kind 区分。 */
+/** 告警对象的处理入口：页面地址与链接文字。关注项按 Monitor 给出的服务名（component_id）与种类（attention_kind）区分。 */
 export function alertLink(object?: HealthObject): AlertLink {
   // 读不到的情况有三种、多半要在命令行里处理：首页跳到监控告警页，那里显示三种情况的处理说明（alertNote）。
   if (readonlyKeyMissing(object)) return { href: "#/ops/monitor", label: "查看处理办法" };
@@ -127,10 +115,13 @@ export function alertLink(object?: HealthObject): AlertLink {
         label: "查看服务"
       };
     case "balance":
-    case "trade_attention":
       return { href: "#/trading/live", label: "查看交易账户" };
-    case "event_center_attention":
-      return eventCenterLink(object.attention_kind);
+    case "attention":
+      // 下架处理的两种关注项去下架名单页（上段是下架处理记录）
+      if (object.component_id === "trade" && object.attention_kind?.startsWith("delist_"))
+        return { href: "#/trading/blocked", label: "查看下架处理" };
+      if (object.component_id === "trade") return { href: "#/trading/live", label: "查看交易账户" };
+      break;
   }
   return {
     href:

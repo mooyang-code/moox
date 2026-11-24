@@ -1,36 +1,4 @@
 {
-  "callback-dispatcher-eventbus": {
-    "publish": [
-      "$JS.ACK.MOOX_COLLECTOR.callback_dispatcher_collector_instrument_delist_scheduled_v1.>",
-      "$JS.ACK.MOOX_COLLECTOR.callback_dispatcher_collector_kline_backfilled_v1.>",
-      "$JS.ACK.MOOX_STORAGE.callback_dispatcher_storage_dataset_period_completed_v1.>",
-      "$JS.ACK.MOOX_STORAGE.callback_dispatcher_storage_view_data_ready_v2.>",
-      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.callback_dispatcher_collector_instrument_delist_scheduled_v1",
-      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.callback_dispatcher_collector_instrument_delist_scheduled_v1.>",
-      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.callback_dispatcher_collector_kline_backfilled_v1",
-      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.callback_dispatcher_collector_kline_backfilled_v1.>",
-      "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.callback_dispatcher_storage_dataset_period_completed_v1",
-      "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.callback_dispatcher_storage_dataset_period_completed_v1.>",
-      "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.callback_dispatcher_storage_view_data_ready_v2",
-      "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.callback_dispatcher_storage_view_data_ready_v2.>",
-      "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_COLLECTOR.callback_dispatcher_collector_instrument_delist_scheduled_v1",
-      "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_COLLECTOR.callback_dispatcher_collector_kline_backfilled_v1",
-      "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.callback_dispatcher_storage_dataset_period_completed_v1",
-      "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.callback_dispatcher_storage_view_data_ready_v2",
-      "$JS.API.CONSUMER.INFO.*.callback_dispatcher_collector_instrument_delist_scheduled_v1",
-      "$JS.API.CONSUMER.INFO.*.callback_dispatcher_collector_kline_backfilled_v1",
-      "$JS.API.CONSUMER.INFO.*.callback_dispatcher_storage_dataset_period_completed_v1",
-      "$JS.API.CONSUMER.INFO.*.callback_dispatcher_storage_view_data_ready_v2",
-      "$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.callback_dispatcher_collector_instrument_delist_scheduled_v1",
-      "$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.callback_dispatcher_collector_kline_backfilled_v1",
-      "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.callback_dispatcher_storage_dataset_period_completed_v1",
-      "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.callback_dispatcher_storage_view_data_ready_v2",
-      "$JS.API.STREAM.NAMES"
-    ],
-    "subscribe": [
-      "_INBOX.>"
-    ]
-  },
   "collector-eventbus": {
     "publish": [
       "$JS.ACK.MOOX_COLLECTOR.collector_resample_backfilled_crypto_v1.>",
@@ -168,11 +136,17 @@
   },
   "trade-eventbus": {
     "publish": [
+      "$JS.ACK.MOOX_COLLECTOR.trade_instrument_delist_v1.>",
       "$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>",
+      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.trade_instrument_delist_v1",
+      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.trade_instrument_delist_v1.>",
       "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1",
       "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>",
+      "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_COLLECTOR.trade_instrument_delist_v1",
       "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1",
+      "$JS.API.CONSUMER.INFO.*.trade_instrument_delist_v1",
       "$JS.API.CONSUMER.INFO.*.trade_target_weight_v1",
+      "$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.trade_instrument_delist_v1",
       "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1",
       "$JS.API.STREAM.NAMES"
     ],

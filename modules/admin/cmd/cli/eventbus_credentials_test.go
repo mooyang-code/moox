@@ -87,7 +87,7 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	require.Equal(t, []string{
 		"eventbus-internal-admin", "metrics-publisher", "monitor-observability-consumer",
 		"storage-eventbus",
-		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus", "callback-dispatcher-eventbus",
+		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus",
 	}, eventBusRoles)
 	collectorACL := eventBusACLBlock(yaml, "collector-eventbus")
 	for _, permission := range []string{
@@ -103,31 +103,28 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	}
 }
 
-func TestEventbusCredentialsCallbackDispatcherConsumer(t *testing.T) {
+func TestEventbusCredentialsTradeConsumesTargetsAndDelists(t *testing.T) {
 	tokens := make(map[string]string, len(eventBusRoles))
 	for _, role := range eventBusRoles {
 		tokens[role] = "token"
 	}
-	acl := eventBusACLBlock(usersYAML(tokens), "callback-dispatcher-eventbus")
+	acl := eventBusACLBlock(usersYAML(tokens), "trade-eventbus")
 	publish := aclLine(acl, "publish:")
-	require.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, strings.TrimSpace(aclLine(acl, "subscribe:")))
-	require.Contains(t, publish, `"$JS.API.STREAM.NAMES"`)
-	// 事件中心只消费，不发布任何事件主题。
+	// Trade 只消费，不发布任何事件主题。
 	require.NotContains(t, publish, `"moox.event.`)
-	for _, event := range events.CallbackDispatcherEvents {
-		name := events.CallbackDispatcherConsumerName(event)
+	for _, consumer := range []struct{ stream, name string }{
+		{events.StreamTrade, events.TradeTargetConsumer.Name()},
+		{events.StreamCollector, events.TradeDelistConsumer.Name()},
+	} {
 		for _, permission := range []string{
-			"$JS.API.CONSUMER.INFO.*." + name,
-			"$JS.API.CONSUMER.CREATE." + event.Stream() + "." + name,
-			"$JS.API.CONSUMER.DURABLE.CREATE." + event.Stream() + "." + name,
-			"$JS.API.CONSUMER.MSG.NEXT." + event.Stream() + "." + name,
-			"$JS.ACK." + event.Stream() + "." + name + ".>",
+			"$JS.API.CONSUMER.CREATE." + consumer.stream + "." + consumer.name,
+			"$JS.API.CONSUMER.DURABLE.CREATE." + consumer.stream + "." + consumer.name,
+			"$JS.API.CONSUMER.MSG.NEXT." + consumer.stream + "." + consumer.name,
+			"$JS.ACK." + consumer.stream + "." + consumer.name + ".>",
 		} {
 			require.Contains(t, publish, `"`+permission+`"`)
 		}
 	}
-	// 凭据文件名与角色一一对应，export-clients 能按文件名找到它。
-	require.Equal(t, "callback-dispatcher-eventbus.yaml", eventBusRoleFiles()["callback-dispatcher-eventbus"])
 }
 
 func TestEventBusCredentialsExportAndRotate(t *testing.T) {
@@ -277,15 +274,14 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
 	dir := t.TempDir()
 	roleFiles := map[string]string{
-		"internal-admin.yaml":               "token: admin-token\n",
-		"metrics-publisher.yaml":            "token: metrics-token\n",
-		"monitor-observability.yaml":        "token: monitor-token\n",
-		"storage-eventbus.yaml":             "token: storage-token\n",
-		"factor-eventbus.yaml":              "token: factor-token\n",
-		"strategy-eventbus.yaml":            "token: strategy-token\n",
-		"trade-eventbus.yaml":               "token: trade-token\n",
-		"collector-eventbus.yaml":           "token: collector-token\n",
-		"callback-dispatcher-eventbus.yaml": "token: dispatcher-token\n",
+		"internal-admin.yaml":        "token: admin-token\n",
+		"metrics-publisher.yaml":     "token: metrics-token\n",
+		"monitor-observability.yaml": "token: monitor-token\n",
+		"storage-eventbus.yaml":      "token: storage-token\n",
+		"factor-eventbus.yaml":       "token: factor-token\n",
+		"strategy-eventbus.yaml":     "token: strategy-token\n",
+		"trade-eventbus.yaml":        "token: trade-token\n",
+		"collector-eventbus.yaml":    "token: collector-token\n",
 	}
 	for name, content := range roleFiles {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
