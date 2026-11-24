@@ -69,7 +69,9 @@ type Snapshot struct {
 	// PositionsReadAt 是读取持仓快照前的本地时间，持仓滞后保护期从它往前算。
 	PositionsReadAt time.Time
 	FillCursors     store.FillCursors
-	Ready           bool
+	// GoneSymbols 是本轮查成交时交易所确认不存在（已下架）的标的：入账前收掉它们补不上的成交缺口（见 settleGoneFillGaps）。
+	GoneSymbols []exchange.SymbolKey
+	Ready       bool
 	// Prices 是读这份快照的适配器，按统一公式估权益时用它取受管现货的参考价；为空时不重算权益。
 	Prices execution.ReferencePriceSource
 }
@@ -262,16 +264,14 @@ func (s *Service) syncAccountLocked(
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
-	var warnings []string
 	var goneSymbols []exchange.SymbolKey
 	for _, key := range symbols {
 		rows, cursor, listErr := adapter.ListRecentFills(ctx, key, cursors[key.String()])
 		if exchange.IsInstrumentNotFound(listErr) {
-			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的、记提示，不让整次同步失败。
+			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的，不让整次同步失败。
 			// 未结束的单、成交缺口、成交游标、和交易所不一致的本地持仓都会把下架标的带进来，不跳过的话账户永远同步不过去。
 			// 成交游标原样保留：删掉的话标的一旦又查得到（误报、重新上市），币安会从 fromId=0 把全部历史成交重拉一遍。
-			// 这个标的上的成交缺口再也补不上，在入账快照之前收掉（见 settleGoneFillGaps）。
-			warnings = append(warnings, fmt.Sprintf("标的 %s 在交易所已不存在，跳过成交查询", key))
+			// 提示和补不上的成交缺口由入账快照统一处理（见 Snapshot.GoneSymbols）；会话启动拉成交走的是同一套。
 			goneSymbols = append(goneSymbols, key)
 			continue
 		}
@@ -284,12 +284,6 @@ func (s *Service) syncAccountLocked(
 			cursors[key.String()] = cursor
 		}
 	}
-	settledGaps, err := s.settleGoneFillGaps(ctx, account, goneSymbols)
-	if err != nil {
-		result, failErr := s.fail(ctx, account, err)
-		return result, maxDifference, failErr
-	}
-	warnings = append(warnings, settledGaps...)
 
 	orders := append([]exchange.Order(nil), openOrders...)
 	// 外部订单可能没有客户端订单号，挂单要同时按交易所订单号比对。
@@ -339,12 +333,11 @@ func (s *Service) syncAccountLocked(
 	result, err := s.applySnapshot(ctx, account.TradingAccountID, Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, AccountReadAt: accountReadAt, PositionsReadAt: positionsReadAt,
-		FillCursors: cursors, Ready: ready, Prices: adapter,
+		FillCursors: cursors, GoneSymbols: goneSymbols, Ready: ready, Prices: adapter,
 	})
 	if err != nil {
 		return result, maxDifference, err
 	}
-	result.Warnings = append(result.Warnings, warnings...)
 	for _, local := range missing {
 		// 迟到成交仍可入账，领域模型允许已撤销订单继续应用成交。
 		if err := s.Fills.ConfirmCancel(ctx, local.SpaceID, local.OrderID); err != nil {
@@ -425,7 +418,7 @@ const InstrumentGoneFillGapReason = "标的已下架，成交明细缺失，以�
 // settleGoneFillGaps 收掉已下架标的上的成交缺口：订单的观察累计成交量（下单回执、订单快照抬高的）领先已入账成交明细，
 // 而交易所对这个标的查成交只回“标的不存在”，明细再也补不上，不收掉的话账户每次同步都判有缺口、一直未就绪。
 // 在同一个事务里把这些标的上观察成交量大于已入账成交量的订单（含已结束的单）压回已入账值，每笔记关注项、写日志，
-// 要人工到交易所核对实际成交。必须在入账快照（applySnapshot）之前做，调用方持有账户锁。返回给同步结果的提示。
+// 要人工到交易所核对实际成交。由 applySnapshot 在入账之前调用，调用方持有账户锁。返回给同步结果的提示。
 func (s *Service) settleGoneFillGaps(ctx context.Context, account store.TradingAccountRecord, keys []exchange.SymbolKey) ([]string, error) {
 	if len(keys) == 0 {
 		return nil, nil
@@ -583,6 +576,15 @@ func (s *Service) applySnapshot(
 		))
 	}
 	result := Result{Ready: snapshot.Ready}
+
+	for _, key := range snapshot.GoneSymbols {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("标的 %s 在交易所已不存在，跳过成交查询", key))
+	}
+	settledGaps, err := s.settleGoneFillGaps(ctx, account, snapshot.GoneSymbols)
+	if err != nil {
+		return s.fail(ctx, account, err)
+	}
+	result.Warnings = append(result.Warnings, settledGaps...)
 
 	// 账户创建前的成交结果已经包含在余额和持仓快照里，只推进游标，不入账也不算外部成交。
 	// 要排在 batchQuantities 和 positionDeleteBefore 之前，否则持仓删除边界会被拉回最老的成交。
