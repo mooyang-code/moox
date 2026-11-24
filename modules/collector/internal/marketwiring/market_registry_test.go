@@ -60,10 +60,9 @@ func TestDefaultSourceIDComesFromCatalog(t *testing.T) {
 		{"stockcn", "sina", "equity", "stockcn_minute_http"},
 		{"stockcn", "eastmoney", "equity", "stockcn_http"},
 		{"stockcn", "tencent", "equity", "stockcn_http"},
-		{"stockcn", "baidu", "equity", "stockcn_http"},
-		// 目录里登记的是 index_http；原来写死的表给的是股票的 stockcn_http。
-		{"stockcn", "eastmoney", "index", "index_http"},
-		{"stockcn", "sina", "convertible_bond", "convertible_bond_http"},
+		// 指数、可转债没有登记数据源。
+		{"stockcn", "eastmoney", "index", ""},
+		{"stockcn", "sina", "convertible_bond", ""},
 		// 同一个数据源在别的市场没有登记。
 		{"crypto", "eastmoney", "equity", ""},
 		// 港股的东方财富只取 K 线，登记的 source_id 与 A 股的不同。

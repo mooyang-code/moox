@@ -91,7 +91,6 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 		ProtocolVariant: "tdx_normal",
 		Transport:       "tcp",
 		Port:            p.port,
-		Status:          marketdata.SourceEnabled,
 	}
 }
 

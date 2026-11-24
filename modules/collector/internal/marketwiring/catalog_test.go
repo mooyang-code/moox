@@ -21,16 +21,9 @@ func TestSingleSourceProvidersComeFromTheCatalog(t *testing.T) {
 		{"crypto", "swap", "binance", "*binance.MarketDataAdapter", "binance/swap_http"},
 		{"crypto", "equity", "binance", "", ""},
 		{"crypto", "spot", "okx", "", ""},
-		{"stockcn", "convertible_bond", "eastmoney", "*markethttp.Provider", "eastmoney/convertible_bond_http"},
-		{"stockcn", "convertible_bond", "sina", "*markethttp.Provider", "sina/convertible_bond_http"},
-		{"stockcn", "convertible_bond", "tencent", "", ""},
-		{"stockcn", "index", "eastmoney", "*markethttp.Provider", "eastmoney/index_http"},
-		{"stockcn", "index", "sina", "*markethttp.Provider", "sina/index_http"},
-		{"stockcn", "index", "tencent", "*markethttp.Provider", "tencent/index_http"},
-		{"stockcn", "index", "cni", "*markethttp.Provider", "cni/index_cni_http"},
-		{"stockcn", "index", "sw", "*markethttp.Provider", "sw/index_sw_http"},
-		{"stockcn", "index", "csindex", "*markethttp.Provider", "csindex/index_http"},
 		{"crypto", "index", "sina", "", ""},
+		{"stockcn", "index", "eastmoney", "", ""},
+		{"stockcn", "convertible_bond", "sina", "", ""},
 		{"stockcn", "futures", "x", "", ""},
 	} {
 		name := fmt.Sprintf("%s/%s/%s", test.market, test.instrument, test.provider)
@@ -54,10 +47,10 @@ func TestRoutedProvidersComeFromTheCatalog(t *testing.T) {
 	require.True(t, found)
 	runtimes, err := marketfetch.LoadSourceRuntimes(route)
 	require.NoError(t, err)
-	sourceIDs := map[string]string{"sina": "stockcn_minute_http", "tencent": "stockcn_http", "eastmoney": "stockcn_http", "baidu": "stockcn_http", "tdx": "normal_7709"}
+	sourceIDs := map[string]string{"sina": "stockcn_minute_http", "tencent": "stockcn_http", "eastmoney": "stockcn_http", "tdx": "normal_7709"}
 	for id, want := range map[string]string{
 		"sina": "*sina.Provider sina/stockcn_minute_http", "tencent": "*tencent.Provider tencent/stockcn_http",
-		"eastmoney": "*eastmoney.Provider eastmoney/stockcn_http", "baidu": "*baidu.Provider baidu/stockcn_http", "tdx": "*tdx.Provider tdx/normal_7709",
+		"eastmoney": "*eastmoney.Provider eastmoney/stockcn_http", "tdx": "*tdx.Provider tdx/normal_7709",
 	} {
 		for _, source := range []string{"", sourceIDs[id]} {
 			provider, err := newRoutedProvider("stockcn", marketdata.InstrumentEquity, id, source, runtimes[id])

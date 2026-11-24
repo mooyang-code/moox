@@ -11,7 +11,6 @@ var (
 	ErrProviderAlreadyRegistered = errors.New("provider already registered")
 	ErrProviderNotFound          = errors.New("provider not found")
 	ErrProviderAmbiguous         = errors.New("provider has multiple sources")
-	ErrSourceUnavailable         = errors.New("source is not enabled")
 	ErrFetcherNotSupported       = errors.New("fetcher not supported")
 	ErrTimeout                   = errors.New("timeout")
 	ErrTCP                       = errors.New("tcp error")
@@ -31,7 +30,6 @@ type ErrorKind string
 
 const (
 	ErrorKindUnknown              ErrorKind = "unknown"
-	ErrorKindSourceUnavailable    ErrorKind = "source_unavailable"
 	ErrorKindTimeout              ErrorKind = "timeout"
 	ErrorKindTCP                  ErrorKind = "tcp"
 	ErrorKindRateLimited          ErrorKind = "rate_limited"
@@ -58,8 +56,6 @@ func ClassifyError(err error) ErrorKind {
 		return ErrorKindDeadlineExceeded
 	case errors.Is(err, ErrTimeout):
 		return ErrorKindTimeout
-	case errors.Is(err, ErrSourceUnavailable):
-		return ErrorKindSourceUnavailable
 	case errors.Is(err, ErrTCP):
 		return ErrorKindTCP
 	case errors.Is(err, ErrRateLimited):

@@ -392,12 +392,6 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			}
 			return nil, fmt.Errorf("%w: provider=%s", err, providerID)
 		}
-		if status := fetcher.Descriptor().Status; status == SourceShadow || status == SourceCatalogOnly {
-			err = fmt.Errorf("%w: %s", ErrSourceUnavailable, fetcher.Descriptor().SourceKey().String())
-			s.breaker.Observe(providerID, err)
-			lastErr = err
-			continue
-		}
 		spec := fetcher.KlineSpec()
 		providerReq := req
 		providerReq.SourceID = fetcher.Descriptor().SourceID

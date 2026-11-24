@@ -81,7 +81,6 @@ func (a *MarketDataAdapter) Descriptor() marketdata.ProviderDescriptor {
 		ProtocolVariant: "http",
 		Transport:       "https",
 		Port:            443,
-		Status:          marketdata.SourceEnabled,
 	}
 }
 

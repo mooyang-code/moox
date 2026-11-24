@@ -49,7 +49,7 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney_select", SourceID: "select_http", DisplayName: "东方财富选股器", Hosts: []string{"data.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "eastmoney_select", SourceID: "select_http", DisplayName: "东方财富选股器", Hosts: []string{"data.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {

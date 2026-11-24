@@ -83,7 +83,7 @@ func NewKline(cfg KlineConfig) *KlineProvider {
 }
 
 func (p *KlineProvider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.sourceID, DisplayName: "Tencent HK Minute", Hosts: []string{klineHost}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.sourceID, DisplayName: "Tencent HK Minute", Hosts: []string{klineHost}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 func (p *KlineProvider) KlineSpec() marketdata.KlineSpec {

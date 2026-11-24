@@ -9,15 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
-	bondeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/bond/eastmoney"
-	bondsina "github.com/mooyang-code/moox/modules/collector/internal/sources/bond/sina"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/index/cni"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/index/csindex"
-	indexeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/index/eastmoney"
-	indexsina "github.com/mooyang-code/moox/modules/collector/internal/sources/index/sina"
-	indexsw "github.com/mooyang-code/moox/modules/collector/internal/sources/index/sw"
-	indextencent "github.com/mooyang-code/moox/modules/collector/internal/sources/index/tencent"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/baidu"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoneyselect"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoneyturnover"
@@ -95,9 +86,6 @@ func build() *marketdata.Catalog {
 			s := deps.Settings
 			return eastmoney.New(eastmoney.Config{KlineBaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, InstrumentRequestTimeout: stockCNInstrumentTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
-		routedEntry(stockcn, marketdata.InstrumentEquity, "baidu", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
-			return baidu.New(baidu.Config{SourceID: deps.SourceID, RateLimit: deps.Settings.RateLimit}), nil
-		}),
 		routedEntry(stockcn, marketdata.InstrumentEquity, "tdx", "normal_7709", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			host := ""
@@ -126,16 +114,6 @@ func build() *marketdata.Catalog {
 		entry(stockcn, marketdata.InstrumentEquity, "eastmoney_select", "select_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			return eastmoneyselect.New(eastmoneyselect.Config{RateLimit: deps.Settings.RateLimit}), nil
 		}),
-		// A 股可转债。
-		entry(stockcn, marketdata.InstrumentConvertibleBond, "eastmoney", "convertible_bond_http", fixed(func() marketdata.MarketProvider { return bondeastmoney.New(bondeastmoney.Config{}) })),
-		entry(stockcn, marketdata.InstrumentConvertibleBond, "sina", "convertible_bond_http", fixed(func() marketdata.MarketProvider { return bondsina.New(bondsina.Config{}) })),
-		// A 股指数。
-		entry(stockcn, marketdata.InstrumentIndex, "eastmoney", "index_http", fixed(func() marketdata.MarketProvider { return indexeastmoney.New(indexeastmoney.Config{}) })),
-		entry(stockcn, marketdata.InstrumentIndex, "sina", "index_http", fixed(func() marketdata.MarketProvider { return indexsina.New(indexsina.Config{}) })),
-		entry(stockcn, marketdata.InstrumentIndex, "tencent", "index_http", fixed(func() marketdata.MarketProvider { return indextencent.New(indextencent.Config{}) })),
-		entry(stockcn, marketdata.InstrumentIndex, "cni", "index_cni_http", fixed(func() marketdata.MarketProvider { return cni.New(cni.Config{}) })),
-		entry(stockcn, marketdata.InstrumentIndex, "sw", "index_sw_http", fixed(func() marketdata.MarketProvider { return indexsw.New(indexsw.Config{}) })),
-		entry(stockcn, marketdata.InstrumentIndex, "csindex", "index_http", fixed(func() marketdata.MarketProvider { return csindex.New(csindex.Config{}) })),
 		// 港股股票：K 线来源按 config/markets/stockhk/route.yaml 分配，东方财富是主源，只取 K 线；腾讯备源在下面。
 		routedEntry(stockhk, marketdata.InstrumentEquity, "eastmoney", hkeastmoney.DefaultSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings

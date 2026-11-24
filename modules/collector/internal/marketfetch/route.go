@@ -342,7 +342,6 @@ type sourceFileBody struct {
 	ID           string              `yaml:"id"`
 	Market       string              `yaml:"market"`
 	EnabledFeeds []string            `yaml:"enabled_feeds"`
-	ShadowFeeds  []string            `yaml:"shadow_feeds"`
 	Hosts        []string            `yaml:"hosts"`
 	Kline        SourceKlineConfig   `yaml:"kline"`
 	RateLimit    sourceRateLimitFile `yaml:"rate_limit"`
@@ -351,7 +350,6 @@ type sourceFileBody struct {
 // SourceKlineConfig 是数据源配置文件里的 K 线一段。
 type SourceKlineConfig struct {
 	Endpoint          string `yaml:"endpoint"`
-	Mode              string `yaml:"mode"`
 	MaxBarsPerRequest int    `yaml:"max_bars_per_request"`
 	VolumeUnit        string `yaml:"volume_unit"`
 	AmountUnit        string `yaml:"amount_unit"`
@@ -372,7 +370,6 @@ type SourceRuntime struct {
 	ID                string
 	KlineEnabled      bool
 	InstrumentEnabled bool
-	KlineShadow       bool
 	KlineBaseURL      string
 	KlineEndpoint     string
 	Hosts             []string
@@ -433,7 +430,6 @@ func LoadSourceRuntime(marketID, id string) (SourceRuntime, bool, error) {
 		ID:                id,
 		KlineEnabled:      containsStringFold(file.Provider.EnabledFeeds, "kline"),
 		InstrumentEnabled: containsStringFold(file.Provider.EnabledFeeds, "instrument"),
-		KlineShadow:       containsStringFold(file.Provider.ShadowFeeds, "kline") || strings.EqualFold(file.Provider.Kline.Mode, "shadow"),
 		KlineBaseURL:      baseURL,
 		KlineEndpoint:     endpoint,
 		Hosts:             append([]string(nil), file.Provider.Hosts...),

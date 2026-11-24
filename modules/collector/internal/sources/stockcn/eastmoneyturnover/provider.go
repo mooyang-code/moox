@@ -43,7 +43,7 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney_turnover", SourceID: "turnover_http", DisplayName: "东方财富换手率", Hosts: []string{"push2his.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "eastmoney_turnover", SourceID: "turnover_http", DisplayName: "东方财富换手率", Hosts: []string{"push2his.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 // FieldSpecs：停牌日补出的行换手率是 0（fill=zero），与成交量一致。

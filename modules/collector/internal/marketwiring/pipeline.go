@@ -62,7 +62,7 @@ func newRoutedKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	registry := marketdata.NewRegistry()
 	for _, source := range kline.Sources() {
 		runtime, ok := runtimes[source.Provider]
-		if !ok || !runtime.KlineEnabled || runtime.KlineShadow {
+		if !ok || !runtime.KlineEnabled {
 			return nil, fmt.Errorf("%s K 线来源 %q 在数据源配置里没有启用", marketID, source.Provider)
 		}
 		provider, providerErr := newRoutedProvider(marketID, instrumentType, source.Provider, source.SourceID, runtime)

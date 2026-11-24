@@ -61,7 +61,7 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "tencent", SourceID: p.sourceID, DisplayName: "Tencent", Hosts: []string{"web.ifzq.gtimg.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "tencent", SourceID: p.sourceID, DisplayName: "Tencent", Hosts: []string{"web.ifzq.gtimg.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
