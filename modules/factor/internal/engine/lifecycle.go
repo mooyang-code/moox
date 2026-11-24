@@ -178,7 +178,7 @@ func (r *Runtime) catchupMembers() []domain.EngineTask {
 }
 
 // taskError 返回任务当前不能计算的原因，能计算时为 nil；与 blockedCheck 用同一个判断：
-// 任务自己的因子回看超过 N（“回看数量”，只影响这个任务），或数据源不能计算——零数据标的（“本地数据”）、
+// 任务自己的因子回看超过 N（“回看数量”，只影响这个任务），或数据源不能计算——全部标的都没有数据（“本地数据”）、
 // 窗口内存超过预算与变更日志断档（这两种检查项名都是“变更同步”）。
 func (r *Runtime) taskError(set domain.EngineTask) error {
 	if r.sources == nil {
@@ -192,7 +192,7 @@ func (r *Runtime) taskError(set domain.EngineTask) error {
 
 // sourceGate 判断任务与数据源当前能不能计算。运行时由本地数据层（*localdata.Data）实现。
 type sourceGate interface {
-	// Blocked 返回数据源不能计算的原因：零数据标的、窗口内存超过预算、变更日志断档。
+	// Blocked 返回数据源不能计算的原因：全部标的都没有数据、窗口内存超过预算、变更日志断档。
 	Blocked(seriesstore.Source) error
 	// LookbackError 返回任务里因子回看超过数据源回看数量 N 的错误。
 	LookbackError(domain.EngineTask) error
@@ -336,6 +336,9 @@ func (r *Runtime) checkTask(ctx context.Context, taskID string) []domain.TaskChe
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
 	if ready {
 		checks = append(checks, r.coverageCheck(ctx, src))
+		if check, ok := r.noDataCheck(taskID, src); ok {
+			checks = append(checks, check)
+		}
 	}
 	checks = append(checks, r.blockedCheck(set, src))
 	if check, ok := r.modulesCheck(set); ok {
@@ -352,6 +355,24 @@ func (r *Runtime) checkTask(ctx context.Context, taskID string) []domain.TaskChe
 	return checks
 }
 
+// noDataCheck 列出任务里本地和 Storage 都没有任何数据的标的：部分没有时警告（这些标的每期按本期不可用处理，其余照常），
+// 全部没有时不通过（同一数据源上别的任务有数据时，预载不会拦住这个任务，只有这里能看出它什么都算不出来）。
+func (r *Runtime) noDataCheck(taskID string, src seriesstore.Source) (domain.TaskCheck, bool) {
+	missing, total := r.data.SubjectsWithoutData(taskID, src)
+	if len(missing) == 0 {
+		return domain.TaskCheck{}, false
+	}
+	message := (&localdata.NoDataError{Subjects: missing}).Error()
+	remedy := fmt.Sprintf("停牌超过保留期的标的复牌后会自动恢复；需要历史时导入：moox-cli import --target factor --space-id %s --dataset-id %s --frequency %s --path <历史文件>；不需要时把它们从源数据集的标签里移除", src.SpaceID, src.DatasetID, src.Freq)
+	if len(missing) < total {
+		return domain.TaskCheck{Name: noDataCheckName, Status: domain.TaskCheckWarn, Message: message + "；这些标的每期按本期不可用处理，其余标的照常计算", Remedy: remedy}, true
+	}
+	return domain.TaskCheck{Name: noDataCheckName, Status: domain.TaskCheckFail, Message: message, Remedy: remedy}, true
+}
+
+// noDataCheckName 是“没有数据的标的”检查项的名字。
+const noDataCheckName = "没有数据的标的"
+
 func gapMessage(count int, first localdata.LongGap) string {
 	if first.Stale {
 		return fmt.Sprintf("%d 个标的长时间没有新数据（例如 %s 已 %s 没有新行情）", count, first.Subject, first.Duration.Round(time.Minute))
@@ -359,7 +380,7 @@ func gapMessage(count int, first localdata.LongGap) string {
 	return fmt.Sprintf("%d 个标的的窗口里有长缺口（例如 %s 连续填充 %d 根、约 %s），填充值仍参与计算", count, first.Subject, first.Rows, first.Duration.Round(time.Minute))
 }
 
-// blockedCheck 把任务当前不能计算的原因翻成检查项：零数据标的要导入或移除，因子回看超过 N 要调 N，变更日志断档要对账。
+// blockedCheck 把任务当前不能计算的原因翻成检查项：全部标的都没有数据时要导入或移除，因子回看超过 N 要调 N，变更日志断档要对账。
 func (r *Runtime) blockedCheck(set domain.EngineTask, src seriesstore.Source) domain.TaskCheck {
 	taskID := set.Set.TaskID
 	err := r.taskError(set)

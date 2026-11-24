@@ -37,7 +37,7 @@ func TestPrepareFailsWhenNoSubjectHasDataAnywhere(t *testing.T) {
 }
 
 // 只有部分标的没有任何数据（停牌超过保留期）：不拖住任务，其余标的照常计算，没有数据的标的本期不可用；
-// 有了数据后下一次预载载入，之后照常计算。
+// 复牌后不用重新预载，实时周期按回看范围拉到它的数据就照常计算。
 func TestPrepareSkipsSubjectsWithoutDataWhenOthersHaveData(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
@@ -47,6 +47,9 @@ func TestPrepareSkipsSubjectsWithoutDataWhenOthersHaveData(t *testing.T) {
 	status := fx.data.WindowStatuses()
 	require.Len(t, status, 1)
 	require.Equal(t, "ready", string(status[0].State))
+	missing, total := fx.data.SubjectsWithoutData("set1", startupSrc)
+	require.Equal(t, []string{"GHOST"}, missing, "任务检查要能列出没有数据的标的")
+	require.Equal(t, 2, total)
 
 	fx.st.put("BTC", 100, 10)
 	outcome := fx.live(t, at(10), []string{"BTC", "GHOST"})
@@ -57,10 +60,11 @@ func TestPrepareSkipsSubjectsWithoutDataWhenOthersHaveData(t *testing.T) {
 	fx.st.put("GHOST", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
 	fx.st.put("BTC", 100, 11)
 	fx.now = at(11)
-	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "GHOST"}))
 	outcome = fx.live(t, at(11), []string{"BTC", "GHOST"})
 	require.Empty(t, outcome.FailedSubjects)
 	require.InDelta(t, (109+110+111)/3.0, fx.result("GHOST", 11).Fields["mean"], 1e-9)
+	missing, _ = fx.data.SubjectsWithoutData("set1", startupSrc)
+	require.Empty(t, missing)
 }
 
 // 因子的回看不能超过数据源的回看数量 N。

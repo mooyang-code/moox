@@ -253,7 +253,7 @@ func sharedSynced() *syncedScope {
 	return scope
 }
 
-// 重启时任务逐个就绪：只有 obs 准备好、wide 还没准备（或准备失败）时，obs 的结果与两个任务都就绪后相同——
+// 重启时任务逐个就绪：只有 obs 准备好、wide 还没准备（或带着没有数据的标的准备）时，obs 的结果与两个任务都就绪后相同——
 // “正在同步”按目录里同源启用任务的范围算，与运行时的登记、准备状态无关。
 func TestObservedRestartTasksReadyOneByOne(t *testing.T) {
 	storage := newSharedStorage()
@@ -306,11 +306,43 @@ func TestObservedRestartTasksReadyOneByOne(t *testing.T) {
 	live(runner, data, obs, []string{"A", "B", "C"})
 	require.Equal(t, math.Float64bits(allReady), math.Float64bits(storage.value(t, "result_ftask_obs", "A", 9, "obs")), "先就绪的 obs")
 
-	// wide 一直没准备：它的范围仍算正在同步，X 不进 obs 的历史截面，GONE 仍在。
+	// wide 准备时带了一个在本地与 Storage 都没有数据的标的（NOPE）：只有部分标的没有数据，准备照常完成，
+	// 它的范围仍算正在同步，X 不进 obs 的历史截面，GONE 仍在。
+	require.NoError(t, data.Prepare(ctx, wide, []string{"A", "B", "C", "X", "NOPE"}))
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: obs.Set, Members: obs.Members,
 		PeriodTime: rt0.Add(9 * time.Minute), UniverseSeries: plainSeries("A", "B", "C")})
 	require.NoError(t, err)
 	history, err := data.HistorySubjects(ctx, plan)
 	require.NoError(t, err)
 	require.Equal(t, []string{"GONE"}, history)
+}
+
+// 任务检查“没有数据的标的”：任务里部分标的没有数据时警告；任务的标的全部没有数据、而同一数据源上别的任务有数据时，
+// 预载不会拦住它，这一项给不通过。
+func TestNoDataCheckWarnsOnSomeAndFailsOnAll(t *testing.T) {
+	storage := newSharedStorage()
+	storage.put("A", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	now := rt0.Add(10 * time.Minute)
+	data := localdata.New(localdata.Config{Store: store, Storage: storage, Admit: memadmit.New(0), Workers: 1, BatchSubjects: 2,
+		Now: func() time.Time { return now }})
+	obs, wide := sharedTasks()
+	ctx := context.Background()
+	require.NoError(t, data.Prepare(ctx, obs, []string{"A", "NOPE"}))
+	require.NoError(t, data.Prepare(ctx, wide, []string{"NOPE", "NADA"}), "同源有数据：预载不拦")
+	r := &Runtime{data: data}
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m"}
+
+	check, ok := r.noDataCheck(obs.Set.TaskID, src)
+	require.True(t, ok)
+	require.Equal(t, domain.TaskCheckWarn, check.Status)
+	require.Contains(t, check.Message, "NOPE")
+	check, ok = r.noDataCheck(wide.Set.TaskID, src)
+	require.True(t, ok)
+	require.Equal(t, domain.TaskCheckFail, check.Status, "任务的标的全部没有数据")
+
+	_, ok = r.noDataCheck("ftask_unknown", src)
+	require.False(t, ok, "没登记的任务没有这一项")
 }
