@@ -20,10 +20,12 @@ Storage 的端到端验证（View 跟随变更日志）在 `modules/storage/inte
 先核对 `moox.toml` 与已部署计划，等待 Collector 自动创建、更新函数。Timer 函数当前超时 60 秒，计划默认内存 128MB（可配置），部署参数由对账器下发；函数应就绪且 Timer 云侧读回与期望一致。
 
 ```bash
-./bin/moox-cli collector fetch-plan --file ./moox.toml --space-id crypto
-./bin/moox-cli collector function probe-egress --file ./moox.toml --space-id crypto
-./bin/moox-cli collector function list --file ./moox.toml --space-id crypto --drift
+./bin/moox-cli collector fetch-plan --file ./moox.toml --space-id stockcn
+./bin/moox-cli collector function probe-egress --file ./moox.toml --space-id stockcn
+./bin/moox-cli collector function list --file ./moox.toml --space-id stockcn --drift
 ```
+
+示例用 stockcn 空间：A 股、港股、美股的 K 线任务默认由 SCF 采集（各市场 `market.yaml` 的 `ingest: scf`）；crypto 默认走 `collector-stream` 的 WS 推送（`ingest: stream`），没有 Timer 采集函数，按下文 WS 路径的项核对。
 
 CLI 使用清单中的操作员 SSH 网关身份。`probe-egress` 经 Collector 对已生效计划里的采集函数发起同步诊断调用；公网 IP 反射不可用时不以缺少 IP 判定行情源失败。
 

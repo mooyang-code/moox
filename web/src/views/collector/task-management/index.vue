@@ -59,8 +59,6 @@ const activeComponent = computed(
 );
 
 function normalizeTab(value: unknown): CollectorTaskTab {
-  // 执行器页签已经删除，旧链接落到运行状态（云账号、代码包从那里进入）
-  if (value === "executors") return "status";
   return value === "status" || value === "backfills" || value === "results" ? value : "tasks";
 }
 

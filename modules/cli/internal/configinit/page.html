@@ -320,7 +320,7 @@ button.ghost.away { visibility: hidden; }
         <div><h2>告警通知</h2><p>行情中断、服务异常时发到群里。</p></div>
         <div class="fields two">
           <label class="f"><span>发送到</span><select id="notify-type"><option value="wecom">企业微信群机器人</option><option value="feishu">飞书群机器人</option><option value="dingtalk">钉钉群机器人</option><option value="webhook">通用 Webhook</option></select></label>
-          <label class="f full"><span>机器人 Webhook 地址<span class="opt">可选</span></span><input type="password" id="notify-url" data-secret autocomplete="new-password" spellcheck="false"><small>在群设置 → 群机器人 → 添加机器人后复制。现在不填也行，部署完成后可以在管理台「监控 › 告警渠道」里添加；添加之前出了问题不会通知到群里。</small></label>
+          <label class="f full"><span>机器人 Webhook 地址<span class="opt">可选</span></span><input type="password" id="notify-url" data-secret autocomplete="new-password" spellcheck="false"><small>在群设置 → 群机器人 → 添加机器人后复制。现在不填也行，部署完成后可以在管理台「资源与运维 › 监控告警」的“消息通知设置”里添加；添加之前出了问题不会通知到群里。</small></label>
           <label class="f full" id="notify-secret-row" hidden><span>密钥<span class="opt">可选</span></span><input type="password" id="notify-secret" data-secret autocomplete="new-password" spellcheck="false"><small id="notify-secret-hint"></small></label>
         </div>
       </div>
@@ -328,7 +328,7 @@ button.ghost.away { visibility: hidden; }
 
     <section class="page" id="page-5" hidden>
       <h1>交易所密钥</h1>
-      <p class="lede">可以不填。在海外服务器上下单，或者让 MooX 检测币安现货下架，需要交易所的 API 密钥；现在不填也行，以后可以在管理台「设置 › 秘钥管理」里添加。</p>
+      <p class="lede">可以不填。在海外服务器上下单，或者让 MooX 检测币安现货下架，需要交易所的 API 密钥；现在不填也行，以后可以在管理台「系统设置 › 密钥管理」里添加。</p>
       <div class="block">
         <div><h2>API 密钥<span class="opt">可选</span></h2>
           <p>每把密钥对应一个交易所和一个环境。<b>只读密钥</b>（只开读取权限）用来检测币安现货下架，不能下单；用来下单的密钥不要开提现权限。</p>

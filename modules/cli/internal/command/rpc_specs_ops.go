@@ -13,7 +13,7 @@ const (
 
 func init() {
 	rpcGroupShort["eventbus"] = "EventBus：流、消费者与事件概览（调用 EventBusMgr，只读）"
-	rpcGroupShort["secret"] = "密钥：只列清单与打码后的信息；新建、修改请用户在管理台“设置 › 密钥”填写"
+	rpcGroupShort["secret"] = "密钥：只列清单与打码后的信息；新建、修改请用户在管理台“系统设置 › 密钥管理”填写"
 	rpcGroupShort["host agent"] = "主机代理：主机资源采集状态（用 --host 指定主机）"
 
 	registerRPCSpecs(

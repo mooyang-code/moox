@@ -10,6 +10,7 @@ trap 'rm -rf "${TMP}"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 GO_WANT="$(tr -d '[:space:]' < "${ROOT}/.go-version")"
+RUST_WANT="$(sed -n 's/^channel *= *"\(.*\)".*/\1/p' "${ROOT}/sdk/rust/rust-toolchain.toml")"
 BASH_BIN="$(command -v bash)"
 PY="$(command -v python3)"
 
@@ -103,10 +104,51 @@ for bad in 22.11.0 22.12.9 20.18.0 18.20.4 21.7.0; do
   grep -q "\[不符\] *Node.js" "${TMP}/out.txt" || fail "Node ${bad} 要报不符"
 done
 
-# ---------------------------------------------------------------- verify 场景：make / rg / jq / rsync
+# ---------------------------------------------------------------- verify 场景：make / rg / jq / rsync / Rust
 if run_check "--profile verify" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=dnf; then fail "缺 make、rg 等应失败"; fi
-for tool in "make" "ripgrep" "jq" "rsync"; do grep -q "\[缺少\] *${tool}" "${TMP}/out.txt" || fail "verify 场景要报缺少 ${tool}"; done
+for tool in "make" "ripgrep" "jq" "rsync" "Rust ${RUST_WANT}"; do grep -q "\[缺少\] *${tool}" "${TMP}/out.txt" || fail "verify 场景要报缺少 ${tool}"; done
 grep -q 'sudo dnf install -y ripgrep' "${TMP}/out.txt" || fail "dnf 下 ripgrep 的建议不对"
+grep -q "rustup toolchain install ${RUST_WANT} .*--target wasm32-unknown-unknown" "${TMP}/out.txt" || fail "Rust 的安装建议要给出固定版本和 wasm 目标"
+
+# Rust：不经 rustup 时看 rustc 的版本与 wasm 目标；经 rustup 时看固定版本的工具链装没装。
+make_rustc() { # rustc --version 报的版本；sysroot 固定在 ${TMP}/sysroot
+  cat >"${TMP}/tools/rustc" <<EOF
+#!/usr/bin/env bash
+[[ "\$1" == "--version" ]] && { echo "rustc $1 (abcdef 2026-01-01)"; exit 0; }
+[[ "\$1 \$2" == "--print sysroot" ]] && { echo "${TMP}/sysroot"; exit 0; }
+exit 0
+EOF
+  chmod +x "${TMP}/tools/rustc"
+}
+rust_line() { grep "Rust ${RUST_WANT}" "${TMP}/out.txt" || true; }
+make_tool cargo "cargo ${RUST_WANT}"
+make_rustc "1.80.0"
+run_check "--profile verify" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=dnf || true
+rust_line | grep -q '\[不符\].*rustc 1.80.0' || fail "Rust 版本不符要报不符并说出发现的版本：$(cat "${TMP}/out.txt")"
+make_rustc "${RUST_WANT}"
+run_check "--profile verify" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=dnf || true
+rust_line | grep -q "\[不符\].*没有 wasm32-unknown-unknown 目标" || fail "缺 wasm 目标要报不符：$(cat "${TMP}/out.txt")"
+mkdir -p "${TMP}/sysroot/lib/rustlib/wasm32-unknown-unknown"
+run_check "--profile verify" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=dnf || true
+rust_line | grep -q "\[通过\].*rustc ${RUST_WANT}" || fail "Rust 齐全时应通过：$(cat "${TMP}/out.txt")"
+# web 场景不检查 Rust。
+run_check "--profile web" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=apt-get || fail "web 场景应通过：$(cat "${TMP}/out.txt")"
+! grep -q 'Rust' "${TMP}/out.txt" || fail "web 场景不该检查 Rust"
+
+cat >"${TMP}/tools/rustup" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "toolchain list") echo "stable-x86_64-unknown-linux-gnu (default)"; [[ -z "${RUSTUP_FAKE_PINNED:-}" ]] || echo "${RUSTUP_FAKE_PINNED}-x86_64-unknown-linux-gnu" ;;
+  "run ${RUSTUP_FAKE_PINNED:-none}") shift 2; exec "$@" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "${TMP}/tools/rustup"
+run_check "--profile verify" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=dnf || true
+rust_line | grep -q "\[不符\].*rustup 里没有工具链 ${RUST_WANT}" || fail "rustup 没装固定版本要报不符：$(cat "${TMP}/out.txt")"
+run_check "--profile verify" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=dnf RUSTUP_FAKE_PINNED="${RUST_WANT}" || true
+rust_line | grep -q "\[通过\].*rustc ${RUST_WANT}" || fail "rustup 装了固定版本时应通过：$(cat "${TMP}/out.txt")"
+rm -f "${TMP}/tools/rustup"
 
 # ---------------------------------------------------------------- JSON 输出
 if run_check "--profile verify --json" MOOX_BUILD_ENV_OS=windows MOOX_BUILD_ENV_PM=winget; then fail "JSON 模式缺项时也应返回非 0"; fi
@@ -117,6 +159,7 @@ assert data["os"] == "windows" and data["package_manager"] == "winget" and data[
 ids = {c["id"]: c for c in data["checks"]}
 assert ids["git"]["status"] == "ok" and ids["go"]["status"] == "ok"
 assert ids["rg"]["status"] == "missing" and "winget install" in ids["rg"]["fix"]
+assert ids["rust"]["status"] == "ok"
 for c in data["checks"]:
     assert set(c) == {"id", "label", "status", "found", "need", "fix"}
 PY

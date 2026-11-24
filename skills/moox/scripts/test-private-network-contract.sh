@@ -14,7 +14,7 @@ fail() {
 
 [[ -f "${REFERENCE}" ]] || fail "private network reference is missing"
 grep -Fq 'references/private-network.md' "${SKILL}" || fail "SKILL.md does not route private-network to the reference"
-grep -Fq '### Tencent Private Network' "${SKILL}" || fail "SKILL.md is missing the private network section"
+grep -Fq '### 腾讯云私有网络' "${SKILL}" || fail "SKILL.md is missing the private network section"
 grep -Fq 'references/private-network.md' "${INSTALL}" || fail "install.md does not point agents at private-network.md"
 
 description="$(sed -n 's/^description: //p' "${SKILL}" | head -1)"
@@ -34,7 +34,6 @@ for required in \
   'MOOX_ENTRY_ADDRESS' \
   'public_net_status' \
   'ModifyInstancesVpcAttribute' \
-  'MOOX_PUBLIC_HOST' \
   'EventBus' \
   'setup inspect-scf' \
   './bin/moox-cli setup validate --file ./moox.toml'

@@ -27,7 +27,6 @@ type componentHarness struct {
 
 func newComponentHarness(t *testing.T, componentID string, rows ...monmetrics.MetricService) *componentHarness {
 	t.Helper()
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.Close() })

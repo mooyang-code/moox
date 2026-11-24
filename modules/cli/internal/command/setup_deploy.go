@@ -140,7 +140,7 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 		Short: "把一台主机部署成 moox.toml 描述的样子：放二进制、渲染配置、按顺序重启有变化的组件，等它们就绪",
 		Long: `部署一台主机上的全部组件，或用 --component 只部署其中几个。每个组件是一个 systemd 用户服务 moox-<组件>。
 重跑同一条命令就是再做一遍：没有变化的组件不重启；上次装好之后被停用（setup stop）的组件只更新文件、保持停用。
-控制机每次部署都会先执行 moox-admin-cli bootstrap（建库、CA、主密钥、管理员、登记主机与部署、登记这台电脑的 moox-cli 公钥，只建不改）；
+控制机每次部署都会先执行 moox-admin-cli bootstrap（建库、CA、主密钥、管理员、登记这台电脑的 moox-cli 公钥，这些只建不改；主机与部署按 moox.toml 同步，已停用的保持停用）；
 其余主机先把登记同步到 Admin，再向控制机要身份材料。只部署个别组件时，服务目录变了会把这台主机的主机网关一起升级。
 每台主机有一把签名私钥（secrets/host.key），本机全部组件共用，Admin 只登记公钥。例行部署不换它：目标机上的私钥和登记的公钥一致就沿用，
 只重新签发主机证书；私钥丢了或对不上时会签发新的。--rotate-host-key 显式换掉它：旧私钥立即作废，这台主机上的组件全部重启。

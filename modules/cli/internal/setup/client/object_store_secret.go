@@ -20,7 +20,7 @@ func (c ObjectStoreCredential) Env() []byte {
 	return []byte("ACCESS_KEY_ID=" + c.AccessKeyID + "\nSECRET_ACCESS_KEY=" + c.SecretAccessKey + "\n")
 }
 
-// ObjectStoreSecret 从 Admin 读出归档对象存储的密钥（管理台“设置 › 密钥”里那条）：要求提供方是 s3（不区分大小写）、
+// ObjectStoreSecret 从 Admin 读出归档对象存储的密钥（管理台“系统设置 › 密钥管理”里那条）：要求提供方是 s3（不区分大小写）、
 // 状态 active、标识与秘钥值非空且不含空白；不校验分类。错误信息不含密钥的任何值。
 func (c *Client) ObjectStoreSecret(ctx context.Context, secretID string) (ObjectStoreCredential, error) {
 	if strings.TrimSpace(secretID) == "" {

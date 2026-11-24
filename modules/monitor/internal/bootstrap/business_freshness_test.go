@@ -36,7 +36,6 @@ func (p *businessFreshnessInventoryProvider) FetchTaskResultInventory(context.Co
 }
 
 func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -747,7 +746,6 @@ func TestBusinessFreshnessReporterSkipsSeriesLimitCheckWhenUnlimited(t *testing.
 }
 
 func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -806,7 +804,6 @@ func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testi
 }
 
 func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -887,7 +884,6 @@ func TestServiceDeploymentExpectedRequiresExplicitRegistration(t *testing.T) {
 }
 
 func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDatasets(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -1174,7 +1170,6 @@ func latenessPolicy(lateness time.Duration) report.RealtimeTimeSeriesPolicy {
 // 观测输入（Monitor 的 EventBus 观测消费者）中断期间：依赖服务指标的检查冻结，既不新增"已停止上报"告警，
 // 也只留一条"观测输入"检查说明原因；刚恢复的宽限期内同样冻结，宽限结束后恢复判定。
 func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.Close() })
@@ -1271,7 +1266,6 @@ func TestRuntimeObservationStateFollowsIngestAndGrace(t *testing.T) {
 // 升级前余额对账和三类关注项记在 crypto 空间下，升级后新结果改记到 mooxsys。库里残留的旧检查不能再被写成失败：
 // 概览会把余额对账的旧检查连同上一次结果读回来，报告器不能拿它当本轮事实，只能按“不再检查”收尾。
 func TestBusinessFreshnessReporterRetiresLegacySpaceChecksAfterUpgrade(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.Close() })

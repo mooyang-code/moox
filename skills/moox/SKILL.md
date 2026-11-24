@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 新安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/validate/deploy/init/status/logs, 检测是否已部署), upgrading, overwriting, uninstalling or rolling back production hosts (发布, 上线, 升级, 覆盖更新, 卸载, 回滚, setup update, setup wipe, setup deploy, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ENTRY_ADDRESS, 外部入口, external_entry, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易查询与写操作, host exec, 命令覆盖).
+description: 凡是与 MooX 量化系统（MooX quant system）有关的事都用这个 skill：用发布产物安装和部署（安装, 新安装, 部署, 初始化, 免密登录, moox-cli config init, setup install/validate/deploy/init/status/logs, 检测是否已部署）；对生产主机做升级、覆盖更新、卸载或回滚（发布, 上线, 升级, 覆盖更新, 卸载, 回滚, setup update, setup wipe, setup deploy, service catalog rollout, 全新部署, 清空重装）；通过 moox-cli 和 gateway call 做日常管理（采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记）。还包括：查询 MooX采集数据（如 BTC-USDT 等加密货币行情查询 crypto market queries、K-line/K线行情查询 K-line queries），因子表达式 DSL（因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子），策略 DSL（策略 DSL, rank 规则, ValidateStrategy, 策略迁移, 选币策略），首页“需要处理”/监控告警排查（moox-cli doctor alerts, monitor-db-check），Linux Host Agent 监控，EventBus 凭据（EventBus credentials）, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View 水位追赶（View watermark catch-up）, repair-view, Factor 周期诊断与补算（Recalc），腾讯云防火墙，CLS 日志查询，CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ENTRY_ADDRESS, 外部入口, external_entry，控制面维护，以及覆盖管理台的 moox-cli 命令集（空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易查询与写操作, host exec, 命令覆盖）。
 ---
 
 # MooX
@@ -80,9 +80,9 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 EventBus 凭据只通过 `skills/moox/scripts/eventbus-credentials.sh` 签发与轮换，发布包和仓库里的 YAML 不含凭据。
 角色令牌轮换后要同步到所有客户端（控制面服务、Storage、每台主机的 Host Agent、SCF）才算完成，按 [`references/eventbus-credentials.md`](references/eventbus-credentials.md) 执行。
-Control `export` does not update Host Agents on other machines：控制机上的 export 不会更新其他主机的 Host Agent。
+控制机上的 `export` 不会更新其他主机的 Host Agent。
 
-### Tencent Private Network
+### 腾讯云私有网络
 
 SCF 函数运行在各地域的 VPC 里，只经同地域入口主机网关的外部入口（私网地址的 `11004`）访问 MooX，不直连 Storage 或 EventBus。
 `[scf_plan]` 里的每个地域都要有一台配置了 `region`、`private_address` 并写了 `external_entry = true` 的主机；不要创建云联网（CCN）；函数需要访问公网行情源时保持 `public_net_status=ENABLE`。

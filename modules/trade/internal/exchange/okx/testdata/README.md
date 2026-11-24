@@ -1,14 +1,14 @@
 # OKX 私有接口样例
 
 - `account_push.json`：官方文档 WebSocket account 频道的推送样例原文（https://www.okx.com/docs-v5/en/ ，2026-11-03 抓取），去掉了文档里的行内注释。
-- orders、positions 推送的样例待测试网录制原文后补充（执行计划 D5）；REST 样例见下面的 T8 一节，取自官方文档。
+- orders、positions 推送还没有样例，跑测试网冒烟（`modules/trade/cmd/testnet-smoke`，入口 `modules/trade/scripts/testnet-smoke.sh`）时录到原文后补充；REST 样例见下面“REST 接口样例”一节，取自官方文档。
 
-## 1B 新增样例
+## 账户配置样例
 
 - `account_config.json`：`GET /api/v5/account/config` 的官方响应样例原文（https://www.okx.com/docs-v5/en/ ，2026-11-06 抓取）。这份官方样例本身带 `perm=read_only,withdraw,trade` 和 `posMode=long_short_mode`，所以同时覆盖“有提现权限”和“双向持仓”两个阻断项；检测测试里的“正常”“acctLv=1”等情况由这份样例改写 `perm`、`posMode`、`acctLv` 得到，只改这三个字段。
 - 未核对：OKX 鉴权类错误码（50100～50114）沿用 `classifyOKXCode` 里已有的集合；官方错误码表不在文档页的同一份 HTML 里，没有逐字核对。50110（IP 不在密钥白名单）按鉴权类处理，也未逐字核对。50112（与时间戳有关）在密钥检测里不当作“密钥被拒绝”，和 50102（时间戳过期）一样按“没有结论”处理，避免海外机时钟偏差时误判并暂停组合；它们的官方说明未逐字核对。
 
-## T8 新增样例（2026-11-06 抓取，均为官方文档页 https://www.okx.com/docs-v5/en/ 的响应样例原文）
+## REST 接口样例（2026-11-06 抓取，均为官方文档页 https://www.okx.com/docs-v5/en/ 的响应样例原文）
 
 - `order_place.json`（POST /api/v5/trade/order）、`order_cancel.json`（POST /api/v5/trade/cancel-order）、`order_details.json`（GET /api/v5/trade/order）、`order_list.json`（GET /api/v5/trade/orders-pending）、`fills.json`（GET /api/v5/trade/fills-history）、`account_balance.json`（GET /api/v5/account/balance）、`account_positions.json`（GET /api/v5/account/positions）、`account_set_leverage.json`（POST /api/v5/account/set-leverage）。
 - 核对结论：

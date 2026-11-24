@@ -27,6 +27,8 @@
 
 规则里引用的列名就是因子任务结果数据集的列名，由成员键推导：`因子ID[__参数段][__输出名]`，参数全为默认值时省略参数段，否则带参数段（例如内置因子 `ma` 的默认窗口是 20：默认成员的列是 `ma`，窗口取 10 的成员的列是 `ma__10`）。创建实例选好因子任务后，页面和校验报错都会列出这个任务的全部列。
 
+本手册示例里的列，除注明“示意列名”的以外，都取自内置因子库（`modules/factor/factors/*.yaml`）：`roc__20` 是 `roc`（变动率）窗口取 20 的成员，`return_std` 是收益率波动（默认窗口 20），`return_std__24` 是窗口取 24 的成员，`quote_volume_mean` 是成交额均值，`zf_mean_q` 是振幅均值分位（0 到 1），`bias` 是收盘价除以均线。用之前要先把对应的成员加进因子任务。
+
 ## 1. 功能地图
 
 | 想做什么 | 怎么写 | 看哪一节 |
@@ -146,7 +148,7 @@ rules:
     type: rank
     allow_empty: true
     universe: {min_age_bars: 24, max_age_bars: 720}   # 上市 1 天到 30 天的新币
-    score: "rank(mom__24)"
+    score: "rank(roc__24)"
     select: {top: 3}
     weight: {total: 0.2}
 ```
@@ -159,8 +161,8 @@ rules:
 - id: momentum_long             # 稳定标识，改 id 等于规则状态从零开始
   name: 动量多头                  # 只用于展示
   type: rank
-  filter: "volume_mean > 20000"          # 布尔表达式：淘汰不合格的标的
-  score: "rank(mom__20)"                 # 数值表达式：分数越高越靠前
+  filter: "quote_volume_mean > 20000"    # 布尔表达式：淘汰不合格的标的
+  score: "rank(roc__20)"                 # 数值表达式：分数越高越靠前
   select: {top: 10, buffer: 2}           # 取前 10 名，上期持有的在前 12 名内继续拿
   weight: {total: 0.8, method: equal, cap: 0.1}   # 规则预算 0.8，等权，单标的最多 0.1
 ```
@@ -186,8 +188,8 @@ filter: "quote_volume_mean > 20000 && close > 0"
 
 ```yaml
 score: "0.6 * rank(bias_q) + 0.4 * rank(quote_volume_mean_q)"   # 两个因子的综合名次
-score: "zscore(mom__20) - 0.5 * zscore(vol__24)"                # 动量减去波动，各自先标准化
-score: "-vol_ratio"                                              # 取负号即“越小越好”
+score: "zscore(roc__20) - 0.5 * zscore(return_std__24)"         # 动量减去波动，各自先标准化
+score: "-return_std"                                            # 取负号即“越小越好”
 ```
 
 要点：
@@ -223,19 +225,21 @@ select: {top: 10, group: {by: industry, max: 3}}                   # 每个行�
 select: {top: 6, group: {by: industry, quotas: [2, 1, 1], rest: 1}} # 按组内最优名次给行业排序，前三个行业名额 2、1、1，其余行业各 1
 ```
 
+`industry` 是示意列名：内置因子库没有行业列，要用自己的因子或数据集里的数值列；A 股的申万行业代码在日线数据集里（`daily.sw_l1`，见 12.11）。
+
 按名次从前往后逐个接受，所属组已满就跳过（明细 `group_full`）。`by` 必须是数值列：主帧 View 的列，或附加来源的列（见下）；分组值为空的标的按缺数处理。`max` 与 `quotas` 二选一，`rest` 只能配 `quotas`。
 
-写了 `sources` 时，`by` 也可以写附加来源的列（`来源名.列名`），例如小时线主帧按日线来源里的行业代码分组：`group: {by: daily.industry, max: 2}`。分组值取这一根主帧读到的最新一根来源值；来源读不到或这一列为空的标的同样按缺数处理（明细 `missing:daily.industry`）。完整例子见 12.10。
+写了 `sources` 时，`by` 也可以写附加来源的列（`来源名.列名`），例如小时线主帧按日线来源里的行业代码分组：`group: {by: daily.sw_l1, max: 2}`。分组值取这一根主帧读到的最新一根来源值；来源读不到或这一列为空的标的同样按缺数处理（明细 `missing:daily.sw_l1`）。完整例子见 12.10、12.11。
 
 **二次排序：`then`**
 
 先粗选再细选：第一段按 `score` 选出一个集合，第二段在这个集合里按新分数再取。
 
 ```yaml
-score: "-vol_ratio"                     # 第一段：波动最小
+score: "-return_std"                    # 第一段：波动最小
 select:
   top: 0.1                              # 取最小的 10%
-  then: {score: "rank(mom__20)", top: 0.5}   # 在其中再取动量最强的一半
+  then: {score: "rank(roc__20)", top: 0.5}   # 在其中再取动量最强的一半
 ```
 
 - `then.score` 可以用 `rank`、`zscore`，在第一段选中的集合上计算；第一段选中、二次排序没取到的标的，明细记 `select.then`。
@@ -274,7 +278,7 @@ weight: {total: 0.8, method: equal, cap: 0.1}
 - id: reversal_short
   type: rank
   side: short              # long（默认）或 short
-  score: "rank(mom__5)"    # 分数最高的被做空
+  score: "rank(roc__5)"    # 分数最高的被做空
   select: {top: 10}
   weight: {total: 0.5}
 ```
@@ -331,9 +335,9 @@ rules:
   - id: main
     type: rank
     filter: "volume > 0"
-    score: "rank(momentum__20)"
+    score: "rank(roc__20)"
     select: {top: 1}
-    filter_after: "shadow__24 <= 0.1"       # 满足条件的留下；只剔除不补位
+    filter_after: "shadow__24 <= 0.1"       # 满足条件的留下；只剔除不补位（shadow__24 是示意列名，内置因子库没有）
     holding: {bars: 24, offsets: all}       # 每根重建一个批次，每个批次持有 24 根
     weight: {total: 1}
 ```
@@ -367,12 +371,12 @@ holding:
 ```yaml
 - id: quiet_long
   type: rank
-  filter: "volume_mean > 0"        # 资格：入场和继续持有都要满足
-  score: "-vol_ratio"              # 补位时的排序
+  filter: "quote_volume_mean > 0"  # 资格：入场和继续持有都要满足
+  score: "-return_std"             # 补位时的排序
   select: {top: 10}                # 目标持有个数
   hold:
-    entry: "vol_pct < 0.1"         # 新入场还要满足；不写表示不限制
-    exit: "vol_pct > 0.7"          # 持有中满足即出场
+    entry: "zf_mean_q < 0.1"       # 新入场还要满足；不写表示不限制
+    exit: "zf_mean_q > 0.7"        # 持有中满足即出场
     max_bars: 720                  # 持有满这么多根强制出场；0 表示不限
     cooldown_bars: 0               # 出场后这么多根内不能再入场
     # allow_reentry: true          # 见下
@@ -474,7 +478,7 @@ stop:
 ### 7.2 scale：按行情给仓位打折
 
 ```yaml
-scale: {expr: "timing_coef", max: 1}    # 数值表达式（逐行，不能用截面函数），结果截到 [0, max]
+scale: {expr: "close > ma__60 ? 1 : 0.5", max: 1}    # 数值表达式（逐行，不能用截面函数），结果截到 [0, max]
 ```
 
 - 系数只乘在规则的输出权重上（rank 在规则内配权与 `cap` 之后），**乘掉的部分留现金**，不重新分配。
@@ -857,10 +861,10 @@ freeze: {watch: short, window_bars: 1, threshold: 0.10, bars: 4}
 **常见写法**
 
 ```yaml
-filter: "volume_mean > 20000 && close > ma__60"             # 两个条件同时满足
+filter: "quote_volume_mean > 20000 && close > ma__60"       # 两个条件同时满足
 filter: "instrument_id matches '^[A-Z]+-USDT$'"             # 只要 USDT 计价
 hold: {entry: "bars[-1].bias <= 1 && bars[0].bias > 1"}     # 上穿（entry 写在 hold 里）
-score: "rank(mom__20) - rank(vol__24)"                      # 综合名次
+score: "rank(roc__20) - rank(return_std__24)"               # 综合名次
 scale: {expr: "close > ma__120 ? 1 : 0.5"}                  # 长均线上方满仓，下方半仓
 ```
 
@@ -912,7 +916,7 @@ rules:
   - id: momentum
     type: rank
     filter: "quote_volume_mean > 1000000"
-    score: "rank(mom__20)"
+    score: "rank(roc__20)"
     select: {top: 10, buffer: 2}
     weight: {total: 1, method: equal, cap: 0.15}
 portfolio: {leverage: 1, max_weight: 0.15}
@@ -927,13 +931,13 @@ universe: {min_age_bars: 720}
 rules:
   - id: long_leg
     type: rank
-    score: "rank(mom__20)"
+    score: "rank(roc__20)"
     select: {top: 0.1, count_min: 3}        # 最强的 10%，至少 3 个
     weight: {total: 0.5}
   - id: short_leg
     type: rank
     side: short
-    score: "-rank(mom__20)"                  # 取负：最弱的被做空
+    score: "-rank(roc__20)"                  # 取负：最弱的被做空
     select: {top: 0.1, count_min: 3}
     weight: {total: 0.5}
 portfolio: {leverage: 1}
@@ -947,12 +951,12 @@ market: {select: swap}
 rules:
   - id: quiet_long
     type: rank
-    filter: "volume_mean > 0"
-    score: "-vol_ratio"
+    filter: "quote_volume_mean > 0"
+    score: "-return_std"
     select: {top: 0.1, count_min: 1}
     hold:
-      entry: "vol_pct < 0.1"
-      exit: "vol_pct > 0.7"
+      entry: "zf_mean_q < 0.1"
+      exit: "zf_mean_q > 0.7"
       max_bars: 720
       cooldown_bars: 0
       allow_reentry: true
@@ -967,10 +971,10 @@ name: calm_then_strong
 rules:
   - id: pick
     type: rank
-    score: "-vol__24"                        # 第一段：波动最小的 20%
+    score: "-return_std__24"                 # 第一段：波动最小的 20%
     select:
       top: 0.2
-      then: {score: "rank(mom__20)", top: 5} # 第二段：其中动量最强的 5 个
+      then: {score: "rank(roc__20)", top: 5} # 第二段：其中动量最强的 5 个
     weight: {total: 1}
 portfolio: {leverage: 1}
 ```
@@ -982,7 +986,7 @@ name: staggered_rebalance
 rules:
   - id: pick
     type: rank
-    score: "rank(mom__20)"
+    score: "rank(roc__20)"
     select: {top: 10}
     holding: {bars: 24, offsets: [0, 6, 12, 18]}   # 四个批次，每个 24 根重选一次，相隔 6 根
     weight: {total: 1}
@@ -1005,8 +1009,8 @@ rules:
     weight: {total: 0.2}
   - id: alt_rotation
     type: rank
-    score: "rank(mom__20)"
-    select: {top: 6, group: {by: industry, max: 2}}
+    score: "rank(roc__20)"
+    select: {top: 6, group: {by: industry, max: 2}}   # industry 是示意列名，见 4.3
     weight: {total: 0.8, cap: 0.2}
 portfolio: {leverage: 1}
 ```
@@ -1018,12 +1022,12 @@ name: capped_with_overflow
 rules:
   - id: concentrated
     type: rank
-    score: "rank(mom__20)"
+    score: "rank(roc__20)"
     select: {top: 1}
     weight: {total: 0.6}
   - id: diversified
     type: rank
-    score: "rank(mom__20)"
+    score: "rank(roc__20)"
     select: {top: 10}
     weight: {total: 0.3}
 portfolio:
@@ -1089,9 +1093,9 @@ sources:
 rules:
   - id: pick
     type: rank
-    filter: "daily.market_cap > 3000000000 && daily.zone_trend + daily.zone_range > 0"
-    score: "rank(daily.mom__20) - rank(daily.vol__20)"
-    select: {top: 5, group: {by: daily.industry, max: 2}}                # 每个行业最多 2 个
+    filter: "daily.total_mv > 3000000000 && daily.zone_trend + daily.zone_range > 0"
+    score: "rank(daily.roc__20) - rank(daily.return_std)"
+    select: {top: 5, group: {by: daily.sw_l1, max: 2}}                  # 每个申万一级行业最多 2 个
     holding: {calendar: trading_days, every: 5, days: [1], at: first}   # 每 5 个交易日的第一根小时线重选
     weight: {total: 1}
     scale: {expr: "daily.zone_trend * sig_breakout + daily.zone_range * sig_revert"}
@@ -1099,7 +1103,7 @@ portfolio: {max_missing: 0.2}
 ```
 
 - 选股只在建仓日判断：`filter`、`score`、`select`（含行业名额）只在每 5 个交易日的第一根小时线上执行，选出的标的持有到下一个建仓日；仓位系数 `scale` 每根小时线都重新取值，乘掉的部分留现金。
-- `scale` 是“日线分区列 × 小时信号列”相加：`daily.zone_trend`、`daily.zone_range` 是日线因子给每个标的标出的分区（0/1，同一天只有一个为 1），`sig_breakout`、`sig_revert` 是小时线因子里对应分区用的 0/1 信号。标的处在哪个分区，就只看那个分区的信号。
+- `scale` 是“日线分区列 × 小时信号列”相加：`daily.zone_trend`、`daily.zone_range` 是日线因子给每个标的标出的分区（0/1，同一天只有一个为 1），`sig_breakout`、`sig_revert` 是小时线因子里对应分区用的 0/1 信号。标的处在哪个分区，就只看那个分区的信号。这四列是示意列名，内置因子库没有，要自己写因子；`daily.total_mv`（总市值）、`daily.roc__20`、`daily.return_std` 是内置因子，`daily.sw_l1` 是 A 股日线数据集的申万一级行业列（见 12.11）。
 - “突破置位、跌破复位并保持”这类信号不在策略里写状态，而是在因子里用事件记忆算子（`ts_last_valid`、`ts_bars_since`、`ts_value_when` 等）写成 0/1 列：突破那根记 1、跌破那根记 0、其余为空，再取最近一次有效值。
 
 ### 12.11 A 股：日线行业与财务选股，5m 主帧

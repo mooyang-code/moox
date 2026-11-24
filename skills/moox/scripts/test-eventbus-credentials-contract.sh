@@ -13,7 +13,7 @@ fail() {
 
 [[ -f "${REFERENCE}" ]] || fail "eventbus credentials reference is missing"
 grep -Fq 'references/eventbus-credentials.md' "${SKILL}" || fail "SKILL.md does not route EventBus rotation to the reference"
-grep -Fq 'Control `export` does not update Host Agents' "${SKILL}" || fail "SKILL.md does not say control export skips remote Host Agents"
+grep -Fq '控制机上的 `export` 不会更新其他主机的 Host Agent' "${SKILL}" || fail "SKILL.md does not say control export skips remote Host Agents"
 
 description="$(sed -n 's/^description: //p' "${SKILL}" | head -1)"
 for trigger in 'EventBus rotate' 'Authorization Violation' 'FIN-WAIT-2' 'certificate signature failure'; do

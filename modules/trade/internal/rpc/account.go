@@ -48,7 +48,7 @@ func (h *AccountServer) CreateTradingAccount(
 	if err != nil {
 		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
-	// 决策 D5：开通合约的账户默认 1 倍杠杆，单标的配置优先；SWAP 一律全仓。
+	// 开通合约的账户默认 1 倍杠杆，单标的配置优先；SWAP 一律全仓。
 	marginMode := exchange.MarginModeUnspecified
 	leverageSettings := map[string]shared.Decimal{}
 	if slices.Contains(markets, exchange.MarketTypeSwap) {

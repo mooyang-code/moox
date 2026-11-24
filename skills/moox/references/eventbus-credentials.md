@@ -89,8 +89,8 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 | 只换了二进制 | 手工换二进制不会带上新的 token，要 `setup deploy` |
 | control 已经 export | 那只是导出；副本还在别的机器 |
 | 上次能连，证书不用动 | EventBus 重启后用磁盘上当前的主机证书；客户端手里的根证书不是签它的那张（控制机重装过）就会 `signature failure` |
-| Host Agent 不是这次发布目标 | 它仍连同一 EventBus；漏同步会泄漏 TCP 并拖死 View |
-| 代码里已经有 trackingDialer | 那只能减轻泄漏，不能代替正确的根证书和 token |
+| Host Agent 不是这次发布目标 | 它仍连同一 EventBus；漏同步的那台连不上、反复重连或退出，主机指标断报，Monitor 的主机快照不再更新 |
+| 代码里已经有 trackingDialer | 它只是让每个 JetStream 客户端重连前先关掉上一条 TCP 连接，EventBus 一侧不再堆积 `FIN-WAIT-2`；凭据不对的客户端照样连不上 |
 
 ## 禁止
 

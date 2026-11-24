@@ -36,7 +36,7 @@ moox-cli udf activate <名称>@<哈希>             # 默认只给影响清单�
 
 切换在**因子引擎模块暂停期间**进行（新 UDF 的首次 `activate` 没有引用方，不需要暂停）：
 
-1. `moox-cli lifecycle pause --module factor-engine`，等本次暂停收敛（`GetStatus` 里引擎生命周期的 `quiesced` 为真）；
+1. `moox-cli lifecycle pause --module factor-engine`，等本次暂停收敛：`moox-cli lifecycle status --module factor-engine --json` 的 `quiesced_at` 有值且不早于 `pause.since`（不带 `--json` 的输出不显示这一项）；
 2. `moox-cli udf activate <名称>@<哈希>`（不带 `--yes` 只预览）：看影响清单（因子定义 → 成员 → 因子任务 → 策略实例）、新旧 `definition_hash` 与回看、前提检查；
    有已领取的补算作业先取消（`moox-cli factor recalc cancel --job-id <作业>`）；回看变长时按提示核对源数据保留期与引擎配置（`window.lookback`、`window.max_memory`、`memory.total_budget`、`compute.max_memory`）；
 3. `moox-cli udf activate <名称>@<哈希>`；

@@ -6,7 +6,7 @@ import (
 )
 
 // ArchiveObjectStore 是归档 worker 的对象存储副本（[archive_object_store]，可选）：标准 S3 接口，后端可替换。
-// 这里不含任何密钥，secret_id 指向管理台“设置 › 密钥”里那条（provider s3、类型 api_key）；
+// 这里不含任何密钥，secret_id 指向管理台“系统设置 › 密钥管理”里那条（provider s3、类型 api_key）；
 // 部署 archive-worker 时由 moox-cli 从 Admin 取出并投影成 worker 的凭据文件。严格校验留给 worker 启动（check-config）。
 type ArchiveObjectStore struct {
 	Endpoint     string `toml:"endpoint"`

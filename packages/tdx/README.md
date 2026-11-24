@@ -21,7 +21,7 @@
 
 未完成以上证据的扩展 Source 只能保持 `catalog_only`，不能被 Market manifest 选为唯一生产来源。尤其不能把 classic 7727 和 mac 7727 当成同一协议，也不能把未确认的扩展字段写入 canonical amount/volume。
 
-## 当前接入与历史证据
+## 当前接入
 
 当前 Collector 的 `config/markets/stockcn/route.yaml` 按频率分路由：`normal_7709` 在 1m 是 fallback，
 在 5m 是主源（通达信权重 4、东方财富权重 2，新浪、腾讯为备源），在 1d 是主源（东方财富为备源）；运行时候选链由 `internal/marketwiring/pipeline.go` 的 `newRoutedKlinePipeline` 按请求频率组装；
@@ -30,32 +30,20 @@
 日内 K 线的时间标签是收盘时刻（2026-11-04 实测 600519 5m：首根 09:35、末根 11:30 / 15:00，与东方财富逐根对齐；
 成交量单位为股，首根含 09:25 开盘集合竞价）；午休期间上午最后一根被标成 13:00，Collector 归一化时归回 11:25 那根。
 实测样本在 `modules/collector/internal/sources/stockcn/tdx/testdata`。
-下列日期段保留当时的开发线路观测与验收边界，不代表本次重新探测，也不保证临时抓包目录仍存在。
 
-## 2026-09-01 探测记录
+## 现状与未完成项
 
-本机探测是单线路、单会话的开发环境证据，不能替代 SCF 地域验证，也不构成频控结论：
+`normal_7709`（已在生产使用）：
 
-- `jstdx.gtjas.com:7709` 成功完成普通协议三条 setup command 和证券数量请求。请求流 86 bytes，响应流 403 bytes，读取到 8 次，四个响应帧头分别为 `b1cb74001c02189300000d004f00bd00`、`b1cb74001c02189400000d004f00bd00`、`b1cb74000c0318990000db0fb300b300` 和 `b1cb74000c0c186c00004e0402000200`。完整原始抓包保存在 `/tmp/tdx-wire-jstdx-normal-20260901`，其中 `request-stream.bin` SHA-256 为 `64645939a6177dc90e8d6e3a7ceceadeb5361903cd5e3d6755c3bfb5ddabb202`，`response-stream.bin` SHA-256 为 `964d04ac5fba55e94e1004e91a21f63b077a3635c6d01e5b16c7b7342cef0d78`。该结果推进 `normal_7709` 的开发线路证据，但仍需从实际 SCF 地域重新采集并人工对账。
-- 同一线路使用 `normal_7709` 请求 `SH.600000` 的日线 `category=4` 成功解码 3 根 K 线，返回日期为 `2026-08-28`、`2026-08-31`、`2026-09-01`，并含 OHLC、volume、amount。分钟 `category=7` 也能解码 3 根记录，但返回标签为 `2026-10-27 13:30` 至 `13:32`，超出本次探测日期 `2026-09-01`；这说明当前帧和字段解析路径可运行，但服务端数据的时间语义尚未通过人工对账，不能作为 canonical K 线或生产启用证据。
-- `113.105.73.88:7709`、`119.147.171.206:7709`、`218.108.50.178:7709` 和 `hq.cjis.cn:7709` 均建立 TCP 连接但在读取首个响应帧时超时；不能据此判定节点永久不可用。
-- `jstdx.gtjas.com:7727`、`shtdx.gtjas.com:7727` 的 classic/MAC 尝试都收到 443 bytes 非完整 TDX body，解析以 `unexpected EOF` 结束；当前没有可用的 `7727` 完整响应头、压缩体、解压体和登录成功证据。
+- 日期解码：压缩日期 `zipday` 只有低 11 位是 `MMDD`，`commands.go` 先取 `zipday%2048` 再解析月、日，有回归测试。
+- 日线及以上的键：`modules/collector/internal/sources/stockcn/tdx/provider.go` 的 `dateKey` 把日线记为交易日期的 UTC 零点（周线取所在周周一、月线取当月 1 日），与采集的统一校验一致。2026-11-11 用 600519、000001、300750 的同 10 个交易日与东方财富对过，开高低收逐根相同（见 `route.yaml` 的 1d 注释）。
+- 未收盘的根：`normalizeBars` 不返回结束时刻晚于取数时刻的根，交易时段内正在形成的那根、开盘前价格为 0 的当天占位根都会被跳过。
+- 北交所：`marketForExchange` 把 `XBSE` 映射到 `MarketBJ`；仓库里没有北交所的实测样本。
+- 南京云函数出口的并发与延迟实测结论写在 `route.yaml` 的 5m 注释里。
 
-## 2026-09-03 分钟 K 线复验与修复
+`ex_classic_7727`、`ex_mac_7727`：只有请求构造和解析代码，没有拿到过完整的真实响应，没有通过上面“证据状态”的要求，Collector 没有接入。
 
-此前 Go 实现将 `600000.SH` 的分钟时间解析成 `2026-10-29`，根因不是请求中的 `category=7` 或 `start=0` 参数，而是压缩日期字段的解码错误：`zipday` 的低 11 位才是 `MMDD`，原实现却直接对完整 16 位值执行 `%100`。例如原始字节 `87 b3` 表示 `2026-09-03`，旧逻辑得到日 `59`，被 `time.Date` 规范化为 `2026-10-29`。
-
-`packages/tdx/commands.go` 已改为先取 `zipday%2048` 再解析月、日，并新增回归测试。修复后从 `shtdx.gtjas.com:7709` 实测 `600000.SH`、`000001.SZ` 的 1 分钟请求均返回 20 根有效记录，时间落在 `2026-09-03`；与 easy_tdx 同线路请求的分钟时间及最新 OHLCV 样本一致。easy_tdx 的协议实现也明确使用 `month=(zipday%2048)//100`、`day=(zipday%2048)%100`，并将 category 7 定义为 1 分钟线。[easy_tdx datetime codec](https://github.com/handsomejustin/easy_tdx/blob/main/src/easy_tdx/codec/datetime_.py)
-
-当时 `normal_7709` 已切换为 A 股 1m 行情的 active fallback 来源。正式运行链为 `sina -> tencent -> tdx -> eastmoney`：每个 Provider 请求失败最多重试 3 次，再进入下一个 Provider；TDX 失败后最后使用东方财富。TDX 不参与主分片分配，但会随每个 stockcn SCF 包注册，因此源绑定的 Timer 也能跨 Provider fallback。
-
-仍有两个独立的后续门禁：日线标准化需要修正为公共 UTC bucket 语义，且日线接口返回的当天记录必须等收盘后再纳入；北交所还需要使用真实有效证券代码完成实测。这些门禁不影响当前 1m normal TDX fallback 的启用。
-
-同日稍后重新执行三种 `wire-spike` 变体时，`jstdx.gtjas.com:7709` 的 normal 和 MAC 请求收到 `HTTP/1.1 403 Forbidden`，classic 请求收到 `HTTP/1.1 502 Bad Gateway`，三次均未收到 TDX 帧。原始响应分别保存在 `/tmp/tdx-wire-jstdx-normal-20260901-rerun`、`/tmp/tdx-wire-jstdx-classic-20260901-rerun` 和 `/tmp/tdx-wire-jstdx-mac-20260901-rerun`；这只是当次网络观测，不能据此判定节点永久不可用。Go transport 已将这类非 TDX HTTP 响应分类为 `ErrProtocol`，避免把代理/WAF 返回误报为 TDX body 的 `unexpected EOF`，但该诊断改进不改变 Wire/Field Acceptance 未通过的结论。
-
-因此 `normal_7709` 已有开发环境的完整 setup/count、日线和分钟 K 线解码证据；日线标准化、当日未收盘过滤、北交所有效样本以及目标 SCF 地域验证仍未完成，`ex_classic_7727` 和 `ex_mac_7727` 也不能推进启用门禁。
-
-SCF 不做主动限频、全局配额或冷却。随机公网出口是部署事实，不是规避上游限制的功能承诺。
+通达信数据源声明的限速默认是每秒 5 个请求、突发 2、单并发（`provider.go`）。云函数的公网出口是随机的，这是部署事实，不是规避上游限制的功能承诺。
 
 ## Wire Spike 命令
 

@@ -2,13 +2,30 @@
 
 训练、评估和审查 `packages/wirecompress` 使用的 zstd 字典。
 
+从仓库根目录运行。评估、审查已注册的字典：
+
 ```bash
-go run ./tools/zstddict train -corpus <训练语料> -out default-v2.zdict -id 0x4D580003 -size 224
-go run ./tools/zstddict eval  -corpus <评估语料> -dict default-v2.zdict
-go run ./tools/zstddict scan  -dict default-v2.zdict
+go run ./tools/zstddict eval -corpus <评估语料> -dict packages/wirecompress/dicts/default-v1.zdict
+go run ./tools/zstddict scan -dict packages/wirecompress/dicts/default-v1.zdict
 ```
 
-`-size` 的单位为 KiB（默认 224），`-cap` 是每类来源的抽样上限 MiB（默认 3）；`-id` 为写入帧头的十六进制字典 ID，必须至少为 `0x8000`。
+训练新版本（输出先放在仓库外，评估通过后再登记）：
+
+```bash
+go run ./tools/zstddict train -corpus <训练语料> -out <临时目录>/default-v<N>.zdict -id <新字典 ID> -size 224
+go run ./tools/zstddict eval  -corpus <评估语料> -dict <临时目录>/default-v<N>.zdict
+go run ./tools/zstddict scan  -dict <临时目录>/default-v<N>.zdict
+```
+
+`-size` 的单位为 KiB（默认 224），`-cap` 是每类来源的抽样上限 MiB（默认 3）；`-id` 必填，是写入帧头的十六进制字典 ID，必须至少为 `0x8000`。
+
+## 登记规则
+
+字典登记在 `packages/wirecompress/dicts/registry.yaml`，现在只有 `default-v1`（文件 `default-v1.zdict`，字典 ID `0x4D580001`，压缩类型号 32）。
+
+- 已登记的版本不可变：不删、不改文件、不改压缩类型号。训练新字典不要覆盖 `default-v1.zdict`。
+- 新版本的名字、文件、字典 ID、压缩类型号都不能与已有版本重复，否则加载注册表时报错；`-id` 传的值要与注册表里写的 `id` 相同（加载时会核对字典文件帧头里的 ID）。按现有编号，下一个版本是 `default-v2`、`0x4D580002`。
+- 分两次发布：先只加版本，全部组件（含 SCF 函数）升级后再把 `default` 指向它。
 
 ## 语料
 

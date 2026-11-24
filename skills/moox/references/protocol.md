@@ -26,8 +26,10 @@ Dataset 不记录所属节点；数据集建好即为 active，可以直接写�
 
 ## 命名
 
-新 API 使用业务域的正式名称，避免 `Project` / `Workspace` 作为 Space 的别名、
-`Instrument` 作为 Subject 的别名，以及 `object_id`、`partition_key`、`DataAddress` 等旧概念。
+新 API 使用业务域的正式名称，避免 `Project` / `Workspace` 作为 Space 的别名，
+也不使用 `object_id`、`DataAddress` 这类名字（`partition_key` 只在归档接口里表示归档分区）。
+存储和元数据接口里的标的只叫 Subject（`subject_id`），不用 `Instrument` 作别名；
+交易模块的 `instrument_id` 指交易所里可下单的品种，是它自己的正式名称，不受这条限制。
 
 - 标的身份使用 `subject_id`，来源适配层负责转换外部 symbol。
 - `series_tag` 是一个可选字符串，不是 map 式维度。

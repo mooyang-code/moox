@@ -20,5 +20,4 @@ moox-cli setup init \
 不挂账户的观察实例，由 `moox-cli setup start --space-id crypto` 自动创建，说明见 [`skills/moox/references/fresh-deploy.md`](../skills/moox/references/fresh-deploy.md) 的“默认展示策略”。
 A 股、港股空间的默认展示策略是同目录的 `dual_ma_cn_5m.yaml`、`dual_ma_hk_5m.yaml`。
 
-行情样例在 [`data/kline/`](./data/kline/)，可执行端到端流程在
-[`e2e/`](./e2e/)。业务运行数据、交易所标的和凭据不进入默认配置。
+可执行端到端流程在 [`e2e/`](./e2e/)。业务运行数据、交易所标的和凭据不进入默认配置。

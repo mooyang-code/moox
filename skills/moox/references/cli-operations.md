@@ -69,9 +69,9 @@ View 自己跟随 Primary 的变更日志，落后时先按 [`view-catchup.md`](
 | `--yes` | `false` | 执行变更确认 |
 | `--dry-run` | 不带 `--yes` 时自动加上 | 只检查，不停服务、不改状态 |
 
-不要手工删除 DuckDB/Bleve 文件；已删除 View 的索引由 Storage View 的清理定时器回收。
+不要手工删除 DuckDB/Bleve 文件；已删除 View 的索引在 View 被摘掉时由 storage-view 当场删除，没删掉的在它下次启动时清理。
 **新建 View、给 View 加标的、调大 `view_rows_per_series` 或放宽 `[storage_view.max_age]` 前要核对内存余量**：`storage-view` 没有代码配置的进程级总预算，单索引 `memory_limit` 也不是进程 RSS 的硬上界。
-历史记录（2026-10-28，未在本次审查中重测）为文件 2.7GB、常驻 7.8GB、主机 15.5GB；稳态 2.5～3 倍、首次建索引额外预留最大索引的 1～1.5 倍，只是相近负载的粗估，不是源码保证。
+粗估时按常驻内存约为全部索引文件大小之和的 2.5～3 倍、首次建索引再预留最大索引文件的 1～1.5 倍；这只是相近负载下的经验值，不是源码保证。
 可按“序列数 × `view_rows_per_series` 行”初估行数；每行 100～150 字节是历史压缩样本，实际取决于字段和数据。用 `docs/部署与运维.md`“Storage 主机内存要求”的经验公式起步，再测量目标负载的 RSS 和建索引峰值；余量不足先升配或缩小 View。
 建索引按 `view_rows_per_series` 从 Primary 读取每个序列最近的行，再按 `max_age` 过滤；历史不足或行已超龄时，以实际留下的数据建成，不保证凑满 N 根。
 

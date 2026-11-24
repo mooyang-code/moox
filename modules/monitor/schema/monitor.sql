@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_samples (
 
 CREATE INDEX IF NOT EXISTS idx_monitor_host_samples_observed ON t_monitor_host_samples (c_observed_at);
 
--- 告警推送渠道（企业微信、飞书、钉钉群机器人或通用 Webhook），告警发给全部渠道；首次建库时按部署配置写入一个，之后在监控页增删
+-- 告警推送渠道（企业微信、飞书、钉钉群机器人或通用 Webhook），告警发给全部渠道；初始渠道由 moox-cli setup init 在没有任何渠道时写入一次，之后在监控页增删
 -- c_secret 选填：飞书的签名校验密钥、钉钉的加签密钥或通用 Webhook 的签名密钥，只写不读
 CREATE TABLE IF NOT EXISTS t_monitor_notification_channels (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,

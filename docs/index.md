@@ -3,7 +3,7 @@ home: true
 title: MooX
 hero:
   name: MooX
-  text: 面向个人的一站式量化平台
+  text: 自托管的分布式实时量化平台
   tagline: 行情采集、数据存储、因子计算、策略选股、交易执行与全链路监控
   image:
     src: /logo.svg

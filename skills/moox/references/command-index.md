@@ -103,7 +103,7 @@
 | `data rows count` | 按 View 统计时序行数（selectors 与时间范围写在 --data 里） |
 | `data rows export` | 导出 Dataset 行为 JSON |
 | `data skill kline get` | 获取 K 线数据 |
-| `data view query` | 按 View 查询时序行（管理台“数据浏览”用的接口；selectors、过滤与排序写在 --data 或对应参数里） |
+| `data view query` | 按 View 查询时序行（管理台看采集结果、因子结果用的接口；selectors、过滤与排序写在 --data 或对应参数里） |
 | `data view state` | 查看 View 的索引状态：活动索引、代次、已建列、覆盖范围与跟随变更日志的进度 |
 | `data view wait-applied` | 等 View 跟上此刻的变更日志头部（之前的写入都已可查） |
 
@@ -288,7 +288,7 @@
 | `ops tencent lighthouse firewall add` | 添加轻量应用服务器防火墙规则 |
 | `ops tencent lighthouse firewall open` | 通过控制面云账户凭证开放轻量防火墙端口 |
 
-## secret：密钥：只列清单与打码后的信息；新建、修改请用户在管理台“设置 › 密钥”填写
+## secret：密钥：只列清单与打码后的信息；新建、修改请用户在管理台“系统设置 › 密钥管理”填写
 
 | 命令 | 说明 |
 | --- | --- |

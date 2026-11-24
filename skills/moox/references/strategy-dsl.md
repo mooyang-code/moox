@@ -63,7 +63,7 @@ bar: 1h
 sources:
   daily: {bar: 1d}                       # 至多两个；名字是 snake_case
 rules:
-  - {id: pick, type: rank, filter: "daily.close > daily.ma__20", score: "rank(daily.mom__20)", select: {top: 5}, weight: 1}
+  - {id: pick, type: rank, filter: "daily.close > daily.ma__60", score: "rank(daily.roc__20)", select: {top: 5}, weight: 1}
 ```
 
 - 实例为每个来源按主帧的任务键各绑一个任务：`--factor-task daily:spot=…`（双市场主帧给 `daily:spot` 与 `daily:swap`，统一数据集写 `daily:multi`）。来源任务的周期要等于来源的 `bar`、是主帧周期的整数倍（股票，即 A 股、港股，只能是 `1d`，主帧必须是日内周期），不能有可变成员。
@@ -293,7 +293,7 @@ stop:
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |
 | 提示使用了 `max_age_bars` 必须写 `allow_empty: true` | 只保留新标的的规则经常没有候选，不写会让整期守门跳过 | 在这条规则上写 `allow_empty: true` |
 | 提示互斥（hold 与 buffer / then / range / filter_after / holding.bars，range 与 top、buffer，then 与 buffer，calendar 与 bars） | 这些写法语义冲突 | 按提示二选一 |
-| 启用被拒，提示 holding.anchor 不是 bar 起点 | 锚点要写某根 bar 的 bar_start（A 股日线是上海 0 点，可直接写交易日期） | 改成 bar 起点或交易日期 |
+| 启用被拒，提示 holding.anchor 不是 bar 起点 | 锚点要写某根 bar 的 bar_start（股票日线——A 股、港股都一样——是交易日期的 UTC 零点，如 `2026-10-09T00:00:00Z`，可直接写交易日期） | 改成 bar 起点或交易日期 |
 | 规则写 `market` 被拒 | 策略没显式写 `market`；单市场策略写了不同的市场；`market: spot` 的规则做空；取值不是 spot、swap | 显式写策略的 `market`（双市场模式才能另选）；现货规则改成多头或改 `market: swap` |
 | 启用被拒，提示列不存在 | 规则引用的列不在因子任务结果里 | 按成员键推导列名；默认参数的成员省略参数段 |
 | 提示 `x 不是已声明的来源` 或不允许属性访问 | 表达式写了 `x.y`，但 `sources` 没有声明 `x` | 在 `sources` 里声明来源，或改回主帧的列名 |

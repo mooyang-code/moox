@@ -44,7 +44,7 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 
 - 现货下单走杠杆账户，每笔请求都显式带 `sideEffectType=NO_SIDE_EFFECT`（不借币、不自动还款），不依赖官方默认值。`exchangeInfo` 里 `isMarginTradingAllowed` 为假的标的不上架。
 - 合约一律全仓，没有切换保证金模式的接口，`SetMarginMode` 是空操作；只支持单向持仓。
-- 余额：杠杆钱包净额取 `crossMarginAsset` 减借款和利息，UM 钱包取 `umWalletBalance`；未实现盈亏只取 UM 持仓接口的 `unRealizedProfit` 之和。UM 钱包的余额不记入现货可用（是否能直接给杠杆账户买单用未核对，见冒烟清单），账户级可用资金放在快照的 `AvailableFunds`，合约保证金按它校验。
+- 余额：杠杆钱包净额取 `crossMarginAsset` 减借款和利息，UM 钱包取 `umWalletBalance`；未实现盈亏只取 UM 持仓接口的 `unRealizedProfit` 之和。UM 钱包的余额不记入现货可用（是否能直接给杠杆账户买单用未核对；统一账户没有测试网，待用户在实盘小额验证时核对），账户级可用资金放在快照的 `AvailableFunds`，合约保证金按它校验。
 - 私有流 listenKey 60 分钟过期，每 30 分钟 `PUT /papi/v1/listenKey` 续期（限流暂停期间跳过，1 分钟后再试）；心跳超时 4 分钟。事件里没有市场字段，按事件类型分派：`executionReport`、`outboundAccountPosition` 是现货，`ORDER_TRADE_UPDATE`、`ACCOUNT_UPDATE`（`fs` 为 UM）是合约，币本位（CM）事件忽略。
 - 周期对账（30 秒）的现货挂单按标的逐个传 `symbol` 查（权重 5）；会话启动和手动全量同步不传 `symbol`，按官方文档说明返回全部（权重按交易中标的数量计，真实行为未核对）。合约挂单始终列全部。
 - 不是统一账户却调用 papi（或相反）时返回什么错误码，官方没有写明，账户类型检测只认 -2015、-2014、-2008、-1002、-1022 这类鉴权错误，其余一律“没有结论”，不会误判。
