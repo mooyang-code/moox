@@ -372,7 +372,7 @@ components:
           - name: ClearSubjectExclusions
           - name: ListSubjectExclusions
             read_only: true
-          # 手工登记标的下架（补漏报和演练）：事件中心页面（经控制台）和 moox-cli。
+          # 手工登记标的下架（补漏报和演练）：交易的下架名单页（经控制台）和 moox-cli。
           - name: RegisterDelistNotice
           # 云账号与代码包（管理台运行状态页“函数”区的两个对话框、moox-cli）；列出云函数的期望与读回。
           - name: ListCloudAccounts
@@ -1019,7 +1019,6 @@ components:
           - name: CancelOrder
           - name: GetOperatorAction
             read_only: true
-            callers: [callback-dispatcher]
           - name: GetLogicalAccountTarget
             read_only: true
           - name: ListShadowTargets
@@ -1047,22 +1046,15 @@ components:
             timeout_ms: 15000
           - name: FlattenTradingAccount
             timeout_ms: 12000
-          - name: BlockInstrument
-            callers: [callback-dispatcher]
-            operators: []
+          # 下架名单与下架记录（全局，不分空间）：解除名单只给管理台（会一并取消进行中的下架处理）。
           - name: UnblockInstrument
-            callers: [callback-dispatcher]
             operators: [console]
           - name: ListBlockedInstruments
             read_only: true
-            callers: [callback-dispatcher]
           - name: ListInstrumentHolders
             read_only: true
-            callers: [callback-dispatcher]
-          - name: FlattenInstrument
-            callers: [callback-dispatcher]
-            operators: []
-            timeout_ms: 12000
+          - name: ListDelists
+            read_only: true
           - name: SummarizeAccountPnl
             read_only: true
             timeout_ms: 15000
@@ -1075,51 +1067,6 @@ components:
           - name: ControlLifecycle
             operators: [moox-cli]
             timeout_ms: 60000
-    doctor:
-      transport: reporter
-      functional_observability: active
-  # 事件中心：接收 EventBus 事件，按用户配置的规则向用户接口发通知或执行系统动作。全局服务，不分空间。
-  - id: callback-dispatcher
-    name: 事件中心
-    binary: moox-callback-dispatcher
-    scope: any
-    replicas: single
-    protected: false
-    args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
-    config_files:
-      - from: modules/callbackdispatcher/config/app.yaml
-      - from: modules/callbackdispatcher/config/trpc_go.yaml
-    after: [host-gateway, eventbus]
-    credentials: ["eventbus:callback-dispatcher-eventbus", cls]
-    health:
-      port: 11461
-    services:
-      - path: trpc.moox.callbackdispatcher.CallbackDispatcherService
-        port: 11460
-        console_name: callback-dispatcher
-        # 测试发送要等对方最多 10 秒。
-        timeout_ms: 15000
-        max_body_bytes: 1048576
-        methods:
-          - name: ListSubscribableEvents
-            read_only: true
-          - name: ListEventRules
-            read_only: true
-          - name: GetEventRule
-            read_only: true
-          # CreateEventRule 的返回里有验证密钥明文：只放行 console，moox-cli 与 gateway call 都不能调用。
-          - name: CreateEventRule
-            operators: [console]
-          - name: UpdateEventRule
-          - name: DeleteEventRule
-          - name: TestEventRule
-          - name: ListEventExecutions
-            read_only: true
-          - name: GetEventExecution
-            read_only: true
-          - name: RetryEventExecution
-          - name: CancelEventExecution
-          - name: AcknowledgeEventExecution
     doctor:
       transport: reporter
       functional_observability: active

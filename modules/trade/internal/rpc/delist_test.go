@@ -7,7 +7,6 @@ import (
 	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
-	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -27,19 +26,17 @@ func delistServer(t *testing.T) (*ConsoleServer, *int) {
 	}, &wakes
 }
 
-// 名单的三个方法和 ListInstrumentHolders 是全局方法：没有空间头也能调用。
+// 名单、持有者与下架记录的查询都是全局方法：没有空间头也能调用。
 func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	server, wakes := delistServer(t)
 	ctx := context.Background() // 没有空间
+	delistAt := time.Now().Add(72 * time.Hour).Truncate(time.Millisecond)
 
-	blocked, err := server.BlockInstrument(ctx, &tradepb.BlockInstrumentReq{
-		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT,
-		ExchangeSymbol: "FOOUSDT", Reason: "公告下架", EventId: "evt-1", Owner: "exec-1",
+	intake, err := server.Delist.Intake(ctx, delistapp.Event{
+		EventID: "evt-1", OccurredAt: time.Now(), Key: delistapp.Key{Exchange: "binance", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"},
+		Scope: store.DelistScopePaperOnly, DelistAt: delistAt, Source: "MANUAL",
 	})
 	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, blocked.GetRetInfo().GetCode())
-	require.True(t, blocked.GetInstrumentUnknown(), "没有开通对应市场的账户：照常写入，带无此标的标记")
-	require.True(t, blocked.GetCreated())
 	require.Equal(t, 1, *wakes, "写入名单后唤醒目标重新判断")
 
 	list, err := server.ListBlockedInstruments(ctx, &tradepb.ListBlockedInstrumentsReq{})
@@ -47,8 +44,19 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, list.GetRetInfo().GetCode())
 	require.Len(t, list.GetInstruments(), 1)
 	require.Equal(t, tradepb.Exchange_EXCHANGE_BINANCE, list.GetInstruments()[0].GetExchange())
-	require.Equal(t, "evt-1", list.GetInstruments()[0].GetSourceEventId())
-	require.Equal(t, "exec-1", list.GetInstruments()[0].GetOwner(), "写入者带回：事件中心据此判断名单项是不是自己写的")
+	require.Equal(t, store.DelistScopePaperOnly, list.GetInstruments()[0].GetScope())
+	require.Equal(t, intake.DelistID, list.GetInstruments()[0].GetDelistId())
+
+	delists, err := server.ListDelists(ctx, &tradepb.ListDelistsReq{ActiveOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, delists.GetRetInfo().GetCode())
+	require.Len(t, delists.GetDelists(), 1)
+	got := delists.GetDelists()[0]
+	require.Equal(t, intake.DelistID, got.GetDelistId())
+	require.Equal(t, tradepb.MarketType_MARKET_TYPE_SPOT, got.GetMarketType())
+	require.Equal(t, delistAt.UnixMilli(), got.GetDelistAtMs())
+	require.Equal(t, store.DelistActive, got.GetStatus())
+	require.Equal(t, "evt-1", got.GetSourceEventId())
 
 	holders, err := server.ListInstrumentHolders(ctx, &tradepb.ListInstrumentHoldersReq{
 		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, ExchangeSymbol: "FOOUSDT",
@@ -65,96 +73,21 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, removed.GetRemoved())
 	require.Equal(t, 2, *wakes)
+	delists, err = server.ListDelists(ctx, &tradepb.ListDelistsReq{})
+	require.NoError(t, err)
+	require.Equal(t, store.DelistCanceled, delists.GetDelists()[0].GetStatus(), "解除名单一并取消进行中的下架记录")
 }
 
 func TestDelistRequestsAreValidated(t *testing.T) {
 	server, _ := delistServer(t)
-	rsp, err := server.BlockInstrument(context.Background(), &tradepb.BlockInstrumentReq{ExchangeSymbol: "FOOUSDT", Reason: "r"})
+	rsp, err := server.UnblockInstrument(context.Background(), &tradepb.UnblockInstrumentReq{ExchangeSymbol: "FOOUSDT"})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	listed, err := server.ListDelists(context.Background(), &tradepb.ListDelistsReq{Limit: 501})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, listed.GetRetInfo().GetCode())
 }
 
-func logicalSeed(t *testing.T, server *ConsoleServer) {
-	t.Helper()
-	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "a", Exchange: "BINANCE", Markets: []string{"SPOT"},
-			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
-		}); err != nil {
-			return err
-		}
-		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
-		}); err != nil {
-			return err
-		}
-		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true, Priority: 1,
-		}); err != nil {
-			return err
-		}
-		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", InstrumentID: "FOO-USDT-SPOT",
-			BaseAsset: "FOO", QuoteAsset: "USDT", SettlementAsset: "USDT", PriceTick: "0.01", ExchangeQuantityStep: "0.1", MinExchangeQuantity: "0.1", Status: "TRADING",
-		})
-	}))
-}
-
-// FlattenInstrument：按空间调用，交易所代码由 Trade 换算成内部标的 ID；“忙”单独返回标记，不返回别人的动作。
-func TestFlattenInstrumentResolvesInstrumentAndReportsBusy(t *testing.T) {
-	server, _ := delistServer(t)
-	logicalSeed(t, server)
-	var got FlattenInstrumentCommand
-	server.FlattenInstrumentAction = func(_ context.Context, command FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
-		got = command
-		return store.OperatorActionRecord{ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID, ActionType: "DELIST_FLATTEN", Status: "COMPLETED"}, true, nil
-	}
-	req := &tradepb.FlattenInstrumentReq{
-		ActionId: "act-1", LogicalAccountId: "logical-1", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-		MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, ExchangeSymbol: "FOOUSDT", Reason: "下架",
-	}
-
-	// 没有空间头：按空间的方法要求空间。
-	noSpace, err := server.FlattenInstrument(context.Background(), req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_NO_PERMISSION, noSpace.GetRetInfo().GetCode())
-
-	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	rsp, err := server.FlattenInstrument(ctx, req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, FlattenInstrumentCommand{
-		SpaceID: "space-1", ActionID: "act-1", LogicalAccountID: "logical-1", Exchange: "BINANCE", InstrumentID: "FOO-USDT-SPOT", Reason: "下架",
-	}, got)
-	require.True(t, rsp.GetUnblocked())
-	require.Equal(t, "DELIST_FLATTEN", rsp.GetAction().GetActionType())
-
-	// 忙：返回 busy 标记和 CONFLICT，不带动作。
-	server.FlattenInstrumentAction = func(context.Context, FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
-		return store.OperatorActionRecord{ActionID: "other"}, false, operatorapp.ErrLogicalAccountBusy
-	}
-	busy, err := server.FlattenInstrument(ctx, req)
-	require.NoError(t, err)
-	require.True(t, busy.GetBusy())
-	require.Equal(t, tradepb.ErrorCode_CONFLICT, busy.GetRetInfo().GetCode())
-	require.Nil(t, busy.GetAction())
-
-	// 别的空间的组合：查不到。
-	other, err := server.FlattenInstrument(spacecontext.WithSpaceID(context.Background(), "space-2"), req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_NOT_FOUND, other.GetRetInfo().GetCode())
-
-	// 组合里没有该交易所的成员：参数错误，不能静默当作平完。
-	req.Exchange = tradepb.Exchange_EXCHANGE_OKX
-	missing, err := server.FlattenInstrument(ctx, req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
-}
-
-// ---- T29 ----
-
-// liveLedgerServer 和 ledgerServer 一样，但 account-1 是实盘永续账户：实盘的资金费才走交易所流水翻页。
 func liveLedgerServer(t *testing.T, adapters adapterMap) *ConsoleServer {
 	t.Helper()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))

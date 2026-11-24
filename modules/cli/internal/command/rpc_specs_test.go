@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -461,4 +462,39 @@ func TestSkillCommandIndexListsEveryCommand(t *testing.T) {
 	}
 	sort.Strings(missing)
 	assert.Empty(t, missing, "这些命令没有写进 skills/moox/references/command-index.md：\n%s", strings.Join(missing, "\n"))
+}
+
+// 帮助文本里的“只读”必须和服务目录一致：写方法不能标成只读，Short 里也不能自称只读。
+func TestRPCSpecKindMatchesCatalog(t *testing.T) {
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	for _, spec := range allRPCSpecs() {
+		name := strings.Join(spec.Path, " ")
+		readOnly := catalog.ReadOnly(spec.Service, spec.Method)
+		switch {
+		case spec.Destructive:
+			assert.Equal(t, "破坏性，默认只预览", spec.kind(), name)
+		case readOnly:
+			assert.Equal(t, "只读", spec.kind(), name)
+		default:
+			assert.Equal(t, "写操作", spec.kind(), name)
+		}
+		if !readOnly {
+			assert.NotContains(t, spec.Short, "只读", "%s 是写方法，Short 不能写只读", name)
+		}
+	}
+	for _, path := range [][]string{{"space", "create"}, {"strategy", "create"}, {"strategy", "instance", "create"}} {
+		spec, ok := findRPCSpec(path)
+		require.True(t, ok, strings.Join(path, " "))
+		assert.Equal(t, "写操作", spec.kind(), strings.Join(path, " "))
+	}
+}
+
+func findRPCSpec(path []string) (rpcSpec, bool) {
+	for _, spec := range allRPCSpecs() {
+		if slices.Equal(spec.Path, path) {
+			return spec, true
+		}
+	}
+	return rpcSpec{}, false
 }

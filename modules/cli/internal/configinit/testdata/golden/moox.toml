@@ -253,7 +253,7 @@ ssh = { port = 22, username = "ubuntu", private_key_file = "~/.ssh/moox_ed25519"
 [deployments]
 control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
 storage = ["storage-primary", "storage-view", "eventbus"]
-overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
+overseas = ["trade", "egress-proxy", "collector-stream"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]

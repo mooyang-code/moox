@@ -422,10 +422,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("database.path", path.Join(data, "moox_trade.db"))
 			set("eventbus.urls", []string{url})
 			set("eventbus.credential_file", credential)
-		case "callback-dispatcher":
-			set("database.path", path.Join(data, "moox_callback_dispatcher.db"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
 		case "factor-engine":
 			set("engine.id", id+"@"+r.Host.Name)
 			set("catalog_sync.state_file", path.Join(data, "engine/catalog.json"))

@@ -21,7 +21,7 @@ func TestUpdateTaskRejectsCrossMarketTagChange(t *testing.T) {
 		CollectParams: `{"target_dataset_id":"bars_single","frequency":"1m"}`, ResultDatasetID: "bars_single", ResultViewID: "view_single",
 	}))
 	service := &Service{taskRepo: db.Tasks(), datasetSrc: tagValidationSource{validationDatasetSource: validationDatasetSource{
-		"bars_single":  storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},
+		"bars_single": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},
 	}, tags: map[string]*storagepb.Tag{
 		"binance_spot": {TagId: "binance_spot", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}},
 		"binance_swap": {TagId: "binance_swap", Attributes: map[string]string{"sync.source": "binance", "market_type": "swap"}},
@@ -37,8 +37,8 @@ func TestUpdateTaskRejectsCrossMarketTagChange(t *testing.T) {
 		return rsp
 	}
 	for name, rsp := range map[string]*pb.UpdateTaskRsp{
-		"单市场加一个市场":    update("single", "binance_spot", "binance_swap"),
-		"单市场换成另一个市场":  update("single", "binance_swap"),
+		"单市场加一个市场":   update("single", "binance_spot", "binance_swap"),
+		"单市场换成另一个市场": update("single", "binance_swap"),
 	} {
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), name)
 		require.NotEmpty(t, rsp.GetRetInfo().GetMsg(), name)

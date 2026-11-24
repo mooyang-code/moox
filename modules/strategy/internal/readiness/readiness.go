@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -120,6 +121,8 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			}
 		}
 	}
+	// 事件级失败标的：因子明细里成员只记这之外多出来的部分，成员完整的失败标的要并上它（factorname.MemberFailedSubjects）。
+	periodFailed := uniqueSorted(event.GetFailedSubjects())
 	for _, factorID := range required {
 		state := states[factorID]
 		switch state.GetStatus() {
@@ -128,14 +131,14 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			result.Detail = fmt.Sprintf("成员 %s 本期被跳过", factorID)
 			return result
 		case statusDegraded:
-			failed := uniqueSorted(state.GetFailedSubjects())
+			failed := uniqueSorted(factorname.MemberFailedSubjects(periodFailed, state.GetFailedSubjects()))
 			if len(failed) > 0 {
 				result.FailedByFactor[factorID] = failed
 			}
 		}
 	}
 	if len(states) == 0 && event.GetStatus() == statusDegraded {
-		result.FailedSubjects = parseScopeRef(event.GetFailedScopeRef())
+		result.FailedSubjects = periodFailed
 	}
 	return result
 }
@@ -169,19 +172,6 @@ func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPe
 		states[id] = state
 	}
 	return states, nil
-}
-
-// parseScopeRef 解析 View 事件的 failed_scope_ref：逗号分隔的标的列表；字面量 degraded 表示没有具体标的。
-func parseScopeRef(ref string) []string {
-	subjects := make([]string, 0)
-	for _, token := range strings.Split(ref, ",") {
-		token = strings.TrimSpace(token)
-		if token == "" || token == statusDegraded {
-			continue
-		}
-		subjects = append(subjects, token)
-	}
-	return uniqueSorted(subjects)
 }
 
 func uniqueSorted(values []string) []string {

@@ -89,7 +89,7 @@ export interface HealthObject {
   kind?: string;
   space_id?: string;
   producer?: string;
-  /** 关注项检查（kind 为 trade_attention、event_center_attention、collector_attention）的种类，例如 delist_readonly_key_missing。 */
+  /** 关注项检查（kind 为 attention，检查 ID 形如 attention:<服务名>:<种类>）的种类，例如 delist_readonly_key_missing；服务名在 component_id。 */
   attention_kind?: string;
 }
 /** critical：服务不可用、数据中断、主机失联或网关异常；warning：资源超阈值、指标上报中断等风险。 */

@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,15 +47,6 @@ func newFakeStorage() *fakeStorage {
 
 // plainTag 是只有一个 series_tag 的测试数据集用的 tag（Storage 不接受空 tag）。
 const plainTag = "venue:binance"
-
-// plainSeries 把标的逐个配上 plainTag。
-func plainSeries(subjects ...string) []seriesset.Series {
-	out := make([]seriesset.Series, 0, len(subjects))
-	for _, subject := range subjects {
-		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: plainTag})
-	}
-	return out
-}
 
 func (f *fakeStorage) put(subject string, base float64, minutes ...int) {
 	f.putTag(subject, plainTag, base, minutes...)
@@ -234,7 +224,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 func (fx *fixture) live(t *testing.T, target time.Time, subjects []string) pipeline.Outcome {
 	t.Helper()
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, UniverseSeries: plainSeries(subjects...), CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, UniverseSubjects: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
 	})
 	require.NoError(t, err)
 	outcome, err := fx.runner.Run(context.Background(), plan)
@@ -635,7 +625,7 @@ func TestCatchUpStopsAtTheLatestClosedBar(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(100))
 	require.NoError(t, err)
 	require.Equal(t, 1, pulled)
-	require.Equal(t, at(10), fx.tagLatest(t, "BTC", plainTag))
+	require.Equal(t, at(10), fx.latest(t, "BTC"))
 }
 
 // 有标的从 Storage 读取失败时要报出来：否则补算照样写出 0 行、作业成功，而且没有任何日志。
@@ -652,7 +642,7 @@ func TestCatchUpReportsReadFailures(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(11))
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.Zero(t, pulled)
-	require.Equal(t, at(9), fx.tagLatest(t, "BTC", plainTag))
+	require.Equal(t, at(9), fx.latest(t, "BTC"))
 }
 
 // 只拉任务范围内的标的：任务收窄之后，本地还留着的其他标的不拉，也不会被加回窗口。
@@ -670,8 +660,8 @@ func TestCatchUpPullsOnlySubjectsInTheTask(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, nil, at(11))
 	require.NoError(t, err)
 	require.Equal(t, 1, pulled)
-	require.Equal(t, at(10), fx.tagLatest(t, "BTC", plainTag))
-	require.Equal(t, at(9), fx.tagLatest(t, "ETH", plainTag))
+	require.Equal(t, at(10), fx.latest(t, "BTC"))
+	require.Equal(t, at(9), fx.latest(t, "ETH"))
 	// 显式给出的标的同样限定在任务范围内。
 	pulled, err = fx.data.CatchUp(context.Background(), fx.set, []string{"ETH", "SOL"}, at(11))
 	require.NoError(t, err)

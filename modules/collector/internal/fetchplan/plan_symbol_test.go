@@ -36,15 +36,16 @@ func TestSymbolChangeWritesATimelineRowFromP(t *testing.T) {
 	}
 	planBaselineSettle(t, h, r)
 	registered := h.registrar.calls
+	before := h.lastRecord().ID
 
 	renamed = true
 	r.lastVerified = h.now
 	require.NoError(t, h.reconcile(r))
-	open := h.open()
-	require.NotNil(t, open, "只改符号也生成新计划")
-	change := h.content(open).Datasets["ds_spot|1m"]
-	require.True(t, change.SymbolsChanged)
-	require.False(t, change.HashChanged)
+	latest := h.lastRecord()
+	require.NotEqual(t, before, latest.ID, "只改符号也生成新计划")
+	change := h.content(latest).Datasets["ds_spot|1m"]
+	require.Equal(t, PlanActionSymbols, change.Action)
+	require.False(t, change.Register)
 	require.NotZero(t, change.P)
 	require.Equal(t, "S001NEW", change.Symbols["S001-USDT"])
 
@@ -79,7 +80,7 @@ func TestBackfillRouteMatchesThePlanOfTheTask(t *testing.T) {
 	content := h.content(applied)
 	var planned *marketfetch.Plan
 	for _, name := range content.SortedFunctionNames() {
-		planned = content.FinalPlan(content.Functions[name])
+		planned = content.Functions[name].Target
 		break
 	}
 	require.NotNil(t, planned)

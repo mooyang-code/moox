@@ -68,7 +68,6 @@ export default defineConfig({
           { text: '主机网关', link: '/模块/主机网关' },
           { text: '出口代理', link: '/模块/出口代理' },
           { text: '事件总线', link: '/模块/事件总线' },
-          { text: '事件中心', link: '/模块/事件中心' },
         ],
       },
       {

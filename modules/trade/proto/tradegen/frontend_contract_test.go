@@ -11,7 +11,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// 管理台“手工登记下架”的预览（web/src/api/callback-dispatcher/delist.ts）和事件中心都按交易计划 4.7 的字段约定读
+// 管理台“手工登记下架”的预览（web/src/api/trade/delist.ts）按字段约定读
 // ListInstrumentHolders：请求用枚举名，响应有 holders[] 各字段和 instrument_unknown。proto 一改，这条测试就会提醒前端同步。
 func readFrontendFile(t *testing.T, relative string) string {
 	t.Helper()
@@ -47,7 +47,7 @@ func protoFieldNames(message protoreflect.MessageDescriptor) []string {
 }
 
 func TestFrontendDelistPreviewMatchesTheHoldersContract(t *testing.T) {
-	source := readFrontendFile(t, "web/src/api/callback-dispatcher/delist.ts")
+	source := readFrontendFile(t, "web/src/api/trade/delist.ts")
 
 	// 请求：字段名和 proto 一致（前端把可读的交易所、市场换成枚举名）。
 	request := (&ListInstrumentHoldersReq{}).ProtoReflect().Descriptor()

@@ -83,8 +83,8 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	period := time.Date(2026, 10, 21, 10, 10, 0, 0, time.UTC)
 	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
-		UniverseSubjectIds: []string{"BTC"}, UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "BTC", SeriesTag: "venue:binance"}},
-		Source: "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
+		UniverseSubjectIds: []string{"BTC"},
+		Source:             "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
 	}, events.PublishOptions{EventID: "evt-period", OccurredAt: period.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
 	confirmed := period.Add(time.Hour)

@@ -212,15 +212,6 @@ describe("installSpaceAwareClient", () => {
       data: "G"
     };
     expect(onOk(globalRead)).toBe(globalRead);
-    const eventCenterRead = {
-      config: {
-        url: "/api/admin/callback-dispatcher/ListEventRules",
-        injectedSpaceId: "space-a",
-        injectedSpaceGeneration: gen - 1
-      },
-      data: "C"
-    };
-    expect(onOk(eventCenterRead)).toBe(eventCenterRead);
     const explicit = { config: { url: "/api/admin/collector/GetTask" }, data: "E" };
     expect(onOk(explicit)).toBe(explicit);
     setSelectedSpaceIdCache("");
@@ -242,7 +233,6 @@ describe("installSpaceAwareClient", () => {
     installSpaceAwareClient(client as never);
     const read = client.post("/api/admin/collector/GetTask", {});
     void client.post("/api/admin/sysdeploy/GetCatalog", {});
-    void client.post("/api/admin/callback-dispatcher/ListEventRules", {});
     void client.post("/api/admin/collector/ListCloudAccounts", {});
     void client.post("/api/admin/collector/CreateTask", {});
     const outcome = read.then(

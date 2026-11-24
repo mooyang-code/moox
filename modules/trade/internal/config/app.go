@@ -41,9 +41,13 @@ type EventBusConfig struct {
 	URLs           []string `yaml:"urls"`
 	CredentialFile string   `yaml:"credential_file"`
 	TargetConsumer string   `yaml:"-"`
+	DelistConsumer string   `yaml:"-"`
 }
 
-var TargetConsumer = events.TradeTargetConsumer.Name()
+var (
+	TargetConsumer = events.TradeTargetConsumer.Name()
+	DelistConsumer = events.TradeDelistConsumer.Name()
+)
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {
@@ -53,7 +57,7 @@ func DefaultConfig() *AppConfig {
 		},
 		Runtime:       RuntimeConfig{},
 		GatewayClient: gatewayclient.FileConfig{Caller: "trade", KeyFile: "../../secrets/host.key"},
-		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
+		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer, DelistConsumer: DelistConsumer},
 	}
 }
 
@@ -124,6 +128,9 @@ func (c *AppConfig) Validate() error {
 		}
 		if c.EventBus.TargetConsumer == "" {
 			return fmt.Errorf("eventbus target consumer is required")
+		}
+		if c.EventBus.DelistConsumer == "" {
+			return fmt.Errorf("eventbus delist consumer is required")
 		}
 	}
 	return nil

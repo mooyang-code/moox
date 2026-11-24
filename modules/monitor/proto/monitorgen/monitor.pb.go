@@ -252,8 +252,8 @@ type HealthObject struct {
 	Kind        string `protobuf:"bytes,7,opt,name=kind,proto3" json:"kind,omitempty"`
 	SpaceId     string `protobuf:"bytes,8,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	Producer    string `protobuf:"bytes,9,opt,name=producer,proto3" json:"producer,omitempty"`
-	// attention_kind 是关注项检查（kind 为 trade_attention、event_center_attention、collector_attention，检查 ID 形如 <kind>:<种类>）的种类，
-	// 例如 delist_readonly_key_missing；只填 Monitor 登记过的种类，前端据此决定处理入口。
+	// attention_kind 是关注项检查（kind 为 attention，检查 ID 形如 attention:<服务名>:<种类>）的种类，例如 delist_readonly_key_missing；
+	// 服务名填在 component_id。前端据此决定处理入口。
 	AttentionKind string `protobuf:"bytes,10,opt,name=attention_kind,json=attentionKind,proto3" json:"attention_kind,omitempty"`
 }
 

@@ -32,6 +32,23 @@ func TestReadinessExposesPaperOrderDiagnosticWithoutGlobalFailure(t *testing.T) 
 	require.Equal(t, map[string]paper.MatcherState{"account-a": fault}, details["paper_account_errors"])
 }
 
+// 下架事件消费者没起来不影响就绪（也就不影响恢复追赶），只写进健康详情。
+func TestReadinessIgnoresTheDelistConsumer(t *testing.T) {
+	r := Readiness{
+		DatabaseReady:         func(context.Context) error { return nil },
+		EventBusEnabled:       true,
+		EventBusReady:         func() bool { return true },
+		DelistConsumerRunning: func() bool { return false },
+		Sessions:              healthSessions{snapshot: traderuntime.SessionSnapshot{Reconciled: true}},
+		TargetWorker:          func() traderuntime.TargetWorkerSnapshot { return traderuntime.TargetWorkerSnapshot{Ready: true} },
+		OperatorWorker:        func() traderuntime.OperatorWorkerSnapshot { return traderuntime.OperatorWorkerSnapshot{Ready: true} },
+		PaperMatcherWorker:    func() (bool, string) { return true, "" },
+	}
+	ready, details := r.Evaluate(context.Background())
+	require.True(t, ready)
+	require.Equal(t, false, details["delist_consumer_running"])
+}
+
 func (s healthSessions) Snapshot() traderuntime.SessionSnapshot { return s.snapshot }
 
 func TestState_New_ShouldInitializeModuleMetadata(t *testing.T) {

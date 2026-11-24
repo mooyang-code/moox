@@ -54,7 +54,7 @@ function independentOfSelectedSpace(url: string | undefined): boolean {
 
 /** 与空间无关的全局服务（没有空间归属）：不参与“切换空间即取消”，否则全局单例读取会被无故打断。 */
 const GLOBAL_SERVICE =
-  /\/api\/admin\/(?:(?:auth|ssh|secret|sysdeploy|setup|monitor|callback-dispatcher)\/|storage\/(?:ListSpaces|CreateSpace|UpdateSpace|DeleteSpace)$|collector\/(?:ListCloudAccounts|ListCloudRegions)$)/;
+  /\/api\/admin\/(?:(?:auth|ssh|secret|sysdeploy|setup|monitor)\/|storage\/(?:ListSpaces|CreateSpace|UpdateSpace|DeleteSpace)$|collector\/(?:ListCloudAccounts|ListCloudRegions)$)/;
 
 let lastSpaceInitFinished = 0;
 let spaceInitInflight: Promise<void> | null = null;

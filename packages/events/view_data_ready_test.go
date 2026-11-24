@@ -83,12 +83,22 @@ func TestViewDataReadyContract(t *testing.T) {
 		require.Equal(t, first.Message.GetEventId(), second.Message.GetEventId())
 	})
 
-	t.Run("degraded cannot be encoded as complete", func(t *testing.T) {
-		invalid := proto.Clone(validReady).(*storagepb.ViewDataReady)
-		invalid.Status = "complete"
-		invalid.FailedScopeRef = "missing:ETH-USDT"
-		_, err := registry.Encode(ViewDataReady, invalid, validationOptions("ready-2", "space", "view-1"))
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "failed_scope_ref")
+	t.Run("failed_subjects rules", func(t *testing.T) {
+		withFailed := func(status string, universe, failed []string) *storagepb.ViewDataReady {
+			ready := proto.Clone(validReady).(*storagepb.ViewDataReady)
+			ready.Status, ready.UniverseSubjectIds, ready.FailedSubjects = status, universe, failed
+			return ready
+		}
+		_, err := registry.Encode(ViewDataReady, withFailed("degraded", []string{"BTC-USDT"}, nil), validationOptions("ready-2", "space", "view-1"))
+		require.NoError(t, err, "degraded 可以不带具体的失败标的")
+		_, err = registry.Encode(ViewDataReady, withFailed("degraded", []string{"BTC-USDT", "ETH-USDT"}, []string{"ETH-USDT"}), validationOptions("ready-3", "space", "view-1"))
+		require.NoError(t, err)
+
+		_, err = registry.Encode(ViewDataReady, withFailed("complete", []string{"ETH-USDT"}, []string{"ETH-USDT"}), validationOptions("ready-4", "space", "view-1"))
+		require.ErrorContains(t, err, "complete status has failed_subjects")
+		_, err = registry.Encode(ViewDataReady, withFailed("degraded", []string{"BTC-USDT"}, []string{"ETH-USDT"}), validationOptions("ready-5", "space", "view-1"))
+		require.ErrorContains(t, err, "not in universe_subject_ids")
+		_, err = registry.Encode(ViewDataReady, withFailed("degraded", []string{"ETH-USDT"}, []string{"ETH-USDT", "ETH-USDT"}), validationOptions("ready-6", "space", "view-1"))
+		require.ErrorContains(t, err, "duplicated")
 	})
 }

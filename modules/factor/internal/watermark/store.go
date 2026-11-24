@@ -10,8 +10,6 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // State 是一个任务的推进状态。
@@ -24,8 +22,8 @@ type State struct {
 	CommittedThrough time.Time `json:"committed_through"`
 	// Target 是已知的最新收盘周期（收到的事件里最大的周期）。
 	Target time.Time `json:"target"`
-	// UniverseSeries 是最近一次事件按序列（标的、series_tag）的期望全集：读回判断没有事件可用的周期时，按序列看哪些已经到了。
-	UniverseSeries []seriesset.Series `json:"universe_series,omitempty"`
+	// UniverseSubjects 是最近一次事件的期望全集（标的）：读回判断没有事件可用的周期时，看哪些标的已经到了。
+	UniverseSubjects []string `json:"universe_subjects,omitempty"`
 	// BlockedSince 是当前阻塞开始的时刻，没有阻塞为零。
 	BlockedSince time.Time `json:"blocked_since,omitempty"`
 	// BlockedPeriod 与 BlockedReason 说明卡在哪一期、为什么。
@@ -76,7 +74,7 @@ func (s *Store) Get(taskID string) (State, bool) {
 	defer s.mu.Unlock()
 	state, ok := s.states[taskID]
 	if ok {
-		state.UniverseSeries = append([]seriesset.Series(nil), state.UniverseSeries...)
+		state.UniverseSubjects = append([]string(nil), state.UniverseSubjects...)
 	}
 	return state, ok
 }
@@ -86,7 +84,7 @@ func (s *Store) Get(taskID string) (State, bool) {
 func (s *Store) Put(state State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state.UniverseSeries = append([]seriesset.Series(nil), state.UniverseSeries...)
+	state.UniverseSubjects = append([]string(nil), state.UniverseSubjects...)
 	if existing, ok := s.states[state.TaskID]; ok && existing.Target.After(state.Target) {
 		state.Target = existing.Target
 	}

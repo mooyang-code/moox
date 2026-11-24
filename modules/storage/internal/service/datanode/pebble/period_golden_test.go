@@ -11,7 +11,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/seriesset"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -95,10 +94,7 @@ type ledgerCase struct {
 	wantMarkerStatus string
 	wantUniverse     []string
 	wantFailed       []string
-	// 下面两项只有统一数据集的用例填；单市场用例的序列名单就是 wantUniverse、wantFailed 逐个配上 goldenTag。
-	wantUniverseSeries int
-	wantFailedSeries   []string // "标的|series_tag"
-	wantStored         map[uint32]float64
+	wantStored       map[uint32]float64
 }
 
 func TestGoldenLedgerJudgement(t *testing.T) {
@@ -201,14 +197,13 @@ func TestGoldenLedgerJudgement(t *testing.T) {
 			unified:    true,
 			steps:      []ledgerStep{commit(61*time.Second, []uint32{0, 2}, "waiting", []uint32{0, 2}), finalize(goldenDeadline)},
 			wantPeriod: "degraded", wantMarkers: 1, wantMarkerStatus: "degraded", wantUniverse: both, wantFailed: both,
-			wantUniverseSeries: 4, wantFailedSeries: []string{"BTC-USDT|" + goldenSwapTag, "ETH-USDT|" + goldenSwapTag},
 			wantStored: map[uint32]float64{0: 1, 2: 1},
 		},
 		{
 			name:       "统一数据集全部成功时没有失败序列",
 			unified:    true,
 			steps:      []ledgerStep{commit(61*time.Second, []uint32{3, 2, 1, 0}, "complete", []uint32{0, 1, 2, 3})},
-			wantPeriod: "complete", wantMarkers: 1, wantMarkerStatus: "complete", wantUniverse: both, wantUniverseSeries: 4,
+			wantPeriod: "complete", wantMarkers: 1, wantMarkerStatus: "complete", wantUniverse: both,
 			wantStored: map[uint32]float64{0: 1, 1: 1, 2: 1, 3: 1},
 		},
 	}
@@ -268,29 +263,6 @@ func TestGoldenLedgerJudgement(t *testing.T) {
 				require.Empty(t, marker.GetCauseEventId())
 				require.Equal(t, tc.wantUniverse, marker.GetUniverseSubjectIds())
 				require.Equal(t, tc.wantFailed, nilIfEmpty(marker.GetFailedSubjects()))
-				var universeSeries []string
-				for _, ref := range marker.GetUniverseSeries() {
-					universeSeries = append(universeSeries, ref.GetSubjectId()+"|"+ref.GetSeriesTag())
-				}
-				wantFailedSeries := tc.wantFailedSeries
-				if tc.unified {
-					require.Len(t, universeSeries, tc.wantUniverseSeries)
-				} else {
-					// 单市场：序列全集与失败序列逐条等于标的配上 goldenTag。
-					var wantUniverseSeries []string
-					for _, subject := range tc.wantUniverse {
-						wantUniverseSeries = append(wantUniverseSeries, subject+"|"+goldenTag)
-					}
-					require.Equal(t, wantUniverseSeries, universeSeries)
-					for _, subject := range tc.wantFailed {
-						wantFailedSeries = append(wantFailedSeries, subject+"|"+goldenTag)
-					}
-				}
-				var failedSeries []string
-				for _, ref := range marker.GetFailedSeries() {
-					failedSeries = append(failedSeries, ref.GetSubjectId()+"|"+ref.GetSeriesTag())
-				}
-				require.Equal(t, wantFailedSeries, failedSeries)
 				require.NotNil(t, marker.GetCompletedAt())
 			}
 			for index := range series {
@@ -535,9 +507,7 @@ func TestGoldenLedgerMarkerSizeLimit(t *testing.T) {
 		smallRaw, _, err := BuildLedgerPeriodCompletedMessage(goldenSpace, &LedgerPeriodCompleted{
 			DatasetID: "small", Frequency: goldenFreq, PeriodTime: goldenPeriod.Unix(), Status: "degraded", SnapshotRef: small.SeriesHash,
 			UniverseSubjectIDs: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
-			UniverseSeries: []*storageeventpb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}},
-			FailedSeries:   []*storageeventpb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}},
-			CompletedAt:    timestamppb.New(now),
+			CompletedAt: timestamppb.New(now),
 		})
 		require.NoError(t, err)
 		clock.set(now)
@@ -589,8 +559,7 @@ func goldenProducerMarker(cause string, periodTime int64, status string) *pb.Dat
 	return &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "factor_result", Frequency: goldenFreq, PeriodTime: periodTime, Status: status,
 		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, CauseEventId: cause,
-		UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}, {SubjectId: "ETH-USDT", SeriesTag: goldenTag}},
-		CompletedAt:    timestamppb.New(time.Unix(periodTime+30, 0)), DetailType: "factor.detail", Detail: []byte("detail-" + cause),
+		CompletedAt: timestamppb.New(time.Unix(periodTime+30, 0)), DetailType: "factor.detail", Detail: []byte("detail-" + cause),
 	}
 }
 

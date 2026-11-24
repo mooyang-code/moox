@@ -27,13 +27,12 @@ import (
 const secretWriteDenied = "密钥的新建、修改、启停与删除由用户在管理台“系统设置 › 密钥管理”操作；明文不经过 Agent，误删也无法恢复"
 
 var gatewayCallDenied = map[string]string{
-	"trpc.moox.ops.SecretMgr/GetSecretValue":                                 "返回密钥明文；云账户等凭证由专用命令在进程内使用，需要查看请到管理台“系统设置 › 密钥管理”",
-	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels":                  "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
-	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「事件中心」的“订阅”页签新建，密钥只在那里显示一次，不经过 Agent",
-	"trpc.moox.ops.SecretMgr/CreateSecret":                                   secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/UpdateSecret":                                   secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":                             secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/DeleteSecret":                                   secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/GetSecretValue":                "返回密钥明文；云账户等凭证由专用命令在进程内使用，需要查看请到管理台“系统设置 › 密钥管理”",
+	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
+	"trpc.moox.ops.SecretMgr/CreateSecret":                  secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/UpdateSecret":                  secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":            secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/DeleteSecret":                  secretWriteDenied,
 }
 
 // rpcBusinessError 是服务返回了业务失败（ret_info.code 非成功）。响应已经打印，这里只负责非 0 退出。
@@ -479,16 +478,23 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 	return request, nil
 }
 
+// kind 是帮助文本里的接口性质：破坏性命令默认只预览；其余按内嵌服务目录区分只读与写操作，目录里查不到的按写操作标。
+func (s rpcSpec) kind() string {
+	if s.Destructive {
+		return "破坏性，默认只预览"
+	}
+	if readOnly, known := gatewayMethodReadOnly(s.Service, s.Method); known && readOnly {
+		return "只读"
+	}
+	return "写操作"
+}
+
 // buildRPCCommand 由规格生成命令。
 func buildRPCCommand(spec rpcSpec) *cobra.Command {
-	kind := "只读"
-	if spec.Destructive {
-		kind = "破坏性，默认只预览"
-	}
 	cmd := &cobra.Command{
 		Use:   spec.Path[len(spec.Path)-1],
 		Short: spec.Short,
-		Long:  fmt.Sprintf("%s\n\n对应接口：%s %s（%s）。--data 可以提供完整请求 JSON，各参数优先于它。", spec.Short, spec.Service, spec.Method, kind),
+		Long:  fmt.Sprintf("%s\n\n对应接口：%s %s（%s）。--data 可以提供完整请求 JSON，各参数优先于它。", spec.Short, spec.Service, spec.Method, spec.kind()),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			request, err := spec.buildRequest(cmd, cmd.InOrStdin())

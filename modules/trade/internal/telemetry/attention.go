@@ -2,10 +2,11 @@ package telemetry
 
 import (
 	"regexp"
-	"sort"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // 需要人看的情况。Monitor 按 kind 生成检查，detail 是账户名和原因。
@@ -53,20 +54,50 @@ const (
 	AttentionClockSkew = "clock_skew"
 	// AttentionIsolatedPosition 是交易所账户里有逐仓持仓：moox 只支持全仓单向，该持仓不入投影，所在组合已暂停（已暂停的不改原因）。
 	AttentionIsolatedPosition = "isolated_position"
+	// AttentionDelistDetected 是收到新的下架记录，且有组合持有或有账户没能判断是否持有（3 分钟窗口）。
+	AttentionDelistDetected = "delist_detected"
+	// AttentionDelistFailed 是下架处理需要人看：当前轮清仓失败或只平了一部分、30 分钟还没能发起、
+	// 下架事件消费者没有运行、核对失败的记录在结束后 24 小时内。
+	AttentionDelistFailed = "delist_failed"
 )
 
-// attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
-var attentionKinds = []string{
-	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
-	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
-	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
-	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
-	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersStuck,
-	AttentionOrdersInstrumentGone, AttentionFillIngestFailed, AttentionClockSkew, AttentionIsolatedPosition,
+// attentionKinds 是 Trade 声明的全部关注项：名称是告警标题，全部是故障级。每种都要上报，恢复后 Monitor 才能看到值回到 0。
+var attentionKinds = []report.AttentionKind{
+	{Kind: AttentionTargetRejected, Name: "交易目标被拒绝", Severity: report.AttentionCritical},
+	{Kind: AttentionAutoPaused, Name: "组合账户自动暂停", Severity: report.AttentionCritical},
+	{Kind: AttentionTargetBlocked, Name: "交易目标持续阻塞", Severity: report.AttentionCritical},
+	{Kind: AttentionAccountNotReady, Name: "执行账户持续未就绪", Severity: report.AttentionCritical},
+	{Kind: AttentionTargetExpired, Name: "交易目标连续过期", Severity: report.AttentionCritical},
+	{Kind: AttentionTargetReversal, Name: "同一目标内反向下单", Severity: report.AttentionCritical},
+	{Kind: AttentionRateLimited, Name: "交易所接口限流", Severity: report.AttentionCritical},
+	{Kind: AttentionTurnoverHigh, Name: "组合账户成交额异常偏高", Severity: report.AttentionCritical},
+	{Kind: AttentionUnknownResults, Name: "下单结果未知偏多", Severity: report.AttentionCritical},
+	{Kind: AttentionInspectionBlocked, Name: "交易账户密钥检测发现阻断项", Severity: report.AttentionCritical},
+	{Kind: AttentionInspectionFailing, Name: "交易账户密钥检测连续失败", Severity: report.AttentionCritical},
+	{Kind: AttentionTransferShortfall, Name: "合约钱包可划转资金不足，现货买入被缩小", Severity: report.AttentionCritical},
+	{Kind: AttentionTransferFailing, Name: "钱包划转或归集出问题", Severity: report.AttentionCritical},
+	{Kind: AttentionMarginRatioLow, Name: "合约保证金率过低", Severity: report.AttentionCritical},
+	{Kind: AttentionValuationDegraded, Name: "估值降级（有持仓取不到价）", Severity: report.AttentionCritical},
+	{Kind: AttentionFlattenOrdersUnsettled, Name: "清仓结束时有子单没收拾掉，需人工核对", Severity: report.AttentionCritical},
+	{Kind: AttentionReleaseOrdersStuck, Name: "过期目标的挂单持续撤不下来", Severity: report.AttentionCritical},
+	{Kind: AttentionOrdersInstrumentGone, Name: "标的已下架的订单需人工核对成交", Severity: report.AttentionCritical},
+	{Kind: AttentionFillIngestFailed, Name: "成交没能记进账本，账户卡在同一笔", Severity: report.AttentionCritical},
+	{Kind: AttentionClockSkew, Name: "本机时钟与交易所相差过大，请检查 NTP", Severity: report.AttentionCritical},
+	{Kind: AttentionIsolatedPosition, Name: "交易所账户里有逐仓持仓，moox 只支持全仓单向", Severity: report.AttentionCritical},
+	{Kind: AttentionDelistDetected, Name: "发现标的即将下架", Severity: report.AttentionCritical},
+	{Kind: AttentionDelistFailed, Name: "下架处理需人工处理", Severity: report.AttentionCritical},
 }
 
-// maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
-const maxAttentionDetail = 480
+// Attention 是 Trade 的关注项指标（moox_attention_active）。
+var Attention = mustNewAttention()
+
+func mustNewAttention() *report.Attention {
+	attention, err := report.NewAttention(prometheus.DefaultRegisterer, attentionKinds)
+	if err != nil {
+		panic(err)
+	}
+	return attention
+}
 
 var urlPattern = regexp.MustCompile(`"?https?://[^\s"]+"?:?`)
 
@@ -77,24 +108,6 @@ func StableReason(reason string) string {
 		reason = string(runes[:96])
 	}
 	return reason
-}
-
-// PublishAttention 用本轮结果替换上报值，items 按 kind 列出每条详情。
-func PublishAttention(items map[string][]string) {
-	Attention.Reset()
-	for _, kind := range attentionKinds {
-		details := append([]string(nil), items[kind]...)
-		if len(details) == 0 {
-			Attention.WithLabelValues(kind, "").Set(0)
-			continue
-		}
-		sort.Strings(details)
-		detail := strings.Join(details, "；")
-		if len(detail) > maxAttentionDetail {
-			detail = strings.ToValidUTF8(detail[:maxAttentionDetail], "") + "…"
-		}
-		Attention.WithLabelValues(kind, detail).Set(1)
-	}
 }
 
 // 没有落库状态的关注项（目标被拒绝、反向下单、接口限流）在这里记下来，在保留窗口内持续上报。

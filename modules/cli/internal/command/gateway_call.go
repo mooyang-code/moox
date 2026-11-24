@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -107,9 +108,12 @@ func newGatewayMethodsCommand() *cobra.Command {
 	}
 }
 
+// embeddedCatalog 只解析一次内嵌服务目录：每条规格命令的帮助文本都要查它。
+var embeddedCatalog = sync.OnceValues(servicecatalog.LoadEmbedded)
+
 // gatewayMethodReadOnly 查内嵌服务目录：方法是否只读；服务或方法不在目录里时 known 为 false，交给网关按 ACL 处理。
 func gatewayMethodReadOnly(service, method string) (readOnly, known bool) {
-	catalog, err := servicecatalog.LoadEmbedded()
+	catalog, err := embeddedCatalog()
 	if err != nil {
 		return false, false
 	}

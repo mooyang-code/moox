@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/egressproxy/internal/config"
 	"github.com/mooyang-code/moox/modules/egressproxy/internal/proxy"
 	egresspb "github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen"
+	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"

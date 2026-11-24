@@ -120,7 +120,7 @@ func (a *Agent) beat(ctx context.Context) {
 	a.Runtime.SetCommitReserve(reserve)
 	if err := a.Runtime.Apply(items); err != nil {
 		// 有市场起不来：不确认这个版本，下一次心跳重试。
-		log.Errorf("collector-stream apply plan %d/%s failed: %v", version.ID, version.Stage, err)
+		log.Errorf("collector-stream apply plan %d failed: %v", version.ID, err)
 		return
 	}
 	if a.Local != nil {
@@ -129,7 +129,7 @@ func (a *Agent) beat(ctx context.Context) {
 	a.mu.Lock()
 	a.applied = version
 	a.mu.Unlock()
-	log.Infof("collector-stream applied plan %d/%s items=%d", version.ID, version.Stage, len(items))
+	log.Infof("collector-stream applied plan %d items=%d", version.ID, len(items))
 	// 立即回报，Collector 看到确认才算下发完成。
 	confirmCtx, cancelConfirm := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelConfirm()

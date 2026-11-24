@@ -201,21 +201,12 @@ func TestEachRegisteredHostIsOneRow(t *testing.T) {
 	require.EqualValues(t, 80, view.Hosts[0].CpuThreshold)
 }
 
-// 关注项检查带上种类（attention_kind），只认 Monitor 登记过的检查和种类。
+// 关注项检查（attention:<服务名>:<kind>）带上服务名与种类（attention_kind）。
 func TestAttentionAlertObjectCarriesAttentionKind(t *testing.T) {
-	object := alertObject("crypto", "collector_attention:delist_readonly_key_missing")
-	require.Equal(t, "collector_attention", object.Kind)
+	object := alertObject("mooxsys", "attention:collector:delist_readonly_key_missing")
+	require.Equal(t, "attention", object.Kind)
+	require.Equal(t, "collector", object.ComponentId)
 	require.Equal(t, "delist_readonly_key_missing", object.AttentionKind)
-	require.Equal(t, "valuation_degraded", alertObject("crypto", "trade_attention:valuation_degraded").AttentionKind)
-	require.Empty(t, alertObject("crypto", "collector_attention:unknown_kind").AttentionKind)
+	require.Equal(t, "valuation_degraded", alertObject("mooxsys", "attention:trade:valuation_degraded").AttentionKind)
 	require.Empty(t, alertObject("crypto", "module:delist_readonly_key_missing").AttentionKind)
-}
-
-// 缺币安只读 Key 只是现货下架改为手工登记，告警是 warning，不挡安装验收；下架来源失败仍是 critical。
-func TestReadonlyKeyMissingAlertIsAWarning(t *testing.T) {
-	check := "collector_attention:delist_readonly_key_missing"
-	require.Equal(t, "warning", alerting.Severity(check))
-	failed := "collector_attention:delist_source_failed"
-	require.Equal(t, "critical", alerting.Severity(failed))
-	require.Equal(t, "critical", alerting.Severity("trade_attention:auto_paused"))
 }

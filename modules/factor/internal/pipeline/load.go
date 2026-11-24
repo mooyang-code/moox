@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // Load 取得一个计划的列式输入。数据都来自本地：实时周期由数据层先把本期标的从 Storage 同步到本地（只拉增量），
@@ -23,7 +22,6 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	result := LoadResult{Frames: make(map[string]*storageio.Frame)}
 	if len(plan.Available) == 0 {
 		result.FailedSubjects = uniqueSorted(plan.UpstreamFailed)
-		result.FailedSeries = append([]seriesset.Series(nil), plan.ExpectedSeries...)
 		return result, nil
 	}
 	if !plan.TargetStart.Before(plan.TargetEnd) {
@@ -37,12 +35,11 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	for subject, frame := range data.Frames {
 		result.Frames[subject] = frame
 	}
-	classifySeries(plan, data, &result)
+	classifySubjects(plan, data, &result)
 	return result, nil
 }
 
-// LoadSubjects 给只有标的名单、没有序列全集的调用方（管理端试算）用：按 plan.Available 读入，再把计划的期望序列补成
-// “期望标的 × 读到的数据里它的 series_tag”（见 SubjectSeries），返回补好的计划与读入结果。读不到数据的标的照常记为失败。
+// LoadSubjects 给管理端试算用：按 plan.Available 读入并分类，与实时、补算同一个判断。
 func (r *Runner) LoadSubjects(ctx context.Context, plan Plan) (Plan, LoadResult, error) {
 	if r == nil || r.data == nil {
 		return plan, LoadResult{}, errors.New("factor local data layer is required")
@@ -54,41 +51,33 @@ func (r *Runner) LoadSubjects(ctx context.Context, plan Plan) (Plan, LoadResult,
 	if err != nil {
 		return plan, LoadResult{}, err
 	}
-	plan.ExpectedSeries = SubjectSeries(data.View, plan.Expected)
 	result := LoadResult{Frames: data.Frames, View: data.View, WarmingSubjects: uniqueSorted(data.Warming)}
 	if result.Frames == nil {
 		result.Frames = make(map[string]*storageio.Frame)
 	}
-	classifySeries(plan, data, &result)
+	classifySubjects(plan, data, &result)
 	return plan, result, nil
 }
 
-// classifySeries 把期望序列分成本期可用与不可用的：标的失败（同步失败、本期数据还没到、预热中）或上游失败的序列不可用，其余可用。
-// 不可用序列的标的记入 FailedSubjects，可用序列的标的是 Available。
-func classifySeries(plan Plan, data DataResult, result *LoadResult) {
-	failedSubject := make(map[string]struct{}, len(data.Failed)+len(result.WarmingSubjects))
-	for _, subject := range data.Failed {
-		failedSubject[subject] = struct{}{}
-	}
-	for _, subject := range result.WarmingSubjects {
-		failedSubject[subject] = struct{}{}
-	}
-	unavailable := seriesSet(plan.UpstreamFailedSeries)
-	for _, item := range plan.ExpectedSeries {
-		if _, whole := failedSubject[item.SubjectID]; whole {
-			result.FailedSeries = append(result.FailedSeries, item)
-		} else if _, bad := unavailable[item]; bad {
-			result.FailedSeries = append(result.FailedSeries, item)
-		} else {
-			result.AvailableSeries = append(result.AvailableSeries, item)
+// classifySubjects 把期望标的分成本期可用与不可用的：同步失败、本期数据还没到、预热中或上游失败的标的不可用，记入 FailedSubjects；
+// 其余期望标的可用（Available）。
+func classifySubjects(plan Plan, data DataResult, result *LoadResult) {
+	failed := make(map[string]struct{}, len(data.Failed)+len(result.WarmingSubjects)+len(plan.UpstreamFailed))
+	for _, group := range [][]string{data.Failed, result.WarmingSubjects, plan.UpstreamFailed} {
+		for _, subject := range group {
+			failed[subject] = struct{}{}
 		}
 	}
-	result.Available = seriesSubjects(result.AvailableSeries)
-	failed := append(seriesSubjects(result.FailedSeries), plan.UpstreamFailed...)
-	for subject := range failedSubject {
-		failed = append(failed, subject)
+	for _, subject := range uniqueSorted(plan.Expected) {
+		if _, bad := failed[subject]; !bad {
+			result.Available = append(result.Available, subject)
+		}
 	}
-	result.FailedSubjects = uniqueSorted(failed)
+	all := make([]string, 0, len(failed))
+	for subject := range failed {
+		all = append(all, subject)
+	}
+	result.FailedSubjects = uniqueSorted(all)
 }
 
 // WarmupStatuses 返回各任务内存窗口的载入状态。

@@ -17,18 +17,14 @@ func TestPeriodTriggerResamplesBucketOnLastSourcePeriodOnly(t *testing.T) {
 	seedTask(t, mgr, storage, []string{"BTC", "ETH", "SOL"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"))
 	trigger := &PeriodTrigger{Index: &TaskIndex{Tasks: mgr.Tasks()}, Engine: &Engine{Primary: storage, State: mgr.Resample()}}
 
+	// XRP 的源任务换过主来源：源行记在另一个 tag 下，与合成任务的 SourceSeriesTag 不同。
+	for at := utc("2026-10-21T10:00:00Z"); at.Before(utc("2026-10-21T10:30:00Z")); at = at.Add(5 * time.Minute) {
+		storage.putSource("crypto", "dataset_src", "XRP", "5m", "venue:okx", at, 1, 2, 0.5, 1, 1, 1, 1)
+	}
 	payload := func(period time.Time, status string, failed ...string) *storagepb.DatasetPeriodCompleted {
-		series := func(subjects ...string) []*storagepb.SeriesRef {
-			var refs []*storagepb.SeriesRef
-			for _, subject := range subjects {
-				refs = append(refs, &storagepb.SeriesRef{SubjectId: subject, SeriesTag: "venue:binance"})
-			}
-			return refs
-		}
 		return &storagepb.DatasetPeriodCompleted{
 			DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: status,
-			UniverseSubjectIds: []string{"BTC", "ETH", "SOL"}, FailedSubjects: failed,
-			UniverseSeries: series("BTC", "ETH", "SOL"), FailedSeries: series(failed...),
+			UniverseSubjectIds: []string{"BTC", "ETH", "SOL", "XRP"}, FailedSubjects: failed,
 			Source: "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
 		}
 	}
@@ -42,6 +38,9 @@ func TestPeriodTriggerResamplesBucketOnLastSourcePeriodOnly(t *testing.T) {
 	require.NotNil(t, storage.target("crypto", "dataset_task", "BTC", "15m", "venue:binance", utc("2026-10-21T10:00:00Z")))
 	require.NotNil(t, storage.target("crypto", "dataset_task", "ETH", "15m", "venue:binance", utc("2026-10-21T10:00:00Z")))
 	require.Nil(t, storage.target("crypto", "dataset_task", "SOL", "15m", "venue:binance", utc("2026-10-21T10:00:00Z")), "degraded 事件里失败的标的先跳过，留给兜底")
+	for _, tag := range []string{"venue:binance", "venue:okx"} {
+		require.Nil(t, storage.target("crypto", "dataset_task", "XRP", "15m", tag, utc("2026-10-21T10:00:00Z")), "源 tag 与合成任务不同：读不到源窗口，跳过且不报错")
+	}
 }
 
 func TestBackfillTriggerSubmitsSourceBackfillJobWithSettleDelay(t *testing.T) {

@@ -19,7 +19,7 @@ const (
 )
 
 func attentionValue(a *attention.Attention, detail string) float64 {
-	return testutil.ToFloat64(a.Gauge().WithLabelValues(attention.KindEastMoneyCooling, detail))
+	return attention.Value(a, attention.KindEastMoneyCooling, detail)
 }
 
 // 事件对应的指标：请求数、等待、拒绝、冷却次数与状态；冷却时上报关注项，恢复后回到 0。

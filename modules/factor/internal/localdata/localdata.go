@@ -21,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/seriessync"
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -728,21 +727,23 @@ func (d *Data) Load(ctx context.Context, plan pipeline.Plan) (pipeline.DataResul
 	return d.loadRange(ctx, st, plan, subjects, plan.HistorySubjects)
 }
 
-// ExpectedSeries 实现 pipeline.SeriesExpecter：没有带序列全集的补算类计划（人工补算、失效重算、读不到 marker 的待办）
-// 的期望序列；带着冻结的 universe_series 的恢复路径不走这里。一个数据集里每个标的只有一条序列，期望序列是“期望标的 × 这个数据集
-// 唯一的 tag”，缺数、失败的处理与按标的判断相同。只排除本地最早一根不早于计划区间终点的标的（区间结束时还没上市），否则补算上市前的
-// 区间时新股被当成缺数，严格截面因子整段跳过，老标的已有的值被写成 NULL。不做下架推测。
-// 唯一的 tag 的取法见 singleTag；本地完全没有数据的期望标的同样配上它，按缺数处理。
-func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]seriesset.Series, error) {
+// ExpectedSubjects 实现 pipeline.SubjectExpecter：没有冻结全集的补算类计划（人工补算、失效重算、读不到 marker 的待办）
+// 的期望标的；带着冻结全集的恢复路径不走这里。只排除本地最早一根不早于计划区间终点的标的（区间结束时还没上市），否则补算上市前的
+// 区间时新股被当成缺数，严格截面因子整段跳过，老标的已有的值被写成 NULL。不做下架推测；本地没有数据的期望标的照常保留，按缺数处理。
+// 这个数据源在本地一个标的都没有时返回 ErrNoLocalData：补算只读本地，这时什么都算不出来。
+func (d *Data) ExpectedSubjects(ctx context.Context, plan pipeline.Plan) ([]string, error) {
 	if len(plan.Expected) == 0 {
 		return nil, nil
 	}
 	src := sourceOf(plan.Set)
-	tag, err := d.singleTag(src, plan.Expected)
+	local, err := d.cfg.Store.Subjects(src)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]seriesset.Series, 0, len(plan.Expected))
+	if len(local) == 0 {
+		return nil, fmt.Errorf("%w（%s/%s %s）", ErrNoLocalData, src.SpaceID, src.DatasetID, src.Freq)
+	}
+	out := make([]string, 0, len(plan.Expected))
 	for _, subject := range plan.Expected {
 		bounds, has, err := d.cfg.Store.Bounds(src, subject)
 		if err != nil {
@@ -751,45 +752,13 @@ func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]series
 		if has && bounds.Earliest.Unix() >= plan.TargetEnd.Unix() {
 			continue
 		}
-		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+		out = append(out, subject)
 	}
 	return out, nil
 }
 
-// ErrNoLocalData 表示数据源在本地时序存储里一条序列都没有：补算只读本地，没有可补的数据。
+// ErrNoLocalData 表示数据源在本地时序存储里一个标的都没有：补算只读本地，没有可补的数据。
 var ErrNoLocalData = errors.New("本地没有这个数据集的数据，没有可补的数据")
-
-// singleTag 返回只有一个 series_tag 的数据集的那个 tag：取本地时序存储里序列边界上记的 tag——先看 subjects（计划的期望标的），
-// 它们都没有本地数据时再看这个数据源上全部有本地数据的标的。看到多个 tag（例如改过 tag，旧 tag 已停写）时取最新一根最晚的那个，
-// 一样晚时取字典序最小的，结果与遍历顺序无关。本地一条序列都没有时返回 ErrNoLocalData：补算只读本地，这时什么都算不出来。
-func (d *Data) singleTag(src seriesstore.Source, subjects []string) (string, error) {
-	pick := func(subjects []string) (string, error) {
-		tag, latest := "", time.Time{}
-		for _, subject := range subjects {
-			bounds, err := d.cfg.Store.TagBounds(src, subject)
-			if err != nil {
-				return "", err
-			}
-			for candidate, b := range bounds {
-				if tag == "" || b.Latest.After(latest) || (b.Latest.Equal(latest) && candidate < tag) {
-					tag, latest = candidate, b.Latest
-				}
-			}
-		}
-		return tag, nil
-	}
-	if tag, err := pick(subjects); err != nil || tag != "" {
-		return tag, err
-	}
-	local, err := d.cfg.Store.Subjects(src)
-	if err != nil {
-		return "", err
-	}
-	if tag, err := pick(local); err != nil || tag != "" {
-		return tag, err
-	}
-	return "", fmt.Errorf("%w（%s/%s %s）", ErrNoLocalData, src.SpaceID, src.DatasetID, src.Freq)
-}
 
 func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, subjects []string) (pipeline.DataResult, error) {
 	res, fromDisk, err := d.loadLiveWindow(ctx, st, plan, subjects)
@@ -932,13 +901,12 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 		}
 	}
 	var ok []string
-	tagOf := plan.ExpectedTags()
 	for _, subject := range subjects {
 		if _, bad := failed[subject]; bad {
 			continue
 		}
 		// 同步之后本期没有真实源行的标的（数据还没到）按失败处理。
-		if seriesMissingAt(view, subject, tagOf[subject], target.Unix(), true) {
+		if subjectMissingAt(view, subject, target.Unix(), true) {
 			failed[subject] = struct{}{}
 			continue
 		}
@@ -960,14 +928,16 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	return pipeline.DataResult{View: view, Frames: rows, Failed: sortedKeys(failed)}, false, nil
 }
 
-// seriesMissingAt 报告标的的期望序列（tag）在视图里没有「目标时刻 target 的真实源行」：序列不在视图里、最后一根早于目标、
-// 或目标那一根是填充行。live 为假时（补算的区间）只看序列有没有数据。
-func seriesMissingAt(view *serieswindow.View, subject, tag string, target int64, live bool) bool {
+// subjectMissingAt 报告标的在视图里没有「目标时刻 target 的真实源行」：同一期一个标的至多一条序列，所以不看 tag，
+// 只要有一条序列的最后一根恰好是目标期且不是填充行就不算缺。live 为假时（补算的区间）只看标的在视图里有没有数据。
+func subjectMissingAt(view *serieswindow.View, subject string, target int64, live bool) bool {
 	for _, sv := range view.Series(subject) {
-		if sv.Tag != tag {
+		if sv.N == 0 {
 			continue
 		}
-		return sv.N == 0 || (live && (sv.End(view.Step) != target || sv.Filled[sv.N-1]))
+		if !live || (sv.End(view.Step) == target && !sv.Filled[sv.N-1]) {
+			return false
+		}
 	}
 	return true
 }
@@ -1183,12 +1153,10 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 		}
 		rows[subject] = seriessync.ColumnsToFrame(subject, target, plan.CarryColumns, types)
 	}
-	// 实时周期（追赶读磁盘）按目标那一根判断；补算与只填充的区间只看期望序列有没有数据。
-	// 计划里没有这个标的的期望序列（试算先读入、再按读到的数据补期望序列）时不判断。
-	tagOf := plan.ExpectedTags()
+	// 实时周期（追赶读磁盘）按目标那一根判断；补算与只填充的区间只看标的有没有数据。
 	live, target := plan.Mode == pipeline.ModeLive, plan.TargetEnd.Add(-step).Unix()
 	for _, subject := range subjects {
-		if tag, expected := tagOf[subject]; expected && got[subject] != nil && seriesMissingAt(view, subject, tag, target, live) {
+		if got[subject] != nil && subjectMissingAt(view, subject, target, live) {
 			failed = append(failed, subject)
 		}
 	}

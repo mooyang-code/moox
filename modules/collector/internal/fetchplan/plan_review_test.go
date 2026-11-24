@@ -66,9 +66,9 @@ func TestDeleteCloudFunctionsByPrefixKeepsTheOtherSpaceWithTheSamePrefix(t *test
 	require.Equal(t, []string{other.FunctionName}, h.cloudTimers(), "本空间的函数删掉了，crypto-x 的还在")
 }
 
-// M1：5m 计划加 1m 任务，过渡下发确认（定时器改成每分钟）后进程重启：EnableAll 按已确认的过渡计划启用，不把 cron 改回每 5 分钟；
-// 推进到 P 之后读回仍是每分钟。
-func TestRestartKeepsTheConfirmedTransitionalCron(t *testing.T) {
+// M1：5m 计划加 1m 任务，下发确认（定时器改成每分钟）、计划还没生效时进程重启：EnableAll 按已确认的 Target 启用，
+// 不把 cron 改回每 5 分钟；计划生效后读回仍是每分钟。
+func TestRestartKeepsTheConfirmedCron(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	h.tasks.tasks = []domain.CollectionTask{{
 		SpaceID: "crypto", TaskID: "spot-5m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
@@ -85,14 +85,16 @@ func TestRestartKeepsTheConfirmedTransitionalCron(t *testing.T) {
 		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_1m","frequency":"1m"}`,
 	})
 	r.lastVerified = h.now
-	require.NoError(t, h.reconcile(r))
+	// 生效日志写不进去：计划下发完也留在未生效状态。
+	h.activity.failures = 1000
+	_ = h.reconcile(r)
 	open := h.open()
 	require.NotNil(t, open)
 	progress, err := decodeFetchPlanProgress(open.Progress)
 	require.NoError(t, err)
-	require.True(t, progress.Transitioned[name], "过渡已确认")
+	require.True(t, progress.Pushed[name], "下发已确认")
 	content := h.content(open)
-	transitionalCron := content.TransitionalCron(content.Functions[name])
+	transitionalCron := content.Functions[name].Cron
 	require.Equal(t, transitionalCron, h.mustFunction(name).Timer.Cron)
 	require.NotEqual(t, fiveMinutes, transitionalCron)
 
@@ -101,9 +103,10 @@ func TestRestartKeepsTheConfirmedTransitionalCron(t *testing.T) {
 	done, err := restarted.EnableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
-	require.Equal(t, transitionalCron, h.mustFunction(name).Timer.Cron, "重启不能把已确认的过渡 cron 改回已生效计划的")
+	require.Equal(t, transitionalCron, h.mustFunction(name).Timer.Cron, "重启不能把已确认的 cron 改回已生效计划的")
+	h.activity.failures = 0
 	planBaselineSettle(t, h, restarted)
-	require.Equal(t, content.FinalCron(content.Functions[name]), h.mustFunction(name).Timer.Cron, "P 之后仍是每分钟")
+	require.Equal(t, content.Functions[name].Cron, h.mustFunction(name).Timer.Cron, "P 之后仍是每分钟")
 	require.Equal(t, transitionalCron, h.mustFunction(name).Timer.Cron)
 }
 
@@ -231,17 +234,19 @@ func TestDeletedUntouchedFunctionIsRebuiltWhileAPlanIsOpen(t *testing.T) {
 	planBaselineSettle(t, h, r)
 	h.now = h.now.Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
-	require.True(t, h.now.Equal(r.lastVerified), "刚读回过")
+	require.False(t, r.lastVerified.IsZero(), "读回过")
 
+	// 生效日志写不进去：计划下发完也留在未生效状态。
+	h.activity.failures = 1000
 	exclusions.items = []store.SubjectExclusion{{SpaceID: "crypto", SubjectID: "S000-USDT", MarketType: "spot"}}
-	require.NoError(t, h.reconcile(r))
+	_ = h.reconcile(r)
 	open := h.open()
 	require.NotNil(t, open)
 	content := h.content(open)
 	var untouched string
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		if function.IsSCF() && !function.Push && !function.Create && !r.finalDiffers(content, function) {
+		if function.IsSCF() && !function.Push && !function.Create {
 			untouched = name
 			break
 		}
@@ -252,7 +257,7 @@ func TestDeletedUntouchedFunctionIsRebuiltWhileAPlanIsOpen(t *testing.T) {
 	require.True(t, results[0].Done, results[0].Error)
 
 	h.now = h.now.Add(time.Minute)
-	require.NoError(t, h.reconcile(r))
+	_ = h.reconcile(r)
 	require.NotNil(t, h.open(), "计划还没生效")
 	require.True(t, h.timerEnabled(untouched), "下一轮就重建")
 	want, err := marketfetch.EncodePlan(content.Functions[untouched].Old)
@@ -368,50 +373,16 @@ func TestUnplannedScanListsEachRegionOnce(t *testing.T) {
 	require.Len(t, refs, 2)
 }
 
-// 复审中问题：未生效计划里已经确认过渡的函数被 RPC 删掉，下一轮就按过渡环境重建，不等到最终阶段；计划仍未生效。
-func TestDeletedTransitionedFunctionIsRebuiltWhileThePlanIsOpen(t *testing.T) {
-	h := newPlanHarness(t, 120)
-	r := h.reconciler()
-	h.applyFirstPlan(r)
-	h.setSubjects(119)
-	require.NoError(t, h.reconcile(r))
-	open := h.open()
-	require.NotNil(t, open)
-	progress, err := decodeFetchPlanProgress(open.Progress)
-	require.NoError(t, err)
-	content := h.content(open)
-	var victim string
-	for _, name := range content.SortedFunctionNames() {
-		if progress.Transitioned[name] {
-			victim = name
-			break
-		}
-	}
-	require.NotEmpty(t, victim, "有已确认过渡的函数")
-	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{victim}})
-	require.NoError(t, err)
-	require.True(t, results[0].Done, results[0].Error)
-
-	h.now = h.now.Add(20 * time.Second)
-	require.NoError(t, h.reconcile(r))
-	require.NotNil(t, h.open(), "计划仍未生效")
-	want, err := marketfetch.EncodePlan(content.TransitionalPlan(content.Functions[victim]))
-	require.NoError(t, err)
-	require.Equal(t, want, h.mustFunction(victim).Info.Environment[marketfetch.PlanEnvName], "按过渡环境重建")
-	require.True(t, h.timerEnabled(victim))
-	progress, err = decodeFetchPlanProgress(h.open().Progress)
-	require.NoError(t, err)
-	require.True(t, progress.Transitioned[victim], "重建之后重新确认")
-}
-
 // T5～T7 审查小项：命名空间改过之后，只删旧命名空间里的同名副本时，在用的那一份还在：
-// 下一轮不去掉它在本阶段的确认，也不再推一次。
+// 下一轮不去掉它的确认，也不再推一次。
 func TestDeletingAStaleCopyKeepsTheConfirmationOfTheLiveFunction(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
 	h.applyFirstPlan(r)
 	h.setSubjects(119)
-	require.NoError(t, h.reconcile(r))
+	// 生效日志写不进去：计划下发完也留在未生效状态。
+	h.activity.failures = 1000
+	_ = h.reconcile(r)
 	open := h.open()
 	require.NotNil(t, open)
 	progress, err := decodeFetchPlanProgress(open.Progress)
@@ -419,12 +390,12 @@ func TestDeletingAStaleCopyKeepsTheConfirmationOfTheLiveFunction(t *testing.T) {
 	content := h.content(open)
 	var victim string
 	for _, name := range content.SortedFunctionNames() {
-		if progress.Transitioned[name] {
+		if progress.Pushed[name] {
 			victim = name
 			break
 		}
 	}
-	require.NotEmpty(t, victim, "有已确认过渡的函数")
+	require.NotEmpty(t, victim, "有已确认下发的函数")
 	live := scfRef(victim)
 	legacy := scfRefIn(victim, live.Region, "legacy")
 	h.scf.Seed(legacy, activeTimerFunction("pkg-old"))
@@ -437,11 +408,11 @@ func TestDeletingAStaleCopyKeepsTheConfirmationOfTheLiveFunction(t *testing.T) {
 	require.Equal(t, "legacy", results[0].Namespace)
 
 	h.now = h.now.Add(20 * time.Second)
-	require.NoError(t, h.reconcile(r))
+	_ = h.reconcile(r)
 	require.NotNil(t, h.open(), "计划仍未生效")
 	progress, err = decodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.True(t, progress.Transitioned[victim], "在用的函数仍算已确认")
+	require.True(t, progress.Pushed[victim], "在用的函数仍算已确认")
 	require.Equal(t, ensures, h.cloud.countOps("ensure", victim), "在用的函数没有被再推一次")
 	_, exists := h.scf.Lookup(legacy)
 	require.False(t, exists, "旧副本删掉了")
@@ -449,59 +420,36 @@ func TestDeletingAStaleCopyKeepsTheConfirmationOfTheLiveFunction(t *testing.T) {
 	require.True(t, exists)
 }
 
-// reconfirmAfterDeletion 把 name 记成已确认过渡与收尾，再模拟它被 RPC 删掉，返回 reconfirmDeleted 之后的进度。
-func reconfirmAfterDeletion(t *testing.T, h *planHarness, r *PlanReconciler, name string) *FetchPlanProgress {
-	t.Helper()
+// 未生效计划里已确认下发的函数被 RPC 删掉：下一轮去掉它的确认、按 Target 重推（Ensure 建出来），不等读回修复。
+func TestDeletedPushedFunctionIsRepushed(t *testing.T) {
+	h := newPlanHarness(t, 120)
+	r := h.reconciler()
+	h.applyFirstPlan(r)
+	// 生效日志写不进去：计划下发完也留在未生效状态。
+	h.activity.failures = 1000
+	h.setSubjects(119)
+	_ = h.reconcile(r)
 	open := h.open()
+	require.NotNil(t, open)
 	progress, err := decodeFetchPlanProgress(open.Progress)
 	require.NoError(t, err)
-	progress.mark(&progress.Transitioned, name)
-	progress.mark(&progress.Finalized, name)
-	require.NoError(t, h.store.Update(context.Background(), open.ID, open.Status, mustJSON(progress), ""))
-	r.readMu.Lock()
-	r.deletedFunctions = map[string]bool{refKey(r.functionRef(name, h.content(open).Functions[name].Region)): true}
-	r.readMu.Unlock()
+	name := h.cloudTimers()[0]
+	require.True(t, progress.Pushed[name])
+	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Names: []string{name}})
+	require.NoError(t, err)
+	require.True(t, results[0].Done, results[0].Error)
 	require.NoError(t, r.reconfirmDeleted(context.Background(), h.open()))
 	require.Empty(t, r.takeDeletedFunctions(), "记录取走后清空")
 	after, err := decodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	return after
-}
+	require.False(t, after.Pushed[name], "去掉确认")
 
-// 复审小项：已确认收尾的函数被删时，最终计划与过渡计划不同的只去掉 Finalized（收尾时重推最终计划）；
-// 相同的（收尾时不再下发）连 Transitioned 一起去掉，由过渡阶段按同一份内容重建，不用等读回修复。
-func TestDeletedFinalizedFunctionLosesTheRightConfirmations(t *testing.T) {
-	// 标的变更：过渡计划带新旧两份，最终计划只留一份，两者不同。
-	h := newPlanHarness(t, 120)
-	r := h.reconciler()
-	h.applyFirstPlan(r)
-	h.setSubjects(119)
+	h.activity.failures = 0
 	require.NoError(t, h.reconcile(r))
-	content := h.content(h.open())
-	name := h.cloudTimers()[0]
-	require.True(t, r.finalDiffers(content, content.Functions[name]))
-	after := reconfirmAfterDeletion(t, h, r, name)
-	require.False(t, after.Finalized[name])
-	require.True(t, after.Transitioned[name], "最终计划不同：只重推最终计划")
-
-	// 新加一个 1m 数据集：过渡计划与最终计划相同。
-	h = newPlanHarness(t, 60)
-	h.tasks.tasks[0].CollectParams = strings.Replace(h.tasks.tasks[0].CollectParams, `"frequency":"1m"`, `"frequency":"5m"`, 1)
-	r = h.reconciler()
-	planBaselineSettle(t, h, r)
-	h.tasks.tasks = append(h.tasks.tasks, domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-		CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_1m","frequency":"1m"}`,
-	})
-	r.lastVerified = h.now
-	require.NoError(t, h.reconcile(r))
-	content = h.content(h.open())
-	name = h.cloudTimers()[0]
-	require.True(t, content.Functions[name].Push)
-	require.False(t, r.finalDiffers(content, content.Functions[name]))
-	after = reconfirmAfterDeletion(t, h, r, name)
-	require.False(t, after.Finalized[name])
-	require.False(t, after.Transitioned[name], "最终计划相同：从过渡阶段重建")
+	require.Nil(t, h.open())
+	want, err := marketfetch.EncodePlan(h.appliedContent().Functions[name].Target)
+	require.NoError(t, err)
+	require.Equal(t, want, h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName], "按 Target 重建")
 }
 
 // 复审小项：定时器已经停用的计划外函数，每小时的读回不再重发停用。

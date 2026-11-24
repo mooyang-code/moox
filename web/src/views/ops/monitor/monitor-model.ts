@@ -673,9 +673,7 @@ const KIND_LABELS: Record<string, string> = {
   metrics_ingest: "指标入库",
   module: "模块运行",
   balance: "账户余额同步",
-  trade_attention: "交易关注项",
-  event_center_attention: "事件中心关注项",
-  collector_attention: "采集关注项",
+  attention: "关注项",
   subject_tag: "标的标签巡检"
 };
 

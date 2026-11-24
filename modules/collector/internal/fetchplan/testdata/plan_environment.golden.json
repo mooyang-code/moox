@@ -10,20 +10,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgX1BwDCDB8XsIV0Wr/mGDfZpH2gwAEkkXunlBLmAwPHcAzHcNj/////////27Zt27Zt23bbtm3btm3b0hnpSLKQjnQk6UhHEs0EoaoUQn67JdER0VHpG5qyTB3zgqTilKjbWOQUhTQ0gwAgArlwjCli1BR2+GLj/KS9Fa04ECAwEAwYbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -42,20 +30,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUNBwCSzB4WoAUxnG/ntXzLnfwYQ1T1bpHiAjOgVMdwDMdw/P////////9t27Zt27Ztu23btm3bth1h+tst4p0ZIVVEg4O/3SLemRFSdSPcCHMjTBGxpCxqtqQVRFOUImrk1CsFEiXdIADOZy6ZPaOyeCFDYhSzq7KXXhoIEBgIBhRuqGHcm4KifwFhR0REWDASeAiKe0ZJSXmUCsNmts8222zTRgc+BCxBwOpk0M/szRbpL3UsoYBBhCpU9eUZEPa+uikAp14KCMCTgKCtm0BoDwvC4ejfYA4RHIi2+EAAcXHQktY=",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -74,20 +50,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNwALFBQCiSBgXoAFpAJw/LUpZIrf3X0FEZUVKSykToCpHOMIRjuoYmYh3v1mVTSarjpGJePebVZEJmRCZUNm+3nJumn2xqZga8qbOMwXttRKD4MZ9mN08orao8dEI81/VNa3pgAFAESgcMvgRPAXR3aikpDxKhWEzHDJVSdrpUtO14PpFwEFd2xZtQySx42r4Ex9E7EfDp1phV+8TD7BBLwUcIAlQtLsJRCosmB58v4H7Cw6oxgeixcVBFbEz",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -108,28 +72,16 @@
      "push": true,
      "create": false,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "8b1cd728aa555c25",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNLwvFCQASUSkXkAfGzPwzc/v2vQ0zNSpy+04pfSjDSgXFoBgYmhVkKQknnAxUXwciwxDOBBpWgyDUPRWSEjIhEbcis1Tl7kwquzpAMSjM/////////9u2bdu2bdt227Zt27Zt29YxrEOSxjqsQ7IO65BFY0ohxGyM325ZdarqVOkfryRH0n0ga0hF5DYkIw1GHg2BhFHGS7ojg+gNJvFmIv2jvSE0hAUCAwQBBAxzqJHU48KifwchhxAJBQRZHRIYgSDAwVJXVFJSHkWFwsZmFVUCpo5FEeYAQblIOaysGRtbU1ObKnBgHAgHRIMhHNsCBYJICUk4SAT4ccKxCYgCwLkVDkr+62ECmA78Kf5UScQhX/DrHLL8qRD2fEI+YFZJAZE/CUilvQkkLFjguDv9BkOL4EAO+ECKcHGglYA=",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
-     },
-     "final_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "054f1f27089cefbe",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgUNCADCzB8WoAXGnG/nXfLXbwIlsSpy+04pnQkEGktYwhJW+f///////3/btm3btm3bbtu2bdu2bVszhWZI8miGZkiaoRnSWAohY9wJ8dstzYyZmULeEXRKnXQ+BKpTBRqDOMkCJM6GcyxdkaEUuqMEv6I7ZSSlVJRdsr8MlsGBAIEBwIABbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "02f61ec1483cdf3b",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNLwvFCQASUSkXkAfGzPwzc/v2vQ0zNSpy+04pfSjDSgXFoBgYmhVkKQknnAxUXwciwxDOBBpWgyDUPRWSEjIhEbcis1Tl7kwquxugGBTm/////////23btm3btm27bdu2bdu2besY1iFJYx3WIVmHdciiMaUQYjbGb7esOlV1qvSPV5Ij6T6QNaQichuSkQYjj4ZAwijjJd2RQfQGk3gzkf7R3hAawgKBAYIAAgZzqJHU48KifwchhxAJBQRZHRIYgSDAwVJXVFJSHkWFwsZmFVUCpo5FEeYAQblIOaysGRtbU1ObKnBgHAgHRIMhHNsCBYJICUk4SAT4ccKxCYgCwLkVDkr+62ECmA78Kf5UScQhX/DrHLL8qRD2fEI+YFZJAZE/CUilvQkkLFjguDv9BkOL4EAO+ECKcHGglYA=",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
      }
     },
@@ -140,28 +92,16 @@
      "push": true,
      "create": false,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "23b95f85d04ac35d",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNQwvlCADiECkXkAc0zPwz53rpbxuGoFO9W6TcJXIMowrFoBi8EG3wnJLFemaQHGc6XElCmEMaSqG0455jsBzCcBjEQ87MH8IkAygGxf/////////ftm3btm3bttu2bdu2bVsSqL/dIt6ZETJGFSHhb7eId2aEjHEkHAl0JNAoYlk5qtmTNlTRcIapkVfvDFiVdcKU85lPZo8YOfyUISGO2Y1hb71VIDBAEEBQAXOoYdicwqJ/B1FHRAQEWDASGIEgQGFhzygpKY+iQmFjMx/1BKjiPu1YAyzqUsF/7/3510Vw4OXAEtouC1LfVCdF6P1NxxIqMIhQk1XfnQJh56MoBTRXUkDynwSkYt0EElZY4JBd/AZDg+BAzuID+cTFgVZaAw==",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
-     },
-     "final_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c88a6fbaf66df3bb",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUVBwCSDB8WoAU0nG/nXfmTvwkUgap6t0i5N0yAqsVQDMVQ/P////////9t27Zt27Ztu23btm3btiWB+tvtnVlVKYSMQUf32+2dWVUphBgJRgIZCR/jzucyDZqqHVKQ2ClhBovg2BFhDGGlm3nOpKCOnLskI+KTDqnqHe8YCBAYAAxGbqhh3JuCon8BYUdERFgwEngIintGSUl5lArDZrbPNtts00YHPgQsQcDqZNDP7M0W6S91LKGAQYQqVPXlGRD2vropAKdeCgjAk4CgrZtAaA8LwuHo32AOERyItvhAAHFx0JLW",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "9489a50c28bd9e84",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNQwvlCADiECkXkAc0zPwz53rpbxuGoFO9W6TcJXIMowrFoBi8EG3wnJLFemaQHGc6XElCmEMaSqG0455jsBzCcBjEQ87MH8I0AlAMiv////////+/bdu2bdu2bbdt27Zt27YkUH+7RbwzI2SMKkLC324R78wIGeNIOBLoSKBRxLJyVLMnbaii4QxTI6/eGbAq64Qp5zOfzB4xcvgpQ0IcsxvD3nqrQGCAIICgAnOoYdicwqJ/B1FHRAQEWDASGIEgQGFhzygpKY+iQmFjMx/1BKjiPu1YAyzqUsF/7/3510Vw4OXAEtouC1LfVCdF6P1NxxIqMIhQk1XfnQJh56MoBTRXUkDynwSkYt0EElZY4JBd/AZDg+BAzuID+cTFgVZaAw==",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
      }
     },
@@ -172,32 +112,237 @@
      "push": true,
      "create": false,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "643c5c8fc51671ca",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNOAV9BwASTSIYkAXIAIwxowEQkghpxCJwXEY2addFGNoEZzjDGfaZgmT34HGKpIwLiRYcbIZgUhmD+FpoN8nR5rJIZpNg5m1KphOc4ewKoZqJeGdW9dPpu0KoZiLemVXRBbpAdIHqdnyuK2vzlZ9KF9GzvWKX/PlryECBJ5pZ0RSX7V+a6TusutWvfiBAYAAweDf4EYwgBBhks1FJSXkUFQobcwoUAWBTKbRUACC3MMhtvT4VoeaJyqXIBV2hxY+Gfhtgxz7U8P07iEgJDX8Phd0iI1CAil4KLJckEPvuJkBpWMAfTn6DhSo4iB8fIIuLA9VtZw==",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "f0d467470256ecf5",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNOAV9BwASTSIYkAXIAIwxowEQkghpxCJwXEY2addFGNoEZzjDGfaZgmT34HGKpIwLiRYcbIZgUhmD+FpoN8nR5rJIZpNg5m1KPhOc4ewKoZqJeGdW9dPpu0KoZiLemVXRBbpAdIHqdnyuK2vzlZ9KF9GzvWKX/PlryECBJ5pZ0RSX7V+a6TusutWvfiBAYAAweDf4EYwgBBhks1FJSXkUFQobcwoUAWBTKbRUACC3MMhtvT4VoeaJyqXIBV2hxY+Gfhtgxz7U8P07iEgJDX8Phd0iI1CAil4KLJckEPvuJkBpWMAfTn6DhSo4iB8fIIuLA9VtZw==",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
-     },
-     "final_environment": {
+     }
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "24e2721f8942d9f9",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNpQK9BQCCSBgWoCUZA0BklpCWGrHC9aaZ5JNd/n+lAkc4whHOruqfiXhnVkVFNcau6p+JeGdGRagIUZFR9a95d+GCmsaOLY0OWfgIk6ehFGLs1W7z0gTezN+0zDyazoQ4tIbWICAoAEUFMPgRPAXR3aikpDxKhWEzHDJVSdrpUtOh+sVG4CNd2xZtJdRlNXzWBxH/0fCTV9jVydwF2KCXAhGQBBDa3QSOCgukZ77fIP4FB0jjA2dxcVDR7gw=",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ec7b0869abe72cd7",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgUFCADCjB8WoAXGnG/nXfLXbwIlsSpy+04pnQkEGktYwhJW+f///////3/btm3btm3bbtu2bdu2bVszhWZI8miGZkiaoRnSWAohY9wJ8dstzYyZmULeEXRKnXQ+BKpTBRqDOMkCJM6GcyxdkaEUuqMEv6I7ZSSlVJRdul8Gy+BAgMAAYMBuqJHY4IKifwExhxAJRVkdEngOFbuikpLyKBWGzX3HEcxkBEsZQo6DKCAcuAYK4dgUIAj0RCXhoCLA4QlHFhAyAH8rHFT529AEmAp+zvWMPPwCD+OgaWV5CSHsz7opgMxLgf40CSS6vQmQZlggXA79Bn2I4CA18AEC4OKghQIB",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "a66479b24ad16e4c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUVBwCSDB8WoAU0nG/nXfmTvwkUgap6t0i5N0yAqsVQDMVQ/P////////9t27Zt27Ztu23btm3btiWB+tvtnVlVKYSMQUf32+2dWVUphBgJRgIZCR/jzucyDZqqHVKQ2ClhBovg2BFhDGGlm3nOpKCOnLskI+KTDqvUO94xECAwABiMbqhh3JuCon8BYUdERFgwEngIintGSUl5lArDZrbPNtts00YHPgQsQcDqZNDP7M0W6S91LKGAQYQqVPXlGRD2vropAKdeCgjAk4CgrZtAaA8LwuHo32AOERyItvhAAHFx0JLW",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ffeb750098aabd69",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNpQK9BQCCSBgWoCUZA0BklpCWGrHC9aaZ5JNd/n+lAkc4whHOruqfiXhnVkVFNcau6p+JeGdGRagIUZFR9a95d+GCmsaOLY0OWfgIk6ehFGLs1W7z0gTezN+0zDyazng4tIbWICAoAEUFMPgRPAXR3aikpDxKhWEzHDJVSdrpUtOh+sVG4CNd2xZtJdRlNXzWBxH/0fCTV9jVydwF2KCXAhGQBBDa3QSOCgukZ77fIP4FB0jjA2dxcVDR7gw=",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
      }
     }
    ]
+  ],
+  "pushes": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:bd51a3889e6725db23f74ab9249a8267e8135316b0caae49c1fbb9f11e3ffd4e",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:2de130950e67bb828097983d6ca9de1f64122085f0be01c2c33e3d122e24b2a1",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-002",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:7ecdc883edf74c37a31fe2434c3d0dc7f4aef98ec873edaf330197c8b3e3e247",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "02f61ec1483cdf3b",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:02f61ec1483cdf3b4d21e7ca39a85fe7033f270060537b257d17a459f3bf6154",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "9489a50c28bd9e84",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:9489a50c28bd9e849b5257cae35e2873314d384e3ad1572c948cd3630a650b4f",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-002",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "f0d467470256ecf5",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:f0d467470256ecf54fedae3f3f4ba9e4b8e76bc26044015573df2a64e7c1f2bc",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:39:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ec7b0869abe72cd7",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:ec7b0869abe72cd7d9e140b4cd0770aea4b6ed7ce63f0a81c47ed623117a6075",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:39:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "a66479b24ad16e4c",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:a66479b24ad16e4c1a770c3218fd59fa6f5f0af64599bf198506b9478cdb197f",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:39:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-002",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ffeb750098aabd69",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:ffeb750098aabd6950a85f7a08a51fc072d9ff8b7fdad7ef48211abf863f40d7",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "19"
+    },
+    "timer": "enabled 0 * * * * * *"
+   }
   ]
  },
  {
@@ -211,20 +356,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNrgX1BwDCDB8XsIV0Wr/mGDfZpH2gwAEkkXunlBLmAwPHcAzHcNj/////////27Zt27Zt23bbtm3btm3b0hnpSLKQjnQk6UhHEs0EoaoUQn67JdER0VHpG5qyTB3zgqTilKjbWOQUhTQ0gwAgArlwjCli1BR2+GLj/KS9Fa04ECAwEAwYbqiR2OCCon8BMYcQCUVZHRJ4DhW7opKS8igVhs19xxHMZARLGUKOgyggHLgGCuHYFCAI9EQl4aAiwOEJRxYQMgB/KxxU+dvQBJgKfs71jDz8Ag/joGlleQkh7M+6KYDMS4H+NAkkur0JkGZYIFwO/QZ9iOAgNfABAuDioIUCAQ==",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -243,20 +376,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNuAUNBwCSzB4WoAUxnG/ntXzLnfwYQ1T1bpHiAjOgVMdwDMdw/P////////9t27Zt27Ztu23btm3bth1h+tst4p0ZIVVEg4O/3SLemRFSdSPcCHMjTBGxpCxqtqQVRFOUImrk1CsFEiXdIADOZy6ZPaOyeCFDYhSzq7KXXhoIEBgIBhRuqGHcm4KifwFhR0REWDASeAiKe0ZJSXmUCsNmts8222zTRgc+BCxBwOpk0M/szRbpL3UsoYBBhCpU9eUZEPa+uikAp14KCMCTgKCtm0BoDwvC4ejfYA4RHIi2+EAAcXHQktY=",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -275,20 +396,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNwALFBQCiSBgXoAFpAJw/LUpZIrf3X0FEZUVKSykToCpHOMIRjuoYmYh3v1mVTSarjpGJePebVZEJmRCZUNm+3nJumn2xqZga8qbOMwXttRKD4MZ9mN08orao8dEI81/VNa3pgAFAESgcMvgRPAXR3aikpDxKhWEzHDJVSdrpUtO14PpFwEFd2xZtQySx42r4Ex9E7EfDp1phV+8TD7BBLwUcIAlQtLsJRCosmB58v4H7Cw6oxgeixcVBFbEz",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -309,28 +418,16 @@
      "push": true,
      "create": false,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "1ea297d4882eedc2",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNKgrVCQAiUSkXkAfGzPwzc/v2vwUzNbRl904pfSjDSgWFUAiF8DJuILYZIxsQ4lfDgRBiR5QJMSE7YpQGVwgjg2qQRhmRSmf5MHWAQijs/////////23btm3btm27bdu2bdu2besY65AkYR3WIVmHdciimTGlEDLGb7esOlV1qvSPV5Yr6T6QNaSichvLSAMhj0agwTDjJt2VQfQGSzwxkf7R3gqtsEBggCCAgAFzqJHY4sKifwchhxAJBQVZHRIYgSAAolJXVFJSHkWFwsZmEAy2B6AqS17CDtAqFyHH777r+77Pf67+wGgQDreWhHBsC5QE+2KScBAR4OGE4xYQBQD/Vjgo+W/DBGQe+CPyV3xRPf6OA0fJ8pKEsAcp8gFiJQXa9CSQlfYmwLBgAcft8hs0LYKDPOAD/MDFgRYFAg==",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
-     },
-     "final_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7c6ef6620b7dd0bf",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNqQS9BwByCx0WoAXGnG/nXeL39wRKYmnL7bunNDMQQoVQCIVQ3P/////////btm3btm3bNs2Vpm2tNKVpS1Oalr0rhRCzMap+u6QhaVhkIIH9V35uMKKQSwVmdohw02k6h+wnDYgQP+VwSIM/xlQlNQqrjvRIBwIEBgCDBlu4sdQig6J/ARJYAWJzV1ROeZQKw2ZqRB5UZmEndTaw5XnAxwdHBi4IR3BBFQLs0REOEAQMmHCkCWgTgIMKRzX/w1ACFgN+SdobQMrqFkbCB+mu/BwE+7xRQGwA4oMEJOulAGI6CbjddRNQ2mGBYeLgb4AOFxw4BR/QPFwctMSD",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c83d50a0aa88f144",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNKgrNCQAiESkXkAfGzPwzc/v2vwUzNbRl904pfSjDSgWFUAiF8DJuILYZIxsQ4lfDgRBiR5QJMSE7YpQGVwgjg2qQRhmRSmf5MDdAIRT2/////////7Zt27Zt27bdtm3btm3btnWMdUiSsA7rkKzDOmTRzJhSCBnjt1tWnao6VfrHK8uVdB/IGlJRuY1lpIGQRyPQYJhxk+7KIHqDJZ6YSP9ob4VWWCAwQBBAwHOokdjiwqJ/ByGHEAkFBVkdEhiBIACiUldUUlIeRYXCxmYQDLYHoCpLXsIO0CoXIcfvvuv7vs9/rv7AaBAOt5aEcGwLlAT7YpJwEBHg4YTjFhAFAP9WOCj5b8MEZB74I/JXfFE9/o4DR8nykoSwBynyAWIlBdr0JJCV9ibAsGABx+3yGzQtgoM84AP8wMWBFgUC",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
      }
     },
@@ -340,17 +437,17 @@
      "executor": "scf",
      "push": true,
      "create": false,
-     "retired": true,
-     "transitional_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "84f60e37b309ff7c",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNMQYVCQAi0SoakAdpAG+MjllTsMkmqS1zeJ13F5GyBM4w5wEH4SAchcKBwBVNkWa3lRNpnCGuIjNvDFKn1Ck3aeUQpoYVFyIOkpWkc9VD0wEchOP/////////b9u2bdu2bdtt27Zt27YtDdTfbjMR78wIqaKk/O02E/HOjBCkAWkgpIFI2ZkypGp6zBVVVBxSevYqniKrTN0oBBrPx5iiQUzxU5dmnDsk5N56y2CAoCCgoAJzqGHcm8KifwdRR0QEBVgwEhiBIIAhYVdUUlIepcKwGY2VAMw1YY5jBwCoS3vb5ff5dUf7wFMCS8AQljjpZgnFSNLf6FhCAYMIdbLqy18g7G90p4B+JQUk/0lA0NZNIDSFBWFxwG8wBwgORC8+EFNcHLSkNQ==",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "725bd9d7d5d301b0",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNMQYVCQAi0SoakAdpAG+MjllTsMkmqS1zeJ13F5GyBM4w5wEH4SAchcKBwBVNkWa3lRNpnCGuIjNvDFKn1Ck3aeUQpoYVFyIOkpWkc9VDnwEchOP/////////b9u2bdu2bdtt27Zt27YtDdTfbjMR78wIqaKk/O02E/HOjBCkAWkgpIFI2ZkypGp6zBVVVBxSevYqniKrTN0oBBrPx5iiQUzxU5dmnDsk5N56y2CAoCCgoAJzqGHcm8KifwdRR0QEBVgwEhiBIIAhYVdUUlIepcKwGY2VAMw1YY5jBwCoS3vb5ff5dUf7wFMCS8AQljjpZgnFSNLf6FhCAYMIdbLqy18g7G90p4B+JQUk/0lA0NZNIDSFBWFxwG8wBwgORC8+EFNcHLSkNQ==",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
      }
     },
@@ -360,21 +457,192 @@
      "executor": "scf",
      "push": true,
      "create": false,
-     "retired": true,
-     "transitional_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "860a3cdd35f02e6a",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNOQOVBwAyTSMZgAfIANNsVrPGEbKJszB1rimMbNK+t64rVoc4xCEQCgJOkUua7TCyRZrjGi+ZuWzqTd5kOY10wWqMDEJFIxlJ6rseDrrBIc7uGKqZiHdmVT+dvjuGaibinVkVfaAPRB+obsfnurI2X/mpdBE92yt2yZ+/hhQ48EYzK5risv1LM32HVbf61RMIDBQACg83+BGMIAQcY7tRSUl5lArDZpUwAODUsi0VAMgtDHJ6z4+FqHqkdAmRQVVKtSup/kSYsS81fPcOIlJCw99CYffKAwpQppcCSyAJRLS7CRAVFkiHvt9g+QsOosYHKODioHLbGQ==",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "5ae91c88a9f448df",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNOQOVBwAyTSMZgAfIANNsVrPGEbKJszB1rimMbNK+t64rVoc4xCEQCgJOkUua7TCyRZrjGi+ZuWzqTd5kOY10wWqMDEJFIxlJ6rsejrPBIc7uGKqZiHdmVT+dvjuGaibinVkVfaAPRB+obsfnurI2X/mpdBE92yt2yZ+/hhQ48EYzK5risv1LM32HVbf61RMIDBQACg83+BGMIAQcY7tRSUl5lArDZpUwAODUsi0VAMgtDHJ6z4+FqHqkdAmRQVVKtSup/kSYsS81fPcOIlJCw99CYffKAwpQppcCSyAJRLS7CRAVFkiHvt9g+QsOosYHKODioHLbGQ==",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
      }
     }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "96a618a5f8f300c5",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNqQS9BwByCx0WoAXGnG/nXeL39wRKYmnL7bunNDMQQoVQCIVQ3P/////////btm3btm3bNs2Vpm2tNKVpS1Oalr0rhRCzMap+u6QhaVhkIIH9V35uMKKQSwVmdohw02k6h+wnDYgQP+VwSIM/xlQlNUq9jvRIBwIEBgCDBlu4sdQig6J/ARJYAWJzV1ROeZQKw2ZqRB5UZmEndTaw5XnAxwdHBi4IR3BBFQLs0REOEAQMmHCkCWgTgIMKRzX/w1ACFgN+SdobQMrqFkbCB+mu/BwE+7xRQGwA4oMEJOulAGI6CbjddRNQ2mGBYeLgb4AOFxw4BR/QPFwctMSD",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-002",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true
+    }
    ]
+  ],
+  "pushes": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "bd51a3889e6725db",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:bd51a3889e6725db23f74ab9249a8267e8135316b0caae49c1fbb9f11e3ffd4e",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2de130950e67bb82",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:2de130950e67bb828097983d6ca9de1f64122085f0be01c2c33e3d122e24b2a1",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-002",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ecdc883edf74c37",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:7ecdc883edf74c37a31fe2434c3d0dc7f4aef98ec873edaf330197c8b3e3e247",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c83d50a0aa88f144",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:c83d50a0aa88f144161d5d79612dae364a468d4fa6a32b1e6e12896b88f6f910",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "725bd9d7d5d301b0",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:725bd9d7d5d301b0855efb73d5c656c25a8ecf40345c9ba4c86e4a4e4edaefb6",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-002",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "5ae91c88a9f448df",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:5ae91c88a9f448df311694a8069aaaf5b3df509426ba17bd65b2e861aeab5a39",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:39:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "96a618a5f8f300c5",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:96a618a5f8f300c501b62f67c94fad5fb2bf5cb1d62676da1b70154a666d0089",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "40"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:39:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "timer",
+    "timer": "disabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:39:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-002",
+    "kind": "timer",
+    "timer": "disabled 0 * * * * * *"
+   }
   ]
  },
  {
@@ -388,20 +656,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c081f98af983a968",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvdCACijB8YsCXJWl/WIi2QvXfSQkYDfim/TCkxzOcEBYP2BsP///////9/27Zt27Zt227btm3btm3bneIOSRJ3uENyhzvkWGVMKUSE/HbL7Ww7IyKTuGERGaaoEgoCUaDiKNdYFFMMKpSRJwxSxjgIQ4zWyT/5KBuRKqzCAAKBgQPAgQF3uLHY4oKifwES2MKhMhcFKSgqj3KSjc1taU0jhVrOPEziGVZ9HDNZzezZVUdu9MqZt66q7F4PwBThAJDqCAdpwSMCQ3BNOFgQGJnCITIgF8CPLRwg/NUkCvDJ+qdokBIQinI2yjF7b13+D4j9s1TAIeD4iQIO+yqwMM0EVgKSJ/B8gVnO57CgI97pN4jhCw7QgQ9cES4OtLRB",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -420,20 +676,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "dd8fd7b01b52b71b",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAOFBQAyxxUXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwQwNg3dV/0zEO7MkkkQoidD/q4Jb/PcaNsIQpbg5fExldLVfKFVh6eTtUzbbGH+Iv6NET9ZirQBBMDgARwUn/GfcvpD64kmQGoTKI2y3ACt0H/mRigGaoZAvNPJkiYmDELH/6iv6S+x2U4HiOe7lAGbQVwFRYAIrBXoCnxXMcorCgs+Kw98gOgUHCOEDV3VxMI62Wg==",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -453,17 +697,17 @@
      "executor": "scf",
      "push": true,
      "create": false,
-     "retired": true,
-     "transitional_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "babd49de6bece89e",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNagytCQCSzSIagDfGWO3azLbl/vIbBzAhsO/1O6XEqgywMQEH4Ya0RyAOh4OBHsBBOO7/////////bdu2bdu2bbtt27Zt27Zt6xzrkKSxDuuQrMM6ZPHOmFLMCPntllWnqk6ZmYlueGbJFNdCUUAGK4zzFYtiSjJDKfIokTPJQIak3s2/2ShVRq7wCgUMCAoSAQkGeqih0EOGRf8C8YYQCUGCLnQSUBBgMDhQ4hKJBCkpj3KSGi0H5jB6tebQJBFpThufuUCBodVgBgTMBULMQSqzukXENCQ1uByUJ8LhkMgIR6kAR7DhQhMOCoENpHCQAiAD7LaFg1p/ZUMBn1g/mf2QXpc7j8yxC+ny0YLYg1ABPr3HMQk4+lWAi2cCnPHSE0wZALPkp7AADZX/BtspOOBAfLDPXRzQ+CA=",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ba9374f090a4d934",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNagytCQCSzSIakDfhs6zYzLDRtvduTJ47a/ml/CklI7s7IAIJwVhpj0AcDgcDPYCEkNz/////////27Zt27Zt23bbtm3btm3b0jnSIckiHdIhSYd0SOKdMWZVpfx2S6JDRIeqyixueFWHMa4Fo1AYykDORzTM2FEGI/LFUc4cSGHK0Xv5LyNGVOWMZxQwIChIBCQYeqih0EOGRf8C8YYQCUGCLnQSUBBgMDhQ4hKJBCkpj3KSGi0H5jB6tebQJBFpThufuUCBodVgBgTMBULMQSqzukXENCQ1uByUJ8LhkMgIR6kAR7DhQhMOCoENpHCQAiAD7LaFg1p/ZUMBn1g/mf2QXpc7j8yxC+ny0YLYg1ABPr3HMQk4+lWAi2cCnPHSE0wZALPkp7AADZX/BtspOOBAfLDPXRzQ+CA=",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
      }
     },
@@ -473,17 +717,17 @@
      "executor": "scf",
      "push": true,
      "create": false,
-     "retired": true,
-     "transitional_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "9f193e74e263cc5e",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNXgQlBgASiBgYkDcNs6zYzLBRa3s3Jl81KlJeRIRwZsaIC5Gsd5kkCHIYXAMWYulm3v1VMxHvtIyWKS1T/9FOsvWfGPUVqDjHkdHYZWh5048tszxJm5NxWNN1HjOPxlZde63XBAZCQQkoFir8xoHTdd9laT6IyNqJgQVio++Lr3HYOcBzNX+8yPoAgqX+ebZaQrIE7UOIeHL1LRoSew6oQHQc59QB8PRVwAFMgLTMniDcCmYJAmFBCZ3wNxCdgoOI8AGqujgY51Yt",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "df320e73617b8584",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNXgQlBgASiBgYkDcNs6zYzLBRa3s3Jl81KlJeRIRwZsaIC8Grd5kkCHIYXAMWYulm3v1VMxHvtIyWKS1T/9FOsvWfGPUVqDjHkdHYZWh5048tszxJm5NxWNN1HjOPxlZde63XBAZCQQkoFir8xoHTdd9laT6IyNqJgQVio++Lr3HYOcBzNX+8yPoAgqX+ebZaQrIE7UOIeHL1LRoSew6oQHQc59QB8PRVwAFMgLTMniDcCmYJAmFBCZ3wNxCdgoOI8AGqujgY51Yt",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
      }
     },
@@ -493,8 +737,83 @@
      "push": true,
      "create": false,
      "retired": false,
-     "transitional_plan": "KLUv/WMBAFhNkg0tCgAizyYakDfhm2VN3DkusvduXJ+bM5L/y5RSgoPdNSAHATb/4fD/////////tm3btm3btt22bdu2bdu2JEmSJEmSJEnnik5VlRWdolNVdIpOFdWdMaWY/XZLFtEhokNm1jJs6swQcxwLR8Ew2JFcj+oopiBmKFRlA/kZJDHMEZ6ttjUpRLwrdaXMwAJBoBBQ1KGQJBYKAgAhgVgUHIlBEoCOqJHY2IKipQ/xhhABAYAFAxK4QcEgkQODhIiAHB1BQwNx1vW1S5/O8v492uU2P/4jMpJMp0IZKVqmwaFQPjBIDQesE9lwjAs2BOdtzeFQQiCKPBxjQLwA5wHiUNffd3ZAJNyvYRIEUDlq73DNcgW93nXtep0BKq3amx+A2NGArH8B3vVlwcRWOktiTAzyYa/zgPCRHsgFQxAfwB6IBUYCkSkOplIb",
-     "final_plan": "KLUv/WMBAFhNkg0tCgAizyYakDfhm2VN3DkusvduXJ+bM5L/y5RSgoPdNSAHATb/4fD/////////tm3btm3btt22bdu2bdu2JEmSJEmSJEnnik5VlRWdolNVdIpOFdWdMaWY/XZLFtEhokNm1jJs6swQcxwLR8Ew2JFcj+oopiBmKFRlA/kZJDHMEZ6ttjUpRLwrdaXMwAJBoBBQ1KGQJBYKAgAhgVgUHIlBEoCOqJHY2IKipQ/xhhABAYAFAxK4QcEgkQODhIiAHB1BQwNx1vW1S5/O8v492uU2P/4jMpJMp0IZKVqmwaFQPjBIDQesE9lwjAs2BOdtzeFQQiCKPBxjQLwA5wHiUNffd3ZAJNyvYRIEUDlq73DNcgW93nXtep0BKq3amx+A2NGArH8B3vVlwcRWOktiTAzyYa/zgPCRHsgFQxAfwB6IBUYCkSkOplIb"
+     "plan": "KLUv/WMBAFhNkg0tCgAizyYakDfhm2VN3DkusvduXJ+bM5L/y5RSgoPdNSAHAab8h8P/////////27Zt27Zt23bbtm3btm3bkiRJkiRJkiSdKzpVVVZ0ik5V0Sk6VVR3xpRi9tstWUSHiA6ZWcuwqTNDzHEsHAXDYEdyPaqjmIKYoVCVDeRnkMQwR3i22takEPGu1JUyAwsEgUJAUYdCklgoCACEBGJRcCQGSYCOqJHY2IKipQ/xhhABAYAFAxK4QcEgkQODhIiAHB1BQwNx1vW1S5/O8v492uU2P/4jMpJMp0IZKVqmwaFQPjBIDQesE9lwjAs2BOdtzeFQQiCKPBxjQLwA5wHiUNffd3ZAJNyvYRIEUDlq73DNcgW93nXtep0BKq3amx+A2NGArH8B3vVlwcRWOktiTAzyYa/zgPCRHsgFQxAfwB6IBUYCkSkOplIb"
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "cron": "0 0 * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "f43a417e03e0319d",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNKQb9CABCzSEZoCfJB2y62d4w2XKnlsZ/wi/llymlblVVOIlIRDIYDgZ6AIlI9/////////+2bdu2bdu23bZt27Zt27Z1jnVI0liHdUjWYR2yeGdMKWaE/HbLqlNVp8zMLG54ZsgYV4JBKApmHOcrGsUUZIVS5AtEzqCjMAT1bv7NR6kycoVXKGBAUHAIODB0qKHY28KifwHxhhAJAUEXHBJQEEAwOFTsigqKyqNOYeMAaGGwBlzMJeROCEAKEIAUEABhOSibCAeCFEc4ZAUOgogjTThoENgshYMUAAbA3lo4qPDXHgqQw/w+ooFaqAOKgLeX0uVNBmI3kQpEQzjOUODLrwL4ORNA/12eIDIAzMLrwoIwOPgbiKbgAI/4IMW7ONCiQQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "cron": "0 0 * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "e9d26bbff0c7eb7b",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNIwKdBQDCxxcYkKcNs2yxscxqE5GGznenJMmLyBLOzBgRyyyzDOMwIA1YZnUz7/6qmYiEqBW1YmrF/uOd5Os/MWpCIOIUR6qx7dDyphdrd3mSNid1WBPpPGYe1Zpde6/3BAZC4QgcFyT8ABz6+CjGAR5X75MfVU4gOIpPdsCV6hrJEgkTIWKtqy9cH7E3TQUo8PgHB1xJXwVixASQM/QENSuY5ReFBZ8Vh79BdAoOEMIHruriYBxttQ==",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+     }
+    },
+    {
+     "name": "stream-crypto-spot",
+     "executor": "stream",
+     "push": false,
+     "create": false,
+     "retired": false,
+     "plan": "KLUv/WMBAFhNkg0tCgAizyYakDfhm2VN3DkusvduXJ+bM5L/y5RSgoPdNSAHAab8h8P/////////27Zt27Zt23bbtm3btm3bkiRJkiRJkiSdKzpVVVZ0ik5V0Sk6VVR3xpRi9tstWUSHiA6ZWcuwqTNDzHEsHAXDYEdyPaqjmIKYoVCVDeRnkMQwR3i22takEPGu1JUyAwsEgUJAUYdCklgoCACEBGJRcCQGSYCOqJHY2IKipQ/xhhABAYAFAxK4QcEgkQODhIiAHB1BQwNx1vW1S5/O8v492uU2P/4jMpJMp0IZKVqmwaFQPjBIDQesE9lwjAs2BOdtzeFQQiCKPBxjQLwA5wHiUNffd3ZAJNyvYRIEUDlq73DNcgW93nXtep0BKq3amx+A2NGArH8B3vVlwcRWOktiTAzyYa/zgPCRHsgFQxAfwB6IBUYCkSkOplIb"
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true
+    },
+    {
+     "name": "stream-crypto-spot",
+     "executor": "stream",
+     "push": false,
+     "create": false,
+     "retired": false,
+     "plan": "KLUv/WMBAFhNkg0tCgAizyYakDfhm2VN3DkusvduXJ+bM5L/y5RSgoPdNSAHAab8h8P/////////27Zt27Zt23bbtm3btm3bkiRJkiRJkiSdKzpVVVZ0ik5V0Sk6VVR3xpRi9tstWUSHiA6ZWcuwqTNDzHEsHAXDYEdyPaqjmIKYoVCVDeRnkMQwR3i22takEPGu1JUyAwsEgUJAUYdCklgoCACEBGJRcCQGSYCOqJHY2IKipQ/xhhABAYAFAxK4QcEgkQODhIiAHB1BQwNx1vW1S5/O8v492uU2P/4jMpJMp0IZKVqmwaFQPjBIDQesE9lwjAs2BOdtzeFQQiCKPBxjQLwA5wHiUNffd3ZAJNyvYRIEUDlq73DNcgW93nXtep0BKq3amx+A2NGArH8B3vVlwcRWOktiTAzyYa/zgPCRHsgFQxAfwB6IBUYCkSkOplIb"
     }
    ],
    [
@@ -505,20 +824,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "67b9274e0407bded",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvtCADCzB8YsCXJWl/WIi2QLXfSQkYDfin/TikxzOcEBYNSFTEY/v///////9u2bdu2bdt227Zt27Zt284UZ0iSOMMZkjOcIceqUgghIojfbrmZbWZEZBYvLKJTjCrBIBQFMo5yjQYp5FCBjHxxiCrnKApxWif/5INspSsswgACgYEDwIEBd7ix2Nqg6F8S2MKhMhcFKSgqj3ILG5sBbWlPI4UtZ95M4nmrPg4VjVX16maLrnjjqtfONHV/DsAR4YCR6ggHacEjAkNwTThYIDAyhUNkQC4AP7ZwgOCvJlGAT9Y/RaMqQCBImVCCgXvr8n9A7J+lAg4Bx88JcMhXgYVZJrASUDyB5wvMcj6GBR3xnt8g0i44QAc+cEW4ONDSBgE=",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -537,20 +844,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7b73dbbda533af8c",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAONBQBSBxYXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwc6shsG7qn8m4p1ZEkkilETo/1XBLf57DRthiFLcHD6mMrraL5SqsHTy9imbbYw/xN9RojXaYq0AQTA4AEcFJ/xnHFPkvXgKSM2h8njlBGoGEFblBytSOUAJ640qWWLORIjYcvUV4iN2i6lAOR5n4ACD9FVABJhAacGewN0KZjkCYUEJxeFvEJ2CA4Twgau6OBhHWy0=",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -567,10 +862,259 @@
      "executor": "stream",
      "push": true,
      "create": false,
-     "retired": true,
-     "transitional_plan": "KLUv/WMBAFhNhA4NCwCCUCsckDfJm2VNjI3AVtt7XwsRMzP0pZQppbS66+54Ao0Czd0x+hGIw8GAALGQ3TGARqFx/////////2/btm3btm3bbdu2bdu2bUuSJEmSJEmSlc4qmZkZq2SVzKySVTIru0PoHGN+uyWtKlVVKmNMDTGyM0ZByfFIDsRgkuV6ZclBRzGGU2ZGlB9SFgRd4dnUNl1OFe+O3TE0wEgULAQWhjgWBWNBCCAoEgyDZDlYAoCQqIHQ2EBASx8BhxABAQEXDBI4AsEQgUMwSEBCQA45BBqWAKbl+ayv04S+j+YBYfKs8xU4lDV+3MwsAQPBQiAoCBoERAHRCH4AwRqO2ujacGgLtgRCrM3hUKwALHk44gHgAEwIxKGyfz/cAZF3vzgPpgr+5rkmfy1p0O+z177sGZg6S/v/ga8cDZzvF+idXhZIkqWzqK+JQf73OQ+Ev/QArxmCfAZ7gLY1EuirODChQA=="
+     "retired": false,
+     "plan": "KLUv/WMBAFhNhA4NCwCCUCsckDfJm2VNjI3AVtt7XwsRMzP0pZQppbS66+54Ao0Czd1B50cgDgcDAsRCdscAGoXG/f///////79t27Zt27Ztt23btm3bti1JkiRJkiRJVjqrZGZmrJJVMrNKVsms7A6hc4z57Za0qlRVqYwxNcTIzhgFJccjORCDSZbrlSUHHcUYTpkZUX5IWRB0hWdT23Q5Vbw7dsfQACNRsBBYGOJYFIwFIYCgSDAMkuVgCYCQqIHQ2EBASx8BhxABAQEXDBI4AsEQgUMwSEBCQA45BBqWAKbl+ayv04S+j+YBYfKs8xU4lDV+3MwsAQPBQiAoCBoERAHRCH4AwRqO2ujacGgLtgRCrM3hUKwALHk44gHgAEwIxKGyfz/cAZF3vzgPpgr+5rkmfy1p0O+z177sGZg6S/v/ga8cDZzvF+idXhZIkqWzqK+JQf73OQ+Ev/QArxmCfAZ7gLY1EuirODChQA=="
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": false,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "67b9274e0407bded",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvtCADCzB8YsCXJWl/WIi2QLXfSQkYDfin/TikxzOcEBYNSFTEY/v///////9u2bdu2bdt227Zt27Zt284UZ0iSOMMZkjOcIceqUgghIojfbrmZbWZEZBYvLKJTjCrBIBQFMo5yjQYp5FCBjHxxiCrnKApxWif/5INspSsswgACgYEDwIEBd7ix2Nqg6F8S2MKhMhcFKSgqj3ILG5sBbWlPI4UtZ95M4nmrPg4VjVX16maLrnjjqtfONHV/DsAR4YCR6ggHacEjAkNwTThYIDAyhUNkQC4AP7ZwgOCvJlGAT9Y/RaMqQCBImVCCgXvr8n9A7J+lAg4Bx88JcMhXgYVZJrASUDyB5wvMcj6GBR3xnt8g0i44QAc+cEW4ONDSBgE=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": false,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7b73dbbda533af8c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAONBQBSBxYXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwc6shsG7qn8m4p1ZEkkilETo/1XBLf57DRthiFLcHD6mMrraL5SqsHTy9imbbYw/xN9RojXaYq0AQTA4AEcFJ/xnHFPkvXgKSM2h8njlBGoGEFblBytSOUAJ640qWWLORIjYcvUV4iN2i6lAOR5n4ACD9FVABJhAacGewN0KZjkCYUEJxeFvEJ2CA4Twgau6OBhHWy0=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     }
+    },
+    {
+     "name": "stream-crypto-spot",
+     "executor": "stream",
+     "push": true,
+     "create": false,
+     "retired": false,
+     "plan": "KLUv/WMBAFhNQAdNCgACUCocgEfJ3Ei2I4FCtXtvQoCcgRG/lPKnlN4cMbBSAUthKSwIRKMAtRDvEGApLGdmZmZmZmZmZmb2/////////7Zt27Zt27bdtm3btm3btpWOlUjSsBIrkazESmTxDqFzjDH77ZZVqapSGWPM44hnTIKQqwExHAeDKOcrIgedxBxOkT8SO5QoB7Kkd+PfWDlVvTu8QzTASBgsBBYkMCgKxoIQQFAkGA1EOVACgImogdTYAgEtfQABhxABAQEXDBK4AcEgsSMgIiIPHUED4FC++3HT+0jTwDBNg2KaCoZpIjyAYg1HbFRtOJgCLcENQ3M4lBWAJg/HKAA2AFMCcaj275M7APPm52blnW4Osxo8s0xBv4td+1ZnYEJY7f8HLnU0cEVfoO++ZYH0LJ1F5U4M9s/HeSD9pQeYzRBUNNgDxK2RQN+KAwAKBA=="
+    }
+   ],
+   [
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": false,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "67b9274e0407bded",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNeAvtCADCzB8YsCXJWl/WIi2QLXfSQkYDfin/TikxzOcEBYNSFTEY/v///////9u2bdu2bdt227Zt27Zt284UZ0iSOMMZkjOcIceqUgghIojfbrmZbWZEZBYvLKJTjCrBIBQFMo5yjQYp5FCBjHxxiCrnKApxWif/5INspSsswgACgYEDwIEBd7ix2Nqg6F8S2MKhMhcFKSgqj3ILG5sBbWlPI4UtZ95M4nmrPg4VjVX16maLrnjjqtfONHV/DsAR4YCR6ggHacEjAkNwTThYIDAyhUNkQC4AP7ZwgOCvJlGAT9Y/RaMqQCBImVCCgXvr8n9A7J+lAg4Bx88JcMhXgYVZJrASUDyB5wvMcj6GBR3xnt8g0i44QAc+cEW4ONDSBgE=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+     }
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": false,
+     "create": false,
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
+      "MOOX_CALLER": "scf-collector",
+      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+      "MOOX_ENTRY_HOST": "storage",
+      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7b73dbbda533af8c",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNbAONBQBSBxYXoCUZA0Bk9rWsZJNmhevdkvKbbP5/VwGFwc6shsG7qn8m4p1ZEkkilETo/1XBLf57DRthiFLcHD6mMrraL5SqsHTy9imbbYw/xN9RojXaYq0AQTA4AEcFJ/xnHFPkvXgKSM2h8njlBGoGEFblBytSOUAJ640qWWLORIjYcvUV4iN2i6lAOR5n4ACD9FVABJhAacGewN0KZjkCYUEJxeFvEJ2CA4Twgau6OBhHWy0=",
+      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+     }
+    },
+    {
+     "name": "stream-crypto-spot",
+     "executor": "stream",
+     "push": true,
+     "create": false,
+     "retired": true
     }
    ]
+  ],
+  "pushes": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c081f98af983a968",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:c081f98af983a968ebf5f75e17bc34d1b15eef9a1942d37588adb142bae8b0eb",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "dd8fd7b01b52b71b",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:dd8fd7b01b52b71bd3776a473b169bd64dc7e476e75146f1b0ded8cdea8ef40d",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T09:00:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "ba9374f090a4d934",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:ba9374f090a4d934ccd22b691cb7cd7a93cb6a9a215af79f1d4304ae6a2cabe3",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T09:00:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "df320e73617b8584",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:df320e73617b858467f52dec8f927b108d0a5a384f02513d29891988464999e2",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T09:03:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "f43a417e03e0319d",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:f43a417e03e0319db73fdc0165768c9a1a5ad38070778bb459b3676074bacfda",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 0 * * * * *"
+   },
+   {
+    "at": "2026-10-12T09:03:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "e9d26bbff0c7eb7b",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:e9d26bbff0c7eb7bb550755a83141cb2925ed3a06b754e00c7fb5c92157c9b60",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 0 * * * * *"
+   },
+   {
+    "at": "2026-10-12T10:00:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "67b9274e0407bded",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:67b9274e0407bded7cade38f540d8248f2ed87c522ae01676502bc55e6dc3311",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "100"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T10:00:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "timer",
+    "timer": "disabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T10:00:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7b73dbbda533af8c",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:7b73dbbda533af8cad4064c208068c6304df14286b8d24663093f32620b764c5",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "20"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T10:00:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "timer",
+    "timer": "disabled 0 * * * * * *"
+   }
   ]
  },
  {
@@ -584,20 +1128,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c4f66b1046a1783f",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNsAU9CACyTB8XsIV0Wr/mGD/ZhDSg4gPklnKnlBLmAwOHcAiHcNz/////////27Zt27Zt23bbtm3btm3bkjmSIckiGZIhSYZkSOJdKWZVhPx2SyJDRIaqyiReeFWnFNehGAhBFcb5iIUVOyUwIk8ccuUYRCGn9/JfNozan/GMAwECA4ABA3CoodzagqJ/AQGHEAkBQVcHElgBwnJXVE45hTrDZiAMFIVEIYwIQ7H4ARQRDrlGRzjIghqBYItMOOgK7DCFIw4ADbCXFg7q/uuIAvIvf3Ta/mZdxEy4ta4uHykQe14qkCqC42ACbH0VSKaZgHbzBGm4vOvPYQEtOPIb7IDgIJX4QPm7OGilQQ==",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -616,20 +1148,8 @@
      "push": true,
      "create": true,
      "retired": false,
-     "transitional_cron": "0 * * * * * *",
-     "final_cron": "0 * * * * * *",
-     "transitional_environment": {
-      "MOOX_CALLER": "scf-collector",
-      "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
-      "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
-      "MOOX_ENTRY_ADDRESS": "storage.example:11004",
-      "MOOX_ENTRY_HOST": "storage",
-      "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "51a0a896bcac3407",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNqgEVBQAyhxUWoCUZA0BkFqJtk2bx6t2S8pts/n9XAYcccshh3lX9MxHvzJJG0qCkQf+vCm7x32vYBCMU4mbgYyqjq31CqQpLJ28PZbON8Yf4G5TMkLVYaxAQFICiAiD8asUnK1QzQGWr/lihVGfLTJYgYISIt6++ZVtizzUViNDj3jIAkr4KuIgJUPKeQMDkHQgaFpRwCH4D5xQcUIwPxIqLg3EROwM=",
-      "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
-     },
-     "final_environment": {
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
@@ -649,8 +1169,7 @@
      "push": true,
      "create": false,
      "retired": false,
-     "transitional_plan": "KLUv/WMBAFhNxwaNCQDyjiYakDfJm2WNXDhB9paNjsXMDEkpf0opzdv/RxBJkRRJkZz/////////t23btm3btu22bdu2bdu2JUmSJEmSJMlCxwqZmZ0VskJmVsgKmZWdY0wpd7/dklaFqgrV3dUMGzt3h0mHhEQwCpeQ01OWiinHFUqZ2Th+zIEY5gePr/YVKXX2KXaKJQ4CiACEGQjpYBgADAYOCYKEFCABgIaokdjYgqKlDxGHEAEBAVcDEjjA4DC5IyKHHEFH0ABrhKocMHAwYsTgwIEmB9Cs4ZCAqQ2HKpAR8Cwrh0MtAZjwcAgDIAAYBohDtf4u2QHFLj+GW5LIWUSa4e1hBf2ude1rnYHJX7WHH7DtaOCY/QLqNxage42PPx4G+s5XeaB8nAeIsRD0AdQDvAGQQFOKgz/aBg==",
-     "final_plan": "KLUv/WMBAFhNxwaNCQDyjiYakDfJm2WNXDhB9paNjsXMDEkpf0opzdv/RxBJkRRJkZz/////////t23btm3btu22bdu2bdu2JUmSJEmSJMlCxwqZmZ0VskJmVsgKmZWdY0wpd7/dklaFqgrV3dUMGzt3h0mHhEQwCpeQ01OWiinHFUqZ2Th+zIEY5gePr/YVKXX2KXaKJQ4CiACEGQjpYBgADAYOCYKEFCABgIaokdjYgqKlDxGHEAEBAVcDEjjA4DC5IyKHHEFH0ABrhKocMHAwYsTgwIEmB9Cs4ZCAqQ2HKpAR8Cwrh0MtAZjwcAgDIAAYBohDtf4u2QHFLj+GW5LIWUSa4e1hBf2ude1rnYHJX7WHH7DtaOCY/QLqNxage42PPx4G+s5XeaB8nAeIsRD0AdQDvAGQQFOKgz/aBg=="
+     "plan": "KLUv/WMBAFhNxwaNCQDyjiYakDfJm2WNXDhB9paNjsXMDEkpf0opzdv/RxBJkRRJkZz/////////t23btm3btu22bdu2bdu2JUmSJEmSJMlCxwqZmZ0VskJmVsgKmZWdY0wpd7/dklaFqgrV3dUMGzt3h0mHhEQwCpeQ01OWiinHFUqZ2Th+zIEY5gePr/YVKVX2KXaKJQ4CiACEGQjpYBgADAYOCYKEFCABgIaokdjYgqKlDxGHEAEBAVcDEjjA4DC5IyKHHEFH0ABrhKocMHAwYsTgwIEmB9Cs4ZCAqQ2HKpAR8Cwrh0MtAZjwcAgDIAAYBohDtf4u2QHFLj+GW5LIWUSa4e1hBf2ude1rnYHJX7WHH7DtaOCY/QLqNxage42PPx4G+s5XeaB8nAeIsRD0AdQDvAGQQFOKgz/aBg=="
     },
     {
      "name": "moox-fetch-plan-crypto-spot-nanjing-000",
@@ -658,17 +1177,17 @@
      "executor": "scf",
      "push": true,
      "create": false,
-     "retired": true,
-     "transitional_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "7ce89c938edd9389",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNKQbdCAAyjSEZoCfJB2y62RqTLXdqafwn/FJ+mVLq1P8KBolIRDIYCgLsg0Sk+////////3/btm3btm3bbtu2bdu2bds6xzokaazDOiTrsA5ZvDOmFDNCfrtl1amqU2ZmFjc8M2SMK8EgFAUzjvMVjWIKskIp8gUiZ9BRGIJ6N//mo1T7K7xCAoGBA8CBAXOoodjbwqJ/AQGHEAlBQVcHEhiBQHCw2BWVU05BncJmD7QwWAAXc5nxFwPRQiKwCgqSLQewiXBIMDjCUSrYEIy00ISDgsDuUjgiATAAttfCQQn/yqGA4sv/Q01BtIJGFtxamC7PE4idRyow3cJxhgKWfhXIz5mA0PMEqV/epVhYMNwdf4OjKTjQER9kcRcHWikI",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "1c9ca9c02143a713",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNKQbdCAAyjSEZoCfJB2y62RqTLXdqafwn/FJ+mVLq1P8KBolIRDIYCgLqg0Sk+////////3/btm3btm3bbtu2bdu2bds6xzokaazDOiTrsA5ZvDOmFDNCfrtl1amqU2ZmFjc8M2SMK8EgFAUzjvMVjWIKskIp8gUiZ9BRGIJ6N//mo1T7K7xCAoGBA8CBAXOoodjbwqJ/AQGHEAlBQVcHEhiBQHCw2BWVU05BncJmD7QwWAAXc5nxFwPRQiKwCgqSLQewiXBIMDjCUSrYEIy00ISDgsDuUjgiATAAttfCQQn/yqGA4sv/Q01BtIJGFtxamC7PE4idRyow3cJxhgKWfhXIz5mA0PMEqV/epVhYMNwdf4OjKTjQER9kcRcHWikI",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
      }
     },
@@ -678,21 +1197,129 @@
      "executor": "scf",
      "push": true,
      "create": false,
-     "retired": true,
-     "transitional_cron": "0 * * * * * *",
-     "transitional_environment": {
+     "retired": false,
+     "cron": "0 * * * * * *",
+     "environment": {
       "MOOX_CALLER": "scf-collector",
       "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
       "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
       "MOOX_ENTRY_ADDRESS": "storage.example:11004",
       "MOOX_ENTRY_HOST": "storage",
       "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "11b3e70efc9834f7",
-      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNIwKNBQCyhxcYoCcNB0yK2RoTsndqafYbRMqLiABX1cQBqaSSjuMgeAJSSd3Mu79qJuKdFtEipUXqP5pJtv4Rnz7iEMb4KRq77CwvurFllgZpMyoMK7rOY+ax2LrLXus1w4BQCBQsI/wPTH1cFOPAbAuuqP8xIxUTCKb6w0x1hWSJtBMhYsnVF6qP2BukAtR4vIMDrqevAhFgAkiqJ3A9eceYwgLPzoLfIDoFBwjjA1dxcTCOdmc=",
+      "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2cc93f988f4059a3",
+      "MOOX_MARKET_FETCH_PLAN": "KLUv/WMBAFhNIwKNBQCyhxcYoCcNB0yK2RoTsndqafYbRMqLiABX1cQBqaSSjuMgqASkkrqZd3/VTMQ7LaJFSovUfzSTbP0jPn3EIYzxUzR22VledGPLLA3SZlQYVnSdx8xjsXWXvdZrhgGhEChYI/wPTH1cFOPAbAuuqP8xIxUTCKb6w0x1hWSJtBMhYsnVF6qP2BukAtR4vIMDrqevAhFgAkiqJ3A9eceYwgLPzoLfIDoFBwjjA1dxcTCOdmc=",
       "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
      }
     }
+   ],
+   [
+    {
+     "name": "local-crypto-spot",
+     "executor": "local",
+     "push": false,
+     "create": false,
+     "retired": false,
+     "plan": "KLUv/WMBAFhNxwaNCQDyjiYakDfJm2WNXDhB9paNjsXMDEkpf0opzdv/RxBJkRRJkZz/////////t23btm3btu22bdu2bdu2JUmSJEmSJMlCxwqZmZ0VskJmVsgKmZWdY0wpd7/dklaFqgrV3dUMGzt3h0mHhEQwCpeQ01OWiinHFUqZ2Th+zIEY5gePr/YVKVX2KXaKJQ4CiACEGQjpYBgADAYOCYKEFCABgIaokdjYgqKlDxGHEAEBAVcDEjjA4DC5IyKHHEFH0ABrhKocMHAwYsTgwIEmB9Cs4ZCAqQ2HKpAR8Cwrh0MtAZjwcAgDIAAYBohDtf4u2QHFLj+GW5LIWUSa4e1hBf2ude1rnYHJX7WHH7DtaOCY/QLqNxage42PPx4G+s5XeaB8nAeIsRD0AdQDvAGQQFOKgz/aBg=="
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-000",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true
+    },
+    {
+     "name": "moox-fetch-plan-crypto-spot-nanjing-001",
+     "region": "ap-nanjing",
+     "executor": "scf",
+     "push": true,
+     "create": false,
+     "retired": true
+    }
    ]
+  ],
+  "pushes": [
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "c4f66b1046a1783f",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:c4f66b1046a1783fb3913f1e957b172cd411e8c749437899fa952d8267ce5513",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "50"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:30:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "51a0a896bcac3407",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:51a0a896bcac34078ebc09e7e81342aa4475ccfd0e216b8d00e9b79415290cb5",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "10"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "1c9ca9c02143a713",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:1c9ca9c02143a713a3c4c22c79bb9812276e7dac98dca641ac95ca24ae69bc19",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:37:00Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "push",
+    "environment": {
+     "MOOX_CALLER": "scf-collector",
+     "MOOX_CALLER_KEY": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+     "MOOX_CALLER_KEY_ID": "assigned-scf-key-17",
+     "MOOX_ENTRY_ADDRESS": "storage.example:11004",
+     "MOOX_ENTRY_HOST": "storage",
+     "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+     "MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "2cc93f988f4059a3",
+     "MOOX_MARKET_FETCH_PLAN": "sha256:2cc93f988f4059a3ad24d9be1868808f121ccd5084c959b5a430517e83553707",
+     "MOOX_MARKET_FETCH_SUBJECT_COUNT": "0"
+    },
+    "timer": "enabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:40:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-000",
+    "kind": "timer",
+    "timer": "disabled 0 * * * * * *"
+   },
+   {
+    "at": "2026-10-12T08:40:20Z",
+    "function": "moox-fetch-plan-crypto-spot-nanjing-001",
+    "kind": "timer",
+    "timer": "disabled 0 * * * * * *"
+   }
   ]
  }
 ]

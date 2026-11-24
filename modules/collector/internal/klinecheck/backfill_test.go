@@ -95,7 +95,7 @@ func newBackfillFixtureWithIngest(t *testing.T, ingest string) (*Backfiller, *he
 		Subjects: []string{"BTC-USDT", "ETH-USDT"}, Ingest: ingest,
 	}}, nil)
 	require.NoError(t, err)
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: base})
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -485,19 +485,19 @@ func TestBackfillUsesTheTimelineSymbolOfTheChunk(t *testing.T) {
 		}}, nil)
 		require.NoError(t, err)
 		var prevFunctions map[string]*fetchplan.PlanFunction
-		var prevDatasets map[string]*fetchplan.PlanDatasetState
+		var prevDatasets map[string]*fetchplan.PlanDataset
 		if previous != nil {
 			prevFunctions, prevDatasets = previous.Applied()
 		}
-		content, _, err := fetchplan.BuildPlanContent(prevFunctions, prevDatasets, desired, func(string) (int64, error) { return p.Unix(), nil })
+		content, _, _, err := fetchplan.BuildPlanContent(prevFunctions, prevDatasets, desired, fetchplan.PlanTiming{Now: p})
 		require.NoError(t, err)
 		return content
 	}
 	first := build(nil, "BTCOLD", base)
 	second := build(first, "BTCNEW", renamedAt)
 	change := second.Datasets["ds|1m"]
-	require.True(t, change.SymbolsChanged, "只改符号也算数据集变更")
-	require.False(t, change.HashChanged, "标的集合没变，不重新登记快照")
+	require.Equal(t, fetchplan.PlanActionSymbols, change.Action, "只改符号也算数据集变更")
+	require.False(t, change.Register, "标的集合没变，不重新登记快照")
 	require.Equal(t, renamedAt.Unix(), change.P)
 	for _, content := range []*fetchplan.FetchPlanContent{first, second} {
 		raw, err := json.Marshal(content)

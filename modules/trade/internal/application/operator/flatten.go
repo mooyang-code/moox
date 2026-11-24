@@ -34,7 +34,7 @@ type FlattenCommand struct {
 	ReduceRatio shared.Decimal
 	// PauseAs 是动作暂停组合时写入的暂停状态（保证金率风控减仓传 store.MarginPause(store.MarginReduced)）；零值按人工暂停记，原因取 Reason。
 	PauseAs store.Pause
-	// DeadlineAt 是下架清仓的截止时间（毫秒，事件中心按下架时间传入）；大于 0 时到点不再下单，动作记 PARTIAL。
+	// DeadlineAt 是下架清仓的截止时间（毫秒，下架定时任务按下架时间传入）；大于 0 时到点不再下单，动作记 PARTIAL。
 	DeadlineAt int64
 
 	// attemptStart 是这一轮执行的起点（毫秒，精确到秒）：动作每次重新进入运行都重新记，下架清仓只统计起点之后的子单是否被拒、是否连续没成交。

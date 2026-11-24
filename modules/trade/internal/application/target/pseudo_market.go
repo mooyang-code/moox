@@ -148,15 +148,20 @@ func (e *Executor) alreadyWarned(key string) bool {
 
 // warnOnce 同一个键只告警一次（进程内）：伪市价用满次数这类每轮都会再次判到的情况不刷屏。
 func (e *Executor) warnOnce(key, message string) {
+	if e.firstTime(key) {
+		log.Warnf("交易关注项：%s", strings.TrimSpace(message))
+	}
+}
+
+// firstTime 报告这个键是否第一次出现（进程内），并把它记下。
+func (e *Executor) firstTime(key string) bool {
 	e.batchMu.Lock()
-	// 每个目标、每个标的一个键，目标换得快：积到上千条就整个清掉（最多多告警一次），不让它随进程寿命无限增长。
+	defer e.batchMu.Unlock()
+	// 每个目标、每个标的一个键，目标换得快：积到上千条就整个清掉（最多多记一次），不让它随进程寿命无限增长。
 	if e.warned == nil || len(e.warned) >= 1000 {
 		e.warned = make(map[string]struct{})
 	}
 	_, repeated := e.warned[key]
 	e.warned[key] = struct{}{}
-	e.batchMu.Unlock()
-	if !repeated {
-		log.Warnf("交易关注项：%s", strings.TrimSpace(message))
-	}
+	return !repeated
 }

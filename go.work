@@ -5,8 +5,6 @@ use (
 	./modules/admin/proto/admingen
 	./modules/archive
 	./modules/archive/proto/archivegen
-	./modules/callbackdispatcher
-	./modules/callbackdispatcher/proto/callbackdispatchergen
 	./modules/cli
 	./modules/collector
 	./modules/collector/proto/collectorgen

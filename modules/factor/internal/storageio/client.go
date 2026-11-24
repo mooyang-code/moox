@@ -8,7 +8,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -68,17 +67,13 @@ type PeriodMarker struct {
 	Status           string
 	UniverseSubjects []string
 	FailedSubjects   []string
-	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的期望全集与失败名单。
-	// 实时计算的计划来自源数据集的周期完成事件，事件总带序列全集，所以标记总带。
-	UniverseSeries []seriesset.Series
-	FailedSeries   []seriesset.Series
-	Factors        []FactorState
-	TriggerEventID string
-	ComputedAt     time.Time
+	Factors          []FactorState
+	TriggerEventID   string
+	ComputedAt       time.Time
 }
 
-// FactorState 是一个成员一期的结果状态：Member 是成员别名（结果数据集内唯一），FactorID 是它引用的定义；
-// ParamsSource、ParamsDigest 是这一期冻结参数的来源与摘要。
+// FactorState 是一个成员一期的结果状态：MemberKey 是成员键（结果数据集内唯一），FactorID 是它引用的定义；
+// FailedSubjects 是该成员本期完整的失败标的（写进周期明细时才减去周期级的失败标的，见 markerToProto）。
 type FactorState struct {
 	MemberKey      string
 	MemberKind     string
@@ -87,8 +82,6 @@ type FactorState struct {
 	FailedSubjects []string
 	SourceHash     string // 填因子定义的 spec_hash；Storage 协议里这个字段仍叫 source_hash
 	DefinitionHash string
-	// FailedSeries 是按序列的失败名单（口径同 FailedSubjects）。
-	FailedSeries []seriesset.Series
 }
 
 type Store interface {

@@ -31,5 +31,6 @@ grep -Fq 'git ls-files' "${check_format_script}"
 grep -Fxq '/src/auto-import.d.ts' web/.prettierignore
 grep -Fxq '/src/components.d.ts' web/.prettierignore
 bash scripts/test/contract/test-secret-scan-contract.sh
+bash scripts/check/check-report-logcls.sh
 
 echo 'quality gate contract passed'

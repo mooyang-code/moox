@@ -245,7 +245,7 @@ func TestCloudTimerMatchesChecksAvailabilityQualifierAndMessage(t *testing.T) {
 func TestCollectorStatusLeavesCloudColumnsEmptyWithoutReadbacks(t *testing.T) {
 	service, db := newCloudFixture(t, notInUse)
 	applyPlan(t, db, "crypto", `{"datasets":{},"functions":{"moox-fetch-plan-crypto-spot-nanjing-000":{"name":"moox-fetch-plan-crypto-spot-nanjing-000","region":"ap-nanjing","market":"spot",`+
-		`"new":{"v":1,"market":{"market_id":"crypto","instrument_type":"spot","provider":"binance","source_id":"binance","market_type":"spot"},"fetch":{},"datasets":[{"dataset_id":"ds","frequency":"1m","copies":[{"subjects":[{"id":"BTC-USDT","index":0}],"hash":"h","count":1}]}]}}}}`)
+		`"target":{"v":1,"market":{"market_id":"crypto","instrument_type":"spot","provider":"binance","source_id":"binance","market_type":"spot"},"fetch":{},"datasets":[{"dataset_id":"ds","frequency":"1m","copies":[{"subjects":[{"id":"BTC-USDT","index":0}],"hash":"h","count":1}]}]}}}}`)
 	rsp, err := service.GetCollectorStatus(context.Background(), &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())

@@ -113,7 +113,7 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 			},
 			want: &storageeventpb.ViewDataReady{
 				ViewId: "kline-view", ViewConfigId: "hash-k", CompletionEventId: "marker-ledger", DatasetId: "kline", Status: "degraded",
-				VisibleScope: "view:kline-view", Frequency: "1m", PeriodTime: 1786032000, FailedScopeRef: "ETH-USDT", ReadyAt: timestamppb.New(occurredAt),
+				VisibleScope: "view:kline-view", Frequency: "1m", PeriodTime: 1786032000, FailedSubjects: []string{"ETH-USDT"}, ReadyAt: timestamppb.New(occurredAt),
 				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
 			},
 			eventID: stableViewEventID("data-ready", "quant", "kline-view", "1m", "1786032000"),

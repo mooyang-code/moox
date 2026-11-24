@@ -7,10 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
-
-	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -1173,144 +1170,11 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 		return nil, err
 	}
 	out = append(out, balances...)
-	for _, source := range attentionSources {
-		attention, err := b.buildAttentionStatuses(ctx, source)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, attention...)
-	}
-	return out, nil
-}
-
-// TradeAttentionNames 是 Trade 上报的需要人看的情况。
-var TradeAttentionNames = map[string]string{
-	"target_rejected":          "交易目标被拒绝",
-	"auto_paused":              "组合账户自动暂停",
-	"target_blocked":           "交易目标持续阻塞",
-	"account_not_ready":        "执行账户持续未就绪",
-	"target_expired":           "交易目标连续过期",
-	"target_reversal":          "同一目标内反向下单",
-	"rate_limited":             "交易所接口限流",
-	"turnover_high":            "组合账户成交额异常偏高",
-	"unknown_results":          "下单结果未知偏多",
-	"inspection_blocked":       "交易账户密钥检测发现阻断项",
-	"inspection_failing":       "交易账户密钥检测连续失败",
-	"transfer_shortfall":       "合约钱包可划转资金不足，现货买入被缩小",
-	"transfer_failing":         "钱包划转或归集出问题",
-	"margin_ratio_low":         "合约保证金率过低",
-	"valuation_degraded":       "估值降级（有持仓取不到价）",
-	"flatten_orders_unsettled": "清仓结束时有子单没收拾掉，需人工核对",
-	"release_orders_stuck":     "过期目标的挂单持续撤不下来",
-	"orders_instrument_gone":   "标的已下架的订单需人工核对成交",
-	"fill_ingest_failed":       "成交没能记进账本，账户卡在同一笔",
-	"clock_skew":               "本机时钟与交易所相差过大，请检查 NTP",
-	"isolated_position":        "交易所账户里有逐仓持仓，moox 只支持全仓单向",
-}
-
-// EventCenterAttentionNames 是事件中心上报的需要人看的情况。
-var EventCenterAttentionNames = map[string]string{
-	"execution_failed": "事件通知失败",
-	"delist_detected":  "发现标的即将下架",
-	"action_failed":    "系统动作处理失败",
-}
-
-// CollectorAttentionNames 是 Collector 上报的需要人看的情况（下架检测）。
-var CollectorAttentionNames = map[string]string{
-	"delist_source_failed":        "下架检测来源连续失败",
-	"delist_readonly_key_missing": "下架检测缺少币安只读 Key",
-	"event_outbox_stuck":          "Collector 事件发件箱积压",
-	"eventbus_consumer_failed":    "Collector EventBus 消费者启动失败",
-	"eastmoney_cooling_down":      "东方财富请求被限流，Collector 已暂停访问",
-}
-
-// warningAttention 是只需提醒、不算故障的关注项（检查 ID）：功能还在，只少了一部分。
-// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收；
-// 东方财富冷却时只是标的列表同步暂缓（云函数采集不受影响），冷却结束探测成功后自动恢复。
-// 这些关注项触发时业务检查是 degraded（需关注），告警级别是 warning；其余关注项是 down 和 critical。
-var warningAttention = map[string]bool{
-	"collector_attention:delist_readonly_key_missing": true,
-	"collector_attention:eastmoney_cooling_down":      true,
-}
-
-// AttentionIsWarning 报告关注项触发时是否只算提醒（warning），不算故障。
-func AttentionIsWarning(check, kind string) bool {
-	return warningAttention[check+":"+kind]
-}
-
-// attentionSource 描述一个模块的关注项指标：指标名、业务检查的种类（检查 ID 的前缀）和 kind 到检查名的对照。
-type attentionSource struct {
-	metric string
-	check  string
-	names  map[string]string
-}
-
-var attentionSources = []attentionSource{
-	{"moox_trade_attention_active", "trade_attention", TradeAttentionNames},
-	{"moox_callbackdispatcher_attention_active", "event_center_attention", EventCenterAttentionNames},
-	{"moox_collector_attention_active", "collector_attention", CollectorAttentionNames},
-}
-
-// AttentionCheckName 返回关注项检查的名字；不是关注项检查或种类未知时返回空。
-func AttentionCheckName(check, kind string) string {
-	for _, source := range attentionSources {
-		if source.check == check {
-			return source.names[kind]
-		}
-	}
-	return ""
-}
-
-// warnedUnknownAttention 记下已经告警过的“服务加种类”：概览每次刷新都会汇总关注项，同一组合只打一次日志。
-var warnedUnknownAttention sync.Map
-
-// buildAttentionStatuses 把一个模块的关注项变成业务检查。detail 标签带对象名和原因，
-// 内容变化后旧序列不再更新，所以只看没有过期的序列。
-func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSource) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, _, err := b.Metrics.Catalog().ListSeries(ctx, "", source.metric, "", 0, 500)
+	attention, err := b.buildAttentionStatuses(ctx)
 	if err != nil {
 		return nil, err
 	}
-	statuses := make(map[string]BusinessStatus, len(source.names))
-	for _, item := range series {
-		kind := labelValue(item.LabelsJSON, "kind")
-		if item.IsStale {
-			continue
-		}
-		if _, known := source.names[kind]; !known {
-			if _, warned := warnedUnknownAttention.LoadOrStore(item.ServiceName+"\x00"+kind, struct{}{}); !warned {
-				log.WarnContextf(ctx, "关注项种类未登记，已跳过: service=%s kind=%q metric=%s", item.ServiceName, kind, source.metric)
-			}
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		if latest == nil {
-			continue
-		}
-		status := BusinessStatus{
-			SpaceID: events.SystemSpaceID, Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
-			LastCheckedAt: latest.ObservedAt,
-		}
-		if latest.Value > 0 {
-			status.Status, status.Reason = "down", labelValue(item.LabelsJSON, "detail")
-			if AttentionIsWarning(source.check, kind) {
-				status.Status = "degraded"
-			}
-		}
-		if current, ok := statuses[kind]; !ok || status.LastCheckedAt.After(current.LastCheckedAt) {
-			statuses[kind] = status
-		}
-	}
-	out := make([]BusinessStatus, 0, len(statuses))
-	for _, status := range statuses {
-		out = append(out, status)
-	}
+	out = append(out, attention...)
 	return out, nil
 }
 
@@ -1581,7 +1445,7 @@ func businessKind(check domain.Check) string {
 		return ""
 	}
 	switch kind {
-	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness":
+	case "market_canary", "subject_tag", "balance", "module", "kline_freshness":
 		return kind
 	default:
 		return ""
@@ -1593,12 +1457,8 @@ func businessModule(checkID string) string {
 	switch kind {
 	case "market_canary", "subject_tag", "kline_freshness":
 		return "collector"
-	case "balance", "trade_attention":
+	case "balance":
 		return "trade"
-	case "event_center_attention":
-		return "callback-dispatcher"
-	case "collector_attention":
-		return "collector"
 	case "module":
 		for _, check := range report.BuiltInModuleHealthChecks() {
 			if check.ID == id {
