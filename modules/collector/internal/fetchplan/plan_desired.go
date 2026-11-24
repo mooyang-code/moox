@@ -26,9 +26,6 @@ type PlanNetwork struct {
 // NetworkPublic 是不绑 VPC、经公网访问外部入口的地域网络方式。
 const NetworkPublic = "public"
 
-// Public 表示这个地域的函数不绑 VPC。
-func (n PlanNetwork) Public() bool { return n.Network == NetworkPublic }
-
 // Check 校验地域网络：public 不能带 VPC；默认方式必须同时有 VPC 与子网。
 func (n PlanNetwork) Check() error {
 	switch n.Network {

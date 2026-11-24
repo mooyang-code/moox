@@ -140,7 +140,7 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 }
 
 // SCFEntryIdentity 返回函数的固定签名身份与默认的外部入口（见 Config.EntryHost）；
-// 各地域的私网入口由 [scf_plan] 渲染到 scf_plan.entry_routes。没有主机标外部入口时不写入口，保留模板里的占位。
+// 各地域的入口（vpc 地域是私网地址，public 地域是公网地址）由 [scf_plan] 渲染到 scf_plan.entry_routes。没有主机标外部入口时不写入口，保留模板里的占位。
 func SCFEntryIdentity(cfg *Config) map[string]string {
 	base := map[string]string{"caller": "scf-collector", "key_file": "../../secrets/scf-collector.key"}
 	if host := cfg.EntryHost(); host.Address != "" {

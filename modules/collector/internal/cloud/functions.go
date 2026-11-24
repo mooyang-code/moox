@@ -398,8 +398,8 @@ func (f *TencentFunctions) ensureOnce(ctx context.Context, s session, spec Funct
 		if fullConfig {
 			request.MemorySize, request.MaxInstanceConcurrency, request.PublicNetStatus = spec.MemoryMB, functionMaxConcurrency, functionPublicNet
 			request.VpcID, request.SubnetID = spec.VPCID, spec.SubnetID
-			// 期望不绑 VPC（public 地域）时要显式清掉：VPC 为空的请求不带 VpcConfig，云上会保留原来的绑定。
-			request.ClearVPC = spec.VPCID == ""
+			// 期望不绑 VPC（public 地域）而云上还绑着时要显式清掉：VPC 为空的请求不带 VpcConfig，云上会保留原来的绑定。
+			request.ClearVPC = spec.VPCID == "" && info.VpcID != ""
 		}
 		if _, err := s.client.UpdateFunctionConfiguration(ctx, request); err != nil {
 			return fmt.Errorf("云函数 %s 改环境与配置失败: %w", name, err)
