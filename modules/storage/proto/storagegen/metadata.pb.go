@@ -44,7 +44,7 @@ type Space struct {
 	UpdatedAt string `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// attributes 是扩展属性，默认不作为索引字段使用。
 	Attributes map[string]string `protobuf:"bytes,8,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	// market 是空间所属市场，如 crypto、cn_a_share、hk、us。
+	// market 是空间所属市场，取值见种子 config/setup/metadata.yaml：crypto、CN、HK、US。
 	Market string `protobuf:"bytes,9,opt,name=market,proto3" json:"market,omitempty"`
 	// timezone 是空间的展示时区（IANA 名称，如 Asia/Shanghai），管理台全站时间按它显示。
 	Timezone string `protobuf:"bytes,10,opt,name=timezone,proto3" json:"timezone,omitempty"`

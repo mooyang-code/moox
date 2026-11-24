@@ -37,7 +37,7 @@
 - 不创建或复用 CCN，不调用 `ModifyInstancesVpcAttribute`。
 - 不把 SCF 指向其他地域入口主机的私网地址；跨地域私网不通。
 - 不修改管理台入口（Admin 的 9527）或 EventBus 目标来“配合”SCF 网络。
-- SCF 网络与部署命令不修改 `moox.toml`；配置变更由 `config init/edit/set/restore` 等专用命令负责。日志和 JSON 不输出密码、SecretKey、签名密钥。
+- SCF 网络与部署命令不修改 `moox.toml`；配置变更由 `config init/edit/set` 等专用命令负责。日志和 JSON 不输出密码、SecretKey、签名密钥。
 
 ## 验收证据
 
