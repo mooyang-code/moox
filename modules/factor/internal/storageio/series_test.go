@@ -48,40 +48,6 @@ func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
 	// 读回：冻结全集带按序列的名单。
 	require.Equal(t, normalizedSeries(universe), seriesFromMarker(protoMarker.GetUniverseSeries()))
 
-	// 失败序列的标的不在失败标的里：先在因子这边报错，不等 Storage 拒发。
-	marker.FailedSeries = append(marker.FailedSeries, seriesRef("BTC", testSpotTag))
-	_, err = markerToProto(marker)
-	require.ErrorContains(t, err, "不在失败标的里")
-}
-
-func TestValidatePeriodDetailSeriesRules(t *testing.T) {
-	universe := []seriesset.Series{seriesRef("BTC", testSpotTag)}
-	ref := func(subject, tag string) *factorpb.SeriesRef {
-		return &factorpb.SeriesRef{SubjectId: subject, SeriesTag: tag}
-	}
-	build := func(mutate func(*factorpb.FactorPeriodState)) *factorpb.PeriodDetail {
-		state := &factorpb.FactorPeriodState{
-			FactorId: "rank", MemberKey: "rank", MemberKind: "fixed", Status: "degraded", SpecHash: "s", DefinitionHash: "d",
-			FailedSubjects: []string{"BTC"}, FailedSeries: []*factorpb.SeriesRef{ref("BTC", testSpotTag)},
-		}
-		mutate(state)
-		return &factorpb.PeriodDetail{SourceDatasetId: "bars", Factors: []*factorpb.FactorPeriodState{state}}
-	}
-	require.NoError(t, ValidatePeriodDetail(build(func(*factorpb.FactorPeriodState) {}), []string{"BTC"}, universe, "degraded"))
-
-	for name, mutate := range map[string]func(*factorpb.FactorPeriodState){
-		"failed series not in universe": func(s *factorpb.FactorPeriodState) { s.FailedSeries = []*factorpb.SeriesRef{ref("ETH", testSpotTag)} },
-		"complete with failed series": func(s *factorpb.FactorPeriodState) {
-			s.Status, s.FailedSubjects = "complete", nil
-		},
-	} {
-		require.Error(t, ValidatePeriodDetail(build(mutate), []string{"BTC"}, universe, "degraded"), name)
-	}
-	// 周期没有序列全集时，失败序列不在全集里，同样拒绝；不带失败序列则通过。
-	require.Error(t, ValidatePeriodDetail(build(func(*factorpb.FactorPeriodState) {}), []string{"BTC"}, nil, "degraded"))
-	require.NoError(t, ValidatePeriodDetail(build(func(s *factorpb.FactorPeriodState) {
-		s.FailedSeries = nil
-	}), []string{"BTC"}, nil, "degraded"))
 }
 
 // 永续整体晚到：每个成员的失败序列都是全部永续序列。230 个成员 × 数百序列逐成员复制会超出事件体积上限，

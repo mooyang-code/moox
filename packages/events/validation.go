@@ -109,73 +109,11 @@ func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.M
 	if payload.GetStatus() == "complete" && len(failed) != 0 {
 		return fmt.Errorf("%s complete status has failed_subjects", label)
 	}
-	if err := validatePeriodSeries(payload, subjects, failed, label); err != nil {
-		return err
-	}
 	// 明细对 Storage 是不透明字节：只要求有明细就有类型，不解析内容。
 	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") || (payload.GetDetailType() != "" && !validRequiredToken(payload.GetDetailType())) {
 		return fmt.Errorf("%s detail and detail_type must be provided together", label)
 	}
 	return nil
-}
-
-// validatePeriodSeries 校验按序列的全集与失败名单：序列不重复、失败名单是全集的子集；
-// 序列全集必填，它包含的标的必须正好是 universe_subject_ids（没有任何标的的事件两者都为空）。
-// 失败序列的标的必须在 failed_subjects 里：标的口径沿用原有定义（统一数据集执行计划 3.4），有一条序列失败的标的就记入失败标的，
-// 只读按标的字段的消费方（单市场任务、K 线 View）才不会把失败序列的标的当成可用。
-func validatePeriodSeries(payload *storagepb.DatasetPeriodCompleted, subjects, failedSubjects map[string]struct{}, label string) error {
-	universe := make(map[string]struct{}, len(payload.GetUniverseSeries()))
-	seenSubjects := make(map[string]struct{}, len(subjects))
-	for i, series := range payload.GetUniverseSeries() {
-		key, err := seriesRefKey(series)
-		if err != nil {
-			return fmt.Errorf("%s universe_series item %d: %w", label, i, err)
-		}
-		if _, ok := universe[key]; ok {
-			return fmt.Errorf("%s universe_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
-		}
-		universe[key] = struct{}{}
-		if _, ok := subjects[series.GetSubjectId()]; !ok {
-			return fmt.Errorf("%s universe_series subject %q is not in universe_subject_ids", label, series.GetSubjectId())
-		}
-		seenSubjects[series.GetSubjectId()] = struct{}{}
-	}
-	if len(seenSubjects) != len(subjects) {
-		return fmt.Errorf("%s universe_series does not cover every subject in universe_subject_ids", label)
-	}
-	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
-	for i, series := range payload.GetFailedSeries() {
-		key, err := seriesRefKey(series)
-		if err != nil {
-			return fmt.Errorf("%s failed_series item %d: %w", label, i, err)
-		}
-		if _, ok := failed[key]; ok {
-			return fmt.Errorf("%s failed_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
-		}
-		failed[key] = struct{}{}
-		if _, ok := universe[key]; !ok {
-			return fmt.Errorf("%s failed_series %q is not in universe_series", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
-		}
-		if _, ok := failedSubjects[series.GetSubjectId()]; !ok {
-			return fmt.Errorf("%s failed_series subject %q is not in failed_subjects", label, series.GetSubjectId())
-		}
-	}
-	if payload.GetStatus() == "complete" && len(failed) != 0 {
-		return fmt.Errorf("%s complete status has failed_series", label)
-	}
-	return nil
-}
-
-// seriesRefKey 校验一条序列引用并返回它的键。series_tag 与行键里的 series_tag 同一套规则（validateSeriesTag），
-// 否则事件里的序列可能对不上 Storage 实际存下的序列。
-func seriesRefKey(series *storagepb.SeriesRef) (string, error) {
-	if series == nil || !validRequiredToken(series.GetSubjectId()) || !validRequiredToken(series.GetSeriesTag()) {
-		return "", fmt.Errorf("subject_id and series_tag are required")
-	}
-	if err := validateSeriesTag(series.GetSeriesTag()); err != nil {
-		return "", fmt.Errorf("series_tag: %w", err)
-	}
-	return series.GetSubjectId() + "\x00" + series.GetSeriesTag(), nil
 }
 
 func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {

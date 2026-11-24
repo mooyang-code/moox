@@ -94,10 +94,6 @@ func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testin
 			marker.FailedSubjects = []string{"BTC"}
 		}},
 		{name: "complete with failed subjects", mutate: func(marker *pb.DatasetPeriodCompletedMarker) { marker.FailedSubjects = []string{"ETH"} }},
-		{name: "missing universe_series", mutate: func(marker *pb.DatasetPeriodCompletedMarker) { marker.UniverseSeries = nil }},
-		{name: "empty series_tag", mutate: func(marker *pb.DatasetPeriodCompletedMarker) {
-			marker.UniverseSeries = []*pb.SeriesRef{{SubjectId: "ETH"}}
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := proto.Clone(base).(*pb.DatasetPeriodCompletedMarker)
