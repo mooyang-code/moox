@@ -247,7 +247,7 @@ func TestBuilderHealthCoversHostSnapshotAndDelegatedComponents(t *testing.T) {
 		metric := &hostmetricpb.HostMetric{HostId: "factor", Hostname: "factor-box", BootId: "boot", Snapshot: &hostmetricpb.HostSnapshot{
 			Cpu: &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 10},
 		}}
-		require.NoError(t, hosts.Persist(t.Context(), &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.New(at)}, metric))
+		require.NoError(t, hosts.Persist(t.Context(), hostmetrics.Report{ID: id, CollectedAt: at, Metric: metric}))
 	}
 	clock := now
 	builder := Builder{

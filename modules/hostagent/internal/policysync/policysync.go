@@ -1,5 +1,5 @@
-// Package policysync 定期从 Monitor 拉取主机策略（全部告警渠道），写入 <部署根>/data/host-agent/host-policy.json。
-// 本机的对端检查与证书巡检只读这个文件；拉取失败时保留旧文件，控制面不可用也不影响主机侧告警。
+// Package policysync 每分钟从 Monitor 拉取主机策略（全部告警渠道），写入 <部署根>/data/host-agent/host-policy.json；
+// 同一次调用带上这一分钟采到的主机快照。本机的对端检查与证书巡检只读这个文件；拉取失败时保留旧文件，控制面不可用也不影响主机侧告警。
 // 拉取的结果同时是非控制机对控制机与 Monitor 的直推依据（见 Watch）。
 package policysync
 
@@ -18,11 +18,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Interval 是拉取周期；启动时先拉一次。连续 3 次失败即推送“控制机或 Monitor 不可达”（Watch），所以按分钟拉取。
-const Interval = time.Minute
-
-// Fetcher 调用 MonitorMgr.GetHostPolicy。
-type Fetcher func(context.Context) (*monitorpb.GetHostPolicyRsp, error)
+// Fetcher 调用 MonitorMgr.GetHostPolicy。拉取由 HostAgent 的采样定时器驱动（启动时一次，之后每分钟一次）：
+// 连续 3 次失败即推送“控制机或 Monitor 不可达”（Watch）。
+type Fetcher func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error)
 
 // Result 是一次同步的结果：written（内容变化，已写入）、unchanged（与缓存一致）。
 type Result string
@@ -74,10 +72,10 @@ func New(path string, fetch Fetcher) (*Syncer, error) {
 	return &Syncer{path: path, fetch: fetch, now: time.Now}, nil
 }
 
-// SyncOnce 拉取一次；内容变化时版本号加一并原子写入，内容相同不重写。失败时旧文件保持不变。
+// SyncOnce 带上主机快照（可以为空）拉取一次；内容变化时版本号加一并原子写入，内容相同不重写。失败时旧文件保持不变。
 // 交给直推判断的只是“能不能从 Monitor 拿到策略”：本机写缓存失败时 Monitor 是可达的，不算不可达。
-func (s *Syncer) SyncOnce(ctx context.Context) (Result, error) {
-	result, startedAt, fetchErr, err := s.syncOnce(ctx)
+func (s *Syncer) SyncOnce(ctx context.Context, report *monitorpb.HostReport) (Result, error) {
+	result, startedAt, fetchErr, err := s.syncOnce(ctx, report)
 	if s.watch != nil {
 		s.watch.Observe(ctx, startedAt, fetchErr)
 	}
@@ -96,8 +94,8 @@ func (s *Syncer) SyncOnce(ctx context.Context) (Result, error) {
 
 // syncOnce 拉取并写入一次；startedAt 是 Monitor 在响应里给出的进程启动时间（拉取失败时为空）。
 // fetchErr 只在没能从 Monitor 拿到策略时非空，err 还包括本机写缓存的失败。
-func (s *Syncer) syncOnce(ctx context.Context) (result Result, startedAt string, fetchErr, err error) {
-	rsp, err := s.fetch(ctx)
+func (s *Syncer) syncOnce(ctx context.Context, report *monitorpb.HostReport) (result Result, startedAt string, fetchErr, err error) {
+	rsp, err := s.fetch(ctx, &monitorpb.GetHostPolicyReq{Host: report})
 	if err != nil {
 		err = fmt.Errorf("fetch host policy: %w", err)
 		return "", "", err, err
@@ -143,24 +141,6 @@ func fromResponse(rsp *monitorpb.GetHostPolicyRsp, now time.Time) hostpolicy.Pol
 		policy.NotificationChannels = append(policy.NotificationChannels, hostpolicy.Channel{Type: channel.GetChannelType(), WebhookURL: channel.GetWebhookUrl(), Secret: channel.GetSecret()})
 	}
 	return policy
-}
-
-// Run 启动时同步一次，之后每个周期同步一次，直到 ctx 结束。错误只记录，由下一轮重试。
-func (s *Syncer) Run(ctx context.Context, interval time.Duration, onError func(error)) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if _, err := s.SyncOnce(callCtx); err != nil && onError != nil {
-			onError(err)
-		}
-		cancel()
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 // Status 返回最近一次成功的时间与最近一次错误，供健康详情展示。

@@ -80,7 +80,7 @@ type Component struct {
 	// StopTimeoutSec 是停止的最长等待（TimeoutStopSec），省略为 DefaultStopTimeoutSec。
 	StopTimeoutSec int `yaml:"stop_timeout_sec,omitempty" json:"stop_timeout_sec,omitempty"`
 	// Credentials 是部署要给它的凭据：eventbus:<角色> 是 EventBus 角色文件；cls 是服务日志上报 CLS 的写入密钥。
-	// 除 host-agent 与第三方程序外，每个组件还隐含一个 eventbus:metrics-publisher（上报指标）。
+	// 除 host-agent（不连 EventBus）与第三方程序外，每个组件还隐含一个 eventbus:metrics-publisher（上报指标）。
 	Credentials []string `yaml:"credentials,omitempty" json:"credentials,omitempty"`
 }
 

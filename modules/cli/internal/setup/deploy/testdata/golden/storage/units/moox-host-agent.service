@@ -3,7 +3,7 @@
 # After= 只写同一台主机上的组件；不等网络就绪的系统目标（用户单元里它不起作用）。
 [Unit]
 Description=MooX host-agent
-After=moox-host-gateway.service moox-eventbus.service
+After=moox-host-gateway.service
 StartLimitIntervalSec=0
 
 [Service]

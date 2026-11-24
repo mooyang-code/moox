@@ -3,7 +3,6 @@ module github.com/mooyang-code/moox/packages/events
 go 1.26.0
 
 require (
-	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
@@ -59,8 +58,6 @@ require (
 	trpc.group/trpc-go/trpc-go v1.0.4 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
-
-replace github.com/mooyang-code/moox/packages/hostmetricpb => ../hostmetricpb
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../jetstream
 

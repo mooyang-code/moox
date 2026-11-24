@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -61,9 +60,6 @@ var (
 	ObservabilityMetricsSnapshotReported = declareEvent("event.observability.metrics.snapshot.reported", 1, StreamObservability, "service", func() proto.Message {
 		return &metricspb.MetricReport{}
 	}, validateObservabilityMetricsSnapshotReported)
-	ObservabilityHostSnapshotReported = declareEvent("event.observability.host.snapshot.reported", 1, StreamObservability, "hostagent", func() proto.Message {
-		return &hostmetricpb.HostMetric{}
-	}, validateObservabilityHostSnapshotReported)
 	// ObservabilityLogReported 是各服务上报的一批重要日志（Error 及以上、关键事件），Monitor 收到后写进自己的库。
 	ObservabilityLogReported = declareEvent("event.observability.log.reported", 1, StreamObservability, "service", func() proto.Message {
 		return &metricspb.LogReport{}

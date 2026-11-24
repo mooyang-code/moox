@@ -124,8 +124,7 @@ func (h *hostCheckHarness) report(cpu float64) {
 			{Pid: 12, Name: "duckdb", CpuPercent: 45, CpuAvailable: true, RssBytes: 7 << 30},
 		},
 	}}
-	message := &eventpb.EventMessage{EventId: fmt.Sprintf("event-%d", h.sequence), OccurredAt: timestamppb.New(h.clock)}
-	require.NoError(h.t, h.hosts.Persist(h.t.Context(), message, metric))
+	require.NoError(h.t, h.hosts.Persist(h.t.Context(), hostmetrics.Report{ID: fmt.Sprintf("report-%d", h.sequence), CollectedAt: h.clock, Metric: metric}))
 }
 
 // gateway 写入主机网关的组件上报：alive 为 false 时最近一次上报停在 5 分钟前。

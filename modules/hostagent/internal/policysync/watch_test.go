@@ -100,7 +100,7 @@ func TestSyncerHandsFetchResultToWatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host-agent", "host-policy.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	var fetchErr error
-	syncer, err := New(path, func(context.Context) (*monitorpb.GetHostPolicyRsp, error) {
+	syncer, err := New(path, func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
 		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: "2026-11-15T09:00:00Z"}, fetchErr
 	})
 	require.NoError(t, err)
@@ -111,15 +111,14 @@ func TestSyncerHandsFetchResultToWatch(t *testing.T) {
 		return nil
 	}
 	syncer.SetWatch(h.watch)
-	_, err = syncer.SyncOnce(t.Context())
+	_, err = syncer.SyncOnce(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, "2026-11-15T09:00:00Z", h.watch.lastStart)
 	fetchErr = errors.New("gateway unavailable")
 	for i := 0; i < UnreachableAfter; i++ {
-		_, _ = syncer.SyncOnce(t.Context())
+		_, _ = syncer.SyncOnce(t.Context(), nil)
 	}
 	require.Equal(t, []string{"【MooX】控制机或 Monitor 不可达（由 storage 观测）"}, seen)
-	require.Equal(t, time.Minute, Interval, "每分钟拉一次")
 }
 
 // “不可达”没有送达（全新安装时渠道还没缓存）就不推“已恢复”：用户不能收到一条从没告警过的恢复。
@@ -151,14 +150,14 @@ func TestWatchRecoversOnlyAfterTheAlertWasDelivered(t *testing.T) {
 func TestSyncerLocalWriteFailureIsNotUnreachable(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
-	syncer, err := New(filepath.Join(blocked, "host-policy.json"), func(context.Context) (*monitorpb.GetHostPolicyRsp, error) {
+	syncer, err := New(filepath.Join(blocked, "host-policy.json"), func(context.Context, *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
 		return &monitorpb.GetHostPolicyRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, MonitorStartedAt: "2026-11-15T09:00:00Z"}, nil
 	})
 	require.NoError(t, err)
 	h := newWatchHarness()
 	syncer.SetWatch(h.watch)
 	for i := 0; i < UnreachableAfter+1; i++ {
-		_, err = syncer.SyncOnce(t.Context())
+		_, err = syncer.SyncOnce(t.Context(), nil)
 		require.Error(t, err, "写缓存失败照样报错")
 	}
 	require.Empty(t, h.sent)

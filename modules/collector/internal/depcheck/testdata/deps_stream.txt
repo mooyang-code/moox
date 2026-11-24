@@ -30,7 +30,6 @@ github.com/mooyang-code/moox/packages/cloudprovider/tencent
 github.com/mooyang-code/moox/packages/clsreporter
 github.com/mooyang-code/moox/packages/events/eventpb
 github.com/mooyang-code/moox/packages/events/systemspace
-github.com/mooyang-code/moox/packages/hostmetricpb
 github.com/mooyang-code/moox/packages/jetstream
 github.com/mooyang-code/moox/packages/metricspb
 github.com/mooyang-code/moox/packages/storagepb

@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
@@ -17,23 +16,6 @@ import (
 )
 
 type EventValidator func(*eventpb.EventMessage, proto.Message) error
-
-func validateObservabilityHostSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*hostmetricpb.HostMetric)
-	if !ok {
-		return fmt.Errorf("host metric payload has type %T", value)
-	}
-	// host_id 的格式由部署登记约束，Monitor 收到后再按登记规则校验一次。
-	if strings.TrimSpace(payload.GetHostId()) == "" ||
-		strings.TrimSpace(payload.GetHostname()) == "" ||
-		payload.GetSnapshot() == nil {
-		return fmt.Errorf("主机快照缺少 host_id、主机名或快照内容")
-	}
-	if payload.GetHostId() != message.GetSubjectId() {
-		return fmt.Errorf("主机快照的 host_id 与 subject_id 不一致")
-	}
-	return nil
-}
 
 func validateObservabilityMetricsSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*metricspb.MetricReport)

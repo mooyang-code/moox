@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/metricspb"
@@ -23,14 +22,14 @@ import (
 )
 
 func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
-	var metricCalls, hostCalls atomic.Int32
+	var metricCalls, logCalls atomic.Int32
 	ctx, consumer, publisher, js := newObservabilityFixture(t, Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 			metricCalls.Add(1)
 			return nil
 		},
-		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
-			hostCalls.Add(1)
+		Logs: func(context.Context, *eventpb.EventMessage, *metricspb.LogReport) error {
+			logCalls.Add(1)
 			return nil
 		},
 	})
@@ -51,8 +50,8 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 	if len(seen) != 2 {
 		t.Fatalf("routes = %v", seen)
 	}
-	if metricCalls.Load() != 1 || hostCalls.Load() != 1 {
-		t.Fatalf("route calls metrics=%d host=%d", metricCalls.Load(), hostCalls.Load())
+	if metricCalls.Load() != 1 || logCalls.Load() != 1 {
+		t.Fatalf("route calls metrics=%d logs=%d", metricCalls.Load(), logCalls.Load())
 	}
 	info, err := js.ConsumerInfo(events.StreamObservability, DefaultConsumer)
 	if err != nil {
@@ -89,7 +88,6 @@ func TestUnifiedObservabilityConsumerNaksTransientRouteFailure(t *testing.T) {
 	transient := errors.New("storage temporarily unavailable")
 	ctx, consumer, publisher, _ := newObservabilityFixture(t, Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error { return transient },
-		Host:    countHostRoute(t, "host"),
 	})
 	publishMetric(t, ctx, publisher, "metric-transient")
 	delivery := fetchDelivery(t, ctx, consumer)
@@ -217,17 +215,16 @@ func newObservabilityFixtureWithContext(t *testing.T, ctx context.Context, route
 func noopRoutes() Routes {
 	return Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error { return nil },
-		Host:    func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
 	}
 }
 
 func publishAllObservabilityEvents(t *testing.T, ctx context.Context, publisher *events.Publisher) {
 	t.Helper()
 	publishMetric(t, ctx, publisher, "metric-route")
-	hostID := "control"
-	_, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
-		HostId: hostID, Hostname: "host-a", Snapshot: &hostmetricpb.HostSnapshot{},
-	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: hostID})
+	_, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
+		ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
+		Records: []*metricspb.LogRecord{{Sequence: 1, TimeUnixNano: time.Now().UnixNano(), Level: "error", Message: "下单失败"}},
+	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "trade/trade@overseas"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,17 +274,12 @@ func fetchDelivery(t *testing.T, ctx context.Context, consumer *Consumer) *jetst
 	return nil
 }
 
-func countHostRoute(t *testing.T, name string) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
-	t.Helper()
-	return func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil }
-}
-
 func routeFromSubject(subject string) string {
 	switch {
 	case contains(subject, ".metrics."):
 		return "metrics"
-	case contains(subject, ".host."):
-		return "host"
+	case contains(subject, ".log."):
+		return "logs"
 	default:
 		return fmt.Sprintf("unknown:%s", subject)
 	}

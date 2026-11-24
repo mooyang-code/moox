@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/nats-io/nats.go"
@@ -49,14 +48,13 @@ func DefaultConfig() Config {
 
 type Routes struct {
 	Metrics func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error
-	Host    func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error
 	// Logs 处理各服务上报的重要日志；为 nil 时这类事件直接确认、不保存。
 	Logs func(context.Context, *eventpb.EventMessage, *metricspb.LogReport) error
 }
 
 func (r Routes) validate() error {
-	if r.Metrics == nil || r.Host == nil {
-		return errors.New("observability metrics and host routes are required")
+	if r.Metrics == nil {
+		return errors.New("observability metrics route is required")
 	}
 	return nil
 }
@@ -191,14 +189,6 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 		}
 		if err := c.routes.Metrics(ctx, message, payload); err != nil {
 			return c.routeError(ctx, "metrics", err, delivery.DeliveryCount)
-		}
-	case matches(message, events.ObservabilityHostSnapshotReported):
-		payload, ok := decoded.Payload.(*hostmetricpb.HostMetric)
-		if !ok {
-			return c.reject(fmt.Errorf("host route payload has type %T", decoded.Payload))
-		}
-		if err := c.routes.Host(ctx, message, payload); err != nil {
-			return c.routeError(ctx, "host", err, delivery.DeliveryCount)
 		}
 	case matches(message, events.ObservabilityLogReported):
 		payload, ok := decoded.Payload.(*metricspb.LogReport)

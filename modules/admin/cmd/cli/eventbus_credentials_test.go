@@ -55,8 +55,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 10 {
-		t.Fatalf("eventbus records=%d, want 10（只有 10 个角色令牌，没有证书）", count)
+	if count != int64(len(eventBusRoles)) {
+		t.Fatalf("eventbus records=%d, want %d（只有角色令牌，没有证书）", count, len(eventBusRoles))
 	}
 }
 
@@ -85,7 +85,7 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 		require.Contains(t, aclLine(factorACL, "publish:"), permission)
 	}
 	require.Equal(t, []string{
-		"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer",
+		"eventbus-internal-admin", "metrics-publisher", "monitor-observability-consumer",
 		"storage-eventbus",
 		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus", "callback-dispatcher-eventbus",
 	}, eventBusRoles)
@@ -151,7 +151,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	for _, name := range []string{"ca.pem", "server.pem", "server-key.pem"} {
 		assert.NoFileExists(t, filepath.Join(exportDir, name))
 	}
-	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
+	assert.NoFileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "metrics-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-observability.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "trade-eventbus.yaml"))
@@ -166,11 +166,10 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	// 导出一律写对外地址；各单元安装时再按"与 EventBus 是否同机"改写成实际连接地址。
 	for name, wantURL := range map[string]string{
-		"internal-admin.yaml":      "tls://203.0.113.10:4222",
-		"metrics-publisher.yaml":   "tls://203.0.113.10:4222",
-		"hostagent-publisher.yaml": "tls://203.0.113.10:4222",
-		"storage-eventbus.yaml":    "tls://203.0.113.10:4222",
-		"factor-eventbus.yaml":     "tls://203.0.113.10:4222",
+		"internal-admin.yaml":    "tls://203.0.113.10:4222",
+		"metrics-publisher.yaml": "tls://203.0.113.10:4222",
+		"storage-eventbus.yaml":  "tls://203.0.113.10:4222",
+		"factor-eventbus.yaml":   "tls://203.0.113.10:4222",
 	} {
 		credential, loadErr := jetstream.LoadCredentialFile(filepath.Join(exportDir, name))
 		require.NoError(t, loadErr, name)
@@ -180,7 +179,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 
 	yaml := usersYAML(map[string]string{
 		"eventbus-internal-admin":        "a",
-		"hostagent-publisher":            "b",
 		"metrics-publisher":              "c",
 		"monitor-observability-consumer": "d",
 		"storage-eventbus":               "f",
@@ -192,13 +190,13 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "factor-eventbus")
 	assert.Contains(t, yaml, "moox.event.observability.metrics.snapshot.reported.v1.>")
 	assert.NotContains(t, yaml, "moox.event.observability.health.")
-	assert.Contains(t, yaml, "moox.event.observability.host.snapshot.reported.v1.>")
+	assert.NotContains(t, yaml, "moox.event.observability.host.snapshot")
+	assert.NotContains(t, yaml, "hostagent-publisher")
 	internalAdminACL := eventBusACLBlock(yaml, "eventbus-internal-admin")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "$JS.EVENT.ADVISORY.API"]}`, aclLine(internalAdminACL, "subscribe:"))
 	assert.NotContains(t, aclLine(internalAdminACL, "subscribe:"), "$JS.EVENT.ADVISORY.API.>")
 	for role, password := range map[string]string{
 		"eventbus-internal-admin":        "a",
-		"hostagent-publisher":            "b",
 		"metrics-publisher":              "c",
 		"monitor-observability-consumer": "d",
 		"storage-eventbus":               "f",
@@ -215,8 +213,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, metricsPublisherACL, "moox.event.observability.log.reported.v1.>")
 	assert.NotContains(t, metricsPublisherACL, "moox.event.observability.host.snapshot")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(metricsPublisherACL, "subscribe:"))
-	hostAgentACL := eventBusACLBlock(yaml, "hostagent-publisher")
-	assert.Contains(t, hostAgentACL, "moox.event.observability.host.snapshot.reported.v1.>")
 	monitorACL := eventBusACLBlock(yaml, "monitor-observability-consumer")
 	assert.Contains(t, monitorACL, "$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1")
 	assert.Contains(t, monitorACL, "$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1")
@@ -258,7 +254,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
 	}
 
-	rotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "hostagent-publisher"}
+	rotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "metrics-publisher"}
 	err = runEventBusCredentialsCommand(rotateArgs, &bytes.Buffer{}, &bytes.Buffer{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--confirm")
@@ -275,14 +271,13 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
-	assert.EqualValues(t, 10, count)
+	assert.EqualValues(t, len(eventBusRoles), count)
 }
 
 func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
 	dir := t.TempDir()
 	roleFiles := map[string]string{
 		"internal-admin.yaml":               "token: admin-token\n",
-		"hostagent-publisher.yaml":          "eventbus_token: host-token\n",
 		"metrics-publisher.yaml":            "token: metrics-token\n",
 		"monitor-observability.yaml":        "token: monitor-token\n",
 		"storage-eventbus.yaml":             "token: storage-token\n",
@@ -482,9 +477,6 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.Error(t, err)
 
 	for role, subjects := range map[string][]string{
-		"hostagent-publisher": {
-			"moox.event.observability.host.snapshot.reported.v1.mooxsys.host-1",
-		},
 		"metrics-publisher": {
 			"moox.event.observability.metrics.snapshot.reported.v1.mooxsys.trade/instance-1",
 			"moox.event.observability.log.reported.v1.mooxsys.trade/instance-1",

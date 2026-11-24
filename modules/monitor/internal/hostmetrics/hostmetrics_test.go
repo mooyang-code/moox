@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,22 +18,37 @@ func validHostMetric() *hostmetricpb.HostMetric {
 	}}
 }
 
-func validHostMessage(t *testing.T) *eventpb.EventMessage {
+const validReportID = "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73"
+
+func validHostReport(t *testing.T) Report {
 	t.Helper()
-	registry, err := events.DefaultRegistry()
+	report, err := ValidateReport(validReportID, time.Now().UTC().Format(time.RFC3339Nano), validHostMetric())
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.ObservabilityHostSnapshotReported, validHostMetric(), events.PublishOptions{EventID: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", OccurredAt: time.Now().UTC(), SpaceID: events.SystemSpaceID, SubjectID: validHostMetric().GetHostId()})
-	require.NoError(t, err)
-	return encoded.Message
+	return report
 }
 
-func TestValidateHostMetricContract(t *testing.T) {
-	message := validHostMessage(t)
-	metric, err := ValidateMessage(message)
+func TestValidateHostReportContract(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	report, err := ValidateReport(validReportID, now, validHostMetric())
 	require.NoError(t, err)
-	assert.Equal(t, message.GetSubjectId(), metric.GetHostId())
-	message.SpaceId = "crypto"
-	assert.Error(t, func() error { _, err := ValidateMessage(message); return err }())
+	assert.Equal(t, "control", report.Metric.GetHostId())
+	for name, check := range map[string]func() error{
+		"上报 ID 不是 UUIDv7": func() error { _, err := ValidateReport("report-1", now, validHostMetric()); return err },
+		"采集时间不合法":         func() error { _, err := ValidateReport(validReportID, "yesterday", validHostMetric()); return err },
+		"采集时间太早": func() error {
+			_, err := ValidateReport(validReportID, time.Now().Add(-time.Hour).Format(time.RFC3339Nano), validHostMetric())
+			return err
+		},
+		"缺快照": func() error { _, err := ValidateReport(validReportID, now, nil); return err },
+		"主机 ID 不合法": func() error {
+			metric := validHostMetric()
+			metric.HostId = "Bad_Host"
+			_, err := ValidateReport(validReportID, now, metric)
+			return err
+		},
+	} {
+		assert.Error(t, check(), name)
+	}
 }
 
 // 正常路径：登记在线、更新最新快照、写本地历史，历史能按时间读回。
@@ -43,11 +56,10 @@ func TestStorePersistsSnapshotLocally(t *testing.T) {
 	db := openRegistryTestDB(t)
 	store := NewStore(NewSampleStore(db))
 	store.SetRegistry(NewRegistry(db))
-	message := validHostMessage(t)
-	metric, err := ValidateMessage(message)
-	require.NoError(t, err)
-	require.NoError(t, store.Persist(context.Background(), message, metric))
-	require.NoError(t, store.Persist(context.Background(), message, metric), "同一分钟重放覆盖，不报错")
+	report := validHostReport(t)
+	metric := report.Metric
+	require.NoError(t, store.Persist(context.Background(), report))
+	require.NoError(t, store.Persist(context.Background(), report), "同一分钟重放覆盖，不报错")
 
 	agents, err := store.ListAgents(context.Background())
 	require.NoError(t, err)
@@ -55,7 +67,7 @@ func TestStorePersistsSnapshotLocally(t *testing.T) {
 	assert.Equal(t, "host", agents[0].Hostname)
 	require.NotNil(t, agents[0].Snapshot)
 
-	occurred := message.GetOccurredAt().AsTime().UTC()
+	occurred := report.CollectedAt
 	history, err := store.History(context.Background(), metric.GetHostId(), occurred.Add(-time.Hour), occurred.Add(time.Hour), 0)
 	require.NoError(t, err)
 	require.Len(t, history, 1)
@@ -70,11 +82,9 @@ func TestStoreKeepsPresenceWhenHistoryWriteFails(t *testing.T) {
 	store.SetRegistry(NewRegistry(db))
 	require.NoError(t, db.Exec("DROP TABLE t_monitor_host_samples").Error)
 
-	message := validHostMessage(t)
-	metric, err := ValidateMessage(message)
-	require.NoError(t, err)
-	require.Error(t, store.Persist(context.Background(), message, metric))
-	require.Error(t, store.Persist(context.Background(), message, metric), "重投同一条消息")
+	report := validHostReport(t)
+	require.Error(t, store.Persist(context.Background(), report))
+	require.Error(t, store.Persist(context.Background(), report), "重发同一次上报")
 
 	agents, err := store.ListAgents(context.Background())
 	require.NoError(t, err)

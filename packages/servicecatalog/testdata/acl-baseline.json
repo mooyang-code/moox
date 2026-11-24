@@ -4,7 +4,7 @@
     "components": 18,
     "services": 25,
     "methods": 331,
-    "read_only_methods": 150,
+    "read_only_methods": 149,
     "retryable_methods": 151,
     "callers": 22,
     "principals": 2
@@ -1099,7 +1099,7 @@
         },
         {
           "name": "GetHostPolicy",
-          "read_only": true,
+          "read_only": false,
           "retryable": true,
           "timeout_ms": 5000
         },

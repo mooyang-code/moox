@@ -122,13 +122,10 @@ func reconcileEventBusFiles(dir string, out io.Writer) error {
 }
 
 func parseCredentialToken(raw string) string {
-	for _, key := range []string{"token", "eventbus_token"} {
-		prefix := key + ":"
-		for _, line := range strings.Split(raw, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, prefix) {
-				return strings.TrimSpace(strings.TrimPrefix(line, prefix))
-			}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(line, "token:"); ok {
+			return strings.TrimSpace(value)
 		}
 	}
 	return ""
@@ -251,12 +248,8 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	}
 	roleFiles := eventBusRoleFiles()
 	for role, name := range roleFiles {
-		field := "token"
-		if role == "hostagent-publisher" {
-			field = "eventbus_token"
-		}
 		// 导出里写的是对外地址；各单元安装时会按"与 EventBus 是否同机"改写成实际使用的地址。
-		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\n%s: %s\nca_file: %s\n", natsURL, role, field, tokens[role], eventBusCAFile)
+		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\ntoken: %s\nca_file: %s\n", natsURL, role, tokens[role], eventBusCAFile)
 		if err := atomicSecretFile(filepath.Join(dir, name), []byte(content)); err != nil {
 			return err
 		}

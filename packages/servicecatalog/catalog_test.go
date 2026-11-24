@@ -541,7 +541,8 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 		t.Fatalf("collector credentials = %v", collector.Credentials)
 	}
 	agent, _ := c.Component("host-agent")
-	if !slices.Equal(agent.EventBusRoles(), []string{"hostagent-publisher"}) {
+	// host-agent 不连 EventBus：主机快照随拉取主机策略经网关报给 Monitor。
+	if len(agent.EventBusRoles()) != 0 {
 		t.Fatalf("host-agent roles = %v", agent.EventBusRoles())
 	}
 	primary, _ := c.Component("storage-primary")

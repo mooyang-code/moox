@@ -118,14 +118,6 @@
       "_INBOX.>"
     ]
   },
-  "hostagent-publisher": {
-    "publish": [
-      "moox.event.observability.host.snapshot.reported.v1.>"
-    ],
-    "subscribe": [
-      "_INBOX.>"
-    ]
-  },
   "metrics-publisher": {
     "publish": [
       "moox.event.observability.log.reported.v1.>",

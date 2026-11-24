@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"google.golang.org/protobuf/proto"
@@ -40,44 +38,37 @@ func (s *Store) SetRegistry(registry *Registry) {
 	}
 }
 
-func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error) {
-	if msg == nil {
-		return nil, errors.New("message is nil")
+// Report 是一次主机快照上报：HostAgent 每分钟随拉取主机策略那次调用带来。
+type Report struct {
+	// ID 是 UUIDv7，与采集时间一起用于去重。
+	ID          string
+	CollectedAt time.Time
+	Metric      *hostmetricpb.HostMetric
+}
+
+// ValidateReport 校验一次上报：ID、采集时间（允许 15 分钟前到 2 分钟后的时钟偏差）、主机 ID 与快照内容。
+func ValidateReport(id, collectedAt string, metric *hostmetricpb.HostMetric) (Report, error) {
+	if parsed, err := uuid.Parse(id); err != nil || parsed.Version() != 7 {
+		return Report{}, errors.New("主机快照的上报 ID 必须是 UUIDv7")
 	}
-	if msg.GetEventName() != events.ObservabilityHostSnapshotReported.Name() || msg.GetEventVersion() != events.ObservabilityHostSnapshotReported.Version() {
-		return nil, errors.New("host metric envelope contract mismatch")
-	}
-	if msg.GetSpaceId() != events.SystemSpaceID || strings.TrimSpace(msg.GetSubjectId()) == "" {
-		return nil, errors.New("host metric space or sequence mismatch")
-	}
-	if parsed, err := uuid.Parse(msg.GetEventId()); err != nil || parsed.Version() != 7 {
-		return nil, errors.New("host metric message_id must be UUIDv7")
-	}
-	if msg.GetOccurredAt() == nil || !msg.GetOccurredAt().IsValid() {
-		return nil, errors.New("host metric timestamps are invalid")
+	occurred, err := time.Parse(time.RFC3339Nano, collectedAt)
+	if err != nil {
+		return Report{}, errors.New("主机快照的采集时间不合法")
 	}
 	now := time.Now().UTC()
-	occurred := msg.GetOccurredAt().AsTime()
 	if occurred.Before(now.Add(-15*time.Minute)) || occurred.After(now.Add(2*time.Minute)) {
-		return nil, errors.New("host metric occurred_at is outside the accepted clock-skew window")
+		return Report{}, errors.New("主机快照的采集时间超出允许的时钟偏差")
 	}
-	if !servicecatalog.ValidHostID(msg.GetSubjectId()) {
-		return nil, errors.New("主机快照的 subject_id 不是合法的主机 ID")
+	if metric == nil || metric.GetSnapshot() == nil {
+		return Report{}, errors.New("主机快照缺少内容")
 	}
-	metric := new(hostmetricpb.HostMetric)
-	if err := proto.Unmarshal(msg.GetPayload(), metric); err != nil {
-		return nil, fmt.Errorf("decode host metric: %w", err)
-	}
-	if metric.GetSnapshot() == nil {
-		return nil, errors.New("host metric snapshot is missing")
-	}
-	if metric.GetHostId() != msg.GetSubjectId() || metric.GetHostname() == "" {
-		return nil, errors.New("主机快照的 host_id 与 subject_id 不一致或缺少主机名")
+	if !servicecatalog.ValidHostID(metric.GetHostId()) || metric.GetHostname() == "" {
+		return Report{}, errors.New("主机快照的 host_id 不是合法的主机 ID，或缺少主机名")
 	}
 	if err := validateSnapshot(metric.GetSnapshot()); err != nil {
-		return nil, err
+		return Report{}, err
 	}
-	return metric, nil
+	return Report{ID: id, CollectedAt: occurred.UTC(), Metric: metric}, nil
 }
 
 func validateSnapshot(s *hostmetricpb.HostSnapshot) error {
@@ -190,20 +181,21 @@ func percent(v float64, available bool) error {
 	return nil
 }
 
-func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *hostmetricpb.HostMetric) error {
+func (s *Store) Persist(ctx context.Context, report Report) error {
 	if s == nil {
 		return errors.New("主机快照处理未初始化")
 	}
-	if msg == nil || metric == nil {
-		return errors.New("host metric event is incomplete")
+	metric := report.Metric
+	if metric == nil {
+		return errors.New("主机快照上报不完整")
 	}
-	occurredAt := msg.GetOccurredAt().AsTime().UTC()
+	occurredAt := report.CollectedAt.UTC()
 	current := true
 	hostID := metric.GetHostId()
 	if s.registry != nil {
 		result, err := s.registry.Observe(ctx, HostObservation{
 			HostID: hostID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
-			OccurredAt: occurredAt, EventID: msg.GetEventId(),
+			OccurredAt: occurredAt, EventID: report.ID,
 		})
 		if err != nil {
 			return fmt.Errorf("update host agent registry: %w", err)

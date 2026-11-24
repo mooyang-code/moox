@@ -8,11 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
@@ -106,7 +104,7 @@ func TestScheduledAndManualRunsShareAgentGuard(t *testing.T) {
 	<-started
 	rsp, manualErr := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, manualErr)
-	assert.Equal(t, "collection already running", rsp.GetPublishError())
+	assert.Equal(t, "collection already running", rsp.GetReportError())
 	assert.Equal(t, uint64(1), a.skipped.Load())
 	close(release)
 	assert.Error(t, <-scheduledDone)
@@ -159,19 +157,14 @@ func TestTimerLibraryStopsServerOnStartupError(t *testing.T) {
 	assert.ErrorContains(t, server.Serve(), want.Error())
 }
 
-func TestRegisteredSampleTimerSurvivesEventBusFailureAndRecovers(t *testing.T) {
+func TestRegisteredSampleTimerSurvivesReportFailureAndRecovers(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	var available atomic.Bool
-	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
-		if !available.Load() {
-			return nil, errors.New("eventbus unavailable")
-		}
-		return &fakeEventPublisher{ready: true}, nil
-	}
+	reporter := &fakeReporter{err: errors.New("monitor unreachable")}
+	a.report = reporter.report
 	s := newImmediateSampleTimerServer("*/1 * * * * *?startAtOnce=1")
 	require.NoError(t, RegisterSampleTimer(s, a))
-	serveDone := serveSampleTimer(t, s, a)
+	serveDone := serveSampleTimer(t, s)
 	require.Eventually(t, func() bool { return a.dropped.Load() > 0 }, 3*time.Second, 10*time.Millisecond)
 	rr := httptest.NewRecorder()
 	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -179,11 +172,11 @@ func TestRegisteredSampleTimerSurvivesEventBusFailureAndRecovers(t *testing.T) {
 	select {
 	case err := <-serveDone:
 		serveDone <- err
-		t.Fatalf("EventBus failure stopped sample timer: %v", err)
+		t.Fatalf("report failure stopped sample timer: %v", err)
 	default:
 	}
-	available.Store(true)
-	require.Eventually(t, func() bool { return a.published.Load() > 0 }, 3*time.Second, 10*time.Millisecond)
+	reporter.setErr(nil)
+	require.Eventually(t, func() bool { return a.reported.Load() > 0 }, 3*time.Second, 10*time.Millisecond)
 }
 
 func TestRegisteredSampleTimerKeepsCollectionFailureUnready(t *testing.T) {
@@ -191,14 +184,14 @@ func TestRegisteredSampleTimerKeepsCollectionFailureUnready(t *testing.T) {
 	a.collector = fakeSnapshotCollector{err: errors.New("required collector failed")}
 	s := newImmediateSampleTimerServer()
 	require.NoError(t, RegisterSampleTimer(s, a))
-	serveSampleTimer(t, s, a)
+	serveSampleTimer(t, s)
 	require.Eventually(t, func() bool { return a.dropped.Load() > 0 }, 3*time.Second, 10*time.Millisecond)
 	rr := httptest.NewRecorder()
 	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
-func serveSampleTimer(t *testing.T, s *server.Server, a *Agent) chan error {
+func serveSampleTimer(t *testing.T, s *server.Server) chan error {
 	t.Helper()
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- s.Serve() }()
@@ -210,7 +203,6 @@ func serveSampleTimer(t *testing.T, s *server.Server, a *Agent) chan error {
 		case <-time.After(3 * time.Second):
 			t.Error("sample timer did not stop")
 		}
-		assert.NoError(t, a.Close())
 	})
 	return serveDone
 }

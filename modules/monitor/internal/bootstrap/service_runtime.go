@@ -37,6 +37,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 			_, reason := evaluationFresh(runtime, time.Now().UTC())
 			return reason
 		},
+		HostReports: hostReportIngest(hostStore, runtime),
 	}))
 }
 

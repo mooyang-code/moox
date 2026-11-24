@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -172,12 +171,6 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 		mutate  func(proto.Message)
 	}{
 		{
-			name: "host snapshot", event: ObservabilityHostSnapshotReported,
-			payload: &hostmetricpb.HostMetric{HostId: "control", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
-			opts:    validationOptions("host-event-1", "mooxsys", "control"),
-			mutate:  func(value proto.Message) { value.(*hostmetricpb.HostMetric).HostId = "other" },
-		},
-		{
 			name: "metrics producer", event: ObservabilityMetricsSnapshotReported,
 			payload: &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage-1", Snapshot: &metricspb.MetricSnapshot{}},
 			opts:    validationOptions("metric-event-1", "mooxsys", "storage/storage-1"),
@@ -207,16 +200,16 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &hostmetricpb.HostMetric{HostId: "control", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}}
+	payload := &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage-1", Snapshot: &metricspb.MetricSnapshot{}}
 	encoded, err := registry.Encode(
-		ObservabilityHostSnapshotReported,
+		ObservabilityMetricsSnapshotReported,
 		payload,
-		validationOptions("host-event-1", "mooxsys", "control"),
+		validationOptions("metric-event-1", "mooxsys", "storage/storage-1"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload.HostId = "storage"
+	payload.InstanceId = "other"
 	encoded.Message.Payload, err = proto.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +218,7 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := DecodeRaw(registry, raw, encoded.Subject, "host-event-1", ContentType); err == nil {
+	if _, _, err := DecodeRaw(registry, raw, encoded.Subject, "metric-event-1", ContentType); err == nil {
 		t.Fatal("DecodeRaw accepted mismatched payload identity")
 	}
 	if _, err := registry.SubjectForMessage(encoded.Message); err == nil {

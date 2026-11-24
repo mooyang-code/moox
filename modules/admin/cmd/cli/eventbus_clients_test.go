@@ -31,12 +31,12 @@ func TestEventBusClientExportContainsOnlyRequestedRolesAndDoesNotRotate(t *testi
 	require.NoError(t, db.Table("t_secrets").Order("c_id").Find(&before).Error)
 	clientDir := filepath.Join(directory, "clients")
 	args := append([]string{"eventbus-credentials", "export-clients"}, base...)
-	args = append(args, "--roles", "metrics-publisher,hostagent-publisher", "--output-dir", clientDir)
+	args = append(args, "--roles", "metrics-publisher,trade-eventbus", "--output-dir", clientDir)
 	output.Reset()
 	require.NoError(t, runEventBusCredentialsCommand(args, &output, &bytes.Buffer{}))
 	var metadata eventBusClientsResult
 	require.NoError(t, json.Unmarshal(output.Bytes(), &metadata))
-	require.Equal(t, []string{"hostagent-publisher", "metrics-publisher"}, metadata.Roles)
+	require.Equal(t, []string{"metrics-publisher", "trade-eventbus"}, metadata.Roles)
 	// 只有两个角色文件，没有证书；目录里另有清单 clients.json。
 	require.Len(t, metadata.Files, 2)
 	entries, err := os.ReadDir(clientDir)
@@ -56,7 +56,7 @@ func TestEventBusClientExportContainsOnlyRequestedRolesAndDoesNotRotate(t *testi
 	require.NoError(t, db.Table("t_secrets").Order("c_id").Find(&after).Error)
 	require.Equal(t, before, after)
 	require.Error(t, runEventBusCredentialsCommand(args, &bytes.Buffer{}, &bytes.Buffer{}))
-	for _, roles := range []string{"server", "ca-private", "hostagent-publisher,hostagent-publisher", ""} {
+	for _, roles := range []string{"server", "ca-private", "trade-eventbus,trade-eventbus", ""} {
 		require.Error(t, exportEventBusClients(t.Context(), db, "gateway-node-1", filepath.Join(directory, "refused"), roles, false, &bytes.Buffer{}))
 		_, err := os.Lstat(filepath.Join(directory, "refused"))
 		require.True(t, os.IsNotExist(err))
