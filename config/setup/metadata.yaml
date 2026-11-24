@@ -129,6 +129,8 @@ tags:
   attributes:
     market_type: equity
     sync.source: eastmoney
+    # 东方财富重试后仍失败（断连、冷却）时改用新浪取一次，只加不减。
+    sync.fallback_source: sina
     sync.cron: "23 * * * *"
     sync.timezone: Asia/Shanghai
 - space_id: stockcn

@@ -20,6 +20,10 @@ const (
 	// KeySyncIndexSource 是指数成分的来源，可选：成分名单与行情不是同一家时才写（港股恒指的行情源是 eastmoney、
 	// 成分来源是 tencent）；不写时等于 KeySyncSource。只在配置了 KeySyncIndex 时有意义。
 	KeySyncIndexSource = "sync.index_source"
+	// KeySyncFallbackSource 是全部标的快照的备用来源，可选：sync.source 重试后仍失败（含冷却中）时改用它取一次。
+	// 备用结果只加不减：只按主来源的范围加入新标的，当前成员一个都不移出（见 subjectsync.TagRunner.fallbackSnapshot）。
+	// 只对全部标的的标签有意义，指数成分标签不用。
+	KeySyncFallbackSource = "sync.fallback_source"
 	// KeySyncCron 是标的同步的 cron 表达式；KeySyncTimezone 是它的时区。
 	KeySyncCron     = "sync.cron"
 	KeySyncTimezone = "sync.timezone"
@@ -45,6 +49,9 @@ func IndexSource(tag *storagepb.Tag) string {
 	}
 	return Source(tag)
 }
+
+// FallbackSource 返回全部标的快照的备用来源（小写）；未配置时为空。
+func FallbackSource(tag *storagepb.Tag) string { return lower(tag, KeySyncFallbackSource) }
 
 // Index 返回标签要同步成分股的指数代码；未配置时为空（同步数据源的全部标的）。
 func Index(tag *storagepb.Tag) string { return strings.TrimSpace(tag.GetAttributes()[KeySyncIndex]) }

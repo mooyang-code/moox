@@ -204,6 +204,22 @@ const (
 	volumeMultiplier = 100
 )
 
+// InAShareScope 判断标的是否在 eastMoneyAShareFilter 的范围内（沪深主板与创业板）：上交所去掉科创板（688、689），
+// 北交所全部不在。给标签同步的备用来源用，让口径更宽的来源（新浪 hs_a）不把范围外的标的加进来。
+func InAShareScope(subjectID string) bool {
+	code, exchange, ok := strings.Cut(subjectID, ".")
+	switch {
+	case !ok:
+		return false
+	case exchange == "XSHE":
+		return true
+	case exchange == "XSHG":
+		return !strings.HasPrefix(code, "688") && !strings.HasPrefix(code, "689")
+	default:
+		return false
+	}
+}
+
 // klineFrequencies 是 A 股支持的 K 线周期。
 var klineFrequencies = []string{"1m", "5m", "1d"}
 
