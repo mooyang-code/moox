@@ -45,7 +45,7 @@ beforeEach(() => {
 
 async function openDialog() {
   wrapper = mount(DelistDialog, {
-    props: { visible: false, systemActionEnabled: true, systemRuleEnabled: true },
+    props: { visible: false },
     global: { plugins: [ArcoVue] },
     attachTo: document.body
   });
@@ -59,6 +59,19 @@ const button = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item => item.textContent?.trim() === text);
 
 describe("手工登记下架对话框", () => {
+  it("登记成功后通知页面刷新下架记录", async () => {
+    mocks.listInstrumentHolders.mockResolvedValue(emptyPreview);
+    mocks.registerDelistNotice.mockResolvedValue({ created: true, event_id: "e1" });
+    const page = await openDialog();
+    expect(document.querySelector(".arco-modal")?.textContent).toContain("登记后 Trade 立即禁止买入");
+    Object.assign(state(page).form, { exchange_symbol: "FOOUSDT", delist_at: FUTURE });
+    button("下一步")?.click();
+    await flushPromises();
+    button("确认登记")?.click();
+    await flushPromises();
+    expect(page.emitted("registered")).toHaveLength(1);
+  });
+
   it("确认页和提交只用预览时的参数快照；预览期间表单禁用", async () => {
     const pending = deferred<HoldersPreview>();
     mocks.listInstrumentHolders.mockReturnValue(pending.promise);
@@ -82,7 +95,7 @@ describe("手工登记下架对话框", () => {
     const text = document.querySelector(".arco-modal")?.textContent ?? "";
     expect(text).toContain("FOOUSDT");
     expect(text).not.toContain("BARUSDT");
-    expect(text).toContain("演练也会全局禁止买入这个标的");
+    expect(text).toContain("演练只对模拟盘生效");
 
     button("确认登记")?.click();
     await flushPromises();
@@ -123,5 +136,6 @@ describe("手工登记下架对话框", () => {
     const text = document.querySelector(".arco-modal")?.textContent ?? "";
     expect(text).toContain("仍会写下架名单");
     expect(text).toContain("名单保留、不会解除");
+    expect(text).not.toContain("会在下架前 24 小时");
   });
 });

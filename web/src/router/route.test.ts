@@ -15,7 +15,6 @@ describe("菜单由路由表生成", () => {
       "策略管理",
       "交易管理",
       "数据归档",
-      "事件中心",
       "资源与运维",
       "系统设置"
     ]);
@@ -32,8 +31,7 @@ describe("菜单由路由表生成", () => {
     expect(children("archive")).toEqual(["归档任务", "归档存储"]);
     expect(children("ops")).toEqual(["监控告警", "服务管理", "主机工作台", "日志中心"]);
     expect(children("settings")).toEqual(["空间管理", "密钥管理"]);
-    // 事件中心是单页菜单，页签在页内
-    expect(menu.find(item => item.name === "events")?.children).toEqual([]);
+    expect(menu.find(item => item.name === "events")).toBeUndefined();
   });
 
   it("路由名不重复；隐藏路由指向的高亮菜单存在", () => {

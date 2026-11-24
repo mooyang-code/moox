@@ -1,9 +1,10 @@
 import { call } from "@/api/http";
-import type { RetInfo } from "@/api/trade/types";
+import type { Exchange, MarketType, RetInfo } from "@/api/trade/types";
 
-// 手工登记下架用到的两个外部接口：
+// 下架处理用到的接口：
 //  - Trade 的 ListInstrumentHolders：只读，用来预览会被平仓的组合；
-//  - Collector 的 RegisterDelistNotice：登记后由 Collector 发布“标的即将下架”。
+//  - Collector 的 RegisterDelistNotice：登记后由 Collector 发布“标的即将下架”，Trade 收到后禁止买入并按时间线平仓；
+//  - Trade 的 ListDelists：只读，下架记录与各轮各组合的清仓动作。
 
 export type DelistExchange = "binance" | "okx";
 export type DelistMarket = "SPOT" | "SWAP";
@@ -129,4 +130,72 @@ export async function registerDelistNotice(req: RegisterDelistNoticeReq): Promis
     spaceId: DELIST_SPACE_ID
   });
   return { created: Boolean(rsp.created), event_id: rsp.event_id ?? "" };
+}
+
+/** 下架记录里一轮一个组合的清仓。 */
+export interface DelistFlatten {
+  round: number;
+  space_id: string;
+  logical_account_id: string;
+  action_id: string;
+  /** RUNNING、COMPLETED、PARTIAL、FAILED；空表示还没发起 */
+  action_status: string;
+  last_error: string;
+  created_at_ms: number;
+}
+
+/** 一条下架记录：一个（标的、范围、下架时间）。 */
+export interface DelistRecord {
+  delist_id: string;
+  exchange: Exchange;
+  market_type: MarketType;
+  exchange_symbol: string;
+  /** ALL 或 PAPER_ONLY */
+  scope: string;
+  delist_at_ms: number;
+  notice_source: string;
+  source_event_id: string;
+  /** ACTIVE、COMPLETED、FAILED、CANCELED、RESCHEDULED */
+  status: string;
+  /** 已规划到第几轮：0 还没到 T−24h，1 已按 T−24h 规划，2 已按 T−2h 规划 */
+  planned_round: number;
+  note: string;
+  result: string;
+  created_at_ms: number;
+  finished_at_ms: number;
+  flattens: DelistFlatten[];
+}
+
+/** 列出下架记录（全局，不分空间）；activeOnly 时只列进行中的，否则按创建时间倒序列最近 limit 条。 */
+export async function listDelists(activeOnly: boolean, limit = 50): Promise<DelistRecord[]> {
+  const rsp = await call<{ active_only: boolean; limit: number }, { ret_info: RetInfo; delists?: Partial<DelistRecord>[] }>(
+    "trade",
+    "ListDelists",
+    { active_only: activeOnly, limit }
+  );
+  return (rsp.delists ?? []).map(item => ({
+    delist_id: item.delist_id ?? "",
+    exchange: item.exchange ?? 0,
+    market_type: item.market_type ?? 0,
+    exchange_symbol: item.exchange_symbol ?? "",
+    scope: item.scope ?? "",
+    delist_at_ms: Number(item.delist_at_ms ?? 0),
+    notice_source: item.notice_source ?? "",
+    source_event_id: item.source_event_id ?? "",
+    status: item.status ?? "",
+    planned_round: Number(item.planned_round ?? 0),
+    note: item.note ?? "",
+    result: item.result ?? "",
+    created_at_ms: Number(item.created_at_ms ?? 0),
+    finished_at_ms: Number(item.finished_at_ms ?? 0),
+    flattens: (item.flattens ?? []).map(flatten => ({
+      round: Number(flatten.round ?? 0),
+      space_id: flatten.space_id ?? "",
+      logical_account_id: flatten.logical_account_id ?? "",
+      action_id: flatten.action_id ?? "",
+      action_status: flatten.action_status ?? "",
+      last_error: flatten.last_error ?? "",
+      created_at_ms: Number(flatten.created_at_ms ?? 0)
+    }))
+  }));
 }

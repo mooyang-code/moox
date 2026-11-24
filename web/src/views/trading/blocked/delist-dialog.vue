@@ -7,17 +7,8 @@
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <template v-if="phase === 'form'">
-      <a-alert v-if="systemRuleEnabled === false" type="warning" class="block-alert">
-        系统订阅“标的即将下架时，卖出策略持有的这个币”已停用：新登记的下架不会被处理，不会禁止买入，也不会平仓。同一个标的已经在处理的下架照常处理，登记新的下架时间会照常改期。
-      </a-alert>
-      <a-alert v-else-if="systemRuleEnabled === null" type="warning" class="block-alert">
-        用来补录漏报的下架，或做演练。{{ SYSTEM_RULE_UNKNOWN_TEXT }}
-      </a-alert>
-      <a-alert v-else-if="systemActionEnabled === true" class="block-alert">
-        用来补录漏报的下架，或做演练。登记后，系统会立即禁止买入这个标的，下架前 24 小时平掉策略持有的部分。
-      </a-alert>
-      <a-alert v-else type="warning" class="block-alert">
-        用来补录漏报的下架，或做演练。{{ systemActionNotice(systemActionEnabled) }}
+      <a-alert class="block-alert">
+        用来补录漏报的下架，或做演练。登记后 Trade 立即禁止买入，下架前 24 小时平掉策略持有的部分。
       </a-alert>
       <a-form :model="form" auto-label-width :disabled="previewing">
         <a-form-item field="exchange" label="交易所" required>
@@ -116,7 +107,7 @@
 </template>
 
 <script setup lang="ts">
-// 事件中心和空间无关，时间都按 UTC 显示
+// 下架名单和空间无关，时间都按 UTC 显示
 import { formatInstant } from "@/utils/time-zone";
 import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
 import { computed, reactive, ref, watch } from "vue";
@@ -135,7 +126,6 @@ import {
   DELIST_MARKETS,
   DELIST_TIME_HINT,
   PAPER_ONLY_NOTE,
-  SYSTEM_RULE_UNKNOWN_TEXT,
   confirmCheckboxText,
   createLatestGuard,
   delistSnapshot,
@@ -144,14 +134,13 @@ import {
   requestErrorText,
   skippedLine,
   summarizeHolders,
-  systemActionNotice,
   type DelistSnapshot
-} from "./event-center-utils";
+} from "./delist-utils";
 
-defineOptions({ name: "EventDelistDialog" });
+defineOptions({ name: "TradingDelistDialog" });
 
-const props = defineProps<{ visible: boolean; systemActionEnabled: boolean | null; systemRuleEnabled: boolean | null }>();
-const emit = defineEmits<{ "update:visible": [value: boolean] }>();
+const props = defineProps<{ visible: boolean }>();
+const emit = defineEmits<{ "update:visible": [value: boolean]; registered: [] }>();
 
 const form = reactive({
   exchange: "binance" as DelistExchange,
@@ -191,8 +180,8 @@ const confirmText = computed(() =>
 const needConfirm = computed(
   () => previewFailed.value || !verified.value || skippedAccounts.value.length > 0 || summary.value.live.length > 0
 );
-// 系统动作已启用并且确认系统规则已启用，登记的下架才会真的被处理（规则状态读不到时不能当成已启用）；下架时间已经过去时只做核对，不会平仓。
-const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled === true && !pastTime.value);
+// 下架时间已经过去时只做核对，不会平仓。
+const willProcess = computed(() => !pastTime.value);
 const noHolderEffect = computed(() => (willProcess.value ? "登记后只会禁止买入。" : ""));
 const summaryTitle = computed(() => {
   const value = snapshot.value;
@@ -273,7 +262,8 @@ async function submit() {
       delist_at_ms: value.delist_at_ms,
       paper_only: value.paper_only
     });
-    Message.success(result.created ? "已登记，稍后可以在执行记录里看到处理进度" : "这条下架之前已经登记过");
+    Message.success(result.created ? "已登记，稍后可以在下架处理记录里看到进度" : "这条下架之前已经登记过");
+    emit("registered");
     emit("update:visible", false);
   } catch (error) {
     reportError(error);

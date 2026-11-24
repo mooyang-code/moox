@@ -159,7 +159,7 @@ describe("Trade public API", () => {
     ).toBe("0.1");
   });
 
-  it("管理台不暴露只给事件中心用的写入接口", () => {
+  it("管理台不暴露已删除的写名单和下架清仓接口", () => {
     expect(trade).not.toHaveProperty("blockInstrument");
     expect(trade).not.toHaveProperty("flattenInstrument");
   });
