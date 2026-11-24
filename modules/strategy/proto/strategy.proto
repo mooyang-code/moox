@@ -158,6 +158,7 @@ message StrategyTaskRequirement {
   repeated string task_keys = 3;                   // 要绑定的任务键（市场确定时才有）：主帧市场（现货在前），参考市场，附加来源的 来源名:市场
   repeated StrategySourceRequirement sources = 4;  // 附加来源（声明顺序）
   repeated string problems = 5;                    // 据此建不了实例的问题（中文），例如策略池成员不存在、股票成员与现货永续成员混放
+  repeated string reference_markets = 6;           // 参考市场（market.reference）：也在 task_keys 里，只用于年龄判定，不是主帧市场
 }
 
 message StrategySourceRequirement {

@@ -87,7 +87,7 @@ import type { ValidateStrategyResult } from "@/api/strategy-types";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { enabledTasks, type TaskOption } from "@/views/strategy/components/task-options";
-import { marketLabel, requirementTaskKeys, targetKey, taskKeyMarkets } from "@/views/strategy/market-mode";
+import { mainMarkets, marketLabel, targetKey } from "@/views/strategy/market-mode";
 import { useTaskRequirement } from "@/views/strategy/use-task-requirement";
 import { percent, skipReasonLabel } from "@/views/strategy/model";
 import { formatInstant } from "@/utils/time-zone";
@@ -116,8 +116,8 @@ let runRequest = 0;
 // 要绑定的市场由后端按 DSL 推出（ValidateStrategy 的 requirement），编辑时停下 400 毫秒再读。
 const { requirement, reload: reloadRequirement } = useTaskRequirement(computed(() => ({ dsl: props.source })));
 const pool = computed(() => Boolean(requirement.value?.pool));
-// 试算只绑主帧（与参考）市场的任务，附加来源读 View 时由后端按需处理
-const activeMarkets = computed(() => taskKeyMarkets(requirementTaskKeys(requirement.value, singleMarket.value || "")));
+// 试算只绑主帧市场的任务（不含参考市场与附加来源）
+const activeMarkets = computed(() => mainMarkets(requirement.value, singleMarket.value || ""));
 const tasksChosen = computed(() => activeMarkets.value.some(market => selected[market]));
 // 选了任务就要把需要的市场都选全；一个都不选只校验 DSL。
 const complete = computed(() => !tasksChosen.value || activeMarkets.value.every(market => selected[market]));

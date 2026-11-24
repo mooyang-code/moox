@@ -111,6 +111,8 @@ export interface StrategyTaskRequirement {
   sources: { name: string; bar: string }[];
   /** 据此建不了实例的问题（中文） */
   problems: string[];
+  /** 参考市场（market.reference）：也在 taskKeys 里，只用于年龄判定，不是主帧市场 */
+  referenceMarkets: string[];
 }
 
 export interface ValidateStrategyResult {

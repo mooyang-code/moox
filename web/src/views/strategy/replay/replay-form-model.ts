@@ -1,6 +1,6 @@
 import type { ReplayInput, Strategy, StrategyTaskRequirement } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
-import { MARKET_ORDER, requirementTaskKeys, taskKeyMarkets } from "@/views/strategy/market-mode";
+import { MARKET_ORDER, mainMarkets } from "@/views/strategy/market-mode";
 import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
@@ -79,12 +79,12 @@ export function replayDeclared(form: ReplayFormState): boolean {
 }
 
 /**
- * 回放要读取任务的市场（现货、永续、股票先后）：从实例发起时就是预填的实例任务的键；其余按后端推出的要求，
- * 没写 market 时只读一个任务，市场取用户选的。
+ * 回放要读取任务的市场（现货、永续、股票先后）：从实例发起时就是预填的实例任务的键；其余按后端推出的主帧市场
+ * （参考市场只用于实时的年龄判定，回放不读），没写 market 时只读一个任务，市场取用户选的。
  */
 export function replayMarkets(form: ReplayFormState): string[] {
   if (form.instance_id) return MARKET_ORDER.filter(market => form.tasks[market]);
-  return taskKeyMarkets(requirementTaskKeys(form.requirement, form.single_market));
+  return mainMarkets(form.requirement, form.single_market);
 }
 
 /** drift 池的回放起点说明：写了漂移起点时起点必须选它，没写时漂移从区间的第一根开始；不是 drift 池时为空串。 */

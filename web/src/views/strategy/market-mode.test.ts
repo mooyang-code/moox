@@ -4,10 +4,11 @@ import {
   instanceTasks,
   parseFactorTasks,
   positionLabel,
+  mainMarkets,
+  requirementReferenceMarkets,
   requirementTaskKeys,
   splitTaskKey,
   taskKeyLabel,
-  taskKeyMarkets,
   tasksText
 } from "./market-mode";
 
@@ -41,12 +42,28 @@ describe("市场模式", () => {
 
 describe("任务键", () => {
   it("按后端的要求拼出任务键：市场确定时用它给的键，没确定时按选的市场拼主帧与附加来源", () => {
-    const declared = { pool: false, marketDeclared: true, taskKeys: ["swap", "spot", "daily:swap"], sources: [], problems: [] };
+    const declared = {
+      pool: false,
+      marketDeclared: true,
+      taskKeys: ["swap", "spot", "daily:swap"],
+      sources: [],
+      problems: [],
+      referenceMarkets: ["spot"]
+    };
     expect(requirementTaskKeys(declared, "")).toEqual(["swap", "spot", "daily:swap"]);
-    expect(taskKeyMarkets(requirementTaskKeys(declared, ""))).toEqual(["swap", "spot"]);
-    const open = { ...declared, marketDeclared: false, taskKeys: [], sources: [{ name: "daily", bar: "1d" }] };
+    // 参考市场 spot 不是主帧市场
+    expect(mainMarkets(declared, "")).toEqual(["swap"]);
+    expect(requirementReferenceMarkets(declared, requirementTaskKeys(declared, ""))).toEqual(["spot"]);
+    const open = {
+      ...declared,
+      marketDeclared: false,
+      taskKeys: [],
+      sources: [{ name: "daily", bar: "1d" }],
+      referenceMarkets: []
+    };
     expect(requirementTaskKeys(open, "")).toEqual([]);
     expect(requirementTaskKeys(open, "equity")).toEqual(["equity", "daily:equity"]);
+    expect(mainMarkets(open, "equity")).toEqual(["equity"]);
     expect(requirementTaskKeys(null, "spot")).toEqual([]);
   });
 

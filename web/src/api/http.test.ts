@@ -133,3 +133,14 @@ describe("服务端时间", () => {
     await expect(fulfilled({ data: {}, headers: { "trpc-ret": "21", "trpc-func-ret": "超时" } })).rejects.toThrow("超时");
   });
 });
+
+describe("服务超时", () => {
+  it("网关或服务内部超时的英文原文统一显示中文", async () => {
+    transport.post.mockResolvedValueOnce({ data: { ret_info: { code: 2, msg: "read tcp 10.1.2.3:1->4.5.6.7:2: i/o timeout" } } });
+    await expect(call("trade", "SubmitOrder", {})).rejects.toThrow("服务响应超时，请稍后重试");
+    transport.post.mockRejectedValueOnce({
+      response: { status: 504, data: { ret_info: { code: 2, msg: "context deadline exceeded" } } }
+    });
+    await expect(call("strategy", "ListStrategies", {})).rejects.toThrow("服务响应超时，请稍后重试");
+  });
+});

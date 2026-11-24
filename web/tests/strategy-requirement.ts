@@ -122,7 +122,8 @@ export function fixtureRequirement(
     return { pool: true, marketDeclared: pool.markets.length > 0, taskKeys: pool.markets, sources: [], problems: pool.problems };
   const market = marketRequirement(dsl);
   const extra = sourceRequirement(dsl);
-  if (!market.declared) return { pool: false, marketDeclared: false, taskKeys: [], sources: extra.sources, problems: [] };
+  if (!market.declared)
+    return { pool: false, marketDeclared: false, taskKeys: [], sources: extra.sources, problems: [], referenceMarkets: [] };
   const references = extra.references.filter(item => !market.markets.includes(item));
   const sourceKeys = extra.sources.flatMap(source => market.markets.map(item => `${source.name}:${item}`));
   return {
@@ -130,7 +131,8 @@ export function fixtureRequirement(
     marketDeclared: true,
     taskKeys: [...market.markets, ...references, ...sourceKeys],
     sources: extra.sources,
-    problems: []
+    problems: [],
+    referenceMarkets: references
   };
 }
 

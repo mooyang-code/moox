@@ -183,6 +183,9 @@ describe("strategy instance creation behavior", () => {
       updated_at: ""
     };
     const { wrapper, flushPromises } = await open({ strategies: [withSources], presetStrategyId: "s2" });
+    expect(wrapper.text()).toContain("参考市场 现货 的计算任务只用于 age_markets: all 的年龄判定");
+    // 主帧只有永续：不说成现货、永续两个主帧任务
+    expect(wrapper.text()).toContain("策略的市场模式需要绑定：永续 的计算任务");
     expect(wrapper.text()).toContain("附加来源 daily（1d）");
     expect(wrapper.text()).toContain("按主帧的市场各绑一个计算任务");
     const selects = wrapper.findAll("select");

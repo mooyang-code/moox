@@ -145,6 +145,24 @@ describe("replay form model", () => {
   });
 });
 
+describe("写了参考市场的策略", () => {
+  // 主帧只有现货，参考市场永续只用于实时的年龄判定：回放只读一个现货任务
+  const withReference = [
+    {
+      strategy_id: "r",
+      dsl_yaml: "name: r\nbar: 1h\nmarket: {select: spot, reference: [swap]}\nuniverse: {min_age_bars: 3, age_markets: all}\n"
+    }
+  ] as Strategy[];
+  const form = { ...base, strategy_id: "r", tasks: { spot: "ftask_spot", swap: "ftask_swap" }, funding_column: "funding_rate" };
+
+  it("只读主帧市场的任务，因子现算不当成两个任务，不带资金费列", () => {
+    expect(replayMarkets(form, withReference)).toEqual(["spot"]);
+    expect(replayFactorTasks(form, withReference)).toEqual({ spot: "ftask_spot" });
+    expect(validateReplayForm({ ...form, input: "compute" }, withReference)).toBe("");
+    expect(replayFundingColumn(form, withReference)).toBe("");
+  });
+});
+
 describe("策略池回放表单", () => {
   const members = [
     { strategy_id: "m_spot", dsl_yaml: "name: a\nbar: 1h\nmarket: {select: spot}\n" },

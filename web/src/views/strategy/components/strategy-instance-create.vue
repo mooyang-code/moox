@@ -213,7 +213,14 @@ import {
   marketsToResolved,
   resolvedMarkets
 } from "@/views/strategy/components/logical-account-options";
-import { marketLabel, requirementTaskKeys, splitTaskKey, taskKeyLabel, taskKeyMarkets } from "@/views/strategy/market-mode";
+import {
+  mainMarkets,
+  marketLabel,
+  requirementReferenceMarkets,
+  requirementTaskKeys,
+  splitTaskKey,
+  taskKeyLabel
+} from "@/views/strategy/market-mode";
 import { useTaskRequirement } from "@/views/strategy/use-task-requirement";
 import { describePool, parseDSL } from "@/views/strategy/dsl";
 
@@ -269,8 +276,9 @@ const {
 } = useTaskRequirement(computed(() => ({ strategyId: form.strategy_id })));
 // 要绑定的任务键：主帧市场、参考市场、附加来源（来源名:市场）；没写 market 时按选的市场拼出。
 const taskKeys = computed(() => requirementTaskKeys(requirement.value, form.single_market));
-// 主帧（与参考）市场：任务键里不带来源的部分。
-const activeMarkets = computed(() => taskKeyMarkets(taskKeys.value));
+// 主帧市场：不带来源、也不是参考市场的键；参考市场只用于 age_markets: all 的年龄判定。
+const activeMarkets = computed(() => mainMarkets(requirement.value, form.single_market));
+const referenceKeys = computed(() => requirementReferenceMarkets(requirement.value, taskKeys.value));
 // 只列策略驱动且可交易市场包含策略输出市场的组合账户（A 股要开通了股票市场），已被其他实例占用的显示但不可选。
 // 预检之后以服务端解析出的市场为准；预检之前按要绑定的市场（没写 market 时按选的市场）先筛。
 const market = computed(() => {
@@ -292,18 +300,29 @@ watch(accountOptions, options => {
     accountCleared.value = true;
   }
 });
-// 附加来源的任务键（来源名:市场）
-const extraKeys = computed(() => taskKeys.value.filter(key => splitTaskKey(key).source));
+// 主帧之外的任务键：参考市场与附加来源（来源名:市场）
+const extraKeys = computed(() => taskKeys.value.filter(key => splitTaskKey(key).source || referenceKeys.value.includes(key)));
 const extraHint = computed(() => {
-  const sources = (requirement.value?.sources ?? []).map(source => `${source.name}（${source.bar || "?"}）`).join("、");
-  return `附加来源 ${sources} 按主帧的市场各绑一个计算任务：周期要与来源的 bar 一致、是主帧周期的整数倍，任务不能有可变成员。`;
+  const parts: string[] = [];
+  if (referenceKeys.value.length)
+    parts.push(
+      `参考市场 ${referenceKeys.value.map(marketLabel).join("、")} 的计算任务只用于 age_markets: all 的年龄判定，不参与选择与下单`
+    );
+  const sources = requirement.value?.sources ?? [];
+  if (sources.length)
+    parts.push(
+      `附加来源 ${sources.map(source => `${source.name}（${source.bar || "?"}）`).join("、")} 按主帧的市场各绑一个计算任务：周期要与来源的 bar 一致、是主帧周期的整数倍，任务不能有可变成员`
+    );
+  return parts.join("；") + "。";
 });
 function taskLabel(key: string) {
-  return taskKeyLabel(key);
+  return referenceKeys.value.includes(key) ? `参考市场（${marketLabel(key)}）` : taskKeyLabel(key);
 }
 function columnsHint(key: string) {
   const { source } = splitTaskKey(key);
-  return source ? `DSL 里写成 ${source}.列名` : "DSL 里直接写这些列名";
+  if (source) return `DSL 里写成 ${source}.列名`;
+  if (referenceKeys.value.includes(key)) return "只用于年龄判定";
+  return "DSL 里直接写这些列名";
 }
 // 带可变成员的任务能不能选：只有附加来源的任务不能有可变成员，主帧任务都能选（不调参的实例只读可变成员的列）。
 function varBlocked(key: string) {

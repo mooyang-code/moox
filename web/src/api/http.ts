@@ -9,7 +9,7 @@ import { installSpaceAwareClient } from "./admin/space-client";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "./admin/space-header";
 import { AuthSessionExpiredError } from "./admin/auth-errors";
 import { StaleSpaceRequestError } from "./admin/stale-space";
-import { explainTransportError } from "./network-error";
+import { explainTimeout, explainTransportError } from "./network-error";
 
 /**
  * 管理台唯一的请求入口：call(服务, 方法, 请求体) 发到 /api/admin/<服务>/<方法>。
@@ -158,7 +158,9 @@ async function send<TRsp>(service: string, method: string, req: object, options:
     const data = (error as { response?: { data?: unknown; status?: number } })?.response?.data as
       | ({ ret_info?: RetInfo } & Record<string, unknown>)
       | undefined;
-    const message = data?.ret_info?.msg || explainTransportError(error, `${serviceLabels[service] || "Control"} 请求失败`);
+    const message = explainTimeout(
+      data?.ret_info?.msg || explainTransportError(error, `${serviceLabels[service] || "Control"} 请求失败`)
+    );
     if ((error as { response?: { status?: number } })?.response?.status === 401) throw new AuthSessionExpiredError(message);
     throw new RequestError(message, data?.ret_info ? data : undefined);
   }
@@ -166,7 +168,7 @@ async function send<TRsp>(service: string, method: string, req: object, options:
   const retInfo = body?.ret_info;
   if (!retInfo) throw new RequestError(`${service}/${method} 的响应缺少 ret_info`);
   if (!isRetInfoSuccess(retInfo.code)) {
-    const message = retInfo.msg || `${service}/${method} 请求失败（错误码 ${retInfo.code}）`;
+    const message = explainTimeout(retInfo.msg || `${service}/${method} 请求失败（错误码 ${retInfo.code}）`);
     throw new RequestError(message, body);
   }
   return body;
