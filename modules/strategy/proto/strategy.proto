@@ -143,7 +143,27 @@ message CreateStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; 
 message UpdateStrategyReq { string strategy_id = 1; string dsl_yaml = 2; }
 message UpdateStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
 message GetStrategyReq { string strategy_id = 1; }
-message GetStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
+message GetStrategyRsp {
+  common.RetInfo ret_info = 1;
+  Strategy strategy = 2;
+  StrategyTaskRequirement requirement = 3;  // 按定义的 DSL 推出的、建实例要绑定的因子任务
+}
+
+// 策略定义建实例时要绑定的因子任务，由 DSL 推出（管理台据此列出要选的任务，不自己解析 DSL）。
+message StrategyTaskRequirement {
+  bool pool = 1;                                   // 是策略池：主帧市场取各成员所需市场的并集
+  // 已确定主帧市场：DSL 写了 market，或策略池的成员能推出市场。为 false 时只绑一个主帧任务，市场由所选任务决定
+  // （股票策略不写 market），附加来源的任务键按所选任务的市场拼出（来源名:市场）
+  bool market_declared = 2;
+  repeated string task_keys = 3;                   // 要绑定的任务键（市场确定时才有）：主帧市场（现货在前），参考市场，附加来源的 来源名:市场
+  repeated StrategySourceRequirement sources = 4;  // 附加来源（声明顺序）
+  repeated string problems = 5;                    // 据此建不了实例的问题（中文），例如策略池成员不存在、股票成员与现货永续成员混放
+}
+
+message StrategySourceRequirement {
+  string name = 1;
+  string bar = 2;
+}
 message ListStrategiesReq { PageRequest page = 1; }
 message ListStrategiesRsp { common.RetInfo ret_info = 1; repeated Strategy strategies = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
 message DeleteStrategyReq { string strategy_id = 1; }
@@ -159,6 +179,7 @@ message ValidateStrategyRsp {
   string resolved_json = 3;
   StrategyResult trial = 4;              // 试算结果，不落库
   repeated StrategyResultItem trial_items = 5;
+  StrategyTaskRequirement requirement = 6;  // DSL 能解析时给出：建实例要绑定的因子任务
 }
 
 message CreateStrategyInstanceReq { StrategyInstance instance = 1; }
