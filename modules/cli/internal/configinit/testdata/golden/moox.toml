@@ -224,6 +224,8 @@ enabled = false
 # ssh 段：只支持免密的密钥登录。private_key_file 是这台电脑上的私钥（config init 生成 ~/.ssh/moox_ed25519 并装到各服务器上），
 # 不写时用 ssh-agent 与 ~/.ssh 下的默认私钥；私钥不带口令（带口令的私钥交给 ssh-agent）。
 # 腾讯云接口的默认地域取控制机的 region。
+# enabled = false 停用这台主机（不写为启用）：Admin 里记为停用，各网关只认它的 host-gateway，部署时只留 host-gateway 在跑；
+# 控制机不能停用。改了之后 setup deploy 这台主机（连不上也照常写登记）。
 [hosts.control]
 label = "控制机"
 address = "198.51.100.10"

@@ -224,6 +224,8 @@ enabled = false
 # ssh 段：只支持免密的密钥登录。private_key_file 是这台电脑上的私钥（config init 生成 ~/.ssh/moox_ed25519 并装到各服务器上），
 # 不写时用 ssh-agent 与 ~/.ssh 下的默认私钥；私钥不带口令（带口令的私钥交给 ssh-agent）。
 # 腾讯云接口的默认地域取控制机的 region。
+# enabled = false 停用这台主机（不写为启用）：Admin 里记为停用，各网关只认它的 host-gateway，部署时只留 host-gateway 在跑；
+# 控制机不能停用。改了之后 setup deploy 这台主机（连不上也照常写登记）。
 [hosts.control]
 label = "控制机"
 address = "203.0.113.10"
@@ -270,6 +272,11 @@ storage = ["storage-primary", "storage-view", "eventbus"]
 overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
 # factor-engine 与 archive-worker 是外部程序组件，以 systemd 用户服务运行。
 factor = ["factor-engine", "archive-worker"]
+
+# 与 [deployments] 同形的停用清单：列出的组件仍装文件，但 Admin 里记为停用（网关撤销路由、Monitor 停掉检查），systemd 单元停掉。
+# 每台主机的列表必须是它在 [deployments] 里那份的子集；受保护组件（admin 等）不能停用。改了之后 setup deploy 那台主机。
+# [deployments_disabled]
+# factor = ["archive-worker"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
