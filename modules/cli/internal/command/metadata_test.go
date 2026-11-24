@@ -59,18 +59,17 @@ func TestBusinessSpacesSortByID(t *testing.T) {
 		},
 	}}
 
-	spaces, err := businessSetupSpaces(seed)
+	ids, err := businessSpaceIDs(seed)
 	require.NoError(t, err)
-	require.Len(t, spaces, 2)
-	assert.Equal(t, "crypto", spaces[0].SpaceID)
-	assert.Equal(t, "stockcn", spaces[1].SpaceID)
-	assert.Equal(t, "CN", spaces[1].Market)
-	assert.Equal(t, "Asia/Shanghai", spaces[1].Timezone)
-	assert.Equal(t, `{"managed_by":"moox-cli"}`, spaces[1].AttributesJSON)
+	assert.Equal(t, []string{"crypto", "stockcn"}, ids)
+	// 市场与时区随空间写进 Storage。
+	space := seed.Spaces[0].toPB()
+	assert.Equal(t, "CN", space.GetMarket())
+	assert.Equal(t, "Asia/Shanghai", space.GetTimezone())
 }
 
 func TestBusinessSpacesRejectDuplicateID(t *testing.T) {
-	_, err := businessSetupSpaces(metadataSeed{Spaces: []seedSpace{
+	_, err := businessSpaceIDs(metadataSeed{Spaces: []seedSpace{
 		{SpaceID: "crypto", Name: "Crypto", Market: "crypto", Timezone: "UTC"},
 		{SpaceID: "crypto", Name: "Crypto 2", Market: "crypto", Timezone: "UTC"},
 	}})

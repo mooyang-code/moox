@@ -3,13 +3,12 @@ package command
 // 空间与元数据：空间、数据来源、标的、标签、数据集、字段、View，以及行与记录的读取。
 
 const (
-	spaceMgr    = "trpc.moox.admin.SpaceMgr"
 	metadataSvc = "trpc.moox.storage.Metadata"
 	dataViewSvc = "trpc.moox.storage.DataView"
 )
 
 func init() {
-	rpcGroupShort["space"] = "空间：一组相互隔离的业务数据（调用 SpaceMgr）"
+	rpcGroupShort["space"] = "空间：一组相互隔离的业务数据（只登记在 Storage）"
 	rpcGroupShort["metadata source"] = "数据来源"
 	rpcGroupShort["metadata subject"] = "标的"
 	rpcGroupShort["metadata dataset"] = "数据集"
@@ -56,12 +55,12 @@ func init() {
 		strFlag("engine", "view.engine", "引擎：duckdb、bleve"),
 	}
 	registerRPCSpecs(
-		rpcSpec{Path: []string{"space", "list"}, Short: "列出空间", Service: spaceMgr, Method: "ListSpaces", NoSpace: true, Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("owner", "owner", "按所有者过滤"), strFlag("status", "status", "按状态过滤")}},
-		rpcSpec{Path: []string{"space", "show"}, Short: "查看 Storage 里一个空间的元数据", Service: metadataSvc, Method: "GetSpace", SpaceField: "space_id"},
-		rpcSpec{Path: []string{"space", "create"}, Short: "新建空间（还要在 Storage 建元数据：数据来源、数据集、字段，见 metadata apply）", Service: spaceMgr, Method: "CreateSpace", NoSpace: true, Flags: spaceFlags},
-		rpcSpec{Path: []string{"space", "update"}, Merge: mergeSpace, Short: "修改空间", Service: spaceMgr, Method: "UpdateSpace", NoSpace: true, Flags: spaceFlags},
-		rpcSpec{Path: []string{"space", "delete"}, Short: "删除空间（默认只预览，--yes 才执行）", Service: spaceMgr, Method: "DeleteSpace", NoSpace: true, Destructive: true,
+		rpcSpec{Path: []string{"space", "list"}, Short: "列出空间", Service: metadataSvc, Method: "ListSpaces", NoSpace: true, Page: rpcPageSize,
+			Flags: []rpcFlag{strFlag("owner", "owner", "按所有者过滤"), strFlag("status", "status", "按状态过滤：active、disabled")}},
+		rpcSpec{Path: []string{"space", "show"}, Short: "查看一个空间", Service: metadataSvc, Method: "GetSpace", SpaceField: "space_id"},
+		rpcSpec{Path: []string{"space", "create"}, Short: "新建空间（建好即可建数据来源、数据集等元数据，见 metadata apply）", Service: metadataSvc, Method: "CreateSpace", NoSpace: true, Flags: spaceFlags},
+		rpcSpec{Path: []string{"space", "update"}, Merge: mergeViaGet("GetSpace", map[string]string{"space_id": "space.space_id"}, "space", "space"), Short: "修改空间（停用后 Collector 不再采它）", Service: metadataSvc, Method: "UpdateSpace", NoSpace: true, Flags: spaceFlags},
+		rpcSpec{Path: []string{"space", "delete"}, Short: "删除空间：会清空该空间全部数据（数据集、View 与全部行情、因子数据），不能恢复；采集任务、交易、策略里按该空间存的记录不跟着删（默认只预览，--yes 才执行）", Service: metadataSvc, Method: "DeleteSpace", NoSpace: true, Destructive: true,
 			Flags: []rpcFlag{reqFlag("space-id", "space_id", "空间 ID")}},
 
 		rpcSpec{Path: []string{"metadata", "source", "list"}, Short: "列出数据来源", Service: metadataSvc, Method: "ListDataSources", SpaceField: "space_id", Page: rpcPageSize,

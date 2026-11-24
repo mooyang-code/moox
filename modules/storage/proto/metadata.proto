@@ -26,6 +26,10 @@ message Space {
   string updated_at = 7;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 8;
+  // market 是空间所属市场，如 crypto、cn_a_share、hk、us。
+  string market = 9;
+  // timezone 是空间的展示时区（IANA 名称，如 Asia/Shanghai），管理台全站时间按它显示。
+  string timezone = 10;
 }
 
 // View 是 Space 内的用户查询入口，只存声明；已建好的索引状态只在 View 的索引文件里，由 DataView.GetViewState 提供。
@@ -338,7 +342,7 @@ message UpdateSpaceRsp {
   Space space = 2;
 }
 
-// DeleteSpaceReq 表示删除一个使用空间及其级联元数据。
+// DeleteSpaceReq 表示删除一个使用空间：连同空间里的数据集、View 与全部行数据一起删除，不能恢复。
 message DeleteSpaceReq {
   string space_id = 2;
 }
@@ -368,6 +372,8 @@ message ListSpacesReq {
   string owner = 2;
   // page 是分页参数。
   common.Page page = 3;
+  // status 是可选状态过滤条件：active、disabled。
+  string status = 4;
 }
 
 // ListSpacesRsp 表示列出使用空间的响应。

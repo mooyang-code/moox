@@ -34,12 +34,13 @@ type setupSnapshot struct {
 }
 
 type setupDeps struct {
-	load                  func(string) (*setupSnapshot, error)
-	loadInitBundle        func(string) (setupInitBundle, error)
-	validate              func(context.Context, *setupSnapshot) (setupvalidate.Result, error)
-	trustHost             func(context.Context, *setupSnapshot, string, string) error
-	applySpaces           func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error)
-	statusSpaces          func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	load           func(string) (*setupSnapshot, error)
+	loadInitBundle func(string) (setupInitBundle, error)
+	validate       func(context.Context, *setupSnapshot) (setupvalidate.Result, error)
+	trustHost      func(context.Context, *setupSnapshot, string, string) error
+	// applySecrets 把秘密文件里的初始秘密写进管理台（只建不改）；setupStatus 核对它们是否都在。
+	applySecrets          func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error)
+	setupStatus           func(context.Context, *setupSnapshot) (setupclient.StatusResult, error)
 	registerCloudAccounts func(context.Context, *setupSnapshot) (*setupCloudAccountSummary, error)
 	provisionCLS          func(context.Context, *setupSnapshot) (*setupCLSSummary, error)
 	// ensureSCFPlan 的最后一个参数是源码或产物包目录：云函数代码包从它下面的 modules/collector 构建。
@@ -529,8 +530,8 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.loadInitBundle, defaults.loadInitBundle)
 	fillSetupDep(&deps.validate, defaults.validate)
 	fillSetupDep(&deps.trustHost, defaults.trustHost)
-	fillSetupDep(&deps.applySpaces, defaults.applySpaces)
-	fillSetupDep(&deps.statusSpaces, defaults.statusSpaces)
+	fillSetupDep(&deps.applySecrets, defaults.applySecrets)
+	fillSetupDep(&deps.setupStatus, defaults.setupStatus)
 	fillSetupDep(&deps.registerCloudAccounts, defaults.registerCloudAccounts)
 	fillSetupDep(&deps.provisionCLS, defaults.provisionCLS)
 	fillSetupDep(&deps.ensureSCFPlan, defaults.ensureSCFPlan)
@@ -612,8 +613,8 @@ func defaultSetupDeps() setupDeps {
 		openStart:             defaultSetupOpenStart,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
-		applySpaces:           defaultSetupApplyWithSpaces,
-		statusSpaces:          defaultSetupStatusWithSpaces,
+		applySecrets:          defaultSetupApplySecrets,
+		setupStatus:           defaultSetupStatus,
 		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
 		provisionCLS:          defaultSetupProvisionCLS,
 		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
@@ -652,7 +653,7 @@ func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupSnapsh
 }
 
 func defaultSetupImportMetadata(ctx context.Context, snapshot *setupSnapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {
-	status, err := defaultSetupStatusWithSpaces(ctx, snapshot, nil)
+	status, err := defaultSetupStatus(ctx, snapshot)
 	if err != nil || status.State != "completed" {
 		return metadataImportSummary{}, fmt.Errorf("setup_incomplete")
 	}
@@ -822,30 +823,22 @@ func manualBrowserTrustCommand(caPath string) string {
 // refreshSetupConsoleCA 在测试里替换。
 var refreshSetupConsoleCA = configinit.RefreshConsoleCA
 
-func defaultSetupApplyWithSpaces(
-	ctx context.Context,
-	snapshot *setupSnapshot,
-	spaces []setupclient.Space,
-) (setupclient.ApplyResult, error) {
+func defaultSetupApplySecrets(ctx context.Context, snapshot *setupSnapshot) (setupclient.ApplyResult, error) {
 	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return setupclient.ApplyResult{}, err
 	}
 	defer gateway.Close()
-	return setupclient.New(gateway).ApplyWithSpaces(ctx, snapshot.Secrets, spaces)
+	return setupclient.New(gateway).Apply(ctx, snapshot.Secrets)
 }
 
-func defaultSetupStatusWithSpaces(
-	ctx context.Context,
-	snapshot *setupSnapshot,
-	spaces []setupclient.Space,
-) (setupclient.StatusResult, error) {
+func defaultSetupStatus(ctx context.Context, snapshot *setupSnapshot) (setupclient.StatusResult, error) {
 	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return setupclient.StatusResult{}, err
 	}
 	defer gateway.Close()
-	return setupclient.New(gateway).StatusWithSpaces(ctx, snapshot.Secrets, spaces)
+	return setupclient.New(gateway).Status(ctx, snapshot.Secrets)
 }
 
 func dialSetupHost(ctx context.Context, host topology.Host) (setupssh.Client, error) {

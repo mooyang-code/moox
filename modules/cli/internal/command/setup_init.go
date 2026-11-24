@@ -22,9 +22,10 @@ import (
 
 const defaultSetupConfigDir = "./config/setup"
 
+// setupInitBundle 是元数据种子：业务空间也在里面，随元数据经 metadata apply 写进 Storage。
 type setupInitBundle struct {
-	Spaces []setupclient.Space
-	Calls  []metadataImportCall
+	SpaceIDs []string
+	Calls    []metadataImportCall
 }
 
 type setupInitStorage interface {
@@ -78,10 +79,11 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var source setupSource
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改）",
-		Long: `--stage storage 在控制机只装了 Admin、存储机装好之后运行：写业务空间与初始秘密、导入元数据，控制机上的 Collector 等要这些就绪才能启动。
+		Short: "导入默认空间与元数据，写入初始秘密（云密钥、交易所密钥、告警渠道，只建不改）",
+		Long: `--stage storage 在控制机只装了 Admin、存储机装好之后运行：写初始秘密、把业务空间与元数据导入 Storage，控制机上的 Collector 等要这些就绪才能启动。
 不带 --stage 在全部组件装好后运行：完成全部初始化。初始秘密取自秘密文件 moox.secrets.toml，规则都是只建不改：
-管理员、腾讯云密钥、交易所密钥在管理台已有时以管理台为准，已在管理台删除的交易所密钥不重建；
+管理员在部署控制机时已建好，这里只核对；腾讯云密钥、交易所密钥在管理台已有时以管理台为准，已在管理台删除的交易所密钥不重建；
+业务空间已在 Storage 时以管理台为准，不比对；
 告警渠道只在 Monitor 还没有任何渠道时写入一次（在管理台把渠道全删掉之后重跑，会把秘密文件里的渠道写回）。
 还会登记云账户、开通日志服务；因子任务由 setup start 导入。已经做过的步骤不会重复写入。
 云函数代码包从 --source-dir（默认当前目录）下的 modules/collector 构建，元数据种子默认读它下面的 config/setup：
@@ -125,32 +127,40 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录（不写时取 --source-dir 下的 config/setup）")
 	cmd.Flags().StringVar(&source.sourceDir, "source-dir", "", "源码或产物包目录（默认当前目录）：云函数代码包和元数据种子从这里取")
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "部署了 Storage 的主机 ID（默认取 moox.toml 里 storage-primary 所在的主机）")
-	cmd.Flags().StringVar(&stage, "stage", "", "只做哪个阶段：storage 只写业务空间、初始秘密与元数据；不填做全部初始化")
+	cmd.Flags().StringVar(&stage, "stage", "", "只做哪个阶段：storage 只写初始秘密、业务空间与元数据；不填做全部初始化")
 	return cmd
 }
 
-// runSetupInitMetadata 只做不依赖管理台服务的初始化：业务空间写进 Admin，元数据写进 Storage。
+// runSetupInitMetadata 只做不依赖管理台服务的初始化：初始秘密写进 Admin，业务空间与元数据写进 Storage。
 // Admin 在 admin 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
 func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupSnapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
-	if _, err := deps.applySpaces(ctx, snapshot, bundle.Spaces); err != nil {
+	if err := applySetupSecrets(ctx, deps, snapshot); err != nil {
 		return setupInitStorageSummary{}, err
-	}
-	adminStatus, err := deps.statusSpaces(ctx, snapshot, bundle.Spaces)
-	if err != nil {
-		return setupInitStorageSummary{}, err
-	}
-	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
-		return setupInitStorageSummary{}, fmt.Errorf("setup_incomplete")
 	}
 	metadata, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
 	if err != nil {
 		return setupInitStorageSummary{}, err
 	}
 	return setupInitStorageSummary{
-		Status: "ready", BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
+		Status: "ready", BusinessSpaceIDs: bundle.SpaceIDs,
 		Metadata:     setupInitMetadataCounts{Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged},
 		Verification: setupInitMetadataCounts{Planned: verification.Planned, Unchanged: verification.Unchanged},
 	}, nil
+}
+
+// applySetupSecrets 写入初始秘密并核对都在。
+func applySetupSecrets(ctx context.Context, deps setupDeps, snapshot *setupSnapshot) error {
+	if _, err := deps.applySecrets(ctx, snapshot); err != nil {
+		return err
+	}
+	status, err := deps.setupStatus(ctx, snapshot)
+	if err != nil {
+		return err
+	}
+	if status.State != "completed" {
+		return fmt.Errorf("setup_incomplete")
+	}
+	return nil
 }
 
 // applySetupMetadata 导入元数据并核对，重复运行结果不变；数据集建好即可写入，不用另外激活。
@@ -191,15 +201,15 @@ func runSetupInit(
 	if firewall.Status != "" && firewall.Status != "ready" {
 		return setupInitSummary{}, fmt.Errorf("firewall_incomplete: status=%s skipped=%d", firewall.Status, firewall.Skipped)
 	}
-	admin, err := deps.applySpaces(ctx, snapshot, bundle.Spaces)
+	admin, err := deps.applySecrets(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	adminStatus, err := deps.statusSpaces(ctx, snapshot, bundle.Spaces)
+	adminStatus, err := deps.setupStatus(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
+	if adminStatus.State != "completed" {
 		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
 	}
 	notification, err := deps.ensureNotification(ctx, snapshot)
@@ -231,15 +241,8 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	adminStatus, err = deps.statusSpaces(ctx, snapshot, bundle.Spaces)
-	if err != nil {
-		return setupInitSummary{}, err
-	}
-	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
-		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
-	}
 	return setupInitSummary{
-		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
+		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.SpaceIDs), BusinessSpaceIDs: bundle.SpaceIDs,
 		Admin: admin, Notification: notification, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
@@ -359,14 +362,6 @@ func sameSetupCloudAccount(account adminclient.CloudAccount, input adminclient.C
 		account.AppID == input.AppID && account.COSRegion == input.COSRegion && account.COSBucket == input.COSBucket
 }
 
-func setupSpaceIDs(spaces []setupclient.Space) []string {
-	ids := make([]string, 0, len(spaces))
-	for _, space := range spaces {
-		ids = append(ids, strings.TrimSpace(space.SpaceID))
-	}
-	return ids
-}
-
 func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	configDir = strings.TrimSpace(configDir)
 	if configDir == "" {
@@ -376,7 +371,7 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	if err != nil {
 		return setupInitBundle{}, err
 	}
-	spaces, err := businessSetupSpaces(seed)
+	spaceIDs, err := businessSpaceIDs(seed)
 	if err != nil {
 		return setupInitBundle{}, err
 	}
@@ -387,7 +382,7 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	if err != nil {
 		return setupInitBundle{}, err
 	}
-	return setupInitBundle{Spaces: spaces, Calls: calls}, nil
+	return setupInitBundle{SpaceIDs: spaceIDs, Calls: calls}, nil
 }
 
 func validateSetupMetadataDependencies(seed metadataSeed) error {

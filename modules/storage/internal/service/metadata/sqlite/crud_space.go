@@ -94,9 +94,10 @@ func (s *Store) DeleteSpace(ctx context.Context, spaceID string) error {
 	return tx.Commit()
 }
 
-func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
+func (s *Store) ListSpaces(ctx context.Context, owner, status string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	pageNo, size, offset := normalizePage(page)
-	rows, err := s.queryDB(ctx).QueryContext(ctx, `SELECT c_item_json, c_ctime, c_mtime FROM t_spaces WHERE (? = '' OR c_owner = ?) ORDER BY c_space_id LIMIT ? OFFSET ?`, owner, owner, size, offset)
+	const where = `WHERE (? = '' OR c_owner = ?) AND (? = '' OR c_status = ?)`
+	rows, err := s.queryDB(ctx).QueryContext(ctx, `SELECT c_item_json, c_ctime, c_mtime FROM t_spaces `+where+` ORDER BY c_space_id LIMIT ? OFFSET ?`, owner, owner, status, status, size, offset)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -113,7 +114,7 @@ func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]
 		return nil, nil, err
 	}
 	var total uint32
-	if err := s.queryDB(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM t_spaces WHERE (? = '' OR c_owner = ?)`, owner, owner).Scan(&total); err != nil {
+	if err := s.queryDB(ctx).QueryRowContext(ctx, `SELECT COUNT(*) FROM t_spaces `+where, owner, owner, status, status).Scan(&total); err != nil {
 		return nil, nil, err
 	}
 	return items, &pb.PageResult{Page: pageNo, Size: size, Total: total, HasMore: uint64(offset)+uint64(len(items)) < uint64(total)}, nil

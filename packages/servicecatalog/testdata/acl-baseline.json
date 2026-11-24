@@ -2,10 +2,10 @@
   "note": "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway 是每台主机的网关（签名主机另由签名头给出）。改服务目录后重新生成并人工看差异，访问控制不得变宽。",
   "summary": {
     "components": 18,
-    "services": 26,
-    "methods": 336,
-    "read_only_methods": 152,
-    "retryable_methods": 153,
+    "services": 25,
+    "methods": 330,
+    "read_only_methods": 150,
+    "retryable_methods": 151,
     "callers": 23,
     "principals": 3
   },
@@ -59,52 +59,9 @@
           "timeout_ms": 5000
         },
         {
-          "name": "GetConfigBackup",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetSetupStatus",
           "read_only": true,
           "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "PutConfigBackup",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        }
-      ]
-    },
-    {
-      "path": "trpc.moox.admin.SpaceMgr",
-      "component": "admin",
-      "console_name": "space",
-      "methods": [
-        {
-          "name": "CreateSpace",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "DeleteSpace",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ListSpaces",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "UpdateSpace",
-          "read_only": false,
-          "retryable": false,
           "timeout_ms": 5000
         }
       ]
@@ -2227,7 +2184,6 @@
     ],
     "collector": [
       "trpc.moox.admin.ActivityLog/AppendActivityLogs",
-      "trpc.moox.admin.SpaceMgr/ListSpaces",
       "trpc.moox.collector.MarketFetchExecutor/Invoke",
       "trpc.moox.egress.Proxy/Do",
       "trpc.moox.ops.SecretMgr/GetCloudCredential",
@@ -2286,13 +2242,7 @@
     "console": [
       "trpc.moox.admin.ActivityLog/ListActivityLogs",
       "trpc.moox.admin.Setup/ApplySetup",
-      "trpc.moox.admin.Setup/GetConfigBackup",
       "trpc.moox.admin.Setup/GetSetupStatus",
-      "trpc.moox.admin.Setup/PutConfigBackup",
-      "trpc.moox.admin.SpaceMgr/CreateSpace",
-      "trpc.moox.admin.SpaceMgr/DeleteSpace",
-      "trpc.moox.admin.SpaceMgr/ListSpaces",
-      "trpc.moox.admin.SpaceMgr/UpdateSpace",
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
@@ -2666,10 +2616,6 @@
       "trpc.moox.admin.ActivityLog/ListActivityLogs",
       "trpc.moox.admin.Setup/ApplySetup",
       "trpc.moox.admin.Setup/GetSetupStatus",
-      "trpc.moox.admin.SpaceMgr/CreateSpace",
-      "trpc.moox.admin.SpaceMgr/DeleteSpace",
-      "trpc.moox.admin.SpaceMgr/ListSpaces",
-      "trpc.moox.admin.SpaceMgr/UpdateSpace",
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",

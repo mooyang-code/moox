@@ -2,25 +2,6 @@
 
 PRAGMA foreign_keys = ON;
 
--- ************ 平台空间表 ************
-CREATE TABLE IF NOT EXISTS t_spaces (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_description TEXT NOT NULL DEFAULT '',
-    c_owner TEXT NOT NULL DEFAULT '',
-    c_market TEXT NOT NULL DEFAULT '',
-    c_timezone TEXT NOT NULL DEFAULT '',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_attributes TEXT NOT NULL DEFAULT '{}',
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_space_id_deleted
-ON t_spaces (c_space_id, c_is_deleted);
-
 -- ************ 用户表 ************
 -- 系统只有一个超级用户：没有角色、状态和个人资料；登录记录写入全局活动日志（auth.login）。
 CREATE TABLE IF NOT EXISTS t_users (

@@ -123,7 +123,7 @@ describe("installSpaceAwareClient", () => {
     setSpaceInitializer(async () => {
       calls += 1;
     });
-    for (const url of ["/api/admin/auth/Login", "/api/admin/space/ListSpaces"]) {
+    for (const url of ["/api/admin/auth/Login", "/api/admin/storage/ListSpaces", "/api/admin/storage/CreateSpace"]) {
       await spaceHandler()({ url, headers: new AxiosHeaders() } as InternalAxiosRequestConfig);
     }
     expect(calls).toBe(0);

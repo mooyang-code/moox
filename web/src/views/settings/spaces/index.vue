@@ -42,7 +42,7 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="220" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
                 <a-button
@@ -54,6 +54,7 @@
                   设为当前
                 </a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
+                <a-button size="mini" type="text" status="danger" @click="confirmDelete(record)">删除</a-button>
               </a-space>
             </template>
           </a-table-column>
@@ -98,11 +99,10 @@
 import StatusMark from "@/views/trading/accounts/shared/status-mark.vue";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
-import { reportControlError } from "@/api/admin/http";
+import { Message, Modal } from "@arco-design/web-vue";
 import { SPACE_TIMEZONES, uncommonZoneHint } from "@/utils/space-zones";
-import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
-import type { Space } from "@/api/admin/types";
+import { createSpace, deleteSpace, listSpaces, updateSpace } from "@/api/storage/spaces";
+import type { Space } from "@/api/storage/spaces";
 import { useSpaceStore } from "@/store/modules/space";
 import { applyPageResult, defaultPagination, formatTime, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
 
@@ -122,7 +122,8 @@ const form = reactive<Space>({
   owner: "",
   market: "",
   timezone: "",
-  status: "active"
+  status: "active",
+  attributes: {}
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑空间" : "创建空间"));
@@ -147,7 +148,8 @@ function resetForm() {
     owner: "",
     market: "",
     timezone: "",
-    status: "active"
+    status: "active",
+    attributes: {}
   });
 }
 
@@ -166,7 +168,9 @@ function openEdit(record: Space) {
     owner: record.owner || "",
     market: record.market || "",
     timezone: record.timezone || "",
-    status: record.status || "active"
+    status: record.status || "active",
+    // Storage 的修改是整体替换：扩展属性原样带回
+    attributes: { ...(record.attributes || {}) }
   });
   visible.value = true;
 }
@@ -188,8 +192,8 @@ async function submit(): Promise<boolean> {
   try {
     if (creating) await createSpace(submitted);
     else await updateSpace(submitted);
-  } catch (error) {
-    reportControlError(error);
+  } catch {
+    // 失败原因已由 Storage 请求层提示
     return false;
   }
   Message.success("空间已保存");
@@ -199,6 +203,27 @@ async function submit(): Promise<boolean> {
     if (creating && submitted.status === "active" && submission.isCurrent()) spaceStore.setSelectedSpace(submitted.space_id);
   });
   return true;
+}
+
+/** 删除空间会清空该空间全部数据，二次确认写明后果。 */
+function confirmDelete(record: Space) {
+  Modal.confirm({
+    title: `删除空间“${record.name || record.space_id}”`,
+    content:
+      "会清空该空间全部数据：数据集、View 与全部行情、因子数据一起删除，不能恢复。采集任务、交易、策略里按这个空间存的记录不会跟着删除。确认删除？",
+    okText: "删除",
+    okButtonProps: { status: "danger" },
+    onBeforeOk: async () => {
+      try {
+        await deleteSpace(record.space_id);
+      } catch {
+        return false;
+      }
+      Message.success("空间已删除");
+      void load();
+      return true;
+    }
+  });
 }
 
 function onPageChange(page: number) {

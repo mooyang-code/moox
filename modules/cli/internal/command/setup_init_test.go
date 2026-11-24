@@ -62,7 +62,7 @@ func TestSetupInitRequiresStorageHost(t *testing.T) {
 func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	bundle, err := loadSetupInitBundle(defaultSetupBundlePath())
 	require.NoError(t, err)
-	require.Len(t, bundle.Spaces, 4)
+	assert.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, bundle.SpaceIDs)
 	require.NotEmpty(t, bundle.Calls)
 	// 种子只剩 A 股财务两个数据集、没有 View：行情数据集由采集任务派生，主机快照改存 Monitor。
 	resources := map[string]int{}
@@ -71,10 +71,6 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	}
 	require.Equal(t, 2, resources["datasets"])
 	require.Zero(t, resources["views"])
-	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
-	assert.Equal(t, "stockcn", bundle.Spaces[1].SpaceID)
-	assert.Equal(t, "stockhk", bundle.Spaces[2].SpaceID)
-	assert.Equal(t, "stockus", bundle.Spaces[3].SpaceID)
 }
 
 func TestSetupInitRunsStagesInOrder(t *testing.T) {
@@ -83,16 +79,12 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	storage := &fakeSetupInitStorage{record: func(stage string) {
 		stages = append(stages, stage)
 	}}
-	spaces := []setupclient.Space{{
-		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
-		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
-	}}
 	deps := setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) {
 			stages = append(stages, "load-bundle")
 			return setupInitBundle{
-				Spaces: spaces,
-				Calls:  make([]metadataImportCall, 3),
+				SpaceIDs: []string{"crypto"},
+				Calls:    make([]metadataImportCall, 3),
 			}, nil
 		},
 		load: func(string) (*setupSnapshot, error) {
@@ -103,15 +95,13 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 			stages = append(stages, "firewall")
 			return setupFirewallSummary{Status: "ready", Targets: 3}, nil
 		},
-		applySpaces: func(_ context.Context, _ *setupSnapshot, got []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
-			require.Equal(t, spaces, got)
-			return setupclient.ApplyResult{Action: "created", Spaces: 1, SpacesCreated: 1}, nil
+			return setupclient.ApplyResult{Action: "created", Secrets: 1}, nil
 		},
-		statusSpaces: func(_ context.Context, _ *setupSnapshot, got []setupclient.Space) (setupclient.StatusResult, error) {
+		setupStatus: func(context.Context, *setupSnapshot) (setupclient.StatusResult, error) {
 			stages = append(stages, "admin-status")
-			require.Equal(t, spaces, got)
-			return setupclient.StatusResult{State: "completed", Spaces: 1}, nil
+			return setupclient.StatusResult{State: "completed"}, nil
 		},
 		ensureNotification: func(context.Context, *setupSnapshot) (*setupNotificationSummary, error) {
 			stages = append(stages, "notification")
@@ -145,7 +135,6 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"login",
 		"storage-apply",
 		"verify",
-		"admin-status",
 	}, stages)
 	var summary map[string]any
 	require.NoError(t, json.Unmarshal(output.Bytes(), &summary))
@@ -158,7 +147,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"firewall":{"status":"ready","targets":3,"rules":0,"skipped":0,"already_open":0,"created":0},
 		"business_spaces":1,
 		"business_space_ids":["crypto"],
-		"admin":{"action":"created","users":0,"secrets":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
+		"admin":{"action":"created","users":0,"secrets":1},
 		"notification":{"status":"kept","existing":1},
 		"cloud_accounts":{"enabled":true,"planned":1,"registered":1,"unchanged":0},
 		"admin_state":"completed",
@@ -184,7 +173,7 @@ func TestSetupInitStopsAfterAdminFailure(t *testing.T) {
 			stages = append(stages, "firewall")
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
 			return setupclient.ApplyResult{}, errors.New("setup_invalid")
 		},
@@ -203,7 +192,7 @@ func TestSetupInitStopsOnPartialFirewall(t *testing.T) {
 		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "partial", Targets: 3, Skipped: 1}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			adminApplied = true
 			return setupclient.ApplyResult{}, nil
 		},
@@ -395,10 +384,10 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			return setupclient.ApplyResult{Action: "unchanged"}, nil
 		},
-		statusSpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error) {
+		setupStatus: func(context.Context, *setupSnapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
 		login: func(context.Context, *setupSnapshot) (setupclient.LoginResult, error) {
@@ -436,12 +425,12 @@ func TestSetupInitKeepsExistingChannelsAndSecrets(t *testing.T) {
 		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			applied++
 			return setupclient.ApplyResult{Action: "unchanged", Kept: []string{"admin", "tencent_cloud"},
 				ExchangeKeys: []setupclient.ExchangeKeyResult{{SecretID: "exchange-binance-production-main", State: setupclient.ExchangeKeyExists}}}, nil
 		},
-		statusSpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error) {
+		setupStatus: func(context.Context, *setupSnapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
 		login: func(context.Context, *setupSnapshot) (setupclient.LoginResult, error) {

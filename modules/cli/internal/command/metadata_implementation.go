@@ -385,7 +385,8 @@ func finishMetadataCall(ctx context.Context, gateway gatewayclient.Invoker, call
 		record(true)
 		return nil
 	}
-	if call.Resource != "tags" {
+	// 空间与标签在管理台可改（空间的名称、时区、停用，标签成员），已有的以管理台为准，不比对。
+	if call.Resource != "tags" && call.Resource != "spaces" {
 		if err := verifyMetadataResource(call.Resource, call.Request, actual); err != nil {
 			return err
 		}
@@ -516,8 +517,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 	}
 	var expected proto.Message
 	switch req := request.(type) {
-	case *pb.CreateSpaceReq:
-		expected = req.GetSpace()
 	case *pb.CreateDataSourceReq:
 		expected = req.GetDataSource()
 	case *pb.CreateDatasetReq:
@@ -547,10 +546,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 }
 
 func metadataContractsEqual(resource string, a, b proto.Message) bool {
-	if resource == "spaces" {
-		x, y := a.(*pb.Space), b.(*pb.Space)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetName() == y.GetName() && x.GetDescription() == y.GetDescription() && x.GetOwner() == y.GetOwner() && x.GetStatus() == y.GetStatus() && maps.Equal(x.GetAttributes(), y.GetAttributes())
-	}
 	if resource == "data_sources" {
 		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
 		return x.GetSpaceId() == y.GetSpaceId() &&
@@ -681,7 +676,7 @@ func (s seedCommon) status() string {
 }
 
 func (s seedSpace) toPB() *pb.Space {
-	return &pb.Space{SpaceId: s.SpaceID, Name: s.Name, Description: s.Description, Owner: s.Owner, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.Space{SpaceId: s.SpaceID, Name: s.Name, Description: s.Description, Owner: s.Owner, Market: s.Market, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedDataSource) toPB() *pb.DataSource {

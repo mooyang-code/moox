@@ -12,6 +12,8 @@ const tencentSecretID = "tencent-default"
 var (
 	ErrStorage = errors.New("setup_storage_failed")
 	ErrInvalid = errors.New("setup_invalid")
+	// ErrAdminMissing 表示还没有管理员：管理员由 setup deploy 部署控制机时建。
+	ErrAdminMissing = errors.New("setup_admin_missing")
 )
 
 type Admin struct {
@@ -22,17 +24,6 @@ type Admin struct {
 type TencentCloud struct {
 	SecretID  string
 	SecretKey string
-}
-
-type Space struct {
-	SpaceID        string
-	Name           string
-	Description    string
-	Owner          string
-	Market         string
-	Timezone       string
-	Status         string
-	AttributesJSON string
 }
 
 // ExchangeKey 是 moox.toml 的一条 [[exchange_keys]]。
@@ -64,19 +55,14 @@ type ExchangeKeyResult struct {
 type Manifest struct {
 	Admin        Admin
 	TencentCloud TencentCloud
-	Spaces       []Space
 	ExchangeKeys []ExchangeKey
 }
 
 type Result struct {
-	Action  string
-	Users   int
-	Secrets int
-	Spaces  int
-	// SpacesCreated、SpacesUnchanged 只统计业务空间。
-	SpacesCreated   int
-	SpacesUnchanged int
-	ExchangeKeys    []ExchangeKeyResult
+	Action       string
+	Users        int
+	Secrets      int
+	ExchangeKeys []ExchangeKeyResult
 	// Kept 同 Status.Kept：这些项本次没有改写。
 	Kept []string
 }
@@ -85,10 +71,9 @@ type Status struct {
 	State   string
 	Users   int
 	Secrets int
-	Spaces  int
 	// Missing 只统计真正缺失的记录；交易所密钥“已存在”和“已在管理台删除”都算完成。
 	Missing int
-	// Kept 是库里已有、与 moox.toml 不一致而以管理台为准保留的项（admin、tencent_cloud、space:<ID>）。
+	// Kept 是库里已有、与 moox.toml 不一致而以管理台为准保留的项（admin、tencent_cloud）。
 	Kept         []string
 	ExchangeKeys []ExchangeKeyResult
 }

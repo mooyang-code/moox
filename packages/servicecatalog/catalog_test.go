@@ -128,7 +128,10 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 				servicePtr(c, cloud).Methods[i].Operators = operators()
 			}
 		}},
-		{"ambiguous console method", func(c *Catalog) { servicePtr(c, "trpc.moox.admin.SpaceMgr").ConsoleName = "storage" }},
+		{"ambiguous console method", func(c *Catalog) {
+			secrets := servicePtr(c, "trpc.moox.ops.SecretMgr")
+			secrets.ConsoleName, secrets.Methods[0].Name = "storage", "ListSpaces"
+		}},
 		{"duplicate identity", func(c *Catalog) { c.Identities = append(c.Identities, c.Identities[0]) }},
 		{"identity is not external", func(c *Catalog) { c.Identities[0].External = false }},
 		{"identity without methods", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "orphan", External: true}) }},

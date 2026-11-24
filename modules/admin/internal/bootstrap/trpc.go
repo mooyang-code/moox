@@ -67,10 +67,6 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 
-	if err := register(&adminpb.SpaceMgrServer_ServiceDesc, services.SpaceMgr); err != nil {
-		return err
-	}
-
 	// 3.5 SSH 管理服务（直连端点走 rawhandler）
 	sshSvc := sshrpc.NewService(services.SSHService)
 	if err := register(&adminpb.SshServer_ServiceDesc, sshSvc); err != nil {
@@ -107,7 +103,7 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	if err != nil {
 		return err
 	}
-	handler, err := console.NewHandler(local, gateway, sessions, services.SpaceMgr)
+	handler, err := console.NewHandler(local, gateway, sessions)
 	if err != nil {
 		_ = gateway.Close()
 		return err

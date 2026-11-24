@@ -18,17 +18,6 @@ type Client struct {
 	gateway gatewayclient.Invoker
 }
 
-type Space struct {
-	SpaceID        string `json:"space_id"`
-	Name           string `json:"name"`
-	Description    string `json:"description"`
-	Owner          string `json:"owner"`
-	Market         string `json:"market"`
-	Timezone       string `json:"timezone"`
-	Status         string `json:"status"`
-	AttributesJSON string `json:"attributes_json"`
-}
-
 // 交易所密钥在 SecretMgr 里的状态，与 Admin 的 setup 服务一致。
 const (
 	ExchangeKeyCreated = "created" // 本次新建
@@ -54,14 +43,11 @@ var exchangeKeyNotes = map[string]string{
 }
 
 type ApplyResult struct {
-	Action          string              `json:"action"`
-	Users           int                 `json:"users"`
-	Secrets         int                 `json:"secrets"`
-	Spaces          int                 `json:"spaces"`
-	SpacesCreated   int                 `json:"spaces_created"`
-	SpacesUnchanged int                 `json:"spaces_unchanged"`
-	ExchangeKeys    []ExchangeKeyResult `json:"exchange_keys,omitempty"`
-	// Kept 是与 moox.toml 不一致、以管理台为准保留的项（admin、tencent_cloud、space:<ID>）。
+	Action       string              `json:"action"`
+	Users        int                 `json:"users"`
+	Secrets      int                 `json:"secrets"`
+	ExchangeKeys []ExchangeKeyResult `json:"exchange_keys,omitempty"`
+	// Kept 是与 moox.toml 不一致、以管理台为准保留的项（admin、tencent_cloud）。
 	Kept []string `json:"kept,omitempty"`
 }
 
@@ -69,7 +55,6 @@ type StatusResult struct {
 	State        string              `json:"state"`
 	Users        int                 `json:"users"`
 	Secrets      int                 `json:"secrets"`
-	Spaces       int                 `json:"spaces"`
 	Missing      int                 `json:"missing"`
 	Kept         []string            `json:"kept,omitempty"`
 	ExchangeKeys []ExchangeKeyResult `json:"exchange_keys,omitempty"`
@@ -79,20 +64,13 @@ func New(gateway gatewayclient.Invoker) *Client {
 	return &Client{gateway: gateway}
 }
 
-// Apply 把秘密文件里的初始秘密（管理员、腾讯云密钥、交易所密钥）写进管理台，规则都是只建不改。
+// Apply 把秘密文件里的初始秘密（腾讯云密钥、交易所密钥）写进管理台，规则都是只建不改；
+// 管理员由部署控制机时建，这里只核对。
 func (c *Client) Apply(ctx context.Context, secrets *topology.Secrets) (ApplyResult, error) {
-	return c.ApplyWithSpaces(ctx, secrets, nil)
-}
-
-func (c *Client) ApplyWithSpaces(
-	ctx context.Context,
-	secrets *topology.Secrets,
-	spaces []Space,
-) (ApplyResult, error) {
 	if secrets == nil || c.gateway == nil {
 		return ApplyResult{}, fmt.Errorf("setup_client_invalid")
 	}
-	request := applyRequest(secrets, spaces)
+	request := applyRequest(secrets)
 	response := &pb.ApplySetupRsp{}
 	if err := c.forwardedPost(ctx, "ApplySetup", request, response); err != nil {
 		return ApplyResult{}, err
@@ -105,26 +83,16 @@ func (c *Client) ApplyWithSpaces(
 	}
 	return ApplyResult{
 		Action: response.GetAction(), Users: int(response.GetUsers()),
-		Secrets: int(response.GetSecrets()),
-		Spaces:  int(response.GetSpaces()), SpacesCreated: int(response.GetSpacesCreated()),
-		SpacesUnchanged: int(response.GetSpacesUnchanged()), Kept: response.GetKept(),
+		Secrets: int(response.GetSecrets()), Kept: response.GetKept(),
 		ExchangeKeys: exchangeKeyResults(response.GetExchangeKeys()),
 	}, nil
 }
 
 func (c *Client) Status(ctx context.Context, secrets *topology.Secrets) (StatusResult, error) {
-	return c.StatusWithSpaces(ctx, secrets, nil)
-}
-
-func (c *Client) StatusWithSpaces(
-	ctx context.Context,
-	secrets *topology.Secrets,
-	spaces []Space,
-) (StatusResult, error) {
 	if secrets == nil || c.gateway == nil {
 		return StatusResult{}, fmt.Errorf("setup_client_invalid")
 	}
-	request := statusRequest(secrets, spaces)
+	request := statusRequest(secrets)
 	response := &pb.GetSetupStatusRsp{}
 	if err := c.forwardedPost(ctx, "GetSetupStatus", request, response); err != nil {
 		return StatusResult{}, err
@@ -137,7 +105,6 @@ func (c *Client) StatusWithSpaces(
 	}
 	return StatusResult{
 		State: response.GetState(), Users: int(response.GetUsers()), Secrets: int(response.GetSecrets()),
-		Spaces:  int(response.GetSpaces()),
 		Missing: int(response.GetMissing()), Kept: response.GetKept(),
 		ExchangeKeys: exchangeKeyResults(response.GetExchangeKeys()),
 	}, nil
@@ -167,28 +134,25 @@ func checkRetInfo(retInfo *pb.RetInfo) error {
 	if retInfo.GetCode() == pb.ErrorCode_SUCCESS {
 		return nil
 	}
-	switch strings.TrimSpace(retInfo.GetMsg()) {
-	case "setup_invalid", "setup_storage_failed":
-		return fmt.Errorf("%s", retInfo.GetMsg())
-	default:
-		return fmt.Errorf("setup_remote_failed")
+	message := strings.TrimSpace(retInfo.GetMsg())
+	if message == "setup_invalid" || message == "setup_storage_failed" || strings.HasPrefix(message, "setup_admin_missing") {
+		return fmt.Errorf("%s", message)
 	}
+	return fmt.Errorf("setup_remote_failed")
 }
 
-func applyRequest(manifest *topology.Secrets, spaces []Space) *pb.ApplySetupReq {
+func applyRequest(manifest *topology.Secrets) *pb.ApplySetupReq {
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		Spaces:       spacesToPB(spaces),
 		ExchangeKeys: exchangeKeysToPB(manifest.ExchangeKeys),
 	}
 }
 
-func statusRequest(manifest *topology.Secrets, spaces []Space) *pb.GetSetupStatusReq {
+func statusRequest(manifest *topology.Secrets) *pb.GetSetupStatusReq {
 	return &pb.GetSetupStatusReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		Spaces:       spacesToPB(spaces),
 		ExchangeKeys: exchangeKeysToPB(manifest.ExchangeKeys),
 	}
 }
@@ -221,16 +185,4 @@ func exchangeKeyResults(items []*pb.SetupExchangeKeyResult) []ExchangeKeyResult 
 		})
 	}
 	return results
-}
-
-func spacesToPB(spaces []Space) []*pb.SetupSpace {
-	result := make([]*pb.SetupSpace, 0, len(spaces))
-	for _, space := range spaces {
-		result = append(result, &pb.SetupSpace{
-			SpaceId: space.SpaceID, Name: space.Name, Description: space.Description,
-			Owner: space.Owner, Market: space.Market, Timezone: space.Timezone,
-			Status: space.Status, AttributesJson: space.AttributesJSON,
-		})
-	}
-	return result
 }

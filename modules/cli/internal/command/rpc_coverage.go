@@ -6,17 +6,14 @@ const (
 	sshReason               = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
 	authReason              = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
 	cloudAccountWriteReason = "云账号的新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里“函数”区的“云账号”对话框做（初始账号由 setup init 登记）；密钥本身在“系统设置 › 密钥管理”"
-	spaceDupReason          = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
 )
 
 // handWrittenCoverage 记录不是规格表生成、而是手写实现的命令各自覆盖了管理台的哪些接口（接口 → 命令路径）。
 var handWrittenCoverage = map[string]string{
 	"trpc.moox.admin.ActivityLog/ListActivityLogs": "activity list",
 
-	"trpc.moox.admin.Setup/ApplySetup":      "setup init",
-	"trpc.moox.admin.Setup/GetSetupStatus":  "setup status",
-	"trpc.moox.admin.Setup/PutConfigBackup": "config backup",
-	"trpc.moox.admin.Setup/GetConfigBackup": "config restore",
+	"trpc.moox.admin.Setup/ApplySetup":     "setup init",
+	"trpc.moox.admin.Setup/GetSetupStatus": "setup status",
 
 	"trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance": "strategy instance delete",
 
@@ -126,11 +123,6 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.SecretMgr/ToggleSecretStatus": secretWriteReason,
 	"trpc.moox.ops.SecretMgr/ExportSecrets":      "密钥整包导出带口令，moox-cli 无权调用，由用户在管理台操作",
 	"trpc.moox.ops.SecretMgr/ImportSecrets":      "密钥整包导入带口令，moox-cli 无权调用，由用户在管理台操作",
-
-	"trpc.moox.storage.Metadata/CreateSpace": spaceDupReason,
-	"trpc.moox.storage.Metadata/UpdateSpace": spaceDupReason,
-	"trpc.moox.storage.Metadata/DeleteSpace": spaceDupReason,
-	"trpc.moox.storage.Metadata/ListSpaces":  spaceDupReason,
 
 	"trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer": walletTransferReason,
 	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":     "解除下架禁止请用户在管理台“交易管理 › 下架名单”里查看与解除（事件中心取消执行也会解除）：解除后策略会恢复买入，Agent 不代用户解除",

@@ -25,6 +25,7 @@ let storageReadGeneration = 0;
 // Only idempotent metadata/data reads are cached. Mutation responses invalidate
 // the short cache so a newly created View or Dataset is visible immediately.
 const storageReadMethods = new Set([
+  "ListSpaces",
   "ListDataSources",
   "ListSubjects",
   "ListTags",

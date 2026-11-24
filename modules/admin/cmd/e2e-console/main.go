@@ -59,7 +59,7 @@ func main() {
 	caFile := flag.String("ca-file", "", "internal CA 证书 PEM；默认使用系统信任库并校验主机名")
 	insecure := flag.Bool("insecure-skip-verify", false, "仅限一次性联调：跳过证书校验（密码经环境变量传入，不要在不可信网络使用）")
 	user := flag.String("user", "admin123", "用户名")
-	createSpaces := flag.Bool("create-spaces", false, "先通过 Console 创建默认业务空间（走管理员授权与 Admin 本地分派）")
+	createSpaces := flag.Bool("create-spaces", false, "先通过 Console 在 Storage 创建默认业务空间")
 	flag.Parse()
 	password := os.Getenv("E2E_PASSWORD")
 	if *base == "" || password == "" {
@@ -86,14 +86,14 @@ func main() {
 	fmt.Println("登录成功: 已获得会话 Cookie")
 	createFailed := 0
 	if *createSpaces {
-		for _, sp := range []struct{ id, name, owner, market, tz, attrs string }{
-			{"stockcn", "A股市场", "quant", "CN", "Asia/Shanghai", ""},
-			{"stockhk", "港股市场", "quant", "HK", "Asia/Hong_Kong", ""},
-			{"stockus", "美股市场", "quant", "US", "America/New_York", ""},
-			{"crypto", "加密货币市场", "quant", "crypto", "UTC", ""},
+		for _, sp := range []struct{ id, name, owner, market, tz string }{
+			{"stockcn", "A股市场", "quant", "CN", "Asia/Shanghai"},
+			{"stockhk", "港股市场", "quant", "HK", "Asia/Hong_Kong"},
+			{"stockus", "美股市场", "quant", "US", "America/New_York"},
+			{"crypto", "加密货币市场", "quant", "crypto", "UTC"},
 		} {
-			body, _ := json.Marshal(map[string]any{"space": map[string]any{"space_id": sp.id, "name": sp.name, "owner": sp.owner, "market": sp.market, "timezone": sp.tz, "status": "active", "attributes": sp.attrs}})
-			code, raw := c.call("/api/admin/space/CreateSpace", "", string(body))
+			body, _ := json.Marshal(map[string]any{"space": map[string]any{"space_id": sp.id, "name": sp.name, "owner": sp.owner, "market": sp.market, "timezone": sp.tz, "status": "active", "attributes": map[string]string{}}})
+			code, raw := c.call("/api/admin/storage/CreateSpace", "", string(body))
 			// 已存在视为成功（重复执行）；其余失败计入验收结果。
 			ok := businessOK(code, raw) || strings.Contains(raw, "UNIQUE") || strings.Contains(raw, "already exists") || strings.Contains(raw, "已存在")
 			if !ok {
@@ -104,7 +104,7 @@ func main() {
 	}
 	tests := []struct{ name, path, space, body string }{
 		{"auth/GetUserInfo", "/api/admin/auth/GetUserInfo", "", `{}`},
-		{"space/ListSpaces", "/api/admin/space/ListSpaces", "", `{"page":{"page":1,"size":20}}`},
+		{"storage/ListSpaces", "/api/admin/storage/ListSpaces", "", `{"page":{"page":1,"size":20}}`},
 		{"sysdeploy/ListDeployments", "/api/admin/sysdeploy/ListDeployments", "", `{"page":{"page":1,"size":100}}`},
 		{"sysdeploy/ListHosts", "/api/admin/sysdeploy/ListHosts", "", `{"page":{"page":1,"size":20}}`},
 		{"storage/ListDatasets(crypto)", "/api/admin/storage/ListDatasets", "crypto", `{"space_id":"crypto","page":{"page":1,"size":5}}`},

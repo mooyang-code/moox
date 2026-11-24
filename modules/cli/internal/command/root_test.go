@@ -93,9 +93,9 @@ func TestApplyProbeResultForSpace(t *testing.T) {
 }
 
 func TestVerifyMetadataResource(t *testing.T) {
-	space := &pb.Space{SpaceId: "crypto", Name: "Crypto", Status: "active"}
-	require.NoError(t, verifyMetadataResource("spaces", &pb.CreateSpaceReq{Space: space}, space))
-	err := verifyMetadataResource("spaces", &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: "crypto", Name: "X", Status: "active"}}, space)
+	source := &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active"}
+	require.NoError(t, verifyMetadataResource("data_sources", &pb.CreateDataSourceReq{DataSource: source}, source))
+	err := verifyMetadataResource("data_sources", &pb.CreateDataSourceReq{DataSource: &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "X", Status: "active"}}, source)
 	require.Error(t, err)
 }
 

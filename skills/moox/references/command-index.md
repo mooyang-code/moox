@@ -334,15 +334,15 @@
 | `setup validate` | 校验两份配置和连接，检测每台主机上各组件是否已部署，给出可选的部署方式（modes）和接下来要运行的命令（next_steps） |
 | `setup wipe` | 卸载：彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复） |
 
-## space：空间：一组相互隔离的业务数据（调用 SpaceMgr）
+## space：空间：一组相互隔离的业务数据（只登记在 Storage）
 
 | 命令 | 说明 |
 | --- | --- |
-| `space create` | 新建空间（还要在 Storage 建元数据：数据来源、数据集、字段，见 metadata apply） |
-| `space delete` | 删除空间（默认只预览，--yes 才执行） |
+| `space create` | 新建空间（建好即可建数据来源、数据集等元数据，见 metadata apply） |
+| `space delete` | 删除空间：会清空该空间全部数据（数据集、View 与全部行情、因子数据），不能恢复；采集任务、交易、策略里按该空间存的记录不跟着删（默认只预览，--yes 才执行） |
 | `space list` | 列出空间 |
-| `space show` | 查看 Storage 里一个空间的元数据 |
-| `space update` | 修改空间 |
+| `space show` | 查看一个空间 |
+| `space update` | 修改空间（停用后 Collector 不再采它） |
 
 ## storage：View 维护
 

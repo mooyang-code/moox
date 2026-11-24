@@ -157,18 +157,6 @@ components:
             operators: [console]
           - name: SftpDelete
             operators: [console]
-      - path: trpc.moox.admin.SpaceMgr
-        port: 11107
-        console_name: space
-        timeout_ms: 5000
-        max_body_bytes: 4194304
-        methods:
-          - name: CreateSpace
-          - name: UpdateSpace
-          - name: DeleteSpace
-          - name: ListSpaces
-            read_only: true
-            callers: [collector]
       - path: trpc.moox.ops.SecretMgr
         port: 11108
         console_name: secret
@@ -240,11 +228,6 @@ components:
           - name: ApplySetup
           - name: GetSetupStatus
             read_only: true
-          - name: PutConfigBackup
-            operators: [console]
-          - name: GetConfigBackup
-            read_only: true
-            operators: [console]
       - path: trpc.moox.admin.ActivityLog
         port: 11113
         console_name: activity

@@ -2,7 +2,6 @@ package activitylog
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	spaceSvc "github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/admin/schema"
 	"github.com/stretchr/testify/require"
@@ -18,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-go"
 )
 
-func newTestService(t *testing.T, authorizer spaceSvc.Service) (*Service, *time.Time) {
+func newTestService(t *testing.T) (*Service, *time.Time) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "admin.db")), &gorm.Config{})
 	require.NoError(t, err)
@@ -28,7 +26,7 @@ func newTestService(t *testing.T, authorizer spaceSvc.Service) (*Service, *time.
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	now := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	service := NewService(db, authorizer)
+	service := NewService(db)
 	service.now = func() time.Time { return now }
 	return service, &now
 }
@@ -38,7 +36,7 @@ func entry(space, category, title, dedup string) *pb.ActivityLogEntry {
 }
 
 func TestAppendIsIdempotentByDedupKey(t *testing.T) {
-	service, _ := newTestService(t, nil)
+	service, _ := newTestService(t)
 	ctx := context.Background()
 	first, err := service.AppendActivityLogs(ctx, &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("crypto", "collector.subject_change", "新增 1 个标的", "k1"), entry("crypto", "collector.fetch_plan_applied", "已生效", "k2")}})
 	require.NoError(t, err)
@@ -61,7 +59,7 @@ func TestAppendIsIdempotentByDedupKey(t *testing.T) {
 }
 
 func TestAppendValidatesEntries(t *testing.T) {
-	service, _ := newTestService(t, nil)
+	service, _ := newTestService(t)
 	for name, bad := range map[string]*pb.ActivityLogEntry{
 		"missing title":  {Source: "collector", Category: "c"},
 		"bad level":      {Source: "collector", Category: "c", Title: "t", Level: "fatal"},
@@ -77,7 +75,7 @@ func TestAppendValidatesEntries(t *testing.T) {
 }
 
 func TestListFiltersAndPaginatesNewestFirst(t *testing.T) {
-	service, now := newTestService(t, nil)
+	service, now := newTestService(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		*now = now.Add(time.Hour)
@@ -117,20 +115,8 @@ func TestListFiltersAndPaginatesNewestFirst(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 }
 
-type spaceAuthorizer struct {
-	spaceSvc.Service
-	allowed map[string]bool
-}
-
-func (a spaceAuthorizer) AuthorizeSpaceRequest(_ context.Context, spaceID string) error {
-	if !a.allowed[spaceID] {
-		return errors.New("space unavailable")
-	}
-	return nil
-}
-
-func TestBrowserCallersNeedAvailableSpaceOrGlobalAndCannotWrite(t *testing.T) {
-	service, _ := newTestService(t, spaceAuthorizer{allowed: map[string]bool{"crypto": true}})
+func TestBrowserCallersNeedSpaceOrGlobalAndCannotWrite(t *testing.T) {
+	service, _ := newTestService(t)
 	_, err := service.AppendActivityLogs(context.Background(), &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{
 		entry("crypto", "c", "t", ""), entry("stockcn", "c", "t2", ""), entry("", "auth.login", "login", ""),
 	}})
@@ -146,9 +132,6 @@ func TestBrowserCallersNeedAvailableSpaceOrGlobalAndCannotWrite(t *testing.T) {
 	noSpace, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, noSpace.GetRetInfo().GetCode())
-	other, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{SpaceId: "stockcn"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_NO_PERMISSION, other.GetRetInfo().GetCode())
 	own, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, own.GetRetInfo().GetCode())
