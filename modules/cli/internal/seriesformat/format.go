@@ -1,14 +1,14 @@
-// Package seriesformat 把各种格式的历史时序数据文件解析成列式的批（设计 7.2）：统一的 Decoder 接口按格式名注册，
-// csv 是第一个实现，以后加 parquet、jsonl、交易所历史数据包只是多注册一个实现；
-// 校验层（Checker）与格式无关：字段齐全、时间按 UTC 解析、按频率对齐、按序列连续。
+// Package seriesformat 把历史时序数据的 CSV 文件（.csv 或 .csv.gz）解析成列式的批（OpenCSV），
+// 并做通用校验（Checker）：字段齐全、时间按 UTC 解析、按频率对齐、按序列（标的、series_tag）连续。
 package seriesformat
 
 import (
+	"bufio"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
-	"sync"
+	"strings"
 	"time"
 )
 
@@ -39,11 +39,13 @@ type Column struct {
 	S    []string  // string、time、json、bytes
 }
 
-// Batch 是列式的一批行：Cols 与 Schema.Fields 一一对应。
+// Batch 是列式的一批行：Cols 与 Options.Fields 一一对应。Subjects 只在多标的文件（带 subject_id 列）里有值，
+// 是每行的标的；单标的文件为 nil，标的取文件名或 --subject。
 type Batch struct {
-	Times []time.Time // UTC
-	Tags  []string
-	Cols  []Column
+	Times    []time.Time // UTC
+	Tags     []string
+	Subjects []string
+	Cols     []Column
 }
 
 // Len 返回批里的行数。
@@ -62,6 +64,10 @@ type Options struct {
 	TimeColumn string
 	// SeriesTag 非空时给所有行统一指定 series_tag（文件里不能再有 series_tag 列）。
 	SeriesTag string
+	// SubjectColumn 为真时表头的 subject_id 列被认作标的列（多标的文件，只写归档时允许）；为假时文件不能有 subject_id 列。
+	SubjectColumn bool
+	// RequireSeriesTag 为真时每行的 series_tag 必须非空（写归档时：漏写 tag 会在归档里多出一条空 tag 序列）。
+	RequireSeriesTag bool
 }
 
 // TimeColumnName 返回时间列名。
@@ -79,54 +85,32 @@ type BatchReader interface {
 	Close() error
 }
 
-// Decoder 是一种文件格式的解析器。
-type Decoder interface {
-	// Format 是格式名（小写），例如 csv。
-	Format() string
-	// Open 读取 r，先校验表头 / 元数据，再按批产出行。
-	Open(r io.Reader, opts Options) (BatchReader, error)
-}
-
-var (
-	mu       sync.RWMutex
-	registry = map[string]Decoder{}
-)
-
-// Register 注册一个格式解析器；格式名重复会 panic（注册发生在包初始化里）。
-func Register(d Decoder) {
-	mu.Lock()
-	defer mu.Unlock()
-	name := d.Format()
-	if _, dup := registry[name]; dup {
-		panic(fmt.Sprintf("seriesformat: 格式 %q 重复注册", name))
+// DataFileName 报告文件名是不是可导入的数据文件（.csv 或 .csv.gz，不区分大小写），并返回去掉扩展名的部分（单标的文件的标的 ID）。
+func DataFileName(name string) (base string, ok bool) {
+	lower := strings.ToLower(name)
+	for _, ext := range []string{".csv.gz", ".csv"} {
+		if strings.HasSuffix(lower, ext) {
+			return name[:len(name)-len(ext)], true
+		}
 	}
-	registry[name] = d
+	return name, false
 }
 
-// Lookup 按格式名取得解析器。
-func Lookup(format string) (Decoder, error) {
-	mu.RLock()
-	defer mu.RUnlock()
-	if d, ok := registry[format]; ok {
-		return d, nil
+// Decompress 按内容的魔数判断是否 gzip 压缩，是就套上解压（.csv.gz 与 .csv 走同一个入口）。
+func Decompress(r io.Reader) (io.Reader, error) {
+	buffered := bufio.NewReader(r)
+	magic, err := buffered.Peek(2)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
 	}
-	return nil, fmt.Errorf("不支持的数据格式 %q（已支持：%v）", format, formatsLocked())
-}
-
-// Formats 返回已注册的格式名。
-func Formats() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	return formatsLocked()
-}
-
-func formatsLocked() []string {
-	out := make([]string, 0, len(registry))
-	for name := range registry {
-		out = append(out, name)
+	if len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		gz, err := gzip.NewReader(buffered)
+		if err != nil {
+			return nil, fmt.Errorf("解压 gzip：%w", err)
+		}
+		return gz, nil
 	}
-	sort.Strings(out)
-	return out
+	return buffered, nil
 }
 
 // ErrMissingFields 表示文件缺少数据集的字段。
@@ -148,7 +132,7 @@ func NewBatch(fields []Field, capacity int) *Batch {
 	return &Batch{Times: make([]time.Time, 0, capacity), Tags: make([]string, 0, capacity), Cols: make([]Column, len(fields))}
 }
 
-// appendRow 追加一行的时间与标签；各列的值由调用方随后追加。
+// appendRow 追加一行的时间与标签（多标的文件另追加标的）；各列的值由调用方随后追加。
 func (b *Batch) appendRow(at time.Time, tag string) {
 	b.Times = append(b.Times, at)
 	b.Tags = append(b.Tags, tag)

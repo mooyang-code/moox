@@ -64,7 +64,8 @@
             {
               "port": 11428,
               "callers": [
-                "console"
+                "console",
+                "moox-cli"
               ]
             }
           ]
@@ -86,14 +87,12 @@
         {"service":"trpc.moox.archive.ArchiveMgr","method":"GetArchivePartition","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","monitor","moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"GetArchiveRun","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","monitor","moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"GetLifecycle","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","moox-cli"]},
-        {"service":"trpc.moox.archive.ArchiveMgr","method":"ImportArchiveFile","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"ListArchivePartitions","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","monitor","moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"ListArchiveRuns","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","monitor","moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"ListArchiveTasks","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","monitor","moox-cli","strategy"]},
-        {"service":"trpc.moox.archive.ArchiveMgr","method":"PrepareArchiveImport","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"PrepareArchiveTask","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","monitor","moox-cli"]},
-        {"service":"trpc.moox.archive.ArchiveMgr","method":"PreviewArchiveSchedule","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":true,"callers":["console","monitor","moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"RunArchiveTaskNow","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":false,"callers":["console","moox-cli"]},
+        {"service":"trpc.moox.archive.ArchiveMgr","method":"StartArchiveImport","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveMgr","method":"UpdateArchiveTask","component":"archive-mgr","port":11406,"max_body_bytes":4194304,"timeout_ms":30000,"read_only":false,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.archive.ArchiveWorker","method":"ArchiveWorkerHeartbeat","component":"archive-mgr","port":11408,"max_body_bytes":4194304,"timeout_ms":60000,"read_only":false,"callers":["archive-worker"]},
         {"service":"trpc.moox.archive.ArchiveWorker","method":"CompleteArchiveRun","component":"archive-mgr","port":11408,"max_body_bytes":4194304,"timeout_ms":60000,"read_only":false,"callers":["archive-worker"]},

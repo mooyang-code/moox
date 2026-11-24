@@ -10,7 +10,7 @@ import (
 )
 
 func stockRequest(paths ...string) Request {
-	return Request{Space: "stockcn", Dataset: "bars", Freq: "5m", Paths: paths, Format: "csv", Step: 5 * time.Minute, BatchRows: 100}
+	return Request{Space: "stockcn", Dataset: "bars", Freq: "5m", Paths: paths, Step: 5 * time.Minute, BatchRows: 100}
 }
 
 // A 股按交易时段判断相邻：跨午休、跨周末不算缺期；交易时段内真正缺的 K 线才算缺；休市时刻的行直接拒绝。

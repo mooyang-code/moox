@@ -395,14 +395,14 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	// ArchiveMgr 19 个（含生命周期两个）、ArchiveWorker 4 个。
-	if len(routes) != 19+4 {
-		t.Fatalf("archive-mgr routes = %d, want 23", len(routes))
+	// ArchiveMgr 17 个（含生命周期两个）、ArchiveWorker 4 个。
+	if len(routes) != 17+4 {
+		t.Fatalf("archive-mgr routes = %d, want 21", len(routes))
 	}
 	if route := routes["trpc.moox.archive.ArchiveMgr/GetLifecycle"]; !slices.Equal(route.Callers, []string{"console", "moox-cli"}) || !route.ReadOnly {
 		t.Fatalf("GetLifecycle 给管理台与 moox-cli 读: %+v", route)
 	}
-	for _, method := range []string{"PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable", "ControlLifecycle"} {
+	for _, method := range []string{"StartArchiveImport", "ClearArchiveUnrecoverable", "ControlLifecycle"} {
 		if route := routes["trpc.moox.archive.ArchiveMgr/"+method]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
 			t.Fatalf("%s 只给 moox-cli: %+v", method, route)
 		}
@@ -512,11 +512,11 @@ func TestOutboundFactorHostDoesNotRelayHealthPorts(t *testing.T) {
 	if relay.Allowed("moox-cli", 22) || relay.Allowed("monitor", 22) {
 		t.Fatal("ssh port must not be relayed")
 	}
-	// 归档 worker 的数据端口只对控制台开放。
-	if !relay.Allowed("console", 11428) || relay.Allowed("monitor", 11428) || relay.Allowed("moox-cli", 11428) || relay.Allowed("console", 11418) {
+	// 归档 worker 的数据端口只对控制台（下载与预览）与 moox-cli（导入写入）开放。
+	if !relay.Allowed("console", 11428) || !relay.Allowed("moox-cli", 11428) || relay.Allowed("monitor", 11428) || relay.Allowed("console", 11418) {
 		t.Fatalf("archive data port relay is wrong: %+v", relay.Ports)
 	}
-	if callers, ok := c.RelayHTTPCallers(11428); !ok || !slices.Equal(callers, []string{"console"}) || !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(HostGatewayRemotePort) {
+	if callers, ok := c.RelayHTTPCallers(11428); !ok || !slices.Equal(callers, []string{"console", "moox-cli"}) || !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(HostGatewayRemotePort) {
 		t.Fatalf("relay_http port declaration is wrong: %v", callers)
 	}
 	for i := 1; i < len(relay.Ports); i++ {

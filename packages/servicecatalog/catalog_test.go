@@ -495,9 +495,9 @@ func TestExternalProgramComponents(t *testing.T) {
 	if worker, _ := c.Component("archive-worker"); len(worker.Services) != 0 {
 		t.Fatalf("archive-worker services = %+v", worker.Services)
 	}
-	// 归档 worker 的数据端口只给控制台，计入它占用的端口。
+	// 归档 worker 的数据端口给控制台与 moox-cli（导入写入），计入它占用的端口。
 	worker, _ := c.Component("archive-worker")
-	if worker.RelayHTTP == nil || worker.RelayHTTP.Port != 11428 || !slices.Equal(worker.RelayHTTP.Callers, []string{"console"}) {
+	if worker.RelayHTTP == nil || worker.RelayHTTP.Port != 11428 || !slices.Equal(worker.RelayHTTP.Callers, []string{"console", "moox-cli"}) {
 		t.Fatalf("archive-worker relay_http = %+v", worker.RelayHTTP)
 	}
 	if !slices.Contains(componentPorts(worker), 11428) || !slices.Contains(componentPorts(worker), 11418) {
@@ -561,8 +561,7 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	c := mustCatalog(t)
 	for _, tc := range []struct{ path, method string }{
 		{"trpc.moox.ops.SysDeploy", "SyncTopology"},
-		{"trpc.moox.archive.ArchiveMgr", "PrepareArchiveImport"},
-		{"trpc.moox.archive.ArchiveMgr", "ImportArchiveFile"},
+		{"trpc.moox.archive.ArchiveMgr", "StartArchiveImport"},
 		{"trpc.moox.archive.ArchiveMgr", "ClearArchiveUnrecoverable"},
 	} {
 		if c.Allowed("console", tc.path, tc.method) {

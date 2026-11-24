@@ -50,7 +50,7 @@ func (a *sessionAxis) fromAxis(x time.Time) time.Time {
 
 // batch 返回行时间换到轴上的批（只供检查器使用，不改原批）。
 func (a *sessionAxis) batch(b *seriesformat.Batch) (*seriesformat.Batch, error) {
-	out := &seriesformat.Batch{Times: make([]time.Time, len(b.Times)), Tags: b.Tags, Cols: b.Cols}
+	out := &seriesformat.Batch{Times: make([]time.Time, len(b.Times)), Tags: b.Tags, Subjects: b.Subjects, Cols: b.Cols}
 	for i, t := range b.Times {
 		x, err := a.toAxis(t)
 		if err != nil {

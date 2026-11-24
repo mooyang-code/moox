@@ -1,6 +1,8 @@
 package seriesformat
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"io"
 	"strings"
@@ -20,9 +22,7 @@ var fields = []Field{
 
 func open(t *testing.T, text string, opts Options) BatchReader {
 	t.Helper()
-	d, err := Lookup("csv")
-	require.NoError(t, err)
-	r, err := d.Open(strings.NewReader(text), opts)
+	r, err := OpenCSV(strings.NewReader(text), opts)
 	require.NoError(t, err)
 	return r
 }
@@ -65,24 +65,23 @@ func TestCSVBatchingAndTimeColumnName(t *testing.T) {
 }
 
 func TestCSVRequiresAllFieldsAndRejectsUnknownColumns(t *testing.T) {
-	d, _ := Lookup("csv")
-	_, err := d.Open(strings.NewReader("data_time,close\n2026-10-01,1\n"), Options{Fields: fields})
+	_, err := OpenCSV(strings.NewReader("data_time,close\n2026-10-01,1\n"), Options{Fields: fields})
 	var missing *ErrMissingFields
 	require.True(t, errors.As(err, &missing))
 	require.Equal(t, []string{"closed", "note", "trades", "ts"}, missing.Fields)
 
-	_, err = d.Open(strings.NewReader("data_time,close,extra\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}})
+	_, err = OpenCSV(strings.NewReader("data_time,close,extra\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}})
 	var unknown *ErrUnknownColumns
 	require.True(t, errors.As(err, &unknown))
 	require.Equal(t, []string{"extra"}, unknown.Columns)
 
-	_, err = d.Open(strings.NewReader("close\n1\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}})
+	_, err = OpenCSV(strings.NewReader("close\n1\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}})
 	require.ErrorContains(t, err, "缺少时间列")
-	_, err = d.Open(strings.NewReader("data_time,close,series_tag\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}, SeriesTag: "x"})
+	_, err = OpenCSV(strings.NewReader("data_time,close,series_tag\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}, SeriesTag: "x"})
 	require.ErrorContains(t, err, "不能再有 series_tag 列")
-	_, err = d.Open(strings.NewReader(""), Options{})
+	_, err = OpenCSV(strings.NewReader(""), Options{})
 	require.ErrorContains(t, err, "空的")
-	_, err = d.Open(strings.NewReader("data_time,close,close\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}})
+	_, err = OpenCSV(strings.NewReader("data_time,close,close\n"), Options{Fields: []Field{{Name: "close", Type: TypeDouble}}})
 	require.ErrorContains(t, err, "重复")
 }
 
@@ -163,9 +162,64 @@ func TestCheckerValidatesAlignmentOrderAndCountsGaps(t *testing.T) {
 	require.Len(t, limited.Finish().Missing, 2)
 }
 
-func TestRegistry(t *testing.T) {
-	require.Equal(t, []string{"csv"}, Formats())
-	_, err := Lookup("parquet")
-	require.ErrorContains(t, err, "不支持的数据格式")
-	require.Panics(t, func() { Register(csvDecoder{}) })
+func TestOpenCSVDecompressesGzipByMagic(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, _ = gz.Write([]byte("data_time,close\n2026-10-01,1\n"))
+	require.NoError(t, gz.Close())
+	r, err := OpenCSV(&buf, Options{Fields: []Field{{Name: "close", Type: TypeDouble}}})
+	require.NoError(t, err)
+	batch, err := r.Next(10)
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, []float64{1}, batch.Cols[0].F)
+}
+
+func TestDataFileName(t *testing.T) {
+	for in, want := range map[string]string{"BTCUSDT.csv": "BTCUSDT", "BTCUSDT.csv.gz": "BTCUSDT", "ETH.CSV.GZ": "ETH"} {
+		got, ok := DataFileName(in)
+		require.True(t, ok, in)
+		require.Equal(t, want, got, in)
+	}
+	_, ok := DataFileName("a.txt")
+	require.False(t, ok)
+	_, ok = DataFileName("a.gz")
+	require.False(t, ok)
+}
+
+func TestSubjectColumn(t *testing.T) {
+	close := []Field{{Name: "close", Type: TypeDouble}}
+	_, err := OpenCSV(strings.NewReader("data_time,subject_id,close\n"), Options{Fields: close, SeriesTag: "x"})
+	require.ErrorContains(t, err, "多标的文件只能只写归档")
+
+	r := open(t, "data_time,subject_id,close\n2026-10-01,A,1\n2026-10-01,B,2\n", Options{Fields: close, SeriesTag: "x", SubjectColumn: true})
+	batch, err := r.Next(10)
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, []string{"A", "B"}, batch.Subjects)
+
+	_, err = open(t, "data_time,subject_id,close\n2026-10-01, ,1\n", Options{Fields: close, SeriesTag: "x", SubjectColumn: true}).Next(10)
+	require.ErrorContains(t, err, "subject_id 为空")
+
+	// 单标的文件不带 Subjects。
+	batch, _ = open(t, "data_time,close\n2026-10-01,1\n", Options{Fields: close, SubjectColumn: true}).Next(10)
+	require.Nil(t, batch.Subjects)
+}
+
+func TestRequireSeriesTag(t *testing.T) {
+	close := []Field{{Name: "close", Type: TypeDouble}}
+	_, err := OpenCSV(strings.NewReader("data_time,close\n"), Options{Fields: close, RequireSeriesTag: true})
+	require.ErrorContains(t, err, "series_tag 必须非空")
+	_, err = OpenCSV(strings.NewReader("data_time,close\n"), Options{Fields: close, RequireSeriesTag: true, SeriesTag: "spot"})
+	require.NoError(t, err)
+	_, err = open(t, "data_time,close,series_tag\n2026-10-01,1,spot\n2026-10-02,1,\n", Options{Fields: close, RequireSeriesTag: true}).Next(10)
+	require.ErrorContains(t, err, "第 3 行的 series_tag 为空")
+}
+
+func TestCheckerKeysBySubjectAndTag(t *testing.T) {
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	multi := &Batch{Times: []time.Time{at, at, at.Add(time.Minute)}, Tags: []string{"s", "s", "s"}, Subjects: []string{"A", "B", "A"}}
+	c := NewChecker(time.Minute)
+	require.NoError(t, c.Check(multi), "同一时刻不同标的不算重复")
+	require.Equal(t, []string{"A", "B"}, c.Finish().Subjects)
+	dup := &Batch{Times: []time.Time{at, at}, Tags: []string{"s", "s"}, Subjects: []string{"A", "A"}}
+	require.ErrorContains(t, NewChecker(time.Minute).Check(dup), "标的 A 的序列")
 }

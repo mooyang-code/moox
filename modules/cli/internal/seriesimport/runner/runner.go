@@ -1,5 +1,5 @@
-// Package runner 是导入服务的编排层（设计第 7 节）：展开文件、按格式解析、做通用校验（字段齐全、UTC、按频率对齐、
-// 连续性）、按时间边界分批、写到一个或多个写入目标，并记录断点。写入目标（Storage、因子本地存储）由调用方提供。
+// Package runner 是导入服务的编排层（设计第 7 节）：展开文件、解析 CSV、做通用校验（字段齐全、UTC、按频率对齐、
+// 连续性）、按时间边界分批、写到一个或多个写入目标，并记录断点。写入目标（Storage、因子本地存储、归档）由调用方提供。
 package runner
 
 import (
@@ -19,6 +19,7 @@ import (
 )
 
 // Chunk 是写给目标的一批行：Batch 的时间落在 [From, To) 内，按时间升序，同一个时间点的所有序列都在同一批里。
+// 多标的文件（只写归档）的 Subject 为空，每行的标的在 Batch.Subjects。
 type Chunk struct {
 	Space, Dataset, Freq, Subject string
 	From, To                      time.Time
@@ -42,7 +43,12 @@ type TailTarget interface {
 	TailOnly() bool
 }
 
-// Finisher 是可选的目标能力：所有文件写完之后调用一次（例如 Storage 目标等 View 跟上写入）。
+// ForwardTarget 是可选的目标能力：返回 true 表示这个目标总是按时间正序写（倒序只为因子机本地连续，归档不需要）。
+type ForwardTarget interface {
+	ForwardOnly() bool
+}
+
+// Finisher 是可选的目标能力：所有文件写完之后调用一次（例如 Storage 目标等 View 跟上写入、归档目标通知 worker 导出）。
 type Finisher interface {
 	Finish(ctx context.Context) error
 }
@@ -57,8 +63,12 @@ type Checkpoints interface {
 type Meta struct {
 	// Fields 是数据集的全部字段（不含时间列与 series_tag）。
 	Fields []seriesformat.Field
-	// SubjectInScope 判断标的是否在数据集的标签范围内；nil 表示不检查。
+	// SubjectInScope 判断标的是否在数据集的标签范围内；nil 表示不检查。ScopeWarnOnly 为真时不在范围内的标的
+	// 只列进摘要、不拒绝（只写归档：已下架、已移出标签的标的仍要能补进归档）。
 	SubjectInScope func(ctx context.Context, subject string) (bool, error)
+	ScopeWarnOnly  bool
+	// BeforeWrite 在第一遍校验通过之后、写入（或 --dry-run 返回）之前调用，拿到全部文件的摘要（例如按行数估算归档磁盘）；nil 表示不检查。
+	BeforeWrite func(ctx context.Context, summary Summary) error
 	// LocalBounds 返回标的在因子机本地的最早与最新时间；nil 表示不知道。文件完全早于本地已有数据（补更早的历史）时，
 	// 批要从后往前写：每一批都与已有数据（或刚写的那一批）相接，本地数据才始终连续。
 	LocalBounds func(ctx context.Context, subject string) (earliest, latest time.Time, ok bool, err error)
@@ -67,11 +77,14 @@ type Meta struct {
 // Request 是一次导入。
 type Request struct {
 	Space, Dataset, Freq string
-	// Paths 是要导入的文件，或者包含文件的目录（目录下按格式后缀取全部文件）。
+	// Paths 是要导入的文件，或者包含文件的目录（目录下取全部 .csv、.csv.gz 文件）。
 	Paths []string
-	// Subject 为空时用文件名（去掉扩展名）作为标的 ID。
+	// Subject 为空时用文件名（去掉 .csv 或 .csv.gz）作为标的 ID。
 	Subject string
-	Format  string
+	// SubjectColumn 为真时接受带 subject_id 列的多标的文件（只写归档时）。
+	SubjectColumn bool
+	// RequireSeriesTag 为真时每行的 series_tag 必须非空（写入目标含归档时）。
+	RequireSeriesTag bool
 	// TimeColumn 是时间列名，默认 data_time；SeriesTag 统一指定 series_tag。
 	TimeColumn string
 	SeriesTag  string
@@ -115,6 +128,23 @@ type Summary struct {
 	Status string        `json:"status"`
 	Files  []FileSummary `json:"files"`
 	Rows   int           `json:"rows"`
+	// SubjectCount 是全部文件涉及的标的数；OutOfScope 是不在数据集标签范围内的标的（只在 ScopeWarnOnly 时有值）。
+	SubjectCount int      `json:"subject_count"`
+	OutOfScope   []string `json:"subjects_out_of_scope,omitempty"`
+	// Archive 是归档目标的导入运行（run_id 与运行消息），没有写归档时为空。
+	Archive *ArchiveRunSummary `json:"archive_run,omitempty"`
+}
+
+// ArchiveRunSummary 是归档目标的导入运行结果。
+type ArchiveRunSummary struct {
+	RunID   string `json:"run_id"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
+// ArchiveReporter 是归档目标提供的可选能力：返回导入运行的结果，写进摘要。
+type ArchiveReporter interface {
+	ArchiveRun() *ArchiveRunSummary
 }
 
 // Run 执行一次导入。有任何文件不合法时，在写入任何内容之前就返回错误（先校验全部文件，再写）。
@@ -128,11 +158,7 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 	if !req.DryRun && len(targets) == 0 {
 		return Summary{}, errors.New("没有写入目标")
 	}
-	decoder, err := seriesformat.Lookup(req.Format)
-	if err != nil {
-		return Summary{}, err
-	}
-	files, err := expand(req.Paths, req.Format)
+	files, err := expand(req.Paths)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -151,23 +177,45 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 		tailFrom time.Time
 	}
 	var plans []plan
+	subjects := map[string]struct{}{}
+	outOfScope := map[string]struct{}{}
+	checkScope := func(subject string) error {
+		subjects[subject] = struct{}{}
+		if meta.SubjectInScope == nil {
+			return nil
+		}
+		ok, err := meta.SubjectInScope(ctx, subject)
+		if err != nil {
+			return fmt.Errorf("检查标的 %s 的标签范围：%w", subject, err)
+		}
+		switch {
+		case ok:
+		case meta.ScopeWarnOnly:
+			outOfScope[subject] = struct{}{}
+		default:
+			return fmt.Errorf("标的 %s 不在数据集的标签范围内（不会自动绑定，请先登记标的）", subject)
+		}
+		return nil
+	}
 	for _, file := range files {
 		subject := req.Subject
 		if subject == "" {
-			subject = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+			subject, _ = seriesformat.DataFileName(filepath.Base(file))
 		}
-		if meta.SubjectInScope != nil {
-			ok, err := meta.SubjectInScope(ctx, subject)
-			if err != nil {
-				return summary, fmt.Errorf("检查标的 %s 的标签范围：%w", subject, err)
-			}
-			if !ok {
-				return summary, fmt.Errorf("标的 %s 不在数据集的标签范围内（不会自动绑定，请先登记标的）", subject)
-			}
-		}
-		report, times, err := scan(ctx, decoder, file, req, meta)
+		report, times, err := scan(ctx, file, req, meta)
 		if err != nil {
 			return summary, fmt.Errorf("%s：%w", file, err)
+		}
+		if report.Subjects != nil {
+			// 多标的文件：标的取每行的 subject_id 列。
+			subject = fmt.Sprintf("多标的（%d 个）", len(report.Subjects))
+			for _, s := range report.Subjects {
+				if err := checkScope(s); err != nil {
+					return summary, err
+				}
+			}
+		} else if err := checkScope(subject); err != nil {
+			return summary, err
 		}
 		if report.Rows == 0 {
 			return summary, fmt.Errorf("%s：文件里没有数据行", file)
@@ -182,7 +230,7 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 		summary.Files = append(summary.Files, fs)
 		summary.Rows += report.Rows
 		reverse := false
-		if meta.LocalBounds != nil {
+		if meta.LocalBounds != nil && report.Subjects == nil {
 			earliest, _, ok, err := meta.LocalBounds(ctx, subject)
 			if err != nil {
 				return summary, fmt.Errorf("读取标的 %s 的本地边界：%w", subject, err)
@@ -193,7 +241,20 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 		if !tailFrom.IsZero() {
 			summary.Files[len(summary.Files)-1].TailFrom, summary.Files[len(summary.Files)-1].TailRows = tailFrom.Format(time.RFC3339), tailRows
 		}
+		if report.Subjects != nil {
+			subject = "" // 写入时每行的标的取 Batch.Subjects
+		}
 		plans = append(plans, plan{file: file, subject: subject, report: report, reverse: reverse, tailFrom: tailFrom})
+	}
+	summary.SubjectCount = len(subjects)
+	for subject := range outOfScope {
+		summary.OutOfScope = append(summary.OutOfScope, subject)
+	}
+	sort.Strings(summary.OutOfScope)
+	if meta.BeforeWrite != nil {
+		if err := meta.BeforeWrite(ctx, summary); err != nil {
+			return summary, err
+		}
 	}
 	if req.DryRun {
 		summary.Status = "dry_run"
@@ -209,7 +270,11 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 			if tail, ok := target.(TailTarget); ok && tail.TailOnly() {
 				tailFrom = p.tailFrom
 			}
-			if err := writeFile(ctx, decoder, p.file, p.subject, p.reverse, tailFrom, req, meta, target, cps, job, fs); err != nil {
+			reverse := p.reverse
+			if forward, ok := target.(ForwardTarget); ok && forward.ForwardOnly() {
+				reverse = false
+			}
+			if err := writeFile(ctx, p.file, p.subject, reverse, tailFrom, req, meta, target, cps, job, fs); err != nil {
 				summary.Status = "failed"
 				if cps != nil {
 					_ = cps.Save(job, p.file, target.Name(), fs.Batches[target.Name()]+fs.Skipped[target.Name()], 0, false, err.Error())
@@ -220,7 +285,11 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 	}
 	for _, target := range targets {
 		if fin, ok := target.(Finisher); ok {
-			if err := fin.Finish(ctx); err != nil {
+			err := fin.Finish(ctx)
+			if reporter, ok := target.(ArchiveReporter); ok {
+				summary.Archive = reporter.ArchiveRun()
+			}
+			if err != nil {
 				summary.Status = "failed"
 				return summary, fmt.Errorf("目标 %s 收尾：%w", target.Name(), err)
 			}
@@ -237,8 +306,8 @@ func (r Request) validate() error {
 		return errors.New("没有指定要导入的文件或目录")
 	case r.Step <= 0:
 		return errors.New("缺少频率对应的周期时长")
-	case r.Format == "":
-		return errors.New("缺少数据格式")
+	case r.SubjectColumn && r.Subject != "":
+		return errors.New("多标的文件按 subject_id 列取标的，不能再给 --subject")
 	}
 	return nil
 }
@@ -252,17 +321,17 @@ func (r Request) batchRows() int {
 
 // options 返回读文件的选项：SeriesTag 为空时按文件里的 series_tag 列。
 func (r Request) options(file string, meta Meta) seriesformat.Options {
-	return seriesformat.Options{Fields: meta.Fields, TimeColumn: r.TimeColumn, SeriesTag: r.SeriesTag}
+	return seriesformat.Options{Fields: meta.Fields, TimeColumn: r.TimeColumn, SeriesTag: r.SeriesTag, SubjectColumn: r.SubjectColumn, RequireSeriesTag: r.RequireSeriesTag}
 }
 
 // scan 流式读完一个文件做通用校验，返回连续性报告；启用尾部窗口时同时返回最后 TailRows 行的时间（升序，可能含同一时间的多行）。
-func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request, meta Meta) (seriesformat.Report, []time.Time, error) {
+func scan(ctx context.Context, file string, req Request, meta Meta) (seriesformat.Report, []time.Time, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return seriesformat.Report{}, nil, err
 	}
 	defer f.Close()
-	r, err := d.Open(f, req.options(file, meta))
+	r, err := seriesformat.OpenCSV(f, req.options(file, meta))
 	if err != nil {
 		return seriesformat.Report{}, nil, err
 	}
@@ -330,7 +399,7 @@ func tailWindow(times []time.Time, req Request) (time.Time, int) {
 }
 
 // writeFile 把一个文件写到一个目标：按时间边界分批，已经有断点的批跳过。
-func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string, reverse bool, tailFrom time.Time, req Request, meta Meta, target Target, cps Checkpoints, job string, fs *FileSummary) error {
+func writeFile(ctx context.Context, file, subject string, reverse bool, tailFrom time.Time, req Request, meta Meta, target Target, cps Checkpoints, job string, fs *FileSummary) error {
 	var doneBatches, doneRows int64
 	if cps != nil {
 		b, rows, done, err := cps.Get(job, file, target.Name())
@@ -349,7 +418,7 @@ func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string
 		return err
 	}
 	defer f.Close()
-	r, err := d.Open(f, req.options(file, meta))
+	r, err := seriesformat.OpenCSV(f, req.options(file, meta))
 	if err != nil {
 		return err
 	}
@@ -523,6 +592,9 @@ func appendBatch(dst, src *seriesformat.Batch) *seriesformat.Batch {
 	}
 	dst.Times = append(dst.Times, src.Times...)
 	dst.Tags = append(dst.Tags, src.Tags...)
+	if dst.Subjects != nil || src.Subjects != nil {
+		dst.Subjects = append(dst.Subjects, src.Subjects...)
+	}
 	for i := range dst.Cols {
 		dst.Cols[i].Null = append(dst.Cols[i].Null, src.Cols[i].Null...)
 		dst.Cols[i].F = append(dst.Cols[i].F, src.Cols[i].F...)
@@ -535,6 +607,9 @@ func appendBatch(dst, src *seriesformat.Batch) *seriesformat.Batch {
 func splitBatch(b *seriesformat.Batch, at int) (*seriesformat.Batch, *seriesformat.Batch) {
 	head := &seriesformat.Batch{Times: b.Times[:at:at], Tags: b.Tags[:at:at], Cols: make([]seriesformat.Column, len(b.Cols))}
 	tail := &seriesformat.Batch{Times: append([]time.Time(nil), b.Times[at:]...), Tags: append([]string(nil), b.Tags[at:]...), Cols: make([]seriesformat.Column, len(b.Cols))}
+	if b.Subjects != nil {
+		head.Subjects, tail.Subjects = b.Subjects[:at:at], append([]string(nil), b.Subjects[at:]...)
+	}
 	for i, c := range b.Cols {
 		head.Cols[i] = seriesformat.Column{Null: c.Null[:at:at]}
 		tail.Cols[i] = seriesformat.Column{Null: append([]bool(nil), c.Null[at:]...)}
@@ -551,8 +626,8 @@ func splitBatch(b *seriesformat.Batch, at int) (*seriesformat.Batch, *seriesform
 	return head, tail
 }
 
-// expand 把文件与目录展开成排好序的文件列表。
-func expand(paths []string, format string) ([]string, error) {
+// expand 把文件与目录展开成排好序的文件列表（目录下取 .csv 与 .csv.gz，不区分大小写）。
+func expand(paths []string) ([]string, error) {
 	var out []string
 	for _, p := range paths {
 		info, err := os.Stat(p)
@@ -568,7 +643,7 @@ func expand(paths []string, format string) ([]string, error) {
 			return nil, err
 		}
 		for _, e := range entries {
-			if !e.IsDir() && strings.EqualFold(strings.TrimPrefix(filepath.Ext(e.Name()), "."), format) {
+			if _, ok := seriesformat.DataFileName(e.Name()); !e.IsDir() && ok {
 				out = append(out, filepath.Join(p, e.Name()))
 			}
 		}
@@ -584,7 +659,7 @@ func stableJobID(req Request, files []string) string {
 	h := sha256.New()
 	// TailRows 进断点身份：同一批文件先按尾部 1000 行导入、再改成 6000 行时，不能沿用「文件已写完」的断点把新增的行跳过。
 	// TailCutoff 随「现在」变化，不进身份，否则每次重跑都换任务、续传失效；它只会单调后移，已写的行不受影响。
-	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%d|%t|%t|%d;", req.Space, req.Dataset, req.Freq, req.Subject, req.TimeColumn, req.SeriesTag, req.batchRows(), req.AllowMissing, req.Recalc, req.TailRows)
+	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%d|%t|%t|%d|%t;", req.Space, req.Dataset, req.Freq, req.Subject, req.TimeColumn, req.SeriesTag, req.batchRows(), req.AllowMissing, req.Recalc, req.TailRows, req.SubjectColumn)
 	for _, f := range files {
 		info, err := os.Stat(f)
 		if err != nil {

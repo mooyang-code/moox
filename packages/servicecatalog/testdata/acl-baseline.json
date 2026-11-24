@@ -3,9 +3,9 @@
   "summary": {
     "components": 18,
     "services": 25,
-    "methods": 327,
-    "read_only_methods": 149,
-    "retryable_methods": 151,
+    "methods": 325,
+    "read_only_methods": 148,
+    "retryable_methods": 150,
     "callers": 22,
     "principals": 2
   },
@@ -126,12 +126,6 @@
           "timeout_ms": 30000
         },
         {
-          "name": "ImportArchiveFile",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 30000
-        },
-        {
           "name": "ListArchivePartitions",
           "read_only": true,
           "retryable": true,
@@ -150,25 +144,19 @@
           "timeout_ms": 30000
         },
         {
-          "name": "PrepareArchiveImport",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 30000
-        },
-        {
           "name": "PrepareArchiveTask",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 30000
         },
         {
-          "name": "PreviewArchiveSchedule",
-          "read_only": true,
-          "retryable": true,
+          "name": "RunArchiveTaskNow",
+          "read_only": false,
+          "retryable": false,
           "timeout_ms": 30000
         },
         {
-          "name": "RunArchiveTaskNow",
+          "name": "StartArchiveImport",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 30000
@@ -2235,7 +2223,6 @@
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
       "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
-      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
       "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
       "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
@@ -2549,7 +2536,6 @@
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
       "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
-      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
       "trpc.moox.collector.CollectMgr/ListTagSyncStatus",
       "trpc.moox.hostagent.HostAgentMgr/GetSnapshot",
@@ -2603,14 +2589,12 @@
       "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
       "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
       "trpc.moox.archive.ArchiveMgr/GetLifecycle",
-      "trpc.moox.archive.ArchiveMgr/ImportArchiveFile",
       "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
-      "trpc.moox.archive.ArchiveMgr/PrepareArchiveImport",
       "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
-      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
+      "trpc.moox.archive.ArchiveMgr/StartArchiveImport",
       "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
       "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
       "trpc.moox.callbackdispatcher.CallbackDispatcherService/CancelEventExecution",
@@ -2945,7 +2929,8 @@
       "component": "archive-worker",
       "port": 11428,
       "callers": [
-        "console"
+        "console",
+        "moox-cli"
       ]
     }
   ]
