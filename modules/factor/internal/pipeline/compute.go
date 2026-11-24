@@ -50,7 +50,6 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		Results:      make(map[string]map[string]ItemResult, len(plan.Members)),
 		FactorStates: make(map[string]storageio.FactorState, len(plan.Members)),
 	}
-	// 缺失、跳过、失败都按序列判断（统一数据集里只缺永续的币时，现货序列照常算）。
 	computation.availableSeries = loaded.AvailableSeries
 	missingSeries := differenceSeries(plan.ExpectedSeries, loaded.AvailableSeries)
 	compiled := make(map[string]domain.MemberDef, len(plan.Members))
@@ -67,10 +66,10 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		withDef.Factor = def // 复制原成员，只替换已编译的定义：固定参数等成员属性要保留。
 		compiled[member.Key] = withDef
 		failed := uniqueSorted(append([]string(nil), missing...))
-		status, skippedTags := seriesMemberStatus(plan, member.Factor, loaded.AvailableSeries, missingSeries)
+		status := seriesMemberStatus(member.Factor, loaded.AvailableSeries, missingSeries)
 		computation.Results[member.Key] = make(map[string]ItemResult)
 		state := memberState(compiled[member.Key], status, failed)
-		state.FailedSeries, state.SkippedSeriesTags = append([]seriesset.Series(nil), missingSeries...), skippedTags
+		state.FailedSeries = append([]seriesset.Series(nil), missingSeries...)
 		computation.FactorStates[member.Key] = state
 	}
 
@@ -106,7 +105,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	computation.BudgetHit = errors.Is(workCtx.Err(), context.DeadlineExceeded)
 	if runErr != nil {
 		// 补算分块超出内存预算是资源错误：整块失败、不写入、不推进进度。分块在读取前已按预算收窄（observed 成员的历史截面
-		// 标的也计入），正常不会出现；读取后按实际的序列数（标的 × series_tag）复核时仍可能超出，例如统一数据集的序列比估计多。
+		// 标的也计入），正常不会出现；读取后按实际的序列数复核时仍可能超出（例如改过 tag 的标的在窗口里有新旧两条序列）。
 		if plan.Mode == ModeRecalc && errors.Is(runErr, ErrMemoryBudget) {
 			return computation, runErr
 		}
@@ -136,34 +135,16 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	return computation, nil
 }
 
-// seriesMemberStatus 是成员本期的状态与被跳过的 series_tag。截面因子按 series_tag 分组计算：
-// 一个 tag 没有可用序列、或严格全集（不允许部分全集）下该 tag 有序列缺数，这个 tag 跳过，另一个 tag 照常算。
-// 汇总规则：全部 tag 都跳过才记 skipped；只跳过一部分记 degraded 并列出跳过的 tag；没有跳过但有序列缺数也是 degraded。
-// 只有一个 series_tag 的数据集上只有“整个成员跳过”这一种，跳过的 tag 名单恒为空。
-func seriesMemberStatus(plan Plan, factor domain.FactorDef, available, missing []seriesset.Series) (string, []string) {
-	var skipped []string
-	if factor.FactorType == domain.FactorTypeCrossSection {
-		availableByTag, missingByTag := make(map[string]int), make(map[string]int)
-		for _, item := range available {
-			availableByTag[item.SeriesTag]++
-		}
-		for _, item := range missing {
-			missingByTag[item.SeriesTag]++
-		}
-		tags := seriesTags(plan.ExpectedSeries)
-		for _, tag := range tags {
-			if availableByTag[tag] == 0 || (missingByTag[tag] > 0 && !factor.AllowPartialUniverse) {
-				skipped = append(skipped, tag)
-			}
-		}
-		if len(skipped) == len(tags) {
-			return "skipped", nil
-		}
+// seriesMemberStatus 是成员本期的状态：截面因子没有可用序列、或严格全集（不允许部分全集）下有序列缺数时整个成员跳过（skipped）；
+// 其余有序列缺数时是 degraded。
+func seriesMemberStatus(factor domain.FactorDef, available, missing []seriesset.Series) string {
+	if factor.FactorType == domain.FactorTypeCrossSection && (len(available) == 0 || (len(missing) > 0 && !factor.AllowPartialUniverse)) {
+		return "skipped"
 	}
-	if len(missing) > 0 || len(skipped) > 0 {
-		return "degraded", skipped
+	if len(missing) > 0 {
+		return "degraded"
 	}
-	return "complete", nil
+	return "complete"
 }
 
 // memberState 是成员本期的状态：成员身份、类型与定义的指纹。本期实际用的参数写在结果行的 __params 列里，不进周期标记。
@@ -366,8 +347,7 @@ func countSeries(subjects []string, view *serieswindow.View) int {
 	return total
 }
 
-// precheckMemory 在读取之前按序列数检查本次计算的估算峰值内存：取期望序列里属于可读标的的条数（统一数据集一个标的有多条），
-// 不少于可读标的数。
+// precheckMemory 在读取之前按序列数检查本次计算的估算峰值内存：取期望序列里属于可读标的的条数，不少于可读标的数。
 func (r *Runner) precheckMemory(plan Plan) error {
 	if r.cfg.MaxMemory <= 0 {
 		return nil
@@ -533,19 +513,11 @@ func (c *Computation) crossPeriods(member domain.MemberDef, targets []time.Time)
 func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.Result, grid computeGrid, outputs map[string]struct{}) {
 	positions := outputColumns(plan, result, member)
 	item := ItemResult{Member: member.Key, Columns: append([]string{"data_time", "series_tag", "subject_id"}, member.OutputColumns()...)}
-	// 被跳过的 series_tag（只有统一数据集会出现）：这些序列不出结果，结果行保持预置的 NULL。
-	skipped := make(map[string]struct{})
-	for _, tag := range c.FactorStates[member.Key].SkippedSeriesTags {
-		skipped[tag] = struct{}{}
-	}
 	for t := grid.first; t <= grid.last; t++ {
 		if c.CrossPeriods[member.Key][grid.at(t).Unix()] != periodOK {
 			continue
 		}
 		for s, key := range result.Series {
-			if _, skip := skipped[key.Tag]; skip {
-				continue
-			}
 			if _, ok := outputs[key.Subject]; !ok {
 				continue
 			}

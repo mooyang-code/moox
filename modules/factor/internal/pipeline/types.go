@@ -36,20 +36,15 @@ type Plan struct {
 	Expected       []string
 	Available      []string
 	UpstreamFailed []string
-	// ExpectedSeries、UpstreamFailedSeries 是按序列（标的、series_tag）的期望全集与上游失败名单，所有数据集都有：
-	// 期望、缺失、跳过、失败都按序列判断，统一数据集里一个市场的缺数不连累另一个市场。
-	// Expected 是它涉及的标的，Available 是至少有一条序列没有上游失败的标的，UpstreamFailed 是有序列上游失败的标的。
+	// ExpectedSeries、UpstreamFailedSeries 是按序列（标的、series_tag）的期望全集与上游失败名单：一个数据集里每个标的只有
+	// 一条序列（它唯一的 tag），与 Expected、UpstreamFailed 一一对应；周期标记与事件里按序列的名单照这一份填。
 	// 实时计划取自周期完成事件；补算类计划没有带时由 Run 向数据层取（SeriesExpecter）。
 	ExpectedSeries       []seriesset.Series
 	UpstreamFailedSeries []seriesset.Series
-	// ExpectedSeriesDerived 为真表示 ExpectedSeries 是数据层在统一数据集上按本地存储推测出来的（补算、失效重算没有冻结全集可用），
-	// 不是 marker 里冻结的确定值。推测的期望可能把晚到或刚下架的序列算进来：非只填充的计划里，因这类推测缺数而被跳过的
-	// series_tag 不写 NULL，保留已有的值。只有一个 tag 的数据集不做推测，恒为假。
-	ExpectedSeriesDerived bool
-	CarryColumns          []string
-	WriteCarry            bool
-	TriggerEventID        string
-	Budget                time.Duration
+	CarryColumns         []string
+	WriteCarry           bool
+	TriggerEventID       string
+	Budget               time.Duration
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞、失败都不写任何字段（尤其不写失效 NULL），也不写 carry 列。
 	// 用于空洞补齐后的恢复。
 	FillOnly bool
@@ -80,10 +75,7 @@ type Outcome struct {
 	Status         string
 	FailedSubjects []string
 	// FailedSeries 是按序列的失败名单，口径同 FailedSubjects。
-	FailedSeries []seriesset.Series
-	// DerivedSkipped 表示补算类计划（期望序列是数据层推测的，ExpectedSeriesDerived）里有成员因推测的期望缺数而整个或部分 tag 被跳过：
-	// 这些行保留了旧值、没有真正重算，失效重算据此保留这一段待办，等推测不再跳过（例如已下架的序列沉默超过阈值被排除）再重算。
-	DerivedSkipped bool
+	FailedSeries   []seriesset.Series
 	Factors        []storageio.FactorState
 	RowsWritten    int
 	Warming        int

@@ -63,9 +63,8 @@ func (r *Runner) LoadSubjects(ctx context.Context, plan Plan) (Plan, LoadResult,
 	return plan, result, nil
 }
 
-// classifySeries 把期望序列分成本期可用与不可用的。标的整体失败（同步失败、预热中，failedSubject）或这条序列自己
-// 不可用（上游失败、本期数据还没到）的序列不可用，其余可用；一个市场的缺数不连累另一个市场。
-// 标的口径沿用原有定义：有不可用序列的标的记入 FailedSubjects，至少有一条可用序列的标的才是 Available。
+// classifySeries 把期望序列分成本期可用与不可用的：标的失败（同步失败、本期数据还没到、预热中）或上游失败的序列不可用，其余可用。
+// 不可用序列的标的记入 FailedSubjects，可用序列的标的是 Available。
 func classifySeries(plan Plan, data DataResult, result *LoadResult) {
 	failedSubject := make(map[string]struct{}, len(data.Failed)+len(result.WarmingSubjects))
 	for _, subject := range data.Failed {
@@ -75,9 +74,6 @@ func classifySeries(plan Plan, data DataResult, result *LoadResult) {
 		failedSubject[subject] = struct{}{}
 	}
 	unavailable := seriesSet(plan.UpstreamFailedSeries)
-	for _, item := range data.FailedSeries {
-		unavailable[item] = struct{}{}
-	}
 	for _, item := range plan.ExpectedSeries {
 		if _, whole := failedSubject[item.SubjectID]; whole {
 			result.FailedSeries = append(result.FailedSeries, item)

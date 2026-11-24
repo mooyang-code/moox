@@ -7,9 +7,8 @@ import (
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
-// validateStateSeries 校验一个成员的按序列字段：失败序列在序列全集里，跳过的 tag 在序列全集里出现；
-// complete 的成员不能有这些名单。
-func validateStateSeries(state *factorpb.FactorPeriodState, universe map[seriesset.Series]struct{}, tags map[string]struct{}) error {
+// validateStateSeries 校验一个成员的按序列字段：失败序列在序列全集里；complete 的成员不能有失败序列。
+func validateStateSeries(state *factorpb.FactorPeriodState, universe map[seriesset.Series]struct{}) error {
 	label := state.GetFactorId()
 	failed := make(map[seriesset.Series]struct{}, len(state.GetFailedSeries()))
 	for i, ref := range state.GetFailedSeries() {
@@ -25,17 +24,8 @@ func validateStateSeries(state *factorpb.FactorPeriodState, universe map[seriess
 		}
 		failed[item] = struct{}{}
 	}
-	skipped, err := uniqueTokens(state.GetSkippedSeriesTags(), fmt.Sprintf("factor %q skipped_series_tags", label))
-	if err != nil {
-		return err
-	}
-	for tag := range skipped {
-		if _, ok := tags[tag]; !ok {
-			return fmt.Errorf("factor period detail: factor %q skipped series tag %q is not in universe_series", label, tag)
-		}
-	}
-	if state.GetStatus() == "complete" && (len(failed) != 0 || len(skipped) != 0) {
-		return fmt.Errorf("factor period detail: complete factor %q has failed series or skipped series tags", label)
+	if state.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("factor period detail: complete factor %q has failed series", label)
 	}
 	return nil
 }

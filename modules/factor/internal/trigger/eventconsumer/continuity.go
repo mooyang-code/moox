@@ -51,9 +51,7 @@ type Continuity struct {
 
 type absentEntry struct {
 	subjects map[string]struct{}
-	// series 是按序列确认没有的（标的、series_tag）：只扣这一条序列，统一数据集里同标的的另一个市场照常算。
-	series map[seriesset.Series]struct{}
-	until  time.Time
+	until    time.Time
 }
 
 // NewContinuity 构造连续水位推进。
@@ -77,9 +75,8 @@ func NewContinuity(cfg ContinuityConfig) (*Continuity, error) {
 func (c *Continuity) States() []watermark.State { return c.cfg.Store.All() }
 
 // NoteAbsent 记下补采确认行情源没有的标的（K 线补写事件带来），30 分钟后过期。
-// subjects 是按标的确认的（该标的的所有序列都没有），series 是按序列确认的（只有这一条序列没有）。
-func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Duration, subjects []string, series []seriesset.Series) {
-	if (len(subjects) == 0 && len(series) == 0) || step <= 0 {
+func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Duration, subjects []string) {
+	if len(subjects) == 0 || step <= 0 {
 		return
 	}
 	c.mu.Lock()
@@ -93,22 +90,16 @@ func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Dur
 		if entry.subjects == nil {
 			entry.subjects = map[string]struct{}{}
 		}
-		if entry.series == nil {
-			entry.series = map[seriesset.Series]struct{}{}
-		}
 		for _, subject := range subjects {
 			entry.subjects[strings.TrimSpace(subject)] = struct{}{}
-		}
-		for _, item := range series {
-			entry.series[seriesset.Series{SubjectID: strings.TrimSpace(item.SubjectID), SeriesTag: strings.TrimSpace(item.SeriesTag)}] = struct{}{}
 		}
 		entry.until = until
 		c.absent[taskID][period.Unix()] = entry
 	}
 }
 
-// absentAt 返回这一期确认没有的标的与序列（复制一份：NoteAbsent 在补写事件的消费协程里会修改同一个任务）。
-func (c *Continuity) absentAt(taskID string, period time.Time) (map[string]struct{}, map[seriesset.Series]struct{}) {
+// absentAt 返回这一期确认没有的标的（复制一份：NoteAbsent 在补写事件的消费协程里会修改同一个任务）。
+func (c *Continuity) absentAt(taskID string, period time.Time) map[string]struct{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.cfg.Now()
@@ -122,11 +113,7 @@ func (c *Continuity) absentAt(taskID string, period time.Time) (map[string]struc
 	for subject := range entry.subjects {
 		subjects[subject] = struct{}{}
 	}
-	series := make(map[seriesset.Series]struct{}, len(entry.series))
-	for item := range entry.series {
-		series[item] = struct{}{}
-	}
-	return subjects, series
+	return subjects
 }
 
 func (c *Continuity) ratioFor(taskID string) float64 {
@@ -227,10 +214,8 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 		if state.InFlightTrigger != "" && state.InFlightPeriod.Equal(period) {
 			triggerID = state.InFlightTrigger
 		}
-		// 期望与缺失按序列数计：统一数据集里一个市场整体晚到不会让整期按标的全部缺失而阻塞水位。
-		counts, confirmed, scope := c.scoped(set, period, scope)
-		expected, unconfirmed := counts.expected, counts.unconfirmed
-		if reason := c.invalid(set.TaskID, counts.judgeExpected, counts.judgeMissing, confirmed); reason != "" {
+		expected, unconfirmed, confirmed, scope := c.scoped(set, period, scope)
+		if reason := c.invalid(set.TaskID, expected, unconfirmed, confirmed); reason != "" {
 			if state.BlockedSince.IsZero() || !state.BlockedPeriod.Equal(period) {
 				if state.BlockedSince.IsZero() {
 					state.BlockedSince = c.cfg.Now().UTC()
@@ -280,60 +265,31 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 	return nil
 }
 
-// periodCounts 是一期的期望与缺失数，都按序列计：expected、unconfirmed 是总数；
-// judgeExpected、judgeMissing 是判断这一期有没有效的数，取缺失比例最低的那个 series_tag 的数（只有一个 tag 时就是总数）。
-type periodCounts struct {
-	expected, unconfirmed       int
-	judgeExpected, judgeMissing int
-}
-
-// scoped 整理一期的范围：扣除补采确认没有的标的与序列，返回期望数与缺失数、确认没有的标的，以及真正要算的范围。
-// 都按序列计数，并且按 series_tag 分别看缺失比例：统一数据集里只要有一个市场的缺失在阈值以内，这一期就有效，
-// 另一个市场整体晚到不会连累它（晚到的序列已经列在失败名单里，记进空洞账本，补齐后由只填充补算补上）。
-func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope periodScope) (counts periodCounts, confirmed map[string]struct{}, out periodScope) {
-	// 按标的确认没有的扣掉它的全部序列；按序列确认没有的（例如永续没有、现货有）只扣这一条，同标的的另一条序列仍在范围内。
-	absentSubjects, absentSeries := c.absentAt(set.TaskID, period)
+// scoped 整理一期的范围：扣除补采确认没有的标的，返回期望数与缺失数（一个标的一条序列，按序列数就是按标的数）、
+// 确认没有的标的，以及真正要算的范围。
+func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope periodScope) (expected, missing int, confirmed map[string]struct{}, out periodScope) {
+	absent := c.absentAt(set.TaskID, period)
 	confirmed = map[string]struct{}{}
 	for _, item := range scope.universeSeries {
-		if _, absent := absentSubjects[strings.TrimSpace(item.SubjectID)]; absent {
+		if _, ok := absent[strings.TrimSpace(item.SubjectID)]; ok {
 			confirmed[item.SubjectID] = struct{}{}
-			continue
-		}
-		if _, absent := absentSeries[item]; absent {
-			confirmed[item.SubjectID] = struct{}{} // 只用于“这一期有没有确认缺失”的判断与日志
 			continue
 		}
 		out.universeSeries = append(out.universeSeries, item)
 	}
 	inScope := make(map[seriesset.Series]struct{}, len(out.universeSeries))
-	expectedByTag, missingByTag := map[string]int{}, map[string]int{}
 	for _, item := range out.universeSeries {
 		inScope[item] = struct{}{}
-		expectedByTag[item.SeriesTag]++
 	}
 	for _, item := range scope.failedSeries {
 		if _, ok := inScope[item]; ok {
 			out.failedSeries = append(out.failedSeries, item)
-			missingByTag[item.SeriesTag]++
 		}
 	}
-	counts = periodCounts{expected: len(out.universeSeries), unconfirmed: len(out.failedSeries)}
-	first := true
-	for tag, expected := range expectedByTag {
-		missed := missingByTag[tag]
-		// 比例最低的 tag 的数；比例相同取缺失少的、再取 tag 小的，结果不依赖 map 的遍历顺序。
-		better := first || missed*counts.judgeExpected < counts.judgeMissing*expected
-		if !better && missed*counts.judgeExpected == counts.judgeMissing*expected {
-			better = missed < counts.judgeMissing || (missed == counts.judgeMissing && expected > counts.judgeExpected)
-		}
-		if better {
-			counts.judgeExpected, counts.judgeMissing, first = expected, missed, false
-		}
-	}
-	return counts, confirmed, out
+	return len(out.universeSeries), len(out.failedSeries), confirmed, out
 }
 
-// invalid 判断一期是否无效：不知道期望数量、零提交（全部缺失）、缺失超过阈值。数量按序列计（见 periodCounts）。
+// invalid 判断一期是否无效：不知道期望数量、零提交（全部缺失）、缺失超过阈值。
 // 范围内的标的全部确认没有时不算无效（没有可算的，直接推进）。
 func (c *Continuity) invalid(taskID string, expected, missing int, confirmed map[string]struct{}) string {
 	switch {
@@ -349,7 +305,7 @@ func (c *Continuity) invalid(taskID string, expected, missing int, confirmed map
 	return ""
 }
 
-// readbackSeries 读回一期源数据，返回还没有行的期望序列（统一数据集里永续没到、现货到了，只有永续算缺失）。
+// readbackSeries 读回一期源数据，返回还没有行的期望序列。
 func (c *Continuity) readbackSeries(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, period time.Time, universe []seriesset.Series) ([]seriesset.Series, error) {
 	var subjects []string
 	for _, item := range universe {

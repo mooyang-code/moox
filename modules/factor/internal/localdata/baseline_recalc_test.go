@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 补算金样（批 3 T0 第 2 项）：单序列数据集（数据集属性 market_type 不是 multi，所有行同一个非空 series_tag）上，经
+// 补算金样（批 3 T0 第 2 项）：单序列数据集（所有行同一个非空 series_tag）上，经
 // 补算执行器、管线与本地数据层（与引擎的正式补算同一条路径）跑一段补算，把写出的结果行（含 __params）与各分块的结果存成数据文件。
 // 输入按序列给（期望序列是“标的 × 唯一的 series_tag”），走按序列的分支；结果要对着这份数据文件逐位一致，
 // 这份文件最初是按标的处理时生成的，所以它同时证明单序列数据集上两种口径的结果相同。
@@ -105,7 +105,7 @@ func baselineRecalcPutLocal(t *testing.T, fx *fixture, subject string, ordinal i
 			}
 			rows.AppendRow(at(m), baselineRecalcTag, false, values...)
 		}
-		_, err = fx.data.Store().WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: subject, From: at(run[0]), To: at(run[len(run)-1] + 1), Rows: rows, Scoped: true}, seriesstore.WriteOptions{FillGaps: true})
+		_, err = fx.data.Store().WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: subject, From: at(run[0]), To: at(run[len(run)-1] + 1), Rows: rows}, seriesstore.WriteOptions{FillGaps: true})
 		require.NoError(t, err)
 		start = end
 	}
@@ -242,13 +242,12 @@ func baselineSeriesOf(subjects []string) []seriesset.Series {
 }
 
 // requireSingleTagLists 是派生断言（批 3 T5）：只有一个 tag 的数据集上按序列的名单由按标的的名单决定——
-// 失败序列就是失败标的逐个配上唯一的 tag，跳过的 tag 恒为空。所以金样只记按标的的名单。
+// 失败序列就是失败标的逐个配上唯一的 tag。所以金样只记按标的的名单。
 func requireSingleTagLists(t *testing.T, failedSubjects []string, failedSeries []seriesset.Series, states []storageio.FactorState) {
 	t.Helper()
 	require.ElementsMatch(t, baselineSeriesOf(failedSubjects), failedSeries)
 	for _, state := range states {
 		require.ElementsMatch(t, baselineSeriesOf(state.FailedSubjects), state.FailedSeries, state.MemberKey)
-		require.Empty(t, state.SkippedSeriesTags, state.MemberKey)
 	}
 }
 
@@ -303,7 +302,6 @@ func baselineRecalcRun(t *testing.T, scenario baselineRecalcScenario, withSeries
 			chunk := stamp(progress)
 			add("chunk", "", "", chunk, "status", outcome.Status)
 			add("chunk", "", "", chunk, "failed_subjects", strings.Join(outcome.FailedSubjects, ";"))
-			add("chunk", "", "", chunk, "derived_skipped", strconv.FormatBool(outcome.DerivedSkipped))
 			add("chunk", "", "", chunk, "rows_written", strconv.Itoa(outcome.RowsWritten))
 			add("chunk", "", "", chunk, "warming", strconv.Itoa(outcome.Warming))
 			states := append([]storageio.FactorState(nil), outcome.Factors...)

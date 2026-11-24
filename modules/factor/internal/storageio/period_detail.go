@@ -11,7 +11,7 @@ import (
 
 // ValidatePeriodDetail 校验因子周期明细：成员身份是 member_key（同一因子可以用不同参数出现多次），factor_id 是它引用的定义；
 // member_kind 必须是已知取值；失败标的必须在冻结的全集里；complete 的周期里不能有非 complete 的成员。
-// 按序列的字段：失败序列在冻结的序列全集里，跳过的 series_tag 是序列全集里出现的 tag。
+// 按序列的字段：失败序列在冻结的序列全集里。
 // Storage 对明细是不透明字节，这些规则由因子自己保证。
 func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe []string, universeSeries []seriesset.Series, status string) error {
 	subjects := make(map[string]struct{}, len(universe))
@@ -19,10 +19,8 @@ func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe []string, univ
 		subjects[subject] = struct{}{}
 	}
 	series := make(map[seriesset.Series]struct{}, len(universeSeries))
-	tags := make(map[string]struct{}, 2)
 	for _, item := range universeSeries {
 		series[item] = struct{}{}
-		tags[item.SeriesTag] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(detail.GetFactors()))
 	for i, state := range detail.GetFactors() {
@@ -59,7 +57,7 @@ func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe []string, univ
 		// 成员的失败序列 = 周期级共享的一份加上自己的：校验用还原后的完整名单。
 		restored := proto.Clone(state).(*factorpb.FactorPeriodState)
 		restored.FailedSeries = seriesToFactorPB(MemberFailedSeries(detail, state))
-		if err := validateStateSeries(restored, series, tags); err != nil {
+		if err := validateStateSeries(restored, series); err != nil {
 			return err
 		}
 		if state.GetStatus() == "complete" && len(failed) != 0 {

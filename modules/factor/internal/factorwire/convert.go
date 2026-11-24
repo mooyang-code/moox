@@ -195,15 +195,14 @@ func RunSummaryToPB(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 	factors := make([]*factorpb.FactorPeriodState, 0, len(summary.Factors))
 	for _, factor := range summary.Factors {
 		factors = append(factors, &factorpb.FactorPeriodState{
-			FactorId:          factor.FactorID,
-			MemberKey:         factor.MemberKey,
-			MemberKind:        factor.MemberKind,
-			Status:            factor.Status,
-			FailedSubjects:    CloneStrings(factor.FailedSubjects),
-			SpecHash:          factor.SpecHash,
-			DefinitionHash:    factor.DefinitionHash,
-			FailedSeries:      seriesToPB(factor.FailedSeries),
-			SkippedSeriesTags: CloneStrings(factor.SkippedSeriesTags),
+			FactorId:       factor.FactorID,
+			MemberKey:      factor.MemberKey,
+			MemberKind:     factor.MemberKind,
+			Status:         factor.Status,
+			FailedSubjects: CloneStrings(factor.FailedSubjects),
+			SpecHash:       factor.SpecHash,
+			DefinitionHash: factor.DefinitionHash,
+			FailedSeries:   seriesToPB(factor.FailedSeries),
 		})
 	}
 	return &factorpb.TaskRunSummary{
@@ -223,7 +222,6 @@ func RunSummaryFromPB(pb *factorpb.TaskRunSummary) domain.TaskRunSummary {
 			FactorID: factor.GetFactorId(), MemberKey: factor.GetMemberKey(), MemberKind: factor.GetMemberKind(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SpecHash: factor.GetSpecHash(),
 			DefinitionHash: factor.GetDefinitionHash(), FailedSeries: seriesFromPB(factor.GetFailedSeries()),
-			SkippedSeriesTags: CloneStrings(factor.GetSkippedSeriesTags()),
 		})
 	}
 	return domain.TaskRunSummary{

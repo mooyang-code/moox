@@ -420,8 +420,8 @@ func (g *gapFiller) span(set domain.FactorTask, entries []gapledger.Entry) (time
 }
 
 // fillSubjects 在 [start, end) 上一次恢复一个任务里若干标的的时间序列因子待办。
-// 按待办周期读结果数据集 marker 里冻结的 universe_series：每个周期的期望序列就是当期实际存在的序列，恢复时每条期望序列都要写成才确认
-// （统一数据集里永续晚到、这一期只有现货行时记失败，待办保留），已下架的序列不在之后各期的冻结全集里，不会让现货的待办永远确认不了。
+// 按待办周期读结果数据集 marker 里冻结的 universe_series：每个周期的期望序列就是当期实际存在的序列，恢复时期望序列要写成才确认，
+// 已下架的标的不在之后各期的冻结全集里，不会让待办永远确认不了。
 // 冻结全集相同的相邻周期合并成一次运行；读不到 marker 或 marker 里没有序列全集的周期，期望序列由数据层给出（pipeline.SeriesExpecter）。
 func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, subjects []string, start, end time.Time) error {
 	taskID := set.Set.TaskID
@@ -660,7 +660,6 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		// 冻结全集按序列（标的、series_tag）判断：统一数据集里缺一个市场的币时只跳过那个市场。
 		// 没有序列全集的 marker（不应出现）时 Series 为空，期望序列由数据层给出。
 		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe.Subjects, Series: universe.Series, Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use)}, nil

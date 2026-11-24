@@ -24,7 +24,7 @@ import (
 
 // 基线金样（第 0 期）：因子库 modules/factor/factors/*.yaml 的全部定义，加上几条只在测试里用的合成截面定义（严格与允许部分全集各一版），
 // 经 pipeline.Compute 在合成计划上的输出值与成员状态。合成计划包含 NaN、零波动段、新上市标的、截面需要的多个标的、
-// 上游失败与数据层失败的标的、统一数据集（现货、永续两条序列）及其上游失败序列。金样由当前代码生成，默认只比对；
+// 上游失败与数据层失败的标的。金样由当前代码生成，默认只比对；
 // 有意改变结果时用 UPDATE_BASELINE=1 重新生成，并在 PR 里说明原因。
 
 const baselineOutputsPath = "testdata/baseline/factor_outputs.csv"
@@ -153,29 +153,11 @@ func baselineSingleSeries(last int) []baselineSeries {
 	}
 }
 
-// baselineUnifiedSeries 是统一数据集的合成数据：S1～S4 各有现货、永续两条序列，S4 的永续在 -30 才上市，S2 的现货有一根 null 收盘价。
-func baselineUnifiedSeries(last int) []baselineSeries {
-	var out []baselineSeries
-	for _, subject := range baselineSubjects[:4] {
-		spot := baselineSeries{subject: subject, tag: tagSpot, first: -baselineHistory, last: last}
-		swap := baselineSeries{subject: subject, tag: tagSwap, first: -baselineHistory, last: last, shift: 1}
-		if subject == "S2" {
-			spot.nullClose = map[int]bool{-5: true}
-		}
-		if subject == "S4" {
-			swap.first = -30
-		}
-		out = append(out, spot, swap)
-	}
-	return out
-}
-
-// baselineData 把合成源行包装成数据层：failed、failedSeries 是数据层报告的本期取不到的标的与序列。
-func baselineData(frames map[string]*storageio.Frame, failed []string, failedSeries []seriesset.Series) *frameData {
+// baselineData 把合成源行包装成数据层：failed 是数据层报告的本期取不到的标的。
+func baselineData(frames map[string]*storageio.Frame, failed []string) *frameData {
 	return &frameData{
-		read:         func(context.Context, Plan, time.Time) (map[string]*storageio.Frame, error) { return frames, nil },
-		failed:       failed,
-		failedSeries: failedSeries,
+		read:   func(context.Context, Plan, time.Time) (map[string]*storageio.Frame, error) { return frames, nil },
+		failed: failed,
 	}
 }
 
@@ -202,23 +184,13 @@ type baselineScenario struct {
 
 func baselineScenarios(t *testing.T, members []domain.MemberDef) []baselineScenario {
 	t.Helper()
-	var unifiedSeries []seriesset.Series
-	for _, subject := range baselineSubjects[:4] {
-		unifiedSeries = append(unifiedSeries, series(subject, tagSpot), series(subject, tagSwap))
-	}
 	// 实时、单序列：事件里 S4 上游失败，数据层又报 S2 本期取不到。
 	live, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{Set: baselineTask(), Members: members, PeriodTime: baselineStart.Add(5 * time.Minute),
 		UniverseSeries: singleSeries(baselineSubjects...), UpstreamFailedSeries: singleSeries("S4")})
 	require.NoError(t, err)
-	// 实时、统一数据集：事件里 S2 的永续序列上游失败（本地仍有它的行）。
-	unifiedLive, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{Set: baselineTask(), Members: members, PeriodTime: baselineStart.Add(2 * time.Minute),
-		UniverseSeries: unifiedSeries, UpstreamFailedSeries: []seriesset.Series{series("S2", tagSwap)}})
-	require.NoError(t, err)
 	return []baselineScenario{
-		{name: "single_recalc", plan: baselineRecalcPlan(members, 6, singleSeries(baselineSubjects...)), data: baselineData(baselineFrames(baselineSingleSeries(5)), nil, nil)},
-		{name: "single_live_failed", plan: live, data: baselineData(baselineFrames(baselineSingleSeries(5)), []string{"S2"}, nil)},
-		{name: "unified_recalc", plan: baselineRecalcPlan(members, 3, unifiedSeries), data: baselineData(baselineFrames(baselineUnifiedSeries(2)), nil, nil)},
-		{name: "unified_live_failed_series", plan: unifiedLive, data: baselineData(baselineFrames(baselineUnifiedSeries(2)), nil, nil)},
+		{name: "single_recalc", plan: baselineRecalcPlan(members, 6, singleSeries(baselineSubjects...)), data: baselineData(baselineFrames(baselineSingleSeries(5)), nil)},
+		{name: "single_live_failed", plan: live, data: baselineData(baselineFrames(baselineSingleSeries(5)), []string{"S2"})},
 	}
 }
 
@@ -270,7 +242,6 @@ func baselineRecords(name string, plan Plan, computation Computation) [][]string
 		add("status", state.Status)
 		add("failed_subjects", strings.Join(state.FailedSubjects, ";"))
 		add("failed_series", baselineSeriesText(state.FailedSeries))
-		add("skipped_series_tags", strings.Join(state.SkippedSeriesTags, ";"))
 		periods := make([]int64, 0, len(computation.CrossPeriods[key]))
 		for period := range computation.CrossPeriods[key] {
 			periods = append(periods, period)
@@ -402,13 +373,11 @@ func baselineCheckScenarios(t *testing.T, library, cross []domain.FactorDef, pla
 		t.Fatalf("S3 零波动段的 min_max 是 0/0，应为 null：%v（有行 %v）", value, ok)
 	}
 
-	// 派生断言（批 3 T5）：只有一个 tag 的数据集上按序列的名单由按标的的名单决定——失败序列就是失败标的逐个配上唯一的 tag，
-	// 跳过的 tag 恒为空。
+	// 派生断言：按序列的名单由按标的的名单决定——失败序列就是失败标的逐个配上唯一的 tag。
 	for _, name := range []string{"single_recalc", "single_live_failed"} {
 		for _, member := range plans[name].Members {
 			state := results[name].FactorStates[member.Key]
 			require.ElementsMatch(t, singleSeries(state.FailedSubjects...), state.FailedSeries, "%s %s", name, member.Key)
-			require.Empty(t, state.SkippedSeriesTags, "%s %s", name, member.Key)
 		}
 	}
 
@@ -423,25 +392,6 @@ func baselineCheckScenarios(t *testing.T, library, cross []domain.FactorDef, pla
 		require.Equal(t, "degraded", live.FactorStates[keyOf(livePlan, item.id+"_partial")].Status, "允许部分全集的截面因子应在可用标的上计算：%s", item.id)
 		require.Positive(t, baselineNonNull(live, keyOf(livePlan, item.id+"_partial")))
 	}
-
-	unified, unifiedPlan := results["unified_live_failed_series"], plans["unified_live_failed_series"]
-	for _, item := range baselineCrossSpecs {
-		strict := unified.FactorStates[keyOf(unifiedPlan, item.id)]
-		require.Equal(t, "degraded", strict.Status, item.id)
-		require.Equal(t, []string{tagSwap}, strict.SkippedSeriesTags, "严格截面因子只跳过永续：%s", item.id)
-		partial := unified.FactorStates[keyOf(unifiedPlan, item.id+"_partial")]
-		require.Empty(t, partial.SkippedSeriesTags, item.id)
-		if _, ok := baselineValueAt(unified, keyOf(unifiedPlan, item.id+"_partial"), "S1", tagSwap, baselineStart.Add(2*time.Minute)); !ok {
-			t.Fatalf("允许部分全集的 %s 应在永续的其余序列上算出结果", item.id)
-		}
-	}
-	if _, ok := baselineValueAt(unified, keyOf(unifiedPlan, "ma"), "S2", tagSwap, baselineStart.Add(2*time.Minute)); ok {
-		t.Fatal("上游失败的 S2 永续序列不进面板，不应有结果行")
-	}
-	recalc, recalcPlan := results["unified_recalc"], plans["unified_recalc"]
-	spot, okSpot := baselineValueAt(recalc, keyOf(recalcPlan, "ma"), "S1", tagSpot, baselineStart)
-	swap, okSwap := baselineValueAt(recalc, keyOf(recalcPlan, "ma"), "S1", tagSwap, baselineStart)
-	require.True(t, okSpot && okSwap && spot != nil && swap != nil && spot != swap, "统一数据集的两条序列应各自计算：%v / %v", spot, swap)
 }
 
 func TestBaselineFactorOutputs(t *testing.T) {
