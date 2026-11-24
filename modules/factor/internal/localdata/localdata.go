@@ -62,8 +62,9 @@ type Config struct {
 // ErrChangeGap 表示数据源的变更日志同步位点断档（离线太久、Storage 节点更换）：要先执行对账。
 var ErrChangeGap = errors.New("变更日志同步位点断档，需要执行对账")
 
-// NoDataError 表示任务里有标的在本地和 Storage 都没有任何数据（设计 6.2，决定 24）：数据源未就绪，
-// 要导入历史数据，或把这些标的从源数据集的标签里移除。
+// NoDataError 表示任务里的标的在本地和 Storage 全都没有任何数据（设计 6.2，决定 24）：数据源未就绪，
+// 要导入历史数据，或把这些标的从源数据集的标签里移除。只有部分标的没有数据时（例如停牌超过保留期的股票）
+// 不算未就绪：记一条警告，这些标的每期按本期不可用处理，其余标的照常计算（任务检查里另有一项列出它们）。
 type NoDataError struct {
 	Subjects []string
 }
@@ -461,11 +462,18 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	if err != nil {
 		return err
 	}
-	// 本地和 Storage 都没有任何数据的标的：拉取成功返回了空结果（拉取失败的不算，那只是同步失败）。数据源未就绪，要导入或移除。
+	// 本地和 Storage 都没有任何数据的标的：拉取成功返回了空结果（拉取失败的不算，那只是同步失败）。
+	// 全部标的都没有数据时数据源未就绪，要导入或移除；只有一部分没有时（停牌超过保留期、刚加入还没采到）不能让它拖住整个任务：
+	// 记警告，它们不进内存窗口，每期按本期不可用处理；实时周期照常按回看范围拉取它们，拉到数据的那一期就载入窗口。
+	// 任务检查的“没有数据的标的”一项现算列出它们。2026-11-24 停牌两个多月的 601059.XSHG 的最后一批 5m 超出保留期，
+	// 沪深 300 的因子任务因此停算了一上午。
 	if noData := noDataSubjects(subjects, local, pull.Failed); len(noData) > 0 {
-		st.ready.Store(false)
-		st.blocked = &NoDataError{Subjects: noData}
-		return st.blocked
+		if len(noData) == len(subjects) {
+			st.ready.Store(false)
+			st.blocked = &NoDataError{Subjects: noData}
+			return st.blocked
+		}
+		log.Warnf("factor_subjects_without_data source=%s %v；这些标的本期不可用，其余照常计算", src, &NoDataError{Subjects: noData})
 	}
 	// 窗口按全部登记任务需要的标的并集载入与保留：任务的标的，加上 observed 任务的历史截面标的。
 	want := append(intersect(subjects, local), history...)
@@ -1605,6 +1613,27 @@ func sortedKeys(set map[string]struct{}) []string {
 
 // st 返回数据源状态（测试用）。
 func (d *Data) st(src seriesstore.Source) *source { return d.lookup(src) }
+
+// SubjectsWithoutData 返回任务登记的标的里本地没有任何数据的（排序）与任务登记的标的数，供任务检查现算：
+// 部分标的没有数据时预载照常完成，只有这里能看出哪些标的每期都算不出来。任务没登记或读本地失败时返回空。
+func (d *Data) SubjectsWithoutData(taskID string, src seriesstore.Source) ([]string, int) {
+	st := d.lookup(src)
+	if st == nil {
+		return nil, 0
+	}
+	st.regsMu.Lock()
+	reg, ok := st.regs[taskID]
+	subjects := append([]string(nil), reg.subjects...)
+	st.regsMu.Unlock()
+	if !ok {
+		return nil, 0
+	}
+	local, err := d.cfg.Store.Subjects(src)
+	if err != nil {
+		return nil, len(subjects)
+	}
+	return noDataSubjects(subjects, local, nil), len(subjects)
+}
 
 // Short 是回看根数不足的标的：本地连续数据的根数不到任务要求的回看，而 Storage 在本地最早一根之前还有数据（不是新上市的标的）。
 type Short struct {

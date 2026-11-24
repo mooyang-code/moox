@@ -16,25 +16,55 @@ import (
 
 var startupSrc = seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}
 
-// 本地和 Storage 都没有任何数据的标的：数据源未就绪，进程不退出，列出这些标的（设计 6.2，决定 24）。
-func TestPrepareFailsStrictlyWhenSubjectHasNoDataAnywhere(t *testing.T) {
+// 全部标的在本地和 Storage 都没有任何数据：数据源未就绪，进程不退出，列出这些标的（设计 6.2，决定 24）。
+func TestPrepareFailsWhenNoSubjectHasDataAnywhere(t *testing.T) {
 	fx := newFixture(t, mean3())
-	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 
-	err := fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "GHOST"})
+	err := fx.data.Prepare(context.Background(), fx.set, []string{"GHOST", "SHADE"})
 	var noData *NoDataError
 	require.True(t, errors.As(err, &noData), "得到 %v", err)
-	require.Equal(t, []string{"GHOST"}, noData.Subjects)
+	require.Equal(t, []string{"GHOST", "SHADE"}, noData.Subjects)
 	require.Contains(t, noData.Error(), "GHOST")
 	require.Equal(t, noData, fx.data.Blocked(startupSrc), "未就绪原因要能被生命周期检查读到")
 	for _, status := range fx.data.WindowStatuses() {
-		require.NotEqual(t, "ready", string(status.State), "有零数据标的时窗口不能处于就绪")
+		require.NotEqual(t, "ready", string(status.State), "全部标的都没有数据时窗口不能处于就绪")
 	}
 
 	// 导入（或采集）补上数据后，再准备就恢复。
 	fx.st.put("GHOST", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"GHOST", "SHADE"}))
+	require.NoError(t, fx.data.Blocked(startupSrc))
+}
+
+// 只有部分标的没有任何数据（停牌超过保留期）：不拖住任务，其余标的照常计算，没有数据的标的本期不可用；
+// 复牌后不用重新预载，实时周期按回看范围拉到它的数据就照常计算。
+func TestPrepareSkipsSubjectsWithoutDataWhenOthersHaveData(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "GHOST"}))
 	require.NoError(t, fx.data.Blocked(startupSrc))
+	status := fx.data.WindowStatuses()
+	require.Len(t, status, 1)
+	require.Equal(t, "ready", string(status[0].State))
+	missing, total := fx.data.SubjectsWithoutData("set1", startupSrc)
+	require.Equal(t, []string{"GHOST"}, missing, "任务检查要能列出没有数据的标的")
+	require.Equal(t, 2, total)
+
+	fx.st.put("BTC", 100, 10)
+	outcome := fx.live(t, at(10), []string{"BTC", "GHOST"})
+	require.Equal(t, []string{"GHOST"}, outcome.FailedSubjects)
+	require.InDelta(t, (108+109+110)/3.0, fx.result("BTC", 10).Fields["mean"], 1e-9)
+
+	// GHOST 复牌、有了数据：再预载后照常计算。
+	fx.st.put("GHOST", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+	fx.st.put("BTC", 100, 11)
+	fx.now = at(11)
+	outcome = fx.live(t, at(11), []string{"BTC", "GHOST"})
+	require.Empty(t, outcome.FailedSubjects)
+	require.InDelta(t, (109+110+111)/3.0, fx.result("GHOST", 11).Fields["mean"], 1e-9)
+	missing, _ = fx.data.SubjectsWithoutData("set1", startupSrc)
+	require.Empty(t, missing)
 }
 
 // 因子的回看不能超过数据源的回看数量 N。
