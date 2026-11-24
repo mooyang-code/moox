@@ -777,37 +777,13 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	if err != nil {
 		return skippedDecision(state, input.SkipConfigError, err.Error()), engine.Frame{}, nil
 	}
-	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutReasons: sets.AgedOutReasons, Holdings: holdings}
+	markets := make([]input.MarketRows, 0, len(readers))
 	for _, reader := range readers {
-		current := segments[reader.market].rows.Bars[key]
-		previous := segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]
-		frameRows := make(map[string]engine.Row, len(current))
-		var marketAged map[string]struct{}
-		for subjectID, row := range current {
-			if manyMarkets {
-				if _, ok := sets.Subjects[subjectID]; !ok {
-					continue
-				}
-				// 某个市场里年龄不够的标的不用这个市场的行（老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）：
-				// 只记下，由选币池构造决定（已持仓的标的豁免）。
-				if passed, probed := agePassed[reader.market]; probed {
-					if _, ok := passed[subjectID]; !ok {
-						if marketAged == nil {
-							marketAged = make(map[string]struct{})
-						}
-						marketAged[subjectID] = struct{}{}
-					}
-				}
-			}
-			// 来源读了 __params 时带上各可变成员这一行实际用的参数，params() 读它；没读时为空，params() 取到 NaN。
-			engineRow := engine.Row{Values: row.Values, Params: row.Params}
-			if program.UsesPreviousBar {
-				if prev, ok := previous[subjectID]; ok {
-					engineRow.Previous = prev.Values
-				}
-			}
-			frameRows[subjectID] = engineRow
-		}
+		markets = append(markets, input.MarketRows{Market: reader.market, Current: segments[reader.market].rows.Bars[key], Previous: segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]})
+	}
+	frame := input.AssembleFrame(input.Assembly{Program: program, Boundary: bar, Sets: sets, Holdings: holdings, Listed: listed, MarketPassed: agePassed, Markets: markets})
+	for _, reader := range readers {
+		frameRows := frame.Markets[reader.market].Rows
 		// 附加来源按 as-of 取这根主帧应读的那一根；同一标的有多个序列的来源行不可信，按缺数处理。
 		for _, name := range sortedNames(segments[reader.market].sources) {
 			period, _, err := resolved.Sources[name].Period(bar.BarEnd)
@@ -824,7 +800,6 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			}
 			input.MergeSourceRows(frameRows, name, usable)
 		}
-		frame.Markets[reader.market] = engine.MarketInput{Rows: frameRows, AgedOut: marketAged}
 	}
 	decision, err := engine.Evaluate(program, frame, state)
 	return decision, frame, err
