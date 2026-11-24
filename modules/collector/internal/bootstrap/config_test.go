@@ -475,45 +475,15 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	require.Equal(t, defaults.Fetch.RequestTimeoutMS, got.RequestTimeoutMS)
 }
 
-func TestStandbyFetchOptionsAreOffByDefaultAndInheritedFromTheGlobalFetch(t *testing.T) {
-	defaults := defaultSCFPlan()
-	require.Zero(t, defaults.fetchFor("crypto", "").StandbyMS, "默认不启用备援")
-	require.False(t, defaults.fetchFor("crypto", "").ConnReuse, "默认不复用连接")
-
-	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"crypto": {Fetch: &SCFPlanFetchConfig{StandbyMS: 800, StandbyHourOnly: true, ConnReuse: true}}}}
-	plan.mergeSpaceDefaults(defaults.Spaces)
-	fetch := plan.fetchFor("crypto", "")
-	require.Equal(t, 800, fetch.StandbyMS)
-	require.True(t, fetch.StandbyHourOnly)
-	require.True(t, fetch.ConnReuse)
-	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency, "只写这几项时其余拉取参数沿用全局默认")
-	require.Zero(t, plan.fetchFor("stockcn", "").StandbyMS, "其他空间不受影响")
-}
-
-// 线上配置只写备援与连接复用时，其余拉取参数沿用内置默认值（解码落在默认配置上，严格解析也认这三个键）。
-func TestScfPlanFetchYAMLWithStandbyAndConnReuseKeepsDefaults(t *testing.T) {
-	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    standby_ms: 800\n    standby_hour_only: true\n    conn_reuse: true\n"))
-	decoder.KnownFields(true)
-	require.NoError(t, decoder.Decode(&cfg))
-	fetch := cfg.SCFPlan.fetchFor("crypto", "")
-	require.Equal(t, 800, fetch.StandbyMS)
-	require.True(t, fetch.StandbyHourOnly)
-	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
-	require.True(t, fetch.ConnReuse)
-}
-
-// 连接复用与备援、取数时刻可以只写需要改的几项，其余沿用默认值；取数时刻按空间设置。
+// 取数时刻可以只写需要改的一项，其余沿用默认值；取数时刻按空间设置。
 func TestScfPlanFetchYAMLNotBeforeOverride(t *testing.T) {
 	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    conn_reuse: true\n  spaces:\n    crypto:\n      fetch:\n        not_before_ms: 2000\n"))
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  spaces:\n    crypto:\n      fetch:\n        not_before_ms: 2000\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
 	fetch := cfg.SCFPlan.fetchFor("crypto", "")
 	require.Equal(t, 2000, fetch.NotBeforeMS)
-	require.True(t, fetch.ConnReuse)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
-	require.Zero(t, fetch.StandbyMS)
 }
 
 // CLI 渲染测试生成的真实产物（modules/cli/internal/setup/topology/testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。

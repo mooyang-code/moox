@@ -425,11 +425,6 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	if blocked, err := r.waitForStream(ctx, desired, previousFunctions); blocked || err != nil {
 		return err
 	}
-	for _, estimate := range EstimateRateBudget(scfFunctions(desired.Functions), r.Options.AssumedEgressIPs) {
-		if estimate.Exceeds() {
-			log.WarnContextf(ctx, "collector fetch plan may hit the provider rate limit space=%s %s: add functions or egress IPs, or lower symbols per function", r.SpaceID, estimate)
-		}
-	}
 	// 计划里有需要新建的函数时拉长提前量：创建 VPC 函数比改环境慢得多。
 	lead := planLeadTime
 	if handoff {

@@ -32,7 +32,6 @@ type pipelineProvider struct {
 	request   *marketdata.KlineRequest
 	rowsFor   func(marketdata.KlineRequest) []marketdata.NormalizedKline
 	errFor    func() error
-	ctxHook   func(context.Context)
 }
 
 func TestPeriodCommitDisabledIgnoresResidualBindings(t *testing.T) {
@@ -191,9 +190,6 @@ func (p pipelineProvider) KlineSpec() marketdata.KlineSpec {
 }
 
 func (p pipelineProvider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
-	if p.ctxHook != nil {
-		p.ctxHook(ctx)
-	}
 	if p.request != nil {
 		*p.request = req
 	}

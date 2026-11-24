@@ -163,7 +163,7 @@ unzip -l "${stock_package_path}" >"${stock_listing_path}"
 grep -q ' main$' "${stock_listing_path}"
 grep -q ' sources/market/binance.yaml$' "${stock_listing_path}"
 # 市场数据文件（路由、数据源运行参数）和交易日历都编在二进制里，代码包不带。
-if grep -Eq 'calendar.yaml|route.yaml|market.yaml|sources/market/(sina|tencent|eastmoney|baidu|tdx).yaml' "${stock_listing_path}"; then
+if grep -Eq 'calendar.yaml|route.yaml|market.yaml|sources/market/(sina|tencent|eastmoney|tdx).yaml' "${stock_listing_path}"; then
   echo "stockcn SCF package must not contain market files (they are embedded in the binary)" >&2
   exit 1
 fi

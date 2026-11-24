@@ -39,36 +39,10 @@ func (key SourceKey) Validate() error {
 	return nil
 }
 
-type SourceStatus string
-
 const (
-	SourceEnabled     SourceStatus = "enabled"
-	SourceShadow      SourceStatus = "shadow"
-	SourceCatalogOnly SourceStatus = "catalog_only"
-)
-
-type SourceSpec struct {
-	Key             SourceKey
-	Status          SourceStatus
-	ProtocolVariant string
-	Transport       string
-	Host            string
-	Port            int
-	Markets         []MarketID
-	Instruments     []InstrumentType
-	Frequencies     []string
-	TimestampMode   TimestampMode
-	CompleteOHLCV   bool
-	HasAmount       bool
-}
-
-const (
-	InstrumentEquity          InstrumentType = "equity"
-	InstrumentETF             InstrumentType = "etf"
-	InstrumentIndex           InstrumentType = "index"
-	InstrumentConvertibleBond InstrumentType = "convertible_bond"
-	InstrumentSpot            InstrumentType = "spot"
-	InstrumentSwap            InstrumentType = "swap"
+	InstrumentEquity InstrumentType = "equity"
+	InstrumentSpot   InstrumentType = "spot"
+	InstrumentSwap   InstrumentType = "swap"
 )
 
 // HasTradeCount 报告这个品种的 K 线是否带报价成交量（quote_volume）和成交笔数（trade_num）：现货、永续带，
@@ -276,7 +250,6 @@ type ProviderDescriptor struct {
 	ProtocolVariant string
 	Transport       string
 	Port            int
-	Status          SourceStatus
 }
 
 var providerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -293,11 +266,6 @@ func (d ProviderDescriptor) Validate() error {
 	}
 	if len(d.Hosts) == 0 {
 		return fmt.Errorf("hosts are required")
-	}
-	switch d.Status {
-	case "", SourceEnabled, SourceShadow, SourceCatalogOnly:
-	default:
-		return fmt.Errorf("invalid source status %q", d.Status)
 	}
 	if d.Transport != "" && (d.Port < 1 || d.Port > 65535) {
 		return fmt.Errorf("invalid source port %d", d.Port)

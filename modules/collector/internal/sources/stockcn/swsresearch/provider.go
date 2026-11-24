@@ -92,7 +92,7 @@ func tlsConfig() *tls.Config {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "swsresearch", SourceID: "sw_class_http", DisplayName: "申万行业分类", Hosts: []string{"www.swsresearch.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "swsresearch", SourceID: "sw_class_http", DisplayName: "申万行业分类", Hosts: []string{"www.swsresearch.com"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 // FieldSpecs：申万只发布行业代码，不发布中文名。

@@ -90,7 +90,7 @@ func secID(req marketdata.KlineRequest) (string, error) {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.klines.SourceID(), DisplayName: "EastMoney HK", Hosts: []string{eastmoneykline.Host}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.klines.SourceID(), DisplayName: "EastMoney HK", Hosts: []string{eastmoneykline.Host}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {

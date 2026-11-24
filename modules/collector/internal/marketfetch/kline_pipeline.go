@@ -228,7 +228,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			fetchStarted := time.Now()
 			trace := &httpclient.Trace{}
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, Adaptive: adaptiveBatch(req.BatchKind)}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithTrace(ctx, trace), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, Adaptive: adaptiveBatch(req.BatchKind)}, itemChain, item.CandidateIndex)
 			timings[index] = itemTiming{
 				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
 				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,
@@ -338,7 +338,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 		}
 		log.WarnContextf(ctx, "market_fetch_pipeline_fetched frequency=%s items=%d failed=%d fetch_ms=%d window_left_ms=%d", req.Frequency, len(req.Items), failed, time.Since(started).Milliseconds(), time.Until(deadline).Milliseconds())
-		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline), batchTimingFields(timings, started, time.Now(), closeAt, req.StandbyMS), probeFields, runtimeFields(req, started))
+		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline), batchTimingFields(timings, started, time.Now(), closeAt), probeFields, runtimeFields(req, started))
 		p.reportSlowItems(req, timings, closeAt)
 	}
 	sort.Slice(rows, func(i, j int) bool {

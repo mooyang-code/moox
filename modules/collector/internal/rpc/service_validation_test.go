@@ -1084,19 +1084,21 @@ func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	task.TagIDs = []string{"binance_spot", "binance_spot_2"}
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
 
-	// Binance 不支持 4h：创建时就拒绝，否则整个空间的计划生成都会失败。
+	// 频率按注入的检查函数（生产里查行情源目录与路由文件）校验，拒绝的原因原样带回；市场 ID 取空间。
+	var calls []string
+	service.checkKlineFrequency = func(marketID, marketType, providerID, frequency string) error {
+		calls = append(calls, marketID+"/"+marketType+"/"+providerID+"/"+frequency)
+		if frequency == "4h" {
+			return fmt.Errorf("不支持 4h K 线")
+		}
+		return nil
+	}
 	task.TagIDs = []string{"binance_spot"}
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"4h"}`
-	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "unsupported")
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "不支持 4h K 线")
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"1mo"}`
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
-
-	// 东方财富 A 股支持 1m、5m：其余频率在创建时就拒绝。
-	task.TagIDs = []string{"cn_a_share"}
-	task.CollectParams = `{"target_dataset_id":"bars","frequency":"5m"}`
-	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
-	task.CollectParams = `{"target_dataset_id":"bars","frequency":"15m"}`
-	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "unsupported")
+	require.Equal(t, []string{"crypto/spot/binance/4h", "crypto/spot/binance/1mo"}, calls)
 }
 
 // 资金费率：只支持 1h、1d；标签必须全部是永续（不能是统一数据集）；行情源要具备这项能力。

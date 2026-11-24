@@ -66,9 +66,6 @@ func TestPipelineBaseline(t *testing.T) {
 		{"crypto/swap/带限速", "crypto", marketdata.InstrumentSwap, "1h", "binance", limits},
 		{"crypto/spot/不带限速", "crypto", marketdata.InstrumentSpot, "1m", "binance", nil},
 		{"crypto/swap/不带限速", "crypto", marketdata.InstrumentSwap, "1m", "binance", nil},
-		{"stockcn/index/eastmoney", "stockcn", marketdata.InstrumentIndex, "5m", "eastmoney", nil},
-		{"stockcn/index/cni（source_id 取登记值）", "stockcn", marketdata.InstrumentIndex, "1d", "cni", nil},
-		{"stockcn/convertible_bond/sina", "stockcn", marketdata.InstrumentConvertibleBond, "5m", "sina", nil},
 	}
 	got := map[string]baselinePipelineView{}
 	for _, item := range cases {

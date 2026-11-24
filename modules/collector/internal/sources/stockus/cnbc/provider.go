@@ -113,7 +113,7 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.sourceID, DisplayName: "CNBC US", Hosts: []string{Host}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.sourceID, DisplayName: "CNBC US", Hosts: []string{Host}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {

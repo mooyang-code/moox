@@ -25,11 +25,5 @@ func NewJobDefinition() jobdef.JobDefinition {
 			{ID: 8, DataType: "kline_resample", FieldKey: "target_dataset_id", FieldName: "目标Dataset", FieldType: "text", DataSourceOptions: dataSources, SortOrder: 4},
 			{ID: 9, DataType: "kline_resample", FieldKey: "target_frequency", FieldName: "目标周期", FieldType: "text", IsRequired: true, DataSourceOptions: dataSources, SortOrder: 5},
 		},
-		Supports: []jobdef.Support{
-			{Exchange: "binance", Market: "spot", DataType: "kline_resample", SourceKind: "dataset"},
-			{Exchange: "binance", Market: "swap", DataType: "kline_resample", SourceKind: "dataset"},
-			{Exchange: "moox", Market: "spot", DataType: "kline_resample", SourceKind: "dataset"},
-			{Exchange: "moox", Market: "swap", DataType: "kline_resample", SourceKind: "dataset"},
-		},
 	}
 }

@@ -74,9 +74,6 @@ func TestRouteBaseline(t *testing.T) {
 		got.RouteIDs["crypto/spot/"+frequency] = baselineRouteID(t, "crypto", marketdata.InstrumentSpot, "crypto_spot_kline", frequency)
 		got.RouteIDs["crypto/swap/"+frequency] = baselineRouteID(t, "crypto", marketdata.InstrumentSwap, "crypto_swap_kline", frequency)
 		got.RouteIDs["crypto/swap/推送/"+frequency] = baselineRouteID(t, "crypto", marketdata.InstrumentSwap, "", frequency)
-		got.RouteIDs["stockcn/index/"+frequency] = baselineRouteID(t, "stockcn", marketdata.InstrumentIndex, "stockcn_index_kline", frequency)
-		got.RouteIDs["stockcn/convertible_bond/"+frequency] = baselineRouteID(t, "stockcn", marketdata.InstrumentConvertibleBond, "stockcn_convertible_bond_kline", frequency)
-		got.RouteIDs["stockcn/index/推送/"+frequency] = baselineRouteID(t, "stockcn", marketdata.InstrumentIndex, "", frequency)
 	}
 
 	// 二、A 股标的分到的主数据源与回落顺序。
@@ -105,5 +102,4 @@ func TestRouteBaseline(t *testing.T) {
 	// 抽查几项，防止记录文件本身被改坏。
 	require.Equal(t, "stockcn_equity_kline_5m", got.RouteIDs["stockcn/equity/5M"])
 	require.Equal(t, "binance_swap_kline_1h", got.RouteIDs["crypto/swap/1h"])
-	require.Equal(t, "stockcn_index_kline", got.RouteIDs["stockcn/index/5m"])
 }

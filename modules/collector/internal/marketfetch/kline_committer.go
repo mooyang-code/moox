@@ -296,9 +296,6 @@ func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, rou
 		fields = append(fields, doubleValue("quote_volume", bar.Amount), intValue("trade_num", bar.TradeCount))
 	} else {
 		fields = append(fields, doubleValue("amount", bar.Amount))
-		if instrumentType == marketdata.InstrumentIndex {
-			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
-		}
 	}
 	fields = append(fields,
 		stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID),

@@ -79,7 +79,7 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "sina_finance", SourceID: "finance_http", DisplayName: "新浪财务报表", Hosts: []string{"quotes.sina.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "sina_finance", SourceID: "finance_http", DisplayName: "新浪财务报表", Hosts: []string{"quotes.sina.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
