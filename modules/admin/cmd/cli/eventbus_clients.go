@@ -75,19 +75,16 @@ func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, 
 				return errors.New("selected EventBus client credential is missing or invalid")
 			}
 			credential := struct {
-				Version      int      `yaml:"version"`
-				URLs         []string `yaml:"urls"`
-				Username     string   `yaml:"username"`
-				Token        string   `yaml:"token,omitempty"`
-				HostToken    string   `yaml:"eventbus_token,omitempty"`
-				MonitorToken string   `yaml:"monitor_eventbus_token,omitempty"`
-				CAFile       string   `yaml:"ca_file"`
+				Version   int      `yaml:"version"`
+				URLs      []string `yaml:"urls"`
+				Username  string   `yaml:"username"`
+				Token     string   `yaml:"token,omitempty"`
+				HostToken string   `yaml:"eventbus_token,omitempty"`
+				CAFile    string   `yaml:"ca_file"`
 			}{Version: 1, URLs: []string{endpoint}, Username: role, CAFile: eventBusCAFile}
 			switch role {
 			case "hostagent-publisher":
 				credential.HostToken = row.SecretValue
-			case "monitor-observability-consumer":
-				credential.MonitorToken = row.SecretValue
 			default:
 				credential.Token = row.SecretValue
 			}

@@ -61,7 +61,7 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	if _, err := js.ConsumerInfo("MOOX_TRADE", "keep"); err != nil {
 		t.Fatalf("consumer state was not preserved: %v", err)
 	}
-	if _, err := js.Publish("moox.event.observability.host.snapshot.reported.v1", []byte("metric")); err != nil {
+	if _, err := js.Publish("moox.event.observability.metrics.snapshot.reported.v1.mooxsys.host-1", []byte("metric")); err != nil {
 		t.Fatal(err)
 	}
 	kept := append([]string(nil), c.Streams[1].Subjects...)
@@ -81,17 +81,6 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	}
 	if info, err := js.StreamInfo(c.Streams[1].Name); err != nil || len(info.Config.Subjects) != len(kept) {
 		t.Fatalf("stream subjects after removal = %+v err=%v", info, err)
-	}
-}
-
-func TestTopicCoverageAndKVTTL(t *testing.T) {
-	c := repositoryConfig(t)
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	c.Streams = append(c.Streams, config.StreamConfig{Name: "MOOX_OBSERVABILITY_DUP", Subjects: []string{"moox.event.observability.>"}, Retention: "limits", Storage: "file"})
-	if err := c.Validate(); err == nil {
-		t.Fatal("overlapping stream accepted")
 	}
 }
 
@@ -153,8 +142,7 @@ func freePort(t *testing.T) int {
 }
 
 func TestEnabledTopics(t *testing.T) {
-	cfg := repositoryConfig(t)
-	assert.Greater(t, enabledTopics(cfg), 0)
+	assert.Greater(t, enabledTopics(), 0)
 }
 
 func TestSubjectRemoved(t *testing.T) {

@@ -154,7 +154,7 @@ func startObservabilityConsumer(
 				// policy; remove it once so the configured policy can take effect on
 				// the next retry instead of leaving observability permanently stale.
 				if strings.Contains(bindErr.Error(), "conflicts in DeliverPolicy") {
-					if deleteErr := js.DeleteConsumer(ctx, consumerCfg.Stream, consumerCfg.Consumer); deleteErr != nil {
+					if deleteErr := js.DeleteConsumer(ctx, events.MonitorObservabilityConsumer.Stream(), observabilityconsumer.DefaultConsumer); deleteErr != nil {
 						log.WarnContextf(ctx, "observability conflicting durable delete failed: %v", deleteErr)
 					}
 				}

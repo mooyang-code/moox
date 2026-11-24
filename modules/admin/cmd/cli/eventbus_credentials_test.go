@@ -67,7 +67,8 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	}
 	yaml := usersYAML(tokens)
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
-	require.Contains(t, aclLine(factorACL, "subscribe:"), "moox.event.storage.dataset.period.completed.v1.>")
+	// 拉取消费只订阅自己的收件箱，不订阅事件主题。
+	require.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, strings.TrimSpace(aclLine(factorACL, "subscribe:")))
 	for _, permission := range []string{
 		"$JS.API.CONSUMER.INFO.*.factor_collector_period_v1",
 		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1",
@@ -225,7 +226,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "moox.event.trade.target.weight_requested.v1.>")
 	strategyACL := eventBusACLBlock(yaml, "strategy-eventbus")
 	assert.NotContains(t, strategyACL, "$JS.API.>")
-	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v2.>"]}`)
+	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	tradeACL := eventBusACLBlock(yaml, "trade-eventbus")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_target_weight_v1")
@@ -246,8 +247,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, yaml, "archive-eventbus")
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
 	assert.Contains(t, aclLine(factorACL, "publish:"), "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1")
-	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.dataset.period.completed.v1.>"]}`, aclLine(factorACL, "subscribe:"))
-	assert.Equal(t, `responses: {max_messages: 1, expires: 10s}`, aclLine(factorACL, "responses:"))
+	assert.Empty(t, aclLine(factorACL, "responses:"))
 	for _, role := range eventBusRoles {
 		if role == "eventbus-internal-admin" {
 			continue
@@ -255,13 +255,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		acl := eventBusACLBlock(yaml, role)
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.API")
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.ACK")
-		if role == "strategy-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v2.>"]}`)
-		} else if role == "factor-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.dataset.period.completed.v1.>"]}`)
-		} else {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
-		}
+		assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
 	}
 
 	rotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "hostagent-publisher"}
@@ -290,7 +284,7 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 		"internal-admin.yaml":               "token: admin-token\n",
 		"hostagent-publisher.yaml":          "eventbus_token: host-token\n",
 		"metrics-publisher.yaml":            "token: metrics-token\n",
-		"monitor-observability.yaml":        "monitor_eventbus_token: monitor-token\n",
+		"monitor-observability.yaml":        "token: monitor-token\n",
 		"storage-eventbus.yaml":             "token: storage-token\n",
 		"factor-eventbus.yaml":              "token: factor-token\n",
 		"strategy-eventbus.yaml":            "token: strategy-token\n",
@@ -553,10 +547,32 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		Stream: "MOOX_STORAGE", Durable: "factor_collector_period_v1",
 		FilterSubject: "moox.event.storage.dataset.period.completed.v1.>",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
-		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true,
 	})
 	require.NoError(t, err)
+	// 只订阅收件箱也能拉到并确认消息：拉取消费不需要订阅事件主题。测试消息不是信封格式，解码错误不影响这里要验证的权限。
+	fetched, _ := factorConsumer.Fetch(factorCtx, 1)
+	require.Len(t, fetched, 1)
+	require.NoError(t, fetched[0].Ack(factorCtx))
 	require.NoError(t, factorConsumer.Close())
+
+	strategyPull, err := jetstream.Connect(factorCtx, jetstream.Config{
+		URLs: []string{server.ClientURL()}, Name: "strategy-view-auth-e2e",
+		Username: "strategy-eventbus", Password: tokens["strategy-eventbus"],
+	})
+	require.NoError(t, err)
+	defer strategyPull.Close()
+	strategyConsumer, err := strategyPull.NewConsumer(factorCtx, jetstream.ConsumerConfig{
+		Stream: "MOOX_STORAGE", Durable: "strategy_view_data_ready_v1",
+		FilterSubject: "moox.event.storage.view.data.ready.v2.>",
+		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true,
+	})
+	require.NoError(t, err)
+	fetched, _ = strategyConsumer.Fetch(factorCtx, 1)
+	require.Len(t, fetched, 1)
+	require.NoError(t, fetched[0].Ack(factorCtx))
+	require.NoError(t, strategyConsumer.Close())
 }
 
 func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) {

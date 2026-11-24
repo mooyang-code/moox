@@ -49,7 +49,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		control.Close()
 		t.Fatal(err)
 	}
-	if _, err := js.AddStream(&nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
+	if _, err := js.AddStream(&nats.StreamConfig{Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(), Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
 		control.Close()
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/matoous/go-nanoid/v2 v2.1.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
@@ -80,6 +81,7 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/netguard v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
@@ -167,3 +169,7 @@ replace github.com/mooyang-code/moox/packages/hostpolicy => ../../packages/hostp
 replace github.com/mooyang-code/moox/packages/netguard => ../../packages/netguard
 
 replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter
+
+replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
+
+replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar

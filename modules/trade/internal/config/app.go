@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -42,7 +43,7 @@ type EventBusConfig struct {
 	TargetConsumer string   `yaml:"-"`
 }
 
-const TargetConsumer = "trade_target_weight_v1"
+var TargetConsumer = events.TradeTargetConsumer.Name()
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {

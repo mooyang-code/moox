@@ -7,12 +7,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"gopkg.in/yaml.v3"
 )
 
 func Default() *Config {
 	return &Config{
-		Broker: BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024},
+		Broker:  BrokerConfig{Host: "127.0.0.1", Port: 4222, ServerName: "eventbus-dev-1", StoreDir: "./data/eventbus/jetstream", StartupTimeout: 10 * time.Second, MaxPayloadBytes: 8 * 1024 * 1024},
+		Streams: events.Streams(),
 	}
 }
 
@@ -53,21 +55,6 @@ func (c *Config) applyDefaults() {
 	if c.Broker.MaxPayloadBytes == 0 {
 		c.Broker.MaxPayloadBytes = d.Broker.MaxPayloadBytes
 	}
-	for i := range c.Streams {
-		normalizeStream(&c.Streams[i])
-	}
-}
-
-func normalizeStream(s *StreamConfig) {
-	if s.Retention == "" {
-		s.Retention = "limits"
-	}
-	if s.Storage == "" {
-		s.Storage = "file"
-	}
-	if s.Discard == "" {
-		s.Discard = "old"
-	}
 }
 
 func (c *Config) applyEnv() {
@@ -88,13 +75,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_EVENTBUS_MAX_PAYLOAD_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Broker.MaxPayloadBytes = n
-		}
-	}
-	if v := os.Getenv("MOOX_EVENTBUS_STREAM_MAX_BYTES"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-			for i := range c.Streams {
-				c.Streams[i].MaxBytes = n
-			}
 		}
 	}
 }

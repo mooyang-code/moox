@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,16 +54,16 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 	if metricCalls.Load() != 1 || hostCalls.Load() != 1 {
 		t.Fatalf("route calls metrics=%d host=%d", metricCalls.Load(), hostCalls.Load())
 	}
-	info, err := js.ConsumerInfo(events.ObservabilityStreamName(), DefaultConsumer)
+	info, err := js.ConsumerInfo(events.StreamObservability, DefaultConsumer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Config.Durable != DefaultConsumer || info.Config.FilterSubject != events.ObservabilityFilterSubject {
+	if info.Config.Durable != DefaultConsumer || !slices.Equal(info.Config.FilterSubjects, events.MonitorObservabilityConsumer.FilterSubjects()) {
 		t.Fatalf("consumer config = %+v", info.Config)
 	}
 }
 
-func TestUnifiedObservabilityConsumerTermsInvalidAndUnknownEvents(t *testing.T) {
+func TestUnifiedObservabilityConsumerTermsInvalidEvents(t *testing.T) {
 	ctx, consumer, _, js := newObservabilityFixture(t, noopRoutes())
 	before := testutil.ToFloat64(rejectedEvents)
 	publishRawEvent(t, js, "moox.event.observability.metrics.snapshot.reported.v1.mooxsys.bad", &eventpb.EventMessage{
@@ -70,22 +71,17 @@ func TestUnifiedObservabilityConsumerTermsInvalidAndUnknownEvents(t *testing.T) 
 		EventVersion: events.ObservabilityMetricsSnapshotReported.Version(), SpaceId: "mooxsys",
 		SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte("not-protobuf"),
 	})
-	publishRawEvent(t, js, "moox.event.observability.unknown.reported.v1.mooxsys.bad", &eventpb.EventMessage{
-		EventId: "unknown-event", EventName: "observability.unknown.reported", EventVersion: 1,
-		SpaceId: "mooxsys", SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte{1},
-	})
-	for range 2 {
-		delivery := fetchDelivery(t, ctx, consumer)
-		result := consumer.Handle(ctx, delivery)
-		if result.Decision != jetstream.TERM || result.Err == nil {
-			t.Fatalf("Handle() = %v, %v; want TERM", result.Decision, result.Err)
-		}
-		if err := jetstream.ApplyHandlerResult(ctx, delivery, result); err != nil {
-			t.Fatal(err)
-		}
+	// Stream 的主题由声明的事件推出，未登记的事件发布不进来，所以这里只验证坏载荷。
+	delivery := fetchDelivery(t, ctx, consumer)
+	result := consumer.Handle(ctx, delivery)
+	if result.Decision != jetstream.TERM || result.Err == nil {
+		t.Fatalf("Handle() = %v, %v; want TERM", result.Decision, result.Err)
 	}
-	if got := testutil.ToFloat64(rejectedEvents); got < before+2 {
-		t.Fatalf("rejected total = %v, want at least %v", got, before+2)
+	if err := jetstream.ApplyHandlerResult(ctx, delivery, result); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(rejectedEvents); got < before+1 {
+		t.Fatalf("rejected total = %v, want at least %v", got, before+1)
 	}
 }
 
@@ -112,7 +108,7 @@ func TestUnifiedObservabilityConsumerNaksTransientRouteFailure(t *testing.T) {
 
 func TestUnifiedObservabilityConsumerReusesDurableAfterRestart(t *testing.T) {
 	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Storage: nats.MemoryStorage})
+	server.AddStream(t, &nats.StreamConfig{Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(), Storage: nats.MemoryStorage})
 	ctx := context.Background()
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "monitor-observability-restart"})
 	if err != nil {
@@ -135,7 +131,7 @@ func TestUnifiedObservabilityConsumerReusesDurableAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	names := server.JetStream().ConsumerNames(events.ObservabilityStreamName())
+	names := server.JetStream().ConsumerNames(events.StreamObservability)
 	var got []string
 	for name := range names {
 		got = append(got, name)
@@ -196,7 +192,7 @@ func newObservabilityFixture(t *testing.T, routes Routes) (context.Context, *Con
 func newObservabilityFixtureWithContext(t *testing.T, ctx context.Context, routes Routes) (*Consumer, *events.Publisher, nats.JetStreamContext) {
 	t.Helper()
 	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Storage: nats.MemoryStorage})
+	server.AddStream(t, &nats.StreamConfig{Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(), Storage: nats.MemoryStorage})
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "monitor-observability-test"})
 	if err != nil {
 		t.Fatal(err)

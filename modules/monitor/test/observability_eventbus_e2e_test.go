@@ -22,7 +22,7 @@ import (
 func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	server := testkit.Start(t)
 	server.AddStream(t, &nats.StreamConfig{
-		Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject},
+		Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(),
 		Storage: nats.MemoryStorage, Duplicates: 2 * time.Minute,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -137,7 +137,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var durableNames []string
-	for name := range server.JetStream().ConsumerNames(events.ObservabilityStreamName()) {
+	for name := range server.JetStream().ConsumerNames(events.StreamObservability) {
 		durableNames = append(durableNames, name)
 	}
 	if len(durableNames) != 1 || durableNames[0] != observabilityconsumer.DefaultConsumer {

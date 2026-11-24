@@ -1,5 +1,5 @@
 // Package catalog 是事件中心可以配置规则的事件目录：界面名、可限定的范围，以及怎样从信封里取出范围的值。
-// 目录只放在本服务里，不改事件注册表；开放新事件只需要在这里加一项，并同步 events.CallbackDispatcherEvents。
+// 目录只放在本服务里，不改事件注册表；开放新事件只需要在这里加一项，并同步 packages/events 拓扑里的 CallbackDispatcherEvents。
 package catalog
 
 import (

@@ -16,10 +16,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const ConsumerName = "factor_collector_period_v1"
+// ConsumerName 是源周期完成事件的持久消费者，声明在 events 拓扑里。
+var ConsumerName = events.FactorPeriodConsumer.Name()
 
 // BackfilledConsumerName 是 K 线补写事件（event.collector.kline.backfilled，MOOX_COLLECTOR）的持久消费者。
-const BackfilledConsumerName = "factor_kline_backfilled_v1"
+var BackfilledConsumerName = events.FactorBackfilledConsumer.Name()
 
 type ConsumerConfig struct {
 	URLs               []string
