@@ -703,7 +703,7 @@ func (r *SummarizeAccountPnlReq) Validate() error {
 }
 
 var validOperatorActionTypes = map[string]struct{}{
-	"MANUAL_ORDER": {}, "SUBMIT_ORDER": {}, "CANCEL_ORDER": {}, "FLATTEN": {}, "REDUCE": {}, "DELIST_FLATTEN": {},
+	"MANUAL_ORDER": {}, "CANCEL_ORDER": {}, "FLATTEN": {}, "REDUCE": {}, "DELIST_FLATTEN": {},
 }
 
 func (r *ListOperatorActionsReq) Validate() error {

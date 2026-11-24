@@ -375,7 +375,7 @@ func TestRunSkipsOnlyWhileFlattenOrReduceIsRunning(t *testing.T) {
 		f.run()
 		require.Empty(t, f.reduces, actionType)
 	}
-	for _, actionType := range []string{"MANUAL_ORDER", "CANCEL_ORDER", "SUBMIT_ORDER"} {
+	for _, actionType := range []string{"MANUAL_ORDER", "CANCEL_ORDER"} {
 		f := newFixture(t, "", "400")
 		create(f, "manual-"+actionType, actionType)
 		f.run()

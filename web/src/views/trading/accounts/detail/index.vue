@@ -467,8 +467,7 @@ const actionTitle = computed(() => {
   if (!action) return "";
   const name = operatorActionTypeText(action.action_type);
   if (action.status === "RUNNING") return `${name}进行中`;
-  if (action.status === "COMPLETED")
-    return ["SUBMIT_ORDER", "MANUAL_ORDER"].includes(action.action_type) ? `${name}：订单已提交` : `${name}完成`;
+  if (action.status === "COMPLETED") return action.action_type === "MANUAL_ORDER" ? `${name}：订单已提交` : `${name}完成`;
   return `${name}${actionStateLabels[action.status] || ""}`;
 });
 const actionAlertType = computed(() => {

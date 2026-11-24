@@ -1151,7 +1151,7 @@ message SummarizeAccountPnlRsp {
 
 message ListOperatorActionsReq {
   string logical_account_id = 1;
-  // 按动作类型过滤：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
+  // 按动作类型过滤：MANUAL_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
   string action_type = 2;
   int64 start_time = 3;
   int64 end_time = 4;

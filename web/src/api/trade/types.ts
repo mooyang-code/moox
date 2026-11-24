@@ -571,8 +571,8 @@ export interface SummarizeAccountPnlRsp {
   funding_from?: string;
 }
 
-/** 操作类型：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN */
-export type OperatorActionType = "MANUAL_ORDER" | "SUBMIT_ORDER" | "CANCEL_ORDER" | "FLATTEN" | "REDUCE" | "DELIST_FLATTEN";
+/** 操作类型：MANUAL_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN */
+export type OperatorActionType = "MANUAL_ORDER" | "CANCEL_ORDER" | "FLATTEN" | "REDUCE" | "DELIST_FLATTEN";
 
 export interface ListOperatorActionsReq {
   logical_account_id: string;

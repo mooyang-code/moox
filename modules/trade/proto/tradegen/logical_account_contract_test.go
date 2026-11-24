@@ -67,7 +67,7 @@ func TestTradeExecutionRPCUsesManualOrderAndLogicalTarget(t *testing.T) {
 	service := File_trade_service_proto.Services().ByName("TradeConsoleService")
 	require.NotNil(t, service)
 	require.NotNil(t, service.Methods().ByName("SubmitOrder"))
-	require.Nil(t, service.Methods().ByName("PlaceManualOrder"), "人工下单只留 SubmitOrder 一个入口")
+	require.Nil(t, service.Methods().ByName("PlaceManualOrder"), "人工下单只留 SubmitOrder 一个入口（动作类型 MANUAL_ORDER）")
 	require.NotNil(t, service.Methods().ByName("GetOperatorAction"))
 	require.NotNil(t, service.Methods().ByName("GetLogicalAccountTarget"))
 	require.Nil(t, service.Methods().ByName("PlaceOrder"))

@@ -11,8 +11,8 @@ var ErrInvalidAction = errors.New("trade: invalid operator action")
 type ActionType string
 
 const (
+	// ActionManualOrder 是人工下单，按组合的控制模式决定要不要先接管（见 operator.Service.PlaceOrder）。
 	ActionManualOrder ActionType = "MANUAL_ORDER"
-	ActionSubmitOrder ActionType = "SUBMIT_ORDER"
 	ActionCancelOrder ActionType = "CANCEL_ORDER"
 	ActionFlatten     ActionType = "FLATTEN"
 	// ActionReduce 按比例减仓，清仓就是比例为 100% 的减仓。
@@ -53,7 +53,6 @@ func (a Action) Validate() error {
 
 func validType(value ActionType) bool {
 	return value == ActionManualOrder ||
-		value == ActionSubmitOrder ||
 		value == ActionCancelOrder ||
 		value == ActionFlatten ||
 		value == ActionReduce ||

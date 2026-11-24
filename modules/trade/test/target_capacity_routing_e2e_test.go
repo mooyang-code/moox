@@ -166,7 +166,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	delivery := &jetstream.Delivery{RawData: raw, Subject: encoded.Subject, RawMessageID: "capacity-target", ContentType: events.ContentType}
 	accepted := eventconsumer.HandleTarget(ctx, delivery, opts)
 	require.Equal(t, jetstream.ACK, accepted.Decision, accepted.Err)
-	receipt, err := f.store.GetTargetReceipt(ctx, testSpace, "capacity-target")
+	receipt, err := f.store.GetAcceptedTargetHistory(ctx, testSpace, "capacity-target")
 	require.NoError(t, err)
 	current, err := f.store.GetLogicalAccountTarget(ctx, testSpace, testLogicalAccount)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	f.fake.mu.Unlock()
 	replayed := eventconsumer.HandleTarget(ctx, delivery, opts)
 	require.Equal(t, jetstream.ACK, replayed.Decision, replayed.Err)
-	after, err := f.store.GetTargetReceipt(ctx, testSpace, "capacity-target")
+	after, err := f.store.GetAcceptedTargetHistory(ctx, testSpace, "capacity-target")
 	require.NoError(t, err)
 	require.Equal(t, receipt, after, "routing/fill/replay must not revalue the accepted target")
 	_, total, err := f.store.ListFills(ctx, testSpace, store.FillQuery{Limit: 10})

@@ -26,8 +26,8 @@ func TestManualRefreshedPaperMarketUsesFrozenSlippageAtMatcher(t *testing.T) {
 	now := testNow
 	f.adapter.(recordingAdapter).ExecutionAdapter.(*paperexec.Adapter).Now = func() time.Time { return now }
 	service := &operator.Service{Store: f.store, Orders: manualSubmitDispatchLoss{Service: f.orders}, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return now }, ManualSubmitWindow: 2 * time.Minute}
-	command := operator.ManualOrderCommand{SpaceID: testSpace, ActionID: "paper-refresh", TradingAccountID: testAccount, ClientOrderID: "paper-refresh", InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"), Reason: "paper delayed submission"}
-	initial, err := service.PlaceManualOrder(ctx, command)
+	command := operator.ManualOrderCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, ActionID: "paper-refresh", TradingAccountID: testAccount, ClientOrderID: "paper-refresh", InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"), Reason: "paper delayed submission"}
+	initial, err := service.PlaceOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.NotNil(t, initial.Order.PaperExecutionPrice)
 	originalPrice := shared.MustDecimal(*initial.Order.PaperExecutionPrice)
@@ -38,7 +38,7 @@ func TestManualRefreshedPaperMarketUsesFrozenSlippageAtMatcher(t *testing.T) {
 	f.fake.reference.UpdatedAt = now
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_paper_account_configs SET c_slippage_bps = '100' WHERE c_space_id = ? AND c_trading_account_id = ?", testSpace, testAccount).Error)
 	service.Orders = f.orders
-	result, err := service.PlaceManualOrder(ctx, command)
+	result, err := service.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	wantPrice := originalPrice.Mul(shared.MustDecimal("2"))
 	require.Equal(t, wantPrice.String(), *result.Order.PaperExecutionPrice)
@@ -70,13 +70,13 @@ func TestManualUnknownSubmissionRemainsRecoverable(t *testing.T) {
 		Now:    func() time.Time { return now }, ManualSubmitWindow: submitWindow,
 	}
 	command := operator.ManualOrderCommand{
-		SpaceID: testSpace, ActionID: "manual-unknown-recovery",
+		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, ActionID: "manual-unknown-recovery",
 		TradingAccountID: testAccount, ClientOrderID: "manual-stable-client",
 		InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("0.01"), Reason: "manual recovery test",
 	}
-	initial, err := service.PlaceManualOrder(ctx, command)
+	initial, err := service.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	require.NotEmpty(t, initial.Action.LastError)
@@ -109,7 +109,7 @@ func TestManualUnknownSubmissionRemainsRecoverable(t *testing.T) {
 	restarted := *service
 	service = &restarted
 	runManualRecoveryWorker(t, f, service)
-	replayed, err := service.PlaceManualOrder(ctx, command)
+	replayed, err := service.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", replayed.Action.Status)
 	require.Equal(t, unknown.OrderID, replayed.Order.OrderID)
@@ -165,7 +165,7 @@ func TestManualAcknowledgedSubmissionCompletesDespiteSyncFailure(t *testing.T) {
 	failure := &manualAckSyncFailure{}
 	f.orders.Syncer = failure
 	f.orders.Adapters = adapterSource{adapter: manualImmediateFillExchange{fakeExchange: f.fake}}
-	result, err := service.PlaceManualOrder(ctx, command)
+	result, err := service.PlaceOrder(ctx, command)
 	require.ErrorContains(t, err, "account sync failed after acknowledged submission")
 	require.Equal(t, 1, failure.calls, "exercise the actual OrderService post-ACK sync failure")
 	require.Equal(t, "COMPLETED", result.Action.Status)
@@ -173,7 +173,7 @@ func TestManualAcknowledgedSubmissionCompletesDespiteSyncFailure(t *testing.T) {
 	require.Equal(t, string(orderdomain.Open), result.Order.State)
 	require.NotEmpty(t, result.Order.ExchangeOrderID)
 	runManualRecoveryWorker(t, f, service)
-	replayed, err := service.PlaceManualOrder(ctx, command)
+	replayed, err := service.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, result.Order.OrderID, replayed.Order.OrderID)
 	require.Equal(t, 1, failure.calls)
@@ -202,7 +202,7 @@ func TestManualLinkedPendingChildRecoveredBeforeSubmit(t *testing.T) {
 	ctx := context.Background()
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualSubmitDispatchLoss{Service: f.orders}
-	initial, err := service.PlaceManualOrder(ctx, command)
+	initial, err := service.PlaceOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
@@ -217,7 +217,7 @@ func TestManualLinkedPendingChildRecoveredBeforeSubmit(t *testing.T) {
 	restarted := *service
 	restarted.Orders = f.orders
 	runManualRecoveryWorker(t, f, &restarted)
-	result, err := restarted.PlaceManualOrder(ctx, command)
+	result, err := restarted.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Equal(t, child.OrderID, result.Order.OrderID)
@@ -231,7 +231,7 @@ func TestManualPendingAccountNotReadyRemainsAccepted(t *testing.T) {
 	ctx := context.Background()
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualSubmitDispatchLoss{Service: f.orders}
-	initial, err := service.PlaceManualOrder(ctx, command)
+	initial, err := service.PlaceOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
@@ -239,7 +239,7 @@ func TestManualPendingAccountNotReadyRemainsAccepted(t *testing.T) {
 	}))
 	service.Orders = f.orders
 	f.account.SessionState = readySession(false)
-	result, err := service.PlaceManualOrder(ctx, command)
+	result, err := service.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", result.Action.Status)
 	require.NotEmpty(t, result.Action.LastError)
@@ -250,13 +250,13 @@ func TestManualPendingAccountNotReadyRemainsAccepted(t *testing.T) {
 func TestManualInitialAccountNotReadyRemainsAccepted(t *testing.T) {
 	f, service, command := manualRecoveryFixture(t)
 	f.account.SessionState = readySession(false)
-	result, err := service.PlaceManualOrder(context.Background(), command)
+	result, err := service.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", result.Action.Status)
 	require.NotEmpty(t, result.Action.LastError)
 	f.account.SessionState = readySession(true)
 	runManualRecoveryWorker(t, f, service)
-	result, err = service.PlaceManualOrder(context.Background(), command)
+	result, err = service.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", result.Action.Status)
 }
@@ -264,14 +264,14 @@ func TestManualInitialAccountNotReadyRemainsAccepted(t *testing.T) {
 func TestManualStaleQuoteRecoversWithoutNewAction(t *testing.T) {
 	f, service, command := manualRecoveryFixture(t)
 	service.Prices = logicalAccountE2EPriceSource{at: testNow.Add(-2 * time.Minute)}
-	result, err := service.PlaceManualOrder(context.Background(), command)
+	result, err := service.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Contains(t, result.Action.LastError, "stale")
 	require.Zero(t, f.fake.placeCalls)
 	service.Prices = logicalAccountE2EPriceSource{at: testNow}
 	runManualRecoveryWorker(t, f, service)
-	result, err = service.PlaceManualOrder(context.Background(), command)
+	result, err = service.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Equal(t, 1, f.fake.placeCalls)
@@ -280,7 +280,7 @@ func TestManualStaleQuoteRecoversWithoutNewAction(t *testing.T) {
 func TestManualWorkerQueriesUnknownBeforeAbsentRetry(t *testing.T) {
 	f, service, command := manualRecoveryFixture(t)
 	f.fake.placeErr = transportError("response lost")
-	initial, err := service.PlaceManualOrder(context.Background(), command)
+	initial, err := service.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.SubmitUnknown), initial.Order.State)
 	now := testNow.Add(2 * time.Second)
@@ -291,7 +291,7 @@ func TestManualWorkerQueriesUnknownBeforeAbsentRetry(t *testing.T) {
 	restarted := *service
 	restarted.Now = func() time.Time { return now }
 	runManualRecoveryWorker(t, f, &restarted)
-	result, err := restarted.PlaceManualOrder(context.Background(), command)
+	result, err := restarted.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Equal(t, initial.Order.OrderID, result.Order.OrderID)
@@ -312,7 +312,7 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 			ctx := context.Background()
 			f, service, command := manualRecoveryFixture(t)
 			service.Orders = manualSubmitDispatchLoss{Service: f.orders}
-			initial, err := service.PlaceManualOrder(ctx, command)
+			initial, err := service.PlaceOrder(ctx, command)
 			require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 			before := initial.Order
 			reserved := shared.MustDecimal(before.ReservedQuantity)
@@ -321,7 +321,7 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 			f.orders.Now = func() time.Time { return now }
 			f.orders.Validator.Now = func() time.Time { return now }
 			service.Orders = f.orders
-			stale, err := service.PlaceManualOrder(ctx, command)
+			stale, err := service.PlaceOrder(ctx, command)
 			require.NoError(t, err)
 			require.Equal(t, "RUNNING", stale.Action.Status)
 			require.Equal(t, string(orderdomain.Pending), stale.Order.State)
@@ -339,7 +339,7 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 			f.fake.reference.Price = f.fake.reference.Price.Mul(factor)
 			f.fake.reference.UpdatedAt = now
 			if tc.insufficient {
-				result, callErr := service.PlaceManualOrder(ctx, command)
+				result, callErr := service.PlaceOrder(ctx, command)
 				require.NoError(t, callErr)
 				require.Equal(t, "RUNNING", result.Action.Status)
 				require.Contains(t, result.Action.LastError, "可用资金不足")
@@ -352,7 +352,7 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 				return
 			}
 			runManualRecoveryWorker(t, f, service)
-			result, err := service.PlaceManualOrder(ctx, command)
+			result, err := service.PlaceOrder(ctx, command)
 			require.NoError(t, err)
 			require.Equal(t, "COMPLETED", result.Action.Status)
 			require.Equal(t, before.OrderID, result.Order.OrderID)
@@ -372,7 +372,7 @@ func TestManualLinkedPendingCannotSubmitAfterMembershipRemoval(t *testing.T) {
 	ctx := context.Background()
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualSubmitDispatchLoss{Service: f.orders}
-	initial, err := service.PlaceManualOrder(ctx, command)
+	initial, err := service.PlaceOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
@@ -380,7 +380,7 @@ func TestManualLinkedPendingCannotSubmitAfterMembershipRemoval(t *testing.T) {
 	}))
 	restarted := *service
 	restarted.Orders = f.orders
-	result, err := restarted.PlaceManualOrder(ctx, command)
+	result, err := restarted.PlaceOrder(ctx, command)
 	require.Error(t, err)
 	require.Equal(t, "FAILED", result.Action.Status)
 	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
@@ -395,11 +395,11 @@ func TestManualLinkedPendingCannotSubmitAfterMembershipRemoval(t *testing.T) {
 func TestManualClientIDConflictTerminatesActionWithoutChangingExistingOrder(t *testing.T) {
 	ctx := context.Background()
 	f, service, command := manualRecoveryFixture(t)
-	first, err := service.PlaceManualOrder(ctx, command)
+	first, err := service.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", first.Action.Status)
 	command.ActionID = "conflicting-action"
-	result, err := service.PlaceManualOrder(ctx, command)
+	result, err := service.PlaceOrder(ctx, command)
 	require.ErrorIs(t, err, orderapp.ErrIdempotencyConflict)
 	action, err := f.store.GetOperatorAction(ctx, testSpace, command.ActionID)
 	require.NoError(t, err)
@@ -426,7 +426,7 @@ func TestManualPendingChildRecoveredWithoutActionLink(t *testing.T) {
 	ctx := context.Background()
 	f, service, command := manualRecoveryFixture(t)
 	service.Orders = manualPlaceAcknowledgmentLoss{OrderService: f.orders}
-	initial, err := service.PlaceManualOrder(ctx, command)
+	initial, err := service.PlaceOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after durable Place before action link")
 	require.Equal(t, "RUNNING", initial.Action.Status)
 	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
@@ -437,7 +437,7 @@ func TestManualPendingChildRecoveredWithoutActionLink(t *testing.T) {
 	restarted := *service
 	restarted.Orders = f.orders
 	require.NoError(t, restarted.ResumeOperatorAction(ctx, initial.Action))
-	result, err := restarted.PlaceManualOrder(ctx, command)
+	result, err := restarted.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Equal(t, child.OrderID, result.Order.OrderID)
@@ -457,7 +457,7 @@ func TestManualConfirmedAbsentPendingRespectsOriginalDeadline(t *testing.T) {
 			ctx := context.Background()
 			f, service, command := manualRecoveryFixture(t)
 			f.fake.placeErr = transportError("manual response lost")
-			initial, err := service.PlaceManualOrder(ctx, command)
+			initial, err := service.PlaceOrder(ctx, command)
 			require.NoError(t, err)
 			child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 			require.NoError(t, err)
@@ -475,7 +475,7 @@ func TestManualConfirmedAbsentPendingRespectsOriginalDeadline(t *testing.T) {
 			restarted.ManualSubmitWindow = 24 * time.Hour
 			err = restarted.ResumeOperatorAction(ctx, initial.Action)
 			require.NoError(t, err, "a durably recorded expiration does not fail worker health")
-			result, err := restarted.PlaceManualOrder(ctx, command)
+			result, err := restarted.PlaceOrder(ctx, command)
 			persisted, getErr := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 			require.NoError(t, getErr)
 			require.Equal(t, child.OrderID, persisted.OrderID)
@@ -513,7 +513,7 @@ func manualRecoveryFixture(t *testing.T) (*fixture, *operator.Service, operator.
 		Now:    func() time.Time { return testNow }, ManualSubmitWindow: 2 * time.Minute,
 	}
 	command := operator.ManualOrderCommand{
-		SpaceID: testSpace, ActionID: "manual-pending-recovery",
+		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, ActionID: "manual-pending-recovery",
 		TradingAccountID: testAccount, ClientOrderID: "manual-stable-client",
 		InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,

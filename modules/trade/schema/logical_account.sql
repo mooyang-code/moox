@@ -121,7 +121,6 @@ CREATE TABLE IF NOT EXISTS t_operator_actions (
             'MANUAL_ORDER',
             'CANCEL_ORDER',
             'FLATTEN',
-            'SUBMIT_ORDER',
             'REDUCE',
             'DELIST_FLATTEN'
         )

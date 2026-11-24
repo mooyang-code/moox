@@ -23,12 +23,12 @@ func TestManualRPCTransientAcceptanceReturnsSuccessWithDurableAction(t *testing.
 				service.Prices = logicalAccountE2EPriceSource{at: testNow.Add(-2 * time.Minute)}
 			}
 			handler := &rpc.ExecutionServer{Store: f.store, Submit: func(ctx context.Context, c rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, err := service.PlaceOrder(ctx, operator.SubmitOrderCommand{LogicalAccountID: c.LogicalAccountID, ManualOrderCommand: operator.ManualOrderCommand{
+				result, err := service.PlaceOrder(ctx, operator.ManualOrderCommand{LogicalAccountID: c.LogicalAccountID,
 					SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID,
 					ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID,
 					Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide,
 					Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason, DeadlineAt: c.DeadlineAt,
-				}})
+				})
 				return result.Action, result.Order, err
 			}}
 			ctx := spacecontext.WithSpaceID(context.Background(), testSpace)

@@ -9809,7 +9809,7 @@ type ListOperatorActionsReq struct {
 	unknownFields protoimpl.UnknownFields
 
 	LogicalAccountId string `protobuf:"bytes,1,opt,name=logical_account_id,json=logicalAccountId,proto3" json:"logical_account_id,omitempty"`
-	// 按动作类型过滤：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
+	// 按动作类型过滤：MANUAL_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
 	ActionType string         `protobuf:"bytes,2,opt,name=action_type,json=actionType,proto3" json:"action_type,omitempty"`
 	StartTime  int64          `protobuf:"varint,3,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
 	EndTime    int64          `protobuf:"varint,4,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`

@@ -41,7 +41,7 @@ func (s databaseSubmissionSyncer) SyncAccount(ctx context.Context, id string) er
 
 func TestSubmissionJoinedExchangeAndSyncDatabaseFailurePreservesRejection(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
-	result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	result, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	orders := s.Orders.(*orderapp.Service)
 	orders.Adapters = rejectedSubmissionAdapter{adapter}
@@ -89,7 +89,7 @@ func (s deadlineUnknownOrders) ResolveUnknown(_ context.Context, _, _ string) (o
 func TestSubmissionInitialDisabledHasNoDurableSideEffects(t *testing.T) {
 	f, s, _ := realSubmissionService(t)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_status='DISABLED' WHERE c_trading_account_id='account-a'").Error)
-	_, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	_, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.Error(t, err)
 	for _, table := range []string{"t_operator_actions", "t_trade_orders"} {
 		var n int64
@@ -113,7 +113,7 @@ func TestSubmissionCanceledDependenciesStillPersistDiagnostics(t *testing.T) {
 			command := submissionCommand(f)
 			var action store.OperatorActionRecord
 			if strings.HasPrefix(path, "recovery") {
-				result, err := s.SubmitOrder(context.Background(), command)
+				result, err := s.PlaceOrder(context.Background(), command)
 				require.NoError(t, err)
 				action = result.Action
 				if path == "recovery-unknown" {
@@ -137,7 +137,7 @@ func TestSubmissionCanceledDependenciesStillPersistDiagnostics(t *testing.T) {
 			if strings.HasPrefix(path, "recovery") {
 				require.NoError(t, s.ResumeOperatorAction(ctx, action))
 			} else {
-				result, err := s.SubmitOrder(ctx, command)
+				result, err := s.PlaceOrder(ctx, command)
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 				require.Equal(t, command.ActionID, result.Action.ActionID)
 			}
@@ -151,7 +151,7 @@ func TestSubmissionCanceledDependenciesStillPersistDiagnostics(t *testing.T) {
 
 func TestSubmissionDiagnosticFailureKeepsCauseAndDurableIdentity(t *testing.T) {
 	f, s, _ := realSubmissionService(t)
-	result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	result, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	dbErr := errors.New("diagnostic update failed")
 	callback := "test:diagnostic_failure"
@@ -180,7 +180,7 @@ func TestSubmissionPlacedChildLinkFailureReturnsBothDurableIdentities(t *testing
 	}))
 	t.Cleanup(func() { require.NoError(t, f.store.DBForTest().Callback().Raw().Remove(callback)) })
 	command := submissionCommand(f)
-	got, err := s.SubmitOrder(context.Background(), command)
+	got, err := s.PlaceOrder(context.Background(), command)
 	require.ErrorIs(t, err, dbErr)
 	require.Equal(t, command.ActionID, got.Action.ActionID)
 	require.NotEmpty(t, got.Order.OrderID)
@@ -192,13 +192,13 @@ func TestSubmissionPlacedChildLinkFailureReturnsBothDurableIdentities(t *testing
 func TestSubmissionReplayCanceledLockKeepsKnownIdentity(t *testing.T) {
 	f, s, _ := realSubmissionService(t)
 	command := submissionCommand(f)
-	accepted, err := s.SubmitOrder(context.Background(), command)
+	accepted, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	unlock := f.store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	got, err := s.SubmitOrder(ctx, command)
+	got, err := s.PlaceOrder(ctx, command)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Equal(t, accepted.Action.ActionID, got.Action.ActionID)
 	require.Equal(t, accepted.Order.OrderID, got.Order.OrderID)
@@ -209,7 +209,7 @@ func TestSubmissionCrashGapRecoveryErrorsKeepTrustedChild(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			f, s, _ := realSubmissionService(t)
 			command := submissionCommand(f)
-			first, err := s.SubmitOrder(context.Background(), command)
+			first, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
 			require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_result_json=? WHERE c_action_id=?", `{"deadline_at":62000}`, command.ActionID).Error)
 			cause := errors.New("crash gap " + path + " failure")
@@ -224,7 +224,7 @@ func TestSubmissionCrashGapRecoveryErrorsKeepTrustedChild(t *testing.T) {
 				}))
 				t.Cleanup(func() { require.NoError(t, f.store.DBForTest().Callback().Raw().Remove(callback)) })
 			}
-			got, err := s.SubmitOrder(context.Background(), command)
+			got, err := s.PlaceOrder(context.Background(), command)
 			require.ErrorIs(t, err, cause)
 			require.Equal(t, first.Action.ActionID, got.Action.ActionID)
 			require.Equal(t, first.Order.OrderID, got.Order.OrderID)
@@ -240,10 +240,10 @@ func TestSubmissionCrashGapRecoveryErrorsKeepTrustedChild(t *testing.T) {
 func TestSubmissionCrashGapNeverReturnsAnotherActionsChild(t *testing.T) {
 	f, s, _ := realSubmissionService(t)
 	command := submissionCommand(f)
-	_, err := s.SubmitOrder(context.Background(), command)
+	_, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	command.ActionID = "different-action"
-	got, err := s.SubmitOrder(context.Background(), command)
+	got, err := s.PlaceOrder(context.Background(), command)
 	require.ErrorIs(t, err, orderapp.ErrIdempotencyConflict)
 	require.Empty(t, got.Order.OrderID)
 }

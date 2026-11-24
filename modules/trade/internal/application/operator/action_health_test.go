@@ -22,9 +22,9 @@ import (
 
 func TestManualRecoverySharedWriteFailureIsNotHealthy(t *testing.T) {
 	f, s, _ := realSubmissionService(t)
-	accepted, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	accepted, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
-	raw, err := manualOrderRequestJSON(submissionCommand(f).ManualOrderCommand)
+	raw, err := manualOrderRequestJSON(submissionCommand(f))
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_action_type='MANUAL_ORDER',c_request_json=? WHERE c_action_id=?", raw, accepted.Action.ActionID).Error)
 	action, err := f.store.GetOperatorAction(context.Background(), "space-1", accepted.Action.ActionID)
@@ -70,7 +70,7 @@ func TestOperatorRealSyncMixedDatabaseFailureNeverBecomesHealthy(t *testing.T) {
 			f, s, a := realSubmissionService(t)
 			var orderID string
 			if kind == string(operatordomain.ActionCancelOrder) {
-				accepted, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+				accepted, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 				require.NoError(t, err)
 				require.NoError(t, s.ResumeOperatorAction(context.Background(), accepted.Action))
 				orderID = accepted.Order.OrderID
@@ -93,7 +93,8 @@ func TestOperatorRealSyncMixedDatabaseFailureNeverBecomesHealthy(t *testing.T) {
 			var err error
 			switch kind {
 			case string(operatordomain.ActionManualOrder):
-				_, err = s.PlaceManualOrder(context.Background(), submissionCommand(f).ManualOrderCommand)
+				setControlMode(t, f, "STRATEGY")
+				_, err = s.PlaceOrder(context.Background(), submissionCommand(f))
 			case string(operatordomain.ActionFlatten):
 				_, err = s.FlattenLogicalAccount(context.Background(), FlattenCommand{SpaceID: "space-1", ActionID: "mixed-flatten", LogicalAccountID: "logical-1", Reason: "stop"})
 			case string(operatordomain.ActionCancelOrder):
@@ -113,7 +114,7 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 			var raw string
 			switch kind {
 			case string(operatordomain.ActionManualOrder):
-				command := submissionCommand(f).ManualOrderCommand
+				command := submissionCommand(f)
 				command.ActionID = "a-action"
 				command.ClientOrderID = "a-client"
 				var err error
@@ -125,7 +126,7 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 				command := submissionCommand(f)
 				command.ActionID = "completed"
 				command.ClientOrderID = "cancel-child"
-				accepted, err := s.SubmitOrder(context.Background(), command)
+				accepted, err := s.PlaceOrder(context.Background(), command)
 				require.NoError(t, err)
 				require.NoError(t, s.ResumeOperatorAction(context.Background(), accepted.Action))
 				raw = `{"order_id":"` + accepted.Order.OrderID + `"}`
@@ -133,12 +134,17 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 				orders.Adapters = cancelDeadlineAdapter{adapter}
 				orders.Syncer = databaseSubmissionSyncer{f.store}
 			}
-			action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "a-action", LogicalAccountID: "logical-1", ActionType: kind, Reason: "ordinary order", RequestJSON: raw, Status: string(operatordomain.StatusRunning), CreatedAt: f.now})
+			var resultJSON *string
+			if kind == string(operatordomain.ActionManualOrder) {
+				takeover := `{"takeover":true}`
+				resultJSON = &takeover
+			}
+			action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "a-action", LogicalAccountID: "logical-1", ActionType: kind, Reason: "ordinary order", RequestJSON: raw, Status: string(operatordomain.StatusRunning), CreatedAt: f.now, ResultJSON: resultJSON})
 			require.NoError(t, err)
 			command := submissionCommand(f)
 			command.ActionID = "z-action"
 			command.ClientOrderID = "z-client"
-			second, err := s.SubmitOrder(context.Background(), command)
+			second, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -174,7 +180,7 @@ func (a cancelDeadlineAdapter) CancelOrder(context.Context, exchange.SymbolKey, 
 
 func TestCancelDeadlineRemainsRecoverableWithIdentity(t *testing.T) {
 	f, s, a := realSubmissionService(t)
-	accepted, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	accepted, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.NoError(t, s.ResumeOperatorAction(context.Background(), accepted.Action))
 	orders := s.Orders.(*orderapp.Service)
@@ -198,7 +204,7 @@ func TestCancelDeadlineRemainsRecoverableWithIdentity(t *testing.T) {
 
 func TestCancelDiagnosticOrderReadFailurePreservesErrorAndIdentity(t *testing.T) {
 	f, s, a := realSubmissionService(t)
-	accepted, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	accepted, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.NoError(t, s.ResumeOperatorAction(context.Background(), accepted.Action))
 	orders := s.Orders.(*orderapp.Service)
@@ -273,7 +279,7 @@ func TestCancelDiagnosticAndCompletionWriteFailureKeepDurableAction(t *testing.T
 	for _, terminal := range []bool{true, false} {
 		t.Run(map[bool]string{true: "completion", false: "diagnostic"}[terminal], func(t *testing.T) {
 			f, s, a := realSubmissionService(t)
-			accepted, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+			accepted, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 			require.NoError(t, err)
 			if terminal {
 				_, err = s.Orders.DiscardPending(context.Background(), "space-1", accepted.Order.OrderID)
@@ -307,7 +313,7 @@ func TestCancelDiagnosticAndCompletionWriteFailureKeepDurableAction(t *testing.T
 
 func TestFlattenRecoversUnknownChildBeforeQuoteAndNeverCompletesUncertain(t *testing.T) {
 	f, s, a := realSubmissionService(t)
-	accepted, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	accepted, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_action_type='FLATTEN',c_request_json=? WHERE c_action_id=?", `{"logical_account_id":"logical-1"}`, accepted.Action.ActionID).Error)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), accepted.Order.OrderID).Error)
@@ -330,9 +336,9 @@ func TestManualRecoveryBusinessRejectionAndUnknownQuery(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			f, s, a := realSubmissionService(t)
 			command := submissionCommand(f)
-			accepted, err := s.SubmitOrder(context.Background(), command)
+			accepted, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
-			raw, err := manualOrderRequestJSON(command.ManualOrderCommand)
+			raw, err := manualOrderRequestJSON(command)
 			require.NoError(t, err)
 			require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_action_type='MANUAL_ORDER',c_request_json=? WHERE c_action_id=?", raw, accepted.Action.ActionID).Error)
 			action, err := f.store.GetOperatorAction(context.Background(), "space-1", accepted.Action.ActionID)
@@ -363,16 +369,20 @@ func TestManualAndCancelLockWaitsAreCancelableAndKeepDurableIDs(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f, s, _ := realSubmissionService(t)
 			command := submissionCommand(f)
-			accepted, err := s.SubmitOrder(context.Background(), command)
+			accepted, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
 			var raw string
 			if kind == string(operatordomain.ActionManualOrder) {
-				raw, err = manualOrderRequestJSON(command.ManualOrderCommand)
+				raw, err = manualOrderRequestJSON(command)
 				require.NoError(t, err)
 			} else {
 				raw = `{"order_id":"` + accepted.Order.OrderID + `"}`
 			}
 			require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_action_type=?,c_request_json=? WHERE c_action_id=?", kind, raw, accepted.Action.ActionID).Error)
+			if kind == string(operatordomain.ActionManualOrder) {
+				// 接管流程：等锁超时只是暂时没做完，对调用方算受理成功。
+				require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_result_json=json_set(c_result_json, '$.takeover', json('true')) WHERE c_action_id=?`, accepted.Action.ActionID).Error)
+			}
 			unlock := f.store.LockLogicalAccount("space-1", "logical-1")
 			defer unlock()
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -380,7 +390,7 @@ func TestManualAndCancelLockWaitsAreCancelableAndKeepDurableIDs(t *testing.T) {
 			var action store.OperatorActionRecord
 			var orderID string
 			if kind == string(operatordomain.ActionManualOrder) {
-				got, callErr := s.PlaceManualOrder(ctx, command.ManualOrderCommand)
+				got, callErr := s.PlaceOrder(ctx, command)
 				err = callErr
 				action = got.Action
 				orderID = got.Order.OrderID
@@ -408,11 +418,11 @@ func TestSubmitWorkerLockTimeoutContinuesNextActionWithHealthyDiagnostics(t *tes
 			f, s, _ := realSubmissionService(t)
 			command := submissionCommand(f)
 			command.ActionID = "a-action"
-			first, err := s.SubmitOrder(context.Background(), command)
+			first, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
 			command.ActionID = "z-action"
 			command.ClientOrderID = "z-client"
-			second, err := s.SubmitOrder(context.Background(), command)
+			second, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
 			failure := errors.New("diagnostic write unavailable")
 			if failDiagnostic {

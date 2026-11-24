@@ -11,10 +11,28 @@ import (
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
 
-func shadowRecord(space, instanceID, targetID string, barEnd int64) store.ShadowTargetRecord {
-	return store.ShadowTargetRecord{
+// shadowStore 打开一个空库，建好两个空间里的组合 logical-1（目标历史按组合挂外键）。
+func shadowStore(t *testing.T) *store.Store {
+	t.Helper()
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tradeStore.Close() })
+	for _, space := range []string{"space-1", "space-2"} {
+		if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+			return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: space, LogicalAccountID: "logical-1", Name: "shadow", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return tradeStore
+}
+
+func shadowRecord(space, instanceID, targetID string, barEnd int64) store.TargetHistoryRecord {
+	return store.TargetHistoryRecord{
 		SpaceID: space, TargetID: targetID, LogicalAccountID: "logical-1", InstanceID: instanceID, SessionID: "session-1",
-		SessionStartedAt: 1000, StrategyID: "strategy-1", BarEndTime: barEnd, ValidUntil: barEnd + 7_200_000,
+		SessionStartedAt: 1000, StrategyID: "strategy-1", BarEndTime: barEnd, ValidUntil: barEnd + 7_200_000, RequestHash: "hash",
 		WeightsJSON:         `[{"instrument_id":"BTC-USDT","target_weight":"0.6"},{"instrument_id":"ETH-USDT","target_weight":"0.2","hold":true}]`,
 		Equity:              "1000",
 		EquitySourceTime:    barEnd - 1000,
@@ -27,13 +45,9 @@ func shadowRecord(space, instanceID, targetID string, barEnd int64) store.Shadow
 // 影子目标按周期从新到旧列出，只列当前空间、这个实例的；权重、参考价、换算出的数量按写入时的形状解开；
 // 不填 limit 取默认条数，超过上限、缺实例 ID、缺空间都拒绝。
 func TestListShadowTargets(t *testing.T) {
-	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { tradeStore.Close() })
+	tradeStore := shadowStore(t)
 	ctx := context.Background()
-	for i, record := range []store.ShadowTargetRecord{
+	for i, record := range []store.TargetHistoryRecord{
 		shadowRecord("space-1", "instance-1", "t1", 3_600_000),
 		shadowRecord("space-1", "instance-1", "t2", 7_200_000),
 		shadowRecord("space-1", "instance-2", "t3", 7_200_000),
@@ -91,11 +105,7 @@ func TestListShadowTargets(t *testing.T) {
 
 // 不填 limit 时列出默认的 20 条（最新的 20 期）。
 func TestListShadowTargetsDefaultsToTwentyItems(t *testing.T) {
-	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { tradeStore.Close() })
+	tradeStore := shadowStore(t)
 	ctx := context.Background()
 	for i := range 25 {
 		record := shadowRecord("space-1", "instance-1", fmt.Sprintf("t%02d", i), int64(i+1)*3_600_000)

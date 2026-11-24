@@ -26,7 +26,7 @@ func TestSubmitOrderRPCPreservesDurableAcceptance(t *testing.T) {
 		Store: rpcStoreWithAccount(t),
 		Submit: func(_ context.Context, command SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 			got = command
-			return store.OperatorActionRecord{ActionID: "action-1", Status: "RUNNING", ActionType: "SUBMIT_ORDER", LastError: "transient diagnostic"}, store.OrderRecord{OrderID: "order-1", State: "PENDING"}, nil
+			return store.OperatorActionRecord{ActionID: "action-1", Status: "RUNNING", ActionType: "MANUAL_ORDER", LastError: "transient diagnostic"}, store.OrderRecord{OrderID: "order-1", State: "PENDING"}, nil
 		},
 	}
 	rsp, err := h.SubmitOrder(spacecontext.WithSpaceID(context.Background(), "space-1"), ordinaryRequest())
