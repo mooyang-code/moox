@@ -66,10 +66,7 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	if strings.TrimSpace(params.SourceDatasetID) == strings.TrimSpace(params.TargetDatasetID) {
 		return fmt.Errorf("source and target Dataset IDs must differ")
 	}
-	if strings.TrimSpace(params.SourceSeriesTag) != "" && len(params.SourceSeriesTags) > 0 {
-		return fmt.Errorf("source_series_tag 与 source_series_tags 不能同时给出")
-	}
-	if len(params.SourceTags()) == 0 {
+	if strings.TrimSpace(params.SourceSeriesTag) == "" {
 		return fmt.Errorf("source_series_tag is required")
 	}
 	// 合成的字段表是固定的，资金费率不做求和合成：源数据集带这一列也可以重采样（结果里没有这一列），只拒绝显式要它。

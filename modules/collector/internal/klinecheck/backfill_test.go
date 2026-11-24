@@ -508,7 +508,7 @@ func TestDatasetMarketRefusesHistoryBeforeAMappingOnlyChange(t *testing.T) {
 	datasetMarket := func(at time.Time) (*marketfetch.Plan, error) {
 		history, err := backfiller.loadPlanHistory(ctx, "crypto")
 		require.NoError(t, err)
-		return history.datasetMarket("ds", "1m", "BTC-USDT", "", at)
+		return history.datasetMarket("ds", "1m", "BTC-USDT", at)
 	}
 
 	// 更新时间是“现在”：此前的历史数据拒绝补采。

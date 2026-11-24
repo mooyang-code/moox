@@ -1060,19 +1060,14 @@ func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	params := `{"target_dataset_id":"bars","frequency":"1m"}`
 	task := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", CollectParams: params}
 
-	// 同一数据源的现货加永续是统一数据集，通过。
+	// 现货加永续不能放进同一个任务：要拆成两个任务（各一个数据集）。
 	task.TagIDs = []string{"binance_spot", "binance_swap"}
-	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "现货与永续请拆成两个任务")
 
 	// 数据源不同的标签不能放进同一个任务。
 	service.datasetSrc.(tagValidationSource).tags["okx_swap"] = &storagepb.Tag{TagId: "okx_swap", Attributes: map[string]string{"sync.source": "okx", "market_type": "swap"}}
 	task.TagIDs = []string{"binance_spot", "okx_swap"}
 	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "数据源不同")
-
-	// 同一数据源但不是现货加永续（例如再加一个交割合约市场）也拒绝。
-	service.datasetSrc.(tagValidationSource).tags["binance_delivery"] = &storagepb.Tag{TagId: "binance_delivery", Attributes: map[string]string{"sync.source": "binance", "market_type": "delivery"}}
-	task.TagIDs = []string{"binance_spot", "binance_swap", "binance_delivery"}
-	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "现货加永续")
 
 	for _, tagID := range []string{"binance_spot", "cn_a_share"} {
 		task.TagIDs = []string{tagID}
@@ -1101,7 +1096,7 @@ func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	require.Equal(t, []string{"crypto/spot/binance/4h", "crypto/spot/binance/1mo"}, calls)
 }
 
-// 资金费率：只支持 1h、1d；标签必须全部是永续（不能是统一数据集）；行情源要具备这项能力。
+// 资金费率：只支持 1h、1d；标签必须是永续；行情源要具备这项能力。
 func TestValidateCollectionTaskTagRoutesFundingRate(t *testing.T) {
 	tags := map[string]*storagepb.Tag{
 		"binance_spot": {TagId: "binance_spot", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}},
@@ -1126,9 +1121,6 @@ func TestValidateCollectionTaskTagRoutesFundingRate(t *testing.T) {
 	task.CollectParams = withFunding("1h")
 	task.TagIDs = []string{"binance_spot"}
 	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "标签 binance_spot 的市场 spot 下没有来源", "只有永续有来源")
-	task.TagIDs = []string{"binance_spot", "binance_swap"}
-	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "统一数据集", "现货加永续不支持")
-
 	// 不选这个字段时行为不变。
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"1m"}`
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))

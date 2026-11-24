@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -292,10 +291,8 @@ type tagReader interface {
 	GetTag(context.Context, *storagepb.GetTagReq) (*storagepb.GetTagRsp, error)
 }
 
-// resultDataSource 返回任务全部标签共享的数据源与市场类型：
-//   - 数据源与市场都相同：返回它们；
-//   - 数据源相同、市场是现货与永续两个：统一数据集，市场类型为 multi，数据源保留；
-//   - 其余（数据源不同，或市场组合不是现货加永续）：返回空值。建任务时已按同样的规则拒绝，这里只是兜底。
+// resultDataSource 返回任务全部标签共享的数据源与市场类型；数据源或市场不全相同时返回空值
+// （建任务时已按同样的规则拒绝，这里只是兜底）。
 func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectTags []string) (source, marketType string, err error) {
 	reader, ok := m.metadata.(tagReader)
 	if !ok || len(subjectTags) == 0 {
@@ -323,9 +320,6 @@ func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectT
 		for market := range markets {
 			return source, market, nil
 		}
-	}
-	if tagattr.IsSpotSwap(markets) {
-		return source, seriesset.MarketMulti, nil
 	}
 	return "", "", nil
 }

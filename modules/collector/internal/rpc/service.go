@@ -1189,7 +1189,6 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 	}
 	type tagRoute struct{ id, source, market string }
 	routes := make([]tagRoute, 0, len(task.TagIDs))
-	markets := map[string]struct{}{}
 	for _, tagID := range normalizeTagIDs(task.TagIDs) {
 		tag, err := tagSource.GetTag(ctx, task.SpaceID, tagID)
 		if err != nil {
@@ -1199,15 +1198,14 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		if route.source == "" || route.market == "" {
 			return fmt.Errorf("tag %s must have sync.source and market_type attributes", tagID)
 		}
-		// 同一任务的结果数据集只能来自一个数据源；市场可以是同一个，或正好是现货加永续（统一数据集）。
+		// 同一任务的结果数据集只放一个数据源、一个市场的序列：现货与永续要拆成两个任务（各一个数据集）。
 		if first := routes; len(first) > 0 && route.source != first[0].source {
 			return fmt.Errorf("标签 %s（数据源 %s）与标签 %s（数据源 %s）的数据源不同，一个任务只能使用同一数据源的标签", first[0].id, first[0].source, tagID, route.source)
 		}
+		if first := routes; len(first) > 0 && route.market != first[0].market {
+			return fmt.Errorf("标签 %s（市场 %s）与标签 %s（市场 %s）的市场不同，一个任务只能使用同一市场的标签；现货与永续请拆成两个任务", first[0].id, first[0].market, tagID, route.market)
+		}
 		routes = append(routes, route)
-		markets[route.market] = struct{}{}
-	}
-	if len(markets) > 1 && !tagattr.IsSpotSwap(markets) {
-		return fmt.Errorf("标签属于 %d 个不同市场，一个任务的标签要么同属一个市场，要么正好是现货加永续（统一数据集）", len(markets))
 	}
 	for _, route := range routes {
 		params, err := domain.ParseCollectParams(task.CollectParams, route.source, route.market, task.DataType)
@@ -1230,12 +1228,11 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 			}
 		}
 	}
-	// 选中的附加字段在任务每个标签的（市场, 品种）下都要有来源：例如资金费率只有永续有来源，
-	// 现货任务和统一数据集（现货加永续）都选不了。
+	// 选中的附加字段在任务的（市场, 品种）下要有来源：例如资金费率只有永续有来源，现货任务选不了。
 	for _, field := range extraFields {
 		for _, route := range routes {
 			if _, ok := s.fieldOffers.Find(task.SpaceID, route.market, field.ID); !ok {
-				return fmt.Errorf("输出字段 %s 在标签 %s 的市场 %s 下没有来源；任务的每个标签都要有（统一数据集也一样）", field.ID, route.id, route.market)
+				return fmt.Errorf("输出字段 %s 在标签 %s 的市场 %s 下没有来源", field.ID, route.id, route.market)
 			}
 		}
 	}

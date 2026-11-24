@@ -11,61 +11,28 @@ import (
 )
 
 // Segment 是一个数据集在 [From, To) 期间（K 线开始时间，Unix 秒；To 为 0 表示至今）应有的标的集合。
+// 一个数据集只放一个市场的序列，每个标的只有一条序列，检查与补采按标的进行，读取不带 series_tag。
 type Segment struct {
-	From     int64
-	To       int64
-	Subjects []string
-	// Series 只在统一数据集（这一段里有 ≥2 个不同 series_tag）时有值：每个 series_tag 下应有的标的（升序）。
-	// 有值时检查、补采按序列（标的、tag）进行；为空时数据集是单序列，不区分 tag，读取也不带 tag。
-	Series       map[string][]string
+	From         int64
+	To           int64
+	Subjects     []string
 	LatenessS    int
 	OutputFields []string
 }
 
-// seriesGroup 是一批同属一个序列 tag 的标的；Tag 为空表示不区分序列。
-type seriesGroup struct {
-	Tag      string
-	Subjects []string
-}
-
-// groups 返回这一段要检查的序列分组：单序列数据集只有一组（Tag 为空），统一数据集每个 tag 一组（按 tag 升序）。
-func (s Segment) groups() []seriesGroup {
-	if len(s.Series) == 0 {
-		return []seriesGroup{{Subjects: s.Subjects}}
-	}
-	tags := make([]string, 0, len(s.Series))
-	for tag := range s.Series {
-		tags = append(tags, tag)
-	}
-	sort.Strings(tags)
-	out := make([]seriesGroup, 0, len(tags))
-	for _, tag := range tags {
-		out = append(out, seriesGroup{Tag: tag, Subjects: s.Series[tag]})
-	}
-	return out
-}
-
-// segmentSeries 把时间线行里的序列（标的、tag）整理成一段的标的与按 tag 的成员：只有出现 ≥2 个不同 tag 才返回按序列的成员。
-func segmentSeries(series []seriesset.Series) (subjects []string, byTag map[string][]string) {
+// segmentSubjects 返回时间线行里序列的标的（大写、去重、升序）。
+func segmentSubjects(series []seriesset.Series) []string {
 	seen := map[string]bool{}
-	members := map[string][]string{}
+	var subjects []string
 	for _, item := range series {
 		subject := strings.ToUpper(item.SubjectID)
 		if !seen[subject] {
 			seen[subject] = true
 			subjects = append(subjects, subject)
 		}
-		tag := strings.TrimSpace(item.SeriesTag)
-		members[tag] = append(members[tag], subject)
 	}
 	sort.Strings(subjects)
-	if len(members) < 2 {
-		return subjects, nil
-	}
-	for tag := range members {
-		sort.Strings(members[tag])
-	}
-	return subjects, members
+	return subjects
 }
 
 // Timeline 是每个“数据集|频率”按时间排列的应有标的。
@@ -93,8 +60,7 @@ func BuildTimeline(entries []store.SeriesTimelineEntry) Timeline {
 		if len(entry.Series) == 0 {
 			continue
 		}
-		subjects, byTag := segmentSeries(entry.Series)
-		timeline[key] = append(timeline[key], Segment{From: entry.EffectiveFrom, Subjects: subjects, Series: byTag, LatenessS: entry.LatenessS, OutputFields: entry.OutputFields})
+		timeline[key] = append(timeline[key], Segment{From: entry.EffectiveFrom, Subjects: segmentSubjects(entry.Series), LatenessS: entry.LatenessS, OutputFields: entry.OutputFields})
 	}
 	return timeline
 }

@@ -136,17 +136,6 @@ func TimelineScenarios(t *testing.T) []TimelineScenario {
 		snapshot("reregister/new_plan_applied", h.store.records)
 	}
 
-	// 统一数据集：现货、永续两条序列写同一个数据集；之后标的减少一个。
-	{
-		h, r := newPlanBaselineUnified(t)
-		attach(h.store)
-		planBaselineSettle(t, h, r)
-		r.lastVerified = h.now
-		h.setSubjects(59)
-		planBaselineSettle(t, h, r)
-		snapshot("unified_dataset", h.store.records)
-	}
-
 	// 交接：云函数 → 推送 → 云函数（哈希不变，不重新登记）。
 	{
 		h := newIngestHarness(t, ingestSCF, "1m", "1h")

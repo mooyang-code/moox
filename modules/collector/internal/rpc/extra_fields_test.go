@@ -28,7 +28,7 @@ func testFieldOffers() marketdata.FieldOffers {
 	}
 }
 
-// 附加字段的通用校验：任务频率要在字段适用的频率里；任务每个标签的（市场, 品种）下都要有来源；重采样不能选。
+// 附加字段的通用校验：任务频率要在字段适用的频率里；任务的（市场, 品种）下要有来源；重采样不能选。
 func TestValidateCollectionTaskTagRoutesExtraFields(t *testing.T) {
 	tags := map[string]*storagepb.Tag{
 		"binance_spot": {TagId: "binance_spot", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}},
@@ -39,16 +39,15 @@ func TestValidateCollectionTaskTagRoutesExtraFields(t *testing.T) {
 		return service.validateCollectionTaskTagRoutes(context.Background(), domain.CollectionTask{SpaceID: "crypto", DataType: "kline", TagIDs: tagIDs,
 			CollectParams: `{"target_dataset_id":"bars","frequency":"` + frequency + `","output_fields":[` + fields + `]}`})
 	}
-	// 现货和永续都有来源的字段，统一数据集可以选。
-	require.NoError(t, validate("1h", `"close","basis"`, "binance_spot", "binance_swap"))
+	require.NoError(t, validate("1h", `"close","basis"`, "binance_spot"))
 	require.NoError(t, validate("1h", `"close","basis","funding_rate"`, "binance_swap"))
 	// 频率不在字段适用的频率里。
 	require.ErrorContains(t, validate("1d", `"close","basis"`, "binance_spot"), "输出字段 basis 只支持 1h 频率")
 	require.ErrorContains(t, validate("1m", `"close","funding_rate"`, "binance_swap"), "输出字段 funding_rate 只支持 1h、1d 频率")
-	// 有一个标签的市场下没有来源。
-	require.ErrorContains(t, validate("1h", `"close","basis","funding_rate"`, "binance_spot", "binance_swap"), "输出字段 funding_rate 在标签 binance_spot 的市场 spot 下没有来源")
+	// 标签的市场下没有来源。
+	require.ErrorContains(t, validate("1h", `"close","basis","funding_rate"`, "binance_spot"), "输出字段 funding_rate 在标签 binance_spot 的市场 spot 下没有来源")
 	// 不是附加字段的输出字段不受这条规则约束。
-	require.NoError(t, validate("1m", `"close","volume"`, "binance_spot", "binance_swap"))
+	require.NoError(t, validate("1m", `"close","volume"`, "binance_spot"))
 
 	// 字段只在自己的市场里是附加字段：别的空间选它不走这条规则（建列时按不认识的字段拒绝）。
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), domain.CollectionTask{SpaceID: "stockcn", DataType: "kline_resample",

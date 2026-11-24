@@ -44,8 +44,8 @@ func legacyBuildTimeline(records []*store.FetchPlanRecord) (klinecheck.Timeline,
 				legacyCloseSegment(timeline, key, change.P)
 			case change.HashChanged && (applied || progress.Registered[key]):
 				legacyCloseSegment(timeline, key, change.P)
-				subjects, byTag := legacySegmentSeries(change.Series)
-				timeline[key] = append(timeline[key], klinecheck.Segment{From: change.P, Subjects: subjects, Series: byTag, LatenessS: change.LatenessS, OutputFields: change.OutputFields})
+				subjects, _ := legacySegmentSeries(change.Series)
+				timeline[key] = append(timeline[key], klinecheck.Segment{From: change.P, Subjects: subjects, LatenessS: change.LatenessS, OutputFields: change.OutputFields})
 			}
 		}
 		// 快照清空发生在这份计划生效之后，所以先按上面还原它的变更，再丢掉此前的全部计划段。
@@ -114,7 +114,6 @@ func TestLegacyTimelineMatchesBuildTimeline(t *testing.T) {
 		"reregister/hashes_cleared":                         "",
 		"reregister/new_plan_registered_not_applied":        "ds_spot|1m=[open:60]",
 		"reregister/new_plan_applied":                       "ds_spot|1m=[open:60]",
-		"unified_dataset":                                   "ds_unified|1m=[closed:60/2tags open:59/2tags]",
 		"handoff_scf_stream_scf":                            "ds_spot_1h|1h=[open:60] ds_spot_1m|1m=[open:60]",
 		"stale_period/saved_not_registered":                 "",
 		"stale_period/reselected_not_registered":            "",
@@ -144,9 +143,6 @@ func timelineShape(timeline klinecheck.Timeline) string {
 				state = "closed"
 			}
 			item := state + ":" + strconv.Itoa(len(segment.Subjects))
-			if len(segment.Series) > 0 {
-				item += "/" + strconv.Itoa(len(segment.Series)) + "tags"
-			}
 			segments = append(segments, item)
 		}
 		parts = append(parts, key+"=["+strings.Join(segments, " ")+"]")
