@@ -136,10 +136,10 @@ test("instance detail distinguishes valid target weight from trade fills and exp
   await expect(page.getByText("25.00%").first()).toBeVisible();
   await expect(page.getByText("历史结果", { exact: true })).toBeVisible();
   await expect(page.getByText("已发送")).toBeVisible();
-  await expect(page.getByText("上一根版本未知（previous_version_unknown）")).toBeVisible();
+  await expect(page.getByText("上一根版本未知（previous_version_unknown） × 1")).toBeVisible();
   await expect(page.getByText("投递状态不代表成交状态")).toBeVisible();
-  await page.getByText("输入绑定（会话固化的 View 列与因子指纹）").click();
-  await expect(page.getByText("ma_20")).toBeVisible();
+  await page.getByText("输入绑定（会话固化的结果 View 列与成员契约）").click();
+  await expect(page.getByText("ma_20", { exact: true })).toBeVisible();
   await expect(page.getByText("停用实例")).toBeVisible();
 });
 
