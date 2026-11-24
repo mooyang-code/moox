@@ -47,7 +47,7 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 			labels := fmt.Sprintf(`{"health_check":%q,"stage":"evaluate"}`, item.check)
 			name := report.ModuleMetricName(item.module, item.metric)
 			require.NoError(t, db.Create(&monmetrics.MetricSeries{ServiceName: "moox_" + item.module, InstanceID: "i", SeriesID: seriesID, MetricName: name, MetricType: "gauge", LabelsJSON: labels, LastSeenAt: now}).Error)
-			require.NoError(t, db.Create(&monmetrics.MetricLatest{SeriesID: seriesID, ServiceName: "moox_" + item.module, InstanceID: "i", MetricName: name, MetricType: "gauge", LabelsJSON: labels, Value: float64(item.at.Unix()), ObservedAt: now}).Error)
+			require.NoError(t, db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{SeriesID: seriesID, ServiceName: "moox_" + item.module, InstanceID: "i", MetricName: name, MetricType: "gauge", LabelsJSON: labels, Value: float64(item.at.Unix()), ObservedAt: now}).Error)
 		}
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})

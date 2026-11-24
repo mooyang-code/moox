@@ -128,6 +128,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	}
 	doctorContext := &monitordoctor.Builder{
 		Deployments: monitordeployment.NewClientSource(runtime.Gateway),
+		Services:    monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology},
 		Alerts:      runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}

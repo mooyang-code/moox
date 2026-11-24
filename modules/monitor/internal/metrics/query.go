@@ -38,21 +38,21 @@ func (q *QueryService) SetNoDataAfter(d time.Duration) {
 	}
 }
 
-func (q *QueryService) Latest(ctx context.Context, seriesID string) (*MetricLatest, error) {
+func (q *QueryService) Latest(ctx context.Context, seriesID string) (*MetricSeries, error) {
 	if q == nil || q.messageStore == nil {
 		return nil, ErrMetricsStoreUnavailable
 	}
 	return q.messageStore.GetLatest(ctx, seriesID)
 }
 
-func (q *QueryService) ListLatestByMetricNames(ctx context.Context, names []string, limit int) ([]MetricLatest, error) {
+func (q *QueryService) ListLatestByMetricNames(ctx context.Context, names []string, limit int) ([]MetricSeries, error) {
 	if q == nil || q.messageStore == nil {
 		return nil, ErrMetricsStoreUnavailable
 	}
 	return q.messageStore.ListLatestByMetricNames(ctx, names, limit)
 }
 
-func (q *QueryService) ListLatestByViewScopes(ctx context.Context, metricName string, scopes []ViewMetricScope, limit int) ([]MetricLatest, error) {
+func (q *QueryService) ListLatestByViewScopes(ctx context.Context, metricName string, scopes []ViewMetricScope, limit int) ([]MetricSeries, error) {
 	if q == nil || q.messageStore == nil {
 		return nil, ErrMetricsStoreUnavailable
 	}

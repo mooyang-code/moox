@@ -211,32 +211,17 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_services (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_services_key
 ON t_monitor_metric_services (c_service_name, c_instance_id, c_boot_id);
 
+-- 指标序列：目录与最新值在同一行。c_last_seen_at 是最近一次上报这条序列的时间（24 小时没上报的序列由清理定时器删除）；
+-- 最新值只前进到更新的观测，水位类指标不往小里退，所以 c_observed_at 可能早于 c_last_seen_at。
 CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    c_series_id TEXT NOT NULL,
     c_service_name TEXT NOT NULL,
     c_instance_id TEXT NOT NULL,
-    c_series_id TEXT NOT NULL,
     c_metric_name TEXT NOT NULL,
     c_metric_type TEXT NOT NULL,
     c_labels_json TEXT NOT NULL DEFAULT '{}',
     c_last_seen_at DATETIME NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_series_key
-ON t_monitor_metric_series (c_service_name, c_instance_id, c_series_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_name
-ON t_monitor_metric_series (c_service_name, c_metric_name);
-
-CREATE TABLE IF NOT EXISTS t_monitor_metric_latest (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_series_id TEXT NOT NULL,
-    c_service_name TEXT NOT NULL,
-    c_instance_id TEXT NOT NULL,
-    c_metric_name TEXT NOT NULL,
-    c_metric_type TEXT NOT NULL,
-    c_labels_json TEXT NOT NULL DEFAULT '{}',
     c_value REAL NOT NULL,
     c_observed_at DATETIME NOT NULL,
     c_interval_seconds INTEGER NOT NULL DEFAULT 0,
@@ -247,8 +232,10 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_latest (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_latest_series ON t_monitor_metric_latest (c_series_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_metric_latest_name ON t_monitor_metric_latest (c_service_name, c_metric_name, c_observed_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_series_key ON t_monitor_metric_series (c_series_id);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_name
+ON t_monitor_metric_series (c_service_name, c_metric_name, c_observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_last_seen ON t_monitor_metric_series (c_last_seen_at);
 
 CREATE TABLE IF NOT EXISTS t_monitor_metric_ingest_messages (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -300,14 +287,6 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_monitor_metric_series SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_latest_mtime
-AFTER UPDATE ON t_monitor_metric_latest
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_monitor_metric_latest SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 CREATE TABLE IF NOT EXISTS t_monitor_component_health (

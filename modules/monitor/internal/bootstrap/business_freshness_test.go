@@ -113,7 +113,7 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		for _, row := range []monmetrics.MetricLatest{
+		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
 			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
 		} {
@@ -164,7 +164,7 @@ func TestBusinessFreshnessReporterReenablesRetiredKlineCheckWhenStillExpected(t 
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		for _, row := range []monmetrics.MetricLatest{
+		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
 			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
 		} {
@@ -458,7 +458,7 @@ func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *test
 			}).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&monmetrics.MetricLatest{
+			if err := db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{
 				SeriesID: metric.id, ServiceName: "collector", InstanceID: "collector@node-a",
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
 				Value: metric.value, ObservedAt: now,
@@ -526,7 +526,7 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 			}).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&monmetrics.MetricLatest{
+			if err := db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{
 				SeriesID: metric.id, ServiceName: serviceName, InstanceID: instanceID,
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
 				Value: metric.value, ObservedAt: now,
@@ -589,7 +589,7 @@ func TestBusinessFreshnessReporterStoresBalanceCheckInSystemSpace(t *testing.T) 
 			}).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&monmetrics.MetricLatest{
+			if err := db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{
 				SeriesID: metric.id, ServiceName: "trade", InstanceID: "trade@control",
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: "{}", Value: metric.value, ObservedAt: now,
 			}).Error; err != nil {
@@ -639,7 +639,7 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 			if err := db.Create(&monmetrics.MetricSeries{ServiceName: "storage-primary", InstanceID: "storage-primary@storage", SeriesID: metric.id, MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, LastSeenAt: now}).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&monmetrics.MetricLatest{SeriesID: metric.id, ServiceName: "storage-primary", InstanceID: "storage-primary@storage", MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, Value: metric.value, ObservedAt: now}).Error; err != nil {
+			if err := db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{SeriesID: metric.id, ServiceName: "storage-primary", InstanceID: "storage-primary@storage", MetricName: metric.name, MetricType: "gauge", LabelsJSON: `{}`, Value: metric.value, ObservedAt: now}).Error; err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -822,7 +822,7 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 		}).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Create(&monmetrics.MetricLatest{
+		if err := db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{
 			SeriesID: "factor-enabled", ServiceName: "factor-mgr", InstanceID: "factor-mgr@control",
 			MetricName: "moox_factor_dataset_enabled", MetricType: "gauge",
 			LabelsJSON: labels, Value: 1, ObservedAt: now.Add(-time.Hour),
@@ -919,7 +919,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 			}).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := db.Create(&monmetrics.MetricLatest{
+			if err := db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{
 				SeriesID: metric.id, ServiceName: "collector", InstanceID: "collector@node-a",
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
 				Value: metric.value, ObservedAt: staleAt,
@@ -1035,7 +1035,7 @@ func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *t
 		}
 		for _, item := range series {
 			require.NoError(t, db.Create(&monmetrics.MetricSeries{ServiceName: "storage-view", InstanceID: "storage-view@control", SeriesID: item.id, MetricName: item.name, MetricType: "gauge", LabelsJSON: item.labels, LastSeenAt: now}).Error)
-			require.NoError(t, db.Create(&monmetrics.MetricLatest{SeriesID: item.id, ServiceName: "storage-view", InstanceID: "storage-view@control", MetricName: item.name, MetricType: "gauge", LabelsJSON: item.labels, Value: item.value, ObservedAt: now}).Error)
+			require.NoError(t, db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{SeriesID: item.id, ServiceName: "storage-view", InstanceID: "storage-view@control", MetricName: item.name, MetricType: "gauge", LabelsJSON: item.labels, Value: item.value, ObservedAt: now}).Error)
 		}
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
@@ -1136,7 +1136,7 @@ func TestBusinessFreshnessReporterNamesStrategyDatasetByInstance(t *testing.T) {
 				ServiceName: "strategy", InstanceID: "strategy@node-a", SeriesID: metric.id,
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels, LastSeenAt: metric.seenAt,
 			}).Error)
-			require.NoError(t, db.Create(&monmetrics.MetricLatest{
+			require.NoError(t, db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{
 				SeriesID: metric.id, ServiceName: "strategy", InstanceID: "strategy@node-a",
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
 				Value: metric.value, ObservedAt: metric.seenAt,
@@ -1285,7 +1285,7 @@ func TestBusinessFreshnessReporterRetiresLegacySpaceChecksAfterUpgrade(t *testin
 				ServiceName: "trade", InstanceID: "trade@control", SeriesID: metric.id,
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: "{}", LastSeenAt: now,
 			}).Error)
-			require.NoError(t, db.Create(&monmetrics.MetricLatest{
+			require.NoError(t, db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{
 				SeriesID: metric.id, ServiceName: "trade", InstanceID: "trade@control",
 				MetricName: metric.name, MetricType: "gauge", LabelsJSON: "{}", Value: metric.value, ObservedAt: now,
 			}).Error)

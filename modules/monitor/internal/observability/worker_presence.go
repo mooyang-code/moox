@@ -49,7 +49,7 @@ func (b Builder) buildWorkerPresence(ctx context.Context, spaceID string, now ti
 		if len(series) == 0 {
 			continue // 管理端没有部署或还没上报过
 		}
-		var current *monmetrics.MetricLatest
+		var current *monmetrics.MetricSeries
 		stale := true
 		for _, item := range series {
 			latest, err := b.Metrics.Latest(ctx, item.SeriesID)

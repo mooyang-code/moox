@@ -9,8 +9,10 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -58,9 +60,11 @@ func TestBuilderHealthReadsReportedReadiness(t *testing.T) {
 	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "m1", OccurredAt: timestamppb.New(now.Add(-3 * time.Minute))},
 		&metricspb.MetricReport{ServiceName: "monitor", InstanceId: "monitor@node-a", NodeId: "node-a", BootId: "boot-a", Ready: proto.Bool(false), NotReadyReason: "观测输入未连接"}, nil)
 	require.NoError(t, err)
+	rows := []*adminpb.ComponentDeployment{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}, {ComponentId: "eventbus", HostId: "node-a", Status: "enabled"}}
+	metrics := monmetrics.NewQueryService(messages, nil)
 	builder := Builder{
-		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}, {ComponentId: "eventbus", HostId: "node-a", Status: "enabled"}}},
-		Metrics:     monmetrics.NewQueryService(messages, nil), HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return now },
+		Deployments: deploymentSourceStub{rows: rows}, Services: topologyServices(t, mgr, rows, metrics, nil, now),
+		Metrics: metrics, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return now },
 	}
 	got, err := builder.Build(context.Background(), "node-a", []string{"monitor", "eventbus"}, nil)
 	require.NoError(t, err)
@@ -250,13 +254,15 @@ func TestBuilderHealthCoversHostSnapshotAndDelegatedComponents(t *testing.T) {
 		require.NoError(t, hosts.Persist(t.Context(), hostmetrics.Report{ID: id, CollectedAt: at, Metric: metric}))
 	}
 	clock := now
+	rows := []*adminpb.ComponentDeployment{
+		{ComponentId: "host-agent", HostId: "factor", Status: "enabled"},
+		{ComponentId: "factor-engine", HostId: "factor", Status: "enabled"},
+		{ComponentId: "archive-worker", HostId: "factor", Status: "enabled"},
+	}
+	metrics := monmetrics.NewQueryService(messages, nil)
 	builder := Builder{
-		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{
-			{ComponentId: "host-agent", HostId: "factor", Status: "enabled"},
-			{ComponentId: "factor-engine", HostId: "factor", Status: "enabled"},
-			{ComponentId: "archive-worker", HostId: "factor", Status: "enabled"},
-		}},
-		Metrics: monmetrics.NewQueryService(messages, nil), Hosts: hosts, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return clock },
+		Deployments: deploymentSourceStub{rows: rows}, Services: topologyServices(t, mgr, rows, metrics, hosts, now),
+		Metrics: metrics, Hosts: hosts, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return clock },
 	}
 	components := []string{"host-agent", "factor-engine", "archive-worker"}
 	health := func() map[string]Observation {
@@ -285,4 +291,23 @@ func TestBuilderHealthCoversHostSnapshotAndDelegatedComponents(t *testing.T) {
 	for id, observation := range health() {
 		require.True(t, observation.Stale, "%s 的上报过期后不能算新鲜", id)
 	}
+}
+
+// topologyServices 把部署行写进 Monitor 自己的拓扑，返回页面与组件检查用的同一个结论来源。
+func topologyServices(t *testing.T, mgr *store.Store, rows []*adminpb.ComponentDeployment, metrics *monmetrics.QueryService, hosts *hostmetrics.Store, now time.Time) observability.Builder {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: now}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if !seen[row.GetHostId()] {
+			seen[row.GetHostId()] = true
+			snapshot.Hosts = append(snapshot.Hosts, domain.TopologyHost{HostID: row.GetHostId(), Address: row.GetHostId() + ".example.test", Status: "enabled"})
+		}
+		snapshot.Deployments = append(snapshot.Deployments, domain.TopologyDeployment{HostID: row.GetHostId(), ComponentID: row.GetComponentId(), Status: row.GetStatus()})
+	}
+	repos := mgr.Repositories()
+	require.NoError(t, repos.Topology.Reconcile(t.Context(), snapshot))
+	return observability.Builder{Metrics: metrics, Hosts: hosts, Topology: repos.Topology}
 }

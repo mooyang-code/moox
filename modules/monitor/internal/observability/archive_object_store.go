@@ -27,7 +27,7 @@ func (b Builder) buildArchiveObjectStore(ctx context.Context, spaceID string, no
 		return nil, err
 	}
 	// probe_error 变化会换一条序列：取最近一次上报的那条。
-	var current *monmetrics.MetricLatest
+	var current *monmetrics.MetricSeries
 	for _, item := range series {
 		if item.IsStale {
 			continue

@@ -41,9 +41,10 @@ type Bar struct {
 
 // MarketClock 按市场的交易日历切分 K 线、算出“此刻应已收线的最新一根”。
 //
-// 24 小时市场（加密货币）按 UTC 固定网格取整，周线按周一对齐，月线按自然月。交易所市场（A 股）只在交易日的交易时段内：
-// 1 分钟线在每个时段内逐分钟切分（09:30～11:29、13:00～14:59 开盘）；日线、周线、月线每个交易日（周、月）一根，
-// 在最后一个交易日的最后一个时段收盘时收线。非交易日、未开盘、午休时，应收的最新一根回溯到上一时段或上一交易日的最后一根。
+// 24 小时市场（加密货币）按 UTC 固定网格取整，周线按周一对齐，月线按自然月。交易所市场只在交易日的交易时段内：
+// 日内周期（含 1m）与日线都交给 barclock（和合成同一套分桶，日线的键是交易日期的 UTC 零点）；
+// 周线、月线每周（月）一根，在最后一个交易日的最后一个时段收盘时收线，由这里按交易日历归并。
+// 非交易日、未开盘、午休时，应收的最新一根回溯到上一时段或上一交易日的最后一根。
 type MarketClock struct {
 	exchange bool
 	location *time.Location
@@ -136,21 +137,13 @@ func (c MarketClock) BarAt(dataTime time.Time, freq frequency.Frequency) (Bar, e
 		return continuousBar(dataTime, freq)
 	}
 	switch {
-	case freq == frequency.Minute1:
-		local := dataTime.In(c.location)
-		day := localMidnight(local)
-		if err := c.requireTradingDay(day); err != nil {
+	case freq == frequency.Day1:
+		bucket, err := c.dailyBucket(dataTime)
+		if err != nil {
 			return Bar{}, err
 		}
-		offset := local.Sub(day)
-		for _, session := range c.sessions {
-			if offset >= session.open && offset < session.close {
-				open := local.Truncate(time.Minute)
-				return Bar{Open: open.UTC(), Close: open.Add(time.Minute).UTC()}, nil
-			}
-		}
-		return Bar{}, fmt.Errorf("%w：%s", ErrOutsideSession, local.Format("2006-01-02 15:04"))
-	case isDailyOrLonger(freq):
+		return barOf(bucket), nil
+	case isWeekOrMonth(freq):
 		return c.periodBar(localMidnight(dataTime.In(c.location)), freq)
 	default:
 		session, err := c.sessionClock(freq)
@@ -178,9 +171,7 @@ func (c MarketClock) LatestClosed(now time.Time, freq frequency.Frequency) (Bar,
 		return Bar{Open: previousOpen(current.Open, freq), Close: current.Open}, nil
 	}
 	switch {
-	case freq == frequency.Minute1:
-		return c.latestClosedMinute(now)
-	case isDailyOrLonger(freq):
+	case isWeekOrMonth(freq):
 		return c.latestClosedPeriod(now, freq)
 	default:
 		session, err := c.sessionClock(freq)
@@ -201,9 +192,7 @@ func (c MarketClock) Next(bar Bar, freq frequency.Frequency) (Bar, error) {
 		return continuousBar(bar.Close, freq)
 	}
 	switch {
-	case freq == frequency.Minute1:
-		return c.nextMinute(bar)
-	case isDailyOrLonger(freq):
+	case isWeekOrMonth(freq):
 		day := localMidnight(bar.Close.In(c.location))
 		next, err := c.tradingDayAfter(day)
 		if err != nil {
@@ -215,7 +204,14 @@ func (c MarketClock) Next(bar Bar, freq frequency.Frequency) (Bar, error) {
 		if err != nil {
 			return Bar{}, err
 		}
-		bucket, err := session.Next(barclock.Bucket{Key: bar.Open, Start: bar.Open, End: bar.Close})
+		current := barclock.Bucket{Key: bar.Open, Start: bar.Open, End: bar.Close}
+		if freq == frequency.Day1 {
+			// 日线的键不是桶的开始时刻：按交易日取回整个桶，barclock 才能从它往后找。
+			if current, err = c.dailyBucket(bar.Open); err != nil {
+				return Bar{}, err
+			}
+		}
+		bucket, err := session.Next(current)
 		if err != nil {
 			return Bar{}, c.bucketError(err)
 		}
@@ -245,7 +241,7 @@ func (c MarketClock) ClosedBarsAfter(latest Bar, until time.Time, freq frequency
 	return count, first, nil
 }
 
-// sessionClock 返回日内周期 freq 按交易时段切分的时钟；周期不能整除交易时段时返回 ErrAlignmentUnconfirmed。
+// sessionClock 返回日内周期（含 1m）或日线 freq 按交易时段切分的时钟；周期不能整除交易时段时返回 ErrAlignmentUnconfirmed。
 func (c MarketClock) sessionClock(freq frequency.Frequency) (barclock.Clock, error) {
 	duration := freq.Duration()
 	if duration <= 0 {
@@ -266,12 +262,34 @@ func (c MarketClock) bucketError(err error) error {
 	return err
 }
 
-func barOf(bucket barclock.Bucket) Bar {
-	return Bar{Open: bucket.Start.UTC(), Close: bucket.End.UTC()}
+// dailyBucket 按日线的键（交易日期的 UTC 零点，即 data_time）取那一天的日线桶；不是交易日时返回 ErrOutsideSession。
+func (c MarketClock) dailyBucket(key time.Time) (barclock.Bucket, error) {
+	session, err := c.sessionClock(frequency.Day1)
+	if err != nil {
+		return barclock.Bucket{}, err
+	}
+	key = key.UTC()
+	date, err := marketcalendar.NewCivilDate(key.Year(), key.Month(), key.Day())
+	if err != nil {
+		return barclock.Bucket{}, err
+	}
+	bucket, ok, err := barclock.DailyBucket(session, date)
+	if err != nil {
+		return barclock.Bucket{}, c.bucketError(err)
+	}
+	if !ok {
+		return barclock.Bucket{}, fmt.Errorf("%w：%s 不是交易日", ErrOutsideSession, date)
+	}
+	return bucket, nil
 }
 
-func isDailyOrLonger(freq frequency.Frequency) bool {
-	return freq == frequency.Day1 || freq == frequency.Week1 || freq == frequency.Month1
+// barOf 把桶换成 K 线：Open 是桶的键（存储里的 data_time；日内是开盘时刻，日线是交易日期的 UTC 零点）。
+func barOf(bucket barclock.Bucket) Bar {
+	return Bar{Open: bucket.Key.UTC(), Close: bucket.End.UTC()}
+}
+
+func isWeekOrMonth(freq frequency.Frequency) bool {
+	return freq == frequency.Week1 || freq == frequency.Month1
 }
 
 // ---------- 24 小时市场 ----------
@@ -334,17 +352,6 @@ func (c MarketClock) isTradingDay(day time.Time) (bool, error) {
 	return status == marketcalendar.TradingDay, nil
 }
 
-func (c MarketClock) requireTradingDay(day time.Time) error {
-	trading, err := c.isTradingDay(day)
-	if err != nil {
-		return err
-	}
-	if !trading {
-		return fmt.Errorf("%w：%s 不是交易日", ErrOutsideSession, day.Format("2006-01-02"))
-	}
-	return nil
-}
-
 func (c MarketClock) tradingDayAfter(day time.Time) (time.Time, error) {
 	for i := 1; i <= maxCalendarWalkDays; i++ {
 		candidate := day.AddDate(0, 0, i)
@@ -359,77 +366,18 @@ func (c MarketClock) tradingDayAfter(day time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("%w：%s 之后 %d 天内没有交易日", ErrCalendarNotCovered, day.Format("2006-01-02"), maxCalendarWalkDays)
 }
 
-func (c MarketClock) latestClosedMinute(now time.Time) (Bar, error) {
-	local := now.In(c.location)
-	today := localMidnight(local)
-	for i := 0; i <= maxCalendarWalkDays; i++ {
-		day := today.AddDate(0, 0, -i)
-		trading, err := c.isTradingDay(day)
-		if err != nil {
-			return Bar{}, err
-		}
-		if !trading {
-			continue
-		}
-		for index := len(c.sessions) - 1; index >= 0; index-- {
-			session := c.sessions[index]
-			open, close := day.Add(session.open), day.Add(session.close)
-			if !close.After(local) {
-				return Bar{Open: close.Add(-time.Minute).UTC(), Close: close.UTC()}, nil
-			}
-			if !open.Add(time.Minute).After(local) {
-				// 时段进行中：最近一个已过的整分钟就是最新一根的收线时刻。
-				end := local.Truncate(time.Minute)
-				return Bar{Open: end.Add(-time.Minute).UTC(), Close: end.UTC()}, nil
-			}
-		}
-	}
-	return Bar{}, fmt.Errorf("%w：%s 之前 %d 天内没有交易日", ErrCalendarNotCovered, today.Format("2006-01-02"), maxCalendarWalkDays)
-}
-
-func (c MarketClock) nextMinute(bar Bar) (Bar, error) {
-	local := bar.Close.In(c.location)
-	day := localMidnight(local)
-	offset := local.Sub(day)
-	for _, session := range c.sessions {
-		if offset >= session.open && offset < session.close {
-			return Bar{Open: local.UTC(), Close: local.Add(time.Minute).UTC()}, nil
-		}
-		if offset < session.open {
-			// 午休或开盘前：下一根是这个时段的第一根。
-			trading, err := c.isTradingDay(day)
-			if err != nil {
-				return Bar{}, err
-			}
-			if trading {
-				open := day.Add(session.open)
-				return Bar{Open: open.UTC(), Close: open.Add(time.Minute).UTC()}, nil
-			}
-			break
-		}
-	}
-	next, err := c.tradingDayAfter(day)
-	if err != nil {
-		return Bar{}, err
-	}
-	open := next.Add(c.sessions[0].open)
-	return Bar{Open: open.UTC(), Close: open.Add(time.Minute).UTC()}, nil
-}
-
-// periodKey 是交易日所属的周期：日线是日期本身，周线是 ISO 周，月线是年月。
+// periodKey 是交易日所属的周期：周线是 ISO 周，月线是年月。
 func periodKey(day time.Time, freq frequency.Frequency) string {
 	switch freq {
 	case frequency.Week1:
 		year, week := day.ISOWeek()
 		return fmt.Sprintf("%d-W%02d", year, week)
-	case frequency.Month1:
-		return day.Format("2006-01")
 	default:
-		return day.Format("2006-01-02")
+		return day.Format("2006-01")
 	}
 }
 
-// periodBar 返回 day 所属周期的那一根：开盘取周期内第一个交易日的本地零点（与日线及以上的 data_time 约定一致），
+// periodBar 返回 day 所属周（月）的那一根：开盘取周期内第一个交易日的本地零点，
 // 收线是周期内最后一个交易日的最后一个时段收盘。
 func (c MarketClock) periodBar(day time.Time, freq frequency.Frequency) (Bar, error) {
 	key := periodKey(day, freq)

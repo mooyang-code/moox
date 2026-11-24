@@ -539,7 +539,7 @@ func (s viewSummaries) find(rule KlineFreshnessRule) viewSummary {
 var viewSummaryMetrics = []string{ViewOutputLatestMetric, ViewOutputTrackedSinceMetric, ViewOutputSubjectsMetric, ViewOutputLaggingMetric, ViewOutputLaggingSubjectMetric}
 
 func (e *KlineFreshnessEvaluator) loadViewSummaries(ctx context.Context, filters []ViewMetricScope, now time.Time) (viewSummaries, error) {
-	rowsByMetric := make(map[string][]MetricLatest, len(viewSummaryMetrics))
+	rowsByMetric := make(map[string][]MetricSeries, len(viewSummaryMetrics))
 	for _, name := range viewSummaryMetrics {
 		rows, err := e.query.ListLatestByViewScopes(ctx, name, filters, 0)
 		if err != nil {

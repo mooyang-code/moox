@@ -279,7 +279,7 @@ func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample) *QuerySe
 		return value
 	}
 	_, err = store.WithDatabase(mgr, func(db *gorm.DB) error {
-		var rows []MetricLatest
+		var rows []MetricSeries
 		for index, sample := range samples {
 			scope := map[string]string{
 				"space_id": or(sample.SpaceID, "crypto"), "view_id": or(sample.ViewID, "view"),
@@ -305,7 +305,7 @@ func newViewSummaryQuery(t *testing.T, samples []viewSummaryTestSample) *QuerySe
 				trackedSince = sample.Latest
 			}
 			add := func(name, subject string, value float64, observedAt time.Time) {
-				rows = append(rows, MetricLatest{SeriesID: fmt.Sprintf("%d-%s-%s", index, name, subject), MetricName: name, LabelsJSON: labels(subject), Value: value, ObservedAt: observedAt})
+				rows = append(rows, MetricSeries{SeriesID: fmt.Sprintf("%d-%s-%s", index, name, subject), MetricName: name, LabelsJSON: labels(subject), Value: value, ObservedAt: observedAt})
 			}
 			add(ViewOutputLatestMetric, "", float64(sample.Latest.Unix()), sample.ObservedAt)
 			add(ViewOutputTrackedSinceMetric, "", float64(trackedSince.Unix()), sample.ObservedAt)

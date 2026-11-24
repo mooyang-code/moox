@@ -271,7 +271,7 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 	now := time.Now().UTC()
 	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
 	_, err = store.WithDatabase(manager, func(db *gorm.DB) error {
-		for _, row := range []monmetrics.MetricLatest{
+		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
 			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
 		} {

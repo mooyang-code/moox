@@ -28,7 +28,7 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 			"t_monitor_alert_events",
 			"t_monitor_host_agents",
 			"t_monitor_host_samples",
-			"t_monitor_metric_services", "t_monitor_metric_series", "t_monitor_metric_latest", "t_monitor_metric_ingest_messages",
+			"t_monitor_metric_services", "t_monitor_metric_series", "t_monitor_metric_ingest_messages",
 			"t_monitor_subject_first_seen",
 		} {
 			if !db.Migrator().HasTable(table) {
@@ -40,7 +40,7 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 			"uk_monitor_checks_key",
 			"uk_monitor_alert_rules_key",
 			"uk_monitor_alert_states_key",
-			"uk_monitor_metric_services_key", "uk_monitor_metric_series_key", "uk_monitor_metric_latest_series", "uk_monitor_metric_ingest_message",
+			"uk_monitor_metric_services_key", "uk_monitor_metric_series_key", "uk_monitor_metric_ingest_message",
 		} {
 			var count int64
 			if err := db.Raw(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?`, index).Scan(&count).Error; err != nil {
