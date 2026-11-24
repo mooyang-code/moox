@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -19,7 +21,7 @@ import (
 
 // “因子现算”来源（见 docs/模块/策略.md 第 10 节）：主帧不读 View，经主机网关调因子引擎的 EngineControl，按因子机本地 K 线
 // 逐步现算。回放开始时 OpenReplay 建会话并给出可回放的各期，之后按期 StepReplay 取行，结束时 CloseReplay。附加来源与参考市场
-// 仍读 View。只支持一个主帧任务。
+// 仍读 View。主帧每个市场（每个因子任务）各开一个会话，同步推进。
 
 const (
 	// computeStepBytes 是单步响应的目标上限（引擎侧同样按 3 MiB 截断，服务包体上限是默认的 4 MiB）。
@@ -92,37 +94,59 @@ func ComputeStepPeriods(series, columns int, tuned bool, limit int) (int, error)
 	return max(1, min(computeStepBytes/perPeriod, max(limit, 1))), nil
 }
 
-// computeSource 是“因子现算”的输入来源。
+// computeSource 是“因子现算”的输入来源：主帧每个市场（每个因子任务）在引擎上各开一个会话，同步推进。
 type computeSource struct {
 	runner   *Runner
 	job      store.Replay
 	resolved input.Resolved
 	program  *dsl.Program
+	// sessions 是主帧各市场的会话（现货在前），与 markets 一一对应。
+	sessions []*computeSession
 	// markets 是主帧的市场：只用到各附加来源的读取器与年龄判定的已通过集合，行与历史读取器为空（主帧的行来自引擎）。
 	markets []*viewMarket
 	// refs 是参考市场的读取器：只读 View 里年龄判定的历史，与 View 来源相同。
 	refs  []*viewMarket
 	abort func(context.Context) error
-	// periods 是 OpenReplay 给出的各期 data_time（Unix 秒，升序），index 是它们的下标；bars 是对应的周期。
+	// periods 是各会话给出的各期的交集（data_time 的 Unix 秒，升序）；bars 是对应的周期。
 	periods []int64
-	index   map[int64]int
 	bars    []input.PeriodBoundaries
-	// stepPeriods 是每步请求的期数。
+	// stepPeriods 是每步请求的期数（按全部会话的序列数合计估算）。
 	stepPeriods int
-	// applied 是最近一段各期实际生效的逐期提交参数（bar_start 的 Unix 秒 → 参数）；rejected 是同一段各期被引擎拒绝的参数的说明。
+	// applied 是最近一段各期实际生效的逐期提交参数（bar_start 的 Unix 秒 → 参数，各会话合并）；rejected 是同一段各期被引擎拒绝的参数的说明。
 	applied  map[int64]engine.ParamSet
 	rejected map[int64][]string
 	// note 是写进局限说明的会话概况：被引擎排除的标的、预热不足的标的。
-	note   string
+	note string
+}
+
+// computeSession 是一个市场（一个因子任务）在引擎上的回放会话。
+type computeSession struct {
+	market *viewMarket
+	task   store.ReplayTask
+	// id 是引擎上的会话 ID：只有一个会话时就是回放 ID，多个时加市场后缀（见 computeSessionID）。
+	id     string
 	opened bool
+	// periods 是这个会话的 OpenReplay 给出的各期，index 是它们的下标。
+	periods []int64
+	index   map[int64]int
 	// tail 是上一段最后一期（bar_start 为 tailAt）的行：策略用到 bars[-1] 时，下一段第一期的上一根读它。
 	tail   []input.Row
 	tailAt time.Time
 }
 
+// computeSessionID 返回一个市场在引擎上的会话 ID：只有一个主帧任务时就是回放 ID；多个任务时每个任务的会话 ID 不同（引擎按会话 ID
+// 登记，同一个 ID 再开会顶掉前一个），加市场后缀。
+func computeSessionID(replayID, market string, sessions int) string {
+	if sessions <= 1 {
+		return replayID
+	}
+	return replayID + "#" + market
+}
+
 // CloseInterruptedSessions 在进程启动、把遗留的运行中回放标成 interrupted 之前调用：逐个关掉“因子现算”回放留在因子引擎上的会话
 // （进程在回放中途退出时没人关，会话占着整段快照的内存与准入预留，要等引擎 6 小时闲置清理）。尽力而为：关不上只记日志，
-// 会话不存在时引擎返回 closed=false、不报错。返回读取运行中回放的错误。
+// 会话不存在时引擎返回 closed=false、不报错。回放登记了多个市场的任务时，加市场后缀的会话也逐个关（参考市场的任务没有会话，
+// 多关一次无害）。返回读取运行中回放的错误。
 func CloseInterruptedSessions(ctx context.Context, repo *store.Store, engine input.EngineClient, logf func(format string, args ...any)) error {
 	if repo == nil || engine == nil {
 		return nil
@@ -132,32 +156,47 @@ func CloseInterruptedSessions(ctx context.Context, repo *store.Store, engine inp
 		return err
 	}
 	for _, id := range ids {
-		closeCtx, cancel := context.WithTimeout(ctx, computeCloseTimeout)
-		rsp, err := engine.CloseReplay(closeCtx, &factorpb.CloseReplayReq{ReplayId: id})
-		cancel()
-		if err == nil {
-			err = engineRetError("CloseReplay", rsp.GetRetInfo())
+		sessionIDs := []string{id}
+		if job, err := repo.GetReplay(ctx, id); err == nil {
+			var markets []string
+			for key := range job.Tasks {
+				if !strings.Contains(key, ":") {
+					markets = append(markets, key)
+				}
+			}
+			if len(markets) > 1 {
+				sort.Strings(markets)
+				for _, market := range markets {
+					sessionIDs = append(sessionIDs, computeSessionID(id, market, len(markets)))
+				}
+			}
 		}
-		if err != nil && logf != nil {
-			logf("进程重启：结束回放 %s 留在因子引擎上的会话失败（由引擎闲置清理）：%v；原始错误：%v", id, err, input.RawCause(err))
+		for _, sessionID := range sessionIDs {
+			closeCtx, cancel := context.WithTimeout(ctx, computeCloseTimeout)
+			rsp, err := engine.CloseReplay(closeCtx, &factorpb.CloseReplayReq{ReplayId: sessionID})
+			cancel()
+			if err == nil {
+				err = engineRetError("CloseReplay", rsp.GetRetInfo())
+			}
+			if err != nil && logf != nil {
+				logf("进程重启：结束回放 %s 留在因子引擎上的会话 %s 失败（由引擎闲置清理）：%v；原始错误：%v", id, sessionID, err, input.RawCause(err))
+			}
 		}
 	}
 	return nil
 }
 
-// newComputeSource 建立“因子现算”的会话：按提交的区间（bars 的首尾）调 OpenReplay，可回放的各期以引擎给出的为准；
-// 返回之后由调用方负责 Close。
+// newComputeSource 建立“因子现算”的会话：主帧每个市场按提交的区间（bars 的首尾）各调一次 OpenReplay，可回放的各期取各会话给出的交集；
+// 任一会话建不起来时已建的都关掉。返回之后由调用方负责 Close。
 func (r *Runner) newComputeSource(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, markets []*replayMarket, bars []input.PeriodBoundaries, abort func(context.Context) error) (*computeSource, error) {
 	if r.Engine == nil {
 		return nil, errors.New("因子引擎客户端未配置，不能用“因子现算”来源回放")
 	}
-	if len(resolved.Tasks) != 1 {
-		return nil, fmt.Errorf("“因子现算”只支持一个主帧任务，这个回放绑定了 %d 个", len(resolved.Tasks))
-	}
-	task := resolved.Primary()
 	source := &computeSource{runner: r, job: job, resolved: resolved, program: program, abort: abort}
 	for _, market := range markets {
-		source.markets = append(source.markets, newViewMarket(market, job.Tasks[market.market], nil, nil))
+		reader := newViewMarket(market, job.Tasks[market.market], nil, nil)
+		source.markets = append(source.markets, reader)
+		source.sessions = append(source.sessions, &computeSession{market: reader, task: job.Tasks[market.market], id: computeSessionID(job.ReplayID, market.market, len(markets))})
 	}
 	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, source.markets, abort); err != nil {
 		return nil, err
@@ -173,24 +212,35 @@ func (r *Runner) newComputeSource(ctx context.Context, job store.Replay, resolve
 	if program.UsesPreviousBar {
 		extra = 1
 	}
-	rsp, err := r.Engine.OpenReplay(ctx, &factorpb.OpenReplayReq{
-		ReplayId: job.ReplayID, TaskId: task.FactorTaskID, From: bars[0].StorageStart.UTC().Format(time.RFC3339),
-		To: bars[len(bars)-1].BarEnd.UTC().Format(time.RFC3339), ExtraPeriods: int32(extra), Columns: columns,
-	})
-	if err != nil {
-		// 结果未知：引擎可能已经登记了会话（例如响应在中转上丢了、或超时），尽力关一次；会话不存在时引擎返回 closed=false、不报错。
-		source.opened = true
-		_ = source.Close(ctx)
-		return nil, &engineOfflineError{method: "OpenReplay", raw: err}
+	notes := make([]string, 0, len(source.sessions))
+	for _, session := range source.sessions {
+		rsp, err := r.Engine.OpenReplay(ctx, &factorpb.OpenReplayReq{
+			ReplayId: session.id, TaskId: session.task.FactorTaskID, From: bars[0].StorageStart.UTC().Format(time.RFC3339),
+			To: bars[len(bars)-1].BarEnd.UTC().Format(time.RFC3339), ExtraPeriods: int32(extra), Columns: columns,
+		})
+		if err != nil {
+			// 结果未知：引擎可能已经登记了会话（例如响应在中转上丢了、或超时），尽力关一次；会话不存在时引擎返回 closed=false、不报错。
+			session.opened = true
+			_ = source.Close(ctx)
+			return nil, &engineOfflineError{method: "OpenReplay", raw: err}
+		}
+		if err := engineRetError("OpenReplay", rsp.GetRetInfo()); err != nil {
+			_ = source.Close(ctx)
+			return nil, err
+		}
+		session.opened = true
+		note, err := source.adopt(session, rsp)
+		if err != nil {
+			_ = source.Close(ctx)
+			return nil, err
+		}
+		notes = append(notes, note)
 	}
-	if err := engineRetError("OpenReplay", rsp.GetRetInfo()); err != nil {
+	if err := source.intersect(); err != nil {
+		_ = source.Close(ctx)
 		return nil, err
 	}
-	source.opened = true
-	if err := source.adopt(rsp); err != nil {
-		_ = source.Close(ctx)
-		return nil, err
-	}
+	source.note = "因子现算：主帧的因子按因子机本地 K 线与回放中的参数重新计算，不读 View 的历史值；年龄按因子机本地数据的根数判断；附加来源与参考市场仍读 View；" + strings.Join(notes, "；")
 	series := 0
 	for _, market := range markets {
 		series += len(market.subjects)
@@ -202,39 +252,35 @@ func (r *Runner) newComputeSource(ctx context.Context, job store.Replay, resolve
 	return source, nil
 }
 
-// adopt 记下会话给出的各期并核对成员：引擎目录里任务成员的定义与发起回放时固化的不一致时拒绝（引擎的目录可能还没跟上）。
-func (s *computeSource) adopt(rsp *factorpb.OpenReplayRsp) error {
+// adopt 记下一个会话给出的各期并核对成员：引擎目录里任务成员的定义与发起回放时固化的不一致时拒绝（引擎的目录可能还没跟上）。
+// 返回这个会话的概况说明（多个会话时带市场名）。
+func (s *computeSource) adopt(session *computeSession, rsp *factorpb.OpenReplayRsp) (string, error) {
 	for _, factor := range rsp.GetFactors() {
 		pinned, ok := s.job.Factors[factor.GetMemberKey()]
 		if ok && pinned != readiness.Contract(factor.GetDefinitionHash(), factor.GetKind()) {
-			return fmt.Errorf("因子引擎里成员 %s 的定义（%s）与发起回放时（%s）不一致：引擎的任务目录可能还没更新，请稍后重新发起",
+			return "", fmt.Errorf("因子引擎里成员 %s 的定义（%s）与发起回放时（%s）不一致：引擎的任务目录可能还没更新，请稍后重新发起",
 				factor.GetMemberKey(), readiness.Contract(factor.GetDefinitionHash(), factor.GetKind()), pinned)
 		}
 	}
-	s.periods = rsp.GetPeriodTimes()
-	if len(s.periods) == 0 {
-		return errors.New("因子引擎没有给出可回放的周期")
+	session.periods = rsp.GetPeriodTimes()
+	if len(session.periods) == 0 {
+		return "", fmt.Errorf("因子引擎没有给出%s可回放的周期", s.marketPrefix(session))
 	}
-	s.index = make(map[int64]int, len(s.periods))
-	s.bars = make([]input.PeriodBoundaries, 0, len(s.periods))
-	for i, at := range s.periods {
+	session.index = make(map[int64]int, len(session.periods))
+	for i, at := range session.periods {
 		bar, err := input.FromStorageStart(s.resolved.Calendar, s.resolved.Bar, time.Unix(at, 0).UTC())
 		if err != nil {
-			return fmt.Errorf("因子引擎给出的周期 %s：%w", time.Unix(at, 0).UTC().Format(time.RFC3339), err)
+			return "", fmt.Errorf("因子引擎给出的周期 %s：%w", time.Unix(at, 0).UTC().Format(time.RFC3339), err)
 		}
-		if bar.StorageStart.Unix() != at || (i > 0 && at <= s.periods[i-1]) {
-			return fmt.Errorf("因子引擎给出的周期 %s 没有按 %s 对齐或不是升序", time.Unix(at, 0).UTC().Format(time.RFC3339), s.resolved.Bar)
+		if bar.StorageStart.Unix() != at || (i > 0 && at <= session.periods[i-1]) {
+			return "", fmt.Errorf("因子引擎给出的周期 %s 没有按 %s 对齐或不是升序", time.Unix(at, 0).UTC().Format(time.RFC3339), s.resolved.Bar)
 		}
-		s.index[at] = i
-		s.bars = append(s.bars, bar)
+		session.index[at] = i
 	}
-	var parts []string
-	parts = append(parts, "因子现算：主帧的因子按因子机本地 K 线与回放中的参数重新计算，不读 View 的历史值；年龄按因子机本地数据的根数判断；附加来源与参考市场仍读 View")
 	// 引擎的候选只取源数据集当前在册（active）的标的，名单里消失的标的（不论何时下架，包括回放区间之后才下架的）不是候选、也不在
 	// excluded 里；候选里本地数据不覆盖回放最后一期的再被排除。所以按数据集登记的个数与实际参与的个数说明差额。
-	listed := len(s.markets[0].subjects)
-	coverage := fmt.Sprintf("数据集登记 %d 个标的，参与 %d 个：只取源数据集当前在册、且本地数据覆盖到回放最后一期的标的，已下架的（不论何时下架）整段不参与，截面因子按较小的全集算，结果有幸存者偏差",
-		listed, len(rsp.GetSubjects()))
+	coverage := fmt.Sprintf("%s数据集登记 %d 个标的，参与 %d 个：只取源数据集当前在册、且本地数据覆盖到回放最后一期的标的，已下架的（不论何时下架）整段不参与，截面因子按较小的全集算，结果有幸存者偏差",
+		s.marketPrefix(session), len(session.market.subjects), len(rsp.GetSubjects()))
 	if excluded := rsp.GetExcluded(); len(excluded) > 0 {
 		samples := make([]string, 0, 3)
 		for _, item := range excluded[:min(3, len(excluded))] {
@@ -242,12 +288,69 @@ func (s *computeSource) adopt(rsp *factorpb.OpenReplayRsp) error {
 		}
 		coverage += fmt.Sprintf("（在册但本地数据不覆盖的 %d 个，例如 %s）", len(excluded), strings.Join(samples, "、"))
 	}
-	parts = append(parts, coverage)
+	parts := []string{coverage}
 	if short := rsp.GetShortWarmup(); short > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个标的的本地数据晚于预热起点，因子前段为空值（例如 %s）", short, strings.Join(rsp.GetShortSamples(), "、")))
 	}
-	s.note = strings.Join(parts, "；")
+	return strings.Join(parts, "；"), nil
+}
+
+// intersect 取各会话给出的各期的交集作为回放的各期：交集的区间内各会话的期次必须完全相同（两个市场的本地数据在区间中间缺的期不同，
+// 同步推进就对不上，直接失败），区间外只有一个会话有的期不回放。
+func (s *computeSource) intersect() error {
+	from, to := s.sessions[0].periods[0], s.sessions[0].periods[len(s.sessions[0].periods)-1]
+	for _, session := range s.sessions[1:] {
+		from, to = max(from, session.periods[0]), min(to, session.periods[len(session.periods)-1])
+	}
+	if from > to {
+		return errors.New("因子引擎给出的各市场可回放的周期没有重叠，无法同步回放")
+	}
+	var common []int64
+	for i, session := range s.sessions {
+		var inRange []int64
+		for _, at := range session.periods {
+			if at >= from && at <= to {
+				inRange = append(inRange, at)
+			}
+		}
+		if i == 0 {
+			common = inRange
+			continue
+		}
+		if !slices.Equal(common, inRange) {
+			return fmt.Errorf("因子引擎给出的%s与%s可回放的周期在 %s 至 %s 之间不一致（本地数据缺的期不同），无法同步回放：先补齐因子机本地的历史再发起",
+				marketLabel(s.sessions[0].market.market), marketLabel(session.market.market), time.Unix(from, 0).UTC().Format(time.RFC3339), time.Unix(to, 0).UTC().Format(time.RFC3339))
+		}
+	}
+	s.periods = common
+	s.bars = make([]input.PeriodBoundaries, 0, len(common))
+	for _, at := range common {
+		bar, err := input.FromStorageStart(s.resolved.Calendar, s.resolved.Bar, time.Unix(at, 0).UTC())
+		if err != nil {
+			return err
+		}
+		s.bars = append(s.bars, bar)
+	}
 	return nil
+}
+
+// marketPrefix 在多个会话时给说明加上市场名（“现货”“永续”），只有一个会话时为空。
+func (s *computeSource) marketPrefix(session *computeSession) string {
+	if len(s.sessions) <= 1 {
+		return ""
+	}
+	return marketLabel(session.market.market)
+}
+
+// marketLabel 是市场的中文名。
+func marketLabel(market string) string {
+	switch market {
+	case dsl.MarketSpot:
+		return "现货"
+	case dsl.MarketSwap:
+		return "永续"
+	}
+	return market
 }
 
 // references 返回参考市场（只参与 age_markets: all 的年龄判定）。
@@ -259,7 +362,7 @@ func (s *computeSource) references() []*replayMarket {
 	return refs
 }
 
-// End 是最后一期之后：引擎给出的各期在会话期间不变。
+// End 是最后一期之后：各期在会话期间不变。
 func (s *computeSource) End() time.Time {
 	return s.bars[len(s.bars)-1].StorageStart.Add(time.Nanosecond)
 }
@@ -268,91 +371,47 @@ func (s *computeSource) Applied(key int64) engine.ParamSet { return s.applied[ke
 
 func (s *computeSource) Rejected(key int64) []string { return s.rejected[key] }
 
-// Close 结束引擎上的会话。回放可能因取消或失败结束（ctx 也许已结束），所以用不随它取消的上下文另设超时；关不上只记日志。
+// Close 结束引擎上的全部会话。回放可能因取消或失败结束（ctx 也许已结束），所以用不随它取消的上下文另设超时；关不上只记日志，
+// 返回第一个错误。
 func (s *computeSource) Close(ctx context.Context) error {
-	if !s.opened {
-		return nil
+	var first error
+	for _, session := range s.sessions {
+		if !session.opened {
+			continue
+		}
+		session.opened = false
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), computeCloseTimeout)
+		rsp, err := s.runner.Engine.CloseReplay(closeCtx, &factorpb.CloseReplayReq{ReplayId: session.id})
+		cancel()
+		if err == nil {
+			err = engineRetError("CloseReplay", rsp.GetRetInfo())
+		}
+		if err != nil {
+			s.runner.logf("回放 %s：结束因子引擎上的会话 %s 失败（由引擎闲置清理）：%v；原始错误：%v", s.job.ReplayID, session.id, err, input.RawCause(err))
+			if first == nil {
+				first = err
+			}
+		}
 	}
-	s.opened = false
-	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), computeCloseTimeout)
-	defer cancel()
-	rsp, err := s.runner.Engine.CloseReplay(closeCtx, &factorpb.CloseReplayReq{ReplayId: s.job.ReplayID})
-	if err == nil {
-		err = engineRetError("CloseReplay", rsp.GetRetInfo())
-	}
-	if err != nil {
-		s.runner.logf("回放 %s：结束因子引擎上的会话失败（由引擎闲置清理）：%v；原始错误：%v", s.job.ReplayID, err, input.RawCause(err))
-	}
-	return err
+	return first
 }
 
-// Load 取一段连续的期：按每步期数逐步请求，返回不足请求的期数（单步响应放不下）时从下一期接着请求，按 OpenReplay 给出的
-// 各期推进，不请求本段之外的期。nextParams 是上一根策略求出的参数，只交给这一段的第一期，引擎之后各期沿用。
+// Load 取一段连续的期：每个会话按每步期数逐步请求，返回不足请求的期数（单步响应放不下）时从下一期接着请求，不请求本段之外的期。
+// nextParams 是上一根策略求出的参数，只交给这一段的第一期（每个会话都给同一份），引擎之后各期沿用。任一会话失效（引擎重启）都整体失败。
 func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundaries, nextParams engine.ParamSet) (map[string]marketSegment, error) {
-	first, ok := s.index[segment[0].StorageStart.Unix()]
-	if !ok || first+len(segment) > len(s.periods) {
-		return nil, fmt.Errorf("周期 %s 不在因子引擎给出的回放区间内", segment[0].StorageStart.UTC().Format(time.RFC3339))
-	}
-	want := first + len(segment)
-	var rows []input.Row
-	// 上一根不在本段里：用上一段最后一期的行（同一会话里算出的原样的行）；第一段没有上一段，用引擎给的上一期同名列补出。
-	usesTail := s.program.UsesPreviousBar && s.tail != nil && s.tailAt.Equal(segment[0].PreviousStart)
-	if usesTail {
-		rows = append(rows, s.tail...)
-	}
-	var last []input.Row
-	ages := make(map[string]map[int64]map[string]int, len(s.markets))
 	s.applied = make(map[int64]engine.ParamSet, len(segment))
 	s.rejected = make(map[int64][]string)
-	params := paramsToPB(nextParams)
-	for cursor := first; cursor < want; {
-		if err := s.abort(ctx); err != nil {
-			return nil, err
-		}
-		rsp, err := s.runner.Engine.StepReplay(ctx, &factorpb.StepReplayReq{ReplayId: s.job.ReplayID, PeriodTime: s.periods[cursor], Periods: int32(min(s.stepPeriods, want-cursor)), Params: params})
-		if err != nil {
-			return nil, &engineOfflineError{method: "StepReplay", raw: err}
-		}
-		if err := engineRetError("StepReplay", rsp.GetRetInfo()); err != nil {
-			return nil, err
-		}
-		periods := rsp.GetPeriods()
-		if len(periods) == 0 {
-			return nil, fmt.Errorf("因子引擎从 %s 起没有返回任何一期", time.Unix(s.periods[cursor], 0).UTC().Format(time.RFC3339))
-		}
-		for i, period := range periods {
-			if cursor+i >= want || period.GetPeriodTime() != s.periods[cursor+i] {
-				return nil, fmt.Errorf("因子引擎返回的第 %d 期（%s）与请求的期次不连续", i+1, time.Unix(period.GetPeriodTime(), 0).UTC().Format(time.RFC3339))
-			}
-			at := time.Unix(period.GetPeriodTime(), 0).UTC()
-			synthesize := cursor+i == first && s.program.UsesPreviousBar && !usesTail && !segment[0].PreviousStart.IsZero()
-			last = last[:0:0]
-			for _, row := range period.GetRows() {
-				current := input.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: at, Values: row.GetValues(), Params: rowParams(row.GetParams())}
-				rows, last = append(rows, current), append(last, current)
-				if synthesize && len(row.GetPrevious()) > 0 {
-					rows = append(rows, input.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: segment[0].PreviousStart, Values: row.GetPrevious()})
-				}
-				s.recordAge(ages, at.Unix(), row)
-			}
-			s.applied[at.Unix()] = appliedParams(period.GetAppliedParams())
-			for _, rejection := range period.GetRejectedParams() {
-				s.rejected[at.Unix()] = append(s.rejected[at.Unix()], fmt.Sprintf("因子引擎拒绝了成员 %s 这一期的参数（%s），沿用上一期生效的参数", rejection.GetMemberKey(), rejection.GetReason()))
-			}
-		}
-		cursor += len(periods)
-		params = nil // 请求的参数只给这一段的第一期，之后引擎沿用
-	}
-	if s.program.UsesPreviousBar {
-		s.tail, s.tailAt = last, segment[len(segment)-1].StorageStart
-	}
 	loaded := make(map[string]marketSegment, len(s.markets)+len(s.refs))
-	for _, market := range s.markets {
-		sources, err := loadSourceSegment(ctx, s.resolved, market, segment)
+	for _, session := range s.sessions {
+		rows, ages, err := s.loadSession(ctx, session, segment, nextParams)
 		if err != nil {
 			return nil, err
 		}
-		loaded[market.market] = marketSegment{rows: input.GroupRows(rows), ages: &engineAges{ages: ages[market.market], passed: market.passed}, sources: sources}
+		sources, err := loadSourceSegment(ctx, s.resolved, session.market, segment)
+		if err != nil {
+			return nil, err
+		}
+		loaded[session.market.market] = marketSegment{rows: input.GroupRows(rows), ages: &engineAges{ages: ages, passed: session.market.passed}, sources: sources}
 	}
 	for _, ref := range s.refs {
 		refAges, err := agePresence(ctx, ref.history, s.resolved, segment, ref.passed)
@@ -364,18 +423,96 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 	return loaded, nil
 }
 
-// recordAge 记下一行的年龄根数（市场 → bar_start → 标的 → 根数）：同一标的在一个市场有多个序列时取最大的（这一根本来就是歧义，
-// 不参与求值）。
-func (s *computeSource) recordAge(ages map[string]map[int64]map[string]int, at int64, row *factorpb.ReplayRow) {
-	market := s.markets[0].market
-	if ages[market] == nil {
-		ages[market] = map[int64]map[string]int{}
+// loadSession 在一个会话上取一段的行与年龄根数（bar_start → 标的 → 根数），并把这一段各期生效与被拒的参数并进 applied、rejected。
+func (s *computeSource) loadSession(ctx context.Context, session *computeSession, segment []input.PeriodBoundaries, nextParams engine.ParamSet) ([]input.Row, map[int64]map[string]int, error) {
+	first, ok := session.index[segment[0].StorageStart.Unix()]
+	if !ok || first+len(segment) > len(session.periods) {
+		return nil, nil, fmt.Errorf("周期 %s 不在因子引擎给出的%s回放区间内", segment[0].StorageStart.UTC().Format(time.RFC3339), s.marketPrefix(session))
 	}
-	if ages[market][at] == nil {
-		ages[market][at] = map[string]int{}
+	want := first + len(segment)
+	var rows []input.Row
+	// 上一根不在本段里：用上一段最后一期的行（同一会话里算出的原样的行）；第一段没有上一段，用引擎给的上一期同名列补出。
+	usesTail := s.program.UsesPreviousBar && session.tail != nil && session.tailAt.Equal(segment[0].PreviousStart)
+	if usesTail {
+		rows = append(rows, session.tail...)
 	}
-	if age := int(row.GetAgeBars()); age > ages[market][at][row.GetSubjectId()] {
-		ages[market][at][row.GetSubjectId()] = age
+	var last []input.Row
+	ages := make(map[int64]map[string]int, len(segment))
+	params := paramsToPB(nextParams)
+	for cursor := first; cursor < want; {
+		if err := s.abort(ctx); err != nil {
+			return nil, nil, err
+		}
+		rsp, err := s.runner.Engine.StepReplay(ctx, &factorpb.StepReplayReq{ReplayId: session.id, PeriodTime: session.periods[cursor], Periods: int32(min(s.stepPeriods, want-cursor)), Params: params})
+		if err != nil {
+			return nil, nil, &engineOfflineError{method: "StepReplay", raw: err}
+		}
+		if err := engineRetError("StepReplay", rsp.GetRetInfo()); err != nil {
+			return nil, nil, err
+		}
+		periods := rsp.GetPeriods()
+		if len(periods) == 0 {
+			return nil, nil, fmt.Errorf("因子引擎从 %s 起没有返回%s任何一期", time.Unix(session.periods[cursor], 0).UTC().Format(time.RFC3339), s.marketPrefix(session))
+		}
+		for i, period := range periods {
+			if cursor+i >= want || period.GetPeriodTime() != session.periods[cursor+i] {
+				return nil, nil, fmt.Errorf("因子引擎返回的第 %d 期（%s）与请求的期次不连续", i+1, time.Unix(period.GetPeriodTime(), 0).UTC().Format(time.RFC3339))
+			}
+			at := time.Unix(period.GetPeriodTime(), 0).UTC()
+			synthesize := cursor+i == first && s.program.UsesPreviousBar && !usesTail && !segment[0].PreviousStart.IsZero()
+			last = last[:0:0]
+			for _, row := range period.GetRows() {
+				current := input.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: at, Values: row.GetValues(), Params: rowParams(row.GetParams())}
+				rows, last = append(rows, current), append(last, current)
+				if synthesize && len(row.GetPrevious()) > 0 {
+					rows = append(rows, input.Row{SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag(), DataTime: segment[0].PreviousStart, Values: row.GetPrevious()})
+				}
+				recordAge(ages, at.Unix(), row)
+			}
+			s.mergeApplied(session, at.Unix(), appliedParams(period.GetAppliedParams()))
+			for _, rejection := range period.GetRejectedParams() {
+				s.rejected[at.Unix()] = append(s.rejected[at.Unix()], fmt.Sprintf("因子引擎拒绝了%s成员 %s 这一期的参数（%s），沿用上一期生效的参数", s.marketPrefix(session), rejection.GetMemberKey(), rejection.GetReason()))
+			}
+		}
+		cursor += len(periods)
+		params = nil // 请求的参数只给这一段的第一期，之后引擎沿用
+	}
+	if s.program.UsesPreviousBar {
+		session.tail, session.tailAt = last, segment[len(segment)-1].StorageStart
+	}
+	return rows, ages, nil
+}
+
+// mergeApplied 把一个会话这一期生效的参数并进这一期的记录：各会话给同一份请求，生效的参数通常相同；某个成员在两个市场生效的参数
+// 不同（例如一边被拒、沿用上一期）时记录先到的那份，另一份写进这一期的说明，不静默丢掉。
+func (s *computeSource) mergeApplied(session *computeSession, at int64, applied engine.ParamSet) {
+	if applied == nil {
+		return
+	}
+	merged := s.applied[at]
+	if merged == nil {
+		s.applied[at] = applied
+		return
+	}
+	for member, values := range applied {
+		existing, ok := merged[member]
+		if !ok {
+			merged[member] = values
+			continue
+		}
+		if !reflect.DeepEqual(existing, values) {
+			s.rejected[at] = append(s.rejected[at], fmt.Sprintf("成员 %s 在%s生效的参数与其他市场不同（%v），记录里取先到的那份", member, s.marketPrefix(session), values))
+		}
+	}
+}
+
+// recordAge 记下一行的年龄根数（bar_start → 标的 → 根数）：同一标的有多个序列时取最大的（这一根本来就是歧义，不参与求值）。
+func recordAge(ages map[int64]map[string]int, at int64, row *factorpb.ReplayRow) {
+	if ages[at] == nil {
+		ages[at] = map[string]int{}
+	}
+	if age := int(row.GetAgeBars()); age > ages[at][row.GetSubjectId()] {
+		ages[at][row.GetSubjectId()] = age
 	}
 }
 

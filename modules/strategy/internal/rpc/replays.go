@@ -215,11 +215,9 @@ func replayInputOf(raw string, strategy dsl.Strategy) (string, error) {
 	return source, nil
 }
 
-// checkComputeReplay 是“因子现算”来源在解析出绑定后的限制：只支持一个主帧任务（现货、永续两个任务不支持），不支持股票市场（引擎回放的计算核心没有核对过交易日历与午休）。
+// checkComputeReplay 是“因子现算”来源在解析出绑定后的限制：不支持股票市场（引擎回放的计算核心没有核对过交易日历与午休）。
+// 现货加永续两个主帧任务时每个任务在引擎上各开一个会话。
 func checkComputeReplay(resolved input.Resolved) error {
-	if len(resolved.Tasks) != 1 {
-		return fmt.Errorf("“因子现算”来源只支持一个主帧任务，这个回放绑定了 %d 个（%s）；现货加永续请改用 View 来源", len(resolved.Tasks), strings.Join(resolved.TaskKeys(), "、"))
-	}
 	if resolved.Calendar != input.DefaultCalendar || resolved.Market.Has(dsl.MarketEquity) {
 		return fmt.Errorf("“因子现算”来源暂不支持股票市场（日历 %s）：请用 View 来源回放", resolved.Calendar)
 	}

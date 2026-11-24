@@ -293,11 +293,16 @@ func (s Service) ComputeReplayWindow(ctx context.Context, spaceID string, resolv
 		}
 		generations[key] = generation
 	}
-	subjects, err := s.Client.ListDatasetSubjects(ctx, spaceID, resolved.Primary().DatasetID)
-	if err != nil {
-		return time.Time{}, nil, 0, err
+	// 单步大小按全部主帧会话合计估算：每个市场一个会话，序列数是各市场数据集的标的数之和。
+	series := 0
+	for _, market := range resolved.Markets() {
+		subjects, err := s.Client.ListDatasetSubjects(ctx, spaceID, resolved.TaskOf(market).DatasetID)
+		if err != nil {
+			return time.Time{}, nil, 0, err
+		}
+		series += len(subjects)
 	}
-	return end, generations, len(subjects) * len(resolved.Markets()), nil
+	return end, generations, series, nil
 }
 
 // PoolReplayWindow 校验并截断策略池研究回放的区间：每个成员按自己的 min_age_bars 与回看校验起点、终点取各 View 各成员中最早的
