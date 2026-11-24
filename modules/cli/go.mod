@@ -18,7 +18,6 @@ replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/facto
 
 replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
 
-
 replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
 
 require (
