@@ -43,7 +43,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if err := source.resolve(); err != nil {
 				return err
 			}
-			reports, err := deps.scanDeployment(cmd.Context(), snapshot, deployscan.Options{Sizes: true})
+			reports, err := deps.scanDeployment(cmd.Context(), snapshot, deployscan.Options{Sizes: true, Wipe: true})
 			if err != nil {
 				return err
 			}
@@ -147,7 +147,7 @@ func executeSetupWipe(ctx context.Context, deps setupDeps, snapshot *setupSnapsh
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
+	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{Wipe: true})
 	if err != nil {
 		return nil, err
 	}

@@ -383,3 +383,38 @@ factor = ["factor-engine"]
 	_, err = Scan(context.Background(), &cfg, dial, Options{Host: "factor"})
 	require.ErrorContains(t, err, "connection refused", "点名的停用主机照常检测")
 }
+
+// 清空针对 moox.toml 所列的全部主机：停用的主机也检测，连不上照常报错并提示先让它可达或从 moox.toml 删掉。
+func TestScanForWipeIncludesDisabledHosts(t *testing.T) {
+	cfg, err := topology.Parse([]byte(`
+[hosts.control]
+address = "203.0.113.10"
+ssh = { username = "ubuntu" }
+
+[hosts.factor]
+address = "203.0.113.12"
+enabled = false
+ssh = { username = "ubuntu" }
+
+[deployments]
+control = ["admin", "monitor", "storage-primary", "storage-view", "eventbus"]
+factor = ["factor-engine"]
+`))
+	require.NoError(t, err)
+	encoded, _ := json.Marshal(map[string]any{"root": cfg.Paths.DeployRoot, "installed": true, "archive_kb": -1, "seaweedfs_kb": -1, "disk_free_kb": -1})
+	reachable := true
+	dial := func(_ context.Context, host topology.Host) (setupssh.Client, error) {
+		if host.Name == "factor" && !reachable {
+			return nil, errors.New("connection refused")
+		}
+		return fakeSSH{host: host.Name, stdout: map[string]string{host.Name: string(encoded)}, mu: &sync.Mutex{}, argv: map[string][]string{}}, nil
+	}
+	reports, err := Scan(context.Background(), &cfg, dial, Options{Wipe: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"control", "factor"}, []string{reports[0].Host, reports[1].Host})
+
+	reachable = false
+	_, err = Scan(context.Background(), &cfg, dial, Options{Wipe: true})
+	require.ErrorContains(t, err, "connection refused")
+	require.ErrorContains(t, err, "从 moox.toml 删掉这台主机")
+}

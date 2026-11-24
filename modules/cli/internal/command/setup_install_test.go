@@ -110,7 +110,13 @@ func newInstallHarness(t *testing.T) *installHarness {
 		scanDeployment: func(_ context.Context, _ *setupSnapshot, options deployscan.Options) ([]deployscan.HostReport, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			return slices.DeleteFunc(slices.Clone(h.reports), func(report deployscan.HostReport) bool { return options.Host != "" && report.Host != options.Host }), nil
+			// 与 deployscan.Scan 一致：点名只看那一台；不点名时停用的主机只在清空时检测。
+			return slices.DeleteFunc(slices.Clone(h.reports), func(report deployscan.HostReport) bool {
+				if options.Host != "" {
+					return report.Host != options.Host
+				}
+				return !h.snapshot.Manifest.HostByID(report.Host).Enabled && !options.Wipe
+			}), nil
 		},
 		wipeHost: func(_ context.Context, host topology.Host, root string) (deployscan.HostResult, error) {
 			if err := record("wipe:" + host.Name); err != nil {
@@ -635,4 +641,29 @@ func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	require.Contains(t, waited["overseas"], "egress-proxy")
 	require.NotContains(t, waited["overseas"], "callback-dispatcher", "声明停用的组件不等")
 	require.NotContains(t, waited, "factor", "停用的主机整台不等")
+}
+
+// 停用的主机上仍留着 host-gateway 等部署：清空照样清它；覆盖更新的预检跳过它（它只写登记，可能连不上）。
+func TestSetupWipeIncludesDisabledHostButUpdateSkipsIt(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	disabled := false
+	factor := h.snapshot.Manifest.HostCatalog["factor"]
+	factor.Enabled = &disabled
+	h.snapshot.Manifest.HostCatalog["factor"] = factor
+	require.False(t, h.snapshot.Manifest.HostByID("factor").Enabled)
+
+	out, err := h.run("update")
+	require.NoError(t, err)
+	for _, host := range parsePreview(t, out)["hosts"].([]any) {
+		require.NotEqual(t, "factor", host.(map[string]any)["host"], "覆盖更新的预检不检测停用的主机")
+	}
+
+	out, err = h.run("wipe")
+	require.NoError(t, err)
+	plan := parsePreview(t, out)["plan"].(map[string]any)
+	require.True(t, slices.ContainsFunc(plan["hosts"].([]any), func(host any) bool { return host.(map[string]any)["host"] == "factor" }), "清空范围包含停用的主机")
+	_, err = h.run("wipe", "--yes", "--expect", plan["digest"].(string))
+	require.NoError(t, err)
+	require.Contains(t, h.calls, "wipe:factor")
 }

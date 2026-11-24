@@ -165,8 +165,8 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupSnapshot
 	steps := setupInstallSteps(snapshot.Manifest, options.spaceID)
 	var plan deployscan.Plan
 	if status.Route == deployscan.RouteInstalled {
-		// 清空范围要带大小，单独扫一次。
-		reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{Sizes: true})
+		// 清空范围要带大小，单独扫一次。清空针对全部主机，停用的也算。
+		reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{Sizes: true, Wipe: true})
 		if err != nil {
 			return err
 		}

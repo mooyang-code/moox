@@ -80,6 +80,8 @@ type Options struct {
 	Host string
 	// Sizes 为真时统计归档目录与 SeaweedFS 数据的大小，只在清空预览里需要。
 	Sizes bool
+	// Wipe 为真时是为清空检测：清空针对 moox.toml 所列的全部主机，停用的主机（上面仍留着 host-gateway 等部署）也检测，连不上照常报错。
+	Wipe bool
 }
 
 // Dial 连接一台主机。
@@ -104,7 +106,7 @@ type inspectResult struct {
 }
 
 // Scan 只读检测全部启用的主机（并行），结果按 cfg.Hosts() 的顺序。moox.toml 里停用的主机不检测：
-// 它只需要写登记，可能长期连不上，不能让预检整体失败；Options.Host 点名的主机照常检测。
+// 它只需要写登记，可能长期连不上，不能让预检整体失败；Options.Host 点名的主机与清空（Options.Wipe）照常检测。
 func Scan(ctx context.Context, cfg *topology.Config, dial Dial, options Options) ([]HostReport, error) {
 	if cfg == nil || dial == nil {
 		return nil, errors.New("deployment inspection requires the topology and an SSH dialer")
@@ -113,7 +115,7 @@ func Scan(ctx context.Context, cfg *topology.Config, dial Dial, options Options)
 		if options.Host != "" {
 			return host.Name != options.Host
 		}
-		return !host.Enabled
+		return !host.Enabled && !options.Wipe
 	})
 	if options.Host != "" && len(hosts) == 0 {
 		return nil, fmt.Errorf("moox.toml 里没有主机 %s", options.Host)
@@ -126,6 +128,9 @@ func Scan(ctx context.Context, cfg *topology.Config, dial Dial, options Options)
 		go func() {
 			defer workers.Done()
 			reports[i], errs[i] = inspect(ctx, dial, host, cfg.Paths.DeployRoot, options.Sizes)
+			if errs[i] != nil && !host.Enabled && options.Wipe {
+				errs[i] = fmt.Errorf("%w（主机 %s 在 moox.toml 里已停用，清空仍要连上它：先让它可达，或从 moox.toml 删掉这台主机）", errs[i], host.Name)
+			}
 		}()
 	}
 	workers.Wait()
