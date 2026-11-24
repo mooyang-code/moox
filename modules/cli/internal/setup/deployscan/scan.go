@@ -76,7 +76,7 @@ type HostReport struct {
 
 // Options 是一次检测的参数。
 type Options struct {
-	// Host 非空时只检测这一台主机。
+	// Host 非空时只检测这一台主机（停用的主机也检测）；为空时检测全部启用的主机。
 	Host string
 	// Sizes 为真时统计归档目录与 SeaweedFS 数据的大小，只在清空预览里需要。
 	Sizes bool
@@ -103,12 +103,18 @@ type inspectResult struct {
 	Journald    bool     `json:"journald"`
 }
 
-// Scan 只读检测全部主机（并行），结果按 cfg.Hosts() 的顺序。
+// Scan 只读检测全部启用的主机（并行），结果按 cfg.Hosts() 的顺序。moox.toml 里停用的主机不检测：
+// 它只需要写登记，可能长期连不上，不能让预检整体失败；Options.Host 点名的主机照常检测。
 func Scan(ctx context.Context, cfg *topology.Config, dial Dial, options Options) ([]HostReport, error) {
 	if cfg == nil || dial == nil {
 		return nil, errors.New("deployment inspection requires the topology and an SSH dialer")
 	}
-	hosts := slices.DeleteFunc(cfg.Hosts(), func(host topology.Host) bool { return options.Host != "" && host.Name != options.Host })
+	hosts := slices.DeleteFunc(cfg.Hosts(), func(host topology.Host) bool {
+		if options.Host != "" {
+			return host.Name != options.Host
+		}
+		return !host.Enabled
+	})
 	if options.Host != "" && len(hosts) == 0 {
 		return nil, fmt.Errorf("moox.toml 里没有主机 %s", options.Host)
 	}

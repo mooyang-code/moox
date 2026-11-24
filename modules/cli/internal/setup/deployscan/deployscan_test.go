@@ -344,3 +344,42 @@ func TestWipeScriptClearsRootKeepsItAndRefusesUnsafeRoots(t *testing.T) {
 	_, err := env.run(t, wipeScript, map[string]any{"root": link})
 	require.Error(t, err, "部署根是符号链接时拒绝")
 }
+
+// moox.toml 里停用的主机只写登记、可能连不上：全量检测跳过它（连不上也不让预检失败），点名检测时照常检测。
+func TestScanSkipsDisabledHostsUnlessNamed(t *testing.T) {
+	cfg, err := topology.Parse([]byte(`
+[paths]
+deploy_root = "/data/moox"
+
+[hosts.control]
+address = "203.0.113.10"
+ssh = { username = "ubuntu" }
+
+[hosts.factor]
+address = "203.0.113.12"
+enabled = false
+ssh = { username = "ubuntu" }
+
+[deployments]
+control = ["admin", "monitor", "storage-primary", "storage-view", "eventbus"]
+factor = ["factor-engine"]
+`))
+	require.NoError(t, err)
+	encoded, _ := json.Marshal(map[string]any{"root": "/data/moox", "installed": true, "archive_kb": -1, "seaweedfs_kb": -1, "disk_free_kb": -1})
+	var dialed []string
+	dial := func(_ context.Context, host topology.Host) (setupssh.Client, error) {
+		dialed = append(dialed, host.Name)
+		if host.Name == "factor" {
+			return nil, errors.New("connection refused")
+		}
+		return fakeSSH{host: host.Name, stdout: map[string]string{host.Name: string(encoded)}, mu: &sync.Mutex{}, argv: map[string][]string{}}, nil
+	}
+	reports, err := Scan(context.Background(), &cfg, dial, Options{})
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.Equal(t, "control", reports[0].Host)
+	require.Equal(t, []string{"control"}, dialed)
+
+	_, err = Scan(context.Background(), &cfg, dial, Options{Host: "factor"})
+	require.ErrorContains(t, err, "connection refused", "点名的停用主机照常检测")
+}

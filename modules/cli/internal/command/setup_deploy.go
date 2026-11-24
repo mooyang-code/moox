@@ -447,7 +447,7 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupS
 				status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 装过，但缺这些组件：%s。如果是上次 setup install 没做完，重跑同一条 setup install；如果是 moox.toml 里新加的组件，覆盖更新会装上", report.Host, strings.Join(lacking, "、")))
 			}
 		case len(report.Entries) != 0 || len(report.Units) != 0 || report.Processes != 0:
-			status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 没有 version.json，但部署根或用户服务里已有东西（失败的部署尝试或别的文件）：部署会直接装在上面、覆盖同名文件；不清楚这些是什么时先让用户确认（setup wipe 会清空 moox.toml 里的全部主机，不能只清这一台）", report.Host))
+			status.Notes = append(status.Notes, fmt.Sprintf("主机 %s 没有 version.json，但部署根或用户服务里已有东西（失败的部署尝试或别的文件）：部署会直接装在上面、覆盖同名文件；不清楚这些是什么时先让用户确认（setup wipe 会清空 moox.toml 里全部启用的主机，不能只清这一台）", report.Host))
 			empty = append(empty, report.Host)
 		default:
 			empty = append(empty, report.Host)
