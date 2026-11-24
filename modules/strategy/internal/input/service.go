@@ -157,8 +157,7 @@ func (s Service) TaskMarket(ctx context.Context, spaceID, taskID string) (string
 }
 
 // CheckRegisteredMarkets 核对实例登记的“任务键 → 任务”：每个任务的源数据集市场（由 marketOf 查询）必须就是登记的市场（附加来源的键
-// 来源名:市场 取冒号后的市场）；
-// 统一数据集（market_type = multi）上的任务登记为 multi。填错会让任务被永久占住、实例又启用不了，所以创建实例时就要核对，
+// 来源名:市场 取冒号后的市场）。填错会让任务被永久占住、实例又启用不了，所以创建实例时就要核对，
 // 启用时也要在关联任务之前再核对一次。
 func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, marketOf func(ctx context.Context, taskID string) (string, error)) error {
 	for _, taskID := range TaskIDs(tasks) {
@@ -172,9 +171,6 @@ func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, market
 		if err != nil {
 			return fmt.Errorf("无法确定因子任务 %s 的市场（它的结果 View 或数据集还没有就绪？）：%w", taskID, err)
 		}
-		if actual == MarketMulti && market != MarketMulti {
-			return fmt.Errorf("因子任务 %s 的源数据集是统一数据集（同时放现货与永续），要登记为 multi，不能登记为 %s", taskID, market)
-		}
 		if actual != market {
 			return fmt.Errorf("因子任务 %s 登记为 %s 市场，但它的源数据集是 %s 市场", taskID, market, actual)
 		}
@@ -182,10 +178,10 @@ func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, market
 	return nil
 }
 
-// TaskIDs 返回实例登记的全部因子任务：先是主帧与参考市场（按现货、永续、股票、统一数据集的先后），再是附加来源（按任务键）。
+// TaskIDs 返回实例登记的全部因子任务：先是主帧与参考市场（按现货、永续、股票的先后），再是附加来源（按任务键）。
 func TaskIDs(tasks map[string]string) []string {
 	ids := make([]string, 0, len(tasks))
-	for _, market := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity, MarketMulti} {
+	for _, market := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity} {
 		if id, ok := tasks[market]; ok {
 			ids = append(ids, id)
 		}
@@ -208,9 +204,6 @@ func CheckResolvedMarkets(resolved Resolved, tasks map[string]string) error {
 		if got := all[market]; got != taskID {
 			for actual, id := range all {
 				if id == taskID {
-					if actual == MarketMulti {
-						return fmt.Errorf("因子任务 %s 在统一数据集上（同时放现货与永续），factor_tasks 要写 multi=%s，不能写成 %s；从实例发起的回放可以省略 factor_tasks", taskID, taskID, market)
-					}
 					return fmt.Errorf("因子任务 %s 登记为 %s 市场，但它的源数据集是 %s 市场", taskID, market, actual)
 				}
 			}

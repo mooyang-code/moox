@@ -531,8 +531,8 @@ func TestComputeStepPeriods(t *testing.T) {
 	require.ErrorContains(t, err, "减少策略引用的列")
 }
 
-// viewEngine 是按 View 已有的行出帧的因子引擎：每期按 OpenReplay 请求的列读这个 View 同一根的行（series_tag 原样，统一数据集上
-// 现货、永续两条序列各一行），上一期的同名列读上一根，年龄是（标的, series_tag）在 View 里最早一行起的根数。引擎与 View 给出相同的
+// viewEngine 是按 View 已有的行出帧的因子引擎：每期按 OpenReplay 请求的列读这个 View 同一根的行（series_tag 原样），
+// 上一期的同名列读上一根，年龄是（标的, series_tag）在 View 里最早一行起的根数。引擎与 View 给出相同的
 // 行时，因子现算与 View 来源的回放结果应当一致。
 type viewEngine struct {
 	client  input.Client
@@ -599,8 +599,7 @@ func (e *viewEngine) CloseReplay(context.Context, *factorpb.CloseReplayReq, ...c
 	return &factorpb.CloseReplayRsp{RetInfo: &commonpb.RetInfo{}, Closed: true}, nil
 }
 
-// 永续（标签黑白名单、显式 pool、新上市的年龄剔除、缺价冻结、逐期结算）、统一数据集（一个任务按 series_tag 分到现货、永续，年龄按市场判断）
-// 与永续计资金费（引擎多返回资金费列）三个场景上，因子现算与 View 来源的逐期记录完全一致。
+// 永续（标签黑白名单、显式 pool、新上市的年龄剔除、缺价冻结、逐期结算）与永续计资金费（引擎多返回资金费列）两个场景上，因子现算与 View 来源的逐期记录完全一致。
 func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 	type scenario struct {
 		name    string
@@ -617,15 +616,10 @@ func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 	}
 	for _, tc := range []scenario{
 		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, client: func() input.Client { return newBaselineClient(baselineSwapClient()) }, task: swapTask, hours: 16},
-		{name: "dual_unified", dsl: baselineDualDSL, client: func() input.Client { return newBaselineClient(&unifiedClient{dualClient: baselineDualClient()}) }, task: uniTask, hours: 16},
 		{name: "swap_funding", dsl: swapOnlyDSL, client: funded, task: swapTask, hours: 10, funding: "funding_rate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			market := "swap"
-			if tc.task == uniTask {
-				market = "multi"
-			}
-			tasks := map[string]store.ReplayTask{market: tc.task}
+			tasks := map[string]store.ReplayTask{"swap": tc.task}
 			viewRepo := openStore(t)
 			viewClient := tc.client()
 			viewJob := startMarketReplay(t, viewRepo, viewClient, "v1", tc.dsl, tc.hours, tasks, 10, 5)

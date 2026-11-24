@@ -1071,7 +1071,7 @@
       ]
     }
   ],
-  "dsl": "name: baseline_unified\nmarket: {select: both, prefer: swap}\nrules:\n  - id: l\n    type: rank\n    score: \"m\"\n    select: {top: 2}\n    weight: {total: 0.6}\n  - id: s\n    type: rank\n    side: short\n    score: \"m\"\n    select: {bottom: 1}\n    weight: {total: 0.4}\nportfolio:\n  leverage: 2\n  max_missing: 1\n",
+  "dsl": "name: baseline_dual_long_short\nmarket: {select: both, prefer: swap}\nrules:\n  - id: l\n    type: rank\n    score: \"m\"\n    select: {top: 2}\n    weight: {total: 0.6}\n  - id: s\n    type: rank\n    side: short\n    score: \"m\"\n    select: {bottom: 1}\n    weight: {total: 0.4}\nportfolio:\n  leverage: 2\n  max_missing: 1\n",
   "market": "select=both, prefer=swap",
-  "name": "unified"
+  "name": "dual_long_short"
 }

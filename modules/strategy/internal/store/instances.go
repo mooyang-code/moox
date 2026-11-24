@@ -25,7 +25,7 @@ type Instance struct {
 	InstanceID string
 	StrategyID string
 	SpaceID    string
-	// FactorTasks 是任务键 → 因子任务 ID：主帧与参考市场的任务键是市场（spot、swap、equity），统一数据集上的任务登记为 multi；
+	// FactorTasks 是任务键 → 因子任务 ID：主帧与参考市场的任务键是市场（spot、swap、equity）；
 	// 附加来源的任务键是 来源名:市场（见 dsl.TaskKey）。
 	FactorTasks      map[string]string
 	LogicalAccountID *string
@@ -155,14 +155,14 @@ const (
 	maxMarketsInSource = 2
 )
 
-// ValidateTaskKeys 校验实例登记的因子任务：键是市场或 来源名:市场，市场只能是 spot、swap、equity、multi，任务 ID 不能为空，个数不超过上限。
+// ValidateTaskKeys 校验实例登记的因子任务：键是市场或 来源名:市场，市场只能是 spot、swap、equity，任务 ID 不能为空，个数不超过上限。
 func ValidateTaskKeys(tasks map[string]string) error {
 	plain := 0
 	sources := map[string]int{}
 	for key, taskID := range tasks {
 		source, market := dsl.SplitTaskKey(key)
-		if market != "spot" && market != "swap" && market != "equity" && market != "multi" {
-			return fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi（附加来源写作 来源名:市场）", market)
+		if market != "spot" && market != "swap" && market != "equity" {
+			return fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap 或 equity（附加来源写作 来源名:市场）", market)
 		}
 		if strings.Contains(key, ":") && !dsl.ValidSourceName(source) {
 			return fmt.Errorf("factor_tasks 的键 %q 不合法：来源名必须是小写字母开头的 snake_case", key)

@@ -15,12 +15,11 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // “因子现算”来源（见 docs/模块/策略.md 第 10 节）：主帧不读 View，经主机网关调因子引擎的 EngineControl，按因子机本地 K 线
 // 逐步现算。回放开始时 OpenReplay 建会话并给出可回放的各期，之后按期 StepReplay 取行，结束时 CloseReplay。附加来源与参考市场
-// 仍读 View。只支持一个主帧任务（方式 A 的两个任务不支持；统一数据集是一个任务，按 series_tag 分到两个市场）。
+// 仍读 View。只支持一个主帧任务。
 
 const (
 	// computeStepBytes 是单步响应的目标上限（引擎侧同样按 3 MiB 截断，服务包体上限是默认的 4 MiB）。
@@ -99,12 +98,10 @@ type computeSource struct {
 	job      store.Replay
 	resolved input.Resolved
 	program  *dsl.Program
-	// markets 是主帧的市场（统一数据集是现货、永续两个，共用一个会话）：只用到各附加来源的读取器与年龄判定的已通过集合，
-	// 行与历史读取器为空（主帧的行来自引擎）。
+	// markets 是主帧的市场：只用到各附加来源的读取器与年龄判定的已通过集合，行与历史读取器为空（主帧的行来自引擎）。
 	markets []*viewMarket
 	// refs 是参考市场的读取器：只读 View 里年龄判定的历史，与 View 来源相同。
 	refs  []*viewMarket
-	memo  *input.RowsMemo
 	abort func(context.Context) error
 	// periods 是 OpenReplay 给出的各期 data_time（Unix 秒，升序），index 是它们的下标；bars 是对应的周期。
 	periods []int64
@@ -158,15 +155,11 @@ func (r *Runner) newComputeSource(ctx context.Context, job store.Replay, resolve
 		return nil, fmt.Errorf("“因子现算”只支持一个主帧任务，这个回放绑定了 %d 个", len(resolved.Tasks))
 	}
 	task := resolved.Primary()
-	var memo *input.RowsMemo
-	if resolved.Unified() {
-		memo = &input.RowsMemo{}
-	}
-	source := &computeSource{runner: r, job: job, resolved: resolved, program: program, memo: memo, abort: abort}
+	source := &computeSource{runner: r, job: job, resolved: resolved, program: program, abort: abort}
 	for _, market := range markets {
-		source.markets = append(source.markets, newViewMarket(market, job.Tasks[resolved.TaskKey(market.market)], nil, nil))
+		source.markets = append(source.markets, newViewMarket(market, job.Tasks[market.market], nil, nil))
 	}
-	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, source.markets, memo, abort); err != nil {
+	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, source.markets, abort); err != nil {
 		return nil, err
 	}
 	refs, err := referenceReaders(ctx, r.Client, job, resolved, abort)
@@ -277,7 +270,6 @@ func (s *computeSource) Rejected(key int64) []string { return s.rejected[key] }
 
 // Close 结束引擎上的会话。回放可能因取消或失败结束（ctx 也许已结束），所以用不随它取消的上下文另设超时；关不上只记日志。
 func (s *computeSource) Close(ctx context.Context) error {
-	s.memo.Reset()
 	if !s.opened {
 		return nil
 	}
@@ -355,17 +347,12 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 		s.tail, s.tailAt = last, segment[len(segment)-1].StorageStart
 	}
 	loaded := make(map[string]marketSegment, len(s.markets)+len(s.refs))
-	defer s.memo.Reset()
 	for _, market := range s.markets {
-		filter := ""
-		if s.resolved.Unified() {
-			filter = market.market
-		}
 		sources, err := loadSourceSegment(ctx, s.resolved, market, segment)
 		if err != nil {
 			return nil, err
 		}
-		loaded[market.market] = marketSegment{rows: input.GroupRows(rows, filter), ages: &engineAges{ages: ages[market.market], passed: market.passed}, sources: sources}
+		loaded[market.market] = marketSegment{rows: input.GroupRows(rows), ages: &engineAges{ages: ages[market.market], passed: market.passed}, sources: sources}
 	}
 	for _, ref := range s.refs {
 		refAges, err := agePresence(ctx, ref.history, s.resolved, segment, ref.passed)
@@ -378,12 +365,9 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 }
 
 // recordAge 记下一行的年龄根数（市场 → bar_start → 标的 → 根数）：同一标的在一个市场有多个序列时取最大的（这一根本来就是歧义，
-// 不参与求值）。统一数据集按 series_tag 分市场，其余都是唯一的那个市场。
+// 不参与求值）。
 func (s *computeSource) recordAge(ages map[string]map[int64]map[string]int, at int64, row *factorpb.ReplayRow) {
 	market := s.markets[0].market
-	if s.resolved.Unified() {
-		market = seriesset.SeriesTagMarket(row.GetSeriesTag())
-	}
 	if ages[market] == nil {
 		ages[market] = map[int64]map[string]int{}
 	}
