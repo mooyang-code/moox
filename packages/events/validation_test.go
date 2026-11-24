@@ -67,6 +67,13 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "complete has no failed subjects", event: DatasetPeriodCompleted, subjectID: "dataset",
+			payload: validLedgerPeriodCompleted(now),
+			mutate: func(value proto.Message) {
+				value.(*storagepb.DatasetPeriodCompleted).FailedSubjects = []string{"BTC-USDT"}
+			},
+		},
+		{
 			name: "ledger needs snapshot_ref", event: DatasetPeriodCompleted, subjectID: "dataset",
 			payload: validLedgerPeriodCompleted(now),
 			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).SnapshotRef = "" },
@@ -110,7 +117,7 @@ func TestDatasetPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	payload := validLedgerPeriodCompleted(timestamppb.Now())
-	payload.UniverseSubjectIds, payload.UniverseSeries = nil, nil
+	payload.UniverseSubjectIds = nil
 	payload.Frequency = "1H"
 	payload.PeriodTime = 1
 	_, err = registry.Encode(DatasetPeriodCompleted, payload, validationOptions("event-1", "space", "dataset"))

@@ -108,33 +108,26 @@ message FactorMember {
   string kind = 12;
 }
 
-// SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
-message SeriesRef {
-  string subject_id = 1;
-  string series_tag = 2;
-}
-
 message FactorPeriodState {
   string factor_id = 1;
   string status = 2;
+  // failed_subjects 是该成员本期失败的标的。放在周期明细（PeriodDetail）里时只记周期级 failed_subjects 之外多出来的部分，
+  // 完整名单 = 周期级 failed_subjects ∪ 这里（还原用 packages/factorname.MemberFailedSubjects）；
+  // 放在心跳 TaskRunSummary 里时是完整名单。
   repeated string failed_subjects = 3;
   string spec_hash = 4;
   string definition_hash = 5;
   string member_key = 7;
   // member_kind 是成员类型：fixed 或 var。
   string member_kind = 8;
-  // failed_series 是按序列（标的、series_tag）的失败名单（每个标的只有一条序列，与 failed_subjects 对应），3E 收成按标的一份时删除。
-  repeated SeriesRef failed_series = 9;
 }
 
 // PeriodDetail 是因子结果数据集一期完成时放进 DatasetPeriodCompleted.detail 的明细（detail_type = moox.factor.PeriodDetail.v1）。
 // Storage 与 View 只原样透传，Strategy 按 detail_type 解码后判断每个因子成员这一期是否可用。
+// factors 里每个成员的 failed_subjects 只记周期级 failed_subjects 之外多出来的部分，读取方用 packages/factorname.MemberFailedSubjects 还原。
 message PeriodDetail {
   string source_dataset_id = 1;
   repeated FactorPeriodState factors = 2;
-  // shared_failed_series 是所有成员的 failed_series 的交集，只放一份（永续整体晚到时每个成员的失败序列相同，逐成员复制会让标记超过事件体积上限）。
-  // 成员完整的失败序列 = shared_failed_series ∪ 该成员的 failed_series；读取方必须这样还原（共享实现：packages/seriesset 的 Union）。只有统一数据集才有。
-  repeated SeriesRef shared_failed_series = 3;
 }
 
 message TaskRunSummary {

@@ -122,7 +122,7 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 		}
 	}
 	// 事件级失败标的：因子明细里成员只记这之外多出来的部分，成员完整的失败标的要并上它（factorname.MemberFailedSubjects）。
-	periodFailed := parseScopeRef(event.GetFailedScopeRef())
+	periodFailed := uniqueSorted(event.GetFailedSubjects())
 	for _, factorID := range required {
 		state := states[factorID]
 		switch state.GetStatus() {
@@ -172,19 +172,6 @@ func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPe
 		states[id] = state
 	}
 	return states, nil
-}
-
-// parseScopeRef 解析 View 事件的 failed_scope_ref：逗号分隔的标的列表；字面量 degraded 表示没有具体标的。
-func parseScopeRef(ref string) []string {
-	subjects := make([]string, 0)
-	for _, token := range strings.Split(ref, ",") {
-		token = strings.TrimSpace(token)
-		if token == "" || token == statusDegraded {
-			continue
-		}
-		subjects = append(subjects, token)
-	}
-	return uniqueSorted(subjects)
 }
 
 func uniqueSorted(values []string) []string {

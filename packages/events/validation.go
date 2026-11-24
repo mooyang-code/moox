@@ -136,17 +136,25 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 	if !validRequiredToken(payload.GetVisibleScope()) {
 		return fmt.Errorf("view data ready visible_scope is required")
 	}
-	if payload.GetStatus() == "complete" && validRequiredToken(payload.GetFailedScopeRef()) {
-		return fmt.Errorf("view data ready complete status has failed_scope_ref")
-	}
-	if payload.GetStatus() == "degraded" && !validRequiredToken(payload.GetFailedScopeRef()) {
-		return fmt.Errorf("view data ready degraded status requires failed_scope_ref")
-	}
 	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") {
 		return fmt.Errorf("view data ready detail and detail_type must be provided together")
 	}
-	if _, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids"); err != nil {
+	universe, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids")
+	if err != nil {
 		return err
+	}
+	// failed_subjects 原样取自周期完成事件：是全集的子集，complete 时为空；degraded 时可以为空（降级但说不出具体标的）。
+	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, "view data ready failed_subjects")
+	if err != nil {
+		return err
+	}
+	if payload.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("view data ready complete status has failed_subjects")
+	}
+	for subject := range failed {
+		if _, ok := universe[subject]; !ok {
+			return fmt.Errorf("view data ready failed_subject %q is not in universe_subject_ids", subject)
+		}
 	}
 	return nil
 }

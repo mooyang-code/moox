@@ -52,8 +52,8 @@ func TestCheckFollowsReadinessTable(t *testing.T) {
 		{name: "因子 degraded 只记失败标的", binding: binding, event: factorEvent(state("ma", "degraded", "h1", "ETH-USDT", "SOL-USDT", "ETH-USDT"), state("mom", "complete", "h2")), failed: map[string][]string{"ma": {"ETH-USDT", "SOL-USDT"}}},
 		{name: "全部 complete", binding: binding, event: factorEvent(state("ma", "complete", "h1"), state("mom", "complete", "h2"))},
 		{name: "未引用的因子 skipped 不影响", binding: Binding{Factors: map[string]string{"ma": "h1|fixed"}}, event: factorEvent(state("ma", "complete", "h1"), state("mom", "skipped", "h2"))},
-		{name: "K 线 View degraded 解析失败标的", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "degraded", FailedScopeRef: "SOL-USDT,ETH-USDT"}, subjects: []string{"ETH-USDT", "SOL-USDT"}},
-		{name: "K 线 View degraded 无具体标的", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "degraded", FailedScopeRef: "degraded"}},
+		{name: "K 线 View degraded 解析失败标的", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "degraded", FailedSubjects: []string{"SOL-USDT", "ETH-USDT"}}, subjects: []string{"ETH-USDT", "SOL-USDT"}},
+		{name: "K 线 View degraded 无具体标的", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "degraded"}},
 		{name: "K 线 View complete", binding: Binding{}, event: &storagepb.ViewDataReady{Status: "complete"}},
 		{name: "bars[-1] 只读 K 线列不要求相邻记录", binding: binding, event: factorEvent(state("ma", "complete", "h1"), state("mom", "complete", "h2"))},
 		{name: "bars[-1] 只核对经它读取的因子", binding: Binding{Factors: map[string]string{"ma": "h1|fixed", "mom": "h2|fixed"}, PreviousFactors: []string{"ma"}}, adjacent: &Record{Factors: map[string]string{"ma": "h1|fixed"}}, event: factorEvent(state("ma", "complete", "h1"), state("mom", "complete", "h2"))},
@@ -168,7 +168,7 @@ func TestCheckCollectsFailedSubjectsByFactor(t *testing.T) {
 func TestCheckRestoresMemberFailuresFromEventLevel(t *testing.T) {
 	binding := Binding{Factors: map[string]string{"ma": "h1|fixed", "rank": "h2|fixed"}}
 	event := factorEvent(state("ma", "degraded", "h1"), state("rank", "degraded", "h2", "BTC-USDT"))
-	event.FailedScopeRef = "SOL-USDT"
+	event.FailedSubjects = []string{"SOL-USDT"}
 	result := Check(binding, nil, event)
 	if result.Reason != "" {
 		t.Fatalf("不应跳过：%s", result.Reason)
