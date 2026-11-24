@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
+	stockcneastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/modules/collector/internal/tradingstatus"
@@ -66,7 +67,11 @@ func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime,
 		return nil, nil, err
 	}
 	metrics := subjectsync.NewMetrics(prometheus.DefaultRegisterer)
-	tags := &subjectsync.TagRunner{Store: storage, Runs: dbm.TagSyncRuns(), Listers: listers, IndexListers: indexListers, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics, KeepHaltedMembers: cryptoStatus}
+	tags := &subjectsync.TagRunner{Store: storage, Runs: dbm.TagSyncRuns(), Listers: listers, IndexListers: indexListers, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics, KeepHaltedMembers: cryptoStatus,
+		// cn_a_share 的备用来源是新浪 hs_a（含科创板、北交所），回落时只加东方财富全市场筛选范围内的新标的。
+		SnapshotScopes: map[subjectsync.ListerKey]func(string) bool{
+			{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}: stockcneastmoney.InAShareScope,
+		}}
 	attributes := &subjectsync.AttributeRunner{Store: storage, Listers: listers, Jobs: cfg.SubjectSync.Attributes, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
 	syncer := &subjectsync.Syncer{Tags: tags, Attributes: attributes}
 	// 交易状态检测挂在属性任务的每分钟定时器上：入口先固定触发时间，先跑交易状态（不进同步锁，写的是另一列），再跑属性任务。

@@ -48,6 +48,9 @@ type TagRunner struct {
 	// RetryDelays 是快照取数失败或校验不通过时在本次同步内重试前的等待（默认 2 秒、4 秒，共 3 次）；
 	// 都失败就保持原成员不变并上报失败，绝不用一份残缺的快照更新成员。
 	RetryDelays []time.Duration
+	// SnapshotScopes 给出主来源快照的标的范围（键是主来源的 ListerKey）：用备用来源时只加入范围内的新标的，
+	// 避免备用来源口径更宽（新浪含科创板、北交所，东方财富不含）时成员在两种口径之间来回变。没登记范围的主来源不过滤。
+	SnapshotScopes map[ListerKey]func(subjectID string) bool
 }
 
 var defaultSnapshotRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second}
@@ -182,6 +185,9 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 		}
 		instruments, err = r.fetchSnapshot(fetchCtx, tag)
 	}
+	if err != nil && tagattr.FallbackSource(tag) != "" && tagattr.Index(tag) == "" {
+		instruments, err = r.fallbackSnapshot(ctx, tag, timeout, err)
+	}
 	subjects := 0
 	var items []*pb.TagSnapshotItem
 	if err == nil {
@@ -249,6 +255,46 @@ func (r *TagRunner) keepTradable(ctx context.Context, tag *pb.Tag, instruments [
 		}
 	}
 	return kept, nil
+}
+
+// fallbackSnapshot 在主来源重试后仍失败时改用 sync.fallback_source 取一次全部标的，超时预算与主来源分开。结果只加不减：
+// 备用来源里主来源范围内（SnapshotScopes）的标的，加上当前全部 active 成员。备用来源少的标的（东方财富独有的退市旧代码、
+// 新浪还没收录的新股）不会因此移出，等主来源恢复再按它的完整快照增减。备用来源也失败、或读成员失败时返回两边的错误，成员不变。
+func (r *TagRunner) fallbackSnapshot(ctx context.Context, tag *pb.Tag, timeout time.Duration, primaryErr error) ([]marketdata.Instrument, error) {
+	source := tagattr.FallbackSource(tag)
+	log.WarnContextf(ctx, "tag %s/%s primary source %s failed, falling back to %s: %v", tag.GetSpaceId(), tag.GetTagId(), tagattr.Source(tag), source, primaryErr)
+	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	items, err := FetchSnapshot(fetchCtx, r.Listers, tag.GetSpaceId(), []string{source}, tagattr.MarketType(tag))
+	if err != nil {
+		return nil, fmt.Errorf("%w; fallback %s: %v", primaryErr, source, err)
+	}
+	members, err := r.Store.ListTagMembers(ctx, tag.GetSpaceId(), tag.GetTagId(), "active")
+	if err != nil {
+		return nil, fmt.Errorf("%w; fallback %s: list members: %v", primaryErr, source, err)
+	}
+	inScope := r.SnapshotScopes[ListerKey{MarketID: tag.GetSpaceId(), Source: tagattr.Source(tag), InstrumentType: tagattr.MarketType(tag)}]
+	seen := make(map[string]bool, len(members))
+	out := make([]marketdata.Instrument, 0, len(members))
+	for _, member := range members {
+		id := member.GetSubject().GetSubjectId()
+		if id != "" && !seen[id] {
+			seen[id] = true
+			// 已有标的的名称与属性 Storage 不会改，这里只需要代码。
+			out = append(out, marketdata.Instrument{SubjectID: id, Name: member.GetSubject().GetName()})
+		}
+	}
+	added := 0
+	for _, item := range items {
+		if seen[item.SubjectID] || (inScope != nil && !inScope(item.SubjectID)) {
+			continue
+		}
+		seen[item.SubjectID] = true
+		out = append(out, item)
+		added++
+	}
+	log.WarnContextf(ctx, "tag %s/%s used fallback %s: kept %d members, added %d new", tag.GetSpaceId(), tag.GetTagId(), source, len(out)-added, added)
+	return out, nil
 }
 
 // snapshotRetryable 判断取快照失败后本次同步内是否值得再试：东方财富主机冷却中（主动停手）时请求根本没有发出去，

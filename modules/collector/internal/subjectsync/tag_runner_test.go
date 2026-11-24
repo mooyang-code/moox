@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -361,5 +362,54 @@ func TestTagSyncKeepsHaltedMembersOnlyWhenTheyAreMembers(t *testing.T) {
 	}
 	if got := store.lastItems["binance_spot"]; len(got) != 2 {
 		t.Fatalf("股票快照原样应用：%v", got)
+	}
+}
+
+// 主来源重试后仍失败（含冷却中）时改用 sync.fallback_source：只加不减，当前 active 成员全部留着，备用来源里只加主来源范围内的新标的；
+// 备用来源也失败时成员不变、上报失败；没配备用来源时行为不变。
+func TestTagSyncFallsBackToSecondarySource(t *testing.T) {
+	tag := autoTag("stockcn", "cn_a_share", "auto", "eastmoney", "equity")
+	tag.Attributes["sync.fallback_source"] = "sina"
+	members := map[string][]*pb.TagMember{"cn_a_share": {member("000001.XSHE", "trading"), member("600001.XSHG", "delisted")}}
+	scope := func(id string) bool { return !strings.HasPrefix(id, "688") && !strings.HasSuffix(id, ".XBSE") }
+	run := func(store *fakeTagStore, tag *pb.Tag, primaryErr, fallbackErr error) error {
+		listers := Listers{
+			{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}: countingLister{calls: new(int), err: primaryErr},
+			{MarketID: "stockcn", Source: "sina", InstrumentType: "equity"}: fakeSubjectLister{items: []marketdata.Instrument{
+				{SubjectID: "000001.XSHE"}, {SubjectID: "300999.XSHE"}, {SubjectID: "688001.XSHG"}, {SubjectID: "920001.XBSE"},
+			}, err: fallbackErr},
+		}
+		runner := &TagRunner{Store: store, Runs: newFakeRunStore(), Listers: listers, FetchTimeout: time.Second, RetryDelays: []time.Duration{},
+			SnapshotScopes: map[ListerKey]func(string) bool{{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}: scope}}
+		_, err := runner.runTag(context.Background(), tag, time.Now())
+		return err
+	}
+
+	for _, primaryErr := range []error{errors.New("connection reset"), cnstock.ErrCoolingDown} {
+		store := &fakeTagStore{applied: map[string]int{}, members: members}
+		if err := run(store, tag, primaryErr, nil); err != nil {
+			t.Fatalf("回落成功应按成功记录：%v", err)
+		}
+		got := append([]string(nil), store.lastItems["cn_a_share"]...)
+		sort.Strings(got)
+		if strings.Join(got, ",") != "000001.XSHE,300999.XSHE,600001.XSHG" {
+			t.Fatalf("回落快照 = %v（主来源错误 %v）", got, primaryErr)
+		}
+	}
+
+	store := &fakeTagStore{applied: map[string]int{}, members: members}
+	if err := run(store, tag, errors.New("connection reset"), errors.New("sina down")); err == nil || store.lastItems["cn_a_share"] != nil {
+		t.Fatalf("备用来源也失败时成员不变：err=%v applied=%v", err, store.lastItems)
+	}
+
+	store = &fakeTagStore{applied: map[string]int{}, members: members, membersErr: errors.New("storage down")}
+	if err := run(store, tag, errors.New("connection reset"), nil); err == nil || store.lastItems["cn_a_share"] != nil {
+		t.Fatalf("读成员失败时不应用回落快照：err=%v applied=%v", err, store.lastItems)
+	}
+
+	plain := autoTag("stockcn", "cn_a_share", "auto", "eastmoney", "equity")
+	store = &fakeTagStore{applied: map[string]int{}, members: members}
+	if err := run(store, plain, errors.New("connection reset"), nil); err == nil || store.lastItems["cn_a_share"] != nil {
+		t.Fatalf("没配备用来源时按失败处理：err=%v applied=%v", err, store.lastItems)
 	}
 }
