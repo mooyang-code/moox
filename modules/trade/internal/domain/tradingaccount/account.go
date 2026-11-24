@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	ErrInvalidAccount       = errors.New("trade: invalid trading account")
-	ErrAccountNotExecutable = errors.New("trade: trading account is not executable")
+	ErrInvalidAccount       = errors.New("执行账户的参数不合法")
+	ErrAccountNotExecutable = errors.New("执行账户当前不能下单")
 )
 
 type LiveConfig struct {

@@ -10,7 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-var ErrInvalidSpec = errors.New("trade: invalid order specification")
+var ErrInvalidSpec = errors.New("订单参数不合法")
 
 var ErrReferencePriceStale = errors.New("reference price is stale")
 

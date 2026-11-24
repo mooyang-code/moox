@@ -37,8 +37,8 @@ const (
 )
 
 var (
-	ErrConflict           = errors.New("trade store: conflict")
-	ErrInvalidRecord      = errors.New("trade store: invalid record")
+	ErrConflict           = errors.New("数据已经被修改，刷新后再试")
+	ErrInvalidRecord      = errors.New("数据不合法")
 	ErrIncompatibleSchema = errors.New("trade store: incompatible schema")
 )
 

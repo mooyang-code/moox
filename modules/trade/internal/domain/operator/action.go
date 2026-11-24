@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-var ErrInvalidAction = errors.New("trade: invalid operator action")
+var ErrInvalidAction = errors.New("人工操作记录不合法")
 
 type ActionType string
 

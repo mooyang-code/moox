@@ -531,15 +531,15 @@ func divideRounded(
 	scale int,
 ) (shared.Decimal, error) {
 	if denominator.Cmp(shared.Zero()) <= 0 || scale < 0 {
-		return shared.Decimal{}, errors.New("trade: invalid decimal division")
+		return shared.Decimal{}, errors.New("数值计算参数不合法：除数要大于 0、精度不能为负")
 	}
 	n := new(big.Rat)
 	d := new(big.Rat)
 	if _, ok := n.SetString(numerator.String()); !ok {
-		return shared.Decimal{}, errors.New("trade: invalid decimal numerator")
+		return shared.Decimal{}, errors.New("数值格式不合法：被除数无法解析")
 	}
 	if _, ok := d.SetString(denominator.String()); !ok {
-		return shared.Decimal{}, errors.New("trade: invalid decimal denominator")
+		return shared.Decimal{}, errors.New("数值格式不合法：除数无法解析")
 	}
 	value := new(big.Rat).Quo(n, d)
 	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)

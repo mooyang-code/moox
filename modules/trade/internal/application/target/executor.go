@@ -24,8 +24,8 @@ import (
 
 var (
 	ErrExecutorConfig     = errors.New("trade target: executor is not configured")
-	ErrInvalidTarget      = errors.New("trade target: invalid target")
-	ErrTargetExpired      = errors.New("trade target: target validity window elapsed")
+	ErrInvalidTarget      = errors.New("交易目标不合法")
+	ErrTargetExpired      = errors.New("交易目标已过有效期")
 	ErrTargetSession      = errors.New("trade target: target session authorization changed")
 	errTargetNotEffective = errors.New("trade target: target is not effective yet")
 )

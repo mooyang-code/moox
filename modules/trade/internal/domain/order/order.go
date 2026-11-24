@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	ErrInvalidOrder      = errors.New("trade: invalid order")
+	ErrInvalidOrder      = errors.New("订单不合法")
 	ErrInvalidTransition = errors.New("trade: invalid order transition")
 )
 
