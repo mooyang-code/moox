@@ -36,7 +36,6 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_order_fill_hourly_summaries",
 		"t_trade_orders",
 		"t_paper_account_configs",
-		"t_paper_balance_projections",
 		"t_shadow_targets",
 		"t_paper_asset_balances",
 		"t_paper_funding_fees",
@@ -94,6 +93,7 @@ func TestAllSQLHasNoRetiredTables(t *testing.T) {
 		"t_ledger_transactions",
 		"t_ledger_entries",
 		"t_trade_balance_projections",
+		"t_paper_balance_projections",
 	}
 	for _, table := range retired {
 		var count int64
@@ -155,7 +155,6 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_target_id"}},
 		{"t_operator_actions", []string{"c_space_id", "c_action_id"}},
-		{"t_paper_balance_projections", []string{"c_space_id", "c_trading_account_id"}},
 		{"t_paper_asset_balances", []string{"c_space_id", "c_trading_account_id", "c_asset"}},
 	}
 	for _, tt := range tests {

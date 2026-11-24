@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -28,10 +26,7 @@ func (tx *Tx) initializePaperBalance(spaceID, accountID, initial string) error {
 	if err != nil {
 		return err
 	}
-	if err := tx.db.Exec(execInsertPaperBalanceProjection, spaceID, accountID, time.Now().UTC().UnixMilli()).Error; err != nil {
-		return writeError(err)
-	}
-	return tx.db.Exec(execInsertPaperAssetBalance, spaceID, accountID, account.SettlementAsset, total).Error
+	return writeError(tx.db.Exec(execInsertPaperAssetBalance, spaceID, accountID, account.SettlementAsset, total).Error)
 }
 
 func (s *Store) GetPaperBalanceSnapshot(ctx context.Context, spaceID, accountID string) (PaperBalanceSnapshot, error) {
@@ -46,33 +41,26 @@ func (s *Store) GetPaperBalanceSnapshot(ctx context.Context, spaceID, accountID 
 
 func (tx *Tx) GetPaperBalanceSnapshot(spaceID, accountID string) (PaperBalanceSnapshot, error) {
 	result := PaperBalanceSnapshot{Totals: map[string]shared.Decimal{}, Reserved: map[string]shared.Decimal{}}
-	var marker struct {
-		InitializedAt int64 `gorm:"column:c_initialized_at"`
-	}
-	err := tx.db.Table("t_paper_balance_projections").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Take(&marker).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// reset data 清掉了余额但保留账户，按配置的初始资金重新开始。
-		var initial string
-		if rawErr := tx.db.Raw(queryPaperInitialBalance, spaceID, accountID).Scan(&initial).Error; rawErr != nil {
-			return result, rawErr
-		}
-		if initial == "" {
-			return result, err
-		}
-		if err = tx.initializePaperBalance(spaceID, accountID, initial); err != nil {
-			return result, err
-		}
-		return tx.GetPaperBalanceSnapshot(spaceID, accountID)
-	}
-	if err != nil {
-		return result, err
-	}
 	var balances []struct {
 		Asset string `gorm:"column:c_asset"`
 		Total string `gorm:"column:c_total"`
 	}
 	if err := tx.db.Table("t_paper_asset_balances").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Find(&balances).Error; err != nil {
 		return result, err
+	}
+	// 余额行只在建账户时写入、之后只改不删，没有余额行就是还没初始化（例如重置数据清掉了余额但保留了账户）：按配置的初始资金重新开始。
+	if len(balances) == 0 {
+		var initial string
+		if err := tx.db.Raw(queryPaperInitialBalance, spaceID, accountID).Scan(&initial).Error; err != nil {
+			return result, err
+		}
+		if initial == "" {
+			return result, gorm.ErrRecordNotFound
+		}
+		if err := tx.initializePaperBalance(spaceID, accountID, initial); err != nil {
+			return result, err
+		}
+		return tx.GetPaperBalanceSnapshot(spaceID, accountID)
 	}
 	for _, balance := range balances {
 		value, err := shared.ParseDecimal(balance.Total)
@@ -233,8 +221,6 @@ func (tx *Tx) PaperT1Bought(spaceID, accountID string, since int64) (map[string]
 
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
-	execInsertPaperBalanceProjection = `INSERT INTO t_paper_balance_projections (c_space_id, c_trading_account_id, c_initialized_at)
-		VALUES (?, ?, ?)`
 	execInsertPaperAssetBalance = `INSERT INTO t_paper_asset_balances (c_space_id, c_trading_account_id, c_asset, c_total)
 		VALUES (?, ?, ?, ?)`
 	queryPaperInitialBalance = `SELECT c_initial_balance FROM t_paper_account_configs
