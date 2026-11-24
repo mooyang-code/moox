@@ -49,7 +49,7 @@ market:
 - 一个市场的因子本期被跳过，或失败（时序因子在该市场整体晚到、读取的标的全部失败；失败的标的占比超过 `portfolio.max_missing`，已持仓的币即使年龄没通过也计入）时，这个市场的币本期不可用：已持仓的保持不动（包括永续空头），新开仓用另一个市场。选币市场、或所有市场都这样不可用时整期按 `market_failed` 跳过（数据类原因，不是“积累中”，持续出现要看数据集新鲜度告警）。只涉及单个市场的策略仍按普通缺数处理。
 - **输入方式**：涉及现货和永续的模式，现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`）；永续上失败的币现货照常，永续的因子被跳过时永续不可用、已持仓的永续保持不动。
 - **规则级市场**：模式含两个市场（`both/*`、`spot/swap`）时，规则可写 `market: spot` 或 `market: swap`，这条规则只用该市场的因子值选择、目标也落在该市场，同一个币在两条规则里可以落在不同市场（不互相抵消）；不沿用上期持仓市场，缺数与年龄按这个市场判断，这个市场不可用时只冻结它在这个市场的持仓。写了它的策略必须显式写 `market`；单市场模式下只能写与策略相同的市场；`market: spot` 的规则不能做空。
-- 绑定两个任务的策略不支持 `factor_params`。
+- 现货、永续两个任务的策略也可以写 `factor_params`：同一份参数提交给两个任务，可变成员在两个任务里都要有。
 - 现货权重之和超过 1、总敞口超过 `leverage` 时，按比例缩小并在摘要注明，不会整期跳过。
 
 - **参考市场**：单市场策略可写 `market: {select: swap, reference: [spot]}`，额外绑定另一个市场的任务（`--factor-task spot=…`），只用于 `age_markets: all` 的年龄判定，不参与选择与下单。只能写模式不涉及的市场；必须有规则写 `age_markets: all`；不支持 `factor_params`、池成员不能写。
@@ -253,7 +253,7 @@ stop:
 2. **创建定义**：`moox-cli strategy create --dsl-file s.yaml`；已有定义用 `strategy update --strategy-id <ID> --dsl-file s.yaml` 修改；删除用 `strategy delete`（默认只预览）。创建后用 `strategy show --strategy-id <ID>` 读回 DSL 核对。
 3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给；股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务要是本空间里运行中的任务（启用时核对），**创建后不能改**；一个任务可以被多个实例引用，只有 DSL 写了 `factor_params` 的实例启用时独占关联主帧任务：创建时不检查，主帧任务已关联到别的实例时启用被拒（“关联的是实例 X，不是本实例”）。已停用的实例可以用 `strategy instance delete --instance-id <实例>` 删除，关联到它的因子任务和结果数据集一起删除、不可恢复（还被别的实例引用时拒绝，先删引用方）；没关联到它的任务保留，只有固定成员的任务不随任何实例删除，不用了要手动停用；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
    不挂账户的是观察实例：只计算目标权重、不投递，适合先验证。
-   需要先看历史表现时用 `strategy replay start`（与 `validate` 同样给 `--factor-task`，加 `--from`、`--to`、费率与可选的 `--slippage-bps`）；声明了 `factor_params` 的策略只能加 `--input compute`（因子现算），它不支持策略池、现货加永续两个任务与股票。
+   需要先看历史表现时用 `strategy replay start`（与 `validate` 同样给 `--factor-task`，加 `--from`、`--to`、费率与可选的 `--slippage-bps`）；声明了 `factor_params` 的策略只能加 `--input compute`（因子现算），它不支持策略池与股票。
 4. **启用**：`strategy instance enable --instance-id <ID>`（`disable` 停用；两者不带 `--yes` 只预览，确认后加 `--yes`）。启用时才解析列、成员契约和市场类型，列不存在或现货做空等问题在这一步被拒绝；
    任务刚建、结果 View 还没数据时可能因“还没有数据（覆盖范围未知）”被拒，等任务算出几个周期后再启用。
    挂账户的实例停用后，Strategy 调一次 Trade 关闭会话，Trade 撤掉最后一份目标的挂单（持仓不动）。返回“实例已停用，但 Trade 未确认”时实例已经停用，
@@ -287,7 +287,7 @@ stop:
 | --- | --- | --- |
 | 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段（进出场条件写在 `hold` 下，规则上没有 `entry`、`exit`） | 按本文字段名核对 |
 | 保存即拒绝，提示 type 只能是 rank | 规则类型只有 `rank` | 固定标的择时写成显式 `pool` 加 `hold`（第 2 节“固定标的择时”）；每根开一批写成 `holding: {bars, offsets: all}` |
-| 回放被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | View 里的历史因子值是按当时提交的参数算的 | 加 `--input compute`；策略池、现货加永续两个任务与股票不支持现算，这类调参策略不能回放 |
+| 回放被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | View 里的历史因子值是按当时提交的参数算的 | 加 `--input compute`；策略池与股票不支持现算，这类调参策略不能回放 |
 | 池定义保存被拒，提示成员不存在或不能进池 | 成员是池、用了 `factor_params`、写了 `sources` 或 `market.reference`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
 | 池实例启用被拒，提示成员没有显式写 market | 现货、永续成员必须写 `market`；只有池绑定 `equity` 任务时，成员按股票成员处理、可以不写 | 给成员策略补上 `market` |
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |

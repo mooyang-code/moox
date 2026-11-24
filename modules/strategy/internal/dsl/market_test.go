@@ -112,8 +112,8 @@ func TestValidateModeRestrictions(t *testing.T) {
 	if err != nil {
 		t.Skipf("factor_params 写法不同：%v", err)
 	}
-	if err := ValidateMode(strategy, both); err == nil || !strings.Contains(err.Error(), "factor_params") {
-		t.Fatalf("双任务不许用 factor_params：%v", err)
+	if err := ValidateMode(strategy, both); err != nil {
+		t.Fatalf("现货加永续两个任务也可以用 factor_params（同一份参数提交给两个任务）：%v", err)
 	}
 	if err := ValidateMode(strategy, spot); err != nil {
 		t.Fatalf("单任务可以用 factor_params：%v", err)
@@ -123,12 +123,12 @@ func TestValidateModeRestrictions(t *testing.T) {
 	}
 }
 
-// 显式写了 market 的 DSL 保存（解析）时就按模式校验：纯现货做空、双任务用 factor_params 都在保存时被拒绝。
+// 显式写了 market 的 DSL 保存（解析）时就按模式校验：纯现货做空在保存时被拒绝，双市场写 factor_params 可以。
 func TestParseValidatesDeclaredMarketMode(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ name, dsl, want string }{
 		{"纯现货做空", "name: s\nmarket: {select: spot}\nrules:\n  - {id: s, type: rank, side: short, score: close, select: {bottom: 1}, weight: 1}\n", "不允许规则 s 做空"},
-		{"双市场不许 factor_params", "name: f\nmarket: {select: both, prefer: spot}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\nfactor_params:\n  ma__var:\n    window: \"close\"\n", "factor_params"},
+		{"双市场可以写 factor_params", "name: f\nmarket: {select: both, prefer: spot}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\nfactor_params:\n  ma__var:\n    window: \"close\"\n", ""},
 	}
 	for _, tc := range cases {
 		_, err := Parse([]byte(tc.dsl))

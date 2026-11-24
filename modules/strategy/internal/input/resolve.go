@@ -210,6 +210,14 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 		}
 	}
 	// 只有声明了 factor_params 的策略逐期提交参数，才固化参数声明；没有声明的策略只读可变成员的列，不提交参数。
+	// 现货、永续两个任务时同一份参数提交给两个任务，所以 factor_params 写的每个成员在每个任务里都要有。
+	for _, member := range sortedKeys(strategy.FactorParams) {
+		for i, found := range memberViews {
+			if _, ok := found[member]; !ok {
+				return Resolved{}, nil, fmt.Errorf("factor_params 的可变成员 %s 在 View %s（因子任务 %s）里不存在：同一份参数要提交给每个主帧任务", member, views[i].view.ViewID, views[i].taskID)
+			}
+		}
+	}
 	if len(strategy.FactorParams) > 0 {
 		resolved.FactorParams = make(map[string][]ParamDecl, len(members))
 		for key, member := range members {

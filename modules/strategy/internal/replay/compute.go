@@ -402,17 +402,20 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 	s.applied = make(map[int64]engine.ParamSet, len(segment))
 	s.rejected = make(map[int64][]string)
 	loaded := make(map[string]marketSegment, len(s.markets)+len(s.refs))
+	applied := make([]map[int64]engine.ParamSet, 0, len(s.sessions))
 	for _, session := range s.sessions {
-		rows, ages, err := s.loadSession(ctx, session, segment, nextParams)
+		rows, ages, sessionApplied, err := s.loadSession(ctx, session, segment, nextParams)
 		if err != nil {
 			return nil, err
 		}
+		applied = append(applied, sessionApplied)
 		sources, err := loadSourceSegment(ctx, s.resolved, session.market, segment)
 		if err != nil {
 			return nil, err
 		}
 		loaded[session.market.market] = marketSegment{rows: input.GroupRows(rows), ages: &engineAges{ages: ages, passed: session.market.passed}, sources: sources}
 	}
+	s.mergeApplied(segment, applied)
 	for _, ref := range s.refs {
 		refAges, err := agePresence(ctx, ref.history, s.resolved, segment, ref.passed)
 		if err != nil {
@@ -423,11 +426,11 @@ func (s *computeSource) Load(ctx context.Context, segment []input.PeriodBoundari
 	return loaded, nil
 }
 
-// loadSession 在一个会话上取一段的行与年龄根数（bar_start → 标的 → 根数），并把这一段各期生效与被拒的参数并进 applied、rejected。
-func (s *computeSource) loadSession(ctx context.Context, session *computeSession, segment []input.PeriodBoundaries, nextParams engine.ParamSet) ([]input.Row, map[int64]map[string]int, error) {
+// loadSession 在一个会话上取一段的行、年龄根数（bar_start → 标的 → 根数）与各期生效的参数（bar_start → 参数），被拒的参数并进 rejected。
+func (s *computeSource) loadSession(ctx context.Context, session *computeSession, segment []input.PeriodBoundaries, nextParams engine.ParamSet) ([]input.Row, map[int64]map[string]int, map[int64]engine.ParamSet, error) {
 	first, ok := session.index[segment[0].StorageStart.Unix()]
 	if !ok || first+len(segment) > len(session.periods) {
-		return nil, nil, fmt.Errorf("周期 %s 不在因子引擎给出的%s回放区间内", segment[0].StorageStart.UTC().Format(time.RFC3339), s.marketPrefix(session))
+		return nil, nil, nil, fmt.Errorf("周期 %s 不在因子引擎给出的%s回放区间内", segment[0].StorageStart.UTC().Format(time.RFC3339), s.marketPrefix(session))
 	}
 	want := first + len(segment)
 	var rows []input.Row
@@ -438,25 +441,26 @@ func (s *computeSource) loadSession(ctx context.Context, session *computeSession
 	}
 	var last []input.Row
 	ages := make(map[int64]map[string]int, len(segment))
+	applied := make(map[int64]engine.ParamSet, len(segment))
 	params := paramsToPB(nextParams)
 	for cursor := first; cursor < want; {
 		if err := s.abort(ctx); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		rsp, err := s.runner.Engine.StepReplay(ctx, &factorpb.StepReplayReq{ReplayId: session.id, PeriodTime: session.periods[cursor], Periods: int32(min(s.stepPeriods, want-cursor)), Params: params})
 		if err != nil {
-			return nil, nil, &engineOfflineError{method: "StepReplay", raw: err}
+			return nil, nil, nil, &engineOfflineError{method: "StepReplay", raw: err}
 		}
 		if err := engineRetError("StepReplay", rsp.GetRetInfo()); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		periods := rsp.GetPeriods()
 		if len(periods) == 0 {
-			return nil, nil, fmt.Errorf("因子引擎从 %s 起没有返回%s任何一期", time.Unix(session.periods[cursor], 0).UTC().Format(time.RFC3339), s.marketPrefix(session))
+			return nil, nil, nil, fmt.Errorf("因子引擎从 %s 起没有返回%s任何一期", time.Unix(session.periods[cursor], 0).UTC().Format(time.RFC3339), s.marketPrefix(session))
 		}
 		for i, period := range periods {
 			if cursor+i >= want || period.GetPeriodTime() != session.periods[cursor+i] {
-				return nil, nil, fmt.Errorf("因子引擎返回的第 %d 期（%s）与请求的期次不连续", i+1, time.Unix(period.GetPeriodTime(), 0).UTC().Format(time.RFC3339))
+				return nil, nil, nil, fmt.Errorf("因子引擎返回的第 %d 期（%s）与请求的期次不连续", i+1, time.Unix(period.GetPeriodTime(), 0).UTC().Format(time.RFC3339))
 			}
 			at := time.Unix(period.GetPeriodTime(), 0).UTC()
 			synthesize := cursor+i == first && s.program.UsesPreviousBar && !usesTail && !segment[0].PreviousStart.IsZero()
@@ -469,7 +473,7 @@ func (s *computeSource) loadSession(ctx context.Context, session *computeSession
 				}
 				recordAge(ages, at.Unix(), row)
 			}
-			s.mergeApplied(session, at.Unix(), appliedParams(period.GetAppliedParams()))
+			applied[at.Unix()] = appliedParams(period.GetAppliedParams())
 			for _, rejection := range period.GetRejectedParams() {
 				s.rejected[at.Unix()] = append(s.rejected[at.Unix()], fmt.Sprintf("因子引擎拒绝了%s成员 %s 这一期的参数（%s），沿用上一期生效的参数", s.marketPrefix(session), rejection.GetMemberKey(), rejection.GetReason()))
 			}
@@ -480,28 +484,23 @@ func (s *computeSource) loadSession(ctx context.Context, session *computeSession
 	if s.program.UsesPreviousBar {
 		session.tail, session.tailAt = last, segment[len(segment)-1].StorageStart
 	}
-	return rows, ages, nil
+	return rows, ages, applied, nil
 }
 
-// mergeApplied 把一个会话这一期生效的参数并进这一期的记录：各会话给同一份请求，生效的参数通常相同；某个成员在两个市场生效的参数
-// 不同（例如一边被拒、沿用上一期）时记录先到的那份，另一份写进这一期的说明，不静默丢掉。
-func (s *computeSource) mergeApplied(session *computeSession, at int64, applied engine.ParamSet) {
-	if applied == nil {
-		return
-	}
-	merged := s.applied[at]
-	if merged == nil {
-		s.applied[at] = applied
-		return
-	}
-	for member, values := range applied {
-		existing, ok := merged[member]
-		if !ok {
-			merged[member] = values
-			continue
+// mergeApplied 把各会话这一段各期生效的参数并成每期一份记录：各会话收到同一份请求，生效的参数通常相同，记录取第一个会话
+// （现货在前）的；某个会话这一期生效的与它不同（例如一边拒绝了参数、沿用上一期，含一边有、一边没有）时写进这一期的说明，不静默丢掉。
+func (s *computeSource) mergeApplied(segment []input.PeriodBoundaries, applied []map[int64]engine.ParamSet) {
+	for _, bar := range segment {
+		at := bar.StorageStart.Unix()
+		first := applied[0][at]
+		if first != nil {
+			s.applied[at] = first
 		}
-		if !reflect.DeepEqual(existing, values) {
-			s.rejected[at] = append(s.rejected[at], fmt.Sprintf("成员 %s 在%s生效的参数与其他市场不同（%v），记录里取先到的那份", member, s.marketPrefix(session), values))
+		for i := 1; i < len(applied); i++ {
+			if other := applied[i][at]; !reflect.DeepEqual(first, other) {
+				s.rejected[at] = append(s.rejected[at], fmt.Sprintf("%s生效的参数与%s不同（%s：%v），记录里取%s的", marketLabel(s.sessions[i].market.market),
+					marketLabel(s.sessions[0].market.market), marketLabel(s.sessions[i].market.market), other, marketLabel(s.sessions[0].market.market)))
+			}
 		}
 	}
 }

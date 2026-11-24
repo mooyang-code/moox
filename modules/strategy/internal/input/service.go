@@ -116,7 +116,7 @@ func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string,
 	if !tuned {
 		return resolved, nil
 	}
-	// 参数只提交给主帧任务（写了 factor_params 的策略只有一个主帧任务，没有参考市场），附加来源的任务只读不关联。
+	// 参数提交给每个主帧任务（现货加永续时两个任务都关联、提交同一份参数；写了 factor_params 的策略没有参考市场），附加来源的任务只读不关联。
 	for _, key := range keys {
 		if source, _ := dsl.SplitTaskKey(key); source != "" {
 			continue
