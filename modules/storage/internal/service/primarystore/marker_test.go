@@ -22,9 +22,7 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 	marker := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "degraded", UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
-		UniverseSeries: []*pb.SeriesRef{{SubjectId: "ETH", SeriesTag: "default"}, {SubjectId: "BTC", SeriesTag: "default"}},
-		FailedSeries:   []*pb.SeriesRef{{SubjectId: "ETH", SeriesTag: "default"}},
-		CauseEventId:   "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
+		CauseEventId: "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
 		DetailType: "test.Detail.v1", Detail: []byte{0x0a, 0x00, 0xff, 0x7f},
 	}
 	row := &pb.RowFieldUpsert{
@@ -79,7 +77,7 @@ func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testin
 	require.NoError(t, err)
 	base := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
-		Status: "complete", UniverseSubjectIds: []string{"ETH"}, UniverseSeries: []*pb.SeriesRef{{SubjectId: "ETH", SeriesTag: "default"}},
+		Status: "complete", UniverseSubjectIds: []string{"ETH"},
 		CauseEventId: "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
 		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
 	}
@@ -94,10 +92,6 @@ func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testin
 			marker.FailedSubjects = []string{"BTC"}
 		}},
 		{name: "complete with failed subjects", mutate: func(marker *pb.DatasetPeriodCompletedMarker) { marker.FailedSubjects = []string{"ETH"} }},
-		{name: "missing universe_series", mutate: func(marker *pb.DatasetPeriodCompletedMarker) { marker.UniverseSeries = nil }},
-		{name: "empty series_tag", mutate: func(marker *pb.DatasetPeriodCompletedMarker) {
-			marker.UniverseSeries = []*pb.SeriesRef{{SubjectId: "ETH"}}
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := proto.Clone(base).(*pb.DatasetPeriodCompletedMarker)

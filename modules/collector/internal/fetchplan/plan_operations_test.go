@@ -111,16 +111,16 @@ func TestSlowEnsureIsNotRestartedAndIsConfirmedWhenItFinishes(t *testing.T) {
 		require.NoError(t, h.reconcile(r), "慢操作不是失败")
 		progress, err := decodeFetchPlanProgress(h.open().Progress)
 		require.NoError(t, err)
-		require.False(t, progress.Transitioned[names[0]])
+		require.False(t, progress.Pushed[names[0]])
 		h.now = h.now.Add(20 * time.Second)
 	}
 	require.Equal(t, 1, h.cloud.countOps("ensure", names[0]), "不重复起操作")
 	g.open()
 	h.waitOps(r)
 	require.NoError(t, h.reconcile(r))
-	progress, err := decodeFetchPlanProgress(h.open().Progress)
+	progress, err := decodeFetchPlanProgress(h.lastRecord().Progress)
 	require.NoError(t, err)
-	require.True(t, progress.Transitioned[names[0]], "结束后当轮确认")
+	require.True(t, progress.Pushed[names[0]], "结束后当轮确认")
 	require.Equal(t, 1, h.cloud.countOps("ensure", names[0]))
 }
 
@@ -200,22 +200,22 @@ func TestPauseWaitsForARunningEnsureThenDisables(t *testing.T) {
 	}
 	progress, err := decodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.False(t, progress.Transitioned[names[0]], "暂停时设成停用的成功不算确认")
+	require.False(t, progress.Pushed[names[0]], "暂停时设成停用的成功不算确认")
 }
 
-// 过渡期间的读回修复与升级：计划处在过渡阶段时触发一次读回修复和一次代码包升级，函数环境仍是过渡计划那一份，没有被改回已生效计划。
-func TestRepairAndUpgradeDuringATransitionKeepTheTransitionalEnvironment(t *testing.T) {
+// 带旧份期间的读回修复与升级：已生效状态里数据集还带着未过窗口的旧份时触发一次读回修复和一次代码包升级，
+// 函数环境仍是存下来的 Target（新旧两份），没有被改成只有一份。
+func TestRepairAndUpgradeWhileAnOldCopyIsKeptUseTheStoredTarget(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
 	h.applyFirstPlan(r)
 	h.setSubjects(119)
 	require.NoError(t, h.reconcile(r))
-	open := h.open()
-	require.NotNil(t, open)
-	content := h.content(open)
+	require.Nil(t, h.open())
+	content := h.appliedContent()
 	name := h.cloudTimers()[0]
 	transitional := h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName]
-	require.Len(t, h.cloudPlan(name).Datasets[0].Copies, 2, "过渡计划带新旧两份")
+	require.Len(t, h.cloudPlan(name).Datasets[0].Copies, 2, "已生效的计划带新旧两份")
 
 	// 读回修复：函数被手工删掉（不受这份计划影响的函数才做校验，这里直接调读回修复）。
 	h.remove(name)
@@ -224,7 +224,7 @@ func TestRepairAndUpgradeDuringATransitionKeepTheTransitionalEnvironment(t *test
 	r.lastVerified = time.Time{}
 	require.NoError(t, r.verifyFleet(context.Background(), scfFunctions(appliedFunctions)))
 	h.waitOps(r)
-	require.Equal(t, transitional, h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName], "修复按已确认的过渡计划重建")
+	require.Equal(t, transitional, h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName], "修复按存下来的 Target 重建")
 
 	// 升级：只换代码，环境沿用云上的过渡计划。
 	h.cloud.setPackages("pkg", "pkg-new")
@@ -233,20 +233,20 @@ func TestRepairAndUpgradeDuringATransitionKeepTheTransitionalEnvironment(t *test
 	h.waitOps(r)
 	function := h.mustFunction(name)
 	require.Equal(t, "pkg-new", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
-	require.Equal(t, transitional, function.Info.Environment[marketfetch.PlanEnvName], "升级不把过渡环境改回已生效计划")
-	final, err := marketfetch.EncodePlan(content.FinalPlan(content.Functions[name]))
+	require.Equal(t, transitional, function.Info.Environment[marketfetch.PlanEnvName], "升级不改环境")
+	previous, err := marketfetch.EncodePlan(content.Functions[name].Old)
 	require.NoError(t, err)
-	require.NotEqual(t, final, transitional, "过渡计划与最终计划确实不同，断言才有意义")
+	require.NotEqual(t, previous, transitional, "两份的计划与上一份确实不同，断言才有意义")
 }
 
-// 新建函数在过渡阶段：计划里新建的函数被建出来时，环境是过渡计划那一份，不是已生效计划的（已生效计划里没有它）。
-func TestNewFunctionIsCreatedWithTheTransitionalPlan(t *testing.T) {
+// 计划里新建的函数被建出来时，环境就是计划里它的 Target。
+func TestNewFunctionIsCreatedWithItsTarget(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
 	h.applyFirstPlan(r)
 	h.setSubjects(160)
 	require.NoError(t, h.reconcile(r))
-	content := h.content(h.open())
+	content := h.content(h.lastRecord())
 	var created string
 	for name, function := range content.Functions {
 		if function.Create {
@@ -254,7 +254,7 @@ func TestNewFunctionIsCreatedWithTheTransitionalPlan(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, created)
-	want, err := marketfetch.EncodePlan(content.TransitionalPlan(content.Functions[created]))
+	want, err := marketfetch.EncodePlan(content.Functions[created].Target)
 	require.NoError(t, err)
 	require.Equal(t, want, h.mustFunction(created).Info.Environment[marketfetch.PlanEnvName])
 	require.True(t, h.timerEnabled(created))
@@ -286,8 +286,8 @@ func TestBackfillFunctionAndDeletionStillWorkWhileTheSpaceIsPaused(t *testing.T)
 	require.False(t, exists)
 }
 
-// 暂停再恢复：计划推进到一半（已有函数确认了过渡、还有一个新建的函数）时暂停，再恢复。
-// 已确认过渡的函数被重新推了一次过渡环境，新建的函数收到过渡环境并启用定时器。
+// 暂停再恢复：计划推进到一半（已有函数确认了下发、还有一个新建的函数）时暂停，再恢复。
+// 已确认的函数被重新推了一次，新建的函数收到它的 Target 并启用定时器。
 func TestPauseAndResumeRepushesAnOpenPlan(t *testing.T) {
 	h := newPlanHarness(t, 120)
 	r := h.reconciler()
@@ -307,7 +307,7 @@ func TestPauseAndResumeRepushesAnOpenPlan(t *testing.T) {
 	g.waitEntered(t)
 	progress, err := decodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.Len(t, progress.Transitioned, 3, "已有函数确认了过渡")
+	require.Len(t, progress.Pushed, 3, "已有函数确认了下发")
 	ensures := map[string]int{}
 	for _, name := range h.cloudTimers() {
 		ensures[name] = h.cloud.countOps("ensure", name)
@@ -324,21 +324,19 @@ func TestPauseAndResumeRepushesAnOpenPlan(t *testing.T) {
 	require.True(t, done)
 	progress, err = decodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.Empty(t, progress.Transitioned)
+	require.Empty(t, progress.Pushed)
 
-	// 恢复：新的对账器重推过渡。
+	// 恢复：新的对账器重推。
 	resumed := h.reconciler()
 	done, err = resumed.EnableAll(context.Background())
 	require.NoError(t, err)
 	require.True(t, done)
 	require.NoError(t, h.reconcile(resumed))
-	open := h.open()
-	require.NotNil(t, open)
-	content := h.content(open)
+	content := h.content(h.lastRecord())
 	for name, count := range ensures {
-		require.Equal(t, count+1, h.cloud.countOps("ensure", name), "已确认过渡的函数重新推一次：%s", name)
+		require.Equal(t, count+1, h.cloud.countOps("ensure", name), "已确认的函数重新推一次：%s", name)
 	}
-	want, err := marketfetch.EncodePlan(content.TransitionalPlan(content.Functions[fresh]))
+	want, err := marketfetch.EncodePlan(content.Functions[fresh].Target)
 	require.NoError(t, err)
 	require.Equal(t, want, h.mustFunction(fresh).Info.Environment[marketfetch.PlanEnvName])
 	for _, name := range planFunctionNames(t, 160) {
@@ -423,7 +421,7 @@ func TestDeletedPlannedFunctionIsRebuiltOnTheNextRound(t *testing.T) {
 	h.applyFirstPlan(r)
 	h.now = h.now.Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
-	require.True(t, h.now.Equal(r.lastVerified), "刚读回过")
+	require.False(t, r.lastVerified.IsZero(), "读回过")
 	victim := h.cloudTimers()[0]
 	results, err := r.DeleteCloudFunctions(context.Background(), DeleteCloudFunctionsRequest{Prefix: r.fleetPrefix() + "spot-nanjing-000"})
 	require.NoError(t, err)

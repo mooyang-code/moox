@@ -27,10 +27,11 @@ func newReregisterFixture(t *testing.T) (*Service, *store.Store) {
 }
 
 const reregisterPlan = `{"datasets":{` +
-	`"ds1|1m":{"dataset_id":"ds1","frequency":"1m","hash":"h1","count":2,"changed":true,"hash_changed":true,"p":100,` +
+	`"ds1|1m":{"dataset_id":"ds1","frequency":"1m","hash":"h1","count":2,"copies":[{"from":100,"hash":"h1","count":2,"lateness_s":15}],` +
+	`"action":"append","register":true,"timeline":true,"timeline_from":100,"p":100,` +
 	`"series":[{"subject_id":"A-USDT","series_tag":""},{"subject_id":"B-USDT","series_tag":""}]},` +
-	`"ds2|1h":{"dataset_id":"ds2","frequency":"1h","hash":"h2","count":3},` +
-	`"gone|1m":{"dataset_id":"gone","frequency":"1m","hash":"h3","gone":true}},"functions":{}}`
+	`"ds2|1h":{"dataset_id":"ds2","frequency":"1h","hash":"h2","count":3,"copies":[{"from":3600,"hash":"h2","count":3,"lateness_s":15}],"action":"keep"},` +
+	`"gone|1m":{"dataset_id":"gone","frequency":"1m","hash":"h3","count":1,"stopped":true,"copies":[{"from":60,"hash":"h3","count":1,"lateness_s":15},{"from":4102444800,"hash":"h3","count":1,"lateness_s":15,"stop":true}],"action":"keep"}},"functions":{}}`
 
 // applyPlan 直接往库里写一份已生效计划，连同对账器登记快照时会写下的时间线行（标的集合变了的数据集从 P 起的序列）。
 func applyPlan(t *testing.T, db *store.Store, spaceID, plan string) *store.FetchPlanRecord {
@@ -38,9 +39,9 @@ func applyPlan(t *testing.T, db *store.Store, spaceID, plan string) *store.Fetch
 	content, err := fetchplan.DecodeFetchPlanContent(plan)
 	require.NoError(t, err)
 	var timeline []store.SeriesTimelineEntry
-	for _, change := range content.Datasets {
-		if change.Changed && change.HashChanged && change.P > 0 {
-			timeline = append(timeline, store.SeriesTimelineEntry{SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P, SeriesHash: change.Hash, Series: change.Series, LatenessS: change.LatenessS})
+	for _, dataset := range content.Datasets {
+		if dataset.Timeline && dataset.P > 0 && !dataset.Stopped {
+			timeline = append(timeline, store.SeriesTimelineEntry{SpaceID: spaceID, DatasetID: dataset.DatasetID, Frequency: dataset.Frequency, EffectiveFrom: dataset.P, SeriesHash: dataset.Hash, Series: dataset.Series, LatenessS: dataset.LatenessS})
 		}
 	}
 	record, err := db.FetchPlans().Create(context.Background(), spaceID, plan, "{}")
@@ -65,7 +66,7 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	rsp, err := service.ReregisterFetchPlan(ctx, &pb.ReregisterFetchPlanReq{SpaceId: " crypto "})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, []string{"ds1|1m", "ds2|1h"}, rsp.GetDatasets(), "已退役的数据集不动")
+	require.Equal(t, []string{"ds1|1m", "ds2|1h"}, rsp.GetDatasets(), "停止的数据集不重新登记")
 	require.EqualValues(t, 1, rsp.GetBackfillJobs())
 
 	latest, err := db.FetchPlans().LatestApplied(ctx, "crypto")
@@ -73,10 +74,10 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	require.Equal(t, applied.ID, latest.ID, "改写的是已生效计划本身，不新建计划")
 	content, err := fetchplan.DecodeFetchPlanContent(latest.Plan)
 	require.NoError(t, err)
-	require.Empty(t, content.Datasets["ds1|1m"].Hash)
-	require.Empty(t, content.Datasets["ds2|1h"].Hash)
-	require.Equal(t, "h3", content.Datasets["gone|1m"].Hash)
-	require.EqualValues(t, 100, content.Datasets["ds1|1m"].P, "其余字段保持原样")
+	require.Empty(t, content.Datasets["ds1|1m"].Head().Hash)
+	require.Empty(t, content.Datasets["ds2|1h"].Head().Hash)
+	require.Nil(t, content.Datasets["gone|1m"], "停止份连同数据集一起去掉")
+	require.EqualValues(t, 100, content.Datasets["ds1|1m"].Head().From, "头份的生效点保持原样")
 
 	for _, key := range [][2]string{{"ds1", "1m"}, {"ds2", "1h"}} {
 		mark, err := db.Backfill().Watermark(ctx, "crypto", key[0], key[1])
@@ -213,7 +214,7 @@ func TestPlanFunctionsListSubjectsPerDataset(t *testing.T) {
 		Subjects: []string{"BTC-USDT", "ETH-USDT"},
 	}}, nil)
 	require.NoError(t, err)
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: base})
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)

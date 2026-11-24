@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// FetchPlan 状态：pending（已保存，尚未登记快照）→ applying（已登记，正在下发与收尾）→ applied（全部完成，已生效）。
+// FetchPlan 状态：pending（已保存，尚未登记快照）→ applying（已登记，正在下发）→ applied（下发确认，已生效）。
 const (
 	FetchPlanPending  = "pending"
 	FetchPlanApplying = "applying"
@@ -49,8 +49,8 @@ func (row fetchPlanRow) record() *FetchPlanRecord {
 	return &FetchPlanRecord{ID: row.ID, SpaceID: row.SpaceID, Status: row.Status, Plan: row.Plan, Progress: row.Progress, LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
-// FetchPlanRepository 保存采集计划。每个空间同一时间最多一份未生效的计划，由唯一索引保证；
-// 一份计划生效时删掉同空间更早的已生效计划，所以每个空间只留未生效的一份与最近已生效的一份。
+// FetchPlanRepository 保存采集计划。每个空间同一时间最多一份未生效的计划，由唯一索引保证，它通常几分钟内生效；
+// 一份计划生效时删掉同空间更早的已生效计划，所以每个空间只留未生效的一份与最近已生效的一份（完整的已生效状态）。
 // 旧计划没有读者：对账只读最近已生效的一份，补采的来源取当前任务、交易所符号取标的时间线。
 type FetchPlanRepository struct{ db *gorm.DB }
 
@@ -164,7 +164,7 @@ func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, prog
 	})
 }
 
-// SavePlan 更新计划内容（重新选择生效周期时使用）。
+// SavePlan 更新未生效计划的内容（登记被拒、撤回某个数据集时使用）。
 func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan string) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("fetch plan repository is not initialized")
@@ -180,6 +180,28 @@ func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan strin
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+// DeleteOpen 删掉一份还没开始登记的未生效计划：同一个事务里确认它仍是 pending 再删。
+// 计划里的数据集全部撤回之后已经没有任何变化时使用；调用方保证它没有已登记的数据集。
+func (r *FetchPlanRepository) DeleteOpen(ctx context.Context, id int64) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("fetch plan repository is not initialized")
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row fetchPlanRow
+		found := tx.Where("c_id = ?", id).Limit(1).Find(&row)
+		if found.Error != nil {
+			return found.Error
+		}
+		if found.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if row.Status != FetchPlanPending {
+			return fmt.Errorf("fetch plan %d is %s, only a pending plan can be deleted", id, row.Status)
+		}
+		return tx.Where("c_id = ? AND c_status = ?", id, FetchPlanPending).Delete(&fetchPlanRow{}).Error
+	})
 }
 
 // ReregisterAppliedPlan 改写一份已生效计划的内容，并在同一个事务里删掉该空间的全部时间线行。只给维护命令用：

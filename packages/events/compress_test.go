@@ -28,14 +28,12 @@ func (c *captureClient) PublishRaw(_ context.Context, subject, _ string, body []
 // periodPayload 构造标的全集有 count 个标的的周期完成事件；标的名高度重复，压缩收益明显。
 func periodPayload(count int) *storagepb.DatasetPeriodCompleted {
 	subjects := make([]string, 0, count)
-	series := make([]*storagepb.SeriesRef, 0, count)
 	for i := 0; i < count; i++ {
 		subjects = append(subjects, fmt.Sprintf("SUBJECT-%s-%04d", strings.Repeat("x", 40), i))
-		series = append(series, &storagepb.SeriesRef{SubjectId: subjects[i], SeriesTag: "venue:binance"})
 	}
 	return &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-		UniverseSubjectIds: subjects, UniverseSeries: series, CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1_786_032_060, 0)),
+		UniverseSubjectIds: subjects, CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1_786_032_060, 0)),
 	}
 }
 

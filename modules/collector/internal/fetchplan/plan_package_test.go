@@ -35,7 +35,7 @@ func TestStreamOnlyPlanKeepsApplyingChangesAfterARestartWithoutAPackage(t *testi
 	h.settle(true)
 	after := h.applied()
 	require.NotEqual(t, before.Functions[streamItem].New, after.Functions[streamItem].New)
-	plan := after.FinalPlan(after.Functions[streamItem])
+	plan := after.Functions[streamItem].Target
 	require.Len(t, plan.Datasets[0].Copies[0].Subjects, 61)
 }
 

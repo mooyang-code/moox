@@ -5,22 +5,17 @@ import (
 	"strings"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/packages/seriesset"
-	"google.golang.org/protobuf/proto"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 // ValidatePeriodDetail 校验因子周期明细：成员身份是 member_key（同一因子可以用不同参数出现多次），factor_id 是它引用的定义；
-// member_kind 必须是已知取值；失败标的必须在冻结的全集里；complete 的周期里不能有非 complete 的成员。
-// 按序列的字段：失败序列在冻结的序列全集里。
+// member_kind 必须是已知取值；成员完整的失败标的（周期级 periodFailed ∪ 成员自己记的，见 factorname.MemberFailedSubjects）
+// 必须在冻结的全集里；complete 的成员没有失败标的；complete 的周期里不能有非 complete 的成员。
 // Storage 对明细是不透明字节，这些规则由因子自己保证。
-func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe []string, universeSeries []seriesset.Series, status string) error {
+func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe, periodFailed []string, status string) error {
 	subjects := make(map[string]struct{}, len(universe))
 	for _, subject := range universe {
 		subjects[subject] = struct{}{}
-	}
-	series := make(map[seriesset.Series]struct{}, len(universeSeries))
-	for _, item := range universeSeries {
-		series[item] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(detail.GetFactors()))
 	for i, state := range detail.GetFactors() {
@@ -45,20 +40,14 @@ func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe []string, univ
 		if !validToken(state.GetDefinitionHash()) {
 			return fmt.Errorf("factor period detail: factor %q definition_hash is required", state.GetFactorId())
 		}
-		failed, err := uniqueTokens(state.GetFailedSubjects(), fmt.Sprintf("factor %q failed_subjects", state.GetFactorId()))
-		if err != nil {
+		if _, err := uniqueTokens(state.GetFailedSubjects(), fmt.Sprintf("factor %q failed_subjects", state.GetFactorId())); err != nil {
 			return err
 		}
-		for subject := range failed {
+		failed := factorname.MemberFailedSubjects(periodFailed, state.GetFailedSubjects())
+		for _, subject := range failed {
 			if _, ok := subjects[subject]; !ok {
 				return fmt.Errorf("factor period detail: factor %q failed_subject %q is not in universe_subject_ids", state.GetFactorId(), subject)
 			}
-		}
-		// 成员的失败序列 = 周期级共享的一份加上自己的：校验用还原后的完整名单。
-		restored := proto.Clone(state).(*factorpb.FactorPeriodState)
-		restored.FailedSeries = seriesToFactorPB(MemberFailedSeries(detail, state))
-		if err := validateStateSeries(restored, series); err != nil {
-			return err
 		}
 		if state.GetStatus() == "complete" && len(failed) != 0 {
 			return fmt.Errorf("factor period detail: complete factor %q has failed subjects", state.GetFactorId())

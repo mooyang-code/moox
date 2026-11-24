@@ -294,7 +294,7 @@ func (a *Adapter) degradedPrice(
 			if err != nil {
 				return shared.Zero(), storageError(err)
 			}
-			if blocked.ContainsInstrument(account.Exchange, *instrument) {
+			if blocked.ContainsInstrument(account, *instrument) {
 				failure = execution.ValuationDelisted
 			}
 		}

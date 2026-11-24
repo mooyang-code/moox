@@ -2,6 +2,7 @@ package eventconsumer
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func seedDelistedInstrument(t *testing.T, tradeStore *store.Store, blocked bool)
 		})
 	}))
 	if blocked {
-		_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+		_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
 			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Reason: "下架", BlockedAt: 1,
 		})
 		require.NoError(t, err)

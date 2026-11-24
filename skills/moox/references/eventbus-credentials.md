@@ -56,7 +56,7 @@ broker 的用户表只随 `eventbus` 组件下发（`export-clients --server`）
 
 ## 新增角色（不轮换现有令牌）
 
-给一个新的客户端（例如 `collector-eventbus`、事件中心的 `callback-dispatcher-eventbus`）开通事件总线权限，不需要轮换现有令牌；全程不打印令牌：
+给一个新的客户端（例如 `collector-eventbus`）开通事件总线权限，不需要轮换现有令牌；全程不打印令牌：
 
 1. 角色、发布的事件与持久消费者声明在 `packages/events/topology.go`，Admin 的 `eventbus-credentials` 按它生成权限；组件要哪个角色登记在服务目录的 `credentials`。
 2. 先部署控制机（`setup deploy --host <控制机>`）：它执行 `eventbus-credentials ensure`，只给缺少的角色生成令牌，已有令牌原样保留。

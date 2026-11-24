@@ -601,10 +601,10 @@ func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
 	require.Empty(t, metadata.deleteRequests, "存在额外 View 时不得删除数据集")
 }
 
-// 周期明细里成员的失败标的去重排序后写出。
+// 周期明细里成员的失败标的去重排序后写出（周期级没有失败标的时成员名单原样保留）。
 func TestMarkerToProtoSortsFailedSubjects(t *testing.T) {
 	marker := PeriodMarker{
-		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded", UniverseSubjects: []string{"BTC", "ETH"}, FailedSubjects: []string{"BTC", "ETH"},
+		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded", UniverseSubjects: []string{"BTC", "ETH"},
 		Factors: []FactorState{{FactorID: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH", "BTC", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
 	}
 	protoMarker, err := markerToProto(marker)

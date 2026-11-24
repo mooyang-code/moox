@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -160,8 +159,8 @@ func (c *Continuity) note(set domain.FactorTask, event periodEvent, create bool)
 	if period.After(state.Target) {
 		state.Target = period
 	}
-	if len(event.universeSeries) > 0 && !period.Before(state.Target) {
-		state.UniverseSeries = append([]seriesset.Series(nil), event.universeSeries...)
+	if len(event.universe) > 0 && !period.Before(state.Target) {
+		state.UniverseSubjects = append([]string(nil), event.universe...)
 	}
 	if err := c.cfg.Store.Put(state); err != nil {
 		return 0, fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
@@ -202,15 +201,15 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 	state, _ := c.cfg.Store.Get(set.TaskID)
 	for processed := 0; state.Behind() && processed < c.cfg.MaxPeriods; processed++ {
 		period := state.CommittedThrough.Add(step)
-		scope, triggerID := periodScope{universeSeries: state.UniverseSeries}, CatchupEventID(set.TaskID, period)
+		scope, triggerID := periodScope{universe: state.UniverseSubjects}, CatchupEventID(set.TaskID, period)
 		if event != nil && event.periodTime.Equal(period) {
 			scope, triggerID = event.scope(), event.eventID
 		} else {
-			missing, err := c.missingSeries(ctx, set, period, scope.universeSeries)
+			missing, err := c.missingSubjects(ctx, set, period, scope.universe)
 			if err != nil {
 				return err
 			}
-			scope.failedSeries = missing
+			scope.failed = missing
 		}
 		if state.InFlightTrigger != "" && state.InFlightPeriod.Equal(period) {
 			triggerID = state.InFlightTrigger
@@ -266,28 +265,25 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 	return nil
 }
 
-// scoped 整理一期的范围：扣除补采确认没有的标的，返回期望数与缺失数（一个标的一条序列，按序列数就是按标的数）、
-// 确认没有的标的，以及真正要算的范围。
+// scoped 整理一期的范围：扣除补采确认没有的标的，返回期望标的数与缺失标的数、确认没有的标的，以及真正要算的范围。
 func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope periodScope) (expected, missing int, confirmed map[string]struct{}, out periodScope) {
 	absent := c.absentAt(set.TaskID, period)
 	confirmed = map[string]struct{}{}
-	for _, item := range scope.universeSeries {
-		if _, ok := absent[strings.TrimSpace(item.SubjectID)]; ok {
-			confirmed[item.SubjectID] = struct{}{}
+	inScope := make(map[string]struct{}, len(scope.universe))
+	for _, subject := range uniqueStrings(scope.universe) {
+		if _, ok := absent[subject]; ok {
+			confirmed[subject] = struct{}{}
 			continue
 		}
-		out.universeSeries = append(out.universeSeries, item)
+		out.universe = append(out.universe, subject)
+		inScope[subject] = struct{}{}
 	}
-	inScope := make(map[seriesset.Series]struct{}, len(out.universeSeries))
-	for _, item := range out.universeSeries {
-		inScope[item] = struct{}{}
-	}
-	for _, item := range scope.failedSeries {
-		if _, ok := inScope[item]; ok {
-			out.failedSeries = append(out.failedSeries, item)
+	for _, subject := range uniqueStrings(scope.failed) {
+		if _, ok := inScope[subject]; ok {
+			out.failed = append(out.failed, subject)
 		}
 	}
-	return len(out.universeSeries), len(out.failedSeries), confirmed, out
+	return len(out.universe), len(out.failed), confirmed, out
 }
 
 // invalid 判断一期是否无效：不知道期望数量、零提交（全部缺失）、缺失超过阈值。
@@ -306,13 +302,9 @@ func (c *Continuity) invalid(taskID string, expected, missing int, confirmed map
 	return ""
 }
 
-// missingSeries 返回期望序列里这一期在本地还没有真实行的（同步之后判断，见 LocalRows）。
-func (c *Continuity) missingSeries(ctx context.Context, set domain.FactorTask, period time.Time, universe []seriesset.Series) ([]seriesset.Series, error) {
-	var subjects []string
-	for _, item := range universe {
-		subjects = append(subjects, item.SubjectID)
-	}
-	subjects = uniqueStrings(subjects)
+// missingSubjects 返回期望标的里这一期在本地还没有真实行的（同步之后判断，见 LocalRows）。
+func (c *Continuity) missingSubjects(ctx context.Context, set domain.FactorTask, period time.Time, universe []string) ([]string, error) {
+	subjects := uniqueStrings(universe)
 	if len(subjects) == 0 {
 		return nil, nil
 	}
@@ -320,10 +312,10 @@ func (c *Continuity) missingSeries(ctx context.Context, set domain.FactorTask, p
 	if err != nil {
 		return nil, fmt.Errorf("%w: 判断 %s 哪些标的已到：%v", storageio.ErrInfra, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
 	}
-	var missing []seriesset.Series
-	for _, item := range universe {
-		if !present[item.SubjectID] {
-			missing = append(missing, item)
+	var missing []string
+	for _, subject := range subjects {
+		if !present[subject] {
+			missing = append(missing, subject)
 		}
 	}
 	return missing, nil

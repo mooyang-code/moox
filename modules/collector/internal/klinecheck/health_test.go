@@ -56,8 +56,8 @@ func TestFormatDuration(t *testing.T) {
 // 低频数据集整点刚过、扫描槽还没到时，水位比“应扫到的时间”落后一个周期是正常的，不算滞后。
 func TestHealthLagIsMeasuredFromWhenTheNextBarBecomesScannable(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
-	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: base.Unix()}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDataset{Action: fetchplan.PlanActionAppend, Register: true, Timeline: true, P: base.Unix()}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = "ds", "1h", 60, "hash:BTC-USDT"
 	change.Series = append(change.Series, seriesOf("BTC-USDT"))
 	content.Datasets["ds|1h"] = change

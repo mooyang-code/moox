@@ -58,8 +58,8 @@ BEGIN
     UPDATE t_collector_tasks SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
 END;
 
--- SCF 定时采集的采集计划：每个空间同一时间最多一份未生效的计划，最近一份已生效的计划即“已生效状态”；
--- 一份计划生效时删掉同空间更早的已生效计划，表里每个空间至多两份。
+-- 采集计划：每个空间同一时间最多一份未生效的计划，通常几分钟内生效；最近一份已生效的计划即已生效状态
+-- （每个数据集可能还带未过窗口的旧份）。一份计划生效时删掉同空间更早的已生效计划，表里每个空间至多两份。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plans (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,

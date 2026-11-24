@@ -38,7 +38,7 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 # 全部组件的 Linux 二进制（纯 Go 交叉编译；Storage 与前端在本机 Docker 里，macOS 先 colima start），产物在 $WT/bin-linux
 cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY bash scripts/build/build-linux-local.sh --out $WT/bin-linux \
   admin host-gateway hostagent eventbus egress-proxy collector collector-stream factor-mgr factor-engine \
-  archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor storage-cli storage
+  archive-mgr archive-worker strategy strategy-cli trade monitor storage-cli storage
 ```
 
 - 目标清单和 `scripts/release/build-release.sh` 里的 `server_targets` 一致（去掉 `collector-scf`）；`archive-worker` 这个目标会带上内置对象存储的 `weed`。
@@ -84,7 +84,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 3 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
 | 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
-| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream、事件中心，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
+| 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
 | 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验（这些要等 Collector、Monitor 起来） |
 | 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
@@ -244,7 +244,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     ```
     第 16 步那个调参任务的 `__params` 只有 `ma__var` 一个键，`$CLI factor task params --task-id <5m 任务>` 有 `ma__var` 最近一次提交（`t_factor_member_params` 的一行）。
     对固定成员发起一次补算（`factor recalc submit --task-id ftask_swap_1m --member ma__5 --from START --to END`），完成后同一区间的 `ma__5` 与补算前逐位相同，`__params` 仍为空。
-18. **序列全集**：事件校验要求 `universe_series` 必填、覆盖 `universe_subject_ids`、tag 非空，不合格的事件发不出去，所以看下游：crypto 现货、合约与 A 股的因子任务都出结果
+18. **标的全集**：周期完成事件只带按标的的 `universe_subject_ids` 与 `failed_subjects`（失败是全集的子集，不合格的事件发不出去），所以看下游：crypto 现货、合约与 A 股的因子任务都出结果
     （`$CLI factor status`，因子引擎的输出里 `factor_period_done ... status=complete`）；对 `ftask_cn_5m` 发起一段补算能算出结果。
 19. **方式 A 仍可用**：现货、永续各一个任务（`--factor-task spot=ftask_spot_1m --factor-task swap=ftask_swap_1m`）的 `market: {select: both, prefer: spot}` 观察实例能启用并出结果；用同样的 `--factor-task` 做一次 View 来源的回放能跑完。
 20. **回放**：

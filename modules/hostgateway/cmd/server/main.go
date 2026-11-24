@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
+	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 

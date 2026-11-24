@@ -152,7 +152,7 @@ export const layoutRoutes = [
         component: () => import("@/views/trading/blocked/index.vue"),
         meta: { title: "下架名单" }
       },
-      // 只知道组合编号、不知道环境的链接（策略页、事件中心）走这个地址；详情页读到组合后换到所属环境的地址。
+      // 只知道组合编号、不知道环境的链接（策略页、下架名单页）走这个地址；详情页读到组合后换到所属环境的地址。
       {
         path: "/trading/accounts/:logical_account_id",
         name: "trading-account-detail",
@@ -180,13 +180,6 @@ export const layoutRoutes = [
         meta: { title: "归档存储" }
       }
     ]
-  },
-  // 事件中心只有一页，页签（事件 / 订阅 / 执行记录）在 query 里。
-  {
-    path: "/events",
-    name: "events",
-    component: () => import("@/views/events/index.vue"),
-    meta: { title: "事件中心", svgIcon: "bell" }
   },
   {
     path: "/ops",

@@ -316,15 +316,11 @@ func writeRowsInBatches(t *testing.T, ctx context.Context, env readyBenchEnv, da
 
 func reportProducerCompleted(t *testing.T, ctx context.Context, env readyBenchEnv, dataset readyBenchDataset, period time.Time, universe []string, cause string) {
 	t.Helper()
-	series := make([]*pb.SeriesRef, 0, len(universe))
-	for _, subject := range universe {
-		series = append(series, &pb.SeriesRef{SubjectId: subject, SeriesTag: "default"})
-	}
 	rsp, err := env.Primary().ReportDatasetPeriodCompleted(ctx, &pb.ReportDatasetPeriodCompletedReq{
 		SpaceId: readyBenchSpace,
 		Marker: &pb.DatasetPeriodCompletedMarker{
 			DatasetId: dataset.datasetID, Frequency: readyBenchFreq, PeriodTime: period.Unix(), Status: "complete",
-			UniverseSubjectIds: universe, UniverseSeries: series, CauseEventId: cause, CompletedAt: timestamppb.Now(),
+			UniverseSubjectIds: universe, CauseEventId: cause, CompletedAt: timestamppb.Now(),
 			DetailType: "moox.bench.PeriodDetail.v1", Detail: []byte("bench"),
 		},
 	})

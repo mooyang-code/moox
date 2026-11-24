@@ -100,7 +100,6 @@ export interface StreamWorkerStatus {
   online?: boolean;
   heartbeat_at?: string;
   applied_plan_id?: number | string;
-  applied_stage?: string;
   conns?: StreamConnStatus[];
   recent?: StreamPeriodStat[];
   clock_offset_ms?: number | string;

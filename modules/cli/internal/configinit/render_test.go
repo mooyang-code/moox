@@ -97,7 +97,7 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	// 角色到组件的映射与示例模板的部署一致。
 	if !slices.Equal(manifest.Deployments["control"], []string{"admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}) ||
 		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-view", "eventbus"}) ||
-		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "egress-proxy", "collector-stream", "callback-dispatcher"}) {
+		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "egress-proxy", "collector-stream"}) {
 		t.Fatalf("部署 = %+v", manifest.Deployments)
 	}
 	if manifest.EventBusHost().Address != manifest.HostCatalog["storage"].Address {

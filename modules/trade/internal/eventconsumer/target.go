@@ -528,7 +528,7 @@ func unsupportedLogicalTargetInstrument(
 		}
 		for _, instrument := range instruments {
 			if !exchange.StatusTradable(instrument.Status) {
-				if blockedSet.ContainsInstrument(account.Exchange, instrument) {
+				if blockedSet.ContainsInstrument(account, instrument) {
 					blockedIDs[instrument.InstrumentID] = struct{}{}
 				}
 				continue

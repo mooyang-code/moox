@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 )
 
@@ -39,23 +40,36 @@ func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string, en
 	if err != nil {
 		return nil, err
 	}
-	periods := map[string]map[string]string{}
-	open, err := s.persistence.FetchPlans().Open(ctx, spaceID)
+	// 交接生效点从已生效状态（加上未生效计划，同一个数据集以它为准）里读：两份执行端不同的数据集，生效点是后一份的 From。
+	plans := s.persistence.FetchPlans()
+	applied, err := plans.LatestApplied(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
-	if open != nil {
-		content, err := fetchplan.DecodeFetchPlanContent(open.Plan)
+	open, err := plans.Open(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	datasets := map[string]*fetchplan.PlanDataset{}
+	for _, record := range []*store.FetchPlanRecord{applied, open} {
+		if record == nil {
+			continue
+		}
+		content, err := fetchplan.DecodeFetchPlanContent(record.Plan)
 		if err != nil {
 			return nil, err
 		}
-		for _, change := range content.Datasets {
-			if change.Changed && change.OldIngest != "" && change.P > 0 {
-				if periods[change.DatasetID] == nil {
-					periods[change.DatasetID] = map[string]string{}
-				}
-				periods[change.DatasetID][change.Frequency] = time.Unix(change.P, 0).UTC().Format(time.RFC3339)
+		for key, dataset := range content.Datasets {
+			datasets[key] = dataset
+		}
+	}
+	periods := map[string]map[string]string{}
+	for _, dataset := range datasets {
+		if from := dataset.HandoffFrom(); from > 0 {
+			if periods[dataset.DatasetID] == nil {
+				periods[dataset.DatasetID] = map[string]string{}
 			}
+			periods[dataset.DatasetID][dataset.Frequency] = time.Unix(from, 0).UTC().Format(time.RFC3339)
 		}
 	}
 	result := make([]*pb.IngestMode, 0, len(tasks))
@@ -69,7 +83,7 @@ func (s *Service) ingestModes(ctx context.Context, spaceID, datasetID string, en
 }
 
 // SetIngestMode 切换 K 线任务的采集方式（只允许 moox-cli）：按数据集切换时改写这个数据集的任务，不给数据集时改空间的全部 K 线任务。
-// 下一轮对账生成交接计划并按频率选生效周期 P。
+// 下一轮对账生成交接计划并按频率选生效周期 P；计划下发确认就生效，截止由之后每轮对账到点再改。
 func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (*pb.SetIngestModeRsp, error) {
 	spaceID := normalizeSpace(req.GetSpaceId())
 	datasetID := strings.TrimSpace(req.GetDatasetId())

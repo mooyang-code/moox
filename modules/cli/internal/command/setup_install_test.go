@@ -48,7 +48,7 @@ ssh = { port = 22, username = "builder" }
 [deployments]
 control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
 storage = ["storage-primary", "storage-view", "eventbus"]
-overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
+overseas = ["trade", "egress-proxy", "collector-stream"]
 factor = ["factor-engine", "archive-worker"]
 `))
 	require.NoError(t, err)
@@ -624,7 +624,7 @@ func TestSetupInitPassesSourceDirectory(t *testing.T) {
 // 统一等就绪按 moox.toml 的声明排除组件：[deployments_disabled] 里的不等，停用的主机整台不等；其余的（含崩溃后正在自动重启的）都要等。
 func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	h := newInstallHarness(t)
-	h.snapshot.Manifest.DeploymentsDisabled = map[string][]string{"overseas": {"callback-dispatcher"}}
+	h.snapshot.Manifest.DeploymentsDisabled = map[string][]string{"overseas": {"collector-stream"}}
 	factor := h.snapshot.Manifest.HostCatalog["factor"]
 	disabled := false
 	factor.Enabled = &disabled
@@ -639,7 +639,7 @@ func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	require.NoError(t, waitSetupAllReady(context.Background(), h.deps, h.snapshot))
 	require.Contains(t, waited["overseas"], "trade")
 	require.Contains(t, waited["overseas"], "egress-proxy")
-	require.NotContains(t, waited["overseas"], "callback-dispatcher", "声明停用的组件不等")
+	require.NotContains(t, waited["overseas"], "collector-stream", "声明停用的组件不等")
 	require.NotContains(t, waited, "factor", "停用的主机整台不等")
 }
 

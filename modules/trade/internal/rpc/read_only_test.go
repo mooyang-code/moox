@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestConsoleQueriesDoNotWaitForReadWriteConnection(t *testing.T) {
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true, Priority: 1,
 		})
 	}))
-	_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
 		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "DOGEUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)

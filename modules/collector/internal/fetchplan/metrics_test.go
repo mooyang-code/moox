@@ -6,8 +6,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -204,12 +202,9 @@ func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
 	}
 }
 
-// 每个白名单原因都要在 Monitor 里有专属告警文案，否则 Monitor 只能显示通用提示。
-func TestEveryFailureReasonHasAMonitorText(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "monitor", "internal", "observability", "overview.go"))
-	require.NoError(t, err)
-	source := string(raw)
+// 每个白名单原因都要有专属告警文案（coordinationFailureTexts），否则关注项只能显示通用提示。
+func TestEveryFailureReasonHasAText(t *testing.T) {
 	for _, reason := range assignmentFailureReasons {
-		require.Containsf(t, source, "{\""+reason+"\", \"", "Monitor 的 coordinationFailureTexts 缺少原因 %q 的告警文案", reason)
+		require.NotEmptyf(t, coordinationFailureTexts[reason], "coordinationFailureTexts 缺少原因 %q 的告警文案", reason)
 	}
 }

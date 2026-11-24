@@ -64,8 +64,7 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	completed, err := svc.ReportDatasetPeriodCompleted(context.Background(), &pb.ReportDatasetPeriodCompletedReq{
 		SpaceId: "space", Marker: &pb.DatasetPeriodCompletedMarker{
 			DatasetId: "factor-data", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", UniverseSubjectIds: []string{"BTC"},
-			UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC", SeriesTag: "default"}},
-			CauseEventId:   "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
+			CauseEventId: "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
 		},
 	})
 	if err != nil || completed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {

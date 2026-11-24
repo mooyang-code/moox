@@ -186,7 +186,7 @@
             }}</a-tag>
             <span class="muted mono-text"
               >{{ status.stream.instance_id }} · 心跳 {{ timeText(status.stream.heartbeat_at) }} · 已应用计划
-              {{ status.stream.applied_plan_id }}/{{ status.stream.applied_stage }}</span
+              {{ status.stream.applied_plan_id }}</span
             >
           </div>
           <a-table row-key="key" size="mini" :data="streamConnRows" :pagination="false" :bordered="{ cell: true }">

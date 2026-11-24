@@ -48,7 +48,7 @@ func writeMarker(t *testing.T, store *pebble.Store, datasetID string, period tim
 	t.Helper()
 	raw, _, err := pebble.BuildProducerPeriodCompletedMessage("s", &pb.DatasetPeriodCompletedMarker{
 		DatasetId: datasetID, Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
-		UniverseSubjectIds: []string{"A"}, UniverseSeries: []*pb.SeriesRef{{SubjectId: "A", SeriesTag: "default"}}, CauseEventId: fmt.Sprintf("cause-%d", period.Unix()), CompletedAt: timestamppb.New(period),
+		UniverseSubjectIds: []string{"A"}, CauseEventId: fmt.Sprintf("cause-%d", period.Unix()), CompletedAt: timestamppb.New(period),
 	})
 	require.NoError(t, err)
 	_, err = store.AppendDatasetMarker(context.Background(), raw)

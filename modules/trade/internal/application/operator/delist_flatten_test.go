@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"testing"
 	"time"
 
@@ -231,7 +232,7 @@ func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 		Unblocked bool `json:"unblocked"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(*result.Action.ResultJSON), &persisted))
-	require.True(t, persisted.Unblocked, "结果 JSON 顶层带 unblocked 标记，事件中心据此判断")
+	require.True(t, persisted.Unblocked, "结果 JSON 顶层带 unblocked 标记")
 	// 完成之后再用同一个动作号调：直接返回旧结果。
 	again, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
@@ -522,4 +523,22 @@ func TestDelistFlattenEndsTheRoundWhenTheWakeUpLeavesNoRoomToPlace(t *testing.T)
 	require.Len(t, fixture.orders.specs, 1)
 	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "下一次调用接着来")
 	require.Empty(t, result.Action.LastError)
+}
+
+// 演练的名单行（仅模拟盘）对实盘账户不生效：即使把实盘组合交给下架清仓，第一轮就按“已解除”结束，不下单（V8）。
+func TestDelistFlattenOfALiveAccountUnderPaperOnlyBlockDoesNotSell(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	_, err := storetest.BlockInstrument(fixture.store, store.BlockedInstrumentRecord{
+		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Scope: store.DelistScopePaperOnly, Reason: "演练", BlockedAt: 1,
+	})
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION', c_account_mode = 'BINANCE_STANDARD', c_credential_secret_id = 'secret-a' WHERE c_trading_account_id = 'account-a'`).Error)
+	fixture.store.InvalidateCaches()
+
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), delistCommand("delist-live-drill", "BTC-USDT-SWAP"))
+
+	require.NoError(t, err)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
+	require.True(t, result.Unblocked)
+	require.Empty(t, fixture.orders.specs, "实盘账户不在演练名单里，不卖")
 }

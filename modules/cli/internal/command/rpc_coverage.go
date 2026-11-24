@@ -114,8 +114,6 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.Ssh/SftpMkdir":         sshReason,
 	"trpc.moox.ops.Ssh/SftpDelete":        sshReason,
 
-	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「事件中心」的“订阅”页签新建，密钥只在那里显示一次，不经过 Agent",
-
 	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做；初始渠道由 setup init 在 Monitor 还没有渠道时写入一次",
 
 	"trpc.moox.ops.SecretMgr/CreateSecret":       secretWriteReason,
@@ -126,5 +124,5 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.SecretMgr/ImportSecrets":      "密钥整包导入带口令，moox-cli 无权调用，由用户在管理台操作",
 
 	"trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer": walletTransferReason,
-	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":     "解除下架禁止请用户在管理台“交易管理 › 下架名单”里查看与解除（事件中心取消执行也会解除）：解除后策略会恢复买入，Agent 不代用户解除",
+	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":     "解除下架禁止请用户在管理台“交易管理 › 下架名单”里查看与解除（会一并取消进行中的下架处理）：解除后策略会恢复买入，Agent 不代用户解除",
 }

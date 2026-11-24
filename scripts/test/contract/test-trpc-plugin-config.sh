@@ -123,7 +123,7 @@ require_text modules/admin/cmd/server/main.go 'packages/healthz/trpcotel' 'missi
 require_text modules/storage/cmd/server/main.go 'packages/healthz/trpcotel' 'missing storage tracing registration'
 
 # 矩阵之外的常驻服务同样要引入 logcls。
-for main in modules/archive/cmd/mgr/main.go modules/callbackdispatcher/cmd/server/main.go modules/collector/cmd/stream/main.go; do
+for main in modules/archive/cmd/mgr/main.go modules/collector/cmd/stream/main.go; do
 	[[ -f "${main}" ]] || fail "missing server entrypoint ${main}"
 	require_text "${main}" 'packages/clsreporter/logcls' "missing log sink registration"
 done

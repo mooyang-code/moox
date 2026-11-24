@@ -80,7 +80,7 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	require.Equal(t, "BRK.B", group.ExternalSymbols["BRK.B.XNYS"])
 	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{group}, nil)
 	require.NoError(t, err)
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-11-10 22:30:00").Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: usTime("2026-11-10 22:30:00")})
 	require.NoError(t, err)
 	require.Len(t, content.Functions, 11)
 
@@ -89,7 +89,7 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	storage := newHKRowStore()
 	var sizes []int
 	for _, name := range content.SortedFunctionNames() {
-		plan := content.FinalPlan(content.Functions[name])
+		plan := content.Functions[name].Target
 		require.NotNil(t, plan, name)
 		require.Equal(t, marketfetch.PlanMarket{MarketID: "stockus", InstrumentType: "equity", Provider: "eastmoney", SourceID: "eastmoney", MarketType: "equity"}, plan.Market, name)
 		require.Equal(t, 5000, plan.Fetch.NotBeforeMS, name)
@@ -143,11 +143,11 @@ func usPlan(t *testing.T) (*marketfetch.Plan, string) {
 	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{usGroup("AAPL.XNAS", "BRK.B.XNYS")}, nil)
 	require.NoError(t, err)
 	// 计划份的生效起点设在这些时刻之前，返回 no_work 只可能是因为周期不是交易桶。
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return usTime("2026-10-20 00:00:00").Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: usTime("2026-10-20 00:00:00")})
 	require.NoError(t, err)
 	require.Len(t, content.Functions, 1)
 	for name, function := range content.Functions {
-		plan := content.FinalPlan(function)
+		plan := function.Target
 		require.NotNil(t, plan)
 		return plan, name
 	}

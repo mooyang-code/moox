@@ -396,7 +396,7 @@ func (s *Service) degradedPrice(
 		if err != nil {
 			return shared.Zero(), 0, err
 		}
-		if blocked.ContainsInstrument(account.Exchange, *instrument) {
+		if blocked.ContainsInstrument(account, *instrument) {
 			failure, reason = execution.ValuationDelisted, "所在标的 "+instrument.ExchangeSymbol+" 在下架名单里"
 		}
 	}

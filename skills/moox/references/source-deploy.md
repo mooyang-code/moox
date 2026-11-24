@@ -20,7 +20,7 @@
 | 每台主机 | `host-gateway` `host-agent`（自动带上，不写在 `[deployments]` 里） |
 | 控制机 | `admin` `monitor` `collector` `factor-mgr` `archive-mgr` `strategy` |
 | 存储机 | `storage-primary` `storage-view`（各一份二进制）`eventbus` |
-| 海外机 | `trade` `egress-proxy` `collector-stream` `callback-dispatcher` |
+| 海外机 | `trade` `egress-proxy` `collector-stream` |
 | 因子机 | `factor-engine` `archive-worker`，没配外部对象存储时还有内置的 `seaweedfs`（二进制 `weed`） |
 
 组件要哪些二进制与配套命令行、启动参数、配置模板、启动顺序都登记在服务目录（`packages/servicecatalog/catalog.yaml` 的 `binary`、`tools`、`args`、`config_files`、`after`）。
