@@ -46,7 +46,7 @@
         </a-radio-group>
         <template #extra>策略没有写 market，只读一个计算任务：先选任务的数据所属的市场（要与任务源数据集的市场一致）。</template>
       </a-form-item>
-      <a-form-item v-for="market in markets" :key="market" :label="`${marketLabel(market)}计算任务`" required>
+      <a-form-item v-for="market in markets" :key="market" :label="`${taskLabel(market)}计算任务`" required>
         <a-select
           v-model="form.tasks[market]"
           allow-search
@@ -59,7 +59,8 @@
         </a-select>
         <template v-if="market === markets[0]" #extra
           ><template v-if="pool">策略池按成员所需市场的并集读任务。</template
-          ><template v-if="markets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template></template
+          ><template v-if="mainMarkets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
+          ><template v-if="markets.length > mainMarkets.length">参考市场的任务只用于年龄判定。</template></template
         >
       </a-form-item>
     </template>
@@ -124,6 +125,8 @@ import {
   replayDriftHint,
   replayIsPool,
   replayMarkets,
+  replayMainMarkets,
+  replayIsReference,
   replayPool,
   replayTuned,
   wholeDays
@@ -174,10 +177,15 @@ watch(
 const inputHint = computed(() => {
   if (tuned.value) return "策略声明了 factor_params：因子按回放中逐期求出的参数现算，只能用因子现算。";
   if (form.value.input === "compute")
-    return "经主机网关调因子引擎，按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制；附加来源、参考市场仍读 View。只支持一个计算任务，不支持策略池与股票。";
+    return "经主机网关调因子引擎，按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制；附加来源、参考市场仍读 View。不支持策略池与股票。";
   return "读计算任务的结果 View：区间受 View 保留的根数限制。";
 });
-const usesSwap = computed(() => markets.value.includes("swap"));
+// 永续手续费只在主帧读永续时用到（参考市场不交易）
+const mainMarkets = computed(() => replayMainMarkets(form.value));
+const usesSwap = computed(() => mainMarkets.value.includes("swap"));
+function taskLabel(market: string) {
+  return replayIsReference(form.value, market) ? `参考市场（${marketLabel(market)}）` : marketLabel(market);
+}
 
 /** 一个市场可选的任务：已被别的市场选走的不再出现。 */
 function taskChoices(market: string) {

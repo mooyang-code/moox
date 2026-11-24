@@ -51,7 +51,12 @@ export function requirementReferenceMarkets(
   return (requirement?.referenceMarkets ?? []).filter(market => keys.includes(market));
 }
 
-/** 主帧市场：任务键里不带来源、也不是参考市场的键，顺序同任务键。账户筛选、现算个数、资金费列都按它判断。 */
+/** 任务键里的市场（不带来源的键，含参考市场），顺序同任务键。 */
+export function taskKeyMarkets(keys: readonly string[]): string[] {
+  return keys.filter(key => !splitTaskKey(key).source);
+}
+
+/** 主帧市场：任务键里不带来源、也不是参考市场的键，顺序同任务键。建实例的账户筛选、股票判断与资金费列按它判断。 */
 export function mainMarkets(requirement: StrategyTaskRequirement | null | undefined, singleMarket: string): string[] {
   const keys = requirementTaskKeys(requirement, singleMarket);
   const references = requirementReferenceMarkets(requirement, keys);

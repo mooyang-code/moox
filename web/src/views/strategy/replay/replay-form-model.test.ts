@@ -146,7 +146,7 @@ describe("replay form model", () => {
 });
 
 describe("写了参考市场的策略", () => {
-  // 主帧只有现货，参考市场永续只用于实时的年龄判定：回放只读一个现货任务
+  // 主帧只有现货，参考市场永续只用于年龄判定：回放也要登记参考市场的任务，资金费与股票判断只看主帧
   const withReference = [
     {
       strategy_id: "r",
@@ -155,21 +155,22 @@ describe("写了参考市场的策略", () => {
   ] as Strategy[];
   const form = { ...base, strategy_id: "r", tasks: { spot: "ftask_spot", swap: "ftask_swap" }, funding_column: "funding_rate" };
 
-  it("只读主帧市场的任务，因子现算不当成两个任务，不带资金费列", () => {
-    expect(replayMarkets(form, withReference)).toEqual(["spot"]);
-    expect(replayFactorTasks(form, withReference)).toEqual({ spot: "ftask_spot" });
+  it("参考市场的任务也提交，因子现算可用，不带资金费列", () => {
+    expect(replayMarkets(form, withReference)).toEqual(["spot", "swap"]);
+    expect(replayFactorTasks(form, withReference)).toEqual({ spot: "ftask_spot", swap: "ftask_swap" });
+    expect(model.replayMainMarkets(withRequirement(form, withReference))).toEqual(["spot"]);
+    expect(model.replayIsReference(withRequirement(form, withReference), "swap")).toBe(true);
     expect(validateReplayForm({ ...form, input: "compute" }, withReference)).toBe("");
     expect(replayFundingColumn(form, withReference)).toBe("");
   });
 
-  it("从实例发起时同样去掉参考市场的任务：因子现算可用，不带资金费列", () => {
+  it("从实例发起时原样提交实例的任务键，资金费列只看主帧", () => {
     const instanceForm = { ...form, instance_id: "i1", instance_strategy_id: "r" };
-    expect(replayMarkets(instanceForm, withReference)).toEqual(["spot"]);
-    expect(replayFactorTasks(instanceForm, withReference)).toEqual({ spot: "ftask_spot" });
+    expect(replayFactorTasks(instanceForm, withReference)).toEqual({ spot: "ftask_spot", swap: "ftask_swap" });
     expect(validateReplayForm({ ...instanceForm, input: "compute" }, withReference)).toBe("");
     expect(replayFundingColumn(instanceForm, withReference)).toBe("");
-    // 实例引用的定义还没读到时照常读全部任务
-    expect(replayMarkets({ ...instanceForm, instance_strategy_id: "" }, withReference)).toEqual(["spot", "swap"]);
+    // 实例引用的定义还没读到时按全部市场算，永续在内就带资金费列
+    expect(replayFundingColumn({ ...instanceForm, instance_strategy_id: "" }, withReference)).toBe("funding_rate");
   });
 });
 
@@ -264,9 +265,10 @@ describe("策略池回放表单", () => {
     expect(replayTuned({ ...base, strategy_id: "", instance_id: "i1", instance_strategy_id: "t1" }, tuned)).toBe(true);
     expect(validateReplayForm(form, tuned)).toContain("因子现算");
     expect(validateReplayForm({ ...form, input: "compute" }, tuned)).toBe("");
+    // 现货加永续各开一个现算会话：两个主帧任务都放行
     expect(
       validateReplayForm({ ...base, strategy_id: "s1", tasks: { spot: "a", swap: "b" }, input: "compute" }, strategies)
-    ).toContain("只支持一个计算任务");
+    ).toBe("");
     expect(
       validateReplayForm(
         { ...base, strategy_id: "s3", single_market: "equity", tasks: { equity: "e" }, input: "compute" },

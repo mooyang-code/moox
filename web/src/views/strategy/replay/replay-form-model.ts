@@ -1,6 +1,6 @@
 import type { ReplayInput, Strategy, StrategyTaskRequirement } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
-import { MARKET_ORDER, mainMarkets } from "@/views/strategy/market-mode";
+import { MARKET_ORDER, mainMarkets, requirementTaskKeys, taskKeyMarkets } from "@/views/strategy/market-mode";
 import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
@@ -79,16 +79,27 @@ export function replayDeclared(form: ReplayFormState): boolean {
 }
 
 /**
- * 回放要读取任务的市场（现货、永续、股票先后），只含主帧市场（参考市场只用于实时的年龄判定，回放不读）：
- * 从实例发起时是预填的实例任务的键去掉参考市场（参考市场按实例引用的定义读出）；其余按后端推出的主帧市场，
- * 没写 market 时只读一个任务，市场取用户选的。
+ * 回放要读取任务的市场（现货、永续、股票先后），含参考市场（后端要求参考市场的任务也登记）：从实例发起时原样是实例任务的键
+ * （后端要求与实例登记的任务一致）；其余按后端推出的任务键，没写 market 时只读一个任务，市场取用户选的。
  */
 export function replayMarkets(form: ReplayFormState): string[] {
-  if (form.instance_id) {
-    const references = form.requirement?.referenceMarkets ?? [];
-    return MARKET_ORDER.filter(market => form.tasks[market] && !references.includes(market));
-  }
-  return mainMarkets(form.requirement, form.single_market);
+  if (form.instance_id) return MARKET_ORDER.filter(market => form.tasks[market]);
+  return taskKeyMarkets(requirementTaskKeys(form.requirement, form.single_market));
+}
+
+/**
+ * 主帧市场：回放读的市场去掉参考市场（参考市场只用于年龄判定，不交易）。股票判断、资金费列与手续费按它判断；
+ * 从实例发起时参考市场按实例引用的定义读出，还没读到时按全部市场算。
+ */
+export function replayMainMarkets(form: ReplayFormState): string[] {
+  if (!form.instance_id) return mainMarkets(form.requirement, form.single_market);
+  const references = form.requirement?.referenceMarkets ?? [];
+  return replayMarkets(form).filter(market => !references.includes(market));
+}
+
+/** 这个市场在回放里是不是参考市场。 */
+export function replayIsReference(form: ReplayFormState, market: string): boolean {
+  return (form.requirement?.referenceMarkets ?? []).includes(market);
 }
 
 /** drift 池的回放起点说明：写了漂移起点时起点必须选它，没写时漂移从区间的第一根开始；不是 drift 池时为空串。 */
@@ -115,7 +126,7 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   const omitted = Boolean(form.instance_id) && !markets.length;
   if (!omitted && !markets.length) return "请选择策略的计算任务（策略没写 market 时先选任务所属的市场）";
   if (markets.some(market => !form.tasks[market])) return "请为策略用到的每个市场选择计算任务";
-  const inputError = replayInputError(form, strategies, markets);
+  const inputError = replayInputError(form, strategies);
   if (inputError) return inputError;
   if (!form.range) return "请选择回放区间";
   if (form.range[1] <= form.range[0]) return "结束时间必须晚于开始时间";
@@ -129,22 +140,20 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   return "";
 }
 
-/** 因子数据来源的本地校验（与后端一致）：声明了 factor_params 的策略必须用因子现算；因子现算不支持策略池、两个计算任务与股票。 */
-function replayInputError(form: ReplayFormState, strategies: Strategy[], markets: string[]): string {
+/** 因子数据来源的本地校验（与后端一致）：声明了 factor_params 的策略必须用因子现算；因子现算不支持策略池与股票。 */
+function replayInputError(form: ReplayFormState, strategies: Strategy[]): string {
   if (form.input !== "compute") {
     return replayTuned(form, strategies) ? "声明了 factor_params 的策略只能用“因子现算”来源回放" : "";
   }
   if (replayIsPool(form, strategies)) return "“因子现算”来源不支持策略池";
-  if (markets.length > 1) return "“因子现算”只支持一个计算任务：现货加永续请改用结果 View";
-  if (markets.includes("equity")) return "“因子现算”暂不支持股票市场";
+  if (replayMainMarkets(form).includes("equity")) return "“因子现算”暂不支持股票市场";
   return "";
 }
 
 /** 提交用的资金费列：只在回放读取永续时带上，表单里隐藏的旧值不提交；策略池的资金费写在池 DSL 里，不提交；没写时为空串。 */
 export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (replayIsPool(form, strategies)) return "";
-  const markets = replayMarkets(form);
-  if (!markets.includes("swap")) return "";
+  if (!replayMainMarkets(form).includes("swap")) return "";
   return (form.funding_column ?? "").trim();
 }
 
