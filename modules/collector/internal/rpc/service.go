@@ -804,11 +804,24 @@ func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDa
 	return &pb.GetDataTypeConfigWithFieldsRsp{
 		RetInfo: retOK(),
 		Detail: &pb.DataTypeConfigDetail{
-			Config:      dataTypeConfigFromDefinition(definition),
-			Fields:      dataTypeFieldsFromDefinition(definition),
-			ExtraFields: s.extraFieldOptions(definition.DataType),
+			Config:           dataTypeConfigFromDefinition(definition),
+			Fields:           dataTypeFieldsFromDefinition(definition),
+			ExtraFields:      s.extraFieldOptions(definition.DataType),
+			BaseOutputFields: baseOutputFieldOptions(definition.DataType),
 		},
 	}, nil
+}
+
+// baseOutputFieldOptions 列出 K 线任务可选的基础输出字段（与建结果数据集列用同一份定义）；其他任务类型没有。
+func baseOutputFieldOptions(dataType string) []*pb.OutputFieldOption {
+	if !strings.EqualFold(strings.TrimSpace(dataType), "kline") {
+		return nil
+	}
+	options := make([]*pb.OutputFieldOption, 0, len(taskresult.KlineOutputFields))
+	for _, field := range taskresult.KlineOutputFields {
+		options = append(options, &pb.OutputFieldOption{FieldId: field.Name, DisplayName: field.DisplayName})
+	}
+	return options
 }
 
 // extraFieldOptions 列出 K 线任务可选的附加字段及其适用范围；其他任务类型没有。

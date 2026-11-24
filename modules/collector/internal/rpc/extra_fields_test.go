@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
@@ -105,7 +106,7 @@ func TestUpdateTaskRejectsAddedOutputFields(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, update("volume", "close").GetRetInfo().GetCode())
 }
 
-// 任务表单接口列出 K 线任务可选的附加字段：字段 ID、适用频率、适用的市场和品种、来源提供方。
+// 任务表单接口列出 K 线任务可选的基础输出字段与附加字段（字段 ID、适用频率、适用的市场和品种、来源提供方）。
 func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
 	service := &Service{fieldOffers: testFieldOffers()}
 	rsp, err := service.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{DataType: "kline"})
@@ -119,7 +120,20 @@ func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
 	require.Equal(t, []string{"1h", "1d"}, options[0].GetFrequencies())
 	require.Equal(t, "binance", options[0].GetProviderId())
 
+	// 基础输出字段与建结果数据集列是同一份定义，管理台不另抄。
+	base := rsp.GetDetail().GetBaseOutputFields()
+	require.Len(t, base, len(taskresult.KlineOutputFields))
+	require.Equal(t, "open", base[0].GetFieldId())
+	require.Equal(t, "开盘", base[0].GetDisplayName())
+	ids := make([]string, 0, len(base))
+	for _, field := range base {
+		ids = append(ids, field.GetFieldId())
+	}
+	require.Contains(t, ids, "amount_quality")
+	require.NotContains(t, ids, "funding_rate", "附加字段不在基础字段里")
+
 	rsp, err = service.GetDataTypeConfigWithFields(context.Background(), &pb.GetDataTypeConfigWithFieldsReq{DataType: "kline_resample"})
 	require.NoError(t, err)
 	require.Empty(t, rsp.GetDetail().GetExtraFields(), "重采样没有附加字段")
+	require.Empty(t, rsp.GetDetail().GetBaseOutputFields(), "重采样的字段表是固定的")
 }

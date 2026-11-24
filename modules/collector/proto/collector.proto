@@ -198,6 +198,14 @@ message DataTypeConfigDetail {
   DataTypeConfig config = 1;
   repeated DataTypeFieldConfig fields = 2;
   repeated ExtraFieldOption extra_fields = 3;  // K 线任务可选的附加字段，默认都不选
+  // K 线任务可选的基础输出字段（结果数据集能建的列，按建列顺序）；附加字段另见 extra_fields。其他任务类型为空。
+  repeated OutputFieldOption base_output_fields = 4;
+}
+
+// OutputFieldOption 是 K 线任务可以选的一个基础输出字段。
+message OutputFieldOption {
+  string field_id = 1;      // 输出字段名
+  string display_name = 2;  // 管理台显示名
 }
 
 // ExtraFieldOption 是 K 线任务可以在输出字段里选的一个附加字段，以及它适用的范围。
