@@ -58,7 +58,8 @@ BEGIN
     UPDATE t_collector_tasks SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
 END;
 
--- SCF 定时采集的采集计划：每个空间同一时间最多一份未生效的计划，最近一份已生效的计划即“已生效状态”。
+-- SCF 定时采集的采集计划：每个空间同一时间最多一份未生效的计划，最近一份已生效的计划即“已生效状态”；
+-- 一份计划生效时删掉同空间更早的已生效计划，表里每个空间至多两份。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plans (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -86,7 +87,8 @@ END;
 
 -- 标的时间线：一个采集数据集的一个频率从 c_effective_from（K 线开始时间，Unix 秒）起应有的序列。
 -- c_series 是登记给 Storage 的那份序列（标的加序列标签）；'[]' 表示从这一刻起不再采集。
--- 行与采集计划记录在同一个事务里写入：序列行在 Storage 确认登记之后，停止行在计划建立时。
+-- c_external_symbols 是这一段每个标的的交易所符号（标的到符号的 JSON 对象），不进序列哈希；符号变化也写一行，补采按它取当时的符号。
+-- 行与采集计划记录在同一个事务里写入：序列变化的行在 Storage 确认登记之后，只有符号变化的行与停止行在计划建立时。
 -- 按写入先后（c_id）重放：一段的结束时间是同一数据集同一频率后一行的生效点；同一生效点后写的覆盖先写的；
 -- 重新登记时整个空间的行一起删除。合成目标数据集不在这张表里。
 CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
@@ -97,6 +99,7 @@ CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
     c_effective_from INTEGER NOT NULL,
     c_series_hash TEXT NOT NULL DEFAULT '',
     c_series TEXT NOT NULL DEFAULT '[]',
+    c_external_symbols TEXT NOT NULL DEFAULT '{}',
     c_lateness_s INTEGER NOT NULL DEFAULT 0,
     c_output_fields TEXT NOT NULL DEFAULT '[]',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

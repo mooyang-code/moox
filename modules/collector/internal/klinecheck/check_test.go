@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
@@ -19,11 +20,19 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-// fakePlans 是内存里的计划记录：补采按它找历史计划，检查按 timelineRows 从它得到时间线行。
+// fakePlans 是内存里的计划记录：检查按 timelineRows 从它得到时间线行。
 type fakePlans struct{ records []*store.FetchPlanRecord }
 
-func (f fakePlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, error) {
-	return f.records, nil
+// fakeRoutes 是补采的路由夹具：除 gone 里的数据集外都有采集任务，来源是币安现货。
+type fakeRoutes struct{ gone map[string]bool }
+
+func (f fakeRoutes) BackfillRoute(_ context.Context, _, datasetID, frequency string) (*marketfetch.Plan, bool, error) {
+	if f.gone[datasetID] {
+		return nil, false, nil
+	}
+	return &marketfetch.Plan{V: 1, Fetch: marketfetch.PlanFetch{Concurrency: 1},
+		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "binance", MarketType: "spot"},
+		Datasets: []marketfetch.PlanDataset{{DatasetID: datasetID, Frequency: frequency}}}, true, nil
 }
 
 func (f fakePlans) ListBySpace(context.Context, string) ([]store.SeriesTimelineEntry, error) {
@@ -56,11 +65,19 @@ func timelineRows(records []*store.FetchPlanRecord) []store.SeriesTimelineEntry 
 				continue
 			}
 			entry := store.SeriesTimelineEntry{SpaceID: record.SpaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P}
+			symbols := change.Symbols
+			if symbols == nil {
+				// 手写的计划夹具没有符号：按函数计划的默认规则（去掉连字符）补上。
+				symbols = map[string]string{}
+				for _, series := range change.Series {
+					symbols[series.SubjectID] = strings.ReplaceAll(series.SubjectID, "-", "")
+				}
+			}
 			switch {
 			case change.Gone:
 				entries = append(entries, entry)
-			case change.HashChanged && (record.Status == store.FetchPlanApplied || progress.Registered[key]):
-				entry.SeriesHash, entry.Series, entry.LatenessS, entry.OutputFields = change.Hash, change.Series, change.LatenessS, change.OutputFields
+			case change.SymbolsChanged || (change.HashChanged && (record.Status == store.FetchPlanApplied || progress.Registered[key])):
+				entry.SeriesHash, entry.Series, entry.Symbols, entry.LatenessS, entry.OutputFields = change.Hash, change.Series, symbols, change.LatenessS, change.OutputFields
 				entries = append(entries, entry)
 			}
 		}

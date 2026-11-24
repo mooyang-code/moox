@@ -23,15 +23,17 @@ const planLeadTimePushOnly = 30 * time.Second
 type PlanDatasetChange struct {
 	PlanDatasetState
 	// Changed：该数据集在某些函数上的采集内容发生变化，需要选生效周期 P；
-	// HashChanged：标的集合 hash 变化，需要在 Storage 登记新快照；Gone：数据集不再采集。
-	Changed     bool               `json:"changed,omitempty"`
-	HashChanged bool               `json:"hash_changed,omitempty"`
-	Gone        bool               `json:"gone,omitempty"`
-	OldHash     string             `json:"old_hash,omitempty"`
-	P           int64              `json:"p,omitempty"`
-	Series      []seriesset.Series `json:"series,omitempty"`
-	Added       []string           `json:"added,omitempty"`
-	Removed     []string           `json:"removed,omitempty"`
+	// HashChanged：标的集合 hash 变化，需要在 Storage 登记新快照；SymbolsChanged：只有交易所符号变了（不登记快照，
+	// 时间线行在计划建立时就写）；Gone：数据集不再采集。
+	Changed        bool               `json:"changed,omitempty"`
+	HashChanged    bool               `json:"hash_changed,omitempty"`
+	SymbolsChanged bool               `json:"symbols_changed,omitempty"`
+	Gone           bool               `json:"gone,omitempty"`
+	OldHash        string             `json:"old_hash,omitempty"`
+	P              int64              `json:"p,omitempty"`
+	Series         []seriesset.Series `json:"series,omitempty"`
+	Added          []string           `json:"added,omitempty"`
+	Removed        []string           `json:"removed,omitempty"`
 	// OldIngest、OldLatenessS 是交接前的执行端与截止（采集方式切换时才有）：旧执行端那一份与 WindowEnd 按旧值，
 	// Storage 属性在 drain 结束、下发最终计划之前才改成新值。
 	OldIngest    string `json:"old_ingest,omitempty"`
@@ -269,6 +271,11 @@ func BuildPlanContent(previous map[string]*PlanFunction, previousDatasets map[st
 				if old != nil {
 					change.OldHash = old.Hash
 				}
+			} else if !sameSymbols(old.Symbols, current.Symbols) {
+				// 标的集合没变、只是交易所符号变了（改名、换合约）：同样选生效周期 P，时间线上从 P 起记新符号，
+				// 补采才能分清 P 之前用旧符号。不用重新登记快照。
+				change.SymbolsChanged, change.Changed = true, true
+				change.Series = current.Series
 			}
 		}
 		content.Datasets[key] = change
@@ -462,42 +469,6 @@ func (c *FetchPlanContent) TransitionalPlan(function *PlanFunctionChange) *marke
 	return out
 }
 
-// SymbolAt 返回函数在某数据集上、at 时刻适用的标的交易所符号。符号例外是函数级的，过渡计划已把新旧例外合并，
-// 所以必须按原始新旧计划与生效时间 P 判断：P 之前用旧计划的映射，P 及之后用新计划的映射。
-// 新旧计划不同时包含该标的、或该数据集没有变更时返回 false，由调用方沿用计划自带的映射。
-func (c *FetchPlanContent) SymbolAt(function *PlanFunctionChange, key, subjectID string, at time.Time) (string, bool) {
-	if function == nil || function.Old == nil || function.New == nil {
-		return "", false
-	}
-	change := c.Datasets[key]
-	if change == nil || !change.Changed {
-		return "", false
-	}
-	if at.Unix() < change.P {
-		if function.Old.HasSubject(subjectID) {
-			return function.Old.ExchangeSymbol(subjectID), true
-		}
-		return "", false
-	}
-	if function.New.HasSubject(subjectID) {
-		return function.New.ExchangeSymbol(subjectID), true
-	}
-	return "", false
-}
-
-// SymbolChangedWithoutBoundary 判断该函数在这次计划里是否发生了没有明确生效边界的符号映射变更：
-// 新旧计划都包含该标的、映射不同，而数据集本身没有变更（没有 P）。此时无法确定旧映射适用到何时。
-func (c *FetchPlanContent) SymbolChangedWithoutBoundary(function *PlanFunctionChange, key, subjectID string) bool {
-	if function == nil || function.Old == nil || function.New == nil {
-		return false
-	}
-	if change := c.Datasets[key]; change != nil && change.Changed {
-		return false
-	}
-	return function.Old.HasSubject(subjectID) && function.New.HasSubject(subjectID) &&
-		function.Old.ExchangeSymbol(subjectID) != function.New.ExchangeSymbol(subjectID)
-}
-
 // FinalPlan 是变更窗口结束后的计划：每个数据集只留最新一份，没有标的的数据集移除；退役函数返回空。
 func (c *FetchPlanContent) FinalPlan(function *PlanFunctionChange) *marketfetch.Plan {
 	if function.New == nil {
@@ -594,7 +565,7 @@ func (c *FetchPlanContent) SortedFunctionNames() []string {
 	return names
 }
 
-// DecodeFetchPlanContent 解码采集计划内容（检查与补采还原历史标的时使用）。
+// DecodeFetchPlanContent 解码采集计划内容（运行状态与采集方式切换读取未生效或已生效的计划时使用）。
 func DecodeFetchPlanContent(raw string) (*FetchPlanContent, error) {
 	return decodeFetchPlanContent(raw)
 }

@@ -102,7 +102,7 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 				valid = false
 				break
 			}
-			routeGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, "", subjects)
+			routeGroups, routeErr := r.taskGroupsForRoute(ctx, task, params, provider, marketType, subjects)
 			if routeErr != nil {
 				log.WarnContextf(ctx, "skip collection task=%s tag=%s route: %v", task.TaskID, tagID, routeErr)
 				valid = false
@@ -150,22 +150,34 @@ func normalizedTaskTagIDs(values []string) []string {
 	return result
 }
 
-func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, provider, marketType, sourceID string, subjects []domain.Subject) ([]TaskGroup, error) {
+// routeMarket 是任务按一个标签路由（provider、market_type）采集时的市场身份：计划的任务组与补采的路由都用它，
+// 两边推出的来源（以及由它决定的 series_tag）才会一致。
+func routeMarket(task domain.CollectionTask, params *domain.CollectParams, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (marketfetch.PlanMarket, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	marketType = strings.ToLower(strings.TrimSpace(marketType))
 	if provider == "" || marketType == "" {
-		return nil, fmt.Errorf("provider and market_type are required")
+		return marketfetch.PlanMarket{}, fmt.Errorf("provider and market_type are required")
 	}
 	marketID, instrumentType, err := marketIdentity(firstNonEmpty(params.MarketID, task.SpaceID), params.InstrumentType, marketType)
 	if err != nil {
-		return nil, err
+		return marketfetch.PlanMarket{}, err
 	}
-	if sourceID = strings.TrimSpace(sourceID); sourceID == "" && r.ResolveSourceID != nil {
-		sourceID = r.ResolveSourceID(marketID, provider, instrumentType)
+	sourceID := ""
+	if resolveSourceID != nil {
+		sourceID = resolveSourceID(marketID, provider, instrumentType)
 	}
 	if sourceID == "" {
 		sourceID = provider
 	}
+	return marketfetch.PlanMarket{MarketID: marketID, InstrumentType: instrumentType, Provider: provider, SourceID: sourceID, MarketType: marketType}, nil
+}
+
+func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, provider, marketType string, subjects []domain.Subject) ([]TaskGroup, error) {
+	route, err := routeMarket(task, params, provider, marketType, r.ResolveSourceID)
+	if err != nil {
+		return nil, err
+	}
+	provider, marketType, marketID, instrumentType, sourceID := route.Provider, route.MarketType, route.MarketID, route.InstrumentType, route.SourceID
 	symbolIDs := make([]string, 0, len(subjects))
 	externalSymbols := make(map[string]string, len(subjects))
 	var pairs map[string]string
@@ -214,20 +226,66 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 // TaskSeriesTag 返回 kline 采集任务按标签路由（provider、market_type）写入行时用的 series_tag，
 // 与 taskGroupsForRoute 生成的计划使用同一套推导（含 source_id 的解析）。
 func TaskSeriesTag(spaceID string, params *domain.CollectParams, provider, marketType string, resolveSourceID marketfetch.SourceIDResolver) (string, error) {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	marketType = strings.ToLower(strings.TrimSpace(marketType))
-	marketID, instrumentType, err := marketIdentity(firstNonEmpty(params.MarketID, spaceID), params.InstrumentType, marketType)
+	route, err := routeMarket(domain.CollectionTask{SpaceID: spaceID}, params, provider, marketType, resolveSourceID)
 	if err != nil {
 		return "", err
 	}
-	sourceID := ""
-	if resolveSourceID != nil {
-		sourceID = resolveSourceID(marketID, provider, instrumentType)
+	return marketfetch.CollectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: route.Provider, SourceID: route.SourceID, MarketType: route.MarketType}), nil
+}
+
+// BackfillRoutes 由当前的采集任务推出补采用的来源与参数：市场身份与计划同一套推导（routeMarket），拉取参数按空间的
+// 计划配置（PlanOptions.planFetch），输出字段取任务的。交易所符号不在这里：补采按标的时间线取当时的符号。
+type BackfillRoutes struct {
+	Tasks interface {
+		ListKline(ctx context.Context, spaceID, datasetID string) ([]domain.CollectionTask, error)
 	}
-	if sourceID == "" {
-		sourceID = provider
+	Tags            tagRouteSource
+	ResolveSourceID marketfetch.SourceIDResolver
+	// Options 返回空间的计划配置（与对账器用的同一份）。
+	Options func(spaceID string) (PlanOptions, error)
+}
+
+// BackfillRoute 返回补采数据集（某个频率）用的计划：Market、Fetch 与只含这个数据集（带输出字段）的 Datasets。
+// 没有写这个数据集与频率的采集任务（任务已删除）时 found 为假。
+func (r *BackfillRoutes) BackfillRoute(ctx context.Context, spaceID, datasetID, frequency string) (plan *marketfetch.Plan, found bool, err error) {
+	if r == nil || r.Tasks == nil || r.Tags == nil || r.Options == nil {
+		return nil, false, fmt.Errorf("backfill routes are not initialized")
 	}
-	return marketfetch.CollectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: provider, SourceID: sourceID, MarketType: marketType}), nil
+	tasks, err := r.Tasks.ListKline(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, false, fmt.Errorf("list collection tasks of dataset %s: %w", datasetID, err)
+	}
+	for _, task := range tasks {
+		params, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		if parseErr != nil {
+			return nil, false, fmt.Errorf("parse collection task %s: %w", task.TaskID, parseErr)
+		}
+		if params.Frequency != frequency {
+			continue
+		}
+		tagIDs := normalizedTaskTagIDs(task.TagIDs)
+		if len(tagIDs) == 0 {
+			return nil, false, fmt.Errorf("collection task %s has no tags", task.TaskID)
+		}
+		// 任务的标签同属一个数据源与市场（建任务时校验），取第一个即可。
+		tag, tagErr := r.Tags.GetTag(ctx, spaceID, tagIDs[0])
+		if tagErr != nil || tag == nil {
+			return nil, false, fmt.Errorf("load tag %s of collection task %s: %v", tagIDs[0], task.TaskID, tagErr)
+		}
+		market, routeErr := routeMarket(task, params, tagattr.Source(tag), tagattr.MarketType(tag), r.ResolveSourceID)
+		if routeErr != nil {
+			return nil, false, fmt.Errorf("route of collection task %s: %w", task.TaskID, routeErr)
+		}
+		options, optionsErr := r.Options(spaceID)
+		if optionsErr != nil {
+			return nil, false, optionsErr
+		}
+		sample := TaskGroup{Provider: market.Provider, MarketType: market.MarketType, MarketID: market.MarketID, InstrumentType: market.InstrumentType, SourceID: market.SourceID, DatasetID: datasetID, Frequency: frequency}
+		return &marketfetch.Plan{V: 1, Market: market, Fetch: options.planFetch(sample), Datasets: []marketfetch.PlanDataset{{
+			DatasetID: datasetID, Frequency: frequency, OutputFields: normalizeOutputFields(params.OutputFields),
+		}}}, true, nil
+	}
+	return nil, false, nil
 }
 
 // marketIdentity 规范化任务的市场与品种：任务没写品种时由市场的标的规则按标签的 market_type 决定。

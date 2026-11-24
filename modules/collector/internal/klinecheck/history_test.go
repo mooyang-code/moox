@@ -79,7 +79,7 @@ func TestScanHistoryScansOneDatasetPerSpacingAndOncePerInterval(t *testing.T) {
 	}
 	now := base.Add(48 * time.Hour)
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Routes: fakeRoutes{}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	first, err := backfiller.ScanHistory(ctx, "crypto")
@@ -125,7 +125,7 @@ func TestScanHistoryRetriesAfterAnHourWhenReadingFails(t *testing.T) {
 	now := base.Add(48 * time.Hour)
 	checker := &Checker{Timeline: fakePlans{records}, Rows: failingRows{errors.New("read timeout")}, Now: func() time.Time { return now }}
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: checker, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: checker, Store: repo, Routes: fakeRoutes{}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	_, err := backfiller.ScanHistory(ctx, "crypto")
@@ -153,7 +153,7 @@ func TestConfirmHistoryCreatesAJobForTheScannedGaps(t *testing.T) {
 	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT")}
 	now := base.Add(48 * time.Hour)
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: rows, Absences: repo, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: rows, Absences: repo, Now: func() time.Time { return now }}, Store: repo, Routes: fakeRoutes{}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	empty, _, err := backfiller.ConfirmHistory(ctx, "crypto", "ds", "1m")
@@ -199,7 +199,7 @@ func TestScansSkipDatasetsThatStoppedCollecting(t *testing.T) {
 
 	now := base.Add(48 * time.Hour)
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: failingRows{errors.New("dataset has no active view")}, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: failingRows{errors.New("dataset has no active view")}, Now: func() time.Time { return now }}, Store: repo, Routes: fakeRoutes{}, Now: func() time.Time { return now }}
 	result, err := backfiller.ScanHistory(context.Background(), "crypto")
 	require.NoError(t, err)
 	require.Nil(t, result)

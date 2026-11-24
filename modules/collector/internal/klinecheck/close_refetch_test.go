@@ -52,7 +52,7 @@ func closeRefetchFixture(t *testing.T) (*Backfiller, *store.Store, *time.Time) {
 	clock := func() time.Time { return *now }
 	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: &fakeRows{}, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	backfiller := &Backfiller{
-		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), BaseCtx: context.Background(), Now: clock,
+		Checker: checker, Store: db.Backfill(), Routes: fakeRoutes{}, BaseCtx: context.Background(), Now: clock,
 		CloseRefetch: markets.CloseRefetchDay,
 	}
 	return backfiller, db, now

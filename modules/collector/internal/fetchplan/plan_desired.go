@@ -76,6 +76,22 @@ type PlanDatasetState struct {
 	OutputFields []string `json:"output_fields,omitempty"`
 	// Ingest 是数据集所在的执行端（scf、stream、local），空表示 scf。
 	Ingest string `json:"ingest,omitempty"`
+	// Symbols 是每个标的的交易所符号（标的 → 符号，与函数计划的 ExchangeSymbol 一致）。不进 Hash；
+	// 变化时数据集同样要选生效周期，并在标的时间线上写一行，补采按时间线取改名前的旧符号。
+	Symbols map[string]string `json:"symbols,omitempty"`
+}
+
+// sameSymbols 比较两份交易所符号映射。
+func sameSymbols(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for subject, symbol := range left {
+		if other, ok := right[subject]; !ok || other != symbol {
+			return false
+		}
+	}
+	return true
 }
 
 // IngestOrSCF 返回数据集的执行端，空视为 scf。
@@ -245,6 +261,16 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			return nil, fmt.Errorf("dataset %s %s: %w", dataset.DatasetID, dataset.Frequency, err)
 		}
 		dataset.Series, dataset.Hash, dataset.Count = set.Series, set.Hash, uint32(len(set.Series))
+		// 交易所符号与函数计划同一规则：有外部符号用它，否则去掉连字符（见 marketfetch.Plan.ExchangeSymbol）。
+		external := markets[datasetMarket[datasetKey]].external
+		dataset.Symbols = make(map[string]string, len(subjectSets[datasetKey]))
+		for subject := range subjectSets[datasetKey] {
+			symbol := external[subject]
+			if symbol == "" {
+				symbol = strings.ReplaceAll(subject, "-", "")
+			}
+			dataset.Symbols[subject] = symbol
+		}
 		dataset.index = make(map[string]uint32, len(set.Series))
 		for i, item := range set.Series {
 			dataset.index[item.Key()] = uint32(i)

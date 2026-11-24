@@ -44,11 +44,6 @@ type RowCounter interface {
 	CountTimeSeriesRows(context.Context, *storagepb.CountTimeSeriesRowsReq, ...client.Option) (*storagepb.CountTimeSeriesRowsRsp, error)
 }
 
-// PlanHistory 返回空间的全部采集计划。只有补采用它：按历史计划找当时负责某个标的的函数与交易所符号映射（loadPlanHistory）。
-type PlanHistory interface {
-	ListAll(context.Context, string) ([]*store.FetchPlanRecord, error)
-}
-
 // Checker 按标的时间线得到应有标的与时间点，读取 Storage 行比对出缺口。
 type Checker struct {
 	Timeline    TimelineSource

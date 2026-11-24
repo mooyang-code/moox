@@ -17,10 +17,6 @@ type recordedPlans struct {
 	cleared int
 }
 
-func (p *recordedPlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, error) {
-	return p.records, nil
-}
-
 func (p *recordedPlans) ListBySpace(context.Context, string) ([]store.SeriesTimelineEntry, error) {
 	return timelineRows(p.records[p.cleared:]), nil
 }
@@ -92,14 +88,14 @@ func TestTimelineRestartsAtTheReregisteredPeriod(t *testing.T) {
 
 	next.Progress = `{"registered":{"ds|1m":true}}`
 	timeline = plans.timeline()
-	require.Equal(t, []Segment{{From: restart.Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15}}, timeline["ds|1m"])
+	require.Equal(t, []Segment{{From: restart.Unix(), Subjects: []string{"A-USDT", "B-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT", "B-USDT": "BUSDT"}, LatenessS: 15}}, timeline["ds|1m"])
 
 	next.Status = store.FetchPlanApplied
 	plans.records = append(plans.records, record(t, 4, store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"))
 	timeline = plans.timeline()
 	require.Equal(t, []Segment{
-		{From: restart.Unix(), To: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15},
-		{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15},
+		{From: restart.Unix(), To: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT", "B-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT", "B-USDT": "BUSDT"}, LatenessS: 15},
+		{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT"}, LatenessS: 15},
 	}, timeline["ds|1m"], "重新登记之后的计划变更照常延续时间线")
 }
 
@@ -125,7 +121,7 @@ func TestTimelineResetCoversRetiredDatasets(t *testing.T) {
 		recordFor(t, 5, "retired", store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"),
 	)
 	timeline = plans.timeline()
-	require.Equal(t, []Segment{{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15}}, timeline["retired|1m"], "重新启用后从新的生效周期开始")
+	require.Equal(t, []Segment{{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT"}, LatenessS: 15}}, timeline["retired|1m"], "重新启用后从新的生效周期开始")
 	require.Equal(t, restart.Unix(), timeline["ds|1m"][0].From)
 }
 
@@ -175,7 +171,7 @@ func TestScansFollowTheReregisteredPeriod(t *testing.T) {
 	markMissing(rows, "A-USDT", base, restart)
 	now := restart.Add(3*time.Hour + 3*time.Minute) // 落后超过一个自动补采窗口，且已过槽内偏移
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Timeline: plans, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: plans, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: plans, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Routes: fakeRoutes{}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))

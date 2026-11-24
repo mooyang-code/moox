@@ -52,12 +52,47 @@ func TestFetchPlanAllowsOneOpenPlanPerSpace(t *testing.T) {
 	next, err := repo.Create(ctx, "crypto", `{"v":3}`, "")
 	require.NoError(t, err, "已生效之后可以保存下一份计划")
 	require.Greater(t, next.ID, record.ID)
-	history, err := repo.ListAll(ctx, "crypto")
-	require.NoError(t, err)
-	require.Len(t, history, 2, "ListAll 返回全部计划（含未生效的），按先后顺序")
-	require.Error(t, repo.Update(ctx, history[0].ID, FetchPlanPending, `{}`, ""), "已生效的计划不能被改回其他状态")
+	require.Len(t, plansOf(t, repo, "crypto"), 2, "未生效的一份与最近已生效的一份")
+	require.Error(t, repo.Update(ctx, record.ID, FetchPlanPending, `{}`, ""), "已生效的计划不能被改回其他状态")
 	again, _ := repo.LatestApplied(ctx, "crypto")
 	require.Equal(t, FetchPlanApplied, again.Status)
+}
+
+// plansOf 按先后返回空间的全部计划记录（测试直接读表）。
+func plansOf(t *testing.T, repo *FetchPlanRepository, spaceID string) []*FetchPlanRecord {
+	t.Helper()
+	var rows []fetchPlanRow
+	require.NoError(t, repo.db.Where("c_space_id = ?", spaceID).Order("c_id ASC").Find(&rows).Error)
+	records := make([]*FetchPlanRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, row.record())
+	}
+	return records
+}
+
+// 一份计划生效时删掉同空间更早的已生效计划：每个空间只留未生效的一份与最近已生效的一份，别的空间不受影响。
+func TestAppliedPlanPrunesOlderAppliedPlans(t *testing.T) {
+	ctx := context.Background()
+	repo := openPlanTestStore(t).FetchPlans()
+	other, err := repo.Create(ctx, "stockcn", `{"v":1}`, "")
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(ctx, other.ID, FetchPlanApplied, `{}`, ""))
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		record, err := repo.Create(ctx, "crypto", `{"v":1}`, "")
+		require.NoError(t, err)
+		require.NoError(t, repo.Update(ctx, record.ID, FetchPlanApplying, `{}`, ""))
+		require.Len(t, plansOf(t, repo, "crypto"), min(i, 1)+1, "生效之前旧的那份还在")
+		require.NoError(t, repo.Update(ctx, record.ID, FetchPlanApplied, `{}`, ""))
+		ids = append(ids, record.ID)
+	}
+	open, err := repo.Create(ctx, "crypto", `{"v":4}`, "")
+	require.NoError(t, err)
+	got := plansOf(t, repo, "crypto")
+	require.Len(t, got, 2)
+	require.Equal(t, ids[2], got[0].ID)
+	require.Equal(t, open.ID, got[1].ID)
+	require.Len(t, plansOf(t, repo, "stockcn"), 1)
 }
 
 func TestBackfillJobChunksClaimAndWatermark(t *testing.T) {
