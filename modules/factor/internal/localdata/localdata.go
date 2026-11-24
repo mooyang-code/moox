@@ -1184,10 +1184,11 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 		rows[subject] = seriessync.ColumnsToFrame(subject, target, plan.CarryColumns, types)
 	}
 	// 实时周期（追赶读磁盘）按目标那一根判断；补算与只填充的区间只看期望序列有没有数据。
+	// 计划里没有这个标的的期望序列（试算先读入、再按读到的数据补期望序列）时不判断。
 	tagOf := plan.ExpectedTags()
 	live, target := plan.Mode == pipeline.ModeLive, plan.TargetEnd.Add(-step).Unix()
 	for _, subject := range subjects {
-		if got[subject] != nil && seriesMissingAt(view, subject, tagOf[subject], target, live) {
+		if tag, expected := tagOf[subject]; expected && got[subject] != nil && seriesMissingAt(view, subject, tag, target, live) {
 			failed = append(failed, subject)
 		}
 	}

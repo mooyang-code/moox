@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
 )
@@ -41,4 +42,17 @@ func TestRealRowsAtRequiresAPreparedSource(t *testing.T) {
 	fx := newFixture(t, mean3())
 	_, err := fx.data.RealRowsAt(context.Background(), fx.set.Set, []string{"BTC"}, at(10))
 	require.ErrorIs(t, err, storageio.ErrInfra)
+}
+
+// 没有期望序列的读入（试算先读入、再按读到的数据补期望序列）：本地有数据的标的不判失败。
+func TestLoadSubjectsWithoutExpectedSeriesKeepsSubjectsAvailable(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(7), TargetEnd: at(10),
+		Expected: []string{"BTC"}, Available: []string{"BTC"}}
+	plan, loaded, err := fx.runner.LoadSubjects(context.Background(), plan)
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTC"}, loaded.Available)
+	require.Equal(t, plainSeries("BTC"), plan.ExpectedSeries)
 }
