@@ -28,7 +28,7 @@ export interface ReplayFormState {
   input: ReplayInput;
   /** 从实例发起时实例引用的策略定义（页面按实例 ID 读回）；只用来判断是不是策略池，没读到时为空。 */
   instance_strategy_id?: string;
-  /** 后端按定义或 DSL 草稿推出的要绑定的任务（页面读回）；从实例发起或还没读到时为空。 */
+  /** 后端按定义或 DSL 草稿推出的要绑定的任务（页面读回；从实例发起时按实例引用的定义）；还没读到时为空。 */
   requirement?: StrategyTaskRequirement | null;
 }
 
@@ -79,11 +79,15 @@ export function replayDeclared(form: ReplayFormState): boolean {
 }
 
 /**
- * 回放要读取任务的市场（现货、永续、股票先后）：从实例发起时就是预填的实例任务的键；其余按后端推出的主帧市场
- * （参考市场只用于实时的年龄判定，回放不读），没写 market 时只读一个任务，市场取用户选的。
+ * 回放要读取任务的市场（现货、永续、股票先后），只含主帧市场（参考市场只用于实时的年龄判定，回放不读）：
+ * 从实例发起时是预填的实例任务的键去掉参考市场（参考市场按实例引用的定义读出）；其余按后端推出的主帧市场，
+ * 没写 market 时只读一个任务，市场取用户选的。
  */
 export function replayMarkets(form: ReplayFormState): string[] {
-  if (form.instance_id) return MARKET_ORDER.filter(market => form.tasks[market]);
+  if (form.instance_id) {
+    const references = form.requirement?.referenceMarkets ?? [];
+    return MARKET_ORDER.filter(market => form.tasks[market] && !references.includes(market));
+  }
   return mainMarkets(form.requirement, form.single_market);
 }
 

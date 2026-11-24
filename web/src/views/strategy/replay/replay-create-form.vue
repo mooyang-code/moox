@@ -138,11 +138,11 @@ const props = defineProps<{ strategies: Strategy[]; tasks: FactorTask[]; tasksLo
 const zone = useDisplayZone();
 
 // 要读哪些市场的任务由后端按定义或 DSL 草稿推出（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
-// 从实例发起时任务已预填，不用读。
+// 从实例发起时任务已预填，按实例引用的定义读出参考市场（回放不读参考市场的任务）。
 const { requirement } = useTaskRequirement(
   computed(() =>
     form.value.instance_id
-      ? {}
+      ? { strategyId: form.value.instance_strategy_id }
       : form.value.source === "dsl"
         ? { dsl: form.value.dsl_yaml }
         : { strategyId: form.value.strategy_id }

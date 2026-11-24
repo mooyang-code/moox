@@ -6,9 +6,9 @@ import { replaySourceOf, wholeDays, type ReplayFormState } from "./replay-form-m
 
 // 页面会把后端按定义或 DSL 草稿推出的要求写进 form.requirement；这里按同样的规则模拟，测试仍按（表单, 定义列表）调用。
 function withRequirement(form: ReplayFormState, list: Strategy[]): ReplayFormState {
-  if (form.instance_id) return form;
-  const dsl = model.replayDslText(form, list);
   const lookup = (id: string) => list.find(item => item.strategy_id === id)?.dsl_yaml ?? null;
+  // 从实例发起时按实例引用的定义读
+  const dsl = form.instance_id ? (lookup(form.instance_strategy_id ?? "") ?? "") : model.replayDslText(form, list);
   return { ...form, requirement: dsl ? fixtureRequirement(dsl, lookup) : null };
 }
 const replayPool = (form: ReplayFormState, list: Strategy[]) => model.replayPool(withRequirement(form, list));
@@ -160,6 +160,16 @@ describe("写了参考市场的策略", () => {
     expect(replayFactorTasks(form, withReference)).toEqual({ spot: "ftask_spot" });
     expect(validateReplayForm({ ...form, input: "compute" }, withReference)).toBe("");
     expect(replayFundingColumn(form, withReference)).toBe("");
+  });
+
+  it("从实例发起时同样去掉参考市场的任务：因子现算可用，不带资金费列", () => {
+    const instanceForm = { ...form, instance_id: "i1", instance_strategy_id: "r" };
+    expect(replayMarkets(instanceForm, withReference)).toEqual(["spot"]);
+    expect(replayFactorTasks(instanceForm, withReference)).toEqual({ spot: "ftask_spot" });
+    expect(validateReplayForm({ ...instanceForm, input: "compute" }, withReference)).toBe("");
+    expect(replayFundingColumn(instanceForm, withReference)).toBe("");
+    // 实例引用的定义还没读到时照常读全部任务
+    expect(replayMarkets({ ...instanceForm, instance_strategy_id: "" }, withReference)).toEqual(["spot", "swap"]);
   });
 });
 
