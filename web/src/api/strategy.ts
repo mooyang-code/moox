@@ -1,4 +1,5 @@
 import { call, RequestError } from "@/api/http";
+import { readAllPages } from "@/api/read-all-pages";
 import type {
   DisplayHidden,
   InstrumentTarget,
@@ -263,14 +264,13 @@ export async function listInstances(
 }
 
 /** 读当前空间的全部实例：每页 200 个，最多读 10 页（单用户场景下足够）。 */
-export async function listAllInstances(): Promise<StrategyInstance[]> {
-  const all: StrategyInstance[] = [];
-  for (let page = 1; page <= 10; page += 1) {
+export function listAllInstances(): Promise<StrategyInstance[]> {
+  let read = 0;
+  return readAllPages(async page => {
     const rsp = await listInstances({ page, page_size: 200 });
-    all.push(...rsp.items);
-    if (!rsp.items.length || all.length >= rsp.page.total) break;
-  }
-  return all;
+    read += rsp.items.length;
+    return { items: rsp.items, hasMore: read < rsp.page.total };
+  });
 }
 
 export async function setInstanceEnabled(instance_id: string, enabled: boolean) {

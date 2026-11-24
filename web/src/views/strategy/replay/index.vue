@@ -298,7 +298,7 @@ import { cancelReplay, getInstance, getReplay, listReplayBars, listReplays, star
 import type { PageResult } from "@/api/strategy";
 import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportError, serverNow } from "@/api/http";
-import { listFactorTasks } from "@/api/factor";
+import { listAllFactorTasks } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
@@ -555,13 +555,8 @@ async function loadTasks() {
   if (!spaceId) return;
   tasksLoading.value = true;
   try {
-    const items: FactorTask[] = [];
-    for (let page = 1; ; page += 1) {
-      const rsp = await listFactorTasks({ page: { page, size: 200 } });
-      if (gen !== generation) return;
-      items.push(...(rsp.factor_tasks || []).map(info => info.factor_task));
-      if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) break;
-    }
+    const items = (await listAllFactorTasks()).map(info => info.factor_task);
+    if (gen !== generation) return;
     // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）。
     tasks.value = items.filter(task => task.space_id === spaceId && task.status !== "pending");
     errors.tasks = "";

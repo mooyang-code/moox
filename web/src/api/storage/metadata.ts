@@ -1,4 +1,5 @@
 import { call, type CallOptions } from "@/api/http";
+import { readAllPages } from "@/api/read-all-pages";
 import type {
   DataSource,
   Dataset,
@@ -219,24 +220,18 @@ export async function listAllViewColumns(spaceId: string, viewId: string) {
   return items;
 }
 
-/** 分页读取空间内全部数据集（最多 20 页 × 500 条）。 */
-export async function listAllDatasets(spaceId: string, options?: CallOptions) {
-  const items: Dataset[] = [];
-  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
-    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size: 500 } }, options);
-    items.push(...(rsp.datasets || []));
-    if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
-  }
-  return items;
+/** 空间内全部数据集（翻完所有页）。 */
+export function listAllDatasets(spaceId: string, options?: CallOptions) {
+  return readAllPages(async page => {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page, size: 500 } }, options);
+    return { items: rsp.datasets || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
-/** 分页读取空间内全部 View（最多 20 页 × 500 条）。 */
-export async function listAllViews(spaceId: string, options?: CallOptions) {
-  const items: View[] = [];
-  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
-    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size: 500 } }, options);
-    items.push(...(rsp.views || []));
-    if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
-  }
-  return items;
+/** 空间内全部 View（翻完所有页）。 */
+export function listAllViews(spaceId: string, options?: CallOptions) {
+  return readAllPages(async page => {
+    const rsp = await listViews({ space_id: spaceId, page: { page, size: 500 } }, options);
+    return { items: rsp.views || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }

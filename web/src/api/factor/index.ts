@@ -1,4 +1,5 @@
 import { callFactor } from "./http";
+import { readAllPages } from "@/api/read-all-pages";
 import type {
   EngineStatus,
   FactorCategory,
@@ -53,6 +54,14 @@ export function deleteFactorTask(task_id: string, purge = false) {
 
 export function listFactorTasks(params: ListFactorTasksReq = {}) {
   return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
+}
+
+/** 全部计算任务（翻完所有页，不限空间：调用方按 space_id 过滤）。 */
+export function listAllFactorTasks() {
+  return readAllPages(async page => {
+    const rsp = await listFactorTasks({ page: { page, size: 200 } });
+    return { items: rsp.factor_tasks || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
 }
 
 /** 读取一个计算任务；任务不存在时抛出错误码为 NOT_FOUND 的 RequestError。 */

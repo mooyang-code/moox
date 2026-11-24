@@ -103,7 +103,7 @@ import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatRetention } from "@/utils/retention";
 import {
   archivableDataset,
@@ -151,27 +151,27 @@ const nowMs = ref(Date.now());
 const runsRefreshKey = ref(0);
 // 行内按钮按任务记“处理中”，不共用一个 busy
 const busy = ref<Record<string, boolean>>({});
-const mainGate = new RequestGate();
-const datasetGate = new RequestGate();
+const mainGate = createLatestRequestGuard();
+const datasetGate = createLatestRequestGuard();
 
 const errorText = (error: unknown) => (error instanceof Error && error.message ? error.message : "请稍后重试");
 
 async function loadMain() {
   if (!spaceId.value) return;
-  const token = mainGate.next();
+  const token = mainGate.begin();
   try {
     const [nextOverview, list] = await Promise.all([getArchiveOverview(), listArchiveTasks({ page: 1, size: 100 })]);
-    if (!mainGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     overview.value = nextOverview;
     tasks.value = list.tasks || [];
     mainLoaded.value = true;
     mainError.value = "";
     lastOkAt.value = Date.now();
   } catch (error) {
-    if (error instanceof StaleSpaceRequestError || !mainGate.isCurrent(token)) return;
+    if (error instanceof StaleSpaceRequestError || !token.isLatest()) return;
     mainError.value = errorText(error);
   } finally {
-    if (mainGate.isCurrent(token)) nowMs.value = Date.now();
+    if (token.isLatest()) nowMs.value = Date.now();
   }
 }
 
@@ -179,15 +179,15 @@ async function loadMain() {
 async function loadDatasets() {
   const space = spaceId.value;
   if (!space) return;
-  const token = datasetGate.next();
+  const token = datasetGate.begin();
   datasetsError.value = "";
   try {
     const all = await listAllDatasets(space);
-    if (!datasetGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     datasets.value = all;
     datasetsLoaded.value = true;
   } catch (error) {
-    if (error instanceof StaleSpaceRequestError || !datasetGate.isCurrent(token)) return;
+    if (error instanceof StaleSpaceRequestError || !token.isLatest()) return;
     datasetsError.value = errorText(error);
   }
 }

@@ -4,6 +4,7 @@
  * - 任一读取失败（包括 archive-mgr 没部署）时什么都不显示，不能把读不到当成“未归档”。
  */
 import { computed, shallowRef, watch, type Ref } from "vue";
+import { readAllPages } from "@/api/read-all-pages";
 import { listArchiveTasks, type ArchiveTask } from "@/api/archive";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
@@ -26,14 +27,14 @@ export interface ArchiveCoverage {
 }
 
 /** 当前空间的全部数据集（翻完所有页）。 */
-export async function listAllDatasets(spaceId: string): Promise<Dataset[]> {
-  const all: Dataset[] = [];
-  for (let page = 1; ; page += 1) {
+export function listAllDatasets(spaceId: string): Promise<Dataset[]> {
+  let read = 0;
+  return readAllPages(async page => {
     const rsp = await listDatasets({ space_id: spaceId, page: { page, size: 200 } });
     const items = rsp.datasets || [];
-    all.push(...items);
-    if (!items.length || !(rsp.page_result?.has_more || all.length < Number(rsp.page_result?.total || 0))) return all;
-  }
+    read += items.length;
+    return { items, hasMore: Boolean(rsp.page_result?.has_more) || read < Number(rsp.page_result?.total || 0) };
+  });
 }
 
 export async function loadArchiveCoverage(spaceId: string, nowMs = Date.now()): Promise<ArchiveCoverageData | null> {

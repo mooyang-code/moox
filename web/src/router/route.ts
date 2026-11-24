@@ -69,15 +69,9 @@ export const layoutRoutes = [
   {
     path: "/factor",
     name: "factor-compute",
-    redirect: "/factor/overview",
+    redirect: "/factor/tasks",
     meta: { title: "因子计算", svgIcon: "experiment" },
     children: [
-      {
-        path: "/factor/overview",
-        name: "factor-overview",
-        component: () => import("@/views/factor/overview/index.vue"),
-        meta: { title: "因子总览" }
-      },
       {
         path: "/factor/definitions",
         name: "factor-definitions",
@@ -107,15 +101,9 @@ export const layoutRoutes = [
   {
     path: "/strategy",
     name: "strategy",
-    redirect: "/strategy/overview",
+    redirect: "/strategy/tasks",
     meta: { title: "策略管理", svgIcon: "mind-mapping" },
     children: [
-      {
-        path: "/strategy/overview",
-        name: "strategy-overview",
-        component: () => import("@/views/strategy/overview/index.vue"),
-        meta: { title: "策略总览" }
-      },
       {
         path: "/strategy/definitions",
         name: "strategy-definitions",

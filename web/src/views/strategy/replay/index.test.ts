@@ -26,7 +26,10 @@ vi.mock("@/api/strategy", () => ({
   startReplay: api.startReplay,
   cancelReplay: api.cancelReplay
 }));
-vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
+vi.mock("@/api/factor", async () => {
+  const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
+  return { listFactorTasks: api.listFactorTasks, listAllFactorTasks: allFactorTasksFrom(api.listFactorTasks) };
+});
 vi.mock("@/api/http", () => ({ reportError: api.reportError, serverNow: () => api.serverNow }));
 // 确认对话框直接当作点了确认
 vi.mock("@arco-design/web-vue", () => ({

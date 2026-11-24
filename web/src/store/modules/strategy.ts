@@ -1,73 +1,24 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
-import { RequestError } from "@/api/http";
-import {
-  deleteStrategy,
-  getInstance,
-  getStrategy,
-  getStrategyResult,
-  listInstances,
-  listStrategies,
-  listStrategyResults,
-  listStrategyTargets
-} from "@/api/strategy";
-import type {
-  Strategy,
-  StrategyInstance,
-  StrategyResult,
-  StrategyResultDetail,
-  StrategyTargetSnapshot
-} from "@/api/strategy-types";
+import { errorMessage } from "@/api/http";
+import { deleteStrategy, listStrategies } from "@/api/strategy";
+import type { Strategy } from "@/api/strategy-types";
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
-
-/** 定义的读取结果：loaded 已读取；missing 服务端确认不存在；error 读取失败（不等于已删除）。 */
-export type StrategyDefinitionStatus = "unknown" | "loaded" | "missing" | "error";
-
-function isNotFound(error: unknown): boolean {
-  if (!(error instanceof RequestError)) return false;
-  const code = error.response?.ret_info?.code;
-  return code === 5 || code === "5" || code === "NOT_FOUND";
-}
-
+/** 策略定义：定义页的分页列表与运行页、回放页共用的完整目录。实例列表与实例详情见 views/strategy 下的组合函数。 */
 export const useStrategyStore = defineStore("strategy", () => {
   // strategies 是定义页当前页的分页列表；strategyCatalog 是完整目录（运行页、回放页的下拉与名称查找）。两者各有请求序号，
   // 迟到的分页响应不能覆盖完整目录。
   const strategies = ref<Strategy[]>([]);
   const strategyCatalog = ref<Strategy[]>([]);
-  const instances = ref<StrategyInstance[]>([]);
-  const instance = ref<StrategyInstance | null>(null);
-  const strategy = ref<Strategy | null>(null);
-  const strategyStatus = ref<StrategyDefinitionStatus>("unknown");
-  const results = ref<StrategyResult[]>([]);
-  const resultDetails = ref<Record<string, StrategyResultDetail>>({});
-  const targetSnapshot = ref<StrategyTargetSnapshot | null>(null);
   const totalStrategies = ref(0);
   const strategiesComplete = ref(false);
-  const totalInstances = ref(0);
-  const totalResults = ref(0);
-  // 加载与错误按资源分开：定义分页列表（listLoading/error）、完整目录、实例列表互不覆盖。
+  // 加载与错误按资源分开：定义分页列表（listLoading/error）与完整目录互不覆盖。
   const listLoading = ref(false);
   const catalogLoading = ref(false);
   const catalogError = ref("");
-  const instancesLoading = ref(false);
-  const instancesError = ref("");
-  const detailLoading = ref(false);
   const error = ref("");
-  const detailError = ref("");
-  // 历史结果的加载与错误独立于实例详情：结果读取失败不能算成“实例详情加载失败”，也不能挡住启停后的状态核对。
-  // loadedResultPage/loadedResultAllHistory 是当前表格里数据所属的页与范围：翻页失败时页面据此把页码退回去。
-  const resultsLoading = ref(false);
-  const resultsError = ref("");
-  const loadedResultPage = ref(1);
-  const loadedResultAllHistory = ref(false);
-  let detailRequest = 0;
-  let resultRequest = 0;
   let strategiesRequest = 0;
   let catalogRequest = 0;
-  let instancesRequest = 0;
 
   async function loadStrategies(params: Parameters<typeof listStrategies>[0] = {}) {
     const requestId = ++strategiesRequest;
@@ -117,151 +68,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     catalogLoading.value = false;
   }
 
-  /** background：后台刷新，不转加载态、不先清错误、不弹全局提示。 */
-  async function loadInstances(params: Parameters<typeof listInstances>[0] = {}, options: { background?: boolean } = {}) {
-    const requestId = ++instancesRequest;
-    if (!options.background) {
-      instancesLoading.value = true;
-      instancesError.value = "";
-    }
-    try {
-      const result = await listInstances(params);
-      if (requestId !== instancesRequest) return;
-      instances.value = result.items;
-      totalInstances.value = result.page.total;
-      instancesError.value = "";
-    } catch (err) {
-      if (requestId === instancesRequest) instancesError.value = errorMessage(err, "策略实例加载失败");
-      throw err;
-    } finally {
-      if (requestId === instancesRequest) instancesLoading.value = false;
-    }
-  }
-
-  /** 切空间时清空实例列表并作废在途请求：新空间的请求失败时不能继续显示旧空间的实例。 */
-  function clearInstances() {
-    instancesRequest += 1;
-    instances.value = [];
-    totalInstances.value = 0;
-    instancesLoading.value = false;
-    instancesError.value = "";
-  }
-
-  /** 读取实例详情：实例 → 定义 → 最新目标；历史结果异步加载，不阻塞目标显示。 */
-  async function loadInstanceDetail(
-    instanceId: string,
-    page = 1,
-    pageSize = 20,
-    allHistory = false,
-    /** 后台轮询传 { silent: true }：不先清掉错误条，错误记在 detailError、resultsError 里由页面显示 */
-    options: { silent?: boolean } = {}
-  ) {
-    const requestId = ++detailRequest;
-    const resultRequestId = ++resultRequest;
-    const hadInstance = instance.value?.instance_id === instanceId;
-    detailLoading.value = true;
-    // 后台轮询不先清掉错误条（否则每轮闪一下），读取成功后再清
-    if (!options.silent) detailError.value = "";
-    try {
-      const current = await getInstance(instanceId);
-      if (requestId !== detailRequest) return false;
-      instance.value = current;
-      detailError.value = "";
-      // 定义读取失败不阻断实例详情，但要区分“已删除”与“读取失败”：只有服务端确认 NOT_FOUND 才算已删除。
-      let definition: Strategy | null = null;
-      let definitionStatus: StrategyDefinitionStatus = "loaded";
-      try {
-        definition = await getStrategy(current.strategy_id);
-      } catch (err) {
-        definitionStatus = isNotFound(err) ? "missing" : "error";
-      }
-      if (requestId !== detailRequest) return false;
-      strategy.value = definition;
-      strategyStatus.value = definitionStatus;
-      const resultTask =
-        current.session_id || allHistory
-          ? listStrategyResults(instanceId, {
-              session_id: allHistory ? undefined : current.session_id,
-              page,
-              page_size: pageSize
-            })
-          : Promise.resolve(null);
-      // 首次读取该实例时显示结果加载态；后台轮询刷新不遮罩，失败时保留上次的数据并提示。
-      const firstLoad = !hadInstance;
-      if (firstLoad) resultsLoading.value = true;
-      void resultTask
-        .then(response => {
-          if (requestId !== detailRequest || resultRequestId !== resultRequest) return;
-          results.value = response?.items ?? [];
-          totalResults.value = response?.page.total ?? 0;
-          loadedResultPage.value = page;
-          loadedResultAllHistory.value = allHistory;
-          resultsError.value = "";
-        })
-        .catch(err => {
-          if (requestId === detailRequest && resultRequestId === resultRequest)
-            resultsError.value = errorMessage(err, "策略结果加载失败");
-        })
-        .finally(() => {
-          if (requestId === detailRequest && resultRequestId === resultRequest) resultsLoading.value = false;
-        });
-      const targets = await listStrategyTargets(instanceId);
-      if (requestId !== detailRequest) return false;
-      targetSnapshot.value = targets;
-      return true;
-    } catch (err) {
-      if (requestId === detailRequest) detailError.value = errorMessage(err, "实例详情加载失败");
-      throw err;
-    } finally {
-      if (requestId === detailRequest) detailLoading.value = false;
-    }
-  }
-
-  /** 读取历史结果的一页：失败时保留当前表格的数据，错误记在 resultsError，调用方按 loadedResultPage 退回页码。 */
-  async function loadResultPage(page: number, pageSize = 20, allHistory = false) {
-    if (!instance.value) return;
-    if (!allHistory && !instance.value.session_id) {
-      // 使在途的“全部历史”请求作废：迟到的响应不能把旧结果填进无会话的“本次启用”表格。
-      resultRequest += 1;
-      results.value = [];
-      totalResults.value = 0;
-      loadedResultPage.value = 1;
-      loadedResultAllHistory.value = false;
-      resultsLoading.value = false;
-      resultsError.value = "";
-      return;
-    }
-    const requestId = ++resultRequest;
-    resultsLoading.value = true;
-    resultsError.value = "";
-    try {
-      const response = await listStrategyResults(instance.value.instance_id, {
-        page,
-        page_size: pageSize,
-        session_id: allHistory ? undefined : instance.value.session_id || undefined
-      });
-      if (requestId !== resultRequest) return;
-      results.value = response.items;
-      totalResults.value = response.page.total;
-      loadedResultPage.value = page;
-      loadedResultAllHistory.value = allHistory;
-    } catch (err) {
-      if (requestId === resultRequest) resultsError.value = errorMessage(err, "策略结果加载失败");
-      throw err;
-    } finally {
-      if (requestId === resultRequest) resultsLoading.value = false;
-    }
-  }
-
-  /** 读取一个结果的解释明细；同一结果只请求一次。 */
-  async function loadResultDetail(resultId: string): Promise<StrategyResultDetail> {
-    const cached = resultDetails.value[resultId];
-    if (cached) return cached;
-    const detail = await getStrategyResult(resultId);
-    resultDetails.value = { ...resultDetails.value, [resultId]: detail };
-    return detail;
-  }
-
   async function removeStrategy(strategyId: string) {
     await deleteStrategy(strategyId);
     strategies.value = strategies.value.filter(item => item.strategy_id !== strategyId);
@@ -269,58 +75,18 @@ export const useStrategyStore = defineStore("strategy", () => {
     totalStrategies.value = Math.max(0, totalStrategies.value - 1);
   }
 
-  function clearDetail() {
-    detailRequest += 1;
-    resultRequest += 1;
-    instance.value = null;
-    strategy.value = null;
-    strategyStatus.value = "unknown";
-    results.value = [];
-    resultDetails.value = {};
-    targetSnapshot.value = null;
-    totalResults.value = 0;
-    detailError.value = "";
-    resultsLoading.value = false;
-    resultsError.value = "";
-    loadedResultPage.value = 1;
-    loadedResultAllHistory.value = false;
-  }
-
   return {
     strategies,
     strategyCatalog,
-    instances,
-    instance,
-    strategy,
-    strategyStatus,
-    results,
-    resultDetails,
-    targetSnapshot,
     totalStrategies,
     strategiesComplete,
-    totalInstances,
-    totalResults,
     listLoading,
     catalogLoading,
     catalogError,
-    instancesLoading,
-    instancesError,
-    detailLoading,
     error,
-    detailError,
-    resultsLoading,
-    resultsError,
-    loadedResultPage,
-    loadedResultAllHistory,
     loadStrategies,
     loadAllStrategies,
     invalidateStrategyCatalog,
-    loadInstances,
-    clearInstances,
-    loadInstanceDetail,
-    loadResultPage,
-    loadResultDetail,
-    removeStrategy,
-    clearDetail
+    removeStrategy
   };
 });

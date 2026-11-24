@@ -5,7 +5,11 @@ import { listDatasets } from "@/api/storage/metadata";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { useFactorStore } from "./factor";
 
-vi.mock("@/api/factor", () => ({ listFactorTasks: vi.fn(), getFactorStatus: vi.fn() }));
+vi.mock("@/api/factor", async () => {
+  const listFactorTasks = vi.fn();
+  const { allFactorTasksFrom } = await import("../../../tests/factor-task-pages");
+  return { listFactorTasks, listAllFactorTasks: allFactorTasksFrom(listFactorTasks), getFactorStatus: vi.fn() };
+});
 vi.mock("@/api/storage/metadata", () => ({ listDatasets: vi.fn() }));
 
 const info = (taskId: string, spaceId = "crypto", members: FactorTaskInfo["members"] = []): FactorTaskInfo => ({

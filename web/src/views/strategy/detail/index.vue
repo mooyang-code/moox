@@ -6,30 +6,30 @@
           <a-button type="text" @click="goBackOr(router, instancesLink())"
             ><template #icon><icon-left /></template>返回</a-button
           >
-          <h2>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</h2>
-          <span class="mono">{{ store.instance?.instance_id || instanceId }}</span>
+          <h2>{{ detail.strategy?.name || detail.instance?.strategy_id || "策略实例" }}</h2>
+          <span class="mono">{{ detail.instance?.instance_id || instanceId }}</span>
           <span v-if="readAt" class="muted"> · 状态读取 {{ readAt }}</span>
         </div>
         <div class="page-actions">
           <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" /><span class="muted" aria-hidden="true"
             >自动刷新</span
-          ><a-button :disabled="!store.instance" @click="openReplay">回放</a-button
+          ><a-button :disabled="!detail.instance" @click="openReplay">回放</a-button
           ><a-button :loading="refreshing" aria-label="刷新实例详情" @click="refreshDetail"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
         </div>
       </div>
-      <a-alert v-if="store.detailError" type="error" show-icon class="top-alert"
-        >详情加载失败：{{ store.detailError
+      <a-alert v-if="detail.detailError" type="error" show-icon class="top-alert"
+        >详情加载失败：{{ detail.detailError
         }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
       <a-alert v-if="logicalAccountError" type="warning" show-icon class="top-alert">
         组合账户读取失败：{{ logicalAccountError }}。账户是否暂停、能否执行目标暂时无法确认。
         <template #action><a-button size="small" @click="reloadLogicalAccount">重试</a-button></template>
       </a-alert>
-      <a-alert v-if="store.instance?.missing_factor_tasks?.length" type="warning" show-icon class="top-alert">
+      <a-alert v-if="detail.instance?.missing_factor_tasks?.length" type="warning" show-icon class="top-alert">
         引用的计算任务
-        {{ store.instance.missing_factor_tasks.join("、") }} 已不存在，删除实例即可清理（到运行实例列表删除）；启用会失败。
+        {{ detail.instance.missing_factor_tasks.join("、") }} 已不存在，删除实例即可清理（到运行实例列表删除）；启用会失败。
       </a-alert>
       <a-alert v-if="logicalAccount?.automation_state === 'PAUSED'" type="warning" show-icon class="top-alert">
         组合账户已暂停，目标不会执行，需要到组合账户恢复自动执行。
@@ -45,61 +45,61 @@
           >
         </template>
       </a-alert>
-      <template v-if="store.instance">
+      <template v-if="detail.instance">
         <a-descriptions :column="{ xs: 1, md: 2, xl: 3 }" bordered size="small" class="summary">
           <a-descriptions-item label="实例状态"
             ><StatusBadge
-              :enabled="store.instance.enabled"
+              :enabled="detail.instance.enabled"
               :uncertain="controlUncertain"
-              :health="store.instance.health"
-              :trial="isTrialInstance(store.instance)"
+              :health="detail.instance.health"
+              :trial="isTrialInstance(detail.instance)"
           /></a-descriptions-item>
           <a-descriptions-item label="模式"
-            ><a-tag :color="store.instance.logical_account_id ? 'orange' : 'blue'">{{
-              store.instance.logical_account_id ? "交易模式" : "仅计算"
+            ><a-tag :color="detail.instance.logical_account_id ? 'orange' : 'blue'">{{
+              detail.instance.logical_account_id ? "交易模式" : "仅计算"
             }}</a-tag></a-descriptions-item
           >
           <a-descriptions-item label="策略定义"
-            >{{ store.strategy?.name || definitionHint }} · <span class="mono">{{ store.instance.strategy_id }}</span>
+            >{{ detail.strategy?.name || definitionHint }} · <span class="mono">{{ detail.instance.strategy_id }}</span>
             <div v-if="versionText" class="version-note">{{ versionText }}</div></a-descriptions-item
           >
-          <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="store.instance.factor_tasks" /></a-descriptions-item>
+          <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="detail.instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="运行会话"
-            ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
+            ><span class="mono">{{ detail.instance.session_id || "无当前会话" }}</span></a-descriptions-item
           >
           <a-descriptions-item label="组合账户"
             ><a-link
-              v-if="store.instance.logical_account_id"
+              v-if="detail.instance.logical_account_id"
               @click="
                 router.push({
-                  path: `/trading/accounts/${store.instance.logical_account_id}`
+                  path: `/trading/accounts/${detail.instance.logical_account_id}`
                 })
               "
-              >{{ logicalAccount?.name || store.instance.logical_account_id }}</a-link
+              >{{ logicalAccount?.name || detail.instance.logical_account_id }}</a-link
             ><span v-else>未关联账户</span></a-descriptions-item
           >
         </a-descriptions>
         <OperationPanel
           :instance-id="instanceId"
-          :enabled="store.instance.enabled"
+          :enabled="detail.instance.enabled"
           :uncertain="controlUncertain"
-          :logical-account-id="store.instance.logical_account_id"
-          :factor-tasks="store.instance.factor_tasks"
+          :logical-account-id="detail.instance.logical_account_id"
+          :factor-tasks="detail.instance.factor_tasks"
           @started="handleControlStarted"
           @changed="reconcileControl"
           @failed="handleControlFailed"
         />
         <InstanceResults
-          :instance="store.instance"
-          :snapshot="store.targetSnapshot"
+          :instance="detail.instance"
+          :snapshot="detail.targetSnapshot"
           :target-state="targetState"
-          :results="store.results"
-          :total="store.totalResults"
+          :results="detail.results"
+          :total="detail.totalResults"
           :page="resultPage"
           :page-size="resultPageSize"
           :scope="resultScope"
-          :loading="store.resultsLoading"
-          :error="store.resultsError"
+          :loading="detail.resultsLoading"
+          :error="detail.resultsError"
           :initial-loading="initialLoading"
           @page="loadResults"
           @retry="loadResults(resultPage, resultScope)"
@@ -107,18 +107,18 @@
         <a-collapse :bordered="false" class="extra-sections">
           <a-collapse-item key="bindings" header="输入绑定（会话固化的结果 View 列与成员契约）"
             ><ResolvedTable
-              :resolved-json="store.instance.resolved_json"
-              :pool="poolMembers(store.strategy?.dsl_yaml || '') !== null"
+              :resolved-json="detail.instance.resolved_json"
+              :pool="poolMembers(detail.strategy?.dsl_yaml || '') !== null"
           /></a-collapse-item>
           <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（最近一次提交、各期投递状态与外显设置）">
-            <StrategyFactorParams :instance="store.instance" />
+            <StrategyFactorParams :instance="detail.instance" />
           </a-collapse-item>
           <a-collapse-item key="definition" header="DSL 定义">
-            <pre class="code-block">{{ store.strategy?.dsl_yaml || definitionEmptyText }}</pre>
+            <pre class="code-block">{{ detail.strategy?.dsl_yaml || definitionEmptyText }}</pre>
           </a-collapse-item>
         </a-collapse>
       </template>
-      <a-empty v-else-if="!store.detailLoading" description="实例不存在或无法读取" />
+      <a-empty v-else-if="!detail.detailLoading" description="实例不存在或无法读取" />
     </div>
   </div>
 </template>
@@ -153,9 +153,9 @@ const autoRefresh = ref(true);
 // 读取到的实例不属于当前空间（例如从别的空间的链接进入）：停止刷新并回到实例列表。
 function leaveIfOtherSpace() {
   const currentSpaceId = spaceStore.selectedSpaceId;
-  if (store.instance && currentSpaceId && store.instance.space_id !== currentSpaceId) {
+  if (detail.instance && currentSpaceId && detail.instance.space_id !== currentSpaceId) {
     // 离开本页后组件卸载，轮询随之停止
-    store.clearDetail();
+    detail.clearDetail();
     router.replace(instancesLink());
     return true;
   }
@@ -163,7 +163,7 @@ function leaveIfOtherSpace() {
 }
 
 const {
-  store,
+  detail,
   resultPage,
   resultScope,
   resultPageSize,
@@ -187,24 +187,25 @@ const {
   account: logicalAccount,
   error: logicalAccountError,
   reload: reloadLogicalAccount
-} = useLogicalAccount(computed(() => store.instance?.logical_account_id));
+} = useLogicalAccount(computed(() => detail.instance?.logical_account_id));
 
 // 引用的计算任务已经不在的实例不再读因子参数：读取只会报错。
 const hasFactors = computed(
   () =>
-    Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)) && !store.instance?.missing_factor_tasks?.length
+    Boolean(detail.instance && parseFactorBinding(detail.instance.resolved_json)) &&
+    !detail.instance?.missing_factor_tasks?.length
 );
 // 实际运行的 DSL 版本（本会话最新结果的 dsl_hash），定义改过时提示停用再启用后生效
 const versionText = computed(() =>
-  store.instance ? runningVersionText(store.instance.session_id, store.results, store.strategy?.dsl_hash) : ""
+  detail.instance ? runningVersionText(detail.instance.session_id, detail.results, detail.strategy?.dsl_hash) : ""
 );
 const definitionHint = computed(() =>
-  store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
+  detail.strategyStatus === "missing" ? "定义已删除" : detail.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
 );
 const definitionEmptyText = computed(() =>
-  store.strategyStatus === "missing"
+  detail.strategyStatus === "missing"
     ? "定义已删除；历史结果的解释里保留了当时的 DSL 版本"
-    : store.strategyStatus === "error"
+    : detail.strategyStatus === "error"
       ? "定义读取失败（并非已删除），将在下次刷新时重试"
       : "定义读取中"
 );
@@ -218,7 +219,7 @@ async function refreshDetail() {
 /** 启停结果未知时重新读取实例，读到最新状态后解除“状态未知”。 */
 async function reconcileControl() {
   const applied = await load();
-  if (applied && !store.detailError) controlUncertain.value = false;
+  if (applied && !detail.detailError) controlUncertain.value = false;
 }
 function handleControlStarted() {
   controlUncertain.value = true;
@@ -227,8 +228,8 @@ function handleControlFailed() {
   controlUncertain.value = true;
 }
 function openReplay() {
-  if (store.instance)
-    router.push(replayLink({ instanceId: store.instance.instance_id, factorTasks: store.instance.factor_tasks }));
+  if (detail.instance)
+    router.push(replayLink({ instanceId: detail.instance.instance_id, factorTasks: detail.instance.factor_tasks }));
 }
 onMounted(start);
 watch(

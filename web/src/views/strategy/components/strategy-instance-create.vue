@@ -191,10 +191,9 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createInstance, getInstance, getStrategy, listInstances, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
-import { listFactorTasks } from "@/api/factor";
+import { listAllFactorTasks } from "@/api/factor";
 import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
-import type { FactorTaskInfo } from "@/api/factor/types";
 import {
   declaresFactorParams,
   enabledTasks,
@@ -415,15 +414,6 @@ function close() {
   emit("update:visible", false);
 }
 
-async function loadAllTasks() {
-  const items: FactorTaskInfo[] = [];
-  for (let page = 1; ; page += 1) {
-    const rsp = await listFactorTasks({ page: { page, size: 200 } });
-    items.push(...(rsp.factor_tasks || []));
-    if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) return items;
-  }
-}
-
 async function loadAllAccounts() {
   const items: LogicalAccount[] = [];
   for (let page = 1; ; page += 1) {
@@ -440,7 +430,7 @@ async function loadTasksList() {
   tasksLoading.value = true;
   tasksError.value = "";
   try {
-    const infos = await loadAllTasks();
+    const infos = await listAllFactorTasks();
     if (requestId !== tasksRequest || props.spaceId !== spaceId) return;
     tasks.value = enabledTasks(infos, spaceId);
   } catch (err) {

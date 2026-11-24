@@ -103,7 +103,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, ref } from "vue";
 import type { InstrumentTarget, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
-import { useStrategyStore } from "@/store/modules/strategy";
+import { getStrategyResult } from "@/api/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import { poolMembers } from "@/views/strategy/market-mode";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
@@ -128,7 +128,8 @@ const props = defineProps<{
   error?: string;
 }>();
 const emit = defineEmits<{ page: [number, "session" | "all"]; retry: [] }>();
-const store = useStrategyStore();
+// 解释明细按结果 ID 缓存：同一结果只请求一次
+const detailCache = new Map<string, StrategyResultDetail>();
 const explainVisible = ref(false);
 const explainLoading = ref(false);
 const explainError = ref("");
@@ -188,7 +189,8 @@ async function explain(record: StrategyResult) {
   explainError.value = "";
   detail.value = null;
   try {
-    const loaded = await store.loadResultDetail(record.result_id);
+    const loaded = detailCache.get(record.result_id) ?? (await getStrategyResult(record.result_id));
+    detailCache.set(record.result_id, loaded);
     if (requestId === explainRequest) detail.value = loaded;
   } catch (err) {
     if (requestId === explainRequest) explainError.value = err instanceof Error ? err.message : "解释明细加载失败";

@@ -299,7 +299,7 @@ import type {
 import { listDatasetColumns, listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { AsyncCodeEditor } from "@/components/code-editor/async";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { isBuiltinTemplate, specTemplate, type FactorTemplateKind } from "./editor-template";
@@ -327,7 +327,6 @@ import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { useSpaceStore } from "@/store/modules/space";
 import AddFactorModal from "@/views/factor/compute-tasks/add-factor-modal.vue";
 import { addFactorState } from "@/views/factor/compute-tasks/compute-tasks-model";
-import { createLatestRequestGuard } from "@/utils/latest-request";
 
 defineOptions({ name: "FactorEditor" });
 
@@ -354,17 +353,17 @@ const saving = ref(false);
 const saveError = ref("");
 const cursor = ref({ line: 1, column: 1 });
 const committed = ref(false);
-const loadGate = new RequestGate();
+const loadGate = createLatestRequestGuard();
 const editorRef = ref<{ insertAtCursor(text: string): boolean } | null>(null);
 
 const referenceDatasetId = ref("");
 const referenceDatasets = ref<Dataset[]>([]);
 const referenceColumns = ref<string[]>([]);
 const datasetsLoading = ref(false);
-const columnsGate = new RequestGate();
+const columnsGate = createLatestRequestGuard();
 
 const compile = ref<CompileState>({ status: "idle" });
-const validateGate = new RequestGate();
+const validateGate = createLatestRequestGuard();
 let validateTimer: ReturnType<typeof setTimeout> | undefined;
 
 const functions = ref<FactorFunction[]>([]);
@@ -382,7 +381,7 @@ const previewResult = ref<PreviewFactorRsp | null>(null);
 // 试算结果对应的定义：定义改了以后旧结果保留，但标明对应修改前的定义。
 const previewSpecKey = ref("");
 const previewOutdated = computed(() => Boolean(previewResult.value) && previewSpecKey.value !== specKey(form));
-const previewGate = new RequestGate();
+const previewGate = createLatestRequestGuard();
 
 const dirty = computed(() => JSON.stringify(form) !== original.value);
 const checklist = computed(() => factorChecklist(form, compile.value));
@@ -472,7 +471,7 @@ function resetForm(next = blankFactorForm()) {
 }
 
 async function load() {
-  const token = loadGate.next();
+  const token = loadGate.begin();
   loadError.value = "";
   committed.value = false;
   if (!editing.value) {
@@ -486,24 +485,24 @@ async function load() {
   loading.value = true;
   try {
     const rsp = await getFactor(factorId.value);
-    if (!loadGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     resetForm(formFromDefinition(rsp.factor));
     usages.value = rsp.usages || [];
     otherSpaceEnabled.value = rsp.other_space_enabled_count ?? 0;
   } catch (error) {
     // 切换空间造成的取消不是失败：空间监听会重新加载
-    if (loadGate.isCurrent(token) && !(error instanceof StaleSpaceRequestError)) {
+    if (token.isLatest() && !(error instanceof StaleSpaceRequestError)) {
       loadError.value = error instanceof Error ? error.message : "因子加载失败";
     }
   } finally {
-    if (loadGate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 
 /** 定义改动后防抖校验；只采用最后一次请求的结果。 */
 function scheduleValidate() {
   if (validateTimer) clearTimeout(validateTimer);
-  validateGate.next();
+  validateGate.invalidate();
   if (!form.spec.trim()) {
     compile.value = { status: "idle" };
     return;
@@ -512,12 +511,12 @@ function scheduleValidate() {
 }
 
 async function validateNow() {
-  const token = validateGate.next();
+  const token = validateGate.begin();
   const key = specKey(form);
   compile.value = { status: "checking" };
   try {
     const result = await validateFactorSpec(form.spec, form.allow_partial_universe, form.factor_id.trim());
-    if (!validateGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     if (result.valid) {
       compile.value = { status: "valid", spec: key, result };
       lastValid.value = result;
@@ -526,7 +525,7 @@ async function validateNow() {
       compile.value = { status: "invalid", spec: key, result };
     }
   } catch (error) {
-    if (validateGate.isCurrent(token)) {
+    if (token.isLatest()) {
       compile.value = { status: "error", message: error instanceof Error ? error.message : "接口调用失败" };
     }
   }
@@ -556,7 +555,7 @@ async function loadFunctions() {
 
 async function runPreview() {
   if (!canPreview.value) return;
-  const token = previewGate.next();
+  const token = previewGate.begin();
   previewing.value = true;
   previewError.value = "";
   previewDone.value = false;
@@ -565,17 +564,17 @@ async function runPreview() {
     const rsp = await previewFactor(
       previewRequest(form, { taskId: previewTaskId.value, subjects: previewSubjects.value, periods: previewPeriods.value })
     );
-    if (!previewGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     previewResult.value = rsp;
     previewSpecKey.value = requestKey;
     previewDone.value = true;
   } catch (error) {
-    if (previewGate.isCurrent(token)) {
+    if (token.isLatest()) {
       previewResult.value = null;
       previewError.value = error instanceof Error ? error.message : "试算失败";
     }
   } finally {
-    if (previewGate.isCurrent(token)) previewing.value = false;
+    if (token.isLatest()) previewing.value = false;
   }
 }
 
@@ -609,13 +608,13 @@ async function loadReferenceDatasets() {
 }
 
 function clearReferenceSelection() {
-  columnsGate.next();
+  columnsGate.invalidate();
   referenceDatasetId.value = "";
   referenceColumns.value = [];
 }
 
 async function loadReferenceColumns() {
-  const token = columnsGate.next();
+  const token = columnsGate.begin();
   referenceColumns.value = [];
   const spaceId = spaceStore.selectedSpaceId;
   if (!referenceDatasetId.value || !spaceId) return;
@@ -627,13 +626,13 @@ async function loadReferenceColumns() {
         dataset_id: referenceDatasetId.value,
         page: { page, size: PAGE_SIZE }
       });
-      if (!columnsGate.isCurrent(token) || spaceId !== spaceStore.selectedSpaceId) return;
+      if (!token.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
       columns.push(...(rsp.columns || []));
       if (!rsp.page_result?.has_more || !(rsp.columns || []).length) break;
     }
-    if (columnsGate.isCurrent(token)) referenceColumns.value = sourceInputColumns(columns);
+    if (token.isLatest()) referenceColumns.value = sourceInputColumns(columns);
   } catch (error) {
-    if (columnsGate.isCurrent(token)) Message.error(error instanceof Error ? error.message : "数据集列加载失败");
+    if (token.isLatest()) Message.error(error instanceof Error ? error.message : "数据集列加载失败");
   }
 }
 
@@ -749,7 +748,7 @@ watch(
   (spaceId, oldSpaceId) => {
     if (spaceId === oldSpaceId) return;
     referenceGuard.invalidate();
-    previewGate.next();
+    previewGate.invalidate();
     previewing.value = false;
     previewResult.value = null;
     previewDone.value = false;
@@ -772,8 +771,8 @@ const saveScope = createSubmitScope({ global: true });
 onBeforeUnmount(() => {
   saveScope.invalidate();
   if (validateTimer) clearTimeout(validateTimer);
-  validateGate.next();
-  previewGate.next();
+  validateGate.invalidate();
+  previewGate.invalidate();
 });
 watch(factorId, () => saveScope.invalidate());
 </script>

@@ -1,20 +1,14 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { getFactorStatus, listFactorTasks } from "@/api/factor";
+import { getFactorStatus, listAllFactorTasks } from "@/api/factor";
 import type { EngineStatus, FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import { listDatasets } from "@/api/storage/metadata";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard, type LatestRequest } from "@/utils/latest-request";
 
 const PAGE_SIZE = 500;
 
 async function fetchAllTasks(spaceId: string) {
-  const items: FactorTaskInfo[] = [];
-  for (let page = 1; ; page += 1) {
-    const rsp = await listFactorTasks({ page: { page, size: PAGE_SIZE } });
-    const batch = rsp.factor_tasks || [];
-    items.push(...batch);
-    if (!rsp.page_result?.has_more || !batch.length) break;
-  }
+  const items = await listAllFactorTasks();
   return items.filter(item => item.factor_task?.space_id === spaceId);
 }
 
@@ -40,7 +34,7 @@ export const useFactorStore = defineStore("factorStore", () => {
   const loadedSpaceId = ref("");
   const datasetNames = ref<Record<string, string>>({});
   const datasetNamesSpaceId = ref("");
-  const gate = new RequestGate();
+  const gate = createLatestRequestGuard();
 
   const current = computed(() => tasks.value.find(item => item.factor_task.task_id === currentTaskId.value));
 
@@ -56,11 +50,11 @@ export const useFactorStore = defineStore("factorStore", () => {
   }
 
   /** 每个空间只加载一次数据集名称；失败不影响计算任务加载，标签回落到 dataset_id。 */
-  async function loadDatasetNames(nextSpaceId: string, token: number) {
+  async function loadDatasetNames(nextSpaceId: string, token: LatestRequest) {
     if (datasetNamesSpaceId.value === nextSpaceId) return;
     try {
       const names = await fetchDatasetNames(nextSpaceId);
-      if (!gate.isCurrent(token)) return;
+      if (!token.isLatest()) return;
       datasetNames.value = names;
       datasetNamesSpaceId.value = nextSpaceId;
     } catch {
@@ -73,7 +67,7 @@ export const useFactorStore = defineStore("factorStore", () => {
    * silent：后台刷新，不转加载态，失败记在 loadError 由页面显示。
    */
   async function load(nextSpaceId: string, options: { silent?: boolean } = {}) {
-    const token = gate.next();
+    const token = gate.begin();
     spaceId.value = nextSpaceId;
     if (!nextSpaceId) {
       tasks.value = [];
@@ -86,7 +80,7 @@ export const useFactorStore = defineStore("factorStore", () => {
     if (!options.silent) loading.value = true;
     try {
       const [items] = await Promise.all([fetchAllTasks(nextSpaceId), loadDatasetNames(nextSpaceId, token)]);
-      if (!gate.isCurrent(token)) return;
+      if (!token.isLatest()) return;
       tasks.value = items;
       loadedSpaceId.value = nextSpaceId;
       loadError.value = "";
@@ -94,10 +88,10 @@ export const useFactorStore = defineStore("factorStore", () => {
         currentTaskId.value = items[0]?.factor_task.task_id || "";
       }
     } catch (error) {
-      if (!gate.isCurrent(token)) return;
+      if (!token.isLatest()) return;
       loadError.value = error instanceof Error ? error.message : "计算任务加载失败";
     } finally {
-      if (gate.isCurrent(token)) loading.value = false;
+      if (token.isLatest()) loading.value = false;
     }
   }
 
@@ -120,7 +114,7 @@ export const useFactorStore = defineStore("factorStore", () => {
   }
 
   function reset() {
-    gate.next();
+    gate.invalidate();
     spaceId.value = "";
     tasks.value = [];
     currentTaskId.value = "";

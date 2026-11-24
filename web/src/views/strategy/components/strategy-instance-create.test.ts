@@ -20,7 +20,10 @@ vi.mock("@/api/strategy", () => ({
   listInstances: api.listInstances,
   validateStrategy: api.validateStrategy
 }));
-vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
+vi.mock("@/api/factor", async () => {
+  const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
+  return { listFactorTasks: api.listFactorTasks, listAllFactorTasks: allFactorTasksFrom(api.listFactorTasks) };
+});
 vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts, listTradingAccounts: api.listTradingAccounts }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 

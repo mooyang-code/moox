@@ -278,7 +278,7 @@ import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/s
 import { listTradingAccounts } from "@/api/trade";
 import { usePolling } from "@/hooks/usePolling";
 import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { datasetMatchesAttribution, isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
 import { alertHref } from "@/views/ops/monitor/health-display";
 import { instancesLink, replayLink, resultsLink } from "@/views/strategy/links";
@@ -325,7 +325,7 @@ const counts = reactive<Record<string, number | null>>({
   accounts: null,
   nodes: null
 });
-const spaceLoadGate = new RequestGate();
+const spaceLoadGate = createLatestRequestGuard();
 
 // 实时部分：监控概览、计算任务、策略实例与目标、最近动态，定时刷新。
 const overview = ref<HealthOverview>();
@@ -341,7 +341,7 @@ const activityLoaded = ref(false);
 // 监控以外各路读取的失败原因：读不到的部分不能显示成正常，也不能刷新“更新于”。
 const liveErrors = reactive({ factor: "", strategy: "", activity: "" });
 const failedCount = computed(() => Object.values(liveErrors).filter(Boolean).length);
-const liveLoadGate = new RequestGate();
+const liveLoadGate = createLatestRequestGuard();
 
 const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value, displayZone.value));
 const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value, displayZone.value));
@@ -471,10 +471,10 @@ function errorText(error: unknown): string {
 
 /** 空间范围：数据集 / View 名称、资产数量与策略定义名称。单项失败不影响其它项。 */
 async function loadSpaceScoped() {
-  const token = spaceLoadGate.next();
+  const token = spaceLoadGate.begin();
   const spaceId = selectedSpaceId.value;
   if (!spaceId) return;
-  const isCurrent = () => spaceLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
+  const isCurrent = () => token.isLatest() && selectedSpaceId.value === spaceId;
   const page = { page: 1, size: 1 };
   await Promise.allSettled([
     Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]).then(([datasets, views]) => {
@@ -519,10 +519,10 @@ async function loadSpaceScoped() {
  * 动态多取一些（30 条）：“新增 0、移除 0”的无变化记录会被过滤掉，仍要凑满磁贴的固定条数。
  */
 async function loadLive() {
-  const token = liveLoadGate.next();
+  const token = liveLoadGate.begin();
   const spaceId = selectedSpaceId.value;
   if (!spaceId) return;
-  const isCurrent = () => liveLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
+  const isCurrent = () => token.isLatest() && selectedSpaceId.value === spaceId;
   await Promise.allSettled([
     // 不带空间：首页的健康结论要和监控页一致，别的空间断了数据也要看得到
     // 首页每路读取的失败都写在页面上，后台读取一律不弹全局提示

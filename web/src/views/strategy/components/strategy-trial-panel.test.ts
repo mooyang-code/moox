@@ -7,7 +7,10 @@ const { validateStrategy, listFactorTasks, getStrategy } = vi.hoisted(() => ({
   getStrategy: vi.fn()
 }));
 vi.mock("@/api/strategy", () => ({ validateStrategy, getStrategy }));
-vi.mock("@/api/factor", () => ({ listFactorTasks }));
+vi.mock("@/api/factor", async () => {
+  const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
+  return { listFactorTasks, listAllFactorTasks: allFactorTasksFrom(listFactorTasks) };
+});
 
 import TrialPanel from "./strategy-trial-panel.vue";
 

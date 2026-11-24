@@ -83,8 +83,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { listFactorTasks } from "@/api/factor";
-import type { FactorTaskInfo } from "@/api/factor/types";
+import { listAllFactorTasks } from "@/api/factor";
 import { getStrategy, validateStrategy } from "@/api/strategy";
 import type { ValidateStrategyResult } from "@/api/strategy-types";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
@@ -166,13 +165,8 @@ async function ensureTasks(visible = true) {
   const requestId = ++tasksRequest;
   tasksLoading.value = true;
   try {
-    const infos: FactorTaskInfo[] = [];
-    for (let page = 1; ; page += 1) {
-      const rsp = await listFactorTasks({ page: { page, size: 200 } });
-      if (requestId !== tasksRequest) return;
-      infos.push(...(rsp.factor_tasks || []));
-      if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) break;
-    }
+    const infos = await listAllFactorTasks();
+    if (requestId !== tasksRequest) return;
     tasks.value = enabledTasks(infos, spaceId);
     loadedSpace = spaceId;
     tasksError.value = "";

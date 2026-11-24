@@ -45,7 +45,7 @@ import { getStrategy } from "@/api/strategy";
 import type { Strategy } from "@/api/strategy-types";
 import CodeBlock from "@/components/code-block/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { summarizeDSL } from "@/views/strategy/dsl";
 import { shortHash } from "@/views/strategy/model";
 import { formatInstant } from "@/utils/time-zone";
@@ -67,10 +67,10 @@ const emit = defineEmits<{
 const definition = ref<Strategy | null>(null);
 const loading = ref(false);
 const error = ref("");
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 
 async function load() {
-  const token = gate.next();
+  const token = gate.begin();
   definition.value = null;
   error.value = "";
   if (!props.definitionId) {
@@ -80,13 +80,13 @@ async function load() {
   loading.value = true;
   try {
     const loaded = await getStrategy(props.definitionId);
-    if (gate.isCurrent(token)) definition.value = loaded;
+    if (token.isLatest()) definition.value = loaded;
   } catch (err) {
     // 切空间造成的取消不是失败：空间监听会重新读取。
     if (err instanceof StaleSpaceRequestError) return;
-    if (gate.isCurrent(token)) error.value = err instanceof Error ? `策略定义读取失败：${err.message}` : "策略定义读取失败";
+    if (token.isLatest()) error.value = err instanceof Error ? `策略定义读取失败：${err.message}` : "策略定义读取失败";
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 

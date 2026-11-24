@@ -133,6 +133,7 @@
 </template>
 
 <script setup lang="ts">
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { reportError } from "@/api/http";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -161,13 +162,7 @@ import FieldEditorDrawer from "./components/FieldEditorDrawer.vue";
 import FieldGroupDialog from "./components/FieldGroupDialog.vue";
 import FieldGroupTree from "./components/FieldGroupTree.vue";
 import FieldTable from "./components/FieldTable.vue";
-import {
-  buildFieldGroupDeleteRequest,
-  fieldQueryFromRoute,
-  fieldQueryToRoute,
-  isSpaceRequestCurrent,
-  RequestGate
-} from "./field-workbench";
+import { buildFieldGroupDeleteRequest, fieldQueryFromRoute, fieldQueryToRoute, isSpaceRequestCurrent } from "./field-workbench";
 
 defineOptions({ name: "DataFields" });
 const route = useRoute();
@@ -199,8 +194,8 @@ const newGroupParentID = ref("");
 const routeReady = ref(false);
 const replacingRoute = ref(false);
 const pagination = reactive({ ...defaultPagination(), pageSizeOptions: [20, 50, 100], showPageSize: true, showTotal: true });
-const fieldGate = new RequestGate();
-const groupGate = new RequestGate();
+const fieldGate = createLatestRequestGuard();
+const groupGate = createLatestRequestGuard();
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let revertingSpace = false;
 
@@ -221,14 +216,14 @@ async function replaceQuery() {
 
 async function loadGroups() {
   if (!selectedSpaceId.value) return;
-  const token = groupGate.next();
+  const token = groupGate.begin();
   groupsLoading.value = true;
   groupError.value = false;
   try {
     const all: FieldGroup[] = [];
     for (let page = 1; ; page += 1) {
       const rsp = await listFieldGroups({ space_id: selectedSpaceId.value, page: { page, size: 200 } });
-      if (!groupGate.isCurrent(token)) return;
+      if (!token.isLatest()) return;
       all.push(...(rsp.field_groups || []));
       if (page === 1) {
         fieldCounts.value = rsp.field_counts || {};
@@ -244,15 +239,15 @@ async function loadGroups() {
       await replaceQuery();
     }
   } catch {
-    if (groupGate.isCurrent(token)) groupError.value = true;
+    if (token.isLatest()) groupError.value = true;
   } finally {
-    if (groupGate.isCurrent(token)) groupsLoading.value = false;
+    if (token.isLatest()) groupsLoading.value = false;
   }
 }
 
 async function loadFields() {
   if (!selectedSpaceId.value) return;
-  const token = fieldGate.next();
+  const token = fieldGate.begin();
   loading.value = true;
   fieldError.value = false;
   try {
@@ -269,15 +264,15 @@ async function loadFields() {
       sort_order: state.order,
       page: { page: state.page, size: state.pageSize }
     });
-    if (!fieldGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     rows.value = rsp.fields || [];
     pagination.current = state.page;
     pagination.pageSize = state.pageSize;
     applyPageResult(pagination, rsp.page_result);
   } catch {
-    if (fieldGate.isCurrent(token)) fieldError.value = true;
+    if (token.isLatest()) fieldError.value = true;
   } finally {
-    if (fieldGate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 
@@ -346,8 +341,8 @@ function closeFieldDrawer() {
 }
 
 async function resetForSpace() {
-  fieldGate.next();
-  groupGate.next();
+  fieldGate.invalidate();
+  groupGate.invalidate();
   closeFieldDrawer();
   groupDialogToken += 1;
   groupSaving.value = false;

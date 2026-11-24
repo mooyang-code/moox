@@ -11,6 +11,8 @@ vi.mock("@/api/strategy", () => ({
 }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => ctx.store }));
+// 实例详情与定义目录在测试里共用同一个假对象
+vi.mock("@/views/strategy/use-instance-detail", () => ({ useInstanceDetail: () => ctx.store }));
 vi.mock("@/views/strategy/components/strategy-instance-results.vue", () => ({
   default: defineComponent({
     props: ["instance", "targetState"],
