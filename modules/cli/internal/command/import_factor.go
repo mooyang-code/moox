@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesformat"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/runner"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/seriesformat"
-	"github.com/mooyang-code/moox/packages/seriesimport/runner"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"google.golang.org/protobuf/proto"
 )

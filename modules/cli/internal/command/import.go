@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesformat"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/checkpoint"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/runner"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/seriesformat"
-	"github.com/mooyang-code/moox/packages/seriesimport/checkpoint"
-	"github.com/mooyang-code/moox/packages/seriesimport/runner"
 	"github.com/spf13/cobra"
 )
 

@@ -66,8 +66,6 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../jetstream
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../metricspb
 
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../marketfetchpb
-
 replace github.com/mooyang-code/moox/packages/storagepb => ../storagepb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../tradeeventpb

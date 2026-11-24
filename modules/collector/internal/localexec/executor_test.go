@@ -10,10 +10,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	marketserverless "github.com/mooyang-code/moox/modules/collector/internal/serverless/market_data"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/require"
 )
 

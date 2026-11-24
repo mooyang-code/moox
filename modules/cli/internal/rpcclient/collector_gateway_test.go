@@ -16,7 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/server"

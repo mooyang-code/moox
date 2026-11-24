@@ -204,24 +204,6 @@ func (c *Consumer) MaxDeliver() int {
 	return c.consumer.MaxDeliver()
 }
 
-func (c *Consumer) FetchEvents(ctx context.Context, batch int) ([]*EventDelivery, error) {
-	rawDeliveries, fetchErr := c.Fetch(ctx, batch)
-	deliveries := make([]*EventDelivery, 0, len(rawDeliveries))
-	var firstErr error
-	if fetchErr != nil {
-		firstErr = fetchErr
-	}
-	for _, raw := range rawDeliveries {
-		delivery := DecodeDelivery(c.registry, raw)
-		if delivery.Err != nil {
-			deliveries = append(deliveries, delivery)
-			continue
-		}
-		deliveries = append(deliveries, delivery)
-	}
-	return deliveries, firstErr
-}
-
 func (c *Consumer) Close() error {
 	if c == nil || c.consumer == nil {
 		return nil

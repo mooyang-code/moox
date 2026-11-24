@@ -40,30 +40,23 @@ use (
 	./packages/frequency
 	./packages/gatewayauth
 	./packages/gatewayclient
-	./packages/gatewayroute/proto/gatewayroutegen
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/hostpolicy
 	./packages/jetstream
 	./packages/lifecycle
 	./packages/marketcalendar
-	./packages/marketfetchpb
 	./packages/metricspb
 	./packages/netguard
 	./packages/notification
 	./packages/report
 	./packages/security
-	./packages/seriesformat
-	./packages/seriesimport
 	./packages/seriesset
 	./packages/servicecatalog
 	./packages/storagepb
 	./packages/storagepolicy
-	./packages/sysctl
-	./packages/tdx
 	./packages/timerjob
 	./packages/tradeeventpb
-	./packages/trpcretry
 	./packages/wirecompress
 	./tools/zstddict
 )

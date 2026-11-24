@@ -13,7 +13,6 @@ require (
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
@@ -121,7 +120,6 @@ replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 
 replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
 
-
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
@@ -142,11 +140,7 @@ replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjo
 
 replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
 
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
-
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
-
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
 

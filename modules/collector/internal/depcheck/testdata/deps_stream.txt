@@ -8,13 +8,14 @@ github.com/mooyang-code/moox/packages/security
 github.com/mooyang-code/moox/packages/gatewayauth
 github.com/mooyang-code/moox/packages/wirecompress
 github.com/mooyang-code/moox/packages/gatewayauth/nativewire
+github.com/mooyang-code/moox/packages/gatewayclient/directorypb
 github.com/mooyang-code/moox/packages/gatewayclient/relay
-github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen
 github.com/mooyang-code/moox/packages/servicecatalog
 github.com/mooyang-code/moox/packages/gatewayclient
 github.com/mooyang-code/moox/packages/security/domainpolicy
 github.com/mooyang-code/moox/modules/collector/internal/httpclient
 github.com/mooyang-code/moox/modules/collector/internal/marketdata
+github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb
 github.com/mooyang-code/moox/modules/collector/config/markets
 github.com/mooyang-code/moox/packages/marketcalendar
 github.com/mooyang-code/moox/packages/barclock
@@ -27,7 +28,6 @@ github.com/mooyang-code/moox/modules/collector/internal/model
 github.com/mooyang-code/moox/packages/cloudprovider
 github.com/mooyang-code/moox/packages/cloudprovider/tencent
 github.com/mooyang-code/moox/packages/clsreporter
-github.com/mooyang-code/moox/packages/marketfetchpb
 github.com/mooyang-code/moox/packages/events/eventpb
 github.com/mooyang-code/moox/packages/events/systemspace
 github.com/mooyang-code/moox/packages/hostmetricpb
@@ -61,7 +61,7 @@ github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sina
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sinafinance
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sinahfq
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/swsresearch
-github.com/mooyang-code/moox/packages/tdx
+github.com/mooyang-code/moox/modules/collector/internal/tdx
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney

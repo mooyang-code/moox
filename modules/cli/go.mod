@@ -14,19 +14,13 @@ replace github.com/mooyang-code/moox/packages/factorudf => ../../packages/factor
 
 replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
 
-replace github.com/mooyang-code/moox/packages/seriesimport => ../../packages/seriesimport
-
 replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/factorexpr
 
 replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
 
-replace github.com/mooyang-code/moox/packages/seriesformat => ../../packages/seriesformat
-
 replace github.com/mooyang-code/moox/packages/seriesset => ../../packages/seriesset
 
 replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
-
-replace github.com/mooyang-code/moox/packages/sysctl => ../../packages/sysctl
 
 require (
 	github.com/BurntSushi/toml v1.3.2
@@ -46,7 +40,6 @@ require (
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostpolicy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
@@ -54,12 +47,9 @@ require (
 	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/seriesformat v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/seriesimport v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesset v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/sysctl v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.9.1
@@ -83,7 +73,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
-	github.com/glebarez/go-sqlite v1.21.2 // indirect
+	github.com/glebarez/go-sqlite v1.21.2
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
@@ -104,7 +94,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/molecule-man/go-brrr v1.3.0 // indirect
-	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000 // indirect
@@ -151,7 +141,6 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
-
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
 replace github.com/mooyang-code/moox/packages/cloudprovider => ../../packages/cloudprovider
@@ -176,15 +165,11 @@ replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/ga
 
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
 
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
-
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
 replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
-
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 

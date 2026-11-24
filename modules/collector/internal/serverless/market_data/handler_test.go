@@ -8,9 +8,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/require"
 )
 

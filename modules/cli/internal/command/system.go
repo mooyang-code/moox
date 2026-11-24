@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/sysctl"
 	"github.com/mooyang-code/moox/packages/lifecycle"
-	"github.com/mooyang-code/moox/packages/sysctl"
 	"github.com/spf13/cobra"
 )
 
 // moox-cli system：系统级暂停与恢复（设计 2.1）。经操作员网关逐个调用各模块服务的 GetLifecycle、ControlLifecycle，
-// 编排逻辑在 packages/sysctl。
+// 编排逻辑在 internal/sysctl。
 
 type systemOptions struct {
 	File           string
@@ -29,7 +29,7 @@ type systemOptions struct {
 
 var systemFlags systemOptions
 
-// systemModules 是参与系统暂停的模块（顺序与依赖由 packages/sysctl 决定）；factor-mgr、archive-mgr、Monitor 不参与。
+// systemModules 是参与系统暂停的模块（顺序与依赖由 internal/sysctl 决定）；factor-mgr、archive-mgr、Monitor 不参与。
 var systemModules = []string{sysctl.Collector, sysctl.FactorEngine, sysctl.Strategy, sysctl.Trade}
 
 // systemPollInterval 是恢复时轮询追赶进度的间隔（测试里调小）。

@@ -314,8 +314,8 @@ func TestProxyBodyLimitsAndDeadlines(t *testing.T) {
 	require.Equal(t, errs.RetClientTimeout, errs.Code(err))
 }
 
-// 上游只对只读方法重试；交给它的元数据原样传给被调服务（x-moox- 头已由路由层筛掉）。
-func TestUpstreamOnlyRetriesReads(t *testing.T) {
+// 上游不重试（只读调用的重发由调用方的 gatewayclient 负责）；交给它的元数据原样传给被调服务（x-moox- 头已由路由层筛掉）。
+func TestUpstreamForwardsOnceWithMetadata(t *testing.T) {
 	opened, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	var calls atomic.Int32
@@ -339,11 +339,7 @@ func TestUpstreamOnlyRetriesReads(t *testing.T) {
 		}
 		_, err := u.Forward(context.Background(), servicecatalog.Route{Address: opened.Addr().String(), ServicePath: primary, Method: method, ReadOnly: readOnly, TimeoutMS: 1000}, codec.SerializationTypePB, nil, metadata)
 		require.Error(t, err)
-		expected := int32(1)
-		if readOnly {
-			expected = 2
-		}
-		require.Equal(t, expected, calls.Load())
+		require.EqualValues(t, 1, calls.Load())
 	}
 	require.False(t, invalidMetadata.Load())
 }

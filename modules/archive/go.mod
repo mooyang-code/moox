@@ -61,7 +61,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/molecule-man/go-brrr v1.3.0 // indirect
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
@@ -138,12 +137,7 @@ replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/ga
 
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
 
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
-
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
-
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
-
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/seriesformat"
-	"github.com/mooyang-code/moox/packages/seriesimport/runner"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesformat"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/runner"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 

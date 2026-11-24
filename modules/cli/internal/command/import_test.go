@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesformat"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/runner"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/seriesformat"
-	"github.com/mooyang-code/moox/packages/seriesimport/runner"
 	"github.com/stretchr/testify/require"
 )
 

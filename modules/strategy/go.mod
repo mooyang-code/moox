@@ -19,7 +19,6 @@ require (
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
@@ -130,7 +129,6 @@ replace github.com/mooyang-code/moox/packages/factorname => ../../packages/facto
 
 replace github.com/mooyang-code/moox/packages/seriesset => ../../packages/seriesset
 
-
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
 replace github.com/mooyang-code/moox/modules/strategy/proto/strategygen => ./proto/strategygen
@@ -158,10 +156,6 @@ replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/ga
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
-
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
-
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 
