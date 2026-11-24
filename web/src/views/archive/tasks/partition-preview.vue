@@ -52,7 +52,7 @@ async function load() {
   error.value = "";
   partition.value = null;
   try {
-    const rsp = await getArchivePartition(props.datasetId, props.partitionKey, { silentError: true });
+    const rsp = await getArchivePartition(props.datasetId, props.partitionKey);
     if (gate.isCurrent(token)) partition.value = rsp.partition || {};
   } catch (cause) {
     if (cause instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;

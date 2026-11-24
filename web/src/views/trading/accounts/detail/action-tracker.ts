@@ -40,7 +40,7 @@ export function useActionTracker(options: ActionTrackerOptions) {
       busy = true;
       try {
         // 每 1.5 秒一次的后台查询：失败显示在跟踪器自己的错误里，不弹全局提示
-        const rsp = await getOperatorAction(actionId, { silent: true });
+        const rsp = await getOperatorAction(actionId);
         if (!request.isLatest() || options.logicalAccountId() !== logicalAccountId) return;
         const isOrderAction = ORDER_ACTIONS.includes(rsp.action.action_type);
         if (action.value?.action_id !== rsp.action.action_id || !isOrderAction) submittedOrder.value = null;
@@ -54,7 +54,7 @@ export function useActionTracker(options: ActionTrackerOptions) {
           orderId = progress.order_id || orderId;
         }
         if (orderId) {
-          const orderRsp = await getOrder(orderId, { silent: true });
+          const orderRsp = await getOrder(orderId);
           if (!request.isLatest() || options.logicalAccountId() !== logicalAccountId) return;
           submittedOrder.value = orderRsp.order;
         }

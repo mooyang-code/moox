@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 import {
   aggregateNetworkRate,
   filesystemUsageAvailable,
@@ -152,12 +152,10 @@ interface HostHistoryPoint {
   snapshot?: HostSnapshot;
 }
 
-export const getCurrentMetrics = (options: { silentError?: boolean } = {}) => {
-  return callControl<Record<string, never>, { agents?: HostAgent[] }>("monitor", "ListHostAgents", {}, options).then(
-    response => ({
-      metrics: (response.agents ?? []).map(agent => toHostMetrics(agent))
-    })
-  );
+export const getCurrentMetrics = () => {
+  return call<Record<string, never>, { agents?: HostAgent[] }>("monitor", "ListHostAgents", {}).then(response => ({
+    metrics: (response.agents ?? []).map(agent => toHostMetrics(agent))
+  }));
 };
 
 /** 历史曲线最多取的点数：1 小时是原始的每分钟一点，更长的范围由服务端等间隔抽取。 */
@@ -166,7 +164,7 @@ const HISTORY_POINT_LIMIT = 500;
 export const getHistoryMetrics = (hostID: string, duration = "1h") => {
   const end = new Date();
   const start = new Date(end.getTime() - durationMilliseconds(duration));
-  return callControl<
+  return call<
     { host_id: string; start_at: string; end_at: string; limit: number },
     { points?: HostHistoryPoint[]; data_gap?: boolean }
   >("monitor", "QueryHostMetricHistory", {

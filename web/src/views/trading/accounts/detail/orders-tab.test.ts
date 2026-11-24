@@ -127,8 +127,7 @@ describe("订单页的来源筛选", () => {
     tab.search();
     await flushPromises();
     expect(mocks.listOrders).toHaveBeenLastCalledWith(
-      expect.objectContaining({ logical_account_id: "l-1", owner_type: "SYSTEM", page: { page: 1, size: 20 } }),
-      { silent: false }
+      expect.objectContaining({ logical_account_id: "l-1", owner_type: "SYSTEM", page: { page: 1, size: 20 } })
     );
 
     tab.ownerType = "";
@@ -165,7 +164,6 @@ describe("未完成订单的后台刷新", () => {
     mocks.listOrders.mockRejectedValue(new Error("网络错误"));
     await vi.advanceTimersByTimeAsync(5000);
     expect(mocks.listOrders).toHaveBeenCalledTimes(2);
-    expect(mocks.listOrders.mock.lastCall?.[1]).toEqual({ silent: true });
     expect(tab.orders).toHaveLength(1);
     expect(tab.error).toBe("");
   });
@@ -196,7 +194,7 @@ describe("未完成订单的后台刷新", () => {
     tab.openDrawer(row);
     mocks.listOrders.mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.getOrder).toHaveBeenCalledWith("o-1", { silent: true });
+    expect(mocks.getOrder).toHaveBeenCalledWith("o-1");
     expect(tab.drawerOrder?.state).toBe("FILLED");
   });
 

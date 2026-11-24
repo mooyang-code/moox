@@ -297,7 +297,7 @@ import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getInstance, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
 import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
-import { reportControlError, serverNow } from "@/api/admin/http";
+import { reportError, serverNow } from "@/api/http";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -573,15 +573,10 @@ async function loadTasks() {
 }
 
 /** 从已加载的 brief 记录之后增量读取；isCurrent 为假表示请求已被新选择或空间切换取代，返回 null。 */
-async function fetchSeries(
-  replayId: string,
-  known: ReplayBar[],
-  isCurrent: () => boolean,
-  silent = false
-): Promise<ReplayBar[] | null> {
+async function fetchSeries(replayId: string, known: ReplayBar[], isCurrent: () => boolean): Promise<ReplayBar[] | null> {
   let merged = known;
   for (let page = Math.floor(known.length / seriesPageSize) + 1; ; page += 1) {
-    const next = await listReplayBars(replayId, { page, page_size: seriesPageSize, brief: true }, { silent });
+    const next = await listReplayBars(replayId, { page, page_size: seriesPageSize, brief: true });
     if (!isCurrent()) return null;
     merged = mergeBars(merged, next.items);
     if (next.items.length < seriesPageSize || merged.length >= next.page.total) return merged;
@@ -601,7 +596,7 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
   const page = tablePage.value;
   if (!silent) tableLoading.value = true;
   try {
-    const result = await listReplayBars(replayId, { page, page_size: tablePageSize }, { silent });
+    const result = await listReplayBars(replayId, { page, page_size: tablePageSize });
     if (!live()) return;
     tableRows.value = result.items;
     tableTotal.value = result.page.total;
@@ -746,9 +741,9 @@ async function refreshSelected() {
   const requestId = selectRequest;
   const gen = generation;
   const isCurrent = () => requestId === selectRequest && gen === generation && selectedId.value === replayId;
-  const replay = await getReplay(replayId, { silent: true });
+  const replay = await getReplay(replayId);
   if (!isCurrent()) return;
-  const all = await fetchSeries(replayId, series.value, isCurrent, true);
+  const all = await fetchSeries(replayId, series.value, isCurrent);
   if (all === null) return;
   selected.value = replay;
   if (all.length !== series.value.length) {
@@ -889,8 +884,8 @@ async function cancel() {
     if (gen === generation && selectedId.value === replayId)
       await select(replayId, { observedCancel: true, keepTablePage: true });
   } catch (err) {
-    // 请求层已提示过的错误不再重复；切换空间后，旧空间的取消失败不再提示。
-    if (gen === generation) reportControlError(err);
+    // 切换空间后，旧空间的取消失败不再提示。
+    if (gen === generation) reportError(err);
   } finally {
     cancelling.value = false;
   }
@@ -940,7 +935,7 @@ function applyPrefill() {
 async function loadInstanceStrategy(instanceId: string) {
   form.instance_strategy_id = "";
   try {
-    const instance = await getInstance(instanceId, { silent: true });
+    const instance = await getInstance(instanceId);
     if (form.instance_id === instanceId) form.instance_strategy_id = instance.strategy_id;
   } catch {
     // 读不到实例时保持空值
@@ -964,7 +959,7 @@ async function pollTick() {
     const page = replayPage.value;
     try {
       // 轮询请求不弹全局错误：失败由下面的计数在页面上统一提示，断网时不会每 5 秒弹出一串错误。
-      const result = await listReplays({ page, page_size: replayPageSize }, { silent: true });
+      const result = await listReplays({ page, page_size: replayPageSize });
       if (gen !== generation) return;
       applyReplayList(gen, seq, page, result);
       await refreshSelected();

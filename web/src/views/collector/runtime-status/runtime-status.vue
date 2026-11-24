@@ -593,7 +593,7 @@ async function loadStatus(background = false) {
   const request = guard.begin();
   if (!background) statusLoading.value = true;
   try {
-    const data = await getCollectorStatus(spaceId, { silentError: background });
+    const data = await getCollectorStatus(spaceId);
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
     loaded.value = true;

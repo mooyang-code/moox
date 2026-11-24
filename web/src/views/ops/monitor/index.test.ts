@@ -3,12 +3,12 @@ import { Message, Modal } from "@arco-design/web-vue";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets } from "@/api/storage/metadata";
 import HealthMonitor from "./index.vue";
 
-vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
+vi.mock("@/api/http", () => ({ call: vi.fn() }));
 // 展开状态在 URL 里：路由换成可控的假实现
 const nav = vi.hoisted(() => ({ route: { query: {} as Record<string, string> } }));
 vi.mock("vue-router", () => ({
@@ -33,7 +33,7 @@ vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(async () => [{ dataset_id: "dataset_abc", name: "现货分钟K线" }]),
   listAllViews: vi.fn(async () => [])
 }));
-const mockedCallControl = vi.mocked(callControl);
+const mockedCallControl = vi.mocked(call);
 const box = defineComponent({ template: "<div><slot /></div>" });
 const hidden = defineComponent({ props: ["visible"], template: '<div v-if="visible"><slot /></div>' });
 let wrapper: VueWrapper | undefined;
@@ -521,6 +521,6 @@ describe("monitor page", () => {
   it("uses the structured overview endpoint", async () => {
     mockedCallControl.mockResolvedValue({ overview: healthy });
     await monitorApi.getOverview({ space_id: "crypto" });
-    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" }, expect.anything());
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" });
   });
 });

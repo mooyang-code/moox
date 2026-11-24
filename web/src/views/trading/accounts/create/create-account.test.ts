@@ -2,7 +2,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
-import { TradeResponseError, type LogicalAccount } from "@/api/trade";
+import { type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
   createPaperSimulation: vi.fn(),
@@ -17,6 +17,12 @@ vi.mock("@/api/trade", async () => ({
 }));
 vi.mock("../shared/exchange-secrets", () => ({ loadExchangeSecrets: vi.fn(async () => []) }));
 import CreateAccount from "./index.vue";
+import { RequestError } from "@/api/http";
+import { tradeErrorText } from "@/api/trade/error-text";
+
+// 交易服务的业务失败：消息按请求层的规则换成中文，响应体原样带上
+const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
+  new RequestError(tradeErrorText(response.ret_info), response);
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -355,13 +361,13 @@ describe("新建账户提交", () => {
       expect(document.body.textContent).toContain("接管账户里已有的持仓");
       // 普通的参数不合法不再猜测是要接管
       mocks.addLogicalAccountMember.mockRejectedValueOnce(
-        new TradeResponseError({ ret_info: { code: 1, msg: "组合成员的环境和结算资产必须一致" } })
+        tradeFailure({ ret_info: { code: 1, msg: "组合成员的环境和结算资产必须一致" } })
       );
       await vm.submit();
       await flushPromises();
       expect(document.body.textContent).not.toContain("后再点一次。");
       mocks.addLogicalAccountMember.mockRejectedValueOnce(
-        new TradeResponseError({
+        tradeFailure({
           ret_info: { code: 20, msg: "执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位" }
         })
       );

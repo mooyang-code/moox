@@ -824,7 +824,7 @@ async function refreshViewIndex() {
   if (!space_id || !view_id) return;
   const isCurrent = () => selectedSpaceId.value === space_id && activeView.value?.view_id === view_id;
   try {
-    const state = await getViewState({ space_id, view_id }, { silentError: true });
+    const state = await getViewState({ space_id, view_id });
     if (isCurrent()) viewIndex.value = { status: state.index_id ? "ready" : "building", state };
   } catch (error) {
     if (!isCurrent()) return;
@@ -924,19 +924,16 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false, { background = 
   try {
     const timeRange = defaultTimeSeriesPreviewRange();
     const projection = props.projectColumns ?? explicitViewColumnNames.value;
-    const rsp = await queryTimeSeriesRows(
-      {
-        space_id,
-        view_id: view.view_id,
-        ...(timeRange ? { time_range: timeRange } : {}),
-        ...(projection.length > 0 ? { column_names: projection } : {}),
-        filter: activeFilterExprs(),
-        sorts: buildViewSorts(sortState),
-        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
-        total_mode: "NONE"
-      },
-      { silentError: true }
-    );
+    const rsp = await queryTimeSeriesRows({
+      space_id,
+      view_id: view.view_id,
+      ...(timeRange ? { time_range: timeRange } : {}),
+      ...(projection.length > 0 ? { column_names: projection } : {}),
+      filter: activeFilterExprs(),
+      sorts: buildViewSorts(sortState),
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
+      total_mode: "NONE"
+    });
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||
@@ -987,17 +984,14 @@ async function loadRecordViewRows(retainRowsOnError = false, { background = fals
   loading.value = true;
   if (!background) queryError.value = "";
   try {
-    const rsp = await searchRecordRows(
-      {
-        space_id,
-        view_id: view.view_id,
-        text_query: recordKeyword.value.trim(),
-        filter: activeFilterExprs(),
-        sorts: buildViewSorts(sortState),
-        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
-      },
-      { silentError: true }
-    );
+    const rsp = await searchRecordRows({
+      space_id,
+      view_id: view.view_id,
+      text_query: recordKeyword.value.trim(),
+      filter: activeFilterExprs(),
+      sorts: buildViewSorts(sortState),
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
+    });
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||

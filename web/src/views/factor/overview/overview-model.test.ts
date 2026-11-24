@@ -250,7 +250,7 @@ describe("overview page contract", () => {
     expect(page).toContain("listRecalcJobs");
     expect(page).toContain("recalcQueryTasks");
     // 只有 useFactorScope 一个 10 秒轮询，补算作业并进同一轮
-    expect(page).toContain("extraPoll: () => loadJobs(true)");
+    expect(page).toContain("extraPoll: () => loadJobs()");
     expect(page).not.toContain("usePolling(");
   });
 });

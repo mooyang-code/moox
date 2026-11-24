@@ -42,13 +42,10 @@ async function load() {
   chart?.release();
   chart = null;
   try {
-    const response = await queryEquityCurve(
-      {
-        logical_account_id: logicalAccountId,
-        ...equityRange(rangeDays.value, Date.now())
-      },
-      { silent: true }
-    );
+    const response = await queryEquityCurve({
+      logical_account_id: logicalAccountId,
+      ...equityRange(rangeDays.value, Date.now())
+    });
     if (seq !== requestSeq || logicalAccountId !== props.logicalAccountId) return;
     points.value = response.points || [];
     // 先结束读取态，图表容器显示出来后再画，否则画布量不到宽度

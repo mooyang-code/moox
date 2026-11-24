@@ -1,4 +1,5 @@
-import { inspectExchangeCredential, reinspectTradingAccount, TradeResponseError } from "@/api/trade";
+import { RequestError } from "@/api/http";
+import { inspectExchangeCredential, reinspectTradingAccount } from "@/api/trade";
 import type { ExchangeInspection, InspectExchangeCredentialReq, TradingAccount } from "@/api/trade/types";
 import { fromInspection, inspectionVerdict, type InspectionView } from "./inspection";
 
@@ -77,7 +78,7 @@ export async function runReinspect(accountId: string, api: InspectionApi = defau
       message: rsp.mode_changed ? "账户类型发生了变化，请确认后再恢复组合" : ""
     };
   } catch (error) {
-    const response = (error instanceof TradeResponseError ? error.response : undefined) as
+    const response = (error instanceof RequestError ? error.response : undefined) as
       | { inspection?: ExchangeInspection; account?: TradingAccount }
       | undefined;
     return {

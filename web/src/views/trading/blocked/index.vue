@@ -35,7 +35,7 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const rsp = await listBlockedInstruments({ silent: true });
+    const rsp = await listBlockedInstruments();
     if (request.isLatest()) rows.value = rsp.instruments || [];
   } catch (error) {
     if (request.isLatest()) loadError.value = error instanceof Error ? error.message : "读取下架名单失败，请稍后重试";

@@ -126,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { computed, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { cancelArchiveRun, listArchiveRuns, type ArchiveRun } from "@/api/archive";
@@ -180,15 +181,12 @@ async function load() {
   const token = gate.next();
   loading.value = true;
   try {
-    const rsp = await listArchiveRuns(
-      {
-        dataset_id: props.datasetId,
-        status: props.query.status,
-        include_ticks: props.query.ticks,
-        page: { page: props.query.rpage, size: PAGE_SIZE }
-      },
-      { silentError: true }
-    );
+    const rsp = await listArchiveRuns({
+      dataset_id: props.datasetId,
+      status: props.query.status,
+      include_ticks: props.query.ticks,
+      page: { page: props.query.rpage, size: PAGE_SIZE }
+    });
     if (!gate.isCurrent(token)) return;
     runs.value = rsp.runs || [];
     total.value = Number(rsp.page_result?.total || runs.value.length);
@@ -229,7 +227,8 @@ function confirmCancel(run: ArchiveRun) {
       canceling.value = { ...canceling.value, [id]: true };
       try {
         await cancelArchiveRun(id);
-      } catch {
+      } catch (error) {
+        reportError(error);
         return false;
       } finally {
         canceling.value = Object.fromEntries(Object.entries(canceling.value).filter(([key]) => key !== id));

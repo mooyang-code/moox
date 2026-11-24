@@ -1,5 +1,5 @@
 import type { CreatePaperSimulationReq, CreateTradingAccountReq, Exchange, MarketType } from "@/api/trade/types";
-import { isTradeSessionNotReady } from "@/api/trade/http";
+import { isTradeSessionNotReady } from "@/api/trade";
 import type { Environment } from "@/components/trade-confirm/environment";
 import { DEFAULT_ORDER_RETENTION_DAYS, orderRetentionError } from "../shared/order-retention";
 

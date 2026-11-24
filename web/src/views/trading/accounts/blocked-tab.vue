@@ -96,10 +96,11 @@ function askUnblock(instrument: BlockedInstrument) {
 async function runUnblock() {
   const target = pending.value;
   if (!target) return;
-  const rsp = await unblockInstrument(
-    { exchange: target.exchange, market_type: target.market_type, exchange_symbol: target.exchange_symbol },
-    { silent: true }
-  );
+  const rsp = await unblockInstrument({
+    exchange: target.exchange,
+    market_type: target.market_type,
+    exchange_symbol: target.exchange_symbol
+  });
   if (rsp.removed) Message.success(`已解除「${target.exchange_symbol}」的买入禁止`);
   else Message.info(`「${target.exchange_symbol}」已经不在名单里`);
   emit("changed");

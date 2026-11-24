@@ -173,7 +173,7 @@ function setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED") {
     ...accountStatusConfirm({ accountName: account.name, enable: status === "ENABLED" }),
     name: account.name,
     run: async () => {
-      await updateTradingAccount({ trading_account_id: accountId, status }, { silent: true });
+      await updateTradingAccount({ trading_account_id: accountId, status });
       Message.success(status === "ENABLED" ? "已启用，等首次同步" : "已停用");
       emit("changed");
     }

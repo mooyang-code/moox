@@ -88,6 +88,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { setLeverage, updateTradingAccount } from "@/api/trade";
@@ -206,7 +207,7 @@ function saveRetention() {
       Message.success("已保存");
       emit("changed");
     })
-    .catch(() => undefined)
+    .catch(reportError)
     .finally(() => {
       saving.value = false;
     });
@@ -221,10 +222,10 @@ function save() {
   const nextName = name.value.trim() !== props.account.name ? name.value.trim() : undefined;
   const fromSecret = props.account.live?.credential_secret_id ?? "";
   const nextSecret = props.account.execution_mode === 2 && secretId.value !== fromSecret ? secretId.value : undefined;
-  const submit = async (silent: boolean) => {
+  const submit = async () => {
     saving.value = true;
     try {
-      await updateTradingAccount({ trading_account_id: accountId, name: nextName, credential_secret_id: nextSecret }, { silent });
+      await updateTradingAccount({ trading_account_id: accountId, name: nextName, credential_secret_id: nextSecret });
       Message.success("已保存");
       emit("changed");
     } finally {
@@ -233,12 +234,12 @@ function save() {
   };
   // 只改名称不用确认；模拟账户没有密钥
   if (nextSecret === undefined || env.value === "paper") {
-    void submit(false).catch(() => undefined);
+    void submit().catch(reportError);
     return;
   }
   openConfirm(
     secretChangeConfirm({ accountName: props.account.name, from: secretName(fromSecret), to: secretName(nextSecret) }),
-    () => submit(true)
+    () => submit()
   );
 }
 
@@ -258,7 +259,7 @@ function saveLeverage() {
   const submit = async () => {
     leverageSaving.value = true;
     try {
-      await setLeverage({ trading_account_id: accountId, instrument_id: instrument, leverage: next }, { silent: true });
+      await setLeverage({ trading_account_id: accountId, instrument_id: instrument, leverage: next });
       Message.success("杠杆已设置，下次开仓前生效");
       leverageInstrument.value = "";
       leverageValue.value = "";

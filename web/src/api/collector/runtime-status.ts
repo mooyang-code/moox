@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 
 export type HealthLevel = "ok" | "warn" | "error";
 
@@ -203,30 +203,19 @@ export interface BackfillJobFilter {
   dataset_id?: string;
 }
 
-export function getCollectorStatus(spaceId: string, options: { silentError?: boolean } = {}) {
-  return callControl<{ space_id: string }, GetCollectorStatusResponse>(
-    "collector",
-    "GetCollectorStatus",
-    { space_id: spaceId },
-    options
-  );
+export function getCollectorStatus(spaceId: string) {
+  return call<{ space_id: string }, GetCollectorStatusResponse>("collector", "GetCollectorStatus", { space_id: spaceId });
 }
 
-export function listKlineBackfills(
-  spaceId: string,
-  filter: BackfillJobFilter,
-  page = 1,
-  size = 20,
-  options: { silentError?: boolean } = {}
-) {
-  return callControl<
+export function listKlineBackfills(spaceId: string, filter: BackfillJobFilter, page = 1, size = 20) {
+  return call<
     { space_id: string; page: { page: number; size: number } } & BackfillJobFilter,
     { items?: KlineBackfillJob[]; page?: { total?: number; has_more?: boolean } }
-  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter }, options);
+  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter });
 }
 
 export function getKlineBackfill(spaceId: string, jobId: string) {
-  return callControl<{ job_id: string; space_id: string }, { job?: KlineBackfillJob; failed_chunks?: KlineBackfillChunk[] }>(
+  return call<{ job_id: string; space_id: string }, { job?: KlineBackfillJob; failed_chunks?: KlineBackfillChunk[] }>(
     "collector",
     "GetKlineBackfill",
     { job_id: jobId, space_id: spaceId }
@@ -234,21 +223,21 @@ export function getKlineBackfill(spaceId: string, jobId: string) {
 }
 
 export function cancelKlineBackfill(spaceId: string, jobId: string) {
-  return callControl<{ job_id: string; space_id: string }, Record<string, never>>("collector", "CancelKlineBackfill", {
+  return call<{ job_id: string; space_id: string }, Record<string, never>>("collector", "CancelKlineBackfill", {
     job_id: jobId,
     space_id: spaceId
   });
 }
 
 export function retryKlineBackfill(spaceId: string, jobId: string) {
-  return callControl<{ job_id: string; space_id: string }, { chunks?: number }>("collector", "RetryKlineBackfill", {
+  return call<{ job_id: string; space_id: string }, { chunks?: number }>("collector", "RetryKlineBackfill", {
     job_id: jobId,
     space_id: spaceId
   });
 }
 
 export function confirmHistoryGaps(spaceId: string, datasetId: string, frequency: string) {
-  return callControl<{ space_id: string; dataset_id: string; frequency: string }, { job_id?: string; chunks?: number }>(
+  return call<{ space_id: string; dataset_id: string; frequency: string }, { job_id?: string; chunks?: number }>(
     "collector",
     "ConfirmHistoryGaps",
     { space_id: spaceId, dataset_id: datasetId, frequency }
@@ -256,7 +245,7 @@ export function confirmHistoryGaps(spaceId: string, datasetId: string, frequency
 }
 
 export function clearSourceAbsences(spaceId: string, datasetId: string, frequency: string) {
-  return callControl<{ space_id: string; dataset_id: string; frequency: string }, { cleared?: number | string }>(
+  return call<{ space_id: string; dataset_id: string; frequency: string }, { cleared?: number | string }>(
     "collector",
     "ClearSourceAbsences",
     { space_id: spaceId, dataset_id: datasetId, frequency }
@@ -267,7 +256,7 @@ export function clearSourceAbsences(spaceId: string, datasetId: string, frequenc
 const klineOpsRequestConfig = { timeout: 330000 };
 
 export function submitKlineBackfill(request: KlineRangeRequest & { force?: boolean }) {
-  return callControl<typeof request, { job_id?: string; chunks?: number }>(
+  return call<typeof request, { job_id?: string; chunks?: number }>(
     "collector",
     "SubmitKlineBackfill",
     request,
@@ -276,5 +265,5 @@ export function submitKlineBackfill(request: KlineRangeRequest & { force?: boole
 }
 
 export function checkKline(request: KlineRangeRequest & { deep?: boolean }) {
-  return callControl<typeof request, CheckKlineResponse>("collector", "CheckKline", request, klineOpsRequestConfig);
+  return call<typeof request, CheckKlineResponse>("collector", "CheckKline", request, klineOpsRequestConfig);
 }

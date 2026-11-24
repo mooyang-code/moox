@@ -124,7 +124,7 @@ import {
   type EventExecutionDetail,
   type SubscribableEvent
 } from "@/api/callback-dispatcher";
-import { reportControlError } from "@/api/admin/http";
+import { reportError } from "@/api/http";
 import CodeBlock from "@/components/code-block/index.vue";
 import {
   canAcknowledge,
@@ -180,7 +180,7 @@ async function load() {
   } catch (error) {
     if (seq !== loadSeq) return;
     detail.value = null;
-    reportControlError(error);
+    reportError(error);
   } finally {
     if (seq === loadSeq) loading.value = false;
   }

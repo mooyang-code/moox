@@ -2,7 +2,7 @@ import { h } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { getFactorTask } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import { deleteInstance } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { instanceTasks, taskKeyLabel } from "@/views/strategy/market-mode";
@@ -59,14 +59,14 @@ export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[])
  * 什么都还没删的失败（例如读不到归档任务、被拒绝）原样显示；没拿到答复的（超时、连接中断、框架错误）删除可能已经做了一部分。
  */
 export function isDeleteIncomplete(error: unknown): boolean {
-  if (error instanceof ControlRequestError && error.response?.ret_info) {
+  if (error instanceof RequestError && error.response?.ret_info) {
     return Boolean((error.response as { incomplete?: boolean }).incomplete);
   }
   return true;
 }
 
 function isNotFound(error: unknown): boolean {
-  const code = error instanceof ControlRequestError ? error.response?.ret_info?.code : undefined;
+  const code = error instanceof RequestError ? error.response?.ret_info?.code : undefined;
   return code === 5 || code === "5" || code === "NOT_FOUND";
 }
 
@@ -75,7 +75,7 @@ async function loadInstanceTasks(instance: StrategyInstance): Promise<DeleteTask
   return Promise.all(
     instanceTasks(instance.factor_tasks).map(async item => {
       try {
-        return { market: item.market, taskId: item.taskId, factorTask: await getFactorTask(item.taskId, { silent: true }) };
+        return { market: item.market, taskId: item.taskId, factorTask: await getFactorTask(item.taskId) };
       } catch (error) {
         if (isNotFound(error)) return { market: item.market, taskId: item.taskId };
         throw error;

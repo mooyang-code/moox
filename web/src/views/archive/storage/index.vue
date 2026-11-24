@@ -162,7 +162,7 @@ async function load() {
   if (!spaceId.value) return;
   const token = gate.next();
   try {
-    const rsp = await getArchiveOverview({ silentError: true });
+    const rsp = await getArchiveOverview();
     if (!gate.isCurrent(token)) return;
     overview.value = rsp;
     loaded.value = true;

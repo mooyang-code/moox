@@ -564,6 +564,7 @@
 </template>
 
 <script setup lang="ts">
+import { RequestError, reportError } from "@/api/http";
 import { buildResultsQuery } from "@/views/collector/task-results/task-results-model";
 import ArchiveCoverageText from "@/views/archive/shared/archive-coverage-text.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
@@ -1629,8 +1630,9 @@ async function openDetailById(taskId: string) {
     const response = await GetTaskDetail({ space_id: spaceId, task_id: taskId });
     if (token !== detailRequestToken || spaceId !== selectedSpaceId.value) return;
     if (response.task) onViewDetails(normalizeCollectionTask(response.task));
-  } catch {
-    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；网络错误由请求层提示，业务错误不另提示
+  } catch (error) {
+    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；只提示网络错误，业务错误不另提示
+    if (!(error instanceof RequestError && error.response)) reportError(error);
     if (token === detailRequestToken) syncListQuery();
   }
 }

@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import {
   deleteStrategy,
   getInstance,
@@ -9,8 +9,7 @@ import {
   listInstances,
   listStrategies,
   listStrategyResults,
-  listStrategyTargets,
-  type RequestOptions
+  listStrategyTargets
 } from "@/api/strategy";
 import type {
   Strategy,
@@ -28,7 +27,7 @@ function errorMessage(error: unknown, fallback: string): string {
 export type StrategyDefinitionStatus = "unknown" | "loaded" | "missing" | "error";
 
 function isNotFound(error: unknown): boolean {
-  if (!(error instanceof ControlRequestError)) return false;
+  if (!(error instanceof RequestError)) return false;
   const code = error.response?.ret_info?.code;
   return code === 5 || code === "5" || code === "NOT_FOUND";
 }
@@ -126,7 +125,7 @@ export const useStrategyStore = defineStore("strategy", () => {
       instancesError.value = "";
     }
     try {
-      const result = await listInstances(params, { silent: options.background });
+      const result = await listInstances(params);
       if (requestId !== instancesRequest) return;
       instances.value = result.items;
       totalInstances.value = result.page.total;
@@ -154,8 +153,8 @@ export const useStrategyStore = defineStore("strategy", () => {
     page = 1,
     pageSize = 20,
     allHistory = false,
-    /** 后台轮询传 { silent: true }：失败不弹全局提示，错误记在 detailError、resultsError 里由页面显示 */
-    options: RequestOptions = {}
+    /** 后台轮询传 { silent: true }：不先清掉错误条，错误记在 detailError、resultsError 里由页面显示 */
+    options: { silent?: boolean } = {}
   ) {
     const requestId = ++detailRequest;
     const resultRequestId = ++resultRequest;
@@ -164,7 +163,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     // 后台轮询不先清掉错误条（否则每轮闪一下），读取成功后再清
     if (!options.silent) detailError.value = "";
     try {
-      const current = await getInstance(instanceId, options);
+      const current = await getInstance(instanceId);
       if (requestId !== detailRequest) return false;
       instance.value = current;
       detailError.value = "";
@@ -172,7 +171,7 @@ export const useStrategyStore = defineStore("strategy", () => {
       let definition: Strategy | null = null;
       let definitionStatus: StrategyDefinitionStatus = "loaded";
       try {
-        definition = await getStrategy(current.strategy_id, options);
+        definition = await getStrategy(current.strategy_id);
       } catch (err) {
         definitionStatus = isNotFound(err) ? "missing" : "error";
       }
@@ -181,15 +180,11 @@ export const useStrategyStore = defineStore("strategy", () => {
       strategyStatus.value = definitionStatus;
       const resultTask =
         current.session_id || allHistory
-          ? listStrategyResults(
-              instanceId,
-              {
-                session_id: allHistory ? undefined : current.session_id,
-                page,
-                page_size: pageSize
-              },
-              options
-            )
+          ? listStrategyResults(instanceId, {
+              session_id: allHistory ? undefined : current.session_id,
+              page,
+              page_size: pageSize
+            })
           : Promise.resolve(null);
       // 首次读取该实例时显示结果加载态；后台轮询刷新不遮罩，失败时保留上次的数据并提示。
       const firstLoad = !hadInstance;
@@ -210,7 +205,7 @@ export const useStrategyStore = defineStore("strategy", () => {
         .finally(() => {
           if (requestId === detailRequest && resultRequestId === resultRequest) resultsLoading.value = false;
         });
-      const targets = await listStrategyTargets(instanceId, options);
+      const targets = await listStrategyTargets(instanceId);
       if (requestId !== detailRequest) return false;
       targetSnapshot.value = targets;
       return true;

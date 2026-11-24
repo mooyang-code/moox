@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 const arco = vi.hoisted(() => ({
   confirm: vi.fn(),
-  success: vi.fn()
+  success: vi.fn(),
+  error: vi.fn()
 }));
-vi.mock("@arco-design/web-vue", () => ({ Modal: { confirm: arco.confirm }, Message: { success: arco.success } }));
+vi.mock("@arco-design/web-vue", () => ({
+  Modal: { confirm: arco.confirm },
+  Message: { success: arco.success, error: arco.error }
+}));
 import { confirmRemoveMembers, removeMembersConfirmText } from "./member-actions";
 
 type ConfirmOptions = { onBeforeOk: () => Promise<boolean> };
@@ -33,6 +37,7 @@ describe("移出标签成员", () => {
     await expect(lastOptions().onBeforeOk()).resolves.toBe(false);
     expect(remove).toHaveBeenCalledTimes(1);
     expect(done).not.toHaveBeenCalled();
+    expect(arco.error).toHaveBeenCalledWith("服务不可用");
 
     remove.mockResolvedValueOnce(undefined);
     confirmRemoveMembers(2, remove, done);

@@ -43,17 +43,11 @@ describe("补采页的 URL 状态", () => {
     ctx.replace.mockReset();
     const wrapper = mount(Host, { global: { plugins: [ArcoVue], stubs: { KlineRangeDialog: true } } });
     await flushPromises();
-    expect(api.listKlineBackfills).toHaveBeenLastCalledWith(
-      "crypto",
-      { dataset_id: "ds_1m", source: "manual" },
-      1,
-      20,
-      expect.anything()
-    );
+    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("crypto", { dataset_id: "ds_1m", source: "manual" }, 1, 20);
 
     ctx.route.query = { tab: "backfills", segment: "auto" };
     await flushPromises();
-    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("crypto", { source: "auto" }, 1, 20, expect.anything());
+    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("crypto", { source: "auto" }, 1, 20);
 
     // 切走期间 URL 换了筛选：失活时不跟随，切回来按 URL 重读
     show.value = false;
@@ -64,11 +58,11 @@ describe("补采页的 URL 状态", () => {
     expect(api.listKlineBackfills).not.toHaveBeenCalled();
     show.value = true;
     await flushPromises();
-    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("crypto", { source: "manual" }, 1, 20, expect.anything());
+    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("crypto", { source: "manual" }, 1, 20);
 
     useSpaceStore().selectedSpaceId = "stockcn";
     await flushPromises();
-    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("stockcn", { attention: true }, 1, 20, expect.anything());
+    expect(api.listKlineBackfills).toHaveBeenLastCalledWith("stockcn", { attention: true }, 1, 20);
     wrapper.unmount();
   });
 });

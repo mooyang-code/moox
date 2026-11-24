@@ -76,7 +76,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { getExecutionCapabilities, listTradableInstruments, submitOrder, TradeResponseError } from "@/api/trade";
+import { RequestError } from "@/api/http";
+import { getExecutionCapabilities, listTradableInstruments, submitOrder } from "@/api/trade";
 import type { ExecutionCapabilities, LogicalAccount, SubmitOrderReq, TradableInstrument, TradingAccount } from "@/api/trade";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -307,15 +308,17 @@ async function submitManual() {
   } catch (error) {
     if (props.logical.logical_account_id !== pending.logical_account_id) return false;
     submissionError.value = error instanceof Error ? error.message : "请求未确认";
-    if (error instanceof TradeResponseError) {
-      if (error.response.action?.action_id === pending.action_id) {
-        tracker.action.value = error.response.action;
-        tracker.submittedOrder.value = error.response.order?.order_id ? error.response.order : null;
+    // 业务失败才带响应体；网络与 HTTP 失败都可能已被受理，走下面的“未确认”
+    const response = error instanceof RequestError ? error.response : undefined;
+    if (response) {
+      if (response.action?.action_id === pending.action_id) {
+        tracker.action.value = response.action;
+        tracker.submittedOrder.value = response.order?.order_id ? response.order : null;
         pendingSubmission.value = null;
         visible.value = false;
         emit("submitted");
       } else if (
-        !error.response.action &&
+        !response.action &&
         [
           "1",
           "2",
@@ -330,7 +333,7 @@ async function submitManual() {
           "SPACE_NOT_FOUND",
           "CONFLICT",
           "TRADE_SESSION_NOT_READY"
-        ].includes(String(error.response.ret_info.code))
+        ].includes(String(response.ret_info?.code))
       ) {
         // 只有明确的受理前错误才允许修改后重填；编号保留。会话未启动（19）时请求没有发到交易所，也算受理前。
         // 缺失、系统错误和传输错误都可能已被受理。

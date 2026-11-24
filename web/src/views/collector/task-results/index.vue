@@ -87,7 +87,7 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 import { computed, onActivated, onDeactivated, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import { useRoute, useRouter } from "vue-router";
 import { GetTaskDetail, GetTaskList, listKlineResampleJobs, type CollectorTask } from "@/api/collector";
@@ -191,7 +191,7 @@ function queryTaskId(value: unknown) {
 function isPermanentTaskDetailError(error: unknown) {
   if (error instanceof TaskDetailIdentityError) return true;
   if (error instanceof AuthSessionExpiredError) return true;
-  if (!(error instanceof ControlRequestError)) return false;
+  if (!(error instanceof RequestError)) return false;
   const code = error.response?.ret_info?.code;
   return permanentTaskDetailErrorCodes.has(code);
 }

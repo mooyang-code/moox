@@ -133,6 +133,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
@@ -447,7 +448,7 @@ function confirmDeleteGroup(group: FieldGroup) {
   });
 }
 
-/** 批量改字段组或状态，返回是否成功（失败提示由请求层弹出）。 */
+/** 批量改字段组或状态，返回是否成功（失败时提示一次）。 */
 async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" | "deleted" }) {
   if (!selectedKeys.value.length) return false;
   batchLoading.value = true;
@@ -457,7 +458,8 @@ async function applyBatch(change: { target_group_id?: string; target_status?: "a
     selectedKeys.value = [];
     await loadAll();
     return true;
-  } catch {
+  } catch (error) {
+    reportError(error);
     return false;
   } finally {
     batchLoading.value = false;

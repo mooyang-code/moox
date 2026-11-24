@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { TradeResponseError } from "@/api/trade";
 import type { ExchangeInspection, TradingAccount } from "@/api/trade/types";
 import { fromInspection } from "./inspection";
 import { previewAllowsNext, previewState, runPreview, runReinspect, type InspectionApi } from "./inspection-actions";
+import { RequestError } from "@/api/http";
+import { tradeErrorText } from "@/api/trade/error-text";
+
+// 交易服务的业务失败：消息按请求层的规则换成中文，响应体原样带上
+const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
+  new RequestError(tradeErrorText(response.ret_info), response);
 
 const passing: ExchangeInspection = { account_mode: "BINANCE_STANDARD", can_trade_spot: true, available_markets: [1] };
 const blocked: ExchangeInspection = {
@@ -69,7 +74,7 @@ describe("已有账户的重新检测", () => {
 
   it("检测没完成时界面仍然刷新：用后端保留的上次结果和累加的失败次数，并说明这次没检测成", async () => {
     const retained: ExchangeInspection = { ...passing, consecutive_failures: 2, last_failure: "HTTP 503" };
-    const error = new TradeResponseError({
+    const error = tradeFailure({
       ret_info: { code: 4, msg: "trade account: 密钥检测没有完成" },
       ...({ inspection: retained, account: { trading_account_id: "a" } } as object)
     });

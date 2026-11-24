@@ -52,9 +52,7 @@ describe("collector backfill page", () => {
     expect(page).toContain("<InfoTip");
     expect(page).toContain('placeholder="全部数据集"');
     expect(page).toContain('v-for="item in JOB_SEGMENTS"');
-    expect(page).toContain(
-      "listKlineBackfills(space, filterOf(), page.value, pageSize, { silentError: Boolean(options.silent) })"
-    );
+    expect(page).toContain("listKlineBackfills(space, filterOf(), page.value, pageSize)");
     expect(page).toContain('fixed="right"');
   });
 

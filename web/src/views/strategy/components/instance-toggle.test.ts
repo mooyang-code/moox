@@ -14,7 +14,7 @@ const api = vi.hoisted(() => {
 vi.mock("@/api/strategy", () => ({ setInstanceEnabled: api.setInstanceEnabled }));
 vi.mock("@arco-design/web-vue", () => ({ Message: api.Message, Modal: { confirm: api.confirm, warning: api.warning } }));
 
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import { TOGGLE_CANCELED_TIP, TRADE_UNCONFIRMED_TIP, confirmInstanceRedisable, confirmInstanceToggle } from "./instance-toggle";
 
 function lastDialog() {
@@ -83,7 +83,7 @@ describe("instance toggle flow", () => {
   });
 
   it("停用已落库、Trade 没确认时用对话框说明重试与立刻停手的办法", async () => {
-    const failure = new ControlRequestError("实例已停用，但 Trade 未确认关闭会话", {
+    const failure = new RequestError("实例已停用，但 Trade 未确认关闭会话", {
       ret_info: { code: 1, msg: "实例已停用，但 Trade 未确认关闭会话" },
       instance: { instance_id: "i-1", enabled: false }
     } as never);
@@ -105,7 +105,7 @@ describe("instance toggle flow", () => {
 
   it("停用失败而实例还启用着时照常报错", async () => {
     api.setInstanceEnabled.mockRejectedValue(
-      new ControlRequestError("实例的会话已变化", {
+      new RequestError("实例的会话已变化", {
         ret_info: { code: 1 },
         instance: { instance_id: "i-1", enabled: true }
       } as never)

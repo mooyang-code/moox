@@ -1,6 +1,6 @@
 import { computed, ref } from "vue";
 import { listAllEventRules, listSubscribableEvents, type EventRule, type SubscribableEvent } from "@/api/callback-dispatcher";
-import { reportControlError } from "@/api/admin/http";
+import { reportError } from "@/api/http";
 
 /**
  * 事件目录、全部订阅与系统订阅的状态：事件页签和订阅页签都要用。
@@ -27,7 +27,7 @@ export function useEventCatalog() {
         systemActionEnabled.value = catalog.availableSystemActions.includes("SYSTEM_ACTION_SELL_DELISTED_HOLDINGS") ? true : null;
         return true;
       } catch (error) {
-        reportControlError(error);
+        reportError(error);
         return false;
       } finally {
         eventsRequest = null;

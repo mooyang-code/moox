@@ -119,7 +119,7 @@ import {
   type EventRule,
   type SubscribableEvent
 } from "@/api/callback-dispatcher";
-import { reportControlError } from "@/api/admin/http";
+import { reportError } from "@/api/http";
 import { defaultPagination } from "@/views/data/shared/metadata-utils";
 import RuleDialog from "./rule-dialog.vue";
 import SecretDialog from "./secret-dialog.vue";
@@ -192,7 +192,7 @@ async function load() {
     rows.value = rsp.rules;
     pagination.total = total;
   } catch (error) {
-    if (seq === loadSeq) reportControlError(error);
+    if (seq === loadSeq) reportError(error);
   } finally {
     if (seq === loadSeq) loading.value = false;
   }
@@ -268,7 +268,7 @@ async function toggle(rule: EventRule, enabled: boolean) {
     Message.success(enabled ? "已启用" : "已停用");
     await load();
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
   } finally {
     toggling.value = "";
   }
@@ -280,7 +280,7 @@ async function remove(rule: EventRule) {
     Message.success("订阅已删除");
     await load();
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
   }
 }
 
@@ -294,7 +294,7 @@ async function sendTest(rule: EventRule) {
       content: `${status}，用时 ${formatDuration(result.duration_ms)}${result.response_snippet ? `。${result.response_snippet}` : ""}`
     });
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
   } finally {
     testing.value = "";
   }

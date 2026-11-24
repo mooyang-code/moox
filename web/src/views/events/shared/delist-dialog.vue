@@ -129,7 +129,7 @@ import {
   type InstrumentHolder,
   type SkippedAccount
 } from "@/api/callback-dispatcher/delist";
-import { reportControlError } from "@/api/admin/http";
+import { reportError } from "@/api/http";
 import {
   DELIST_EXCHANGES,
   DELIST_MARKETS,
@@ -276,7 +276,7 @@ async function submit() {
     Message.success(result.created ? "已登记，稍后可以在执行记录里看到处理进度" : "这条下架之前已经登记过");
     emit("update:visible", false);
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
   } finally {
     submitting.value = false;
   }

@@ -93,10 +93,7 @@ describe("下架名单子页签", () => {
     expect(document.body.textContent).toContain("下架清仓");
     confirmButton("解除")?.click();
     await flushPromises();
-    expect(api.unblockInstrument).toHaveBeenCalledWith(
-      { exchange: 1, market_type: 1, exchange_symbol: "LUNAUSDT" },
-      { silent: true }
-    );
+    expect(api.unblockInstrument).toHaveBeenCalledWith({ exchange: 1, market_type: 1, exchange_symbol: "LUNAUSDT" });
     expect(wrapper.emitted("changed")).toHaveLength(1);
   });
 

@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 
 // 事件中心（callback-dispatcher）的接口：全局服务，不分空间。字段以
 // modules/callbackdispatcher/proto/callbackdispatcher.proto 为准；时间一律是 Unix 毫秒。
@@ -278,10 +278,11 @@ export interface SubscribableCatalog {
 }
 
 export async function listSubscribableEvents(): Promise<SubscribableCatalog> {
-  const rsp = await callControl<
-    Record<string, never>,
-    { events?: SubscribableEvent[]; available_system_actions?: (number | string)[] }
-  >(SERVICE, "ListSubscribableEvents", {});
+  const rsp = await call<Record<string, never>, { events?: SubscribableEvent[]; available_system_actions?: (number | string)[] }>(
+    SERVICE,
+    "ListSubscribableEvents",
+    {}
+  );
   return {
     events: (rsp.events ?? []).map(event => normalizeEvent(event as never)),
     availableSystemActions: (rsp.available_system_actions ?? []).map(item => enumName(item, SYSTEM_ACTION_NAMES))
@@ -289,7 +290,7 @@ export async function listSubscribableEvents(): Promise<SubscribableCatalog> {
 }
 
 export async function listEventRules(page: PageReq = {}): Promise<{ rules: EventRule[]; page_result?: PageResult }> {
-  const rsp = await callControl<{ page: PageReq }, { rules?: EventRule[]; page_result?: PageResult }>(SERVICE, "ListEventRules", {
+  const rsp = await call<{ page: PageReq }, { rules?: EventRule[]; page_result?: PageResult }>(SERVICE, "ListEventRules", {
     page
   });
   return { rules: (rsp.rules ?? []).map(rule => normalizeRule(rule as never)), page_result: rsp.page_result };
@@ -308,25 +309,21 @@ export async function listAllEventRules(): Promise<EventRule[]> {
 }
 
 export async function createEventRule(req: CreateEventRuleReq): Promise<{ rule: EventRule; signing_secret: string }> {
-  const rsp = await callControl<CreateEventRuleReq, { rule: EventRule; signing_secret?: string }>(
-    SERVICE,
-    "CreateEventRule",
-    req
-  );
+  const rsp = await call<CreateEventRuleReq, { rule: EventRule; signing_secret?: string }>(SERVICE, "CreateEventRule", req);
   return { rule: normalizeRule(rsp.rule as never), signing_secret: rsp.signing_secret ?? "" };
 }
 
 export async function updateEventRule(req: UpdateEventRuleReq): Promise<EventRule> {
-  const rsp = await callControl<UpdateEventRuleReq, { rule: EventRule }>(SERVICE, "UpdateEventRule", req);
+  const rsp = await call<UpdateEventRuleReq, { rule: EventRule }>(SERVICE, "UpdateEventRule", req);
   return normalizeRule(rsp.rule as never);
 }
 
 export async function deleteEventRule(ruleId: string): Promise<void> {
-  await callControl<{ rule_id: string }, unknown>(SERVICE, "DeleteEventRule", { rule_id: ruleId });
+  await call<{ rule_id: string }, unknown>(SERVICE, "DeleteEventRule", { rule_id: ruleId });
 }
 
 export async function testEventRule(ruleId: string): Promise<TestEventRuleResult> {
-  const rsp = await callControl<{ rule_id: string }, Partial<TestEventRuleResult>>(SERVICE, "TestEventRule", {
+  const rsp = await call<{ rule_id: string }, Partial<TestEventRuleResult>>(SERVICE, "TestEventRule", {
     rule_id: ruleId
   });
   return {
@@ -337,16 +334,13 @@ export async function testEventRule(ruleId: string): Promise<TestEventRuleResult
   };
 }
 
-/** silentError：后台轮询用，网络错误不弹提示。 */
 export async function listEventExecutions(
-  req: ListEventExecutionsReq,
-  options: { silentError?: boolean } = {}
+  req: ListEventExecutionsReq
 ): Promise<{ executions: EventExecution[]; page_result?: PageResult }> {
-  const rsp = await callControl<ListEventExecutionsReq, { executions?: EventExecution[]; page_result?: PageResult }>(
+  const rsp = await call<ListEventExecutionsReq, { executions?: EventExecution[]; page_result?: PageResult }>(
     SERVICE,
     "ListEventExecutions",
-    req,
-    options
+    req
   );
   return {
     executions: (rsp.executions ?? []).map(item => normalizeExecution(item as never)),
@@ -355,7 +349,7 @@ export async function listEventExecutions(
 }
 
 export async function getEventExecution(executionId: string): Promise<EventExecutionDetail> {
-  const rsp = await callControl<{ execution_id: string }, { detail?: Record<string, unknown> }>(SERVICE, "GetEventExecution", {
+  const rsp = await call<{ execution_id: string }, { detail?: Record<string, unknown> }>(SERVICE, "GetEventExecution", {
     execution_id: executionId
   });
   const detail = (rsp.detail ?? {}) as Record<string, unknown>;
@@ -387,7 +381,7 @@ export async function getEventExecution(executionId: string): Promise<EventExecu
 }
 
 async function executionAction(method: string, executionId: string): Promise<EventExecution> {
-  const rsp = await callControl<{ execution_id: string }, { execution?: EventExecution }>(SERVICE, method, {
+  const rsp = await call<{ execution_id: string }, { execution?: EventExecution }>(SERVICE, method, {
     execution_id: executionId
   });
   return normalizeExecution((rsp.execution ?? {}) as never);

@@ -53,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { onMounted, computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
@@ -129,8 +130,8 @@ const submitCreate = async (): Promise<boolean> => {
     Message.success("空间创建成功");
     resetCreate();
     return true;
-  } catch {
-    // 失败原因已由 Storage 请求层提示
+  } catch (error) {
+    reportError(error);
     return false;
   }
 };

@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   cancelReplay: vi.fn(),
   listFactorTasks: vi.fn(),
   loadAllStrategies: vi.fn(),
-  reportControlError: vi.fn(),
+  reportError: vi.fn(),
   // serverNow 是请求层按 Date 头换算的服务端时间；null 表示还没有读到。
   serverNow: null as number | null,
   chartSpecs: [] as any[],
@@ -27,7 +27,7 @@ vi.mock("@/api/strategy", () => ({
   cancelReplay: api.cancelReplay
 }));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
-vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
+vi.mock("@/api/http", () => ({ reportError: api.reportError, serverNow: () => api.serverNow }));
 // 确认对话框直接当作点了确认
 vi.mock("@arco-design/web-vue", () => ({
   Message: { success: vi.fn(), error: vi.fn() },
@@ -222,7 +222,7 @@ describe("strategy replay page", () => {
       api.cancelReplay,
       api.listFactorTasks,
       api.loadAllStrategies,
-      api.reportControlError
+      api.reportError
     ])
       fn.mockReset();
     vi.mocked(Message.error).mockClear();
@@ -286,9 +286,6 @@ describe("strategy replay page", () => {
     // 第二个周期列表里已经没有运行中的回放，只因所选回放仍在运行而刷新。
     await pollOnce();
     expect(api.getReplay.mock.calls.length).toBeGreaterThan(afterFirst);
-    // 轮询请求不弹全局错误提示。
-    expect(api.listReplays.mock.calls.at(-1)?.[1]).toEqual({ silent: true });
-    expect(api.getReplay.mock.calls.at(-1)?.[1]).toEqual({ silent: true });
   });
 
   it("waits for partial metrics only on the cancelled replay", async () => {
@@ -642,7 +639,7 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    expect(api.getInstance).toHaveBeenCalledWith("i1", { silent: true });
+    expect(api.getInstance).toHaveBeenCalledWith("i1");
     expect(vm.form.instance_id).toBe("i1");
     expect(vm.form.instance_strategy_id).toBe("s2");
 
@@ -807,7 +804,7 @@ describe("strategy replay page", () => {
     expect(wrapper.text()).not.toContain("后台暂时无法访问");
   });
 
-  it("silences every polling request and keeps the table steady", async () => {
+  it("polls both the series and the table and keeps the table steady", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     mountPage();
@@ -816,7 +813,6 @@ describe("strategy replay page", () => {
     await pollOnce();
     const calls = api.listReplayBars.mock.calls;
     expect(calls.length).toBeGreaterThanOrEqual(2);
-    for (const call of calls) expect(call[2]).toEqual({ silent: true });
     expect(calls.some(call => call[1]?.brief)).toBe(true);
     expect(calls.some(call => !call[1]?.brief)).toBe(true);
   });
@@ -958,8 +954,8 @@ describe("strategy replay page", () => {
     api.cancelReplay.mockRejectedValueOnce(failure);
     await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
-    expect(api.reportControlError).toHaveBeenCalledTimes(1);
-    expect(api.reportControlError).toHaveBeenCalledWith(failure);
+    expect(api.reportError).toHaveBeenCalledTimes(1);
+    expect(api.reportError).toHaveBeenCalledWith(failure);
     expect(Message.error).not.toHaveBeenCalled();
     const pending = deferred<unknown>();
     api.cancelReplay.mockImplementationOnce(() => pending.promise);
@@ -969,7 +965,7 @@ describe("strategy replay page", () => {
     await nextTick();
     pending.reject(new Error("旧空间的取消失败"));
     await flushPromises();
-    expect(api.reportControlError).toHaveBeenCalledTimes(1);
+    expect(api.reportError).toHaveBeenCalledTimes(1);
   });
 
   it("drops in-flight requests after unmount", async () => {
@@ -1138,7 +1134,6 @@ describe("strategy replay page", () => {
     const tableCalls = api.listReplayBars.mock.calls.filter(call => !call[1]?.brief);
     expect(tableCalls).toHaveLength(1);
     expect(tableCalls[0][1]).toMatchObject({ page: 2 });
-    expect(tableCalls[0][2]).toEqual({ silent: true });
     expect((wrapper.vm as any).tableTotal).toBe(70);
     expect((wrapper.vm as any).tableRows).toHaveLength(20);
     expect(wrapper.find(".table").attributes("data-loading")).toBe("false");
@@ -1207,9 +1202,11 @@ describe("strategy replay page", () => {
     api.listReplayBars.mockImplementation((_id: string, params: any) =>
       Promise.resolve(params?.brief ? bars : { items: [bar(), bar()], page: { total: 2 } })
     );
+    const tableCalls = () => api.listReplayBars.mock.calls.filter(call => !call[1]?.brief).length;
+    const before = tableCalls();
     manual.reject(new Error("超时"));
     await flushPromises();
-    expect(api.listReplayBars.mock.calls.filter(call => !call[1]?.brief && call[2]?.silent)).toHaveLength(1);
+    expect(tableCalls()).toBe(before + 1);
     expect((wrapper.vm as any).tableRows).toHaveLength(2);
     expect((wrapper.vm as any).errors.table).toBe("");
   });
@@ -1331,7 +1328,6 @@ describe("strategy replay page", () => {
     await flushPromises();
     const tableCalls = api.listReplayBars.mock.calls.filter(call => call[0] === "r1" && !call[1]?.brief);
     expect(tableCalls).toHaveLength(1);
-    expect(tableCalls[0][2]).toEqual({ silent: false });
   });
 
   it("returns the page number to the last shown page when a manual page flip fails", async () => {

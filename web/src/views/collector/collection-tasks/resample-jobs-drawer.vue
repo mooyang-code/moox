@@ -147,7 +147,7 @@ async function reload(background = false) {
   const token = ++requestToken;
   if (!background) loading.value = true;
   try {
-    const list = await listKlineResampleJobs(props.spaceId, props.taskId, "", 50, { silentError: background });
+    const list = await listKlineResampleJobs(props.spaceId, props.taskId, "", 50);
     if (token === requestToken) jobs.value = list;
   } catch (error) {
     if (token === requestToken && !background) Message.error(error instanceof Error ? error.message : "获取历史合成作业失败");

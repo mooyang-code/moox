@@ -1,4 +1,4 @@
-import { callStorage as callView, type StorageCallOptions } from "./http";
+import { call, RequestError, type CallOptions } from "@/api/http";
 import type {
   FilterSpec,
   Page,
@@ -15,6 +15,10 @@ import type {
   VersionRange,
   ViewColumn
 } from "./types";
+
+/** Storage 的调用；读取带短时缓存，见 @/api/http。 */
+const callStorage = <TReq extends object, TRsp>(method: string, req: TReq, options?: CallOptions) =>
+  call<TReq, TRsp>("storage", method, req, options);
 
 export interface QueryTimeSeriesRowsReq {
   space_id: string;
@@ -41,15 +45,15 @@ export interface SearchRecordRowsReq {
   page?: Page;
 }
 
-export function queryTimeSeriesRows(req: QueryTimeSeriesRowsReq, options: StorageCallOptions = {}) {
-  return callView<
+export function queryTimeSeriesRows(req: QueryTimeSeriesRowsReq, options: CallOptions = {}) {
+  return callStorage<
     QueryTimeSeriesRowsReq,
     { ret_info: RetInfo; columns: ResultColumn[]; rows: TimeSeriesRow[]; page_result: PageResult }
   >("QueryTimeSeriesRows", req, options);
 }
 
-export function searchRecordRows(req: SearchRecordRowsReq, options: StorageCallOptions = {}) {
-  return callView<
+export function searchRecordRows(req: SearchRecordRowsReq, options: CallOptions = {}) {
+  return callStorage<
     SearchRecordRowsReq,
     { ret_info: RetInfo; columns: ResultColumn[]; rows: RecordRow[]; page_result: PageResult }
   >("SearchRecordRows", req, options);
@@ -84,12 +88,11 @@ export interface GetViewStateRsp {
   applied_cursor?: DatasetChangeCursor;
 }
 
-export function getViewState(req: GetViewStateReq, options: StorageCallOptions = {}) {
-  return callView<GetViewStateReq, GetViewStateRsp>("GetViewState", req, options);
+export function getViewState(req: GetViewStateReq, options: CallOptions = {}) {
+  return callStorage<GetViewStateReq, GetViewStateRsp>("GetViewState", req, options);
 }
 
 /** storage-view 还没登记这个 View（ret_info.code 为 VIEW_NOT_FOUND）。 */
 export function isViewNotFoundError(error: unknown): boolean {
-  const code = (error as { retCode?: unknown } | null)?.retCode;
-  return code === 10 || code === "10" || code === "VIEW_NOT_FOUND";
+  return error instanceof RequestError && error.hasCode(10, "VIEW_NOT_FOUND");
 }

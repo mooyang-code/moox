@@ -7,10 +7,10 @@ import { RequestGate } from "@/utils/request-gate";
 
 const PAGE_SIZE = 500;
 
-async function fetchAllTasks(spaceId: string, silentError: boolean) {
+async function fetchAllTasks(spaceId: string) {
   const items: FactorTaskInfo[] = [];
   for (let page = 1; ; page += 1) {
-    const rsp = await listFactorTasks({ page: { page, size: PAGE_SIZE } }, { silentError });
+    const rsp = await listFactorTasks({ page: { page, size: PAGE_SIZE } });
     const batch = rsp.factor_tasks || [];
     items.push(...batch);
     if (!rsp.page_result?.has_more || !batch.length) break;
@@ -22,7 +22,7 @@ async function fetchDatasetNames(spaceId: string) {
   const names: Record<string, string> = {};
   for (let page = 1; ; page += 1) {
     // 名称只用于展示，失败时回落到 dataset_id：一律静默（读取失败时每次刷新都会重试）
-    const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } }, { silentError: true });
+    const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } });
     const batch = rsp.datasets || [];
     for (const dataset of batch) names[dataset.dataset_id] = dataset.name;
     if (!rsp.page_result?.has_more || !batch.length) break;
@@ -70,7 +70,7 @@ export const useFactorStore = defineStore("factorStore", () => {
 
   /**
    * 加载某个空间的全部计算任务；过期响应被丢弃，当前选择失效时回落到第一项。
-   * silent：后台刷新，不转加载态、不弹全局提示，失败记在 loadError 由页面显示。
+   * silent：后台刷新，不转加载态，失败记在 loadError 由页面显示。
    */
   async function load(nextSpaceId: string, options: { silent?: boolean } = {}) {
     const token = gate.next();
@@ -85,10 +85,7 @@ export const useFactorStore = defineStore("factorStore", () => {
     }
     if (!options.silent) loading.value = true;
     try {
-      const [items] = await Promise.all([
-        fetchAllTasks(nextSpaceId, Boolean(options.silent)),
-        loadDatasetNames(nextSpaceId, token)
-      ]);
+      const [items] = await Promise.all([fetchAllTasks(nextSpaceId), loadDatasetNames(nextSpaceId, token)]);
       if (!gate.isCurrent(token)) return;
       tasks.value = items;
       loadedSpaceId.value = nextSpaceId;
@@ -116,7 +113,7 @@ export const useFactorStore = defineStore("factorStore", () => {
   /** 引擎状态只用于展示，读不到时为空、不弹提示。 */
   async function refreshEngine() {
     try {
-      engine.value = await getFactorStatus({ silentError: true });
+      engine.value = await getFactorStatus();
     } catch {
       engine.value = null;
     }

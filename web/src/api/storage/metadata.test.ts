@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ callStorage: vi.fn() }));
+const mocks = vi.hoisted(() => ({ call: vi.fn() }));
 
-vi.mock("./http", () => ({ callStorage: mocks.callStorage }));
+// 只看 Storage 的方法名、请求体与选项：服务名固定是 storage
+vi.mock("@/api/http", () => ({
+  call: (_service: string, method: string, req: unknown, options?: unknown) =>
+    options === undefined ? mocks.call(method, req) : mocks.call(method, req, options)
+}));
 
 import { listDatasets } from "./metadata";
 
 describe("Storage metadata Dataset APIs", () => {
   beforeEach(() => {
-    mocks.callStorage.mockReset();
-    mocks.callStorage.mockResolvedValue({
+    mocks.call.mockReset();
+    mocks.call.mockResolvedValue({
       ret_info: { code: 0, msg: "" },
       datasets: [],
       page_result: { page: 1, size: 20, total: 0, has_more: false, next_cursor: "" }
@@ -23,15 +27,11 @@ describe("Storage metadata Dataset APIs", () => {
       data_kind: "DATA_KIND_TIME_SERIES",
       page: { page: 1, size: 20 }
     });
-    expect(mocks.callStorage).toHaveBeenLastCalledWith(
-      "ListDatasets",
-      {
-        space_id: "space-a",
-        data_source_id: "source-a",
-        data_kind: "DATA_KIND_TIME_SERIES",
-        page: { page: 1, size: 20 }
-      },
-      undefined
-    );
+    expect(mocks.call).toHaveBeenLastCalledWith("ListDatasets", {
+      space_id: "space-a",
+      data_source_id: "source-a",
+      data_kind: "DATA_KIND_TIME_SERIES",
+      page: { page: 1, size: 20 }
+    });
   });
 });

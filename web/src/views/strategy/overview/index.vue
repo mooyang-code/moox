@@ -181,14 +181,14 @@ async function loadAll(options: { background?: boolean } = {}) {
   if (!options.background) loading.value = true;
   try {
     const [nextInstances, replayPage] = await Promise.all([
-      listAllInstances({ silent: Boolean(options.background) }),
-      listReplays({ page: 1, page_size: 20 }, { silent: true }).catch(error => {
+      listAllInstances(),
+      listReplays({ page: 1, page_size: 20 }).catch(error => {
         if (gate.isCurrent(token)) replayError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
         return null;
       }),
       // 策略目录只在前台加载时补读：后台刷新不重试，免得策略模块不可用时每 30 秒弹一次
       store.strategiesComplete || options.background ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined),
-      listLogicalAccounts({ page: 1, size: 500 }, { silent: true })
+      listLogicalAccounts({ page: 1, size: 500 })
         .then(rsp => {
           if (gate.isCurrent(token)) {
             const paused = (rsp.logical_accounts || []).filter(item => item.automation_state === "PAUSED");
@@ -199,9 +199,7 @@ async function loadAll(options: { background?: boolean } = {}) {
     ]);
     if (!gate.isCurrent(token)) return;
     const enabled = nextInstances.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
-    const settled = await Promise.allSettled(
-      enabled.map(item => listStrategyTargets(item.instance_id, { silent: Boolean(options.background) }))
-    );
+    const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));
     if (!gate.isCurrent(token)) return;
     const nextTargets: Record<string, StrategyTargetSnapshot> = {};
     settled.forEach((result, index) => {

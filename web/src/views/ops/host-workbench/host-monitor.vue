@@ -87,12 +87,11 @@ const onlineCount = computed(() => rows.value.filter(row => row.state === "onlin
 const attentionCount = computed(() => rows.value.filter(row => row.attention || row.state === "offline").length);
 const unmonitoredCount = computed(() => rows.value.filter(row => row.state === "unmonitored").length);
 
-/** background：自动刷新，不弹全局提示，失败写在页面上并保留上次的数据。 */
-async function refreshData(refreshHistory = false, background = false) {
+/** 自动刷新与手动刷新共用：失败写在页面上并保留上次的数据。 */
+async function refreshData(refreshHistory = false) {
   const currentRequestID = ++requestID;
   loading.value = true;
-  const options = { silentError: background };
-  const results = await Promise.allSettled([getCurrentMetrics(options), listAllDeploymentHosts(options)]);
+  const results = await Promise.allSettled([getCurrentMetrics(), listAllDeploymentHosts()]);
   if (currentRequestID !== requestID) return;
   const [monitorResult, hostResult] = results;
   const errors: string[] = [];
@@ -112,7 +111,7 @@ async function refreshData(refreshHistory = false, background = false) {
 }
 
 // 自动刷新：开关打开且页面可见时轮询，不叠加
-usePolling(() => refreshData(false, true), AUTO_REFRESH_MS, autoRefresh);
+usePolling(() => refreshData(false), AUTO_REFRESH_MS, autoRefresh);
 function manualRefresh() {
   return refreshData(true);
 }

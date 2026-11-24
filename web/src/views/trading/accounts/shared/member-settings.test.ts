@@ -150,8 +150,7 @@ describe("测试网、生产环境下的设置要先确认", () => {
     confirmButton("更换")?.click();
     await flushPromises();
     expect(api.updateTradingAccount).toHaveBeenCalledWith(
-      expect.objectContaining({ trading_account_id: "prod-1", credential_secret_id: "s2" }),
-      { silent: true }
+      expect.objectContaining({ trading_account_id: "prod-1", credential_secret_id: "s2" })
     );
     wrapper.unmount();
   });
@@ -179,10 +178,11 @@ describe("测试网、生产环境下的设置要先确认", () => {
     expect(confirmButton("更换")?.disabled).toBe(false);
     confirmButton("更换")?.click();
     await flushPromises();
-    expect(api.updateTradingAccount).toHaveBeenCalledWith(
-      { trading_account_id: "prod-1", name: undefined, credential_secret_id: "s2" },
-      { silent: true }
-    );
+    expect(api.updateTradingAccount).toHaveBeenCalledWith({
+      trading_account_id: "prod-1",
+      name: undefined,
+      credential_secret_id: "s2"
+    });
     wrapper.unmount();
   });
 
@@ -194,10 +194,11 @@ describe("测试网、生产环境下的设置要先确认", () => {
     vm.save();
     await flushPromises();
     expect(vm.confirmVisible).toBe(false);
-    expect(api.updateTradingAccount).toHaveBeenCalledWith(
-      { trading_account_id: "prod-1", name: "新名字", credential_secret_id: undefined },
-      { silent: false }
-    );
+    expect(api.updateTradingAccount).toHaveBeenCalledWith({
+      trading_account_id: "prod-1",
+      name: "新名字",
+      credential_secret_id: undefined
+    });
     wrapper.unmount();
   });
 
@@ -228,10 +229,7 @@ describe("测试网、生产环境下的设置要先确认", () => {
     expect(document.querySelector(".tx-confirm input")).toBeNull();
     confirmButton("设置")?.click();
     await flushPromises();
-    expect(api.setLeverage).toHaveBeenCalledWith(
-      { trading_account_id: "l1", instrument_id: "ETH-USDT-SWAP", leverage: "5" },
-      { silent: true }
-    );
+    expect(api.setLeverage).toHaveBeenCalledWith({ trading_account_id: "l1", instrument_id: "ETH-USDT-SWAP", leverage: "5" });
     wrapper.unmount();
   });
 
@@ -246,10 +244,7 @@ describe("测试网、生产环境下的设置要先确认", () => {
     await typeName("生产主账户");
     confirmButton("设置")?.click();
     await flushPromises();
-    expect(api.setLeverage).toHaveBeenCalledWith(
-      { trading_account_id: "prod-1", instrument_id: "BTC-USDT-SWAP", leverage: "5" },
-      { silent: true }
-    );
+    expect(api.setLeverage).toHaveBeenCalledWith({ trading_account_id: "prod-1", instrument_id: "BTC-USDT-SWAP", leverage: "5" });
     wrapper.unmount();
   });
 });

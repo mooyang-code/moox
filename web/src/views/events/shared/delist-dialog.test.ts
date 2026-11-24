@@ -8,7 +8,7 @@ vi.mock("@/api/callback-dispatcher/delist", async () => ({
   ...(await vi.importActual<typeof import("@/api/callback-dispatcher/delist")>("@/api/callback-dispatcher/delist")),
   ...mocks
 }));
-vi.mock("@/api/admin/http", () => ({ reportControlError: vi.fn(), callControl: vi.fn() }));
+vi.mock("@/api/http", () => ({ reportError: vi.fn(), call: vi.fn() }));
 
 import DelistDialog from "./delist-dialog.vue";
 

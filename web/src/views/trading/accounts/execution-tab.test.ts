@@ -106,7 +106,7 @@ describe("执行账户子页签", () => {
     expect(document.body.textContent).not.toContain("输入执行账户名称");
     confirmButton("停用")?.click();
     await flushPromises();
-    expect(api.updateTradingAccount).toHaveBeenCalledWith({ trading_account_id: "ta-9", status: "DISABLED" }, { silent: true });
+    expect(api.updateTradingAccount).toHaveBeenCalledWith({ trading_account_id: "ta-9", status: "DISABLED" });
   });
 
   it("生产环境加入组合并接管已有持仓：先确认、要输入组合名称", async () => {

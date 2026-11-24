@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 
 export interface CollectorPage {
   page?: number;
@@ -222,16 +222,16 @@ export interface DataTypeConfigDetail {
 }
 
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {
-  return callControl<GetTaskListRequest, GetTaskListResponse>("collector", "GetTaskList", params);
+  return call<GetTaskListRequest, GetTaskListResponse>("collector", "GetTaskList", params);
 }
 
 export async function GetTaskDetail(params: GetTaskDetailRequest): Promise<GetTaskDetailResponse> {
-  return callControl<GetTaskDetailRequest, GetTaskDetailResponse>("collector", "GetTaskDetail", params);
+  return call<GetTaskDetailRequest, GetTaskDetailResponse>("collector", "GetTaskDetail", params);
 }
 
 /** 读取标签同步状态；spaceId 为空表示所有空间。 */
 export async function listTagSyncStatus(spaceId = ""): Promise<TagSyncStatus[]> {
-  const rsp = await callControl<{ space_id: string }, { items?: TagSyncStatus[] }>("collector", "ListTagSyncStatus", {
+  const rsp = await call<{ space_id: string }, { items?: TagSyncStatus[] }>("collector", "ListTagSyncStatus", {
     space_id: spaceId
   });
   return rsp.items || [];
@@ -239,32 +239,32 @@ export async function listTagSyncStatus(spaceId = ""): Promise<TagSyncStatus[]> 
 
 /** 读取可用于标的同步的（来源，市场类型）组合。 */
 export async function listSubjectListers(): Promise<SubjectLister[]> {
-  const rsp = await callControl<Record<string, never>, { listers?: SubjectLister[] }>("collector", "ListSubjectListers", {});
+  const rsp = await call<Record<string, never>, { listers?: SubjectLister[] }>("collector", "ListSubjectListers", {});
   return rsp.listers || [];
 }
 
 export async function CreateTask(params: CreateTaskRequest): Promise<CreateTaskResponse> {
-  return callControl<CreateTaskRequest, CreateTaskResponse>("collector", "CreateTask", params);
+  return call<CreateTaskRequest, CreateTaskResponse>("collector", "CreateTask", params);
 }
 
 export async function UpdateTask(params: UpdateTaskRequest): Promise<UpdateTaskResponse> {
-  return callControl<UpdateTaskRequest, UpdateTaskResponse>("collector", "UpdateTask", params);
+  return call<UpdateTaskRequest, UpdateTaskResponse>("collector", "UpdateTask", params);
 }
 
 export async function DisableTask(params: DisableTaskRequest): Promise<Record<string, unknown>> {
-  return callControl<DisableTaskRequest, Record<string, unknown>>("collector", "DisableTask", params);
+  return call<DisableTaskRequest, Record<string, unknown>>("collector", "DisableTask", params);
 }
 
 export async function DeleteTask(params: DeleteTaskRequest): Promise<Record<string, unknown>> {
-  return callControl<DeleteTaskRequest, Record<string, unknown>>("collector", "DeleteTask", params);
+  return call<DeleteTaskRequest, Record<string, unknown>>("collector", "DeleteTask", params);
 }
 
 export async function GetDataTypeConfigs(): Promise<{ configs?: DataTypeConfig[] }> {
-  return callControl<Record<string, never>, { configs?: DataTypeConfig[] }>("collector", "GetDataTypeConfigs", {});
+  return call<Record<string, never>, { configs?: DataTypeConfig[] }>("collector", "GetDataTypeConfigs", {});
 }
 
 export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ detail?: DataTypeConfigDetail }> {
-  return callControl<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collector", "GetDataTypeConfigWithFields", {
+  return call<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collector", "GetDataTypeConfigWithFields", {
     data_type: dataType
   });
 }
@@ -272,41 +272,28 @@ export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ d
 export async function submitKlineResampleJob(
   request: SubmitResampleJobRequest
 ): Promise<{ job?: ResampleJob; created?: boolean }> {
-  return callControl<SubmitResampleJobRequest, { job?: ResampleJob; created?: boolean }>(
-    "collector",
-    "SubmitKlineResampleJob",
-    request
-  );
+  return call<SubmitResampleJobRequest, { job?: ResampleJob; created?: boolean }>("collector", "SubmitKlineResampleJob", request);
 }
 
 export async function getKlineResampleJob(spaceId: string, jobId: string): Promise<ResampleJob | undefined> {
-  const response = await callControl<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
-    "collector",
-    "GetKlineResampleJob",
-    {
-      space_id: spaceId,
-      job_id: jobId
-    }
-  );
+  const response = await call<{ space_id: string; job_id: string }, { job?: ResampleJob }>("collector", "GetKlineResampleJob", {
+    space_id: spaceId,
+    job_id: jobId
+  });
   return response.job;
 }
 
-export async function listKlineResampleJobs(
-  spaceId: string,
-  taskId = "",
-  status = "",
-  limit = 50,
-  options: { silentError?: boolean } = {}
-): Promise<ResampleJob[]> {
-  const response = await callControl<
-    { space_id: string; task_id: string; status: string; limit: number },
-    { jobs?: ResampleJob[] }
-  >("collector", "ListKlineResampleJobs", { space_id: spaceId, task_id: taskId, status, limit }, options);
+export async function listKlineResampleJobs(spaceId: string, taskId = "", status = "", limit = 50): Promise<ResampleJob[]> {
+  const response = await call<{ space_id: string; task_id: string; status: string; limit: number }, { jobs?: ResampleJob[] }>(
+    "collector",
+    "ListKlineResampleJobs",
+    { space_id: spaceId, task_id: taskId, status, limit }
+  );
   return response.jobs || [];
 }
 
 export async function cancelKlineResampleJob(spaceId: string, jobId: string): Promise<ResampleJob | undefined> {
-  const response = await callControl<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
+  const response = await call<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
     "collector",
     "CancelKlineResampleJob",
     {
@@ -322,7 +309,7 @@ export async function previewKlineResampleSource(
   sourceTaskId: string,
   targetFrequency = ""
 ): Promise<ResampleSourcePreview> {
-  return callControl<{ space_id: string; source_task_id: string; target_frequency: string }, ResampleSourcePreview>(
+  return call<{ space_id: string; source_task_id: string; target_frequency: string }, ResampleSourcePreview>(
     "collector",
     "PreviewKlineResampleSource",
     { space_id: spaceId, source_task_id: sourceTaskId, target_frequency: targetFrequency }

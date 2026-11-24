@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ callControl: vi.fn(async () => ({})), reportControlError: vi.fn() }));
-vi.mock("@/api/admin/http", () => ({ callControl: mocks.callControl, reportControlError: mocks.reportControlError }));
+const mocks = vi.hoisted(() => ({ call: vi.fn(async () => ({})), reportError: vi.fn() }));
+vi.mock("@/api/http", () => ({ call: mocks.call, reportError: mocks.reportError }));
 import * as archive from "./index";
 
 beforeEach(() => {
-  mocks.callControl.mockReset().mockResolvedValue({});
-  mocks.reportControlError.mockReset();
+  mocks.call.mockReset().mockResolvedValue({});
+  mocks.reportError.mockReset();
 });
 
-const lastCall = () => mocks.callControl.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>, unknown];
+const lastCall = () => mocks.call.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>, unknown];
 
 describe("归档接口封装", () => {
   it("服务名是 archive，方法名和请求体对得上，请求体里没有 space_id", async () => {
@@ -72,20 +72,10 @@ describe("归档接口封装", () => {
     }
   });
 
-  it("轮询用的读取把 silentError 传下去", async () => {
-    await archive.getArchiveOverview({ silentError: true });
-    expect(lastCall()[3]).toEqual({ silentError: true });
-    await archive.listArchiveTasks({ page: 1, size: 100 }, { silentError: true });
-    expect(lastCall()[3]).toEqual({ silentError: true });
-  });
-
-  it("用户操作的业务错误会弹提示（Console 转发的业务错误不进请求层拦截器）；轮询带 silentError 的不弹", async () => {
+  it("失败只抛给调用方，不在接口封装里提示", async () => {
     const failure = new Error("任务已有排队中或运行中的运行");
-    mocks.callControl.mockRejectedValueOnce(failure);
+    mocks.call.mockRejectedValueOnce(failure);
     await expect(archive.runArchiveTaskNow("ds")).rejects.toBe(failure);
-    expect(mocks.reportControlError).toHaveBeenCalledWith(failure);
-    mocks.callControl.mockRejectedValueOnce(new Error("超时"));
-    await expect(archive.getArchiveOverview({ silentError: true })).rejects.toThrow("超时");
-    expect(mocks.reportControlError).toHaveBeenCalledTimes(1);
+    expect(mocks.reportError).not.toHaveBeenCalled();
   });
 });

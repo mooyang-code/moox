@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@/api/strategy", () => api);
 
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import { useStrategyStore } from "./strategy";
 
 const instance = (overrides: Record<string, unknown> = {}) => ({
@@ -195,7 +195,7 @@ describe("strategy store", () => {
 
   it("marks the definition as missing only when the server confirms NOT_FOUND", async () => {
     api.getInstance.mockResolvedValue(instance());
-    api.getStrategy.mockRejectedValue(new ControlRequestError("not found", { ret_info: { code: 5, msg: "not found" } } as never));
+    api.getStrategy.mockRejectedValue(new RequestError("not found", { ret_info: { code: 5, msg: "not found" } } as never));
     api.listStrategyTargets.mockResolvedValue(emptyTargets);
     api.listStrategyResults.mockResolvedValue({ items: [], page: { total: 0 } });
     const store = useStrategyStore();

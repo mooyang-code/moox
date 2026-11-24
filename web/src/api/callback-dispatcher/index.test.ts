@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ callControl: vi.fn(), callTrade: vi.fn() }));
-vi.mock("@/api/admin/http", () => ({ callControl: mocks.callControl }));
-vi.mock("@/api/trade/http", () => ({ callTrade: mocks.callTrade }));
+const mocks = vi.hoisted(() => ({ call: vi.fn() }));
+vi.mock("@/api/http", () => ({ call: mocks.call }));
 
 import {
   createEventRule,
@@ -19,8 +18,7 @@ import { buildHoldersRequest, listInstrumentHolders, registerDelistNotice } from
 
 describe("事件中心接口", () => {
   beforeEach(() => {
-    mocks.callControl.mockReset();
-    mocks.callTrade.mockReset();
+    mocks.call.mockReset();
   });
 
   it("枚举数字转成名称，未知值落到未指定", () => {
@@ -33,15 +31,15 @@ describe("事件中心接口", () => {
   });
 
   it("事件目录带上已上线的系统动作，没上线时是空列表", async () => {
-    mocks.callControl.mockResolvedValue({ events: [{ event_name: "e.a", version: 1, title: "t" }] });
+    mocks.call.mockResolvedValue({ events: [{ event_name: "e.a", version: 1, title: "t" }] });
     expect(await listSubscribableEvents()).toMatchObject({ availableSystemActions: [] });
 
-    mocks.callControl.mockResolvedValue({ events: [], available_system_actions: [1] });
+    mocks.call.mockResolvedValue({ events: [], available_system_actions: [1] });
     expect((await listSubscribableEvents()).availableSystemActions).toEqual(["SYSTEM_ACTION_SELL_DELISTED_HOLDINGS"]);
   });
 
   it("事件目录的示例和字段说明：有就带上，旧版本没返回时是空的", async () => {
-    mocks.callControl.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       events: [
         { event_name: "a", sample_json: '{"event":"a"}', payload_fields: [{ field: "x", title: "说明" }] },
         { event_name: "b" }
@@ -53,7 +51,7 @@ describe("事件中心接口", () => {
   });
 
   it("规则列表：枚举、缺省的布尔和范围都被规范化", async () => {
-    mocks.callControl.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       rules: [
         {
           rule_id: "r1",
@@ -77,7 +75,7 @@ describe("事件中心接口", () => {
       page_result: { total: 2 }
     });
     const rsp = await listEventRules({ page: 1, size: 20 });
-    expect(mocks.callControl).toHaveBeenCalledWith("callback-dispatcher", "ListEventRules", { page: { page: 1, size: 20 } });
+    expect(mocks.call).toHaveBeenCalledWith("callback-dispatcher", "ListEventRules", { page: { page: 1, size: 20 } });
     expect(rsp.rules[0]).toMatchObject({
       action_type: "ACTION_TYPE_SYSTEM",
       system_action: "SYSTEM_ACTION_SELL_DELISTED_HOLDINGS",
@@ -95,7 +93,7 @@ describe("事件中心接口", () => {
   });
 
   it("创建规则返回只显示一次的验证密钥", async () => {
-    mocks.callControl.mockResolvedValue({ rule: { rule_id: "r1", action_type: 1 }, signing_secret: "s3cret" });
+    mocks.call.mockResolvedValue({ rule: { rule_id: "r1", action_type: 1 }, signing_secret: "s3cret" });
     const result = await createEventRule({
       name: "n",
       event_name: "e",
@@ -104,40 +102,31 @@ describe("事件中心接口", () => {
       allow_private_address: false
     });
     expect(result.signing_secret).toBe("s3cret");
-    expect(mocks.callControl).toHaveBeenCalledWith(
-      "callback-dispatcher",
-      "CreateEventRule",
-      expect.objectContaining({ name: "n" })
-    );
+    expect(mocks.call).toHaveBeenCalledWith("callback-dispatcher", "CreateEventRule", expect.objectContaining({ name: "n" }));
   });
 
   it("只启停时请求里只带 rule_id 和 enabled", async () => {
-    mocks.callControl.mockResolvedValue({ rule: { rule_id: "r1" } });
+    mocks.call.mockResolvedValue({ rule: { rule_id: "r1" } });
     await updateEventRule({ rule_id: "r1", enabled: false });
-    expect(mocks.callControl).toHaveBeenCalledWith("callback-dispatcher", "UpdateEventRule", { rule_id: "r1", enabled: false });
+    expect(mocks.call).toHaveBeenCalledWith("callback-dispatcher", "UpdateEventRule", { rule_id: "r1", enabled: false });
   });
 
   it("执行记录列表带筛选和分页", async () => {
-    mocks.callControl.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       executions: [{ execution_id: "x1", status: 4, action_type: 1, attempts: "3", acknowledged: true }],
       page_result: { total: 1 }
     });
     const rsp = await listEventExecutions({ rule_id: "r1", status: "EXECUTION_STATUS_FAILED", page: { page: 2, size: 20 } });
-    expect(mocks.callControl).toHaveBeenCalledWith(
-      "callback-dispatcher",
-      "ListEventExecutions",
-      {
-        rule_id: "r1",
-        status: "EXECUTION_STATUS_FAILED",
-        page: { page: 2, size: 20 }
-      },
-      {}
-    );
+    expect(mocks.call).toHaveBeenCalledWith("callback-dispatcher", "ListEventExecutions", {
+      rule_id: "r1",
+      status: "EXECUTION_STATUS_FAILED",
+      page: { page: 2, size: 20 }
+    });
     expect(rsp.executions[0]).toMatchObject({ status: "EXECUTION_STATUS_FAILED", attempts: 3, acknowledged: true });
   });
 
   it("执行详情包含每次尝试和下架各步", async () => {
-    mocks.callControl.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       detail: {
         execution: { execution_id: "x1", status: 3 },
         payload_json: "{}",
@@ -151,20 +140,20 @@ describe("事件中心接口", () => {
   });
 
   it("重新执行调用 RetryEventExecution", async () => {
-    mocks.callControl.mockResolvedValue({ execution: { execution_id: "x1", status: 1 } });
+    mocks.call.mockResolvedValue({ execution: { execution_id: "x1", status: 1 } });
     const result = await retryEventExecution("x1");
-    expect(mocks.callControl).toHaveBeenCalledWith("callback-dispatcher", "RetryEventExecution", { execution_id: "x1" });
+    expect(mocks.call).toHaveBeenCalledWith("callback-dispatcher", "RetryEventExecution", { execution_id: "x1" });
     expect(result.status).toBe("EXECUTION_STATUS_PENDING");
   });
 
   it("读全部规则时翻完所有页", async () => {
     const rule = (id: string) => ({ rule_id: id, name: id, event_name: "e", scope: [], system: id === "sys" });
-    mocks.callControl
+    mocks.call
       .mockResolvedValueOnce({ rules: [rule("sys"), rule("a")], page_result: { total: 3, has_more: true } })
       .mockResolvedValueOnce({ rules: [rule("b")], page_result: { total: 3 } });
     const rules = await listAllEventRules();
     expect(rules.map(item => item.rule_id)).toEqual(["sys", "a", "b"]);
-    expect(mocks.callControl.mock.calls.map(call => call[2].page)).toEqual([
+    expect(mocks.call.mock.calls.map(call => call[2].page)).toEqual([
       { page: 1, size: 200 },
       { page: 2, size: 200 }
     ]);
@@ -173,8 +162,7 @@ describe("事件中心接口", () => {
 
 describe("手工登记下架的外部接口", () => {
   beforeEach(() => {
-    mocks.callControl.mockReset();
-    mocks.callTrade.mockReset();
+    mocks.call.mockReset();
   });
 
   it("预览请求把交易所和市场换成 Trade 的枚举名", () => {
@@ -196,7 +184,7 @@ describe("手工登记下架的外部接口", () => {
   });
 
   it("预览持有者：静默调用，缺省字段补默认值", async () => {
-    mocks.callTrade.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       ret_info: { code: 0 },
       holders: [{ space_id: "crypto", logical_account_id: "la-1", quantity: 2 }]
     });
@@ -206,12 +194,12 @@ describe("手工登记下架的外部接口", () => {
       exchange_symbol: "FOOUSDT",
       paper_only: false
     });
-    expect(mocks.callTrade).toHaveBeenCalledWith(
-      "console",
-      "ListInstrumentHolders",
-      { exchange: "EXCHANGE_BINANCE", market_type: "MARKET_TYPE_SPOT", exchange_symbol: "FOOUSDT", paper_only: false },
-      { silent: true }
-    );
+    expect(mocks.call).toHaveBeenCalledWith("trade", "ListInstrumentHolders", {
+      exchange: "EXCHANGE_BINANCE",
+      market_type: "MARKET_TYPE_SPOT",
+      exchange_symbol: "FOOUSDT",
+      paper_only: false
+    });
     expect(holders).toEqual({
       holders: [
         {
@@ -234,7 +222,7 @@ describe("手工登记下架的外部接口", () => {
 
   it("Trade 违约时按无法确认处理：只查模拟盘却返回非模拟盘的项；无此标的却带着持有者", async () => {
     const paperOnly = { exchange: "okx", market: "SWAP", exchange_symbol: "FOO-USDT-SWAP", paper_only: true } as const;
-    mocks.callTrade.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       ret_info: { code: 0 },
       holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: false }]
     });
@@ -242,13 +230,13 @@ describe("手工登记下架的外部接口", () => {
     expect(violated.verified).toBe(false);
     expect(violated.holders[0].paper).toBe(false);
 
-    mocks.callTrade.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       ret_info: { code: 0 },
       holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: true }]
     });
     expect((await listInstrumentHolders(paperOnly)).verified).toBe(true);
 
-    mocks.callTrade.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       ret_info: { code: 0 },
       instrument_unknown: true,
       holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: false }]
@@ -257,7 +245,7 @@ describe("手工登记下架的外部接口", () => {
   });
 
   it("有账户没能判断时：持有者照常返回，没能判断的账户单独带回", async () => {
-    mocks.callTrade.mockResolvedValue({
+    mocks.call.mockResolvedValue({
       ret_info: { code: 0 },
       holders: [{ space_id: "crypto", logical_account_id: "la-1", quantity: "2", status: "DISABLED", note: "取不到报价" }],
       skipped_accounts: [{ trading_account_id: "ta-9", reason: "资金设置读不出来" }]
@@ -276,22 +264,22 @@ describe("手工登记下架的外部接口", () => {
 
   it("没有 holders 字段又没有无此标的标记时，不能当成没人持有", async () => {
     const input = { exchange: "binance", market: "SPOT", exchange_symbol: "FOOUSDT", paper_only: false } as const;
-    mocks.callTrade.mockResolvedValue({ ret_info: { code: 0 } });
+    mocks.call.mockResolvedValue({ ret_info: { code: 0 } });
     expect(await listInstrumentHolders(input)).toMatchObject({ holders: [], verified: false });
 
-    mocks.callTrade.mockResolvedValue({ ret_info: { code: 0 }, holders: [] });
+    mocks.call.mockResolvedValue({ ret_info: { code: 0 }, holders: [] });
     expect(await listInstrumentHolders(input)).toMatchObject({ holders: [], verified: true, instrumentUnknown: false });
 
-    mocks.callTrade.mockResolvedValue({ ret_info: { code: 0 }, instrument_unknown: true });
+    mocks.call.mockResolvedValue({ ret_info: { code: 0 }, instrument_unknown: true });
     expect(await listInstrumentHolders(input)).toMatchObject({ holders: [], verified: true, instrumentUnknown: true });
   });
 
   it("登记下架带 crypto 空间头，created 缺省按已登记过处理", async () => {
-    mocks.callControl.mockResolvedValue({ event_id: "delist-1" });
+    mocks.call.mockResolvedValue({ event_id: "delist-1" });
     const req = { exchange: "binance", market: "SPOT", exchange_symbol: "FOOUSDT", delist_at_ms: 1, paper_only: false } as const;
     const result = await registerDelistNotice(req);
-    expect(mocks.callControl).toHaveBeenCalledWith("collector", "RegisterDelistNotice", req, {
-      headers: { "X-Space-Id": "crypto" }
+    expect(mocks.call).toHaveBeenCalledWith("collector", "RegisterDelistNotice", req, {
+      spaceId: "crypto"
     });
     expect(result).toEqual({ created: false, event_id: "delist-1" });
   });

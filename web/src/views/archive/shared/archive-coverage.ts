@@ -26,10 +26,10 @@ export interface ArchiveCoverage {
 }
 
 /** 当前空间的全部数据集（翻完所有页）。 */
-export async function listAllDatasets(spaceId: string, options: { silentError?: boolean } = {}): Promise<Dataset[]> {
+export async function listAllDatasets(spaceId: string): Promise<Dataset[]> {
   const all: Dataset[] = [];
   for (let page = 1; ; page += 1) {
-    const rsp = await listDatasets({ space_id: spaceId, page: { page, size: 200 } }, options);
+    const rsp = await listDatasets({ space_id: spaceId, page: { page, size: 200 } });
     const items = rsp.datasets || [];
     all.push(...items);
     if (!items.length || !(rsp.page_result?.has_more || all.length < Number(rsp.page_result?.total || 0))) return all;
@@ -38,10 +38,7 @@ export async function listAllDatasets(spaceId: string, options: { silentError?: 
 
 export async function loadArchiveCoverage(spaceId: string, nowMs = Date.now()): Promise<ArchiveCoverageData | null> {
   try {
-    const [taskRsp, datasets] = await Promise.all([
-      listArchiveTasks({ page: 1, size: 100 }, { silentError: true }),
-      listAllDatasets(spaceId, { silentError: true })
-    ]);
+    const [taskRsp, datasets] = await Promise.all([listArchiveTasks({ page: 1, size: 100 }), listAllDatasets(spaceId)]);
     return {
       spaceId,
       loadedAt: nowMs,

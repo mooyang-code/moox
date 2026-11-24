@@ -23,7 +23,7 @@ describe("frontend network contract", () => {
   });
 
   it("keeps auth and raw routes under the same-origin Admin gateway", () => {
-    expect(normalizeSource(source)).toContain('callControl<{username:string;password:string},LoginResult>("auth","Login"');
+    expect(normalizeSource(source)).toContain('call<{username:string;password:string},LoginResult>("auth","Login"');
     expect(source).toContain("/api/admin/ssh/WsConnect");
     expect(source).toContain("/api/admin/ssh/SftpDownload");
     expect(source).toContain("/api/admin/ssh/SftpUpload");

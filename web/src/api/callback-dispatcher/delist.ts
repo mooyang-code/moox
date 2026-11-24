@@ -1,5 +1,4 @@
-import { callControl } from "@/api/admin/http";
-import { callTrade } from "@/api/trade/http";
+import { call } from "@/api/http";
 import type { RetInfo } from "@/api/trade/types";
 
 // 手工登记下架用到的两个外部接口：
@@ -89,7 +88,7 @@ export function buildHoldersRequest(input: {
 }
 
 export async function listInstrumentHolders(input: Parameters<typeof buildHoldersRequest>[0]): Promise<HoldersPreview> {
-  const rsp = await callTrade<
+  const rsp = await call<
     ListInstrumentHoldersReq,
     {
       ret_info: RetInfo;
@@ -98,7 +97,7 @@ export async function listInstrumentHolders(input: Parameters<typeof buildHolder
       skipped_accounts?: Partial<SkippedAccount>[];
       notes?: string[];
     }
-  >("console", "ListInstrumentHolders", buildHoldersRequest(input), { silent: true });
+  >("trade", "ListInstrumentHolders", buildHoldersRequest(input));
   const instrumentUnknown = Boolean(rsp.instrument_unknown);
   const holders = (rsp.holders ?? []).map(item => ({
     space_id: item.space_id ?? "",
@@ -126,11 +125,8 @@ export async function listInstrumentHolders(input: Parameters<typeof buildHolder
 }
 
 export async function registerDelistNotice(req: RegisterDelistNoticeReq): Promise<RegisterDelistNoticeResult> {
-  const rsp = await callControl<RegisterDelistNoticeReq, Partial<RegisterDelistNoticeResult>>(
-    "collector",
-    "RegisterDelistNotice",
-    req,
-    { headers: { "X-Space-Id": DELIST_SPACE_ID } }
-  );
+  const rsp = await call<RegisterDelistNoticeReq, Partial<RegisterDelistNoticeResult>>("collector", "RegisterDelistNotice", req, {
+    spaceId: DELIST_SPACE_ID
+  });
   return { created: Boolean(rsp.created), event_id: rsp.event_id ?? "" };
 }

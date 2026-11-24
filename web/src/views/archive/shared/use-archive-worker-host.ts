@@ -16,11 +16,8 @@ export function useArchiveWorkerHost() {
     const token = ++seq;
     try {
       const [deployments, hosts] = await Promise.all([
-        listDeployments(
-          { component_id: ARCHIVE_WORKER_COMPONENT, status: "enabled", page: { page: 1, size: 100 } },
-          { silentError: true }
-        ),
-        listAllDeploymentHosts({ silentError: true })
+        listDeployments({ component_id: ARCHIVE_WORKER_COMPONENT, status: "enabled", page: { page: 1, size: 100 } }),
+        listAllDeploymentHosts()
       ]);
       if (token !== seq) return;
       host.value = resolveWorkerHost(deployments.deployments || [], hosts);

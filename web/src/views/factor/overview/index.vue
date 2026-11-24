@@ -101,7 +101,7 @@ defineOptions({ name: "FactorOverview" });
 
 const router = useRouter();
 // 补算作业和计算任务、引擎状态同一轮刷新
-const { store, spaceId, reload } = useFactorScope({ extraPoll: () => loadJobs(true) });
+const { store, spaceId, reload } = useFactorScope({ extraPoll: () => loadJobs() });
 
 const jobs = ref<RecalcJob[]>([]);
 // 补算作业读到过才显示“没有……”；读取失败时写明，不当成没有
@@ -139,7 +139,7 @@ const runningNote = computed(() => {
 });
 
 /** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出。 */
-async function loadJobs(background = false) {
+async function loadJobs() {
   const token = gate.next();
   const ids = recalcQueryTasks(sets.value);
   if (!ids.length) {
@@ -151,10 +151,7 @@ async function loadJobs(background = false) {
   try {
     const results = await Promise.all(
       ids.map(taskId =>
-        listRecalcJobs(
-          { task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } },
-          { silentError: background }
-        )
+        listRecalcJobs({ task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } })
       )
     );
     if (!gate.isCurrent(token)) return;

@@ -1,12 +1,11 @@
-import type { AxiosRequestConfig } from "axios";
-import { callControl } from "@/api/admin/http";
+import { call, type CallOptions } from "@/api/http";
 import type { RetInfo } from "@/api/storage/types";
 
-/** config.silentError 为真时失败不弹全局提示（后台轮询由页面自己显示失败）。 */
+/** 因子管理端（factor-mgr）的调用。 */
 export function callFactor<TReq extends object, TRsp extends { ret_info: RetInfo }>(
   method: string,
   req: TReq,
-  config?: AxiosRequestConfig
+  options?: CallOptions
 ) {
-  return callControl<TReq, TRsp>("factor-mgr", method, req, config);
+  return call<TReq, TRsp>("factor-mgr", method, req, options);
 }
