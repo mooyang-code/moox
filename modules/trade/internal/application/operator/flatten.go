@@ -32,6 +32,8 @@ type FlattenCommand struct {
 	Exchange string
 	// ReduceRatio 在 0 到 1 之间时只减掉这个比例的持仓；为零或 1 表示全部清掉。
 	ReduceRatio shared.Decimal
+	// PauseAs 是动作暂停组合时写入的暂停状态（保证金率风控减仓传 store.MarginPause(store.MarginReduced)）；零值按人工暂停记，原因取 Reason。
+	PauseAs store.Pause
 	// DeadlineAt 是下架清仓的截止时间（毫秒，事件中心按下架时间传入）；大于 0 时到点不再下单，动作记 PARTIAL。
 	DeadlineAt int64
 
@@ -268,12 +270,11 @@ func (s *Service) FlattenLogicalAccount(
 				return err
 			}
 			if logical.ControlMode != "MANUAL" {
-				if err := tx.SetLogicalAccountAutomation(
-					command.SpaceID,
-					command.LogicalAccountID,
-					"PAUSED",
-					strings.TrimSpace(command.Reason),
-				); err != nil {
+				pause := command.PauseAs
+				if pause.Source == "" {
+					pause = store.UserPause(strings.TrimSpace(command.Reason))
+				}
+				if err := tx.PauseLogicalAccount(command.SpaceID, command.LogicalAccountID, pause); err != nil {
 					return err
 				}
 			}

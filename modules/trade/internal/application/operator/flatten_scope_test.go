@@ -137,9 +137,10 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单' WHERE c_logical_account_id = 'logical-1'`).Error)
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER' WHERE c_logical_account_id = 'logical-1'`).Error)
 	command := flattenCommand("margin-logical-1-1")
-	command.ReduceRatio, command.Reason = shared.MustDecimal("0.5"), store.MarginPauseReason()
+	command.ReduceRatio, command.Reason = shared.MustDecimal("0.5"), store.MarginPause(store.MarginReduced).Reason
+	command.PauseAs = store.MarginPause(store.MarginReduced)
 
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 
@@ -149,6 +150,21 @@ func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
 	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "自主下单", logical.PauseReason)
+}
+
+// 策略组合的风控减仓按 PauseAs 暂停：来源记保证金率风控、减仓状态记已减仓，原因取对应的固定文字。
+func TestMarginReducePausesWithMarginSource(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	command := flattenCommand("margin-logical-1-2")
+	command.ReduceRatio, command.PauseAs = shared.MustDecimal("0.5"), store.MarginPause(store.MarginReduced)
+	command.Reason = command.PauseAs.Reason
+
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+
+	require.NoError(t, err)
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, store.MarginPause(store.MarginReduced), logical.Pause())
 }
 
 // 风控减仓的子单零成交就过期：同一个动作号重试时换号再下，不判部分完成；交易所确定性拒绝才终结。

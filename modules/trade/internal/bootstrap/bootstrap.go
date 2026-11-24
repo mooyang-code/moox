@@ -258,10 +258,10 @@ func initialize(
 	marginService := &marginmonitor.Service{
 		Store: tradeStore,
 		Reduce: func(
-			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, pause store.Pause,
 		) (store.OperatorActionRecord, error) {
 			result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
-				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: pause.Reason, ReduceRatio: ratio, PauseAs: pause,
 			})
 			return result.Action, reduceErr
 		},

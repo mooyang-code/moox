@@ -1420,9 +1420,8 @@ func (e *Executor) pauseLogicalAccount(
 		_, err := tx.PauseLogicalAccountIf(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
-			"ACTIVE",
-			"",
-			store.AutoPauseReason(reason),
+			store.Pause{},
+			store.SystemPause(reason),
 		)
 		return err
 	}); err != nil {

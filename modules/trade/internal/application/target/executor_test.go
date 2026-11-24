@@ -496,7 +496,7 @@ func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
 	target, err := fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.MarginPauseReason())
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.MarginPause(store.MarginReduced))
 	}))
 
 	require.NoError(t, fixture.executor().pauseLogicalAccount(ctx, logicalAccount, target, "下单冲突"))
@@ -504,7 +504,7 @@ func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
 	current, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", current.AutomationState)
-	require.Equal(t, store.MarginPauseReason(), current.PauseReason)
+	require.Equal(t, store.MarginPause(store.MarginReduced).Reason, current.PauseReason)
 	target, err = fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "下单冲突", target.LastError)

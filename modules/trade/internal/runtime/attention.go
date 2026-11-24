@@ -154,7 +154,7 @@ func (w *AttentionWorker) scanLogicalAccount(
 	items map[string][]string,
 	blocked map[string]time.Time,
 ) error {
-	if store.IsAutoPauseReason(logical.PauseReason) {
+	if logical.Pause().Auto() {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
 	}
 	// 保证金率风控暂停的组合在用户确认恢复之前一直上报，按库里的状态推出（不用带时间窗口的记录，窗口过了告警就丢了）；
@@ -169,8 +169,8 @@ func (w *AttentionWorker) scanLogicalAccount(
 		} else if last != nil && (last.Status == "RUNNING" || now.Sub(last.UpdatedAt) <= rejectionWindow) {
 			items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"：保证金率过低，风控正在或刚刚按比例减仓")
 		}
-	} else if store.IsMarginPauseReason(logical.PauseReason) {
-		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"："+store.MarginAttentionDetail(logical.PauseReason))
+	} else if logical.Pause().Margin() {
+		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"："+store.MarginAttentionDetail(logical.MarginReduceState))
 	}
 	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。
 	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {

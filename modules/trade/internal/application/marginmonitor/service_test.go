@@ -241,7 +241,8 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 	f := &fixture{t: t, store: tradeStore}
 	f.service = &Service{
 		Store: tradeStore, Now: func() time.Time { return time.Now().Add(f.offset) },
-		Reduce: func(_ context.Context, spaceID, actionID, logicalID string, ratio shared.Decimal, reason string) (store.OperatorActionRecord, error) {
+		Reduce: func(_ context.Context, spaceID, actionID, logicalID string, ratio shared.Decimal, pause store.Pause) (store.OperatorActionRecord, error) {
+			reason := pause.Reason
 			if f.busy {
 				return store.OperatorActionRecord{}, operatorapp.ErrLogicalAccountBusy
 			}
@@ -254,7 +255,7 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 					return err
 				}
 				if logical.ControlMode != "MANUAL" {
-					if err := tx.SetLogicalAccountAutomation(spaceID, logicalID, "PAUSED", reason); err != nil {
+					if err := tx.PauseLogicalAccount(spaceID, logicalID, pause); err != nil {
 						return err
 					}
 				}
@@ -267,15 +268,15 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 			})
 			return record, err
 		},
-		Pause: func(_ context.Context, spaceID, logicalID, expectedState, expectedReason, reason string) (bool, error) {
+		Pause: func(_ context.Context, spaceID, logicalID string, expected, pause store.Pause) (bool, error) {
 			var paused bool
 			err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 				var pauseErr error
-				paused, pauseErr = tx.PauseLogicalAccountIf(spaceID, logicalID, expectedState, expectedReason, reason)
+				paused, pauseErr = tx.PauseLogicalAccountIf(spaceID, logicalID, expected, pause)
 				return pauseErr
 			})
 			if paused {
-				f.pauses = append(f.pauses, reason)
+				f.pauses = append(f.pauses, pause.Reason)
 			}
 			return paused, err
 		},
@@ -323,9 +324,9 @@ func TestRunTriggersReduceAndPausesOnce(t *testing.T) {
 	require.Equal(t, "logical-1", call.logicalID)
 	require.Contains(t, call.actionID, store.MarginActionIDPrefix+"logical-1-")
 	require.Equal(t, "0.1", call.ratio.String())
-	require.Equal(t, store.MarginPauseReason(), call.reason, "暂停原因是固定文字，不带变化的数字")
-	require.True(t, store.IsAutoPauseReason(call.reason))
-	require.True(t, store.IsMarginPauseReason(f.logical().PauseReason))
+	require.Equal(t, store.MarginPause(store.MarginReduced).Reason, call.reason, "暂停原因是固定文字，不带变化的数字")
+	require.True(t, f.logical().Pause().Auto(), "风控暂停同时算系统自动暂停")
+	require.True(t, f.logical().Pause().Margin())
 
 	// 组合已经被暂停、又没有恢复过：下一轮不再触发（不会每个周期再减 10%）。
 	f.run()
@@ -388,7 +389,7 @@ func TestRunPausesFirstWhenTheReduceCannotStart(t *testing.T) {
 	f.busy = true
 	f.run()
 	require.Empty(t, f.reduces)
-	require.Equal(t, []string{store.MarginPausePendingReason()}, f.pauses, "先暂停时不能写已减仓")
+	require.Equal(t, []string{store.MarginPause(store.MarginReducePending).Reason}, f.pauses, "先暂停时不能写已减仓")
 	require.Equal(t, "PAUSED", f.logical().AutomationState)
 
 	f.run()
@@ -452,16 +453,16 @@ func TestRestartStillCompletesAReduceThatWasPendingBehindADelistFlatten(t *testi
 	f.busy = true
 	f.run()
 	require.Empty(t, f.reduces)
-	require.Equal(t, store.MarginPausePendingReason(), f.logical().PauseReason)
+	require.Equal(t, store.MarginPause(store.MarginReducePending).Reason, f.logical().PauseReason)
 	require.NotContains(t, f.logical().PauseReason, "已暂停并按设置的比例减仓", "减仓还没做，不能说已减仓")
-	require.True(t, store.IsMarginPauseReason(f.logical().PauseReason), "仍然算保证金风控暂停（关注项照报）")
+	require.True(t, f.logical().Pause().Margin(), "仍然算保证金风控暂停（关注项照报）")
 
 	f.restart()
 	f.busy = false
 	f.run()
 
 	require.Len(t, f.reduces, 1, "下架清仓结束后补上减仓")
-	require.Equal(t, store.MarginPauseReason(), f.logical().PauseReason, "减仓发出后原因换成已减仓")
+	require.Equal(t, store.MarginPause(store.MarginReduced).Reason, f.logical().PauseReason, "减仓发出后原因换成已减仓")
 }
 
 // 人工暂停的组合照样监控（价格不会因为组合暂停就停下）。
@@ -523,11 +524,11 @@ func TestCollectRunsAfterTheReduceFinishes(t *testing.T) {
 
 // 归集不看暂停原因文字：风控减仓之后撤单、外部成交、人工下单、手动暂停都会改写暂停原因，归集照常做完。
 func TestCollectIgnoresRewrittenPauseReasons(t *testing.T) {
-	for name, reason := range map[string]string{
-		"外部订单或成交": store.AutoPauseReason("发现外部订单"),
-		"人工下单待核实": store.AutoPauseReason("人工下单结果待核实"),
-		"用户撤单":    "人工撤单",
-		"用户手动暂停":  "手动暂停",
+	for name, pause := range map[string]store.Pause{
+		"外部订单或成交": store.SystemPause("发现外部订单"),
+		"人工下单待核实": store.SystemPause("人工下单结果待核实"),
+		"用户撤单":    store.UserPause("人工撤单"),
+		"用户手动暂停":  store.UserPause("手动暂停"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, "", "400")
@@ -535,7 +536,7 @@ func TestCollectIgnoresRewrittenPauseReasons(t *testing.T) {
 			actionID := f.reduces[0].actionID
 			require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
 			require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-				return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", reason)
+				return tx.PauseLogicalAccount("space-1", "logical-1", pause)
 			}))
 
 			f.run()
@@ -552,7 +553,7 @@ func TestCollectStopsOnceThePortfolioWasResumed(t *testing.T) {
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
 	f.resume()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.AutoPauseReason("发现外部订单"))
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.SystemPause("发现外部订单"))
 	}))
 	f.restart()
 
@@ -663,16 +664,16 @@ func TestPendingReasonBecomesUnreducedOnceTheRatioIsSafe(t *testing.T) {
 	f := newFixture(t, "", "400")
 	f.busy = true
 	f.run()
-	require.Equal(t, store.MarginPausePendingReason(), f.logical().PauseReason)
+	require.Equal(t, store.MarginPause(store.MarginReducePending).Reason, f.logical().PauseReason)
 
 	// 比值回到安全线（阈值调低到 0.3，读数 0.4）。
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"margin_ratio_threshold":"0.3"}'`).Error)
 	f.busy = false
 	f.run()
 	require.Empty(t, f.reduces)
-	require.Equal(t, store.MarginPauseUnreducedReason(), f.logical().PauseReason)
-	require.True(t, store.IsMarginPauseReason(f.logical().PauseReason), "仍是保证金风控暂停，关注项照报")
-	require.False(t, store.IsMarginPausePending(f.logical().PauseReason))
+	require.Equal(t, store.MarginPause(store.MarginUnreduced).Reason, f.logical().PauseReason)
+	require.True(t, f.logical().Pause().Margin(), "仍是保证金风控暂停，关注项照报")
+	require.False(t, (f.logical().MarginReduceState == store.MarginReducePending))
 	f.run()
 	require.Empty(t, f.reduces, "原因改过之后不再重复处理")
 
@@ -686,7 +687,7 @@ func TestPendingReasonBecomesUnreducedOnceTheRatioIsSafe(t *testing.T) {
 func TestManualGroupReducesAgainOnceTheLastReduceFinished(t *testing.T) {
 	f := newFixture(t, "", "400")
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER'`).Error)
 	setEquity := func(equity string) {
 		t.Helper()
 		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_snapshot_json = json_set(c_snapshot_json, '$.exchange_equity', ?)`, equity).Error)

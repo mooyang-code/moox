@@ -206,7 +206,7 @@ func TestManualAccountKeepsPauseReasonOnExternalFact(t *testing.T) {
 
 	logical, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.False(t, store.IsAutoPauseReason(logical.PauseReason))
+	require.False(t, logical.Pause().Auto())
 }
 
 // 会话启动和手动同步：500 个有游标但没有变化的标的不能一次全拉。

@@ -199,7 +199,7 @@ func TestCreateIntoRejectsRunningMismatchedAndUnknownLogicalAccountsWithoutCreat
 	require.NoError(t, err)
 	logicalID := first.LogicalAccount.LogicalAccountID
 	require.NoError(t, db.DBForTest().Table("t_logical_accounts").
-		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "ACTIVE", "c_pause_reason": ""}).Error)
+		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "ACTIVE", "c_pause_reason": "", "c_pause_source": ""}).Error)
 
 	countAccounts := func() int64 {
 		var count int64
@@ -214,7 +214,7 @@ func TestCreateIntoRejectsRunningMismatchedAndUnknownLogicalAccountsWithoutCreat
 	require.ErrorContains(t, err, "先暂停")
 
 	require.NoError(t, db.DBForTest().Table("t_logical_accounts").
-		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "PAUSED", "c_pause_reason": "测试"}).Error)
+		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "PAUSED", "c_pause_reason": "测试", "c_pause_source": "USER"}).Error)
 	mismatched := paperCommand("paper-c", "")
 	mismatched.LogicalAccountID = logicalID
 	mismatched.SettlementAsset = "USDC"

@@ -35,7 +35,7 @@ func TestFilterIsolatedPositionsPausesLogicalAccountWithSymbol(t *testing.T) {
 	logical, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", logical.AutomationState)
-	require.True(t, store.IsAutoPauseReason(logical.PauseReason))
+	require.True(t, logical.Pause().Auto())
 	require.Contains(t, logical.PauseReason, "ETHUSDT")
 	require.Contains(t, logical.PauseReason, "逐仓")
 }
@@ -81,13 +81,13 @@ func TestFilterIsolatedPositionsLeavesOtherStatesAlone(t *testing.T) {
 
 	// 组合已被风控暂停：同样不改写原因。
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.MarginPauseReason())
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.MarginPause(store.MarginReduced))
 	}))
 	_, err = service.FilterIsolatedPositions(context.Background(), "account-1", isolatedMixedPositions())
 	require.NoError(t, err)
 	logical, err = tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, store.MarginPauseReason(), logical.PauseReason)
+	require.Equal(t, store.MarginPause(store.MarginReduced).Reason, logical.PauseReason)
 }
 
 // 关注项不看组合状态：已暂停和自主下单的账户同样记一条，说明这笔逐仓持仓不入投影。

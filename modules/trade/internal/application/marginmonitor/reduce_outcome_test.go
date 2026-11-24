@@ -11,8 +11,8 @@ import (
 // 部分完成时现货卖出所得照常归集。
 func TestReduceOutcomeIsReflectedInPauseReasonAndAttention(t *testing.T) {
 	for status, want := range map[string]string{
-		"FAILED":  store.MarginPauseReduceFailedReason(),
-		"PARTIAL": store.MarginPauseReducePartialReason(),
+		"FAILED":  store.MarginPause(store.MarginReduceFailed).Reason,
+		"PARTIAL": store.MarginPause(store.MarginReducePartial).Reason,
 	} {
 		t.Run(status, func(t *testing.T) {
 			f := newFixture(t, "", "400")
@@ -23,8 +23,8 @@ func TestReduceOutcomeIsReflectedInPauseReasonAndAttention(t *testing.T) {
 
 			f.run()
 			require.Equal(t, want, f.logical().PauseReason)
-			require.True(t, store.IsMarginPauseReason(f.logical().PauseReason), "仍算保证金风控暂停")
-			require.Contains(t, store.MarginAttentionDetail(f.logical().PauseReason), "人工处理")
+			require.True(t, f.logical().Pause().Margin(), "仍算保证金风控暂停")
+			require.Contains(t, store.MarginAttentionDetail(f.logical().MarginReduceState), "人工处理")
 			require.Len(t, f.collect, 1, "减仓结束后照常归集")
 
 			f.run()

@@ -51,12 +51,12 @@ func reducedNothing(action store.OperatorActionRecord) bool {
 	return json.Unmarshal([]byte(*action.ResultJSON), &result) == nil && len(result.ReduceTargets) == 0
 }
 
-// Reduce 发起按比例减仓（先暂停组合（自主下单组合不暂停）、撤全部订单，再把现货和合约同比例减掉）。
-type Reduce func(ctx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string) (store.OperatorActionRecord, error)
+// Reduce 发起按比例减仓（先按 pause 暂停组合（自主下单组合不暂停）、撤全部订单，再把现货和合约同比例减掉）；pause.Reason 同时记作动作原因。
+type Reduce func(ctx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, pause store.Pause) (store.OperatorActionRecord, error)
 
 // Pause 只暂停组合（有下架清仓在跑时减仓排不进去，先把组合停住；或改写“减仓待执行”的原因）。
-// 条件更新：只有组合当前的状态和暂停原因仍是 expectedState、expectedReason 时才改，返回是否改了。
-type Pause func(ctx context.Context, spaceID, logicalAccountID, expectedState, expectedReason, reason string) (bool, error)
+// 条件更新：只有组合当前的暂停来源与减仓状态仍是 expected（零值表示仍在自动执行）时才改成 pause，返回是否改了。
+type Pause func(ctx context.Context, spaceID, logicalAccountID string, expected, pause store.Pause) (bool, error)
 
 // Collect 把普通账户现货钱包里的资金归集回合约钱包；pending 为真表示还没完成，下一轮再调（实现须幂等）。
 // idempotencyKey 是这次风控事件的幂等键（风控减仓的动作号，形如 margin-<组合>-<时间>）：风控划转没有目标（target_id 为空串），
@@ -319,7 +319,7 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 		}
 	}
 	// 上一次风控减仓之后，组合要恢复过（用户确认安全后手动恢复，时间记在库里，重启不丢）才会再触发：用户在暂停期间人工下单、撤单、
-	// 清仓改写了暂停原因，比值仍低也不会再自动减一次。例外：风控先把组合暂停、减仓还没排进去（暂停原因是“减仓待执行”）时要补减仓。
+	// 清仓会把暂停来源改成人工，比值仍低也不会再自动减一次。例外：风控先把组合暂停、减仓还没排进去（减仓状态是“减仓待执行”）时要补减仓。
 	// 自主下单组合没有恢复这一步：上一次风控减仓已经结束（还在跑的上面已经返回）就照常判断，比值仍不高于阈值就再减一次。
 	// 例外：上一次减仓一笔都没减（持仓太小，按比例算出的量不足最小下单量），一小时内不再发起，免得每分钟白撤一次用户的挂单。
 	last, err := s.lastMarginAction(ctx, logical)
@@ -328,7 +328,7 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	}
 	if last != nil {
 		if logical.ControlMode != "MANUAL" {
-			if !store.IsMarginPausePending(logical.PauseReason) && logical.ResumedAt <= last.CreatedAt.UnixMilli()+createdAtSlackMillis {
+			if logical.MarginReduceState != store.MarginReducePending && logical.ResumedAt <= last.CreatedAt.UnixMilli()+createdAtSlackMillis {
 				return nil
 			}
 		} else if reducedNothing(*last) && s.now().Sub(last.UpdatedAt) < emptyReduceRetry {
@@ -365,9 +365,9 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	}
 	if len(triggered) == 0 {
 		// “减仓待执行”期间保证金率又回到了安全线：减仓不会再做，原因不能一直写“待执行”，改成“没有减仓、等待确认后恢复”。
-		if safe && store.IsMarginPausePending(logical.PauseReason) && s.Pause != nil {
-			// 只有原因仍是“减仓待执行”时才改写：读到组合之后用户可能已经恢复或改了原因。
-			_, err := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, "PAUSED", store.MarginPausePendingReason(), store.MarginPauseUnreducedReason())
+		if safe && logical.MarginReduceState == store.MarginReducePending && s.Pause != nil {
+			// 只有仍是“减仓待执行”时才改写：读到组合之后用户可能已经恢复或人工暂停。
+			_, err := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.MarginPause(store.MarginReducePending), store.MarginPause(store.MarginUnreduced))
 			return err
 		}
 		return nil
@@ -375,27 +375,27 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	return s.trigger(ctx, logical, settings, triggered)
 }
 
-// noteReduceOutcome 风控减仓结束但没有做完（FAILED、PARTIAL）时，把暂停原因如实改写：只在原因仍是“已按比例减仓”时改。
+// noteReduceOutcome 风控减仓结束但没有做完（FAILED、PARTIAL）时，把减仓状态如实改写：只在仍是“已减仓”时改。
 func (s *Service) noteReduceOutcome(ctx context.Context, logical store.LogicalAccountRecord) error {
-	if logical.PauseReason != store.MarginPauseReason() || s.Pause == nil {
+	if logical.MarginReduceState != store.MarginReduced || s.Pause == nil {
 		return nil
 	}
 	action, err := s.lastMarginAction(ctx, logical)
 	if err != nil || action == nil {
 		return err
 	}
-	reason := ""
+	var outcome store.MarginReduceState
 	switch action.Status {
 	case string(operatordomain.StatusFailed):
-		reason = store.MarginPauseReduceFailedReason()
+		outcome = store.MarginReduceFailed
 	case string(operatordomain.StatusPartial):
-		reason = store.MarginPauseReducePartialReason()
+		outcome = store.MarginReducePartial
 	default:
 		return nil
 	}
-	changed, err := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, "PAUSED", store.MarginPauseReason(), reason)
+	changed, err := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.MarginPause(store.MarginReduced), store.MarginPause(outcome))
 	if changed {
-		log.Warnf("交易关注项：组合 %s 的风控减仓 %s 结束状态为 %s，暂停原因已改写", logical.LogicalAccountID, action.ActionID, action.Status)
+		log.Warnf("交易关注项：组合 %s 的风控减仓 %s 结束状态为 %s，减仓状态已改写", logical.LogicalAccountID, action.ActionID, action.Status)
 	}
 	return err
 }
@@ -414,12 +414,12 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 		detail += reading.Describe()
 	}
 	actionID := store.MarginActionIDPrefix + logical.LogicalAccountID + "-" + s.now().UTC().Format("20060102T150405")
-	_, err := s.Reduce(ctx, logical.SpaceID, actionID, logical.LogicalAccountID, settings.MarginReduceRatio, store.MarginPauseReason())
+	_, err := s.Reduce(ctx, logical.SpaceID, actionID, logical.LogicalAccountID, settings.MarginReduceRatio, store.MarginPause(store.MarginReduced))
 	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
 		// 减仓排不进去（有下架清仓在跑，或拿不到组合锁）：先把组合暂停停住，下一轮再试减仓。
 		if logical.AutomationState == "ACTIVE" && s.Pause != nil {
 			// 只在组合仍在自动执行时暂停：读到组合之后用户可能已经人工暂停，不覆盖人工原因。
-			paused, pauseErr := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, "ACTIVE", "", store.MarginPausePendingReason())
+			paused, pauseErr := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.Pause{}, store.MarginPause(store.MarginReducePending))
 			if pauseErr != nil || !paused {
 				return pauseErr
 			}
@@ -441,7 +441,7 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 
 // collectAfterReduce 把风控减仓做完之后的归集做完：普通账户的现货卖出所得在现货钱包里，要划回合约钱包补保证金。
 // 看组合最近一次风控减仓动作：减仓还在跑就等；动作之后组合恢复过就不再为它归集；其余都按这个动作的动作号归集。
-// 不看暂停原因文字（撤单、外部成交、人工下单、手动暂停都会改写它）；这个动作是否已经归集完成、是否被交易所拒到放弃，
+// 不看暂停状态（撤单、外部成交、人工下单、手动暂停都会改写它）；这个动作是否已经归集完成、是否被交易所拒到放弃，
 // 由 Collect 按引用号查全部划转记录得出（不限时间，重启不丢），这里的 collected 只是进程内的缓存，省掉每分钟重复查余额。
 // 动作结束超过 collectGiveUpAfter 且库里没有它的任何归集记录时不再归集。
 // 归集的账户有一个没就绪就先不记完成，下一轮再来。

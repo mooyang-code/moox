@@ -242,7 +242,7 @@ func TestExternalFactKeepsMarginPauseReason(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.MarginPausePendingReason())
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.MarginPause(store.MarginReducePending))
 	}))
 	service := Service{Store: tradeStore}
 
@@ -251,8 +251,8 @@ func TestExternalFactKeepsMarginPauseReason(t *testing.T) {
 	logicalAccount, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
-	require.Equal(t, store.MarginPausePendingReason(), logicalAccount.PauseReason)
-	require.True(t, store.IsMarginPausePending(logicalAccount.PauseReason))
+	require.Equal(t, store.MarginPause(store.MarginReducePending).Reason, logicalAccount.PauseReason)
+	require.True(t, (logicalAccount.MarginReduceState == store.MarginReducePending))
 }
 
 // 人工暂停的组合出现外部订单时，原因照常换成外部订单的自动暂停原因。
@@ -269,7 +269,7 @@ func TestExternalFactOverridesManualPauseReason(t *testing.T) {
 	logicalAccount, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
-	require.Equal(t, store.AutoPauseReason("发现外部订单或成交 EXTERNAL：account-1"), logicalAccount.PauseReason)
+	require.Equal(t, store.SystemPause("发现外部订单或成交 EXTERNAL：account-1").Reason, logicalAccount.PauseReason)
 }
 
 func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {

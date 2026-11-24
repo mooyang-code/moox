@@ -7,41 +7,77 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 条件暂停：组合当前的状态和原因已不是预期值（用户恢复了、人工改了原因）时不改写。
-func TestPauseLogicalAccountIfOnlyRewritesExpectedReason(t *testing.T) {
+// 条件暂停按暂停来源与减仓状态比对：组合已不是预期的状态（用户恢复了、人工暂停了）时不改写。
+func TestPauseLogicalAccountIfOnlyRewritesExpectedState(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "one", ExecutionMode: "PAPER", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: MarginPausePendingReason(),
+			AutomationState: "PAUSED", PauseReason: "新建",
 		})
 	}))
-	pauseIf := func(state, expected, reason string) bool {
+	pauseIf := func(expected, pause Pause) bool {
 		var changed bool
 		require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 			var err error
-			changed, err = tx.PauseLogicalAccountIf("space-1", "logical-1", state, expected, reason)
+			changed, err = tx.PauseLogicalAccountIf("space-1", "logical-1", expected, pause)
 			return err
 		}))
 		return changed
 	}
-	// 人工改写了原因之后，风控“减仓待执行 → 没有减仓”的改写不生效。
+	current := func() LogicalAccountRecord {
+		logical, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
+		require.NoError(t, err)
+		return logical
+	}
+	require.Equal(t, PauseSourceUser, current().PauseSource, "新建组合的初始暂停记为人工")
+
+	// 人工暂停之后，风控“减仓待执行 → 没有减仓”的改写不生效。
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工暂停")
 	}))
-	require.False(t, pauseIf("PAUSED", MarginPausePendingReason(), MarginPauseUnreducedReason()))
-	logical, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, "人工暂停", logical.PauseReason)
-	// 预期仍成立时才改。
+	require.False(t, pauseIf(MarginPause(MarginReducePending), MarginPause(MarginUnreduced)))
+	require.Equal(t, UserPause("人工暂停"), current().Pause())
+
+	// 预期仍成立时才改，原因跟着减仓状态换成固定文字。
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", MarginPausePendingReason())
+		return tx.PauseLogicalAccount("space-1", "logical-1", MarginPause(MarginReducePending))
 	}))
-	require.True(t, pauseIf("PAUSED", MarginPausePendingReason(), MarginPauseUnreducedReason()))
-	logical, err = s.GetLogicalAccount(ctx, "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, MarginPauseUnreducedReason(), logical.PauseReason)
-	// 组合已不是自动执行状态时，“ACTIVE → 减仓待执行”的暂停不生效。
-	require.False(t, pauseIf("ACTIVE", "", MarginPausePendingReason()))
+	require.True(t, pauseIf(MarginPause(MarginReducePending), MarginPause(MarginUnreduced)))
+	require.Equal(t, MarginPause(MarginUnreduced), current().Pause())
+
+	// 组合已不在自动执行时，“运行中 → 减仓待执行”的暂停不生效。
+	require.False(t, pauseIf(Pause{}, MarginPause(MarginReducePending)))
+
+	// 恢复后三列一起清空，再从运行中暂停才生效。
+	require.NoError(t, s.DBForTest().Exec(`UPDATE t_logical_accounts SET c_automation_state = 'ACTIVE', c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = ''`).Error)
+	require.True(t, pauseIf(Pause{}, SystemPause("发现外部订单")))
+	require.Equal(t, PauseSourceSystem, current().PauseSource)
+	require.True(t, current().Pause().Auto())
+	require.False(t, current().Pause().Margin())
+}
+
+// 表约束：暂停来源与减仓状态必须和自动执行状态一致，减仓状态只在保证金率风控暂停时出现。
+func TestLogicalAccountPauseColumnsConstraints(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "one", ExecutionMode: "PAPER", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "新建",
+		})
+	}))
+	for _, update := range []string{
+		`UPDATE t_logical_accounts SET c_pause_source = ''`,
+		`UPDATE t_logical_accounts SET c_margin_reduce_state = 'PENDING'`,
+		`UPDATE t_logical_accounts SET c_pause_source = 'MARGIN'`,
+		`UPDATE t_logical_accounts SET c_automation_state = 'ACTIVE', c_pause_reason = ''`,
+		`UPDATE t_logical_accounts SET c_pause_source = 'OTHER'`,
+	} {
+		require.Error(t, s.DBForTest().Exec(update).Error, update)
+	}
+	require.Error(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PauseLogicalAccount("space-1", "logical-1", Pause{Source: PauseSourceMargin, Reason: "缺减仓状态"})
+	}), "保证金率风控暂停必须带减仓状态")
 }
