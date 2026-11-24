@@ -54,6 +54,9 @@
 # 币安永续 1h/1d 可选资金费率：--output-field 会替换默认字段，要把默认字段一起列出，例如
 # --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；采集方式不填用市场默认值（crypto 是 stream），要指定加 --ingest stream|scf|local；建完用 ingest-mode get 确认
 # 股票任务（A 股、港股、美股）不要用默认的 --output-field（那是现货、永续行的字段），带 --all-output-fields 输出股票行的全部字段
+# 合成任务：先 collector resample preview --source-task-id <源任务> --target-frequency 5m 看能否合成，再
+# collector task create --space-id <空间> --name "<名称>" --source-task-id <源任务> --frequency 5m（不带 --tag-id；标的、源参数跟源任务走；
+# 不给 --output-field 就输出合成的全部固定字段，资金费率与附加字段不合成）；要历史数据再用 collector resample backfill
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
 ./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认

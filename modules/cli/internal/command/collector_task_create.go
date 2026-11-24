@@ -26,6 +26,8 @@ type collectorTaskCreateFlags struct {
 	Lateness  int
 	Disabled  bool
 	Ingest    string
+	// SourceTaskID 不为空时建 K 线合成任务：源参数由服务端按源任务推导，--frequency 是目标周期。
+	SourceTaskID string
 }
 
 var collectorTaskCreateFlagsValue collectorTaskCreateFlags
@@ -37,17 +39,36 @@ var collectorTaskCmd = &cobra.Command{
 
 var collectorTaskCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "创建 K 线采集任务（可指定采集方式与每函数标的数）",
+	Short: "创建 K 线采集任务或合成任务（--source-task-id）",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if strings.TrimSpace(collectorTaskCreateFlagsValue.SourceTaskID) != "" {
+			if err := validateResampleCreateFlags(cmd); err != nil {
+				return err
+			}
+			return runCollectorTaskCreate(cmd.Context(), cmd.OutOrStdout(), collectorTaskCreateFlagsValue, cmd.Flags().Changed("output-field"))
+		}
 		if collectorTaskCreateFlagsValue.AllFields && cmd.Flags().Changed("output-field") {
 			return errors.New("--all-output-fields 不能与 --output-field 同时用")
 		}
 		if hint := collectorTaskCreateFieldsHint(collectorTaskCreateFlagsValue, cmd.Flags().Changed("output-field")); hint != "" {
 			fmt.Fprintln(cmd.ErrOrStderr(), hint)
 		}
-		return runCollectorTaskCreate(cmd.Context(), cmd.OutOrStdout(), collectorTaskCreateFlagsValue)
+		return runCollectorTaskCreate(cmd.Context(), cmd.OutOrStdout(), collectorTaskCreateFlagsValue, true)
 	},
+}
+
+// validateResampleCreateFlags 检查合成任务的参数：目标周期必须显式给出；标的、采集方式、每函数标的数和迟到时间都跟源任务或固定值走，不能指定。
+func validateResampleCreateFlags(cmd *cobra.Command) error {
+	if !cmd.Flags().Changed("frequency") {
+		return errors.New("合成任务必须用 --frequency 指定目标周期（例如 5m）")
+	}
+	for _, name := range []string{"tag-id", "ingest", "symbols-per-function", "allowed-lateness-seconds", "all-output-fields"} {
+		if cmd.Flags().Changed(name) {
+			return fmt.Errorf("合成任务不能指定 --%s：标的与源参数由源任务决定", name)
+		}
+	}
+	return nil
 }
 
 // collectorTaskCreateFieldsHint 在既没显式给 --output-field、也没带 --all-output-fields 时返回一句提示：
@@ -68,8 +89,9 @@ func init() {
 	flags.StringVar(&collectorTaskCreateFlagsValue.Name, "name", "", "任务名称")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Description, "description", "", "任务说明")
 	flags.StringSliceVar(&collectorTaskCreateFlagsValue.TagIDs, "tag-id", nil, "标的标签，可重复")
-	flags.StringVar(&collectorTaskCreateFlagsValue.Frequency, "frequency", "1m", "K 线频率")
-	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段；默认值是现货、永续行的字段，股票任务用 --all-output-fields")
+	flags.StringVar(&collectorTaskCreateFlagsValue.Frequency, "frequency", "1m", "K 线频率；合成任务是目标周期，必须显式给出")
+	flags.StringVar(&collectorTaskCreateFlagsValue.SourceTaskID, "source-task-id", "", "建 K 线合成任务：源采集任务 ID（源数据集、源周期由服务端推导；先用 collector resample preview 看目标周期是否可行）")
+	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段；默认值是现货、永续行的字段，股票任务用 --all-output-fields；合成任务不给就输出合成的全部固定字段")
 	flags.BoolVar(&collectorTaskCreateFlagsValue.AllFields, "all-output-fields", false, "不指定输出字段：输出该品种行的全部字段，与内置任务不写 output_fields 相同（股票任务用它）；不能与 --output-field 同时用")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Symbols, "symbols-per-function", 0, "定时模式下每个函数负责的标的数（0 为默认 50）")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
@@ -77,11 +99,20 @@ func init() {
 	flags.StringVar(&collectorTaskCreateFlagsValue.Ingest, "ingest", "", "采集方式：stream（collector-stream 接收推送）、scf（云函数定时拉取）或 local（collector-stream 本地定时拉取）；留空用市场默认值")
 }
 
-func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorTaskCreateFlags) error {
-	if strings.TrimSpace(flags.SpaceID) == "" || strings.TrimSpace(flags.Name) == "" || len(flags.TagIDs) == 0 {
-		return errors.New("--space-id, --name and at least one --tag-id are required")
+// fieldsGiven 只对合成任务有意义：没显式给 --output-field 时不发 output_fields，输出合成的全部固定字段（资金费率、股票附加字段不合成）。
+func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorTaskCreateFlags, fieldsGiven bool) error {
+	resample := strings.TrimSpace(flags.SourceTaskID) != ""
+	if strings.TrimSpace(flags.SpaceID) == "" || strings.TrimSpace(flags.Name) == "" {
+		return errors.New("--space-id and --name are required")
 	}
-	structured, err := structpb.NewStruct(collectorTaskCreateParams(flags))
+	if !resample && len(flags.TagIDs) == 0 {
+		return errors.New("at least one --tag-id is required（建合成任务用 --source-task-id）")
+	}
+	dataType, params := "kline", collectorTaskCreateParams(flags)
+	if resample {
+		dataType, params = "kline_resample", collectorResampleTaskParams(flags, fieldsGiven)
+	}
+	structured, err := structpb.NewStruct(params)
 	if err != nil {
 		return err
 	}
@@ -93,7 +124,7 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	defer gateway.Close()
 	rsp := &collectorpb.CreateTaskRsp{}
 	req := &collectorpb.CreateTaskReq{
-		Task: &collectorpb.CollectionTask{SpaceId: flags.SpaceID, TaskName: flags.Name, Description: flags.Description, DataType: "kline", Ingest: strings.ToLower(strings.TrimSpace(flags.Ingest)), TagIds: flags.TagIDs, CollectParams: structured, Enabled: &enabled, Creator: "moox-cli"},
+		Task: &collectorpb.CollectionTask{SpaceId: flags.SpaceID, TaskName: flags.Name, Description: flags.Description, DataType: dataType, Ingest: strings.ToLower(strings.TrimSpace(flags.Ingest)), TagIds: flags.TagIDs, CollectParams: structured, Enabled: &enabled, Creator: "moox-cli"},
 	}
 	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "CreateTask", req, rsp); err != nil {
 		return fmt.Errorf("create task: %w", err)
@@ -115,6 +146,15 @@ func collectorTaskCreateParams(flags collectorTaskCreateFlags) map[string]any {
 	}
 	if flags.Lateness > 0 {
 		params["allowed_lateness_seconds"] = flags.Lateness
+	}
+	return params
+}
+
+// collectorResampleTaskParams 拼出合成任务的参数，与管理台一致：只给源任务和目标周期，源数据集、源周期、序列由服务端推导。
+func collectorResampleTaskParams(flags collectorTaskCreateFlags, fieldsGiven bool) map[string]any {
+	params := map[string]any{"source_task_id": strings.TrimSpace(flags.SourceTaskID), "target_frequency": strings.TrimSpace(flags.Frequency)}
+	if fieldsGiven {
+		params["output_fields"] = stringsToAny(flags.Fields)
 	}
 	return params
 }
