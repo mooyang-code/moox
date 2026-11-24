@@ -21,10 +21,7 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 	_, err = store.WithDatabase(mgr, func(db *gorm.DB) struct{} {
 		for _, table := range []string{
 			"t_monitor_checks",
-			"t_monitor_check_results",
 			"t_monitor_notification_channels",
-			"t_monitor_alert_rules",
-			"t_monitor_alert_states",
 			"t_monitor_alert_events",
 			"t_monitor_host_agents",
 			"t_monitor_host_samples",
@@ -37,9 +34,8 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 		}
 
 		for _, index := range []string{
-			"uk_monitor_checks_key",
-			"uk_monitor_alert_rules_key",
-			"uk_monitor_alert_states_key",
+			"idx_t_monitor_checks_alert",
+			"idx_t_monitor_alert_events_check",
 			"uk_monitor_metric_services_key", "uk_monitor_metric_series_key", "uk_monitor_metric_ingest_message",
 		} {
 			var count int64
@@ -60,14 +56,20 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 				t.Fatalf("single-instance schema must not create %s", table)
 			}
 		}
-		for _, table := range []string{"t_monitor_alert_states", "t_monitor_alert_events"} {
+		for _, table := range []string{"t_monitor_checks", "t_monitor_alert_events"} {
 			if db.Migrator().HasColumn(table, "c_owner_instance_id") {
 				t.Fatalf("single-instance schema must not create %s.c_owner_instance_id", table)
 			}
 		}
-		for _, table := range []string{"t_monitor_checks", "t_monitor_alert_rules"} {
+		for _, table := range []string{"t_monitor_checks"} {
 			if db.Migrator().HasColumn(table, "c_is_deleted") {
 				t.Fatalf("greenfield hard-delete schema must not create %s.c_is_deleted", table)
+			}
+		}
+		// 检查结果、告警规则、告警状态三张表已合进检查表。
+		for _, table := range []string{"t_monitor_check_results", "t_monitor_alert_rules", "t_monitor_alert_states"} {
+			if db.Migrator().HasTable(table) {
+				t.Fatalf("merged table %s must not be created", table)
 			}
 		}
 		for _, table := range []string{"t_monitor_webhooks", "t_monitor_metric_rules", "t_monitor_metric_rule_states", "t_monitor_metric_rule_evaluations", "t_monitor_metric_rule_channels"} {

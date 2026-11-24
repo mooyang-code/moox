@@ -18,7 +18,7 @@ func archiveChecks(t *testing.T, datasets []string, seed func(db *gorm.DB, now t
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) { seed(db, now) })
 	builder := Builder{Metrics: query, Now: func() time.Time { return now }, Datasets: datasetsStub(datasets)}
-	overview, err := builder.Build(t.Context(), "")
+	overview, err := builder.buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

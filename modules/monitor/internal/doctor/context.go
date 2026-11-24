@@ -136,7 +136,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 			return Context{}, err
 		}
 		for _, event := range events {
-			if event.Status == domain.AlertStatusFiring {
+			if event.EventType == domain.AlertEventTriggered || event.EventType == domain.AlertEventReminder {
 				out.Alerts = append(out.Alerts, event)
 			}
 		}

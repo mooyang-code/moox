@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-
 	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
@@ -60,6 +59,8 @@ type HostStatus struct {
 
 type DatasetFrequencyStatus struct {
 	Producer, SpaceID, DatasetID, Freq, Status, Reason string
+	// ServiceName 是上报这项数据集指标的服务（组件 ID）。
+	ServiceName string
 	// DisplayName 是生产者随期望清单上报的展示名称（moox_<模块>_dataset_info 的 name 标签，例如策略实例名），
 	// 没有上报时为空，由调用方退回 Storage 里的数据集名称或数据集 ID。
 	DisplayName string
@@ -98,31 +99,31 @@ type DatasetFrequencyStatus struct {
 	Timezone string
 }
 
+// BusinessStatus 是一项业务检查本轮的结果：Status 为 healthy 时通过，其余（down、degraded、stale、unknown）都算失败。
 type BusinessStatus struct {
 	SpaceID, Kind, Module, Status, Reason string
 	CheckID, RawError, Name               string
-	LastCheckedAt                         time.Time
-	// FromStoredCheck 表示这一项是从库里已有检查读回来的上一次结果，不是本轮按指标新算出的；同一检查本轮有新结果时会被新结果替换。
-	FromStoredCheck bool
+	// Severity 是生产者给出的级别（关注项的 critical、warning）；为空时按检查 ID 推出。
+	Severity string
+	// Frozen 表示本轮读不到依赖、无法判断：检查保持原状态（既不推进也不删除）。
+	Frozen        bool
+	LastCheckedAt time.Time
 }
 
 type Overview struct {
-	GeneratedAt    time.Time
-	Services       []ServiceStatus
-	Unregistered   []ServiceStatus
-	TopologyKnown  bool
-	Topology       *domain.TopologySnapshot
-	Hosts          []HostStatus
-	Datasets       []DatasetFrequencyStatus
-	BusinessChecks []BusinessStatus
+	GeneratedAt   time.Time
+	Services      []ServiceStatus
+	Unregistered  []ServiceStatus
+	TopologyKnown bool
+	Topology      *domain.TopologySnapshot
+	Hosts         []HostStatus
+	Datasets      []DatasetFrequencyStatus
 }
 
 type Builder struct {
 	Metrics                    *monmetrics.QueryService
 	Hosts                      *hostmetrics.Store
-	Checks                     *store.CheckRepository
 	Topology                   *store.TopologyRepository
-	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
 	BalanceDifferenceThreshold float64
 	MarketFetchThresholds      MarketFetchThresholds
@@ -163,56 +164,39 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
 		return Overview{}, err
 	}
-	if out.BusinessChecks, err = b.buildBusinessChecks(ctx, spaceID); err != nil {
-		return Overview{}, err
-	}
-	coordination, err := b.buildMarketFetchCoordination(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, coordination...)
-	streams, err := b.buildCollectorStreamMissing(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, streams...)
-	params, err := b.buildFactorParamHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, params...)
-	delivery, err := b.buildStorageOutboxHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, delivery...)
-	viewFiles, err := b.buildViewFileLimitHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, viewFiles...)
-	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, presence...)
-	objectStore, err := b.buildArchiveObjectStore(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, objectStore...)
-	archive, err := b.buildArchiveHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, archive...)
-	seriesLimit, err := b.buildSeriesLimitHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, seriesLimit...)
-	out.BusinessChecks = uniqueBusinessChecks(out.BusinessChecks)
 	sortOverview(&out)
+	return out, nil
+}
+
+// BusinessChecks 按指标算出本轮的业务检查（关注项与 Monitor 替生产者判断的那几项），只在检查评估里调用；
+// 页面读检查表里上一轮评估的结果。每项都带检查 ID、名称（关注项另带级别）。
+func (b Builder) BusinessChecks(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
+	builds := []func(context.Context, string, time.Time) ([]BusinessStatus, error){
+		func(ctx context.Context, _ string, _ time.Time) ([]BusinessStatus, error) {
+			return b.buildBalanceStatuses(ctx)
+		},
+		func(ctx context.Context, _ string, now time.Time) ([]BusinessStatus, error) {
+			return b.buildAttentionStatuses(ctx, now)
+		},
+		b.buildMarketFetchCoordination, b.buildCollectorStreamMissing, b.buildFactorParamHealth, b.buildStorageOutboxHealth,
+		b.buildViewFileLimitHealth, b.buildWorkerPresence, b.buildArchiveObjectStore, b.buildArchiveHealth, b.buildSeriesLimitHealth,
+	}
+	var out []BusinessStatus
+	for _, build := range builds {
+		items, err := build(ctx, "", now)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if item.CheckID == "" {
+				item.CheckID, item.Name = businessCheckIdentity(item)
+			}
+			if item.SpaceID == "" {
+				item.SpaceID = events.SystemSpaceID
+			}
+			out = append(out, item)
+		}
+	}
 	return out, nil
 }
 
@@ -643,7 +627,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 		if !exists {
 			current = aggregatedDataset{
 				key: datasetKey{
-					producer: key.producer, spaceID: key.spaceID,
+					service: key.service, producer: key.producer, spaceID: key.spaceID,
 					datasetID: key.datasetID, primaryDatasetID: key.primaryDatasetID, freq: key.freq,
 				},
 				value: value,
@@ -943,7 +927,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		PrimaryDatasetID: key.primaryDatasetID,
 		LastRunAt:        unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess), LastPartialAt: unixTime(value.lastPartial),
 		InputWatermarkAt: unixTime(value.input), OutputWatermarkAt: unixTime(value.output),
-		LastReportedAt: value.reportedAt,
+		LastReportedAt: value.reportedAt, ServiceName: key.service,
 	}
 	runLag, successLag, lateness := datasetTolerances(key, value.interval, policy)
 	item.LatenessLimitSeconds = int64(lateness / time.Second)
@@ -1056,58 +1040,6 @@ func parseOverviewFrequency(raw string) time.Duration {
 		return 0
 	}
 	return parsed.NominalDuration()
-}
-
-func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
-	out := make([]BusinessStatus, 0)
-	if b.Checks != nil && b.Results != nil {
-		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness"}, 1501)
-		if err != nil {
-			return nil, err
-		}
-		if len(checks) > 1500 {
-			return nil, fmt.Errorf("business checks exceed 1500 items")
-		}
-		for _, check := range checks {
-			kind := businessKind(check)
-			if kind == "" {
-				continue
-			}
-			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Name: check.Name, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报", FromStoredCheck: true}
-			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
-			if err != nil {
-				return nil, err
-			}
-			if len(results) > 0 {
-				item.LastCheckedAt = results[0].CheckedAt.UTC()
-				item.Status = strings.ToLower(string(results[0].Status))
-				item.Reason = results[0].ErrorMessage
-				item.RawError = results[0].RawError
-				if item.Reason == "" {
-					item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
-				}
-				if item.Reason == domain.CheckReasonRetired {
-					item.Status = "disabled"
-				}
-			}
-			out = append(out, item)
-		}
-	}
-	// 余额对账和各模块的关注项与空间无关，归在 mooxsys 下。
-	if spaceID != "" && spaceID != events.SystemSpaceID {
-		return out, nil
-	}
-	balances, err := b.buildBalanceStatuses(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, balances...)
-	attention, err := b.buildAttentionStatuses(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, attention...)
-	return out, nil
 }
 
 func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, error) {
@@ -1371,55 +1303,6 @@ func (b Builder) balanceMetricValues(ctx context.Context, metricName string) (ma
 	return out, nil
 }
 
-func businessKind(check domain.Check) string {
-	kind, _, ok := strings.Cut(check.CheckID, ":")
-	if !ok {
-		return ""
-	}
-	switch kind {
-	case "market_canary", "subject_tag", "balance", "module", "kline_freshness":
-		return kind
-	default:
-		return ""
-	}
-}
-
-func businessModule(checkID string) string {
-	kind, id, _ := strings.Cut(checkID, ":")
-	switch kind {
-	case "market_canary", "subject_tag", "kline_freshness":
-		return "collector"
-	case "balance":
-		return "trade"
-	case "module":
-		for _, check := range report.BuiltInModuleHealthChecks() {
-			if check.ID == id {
-				return check.Module
-			}
-		}
-	}
-	return ""
-}
-
-// Live metric facts supersede the cached external check for the same identity.
-func uniqueBusinessChecks(items []BusinessStatus) []BusinessStatus {
-	indexes := make(map[string]int, len(items))
-	out := make([]BusinessStatus, 0, len(items))
-	for _, item := range items {
-		if item.CheckID == "" {
-			item.CheckID = item.Kind + ":" + item.Module
-		}
-		key := item.SpaceID + "\x00" + item.CheckID
-		if i, exists := indexes[key]; exists {
-			out[i] = item
-			continue
-		}
-		indexes[key] = len(out)
-		out = append(out, item)
-	}
-	return out
-}
-
 func sortOverview(out *Overview) {
 	sort.Slice(out.Services, func(i, j int) bool {
 		if statusRank(out.Services[i].Status) != statusRank(out.Services[j].Status) {
@@ -1440,12 +1323,6 @@ func sortOverview(out *Overview) {
 		left := out.Datasets[i].Producer + "\x00" + out.Datasets[i].DatasetID + "\x00" + out.Datasets[i].Freq
 		right := out.Datasets[j].Producer + "\x00" + out.Datasets[j].DatasetID + "\x00" + out.Datasets[j].Freq
 		return left < right
-	})
-	sort.Slice(out.BusinessChecks, func(i, j int) bool {
-		if statusRank(out.BusinessChecks[i].Status) != statusRank(out.BusinessChecks[j].Status) {
-			return statusRank(out.BusinessChecks[i].Status) < statusRank(out.BusinessChecks[j].Status)
-		}
-		return out.BusinessChecks[i].Kind < out.BusinessChecks[j].Kind
 	})
 }
 

@@ -87,7 +87,8 @@ func (b Builder) buildArchiveHealth(ctx context.Context, spaceID string, now tim
 	}
 	datasets, err := b.Datasets.ListArchivableDatasets(ctx)
 	if err != nil {
-		return out, nil // 数据集清单暂时拿不到时不判断覆盖情况
+		// 数据集清单暂时拿不到时不判断覆盖情况：保持原状态，不能当成“不再检查”把已有告警恢复掉。
+		return append(out, BusinessStatus{SpaceID: events.SystemSpaceID, Kind: "archive_coverage", Module: "archive", Frozen: true}), nil
 	}
 	var missing []string
 	for _, key := range datasets {

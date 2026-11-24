@@ -7,13 +7,6 @@ import "host_metric.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen;monitorpb";
 
-enum AlertStatus {
-  ALERT_STATUS_UNSPECIFIED = 0;
-  ALERT_STATUS_OK = 1;
-  ALERT_STATUS_FIRING = 2;
-  ALERT_STATUS_RESOLVED = 3;
-}
-
 enum AlertEventType {
   ALERT_EVENT_TYPE_UNSPECIFIED = 0;
   ALERT_EVENT_TYPE_TRIGGERED = 1;
@@ -21,16 +14,17 @@ enum AlertEventType {
   ALERT_EVENT_TYPE_RESOLVED = 3;
 }
 
+// AlertEvent 是一条告警事件；标题与级别是写事件时检查的名称与级别，检查删除后仍能显示。
 message AlertEvent {
   string event_id = 1;
   string space_id = 2;
-  string rule_id = 3;
-  string check_id = 4;
-  AlertEventType event_type = 5;
-  AlertStatus status = 6;
-  string message = 8;
-  string payload_json = 9;
-  string created_at = 10;
+  string check_id = 3;
+  AlertEventType event_type = 4;
+  string title = 5;
+  string severity = 6;
+  string message = 7;
+  string payload_json = 8;
+  string created_at = 9;
 }
 
 // Health overview v2: identities are explicit; status has six canonical values.
@@ -283,7 +277,7 @@ message AlertIncident {
   string triggered_at = 6;
   // 为空表示尚未收到恢复记录。
   string resolved_at = 7;
-  // 告警是否仍在进行；检查被停用或删除时告警直接撤销，没有恢复记录，active 为 false。
+  // 告警是否仍在进行；检查不再产出（对象停用或删除）时会写一条恢复记录，active 为 false。
   bool active = 8;
   int32 reminder_count = 9;
   bool notify_failed = 10;

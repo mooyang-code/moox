@@ -21,7 +21,7 @@ instance:
   instance_id: ""
 
 scheduler:
-  result_retention_days: 14
+  alert_event_retention_days: 14
 
 deployment:
   # 从 Admin 同步部署拓扑（每台主机应该有哪些组件）；组件健康只看各组件的上报。

@@ -43,9 +43,9 @@ type InstanceConfig struct {
 	InstanceID string `yaml:"instance_id"`
 }
 
-// SchedulerConfig 是检查结果的保留天数（检查由检查定时器每 30 秒评估，没有单独的调度并发）。
+// SchedulerConfig 是告警事件的保留天数（检查由检查定时器每 30 秒评估，没有单独的调度并发；检查结果不保存历史）。
 type SchedulerConfig struct {
-	ResultRetentionDays int `yaml:"result_retention_days"`
+	AlertEventRetentionDays int `yaml:"alert_event_retention_days"`
 }
 
 // DeploymentConfig 控制是否从 Admin 同步部署拓扑（每台主机应该有哪些组件）；组件健康只看上报，不做探测。
@@ -155,7 +155,7 @@ func Default() *Config {
 			InstanceID: defaultInstanceID(),
 		},
 		Scheduler: SchedulerConfig{
-			ResultRetentionDays: 14,
+			AlertEventRetentionDays: 14,
 		},
 		Deployment: DeploymentConfig{Enabled: true},
 		Alert: AlertConfig{
@@ -197,8 +197,8 @@ func (c *Config) applyDefaults() {
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = defaults.Instance.InstanceID
 	}
-	if c.Scheduler.ResultRetentionDays == 0 {
-		c.Scheduler.ResultRetentionDays = defaults.Scheduler.ResultRetentionDays
+	if c.Scheduler.AlertEventRetentionDays == 0 {
+		c.Scheduler.AlertEventRetentionDays = defaults.Scheduler.AlertEventRetentionDays
 	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds

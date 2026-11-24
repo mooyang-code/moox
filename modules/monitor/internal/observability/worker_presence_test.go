@@ -12,7 +12,7 @@ func presenceChecks(t *testing.T, seed func(db *gorm.DB, now time.Time)) map[str
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) { seed(db, now) })
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

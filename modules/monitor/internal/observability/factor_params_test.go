@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func factorParamChecks(got Overview) map[string]BusinessStatus {
+func factorParamChecks(got testOverview) map[string]BusinessStatus {
 	out := map[string]BusinessStatus{}
 	for _, check := range got.BusinessChecks {
 		if check.Kind == "factor_params" {
@@ -26,7 +26,7 @@ func TestBuilderReportsStrategyParamDeliveryStale(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "stale-hot", "strategy", "strategy@control", "moox_strategy_param_delivery_stale", `{"space_id":"crypto","instance_id":"i1"}`, 1, now)
 		seedOverviewMetricForInstance(t, db, "stale-ok", "strategy", "strategy@control", "moox_strategy_param_delivery_stale", `{"space_id":"crypto","instance_id":"i2"}`, 0, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	checks := factorParamChecks(got)
 	require.Equal(t, "down", checks["delivery"].Status)
@@ -34,7 +34,7 @@ func TestBuilderReportsStrategyParamDeliveryStale(t *testing.T) {
 	require.NotContains(t, checks["delivery"].Reason, "i2")
 
 	empty, _ := openOverviewState(t, func(*gorm.DB) {})
-	got, err = (Builder{Metrics: empty, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err = (Builder{Metrics: empty, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Empty(t, factorParamChecks(got))
 }
@@ -44,7 +44,7 @@ func TestBuilderStrategyParamDeliveryHealthyWhenAlertsClear(t *testing.T) {
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "stale-ok", "strategy", "strategy@control", "moox_strategy_param_delivery_stale", `{"space_id":"crypto","instance_id":"i1"}`, 0, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Equal(t, "healthy", factorParamChecks(got)["delivery"].Status)
 }
@@ -60,7 +60,7 @@ func TestBuilderStrategyParamDeliveryReadsAllSeriesPages(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "stale-zzz", "strategy", "strategy@control", "moox_strategy_param_delivery_stale",
 			`{"space_id":"crypto","instance_id":"last"}`, 1, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	checks := factorParamChecks(got)
 	require.Equal(t, "down", checks["delivery"].Status)

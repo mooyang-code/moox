@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,7 +14,7 @@ func attentionChecks(t *testing.T, seed func(db *gorm.DB, now time.Time)) map[st
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) { seed(db, now) })
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	out := map[string]BusinessStatus{}
 	for _, item := range overview.BusinessChecks {
@@ -52,7 +53,7 @@ func TestAttentionChecksBelongToSystemSpace(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "tr-rejected", "trade", "trade@control", "moox_attention_active", `{"kind":"target_rejected","name":"交易目标被拒绝","severity":"critical","detail":"x"}`, 1, now)
 	})
 	has := func(spaceID string) bool {
-		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), spaceID)
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), spaceID)
 		require.NoError(t, err)
 		for _, item := range overview.BusinessChecks {
 			if item.CheckID == "attention:trade:target_rejected" {
@@ -76,9 +77,9 @@ func TestWarningAttentionIsDegraded(t *testing.T) {
 	key := checks["attention:collector:delist_readonly_key_missing"]
 	require.Equal(t, "degraded", key.Status)
 	require.Contains(t, key.Reason, "只读 Key")
-	require.Equal(t, "warning", AttentionSeverity("attention:collector:delist_readonly_key_missing"))
+	require.Equal(t, "warning", key.Severity)
 	require.Equal(t, "down", checks["attention:collector:delist_source_failed"].Status)
-	require.Equal(t, "critical", AttentionSeverity("attention:collector:delist_source_failed"))
+	require.Equal(t, "critical", checks["attention:collector:delist_source_failed"].Severity)
 }
 
 func TestParseAttentionCheckID(t *testing.T) {
@@ -90,4 +91,41 @@ func TestParseAttentionCheckID(t *testing.T) {
 		_, _, ok := ParseAttentionCheckID(id)
 		require.False(t, ok, id)
 	}
+}
+
+// 只取未过期的序列：超过 500 条已过期的历史序列（series_id 排在前面）也挤不掉新鲜序列；detail 变化时取最新那条。
+func TestAttentionReadsOnlyFreshSeries(t *testing.T) {
+	checks := attentionChecks(t, func(db *gorm.DB, now time.Time) {
+		for i := range 600 {
+			seedOverviewMetricForInstance(t, db, fmt.Sprintf("a-old-%04d", i), "trade", "trade@control", "moox_attention_active",
+				fmt.Sprintf(`{"kind":"auto_paused","name":"组合账户自动暂停","severity":"critical","detail":"旧 %d"}`, i), 1, now.Add(-time.Hour))
+		}
+		seedOverviewMetricForInstance(t, db, "z-older", "trade", "trade@control", "moox_attention_active", `{"kind":"auto_paused","name":"组合账户自动暂停","severity":"critical","detail":"上一条"}`, 1, now.Add(-20*time.Second))
+		seedOverviewMetricForInstance(t, db, "z-new", "trade", "trade@control", "moox_attention_active", `{"kind":"auto_paused","name":"组合账户自动暂停","severity":"critical","detail":""}`, 0, now)
+	})
+	require.Len(t, checks, 1)
+	require.Equal(t, "healthy", checks["attention:trade:auto_paused"].Status, "取最近一次上报的那条")
+}
+
+// 未过期的序列超过上限时报错：业务域本轮整体不推进，不能把截掉的关注项当成“不再产出”删掉。
+func TestAttentionTooManyFreshSeriesFails(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		for i := range attentionSeriesLimit + 1 {
+			seedOverviewMetricForInstance(t, db, fmt.Sprintf("s-%05d", i), "trade", "trade@control", "moox_attention_active",
+				fmt.Sprintf(`{"kind":"k%d","name":"n","severity":"critical","detail":""}`, i), 0, now)
+		}
+	})
+	_, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).BusinessChecks(t.Context(), now)
+	require.Error(t, err)
+}
+
+// 序列过期截止比服务判定多放一轮：生产者刚停报（序列 2 分 10 秒没更新）时仍按最后的值产出，等组件停止上报接手冻结。
+func TestAttentionFreshCutoffHasOneExtraRound(t *testing.T) {
+	checks := attentionChecks(t, func(db *gorm.DB, now time.Time) {
+		seedOverviewMetricForInstance(t, db, "tr", "trade", "trade@control", "moox_attention_active", `{"kind":"auto_paused","name":"组合账户自动暂停","severity":"critical","detail":"x"}`, 1, now.Add(-130*time.Second))
+		seedOverviewMetricForInstance(t, db, "tr-gone", "trade", "trade@control", "moox_attention_active", `{"kind":"target_blocked","name":"交易目标持续阻塞","severity":"critical","detail":"x"}`, 1, now.Add(-160*time.Second))
+	})
+	require.Equal(t, "down", checks["attention:trade:auto_paused"].Status)
+	require.NotContains(t, checks, "attention:trade:target_blocked")
 }

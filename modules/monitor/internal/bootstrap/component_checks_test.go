@@ -43,20 +43,31 @@ func newComponentHarness(t *testing.T, componentID string, rows ...monmetrics.Me
 	h := &componentHarness{t: t, db: handle, repos: manager.Repositories(), state: observationState{Ready: true}}
 	seedBusinessTopology(t, h.repos, "node-a", componentID, true)
 	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
-		Metrics: query, Checks: h.repos.Checks, Topology: h.repos.Topology, Results: h.repos.Results,
-	}, h.repos, nil, func(time.Time) observationState { return h.state }, 30*time.Second)
+		Metrics: query, Topology: h.repos.Topology,
+	}, h.repos, testApplier(h.repos), func(time.Time) observationState { return h.state }, 30*time.Second)
 	h.run = func() error { return run(t.Context()) }
 	return h
 }
 
-// latest 返回检查最近一次结果；ok 为 false 表示这项检查还没有被判定过。
-func (h *componentHarness) latest(checkID string) (domain.CheckResult, bool) {
-	results, err := h.repos.Results.Recent(h.t.Context(), events.SystemSpaceID, checkID, 1)
-	require.NoError(h.t, err)
-	if len(results) == 0 {
-		return domain.CheckResult{}, false
+// latest 返回检查最近一次结果；ok 为 false 表示这项检查还没有被判定过（没有检查行）。
+func (h *componentHarness) latest(checkID string) (checkResult, bool) {
+	return latestResult(h.t, h.repos, events.SystemSpaceID, checkID)
+}
+
+// checkResult 是检查行里最近一次结果的部分。
+type checkResult struct {
+	Success                bool
+	ErrorMessage, RawError string
+}
+
+// latestResult 读检查行里的最近一次结果；没有检查行时 ok 为 false。
+func latestResult(t *testing.T, repositories *store.Repositories, spaceID, checkID string) (checkResult, bool) {
+	t.Helper()
+	row := checkRow(t, repositories, spaceID, checkID)
+	if row == nil {
+		return checkResult{}, false
 	}
-	return results[0], true
+	return checkResult{Success: row.Status != domain.CheckStatusDown, ErrorMessage: row.Reason, RawError: row.RawError}, true
 }
 
 func serviceRow(service string, lastSeen time.Time, readiness, reason string) monmetrics.MetricService {

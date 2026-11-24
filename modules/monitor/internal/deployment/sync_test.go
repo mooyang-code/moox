@@ -49,7 +49,7 @@ func TestSyncWritesTopologyWithoutProbeChecks(t *testing.T) {
 	topology, err := repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	require.Len(t, topology.Deployments, 2)
-	count, err := repos.Checks.Count(t.Context(), store.ListChecksOptions{})
+	count, err := repos.Checks.Count(t.Context())
 	require.NoError(t, err)
 	require.Zero(t, count, "部署同步不再生成探测检查")
 

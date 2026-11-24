@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -40,20 +40,20 @@ func (s *capturedSender) Send(_ context.Context, message notification.Message) e
 	return nil
 }
 
-// forCheck 返回某项检查推送过的消息（推送的 Key 是 规则ID:检查ID）。
+// forCheck 返回某项系统空间检查推送过的消息（推送的 Key 是 空间/检查ID）。
 func (s *capturedSender) forCheck(checkID string) []notification.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []notification.Message
 	for _, message := range s.messages {
-		if message.Key == "default:"+checkID+":"+checkID {
+		if message.Key == events.SystemSpaceID+"/"+checkID {
 			out = append(out, message)
 		}
 	}
 	return out
 }
 
-// hostCheckHarness 把主机登记、评估（写检查结果、告警评估、推送）和页面概览接在同一个库上，时间由 clock 控制。
+// hostCheckHarness 把主机登记、评估（推进检查表、推送）和页面概览接在同一个库上，时间由 clock 控制。
 type hostCheckHarness struct {
 	t         *testing.T
 	repos     *store.Repositories
@@ -94,21 +94,18 @@ func newHostCheckHarness(t *testing.T) *hostCheckHarness {
 	require.NoError(t, err)
 
 	now := func() time.Time { return h.clock }
-	facts := &observability.Builder{Metrics: monmetrics.NewQueryService(h.messages, nil), Hosts: h.hosts, Checks: h.repos.Checks, Results: h.repos.Results, Topology: h.repos.Topology, Now: now}
-	evaluator := alerting.NewEvaluator(h.repos.Alerts, alerting.Options{Sender: func(context.Context) (notification.Sender, error) { return h.sender, nil }})
-	hook := func(ctx context.Context, check domain.Check, result domain.CheckResult) {
-		require.NoError(t, evaluator.Evaluate(ctx, check, result))
-	}
+	facts := &observability.Builder{Metrics: monmetrics.NewQueryService(h.messages, nil), Hosts: h.hosts, Topology: h.repos.Topology, Now: now}
+	applier := &checks.Applier{Checks: h.repos.Checks, Sender: func(context.Context) (notification.Sender, error) { return h.sender, nil }, Now: now}
 	observation := func(time.Time) observationState { return observationState{Ready: true, Suspended: h.suspended} }
-	h.hostRun = buildHostCheckReporter(facts, h.repos, hook, observation)
-	h.businessRun = buildBusinessFreshnessReporterWithInterval(facts, h.repos, hook, observation, 30*time.Second)
+	h.hostRun = buildHostCheckReporter(facts, applier, observation)
+	h.businessRun = buildBusinessFreshnessReporterWithInterval(facts, h.repos, applier, observation, 30*time.Second)
 	h.run = func(ctx context.Context) error {
 		if err := h.hostRun(ctx); err != nil {
 			return err
 		}
 		return h.businessRun(ctx)
 	}
-	h.page = healthview.Builder{Facts: facts, Checks: h.repos.Checks, Results: h.repos.Results, Alerts: h.repos.Alerts, Now: now}
+	h.page = healthview.Builder{Facts: facts, Checks: h.repos.Checks, Alerts: h.repos.Alerts, Now: now}
 	return h
 }
 
@@ -265,9 +262,9 @@ func TestHostThresholdAlertCountsSamplesAndMatchesPage(t *testing.T) {
 	h := newHostCheckHarness(t)
 	cpu := hostmetrics.CheckID("storage", hostmetrics.HostMetricCPU)
 	failures := func() int {
-		state, err := h.repos.Alerts.GetState(t.Context(), events.SystemSpaceID, "default:"+cpu, cpu)
+		row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, cpu)
 		require.NoError(t, err)
-		return state.FailureCount
+		return row.FailureCount
 	}
 	h.gateway(true)
 	h.report(95)
@@ -409,9 +406,9 @@ func TestHostChecksDoNotDependOnBusinessEvaluation(t *testing.T) {
 		require.NoError(t, h.businessRun(t.Context()))
 	}
 	require.Len(t, h.sender.forCheck(presence), 1, "业务评估不能把主机失联恢复掉")
-	results, err := h.repos.Results.Recent(t.Context(), events.SystemSpaceID, presence, 1)
-	require.NoError(t, err)
-	require.NotEqual(t, domain.CheckReasonRetired, results[0].ErrorMessage)
+	row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, presence)
+	require.NoError(t, err, "业务评估不删主机域的检查")
+	require.True(t, row.Firing())
 	require.NotNil(t, h.pageAlert(hostmetrics.CheckKindPresence))
 }
 
@@ -455,7 +452,7 @@ func TestSampleArrivingWhileSuspendedIsEvaluatedAfterwards(t *testing.T) {
 	h.suspended = false
 	h.advance(30 * time.Second)
 	h.evaluate()
-	state, err := h.repos.Alerts.GetState(t.Context(), events.SystemSpaceID, "default:"+cpu, cpu)
+	row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, cpu)
 	require.NoError(t, err)
-	require.Equal(t, 1, state.FailureCount)
+	require.Equal(t, 1, row.FailureCount)
 }

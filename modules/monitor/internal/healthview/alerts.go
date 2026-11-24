@@ -3,18 +3,14 @@ package healthview
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
-	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/report"
-	"gorm.io/gorm"
 )
 
 // Check IDs are code-owned namespaces. Parse their identity fields exactly;
@@ -54,63 +50,6 @@ func alertObject(spaceID, checkID string) *pb.HealthObject {
 	return object
 }
 
-// fallbackTitle 在检查记录已经不在时（例如对象删除后检查被清理，告警经过里还留着它）用身份字段拼出标题。
-func fallbackTitle(checkID string, object *pb.HealthObject, facts observability.Overview) string {
-	switch {
-	case object.Type == "component":
-		return componentName(facts, object.ComponentId) + "（" + object.HostId + "）"
-	case object.Type == "dataset":
-		return object.DatasetId + " · " + object.Freq
-	case object.Type == "host":
-		identity := object.HostId
-		switch object.Kind {
-		case "presence":
-			return "主机 " + identity + " · 失联"
-		case "status":
-			return "主机网关（" + identity + "）"
-		}
-		if label := hostmetrics.MetricLabel(object.Kind); label != "" {
-			return "主机 " + identity + " · " + label
-		}
-		return "主机 " + identity
-	case object.ComponentId != "":
-		return componentName(facts, object.ComponentId) + "业务检查"
-	}
-	return checkID
-}
-
-// checkTitles 缓存检查名称：页面标题与企业微信、飞书推送的标题一致。
-type checkTitles struct {
-	checks *store.CheckRepository
-	names  map[string]string
-}
-
-func newCheckTitles(checks *store.CheckRepository) *checkTitles {
-	return &checkTitles{checks: checks, names: make(map[string]string)}
-}
-
-func (t *checkTitles) title(ctx context.Context, spaceID, checkID string, object *pb.HealthObject, facts observability.Overview) (string, error) {
-	key := spaceID + "\x00" + checkID
-	if name, ok := t.names[key]; ok {
-		return name, nil
-	}
-	name := ""
-	if t.checks != nil {
-		check, err := t.checks.Get(ctx, spaceID, checkID)
-		switch {
-		case err == nil:
-			name = strings.TrimSpace(check.Name)
-		case !errors.Is(err, gorm.ErrRecordNotFound):
-			return "", err
-		}
-	}
-	if name == "" {
-		name = fallbackTitle(checkID, object, facts)
-	}
-	t.names[key] = name
-	return name, nil
-}
-
 // eventReason 取告警事件记录的问题描述（payload 的 reason）。
 func eventReason(event domain.AlertEvent) string {
 	var payload struct {
@@ -140,44 +79,30 @@ func eventProcesses(event domain.AlertEvent) []*pb.AlertProcess {
 	return out
 }
 
-func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, facts observability.Overview, titles *checkTitles) (*pb.HealthAlert, error) {
-	object := alertObject(state.SpaceID, state.CheckID)
-	title, err := titles.title(ctx, state.SpaceID, state.CheckID, object, facts)
-	if err != nil {
-		return nil, err
+// alertID 是告警在页面里的编号：空间加检查 ID。
+func alertID(spaceID, checkID string) string { return spaceID + "/" + checkID }
+
+// projectAlert 把一行在告警中的检查投影成页面告警。恢复确认期间（最近一次已通过）仍显示最近一次失败的原因。
+func (b Builder) projectAlert(ctx context.Context, check domain.Check, facts observability.Overview) (*pb.HealthAlert, error) {
+	object := alertObject(check.SpaceID, check.CheckID)
+	alert := &pb.HealthAlert{
+		Id: alertID(check.SpaceID, check.CheckID), Severity: check.Severity, Object: object, Title: check.Name,
+		LastCheckedAt: stamp(check.CheckedAt), Recovering: check.Status != domain.CheckStatusDown,
 	}
-	alert := &pb.HealthAlert{Id: state.DedupeKey, Severity: alerting.Severity(state.CheckID), Object: object, Title: title, Reason: "监控项持续异常", LastCheckedAt: stamp(state.UpdatedAt)}
-	if state.TriggeredAt != nil {
-		alert.TriggeredAt = stamp(*state.TriggeredAt)
+	if check.TriggeredAt != nil {
+		alert.TriggeredAt = stamp(*check.TriggeredAt)
 	}
-	if b.Results != nil {
-		results, err := b.Results.Recent(ctx, state.SpaceID, state.CheckID, 1)
-		if err != nil {
-			return nil, err
-		}
-		if len(results) > 0 {
-			latest := &results[0]
-			alert.LastCheckedAt = stamp(latest.CheckedAt)
-			alert.Recovering = latest.Success
-			cause := latest
-			if latest.Success {
-				failed, err := b.Results.LastFailure(ctx, state.SpaceID, state.CheckID)
-				if err != nil {
-					return nil, err
-				}
-				if failed != nil {
-					cause = failed
-				}
-			}
-			alert.Reason, alert.RawError = ChineseReason(cause.ErrorMessage), rawReason(cause.ErrorMessage, cause.RawError)
-			if alert.Reason == "" {
-				alert.Reason = "监控项持续异常"
-			}
-		}
+	reason, raw := check.Reason, check.RawError
+	if alert.Recovering {
+		reason, raw = check.FailureReason, check.FailureRawError
+	}
+	alert.Reason, alert.RawError = ChineseReason(reason), rawReason(reason, raw)
+	if alert.Reason == "" {
+		alert.Reason = "监控项持续异常"
 	}
 	if object.Type == "dataset" {
 		for _, dataset := range facts.Datasets {
-			if dataset.SpaceID != state.SpaceID || dataset.Producer != object.Producer || dataset.DatasetID != object.DatasetId || !strings.EqualFold(dataset.Freq, object.Freq) {
+			if dataset.SpaceID != check.SpaceID || dataset.Producer != object.Producer || dataset.DatasetID != object.DatasetId || !strings.EqualFold(dataset.Freq, object.Freq) {
 				continue
 			}
 			// 恢复确认期间保留失败时的原因，不用已经恢复的数据集状态覆盖；水位等事实单独给出。
@@ -189,8 +114,8 @@ func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, fact
 			break
 		}
 	}
-	if _, _, hostCheck := hostmetrics.ParseCheckID(state.CheckID); hostCheck && b.Alerts != nil {
-		event, err := b.Alerts.LatestFiringEvent(ctx, state.SpaceID, state.RuleID, state.CheckID)
+	if _, _, hostCheck := hostmetrics.ParseCheckID(check.CheckID); hostCheck && b.Alerts != nil {
+		event, err := b.Alerts.LatestFiringEvent(ctx, check.SpaceID, check.CheckID)
 		if err != nil {
 			return nil, err
 		}

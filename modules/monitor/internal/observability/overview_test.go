@@ -158,8 +158,8 @@ func TestBuilderDeduplicatesServiceBootHistory(t *testing.T) {
 	})
 	seedServiceTopology(t, repositories, "node-a", "collector", true)
 	got, err := (Builder{
-		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
-	}).Build(t.Context(), "")
+		Metrics: query, Topology: repositories.Topology,
+	}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestBuilderReportsTimerCoordinationHealth(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "timer-success", "collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "timer-trigger", "collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto","node_id":"timer-1","enabled":"true"}`, 1, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 	got, err := (Builder{
 		Metrics: query, Now: func() time.Time { return now },
 		MarketFetchThresholds: MarketFetchThresholds{CoordinationStaleAfter: time.Minute, PendingGrace: 30 * time.Second},
-	}).Build(t.Context(), "stockcn")
+	}).buildForTest(t.Context(), "stockcn")
 
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
@@ -217,7 +217,7 @@ func TestBuilderIgnoresDisabledTimerNodes(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "timer-success", "collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "disabled-trigger", "collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto","node_id":"timer-disabled","enabled":"false"}`, 0, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
@@ -235,7 +235,7 @@ func TestBuilderDoesNotAlertDuringExpectedAsyncTimerBatch(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "timer-success", "collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto"}`, float64(lastSuccess.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "timer-trigger", "collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto","node_id":"timer-1","enabled":"true"}`, 1, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
@@ -255,7 +255,7 @@ func TestBuilderSuppressesShortPendingTimerBatch(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "pending-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(pendingSince.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "pending-trigger", "collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto","node_id":"timer-1","enabled":"true"}`, 1, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
@@ -285,7 +285,7 @@ func TestBuilderExplainsEachCoordinationFailureReasonWithItsOwnText(t *testing.T
 				seedOverviewMetricForInstance(t, db, reason+"-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
 				seedOverviewMetricForInstance(t, db, reason+"-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"`+reason+`"}`, 1, now)
 			})
-			got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+			got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 			require.NoError(t, err)
 			require.Len(t, got.BusinessChecks, 1)
 			require.Equal(t, "down", got.BusinessChecks[0].Status)
@@ -329,7 +329,7 @@ func TestBuilderDoesNotMislabelCloudFailureAsCapacityShortage(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "cloud-capacity-total", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_total", `{"space_id":"crypto"}`, 60, now)
 		seedOverviewMetricForInstance(t, db, "cloud-capacity-required", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_required", `{"space_id":"crypto"}`, 34, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
@@ -349,7 +349,7 @@ func TestBuilderAlertsWhenTimerBatchPendingTooLong(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "slow-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(pendingSince.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "slow-trigger", "collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto","node_id":"timer-1","enabled":"true"}`, 1, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
@@ -365,7 +365,7 @@ func TestBuilderReportsStoppedCollectorForStaleTimerCoordinationSeries(t *testin
 		seedOverviewMetricForInstance(t, db, "stale-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, old)
 		seedOverviewMetricForInstance(t, db, "stale-success", "collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto"}`, float64(old.Unix()), old)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "market_fetch", got.BusinessChecks[0].Kind)
@@ -381,7 +381,7 @@ func TestBuilderIgnoresDeletedTimerLabelsWhenCollectorReporterIsFresh(t *testing
 		old := now.Add(-2 * time.Hour)
 		seedOverviewMetricForInstance(t, db, "deleted-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, old)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	for _, item := range got.BusinessChecks {
 		require.NotEqual(t, "market_fetch", item.Kind)
@@ -393,7 +393,7 @@ func TestBuilderReportsInitialTimerCoordinationFailure(t *testing.T) {
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "failed-coordination", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
@@ -407,7 +407,7 @@ func TestBuilderAggregatesTimerCoordinationAcrossCollectors(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "coord-good", "collector", "collector@a", "moox_collector_market_fetch_coordination_healthy", labels, 1, now)
 		seedOverviewMetricForInstance(t, db, "coord-bad", "collector", "collector@b", "moox_collector_market_fetch_coordination_healthy", labels, 0, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
@@ -423,7 +423,7 @@ func TestBuilderDoesNotTreatUnknownTimerReadbackAsUnavailable(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "unknown-success", "collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "unknown-trigger", "collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto","node_id":"timer-1","enabled":"true"}`, -1, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
@@ -441,7 +441,7 @@ func TestBuilderNotReadyReportMarksComponentDown(t *testing.T) {
 		}
 	})
 	seedServiceTopology(t, repositories, "node-a", "storage-primary", true)
-	got, err := (Builder{Metrics: query, Topology: repositories.Topology}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Topology: repositories.Topology}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestBuilderTreatsEveryDeploymentWithoutReportAsMissing(t *testing.T) {
 	for _, componentID := range []string{"factor-mgr", "egress-proxy", "archive-mgr"} {
 		query, repositories := openOverviewState(t, func(*gorm.DB) {})
 		seedServiceTopology(t, repositories, "node-b", componentID, true)
-		got, err := (Builder{Metrics: query, Topology: repositories.Topology}).Build(t.Context(), "")
+		got, err := (Builder{Metrics: query, Topology: repositories.Topology}).buildForTest(t.Context(), "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -477,7 +477,7 @@ func TestBuilderMarksBalanceDownAfterThreeFailures(t *testing.T) {
 		seedOverviewMetric(t, db, "balance-failures", "moox_trade_balance_sync_consecutive_failures", `{}`, 3, now)
 		seedOverviewMetric(t, db, "balance-difference", "moox_trade_balance_sync_max_difference_ratio", `{}`, 0.01, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, BalanceDifferenceThreshold: 0.05}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, BalanceDifferenceThreshold: 0.05}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func TestBuilderOmitsBalanceCheckBeforeAnyAccountSyncRuns(t *testing.T) {
 		seedOverviewMetric(t, db, "balance-failures", "moox_trade_balance_sync_consecutive_failures", `{}`, 0, now)
 		seedOverviewMetric(t, db, "balance-difference", "moox_trade_balance_sync_max_difference_ratio", `{}`, 0, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func TestBuilderMarksBalanceDifferenceAboveThresholdDown(t *testing.T) {
 		seedOverviewMetric(t, db, "balance-failures", "moox_trade_balance_sync_consecutive_failures", `{}`, 0, now)
 		seedOverviewMetric(t, db, "balance-difference", "moox_trade_balance_sync_max_difference_ratio", `{}`, 0.08, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, BalanceDifferenceThreshold: 0.05}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, BalanceDifferenceThreshold: 0.05}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestBuilderIgnoresDatasetEnabledFromSupersededFactorBoot(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "live-interval", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_expected_interval_seconds", live, 60, now)
 		seedOverviewMetricForInstance(t, db, "inventory", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "crypto")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).buildForTest(t.Context(), "crypto")
 	require.NoError(t, err)
 	var ids []string
 	for _, item := range got.Datasets {
@@ -586,7 +586,7 @@ func TestBuilderIncludesStorageCommitFactsWithoutEnabledInventory(t *testing.T) 
 		seedOverviewMetric(t, db, "storage-success", "moox_storage_dataset_last_success_timestamp_seconds", labels, float64(storageAt.Unix()), now)
 		seedOverviewMetric(t, db, "storage-output", "moox_storage_dataset_output_watermark_timestamp_seconds", labels, float64(storageAt.Unix()), now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +611,7 @@ func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "factor-view-watermark", "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(watermark.Unix()), now)
 		seedOverviewMetricForInstance(t, db, "factor-view-arrival", "storage-view", "storage-view@control", "moox_storage_view_output_arrival_timestamp_seconds", labels, float64(watermark.Add(time.Minute+4*time.Second).Unix()), now)
 	})
-	got, err := (Builder{Metrics: query, Inventory: cryptoInventory, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Inventory: cryptoInventory, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +645,7 @@ func TestBuilderDoesNotCountBarsClosedAfterTheLastReport(t *testing.T) {
 	})
 	policy := testRealtimePolicy()
 	policy.Defaults.MinuteLateness = 30 * time.Second
-	got, err := (Builder{Metrics: query, Inventory: cryptoInventory, Now: func() time.Time { return now }, Policy: policy}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Inventory: cryptoInventory, Now: func() time.Time { return now }, Policy: policy}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.Datasets, 1)
 	row := got.Datasets[0]
@@ -679,7 +679,7 @@ func TestBuilderAggregatesDatasetInstances(t *testing.T) {
 	})
 	got, err := (Builder{
 		Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy(),
-	}).Build(t.Context(), "")
+	}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,7 +698,7 @@ func TestDatasetFrequencyLimitReturnsErrorInsteadOfTruncating(t *testing.T) {
 
 func TestBuilderReturnsBoundedEmptyOverviewWhenSourcesAreDisabled(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	got, err := (Builder{Now: func() time.Time { return now }}).Build(t.Context(), "mooxsys")
+	got, err := (Builder{Now: func() time.Time { return now }}).buildForTest(t.Context(), "mooxsys")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +713,7 @@ func TestOverviewReportsStorageOutboxBacklogBeforeDatasetWatermarkStalls(t *test
 		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-primary", "storage-primary@storage", "moox_storage_outbox_pending_entries", `{}`, 42, now)
 		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-primary", "storage-primary@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 181, now)
 	})
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +735,7 @@ func TestOverviewKeepsShortStorageOutboxBacklogHealthy(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "outbox-pending", "storage-primary", "storage-primary@storage", "moox_storage_outbox_pending_entries", `{}`, 3, now)
 		seedOverviewMetricForInstance(t, db, "outbox-age", "storage-primary", "storage-primary@storage", "moox_storage_outbox_oldest_age_seconds", `{}`, 20, now)
 	})
-	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,23 +851,6 @@ func TestDatasetStatusReportsWarmingWhilePartialRunsKeepArriving(t *testing.T) {
 	require.Equal(t, "尚无成功运行", got.Reason, "没有部分结果上报时保持原样")
 }
 
-// 检查对象已停用或移除时仍写入通过结果（让既有告警恢复），概览要显示“已停用”，不能算作正常。
-func TestBusinessCheckRetiredResultIsDisabled(t *testing.T) {
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	require.NoError(t, manager.ApplySchema(schema.SQL()))
-	repos := manager.Repositories()
-	now := time.Now().UTC()
-	checkID := "kline_freshness:stockcn:view_a:1m"
-	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{SpaceID: "stockcn", CheckID: checkID, Name: "A 股分钟K线", Kind: domain.CheckKindExternal, Enabled: true}))
-	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "retired", SpaceID: "stockcn", CheckID: checkID, Status: domain.CheckStatusOK, Success: true, ErrorMessage: domain.CheckReasonRetired, CheckedAt: now}))
-	got, err := (Builder{Checks: repos.Checks, Results: repos.Results, Now: func() time.Time { return now }}).Build(t.Context(), "")
-	require.NoError(t, err)
-	require.Len(t, got.BusinessChecks, 1)
-	require.Equal(t, "disabled", got.BusinessChecks[0].Status)
-}
-
 // 连续 3 个周期有失败标的（不含疑似下架）时告警；心跳中断由 Collector 的关注项判断。
 func TestBuilderReportsCollectorStreamMissingStreaks(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
@@ -875,7 +858,7 @@ func TestBuilderReportsCollectorStreamMissingStreaks(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "stream-streak", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"swap","frequency":"1m","dataset_id":"ds_swap"}`, 3, now)
 		seedOverviewMetricForInstance(t, db, "stream-ok", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"spot","frequency":"1m","dataset_id":"ds_spot"}`, 2, now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	byModule := map[string]BusinessStatus{}
 	for _, check := range got.BusinessChecks {
@@ -888,7 +871,7 @@ func TestBuilderReportsCollectorStreamMissingStreaks(t *testing.T) {
 	fresh, _ := openOverviewState(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "stream-ok", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"spot","frequency":"1m","dataset_id":"ds_spot"}`, 0, now)
 	})
-	got, err = (Builder{Metrics: fresh, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	got, err = (Builder{Metrics: fresh, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 	require.NoError(t, err)
 	for _, check := range got.BusinessChecks {
 		require.Equal(t, "healthy", check.Status, check.Module)
@@ -896,7 +879,7 @@ func TestBuilderReportsCollectorStreamMissingStreaks(t *testing.T) {
 }
 
 func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
-	find := func(overview Overview) *BusinessStatus {
+	find := func(overview testOverview) *BusinessStatus {
 		for i := range overview.BusinessChecks {
 			if overview.BusinessChecks[i].Kind == "view_file" {
 				return &overview.BusinessChecks[i]
@@ -912,7 +895,7 @@ func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
 		query := openOverviewMetrics(t, func(db *gorm.DB) {
 			seedOverviewMetricForInstance(t, db, "view-file", "storage-view", "storage-view@storage", "moox_storage_view_file_over_limit", `{}`, tc.value, now)
 		})
-		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).buildForTest(t.Context(), "")
 		if err != nil {
 			t.Fatal(err)
 		}

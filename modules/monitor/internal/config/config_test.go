@@ -34,8 +34,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
-	if cfg.Scheduler.ResultRetentionDays != 14 {
-		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
+	if cfg.Scheduler.AlertEventRetentionDays != 14 {
+		t.Fatalf("retention days = %d", cfg.Scheduler.AlertEventRetentionDays)
 	}
 	if !cfg.Deployment.Enabled {
 		t.Fatalf("deployment = %+v", cfg.Deployment)

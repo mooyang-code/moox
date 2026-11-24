@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/report"
@@ -26,12 +28,12 @@ const moduleIdleAfter = time.Hour
 // moduleHealthItems 在模块上报过运行之后，把每个内置模块健康检查转成一项业务检查。
 // 最近一次运行失败、且 MaxLag 内没有成功过时判失败；模块恢复成功，或最近一次失败之后
 // 超过 moduleIdleAfter（和 MaxLag 取大）没有新的运行（闲置，例如组合解绑后没有调仓可做），判健康。
-func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, checks []report.ModuleHealthCheck, now time.Time) ([]businessFreshnessItem, error) {
+func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, healthChecks []report.ModuleHealthCheck, now time.Time) ([]checks.Fact, error) {
 	if query == nil {
 		return nil, nil
 	}
-	items := make([]businessFreshnessItem, 0, len(checks))
-	for _, check := range checks {
+	items := make([]checks.Fact, 0, len(healthChecks))
+	for _, check := range healthChecks {
 		if !check.Enabled {
 			continue
 		}
@@ -50,21 +52,21 @@ func moduleHealthItems(ctx context.Context, query *monmetrics.QueryService, chec
 		if name == "" {
 			name = check.ID
 		}
-		item := businessFreshnessItem{
-			spaceID: events.SystemSpaceID, checkID: "module:" + check.ID, name: name,
-			success: true, reason: "最近一次运行成功",
+		item := checks.Fact{
+			SpaceID: events.SystemSpaceID, CheckID: "module:" + check.ID, Name: name,
+			Status: domain.CheckStatusOK, Reason: "最近一次运行成功",
 		}
 		failing := lastError.After(lastSuccess) && now.Sub(lastSuccess) > check.MaxLag
 		switch {
 		case failing && now.Sub(lastError) > max(check.MaxLag, moduleIdleAfter):
-			item.reason = fmt.Sprintf("最近一次运行失败（%s）之后已 %s没有新的运行，按闲置处理",
+			item.Reason = fmt.Sprintf("最近一次运行失败（%s）之后已 %s没有新的运行，按闲置处理",
 				alerttext.Time(lastError), alerttext.Duration(now.Sub(lastError)))
 		case failing:
-			item.success = false
+			item.Status = domain.CheckStatusDown
 			if lastSuccess.IsZero() {
-				item.reason = fmt.Sprintf("最近一次运行失败（%s），且从未成功过", alerttext.Time(lastError))
+				item.Reason = fmt.Sprintf("最近一次运行失败（%s），且从未成功过", alerttext.Time(lastError))
 			} else {
-				item.reason = fmt.Sprintf("最近一次运行失败（%s），已 %s没有成功运行（上次成功 %s）",
+				item.Reason = fmt.Sprintf("最近一次运行失败（%s），已 %s没有成功运行（上次成功 %s）",
 					alerttext.Time(lastError), alerttext.Duration(now.Sub(lastSuccess)), alerttext.Time(lastSuccess))
 			}
 		}
