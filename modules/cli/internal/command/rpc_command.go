@@ -433,6 +433,10 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 		if err != nil {
 			return nil, err
 		}
+		// 没显式传参时，参数的默认值同样不能覆盖 --data 里已给的字段。
+		if ok && !cmd.Flags().Changed(flag.Name) && hasRequestPath(request, flag.Field) {
+			ok = false
+		}
 		if ok {
 			setRequestPath(request, flag.Field, value)
 			if flag.AlsoField != "" {

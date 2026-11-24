@@ -120,11 +120,11 @@
   启用后先预热，预热完成前不求值、不能 `confirm`；研究回放支持，只能用结果 View 来源（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
 - **注意**：一个因子任务可以被多个实例引用，只有写了 `factor_params` 的实例启用时独占关联它（一个任务只关联一个实例）；实例的任务在创建时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
 
-## 交易（只读）
+## 交易
 
 - **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘（币安、OKX、A 股、港股；A 股与港股只有模拟盘，港股按港元结算、每手股数逐只不同、当日买入可卖）；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
 - **在哪**：组件 `trade`，默认海外机（`[deployments]` 决定）。
-- **常用**（都是只读，写操作由用户在管理台做）：
+- **常用**（查询；写操作见 `command-index.md` 的 trade 一节，默认只预览，`--yes` 才执行）：
 
 ```bash
 ./bin/moox-cli trade logical list|show|target                      # 组合账户与当前策略目标
@@ -133,6 +133,8 @@
 ./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
 ./bin/moox-cli trade blocked list                                  # 下架名单（全局）
 ./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+./bin/moox-cli trade logical fund-settings --logical-account-id <ID> --reserve-ratio 0.05 --yes   # 改资金预留比例（先取回已有设置再合并）
+./bin/moox-cli trade logical pause|resume --logical-account-id <ID> --yes   # 暂停、恢复组合的自动执行
 ```
 
 - **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台交易页的下架名单里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
