@@ -95,7 +95,7 @@ func followReadyEvent(view *pb.View, configID string, message *eventpb.EventMess
 		ViewId: view.GetViewId(), ViewConfigId: configID, CompletionEventId: message.GetEventId(),
 		DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(),
 		Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
-		FailedScopeRef: degradedScopeRef(payload.GetStatus(), payload.GetFailedSubjects()),
+		FailedSubjects: uniqueSortedStrings(payload.GetFailedSubjects()),
 		ReadyAt:        cloneTimestamp(message.GetOccurredAt()),
 	}
 	switch payload.GetSource() {
@@ -205,16 +205,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func degradedScopeRef(status string, failed []string) string {
-	if status != "degraded" {
-		return ""
-	}
-	if refs := uniqueSortedStrings(failed); len(refs) > 0 {
-		return strings.Join(refs, ",")
-	}
-	return "degraded"
 }
 
 func stableViewEventID(parts ...string) string {

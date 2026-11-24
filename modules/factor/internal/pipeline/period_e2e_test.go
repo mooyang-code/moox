@@ -107,7 +107,7 @@ func e2eLiveInput(target time.Time, subjects []string, factors []domain.FactorDe
 			TaskID: "task_e2e", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m",
 			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 		},
-		Members: domain.AsMembers(factors...), PeriodTime: target, UniverseSeries: singleSeries(subjects...), CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
+		Members: domain.AsMembers(factors...), PeriodTime: target, UniverseSubjects: subjects, CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
 	}
 }
 
@@ -178,7 +178,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
 		runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 		input := e2eLiveInput(target, subjects, []domain.FactorDef{mean})
-		input.UpstreamFailedSeries = singleSeries("SOL")
+		input.UpstreamFailed = []string{"SOL"}
 		plan, err := BuildLivePlan(clock, input)
 		require.NoError(t, err)
 
@@ -189,6 +189,18 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 		require.Len(t, store.result, 2)
 		require.Equal(t, "degraded", store.markers[0].Status)
 		require.Equal(t, []string{"SOL"}, store.markers[0].FailedSubjects)
+		// 本地已有 SOL 本期的行，但上游判为失败：不进面板、不写出有值的结果。
+		for _, row := range store.result {
+			if row.SubjectID == "SOL" {
+				require.Nil(t, row.Fields["mean"], "上游失败的标的不能算出值")
+			}
+		}
+		// 周期有失败标的时，每个成员的完整名单都含这些标的、状态不是 complete（周期明细只记多出部分，靠这一点还原）。
+		for _, state := range store.markers[0].Factors {
+			require.NotEqual(t, "complete", state.Status, state.MemberKey)
+			require.Subset(t, state.FailedSubjects, store.markers[0].FailedSubjects, state.MemberKey)
+		}
+		require.Equal(t, store.markers[0].Factors, outcome.Factors, "心跳摘要取的 Outcome.Factors 是完整名单")
 	})
 
 	t.Run("failing factor writes null column and degrades", func(t *testing.T) {

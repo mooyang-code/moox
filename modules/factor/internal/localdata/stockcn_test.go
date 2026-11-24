@@ -126,7 +126,7 @@ func TestStockCN5mAcrossBreaks(t *testing.T) {
 			}
 
 			plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-				Set: set.Set, Members: set.Members, PeriodTime: period, UniverseSeries: plainSeries(subjects...), CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+				Set: set.Set, Members: set.Members, PeriodTime: period, UniverseSubjects: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
 			})
 			require.NoError(t, err)
 			outcome, err := runner.Run(context.Background(), plan)

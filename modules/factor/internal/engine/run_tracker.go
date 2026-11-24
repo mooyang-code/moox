@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // runTracker keeps the latest live period per factor task in memory. The period
@@ -76,7 +75,6 @@ func (t *runTracker) record(taskID string, axis periodclock.Axis, periodTime tim
 			FailedSubjects: factor.FailedSubjects,
 			SpecHash:       factor.SourceHash,
 			DefinitionHash: factor.DefinitionHash,
-			FailedSeries:   factor.FailedSeries,
 		})
 	}
 	t.runs[taskID] = trackedRun{
@@ -146,8 +144,6 @@ func (run trackedRun) withRepairs(completedAt time.Time) trackedRun {
 		fixed := run.repaired[factor.MemberKey]
 		next := factor
 		next.FailedSubjects = subjectsWithout(factor.FailedSubjects, fixed)
-		// 补齐的标的从按序列的名单里一并去掉。
-		next.FailedSeries = seriesWithout(factor.FailedSeries, fixed)
 		// 整因子跳过的因子实时路径没写被跳过的行：补算重算时没写成的标的仍然缺结果。
 		if factor.Status == "skipped" {
 			next.FailedSubjects = mergeSubjects(next.FailedSubjects, run.unwritten[factor.MemberKey], fixed)
@@ -201,20 +197,6 @@ func mergeSubjects(subjects []string, extra, skip map[string]struct{}) []string 
 		}
 	}
 	sort.Strings(out)
-	return out
-}
-
-// seriesWithout 去掉属于 drop 里标的的序列。
-func seriesWithout(values []seriesset.Series, drop map[string]struct{}) []seriesset.Series {
-	if len(drop) == 0 {
-		return values
-	}
-	var out []seriesset.Series
-	for _, value := range values {
-		if _, ok := drop[value.SubjectID]; !ok {
-			out = append(out, value)
-		}
-	}
 	return out
 }
 

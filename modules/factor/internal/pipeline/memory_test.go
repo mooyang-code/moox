@@ -93,7 +93,7 @@ func TestRunPrechecksMemoryBeforeReading(t *testing.T) {
 	require.Equal(t, "degraded", store.markers[0].Factors[0].Status)
 
 	recalc := plan
-	recalc.Mode, recalc.TargetStart, recalc.TargetEnd = ModeRecalc, target.Add(-5*time.Minute), target.Add(time.Minute)
+	recalc.Mode, recalc.TargetStart, recalc.TargetEnd, recalc.FrozenUniverse = ModeRecalc, target.Add(-5*time.Minute), target.Add(time.Minute), true
 	_, err = runner.Run(context.Background(), recalc)
 	require.ErrorIs(t, err, ErrMemoryBudget)
 	require.Equal(t, 0, store.reads)

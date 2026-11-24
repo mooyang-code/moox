@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorudf"
 	"github.com/mooyang-code/moox/packages/lifecycle"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 func SetToPB(set domain.FactorTask) *factorpb.FactorTask {
@@ -202,7 +201,6 @@ func RunSummaryToPB(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 			FailedSubjects: CloneStrings(factor.FailedSubjects),
 			SpecHash:       factor.SpecHash,
 			DefinitionHash: factor.DefinitionHash,
-			FailedSeries:   seriesToPB(factor.FailedSeries),
 		})
 	}
 	return &factorpb.TaskRunSummary{
@@ -221,7 +219,7 @@ func RunSummaryFromPB(pb *factorpb.TaskRunSummary) domain.TaskRunSummary {
 		factors = append(factors, domain.FactorPeriodState{
 			FactorID: factor.GetFactorId(), MemberKey: factor.GetMemberKey(), MemberKind: factor.GetMemberKind(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SpecHash: factor.GetSpecHash(),
-			DefinitionHash: factor.GetDefinitionHash(), FailedSeries: seriesFromPB(factor.GetFailedSeries()),
+			DefinitionHash: factor.GetDefinitionHash(),
 		})
 	}
 	return domain.TaskRunSummary{
@@ -499,28 +497,6 @@ func CloneParams(params map[string]float64) map[string]float64 {
 	out := make(map[string]float64, len(params))
 	for name, value := range params {
 		out[name] = value
-	}
-	return out
-}
-
-func seriesToPB(values []seriesset.Series) []*factorpb.SeriesRef {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]*factorpb.SeriesRef, len(values))
-	for i, value := range values {
-		out[i] = &factorpb.SeriesRef{SubjectId: value.SubjectID, SeriesTag: value.SeriesTag}
-	}
-	return out
-}
-
-func seriesFromPB(values []*factorpb.SeriesRef) []seriesset.Series {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]seriesset.Series, len(values))
-	for i, value := range values {
-		out[i] = seriesset.Series{SubjectID: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()}
 	}
 	return out
 }

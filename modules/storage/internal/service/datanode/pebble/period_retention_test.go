@@ -30,8 +30,8 @@ func TestCleanupExpiredBucketsRemovesLedgerAndMarkersBeforeCutoff(t *testing.T) 
 		require.Equal(t, "complete", result.Status)
 		raw, _, err := BuildProducerPeriodCompletedMessage(goldenSpace, &pb.DatasetPeriodCompletedMarker{
 			DatasetId: goldenDataset, Frequency: goldenFreq, PeriodTime: period.Unix(), Status: "complete",
-			UniverseSubjectIds: []string{"BTC-USDT"}, UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}},
-			CauseEventId: "source-ready", CompletedAt: timestamppb.New(period.Add(time.Minute)),
+			UniverseSubjectIds: []string{"BTC-USDT"},
+			CauseEventId:       "source-ready", CompletedAt: timestamppb.New(period.Add(time.Minute)),
 		})
 		require.NoError(t, err)
 		_, err = store.AppendDatasetMarker(ctx, raw)

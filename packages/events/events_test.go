@@ -197,7 +197,6 @@ func validLedgerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.DatasetPe
 		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "ledger",
 		SnapshotRef:        "series-hash-1",
 		UniverseSubjectIds: []string{"BTC-USDT"},
-		UniverseSeries:     []*storagepb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: "venue:binance"}},
 		CompletedAt:        now,
 	}
 }
@@ -216,8 +215,7 @@ func validProducerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.Dataset
 	return &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset_result", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 		UniverseSubjectIds: []string{"BTC-USDT"}, CauseEventId: "period-completed-1", CompletedAt: now,
-		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: "venue:binance"}},
-		DetailType:     "test.Detail.v1", Detail: []byte("opaque"),
+		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
 	}
 }
 

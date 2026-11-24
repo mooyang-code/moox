@@ -15,7 +15,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -158,14 +157,12 @@ func (s *Store) validatePeriodUniverseSize(exp DatasetPeriodExpectation) error {
 	if s.maxEventBytes <= 0 {
 		return nil
 	}
-	// 最坏情况：每个标的、每条序列都失败。按标的的名单与按序列的名单（标的加 series_tag）各出现两次（全集与失败名单）。
+	// 最坏情况：每个标的都失败，按标的的全集与失败名单各一份。
 	universe, _ := periodMarkerSubjects(exp, nil)
-	universeSeries, _ := periodMarkerSeries(exp, nil)
 	completed := &LedgerPeriodCompleted{
 		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
 		Status: periodDegraded, SnapshotRef: exp.SeriesHash,
 		UniverseSubjectIDs: universe, FailedSubjects: append([]string(nil), universe...),
-		UniverseSeries: universeSeries, FailedSeries: universeSeries,
 		CompletedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
 	}
 	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
@@ -310,12 +307,10 @@ func (s *Store) finalizePeriodLocked(ctx context.Context, exp DatasetPeriodExpec
 		return record, nil
 	}
 	universe, failed := periodMarkerSubjects(exp, record.Success)
-	universeSeries, failedSeries := periodMarkerSeries(exp, record.Success)
 	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, &LedgerPeriodCompleted{
 		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
 		Status: terminal, SnapshotRef: record.SeriesHash,
-		UniverseSubjectIDs: universe, FailedSubjects: failed,
-		UniverseSeries: universeSeries, FailedSeries: failedSeries, CompletedAt: timestamppb.New(now.UTC()),
+		UniverseSubjectIDs: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(now.UTC()),
 	})
 	if err != nil {
 		return record, err
@@ -636,23 +631,6 @@ func periodMarkerSubjects(exp DatasetPeriodExpectation, success []byte) ([]strin
 				failedSeen[subjectID] = struct{}{}
 				failed = append(failed, subjectID)
 			}
-		}
-	}
-	return universe, failed
-}
-
-// periodMarkerSeries 返回按序列（标的、series_tag）的期望全集与失败名单，所有数据集都给出。
-// 失败口径与 periodMarkerSubjects 一致：没有成功提交的序列即失败。
-func periodMarkerSeries(exp DatasetPeriodExpectation, success []byte) (universe, failed []*storageeventpb.SeriesRef) {
-	for index, series := range exp.SeriesSnapshot {
-		subjectID := strings.TrimSpace(series.SubjectID)
-		if subjectID == "" {
-			continue
-		}
-		ref := &storageeventpb.SeriesRef{SubjectId: subjectID, SeriesTag: strings.TrimSpace(series.SeriesTag)}
-		universe = append(universe, ref)
-		if !bitmapBitSet(success, uint32(index)) {
-			failed = append(failed, ref)
 		}
 	}
 	return universe, failed
