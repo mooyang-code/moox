@@ -34,12 +34,9 @@ const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
   freq: "1m",
   partition_unit: "day",
   retention: "840h",
-  pull_every_bars: 1,
-  interval_seconds: 3600,
   status: "enabled",
   purpose: "collect",
   dir_name: "binance-spot-kline-1m",
-  next_pull_at: iso(NOW + 2 * MINUTE),
   last_success_at: iso(NOW - 30 * MINUTE),
   health: "ok",
   health_reason: "",
@@ -50,7 +47,7 @@ const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
   max_data_time: iso(NOW - MINUTE),
   last_run: {
     run_id: "run-1",
-    kind: "scheduled",
+    kind: "follow",
     status: "succeeded",
     started_at: iso(NOW - 30 * MINUTE),
     finished_at: iso(NOW - 29 * MINUTE)
@@ -62,16 +59,16 @@ const runs = [
   {
     run_id: "run-q",
     dataset_id: "ds_kline_1m",
-    kind: "tick",
+    kind: "range",
     status: "queued",
     scheduled_at: iso(NOW),
-    range_start: iso(NOW - 2 * MINUTE),
-    range_end: iso(NOW)
+    range_start: iso(NOW - 2 * DAY),
+    range_end: iso(NOW - DAY)
   },
   {
     run_id: "run-1",
     dataset_id: "ds_kline_1m",
-    kind: "scheduled",
+    kind: "follow",
     status: "succeeded",
     scheduled_at: iso(NOW - 30 * MINUTE),
     started_at: iso(NOW - 30 * MINUTE),
@@ -210,7 +207,7 @@ async function gateway(route: Route) {
       });
     case "RecentRows":
       return route.fulfill({
-        json: { columns: recentColumns, rows: recentRows(url.searchParams.get("before")), staged_until: iso(NOW - MINUTE) }
+        json: { columns: recentColumns, rows: recentRows(url.searchParams.get("before")) }
       });
     case "PartitionDownload":
       return route.fulfill({
@@ -230,26 +227,11 @@ async function gateway(route: Route) {
           partition_unit: "day",
           retention: "840h",
           earliest_backfill_from: iso(NOW - 34 * DAY),
-          recommended_pull_every_bars: 1,
           exists: tasks.some(item => item.dataset_id === body.dataset_id),
           purpose: "collect",
           suggested_dir_name: "binance-spot-kline-5m",
           // 已有任务的目录名算冲突
           dir_name_conflict: tasks.some(item => item.dir_name === (body.dir_name || "binance-spot-kline-5m"))
-        })
-      });
-    case "PreviewArchiveSchedule":
-      return route.fulfill({
-        json: ok({
-          next_runs: [1, 2, 3, 4, 5].map(i => iso(NOW + i * 5 * MINUTE)),
-          next_reviews: [1, 2, 3].map(i => iso(NOW + i * 60 * MINUTE)),
-          interval_seconds: 3600,
-          read_span_seconds: 4560,
-          // 后端给的是文本，不是时刻
-          partition_export_estimates: [
-            `分区 2026-11-06：预计 ${iso(NOW + 10 * MINUTE)} 导出`,
-            `分区 2026-11-07：预计 ${iso(NOW + DAY)} 导出`
-          ]
         })
       });
     case "CreateArchiveTask":

@@ -31,7 +31,7 @@ func TestRecentRowsOrderPagingAndFormatting(t *testing.T) {
 		row("BTC", at.Add(2*time.Minute), "", 0.5, nil, nil, "x", nil),
 		row("ETH", at.Add(3*time.Minute), "", 9.0, true, nil, "y", nil),
 	}
-	if _, err := s.Stage(ctx, task, rows, utcDay, now0, StageReplace); err != nil {
+	if _, err := s.Stage(ctx, task, rows, utcDay, now0); err != nil {
 		t.Fatal(err)
 	}
 	ro, err := OpenReadOnly(s.Path())
@@ -84,7 +84,7 @@ func TestReadOnlyConnectionCannotWriteAndReleasesTheWAL(t *testing.T) {
 	if err := s.EnsureTable(ctx, task); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 2.0, "n", int64(1))}, utcDay, now0, StageReplace); err != nil {
+	if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 2.0, "n", int64(1))}, utcDay, now0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenReadOnly(filepath.Join(t.TempDir(), "absent.db")); err == nil {
@@ -94,7 +94,7 @@ func TestReadOnlyConnectionCannotWriteAndReleasesTheWAL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ro.SetResumeFrom(ctx, "crypto", "ds_1m", now0); err == nil {
+	if err := ro.SetChangeCursor(ctx, "crypto", "ds_1m", "store-1", 1); err == nil {
 		t.Fatal("只读连接写入成功")
 	}
 	if _, err := ro.Recent(ctx, task, "BTC", time.Time{}, 10); err != nil {

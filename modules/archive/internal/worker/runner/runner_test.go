@@ -35,17 +35,28 @@ type fakeSource struct {
 	failFrom   time.Time
 	columnsErr error // 非空时 Columns 失败
 
-	// 变更日志：changeLog 的第 i 条序号为 i+1，一页只返回一条；游标早于 changeTrimmed 时断档。
-	changeLog     [][2]time.Time
+	// 变更日志：changeLog 的第 i 条序号为 i+1，一页只返回一条（可带多个标的的范围）；游标早于 changeTrimmed 时断档。
+	changeLog     [][]source.ChangeSpan
 	changeTrimmed uint64
 	changesErr    error
 	changeCalls   int
+	// headCalls 是只取头部位点（cursor 为 nil）的次数；onHead 在取头部时调用（测试在这里模拟“取头部之前刚写入”）。
+	headCalls int
+	onHead    func()
+	// onRead 在每次读行之后调用（测试用它推进时钟）。
+	onRead func(source.Range)
 }
 
 func (f *fakeSource) ReadChanges(_ context.Context, _, _ string, cursor *source.ChangeCursor) (source.Changes, error) {
 	f.changeCalls++
 	if f.changesErr != nil {
 		return source.Changes{}, f.changesErr
+	}
+	if cursor == nil {
+		f.headCalls++
+		if f.onHead != nil {
+			f.onHead()
+		}
 	}
 	head := source.ChangeCursor{StoreID: "store", Sequence: uint64(len(f.changeLog))}
 	if cursor == nil {
@@ -58,7 +69,7 @@ func (f *fakeSource) ReadChanges(_ context.Context, _, _ string, cursor *source.
 		return source.Changes{Next: head}, nil
 	}
 	next := source.ChangeCursor{StoreID: head.StoreID, Sequence: cursor.Sequence + 1}
-	return source.Changes{Spans: [][2]time.Time{f.changeLog[cursor.Sequence]}, Next: next, HasMore: next.Sequence < head.Sequence, Bytes: 10}, nil
+	return source.Changes{Spans: f.changeLog[cursor.Sequence], Next: next, HasMore: next.Sequence < head.Sequence, Bytes: 10}, nil
 }
 
 func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column, error) {
@@ -73,6 +84,9 @@ func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column,
 
 func (f *fakeSource) ReadRange(_ context.Context, req source.Range) (source.Page, error) {
 	f.requests = append(f.requests, req)
+	if f.onRead != nil {
+		defer f.onRead(req)
+	}
 	if f.failAll != nil {
 		return source.Page{}, f.failAll
 	}
@@ -87,8 +101,15 @@ func (f *fakeSource) ReadRange(_ context.Context, req source.Range) (source.Page
 		return source.Page{}, errors.New("source went away")
 	}
 	f.served++
+	only := map[string]bool{}
+	for _, subject := range req.Subjects {
+		only[subject] = true
+	}
 	var matched []staging.Row
 	for _, row := range f.rows {
+		if len(only) > 0 && !only[row.SubjectID] {
+			continue
+		}
 		if !row.DataTime.Before(req.Start) && row.DataTime.Before(req.End) {
 			matched = append(matched, row)
 		}
@@ -111,12 +132,23 @@ func (f *fakeSource) ReadRange(_ context.Context, req source.Range) (source.Page
 	return page, nil
 }
 
-type noPacer struct{ throttled int64 }
+// noPacer 不等待；allowed 非空时由它回答 AllowedAt（模拟秒窗口与整点窗口），waits 记 WaitTurn 的次数。
+type noPacer struct {
+	throttled int64
+	waits     int
+	allowed   func(time.Time) time.Time
+}
 
-func (noPacer) WaitTurn(context.Context) error               { return nil }
+func (p *noPacer) AllowedAt(t time.Time) time.Time {
+	if p.allowed != nil {
+		return p.allowed(t)
+	}
+	return t
+}
+func (p *noPacer) WaitTurn(context.Context) error            { p.waits++; return nil }
 func (p *noPacer) Throttle(_ context.Context, n int64) error { p.throttled += n; return nil }
-func (noPacer) Sleep(context.Context, time.Duration) error   { return nil }
-func (noPacer) Interval() time.Duration                      { return 0 }
+func (*noPacer) Sleep(context.Context, time.Duration) error  { return nil }
+func (*noPacer) Interval() time.Duration                     { return 0 }
 
 type env struct {
 	t     *testing.T
@@ -148,8 +180,8 @@ func (e *env) runner(pageRows int) *Runner {
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: "run_1", LeaseToken: "tok", Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
-		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
+		RunId: "run_1", LeaseToken: "tok", Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
+		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: e.now.Format(time.RFC3339), ScheduledAt: e.now.Format(time.RFC3339),
 	}
 	if mutate != nil {
@@ -160,7 +192,7 @@ func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAs
 
 func (e *env) run(pageRows int, mutate func(*archivepb.RunAssignment), report func(Progress) bool) *Outcome {
 	e.t.Helper()
-	out, err := e.runner(pageRows).Execute(context.Background(), e.assignment(mutate), report)
+	out, err := e.runner(pageRows).Execute(context.Background(), e.assignment(mutate), report, nil)
 	if err != nil {
 		e.t.Fatalf("Execute: %v", err)
 	}
@@ -203,63 +235,74 @@ func readFile(t *testing.T, root, rel string) string {
 	return string(raw)
 }
 
-func TestFirstRunStagesRowsWithoutBackfillAndAdvancesTheWatermark(t *testing.T) {
+// 首次运行：位点记在日志头部，重读进度 [回补起点, 取头部之后的时刻)；按 1 小时一段读（不跨分区），最后一段不设上界，读完两列清空。
+func TestFirstFollowRebasesAndRescansFromTheBackfill(t *testing.T) {
 	e := newEnv(t)
 	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	e.src.rows = append(rows("BTC", day, 60, 1), rows("ETH", day, 60, 100)...)
+	e.src.changeLog = [][]source.ChangeSpan{{{SubjectID: "BTC", Start: day, End: day}}} // 首次运行之前已有的条目不重放
 	var progress []Progress
-	out := e.run(50, nil, func(p Progress) bool { progress = append(progress, p); return false })
-	if out.Status != "succeeded" || out.Progress.RowsRead != 120 || out.RowsAdded != 120 || out.RowsChanged != 0 || out.Progress.RequestCount != 4 || out.Progress.SubjectsDone != 2 {
+	out := e.run(50, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-16T23:00:00Z" }, func(p Progress) bool { progress = append(progress, p); return false })
+	if out.Status != "succeeded" || out.Progress.RowsRead != 120 || out.RowsAdded != 120 || out.RowsChanged != 0 || out.Progress.SubjectsDone != 2 || len(out.Unrecoverable) != 0 {
 		t.Fatalf("out = %+v", out)
 	}
-	// 区间 = 本次运行开始 − 执行间隔 − L − S（1m）= 01:04:43 − 1h − 15m − 1m = 前一天 23:48:43，按分区边界切成两块。
-	first, last := e.src.requests[0], e.src.requests[len(e.src.requests)-1]
-	if want := e.now.Add(-time.Hour - 15*time.Minute - time.Minute); !first.Start.Equal(want) || !first.End.Equal(day) || !last.End.Equal(e.now) {
-		t.Fatalf("range = [%s, %s) … %s, want start %s", first.Start, first.End, last.End, want)
+	var bounds []string
+	for _, r := range e.src.requests {
+		if r.Cursor == "" {
+			bounds = append(bounds, r.Start.Format("01-02T15:04")+"→"+r.End.Format("2006-01-02T15:04"))
+		}
 	}
-	if len(progress) != 4 || e.pace.throttled != 12000 {
-		t.Fatalf("progress=%d throttled=%d", len(progress), e.pace.throttled)
+	want := "10-16T23:00→2026-10-17T00:00 10-17T00:00→2026-10-17T01:00 10-17T01:00→2200-01-01T00:00"
+	if strings.Join(bounds, " ") != want {
+		t.Fatalf("分段 = %v", bounds)
+	}
+	if got := changeCursor(t, e); got != 1 {
+		t.Fatalf("位点应记在日志头部: %d", got)
+	}
+	if _, _, ok, _ := e.store.Rescan(context.Background(), "crypto", "ds_1m"); ok {
+		t.Fatal("读完后重读进度应清空")
+	}
+	if e.src.headCalls != 1 || len(progress) == 0 || e.pace.throttled != 12000 {
+		t.Fatalf("headCalls=%d progress=%d throttled=%d", e.src.headCalls, len(progress), e.pace.throttled)
 	}
 	// 今天的分区还没到导出时间：只登记为 open（暂存中），没有文件。
 	p := report(out, "2026-10-17")
 	if p == nil || p.GetStatus() != "open" || p.GetRowCount() != 120 || p.GetSubjectCount() != 2 || p.GetFilePath() != "" || out.Exported != 0 {
 		t.Fatalf("partition = %v", p)
 	}
-	// 昨天 23:48 起的区间跨了零点，所以前一天的分区也有行？这里数据只在今天，昨天没有行。
 	if report(out, "2026-10-16") != nil {
 		t.Fatal("没有行的分区不应登记")
-	}
-	if w, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); !ok || !w.Equal(e.now) {
-		t.Fatalf("watermark = %v %v", w, ok)
 	}
 	if _, err := os.Stat(filepath.Join(e.root, "crypto", "collect", "kline-1m", "dataset.json")); err != nil {
 		t.Fatalf("dataset.json: %v", err)
 	}
 }
 
-func TestSecondRunReadsFromTheWatermarkMinusLookbackAndSkipsUnchangedRows(t *testing.T) {
+// 没有新写入的一轮：不读行，到期分区照样导出、定稿，位点不变；之后按日志只读改动的范围。
+func TestFollowWithoutNewWritesExportsDuePartitionsAndKeepsTheCursor(t *testing.T) {
 	e := newEnv(t)
 	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", day, 120, 1) // 00:00–01:59
-	e.run(2000, nil, nil)
+	e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-17T00:00:00Z" }, nil)
+	before := changeCursor(t, e)
 	e.src.requests = nil
-	e.now = e.now.Add(time.Hour)
+	e.now = time.Date(2026, 10, 18, 0, 20, 43, 0, time.UTC)    // 10-17 收盘 + 15 分钟之后
+	e.src.rows = append(e.src.rows, rows("ETH", day, 1, 5)...) // 日志里没有的写入不会被读到
 	out := e.run(2000, nil, nil)
-	// 起点 = W − L − S = 01:04:43 − 15m − 1m；已读过的行值没变，不产生写入。
-	if want := time.Date(2026, 10, 17, 0, 48, 43, 0, time.UTC); !e.src.requests[0].Start.Equal(want) {
-		t.Fatalf("start = %s, want %s", e.src.requests[0].Start, want)
+	if out.Status != "succeeded" || len(e.src.requests) != 0 || out.Exported != 1 || changeCursor(t, e) != before {
+		t.Fatalf("out=%+v requests=%d cursor=%d", out, len(e.src.requests), changeCursor(t, e))
 	}
-	// 第二次运行读 00:48:43 起的 71 行：前 16 行上一次已读过（值没变，不产生写入），后 55 行是新到的。
-	if out.Progress.RowsRead != 71 || out.RowsAdded != 55 || out.RowsChanged != 0 {
-		t.Fatalf("out = %+v", out)
+	if p := report(out, "2026-10-17"); p.GetStatus() != "exported" || p.GetRowCount() != 120 {
+		t.Fatalf("p = %v", p)
 	}
-	// 窗口内的晚到补采：一条新行 + 一条值变化。
-	e.src.rows = append(e.src.rows, rows("ETH", day.Add(118*time.Minute), 1, 5)...)
-	e.src.rows[115].Values[1] = 999.0   // 01:55
-	e.now = e.now.Add(26 * time.Minute) // 02:30:43：窗口起点 02:04:43 − 16m = 01:48:43
+	// 日志里有一条写入：只读这个标的这段时间，一条新增、一条值变化。
+	e.src.rows[115].Values[1] = 999.0 // BTC 01:55
+	e.src.rows = append(e.src.rows, rows("BTC", day.Add(5*time.Hour), 1, 7)...)
+	e.src.changeLog = append(e.src.changeLog, []source.ChangeSpan{{SubjectID: "BTC", Start: day.Add(115 * time.Minute), End: day.Add(5 * time.Hour)}})
+	e.now = e.now.Add(time.Minute)
 	out = e.run(2000, nil, nil)
-	if out.RowsAdded != 1 || out.RowsChanged != 1 {
-		t.Fatalf("补采应产生 1 新增 1 变化: %+v", out)
+	if out.RowsAdded != 1 || out.RowsChanged != 1 || len(e.src.requests) != 1 || strings.Join(e.src.requests[0].Subjects, ",") != "BTC" || changeCursor(t, e) != before+1 {
+		t.Fatalf("out=%+v requests=%+v", out, e.src.requests)
 	}
 }
 
@@ -347,8 +390,8 @@ func TestLateRowsReopenAFinalPartitionAndKeepEveryOriginalRow(t *testing.T) {
 			t.Fatalf("重写后丢了原有的行 %q", line)
 		}
 	}
-	if w, _, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); !w.Equal(time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)) {
-		t.Fatalf("补拉区间不能推进水位: %v", w)
+	if changeCursor(t, e) != 0 {
+		t.Fatal("补拉区间不能推进位点")
 	}
 	// 再读一次同样的区间：值没变，不重写（导出次数不变）。
 	e.now = e.now.Add(time.Hour)
@@ -360,12 +403,14 @@ func TestLateRowsReopenAFinalPartitionAndKeepEveryOriginalRow(t *testing.T) {
 	}
 }
 
-func TestBackfillIsReadPartitionByPartition(t *testing.T) {
+func TestRangeIsReadPartitionByPartition(t *testing.T) {
 	e := newEnv(t)
 	start := time.Date(2026, 10, 14, 22, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", start, 60*30, 1) // 跨 14 日晚到 16 日
 	e.now = time.Date(2026, 10, 16, 6, 0, 0, 0, time.UTC)
-	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = start.Format(time.RFC3339); a.Retention = "forever" }, nil)
+	out := e.run(2000, func(a *archivepb.RunAssignment) {
+		a.Kind, a.RangeStart, a.RangeEnd, a.Retention = "range", start.Format(time.RFC3339), e.now.Format(time.RFC3339), "forever"
+	}, nil)
 	var bounds []string
 	for _, r := range e.src.requests {
 		bounds = append(bounds, r.Start.Format("01-02T15")+"→"+r.End.Format("01-02T15"))
@@ -377,14 +422,17 @@ func TestBackfillIsReadPartitionByPartition(t *testing.T) {
 	if out.Progress.RowsRead != 60*30 || report(out, "2026-10-14") == nil || report(out, "2026-10-15") == nil {
 		t.Fatalf("out = %+v", out)
 	}
+	if _, _, ok, _ := e.store.ChangeCursor(context.Background(), "crypto", "ds_1m"); ok || e.src.changeCalls != 0 {
+		t.Fatal("补拉区间不读变更日志、不写位点")
+	}
 }
 
 func TestRetentionClampsTheRangeAndReportsWhatCannotBeRecovered(t *testing.T) {
 	e := newEnv(t)
 	e.src.rows = rows("BTC", e.now.Add(-30*time.Hour), 10, 1)
 	out := e.run(2000, func(a *archivepb.RunAssignment) {
-		a.Retention = "24h"
-		a.BackfillFrom = e.now.Add(-48 * time.Hour).Format(time.RFC3339)
+		a.Kind, a.Retention = "range", "24h"
+		a.RangeStart, a.RangeEnd = e.now.Add(-48*time.Hour).Format(time.RFC3339), e.now.Format(time.RFC3339)
 	}, nil)
 	if len(out.Unrecoverable) != 1 {
 		t.Fatalf("unrecoverable = %v", out.Unrecoverable)
@@ -401,27 +449,27 @@ func TestRetentionClampsTheRangeAndReportsWhatCannotBeRecovered(t *testing.T) {
 	if out.Status != "succeeded" {
 		t.Fatalf("out = %+v", out)
 	}
-	if _, err := e.runner(10).Execute(context.Background(), e.assignment(func(a *archivepb.RunAssignment) { a.Retention = "soon" }), nil); err != nil && out == nil {
+	if _, err := e.runner(10).Execute(context.Background(), e.assignment(func(a *archivepb.RunAssignment) { a.Retention = "soon" }), nil, nil); err != nil && out == nil {
 		t.Fatal(err)
 	}
 }
 
-func TestCancellationLeavesStagedBatchesAndDoesNotAdvanceTheWatermark(t *testing.T) {
+func TestCancellationLeavesStagedBatchesAndKeepsTheRescanProgress(t *testing.T) {
 	e := newEnv(t)
 	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", day, 60, 1) // 00:00–00:59
-	calls := 0
-	out := e.run(20, nil, func(p Progress) bool { calls++; return p.RowsRead >= 40 })
+	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = day.Format(time.RFC3339) }
+	out := e.run(20, backfill, func(p Progress) bool { return p.RowsRead >= 40 })
 	if out.Status != "canceled" || out.Progress.RowsRead != 40 {
 		t.Fatalf("out = %+v", out)
 	}
-	if _, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); ok {
-		t.Fatal("取消的运行不能推进水位")
+	if from, _, ok, _ := e.store.Rescan(context.Background(), "crypto", "ds_1m"); !ok || !from.Equal(day) {
+		t.Fatalf("取消的那一段没读完，重读进度不动: %v %v", from, ok)
 	}
 	if p := report(out, "2026-10-17"); p == nil || p.GetRowCount() != 40 || p.GetStatus() != "open" {
 		t.Fatalf("已提交的批次留在暂存区并登记: %v", p)
 	}
-	// 下一次运行从同一个起点重读，已写入的行值没变，不重复计数。
+	// 下一次运行从同一段重读，已写入的行值没变，不重复计数。
 	e.now = e.now.Add(time.Minute)
 	out = e.run(20, nil, nil)
 	if out.Status != "succeeded" || out.RowsAdded != 20 {
@@ -449,8 +497,8 @@ func TestReadFailuresAreRetriedThenReportedWithoutAdvancing(t *testing.T) {
 	if len(e2.src.requests) != 3 {
 		t.Fatalf("requests = %d, want 3 attempts", len(e2.src.requests))
 	}
-	if _, ok, _ := e2.store.Watermark(context.Background(), "crypto", "ds_1m"); ok {
-		t.Fatal("失败的运行不能推进水位")
+	if from, _, ok, _ := e2.store.Rescan(context.Background(), "crypto", "ds_1m"); !ok || !from.Equal(e2.now.Add(-168*time.Hour)) {
+		t.Fatalf("失败的那一段重读进度不动: %v %v", from, ok)
 	}
 }
 
@@ -480,7 +528,7 @@ func TestStockCNPartitionWaitsForTheLocalCloseAndMonthPartitionsUseTheTwelveHour
 	}
 	m.now = time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	out = m.run(2000, func(a *archivepb.RunAssignment) {
-		a.Freq, a.PartitionUnit, a.IntervalSeconds, a.Retention = "1d", "month", 86400, "forever"
+		a.Freq, a.PartitionUnit, a.Retention = "1d", "month", "forever"
 		a.BackfillFrom = "2026-09-25T00:00:00Z"
 	}, nil)
 	oct, sep := report(out, "2026-10"), report(out, "2026-09")
@@ -505,63 +553,18 @@ func TestExecuteRejectsBadAssignmentsAndMissingColumns(t *testing.T) {
 		"no dir name":    func(a *archivepb.RunAssignment) { a.DirName = "" },
 		"no purpose":     func(a *archivepb.RunAssignment) { a.Purpose = "" },
 		"unsafe dir":     func(a *archivepb.RunAssignment) { a.DirName = "../x" },
-		"dot purpose":    func(a *archivepb.RunAssignment) { a.Purpose = ".import" },
+		"dot purpose":    func(a *archivepb.RunAssignment) { a.Purpose = ".state" },
+		"unknown kind":   func(a *archivepb.RunAssignment) { a.Kind = "tick" },
+		"import no feed": func(a *archivepb.RunAssignment) { a.Kind = "import" },
 	} {
-		out, err := e.runner(10).Execute(context.Background(), e.assignment(mutate), nil)
+		out, err := e.runner(10).Execute(context.Background(), e.assignment(mutate), nil, nil)
 		if err == nil && (out == nil || out.Status != "failed") {
 			t.Fatalf("%s: 应报错或失败: out=%+v", name, out)
 		}
 	}
 	e.src.columns = []staging.Column{{Name: "Bad-Name", Type: staging.TypeDouble}}
-	if out, err := e.runner(10).Execute(context.Background(), e.assignment(nil), nil); err == nil && (out == nil || out.Status != "failed") {
+	if out, err := e.runner(10).Execute(context.Background(), e.assignment(nil), nil, nil); err == nil && (out == nil || out.Status != "failed") {
 		t.Fatalf("非法列名必须报错: out=%+v", out)
-	}
-}
-
-func TestFirstRunRetryReadsFromTheSameStartAfterAFailure(t *testing.T) {
-	e := newEnv(t)
-	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
-	e.src.rows = rows("BTC", day, 60, 1)
-	// 第一次运行：01:04:43 开始，第一块（前一天 23:48:43 起）的读取就失败（只试 1 次），没有续读起点。
-	e.src.failAll = errors.New("storage unreachable")
-	r := e.runner(20)
-	r.ReadAttempts = 1
-	out, err := r.Execute(context.Background(), e.assignment(nil), nil)
-	if err != nil || out.Status != "failed" {
-		t.Fatalf("out=%+v err=%v", out, err)
-	}
-	firstStart := e.src.requests[0].Start
-	e.src.requests, e.src.failAll = nil, nil
-	// 一个小时之后重试：起点必须仍是第一次的起点（而不是重新往前推 1h16m），否则两次起点之间没读到的数据永久漏读。
-	e.now = e.now.Add(time.Hour)
-	out = e.run(20, nil, nil)
-	if out.Status != "succeeded" || !e.src.requests[0].Start.Equal(firstStart) {
-		t.Fatalf("重试起点 = %s, 第一次起点 = %s, out=%+v", e.src.requests[0].Start, firstStart, out)
-	}
-	// 水位前进之后，起点回到「水位 − L − S」。
-	e.src.requests = nil
-	e.now = e.now.Add(time.Hour)
-	e.run(20, nil, nil)
-	if want := time.Date(2026, 10, 17, 1, 4, 43, 0, time.UTC).Add(time.Hour).Add(-16 * time.Minute); !e.src.requests[0].Start.Equal(want) {
-		t.Fatalf("start = %s, want %s", e.src.requests[0].Start, want)
-	}
-}
-
-func TestFirstRunKeepsItsStartWhenColumnsLookupFails(t *testing.T) {
-	e := newEnv(t)
-	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
-	e.src.rows = rows("BTC", day, 60, 1)
-	firstRunAt := e.now
-	e.src.columnsErr = errors.New("columns timeout")
-	if out := e.run(20, nil, nil); out.Status != "failed" || len(e.src.requests) != 0 {
-		t.Fatalf("out=%+v", out)
-	}
-	e.src.columnsErr = nil
-	e.now = e.now.Add(time.Hour)
-	e.run(20, nil, nil)
-	// 起点沿用第一次运行算出的（运行开始往前推 1h16m），而不是第二次运行重新推的。
-	if want := firstRunAt.Add(-76 * time.Minute); !e.src.requests[0].Start.Equal(want) {
-		t.Fatalf("start = %s, want %s", e.src.requests[0].Start, want)
 	}
 }
 
@@ -628,76 +631,6 @@ func partitionState(t *testing.T, e *env, key string) staging.PartitionState {
 	return p
 }
 
-// 回补中途某页失败：之前的分区块已经导出、到期的已定稿；下一次运行从续读起点接着读，不从回补起点重读。
-func TestBackfillResumesAfterAFailedChunkWithEarlierPartitionsAlreadyHandled(t *testing.T) {
-	e := newEnv(t)
-	from := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
-	for d := 0; d < 4; d++ {
-		e.src.rows = append(e.src.rows, rows("BTC", from.AddDate(0, 0, d).Add(time.Hour), 30, float64(d))...)
-	}
-	e.now = time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
-	e.src.failFrom = time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC) // 第三块起读取失败
-	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = from.Format(time.RFC3339); a.Retention = "forever" }
-	r := e.runner(2000)
-	r.ReadAttempts = 1
-	out, err := r.Execute(context.Background(), e.assignment(backfill), nil)
-	if err != nil || out.Status != "failed" {
-		t.Fatalf("out=%+v err=%v", out, err)
-	}
-	// 10-10 收盘 + L + 3 天 = 10-14 00:15，已定稿；10-11 已过收盘 + L，已导出。
-	if p := partitionState(t, e, "2026-10-10"); p.Status != staging.StatusFinal || p.RowCount != 30 {
-		t.Fatalf("10-10 = %+v", p)
-	}
-	if p := partitionState(t, e, "2026-10-11"); p.Status != staging.StatusExported || p.FilePath == "" {
-		t.Fatalf("10-11 = %+v", p)
-	}
-	if out.Exported != 2 || out.Finalized != 1 || report(out, "2026-10-10").GetStatus() != "final" {
-		t.Fatalf("上报应带上已处理的分区: %+v", out)
-	}
-	if _, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); ok {
-		t.Fatal("失败的运行不能推进水位")
-	}
-	resume, ok, _ := e.store.ResumeFrom(context.Background(), "crypto", "ds_1m")
-	if !ok || !resume.Equal(e.src.failFrom) {
-		t.Fatalf("resume_from = %v %v", resume, ok)
-	}
-	// 下一次运行（回补起点仍在）：从续读起点读，读完后推进水位并清掉续读起点。
-	e.src.failFrom, e.src.requests = time.Time{}, nil
-	e.now = e.now.Add(time.Hour)
-	out = e.run(2000, backfill, nil)
-	if out.Status != "succeeded" || !e.src.requests[0].Start.Equal(resume) {
-		t.Fatalf("续读起点 = %s, want %s; out=%+v", e.src.requests[0].Start, resume, out)
-	}
-	if out.Progress.RowsRead != 60 || partitionState(t, e, "2026-10-12").Status != staging.StatusExported {
-		t.Fatalf("续读应只读 10-12 起的两天: %+v", out)
-	}
-	if _, ok, _ := e.store.ResumeFrom(context.Background(), "crypto", "ds_1m"); ok {
-		t.Fatal("水位推进后续读起点应清掉")
-	}
-	if w, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); !ok || !w.Equal(e.now) {
-		t.Fatalf("watermark = %v %v", w, ok)
-	}
-}
-
-// 续读点不晚于“本次运行开始 − L − S”。
-func TestResumePointIsCappedAtRunStartMinusLookback(t *testing.T) {
-	e := newEnv(t)
-	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
-	e.src.rows = rows("BTC", day, 30, 1)
-	e.now = time.Date(2026, 10, 17, 0, 5, 0, 0, time.UTC)
-	// 区间 [10-16 23:00, 10-17 00:05)：第一块结束于 00:00，而 运行开始 − 16 分钟 = 23:49。
-	e.src.failFrom = day
-	r := e.runner(2000)
-	r.ReadAttempts = 1
-	if out, _ := r.Execute(context.Background(), e.assignment(func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-16T23:00:00Z" }), nil); out.Status != "failed" {
-		t.Fatalf("out=%+v", out)
-	}
-	if resume, ok, _ := e.store.ResumeFrom(context.Background(), "crypto", "ds_1m"); !ok || !resume.Equal(e.now.Add(-16*time.Minute)) {
-		t.Fatalf("resume_from = %v %v", resume, ok)
-	}
-}
-
-// 暂存库丢失后：按 mgr 的登记（last_success_at + registered_partitions）重建，再读到旧分区的行时读回原文件合并，行数不减少。
 func TestLostStagingIsRebuiltFromTheManagerRegistrationWithoutLosingRows(t *testing.T) {
 	e := newEnv(t)
 	e.format = "" // 走生产默认的 csv.gz：读回前校验、解压读回、重新压缩导出
@@ -765,7 +698,7 @@ func TestReadBackUsesTheRecordedPathAfterTheExportFormatChanged(t *testing.T) {
 	e.now = e.now.Add(time.Hour)
 	out, err := r.Execute(context.Background(), e.assignment(func(a *archivepb.RunAssignment) {
 		a.Kind, a.RangeStart, a.RangeEnd = "range", "2026-10-10T00:00:00Z", "2026-10-11T00:00:00Z"
-	}), nil)
+	}), nil, nil)
 	if err != nil || out.Status != "succeeded" {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
@@ -828,7 +761,22 @@ func TestExportRefusesToOverwriteAFileTheStagingDoesNotKnow(t *testing.T) {
 	}
 }
 
-// 保留期截掉的长度不到一根 K 线跨度时不记“无法补齐”。
+// 首次运行的回补起点早于保留期起点：[回补起点, R) 记为无法补齐，从 R 读起；截掉的不到一根 K 线跨度时不记。
+func TestFirstRunBeforeTheRetentionReportsWhatCannotBeRecovered(t *testing.T) {
+	e := newEnv(t)
+	out := e.run(2000, func(a *archivepb.RunAssignment) {
+		a.Retention = "24h"
+		a.BackfillFrom = e.now.Add(-48 * time.Hour).Format(time.RFC3339)
+	}, nil)
+	if out.Status != "succeeded" || len(out.Unrecoverable) != 1 || out.Unrecoverable[0].GetStartTime() != e.now.Add(-48*time.Hour).Format(time.RFC3339) ||
+		out.Unrecoverable[0].GetEndTime() != e.now.Add(-24*time.Hour).Format(time.RFC3339) {
+		t.Fatalf("out = %+v", out)
+	}
+	if !e.src.requests[0].Start.Equal(e.now.Add(-24 * time.Hour)) {
+		t.Fatalf("start = %s", e.src.requests[0].Start)
+	}
+}
+
 func TestRetentionCutShorterThanABarIsNotReported(t *testing.T) {
 	e := newEnv(t)
 	out := e.run(2000, func(a *archivepb.RunAssignment) {
@@ -849,59 +797,5 @@ func TestEmptyRetentionIsAnError(t *testing.T) {
 	}
 	if _, forever, err := parseRetention("forever"); err != nil || !forever {
 		t.Fatal("forever 是永久")
-	}
-}
-
-func TestTickReadsTheAssignedRangeWithoutTouchingTheWatermark(t *testing.T) {
-	e := newEnv(t)
-	ctx := context.Background()
-	// 首次就是到点拉取（复核还没跑过）：只读下发区间，不写首次起点。
-	e.now = time.Date(2026, 10, 17, 0, 4, 30, 0, time.UTC)
-	e.src.rows = rows("BTC", time.Date(2026, 10, 16, 23, 50, 0, 0, time.UTC), 14, 1)
-	tick := func(a *archivepb.RunAssignment) {
-		a.Kind, a.RangeStart, a.RangeEnd = "tick", "2026-10-16T23:55:00Z", "2026-10-17T00:04:25Z"
-	}
-	out := e.run(2000, tick, nil)
-	if out.Status != "succeeded" || out.Progress.RowsRead != 9 {
-		t.Fatalf("out = %+v", out)
-	}
-	var bounds []string
-	for _, r := range e.src.requests {
-		bounds = append(bounds, r.Start.Format("01-02T15:04:05")+"→"+r.End.Format("01-02T15:04:05"))
-	}
-	// 按分区边界切块，读的就是下发区间。
-	if strings.Join(bounds, ",") != "10-16T23:55:00→10-17T00:00:00,10-17T00:00:00→10-17T00:04:25" {
-		t.Fatalf("requests = %v", bounds)
-	}
-	if _, ok, _ := e.store.Watermark(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("到点拉取不能推进水位")
-	}
-	if _, ok, _ := e.store.FirstStart(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("到点拉取不能写首次起点")
-	}
-	if _, ok, _ := e.store.ResumeFrom(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("到点拉取不能写续读起点")
-	}
-
-	// 复核推进水位；之后的到点拉取不改它。
-	e.now = time.Date(2026, 10, 17, 0, 34, 30, 0, time.UTC)
-	e.run(2000, nil, nil)
-	w, ok, _ := e.store.Watermark(ctx, "crypto", "ds_1m")
-	if !ok || !w.Equal(e.now) {
-		t.Fatalf("复核推进水位: %v %v", w, ok)
-	}
-	e.now = time.Date(2026, 10, 17, 0, 40, 30, 0, time.UTC)
-	e.src.requests = nil
-	out = e.run(2000, func(a *archivepb.RunAssignment) {
-		a.Kind, a.RangeStart, a.RangeEnd = "tick", "2026-10-17T00:37:00Z", "2026-10-17T00:40:25Z"
-	}, nil)
-	if out.Status != "succeeded" || len(e.src.requests) != 1 || !e.src.requests[0].Start.Equal(time.Date(2026, 10, 17, 0, 37, 0, 0, time.UTC)) {
-		t.Fatalf("out = %+v requests = %+v", out, e.src.requests)
-	}
-	if after, _, _ := e.store.Watermark(ctx, "crypto", "ds_1m"); !after.Equal(w) {
-		t.Fatalf("到点拉取改了水位: %s → %s", w, after)
-	}
-	if _, ok, _ := e.store.ResumeFrom(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("到点拉取不能写续读起点")
 	}
 }

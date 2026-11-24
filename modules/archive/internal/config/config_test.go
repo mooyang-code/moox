@@ -28,7 +28,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Schedule.MinLookback != 15*time.Minute || cfg.Run.LeaseTTL != 10*time.Minute ||
+	if cfg.AllowedLateness != 15*time.Minute || cfg.Run.LeaseTTL != 10*time.Minute ||
 		cfg.StagingRetention != 72*time.Hour || cfg.Database.Path != "./data/archive-mgr/archive.db" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
@@ -46,8 +46,8 @@ func TestLoadRejectsUnknownKeysMultipleDocumentsAndBadValues(t *testing.T) {
 		"two documents":  minimal + "---\ndatabase:\n  path: x\n",
 		"wrong caller":   strings.Replace(minimal, "archive-mgr", "someone", 1),
 		"short lease":    minimal + "run:\n  lease_ttl: 10s\n",
-		"low lookback":   minimal + "schedule:\n  min_lookback: 5m\n",
-		"bad retention":  minimal + "retention:\n  scheduled_success: 720h\n  other: 24h\n",
+		"low lateness":   minimal + "allowed_lateness: 5m\n",
+		"bad retention":  minimal + "retention:\n  other: 24h\n",
 		"short staging":  minimal + "staging_retention: 1h\n",
 		"bad tz":         minimal + "spaces:\n  crypto:\n    tz: Mars/Base\n",
 		"bad close":      minimal + "spaces:\n  stockcn:\n    tz: Asia/Shanghai\n    local_close: \"25:61\"\n",

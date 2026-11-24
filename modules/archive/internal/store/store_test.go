@@ -26,7 +26,7 @@ func openTest(t *testing.T) *Store {
 func task(space, dataset string) Task {
 	return Task{
 		SpaceID: space, DatasetID: dataset, Purpose: "collect", DirName: "dir-" + strings.ReplaceAll(dataset, "_", "-"), Freq: "1m", PartitionUnit: "day", Retention: "168h",
-		PullEveryBars: 1, IntervalSeconds: 3600, Status: StatusEnabled, Creator: "tester",
+		BackfillFrom: t0.Add(-6 * 24 * time.Hour).Truncate(time.Second), Status: StatusEnabled, Creator: "tester",
 	}
 }
 
@@ -61,10 +61,10 @@ func TestOpenCreatesIncrementalVacuumDatabase(t *testing.T) {
 	}
 }
 
-func TestCreateTaskAllowsOneTaskPerDatasetAndStartsWithEmptyBoundaries(t *testing.T) {
+func TestCreateTaskAllowsOneTaskPerDatasetAndKeepsTheBackfillStart(t *testing.T) {
 	s := openTest(t)
 	created, _ := mustTask(t, s, "crypto", "ds1", false)
-	if created.Status != StatusEnabled || created.IntervalSeconds != 3600 || created.PullEveryBars != 1 || !created.LastBoundary.IsZero() || !created.LastReview.IsZero() {
+	if created.Status != StatusEnabled || !created.BackfillFrom.Equal(task("crypto", "ds1").BackfillFrom) {
 		t.Fatalf("task = %+v", created)
 	}
 	if runs, total, _ := s.ListRuns(context.Background(), "crypto", "ds1", "", true, 10, 0); total != 0 || len(runs) != 0 {
@@ -74,9 +74,9 @@ func TestCreateTaskAllowsOneTaskPerDatasetAndStartsWithEmptyBoundaries(t *testin
 		t.Fatalf("重复创建应返回 ErrConflict: %v", err)
 	}
 	bad := task("crypto", "ds3")
-	bad.PullEveryBars = 1441
+	bad.BackfillFrom = time.Time{}
 	if _, err := s.CreateTask(context.Background(), bad); err == nil {
-		t.Fatal("pull_every_bars 超出 1～1440 应被表约束拒绝")
+		t.Fatal("没有回补起点的任务应被拒绝")
 	}
 	mustTask(t, s, "crypto", "ds2", false)
 	tasks, total, err := s.ListTasks(context.Background(), "crypto", 10, 0)
@@ -91,124 +91,73 @@ func TestCreateTaskAllowsOneTaskPerDatasetAndStartsWithEmptyBoundaries(t *testin
 	}
 }
 
-// fixedPlan 对所有任务返回同一个判定。
-func fixedPlan(plan TriggerPlan) func(Task) (TriggerPlan, error) {
-	return func(Task) (TriggerPlan, error) { return plan, nil }
-}
-
-func TestTriggerDueRecordsBoundariesSkipsBusyTasksAndIgnoresPausedOnes(t *testing.T) {
+// 设计 6.1 第 1 条：启用且空闲的任务各生成一条 follow；有任何排队中或运行中运行（含排队中的导入）的不生成；
+// 停用任务不生成；整点窗口内照常生成。
+func TestCreateFollowRunsOnlyForEnabledIdleTasks(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", false)
-	mustTask(t, s, "crypto", "ds2", false)
-	mustTask(t, s, "crypto", "ds3", false)
-	if _, err := s.UpdateTask(ctx, "crypto", "ds3", TaskUpdate{PullEveryBars: 1, Status: StatusPaused}, t0); err != nil {
+	for _, ds := range []string{"idle", "busy", "importing", "paused"} {
+		mustTask(t, s, "crypto", ds, false)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "busy", RunSpec{Kind: KindManual}, t0); err != nil {
 		t.Fatal(err)
 	}
-	// 不到点：什么都不写。
-	if res, problems, err := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{})); err != nil || res != (TriggerResult{}) || len(problems) != 0 {
-		t.Fatalf("不到点 = %+v %v %v", res, problems, err)
+	if _, err := s.CreateRun(ctx, "crypto", "importing", RunSpec{Kind: KindImport}, t0); err != nil {
+		t.Fatal(err)
 	}
-	if runs, _, _ := s.ListRuns(ctx, "", "", "", true, 10, 0); len(runs) != 0 {
-		t.Fatalf("不到点不写运行记录: %v", runs)
+	if _, err := s.UpdateTask(ctx, "crypto", "paused", TaskUpdate{Status: StatusPaused}, t0); err != nil {
+		t.Fatal(err)
 	}
-	review := TriggerPlan{Kind: KindScheduled, LastBoundary: t0.Truncate(time.Minute), LastReview: t0.Truncate(time.Hour).Add(34 * time.Minute)}
-	res, _, err := s.TriggerDue(ctx, t0, fixedPlan(review))
-	if err != nil || res.Reviews != 2 || res.Ticks != 0 || res.Skipped != 0 {
-		t.Fatalf("复核 = %+v err=%v", res, err)
+	// 整点窗口内（:59:25）照常生成。
+	quiet := time.Date(2026, 10, 17, 0, 59, 25, 0, time.UTC)
+	created, err := s.CreateFollowRuns(ctx, quiet)
+	if err != nil || created != 1 {
+		t.Fatalf("created = %d err=%v", created, err)
 	}
-	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	if !got.LastBoundary.Equal(review.LastBoundary) || !got.LastReview.Equal(review.LastReview) {
-		t.Fatalf("生成运行后记下两个边界: %+v", got)
+	runs, _, _ := s.ListRuns(ctx, "crypto", "idle", RunQueued, true, 10, 0)
+	if len(runs) != 1 || runs[0].Kind != KindFollow || !runs[0].ScheduledAt.Equal(quiet) {
+		t.Fatalf("idle 任务的 follow = %+v", runs)
 	}
-	if paused, _ := s.GetTask(ctx, "crypto", "ds3"); !paused.LastBoundary.IsZero() {
-		t.Fatalf("停用的任务不触发: %+v", paused)
-	}
-	// 已有排队中的运行：跳过、累加次数，边界不前进。
-	tick := TriggerPlan{Kind: KindTick, RangeStart: t0.Add(-3 * time.Minute), RangeEnd: t0.Add(time.Minute), LastBoundary: t0.Add(time.Minute).Truncate(time.Minute), LastReview: review.LastReview}
-	res, _, err = s.TriggerDue(ctx, t0.Add(time.Minute), fixedPlan(tick))
-	if err != nil || res.Skipped != 2 || res.Ticks != 0 {
-		t.Fatalf("应跳过: %+v err=%v", res, err)
-	}
-	got, _ = s.GetTask(ctx, "crypto", "ds1")
-	if got.ConsecutiveSkips != 1 || !got.LastBoundary.Equal(review.LastBoundary) {
-		t.Fatalf("跳过时边界不前进: %+v", got)
-	}
-	// 运行结束后到点拉取：生成 tick 运行（带区间），清零跳过次数。
-	for _, ds := range []string{"ds1", "ds2"} {
-		runs, _, _ := s.ListRuns(ctx, "crypto", ds, "", true, 10, 0)
-		if _, err := s.CancelRun(ctx, runs[0].RunID, "", t0.Add(time.Minute)); err != nil {
-			t.Fatal(err)
+	for _, ds := range []string{"busy", "importing", "paused"} {
+		if runs, _, _ := s.ListRuns(ctx, "crypto", ds, "", true, 10, 0); len(runs) > 1 || (len(runs) == 1 && runs[0].Kind == KindFollow) {
+			t.Fatalf("%s 不应生成 follow: %+v", ds, runs)
 		}
 	}
-	res, _, err = s.TriggerDue(ctx, t0.Add(time.Minute), fixedPlan(tick))
-	if err != nil || res.Ticks != 2 {
-		t.Fatalf("到点拉取 = %+v err=%v", res, err)
-	}
-	got, _ = s.GetTask(ctx, "crypto", "ds1")
-	if got.ConsecutiveSkips != 0 || !got.LastBoundary.Equal(tick.LastBoundary) {
-		t.Fatalf("tick 后: %+v", got)
-	}
-	runs, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunQueued, true, 10, 0)
-	if len(runs) != 1 || runs[0].Kind != KindTick || !runs[0].RangeStart.Equal(tick.RangeStart) || !runs[0].RangeEnd.Equal(tick.RangeEnd) || !runs[0].ScheduledAt.Equal(t0.Add(time.Minute)) {
-		t.Fatalf("tick 运行 = %+v", runs)
+	// 上一条 follow 还在排队：下一分钟不再生成。
+	if created, err := s.CreateFollowRuns(ctx, quiet.Add(time.Minute)); err != nil || created != 0 {
+		t.Fatalf("排队中时 created = %d err=%v", created, err)
 	}
 }
 
-func TestTriggerDueSkipsTasksWhosePlanFails(t *testing.T) {
+func TestPausingCancelsQueuedRunsAndResumeKeepsTheTaskState(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", false)
-	res, problems, err := s.TriggerDue(ctx, t0, func(Task) (TriggerPlan, error) { return TriggerPlan{}, errors.New("bad timing") })
-	if err != nil || res != (TriggerResult{}) || len(problems) != 1 {
-		t.Fatalf("res=%+v problems=%v err=%v", res, problems, err)
-	}
-	if _, problems, _ := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{Kind: KindRange})); len(problems) != 1 {
-		t.Fatalf("触发器不能生成补拉运行: %v", problems)
-	}
-	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastBoundary.IsZero() || got.ConsecutiveSkips != 0 {
-		t.Fatalf("判定出错时任务状态不变: %+v", got)
-	}
-}
-
-func TestPausingCancelsQueuedRunsAndResumeClearsBoundaries(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	_, run := mustTask(t, s, "crypto", "ds1", true)
-	if _, _, err := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{Kind: KindScheduled, LastBoundary: t0, LastReview: t0})); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CancelRun(ctx, run.RunID, "", t0); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{Kind: KindScheduled, LastBoundary: t0, LastReview: t0})); err != nil {
+	if _, err := s.CreateFollowRuns(ctx, t0); err != nil {
 		t.Fatal(err)
 	}
 	queued, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunQueued, true, 10, 0)
 	if len(queued) != 1 {
 		t.Fatalf("queued = %v", queued)
 	}
-	update := TaskUpdate{PullEveryBars: 5, Status: StatusPaused}
-	paused, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(time.Minute))
-	if err != nil || paused.PullEveryBars != 5 || !paused.LastBoundary.Equal(t0) {
-		t.Fatalf("停用不清边界: %+v err=%v", paused, err)
+	paused, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusPaused}, t0.Add(time.Minute))
+	if err != nil || paused.Status != StatusPaused {
+		t.Fatalf("停用: %+v err=%v", paused, err)
 	}
 	if got, _ := s.GetRun(ctx, queued[0].RunID); got.Status != RunCanceled || got.FinishedAt.IsZero() {
 		t.Fatalf("停用应取消排队中的运行: %+v", got)
 	}
-	update.Status = StatusEnabled
-	resumed, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(2*time.Minute))
-	if err != nil || resumed.Status != StatusEnabled || !resumed.LastBoundary.IsZero() || !resumed.LastReview.IsZero() {
-		t.Fatalf("重新启用清空两个边界: %+v err=%v", resumed, err)
+	if created, _ := s.CreateFollowRuns(ctx, t0.Add(time.Minute)); created != 0 {
+		t.Fatal("停用的任务不生成 follow")
 	}
-	// 本来就是启用的任务修改设置时不清边界。
-	if _, _, err := s.TriggerDue(ctx, t0.Add(3*time.Minute), fixedPlan(TriggerPlan{Kind: KindScheduled, LastBoundary: t0, LastReview: t0})); err != nil {
-		t.Fatal(err)
+	resumed, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusEnabled}, t0.Add(2*time.Minute))
+	if err != nil || resumed.Status != StatusEnabled || !resumed.BackfillFrom.Equal(paused.BackfillFrom) {
+		t.Fatalf("重新启用: %+v err=%v", resumed, err)
 	}
-	if again, _ := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(4*time.Minute)); !again.LastBoundary.Equal(t0) {
-		t.Fatalf("启用 → 启用不清边界: %+v", again)
+	if created, _ := s.CreateFollowRuns(ctx, t0.Add(2*time.Minute)); created != 1 {
+		t.Fatal("重新启用后照常生成 follow")
 	}
-	if _, err := s.UpdateTask(ctx, "crypto", "missing", update, t0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UpdateTask(ctx, "crypto", "missing", TaskUpdate{Status: StatusEnabled}, t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing: %v", err)
 	}
 }
@@ -221,14 +170,74 @@ func TestCreateRunRejectsConcurrentRunsAndUnknownTasks(t *testing.T) {
 	if err != nil || run.Kind != KindRange || !run.RangeStart.Equal(t0.Add(-time.Hour)) {
 		t.Fatalf("range run = %+v err=%v", run, err)
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0); !errors.Is(err, ErrConflict) {
-		t.Fatalf("已有排队中的运行: %v", err)
+	for _, kind := range []string{KindManual, KindImport} {
+		_, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: kind}, t0)
+		var conflict *ConflictError
+		if !errors.Is(err, ErrConflict) || !errors.As(err, &conflict) || conflict.Blocking.RunID != run.RunID || conflict.Blocking.Kind != KindRange {
+			t.Fatalf("%s 应被排队中的补拉挡住并给出挡住它的运行: %v", kind, err)
+		}
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds2", RunSpec{Kind: KindTick, RangeStart: t0, RangeEnd: t0}, t0); err == nil {
-		t.Fatal("CreateRun 不能生成 tick 运行")
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindFollow}, t0); err == nil {
+		t.Fatal("CreateRun 不能生成 follow 运行")
 	}
 	if _, err := s.CreateRun(ctx, "crypto", "nope", RunSpec{Kind: KindManual}, t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown task: %v", err)
+	}
+	// 运行中的补拉同样挡住。
+	claimed := mustClaim(t, s, t0)
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport}, t0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("运行中的 %s 应挡住导入: %v", claimed.Run.Kind, err)
+	}
+}
+
+// 设计 6.1 第 2 条：manual、range、import 取消排队中的 follow；只有运行中的 follow 时不冲突，
+// ClaimRuns 在 follow 结束前不领取新运行。
+func TestCreateRunPreemptsQueuedFollowAndQueuesBehindARunningOne(t *testing.T) {
+	for _, spec := range []RunSpec{{Kind: KindManual}, {Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, {Kind: KindImport}} {
+		t.Run(spec.Kind, func(t *testing.T) {
+			s := openTest(t)
+			ctx := context.Background()
+			mustTask(t, s, "crypto", "ds1", false)
+			if created, err := s.CreateFollowRuns(ctx, t0); err != nil || created != 1 {
+				t.Fatalf("follow = %d err=%v", created, err)
+			}
+			follow, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunQueued, true, 10, 0)
+			run, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0.Add(time.Second))
+			if err != nil {
+				t.Fatalf("排队中的 follow 不应挡住: %v", err)
+			}
+			if got, _ := s.GetRun(ctx, follow[0].RunID); got.Status != RunCanceled || !strings.Contains(got.Message, "让位") {
+				t.Fatalf("排队中的 follow 应被取消: %+v", got)
+			}
+			// 新运行完成后再起一条 follow，领取后再建一条同类运行：运行中的 follow 不挡。
+			c := mustClaim(t, s, t0.Add(2*time.Second))
+			if c.Run.RunID != run.RunID {
+				t.Fatalf("claimed = %+v", c.Run)
+			}
+			if err := s.CompleteRun(ctx, CompleteRequest{RunID: run.RunID, LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(3 * time.Second)}); err != nil {
+				t.Fatal(err)
+			}
+			if created, _ := s.CreateFollowRuns(ctx, t0.Add(time.Minute)); created != 1 {
+				t.Fatal("应生成新的 follow")
+			}
+			running := mustClaim(t, s, t0.Add(time.Minute))
+			if running.Run.Kind != KindFollow {
+				t.Fatalf("应领到 follow: %+v", running.Run)
+			}
+			next, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0.Add(time.Minute+time.Second))
+			if err != nil {
+				t.Fatalf("运行中的 follow 不应挡住: %v", err)
+			}
+			if claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, Now: t0.Add(time.Minute), LeaseTTL: time.Minute}); err != nil || len(claimed) != 0 {
+				t.Fatalf("follow 结束前不领取同任务的新运行: %+v err=%v", claimed, err)
+			}
+			if err := s.CompleteRun(ctx, CompleteRequest{RunID: running.Run.RunID, LeaseToken: running.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			if c := mustClaim(t, s, t0.Add(2*time.Minute)); c.Run.RunID != next.RunID {
+				t.Fatalf("follow 结束后领取新运行: %+v", c.Run)
+			}
+		})
 	}
 }
 
@@ -283,76 +292,12 @@ func TestClaimRunsLetsImportBypassStorageLimit(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "busy", RunSpec{Kind: KindManual}, t0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0.Add(time.Second)); err != nil {
+	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport}, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	// 读 Storage 的名额已被 worker 占满（上限 1）：manual 领不到，import 照样领取。
 	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 1 || claimed[0].Run.Kind != KindImport {
-		t.Fatalf("claimed = %+v err=%v", claimed, err)
-	}
-}
-
-// 排队中的复核或立即运行不挡导入；运行中的运行或排队中的另一条导入才挡。领取时同一任务只执行一条。
-func TestImportCoexistsWithQueuedRunsButTaskRunsOneAtATime(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	if _, err := s.CreateTask(ctx, task("crypto", "ds1")); err != nil {
-		t.Fatal(err)
-	}
-	spec := RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0); err != nil {
-		t.Fatal(err)
-	}
-	imp, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0.Add(time.Second))
-	if err != nil {
-		t.Fatalf("排队中的立即运行不应挡导入: %v", err)
-	}
-	// 立即运行、补拉仍然被排队中的运行挡住；第二条导入被排队中的导入挡住。
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0); !errors.Is(err, ErrConflict) {
-		t.Fatalf("立即运行应冲突: %v", err)
-	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0); !errors.Is(err, ErrConflict) {
-		t.Fatalf("第二条导入应冲突: %v", err)
-	}
-	// 读 Storage 的名额已满：manual 领不到，导入领到；同一次领取里不会再领同任务的 manual。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
-	if err != nil || len(claimed) != 1 || claimed[0].Run.RunID != imp.RunID {
-		t.Fatalf("claimed = %+v err=%v", claimed, err)
-	}
-	// 导入运行中：即使读 Storage 的名额有空，同任务的 manual 也不领取；导入运行中时再建导入冲突。
-	again, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
-	if err != nil || len(again) != 0 {
-		t.Fatalf("again = %+v err=%v", again, err)
-	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0); !errors.Is(err, ErrConflict) {
-		t.Fatalf("导入运行中再建导入应冲突: %v", err)
-	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: imp.RunID, LeaseToken: claimed[0].Run.LeaseToken, Status: RunSucceeded, Now: t0}); err != nil {
-		t.Fatal(err)
-	}
-	last, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
-	if err != nil || len(last) != 1 || last[0].Run.Kind != KindManual {
-		t.Fatalf("last = %+v err=%v", last, err)
-	}
-}
-
-// 同一次领取里，同一任务只领计划时刻更早的那条（不限读 Storage 名额时也一样）。
-func TestClaimRunsTakesOneRunPerTaskWithinOneClaim(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	if _, err := s.CreateTask(ctx, task("crypto", "ds1")); err != nil {
-		t.Fatal(err)
-	}
-	manual, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 3, Now: t0, LeaseTTL: time.Minute})
-	if err != nil || len(claimed) != 1 || claimed[0].Run.RunID != manual.RunID {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
 }
@@ -366,7 +311,7 @@ func TestClaimRunsImportDoesNotConsumeStorageSlotWithinOneClaim(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0); err != nil {
+	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport}, t0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateRun(ctx, "crypto", "plain", RunSpec{Kind: KindManual}, t0.Add(time.Second)); err != nil {
@@ -415,7 +360,8 @@ func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 		t.Fatalf("run = %+v", run)
 	}
 	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	if !got.LastSuccessAt.Equal(c.Run.StartedAt) || !got.FinalUntil.Equal(final) {
+	// 归档起点成功后不再清空：暂存库丢失后整段重读仍以它为下界。
+	if !got.LastSuccessAt.Equal(c.Run.StartedAt) || !got.FinalUntil.Equal(final) || !got.BackfillFrom.Equal(task("crypto", "ds1").BackfillFrom) {
 		t.Fatalf("task = %+v", got)
 	}
 	// 定稿边界只前进不回退。
@@ -692,7 +638,7 @@ func TestCreateTaskKeepsDirNamesUniquePerSpaceAndPurpose(t *testing.T) {
 		t.Fatalf("没人用的目录名: %v %v", ok, err)
 	}
 	// 修改任务与每小时的数据集刷新都不动用途与目录名。
-	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{PullEveryBars: 5, Status: StatusPaused}, t0); err != nil {
+	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusPaused}, t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "720h", `{"name":"x"}`); err != nil {
@@ -825,58 +771,56 @@ func TestExpireLeasesFailsLostRunsAndCleanupHonorsRetention(t *testing.T) {
 	if run.Status != RunFailed || run.Message != "worker 失联" {
 		t.Fatalf("run = %+v", run)
 	}
-	// 清理：失败的运行保留 90 天，成功的复核保留 30 天，成功的到点拉取保留 24 小时。
+	// 清理：成功的 follow 保留 24 小时，失败与取消的 follow 7 天，其余运行（含失败的 manual）用 other（90 天）。
 	const day = 24 * time.Hour
 	now := t0.AddDate(0, 0, 45)
-	if n, _ := s.CleanupRuns(ctx, now, day, 30*day, 90*day); n != 0 {
+	if n, _ := s.CleanupRuns(ctx, now, day, 90*day); n != 0 {
 		t.Fatalf("失败的运行 45 天内不清理: %d", n)
 	}
 	mustTask(t, s, "crypto", "ds2", false)
 	mustTask(t, s, "crypto", "ds3", false)
-	complete := func(kind string, at time.Time) {
+	// ds1 有一条失败的 manual：不生成 follow 之外的影响；只给 ds2、ds3 生成 follow。
+	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{Status: StatusPaused}, t0); err != nil {
+		t.Fatal(err)
+	}
+	finish := func(at time.Time, status string) {
 		t.Helper()
-		plan := TriggerPlan{Kind: kind, LastBoundary: at, LastReview: at}
-		if kind == KindTick {
-			plan.RangeStart, plan.RangeEnd = at.Add(-3*time.Minute), at
-		}
-		if _, _, err := s.TriggerDue(ctx, at, func(task Task) (TriggerPlan, error) {
-			if task.DatasetID == "ds1" {
-				return TriggerPlan{}, nil
-			}
-			return plan, nil
-		}); err != nil {
-			t.Fatal(err)
+		if created, err := s.CreateFollowRuns(ctx, at); err != nil || created != 2 {
+			t.Fatalf("follow = %d err=%v", created, err)
 		}
 		claimed, _ := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 5, Now: at, LeaseTTL: time.Minute})
 		if len(claimed) != 2 {
 			t.Fatalf("claimed = %v", claimed)
 		}
 		for _, cl := range claimed {
-			if err := s.CompleteRun(ctx, CompleteRequest{RunID: cl.Run.RunID, LeaseToken: cl.Run.LeaseToken, Status: RunSucceeded, Now: at.Add(time.Second)}); err != nil {
+			if err := s.CompleteRun(ctx, CompleteRequest{RunID: cl.Run.RunID, LeaseToken: cl.Run.LeaseToken, Status: status, Now: at.Add(time.Second)}); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	complete(KindScheduled, t0.Add(10*time.Minute))
-	complete(KindTick, t0.Add(11*time.Minute))
-	// 成功的到点拉取不推进最近成功时间。
+	finish(t0.Add(10*time.Minute), RunSucceeded)
+	finish(t0.Add(11*time.Minute), RunFailed)
+	// 成功的 follow 推进最近成功时间，失败的不推进。
 	if got, _ := s.GetTask(ctx, "crypto", "ds2"); !got.LastSuccessAt.Equal(t0.Add(10 * time.Minute)) {
 		t.Fatalf("last_success_at = %s", got.LastSuccessAt)
 	}
-	if runs, total, _ := s.ListRuns(ctx, "crypto", "ds2", "", false, 10, 0); total != 1 || runs[0].Kind != KindScheduled {
-		t.Fatalf("默认不列成功的 tick: %v", runs)
+	if runs, total, _ := s.ListRuns(ctx, "crypto", "ds2", "", false, 10, 0); total != 1 || runs[0].Status != RunFailed {
+		t.Fatalf("默认不列成功的 follow: %v", runs)
 	}
-	if n, err := s.CleanupRuns(ctx, t0.Add(day), day, 30*day, 90*day); err != nil || n != 0 {
-		t.Fatalf("tick 成功运行 24 小时内不清理: n=%d err=%v", n, err)
+	if _, total, _ := s.ListRuns(ctx, "crypto", "ds2", "", true, 10, 0); total != 2 {
+		t.Fatalf("include_follow 时列出成功的 follow: %d", total)
 	}
-	if n, err := s.CleanupRuns(ctx, t0.Add(day+12*time.Minute), day, 30*day, 90*day); err != nil || n != 2 {
-		t.Fatalf("成功的 tick 超过 24 小时应清理 2 条: n=%d err=%v", n, err)
+	if n, err := s.CleanupRuns(ctx, t0.Add(day), day, 90*day); err != nil || n != 0 {
+		t.Fatalf("成功的 follow 24 小时内不清理: n=%d err=%v", n, err)
 	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), day, 30*day, 90*day); err != nil || n != 2 {
-		t.Fatalf("成功的复核超过 30 天应清理 2 条: n=%d err=%v", n, err)
+	if n, err := s.CleanupRuns(ctx, t0.Add(day+12*time.Minute), day, 90*day); err != nil || n != 2 {
+		t.Fatalf("成功的 follow 超过 24 小时应清理 2 条: n=%d err=%v", n, err)
 	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 100), day, 30*day, 90*day); err != nil || n != 1 {
-		t.Fatalf("失败的运行超过 90 天应清理: n=%d err=%v", n, err)
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 8), day, 90*day); err != nil || n != 2 {
+		t.Fatalf("失败的 follow 超过 7 天应清理 2 条: n=%d err=%v", n, err)
+	}
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 100), day, 90*day); err != nil || n != 1 {
+		t.Fatalf("失败的 manual 超过 90 天应清理: n=%d err=%v", n, err)
 	}
 }
 
@@ -978,35 +922,35 @@ func TestLastSuccessOnlyMovesForward(t *testing.T) {
 	}
 }
 
-func TestLastRunsStayFastWithManyTicks(t *testing.T) {
+func TestLastRunsStayFastWithManyFollowRuns(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	for _, ds := range []string{"ds1", "ds2"} {
 		mustTask(t, s, "crypto", ds, false)
 	}
-	// 每个任务 1 条复核，之后 1.5 万条成功的 tick（约 10 天的 1m 拉取）。
-	_, err := s.db.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at, c_started_at, c_finished_at)
-SELECT 'review_' || c_dataset_id, c_space_id, c_dataset_id, 'scheduled', 'succeeded', '2026-10-17 00:34:25.000', '2026-10-17 00:34:30.000', '2026-10-17 00:35:00.000'
-FROM t_archive_tasks`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 15000)
-INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at)
-SELECT 'tick_' || t.c_dataset_id || '_' || n.i, t.c_space_id, t.c_dataset_id, 'tick', '2026-10-17 00:00:00.000', '2026-10-17 00:01:00.000', 'succeeded',
+	// 每个任务 1.5 万条成功的 follow（约 10 天），最后一条 follow 失败、再之后一条 range 在排队。
+	_, err := s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 15000)
+INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at)
+SELECT 'follow_' || t.c_dataset_id || '_' || n.i, t.c_space_id, t.c_dataset_id, 'follow', 'succeeded',
 strftime('%Y-%m-%d %H:%M:%S.000', '2026-10-17 00:40:25', '+' || n.i || ' minutes')
 FROM n, t_archive_tasks t`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at, c_range_start, c_range_end)
+SELECT 'failed_' || c_dataset_id, c_space_id, c_dataset_id, 'follow', 'failed', '2026-11-30 00:00:25.000', NULL, NULL FROM t_archive_tasks
+UNION ALL SELECT 'range_' || c_dataset_id, c_space_id, c_dataset_id, 'range', 'queued', '2026-11-30 00:01:25.000', '2026-11-29 00:00:00.000', '2026-11-29 01:00:00.000' FROM t_archive_tasks`)
+	if err != nil {
+		t.Fatal(err)
+	}
 	started := time.Now()
 	last, err := s.LastRuns(ctx, "crypto")
-	if err != nil || len(last) != 2 || last["crypto/ds1"].RunID != "tick_ds1_15000" {
+	if err != nil || len(last) != 2 || last["crypto/ds1"].RunID != "range_ds1" {
 		t.Fatalf("last = %+v err=%v", last, err)
 	}
-	reviews, err := s.LastReviewRuns(ctx, "")
-	if err != nil || len(reviews) != 2 || reviews["crypto/ds2"].RunID != "review_ds2" {
-		t.Fatalf("reviews = %+v err=%v", reviews, err)
+	follows, err := s.LastFollowSuccesses(ctx, "")
+	if err != nil || len(follows) != 2 || follows["crypto/ds2"].RunID != "follow_ds2_15000" {
+		t.Fatalf("follows = %+v err=%v", follows, err)
 	}
 	if took := time.Since(started); took > 2*time.Second {
 		t.Fatalf("最近运行查询耗时 %s", took)
@@ -1014,63 +958,26 @@ FROM n, t_archive_tasks t`)
 	t.Logf("两次查询耗时 %s", time.Since(started))
 }
 
-// 排队中的到点拉取让位给立即运行与补拉区间；运行中的运行仍然冲突。
-func TestManualRunPreemptsQueuedTick(t *testing.T) {
+// 导入运行不带文件，成功的按“其余运行”保留（other），不按 follow 的 24 小时。
+func TestImportRunsAreKeptLikeOtherRuns(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", false)
-	tick := TriggerPlan{Kind: KindTick, RangeStart: t0.Add(-3 * time.Minute), RangeEnd: t0, LastBoundary: t0.Truncate(time.Minute), LastReview: t0}
-	if res, _, err := s.TriggerDue(ctx, t0, fixedPlan(tick)); err != nil || res.Ticks != 1 {
-		t.Fatalf("tick = %+v %v", res, err)
-	}
-	manual, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(time.Second))
-	if err != nil {
-		t.Fatalf("排队中的 tick 应让位: %v", err)
-	}
-	canceled, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunCanceled, true, 10, 0)
-	if len(canceled) != 1 || canceled[0].Kind != KindTick {
-		t.Fatalf("被让位的 tick 应标为取消: %+v", canceled)
-	}
-	if _, err := s.ClaimRuns(ctx, ClaimRequest{FreeSlots: 1, Now: t0.Add(2 * time.Second), LeaseTTL: time.Minute}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
-		t.Fatalf("运行中的 %s 仍应冲突: %v", manual.RunID, err)
-	}
-}
-
-func TestImportRunsNeedAFileAndAreKeptLikeOtherRuns(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", false)
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport}, t0); err == nil {
-		t.Fatal("没有导入文件的导入运行应被拒绝")
-	}
-	// 库里的 CHECK 也挡住没有导入文件的导入运行。
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_scheduled_at) VALUES ('r', 'crypto', 'ds1', 'import', ?)`, fmtTime(t0)); err == nil {
-		t.Fatal("CHECK 应拒绝没有 c_import_file 的导入运行")
-	}
-	run, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport, ImportFile: "imp_1/a.csv", Overwrite: true}, t0)
+	run, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport}, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.GetRun(ctx, run.RunID)
-	if err != nil || got.Kind != KindImport || got.ImportFile != "imp_1/a.csv" || !got.Overwrite {
+	if got, err := s.GetRun(ctx, run.RunID); err != nil || got.Kind != KindImport || got.Status != RunQueued {
 		t.Fatalf("run = %+v, %v", got, err)
-	}
-	manual, _ := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
-	if manual.RunID != "" {
-		t.Fatal("导入排队时不能再建运行")
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'succeeded', c_finished_at = ? WHERE c_run_id = ?`, fmtTime(t0), run.RunID); err != nil {
 		t.Fatal(err)
 	}
 	day := 24 * time.Hour
-	// 成功的导入按“其余运行”保留 90 天，不按复核的 30 天。
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), day, 30*day, 90*day); err != nil || n != 0 {
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), day, 90*day); err != nil || n != 0 {
 		t.Fatalf("40 天时不应清理导入运行: %d %v", n, err)
 	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 91), day, 30*day, 90*day); err != nil || n != 1 {
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 91), day, 90*day); err != nil || n != 1 {
 		t.Fatalf("超过 90 天应清理导入运行: %d %v", n, err)
 	}
 }

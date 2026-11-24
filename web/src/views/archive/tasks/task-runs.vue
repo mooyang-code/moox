@@ -10,11 +10,11 @@
         <a-option v-for="status in RUN_STATUSES" :key="status" :value="status">{{ runStatusLabel(status) }}</a-option>
       </a-select>
       <a-checkbox
-        :model-value="query.ticks"
-        @change="(value: unknown) => emit('update:query', { ticks: Boolean(value), rpage: 1 })"
-        >显示成功的到点拉取</a-checkbox
+        :model-value="query.follow"
+        @change="(value: unknown) => emit('update:query', { follow: Boolean(value), rpage: 1 })"
+        >显示成功的跟随运行</a-checkbox
       >
-      <span class="sub">每分钟一条，默认只看复核与异常</span>
+      <span class="sub">每分钟一条，默认只看整段重读、补拉、导入与异常</span>
     </div>
     <div v-if="error" class="load-error">
       读取运行记录失败：{{ error }}<template v-if="runs.length">（下面是上次读到的）</template> ·
@@ -57,15 +57,11 @@
         <a-table-column title="耗时" :width="100"
           ><template #cell="{ record }">{{ runDurationText(record, nowMs) }}</template></a-table-column
         >
-        <a-table-column title="读取区间 / 导入文件" :width="210">
+        <a-table-column title="读取区间" :width="210">
           <template #cell="{ record }">
-            <template v-if="record.kind === 'tick' || record.kind === 'range'">
+            <template v-if="record.kind === 'range'">
               <div>{{ formatInstant(record.range_start, zone) }}</div>
               <div>～ {{ formatInstant(record.range_end, zone) }}</div>
-            </template>
-            <template v-else-if="record.kind === 'import'">
-              <div class="message">{{ importFileText(record) || "—" }}</div>
-              <div class="sub">{{ importModeText(record) }}</div>
             </template>
             <span v-else>—</span>
           </template>
@@ -138,8 +134,6 @@ import { formatInstant } from "@/utils/time-zone";
 import {
   RUN_STATUSES,
   foldRunMessage,
-  importFileText,
-  importModeText,
   kindLabel,
   runActive,
   runDurationText,
@@ -151,7 +145,7 @@ import {
 } from "../shared/archive-model";
 
 /**
- * 运行记录页签：状态筛选、是否列出成功的到点拉取、页码都在 URL 里。
+ * 运行记录页签：状态筛选、是否列出成功的跟随运行、页码都在 URL 里。
  * 有排队或运行中的运行时每 10 秒刷新，其余 30 秒；轮询请求不弹全局错误。时刻都到秒。
  */
 const PAGE_SIZE = 50;
@@ -164,7 +158,7 @@ const props = defineProps<{
   /** 任务的最近一次运行正在运行 */
   taskRunning: boolean;
   remoteEnabled?: boolean;
-  /** 变化时重读（立即运行、补拉之后 URL 可能不变） */
+  /** 变化时重读（整段重读、补拉之后 URL 可能不变） */
   refreshKey?: number;
 }>();
 const emit = defineEmits<{ "update:query": [patch: Partial<ArchiveQuery>]; changed: [] }>();
@@ -184,7 +178,7 @@ async function load() {
     const rsp = await listArchiveRuns({
       dataset_id: props.datasetId,
       status: props.query.status,
-      include_ticks: props.query.ticks,
+      include_follow: props.query.follow,
       page: { page: props.query.rpage, size: PAGE_SIZE }
     });
     if (!token.isLatest()) return;
@@ -202,7 +196,7 @@ async function load() {
 
 // 逐项比较：props.query 每次路由变化都是新对象，不能整体依赖它
 watch(
-  [() => props.datasetId, () => props.query.status, () => props.query.ticks, () => props.query.rpage, () => props.refreshKey],
+  [() => props.datasetId, () => props.query.status, () => props.query.follow, () => props.query.rpage, () => props.refreshKey],
   () => {
     loaded.value = false;
     void load();
@@ -219,7 +213,7 @@ function confirmCancel(run: ArchiveRun) {
   const id = run.run_id || "";
   Modal.confirm({
     title: `取消这次${kindLabel(run.kind)}？`,
-    content: "已导出的分区仍会登记；到点拉取的区间由之后的复核补上。",
+    content: "已导出的分区仍会登记；跟随与整段重读从停下的位置接着读，导入运行取消后已写入的行照常导出。",
     okText: "取消运行",
     okButtonProps: { status: "warning" },
     cancelText: "不取消",

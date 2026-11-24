@@ -109,6 +109,7 @@ import {
   archiveQueryFor,
   parseArchiveQuery,
   pauseConfirmText,
+  rescanConfirmText,
   unarchivedDatasets,
   type ArchiveQuery
 } from "../shared/archive-model";
@@ -146,7 +147,7 @@ const datasets = ref<Dataset[]>([]);
 const datasetsLoaded = ref(false);
 const datasetsError = ref("");
 const nowMs = ref(Date.now());
-// 立即运行、补拉区间成功后加 1：抽屉已经开在运行记录页签时 URL 不变，靠它让运行记录重读
+// 整段重读、补拉区间成功后加 1：抽屉已经开在运行记录页签时 URL 不变，靠它让运行记录重读
 const runsRefreshKey = ref(0);
 // 行内按钮按任务记“处理中”，不共用一个 busy
 const busy = ref<Record<string, boolean>>({});
@@ -305,19 +306,30 @@ function refreshAfterAction() {
   void tick();
 }
 
-async function runNow(task: ArchiveTask) {
+function runNow(task: ArchiveTask) {
   const id = task.dataset_id || "";
-  await withBusy(id, async () => {
-    try {
-      await runArchiveTaskNow(id);
-    } catch (error) {
-      reportError(error);
-      return;
+  Modal.confirm({
+    title: `整段重读「${displayName(task)}」？`,
+    content: rescanConfirmText(formatRetention(task.retention)),
+    okText: "整段重读",
+    cancelText: "取消",
+    onBeforeOk: async () => {
+      let ok = true;
+      await withBusy(id, async () => {
+        try {
+          await runArchiveTaskNow(id);
+        } catch (error) {
+          reportError(error);
+          ok = false;
+          return;
+        }
+        Message.success("已排队");
+        setQuery({ task: id, tab: "runs" });
+        runsRefreshKey.value += 1;
+        void tick();
+      });
+      return ok;
     }
-    Message.success("已排队");
-    setQuery({ task: id, tab: "runs" });
-    runsRefreshKey.value += 1;
-    void tick();
   });
 }
 
@@ -333,7 +345,7 @@ function toggleTask(task: ArchiveTask) {
         reportError(error);
         return;
       }
-      Message.success("已启用，下一次检查立即复核");
+      Message.success("已启用，从原位点继续跟随");
       void tick();
     });
     return;

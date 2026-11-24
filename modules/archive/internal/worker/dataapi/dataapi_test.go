@@ -94,7 +94,7 @@ func (e *env) partition(content []byte, replicated bool) string {
 	_, err := e.store.Stage(ctx, e.task, []staging.Row{{SubjectID: "BTCUSDT", DataTime: day0, Values: []any{1.0, true}}},
 		func(at time.Time) staging.PartitionRef {
 			return staging.PartitionRef{Key: "2026-10-15", Start: day0, End: day0.AddDate(0, 0, 1)}
-		}, day0.Add(time.Hour), staging.StageReplace)
+		}, day0.Add(time.Hour))
 	require.NoError(e.t, err)
 	sum := sha256.Sum256(content)
 	sha := hex.EncodeToString(sum[:])
@@ -274,9 +274,8 @@ type recentBody struct {
 		Name string `json:"name"`
 		Type string `json:"type"`
 	} `json:"columns"`
-	Rows        [][]*string `json:"rows"`
-	StagedUntil string      `json:"staged_until"`
-	Msg         string      `json:"msg"`
+	Rows [][]*string `json:"rows"`
+	Msg  string      `json:"msg"`
 }
 
 func TestRecentRowsReadDatasetJSONAndPage(t *testing.T) {
@@ -301,9 +300,8 @@ func TestRecentRowsReadDatasetJSONAndPage(t *testing.T) {
 	rows = append(rows, staging.Row{SubjectID: "ETHUSDT", DataTime: day0.Add(time.Hour), Values: []any{9.0, true}})
 	_, err := e.store.Stage(t.Context(), e.task, rows, func(time.Time) staging.PartitionRef {
 		return staging.PartitionRef{Key: "2026-10-15", Start: day0, End: day0.AddDate(0, 0, 1)}
-	}, day0.Add(time.Hour), staging.StageReplace)
+	}, day0.Add(time.Hour))
 	require.NoError(t, err)
-	require.NoError(t, e.store.AdvanceWatermark(t.Context(), space, dataset, day0.Add(2*time.Hour)))
 
 	query.Set("limit", "3")
 	resp, body, _ = get(t, ts, "/v1/recent", query)
@@ -313,7 +311,6 @@ func TestRecentRowsReadDatasetJSONAndPage(t *testing.T) {
 	require.Len(t, got.Columns, 5)
 	require.Equal(t, "closed", got.Columns[4].Name)
 	require.Equal(t, "bool", got.Columns[4].Type)
-	require.Equal(t, "2026-10-15T02:00:00Z", got.StagedUntil)
 	require.Len(t, got.Rows, 3)
 	require.Equal(t, "2026-10-15T00:04:00Z", *got.Rows[0][0])
 	require.Nil(t, got.Rows[0][3])

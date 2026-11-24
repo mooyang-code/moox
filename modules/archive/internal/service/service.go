@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
-	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -92,16 +91,6 @@ func (s *Service) Mgr() *MgrService { return &MgrService{svc: s} }
 func (s *Service) Worker() *WorkerService { return &WorkerService{svc: s} }
 
 func (s *Service) clock() time.Time { return s.now().UTC() }
-
-// timing 返回任务算拉取边界用的时序信息（空间时区与本地收盘时刻取自配置，时区无效时按 UTC）。
-func (s *Service) timing(spaceID, freq string, pullEveryBars int) schedule.Timing {
-	spaceCfg := s.cfg.Space(spaceID)
-	loc, err := time.LoadLocation(spaceCfg.TZ)
-	if err != nil {
-		loc = time.UTC
-	}
-	return schedule.Timing{Freq: freq, PullEveryBars: pullEveryBars, Loc: loc, LocalClose: spaceCfg.LocalClose}
-}
 
 func success() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"}

@@ -152,24 +152,24 @@
 
 ## 归档
 
-把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：每收盘 N 根（`--pull-every-bars`，默认 1）拉一次新收盘的几根，
-低于 1d 的另有每小时第 34 分的复核（推进水位），1d 及以上每天一次。读取 Storage 只在每分钟第 25～55 秒、且避开每小时 :58～:04（写死，worker 的 `pacing.minute_window` 可关掉秒窗口）。
-管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录与磁盘；CSV 导入与按时间区间清除无法补齐区间只有命令行（`archive import`、`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
+把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：mgr 每分钟给每个任务生成一条跟随（follow）运行，worker 按 Storage 的变更日志读改动过的行，到期的分区导出、定稿；
+首次运行或位点失效（worker 停机超过 7 天）时从回补起点（默认线上保留期起点）整段重读，crypto 1m 要十几个小时，进度见任务的最近运行。读取 Storage 只在每分钟第 25～55 秒、且避开每小时 :58～:04（写死，worker 的 `pacing.minute_window` 可关掉秒窗口）。
+保留期内的数据只要写进 Storage 就会进归档；保留期之外的历史用 `moox-cli import --target archive` 导入（见 [`initial-import.md`](initial-import.md)）。
+管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录与磁盘；按时间区间清除无法补齐区间只有命令行（`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
 分区路径 `<空间>/<用途>/<目录名>/<yyyy>/<yyyymmdd>.csv.gz`（1d 及以上是月分区 `<yyyymm>`；worker 配置 `export_format: csv` 时扩展名为 `.csv`），用途 `collect`（采集结果）/ `factor`（因子结果）/ `data`，目录名建任务时定（`tasks prepare` 给建议值，`tasks create --dir-name` 可改），建好后不改；归档根目录的 `datasets.csv` 是目录与数据集的对照表。
 
 ```bash
-./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期与推荐的拉取间隔
-./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> [--pull-every-bars 5]
-./bin/moox-cli archive tasks list|preview               # 列出任务；预览接下来的拉取、复核时刻与分区导出时间
-./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
-./bin/moox-cli archive tasks backfill|run|update|delete ...
-./bin/moox-cli archive import template --space-id crypto --dataset-id <数据集>        # 导入文件的表头
-./bin/moox-cli archive import --space-id crypto --dataset-id <数据集> --csv <文件.csv|.csv.gz> [--overwrite] --wait --yes
+./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期、最早回补起点与建议目录名
+./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> [--backfill-from <RFC3339>]
+./bin/moox-cli archive tasks list
+./bin/moox-cli archive overview | runs list [--include-follow]|get|cancel | partitions list|get
+./bin/moox-cli archive tasks backfill|run|update|delete ...      # run 是整段重读线上保留期
+./bin/moox-cli import --space-id crypto --dataset-id <数据集> --frequency 1m --path <文件.csv|.csv.gz|目录> --target archive --series-tag <tag> [--allow-missing] [--dry-run]
 ./bin/moox-cli archive tasks clear-unrecoverable --space-id crypto --dataset-id <数据集> --start <RFC3339> --end <RFC3339> --yes
 ```
 
-导入：经 SSH 把文件传到 archive-worker 所在主机的 `<归档根目录>/.import/<import_id>/`，worker 先整份校验（有一行不对就整份拒绝、什么都不写，消息列前 20 条带行号的错误），再分块写入；默认同键已存在时只补空缺，`--overwrite` 覆盖（必须带齐全部值列）。
-导入不推进水位、不自动清无法补齐区间，补齐历史缺口后确认再用 `clear-unrecoverable` 清。规则细节见 `docs/模块/归档.md` 第 9 节“CSV 导入”。
+导入（`import --target archive`）：CLI 先整份校验全部文件（与写 Storage 同一套规则），再建一条占住任务的导入运行，行经 worker 数据端口（只出站主机经 control 中转，较慢）写进暂存区，命令结束时统一导出；同键已归档的一律覆盖，`series_tag` 必须非空；只写归档时可用带 `subject_id` 列的多标的文件、不检查标签范围。
+预检按行数估算 worker 暂存库要的磁盘，不够时按时间拆成几次导入。导入不自动清无法补齐区间，补齐历史缺口后确认再用 `clear-unrecoverable` 清。规则细节见 `docs/模块/归档.md` 第 9 节“导入运行”。
 
 对象存储副本：默认用随 archive-worker 部署的内置 SeaweedFS（`moox-seaweedfs`，只听 127.0.0.1，和归档文件同盘，不防整盘故障）；要异地副本就在 `moox.toml` 写 `[archive_object_store]` 改用外部 S3（只写 endpoint、region、bucket、url_style、storage_class 与管理台密钥的 `secret_id`，不写密钥值；第一次加只能用 `config edit` 的“归档对象存储”一组）。
 worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺文件从远端取回；用外部 S3 时换机器不用拷目录。对象存储连续不可用超过 5 分钟，Monitor 推送“归档对象存储”告警。看状态：`archive tasks list` 的 `remote_pending_count` / `remote_verified_count`，

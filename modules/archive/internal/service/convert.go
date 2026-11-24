@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 )
@@ -35,7 +34,7 @@ func runToPB(r store.Run) *archivepb.ArchiveRun {
 		LeaseUntil: fmtRFC(r.LeaseUntil), SubjectsTotal: r.Stats.SubjectsTotal, SubjectsDone: r.Stats.SubjectsDone,
 		RequestCount: r.Stats.RequestCount, BytesRead: r.Stats.BytesRead, RowsRead: r.Stats.RowsRead, RowsAdded: r.Stats.RowsAdded,
 		RowsChanged: r.Stats.RowsChanged, PartitionsExported: r.Stats.PartitionsExported, PartitionsFinalized: r.Stats.PartitionsFinalized, Message: r.Message,
-		PartitionsUploaded: r.Stats.PartitionsUploaded, ImportFile: r.ImportFile, Overwrite: r.Overwrite,
+		PartitionsUploaded: r.Stats.PartitionsUploaded,
 	}
 	for _, item := range r.Unrecoverable {
 		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})
@@ -119,19 +118,13 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 	}
 }
 
-// taskToPB 把任务转成接口消息；启用的任务带上下一次拉取时刻（算不出时留空）。
-func (s *Service) taskToPB(t store.Task, now time.Time) *archivepb.ArchiveTask {
+// taskToPB 把任务转成接口消息。
+func (s *Service) taskToPB(t store.Task) *archivepb.ArchiveTask {
 	out := &archivepb.ArchiveTask{
 		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: t.PartitionUnit, Retention: t.Retention,
-		PullEveryBars: uint32(t.PullEveryBars), IntervalSeconds: uint32(t.IntervalSeconds), BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
-		LastBoundary: fmtRFC(t.LastBoundary), LastReview: fmtRFC(t.LastReview), ConsecutiveSkips: uint32(t.ConsecutiveSkips),
+		BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
 		LastSuccessAt: fmtRFC(t.LastSuccessAt), FinalUntil: fmtRFC(t.FinalUntil), Creator: t.Creator, CreatedAt: fmtRFC(t.CreatedAt), UpdatedAt: fmtRFC(t.UpdatedAt),
 		BlockedReason: t.BlockedReason,
-	}
-	if t.Status == store.StatusEnabled {
-		if pulls, err := schedule.NextPulls(s.timing(t.SpaceID, t.Freq, t.PullEveryBars), now, 1); err == nil && len(pulls) > 0 {
-			out.NextPullAt = fmtRFC(pulls[0])
-		}
 	}
 	for _, item := range t.Unrecoverable {
 		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})

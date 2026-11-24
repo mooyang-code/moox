@@ -1,8 +1,8 @@
 -- Archive manager SQLite schema（库以 PRAGMA auto_vacuum = INCREMENTAL 创建，见 store.Open）。
 -- 时间列统一存 UTC 文本 "2006-01-02 15:04:05.000"，按字典序比较即按时间比较。
 
--- 归档任务：一个时序数据集最多一个任务；频率、分区粒度和复核间隔在保存时确定，保留期由维护定时器刷新
--- c_last_boundary、c_last_review 是最近一次已生成运行的拉取边界与复核边界，为空时下一次检查立即复核
+-- 归档任务：一个时序数据集最多一个任务；频率与分区粒度在保存时确定，保留期由维护定时器刷新
+-- 任务每分钟由 follow 运行跟随 Storage 变更日志；c_backfill_from 是归档起点（创建时确定，之后不改）
 -- c_purpose（collect 采集结果、factor 因子结果、data 其他）与 c_dir_name 决定分区目录 <空间>/<用途>/<目录名>/，建好后不改
 CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -14,13 +14,8 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_partition_unit TEXT NOT NULL,
     c_retention TEXT NOT NULL DEFAULT '',
     c_meta_json TEXT NOT NULL DEFAULT '',
-    c_pull_every_bars INTEGER NOT NULL DEFAULT 1,
-    c_interval_seconds INTEGER NOT NULL,
-    c_backfill_from DATETIME,
+    c_backfill_from DATETIME NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'enabled',
-    c_last_boundary DATETIME,
-    c_last_review DATETIME,
-    c_consecutive_skips INTEGER NOT NULL DEFAULT 0,
     c_last_success_at DATETIME,
     c_final_until DATETIME,
     c_creator TEXT NOT NULL DEFAULT '',
@@ -29,10 +24,7 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_unrecoverable_json TEXT NOT NULL DEFAULT '[]',
     c_blocked_reason TEXT NOT NULL DEFAULT '',
     CHECK (c_partition_unit IN ('day', 'month')),
-    CHECK (c_pull_every_bars BETWEEN 1 AND 1440),
-    CHECK (c_interval_seconds IN (3600, 86400)),
     CHECK (c_status IN ('enabled', 'paused')),
-    CHECK (c_consecutive_skips >= 0),
     CHECK (c_purpose IN ('collect', 'factor', 'data')),
     CHECK (c_dir_name != ''),
     UNIQUE (c_space_id, c_dataset_id),
@@ -49,14 +41,14 @@ BEGIN
     UPDATE t_archive_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 归档运行：一次复核（scheduled）、手动、到点拉取（tick）、补拉区间（range）或导入本地 CSV（import）的执行；running 期间靠运行租约（c_lease_token、c_lease_until）发现 worker 失联
--- c_import_file 是导入运行在 worker 上的文件路径，c_overwrite 为 1 时同键已存在的行以导入文件为准
+-- 归档运行：follow（每分钟按变更日志跟随）、manual（整段重读线上保留期）、range（补拉区间）、import（moox-cli import 写入暂存区后统一导出）
+-- running 期间靠运行租约（c_lease_token、c_lease_until）发现 worker 失联
 CREATE TABLE IF NOT EXISTS t_archive_runs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_run_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
-    c_kind TEXT NOT NULL DEFAULT 'scheduled',
+    c_kind TEXT NOT NULL DEFAULT 'follow',
     c_range_start DATETIME,
     c_range_end DATETIME,
     c_status TEXT NOT NULL DEFAULT 'queued',
@@ -79,13 +71,9 @@ CREATE TABLE IF NOT EXISTS t_archive_runs (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_partitions_uploaded INTEGER NOT NULL DEFAULT 0,
-    c_import_file TEXT,
-    c_overwrite INTEGER NOT NULL DEFAULT 0,
-    CHECK (c_kind IN ('scheduled', 'manual', 'tick', 'range', 'import')),
+    CHECK (c_kind IN ('follow', 'manual', 'range', 'import')),
     CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'canceled')),
-    CHECK (c_kind NOT IN ('tick', 'range') OR (c_range_start IS NOT NULL AND c_range_end IS NOT NULL)),
-    CHECK (c_kind != 'import' OR c_import_file IS NOT NULL),
-    CHECK (c_overwrite IN (0, 1)),
+    CHECK (c_kind != 'range' OR (c_range_start IS NOT NULL AND c_range_end IS NOT NULL)),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_archive_tasks (c_space_id, c_dataset_id) ON DELETE CASCADE,
     UNIQUE (c_run_id)
 );

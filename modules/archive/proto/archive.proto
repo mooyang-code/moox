@@ -8,14 +8,14 @@ option go_package = "github.com/mooyang-code/moox/modules/archive/proto/archiveg
 
 // 时间字段统一为 RFC3339（UTC）字符串；空串表示没有。
 
-// ArchiveRun 是一次复核、手动、到点拉取或补拉区间的执行。
+// ArchiveRun 是一次跟随、整段重读、补拉区间或导入的执行。
 message ArchiveRun {
   string run_id = 1;
   string space_id = 2;
   string dataset_id = 3;
-  // kind：scheduled（每小时或每天一次的复核，推进水位）、manual（立即运行，同复核）、
-  // tick（到点拉取新收盘的几根，读下发区间、不推进水位）、range（补拉区间）、
-  // import（把 moox-cli 上传的本地 CSV 导进归档，不经 Storage、不推进水位、不更新最近成功时间）。
+  // kind：follow（mgr 每分钟生成，按 Storage 变更日志读改动过的行并导出定稿）、
+  // manual（整段重读线上保留期内的数据，之后的 follow 分段读完）、range（补拉区间）、
+  // import（moox-cli import 的归档目标：经 worker 数据端口写入暂存区，结束后统一导出；不推进位点、不更新最近成功时间）。
   string kind = 4;
   string range_start = 5;
   string range_end = 6;
@@ -38,10 +38,6 @@ message ArchiveRun {
   string message = 23;
   // partitions_uploaded：本次运行上传到对象存储并校验通过的分区数。
   uint32 partitions_uploaded = 24;
-  // 导入的文件（kind=import 时有值）：相对归档根目录下 .import 的 "<import_id>/<文件名>"。
-  string import_file = 25;
-  // 导入时同键已存在的行是否覆盖（kind=import）。
-  bool overwrite = 26;
 }
 
 // UnrecoverableRange 是超出线上保留期、无法补齐的区间（按序列合并）。
@@ -60,19 +56,11 @@ message ArchiveTask {
   // partition_unit：day、month。
   string partition_unit = 4;
   string retention = 6;
-  // 每收盘多少根 K 线拉取一次（N，1～1440）；1d 及以上每天一次，忽略 N。
-  uint32 pull_every_bars = 7;
-  // 复核间隔（秒）：低于 1d 为 3600，1d 及以上为 86400。
-  uint32 interval_seconds = 8;
+  // 归档起点（回补起点）：创建时确定，之后不改；暂存区没有分区时整段重读从这里读起。
   string backfill_from = 9;
   // status：enabled、paused。
   string status = 10;
-  // 最近一次已处理的拉取边界与复核边界；为空表示还没处理过（下一次检查立即复核）。
-  string last_boundary = 11;
-  string last_review = 12;
-  // 下一次拉取的时刻（下一个拉取边界之后的第一次检查，落在整点窗口 :58～:04 的顺延到 :04:25）；停用时为空。
-  string next_pull_at = 13;
-  uint32 consecutive_skips = 14;
+  // 最近一次成功的 follow 或 manual 的开始时间。
   string last_success_at = 15;
   string final_until = 16;
   string creator = 17;
@@ -214,8 +202,6 @@ message PrepareArchiveTaskRsp {
   string partition_unit = 3;
   string retention = 4;
   string earliest_backfill_from = 5;
-  // 推荐的拉取间隔（根数 N）。
-  uint32 recommended_pull_every_bars = 7;
   bool exists = 8;
   // 用途（collect、factor、data），由数据集角色决定。
   string purpose = 9;
@@ -225,31 +211,10 @@ message PrepareArchiveTaskRsp {
   bool dir_name_conflict = 11;
 }
 
-message PreviewArchiveScheduleReq {
-  string space_id = 1;
-  string dataset_id = 2;
-  // 每收盘多少根 K 线拉取一次；0 表示默认 1。
-  uint32 pull_every_bars = 3;
-}
-message PreviewArchiveScheduleRsp {
-  common.RetInfo ret_info = 1;
-  // 接下来 5 个拉取时刻（落在整点窗口 :58～:04 的顺延到 :04:25，去重）。
-  repeated string next_runs = 2;
-  // 复核间隔（秒）。
-  uint32 interval_seconds = 3;
-  // 每次复核读取区间的长度（秒）：复核间隔 + 最少回看 + 一根 K 线的最大跨度。
-  uint32 read_span_seconds = 4;
-  // 上一个与当前分区的预计导出时间（收盘 + 最少回看之后的第一次拉取或复核）。
-  repeated string partition_export_estimates = 5;
-  // 接下来 3 个复核时刻。
-  repeated string next_reviews = 6;
-}
-
 message CreateArchiveTaskReq {
   string space_id = 1;
   string dataset_id = 2;
-  // 每收盘多少根 K 线拉取一次；0 表示默认 1。
-  uint32 pull_every_bars = 3;
+  // 回补起点（归档起点）：为空时取现在 − 线上保留期 + 1 天；保留期为 forever 时必填。
   string backfill_from = 4;
   // 创建后是否启用；默认启用。
   bool paused = 5;
@@ -264,10 +229,7 @@ message CreateArchiveTaskRsp {
 message UpdateArchiveTaskReq {
   string space_id = 1;
   string dataset_id = 2;
-  // 每收盘多少根 K 线拉取一次；0 表示不修改。
-  uint32 pull_every_bars = 3;
-  string backfill_from = 4;
-  // status：enabled、paused；停用后重新启用时清空两个边界，下一次检查立即复核。
+  // status：enabled、paused；为空表示不修改。重新启用后从原位点继续跟随。
   string status = 5;
   // 清除任务累积的无法补齐区间（确认过、不再需要提示时）。
   bool clear_unrecoverable = 6;
@@ -320,8 +282,8 @@ message ListArchiveRunsReq {
   string status = 2;
   common.Page page = 3;
   string space_id = 4;
-  // 是否列出成功的到点拉取（tick）运行；默认不列（每分钟一条），排队、运行中、失败和取消的 tick 照常列出。
-  bool include_ticks = 5;
+  // 是否列出成功的 follow 运行；默认不列（每分钟一条），排队、运行中、失败和取消的 follow 照常列出。
+  bool include_follow = 5;
 }
 message ListArchiveRunsRsp {
   common.RetInfo ret_info = 1;
@@ -361,34 +323,17 @@ message GetArchivePartitionRsp {
   ArchivePartition partition = 2;
 }
 
-// PrepareArchiveImportReq 为导入取上传位置：在线 worker 的归档根目录与新生成的导入 ID（只给 moox-cli）。
-message PrepareArchiveImportReq {
+// StartArchiveImportReq 为 moox-cli import 的归档目标建一条导入运行（只给 moox-cli）：运行占住任务，
+// 期间 moox-cli 经 worker 数据端口写入批次，结束后统一导出。
+message StartArchiveImportReq {
   string space_id = 1;
   string dataset_id = 2;
 }
-message PrepareArchiveImportRsp {
-  common.RetInfo ret_info = 1;
-  // worker 的归档根目录与 worker ID。
-  string root_dir = 2;
-  string worker_id = 3;
-  string import_id = 4;
-  // 上传目录：<root_dir>/.import/<import_id>。
-  string import_dir = 5;
-}
-
-// ImportArchiveFileReq 为已上传到 <root>/.import/<import_id>/<file_name> 的 CSV 建一条导入运行（只给 moox-cli）。
-message ImportArchiveFileReq {
-  string space_id = 1;
-  string dataset_id = 2;
-  string import_id = 3;
-  // 文件名（.csv 或 .csv.gz，不含目录）。
-  string file_name = 4;
-  // 同键已存在时是否覆盖；默认以已归档的为准，只补空缺。
-  bool overwrite = 5;
-}
-message ImportArchiveFileRsp {
+message StartArchiveImportRsp {
   common.RetInfo ret_info = 1;
   ArchiveRun run = 2;
+  // 在线 worker 的 ID（archive-worker@<主机 ID>），moox-cli 据此找到数据端口所在主机。
+  string worker_id = 3;
 }
 
 // ClearArchiveUnrecoverableReq 删掉任务累积的、整段落在 [start, end) 里的无法补齐区间（只给 moox-cli）。
@@ -409,7 +354,6 @@ service ArchiveMgr {
   rpc GetArchiveOverview(GetArchiveOverviewReq) returns (GetArchiveOverviewRsp);
   rpc ListArchiveTasks(ListArchiveTasksReq) returns (ListArchiveTasksRsp);
   rpc PrepareArchiveTask(PrepareArchiveTaskReq) returns (PrepareArchiveTaskRsp);
-  rpc PreviewArchiveSchedule(PreviewArchiveScheduleReq) returns (PreviewArchiveScheduleRsp);
   rpc CreateArchiveTask(CreateArchiveTaskReq) returns (CreateArchiveTaskRsp);
   rpc UpdateArchiveTask(UpdateArchiveTaskReq) returns (UpdateArchiveTaskRsp);
   rpc DeleteArchiveTask(DeleteArchiveTaskReq) returns (DeleteArchiveTaskRsp);
@@ -420,8 +364,7 @@ service ArchiveMgr {
   rpc GetArchiveRun(GetArchiveRunReq) returns (GetArchiveRunRsp);
   rpc ListArchivePartitions(ListArchivePartitionsReq) returns (ListArchivePartitionsRsp);
   rpc GetArchivePartition(GetArchivePartitionReq) returns (GetArchivePartitionRsp);
-  rpc PrepareArchiveImport(PrepareArchiveImportReq) returns (PrepareArchiveImportRsp);
-  rpc ImportArchiveFile(ImportArchiveFileReq) returns (ImportArchiveFileRsp);
+  rpc StartArchiveImport(StartArchiveImportReq) returns (StartArchiveImportRsp);
   rpc ClearArchiveUnrecoverable(ClearArchiveUnrecoverableReq) returns (ClearArchiveUnrecoverableRsp);
   // GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
   // 暂停时定时触发与定时维护跳过，已经在执行的运行由 worker 跑完；没有要追赶的数据，恢复即放行。
@@ -474,10 +417,8 @@ message RunAssignment {
   string freq = 6;
   string partition_unit = 7;
   string retention = 9;
-  // 复核间隔（秒）；首次复核没有水位与回补起点时从「开始 − 复核间隔 − L − S」读起。
-  uint32 interval_seconds = 10;
-  // 最少回看时长 L（秒）。
-  uint32 min_lookback_seconds = 11;
+  // 允许迟到（秒）：分区收盘后再等这么久才导出。
+  uint32 allowed_lateness_seconds = 11;
   // 空间时区与本地收盘时刻（"15:00"；空串表示全天交易）。
   string space_tz = 12;
   string local_close = 13;
@@ -486,17 +427,17 @@ message RunAssignment {
   string scheduled_at = 15;
   // 本次运行开始（读取区间的终点）。
   string started_at = 16;
-  // 读取区间（kind=range 或 tick 时有值）。
+  // 读取区间（kind=range 时有值）。
   string range_start = 17;
   string range_end = 18;
-  // 回补起点（任务设置，首次运行使用）。
+  // 归档起点（任务的回补起点）：暂存区没有分区时整段重读的下界。
   string backfill_from = 19;
   uint32 lease_ttl_seconds = 20;
-  // 任务自增 ID（不复用）。任务删除后重建会得到新值，worker 据此丢弃旧任务遗留的水位和暂存数据。
+  // 任务自增 ID（不复用）。任务删除后重建会得到新值，worker 据此丢弃旧任务遗留的位点和暂存数据。
   string task_id = 21;
   // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进 <space>/<purpose>/<dir_name>/dataset.json。
   string dataset_meta_json = 22;
-  // 任务最近一次成功的复核或手动运行的开始时间（即读取水位）；worker 本地没有水位时用它。
+  // 最近一次成功的 follow 或 manual 的开始时间；位点断档时据此判断无法补齐的区间。
   string last_success_at = 23;
   // 该任务在 mgr 的分区登记（只含结束时间晚于「本次开始 − 线上保留期」的，kind=import 时为全部；不带预览与列名）；
   // worker 本地缺分区状态时据此补齐。
@@ -504,10 +445,6 @@ message RunAssignment {
   // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
   string purpose = 25;
   string dir_name = 26;
-  // 导入的文件（kind=import）："<import_id>/<文件名>"，worker 只认 <root>/.import/<import_id>/<文件名>。
-  string import_file = 27;
-  // 导入时同键已存在的行是否覆盖（kind=import）；为真时 CSV 必须带齐数据集的全部值列。
-  bool overwrite = 28;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;

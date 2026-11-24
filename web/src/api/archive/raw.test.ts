@@ -14,7 +14,7 @@ const json = (status: number, body: unknown) =>
 
 describe("归档裸 HTTP", () => {
   it("最新数据：同源请求带 Cookie，不取票据，参数都编码", async () => {
-    fetchMock.mockImplementation(async () => json(200, { columns: [], rows: [], staged_until: "" }));
+    fetchMock.mockImplementation(async () => json(200, { columns: [], rows: [] }));
     await fetchArchiveRecentRows({ space: "crypto", dataset: "ds_1m", subject: "BTC/USDT&x", limit: 200 });
     await fetchArchiveRecentRows({
       space: "crypto",

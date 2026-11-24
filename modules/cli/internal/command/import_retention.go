@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesformat"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
@@ -66,7 +67,7 @@ func warnImportRetention(out io.Writer, paths []string, timeColumn, space, freq 
 		space, freq, retention.String(), cutoff.Format(time.RFC3339), staleRows, staleFiles, space, freq, freq)
 }
 
-// importCSVFiles 展开文件与目录（目录下的 .csv 文件）。
+// importCSVFiles 展开文件与目录（目录下的 .csv 与 .csv.gz 文件）。
 func importCSVFiles(paths []string) ([]string, error) {
 	var files []string
 	for _, path := range paths {
@@ -82,7 +83,7 @@ func importCSVFiles(paths []string) ([]string, error) {
 			if err != nil {
 				return err
 			}
-			if !d.IsDir() && strings.EqualFold(filepath.Ext(p), ".csv") {
+			if _, ok := seriesformat.DataFileName(d.Name()); !d.IsDir() && ok {
 				files = append(files, p)
 			}
 			return nil
@@ -101,7 +102,11 @@ func staleRowsBefore(path, timeColumn string, cutoff time.Time) (stale int, firs
 		return 0, time.Time{}, false
 	}
 	defer file.Close()
-	reader := csv.NewReader(file)
+	plain, err := seriesformat.Decompress(file)
+	if err != nil {
+		return 0, time.Time{}, false
+	}
+	reader := csv.NewReader(plain)
 	reader.FieldsPerRecord = -1
 	header, err := reader.Read()
 	if err != nil {
@@ -124,7 +129,7 @@ func staleRowsBefore(path, timeColumn string, cutoff time.Time) (stale int, firs
 		if err != nil || column >= len(record) {
 			return stale, first, stale > 0
 		}
-		at, err := time.Parse(time.RFC3339, strings.TrimSpace(record[column]))
+		at, err := seriesformat.ParseTime(record[column])
 		if err != nil {
 			return stale, first, stale > 0
 		}

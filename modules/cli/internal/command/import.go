@@ -26,7 +26,6 @@ var importFlags importOptions
 type importOptions struct {
 	Space, Dataset, Freq string
 	Paths                []string
-	Format               string
 	Subject              string
 	TimeColumn           string
 	SeriesTag            string
@@ -48,20 +47,28 @@ type importOptions struct {
 
 var importCmd = &cobra.Command{
 	Use:   "import",
-	Short: "导入历史时序数据（写 Storage 和因子机本地存储）",
-	Long: `把历史时序数据文件导入 Storage 与因子机的本地时序存储。
+	Short: "导入历史时序数据（写 Storage、因子机本地存储与归档）",
+	Long: `把历史时序数据文件（.csv 或 .csv.gz）导入 Storage、因子机的本地时序存储与归档。
 
-文件必须带数据集的全部字段和时间列（可选 series_tag 列），时间按 UTC 解析；文件名（去掉扩展名）即标的 ID。
+文件必须带数据集的全部字段和时间列（可选 series_tag 列），时间按 UTC 解析；文件名（去掉 .csv 或 .csv.gz）即标的 ID。
 本地存储按频率网格保证连续：序列内部缺周期时默认拒绝，加 --allow-missing 把缺的周期写成带标记的填充行。
 写 Storage 与写因子机本地存储都经过操作员 SSH 网关（同 moox-cli storage 的其他命令）：因子机本地存储经因子引擎
 trpc.moox.factor.EngineControl 的 WriteSeries 写入，因子机只能出站时由网关经 control 中转，不需要手工建隧道。
 一批（--batch-rows）编码后不能超过 4 MiB，默认一万行远在这之内；超了会提示减小 --batch-rows。
 
+写入目标 archive（归档）：只用于线上保留期之外的历史（保留期内的数据写进 Storage 就会被归档跟随）。
+命令建一条占住归档任务的导入运行，行经 worker 数据端口（只出站主机经 control 中转，较慢）写进暂存区，命令结束时统一导出；
+series_tag 必须非空（列或 --series-tag）；同键已归档的一律覆盖；预检按行数估算 worker 暂存库要的磁盘，不够时按时间拆成几次导入。
+只写归档时接受带 subject_id 列的多标的文件，且不检查标的在不在数据集的标签范围（摘要列出不在范围内的标的）。
+
 示例:
   moox-cli import --space-id crypto --dataset-id dataset_spot_kline_1m --frequency 1m \
     --path ~/Downloads/spot_1m/ --target storage,factor --allow-missing --recalc
 
-  moox-cli import --space-id crypto --dataset-id dataset_spot_kline_1m --frequency 1m --path ~/Downloads/BTCUSDT.csv --dry-run`,
+  moox-cli import --space-id crypto --dataset-id dataset_spot_kline_1m --frequency 1m --path ~/Downloads/BTCUSDT.csv --dry-run
+
+  moox-cli import --space-id crypto --dataset-id dataset_spot_kline_1m --frequency 1m \
+    --path ~/Downloads/spot_1m_2024.csv.gz --target archive --series-tag spot --allow-missing`,
 	RunE: func(cmd *cobra.Command, args []string) error { return runImportCommand(cmd.Context(), importFlags) },
 }
 
@@ -72,15 +79,14 @@ func init() {
 	f.StringVar(&importFlags.Dataset, "dataset-id", "", "Dataset ID")
 	f.StringVar(&importFlags.Freq, "frequency", "", "时序频率：1m 5m 15m 30m 1h 4h 1d")
 	f.StringArrayVar(&importFlags.Paths, "path", nil, "数据文件或目录（可重复）")
-	f.StringVar(&importFlags.Format, "format", "csv", "数据格式")
-	f.StringVar(&importFlags.Subject, "subject", "", "标的 ID；不写时用文件名（去掉扩展名）")
+	f.StringVar(&importFlags.Subject, "subject", "", "标的 ID；不写时用文件名（去掉 .csv 或 .csv.gz）")
 	f.StringVar(&importFlags.TimeColumn, "time-column", "data_time", "时间列名")
 	f.StringVar(&importFlags.SeriesTag, "series-tag", "", "统一指定 series_tag；为空表示默认序列（文件里有 series_tag 列时按文件）")
 	f.IntVar(&importFlags.BatchRows, "batch-rows", 10000, "每批最多行数（不会拆开同一个时间点）")
 	f.BoolVar(&importFlags.AllowMissing, "allow-missing", false, "允许序列内部缺周期（交易所本身缺数据），因子本地存储把缺的周期写成带标记的填充行")
 	f.BoolVar(&importFlags.Recalc, "recalc", false, "导入后对已算出过因子值的区间重算（因子本地存储记入失效重算待办）")
 	f.BoolVar(&importFlags.DryRun, "dry-run", false, "只校验不写入")
-	f.StringSliceVar(&importFlags.Targets, "target", []string{"storage", "factor"}, "写入目标：storage、factor")
+	f.StringSliceVar(&importFlags.Targets, "target", []string{"storage", "factor"}, "写入目标：storage、factor、archive（可任意组合）")
 	f.StringVar(&importFlags.Manifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 跟上导入的写入")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
@@ -102,10 +108,11 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	if err != nil {
 		return err
 	}
-	wantStorage, wantFactor, err := importTargets(opts.Targets)
+	wantStorage, wantFactor, wantArchive, err := importTargets(opts.Targets)
 	if err != nil {
 		return err
 	}
+	archiveOnly := wantArchive && !wantStorage && !wantFactor
 	gateway, err := openCommandGateway(ctx, opts.Manifest, nil)
 	if err != nil {
 		return err
@@ -120,7 +127,7 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 		meta    runner.Meta
 		targets []runner.Target
 	)
-	if wantStorage {
+	if wantStorage || wantArchive {
 		metaClient := gatewayStorageImportMetadataClient{Gateway: gateway}
 		dataset, err := metaClient.GetDataset(ctx, opts.Space, opts.Dataset)
 		if err != nil {
@@ -140,21 +147,47 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 		if err != nil {
 			return err
 		}
-		meta = runner.Meta{Fields: fields, SubjectInScope: func(ctx context.Context, subject string) (bool, error) {
-			subjects, err := metaClient.ListDatasetSubjects(ctx, opts.Space, opts.Dataset, subject)
-			if err != nil {
-				return false, err
+		meta = runner.Meta{Fields: fields}
+		switch {
+		case wantStorage:
+			meta.SubjectInScope = func(ctx context.Context, subject string) (bool, error) {
+				subjects, err := metaClient.ListDatasetSubjects(ctx, opts.Space, opts.Dataset, subject)
+				if err != nil {
+					return false, err
+				}
+				return storageImportSubjectBound(subjects, subject), nil
 			}
-			return storageImportSubjectBound(subjects, subject), nil
-		}}
+		case wantFactor:
+			meta.SubjectInScope = func(ctx context.Context, subject string) (bool, error) {
+				return engine.SubjectInScope(ctx, opts.Space, opts.Dataset, subject)
+			}
+		default:
+			// 只写归档：归档存长历史，已下架、已移出标签的标的仍要能补进归档；不在范围内的只列进摘要。
+			if meta.SubjectInScope, err = archiveSubjectScope(ctx, metaClient, opts.Space, opts.Dataset); err != nil {
+				return err
+			}
+			meta.ScopeWarnOnly = true
+		}
+		if wantArchive {
+			check, err := checkArchiveImport(ctx, gateway, opts.Space, opts.Dataset)
+			if err != nil {
+				return err
+			}
+			meta.BeforeWrite = func(ctx context.Context, summary runner.Summary) error {
+				return checkArchiveDisk(ctx, gateway, opts.Space, opts.Dataset, check, summary, len(fields))
+			}
+		}
 		if opts.ViewID != "" {
 			if err := checkImportView(ctx, metaClient, opts.Space, opts.ViewID, opts.Dataset); err != nil {
 				return err
 			}
 		}
-		if !opts.DryRun {
+		if wantStorage && !opts.DryRun {
 			writer := gatewayStorageDataWriter{Gateway: gateway, SpaceID: opts.Space}
 			targets = append(targets, &importStorageTarget{writer: writer, types: types, view: opts.ViewID, space: opts.Space, dataset: opts.Dataset})
+		}
+		if wantArchive && !opts.DryRun {
+			targets = append(targets, &importArchiveTarget{gateway: gateway, file: opts.Manifest, space: opts.Space, dataset: opts.Dataset, types: types})
 		}
 	} else {
 		fields, err := engine.Fields(ctx, opts.Space, opts.Dataset, opts.Freq)
@@ -174,7 +207,7 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	retention, retentionKnown := loadImportRetention(opts.Manifest, opts.Space, opts.Freq)
 	limits := importPackLimits{Now: time.Now().UTC(), Retention: retention, RetentionKnown: retentionKnown, MinRows: opts.MinRows}
 	// 用了 --tail-rows 的 Storage 目标只写保留期内的尾部，不会有“写进去又被清掉”的行，不需要保留期警告。
-	if wantStorage && opts.TailRows == 0 && strings.EqualFold(strings.TrimSpace(opts.Format), "csv") && retentionKnown {
+	if wantStorage && opts.TailRows == 0 && retentionKnown {
 		warnImportRetention(os.Stderr, opts.Paths, opts.TimeColumn, opts.Space, opts.Freq, retention, time.Now())
 	}
 	cps, err := checkpoint.Open(opts.JobDB)
@@ -183,7 +216,8 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	}
 	defer cps.Close()
 	request := runner.Request{
-		Space: opts.Space, Dataset: opts.Dataset, Freq: opts.Freq, Paths: opts.Paths, Format: opts.Format, Subject: opts.Subject,
+		Space: opts.Space, Dataset: opts.Dataset, Freq: opts.Freq, Paths: opts.Paths, Subject: opts.Subject,
+		SubjectColumn: archiveOnly && opts.Subject == "", RequireSeriesTag: wantArchive,
 		TimeColumn: opts.TimeColumn, SeriesTag: opts.SeriesTag, BatchRows: opts.BatchRows, AllowMissing: opts.AllowMissing,
 		Recalc: opts.Recalc, DryRun: opts.DryRun, JobID: opts.JobID, Step: step,
 		TailRows: opts.TailRows, TailCutoff: limits.tailCutoff(),
@@ -260,22 +294,24 @@ func importPackPreflightError(runErr error, problems []string) error {
 	return fmt.Errorf("导入包预检未通过（%d 项，没有写入任何内容）：\n  %s", len(lines), strings.Join(shown, "\n  "))
 }
 
-func importTargets(names []string) (storage, factor bool, err error) {
+func importTargets(names []string) (storage, factor, archive bool, err error) {
 	for _, name := range names {
 		switch strings.TrimSpace(name) {
 		case "storage":
 			storage = true
 		case "factor":
 			factor = true
+		case "archive":
+			archive = true
 		case "":
 		default:
-			return false, false, fmt.Errorf("未知的写入目标 %q（storage、factor）", name)
+			return false, false, false, fmt.Errorf("未知的写入目标 %q（storage、factor、archive）", name)
 		}
 	}
-	if !storage && !factor {
-		return false, false, errors.New("至少要有一个写入目标（--target storage,factor）")
+	if !storage && !factor && !archive {
+		return false, false, false, errors.New("至少要有一个写入目标（--target storage,factor,archive）")
 	}
-	return storage, factor, nil
+	return storage, factor, archive, nil
 }
 
 func importStep(freq string) (time.Duration, error) {
@@ -287,7 +323,8 @@ func importStep(freq string) (time.Duration, error) {
 	return 0, fmt.Errorf("不支持的频率 %q（支持 1m 5m 15m 30m 1h 4h 1d）", freq)
 }
 
-// importFieldsFromColumns 取数据集的启用字段（不含系统列与时间、标的、series_tag 等保留列），按名称排序。
+// importFieldsFromColumns 取数据集的启用字段：来源为字段或自定义（与归档 worker 取列的口径一致，否则归档批次会被拒），
+// 不含时间、标的、series_tag 等保留列，按名称排序。
 func importFieldsFromColumns(columns []*pb.DatasetColumn) ([]seriesformat.Field, map[string]pb.FieldValueType, error) {
 	byName, err := storageImportColumnMap(columns)
 	if err != nil {
@@ -300,7 +337,9 @@ func importFieldsFromColumns(columns []*pb.DatasetColumn) ([]seriesformat.Field,
 		if column.GetStatus() != "" && column.GetStatus() != "active" {
 			continue
 		}
-		if column.GetOriginType() == pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM {
+		switch column.GetOriginType() {
+		case pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
+		default:
 			continue
 		}
 		if _, skip := reserved[name]; skip {
@@ -411,7 +450,7 @@ func (t *importStorageTarget) Finish(ctx context.Context) error {
 	}
 }
 
-// importUpserts 把一批行转成 Storage 的字段更新；空值写成显式 NULL（清除该字段，与因子机本地「整段替换」的结果一致，
+// importUpserts 把一批行转成 Storage 的字段更新（归档目标写的也是这一种行）；多标的文件每行的标的取 Batch.Subjects。空值写成显式 NULL（清除该字段，与因子机本地「整段替换」的结果一致，
 // 否则 Storage 保留旧值、本地为 NULL，两边不一致，之后同步还会把本地改回旧值）。
 func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.RowFieldUpsert, error) {
 	rows := make([]*pb.RowFieldUpsert, 0, c.Batch.Len())
@@ -429,9 +468,13 @@ func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.Ro
 			}
 			values = append(values, &pb.FieldValue{FieldId: field.Name, Value: value})
 		}
+		subject := c.Subject
+		if c.Batch.Subjects != nil {
+			subject = c.Batch.Subjects[i]
+		}
 		rows = append(rows, &pb.RowFieldUpsert{
 			Key: &pb.RowKey{SpaceId: c.Space, DatasetId: c.Dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: c.Subject, Freq: c.Freq, DataTime: c.Batch.Times[i].UTC().Format(time.RFC3339Nano), SeriesTag: c.Batch.Tags[i],
+				SubjectId: subject, Freq: c.Freq, DataTime: c.Batch.Times[i].UTC().Format(time.RFC3339Nano), SeriesTag: c.Batch.Tags[i],
 			}}},
 			Fields: values,
 		})
