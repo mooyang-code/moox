@@ -122,7 +122,7 @@ func TestMarketPlansMatchBaseline(t *testing.T) {
 				StreamLatenessS: defaultStreamConfig().LatenessS,
 				SpaceID:         item.space, Markets: item.markets, SymbolsPerFunction: plan.symbolsPerFunction(item.space),
 				Fetch: plan.fetchFor(item.space, ""), MarketFetch: plan.marketFetches(item.space),
-				DefaultLatenessS: latenessSeconds, MarketLatenessS: plan.marketLateness(item.space), AssumedEgressIPs: plan.AssumedEgressIPs,
+				DefaultLatenessS: latenessSeconds, MarketLatenessS: plan.marketLateness(item.space),
 				DeriveFetch: fetchplan.RouteFetchLimits(item.space),
 			}
 			if sizing := plan.autoSizing(item.space); sizing != nil {

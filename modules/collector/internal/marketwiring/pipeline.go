@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
@@ -115,7 +114,7 @@ func newSingleSourceKlinePipeline(storage marketfetch.Storage, marketID string, 
 		return nil, fmt.Errorf("行情源目录里没有 %s 的 %s 数据源 %q", marketID, instrumentType, providerID)
 	}
 	sourceID := entry.Key.SourceID
-	provider, err := entry.Build(marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled(), SourceID: sourceID, Settings: marketdata.SourceSettings{RateLimit: feedRateLimit(limits)}})
+	provider, err := entry.Build(marketdata.Deps{SourceID: sourceID, Settings: marketdata.SourceSettings{RateLimit: feedRateLimit(limits)}})
 	if err != nil {
 		return nil, err
 	}

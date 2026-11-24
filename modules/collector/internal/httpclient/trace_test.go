@@ -164,23 +164,11 @@ func TestTraceRecordsResponseHintsAndBodyOfNon200(t *testing.T) {
 	require.Contains(t, AttemptsText(trace.Snapshot().Attempts), "f=-1")
 }
 
-func TestSharedClientIsOnlyUsedWhenConnReuseIsEnabled(t *testing.T) {
-	SetConnReuse(false)
-	require.Nil(t, SharedClientIfEnabled())
-	SetConnReuse(true)
-	t.Cleanup(func() { SetConnReuse(false) })
-	first := SharedClientIfEnabled()
-	require.NotNil(t, first)
-	require.Same(t, first, SharedClientIfEnabled(), "进程内共享同一个客户端，空闲连接才能跨调用复用")
-	SetConnReuse(false)
-	require.Nil(t, SharedClientIfEnabled(), "关闭后沿用每次新建的客户端")
-}
-
-func TestSharedClientKeepsConnectionsAcrossInvocations(t *testing.T) {
+func TestTraceCountsReusedConnections(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
 	defer server.Close()
 	domain := strings.TrimPrefix(server.URL, "https://")
-	// 模拟两次相隔的调用共用同一个客户端：第二次请求应复用第一次留下的空闲连接。
+	// 同一个客户端的第二次请求复用第一次留下的空闲连接。
 	client := NewHTTPClient(&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, MaxIdleConnsPerHost: 8}})
 	var out map[string]any
 	require.NoError(t, client.Get(context.Background(), domain, "/", nil, &out))

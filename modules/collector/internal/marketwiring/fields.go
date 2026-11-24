@@ -3,7 +3,6 @@ package marketwiring
 import (
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
@@ -17,7 +16,7 @@ func FieldOffers() marketdata.FieldOffers { return catalog.FieldOffers() }
 func FieldSources(marketID string, instrumentType marketdata.InstrumentType) ([]marketdata.FieldSource, error) {
 	marketID = strings.ToLower(strings.TrimSpace(marketID))
 	return catalog.Default().FieldSources(marketdata.MarketID(marketID), instrumentType, func(entry marketdata.CatalogEntry) (marketdata.Deps, error) {
-		deps := marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled()}
+		deps := marketdata.Deps{}
 		runtime, found, err := marketfetch.LoadSourceRuntime(marketID, entry.Key.ProviderID)
 		if err != nil {
 			return marketdata.Deps{}, err
@@ -50,7 +49,7 @@ func FundingCacheForMarket(market marketfetch.PlanMarket) *marketfetch.FundingCa
 	if err != nil || entry.RouteSource {
 		return nil
 	}
-	provider, err := entry.Build(marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled()})
+	provider, err := entry.Build(marketdata.Deps{})
 	if err != nil {
 		return nil
 	}

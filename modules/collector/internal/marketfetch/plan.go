@@ -67,12 +67,6 @@ type PlanFetch struct {
 	FeedConcurrency  int `json:"feed_concurrency"`
 	RequestTimeoutMS int `json:"request_timeout_ms"`
 	StorageTimeoutMS int `json:"storage_timeout_ms,omitempty"`
-	// StandbyMS 大于 0 时启用备援请求（行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准），0 表示关闭。
-	// StandbyHourOnly 为真时只在整点那一分钟触发的调用里启用。
-	StandbyMS       int  `json:"standby_ms,omitempty"`
-	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
-	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）。
-	ConnReuse bool `json:"conn_reuse,omitempty"`
 	// NotBeforeMS 是相对收盘的最早取数时刻（毫秒）：函数要等到收盘 + NotBeforeMS 才开始取数（定时器晚到时不再多等），0 表示不等待。
 	NotBeforeMS int `json:"not_before_ms,omitempty"`
 }
@@ -103,9 +97,6 @@ const (
 	PlanExecutorStreaming = "stream"
 	PlanExecutorLocal     = "local"
 )
-
-// MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
-const MinStandbyMS = 200
 
 // PlanDataset 是一个结果数据集：每个数据集 1～2 份（生效起点、hash、总数、本函数标的与序号）。
 type PlanDataset struct {
@@ -199,9 +190,6 @@ func (p *Plan) Validate() error {
 	}
 	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 {
 		return errors.New("plan fetch limits are out of range")
-	}
-	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) {
-		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d", MinStandbyMS, MaxStandbyMS)
 	}
 	if f.NotBeforeMS != 0 && (f.NotBeforeMS < MinNotBeforeMS || f.NotBeforeMS > MaxNotBeforeMS) {
 		return fmt.Errorf("plan fetch.not_before_ms must be 0 or between %d and %d", MinNotBeforeMS, MaxNotBeforeMS)
@@ -442,17 +430,6 @@ func (p *Plan) StartDelay(entry, scheduled time.Time) time.Duration {
 		return 0
 	}
 	return max(scheduled.Add(time.Duration(p.Fetch.NotBeforeMS)*time.Millisecond).Sub(entry), 0)
-}
-
-// StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。
-func (p *Plan) StandbyFor(scheduled time.Time) int {
-	if p == nil || p.Fetch.StandbyMS <= 0 {
-		return 0
-	}
-	if p.Fetch.StandbyHourOnly && scheduled.UTC().Minute() != 0 {
-		return 0
-	}
-	return p.Fetch.StandbyMS
 }
 
 // PlanDatasetKey 返回采集计划里数据集的键“数据集|频率”。键的写法只在这里定义。

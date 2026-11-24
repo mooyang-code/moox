@@ -59,8 +59,6 @@ type PlanOptions struct {
 	MarketLatenessS  map[string]int
 	// StreamLatenessS 是推送方式按频率的截止默认值。
 	StreamLatenessS map[string]int
-	// AssumedEgressIPs 是函数出口 IP 个数的估计值，只用于频控估算（保守默认 1）。
-	AssumedEgressIPs int
 	// AutoSize 按市场的限速配置与标的数估算每函数标的数（见 FleetSizing）；返回 0 表示算不出，用 SymbolsPerFunction。
 	// 任务自己指定的每函数标的数优先于它。
 	AutoSize func(sample TaskGroup, subjects int) int

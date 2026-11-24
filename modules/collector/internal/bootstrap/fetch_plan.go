@@ -164,7 +164,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				StreamLatenessS: cfg.Stream.LatenessS,
 				SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], BackfillRegion: cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].BackfillRegion, SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
 				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
-				DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
+				DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID),
 			}
 			// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
 			options.DeriveFetch = fetchplan.RouteFetchLimits(spaceID)
