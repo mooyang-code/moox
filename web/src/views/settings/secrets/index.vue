@@ -176,7 +176,7 @@
         @close="resetExport"
       >
         <a-alert type="warning" class="transfer-alert">
-          迁移包包含全部密钥的明文（系统密钥与配置备份除外），用下面的口令加密；在新环境“导入”时需要同一口令。
+          迁移包包含全部密钥的明文（系统密钥除外），用下面的口令加密；在新环境“导入”时需要同一口令。
           口令丢失无法找回，迁移包和口令请分开保管。
         </a-alert>
         <a-form :model="exportForm" auto-label-width>
