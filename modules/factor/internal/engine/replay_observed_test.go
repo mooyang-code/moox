@@ -94,7 +94,7 @@ func TestReplayObservedHistoryIncludesDelisted(t *testing.T) {
 			require.InDelta(t, expected, got, 1e-12, "minute %d", minute)
 		}
 		plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: set.Set, Members: set.Members, PeriodTime: period,
-			UniverseSeries: plainSeries("A", "B")})
+			UniverseSubjects: []string{"A", "B"}})
 		require.NoError(t, err)
 		plan.HistorySubjects, err = live.HistorySubjects(ctx, plan)
 		require.NoError(t, err)

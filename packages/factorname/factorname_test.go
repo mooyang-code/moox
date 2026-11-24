@@ -336,3 +336,14 @@ func TestVectorsAreLoaded(t *testing.T) {
 		}
 	}
 }
+
+func TestMemberFailedSubjects(t *testing.T) {
+	got := MemberFailedSubjects([]string{"ETH", "BTC"}, []string{"SOL", "BTC", " "})
+	want := []string{"BTC", "ETH", "SOL"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("MemberFailedSubjects = %v, want %v", got, want)
+	}
+	if got := MemberFailedSubjects(nil, nil); len(got) != 0 {
+		t.Fatalf("空输入应返回空名单，得到 %v", got)
+	}
+}

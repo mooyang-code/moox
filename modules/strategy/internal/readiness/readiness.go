@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -120,6 +121,8 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			}
 		}
 	}
+	// 事件级失败标的：因子明细里成员只记这之外多出来的部分，成员完整的失败标的要并上它（factorname.MemberFailedSubjects）。
+	periodFailed := parseScopeRef(event.GetFailedScopeRef())
 	for _, factorID := range required {
 		state := states[factorID]
 		switch state.GetStatus() {
@@ -128,14 +131,14 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			result.Detail = fmt.Sprintf("成员 %s 本期被跳过", factorID)
 			return result
 		case statusDegraded:
-			failed := uniqueSorted(state.GetFailedSubjects())
+			failed := uniqueSorted(factorname.MemberFailedSubjects(periodFailed, state.GetFailedSubjects()))
 			if len(failed) > 0 {
 				result.FailedByFactor[factorID] = failed
 			}
 		}
 	}
 	if len(states) == 0 && event.GetStatus() == statusDegraded {
-		result.FailedSubjects = parseScopeRef(event.GetFailedScopeRef())
+		result.FailedSubjects = periodFailed
 	}
 	return result
 }

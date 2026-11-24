@@ -35,9 +35,9 @@ func TestAssembleSingleTagRecalcPeakMemory(t *testing.T) {
 	plan := Plan{
 		Mode: ModeRecalc, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "bars", Freq: "1m"},
 		Members: domain.AsMembers(defs...), TargetStart: start, TargetEnd: start.Add(periods * time.Minute),
-		Expected: ids, Available: ids, ExpectedSeries: singleSeries(ids...),
+		Expected: ids, Available: ids,
 	}
-	loaded := LoadResult{Available: ids, AvailableSeries: plan.ExpectedSeries, Frames: make(map[string]*storageio.Frame, subjects)}
+	loaded := LoadResult{Available: ids, Frames: make(map[string]*storageio.Frame, subjects)}
 	computation := Computation{Results: map[string]map[string]ItemResult{}, FactorStates: map[string]storageio.FactorState{}}
 	for _, subject := range ids {
 		frame := &storageio.Frame{SubjectID: subject, Columns: []string{"data_time", "series_tag", "close"}}

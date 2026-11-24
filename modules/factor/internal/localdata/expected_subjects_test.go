@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,61 +57,50 @@ func (fx *fixture) rawResult(subject, tag string, m int) (storageResult, bool) {
 
 type storageResult struct{ rank, mean any }
 
-func (fx *fixture) tagLatest(t *testing.T, subject, tag string) time.Time {
+// latest 返回标的本地数据的最新一根。
+func (fx *fixture) latest(t *testing.T, subject string) time.Time {
 	t.Helper()
-	bounds, err := fx.data.cfg.Store.TagBounds(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}, subject)
+	bounds, _, err := fx.data.cfg.Store.Bounds(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}, subject)
 	require.NoError(t, err)
-	return bounds[tag].Latest
+	return bounds.Latest
 }
 
-// 补算类计划的期望序列是“期望标的 × 唯一的 tag”：唯一的 tag 取本地序列边界上记的 tag；本地没有数据的期望标的（SOL）同样配上它，
-// 按缺数处理。
-func TestExpectedSeriesForSingleTagDatasetIsSubjectsTimesTheTag(t *testing.T) {
+// 补算类计划的期望标的：本地没有数据的期望标的（SOL）照常保留，按缺数处理；本地完全没有数据时报 ErrNoLocalData。
+func TestExpectedSubjectsKeepsSubjectsWithoutLocalData(t *testing.T) {
 	fx := newFixture(t, mean3())
+	_, err := fx.data.ExpectedSubjects(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC"}, TargetEnd: at(10)})
+	require.ErrorIs(t, err, ErrNoLocalData, "本地一个标的都没有：没有可补的数据，补算直接报错")
+
 	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	fx.st.put("ETH", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "ETH"}))
-	want := plainSeries("BTC", "ETH", "SOL")
-	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH", "SOL"}, TargetEnd: at(10)})
+	subjects, err := fx.data.ExpectedSubjects(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH", "SOL"}, TargetEnd: at(10)})
 	require.NoError(t, err)
-	require.Equal(t, want, series)
-
-	// 期望标的在本地都没有数据时，从数据源上别的有本地数据的标的取 tag。
-	series, err = fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"SOL"}, TargetEnd: at(10)})
-	require.NoError(t, err)
-	require.Equal(t, plainSeries("SOL"), series)
-
-	// 改过 tag：旧 tag 停在第 9 分钟，新 tag 写到第 12 分钟。取最新一根最晚的新 tag，不看字典序（旧 tag 的字典序更小），
-	// 仍是每个标的一条序列。
-	const renamed = "venue:binance|v2"
-	fx.st.putTag("ETH", renamed, 100, 10, 11, 12)
-	fx.now = at(13)
-	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC", "ETH"}))
-	for i := 0; i < 5; i++ {
-		series, err = fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC", "ETH", "SOL"}, TargetEnd: at(13)})
-		require.NoError(t, err)
-		require.Equal(t, []seriesset.Series{{SubjectID: "BTC", SeriesTag: renamed}, {SubjectID: "ETH", SeriesTag: renamed}, {SubjectID: "SOL", SeriesTag: renamed}}, series)
-	}
+	require.Equal(t, []string{"BTC", "ETH", "SOL"}, subjects)
 }
 
-// 多个 tag 的最新一根一样晚时取字典序最小的，结果与遍历顺序无关。
-func TestSingleTagTieBreaksByName(t *testing.T) {
+// 没有冻结全集的补算跨过 tag 切换：BTC 第 5 分钟起从 tag a 换到 tag b，补算 [3,8) 五期都按各自那一期的源行写成，
+// 不再只认最新的 tag（改前 3、4 两期记成 failed）。
+func TestRecalcAcrossTagSwitchWritesEveryPeriod(t *testing.T) {
 	fx := newFixture(t, mean3())
-	fx.st.putTag("BTC", "venue:b", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
-	fx.st.putTag("BTC", "venue:a", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	fx.st.put("BTC", 100, minutesBetween(0, 4)...)
+	fx.st.putTag("BTC", "venue:b", 100, minutesBetween(5, 9)...)
+	fx.now = at(10)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
-	for i := 0; i < 5; i++ {
-		series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC"}, TargetEnd: at(10)})
-		require.NoError(t, err)
-		require.Equal(t, []seriesset.Series{{SubjectID: "BTC", SeriesTag: "venue:a"}}, series)
+	// 同步只取最近的回看窗口：更早的几根直接写进本地存储（补算只读本地）。
+	fx.putLocalEarly(t, "BTC", plainTag, minutesBetween(0, 4)...)
+	fx.putLocalEarly(t, "BTC", "venue:b", minutesBetween(5, 9)...)
+	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(3), TargetEnd: at(8),
+		Expected: []string{"BTC"}, Available: []string{"BTC"}, CarryColumns: []string{"close", "volume"}, WriteCarry: true}
+	outcome, err := fx.runner.Run(context.Background(), plan)
+	require.NoError(t, err)
+	for m := 3; m < 8; m++ {
+		require.Equal(t, pipeline.ItemWritten, outcome.Items[pipeline.ItemKey{Member: "mean", Subject: "BTC", Period: at(m)}], "第 %d 分钟", m)
 	}
-}
-
-// 本地一条序列都没有：没有可补的数据，补算直接报错。
-func TestExpectedSeriesForSingleTagDatasetWithoutLocalData(t *testing.T) {
-	fx := newFixture(t, mean3())
-	_, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: []string{"BTC"}, TargetEnd: at(10)})
-	require.ErrorIs(t, err, ErrNoLocalData)
+	_, ok := fx.rawResult("BTC", plainTag, 4)
+	require.True(t, ok, "旧 tag 那一期按旧 tag 的行键写出")
+	_, ok = fx.rawResult("BTC", "venue:b", 5)
+	require.True(t, ok, "新 tag 那一期按新 tag 的行键写出")
 }
 
 func minutesBetween(from, to int) []int {
@@ -123,11 +111,11 @@ func minutesBetween(from, to int) []int {
 	return out
 }
 
-// fillItems 对 BTC 在 [start, end) 做只填充恢复，返回每个周期的逐项结果；frozen 为空表示没有冻结全集。
-func fillItems(t *testing.T, fx *fixture, member string, start, end int, frozen []seriesset.Series) map[int]pipeline.ItemStatus {
+// fillItems 对 BTC 在 [start, end) 做只填充恢复（没有冻结全集），返回每个周期的逐项结果。
+func fillItems(t *testing.T, fx *fixture, member string, start, end int) map[int]pipeline.ItemStatus {
 	t.Helper()
 	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(start), TargetEnd: at(end),
-		Expected: []string{"BTC"}, ExpectedSeries: frozen, Available: []string{"BTC"}, CarryColumns: []string{"close", "volume"}, FillOnly: true}
+		Expected: []string{"BTC"}, Available: []string{"BTC"}, CarryColumns: []string{"close", "volume"}, FillOnly: true}
 	outcome, err := fx.runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	out := map[int]pipeline.ItemStatus{}
@@ -137,12 +125,12 @@ func fillItems(t *testing.T, fx *fixture, member string, start, end int, frozen 
 	return out
 }
 
-// 没有 ExpectedSeries 的只填充计划：缺目标那一根是 failed。
+// 没有冻结全集的只填充计划：缺目标那一根是 failed。
 func TestFillOnlySingleSeriesUnchanged(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
-	require.Equal(t, pipeline.ItemFailed, fillItems(t, fx, "mean", 9, 10, nil)[9])
+	require.Equal(t, pipeline.ItemFailed, fillItems(t, fx, "mean", 9, 10)[9])
 }
 
 // 补算上市前的区间：SOL 第 12 分钟才有本地数据，补算 [5,10) 时它还没上市，不按缺数处理；
@@ -164,9 +152,9 @@ func TestSingleTagRecalcBeforeListingKeepsExistingRanks(t *testing.T) {
 		}
 	}
 	subjects := []string{"BTC", "ETH", "SOL"}
-	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: subjects, TargetStart: at(5), TargetEnd: at(10)})
+	expected, err := fx.data.ExpectedSubjects(context.Background(), pipeline.Plan{Set: fx.set.Set, Expected: subjects, TargetStart: at(5), TargetEnd: at(10)})
 	require.NoError(t, err)
-	require.Equal(t, plainSeries("BTC", "ETH"), series, "区间结束时还没上市的 SOL 不在期望序列里")
+	require.Equal(t, []string{"BTC", "ETH"}, expected, "区间结束时还没上市的 SOL 不在期望标的里")
 
 	executor := recalcexec.NewExecutor(fx.runner)
 	source := func(context.Context) (recalcexec.Selection, error) {

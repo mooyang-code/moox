@@ -622,12 +622,12 @@ func periodSeriesOf(view *serieswindow.View, subject string, atSec int64) (serie
 	return serieswindow.SeriesView{}, false
 }
 
-// periodSeries 返回这些标的在 atSec 那一期的序列，按标的的先后。
-func periodSeries(view *serieswindow.View, subjects []string, atSec int64) []seriesset.Series {
-	var out []seriesset.Series
+// periodSubjects 返回这些标的里在 atSec 那一期有序列（已经开始、还没结束）的标的，按标的的先后。
+func periodSubjects(view *serieswindow.View, subjects []string, atSec int64) []string {
+	var out []string
 	for _, subject := range subjects {
-		if sv, ok := periodSeriesOf(view, subject, atSec); ok {
-			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
+		if _, ok := periodSeriesOf(view, subject, atSec); ok {
+			out = append(out, subject)
 		}
 	}
 	return out
@@ -725,21 +725,19 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 			universe = append(universe, subject)
 		}
 	}
-	// 回放按标的选范围：本期的序列全集取这些标的在快照里本期已经开始、还没结束的序列（实时取完成事件的序列全集）。
+	// 回放按标的选范围：本期的全集取这些标的里在快照中本期已经开始、还没结束的（实时取完成事件的全集），已下架的标的不进全集。
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
 		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period,
-		UniverseSeries: periodSeries(s.view, universe, period.Unix()),
+		UniverseSubjects: periodSubjects(s.view, universe, period.Unix()),
 	})
 	if err != nil {
 		return nil, err
 	}
 	// 本期可用与实时一致：标的这一期的序列有真实的源行（填充行不算）。
 	var available []string
-	var availableSeries []seriesset.Series
 	for _, subject := range universe {
 		if sv, ok := periodSeriesOf(s.view, subject, period.Unix()); ok && sv.RealRowAt(s.view.Step, period.Unix()) {
 			available = append(available, subject)
-			availableSeries = append(availableSeries, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
 		}
 	}
 	plan.Available = available
@@ -757,7 +755,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		}
 	}
 	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: available,
-		AvailableSeries: availableSeries, Frames: map[string]*storageio.Frame{}}
+		Frames: map[string]*storageio.Frame{}}
 	computation, err := runner.Compute(ctx, plan, loaded)
 	if err != nil {
 		return nil, fmt.Errorf("计算 %s：%w", s.axis.Format(period), err)

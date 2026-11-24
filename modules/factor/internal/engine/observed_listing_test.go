@@ -74,7 +74,7 @@ func newListingScenario(t *testing.T) *listingScenario {
 func (sc *listingScenario) live(minute int, universe ...string) float64 {
 	sc.t.Helper()
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: sc.obs.Set, Members: sc.obs.Members,
-		PeriodTime: rt0.Add(time.Duration(minute) * time.Minute), UniverseSeries: plainSeries(universe...), CarryColumns: []string{"close"}})
+		PeriodTime: rt0.Add(time.Duration(minute) * time.Minute), UniverseSubjects: universe, CarryColumns: []string{"close"}})
 	require.NoError(sc.t, err)
 	_, err = sc.runner.Run(context.Background(), plan)
 	require.NoError(sc.t, err)

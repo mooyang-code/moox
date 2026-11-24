@@ -162,3 +162,22 @@ func TestCheckCollectsFailedSubjectsByFactor(t *testing.T) {
 		t.Fatalf("失败标的不符：%v", result.FailedByFactor)
 	}
 }
+
+// 因子明细里成员只记周期级之外多出来的失败标的：成员完整的失败标的 = 事件级失败标的 ∪ 成员自己记的；
+// 事件级失败标的只进成员名单，不进 FailedSubjects（否则会在全部列上记成上游失败）。
+func TestCheckRestoresMemberFailuresFromEventLevel(t *testing.T) {
+	binding := Binding{Factors: map[string]string{"ma": "h1|fixed", "rank": "h2|fixed"}}
+	event := factorEvent(state("ma", "degraded", "h1"), state("rank", "degraded", "h2", "BTC-USDT"))
+	event.FailedScopeRef = "SOL-USDT"
+	result := Check(binding, nil, event)
+	if result.Reason != "" {
+		t.Fatalf("不应跳过：%s", result.Reason)
+	}
+	want := map[string][]string{"ma": {"SOL-USDT"}, "rank": {"BTC-USDT", "SOL-USDT"}}
+	if !reflect.DeepEqual(result.FailedByFactor, want) {
+		t.Fatalf("失败标的不符：got %v want %v", result.FailedByFactor, want)
+	}
+	if len(result.FailedSubjects) != 0 {
+		t.Fatalf("有因子明细时事件级失败标的不进 FailedSubjects：%v", result.FailedSubjects)
+	}
+}

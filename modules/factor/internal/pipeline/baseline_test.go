@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/factorlib"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -166,12 +165,11 @@ func baselineTask() domain.FactorTask {
 		Freq: "1m", Status: domain.TaskStatusEnabled}
 }
 
-// baselineRecalcPlan 是补算计划：目标区间 [baselineStart, baselineStart+periods)，期望序列由调用方给出。
-func baselineRecalcPlan(members []domain.MemberDef, periods int, expectedSeries []seriesset.Series) Plan {
+// baselineRecalcPlan 是补算计划：目标区间 [baselineStart, baselineStart+periods)，期望标的由调用方给出。
+func baselineRecalcPlan(members []domain.MemberDef, periods int, expected []string) Plan {
 	plan := Plan{Mode: ModeRecalc, Set: baselineTask(), Members: members, TargetStart: baselineStart,
-		TargetEnd: baselineStart.Add(time.Duration(periods) * time.Minute), WriteCarry: true}
-	plan.ExpectedSeries = uniqueSeriesSorted(expectedSeries)
-	plan.Expected = seriesSubjects(plan.ExpectedSeries)
+		TargetEnd: baselineStart.Add(time.Duration(periods) * time.Minute), WriteCarry: true, FrozenUniverse: true}
+	plan.Expected = uniqueSorted(expected)
 	plan.Available = append([]string(nil), plan.Expected...)
 	return plan
 }
@@ -186,10 +184,10 @@ func baselineScenarios(t *testing.T, members []domain.MemberDef) []baselineScena
 	t.Helper()
 	// 实时、单序列：事件里 S4 上游失败，数据层又报 S2 本期取不到。
 	live, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{Set: baselineTask(), Members: members, PeriodTime: baselineStart.Add(5 * time.Minute),
-		UniverseSeries: singleSeries(baselineSubjects...), UpstreamFailedSeries: singleSeries("S4")})
+		UniverseSubjects: baselineSubjects, UpstreamFailed: []string{"S4"}})
 	require.NoError(t, err)
 	return []baselineScenario{
-		{name: "single_recalc", plan: baselineRecalcPlan(members, 6, singleSeries(baselineSubjects...)), data: baselineData(baselineFrames(baselineSingleSeries(5)), nil)},
+		{name: "single_recalc", plan: baselineRecalcPlan(members, 6, baselineSubjects), data: baselineData(baselineFrames(baselineSingleSeries(5)), nil)},
 		{name: "single_live_failed", plan: live, data: baselineData(baselineFrames(baselineSingleSeries(5)), []string{"S2"})},
 	}
 }
@@ -217,15 +215,7 @@ func baselineValue(value any) string {
 	}
 }
 
-func baselineSeriesText(items []seriesset.Series) string {
-	parts := make([]string, 0, len(items))
-	for _, item := range items {
-		parts = append(parts, item.SubjectID+"@"+item.SeriesTag)
-	}
-	return strings.Join(parts, ";")
-}
-
-// baselineRecords 把一次计算转成 CSV 记录：每个成员先是状态（status、失败标的与序列、跳过的 tag、截面各周期结果、整体失败原因），
+// baselineRecords 把一次计算转成 CSV 记录：每个成员先是状态（status、失败标的、跳过的 tag、截面各周期结果、整体失败原因），
 // 再是逐行的输出值，按（标的、series_tag、时间）排序，同一行的各输出按定义顺序。没有源行的时刻不产生记录，null 写 null。
 func baselineRecords(name string, plan Plan, computation Computation) [][]string {
 	var records [][]string
@@ -241,7 +231,6 @@ func baselineRecords(name string, plan Plan, computation Computation) [][]string
 		}
 		add("status", state.Status)
 		add("failed_subjects", strings.Join(state.FailedSubjects, ";"))
-		add("failed_series", baselineSeriesText(state.FailedSeries))
 		periods := make([]int64, 0, len(computation.CrossPeriods[key]))
 		for period := range computation.CrossPeriods[key] {
 			periods = append(periods, period)
@@ -371,14 +360,6 @@ func baselineCheckScenarios(t *testing.T, library, cross []domain.FactorDef, pla
 	}
 	if value, ok := baselineValueAt(single, keyOf(plan, "min_max"), "S3", "venue:binance", baselineStart); !ok || value != nil {
 		t.Fatalf("S3 零波动段的 min_max 是 0/0，应为 null：%v（有行 %v）", value, ok)
-	}
-
-	// 派生断言：按序列的名单由按标的的名单决定——失败序列就是失败标的逐个配上唯一的 tag。
-	for _, name := range []string{"single_recalc", "single_live_failed"} {
-		for _, member := range plans[name].Members {
-			state := results[name].FactorStates[member.Key]
-			require.ElementsMatch(t, singleSeries(state.FailedSubjects...), state.FailedSeries, "%s %s", name, member.Key)
-		}
 	}
 
 	live, livePlan := results["single_live_failed"], plans["single_live_failed"]

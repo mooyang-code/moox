@@ -6,7 +6,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // Data 是管线的数据层：本地时序存储、内存窗口和与 Storage 的同步（engine 里的 localdata 实现）。
@@ -20,11 +19,11 @@ type Data interface {
 	WindowStatuses() []WarmupStatus
 }
 
-// SeriesExpecter 是数据层的能力：为没有带序列全集的补算类计划（人工补算、失效重算，以及读不到周期 marker 的空洞恢复）
-// 给出期望序列：“期望标的 × 这个数据集唯一的 tag”，本地没有数据的标的同样配上这个 tag，按缺数处理。
-// 带着冻结的 universe_series 的恢复路径不走这里。
-type SeriesExpecter interface {
-	ExpectedSeries(ctx context.Context, plan Plan) ([]seriesset.Series, error)
+// SubjectExpecter 是数据层的能力：为没有冻结全集的补算类计划（人工补算、失效重算，以及读不到周期 marker 的空洞恢复）
+// 收窄期望标的：排除本地最早一根不早于计划区间终点的标的（区间结束时还没上市）；本地没有数据的标的照常保留，按缺数处理。
+// 带着冻结全集（Plan.FrozenUniverse）的恢复路径不走这里。
+type SubjectExpecter interface {
+	ExpectedSubjects(ctx context.Context, plan Plan) ([]string, error)
 }
 
 // HistorySource 是数据层的可选能力：为有 observed 成员的计划列出 Plan.HistorySubjects——本地存储里在读取区间
@@ -98,7 +97,7 @@ type GapSink interface {
 }
 
 // ReportedSink 是 GapSink 的可选扩展：这一期的周期完成标记（marker）写完后被调用。
-// 账本在结果和 marker 之前记账，恢复要读 marker 里冻结的序列全集，所以记账时唤醒恢复必然抢在 marker 之前，需要在这里再唤醒一次。
+// 账本在结果和 marker 之前记账，恢复要读 marker 里冻结的全集，所以记账时唤醒恢复必然抢在 marker 之前，需要在这里再唤醒一次。
 type ReportedSink interface {
 	PeriodReported()
 }
