@@ -48,19 +48,9 @@ func (tx *Tx) GetPaperBalanceSnapshot(spaceID, accountID string) (PaperBalanceSn
 	if err := tx.db.Table("t_paper_asset_balances").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Find(&balances).Error; err != nil {
 		return result, err
 	}
-	// 余额行只在建账户时写入、之后只改不删，没有余额行就是还没初始化（例如重置数据清掉了余额但保留了账户）：按配置的初始资金重新开始。
+	// 余额行在建账户的同一个事务里写入、之后只改不删：没有余额行说明不是模拟账户（或账户不存在）。
 	if len(balances) == 0 {
-		var initial string
-		if err := tx.db.Raw(queryPaperInitialBalance, spaceID, accountID).Scan(&initial).Error; err != nil {
-			return result, err
-		}
-		if initial == "" {
-			return result, gorm.ErrRecordNotFound
-		}
-		if err := tx.initializePaperBalance(spaceID, accountID, initial); err != nil {
-			return result, err
-		}
-		return tx.GetPaperBalanceSnapshot(spaceID, accountID)
+		return result, gorm.ErrRecordNotFound
 	}
 	for _, balance := range balances {
 		value, err := shared.ParseDecimal(balance.Total)
@@ -223,8 +213,6 @@ func (tx *Tx) PaperT1Bought(spaceID, accountID string, since int64) (map[string]
 const (
 	execInsertPaperAssetBalance = `INSERT INTO t_paper_asset_balances (c_space_id, c_trading_account_id, c_asset, c_total)
 		VALUES (?, ?, ?, ?)`
-	queryPaperInitialBalance = `SELECT c_initial_balance FROM t_paper_account_configs
-		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	// 状态列表由调用方传入 activeOrderStates。
 	queryPaperActiveReservations = `SELECT c_reserved_asset, c_remaining_reserved_quantity FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?`

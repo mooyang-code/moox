@@ -187,10 +187,6 @@ func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountI
 		if account.ExecutionMode != string(exchange.ExecutionModePaper) || account.SettlementAsset == "" {
 			return fmt.Errorf("%w: paper funding account", ErrInvalidRecord)
 		}
-		// 余额投影被清掉后要按初始资金重建，先确认它存在。
-		if _, err := tx.GetPaperBalanceSnapshot(spaceID, tradingAccountID); err != nil {
-			return err
-		}
 		// 持仓在事务里读：和余额改动看到的是同一份成交。
 		activity, err := tx.paperSwapActivity(spaceID, tradingAccountID, ordered[0].FundingTime.UnixMilli())
 		if err != nil {

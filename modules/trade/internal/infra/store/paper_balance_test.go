@@ -243,15 +243,3 @@ func TestPaperBalanceNewFillAndReplay(t *testing.T) {
 		require.Equal(t, "1", snapshot.Totals["BTC"].String())
 	}
 }
-
-// 没有余额行就是还没初始化（例如重置数据清掉了余额但保留了账户）：读快照时按配置的初始资金重建结算资产行。
-func TestPaperBalanceReinitializesWhenBalanceRowsMissing(t *testing.T) {
-	s := openTestStore(t)
-	a := testAccount()
-	a.ExecutionMode = "PAPER"
-	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(a) }))
-	require.NoError(t, s.db.Exec("DELETE FROM t_paper_asset_balances").Error)
-	snapshot, err := s.GetPaperBalanceSnapshot(context.Background(), a.SpaceID, a.TradingAccountID)
-	require.NoError(t, err)
-	require.Equal(t, "100000", snapshot.Totals[a.SettlementAsset].String())
-}
