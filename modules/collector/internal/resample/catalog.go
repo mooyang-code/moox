@@ -90,10 +90,15 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
 	params.TargetDatasetID = ids.DatasetID
 	targetDatasetID, targetViewID := ids.DatasetID, ids.ViewID
+	// 逐级合成时源本身是合成结果、没有数据来源：沿用它记下的原始 K 线来源，因子任务据此绑定数据来源。
+	sourceDataSourceID := source.DataSourceID
+	if sourceDataSourceID == "" {
+		sourceDataSourceID = source.Attributes["source_data_source_id"]
+	}
 	attrs := map[string]string{
 		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(params.MarketType),
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
-		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
+		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": sourceDataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": strings.Join(params.SourceTags(), ","),
 		"target_freq": targetFreq.Storage,
 	}

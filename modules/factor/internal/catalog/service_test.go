@@ -1070,3 +1070,25 @@ func validateResultColumnContract(col storageio.ColumnInfo) error {
 	}
 	return nil
 }
+
+// Collector 的 K 线合成结果不声明数据来源，源 K 线的来源记在 source_data_source_id 属性里：因子任务能以它为源，
+// 结果数据集绑定这个来源；其他没有数据来源的数据集照旧拒绝。
+func TestCreateTaskAcceptsKlineResampleSource(t *testing.T) {
+	meta := newMetadataFake()
+	source := meta.datasets[resultKey("crypto", "dataset_prices")]
+	source.DataSourceID = ""
+	source.Attributes = map[string]string{"dataset_role": "kline_resample_result", "source_data_source_id": "binance"}
+	meta.datasets[resultKey("crypto", "dataset_prices")] = source
+
+	created, err := NewService(openCatalogStore(t), meta).CreateTask(context.Background(), newTask())
+	require.NoError(t, err)
+	require.Equal(t, "binance", meta.createdSpec.DataSourceID)
+	require.Equal(t, domain.TaskStatusEnabled, created.Status)
+
+	meta = newMetadataFake()
+	source = meta.datasets[resultKey("crypto", "dataset_prices")]
+	source.DataSourceID = ""
+	meta.datasets[resultKey("crypto", "dataset_prices")] = source
+	_, err = NewService(openCatalogStore(t), meta).CreateTask(context.Background(), newTask())
+	require.ErrorContains(t, err, "data source is invalid")
+}

@@ -387,3 +387,13 @@ func TestPrepareTargetKeepsReadyTaskWhenViewStateUnavailable(t *testing.T) {
 	require.NotEmpty(t, metadata.views, "目标 View 保留")
 	require.NotEmpty(t, metadata.datasets, "目标数据集保留")
 }
+
+// 逐级合成：源是上一级合成结果、没有数据来源时，目标沿用它记下的原始 K 线来源，因子任务才能以它为源。
+func TestPrepareTargetInheritsSourceDataSourceForChainedResample(t *testing.T) {
+	metadata, catalog, rule, params, _, subjects := newPrepareTargetFixture("")
+	source := storagesource.DatasetInfo{Attributes: map[string]string{"dataset_role": "kline_resample_result", "source_data_source_id": "binance"}}
+
+	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
+	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+	require.Equal(t, "binance", metadata.datasets[ids.DatasetID].GetAttributes()["source_data_source_id"])
+}
