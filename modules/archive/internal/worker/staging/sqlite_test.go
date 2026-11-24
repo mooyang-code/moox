@@ -19,7 +19,7 @@ func TestStageKeepsNanosecondKeys(t *testing.T) {
 	res, err := s.Stage(ctx, task, []Row{
 		row("BTC", at.Add(100), "", 1.0, 1.0, nil, nil),
 		row("BTC", at.Add(200), "", 2.0, 2.0, nil, nil),
-	}, utcDay, now0, StageReplace)
+	}, utcDay, now0)
 	if err != nil || res.Added != 2 {
 		t.Fatalf("res = %+v err=%v", res, err)
 	}
@@ -52,7 +52,7 @@ func TestAllColumnTypesRoundTripThroughTheArchiveFile(t *testing.T) {
 		row("ETH", at, "", math.NaN(), nil, nil, nil, nil, nil, nil),
 		row("SOL", at, "", 1e21, int64(0), "line1\r\nline2", true, at, "", []byte("x")),
 	}
-	if _, err := s.Stage(ctx, task, rows, utcDay, now0, StageReplace); err != nil {
+	if _, err := s.Stage(ctx, task, rows, utcDay, now0); err != nil {
 		t.Fatal(err)
 	}
 	p, _, _ := s.Partition(ctx, "crypto", "all", "2026-10-15")
@@ -61,13 +61,13 @@ func TestAllColumnTypesRoundTripThroughTheArchiveFile(t *testing.T) {
 	if err := s.MarkExported(ctx, "crypto", "all", p.Key, now0.Add(time.Hour), "rel.csv", fileSHA(t, file)); err != nil {
 		t.Fatal(err)
 	}
-	if err := finalizeAll(ctx, s, task, []string{p.Key}, now0, now0); err != nil {
+	if err := finalizeAll(ctx, s, task, []string{p.Key}, now0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReopenFinal(ctx, task, p.Key, file); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.Stage(ctx, task, rows, utcDay, now0.Add(2*time.Hour), StageReplace)
+	res, err := s.Stage(ctx, task, rows, utcDay, now0.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,12 +92,12 @@ func TestAllColumnTypesRoundTripThroughTheArchiveFile(t *testing.T) {
 func TestReopenFinalRejectsMalformedFiles(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	_ = s.EnsureTable(ctx, task)
-	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0, StageReplace)
+	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	file := filepath.Join(t.TempDir(), "p.csv")
 	exportFile(t, s, task, p, file)
 	_ = s.MarkExported(ctx, "crypto", "ds_1m", p.Key, now0.Add(time.Hour), "rel.csv", "sha")
-	_ = finalizeAll(ctx, s, task, []string{p.Key}, now0, now0)
+	_ = finalizeAll(ctx, s, task, []string{p.Key}, now0)
 	for name, body := range map[string]string{
 		"field count": "data_time,subject_id,series_tag,open,close,note,n\n2026-10-15T00:00:00Z,BTC,,1.0\n",
 		"bad number":  "data_time,subject_id,series_tag,open,close,note,n\n2026-10-15T00:00:00Z,BTC,\"\",abc,1.0,,\n",
@@ -150,7 +150,7 @@ func TestReopenFinalHandlesWideTables(t *testing.T) {
 		}
 		rows = append(rows, row(fmt.Sprintf("S%03d", i), day0.Add(time.Hour), "", values...))
 	}
-	if _, err := s.Stage(ctx, task, rows, utcDay, now0, StageReplace); err != nil {
+	if _, err := s.Stage(ctx, task, rows, utcDay, now0); err != nil {
 		t.Fatal(err)
 	}
 	p, _, _ := s.Partition(ctx, "crypto", "wide", "2026-10-15")
@@ -159,13 +159,13 @@ func TestReopenFinalHandlesWideTables(t *testing.T) {
 	if err := s.MarkExported(ctx, "crypto", "wide", p.Key, now0.Add(time.Hour), "rel.csv", fileSHA(t, file)); err != nil {
 		t.Fatal(err)
 	}
-	if err := finalizeAll(ctx, s, task, []string{p.Key}, now0, now0); err != nil {
+	if err := finalizeAll(ctx, s, task, []string{p.Key}, now0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReopenFinal(ctx, task, p.Key, file); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.Stage(ctx, task, rows, utcDay, now0.Add(2*time.Hour), StageReplace)
+	res, err := s.Stage(ctx, task, rows, utcDay, now0.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

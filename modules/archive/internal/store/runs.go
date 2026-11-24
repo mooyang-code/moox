@@ -54,15 +54,11 @@ type Run struct {
 	Unrecoverable []Unrecoverable
 	Message       string
 	CreatedAt     time.Time
-	// ImportFile 是导入的文件 "<import_id>/<文件名>"（kind=import）；Overwrite 表示同键已存在时覆盖。
-	ImportFile string
-	Overwrite  bool
 }
 
 const runColumns = `c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at, c_started_at, c_finished_at,
 c_lease_token, c_lease_until, c_subjects_total, c_subjects_done, c_request_count, c_bytes_read, c_rows_read, c_rows_added,
-c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime, c_partitions_uploaded,
-COALESCE(c_import_file, ''), c_overwrite`
+c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime, c_partitions_uploaded`
 
 func scanRun(row rowScanner) (Run, error) {
 	var r Run
@@ -71,7 +67,7 @@ func scanRun(row rowScanner) (Run, error) {
 	err := row.Scan(&r.RunID, &r.SpaceID, &r.DatasetID, &r.Kind, &rangeStart, &rangeEnd, &r.Status, &scheduled, &started, &finished,
 		&r.LeaseToken, &leaseUntil, &r.Stats.SubjectsTotal, &r.Stats.SubjectsDone, &r.Stats.RequestCount, &r.Stats.BytesRead,
 		&r.Stats.RowsRead, &r.Stats.RowsAdded, &r.Stats.RowsChanged, &r.Stats.PartitionsExported, &r.Stats.PartitionsFinalized,
-		&unrecoverable, &r.Message, &created, &r.Stats.PartitionsUploaded, &r.ImportFile, &r.Overwrite)
+		&unrecoverable, &r.Message, &created, &r.Stats.PartitionsUploaded)
 	if err != nil {
 		return Run{}, err
 	}
@@ -83,36 +79,44 @@ func scanRun(row rowScanner) (Run, error) {
 	return r, nil
 }
 
-// RunSpec 是新运行的类型与参数：range、tick 带读取区间，import 带导入文件与是否覆盖。
+// RunSpec 是新运行的类型与参数：range 带读取区间。
 type RunSpec struct {
 	Kind       string
 	RangeStart time.Time
 	RangeEnd   time.Time
-	ImportFile string
-	Overwrite  bool
 }
 
 func insertRun(ctx context.Context, tx *sql.Tx, spaceID, datasetID string, spec RunSpec, scheduledAt time.Time) (Run, error) {
 	id := newID("run_")
-	var importFile any
-	if spec.ImportFile != "" {
-		importFile = spec.ImportFile
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at, c_import_file, c_overwrite)
-VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, id, spaceID, datasetID, spec.Kind, nullTime(spec.RangeStart), nullTime(spec.RangeEnd), fmtTime(scheduledAt), importFile, spec.Overwrite); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at)
+VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`, id, spaceID, datasetID, spec.Kind, nullTime(spec.RangeStart), nullTime(spec.RangeEnd), fmtTime(scheduledAt)); err != nil {
 		return Run{}, err
 	}
 	return scanRun(tx.QueryRowContext(ctx, queryRuns1, id))
 }
 
-// CreateRun 为任务生成一条 manual、range 或 import 运行（复核与到点拉取只由 TriggerDue 生成）；冲突规则见函数内，冲突时返回 ErrConflict。
+// ConflictError 是 CreateRun 冲突时挡住新运行的那条运行（errors.Is(err, ErrConflict) 为真）。
+type ConflictError struct{ Blocking Run }
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("任务已有%s的 %s 运行 %s", runStatusText(e.Blocking.Status), e.Blocking.Kind, e.Blocking.RunID)
+}
+
+func (e *ConflictError) Is(target error) bool { return target == ErrConflict }
+
+func runStatusText(status string) string {
+	if status == RunRunning {
+		return "运行中"
+	}
+	return "排队中"
+}
+
+// CreateRun 为任务生成一条 manual、range 或 import 运行（follow 只由 CreateFollowRuns 生成）：
+// 先取消本任务排队中的 follow；本任务有排队中或运行中的 manual、range、import 时返回 *ConflictError；
+// 运行中的 follow 不挡，新运行排在它后面（ClaimRuns 保证同一任务同时只执行一条）。
 func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID string, spec RunSpec, now time.Time) (Run, error) {
 	switch spec.Kind {
-	case KindManual, KindRange:
-	case KindImport:
-		if spec.ImportFile == "" {
-			return Run{}, errors.New("导入运行必须带导入文件")
-		}
+	case KindManual, KindRange, KindImport:
 	default:
 		return Run{}, fmt.Errorf("CreateRun 不能生成 %q 运行", spec.Kind)
 	}
@@ -125,25 +129,17 @@ func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID string, spec R
 		if exists == 0 {
 			return ErrNotFound
 		}
-		// 排队中的到点拉取让位：取消它（它的区间由之后的复核兜底），否则 1m 任务几乎每分钟都有一条排队的 tick，
-		// 立即运行、补拉与导入会间歇返回冲突，worker 每天维护期间更是必定冲突。
-		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '让位给立即运行、补拉区间或导入'
-WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'tick' AND c_status = 'queued'`, fmtTime(now), spaceID, datasetID); err != nil {
+		// 排队中的 follow 让位：取消它，下一分钟的 follow 在新运行结束后再生成。
+		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '让位给整段重读、补拉区间或导入'
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'follow' AND c_status = 'queued'`, fmtTime(now), spaceID, datasetID); err != nil {
 			return err
 		}
-		// 立即运行、补拉区间：任务有排队中或运行中的运行就冲突。
-		// 导入：只在有运行中的运行、或已有一条排队中的导入时冲突；排队中的复核、立即运行、补拉不挡导入
-		// （长回补期间复核要排几个小时）。同一任务不会并行执行，由 ClaimRuns 跳过已有运行中运行的任务保证。
-		blocking := `SELECT COUNT(*) FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ? AND c_status IN ('queued', 'running')`
-		if spec.Kind == KindImport {
-			blocking = `SELECT COUNT(*) FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ? AND (c_status = 'running' OR (c_status = 'queued' AND c_kind = 'import'))`
-		}
-		var active int
-		if err := tx.QueryRowContext(ctx, blocking, spaceID, datasetID).Scan(&active); err != nil {
+		blocking, err := scanRun(tx.QueryRowContext(ctx, queryRunsBlocking, spaceID, datasetID))
+		switch {
+		case err == nil:
+			return &ConflictError{Blocking: blocking}
+		case !errors.Is(err, sql.ErrNoRows):
 			return err
-		}
-		if active > 0 {
-			return ErrConflict
 		}
 		created, err := insertRun(ctx, tx, spaceID, datasetID, spec, now)
 		run = created
@@ -161,9 +157,9 @@ func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
 	return run, err
 }
 
-// ListRuns 按计划时刻倒序分页列出运行；spaceID、datasetID、status 为空表示不限；includeTicks 为假时不列成功的到点拉取。
-func (s *Store) ListRuns(ctx context.Context, spaceID, datasetID, status string, includeTicks bool, limit, offset int) ([]Run, int, error) {
-	args := []any{spaceID, spaceID, datasetID, datasetID, status, status, includeTicks}
+// ListRuns 按计划时刻倒序分页列出运行；spaceID、datasetID、status 为空表示不限；includeFollow 为假时不列成功的 follow。
+func (s *Store) ListRuns(ctx context.Context, spaceID, datasetID, status string, includeFollow bool, limit, offset int) ([]Run, int, error) {
+	args := []any{spaceID, spaceID, datasetID, datasetID, status, status, includeFollow}
 	var total int
 	if err := s.db.QueryRowContext(ctx, queryRunsCount, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -207,9 +203,9 @@ func (s *Store) LastRuns(ctx context.Context, spaceID string) (map[string]Run, e
 	return s.lastRuns(ctx, queryRuns4, spaceID)
 }
 
-// LastReviewRuns 返回每个任务最近一次复核或手动运行（按计划时刻），健康等级按它判断耗时。
-func (s *Store) LastReviewRuns(ctx context.Context, spaceID string) (map[string]Run, error) {
-	return s.lastRuns(ctx, queryRuns8, spaceID)
+// LastFollowSuccesses 返回每个任务最近一次成功的 follow 或 manual（按计划时刻），健康规则据它的消息判断整段重读是否进行中。
+func (s *Store) LastFollowSuccesses(ctx context.Context, spaceID string) (map[string]Run, error) {
+	return s.lastRuns(ctx, queryRunsFollowSuccess, spaceID)
 }
 
 func (s *Store) lastRuns(ctx context.Context, query, spaceID string) (map[string]Run, error) {
@@ -295,7 +291,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 			return err
 		}
 		busy := req.BusyStorageRuns
-		// 同一任务同时只执行一条运行：导入可以和排队中的复核并存，领取时跳过已有运行中运行的任务（含本次刚领到的）。
+		// 同一任务同时只执行一条运行：新运行可以排在运行中的 follow 后面，领取时跳过已有运行中运行的任务（含本次刚领到的）。
 		runningTasks := map[string]bool{}
 		taskRows, err := tx.QueryContext(ctx, `SELECT DISTINCT c_space_id, c_dataset_id FROM t_archive_runs WHERE c_status = 'running'`)
 		if err != nil {
@@ -326,7 +322,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 			if err != nil {
 				return err
 			}
-			// 导入读的是 worker 本机的 CSV，不读 Storage 时序数据（只取一次列信息），不占读 Storage 的并发名额（否则长回补期间导入要排几个小时）。
+			// 导入的行由 moox-cli 经数据端口写来，不读 Storage 时序数据（只取一次列信息），不占读 Storage 的并发名额。
 			readsStorage := run.Kind != KindImport
 			if readsStorage && req.MaxStorageRuns > 0 && busy >= req.MaxStorageRuns {
 				continue
@@ -399,14 +395,13 @@ func (s *Store) RunningRunIDsCanceled(ctx context.Context, runIDs []string) ([]s
 	return out, nil
 }
 
-// CleanupRuns 按保留期清理运行记录：成功的到点拉取用 tickSuccess，成功的复核用 scheduledSuccess，其余用 other。
-func (s *Store) CleanupRuns(ctx context.Context, now time.Time, tickSuccess, scheduledSuccess, other time.Duration) (int, error) {
+// CleanupRuns 按保留期清理运行记录：成功的 follow 用 followSuccess，失败与取消的 follow 用 followOtherRetention，其余用 other。
+func (s *Store) CleanupRuns(ctx context.Context, now time.Time, followSuccess, other time.Duration) (int, error) {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM t_archive_runs WHERE c_status IN ('succeeded', 'failed', 'canceled') AND c_finished_at IS NOT NULL AND
-((c_kind = 'tick' AND c_status = 'succeeded' AND c_finished_at < ?)
-OR (c_kind = 'scheduled' AND c_status = 'succeeded' AND c_finished_at < ?)
-OR (c_kind = 'tick' AND c_status != 'succeeded' AND c_finished_at < ?)
-OR (c_kind != 'tick' AND NOT (c_kind = 'scheduled' AND c_status = 'succeeded') AND c_finished_at < ?))`,
-		fmtTime(now.Add(-tickSuccess)), fmtTime(now.Add(-scheduledSuccess)), fmtTime(now.Add(-tickOtherRetention)), fmtTime(now.Add(-other)))
+((c_kind = 'follow' AND c_status = 'succeeded' AND c_finished_at < ?)
+OR (c_kind = 'follow' AND c_status != 'succeeded' AND c_finished_at < ?)
+OR (c_kind != 'follow' AND c_finished_at < ?))`,
+		fmtTime(now.Add(-followSuccess)), fmtTime(now.Add(-followOtherRetention)), fmtTime(now.Add(-other)))
 	if err != nil {
 		return 0, err
 	}
@@ -414,8 +409,8 @@ OR (c_kind != 'tick' AND NOT (c_kind = 'scheduled' AND c_status = 'succeeded') A
 	return int(affected), nil
 }
 
-// tickOtherRetention 是失败、取消的到点拉取的保留期：每分钟可能一条，按其余运行的 90 天保留会堆积十几万条，拖慢每分钟的检查。
-const tickOtherRetention = 7 * 24 * time.Hour
+// followOtherRetention 是失败、取消的 follow 的保留期：每分钟可能一条，按其余运行的 90 天保留会堆积十几万条，拖慢每分钟的检查。
+const followOtherRetention = 7 * 24 * time.Hour
 
 // CountQueued 返回排队中的运行数。
 func (s *Store) CountQueued(ctx context.Context) (int, error) {
@@ -440,14 +435,17 @@ const (
 	queryRuns1 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_run_id = ?`
 	queryRuns3 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_status IN ('queued', 'running') AND (? = '' OR c_space_id = ?)
 ORDER BY c_scheduled_at`
-	// 最近一次运行：从任务表出发（每个任务一次索引查找），不随运行记录（每分钟一条 tick）变多而变慢。
+	// 最近一次运行：从任务表出发（每个任务一次索引查找），不随运行记录（每分钟一条 follow）变多而变慢。
 	queryRuns4 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_id IN (SELECT (SELECT x.c_id FROM t_archive_runs x
 WHERE x.c_space_id = t.c_space_id AND x.c_dataset_id = t.c_dataset_id ORDER BY x.c_scheduled_at DESC, x.c_id DESC LIMIT 1)
 FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
-	queryRuns8 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_id IN (SELECT (SELECT x.c_id FROM t_archive_runs x
-WHERE x.c_space_id = t.c_space_id AND x.c_dataset_id = t.c_dataset_id AND x.c_kind IN ('scheduled', 'manual')
+	queryRunsFollowSuccess = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_id IN (SELECT (SELECT x.c_id FROM t_archive_runs x
+WHERE x.c_space_id = t.c_space_id AND x.c_dataset_id = t.c_dataset_id AND x.c_kind IN ('follow', 'manual') AND x.c_status = 'succeeded'
 ORDER BY x.c_scheduled_at DESC, x.c_id DESC LIMIT 1)
 FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
+	// 挡住新的 manual、range、import 的运行（排队中或运行中、不是 follow 的）。
+	queryRunsBlocking = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ?
+AND c_status IN ('queued', 'running') AND c_kind != 'follow' ORDER BY c_scheduled_at LIMIT 1`
 	queryRuns6 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_status = 'queued' ORDER BY c_scheduled_at, c_id`
 	queryRuns7 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`
 )
@@ -455,7 +453,7 @@ FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
 // 运行列表的筛选条件固定，spaceID、datasetID、status 为空表示不限。
 const (
 	runsFilter = `(? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND (? = '' OR c_status = ?)
-AND (? OR c_kind != 'tick' OR c_status != 'succeeded')`
+AND (? OR c_kind != 'follow' OR c_status != 'succeeded')`
 	queryRunsCount = `SELECT COUNT(*) FROM t_archive_runs WHERE ` + runsFilter
 	queryRunsList  = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE ` + runsFilter + ` ORDER BY c_scheduled_at DESC, c_id DESC LIMIT ? OFFSET ?`
 )

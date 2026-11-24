@@ -57,11 +57,10 @@ const task = (over: Partial<ArchiveTask> = {}): ArchiveTask => ({
   dataset_id: "ds_1m",
   freq: "1m",
   retention: "840h",
-  pull_every_bars: 1,
   status: "enabled",
-  next_pull_at: "2026-11-07T04:41:25Z",
+  last_success_at: "2026-11-07T04:41:25Z",
   health: "warning",
-  health_reason: "最近一次复核失败：Storage 超时",
+  health_reason: "最近一次运行失败：Storage 超时",
   partition_count: 3,
   ...over
 });
@@ -140,7 +139,7 @@ describe("归档任务页", () => {
 
   it("健康原因直接写在单元格里", async () => {
     const page = await mountPage();
-    expect(page.find(".reason").text()).toBe("最近一次复核失败：Storage 超时");
+    expect(page.find(".reason").text()).toBe("最近一次运行失败：Storage 超时");
   });
 
   it("?task= 指向不存在的任务时不打开抽屉，提示并清掉参数", async () => {
@@ -218,10 +217,12 @@ describe("任务表", () => {
     expect(wrapper.emitted("remove")).toBeUndefined();
   });
 
-  it("下次拉取到分钟、悬停看到秒，都带后缀", async () => {
+  it("跟随列写每分钟跟随；最近成功到分钟、悬停看到秒，都带后缀", async () => {
     wrapper = mount(TaskTable, { props: { ...props, tasks: [task()] }, global: { plugins: [ArcoVue] } });
     await flushPromises();
-    expect(wrapper.text()).toContain("每收盘 1 根 · 下次 2026-11-07 04:41 UTC");
-    expect(wrapper.find('[title="下次拉取 2026-11-07 04:41:25 UTC"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("每分钟跟随变更日志");
+    expect(wrapper.text()).toContain("最近成功 2026-11-07 04:41 UTC");
+    expect(wrapper.find('[title="2026-11-07 04:41:25 UTC"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("整段重读");
   });
 });

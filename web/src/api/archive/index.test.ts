@@ -23,14 +23,9 @@ describe("归档接口封装", () => {
         { dataset_id: "ds", dir_name: "binance-spot-1m" }
       ],
       [
-        () => archive.previewArchiveSchedule({ dataset_id: "ds", pull_every_bars: 5 }),
-        "PreviewArchiveSchedule",
-        { dataset_id: "ds", pull_every_bars: 5 }
-      ],
-      [
-        () => archive.createArchiveTask({ dataset_id: "ds", pull_every_bars: 1, backfill_from: "", paused: false, dir_name: "" }),
+        () => archive.createArchiveTask({ dataset_id: "ds", backfill_from: "", paused: false, dir_name: "" }),
         "CreateArchiveTask",
-        { dataset_id: "ds", pull_every_bars: 1, backfill_from: "", paused: false, dir_name: "" }
+        { dataset_id: "ds", backfill_from: "", paused: false, dir_name: "" }
       ],
       [
         () => archive.updateArchiveTask({ dataset_id: "ds", status: "paused" }),
@@ -46,9 +41,9 @@ describe("归档接口封装", () => {
       ],
       [() => archive.cancelArchiveRun("r1"), "CancelArchiveRun", { run_id: "r1" }],
       [
-        () => archive.listArchiveRuns({ dataset_id: "ds", include_ticks: true, page: { page: 1, size: 50 } }),
+        () => archive.listArchiveRuns({ dataset_id: "ds", include_follow: true, page: { page: 1, size: 50 } }),
         "ListArchiveRuns",
-        { dataset_id: "ds", include_ticks: true, page: { page: 1, size: 50 } }
+        { dataset_id: "ds", include_follow: true, page: { page: 1, size: 50 } }
       ],
       [
         () => archive.listArchivePartitions({ dataset_id: "ds", from_month: "2026-10", page: { page: 1, size: 50 } }),
@@ -61,7 +56,7 @@ describe("归档接口封装", () => {
         { dataset_id: "ds", partition_key: "2026-11-07" }
       ]
     ];
-    expect(cases).toHaveLength(14);
+    expect(cases).toHaveLength(13);
     for (const [run, method, body] of cases) {
       await run();
       const [service, called, req] = lastCall();

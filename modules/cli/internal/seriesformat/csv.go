@@ -12,19 +12,20 @@ import (
 	"time"
 )
 
-func init() { Register(csvDecoder{}) }
+// SeriesTagColumn 是文件里可选的 series_tag 列名；SubjectColumn 是多标的文件的标的列名。
+const (
+	SeriesTagColumn = "series_tag"
+	SubjectColumn   = "subject_id"
+)
 
-// SeriesTagColumn 是文件里可选的 series_tag 列名。
-const SeriesTagColumn = "series_tag"
-
-type csvDecoder struct{}
-
-func (csvDecoder) Format() string { return "csv" }
-
-// Open 读取 CSV：第一行是表头，必须有时间列与数据集的全部字段，可选 series_tag 列；
-// 空单元格表示该行该字段为空（NULL）。时间按 UTC 解析：没有时区的视为 UTC，带时区的转换为 UTC；
-// 也接受秒或毫秒的 Unix 时间戳。
-func (csvDecoder) Open(r io.Reader, opts Options) (BatchReader, error) {
+// OpenCSV 读取 CSV（gzip 压缩的按魔数自动解压）：第一行是表头，必须有时间列与数据集的全部字段，可选 series_tag 列，
+// opts.SubjectColumn 为真时可选 subject_id 列；空单元格表示该行该字段为空（NULL）。时间按 UTC 解析：没有时区的视为 UTC，
+// 带时区的转换为 UTC；也接受秒、毫秒或纳秒的 Unix 时间戳。
+func OpenCSV(r io.Reader, opts Options) (BatchReader, error) {
+	r, err := Decompress(r)
+	if err != nil {
+		return nil, err
+	}
 	reader := csv.NewReader(r)
 	reader.FieldsPerRecord = -1
 	reader.ReuseRecord = true
@@ -53,9 +54,16 @@ func (csvDecoder) Open(r io.Reader, opts Options) (BatchReader, error) {
 	if hasTag && opts.SeriesTag != "" {
 		return nil, fmt.Errorf("指定了统一的 series_tag，文件里不能再有 %s 列", SeriesTagColumn)
 	}
+	if opts.RequireSeriesTag && !hasTag && opts.SeriesTag == "" {
+		return nil, fmt.Errorf("写归档时 series_tag 必须非空：文件里加 %s 列，或用 --series-tag 统一指定", SeriesTagColumn)
+	}
+	subjectPos, hasSubject := positions[SubjectColumn]
+	if hasSubject && !opts.SubjectColumn {
+		return nil, fmt.Errorf("文件里有 %s 列（多标的文件）：多标的文件只能只写归档（--target archive），且不能给 --subject", SubjectColumn)
+	}
 	fieldPos := make([]int, len(opts.Fields))
 	var missing []string
-	used := map[string]struct{}{timeName: {}, SeriesTagColumn: {}}
+	used := map[string]struct{}{timeName: {}, SeriesTagColumn: {}, SubjectColumn: {}}
 	for i, f := range opts.Fields {
 		pos, ok := positions[f.Name]
 		if !ok {
@@ -79,18 +87,20 @@ func (csvDecoder) Open(r io.Reader, opts Options) (BatchReader, error) {
 		sort.Strings(unknown)
 		return nil, &ErrUnknownColumns{Columns: unknown}
 	}
-	return &csvReader{r: reader, opts: opts, timePos: timePos, tagPos: tagPos, hasTag: hasTag, fieldPos: fieldPos, line: 1}, nil
+	return &csvReader{r: reader, opts: opts, timePos: timePos, tagPos: tagPos, hasTag: hasTag, subjectPos: subjectPos, hasSubject: hasSubject, fieldPos: fieldPos, line: 1}, nil
 }
 
 type csvReader struct {
-	r        *csv.Reader
-	opts     Options
-	timePos  int
-	tagPos   int
-	hasTag   bool
-	fieldPos []int
-	line     int
-	closed   bool
+	r          *csv.Reader
+	opts       Options
+	timePos    int
+	tagPos     int
+	hasTag     bool
+	subjectPos int
+	hasSubject bool
+	fieldPos   []int
+	line       int
+	closed     bool
 }
 
 func (c *csvReader) Close() error { c.closed = true; return nil }
@@ -100,8 +110,8 @@ func (c *csvReader) Next(max int) (*Batch, error) {
 		return nil, errClosed
 	}
 	batch := NewBatch(c.opts.Fields, max)
-	for i := range batch.Cols {
-		batch.Cols[i] = Column{}
+	if c.hasSubject {
+		batch.Subjects = make([]string, 0, max)
 	}
 	for batch.Len() < max {
 		record, err := c.r.Read()
@@ -125,6 +135,19 @@ func (c *csvReader) Next(max int) (*Batch, error) {
 		tag := c.opts.SeriesTag
 		if c.hasTag && c.tagPos < len(record) {
 			tag = strings.TrimSpace(record[c.tagPos])
+		}
+		if tag == "" && c.opts.RequireSeriesTag {
+			return nil, fmt.Errorf("第 %d 行的 %s 为空（写归档时必须非空）", c.line, SeriesTagColumn)
+		}
+		if c.hasSubject {
+			subject := ""
+			if c.subjectPos < len(record) {
+				subject = strings.TrimSpace(record[c.subjectPos])
+			}
+			if subject == "" {
+				return nil, fmt.Errorf("第 %d 行的 %s 为空", c.line, SubjectColumn)
+			}
+			batch.Subjects = append(batch.Subjects, subject)
 		}
 		batch.appendRow(at, tag)
 		for i, f := range c.opts.Fields {

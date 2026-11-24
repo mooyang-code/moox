@@ -76,8 +76,8 @@ func TestRelayAllowlistOnlyOnControl(t *testing.T) {
 	require.True(t, ok)
 }
 
-// 归档 worker 部署在出站主机上时，它的数据端口只对 console 开放，monitor 与 moox-cli 打不开。
-func TestRelayDataPortOnlyForConsole(t *testing.T) {
+// 归档 worker 部署在出站主机上时，它的数据端口只对 console（下载与预览）与 moox-cli（导入写入）开放，monitor 打不开。
+func TestRelayDataPortOnlyForConsoleAndCLI(t *testing.T) {
 	raw := testsnapshot.NewWithOutbound(t, "control", "home")
 	testsnapshot.Deployment(t, raw, "control", "archive-worker").HostId = "home"
 	testsnapshot.Rehash(t, raw)
@@ -87,7 +87,7 @@ func TestRelayDataPortOnlyForConsole(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, relay.Allowed("console", archiveDataPort))
 	require.False(t, relay.Allowed("monitor", archiveDataPort))
-	require.False(t, relay.Allowed("moox-cli", archiveDataPort))
+	require.True(t, relay.Allowed("moox-cli", archiveDataPort))
 	require.True(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
 	require.Len(t, relay.Ports, 2)
 

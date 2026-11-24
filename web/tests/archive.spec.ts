@@ -30,8 +30,7 @@ test("建归档任务：目录名默认建议值、路径预览、冲突标红�
   const dirInput = drawer.locator(".arco-input-wrapper input").first();
   await expect(dirInput).toHaveValue("binance-spot-kline-5m");
   await expect(drawer).toContainText("/data/moox/archive/crypto/collect/binance-spot-kline-5m/<yyyy>/<yyyymmdd>.csv.gz");
-  await expect(drawer).toContainText("每小时 :58:00～:04:00 不拉取，这段时间的边界顺延到 :04:25");
-  await expect(drawer.getByText("接下来 5 次拉取")).toBeVisible();
+  await expect(drawer).toContainText("创建后每分钟按 Storage 的变更日志跟随");
   // 改成已有任务的目录名：防抖后检查，标红
   await dirInput.fill("binance-spot-kline-1m");
   await expect(drawer).toContainText("目录名已被「现货 1 分钟 K 线」使用，请改一个");
@@ -87,12 +86,12 @@ test("分区下载：已校验的直接下载（同源带 Cookie，不取票据�
   });
 });
 
-test("最新数据：标的进 URL，表头写读取水位，更早翻页带 before", async ({ page }) => {
+test("最新数据：标的进 URL，表头写最近一次跟随，更早翻页带 before", async ({ page }) => {
   await page.goto("/#/archive/tasks?task=ds_kline_1m&tab=recent&subject=BTC-USDT");
   const drawer = page.locator(".arco-drawer");
   await expect(drawer.locator(".arco-tabs-tab-active")).toHaveText("最新数据");
-  await expect(drawer).toContainText("暂存库已从 Storage 读到");
-  await expect(drawer).toContainText("之后的行可能还没读到");
+  await expect(drawer).toContainText("最近一次跟随");
+  await expect(drawer).toContainText("之后写进 Storage 的行可能还没进暂存库");
   const rows = drawer.locator(".task-recent tbody tr");
   await expect(rows).toHaveCount(200);
   expect(calls.bodies.RecentRows?.at(-1)).toMatchObject({ space: "crypto", dataset: "ds_kline_1m", subject: "BTC-USDT" });

@@ -23,8 +23,9 @@ type Config struct {
 	sourcePath    string                   `yaml:"-"`
 	Database      DatabaseConfig           `yaml:"database"`
 	Run           RunConfig                `yaml:"run"`
-	Schedule      ScheduleConfig           `yaml:"schedule"`
-	Retention     RetentionConfig          `yaml:"retention"`
+	// AllowedLateness 是分区收盘后再等多久才导出（允许迟到的写入）。
+	AllowedLateness time.Duration   `yaml:"allowed_lateness"`
+	Retention       RetentionConfig `yaml:"retention"`
 	// StagingRetention 是 worker 暂存区保留最近多久的数据，之后分区定稿。
 	StagingRetention time.Duration `yaml:"staging_retention"`
 	// Spaces 是各空间的时区与本地收盘时刻；没有配置的空间按 UTC、全天交易处理。
@@ -41,16 +42,10 @@ type RunConfig struct {
 	LeaseTTL time.Duration `yaml:"lease_ttl"`
 }
 
-// ScheduleConfig 是复核的读取规则（拉取边界与检查节奏是代码常量，见 schedule 包）。
-type ScheduleConfig struct {
-	// MinLookback 是复核从水位往前回看的最少时长 L。
-	MinLookback time.Duration `yaml:"min_lookback"`
-}
-
-// RetentionConfig 是 mgr 库中运行记录的保留期。
+// RetentionConfig 是 mgr 库中运行记录的保留期：Other 是 manual、range、import 与失败、取消的运行
+// （follow 的保留期是代码常量：成功 24 小时，失败与取消 7 天）。
 type RetentionConfig struct {
-	ScheduledSuccess time.Duration `yaml:"scheduled_success"`
-	Other            time.Duration `yaml:"other"`
+	Other time.Duration `yaml:"other"`
 }
 
 // SpaceConfig 描述一个空间的交易日历属性。
@@ -93,8 +88,8 @@ func Default() *Config {
 		GatewayClient:    gatewayclient.FileConfig{Caller: Caller, KeyFile: "../../secrets/host.key"},
 		Database:         DatabaseConfig{Path: "./data/archive-mgr/archive.db"},
 		Run:              RunConfig{LeaseTTL: 10 * time.Minute},
-		Schedule:         ScheduleConfig{MinLookback: 15 * time.Minute},
-		Retention:        RetentionConfig{ScheduledSuccess: 30 * 24 * time.Hour, Other: 90 * 24 * time.Hour},
+		AllowedLateness:  15 * time.Minute,
+		Retention:        RetentionConfig{Other: 90 * 24 * time.Hour},
 		StagingRetention: 72 * time.Hour,
 		Spaces: map[string]SpaceConfig{
 			"crypto":  {TZ: "UTC"},
@@ -128,11 +123,11 @@ func (c *Config) Validate() error {
 	if c.Run.LeaseTTL < time.Minute {
 		return fmt.Errorf("run.lease_ttl 不能小于 1 分钟")
 	}
-	if c.Schedule.MinLookback < 15*time.Minute {
-		return fmt.Errorf("schedule.min_lookback 不能小于 15 分钟")
+	if c.AllowedLateness < 15*time.Minute {
+		return fmt.Errorf("allowed_lateness 不能小于 15 分钟")
 	}
-	if c.Retention.ScheduledSuccess < 24*time.Hour || c.Retention.Other < c.Retention.ScheduledSuccess {
-		return fmt.Errorf("retention.scheduled_success 至少 1 天，retention.other 不能小于它")
+	if c.Retention.Other < 7*24*time.Hour {
+		return fmt.Errorf("retention.other 不能小于 7 天")
 	}
 	if c.StagingRetention < 24*time.Hour {
 		return fmt.Errorf("staging_retention 不能小于 1 天")

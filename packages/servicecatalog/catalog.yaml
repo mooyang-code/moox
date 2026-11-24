@@ -606,9 +606,6 @@ components:
           - name: PrepareArchiveTask
             read_only: true
             callers: [monitor]
-          - name: PreviewArchiveSchedule
-            read_only: true
-            callers: [monitor]
           - name: CreateArchiveTask
           - name: UpdateArchiveTask
           - name: DeleteArchiveTask
@@ -627,10 +624,8 @@ components:
           - name: GetArchivePartition
             read_only: true
             callers: [monitor]
-          # CSV 导入与清除无法补齐区间：只给 moox-cli（导入要经 SSH 把文件传到 worker 所在主机）。
-          - name: PrepareArchiveImport
-            operators: [moox-cli]
-          - name: ImportArchiveFile
+          # moox-cli import 的归档目标建导入运行（行经 worker 数据端口写入），以及清除无法补齐区间：只给 moox-cli。
+          - name: StartArchiveImport
             operators: [moox-cli]
           - name: ClearArchiveUnrecoverable
             operators: [moox-cli]
@@ -1148,11 +1143,12 @@ components:
     external_program: true
     health:
       port: 11418
-    # 数据端口只听 127.0.0.1：分区副本下载与最新数据预览，只给控制台经 Admin 使用（只出站主机上经 control 中转）。
+    # 数据端口只听 127.0.0.1（只出站主机上经 control 中转）：分区下载与最新数据预览给控制台（经 Admin），导入写入给 moox-cli。
     relay_http:
       port: 11428
       callers:
         - console
+        - moox-cli
     doctor:
       transport: delegated
       functional_observability: deferred

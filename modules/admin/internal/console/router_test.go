@@ -594,8 +594,7 @@ func TestStorageTopLevelSpaceMethodsMatchProto(t *testing.T) {
 func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/admin/sysdeploy/SyncTopology",
-		"/api/admin/archive/PrepareArchiveImport",
-		"/api/admin/archive/ImportArchiveFile",
+		"/api/admin/archive/StartArchiveImport",
 		"/api/admin/archive/ClearArchiveUnrecoverable",
 	} {
 		store, current := setupSessionTest(t)

@@ -48,7 +48,7 @@ func (*storageOperationsWire) GetSubject(context.Context, *pb.GetSubjectReq) (*p
 }
 
 func (*storageOperationsWire) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq) (*pb.ListDatasetColumnsRsp, error) {
-	return &pb.ListDatasetColumnsRsp{RetInfo: &pb.RetInfo{}, Columns: []*pb.DatasetColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}}, nil
+	return &pb.ListDatasetColumnsRsp{RetInfo: &pb.RetInfo{}, Columns: []*pb.DatasetColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD}}}, nil
 }
 
 func (*storageOperationsWire) ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq) (*pb.ListDatasetSubjectsRsp, error) {

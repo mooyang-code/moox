@@ -58,7 +58,7 @@ func preflight(t *testing.T, dir string, limits importPackLimits) []string {
 	}
 	problems := checkImportPackFiles(pack)
 	summary, err := runner.Run(t.Context(), runner.Request{
-		Space: pack.SpaceID, Dataset: pack.DatasetID, Freq: pack.Freq, Paths: pack.paths(), Format: "csv", Step: 5 * time.Minute, DryRun: true,
+		Space: pack.SpaceID, Dataset: pack.DatasetID, Freq: pack.Freq, Paths: pack.paths(), Step: 5 * time.Minute, DryRun: true,
 	}, runner.Meta{Fields: []seriesformat.Field{{Name: "close", Type: seriesformat.TypeDouble}, {Name: "volume", Type: seriesformat.TypeDouble}}}, nil, nil)
 	if err != nil {
 		t.Fatalf("校验扫描：%v", err)

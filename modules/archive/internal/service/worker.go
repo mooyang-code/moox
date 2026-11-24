@@ -92,11 +92,11 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition) *arc
 		RunId: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Kind: c.Run.Kind, SpaceId: c.Task.SpaceID, DatasetId: c.Task.DatasetID,
 		Purpose: c.Task.Purpose, DirName: c.Task.DirName,
 		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, Retention: c.Task.Retention,
-		IntervalSeconds: uint32(c.Task.IntervalSeconds), MinLookbackSeconds: uint32(s.cfg.Schedule.MinLookback / time.Second),
-		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
+		AllowedLatenessSeconds: uint32(s.cfg.AllowedLateness / time.Second),
+		SpaceTz:                spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
 		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskId: strconv.FormatInt(c.Task.ID, 10), DatasetMetaJson: c.Task.MetaJSON, LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
-		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports, ImportFile: c.Run.ImportFile, Overwrite: c.Run.Overwrite,
+		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports,
 	}
 }
 
