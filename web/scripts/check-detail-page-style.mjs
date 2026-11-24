@@ -13,7 +13,6 @@ const pageShellFiles = [
   "src/views/data/subjects/index.vue",
   "src/views/data/fields/index.vue",
   "src/views/data/view-browse/index.vue",
-  "src/views/factor/overview/index.vue",
   "src/views/factor/definitions/index.vue",
   "src/views/factor/editor/index.vue",
   "src/views/factor/task-management/index.vue",
