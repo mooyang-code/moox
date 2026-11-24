@@ -28,7 +28,7 @@ var healthMetricSuffixes = []string{
 }
 
 var healthMetricNames = map[string]struct{}{
-	AttentionMetric: {},
+	AttentionMetric:                                                            {},
 	ArchiveTaskHealthMetric:                                                    {},
 	ArchiveObjectStoreStateMetric:                                              {},
 	"moox_collector_market_fetch_assignment_required":                          {},
