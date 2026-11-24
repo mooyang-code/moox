@@ -220,12 +220,20 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneFillCursors(s.Account.FillCursors)
+	var goneSymbols []exchange.SymbolKey
 	for _, key := range symbols {
 		rows, cursor, listErr := s.Adapter.ListRecentFills(
 			ctx,
 			key,
 			cursors[key.String()],
 		)
+		if exchange.IsInstrumentNotFound(listErr) {
+			// 标的已下架：和账户同步一样跳过、成交游标原样保留，补不上的成交缺口由入账快照收掉。
+			// 在这里断开的话每次重连都撞同一个错，会话永远起不来。
+			log.WarnContextf(ctx, "标的 %s 在交易所已不存在，跳过成交查询：account=%s", key, s.Account.TradingAccountID)
+			goneSymbols = append(goneSymbols, key)
+			continue
+		}
 		if listErr != nil {
 			return s.disconnect(ctx, listErr)
 		}
@@ -241,7 +249,8 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	s.opMu.Lock()
 	_, err = s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
-		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors, Ready: false,
+		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors,
+		GoneSymbols: goneSymbols, Ready: false,
 		Prices: s.Adapter,
 	})
 	s.opMu.Unlock()

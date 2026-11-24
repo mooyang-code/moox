@@ -510,3 +510,126 @@ func TestPaperSessionSkipsSymbolConfig(t *testing.T) {
 	require.NoError(t, session.EnsureSymbolConfig(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), shared.MustDecimal("3")))
 	require.Empty(t, scripted.callSnapshot())
 }
+
+// goneFillsSessionAdapter 模拟有一个已下架标的的交易所：查它的成交回“标的不存在”，其余照常；私有流只订阅、不推事件。
+type goneFillsSessionAdapter struct {
+	*scriptedSessionAdapter
+}
+
+func (a goneFillsSessionAdapter) ListRecentFills(
+	_ context.Context,
+	key exchange.SymbolKey,
+	cursor string,
+) ([]exchange.Fill, string, error) {
+	if key.Symbol == "DEAD-USDT" {
+		return nil, cursor, &exchange.Error{
+			Kind: exchange.ErrorRejected, HTTPStatus: 400, Code: exchange.CodeBinanceInvalidSymbol,
+		}
+	}
+	return nil, "9", nil
+}
+
+func (a goneFillsSessionAdapter) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
+	handler.OnSubscribed()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-a.disconnect:
+		return err
+	}
+}
+
+// 账户里留着一笔已下架标的的未结束订单，还带着成交缺口：会话启动拉成交时交易所回“标的不存在”，
+// 不能因此断开（否则每次重连都撞同一个错，会话永远起不来）。要和账户同步一样跳过这个标的、
+// 保留它的成交游标、收掉补不上的成交缺口，账户照常就绪。
+func TestExchangeSessionStartsWithDelistedInstrumentOrder(t *testing.T) {
+	tradeStore := openRuntimeStore(t)
+	account := seedRuntimeAccount(t, tradeStore)
+	ctx, cancel := context.WithCancel(context.Background())
+	limit := "1"
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: "DEAD-USDT",
+			InstrumentID: "DEADUSDT", BaseAsset: "DEAD", QuoteAsset: "USDT",
+			SettlementAsset: "USDT", Linear: true, ContractValue: "1",
+			ContractValueAsset: "DEAD", ExchangeQuantityStep: "1",
+			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "LIVE",
+			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "gone-open", TradingAccountID: "account-1", ClientOrderID: "gone-open-client",
+			ExchangeOrderID: "7", MarketType: "SWAP", ExchangeSymbol: "DEAD-USDT", OrderType: "LIMIT",
+			TimeInForce: "GTC", Side: "SELL", PositionSide: "NET", Quantity: "2", LimitPrice: &limit,
+			ReferencePrice: "1", ReferencePriceAt: 1_000, ReduceOnly: true, OwnerType: "OPERATOR", OwnerID: "delist-1",
+			LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0", ReservedAsset: "USDT",
+			ReservedQuantity: "5", RemainingReservedQuantity: "5", SubmittedAt: time.Now().UnixMilli(), Version: 1,
+		}); err != nil {
+			return err
+		}
+		return tx.UpdateTradingAccountFacts(
+			"space-1", "account-1", store.FillCursors{"SWAP:DEAD-USDT": "41"}, account.Snapshot, 1, 1,
+		)
+	}))
+	adapter := goneFillsSessionAdapter{&scriptedSessionAdapter{disconnect: make(chan error, 1)}}
+	syncService := &accountsync.Service{
+		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
+		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
+	}
+	// 订单更新报了部分成交、明细没入账：留下成交缺口，标的下架后再也补不上。
+	orderLimit := shared.MustDecimal("1")
+	require.NoError(t, syncService.ApplyOrder(ctx, "account-1", exchange.Order{
+		Market: exchange.MarketTypeSwap, ExchangeSymbol: "DEAD-USDT", ClientOrderID: "gone-open-client",
+		ExchangeOrderID: "7", OrderType: exchange.OrderTypeLimit, Side: exchange.SideSell,
+		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("2"), LimitPrice: &orderLimit,
+		FilledQuantity: shared.MustDecimal("1"), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+	}))
+	gaps, err := tradeStore.CountOrdersWithFillGap(ctx, "space-1", "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, gaps, "前提：下架标的的单带着成交缺口")
+
+	session := &ExchangeSession{
+		Account: account, Adapter: adapter, Sync: syncService, SyncInterval: time.Hour,
+	}
+	done := make(chan error, 1)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("session did not stop before store cleanup")
+		}
+	})
+	go func() { done <- session.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		select {
+		case runErr := <-done:
+			done <- runErr
+			t.Errorf("会话启动时断开了：%v", runErr)
+			return true
+		default:
+			return session.Ready()
+		}
+	}, 2*time.Second, 10*time.Millisecond)
+	require.True(t, session.Ready())
+	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, stored.Ready, "缺口收掉后账户要就绪：%s", stored.LastError)
+	require.Equal(t, "41", stored.FillCursors["SWAP:DEAD-USDT"], "下架标的的成交游标原样保留")
+	gaps, err = tradeStore.CountOrdersWithFillGap(context.Background(), "space-1", "account-1")
+	require.NoError(t, err)
+	require.Zero(t, gaps)
+}
