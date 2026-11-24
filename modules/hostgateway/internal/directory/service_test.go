@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testrpc"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testsnapshot"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	pb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	pb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"

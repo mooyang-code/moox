@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

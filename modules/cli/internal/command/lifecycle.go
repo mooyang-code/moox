@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
+	"github.com/mooyang-code/moox/modules/cli/internal/sysctl"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/sysctl"
 	"github.com/spf13/cobra"
 )
 

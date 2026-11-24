@@ -31,6 +31,15 @@ __pycache__/
 
 # Go workspace file
 go.work.sum
+# 本机遗留的校验和文件，Go 工具链不读它，仓库里也没有引用
+/go.work.pin.sum
+
+# 系统与本机工具产生的文件
+.DS_Store
+.zcode/
+
+# 执行计划只留在本机，不进 Git
+docs/计划/
 
 # env file
 .env
@@ -126,3 +135,5 @@ docs/.vitepress/cache/
 
 # 误执行 go build 产生的二进制
 sdk/rust/target/
+/modules/importer/
+/tools/zstddict/zstddict

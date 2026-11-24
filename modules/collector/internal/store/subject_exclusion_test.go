@@ -31,11 +31,11 @@ func TestSubjectExclusionsSetUpdateExpireAndClear(t *testing.T) {
 	require.True(t, active[1].Excludes("spot"), "不填市场表示该空间所有市场")
 
 	// 重复设置更新原因与到期时间。
-	require.NoError(t, repo.Set(ctx, []SubjectExclusion{{SpaceID: "crypto", SubjectID: "ETH-USDT", Reason: "延长", Caller: "collector-operator", CreatedAt: now, ExpiresAt: now.Add(2 * time.Hour)}}))
+	require.NoError(t, repo.Set(ctx, []SubjectExclusion{{SpaceID: "crypto", SubjectID: "ETH-USDT", Reason: "延长", Caller: "moox-cli", CreatedAt: now, ExpiresAt: now.Add(2 * time.Hour)}}))
 	active, _ = repo.Active(ctx, "crypto", now.Add(90*time.Minute))
 	require.Len(t, active, 2)
 	require.Equal(t, "延长", active[1].Reason)
-	require.Equal(t, "collector-operator", active[1].Caller)
+	require.Equal(t, "moox-cli", active[1].Caller)
 	// 到期自动失效。
 	active, _ = repo.Active(ctx, "crypto", now.Add(2*time.Hour))
 	require.Len(t, active, 1)

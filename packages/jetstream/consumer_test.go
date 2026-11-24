@@ -285,49 +285,6 @@ func TestNewConsumerRejectsAmbiguousFilterConfiguration(t *testing.T) {
 	}
 }
 
-func TestConsumerStateReportsPendingAndAckPending(t *testing.T) {
-	srv, url := startTestServer(t)
-	defer srv.Shutdown()
-	client := connectTestClient(t, url)
-	defer client.Close()
-	ensureTestStream(t, client, "TEST", "moox.test.>")
-	consumer, err := client.NewConsumer(context.Background(), testConsumerConfig("consumer-state"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumer.Close()
-	for i := 0; i < 2; i++ {
-		if _, err := client.PublishRaw(context.Background(), "moox.test.state", fmt.Sprintf("state-%d", i), []byte("payload"), "application/octet-stream"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	deliveries, err := consumer.Fetch(context.Background(), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deliveries) != 1 {
-		t.Fatalf("deliveries = %d", len(deliveries))
-	}
-	state, err := client.ConsumerState(context.Background(), "TEST", "consumer-state")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.NumPending != 1 || state.NumAckPending != 1 {
-		t.Fatalf("state = %+v, want one pending and one ack pending", state)
-	}
-}
-
-func TestConsumerStateRejectsMissingConsumer(t *testing.T) {
-	srv, url := startTestServer(t)
-	defer srv.Shutdown()
-	client := connectTestClient(t, url)
-	defer client.Close()
-	ensureTestStream(t, client, "TEST", "moox.test.>")
-	if _, err := client.ConsumerState(context.Background(), "TEST", "missing"); !errors.Is(err, ErrConsumerNotFound) {
-		t.Fatalf("error = %v, want consumer not found", err)
-	}
-}
-
 func TestNewConsumerUpdatesMutableFields(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()

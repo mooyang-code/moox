@@ -4,7 +4,6 @@ go 1.27.3
 
 require (
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
@@ -61,10 +60,7 @@ require (
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../gatewayauth
 
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../gatewayroute/proto/gatewayroutegen
-
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../servicecatalog
-
 
 replace github.com/mooyang-code/moox/packages/security => ../security
 

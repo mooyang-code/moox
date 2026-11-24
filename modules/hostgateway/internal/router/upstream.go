@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/rpcconn"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
-	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
@@ -36,9 +35,7 @@ func (u *Upstream) Forward(parent context.Context, route servicecatalog.Route, s
 		client.WithTransport(u.transport), client.WithPool(u.pool), client.WithMultiplexed(false),
 		client.WithTimeout(time.Duration(route.TimeoutMS) * time.Millisecond), client.WithDialTimeout(time.Duration(route.TimeoutMS) * time.Millisecond),
 	}
-	if route.ReadOnly {
-		options = append(options, client.WithFilter(trpcretry.ReadOnly()))
-	}
+	// 网关只转发一次：只读调用的重发由调用方的 gatewayclient 负责，这里再重试会让一次失败放大成多次上游请求。
 	// metadata 已由路由层筛过：外面带进来的 x-moox- 头不在里面。
 	for key, value := range metadata {
 		options = append(options, client.WithMetaData(key, append([]byte(nil), value...)))

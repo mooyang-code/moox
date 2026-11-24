@@ -6,8 +6,8 @@
     "methods": 332,
     "read_only_methods": 150,
     "retryable_methods": 151,
-    "callers": 23,
-    "principals": 3
+    "callers": 22,
+    "principals": 2
   },
   "services": [
     {
@@ -2243,7 +2243,6 @@
       "trpc.moox.storage.PrimaryStore/RegisterSeriesSnapshot",
       "trpc.moox.storage.PrimaryStore/UpsertFields"
     ],
-    "collector-operator": [],
     "collector-stream": [
       "trpc.moox.collector.StreamCollector/PullStreamPlan",
       "trpc.moox.collector.StreamCollector/ReportStreamPeriods",
@@ -2971,12 +2970,6 @@
     ]
   },
   "principals": {
-    "collector-operator": [
-      "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
-      "trpc.moox.collector.CollectMgr/ListSubjectExclusions",
-      "trpc.moox.collector.CollectMgr/SetSubjectExclusions",
-      "trpc.moox.collector.CollectMgr/SyncSubjects"
-    ],
     "moox-skill": [
       "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
     ],

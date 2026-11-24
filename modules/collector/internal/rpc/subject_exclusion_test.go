@@ -40,13 +40,13 @@ func TestSubjectExclusionsSetListClearAndLogActivity(t *testing.T) {
 	}
 
 	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
-	rsp, err := service.SetSubjectExclusions(ctx, &pb.SetSubjectExclusionsReq{SpaceId: "Crypto", SubjectIds: []string{"btc-usdt", "ETH-USDT", "btc-usdt"}, MarketType: "swap", Reason: "公告下架", Operator: "collector-operator", ExpiresAt: expires})
+	rsp, err := service.SetSubjectExclusions(ctx, &pb.SetSubjectExclusionsReq{SpaceId: "Crypto", SubjectIds: []string{"btc-usdt", "ETH-USDT", "btc-usdt"}, MarketType: "swap", Reason: "公告下架", Operator: "moox-cli", ExpiresAt: expires})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Len(t, rsp.GetExclusions(), 2)
 	require.Equal(t, "BTC-USDT", rsp.GetExclusions()[0].GetSubjectId())
 	require.Equal(t, "swap", rsp.GetExclusions()[0].GetMarketType())
-	require.Equal(t, "collector-operator", rsp.GetExclusions()[0].GetOperator())
+	require.Equal(t, "moox-cli", rsp.GetExclusions()[0].GetOperator())
 	require.Equal(t, expires, rsp.GetExclusions()[0].GetExpiresAt())
 	require.Len(t, activity.entries, 1)
 	require.Equal(t, "collector.subject_change", activity.entries[0].Category)

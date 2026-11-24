@@ -9,8 +9,8 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	commonsrc "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
+	tdxwire "github.com/mooyang-code/moox/modules/collector/internal/tdx"
 	"github.com/mooyang-code/moox/packages/barclock"
-	tdxwire "github.com/mooyang-code/moox/packages/tdx"
 )
 
 type Config struct {

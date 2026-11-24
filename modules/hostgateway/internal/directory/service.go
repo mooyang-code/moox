@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
-	pb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	pb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
 )

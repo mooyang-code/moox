@@ -7,7 +7,7 @@ export interface Space {
   name: string;
   description?: string;
   owner?: string;
-  /** 市场，如 crypto、CN、HK、US。 */
+  /** 市场，取值见种子 config/setup/metadata.yaml：crypto、CN、HK、US。 */
   market?: string;
   /** 展示时区（IANA 名称）：页面上这个空间的时间按它显示。 */
   timezone?: string;

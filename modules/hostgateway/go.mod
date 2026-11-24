@@ -10,13 +10,11 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/trpcretry v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/protobuf v1.36.12
@@ -93,11 +91,7 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 
 replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
 
-
-replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
-
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
-
 
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 
@@ -113,8 +107,6 @@ replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
-
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
@@ -124,8 +116,6 @@ replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonp
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
 
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
-
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 

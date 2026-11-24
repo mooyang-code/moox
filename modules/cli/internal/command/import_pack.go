@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/seriesimport/runner"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/runner"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 

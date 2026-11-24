@@ -18,7 +18,6 @@ require (
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
@@ -140,8 +139,6 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metric
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
-
 replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
@@ -158,14 +155,11 @@ replace github.com/mooyang-code/moox/packages/factorname => ../../packages/facto
 
 replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 
-
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 
 replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
 
 replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
-
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 

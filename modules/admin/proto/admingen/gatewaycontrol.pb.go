@@ -264,7 +264,7 @@ func (x *SnapshotDeployment) GetEnabled() bool {
 	return false
 }
 
-// 不属于主机的身份：moox-cli、scf-collector、moox-skill、collector-operator。
+// 不属于主机的身份：moox-cli、scf-collector、moox-skill。
 type SnapshotIdentity struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

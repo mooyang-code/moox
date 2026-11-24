@@ -16,7 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
-	tdxwire "github.com/mooyang-code/moox/packages/tdx"
+	tdxwire "github.com/mooyang-code/moox/modules/collector/internal/tdx"
 	"github.com/stretchr/testify/require"
 )
 

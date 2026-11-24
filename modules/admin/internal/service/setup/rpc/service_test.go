@@ -101,7 +101,6 @@ func TestApplySetupRejectsMissingSections(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, response.GetRetInfo().GetCode())
 }
 
-
 func TestSetupMapsExchangeKeysAndNeverEchoesTheirValues(t *testing.T) {
 	keys := []*pb.SetupExchangeKey{
 		{Name: "readonly", Exchange: "binance", Environment: "production", ApiKey: "recognizable-api-key", SecretKey: "recognizable-exchange-secret", Readonly: true},
