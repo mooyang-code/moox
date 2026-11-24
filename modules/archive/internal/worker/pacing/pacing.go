@@ -1,6 +1,6 @@
 // Package pacing 让归档 worker 读取 Storage 时不与行情写入抢资源：每分钟只在第 25～55 秒发起请求（避开采集函数在第 0 秒的
 // 触发与写入），每小时 :58～:04 不发（避开 1h 及以上数据集在整点的集中收盘），所有运行共用一个带宽令牌桶。
-// 两个窗口写死在 internal/schedule，与 mgr 的整点跳过同一份；只有每分钟的秒窗口可用 pacing.minute_window 关掉。
+// 两个窗口写死在 internal/schedule；只有每分钟的秒窗口可用 pacing.minute_window 关掉。整点窗口内的 follow 只做导出与定稿。
 package pacing
 
 import (

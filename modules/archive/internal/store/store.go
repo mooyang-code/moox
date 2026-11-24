@@ -47,13 +47,12 @@ const (
 	RunFailed    = "failed"
 	RunCanceled  = "canceled"
 
-	// KindScheduled 是复核（每小时或每天一次，推进水位）；KindManual 是立即运行（同复核）；
-	// KindTick 是到点拉取（读下发区间、不推进水位）；KindRange 是补拉区间；KindImport 见下。
-	KindScheduled = "scheduled"
-	KindManual    = "manual"
-	KindTick      = "tick"
-	KindRange     = "range"
-	// KindImport 是导入 moox-cli 上传的本地 CSV（不经 Storage、不推进水位、不更新最近成功时间）。
+	// KindFollow 是 mgr 每分钟生成的跟随运行（按 Storage 变更日志读改动过的行并导出定稿）；
+	// KindManual 是整段重读线上保留期；KindRange 是补拉区间；
+	// KindImport 是 moox-cli import 的归档目标（经 worker 数据端口写入暂存区，不推进位点、不更新最近成功时间）。
+	KindFollow = "follow"
+	KindManual = "manual"
+	KindRange  = "range"
 	KindImport = "import"
 
 	PartitionOpen     = "open"

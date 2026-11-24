@@ -22,8 +22,6 @@ type MgrService struct{ svc *Service }
 const (
 	defaultPageSize = 50
 	maxPageSize     = 200
-	previewPulls    = 5
-	previewReviews  = 3
 	timeSeriesKind  = "time_series"
 	datasetActive   = "active"
 )
@@ -89,31 +87,25 @@ func validateBackfill(value, retention string, now time.Time) (time.Time, error)
 	return backfill, nil
 }
 
-// pullEveryBars 校验用户填写的 N：0 取 fallback；1d 及以上每天一次，固定存 1。
-func pullEveryBars(freq string, requested uint32, fallback int) (int, error) {
-	daily, err := schedule.Daily(freq)
+// createBackfill 返回新任务的归档起点：没填时取「现在 − 线上保留期 + 1 天」（首次运行整段读线上保留期），
+// 保留期为 forever 时必须填写；填了的按 validateBackfill 校验。
+func createBackfill(value, retention string, now time.Time) (time.Time, error) {
+	if strings.TrimSpace(value) != "" {
+		return validateBackfill(value, retention, now)
+	}
+	earliest, ok, err := earliestBackfill(retention, now)
 	if err != nil {
-		return 0, err
+		return time.Time{}, err
 	}
-	n := int(requested)
-	if n == 0 {
-		n = fallback
+	if !ok {
+		return time.Time{}, fmt.Errorf("%w：线上保留期为 forever 的数据集必须填写回补起点", ErrInvalidBackfill)
 	}
-	if err := schedule.ValidatePullEveryBars(n); err != nil {
-		return 0, err
+	// 向上取整到秒（与 clampToEarliest 同一口径），保存的值不早于下界。
+	start := earliest.Truncate(time.Second)
+	if start.Before(earliest) {
+		start = start.Add(time.Second)
 	}
-	if daily {
-		return 1, nil
-	}
-	// 步长不超过一天：步长太长时到点拉取要读的根数会超出线上保留期，被截断后误记为无法补齐。
-	span, err := schedule.BarSpan(freq)
-	if err != nil {
-		return 0, err
-	}
-	if span*time.Duration(n) > 24*time.Hour {
-		return 0, fmt.Errorf("pull_every_bars × 频率不能超过 1 天：%s × %d", freq, n)
-	}
-	return n, nil
+	return start, nil
 }
 
 // earliestBackfill 返回回补起点的下限；保留期为 forever 时返回 false。
@@ -163,15 +155,7 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	interval, err := schedule.ReviewInterval(ds.Freq)
-	if err != nil {
-		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
-	}
-	n, err := pullEveryBars(ds.Freq, req.GetPullEveryBars(), schedule.DefaultPullEveryBars)
-	if err != nil {
-		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
-	}
-	backfill, err := validateBackfill(req.GetBackfillFrom(), ds.Retention, s.clock())
+	backfill, err := createBackfill(req.GetBackfillFrom(), ds.Retention, s.clock())
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
@@ -187,7 +171,7 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	task := store.Task{
 		MetaJSON: metaJSON(ds), Purpose: purposeOf(ds), DirName: dirName,
 		SpaceID: space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
-		PullEveryBars: n, IntervalSeconds: int(interval / time.Second), BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "console",
+		BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "console",
 	}
 	if req.GetPaused() {
 		task.Status = store.StatusPaused
@@ -203,7 +187,7 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 		}
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
-	return &archivepb.CreateArchiveTaskRsp{RetInfo: success(), Task: s.taskToPB(created, s.clock())}, nil
+	return &archivepb.CreateArchiveTaskRsp{RetInfo: success(), Task: s.taskToPB(created)}, nil
 }
 
 func datasetError(err error) *commonpb.RetInfo {
@@ -234,24 +218,13 @@ func (m *MgrService) UpdateArchiveTask(ctx context.Context, req *archivepb.Updat
 	default:
 		return &archivepb.UpdateArchiveTaskRsp{RetInfo: invalid(fmt.Errorf("status %q 无效，只能是 enabled 或 paused", req.GetStatus()))}, nil
 	}
-	n, err := pullEveryBars(task.Freq, req.GetPullEveryBars(), task.PullEveryBars)
-	if err != nil {
-		return &archivepb.UpdateArchiveTaskRsp{RetInfo: invalid(err)}, nil
-	}
 	now := s.clock()
-	// 用户没改回补起点时保留原值（即使它已超出保留期），首次回补尚未完成时不能被改丢；只有改了才校验。
-	backfill := task.BackfillFrom
-	if req.GetBackfillFrom() != "" {
-		if backfill, err = validateBackfill(req.GetBackfillFrom(), task.Retention, now); err != nil {
-			return &archivepb.UpdateArchiveTaskRsp{RetInfo: invalid(err)}, nil
-		}
-	}
-	update := store.TaskUpdate{PullEveryBars: n, BackfillFrom: backfill, Status: status, ClearUnrecoverable: req.GetClearUnrecoverable()}
+	update := store.TaskUpdate{Status: status, ClearUnrecoverable: req.GetClearUnrecoverable()}
 	updated, err := s.store.UpdateTask(ctx, space, req.GetDatasetId(), update, now)
 	if err != nil {
 		return &archivepb.UpdateArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
-	return &archivepb.UpdateArchiveTaskRsp{RetInfo: success(), Task: s.taskToPB(updated, now)}, nil
+	return &archivepb.UpdateArchiveTaskRsp{RetInfo: success(), Task: s.taskToPB(updated)}, nil
 }
 
 func (m *MgrService) DeleteArchiveTask(ctx context.Context, req *archivepb.DeleteArchiveTaskReq) (*archivepb.DeleteArchiveTaskRsp, error) {
@@ -281,9 +254,6 @@ func (m *MgrService) RunArchiveTaskNow(ctx context.Context, req *archivepb.RunAr
 	}
 	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindManual}, s.clock())
 	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			return &archivepb.RunArchiveTaskNowRsp{RetInfo: conflict(errors.New("任务已有排队中或运行中的运行"))}, nil
-		}
 		return &archivepb.RunArchiveTaskNowRsp{RetInfo: fail(err)}, nil
 	}
 	return &archivepb.RunArchiveTaskNowRsp{RetInfo: success(), Run: runToPB(run)}, nil
@@ -338,9 +308,6 @@ func (m *MgrService) BackfillArchiveRange(ctx context.Context, req *archivepb.Ba
 	}
 	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindRange, RangeStart: start, RangeEnd: end}, now)
 	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			return &archivepb.BackfillArchiveRangeRsp{RetInfo: conflict(errors.New("任务已有排队中或运行中的运行"))}, nil
-		}
 		return &archivepb.BackfillArchiveRangeRsp{RetInfo: fail(err)}, nil
 	}
 	return &archivepb.BackfillArchiveRangeRsp{RetInfo: success(), Run: runToPB(run)}, nil
@@ -368,7 +335,7 @@ func (m *MgrService) ListArchiveRuns(ctx context.Context, req *archivepb.ListArc
 		return &archivepb.ListArchiveRunsRsp{RetInfo: invalid(err)}, nil
 	}
 	page, size, offset := pageOf(req.GetPage())
-	runs, total, err := m.svc.store.ListRuns(ctx, space, req.GetDatasetId(), req.GetStatus(), req.GetIncludeTicks(), size, offset)
+	runs, total, err := m.svc.store.ListRuns(ctx, space, req.GetDatasetId(), req.GetStatus(), req.GetIncludeFollow(), size, offset)
 	if err != nil {
 		return &archivepb.ListArchiveRunsRsp{RetInfo: inner(err)}, nil
 	}
@@ -456,10 +423,7 @@ func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.Prep
 	if err != nil {
 		return &archivepb.PrepareArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	rsp := &archivepb.PrepareArchiveTaskRsp{
-		RetInfo: success(), Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention,
-		RecommendedPullEveryBars: schedule.DefaultPullEveryBars,
-	}
+	rsp := &archivepb.PrepareArchiveTaskRsp{RetInfo: success(), Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention}
 	if earliest, ok, _ := earliestBackfill(ds.Retention, s.clock()); ok {
 		rsp.EarliestBackfillFrom = fmtRFC(earliest)
 	}
@@ -484,74 +448,6 @@ func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.Prep
 	}
 	rsp.DirNameConflict = taken && holder != ds.DatasetID
 	return rsp, nil
-}
-
-func (m *MgrService) PreviewArchiveSchedule(ctx context.Context, req *archivepb.PreviewArchiveScheduleReq) (*archivepb.PreviewArchiveScheduleRsp, error) {
-	s := m.svc
-	space, err := resolveSpace(ctx, req.GetSpaceId(), true)
-	if err != nil {
-		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
-	}
-	ds, err := s.loadArchivableDataset(ctx, space, req.GetDatasetId())
-	if err != nil {
-		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: datasetError(err)}, nil
-	}
-	n, err := pullEveryBars(ds.Freq, req.GetPullEveryBars(), schedule.DefaultPullEveryBars)
-	if err != nil {
-		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
-	}
-	interval, err := schedule.ReviewInterval(ds.Freq)
-	if err != nil {
-		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
-	}
-	span, err := schedule.ReadSpan(interval, s.cfg.Schedule.MinLookback, ds.Freq)
-	if err != nil {
-		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
-	}
-	now := s.clock()
-	timing := s.timing(space, ds.Freq, n)
-	pulls, err := schedule.NextPulls(timing, now, previewPulls)
-	if err != nil {
-		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
-	}
-	reviews, err := schedule.NextReviews(timing, now, previewReviews)
-	if err != nil {
-		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
-	}
-	rsp := &archivepb.PreviewArchiveScheduleRsp{RetInfo: success(), IntervalSeconds: uint32(interval / time.Second), ReadSpanSeconds: uint32(span / time.Second)}
-	for _, t := range pulls {
-		rsp.NextRuns = append(rsp.NextRuns, fmtRFC(t))
-	}
-	for _, t := range reviews {
-		rsp.NextReviews = append(rsp.NextReviews, fmtRFC(t))
-	}
-	rsp.PartitionExportEstimates = s.exportEstimates(space, ds, timing, now)
-	return rsp, nil
-}
-
-// exportEstimates 给出上一个分区与当前分区预计的导出时间：收盘 + 最少回看之后的第一次拉取或复核。
-func (s *Service) exportEstimates(space string, ds Dataset, timing schedule.Timing, now time.Time) []string {
-	unit, err := schedule.PartitionUnit(ds.Freq)
-	if err != nil {
-		return nil
-	}
-	spaceCfg := s.cfg.Space(space)
-	currentKey, currentStart, currentEnd := schedule.PartitionOf(unit, timing.Loc, now)
-	previousKey, previousStart, previousEnd := schedule.PartitionOf(unit, timing.Loc, currentStart.Add(-time.Second))
-	var out []string
-	for _, c := range []struct {
-		key        string
-		start, end time.Time
-	}{{previousKey, previousStart, previousEnd}, {currentKey, currentStart, currentEnd}} {
-		closeAt, err := schedule.PartitionClose(unit, timing.Loc, spaceCfg.LocalClose, ds.Freq, c.start, c.end)
-		if err != nil {
-			continue
-		}
-		if at, err := schedule.ExportEstimate(timing, closeAt, s.cfg.Schedule.MinLookback); err == nil {
-			out = append(out, fmt.Sprintf("分区 %s：预计 %s 导出", c.key, fmtRFC(at)))
-		}
-	}
-	return out
 }
 
 func (m *MgrService) ListArchiveTasks(ctx context.Context, req *archivepb.ListArchiveTasksReq) (*archivepb.ListArchiveTasksRsp, error) {
@@ -579,7 +475,7 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	if err != nil {
 		return nil, err
 	}
-	lastReviews, err := s.store.LastReviewRuns(ctx, space)
+	lastFollows, err := s.store.LastFollowSuccesses(ctx, space)
 	if err != nil {
 		return nil, err
 	}
@@ -613,18 +509,18 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	out := make([]*archivepb.ArchiveTask, 0, len(tasks))
 	for _, task := range tasks {
 		key := task.SpaceID + "/" + task.DatasetID
-		view := s.taskToPB(task, now)
+		view := s.taskToPB(task)
 		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerLastSeen: status.lastSeen,
-			Lookback: s.cfg.Schedule.MinLookback, SpaceTZ: s.cfg.Space(task.SpaceID).TZ, SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose,
+			Lateness: s.cfg.AllowedLateness, SpaceTZ: s.cfg.Space(task.SpaceID).TZ, SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose,
 			RemoteEnabled: status.remoteEnabled, Remote: backlogs[key]}
 		if run, ok := lastRuns[key]; ok {
 			copied := run
 			in.LastRun = &copied
 			view.LastRun = runToPB(run)
 		}
-		if run, ok := lastReviews[key]; ok {
+		if run, ok := lastFollows[key]; ok {
 			copied := run
-			in.LastReview = &copied
+			in.LastFollow = &copied
 		}
 		if sum, ok := sums[key]; ok {
 			view.PartitionCount, view.FileCount, view.TotalRows, view.TotalFileBytes = uint32(sum.Partitions), uint32(sum.Files), sum.Rows, sum.FileBytes
@@ -726,5 +622,67 @@ func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArc
 		rsp.Alerts = append(rsp.Alerts, "归档 worker 不在线")
 	}
 	sort.Strings(rsp.Alerts)
+	return rsp, nil
+}
+
+// onlineWorker 返回在线的 worker；不在线时报错。
+func (s *Service) onlineWorker(ctx context.Context) (store.Worker, error) {
+	w, ok, err := s.store.GetWorker(ctx)
+	if err != nil {
+		return store.Worker{}, err
+	}
+	if !ok || !workerOnline(w, s.clock()) {
+		return store.Worker{}, errors.New("归档 worker 不在线，无法导入")
+	}
+	return w, nil
+}
+
+// StartArchiveImport 为 moox-cli import 的归档目标建一条导入运行：任务存在、worker 在线才建；
+// 任务有排队中或运行中的整段重读、补拉区间或导入时返回冲突，并写明挡住它的运行。
+func (m *MgrService) StartArchiveImport(ctx context.Context, req *archivepb.StartArchiveImportReq) (*archivepb.StartArchiveImportRsp, error) {
+	s := m.svc
+	space, err := resolveSpace(ctx, req.GetSpaceId(), true)
+	if err != nil {
+		return &archivepb.StartArchiveImportRsp{RetInfo: invalid(err)}, nil
+	}
+	if _, err := s.store.GetTask(ctx, space, req.GetDatasetId()); err != nil {
+		return &archivepb.StartArchiveImportRsp{RetInfo: fail(err)}, nil
+	}
+	worker, err := s.onlineWorker(ctx)
+	if err != nil {
+		return &archivepb.StartArchiveImportRsp{RetInfo: conflict(err)}, nil
+	}
+	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindImport}, s.clock())
+	if err != nil {
+		return &archivepb.StartArchiveImportRsp{RetInfo: fail(err)}, nil
+	}
+	return &archivepb.StartArchiveImportRsp{RetInfo: success(), Run: runToPB(run), WorkerId: worker.WorkerID}, nil
+}
+
+func (m *MgrService) ClearArchiveUnrecoverable(ctx context.Context, req *archivepb.ClearArchiveUnrecoverableReq) (*archivepb.ClearArchiveUnrecoverableRsp, error) {
+	s := m.svc
+	space, err := resolveSpace(ctx, req.GetSpaceId(), true)
+	if err != nil {
+		return &archivepb.ClearArchiveUnrecoverableRsp{RetInfo: invalid(err)}, nil
+	}
+	start, err := parseRFC("start", req.GetStart())
+	var end time.Time
+	if err == nil {
+		end, err = parseRFC("end", req.GetEnd())
+	}
+	if err == nil && (start.IsZero() || end.IsZero() || !start.Before(end)) {
+		err = errors.New("start、end 都必填，且 start 必须早于 end")
+	}
+	if err != nil {
+		return &archivepb.ClearArchiveUnrecoverableRsp{RetInfo: invalid(err)}, nil
+	}
+	removed, err := s.store.ClearUnrecoverable(ctx, space, req.GetDatasetId(), start, end)
+	if err != nil {
+		return &archivepb.ClearArchiveUnrecoverableRsp{RetInfo: fail(err)}, nil
+	}
+	rsp := &archivepb.ClearArchiveUnrecoverableRsp{RetInfo: success()}
+	for _, item := range removed {
+		rsp.Removed = append(rsp.Removed, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})
+	}
 	return rsp, nil
 }

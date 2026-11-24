@@ -23,9 +23,15 @@ type Range struct {
 	Columns   []staging.Column
 	Start     time.Time
 	End       time.Time
-	Cursor    string
-	PageRows  int
+	// Subjects 非空时只读这些标的（每个标的一个 selector，最多 MaxSelectors 个），Freq 是它们的频率；为空时读区间内全部标的。
+	Subjects []string
+	Freq     string
+	Cursor   string
+	PageRows int
 }
+
+// MaxSelectors 是 ReadTimeSeriesRows 一次最多带的 selector 数（Storage 的上限）。
+const MaxSelectors = 100
 
 // Page 是一页结果。
 type Page struct {
@@ -141,8 +147,11 @@ func columnType(t storagepb.FieldValueType) (string, bool) {
 	}
 }
 
-// ReadRange 读取时间区间 [Start, End) 的一页：不指定标的，按游标翻页。
+// ReadRange 读取时间区间 [Start, End) 的一页：Subjects 为空时不指定标的，否则按标的读；按游标翻页。
 func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
+	if len(req.Subjects) > MaxSelectors {
+		return Page{}, fmt.Errorf("read rows %s/%s: 一次最多读 %d 个标的，当前 %d 个", req.SpaceID, req.DatasetID, MaxSelectors, len(req.Subjects))
+	}
 	names := make([]string, len(req.Columns))
 	for i, col := range req.Columns {
 		names[i] = col.Name
@@ -152,6 +161,9 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 		SpaceId: req.SpaceID, DatasetId: req.DatasetID, ColumnNames: names,
 		TimeRange: &storagepb.TimeRange{StartTime: req.Start.UTC().Format(time.RFC3339Nano), EndTime: req.End.UTC().Format(time.RFC3339Nano)},
 		Page:      &commonpb.Page{Size: uint32(req.PageRows), Cursor: req.Cursor},
+	}
+	for _, subject := range req.Subjects {
+		call.Selectors = append(call.Selectors, &storagepb.TimeSeriesSelector{SpaceId: req.SpaceID, DatasetId: req.DatasetID, SubjectId: subject, Freq: req.Freq})
 	}
 	if err := c.gateway.Invoke(gatewayclient.WithoutRetry(ctx), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", call, rsp); err != nil {
 		return Page{}, fmt.Errorf("read rows %s/%s: %w", req.SpaceID, req.DatasetID, err)
@@ -175,7 +187,7 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 			if !ok {
 				continue
 			}
-			value, err := convert(req.Columns[i].Type, field.GetValue())
+			value, err := Convert(req.Columns[i].Type, field.GetValue())
 			if err != nil {
 				return Page{}, fmt.Errorf("row %s@%s column %s: %w", row.GetKey().GetSubjectId(), row.GetKey().GetDataTime(), field.GetFieldId(), err)
 			}
@@ -198,10 +210,16 @@ type ChangeCursor struct {
 	Sequence uint64
 }
 
+// ChangeSpan 是一次写入对一个标的造成的变更范围（含两端，UTC）。
+type ChangeSpan struct {
+	SubjectID  string
+	Start, End time.Time
+}
+
 // Changes 是变更日志的一页。
 type Changes struct {
-	// Spans 是这一页里时间序列行写入涉及的时间范围（含两端，UTC），不分标的。
-	Spans [][2]time.Time
+	// Spans 是这一页里时间序列行写入涉及的标的与时间范围。
+	Spans []ChangeSpan
 	// Next 是已扫描到的位点，原样用作下一次读取的游标。
 	Next    ChangeCursor
 	HasMore bool
@@ -211,8 +229,8 @@ type Changes struct {
 	Bytes int64
 }
 
-// changePageLimit 是一页最多扫描的日志条数（Storage 的上限）。
-const changePageLimit = 2000
+// changePageLimit 是一页最多扫描的日志条数：一页的范围小一些，读完行、推进位点更快。
+const changePageLimit = 200
 
 // ReadChanges 从游标之后读一页数据集的变更日志；cursor 为 nil 时只取日志头部的位点。
 func (c *Client) ReadChanges(ctx context.Context, spaceID, datasetID string, cursor *ChangeCursor) (Changes, error) {
@@ -239,14 +257,14 @@ func (c *Client) ReadChanges(ctx context.Context, spaceID, datasetID string, cur
 			if startErr != nil || endErr != nil {
 				return Changes{}, fmt.Errorf("read dataset changes %s/%s: 无效的时间范围 %q-%q", spaceID, datasetID, r.GetStartTime(), r.GetEndTime())
 			}
-			out.Spans = append(out.Spans, [2]time.Time{start.UTC(), end.UTC()})
+			out.Spans = append(out.Spans, ChangeSpan{SubjectID: r.GetSubjectId(), Start: start.UTC(), End: end.UTC()})
 		}
 	}
 	return out, nil
 }
 
-// convert 把 Storage 的值转换成暂存列类型对应的 Go 值；缺失或 null 返回 nil。
-func convert(columnType string, value *storagepb.TypedValue) (any, error) {
+// Convert 把 Storage 的值转换成暂存列类型对应的 Go 值；缺失或 null 返回 nil。读 Storage 与导入批次共用这一套规则。
+func Convert(columnType string, value *storagepb.TypedValue) (any, error) {
 	if value == nil || value.GetValue() == nil {
 		return nil, nil
 	}

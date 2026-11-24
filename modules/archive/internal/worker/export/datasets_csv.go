@@ -20,7 +20,7 @@ var datasetsCSVHeader = []string{"space_id", "purpose", "dir_name", "dataset_id"
 // datasetsCSVMu 让同一进程里刷新对照表的调用串行（Files 是值类型，锁放在包级）。
 var datasetsCSVMu sync.Mutex
 
-// WriteDatasetsCSV 扫描 <root>/<space>/<purpose>/<dir_name>/dataset.json（各级都跳过点开头的目录，如 .state、.import），
+// WriteDatasetsCSV 扫描 <root>/<space>/<purpose>/<dir_name>/dataset.json（各级都跳过点开头的目录，如 .state），
 // 生成根目录的 datasets.csv（列 space_id,purpose,dir_name,dataset_id,name,freq，按前三列排序）；内容没变时不重写。
 // 先写唯一的临时文件（.partial 结尾，残留由 CleanPartials 清掉）再改名。对照表只在本地，不上传对象存储。
 func (f Files) WriteDatasetsCSV() error {

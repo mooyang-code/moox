@@ -26,8 +26,6 @@ type ArchiveMgrService interface {
 
 	PrepareArchiveTask(ctx context.Context, req *PrepareArchiveTaskReq) (*PrepareArchiveTaskRsp, error)
 
-	PreviewArchiveSchedule(ctx context.Context, req *PreviewArchiveScheduleReq) (*PreviewArchiveScheduleRsp, error)
-
 	CreateArchiveTask(ctx context.Context, req *CreateArchiveTaskReq) (*CreateArchiveTaskRsp, error)
 
 	UpdateArchiveTask(ctx context.Context, req *UpdateArchiveTaskReq) (*UpdateArchiveTaskRsp, error)
@@ -48,9 +46,7 @@ type ArchiveMgrService interface {
 
 	GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq) (*GetArchivePartitionRsp, error)
 
-	PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq) (*PrepareArchiveImportRsp, error)
-
-	ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq) (*ImportArchiveFileRsp, error)
+	StartArchiveImport(ctx context.Context, req *StartArchiveImportReq) (*StartArchiveImportRsp, error)
 
 	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq) (*ClearArchiveUnrecoverableRsp, error)
 	// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
@@ -104,24 +100,6 @@ func ArchiveMgrService_PrepareArchiveTask_Handler(svr interface{}, ctx context.C
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(ArchiveMgrService).PrepareArchiveTask(ctx, reqbody.(*PrepareArchiveTaskReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func ArchiveMgrService_PreviewArchiveSchedule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PreviewArchiveScheduleReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ArchiveMgrService).PreviewArchiveSchedule(ctx, reqbody.(*PreviewArchiveScheduleReq))
 	}
 
 	var rsp interface{}
@@ -312,32 +290,14 @@ func ArchiveMgrService_GetArchivePartition_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func ArchiveMgrService_PrepareArchiveImport_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrepareArchiveImportReq{}
+func ArchiveMgrService_StartArchiveImport_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &StartArchiveImportReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ArchiveMgrService).PrepareArchiveImport(ctx, reqbody.(*PrepareArchiveImportReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func ArchiveMgrService_ImportArchiveFile_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ImportArchiveFileReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ArchiveMgrService).ImportArchiveFile(ctx, reqbody.(*ImportArchiveFileReq))
+		return svr.(ArchiveMgrService).StartArchiveImport(ctx, reqbody.(*StartArchiveImportReq))
 	}
 
 	var rsp interface{}
@@ -420,10 +380,6 @@ var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: ArchiveMgrService_PrepareArchiveTask_Handler,
 		},
 		{
-			Name: "/trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
-			Func: ArchiveMgrService_PreviewArchiveSchedule_Handler,
-		},
-		{
 			Name: "/trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
 			Func: ArchiveMgrService_CreateArchiveTask_Handler,
 		},
@@ -464,12 +420,8 @@ var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: ArchiveMgrService_GetArchivePartition_Handler,
 		},
 		{
-			Name: "/trpc.moox.archive.ArchiveMgr/PrepareArchiveImport",
-			Func: ArchiveMgrService_PrepareArchiveImport_Handler,
-		},
-		{
-			Name: "/trpc.moox.archive.ArchiveMgr/ImportArchiveFile",
-			Func: ArchiveMgrService_ImportArchiveFile_Handler,
+			Name: "/trpc.moox.archive.ArchiveMgr/StartArchiveImport",
+			Func: ArchiveMgrService_StartArchiveImport_Handler,
 		},
 		{
 			Name: "/trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
@@ -620,9 +572,6 @@ func (s *UnimplementedArchiveMgr) ListArchiveTasks(ctx context.Context, req *Lis
 func (s *UnimplementedArchiveMgr) PrepareArchiveTask(ctx context.Context, req *PrepareArchiveTaskReq) (*PrepareArchiveTaskRsp, error) {
 	return nil, errors.New("rpc PrepareArchiveTask of service ArchiveMgr is not implemented")
 }
-func (s *UnimplementedArchiveMgr) PreviewArchiveSchedule(ctx context.Context, req *PreviewArchiveScheduleReq) (*PreviewArchiveScheduleRsp, error) {
-	return nil, errors.New("rpc PreviewArchiveSchedule of service ArchiveMgr is not implemented")
-}
 func (s *UnimplementedArchiveMgr) CreateArchiveTask(ctx context.Context, req *CreateArchiveTaskReq) (*CreateArchiveTaskRsp, error) {
 	return nil, errors.New("rpc CreateArchiveTask of service ArchiveMgr is not implemented")
 }
@@ -653,11 +602,8 @@ func (s *UnimplementedArchiveMgr) ListArchivePartitions(ctx context.Context, req
 func (s *UnimplementedArchiveMgr) GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq) (*GetArchivePartitionRsp, error) {
 	return nil, errors.New("rpc GetArchivePartition of service ArchiveMgr is not implemented")
 }
-func (s *UnimplementedArchiveMgr) PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq) (*PrepareArchiveImportRsp, error) {
-	return nil, errors.New("rpc PrepareArchiveImport of service ArchiveMgr is not implemented")
-}
-func (s *UnimplementedArchiveMgr) ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq) (*ImportArchiveFileRsp, error) {
-	return nil, errors.New("rpc ImportArchiveFile of service ArchiveMgr is not implemented")
+func (s *UnimplementedArchiveMgr) StartArchiveImport(ctx context.Context, req *StartArchiveImportReq) (*StartArchiveImportRsp, error) {
+	return nil, errors.New("rpc StartArchiveImport of service ArchiveMgr is not implemented")
 }
 func (s *UnimplementedArchiveMgr) ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq) (*ClearArchiveUnrecoverableRsp, error) {
 	return nil, errors.New("rpc ClearArchiveUnrecoverable of service ArchiveMgr is not implemented")
@@ -704,8 +650,6 @@ type ArchiveMgrClientProxy interface {
 
 	PrepareArchiveTask(ctx context.Context, req *PrepareArchiveTaskReq, opts ...client.Option) (rsp *PrepareArchiveTaskRsp, err error)
 
-	PreviewArchiveSchedule(ctx context.Context, req *PreviewArchiveScheduleReq, opts ...client.Option) (rsp *PreviewArchiveScheduleRsp, err error)
-
 	CreateArchiveTask(ctx context.Context, req *CreateArchiveTaskReq, opts ...client.Option) (rsp *CreateArchiveTaskRsp, err error)
 
 	UpdateArchiveTask(ctx context.Context, req *UpdateArchiveTaskReq, opts ...client.Option) (rsp *UpdateArchiveTaskRsp, err error)
@@ -726,9 +670,7 @@ type ArchiveMgrClientProxy interface {
 
 	GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq, opts ...client.Option) (rsp *GetArchivePartitionRsp, err error)
 
-	PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq, opts ...client.Option) (rsp *PrepareArchiveImportRsp, err error)
-
-	ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq, opts ...client.Option) (rsp *ImportArchiveFileRsp, err error)
+	StartArchiveImport(ctx context.Context, req *StartArchiveImportReq, opts ...client.Option) (rsp *StartArchiveImportRsp, err error)
 
 	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq, opts ...client.Option) (rsp *ClearArchiveUnrecoverableRsp, err error)
 	// GetLifecycle GetLifecycle 读归档管理模块的暂停状态（设计 3.7，请求与响应见 moox_common.proto）。它不参与系统暂停，
@@ -801,26 +743,6 @@ func (c *ArchiveMgrClientProxyImpl) PrepareArchiveTask(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrepareArchiveTaskRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *ArchiveMgrClientProxyImpl) PreviewArchiveSchedule(ctx context.Context, req *PreviewArchiveScheduleReq, opts ...client.Option) (*PreviewArchiveScheduleRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule")
-	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("archive")
-	msg.WithCalleeService("ArchiveMgr")
-	msg.WithCalleeMethod("PreviewArchiveSchedule")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PreviewArchiveScheduleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1027,40 +949,20 @@ func (c *ArchiveMgrClientProxyImpl) GetArchivePartition(ctx context.Context, req
 	return rsp, nil
 }
 
-func (c *ArchiveMgrClientProxyImpl) PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq, opts ...client.Option) (*PrepareArchiveImportRsp, error) {
+func (c *ArchiveMgrClientProxyImpl) StartArchiveImport(ctx context.Context, req *StartArchiveImportReq, opts ...client.Option) (*StartArchiveImportRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/PrepareArchiveImport")
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/StartArchiveImport")
 	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("archive")
 	msg.WithCalleeService("ArchiveMgr")
-	msg.WithCalleeMethod("PrepareArchiveImport")
+	msg.WithCalleeMethod("StartArchiveImport")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &PrepareArchiveImportRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *ArchiveMgrClientProxyImpl) ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq, opts ...client.Option) (*ImportArchiveFileRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/ImportArchiveFile")
-	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("archive")
-	msg.WithCalleeService("ArchiveMgr")
-	msg.WithCalleeMethod("ImportArchiveFile")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ImportArchiveFileRsp{}
+	rsp := &StartArchiveImportRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

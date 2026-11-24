@@ -1,6 +1,7 @@
-// Package dataapi 是 worker 只听 127.0.0.1 的数据端口：下载分区的远端副本（GET /v1/partition）与查看暂存库里
-// 某个标的最近的行（GET /v1/recent）。端口不验签：外部只能经 control 的中转（按服务目录只放行 console）或
-// control 本机的 Admin 进入，浏览器的鉴权由 Admin 的一次性 ticket 完成。
+// Package dataapi 是 worker 只听 127.0.0.1 的数据端口：下载分区的远端副本（GET /v1/partition）、查看暂存库里
+// 某个标的最近的行（GET /v1/recent），以及 moox-cli import 的归档目标写入批次（POST /v1/import/rows、/v1/import/finish）。
+// 端口不验签：外部只能经 control 的中转（按服务目录只放行 console 与 moox-cli）、SSH 本地转发或 control 本机的 Admin 进入；
+// 浏览器的鉴权由 Admin 的一次性 ticket 完成，Admin 只转发两个 GET 路径。写接口只接受 worker 正在执行的导入运行。
 package dataapi
 
 import (
@@ -22,6 +23,8 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -34,7 +37,32 @@ const (
 	DefaultRecentLimit = 200
 	MaxRecentLimit     = 500
 	maxSubjectLength   = 256
+	// MaxImportBodyBytes 是一次导入写入的请求体上限（protobuf 编码的 PrimaryUpsertFieldsReq；moox-cli 每批 1000 行）。
+	MaxImportBodyBytes = 8 << 20
 )
+
+// 导入写接口的错误：ImportSink 返回它们（可包一层说明），处理器据此给出状态码。
+var (
+	// ErrImportNotFound：运行不存在、不是导入运行或已经结束（404）。
+	ErrImportNotFound = errors.New("没有正在执行的这条导入运行")
+	// ErrDiskInsufficient：worker 可用磁盘低于下限（507）。
+	ErrDiskInsufficient = errors.New("worker 可用磁盘低于下限，拒绝写入")
+	// ErrInvalidBatch：批次不合法，整批拒绝（400）。
+	ErrInvalidBatch = errors.New("导入批次不合法")
+)
+
+// ImportResult 是一批行写进暂存区的结果（响应 JSON）。
+type ImportResult struct {
+	Added   uint64 `json:"added"`
+	Changed uint64 `json:"changed"`
+	Same    uint64 `json:"same"`
+}
+
+// ImportSink 把导入批次交给正在执行的导入运行；只有运行协程写暂存区，串行由它保证。
+type ImportSink interface {
+	Write(ctx context.Context, runID string, req *storagepb.PrimaryUpsertFieldsReq) (ImportResult, error)
+	Finish(runID string) error
+}
 
 // SHA256Header 是下载响应里分区文件 sha256 的响应头。
 const SHA256Header = "X-Moox-SHA256"
@@ -52,6 +80,8 @@ type Options struct {
 	Files export.Files
 	// Remote 为 nil 表示没有配置对象存储，下载一律 409。
 	Remote Remote
+	// Imports 接收导入批次；nil 时写接口一律 404。
+	Imports ImportSink
 	// BytesPerSecond 是全部下载共享的带宽上限。
 	BytesPerSecond int64
 	// OpenStore 只读打开暂存库，默认 staging.OpenReadOnly（测试替换）。
@@ -83,6 +113,8 @@ func New(opts Options) *Server {
 	s := &Server{opts: opts, downloads: make(chan struct{}, MaxDownloads), bucket: newBucket(opts.BytesPerSecond, opts.Now, opts.Sleep), mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /v1/partition", s.partition)
 	s.mux.HandleFunc("GET /v1/recent", s.recent)
+	s.mux.HandleFunc("POST /v1/import/rows", s.importRows)
+	s.mux.HandleFunc("POST /v1/import/finish", s.importFinish)
 	return s
 }
 
@@ -229,9 +261,8 @@ func (s *Server) write(ctx context.Context, w io.Writer, p []byte) error {
 
 // recentResponse 是 /v1/recent 的响应。单元格是按 CSV 规则格式化的字符串，缺失值为 null。
 type recentResponse struct {
-	Columns     []staging.RecentColumn `json:"columns"`
-	Rows        [][]*string            `json:"rows"`
-	StagedUntil string                 `json:"staged_until"`
+	Columns []staging.RecentColumn `json:"columns"`
+	Rows    [][]*string            `json:"rows"`
 }
 
 func (s *Server) recent(w http.ResponseWriter, r *http.Request) {
@@ -299,18 +330,71 @@ func (s *Server) recent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "查询最新数据失败")
 		return
 	}
-	// staged_until 是扫描水位：暂存库已从 Storage 读到的时刻，之前的行都在暂存库或已定稿的文件里。
-	resp := recentResponse{Columns: rows.Columns, Rows: rows.Rows}
-	watermark, ok, err := store.Watermark(ctx, space, dataset)
-	switch {
-	case err != nil:
-		// 水位只用于页面提示，读取失败不影响返回的行。
-		log.Warnf("archive data api: 读取 %s/%s 的扫描水位失败: %v", space, dataset, err)
-	case ok:
-		resp.StagedUntil = watermark.UTC().Format(time.RFC3339)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(recentResponse{Columns: rows.Columns, Rows: rows.Rows})
+}
+
+// importRows 处理 POST /v1/import/rows?run=<run_id>：请求体是 protobuf 编码的 PrimaryUpsertFieldsReq，
+// 交给导入运行写进暂存区，写完回 {"added","changed","same"}。
+func (s *Server) importRows(w http.ResponseWriter, r *http.Request) {
+	runID := r.URL.Query().Get("run")
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run 不能为空")
+		return
+	}
+	if s.opts.Imports == nil {
+		writeError(w, http.StatusNotFound, ErrImportNotFound.Error())
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxImportBodyBytes))
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("读取请求体失败（上限 %d 字节）: %v", MaxImportBodyBytes, err))
+		return
+	}
+	req := &storagepb.PrimaryUpsertFieldsReq{}
+	if err := proto.Unmarshal(body, req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求体不是 PrimaryUpsertFieldsReq: "+err.Error())
+		return
+	}
+	result, err := s.opts.Imports.Write(r.Context(), runID, req)
+	if err != nil {
+		writeError(w, importStatus(err), err.Error())
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// importFinish 处理 POST /v1/import/finish?run=<run_id>：通知导入运行批次已全部写完，立即返回 202。
+func (s *Server) importFinish(w http.ResponseWriter, r *http.Request) {
+	runID := r.URL.Query().Get("run")
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run 不能为空")
+		return
+	}
+	if s.opts.Imports == nil {
+		writeError(w, http.StatusNotFound, ErrImportNotFound.Error())
+		return
+	}
+	if err := s.opts.Imports.Finish(runID); err != nil {
+		writeError(w, importStatus(err), err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func importStatus(err error) int {
+	switch {
+	case errors.Is(err, ErrImportNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrDiskInsufficient):
+		return http.StatusInsufficientStorage
+	case errors.Is(err, ErrInvalidBatch):
+		return http.StatusBadRequest
+	default:
+		log.Errorf("archive data api: 导入写入失败: %v", err)
+		return http.StatusInternalServerError
+	}
 }
 
 // datasetColumns 读 dataset.json 里的值列（去掉三个系统列）。

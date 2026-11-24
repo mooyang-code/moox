@@ -35,13 +35,7 @@ func TestBackfillStartsAreClampedToTheLowerBoundWithinAnHour(t *testing.T) {
 		r.SpaceId, r.BackfillFrom = "stockcn", fmtRFC(early.Add(-2*time.Hour))
 	})
 	requireCode(t, rejected.GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "不能早于")
-	// 修改任务的回补起点同理。
 	h.now = h.now.Add(10 * time.Minute)
-	updated, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", BackfillFrom: want})
-	requireOK(t, updated.GetRetInfo())
-	if got := updated.GetTask().GetBackfillFrom(); got != fmtRFC(h.now.Add(-144*time.Hour)) {
-		t.Fatalf("修改后的回补起点 = %s", got)
-	}
 
 	// 补拉区间：早 10 分钟夹到下界，下发的就是夹取后的区间；早 2 小时拒绝。
 	lower := h.now.Add(-144 * time.Hour)
@@ -92,9 +86,9 @@ func withRemote(p store.Partition, r store.Remote) store.Partition {
 func TestRemoteHealthRuleAppliesOnlyWhenEnabled(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	base := store.Task{SpaceID: "crypto", DatasetID: "ds", Freq: "1m", PartitionUnit: "day", Retention: "168h", Status: store.StatusEnabled,
-		IntervalSeconds: 3600, CreatedAt: now.Add(-240 * time.Hour), LastSuccessAt: now.Add(-10 * time.Minute)}
+		CreatedAt: now.Add(-240 * time.Hour), LastSuccessAt: now.Add(-10 * time.Minute)}
 	eval := func(enabled bool, age time.Duration, lastErr string) (string, string) {
-		return evaluateHealth(healthInput{Now: now, Task: base, Lookback: 15 * time.Minute, SpaceTZ: "UTC", RemoteEnabled: enabled,
+		return evaluateHealth(healthInput{Now: now, Task: base, Lateness: 15 * time.Minute, SpaceTZ: "UTC", RemoteEnabled: enabled,
 			Remote: store.RemoteBacklog{Unreplicated: 2, OldestExportedAt: now.Add(-age), OldestKey: "2026-10-13", LastError: lastErr}})
 	}
 	if level, _ := eval(false, 100*time.Hour, ""); level != HealthOK {
@@ -189,7 +183,7 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 // 重导出后计时从新的导出时间算：新版本刚导出，旧版本远端副本不算数，但还没到 24 小时。
 func TestRemoteHealthRestartsFromTheNewExport(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	in := healthInput{Now: now, Task: store.Task{Retention: "168h", Status: store.StatusEnabled, IntervalSeconds: 3600, LastSuccessAt: now}, RemoteEnabled: true, Remote: store.RemoteBacklog{Unreplicated: 1, OldestExportedAt: now.Add(-time.Hour), OldestKey: "2026-10-01"}}
+	in := healthInput{Now: now, Task: store.Task{Retention: "168h", Status: store.StatusEnabled, LastSuccessAt: now}, RemoteEnabled: true, Remote: store.RemoteBacklog{Unreplicated: 1, OldestExportedAt: now.Add(-time.Hour), OldestKey: "2026-10-01"}}
 	if level, reason := evaluateHealth(in); level != HealthOK {
 		t.Fatalf("重导出 1 小时内 = %s %s", level, reason)
 	}
