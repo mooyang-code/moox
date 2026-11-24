@@ -41,7 +41,12 @@ type Dependencies struct {
 	ResultManager     *taskresult.Manager
 	// FieldOffers 是行情源目录里可用的附加字段（由 marketwiring 注入）；为空表示没有。
 	FieldOffers marketdata.FieldOffers
+	// CheckKlineFrequency 校验（市场，品种，来源）能否采该频率的 K 线（由 marketwiring 注入，查行情源目录与路由文件）；为空时不校验。
+	CheckKlineFrequency KlineFrequencyChecker
 }
+
+// KlineFrequencyChecker 校验 K 线任务的（市场 ID，市场类型，来源，频率）组合，不支持时返回中文原因。
+type KlineFrequencyChecker func(marketID, marketType, providerID, frequency string) error
 
 // RealtimeInventory reconciles the derived expected Dataset registry.
 type RealtimeInventory interface {
@@ -65,6 +70,7 @@ type Service struct {
 	subjectSyncer           SubjectSyncer
 	tradingStatus           TradingStatusRunner
 	fieldOffers             marketdata.FieldOffers
+	checkKlineFrequency     KlineFrequencyChecker
 	klineOps                KlineOps
 	fetchPlanControl        FetchPlanControl
 	sourceIDResolver        marketfetch.SourceIDResolver
@@ -149,12 +155,13 @@ type datasetSource interface {
 // New creates a collector management service.
 func New(persistence *store.Store, deps Dependencies) *Service {
 	return &Service{
-		persistence:   persistence,
-		taskRepo:      persistence.Tasks(),
-		datasetSrc:    deps.DatasetSource,
-		inventory:     deps.RealtimeInventory,
-		resultManager: deps.ResultManager,
-		fieldOffers:   deps.FieldOffers,
+		persistence:         persistence,
+		taskRepo:            persistence.Tasks(),
+		datasetSrc:          deps.DatasetSource,
+		inventory:           deps.RealtimeInventory,
+		resultManager:       deps.ResultManager,
+		fieldOffers:         deps.FieldOffers,
+		checkKlineFrequency: deps.CheckKlineFrequency,
 	}
 }
 
@@ -1210,9 +1217,17 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		if err := params.Validate(); err != nil {
 			return fmt.Errorf("tag %s route is invalid: %w", route.id, err)
 		}
-		definition, exists := jobs.JobDefinitionByDataType(params.Collector.DataType)
-		if !exists || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
-			return fmt.Errorf("tag %s route is unsupported: provider=%s market=%s data_type=%s", route.id, route.source, route.market, params.Collector.DataType)
+		if s.checkKlineFrequency == nil {
+			continue
+		}
+		marketID := params.MarketID
+		if strings.TrimSpace(marketID) == "" {
+			marketID = task.SpaceID
+		}
+		for _, frequency := range params.Collector.Intervals {
+			if err := s.checkKlineFrequency(marketID, route.market, route.source, frequency); err != nil {
+				return fmt.Errorf("标签 %s 的来源 %s 采不了这个任务：%w", route.id, route.source, err)
+			}
 		}
 	}
 	// 选中的附加字段在任务每个标签的（市场, 品种）下都要有来源：例如资金费率只有永续有来源，

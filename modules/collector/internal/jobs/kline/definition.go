@@ -1,17 +1,12 @@
+// Package kline 定义 K 线采集任务的表单元数据。
 package kline
 
 import (
-	"context"
-	"fmt"
-
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/jobdef"
 )
 
-// binanceFrequencies 是 Binance 适配器实际支持的 K 线周期（与表单选项、marketdata 的 K 线周期一致）。
-var binanceFrequencies = []string{"1m", "5m", "15m", "30m", "1h", "1d", "1w", "1mo"}
-
-// NewJobDefinition returns the K-line collector job definition.
+// NewJobDefinition 返回 K 线采集任务的定义。能采哪些频率不在这里写：建任务时按行情源目录与路由文件校验
+// （marketwiring.CheckKlineFrequency）。
 func NewJobDefinition() jobdef.JobDefinition {
 	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "binance", Label: "币安"}}}
 	return jobdef.JobDefinition{
@@ -36,19 +31,6 @@ func NewJobDefinition() jobdef.JobDefinition {
 				DataSourceOptions: dataSources,
 				SortOrder:         1,
 			},
-		},
-		Supports: []jobdef.Support{
-			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset", Frequencies: binanceFrequencies},
-			{Exchange: "binance", Market: "swap", DataType: "kline", SourceKind: "dataset", Frequencies: binanceFrequencies},
-			{Exchange: "eastmoney", Market: "equity", DataType: "kline", SourceKind: "dataset", Frequencies: []string{"1m", "5m", "1d"}},
-		},
-		Planner: func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
-			_ = ctx
-			_ = rule
-			if params.Source.Kind != "dataset" {
-				return nil, fmt.Errorf("kline planner requires dataset source, got %s", params.Source.Kind)
-			}
-			return BuildTaskSpecs(params, subjects), nil
 		},
 	}
 }

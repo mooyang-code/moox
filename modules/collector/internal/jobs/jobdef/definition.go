@@ -1,15 +1,5 @@
-// Package jobdef defines collector job metadata used by control-plane RPCs and planners.
+// Package jobdef 定义采集任务类型的元数据（任务表单与执行方式）。
 package jobdef
-
-import (
-	"context"
-	"strings"
-
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-)
-
-// Planner builds atomic task specs for one collector job definition.
-type Planner func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error)
 
 // Option is a UI option value exposed through CollectMgr data type configs.
 type Option struct {
@@ -20,16 +10,6 @@ type Option struct {
 // OptionList is the JSON shape expected by the admin frontend.
 type OptionList struct {
 	Options []Option `json:"options"`
-}
-
-// Support describes an exchange/market/data_type tuple handled by a job definition.
-type Support struct {
-	Exchange   string
-	Market     string
-	DataType   string
-	SourceKind string
-	// Frequencies 限定该来源能采集的 K 线周期；为空表示不限。
-	Frequencies []string
 }
 
 // ExecutionMode separates queue-backed exchange jobs from Collector-local jobs.
@@ -58,7 +38,8 @@ type FieldDefinition struct {
 	SortOrder         int32
 }
 
-// JobDefinition describes one collector data type and its rule-planning metadata.
+// JobDefinition 描述一种采集任务类型。参数的合法组合不在这里声明：K 线任务按行情源目录校验，
+// 合成任务由 resample.ValidateTaskParams 校验。
 type JobDefinition struct {
 	ID                int32
 	DataType          string
@@ -68,47 +49,5 @@ type JobDefinition struct {
 	SortOrder         int32
 	Version           int32
 	Fields            []FieldDefinition
-	Supports          []Support
-	Planner           Planner
 	ExecutionMode     ExecutionMode
-}
-
-// Matches returns whether params can be planned by this job definition.
-func (d JobDefinition) Matches(params *domain.CollectParams) bool {
-	if params == nil {
-		return false
-	}
-	for _, support := range d.Supports {
-		if equalFoldTrim(support.Exchange, params.Collector.Exchange) &&
-			equalFoldTrim(support.Market, params.Collector.Market) &&
-			equalFoldTrim(support.DataType, params.Collector.DataType) &&
-			equalFoldTrim(support.SourceKind, params.Source.Kind) &&
-			supportsIntervals(support.Frequencies, params.Collector.Intervals) {
-			return true
-		}
-	}
-	return false
-}
-
-func supportsIntervals(supported, intervals []string) bool {
-	if len(supported) == 0 {
-		return true
-	}
-	for _, interval := range intervals {
-		found := false
-		for _, item := range supported {
-			if equalFoldTrim(item, interval) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-func equalFoldTrim(left string, right string) bool {
-	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
 }

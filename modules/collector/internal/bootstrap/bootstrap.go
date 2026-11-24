@@ -123,6 +123,8 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runt
 		ResultManager:     resultManager,
 		// 附加字段由行情源目录里的来源提供：建任务、改任务、任务表单都按目录判断。
 		FieldOffers: marketwiring.FieldOffers(),
+		// K 线任务的频率按行情源目录与路由文件校验，与取数时的装配口径一致。
+		CheckKlineFrequency: marketwiring.CheckKlineFrequency,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := fetchplan.NewControlMetrics(prometheus.DefaultRegisterer)
