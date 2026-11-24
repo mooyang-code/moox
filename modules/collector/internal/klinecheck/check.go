@@ -38,7 +38,8 @@ type AbsenceSource interface {
 	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
 }
 
-// RowCounter 按标的统计时间范围内已存在的行数，由 Storage 的 active View 回答，只回传计数。
+// RowCounter 按标的统计时间范围内已存在的行数，只回传计数。生产里是 Storage 主服务的 PrimaryStore.CountTimeSeriesRows，
+// 在 Pebble 的序列索引上数键，看得到全部保留期内的数据（historyStarts 据此判断范围之前有没有数据）。
 // Rows 实现了它时，检查先比对根数，只有根数对不上的标的才读行定位缺口。
 type RowCounter interface {
 	CountTimeSeriesRows(context.Context, *storagepb.CountTimeSeriesRowsReq, ...client.Option) (*storagepb.CountTimeSeriesRowsRsp, error)
