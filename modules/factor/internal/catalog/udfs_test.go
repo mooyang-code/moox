@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -139,8 +138,8 @@ func TestPublishRejectsUnqualifiedPackages(t *testing.T) {
 	require.ErrorContains(t, err, "未提交改动")
 }
 
-// 首次启用没有引用方，不要求暂停引擎；之后因子定义才能引用它。
-func TestFirstActivationNeedsNoPause(t *testing.T) {
+// 首次启用没有引用方，前提都满足；之后因子定义才能引用它。
+func TestFirstActivation(t *testing.T) {
 	svc, db := newUdfService(t)
 	ctx := context.Background()
 	res, err := svc.PublishUdf(ctx, udfPackage(t, "ts_mean"))
@@ -170,37 +169,11 @@ func TestFirstActivationNeedsNoPause(t *testing.T) {
 	require.Equal(t, res.Hash, created.UDFs["ts_mean_udf"].Hash)
 }
 
-type fakeEngine struct {
-	mu     sync.Mutex
-	info   domain.EngineInfo
-	status domain.EngineStatus
-	seen   bool
-	beat   bool // 每次读取都推进心跳时间（模拟引擎持续上报）
-}
-
-func (f *fakeEngine) view(context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.beat {
-		f.info.LastHeartbeatAt = f.info.LastHeartbeatAt.Add(time.Second)
-	}
-	return f.info, f.status, f.seen, nil
-}
-
-func (f *fakeEngine) set(stage string, quiesced bool, at time.Time) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.seen = true
-	f.info = domain.EngineInfo{Online: true, LastHeartbeatAt: time.Now()}
-	f.status.Lifecycle = domain.EngineLifecycle{Stage: stage, Quiesced: quiesced, QuiescedAt: at}
-}
-
-// 切换在引擎暂停期间进行：未暂停、未收敛、离线时拒绝；有已领取的补算作业时拒绝；dry_run 不改数据。
+// 切换与改写定义用同一组前提：有已启用的成员引用时拒绝；受影响任务有已经开始的补算作业（正在运行，或进度已越过起点）时拒绝；
+// 没开始的作业不拦；dry_run 不改数据。
 func TestActivationPrerequisites(t *testing.T) {
 	svc, db := newUdfService(t)
 	ctx := context.Background()
-	engine := &fakeEngine{beat: true}
-	WithEngineView(engine.view)(svc)
 
 	v1, err := svc.PublishUdf(ctx, udfPackage(t, "ts_mean"))
 	require.NoError(t, err)
@@ -229,57 +202,44 @@ func TestActivationPrerequisites(t *testing.T) {
 		}
 		return m
 	}
-	const pausedName = "因子引擎模块已暂停且本次暂停已收敛"
+	const enabledName = "没有已启用的成员引用它"
 
-	// 没有收到过心跳。
+	// 成员已启用。
 	dry, err := svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, true)
 	require.NoError(t, err)
-	require.False(t, checks(dry)[pausedName].OK)
+	require.False(t, checks(dry)[enabledName].OK)
+	require.Contains(t, checks(dry)[enabledName].Detail, testTaskID()+"/f_mean")
 	require.Len(t, dry.Impacts, 1)
 	require.Equal(t, "f_mean", dry.Impacts[0].FactorID)
 	require.NotEqual(t, dry.Impacts[0].OldDefinitionHash, dry.Impacts[0].NewDefinitionHash, "切换版本 definition_hash 改变")
 	require.Equal(t, []string{testTaskID()}, dry.Tasks)
-
-	// 引擎在运行。
-	engine.set("running", false, time.Time{})
 	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
 	require.ErrorIs(t, err, store.ErrConflict)
-	require.ErrorContains(t, err, "不是暂停")
+	require.ErrorContains(t, err, enabledName)
 
-	// 已暂停但没有收敛。
-	engine.set("paused", false, time.Time{})
-	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
-	require.ErrorContains(t, err, "还没有收敛")
-
-	// 引擎离线。
-	engine.set("paused", true, time.Now())
-	engine.info.Online = false
-	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
-	require.ErrorContains(t, err, "离线")
-
-	// 已暂停且已收敛，但有已领取的补算作业。
-	engine.set("paused", true, time.Now())
+	// 停用成员后，正在运行的作业（刚领取、进度还在起点）仍算已经开始。
+	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_mean", domain.MemberStatusDisabled)
+	require.NoError(t, err)
 	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
 	require.NoError(t, err)
-	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status = store.RecalcStatusRunning; return nil })
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusRunning, 1; return nil })
 	require.NoError(t, err)
 	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
 	require.ErrorContains(t, err, "补算作业")
+	require.ErrorContains(t, err, job.JobID)
 	name, _, _ := db.GetUdf(ctx, "ts_mean_udf")
 	require.Equal(t, v1.Hash, name.ActiveHash, "前提不满足时不改数据")
 
-	// 领取过又被引擎归还的作业（回到 accepted，绑定已固化）同样拒绝；从未领取过的 accepted 作业不拦。
-	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status = store.RecalcStatusAccepted; return nil })
+	// 领取过又被引擎归还的作业（回到 accepted，进度已越过起点）同样拒绝；从未开始的 accepted 作业不拦。
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusAccepted, 50; return nil })
 	require.NoError(t, err)
 	fresh, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-2", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
-	require.NoError(t, err)
-	_, err = db.SaveJobBindings(ctx, job.JobID, map[string]string{"ts_mean_udf": v1.Hash})
 	require.NoError(t, err)
 	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
 	require.ErrorContains(t, err, job.JobID)
 	require.NotContains(t, err.Error(), fresh.JobID)
 
-	// 取消作业后切换成功；之后读取这些定义得到新的绑定。
+	// 取消作业后切换成功；之后读取这些定义得到新的版本。
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status = store.RecalcStatusCancelled; return nil })
 	require.NoError(t, err)
 	res, err := svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
@@ -289,8 +249,7 @@ func TestActivationPrerequisites(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, v2.Hash, def.UDFs["ts_mean_udf"].Hash)
 
-	// 回滚：指回旧版本（同样的步骤）。
-	engine.set("paused", true, time.Now())
+	// 回滚：指回旧版本（同样的前提）。
 	back, err := svc.ActivateUdf(ctx, "ts_mean_udf", v1.Hash, false)
 	require.NoError(t, err)
 	require.True(t, back.Applied)
@@ -301,50 +260,42 @@ func TestActivationPrerequisites(t *testing.T) {
 	require.False(t, same.Applied)
 }
 
-// 提交前复核：引擎在复核期间离开暂停，切换被拒绝。
-func TestActivationRecheckDetectsAResume(t *testing.T) {
+// 改写定义与切换版本同一组前提：成员停用后，受影响任务有已经开始的补算作业时仍拒绝。
+func TestUpdateFactorRejectsStartedRecalcJob(t *testing.T) {
 	svc, db := newUdfService(t)
 	ctx := context.Background()
-	engine := &fakeEngine{}
-	WithEngineView(engine.view)(svc)
-	v1, err := svc.PublishUdf(ctx, udfPackage(t, "ts_mean"))
+	_, err := svc.CreateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 3)\n"))
 	require.NoError(t, err)
-	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v1.Hash, false)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_plain", "", nil)
 	require.NoError(t, err)
-	_, err = svc.CreateFactor(ctx, factorWithSpec("f_mean", "output: udf.ts_mean_udf(close, 3)\n"))
-	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil)
-	require.NoError(t, err)
-	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_mean", domain.MemberStatusEnabled)
-	require.NoError(t, err)
-	old, _ := db.GetUdfVersion(ctx, v1.Hash, true)
-	v2 := old
-	v2.Hash = "00" + old.Hash[2:]
-	_, err = db.PutUdfVersion(ctx, v2)
+	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_plain", domain.MemberStatusEnabled)
 	require.NoError(t, err)
 
-	at := time.Now()
-	engine.set("paused", true, at)
-	// 第二次心跳（复核用）显示引擎已经恢复。
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		engine.set("running", false, time.Time{})
-		engine.mu.Lock()
-		engine.info.LastHeartbeatAt = engine.info.LastHeartbeatAt.Add(time.Minute)
-		engine.mu.Unlock()
-	}()
-	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, false)
+	_, err = svc.UpdateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 4)\n"))
 	require.ErrorIs(t, err, store.ErrConflict)
-	name, _, _ := db.GetUdf(ctx, "ts_mean_udf")
-	require.Equal(t, v1.Hash, name.ActiveHash)
+	require.ErrorContains(t, err, "没有已启用的成员引用它")
+
+	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "f_plain", domain.MemberStatusDisabled)
+	require.NoError(t, err)
+	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	require.NoError(t, err)
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status, j.ProgressTime = store.RecalcStatusRunning, 30; return nil })
+	require.NoError(t, err)
+	_, err = svc.UpdateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 4)\n"))
+	require.ErrorIs(t, err, store.ErrConflict)
+	require.ErrorContains(t, err, job.JobID)
+
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status = store.RecalcStatusCancelled; return nil })
+	require.NoError(t, err)
+	updated, err := svc.UpdateFactor(ctx, factorWithSpec("f_plain", "output: ts_mean(close, 4)\n"))
+	require.NoError(t, err)
+	require.Equal(t, 4, updated.LookbackPeriods)
 }
 
 // 新版本编译失败或成员参数越界时拒绝切换。
 func TestActivationRejectsIncompatibleVersion(t *testing.T) {
 	svc, db := newUdfService(t)
 	ctx := context.Background()
-	engine := &fakeEngine{beat: true}
-	WithEngineView(engine.view)(svc)
 	v1, err := svc.PublishUdf(ctx, udfPackage(t, "ts_mean"))
 	require.NoError(t, err)
 	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v1.Hash, false)
@@ -420,30 +371,4 @@ func TestUdfLockSerializesDefinitionChangesWithActivation(t *testing.T) {
 	}
 	unlock()
 	require.NoError(t, <-done)
-}
-
-// 没有已启用的成员引用，但引擎状态不可信（离线）：无法确认它没有在按旧目录使用旧版本，仍要求暂停。
-func TestActivationRequiresPauseWhenEngineStateIsUntrustedAndDefinitionsReferenceIt(t *testing.T) {
-	svc, db := newUdfService(t)
-	ctx := context.Background()
-	engine := &fakeEngine{seen: true, info: domain.EngineInfo{Online: false, LastHeartbeatAt: time.Now().Add(-time.Hour)}}
-	WithEngineView(engine.view)(svc)
-	v1, err := svc.PublishUdf(ctx, udfPackage(t, "ts_mean"))
-	require.NoError(t, err)
-	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v1.Hash, false)
-	require.NoError(t, err)
-	_, err = svc.CreateFactor(ctx, factorWithSpec("f_mean", "output: udf.ts_mean_udf(close, 3)\n"))
-	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil) // 成员存在但未启用
-	require.NoError(t, err)
-
-	old, _ := db.GetUdfVersion(ctx, v1.Hash, true)
-	v2 := old
-	v2.Hash = "00" + old.Hash[2:]
-	_, err = db.PutUdfVersion(ctx, v2)
-	require.NoError(t, err)
-	dry, err := svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, true)
-	require.NoError(t, err)
-	require.False(t, dry.Prerequisites[0].OK)
-	require.Contains(t, dry.Prerequisites[0].Detail, "离线")
 }

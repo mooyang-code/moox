@@ -425,14 +425,13 @@ func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) dom
 	}
 }
 
-// lifecycleStatus 是随心跳上报的模块级生命周期状态：管理端据此确认本次暂停已收敛（切换自定义算子版本的前提），
-// 并把暂停类型、原因与追赶进度代报给 Monitor（首页的系统状态读它）。
+// lifecycleStatus 是随心跳上报的模块级生命周期状态：管理端把暂停类型、原因与追赶进度代报给 Monitor（首页的系统状态读它）。
 func (r *Runtime) lifecycleStatus() domain.EngineLifecycle {
 	if r.life == nil {
 		return domain.EngineLifecycle{}
 	}
 	state := r.life.State()
-	out := domain.EngineLifecycle{Stage: string(state.Stage), QuiescedAt: state.QuiescedAt, Quiesced: state.Quiesced(), CatchupBlocked: r.catchupPreconditionFor(r.catchupMembers()), Catchup: state.Catchup}
+	out := domain.EngineLifecycle{Stage: string(state.Stage), CatchupBlocked: r.catchupPreconditionFor(r.catchupMembers()), Catchup: state.Catchup}
 	if state.Pause != nil {
 		out.PausedSince, out.PauseKind, out.PauseReason = state.Pause.Since, string(state.Pause.Kind), state.Pause.Reason
 	}

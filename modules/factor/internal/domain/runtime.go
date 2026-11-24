@@ -125,12 +125,10 @@ type UDFModuleStatus struct {
 	Error string
 }
 
-// EngineLifecycle 是引擎模块级的生命周期状态。Quiesced 为真表示本次暂停已收敛（在途写结果操作都已结束）。
+// EngineLifecycle 是引擎模块级的生命周期状态。
 type EngineLifecycle struct {
 	Stage          string
 	PausedSince    time.Time
-	QuiescedAt     time.Time
-	Quiesced       bool
 	CatchupBlocked string
 	// PauseKind（manual、system）与 PauseReason 是本次暂停的类型与原因；Catchup 是恢复追赶的进度。factor-mgr 把它们代报给 Monitor。
 	PauseKind   string

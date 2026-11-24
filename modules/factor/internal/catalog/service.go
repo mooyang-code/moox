@@ -35,7 +35,6 @@ type Service struct {
 	subjects    SubjectSource
 	refSubjects SubjectSource
 	verifier    *UDFVerifier
-	engineView  EngineView
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
@@ -479,7 +478,8 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 	return s.db.GetFactor(ctx, factor.FactorID)
 }
 
-// UpdateFactor 改写一个定义。被任务引用的定义有这些限制：任一成员已启用时拒绝；不允许增删参数，不允许改参数的类型、
+// UpdateFactor 改写一个定义。被任务引用的定义有这些限制：与 ActivateUdf 相同的两项前提（没有已启用的成员引用它、
+// 受影响任务没有已经开始的补算作业，见 definitionPrerequisites）；不允许增删参数，不允许改参数的类型、
 // 声明顺序和默认值，也不允许增删、改名或重排输出（设计 5.4）；新的参数范围必须仍包含所有引用它的成员保存的参数；
 // 新定义还要对每个引用它的任务重新做成员校验，任何一项不通过都拒绝整次更新。
 func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
@@ -512,12 +512,6 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		return domain.FactorDef{}, err
 	}
 	referencing := usages[factor.FactorID]
-	for _, usage := range referencing {
-		if usage.Status == domain.MemberStatusEnabled {
-			return domain.FactorDef{}, fmt.Errorf("%w: factor %q is enabled in task %q; disable it before updating its definition",
-				store.ErrConflict, factor.FactorID, usage.TaskID)
-		}
-	}
 	if len(referencing) > 0 {
 		if err := domain.CheckDefinitionCompatible(current, factor); err != nil {
 			return domain.FactorDef{}, fmt.Errorf("%w: %v", store.ErrConflict, err)
@@ -538,6 +532,9 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 			return domain.FactorDef{}, err
 		}
 		defer unlockTask()
+	}
+	if err := checkPrerequisites(s.definitionPrerequisites(ctx, referencing, taskIDs)); err != nil {
+		return domain.FactorDef{}, err
 	}
 	for _, usage := range referencing {
 		task, err := s.db.GetTask(ctx, usage.TaskID)

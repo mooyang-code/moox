@@ -60,7 +60,7 @@ message FactorDef {
   string category_id = 18;
   // params 是 spec 声明的可调参数（派生，只读）。
   repeated FactorParamDecl params = 19;
-  // udfs 是这份定义引用的自定义算子在本次编译所用的版本与元数据（只读，管理端读取时按启用版本或补算作业固化的绑定解析）；
+  // udfs 是这份定义引用的自定义算子在本次编译所用的版本与元数据（只读，管理端读取时按启用版本解析）；
   // 随目录快照与补算任务下发，引擎据此编译。
   repeated UdfDef udfs = 20;
 }
@@ -776,7 +776,7 @@ message EngineRuntimeStatus {
   repeated TaskWatermarkStatus watermarks = 10;
   // udf_modules 是引擎当前目录引用的各自定义算子模块的状态。
   repeated UdfModuleStatus udf_modules = 12;
-  // lifecycle 是模块级生命周期状态：管理端切换自定义算子版本之前，据此确认本次暂停已收敛；factor-mgr 也把它代报给 Monitor。
+  // lifecycle 是模块级生命周期状态：factor-mgr 把它代报给 Monitor。
   EngineLifecycleStatus lifecycle = 11;
   // ready 与 not_ready_reason 是引擎自己 /readyz 用的同一个就绪判断：引擎不经 packages/report 上报，由 factor-mgr 代报给 Monitor。
   bool ready = 13;
@@ -789,10 +789,6 @@ message EngineLifecycleStatus {
   string stage = 1;
   // paused_since 是本次暂停开始的时间（RFC3339），未暂停为空。
   string paused_since = 2;
-  // quiesced_at 是本次暂停收敛完成的时间：在途的写结果操作都已结束；暂停收敛超时或未暂停时为空。
-  string quiesced_at = 3;
-  // quiesced 为真表示本次暂停已收敛（收敛时间不早于本次暂停开始）。上一轮暂停留下的收敛时间不算。
-  bool quiesced = 4;
   // catchup_blocked 是恢复追赶的前置条件尚未满足的原因，满足或不在恢复追赶中为空。
   string catchup_blocked = 5;
   // pause_kind（manual、system）与 pause_reason 是本次暂停的类型与原因，未暂停为空。

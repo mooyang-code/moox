@@ -49,7 +49,6 @@ func TestPauseWaitsForRegisteredWritesBeforeQuiesced(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("在途操作结束后暂停应当收敛")
 	}
-	require.True(t, r.lifecycleStatus().Quiesced)
 	require.Equal(t, "paused", r.lifecycleStatus().Stage)
 }
 
@@ -244,12 +243,11 @@ func (g *gatedCatalogClient) SyncCatalog(ctx context.Context, _ string) (Catalog
 	return CatalogSnapshot{NotModified: true}, nil
 }
 
-// 上报的状态与未暂停时：没有收敛证据。
-func TestLifecycleStatusWithoutPauseIsNotQuiesced(t *testing.T) {
+// 未暂停时上报的状态只有阶段。
+func TestLifecycleStatusWithoutPause(t *testing.T) {
 	r, _ := newLifecycleRuntime(t)
 	startRunningModule(t, r)
 	st := r.lifecycleStatus()
-	require.False(t, st.Quiesced)
 	require.True(t, st.PausedSince.IsZero())
 	require.Equal(t, domain.EngineLifecycle{Stage: st.Stage}, st)
 }

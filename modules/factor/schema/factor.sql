@@ -107,9 +107,6 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_engine_id TEXT NOT NULL DEFAULT '',
     c_lease_token TEXT NOT NULL DEFAULT '',
     c_lease_expires_at INTEGER NOT NULL DEFAULT 0,
-    -- 首次领取时固化的自定义算子绑定（名称 → 版本哈希的 JSON）：续跑、租约过期后重新领取都用它，不再按当前启用版本解析。
-    -- NULL 表示还没固化（没被领取过），空对象表示固化过且没有引用自定义算子
-    c_udf_bindings TEXT,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('accepted', 'running', 'succeeded', 'failed', 'cancelled')),
