@@ -204,17 +204,6 @@ func (w *Window) Latest(subject string) (time.Time, bool) {
 	return time.Unix(end, 0).UTC(), true
 }
 
-// LatestOf 返回标的某一条序列（series_tag）在窗口里最新一根的时间；窗口里没有这条序列时 ok 为 false。
-func (w *Window) LatestOf(subject, tag string) (time.Time, bool) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	s, ok := w.series[seriesKey{subject, tag}]
-	if !ok {
-		return time.Time{}, false
-	}
-	return time.Unix(s.end, 0).UTC(), true
-}
-
 // ---------------------------------------------------------------- 载入
 
 // Retain 只保留名单里的标的，其余标的的序列从窗口里移除（标的被移出任务之后释放它们占的内存，设计 6.2）。返回移除的标的数。
@@ -478,6 +467,25 @@ type SeriesView struct {
 
 // End 返回最后一个可见行的时间。
 func (s SeriesView) End(step int64) int64 { return s.Start + int64(s.N-1)*step }
+
+// RealRowAt 报告序列在 atSec 那一根有没有真实的源行：有这一行、不是填充行、至少一个数值字段不是 NaN。
+// 填充行是同步补上的缺失周期（OHLC 取上一根收盘、成交量为 0），不算这一期到了；真实行到达后会替换填充行。
+// 回放与连续水位共用这一口径。
+func (s SeriesView) RealRowAt(step, atSec int64) bool {
+	if s.N == 0 || atSec < s.Start || atSec > s.End(step) || (atSec-s.Start)%step != 0 {
+		return false
+	}
+	i := (atSec - s.Start) / step
+	if int(i) < len(s.Filled) && s.Filled[i] {
+		return false
+	}
+	for _, col := range s.Cols {
+		if !math.IsNaN(col[i]) {
+			return true
+		}
+	}
+	return false
+}
 
 // View 是一次读租约抓到的列式数据：各标的的序列（已按标签排序）。
 type View struct {

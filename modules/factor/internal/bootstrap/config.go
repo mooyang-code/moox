@@ -26,10 +26,9 @@ type DatabaseConfig struct {
 	Path string `yaml:"path"`
 }
 
-// EngineConfig bounds the compute engine's leases.
+// EngineConfig 是计算引擎登记的参数：lease_ttl 是心跳的新鲜期，超过它没有心跳，引擎显示为离线，别的 engine_id 也可以登记。
 type EngineConfig struct {
-	LeaseTTL    time.Duration `yaml:"lease_ttl"`
-	JobLeaseTTL time.Duration `yaml:"job_lease_ttl"`
+	LeaseTTL time.Duration `yaml:"lease_ttl"`
 }
 
 func Load(path string) (*Config, error) {
@@ -64,7 +63,7 @@ func Default() *Config {
 	return &Config{
 		Database:      DatabaseConfig{Path: "./data/factor/factor.db"},
 		GatewayClient: gatewayclient.FileConfig{Caller: "factor-mgr", KeyFile: "../../secrets/host.key"},
-		Engine:        EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
+		Engine:        EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL},
 	}
 }
 
@@ -75,9 +74,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Engine.LeaseTTL == 0 {
 		c.Engine.LeaseTTL = defaults.Engine.LeaseTTL
-	}
-	if c.Engine.JobLeaseTTL == 0 {
-		c.Engine.JobLeaseTTL = defaults.Engine.JobLeaseTTL
 	}
 }
 
@@ -102,9 +98,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Engine.LeaseTTL < 10*time.Second {
 		return fmt.Errorf("engine.lease_ttl must be at least 10s")
-	}
-	if c.Engine.JobLeaseTTL < time.Minute {
-		return fmt.Errorf("engine.job_lease_ttl must be at least 1m")
 	}
 	return nil
 }

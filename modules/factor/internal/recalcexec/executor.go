@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -467,30 +466,15 @@ type paramRows struct {
 	byPeriod map[int64]map[string]map[string]map[string]float64
 }
 
-// newParamRows 按期次和标的整理已有行的 __params。参数按标的给，统一数据集同一标的的几条序列（tag）各存一份：
-// 按成员合并，某个 tag 当期失败或被跳过时写的是 {}，不能盖掉另一个 tag 记下的参数；按 tag 排序后合并，结果与遍历顺序无关。
+// newParamRows 按期次和标的整理已有行的 __params（一个标的一期只有一行）。
 func newParamRows(rows map[pipeline.RowKey]map[string]map[string]float64) paramRows {
-	keys := make([]pipeline.RowKey, 0, len(rows))
-	for key := range rows {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].Tag < keys[j].Tag })
 	byPeriod := make(map[int64]map[string]map[string]map[string]float64)
-	for _, key := range keys {
+	for key, params := range rows {
 		at := key.At.UTC().Unix()
 		if byPeriod[at] == nil {
 			byPeriod[at] = make(map[string]map[string]map[string]float64)
 		}
-		merged := byPeriod[at][key.Subject]
-		if merged == nil {
-			merged = make(map[string]map[string]float64, len(rows[key]))
-			byPeriod[at][key.Subject] = merged
-		}
-		for member, params := range rows[key] {
-			if _, ok := merged[member]; !ok {
-				merged[member] = params
-			}
-		}
+		byPeriod[at][key.Subject] = params
 	}
 	return paramRows{rows: rows, byPeriod: byPeriod}
 }
@@ -640,7 +624,6 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 		}
 		into.Factors[i].FailedSubjects = append(into.Factors[i].FailedSubjects, state.FailedSubjects...)
 		into.Factors[i].FailedSeries = append(into.Factors[i].FailedSeries, state.FailedSeries...)
-		into.Factors[i].SkippedSeriesTags = append(into.Factors[i].SkippedSeriesTags, state.SkippedSeriesTags...)
 	}
 	return into
 }

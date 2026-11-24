@@ -10,16 +10,15 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/stretchr/testify/require"
 )
 
-type noopPeriodReader struct{}
+type noopLocalRows struct{}
 
-func (noopPeriodReader) ReadWindow(context.Context, storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+func (noopLocalRows) RealRowsAt(context.Context, domain.FactorTask, []string, time.Time) (map[string]bool, error) {
 	return nil, nil
 }
 
@@ -46,7 +45,7 @@ func newCatchupRuntime(t *testing.T) (*Runtime, *watermark.Store) {
 	r, _ := newLifecycleRuntime(t)
 	store, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
 	require.NoError(t, err)
-	r.continuity, err = eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: store, Reader: noopPeriodReader{}})
+	r.continuity, err = eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: store, Local: noopLocalRows{}})
 	require.NoError(t, err)
 	r.advanceKick = make(chan string, 4)
 	return r, store

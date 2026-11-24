@@ -160,7 +160,6 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 	job.Subjects = factorwire.CloneStrings(pb.GetSubjects())
 	job.Status = pb.GetStatus()
 	job.Error = pb.GetError()
-	job.EngineID = pb.GetEngineId()
 	timeFields := []struct {
 		name   string
 		value  string

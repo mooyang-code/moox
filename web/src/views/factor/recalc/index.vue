@@ -80,9 +80,6 @@
                   <a-progress :percent="record.progress / 100" :status="record.job.status === 'failed' ? 'danger' : undefined" />
                 </template>
               </a-table-column>
-              <a-table-column title="执行引擎" :width="180" :ellipsis="true" :tooltip="true">
-                <template #cell="{ record }">{{ engineText(record.job) }}</template>
-              </a-table-column>
               <a-table-column title="创建时间" :width="180">
                 <template #cell="{ record }">{{ formatTime(record.job.created_at, displayZone) }}</template>
               </a-table-column>
@@ -117,7 +114,7 @@ import TaskTabs from "@/views/factor/shared/task-tabs.vue";
 import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
-import { STATUS_SEGMENTS, engineText, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
+import { STATUS_SEGMENTS, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 页面时间按当前空间登记的时区显示

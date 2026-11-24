@@ -12,4 +12,3 @@ gateway_client:
 
 engine:
   lease_ttl: 45s
-  job_lease_ttl: 15m

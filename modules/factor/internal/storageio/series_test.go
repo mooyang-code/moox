@@ -19,24 +19,22 @@ func seriesRef(subject, tag string) seriesset.Series {
 	return seriesset.Series{SubjectID: subject, SeriesTag: tag}
 }
 
-// 统一数据集：周期完成标记带按序列的全集与失败名单，明细里的失败序列、跳过的 tag 去重排序后写出。
+// 周期完成标记带按序列的全集与失败名单（每个标的配它唯一的 tag），明细里的失败序列去重排序后写出。
 func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
-	universe := []seriesset.Series{
-		seriesRef("ETH", testSwapTag), seriesRef("BTC", testSpotTag), seriesRef("BTC", testSwapTag), seriesRef("ETH", testSpotTag),
-	}
+	universe := []seriesset.Series{seriesRef("ETH", testSpotTag), seriesRef("BTC", testSpotTag)}
 	marker := PeriodMarker{
 		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded",
 		UniverseSubjects: []string{"BTC", "ETH"}, FailedSubjects: []string{"ETH"},
-		UniverseSeries: universe, FailedSeries: []seriesset.Series{seriesRef("ETH", testSwapTag)},
+		UniverseSeries: universe, FailedSeries: []seriesset.Series{seriesRef("ETH", testSpotTag)},
 		Factors: []FactorState{{
 			FactorID: "rank", MemberKey: "rank", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH"},
-			FailedSeries:      []seriesset.Series{seriesRef("ETH", testSwapTag), seriesRef("ETH", testSwapTag)},
-			SkippedSeriesTags: []string{testSwapTag, testSwapTag}, SourceHash: "s", DefinitionHash: "d",
+			FailedSeries: []seriesset.Series{seriesRef("ETH", testSpotTag), seriesRef("ETH", testSpotTag)},
+			SourceHash:   "s", DefinitionHash: "d",
 		}},
 	}
 	protoMarker, err := markerToProto(marker)
 	require.NoError(t, err)
-	require.Len(t, protoMarker.GetUniverseSeries(), 4)
+	require.Len(t, protoMarker.GetUniverseSeries(), 2)
 	require.Equal(t, "BTC", protoMarker.GetUniverseSeries()[0].GetSubjectId(), "按（标的、series_tag）排序")
 	require.Equal(t, testSpotTag, protoMarker.GetUniverseSeries()[0].GetSeriesTag())
 	require.Len(t, protoMarker.GetFailedSeries(), 1)
@@ -45,8 +43,7 @@ func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
 	state := detail.GetFactors()[0]
 	require.Len(t, detail.GetSharedFailedSeries(), 1, "失败序列在周期级放一份")
 	require.Empty(t, state.GetFailedSeries(), "成员级只放与周期级不同的部分")
-	require.Equal(t, []seriesset.Series{seriesRef("ETH", testSwapTag)}, MemberFailedSeries(detail, state), "读回时还原成完整的成员级名单")
-	require.Equal(t, []string{testSwapTag}, state.GetSkippedSeriesTags())
+	require.Equal(t, []seriesset.Series{seriesRef("ETH", testSpotTag)}, MemberFailedSeries(detail, state), "读回时还原成完整的成员级名单")
 
 	// 读回：冻结全集带按序列的名单。
 	require.Equal(t, normalizedSeries(universe), seriesFromMarker(protoMarker.GetUniverseSeries()))
@@ -58,15 +55,14 @@ func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
 }
 
 func TestValidatePeriodDetailSeriesRules(t *testing.T) {
-	universe := []seriesset.Series{seriesRef("BTC", testSpotTag), seriesRef("BTC", testSwapTag)}
+	universe := []seriesset.Series{seriesRef("BTC", testSpotTag)}
 	ref := func(subject, tag string) *factorpb.SeriesRef {
 		return &factorpb.SeriesRef{SubjectId: subject, SeriesTag: tag}
 	}
 	build := func(mutate func(*factorpb.FactorPeriodState)) *factorpb.PeriodDetail {
 		state := &factorpb.FactorPeriodState{
 			FactorId: "rank", MemberKey: "rank", MemberKind: "fixed", Status: "degraded", SpecHash: "s", DefinitionHash: "d",
-			FailedSubjects: []string{"BTC"}, FailedSeries: []*factorpb.SeriesRef{ref("BTC", testSwapTag)},
-			SkippedSeriesTags: []string{testSwapTag},
+			FailedSubjects: []string{"BTC"}, FailedSeries: []*factorpb.SeriesRef{ref("BTC", testSpotTag)},
 		}
 		mutate(state)
 		return &factorpb.PeriodDetail{SourceDatasetId: "bars", Factors: []*factorpb.FactorPeriodState{state}}
@@ -74,18 +70,17 @@ func TestValidatePeriodDetailSeriesRules(t *testing.T) {
 	require.NoError(t, ValidatePeriodDetail(build(func(*factorpb.FactorPeriodState) {}), []string{"BTC"}, universe, "degraded"))
 
 	for name, mutate := range map[string]func(*factorpb.FactorPeriodState){
-		"failed series not in universe": func(s *factorpb.FactorPeriodState) { s.FailedSeries = []*factorpb.SeriesRef{ref("ETH", testSwapTag)} },
-		"skipped tag unknown":           func(s *factorpb.FactorPeriodState) { s.SkippedSeriesTags = []string{"venue:okx"} },
+		"failed series not in universe": func(s *factorpb.FactorPeriodState) { s.FailedSeries = []*factorpb.SeriesRef{ref("ETH", testSpotTag)} },
 		"complete with failed series": func(s *factorpb.FactorPeriodState) {
 			s.Status, s.FailedSubjects = "complete", nil
 		},
 	} {
 		require.Error(t, ValidatePeriodDetail(build(mutate), []string{"BTC"}, universe, "degraded"), name)
 	}
-	// 周期没有序列全集时，失败序列与跳过的 tag 都不在全集里，同样拒绝；不带这两项则通过。
+	// 周期没有序列全集时，失败序列不在全集里，同样拒绝；不带失败序列则通过。
 	require.Error(t, ValidatePeriodDetail(build(func(*factorpb.FactorPeriodState) {}), []string{"BTC"}, nil, "degraded"))
 	require.NoError(t, ValidatePeriodDetail(build(func(s *factorpb.FactorPeriodState) {
-		s.FailedSeries, s.SkippedSeriesTags = nil, nil
+		s.FailedSeries = nil
 	}), []string{"BTC"}, nil, "degraded"))
 }
 

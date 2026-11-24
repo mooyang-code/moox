@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"slices"
 	"sort"
 	"strings"
 
@@ -9,8 +8,8 @@ import (
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
-// 管线一律按序列（标的、series_tag）判断期望全集、缺失、跳过与失败：只有一个 series_tag 的数据集每个标的一条序列，
-// 统一数据集（同一个数据集里同时放现货、永续两个 series_tag）每个标的至多两条。
+// 管线的期望全集、缺失、跳过与失败记成序列（标的、series_tag）：一个数据集里每个标的一期只有一条序列，
+// 按序列与按标的一一对应；周期标记与事件里按序列的名单照这一份填。
 
 // uniqueSeriesSorted 去掉空项与重复项，按（标的、series_tag）排序。
 func uniqueSeriesSorted(values []seriesset.Series) []seriesset.Series {
@@ -45,15 +44,6 @@ func seriesSubjects(values []seriesset.Series) []string {
 		subjects = append(subjects, value.SubjectID)
 	}
 	return uniqueSorted(subjects)
-}
-
-// seriesTags 返回序列涉及的 series_tag（排序、去重）。
-func seriesTags(values []seriesset.Series) []string {
-	tags := make([]string, 0, 2)
-	for _, value := range values {
-		tags = append(tags, value.SeriesTag)
-	}
-	return uniqueSorted(tags)
 }
 
 // seriesSet 把序列列表做成集合。
@@ -104,26 +94,12 @@ func seriesOfSubjects(values []seriesset.Series, subjects []string) []seriesset.
 	return out
 }
 
-// tagsBySubject 把序列按标的归组：标的 → 排好序、去重的 series_tag。同一条序列出现两次时只留一个 tag：
-// 组装用 tag 在这里的位置作位图的位，重复的 tag 会让位图多要一位，对应的项就永远确认不了。
-func tagsBySubject(values []seriesset.Series) map[string][]string {
-	out := make(map[string][]string)
-	for _, value := range values {
-		out[value.SubjectID] = append(out[value.SubjectID], value.SeriesTag)
-	}
-	for subject, tags := range out {
-		sort.Strings(tags)
-		out[subject] = slices.Compact(tags)
-	}
-	return out
-}
+// ExpectedTags 返回计划里每个标的期望序列的 series_tag（标的 → tag）。数据层据此判断这条序列本期有没有真实的源行。
+func (p Plan) ExpectedTags() map[string]string { return expectedTags(p.ExpectedSeries) }
 
-// TagsBySubject 返回计划里每个标的期望的 series_tag（标的 → tag）。数据层据此按各序列自己的进度同步与判断。
-func (p Plan) TagsBySubject() map[string][]string { return tagsBySubject(p.ExpectedSeries) }
-
-// SubjectSeries 把按标的选定的范围换成序列：每个标的配上视图里它的各个 series_tag。给手里只有标的名单和已读入数据的调用方
-// （试算、回放）用，结果与“按标的判断”相同：标的缺数就是它的序列缺数。视图里没有数据的标的配上这些标的里最小的那个 tag
-// （它必然缺数，配哪个 tag 只影响记在哪个 tag 名下）；视图里一个 tag 都没有时这些标的没有序列。
+// SubjectSeries 把按标的选定的范围换成序列：每个标的配上视图里它最新的那条序列的 tag（改过 tag 时取最后一根最晚的）。
+// 给手里只有标的名单和已读入数据的调用方（试算）用，结果与“按标的判断”相同：标的缺数就是它的序列缺数。
+// 视图里没有数据的标的配上这些标的里最小的那个 tag（它必然缺数，配哪个 tag 只影响记在哪个 tag 名下）；视图里一个 tag 都没有时这些标的没有序列。
 func SubjectSeries(view *serieswindow.View, subjects []string) []seriesset.Series {
 	var out []seriesset.Series
 	var empty []string
@@ -134,11 +110,15 @@ func SubjectSeries(view *serieswindow.View, subjects []string) []seriesset.Serie
 			empty = append(empty, subject)
 			continue
 		}
-		for _, sv := range list {
-			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
-			if fallback == "" || sv.Tag < fallback {
-				fallback = sv.Tag
+		latest := list[0]
+		for _, sv := range list[1:] {
+			if sv.End(view.Step) > latest.End(view.Step) {
+				latest = sv
 			}
+		}
+		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: latest.Tag})
+		if fallback == "" || latest.Tag < fallback {
+			fallback = latest.Tag
 		}
 	}
 	if fallback != "" {

@@ -12,7 +12,7 @@ import (
 type FactorValues map[seriesset.Series]map[string]map[string]float64
 
 // PeriodValues 取出计算结果里 period 这一期各序列各成员的输出值（回放用，不经过写入）。
-// 时序因子按标的取行、行里带 series_tag，截面因子的行自带标的与 series_tag；统一数据集上同一标的的两条序列各自一项。
+// 时序因子按标的取行、行里带 series_tag，截面因子的行自带标的与 series_tag。
 func PeriodValues(plan Plan, computation Computation, period time.Time) (FactorValues, error) {
 	out := FactorValues{}
 	put := func(series seriesset.Series, member string, outputs []string, values []any) {

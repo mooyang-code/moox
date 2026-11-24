@@ -69,13 +69,12 @@ func (c *ManagerClient) Heartbeat(ctx context.Context, status domain.EngineStatu
 	return time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second, nil
 }
 
-// PulledJob is a recalc job leased to this engine with its execution inputs.
+// PulledJob is a recalc job handed to this engine with its execution inputs.
 type PulledJob struct {
-	JobID      string
-	LeaseToken string
-	Window     recalcexec.Window
-	Subjects   []string
-	Set        domain.EngineTask
+	JobID    string
+	Window   recalcexec.Window
+	Subjects []string
+	Set      domain.EngineTask
 	// DefaultFilled 是管理端已经记下的、按默认参数新补的期次（成员键 → 闭区间）：作业中途换引擎或重启后接着累计。
 	DefaultFilled map[string][]domain.TimeRange
 }
@@ -93,7 +92,7 @@ func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, err
 	if err != nil {
 		return PulledJob{}, false, fmt.Errorf("decode recalc job set: %w", err)
 	}
-	job := PulledJob{JobID: rsp.GetJob().GetJobId(), LeaseToken: rsp.GetLeaseToken(), Subjects: rsp.GetJob().GetSubjects(), Set: set,
+	job := PulledJob{JobID: rsp.GetJob().GetJobId(), Subjects: rsp.GetJob().GetSubjects(), Set: set,
 		DefaultFilled: defaultFilledFromRanges(rsp.GetJob().GetDefaultFilled())}
 	for _, field := range []struct {
 		name   string
@@ -115,10 +114,10 @@ func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, err
 
 // ReportRecalcProgress returns the manager's current status of the job. defaultFilled 是到目前为止累计的按默认参数新补的期次，
 // 为空表示没有变化。
-func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error) {
+func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error) {
 	var rsp factorpb.ReportRecalcProgressRsp
 	req := &factorpb.ReportRecalcProgressReq{
-		Engine: factorwire.EngineIdentityToPB(c.identity), JobId: jobID, LeaseToken: leaseToken,
+		Engine: factorwire.EngineIdentityToPB(c.identity), JobId: jobID,
 		ProgressTime: factorwire.FormatTime(progress), Status: status, Error: errText,
 		DefaultFilled: defaultFilledToRanges(defaultFilled),
 	}

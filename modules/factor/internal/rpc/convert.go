@@ -72,7 +72,6 @@ func recalcJobToPB(job RecalcJob) *factorpb.RecalcJob {
 		Status:        job.Status,
 		ProgressTime:  factorwire.FormatTime(job.ProgressTime),
 		Error:         job.Error,
-		EngineId:      job.EngineID,
 		DefaultFilled: defaultFilledToPB(job.DefaultFilled),
 		CreatedAt:     factorwire.FormatTime(job.CreatedAt),
 		UpdatedAt:     factorwire.FormatTime(job.UpdatedAt),

@@ -265,9 +265,8 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     - 停用后把实例改到另一个组合账户（`strategy instance update`），再执行一次 `disable`，关闭仍落在原组合上（原组合的目标过期，新组合没有变化）。
     - 管理台的组合账户详情页能看到关联的实例；`$CLI trade logical show --logical-account-id <组合>` 的输出里没有归属相关的字段（归属只记在 Strategy）。
 22. **因子侧**：新建因子任务后几分钟内 `$CLI factor task status --task-id <任务>` 显示计算中（检查全部通过）；第 17 步已看过 `t_factor_member_params`；
-    带自定义算子的补算作业续跑时用的是首次领取时的算子版本：主机装了 `sqlite3` 时只读看 Factor 库，
-    `$CLI host exec --host control -- sqlite3 -readonly /data/moox/data/factor-mgr/factor.db "SELECT c_job_id, c_udf_bindings FROM t_factor_recalc_jobs"`，
-    领取过的作业这一列有值（空对象表示没引用算子），激活新版本后再续跑这一列不变。
+    补算作业开始后切换自定义算子版本（`udf activate`）或改定义（`factor update`）都被拒绝，前提检查列出这条作业：
+    `$CLI udf activate <名称>@<哈希>` 不带 `--yes` 只预览，看“受影响任务没有已经开始的补算作业”这一项。
 23. **EngineControl 与模板**：`$CLI host routes --host-id factor` 里有 `trpc.moox.factor.EngineControl` 的三条路由，调用方是 strategy；因子机上 `ss -ltn | grep ':11423 '` 只监听 `127.0.0.1`。
 24. **逐台核对部署**（`$CLI host exec --host <主机> -- <命令>`；因子机只出站，这一步在局域网里做）：
     ```bash

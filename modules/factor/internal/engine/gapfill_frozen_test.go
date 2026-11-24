@@ -18,7 +18,7 @@ func minuteAt(n int) time.Time { return gapT0.Add(time.Duration(n) * time.Minute
 func frozen(subjects ...string) storageio.Universe {
 	var series []seriesset.Series
 	for _, subject := range subjects {
-		series = append(series, seriesOf(subject, gapSpotTag, gapSwapTag)...)
+		series = append(series, seriesOf(subject, gapSpotTag)...)
 	}
 	return storageio.Universe{Subjects: subjects, Series: series}
 }
@@ -42,13 +42,13 @@ func TestGapFillerMixesPeriodsWithAndWithoutFrozenUniverse(t *testing.T) {
 	f.filler.tick(context.Background())
 
 	require.Len(t, f.chunks.calls, 3)
-	require.Equal(t, seriesOf("BTC", gapSpotTag, gapSwapTag), f.chunks.calls[0].selection.Series)
+	require.Equal(t, seriesOf("BTC", gapSpotTag), f.chunks.calls[0].selection.Series)
 	require.Equal(t, minuteAt(0), f.chunks.calls[0].start)
 	require.Equal(t, minuteAt(1), f.chunks.calls[0].end)
 	require.Empty(t, f.chunks.calls[1].selection.Series, "没有冻结全集的相邻周期合并")
 	require.Equal(t, minuteAt(1), f.chunks.calls[1].start)
 	require.Equal(t, minuteAt(3), f.chunks.calls[1].end)
-	require.Equal(t, seriesOf("BTC", gapSpotTag, gapSwapTag), f.chunks.calls[2].selection.Series)
+	require.Equal(t, seriesOf("BTC", gapSpotTag), f.chunks.calls[2].selection.Series)
 	require.Equal(t, minuteAt(3), f.chunks.calls[2].start)
 	require.Zero(t, f.ledger.PendingCount())
 }
@@ -98,7 +98,7 @@ func TestGapFillerDailyTaskMergesOnlyAdjacentDays(t *testing.T) {
 	require.Equal(t, gapT0.Add(4*day), f.chunks.calls[1].end)
 }
 
-// 本批之外的标的上下架不切碎批次：冻结全集先按本批标的过滤再比较，SOL 的永续只在第 0 期的全集里，BTC 两期的序列相同，仍是一次运行。
+// 本批之外的标的上下架不切碎批次：冻结全集先按本批标的过滤再比较，SOL 只在第 0 期的全集里，BTC 两期的序列相同，仍是一次运行。
 func TestGapFillerOtherSubjectsListingDoesNotSplitTheBatch(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{
@@ -114,7 +114,7 @@ func TestGapFillerOtherSubjectsListingDoesNotSplitTheBatch(t *testing.T) {
 
 	require.Len(t, f.chunks.calls, 1)
 	require.Equal(t, minuteAt(2), f.chunks.calls[0].end)
-	require.Equal(t, seriesOf("BTC", gapSpotTag, gapSwapTag), f.chunks.calls[0].selection.Series)
+	require.Equal(t, seriesOf("BTC", gapSpotTag), f.chunks.calls[0].selection.Series)
 }
 
 // 同一轮里同一（数据集、触发事件、周期）的 marker 只读一次：两个批的区间不同、都含第 0 期时第 0 期不重复读。
@@ -219,7 +219,7 @@ func TestGapFillerHoldsPendingWhileMarkerMayStillBeWritten(t *testing.T) {
 	f.now = gapT0.Add(2 * time.Minute)
 	f.filler.tick(context.Background())
 	require.Len(t, f.chunks.calls, 1)
-	require.Equal(t, seriesOf("BTC", gapSpotTag, gapSwapTag), f.chunks.calls[0].selection.Series)
+	require.Equal(t, seriesOf("BTC", gapSpotTag), f.chunks.calls[0].selection.Series)
 	require.Zero(t, f.ledger.PendingCount())
 
 	// 超过 Settle 仍读不到 marker：按原逻辑退回兜底，一次运行、不带序列。

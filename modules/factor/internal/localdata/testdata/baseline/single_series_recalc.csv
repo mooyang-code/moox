@@ -1,7 +1,6 @@
 scenario,kind,subject,series_tag,data_time,column,value
 all_members,chunk,,,2026-10-01T00:41:00Z,status,degraded
 all_members,chunk,,,2026-10-01T00:41:00Z,failed_subjects,S5
-all_members,chunk,,,2026-10-01T00:41:00Z,derived_skipped,false
 all_members,chunk,,,2026-10-01T00:41:00Z,rows_written,4
 all_members,chunk,,,2026-10-01T00:41:00Z,warming,0
 all_members,member,,,2026-10-01T00:41:00Z,mean.status,degraded
@@ -31,7 +30,6 @@ all_members,item,S6,,2026-10-01T00:40:00Z,rank_partial,written
 all_members,default_filled,,,2026-10-01T00:40:00Z,pmean__var,2026-10-01T00:41:00Z
 all_members,chunk,,,2026-10-01T00:45:00Z,status,degraded
 all_members,chunk,,,2026-10-01T00:45:00Z,failed_subjects,S5
-all_members,chunk,,,2026-10-01T00:45:00Z,derived_skipped,false
 all_members,chunk,,,2026-10-01T00:45:00Z,rows_written,16
 all_members,chunk,,,2026-10-01T00:45:00Z,warming,0
 all_members,member,,,2026-10-01T00:45:00Z,mean.status,degraded
@@ -112,7 +110,6 @@ all_members,default_filled,,,2026-10-01T00:43:00Z,pmean__var,2026-10-01T00:45:00
 all_members,default_filled,,,2026-10-01T00:44:00Z,pmean__var,2026-10-01T00:45:00Z
 all_members,chunk,,,2026-10-01T00:46:00Z,status,degraded
 all_members,chunk,,,2026-10-01T00:46:00Z,failed_subjects,S5
-all_members,chunk,,,2026-10-01T00:46:00Z,derived_skipped,false
 all_members,chunk,,,2026-10-01T00:46:00Z,rows_written,4
 all_members,chunk,,,2026-10-01T00:46:00Z,warming,0
 all_members,member,,,2026-10-01T00:46:00Z,mean.status,degraded
@@ -142,7 +139,6 @@ all_members,item,S6,,2026-10-01T00:45:00Z,rank_partial,written
 all_members,default_filled,,,2026-10-01T00:45:00Z,pmean__var,2026-10-01T00:46:00Z
 all_members,chunk,,,2026-10-01T00:51:00Z,status,degraded
 all_members,chunk,,,2026-10-01T00:51:00Z,failed_subjects,S5
-all_members,chunk,,,2026-10-01T00:51:00Z,derived_skipped,false
 all_members,chunk,,,2026-10-01T00:51:00Z,rows_written,22
 all_members,chunk,,,2026-10-01T00:51:00Z,warming,0
 all_members,member,,,2026-10-01T00:51:00Z,mean.status,degraded
@@ -260,7 +256,6 @@ all_members,default_filled,,,2026-10-01T00:49:00Z,pmean__var,2026-10-01T00:51:00
 all_members,default_filled,,,2026-10-01T00:50:00Z,pmean__var,2026-10-01T00:51:00Z
 all_members,chunk,,,2026-10-01T00:52:00Z,status,degraded
 all_members,chunk,,,2026-10-01T00:52:00Z,failed_subjects,S5
-all_members,chunk,,,2026-10-01T00:52:00Z,derived_skipped,false
 all_members,chunk,,,2026-10-01T00:52:00Z,rows_written,4
 all_members,chunk,,,2026-10-01T00:52:00Z,warming,0
 all_members,member,,,2026-10-01T00:52:00Z,mean.status,degraded
@@ -644,7 +639,6 @@ all_members,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T00:47:0
 all_members,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T00:47:00Z,volume,154
 var_member_only,chunk,,,2026-10-01T00:41:00Z,status,degraded
 var_member_only,chunk,,,2026-10-01T00:41:00Z,failed_subjects,S5
-var_member_only,chunk,,,2026-10-01T00:41:00Z,derived_skipped,false
 var_member_only,chunk,,,2026-10-01T00:41:00Z,rows_written,4
 var_member_only,chunk,,,2026-10-01T00:41:00Z,warming,0
 var_member_only,member,,,2026-10-01T00:41:00Z,pmean__var.status,degraded
@@ -656,7 +650,6 @@ var_member_only,item,S6,,2026-10-01T00:40:00Z,pmean__var,written
 var_member_only,default_filled,,,2026-10-01T00:40:00Z,pmean__var,2026-10-01T00:41:00Z
 var_member_only,chunk,,,2026-10-01T00:45:00Z,status,degraded
 var_member_only,chunk,,,2026-10-01T00:45:00Z,failed_subjects,S5
-var_member_only,chunk,,,2026-10-01T00:45:00Z,derived_skipped,false
 var_member_only,chunk,,,2026-10-01T00:45:00Z,rows_written,16
 var_member_only,chunk,,,2026-10-01T00:45:00Z,warming,0
 var_member_only,member,,,2026-10-01T00:45:00Z,pmean__var.status,degraded
@@ -683,7 +676,6 @@ var_member_only,default_filled,,,2026-10-01T00:43:00Z,pmean__var,2026-10-01T00:4
 var_member_only,default_filled,,,2026-10-01T00:44:00Z,pmean__var,2026-10-01T00:45:00Z
 var_member_only,chunk,,,2026-10-01T00:46:00Z,status,degraded
 var_member_only,chunk,,,2026-10-01T00:46:00Z,failed_subjects,S5
-var_member_only,chunk,,,2026-10-01T00:46:00Z,derived_skipped,false
 var_member_only,chunk,,,2026-10-01T00:46:00Z,rows_written,4
 var_member_only,chunk,,,2026-10-01T00:46:00Z,warming,0
 var_member_only,member,,,2026-10-01T00:46:00Z,pmean__var.status,degraded
@@ -695,7 +687,6 @@ var_member_only,item,S6,,2026-10-01T00:45:00Z,pmean__var,written
 var_member_only,default_filled,,,2026-10-01T00:45:00Z,pmean__var,2026-10-01T00:46:00Z
 var_member_only,chunk,,,2026-10-01T00:51:00Z,status,degraded
 var_member_only,chunk,,,2026-10-01T00:51:00Z,failed_subjects,S5
-var_member_only,chunk,,,2026-10-01T00:51:00Z,derived_skipped,false
 var_member_only,chunk,,,2026-10-01T00:51:00Z,rows_written,22
 var_member_only,chunk,,,2026-10-01T00:51:00Z,warming,0
 var_member_only,member,,,2026-10-01T00:51:00Z,pmean__var.status,degraded
@@ -732,7 +723,6 @@ var_member_only,default_filled,,,2026-10-01T00:49:00Z,pmean__var,2026-10-01T00:5
 var_member_only,default_filled,,,2026-10-01T00:50:00Z,pmean__var,2026-10-01T00:51:00Z
 var_member_only,chunk,,,2026-10-01T00:52:00Z,status,degraded
 var_member_only,chunk,,,2026-10-01T00:52:00Z,failed_subjects,S5
-var_member_only,chunk,,,2026-10-01T00:52:00Z,derived_skipped,false
 var_member_only,chunk,,,2026-10-01T00:52:00Z,rows_written,4
 var_member_only,chunk,,,2026-10-01T00:52:00Z,warming,0
 var_member_only,member,,,2026-10-01T00:52:00Z,pmean__var.status,degraded
@@ -955,7 +945,6 @@ var_member_only,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T00:
 var_member_only,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T00:47:00Z,volume,154
 fixed_members_only,chunk,,,2026-10-01T00:45:00Z,status,degraded
 fixed_members_only,chunk,,,2026-10-01T00:45:00Z,failed_subjects,S5
-fixed_members_only,chunk,,,2026-10-01T00:45:00Z,derived_skipped,false
 fixed_members_only,chunk,,,2026-10-01T00:45:00Z,rows_written,20
 fixed_members_only,chunk,,,2026-10-01T00:45:00Z,warming,0
 fixed_members_only,member,,,2026-10-01T00:45:00Z,mean.status,degraded
@@ -1026,7 +1015,6 @@ fixed_members_only,item,S6,,2026-10-01T00:43:00Z,rank_partial,written
 fixed_members_only,item,S6,,2026-10-01T00:44:00Z,rank_partial,written
 fixed_members_only,chunk,,,2026-10-01T00:50:00Z,status,degraded
 fixed_members_only,chunk,,,2026-10-01T00:50:00Z,failed_subjects,S5
-fixed_members_only,chunk,,,2026-10-01T00:50:00Z,derived_skipped,false
 fixed_members_only,chunk,,,2026-10-01T00:50:00Z,rows_written,22
 fixed_members_only,chunk,,,2026-10-01T00:50:00Z,warming,0
 fixed_members_only,member,,,2026-10-01T00:50:00Z,mean.status,degraded
@@ -1112,7 +1100,6 @@ fixed_members_only,item,S6,,2026-10-01T00:48:00Z,rank_partial,failed
 fixed_members_only,item,S6,,2026-10-01T00:49:00Z,rank_partial,failed
 fixed_members_only,chunk,,,2026-10-01T00:52:00Z,status,degraded
 fixed_members_only,chunk,,,2026-10-01T00:52:00Z,failed_subjects,S5;S6
-fixed_members_only,chunk,,,2026-10-01T00:52:00Z,derived_skipped,false
 fixed_members_only,chunk,,,2026-10-01T00:52:00Z,rows_written,8
 fixed_members_only,chunk,,,2026-10-01T00:52:00Z,warming,0
 fixed_members_only,member,,,2026-10-01T00:52:00Z,mean.status,degraded
@@ -1407,7 +1394,6 @@ fixed_members_only,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T
 fixed_members_only,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T00:47:00Z,volume,154
 fill_only,chunk,,,2026-10-01T00:41:00Z,status,degraded
 fill_only,chunk,,,2026-10-01T00:41:00Z,failed_subjects,S5
-fill_only,chunk,,,2026-10-01T00:41:00Z,derived_skipped,false
 fill_only,chunk,,,2026-10-01T00:41:00Z,rows_written,4
 fill_only,chunk,,,2026-10-01T00:41:00Z,warming,0
 fill_only,member,,,2026-10-01T00:41:00Z,mean.status,degraded
@@ -1437,7 +1423,6 @@ fill_only,item,S6,,2026-10-01T00:40:00Z,rank_partial,written
 fill_only,default_filled,,,2026-10-01T00:40:00Z,pmean__var,2026-10-01T00:41:00Z
 fill_only,chunk,,,2026-10-01T00:45:00Z,status,degraded
 fill_only,chunk,,,2026-10-01T00:45:00Z,failed_subjects,S5
-fill_only,chunk,,,2026-10-01T00:45:00Z,derived_skipped,false
 fill_only,chunk,,,2026-10-01T00:45:00Z,rows_written,16
 fill_only,chunk,,,2026-10-01T00:45:00Z,warming,0
 fill_only,member,,,2026-10-01T00:45:00Z,mean.status,degraded
@@ -1518,7 +1503,6 @@ fill_only,default_filled,,,2026-10-01T00:43:00Z,pmean__var,2026-10-01T00:45:00Z
 fill_only,default_filled,,,2026-10-01T00:44:00Z,pmean__var,2026-10-01T00:45:00Z
 fill_only,chunk,,,2026-10-01T00:46:00Z,status,degraded
 fill_only,chunk,,,2026-10-01T00:46:00Z,failed_subjects,S5
-fill_only,chunk,,,2026-10-01T00:46:00Z,derived_skipped,false
 fill_only,chunk,,,2026-10-01T00:46:00Z,rows_written,4
 fill_only,chunk,,,2026-10-01T00:46:00Z,warming,0
 fill_only,member,,,2026-10-01T00:46:00Z,mean.status,degraded
@@ -1548,7 +1532,6 @@ fill_only,item,S6,,2026-10-01T00:45:00Z,rank_partial,written
 fill_only,default_filled,,,2026-10-01T00:45:00Z,pmean__var,2026-10-01T00:46:00Z
 fill_only,chunk,,,2026-10-01T00:51:00Z,status,degraded
 fill_only,chunk,,,2026-10-01T00:51:00Z,failed_subjects,S5
-fill_only,chunk,,,2026-10-01T00:51:00Z,derived_skipped,false
 fill_only,chunk,,,2026-10-01T00:51:00Z,rows_written,22
 fill_only,chunk,,,2026-10-01T00:51:00Z,warming,0
 fill_only,member,,,2026-10-01T00:51:00Z,mean.status,degraded
@@ -1666,7 +1649,6 @@ fill_only,default_filled,,,2026-10-01T00:49:00Z,pmean__var,2026-10-01T00:51:00Z
 fill_only,default_filled,,,2026-10-01T00:50:00Z,pmean__var,2026-10-01T00:51:00Z
 fill_only,chunk,,,2026-10-01T00:52:00Z,status,degraded
 fill_only,chunk,,,2026-10-01T00:52:00Z,failed_subjects,S5
-fill_only,chunk,,,2026-10-01T00:52:00Z,derived_skipped,false
 fill_only,chunk,,,2026-10-01T00:52:00Z,rows_written,4
 fill_only,chunk,,,2026-10-01T00:52:00Z,warming,0
 fill_only,member,,,2026-10-01T00:52:00Z,mean.status,degraded
@@ -1900,7 +1882,6 @@ fill_only,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T00:47:00Z
 fill_only,row,S6,venue:binance|market:spot|source:spot_http,2026-10-01T00:47:00Z,rank_partial,1
 complete_subjects,chunk,,,2026-10-01T00:41:00Z,status,complete
 complete_subjects,chunk,,,2026-10-01T00:41:00Z,failed_subjects,
-complete_subjects,chunk,,,2026-10-01T00:41:00Z,derived_skipped,false
 complete_subjects,chunk,,,2026-10-01T00:41:00Z,rows_written,3
 complete_subjects,chunk,,,2026-10-01T00:41:00Z,warming,0
 complete_subjects,member,,,2026-10-01T00:41:00Z,mean.status,complete
@@ -1926,7 +1907,6 @@ complete_subjects,item,S3,,2026-10-01T00:40:00Z,rank_partial,written
 complete_subjects,default_filled,,,2026-10-01T00:40:00Z,pmean__var,2026-10-01T00:41:00Z
 complete_subjects,chunk,,,2026-10-01T00:45:00Z,status,complete
 complete_subjects,chunk,,,2026-10-01T00:45:00Z,failed_subjects,
-complete_subjects,chunk,,,2026-10-01T00:45:00Z,derived_skipped,false
 complete_subjects,chunk,,,2026-10-01T00:45:00Z,rows_written,12
 complete_subjects,chunk,,,2026-10-01T00:45:00Z,warming,0
 complete_subjects,member,,,2026-10-01T00:45:00Z,mean.status,complete
@@ -1991,7 +1971,6 @@ complete_subjects,default_filled,,,2026-10-01T00:43:00Z,pmean__var,2026-10-01T00
 complete_subjects,default_filled,,,2026-10-01T00:44:00Z,pmean__var,2026-10-01T00:45:00Z
 complete_subjects,chunk,,,2026-10-01T00:46:00Z,status,complete
 complete_subjects,chunk,,,2026-10-01T00:46:00Z,failed_subjects,
-complete_subjects,chunk,,,2026-10-01T00:46:00Z,derived_skipped,false
 complete_subjects,chunk,,,2026-10-01T00:46:00Z,rows_written,3
 complete_subjects,chunk,,,2026-10-01T00:46:00Z,warming,0
 complete_subjects,member,,,2026-10-01T00:46:00Z,mean.status,complete
@@ -2017,7 +1996,6 @@ complete_subjects,item,S3,,2026-10-01T00:45:00Z,rank_partial,written
 complete_subjects,default_filled,,,2026-10-01T00:45:00Z,pmean__var,2026-10-01T00:46:00Z
 complete_subjects,chunk,,,2026-10-01T00:51:00Z,status,complete
 complete_subjects,chunk,,,2026-10-01T00:51:00Z,failed_subjects,
-complete_subjects,chunk,,,2026-10-01T00:51:00Z,derived_skipped,false
 complete_subjects,chunk,,,2026-10-01T00:51:00Z,rows_written,15
 complete_subjects,chunk,,,2026-10-01T00:51:00Z,warming,0
 complete_subjects,member,,,2026-10-01T00:51:00Z,mean.status,complete
@@ -2095,7 +2073,6 @@ complete_subjects,default_filled,,,2026-10-01T00:49:00Z,pmean__var,2026-10-01T00
 complete_subjects,default_filled,,,2026-10-01T00:50:00Z,pmean__var,2026-10-01T00:51:00Z
 complete_subjects,chunk,,,2026-10-01T00:52:00Z,status,complete
 complete_subjects,chunk,,,2026-10-01T00:52:00Z,failed_subjects,
-complete_subjects,chunk,,,2026-10-01T00:52:00Z,derived_skipped,false
 complete_subjects,chunk,,,2026-10-01T00:52:00Z,rows_written,3
 complete_subjects,chunk,,,2026-10-01T00:52:00Z,warming,0
 complete_subjects,member,,,2026-10-01T00:52:00Z,mean.status,complete

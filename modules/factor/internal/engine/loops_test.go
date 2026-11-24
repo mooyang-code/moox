@@ -84,7 +84,7 @@ func (f *jobClientFake) PullRecalcJob(context.Context) (PulledJob, bool, error) 
 	return f.job, found, nil
 }
 
-func (f *jobClientFake) ReportRecalcProgress(_ context.Context, _, _ string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error) {
+func (f *jobClientFake) ReportRecalcProgress(_ context.Context, _ string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error) {
 	f.reports = append(f.reports, reportCall{progress: progress, status: status, errText: errText, defaultFilled: defaultFilled})
 	if f.err != nil {
 		return "", f.err
@@ -125,7 +125,7 @@ func (r *planRecorder) Run(_ context.Context, plan pipeline.Plan) (pipeline.Outc
 func testJob(subjects ...string) PulledJob {
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	return PulledJob{
-		JobID: "job-1", LeaseToken: "token", Subjects: subjects,
+		JobID: "job-1", Subjects: subjects,
 		Window: recalcexec.Window{Start: start, End: start.Add(6 * time.Minute), Progress: start},
 		Set:    engineTask("ftask_a", "dataset_a", true, "bias"),
 	}
@@ -170,20 +170,22 @@ func TestRecalcLoopAbandonsOnConflict(t *testing.T) {
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
 	loop := newTestLoop(client, runner, &sourceFake{})
 
-	_, err := loop.RunOnce(context.Background())
+	found, err := loop.RunOnce(context.Background())
 
 	require.NoError(t, err)
-	require.Len(t, client.reports, 1, "no failed report after losing the lease")
+	require.False(t, found, "放弃的作业按没有作业处理，等一个轮询间隔再领")
+	require.Len(t, client.reports, 1, "no failed report after losing the registration")
 }
 
 func TestRecalcLoopAbandonsWhenManagerUnreachable(t *testing.T) {
 	client := &jobClientFake{job: testJob("BTC"), found: true, err: errors.New("dial tcp: i/o timeout")}
 	loop := newTestLoop(client, &planRecorder{out: pipeline.Outcome{Status: "complete"}}, &sourceFake{})
 
-	_, err := loop.RunOnce(context.Background())
+	found, err := loop.RunOnce(context.Background())
 
 	require.NoError(t, err)
-	require.Len(t, client.reports, 1, "the job is left to expire and resume, never marked failed")
+	require.False(t, found, "放弃的作业按没有作业处理，等一个轮询间隔再领")
+	require.Len(t, client.reports, 1, "the job stays running and resumes on the next pull, never marked failed")
 }
 
 func TestRecalcLoopReportsFailedWithError(t *testing.T) {

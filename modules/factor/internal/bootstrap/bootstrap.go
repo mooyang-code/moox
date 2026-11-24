@@ -84,7 +84,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	storage := storageio.NewGatewayClient(runtime.gateway)
 
-	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL), enginehub.WithHeartbeatStore(db))
+	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithHeartbeatStore(db))
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
 	// 自定义算子（wasm UDF）：发布复核与试算各有自己的运行时、内存预算与时限，与引擎分开计算；管理端不常驻实例。
 	verifyRuntime, err := factorudf.NewRuntime(appCtx, factorudf.Options{
@@ -104,7 +104,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	catalogService := catalog.NewService(db, storage,
 		catalog.WithReadyRecorder(hub.SetResultReady),
 		catalog.WithUDFVerifier(catalog.UDFVerifier{Runtime: verifyRuntime, Conformance: factorudf.ConformanceOptions{Timeout: udfVerifyTimeout}}),
-		catalog.WithEngineView(hub.Engine),
 		catalog.WithRefSubjectSource(storage),
 	)
 	fetchModule := func(ctx context.Context, hash string) ([]byte, error) {

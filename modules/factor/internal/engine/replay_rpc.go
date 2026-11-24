@@ -79,7 +79,7 @@ func replayParamsFromPB(members []*factorpb.MemberParams) (map[string]domain.Par
 	return out, nil
 }
 
-// replayPeriodToPB 把一期的帧换成线上格式：行按（标的, series_tag）的顺序，成员参数按成员键排序。
+// replayPeriodToPB 把一期的帧换成线上格式：行按标的的顺序，成员参数按成员键排序。
 func replayPeriodToPB(frame ReplayPeriodFrame) *factorpb.ReplayPeriod {
 	out := &factorpb.ReplayPeriod{PeriodTime: frame.Period, Rows: make([]*factorpb.ReplayRow, 0, len(frame.Rows))}
 	for _, row := range frame.Rows {

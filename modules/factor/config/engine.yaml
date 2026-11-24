@@ -82,7 +82,7 @@ watermark:
   state_file: ./data/engine/watermarks.json
   max_missing_ratio: 0.1        # 未确认缺失的失败标的 ÷ 期望标的超过它的周期阻塞水位
   task_ratios: {}                # 按任务 ID 覆盖阈值
-  poll_interval: 10s            # 阻塞或落后时读回 Storage 继续推进的间隔（保底）
+  poll_interval: 10s            # 阻塞或落后时继续推进的间隔（保底）
   max_periods: 30               # 一次推进最多处理的周期数
 
 # 系统暂停与恢复的本地状态：重启后按它决定继续暂停还是运行。
