@@ -70,7 +70,7 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	applied, err := setup.Apply(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
-	require.NoError(t, setup.SyncHostDeployments(t.Context(), cfg, cfg.ControlHost().Name))
+	require.NoError(t, setup.SyncTopology(t.Context(), cfg))
 	doctor := doctorcli.New(gateway)
 	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
 	require.NoError(t, err)
@@ -112,9 +112,9 @@ func (*adminRPCWire) GetDoctorContext(_ context.Context, req *monitorpb.GetDocto
 	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
 }
 
-func (w *adminRPCWire) SyncHostDeployments(_ context.Context, req *adminpb.SyncHostDeploymentsReq) (*adminpb.SyncHostDeploymentsRsp, error) {
-	if req.GetHostId() == "" || len(req.GetComponentIds()) == 0 {
-		return &adminpb.SyncHostDeploymentsRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INVALID_PARAM}}, nil
+func (w *adminRPCWire) SyncTopology(_ context.Context, req *adminpb.SyncTopologyReq) (*adminpb.SyncTopologyRsp, error) {
+	if len(req.GetHosts()) == 0 || len(req.GetHosts()[0].GetComponentIds()) == 0 {
+		return &adminpb.SyncTopologyRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INVALID_PARAM}}, nil
 	}
-	return &adminpb.SyncHostDeploymentsRsp{RetInfo: &adminpb.RetInfo{}}, nil
+	return &adminpb.SyncTopologyRsp{RetInfo: &adminpb.RetInfo{}}, nil
 }

@@ -20,7 +20,6 @@ func TestBuiltInEvents(t *testing.T) {
 	want := []string{
 		"event.collector.instrument.delist_scheduled@1",
 		"event.collector.kline.backfilled@1",
-		"event.observability.host.snapshot.reported@1",
 		"event.observability.log.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
 		"event.storage.dataset.period.completed@1",
@@ -30,7 +29,6 @@ func TestBuiltInEvents(t *testing.T) {
 	wantOwners := map[string]string{
 		"event.collector.instrument.delist_scheduled@1":   "collector",
 		"event.collector.kline.backfilled@1":              "collector",
-		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.log.reported@1":              "service",
 		"event.observability.metrics.snapshot.reported@1": "service",
 		"event.storage.dataset.period.completed@1":        "storage",
@@ -129,7 +127,7 @@ func TestObservabilityEventsShareOneStream(t *testing.T) {
 	require.NoError(t, err)
 	for _, event := range []Event{
 		ObservabilityMetricsSnapshotReported,
-		ObservabilityHostSnapshotReported,
+		ObservabilityLogReported,
 	} {
 		require.Equal(t, "MOOX_OBSERVABILITY", event.Stream())
 		family, err := registry.FamilyPattern(event)

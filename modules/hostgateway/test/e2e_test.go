@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -58,7 +59,7 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	testsnapshot.Host(t, raw, "storage").ExternalEntry = true
 	testsnapshot.AddIdentity(raw, "moox-skill")
 	testsnapshot.Rehash(t, raw)
-	reports := make(chan *pb.ReportStatusReq, 10)
+	pulls := make(chan *pb.PullSnapshotReq, 10)
 	testrpc.Serve(t, tls.NewListener(controlSocket, controlTLS.Server()), servicecatalog.GatewayControlPath, func(ctx context.Context, body []byte) ([]byte, error) {
 		message := codec.Message(ctx)
 		method := strings.TrimPrefix(message.ServerRPCName(), "/"+servicecatalog.GatewayControlPath+"/")
@@ -70,23 +71,22 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		if method == "PullSnapshot" {
-			req := &pb.PullSnapshotReq{}
-			if err := proto.Unmarshal(body, req); err != nil {
-				return nil, err
-			}
-			rsp := &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}
-			if req.CurrentHash != raw.Hash {
-				rsp.Changed, rsp.Snapshot = true, raw
-			}
-			return proto.Marshal(rsp)
+		if method != "PullSnapshot" {
+			return nil, fmt.Errorf("unexpected GatewayControl method %s", method)
 		}
-		req := &pb.ReportStatusReq{}
+		req := &pb.PullSnapshotReq{}
 		if err := proto.Unmarshal(body, req); err != nil {
 			return nil, err
 		}
-		reports <- req
-		return proto.Marshal(&pb.ReportStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
+		select {
+		case pulls <- req:
+		default:
+		}
+		rsp := &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}
+		if req.CurrentHash != raw.Hash {
+			rsp.Changed, rsp.Snapshot = true, raw
+		}
+		return proto.Marshal(rsp)
 	})
 	upstream, err := net.Listen("tcp", "127.0.0.1:20102")
 	require.NoError(t, err)
@@ -224,13 +224,15 @@ func TestRunOwnsTLSLocalDirectoryAndCompleteCache(t *testing.T) {
 	require.Equal(t, raw.Hash, view.Hash())
 	_, err = snapshot.Build("storage", view.Proto())
 	require.NoError(t, err)
-	select {
-	case report := <-reports:
-		require.NotEmpty(t, report.InstanceId)
-		require.Equal(t, "e2e-version", report.Version)
-		require.Equal(t, raw.Hash, report.AppliedHash)
-	case <-time.After(time.Second):
-		t.Fatal("heartbeat missing")
+	// 之后的拉取带上已应用的快照哈希（兼作心跳）。
+	deadline := time.After(10 * time.Second)
+	for applied := false; !applied; {
+		select {
+		case req := <-pulls:
+			applied = req.CurrentHash == raw.Hash
+		case <-deadline:
+			t.Fatal("pull with applied hash missing")
+		}
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -49,7 +48,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		control.Close()
 		t.Fatal(err)
 	}
-	if _, err := js.AddStream(&nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
+	if _, err := js.AddStream(&nats.StreamConfig{Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(), Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
 		control.Close()
 		t.Fatal(err)
 	}
@@ -90,7 +89,6 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 			_, commitErr := messageStore.CommitIngest(routeCtx, message, report, samples)
 			return commitErr
 		},
-		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
 	}
 	consumer, err := observabilityconsumer.NewConsumer(ctx, eventClient, registry, observabilityconsumer.DefaultConfig(), routes)
 	if err != nil {

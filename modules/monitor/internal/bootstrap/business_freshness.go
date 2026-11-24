@@ -74,46 +74,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
 		retired := make(map[string]struct{})
-		// 本轮保持原状态的检查：信号无法确认的网关检查。
+		// 本轮保持原状态的检查。
 		frozenChecks := make(map[string]bool)
-		// 每台主机的网关三项信号（心跳、实例冲突、路由同步）合并成一条检查：任何一项异常都要处理，没必要分三处告警。
-		type gatewayHost struct {
-			unknown, unhealthy bool
-			reasons, raws      []string
-		}
-		gatewayHosts := make(map[string]*gatewayHost)
-		gatewayNames := map[string]string{"heartbeat": "心跳", "instance_conflict": "实例", "route_sync": "路由同步"}
-		for _, signal := range overview.GatewaySignals {
-			host := gatewayHosts[signal.HostID]
-			if host == nil {
-				host = &gatewayHost{}
-				gatewayHosts[signal.HostID] = host
-			}
-			switch {
-			case signal.Status == "unknown":
-				host.unknown = true
-			case signal.Status != "healthy":
-				host.unhealthy = true
-				host.reasons = append(host.reasons, gatewayNames[signal.Kind]+"："+signal.Reason)
-				if signal.RawError != "" {
-					host.raws = append(host.raws, signal.RawError)
-				}
-			}
-		}
-		for hostID, host := range gatewayHosts {
-			checkID := "gateway:" + hostID + ":status"
-			key := events.SystemSpaceID + "\x00" + checkID
-			// 没有任何异常信号、但有信号无法确认时保持原状态，不伪造成功去恢复既有告警。
-			if host.unknown && !host.unhealthy {
-				frozenChecks[key] = true
-				continue
-			}
-			reason := "网关心跳、实例与路由同步正常"
-			if host.unhealthy {
-				reason = strings.Join(host.reasons, "；")
-			}
-			items[key] = businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: checkID, name: "主机网关（" + hostID + "）", success: !host.unhealthy, reason: reason, rawError: strings.Join(host.raws, "；")}
-		}
 		klineEvaluationRan := len(klineEvaluators) == 0 || klineEvaluators[0] == nil
 		klineEvaluated := make(map[string]struct{})
 		// K 线新鲜度已覆盖的结果数据集/视图：同一条数据链路（Storage 写入水位、View 水位）不再各自生成 dataset 新鲜度检查。
@@ -526,9 +488,9 @@ func collectorHalted(services []monitorobservability.ServiceStatus) bool {
 // observationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。
 const observationIngestCheckID = "observation:ingest"
 
-// observationIndependent 报告一项检查是否不依赖观测输入：网关信号来自 Admin，行情探针与 K 线新鲜度直接读 Storage 与控制面。
+// observationIndependent 报告一项检查是否不依赖观测输入：行情探针与 K 线新鲜度直接读 Storage 与控制面。
 func observationIndependent(checkID string) bool {
-	for _, prefix := range []string{"gateway:", "kline_freshness:", "market_canary:", tagCheckPrefix, observationIngestCheckID} {
+	for _, prefix := range []string{"kline_freshness:", "market_canary:", tagCheckPrefix, observationIngestCheckID} {
 		if strings.HasPrefix(checkID, prefix) {
 			return true
 		}

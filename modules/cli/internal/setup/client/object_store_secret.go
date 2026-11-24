@@ -52,3 +52,18 @@ func objectStoreCredential(secretID string, secret *pb.SecretMaterial) (ObjectSt
 	}
 	return ObjectStoreCredential{AccessKeyID: keyID, SecretAccessKey: value}, nil
 }
+
+// remoteRet 把 Admin 返回的错误码换成带方法名的错误。
+func remoteRet(method string, ret *pb.RetInfo) error {
+	if ret == nil {
+		return fmt.Errorf("%s: empty response", method)
+	}
+	if ret.GetCode() == pb.ErrorCode_SUCCESS {
+		return nil
+	}
+	msg := strings.TrimSpace(ret.GetMsg())
+	if msg == "" {
+		msg = ret.GetCode().String()
+	}
+	return errors.New(method + ": " + msg)
+}

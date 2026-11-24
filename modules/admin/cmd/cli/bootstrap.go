@@ -160,8 +160,8 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		for _, h := range topology.Hosts {
 			specs = append(specs, hostSpec(h))
 		}
-		// This also reserves SQLite's writer before validating the full fleet.
-		if err := dao.SyncHosts(ctx, specs); err != nil {
+		// 按 moox.toml 整份覆盖主机与部署（含启停状态）；同时先占住 SQLite 的写锁再校验整份拓扑。
+		if _, err := dao.ReplaceTopology(ctx, specs); err != nil {
 			return err
 		}
 		if _, err := masterKey(); err != nil {
@@ -215,7 +215,8 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 
 // hostSpec 把离线拓扑里的主机转换成部署同步的输入；SSH 凭据随主机一起写入。
 func hostSpec(h hostbundle.Host) sysdeploy.HostSpec {
-	spec := sysdeploy.HostSpec{HostID: h.HostID, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, ExternalEntry: h.ExternalEntry, Description: h.Description, Components: h.Components}
+	spec := sysdeploy.HostSpec{HostID: h.HostID, Enabled: !h.Disabled, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability,
+		ExternalEntry: h.ExternalEntry, Description: h.Description, Components: h.Components, DisabledComponents: h.DisabledComponents}
 	if h.SSH != nil && h.SSH.Port != 0 {
 		ssh := &sysdeploy.SSHSpec{Port: h.SSH.Port, User: h.SSH.User}
 		if h.SSH.AuthType == "private_key" {

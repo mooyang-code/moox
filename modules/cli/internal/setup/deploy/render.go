@@ -253,10 +253,8 @@ func (r *renderer) eventBus(component servicecatalog.Component, environment map[
 		}
 		r.put(component.ID, "secrets/eventbus/"+role+".yaml", rendered, 0o600)
 	}
-	if component.ID != "host-agent" {
-		environment["MOOX_METRICS_EVENTBUS_URL"] = url
-		environment["MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"] = path.Join(directory, "metrics-publisher.yaml")
-	}
+	environment["MOOX_METRICS_EVENTBUS_URL"] = url
+	environment["MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"] = path.Join(directory, "metrics-publisher.yaml")
 	if role := primaryRole(component); role != "" {
 		credential := path.Join(directory, role+".yaml")
 		environment["MOOX_EVENTBUS_URL"], environment["MOOX_EVENTBUS_CREDENTIAL_FILE"] = url, credential
@@ -377,7 +375,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 		switch id {
 		case "host-agent":
 			set("host_id", r.Host.Name)
-			set("eventbus_config", credential)
 			set("host_policy_path", layout.HostPolicy())
 			set("gateway_client", map[string]string{})
 			if err == nil {

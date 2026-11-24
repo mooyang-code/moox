@@ -12,9 +12,9 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	observabilityconsumer "github.com/mooyang-code/moox/modules/monitor/internal/observability/eventconsumer"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
@@ -107,7 +107,6 @@ func startObservabilityConsumer(
 	}
 	routes := observabilityconsumer.Routes{
 		Metrics: metricsObservabilityRoute(messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
-		Host:    hostObservabilityRoute(hostStore, runtime),
 	}
 	if runtime.Repositories != nil {
 		routes.Logs = logObservabilityRoute(runtime.Repositories.Logs)
@@ -154,7 +153,7 @@ func startObservabilityConsumer(
 				// policy; remove it once so the configured policy can take effect on
 				// the next retry instead of leaving observability permanently stale.
 				if strings.Contains(bindErr.Error(), "conflicts in DeliverPolicy") {
-					if deleteErr := js.DeleteConsumer(ctx, consumerCfg.Stream, consumerCfg.Consumer); deleteErr != nil {
+					if deleteErr := js.DeleteConsumer(ctx, events.MonitorObservabilityConsumer.Stream(), observabilityconsumer.DefaultConsumer); deleteErr != nil {
 						log.WarnContextf(ctx, "observability conflicting durable delete failed: %v", deleteErr)
 					}
 				}
@@ -256,24 +255,24 @@ func metricsObservabilityRoute(
 	}
 }
 
-func hostObservabilityRoute(store *hostmetrics.Store, runtime *Runtime) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
-	return func(ctx context.Context, message *eventpb.EventMessage, _ *hostmetricpb.HostMetric) error {
-		metric, err := hostmetrics.ValidateMessage(message)
+// hostReportIngest 处理 HostAgent 随拉取主机策略带来的主机快照：校验、入库，并记下写入成败（进 Monitor 自己的就绪判断）。
+func hostReportIngest(store *hostmetrics.Store, runtime *Runtime) func(context.Context, *monitorpb.HostReport) error {
+	return func(ctx context.Context, report *monitorpb.HostReport) error {
+		validated, err := hostmetrics.ValidateReport(report.GetReportId(), report.GetCollectedAt(), report.GetMetric())
 		if err != nil {
-			return observabilityconsumer.Permanent(err)
+			return err
 		}
 		if store == nil {
 			err := errors.New("主机快照处理未初始化")
 			runtime.recordHostWriteFailure(err)
 			return err
 		}
-		err = store.Persist(ctx, message, metric)
-		if err != nil {
+		if err := store.Persist(ctx, validated); err != nil {
 			runtime.recordHostWriteFailure(err)
-		} else {
-			runtime.recordHostWriteSuccess()
+			return err
 		}
-		return err
+		runtime.recordHostWriteSuccess()
+		return nil
 	}
 }
 

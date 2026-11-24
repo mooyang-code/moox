@@ -43,7 +43,7 @@ func TestConsumerEventFiltersRejectAmbiguousOrCrossStreamEvents(t *testing.T) {
 	tests := []ConsumerConfig{
 		{Event: ViewDataReady, Events: []Event{DatasetPeriodCompleted}},
 		{Events: []Event{ViewDataReady, ViewDataReady}},
-		{Events: []Event{ViewDataReady, ObservabilityHostSnapshotReported}},
+		{Events: []Event{ViewDataReady, ObservabilityLogReported}},
 		{},
 	}
 	for _, cfg := range tests {

@@ -10,7 +10,6 @@ import (
 	observabilityconsumer "github.com/mooyang-code/moox/modules/monitor/internal/observability/eventconsumer"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/metricspb"
@@ -22,7 +21,7 @@ import (
 func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	server := testkit.Start(t)
 	server.AddStream(t, &nats.StreamConfig{
-		Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject},
+		Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(),
 		Storage: nats.MemoryStorage, Duplicates: 2 * time.Minute,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -40,7 +39,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var metricCalls, hostCalls, retryCalls int
+	var metricCalls, logCalls, retryCalls int
 	routes := observabilityconsumer.Routes{
 		Metrics: func(_ context.Context, message *eventpb.EventMessage, _ *metricspb.MetricReport) error {
 			metricCalls++
@@ -52,8 +51,8 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 			}
 			return nil
 		},
-		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
-			hostCalls++
+		Logs: func(context.Context, *eventpb.EventMessage, *metricspb.LogReport) error {
+			logCalls++
 			return nil
 		},
 	}
@@ -68,12 +67,12 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 
 	publishObservabilityMetric(t, ctx, publisher, "metrics-deduplicated")
 	publishObservabilityMetric(t, ctx, publisher, "metrics-deduplicated")
-	hostID := "control"
-	if _, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
-		HostId: hostID, Hostname: "worker-a", Snapshot: &hostmetricpb.HostSnapshot{},
+	if _, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
+		ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
+		Records: []*metricspb.LogRecord{{Sequence: 1, TimeUnixNano: time.Now().UnixNano(), Level: "error", Message: "下单失败"}},
 	}, events.PublishOptions{
 		EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(),
-		SpaceID: "mooxsys", SubjectID: hostID,
+		SpaceID: "mooxsys", SubjectID: "trade/trade@overseas",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +87,8 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if metricCalls != 1 || hostCalls != 1 {
-		t.Fatalf("deduplicated route calls metrics=%d host=%d", metricCalls, hostCalls)
+	if metricCalls != 1 || logCalls != 1 {
+		t.Fatalf("deduplicated route calls metrics=%d logs=%d", metricCalls, logCalls)
 	}
 
 	publishObservabilityMetric(t, ctx, publisher, "metrics-retry")
@@ -137,7 +136,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var durableNames []string
-	for name := range server.JetStream().ConsumerNames(events.ObservabilityStreamName()) {
+	for name := range server.JetStream().ConsumerNames(events.StreamObservability) {
 		durableNames = append(durableNames, name)
 	}
 	if len(durableNames) != 1 || durableNames[0] != observabilityconsumer.DefaultConsumer {

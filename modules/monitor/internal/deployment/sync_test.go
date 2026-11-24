@@ -44,7 +44,7 @@ func TestSyncWritesTopologyWithoutProbeChecks(t *testing.T) {
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	source := &memorySource{snapshot: testSnapshot(t)}
-	syncer := NewSyncer(repos.Topology, source, nil)
+	syncer := NewSyncer(repos.Topology, source)
 	require.NoError(t, syncer.Sync(t.Context()))
 	topology, err := repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)

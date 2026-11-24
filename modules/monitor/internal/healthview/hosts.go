@@ -26,6 +26,13 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 			}
 		}
 	}
+	// 主机网关的组件上报：没有 host-agent 上报（或已停用）的主机按它判断在不在线。
+	gateway := make(map[string]string)
+	for _, service := range facts.Services {
+		if service.ServiceName == "host-gateway" && service.Source == observability.SourceReporter {
+			gateway[service.NodeID] = service.ReporterStatus
+		}
+	}
 	// reported 表示这台主机有过 host-agent 上报。
 	decorate := func(host *pb.HealthHost, reported bool) {
 		if agentDisabled[host.HostId] {
@@ -37,21 +44,14 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 				host.Status, host.Reason = "disabled", "主机已停用"
 			}
 		}
-		for _, signal := range facts.GatewaySignals {
-			if signal.HostID != host.HostId {
-				continue
-			}
-			host.GatewaySignals = append(host.GatewaySignals, &pb.HealthGatewaySignal{Kind: signal.Kind, PendingSince: stamp(signal.PendingSince), ExpectedHash: signal.ExpectedHash, AppliedHash: signal.AppliedHash, Signal: &pb.HealthSignal{Status: domain.HealthStatus(signal.Status), Reason: signal.Reason, RawError: signal.RawError, CheckedAt: stamp(signal.CheckedAt)}})
-			if host.Status == "disabled" {
-				continue
-			}
-			if signal.Kind == "heartbeat" && (!reported || agentDisabled[host.HostId]) && !expectedAgent[host.HostId] {
-				host.Status, host.Reason = domain.HealthStatus(signal.Status), signal.Reason
-			}
-			// 已按主机失联显示的主机保留失联的原因（与告警同一段文字），不被单项网关信号的说明盖掉。
-			if signal.Status == "down" && host.Status != "down" {
-				host.Status, host.Reason = "down", signal.Reason
-			}
+		if host.Status == "disabled" || reported && !agentDisabled[host.HostId] || expectedAgent[host.HostId] {
+			return
+		}
+		switch gateway[host.HostId] {
+		case "healthy":
+			host.Status, host.Reason = "healthy", "主机网关在上报"
+		case "stale", "missing":
+			host.Status, host.Reason = "down", "主机网关停止上报"
 		}
 	}
 	var out []*pb.HealthHost

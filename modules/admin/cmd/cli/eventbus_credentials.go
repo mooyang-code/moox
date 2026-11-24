@@ -19,14 +19,10 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
-
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus", "callback-dispatcher-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade", "collector-eventbus": "eventbus_collector", "callback-dispatcher-eventbus": "eventbus_callback_dispatcher"}
 
 // eventBusCAFile 是角色文件里写的根证书位置：角色文件在 secrets/eventbus/ 下，MooX CA 根证书在上一级的 secrets/ 下。
 // EventBus 的服务端证书就是它所在主机的主机证书，客户端用这张根证书校验。
@@ -126,13 +122,10 @@ func reconcileEventBusFiles(dir string, out io.Writer) error {
 }
 
 func parseCredentialToken(raw string) string {
-	for _, key := range []string{"token", "eventbus_token", "monitor_eventbus_token"} {
-		prefix := key + ":"
-		for _, line := range strings.Split(raw, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, prefix) {
-				return strings.TrimSpace(strings.TrimPrefix(line, prefix))
-			}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(line, "token:"); ok {
+			return strings.TrimSpace(value)
 		}
 	}
 	return ""
@@ -255,101 +248,13 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	}
 	roleFiles := eventBusRoleFiles()
 	for role, name := range roleFiles {
-		field := "token"
-		if role == "hostagent-publisher" {
-			field = "eventbus_token"
-		}
-		if role == "monitor-observability-consumer" {
-			field = "monitor_eventbus_token"
-		}
 		// 导出里写的是对外地址；各单元安装时会按"与 EventBus 是否同机"改写成实际使用的地址。
-		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\n%s: %s\nca_file: %s\n", natsURL, role, field, tokens[role], eventBusCAFile)
+		content := fmt.Sprintf("version: 1\nurls:\n  - %s\nusername: %s\ntoken: %s\nca_file: %s\n", natsURL, role, tokens[role], eventBusCAFile)
 		if err := atomicSecretFile(filepath.Join(dir, name), []byte(content)); err != nil {
 			return err
 		}
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "roles": eventBusRoles})
-}
-
-func eventBusRoleFiles() map[string]string {
-	return map[string]string{
-		"eventbus-internal-admin":        "internal-admin.yaml",
-		"hostagent-publisher":            "hostagent-publisher.yaml",
-		"metrics-publisher":              "metrics-publisher.yaml",
-		"monitor-observability-consumer": "monitor-observability.yaml",
-		"storage-eventbus":               "storage-eventbus.yaml",
-		"factor-eventbus":                "factor-eventbus.yaml",
-		"strategy-eventbus":              "strategy-eventbus.yaml",
-		"trade-eventbus":                 "trade-eventbus.yaml",
-		"collector-eventbus":             "collector-eventbus.yaml",
-		"callback-dispatcher-eventbus":   "callback-dispatcher-eventbus.yaml",
-	}
-}
-
-// collectorEventBusSpaces 是 Collector 合成消费者按空间创建持久消费者的空间，必须与 barclock.Markets() 登记的市场一致
-// （Collector 给每个登记的市场建消费者）；新增市场时同步修改。
-var collectorEventBusSpaces = []string{"crypto", "stockcn", "stockhk", "stockus"}
-
-// collectorEventBusPublish 是 Collector 的发布权限：发布补采完成事件和标的下架事件，以及合成的两个持久消费者
-// （源周期完成在 MOOX_STORAGE、补采完成在 MOOX_COLLECTOR，每个空间各一个）所需的 JetStream 接口。
-func collectorEventBusPublish() string {
-	allow := []string{`"moox.event.collector.kline.backfilled.v1.>"`, `"moox.event.collector.instrument.delist_scheduled.v1.>"`, `"$JS.API.STREAM.NAMES"`}
-	for _, space := range collectorEventBusSpaces {
-		for _, consumer := range []struct{ stream, name string }{
-			{"MOOX_STORAGE", "collector_resample_period_" + space + "_v1"},
-			{"MOOX_COLLECTOR", "collector_resample_backfilled_" + space + "_v1"},
-		} {
-			allow = append(allow,
-				fmt.Sprintf(`"$JS.API.CONSUMER.INFO.*.%s"`, consumer.name),
-				fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s"`, consumer.stream, consumer.name),
-				fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s.>"`, consumer.stream, consumer.name),
-				fmt.Sprintf(`"$JS.API.CONSUMER.DURABLE.CREATE.%s.%s"`, consumer.stream, consumer.name),
-				fmt.Sprintf(`"$JS.API.CONSUMER.MSG.NEXT.%s.%s"`, consumer.stream, consumer.name),
-				fmt.Sprintf(`"$JS.ACK.%s.%s.>"`, consumer.stream, consumer.name),
-			)
-		}
-	}
-	return strings.Join(allow, ", ")
-}
-
-func usersYAML(tokens map[string]string) string {
-	return baseUsersYAML(tokens) + callbackDispatcherUserYAML(tokens["callback-dispatcher-eventbus"])
-}
-
-func baseUsersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; publisher roles never receive broad JetStream API access.
-	return fmt.Sprintf("users:\n"+
-		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"$JS.EVENT.ADVISORY.API\"]}\n"+
-		"  - username: hostagent-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.observability.host.snapshot.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: metrics-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.observability.metrics.snapshot.reported.v1.>\", \"moox.event.observability.log.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: monitor-observability-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.DELETE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.ACK.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.storage.dataset.period.completed.v1.>\", \"moox.event.storage.view.data.ready.v2.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.ACK.MOOX_STORAGE.factor_collector_period_v1.>\", \"$JS.API.CONSUMER.INFO.*.factor_kline_backfilled_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.factor_kline_backfilled_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.factor_kline_backfilled_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_COLLECTOR.factor_kline_backfilled_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.factor_kline_backfilled_v1\", \"$JS.ACK.MOOX_COLLECTOR.factor_kline_backfilled_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.dataset.period.completed.v1.>\"]}\n      responses: {max_messages: 1, expires: 10s}\n"+
-		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.trade.target.weight_requested.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.ACK.MOOX_STORAGE.strategy_view_data_ready_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.view.data.ready.v2.>\"]}\n"+
-		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: collector-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [%s]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
-		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"], tokens["collector-eventbus"], collectorEventBusPublish())
-}
-
-// callbackDispatcherEventBusPublish 是事件中心的权限：只有它自己消费的那几个 durable 的 JetStream 接口，
-// 没有任何事件主题的发布权限（它不向 EventBus 反写事件）。每个事件一个 durable，名字由 events 包统一生成。
-func callbackDispatcherEventBusPublish() string {
-	allow := []string{`"$JS.API.STREAM.NAMES"`}
-	for _, event := range events.CallbackDispatcherEvents {
-		stream, name := event.Stream(), events.CallbackDispatcherConsumerName(event)
-		allow = append(allow,
-			fmt.Sprintf(`"$JS.API.CONSUMER.INFO.*.%s"`, name),
-			fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s"`, stream, name),
-			fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s.>"`, stream, name),
-			fmt.Sprintf(`"$JS.API.CONSUMER.DURABLE.CREATE.%s.%s"`, stream, name),
-			fmt.Sprintf(`"$JS.API.CONSUMER.MSG.NEXT.%s.%s"`, stream, name),
-			fmt.Sprintf(`"$JS.ACK.%s.%s.>"`, stream, name),
-		)
-	}
-	return strings.Join(allow, ", ")
-}
-
-func callbackDispatcherUserYAML(token string) string {
-	return fmt.Sprintf("  - username: callback-dispatcher-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [%s]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n", token, callbackDispatcherEventBusPublish())
 }
 
 func atomicSecretFile(path string, data []byte) error {

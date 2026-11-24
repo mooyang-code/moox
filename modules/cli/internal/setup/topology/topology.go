@@ -45,16 +45,19 @@ type EventBus struct {
 
 // Config 是 moox.toml 的内容。字段都是拓扑与部署时渲染的参数，没有秘密。
 type Config struct {
-	Paths              Paths                     `toml:"paths"`
-	EventBus           EventBus                  `toml:"eventbus"`
-	HostCatalog        map[string]HostDefinition `toml:"hosts"`
-	Deployments        map[string][]string       `toml:"deployments"`
-	StorageRetention   StorageRetention          `toml:"storage_retention"`
-	StorageView        StorageView               `toml:"storage_view"`
-	CollectorRetention CollectorRetention        `toml:"collector_retention"`
-	EgressProxy        EgressProxy               `toml:"egress_proxy"`
-	Logging            Logging                   `toml:"logging"`
-	SCFPlan            SCFPlan                   `toml:"scf_plan"`
+	Paths       Paths                     `toml:"paths"`
+	EventBus    EventBus                  `toml:"eventbus"`
+	HostCatalog map[string]HostDefinition `toml:"hosts"`
+	Deployments map[string][]string       `toml:"deployments"`
+	// DeploymentsDisabled 是与 [deployments] 同形的停用清单：列出的组件仍登记、仍装文件，但 Admin 里记为停用、systemd 单元停掉。
+	// 每台主机的列表必须是它在 [deployments] 里那份的子集。
+	DeploymentsDisabled map[string][]string `toml:"deployments_disabled"`
+	StorageRetention    StorageRetention    `toml:"storage_retention"`
+	StorageView         StorageView         `toml:"storage_view"`
+	CollectorRetention  CollectorRetention  `toml:"collector_retention"`
+	EgressProxy         EgressProxy         `toml:"egress_proxy"`
+	Logging             Logging             `toml:"logging"`
+	SCFPlan             SCFPlan             `toml:"scf_plan"`
 	// ArchiveObjectStore 为 nil 表示归档用因子机上内置的 SeaweedFS；非 nil 时用这里配置的外部 S3。
 	ArchiveObjectStore *ArchiveObjectStore `toml:"archive_object_store"`
 	// Overrides 是手工调过的组件配置：组件 → 配置文件名 → 键路径 → 值，部署渲染之后逐项覆盖。

@@ -36,10 +36,9 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 			{NodeID: "control", ServiceName: "eventbus", Enabled: true, Status: "unknown", Reason: "reporter missing", ReporterStatus: "missing"},
 			{NodeID: "control", ServiceName: "archive-mgr", Status: "disabled", Reason: "部署已停用", ReporterStatus: "missing"},
 		},
-		Unregistered:   []observability.ServiceStatus{{NodeID: "control", ServiceName: "unknown-collector-name", Instances: []observability.ReporterInstance{{InstanceID: "orphan", Version: "dev", Status: "healthy", LastSeenAt: now}}}},
-		Hosts:          []observability.HostStatus{{HostID: "offline", Hostname: "offline-host", Status: "down", Reason: "agent unreachable", LastSeenAt: now.Add(-10 * time.Minute)}},
-		GatewaySignals: []observability.GatewaySignal{{HostID: "offline", Kind: "heartbeat", Status: "down", Reason: "主机网关心跳已中断", CheckedAt: now}},
-		Datasets:       []observability.DatasetFrequencyStatus{{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Status: "degraded", Reason: "输出水位已落后", LastRunAt: now, LastSuccessAt: now.Add(-time.Minute), InputWatermarkAt: now, OutputWatermarkAt: now.Add(-2 * time.Minute), LastReportedAt: now, LatestBarClose: now.Add(-time.Minute), OutputArrivedAt: now.Add(-time.Minute + 3*time.Second), DelaySeconds: 3, DelayKnown: true, ExpectedBarAt: now.Add(-2 * time.Minute), ExpectedBarClose: now.Add(-time.Minute), LatenessLimitSeconds: 600, Timezone: "UTC"}},
+		Unregistered: []observability.ServiceStatus{{NodeID: "control", ServiceName: "unknown-collector-name", Instances: []observability.ReporterInstance{{InstanceID: "orphan", Version: "dev", Status: "healthy", LastSeenAt: now}}}},
+		Hosts:        []observability.HostStatus{{HostID: "offline", Hostname: "offline-host", Status: "down", Reason: "agent unreachable", LastSeenAt: now.Add(-10 * time.Minute)}},
+		Datasets:     []observability.DatasetFrequencyStatus{{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Status: "degraded", Reason: "输出水位已落后", LastRunAt: now, LastSuccessAt: now.Add(-time.Minute), InputWatermarkAt: now, OutputWatermarkAt: now.Add(-2 * time.Minute), LastReportedAt: now, LatestBarClose: now.Add(-time.Minute), OutputArrivedAt: now.Add(-time.Minute + 3*time.Second), DelaySeconds: 3, DelayKnown: true, ExpectedBarAt: now.Add(-2 * time.Minute), ExpectedBarClose: now.Add(-time.Minute), LatenessLimitSeconds: 600, Timezone: "UTC"}},
 	}
 	view := projectFacts(facts)
 	hostAlert, err := (Builder{}).projectAlert(t.Context(), domain.AlertState{CheckID: "host:offline:cpu", DedupeKey: "host-alert", TriggeredAt: &now, UpdatedAt: now}, facts, newCheckTitles(nil))
@@ -136,14 +135,14 @@ func TestUnknownTopologyNeverInventsComponentsAndNamesNeverMatchSubstrings(t *te
 }
 
 func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.T) {
-	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "host-agent", Status: "disabled"}}}, Hosts: []observability.HostStatus{{HostID: "control", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy", Reason: "主机网关心跳正常"}}}
+	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "host-agent", Status: "disabled"}}}, Hosts: []observability.HostStatus{{HostID: "control", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)}}, Services: []observability.ServiceStatus{{NodeID: "control", ServiceName: "host-gateway", Source: observability.SourceReporter, Enabled: true, ReporterStatus: "healthy"}}}
 	view := projectFacts(facts)
 	require.Equal(t, "healthy", view.Hosts[0].Status)
-	// 采集部署启用后停报：网关心跳正常时主机仍在线，只是 host-agent 停了，显示需关注；心跳也停了才是主机失联。
+	// 采集部署启用后停报：主机网关仍在上报时主机仍在线，只是 host-agent 停了，显示需关注；网关也停报才是主机失联。
 	facts.Topology.Deployments[0].Status = "enabled"
 	view = projectFacts(facts)
 	require.Equal(t, "degraded", view.Hosts[0].Status)
-	facts.GatewaySignals[0].Status, facts.GatewaySignals[0].Reason = "down", "主机网关超过 2 分钟没有心跳"
+	facts.Services[0].ReporterStatus = "stale"
 	view = projectFacts(facts)
 	require.Equal(t, "down", view.Hosts[0].Status)
 	facts.Topology.Hosts[0].Status = "disabled"
@@ -164,19 +163,6 @@ func TestAgentOfRemovedHostIsNeitherListedNorAlerted(t *testing.T) {
 	facts.Topology = nil
 	view = projectFacts(facts)
 	require.Len(t, view.Hosts, 2)
-}
-
-func TestGatewayPendingTimeKeepsItsSnapshotIdentity(t *testing.T) {
-	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	pending := now.Add(-time.Minute)
-	facts := observability.Overview{GeneratedAt: now, TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "route_sync", Status: "unknown", PendingSince: pending, ExpectedHash: "new", AppliedHash: "old", CheckedAt: now}}}
-	hosts := projectHosts(facts)
-	require.Len(t, hosts, 1)
-	require.Len(t, hosts[0].GatewaySignals, 1)
-	signal := hosts[0].GatewaySignals[0]
-	require.Equal(t, pending.Format(time.RFC3339Nano), signal.PendingSince)
-	require.Equal(t, "new", signal.ExpectedHash)
-	require.Equal(t, "old", signal.AppliedHash)
 }
 
 func TestSeriesLimitAlertIsAWarning(t *testing.T) {
@@ -203,15 +189,15 @@ func TestEachRegisteredHostIsOneRow(t *testing.T) {
 	require.Equal(t, "unknown", view.Hosts[1].Status, "登记主机没有采集器上报时显示未上报")
 	require.Empty(t, view.Alerts, "告警只来自告警状态，主机事实不再另外投影一份失联告警")
 
-	// host-agent 停报：没有网关心跳可确认时按主机失联显示异常；网关心跳正常时主机仍在线，只显示需关注。
+	// host-agent 停报：没有主机网关的上报可确认时按主机失联显示异常；网关仍在上报时主机仍在线，只显示需关注。
 	facts.Hosts[0].Status = "down"
 	facts.Hosts[0].LastSeenAt = now.Add(-10 * time.Minute)
 	view = projectFacts(facts)
 	require.Equal(t, "down", view.Hosts[0].Status)
-	facts.GatewaySignals = []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy"}}
+	facts.Services = []observability.ServiceStatus{{NodeID: "control", ServiceName: "host-gateway", Source: observability.SourceReporter, Enabled: true, ReporterStatus: "healthy"}}
 	view = projectFacts(facts)
 	require.Equal(t, "degraded", view.Hosts[0].Status)
-	require.Contains(t, view.Hosts[0].Reason, "主机网关心跳正常")
+	require.Contains(t, view.Hosts[0].Reason, "主机网关仍在上报")
 	require.EqualValues(t, 80, view.Hosts[0].CpuThreshold)
 }
 

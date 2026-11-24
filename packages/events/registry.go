@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -51,12 +50,6 @@ func (e Event) Validate(message *eventpb.EventMessage, payload proto.Message) er
 
 var builtInEvents []Event
 
-const ObservabilityFilterSubject = "moox.event.observability.>"
-
-func ObservabilityStreamName() string {
-	return ObservabilityMetricsSnapshotReported.Stream()
-}
-
 func declareEvent(name string, version uint32, stream, owner string, newPayload func() proto.Message, validate EventValidator) Event {
 	event := Event{name: name, version: version, stream: stream, owner: owner, newPayload: newPayload, validate: validate}
 	builtInEvents = append(builtInEvents, event)
@@ -64,33 +57,30 @@ func declareEvent(name string, version uint32, stream, owner string, newPayload 
 }
 
 var (
-	ObservabilityMetricsSnapshotReported = declareEvent("event.observability.metrics.snapshot.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
+	ObservabilityMetricsSnapshotReported = declareEvent("event.observability.metrics.snapshot.reported", 1, StreamObservability, "service", func() proto.Message {
 		return &metricspb.MetricReport{}
 	}, validateObservabilityMetricsSnapshotReported)
-	ObservabilityHostSnapshotReported = declareEvent("event.observability.host.snapshot.reported", 1, "MOOX_OBSERVABILITY", "hostagent", func() proto.Message {
-		return &hostmetricpb.HostMetric{}
-	}, validateObservabilityHostSnapshotReported)
 	// ObservabilityLogReported 是各服务上报的一批重要日志（Error 及以上、关键事件），Monitor 收到后写进自己的库。
-	ObservabilityLogReported = declareEvent("event.observability.log.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
+	ObservabilityLogReported = declareEvent("event.observability.log.reported", 1, StreamObservability, "service", func() proto.Message {
 		return &metricspb.LogReport{}
 	}, validateObservabilityLogReported)
 	// DatasetPeriodCompleted 是数据集一期完成的统一事件：来源（ledger 账本判定 / producer 写入方报告）只描述怎么判定的，不是业务分类。
-	DatasetPeriodCompleted = declareEvent("event.storage.dataset.period.completed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+	DatasetPeriodCompleted = declareEvent("event.storage.dataset.period.completed", 1, StreamStorage, "storage", func() proto.Message {
 		return &storagepb.DatasetPeriodCompleted{}
 	}, validateDatasetPeriodCompleted)
 	// CollectorKlineBackfilled 在 K 线于周期结束后被补写（补采分块读回确认、合成的补写）时由 Collector 发布，只带元数据，不带行情数据。
-	CollectorKlineBackfilled = declareEvent("event.collector.kline.backfilled", 1, "MOOX_COLLECTOR", "collector", func() proto.Message {
+	CollectorKlineBackfilled = declareEvent("event.collector.kline.backfilled", 1, StreamCollector, "collector", func() proto.Message {
 		return &storagepb.CollectorKlineBackfilled{}
 	}, validateCollectorKlineBackfilled)
 	// InstrumentDelistScheduled 在 Collector 的下架检测发现标的即将下架（或手工登记）时发布，只带元数据；
 	// 信封 subject 是“交易所:市场:交易所代码”，空间固定为系统空间。
-	InstrumentDelistScheduled = declareEvent("event.collector.instrument.delist_scheduled", 1, "MOOX_COLLECTOR", "collector", func() proto.Message {
+	InstrumentDelistScheduled = declareEvent("event.collector.instrument.delist_scheduled", 1, StreamCollector, "collector", func() proto.Message {
 		return &storagepb.InstrumentDelistScheduled{}
 	}, validateInstrumentDelistScheduled)
-	ViewDataReady = declareEvent("event.storage.view.data.ready", 2, "MOOX_STORAGE", "storage", func() proto.Message {
+	ViewDataReady = declareEvent("event.storage.view.data.ready", 2, StreamStorage, "storage", func() proto.Message {
 		return &storagepb.ViewDataReady{}
 	}, validateViewDataReady)
-	LogicalAccountTargetWeightRequested = declareEvent("event.trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
+	LogicalAccountTargetWeightRequested = declareEvent("event.trade.target.weight_requested", 1, StreamTrade, "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetWeightRequested{}
 	}, validateLogicalAccountTargetWeightRequested)
 )

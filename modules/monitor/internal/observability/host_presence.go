@@ -6,17 +6,17 @@ import "sort"
 // 同一次采集器停报在页面和推送里是同一个判断、同一段文字。
 const (
 	HostOnline = "online"
-	// HostAgentStopped 是采集器停报、但主机网关心跳正常：主机在线，只是 host-agent 停了。
+	// HostAgentStopped 是采集器停报、但主机网关的组件上报正常：主机在线，只是 host-agent 停了。
 	HostAgentStopped = "agent_stopped"
-	// HostLost 是采集器停报、主机网关心跳也不正常：按主机失联处理。
+	// HostLost 是采集器停报、主机网关的组件上报也停了：按主机失联处理。
 	HostLost = "lost"
 )
 
 const (
 	hostOnlineReason       = "主机连接正常"
-	hostAgentStoppedReason = "主机采集代理（host-agent）超过 3 分钟没有上报，但主机网关心跳正常，主机仍在线；进程退出后 systemd 会在 5 秒后把它拉起，持续未恢复请执行 moox-cli setup logs --host <主机> --component host-agent"
-	hostLostReason         = "主机采集代理超过 3 分钟没有上报，主机网关心跳也已停止，主机可能宕机或断网"
-	hostLostUnsureReason   = "主机采集代理超过 3 分钟没有上报，主机网关心跳无法确认，主机可能宕机、断网，或采集代理已停止"
+	hostAgentStoppedReason = "主机采集代理（host-agent）超过 3 分钟没有上报，但主机网关仍在上报，主机仍在线；进程退出后 systemd 会在 5 秒后把它拉起，持续未恢复请执行 moox-cli setup logs --host <主机> --component host-agent"
+	hostLostReason         = "主机采集代理超过 3 分钟没有上报，主机网关也已停止上报，主机可能宕机或断网"
+	hostLostUnsureReason   = "主机采集代理超过 3 分钟没有上报，这台主机没有登记主机网关的上报，主机可能宕机、断网，或采集代理已停止"
 )
 
 // HostPresence 是一台登记主机最近一次上报及其在线情形。
@@ -53,22 +53,22 @@ func (o Overview) HostPresences() []HostPresence {
 		}
 		hosts = append(hosts, item)
 	}
-	// 网关心跳确认正常才算主机在线。某一次读取网关状态出错不改变结论：库里保留上一次读到的心跳时间，
-	// 它超过 2 分钟自然判为停止，这时才改判失联；否则读取时好时坏会让失联与停报来回切换。
-	heartbeat := map[string]string{}
-	for _, signal := range o.GatewaySignals {
-		if signal.Kind == "heartbeat" {
-			heartbeat[signal.HostID] = signal.Status
+	// 主机网关的组件上报（经 EventBus）正常才算主机在线，按它区分“采集代理停了”与“主机失联”。
+	// EventBus 不可达时各网关的上报一起过期，这时采集代理停报的主机会被判成失联（见监控.md 已知差别）。
+	gateway := map[string]string{}
+	for _, service := range o.Services {
+		if service.ServiceName == "host-gateway" && service.Source == SourceReporter {
+			gateway[service.NodeID] = service.ReporterStatus
 		}
 	}
 	out := make([]HostPresence, 0, len(hosts))
 	for _, host := range hosts {
 		presence := HostPresence{Host: host, State: HostOnline, Reason: hostOnlineReason, Disabled: disabled[host.HostID]}
 		if host.Status != "healthy" {
-			switch heartbeat[host.HostID] {
+			switch gateway[host.HostID] {
 			case "healthy":
 				presence.State, presence.Reason = HostAgentStopped, hostAgentStoppedReason
-			case "down":
+			case "stale", "missing":
 				presence.State, presence.Reason = HostLost, hostLostReason
 			default:
 				presence.State, presence.Reason = HostLost, hostLostUnsureReason

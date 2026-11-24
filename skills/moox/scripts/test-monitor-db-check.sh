@@ -63,11 +63,11 @@ db.execute("INSERT INTO t_monitor_alert_states (c_space_id, c_rule_id, c_check_i
 db.execute("INSERT INTO t_monitor_alert_states (c_space_id, c_rule_id, c_check_id, c_status) "
            "VALUES ('crypto', 'default:other:1m', 'other:1m', 'ok')")
 label = '{"view_id":"view_quiet_kline_1h"}'
-db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at) "
-           "VALUES ('storage-view', 'sv@control', 's1', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?)", (label, old))
+db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at, c_value, c_observed_at) "
+           "VALUES ('storage-view', 'sv@control', 's1', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?, 0, ?)", (label, old, old))
 fresh = '{"view_id":"view_live_kline_1m"}'
-db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at) "
-           "VALUES ('storage-view', 'sv@control', 's2', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?)", (fresh, now.isoformat()))
+db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at, c_value, c_observed_at) "
+           "VALUES ('storage-view', 'sv@control', 's2', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?, 0, ?)", (fresh, now.isoformat(), now.isoformat()))
 db.commit()
 db.close()
 EOF

@@ -2,15 +2,12 @@ package catalog
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
-	"gopkg.in/yaml.v3"
 )
 
 // 目录里的每个事件都必须在注册表里声明过，而且所属的流不是工作队列（再挂消费者会和原消费者抢消息）。
@@ -18,26 +15,17 @@ func TestCatalogEventsAreRegisteredAndNotOnWorkQueueStreams(t *testing.T) {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "eventbus", "config", "app.yaml"))
-	require.NoError(t, err)
-	var topology struct {
-		Streams []struct {
-			Name      string `yaml:"name"`
-			Retention string `yaml:"retention"`
-		} `yaml:"streams"`
-	}
-	require.NoError(t, yaml.Unmarshal(raw, &topology))
-	retention := map[string]string{}
-	for _, stream := range topology.Streams {
-		retention[stream.Name] = stream.Retention
+	workQueue := map[string]bool{}
+	for _, stream := range events.Streams() {
+		workQueue[stream.Name] = stream.WorkQueue
 	}
 
 	require.NotEmpty(t, Subscribable())
 	for _, entry := range Subscribable() {
 		_, ok := registry.Lookup(entry.Event.Name(), entry.Event.Version())
 		require.True(t, ok, entry.Name())
-		require.NotEmpty(t, retention[entry.Event.Stream()], "%s 所属的流 %s 不在 EventBus 配置里", entry.Name(), entry.Event.Stream())
-		require.NotEqual(t, "work_queue", retention[entry.Event.Stream()], "%s 所属的流是工作队列，不能开放订阅", entry.Name())
+		require.Contains(t, workQueue, entry.Event.Stream(), "%s 所属的流 %s 没有声明", entry.Name(), entry.Event.Stream())
+		require.False(t, workQueue[entry.Event.Stream()], "%s 所属的流是工作队列，不能开放订阅", entry.Name())
 		require.NotEmpty(t, entry.Title)
 		require.NotEmpty(t, entry.Fields)
 		require.NotEmpty(t, entry.Sample)

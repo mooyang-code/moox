@@ -13,14 +13,13 @@ import (
 )
 
 type CredentialFile struct {
-	URLs                 []string `yaml:"urls"`
-	Version              int      `yaml:"version"`
-	Username             string   `yaml:"username"`
-	Password             string   `yaml:"password"`
-	Token                string   `yaml:"token"`
-	EventBusToken        string   `yaml:"eventbus_token"`
-	MonitorEventBusToken string   `yaml:"monitor_eventbus_token"`
-	CAFile               string   `yaml:"ca_file"`
+	URLs          []string `yaml:"urls"`
+	Version       int      `yaml:"version"`
+	Username      string   `yaml:"username"`
+	Password      string   `yaml:"password"`
+	Token         string   `yaml:"token"`
+	EventBusToken string   `yaml:"eventbus_token"`
+	CAFile        string   `yaml:"ca_file"`
 }
 
 // ExpandCredentialPath resolves environment variables and a leading ~/ so
@@ -53,9 +52,6 @@ func LoadCredentialFile(path string) (CredentialFile, error) {
 	}
 	if file.Password == "" {
 		file.Password = file.EventBusToken
-	}
-	if file.Password == "" {
-		file.Password = file.MonitorEventBusToken
 	}
 	if strings.TrimSpace(file.Username) == "" || file.Password == "" {
 		return file, fmt.Errorf("credential file requires username and token/password")

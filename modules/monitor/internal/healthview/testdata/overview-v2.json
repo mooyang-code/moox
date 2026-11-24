@@ -139,7 +139,6 @@
       "disk_threshold": 0,
       "disk_total_bytes": "0",
       "disk_used_bytes": "0",
-      "gateway_signals": [],
       "host_id": "control",
       "hostname": "",
       "last_reported_at": "",
@@ -164,20 +163,6 @@
       "disk_threshold": 85,
       "disk_total_bytes": "0",
       "disk_used_bytes": "0",
-      "gateway_signals": [
-        {
-          "applied_hash": "",
-          "expected_hash": "",
-          "kind": "heartbeat",
-          "pending_since": "",
-          "signal": {
-            "checked_at": "2026-10-09T12:00:00Z",
-            "raw_error": "",
-            "reason": "主机网关心跳已中断",
-            "status": "down"
-          }
-        }
-      ],
       "host_id": "offline",
       "hostname": "offline-host",
       "last_reported_at": "2026-10-09T11:50:00Z",
@@ -187,7 +172,7 @@
       "memory_total_bytes": "0",
       "memory_used_bytes": "0",
       "metrics_available": false,
-      "reason": "主机采集代理超过 3 分钟没有上报，主机网关心跳也已停止，主机可能宕机或断网",
+      "reason": "主机采集代理超过 3 分钟没有上报，这台主机没有登记主机网关的上报，主机可能宕机、断网，或采集代理已停止",
       "status": "down"
     }
   ],

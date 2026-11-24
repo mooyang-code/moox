@@ -25,7 +25,7 @@ func setupUpdateSteps(manifest *topology.Config) []setupInstallStep {
 }
 
 // setupUpdateNote 是覆盖更新预览里固定的说明：不做的事和它们的代价。
-const setupUpdateNote = "数据保留；不初始化、不启动空间：手工停用的任务和组件保持停用。新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位，" +
+const setupUpdateNote = "数据保留；不初始化、不启动空间：手工停用的任务保持停用，组件按 moox.toml 的声明启停（setup stop 临时停掉的会被重新拉起）。新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位，" +
 	"在 moox.toml 里新开了云函数采集、日志服务或换了云账号也不会生效，需要时再运行 setup init（只建不改）。" +
 	"配置每次部署都从这个版本的模板重新渲染，手工调过的值要写在 [overrides] 里才会保留"
 
@@ -98,7 +98,7 @@ func newSetupUpdateCommand(deps setupDeps) *cobra.Command {
 		Short: "覆盖更新已装好的系统：按安装顺序把这个版本的程序和配置重新部署到全部主机，数据保留（默认只预览）",
 		Long: `不带 --yes 只读预览：每台主机要更新、新装（moox.toml 里新加的组件或主机）、删掉（moox.toml 里去掉的组件）的组件，以及执行步骤。
 带 --yes 按顺序执行：准备这台电脑的操作身份、放行防火墙、控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，
-然后控制机其余组件和其余主机，最后统一等一次全部组件就绪。每台主机只重启二进制或配置有变化的组件，用 setup stop 停掉的组件保持停用。
+然后控制机其余组件和其余主机，最后统一等一次全部组件就绪。每台主机只重启二进制或配置有变化的组件，组件按 moox.toml 的声明启停（[deployments_disabled] 与停用的主机），主机与部署的登记按 moox.toml 整份覆盖 Admin。
 不初始化（不写业务空间、元数据、初始秘密和告警渠道）、不启动空间（手工停用的任务保持停用，不重建云函数），数据目录不动；
 新版本带来的空间、数据集、内置任务和云函数代码包，以及 moox.toml 里新开的云函数采集、日志服务、换的云账号，要再运行 setup init 才到位。
 组件换了主机时旧主机上的会停掉删除，新主机上从空数据开始，数据不迁移（预览的 moves 单列）。

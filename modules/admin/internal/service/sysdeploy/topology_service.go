@@ -130,63 +130,34 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	return response, nil
 }
 
-func (s *ServiceImpl) SyncHostDeployments(ctx context.Context, req *pb.SyncHostDeploymentsReq) (*pb.SyncHostDeploymentsRsp, error) {
-	spec := HostSpec{HostID: req.GetHostId(), Label: req.GetLabel(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Reachability: req.GetReachability(), ExternalEntry: req.GetExternalEntry(), Description: req.GetDescription(), Components: req.GetComponentIds()}
-	if req.GetSshPort() != 0 {
-		ssh := &SSHSpec{Port: int(req.GetSshPort()), User: req.GetSshUser()}
-		switch req.GetSshAuthType() {
-		case "password":
-			ssh.Password = req.GetSshSecret()
-		case "private_key":
-			ssh.PrivateKey, ssh.Passphrase = req.GetSshSecret(), req.GetSshPassphrase()
+// SyncTopology 按 moox.toml 的整份声明覆盖主机与部署的登记。
+func (s *ServiceImpl) SyncTopology(ctx context.Context, req *pb.SyncTopologyReq) (*pb.SyncTopologyRsp, error) {
+	specs := make([]HostSpec, 0, len(req.GetHosts()))
+	for _, host := range req.GetHosts() {
+		spec := HostSpec{HostID: host.GetHostId(), Enabled: host.GetEnabled(), Label: host.GetLabel(), Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Region: host.GetRegion(),
+			Reachability: host.GetReachability(), ExternalEntry: host.GetExternalEntry(), Description: host.GetDescription(), Components: host.GetComponentIds(), DisabledComponents: host.GetDisabledComponentIds()}
+		if host.GetSshPort() != 0 {
+			ssh := &SSHSpec{Port: int(host.GetSshPort()), User: host.GetSshUser()}
+			switch host.GetSshAuthType() {
+			case "password":
+				ssh.Password = host.GetSshSecret()
+			case "private_key":
+				ssh.PrivateKey, ssh.Passphrase = host.GetSshSecret(), host.GetSshPassphrase()
+			}
+			spec.SSH = ssh
 		}
-		spec.SSH = ssh
+		specs = append(specs, spec)
 	}
 	dao, err := s.topologyDAO()
+	var touched []string
 	if err == nil {
-		err = dao.SyncHostDeployments(ctx, spec)
+		touched, err = dao.ReplaceTopology(ctx, specs)
 	}
-	if err == nil {
-		// 连接信息可能变了：旧终端和文件会话不能继续连着旧凭据或旧地址。
-		s.closeHostSessions(req.GetHostId())
+	// 连接信息变了或主机被删掉：旧终端和文件会话不能继续连着旧凭据或旧地址。
+	for _, hostID := range touched {
+		s.closeHostSessions(hostID)
 	}
-	return &pb.SyncHostDeploymentsRsp{RetInfo: topologyRet(err)}, nil
-}
-
-func (s *ServiceImpl) SetHostStatus(ctx context.Context, req *pb.SetHostStatusReq) (*pb.SetHostStatusRsp, error) {
-	if req.GetHostId() == "" {
-		return &pb.SetHostStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id is required")}, nil
-	}
-	dao, err := s.topologyDAO()
-	if err == nil {
-		err = dao.SetHostStatus(ctx, req.GetHostId(), req.GetStatus())
-	}
-	return &pb.SetHostStatusRsp{RetInfo: topologyRet(err)}, nil
-}
-
-func (s *ServiceImpl) SetDeploymentStatus(ctx context.Context, req *pb.SetDeploymentStatusReq) (*pb.SetDeploymentStatusRsp, error) {
-	if req.GetHostId() == "" || req.GetComponentId() == "" {
-		return &pb.SetDeploymentStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id and component_id are required")}, nil
-	}
-	dao, err := s.topologyDAO()
-	if err == nil {
-		err = dao.SetDeploymentStatus(ctx, req.GetHostId(), req.GetComponentId(), req.GetStatus())
-	}
-	return &pb.SetDeploymentStatusRsp{RetInfo: topologyRet(err)}, nil
-}
-
-func (s *ServiceImpl) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHostReq) (*pb.DeleteDeploymentHostRsp, error) {
-	if req.GetHostId() == "" {
-		return &pb.DeleteDeploymentHostRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id is required")}, nil
-	}
-	dao, err := s.topologyDAO()
-	if err == nil {
-		err = dao.DeleteHost(ctx, req.GetHostId())
-	}
-	if err == nil {
-		s.closeHostSessions(req.GetHostId())
-	}
-	return &pb.DeleteDeploymentHostRsp{RetInfo: topologyRet(err)}, nil
+	return &pb.SyncTopologyRsp{RetInfo: topologyRet(err)}, nil
 }
 
 func statusToProto(status *HostGatewayStatus) *pb.HostGatewayRuntimeStatus {
@@ -196,7 +167,7 @@ func statusToProto(status *HostGatewayStatus) *pb.HostGatewayRuntimeStatus {
 		}
 		return t.UTC().Format(time.RFC3339Nano)
 	}
-	result := &pb.HostGatewayRuntimeStatus{InstanceId: status.InstanceID, Version: status.Version, ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, RouteCount: status.RouteCount, LastSeenAt: format(status.LastSeenAt), LastError: status.LastError, PreviousInstanceId: status.PreviousInstanceID, ReplacedAt: format(status.ReplacedAt), ConflictInstanceId: status.ConflictInstanceID, ConflictSeenAt: format(status.ConflictSeenAt)}
+	result := &pb.HostGatewayRuntimeStatus{ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, LastSeenAt: format(status.LastSeenAt)}
 	if status.RelaySessions != "" {
 		// 写入时已校验；读不出时宁可不展示，也不让整个状态查询失败。
 		_ = json.Unmarshal([]byte(status.RelaySessions), &result.RelaySessions)

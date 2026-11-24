@@ -30,31 +30,19 @@ const (
 	ReadinessNotReady = "not_ready"
 )
 
+// MetricSeries 是一条指标序列：目录（名称、类型、标签、最近一次上报时间）与最新值在同一行（t_monitor_metric_series）。
 type MetricSeries struct {
-	ID          uint64    `gorm:"column:c_id;primaryKey"`
-	ServiceName string    `gorm:"column:c_service_name"`
-	InstanceID  string    `gorm:"column:c_instance_id"`
-	SeriesID    string    `gorm:"column:c_series_id"`
-	MetricName  string    `gorm:"column:c_metric_name"`
-	MetricType  string    `gorm:"column:c_metric_type"`
-	LabelsJSON  string    `gorm:"column:c_labels_json"`
-	LastSeenAt  time.Time `gorm:"column:c_last_seen_at"`
+	ID          uint64 `gorm:"column:c_id;primaryKey"`
+	SeriesID    string `gorm:"column:c_series_id"`
+	ServiceName string `gorm:"column:c_service_name"`
+	InstanceID  string `gorm:"column:c_instance_id"`
+	MetricName  string `gorm:"column:c_metric_name"`
+	MetricType  string `gorm:"column:c_metric_type"`
+	LabelsJSON  string `gorm:"column:c_labels_json"`
+	// LastSeenAt 是最近一次上报这条序列的时间；最新值只前进到更新的观测，ObservedAt 可能早于它。
+	LastSeenAt time.Time `gorm:"column:c_last_seen_at"`
 	// IsStale is derived on read from LastSeenAt; it is not stored.
-	IsStale   bool      `gorm:"-"`
-	CreatedAt time.Time `gorm:"column:c_ctime"`
-	UpdatedAt time.Time `gorm:"column:c_mtime"`
-}
-
-func (MetricSeries) TableName() string { return "t_monitor_metric_series" }
-
-type MetricLatest struct {
-	ID              uint64    `gorm:"column:c_id;primaryKey"`
-	SeriesID        string    `gorm:"column:c_series_id"`
-	ServiceName     string    `gorm:"column:c_service_name"`
-	InstanceID      string    `gorm:"column:c_instance_id"`
-	MetricName      string    `gorm:"column:c_metric_name"`
-	MetricType      string    `gorm:"column:c_metric_type"`
-	LabelsJSON      string    `gorm:"column:c_labels_json"`
+	IsStale         bool      `gorm:"-"`
 	Value           float64   `gorm:"column:c_value"`
 	ObservedAt      time.Time `gorm:"column:c_observed_at"`
 	IntervalSeconds int       `gorm:"column:c_interval_seconds"`
@@ -65,7 +53,7 @@ type MetricLatest struct {
 	UpdatedAt       time.Time `gorm:"column:c_mtime"`
 }
 
-func (MetricLatest) TableName() string { return "t_monitor_metric_latest" }
+func (MetricSeries) TableName() string { return "t_monitor_metric_series" }
 
 type MetricIngestMessage struct {
 	ID          uint64     `gorm:"column:c_id;primaryKey"`

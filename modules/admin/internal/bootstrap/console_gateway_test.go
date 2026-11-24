@@ -30,10 +30,12 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	topology, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	require.NoError(t, topology.SyncHosts(ctx, []sysdeploy.HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "collector"}},
-		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
-	}))
+	specs := []sysdeploy.HostSpec{
+		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin", "collector"}},
+		{HostID: "storage", Enabled: true, Address: "storage.example.test", Components: []string{"storage-primary", "storage-view"}},
+	}
+	_, err = topology.ReplaceTopology(ctx, specs)
+	require.NoError(t, err)
 	// 管理台用控制机的主机密钥、以 console 的身份签名。
 	keyFile := filepath.Join(t.TempDir(), "host.key")
 	require.NoError(t, os.WriteFile(keyFile, []byte(gatewayauth.EncodeSigningKey(authtest.Key("host/control"))+"\n"), 0o600))
@@ -45,7 +47,9 @@ func TestConsoleGatewayStartsFromDatabaseWhileHostGatewayIsOffline(t *testing.T)
 	first := client.Directory()
 	require.Equal(t, []string{"control"}, first.Services["trpc.moox.collector.CollectMgr"])
 	require.Equal(t, []string{"storage"}, first.Services["trpc.moox.storage.Metadata"])
-	require.NoError(t, topology.SetDeploymentStatus(ctx, "control", "collector", servicecatalog.Disabled))
+	specs[0].DisabledComponents = []string{"collector"}
+	_, err = topology.ReplaceTopology(ctx, specs)
+	require.NoError(t, err)
 	require.NoError(t, client.Refresh(ctx))
 	require.NotEqual(t, first.Version, client.Directory().Version)
 	require.NotContains(t, client.Directory().Services, "trpc.moox.collector.CollectMgr")

@@ -59,7 +59,7 @@ func TestBusinessFreshnessRecordsNewSubjectsAsDegradedWithoutFailing(t *testing.
 	now := time.Date(2026, 10, 21, 13, 51, 0, 0, time.UTC)
 	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1h"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		for _, row := range []monmetrics.MetricLatest{
+		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Truncate(time.Hour).Add(-time.Hour).Unix()), ObservedAt: now},
 			{SeriesID: "tracked", MetricName: monmetrics.ViewOutputTrackedSinceMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-6 * time.Hour).Unix()), ObservedAt: now},
 			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 2, ObservedAt: now},

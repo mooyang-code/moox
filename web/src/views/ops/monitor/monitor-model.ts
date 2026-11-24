@@ -769,13 +769,10 @@ export interface HostCard {
   status: string;
   reason: string;
   meters: Meter[];
-  gatewayIssues: Fact[];
   lastReported: string;
   lastReportedTitle: string;
   href: string;
 }
-
-const GATEWAY_LABELS: Record<string, string> = { heartbeat: "网关心跳", instance_conflict: "网关实例", route_sync: "路由同步" };
 
 function meter(
   label: string,
@@ -833,12 +830,6 @@ export function hostCards(overview: HealthOverview | undefined, nowMs: number): 
         host.disk_mountpoint ? `使用率最高的挂载点：${host.disk_mountpoint}` : ""
       )
     ],
-    gatewayIssues: (host.gateway_signals || [])
-      .filter(signal => signal.signal?.status && signal.signal.status !== "healthy")
-      .map(signal => ({
-        label: GATEWAY_LABELS[signal.kind || ""] || signal.kind || "网关",
-        value: signal.signal?.reason || statusLabel(signal.signal?.status)
-      })),
     lastReported: relativeTime(host.last_reported_at, nowMs),
     lastReportedTitle: fullTime(host.last_reported_at),
     href: hostHref(host.host_id)

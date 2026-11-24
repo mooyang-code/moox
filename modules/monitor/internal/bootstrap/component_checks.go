@@ -11,7 +11,7 @@ import (
 )
 
 // componentCheckPrefixes 是按部署生成的检查：部署停用或删除后不再生成，已有的检查随之停用；重新部署时恢复启用。
-var componentCheckPrefixes = []string{"gateway:", "reporter:", "ready:", "restart:"}
+var componentCheckPrefixes = []string{"reporter:", "ready:", "restart:"}
 
 func componentCheck(checkID string) bool {
 	for _, prefix := range componentCheckPrefixes {

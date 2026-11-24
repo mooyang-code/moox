@@ -22,7 +22,6 @@ func TestStateHealthReadinessAndMetrics(t *testing.T) {
 
 	state.ApplyRoutes("hash", 2, true)
 	state.RouteSyncSucceeded(time.Now())
-	state.RouteReportSucceeded(time.Now())
 	assertStatus(t, mux, "/readyz", http.StatusOK)
 	if !state.Disabled() {
 		t.Fatal("Disabled() = false")
@@ -41,7 +40,6 @@ func TestStateHealthReadinessAndMetrics(t *testing.T) {
 	for _, want := range []string{
 		"host_gateway_route_sync_errors_total 1",
 		"host_gateway_route_validation_failures_total 1",
-		"host_gateway_route_report_errors_total 0",
 		"host_gateway_auth_failures_total 1",
 		"host_gateway_replay_failures_total 1",
 		`host_gateway_upstream_failures_total{type="connection"} 1`,
@@ -74,16 +72,11 @@ func TestReadinessRequiresFreshSyncAndHeartbeat(t *testing.T) {
 	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
 
 	state.RouteSyncSucceeded(now)
-	state.RouteReportSucceeded(now)
 	assertStatus(t, state.Handler(), "/readyz", http.StatusOK)
 
 	now = now.Add(2 * time.Second)
 	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
 	state.RouteSyncSucceeded(now)
-	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
-	state.RouteReportSucceeded(now)
-	assertStatus(t, state.Handler(), "/readyz", http.StatusOK)
-	state.RouteReportFailed()
 	assertStatus(t, state.Handler(), "/readyz", http.StatusOK)
 	now = now.Add(2 * time.Second)
 	assertStatus(t, state.Handler(), "/readyz", http.StatusServiceUnavailable)
@@ -127,7 +120,6 @@ func TestHealthJSONBindsRuntimeProcessAndSnapshotIdentity(t *testing.T) {
 		if path == "/readyz" {
 			state.ApplyRoutes("snapshot-hash", 2, false)
 			state.RouteSyncSucceeded(time.Now())
-			state.RouteReportSucceeded(time.Now())
 		}
 		recorder := httptest.NewRecorder()
 		state.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))

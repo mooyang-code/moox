@@ -267,6 +267,15 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	require.Len(t, relay[0].Rules, 2)
 	assert.Equal(t, "11003", relay[0].Rules[0].Ports)
 	assert.Equal(t, "4222", relay[0].Rules[1].Ports)
+
+	// 停用的主机只写登记，不碰它的防火墙。
+	disabled := false
+	storage := manifest.HostCatalog["storage"]
+	storage.Enabled = &disabled
+	manifest.HostCatalog["storage"] = storage
+	targets = mustFirewallTargets(t, manifest)
+	require.Len(t, targets, 1)
+	assert.Nil(t, ports("storage"))
 }
 
 func mustFirewallTargets(t *testing.T, manifest *topology.Config) []setupFirewallTarget {

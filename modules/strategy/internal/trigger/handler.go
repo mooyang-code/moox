@@ -15,12 +15,13 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // ViewDataReadyConsumerName 是默认的 durable 消费者名。
-const ViewDataReadyConsumerName = "strategy_view_data_ready_v1"
+var ViewDataReadyConsumerName = events.StrategyViewReadyConsumer.Name()
 
 // ErrInvalidEvent 表示事件本身不可处理（处理器未配置或事件为空），重投无意义。
 var ErrInvalidEvent = errors.New("事件不可处理")

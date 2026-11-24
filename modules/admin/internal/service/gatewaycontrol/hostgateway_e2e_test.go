@@ -71,9 +71,10 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	ctx := context.Background()
 	// 控制机登记成外部入口：它的网关多开 11004，接外部身份的请求。外部身份能调的方法都在存储机上，
 	// 入口放在控制机，外部请求都要由控制机网关带来源头转到存储机，跨主机转发因此有真实进程覆盖。
-	controlSpec := sysdeploy.HostSpec{HostID: "control", Address: "127.0.0.1", ExternalEntry: true, Components: []string{"admin", "collector"}}
-	storageSpec := sysdeploy.HostSpec{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view", "monitor"}}
-	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{controlSpec, storageSpec}))
+	controlSpec := sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: []string{"admin", "collector"}}
+	storageSpec := sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view", "monitor"}}
+	f.specs = []sysdeploy.HostSpec{controlSpec, storageSpec}
+	require.NoError(t, f.declare())
 	for _, identity := range []string{"scf-collector", "moox-skill"} {
 		require.NoError(t, f.keys.SetIdentity(ctx, identity, publicKey("identity/"+identity)))
 	}
@@ -112,14 +113,12 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	waitForE2E(t, 15*time.Second, "both actual gateway heartbeats", func() bool {
 		for _, host := range []string{"control", "storage"} {
 			status, err := f.topology.GetGatewayStatus(ctx, host)
-			if err != nil || status.InstanceID == "" || status.AppliedHash != status.ExpectedHash || status.Version != "control-e2e" {
+			if err != nil || status.LastSeenAt == nil || status.AppliedHash != status.ExpectedHash {
 				return false
 			}
 		}
 		return true
 	})
-	initialInstance := f.status(t).InstanceID
-	initialControlInstance := controlProcess.instance(t, f)
 
 	collector, console := authtest.Component("collector", "control"), authtest.Component("console", "control")
 	local := map[string]gatewayauth.Credentials{"control": collector, "storage": authtest.Component("monitor", "storage")}
@@ -281,7 +280,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	// A newly registered host is also a new caller. Its signature must become
 	// accepted through the already running control gateway after the next pull.
-	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
+	require.NoError(t, f.declareHost(sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
 	require.NoError(t, f.keys.SetHostPublicKey(ctx, "joining", publicKey("host/joining")))
 	joining := authtest.Component("host-gateway", "joining")
 	joiningBody, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "joining"})
@@ -294,20 +293,17 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		var rsp pb.PullSnapshotRsp
 		return codec.Unmarshal(codec.SerializationTypePB, raw, &rsp) == nil && rsp.Changed && snapshotHost(rsp.GetSnapshot(), "joining") != nil
 	})
-	controlStatus, err := f.topology.GetGatewayStatus(ctx, "control")
-	require.NoError(t, err)
-	require.Equal(t, initialControlInstance, controlStatus.InstanceID)
 	t.Log("SCENARIO PASS new-caller-next-snapshot-without-restart")
 
-	require.NoError(t, f.topology.SetDeploymentStatus(ctx, "storage", "storage-primary", servicecatalog.Disabled))
+	f.specs[1].DisabledComponents = []string{"storage-primary"}
+	require.NoError(t, f.declare())
 	waitForE2E(t, 15*time.Second, "disabled deployment explicitly rejected", func() bool {
 		_, err := clients["control"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
 		return err != nil && (strings.Contains(err.Error(), "no enabled deployment") || strings.Contains(err.Error(), "not deployed"))
 	})
-	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{
-		{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}},
-		{HostID: "control", Address: "127.0.0.1", Components: append(slices.Clone(controlSpec.Components), "storage-primary")},
-	}))
+	f.specs[0] = sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: append(slices.Clone(controlSpec.Components), "storage-primary")}
+	f.specs[1] = sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}}
+	require.NoError(t, f.declare())
 	// PrimaryStore 换到 control：control 的客户端改成直连本机服务端口，storage 的客户端改成跨主机经 control 网关的 11003。
 	waitForE2E(t, 15*time.Second, "existing clients automatically switch deployment target", func() bool {
 		for _, c := range clients {
@@ -331,18 +327,12 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	storageProcess.stop(t)
 	storageProcess = startGatewayExecutable(t, binary, framework, configs["storage"])
-	waitForE2E(t, 15*time.Second, "normal process replacement heartbeat", func() bool { return f.status(t).InstanceID != initialInstance })
-	require.Empty(t, f.status(t).ConflictInstanceID)
-	require.Equal(t, initialInstance, f.status(t).PreviousInstanceID)
-	// A second genuine process uses separate sockets/cache but the same host
-	// identity. Its real timer and the original timer must reveal the conflict.
-	duplicate := configs["storage"]
-	duplicate.Server = hostgatewayconfig.Server{RemoteAddr: unusedE2EAddress(t), LocalAddr: unusedE2EAddress(t), HealthAddr: unusedE2EAddress(t)}
-	duplicate.Store.Path = filepath.Join(root, "duplicate-cache")
-	duplicateProcess := startGatewayExecutable(t, binary, framework, duplicate)
-	waitForE2E(t, 31*time.Second, "alternating real processes detected as conflict", func() bool { return f.status(t).ConflictInstanceID != "" })
-	duplicateProcess.stop(t)
-	t.Log("SCENARIO PASS normal-restart-and-live-instance-conflict")
+	restartedAt := time.Now().UTC()
+	waitForE2E(t, 15*time.Second, "restarted process pulls again", func() bool {
+		status := f.status(t)
+		return status.LastSeenAt != nil && status.LastSeenAt.After(restartedAt) && status.AppliedHash == status.ExpectedHash
+	})
+	t.Log("SCENARIO PASS normal-restart")
 
 	// Keep control's business route active, but stop the actual Admin control
 	// listener. Both gateways retain their previously authenticated snapshots.
@@ -461,22 +451,6 @@ func (p *gatewayExecutable) stop(t *testing.T) {
 		<-p.done
 		t.Errorf("gateway %s failed to stop", p.host)
 	}
-}
-
-func (p *gatewayExecutable) instance(t *testing.T, f *controlFixture) string {
-	t.Helper()
-	status, err := f.topology.GetGatewayStatus(context.Background(), p.host)
-	require.NoError(t, err)
-	return status.InstanceID
-}
-
-func unusedE2EAddress(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	address := l.Addr().String()
-	require.NoError(t, l.Close())
-	return address
 }
 
 func startEchoBackend(t *testing.T, address, path string, calls *atomic.Int64) {

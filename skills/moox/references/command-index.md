@@ -296,13 +296,9 @@
 | --- | --- |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
-| `setup deploy` | 把一台主机部署成 moox.toml 描述的样子：放二进制、渲染配置、按顺序重启有变化的组件，等它们就绪（`--component` 只部署个别组件） |
-| `setup deployment disable` | 停用部署：外部程序先停服务并核对已停止，再改登记；普通组件只改登记 |
-| `setup deployment enable` | 启用部署：外部程序要求主机已启用，先改登记再启动服务；普通组件只改登记 |
+| `setup deploy` | 把一台主机部署成 moox.toml 描述的样子：先按 moox.toml 整份覆盖 Admin 的主机与部署登记（含启停），再放二进制、渲染配置、按声明启停并重启有变化的组件，等它们就绪（`--component` 只部署个别组件） |
 | `setup export-skill-config` | 导出 Skill 使用的最小数据访问配置（moox-skill 的签名私钥在本机生成，公钥登记到控制机） |
 | `setup firewall` | 初始化所有目标主机的腾讯云防火墙端口（默认只预览，--yes 才执行） |
-| `setup host disable` | 停用主机：先停掉它上面启用的外部程序，全部成功后才改登记（网关路由随之撤销） |
-| `setup host enable` | 启用主机：先改登记，再只启动启用部署的外部程序（单独停用的程序保持停用） |
 | `setup host-diagnostics` | 检查远端主机磁盘和服务进程 |
 | `setup hosts` | 列出可选的部署主机（不输出密码） |
 | `setup init` | 导入默认空间与元数据，写入初始秘密（管理员、云密钥、交易所密钥、告警渠道，只建不改） |
@@ -314,13 +310,11 @@
 | `setup package-components` | 按服务目录把编译好的 Linux 二进制打成每个组件一个包（发布脚本用） |
 | `setup operator` | 准备这台电脑的操作身份：生成 moox-cli 的签名私钥；--register 把公钥登记到已经装好的控制机 |
 | `setup reboot-host` | 重启无响应的腾讯云主机（默认只预览，--yes 才重启） |
-| `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
 | `setup restart` | 重启一个组件（systemctl --user restart；默认只预览，--yes 才执行） |
 | `setup start` | 启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略 |
 | `setup start-component` | 恢复一个被停掉的组件并开机自启（systemctl --user enable --now；默认只预览） |
 | `setup status` | 只读查看各主机的部署状态：version.json 里的版本，以及每个组件的用户服务是否在运行 |
-| `setup stop` | 停掉一个组件并不再开机自启（systemctl --user disable --now；之后的部署保持停用；默认只预览） |
-| `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |
+| `setup stop` | 临时停掉一个组件并不再开机自启（systemctl --user disable --now；不改登记，下次部署按 moox.toml 的声明重新拉起；默认只预览） |
 | `setup trust-browser` | 检查并安装管理台浏览器证书信任 |
 | `setup trust-host` | 确认并记录 SSH 主机指纹 |
 | `setup update` | 覆盖更新已装好的系统：按安装顺序把这个版本的程序和配置重新部署到全部主机，数据保留（默认只预览） |

@@ -214,14 +214,6 @@ message HealthBusinessCheck {
   // 检查名称，与推送标题一致。
   string name = 9;
 }
-message HealthGatewaySignal {
-  string kind = 1;
-  HealthSignal signal = 2;
-  // Persisted first observation of the current desired/applied mismatch.
-  string pending_since = 3;
-  string expected_hash = 4;
-  string applied_hash = 5;
-}
 message HealthHost {
   string host_id = 1;
   string hostname = 3;
@@ -234,7 +226,6 @@ message HealthHost {
   bool metrics_available = 10;
   bool cpu_available = 11;
   string last_reported_at = 12;
-  repeated HealthGatewaySignal gateway_signals = 13;
   bool memory_available = 14;
   bool disk_available = 15;
   // 告警阈值（百分比）；0 表示没有对应的告警规则。
@@ -325,9 +316,20 @@ message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationCha
 message DeleteNotificationChannelReq { string channel_id = 1; }
 message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 
-// GetHostPolicyReq 由每台主机的 HostAgent 定期调用，拉取主机策略并缓存到 <部署根>/data/host-agent/host-policy.json，
-// 供 HostAgent 的对端检查与证书巡检直接推送告警。只允许调用方 host-agent。
-message GetHostPolicyReq {}
+// GetHostPolicyReq 由每台主机的 HostAgent 每分钟调用一次：带上这一分钟采到的主机快照，拉回主机策略缓存到
+// <部署根>/data/host-agent/host-policy.json，供 HostAgent 的对端检查与证书巡检直接推送告警。只允许调用方 host-agent。
+message GetHostPolicyReq {
+  // 这次采集的主机快照；采集失败时为空，策略照常返回。
+  HostReport host = 1;
+}
+// HostReport 是一次主机快照上报。
+message HostReport {
+  // UUIDv7，Monitor 按它与采集时间去重。
+  string report_id = 1;
+  // 采集时间（RFC3339Nano）。
+  string collected_at = 2;
+  trpc.moox.hostagent.HostMetric metric = 3;
+}
 // HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
 message HostPolicyChannel {
   string channel_type = 1;

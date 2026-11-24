@@ -31,12 +31,16 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	require.NoError(t, os.Mkdir(dir, 0o700))
 	opts := bootstrapOptions{topologyFile: filepath.Join(dir, "topology.json"), dbPath: filepath.Join(dir, "data", "admin.db"), masterFile: filepath.Join(dir, "secrets", "admin-encryption.key"), pkiDir: filepath.Join(dir, "secrets", "pki"), outputDir: filepath.Join(dir, "bundles"),
 		operatorPublicKey: identityPublicKey("operator")}
-	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
+	writeBootstrapTopology(t, opts, bootstrapFixtureTopology())
+	return opts
+}
+
+func bootstrapFixtureTopology() hostbundle.Topology {
+	return hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
 		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "collector"}},
 		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-view"}},
 		{HostID: "overseas", Address: "192.0.2.3", Components: []string{"egress-proxy", "trade"}},
-	}})
-	return opts
+	}}
 }
 
 func writeBootstrapTopology(t *testing.T, opts bootstrapOptions, topology hostbundle.Topology) {
@@ -193,18 +197,17 @@ func TestBootstrapEmptyEnvironmentIssuesHostKeyAndRegistersOperator(t *testing.T
 	require.Equal(t, []string{"admin", "collector", "console", "host-agent", "host-gateway"}, catalog.SigningCallers(servicecatalog.NewTopology(snapshotHosts, snapshotDeployments))["control"])
 }
 
-// 重跑（例行升级、续证书）：目标机上的私钥和登记的一致就不换密钥，包里没有私钥；主密钥、CA、停用状态、已登记的操作电脑公钥都不变。
-func TestBootstrapRetryKeepsKeysMasterCAAndDisabledStates(t *testing.T) {
+// 重跑（例行升级、续证书）：目标机上的私钥和登记的一致就不换密钥，包里没有私钥；主密钥、CA、已登记的操作电脑公钥都不变；
+// 启停状态取自拓扑文件（moox.toml 的声明）。
+func TestBootstrapRetryKeepsKeysMasterCAAndTakesStatesFromTopology(t *testing.T) {
 	opts := newBootstrapFixture(t)
 	first := runBootstrapFixture(t, opts)
 	master, err := os.ReadFile(opts.masterFile)
 	require.NoError(t, err)
-	db, err := openAdminCLIDB(opts.dbPath)
-	require.NoError(t, err)
-	dao, err := sysdeploy.NewTopologyDAO(db, "control")
-	require.NoError(t, err)
-	require.NoError(t, dao.SetHostStatus(context.Background(), "storage", "disabled"))
-	closeAdminCLIDB(db)
+	declared := bootstrapFixtureTopology()
+	declared.Hosts[1].Disabled = true
+	declared.Hosts[2].DisabledComponents = []string{"trade"}
+	writeBootstrapTopology(t, opts, declared)
 
 	opts.current = currentKeys{host: first.SignPublicKey, scfCollector: first.SCFCollectorPublicKey}
 	// 另一台电脑的公钥：bootstrap 不改已经登记的那一把（换电脑走 setup operator --register）。
@@ -222,14 +225,15 @@ func TestBootstrapRetryKeepsKeysMasterCAAndDisabledStates(t *testing.T) {
 	again, err := os.ReadFile(opts.masterFile)
 	require.NoError(t, err)
 	require.Equal(t, master, again)
-	db, err = openAdminCLIDB(opts.dbPath)
+	db, err := openAdminCLIDB(opts.dbPath)
 	require.NoError(t, err)
 	defer closeAdminCLIDB(db)
-	dao, err = sysdeploy.NewTopologyDAO(db, "control")
+	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	hosts, _, err := dao.Read(context.Background())
+	hosts, deployments, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "disabled", hosts[slices.IndexFunc(hosts, func(h sysdeploy.HostRecord) bool { return h.HostID == "storage" })].Status)
+	require.Equal(t, "disabled", deployments[slices.IndexFunc(deployments, func(p sysdeploy.DeploymentRecord) bool { return p.HostID == "overseas" && p.ComponentID == "trade" })].Status)
 }
 
 // 目标机上没有私钥（或和登记的对不上）：新生成一把并登记，旧公钥随即不在了，没有新旧并存。

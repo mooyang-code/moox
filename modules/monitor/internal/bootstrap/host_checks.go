@@ -47,9 +47,9 @@ func hostTitle(host monitorobservability.HostStatus) string { return host.HostID
 // hostCheckTimeout 是主机类检查一轮的时限。它只读写 Monitor 自己的库，不沿用检查定时器那一轮剩下的时间。
 const hostCheckTimeout = 10 * time.Second
 
-// buildHostCheckReporter 返回每轮评估最先执行的主机类检查。它独立于业务评估：只需要采集器登记、部署拓扑和网关信号，
+// buildHostCheckReporter 返回每轮评估最先执行的主机类检查。它独立于业务评估：只需要采集器登记、部署拓扑和主机网关的组件上报，
 // 都在本地库里，所以业务评估读 Storage 超时或整体失败时，主机失联、host-agent 停报与资源告警照常产出。
-// 观测输入中断时整轮冻结：不写结果，既不新增告警，也不恢复已有告警。
+// 观测输入中断时整轮冻结：不写结果，既不新增告警，也不恢复已有告警（失联判断要用经 EventBus 的网关上报）。
 func buildHostCheckReporter(
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,

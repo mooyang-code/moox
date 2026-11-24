@@ -50,7 +50,7 @@ type monitorGatewayWire struct {
 	calls     int
 	reads     int
 	refreshes int
-	// statusChanges 记下到达本机 SysDeploy 的 SetDeploymentStatus 次数。
+	// statusChanges 记下到达本机 SysDeploy 的 SyncTopology 次数。
 	statusChanges int
 }
 
@@ -188,20 +188,17 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, snapshot.Deployments, 1)
 	require.Equal(t, "control.example.test", snapshot.Hosts[0].GetAddress())
-	gatewayStatus, err := source.GatewayStatus(t.Context(), "control")
-	require.NoError(t, err)
-	require.Equal(t, "control-instance", gatewayStatus.GetInstanceId())
-	// Monitor 不在 SetDeploymentStatus 的调用方名单里。同机直连不查名单（名单由网关在跨主机调用时把关），请求会到达本机服务。
+	// Monitor 不在 SyncTopology 的调用方名单里。同机直连不查名单（名单由网关在跨主机调用时把关），请求会到达本机服务。
 	embedded, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	require.False(t, embedded.Allowed("monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus"))
-	var unlisted adminpb.SetDeploymentStatusRsp
-	require.NoError(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", &adminpb.SetDeploymentStatusReq{}, &unlisted))
+	require.False(t, embedded.Allowed("monitor", "trpc.moox.ops.SysDeploy", "SyncTopology"))
+	var unlisted adminpb.SyncTopologyRsp
+	require.NoError(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SyncTopology", &adminpb.SyncTopologyReq{}, &unlisted))
 	wire.mu.Lock()
 	reads, calls, refreshes, statusChanges := wire.reads, wire.calls, wire.refreshes, wire.statusChanges
 	wire.mu.Unlock()
 	require.Equal(t, 2, reads)
-	require.Equal(t, 9, calls)
+	require.Equal(t, 8, calls)
 	require.Equal(t, 1, statusChanges)
 	require.GreaterOrEqual(t, refreshes, 2)
 	_, err = runtime.StorageGateway.GetDataset(t.Context(), &storagepb.GetDatasetReq{SpaceId: "crypto"}, client.WithTarget("ip://192.0.2.99:20200"))
@@ -222,14 +219,14 @@ type monitorSysDeployWire struct {
 	wire *monitorGatewayWire
 }
 
-func (w monitorSysDeployWire) SetDeploymentStatus(ctx context.Context, req *adminpb.SetDeploymentStatusReq) (*adminpb.SetDeploymentStatusRsp, error) {
-	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", req); err != nil {
+func (w monitorSysDeployWire) SyncTopology(ctx context.Context, req *adminpb.SyncTopologyReq) (*adminpb.SyncTopologyRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "SyncTopology", req); err != nil {
 		return nil, err
 	}
 	w.wire.mu.Lock()
 	w.wire.statusChanges++
 	w.wire.mu.Unlock()
-	return &adminpb.SetDeploymentStatusRsp{RetInfo: &adminpb.RetInfo{}}, nil
+	return &adminpb.SyncTopologyRsp{RetInfo: &adminpb.RetInfo{}}, nil
 }
 
 func (w monitorSysDeployWire) GetCatalog(ctx context.Context, req *adminpb.GetCatalogReq) (*adminpb.GetCatalogRsp, error) {
@@ -245,7 +242,7 @@ func (w monitorSysDeployWire) GetHostRoutes(ctx context.Context, req *adminpb.Ge
 	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "GetHostRoutes", req); err != nil {
 		return nil, err
 	}
-	return &adminpb.GetHostRoutesRsp{RetInfo: &adminpb.RetInfo{}, HostId: req.GetHostId(), GatewayStatus: &adminpb.HostGatewayRuntimeStatus{InstanceId: "control-instance"}}, nil
+	return &adminpb.GetHostRoutesRsp{RetInfo: &adminpb.RetInfo{}, HostId: req.GetHostId()}, nil
 }
 func (w monitorSysDeployWire) ListHosts(ctx context.Context, req *adminpb.ListDeploymentHostsReq) (*adminpb.ListDeploymentHostsRsp, error) {
 	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListHosts", req); err != nil {

@@ -62,7 +62,7 @@ func verifiedHeader(host string) http.Header {
 	return http.Header{gatewayauth.HeaderVerifiedHost: {host}}
 }
 
-// 网关验过签之后转进来的调用：按签名主机头认主机，一台主机只能取自己的快照、报自己的心跳。
+// 网关验过签之后转进来的调用：按签名主机头认主机，一台主机只能取自己的快照（拉取兼作心跳）。
 func TestRealTRPCSnapshotHeartbeatAndHostIsolation(t *testing.T) {
 	f := newControlFixture(t)
 	address, _ := startControlWire(t, f.service)
@@ -79,17 +79,10 @@ func TestRealTRPCSnapshotHeartbeatAndHostIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, unchanged.Changed)
 	require.Nil(t, unchanged.Snapshot)
-	report, err := proxy.ReportStatus(context.Background(), &pb.ReportStatusReq{HostId: "storage", InstanceId: "wire-instance", Version: "v-test", AppliedHash: response.Snapshot.Hash, RouteCount: 7})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, report.GetRetInfo().GetCode())
 	status := f.status(t)
-	require.Equal(t, "wire-instance", status.InstanceID)
 	require.Equal(t, response.Snapshot.Hash, status.AppliedHash)
 	require.Equal(t, response.Snapshot.Hash, status.ExpectedHash)
-	require.EqualValues(t, 7, status.RouteCount)
 	_, err = proxy.PullSnapshot(context.Background(), &pb.PullSnapshotReq{HostId: "control"})
-	require.Error(t, err)
-	_, err = proxy.ReportStatus(context.Background(), &pb.ReportStatusReq{HostId: "control", InstanceId: "forged", Version: "v-test"})
 	require.Error(t, err)
 }
 

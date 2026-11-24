@@ -29,20 +29,16 @@ func (s *fakeSnapshots) Save(view *snapshot.View) error {
 }
 
 type fakeControl struct {
-	pulled             *snapshot.View
-	pullErr, reportErr error
-	current, reported  string
-	calls              int
+	pulled  *snapshot.View
+	pullErr error
+	current string
+	calls   int
 }
 
 func (c *fakeControl) Pull(_ context.Context, hash string) (*snapshot.View, error) {
 	c.calls++
 	c.current = hash
 	return c.pulled, c.pullErr
-}
-func (c *fakeControl) Report(_ context.Context, hash string, _ int32, _ string) error {
-	c.reported = hash
-	return c.reportErr
 }
 
 func fixtureView(t *testing.T, components ...string) *snapshot.View {
@@ -81,10 +77,11 @@ func TestPersistenceFailureAppliesRevocationAndRetriesUnchangedView(t *testing.T
 	require.Error(t, r.Refresh(context.Background()))
 	_, found := r.State().Load().Resolve("trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows")
 	require.False(t, found, "a cache failure must not preserve withdrawn permissions")
-	require.Equal(t, replacement.Hash(), control.reported)
 	require.NotEqual(t, replacement.Hash(), cache.cached.Hash())
 	control.pulled, cache.saveErr = nil, nil
 	require.NoError(t, r.Refresh(context.Background()))
+	// 下一次拉取带上的已应用哈希是新快照（兼作心跳）。
+	require.Equal(t, replacement.Hash(), control.current)
 	require.Equal(t, replacement.Hash(), cache.cached.Hash())
 	require.Equal(t, 2, cache.saves)
 }
@@ -103,15 +100,15 @@ func TestStartupWithoutSnapshotFailsAndCancellationIsRespected(t *testing.T) {
 	require.Zero(t, control.calls)
 }
 
-func TestHeartbeatFailureAndContinuousSyncWarning(t *testing.T) {
+func TestContinuousSyncWarning(t *testing.T) {
 	now := time.Now()
-	control := &fakeControl{pulled: fixtureView(t), reportErr: errors.New("heartbeat failed")}
+	control := &fakeControl{pulled: fixtureView(t)}
 	warnings := []string{}
 	h := health.NewState()
 	r := New(Options{HostID: "storage", Snapshots: &fakeSnapshots{}, Control: control, Health: h, Now: func() time.Time { return now }, Warn: func(s string) { warnings = append(warnings, s) }})
 	require.NoError(t, r.Initialize(context.Background()))
-	require.False(t, h.Ready())
-	control.pulled, control.reportErr = nil, nil
+	require.True(t, h.Ready())
+	control.pulled = nil
 	require.NoError(t, r.Refresh(context.Background()))
 	require.True(t, h.Ready())
 	control.pullErr = errors.New("offline")
@@ -120,14 +117,14 @@ func TestHeartbeatFailureAndContinuousSyncWarning(t *testing.T) {
 	require.False(t, h.Ready())
 	now = now.Add(9 * time.Minute)
 	require.Error(t, r.Refresh(context.Background()))
-	require.Len(t, warnings, 2)
+	require.Len(t, warnings, 1)
 	require.Error(t, r.Refresh(context.Background()))
-	require.Len(t, warnings, 2)
+	require.Len(t, warnings, 1)
 	control.pullErr = nil
 	require.NoError(t, r.Refresh(context.Background()))
 	control.pullErr = errors.New("offline")
 	require.Error(t, r.Refresh(context.Background()))
-	require.Len(t, warnings, 2)
+	require.Len(t, warnings, 1)
 }
 
 func TestHealthServerTimeouts(t *testing.T) {

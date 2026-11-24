@@ -171,9 +171,6 @@
                   </div>
                 </div>
                 <p v-if="host.tone !== 'ok'" class="host-card__reason">{{ host.reason }}</p>
-                <p v-for="issue in host.gatewayIssues" :key="issue.label" class="host-card__reason">
-                  {{ issue.label }}：{{ issue.value }}
-                </p>
                 <small class="muted" :title="host.lastReportedTitle">最后上报 {{ host.lastReported }}</small>
               </div>
               <p v-if="!hosts.length" class="empty">暂无主机</p>

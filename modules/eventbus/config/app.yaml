@@ -1,4 +1,4 @@
-# MooX EventBus 只负责单机 NATS JetStream 运行时和基础拓扑。
+# MooX EventBus 只负责单机 NATS JetStream 运行时；Stream 由 packages/events 的拓扑声明推出，不在这里配置。
 broker:
   host: 127.0.0.1
   port: 4222
@@ -20,46 +20,3 @@ broker:
 
 internal_client:
   credential_file: ""
-
-streams:
-  - name: MOOX_STORAGE
-    subjects:
-      - "moox.event.storage.dataset.period.completed.v1.>"
-      - "moox.event.storage.view.data.ready.v2.>"
-    retention: limits
-    discard: old
-    storage: file
-    max_age: 72h
-    duplicates: 2m
-    # 只剩周期完成与 View 就绪两种事件，不再有行数据：每条带标的全集，几 KB 到十几 KB（发布时压缩），
-    # 按每天几万条估，72 小时在几百 MB 量级；上限 2 GiB 留足余量，超出时丢最旧的。
-    max_bytes: 2147483648
-  - name: MOOX_OBSERVABILITY
-    subjects:
-      - "moox.event.observability.>"
-    retention: limits
-    discard: old
-    storage: file
-    max_age: 24h
-    duplicates: 2m
-    max_bytes: 134217728
-  - name: MOOX_TRADE
-    # Automatic execution consumes only the session-scoped weight contract.
-    # Historical quantity messages are intentionally not routed into this
-    # stream after the protocol cutover.
-    subjects: ["moox.event.trade.target.weight_requested.v1.>"]
-    retention: work_queue
-    discard: old
-    storage: file
-    max_age: 168h
-    duplicates: 2m
-    max_bytes: 134217728
-  - name: MOOX_COLLECTOR
-    # Collector 发布的元数据事件（不带行情数据）：K 线于周期结束后被补写，供合成与因子按事件重算；标的即将下架，供事件中心处理。
-    subjects: ["moox.event.collector.kline.backfilled.v1.>", "moox.event.collector.instrument.delist_scheduled.v1.>"]
-    retention: limits
-    discard: old
-    storage: file
-    max_age: 72h
-    duplicates: 2m
-    max_bytes: 134217728

@@ -43,7 +43,7 @@ $CLI setup status --file <moox.toml> --host <主机>
 - `--binary-dir` 里要有这次部署的每个组件的二进制和配套命令行（例如 `admin` 要 `moox-admin` 与 `moox-admin-cli`），缺了会报 `binary_missing` 并指出是哪个文件。
   构建目标和组件基本同名：`host-gateway`、`admin`、`collector`、`factor-mgr`、`strategy` 目标同时产出对应的 `-cli`，`hostagent` 目标产出 `moox-host-agent`，
   `storage` 目标产出两个 Storage 二进制，`storage-cli` 是独立目标，`archive-worker` 目标带上 `weed`。
-- 部署按二进制摘要和渲染出的配置判断变化：**只有变了的组件会重启**，没变的只核对在运行。结果里每个组件是 `started`、`restarted`、`unchanged` 或 `paused`（被 `setup stop` 停用的，只更新文件）。
+- 部署按二进制摘要和渲染出的配置判断变化：**只有变了的组件会重启**，没变的只核对在运行。结果里每个组件是 `started`、`restarted`、`unchanged` 或 `disabled`（`moox.toml` 声明停用的，只更新文件、单元停掉）。
 - 部署最后等这次装的组件就绪（本机 `/readyz`），到时限没就绪会列出来并返回失败：先看 `setup logs --host <主机> --component <组件> --journal`。
 - 控制机每次部署都会先执行 `moox-admin-cli bootstrap`（CA、主密钥、管理员、已登记的公钥只建不改；主机与部署按 `moox.toml` 同步，启停状态保留）；其余主机每次先把登记同步到 Admin，再向控制机要身份材料。
 
@@ -71,7 +71,7 @@ $CLI setup status --file <moox.toml> --host <主机>
 ## 发布后验证（只读）
 
 1. `setup status`：组件都是 `active`，`version.json` 的版本与提交是这次的。
-2. 告警：发布期间 Monitor 会短暂出现“运行指标上报”“网关心跳”“行情探针”告警，**几分钟内自动恢复就是正常**；超过 5 分钟仍未恢复才查：`moox-cli doctor alerts --format text`。
+2. 告警：发布期间 Monitor 会短暂出现“运行指标上报”“行情探针”告警，**几分钟内自动恢复就是正常**；超过 5 分钟仍未恢复才查：`moox-cli doctor alerts --format text`。
 3. 日志：用 `moox-cli monitor logs --component <组件> --from <发布时刻>` 看新进程启动之后的记录。**先确认里面有这次启动的 `process_started`**：它同时证明新二进制已经在跑、EventBus 的发布权限没问题、Monitor 入库正常。
    看不到它时不能当成“没有错误”。崩溃信息（panic）在 journald 里：`setup logs --host <主机> --component <组件> --journal`；完整的文件日志在 `<部署根>/logs/<组件>/trpc.log`。
 4. 前端（内嵌在 `moox-admin` 里）：`curl -sk https://<控制机地址>:9527/ | grep -o 'static/js/index-[^"]*\.js'` 应等于构建输出里“moox-admin 内嵌前端”那一行的入口文件。页面需登录，由用户自己在浏览器验证。

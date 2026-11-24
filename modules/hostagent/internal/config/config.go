@@ -15,21 +15,13 @@ import (
 type Config struct {
 	Version int `yaml:"version"`
 	// HostID 是 Admin 登记的主机 ID，必填：主机快照的 subject_id、Monitor 的主机记录都以它为键。
-	HostID         string `yaml:"host_id"`
-	HostName       string `yaml:"host_name"`
-	EventBusConfig string `yaml:"eventbus_config"`
-	// HostAgent 定期经本机网关从 Monitor 拉取主机策略，写入 HostPolicyPath（<部署根>/data/host-agent/host-policy.json）；
-	// 网关目录缓存也放在同一目录。
+	HostID   string `yaml:"host_id"`
+	HostName string `yaml:"host_name"`
+	// HostAgent 每分钟经本机网关把主机快照报给 Monitor，同一次调用拉回主机策略，写入 HostPolicyPath
+	// （<部署根>/data/host-agent/host-policy.json）；网关目录缓存也放在同一目录。
 	GatewayClient  gatewayclient.FileConfig `yaml:"gateway_client"`
 	HostPolicyPath string                   `yaml:"host_policy_path"`
 	sourcePath     string
-}
-type EventBusConfig struct {
-	Version       int      `yaml:"version"`
-	URLs          []string `yaml:"urls"`
-	Username      string   `yaml:"username"`
-	EventBusToken string   `yaml:"eventbus_token"`
-	CAFile        string   `yaml:"ca_file"`
 }
 
 func Load(path string) (*Config, error) {
@@ -48,13 +40,12 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.HostID = strings.TrimSpace(cfg.HostID)
 	cfg.HostName = strings.TrimSpace(cfg.HostName)
-	cfg.EventBusConfig = strings.TrimSpace(cfg.EventBusConfig)
 	cfg.HostPolicyPath = strings.TrimSpace(cfg.HostPolicyPath)
 	if !servicecatalog.ValidHostID(cfg.HostID) {
 		return nil, fmt.Errorf("host_id 必填，且须是登记的主机 ID（小写字母开头，只含小写字母、数字和连字符）")
 	}
-	if !filepath.IsAbs(cfg.EventBusConfig) || !filepath.IsAbs(cfg.HostPolicyPath) {
-		return nil, fmt.Errorf("eventbus_config 与 host_policy_path 必填，且须是绝对路径")
+	if !filepath.IsAbs(cfg.HostPolicyPath) {
+		return nil, fmt.Errorf("host_policy_path 必填，且须是绝对路径")
 	}
 	if cfg.GatewayClient.Caller != "host-agent" {
 		return nil, fmt.Errorf("gateway_client.caller 须为 host-agent")
@@ -71,29 +62,4 @@ func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client,
 		return nil, fmt.Errorf("host-agent 配置未经 Load 载入，无法打开网关客户端")
 	}
 	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.HostPolicyPath), onRefreshError)
-}
-
-func LoadEventBus(path string) (EventBusConfig, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return EventBusConfig{}, fmt.Errorf("stat eventbus config: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return EventBusConfig{}, fmt.Errorf("eventbus config must be a regular 0600 file")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return EventBusConfig{}, fmt.Errorf("read eventbus config: %w", err)
-	}
-	var cfg EventBusConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return cfg, fmt.Errorf("parse eventbus config: %w", err)
-	}
-	if len(cfg.URLs) == 0 || strings.TrimSpace(cfg.Username) == "" || strings.TrimSpace(cfg.EventBusToken) == "" {
-		return cfg, fmt.Errorf("eventbus config requires urls, username, and eventbus_token")
-	}
-	if cfg.CAFile != "" && !filepath.IsAbs(cfg.CAFile) {
-		cfg.CAFile = filepath.Join(filepath.Dir(path), cfg.CAFile)
-	}
-	return cfg, nil
 }

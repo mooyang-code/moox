@@ -34,11 +34,11 @@ func readHost(t *testing.T, dao *TopologyDAO, hostID string) HostRecord {
 }
 
 func TestSyncWritesLabelSSHColumnsAndEncryptedCredential(t *testing.T) {
-	dao, ctx := sshTopologyDAO(t), context.Background()
+	dao := sshTopologyDAO(t)
 	spec := topologySpecs()[1]
 	spec.Label = "存储机"
 	spec.SSH = &SSHSpec{Port: 2222, User: "ubuntu", PrivateKey: "-----PRIVATE KEY-----", Passphrase: "phrase"}
-	require.NoError(t, dao.SyncHostDeployments(ctx, spec))
+	require.NoError(t, syncHost(dao, spec))
 
 	host := readHost(t, dao, "storage")
 	require.Equal(t, "存储机", host.Label)
@@ -60,7 +60,7 @@ func TestSyncWritesLabelSSHColumnsAndEncryptedCredential(t *testing.T) {
 
 	// 换成密码：整条记录被替换，类型随之改变。
 	spec.SSH = &SSHSpec{Port: 22, User: "ops", Password: "p4ss"}
-	require.NoError(t, dao.SyncHostDeployments(ctx, spec))
+	require.NoError(t, syncHost(dao, spec))
 	plain, err = secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("storage"))
 	require.NoError(t, err)
 	require.Equal(t, secretmodel.SSHSecretTypePassword, plain.SecretType)
@@ -68,14 +68,14 @@ func TestSyncWritesLabelSSHColumnsAndEncryptedCredential(t *testing.T) {
 }
 
 func TestSyncWithoutSSHClearsPortUserAndCredentialButKeepsFingerprint(t *testing.T) {
-	dao, ctx := sshTopologyDAO(t), context.Background()
+	dao := sshTopologyDAO(t)
 	spec := topologySpecs()[1]
 	spec.SSH = &SSHSpec{Port: 22, User: "ubuntu", Password: "p4ss"}
-	require.NoError(t, dao.SyncHostDeployments(ctx, spec))
+	require.NoError(t, syncHost(dao, spec))
 	require.NoError(t, dao.db.Exec("UPDATE t_hosts SET c_ssh_fingerprint = '198.51.100.7:22 SHA256:abc' WHERE c_host_id = 'storage'").Error)
 
 	spec.SSH = nil
-	require.NoError(t, dao.SyncHostDeployments(ctx, spec))
+	require.NoError(t, syncHost(dao, spec))
 	host := readHost(t, dao, "storage")
 	require.Zero(t, host.SSHPort)
 	require.Empty(t, host.SSHUser)
@@ -85,7 +85,7 @@ func TestSyncWithoutSSHClearsPortUserAndCredentialButKeepsFingerprint(t *testing
 }
 
 func TestSyncRejectsInvalidSSHAndLabel(t *testing.T) {
-	dao, ctx := sshTopologyDAO(t), context.Background()
+	dao := sshTopologyDAO(t)
 	storage := topologySpecs()[1]
 	outbound := HostSpec{HostID: "factor", Address: "192.168.0.103", Reachability: "outbound", Components: []string{"factor-engine"}}
 	for name, spec := range map[string]HostSpec{
@@ -96,12 +96,12 @@ func TestSyncRejectsInvalidSSHAndLabel(t *testing.T) {
 		"bad port":            withSSH(storage, &SSHSpec{Port: 70000, User: "u", Password: "p"}),
 		"no user":             withSSH(storage, &SSHSpec{Port: 22, Password: "p"}),
 	} {
-		err := dao.SyncHostDeployments(ctx, spec)
+		err := syncHost(dao, spec)
 		require.ErrorIs(t, err, ErrInvalidTopology, name)
 	}
 	long := storage
 	long.Label = string(make([]rune, 65))
-	require.ErrorIs(t, dao.SyncHostDeployments(ctx, long), ErrInvalidTopology)
+	require.ErrorIs(t, syncHost(dao, long), ErrInvalidTopology)
 	require.Zero(t, readHost(t, dao, "storage").SSHPort)
 }
 
@@ -114,23 +114,20 @@ func TestInvalidSSHRollsBackWholeSync(t *testing.T) {
 	dao, ctx := sshTopologyDAO(t), context.Background()
 	valid := withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})
 	bad := withSSH(topologySpecs()[2], &SSHSpec{Port: 22, User: "u"})
-	err := dao.SyncHosts(ctx, []HostSpec{valid, bad})
+	_, err := dao.ReplaceTopology(ctx, []HostSpec{topologySpecs()[0], valid, bad})
 	require.ErrorIs(t, err, ErrInvalidTopology)
 	require.Zero(t, readHost(t, dao, "storage").SSHPort, "同一批里有非法 SSH 信息时，整批不写入")
 	_, err = secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("storage"))
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
-func TestDeleteHostRemovesSSHCredential(t *testing.T) {
+func TestUndeclaredHostLosesSSHCredential(t *testing.T) {
 	dao, ctx := sshTopologyDAO(t), context.Background()
 	spec := withSSH(topologySpecs()[2], &SSHSpec{Port: 22, User: "u", Password: "p"})
-	require.NoError(t, dao.SyncHostDeployments(ctx, spec))
-	// 去掉业务组件后才能删除主机。
-	empty := spec
-	empty.Components = nil
-	require.NoError(t, dao.SyncHostDeployments(ctx, empty))
-	require.NoError(t, dao.DeleteHost(ctx, "overseas"))
-	_, err := secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("overseas"))
+	require.NoError(t, syncHost(dao, spec))
+	_, err := dao.ReplaceTopology(ctx, topologySpecs()[:2])
+	require.NoError(t, err)
+	_, err = secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("overseas"))
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -138,31 +135,38 @@ func TestLazyEncryptionKeyIsNotRequestedWithoutCredentials(t *testing.T) {
 	dao := topologyDAO(t)
 	calls := 0
 	dao.WithEncryptionKeyFunc(func() (string, error) { calls++; return sshTestKey, nil })
-	require.NoError(t, dao.SyncHostDeployments(context.Background(), topologySpecs()[1]))
+	require.NoError(t, syncHost(dao, topologySpecs()[1]))
 	require.Zero(t, calls, "没有 SSH 凭据时不取主密钥")
-	require.NoError(t, dao.SyncHostDeployments(context.Background(), withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})))
+	require.NoError(t, syncHost(dao, withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})))
 	require.Equal(t, 1, calls)
 	dao.WithEncryptionKeyFunc(func() (string, error) { return "", errors.New("no key") })
-	require.Error(t, dao.SyncHostDeployments(context.Background(), withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})))
+	require.Error(t, syncHost(dao, withSSH(topologySpecs()[1], &SSHSpec{Port: 22, User: "u", Password: "p"})))
 }
 
 type recordingCloser struct{ hosts []string }
 
 func (r *recordingCloser) CloseHostSessions(hostID string) { r.hosts = append(r.hosts, hostID) }
 
-func TestServiceClosesSessionsAfterSyncAndDelete(t *testing.T) {
+func TestServiceClosesSessionsOfChangedHostsOnly(t *testing.T) {
 	dao := sshTopologyDAO(t)
 	service := &ServiceImpl{db: dao.db, adminNodeID: "control"}
 	closer := &recordingCloser{}
 	service.SetSessionCloser(closer)
 	ctx := context.Background()
-
-	rsp, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "egress-proxy"}, Label: "海外机", SshPort: 22, SshUser: "u", SshAuthType: "password", SshSecret: "p"})
+	declared := func(overseas *pb.SyncTopologyHost) *pb.SyncTopologyReq {
+		return &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{
+			{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin", "collector"}},
+			{HostId: "storage", Enabled: true, Address: "storage.example.test", ComponentIds: []string{"storage-primary", "storage-view"}},
+			overseas,
+		}}
+	}
+	overseas := &pb.SyncTopologyHost{HostId: "overseas", Enabled: true, Address: "compute.example.test", ComponentIds: []string{"trade", "egress-proxy"}, Label: "海外机", SshPort: 22, SshUser: "u", SshAuthType: "password", SshSecret: "p"}
+	rsp, err := service.SyncTopology(ctx, declared(overseas))
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, []string{"overseas"}, closer.hosts)
+	require.Equal(t, []string{"overseas"}, closer.hosts, "只有 SSH 信息变了的主机关会话")
 
-	bad, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "egress-proxy"}, SshPort: 22, SshUser: "u", SshAuthType: "password"})
+	bad, err := service.SyncTopology(ctx, declared(&pb.SyncTopologyHost{HostId: "overseas", Enabled: true, Address: "compute.example.test", ComponentIds: []string{"trade", "egress-proxy"}, SshPort: 22, SshUser: "u", SshAuthType: "password"}))
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 	require.Len(t, closer.hosts, 1, "失败的同步不关闭会话")

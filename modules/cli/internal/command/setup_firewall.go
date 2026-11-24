@@ -245,8 +245,8 @@ func setupFirewallTargets(manifest *topology.Config) ([]setupFirewallTarget, err
 	byAddress := make(map[string]int)
 	targets := make([]setupFirewallTarget, 0, len(manifest.Hosts()))
 	add := func(host topology.Host, rules []cloudtencent.CreateFirewallRulesOptions) {
-		// 只能出站的主机不接受入站连接，它的地址也不是可放行的公网地址。
-		if strings.TrimSpace(host.Address) == "" || len(rules) == 0 || host.Reachability == servicecatalog.ReachabilityOutbound {
+		// 只能出站的主机不接受入站连接，它的地址也不是可放行的公网地址；停用的主机只写登记，不碰它的防火墙。
+		if strings.TrimSpace(host.Address) == "" || len(rules) == 0 || host.Reachability == servicecatalog.ReachabilityOutbound || !host.Enabled {
 			return
 		}
 		key := strings.ToLower(strings.TrimSpace(host.Address))

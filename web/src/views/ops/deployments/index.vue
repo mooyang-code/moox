@@ -6,7 +6,7 @@
         <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh()">刷新</a-button>
       </div>
       <p class="muted">
-        主机与组件的新增、部署、启停和移除都通过 moox skill 操作（让 Agent 使用 moox skill
+        主机与组件的新增、部署、启停和移除都写在 moox.toml 里，通过 moox skill 部署生效（让 Agent 使用 moox skill
         完成），控制台只展示。停用会撤下路由和健康检查。
       </p>
       <a-alert v-if="error" type="error">{{ error }}。以下保留上次数据，健康状态未知。</a-alert>
@@ -45,12 +45,8 @@
             </div>
             <p class="gateway-summary">
               主机网关：<strong>{{ error ? "状态未知" : gatewayLabel(routes[group.host.host_id]) }}</strong> · 路由：{{
-                syncFor(group.host.host_id).label
+                syncFor(group.host.host_id)
               }}
-              <span v-if="syncFor(group.host.host_id).pendingSince"
-                >（自 {{ formatInstant(syncFor(group.host.host_id).pendingSince, displayZone) }}）</span
-              >
-              <span v-else-if="syncFor(group.host.host_id).label === '待同步'">（起点尚未观测）</span>
               · 组件：{{
                 group.rows
                   .map(row => `${row.definition?.name || row.deployment.component_id} ${statusLabel(row.status)}`)
@@ -143,16 +139,12 @@
           <div v-if="currentRoutes" class="snapshot-summary">
             <p>
               快照格式 v{{ currentRoutes.snapshot_schema_version }} · 本次编译
-              {{ formatInstant(currentRoutes.compiled_at, displayZone) }} · {{ syncFor(selectedHostId).label
-              }}<span v-if="syncFor(selectedHostId).pendingSince"
-                >（自 {{ formatInstant(syncFor(selectedHostId).pendingSince, displayZone) }}）</span
-              >
+              {{ formatInstant(currentRoutes.compiled_at, displayZone) }} · {{ syncFor(selectedHostId) }}
             </p>
             <p class="hashes">
               期望快照 {{ currentRoutes.gateway_status?.expected_hash || "暂无" }}<br />已应用快照
               {{ currentRoutes.gateway_status?.applied_hash || "暂无" }}
             </p>
-            <p v-if="currentRoutes.gateway_status?.last_error" class="error">{{ currentRoutes.gateway_status.last_error }}</p>
           </div>
           <a-alert v-if="currentRouteError" type="error">路由读取失败：{{ currentRouteError }}</a-alert>
           <div v-else-if="currentRoutes" class="table-scroll">
@@ -309,7 +301,6 @@ const {
   requestedComponent,
   clearLocator,
   selectRouteHost,
-  gatewaySignal,
   refresh
 } = useDeployments();
 const caller = ref("");
@@ -321,9 +312,7 @@ watch(selectedHostId, () => {
 const callers = computed(() => [...new Set((currentRoutes.value?.routes || []).flatMap(item => item.callers || []))].sort());
 const routeGroups = computed(() => groupRoutes(currentRoutes.value?.routes || [], caller.value || "", method.value));
 function syncFor(hostId: string) {
-  return error.value
-    ? { label: "同步状态未知", pendingSince: "" }
-    : routeSync(routes.value[hostId], gatewaySignal(hostId, "route_sync"));
+  return error.value ? "同步状态未知" : routeSync(routes.value[hostId]);
 }
 </script>
 <style scoped>

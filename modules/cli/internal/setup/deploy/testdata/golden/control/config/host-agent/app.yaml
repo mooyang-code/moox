@@ -1,6 +1,5 @@
 version: 1
 # 以下路径与主机 ID 都由部署渲染填写；host_id 是 Admin 登记的主机 ID，必填，Monitor 按它记这台主机。
-eventbus_config: /data/moox/secrets/eventbus/hostagent-publisher.yaml
 host_id: control
 # 可选的展示名；与部署登记的关联只用 host_id。
 host_name: ""

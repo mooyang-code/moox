@@ -16,7 +16,7 @@ EventBus 没有自己的证书和 CA：服务端证书就是它所在主机的�
 - `eventbus-credentials ensure|export|export-clients|rotate`
 - EventBus 所在主机改了地址，或 EventBus 换了主机（例如从控制机搬到存储机）：角色文件里的地址要跟着换
 - 日志出现 `Authorization Violation`、`certificate signature failure`、`certificate verify failed`
-- EventBus `:4222` 对单一客户端 IP 堆积 `FIN-WAIT-2`，或 Host Agent 因 NATS 失败反复退出
+- EventBus `:4222` 对单一客户端 IP 堆积 `FIN-WAIT-2`
 
 ## 权威材料
 
@@ -49,7 +49,6 @@ broker 的用户表只随 `eventbus` 组件下发（`export-clients --server`）
 | 程序 | 副本 | 同步方式 |
 |---|---|---|
 | EventBus 自己 | EventBus 所在主机的 `users.yaml`、`internal-admin.yaml`，以及这台主机的主机证书 | `setup deploy --host <EventBus 所在主机>` |
-| 每台主机的 Host Agent | `secrets/eventbus/hostagent-publisher.yaml` | 每台主机 `setup deploy --host <主机>` |
 | 控制机、存储机、海外机上的服务 | 各自的 `<角色>.yaml` 与人人都有的 `metrics-publisher.yaml` | 每台主机 `setup deploy --host <主机>` |
 | 因子引擎 | 因子机的 `factor-eventbus.yaml` | `setup deploy --host <因子机>` |
 
@@ -59,7 +58,7 @@ broker 的用户表只随 `eventbus` 组件下发（`export-clients --server`）
 
 给一个新的客户端（例如 `collector-eventbus`、事件中心的 `callback-dispatcher-eventbus`）开通事件总线权限，不需要轮换现有令牌；全程不打印令牌：
 
-1. 角色与权限写在代码里（`modules/admin/cmd/cli/eventbus_credentials.go`），组件要哪个角色登记在服务目录的 `credentials`。
+1. 角色、发布的事件与持久消费者声明在 `packages/events/topology.go`，Admin 的 `eventbus-credentials` 按它生成权限；组件要哪个角色登记在服务目录的 `credentials`。
 2. 先部署控制机（`setup deploy --host <控制机>`）：它执行 `eventbus-credentials ensure`，只给缺少的角色生成令牌，已有令牌原样保留。
 3. 再部署 EventBus 所在主机：新的用户表（含新角色和按当前代码重新生成的 ACL）随 `eventbus` 组件下发并重启它；EventBus 重启会让所有客户端短暂重连。
    ACL 可能随代码增加或删除权限，部署前逐项核对权限差异与本次发布的消费者契约。
@@ -77,10 +76,10 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 ## 验收（禁止凭“进程在跑”收工）
 
 - 每台主机的 `secrets/moox-ca.crt` 的 SHA-256 与控制机的根证书一致。
-- Host Agent：Monitor 收到新样本，日志没有 `Authorization Violation` / `certificate signature failure`。
+- 各服务：日志没有 `Authorization Violation` / `certificate signature failure`，Monitor 的组件上报继续前进。
 - EventBus `ss`：`FIN-WAIT-2` 不因某一客户端 IP 持续堆积。
 - Storage View（只向 EventBus 发布就绪事件，不消费）：日志里没有 `View 就绪事件发布器重连 EventBus 失败`。
-- Monitor：Host snapshot 与 View 水位在轮换后继续前进。
+- Monitor：View 水位在轮换后继续前进。
 
 ## 常见借口
 
@@ -89,7 +88,7 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 | 只换了二进制 | 手工换二进制不会带上新的 token，要 `setup deploy` |
 | control 已经 export | 那只是导出；副本还在别的机器 |
 | 上次能连，证书不用动 | EventBus 重启后用磁盘上当前的主机证书；客户端手里的根证书不是签它的那张（控制机重装过）就会 `signature failure` |
-| Host Agent 不是这次发布目标 | 它仍连同一 EventBus；漏同步的那台连不上、反复重连或退出，主机指标断报，Monitor 的主机快照不再更新 |
+| 某台主机不是这次发布目标 | 它上面的服务仍连同一 EventBus；漏同步的那台连不上、反复重连，组件上报断掉，Monitor 判它们停止上报 |
 | 代码里已经有 trackingDialer | 它只是让每个 JetStream 客户端重连前先关掉上一条 TCP 连接，EventBus 一侧不再堆积 `FIN-WAIT-2`；凭据不对的客户端照样连不上 |
 
 ## 禁止

@@ -126,7 +126,7 @@ func recordBarArrivals(tx *gorm.DB, samples []Sample) error {
 	if len(seriesIDs) == 0 {
 		return nil
 	}
-	var rows []MetricLatest
+	var rows []MetricSeries
 	if err := tx.Select("c_series_id", "c_value").Where("c_series_id IN ?", seriesIDs).Find(&rows).Error; err != nil {
 		return err
 	}

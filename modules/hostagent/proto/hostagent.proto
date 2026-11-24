@@ -13,19 +13,20 @@ message GetStatusRsp {
   string hostname = 3;
   string boot_id = 4;
   string last_collect_at = 5;
-  string last_publish_at = 6;
+  // 最近一次把快照成功报给 Monitor（随拉取主机策略那次调用）的时间。
+  string last_report_at = 6;
   string last_error = 7;
   uint64 collected = 8;
-  uint64 published = 9;
+  uint64 reported = 9;
   uint64 dropped = 10;
   uint64 skipped = 11;
-  bool eventbus_connected = 12;
-  HostSnapshot latest = 13;
+  HostSnapshot latest = 12;
 }
 message GetSnapshotReq {}
 message GetSnapshotRsp { HostSnapshot snapshot = 1; string collected_at = 2; }
 message RunOnceReq {}
-message RunOnceRsp { string message_id = 1; bool published = 2; string publish_error = 3; HostSnapshot snapshot = 4; }
+// RunOnce 立即采集一次，并随拉取主机策略报给 Monitor。
+message RunOnceRsp { string report_id = 1; bool reported = 2; string report_error = 3; HostSnapshot snapshot = 4; }
 
 service HostAgentMgr {
   rpc GetStatus(GetStatusReq) returns (GetStatusRsp);
