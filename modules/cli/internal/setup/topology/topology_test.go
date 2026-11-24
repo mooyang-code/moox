@@ -104,6 +104,7 @@ func TestParseRejectsRemovedSectionsAndSaysWhich(t *testing.T) {
 		"tls_enabled":             {strings.Replace(validConfig, "port = 4222", "port = 4222\ntls_enabled = true", 1), []string{"eventbus.tls_enabled 已删除"}},
 		"ssh.password":            {strings.Replace(validConfig, `username = "ubuntu"`, `username = "ubuntu", password = "p"`, 1), []string{"hosts.control.ssh.password 已删除"}},
 		"私钥口令":                    {strings.Replace(validConfig, `username = "ubuntu"`, `username = "ubuntu", private_key_passphrase = "p"`, 1), []string{"hosts.control.ssh.private_key_passphrase 已删除"}},
+		"assumed_egress_ips":      {validConfig + "\n[scf_plan]\nassumed_egress_ips = 5\n", []string{"scf_plan.assumed_egress_ips 已删除", "删掉这一行"}},
 		"control_root":            {"[paths]\ndeploy_root = \"/data/moox\"\ncontrol_root = \"/data/moox/prod\"\n" + validConfig, []string{"paths.control_root 已删除"}},
 	} {
 		t.Run(name, func(t *testing.T) {

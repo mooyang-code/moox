@@ -203,6 +203,10 @@ func removedInConfig(key toml.Key) string {
 		if at(1) == "cls" && (at(2) == "writer_secret_id" || at(2) == "writer_secret_key") {
 			return "logging.cls." + at(2) + " 是秘密，要写在同目录的 " + SecretsFileName + " 的 [logging.cls] 里"
 		}
+	case "scf_plan":
+		if at(1) == "assumed_egress_ips" {
+			return "scf_plan.assumed_egress_ips 已删除（限速预算估算已删除），请从 moox.toml 删掉这一行"
+		}
 	case "hosts":
 		if at(2) == "ssh" && (at(3) == "password" || at(3) == "private_key_passphrase") {
 			return fmt.Sprintf("hosts.%s.ssh.%s 已删除：只支持免密的密钥登录，私钥不带口令（带口令的私钥交给 ssh-agent）", at(1), at(3))

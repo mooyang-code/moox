@@ -23,8 +23,6 @@ type SCFPlan struct {
 	MemoryMB int `toml:"memory_mb"`
 	// SymbolsPerFunction 是每个函数负责的标的数，默认 50；按空间可覆盖。
 	SymbolsPerFunction int `toml:"symbols_per_function"`
-	// AssumedEgressIPs 是函数出口 IP 个数的估计，只用于频控估算与告警，默认 1。
-	AssumedEgressIPs int `toml:"assumed_egress_ips"`
 	// Regions 是函数所在地域的网络。vpc 方式（默认）要求地域内有一台标了 external_entry、配置了 private_address 的主机；
 	// public 方式用于没有 MooX 主机的地域，函数不绑 VPC，经公网连 entry_host 的外部入口。
 	// 没被任何市场使用的地域也照样渲染：撤掉地域时，退役函数在计划推进期间还要用到它的网络与入口。
