@@ -748,7 +748,7 @@ func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID st
 	}
 	amountQuality := "reported"
 	if bar.AmountEstimated {
-		amountQuality = "estimated_close_x_volume"
+		amountQuality = "estimated"
 	}
 	instrumentName = strings.TrimSpace(instrumentName)
 	if instrumentName == "" {
@@ -770,7 +770,7 @@ func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID st
 		stringValue("source_provider", bar.ProviderID),
 		stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
 	}
-	// 上游缺成交额（腾讯）时按 收盘价 × 成交量 估算写入 amount，amount_quality=estimated_close_x_volume 标明是估算值。
+	// 上游缺成交额（A 股腾讯、美股 CNBC）时写入数据源估算的值，amount_quality=estimated 标明是估算值，各来源的算法见数据源的注释。
 	fields = append(fields, doubleValue("amount", bar.Amount))
 	if strings.TrimSpace(bar.SourceID) != "" {
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))

@@ -73,8 +73,9 @@ func TestDefaultSourceIDComesFromCatalog(t *testing.T) {
 		// 美股的纳斯达克、datahub 只取指数成分，登记的 source_id 与港股腾讯相同。
 		{"stockus", "nasdaq", "equity", "index_constituent_http"},
 		{"stockus", "datahub", "equity", "index_constituent_http"},
-		// 美股的东方财富同样只取 K 线。
-		{"stockus", "eastmoney", "equity", "stockus_http"},
+		// 美股的 K 线只有 CNBC；东方财富只做标的同步的交易所对照，不是 K 线来源，目录里没有它的登记。
+		{"stockus", "cnbc", "equity", "stockus_cnbc_http"},
+		{"stockus", "eastmoney", "equity", ""},
 		{"stockus", "sina", "equity", ""},
 		{"stockcn", "unknown", "equity", ""},
 	} {

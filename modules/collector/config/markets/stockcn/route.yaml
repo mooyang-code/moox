@@ -28,7 +28,7 @@ klines:
   # - tdx：TCP，延迟最低且不随并发上升，成交量与东方财富一致，成交额是 float32（末位有误差）；权重最高、排在回落链首位。
   # - eastmoney：push2his，成交量单位手×100，有成交额，回看 30 天。
   # - sina：成交量单位股，有成交额，一页 1023 根、回看 20 天；收盘后头几秒给未定稿值，fallback（排在 tencent 之前）。
-  # - tencent：成交量单位手（可有小数），没有成交额，按 收盘价 × 成交量 估算（amount_quality=estimated_close_x_volume）；fallback。
+  # - tencent：成交量单位手（可有小数），没有成交额，按 收盘价 × 成交量 估算（amount_quality=estimated）；fallback。
   - frequency: 5m
     providers:
       - {id: tdx, source_id: normal_7709, weight: 4, role: primary}

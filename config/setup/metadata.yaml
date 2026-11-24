@@ -159,7 +159,7 @@ tags:
     sync.index: HSI
     sync.cron: "40 8 * * *"
     sync.timezone: Asia/Hong_Kong
-# 美股标普 500 与纳斯达克 100：行情源是东方财富（sync.source），成分名单分别来自 datahub 的开源数据集与纳斯达克官网接口（sync.index_source）。
+# 美股标普 500 与纳斯达克 100：sync.source 是东方财富，只用它的美股列表给成分对交易所（K 线按路由取 CNBC，不看它），成分名单分别来自 datahub 的开源数据集与纳斯达克官网接口（sync.index_source）。
 # 成分在纽约开盘前（08:00，周一到周五）同步；sync.cron 不写时是每小时一次（UTC），所以必须写 cron 和时区。
 - space_id: stockus
   tag_id: us_spx

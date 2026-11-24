@@ -64,7 +64,7 @@ space=stockcn dataset=dataset_stock_task subject=000002.XSHE freq=5m data_time=2
   route_rank int 4
   source_provider string "tencent"
   quality_status string "fallback"
-  amount_quality string "estimated_close_x_volume"
+  amount_quality string "estimated"
   amount double 55450
   provider_id string "tencent"
   source_id string "stockcn_http"
@@ -87,7 +87,7 @@ space=stockcn dataset=dataset_stock_task subject=000002.XSHE freq=5m data_time=2
   route_rank int 4
   source_provider string "tencent"
   quality_status string "fallback"
-  amount_quality string "estimated_close_x_volume"
+  amount_quality string "estimated"
   amount double 110920
   provider_id string "tencent"
   source_id string "stockcn_http"

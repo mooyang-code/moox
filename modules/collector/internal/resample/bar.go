@@ -41,7 +41,7 @@ type SourceBar struct {
 	Volume      *float64
 	QuoteVolume *float64
 	TradeNum    *int64
-	// Amount 是 A 股的成交额；可能是采集时按 收盘价 × 成交量 估算的值（腾讯），合成不区分估算与否。
+	// Amount 是 A 股的成交额；可能是采集时估算的值（腾讯按 收盘价 × 成交量），合成不区分估算与否。
 	Amount *float64
 }
 

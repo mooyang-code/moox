@@ -1,0 +1,20 @@
+provider:
+  id: cnbc
+  market: stockus
+  # 美股唯一的 K 线来源：CNBC 网页自用的 1M 接口，本地合成 5m（见 internal/sources/stockus/cnbc）。只取 K 线。
+  enabled_feeds: [kline]
+  hosts: [ts-api.cnbc.com]
+  kline:
+    # 补采的分块最多是一只标的的一个交易日（78 根 5m）；一次请求取这段时间的 1M。
+    max_bars_per_request: 78
+    volume_unit: shares
+    amount_unit: USD
+  rate_limit:
+    scope: egress_ip
+    # 2026-11-23 实测：本机、控制机并发 64、约 6000 次请求没有一次失败；南京云函数 11 个函数同时取标普 500，
+    # 单次 p90 约 1.4～1.8 秒，零星超时。每函数 50 只、并发 16，3～5 秒取完；超时靠重试兜底。
+    requests_per_second: 50
+    burst: 20
+    max_concurrent: 16
+    cooldown: 1s
+    request_timeout: 3s
