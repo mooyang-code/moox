@@ -244,7 +244,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     ```
     第 16 步那个调参任务的 `__params` 只有 `ma__var` 一个键，`$CLI factor task params --task-id <5m 任务>` 有 `ma__var` 最近一次提交（`t_factor_member_params` 的一行）。
     对固定成员发起一次补算（`factor recalc submit --task-id ftask_swap_1m --member ma__5 --from START --to END`），完成后同一区间的 `ma__5` 与补算前逐位相同，`__params` 仍为空。
-18. **序列全集**：事件校验要求 `universe_series` 必填、覆盖 `universe_subject_ids`、tag 非空，不合格的事件发不出去，所以看下游：crypto 现货、合约与 A 股的因子任务都出结果
+18. **标的全集**：周期完成事件只带按标的的 `universe_subject_ids` 与 `failed_subjects`（失败是全集的子集，不合格的事件发不出去），所以看下游：crypto 现货、合约与 A 股的因子任务都出结果
     （`$CLI factor status`，因子引擎的输出里 `factor_period_done ... status=complete`）；对 `ftask_cn_5m` 发起一段补算能算出结果。
 19. **方式 A 仍可用**：现货、永续各一个任务（`--factor-task spot=ftask_spot_1m --factor-task swap=ftask_swap_1m`）的 `market: {select: both, prefer: spot}` 观察实例能启用并出结果；用同样的 `--factor-task` 做一次 View 来源的回放能跑完。
 20. **回放**：
