@@ -16,9 +16,9 @@ import (
 	yamlv3 "gopkg.in/yaml.v3"
 )
 
-// 全新安装能连上 EventBus：用生成的 users.yaml 起真实的 NATS 服务，事件中心角色按生产用的消费者配置创建全部 durable、
-// 拉取并确认消息；它不能发布任何事件主题；Collector 角色能发布下架事件。
-func TestGeneratedACLLetsCallbackDispatcherConsumeEveryItsEventAndPublishNothing(t *testing.T) {
+// 全新安装能连上 EventBus：用生成的 users.yaml 起真实的 NATS 服务，Collector 角色能发布下架事件；Trade 角色按生产用的消费者配置
+// 在 MOOX_COLLECTOR 上建 trade_instrument_delist_v1、拉取并确认消息；它建不了别人的 durable，也不能发布事件主题。
+func TestGeneratedACLLetsTradeConsumeDelistEvents(t *testing.T) {
 	tokens := map[string]string{}
 	for index, role := range eventBusRoles {
 		tokens[role] = fmt.Sprintf("token-%d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", index)
@@ -86,36 +86,28 @@ func TestGeneratedACLLetsCallbackDispatcherConsumeEveryItsEventAndPublishNothing
 	})
 	require.NoError(t, err)
 
-	// 事件中心角色：按事件中心的消费者配置为每个可订阅事件创建自己的 durable。
-	dispatcherClient, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.ClientURL()}, Name: "dispatcher-acl-e2e", Username: "callback-dispatcher-eventbus", Password: tokens["callback-dispatcher-eventbus"]})
+	// Trade 角色：与 RunDelist 相同的消费者配置。
+	tradeClient, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.ClientURL()}, Name: "trade-acl-e2e", Username: "trade-eventbus", Password: tokens["trade-eventbus"]})
 	require.NoError(t, err)
-	defer dispatcherClient.Close()
-	for _, event := range events.CallbackDispatcherEvents {
-		policy := nats.DeliverNewPolicy
-		if event.Name() == events.InstrumentDelistScheduled.Name() {
-			policy = nats.DeliverAllPolicy
-		}
-		consumer, err := events.NewConsumer(ctx, dispatcherClient, registry, events.ConsumerConfig{
-			Name: events.CallbackDispatcherConsumerName(event), Event: event,
-			AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: policy, DeliverDecodeErrors: true,
-		})
-		require.NoError(t, err, event.Name())
-		if event.Name() == events.InstrumentDelistScheduled.Name() {
-			deliveries, err := consumer.Fetch(ctx, 1)
-			require.NoError(t, err)
-			require.Len(t, deliveries, 1, "能拉取到 Collector 发布的下架事件")
-			require.NoError(t, jetstream.ApplyHandlerResult(ctx, deliveries[0], jetstream.HandlerResult{Decision: jetstream.ACK}), "能确认消息")
-		}
-		require.NoError(t, consumer.Close(), event.Name())
-	}
+	defer tradeClient.Close()
+	consumer, err := events.NewConsumer(ctx, tradeClient, registry, events.ConsumerConfig{
+		Name: events.TradeDelistConsumer.Name(), Event: events.InstrumentDelistScheduled,
+		AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 1, FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true,
+	})
+	require.NoError(t, err)
+	deliveries, err := consumer.Fetch(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, deliveries, 1, "能拉取到 Collector 发布的下架事件")
+	require.NoError(t, jetstream.ApplyHandlerResult(ctx, deliveries[0], jetstream.HandlerResult{Decision: jetstream.ACK}), "能确认消息")
+	require.NoError(t, consumer.Close())
 
-	// 不属于它的 durable 创建不了；任何事件主题都不能发布。
-	_, err = events.NewConsumer(ctx, dispatcherClient, registry, events.ConsumerConfig{
-		Name: "callback_dispatcher_not_owned", Event: events.InstrumentDelistScheduled,
+	// 别人的 durable 建不了（Collector 自己的 K 线合成消费者）；任何事件主题都不能发布。
+	_, err = events.NewConsumer(ctx, tradeClient, registry, events.ConsumerConfig{
+		Name: events.FactorBackfilledConsumer.Name(), Event: events.CollectorKlineBackfilled,
 		AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 64, FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy,
 	})
 	require.Error(t, err)
-	raw, err := nats.Connect(server.ClientURL(), nats.UserInfo("callback-dispatcher-eventbus", tokens["callback-dispatcher-eventbus"]))
+	raw, err := nats.Connect(server.ClientURL(), nats.UserInfo("trade-eventbus", tokens["trade-eventbus"]))
 	require.NoError(t, err)
 	t.Cleanup(raw.Close)
 	rawJS, err := raw.JetStream()
@@ -124,7 +116,6 @@ func TestGeneratedACLLetsCallbackDispatcherConsumeEveryItsEventAndPublishNothing
 		"moox.event.collector.instrument.delist_scheduled.v1.mooxsys.x",
 		"moox.event.collector.kline.backfilled.v1.crypto.x",
 		"moox.event.storage.view.data.ready.v2.crypto.x",
-		"moox.event.trade.target.weight_requested.v1.crypto.x",
 	} {
 		_, err := rawJS.Publish(subject, []byte("x"), nats.AckWait(time.Second))
 		require.Error(t, err, subject)

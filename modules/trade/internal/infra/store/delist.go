@@ -171,15 +171,6 @@ func (tx *Tx) BlockInstrument(record BlockedInstrumentRecord) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
-// BlockInstrument 在单独的事务里写一行名单，见 Tx.BlockInstrument。
-func (s *Store) BlockInstrument(ctx context.Context, record BlockedInstrumentRecord) (created bool, err error) {
-	err = s.Transaction(ctx, func(tx *Tx) error {
-		created, err = tx.BlockInstrument(record)
-		return err
-	})
-	return created, err
-}
-
 // GetBlockedInstrument 读一行名单；不在名单里 found=false。
 func (tx *Tx) GetBlockedInstrument(exchange, marketType, exchangeSymbol string) (record BlockedInstrumentRecord, found bool, err error) {
 	rows := []BlockedInstrumentRecord{}

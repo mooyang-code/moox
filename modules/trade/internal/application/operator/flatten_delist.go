@@ -149,7 +149,7 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 			history.lastFinishedAt = at
 		}
 		// 起点取到秒、订单创建时间也只到秒（向下取整）：同一秒内创建的子单算这一轮的，否则这一轮刚下的单会被漏数。
-		// 代价是上一轮结束后不到一秒就用同一个动作号重试，会看到上一轮同一秒的被拒单（事件中心至少隔 30 秒才重试，碰不到）。
+		// 代价是上一轮结束后不到一秒就用同一个动作号重试，会看到上一轮同一秒的被拒单（下架定时任务对失败的动作至少隔 10 分钟才重发，碰不到）。
 		if current.CreatedAt.UnixMilli() >= command.attemptStart {
 			thisRound = append(thisRound, current)
 		}

@@ -128,7 +128,7 @@ import {
   type DelistMarket,
   type InstrumentHolder,
   type SkippedAccount
-} from "@/api/callback-dispatcher/delist";
+} from "@/api/trade/delist";
 import { reportError } from "@/api/http";
 import {
   DELIST_EXCHANGES,

@@ -23,24 +23,6 @@
 | Field / 列 | 数据集的字段；因子结果是结果数据集的列 |
 | View | 面向查询的宽表，由 Storage 异步构建，可重建 |
 
-## 事件中心
-
-- **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓）。管理台叫「事件中心」。
-- **在哪**：组件 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
-- **常用**：
-
-```bash
-./bin/moox-cli event catalog                                      # 可配置的事件与可限定的范围
-./bin/moox-cli event rules list|get|update|delete|test            # 事件规则；新建规则返回验证密钥明文，Agent 不新建，请用户在管理台「事件中心」的“订阅”页签新建
-./bin/moox-cli event executions list|get|retry|cancel|ack         # 执行记录：失败重试、取消（下架处理会同时解除禁止）、确认
-./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架（会触发系统规则）
-```
-
-- 手工登记下架的后果：登记后立即禁止买入，到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。管理台「事件中心」“事件”页签里“标的即将下架”一行的“手工登记”效果相同。
-
-- 库文件没有迁移：事件中心启动时发现表结构是旧的（报“数据库是旧版本的结构”）就拒绝启动，要先停服务、删库文件（部署根下的 `data/callback-dispatcher/moox_callback_dispatcher.db*`）再启动，和用户确认后再做。
-- 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`attention:callback-dispatcher:*`）见 [`monitor-attention.md`](monitor-attention.md)。
-
 ## 采集
 
 - **做什么**：按采集任务定时拉取或经 WebSocket 推送 K 线，写入 Storage；巡检缺口、补采、K 线合成（重采样）、每小时同步交易所标的。
@@ -124,7 +106,7 @@
 
 ## 交易
 
-- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘（币安、OKX、A 股、港股；A 股与港股只有模拟盘，港股按港元结算、每手股数逐只不同、当日买入可卖）；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
+- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘（币安、OKX、A 股、港股；A 股与港股只有模拟盘，港股按港元结算、每手股数逐只不同、当日买入可卖）；实盘风控：下架处理（收到下架事件立即把标的写进名单、只减不增，T−24h、T−2h 两轮自动清仓策略持有的部分，T+10 分钟核对；演练只对模拟盘生效）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
 - **在哪**：组件 `trade`，默认海外机（`[deployments]` 决定）。
 - **常用**（查询；写操作见 `command-index.md` 的 trade 一节，默认只预览，`--yes` 才执行）：
 
@@ -135,11 +117,13 @@
 ./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
 ./bin/moox-cli trade blocked list                                  # 下架名单（全局）
 ./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+./bin/moox-cli trade delist list [--active-only]                   # 下架记录：状态、已规划轮次、各轮各组合的清仓动作
+./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架
 ./bin/moox-cli trade logical fund-settings --logical-account-id <ID> --reserve-ratio 0.05 --yes   # 改资金预留比例（先取回已有设置再合并）
 ./bin/moox-cli trade logical pause|resume --logical-account-id <ID> --yes   # 暂停、恢复组合的自动执行
 ```
 
-- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台“交易管理 › 下架名单”里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
+- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台“交易管理 › 下架名单”里操作（会一并取消进行中的下架处理，含演练）。手工登记下架的后果：登记后立即禁止买入，到下架前 24 小时（已不足 24 小时的立即）自动卖出策略持有的仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`，名单与清仓都只对模拟盘生效，演练核对结束后名单行自动删掉。Trade 暂停期间照常收事件、写名单，但时间线不推进（不清仓）。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
 - 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`attention:trade:*`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控

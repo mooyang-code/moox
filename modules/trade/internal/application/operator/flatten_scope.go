@@ -292,7 +292,7 @@ func (s *Service) delistBlockState(ctx context.Context, spaceID, tradingAccountI
 }
 
 // stopIfUnblocked 在下架清仓的每一轮开头先查名单：已经解除禁止就撤掉本动作的订单，撤单之后同步并确认它们都结束了，
-// 账户才记 COMPLETED 并带“已解除禁止”标记（不记 FAILED 或 PARTIAL，免得事件中心按规则重试）。
+// 账户才记 COMPLETED 并带“已解除禁止”标记（不记 FAILED 或 PARTIAL，免得下架定时任务把它当失败重发）。
 // 撤单还没确认结束时这个账户这一轮到此为止（记运行中、可重试），下一轮接着确认：不能返回去继续下单，
 // 也不能把还没结束的订单留给执行器（它会把这笔 OPERATOR 单当冲突、暂停组合）。
 // 查名单失败时不停（按仍在名单里继续），错误留给后面的步骤；返回 true 表示这个账户这一轮不再往下做。

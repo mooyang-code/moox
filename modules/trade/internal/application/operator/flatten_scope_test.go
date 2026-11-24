@@ -58,7 +58,7 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 // block 把标的写进下架名单：下架清仓每一轮先查名单，不在名单里就当作已经解除禁止而结束。
 func (f *operatorFixture) block(t *testing.T, market, symbol string) {
 	t.Helper()
-	_, err := f.store.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
 		Exchange: "BINANCE", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)

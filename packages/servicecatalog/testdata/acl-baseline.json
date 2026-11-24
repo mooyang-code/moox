@@ -1,12 +1,12 @@
 {
   "note": "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway 是每台主机的网关（签名主机另由签名头给出）。改服务目录后重新生成并人工看差异，访问控制不得变宽。",
   "summary": {
-    "components": 18,
-    "services": 25,
-    "methods": 328,
-    "read_only_methods": 150,
-    "retryable_methods": 152,
-    "callers": 22,
+    "components": 17,
+    "services": 24,
+    "methods": 314,
+    "read_only_methods": 145,
+    "retryable_methods": 147,
+    "callers": 21,
     "principals": 2
   },
   "services": [
@@ -208,85 +208,6 @@
           "read_only": false,
           "retryable": false,
           "timeout_ms": 60000
-        }
-      ]
-    },
-    {
-      "path": "trpc.moox.callbackdispatcher.CallbackDispatcherService",
-      "component": "callback-dispatcher",
-      "console_name": "callback-dispatcher",
-      "methods": [
-        {
-          "name": "AcknowledgeEventExecution",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "CancelEventExecution",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "CreateEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "DeleteEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "GetEventExecution",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "GetEventRule",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "ListEventExecutions",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "ListEventRules",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "ListSubscribableEvents",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "RetryEventExecution",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "TestEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "UpdateEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
         }
       ]
     },
@@ -1862,12 +1783,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "BlockInstrument",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "CancelOrder",
           "read_only": false,
           "retryable": false,
@@ -1908,12 +1823,6 @@
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
-        },
-        {
-          "name": "FlattenInstrument",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 12000
         },
         {
           "name": "FlattenLogicalAccount",
@@ -2161,14 +2070,6 @@
       "trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
       "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
     ],
-    "callback-dispatcher": [
-      "trpc.moox.trade.TradeConsoleService/BlockInstrument",
-      "trpc.moox.trade.TradeConsoleService/FlattenInstrument",
-      "trpc.moox.trade.TradeConsoleService/GetOperatorAction",
-      "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
-      "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
-      "trpc.moox.trade.TradeConsoleService/UnblockInstrument"
-    ],
     "collector": [
       "trpc.moox.admin.ActivityLog/AppendActivityLogs",
       "trpc.moox.collector.MarketFetchExecutor/Invoke",
@@ -2244,18 +2145,6 @@
       "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
       "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CancelEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/DeleteEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventExecutions",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventRules",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListSubscribableEvents",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/RetryEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/TestEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/UpdateEventRule",
       "trpc.moox.collector.CollectMgr/CancelKlineBackfill",
       "trpc.moox.collector.CollectMgr/CancelKlineResampleJob",
       "trpc.moox.collector.CollectMgr/CheckKline",
@@ -2619,17 +2508,6 @@
       "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
       "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CancelEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/DeleteEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventExecutions",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventRules",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListSubscribableEvents",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/RetryEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/TestEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/UpdateEventRule",
       "trpc.moox.collector.CollectMgr/CancelKlineBackfill",
       "trpc.moox.collector.CollectMgr/CancelKlineResampleJob",
       "trpc.moox.collector.CollectMgr/CheckKline",

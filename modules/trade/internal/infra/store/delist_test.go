@@ -14,13 +14,13 @@ func TestBlockedInstrumentLifecycleIsIdempotent(t *testing.T) {
 		Exchange: " binance ", MarketType: "spot", ExchangeSymbol: " FOOUSDT ",
 		Reason: "公告下架", DelistID: " delist-1 ", BlockedAt: 100,
 	}
-	created, err := s.BlockInstrument(ctx, record)
+	created, err := blockInstrument(t, s, record)
 	require.NoError(t, err)
 	require.True(t, created)
 
 	// 重复写入不改已有记录，也不报错。
 	record.Reason, record.DelistID, record.BlockedAt = "别的原因", "delist-2", 200
-	created, err = s.BlockInstrument(ctx, record)
+	created, err = blockInstrument(t, s, record)
 	require.NoError(t, err)
 	require.False(t, created)
 
@@ -47,7 +47,7 @@ func TestBlockedInstrumentLifecycleIsIdempotent(t *testing.T) {
 
 func TestBlockInstrumentRejectsIncompleteRecord(t *testing.T) {
 	s := openTestStore(t)
-	_, err := s.BlockInstrument(context.Background(), BlockedInstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"})
+	_, err := blockInstrument(t, s, BlockedInstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"})
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
@@ -103,7 +103,7 @@ func TestUnblockInstrumentCancelsActiveDelists(t *testing.T) {
 	insert("all", DelistScopeAll, DelistActive)
 	insert("paper", DelistScopePaperOnly, DelistActive)
 	insert("old", DelistScopeAll, DelistRescheduled)
-	_, err := s.BlockInstrument(ctx, BlockedInstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Reason: "r", DelistID: "all"})
+	_, err := blockInstrument(t, s, BlockedInstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Reason: "r", DelistID: "all"})
 	require.NoError(t, err)
 
 	removed, err := s.UnblockInstrument(ctx, "BINANCE", "SPOT", "FOOUSDT")
@@ -117,4 +117,13 @@ func TestUnblockInstrumentCancelsActiveDelists(t *testing.T) {
 	active, err := s.ListActiveDelists(ctx)
 	require.NoError(t, err)
 	require.Empty(t, active)
+}
+
+func blockInstrument(t *testing.T, s *Store, record BlockedInstrumentRecord) (created bool, err error) {
+	t.Helper()
+	err = s.Transaction(context.Background(), func(tx *Tx) error {
+		created, err = tx.BlockInstrument(record)
+		return err
+	})
+	return created, err
 }

@@ -2,28 +2,10 @@ package rpc
 
 import (
 	"context"
-	"errors"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
-	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
-
-// FlattenInstrumentCommand 是对一个组合发起的单标的下架清仓：标的已经按交易所换算成内部标的 ID。
-type FlattenInstrumentCommand struct {
-	SpaceID          string
-	ActionID         string
-	LogicalAccountID string
-	Exchange         string
-	InstrumentID     string
-	Reason           string
-	// DeadlineAt 是截止时间（毫秒，下架时间）；0 表示不限。
-	DeadlineAt int64
-}
-
-// FlattenInstrumentFunc 发起下架清仓。unblocked 为真表示标的已被解除禁止而提前结束。
-type FlattenInstrumentFunc func(ctx context.Context, command FlattenInstrumentCommand) (action store.OperatorActionRecord, unblocked bool, err error)
 
 func delistKey(exchange tradepb.Exchange, market tradepb.MarketType, symbol string) delistapp.Key {
 	return delistapp.Key{
@@ -33,21 +15,7 @@ func delistKey(exchange tradepb.Exchange, market tradepb.MarketType, symbol stri
 	}
 }
 
-// BlockInstrument 把标的写进下架名单。全局方法，不检查空间。
-func (s *ConsoleServer) BlockInstrument(ctx context.Context, req *tradepb.BlockInstrumentReq) (*tradepb.BlockInstrumentRsp, error) {
-	if err := validatePB(req); err != nil {
-		return &tradepb.BlockInstrumentRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	if s.Delist == nil {
-		return &tradepb.BlockInstrumentRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
-	}
-	result, err := s.Delist.Block(ctx, delistKey(req.GetExchange(), req.GetMarketType(), req.GetExchangeSymbol()), req.GetReason(), req.GetOwner())
-	return &tradepb.BlockInstrumentRsp{
-		RetInfo: errorInfo(err), InstrumentUnknown: result.InstrumentUnknown, Created: result.Created,
-	}, nil
-}
-
-// UnblockInstrument 解除禁止。全局方法，不检查空间。
+// UnblockInstrument 解除禁止，并取消这个标的进行中的下架处理（含演练）。全局方法，不检查空间。
 func (s *ConsoleServer) UnblockInstrument(ctx context.Context, req *tradepb.UnblockInstrumentReq) (*tradepb.UnblockInstrumentRsp, error) {
 	if err := validatePB(req); err != nil {
 		return &tradepb.UnblockInstrumentRsp{RetInfo: invalidInfo(err)}, nil
@@ -107,38 +75,6 @@ func (s *ConsoleServer) ListInstrumentHolders(ctx context.Context, req *tradepb.
 	}
 	rsp.Notes = result.Notes
 	return rsp, nil
-}
-
-// FlattenInstrument 在调用时带的空间里，对组合中属于这个交易所的成员发起单标的下架清仓。
-func (s *ConsoleServer) FlattenInstrument(ctx context.Context, req *tradepb.FlattenInstrumentReq) (*tradepb.FlattenInstrumentRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.FlattenInstrumentRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if s.Delist == nil || s.FlattenInstrumentAction == nil || s.Store == nil {
-		return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
-	}
-	// 先按空间读一次组合，保证只能操作自己空间的组合。
-	if _, err := s.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
-		return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err)}, nil
-	}
-	key := delistKey(req.GetExchange(), req.GetMarketType(), req.GetExchangeSymbol())
-	instrumentID, err := s.Delist.ResolveInstrumentID(ctx, spaceID, req.GetLogicalAccountId(), key)
-	if err != nil {
-		return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err)}, nil
-	}
-	action, unblocked, err := s.FlattenInstrumentAction(ctx, FlattenInstrumentCommand{
-		SpaceID: spaceID, ActionID: req.GetActionId(), LogicalAccountID: req.GetLogicalAccountId(),
-		Exchange: key.Exchange, InstrumentID: instrumentID, Reason: req.GetReason(), DeadlineAt: req.GetDeadlineAt(),
-	})
-	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
-		// 忙：别的清仓在跑或拿不到组合锁。不返回动作（返回的可能是别人的），事件中心稍后再试，不计入重试次数。
-		return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err), Busy: true}, nil
-	}
-	return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err), Action: operatorActionToPB(action), Unblocked: unblocked}, nil
 }
 
 // ListDelists 列出下架记录（按创建时间倒序），带各轮各组合的动作状态。全局方法，不检查空间。

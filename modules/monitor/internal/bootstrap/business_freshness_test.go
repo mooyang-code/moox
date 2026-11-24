@@ -1294,7 +1294,7 @@ func TestBusinessFreshnessReporterRetiresLegacySpaceChecksAfterUpgrade(t *testin
 	})
 	require.NoError(t, err)
 	repositories := manager.Repositories()
-	legacy := []string{"balance:trade", "trade_attention:target_rejected", "event_center_attention:execution_failed", "collector_attention:delist_source_failed"}
+	legacy := []string{"balance:trade", "trade_attention:target_rejected", "collector_attention:delist_source_failed"}
 	before := now.Add(-time.Minute)
 	for _, checkID := range legacy {
 		require.NoError(t, repositories.Checks.Create(t.Context(), &domain.Check{

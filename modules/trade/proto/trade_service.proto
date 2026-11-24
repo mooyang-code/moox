@@ -952,11 +952,9 @@ service TradeConsoleService {
   rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
   rpc ListAccountLedger(ListAccountLedgerReq) returns (ListAccountLedgerRsp);
   rpc FlattenTradingAccount(FlattenTradingAccountReq) returns (FlattenTradingAccountRsp);
-  rpc BlockInstrument(BlockInstrumentReq) returns (BlockInstrumentRsp);
   rpc UnblockInstrument(UnblockInstrumentReq) returns (UnblockInstrumentRsp);
   rpc ListBlockedInstruments(ListBlockedInstrumentsReq) returns (ListBlockedInstrumentsRsp);
   rpc ListInstrumentHolders(ListInstrumentHoldersReq) returns (ListInstrumentHoldersRsp);
-  rpc FlattenInstrument(FlattenInstrumentReq) returns (FlattenInstrumentRsp);
   rpc ListDelists(ListDelistsReq) returns (ListDelistsRsp);
   rpc SummarizeAccountPnl(SummarizeAccountPnlReq) returns (SummarizeAccountPnlRsp);
   rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
@@ -1000,31 +998,11 @@ message ListAccountLedgerRsp {
   bool has_more = 3;
 }
 
-// ===== 下架名单与下架清仓（交易计划 4.7，供事件中心调用） =====
-// 下面的接口都用（交易所、市场、交易所代码）定位标的，由 Trade 换算内部标的 ID。
-// 名单的三个接口和 ListInstrumentHolders 是全局的，不分空间，Trade 不检查空间头。
+// ===== 下架名单与下架记录 =====
+// 下架处理在 Trade 进程内完成（收下架事件、按时间线清仓、核对），下面只是给管理台和 moox-cli 的查询与人工解除。
+// 一律用（交易所、市场、交易所代码）定位标的，由 Trade 换算内部标的 ID；全局的，不分空间，Trade 不检查空间头。
 
-// 写入下架名单。名单标的“只减不增”：还能交易时目标里加仓的部分被截掉、减仓照常，不能交易时整项跳过。
-message BlockInstrumentReq {
-  Exchange exchange = 1;
-  // 只收 MARKET_TYPE_SPOT、MARKET_TYPE_SWAP。
-  MarketType market_type = 2;
-  string exchange_symbol = 3;
-  string reason = 4;
-  // 来源事件 ID，只用于审计。
-  string event_id = 5;
-  // 写入者的标识（事件中心的下架处理传它的执行记录 ID）。已在名单里时保留第一个写入者；可以为空。
-  string owner = 6;
-}
-message BlockInstrumentRsp {
-  common.RetInfo ret_info = 1;
-  // true 表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
-  bool instrument_unknown = 2;
-  // false 表示标的已经在名单里，没有改动（原因、写入者都保留第一次写入的）。写名单的响应丢了再重试拿到的也是 false，
-  // 所以“这一项是不是自己写的”要看名单项的 owner，不能看它。
-  bool created = 3;
-}
-
+// 解除禁止：删掉名单行，并把这个标的进行中的下架记录（含演练）一并取消。
 message UnblockInstrumentReq {
   Exchange exchange = 1;
   MarketType market_type = 2;
@@ -1045,14 +1023,11 @@ message BlockedInstrument {
   string base_asset = 5;
   // 写入名单时的原因，只用于展示和审计。
   string reason = 6;
-  string source_event_id = 7;
-  int64 blocked_at = 8;
-  // 写入者的标识：第一个把它写进名单的调用方传的 owner，后来的重复写入不会覆盖；没传为空。
-  string owner = 9;
+  int64 blocked_at = 7;
   // 范围：ALL 对所有账户生效；PAPER_ONLY 只对模拟盘账户生效（演练）。
-  string scope = 10;
+  string scope = 8;
   // 写入或把范围升级为 ALL 的那条下架记录。
-  string delist_id = 11;
+  string delist_id = 9;
 }
 message ListBlockedInstrumentsReq {}
 message ListBlockedInstrumentsRsp {
@@ -1097,27 +1072,6 @@ message ListInstrumentHoldersRsp {
   repeated SkippedAccount skipped_accounts = 4;
   // 明确不算持有的说明，例如标的的计价币不是账户的结算币（清仓不会卖它）。
   repeated string notes = 5;
-}
-
-// 在调用时带的空间里，对组合中属于这个交易所的成员发起单标的下架清仓（DELIST_FLATTEN）：不暂停组合，只看这一个标的。
-// 同一个 action_id 要求组合、标的、reason 完全一致；已完成的直接返回旧结果；FAILED、PARTIAL 用同一个号再调会重新执行。
-message FlattenInstrumentReq {
-  string action_id = 1;
-  string logical_account_id = 2;
-  Exchange exchange = 3;
-  MarketType market_type = 4;
-  string exchange_symbol = 5;
-  string reason = 6;
-  // 截止时间（毫秒，传下架时间）：大于 0 时到点 Trade 不再下单，动作记 PARTIAL（剩余持仓写在结果里）；0 表示不限，只受 30 分钟期限约束。
-  int64 deadline_at = 7;
-}
-message FlattenInstrumentRsp {
-  common.RetInfo ret_info = 1;
-  OperatorAction action = 2;
-  // true 表示 Trade 暂时忙（同组合有整组清仓、减仓在跑，或拿不到组合锁），稍后再试，不计入重试次数；此时 ret_info 是 CONFLICT。
-  bool busy = 3;
-  // true 表示标的已被解除禁止而提前结束，动作记 COMPLETED，不要重试（结果 JSON 顶层也带 unblocked）。
-  bool unblocked = 4;
 }
 
 // 下架记录里一轮一个组合的清仓。

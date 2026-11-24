@@ -221,7 +221,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "event_center_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "view_follow" && business.Kind != "worker_presence" && business.Kind != "archive_object_store" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
+			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "view_follow" && business.Kind != "worker_presence" && business.Kind != "archive_object_store" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
 				continue
 			}
 			// 概览从库里已有检查读回来的上一次结果不是本轮新算出的事实：不能拿它再写一次结果（它的状态值是 ok，会被记成失败）。

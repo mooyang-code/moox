@@ -27,19 +27,19 @@ func attentionChecks(t *testing.T, seed func(db *gorm.DB, now time.Time)) map[st
 // 各服务的关注项：检查 ID 是 attention:<服务名>:<kind>，名称取 name 标签；值为 1 的变成失败的业务检查，原因是 detail 标签；值回到 0 的恢复。
 func TestAttentionBecomesBusinessChecks(t *testing.T) {
 	checks := attentionChecks(t, func(db *gorm.DB, now time.Time) {
-		seedOverviewMetricForInstance(t, db, "ec-failed", "callback-dispatcher", "callback-dispatcher@overseas", "moox_attention_active", `{"kind":"execution_failed","name":"事件通知失败","severity":"critical","detail":"币安下架通知：对方返回状态码 500"}`, 1, now)
-		seedOverviewMetricForInstance(t, db, "ec-detected", "callback-dispatcher", "callback-dispatcher@overseas", "moox_attention_active", `{"kind":"delist_detected","name":"发现标的即将下架","severity":"critical","detail":""}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "tr-failed", "trade", "trade@overseas", "moox_attention_active", `{"kind":"delist_failed","name":"下架处理需人工处理","severity":"critical","detail":"BINANCE SPOT FOOUSDT 第 1 轮组合 a 清仓失败"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "tr-detected", "trade", "trade@overseas", "moox_attention_active", `{"kind":"delist_detected","name":"发现标的即将下架","severity":"critical","detail":""}`, 0, now)
 		seedOverviewMetricForInstance(t, db, "co-source", "collector", "collector@control", "moox_attention_active", `{"kind":"delist_source_failed","name":"下架检测来源连续失败","severity":"critical","detail":"OKX 永续合约信息 连续 3 次失败：超时"}`, 1, now)
 		seedOverviewMetricForInstance(t, db, "tr-rejected", "trade", "trade@control", "moox_attention_active", `{"kind":"target_rejected","name":"交易目标被拒绝","severity":"critical","detail":"x"}`, 1, now)
 	})
 
-	failed := checks["attention:callback-dispatcher:execution_failed"]
+	failed := checks["attention:trade:delist_failed"]
 	require.Equal(t, "down", failed.Status)
-	require.Equal(t, "事件通知失败", failed.Name)
-	require.Equal(t, "callback-dispatcher", failed.Module)
-	require.Equal(t, "币安下架通知：对方返回状态码 500", failed.Reason)
+	require.Equal(t, "下架处理需人工处理", failed.Name)
+	require.Equal(t, "trade", failed.Module)
+	require.Equal(t, "BINANCE SPOT FOOUSDT 第 1 轮组合 a 清仓失败", failed.Reason)
 	require.Equal(t, events.SystemSpaceID, failed.SpaceID)
-	require.Equal(t, "healthy", checks["attention:callback-dispatcher:delist_detected"].Status)
+	require.Equal(t, "healthy", checks["attention:trade:delist_detected"].Status)
 	require.Equal(t, "down", checks["attention:collector:delist_source_failed"].Status)
 	require.Contains(t, checks["attention:collector:delist_source_failed"].Reason, "OKX 永续合约信息")
 	require.Equal(t, "交易目标被拒绝", checks["attention:trade:target_rejected"].Name)

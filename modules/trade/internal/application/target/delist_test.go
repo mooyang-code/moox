@@ -2,6 +2,7 @@ package target
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 
 func (f *targetFixture) block(t *testing.T, market, symbol string) {
 	t.Helper()
-	_, err := f.store.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
 		Exchange: "BINANCE", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
@@ -108,7 +109,7 @@ func TestBlockedInstrumentNotInTargetIsStillSold(t *testing.T) {
 func TestBlockedInstrumentOnOtherExchangeDoesNotRestrict(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	_, err := f.store.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
 		Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Reason: "别家", BlockedAt: 1,
 	})
 	require.NoError(t, err)
@@ -354,7 +355,7 @@ func TestReduceOnlyWarningChecksDedupeBeforeFetchingAQuote(t *testing.T) {
 func TestPaperOnlyBlockRestrictsPaperMembers(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	_, err := f.store.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
 		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Scope: store.DelistScopePaperOnly, Reason: "演练", BlockedAt: 1,
 	})
 	require.NoError(t, err)

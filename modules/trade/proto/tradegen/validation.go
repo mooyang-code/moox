@@ -643,19 +643,6 @@ func validateInstrumentKey(exchange Exchange, market MarketType, symbol string) 
 	return nil
 }
 
-func (r *BlockInstrumentReq) Validate() error {
-	if r == nil {
-		return fmt.Errorf("request is required")
-	}
-	if err := validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol); err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.Reason) == "" {
-		return fmt.Errorf("reason is required")
-	}
-	return nil
-}
-
 func (r *UnblockInstrumentReq) Validate() error {
 	if r == nil {
 		return fmt.Errorf("request is required")
@@ -680,16 +667,6 @@ func (r *ListDelistsReq) Validate() error {
 		return fmt.Errorf("limit must be between 0 and 500")
 	}
 	return nil
-}
-
-func (r *FlattenInstrumentReq) Validate() error {
-	if r == nil ||
-		strings.TrimSpace(r.ActionId) == "" ||
-		strings.TrimSpace(r.LogicalAccountId) == "" ||
-		strings.TrimSpace(r.Reason) == "" {
-		return fmt.Errorf("action_id, logical_account_id and reason are required")
-	}
-	return validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol)
 }
 
 func (r *SummarizeAccountPnlReq) Validate() error {

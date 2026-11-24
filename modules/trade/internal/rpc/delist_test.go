@@ -7,7 +7,6 @@ import (
 	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
-	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -89,87 +88,6 @@ func TestDelistRequestsAreValidated(t *testing.T) {
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, listed.GetRetInfo().GetCode())
 }
 
-func logicalSeed(t *testing.T, server *ConsoleServer) {
-	t.Helper()
-	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "a", Exchange: "BINANCE", Markets: []string{"SPOT"},
-			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
-		}); err != nil {
-			return err
-		}
-		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
-		}); err != nil {
-			return err
-		}
-		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true, Priority: 1,
-		}); err != nil {
-			return err
-		}
-		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", InstrumentID: "FOO-USDT-SPOT",
-			BaseAsset: "FOO", QuoteAsset: "USDT", SettlementAsset: "USDT", PriceTick: "0.01", ExchangeQuantityStep: "0.1", MinExchangeQuantity: "0.1", Status: "TRADING",
-		})
-	}))
-}
-
-// FlattenInstrument：按空间调用，交易所代码由 Trade 换算成内部标的 ID；“忙”单独返回标记，不返回别人的动作。
-func TestFlattenInstrumentResolvesInstrumentAndReportsBusy(t *testing.T) {
-	server, _ := delistServer(t)
-	logicalSeed(t, server)
-	var got FlattenInstrumentCommand
-	server.FlattenInstrumentAction = func(_ context.Context, command FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
-		got = command
-		return store.OperatorActionRecord{ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID, ActionType: "DELIST_FLATTEN", Status: "COMPLETED"}, true, nil
-	}
-	req := &tradepb.FlattenInstrumentReq{
-		ActionId: "act-1", LogicalAccountId: "logical-1", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-		MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, ExchangeSymbol: "FOOUSDT", Reason: "下架",
-	}
-
-	// 没有空间头：按空间的方法要求空间。
-	noSpace, err := server.FlattenInstrument(context.Background(), req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_NO_PERMISSION, noSpace.GetRetInfo().GetCode())
-
-	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-	rsp, err := server.FlattenInstrument(ctx, req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, FlattenInstrumentCommand{
-		SpaceID: "space-1", ActionID: "act-1", LogicalAccountID: "logical-1", Exchange: "BINANCE", InstrumentID: "FOO-USDT-SPOT", Reason: "下架",
-	}, got)
-	require.True(t, rsp.GetUnblocked())
-	require.Equal(t, "DELIST_FLATTEN", rsp.GetAction().GetActionType())
-
-	// 忙：返回 busy 标记和 CONFLICT，不带动作。
-	server.FlattenInstrumentAction = func(context.Context, FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
-		return store.OperatorActionRecord{ActionID: "other"}, false, operatorapp.ErrLogicalAccountBusy
-	}
-	busy, err := server.FlattenInstrument(ctx, req)
-	require.NoError(t, err)
-	require.True(t, busy.GetBusy())
-	require.Equal(t, tradepb.ErrorCode_CONFLICT, busy.GetRetInfo().GetCode())
-	require.Nil(t, busy.GetAction())
-
-	// 别的空间的组合：查不到。
-	other, err := server.FlattenInstrument(spacecontext.WithSpaceID(context.Background(), "space-2"), req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_NOT_FOUND, other.GetRetInfo().GetCode())
-
-	// 组合里没有该交易所的成员：参数错误，不能静默当作平完。
-	req.Exchange = tradepb.Exchange_EXCHANGE_OKX
-	missing, err := server.FlattenInstrument(ctx, req)
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
-}
-
-// ---- T29 ----
-
-// liveLedgerServer 和 ledgerServer 一样，但 account-1 是实盘永续账户：实盘的资金费才走交易所流水翻页。
 func liveLedgerServer(t *testing.T, adapters adapterMap) *ConsoleServer {
 	t.Helper()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))

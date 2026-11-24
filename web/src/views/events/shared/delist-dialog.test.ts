@@ -1,11 +1,11 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HoldersPreview } from "@/api/callback-dispatcher/delist";
+import type { HoldersPreview } from "@/api/trade/delist";
 
 const mocks = vi.hoisted(() => ({ listInstrumentHolders: vi.fn(), registerDelistNotice: vi.fn() }));
-vi.mock("@/api/callback-dispatcher/delist", async () => ({
-  ...(await vi.importActual<typeof import("@/api/callback-dispatcher/delist")>("@/api/callback-dispatcher/delist")),
+vi.mock("@/api/trade/delist", async () => ({
+  ...(await vi.importActual<typeof import("@/api/trade/delist")>("@/api/trade/delist")),
   ...mocks
 }));
 vi.mock("@/api/http", () => ({ reportError: vi.fn(), call: vi.fn() }));

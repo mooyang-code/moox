@@ -112,47 +112,6 @@ func (s *Service) lookup(ctx context.Context, key Key) (store.InstrumentRecord, 
 	return record, true, nil
 }
 
-// BlockResult 是写入名单的结果。
-type BlockResult struct {
-	// Created 为假表示已经在名单里，没有改动。
-	Created bool
-	// InstrumentUnknown 为真表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
-	InstrumentUnknown bool
-}
-
-// Block 把标的按范围 ALL 写进下架名单，下架记录填 owner。已在名单里时不改动。
-func (s *Service) Block(ctx context.Context, key Key, reason, owner string) (BlockResult, error) {
-	if err := s.ready(); err != nil {
-		return BlockResult{}, err
-	}
-	key, err := normalize(key)
-	if err != nil {
-		return BlockResult{}, err
-	}
-	if strings.TrimSpace(reason) == "" {
-		return BlockResult{}, fmt.Errorf("%w: reason 必填", ErrInvalidRequest)
-	}
-	instrument, known, err := s.lookup(ctx, key)
-	if err != nil {
-		return BlockResult{}, err
-	}
-	created, err := s.Store.BlockInstrument(ctx, store.BlockedInstrumentRecord{
-		Exchange: key.Exchange, MarketType: key.MarketType, ExchangeSymbol: key.ExchangeSymbol, Scope: store.DelistScopeAll,
-		InstrumentID: instrument.InstrumentID, BaseAsset: instrument.BaseAsset,
-		Reason: reason, DelistID: owner, BlockedAt: s.now().UnixMilli(),
-	})
-	if err != nil {
-		return BlockResult{}, err
-	}
-	if created {
-		s.changed()
-		if known {
-			s.warnSpecialHolders(ctx, key, instrument)
-		}
-	}
-	return BlockResult{Created: created, InstrumentUnknown: !known}, nil
-}
-
 // warnSpecialHolders 在写入名单时检查：这个标的是不是某个组合的套利底仓对冲腿，或排除资产（BNB 保留、稳定币保证金、保证金币、底仓）。
 // 这些资产清仓不会自动处理（也不算策略持有），下架时没有任何动作会碰它们，所以要提醒人工处理。固定文字，不带变化的数字。
 func (s *Service) warnSpecialHolders(ctx context.Context, key Key, instrument store.InstrumentRecord) {

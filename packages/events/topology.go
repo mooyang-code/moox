@@ -3,7 +3,6 @@ package events
 import (
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -162,8 +161,6 @@ var Roles = []Role{
 	{Username: "strategy-eventbus", File: "strategy-eventbus", SecretKey: "eventbus_strategy", Publishes: []Event{LogicalAccountTargetWeightRequested}, Consumers: []DurableConsumer{StrategyViewReadyConsumer}},
 	{Username: "trade-eventbus", File: "trade-eventbus", SecretKey: "eventbus_trade", Consumers: []DurableConsumer{TradeTargetConsumer, TradeDelistConsumer}},
 	{Username: "collector-eventbus", File: "collector-eventbus", SecretKey: "eventbus_collector", Publishes: []Event{CollectorKlineBackfilled, InstrumentDelistScheduled}, Consumers: []DurableConsumer{CollectorResamplePeriodConsumer, CollectorResampleBackfilledConsumer}},
-	// 事件中心只消费、不发布。
-	{Username: "callback-dispatcher-eventbus", File: "callback-dispatcher-eventbus", SecretKey: "eventbus_callback_dispatcher", Consumers: callbackDispatcherConsumers()},
 }
 
 // RoleByFile 按凭据文件名（服务目录里 eventbus:<File> 的 <File>）找账号。
@@ -184,24 +181,4 @@ func RoleByUsername(username string) (Role, bool) {
 		}
 	}
 	return Role{}, false
-}
-
-// CallbackDispatcherEvents 是事件中心（callback-dispatcher）消费的事件，每个事件一个固定的 durable。
-// 不开放 MOOX_TRADE 的事件：它是工作队列，再挂消费者会和 Trade 抢消息。
-var CallbackDispatcherEvents = []Event{DatasetPeriodCompleted, ViewDataReady, CollectorKlineBackfilled, InstrumentDelistScheduled}
-
-// CallbackDispatcherConsumerName 返回事件中心消费某个事件的 durable 名：
-// NATS 的 durable 名不能含点号，所以取去掉“event.”前缀的事件名，点换成下划线，前面加
-// callback_dispatcher_，后面加 _v<版本>，例如 callback_dispatcher_collector_instrument_delist_scheduled_v1。
-func CallbackDispatcherConsumerName(event Event) string {
-	name := strings.ReplaceAll(strings.TrimPrefix(event.Name(), "event."), ".", "_")
-	return fmt.Sprintf("callback_dispatcher_%s_v%d", name, event.Version())
-}
-
-func callbackDispatcherConsumers() []DurableConsumer {
-	out := make([]DurableConsumer, 0, len(CallbackDispatcherEvents))
-	for _, event := range CallbackDispatcherEvents {
-		out = append(out, declareConsumer(CallbackDispatcherConsumerName(event), event))
-	}
-	return out
 }

@@ -25,8 +25,8 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
 			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
 			"ListAccountLedger", "FlattenTradingAccount",
-			"BlockInstrument", "UnblockInstrument", "ListBlockedInstruments", "ListInstrumentHolders",
-			"FlattenInstrument", "ListDelists", "SummarizeAccountPnl", "ListOperatorActions",
+			"UnblockInstrument", "ListBlockedInstruments", "ListInstrumentHolders",
+			"ListDelists", "SummarizeAccountPnl", "ListOperatorActions",
 			"GetLifecycle", "ControlLifecycle",
 		},
 	}

@@ -206,7 +206,7 @@ func TestSilentEnabledDeploymentsAreDown(t *testing.T) {
 			{HostID: "control", ComponentID: "strategy", Status: "enabled"},
 			{HostID: "control", ComponentID: "trade", Status: "enabled"},
 			{HostID: "control", ComponentID: "monitor", Status: "enabled"},
-			{HostID: "control", ComponentID: "callback-dispatcher", Status: "disabled"},
+			{HostID: "control", ComponentID: "archive-mgr", Status: "disabled"},
 		},
 	}))
 	got, err := (Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
@@ -218,5 +218,5 @@ func TestSilentEnabledDeploymentsAreDown(t *testing.T) {
 	require.Equal(t, [2]string{"missing", "down"}, [2]string{byID["strategy"].ReporterStatus, byID["strategy"].Status}, "从没上报")
 	require.Equal(t, [2]string{"stale", "down"}, [2]string{byID["trade"].ReporterStatus, byID["trade"].Status}, "停止上报")
 	require.Equal(t, "healthy", byID["monitor"].Status)
-	require.Equal(t, [2]string{"missing", "disabled"}, [2]string{byID["callback-dispatcher"].ReporterStatus, byID["callback-dispatcher"].Status}, "未启用的部署不算")
+	require.Equal(t, [2]string{"missing", "disabled"}, [2]string{byID["archive-mgr"].ReporterStatus, byID["archive-mgr"].Status}, "未启用的部署不算")
 }

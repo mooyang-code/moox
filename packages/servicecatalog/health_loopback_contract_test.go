@@ -41,7 +41,6 @@ var healthListeners = map[string][]healthListener{
 	"storage-view":        {{kind: "trpc", file: "modules/storage/config/storage_view/trpc_go.yaml"}},
 	"egress-proxy":        {{kind: "trpc", file: "modules/egressproxy/config/trpc_go.yaml"}},
 	"trade":               {{kind: "trpc", file: "modules/trade/config/trpc_go.yaml"}},
-	"callback-dispatcher": {{kind: "trpc", file: "modules/callbackdispatcher/config/trpc_go.yaml"}},
 	"factor-engine":       {{kind: "trpc", file: "modules/factor/config/trpc_go.engine.yaml"}},
 	"archive-worker":      {{kind: "key", file: "modules/archive/config/worker/app.yaml", key: "health.addr"}},
 }

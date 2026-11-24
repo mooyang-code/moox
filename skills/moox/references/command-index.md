@@ -65,7 +65,7 @@
 | `collector resample jobs` | 查看历史合成作业；带 --job-id 查看单个作业，否则按任务、状态列出最近的作业 |
 | `collector resample preview` | 预览合成的源任务与目标频率是否可行 |
 | `collector status` | 查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总 |
-| `collector delist register` | 手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，事件中心的系统规则随即禁止买入，到 T−24h 会自动卖出策略持有的实盘仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only） |
+| `collector delist register` | 手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，Trade 随即禁止买入，到 T−24h 会自动卖出策略持有的仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only） |
 | `collector subjects exclude` | 把标的从采集计划里临时去掉（交易所公告下架、数据异常等） |
 | `collector subjects exclusions` | 列出空间当前生效的排除（设置人、原因、设置与到期时间） |
 | `collector subjects listers` | 列出可用的标的来源（交易所列表器） |
@@ -113,22 +113,6 @@
 | `doctor diagnose` | 按 Monitor 的事实诊断模块 |
 
 各组件的健康端口（`/healthz`、`/readyz`、`/metrics`）只听 127.0.0.1、不验签：`doctor bootstrap` 只查本机，直接请求本机端口；`doctor diagnose` 在组件给 Monitor 的上报缺失或过期时，经 SSH 在目标机上请求它的本机 `/readyz`（SSH 连不上记为无法判断），`systemd` 用户服务的状态同样经 SSH 读取。因子机只能出站，SSH 只有在家里的局域网才连得上，所以因子机的 doctor 与 `/readyz` 检查只能在局域网里做；不在局域网时看 Monitor 的上报状态（`doctor alerts`）和 `moox-cli host agent status --host factor`。
-
-## event：事件中心：事件规则（事件发生时通知你的接口）与执行记录（调用 CallbackDispatcherService）
-
-| 命令 | 说明 |
-| --- | --- |
-| `event catalog` | 列出可以配置规则的事件，以及每个事件可限定的范围字段 |
-| `event executions ack` | 确认失败的记录已处理，清除它引起的告警 |
-| `event executions cancel` | 取消还没结束的执行；对下架处理同时解除禁止买入（默认只预览，--yes 才执行） |
-| `event executions get` | 查看一条执行记录（每次尝试的状态码、耗时；下架处理的各轮步骤） |
-| `event executions list` | 列出执行记录 |
-| `event executions retry` | 重新执行一条失败的记录 |
-| `event rules delete` | 删除事件规则（默认只预览，--yes 才执行；系统规则不能删除） |
-| `event rules get` | 查看一条事件规则 |
-| `event rules list` | 列出事件规则 |
-| `event rules test` | 用一条示例事件向通知地址发一次，返回状态码和耗时（不写执行记录） |
-| `event rules update` | 修改事件规则，只改给出的字段（系统规则只能改 --enabled） |
 
 ## eventbus：EventBus：流、消费者与事件概览（调用 EventBusMgr，只读）
 

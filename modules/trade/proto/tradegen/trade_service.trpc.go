@@ -96,15 +96,11 @@ type TradeConsoleServiceService interface {
 
 	FlattenTradingAccount(ctx context.Context, req *FlattenTradingAccountReq) (*FlattenTradingAccountRsp, error)
 
-	BlockInstrument(ctx context.Context, req *BlockInstrumentReq) (*BlockInstrumentRsp, error)
-
 	UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq) (*UnblockInstrumentRsp, error)
 
 	ListBlockedInstruments(ctx context.Context, req *ListBlockedInstrumentsReq) (*ListBlockedInstrumentsRsp, error)
 
 	ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq) (*ListInstrumentHoldersRsp, error)
-
-	FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq) (*FlattenInstrumentRsp, error)
 
 	ListDelists(ctx context.Context, req *ListDelistsReq) (*ListDelistsRsp, error)
 
@@ -801,24 +797,6 @@ func TradeConsoleServiceService_FlattenTradingAccount_Handler(svr interface{}, c
 	return rsp, nil
 }
 
-func TradeConsoleServiceService_BlockInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &BlockInstrumentReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).BlockInstrument(ctx, reqbody.(*BlockInstrumentReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func TradeConsoleServiceService_UnblockInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &UnblockInstrumentReq{}
 	filters, err := f(req)
@@ -863,24 +841,6 @@ func TradeConsoleServiceService_ListInstrumentHolders_Handler(svr interface{}, c
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).ListInstrumentHolders(ctx, reqbody.(*ListInstrumentHoldersReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeConsoleServiceService_FlattenInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &FlattenInstrumentReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeConsoleServiceService).FlattenInstrument(ctx, reqbody.(*FlattenInstrumentReq))
 	}
 
 	var rsp interface{}
@@ -1139,10 +1099,6 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_FlattenTradingAccount_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeConsoleService/BlockInstrument",
-			Func: TradeConsoleServiceService_BlockInstrument_Handler,
-		},
-		{
 			Name: "/trpc.moox.trade.TradeConsoleService/UnblockInstrument",
 			Func: TradeConsoleServiceService_UnblockInstrument_Handler,
 		},
@@ -1153,10 +1109,6 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
 			Func: TradeConsoleServiceService_ListInstrumentHolders_Handler,
-		},
-		{
-			Name: "/trpc.moox.trade.TradeConsoleService/FlattenInstrument",
-			Func: TradeConsoleServiceService_FlattenInstrument_Handler,
 		},
 		{
 			Name: "/trpc.moox.trade.TradeConsoleService/ListDelists",
@@ -1306,9 +1258,6 @@ func (s *UnimplementedTradeConsoleService) ListAccountLedger(ctx context.Context
 func (s *UnimplementedTradeConsoleService) FlattenTradingAccount(ctx context.Context, req *FlattenTradingAccountReq) (*FlattenTradingAccountRsp, error) {
 	return nil, errors.New("rpc FlattenTradingAccount of service TradeConsoleService is not implemented")
 }
-func (s *UnimplementedTradeConsoleService) BlockInstrument(ctx context.Context, req *BlockInstrumentReq) (*BlockInstrumentRsp, error) {
-	return nil, errors.New("rpc BlockInstrument of service TradeConsoleService is not implemented")
-}
 func (s *UnimplementedTradeConsoleService) UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq) (*UnblockInstrumentRsp, error) {
 	return nil, errors.New("rpc UnblockInstrument of service TradeConsoleService is not implemented")
 }
@@ -1317,9 +1266,6 @@ func (s *UnimplementedTradeConsoleService) ListBlockedInstruments(ctx context.Co
 }
 func (s *UnimplementedTradeConsoleService) ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq) (*ListInstrumentHoldersRsp, error) {
 	return nil, errors.New("rpc ListInstrumentHolders of service TradeConsoleService is not implemented")
-}
-func (s *UnimplementedTradeConsoleService) FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq) (*FlattenInstrumentRsp, error) {
-	return nil, errors.New("rpc FlattenInstrument of service TradeConsoleService is not implemented")
 }
 func (s *UnimplementedTradeConsoleService) ListDelists(ctx context.Context, req *ListDelistsReq) (*ListDelistsRsp, error) {
 	return nil, errors.New("rpc ListDelists of service TradeConsoleService is not implemented")
@@ -1425,15 +1371,11 @@ type TradeConsoleServiceClientProxy interface {
 
 	FlattenTradingAccount(ctx context.Context, req *FlattenTradingAccountReq, opts ...client.Option) (rsp *FlattenTradingAccountRsp, err error)
 
-	BlockInstrument(ctx context.Context, req *BlockInstrumentReq, opts ...client.Option) (rsp *BlockInstrumentRsp, err error)
-
 	UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq, opts ...client.Option) (rsp *UnblockInstrumentRsp, err error)
 
 	ListBlockedInstruments(ctx context.Context, req *ListBlockedInstrumentsReq, opts ...client.Option) (rsp *ListBlockedInstrumentsRsp, err error)
 
 	ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq, opts ...client.Option) (rsp *ListInstrumentHoldersRsp, err error)
-
-	FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq, opts ...client.Option) (rsp *FlattenInstrumentRsp, err error)
 
 	ListDelists(ctx context.Context, req *ListDelistsReq, opts ...client.Option) (rsp *ListDelistsRsp, err error)
 
@@ -2215,26 +2157,6 @@ func (c *TradeConsoleServiceClientProxyImpl) FlattenTradingAccount(ctx context.C
 	return rsp, nil
 }
 
-func (c *TradeConsoleServiceClientProxyImpl) BlockInstrument(ctx context.Context, req *BlockInstrumentReq, opts ...client.Option) (*BlockInstrumentRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/BlockInstrument")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("BlockInstrument")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &BlockInstrumentRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *TradeConsoleServiceClientProxyImpl) UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq, opts ...client.Option) (*UnblockInstrumentRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -2289,26 +2211,6 @@ func (c *TradeConsoleServiceClientProxyImpl) ListInstrumentHolders(ctx context.C
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListInstrumentHoldersRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeConsoleServiceClientProxyImpl) FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq, opts ...client.Option) (*FlattenInstrumentRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/FlattenInstrument")
-	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeConsoleService")
-	msg.WithCalleeMethod("FlattenInstrument")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &FlattenInstrumentRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

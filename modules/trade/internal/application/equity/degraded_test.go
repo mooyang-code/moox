@@ -175,7 +175,7 @@ func TestSampleAccountFailsOnHaltedAssetWithoutAnyPrice(t *testing.T) {
 // 停止交易而且在下架名单里：可以按 0 计，采样照常。
 func TestSampleAccountZeroesBlockedHaltedAsset(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "BREAK")
-	_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
 		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func TestSampleAccountZeroesBlockedHaltedAsset(t *testing.T) {
 // （下架之前它仍有市价，按 0 计会让权益骤降）。
 func TestSampleAccountFailsOnBlockedTradingAssetQuoteFailure(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "TRADING")
-	_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
 		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)

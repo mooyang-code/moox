@@ -13,7 +13,7 @@ import type {
   InstrumentHolder,
   RegisterDelistNoticeReq,
   SkippedAccount
-} from "@/api/callback-dispatcher/delist";
+} from "@/api/trade/delist";
 import { NETWORK_ERROR_MESSAGE, isNetworkFailure } from "@/api/network-error";
 
 export type StatusTone = "wait" | "run" | "ok" | "fail" | "cancel";

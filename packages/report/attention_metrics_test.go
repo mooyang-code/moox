@@ -15,13 +15,10 @@ func TestAttentionMetricIsMonitored(t *testing.T) {
 	if !IsMonitoredMetric(AttentionMetric) {
 		t.Fatalf("%s 必须在上报白名单里", AttentionMetric)
 	}
-	for _, name := range []string{"moox_trade_attention_active", "moox_callbackdispatcher_attention_active", "moox_collector_attention_active"} {
+	for _, name := range []string{"moox_trade_attention_active", "moox_collector_attention_active"} {
 		if IsMonitoredMetric(name) {
 			t.Errorf("旧关注项指标 %s 已合成 %s，不应再上报", name, AttentionMetric)
 		}
-	}
-	if IsMonitoredMetric("moox_callbackdispatcher_event_errors_total") {
-		t.Error("事件中心的事件错误计数没有 Monitor 消费方，不应该上报")
 	}
 }
 

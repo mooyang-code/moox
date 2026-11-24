@@ -36,9 +36,8 @@ type ConsoleServer struct {
 	Exchanges          execution.ExchangeCatalog
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc
-	// Delist 是下架名单与持有者查询；FlattenInstrumentAction 发起单标的下架清仓。
-	Delist                  *delistapp.Service
-	FlattenInstrumentAction FlattenInstrumentFunc
+	// Delist 是下架名单、下架记录与持有者查询。
+	Delist *delistapp.Service
 	// Lifecycle 是模块的生命周期控制器（GetLifecycle、ControlLifecycle 转给它，见 lifecycle.go）。
 	Lifecycle *lifecycle.Controller
 }
