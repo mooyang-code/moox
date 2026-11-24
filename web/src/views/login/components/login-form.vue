@@ -36,7 +36,7 @@ import { safeRedirect } from "@/utils/safe-redirect";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { loginAPI } from "@/api/modules/user/index";
 import { Message } from "@arco-design/web-vue";
-import { getErrorMessage } from "@/utils/error-handler";
+import { errorMessage } from "@/api/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 
 const userStores = useUserInfoStore();
@@ -197,7 +197,7 @@ const onLogin = async () => {
     console.error("登录失败:", error);
     userStores.clearAccount();
 
-    const loginErrorMessage = getErrorMessage(error, "登录失败");
+    const loginErrorMessage = errorMessage(error, "登录失败");
     Message.error(loginErrorMessage);
   } finally {
     loginLoading.value = false;

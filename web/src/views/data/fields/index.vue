@@ -46,7 +46,7 @@
         <section class="field-workbench">
           <aside class="group-panel">
             <a-alert v-if="groupError" type="error" class="inline-error"
-              >字段组加载失败 <a-link @click="loadGroups">重试</a-link></a-alert
+              >字段组加载失败：{{ groupError }} <a-link @click="loadGroups">重试</a-link></a-alert
             >
             <FieldGroupTree
               :groups="groups"
@@ -72,7 +72,7 @@
               @clear="selectedKeys = []"
             />
             <a-alert v-if="fieldError" type="error" class="table-error"
-              >字段列表加载失败 <a-link @click="loadFields">重试</a-link></a-alert
+              >字段列表加载失败：{{ fieldError }} <a-link @click="loadFields">重试</a-link></a-alert
             >
             <FieldTable
               :rows="rows"
@@ -134,7 +134,7 @@
 
 <script setup lang="ts">
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { reportError } from "@/api/http";
+import { errorMessage, reportError } from "@/api/http";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
@@ -179,8 +179,9 @@ const ungroupedFieldCount = ref(0);
 const selectedKeys = ref<string[]>([]);
 const loading = ref(false);
 const groupsLoading = ref(false);
-const fieldError = ref(false);
-const groupError = ref(false);
+// 读取失败的原因；空串表示没有失败
+const fieldError = ref("");
+const groupError = ref("");
 const batchLoading = ref(false);
 const fieldSaving = ref(false);
 const groupSaving = ref(false);
@@ -218,7 +219,7 @@ async function loadGroups() {
   if (!selectedSpaceId.value) return;
   const token = groupGate.begin();
   groupsLoading.value = true;
-  groupError.value = false;
+  groupError.value = "";
   try {
     const all: FieldGroup[] = [];
     for (let page = 1; ; page += 1) {
@@ -238,8 +239,8 @@ async function loadGroups() {
       state.page = 1;
       await replaceQuery();
     }
-  } catch {
-    if (token.isLatest()) groupError.value = true;
+  } catch (error) {
+    if (token.isLatest()) groupError.value = errorMessage(error, "请稍后重试");
   } finally {
     if (token.isLatest()) groupsLoading.value = false;
   }
@@ -249,7 +250,7 @@ async function loadFields() {
   if (!selectedSpaceId.value) return;
   const token = fieldGate.begin();
   loading.value = true;
-  fieldError.value = false;
+  fieldError.value = "";
   try {
     const selected = groups.value.find(item => item.group_id === state.group);
     const rsp = await listFields({
@@ -269,8 +270,8 @@ async function loadFields() {
     pagination.current = state.page;
     pagination.pageSize = state.pageSize;
     applyPageResult(pagination, rsp.page_result);
-  } catch {
-    if (token.isLatest()) fieldError.value = true;
+  } catch (error) {
+    if (token.isLatest()) fieldError.value = errorMessage(error, "请稍后重试");
   } finally {
     if (token.isLatest()) loading.value = false;
   }

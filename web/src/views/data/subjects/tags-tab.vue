@@ -163,6 +163,7 @@
 </template>
 
 <script setup lang="ts">
+import { RequestError, reportError } from "@/api/http";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
@@ -359,10 +360,13 @@ function confirmDelete(tag: Tag) {
         Message.success("标签已删除");
         await load();
       } catch (error) {
-        const items = (error as { response?: { data?: { references?: TagReference[] } } }).response?.data?.references || [];
+        // 被数据集引用时后端随错误返回引用列表：弹窗列出；其余失败提示原因
+        const items: TagReference[] = (error instanceof RequestError ? error.response?.references : undefined) || [];
         if (items.length) {
           references.value = items;
           referenceVisible.value = true;
+        } else {
+          reportError(error);
         }
       }
     }
