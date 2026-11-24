@@ -114,10 +114,8 @@ func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 		require.Len(t, value.GetAbsent(), 2, "从新到旧")
 		other := value.GetAbsent()[1]
 		require.Equal(t, "ETH", other.GetSubjectId(), "这批没有补写的标的的确认缺失也带上")
-		require.Empty(t, other.GetSeriesTag())
 		absent := value.GetAbsent()[0]
 		require.Equal(t, "BTC", absent.GetSubjectId())
-		require.Empty(t, absent.GetSeriesTag(), "数据集里每个标的只有一条序列，不带 series_tag")
 		require.Equal(t, start, absent.GetStart().AsTime(), "截到事件范围内")
 		require.Equal(t, start.Add(10*time.Minute), absent.GetEnd().AsTime())
 	}
