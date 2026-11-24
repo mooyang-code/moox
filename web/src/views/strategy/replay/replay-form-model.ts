@@ -1,6 +1,6 @@
 import type { ReplayInput, Strategy } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
-import { TASK_KEY_ORDER, marketRequirement, poolRequirement, type PoolRequirement } from "@/views/strategy/market-mode";
+import { MARKET_ORDER, marketRequirement, poolRequirement, type PoolRequirement } from "@/views/strategy/market-mode";
 import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
@@ -80,11 +80,11 @@ export function replayDeclared(form: ReplayFormState, strategies: Strategy[]): b
 }
 
 /**
- * 回放要读取任务的市场（现货、永续、股票先后，统一数据集上的任务键是 multi）：从实例发起时就是预填的实例任务的键；策略池取成员市场的并集；
+ * 回放要读取任务的市场（现货、永续、股票先后）：从实例发起时就是预填的实例任务的键；策略池取成员市场的并集；
  * 否则按策略 DSL 的 market 读出，没写 market 时只读一个任务，市场取用户选的。
  */
 export function replayMarkets(form: ReplayFormState, strategies: Strategy[]): string[] {
-  if (form.instance_id) return TASK_KEY_ORDER.filter(market => form.tasks[market]);
+  if (form.instance_id) return MARKET_ORDER.filter(market => form.tasks[market]);
   const pool = replayPool(form, strategies);
   if (pool) return pool.markets;
   const requirement = marketRequirement(replayDslText(form, strategies));
@@ -136,16 +136,16 @@ function replayInputError(form: ReplayFormState, strategies: Strategy[], markets
     return replayTuned(form, strategies) ? "声明了 factor_params 的策略只能用“因子现算”来源回放" : "";
   }
   if (replayIsPool(form, strategies)) return "“因子现算”来源不支持策略池";
-  if (markets.length > 1) return "“因子现算”只支持一个计算任务：现货加永续请用统一数据集上的任务，或改用结果 View";
+  if (markets.length > 1) return "“因子现算”只支持一个计算任务：现货加永续请改用结果 View";
   if (markets.includes("equity")) return "“因子现算”暂不支持股票市场";
   return "";
 }
 
-/** 提交用的资金费列：只在回放读取永续（含统一数据集）时带上，表单里隐藏的旧值不提交；策略池的资金费写在池 DSL 里，不提交；没写时为空串。 */
+/** 提交用的资金费列：只在回放读取永续时带上，表单里隐藏的旧值不提交；策略池的资金费写在池 DSL 里，不提交；没写时为空串。 */
 export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (replayIsPool(form, strategies)) return "";
   const markets = replayMarkets(form, strategies);
-  if (!markets.includes("swap") && !markets.includes("multi")) return "";
+  if (!markets.includes("swap")) return "";
   return (form.funding_column ?? "").trim();
 }
 

@@ -21,7 +21,6 @@
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
-            <span v-if="currentDatasetUnified">{{ datasetMarketText("multi") }}</span>
             <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="viewIndexTag.color">{{ viewIndexTag.text }}</a-tag>
@@ -415,7 +414,7 @@ import type {
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useSpaceStore } from "@/store/modules/space";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
-import { datasetMarketText, isUnifiedMarketType, seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
+import { seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
 import {
   adaptiveColumnWidth,
   recordRowsToTableRows,
@@ -636,9 +635,6 @@ const currentDatasetRetention = computed(() => {
   if (!dataset?.retention) return "";
   return `${formatRetention(dataset.retention)}（${retentionSourceLabel(dataset.retention_source)}）`;
 });
-
-// 统一数据集（market_type 为 multi）：同一个数据集里放现货、永续两条序列。
-const currentDatasetUnified = computed(() => isUnifiedMarketType(primaryDataset.value?.attributes?.market_type));
 
 const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.dataset_id));
 const modeText = computed(() => {

@@ -33,14 +33,8 @@ describe("市场模式", () => {
     expect(marketRequirement("name: a\nmarket: spot\n")).toEqual({ declared: false, markets: [] });
   });
 
-  it("统一数据集上的任务键 multi 排在最后，URL 里照常往返", () => {
-    expect(instanceTasks({ multi: "ftask_u" })).toEqual([{ market: "multi", taskId: "ftask_u" }]);
-    expect(tasksText({ multi: "ftask_u" })).toBe("ftask_u");
-    expect(formatFactorTasks({ multi: "ftask_u" })).toBe("multi=ftask_u");
-    expect(parseFactorTasks("multi=ftask_u")).toEqual({ multi: "ftask_u" });
-  });
-
   it("计算任务在 URL 里往返：只认三个市场，坏项忽略", () => {
+    expect(parseFactorTasks("multi=ftask_u")).toEqual({});
     expect(formatFactorTasks({ swap: "ftask_b", spot: "ftask_a" })).toBe("spot=ftask_a,swap=ftask_b");
     expect(formatFactorTasks(undefined)).toBe("");
     expect(parseFactorTasks("spot=ftask_a,swap=ftask_b")).toEqual({ spot: "ftask_a", swap: "ftask_b" });
@@ -134,7 +128,7 @@ describe("附加来源与参考市场", () => {
   it("任务键 来源名:市场 的拆分、展示与 URL 往返", () => {
     expect(splitTaskKey("daily:swap")).toEqual({ source: "daily", market: "swap" });
     expect(splitTaskKey("spot")).toEqual({ source: "", market: "spot" });
-    expect(taskKeyLabel("daily:multi")).toBe("来源 daily（统一数据集）");
+    expect(taskKeyLabel("daily:spot")).toBe("来源 daily（现货）");
     expect(taskKeyLabel("swap")).toBe("永续");
     const tasks = { "daily:swap": "ftask_d", swap: "ftask_s", spot: "ftask_r" };
     expect(instanceTasks(tasks).map(item => item.market)).toEqual(["spot", "swap", "daily:swap"]);

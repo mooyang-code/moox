@@ -11,8 +11,7 @@ const api = vi.hoisted(() => ({
   listInstances: vi.fn(),
   listFactorTasks: vi.fn(),
   listLogicalAccounts: vi.fn(),
-  listTradingAccounts: vi.fn(async () => ({ accounts: [] })),
-  listAllDatasets: vi.fn()
+  listTradingAccounts: vi.fn(async () => ({ accounts: [] }))
 }));
 vi.mock("@/api/strategy", () => ({
   createInstance: api.createInstance,
@@ -22,7 +21,6 @@ vi.mock("@/api/strategy", () => ({
   validateStrategy: api.validateStrategy
 }));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
-vi.mock("@/api/storage/metadata", () => ({ listAllDatasets: api.listAllDatasets }));
 vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts, listTradingAccounts: api.listTradingAccounts }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
@@ -136,7 +134,6 @@ describe("strategy instance creation behavior", () => {
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
     api.listInstances.mockReset().mockResolvedValue({ items: [], page: { total: 0 } });
-    api.listAllDatasets.mockReset().mockResolvedValue([]);
   });
 
   // 运行模式的单选组是页面里最后一个单选组（前面可能还有“输入方式”）。
@@ -438,69 +435,6 @@ describe("strategy instance creation behavior", () => {
     expect(sourceOption.text()).toContain("有可变成员，不可选");
     expect(option(sourced.wrapper, 2, "ftask_fixed").attributes("disabled")).toBeUndefined();
     expect(sourced.wrapper.text()).toContain("附加来源的任务不能有可变成员");
-  });
-
-  describe("统一数据集上的任务（方式 B）", () => {
-    const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
-    const unifiedTasks = () => {
-      api.listFactorTasks.mockResolvedValue({
-        factor_tasks: [
-          taskInfo({ name: "统一因子", source_dataset_id: "ds_uni" }, "ftask_uni"),
-          taskInfo({ name: "现货因子", source_dataset_id: "ds_spot" }, "ftask_spot"),
-          taskInfo({ name: "永续因子", source_dataset_id: "ds_swap" }, "ftask_swap")
-        ],
-        page_result: { has_more: false }
-      });
-      api.listAllDatasets.mockResolvedValue([
-        { dataset_id: "ds_uni", attributes: { market_type: "multi" } },
-        { dataset_id: "ds_spot", attributes: { market_type: "spot" } },
-        { dataset_id: "ds_swap", attributes: {} }
-      ]);
-    };
-    const optionValues = (select: { findAll: (selector: string) => any[] }) =>
-      select.findAll("option").map(item => item.attributes("value"));
-
-    it("lets a strategy with market pick one task on a unified dataset and registers it as multi", async () => {
-      unifiedTasks();
-      const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: mixed });
-      // 分开的方式里只列单市场数据集上的任务。
-      expect(optionValues(wrapper.findAll("select")[1])).not.toContain("ftask_uni");
-      wrapper.findAllComponents({ name: "RadioGroupStub" })[0].vm.$emit("update:modelValue", "unified");
-      await flushPromises();
-      const selects = wrapper.findAll("select");
-      // 定义、统一数据集任务两个选择框，只列统一数据集上的任务。
-      expect(selects).toHaveLength(2);
-      expect(optionValues(selects[1]).filter(Boolean)).toEqual(["ftask_uni"]);
-      await selects[1].setValue("ftask_uni");
-      await precheck(wrapper, flushPromises);
-      await wrapper
-        .findAll("button")
-        .find(item => item.text() === "创建停用实例")!
-        .trigger("click");
-      await flushPromises();
-      expect(api.validateStrategy).toHaveBeenCalledWith(mixed[0].dsl_yaml, { multi: "ftask_uni" });
-      expect(api.createInstance).toHaveBeenCalledWith({
-        instance_id: undefined,
-        strategy_id: "s1",
-        factor_tasks: { multi: "ftask_uni" },
-        logical_account_id: ""
-      });
-    });
-
-    it("does not offer unified datasets to a strategy without market", async () => {
-      unifiedTasks();
-      const noMarket = [{ ...strategies[0], dsl_yaml: "name: demo\n" }];
-      const { wrapper } = await open({ presetStrategyId: "s1", strategies: noMarket });
-      expect(wrapper.text()).not.toContain("统一数据集上的一个计算任务");
-    });
-
-    it("keeps listing every task and says so when the datasets cannot be read", async () => {
-      unifiedTasks();
-      api.listAllDatasets.mockRejectedValue(new Error("存储服务不可用"));
-      const { wrapper } = await open({ presetStrategyId: "s1", strategies: mixed });
-      expect(wrapper.text()).toContain("数据集信息读取失败（存储服务不可用）");
-      expect(optionValues(wrapper.findAll("select")[1])).toContain("ftask_uni");
-    });
   });
 
   it("prechecks a mixed-market strategy with both tasks", async () => {

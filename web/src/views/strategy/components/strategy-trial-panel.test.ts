@@ -8,9 +8,6 @@ const { validateStrategy, listFactorTasks, getStrategy } = vi.hoisted(() => ({
 }));
 vi.mock("@/api/strategy", () => ({ validateStrategy, getStrategy }));
 vi.mock("@/api/factor", () => ({ listFactorTasks }));
-vi.mock("@/api/storage/metadata", () => ({
-  listAllDatasets: vi.fn(async () => [{ dataset_id: "ds_uni", attributes: { market_type: "multi" } }])
-}));
 
 import TrialPanel from "./strategy-trial-panel.vue";
 
@@ -47,27 +44,6 @@ describe("strategy trial panel", () => {
     listFactorTasks
       .mockReset()
       .mockResolvedValue({ factor_tasks: [taskInfo("ftask_spot"), taskInfo("ftask_swap")], page_result: { has_more: false } });
-  });
-
-  it("does not offer tasks on a unified dataset: the panel registers tasks by market", async () => {
-    listFactorTasks.mockResolvedValue({
-      factor_tasks: [
-        taskInfo("ftask_spot"),
-        { factor_task: { ...taskInfo("ftask_uni").factor_task, source_dataset_id: "ds_uni" }, members: [] }
-      ],
-      page_result: { has_more: false }
-    });
-    const wrapper = mount(TrialPanel, {
-      props: { source: "name: a\nmarket: {select: swap}\n", spaceId: "s1" },
-      global: { stubs }
-    });
-    await (wrapper.vm as unknown as { ensureTasks: () => Promise<void> }).ensureTasks();
-    await flushPromises();
-    const options = wrapper
-      .findAll("option")
-      .map(item => item.attributes("value"))
-      .filter(Boolean);
-    expect(options).toEqual(["ftask_spot"]);
   });
 
   it("策略池按成员所需市场的并集选任务：成员一个现货、一个永续时两个市场都要选", async () => {

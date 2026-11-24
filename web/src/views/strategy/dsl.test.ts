@@ -85,7 +85,7 @@ describe("混合市场模板", () => {
     expect(result.preview?.rules.map(rule => rule.id)).toEqual(["long_momentum", "short_weak"]);
     expect(mixedMarketTemplate).toContain("market: {select: both, prefer: swap}");
     expect(mixedMarketTemplate).toContain("side: short");
-    expect(mixedMarketTemplate).toContain("现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务");
+    expect(mixedMarketTemplate).toContain("现货、永续各一个（两个任务的列名要一致）");
     expect(mixedMarketTemplate).not.toContain("factor_params:");
   });
 });

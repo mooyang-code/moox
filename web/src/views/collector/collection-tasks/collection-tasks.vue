@@ -271,19 +271,12 @@
                 </a-option>
               </a-select>
               <span class="field-hint"
-                >同一任务的标签必须来自同一来源；同时选现货、永续两个市场的标签时，可以合并成一个统一数据集。</span
+                >同一任务的标签必须来自同一来源；同时选现货、永续两个市场的标签时，按市场拆成两个任务。</span
               >
             </a-form-item>
-            <a-form-item v-if="!editing && crossMarketSelected" label="组织方式">
-              <a-radio-group v-model="organization">
-                <a-radio value="unified">合并为一个数据集</a-radio>
-                <a-radio value="split">按市场拆成两个任务</a-radio>
-              </a-radio-group>
-              <span class="field-hint"
-                >合并后现货、永续放在同一个数据集里，只要一个计算任务和一个
-                View；两个市场共用采集周期，一个市场延迟会拖慢另一个。只用一个市场的策略建议按市场拆成两个任务。</span
-              >
-            </a-form-item>
+            <a-alert v-if="!editing && crossMarketSelected" type="info" show-icon class="cross-market-hint"
+              >选了现货、永续两个市场的标签：提交时按市场拆成两个任务，任务名后加市场名；同时用两个市场的策略各绑一个计算任务。</a-alert
+            >
           </template>
           <a-alert v-else-if="editor.data_type !== 'kline_resample'" type="info" show-icon
             >当前执行任务类型没有标的范围，此项留空。</a-alert
@@ -326,9 +319,7 @@
             <a-descriptions v-if="resamplePreview" :column="2" size="small" bordered class="resample-source-info">
               <a-descriptions-item label="源数据集">{{ resamplePreview.source_dataset_id || "-" }}</a-descriptions-item>
               <a-descriptions-item label="源周期">{{ resamplePreview.source_frequency || "-" }}</a-descriptions-item>
-              <a-descriptions-item label="序列标签">{{
-                resamplePreview.source_series_tags?.join("、") || resamplePreview.source_series_tag || "-"
-              }}</a-descriptions-item>
+              <a-descriptions-item label="序列标签">{{ resamplePreview.source_series_tag || "-" }}</a-descriptions-item>
               <a-descriptions-item label="采集标的"
                 >继承源任务，共 {{ resamplePreview.subject_count ?? 0 }} 个标的</a-descriptions-item
               >
@@ -494,7 +485,7 @@
           <a-descriptions v-if="detailData.data_type === 'kline_resample'" :column="2" bordered class="detail-resample-info">
             <a-descriptions-item label="源任务">{{ resampleSourceSummary(detailData) }}</a-descriptions-item>
             <a-descriptions-item label="源周期 / 序列标签">
-              {{ stringParam(detailData, "source_frequency") || "-" }} / {{ resampleSeriesTags(detailData) || "-" }}
+              {{ stringParam(detailData, "source_frequency") || "-" }} / {{ stringParam(detailData, "source_series_tag") || "-" }}
             </a-descriptions-item>
           </a-descriptions>
           <div v-if="detailDependents.length" class="detail-dependents">
@@ -625,7 +616,6 @@ import {
   type CollectionTaskInput,
   type CollectionTaskMarket,
   type CollectionTaskRecord,
-  type TaskOrganization,
   type TaskTagRoute
 } from "./collection-task-params";
 import ResampleJobsDrawer from "./resample-jobs-drawer.vue";
@@ -675,8 +665,6 @@ const jobsTarget = ref<{ taskId: string; taskName: string; targetFrequency: stri
 
 const frequencyValue = ref("");
 const subjectTagIds = ref<string[]>([]);
-// 选了现货、永续两个市场的标签时，创建任务的组织方式：合并成一个统一数据集，或按市场拆成两个任务。
-const organization = ref<TaskOrganization>("unified");
 // 新建 K 线任务的采集方式；空表示按市场默认。
 const ingest = ref("");
 const selectedOutputFields = ref<string[]>([]);
@@ -1044,7 +1032,6 @@ function resetEditor() {
   editor.creator = account.value?.user?.userName || "";
   frequencyValue.value = "";
   subjectTagIds.value = [];
-  organization.value = "unified";
   ingest.value = "";
   sourceTaskId.value = "";
   resamplePreview.value = null;
@@ -1089,7 +1076,6 @@ function onUpdate(record: CollectionTaskRecord) {
           source_dataset_id: input.sourceId || "",
           source_frequency: input.sourceFrequency || "",
           source_series_tag: input.sourceSeriesTag || "",
-          source_series_tags: input.sourceSeriesTags || [],
           subject_count: 0,
           market_id: "",
           provider: input.provider,
@@ -1313,8 +1299,7 @@ async function saveEditor() {
   try {
     if (editorMode.value === "create") {
       const input = currentTaskInput();
-      const groups =
-        input.dataType === "kline" ? planTaskGroups(selectedTagRoutes.value, organization.value) : [{ suffix: "", tagIds: [] }];
+      const groups = input.dataType === "kline" ? planTaskGroups(selectedTagRoutes.value) : [{ suffix: "", tagIds: [] }];
       const created: string[] = [];
       for (const group of groups) {
         const groupInput = group.tagIds.length ? { ...input, subjectTags: group.tagIds } : input;
@@ -1458,13 +1443,6 @@ async function loadSourceTasks() {
 function stringParam(task: CollectionTaskRecord, key: string): string {
   const value = task.collect_params?.[key];
   return typeof value === "string" ? value.trim() : "";
-}
-
-// 合成源的序列标签：统一数据集是 source_series_tags（每个市场一条），单序列的源是 source_series_tag。
-function resampleSeriesTags(task: CollectionTaskRecord): string {
-  const tags = task.collect_params?.source_series_tags;
-  if (Array.isArray(tags) && tags.length) return tags.filter(tag => typeof tag === "string").join("、");
-  return stringParam(task, "source_series_tag");
 }
 
 // 列表“合成来源”列：源任务名 → 目标频率；老任务没有 source_task_id 时显示源数据集。

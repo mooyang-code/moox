@@ -45,7 +45,7 @@ const foldText = (value: string | undefined) => (value || "").trim().toLowerCase
 
 /**
  * 当前可选的附加字段：只有 K 线采集有；字段要在本空间、当前频率下可用，并且所选的每个标签的品种都有来源
- * （所以现货加永续的统一数据集选不了资金费率）。没选标签时一个都不可选。与后端建任务的校验一致。
+ * （所以同时选了现货、永续的标签时选不了资金费率）。没选标签时一个都不可选。与后端建任务的校验一致。
  */
 export function availableExtraFieldIds(condition: ExtraFieldCondition): Set<string> {
   const available = new Set<string>();
@@ -106,7 +106,7 @@ export function outputFieldSelectable(fieldId: string, editing: boolean, origina
   return originalFields.some(id => foldText(id) === foldText(fieldId));
 }
 
-export type CollectionTaskMarket = "spot" | "swap" | "equity" | "multi";
+export type CollectionTaskMarket = "spot" | "swap" | "equity";
 
 export interface CollectionTaskInput {
   dataType: CollectionTaskDataType;
@@ -120,8 +120,6 @@ export interface CollectionTaskInput {
   sourceId?: string;
   sourceFrequency?: string;
   sourceSeriesTag?: string;
-  /** 源是统一数据集（现货加永续）时各条源序列的 series_tag，此时 sourceSeriesTag 为空 */
-  sourceSeriesTags?: string[];
   outputFields?: string[];
   tagIds?: string[];
   /** 新建 K 线任务的采集方式（stream、scf、local）；空表示用市场默认值 */
@@ -148,8 +146,6 @@ export interface KlineResampleParams extends Record<string, unknown> {
   source_dataset_id?: string;
   source_frequency?: string;
   source_series_tag?: string;
-  /** 源是统一数据集时各条源序列的 series_tag，与 source_series_tag 只会给出一个 */
-  source_series_tags?: string[];
   target_frequency: string;
   output_fields?: string[];
 }
@@ -235,9 +231,6 @@ export function parseKlineResampleParams(params: Record<string, unknown>): Kline
     source_dataset_id: stringValue(params.source_dataset_id),
     source_frequency: stringValue(params.source_frequency),
     source_series_tag: stringValue(params.source_series_tag),
-    ...(stringArrayValue(params.source_series_tags).length
-      ? { source_series_tags: stringArrayValue(params.source_series_tags) }
-      : {}),
     target_frequency: stringValue(params.target_frequency),
     ...(stringArrayValue(params.output_fields).length ? { output_fields: stringArrayValue(params.output_fields) } : {})
   };
@@ -300,7 +293,6 @@ export function parseCollectionTaskInput(
       sourceId: resample.source_dataset_id,
       sourceFrequency: resample.source_frequency,
       sourceSeriesTag: resample.source_series_tag,
-      sourceSeriesTags: resample.source_series_tags || [],
       outputFields: resample.output_fields || []
     };
   }
@@ -325,7 +317,7 @@ function normalizeDataType(value: string): CollectionTaskDataType {
 }
 
 export function normalizeMarket(value: string): CollectionTaskMarket {
-  return value === "swap" || value === "equity" || value === "multi" ? value : "spot";
+  return value === "swap" || value === "equity" ? value : "spot";
 }
 
 /** 一个标签的最小描述：创建任务时按它判断来源和市场。 */
@@ -335,39 +327,32 @@ export interface TaskTagRoute {
   market: string;
 }
 
-/** 创建任务时两个市场的组织方式：合并成一个统一数据集，或按市场拆成两个任务。 */
-export type TaskOrganization = "unified" | "split";
-
 export interface TaskGroupPlan {
-  /** 拆分时加在任务名后面的市场名；合并（单组）时为空。 */
+  /** 拆分时加在任务名后面的市场名；只有一个市场时为空。 */
   suffix: string;
   tagIds: string[];
 }
 
-/**
- * 选中的标签跨了现货、永续两个市场（同一来源）。后端只认这一种跨市场：来源不同的标签不能放进同一个任务。
- */
+/** 选中的标签跨了市场：创建时按市场拆成多个任务（一个任务的标签只能属于一个市场）。 */
 export function isCrossMarketSelection(tags: TaskTagRoute[]): boolean {
   return new Set(tags.map(tag => tag.market)).size > 1;
 }
 
-/** 选中的标签能否放进一个任务：来源必须相同；跨市场时只允许现货和永续。返回不能的原因，没有问题时返回空。 */
+/** 选中的标签能否一起建任务：来源必须相同；跨市场时只允许现货和永续（拆成两个任务）。返回不能的原因，没有问题时返回空。 */
 export function taskTagSelectionError(tags: TaskTagRoute[]): string {
   if (new Set(tags.map(tag => tag.source)).size > 1) {
     return "同一任务的标签必须来自同一来源；来源不同的标签请分别建任务";
   }
   const markets = [...new Set(tags.map(tag => tag.market))];
   if (markets.length > 1 && !(markets.length === 2 && markets.includes("spot") && markets.includes("swap"))) {
-    return "只有现货和永续两个市场可以放进同一个任务";
+    return "只有现货和永续两个市场的标签可以一起选（按市场拆成两个任务）";
   }
   return "";
 }
 
-/**
- * 按组织方式把选中的标签分成要创建的任务：合并（或没有跨市场）就是一个任务；拆分按市场各一个任务，现货在前。
- */
-export function planTaskGroups(tags: TaskTagRoute[], organization: TaskOrganization): TaskGroupPlan[] {
-  if (!isCrossMarketSelection(tags) || organization === "unified") {
+/** 把选中的标签分成要创建的任务：只有一个市场时就是一个任务；跨市场时按市场各一个任务，现货在前。 */
+export function planTaskGroups(tags: TaskTagRoute[]): TaskGroupPlan[] {
+  if (!isCrossMarketSelection(tags)) {
     return [{ suffix: "", tagIds: tags.map(tag => tag.tag_id) }];
   }
   const byMarket = new Map<string, string[]>();

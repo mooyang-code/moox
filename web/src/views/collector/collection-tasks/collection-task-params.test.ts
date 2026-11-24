@@ -15,7 +15,12 @@ import {
   collectionTaskResultLabel,
   normalizeCollectionTask,
   parseCollectionTaskInput,
-  taskFrequency
+  taskFrequency,
+  isCrossMarketSelection,
+  planTaskGroups,
+  splitTaskName,
+  taskTagSelectionError,
+  type TaskTagRoute
 } from "./collection-task-params";
 
 describe("collection task params", () => {
@@ -106,24 +111,6 @@ describe("collection task params", () => {
       source_task_id: "task-1m"
     });
     expect(parseCollectionTaskInput(task)).toMatchObject({ provider: "moox", market: "spot", sourceTaskId: "task-1m" });
-  });
-
-  it("统一数据集的合成源：读出 source_series_tags，source_series_tag 为空", () => {
-    const params = {
-      source_task_id: "task-uni",
-      source_dataset_id: "uni-bars",
-      source_frequency: "1m",
-      source_series_tags: ["venue:binance|market:spot", "venue:binance|market:swap"],
-      target_frequency: "5m"
-    };
-    expect(parseKlineResampleParams(params)).toMatchObject({
-      source_series_tag: "",
-      source_series_tags: ["venue:binance|market:spot", "venue:binance|market:swap"]
-    });
-    expect(
-      parseCollectionTaskInput({ data_type: "kline_resample", tag_ids: [], collect_params: params }).sourceSeriesTags
-    ).toEqual(["venue:binance|market:spot", "venue:binance|market:swap"]);
-    expect(parseKlineResampleParams({ ...params, source_series_tags: undefined })).not.toHaveProperty("source_series_tags");
   });
 
   it("emits result_config separately from the task payload", () => {
@@ -262,14 +249,14 @@ describe("附加输出字段", () => {
     expect(available(" StockCN ", "1D", [equity])).toEqual(["adj_factor", "sw_l1"]);
   });
 
-  it("资金费率的显示与原来一致：只在永续、1h 或 1d、非统一数据集时出现", () => {
+  it("资金费率的显示与原来一致：只在永续、1h 或 1d、没有同时选现货时出现", () => {
     expect(available("crypto", "1h", [swap])).toEqual(["funding_rate"]);
     expect(available("crypto", "1d", [swap, swap])).toEqual(["funding_rate"]);
     for (const frequency of ["1m", "5m", "30m", "4h", "1w", "1mo", ""]) {
       expect(available("crypto", frequency, [swap])).toEqual([]);
     }
     expect(available("crypto", "1h", [spot])).toEqual([]);
-    // 现货加永续的统一数据集选不了
+    // 同时选了现货、永续的标签时选不了
     expect(available("crypto", "1h", [spot, swap])).toEqual([]);
     expect(available("crypto", "1h", [])).toEqual([]);
     expect(available("crypto", "1h", [swap], "kline_resample")).toEqual([]);
@@ -328,5 +315,32 @@ describe("附加输出字段", () => {
     // 原来没有显式选择（默认字段）：可以收窄到基础字段，不能勾附加字段
     expect(outputFieldSelectable("close", true, [])).toBe(true);
     expect(outputFieldSelectable("adj_factor", true, [])).toBe(false);
+  });
+});
+
+describe("选了现货、永续两个市场的标签时按市场拆任务", () => {
+  const spotTag: TaskTagRoute = { tag_id: "tag_spot", source: "binance", market: "spot" };
+  const swapTag: TaskTagRoute = { tag_id: "tag_swap", source: "binance", market: "swap" };
+
+  it("识别跨市场的选择", () => {
+    expect(isCrossMarketSelection([spotTag])).toBe(false);
+    expect(isCrossMarketSelection([spotTag, { ...spotTag, tag_id: "tag_spot_2" }])).toBe(false);
+    expect(isCrossMarketSelection([spotTag, swapTag])).toBe(true);
+  });
+
+  it("来源不同、或现货永续之外的跨市场选择不能一起建", () => {
+    expect(taskTagSelectionError([spotTag, swapTag])).toBe("");
+    expect(taskTagSelectionError([spotTag, { ...swapTag, source: "okx" }])).toContain("同一来源");
+    expect(taskTagSelectionError([spotTag, swapTag, { ...spotTag, tag_id: "e", market: "equity" }])).toContain("现货和永续");
+  });
+
+  it("一个市场时只建一个任务；跨市场时按市场各一个，现货在前", () => {
+    expect(planTaskGroups([spotTag])).toEqual([{ suffix: "", tagIds: ["tag_spot"] }]);
+    expect(planTaskGroups([swapTag, spotTag])).toEqual([
+      { suffix: "现货", tagIds: ["tag_spot"] },
+      { suffix: "永续", tagIds: ["tag_swap"] }
+    ]);
+    expect(splitTaskName(" 币安 1 分钟 ", "永续")).toBe("币安 1 分钟（永续）");
+    expect(splitTaskName("币安", "")).toBe("币安");
   });
 });

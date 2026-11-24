@@ -88,7 +88,7 @@ portfolio:
 
 /** 混合市场示例：market 写 {select: both, prefer: swap}，同一个币两边都有时优先永续下单；空头只走永续（现货不能做空）。 */
 export const mixedMarketTemplate = `# 混合市场示例：从现货与永续两边选币，空头只走永续。
-# 创建实例时绑定计算任务：现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务；
+# 创建实例时绑定计算任务：现货、永续各一个（两个任务的列名要一致）；
 # 混合市场不能用 factor_params。
 name: mixed_market_momentum
 bar: 1h

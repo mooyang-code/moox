@@ -300,7 +300,6 @@ import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportControlError, serverNow } from "@/api/admin/http";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
-import { loadUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
@@ -563,13 +562,8 @@ async function loadTasks() {
       items.push(...(rsp.factor_tasks || []).map(info => info.factor_task));
       if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) break;
     }
-    const unifiedIds = await loadUnifiedDatasetIds(spaceId);
-    if (gen !== generation) return;
-    // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）；统一数据集上的任务要登记为 multi，这里的表单按市场选任务，
-    // 不列它们（要回放统一数据集上的实例，从实例详情发起）。
-    tasks.value = items.filter(
-      task => task.space_id === spaceId && task.status !== "pending" && !unifiedIds.has(task.source_dataset_id)
-    );
+    // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）。
+    tasks.value = items.filter(task => task.space_id === spaceId && task.status !== "pending");
     errors.tasks = "";
   } catch (err) {
     if (gen === generation) errors.tasks = `计算任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
@@ -914,10 +908,6 @@ async function rerunWithConfig() {
   rerunning.value = true;
   try {
     const next = replayFormFromReplay(await getReplay(replayId));
-    if (!next) {
-      Message.info("这个回放用的是统一数据集上的任务，发起表单不能选，请从实例详情发起");
-      return;
-    }
     Object.assign(form, { ...next, single_market: Object.keys(next.tasks).length === 1 ? Object.keys(next.tasks)[0] : "" });
     openCreate();
   } catch (err) {

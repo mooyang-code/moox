@@ -3,17 +3,10 @@ import { parseDocument } from "yaml";
 /** 策略涉及的市场，顺序固定：现货、永续、股票。 */
 export const MARKET_ORDER = ["spot", "swap", "equity"] as const;
 
-/** 统一数据集上的计算任务登记的键：一个任务同时覆盖现货与永续（数据集的 market_type 是 multi）。 */
-export const UNIFIED_TASK_KEY = "multi";
-
-/** 计算任务的键，顺序固定：三个市场，然后是统一数据集上的任务。 */
-export const TASK_KEY_ORDER = [...MARKET_ORDER, UNIFIED_TASK_KEY] as const;
-
-export const marketLabels: Record<string, string> = {
+const marketLabels: Record<string, string> = {
   spot: "现货",
   swap: "永续",
-  equity: "股票",
-  [UNIFIED_TASK_KEY]: "统一数据集"
+  equity: "股票"
 };
 
 export function marketLabel(market: string): string {
@@ -146,9 +139,9 @@ export function poolRequirement(
   return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
 }
 
-/** 实例绑定的计算任务，按市场先后排列（统一数据集上的任务键是 multi，排在市场之后），附加来源的任务（来源名:市场）按键排在最后。 */
+/** 实例绑定的计算任务，按市场先后排列，附加来源的任务（来源名:市场）按键排在最后。 */
 export function instanceTasks(tasks: Record<string, string> | undefined): { market: string; taskId: string }[] {
-  const plain = TASK_KEY_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
+  const plain = MARKET_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
   const sources = Object.keys(tasks ?? {})
     .filter(key => splitTaskKey(key).source)
     .sort()
@@ -170,13 +163,13 @@ export function formatFactorTasks(tasks: Record<string, string> | undefined): st
     .join(",");
 }
 
-/** 解析 URL 里的计算任务；只认现货、永续、股票三个市场与统一数据集（multi），以及附加来源的 来源名:市场，其余与格式不对的项忽略。 */
+/** 解析 URL 里的计算任务；只认现货、永续、股票三个市场，以及附加来源的 来源名:市场，其余与格式不对的项忽略。 */
 export function parseFactorTasks(raw: string): Record<string, string> {
   const tasks: Record<string, string> = {};
   for (const part of raw.split(",")) {
     const [key, taskId] = part.split("=").map(item => item.trim());
     const { source, market } = splitTaskKey(key ?? "");
-    const knownMarket = (TASK_KEY_ORDER as readonly string[]).includes(market);
+    const knownMarket = (MARKET_ORDER as readonly string[]).includes(market);
     if (taskId && knownMarket && (!key.includes(":") || sourceNamePattern.test(source))) tasks[key] = taskId;
   }
   return tasks;

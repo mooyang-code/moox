@@ -56,7 +56,7 @@ describe("instance delete flow", () => {
       },
       { market: "swap", taskId: "ftask_swap" },
       {
-        market: "multi",
+        market: "daily:spot",
         taskId: "ftask_spot_1m",
         factorTask: { name: "公共", result_dataset_id: "dataset_shared", bound_instance_id: "" } as never
       }

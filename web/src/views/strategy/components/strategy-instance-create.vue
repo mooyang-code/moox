@@ -40,24 +40,12 @@
           market，只绑一个计算任务：先选任务的数据所属的市场（必须与任务源数据集的市场一致，创建前的预检会核对）。</template
         >
       </a-form-item>
-      <p v-else-if="activeMarkets.length && !unifiedMode" class="meta-hint mode-hint">
+      <p v-else-if="activeMarkets.length" class="meta-hint mode-hint">
         {{ poolRequirement ? "策略池要绑定各成员所需市场的并集：" : "策略的市场模式需要绑定："
         }}{{ activeMarkets.map(marketLabel).join("、") }} 的计算任务{{
           activeMarkets.length > 1 ? "（现货、永续各一个，两个任务的周期、日历和用到的列要一致）" : ""
         }}。
       </p>
-      <a-form-item v-if="canUnified" label="输入方式">
-        <a-radio-group v-model="form.input_mode" type="button" @change="onInputModeChange">
-          <a-radio value="split">{{ activeMarkets.length > 1 ? "现货、永续各一个计算任务" : "市场自己的计算任务" }}</a-radio>
-          <a-radio value="unified">统一数据集上的一个计算任务</a-radio>
-        </a-radio-group>
-        <template #extra
-          >统一数据集把现货、永续放在同一个数据集里（用 series_tag 区分），一个计算任务、一个 View
-          同时覆盖两个市场，策略到达即求值；
-          分开时现货、永续各有自己的数据集与计算任务，策略等两边都到齐再求值。统一数据集上的任务暂不支持
-          factor_params（带可变成员的任务可以选，只读它的列），也不能进策略池。</template
-        >
-      </a-form-item>
       <p v-if="extraKeys.length" class="meta-hint mode-hint">
         {{ extraHint }}
       </p>
@@ -74,7 +62,7 @@
           allow-search
           allow-clear
           :loading="tasksLoading"
-          :placeholder="market === UNIFIED_TASK_KEY ? '选择一个统一数据集上运行中的计算任务' : '选择一个运行中的计算任务'"
+          placeholder="选择一个运行中的计算任务"
           @change="onTaskChange"
         >
           <a-option
@@ -91,15 +79,7 @@
       <p v-if="tasksError" class="meta-hint meta-error">
         计算任务列表读取失败：{{ tasksError }}<a-link @click="loadTasksList">重试</a-link>
       </p>
-      <p v-if="datasetsError" class="meta-hint meta-error">
-        数据集信息读取失败（{{ datasetsError }}），暂时分不出哪些任务在统一数据集上；<a-link @click="loadDatasetsList"
-          >重试</a-link
-        >
-      </p>
-      <p v-else-if="unifiedMode && !tasksLoading && !taskChoices(UNIFIED_TASK_KEY).length" class="meta-hint">
-        当前空间没有可用的统一数据集计算任务：任务的源数据集要是统一数据集（market_type 为 multi），并且处于运行中。
-      </p>
-      <p v-else-if="!tasksLoading && !tasks.length" class="meta-hint">
+      <p v-if="!tasksLoading && !tasks.length" class="meta-hint">
         当前空间没有可用的计算任务：任务必须处于运行中。请先到「因子」模块创建并启用任务。
       </p>
       <p v-else-if="tuned" class="meta-hint">
@@ -218,13 +198,11 @@ import type { FactorTaskInfo } from "@/api/factor/types";
 import {
   declaresFactorParams,
   enabledTasks,
-  isUnifiedTask,
   selectableTask,
   varMemberBlockReason,
   SOURCE_VAR_MEMBER_REASON,
   type TaskOption
 } from "@/views/strategy/components/task-options";
-import { readUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import {
@@ -234,7 +212,6 @@ import {
   resolvedMarkets
 } from "@/views/strategy/components/logical-account-options";
 import {
-  UNIFIED_TASK_KEY,
   marketLabel,
   marketRequirement,
   poolMembers,
@@ -253,7 +230,6 @@ const checking = ref(false);
 const tasksLoading = ref(false);
 const accountsLoading = ref(false);
 const tasksError = ref("");
-const datasetsError = ref("");
 const accountsError = ref("");
 const error = ref("");
 const fieldErrors = reactive<Record<"strategy_id" | "factor_tasks" | "logical_account_id", string>>({
@@ -267,16 +243,12 @@ const form = reactive({
   strategy_id: "",
   // 策略没有写 market 时只绑一个任务，市场由用户选定。
   single_market: "",
-  // 输入方式：split 是各市场各一个计算任务，unified 是统一数据集上的一个计算任务（只有策略写了 market、不是策略池时可选）。
-  input_mode: "split" as "split" | "unified",
-  // 任务键（市场，或统一数据集的 multi）→ 计算任务。
+  // 任务键（市场，或附加来源的 来源名:市场）→ 计算任务。
   tasks: {} as Record<string, string>,
   logical_account_id: "",
   mode: "compute" as "compute" | "trade"
 });
 const tasks = ref<TaskOption[]>([]);
-// 统一数据集（market_type 为 multi）的数据集 ID：计算任务的源数据集在其中的任务在统一数据集上。
-const unifiedDatasetIds = ref<ReadonlySet<string>>(new Set());
 const accounts = ref<LogicalAccount[]>([]);
 // 成员执行账户：用来在账户选项前写测试网还是生产；读不到时为 null，选项只写“实盘”。
 const tradingAccounts = ref<ReadonlyMap<string, TradingAccount> | null>(null);
@@ -284,7 +256,6 @@ const tradingAccounts = ref<ReadonlyMap<string, TradingAccount> | null>(null);
 const boundInstances = ref<ReadonlyMap<string, string> | null>(null);
 const check_result = ref<ValidateStrategyResult | null>(null);
 let tasksRequest = 0;
-let datasetsRequest = 0;
 let accountsRequest = 0;
 let submitRequest = 0;
 let checkRequest = 0;
@@ -366,18 +337,13 @@ watch(accountOptions, options => {
     accountCleared.value = true;
   }
 });
-// 统一数据集：策略写了 market（统一数据集没有可当默认值的市场）、不是策略池时可以选统一数据集上的任务。
-const canUnified = computed(() => !poolRequirement.value && requirement.value.declared && requirement.value.markets.length > 0);
-const unifiedMode = computed(() => canUnified.value && form.input_mode === "unified");
-// 主帧的任务键：统一数据集只有一个键 multi，否则是策略涉及的各市场。
-const mainKeys = computed(() => (unifiedMode.value ? [UNIFIED_TASK_KEY] : activeMarkets.value));
-// DSL 的附加来源（sources）与参考市场（market.reference）：策略池不支持，统一数据集已覆盖两个市场、不再绑参考市场。
+// 主帧的任务键：策略涉及的各市场。
+const mainKeys = activeMarkets;
+// DSL 的附加来源（sources）与参考市场（market.reference）：策略池不支持。
 const extras = computed(() =>
   poolRequirement.value ? { sources: [], references: [] } : sourceRequirement(selectedStrategy.value?.dsl_yaml ?? "")
 );
-const referenceKeys = computed(() =>
-  unifiedMode.value ? [] : extras.value.references.filter(market => !activeMarkets.value.includes(market))
-);
+const referenceKeys = computed(() => extras.value.references.filter(market => !activeMarkets.value.includes(market)));
 // 每个附加来源按主帧的任务键各绑一个任务：键写成 来源名:市场。
 const sourceKeys = computed(() =>
   extras.value.sources.flatMap(source => mainKeys.value.map(market => sourceTaskKey(source.name, market)))
@@ -401,10 +367,10 @@ function taskLabel(key: string) {
   return referenceKeys.value.includes(key) ? `参考市场（${marketLabel(key)}）` : taskKeyLabel(key);
 }
 function columnsHint(key: string) {
-  const { source, market } = splitTaskKey(key);
+  const { source } = splitTaskKey(key);
   if (source) return `DSL 里写成 ${source}.列名`;
   if (referenceKeys.value.includes(key)) return "只用于年龄判定";
-  return market === UNIFIED_TASK_KEY ? "DSL 里直接写这些列名，现货、永续共用" : "DSL 里直接写这些列名";
+  return "DSL 里直接写这些列名";
 }
 // 带可变成员的任务能不能选：只有附加来源的任务不能有可变成员，主帧任务都能选（不调参的实例只读可变成员的列）。
 function varBlocked(key: string) {
@@ -421,18 +387,12 @@ const hasBlockedVarTasks = computed(() =>
   taskKeys.value.some(key => varBlocked(key) && taskChoices(key).some(task => task.varMembers.length))
 );
 const tasksSelected = computed(() => taskKeys.value.length > 0 && taskKeys.value.every(market => Boolean(form.tasks[market])));
-// 统一数据集上的任务只能选 multi，其余键只能选单市场数据集上的任务；另一个键已选的任务不再出现：一个任务只能登记一次。
-// 写了 factor_params 的定义不能选已关联到别的实例的主帧任务。
-// 数据集信息读取失败时分不出哪些任务在统一数据集上，先都列出，由绑定预检核对。
+// 另一个键已选的任务不再出现：一个任务只能登记一次；写了 factor_params 的定义不能选已关联到别的实例的主帧任务。
+// 任务的市场是否与键对应由绑定预检核对。
 function taskChoices(market: string) {
   const taken = new Set(taskKeys.value.filter(item => item !== market).map(item => form.tasks[item]));
   const source = splitTaskKey(market).source;
-  return tasks.value.filter(task => {
-    if (taken.has(task.taskId)) return false;
-    if (!selectableTask(task, tuned.value, source)) return false;
-    if (datasetsError.value) return true;
-    return isUnifiedTask(task, unifiedDatasetIds.value) === (splitTaskKey(market).market === UNIFIED_TASK_KEY);
-  });
+  return tasks.value.filter(task => !taken.has(task.taskId) && selectableTask(task, tuned.value, source));
 }
 // 提交与预检的 factor_tasks：只含要绑定的任务键。
 function factorTasks(): Record<string, string> {
@@ -490,20 +450,6 @@ async function loadTasksList() {
   }
 }
 
-async function loadDatasetsList() {
-  const spaceId = props.spaceId;
-  if (!spaceId) return;
-  const requestId = ++datasetsRequest;
-  datasetsError.value = "";
-  try {
-    const ids = await readUnifiedDatasetIds(spaceId);
-    if (requestId !== datasetsRequest || props.spaceId !== spaceId) return;
-    unifiedDatasetIds.value = ids;
-  } catch (err) {
-    if (requestId === datasetsRequest) datasetsError.value = err instanceof Error ? err.message : "数据集加载失败";
-  }
-}
-
 async function loadAccountsList() {
   const spaceId = props.spaceId;
   if (!spaceId) return;
@@ -533,7 +479,6 @@ async function loadAccountsList() {
 
 function loadMetadata() {
   void loadTasksList();
-  void loadDatasetsList();
   void loadAccountsList();
 }
 
@@ -541,15 +486,10 @@ function onStrategyChange() {
   fieldErrors.strategy_id = "";
   // 预检作废了，“预检没有通过”的提示也不再成立
   error.value = "";
-  form.input_mode = "split";
   form.tasks = {};
   resetCheck();
 }
 function onMarketChange() {
-  form.tasks = {};
-  onTaskChange();
-}
-function onInputModeChange() {
   form.tasks = {};
   onTaskChange();
 }
@@ -615,14 +555,10 @@ function resetForm() {
   memberRequest += 1;
   for (const key of Object.keys(memberDefinitions)) delete memberDefinitions[key];
   form.single_market = "";
-  form.input_mode = "split";
   form.tasks = {};
   form.logical_account_id = "";
   form.mode = "compute";
   tasks.value = [];
-  unifiedDatasetIds.value = new Set();
-  datasetsRequest += 1;
-  datasetsError.value = "";
   accounts.value = [];
   tradingAccounts.value = null;
   boundInstances.value = null;
@@ -650,9 +586,7 @@ async function submit() {
     ? "先选择任务的市场"
     : tasksSelected.value
       ? ""
-      : unifiedMode.value
-        ? "请选择统一数据集上的计算任务"
-        : `请为${taskKeys.value.map(taskLabel).join("、")}各选一个计算任务`;
+      : `请为${taskKeys.value.map(taskLabel).join("、")}各选一个计算任务`;
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
   if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;

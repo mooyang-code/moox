@@ -27,9 +27,6 @@ vi.mock("@/api/strategy", () => ({
   cancelReplay: api.cancelReplay
 }));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
-vi.mock("@/api/storage/metadata", () => ({
-  listAllDatasets: vi.fn(async () => [{ dataset_id: "ds_uni", attributes: { market_type: "multi" } }])
-}));
 vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
 // 确认对话框直接当作点了确认
 vi.mock("@arco-design/web-vue", () => ({

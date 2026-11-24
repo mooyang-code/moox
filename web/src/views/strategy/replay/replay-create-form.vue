@@ -59,8 +59,7 @@
         </a-select>
         <template v-if="market === markets[0]" #extra
           ><template v-if="pool">策略池按成员所需市场的并集读任务。</template
-          ><template v-if="markets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
-          >统一数据集上的任务不在这里列出，要回放请从实例详情发起。</template
+          ><template v-if="markets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template></template
         >
       </a-form-item>
     </template>
@@ -160,8 +159,7 @@ const inputHint = computed(() => {
     return "经主机网关调因子引擎，按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制；附加来源、参考市场仍读 View。只支持一个计算任务，不支持策略池与股票。";
   return "读计算任务的结果 View：区间受 View 保留的根数限制。";
 });
-// 统一数据集上的任务同时覆盖现货与永续，永续费率也要填。
-const usesSwap = computed(() => markets.value.includes("swap") || markets.value.includes("multi"));
+const usesSwap = computed(() => markets.value.includes("swap"));
 
 /** 一个市场可选的任务：已被别的市场选走的不再出现。 */
 function taskChoices(market: string) {

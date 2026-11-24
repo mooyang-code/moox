@@ -195,9 +195,6 @@ describe("replay model helpers", () => {
     expect(replayUsesSwap(single)).toBe(false);
     expect(replayUsesSwap(mixed)).toBe(true);
     expect(replayUsesSwap(null)).toBe(false);
-    const unified = { tasks: { multi: { factor_task_id: "ftask_u", view_id: "u" } }, spot_fee_bps: 10, swap_fee_bps: 5 };
-    expect(replayUsesSwap(unified), "统一数据集的任务同时带现货与永续").toBe(true);
-    expect(replayFeeText(unified)).toBe("现货 10 bps、永续 5 bps");
   });
 
   it("summarizes the equity curve in text", () => {
@@ -253,7 +250,7 @@ describe("回放对比", () => {
     expect(replayMetricsLine("")).toBe("");
   });
 
-  it("按此配置重新发起：带上当时的 DSL、任务、区间和手续费；统一数据集上的任务不能在表单里选", () => {
+  it("按此配置重新发起：带上当时的 DSL、任务、区间和手续费", () => {
     const base = {
       replay_id: "r1",
       strategy_id: "s1",
@@ -274,9 +271,6 @@ describe("回放对比", () => {
       swap_fee_bps: 5,
       slippage_bps: 2
     });
-    expect(
-      replayFormFromReplay({ ...(base as object), tasks: { multi: { factor_task_id: "u", view_id: "v" } } } as never)
-    ).toBeNull();
     // 资金费列随配置带回表单，没写时为空串。
     expect(replayFormFromReplay(base)).toMatchObject({ funding_column: "" });
     expect(replayFormFromReplay({ ...(base as object), funding_column: "funding_rate" } as never)).toMatchObject({
