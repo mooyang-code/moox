@@ -124,6 +124,30 @@ type Subject struct {
 	SubjectID string
 	SeriesTag string
 	Active    bool
+	// Suspended 表示标的不活跃只是因为停牌（成员仍在标签里、交易状态是 suspended）：已持有的保持持仓（见 frame.go），
+	// 没持有的不进全集。delisted 或被移出标签的不算。
+	Suspended bool
+}
+
+// TagMember 是标签的一个活跃成员；TradingStatus 是成员在这个标签（市场）上的交易状态，空值按 trading 处理。
+type TagMember struct {
+	SubjectID     string
+	TradingStatus string
+}
+
+// 策略要区分的成员交易状态（与 Storage 的 t_subject_tags.c_trading_status 一致；其余值含空值都按 trading 处理）。
+const (
+	TradingStatusSuspended = "suspended"
+	TradingStatusDelisted  = "delisted"
+)
+
+// MemberIDs 返回成员的标的 ID（顺序不变），给只按标签取成员的集合划分用。
+func MemberIDs(members []TagMember) []string {
+	ids := make([]string, 0, len(members))
+	for _, member := range members {
+		ids = append(ids, member.SubjectID)
+	}
+	return ids
 }
 
 // FactorInfo 是因子定义中策略关心的部分。
@@ -176,7 +200,8 @@ type Client interface {
 	ViewCoverage(ctx context.Context, spaceID string, view ViewInfo, exact bool) (Coverage, error)
 	GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error)
 	ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]Subject, error)
-	ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error)
+	// ListTagMembers 返回标签的活跃成员（按标的 ID 排序），带出成员的交易状态，不按交易状态过滤。
+	ListTagMembers(ctx context.Context, spaceID, tagID string) ([]TagMember, error)
 	GetTag(ctx context.Context, spaceID, tagID string) (TagInfo, error)
 	// QueryRows 读取全部页面并返回服务端修订号；索引或修订号变化返回 ErrStale。
 	QueryRows(ctx context.Context, spaceID string, query Query) ([]Row, uint64, error)

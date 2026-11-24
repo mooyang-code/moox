@@ -237,13 +237,13 @@ func guard(portfolio dsl.Portfolio, sets ruleSets, frozen int) string {
 // 并且是因为所在市场本期整体不可用而冻结（market_hold）的标的。冻结按币，别的规则在不可用市场的持仓（例如永续不可用时的永续空头）
 // 会把这个币在所有规则里冻结，本规则没持有它，它对本规则只是本期不参与的候选，计进缺数会让一部分市场不可用变成整期跳过（设计 3.2.1）。
 // 本规则持有的冻结标的、以及只缺上一根而冻结（prev_hold）的标的照旧计入：只缺上一根与另一个市场可不可用无关。
+// 停牌保持（suspended_hold）的标的单市场、多市场都不计入：停牌可能持续几个月，小池子会在整个停牌期间每期整期跳过。
 func guardedFrozen(mode dsl.Market, sets ruleSets, ruleHeld []string) int {
-	if mode.Single() {
-		return len(sets.frozen)
-	}
 	count := 0
 	for id := range sets.frozen {
-		if contains(ruleHeld, id) || sets.holdReason[id] != reasonMarketHold {
+		switch {
+		case sets.holdReason[id] == reasonSuspendedHold:
+		case mode.Single() || contains(ruleHeld, id) || sets.holdReason[id] != reasonMarketHold:
 			count++
 		}
 	}

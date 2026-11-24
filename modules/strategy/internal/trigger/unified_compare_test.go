@@ -71,8 +71,12 @@ func (s *ucStorage) ListDatasetSubjects(_ context.Context, _, datasetID string) 
 	return append([]input.Subject(nil), s.subjects[datasetID]...), nil
 }
 
-func (s *ucStorage) ListTagMembers(_ context.Context, _, tagID string) ([]string, error) {
-	return append([]string(nil), s.tags[tagID]...), nil
+func (s *ucStorage) ListTagMembers(_ context.Context, _, tagID string) ([]input.TagMember, error) {
+	members := make([]input.TagMember, 0, len(s.tags[tagID]))
+	for _, id := range s.tags[tagID] {
+		members = append(members, input.TagMember{SubjectID: id})
+	}
+	return members, nil
 }
 
 func (s *ucStorage) GetTag(_ context.Context, _, tagID string) (input.TagInfo, error) {

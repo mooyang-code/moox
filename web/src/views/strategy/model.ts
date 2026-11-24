@@ -140,6 +140,7 @@ const itemReasons: Record<string, string> = {
   holding: "延续批次持有",
   prev_hold: "只缺上一根，保持持仓不动",
   market_hold: "所在市场本期不可用，保持持仓不动",
+  suspended_hold: "停牌，保持持仓不动",
   stop_loss: "固定止损",
   trailing_stop: "跟踪止损",
   take_profit: "止盈",

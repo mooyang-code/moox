@@ -12,10 +12,12 @@ import (
 
 // fakeClient 是内存中的 Storage/Factor 替身。
 type fakeClient struct {
-	views      map[string]ViewInfo
-	datasets   map[string]DatasetInfo
-	subjects   map[string][]Subject
-	tags       map[string][]string
+	views    map[string]ViewInfo
+	datasets map[string]DatasetInfo
+	subjects map[string][]Subject
+	tags     map[string][]string
+	// trading 是成员的交易状态（标签 → 标的 → 状态），没有的按 trading 处理。
+	trading    map[string]map[string]string
 	tagMarkets map[string]string
 	factors    map[string]FactorInfo
 	rows       func(query Query) ([]Row, uint64, error)
@@ -67,15 +69,19 @@ func (f *fakeClient) ListDatasetSubjects(_ context.Context, _, datasetID string)
 	return append([]Subject(nil), f.subjects[datasetID]...), nil
 }
 
-func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]string, error) {
+func (f *fakeClient) ListTagMembers(_ context.Context, _, tagID string) ([]TagMember, error) {
 	if err := f.errors["tags"]; err != nil {
 		return nil, err
 	}
-	members, ok := f.tags[tagID]
+	ids, ok := f.tags[tagID]
 	if !ok {
 		return nil, fmt.Errorf("标签 %s 不存在", tagID)
 	}
-	return append([]string(nil), members...), nil
+	members := make([]TagMember, 0, len(ids))
+	for _, id := range ids {
+		members = append(members, TagMember{SubjectID: id, TradingStatus: f.trading[tagID][id]})
+	}
+	return members, nil
 }
 
 func (f *fakeClient) GetTag(_ context.Context, _, tagID string) (TagInfo, error) {

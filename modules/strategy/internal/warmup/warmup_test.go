@@ -84,7 +84,7 @@ func (f *fakeClient) ListDatasetSubjects(context.Context, string, string) ([]inp
 	return []input.Subject{{SubjectID: "A", Active: true}, {SubjectID: "B", Active: true}, {SubjectID: "C", Active: true}}, nil
 }
 
-func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]string, error) {
+func (f *fakeClient) ListTagMembers(context.Context, string, string) ([]input.TagMember, error) {
 	return nil, nil
 }
 
