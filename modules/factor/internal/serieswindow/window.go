@@ -468,6 +468,25 @@ type SeriesView struct {
 // End 返回最后一个可见行的时间。
 func (s SeriesView) End(step int64) int64 { return s.Start + int64(s.N-1)*step }
 
+// RealRowAt 报告序列在 atSec 那一根有没有真实的源行：有这一行、不是填充行、至少一个数值字段不是 NaN。
+// 填充行是同步补上的缺失周期（OHLC 取上一根收盘、成交量为 0），不算这一期到了；真实行到达后会替换填充行。
+// 回放与连续水位共用这一口径。
+func (s SeriesView) RealRowAt(step, atSec int64) bool {
+	if s.N == 0 || atSec < s.Start || atSec > s.End(step) || (atSec-s.Start)%step != 0 {
+		return false
+	}
+	i := (atSec - s.Start) / step
+	if int(i) < len(s.Filled) && s.Filled[i] {
+		return false
+	}
+	for _, col := range s.Cols {
+		if !math.IsNaN(col[i]) {
+			return true
+		}
+	}
+	return false
+}
+
 // View 是一次读租约抓到的列式数据：各标的的序列（已按标签排序）。
 type View struct {
 	Step      int64

@@ -1556,7 +1556,6 @@ func (d *Data) BackfillTask(ctx context.Context, set domain.EngineTask, subjects
 //     Prepare 自己会拉到最新。
 //   - 只拉数据源上登记的标的范围内、本地已有数据的标的（subjects 为空表示这个范围内的全部标的）。本地没有数据的标的不拉：
 //     第一次准备在取同步基线之前就失败时本地是空的，靠这一条不会在没有基线的情况下写入（那样会漏掉之后的修正）。
-//   - 按各序列自己的进度拉，与实时路径相同：落后的序列不会被另一条序列的最新时间盖住而写成填充行。
 //   - 有标的读取失败时返回错误（已经拉到的照常写入）。
 func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []string, end time.Time) (int, error) {
 	src := sourceOf(set.Set)
@@ -1592,10 +1591,6 @@ func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []st
 	}
 	// 上一期的热路径写盘必须先落完：拉取按本地最新一根决定从哪里拉。
 	d.settleFlush(st)
-	plan := pipeline.Plan{Set: set.Set, Expected: subjects, TargetStart: end, TargetEnd: end}
-	if plan.ExpectedSeries, err = d.ExpectedSeries(ctx, plan); err != nil {
-		return 0, err
-	}
 	staged, err := d.syncer.PullStaged(ctx, st.spec, subjects, end)
 	if err != nil {
 		return 0, err
@@ -1617,7 +1612,65 @@ func (d *Data) CatchUp(ctx context.Context, set domain.EngineTask, subjects []st
 	return len(written), nil
 }
 
-// syncWindow 把 CatchUp 的一次写入反映到窗口。数据集字段变了时窗口要按新字段重建，重建完成之前按预热处理（与实时路径相同）。
+// RealRowsAt 判断没有事件可用的周期（连续水位追赶）哪些标的这一期已经到了：先把 subjects 从 Storage 增量同步到本地
+// （拉到 period 这一根为止；与实时路径一样，新进名单、本地还没有数据的标的也同步，从回看根数之前拉起），
+// 再看每个标的在本地这一期有没有真实的行（口径见 serieswindow.SeriesView.RealRowAt：有行、不是填充行、至少一个数值字段非 NaN）。
+// 不按本地最新时间判断：中间缺一根、后面已经到了的标的，这一期仍算没到。返回这一期有真实行的标的。
+// 数据源还没准备好（窗口没载入）或有标的拉取失败时返回 ErrInfra：判断不可靠，由调用方稍后重试。
+func (d *Data) RealRowsAt(ctx context.Context, set domain.FactorTask, subjects []string, period time.Time) (map[string]bool, error) {
+	src := sourceOf(set)
+	st := d.lookup(src)
+	if st == nil || !st.ready.Load() {
+		return nil, fmt.Errorf("%w：数据源 %s 的本地窗口还没载入", storageio.ErrInfra, src)
+	}
+	step, err := seriesstore.Step(src.Freq)
+	if err != nil {
+		return nil, err
+	}
+	d.lockSource(st, "连续水位判断")
+	defer st.mu.Unlock()
+	if !st.ready.Load() || st.window == nil {
+		return nil, fmt.Errorf("%w：数据源 %s 的本地窗口还没载入", storageio.ErrInfra, src)
+	}
+	d.settleFlush(st)
+	end := period.Add(step)
+	staged, err := d.syncer.PullStaged(ctx, st.spec, subjects, end)
+	if err != nil {
+		return nil, err
+	}
+	written, err := staged.Commit(ctx, staged.Writes)
+	if err != nil {
+		return nil, err
+	}
+	for subject, res := range written {
+		if err := d.syncWindow(ctx, st, subject, res); err != nil {
+			return nil, err
+		}
+	}
+	if len(staged.Failed) > 0 {
+		return nil, fmt.Errorf("%w：%d 个标的拉取失败", storageio.ErrInfra, len(staged.Failed))
+	}
+	got, err := d.cfg.Store.ReadRange(ctx, src, subjects, period, end)
+	if err != nil {
+		return nil, err
+	}
+	view, err := serieswindow.FromColumns(src, int64(step/time.Second), st.numeric, got)
+	if err != nil {
+		return nil, err
+	}
+	present := make(map[string]bool, len(subjects))
+	for _, subject := range subjects {
+		for _, sv := range view.Series(subject) {
+			if sv.RealRowAt(view.Step, period.Unix()) {
+				present[subject] = true
+				break
+			}
+		}
+	}
+	return present, nil
+}
+
+// syncWindow 把 CatchUp、RealRowsAt 的一次写入反映到窗口。数据集字段变了时窗口要按新字段重建，重建完成之前按预热处理（与实时路径相同）。
 func (d *Data) syncWindow(ctx context.Context, st *source, subject string, res seriesstore.WriteResult) error {
 	err := d.applyToWindow(ctx, st, subject, res)
 	if errors.Is(err, serieswindow.ErrSchemaChanged) {

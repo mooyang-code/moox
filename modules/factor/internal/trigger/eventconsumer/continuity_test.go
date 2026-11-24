@@ -37,18 +37,16 @@ func (p *periodRows) set(period time.Time, subjects ...string) {
 	}
 }
 
-func (p *periodRows) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+func (p *periodRows) RealRowsAt(_ context.Context, _ domain.FactorTask, subjects []string, period time.Time) (map[string]bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	frames := map[string]*storageio.Frame{}
-	for _, subject := range req.Subjects {
-		frame := &storageio.Frame{SubjectID: subject}
-		if p.present[req.Start.Unix()][subject] {
-			frame.Rows = [][]any{{req.Start, testSeriesTag, 1.0}}
+	out := map[string]bool{}
+	for _, subject := range subjects {
+		if p.present[period.Unix()][subject] {
+			out[subject] = true
 		}
-		frames[subject] = frame
 	}
-	return frames, nil
+	return out, nil
 }
 
 var continuityBase = time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
@@ -126,7 +124,7 @@ func newContinuityHarness(t *testing.T) *continuityHarness {
 	store, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
 	require.NoError(t, err)
 	h.store = store
-	h.cont, err = NewContinuity(ContinuityConfig{Store: store, Reader: h.rows, Now: func() time.Time { return h.now }})
+	h.cont, err = NewContinuity(ContinuityConfig{Store: store, Local: h.rows, Now: func() time.Time { return h.now }})
 	require.NoError(t, err)
 	h.handler.SetContinuity(h.cont)
 	return h
@@ -280,7 +278,7 @@ func TestContinuityResumesAfterRestart(t *testing.T) {
 	h.event(2, universe, nil)
 	reopened, err := watermark.Open(h.store.Path())
 	require.NoError(t, err)
-	cont, err := NewContinuity(ContinuityConfig{Store: reopened, Reader: h.rows})
+	cont, err := NewContinuity(ContinuityConfig{Store: reopened, Local: h.rows})
 	require.NoError(t, err)
 	h.handler.SetContinuity(cont)
 	h.rows.set(minuteAt(1), universe...)

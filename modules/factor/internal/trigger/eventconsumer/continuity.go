@@ -21,15 +21,16 @@ const (
 	defaultMaxPeriods      = 30
 )
 
-// PeriodReader 读回源数据集某一期的行（判断没有事件可用的周期哪些标的已经到了）。
-type PeriodReader interface {
-	ReadWindow(context.Context, storageio.ReadRequest) (map[string]*storageio.Frame, error)
+// LocalRows 判断没有事件可用的周期哪些标的已经到了：先把这些标的增量同步到本地，再看本地这一期有没有真实的行
+// （localdata.Data.RealRowsAt）。
+type LocalRows interface {
+	RealRowsAt(ctx context.Context, set domain.FactorTask, subjects []string, period time.Time) (map[string]bool, error)
 }
 
 // ContinuityConfig 是连续水位的参数。
 type ContinuityConfig struct {
-	Store  *watermark.Store
-	Reader PeriodReader
+	Store *watermark.Store
+	Local LocalRows
 	// MaxMissingRatio 是缺失阈值：未确认缺失的失败标的 ÷ 期望标的超过它的周期视为无效，阻塞水位（默认 10%）；
 	// SetRatios 按任务 ID 覆盖。
 	MaxMissingRatio float64
@@ -56,8 +57,8 @@ type absentEntry struct {
 
 // NewContinuity 构造连续水位推进。
 func NewContinuity(cfg ContinuityConfig) (*Continuity, error) {
-	if cfg.Store == nil || cfg.Reader == nil {
-		return nil, errors.New("continuity requires a watermark store and a period reader")
+	if cfg.Store == nil || cfg.Local == nil {
+		return nil, errors.New("continuity requires a watermark store and local rows")
 	}
 	if cfg.MaxMissingRatio <= 0 {
 		cfg.MaxMissingRatio = defaultMaxMissingRatio
@@ -205,7 +206,7 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 		if event != nil && event.periodTime.Equal(period) {
 			scope, triggerID = event.scope(), event.eventID
 		} else {
-			missing, err := c.readbackSeries(ctx, h, set, members, period, scope.universeSeries)
+			missing, err := c.missingSeries(ctx, set, period, scope.universeSeries)
 			if err != nil {
 				return err
 			}
@@ -305,8 +306,8 @@ func (c *Continuity) invalid(taskID string, expected, missing int, confirmed map
 	return ""
 }
 
-// readbackSeries 读回一期源数据，返回还没有行的期望序列。
-func (c *Continuity) readbackSeries(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, period time.Time, universe []seriesset.Series) ([]seriesset.Series, error) {
+// missingSeries 返回期望序列里这一期在本地还没有真实行的（同步之后判断，见 LocalRows）。
+func (c *Continuity) missingSeries(ctx context.Context, set domain.FactorTask, period time.Time, universe []seriesset.Series) ([]seriesset.Series, error) {
 	var subjects []string
 	for _, item := range universe {
 		subjects = append(subjects, item.SubjectID)
@@ -315,36 +316,13 @@ func (c *Continuity) readbackSeries(ctx context.Context, h *Handler, set domain.
 	if len(subjects) == 0 {
 		return nil, nil
 	}
-	column := "close"
-	for _, member := range members {
-		if len(member.Factor.InputColumns) > 0 {
-			column = member.Factor.InputColumns[0]
-			break
-		}
-	}
-	step := periodStep(set)
-	readCtx, cancel := context.WithTimeout(ctx, h.cfg.ReadColumnTimeout)
-	defer cancel()
-	frames, err := c.cfg.Reader.ReadWindow(readCtx, storageio.ReadRequest{SpaceID: set.SpaceID, DatasetID: set.SourceDatasetID, Freq: set.Freq, Subjects: subjects, Start: period, End: period.Add(step), Columns: []string{column}})
+	present, err := c.cfg.Local.RealRowsAt(ctx, set, subjects, period)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read back period %s: %v", storageio.ErrInfra, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
-	}
-	present := make(map[seriesset.Series]struct{})
-	for subject, frame := range frames {
-		if frame == nil {
-			continue
-		}
-		for _, row := range frame.Rows {
-			if len(row) > 1 {
-				if tag, ok := row[1].(string); ok {
-					present[seriesset.Series{SubjectID: subject, SeriesTag: tag}] = struct{}{}
-				}
-			}
-		}
+		return nil, fmt.Errorf("%w: 判断 %s 哪些标的已到：%v", storageio.ErrInfra, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
 	}
 	var missing []seriesset.Series
 	for _, item := range universe {
-		if _, ok := present[item]; !ok {
+		if !present[item.SubjectID] {
 			missing = append(missing, item)
 		}
 	}

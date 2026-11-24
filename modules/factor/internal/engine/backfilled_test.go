@@ -25,7 +25,7 @@ func TestOnBackfilledMarksPeriodsFilledAndKicksTasksOfTheDataset(t *testing.T) {
 	require.NoError(t, err)
 	marks, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
 	require.NoError(t, err)
-	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Reader: struct{ eventconsumer.PeriodReader }{}})
+	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Local: struct{ eventconsumer.LocalRows }{}})
 	require.NoError(t, err)
 	gapKicks := 0
 	r := &Runtime{catalog: cache, continuity: continuity, advanceKick: make(chan string, 4), filled: newFilledPeriods(time.Now), kickGap: func() { gapKicks++ }}
@@ -64,7 +64,7 @@ func TestOnBackfilledRaisesTheCatchupTargetUpToTheLatestClosedBar(t *testing.T) 
 	require.NoError(t, err)
 	start := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 	require.NoError(t, marks.Put(watermark.State{TaskID: "ftask_a", SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m", CommittedThrough: start.Add(-time.Minute), Target: start.Add(-time.Minute)}))
-	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Reader: struct{ eventconsumer.PeriodReader }{}})
+	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Local: struct{ eventconsumer.LocalRows }{}})
 	require.NoError(t, err)
 	now := start.Add(30*time.Minute + 40*time.Second)
 	r := &Runtime{catalog: cache, continuity: continuity, advanceKick: make(chan string, 4), filled: newFilledPeriods(func() time.Time { return now }), kickGap: func() {}}

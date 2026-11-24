@@ -190,7 +190,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}
 	r.watermarks = watermarks
 	if r.continuity, err = eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{
-		Store: watermarks, Reader: r.storage, MaxMissingRatio: cfg.Watermark.MaxMissingRatio, SetRatios: cfg.Watermark.SetRatios, MaxPeriods: cfg.Watermark.MaxPeriods,
+		Store: watermarks, Local: r.data, MaxMissingRatio: cfg.Watermark.MaxMissingRatio, SetRatios: cfg.Watermark.SetRatios, MaxPeriods: cfg.Watermark.MaxPeriods,
 	}); err != nil {
 		return nil, err
 	}

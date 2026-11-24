@@ -552,7 +552,7 @@ func (s *replaySession) stepPeriod(ctx context.Context, runner *pipeline.Runner,
 	stepSecs := int64(s.step / time.Second)
 	for _, subject := range s.subjects {
 		// 一个标的一期只有一条序列，每个标的至多出一行。本期在快照里没有行（还没上市、已经结束）时不出行；出不出行与请求了哪些列无关。
-		if sv, ok := periodSeriesOf(s.view, subject, now); ok && seriesHasRow(s.view, sv, now) {
+		if sv, ok := periodSeriesOf(s.view, subject, now); ok && sv.RealRowAt(s.view.Step, now) {
 			key := seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag}
 			row := ReplayRow{Series: key, Values: map[string]float64{}}
 			for _, name := range s.columns.source {
@@ -631,24 +631,6 @@ func periodSeries(view *serieswindow.View, subjects []string, atSec int64) []ser
 		}
 	}
 	return out
-}
-
-// seriesHasRow 报告这条序列在 atSec 那一根有没有真实的源行：有任何一个数值字段的值、且不是填充行。填充行是同步补上的缺失周期
-// （OHLC 取上一根收盘、成交量为 0），与实时一样不算本期有行（实时把目标那一根是填充行的序列判为本期不可用，见 localdata.seriesMissingAt）。
-func seriesHasRow(view *serieswindow.View, sv serieswindow.SeriesView, atSec int64) bool {
-	if atSec < sv.Start || atSec > sv.End(view.Step) {
-		return false
-	}
-	i := (atSec - sv.Start) / view.Step
-	if int(i) < len(sv.Filled) && sv.Filled[i] {
-		return false
-	}
-	for _, col := range sv.Cols {
-		if !math.IsNaN(col[i]) {
-			return true
-		}
-	}
-	return false
 }
 
 // udfHashes 返回现有回放会话引用的自定义算子版本：目录切换后这些版本仍不能卸载（会话的计算还要用）。
@@ -755,7 +737,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	var available []string
 	var availableSeries []seriesset.Series
 	for _, subject := range universe {
-		if sv, ok := periodSeriesOf(s.view, subject, period.Unix()); ok && seriesHasRow(s.view, sv, period.Unix()) {
+		if sv, ok := periodSeriesOf(s.view, subject, period.Unix()); ok && sv.RealRowAt(s.view.Step, period.Unix()) {
 			available = append(available, subject)
 			availableSeries = append(availableSeries, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
 		}
