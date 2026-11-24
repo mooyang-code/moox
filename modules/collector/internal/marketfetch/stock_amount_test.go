@@ -28,7 +28,7 @@ func TestStockKlineRowWritesEstimatedAmountWithQualityMark(t *testing.T) {
 	}
 	estimated := fields(bar)
 	require.Equal(t, 10500.0, estimated["amount"].GetValue().GetDoubleValue(), "估算的成交额照常写入")
-	require.Equal(t, "estimated_close_x_volume", estimated["amount_quality"].GetValue().GetStringValue())
+	require.Equal(t, "estimated", estimated["amount_quality"].GetValue().GetStringValue())
 	bar.AmountEstimated = false
 	reported := fields(bar)
 	require.Equal(t, 10500.0, reported["amount"].GetValue().GetDoubleValue())

@@ -81,8 +81,9 @@ func TestMarketPlansMatchBaseline(t *testing.T) {
 			{Provider: "eastmoney", SourceID: "stockhk_http", MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity", DatasetID: "ds_hk_5m", Frequency: "5m",
 				Subjects: marketPlanSubjects("%05d.XHKG", 1, 95)},
 		}},
+		// 美股分组的 source_id 是退回的 provider：目录里东方财富不是美股的 K 线来源（K 线按路由取 CNBC）。
 		{space: "stockus", markets: map[string][]string{"equity": {"ap-nanjing"}}, groups: []fetchplan.TaskGroup{
-			{Provider: "eastmoney", SourceID: "stockus_http", MarketType: "equity", MarketID: "stockus", InstrumentType: "equity", DatasetID: "ds_us_5m", Frequency: "5m",
+			{Provider: "eastmoney", SourceID: "eastmoney", MarketType: "equity", MarketID: "stockus", InstrumentType: "equity", DatasetID: "ds_us_5m", Frequency: "5m",
 				Subjects: marketPlanSubjects("S%03d.XNYS", 1, 505)},
 		}},
 		// crypto 的默认值是推送；另外记一组全部走云函数的（现货、永续各自的取数时刻与截止只在云函数计划里体现）。

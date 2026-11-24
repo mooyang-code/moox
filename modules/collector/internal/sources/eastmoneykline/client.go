@@ -81,14 +81,8 @@ type Config struct {
 
 	// Frequencies 是这个市场支持的周期，其余的不发请求直接拒绝。
 	Frequencies []string
-	// SecID 把请求里的标的换成接口的 secid（A 股 600000.XSHG → 1.600000，港股 00700.XHKG → 116.00700，
-	// 美股按请求的交易所与代码：XNAS 的 AAPL → 105.AAPL）。
+	// SecID 把请求里的标的换成接口的 secid（A 股 600000.XSHG → 1.600000，港股 00700.XHKG → 116.00700）。
 	SecID func(req marketdata.KlineRequest) (string, error)
-	// DateRange 是各市场的日期区间规则（可选）：按请求算出 beg、end 两个 20060102 日期，beg 为空表示不带起点。
-	// 不写时用 UTCDateRange，即请求起止时刻的 UTC 日期（A 股、港股）。上游按日期过滤的规则没有文档，是各市场实测出来的，
-	// 美股就与 UTC 日期无关（见 stockus/eastmoney）。
-	// 写了 DateRange 的市场，按区间取时上游会多带区间外的根：区间外的根只作容错，解析或校验失败时跳过，不影响整次请求。
-	DateRange func(req marketdata.KlineRequest, frequency marketdata.Frequency) (beg, end string)
 	// VolumeMultiplier 把上游的成交量换成股：A 股的单位是手，乘 100；港股已经是股，乘 1。
 	VolumeMultiplier float64
 	// Location 是时间标签的时区。日内标签是收盘时刻。
@@ -145,10 +139,9 @@ type response struct {
 //
 // 请求带起止时刻时按 beg、end 两个日期取整天（上游忽略 lmt，返回区间内的全部根），不按时刻截取：定时采集只要目标那一根，
 // 也是取当天整天，由流水线按开始时刻挑出来。所以新一根还没出现时（冷门股在边界后一分多钟里，刚收盘那根仍是最后一根）
-// 照样取得到目标那根。不带起止时刻时取 end 之前最近 Limit 根。beg、end 怎么由请求算出来是各市场的规则（Config.DateRange）。
+// 照样取得到目标那根。不带起止时刻时取 end 之前最近 Limit 根。beg、end 是请求起止时刻的 UTC 日期（见 utcDateRange）。
 //
-// 任何一根解析或校验失败，整次请求失败，不会只丢掉那一根；例外是写了 DateRange 的市场按区间取时，请求区间
-// [StartTime, EndTime)（按开始时刻）之外的根不合法时跳过：这类市场的上游会多带前后的根，它们不会被写入。
+// 任何一根解析或校验失败，整次请求失败，不会只丢掉那一根。
 func (c *Client) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
@@ -162,11 +155,7 @@ func (c *Client) FetchKlines(ctx context.Context, req marketdata.KlineRequest) (
 	if err != nil {
 		return nil, err
 	}
-	dateRange := c.cfg.DateRange
-	if dateRange == nil {
-		dateRange = UTCDateRange
-	}
-	begDate, endDate := dateRange(req, frequency)
+	begDate, endDate := utcDateRange(req)
 	requestLimit := req.Limit
 	rangeRequest := !req.StartTime.IsZero() || !req.EndTime.IsZero()
 	if rangeRequest {
@@ -197,9 +186,6 @@ func (c *Client) FetchKlines(ctx context.Context, req marketdata.KlineRequest) (
 	for _, line := range lines {
 		row, err := c.normalize(req, frequency, line, now)
 		if err != nil {
-			if c.cfg.DateRange != nil && rangeRequest && c.outsideRequest(req, frequency, line) {
-				continue
-			}
 			return nil, err
 		}
 		if !now.Before(row.BarEnd) {
@@ -264,9 +250,9 @@ func (c *Client) networkFailure(ctx context.Context, failed uint32) {
 	}
 }
 
-// UTCDateRange 是默认的日期区间规则：beg 取请求起点的 UTC 日期（没有起点就不带），end 取请求终点的 UTC 日期，
+// utcDateRange 是日期区间规则：beg 取请求起点的 UTC 日期（没有起点就不带），end 取请求终点的 UTC 日期，
 // 没有终点时取请求时刻的日期，都没有时取一个远期日期。
-func UTCDateRange(req marketdata.KlineRequest, _ marketdata.Frequency) (beg, end string) {
+func utcDateRange(req marketdata.KlineRequest) (beg, end string) {
 	end = "20500101"
 	if !req.EndTime.IsZero() {
 		end = req.EndTime.UTC().Format("20060102")
@@ -277,21 +263,6 @@ func UTCDateRange(req marketdata.KlineRequest, _ marketdata.Frequency) (beg, end
 		beg = req.StartTime.UTC().Format("20060102")
 	}
 	return beg, end
-}
-
-// outsideRequest 判断返回里的一行是否落在请求区间 [StartTime, EndTime)（按开始时刻）之外。日内标签解析不出来时按区间内处理，
-// 让解析错误照常报出；日线不判断。
-func (c *Client) outsideRequest(req marketdata.KlineRequest, frequency marketdata.Frequency, line string) bool {
-	if frequency == marketdata.FrequencyDay {
-		return false
-	}
-	label, _, _ := strings.Cut(line, ",")
-	closeAt, err := time.ParseInLocation(minuteLayout, strings.TrimSpace(label), c.cfg.Location)
-	if err != nil {
-		return false
-	}
-	barStart := closeAt.Add(-frequency.Duration())
-	return (!req.StartTime.IsZero() && barStart.Before(req.StartTime)) || (!req.EndTime.IsZero() && !barStart.Before(req.EndTime))
 }
 
 // normalize 把返回里的一行（时间标签,开,收,高,低,成交量,成交额,…）归一化成一根 K 线。

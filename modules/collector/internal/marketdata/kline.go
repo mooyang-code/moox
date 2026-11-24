@@ -22,8 +22,8 @@ type NormalizedKline struct {
 	// Volume 是成交量（股票是股，crypto 是基础币数量）；Amount 是按标的交易币种计的成交额（crypto 是报价成交量）。
 	Volume float64
 	Amount float64
-	// AmountEstimated 标记上游不给成交额（腾讯）、Amount 是 收盘价 × 成交量 的估算值：照常写入 amount，
-	// 并写 amount_quality=estimated_close_x_volume。
+	// AmountEstimated 标记上游不给成交额、Amount 是数据源估算的值（A 股腾讯：收盘价 × 成交量；美股 CNBC：每根 1M 的
+	// 成交量 × 开高低收均价之和）：照常写入 amount，并写 amount_quality=estimated。
 	AmountEstimated   bool
 	TradeCount        int64
 	ProviderTimestamp time.Time

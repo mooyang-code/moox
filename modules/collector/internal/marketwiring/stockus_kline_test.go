@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,37 +17,153 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	useastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/eastmoney"
+	uscnbc "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/cnbc"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
 
-// 美股股票的 K 线按路由装配：候选链只有东方财富，source_id、限速、单次根数来自路由与数据源配置文件，结算延迟 5 秒。
-// 假的东方财富服务返回 2026-11-12 实测的样例（docs/计划/美股实测数据，截进 sources/stockus/eastmoney/testdata），
-// 其余都是真实装配：行情源目录、标的规则、路由文件、流水线。
+// 美股股票的 K 线按路由装配：候选链只有 CNBC，source_id、限速来自路由与数据源配置文件，结算延迟 5 秒。
+// 假的 CNBC 服务按请求路径里的开始、结束（纽约时间，两端都含）截取 1M 返回：内容是 2026-11-23（冬令时）、2026-10-20（夏令时）
+// AAPL 整天的实测返回（截进 sources/stockus/cnbc/testdata），或按交易日合成的 1M；其余都是真实装配：行情源目录、标的规则、路由文件、流水线。
 
 const usDataset = "dataset_stockus_equity_kline_5m"
 
-// usTime 把北京时间（东方财富美股 K 线标签用的时区）换成 UTC。
-func usTime(value string) time.Time {
-	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", value, time.FixedZone("CST", 8*3600))
+// usBarsPrefix 是 CNBC 1M 接口的路径前缀，后面接 /{代码}/1M/{开始}/{结束}/unadjusted/EST5EDT.json。
+const usBarsPrefix = "/harmony/app/bars/"
+
+var usNewYork = func() *time.Location {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		panic(err)
+	}
+	return location
+}()
+
+// nyTime 把纽约时间（"2006-01-02 15:04"）换成 UTC。
+func nyTime(value string) time.Time {
+	parsed, err := time.ParseInLocation("2006-01-02 15:04", value, usNewYork)
 	if err != nil {
 		panic(err)
 	}
 	return parsed.UTC()
 }
 
-func usTestdata(t *testing.T, name string) []byte {
+// usBarsPath 是取 code 在纽约时间 [from, to]（两端都含，"yyyyMMddHHmm"）内 1M 的请求路径。
+func usBarsPath(code, from, to string) string {
+	return usBarsPrefix + code + "/1M/" + from + "00/" + to + "00/unadjusted/EST5EDT.json"
+}
+
+// usMinute 是假 CNBC 服务返回的一根 1M，字段写法与 CNBC 相同：价格是字符串，量是整数，tradeTime 是纽约时间的开始时刻。
+type usMinute struct {
+	Open      string `json:"open"`
+	High      string `json:"high"`
+	Low       string `json:"low"`
+	Close     string `json:"close"`
+	Volume    int64  `json:"volume"`
+	TradeTime string `json:"tradeTime"`
+}
+
+// usRecordedMinutes 读 cnbc 包 testdata 里的实测返回。
+func usRecordedMinutes(t *testing.T, name string) []usMinute {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("..", "sources", "stockus", "eastmoney", "testdata", name))
+	raw, err := os.ReadFile(filepath.Join("..", "sources", "stockus", "cnbc", "testdata", name))
 	require.NoError(t, err)
-	return body
+	var payload struct {
+		BarData struct {
+			PriceBars []usMinute `json:"priceBars"`
+		} `json:"barData"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	require.NotEmpty(t, payload.BarData.PriceBars)
+	return payload.BarData.PriceBars
+}
+
+// usDay 是一个纽约交易日：收市时刻 16:00，半日市 13:00。
+type usDay struct{ date, closeClock string }
+
+// usSessionMinutes 按交易日合成 1M，时间升序：与 CNBC 一样带盘前（09:00 起）和收市后半小时（含收市那一分钟），
+// 这些都不属于交易时段，合成 5m 时应当丢掉。内容按序号造：开 100+序号%50，高 开+1，低 开-1，收 开+0.5，量 1000+序号。
+func usSessionMinutes(days ...usDay) []usMinute {
+	var minutes []usMinute
+	for _, day := range days {
+		open := nyTime(day.date + " 09:00").In(usNewYork)
+		last := nyTime(day.date + " " + day.closeClock).Add(30 * time.Minute).In(usNewYork)
+		for at := open; !at.After(last); at = at.Add(time.Minute) {
+			index := len(minutes)
+			price := 100 + float64(index%50)
+			minutes = append(minutes, usMinute{
+				Open: fmt.Sprintf("%.4f", price), High: fmt.Sprintf("%.4f", price+1), Low: fmt.Sprintf("%.4f", price-1), Close: fmt.Sprintf("%.4f", price+0.5),
+				Volume: int64(1000 + index), TradeTime: at.Format("20060102150405"),
+			})
+		}
+	}
+	return minutes
+}
+
+// usCNBCServer 是假的 CNBC 1M 接口：按请求路径里的代码取 minutes 给出的 1M，再按开始、结束（纽约时间，两端都含）截取返回，
+// 并记下每次请求的路径。minutes 每次请求都调用，可以随时间返回不同的内容。
+type usCNBCServer struct {
+	t       *testing.T
+	minutes func(code string) []usMinute
+	mu      sync.Mutex
+	paths   []string
+}
+
+func newUSCNBCServer(t *testing.T, minutes func(code string) []usMinute) *usCNBCServer {
+	return &usCNBCServer{t: t, minutes: minutes}
+}
+
+func (s *usCNBCServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.paths = append(s.paths, r.URL.Path)
+	s.mu.Unlock()
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, usBarsPrefix), "/")
+	if !strings.HasPrefix(r.URL.Path, usBarsPrefix) || len(parts) != 6 || parts[1] != "1M" || parts[4] != "unadjusted" || parts[5] != "EST5EDT.json" {
+		http.Error(w, "unexpected path "+r.URL.Path, http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(r.Header.Get("User-Agent"), "Mozilla/5.0") {
+		http.Error(w, "Access Denied", http.StatusForbidden)
+		return
+	}
+	code, from, to := parts[0], parts[2], parts[3]
+	picked := []usMinute{}
+	for _, minute := range s.minutes(code) {
+		if minute.TradeTime >= from && minute.TradeTime <= to {
+			picked = append(picked, minute)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"barData": map[string]any{"symbol": code, "priceBars": picked}})
+}
+
+// requested 返回发过的全部请求路径。
+func (s *usCNBCServer) requested() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.paths...)
+}
+
+// requestsFor 返回某个代码的请求次数。
+func (s *usCNBCServer) requestsFor(code string) int {
+	count := 0
+	for _, path := range s.requested() {
+		if strings.HasPrefix(path, usBarsPrefix+code+"/") {
+			count++
+		}
+	}
+	return count
+}
+
+// usSameMinutes 对任何代码都返回同一组 1M。
+func usSameMinutes(minutes []usMinute) func(string) []usMinute {
+	return func(string) []usMinute { return minutes }
 }
 
 func TestStockUSKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	// 请求里写别的数据源也不影响：来源按路由分配。
 	pipeline, err := NewKlinePipeline(timerHandlerStorage{}, "stockus", marketdata.InstrumentEquity, "5m", "sina", nil)
 	require.NoError(t, err)
-	require.Equal(t, []string{"eastmoney"}, pipeline.CandidateChain)
+	require.Equal(t, []string{"cnbc"}, pipeline.CandidateChain)
 	require.True(t, pipeline.AutoBindSource)
 	require.Empty(t, pipeline.SourceID)
 	require.Equal(t, 5*time.Second, pipeline.SettleDelay)
@@ -54,15 +171,20 @@ func TestStockUSKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	require.Equal(t, marketdata.InstrumentEquity, pipeline.InstrumentType)
 	require.Empty(t, pipeline.Fields, "美股没有附加字段来源")
 
-	provider, err := pipeline.Router.Provider("eastmoney")
+	provider, err := pipeline.Router.Provider("cnbc")
 	require.NoError(t, err)
-	require.Equal(t, "*eastmoney.Provider eastmoney/stockus_http", fmt.Sprintf("%T %s", provider, provider.Descriptor().SourceKey()))
-	require.IsType(t, &useastmoney.Provider{}, provider, "是美股的东方财富，不是 A 股、港股的")
-	spec, err := pipeline.Router.NewSession().KlineSpec("eastmoney")
+	require.IsType(t, &uscnbc.Provider{}, provider)
+	require.Equal(t, "cnbc/stockus_cnbc_http", provider.Descriptor().SourceKey().String())
+	spec, err := pipeline.Router.NewSession().KlineSpec("cnbc")
 	require.NoError(t, err)
 	require.Equal(t, []string{"5m"}, spec.Frequencies)
-	require.Equal(t, 1205, spec.MaxBarsPerRequest)
-	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: 5 * time.Second}, spec.RateLimit)
+	require.Equal(t, 78, spec.MaxBarsPerRequest)
+	require.True(t, spec.History.SupportsArbitraryRange)
+	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: 3 * time.Second}, spec.RateLimit)
+
+	// 东方财富只剩标的同步（交易所对照），不再是美股的 K 线来源。
+	_, err = pipeline.Router.Provider("eastmoney")
+	require.Error(t, err)
 
 	// 只有 5m 的路由。
 	for _, frequency := range []string{"1m", "1d"} {
@@ -71,26 +193,26 @@ func TestStockUSKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	}
 	require.Equal(t, "stockus_equity_kline_5m", marketfetch.KlineRouteID("stockus", marketdata.InstrumentEquity, "5m"))
 
-	// 标的规则换出的代码（保留点）与交易所传给数据源：BRK.B.XNYS → BRK.B、XNYS。
-	symbol, err := ResolveSymbol("eastmoney", "stockus", "equity", "BRK.B.XNYS")
+	// 标的规则换出的代码保留点：BRK.B.XNYS → BRK.B（CNBC 认 BRK.B）。
+	symbol, err := ResolveSymbol("cnbc", "stockus", "equity", "BRK.B.XNYS")
 	require.NoError(t, err)
 	require.Equal(t, "BRK.B", symbol)
 }
 
-// stockUSPipeline 装一条美股 5m 流水线，只把连网的那一段换掉：数据源仍是美股的东方财富（限速、单次根数与装配出来的相同），
+// stockUSPipeline 装一条美股 5m 流水线，只把连网的那一段换掉：数据源仍是 CNBC（限速与装配出来的相同），
 // 熔断阈值沿用装配出来的，请求交给 handler，时钟固定在 now。limits 是请求带的限速，可以为空。
-func stockUSPipeline(t *testing.T, storage marketfetch.Storage, now time.Time, limits *marketfetch.FeedLimits, handler http.HandlerFunc) *marketfetch.KlinePipeline {
+func stockUSPipeline(t *testing.T, storage marketfetch.Storage, now time.Time, limits *marketfetch.FeedLimits, handler http.Handler) *marketfetch.KlinePipeline {
 	t.Helper()
 	pipeline, err := NewKlinePipeline(storage, "stockus", marketdata.InstrumentEquity, "5m", "", limits)
 	require.NoError(t, err)
-	spec, err := pipeline.Router.NewSession().KlineSpec("eastmoney")
+	spec, err := pipeline.Router.NewSession().KlineSpec("cnbc")
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	clock := func() time.Time { return now }
 	registry := marketdata.NewRegistry()
-	require.NoError(t, registry.Register(useastmoney.New(useastmoney.Config{
-		BaseURL: server.URL, HTTPClient: server.Client(), Now: clock, RateLimit: spec.RateLimit, MaxBarsPerRequest: spec.MaxBarsPerRequest,
+	require.NoError(t, registry.Register(uscnbc.New(uscnbc.Config{
+		BaseURL: server.URL, SourceID: uscnbc.DefaultSourceID, HTTPClient: server.Client(), Now: clock, RateLimit: spec.RateLimit,
 	})))
 	router, err := marketdata.NewRouter(registry, pipeline.Router.BreakerThreshold(), nil, nil)
 	require.NoError(t, err)
@@ -98,12 +220,12 @@ func stockUSPipeline(t *testing.T, storage marketfetch.Storage, now time.Time, l
 	return pipeline
 }
 
-// usRealtimeRequest 是云函数定时请求（只要目标那一根）：target 是目标那根的开始时刻（北京时间）。
-func usRealtimeRequest(subject, symbol, target string) marketfetch.Request {
-	start := usTime(target)
+// usRealtimeRequest 是云函数定时请求（只要目标那一根）：target 是目标那根的开始时刻（UTC）。
+// 美股的来源按路由分配，计划生成的取数项不带 provider、source_id。
+func usRealtimeRequest(subject, symbol string, target time.Time) marketfetch.Request {
 	item := domain.CollectionItem{
-		InstanceID: "instance-1", SubjectID: subject, Symbol: symbol, Provider: "eastmoney", MarketType: "equity", DataType: "kline",
-		DatasetID: usDataset, Frequency: "5m", TargetDataTime: start.Format(time.RFC3339Nano), SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true,
+		InstanceID: "instance-1", SubjectID: subject, Symbol: symbol, MarketType: "equity", DataType: "kline",
+		DatasetID: usDataset, Frequency: "5m", TargetDataTime: target.Format(time.RFC3339Nano), SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true,
 	}
 	return marketfetch.Request{
 		BatchID: "scheduled", BatchKind: domain.BatchKindRealtime, SpaceID: "stockus", MarketID: "stockus", InstrumentType: "equity",
@@ -116,305 +238,264 @@ func usRealtimeRequest(subject, symbol, target string) marketfetch.Request {
 	}
 }
 
-// usBackfillRequest 是补采分块：[start, end) 按 K 线开始时刻（北京时间）。
-func usBackfillRequest(subject, symbol, start, end string) marketfetch.Request {
+// usBackfillRequest 是补采分块：[start, end) 按 K 线开始时刻（UTC）。
+func usBackfillRequest(subject, symbol string, start, end time.Time) marketfetch.Request {
 	return marketfetch.Request{
 		BatchID: "backfill", BatchKind: domain.BatchKindBackfill, SpaceID: "stockus", MarketID: "stockus", InstrumentType: "equity",
 		DatasetID: usDataset, Frequency: "5m", MarketType: "equity", RequestID: "backfill",
 		Items: []domain.CollectionItem{{
-			SubjectID: subject, Symbol: symbol, Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: usDataset, Frequency: "5m",
-			StartTime: usTime(start).Format(time.RFC3339Nano), EndTime: usTime(end).Format(time.RFC3339Nano), BarLimit: 1000,
+			SubjectID: subject, Symbol: symbol, MarketType: "equity", DataType: "kline", DatasetID: usDataset, Frequency: "5m",
+			StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano), BarLimit: 1000,
 		}},
 	}
 }
 
-// withKlinesPrefix 在返回内容的 klines 数组最前面加几行。
-func withKlinesPrefix(body []byte, lines ...string) []byte {
-	quoted := make([]string, 0, len(lines))
-	for _, line := range lines {
-		quoted = append(quoted, `"`+line+`"`)
-	}
-	return []byte(strings.Replace(string(body), `"klines":[`, `"klines":[`+strings.Join(quoted, ",")+",", 1))
+// requireCNBCRow 断言写出的行来自 CNBC：来源、路由、单位，成交额是估算值。
+func requireCNBCRow(t *testing.T, fields map[string]*storagepb.TypedValue, symbol string) {
+	t.Helper()
+	require.Equal(t, "cnbc", fields["provider_id"].GetStringValue())
+	require.Equal(t, "cnbc", fields["source_provider"].GetStringValue())
+	require.Equal(t, "stockus_cnbc_http", fields["source_id"].GetStringValue())
+	require.Equal(t, "estimated", fields["amount_quality"].GetStringValue(), "CNBC 没有成交额，按 成交量 × 均价 估算")
+	require.Equal(t, "shares", fields["volume_unit"].GetStringValue())
+	require.Equal(t, "usd", fields["amount_unit"].GetStringValue())
+	require.Equal(t, symbol, fields["provider_symbol"].GetStringValue())
+	require.Equal(t, "stockus_equity_kline_5m", fields["route_id"].GetStringValue())
 }
 
-// 定时请求（只要目标那一根）：冬令时首根（22:35）与末根（次日 05:00）、夏令时首根（21:35）与末根（04:00），
-// 断言发给假服务的 beg、end 与日期区间规则一致，写入的只有目标那一根，键是开盘时刻（UTC）。
-// 返回内容是实测的整段（含目标之前、之后的根），实际请求时目标之后的根还不存在；这里按时钟固定在收盘后 5 秒，
-// 之后的根不返回，之前的根不属于目标，只写目标那一根。
-// 每个用例再跑一遍：返回里带着前一时段的一根不合法的根（构造的：开盘价高于最高价，早于目标，在请求区间之外），仍然成功。
+// 定时请求（只要目标那一根）：冬令时（2026-11-23）、夏令时（2026-10-20）的首根（纽约 09:30）与末根（15:55），用整天的实测 1M。
+// 断言发给假服务的路径（纽约时间，终点是目标那根的最后一分钟），写入的只有目标那一根，键是开始时刻（UTC），
+// 开高低收量由那 5 根 1M 合成；末根不含 16:00 那根 1M（收盘竞价）。
 func TestStockUSScheduledRequestWritesTheTargetBar(t *testing.T) {
 	for _, tc := range []struct {
-		name, file, target, now, beg, end string
-		dataTime                          string
-		// open, high, low, close, volume, amount
-		want [6]float64
+		name, file, target, from, to string
+		dataTime                     string
+		// open, high, low, close, volume
+		want   [5]float64
+		amount float64
 	}{
 		{
-			name: "冬令时首根 22:35", file: "kline_5m_AAPL_20261111_20261113.json", target: "2026-11-11 22:30:00", now: "2026-11-11 22:35:05",
-			beg: "20261111", end: "20261112", dataTime: "2026-11-11T14:30:00Z",
-			want: [6]float64{349.545, 353.35, 349.325, 352.06, 2331875, 816847880},
+			name: "冬令时首根", file: "aapl_1m_20261123.json", target: "2026-11-23 09:30", from: "202611230930", to: "202611230934",
+			dataTime: "2026-11-23T14:30:00Z", want: [5]float64{347.82, 349.76, 347.01, 347.79, 2147640}, amount: 748029888.33,
 		},
 		{
-			name: "冬令时末根次日 05:00", file: "kline_5m_AAPL_20261111_20261113.json", target: "2026-11-12 04:55:00", now: "2026-11-12 05:00:05",
-			beg: "20261111", end: "20261113", dataTime: "2026-11-11T20:55:00Z",
-			want: [6]float64{355.405, 355.91, 355.28, 355.63, 10630410, 3765914850},
+			name: "冬令时末根", file: "aapl_1m_20261123.json", target: "2026-11-23 15:55", from: "202611231555", to: "202611231559",
+			dataTime: "2026-11-23T20:55:00Z", want: [5]float64{349.66, 349.7, 348.67, 349.1, 2377531}, amount: 830172640.935,
 		},
 		{
-			name: "夏令时周一首根 21:35（beg 是周日）", file: "kline_5m_AAPL_20261025_20261027.json", target: "2026-10-26 21:30:00", now: "2026-10-26 21:35:05",
-			beg: "20261025", end: "20261027", dataTime: "2026-10-26T13:30:00Z",
-			want: [6]float64{343.9, 346.215, 342.11, 344.05, 2565332, 881328360},
+			name: "夏令时首根", file: "aapl_1m_20261020.json", target: "2026-10-20 09:30", from: "202610200930", to: "202610200934",
+			dataTime: "2026-10-20T13:30:00Z", want: [5]float64{339.86, 342.66, 338.7, 342.32, 1638703}, amount: 558640276.506725,
 		},
 		{
-			name: "夏令时末根 04:00", file: "kline_5m_AAPL_20261028_20261031.json", target: "2026-10-30 03:55:00", now: "2026-10-30 04:00:05",
-			beg: "20261029", end: "20261031", dataTime: "2026-10-29T19:55:00Z",
-			want: [6]float64{348.92, 349.06, 348.3, 348.91, 16479171, 5749156525},
+			name: "夏令时末根", file: "aapl_1m_20261020.json", target: "2026-10-20 15:55", from: "202610201555", to: "202610201559",
+			dataTime: "2026-10-20T19:55:00Z", want: [5]float64{339.49, 339.58, 339.2, 339.47, 816539}, amount: 277126794.29105,
 		},
 	} {
-		for _, dirty := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/前一时段带不合法根=%v", tc.name, dirty), func(t *testing.T) {
-				body := usTestdata(t, tc.file)
-				if dirty {
-					body = withKlinesPrefix(body, "2026-10-23 04:00,100.000,90.000,95.000,80.000,1000,100000.000")
-				}
-				storage := &capturedStorage{}
-				var query map[string]string
-				pipeline := stockUSPipeline(t, storage, usTime(tc.now), nil, func(w http.ResponseWriter, r *http.Request) {
-					query = map[string]string{}
-					for _, name := range []string{"secid", "klt", "fqt", "beg", "end", "lmt"} {
-						query[name] = r.URL.Query().Get(name)
-					}
-					_, _ = w.Write(body)
-				})
-				payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", tc.target))
-				require.NoError(t, err)
-				require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
-				require.Equal(t, map[string]string{"secid": "105.AAPL", "klt": "5", "fqt": "0", "beg": tc.beg, "end": tc.end, "lmt": "1205"}, query)
-				require.Len(t, storage.committed, 1, "只写目标那一根")
-				key := storage.committed[0].GetRow().GetKey()
-				require.Equal(t, usDataset, key.GetDatasetId())
-				require.Equal(t, "AAPL.XNAS", key.GetTimeSeries().GetSubjectId())
-				require.Equal(t, "default", key.GetTimeSeries().GetSeriesTag())
-				require.Equal(t, tc.dataTime, key.GetTimeSeries().GetDataTime(), "键是开盘时刻")
-				fields := rowFields(storage.committed[0].GetRow())
-				require.Equal(t, tc.want, [6]float64{
-					fields["open"].GetDoubleValue(), fields["high"].GetDoubleValue(), fields["low"].GetDoubleValue(),
-					fields["close"].GetDoubleValue(), fields["volume"].GetDoubleValue(), fields["amount"].GetDoubleValue(),
-				})
-				require.Equal(t, "shares", fields["volume_unit"].GetStringValue())
-				require.Equal(t, "usd", fields["amount_unit"].GetStringValue())
-				require.Equal(t, "eastmoney", fields["provider_id"].GetStringValue())
-				require.Equal(t, "stockus_http", fields["source_id"].GetStringValue())
-				require.Equal(t, "AAPL", fields["provider_symbol"].GetStringValue())
-				require.Equal(t, "stockus_equity_kline_5m", fields["route_id"].GetStringValue())
+		t.Run(tc.name, func(t *testing.T) {
+			target := nyTime(tc.target)
+			server := newUSCNBCServer(t, usSameMinutes(usRecordedMinutes(t, tc.file)))
+			storage := &capturedStorage{}
+			// 时钟在收盘后 5 秒（结算延迟刚好过去）。
+			pipeline := stockUSPipeline(t, storage, target.Add(5*time.Minute+5*time.Second), nil, server)
+			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
+			require.NoError(t, err)
+			require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+			require.Equal(t, []string{usBarsPath("AAPL", tc.from, tc.to)}, server.requested())
+			require.Len(t, storage.committed, 1, "只写目标那一根")
+			key := storage.committed[0].GetRow().GetKey()
+			require.Equal(t, usDataset, key.GetDatasetId())
+			require.Equal(t, "AAPL.XNAS", key.GetTimeSeries().GetSubjectId())
+			require.Equal(t, "default", key.GetTimeSeries().GetSeriesTag())
+			require.Equal(t, tc.dataTime, key.GetTimeSeries().GetDataTime(), "键是开始时刻")
+			fields := rowFields(storage.committed[0].GetRow())
+			require.Equal(t, tc.want, [5]float64{
+				fields["open"].GetDoubleValue(), fields["high"].GetDoubleValue(), fields["low"].GetDoubleValue(),
+				fields["close"].GetDoubleValue(), fields["volume"].GetDoubleValue(),
 			})
-		}
+			require.InDelta(t, tc.amount, fields["amount"].GetDoubleValue(), 1e-3, "成交额按每根 1M 的 成交量 ×（开 + 高 + 低 + 收）/ 4 求和")
+			requireCNBCRow(t, fields, "AAPL")
+		})
 	}
 
 	// 没等够结算延迟（收盘后 5 秒）就取：目标那根不写，这一项失败，等下一次。
 	early := &capturedStorage{}
-	body := usTestdata(t, "kline_5m_AAPL_20261111_20261113.json")
-	pipeline := stockUSPipeline(t, early, usTime("2026-11-11 22:35:04"), nil, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
-	payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", "2026-11-11 22:30:00"))
+	target := nyTime("2026-11-23 09:30")
+	server := newUSCNBCServer(t, usSameMinutes(usRecordedMinutes(t, "aapl_1m_20261123.json")))
+	pipeline := stockUSPipeline(t, early, target.Add(5*time.Minute+4*time.Second), nil, server)
+	payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.GetStatus())
 	require.Empty(t, early.committed)
 }
 
-// 目标那一根取不到时（上游晚于结算延迟才出新一根）：冬令时首根返回空、夏令时首根返回里只有 beg 取前一天多带的前一时段的根，
-// 两种都是“没有已收盘的 K 线”（ErrNoClosedBar），这一项失败等重试或补采，不写数据。
+// 目标那一根取不到时（那 5 分钟 CNBC 还没有 1M，或标的停牌没有成交）：返回里没有 priceBars 或只有区间外的根，
+// 都是“没有已收盘的 K 线”（ErrNoClosedBar），这一项失败等重试或补采，不写数据，也不是回看覆盖错误。
 func TestStockUSScheduledRequestFailsWhenTheTargetBarIsMissing(t *testing.T) {
-	winter := &capturedStorage{}
-	pipeline := stockUSPipeline(t, winter, usTime("2026-11-11 22:35:05"), nil, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"data":{"klines":[]}}`)) })
-	payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", "2026-11-11 22:30:00"))
-	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
-	require.Contains(t, payload.GetErrorSummary(), "no closed bar")
-	require.Empty(t, winter.committed)
-
-	// 夏令时首根取不到：返回的是前一时段 10-28 22:30 到 10-29 04:00 的根。
-	var tail []string
-	for _, line := range strings.Split(string(usTestdata(t, "kline_5m_AAPL_20261028_20261031.json")), "\n") {
-		line = strings.TrimSuffix(strings.TrimSpace(line), ",")
-		if strings.HasPrefix(line, `"2026-10-28`) || (strings.HasPrefix(line, `"2026-10-29`) && line[12:17] <= "04:00") {
-			tail = append(tail, line)
-		}
-	}
-	require.Len(t, tail, 67)
-	summer := &capturedStorage{}
-	pipeline = stockUSPipeline(t, summer, usTime("2026-10-29 21:35:05"), nil, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"klines":[` + strings.Join(tail, ",") + `]}}`))
-	})
-	payload, err = pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", "2026-10-29 21:30:00"))
-	require.NoError(t, err)
-	require.Equal(t, "failed", payload.GetStatus())
-	require.Contains(t, payload.GetErrorSummary(), "no closed bar", "不是回看覆盖错误")
-	require.NotContains(t, payload.GetErrorSummary(), "coverage")
-	require.Empty(t, summer.committed)
-}
-
-// usUpstream 是东方财富美股日期区间规则的模型（实测得到，见 sources/stockus/eastmoney/daterange.go）：返回收盘标签（北京时间）
-// 不早于 beg 日 22:30、在 end 日某个时刻之前的根。cutoff 是那个时刻（05:00 含，或 21:30 不含两个极端）；
-// 根的内容是合成的（开高低收量额按序号造，合法），标签取自同日 AAPL 全量返回的 1412 根。
-func usUpstream(t *testing.T, cutoff time.Duration, inclusive bool) http.HandlerFunc {
-	return usUpstreamDropping(t, cutoff, inclusive, nil)
-}
-
-// usUpstreamDropping 同 usUpstream，drop 返回真的标签上游没有这一根（标的停牌、退市）。
-func usUpstreamDropping(t *testing.T, cutoff time.Duration, inclusive bool, drop func(label time.Time) bool) http.HandlerFunc {
-	t.Helper()
-	var recorded struct {
-		Universe []string `json:"universe"`
-	}
-	require.NoError(t, json.Unmarshal(usTestdata(t, "date_range_requests.json"), &recorded))
-	return usModelUpstream(t, recorded.Universe, cutoff, inclusive, drop, nil)
-}
-
-// usModelUpstream 是日期区间规则模型的本体：universe 是上游有的全部收盘标签（北京时间，"2006-01-02 15:04"），
-// line 为空时按序号合成一根合法的 K 线，否则由它按（序号，标签）给出这一根的内容（不带外层引号）。
-func usModelUpstream(t *testing.T, universe []string, cutoff time.Duration, inclusive bool, drop func(label time.Time) bool, line func(index int, label string) string) http.HandlerFunc {
-	t.Helper()
-	beijing := time.FixedZone("CST", 8*3600)
-	return func(w http.ResponseWriter, r *http.Request) {
-		beg, err := time.ParseInLocation("20060102", r.URL.Query().Get("beg"), beijing)
-		require.NoError(t, err)
-		end, err := time.ParseInLocation("20060102", r.URL.Query().Get("end"), beijing)
-		require.NoError(t, err)
-		from, to := beg.Add(22*time.Hour+30*time.Minute), end.Add(cutoff)
-		lines := []string{}
-		for index, label := range universe {
-			at, err := time.ParseInLocation("2006-01-02 15:04", label, beijing)
+	for _, tc := range []struct {
+		name, target string
+		minutes      []usMinute
+	}{
+		// 前一个交易日整天都有，目标日一根都没有。
+		{"冬令时首根", "2026-11-24 09:30", usRecordedMinutes(t, "aapl_1m_20261123.json")},
+		{"夏令时首根", "2026-10-21 09:30", usRecordedMinutes(t, "aapl_1m_20261020.json")},
+		// 盘中缺了目标那 5 分钟：前后的 1M 都在。
+		{"盘中缺目标那 5 分钟", "2026-11-23 10:00", func() []usMinute {
+			var kept []usMinute
+			for _, minute := range usRecordedMinutes(t, "aapl_1m_20261123.json") {
+				if minute.TradeTime < "20261123100000" || minute.TradeTime > "20261123100400" {
+					kept = append(kept, minute)
+				}
+			}
+			return kept
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := nyTime(tc.target)
+			storage := &capturedStorage{}
+			pipeline := stockUSPipeline(t, storage, target.Add(5*time.Minute+5*time.Second), nil, newUSCNBCServer(t, usSameMinutes(tc.minutes)))
+			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
 			require.NoError(t, err)
-			if at.Before(from) || at.After(to) || (!inclusive && at.Equal(to)) || (drop != nil && drop(at)) {
-				continue
-			}
-			if line != nil {
-				lines = append(lines, `"`+line(index, label)+`"`)
-				continue
-			}
-			price := 100 + float64(index%50)
-			lines = append(lines, fmt.Sprintf(`"%s,%.3f,%.3f,%.3f,%.3f,%d,%d.000"`, label, price, price+0.5, price+1, price-1, 1000+index, (1000+index)*100))
-		}
-		_, _ = w.Write([]byte(`{"data":{"klines":[` + strings.Join(lines, ",") + `]}}`))
-	}
-}
-
-// 补采请求（给区间）：只写区间内的根，上游多带的前后的根不写，也不让请求失败。
-// 样例里有：实测的冬令时整天（返回还多带 11-12 晚上的 7 根）、实测的夏令时整天（beg 取前一天才带出开盘后 11 根，返回还多带前后各一天）；
-// 上游模型（合成内容）下的夏令时周一、跨周末、跨夏令时结束（2026-11-01）的分块，两种切点各跑一遍。
-func TestStockUSBackfillWritesOnlyTheRange(t *testing.T) {
-	type sample struct {
-		name, start, end string
-		count            int
-		first, last      string
-		beg, end2        string
-	}
-	run := func(t *testing.T, handler http.HandlerFunc, start, end string) ([]string, map[string]string) {
-		storage := &capturedStorage{}
-		var query map[string]string
-		pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 12:00:00"), nil, func(w http.ResponseWriter, r *http.Request) {
-			query = map[string]string{"secid": r.URL.Query().Get("secid"), "beg": r.URL.Query().Get("beg"), "end": r.URL.Query().Get("end")}
-			handler(w, r)
+			require.Equal(t, "failed", payload.GetStatus())
+			require.Contains(t, payload.GetErrorSummary(), "no closed bar")
+			require.NotContains(t, payload.GetErrorSummary(), "coverage")
+			require.Empty(t, storage.committed)
 		})
-		payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", start, end))
-		require.NoError(t, err)
-		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
-		times := make([]string, 0, len(storage.rows))
-		for _, row := range storage.rows {
-			times = append(times, row.GetKey().GetTimeSeries().GetDataTime())
-			require.Equal(t, "AAPL.XNAS", row.GetKey().GetTimeSeries().GetSubjectId())
-		}
-		return times, query
-	}
-	recorded := func(file string) http.HandlerFunc {
-		body := usTestdata(t, file)
-		return func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }
-	}
-
-	t.Run("冬令时整天（实测）", func(t *testing.T) {
-		times, query := run(t, recorded("kline_5m_AAPL_20261111_20261113.json"), "2026-11-11 22:30:00", "2026-11-12 05:00:00")
-		require.Equal(t, map[string]string{"secid": "105.AAPL", "beg": "20261111", "end": "20261113"}, query)
-		require.Len(t, times, 78, "只写 11-11 的 78 根，11-12 晚上多带的 7 根不写")
-		require.Equal(t, "2026-11-11T14:30:00Z", times[0])
-		require.Equal(t, "2026-11-11T20:55:00Z", times[77])
-	})
-	t.Run("夏令时整天（实测）：开盘后 11 根与前后多带的根", func(t *testing.T) {
-		times, query := run(t, recorded("kline_5m_AAPL_20261028_20261031.json"), "2026-10-29 21:30:00", "2026-10-30 04:00:00")
-		require.Equal(t, map[string]string{"secid": "105.AAPL", "beg": "20261028", "end": "20261031"}, query)
-		require.Len(t, times, 78, "223 根里只写 10-29 的 78 根")
-		require.Equal(t, "2026-10-29T13:30:00Z", times[0], "21:35 标签的首根")
-		require.Equal(t, "2026-10-29T19:55:00Z", times[77])
-	})
-	for _, cutoff := range []struct {
-		name      string
-		offset    time.Duration
-		inclusive bool
-	}{{"切点 05:00 含", 5 * time.Hour, true}, {"切点 21:30 不含", 21*time.Hour + 30*time.Minute, false}} {
-		for _, tc := range []sample{
-			{name: "夏令时周一整天", start: "2026-10-26 21:30:00", end: "2026-10-27 04:00:00", count: 78, first: "2026-10-26T13:30:00Z", last: "2026-10-26T19:55:00Z", beg: "20261025", end2: "20261028"},
-			{name: "跨周末：周五、周一两个冬令时交易日", start: "2026-11-06 22:30:00", end: "2026-11-10 05:00:00", count: 156, first: "2026-11-06T14:30:00Z", last: "2026-11-09T20:55:00Z", beg: "20261106", end2: "20261111"},
-			{name: "跨周末：周一首根", start: "2026-11-09 22:30:00", end: "2026-11-09 22:35:00", count: 1, first: "2026-11-09T14:30:00Z", last: "2026-11-09T14:30:00Z", beg: "20261109", end2: "20261110"},
-			{name: "跨夏令时结束：10-30（夏令时）与 11-02（冬令时）", start: "2026-10-30 21:30:00", end: "2026-11-03 05:00:00", count: 156, first: "2026-10-30T13:30:00Z", last: "2026-11-02T20:55:00Z", beg: "20261029", end2: "20261104"},
-			{name: "夏令时结束后的周一首根", start: "2026-11-02 22:30:00", end: "2026-11-02 22:35:00", count: 1, first: "2026-11-02T14:30:00Z", last: "2026-11-02T14:30:00Z", beg: "20261102", end2: "20261103"},
-		} {
-			t.Run(cutoff.name+"/"+tc.name, func(t *testing.T) {
-				times, query := run(t, usUpstream(t, cutoff.offset, cutoff.inclusive), tc.start, tc.end)
-				require.Equal(t, map[string]string{"secid": "105.AAPL", "beg": tc.beg, "end": tc.end2}, query)
-				require.Len(t, times, tc.count)
-				require.Equal(t, tc.first, times[0])
-				require.Equal(t, tc.last, times[len(times)-1])
-			})
-		}
 	}
 }
 
-// 半日市（2026-11-27 感恩节次日，13:00 收市，冬令时）：42 根，标签 11-27 22:35～11-28 02:00。没有真实样例（计划 U0 第 3 项要等当天实测），
-// 用构造的 42 根；补采按区间写入 42 根，不多不少。
-func TestStockUSHalfDayWritesFortyTwoBars(t *testing.T) {
-	lines := make([]string, 0, 42)
-	for label := usTime("2026-11-27 22:35:00"); !label.After(usTime("2026-11-28 02:00:00")); label = label.Add(5 * time.Minute) {
-		lines = append(lines, fmt.Sprintf(`"%s,300.000,300.200,300.400,299.800,%d,30000000.000"`, label.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04"), 100000+len(lines)))
+// 补采请求（给区间）：只写区间内的根；返回里的盘前、盘后与 16:00 那根 1M 不进任何一根，也不让请求失败。
+// 实测的冬令时、夏令时整天与盘中一段；合成的跨周末、跨夏令时结束（2026-11-01）、周一首根单根、超过 5 天分几次请求。
+func TestStockUSBackfillWritesOnlyTheRange(t *testing.T) {
+	recorded := func(file string) []usMinute { return usRecordedMinutes(t, file) }
+	weeks := usSessionMinutes(
+		usDay{"2026-10-29", "16:00"}, usDay{"2026-10-30", "16:00"}, // 夏令时最后一周的周四、周五
+		usDay{"2026-11-02", "16:00"}, usDay{"2026-11-03", "16:00"}, usDay{"2026-11-04", "16:00"}, usDay{"2026-11-05", "16:00"}, usDay{"2026-11-06", "16:00"},
+		usDay{"2026-11-09", "16:00"}, usDay{"2026-11-10", "16:00"},
+	)
+	for _, tc := range []struct {
+		name       string
+		minutes    []usMinute
+		start, end string
+		now        time.Time
+		count      int
+		first      string
+		last       string
+		paths      []string
+	}{
+		{
+			name: "冬令时整天（实测）", minutes: recorded("aapl_1m_20261123.json"), start: "2026-11-23 09:30", end: "2026-11-23 16:00", now: nyTime("2026-11-23 20:00"),
+			count: 78, first: "2026-11-23T14:30:00Z", last: "2026-11-23T20:55:00Z",
+			paths: []string{usBarsPath("AAPL", "202611230930", "202611231559")},
+		},
+		{
+			name: "夏令时整天（实测），区间是纽约零点到次日零点", minutes: recorded("aapl_1m_20261020.json"), start: "2026-10-20 00:00", end: "2026-10-21 00:00", now: nyTime("2026-10-21 08:00"),
+			count: 78, first: "2026-10-20T13:30:00Z", last: "2026-10-20T19:55:00Z",
+			paths: []string{usBarsPath("AAPL", "202610200000", "202610202359")},
+		},
+		{
+			name: "盘中一段（实测）", minutes: recorded("aapl_1m_20261123.json"), start: "2026-11-23 10:00", end: "2026-11-23 11:00", now: nyTime("2026-11-23 20:00"),
+			count: 12, first: "2026-11-23T15:00:00Z", last: "2026-11-23T15:55:00Z",
+			paths: []string{usBarsPath("AAPL", "202611231000", "202611231059")},
+		},
+		{
+			name: "跨周末：周五、周一两个冬令时交易日", minutes: weeks, start: "2026-11-06 09:30", end: "2026-11-09 16:00", now: nyTime("2026-11-10 20:00"),
+			count: 156, first: "2026-11-06T14:30:00Z", last: "2026-11-09T20:55:00Z",
+			paths: []string{usBarsPath("AAPL", "202611060930", "202611091559")},
+		},
+		{
+			name: "跨周末：周一首根", minutes: weeks, start: "2026-11-09 09:30", end: "2026-11-09 09:35", now: nyTime("2026-11-10 20:00"),
+			count: 1, first: "2026-11-09T14:30:00Z", last: "2026-11-09T14:30:00Z",
+			paths: []string{usBarsPath("AAPL", "202611090930", "202611090934")},
+		},
+		{
+			name: "跨夏令时结束：10-30（夏令时）与 11-02（冬令时），路径按纽约时间写", minutes: weeks, start: "2026-10-30 09:30", end: "2026-11-02 16:00", now: nyTime("2026-11-10 20:00"),
+			count: 156, first: "2026-10-30T13:30:00Z", last: "2026-11-02T20:55:00Z",
+			paths: []string{usBarsPath("AAPL", "202610300930", "202611021559")},
+		},
+		{
+			name: "超过 5 天分几次请求，段与段之间不重复", minutes: weeks, start: "2026-10-29 00:00", end: "2026-11-11 00:00", now: nyTime("2026-11-11 08:00"),
+			count: 9 * 78, first: "2026-10-29T13:30:00Z", last: "2026-11-10T20:55:00Z",
+			// 每段 5 天，按绝对时长切：10-29 零点（夏令时）加 5 天落在冬令时的 11-02 23:00，所以前两段的终点是 22:59；
+			// 最后一段到区间终点（11-11 零点）前一分钟。
+			paths: []string{
+				usBarsPath("AAPL", "202610290000", "202611022259"),
+				usBarsPath("AAPL", "202611022300", "202611072259"),
+				usBarsPath("AAPL", "202611072300", "202611102359"),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newUSCNBCServer(t, usSameMinutes(tc.minutes))
+			storage := &capturedStorage{}
+			pipeline := stockUSPipeline(t, storage, tc.now, nil, server)
+			payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", nyTime(tc.start), nyTime(tc.end)))
+			require.NoError(t, err)
+			require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+			require.Equal(t, tc.paths, server.requested())
+			require.Len(t, storage.rows, tc.count)
+			seen := map[string]bool{}
+			for _, row := range storage.rows {
+				dataTime := row.GetKey().GetTimeSeries().GetDataTime()
+				require.False(t, seen[dataTime], "同一根只写一次：%s", dataTime)
+				seen[dataTime] = true
+				require.Equal(t, "AAPL.XNAS", row.GetKey().GetTimeSeries().GetSubjectId())
+				at, err := time.Parse(time.RFC3339, dataTime)
+				require.NoError(t, err)
+				require.False(t, at.Before(nyTime(tc.start)) || !at.Before(nyTime(tc.end)), "%s 在区间外", dataTime)
+				clock := at.In(usNewYork).Format("15:04")
+				require.True(t, clock >= "09:30" && clock <= "15:55", "%s 不在交易时段", dataTime)
+			}
+			require.Equal(t, tc.first, storage.rows[0].GetKey().GetTimeSeries().GetDataTime())
+			require.Equal(t, tc.last, storage.rows[len(storage.rows)-1].GetKey().GetTimeSeries().GetDataTime())
+			requireCNBCRow(t, rowFields(storage.rows[0]), "AAPL")
+		})
 	}
-	require.Len(t, lines, 42)
+}
+
+// 半日市（2026-11-27 感恩节次日，13:00 收市，冬令时）：42 根，09:30～12:55；13:00 那根 1M（收盘竞价）与之后的盘后 1M 丢掉。
+// 没有真实样例，用合成的 1M；补采按纽约当天零点到次日零点的区间写入 42 根，不多不少。
+func TestStockUSHalfDayWritesFortyTwoBars(t *testing.T) {
+	server := newUSCNBCServer(t, usSameMinutes(usSessionMinutes(usDay{"2026-11-27", "13:00"})))
 	storage := &capturedStorage{}
-	pipeline := stockUSPipeline(t, storage, usTime("2026-11-28 02:10:00"), nil, func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "20261127", r.URL.Query().Get("beg"))
-		require.Equal(t, "20261129", r.URL.Query().Get("end"))
-		_, _ = w.Write([]byte(`{"data":{"klines":[` + strings.Join(lines, ",") + `]}}`))
-	})
-	payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", "2026-11-27 22:30:00", "2026-11-28 02:00:00"))
+	pipeline := stockUSPipeline(t, storage, nyTime("2026-11-27 13:10"), nil, server)
+	payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", nyTime("2026-11-27 00:00"), nyTime("2026-11-28 00:00")))
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Equal(t, []string{usBarsPath("AAPL", "202611270000", "202611271309")}, server.requested(), "终点不超过当前时刻")
 	require.Len(t, storage.rows, 42)
 	require.Equal(t, "2026-11-27T14:30:00Z", storage.rows[0].GetKey().GetTimeSeries().GetDataTime())
-	require.Equal(t, "2026-11-27T17:55:00Z", storage.rows[41].GetKey().GetTimeSeries().GetDataTime(), "02:00 标签的那根是当天最后一根")
+	require.Equal(t, "2026-11-27T17:55:00Z", storage.rows[41].GetKey().GetTimeSeries().GetDataTime(), "12:55 那根是当天最后一根")
 }
 
-// 带点的代码与三个交易所：请求里的 secid 由请求的交易所与代码换出（XNYS 的 BRK.B → 106.BRK_B，XASE 的 SPY → 107.SPY），
-// 写出的行上标的 ID 与传给数据源的代码都保留点。
+// 带点的代码与三个交易所：请求路径里的代码就是标的规则换出的代码，带类别的保留点（BRK.B，CNBC 不认 BRK_B），
+// 请求不带交易所；写出的行上标的 ID 与传给数据源的代码都保留点。
 func TestStockUSRequestsUseExchangeAndDottedCode(t *testing.T) {
-	body := usTestdata(t, "kline_5m_AAPL_boundary_2250.json")
-	for _, tc := range []struct{ subject, symbol, secid string }{
-		{"AAPL.XNAS", "AAPL", "105.AAPL"},
-		{"JPM.XNYS", "JPM", "106.JPM"},
-		{"BRK.B.XNYS", "BRK.B", "106.BRK_B"},
-		{"BF.B.XNYS", "BF.B", "106.BF_B"},
-		{"SPY.XASE", "SPY", "107.SPY"},
+	minutes := usSessionMinutes(usDay{"2026-11-12", "16:00"})
+	target := nyTime("2026-11-12 09:45")
+	for _, tc := range []struct{ subject, symbol string }{
+		{"AAPL.XNAS", "AAPL"},
+		{"JPM.XNYS", "JPM"},
+		{"BRK.B.XNYS", "BRK.B"},
+		{"BF.B.XNYS", "BF.B"},
+		{"SPY.XASE", "SPY"},
 	} {
-		storage := &capturedStorage{}
-		var secid string
-		pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 22:50:05"), nil, func(w http.ResponseWriter, r *http.Request) {
-			secid = r.URL.Query().Get("secid")
-			_, _ = w.Write(body)
+		t.Run(tc.subject, func(t *testing.T) {
+			symbol, err := ResolveSymbol("cnbc", "stockus", "equity", tc.subject)
+			require.NoError(t, err)
+			require.Equal(t, tc.symbol, symbol, "标的规则换出的代码")
+			server := newUSCNBCServer(t, usSameMinutes(minutes))
+			storage := &capturedStorage{}
+			pipeline := stockUSPipeline(t, storage, target.Add(5*time.Minute+5*time.Second), nil, server)
+			payload, err := pipeline.Execute(context.Background(), usRealtimeRequest(tc.subject, tc.symbol, target))
+			require.NoError(t, err)
+			require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+			require.Equal(t, []string{usBarsPath(tc.symbol, "202611120945", "202611120949")}, server.requested())
+			require.Len(t, storage.committed, 1)
+			key := storage.committed[0].GetRow().GetKey().GetTimeSeries()
+			require.Equal(t, tc.subject, key.GetSubjectId())
+			require.Equal(t, "2026-11-12T14:45:00Z", key.GetDataTime())
+			requireCNBCRow(t, rowFields(storage.committed[0].GetRow()), tc.symbol)
 		})
-		payload, err := pipeline.Execute(context.Background(), usRealtimeRequest(tc.subject, tc.symbol, "2026-11-12 22:45:00"))
-		require.NoError(t, err)
-		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
-		require.Equal(t, tc.secid, secid, tc.subject)
-		require.Len(t, storage.committed, 1)
-		key := storage.committed[0].GetRow().GetKey().GetTimeSeries()
-		require.Equal(t, tc.subject, key.GetSubjectId())
-		require.Equal(t, tc.symbol, rowFields(storage.committed[0].GetRow())["provider_symbol"].GetStringValue())
-		require.Equal(t, "2026-11-12T14:45:00Z", key.GetDataTime())
 	}
 }
 
@@ -436,72 +517,30 @@ func TestStockUSSingleSourceBreakerThreshold(t *testing.T) {
 	require.Equal(t, 48, threshold(nil), "云函数里并发来自计划下发的环境变量")
 }
 
-// 夏令时前 11 根里最后一根（标签 22:25）和后面的 22:30、冬令时首根 22:35，各自单独作为定时请求的目标：上游模型下 beg 少算一天就取不到
-// （beg 的偏移从 22:30 改成 22:25 时，22:25 这一根的 beg 会落在当天、返回里没有它）。实测样例的返回是整段，盖不住这一点，所以用上游模型。
-func TestStockUSScheduledRequestForTheFirstBarsOfADaylightSavingDay(t *testing.T) {
-	for _, cutoff := range []struct {
-		name      string
-		offset    time.Duration
-		inclusive bool
-	}{{"切点 05:00 含", 5 * time.Hour, true}, {"切点 21:30 不含", 21*time.Hour + 30*time.Minute, false}} {
-		for _, label := range []string{
-			"2026-10-29 21:35", "2026-10-29 21:40", "2026-10-29 22:20", "2026-10-29 22:25", "2026-10-29 22:30", "2026-10-29 22:35", // 夏令时：前 11 根是 21:35～22:25
-			"2026-10-26 22:25",                     // 夏令时周一，beg 是周日
-			"2026-11-11 22:35", "2026-11-11 22:40", // 冬令时首根
-		} {
-			t.Run(cutoff.name+"/"+label, func(t *testing.T) {
-				closeAt := usTime(label + ":00")
-				storage := &capturedStorage{}
-				pipeline := stockUSPipeline(t, storage, closeAt.Add(5*time.Second), nil, usUpstream(t, cutoff.offset, cutoff.inclusive))
-				target := closeAt.Add(-5 * time.Minute).In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05")
-				payload, err := pipeline.Execute(context.Background(), usRealtimeRequest("AAPL.XNAS", "AAPL", target))
-				require.NoError(t, err)
-				require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
-				require.Len(t, storage.committed, 1)
-				require.Equal(t, closeAt.Add(-5*time.Minute).Format(time.RFC3339), storage.committed[0].GetRow().GetKey().GetTimeSeries().GetDataTime())
-			})
-		}
-	}
-}
-
 // 标的当天一根都没有（全天停牌，或已退市而标签还没同步掉）：补采分块报“没有已收盘的 K 线”（ErrNoClosedBar），
 // 补采把它当成行情源确认没有；不能报回看覆盖错误（那会让整个数据集的自动补采卡在同一个水位）。
-// 用上游模型去掉某个交易日的全部根：返回里只剩 beg、end 规则多带回的前后一天的根（或空）。
-// 夏令时 10-29（标签 10-29 21:35～10-30 04:00）和冬令时 11-11（标签 11-11 22:35～11-12 05:00）各取首根单根、整天、其他分块。
+// 上游有停牌日前后两天的 1M、停牌日一根都没有：夏令时 10-29、冬令时 11-11 各取首根单根、整天、午后一段的分块。
 // 盘中部分停牌（区间内有根、缺开头几根）报覆盖错误是港股、A 股原有的行为，不在这里改。
 func TestStockUSSuspendedDayBackfillReportsNoClosedBar(t *testing.T) {
-	cst := time.FixedZone("CST", 8*3600)
-	dropDay := func(from, to string) func(time.Time) bool {
-		start, end := usTime(from+":00"), usTime(to+":00")
-		return func(label time.Time) bool { return !label.Before(start) && !label.After(end) }
-	}
 	for _, tc := range []struct {
 		name, start, end string
-		drop             func(time.Time) bool
+		days             []usDay
 	}{
-		{"夏令时首根单根分块", "2026-10-29 21:30:00", "2026-10-29 21:35:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
-		{"夏令时 22:30 那一根", "2026-10-29 22:25:00", "2026-10-29 22:30:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
-		{"夏令时整天分块", "2026-10-29 21:30:00", "2026-10-30 04:00:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
-		{"夏令时凌晨段分块", "2026-10-30 00:00:00", "2026-10-30 04:00:00", dropDay("2026-10-29 21:35", "2026-10-30 04:00")},
-		{"冬令时首根单根分块", "2026-11-11 22:30:00", "2026-11-11 22:35:00", dropDay("2026-11-11 22:35", "2026-11-12 05:00")},
-		{"冬令时整天分块", "2026-11-11 22:30:00", "2026-11-12 05:00:00", dropDay("2026-11-11 22:35", "2026-11-12 05:00")},
-		{"冬令时凌晨段分块（下一时段 11-12 晚上已有数据）", "2026-11-12 00:00:00", "2026-11-12 05:00:00", dropDay("2026-11-11 22:35", "2026-11-12 05:00")},
+		{"夏令时首根单根分块", "2026-10-29 09:30", "2026-10-29 09:35", []usDay{{"2026-10-28", "16:00"}, {"2026-10-30", "16:00"}}},
+		{"夏令时整天分块", "2026-10-29 00:00", "2026-10-30 00:00", []usDay{{"2026-10-28", "16:00"}, {"2026-10-30", "16:00"}}},
+		{"夏令时午后一段", "2026-10-29 13:00", "2026-10-29 16:00", []usDay{{"2026-10-28", "16:00"}, {"2026-10-30", "16:00"}}},
+		{"冬令时首根单根分块", "2026-11-11 09:30", "2026-11-11 09:35", []usDay{{"2026-11-10", "16:00"}, {"2026-11-12", "16:00"}}},
+		{"冬令时整天分块（下一个交易日已有数据）", "2026-11-11 00:00", "2026-11-12 00:00", []usDay{{"2026-11-10", "16:00"}, {"2026-11-12", "16:00"}}},
 	} {
-		for _, cutoff := range []struct {
-			name      string
-			offset    time.Duration
-			inclusive bool
-		}{{"切点 05:00 含", 5 * time.Hour, true}, {"切点 21:30 不含", 21*time.Hour + 30*time.Minute, false}} {
-			t.Run(tc.name+"/"+cutoff.name, func(t *testing.T) {
-				storage := &capturedStorage{}
-				pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 23:00:00").In(cst), nil, usUpstreamDropping(t, cutoff.offset, cutoff.inclusive, tc.drop))
-				payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", tc.start, tc.end))
-				require.NoError(t, err)
-				require.Equal(t, "failed", payload.GetStatus())
-				require.Contains(t, payload.GetErrorSummary(), "no closed bar")
-				require.NotContains(t, payload.GetErrorSummary(), "coverage")
-				require.Empty(t, storage.rows)
-			})
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			storage := &capturedStorage{}
+			pipeline := stockUSPipeline(t, storage, nyTime("2026-11-13 10:00"), nil, newUSCNBCServer(t, usSameMinutes(usSessionMinutes(tc.days...))))
+			payload, err := pipeline.Execute(context.Background(), usBackfillRequest("AAPL.XNAS", "AAPL", nyTime(tc.start), nyTime(tc.end)))
+			require.NoError(t, err)
+			require.Equal(t, "failed", payload.GetStatus())
+			require.Contains(t, payload.GetErrorSummary(), "no closed bar")
+			require.NotContains(t, payload.GetErrorSummary(), "coverage")
+			require.Empty(t, storage.rows)
+		})
 	}
 }

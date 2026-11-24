@@ -29,8 +29,8 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
 	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
 	hktencent "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/tencent"
+	uscnbc "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/cnbc"
 	usdatahub "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/datahub"
-	useastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/eastmoney"
 	usnasdaq "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/nasdaq"
 )
 
@@ -152,11 +152,11 @@ func build() *marketdata.Catalog {
 		// 美股：纳斯达克 100（纳斯达克官网）和标普 500（datahub 的 CSV）的成分来源，只取指数成分，不取 K 线、不取全部标的。
 		entry(stockus, marketdata.InstrumentEquity, "nasdaq", usnasdaq.DefaultSourceID, fixed(func() marketdata.MarketProvider { return usnasdaq.New(usnasdaq.Config{}) })),
 		entry(stockus, marketdata.InstrumentEquity, "datahub", usdatahub.DefaultSourceID, fixed(func() marketdata.MarketProvider { return usdatahub.New(usdatahub.Config{}) })),
-		// 美股股票：K 线来源按 config/markets/stockus/route.yaml 分配，只有东方财富一家，只取 K 线；
-		// 指数成分（标普 500、纳斯达克 100）的来源另行登记。
-		routedEntry(stockus, marketdata.InstrumentEquity, "eastmoney", useastmoney.DefaultSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		// 美股股票：K 线来源按 config/markets/stockus/route.yaml 分配，只有 CNBC 一家（取 1M 合成 5m），只取 K 线；
+		// 指数成分（标普 500、纳斯达克 100）的来源另行登记，标普 500 的交易所对照翻东方财富美股列表（exchangelist），不在目录里。
+		routedEntry(stockus, marketdata.InstrumentEquity, "cnbc", uscnbc.DefaultSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
-			return useastmoney.New(useastmoney.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
+			return uscnbc.New(uscnbc.Config{BaseURL: s.BaseURL, SourceID: deps.SourceID, RateLimit: s.RateLimit}), nil
 		}),
 	)
 }

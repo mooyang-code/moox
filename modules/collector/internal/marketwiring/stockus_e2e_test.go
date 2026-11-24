@@ -3,10 +3,8 @@ package marketwiring
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,7 +15,7 @@ import (
 )
 
 // usPlanOptions 与 Collector 装配采集计划时相同：每函数标的数、收盘后等待时间读编进二进制的 config/markets/stockus/market.yaml
-// 的 scf_plan（部署配置只写代码包与命名空间时的默认值），函数内并发由美股的路由与东方财富的限速配置推导。
+// 的 scf_plan（部署配置只写代码包与命名空间时的默认值），函数内并发由美股的路由与 CNBC 的限速配置推导。
 func usPlanOptions() fetchplan.PlanOptions {
 	config, err := markets.ConfigFor("stockus")
 	if err != nil {
@@ -40,8 +38,18 @@ func usPlanOptions() fetchplan.PlanOptions {
 		DeriveFetch:        fetchplan.RouteFetchLimits("stockus")}
 }
 
-// usGroup 按 Collector 由任务和标签成员拼分组的做法造一个美股分组：source_id 取行情源目录的登记，
-// 传给数据源的代码由美股的标的规则换出（BRK.B.XNYS → BRK.B）。
+// usTime 把北京时间换成 UTC：定时器触发时刻、计划生效起点按北京时间写。
+func usTime(value string) time.Time {
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", value, time.FixedZone("CST", 8*3600))
+	if err != nil {
+		panic(err)
+	}
+	return parsed.UTC()
+}
+
+// usGroup 按 Collector 由任务和标签成员拼分组的做法造一个美股分组：provider 是标签的 sync.source（东方财富，标的同步用它对照交易所），
+// source_id 先查行情源目录的登记——目录里东方财富已经不是美股的 K 线来源，查不到，按分组的做法退回 provider；
+// 传给数据源的代码由美股的标的规则换出（BRK.B.XNYS → BRK.B）。K 线来源由路由分配，与分组的 provider、source_id 无关。
 func usGroup(subjects ...string) fetchplan.TaskGroup {
 	symbols := make(map[string]string, len(subjects))
 	for _, subject := range subjects {
@@ -51,20 +59,24 @@ func usGroup(subjects ...string) fetchplan.TaskGroup {
 		}
 		symbols[subject] = symbol
 	}
-	return fetchplan.TaskGroup{Provider: "eastmoney", SourceID: DefaultSourceID("stockus", "eastmoney", "equity"), MarketType: "equity", MarketID: "stockus", InstrumentType: "equity",
+	sourceID := DefaultSourceID("stockus", "eastmoney", "equity")
+	if sourceID == "" {
+		sourceID = "eastmoney"
+	}
+	return fetchplan.TaskGroup{Provider: "eastmoney", SourceID: sourceID, MarketType: "equity", MarketID: "stockus", InstrumentType: "equity",
 		DatasetID: usDataset, Frequency: "5m", Subjects: subjects, ExternalSymbols: symbols}
 }
 
 // 从采集计划到云函数入参再到写入：标普 500 的 503 只标的（含带点的 BRK.B、ETF 的 XASE）、每函数 50 只，得到 11 个函数（10 个 50 只、1 个 3 只），都在南京，收盘后等 5 秒。
-// 美股的来源按路由分配，所以函数的请求里不带 provider、source_id；请求交给流水线后由路由选中东方财富，写出的行上是 eastmoney、stockus_http；
-// 发给东方财富的 secid 由标的的交易所与代码换出。
+// 美股的来源按路由分配，所以函数的请求里不带 provider、source_id；请求交给流水线后由路由选中 CNBC，写出的行上是 cnbc、stockus_cnbc_http；
+// 发给 CNBC 的请求路径里是标的规则换出的代码（带类别的保留点）。
 func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	subjects := []string{"BRK.B.XNYS", "SPY.XASE"}
 	for i := 0; len(subjects) < 503; i++ {
 		subjects = append(subjects, fmt.Sprintf("A%c%c.XNAS", 'A'+i/26, 'A'+i%26))
 	}
 	group := usGroup(subjects...)
-	require.Equal(t, "stockus_http", group.SourceID, "source_id 取自行情源目录的登记")
+	require.Equal(t, "eastmoney", group.SourceID, "目录里没有美股东方财富 K 线的登记，source_id 退回 provider")
 	require.Equal(t, "BRK.B", group.ExternalSymbols["BRK.B.XNYS"])
 	desired, err := fetchplan.BuildDesiredState(usPlanOptions(), []fetchplan.TaskGroup{group}, nil)
 	require.NoError(t, err)
@@ -73,15 +85,13 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	require.Len(t, content.Functions, 11)
 
 	scheduled := usTime("2026-11-12 22:50:00")
-	body := usTestdata(t, "kline_5m_AAPL_boundary_2250.json")
+	server := newUSCNBCServer(t, usSameMinutes(usSessionMinutes(usDay{"2026-11-12", "16:00"})))
 	storage := newHKRowStore()
-	var secidsMu sync.Mutex
-	secids := map[string]bool{}
 	var sizes []int
 	for _, name := range content.SortedFunctionNames() {
 		plan := content.FinalPlan(content.Functions[name])
 		require.NotNil(t, plan, name)
-		require.Equal(t, marketfetch.PlanMarket{MarketID: "stockus", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockus_http", MarketType: "equity"}, plan.Market, name)
+		require.Equal(t, marketfetch.PlanMarket{MarketID: "stockus", InstrumentType: "equity", Provider: "eastmoney", SourceID: "eastmoney", MarketType: "equity"}, plan.Market, name)
 		require.Equal(t, 5000, plan.Fetch.NotBeforeMS, name)
 		require.Equal(t, 16, plan.Fetch.Concurrency, name)
 		require.Equal(t, 5*time.Second, plan.StartDelay(scheduled, scheduled), "定时器准点触发时等 5 秒再取数")
@@ -104,12 +114,7 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 		}
 
 		request.FetchLimits = plan.Fetch.Limits()
-		pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 22:50:05"), request.FetchLimits, func(w http.ResponseWriter, r *http.Request) {
-			secidsMu.Lock()
-			secids[r.URL.Query().Get("secid")] = true
-			secidsMu.Unlock()
-			_, _ = w.Write(body)
-		})
+		pipeline := stockUSPipeline(t, storage, usTime("2026-11-12 22:50:05"), request.FetchLimits, server)
 		payload, err := pipeline.Execute(context.Background(), request)
 		require.NoError(t, err)
 		require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
@@ -121,13 +126,16 @@ func TestStockUSPlanToFunctionRequests(t *testing.T) {
 	for _, subject := range subjects {
 		fields := storage.rows[hkRowKey(subject, "2026-11-12T14:45:00Z")]
 		require.NotNil(t, fields, subject)
-		require.Equal(t, "eastmoney", fields["provider_id"].GetStringValue(), subject)
-		require.Equal(t, "stockus_http", fields["source_id"].GetStringValue(), subject)
+		require.Equal(t, "cnbc", fields["provider_id"].GetStringValue(), subject)
+		require.Equal(t, "stockus_cnbc_http", fields["source_id"].GetStringValue(), subject)
+		require.Equal(t, "estimated", fields["amount_quality"].GetStringValue(), subject)
 		require.Equal(t, "stockus_equity_kline_5m", fields["route_id"].GetStringValue(), subject)
 	}
-	require.True(t, secids["106.BRK_B"], "带点的代码换成下划线")
-	require.True(t, secids["107.SPY"])
-	require.True(t, secids["105.AAA"])
+	require.Len(t, server.requested(), 503, "每只标的一次请求")
+	for _, code := range []string{"BRK.B", "SPY", "AAA"} {
+		require.Equal(t, 1, server.requestsFor(code), "带类别的代码保留点："+code)
+	}
+	require.Contains(t, server.requested(), usBarsPath("BRK.B", "202611120945", "202611120949"), "22:50（北京）是纽约 09:50，取 09:45 那根")
 }
 
 func usPlan(t *testing.T) (*marketfetch.Plan, string) {

@@ -77,9 +77,9 @@ github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/tencent
+github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/cnbc
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/exchangelist
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/datahub
-github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/eastmoney
 github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/nasdaq
 github.com/mooyang-code/moox/modules/collector/internal/sources/catalog
 github.com/mooyang-code/moox/modules/collector/internal/tagattr

@@ -24,12 +24,14 @@ func usPlanOptions(plan SCFPlanConfig) fetchplan.PlanOptions {
 	return options
 }
 
+// usGroups 与 Collector 拼出的美股分组相同：provider 是标签的 sync.source（东方财富）；行情源目录里美股的 K 线只有 CNBC，
+// 查不到东方财富的 source_id，分组退回用 provider。K 线来源由路由分配，与这两个值无关。
 func usGroups(subjects int) []fetchplan.TaskGroup {
 	ids := make([]string, 0, subjects)
 	for i := 1; i <= subjects; i++ {
 		ids = append(ids, fmt.Sprintf("S%03d.XNYS", i))
 	}
-	return []fetchplan.TaskGroup{{Provider: "eastmoney", SourceID: "stockus_http", MarketType: "equity", MarketID: "stockus", InstrumentType: "equity",
+	return []fetchplan.TaskGroup{{Provider: "eastmoney", SourceID: "eastmoney", MarketType: "equity", MarketID: "stockus", InstrumentType: "equity",
 		DatasetID: "ds_us_5m", Frequency: "5m", Subjects: ids}}
 }
 
