@@ -1,17 +1,17 @@
 <template>
-  <template v-for="item in props.routeTree" :key="item.name">
-    <a-sub-menu v-if="menuShow(item)" :key="item.name">
-      <template #icon v-if="item.meta.svgIcon || item.meta.icon">
-        <MenuItemIcon :svg-icon="item.meta.svgIcon" :icon="item.meta.icon" />
+  <template v-for="item in props.items" :key="item.name">
+    <a-sub-menu v-if="item.children.length" :key="item.name">
+      <template #icon v-if="item.svgIcon">
+        <MenuItemIcon :svg-icon="item.svgIcon" />
       </template>
-      <template #title>{{ item.meta.title }}</template>
-      <MenuItem :route-tree="item.children" />
+      <template #title>{{ item.title }}</template>
+      <MenuItem :items="item.children" />
     </a-sub-menu>
-    <a-menu-item v-else-if="aMenuShow(item)" :key="item?.name">
-      <template #icon v-if="item.meta.svgIcon || item.meta.icon">
-        <MenuItemIcon :svg-icon="item.meta.svgIcon" :icon="item.meta.icon" />
+    <a-menu-item v-else :key="item.name">
+      <template #icon v-if="item.svgIcon">
+        <MenuItemIcon :svg-icon="item.svgIcon" />
       </template>
-      <span>{{ item.meta.title }}</span>
+      <span>{{ item.title }}</span>
     </a-menu-item>
   </template>
 </template>
@@ -19,20 +19,9 @@
 <script setup lang="ts">
 import MenuItem from "@/layout/components/Menu/menu-item.vue";
 import MenuItemIcon from "@/layout/components/Menu/menu-item-icon.vue";
-import { useMenuMethod } from "@/hooks/useMenuMethod";
+import type { MenuNode } from "@/layout/components/Menu/menu-selected";
 
 defineOptions({ name: "MenuItem", inheritAttrs: false });
 
-interface Props {
-  routeTree: Menu.MenuOptions[];
-}
-// props的数据类型
-// type类型参考：https://cn.vuejs.org/guide/typescript/composition-api.html#typing-component-props
-const props = withDefaults(defineProps<Props>(), {
-  routeTree: () => []
-});
-
-const { menuShow, aMenuShow } = useMenuMethod();
+const props = defineProps<{ items: MenuNode[] }>();
 </script>
-
-<style lang="scss" scoped></style>

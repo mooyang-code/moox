@@ -1,48 +1,31 @@
 import pinia from "@/store/index";
 import { storeToRefs } from "pinia";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
-import { deepClone, arrayFlattened } from "@/utils/index";
-import { useRoutingMethod } from "@/hooks/useRoutingMethod";
-
-/**
- * 路由树转一维数组
- * @param {array} tree 路由树
- * @returns 一维路由数组
- */
-export function linearArray(tree: any) {
-  const nodes: any = deepClone(tree);
-  return arrayFlattened(nodes, "children");
-}
+import { deepClone } from "@/utils/index";
+import { flatRoutes } from "@/router/route";
 
 /**
  * 统一处理所有的路由跳转：当前路由高亮、tabs栏数据。
- * menu和tabs以及手动刷新浏览器等功能只需要跳转即可，高亮和标签栏的逻辑这边负责
+ * menu和tabs以及手动刷新浏览器等功能只需要跳转即可，高亮和标签栏的逻辑这边负责。
+ * 只处理路由表里不隐藏的页面：登录页、404、编辑页与详情页不进标签栏。
  * @param {any} current 需要跳转的路由和路由参数
  */
 export const currentlyRoute = (current: any) => {
+  const routes = flatRoutes();
+  const entry = routes.find(item => item.name === current.name);
+  if (!entry || entry.meta.hide) return;
+
   const route = deepCloneRoute(current);
   const store = useRoutesConfigStore(pinia);
-  const { tabsList, routeList } = storeToRefs(store);
+  const { tabsList } = storeToRefs(store);
   // tabs无数据则默认添加首页
-  if (tabsList.value.length == 0 && routeList.value.length != 0) {
-    store.setTabs(routeList.value[0]);
-  }
-
-  const staticRouteNames = ["home"];
-
-  // 跳转路由是有权限的，从有权限路由中匹配
-  const { hasRoute } = useRoutingMethod();
-  // 对于静态路由，跳过权限检查；其他路由进行正常权限检查
-  const isStaticRoute = staticRouteNames.includes(route.name);
-  if (!isStaticRoute && !hasRoute(route.name)) {
-    return;
+  if (tabsList.value.length == 0) {
+    const home = routes[0];
+    store.setTabs(deepCloneRoute({ ...home, query: {}, params: {} }));
   }
 
   // 存入当前路由-高亮
   store.setCurrentRoute(route);
-
-  // 外链（非内嵌）不进标签栏
-  if (route.meta.link && !route.meta.iframe) return;
 
   // 存入tabs栏数据
   store.setTabs(route);
@@ -62,52 +45,3 @@ export const deepCloneRoute = (route: any) => {
     params: route.params
   });
 };
-
-/**
- * 模块替换，深层递归，对所有的路由中符合条件的模块进行转换
- * @param {array} tree 过滤角色权限后的树
- */
-export const moduleReplacement = (tree: any) => {
-  if (tree?.length == 0) return [];
-  tree.map((item: any) => {
-    // 模块匹配以及转换
-    moduleMatch(item);
-    if (item?.children?.length > 0) {
-      item.children = moduleReplacement(item.children);
-    }
-  });
-  return tree;
-};
-
-/**
- * 模块匹配
- * 1、导入 views 目录及其子目录下的所有 .vue 文件。
- * 2、匹配views下的所有文件路径，将模块转换为按需引入的真实模块
- * 3、未匹配上，不做处理
- */
-// 匹配views里面所有的.vue文件
-const modules = import.meta.glob("@/views/**/*.vue");
-export const moduleMatch = (item: any) => {
-  // 匹配每个views文件夹下的文件路径
-  for (const key in modules) {
-    const dir = normalizeViewModulePath(key);
-    // 若匹配上，则替换真实模块
-    if (item.component === dir) {
-      // 按需引入modules
-      // 将模块的导入操作和实际使用操作解耦，使得我们可以在需要的时候才执行导入操作
-      item.component = () => modules[key]();
-    }
-  }
-};
-
-function normalizeViewModulePath(key: string) {
-  const normalized = key.replace(/\.vue$/, "");
-  const prefixes = ["@/views/", "/src/views/"];
-  const matchedPrefix = prefixes.find(prefix => normalized.startsWith(prefix));
-  if (matchedPrefix) return normalized.slice(matchedPrefix.length);
-
-  const marker = "/views/";
-  const markerIndex = normalized.indexOf(marker);
-  if (markerIndex >= 0) return normalized.slice(markerIndex + marker.length);
-  return normalized;
-}

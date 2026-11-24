@@ -223,7 +223,7 @@ function changePageSize(size: number) {
   pagination.current = 1;
 }
 
-/** 选中的分类写进 ?category=；路由声明了 reuseOnQuery，页面不重建，关键词等筛选保持。 */
+/** 选中的分类写进 ?category=；query 变化时页面不重建，关键词等筛选保持。 */
 function selectCategory(categoryId: string) {
   mobileTreeVisible.value = false;
   if (categoryId === selectedCategory.value) return;

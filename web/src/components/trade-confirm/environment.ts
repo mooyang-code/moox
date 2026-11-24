@@ -1,4 +1,5 @@
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { flatRoutes } from "@/router/route";
 
 /** 账户所处环境：模拟盘不连交易所，测试网和生产环境连交易所对应环境。 */
 export type Environment = "paper" | "testnet" | "prod";
@@ -9,14 +10,21 @@ export const environmentTabs: readonly { key: Environment; label: string; desc: 
   { key: "prod", label: "生产环境", desc: "连交易所生产环境，用真实资金交易。" }
 ];
 
+/** 路由表里这个环境的账户列表菜单（meta.env 写明环境、不隐藏的那条）。 */
+function environmentMenu(env: Environment): { name: string; path: string; title: string } {
+  const route = flatRoutes().find(item => item.meta.env === env && !item.meta.hide);
+  if (!route) throw new Error(`路由表里没有 ${env} 环境的账户菜单`);
+  return { name: route.name, path: route.path, title: String(route.meta.title) };
+}
+
 /**
- * 每个环境在「交易管理」下各有一个菜单：列表页是 path，这个环境的组合详情是 path/组合编号。
+ * 每个环境在「交易管理」下各有一个菜单，取自路由表：列表页是 path，这个环境的组合详情是 path/组合编号。
  * 详情路由的 name 是菜单 name 加 "-detail"，侧栏按 activeMenu 高亮所属菜单。
  */
 export const environmentMenus: Readonly<Record<Environment, { name: string; path: string; title: string }>> = {
-  paper: { name: "trading-paper", path: "/trading/paper", title: "模拟账户" },
-  testnet: { name: "trading-testnet", path: "/trading/testnet", title: "测试账户" },
-  prod: { name: "trading-live", path: "/trading/live", title: "实盘账户" }
+  paper: environmentMenu("paper"),
+  testnet: environmentMenu("testnet"),
+  prod: environmentMenu("prod")
 };
 
 /** 路由 meta.env 写明页面属于哪个环境；没写（按组合编号直接打开的通用详情地址）返回 undefined。 */
