@@ -23,10 +23,9 @@ const (
 	BackfillSourceManual = "manual"
 	BackfillSourceAuto   = "auto"
 
-	// BackfillKindGap 按缺口补采；BackfillKindForce 不检查缺口、整段重拉；BackfillKindHistory 确认历史扫描发现的缺口。
-	BackfillKindGap     = "gap"
-	BackfillKindForce   = "force"
-	BackfillKindHistory = "history"
+	// BackfillKindGap 按缺口补采；BackfillKindForce 不检查缺口、整段重拉。
+	BackfillKindGap   = "gap"
+	BackfillKindForce = "force"
 )
 
 // BackfillJob 是一次补采作业。DatasetID、Frequency、SubjectID 为空表示全部。
@@ -147,7 +146,7 @@ const (
 	backfillChunksTable = "t_collector_kline_backfill_chunks"
 )
 
-// BackfillRepository 保存补采作业、分块、自动补采水位、已确认的行情源缺失与历史扫描结果。
+// BackfillRepository 保存补采作业、分块、自动补采水位与已确认的行情源缺失。
 type BackfillRepository struct{ db *gorm.DB }
 
 func NewBackfillRepository(db *gorm.DB) *BackfillRepository { return &BackfillRepository{db: db} }
@@ -613,7 +612,7 @@ func (r *BackfillRepository) SetWatermark(ctx context.Context, spaceID, datasetI
 		spaceID, datasetID, frequency, scannedUntil.UTC(), time.Now().UTC()).Error
 }
 
-// Reset 清掉该空间全部补采作业、分块、自动补采水位与历史扫描记录，返回清掉的作业数。用于 Storage 数据被清空之后：
+// Reset 清掉该空间全部补采作业、分块与自动补采水位，返回清掉的作业数。用于 Storage 数据被清空之后：
 // 旧作业指向已经不存在的数据，水位不清会让自动补采沿用旧位置。运行中的分块写回状态时找不到行，直接放弃。
 // 已确认的行情源缺失是行情源本身的事实，与 Storage 无关，保留。
 func (r *BackfillRepository) Reset(ctx context.Context, spaceID string) (int64, error) {
@@ -635,9 +634,6 @@ func (r *BackfillRepository) Reset(ctx context.Context, spaceID string) (int64, 
 			return result.Error
 		}
 		jobs = result.RowsAffected
-		if err := tx.Where("c_space_id = ?", spaceID).Delete(&historyScanRow{}).Error; err != nil {
-			return err
-		}
 		return tx.Where("c_space_id = ?", spaceID).Delete(&backfillWatermarkRow{}).Error
 	})
 	return jobs, err

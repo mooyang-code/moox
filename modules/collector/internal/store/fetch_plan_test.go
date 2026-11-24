@@ -230,7 +230,7 @@ func TestBackfillFailedChunkCountsAndCleanup(t *testing.T) {
 	require.NotNil(t, job)
 }
 
-func TestSourceAbsencesAndHistoryScans(t *testing.T) {
+func TestSourceAbsences(t *testing.T) {
 	ctx := context.Background()
 	repo := openPlanTestStore(t).Backfill()
 	from := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
@@ -250,18 +250,12 @@ func TestSourceAbsencesAndHistoryScans(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]int{"d|1m": 4}, bars)
 
-	require.NoError(t, repo.SaveHistoryScan(ctx, HistoryScan{SpaceID: "crypto", DatasetID: "d", Frequency: "1m", ScannedAt: from, From: from.Add(-time.Hour), To: from, GapBars: 5, GapSubjects: 2, Gaps: `[{"from":"x"}]`}))
-	scans, err := repo.HistoryScans(ctx, "crypto")
-	require.NoError(t, err)
-	require.Equal(t, 5, scans["d|1m"].GapBars)
-	require.True(t, scans["d|1m"].To.Equal(from))
-
 	cleared, err := repo.ClearAbsences(ctx, "crypto", "d", "1m")
 	require.NoError(t, err)
 	require.EqualValues(t, 2, cleared)
-	scans, err = repo.HistoryScans(ctx, "crypto")
+	bars, err = repo.AbsentBars(ctx, "crypto")
 	require.NoError(t, err)
-	require.Empty(t, scans, "清除缺失后重新扫描历史")
+	require.Empty(t, bars)
 }
 
 func TestFetchPlanSpacesListsEverySpaceThatEverHadAPlan(t *testing.T) {

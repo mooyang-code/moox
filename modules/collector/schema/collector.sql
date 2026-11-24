@@ -126,7 +126,7 @@ BEGIN
 END;
 
 -- K 线补采作业：一个作业拆成若干（数据集、标的、时间段）分块。
--- c_dataset_id、c_frequency、c_subject_id 为空表示全部；c_kind 取 gap（按缺口）、force（整段重拉）、history（确认历史缺口）。
+-- c_dataset_id、c_frequency、c_subject_id 为空表示全部；c_kind 取 gap（按缺口）、force（整段重拉）。
 CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_source IN ('manual', 'auto')),
-    CHECK (c_kind IN ('gap', 'force', 'history')),
+    CHECK (c_kind IN ('gap', 'force')),
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
     UNIQUE (c_job_id)
 );
@@ -207,21 +207,6 @@ CREATE TABLE IF NOT EXISTS t_collector_source_absences (
     c_bars INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from)
-);
-
--- 每个数据集最近一次历史缺口扫描（早于最早生效点的一段历史）的结果；c_gaps 是缺口分组 JSON，供确认补采。
-CREATE TABLE IF NOT EXISTS t_collector_history_scans (
-    c_space_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_frequency TEXT NOT NULL,
-    c_scanned_at DATETIME NOT NULL,
-    c_from DATETIME,
-    c_to DATETIME,
-    c_gap_bars INTEGER NOT NULL DEFAULT 0,
-    c_gap_subjects INTEGER NOT NULL DEFAULT 0,
-    c_gaps TEXT NOT NULL DEFAULT '[]',
-    c_last_error TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
 );
 
 -- 自动补采的扫描水位：已扫描到哪个时间点。

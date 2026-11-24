@@ -88,8 +88,6 @@ type BackfillStore interface {
 	AddAbsences(context.Context, []store.SourceAbsence) error
 	AbsencesIn(context.Context, string, string, string, []string, time.Time, time.Time) ([]store.SourceAbsence, error)
 	ClearAbsences(context.Context, string, string, string) (int64, error)
-	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
-	SaveHistoryScan(context.Context, store.HistoryScan) error
 }
 
 // RouteSource 由当前的采集任务给出补采数据集（某个频率）用的来源、拉取参数与输出字段，由 *fetchplan.BackfillRoutes 实现。
@@ -143,9 +141,7 @@ type Backfiller struct {
 	lastScan map[string]time.Time
 	// refetchedDay 是每个空间最近一次已提交收市后整天重取的那天（范围起点），只在内存里，防止同一轮里重复提交。
 	refetchedDay map[string]time.Time
-	// lastHistoryRun 是每个空间最近一次历史缺口扫描的时间（见 ScanHistory）；每个数据集的扫描记录保存在库里。
-	lastHistoryRun map[string]time.Time
-	workers        sync.WaitGroup
+	workers      sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
 }
@@ -208,7 +204,7 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	if b == nil || b.Checker == nil || b.Store == nil {
 		return "", 0, fmt.Errorf("backfiller is not initialized")
 	}
-	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force, BeforeFirstPlan: request.Force, IncludeOpenBar: request.IncludeOpenBar})
+	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force, IncludeOpenBar: request.IncludeOpenBar})
 	if err != nil {
 		return "", 0, err
 	}
@@ -356,7 +352,7 @@ func (b *Backfiller) Retry(ctx context.Context, jobID string) (int, error) {
 	return b.Store.RetryJob(ctx, jobID)
 }
 
-// ClearAbsences 清掉一个数据集已确认的行情源缺失，并让历史扫描重新进行；返回清掉的区间数。
+// ClearAbsences 清掉一个数据集已确认的行情源缺失，之后的检查与补采重新判断这些 K 线；返回清掉的区间数。
 func (b *Backfiller) ClearAbsences(ctx context.Context, spaceID, datasetID, frequency string) (int64, error) {
 	return b.Store.ClearAbsences(ctx, spaceID, datasetID, frequency)
 }
@@ -604,8 +600,8 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		}
 		return false
 	}
-	// 复查带上 BeforeFirstPlan：强制重拉早于计划生效点的分块要真的读回来确认；范围在计划内的分块不受影响。
-	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, From: chunk.From, To: chunk.To, BeforeFirstPlan: true})
+	// 复查与检查同一口径：早于时间线起点的分块同样读回确认。
+	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, From: chunk.From, To: chunk.To})
 	if err != nil {
 		fail(fmt.Errorf("verify chunk: %w", err))
 		return

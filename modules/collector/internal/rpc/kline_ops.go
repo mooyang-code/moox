@@ -21,7 +21,6 @@ type KlineOps interface {
 	List(ctx context.Context, spaceID string, filter store.BackfillJobFilter, page, size int) ([]klinecheck.JobStatus, int64, error)
 	Cancel(ctx context.Context, jobID string) error
 	Retry(ctx context.Context, jobID string) (int, error)
-	ConfirmHistory(ctx context.Context, spaceID, datasetID, frequency string) (string, int, error)
 	ClearAbsences(ctx context.Context, spaceID, datasetID, frequency string) (int64, error)
 }
 
@@ -222,24 +221,7 @@ func datasetScope(spaceID, datasetID, frequency string) (string, string, string,
 	return spaceID, datasetID, frequency, nil
 }
 
-// ConfirmHistoryGaps 按最近一次历史扫描记下的缺口建立补采作业。
-func (s *Service) ConfirmHistoryGaps(ctx context.Context, req *pb.ConfirmHistoryGapsReq) (*pb.ConfirmHistoryGapsRsp, error) {
-	if s.klineOps == nil {
-		return &pb.ConfirmHistoryGapsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "kline backfill is not configured")}, nil
-	}
-	spaceID, datasetID, frequency, err := datasetScope(req.GetSpaceId(), req.GetDatasetId(), req.GetFrequency())
-	if err != nil {
-		return &pb.ConfirmHistoryGapsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	jobID, chunks, err := s.klineOps.ConfirmHistory(ctx, spaceID, datasetID, frequency)
-	if err != nil {
-		log.ErrorContextf(ctx, "confirm history gaps failed space=%s dataset=%s|%s: %v", spaceID, datasetID, frequency, err)
-		return &pb.ConfirmHistoryGapsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-	}
-	return &pb.ConfirmHistoryGapsRsp{RetInfo: retOK(), JobId: jobID, Chunks: int32(chunks)}, nil
-}
-
-// ClearSourceAbsences 清掉一个数据集已确认的行情源缺失，并让历史缺口扫描重新进行。
+// ClearSourceAbsences 清掉一个数据集已确认的行情源缺失，之后的检查与补采重新判断这些 K 线。
 func (s *Service) ClearSourceAbsences(ctx context.Context, req *pb.ClearSourceAbsencesReq) (*pb.ClearSourceAbsencesRsp, error) {
 	if s.klineOps == nil {
 		return &pb.ClearSourceAbsencesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "kline backfill is not configured")}, nil

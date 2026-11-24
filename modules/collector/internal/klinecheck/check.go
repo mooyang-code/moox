@@ -73,8 +73,6 @@ type Request struct {
 	// 恢复追赶用它：暂停那一刻正在走的那根 K 线（例如 07:06:45 暂停时的 07:06 那根 1m、07:00 那根 1h）是在暂停期间收盘的，
 	// 暂停期间没有采到，但它的开始时间早于暂停时间，按默认的「向上对齐」会被漏掉。
 	IncludeOpenBar bool
-	// BeforeFirstPlan 让范围可以早于每个数据集最早的采集计划生效点（见 extendEarliestSegments）；默认只检查计划覆盖的时间。
-	BeforeFirstPlan bool
 }
 
 // Gap 是一段连续缺失的 K 线：[From, To) 内按频率共缺 Missing 根。
@@ -115,9 +113,7 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if request.BeforeFirstPlan {
-		extendEarliestSegments(timeline, request.From)
-	}
+	extendEarliestSegments(timeline, request.From)
 	type job struct {
 		key      string
 		segment  Segment
@@ -228,16 +224,65 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 	return result, nil
 }
 
-// extendEarliestSegments 把每个数据集最早一段的起点前移到 from，让强制重拉（及其复查）能覆盖早于采集计划生效点的数据。
-// 计划只记录“从哪个周期起实时采集”，更早的数据可能来自旧的采集方式或历史导入，其中的孔洞按计划时间线看不到，
-// 只能由操作员指定范围重拉。更早时间的标的集合已无记录，沿用最早一段的标的。
+// extendEarliestSegments 把每个数据集最早一段的起点前移到 from，让检查与补采能覆盖早于时间线起点（最早的采集计划生效点）的数据：
+// 那段数据来自旧的采集方式或历史导入，其中的孔洞只能由操作员指定范围检查或补采。更早时间的标的集合已无记录，
+// 沿用最早一段的标的；原来的起点记在 TimelineFrom，早于它的 K 线只从每个标的自己的第一根起算（见 historyStarts）。
 func extendEarliestSegments(timeline Timeline, from time.Time) {
 	at := from.UTC().Unix()
 	for _, segments := range timeline {
 		if len(segments) > 0 && segments[0].From > at {
+			segments[0].TimelineFrom = segments[0].From
 			segments[0].From = at
 		}
 	}
+}
+
+// historyStarts 返回早于时间线起点的那部分里，每个标的从 bars 的哪个下标起才算应有 K 线：
+// 标的在 bars[0] 之前已有数据就从头算（不裁剪，范围开头的真实缺口照常报）；否则从它在时间线起点之前的第一根起算，
+// 那之前一根都没有的（新上市）从时间线起点起算。present 是读到的行（扣除已确认缺失之前）。
+// 没有计数能力或计数失败时不裁剪：宁可多报，不把真实缺口当成“尚无历史”。返回值只含需要裁剪的标的。
+func (c *Checker) historyStarts(ctx context.Context, spaceID, datasetID, frequencyName string, subjects []string, bars []time.Time, present map[string]map[int64]bool, timelineFrom int64) map[string]int {
+	boundary := sort.Search(len(bars), func(i int) bool { return bars[i].Unix() >= timelineFrom })
+	counter, ok := c.Rows.(RowCounter)
+	if boundary == 0 || len(subjects) == 0 || !ok {
+		return nil
+	}
+	prior := map[string]int{}
+	for from := 0; from < len(subjects); from += subjectsPerCount {
+		batch := subjects[from:min(from+subjectsPerCount, len(subjects))]
+		counts, err := countPresent(ctx, counter, spaceID, datasetID, frequencyName, batch, time.Unix(0, 0).UTC(), bars[0])
+		if err != nil {
+			log.WarnContextf(ctx, "collector kline count before range failed, gaps before the timeline are not trimmed space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
+			return nil
+		}
+		for subject, count := range counts {
+			prior[subject] = count
+		}
+	}
+	starts := map[string]int{}
+	for _, subject := range subjects {
+		if prior[subject] > 0 {
+			continue
+		}
+		start := firstPresent(bars[:boundary], present[subject])
+		if start < 0 {
+			start = boundary
+		}
+		if start > 0 {
+			starts[subject] = start
+		}
+	}
+	return starts
+}
+
+// firstPresent 返回标的第一根已存在的 K 线在 bars 里的下标；一根都没有时返回 -1。
+func firstPresent(bars []time.Time, present map[int64]bool) int {
+	for i, bar := range bars {
+		if present[bar.Unix()] {
+			return i
+		}
+	}
+	return -1
 }
 
 // expectedBars 返回区间内已过截止时间、应当存在的 K 线开始时间。
@@ -295,6 +340,7 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 	}
 	present := map[string]map[int64]bool{}
 	complete := map[string]bool{}
+	var starts map[string]int
 	absent := 0
 	if !request.AssumeMissing {
 		end := bars[len(bars)-1].Add(time.Second)
@@ -330,16 +376,23 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 				present[subject] = times
 			}
 		}
+		// 早于时间线起点的部分：每个标的从自己的第一根起算，一根都没有的不报（新上市的标的前面本来没有数据）。
+		if segment.TimelineFrom > 0 {
+			starts = c.historyStarts(ctx, request.SpaceID, datasetID, frequencyName, detail, bars, present, segment.TimelineFrom)
+		}
 		absent += coverAbsences(bars, present, absentBars, detail)
 	}
 	var gaps []Gap
+	expected := len(bars) * len(subjects)
 	for _, subject := range subjects {
+		start := starts[subject]
+		expected -= start
 		if complete[subject] {
 			continue
 		}
-		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, frequency, bars, present[subject])...)
+		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, frequency, bars[start:], present[subject])...)
 	}
-	return gaps, len(bars) * len(subjects), absent, nil
+	return gaps, expected, absent, nil
 }
 
 // counter 返回可用的计数能力：深度检查要校验字段，强制重拉不读数据，二者都不计数。

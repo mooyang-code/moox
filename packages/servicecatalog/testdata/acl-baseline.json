@@ -3,7 +3,7 @@
   "summary": {
     "components": 18,
     "services": 25,
-    "methods": 332,
+    "methods": 331,
     "read_only_methods": 150,
     "retryable_methods": 151,
     "callers": 22,
@@ -333,12 +333,6 @@
         },
         {
           "name": "CompletePackageUpload",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ConfirmHistoryGaps",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -2287,7 +2281,6 @@
       "trpc.moox.collector.CollectMgr/ClearSourceAbsences",
       "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
       "trpc.moox.collector.CollectMgr/CompletePackageUpload",
-      "trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
       "trpc.moox.collector.CollectMgr/CreateCloudAccount",
       "trpc.moox.collector.CollectMgr/CreateTask",
       "trpc.moox.collector.CollectMgr/DeleteCloudAccount",
@@ -2663,7 +2656,6 @@
       "trpc.moox.collector.CollectMgr/ClearSourceAbsences",
       "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
       "trpc.moox.collector.CollectMgr/CompletePackageUpload",
-      "trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
       "trpc.moox.collector.CollectMgr/ControlLifecycle",
       "trpc.moox.collector.CollectMgr/CreateCloudAccount",
       "trpc.moox.collector.CollectMgr/CreateTask",

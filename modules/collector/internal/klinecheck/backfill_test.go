@@ -166,9 +166,8 @@ func TestBackfillForceSplitsLongRangesAndRespectsInFlightLimit(t *testing.T) {
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
 }
 
-// 强制重拉可以补采早于采集计划生效点的缺口（数据来自旧的采集方式，计划时间线之外），分块完成后读回确认；
-// 不强制时同一范围没有缺口可补。
-func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
+// 普通补采可以补早于时间线起点（最早的计划生效点）的缺口（数据来自旧的采集方式或历史导入），分块完成后读回确认。
+func TestBackfillFillsAGapBeforeTheTimeline(t *testing.T) {
 	backfiller, invoker, rows, base := newBackfillFixture(t)
 	ctx := context.Background()
 	gapAt := base.Add(-30 * time.Minute)
@@ -176,12 +175,7 @@ func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
 	rows.missing["BTC-USDT"][gapAt.Unix()] = true
 	rows.mu.Unlock()
 
-	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(time.Minute)}, "manual")
-	require.NoError(t, err)
-	require.Empty(t, jobID)
-	require.Zero(t, chunks, "不强制时生效点之前不在检查范围内")
-
-	jobID, chunks, err = backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(time.Minute), Force: true}, "manual")
+	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt.Add(-time.Minute), To: gapAt.Add(time.Minute)}, "manual")
 	require.NoError(t, err)
 	require.NotEmpty(t, jobID)
 	require.Equal(t, 1, chunks)
@@ -198,7 +192,7 @@ func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
 	require.False(t, rows.missing["BTC-USDT"][gapAt.Unix()], "函数写入后复查已读到这根 K 线")
 }
 
-// 早于计划生效点的分块完成后同样读回确认：函数“成功”却没有写入时不会被当成已补齐，
+// 早于时间线起点的强制重拉分块完成后同样读回确认：函数“成功”却没有写入时不会被当成已补齐，
 // 先退回重跑，两次缺的一样才确认为行情源没有，写入根数为 0。
 func TestBackfillBeforeTheFirstPlanIsVerifiedByReadingBack(t *testing.T) {
 	backfiller, invoker, rows, base := newBackfillFixture(t)

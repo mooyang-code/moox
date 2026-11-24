@@ -45,7 +45,6 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.collector.CollectMgr/ListKlineBackfills":     "collector kline backfill-status",
 	"trpc.moox.collector.CollectMgr/CancelKlineBackfill":    "collector kline backfill-cancel",
 	"trpc.moox.collector.CollectMgr/RetryKlineBackfill":     "collector kline backfill-retry",
-	"trpc.moox.collector.CollectMgr/ConfirmHistoryGaps":     "collector kline history-confirm",
 	"trpc.moox.collector.CollectMgr/ClearSourceAbsences":    "collector kline absences-clear",
 	"trpc.moox.collector.CollectMgr/SubmitKlineResampleJob": "collector resample backfill",
 	"trpc.moox.collector.CollectMgr/GetKlineResampleJob":    "collector resample jobs",

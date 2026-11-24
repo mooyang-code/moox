@@ -34,7 +34,6 @@ var (
 	klineBackfillStatusFlags klineRangeFlags
 	klineBackfillCancelFlags klineRangeFlags
 	klineBackfillRetryFlags  klineRangeFlags
-	klineHistoryFlags        klineRangeFlags
 	klineAbsencesClearFlags  klineRangeFlags
 	fetchPlanFlags           klineRangeFlags
 	statusFlags              klineRangeFlags
@@ -89,18 +88,9 @@ var collectorKlineBackfillRetryCmd = &cobra.Command{
 	},
 }
 
-var collectorKlineHistoryConfirmCmd = &cobra.Command{
-	Use:   "history-confirm",
-	Short: "按最近一次历史扫描发现的缺口补采；行情源本来没有的 K 线会被确认并不再报告",
-	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runKlineHistoryConfirm(cmd.Context(), cmd.OutOrStdout(), klineHistoryFlags)
-	},
-}
-
 var collectorKlineAbsencesClearCmd = &cobra.Command{
 	Use:   "absences-clear",
-	Short: "清掉数据集已确认的“行情源缺失”（行情源后来补上数据时），并让历史扫描重新进行",
+	Short: "清掉数据集已确认的“行情源缺失”（行情源后来补上数据时），之后的检查与补采重新判断这些 K 线",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runKlineAbsencesClear(cmd.Context(), cmd.OutOrStdout(), klineAbsencesClearFlags)
@@ -189,7 +179,7 @@ func init() {
 	collectorFetchPlanReregisterCmd.Flags().StringVar(&fetchPlanReregisterFlags.SpaceID, "space-id", "", "空间 ID")
 	collectorFetchPlanReregisterCmd.Flags().BoolVar(&fetchPlanReregisterFlags.Yes, "yes", false, "确认清空补采作业并让采集计划重新登记")
 	collectorKlineCmd.AddCommand(collectorKlineCheckCmd, collectorKlineBackfillCmd, collectorKlineBackfillStatusCmd, collectorKlineBackfillCancelCmd,
-		collectorKlineBackfillRetryCmd, collectorKlineHistoryConfirmCmd, collectorKlineAbsencesClearCmd)
+		collectorKlineBackfillRetryCmd, collectorKlineAbsencesClearCmd)
 	bindRange := func(cmd *cobra.Command, flags *klineRangeFlags, withRange bool) {
 		cmd.Flags().StringVar(&flags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 		cmd.Flags().StringVar(&flags.SpaceID, "space-id", "", "空间 ID")
@@ -203,7 +193,7 @@ func init() {
 	bindRange(collectorKlineCheckCmd, &klineCheckFlags, true)
 	collectorKlineCheckCmd.Flags().BoolVar(&klineCheckFlags.Deep, "deep", false, "校验每根 K 线的字段齐全")
 	bindRange(collectorKlineBackfillCmd, &klineBackfillFlags, true)
-	collectorKlineBackfillCmd.Flags().BoolVar(&klineBackfillFlags.Force, "force", false, "不检查缺口，范围内应有的 K 线全部重拉；范围可以早于采集计划的生效点（沿用最早一段的标的）")
+	collectorKlineBackfillCmd.Flags().BoolVar(&klineBackfillFlags.Force, "force", false, "不检查缺口，范围内应有的 K 线全部重拉")
 	bindRange(collectorKlineBackfillStatusCmd, &klineBackfillStatusFlags, false)
 	collectorKlineBackfillStatusCmd.Flags().StringVar(&klineBackfillStatusFlags.JobID, "job-id", "", "补采作业 ID")
 	collectorKlineBackfillStatusCmd.Flags().StringVar(&klineBackfillStatusFlags.Source, "source", "", "列表只看 manual 或 auto 作业")
@@ -213,14 +203,9 @@ func init() {
 	collectorKlineBackfillCancelCmd.Flags().StringVar(&klineBackfillCancelFlags.JobID, "job-id", "", "补采作业 ID")
 	bindRange(collectorKlineBackfillRetryCmd, &klineBackfillRetryFlags, false)
 	collectorKlineBackfillRetryCmd.Flags().StringVar(&klineBackfillRetryFlags.JobID, "job-id", "", "补采作业 ID")
-	for _, item := range []struct {
-		cmd   *cobra.Command
-		flags *klineRangeFlags
-	}{{collectorKlineHistoryConfirmCmd, &klineHistoryFlags}, {collectorKlineAbsencesClearCmd, &klineAbsencesClearFlags}} {
-		bindRange(item.cmd, item.flags, false)
-		item.cmd.Flags().StringVar(&item.flags.DatasetID, "dataset-id", "", "数据集 ID")
-		item.cmd.Flags().StringVar(&item.flags.Frequency, "frequency", "", "频率，如 1m")
-	}
+	bindRange(collectorKlineAbsencesClearCmd, &klineAbsencesClearFlags, false)
+	collectorKlineAbsencesClearCmd.Flags().StringVar(&klineAbsencesClearFlags.DatasetID, "dataset-id", "", "数据集 ID")
+	collectorKlineAbsencesClearCmd.Flags().StringVar(&klineAbsencesClearFlags.Frequency, "frequency", "", "频率，如 1m")
 	bindRange(collectorFetchPlanCmd, &fetchPlanFlags, false)
 	bindRange(collectorStatusCmd, &statusFlags, false)
 }
@@ -452,8 +437,7 @@ func runCollectorStatus(ctx context.Context, out io.Writer, flags klineRangeFlag
 			"subjects": item.GetSubjectCount(), "functions": item.GetFunctionCount(), "effective_from": item.GetEffectiveFrom(),
 			"inspected_until": item.GetInspectedUntil(), "inspect_lag_seconds": item.GetInspectLagSeconds(),
 			"gap_bars_24h": item.GetGapBars_24H(), "gap_subjects_24h": item.GetGapSubjects_24H(), "failed_chunks_24h": item.GetFailedChunks_24H(),
-			"history_scanned_at": item.GetHistoryScannedAt(), "history_gap_bars": item.GetHistoryGapBars(), "history_gap_subjects": item.GetHistoryGapSubjects(),
-			"history_error": item.GetHistoryError(), "absent_bars": item.GetAbsentBars(),
+			"absent_bars": item.GetAbsentBars(),
 		})
 	}
 	pending := 0
@@ -495,30 +479,6 @@ func (flags klineRangeFlags) datasetScope() error {
 	return nil
 }
 
-func runKlineHistoryConfirm(ctx context.Context, out io.Writer, flags klineRangeFlags) error {
-	if err := flags.datasetScope(); err != nil {
-		return err
-	}
-	gateway, err := openCommandGateway(ctx, flags.File, nil)
-	if err != nil {
-		return err
-	}
-	defer gateway.Close()
-	rsp := &collectorpb.ConfirmHistoryGapsRsp{}
-	req := &collectorpb.ConfirmHistoryGapsReq{SpaceId: flags.SpaceID, DatasetId: flags.DatasetID, Frequency: flags.Frequency}
-	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "ConfirmHistoryGaps", req, rsp); err != nil {
-		return fmt.Errorf("confirm history gaps: %w", err)
-	}
-	if err := collectorRetError("confirm history gaps", rsp.GetRetInfo()); err != nil {
-		return err
-	}
-	status := "submitted"
-	if rsp.GetJobId() == "" {
-		status = "no_gap"
-	}
-	return printJSON(out, map[string]any{"status": status, "job_id": rsp.GetJobId(), "chunks": rsp.GetChunks()})
-}
-
 func runKlineAbsencesClear(ctx context.Context, out io.Writer, flags klineRangeFlags) error {
 	if err := flags.datasetScope(); err != nil {
 		return err
@@ -545,7 +505,7 @@ func runFetchPlanReregister(ctx context.Context, out io.Writer, flags klineRange
 		return errors.New("--space-id is required")
 	}
 	if !yes {
-		return errors.New("该命令会清空空间的补采作业与历史扫描记录，并让采集计划重新登记序列快照；确认后加 --yes 重新执行")
+		return errors.New("该命令会清空空间的补采作业与自动补采水位，并让采集计划重新登记序列快照；确认后加 --yes 重新执行")
 	}
 	gateway, err := openCommandGateway(ctx, flags.File, nil)
 	if err != nil {

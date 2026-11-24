@@ -56,7 +56,7 @@ func TestStockDailyCheckExpectsTradingDaysAndMergesAcrossWeekends(t *testing.T) 
 
 	// 补最近一年：一个标的一段缺口、一个分块。
 	now = day(11, 11).Add(5 * time.Minute)
-	year, err := checker.Check(context.Background(), Request{SpaceID: "stockcn", From: time.Date(2025, 11, 11, 0, 0, 0, 0, time.UTC), To: day(11, 11), AssumeMissing: true, BeforeFirstPlan: true})
+	year, err := checker.Check(context.Background(), Request{SpaceID: "stockcn", From: time.Date(2025, 11, 11, 0, 0, 0, 0, time.UTC), To: day(11, 11), AssumeMissing: true})
 	require.NoError(t, err)
 	require.Len(t, year.Gaps, 1)
 	require.Greater(t, year.Expected, 235)

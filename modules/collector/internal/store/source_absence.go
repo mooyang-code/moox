@@ -120,7 +120,7 @@ func (r *BackfillRepository) AbsentBars(ctx context.Context, spaceID string) (ma
 	return out, nil
 }
 
-// ClearAbsences 清掉一个数据集（某个频率）全部已确认缺失，并删除其历史扫描记录让下一轮重新扫描；返回清掉的区间数。
+// ClearAbsences 清掉一个数据集（某个频率）全部已确认缺失，返回清掉的区间数。
 func (r *BackfillRepository) ClearAbsences(ctx context.Context, spaceID, datasetID, frequency string) (int64, error) {
 	if err := r.ready(); err != nil {
 		return 0, err
@@ -129,14 +129,6 @@ func (r *BackfillRepository) ClearAbsences(ctx context.Context, spaceID, dataset
 	if spaceID == "" || datasetID == "" || frequency == "" {
 		return 0, fmt.Errorf("space_id, dataset_id and frequency are required")
 	}
-	var cleared int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Delete(&sourceAbsenceRow{})
-		if result.Error != nil {
-			return result.Error
-		}
-		cleared = result.RowsAffected
-		return tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Delete(&historyScanRow{}).Error
-	})
-	return cleared, err
+	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Delete(&sourceAbsenceRow{})
+	return result.RowsAffected, result.Error
 }

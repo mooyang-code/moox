@@ -21,6 +21,9 @@ type Segment struct {
 	Symbols      map[string]string
 	LatenessS    int
 	OutputFields []string
+	// TimelineFrom 只在检查把最早一段前移到时间线起点之前时有值（见 extendEarliestSegments），是原来的起点：
+	// 早于它的 K 线按“每个标的从自己的第一根起算”判断缺口。
+	TimelineFrom int64
 }
 
 // segmentSubjects 返回时间线行里序列的标的（大写、去重、升序）。
@@ -54,7 +57,7 @@ type TimelineSource interface {
 //
 // 行由采集计划的对账写入：Storage 确认登记后写序列行（未生效但已登记的计划也算），数据集不再采集时写停止行。
 // 重新登记（Storage 被整体清空）时整个空间的行被删掉，包括已退役的数据集：时间线从重新登记后的新生效周期重新写起，
-// 新快照登记之前没有任何一段，所以检查、自动补采与历史扫描的起点（最早一段的 From）都是清库后的新生效点。
+// 新快照登记之前没有任何一段，所以检查与自动补采的起点（最早一段的 From）都是清库后的新生效点。
 func BuildTimeline(entries []store.SeriesTimelineEntry) Timeline {
 	timeline := Timeline{}
 	for _, entry := range entries {
@@ -78,7 +81,7 @@ func loadTimeline(ctx context.Context, source TimelineSource, spaceID string) (T
 }
 
 // Active 报告数据集是否仍在采集：最后一段没有结束。已停止采集的数据集不再有新数据，结果数据可能已随任务删除，
-// 自动补采与历史扫描都跳过它们。
+// 自动补采跳过它们。
 func (t Timeline) Active(key string) bool {
 	segments := t[key]
 	return len(segments) > 0 && segments[len(segments)-1].To == 0

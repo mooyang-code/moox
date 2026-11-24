@@ -463,7 +463,7 @@ message KlineBackfillChunk {
 message KlineBackfillJob {
   string job_id = 1;
   string space_id = 2;
-  // source 取值 manual、auto；kind 取值 gap（按缺口）、force（整段重拉）、history（确认历史缺口）。
+  // source 取值 manual、auto；kind 取值 gap（按缺口）、force（整段重拉）。
   string source = 3;
   string kind = 4;
   // dataset_id、frequency、subject_id 为空表示全部。
@@ -532,21 +532,7 @@ message RetryKlineBackfillRsp {
   int32 chunks = 2;
 }
 
-// ConfirmHistoryGaps 按最近一次历史扫描记下的缺口建立补采作业；补完后行情源没有的部分自动确认，不再报告。
-message ConfirmHistoryGapsReq {
-  string space_id = 1;
-  string dataset_id = 2;
-  string frequency = 3;
-}
-
-message ConfirmHistoryGapsRsp {
-  common.RetInfo ret_info = 1;
-  // job_id 为空表示没有待确认的历史缺口。
-  string job_id = 2;
-  int32 chunks = 3;
-}
-
-// ClearSourceAbsences 清掉一个数据集已确认的“行情源缺失”，并让历史缺口扫描重新进行。
+// ClearSourceAbsences 清掉一个数据集已确认的“行情源缺失”，之后的检查与补采重新判断这些 K 线。
 message ClearSourceAbsencesReq {
   string space_id = 1;
   string dataset_id = 2;
@@ -589,11 +575,6 @@ message CollectorDatasetStatus {
   int32 gap_bars_24h = 8;
   int32 gap_subjects_24h = 9;
   int32 failed_chunks_24h = 10;
-  // history_* 是最近一次历史缺口扫描的结果（扣除已确认缺失）；没有扫描过时 history_scanned_at 为空。
-  string history_scanned_at = 11;
-  int32 history_gap_bars = 12;
-  int32 history_gap_subjects = 13;
-  string history_error = 14;
   // absent_bars 是已确认行情源没有的根数，不影响健康等级。
   int32 absent_bars = 15;
   // level 取值 ok、warn、error。
@@ -667,7 +648,7 @@ message CollectorUnplannedFunction {
 
 // ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
 // “快照未登记”，下一轮对账会生成新计划、重新登记序列快照并选新的生效周期；同时清掉该空间的补采作业、
-// 自动补采水位与历史扫描记录。此后数据集的时间线（检查、自动补采与历史扫描的范围）从新的生效周期开始，
+// 自动补采水位。此后数据集的时间线（检查与自动补采的范围）从新的生效周期开始，
 // 清库前的计划段不再参与。
 message ReregisterFetchPlanReq {
   string space_id = 1;
@@ -984,7 +965,6 @@ service CollectMgr {
   rpc ListKlineBackfills(ListKlineBackfillsReq) returns (ListKlineBackfillsRsp);
   rpc CancelKlineBackfill(CancelKlineBackfillReq) returns (CancelKlineBackfillRsp);
   rpc RetryKlineBackfill(RetryKlineBackfillReq) returns (RetryKlineBackfillRsp);
-  rpc ConfirmHistoryGaps(ConfirmHistoryGapsReq) returns (ConfirmHistoryGapsRsp);
   rpc ClearSourceAbsences(ClearSourceAbsencesReq) returns (ClearSourceAbsencesRsp);
 
   // ----- 运行状态与采集计划 -----
