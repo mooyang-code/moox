@@ -171,26 +171,16 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, coordination...)
-	streams, err := b.buildCollectorStreamHealth(ctx, spaceID, now)
+	streams, err := b.buildCollectorStreamMissing(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, streams...)
-	watermarks, err := b.buildFactorWatermarkHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, watermarks...)
 	params, err := b.buildFactorParamHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, params...)
-	rejections, err := b.buildDeadlineRejectionHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, rejections...)
 	delivery, err := b.buildStorageOutboxHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -201,11 +191,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, viewFiles...)
-	viewFollow, err := b.buildViewFollowLagHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, viewFollow...)
 	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -364,60 +349,6 @@ func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, n
 	}
 	return []BusinessStatus{{
 		SpaceID: events.SystemSpaceID, Kind: "view_file", Module: "storage_view",
-		Status: status, Reason: reason, LastCheckedAt: now,
-	}}, nil
-}
-
-// viewFollowLagLimit 是 View 跟随变更日志允许的落后时长：跟随器空闲时每轮最多等 20 秒，正常应用一期在秒级以内。
-const viewFollowLagLimit = 2 * time.Minute
-
-// buildViewFollowLagHealth 把 Storage View 上报的跟随落后时长（距离上一次追上变更日志头部）转成告警。
-// 只按时长判断：空闲数据集的序号差天然会有一轮等待的量，按序号差会误报。
-func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != events.SystemSpaceID {
-		return nil, nil
-	}
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_view_follow_lag_seconds", "", 500, now)
-	if err != nil {
-		return nil, err
-	}
-	found := false
-	var lagging []string
-	var worst float64
-	for _, item := range series {
-		if item.IsStale {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		found = true
-		if latest.Value <= viewFollowLagLimit.Seconds() {
-			continue
-		}
-		worst = max(worst, latest.Value)
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, err
-		}
-		lagging = append(lagging, labels["space_id"]+"/"+labels["view_id"])
-	}
-	if !found {
-		return nil, nil
-	}
-	status, reason := "healthy", "View 跟随数据变更正常"
-	if len(lagging) > 0 {
-		sort.Strings(lagging)
-		status = "down"
-		reason = fmt.Sprintf("%d 个 View 跟随数据变更落后，最久约 %d 分钟没有追上（%s）；查询会读到旧数据，看 storage-view 日志里的跟随失败原因",
-			len(lagging), max(1, int(worst)/60), strings.Join(lagging, "、"))
-	}
-	return []BusinessStatus{{
-		SpaceID: events.SystemSpaceID, Kind: "view_follow", Module: "storage_view",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -1564,114 +1495,27 @@ func unixTime(value float64) time.Time {
 	return time.Unix(int64(value), 0).UTC()
 }
 
-// collectorStreamHeartbeatTimeout 是 collector-stream 心跳中断的告警阈值。
-const collectorStreamHeartbeatTimeout = 3 * time.Minute
-
 // collectorStreamFailedStreak 是连续多少个周期有失败标的（不含疑似下架）才告警。
 const collectorStreamFailedStreak = 3
 
-// buildCollectorStreamHealth 消费 Collector 汇总的推送采集指标：collector-stream 心跳中断超过 3 分钟、
-// 连续 3 个周期有失败标的（已判定疑似下架的不计入，避免每次下架都误报）。没有心跳序列的空间（没部署推送）不出检查项。
-func (b Builder) buildCollectorStreamHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+// buildCollectorStreamMissing 消费 Collector 汇总的推送连续缺失期数：连续 3 个周期有失败标的（已判定疑似下架的不计入，避免每次下架都误报）。
+// 心跳中断由 Collector 自己判断后上报关注项 stream_heartbeat_lost。没有序列的空间（没部署推送）不出检查项。
+func (b Builder) buildCollectorStreamMissing(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	type streamState struct {
-		heartbeat float64
-		streaks   []string
-	}
-	states := map[string]*streamState{}
-	load := func(metricName string, apply func(*streamState, map[string]string, float64)) error {
-		series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", metricName, "", 500, now)
-		if err != nil {
-			return err
-		}
-		for _, item := range series {
-			if item.IsStale {
-				continue
-			}
-			labels, err := datasetLabels(item.LabelsJSON)
-			if err != nil {
-				return fmt.Errorf("collector stream labels for %s: %w", item.SeriesID, err)
-			}
-			current := strings.TrimSpace(labels["space_id"])
-			if current == "" || (spaceID != "" && current != spaceID) {
-				continue
-			}
-			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-			if err != nil {
-				return err
-			}
-			state := states[current]
-			if state == nil {
-				state = &streamState{}
-				states[current] = state
-			}
-			apply(state, labels, latest.Value)
-		}
-		return nil
-	}
-	if err := load("moox_collector_stream_heartbeat_timestamp_seconds", func(state *streamState, _ map[string]string, value float64) {
-		if value > state.heartbeat {
-			state.heartbeat = value
-		}
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_stream_failed_period_streak", func(state *streamState, labels map[string]string, value float64) {
-		if value >= collectorStreamFailedStreak {
-			state.streaks = append(state.streaks, fmt.Sprintf("%s/%s %s 连续 %d 期", labels["market"], labels["dataset_id"], labels["frequency"], int(value)))
-		}
-	}); err != nil {
-		return nil, err
-	}
-	spaces := make([]string, 0, len(states))
-	for space := range states {
-		spaces = append(spaces, space)
-	}
-	sort.Strings(spaces)
-	var out []BusinessStatus
-	for _, space := range spaces {
-		state := states[space]
-		if state.heartbeat > 0 {
-			status, reason := "healthy", "collector-stream 心跳正常"
-			if since := now.Sub(unixTime(state.heartbeat)); since > collectorStreamHeartbeatTimeout {
-				status, reason = "down", fmt.Sprintf("collector-stream 心跳已中断 %s（最后 %s）：推送采集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --ingest scf 切回（心跳已超时，交接不等它确认）", since.Truncate(time.Second), unixTime(state.heartbeat).Format(time.RFC3339))
-			}
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream", Status: status, Reason: reason, LastCheckedAt: now})
-		}
-		if len(state.streaks) > 0 {
-			sort.Strings(state.streaks)
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream_missing", Status: "down",
-				Reason: "推送连续多个周期有标的没到（不含疑似下架，由补采补齐）：" + strings.Join(state.streaks, "；"), LastCheckedAt: now})
-		} else if state.heartbeat > 0 {
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream_missing", Status: "healthy", Reason: "推送周期没有连续缺失", LastCheckedAt: now})
-		}
-	}
-	return out, nil
-}
-
-// factorWatermarkStallAfter 是因子任务连续水位阻塞多久告警：不自动跳过，交给人工（手动补采、确认缺失）。
-const factorWatermarkStallAfter = 30 * time.Minute
-
-// buildFactorWatermarkHealth 消费因子管理服务导出的连续水位阻塞起始时间：阻塞超过 30 分钟的集合告警。
-func (b Builder) buildFactorWatermarkHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_factor_task_watermark_blocked_since_timestamp_seconds", "", 500, now)
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_collector_stream_failed_period_streak", "", 500, now)
 	if err != nil {
 		return nil, err
 	}
-	stalled := map[string][]string{}
-	seen := map[string]bool{}
+	streaks := map[string][]string{}
 	for _, item := range series {
 		if item.IsStale {
 			continue
 		}
 		labels, err := datasetLabels(item.LabelsJSON)
 		if err != nil {
-			return nil, fmt.Errorf("factor watermark labels for %s: %w", item.SeriesID, err)
+			return nil, fmt.Errorf("collector stream labels for %s: %w", item.SeriesID, err)
 		}
 		current := strings.TrimSpace(labels["space_id"])
 		if current == "" || (spaceID != "" && current != spaceID) {
@@ -1681,80 +1525,27 @@ func (b Builder) buildFactorWatermarkHealth(ctx context.Context, spaceID string,
 		if err != nil {
 			return nil, err
 		}
-		seen[current] = true
-		if latest.Value > 0 && now.Sub(unixTime(latest.Value)) > factorWatermarkStallAfter {
-			stalled[current] = append(stalled[current], fmt.Sprintf("%s 自 %s 起", labels["task_id"], unixTime(latest.Value).Format(time.RFC3339)))
+		if _, ok := streaks[current]; !ok {
+			streaks[current] = nil
+		}
+		if latest.Value >= collectorStreamFailedStreak {
+			streaks[current] = append(streaks[current], fmt.Sprintf("%s/%s %s 连续 %d 期", labels["market"], labels["dataset_id"], labels["frequency"], int(latest.Value)))
 		}
 	}
-	spaces := make([]string, 0, len(seen))
-	for space := range seen {
+	spaces := make([]string, 0, len(streaks))
+	for space := range streaks {
 		spaces = append(spaces, space)
 	}
 	sort.Strings(spaces)
-	out := make([]BusinessStatus, 0, len(spaces))
+	var out []BusinessStatus
 	for _, space := range spaces {
-		if list := stalled[space]; len(list) > 0 {
+		if list := streaks[space]; len(list) > 0 {
 			sort.Strings(list)
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_watermark", Module: "factor_engine", Status: "down",
-				Reason: "因子连续水位停滞超过 30 分钟（前面有还没补到的周期，不会自动跳过）：" + strings.Join(list, "；") + "。请检查补采，或确认行情源缺失", LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream_missing", Status: "down",
+				Reason: "推送连续多个周期有标的没到（不含疑似下架，由补采补齐）：" + strings.Join(list, "；"), LastCheckedAt: now})
 			continue
 		}
-		out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_watermark", Module: "factor_engine", Status: "healthy", Reason: "因子连续水位正常", LastCheckedAt: now})
-	}
-	return out, nil
-}
-
-// deadlineRejectionWindow 是“周期建立前截止已过”拒绝的告警窗口：最近这段时间内出现过就告警。
-const deadlineRejectionWindow = 10 * time.Minute
-
-// buildDeadlineRejectionHealth 消费 Storage 导出的截止拒绝时刻：写入方取数晚于数据集截止时整期提交被拒（常见于采集方式切换后截止没跟上），
-// 数据只能靠补采补齐，最近 10 分钟内出现过就告警。
-func (b Builder) buildDeadlineRejectionHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_period_deadline_rejected_timestamp_seconds", "", 500, now)
-	if err != nil {
-		return nil, err
-	}
-	recent := map[string][]string{}
-	seen := map[string]bool{}
-	for _, item := range series {
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("storage deadline rejection labels for %s: %w", item.SeriesID, err)
-		}
-		current := strings.TrimSpace(labels["space_id"])
-		if current == "" || (spaceID != "" && current != spaceID) {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		seen[current] = true
-		if latest.Value > 0 && now.Sub(unixTime(latest.Value)) <= deadlineRejectionWindow {
-			name := b.Metrics.DatasetDisplayName(ctx, current, labels["dataset_id"])
-			if name == "" {
-				name = labels["dataset_id"]
-			}
-			recent[current] = append(recent[current], fmt.Sprintf("%s（%s，最近 %s）", name, labels["freq"], unixTime(latest.Value).Format(time.RFC3339)))
-		}
-	}
-	spaces := make([]string, 0, len(seen))
-	for space := range seen {
-		spaces = append(spaces, space)
-	}
-	sort.Strings(spaces)
-	out := make([]BusinessStatus, 0, len(spaces))
-	for _, space := range spaces {
-		if list := recent[space]; len(list) > 0 {
-			sort.Strings(list)
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "storage_rejection", Module: "storage", Status: "down",
-				Reason: "Storage 拒绝周期提交：周期建立前截止已过（写入方取数晚于数据集截止，常见于采集方式切换后截止没跟上），整期数据要靠补采：" + strings.Join(list, "；"), LastCheckedAt: now})
-			continue
-		}
-		out = append(out, BusinessStatus{SpaceID: space, Kind: "storage_rejection", Module: "storage", Status: "healthy", Reason: "最近 10 分钟没有截止拒绝", LastCheckedAt: now})
+		out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream_missing", Status: "healthy", Reason: "推送周期没有连续缺失", LastCheckedAt: now})
 	}
 	return out, nil
 }

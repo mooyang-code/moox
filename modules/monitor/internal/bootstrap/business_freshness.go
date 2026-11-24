@@ -550,24 +550,15 @@ func businessCheckIdentity(business monitorobservability.BusinessStatus) (checkI
 	checkID, name = "balance:"+business.Module, "账户余额同步 "+business.Module
 	if business.Kind == "market_fetch" {
 		checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
-		switch business.Module {
-		case "collector_stream":
-			name = "行情推送 collector-stream 心跳"
-		case "collector_stream_missing":
+		if business.Module == "collector_stream_missing" {
 			name = "行情推送连续缺失"
 		}
-	} else if business.Kind == "storage_rejection" {
-		checkID, name = "storage_rejection:"+business.Module, "存储截止拒绝"
-	} else if business.Kind == "factor_watermark" {
-		checkID, name = "factor_watermark:"+business.Module, "因子连续水位"
 	} else if business.Kind == "factor_params" {
 		checkID, name = "factor_params:"+business.Module, "策略参数投递"
 	} else if business.Kind == "data_delivery" {
 		checkID, name = "data_delivery:"+business.Module, "数据投递队列"
 	} else if business.Kind == "view_file" {
 		checkID, name = "view_file:"+business.Module, "View 索引文件大小"
-	} else if business.Kind == "view_follow" {
-		checkID, name = "view_follow:"+business.Module, "View 跟随数据变更"
 	} else if business.Kind == "metrics_ingest" {
 		checkID, name = "metrics_ingest:"+business.Module, "指标序列数量保护"
 	} else if business.Kind == "worker_presence" {

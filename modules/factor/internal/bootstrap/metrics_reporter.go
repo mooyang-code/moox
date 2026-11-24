@@ -71,7 +71,11 @@ func registerMetricsReporter(s *server.Server, engine engineView, readiness func
 		return fmt.Errorf("create factor dataset metrics: %w", err)
 	}
 	observer := newFactorDatasetObserver(engine, datasets)
-	observer.blocked = newWatermarkBlockedGauge(prometheus.DefaultRegisterer)
+	attention, err := report.NewAttention(prometheus.DefaultRegisterer, attentionKinds)
+	if err != nil {
+		return fmt.Errorf("create factor attention metric: %w", err)
+	}
+	attention.AddSource("watermark", observer.watermarkAttention)
 	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "factor")
 	if err != nil {
 		return fmt.Errorf("create factor engine presence metric: %w", err)

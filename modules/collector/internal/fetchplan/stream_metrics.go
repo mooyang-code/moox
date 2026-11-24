@@ -6,10 +6,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// StreamMetrics 是 Collector 汇总的推送采集指标（由 collector-stream 心跳与周期统计生成），Monitor 据此告警。
+// StreamMetrics 是 Collector 汇总的推送采集指标（由 collector-stream 心跳与周期统计生成）。心跳中断由关注项 stream_heartbeat_lost 判断，不在这里。
 type StreamMetrics struct {
-	online       *prometheus.GaugeVec
-	heartbeatAt  *prometheus.GaugeVec
 	arrivals     *prometheus.CounterVec
 	missed       *prometheus.CounterVec
 	suspected    *prometheus.CounterVec
@@ -26,8 +24,6 @@ func NewStreamMetrics(reg prometheus.Registerer) *StreamMetrics {
 		reg = prometheus.DefaultRegisterer
 	}
 	m := &StreamMetrics{
-		online:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_stream_online", Help: "collector-stream 心跳是否在超时之内（1 在线）。"}, []string{"space_id"}),
-		heartbeatAt:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_stream_heartbeat_timestamp_seconds", Help: "collector-stream 最近一次心跳的 Unix 时间。"}, []string{"space_id"}),
 		arrivals:     prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_stream_period_final_arrivals_total", Help: "推送到达的收盘定稿数。"}, []string{"space_id", "market", "frequency"}),
 		missed:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_stream_period_missed_total", Help: "截止时仍缺的标的数（不含疑似下架）。"}, []string{"space_id", "market", "frequency"}),
 		suspected:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_stream_period_suspected_total", Help: "截止时仍缺且已判定疑似下架的标的数。"}, []string{"space_id", "market", "frequency"}),
@@ -37,8 +33,6 @@ func NewStreamMetrics(reg prometheus.Registerer) *StreamMetrics {
 		failedStreak: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_stream_failed_period_streak", Help: "连续有失败标的（不含疑似下架）的周期数。"}, []string{"space_id", "market", "frequency", "dataset_id"}),
 		clockOffset:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_stream_clock_offset_seconds", Help: "collector-stream 时钟减 Collector 时钟的估计值。"}, []string{"space_id"}),
 	}
-	m.online = registerGaugeVec(reg, m.online)
-	m.heartbeatAt = registerGaugeVec(reg, m.heartbeatAt)
 	m.arrivals = registerCounterVec(reg, m.arrivals)
 	m.missed = registerCounterVec(reg, m.missed)
 	m.suspected = registerCounterVec(reg, m.suspected)
@@ -59,24 +53,10 @@ func (m *StreamMetrics) ObserveHeartbeat(spaceID string, at time.Time, clockOffs
 	if m == nil {
 		return
 	}
-	m.heartbeatAt.WithLabelValues(spaceID).Set(float64(at.Unix()))
-	m.online.WithLabelValues(spaceID).Set(1)
 	m.clockOffset.WithLabelValues(spaceID).Set(clockOffset.Seconds())
 	for key, value := range reconnects {
 		m.reconnects.WithLabelValues(spaceID, key[0], key[1]).Set(float64(value))
 	}
-}
-
-// ObserveOnline 按心跳超时刷新在线状态。
-func (m *StreamMetrics) ObserveOnline(spaceID string, online bool) {
-	if m == nil {
-		return
-	}
-	value := 0.0
-	if online {
-		value = 1
-	}
-	m.online.WithLabelValues(spaceID).Set(value)
 }
 
 // StreamPeriodObservation 是一期统计里 Collector 关心的部分。

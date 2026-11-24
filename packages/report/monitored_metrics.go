@@ -28,7 +28,7 @@ var healthMetricSuffixes = []string{
 }
 
 var healthMetricNames = map[string]struct{}{
-	AttentionMetric: {},
+	AttentionMetric:                                                            {},
 	ArchiveTaskHealthMetric:                                                    {},
 	ArchiveObjectStoreStateMetric:                                              {},
 	"moox_collector_market_fetch_assignment_required":                          {},
@@ -45,11 +45,7 @@ var healthMetricNames = map[string]struct{}{
 	"moox_collector_market_fetch_timer_available":                              {},
 	"moox_collector_market_fetch_assignment_errors_total":                      {},
 	"moox_collector_period_pending_total":                                      {},
-	"moox_collector_stream_online":                                             {},
-	"moox_factor_task_watermark_blocked_since_timestamp_seconds":               {},
 	"moox_strategy_param_delivery_stale":                                       {},
-	"moox_storage_period_deadline_rejected_timestamp_seconds":                  {},
-	"moox_collector_stream_heartbeat_timestamp_seconds":                        {},
 	"moox_collector_stream_failed_period_streak":                               {},
 	"moox_collector_stream_period_missed_total":                                {},
 	"moox_collector_stream_periods_total":                                      {},
@@ -62,8 +58,6 @@ var healthMetricNames = map[string]struct{}{
 	"moox_storage_outbox_publish_errors_total":                                 {},
 	"moox_storage_outbox_pending_entries":                                      {},
 	"moox_storage_view_file_over_limit":                                        {},
-	"moox_storage_view_follow_lag_seconds":                                     {},
-	"moox_storage_view_follow_lag_changes":                                     {},
 	"moox_storage_outbox_oldest_age_seconds":                                   {},
 	"moox_storage_view_output_arrival_timestamp_seconds":                       {},
 	"moox_storage_view_output_latest_data_time_seconds":                        {},

@@ -153,7 +153,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runt
 	}
 	bus.start(process)
 	control := &collectorControl{}
-	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus); err != nil {
+	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control, bus, attn); err != nil {
 		return nil, err
 	}
 	healthState, life, err := registerHealth(s, cfg, dbm, process, control, svc)

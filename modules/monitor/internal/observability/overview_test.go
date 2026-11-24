@@ -868,11 +868,10 @@ func TestBusinessCheckRetiredResultIsDisabled(t *testing.T) {
 	require.Equal(t, "disabled", got.BusinessChecks[0].Status)
 }
 
-// collector-stream 心跳中断超过 3 分钟、连续 3 个周期有失败标的（不含疑似下架）时告警。
-func TestBuilderReportsCollectorStreamHeartbeatAndMissingStreaks(t *testing.T) {
+// 连续 3 个周期有失败标的（不含疑似下架）时告警；心跳中断由 Collector 的关注项判断。
+func TestBuilderReportsCollectorStreamMissingStreaks(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "stream-hb", "collector", "collector@control", "moox_collector_stream_heartbeat_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-4*time.Minute).Unix()), now)
 		seedOverviewMetricForInstance(t, db, "stream-streak", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"swap","frequency":"1m","dataset_id":"ds_swap"}`, 3, now)
 		seedOverviewMetricForInstance(t, db, "stream-ok", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"spot","frequency":"1m","dataset_id":"ds_spot"}`, 2, now)
 	})
@@ -882,63 +881,18 @@ func TestBuilderReportsCollectorStreamHeartbeatAndMissingStreaks(t *testing.T) {
 	for _, check := range got.BusinessChecks {
 		byModule[check.Module] = check
 	}
-	require.Equal(t, "down", byModule["collector_stream"].Status)
-	require.Contains(t, byModule["collector_stream"].Reason, "心跳已中断")
 	require.Equal(t, "down", byModule["collector_stream_missing"].Status)
 	require.Contains(t, byModule["collector_stream_missing"].Reason, "swap/ds_swap 1m 连续 3 期")
 	require.NotContains(t, byModule["collector_stream_missing"].Reason, "ds_spot")
 
 	fresh, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "stream-hb", "collector", "collector@control", "moox_collector_stream_heartbeat_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-20*time.Second).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "stream-ok", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"spot","frequency":"1m","dataset_id":"ds_spot"}`, 0, now)
 	})
 	got, err = (Builder{Metrics: fresh, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	for _, check := range got.BusinessChecks {
 		require.Equal(t, "healthy", check.Status, check.Module)
 	}
-}
-
-// 因子任务连续水位阻塞超过 30 分钟告警，未超过或没有阻塞时正常。
-func TestBuilderReportsStalledFactorWatermarks(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "wm-stalled", "factor", "factor-mgr@control", "moox_factor_task_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_a"}`, float64(now.Add(-31*time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "wm-recent", "factor", "factor-mgr@control", "moox_factor_task_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_b"}`, float64(now.Add(-5*time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "wm-ok", "factor", "factor-mgr@control", "moox_factor_task_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_c"}`, 0, now)
-	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
-	require.NoError(t, err)
-	var check *BusinessStatus
-	for i := range got.BusinessChecks {
-		if got.BusinessChecks[i].Kind == "factor_watermark" {
-			check = &got.BusinessChecks[i]
-		}
-	}
-	require.NotNil(t, check)
-	require.Equal(t, "down", check.Status)
-	require.Contains(t, check.Reason, "ftask_a")
-	require.NotContains(t, check.Reason, "ftask_b")
-}
-
-// 最近 10 分钟内有截止拒绝的数据集告警，更早的不告警。
-func TestBuilderReportsRecentStorageDeadlineRejections(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "rej-recent", "storage", "storage-primary@storage", "moox_storage_period_deadline_rejected_timestamp_seconds", `{"space_id":"crypto","dataset_id":"ds_swap","freq":"1m"}`, float64(now.Add(-2*time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "rej-old", "storage", "storage-primary@storage", "moox_storage_period_deadline_rejected_timestamp_seconds", `{"space_id":"crypto","dataset_id":"ds_spot","freq":"1m"}`, float64(now.Add(-30*time.Minute).Unix()), now)
-	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
-	require.NoError(t, err)
-	var check *BusinessStatus
-	for i := range got.BusinessChecks {
-		if got.BusinessChecks[i].Kind == "storage_rejection" {
-			check = &got.BusinessChecks[i]
-		}
-	}
-	require.NotNil(t, check)
-	require.Equal(t, "down", check.Status)
-	require.Contains(t, check.Reason, "ds_swap")
-	require.NotContains(t, check.Reason, "ds_spot")
 }
 
 func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
@@ -964,37 +918,6 @@ func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
 		}
 		if item := find(overview); item == nil || item.Status != tc.status {
 			t.Fatalf("超限数量 %.0f 时检查 = %+v，want %s", tc.value, item, tc.status)
-		}
-	}
-}
-
-// View 跟随变更日志落后超过 2 分钟才告警，原因里点名落后的 View；只上报了正常值时是健康。
-func TestViewFollowLagBecomesBusinessCheck(t *testing.T) {
-	find := func(overview Overview) *BusinessStatus {
-		for i := range overview.BusinessChecks {
-			if overview.BusinessChecks[i].Kind == "view_follow" {
-				return &overview.BusinessChecks[i]
-			}
-		}
-		return nil
-	}
-	for _, tc := range []struct {
-		value  float64
-		status string
-	}{{0, "healthy"}, {90, "healthy"}, {600, "down"}} {
-		now := time.Now().UTC().Truncate(time.Second)
-		query := openOverviewMetrics(t, func(db *gorm.DB) {
-			seedOverviewMetricForInstance(t, db, "view-follow-ok", "storage-view", "storage-view@storage", "moox_storage_view_follow_lag_seconds", `{"space_id":"crypto","view_id":"kline_1m"}`, 0, now)
-			seedOverviewMetricForInstance(t, db, "view-follow", "storage-view", "storage-view@storage", "moox_storage_view_follow_lag_seconds", `{"space_id":"crypto","view_id":"factor_5m"}`, tc.value, now)
-		})
-		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
-		require.NoError(t, err)
-		item := find(overview)
-		require.NotNil(t, item)
-		require.Equal(t, tc.status, item.Status, "落后 %.0f 秒", tc.value)
-		if tc.status == "down" {
-			require.Contains(t, item.Reason, "crypto/factor_5m")
-			require.NotContains(t, item.Reason, "kline_1m")
 		}
 	}
 }

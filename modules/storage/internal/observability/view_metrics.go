@@ -39,7 +39,9 @@ type ViewMetrics struct {
 	restoreFailures         prometheus.Counter
 	viewFileOverLimit       prometheus.Gauge
 	// followLag 是各 View 跟随变更日志的落后情况，采集时现算。
-	followLag                        *viewFollowLagCollector
+	followLag *viewFollowLagCollector
+	// attention 是 storage-view 的关注项上报器，只在 View 角色里设置。
+	attention                        viewAttention
 	followingSnapshot                atomic.Bool
 	viewWatermarkMu                  sync.Mutex
 	viewWatermarks                   map[string]int64

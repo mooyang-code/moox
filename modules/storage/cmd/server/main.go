@@ -112,10 +112,11 @@ func runPrimaryRole() error {
 	if err != nil {
 		return fmt.Errorf("initialize storage dataset metrics: %w", err)
 	}
-	deadlineRejections, err := observability.NewDeadlineRejections(prometheus.DefaultRegisterer)
+	attention, err := observability.NewPrimaryAttention(prometheus.DefaultRegisterer)
 	if err != nil {
-		return fmt.Errorf("initialize storage deadline rejection metrics: %w", err)
+		return fmt.Errorf("initialize storage-primary attention: %w", err)
 	}
+	deadlineRejections := observability.NewDeadlineRejections(attention)
 	svc, err := primarystore.New(primarystore.Options{
 		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
 		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,
@@ -264,6 +265,11 @@ func runViewRole() error {
 		return err
 	}
 	svc.SetMetrics(observability.DefaultViewMetrics)
+	viewAttention, err := observability.NewViewAttention(prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("initialize storage-view attention: %w", err)
+	}
+	observability.DefaultViewMetrics.SetAttention(viewAttention)
 	if !svc.HasEngine("duckdb") {
 		return errors.New("storage-view requires a CGO-enabled DuckDB engine")
 	}

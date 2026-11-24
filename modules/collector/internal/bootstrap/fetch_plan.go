@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/adminrpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
 	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -51,7 +52,7 @@ func managedSpaces(ctx context.Context, cfg *Config, dbm *store.Store) ([]string
 }
 
 // registerFetchPlanManager 启动采集计划对账：管理集合里的每个空间一个独立协程。对账器始终启动，推送采集不依赖云函数配置。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *fetchplan.ControlMetrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime) error {
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *fetchplan.ControlMetrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime, attn *attention.Attention) error {
 	managed := func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, dbm) }
 	// 启动时先逐个云函数空间检查部署参数，配置错误尽早暴露。
 	for _, space := range cfg.scfSpaces() {
@@ -243,7 +244,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	if !process.launch(func() { control.runRecovery(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}
-	// 心跳中断时在线指标也要变：定时按心跳超时刷新。
+	heartbeat := collectsvc.NewStreamHeartbeatAttention(dbm, time.Duration(cfg.Stream.HeartbeatTimeoutSeconds)*time.Second, attn)
+	// 心跳中断由关注项判断：每 30 秒读库重算，心跳停了值也会变。
 	if !process.launch(func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -252,7 +254,9 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			case <-process.ctx.Done():
 				return
 			case <-ticker.C:
-				stream.RefreshOnline(process.ctx, control.managed(process.ctx))
+				if err := heartbeat.Refresh(process.ctx, control.managed(process.ctx)); err != nil {
+					log.WarnContextf(process.ctx, "collector-stream 心跳关注项未刷新: %v", err)
+				}
 			}
 		}
 	}) {

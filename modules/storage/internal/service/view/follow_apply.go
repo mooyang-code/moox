@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/client"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -28,6 +29,28 @@ const (
 	// followReadTimeout 限制回读的一次调用。
 	followReadTimeout = 30 * time.Second
 )
+
+// viewFollowLagLimit 是 View 跟随变更日志允许的落后时长：跟随器空闲时每轮最多等 20 秒，正常应用一期在秒级以内。
+// 只按时长判断：空闲数据集的序号差天然会有一轮等待的量，按序号差会误报。
+const viewFollowLagLimit = 2 * time.Minute
+
+// followLagAttention 列出落后超过 viewFollowLagLimit 的 View。detail 只写对象与落后起点（上次追上日志头部的时刻），同一次落后内不变。
+func followLagAttention(lags []follow.Lag) map[string][]string {
+	var lagging []string
+	for _, lag := range lags {
+		if lag.Seconds <= viewFollowLagLimit.Seconds() || lag.Since.IsZero() {
+			continue
+		}
+		lagging = append(lagging, fmt.Sprintf("%s/%s 自 %s 起没有追上", lag.Key.SpaceID, lag.Key.ViewID, report.AttentionTime(lag.Since)))
+	}
+	if len(lagging) == 0 {
+		return nil
+	}
+	sort.Strings(lagging)
+	// 合成一条：对象按序在前、处理提示在后（多条会被重新排序）。
+	detail := strings.Join(lagging, "；") + "。查询会读到旧数据，看 storage-view 日志里的跟随失败原因"
+	return map[string][]string{observability.AttentionViewFollowLagging: {detail}}
+}
 
 // FollowOptions 是 View 跟随变更日志的依赖。
 type FollowOptions struct {
@@ -82,12 +105,14 @@ func (s *Service) StartFollowing(ctx context.Context, opts FollowOptions) (func(
 		}
 		return out
 	})
+	s.metrics.SetAttentionSource("view_follow", func(now time.Time) map[string][]string { return followLagAttention(manager.Lags(now)) })
 	for _, ref := range refs {
 		s.ensureFollower(ref)
 	}
 	return func() {
 		s.metrics.SetFollowing(false)
 		s.metrics.SetFollowLagSource(nil)
+		s.metrics.SetAttentionSource("view_follow", nil)
 		manager.Close()
 		s.mu.Lock()
 		if s.follow == manager {

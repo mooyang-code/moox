@@ -24,6 +24,11 @@ const (
 // maxAttentionDetail 是 detail 标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
 const maxAttentionDetail = 480
 
+// AttentionTime 是 detail 里写时刻的统一格式（UTC，到分钟）：只写起始或最后时刻，不写持续多久，同一次情况内 detail 不变。
+func AttentionTime(at time.Time) string {
+	return at.UTC().Format("01-02 15:04 UTC")
+}
+
 // AttentionKind 是生产者声明的一种需要人看的情况：名称是告警标题，级别是 critical（故障）或 warning（只需提醒）。
 type AttentionKind struct{ Kind, Name, Severity string }
 
