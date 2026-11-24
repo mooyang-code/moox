@@ -123,6 +123,37 @@ func TestEnsureTakesOverSameNameFunctionWithDifferentPackageAndEnvironment(t *te
 	require.Empty(t, fake.RejectedWrites())
 }
 
+// public 地域的函数不绑 VPC：新建时不带 VPC；同名函数原来绑着 VPC 时，Ensure 显式清掉，之后不再有写请求。
+func TestEnsureClearsVPCForPublicRegionFunction(t *testing.T) {
+	ctx := context.Background()
+	public := func(version string) FunctionSpec {
+		spec := finalSpec(version)
+		spec.VPCID, spec.SubnetID = "", ""
+		return spec
+	}
+
+	fake := newBaselineSCF()
+	functions := newTestFunctions(t, fake)
+	require.NoError(t, functions.Ensure(ctx, public("v1")))
+	function := functionState(t, fake, baselineRef)
+	require.Empty(t, function.VpcID)
+	require.Empty(t, function.SubnetID)
+	require.Equal(t, "ENABLE", function.PublicNetStatus)
+
+	fake = newBaselineSCF()
+	seedTimerFunction(fake, "Active", "moox-collector_v1", timerEnvironment(`{"v":1,"plan":"final"}`, "hash-final", "42", "scf-key-2"), enabledTimer("5 * * * * * *"))
+	functions = newTestFunctions(t, fake)
+	require.NoError(t, functions.Ensure(ctx, public("v1")))
+	function = functionState(t, fake, baselineRef)
+	require.Empty(t, function.VpcID, "原来绑着 VPC 的函数要清掉")
+	require.Empty(t, function.SubnetID)
+	require.Empty(t, fake.RejectedWrites())
+	fake.ResetWrites()
+	require.NoError(t, functions.Ensure(ctx, public("v1")))
+	writes, _ := fake.Snapshot()
+	require.Empty(t, writes, "清掉 VPC 后与期望一致，再调用不能有写请求")
+}
+
 // 定时器被人停掉或删掉：Ensure 把它改回期望的样子，环境与代码不动。
 func TestEnsureRestoresStoppedOrDeletedTimer(t *testing.T) {
 	ctx := context.Background()
@@ -310,7 +341,7 @@ func TestEnsureRejectsInvalidSpecsBeforeAnyWrite(t *testing.T) {
 		{"定时函数不带采集计划", func(spec *FunctionSpec) { delete(spec.Environment, "MOOX_MARKET_FETCH_PLAN") }, "MOOX_MARKET_FETCH_PLAN"},
 		{"cron 不支持", func(spec *FunctionSpec) { spec.Timer = &Timer{Cron: "0 */7 * * * * *", Enabled: true} }, "cron"},
 		{"代码包不可用", func(spec *FunctionSpec) { spec.Package.Status = "pending" }, "不可用"},
-		{"没有 VPC", func(spec *FunctionSpec) { spec.VPCID = "" }, "VPC"},
+		{"有 VPC 没有子网", func(spec *FunctionSpec) { spec.SubnetID = "" }, "VPC 与子网"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fake := newBaselineSCF()

@@ -20,7 +20,7 @@ import (
 )
 
 // SCFPlanConfig 是定时触发采集的函数部署参数。网络（VPC、子网）按地域放在 scf_regions，
-// 每个空间与市场使用的地域放在 scf_markets，函数访问外部入口的私网地址放在 entry_routes。
+// 每个空间与市场使用的地域放在 scf_markets，函数访问外部入口的地址放在 entry_routes（vpc 地域是私网地址，public 地域是公网地址）。
 type SCFPlanConfig struct {
 	CloudAccountID string `yaml:"cloud_account_id"`
 	// PackageName 是代码包的包名：每轮取这个包名最新的可用代码包（上传新版本后函数自动升级）。
@@ -35,7 +35,7 @@ type SCFPlanConfig struct {
 	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
 	// AssumedEgressIPs 是函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警。
 	AssumedEgressIPs int `yaml:"assumed_egress_ips"`
-	// EntryRoutes 是采集计划函数访问外部入口的私网地址（按地域）。
+	// EntryRoutes 是采集计划函数访问外部入口的地址（按地域；vpc 地域是私网，public 地域是公网）。
 	EntryRoutes map[string]SCFEntryEndpoint `yaml:"entry_routes"`
 	Fetch       SCFPlanFetchConfig          `yaml:"fetch"`
 	// Spaces 是按空间的覆盖项：每函数标的数与拉取参数（stockcn 与 crypto 的限流、取数时刻不同）。
@@ -323,7 +323,7 @@ func mergeSpaces(lists ...[]string) []string {
 	return all
 }
 
-// validateSCFPlan 检查采集计划配置：每个地域必须有 VPC、子网与同地域外部入口私网地址。
+// validateSCFPlan 检查采集计划配置：用到的每个地域要有合法的网络（见 PlanNetwork.Check）与入口路由。
 func (c *Config) validateSCFPlan() error {
 	if len(c.SCFMarkets) == 0 {
 		return nil
@@ -348,11 +348,8 @@ func (c *Config) validateSCFPlan() error {
 	}
 	for space, override := range plan.Spaces {
 		if region := override.BackfillRegion; region != "" {
-			if network, ok := c.SCFRegions[region]; !ok || network.VPCID == "" || network.SubnetID == "" {
-				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s has no VPC and subnet in scf_regions", space, region)
-			}
-			if _, ok := plan.EntryRoutes[region]; !ok {
-				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s has no same-region entry route in scf_plan.entry_routes", space, region)
+			if err := c.checkSCFRegion(region); err != nil {
+				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s: %w", space, region, err)
 			}
 		}
 		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
@@ -373,15 +370,27 @@ func (c *Config) validateSCFPlan() error {
 				return fmt.Errorf("scf_markets[%s][%s] requires a lowercase market and at least one region", space, market)
 			}
 			for _, region := range regions {
-				network, ok := c.SCFRegions[region]
-				if !ok || network.VPCID == "" || network.SubnetID == "" {
-					return fmt.Errorf("scf_markets[%s][%s] region %s has no VPC and subnet in scf_regions", space, market, region)
-				}
-				if _, ok := plan.EntryRoutes[region]; !ok {
-					return fmt.Errorf("scf_markets[%s][%s] region %s has no same-region entry route in scf_plan.entry_routes", space, market, region)
+				if err := c.checkSCFRegion(region); err != nil {
+					return fmt.Errorf("scf_markets[%s][%s] region %s: %w", space, market, region, err)
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// checkSCFRegion 校验某地域的函数网络与入口路由：网络见 PlanNetwork.Check；vpc 地域的入口是同地域入口主机的私网地址，
+// public 地域的入口是入口主机的公网地址，两种都要在 scf_plan.entry_routes 里。
+func (c *Config) checkSCFRegion(region string) error {
+	network, ok := c.SCFRegions[region]
+	if !ok {
+		return fmt.Errorf("has no network in scf_regions")
+	}
+	if err := network.Check(); err != nil {
+		return fmt.Errorf("scf_regions: %w", err)
+	}
+	if _, ok := c.SCFPlan.EntryRoutes[region]; !ok {
+		return fmt.Errorf("has no entry route in scf_plan.entry_routes")
 	}
 	return nil
 }
@@ -430,7 +439,7 @@ func (c *Config) fetchPlanDeploy(spaceID string) (fetchplan.PlanDeploy, error) {
 	}, nil
 }
 
-// scfPlanEntryEnvironmentRoute 返回某地域的外部入口私网地址配置。
+// scfPlanEntryEnvironmentRoute 返回某地域的外部入口地址配置。
 func (c *Config) scfPlanEntryEnvironmentRoute(region string) (SCFEntryEndpoint, error) {
 	route, ok := c.SCFPlan.EntryRoutes[strings.ToLower(strings.TrimSpace(region))]
 	if !ok {
@@ -439,7 +448,7 @@ func (c *Config) scfPlanEntryEnvironmentRoute(region string) (SCFEntryEndpoint, 
 	return route, nil
 }
 
-// scfPlanEntryEnvironment 返回采集计划函数在某地域使用的外部入口环境：私网入口与调用方密钥。
+// scfPlanEntryEnvironment 返回采集计划函数在某地域使用的外部入口环境：入口地址与调用方密钥。
 func (c *Config) scfPlanEntryEnvironment(region string) (map[string]string, error) {
 	route, err := c.scfPlanEntryEnvironmentRoute(region)
 	if err != nil {

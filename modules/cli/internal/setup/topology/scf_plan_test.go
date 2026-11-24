@@ -71,11 +71,30 @@ func TestSCFPlanDisabledRemovesTheRenderedBlocks(t *testing.T) {
 
 func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) {
 	cases := map[string]func(*Config){
-		"no cloud account":               func(m *Config) { m.SCFPlan.CloudAccount = SCFCloudAccountConfig{} },
-		"no spaces":                      func(m *Config) { m.SCFPlan.Spaces = nil },
-		"no markets":                     func(m *Config) { m.SCFPlan.Spaces[0].Markets = nil },
-		"missing vpc":                    func(m *Config) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },
-		"unused region":                  func(m *Config) { m.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "v", SubnetID: "s"} },
+		"no cloud account":            func(m *Config) { m.SCFPlan.CloudAccount = SCFCloudAccountConfig{} },
+		"no spaces":                   func(m *Config) { m.SCFPlan.Spaces = nil },
+		"no markets":                  func(m *Config) { m.SCFPlan.Spaces[0].Markets = nil },
+		"missing vpc":                 func(m *Config) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },
+		"unused region without entry": func(m *Config) { m.SCFPlan.Regions["ap-shanghai"] = SCFPlanRegion{VPCID: "v", SubnetID: "s"} },
+		"bad network": func(m *Config) {
+			m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{Network: "cable", VPCID: "v", SubnetID: "s"}
+		},
+		"public with vpc": func(m *Config) {
+			m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{Network: "public", VPCID: "v", SubnetID: "s", EntryHost: "storage"}
+		},
+		"public without entry host": func(m *Config) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{Network: "public"} },
+		"public entry is not an entry": func(m *Config) {
+			m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{Network: "public", EntryHost: "control"}
+		},
+		"public entry is unknown": func(m *Config) {
+			m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{Network: "public", EntryHost: "nobody"}
+		},
+		"public entry has no address": func(m *Config) {
+			m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{Network: "public", EntryHost: "storage"}
+			definition := m.HostCatalog["storage"]
+			definition.Address = ""
+			m.HostCatalog["storage"] = definition
+		},
 		"unsupported region":             func(m *Config) { m.SCFPlan.Spaces[0].Markets["spot"] = []string{"mars-1"} },
 		"unsupported backfill region":    func(m *Config) { m.SCFPlan.Spaces[0].BackfillRegion = "mars-1" },
 		"backfill region has no network": func(m *Config) { m.SCFPlan.Spaces[0].BackfillRegion = "ap-nanjing" },
@@ -104,6 +123,36 @@ func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) 
 	manifest := scfPlanTestConfig()
 	manifest.SCFPlan.Enabled, manifest.SCFPlan.Spaces = false, nil
 	require.NoError(t, manifest.CheckSCFPlan())
+}
+
+// public 地域不绑 VPC，入口用 entry_host 的公网地址；没被市场使用的地域（撤地域的过渡期）照样渲染网络与入口。
+func TestSCFPlanPublicRegionAndUnusedRegionAreRendered(t *testing.T) {
+	manifest := scfPlanTestConfig()
+	manifest.SCFPlan.Regions["ap-shanghai"] = SCFPlanRegion{Network: " Public ", EntryHost: "storage"}
+	manifest.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "vpc-nj", SubnetID: "subnet-nj"}
+	manifest.SCFPlan.Spaces[0].Markets["spot"] = []string{"ap-hongkong", "ap-shanghai"}
+	require.NoError(t, manifest.CheckSCFPlan())
+	require.Equal(t, SCFNetworkPublic, manifest.SCFPlan.Regions["ap-shanghai"].Network)
+	require.Equal(t, SCFNetworkVPC, manifest.SCFPlan.Regions["ap-hongkong"].Network)
+	address, host, err := manifest.SCFPlanEntry("ap-shanghai")
+	require.NoError(t, err)
+	require.Equal(t, "2.2.2.2:11004", address)
+	require.Equal(t, "storage", host)
+
+	rendered, err := RenderCollectorRuntimeConfig(manifest, nil)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &got))
+	require.Equal(t, map[string]any{
+		"ap-hongkong": map[string]any{"vpc_id": "vpc-hk", "subnet_id": "subnet-hk"},
+		"ap-nanjing":  map[string]any{"vpc_id": "vpc-nj", "subnet_id": "subnet-nj"},
+		"ap-shanghai": map[string]any{"network": "public"},
+	}, got["scf_regions"])
+	require.Equal(t, map[string]any{
+		"ap-hongkong": map[string]any{"entry_address": "172.19.32.13:11004", "entry_host": "overseas"},
+		"ap-nanjing":  map[string]any{"entry_address": "10.206.0.5:11004", "entry_host": "storage"},
+		"ap-shanghai": map[string]any{"entry_address": "2.2.2.2:11004", "entry_host": "storage"},
+	}, got["scf_plan"].(map[string]any)["entry_routes"])
 }
 
 func TestSCFPlanEntrySelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
@@ -150,7 +199,9 @@ const scfPlanRenderedFixture = "testdata/scf_plan_rendered.yaml"
 
 func TestSCFPlanRenderedCollectorConfigMatchesTheSharedFixture(t *testing.T) {
 	manifest := scfPlanTestConfig()
-	manifest.SCFPlan.Spaces = append(manifest.SCFPlan.Spaces, SCFPlanSpace{SpaceID: "stockcn", Markets: map[string][]string{"equity": {"ap-hongkong"}}})
+	manifest.SCFPlan.Spaces = append(manifest.SCFPlan.Spaces, SCFPlanSpace{SpaceID: "stockcn", Markets: map[string][]string{"equity": {"ap-hongkong", "ap-shanghai"}}})
+	// 公网地域：Collector 也要能加载 network: public 与公网入口。
+	manifest.SCFPlan.Regions["ap-shanghai"] = SCFPlanRegion{Network: SCFNetworkPublic, EntryHost: "storage"}
 	require.NoError(t, manifest.CheckSCFPlan())
 	// 与默认部署一致的出口与保留策略，使产物是 Collector 能真实加载的完整配置。
 	manifest.EgressProxy = EgressProxy{HTTPDomains: []string{"*.binance.com"}}
@@ -172,7 +223,7 @@ func TestSCFPlanBackfillRegionIsRendered(t *testing.T) {
 	manifest.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "vpc-nj", SubnetID: "subnet-nj"}
 	manifest.SCFPlan.Spaces[0].BackfillRegion = " AP-Nanjing "
 	require.NoError(t, manifest.CheckSCFPlan())
-	require.Equal(t, []string{"ap-hongkong", "ap-nanjing"}, manifest.SCFPlanRegionNames())
+	require.Equal(t, []string{"ap-hongkong", "ap-nanjing"}, manifest.SCFPlanConfiguredRegions())
 
 	rendered, err := RenderCollectorRuntimeConfig(manifest, []byte("database: {path: keep.db}\n"))
 	require.NoError(t, err)

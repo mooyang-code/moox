@@ -25,7 +25,9 @@ type SCFPlan struct {
 	SymbolsPerFunction int `toml:"symbols_per_function"`
 	// AssumedEgressIPs 是函数出口 IP 个数的估计，只用于频控估算与告警，默认 1。
 	AssumedEgressIPs int `toml:"assumed_egress_ips"`
-	// Regions 是函数所在地域的网络（VPC 与子网），地域内必须有一台标了 external_entry、配置了 private_address 的主机。
+	// Regions 是函数所在地域的网络。vpc 方式（默认）要求地域内有一台标了 external_entry、配置了 private_address 的主机；
+	// public 方式用于没有 MooX 主机的地域，函数不绑 VPC，经公网连 entry_host 的外部入口。
+	// 没被任何市场使用的地域也照样渲染：撤掉地域时，退役函数在计划推进期间还要用到它的网络与入口。
 	Regions map[string]SCFPlanRegion `toml:"regions"`
 	Spaces  []SCFPlanSpace           `toml:"spaces"`
 }
@@ -42,11 +44,21 @@ type SCFCloudAccountConfig struct {
 
 // SCFPlanRegion 是某个地域的函数网络。
 type SCFPlanRegion struct {
+	// Network 是函数访问外部入口的方式：vpc（默认）经同地域入口主机的私网；public 不绑 VPC，经公网连 entry_host。
+	// 按地域生效，各空间共用。
+	Network  string `toml:"network"`
 	VPCID    string `toml:"vpc_id"`
 	SubnetID string `toml:"subnet_id"`
-	// EntryHost 指定该地域用哪台主机的外部入口作为函数入口；同地域只有一台有私网地址的入口主机时可省略。
+	// EntryHost 指定函数入口用哪台主机的外部入口。vpc 方式下同地域只有一台有私网地址的入口主机时可省略；
+	// public 方式必填，主机可以在任何地域，用它的公网地址。
 	EntryHost string `toml:"entry_host"`
 }
+
+// SCF 函数访问外部入口的两种方式。
+const (
+	SCFNetworkVPC    = "vpc"
+	SCFNetworkPublic = "public"
+)
 
 // SCFPlanSpace 是参与 Timer 采集的一个空间。
 type SCFPlanSpace struct {
@@ -87,6 +99,10 @@ func (p *SCFPlan) Normalize() {
 	for name, region := range p.Regions {
 		region.VPCID, region.SubnetID = strings.TrimSpace(region.VPCID), strings.TrimSpace(region.SubnetID)
 		region.EntryHost = strings.TrimSpace(region.EntryHost)
+		region.Network = strings.ToLower(strings.TrimSpace(region.Network))
+		if region.Network == "" {
+			region.Network = SCFNetworkVPC
+		}
 		regions[strings.ToLower(strings.TrimSpace(name))] = region
 	}
 	p.Regions = regions
@@ -185,26 +201,45 @@ func (c *Config) CheckSCFPlan() error {
 		}
 	}
 	for region := range used {
-		network, ok := plan.Regions[region]
-		if !ok || network.VPCID == "" || network.SubnetID == "" {
-			return fmt.Errorf("config_invalid: scf_plan.regions.%s requires vpc_id and subnet_id (functions run inside the region's VPC)", region)
+		if _, ok := plan.Regions[region]; !ok {
+			return fmt.Errorf("config_invalid: scf_plan.regions.%s is required: every region used by a space needs its network", region)
+		}
+	}
+	for region, network := range plan.Regions {
+		if !tencent.IsSCFRegion(region) {
+			return fmt.Errorf("config_invalid: scf_plan.regions.%s is not a supported region", region)
+		}
+		switch network.Network {
+		case SCFNetworkVPC:
+			if network.VPCID == "" || network.SubnetID == "" {
+				return fmt.Errorf("config_invalid: scf_plan.regions.%s requires vpc_id and subnet_id (functions run inside the region's VPC); use network = \"public\" for a region without a MooX host", region)
+			}
+		case SCFNetworkPublic:
+			if network.VPCID != "" || network.SubnetID != "" {
+				return fmt.Errorf("config_invalid: scf_plan.regions.%s uses network = \"public\" and must not set vpc_id or subnet_id", region)
+			}
+			if network.EntryHost == "" {
+				return fmt.Errorf("config_invalid: scf_plan.regions.%s uses network = \"public\" and requires entry_host (an external entry host reached over the internet)", region)
+			}
+		default:
+			return fmt.Errorf("config_invalid: scf_plan.regions.%s.network must be \"vpc\" or \"public\"", region)
 		}
 		if _, _, err := c.SCFPlanEntry(region); err != nil {
 			return err
 		}
 	}
-	for region := range plan.Regions {
-		if _, ok := used[region]; !ok {
-			return fmt.Errorf("config_invalid: scf_plan.regions.%s is not used by any space market", region)
-		}
-	}
 	return nil
 }
 
-// SCFPlanEntry 返回某地域 SCF 函数用的外部入口：该地域内标了 external_entry、配置了私网地址的主机，返回它的私网入口地址与主机 ID。
-// 函数在地域的 VPC 里运行，只能用私网地址访问。同地域有多台候选时必须用 scf_plan.regions.<region>.entry_host 指定。
+// SCFPlanEntry 返回某地域 SCF 函数用的外部入口地址与主机 ID。
+// vpc 方式：该地域内标了 external_entry、配置了私网地址的主机的私网地址；函数在地域的 VPC 里运行，只能用私网访问，
+// 同地域有多台候选时必须用 scf_plan.regions.<region>.entry_host 指定。
+// public 方式：entry_host 的公网地址（任何地域）；入口主机的安全组要对公网放行外部入口端口。
 func (c *Config) SCFPlanEntry(region string) (address, host string, err error) {
 	region = strings.ToLower(strings.TrimSpace(region))
+	if network := c.SCFPlan.Regions[region]; network.Network == SCFNetworkPublic {
+		return c.scfPlanPublicEntry(region, network.EntryHost)
+	}
 	var inRegion, usable []Host
 	for _, host := range c.Hosts() {
 		if host.Region != region || !host.ExternalEntry {
@@ -248,21 +283,27 @@ func (c *Config) SCFPlanEntry(region string) (address, host string, err error) {
 	return net.JoinHostPort(chosen.PrivateAddress, strconv.Itoa(servicecatalog.HostGatewayExternalPort)), chosen.Name, nil
 }
 
-// SCFPlanRegionNames 返回计划用到的地域（排序）。
-func (c *Config) SCFPlanRegionNames() []string {
-	set := map[string]struct{}{}
-	for _, space := range c.SCFPlan.Spaces {
-		for _, regions := range space.Markets {
-			for _, region := range regions {
-				set[region] = struct{}{}
-			}
+// scfPlanPublicEntry 返回 public 方式地域的入口：entry_host 的公网地址加外部入口端口。
+func (c *Config) scfPlanPublicEntry(region, want string) (string, string, error) {
+	for _, host := range c.Hosts() {
+		if host.Name != want {
+			continue
 		}
-		if space.BackfillRegion != "" {
-			set[space.BackfillRegion] = struct{}{}
+		if !host.ExternalEntry {
+			return "", "", fmt.Errorf("config_invalid: scf_plan.regions.%s.entry_host %q is not an external entry host (hosts.%s.external_entry = true)", region, want, want)
 		}
+		if host.Address == "" {
+			return "", "", fmt.Errorf("config_invalid: hosts.%s.address is required: scf_plan functions in %s reach its external entry over the internet", want, region)
+		}
+		return net.JoinHostPort(host.Address, strconv.Itoa(servicecatalog.HostGatewayExternalPort)), host.Name, nil
 	}
-	names := make([]string, 0, len(set))
-	for name := range set {
+	return "", "", fmt.Errorf("config_invalid: scf_plan.regions.%s.entry_host %q is not a configured host", region, want)
+}
+
+// SCFPlanConfiguredRegions 返回 [scf_plan.regions] 里配置的全部地域（排序），含没被市场使用的地域。
+func (c *Config) SCFPlanConfiguredRegions() []string {
+	names := make([]string, 0, len(c.SCFPlan.Regions))
+	for name := range c.SCFPlan.Regions {
 		names = append(names, name)
 	}
 	sort.Strings(names)

@@ -15,6 +15,8 @@ scf_regions:
   ap-hongkong:
     subnet_id: subnet-hk
     vpc_id: vpc-hk
+  ap-shanghai:
+    network: public
 scf_markets:
   crypto:
     spot:
@@ -24,6 +26,7 @@ scf_markets:
   stockcn:
     equity:
       - ap-hongkong
+      - ap-shanghai
 scf_plan:
   cloud_account_id: tencent-scf
   memory_mb: 128
@@ -32,6 +35,9 @@ scf_plan:
     ap-hongkong:
       entry_address: 172.19.32.13:11004
       entry_host: overseas
+    ap-shanghai:
+      entry_address: 2.2.2.2:11004
+      entry_host: storage
   spaces:
     crypto:
       namespace: moox-crypto-plan

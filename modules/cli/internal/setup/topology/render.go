@@ -78,8 +78,8 @@ func RenderCollectorRuntimeConfig(cfg *Config, existing []byte) ([]byte, error) 
 	))
 }
 
-// renderSCFPlanBlocks 渲染 Timer 采集计划的 Collector 配置：scf_regions（地域网络）、scf_markets（空间与市场的运行地域）、
-// scf_plan（云账号、代码包名称、命名空间、各地域外部入口的私网地址）。未启用时三块一并移除：这只关掉云函数，推送采集不受影响。
+// renderSCFPlanBlocks 渲染 Timer 采集计划的 Collector 配置：scf_regions（地域网络：vpc 或 public）、scf_markets（空间与市场的运行地域）、
+// scf_plan（云账号、代码包名称、命名空间、各地域外部入口的地址：vpc 地域是私网地址，public 地域是公网地址）。未启用时三块一并移除：这只关掉云函数，推送采集不受影响。
 // 代码包只写名称：Collector 总是使用该名称的最新可用版本，上传新版本后不需要改配置或重启。
 func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	plan := cfg.SCFPlan
@@ -94,9 +94,14 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	}
 	regions := map[string]map[string]string{}
 	entries := map[string]map[string]string{}
-	for _, region := range cfg.SCFPlanRegionNames() {
+	// 渲染配置里的全部地域（含没被市场使用的）：撤掉地域时，退役函数在计划推进期间还要用到它的网络与入口。
+	for _, region := range cfg.SCFPlanConfiguredRegions() {
 		network := plan.Regions[region]
-		regions[region] = map[string]string{"vpc_id": network.VPCID, "subnet_id": network.SubnetID}
+		if network.Network == SCFNetworkPublic {
+			regions[region] = map[string]string{"network": SCFNetworkPublic}
+		} else {
+			regions[region] = map[string]string{"vpc_id": network.VPCID, "subnet_id": network.SubnetID}
+		}
 		address, host, entryErr := cfg.SCFPlanEntry(region)
 		if entryErr != nil {
 			return nil, entryErr
@@ -135,7 +140,7 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 }
 
 // SCFEntryIdentity 返回函数的固定签名身份与默认的外部入口（见 Config.EntryHost）；
-// 各地域的私网入口由 [scf_plan] 渲染到 scf_plan.entry_routes。没有主机标外部入口时不写入口，保留模板里的占位。
+// 各地域的入口（vpc 地域是私网地址，public 地域是公网地址）由 [scf_plan] 渲染到 scf_plan.entry_routes。没有主机标外部入口时不写入口，保留模板里的占位。
 func SCFEntryIdentity(cfg *Config) map[string]string {
 	base := map[string]string{"caller": "scf-collector", "key_file": "../../secrets/scf-collector.key"}
 	if host := cfg.EntryHost(); host.Address != "" {

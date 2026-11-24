@@ -301,10 +301,10 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 
 	noRoute := valid()
 	noRoute.SCFPlan.EntryRoutes = nil
-	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region entry route")
+	require.ErrorContains(t, noRoute.validateSCFPlan(), "no entry route")
 	noNetwork := valid()
 	noNetwork.SCFRegions = nil
-	require.ErrorContains(t, noNetwork.validateSCFPlan(), "VPC and subnet")
+	require.ErrorContains(t, noNetwork.validateSCFPlan(), "no network in scf_regions")
 	noDeploy := valid()
 	noDeploy.SCFPlan.PackageName = ""
 	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_name")
@@ -314,9 +314,27 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 	backfill.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"crypto": {BackfillRegion: "ap-nanjing"}}
 	require.NoError(t, backfill.validateSCFPlan())
 	backfill.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"crypto": {BackfillRegion: "ap-hongkong"}}
-	require.ErrorContains(t, backfill.validateSCFPlan(), "backfill_region ap-hongkong has no VPC and subnet")
+	require.ErrorContains(t, backfill.validateSCFPlan(), "backfill_region ap-hongkong: has no network")
 	backfill.SCFRegions["ap-hongkong"] = fetchplan.PlanNetwork{VPCID: "vpc-2", SubnetID: "subnet-2"}
-	require.ErrorContains(t, backfill.validateSCFPlan(), "backfill_region ap-hongkong has no same-region entry route")
+	require.ErrorContains(t, backfill.validateSCFPlan(), "backfill_region ap-hongkong: has no entry route")
+
+	// public 地域不绑 VPC，入口是入口主机的公网地址；带了 VPC、或 vpc 地域缺子网、或 network 写错都拒绝。
+	public := valid()
+	public.SCFRegions["ap-shanghai"] = fetchplan.PlanNetwork{Network: fetchplan.NetworkPublic}
+	public.SCFPlan.EntryRoutes["ap-shanghai"] = SCFEntryEndpoint{Address: "146.56.196.204:11004", Host: "storage"}
+	public.SCFMarkets["crypto"]["spot"] = []string{"ap-nanjing", "ap-shanghai"}
+	require.NoError(t, public.validateSCFPlan())
+	public.SCFRegions["ap-shanghai"] = fetchplan.PlanNetwork{Network: fetchplan.NetworkPublic, VPCID: "vpc-3"}
+	require.ErrorContains(t, public.validateSCFPlan(), "must not set vpc_id")
+	public.SCFRegions["ap-shanghai"] = fetchplan.PlanNetwork{VPCID: "vpc-3"}
+	require.ErrorContains(t, public.validateSCFPlan(), "needs vpc_id and subnet_id")
+	public.SCFRegions["ap-shanghai"] = fetchplan.PlanNetwork{Network: "cable"}
+	require.ErrorContains(t, public.validateSCFPlan(), "must be vpc or public")
+	// 撤地域的过渡期：scf_regions 里有、但没被市场使用的地域照样接受。
+	unused := valid()
+	unused.SCFRegions["ap-shanghai"] = fetchplan.PlanNetwork{Network: fetchplan.NetworkPublic}
+	unused.SCFPlan.EntryRoutes["ap-shanghai"] = SCFEntryEndpoint{Address: "146.56.196.204:11004", Host: "storage"}
+	require.NoError(t, unused.validateSCFPlan())
 
 	shared := valid()
 	shared.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
@@ -515,6 +533,12 @@ func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 	route, err := cfg.scfPlanEntryEnvironmentRoute("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", route.Address)
+	// 公网地域：不绑 VPC，入口是入口主机的公网地址。
+	require.Equal(t, fetchplan.PlanNetwork{Network: fetchplan.NetworkPublic}, cfg.SCFRegions["ap-shanghai"])
+	route, err = cfg.scfPlanEntryEnvironmentRoute("ap-shanghai")
+	require.NoError(t, err)
+	require.Equal(t, "2.2.2.2:11004", route.Address)
+	require.Equal(t, "storage", route.Host)
 }
 
 // 按市场的覆盖只影响该市场，未写的字段沿用空间与全局值；内置默认给 crypto 合约 8 秒、现货 3 秒后取数、合约 SCF 截止 20 秒。
