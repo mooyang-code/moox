@@ -306,7 +306,7 @@ func TestFinalizeDeletesRowsPerPartition(t *testing.T) {
 		t.Fatalf("定稿后: %+v %+v", p, stats)
 	}
 	if _, _, ok, _ := s.ChangeCursor(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("定稿不推进水位")
+		t.Fatal("定稿不动位点")
 	}
 	// 已定稿的分区再定稿是空操作。
 	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, now0.Add(time.Hour)); err != nil {
@@ -558,7 +558,7 @@ func TestBindTaskDropsStateOfAnotherTaskID(t *testing.T) {
 	if _, _, ok, _ := s.ChangeCursor(ctx, "crypto", "ds_1m"); !ok {
 		t.Fatal("同一任务不应丢位点")
 	}
-	// 任务重建：旧水位、暂存表与分区状态全部丢弃。
+	// 任务重建：旧位点、暂存表与分区状态全部丢弃。
 	rebuilt := task
 	rebuilt.DirName = "binance-spot-kline-1m-v2"
 	if err := s.BindTask(ctx, rebuilt, "8"); err != nil {

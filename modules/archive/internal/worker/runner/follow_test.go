@@ -107,7 +107,7 @@ func TestRescanStopsAtASegmentBoundaryWhenTheBudgetRunsOut(t *testing.T) {
 		e.src.requests = nil
 		e.run(2000, nil, nil)
 		if !e.src.requests[0].Start.Equal(time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)) {
-			t.Fatalf("续读起点 = %s", e.src.requests[0].Start)
+			t.Fatalf("接着重读的起点 = %s", e.src.requests[0].Start)
 		}
 	})
 	t.Run("过了第 55 秒", func(t *testing.T) {
@@ -187,7 +187,7 @@ func TestRescanResumesFromTheProgressAfterAFailure(t *testing.T) {
 	e.now = e.now.Add(time.Minute)
 	out = e.run(2000, nil, nil)
 	if out.Status != "succeeded" || !e.src.requests[0].Start.Equal(d0.Add(5*time.Hour)) || out.Progress.RowsRead != 60*20 {
-		t.Fatalf("续读: start=%s out=%+v", e.src.requests[0].Start, out)
+		t.Fatalf("接着重读: start=%s out=%+v", e.src.requests[0].Start, out)
 	}
 	if _, _, ok := rescanState(t, e); ok {
 		t.Fatal("读完后应清空")
