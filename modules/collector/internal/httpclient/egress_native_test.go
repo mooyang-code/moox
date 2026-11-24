@@ -116,6 +116,12 @@ type tagSnapshotFixture struct {
 }
 
 func (f *tagSnapshotFixture) ListTags(context.Context) ([]*storagepb.Tag, error) { return f.tags, nil }
+
+// ListTagMembers 只在快照带交易所原始交易状态时用到，这里的快照都不带。
+func (f *tagSnapshotFixture) ListTagMembers(context.Context, string, string, string) ([]*storagepb.TagMember, error) {
+	return nil, nil
+}
+
 func (f *tagSnapshotFixture) ApplyTagSnapshot(_ context.Context, _, tag string, items []*storagepb.TagSnapshotItem) error {
 	f.applied[tag] = items
 	return nil

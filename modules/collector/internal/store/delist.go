@@ -92,3 +92,30 @@ func (r *DelistNoticeRepository) Register(ctx context.Context, notice DelistNoti
 	})
 	return created, eventID, err
 }
+
+// DelistedSymbols 返回某交易所、某市场、某范围里“最新一条通知的下架时间已经过了 now”的代码集合（交易所写法，大写）。
+// 同一代码改过下架时间时有多行，按 c_id 取最新一行；交易状态检测据此把长期留在交易所列表里的下架现货标成退市。
+func (r *DelistNoticeRepository) DelistedSymbols(ctx context.Context, exchange, market, scope string, now time.Time) (map[string]bool, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("delist notice repository is not ready")
+	}
+	var rows []delistNoticeRow
+	if err := r.db.WithContext(ctx).Select("c_id", "c_symbol", "c_delist_at").
+		Where("c_exchange = ? AND c_market = ? AND c_scope = ?", exchange, market, scope).
+		Order("c_id DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	delisted := map[string]bool{}
+	for _, row := range rows {
+		symbol := strings.ToUpper(strings.TrimSpace(row.Symbol))
+		if seen[symbol] {
+			continue
+		}
+		seen[symbol] = true
+		if !row.DelistAt.After(now.UTC()) {
+			delisted[symbol] = true
+		}
+	}
+	return delisted, nil
+}

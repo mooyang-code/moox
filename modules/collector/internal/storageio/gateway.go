@@ -124,6 +124,14 @@ func (c *Client) UpdateSubjectAttributes(ctx context.Context, request *storagepb
 	return invoke[storagepb.UpdateSubjectAttributesRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpdateSubjectAttributes", request, options)
 }
 
+func (c *Client) ListTagMembers(ctx context.Context, request *storagepb.ListTagMembersReq, options ...client.Option) (*storagepb.ListTagMembersRsp, error) {
+	return invoke[storagepb.ListTagMembersRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ListTagMembers", request, options)
+}
+
+func (c *Client) SetTagMemberTradingStatus(ctx context.Context, request *storagepb.SetTagMemberTradingStatusReq, options ...client.Option) (*storagepb.SetTagMemberTradingStatusRsp, error) {
+	return invoke[storagepb.SetTagMemberTradingStatusRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "SetTagMemberTradingStatus", request, options)
+}
+
 func (c *Client) GetDataSource(ctx context.Context, request *storagepb.GetDataSourceReq, options ...client.Option) (*storagepb.GetDataSourceRsp, error) {
 	return invoke[storagepb.GetDataSourceRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetDataSource", request, options)
 }

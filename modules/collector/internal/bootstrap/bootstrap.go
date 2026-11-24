@@ -126,17 +126,19 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*Runt
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := fetchplan.NewControlMetrics(prometheus.DefaultRegisterer)
-	subjectSyncer, err := registerSubjectSyncRuntime(s, cfg, process, dbm.TagSyncRuns())
+	subjectSyncer, tradingStatus, err := registerSubjectSyncRuntime(s, cfg, process, dbm)
 	if err != nil {
 		return nil, err
 	}
 	svc.SetSubjectSyncer(subjectSyncer)
+	svc.SetTradingStatus(tradingStatus)
 	streamService := collectsvc.NewStreamService(dbm, collectsvc.StreamSettings{HeartbeatTimeout: time.Duration(cfg.Stream.HeartbeatTimeoutSeconds) * time.Second, CommitReserveMS: cfg.Stream.CommitReserveMS},
 		fetchplan.NewStreamMetrics(prometheus.DefaultRegisterer), subjectSyncer)
 	streamServer := s.Service("trpc.moox.collector.StreamCollector")
 	if streamServer == nil {
 		return nil, fmt.Errorf("trpc_go.yaml 缺少 trpc.moox.collector.StreamCollector 服务")
 	}
+	streamService.SetTradingStatus(tradingStatus)
 	collectorpb.RegisterStreamCollectorService(streamServer, streamService)
 	svc.SetStreamService(streamService)
 	bus, err := newEventBusRuntime(cfg, dbm, attn)

@@ -73,13 +73,13 @@ func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.Coll
 	}
 }
 
-// filterSymbols 过滤标的列表，仅保留 QuoteAsset 为 USDT 且 Status 为 active 的数据
+// filterSymbols 只保留 USDT 计价的交易对，交易状态不限（带在 TradingStatus 里）：标签同步只新增 TRADING 的，
+// 已是成员、临时 BREAK 的留着交给交易状态检测，见 subjectsync.TagRunner。
 func (c *SymbolCollector) filterSymbols(symbols []*exchange.SymbolInfo) []*exchange.SymbolInfo {
 	filtered := make([]*exchange.SymbolInfo, 0, len(symbols))
 
 	for _, symbol := range symbols {
-		// 仅保留 QuoteAsset 为 USDT 且 Status 为 active 的标的
-		if symbol.QuoteAsset == "USDT" && symbol.Status == "active" {
+		if symbol != nil && symbol.QuoteAsset == "USDT" {
 			filtered = append(filtered, symbol)
 		}
 	}

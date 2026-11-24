@@ -21,6 +21,10 @@ subject_sync:
   instrument_type: equity
   cron: "10 8 * * *"
   timezone: Asia/Shanghai
+# 交易状态检测：开盘前与午休各查一次腾讯快照第 40 个字段（S 停牌，D、C 退市），写到标签成员上；不可交易的成员不进采集计划、
+# 监控与因子名单。午休那次让上午停牌、午后复牌的股票在 13:00 前回到计划。
+trading_status:
+  - {market_type: equity, source: tencent, cron: "5 9,12 * * 1-5", timezone: Asia/Shanghai}
 # 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
 scf_plan:
   # 每函数标的数按各源的权重与限速、标的数估算（沪深300 约 8 个函数，只用通达信和东方财富，多拆函数让出口 IP 分散、避开单 IP 频控）。

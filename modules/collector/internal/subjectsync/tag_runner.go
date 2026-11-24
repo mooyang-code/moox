@@ -23,6 +23,8 @@ const sqliteTimeLayout = "2006-01-02 15:04:05"
 type TagStore interface {
 	ListTags(context.Context) ([]*pb.Tag, error)
 	ApplyTagSnapshot(context.Context, string, string, []*pb.TagSnapshotItem) error
+	// ListTagMembers 读标签成员（含交易状态）；只在快照带交易所原始状态（币安）时用到。
+	ListTagMembers(ctx context.Context, spaceID, tagID, status string) ([]*pb.TagMember, error)
 }
 
 // RunStore 保存标签的同步运行结果（Collector 自己的库）：调度判断读它，结果写它。
@@ -40,6 +42,9 @@ type TagRunner struct {
 	FetchTimeout time.Duration
 	Now          func() time.Time
 	Metrics      *Metrics
+	// KeepHaltedMembers 表示交易状态检测在管带交易所原始状态的市场（crypto）：已是成员、临时不可交易（BREAK 等）的交易对留在
+	// 标签里交给它标成停牌。关掉时快照只留正常交易的，否则这些成员会留在标签里却没人标成停牌、照常被采集。
+	KeepHaltedMembers bool
 	// RetryDelays 是快照取数失败或校验不通过时在本次同步内重试前的等待（默认 2 秒、4 秒，共 3 次）；
 	// 都失败就保持原成员不变并上报失败，绝不用一份残缺的快照更新成员。
 	RetryDelays []time.Duration
@@ -180,6 +185,9 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 	subjects := 0
 	var items []*pb.TagSnapshotItem
 	if err == nil {
+		instruments, err = r.keepTradable(ctx, tag, instruments)
+	}
+	if err == nil {
 		items, err = snapshotItems(tag, instruments)
 	}
 	if err == nil {
@@ -200,6 +208,47 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 		r.Metrics.observeTagSuccess(tag, runAt)
 	}
 	return subjects, nil
+}
+
+// keepTradable 处理带交易所原始交易状态的快照（币安）。交易所长期保留已下架的交易对（现货 3751 个里正常交易的只有 1376 个），
+// 整份应用会把它们加进标签、并重新激活早被移出的成员，所以只保留：正常交易的，加上（开着 KeepHaltedMembers 时）已是 active
+// 成员、而且没被标成退市的非交易交易对。没有原始状态的来源（股票）不适用，原样返回。一个正常交易的都没有时按失败处理、成员不变
+// （交易所整体维护或接口异常），读成员失败同样按失败处理，不能退回“只留正常交易的”把停牌成员移出。
+func (r *TagRunner) keepTradable(ctx context.Context, tag *pb.Tag, instruments []marketdata.Instrument) ([]marketdata.Instrument, error) {
+	raw, trading := false, 0
+	for _, item := range instruments {
+		if item.TradingStatus != "" {
+			raw = true
+		}
+		if item.TradingStatus == marketdata.BinanceTrading {
+			trading++
+		}
+	}
+	if !raw {
+		return instruments, nil
+	}
+	if trading == 0 {
+		return nil, fmt.Errorf("%w: tag %s/%s snapshot has no instrument in TRADING", marketdata.ErrProtocol, tag.GetSpaceId(), tag.GetTagId())
+	}
+	keep := map[string]bool{}
+	if r.KeepHaltedMembers && trading < len(instruments) {
+		members, err := r.Store.ListTagMembers(ctx, tag.GetSpaceId(), tag.GetTagId(), "active")
+		if err != nil {
+			return nil, fmt.Errorf("list members of %s/%s: %w", tag.GetSpaceId(), tag.GetTagId(), err)
+		}
+		for _, member := range members {
+			if member.GetTradingStatus() != "delisted" {
+				keep[member.GetSubject().GetSubjectId()] = true
+			}
+		}
+	}
+	kept := make([]marketdata.Instrument, 0, len(instruments))
+	for _, item := range instruments {
+		if item.TradingStatus == marketdata.BinanceTrading || keep[item.SubjectID] {
+			kept = append(kept, item)
+		}
+	}
+	return kept, nil
 }
 
 // snapshotRetryable 判断取快照失败后本次同步内是否值得再试：东方财富主机冷却中（主动停手）时请求根本没有发出去，

@@ -3,7 +3,7 @@
   "summary": {
     "components": 18,
     "services": 26,
-    "methods": 335,
+    "methods": 336,
     "read_only_methods": 152,
     "retryable_methods": 153,
     "callers": 23,
@@ -1626,6 +1626,12 @@
           "timeout_ms": 5000
         },
         {
+          "name": "SetTagMemberTradingStatus",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 5000
+        },
+        {
           "name": "UpdateDataSource",
           "read_only": false,
           "retryable": false,
@@ -2257,6 +2263,7 @@
       "trpc.moox.storage.Metadata/ListViewColumns",
       "trpc.moox.storage.Metadata/ListViews",
       "trpc.moox.storage.Metadata/ResolveSubjects",
+      "trpc.moox.storage.Metadata/SetTagMemberTradingStatus",
       "trpc.moox.storage.Metadata/UpdateDataset",
       "trpc.moox.storage.Metadata/UpdateSubjectAttributes",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",

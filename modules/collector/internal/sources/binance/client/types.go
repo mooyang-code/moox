@@ -162,6 +162,17 @@ func (s *exchangeInfoSymbolRaw) toSymbolInfo() *exchange.SymbolInfo {
 	return raw.ToSymbolInfo()
 }
 
+// countTrading 数正常交易（TRADING）的交易对，用于日志。
+func countTrading(symbols []*exchange.SymbolInfo) int {
+	n := 0
+	for _, symbol := range symbols {
+		if symbol != nil && symbol.TradingStatus == "TRADING" {
+			n++
+		}
+	}
+	return n
+}
+
 // decodeExchangeInfo streams the large top-level symbols array. The callback
 // decides which entries to retain; the raw entry and its filters become
 // collectible before the next entry is decoded.
@@ -275,14 +286,15 @@ func (s *SymbolInfoRaw) ToSymbolInfo() *exchange.SymbolInfo {
 	}
 
 	return &exchange.SymbolInfo{
-		Symbol:     formattedSymbol,
-		BaseAsset:  s.BaseAsset,
-		QuoteAsset: s.QuoteAsset,
-		Status:     status,
-		MinQty:     minQty,
-		MaxQty:     maxQty,
-		TickSize:   tickSize,
-		LotSize:    lotSize,
-		Pair:       strings.ToUpper(strings.TrimSpace(s.Pair)),
+		TradingStatus: strings.ToUpper(strings.TrimSpace(s.Status)),
+		Symbol:        formattedSymbol,
+		BaseAsset:     s.BaseAsset,
+		QuoteAsset:    s.QuoteAsset,
+		Status:        status,
+		MinQty:        minQty,
+		MaxQty:        maxQty,
+		TickSize:      tickSize,
+		LotSize:       lotSize,
+		Pair:          strings.ToUpper(strings.TrimSpace(s.Pair)),
 	}
 }

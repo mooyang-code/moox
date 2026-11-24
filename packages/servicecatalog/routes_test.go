@@ -147,7 +147,7 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		callers []string
 	}{
 		"control":  {179, []string{"archive-mgr", "collector", "collector-operator", "collector-stream", "console", "factor-engine", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
-		"storage":  {65, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
+		"storage":  {66, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
 		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}},
 	}
 	for _, host := range p.Hosts {

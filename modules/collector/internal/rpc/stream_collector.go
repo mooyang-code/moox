@@ -38,7 +38,9 @@ type StreamService struct {
 	settings    StreamSettings
 	metrics     *fetchplan.StreamMetrics
 	syncer      SubjectSyncer
-	now         func() time.Time
+	// tradingStatus 在疑似下架触发的立即同步之后，对那个市场再检测一次交易状态，让停牌分钟级生效（可为空）。
+	tradingStatus TradingStatusRunner
+	now           func() time.Time
 
 	mu      sync.Mutex
 	recent  map[string][]*pb.StreamPeriodStat
@@ -175,7 +177,11 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 	return &pb.ReportStreamPeriodsRsp{RetInfo: retOK()}, nil
 }
 
-// syncMarket 在后台立即同步一个市场的自动标签（等同 SyncSubjects，不等 cron）；同一市场同一时间只跑一次。
+// SetTradingStatus 注入交易状态检测。
+func (s *StreamService) SetTradingStatus(runner TradingStatusRunner) { s.tradingStatus = runner }
+
+// syncMarket 在后台立即同步一个市场的自动标签（等同 SyncSubjects，不等 cron），之后再检测一次这个市场的交易状态；
+// 同一市场同一时间只跑一次。
 func (s *StreamService) syncMarket(spaceID, market string) {
 	if s.syncer == nil || strings.TrimSpace(market) == "" {
 		return
@@ -196,6 +202,15 @@ func (s *StreamService) syncMarket(spaceID, market string) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), subjectSyncTimeout)
 		defer cancel()
+		// 标签同步失败或正忙（ErrBusy）时也要检测：用 defer 放在任何 return 之后执行。
+		defer func() {
+			if s.tradingStatus == nil {
+				return
+			}
+			if err := s.tradingStatus.Run(ctx, spaceID, market); err != nil {
+				log.WarnContextf(ctx, "collector-stream suspect triggered trading status space=%s market=%s: %v", spaceID, market, err)
+			}
+		}()
 		report, err := s.syncer.SyncNow(ctx, subjectsync.Filter{SpaceID: spaceID, MarketType: market}, false)
 		if err != nil {
 			log.WarnContextf(ctx, "collector-stream suspect triggered subject sync failed space=%s market=%s: %v", spaceID, market, err)

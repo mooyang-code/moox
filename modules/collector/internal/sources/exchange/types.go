@@ -59,4 +59,6 @@ type SymbolInfo struct {
 	LotSize    string // 数量最小变动单位
 	// Pair 是永续合约的标的交易对（连续合约 K 线按它订阅），现货为空。
 	Pair string
+	// TradingStatus 是交易所给的原始交易状态（币安 TRADING、BREAK、HALT、DELIVERING……），交易状态检测按它判定。
+	TradingStatus string
 }

@@ -113,9 +113,14 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 	collector.fetchSymbolPage = func(_ context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
 		assert.Equal(t, InstTypeSPOT, params.InstType)
 		return []*exchange.SymbolInfo{
-			{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"},
-			{Symbol: "币安人生USDT", BaseAsset: "币安人生", QuoteAsset: "USDT", Status: "active"},
-			{Symbol: "ETH-USDT", BaseAsset: "ETH", QuoteAsset: "USDT", Status: "inactive"},
+			{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active", TradingStatus: "TRADING"},
+			{Symbol: "币安人生USDT", BaseAsset: "币安人生", QuoteAsset: "USDT", Status: "active", TradingStatus: "TRADING"},
+			// 非交易状态的交易对也带出来（交易状态检测与标签同步各自处理），状态在 TradingStatus 里。
+			{Symbol: "ETH-USDT", BaseAsset: "ETH", QuoteAsset: "USDT", Status: "inactive", TradingStatus: "BREAK"},
+			{Symbol: "XRP-BUSD", BaseAsset: "XRP", QuoteAsset: "BUSD", Status: "active", TradingStatus: "TRADING"},
+			// 同一标的出现两次（一条是已下架的旧交易对）：保留 TRADING 的那条。
+			{Symbol: "SOL-USDT", BaseAsset: "SOL", QuoteAsset: "USDT", Status: "inactive", TradingStatus: "BREAK"},
+			{Symbol: "SOL-USDT", BaseAsset: "SOL", QuoteAsset: "USDT", Status: "active", TradingStatus: "TRADING"},
 		}, nil
 	}
 
@@ -133,23 +138,19 @@ func TestMarketDataAdapterFetchesTypedInstrumentSnapshot(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, snapshotAt.Format(time.RFC3339Nano), snapshot.SnapshotID)
-	assert.Equal(t, map[string]int{"binance": 2}, snapshot.ExchangeCounts)
+	assert.Equal(t, map[string]int{"binance": 4}, snapshot.ExchangeCounts)
 	require.Equal(t, []marketdata.Instrument{{
-		SubjectID:      "BTC-USDT",
-		ProviderSymbol: "BTCUSDT",
-		Exchange:       "binance",
-		Name:           "BTC/USDT",
-		Status:         "active",
-		BaseAsset:      "BTC",
-		QuoteAsset:     "USDT",
+		SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT", Exchange: "binance", Name: "BTC/USDT",
+		Status: "active", BaseAsset: "BTC", QuoteAsset: "USDT", TradingStatus: "TRADING",
 	}, {
-		SubjectID:      "币安人生-USDT",
-		ProviderSymbol: "币安人生USDT",
-		Exchange:       "binance",
-		Name:           "币安人生/USDT",
-		Status:         "active",
-		BaseAsset:      "币安人生",
-		QuoteAsset:     "USDT",
+		SubjectID: "币安人生-USDT", ProviderSymbol: "币安人生USDT", Exchange: "binance", Name: "币安人生/USDT",
+		Status: "active", BaseAsset: "币安人生", QuoteAsset: "USDT", TradingStatus: "TRADING",
+	}, {
+		SubjectID: "ETH-USDT", ProviderSymbol: "ETHUSDT", Exchange: "binance", Name: "ETH/USDT",
+		Status: "inactive", BaseAsset: "ETH", QuoteAsset: "USDT", TradingStatus: "BREAK",
+	}, {
+		SubjectID: "SOL-USDT", ProviderSymbol: "SOLUSDT", Exchange: "binance", Name: "SOL/USDT",
+		Status: "active", BaseAsset: "SOL", QuoteAsset: "USDT", TradingStatus: "TRADING",
 	}}, snapshot.Instruments)
 	require.NoError(t, marketdata.ValidateInstrumentSnapshot(snapshot))
 }

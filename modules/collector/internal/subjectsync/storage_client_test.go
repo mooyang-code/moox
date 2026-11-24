@@ -23,7 +23,8 @@ func TestStorageClientRequiresOnlyGateway(t *testing.T) {
 }
 
 type fakeMetadataClient struct {
-	listTags func(context.Context, *storagepb.ListTagsReq) (*storagepb.ListTagsRsp, error)
+	listTags    func(context.Context, *storagepb.ListTagsReq) (*storagepb.ListTagsRsp, error)
+	listMembers func(context.Context, *storagepb.ListTagMembersReq) (*storagepb.ListTagMembersRsp, error)
 }
 
 func (f *fakeMetadataClient) ListTags(ctx context.Context, req *storagepb.ListTagsReq, _ ...client.Option) (*storagepb.ListTagsRsp, error) {
@@ -35,6 +36,17 @@ func (*fakeMetadataClient) ApplyTagSnapshot(context.Context, *storagepb.ApplyTag
 }
 
 func (*fakeMetadataClient) UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error) {
+	return nil, nil
+}
+
+func (f *fakeMetadataClient) ListTagMembers(ctx context.Context, req *storagepb.ListTagMembersReq, _ ...client.Option) (*storagepb.ListTagMembersRsp, error) {
+	if f.listMembers == nil {
+		return &storagepb.ListTagMembersRsp{RetInfo: storageSuccess()}, nil
+	}
+	return f.listMembers(ctx, req)
+}
+
+func (*fakeMetadataClient) SetTagMemberTradingStatus(context.Context, *storagepb.SetTagMemberTradingStatusReq, ...client.Option) (*storagepb.SetTagMemberTradingStatusRsp, error) {
 	return nil, nil
 }
 
@@ -106,4 +118,31 @@ type subjectGatewayFunc func(context.Context, string, string, any, any) error
 
 func (f subjectGatewayFunc) Invoke(ctx context.Context, service, method string, request, response any) error {
 	return f(ctx, service, method, request, response)
+}
+
+// 成员列表按页读完：满页就接着读下一页。
+func TestListTagMembersReadsAllPages(t *testing.T) {
+	pages := 0
+	storage := &StorageClient{client: &fakeMetadataClient{listMembers: func(_ context.Context, req *storagepb.ListTagMembersReq) (*storagepb.ListTagMembersRsp, error) {
+		pages++
+		if req.GetStatus() != "active" {
+			t.Fatalf("status filter = %q", req.GetStatus())
+		}
+		size := storagePageSize
+		if req.GetPage().GetPage() == 2 {
+			size = 3
+		}
+		members := make([]*storagepb.TagMember, size)
+		for i := range members {
+			members[i] = &storagepb.TagMember{Subject: &storagepb.Subject{SubjectId: "S"}}
+		}
+		return &storagepb.ListTagMembersRsp{RetInfo: storageSuccess(), Members: members, PageResult: &storagepb.PageResult{HasMore: req.GetPage().GetPage() == 1}}, nil
+	}}}
+	members, err := storage.ListTagMembers(context.Background(), "crypto", "binance_spot", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages != 2 || len(members) != storagePageSize+3 {
+		t.Fatalf("pages=%d members=%d", pages, len(members))
+	}
 }

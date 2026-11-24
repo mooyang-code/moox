@@ -3,9 +3,11 @@ package subjectsync
 import (
 	"context"
 	"errors"
-	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -88,7 +90,11 @@ func (s *Syncer) RunDueTags(ctx context.Context) error {
 // RunDueAttributes is the scheduled entry point for attribute jobs.
 func (s *Syncer) RunDueAttributes(ctx context.Context) error {
 	// 触发时间在等待锁之前固定：等待手动同步期间跨过计划分钟时仍按触发时刻判断到期
-	triggeredAt := s.Attributes.Current()
+	return s.RunDueAttributesAt(ctx, s.Attributes.Current())
+}
+
+// RunDueAttributesAt 以调用方固定的触发时间运行到期的属性任务（定时回调里与交易状态检测共用同一个触发时间）。
+func (s *Syncer) RunDueAttributesAt(ctx context.Context, triggeredAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Attributes.RunOnceAt(ctx, triggeredAt)

@@ -17,6 +17,14 @@ import (
 
 type recordingSyncer struct{ filters chan subjectsync.Filter }
 
+// recordingTradingStatus 记下被触发检测的空间与市场类型。
+type recordingTradingStatus struct{ calls chan string }
+
+func (r *recordingTradingStatus) Run(_ context.Context, spaceID, marketType string) error {
+	r.calls <- spaceID + "/" + marketType
+	return nil
+}
+
 func (s *recordingSyncer) SupportedListers() map[string][]string { return nil }
 
 func (s *recordingSyncer) SyncNow(_ context.Context, filter subjectsync.Filter, _ bool) (subjectsync.Report, error) {
@@ -43,6 +51,8 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	ctx := context.Background()
 	syncer := &recordingSyncer{filters: make(chan subjectsync.Filter, 1)}
 	stream := NewStreamService(db, StreamSettings{}, fetchplan.NewStreamMetrics(prometheus.NewRegistry()), syncer)
+	trading := &recordingTradingStatus{calls: make(chan string, 1)}
+	stream.SetTradingStatus(trading)
 	service.SetStreamService(stream)
 
 	rsp, err := stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", SentAtMs: time.Now().UnixMilli()})
@@ -89,6 +99,12 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 		require.Equal(t, subjectsync.Filter{SpaceID: "crypto", MarketType: "swap"}, filter)
 	case <-time.After(time.Second):
 		t.Fatal("suspect did not trigger a subject sync")
+	}
+	select {
+	case call := <-trading.calls:
+		require.Equal(t, "crypto/swap", call, "同步之后对这个市场再检测一次交易状态")
+	case <-time.After(time.Second):
+		t.Fatal("suspect did not trigger a trading status check")
 	}
 	status, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)

@@ -282,7 +282,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 	})
 	symbols = a.symbolCollector.filterSymbols(fetched)
 	if len(symbols) == 0 && fetchErr == nil {
-		fetchErr = fmt.Errorf("Binance active USDT symbol snapshot is empty")
+		fetchErr = fmt.Errorf("Binance USDT symbol snapshot is empty")
 	}
 	err = fetchErr
 	if err != nil {
@@ -303,8 +303,19 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 			log.WarnContextf(ctx, "binance symbol skipped symbol=%s base=%s quote=%s err=%v", symbol.Symbol, symbol.BaseAsset, symbol.QuoteAsset, subjectErr)
 			continue
 		}
-		if _, ok := index[subjectID]; ok {
-			duplicated[subjectID] = true
+		if at, ok := index[subjectID]; ok {
+			// 同一个标的出现多次：交易所长期保留已下架的旧交易对，优先保留正常交易的那条；都不是或都是 TRADING 时两条都丢。
+			existing := instruments[at].TradingStatus == marketdata.BinanceTrading
+			incoming := symbol.TradingStatus == marketdata.BinanceTrading
+			switch {
+			case incoming && !existing:
+				instruments[at].ProviderSymbol, instruments[at].Status, instruments[at].TradingStatus = externalSymbol(symbol), symbol.Status, symbol.TradingStatus
+				instruments[at].BaseAsset, instruments[at].QuoteAsset, instruments[at].Pair = symbol.BaseAsset, symbol.QuoteAsset, symbol.Pair
+				delete(duplicated, subjectID)
+			case existing && !incoming:
+			default:
+				duplicated[subjectID] = true
+			}
 			continue
 		}
 		index[subjectID] = len(instruments)
@@ -317,6 +328,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 			BaseAsset:      symbol.BaseAsset,
 			QuoteAsset:     symbol.QuoteAsset,
 			Pair:           symbol.Pair,
+			TradingStatus:  symbol.TradingStatus,
 		})
 	}
 	if len(duplicated) > 0 {

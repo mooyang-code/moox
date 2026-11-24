@@ -134,11 +134,9 @@ func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 		func() error {
 			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SwapExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
+				// 只要永续合约（含交割中的 PERPETUAL_DELIVERING），状态不限：交易状态由 Collector 的交易状态检测判定。
 				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
-					if raw.Status != "TRADING" || raw.ContractType != "PERPETUAL" {
-						return false
-					}
-					return true
+					return raw.ContractType == "PERPETUAL" || raw.ContractType == "PERPETUAL_DELIVERING"
 				})
 				return decodeErr
 			})
@@ -148,8 +146,8 @@ func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 		return nil, fmt.Errorf("获取永续合约交易所信息失败: %w", err)
 	}
 
-	log.InfoContextf(ctx, "[SwapAPI] 获取ExchangeInfo成功，总计%d个交易对，活跃永续合约%d个",
-		total, len(symbols))
+	log.InfoContextf(ctx, "[SwapAPI] 获取ExchangeInfo成功，总计%d个交易对，永续合约%d个，正常交易%d个",
+		total, len(symbols), countTrading(symbols))
 	return symbols, nil
 }
 

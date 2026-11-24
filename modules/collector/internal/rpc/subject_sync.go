@@ -26,6 +26,14 @@ type SubjectSyncer interface {
 // called once during bootstrap, before the server starts serving.
 func (s *Service) SetSubjectSyncer(syncer SubjectSyncer) { s.subjectSyncer = syncer }
 
+// TradingStatusRunner 立即检测一个空间（marketType 为空表示全部市场类型）的标的交易状态，见 tradingstatus.Runner。
+type TradingStatusRunner interface {
+	Run(ctx context.Context, spaceID, marketType string) error
+}
+
+// SetTradingStatus 注入交易状态检测：手工同步标的之后顺带刷新。
+func (s *Service) SetTradingStatus(runner TradingStatusRunner) { s.tradingStatus = runner }
+
 // SyncSubjects synchronizes subject tags (and optionally attributes) now, for
 // first deployments and recovery without waiting for the hourly timer. A
 // failed tag is reported in the response; the call itself still succeeds so
@@ -50,6 +58,12 @@ func (s *Service) SyncSubjects(ctx context.Context, req *pb.SyncSubjectsReq) (*p
 		}
 		log.ErrorContextf(ctx, "manual subject sync failed: %v", err)
 		return &pb.SyncSubjectsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	// 手工同步后顺带刷新交易状态（与推送侧疑似下架的立即同步一样）：停牌、复牌不用等下一次定时检测。失败只记日志。
+	if s.tradingStatus != nil {
+		if err := s.tradingStatus.Run(ctx, filter.SpaceID, ""); err != nil {
+			log.WarnContextf(ctx, "trading status after manual subject sync space=%s: %v", filter.SpaceID, err)
+		}
 	}
 	rsp := &pb.SyncSubjectsRsp{RetInfo: retOK()}
 	for _, tag := range report.Tags {

@@ -23,6 +23,10 @@ egress_probe: public_ip
 # 取 16:20（并入之后约 3 分钟）。收盘价并入时小幅变化，没有出现收盘价超出最高、最低价。
 # 半日市（13:00 收市）并入时刻没有实测，按同样的 16 分钟推断，当天实际的收市时刻加 20 分钟即 13:20。
 refetch_after_close_minutes: 20
+# 交易状态检测：开盘前查一次腾讯美股快照第 40 个字段（S 停牌，D 退市）。2026-11-24 实测纳斯达克上市的暂停股标 S，
+# AMEX 上市的暂停股腾讯不标（照旧按缺数处理）。
+trading_status:
+  - {market_type: equity, source: tencent, cron: "5 9 * * 1-5", timezone: America/New_York}
 # 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
 scf_plan:
   # 固定每函数 50 只标的（标普 500 共 503 只、11 个函数）。美股只有一个数据源，每只每期一个请求，

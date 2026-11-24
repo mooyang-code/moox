@@ -20,6 +20,9 @@ subject_egress: direct
 # 16:00 这根在 16:10 前才并入收市竞价的成交，16:00:05 取到的是连续交易时段的值，所以收市 15 分钟后整天重取一次；
 # 半日市按当天实际的收市时刻（12:00）算。
 refetch_after_close_minutes: 15
+# 交易状态检测：开盘前与午休各查一次腾讯港股快照第 40 个字段（非空即停牌）。腾讯对退市的港股不返回行，退市靠成分同步移出。
+trading_status:
+  - {market_type: equity, source: tencent, cron: "5 9,12 * * 1-5", timezone: Asia/Hong_Kong}
 # 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
 scf_plan:
   # 固定每函数 25 只标的（恒指 95 只共 4 个函数）。不按负载估算函数个数（不写 auto_size），

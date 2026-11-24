@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/delist"
+	"github.com/mooyang-code/moox/modules/collector/internal/tradingstatus/delist"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
