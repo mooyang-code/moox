@@ -99,7 +99,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(params.MarketType),
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": sourceDataSourceID,
-		"source_freq": params.SourceFrequency, "source_series_tag": strings.Join(params.SourceTags(), ","),
+		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
 		"target_freq": targetFreq.Storage,
 	}
 	createdDataset, createdView := false, false

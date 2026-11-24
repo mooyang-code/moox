@@ -401,8 +401,18 @@ func TestHandoffLatenessSwitchesOnTimeWhenTheOldSideNeverConfirms(t *testing.T) 
 func TestDesiredStateRejectsOneDatasetWithTwoIngests(t *testing.T) {
 	group := TaskGroup{Provider: "binance", SourceID: "spot_http", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m", Subjects: []string{"ABC-USDT"}, Ingest: ingestStream}
 	other := group
-	other.Provider, other.SourceID, other.MarketType, other.InstrumentType, other.Ingest = "binance", "swap_http", "swap", "swap", ingestSCF
+	other.Ingest = ingestSCF
 	_, err := BuildDesiredState(PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-hongkong"}, "swap": {"ap-hongkong"}}, Fetch: marketfetch.PlanFetch{Concurrency: 1}, DefaultLatenessS: 15},
 		[]TaskGroup{group, other}, nil)
 	require.ErrorContains(t, err, "conflicting ingest")
+}
+
+// 一个数据集只放一个市场的序列：现货、永续两组写同一个数据集时期望状态算不出来（现货与永续要拆成两个任务）。
+func TestDesiredStateRejectsOneDatasetFedByTwoMarkets(t *testing.T) {
+	group := TaskGroup{Provider: "binance", SourceID: "spot_http", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m", Subjects: []string{"ABC-USDT"}, Ingest: ingestSCF}
+	other := group
+	other.SourceID, other.MarketType, other.InstrumentType = "swap_http", "swap", "perpetual"
+	_, err := BuildDesiredState(PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-hongkong"}, "swap": {"ap-hongkong"}}, Fetch: marketfetch.PlanFetch{Concurrency: 1}, DefaultLatenessS: 15},
+		[]TaskGroup{group, other}, nil)
+	require.ErrorContains(t, err, "fed by two markets")
 }

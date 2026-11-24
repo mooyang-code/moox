@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -419,17 +418,6 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		dispatched["handoff_scf_local"] = h.cloud.operations()
 	}
 
-	// 统一数据集：同一个数据集挂现货、永续两个任务，两个市场的函数共用一份快照；之后标的减少一个。
-	{
-		h, r := newPlanBaselineUnified(t)
-		planBaselineSettle(t, h, r)
-		r.lastVerified = h.now
-		h.setSubjects(59)
-		planBaselineSettle(t, h, r)
-		scenarios = append(scenarios, planBaselineScenario{Name: "unified_dataset_then_subject_change", Plans: planBaselineRecords(t, r, h.store.records)})
-		dispatched["unified_dataset_then_subject_change"] = h.cloud.operations()
-	}
-
 	for _, scenario := range scenarios {
 		require.NotEmpty(t, scenario.Plans, scenario.Name)
 		for _, plan := range scenario.Plans {
@@ -506,33 +494,4 @@ func (s planBaselineSymbols) GetTag(_ context.Context, _, tagID string) (*storag
 		marketType = "swap"
 	}
 	return &storagepb.Tag{TagId: tagID, Attributes: map[string]string{"sync.source": "binance", "market_type": marketType}}, nil
-}
-
-// newPlanBaselineUnified 构造统一数据集的夹具：同一个数据集挂现货、永续两个任务。
-func newPlanBaselineUnified(t *testing.T) (*planHarness, *PlanReconciler) {
-	h := newPlanHarness(t, 60)
-	h.tasks.tasks = []domain.CollectionTask{
-		{SpaceID: "crypto", TaskID: "unified-spot", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-			CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_unified","frequency":"1m"}`},
-		{SpaceID: "crypto", TaskID: "unified-swap", Enabled: true, DataType: "kline", TagIDs: []string{"binance_swap"},
-			CollectParams: `{"provider":"binance","market_type":"swap","subject_tags":["binance_swap"],"target_dataset_id":"ds_unified","frequency":"1m"}`},
-	}
-	r := h.reconciler()
-	r.Groups.Symbols = planBaselineSymbols{h.symbols}
-	r.Deploy.Networks["ap-hongkong"] = PlanNetwork{VPCID: "vpc-2", SubnetID: "subnet-2"}
-	return h, r
-}
-
-// 基线场景里统一数据集确实走了两个市场：防止夹具变化后场景悄悄退化成单市场。
-func TestPlanBaselineUnifiedScenarioCoversBothMarkets(t *testing.T) {
-	h, r := newPlanBaselineUnified(t)
-	require.NoError(t, h.reconcile(r))
-	record, err := h.store.Open(context.Background(), "crypto")
-	require.NoError(t, err)
-	require.NotNil(t, record)
-	regions := map[string]bool{}
-	for _, function := range h.content(record).Functions {
-		regions[function.Region] = true
-	}
-	require.Equal(t, map[string]bool{"ap-nanjing": true, "ap-hongkong": true}, regions)
 }

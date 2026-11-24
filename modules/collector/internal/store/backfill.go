@@ -23,10 +23,9 @@ const (
 	BackfillSourceManual = "manual"
 	BackfillSourceAuto   = "auto"
 
-	// BackfillKindGap 按缺口补采；BackfillKindForce 不检查缺口、整段重拉；BackfillKindHistory 确认历史扫描发现的缺口。
-	BackfillKindGap     = "gap"
-	BackfillKindForce   = "force"
-	BackfillKindHistory = "history"
+	// BackfillKindGap 按缺口补采；BackfillKindForce 不检查缺口、整段重拉。
+	BackfillKindGap   = "gap"
+	BackfillKindForce = "force"
 )
 
 // BackfillJob 是一次补采作业。DatasetID、Frequency、SubjectID 为空表示全部。
@@ -48,15 +47,13 @@ type BackfillJob struct {
 	UpdatedAt        time.Time
 }
 
-// BackfillChunk 是补采的最小执行单位：一个数据集、一个标的（统一数据集还要指定序列）、一段连续时间（至多 1000 根）。
+// BackfillChunk 是补采的最小执行单位：一个数据集、一个标的、一段连续时间（至多 1000 根）。
 type BackfillChunk struct {
 	ID        int64
 	JobID     string
 	DatasetID string
 	Frequency string
 	SubjectID string
-	// SeriesTag 只在统一数据集（多个 series_tag）时有值：补采按该序列所属市场的路由取数；单序列数据集为空。
-	SeriesTag string
 	From      time.Time
 	To        time.Time
 	ChunkID   string
@@ -112,7 +109,6 @@ type backfillChunkRow struct {
 	DatasetID   string     `gorm:"column:c_dataset_id"`
 	Frequency   string     `gorm:"column:c_frequency"`
 	SubjectID   string     `gorm:"column:c_subject_id"`
-	SeriesTag   string     `gorm:"column:c_series_tag"`
 	From        time.Time  `gorm:"column:c_from"`
 	To          time.Time  `gorm:"column:c_to"`
 	ChunkID     string     `gorm:"column:c_chunk_id"`
@@ -130,7 +126,7 @@ func (backfillChunkRow) TableName() string { return "t_collector_kline_backfill_
 
 func (row backfillChunkRow) chunk() BackfillChunk {
 	return BackfillChunk{
-		ID: row.ID, JobID: row.JobID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag, From: row.From, To: row.To, ChunkID: row.ChunkID,
+		ID: row.ID, JobID: row.JobID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: row.From, To: row.To, ChunkID: row.ChunkID,
 		Status: row.Status, Attempts: row.Attempts, Rows: row.Rows, Missing: row.Missing, StartedAt: row.StartedAt, LatestEndAt: row.LatestEndAt, LastError: row.LastError, UpdatedAt: row.UpdatedAt,
 	}
 }
@@ -150,7 +146,7 @@ const (
 	backfillChunksTable = "t_collector_kline_backfill_chunks"
 )
 
-// BackfillRepository 保存补采作业、分块、自动补采水位、已确认的行情源缺失与历史扫描结果。
+// BackfillRepository 保存补采作业、分块、自动补采水位与已确认的行情源缺失。
 type BackfillRepository struct{ db *gorm.DB }
 
 func NewBackfillRepository(db *gorm.DB) *BackfillRepository { return &BackfillRepository{db: db} }
@@ -190,7 +186,7 @@ func (r *BackfillRepository) CreateJob(ctx context.Context, job BackfillJob, chu
 		}
 		rows := make([]backfillChunkRow, 0, len(chunks))
 		for _, chunk := range chunks {
-			rows = append(rows, backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, SeriesTag: chunk.SeriesTag, From: chunk.From.UTC(), To: chunk.To.UTC(), ChunkID: chunk.ChunkID, Status: BackfillPending, UpdatedAt: now})
+			rows = append(rows, backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, From: chunk.From.UTC(), To: chunk.To.UTC(), ChunkID: chunk.ChunkID, Status: BackfillPending, UpdatedAt: now})
 		}
 		return tx.CreateInBatches(&rows, 200).Error
 	})
@@ -379,7 +375,7 @@ func (r *BackfillRepository) FinishChunk(ctx context.Context, id int64, attempt 
 			origin = BackfillKindForce
 		}
 		return addNoticesTx(tx, []BackfillNotice{{
-			SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, SeriesTag: chunk.SeriesTag,
+			SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID,
 			Start: chunk.From, End: chunk.To, Origin: origin, JobID: chunk.JobID,
 		}})
 	})
@@ -616,7 +612,7 @@ func (r *BackfillRepository) SetWatermark(ctx context.Context, spaceID, datasetI
 		spaceID, datasetID, frequency, scannedUntil.UTC(), time.Now().UTC()).Error
 }
 
-// Reset 清掉该空间全部补采作业、分块、自动补采水位与历史扫描记录，返回清掉的作业数。用于 Storage 数据被清空之后：
+// Reset 清掉该空间全部补采作业、分块与自动补采水位，返回清掉的作业数。用于 Storage 数据被清空之后：
 // 旧作业指向已经不存在的数据，水位不清会让自动补采沿用旧位置。运行中的分块写回状态时找不到行，直接放弃。
 // 已确认的行情源缺失是行情源本身的事实，与 Storage 无关，保留。
 func (r *BackfillRepository) Reset(ctx context.Context, spaceID string) (int64, error) {
@@ -638,9 +634,6 @@ func (r *BackfillRepository) Reset(ctx context.Context, spaceID string) (int64, 
 			return result.Error
 		}
 		jobs = result.RowsAffected
-		if err := tx.Where("c_space_id = ?", spaceID).Delete(&historyScanRow{}).Error; err != nil {
-			return err
-		}
 		return tx.Where("c_space_id = ?", spaceID).Delete(&backfillWatermarkRow{}).Error
 	})
 	return jobs, err

@@ -76,11 +76,33 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	operations := make(chan struct{}, cfg.SCFPlan.MaxConcurrentOperations)
 	reconcilers := &fetchplan.Reconcilers{}
 	var autoScans sync.Map
+	// planOptions 是空间的采集计划配置：对账器与补采的路由用同一份。
+	planOptions := func(spaceID string) (fetchplan.PlanOptions, error) {
+		latenessSeconds, err := defaultLatenessSeconds(spaceID)
+		if err != nil {
+			return fetchplan.PlanOptions{}, err
+		}
+		options := fetchplan.PlanOptions{
+			StreamLatenessS: cfg.Stream.LatenessS,
+			SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], BackfillRegion: cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].BackfillRegion, SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
+			Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
+			DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID),
+		}
+		// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
+		options.DeriveFetch = fetchplan.RouteFetchLimits(spaceID)
+		// 每函数标的数的估算看 market.yaml 的 scf_plan.auto_size 配没配；同样只对有路由文件的市场算得出来。
+		if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
+			options.AutoSize = fetchplan.RouteAutoSize(spaceID, *sizing)
+		}
+		return options, nil
+	}
 	checker := &klinecheck.Checker{Timeline: dbm.SeriesTimeline(), Rows: storageio.NewGatewayClient(process.gateway), Absences: dbm.Backfill(), Fields: marketwiring.FieldOffers()}
 	// 应有时间点与函数侧同一套过滤：只有该市场此频率的交易桶才应有 K 线。
 	checker.Calendar = markets.TradingBar
 	backfiller := &klinecheck.Backfiller{
-		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: reconcilers, BaseCtx: process.ctx, Refill: true,
+		Checker: checker, Store: dbm.Backfill(), Invoker: reconcilers, BaseCtx: process.ctx, Refill: true,
+		// 补采的来源与参数取当前任务（与计划同一套推导），交易所符号取标的时间线。
+		Routes: &fetchplan.BackfillRoutes{Tasks: dbm.Tasks(), Tags: source, ResolveSourceID: marketwiring.DefaultSourceID, Options: planOptions},
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
 			space := strings.ToLower(spaceID)
 			manual, err := dbm.FetchPlans().ManuallyPausedSpaces(ctx)
@@ -157,21 +179,9 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return running, nil
 		},
 		Factory: func(spaceID string) (*fetchplan.PlanReconciler, error) {
-			latenessSeconds, err := defaultLatenessSeconds(spaceID)
+			options, err := planOptions(spaceID)
 			if err != nil {
 				return nil, err
-			}
-			options := fetchplan.PlanOptions{
-				StreamLatenessS: cfg.Stream.LatenessS,
-				SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], BackfillRegion: cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].BackfillRegion, SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
-				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
-				DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID),
-			}
-			// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
-			options.DeriveFetch = fetchplan.RouteFetchLimits(spaceID)
-			// 每函数标的数的估算看 market.yaml 的 scf_plan.auto_size 配没配；同样只对有路由文件的市场算得出来。
-			if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
-				options.AutoSize = fetchplan.RouteAutoSize(spaceID, *sizing)
 			}
 			deploy, err := cfg.fetchPlanDeploy(spaceID)
 			if err != nil {
@@ -220,10 +230,6 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				defer cancel()
 				if err := backfiller.AutoScan(scanCtx, spaceID); err != nil {
 					log.WarnContextf(scanCtx, "collector auto backfill scan failed space=%s: %v", spaceID, err)
-				}
-				// 早于数据集最早生效点的历史缺口，检查与自动补采都看不到：定期读回并写日志，不补采。
-				if _, err := backfiller.ScanHistory(scanCtx, spaceID); err != nil {
-					log.WarnContextf(scanCtx, "collector history scan failed space=%s: %v", spaceID, err)
 				}
 			}) {
 				autoScans.Delete(spaceID)

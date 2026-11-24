@@ -363,7 +363,6 @@ components:
             read_only: true
           - name: CancelKlineBackfill
           - name: RetryKlineBackfill
-          - name: ConfirmHistoryGaps
           - name: ClearSourceAbsences
           - name: GetCollectorStatus
             read_only: true

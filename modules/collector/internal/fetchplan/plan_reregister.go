@@ -28,7 +28,7 @@ type PlanReregisterStore interface {
 // 而对账只在数据集标的集合 hash 变化时才重新登记：hash 清空后，下一轮对账会把全部数据集当作变化，
 // 生成新计划、重新登记快照并选新的生效周期。已退役的数据集（Gone）不动。
 // 同一个事务里删掉该空间的全部标的时间线：此前的时间线连同数据一起作废（包括已退役的数据集），
-// 检查、自动补采与历史扫描的起点变成重新登记后的新生效周期；新快照登记之前没有任何时间线。
+// 检查与自动补采的起点变成重新登记后的新生效周期；新快照登记之前没有任何时间线。
 func ClearRegisteredSnapshots(ctx context.Context, plans PlanReregisterStore, spaceID string) ([]string, error) {
 	open, err := plans.Open(ctx, spaceID)
 	if err != nil {

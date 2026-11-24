@@ -115,7 +115,7 @@ func newUSRefetchHarness(t *testing.T, subjects []string, minutes func(code stri
 	h.invoker = &hkFunctionInvoker{t: t, handler: handler}
 	checker := &klinecheck.Checker{Timeline: db.SeriesTimeline(), Rows: h.storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	h.backfiller = &klinecheck.Backfiller{
-		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: h.invoker, BaseCtx: context.Background(), Now: clock,
+		Checker: checker, Store: db.Backfill(), Routes: contentRoutes{content}, Invoker: h.invoker, BaseCtx: context.Background(), Now: clock,
 		Functions:    func(string) klinecheck.FunctionProvider { return usBackfillFunctions{} },
 		CloseRefetch: markets.CloseRefetchDay,
 	}

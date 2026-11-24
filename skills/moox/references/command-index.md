@@ -52,13 +52,12 @@
 | `collector function upload` | 构建（或使用现成的）SCF 代码包并只上传，不创建函数 |
 | `collector ingest-mode get` | 查看各 K 线任务的采集方式、交接中的生效周期与 collector-stream 实例状态 |
 | `collector ingest-mode set` | 切换采集方式（按生效周期交接；不带 --dataset-id 表示空间全部 K 线任务） |
-| `collector kline absences-clear` | 清掉数据集已确认的“行情源缺失”（行情源后来补上数据时），并让历史扫描重新进行 |
+| `collector kline absences-clear` | 清掉数据集已确认的“行情源缺失”（行情源后来补上数据时），之后的检查与补采重新判断这些 K 线 |
 | `collector kline backfill` | 补采缺失的 K 线（默认补检查出的缺口，--force 强制重拉整个范围） |
 | `collector kline backfill-cancel` | 取消补采作业（运行中的分块等其结束） |
 | `collector kline backfill-retry` | 重试已失败补采作业的失败分块 |
 | `collector kline backfill-status` | 查看补采作业进度；不带 --job-id 时列出空间最近的作业 |
 | `collector kline check` | 按采集计划检查时间范围内的 K 线是否齐全，输出缺口 |
-| `collector kline history-confirm` | 按最近一次历史扫描发现的缺口补采；行情源本来没有的 K 线会被确认并不再报告 |
 | `collector package delete` | 删除代码包（先删 COS 对象再删记录；默认只预览，--yes 才执行） |
 | `collector package list` | 列出空间的云函数代码包（按上传先后倒序，每个包名保留最新 3 个） |
 | `collector resample backfill` | 提交历史合成作业：把时间范围内的目标 K 线按源数据重新合成 |

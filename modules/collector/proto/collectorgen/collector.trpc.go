@@ -199,8 +199,6 @@ type CollectMgrService interface {
 
 	RetryKlineBackfill(ctx context.Context, req *RetryKlineBackfillReq) (*RetryKlineBackfillRsp, error)
 
-	ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq) (*ConfirmHistoryGapsRsp, error)
-
 	ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq) (*ClearSourceAbsencesRsp, error)
 	// GetCollectorStatus ----- 运行状态与采集计划 -----
 	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq) (*GetCollectorStatusRsp, error)
@@ -658,24 +656,6 @@ func CollectMgrService_RetryKlineBackfill_Handler(svr interface{}, ctx context.C
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).RetryKlineBackfill(ctx, reqbody.(*RetryKlineBackfillReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CollectMgrService_ConfirmHistoryGaps_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ConfirmHistoryGapsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).ConfirmHistoryGaps(ctx, reqbody.(*ConfirmHistoryGapsReq))
 	}
 
 	var rsp interface{}
@@ -1234,10 +1214,6 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_RetryKlineBackfill_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
-			Func: CollectMgrService_ConfirmHistoryGaps_Handler,
-		},
-		{
 			Name: "/trpc.moox.collector.CollectMgr/ClearSourceAbsences",
 			Func: CollectMgrService_ClearSourceAbsences_Handler,
 		},
@@ -1446,9 +1422,6 @@ func (s *UnimplementedCollectMgr) CancelKlineBackfill(ctx context.Context, req *
 }
 func (s *UnimplementedCollectMgr) RetryKlineBackfill(ctx context.Context, req *RetryKlineBackfillReq) (*RetryKlineBackfillRsp, error) {
 	return nil, errors.New("rpc RetryKlineBackfill of service CollectMgr is not implemented")
-}
-func (s *UnimplementedCollectMgr) ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq) (*ConfirmHistoryGapsRsp, error) {
-	return nil, errors.New("rpc ConfirmHistoryGaps of service CollectMgr is not implemented")
 }
 func (s *UnimplementedCollectMgr) ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq) (*ClearSourceAbsencesRsp, error) {
 	return nil, errors.New("rpc ClearSourceAbsences of service CollectMgr is not implemented")
@@ -1718,8 +1691,6 @@ type CollectMgrClientProxy interface {
 	CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq, opts ...client.Option) (rsp *CancelKlineBackfillRsp, err error)
 
 	RetryKlineBackfill(ctx context.Context, req *RetryKlineBackfillReq, opts ...client.Option) (rsp *RetryKlineBackfillRsp, err error)
-
-	ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq, opts ...client.Option) (rsp *ConfirmHistoryGapsRsp, err error)
 
 	ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq, opts ...client.Option) (rsp *ClearSourceAbsencesRsp, err error)
 	// GetCollectorStatus ----- 运行状态与采集计划 -----
@@ -2237,26 +2208,6 @@ func (c *CollectMgrClientProxyImpl) RetryKlineBackfill(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RetryKlineBackfillRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CollectMgrClientProxyImpl) ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq, opts ...client.Option) (*ConfirmHistoryGapsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ConfirmHistoryGaps")
-	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("collector")
-	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("ConfirmHistoryGaps")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ConfirmHistoryGapsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

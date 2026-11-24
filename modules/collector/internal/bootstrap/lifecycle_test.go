@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
@@ -133,7 +134,7 @@ func TestCollectorRecoverySkipsManuallyPausedSpaces(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.FetchPlans().SetPaused(ctx, "stockcn", true))
 	plans := &recordingPlans{}
-	control.backfiller = &klinecheck.Backfiller{Checker: &klinecheck.Checker{Timeline: plans, Rows: noRows{}}, Store: db.Backfill(), Plans: db.FetchPlans()}
+	control.backfiller = &klinecheck.Backfiller{Checker: &klinecheck.Checker{Timeline: plans, Rows: noRows{}}, Store: db.Backfill(), Routes: &fetchplan.BackfillRoutes{}}
 	require.NoError(t, control.setPaused(ctx, true))
 	control.setRecovering(true)
 

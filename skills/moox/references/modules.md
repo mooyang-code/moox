@@ -59,7 +59,7 @@
 # 不给 --output-field 就输出合成的全部固定字段，资金费率与附加字段不合成）；要历史数据再用 collector resample backfill
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
-./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
+./bin/moox-cli collector kline absences-clear ...                    # 行情源后来补上数据时清除“行情源本来没有”的确认
 ./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
 ./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）

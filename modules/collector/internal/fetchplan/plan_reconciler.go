@@ -471,8 +471,8 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		}
 	}
 	progress := &FetchPlanProgress{}
-	// 不再采集的数据集从计划建立起就在时间线上停止，和计划记录一起落库。
-	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress), content.stoppedTimeline(r.SpaceID)...)
+	// 不再采集的数据集从计划建立起就在时间线上停止，只有符号变了的数据集从 P 起记新符号，都和计划记录一起落库。
+	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress), content.planCreatedTimeline(r.SpaceID)...)
 	if errors.Is(err, store.ErrFetchPlanOpen) {
 		return nil
 	}
