@@ -229,8 +229,9 @@ type Changes struct {
 	Bytes int64
 }
 
-// changePageLimit 是一页最多扫描的日志条数：一页的范围小一些，读完行、推进位点更快。
-const changePageLimit = 200
+// changePageLimit 是一页最多扫描的日志条数（Storage 的上限）。它按全库日志计数、不是本数据集的条数，
+// 取小了每个任务扫全局日志的请求数成倍增加，任务多时位点越落越远；一页的大小另由 Storage 按字节截断。
+const changePageLimit = 2000
 
 // ReadChanges 从游标之后读一页数据集的变更日志；cursor 为 nil 时只取日志头部的位点。
 func (c *Client) ReadChanges(ctx context.Context, spaceID, datasetID string, cursor *ChangeCursor) (Changes, error) {
