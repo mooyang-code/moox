@@ -7,7 +7,7 @@ async function installShell(page: Page) {
       json: { ret_info: { code: 0, msg: "ok" }, user_info: { user_id: "u1", username: "admin", nickname: "Admin", role: 2 } }
     })
   );
-  await page.route("**/api/admin/space/ListSpaces", route =>
+  await page.route("**/api/admin/storage/ListSpaces", route =>
     route.fulfill({
       json: {
         ret_info: { code: 0 },

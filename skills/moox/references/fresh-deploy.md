@@ -87,7 +87,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream、事件中心，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
 | 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
 | 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验（这些要等 Collector、Monitor 起来） |
-| 9 | 备份配置、`setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
+| 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
 
 - `setup verify` 不把“有限保留期的数据集还没有归档任务”算作没装好（全新安装一定没有归档任务，这一项在 `doctor alerts` 里照常显示）：装完后按需要用 `moox-cli archive tasks create` 或管理台“数据归档 › 归档任务”建任务。
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
