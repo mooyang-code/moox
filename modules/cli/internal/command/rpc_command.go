@@ -478,16 +478,23 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 	return request, nil
 }
 
+// kind 是帮助文本里的接口性质：破坏性命令默认只预览；其余按内嵌服务目录区分只读与写操作，目录里查不到的按写操作标。
+func (s rpcSpec) kind() string {
+	if s.Destructive {
+		return "破坏性，默认只预览"
+	}
+	if readOnly, known := gatewayMethodReadOnly(s.Service, s.Method); known && readOnly {
+		return "只读"
+	}
+	return "写操作"
+}
+
 // buildRPCCommand 由规格生成命令。
 func buildRPCCommand(spec rpcSpec) *cobra.Command {
-	kind := "只读"
-	if spec.Destructive {
-		kind = "破坏性，默认只预览"
-	}
 	cmd := &cobra.Command{
 		Use:   spec.Path[len(spec.Path)-1],
 		Short: spec.Short,
-		Long:  fmt.Sprintf("%s\n\n对应接口：%s %s（%s）。--data 可以提供完整请求 JSON，各参数优先于它。", spec.Short, spec.Service, spec.Method, kind),
+		Long:  fmt.Sprintf("%s\n\n对应接口：%s %s（%s）。--data 可以提供完整请求 JSON，各参数优先于它。", spec.Short, spec.Service, spec.Method, spec.kind()),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			request, err := spec.buildRequest(cmd, cmd.InOrStdin())

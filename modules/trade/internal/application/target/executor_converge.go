@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 本文件是 Converge 的各个步骤：撤旧单与冲突检查、处理本目标在途子单、逐标的算动作、执行阶段、收尾。
@@ -49,6 +50,7 @@ func (run *stageRun) holdCollect(stage int, action laneAction) {
 }
 
 // stopWhenInactive 处理组合已暂停（自动执行不是 ACTIVE）：撤掉本目标留下的一笔在途单，原因写进目标；没有在途单就只报暂停。
+// 每份目标（每期）在文件日志里记一条说明：目标已接受但不下单，否则只看日志会以为目标丢了。
 func (e *Executor) stopWhenInactive(
 	ctx context.Context,
 	spaceID string,
@@ -56,6 +58,10 @@ func (e *Executor) stopWhenInactive(
 	logicalAccount store.LogicalAccountRecord,
 	target *store.LogicalAccountTargetRecord,
 ) (Result, error) {
+	if e.firstTime("paused|" + spaceID + "|" + target.TargetID) {
+		log.Infof("组合 %s（%s）自动执行已暂停（%s）：目标 %s 已接受但不下单，恢复用 trade logical resume",
+			logicalAccount.Name, logicalAccountID, logicalAccount.PauseReason, target.TargetID)
+	}
 	orders, _, listErr := e.Store.ListOrders(
 		ctx,
 		spaceID,
