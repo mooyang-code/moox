@@ -76,9 +76,6 @@ func resolveViews(ctx context.Context, client Client, spaceID string, taskIDs []
 		seen[item.market] = taskID
 		views = append(views, item)
 	}
-	if _, unified := seen[MarketMulti]; unified && len(views) > 1 {
-		return nil, fmt.Errorf("因子任务 %s 在统一数据集上，同时覆盖现货与永续，不能再绑定其他任务", seen[MarketMulti])
-	}
 	sort.Slice(views, func(i, j int) bool { return marketOrder(views[i].market) < marketOrder(views[j].market) })
 	return views, nil
 }
@@ -103,26 +100,18 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 		}
 	}
 	resolved.Bar, resolved.Calendar = strings.ToLower(first.view.Frequency), calendarOf(first)
-	// 市场模式：DSL 写出的，或只绑一个任务时取任务的市场；股票不允许写 market；统一数据集同时覆盖现货与永续，没有可当默认值的市场，必须写。
-	unified := first.market == MarketMulti
+	// 市场模式：DSL 写出的，或只绑一个任务时取任务的市场；股票不允许写 market。
 	switch {
 	case first.market == dsl.MarketEquity && strategy.MarketDeclared:
 		return Resolved{}, nil, errors.New("股票策略不允许写 market")
 	case strategy.MarketDeclared:
 		resolved.Market = strategy.Market
-	case unified:
-		return Resolved{}, nil, errors.New("因子任务在统一数据集上，同时覆盖现货与永续，DSL 必须写 market（select、prefer）")
 	case len(views) == 1:
 		resolved.Market = dsl.SingleMarket(first.market)
 	default:
 		return Resolved{}, nil, errors.New("绑定了现货、永续两个因子任务，DSL 必须写 market（select、prefer）")
 	}
-	if unified {
-		// 参数按标的取值，现货、永续两条序列会共用同一组参数，是否合理以后再定。
-		if len(strategy.FactorParams) > 0 {
-			return Resolved{}, nil, errors.New("统一数据集上的任务暂不支持 factor_params：现货、永续两条序列会共用同一组参数")
-		}
-	} else if got := resolved.Markets(); len(got) != len(resolved.Market.Markets()) || len(got) != len(views) {
+	if got := resolved.Markets(); len(got) != len(resolved.Market.Markets()) || len(got) != len(views) {
 		return Resolved{}, nil, fmt.Errorf("市场模式 %s 需要绑定 %s 的因子任务，实际绑定了 %s", resolved.Market, strings.Join(resolved.Market.Markets(), "、"), strings.Join(boundMarkets(views), "、"))
 	}
 	strategy.Market = resolved.Market
@@ -221,6 +210,14 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 		}
 	}
 	// 只有声明了 factor_params 的策略逐期提交参数，才固化参数声明；没有声明的策略只读可变成员的列，不提交参数。
+	// 现货、永续两个任务时同一份参数提交给两个任务，所以 factor_params 写的每个成员在每个任务里都要有。
+	for _, member := range sortedKeys(strategy.FactorParams) {
+		for i, found := range memberViews {
+			if _, ok := found[member]; !ok {
+				return Resolved{}, nil, fmt.Errorf("factor_params 的可变成员 %s 在 View %s（因子任务 %s）里不存在：同一份参数要提交给每个主帧任务", member, views[i].view.ViewID, views[i].taskID)
+			}
+		}
+	}
 	if len(strategy.FactorParams) > 0 {
 		resolved.FactorParams = make(map[string][]ParamDecl, len(members))
 		for key, member := range members {
@@ -493,15 +490,7 @@ func checkViewCoverage(ctx context.Context, client Client, spaceID string, resol
 		return err
 	}
 	if longest := resolved.LongestAge(); longest > 0 {
-		if err := checkAgeCoverage(view, resolved, longest, now); err != nil {
-			return err
-		}
-		// 统一数据集的 View 级覆盖统计取所有序列的最早一行：现货、永续分两次导入、永续历史较短时它会放行，之后永续一直被当新上市。
-		// 各市场的历史分别要够：在目标根附近按市场探针，某个市场一行都没有就拒绝启用（与现货、永续各一个任务时分别校验一致）。
-		if resolved.Unified() {
-			return checkUnifiedAgeCoverage(ctx, client, spaceID, view, resolved, now)
-		}
-		return nil
+		return checkAgeCoverage(view, resolved, longest, now)
 	}
 	// 没有 min_age_bars 时覆盖范围不影响实时求值，只校验行键；还没有数据时无从校验，允许启用。
 	if view.IndexedTo.IsZero() {
@@ -577,9 +566,9 @@ func sourceMarketType(ctx context.Context, client Client, spaceID string, source
 	return marketType, nil
 }
 
-// knownMarketType 报告策略支持的数据集市场类型：现货 spot、永续合约 swap、A 股 equity，以及同时放现货与永续的统一数据集 multi。
+// knownMarketType 报告策略支持的数据集市场类型：现货 spot、永续合约 swap、股票 equity。
 func knownMarketType(value string) bool {
-	return value == "spot" || value == "swap" || value == "equity" || value == MarketMulti
+	return value == "spot" || value == "swap" || value == "equity"
 }
 
 // StockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
@@ -690,11 +679,7 @@ func ParseResolved(raw []byte) (Resolved, error) {
 	if resolved.Market.IsZero() || len(resolved.Tasks) == 0 || resolved.Bar == "" || resolved.Calendar == "" {
 		return Resolved{}, errors.New("resolved_json 缺少 market、tasks、bar 或 calendar")
 	}
-	if resolved.Unified() {
-		if len(resolved.Tasks) != 1 {
-			return Resolved{}, errors.New("resolved_json 的统一数据集任务不能与其他任务并存")
-		}
-	} else if got := resolved.Markets(); len(got) != len(resolved.Tasks) || len(got) != len(resolved.Market.Markets()) {
+	if got := resolved.Markets(); len(got) != len(resolved.Tasks) || len(got) != len(resolved.Market.Markets()) {
 		return Resolved{}, errors.New("resolved_json 的 tasks 与 market 不一致")
 	}
 	for market, task := range resolved.Tasks {

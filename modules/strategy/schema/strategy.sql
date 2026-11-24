@@ -43,7 +43,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account
 ON t_strategy_instances (c_space_id, c_logical_account_id)
 WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL;
 
--- 实例登记的因子任务：每个市场（spot、swap、equity）一个，统一数据集上的任务登记为 multi（同时覆盖现货与永续）。
+-- 实例登记的因子任务：每个市场（spot、swap、equity）一个。
 -- 一个任务可以被多个实例引用；只有声明了 factor_params 的实例启用时把主帧任务独占关联（关联记在 Factor 侧）。
 -- c_source 是附加列来源名，空串表示主帧（参考市场的任务也登记在主帧下，由 DSL 的 market.reference 区分）
 CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
     c_market TEXT NOT NULL,
     c_factor_task_id TEXT NOT NULL,
     PRIMARY KEY (c_instance_id, c_source, c_market),
-    CHECK (c_market IN ('spot', 'swap', 'equity', 'multi')),
+    CHECK (c_market IN ('spot', 'swap', 'equity')),
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id)
 );
 
@@ -238,7 +238,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
 );
 
 -- 年龄探针通过的标的：上市时间只会越来越久，通过一次后跨周期、跨重启复用；c_index_id 是 View 的活动索引，索引重建后旧行作废；
--- c_market 是探针判断的市场（统一数据集的一个 View 里现货、永续各有各的历史，老的现货币新上永续时不能用现货的历史通过永续的年龄检查）
+-- c_market 是 View 所属的市场
 CREATE TABLE IF NOT EXISTS t_strategy_age_passed (
     c_space_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL,

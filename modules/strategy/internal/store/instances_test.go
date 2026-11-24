@@ -304,27 +304,15 @@ func TestInstanceBindsTwoFactorTasks(t *testing.T) {
 	}
 }
 
-// 统一数据集上的任务登记为 multi：一个实例只绑这一个任务，会话固化的任务键也是 multi。
-func TestInstanceBindsUnifiedTask(t *testing.T) {
+// 任务键的市场只能是现货、永续、股票：multi 等未知市场在登记时拒绝。
+func TestInstanceRejectsUnknownTaskMarket(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	unified := Instance{InstanceID: "iu", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"multi": "ftask_unified"}, CreatedAt: testNow}
-	if err := repo.CreateInstance(ctx, unified); err != nil {
-		t.Fatalf("统一数据集上的任务应能登记为 multi：%v", err)
-	}
-	got, err := repo.GetInstance(ctx, "iu")
-	if err != nil || got.FactorTasks["multi"] != "ftask_unified" {
-		t.Fatalf("实例应记下 multi 任务：%+v err=%v", got, err)
-	}
-	session := "session-unified"
-	if err := repo.EnableInstance(ctx, Session{SessionID: session, InstanceID: "iu", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"both","prefer":"swap"},"tasks":{"multi":{"view_id":"view_factor_unified","factor_task_id":"ftask_unified"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
-		t.Fatal(err)
-	}
-	instances, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_unified")
-	if err != nil || len(instances) != 1 || instances[0].InstanceID != "iu" {
-		t.Fatalf("事件应按统一数据集的 View 路由到实例：%+v err=%v", instances, err)
+	err := repo.CreateInstance(ctx, Instance{InstanceID: "iu", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"multi": "ftask_unified"}, CreatedAt: testNow})
+	if err == nil || !strings.Contains(err.Error(), "不受支持") {
+		t.Fatalf("multi 应被拒绝：%v", err)
 	}
 }

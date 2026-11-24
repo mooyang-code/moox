@@ -24,8 +24,6 @@ message StrategyInstance {
   string strategy_id = 2;
   string space_id = 3;
   // 市场（spot | swap | equity）→ 因子任务 ID；市场必须与任务源数据集的市场一致，且恰好是策略市场模式需要的那些市场。
-  // 统一数据集（同一个数据集里同时放现货、永续两条序列，数据集的 market_type 是 multi）上的任务登记为 multi，只绑这一个任务，
-  // 策略必须显式写 market。
   map<string, string> factor_tasks = 4;
   string logical_account_id = 5;
   bool enabled = 6;
@@ -145,7 +143,27 @@ message CreateStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; 
 message UpdateStrategyReq { string strategy_id = 1; string dsl_yaml = 2; }
 message UpdateStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
 message GetStrategyReq { string strategy_id = 1; }
-message GetStrategyRsp { common.RetInfo ret_info = 1; Strategy strategy = 2; }
+message GetStrategyRsp {
+  common.RetInfo ret_info = 1;
+  Strategy strategy = 2;
+  StrategyTaskRequirement requirement = 3;  // 按定义的 DSL 推出的、建实例要绑定的因子任务
+}
+
+// 策略定义建实例时要绑定的因子任务，由 DSL 推出（管理台据此列出要选的任务，不自己解析 DSL）。
+message StrategyTaskRequirement {
+  bool pool = 1;                                   // 是策略池：主帧市场取各成员所需市场的并集
+  // 已确定主帧市场：DSL 写了 market，或策略池的成员能推出市场。为 false 时只绑一个主帧任务，市场由所选任务决定
+  // （股票策略不写 market），附加来源的任务键按所选任务的市场拼出（来源名:市场）
+  bool market_declared = 2;
+  repeated string task_keys = 3;                   // 要绑定的任务键（市场确定时才有）：主帧市场（现货在前），参考市场，附加来源的 来源名:市场
+  repeated StrategySourceRequirement sources = 4;  // 附加来源（声明顺序）
+  repeated string problems = 5;                    // 据此建不了实例的问题（中文），例如策略池成员不存在、股票成员与现货永续成员混放
+}
+
+message StrategySourceRequirement {
+  string name = 1;
+  string bar = 2;
+}
 message ListStrategiesReq { PageRequest page = 1; }
 message ListStrategiesRsp { common.RetInfo ret_info = 1; repeated Strategy strategies = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
 message DeleteStrategyReq { string strategy_id = 1; }
@@ -153,7 +171,7 @@ message DeleteStrategyRsp { common.RetInfo ret_info = 1; }
 
 message ValidateStrategyReq {
   string dsl_yaml = 1;
-  map<string, string> factor_tasks = 2;  // 可选，市场（统一数据集上的任务写 multi）→ 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
+  map<string, string> factor_tasks = 2;  // 可选，市场（spot | swap | equity）→ 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
 }
 message ValidateStrategyRsp {
   common.RetInfo ret_info = 1;
@@ -161,6 +179,7 @@ message ValidateStrategyRsp {
   string resolved_json = 3;
   StrategyResult trial = 4;              // 试算结果，不落库
   repeated StrategyResultItem trial_items = 5;
+  StrategyTaskRequirement requirement = 6;  // DSL 能解析时给出：建实例要绑定的因子任务
 }
 
 message CreateStrategyInstanceReq { StrategyInstance instance = 1; }
@@ -214,7 +233,7 @@ message StartReplayReq {
   string start_time = 4;
   string end_time = 5;
   string instance_id = 7;
-  map<string, string> factor_tasks = 8;  // 市场（spot | swap | equity，统一数据集上的任务写 multi）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
+  map<string, string> factor_tasks = 8;  // 市场（spot | swap | equity）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
   double spot_fee_bps = 9;               // 现货与股票的单边手续费（基点）
   double swap_fee_bps = 10;              // 永续的单边手续费（基点）
   string funding_column = 11;            // 可选：永续持仓按 View 里的这一列（本根累计的资金费率，例如 funding_rate）结算资金费；策略池不能写，改写池 DSL 的 fees.funding_column

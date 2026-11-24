@@ -211,7 +211,7 @@ func replayTaskIDs(job store.Replay) map[string]string {
 // replayViewIDs 返回回放读取的结果 View（按任务键先后）。
 func replayViewIDs(job store.Replay) []string {
 	ids := make([]string, 0, len(job.Tasks))
-	for _, key := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity, input.MarketMulti} {
+	for _, key := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity} {
 		if task, ok := job.Tasks[key]; ok {
 			ids = append(ids, task.ViewID)
 		}
@@ -237,7 +237,6 @@ func checkFundingColumn(views map[string]input.ViewInfo, column string) error {
 }
 
 // loadMarketViews 读取绑定的每个市场的结果 View（要有 close 列，账本按它估值）与数据集的全部标的绑定（含已停用，回放中都视为活跃）。
-// 统一数据集里现货、永续共用一个 View：每个市场各取一份（View 与标的相同，标的不带 series_tag，读全部序列，读回的行再按市场过滤）。
 func loadMarketViews(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved) (map[string]input.ViewInfo, map[string][]input.Subject, error) {
 	markets := resolved.Markets()
 	views := make(map[string]input.ViewInfo, len(markets))
@@ -265,9 +264,6 @@ func loadMarketViews(ctx context.Context, client input.Client, spaceID string, r
 		active := make([]input.Subject, 0, len(bindings))
 		for _, subject := range bindings {
 			subject.Active = true
-			if resolved.Unified() {
-				subject.SeriesTag = ""
-			}
 			active = append(active, subject)
 		}
 		if len(active) == 0 {
@@ -292,9 +288,6 @@ func loadMarketSubjects(ctx context.Context, client input.Client, spaceID string
 		active := make([]input.Subject, 0, len(bindings))
 		for _, subject := range bindings {
 			subject.Active = true
-			if resolved.Unified() {
-				subject.SeriesTag = ""
-			}
 			active = append(active, subject)
 		}
 		if len(active) == 0 {
@@ -621,19 +614,12 @@ func (r *Runner) abortHook(replayID string) func(context.Context) error {
 // 的起点并截断终点，终点取各 View 中最早的；返回各市场更新后的 View。
 func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, views map[string]input.ViewInfo, start, end time.Time, abort func(context.Context) error) (map[string]input.ViewInfo, time.Time, error) {
 	checked := make(map[string]input.ViewInfo, len(views))
-	byKey := make(map[string]input.ViewInfo, len(views))
 	for _, market := range resolved.Markets() {
-		key := resolved.TaskKey(market)
-		// 统一数据集的两个市场共用一个 View，只复查一次。
-		if view, ok := byKey[key]; ok {
-			checked[market] = view
-			continue
-		}
-		view, newEnd, err := r.recheckView(ctx, job, key, resolved, program, views[market], start, end, false, abort)
+		view, newEnd, err := r.recheckView(ctx, job, market, resolved, program, views[market], start, end, false, abort)
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		checked[market], byKey[key], end = view, view, newEnd
+		checked[market], end = view, newEnd
 	}
 	return checked, end, nil
 }
@@ -719,7 +705,7 @@ func sortedNames[V any](values map[string]V) []string {
 // refs 是参考市场的读取器：只参与 age_markets: all 的年龄判定（列出的标的与探针）。
 func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers, refs []*replayMarket, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, engine.Frame, error) {
 	key := bar.StorageStart.Unix()
-	multi := len(readers) > 1
+	manyMarkets := len(readers) > 1
 	// 基础集合与标的绑定只取选币市场：基础集合是选币市场本期有行的标的（回放与实时的已知差别见 docs/模块/策略.md 第 10 节）。
 	universeSet := make(map[string]struct{})
 	var subjects []input.Subject
@@ -745,7 +731,7 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	involved := sets.Instruments()
 	for _, reader := range readers {
 		if detail := firstAmbiguous(involved, segments[reader.market].rows.Ambiguous[key]); detail != "" {
-			return skippedDecision(state, input.SkipAmbiguousSeries, marketDetail(reader.market, multi, detail)), engine.Frame{}, nil
+			return skippedDecision(state, input.SkipAmbiguousSeries, marketDetail(reader.market, manyMarkets, detail)), engine.Frame{}, nil
 		}
 	}
 	// 每个市场列出的标的取它的全部标的绑定（与实时的市场基础集合一致：本根没有行也算列出），探针候选也按它收窄。
@@ -783,7 +769,7 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	if program.UsesPreviousBar {
 		for _, reader := range readers {
 			if detail := firstAmbiguous(involved, segments[reader.market].rows.Ambiguous[bar.PreviousStart.Unix()]); detail != "" {
-				return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+marketDetail(reader.market, multi, detail)), engine.Frame{}, nil
+				return skippedDecision(state, input.SkipAmbiguousSeries, "上一根："+marketDetail(reader.market, manyMarkets, detail)), engine.Frame{}, nil
 			}
 		}
 	}
@@ -791,37 +777,13 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	if err != nil {
 		return skippedDecision(state, input.SkipConfigError, err.Error()), engine.Frame{}, nil
 	}
-	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutReasons: sets.AgedOutReasons, Holdings: holdings}
+	markets := make([]input.MarketRows, 0, len(readers))
 	for _, reader := range readers {
-		current := segments[reader.market].rows.Bars[key]
-		previous := segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]
-		frameRows := make(map[string]engine.Row, len(current))
-		var marketAged map[string]struct{}
-		for subjectID, row := range current {
-			if multi {
-				if _, ok := sets.Subjects[subjectID]; !ok {
-					continue
-				}
-				// 某个市场里年龄不够的标的不用这个市场的行（老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）：
-				// 只记下，由选币池构造决定（已持仓的标的豁免）。
-				if passed, probed := agePassed[reader.market]; probed {
-					if _, ok := passed[subjectID]; !ok {
-						if marketAged == nil {
-							marketAged = make(map[string]struct{})
-						}
-						marketAged[subjectID] = struct{}{}
-					}
-				}
-			}
-			// 来源读了 __params 时带上各可变成员这一行实际用的参数，params() 读它；没读时为空，params() 取到 NaN。
-			engineRow := engine.Row{Values: row.Values, Params: row.Params}
-			if program.UsesPreviousBar {
-				if prev, ok := previous[subjectID]; ok {
-					engineRow.Previous = prev.Values
-				}
-			}
-			frameRows[subjectID] = engineRow
-		}
+		markets = append(markets, input.MarketRows{Market: reader.market, Current: segments[reader.market].rows.Bars[key], Previous: segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]})
+	}
+	frame := input.AssembleFrame(input.Assembly{Program: program, Boundary: bar, Sets: sets, Holdings: holdings, Listed: listed, MarketPassed: agePassed, Markets: markets})
+	for _, reader := range readers {
+		frameRows := frame.Markets[reader.market].Rows
 		// 附加来源按 as-of 取这根主帧应读的那一根；同一标的有多个序列的来源行不可信，按缺数处理。
 		for _, name := range sortedNames(segments[reader.market].sources) {
 			period, _, err := resolved.Sources[name].Period(bar.BarEnd)
@@ -838,15 +800,14 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			}
 			input.MergeSourceRows(frameRows, name, usable)
 		}
-		frame.Markets[reader.market] = engine.MarketInput{Rows: frameRows, AgedOut: marketAged}
 	}
 	decision, err := engine.Evaluate(program, frame, state)
 	return decision, frame, err
 }
 
 // marketDetail 在多个市场时给说明加上市场名。
-func marketDetail(market string, multi bool, detail string) string {
-	if !multi {
+func marketDetail(market string, manyMarkets bool, detail string) string {
+	if !manyMarkets {
 		return detail
 	}
 	return market + " 市场：" + detail

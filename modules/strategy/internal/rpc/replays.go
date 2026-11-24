@@ -135,9 +135,9 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if fundingColumn != "" && !resolved.Market.Has(dsl.MarketSwap) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("策略不涉及永续（市场 %s），资金费只对永续持仓结算，不要写 funding_column", resolved.Market))}, nil
 	}
-	// 只绑一个 View（纯永续、统一数据集）时 ViewColumns 就是这个 View 的列，提交时就能确认资金费列存在；现货、永续两个 View 时
+	// 只绑一个 View（纯永续）时 ViewColumns 就是这个 View 的列，提交时就能确认资金费列存在；现货、永续两个 View 时
 	// ViewColumns 是交集（现货没有这一列），留到执行时按永续的 View 检查。
-	if fundingColumn != "" && (resolved.Market.Single() || resolved.Unified()) && !slices.Contains(resolved.ViewColumns, fundingColumn) {
+	if fundingColumn != "" && resolved.Market.Single() && !slices.Contains(resolved.ViewColumns, fundingColumn) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("永续的 View 没有资金费列 %s", fundingColumn))}, nil
 	}
 	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间（行键是交易日期的 UTC 零点，见 input.ReplayRange）。
@@ -215,12 +215,9 @@ func replayInputOf(raw string, strategy dsl.Strategy) (string, error) {
 	return source, nil
 }
 
-// checkComputeReplay 是“因子现算”来源在解析出绑定后的限制：只支持一个主帧任务（方式 A 的现货、永续两个任务不支持；统一数据集是
-// 一个任务），不支持股票市场（引擎回放的计算核心没有核对过交易日历与午休）。
+// checkComputeReplay 是“因子现算”来源在解析出绑定后的限制：不支持股票市场（引擎回放的计算核心没有核对过交易日历与午休）。
+// 现货加永续两个主帧任务时每个任务在引擎上各开一个会话。
 func checkComputeReplay(resolved input.Resolved) error {
-	if len(resolved.Tasks) != 1 {
-		return fmt.Errorf("“因子现算”来源只支持一个主帧任务，这个回放绑定了 %d 个（%s）；现货加永续请用统一数据集上的任务，或改用 View 来源", len(resolved.Tasks), strings.Join(resolved.TaskKeys(), "、"))
-	}
 	if resolved.Calendar != input.DefaultCalendar || resolved.Market.Has(dsl.MarketEquity) {
 		return fmt.Errorf("“因子现算”来源暂不支持股票市场（日历 %s）：请用 View 来源回放", resolved.Calendar)
 	}

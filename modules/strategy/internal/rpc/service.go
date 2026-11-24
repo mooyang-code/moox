@@ -340,7 +340,11 @@ func (s *Service) GetStrategy(ctx context.Context, req *strategypb.GetStrategyRe
 	if err != nil {
 		return &strategypb.GetStrategyRsp{RetInfo: failure(err)}, nil
 	}
-	return &strategypb.GetStrategyRsp{RetInfo: success(), Strategy: definitionProto(def)}, nil
+	rsp := &strategypb.GetStrategyRsp{RetInfo: success(), Strategy: definitionProto(def)}
+	if strategy, err := dsl.Parse([]byte(def.DSLYaml)); err == nil {
+		rsp.Requirement = s.taskRequirement(ctx, strategy)
+	}
+	return rsp, nil
 }
 
 func (s *Service) ListStrategies(ctx context.Context, req *strategypb.ListStrategiesReq) (*strategypb.ListStrategiesRsp, error) {

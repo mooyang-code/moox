@@ -53,7 +53,7 @@ func TestStartReplayInputSource(t *testing.T) {
 	}
 }
 
-// “因子现算”的限制：策略池、绑了两个主帧任务、股票市场都拒绝；一期的因子帧估算超过单步上限时提交即拒绝。
+// “因子现算”的限制：策略池、股票市场都拒绝（现货加永续两个主帧任务可以）；一期的因子帧估算超过单步上限时提交即拒绝。
 func TestStartComputeReplayRejections(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
@@ -61,8 +61,9 @@ func TestStartComputeReplayRejections(t *testing.T) {
 		req.StartTime, req.EndTime, req.Input = "2026-09-01", "2026-09-02", "compute"
 		return req
 	}
+	// 现货加永续两个主帧任务可以现算（每个任务各开一个会话）。
 	both, _ := h.service.StartReplay(h.ctx, day(&strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a", "swap": "ftask_swap"}}))
-	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只支持一个主帧任务")
+	requireOK(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg())
 
 	h.createStrategy("member_spot", spotMemberDSL)
 	h.createStrategy("member_swap", swapMemberDSL)

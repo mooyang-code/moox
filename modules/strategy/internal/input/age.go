@@ -33,7 +33,7 @@ func ruleAges(strategy dsl.Strategy) map[string]AgeRule {
 	return ages
 }
 
-// CheckAgeMarkets 检查 age_markets: all 只用在绑定了两个市场的实例上（统一数据集、现货永续两个任务，或单市场加参考市场）：只绑一个市场时
+// CheckAgeMarkets 检查 age_markets: all 只用在绑定了两个市场的实例上（现货永续两个任务，或单市场加参考市场）：只绑一个市场时
 // 它与 each 没有区别，用户却以为在核对另一个市场，所以直接拒绝。
 func (r Resolved) CheckAgeMarkets() error {
 	if len(r.Market.Markets()) >= 2 || len(r.References) > 0 {

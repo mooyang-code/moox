@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"math/rand/v2"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // DefaultReplayMaxBars 是一次回放允许的最多 bar 数。
@@ -295,34 +293,11 @@ type RangeLoader struct {
 	View     ViewInfo
 	Subjects []Subject
 	Columns  []string
-	// Memo 非空时，共用同一个 View 的几个读取器（统一数据集里每个市场一个）对同一段、同样的列与标的只读一次 Storage。
-	Memo *RowsMemo
-	// Market 非空表示读的是统一数据集（一个 View 里现货、永续用 series_tag 区分）里这个市场的行：Subjects 不带 series_tag
-	// （读全部序列），读回的行按 series_tag 对应的市场过滤，只保留这个市场的；歧义也只在这个市场内判断。为空时按 View 读全部行。
-	Market string
 	// ExpectedRevision 非零时固定读取的索引修订号（取自同一段主数据读取返回的修订号）：修订号变化时不退避重读，
 	// 直接返回 *RevisionChangedError，由调用方连同主数据一起重读，保证同一段的两次读取来自同一修订号。
 	ExpectedRevision uint64
 	// Abort 在每次退避重读之前调用，返回非空错误时放弃读取并原样返回它（例如回放已被取消）；可以为空。
 	Abort func(context.Context) error
-}
-
-// RowsMemo 暂存一段读取的原始行：统一数据集里现货、永续各有一个读取器，它们读的是同一个 View 的同一段，共用一次读取，
-// 之后各自按市场过滤。回放读完一段就 Reset，不跨段保留（行占内存）。
-type RowsMemo struct {
-	entries map[string]rowsMemoEntry
-}
-
-type rowsMemoEntry struct {
-	rows     []Row
-	revision uint64
-}
-
-// Reset 丢弃暂存的行。
-func (m *RowsMemo) Reset() {
-	if m != nil {
-		m.entries = nil
-	}
 }
 
 // RangeRows 是一段读取的结果：bar_start（Unix 秒）→ subject_id → 行；Ambiguous 记录同一标的同一周期出现多个序列的
@@ -355,7 +330,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 			if err := l.checkGeneration(ctx); err != nil {
 				return RangeRows{}, err
 			}
-			grouped := groupRange(rows, l.Market)
+			grouped := groupRange(rows)
 			grouped.Revision = revision
 			return grouped, nil
 		}
@@ -389,34 +364,9 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 	}
 }
 
-// subjectsKey 是标的（含 series_tag，顺序有关）内容的摘要，作暂存的键：只比个数会把标的不同的两次读取当成同一次。
-func subjectsKey(subjects []Subject) string {
-	hash := fnv.New64a()
-	for _, subject := range subjects {
-		_, _ = hash.Write([]byte(subject.SubjectID))
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(subject.SeriesTag))
-		_, _ = hash.Write([]byte{1})
-	}
-	return fmt.Sprintf("%d:%x", len(subjects), hash.Sum64())
-}
-
-// queryRows 读一段原始行；有 Memo 时同样的读取只发一次。
+// queryRows 读一段原始行。
 func (l *RangeLoader) queryRows(ctx context.Context, start, end time.Time) ([]Row, uint64, error) {
-	key := fmt.Sprintf("%s|%s|%d|%d|%d|%s|%s", l.View.ViewID, l.View.ActiveIndexID, start.UnixNano(), end.UnixNano(), l.ExpectedRevision, subjectsKey(l.Subjects), strings.Join(l.Columns, ","))
-	if l.Memo != nil {
-		if entry, ok := l.Memo.entries[key]; ok {
-			return entry.rows, entry.revision, nil
-		}
-	}
-	rows, revision, err := l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
-	if err == nil && l.Memo != nil {
-		if l.Memo.entries == nil {
-			l.Memo.entries = make(map[string]rowsMemoEntry)
-		}
-		l.Memo.entries[key] = rowsMemoEntry{rows: rows, revision: revision}
-	}
-	return rows, revision, err
+	return l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
 }
 
 // wait 等待 d，等待前后都确认是否要放弃（Abort）：取消可能就落在等待期间；ctx 结束时返回 ctx 的错误。
@@ -521,11 +471,11 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// GroupRows 按 bar_start 与标的整理一批行，规则与 RangeLoader 读回的行相同：market 非空时只留这个市场的序列（统一数据集），
-// 同一标的同一周期有多个序列时记入 Ambiguous。“因子现算”来源用它整理引擎返回的行，歧义判断与 View 来源一致。
-func GroupRows(rows []Row, market string) RangeRows { return groupRange(rows, market) }
+// GroupRows 按 bar_start 与标的整理一批行，规则与 RangeLoader 读回的行相同：同一标的同一周期有多个序列时记入 Ambiguous。
+// “因子现算”来源用它整理引擎返回的行，歧义判断与 View 来源一致。
+func GroupRows(rows []Row) RangeRows { return groupRange(rows) }
 
-func groupRange(rows []Row, market string) RangeRows {
+func groupRange(rows []Row) RangeRows {
 	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]map[string]string)}
 	tags := make(map[int64]map[string]string)
 	markAmbiguous := func(key int64, subjectID, detail string) {
@@ -539,27 +489,12 @@ func groupRange(rows []Row, market string) RangeRows {
 			continue
 		}
 		key := row.DataTime.Unix()
-		if market != "" {
-			// 统一数据集：现货、永续两条序列并存是正常的；换不出市场的序列才有歧义，两个市场都不能用这个标的的这一根。
-			rowMarket := seriesset.SeriesTagMarket(row.SeriesTag)
-			if rowMarket != dsl.MarketSpot && rowMarket != dsl.MarketSwap {
-				markAmbiguous(key, row.SubjectID, fmt.Sprintf("标的 %s 的序列 %q 无法判断所属市场", row.SubjectID, row.SeriesTag))
-				continue
-			}
-			if rowMarket != market {
-				continue
-			}
-		}
 		if result.Bars[key] == nil {
 			result.Bars[key] = make(map[string]Row)
 			tags[key] = make(map[string]string)
 		}
 		if tag, seen := tags[key][row.SubjectID]; seen && tag != row.SeriesTag {
-			detail := fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
-			if market != "" {
-				detail = fmt.Sprintf("标的 %s 在同一周期的%s市场有多个序列（%s、%s）", row.SubjectID, market, tag, row.SeriesTag)
-			}
-			markAmbiguous(key, row.SubjectID, detail)
+			markAmbiguous(key, row.SubjectID, fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag))
 			continue
 		}
 		tags[key][row.SubjectID] = row.SeriesTag

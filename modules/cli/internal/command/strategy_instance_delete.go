@@ -154,7 +154,7 @@ func readStrategyDeleteInstance(ctx context.Context, client *rpcclient.Client, i
 // 没关联的保留，Factor 里已经不存在的标为已删除。
 func strategyDeleteTasks(ctx context.Context, gateway commandGateway, spaceID string, instance strategyDeleteInstance) ([]strategyDeleteTask, error) {
 	var tasks []strategyDeleteTask
-	for _, market := range []string{"spot", "swap", "equity", "multi"} {
+	for _, market := range []string{"spot", "swap", "equity"} {
 		taskID, ok := instance.FactorTasks[market]
 		if !ok {
 			continue

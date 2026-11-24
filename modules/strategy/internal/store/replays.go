@@ -50,7 +50,7 @@ type Replay struct {
 	DSLHash  string
 	Calendar string
 	SpaceID  string
-	// Tasks 是各任务键（市场 spot、swap、equity，统一数据集上的任务是 multi；附加来源是 来源名:市场）读取的因子任务与结果 View。
+	// Tasks 是各任务键（市场 spot、swap、equity；附加来源是 来源名:市场）读取的因子任务与结果 View。
 	Tasks map[string]ReplayTask
 	// Input 是主帧的输入来源（ReplayInputView 或 ReplayInputCompute）；登记时为空按 view。附加来源与参考市场总是读 View。
 	Input     string

@@ -125,38 +125,40 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 	if err != nil {
 		return err
 	}
-	// 动态参数回写只用于只绑一个主帧因子任务的实例（双任务的成员键可能重名，写入会冲突）；附加来源的任务不接受参数
+	// 参数提交给每个主帧任务（现货加永续时两个任务提交同一份参数，按现货、永续的先后）；附加来源的任务不接受参数
 	// （写了 sources 的策略，factor_params 只作用于主帧任务；写了参考市场的策略不支持 factor_params，保存时已拒绝）。
-	var taskIDs []string
-	for key, taskID := range instance.FactorTasks {
-		if source, _ := dsl.SplitTaskKey(key); source == "" {
-			taskIDs = append(taskIDs, taskID)
-		}
-	}
-	if len(taskIDs) != 1 {
-		return s.reject(ctx, delivery, "绑定了多个因子任务的实例不支持回写参数")
+	// 全部任务都接受（或幂等重复）才算送达；任一任务拒绝就整条标为被拒绝；传输失败整条重试：FactorMgr 按（任务、成员）
+	// 同期同 request_id 幂等，已接受的任务重投只是重复。
+	taskIDs := input.TaskIDs(mainTasks(instance.FactorTasks))
+	if len(taskIDs) == 0 {
+		return s.reject(ctx, delivery, "实例没有主帧因子任务")
 	}
 	members := map[string]map[string]input.ParamValue{}
 	if err := json.Unmarshal(delivery.Members, &members); err != nil {
 		return s.reject(ctx, delivery, "待投递的参数无法解析")
 	}
-	callCtx, cancel := context.WithTimeout(ctx, submissionTimeout)
-	defer cancel()
-	results, err := s.Factors.SubmitFactorParams(callCtx, input.ParamSubmission{
-		RequestID: delivery.ResultID, Writer: delivery.InstanceID, TaskID: taskIDs[0],
-		PeriodTime: delivery.Period, Members: members,
-	})
-	if err != nil {
-		var service *input.ServiceError
-		if errors.As(err, &service) && service.Code == commonpb.ErrorCode_INVALID_PARAM {
-			// 请求本身被判为无效：重试也不会成功。
-			return s.reject(ctx, delivery, err.Error())
+	for _, taskID := range taskIDs {
+		callCtx, cancel := context.WithTimeout(ctx, submissionTimeout)
+		results, err := s.Factors.SubmitFactorParams(callCtx, input.ParamSubmission{
+			RequestID: delivery.ResultID, Writer: delivery.InstanceID, TaskID: taskID,
+			PeriodTime: delivery.Period, Members: members,
+		})
+		cancel()
+		if err != nil {
+			var service *input.ServiceError
+			if errors.As(err, &service) && service.Code == commonpb.ErrorCode_INVALID_PARAM {
+				// 请求本身被判为无效：重试也不会成功。
+				return s.reject(ctx, delivery, err.Error())
+			}
+			s.recordFailure(delivery.ResultID)
+			return fmt.Errorf("提交参数 %s 给因子任务 %s：%w", delivery.ResultID, taskID, err)
 		}
-		s.recordFailure(delivery.ResultID)
-		return fmt.Errorf("提交参数 %s：%w", delivery.ResultID, err)
-	}
-	if reason := rejection(results); reason != "" {
-		return s.reject(ctx, delivery, reason)
+		if reason := rejection(results); reason != "" {
+			if len(taskIDs) > 1 {
+				reason = fmt.Sprintf("因子任务 %s：%s", taskID, reason)
+			}
+			return s.reject(ctx, delivery, reason)
+		}
 	}
 	if err := s.Store.MarkParamsDelivered(ctx, delivery.ResultID, s.now()); err != nil {
 		return err
@@ -166,6 +168,17 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 		s.OnResult(ResultDelivered)
 	}
 	return nil
+}
+
+// mainTasks 返回实例的主帧任务（市场 → 任务），不含附加来源。
+func mainTasks(tasks map[string]string) map[string]string {
+	out := make(map[string]string, len(tasks))
+	for key, taskID := range tasks {
+		if source, _ := dsl.SplitTaskKey(key); source == "" {
+			out[key] = taskID
+		}
+	}
+	return out
 }
 
 // reject 把记录标为被拒绝：不再重试，也不算送达。
