@@ -398,6 +398,8 @@ func (f *TencentFunctions) ensureOnce(ctx context.Context, s session, spec Funct
 		if fullConfig {
 			request.MemorySize, request.MaxInstanceConcurrency, request.PublicNetStatus = spec.MemoryMB, functionMaxConcurrency, functionPublicNet
 			request.VpcID, request.SubnetID = spec.VPCID, spec.SubnetID
+			// 期望不绑 VPC（public 地域）时要显式清掉：VPC 为空的请求不带 VpcConfig，云上会保留原来的绑定。
+			request.ClearVPC = spec.VPCID == ""
 		}
 		if _, err := s.client.UpdateFunctionConfiguration(ctx, request); err != nil {
 			return fmt.Errorf("云函数 %s 改环境与配置失败: %w", name, err)
@@ -699,8 +701,9 @@ func validateSpec(spec FunctionSpec) error {
 	if spec.MemoryMB <= 0 {
 		return fmt.Errorf("云函数 %s 没有指定内存", spec.Ref.Name)
 	}
-	if strings.TrimSpace(spec.VPCID) == "" || strings.TrimSpace(spec.SubnetID) == "" {
-		return fmt.Errorf("云函数 %s 必须指定 VPC 与子网", spec.Ref.Name)
+	// VPC 与子网要么都有（vpc 地域），要么都为空（public 地域，不绑 VPC、经公网访问外部入口）。
+	if (strings.TrimSpace(spec.VPCID) == "") != (strings.TrimSpace(spec.SubnetID) == "") {
+		return fmt.Errorf("云函数 %s 的 VPC 与子网必须同时指定或同时为空", spec.Ref.Name)
 	}
 	if spec.ReservedMem < 0 {
 		return fmt.Errorf("云函数 %s 的预留并发内存不能为负", spec.Ref.Name)

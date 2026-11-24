@@ -348,11 +348,8 @@ func (c *Config) validateSCFPlan() error {
 	}
 	for space, override := range plan.Spaces {
 		if region := override.BackfillRegion; region != "" {
-			if network, ok := c.SCFRegions[region]; !ok || network.VPCID == "" || network.SubnetID == "" {
-				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s has no VPC and subnet in scf_regions", space, region)
-			}
-			if _, ok := plan.EntryRoutes[region]; !ok {
-				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s has no same-region entry route in scf_plan.entry_routes", space, region)
+			if err := c.checkSCFRegion(region); err != nil {
+				return fmt.Errorf("scf_plan.spaces[%s].backfill_region %s: %w", space, region, err)
 			}
 		}
 		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
@@ -373,15 +370,27 @@ func (c *Config) validateSCFPlan() error {
 				return fmt.Errorf("scf_markets[%s][%s] requires a lowercase market and at least one region", space, market)
 			}
 			for _, region := range regions {
-				network, ok := c.SCFRegions[region]
-				if !ok || network.VPCID == "" || network.SubnetID == "" {
-					return fmt.Errorf("scf_markets[%s][%s] region %s has no VPC and subnet in scf_regions", space, market, region)
-				}
-				if _, ok := plan.EntryRoutes[region]; !ok {
-					return fmt.Errorf("scf_markets[%s][%s] region %s has no same-region entry route in scf_plan.entry_routes", space, market, region)
+				if err := c.checkSCFRegion(region); err != nil {
+					return fmt.Errorf("scf_markets[%s][%s] region %s: %w", space, market, region, err)
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// checkSCFRegion 校验某地域的函数网络与入口路由：网络见 PlanNetwork.Check；vpc 地域的入口是同地域入口主机的私网地址，
+// public 地域的入口是入口主机的公网地址，两种都要在 scf_plan.entry_routes 里。
+func (c *Config) checkSCFRegion(region string) error {
+	network, ok := c.SCFRegions[region]
+	if !ok {
+		return fmt.Errorf("has no network in scf_regions")
+	}
+	if err := network.Check(); err != nil {
+		return fmt.Errorf("scf_regions: %w", err)
+	}
+	if _, ok := c.SCFPlan.EntryRoutes[region]; !ok {
+		return fmt.Errorf("has no entry route in scf_plan.entry_routes")
 	}
 	return nil
 }

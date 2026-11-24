@@ -15,10 +15,35 @@ import (
 // DefaultSymbolsPerFunction 是每个定时函数默认负责的标的数（现货与合约相同）。
 const DefaultSymbolsPerFunction = 50
 
-// PlanNetwork 是某地域的 SCF 网络：函数绑定该地域内的 VPC，通过私网访问同地域的外部入口。
+// PlanNetwork 是某地域的 SCF 网络。默认（Network 为空）函数绑定该地域内的 VPC，通过私网访问同地域的外部入口；
+// Network 为 public 时函数不绑 VPC，经公网访问入口主机的外部入口（用于没有 MooX 主机的地域）。
 type PlanNetwork struct {
+	Network  string `yaml:"network" json:"network"`
 	VPCID    string `yaml:"vpc_id" json:"vpc_id"`
 	SubnetID string `yaml:"subnet_id" json:"subnet_id"`
+}
+
+// NetworkPublic 是不绑 VPC、经公网访问外部入口的地域网络方式。
+const NetworkPublic = "public"
+
+// Public 表示这个地域的函数不绑 VPC。
+func (n PlanNetwork) Public() bool { return n.Network == NetworkPublic }
+
+// Check 校验地域网络：public 不能带 VPC；默认方式必须同时有 VPC 与子网。
+func (n PlanNetwork) Check() error {
+	switch n.Network {
+	case NetworkPublic:
+		if n.VPCID != "" || n.SubnetID != "" {
+			return fmt.Errorf("network public must not set vpc_id or subnet_id")
+		}
+	case "", "vpc":
+		if n.VPCID == "" || n.SubnetID == "" {
+			return fmt.Errorf("needs vpc_id and subnet_id")
+		}
+	default:
+		return fmt.Errorf("network %q must be vpc or public", n.Network)
+	}
+	return nil
 }
 
 // PlanOptions 是计算期望状态所需的配置。

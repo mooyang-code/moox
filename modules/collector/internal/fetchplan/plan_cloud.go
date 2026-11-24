@@ -109,12 +109,15 @@ func (r *PlanReconciler) functionRef(name, region string) cloud.FunctionRef {
 	return cloud.FunctionRef{AccountID: r.Deploy.CloudAccountID, Region: region, Namespace: r.Deploy.NamespaceFor(name), Name: name}
 }
 
-// desiredSpec 是一个定时函数期望内容的唯一出处：环境（基础项加受管项）、内存、超时、VPC、定时器。
+// desiredSpec 是一个定时函数期望内容的唯一出处：环境（基础项加受管项）、内存、超时、VPC（public 地域为空）、定时器。
 // 代码包不在这里定：操作开始时现取最新的可用包（见 withPackage），排队期间上传的新包也能用上。
 func (r *PlanReconciler) desiredSpec(target functionTarget) (cloud.FunctionSpec, error) {
 	network, ok := r.Deploy.Networks[target.Region]
-	if !ok || network.VPCID == "" || network.SubnetID == "" {
-		return cloud.FunctionSpec{}, fmt.Errorf("region %s has no VPC and subnet configured", target.Region)
+	if !ok {
+		return cloud.FunctionSpec{}, fmt.Errorf("region %s has no network configured", target.Region)
+	}
+	if err := network.Check(); err != nil {
+		return cloud.FunctionSpec{}, fmt.Errorf("region %s: %w", target.Region, err)
 	}
 	managed, err := r.functionEnvironment(target.Region, target.Plan)
 	if err != nil {

@@ -1578,8 +1578,11 @@ func (r *PlanReconciler) backfillRef(marketType, region string) cloud.FunctionRe
 // backfillSpec 是补采函数的期望内容：不带定时器与采集计划，同步调用，预留并发 5 份内存硬性限制并发实例数。
 func (r *PlanReconciler) backfillSpec(ref cloud.FunctionRef, access map[string]string) (cloud.FunctionSpec, error) {
 	network, ok := r.Deploy.Networks[ref.Region]
-	if !ok || network.VPCID == "" || network.SubnetID == "" {
-		return cloud.FunctionSpec{}, fmt.Errorf("region %s has no VPC and subnet configured", ref.Region)
+	if !ok {
+		return cloud.FunctionSpec{}, fmt.Errorf("region %s has no network configured", ref.Region)
+	}
+	if err := network.Check(); err != nil {
+		return cloud.FunctionSpec{}, fmt.Errorf("region %s: %w", ref.Region, err)
 	}
 	environment := map[string]string{"MOOX_MARKET_FETCH_MODE": "backfill", "MOOX_FETCH_TIMEOUT_SECONDS": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)}
 	for _, key := range []string{"MOOX_ENTRY_ADDRESS", "MOOX_ENTRY_HOST", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {

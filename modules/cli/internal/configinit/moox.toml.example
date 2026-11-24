@@ -170,6 +170,13 @@ enabled = false
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
 # entry_host = "overseas"   # 同地域有多台带私网地址的入口主机时必须指定
+#
+# 没有 MooX 主机的地域（例如上海）用公网方式：函数不绑 VPC，写入时经公网连 entry_host 的外部入口（公网地址加 11004），
+# 入口主机的安全组要对公网放行 11004。network 按地域生效，各空间共用；不写时是 vpc。
+# 撤掉一个地域：先从市场里去掉、保留这一段并部署；新计划生效后到腾讯云控制台删掉那里的函数和命名空间；最后再删这一段。
+# [scf_plan.regions.ap-shanghai]
+# network = "public"
+# entry_host = "storage"
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"
