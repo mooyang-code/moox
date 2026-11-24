@@ -26,6 +26,18 @@ func (f *targetFixture) delistInstrument(t *testing.T, instrumentID string) {
 	f.store.InvalidateCaches()
 }
 
+func (f *targetFixture) resumeInstrument(t *testing.T, instrumentID string) {
+	t.Helper()
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_status = 'TRADING' WHERE c_instrument_id = ?", instrumentID).Error)
+	f.store.InvalidateCaches()
+}
+
+func (f *targetFixture) removeInstrument(t *testing.T, instrumentID string) {
+	t.Helper()
+	require.NoError(t, f.store.DBForTest().Exec("DELETE FROM t_trade_instruments WHERE c_instrument_id = ?", instrumentID).Error)
+	f.store.InvalidateCaches()
+}
+
 func (f *targetFixture) converged(t *testing.T) Result {
 	t.Helper()
 	f.now = time.Now().UTC()
@@ -118,40 +130,115 @@ func TestBlockedSpotDoesNotRestrictSwap(t *testing.T) {
 	require.Equal(t, []string{"BTC-USDT-SWAP:BUY"}, placedInstruments(f), "现货买入被截掉，永续加仓照常")
 }
 
-// 已经不能交易的永续：持仓不再让目标置为 BLOCKED，目标里的这一项整项跳过，其余照常。
+// 名单里已经不能交易的永续：持仓不让目标置为 BLOCKED，目标里的这一项整项跳过，其余照常。
 func TestBlockedUntradableSwapDoesNotBlockTarget(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
 	f.delistInstrument(t, "BTC-USDT-SWAP")
+	f.block(t, "SWAP", "BTCUSDT")
 	f.target(t, []store.InstrumentTarget{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"},
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"},
 	})
-
-	// 没进名单：持仓没有可交易标的，目标被阻塞。
 	result := f.converged(t)
-	require.Equal(t, StatusBlocked, result.Status)
-
-	f.block(t, "SWAP", "BTCUSDT")
-	result = f.converged(t)
-	require.NotEqual(t, StatusBlocked, result.Status, "名单里的不再阻塞组合")
+	require.NotEqual(t, StatusBlocked, result.Status, "名单里的不阻塞组合")
 	require.Equal(t, []string{"ETH-USDT-SPOT:BUY"}, placedInstruments(f), "名单标的不买不卖，其余照常")
 }
 
-// 现货按基础资产匹配，而且只匹配 SPOT 条目：永续下架不会把同名现货余额的阻塞也豁免掉。
-func TestBlockedSpotBalanceIsMatchedByBaseAssetAndSpotEntriesOnly(t *testing.T) {
+// 名单里已经不能交易的现货：余额按基础资产匹配，整项跳过，不阻塞组合。
+func TestBlockedUntradableSpotBalanceDoesNotBlockTarget(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.setSpotBalance("BTC", "2")
+	f.delistInstrument(t, "BTC-USDT-SPOT")
+	f.block(t, "SPOT", "BTCUSDT")
+	f.target(t, []store.InstrumentTarget{
+		{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"},
+		{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"},
+	})
+	result := f.converged(t)
+	require.NotEqual(t, StatusBlocked, result.Status)
+	require.Equal(t, []string{"ETH-USDT-SPOT:BUY"}, placedInstruments(f))
+}
+
+// 列表里有、但暂不可交易（BREAK）而且不在名单里的现货余额和永续持仓：本轮跳过，不阻塞组合，其余照常收敛；
+// 恢复 TRADING 后照常收敛。
+func TestSuspendedHoldingsAreSkippedUntilTradableAgain(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.setSpotBalance("BTC", "2")
+	f.setSwapPosition("BTCUSDT", "5")
+	f.delistInstrument(t, "BTC-USDT-SPOT")
+	f.delistInstrument(t, "BTC-USDT-SWAP")
+	f.target(t, []store.InstrumentTarget{
+		{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"},
+		{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"},
+		{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"},
+	})
+	result := f.converged(t)
+	require.NotEqual(t, StatusBlocked, result.Status, "暂不可交易的持仓不阻塞组合")
+	require.Equal(t, []string{"ETH-USDT-SPOT:BUY"}, placedInstruments(f), "暂停的标的不买不卖，其余照常")
+	stored, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Empty(t, stored.BlockedTargets)
+
+	// 恢复可交易：ETH 已成交，暂停期间跳过的两项照常收敛。
+	f.orders.specs = nil
+	f.setSpotBalance("ETH", "12")
+	f.resumeInstrument(t, "BTC-USDT-SPOT")
+	f.resumeInstrument(t, "BTC-USDT-SWAP")
+	e := f.executor()
+	e.MinBatchInterval = 0
+	result, err = e.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.NotEqual(t, StatusBlocked, result.Status)
+	require.Equal(t, []string{"BTC-USDT-SWAP:BUY"}, placedInstruments(f), "先做合约加仓，现货买入在后一阶段")
+	require.Equal(t, "5", f.orders.specs[0].Quantity.String())
+}
+
+// 目标里对暂不可交易的现货是保持（Hold）：同样不阻塞组合。
+func TestSuspendedSpotHoldDoesNotBlockTarget(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSpotBalance("BTC", "2")
 	f.delistInstrument(t, "BTC-USDT-SPOT")
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Hold: true}})
-
-	f.block(t, "SWAP", "BTCUSDT")
 	result := f.converged(t)
-	require.Equal(t, StatusBlocked, result.Status, "永续条目不豁免现货余额")
-
-	f.block(t, "SPOT", "BTCUSDT")
-	result = f.converged(t)
 	require.NotEqual(t, StatusBlocked, result.Status)
+	require.Empty(t, f.orders.specs)
+}
+
+// 交易所列表里没有对应标的的持仓：照旧阻塞组合。现货沿用结算币过滤：只有别的结算币的、暂不可交易的标的，
+// 不算列表里有；永续是标的整条不在列表里。
+func TestHoldingsWithoutListedInstrumentStillBlockTarget(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func(t *testing.T, f *targetFixture)
+	}{
+		{"现货余额", func(t *testing.T, f *targetFixture) {
+			f.setSpotBalance("BTC", "2")
+			f.delistInstrument(t, "BTC-USDT-SPOT")
+			require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_settlement_asset = 'FDUSD' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
+			f.store.InvalidateCaches()
+		}},
+		{"永续持仓", func(t *testing.T, f *targetFixture) {
+			f.setSwapPosition("BTCUSDT", "5")
+			f.removeInstrument(t, "BTC-USDT-SWAP")
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMixedExecutorFixture(t)
+			c.setup(t, f)
+			// 现货余额要在目标里才受管；永续持仓不论在不在目标里都要处理。
+			f.target(t, []store.InstrumentTarget{
+				{InstrumentID: "BTC-USDT-SPOT", Hold: true},
+				{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"},
+			})
+			result := f.converged(t)
+			require.Equal(t, StatusBlocked, result.Status)
+			stored, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+			require.NoError(t, err)
+			require.Len(t, stored.BlockedTargets, 1)
+			require.Contains(t, stored.BlockedTargets[0].Reason, "可交易")
+		})
+	}
 }
 
 // 下架清仓正在做：它的 OPERATOR 单不算冲突，不暂停组合；执行器不碰这个标的，别的标的照常。

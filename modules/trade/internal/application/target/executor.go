@@ -123,7 +123,7 @@ type memberState struct {
 	// t1 是有 T+1 规则的市场（股票）当日买入、当天还不能卖的数量：总数 − 冻结 − 可卖。挂单冻结的部分不在里面。
 	t1      map[string]shared.Decimal
 	blocked []store.BlockedTarget
-	// skip 是执行器不碰的标的（内部标的 ID）：名单里已经不能交易的，或正在做下架清仓的。
+	// skip 是执行器不碰的标的（内部标的 ID）：名单里已经不能交易的、不在名单里但暂不可交易的，或正在做下架清仓的。
 	skip map[string]bool
 	// reduceOnly 是只减不增的标的：名单里还能交易的。
 	reduceOnly map[string]bool
@@ -523,19 +523,32 @@ func (e *Executor) loadMembers(
 		instruments := make(map[string]store.InstrumentRecord)
 		// 现货和合约的交易所代码相同（BTCUSDT），按（市场，代码）找标的。
 		symbols := make(map[exchange.SymbolKey]string)
+		// suspendedAssets、suspendedSymbols 是交易所列表里有、但暂不可交易（例如币安 BREAK）而且不在下架名单里的标的，
+		// 分别按现货基础资产、（市场，代码）索引到标的 ID：这些持仓本轮跳过，不阻塞组合，恢复可交易后照常收敛。
+		suspendedAssets := make(map[string]string)
+		suspendedSymbols := make(map[exchange.SymbolKey]string)
+		skip := make(map[string]bool)
+		reduceOnly := make(map[string]bool)
 		for _, instrument := range instrumentRecords {
-			if !exchange.StatusTradable(instrument.Status) {
-				continue
-			}
 			if instrument.SettlementAsset != "" &&
 				instrument.SettlementAsset != account.SettlementAsset {
 				continue
 			}
-			instruments[instrument.InstrumentID] = instrument
-			symbols[exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)] = instrument.InstrumentID
+			key := exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
+			if exchange.StatusTradable(instrument.Status) {
+				instruments[instrument.InstrumentID] = instrument
+				symbols[key] = instrument.InstrumentID
+				continue
+			}
+			if blockedSet.ContainsInstrument(account.Exchange, instrument) {
+				continue
+			}
+			skip[instrument.InstrumentID] = true
+			suspendedSymbols[key] = instrument.InstrumentID
+			if exchange.RuleFor(instrument.MarketType).PositionFromBalance {
+				suspendedAssets[instrument.BaseAsset] = instrument.InstrumentID
+			}
 		}
-		skip := make(map[string]bool)
-		reduceOnly := make(map[string]bool)
 		for _, instrument := range instrumentRecords {
 			if blockedSet.ContainsInstrument(account.Exchange, instrument) {
 				if _, tradable := instruments[instrument.InstrumentID]; tradable {
@@ -576,6 +589,10 @@ func (e *Executor) loadMembers(
 				if !mapped {
 					// 名单里已经不能交易的现货标的：下架后剩下的余额不阻塞组合，整项跳过。
 					if _, delisted := blockedAssets[balance.Asset]; delisted {
+						continue
+					}
+					if suspendedID, suspended := suspendedAssets[balance.Asset]; suspended {
+						e.warnSuspended(logicalAccountID, account.TradingAccountID, suspendedID)
 						continue
 					}
 					blocked = append(blocked, store.BlockedTarget{
@@ -630,6 +647,10 @@ func (e *Executor) loadMembers(
 					continue // 名单里已经不能交易的永续：不阻塞组合，整项跳过
 				}
 				if instrumentID == "" {
+					if suspendedID, suspended := suspendedSymbols[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]; suspended {
+						e.warnSuspended(logicalAccountID, account.TradingAccountID, suspendedID)
+						continue
+					}
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: position.ExchangeSymbol,
 						Quantity:     quantity.String(),
@@ -651,6 +672,14 @@ func (e *Executor) loadMembers(
 		})
 	}
 	return members, nil
+}
+
+// warnSuspended 对暂不可交易而跳过的持仓打关注项，同一个组合、账户、标的每天一次（每轮都会判到，不刷屏）。
+func (e *Executor) warnSuspended(logicalAccountID, tradingAccountID, instrumentID string) {
+	e.warnOnce(
+		"suspended|"+logicalAccountID+"|"+tradingAccountID+"|"+instrumentID+"|"+e.now().Format("2006-01-02"),
+		fmt.Sprintf("组合 %s 的账户 %s 持有的标的 %s 暂不可交易，本轮跳过，其余照常执行", logicalAccountID, tradingAccountID, instrumentID),
+	)
 }
 
 func spotInstrumentID(
