@@ -41,7 +41,7 @@ func (s *planSim) step(lead time.Duration) (*FetchPlanContent, bool, []string) {
 	s.t.Helper()
 	desired, err := BuildDesiredState(s.options, s.groups, s.functions)
 	require.NoError(s.t, err)
-	content, changed, waiting, err := BuildPlanContent(s.functions, s.datasets, desired, PlanTiming{Now: s.now, Lead: lead, LatenessOK: allLatenessOK{}})
+	content, changed, waiting, err := BuildPlanContent(s.functions, s.datasets, desired, PlanTiming{Now: s.now, Lead: lead, LatenessOK: noHandoffs{}})
 	require.NoError(s.t, err)
 	if !changed {
 		return content, false, waiting
@@ -120,8 +120,8 @@ func (s *planSim) rows(key string) []store.SeriesTimelineEntry {
 	return out
 }
 
-// allLatenessOK 表示交接截止都已改成功（纯函数测试里没有交接）。
-type allLatenessOK map[string]bool
+// noHandoffs 是纯函数模拟用的交接截止结果：模拟里没有交接，两份截止总是相同，裁剪不看它。
+type noHandoffs map[string]bool
 
 func at(day, hour, minute, second int) time.Time {
 	return time.Date(2026, 11, day, hour, minute, second, 0, time.UTC)
@@ -527,8 +527,9 @@ func TestStreamPlanAfterReplaceSelectsTheNewCopy(t *testing.T) {
 	require.Len(t, copy.Subjects, 62)
 }
 
-// 撤回：两个数据集一起变，其中一个登记返回 effective_from_stale。它被撤回，另一个照常生效；只剩它一个时，未生效记录被删掉。
-func TestWithdrawKeepsTheOtherDatasetAndDeletesAnEmptyPlan(t *testing.T) {
+// 撤回：两个数据集一起变，其中一个登记返回 effective_from_stale。它被撤回，另一个照常生效。
+// 只剩它一个时未生效记录被删掉，见 TestPlanReconcilerWithdrawsADatasetOnExplicitStaleRejection。
+func TestWithdrawKeepsTheOtherDataset(t *testing.T) {
 	h := newIngestHarness(t, ingestSCF, "1m", "1h")
 	h.settle(true)
 	h.setSubjects(61)
@@ -551,7 +552,6 @@ func TestWithdrawKeepsTheOtherDatasetAndDeletesAnEmptyPlan(t *testing.T) {
 	h.now = h.now.Add(20 * time.Second)
 	require.NoError(t, h.reconcile(h.r))
 	require.Equal(t, PlanActionAppend, h.content(h.lastRecord()).Datasets["ds_spot_1h|1h"].Action)
-	// 只剩它一个时未生效记录被删掉：见 TestPlanReconcilerWithdrawsADatasetOnExplicitStaleRejection。
 }
 
 // 崩溃重放：登记请求发出、Storage 已经登记，但 Collector 落库前重启；下一轮用同一个请求重放，Storage 返回成功，内容不改。
