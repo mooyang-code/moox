@@ -17,12 +17,30 @@ import (
 type fakeTagStore struct {
 	tags    []*pb.Tag
 	applied map[string]int
+	// members 是各标签当前的 active 成员（含交易状态）；membersErr 让读成员失败。lastItems 记最后一次应用的成员。
+	members    map[string][]*pb.TagMember
+	membersErr error
+	lastItems  map[string][]string
 }
 
 func (f *fakeTagStore) ListTags(context.Context) ([]*pb.Tag, error) { return f.tags, nil }
 func (f *fakeTagStore) ApplyTagSnapshot(_ context.Context, _, tagID string, items []*pb.TagSnapshotItem) error {
 	f.applied[tagID] = len(items)
+	if f.lastItems == nil {
+		f.lastItems = map[string][]string{}
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.GetSubjectId())
+	}
+	f.lastItems[tagID] = ids
 	return nil
+}
+func (f *fakeTagStore) ListTagMembers(_ context.Context, _, tagID, _ string) ([]*pb.TagMember, error) {
+	if f.membersErr != nil {
+		return nil, f.membersErr
+	}
+	return f.members[tagID], nil
 }
 
 // fakeRunStore 在内存里保存标签的同步运行结果。
@@ -286,4 +304,62 @@ type countingLister struct {
 func (l countingLister) List(context.Context) ([]marketdata.Instrument, error) {
 	*l.calls++
 	return nil, l.err
+}
+
+func member(id, tradingStatus string) *pb.TagMember {
+	return &pb.TagMember{Status: "active", TradingStatus: tradingStatus, Subject: &pb.Subject{SubjectId: id}}
+}
+
+// 带交易所原始状态（币安）的快照：只新增、重新激活正常交易的；已是成员、临时不可交易的留着交给交易状态检测；被标成退市的、
+// 不是成员的非交易交易对都不进快照。检测关掉时只留正常交易的。一个正常交易的都没有、或读成员失败时按失败处理、成员不变。
+func TestTagSyncKeepsHaltedMembersOnlyWhenTheyAreMembers(t *testing.T) {
+	instruments := []marketdata.Instrument{
+		{SubjectID: "BTC-USDT", TradingStatus: "TRADING"},
+		{SubjectID: "NEW-USDT", TradingStatus: "TRADING"},
+		{SubjectID: "HALT-USDT", TradingStatus: "BREAK"}, // 已是成员、临时停牌
+		{SubjectID: "GONE-USDT", TradingStatus: "BREAK"}, // 已是成员、已标退市
+		{SubjectID: "OLD-USDT", TradingStatus: "BREAK"},  // 早已下架、不是成员（或 inactive 的旧成员）
+	}
+	run := func(store *fakeTagStore, keepHalted bool, items []marketdata.Instrument) error {
+		listers := Listers{{MarketID: "crypto", Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: items}}
+		runner := &TagRunner{Store: store, Runs: newFakeRunStore(), Listers: listers, FetchTimeout: time.Second, KeepHaltedMembers: keepHalted, RetryDelays: []time.Duration{}}
+		_, err := runner.runTag(context.Background(), autoTag("crypto", "binance_spot", "auto", "binance", "spot"), time.Now())
+		return err
+	}
+	members := map[string][]*pb.TagMember{"binance_spot": {member("BTC-USDT", "trading"), member("HALT-USDT", "suspended"), member("GONE-USDT", "delisted")}}
+
+	store := &fakeTagStore{applied: map[string]int{}, members: members}
+	if err := run(store, true, instruments); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.lastItems["binance_spot"]; strings.Join(got, ",") != "BTC-USDT,HALT-USDT,NEW-USDT" {
+		t.Fatalf("开着检测时的快照 = %v", got)
+	}
+
+	store = &fakeTagStore{applied: map[string]int{}, members: members}
+	if err := run(store, false, instruments); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.lastItems["binance_spot"]; strings.Join(got, ",") != "BTC-USDT,NEW-USDT" {
+		t.Fatalf("检测关掉时只留正常交易的：%v", got)
+	}
+
+	store = &fakeTagStore{applied: map[string]int{}, members: members, membersErr: errors.New("storage down")}
+	if err := run(store, true, instruments); err == nil || store.lastItems["binance_spot"] != nil {
+		t.Fatalf("读成员失败要按失败处理、不应用快照：err=%v applied=%v", err, store.lastItems)
+	}
+
+	store = &fakeTagStore{applied: map[string]int{}, members: members}
+	if err := run(store, true, []marketdata.Instrument{{SubjectID: "BTC-USDT", TradingStatus: "BREAK"}}); err == nil || store.lastItems["binance_spot"] != nil {
+		t.Fatalf("一个正常交易的都没有要按失败处理：err=%v applied=%v", err, store.lastItems)
+	}
+
+	// 没有原始状态的来源（股票）原样应用，不读成员。
+	store = &fakeTagStore{applied: map[string]int{}, membersErr: errors.New("must not be called")}
+	if err := run(store, true, []marketdata.Instrument{{SubjectID: "A"}, {SubjectID: "B"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.lastItems["binance_spot"]; len(got) != 2 {
+		t.Fatalf("股票快照原样应用：%v", got)
+	}
 }

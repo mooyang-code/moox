@@ -45,11 +45,27 @@ type Config struct {
 	SubjectEgress string `yaml:"subject_egress"`
 	// SubjectSync 是标的属性同步的默认任务；不写表示没有全市场标的同步。
 	SubjectSync *SubjectSync `yaml:"subject_sync"`
+	// TradingStatus 是交易状态检测的任务（每个 market_type 一条）；不写表示这个市场不检测。只在这里配，不能被部署配置覆盖。
+	TradingStatus []TradingStatusJob `yaml:"trading_status"`
 	// RefetchAfterCloseMinutes 是收市后多久把当天整天强制重取一遍（分钟）；不写就不重取。只对有交易时段的市场有意义。
 	RefetchAfterCloseMinutes int `yaml:"refetch_after_close_minutes"`
 	// SCFPlan 是采集计划的默认参数，由 bootstrap 按它的配置结构解析。
 	SCFPlan yaml.Node `yaml:"scf_plan"`
 }
+
+// TradingStatusJob 是一个市场类型的交易状态检测：来源 tencent（股票）或 binance（crypto），按 cron 在 timezone 里触发。
+type TradingStatusJob struct {
+	MarketType string `yaml:"market_type"`
+	Source     string `yaml:"source"`
+	Cron       string `yaml:"cron"`
+	Timezone   string `yaml:"timezone"`
+}
+
+// 交易状态检测的来源。
+const (
+	TradingStatusSourceTencent = "tencent"
+	TradingStatusSourceBinance = "binance"
+)
 
 // SubjectSync 是标的属性同步的默认任务。
 type SubjectSync struct {
@@ -114,6 +130,12 @@ func parseConfig(marketID string, raw []byte) (Config, error) {
 	}
 	if job := config.SubjectSync; job != nil && len(job.Sources) == 0 {
 		return Config{}, fmt.Errorf("subject_sync.sources 不能为空")
+	}
+	for _, job := range config.TradingStatus {
+		if job.MarketType == "" || job.Cron == "" || job.Timezone == "" ||
+			(job.Source != TradingStatusSourceTencent && job.Source != TradingStatusSourceBinance) {
+			return Config{}, fmt.Errorf("trading_status 每条都要写 market_type、cron、timezone，source 只能是 %s 或 %s", TradingStatusSourceTencent, TradingStatusSourceBinance)
+		}
 	}
 	if config.RefetchAfterCloseMinutes < 0 {
 		return Config{}, fmt.Errorf("refetch_after_close_minutes 不能为负")

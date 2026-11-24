@@ -18,7 +18,7 @@ func TestMetadataSchemaContract(t *testing.T) {
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '18')",
+		"VALUES ('schema_version', '19')",
 		"CREATE TABLE IF NOT EXISTS t_tags (",
 		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
 		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
@@ -99,8 +99,8 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "18" {
-		t.Fatalf("persisted schema version = %q, want 18", version)
+	if version != "19" {
+		t.Fatalf("persisted schema version = %q, want 19", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {

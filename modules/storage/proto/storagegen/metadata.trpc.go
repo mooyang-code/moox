@@ -77,6 +77,8 @@ type MetadataService interface {
 	ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq) (*ApplyTagSnapshotRsp, error)
 
 	UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq) (*UpdateSubjectAttributesRsp, error)
+	// SetTagMemberTradingStatus 写标签成员的交易状态（只有 Collector 的交易状态检测调用）。
+	SetTagMemberTradingStatus(ctx context.Context, req *SetTagMemberTradingStatusReq) (*SetTagMemberTradingStatusRsp, error)
 
 	ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq) (*ResolveSubjectsRsp, error)
 	// CreateDataset 创建数据集。
@@ -639,6 +641,24 @@ func MetadataService_UpdateSubjectAttributes_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
+func MetadataService_SetTagMemberTradingStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetTagMemberTradingStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).SetTagMemberTradingStatus(ctx, reqbody.(*SetTagMemberTradingStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MetadataService_ResolveSubjects_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ResolveSubjectsReq{}
 	filters, err := f(req)
@@ -1103,6 +1123,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_UpdateSubjectAttributes_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/SetTagMemberTradingStatus",
+			Func: MetadataService_SetTagMemberTradingStatus_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/ResolveSubjects",
 			Func: MetadataService_ResolveSubjects_Handler,
 		},
@@ -1316,6 +1340,11 @@ func (s *UnimplementedMetadata) ApplyTagSnapshot(ctx context.Context, req *Apply
 func (s *UnimplementedMetadata) UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq) (*UpdateSubjectAttributesRsp, error) {
 	return nil, errors.New("rpc UpdateSubjectAttributes of service Metadata is not implemented")
 }
+
+// SetTagMemberTradingStatus 写标签成员的交易状态（只有 Collector 的交易状态检测调用）。
+func (s *UnimplementedMetadata) SetTagMemberTradingStatus(ctx context.Context, req *SetTagMemberTradingStatusReq) (*SetTagMemberTradingStatusRsp, error) {
+	return nil, errors.New("rpc SetTagMemberTradingStatus of service Metadata is not implemented")
+}
 func (s *UnimplementedMetadata) ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq) (*ResolveSubjectsRsp, error) {
 	return nil, errors.New("rpc ResolveSubjects of service Metadata is not implemented")
 }
@@ -1476,6 +1505,8 @@ type MetadataClientProxy interface {
 	ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq, opts ...client.Option) (rsp *ApplyTagSnapshotRsp, err error)
 
 	UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq, opts ...client.Option) (rsp *UpdateSubjectAttributesRsp, err error)
+	// SetTagMemberTradingStatus 写标签成员的交易状态（只有 Collector 的交易状态检测调用）。
+	SetTagMemberTradingStatus(ctx context.Context, req *SetTagMemberTradingStatusReq, opts ...client.Option) (rsp *SetTagMemberTradingStatusRsp, err error)
 
 	ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq, opts ...client.Option) (rsp *ResolveSubjectsRsp, err error)
 	// CreateDataset 创建数据集。
@@ -2099,6 +2130,26 @@ func (c *MetadataClientProxyImpl) UpdateSubjectAttributes(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateSubjectAttributesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) SetTagMemberTradingStatus(ctx context.Context, req *SetTagMemberTradingStatusReq, opts ...client.Option) (*SetTagMemberTradingStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/SetTagMemberTradingStatus")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("SetTagMemberTradingStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetTagMemberTradingStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

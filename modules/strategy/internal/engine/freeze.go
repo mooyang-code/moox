@@ -10,14 +10,18 @@ import (
 const (
 	// causeMarket：标的所在市场本期整体不可用（那个市场的因子本期被跳过）：已持仓的标的冻结。
 	causeMarket = "market"
+	// causeSuspended：已持有的标的在所在市场停牌：冻结。
+	causeSuspended = "suspended"
 	// causePrevOnly：当期输入齐全，只缺上一根（bars[-1]）的值，且没有失败证据。
 	causePrevOnly = "prevonly"
 	// causeOther：其余一切缺失（因子失败、K 线失败、无行、值缺失而没有证据）。
 	causeOther = "other"
 
-	// 冻结标的的明细原因：reasonPrevHold 是只缺上一根保持持仓，reasonMarketHold 是所在市场本期整体不可用保持持仓。
-	reasonPrevHold   = "prev_hold"
-	reasonMarketHold = "market_hold"
+	// 冻结标的的明细原因：reasonPrevHold 是只缺上一根保持持仓，reasonMarketHold 是所在市场本期整体不可用保持持仓，
+	// reasonSuspendedHold 是停牌保持持仓。停牌可能持续几个月：suspended_hold 不延后同批次的重建，也不计入守门缺数（见 rank.go、evaluate.go）。
+	reasonPrevHold      = "prev_hold"
+	reasonMarketHold    = "market_hold"
+	reasonSuspendedHold = "suspended_hold"
 )
 
 // cause 是一列上的一个缺失原因。text 与明细里的 Reason 一致（例如 market_unavailable:ma、missing:bars[-1].ma）。
@@ -31,8 +35,11 @@ type cause struct {
 func missingCauses(id string, row Row, hasRow bool, columns, previousColumns []string, failed map[string]map[string]string) []cause {
 	var causes []cause
 	classify := func(reason string) string {
-		if reason == FailedMarket {
+		switch reason {
+		case FailedMarket:
 			return causeMarket
+		case FailedSuspended:
+			return causeSuspended
 		}
 		return causeOther
 	}
@@ -101,7 +108,7 @@ func sortedSet(set map[string]struct{}) []string {
 // frozenSet 返回因市场不可用或只缺上一根而缺数、需要保持持仓的标的：策略当前持有（上期组合目标非零，任一市场）的标的，
 // 只要在所有引用它的规则里缺失的原因全部是市场不可用（market）或只缺上一根（prevonly），就冻结——持仓数量不动，不判 exit、不从目标里移除。
 // 只要有任何一条规则里混有其他原因（因子失败、K 线失败、无行、值缺失而没有证据），就完全按现有逻辑处理。
-// reasons 是每个冻结标的的明细原因：任一规则里有市场不可用的原因记 market_hold，否则记 prev_hold。
+// reasons 是每个冻结标的的明细原因：任一规则里有停牌的原因记 suspended_hold，其次有市场不可用的原因记 market_hold，否则记 prev_hold。
 //
 // 策略里有规则写了 on_missing 时按另一套合并规则（见 frozenSetOnMissing）；没有时逻辑与结果都不变。streaks 是各规则新的连续缺数根数。
 //
@@ -113,7 +120,7 @@ func frozenSet(program *dsl.Program, frame Frame, previous State, candidates []s
 		return frozenSetOnMissing(program, frame, previous, candidates, scope)
 	}
 	for _, id := range candidates {
-		protectable, blocked, market := false, false, false
+		protectable, blocked, market, suspended := false, false, false, false
 		for i := range program.Rules {
 			rule := &program.Rules[i]
 			ruleID := rule.Rule.ID
@@ -134,6 +141,8 @@ func frozenSet(program *dsl.Program, frame Frame, previous State, candidates []s
 					blocked = true
 				case causeMarket:
 					protectable, market = true, true
+				case causeSuspended:
+					protectable, suspended = true, true
 				default:
 					protectable = true
 				}
@@ -141,10 +150,7 @@ func frozenSet(program *dsl.Program, frame Frame, previous State, candidates []s
 		}
 		if protectable && !blocked {
 			frozen[id] = struct{}{}
-			reasons[id] = reasonPrevHold
-			if market {
-				reasons[id] = reasonMarketHold
-			}
+			reasons[id] = holdReason(suspended, market, false)
 		}
 	}
 	return frozen, reasons, nil
@@ -181,12 +187,12 @@ const reasonMissingKept = "missing_kept"
 //   - 只有持有该标的的规则参与“要不要移出”的判断；没持有它的规则只把它当作缺数的候选，其他原因（缺数）不阻止冻结；
 //   - 持有它的规则里出现其他原因（本根缺数）时：写了 on_missing 且连续缺数不超过 keep_bars 的，按缺数冻结保持（missing_kept）；
 //     没写 on_missing、或已超过 keep_bars 的，阻止冻结，按现状移出；
-//   - 市场不可用、只缺上一根的冻结与现状相同（任一规则里出现都可以保护）。
+//   - 市场不可用、停牌、只缺上一根的冻结与现状相同（任一规则里出现都可以保护）。
 func frozenSetOnMissing(program *dsl.Program, frame Frame, previous State, candidates []string, scope string) (map[string]struct{}, map[string]string, map[string]map[string]int) {
 	frozen, reasons := make(map[string]struct{}), make(map[string]string)
 	streaks := make(map[string]map[string]int)
 	for _, id := range candidates {
-		protectable, blocked, market, kept := false, false, false, false
+		protectable, blocked, market, suspended, kept := false, false, false, false, false
 		next := make(map[string]int)
 		for i := range program.Rules {
 			rule := &program.Rules[i]
@@ -209,6 +215,8 @@ func frozenSetOnMissing(program *dsl.Program, frame Frame, previous State, candi
 					other = true
 				case causeMarket:
 					protectable, market = true, true
+				case causeSuspended:
+					protectable, suspended = true, true
 				default:
 					protectable = true
 				}
@@ -228,14 +236,7 @@ func frozenSetOnMissing(program *dsl.Program, frame Frame, previous State, candi
 			continue
 		}
 		frozen[id] = struct{}{}
-		switch {
-		case market:
-			reasons[id] = reasonMarketHold
-		case kept:
-			reasons[id] = reasonMissingKept
-		default:
-			reasons[id] = reasonPrevHold
-		}
+		reasons[id] = holdReason(suspended, market, kept)
 		for ruleID, streak := range next {
 			if streaks[ruleID] == nil {
 				streaks[ruleID] = make(map[string]int)
@@ -244,6 +245,20 @@ func frozenSetOnMissing(program *dsl.Program, frame Frame, previous State, candi
 		}
 	}
 	return frozen, reasons, streaks
+}
+
+// holdReason 按优先级给出冻结标的的明细原因：停牌 > 市场不可用 > 按 on_missing 保持 > 只缺上一根。
+// 停牌排在最前：停牌持仓所在市场本期整体不可用时也按停牌处理，不延后批次重建、不计入守门缺数。
+func holdReason(suspended, market, kept bool) string {
+	switch {
+	case suspended:
+		return reasonSuspendedHold
+	case market:
+		return reasonMarketHold
+	case kept:
+		return reasonMissingKept
+	}
+	return reasonPrevHold
 }
 
 func contains(values []string, target string) bool {

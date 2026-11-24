@@ -101,7 +101,7 @@ func parseBinanceSpotSchedule(schedule binanceDelistSchedule, now time.Time) []N
 	return notices
 }
 
-// BinanceSwap 读币安 U 本位合约信息。单独解码，不复用过滤掉非 TRADING 合约的 GetExchangeInfo。
+// BinanceSwap 读币安 U 本位合约信息。单独解码 deliveryDate，不复用标的同步的 GetExchangeInfo（那里不带交割时间）。
 // 永续合约（PERPETUAL，下架流程中为 PERPETUAL_DELIVERING）的交割时间正常是占位的远期值，出现真实的近期交割时间就是即将下架。
 type BinanceSwap struct {
 	Client PlainGetter

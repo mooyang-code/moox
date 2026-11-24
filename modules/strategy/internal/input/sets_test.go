@@ -21,7 +21,8 @@ func shanghai(t *testing.T) *time.Location {
 
 func membershipOf(client *fakeClient) Membership {
 	return func(ctx context.Context, tagID string) ([]string, error) {
-		return client.ListTagMembers(ctx, "space", tagID)
+		members, err := client.ListTagMembers(ctx, "space", tagID)
+		return MemberIDs(members), err
 	}
 }
 

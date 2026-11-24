@@ -59,7 +59,7 @@ func (s *Store) ListTagMembers(ctx context.Context, query metadatastore.TagMembe
 	for rows.Next() {
 		item := &pb.TagMember{Subject: &pb.Subject{}}
 		var raw string
-		if err := rows.Scan(&item.SpaceId, &item.TagId, &item.Status, &item.InactiveAt, &raw); err != nil {
+		if err := rows.Scan(&item.SpaceId, &item.TagId, &item.Status, &item.InactiveAt, &item.TradingStatus, &raw); err != nil {
 			return nil, nil, err
 		}
 		if err := unmarshalOptions.Unmarshal([]byte(raw), item.Subject); err != nil {
@@ -310,6 +310,38 @@ func (s *Store) UpdateSubjectAttributes(ctx context.Context, spaceID string, ite
 	return updated, skipped, tx.Commit()
 }
 
+// SetTagMemberTradingStatus 写标签成员的交易状态。只更新值不同的行：修订号触发器挂在 c_trading_status 上，
+// 值不变也执行 UPDATE 会让采集计划、监控、策略的缓存白白重算。不是这个标签成员的条目计入跳过。
+func (s *Store) SetTagMemberTradingStatus(ctx context.Context, spaceID, tagID string, items []*pb.TagMemberTradingStatus) (int, int, error) {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(tagID) == "" {
+		return 0, 0, storeerr.Invalidf("space_id and tag_id are required")
+	}
+	for _, item := range items {
+		if item == nil || strings.TrimSpace(item.GetSubjectId()) == "" || !metadatastore.ValidTradingStatus(item.GetTradingStatus()) {
+			return 0, 0, storeerr.Invalidf("trading_status items need subject_id and one of trading, suspended, delisted")
+		}
+	}
+	tx, err := beginImmediate(ctx, s.db)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+	updated := 0
+	for _, item := range items {
+		result, err := tx.ExecContext(ctx, setTagMemberTradingStatusSQL, item.GetTradingStatus(), spaceID, tagID, item.GetSubjectId(), item.GetTradingStatus())
+		if err != nil {
+			return 0, 0, err
+		}
+		if n, err := result.RowsAffected(); err == nil && n > 0 {
+			updated++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return updated, len(items) - updated, nil
+}
+
 func (s *Store) ResolveSubjects(ctx context.Context, spaceID string, tagIDs []string) ([]*pb.Subject, error) {
 	ids := uniqueStrings(tagIDs)
 	if len(ids) == 0 {
@@ -352,8 +384,11 @@ func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID, datasetID, sub
 		return nil, nil, err
 	}
 	pageNo, size, offset := normalizePage(page)
+	// 活跃：至少一个绑定的成员与标的都 active、而且可交易；suspended：没有活跃绑定，但有一个绑定只因停牌才不活跃。
 	rows, err := db.QueryContext(ctx, `
-		SELECT m.c_subject_id, MAX(CASE WHEN m.c_status = 'active' AND s.c_status = 'active' THEN 1 ELSE 0 END) `+from+`
+		SELECT m.c_subject_id,
+			MAX(CASE WHEN m.c_status = 'active' AND s.c_status = 'active' AND m.c_trading_status = 'trading' THEN 1 ELSE 0 END),
+			MAX(CASE WHEN m.c_status = 'active' AND s.c_status = 'active' AND m.c_trading_status = 'suspended' THEN 1 ELSE 0 END) `+from+`
 		GROUP BY m.c_subject_id ORDER BY m.c_subject_id LIMIT ? OFFSET ?`, append(args, size, offset)...)
 	if err != nil {
 		return nil, nil, err
@@ -362,15 +397,15 @@ func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID, datasetID, sub
 	items := make([]*pb.DatasetSubject, 0)
 	for rows.Next() {
 		var id string
-		var active int
-		if err := rows.Scan(&id, &active); err != nil {
+		var active, suspended int
+		if err := rows.Scan(&id, &active, &suspended); err != nil {
 			return nil, nil, err
 		}
 		status := metadatastore.TagMemberInactive
 		if active == 1 {
 			status = metadatastore.TagMemberActive
 		}
-		items = append(items, &pb.DatasetSubject{SpaceId: spaceID, DatasetId: datasetID, SubjectId: id, Status: status})
+		items = append(items, &pb.DatasetSubject{SpaceId: spaceID, DatasetId: datasetID, SubjectId: id, Status: status, Suspended: active == 0 && suspended == 1})
 	}
 	return items, &pb.PageResult{Page: pageNo, Size: size, Total: uint32(total), HasMore: uint64(offset)+uint64(len(items)) < total}, rows.Err()
 }
@@ -404,7 +439,7 @@ const (
 
 	queryTagMembersCount = `SELECT COUNT(1) FROM t_subject_tags m JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id WHERE ` + tagMembersFilter
 	queryTagMembersList  = `
-		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, s.c_item_json
+		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, m.c_trading_status, s.c_item_json
 		FROM t_subject_tags m
 		JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id
 		WHERE ` + tagMembersFilter + ` ORDER BY m.c_tag_id, m.c_subject_id LIMIT ? OFFSET ?`
@@ -414,11 +449,12 @@ const (
 
 // 按成员列表批量操作的语句：成员 ID 以 JSON 数组传入，用 json_each 展开。
 const (
-	deleteTagMembersSQL         = `DELETE FROM t_subject_tags WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?))`
-	setTagMembersStatusSQL      = `UPDATE t_subject_tags SET c_status = ?, c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?))`
-	activateSnapshotMembersSQL  = `UPDATE t_subject_tags SET c_status = 'active', c_inactive_at = '' WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?)) AND c_status <> 'active'`
-	inactivateMissingMembersSQL = `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active' AND c_subject_id NOT IN (SELECT value FROM json_each(?))`
-	resolveSubjectsSQL          = `SELECT s.c_item_json FROM t_subjects s JOIN t_subject_tags m ON m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id WHERE s.c_space_id = ? AND s.c_status = 'active' AND m.c_status = 'active' AND m.c_tag_id IN (SELECT value FROM json_each(?)) GROUP BY s.c_subject_id, s.c_item_json ORDER BY s.c_subject_id`
+	deleteTagMembersSQL          = `DELETE FROM t_subject_tags WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?))`
+	setTagMembersStatusSQL       = `UPDATE t_subject_tags SET c_status = ?, c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?))`
+	activateSnapshotMembersSQL   = `UPDATE t_subject_tags SET c_status = 'active', c_inactive_at = '' WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?)) AND c_status <> 'active'`
+	inactivateMissingMembersSQL  = `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active' AND c_subject_id NOT IN (SELECT value FROM json_each(?))`
+	setTagMemberTradingStatusSQL = `UPDATE t_subject_tags SET c_trading_status = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id = ? AND c_trading_status <> ?`
+	resolveSubjectsSQL           = `SELECT s.c_item_json FROM t_subjects s JOIN t_subject_tags m ON m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id WHERE s.c_space_id = ? AND s.c_status = 'active' AND m.c_status = 'active' AND m.c_trading_status = 'trading' AND m.c_tag_id IN (SELECT value FROM json_each(?)) GROUP BY s.c_subject_id, s.c_item_json ORDER BY s.c_subject_id`
 )
 
 func uniqueStrings(values []string) []string {

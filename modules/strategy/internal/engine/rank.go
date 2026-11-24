@@ -134,7 +134,8 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		rebuild = holdingRebuilds(rule.Rule.Holding, frame.BarIndex, frame.Holdings[rule.Rule.ID], previous)
 		// 含冻结成员的批次延后重建：冻结成员不在候选里，现在重建会丢掉它的份额，保持结束后它就会被卖掉。
 		// 延后期间不推进批次的 EstablishedBar，保持解除后由「已满 bars 根未重建」的补建逻辑重建，建仓序号仍按 offset 对齐。
-		rebuild = withoutFrozenBatches(rebuild, previous, sets.frozen)
+		// 停牌保持的成员不延后：停牌可能持续几个月，同批次其他标的不能跟着几个月不换仓；它的持仓由组合层按上期目标保持。
+		rebuild = withoutFrozenBatches(rebuild, previous, sets.frozenExcept(reasonSuspendedHold))
 		if sets.waived {
 			// 不守门的一期没有可用候选，重建会建出空批次（首根 ok bar 上全部批次都是空的），永续恢复后要等各批次到期才配满；
 			// 这一期不重建，沿用上期批次，到期没重建的批次在之后第一根 ok bar 上补建。

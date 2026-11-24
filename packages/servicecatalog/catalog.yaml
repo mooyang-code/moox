@@ -1050,6 +1050,9 @@ components:
           - name: UpdateSubjectAttributes
             callers: [collector]
             operators: []
+          - name: SetTagMemberTradingStatus
+            callers: [collector]
+            operators: []
           - name: ResolveSubjects
             read_only: true
             callers: [collector, factor-mgr, monitor, strategy]

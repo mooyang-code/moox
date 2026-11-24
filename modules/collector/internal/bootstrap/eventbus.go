@@ -5,13 +5,13 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/attention"
-	"github.com/mooyang-code/moox/modules/collector/internal/delist"
 	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	binanceclient "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/tradingstatus/delist"
 	"github.com/mooyang-code/moox/packages/events"
 	"trpc.group/trpc-go/trpc-go/log"
 )

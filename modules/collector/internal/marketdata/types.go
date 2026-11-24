@@ -402,7 +402,13 @@ type Instrument struct {
 	QuoteAsset     string
 	// Pair 是可选的交易所交易对（币安永续合约的 pair，连续合约 K 线按它订阅）；为空表示与 ProviderSymbol 相同。
 	Pair string
+	// TradingStatus 是交易所给的原始交易状态（目前只有币安带：TRADING、BREAK、HALT……）。为空表示来源不带这个字段
+	// （股票），标签同步的“只保留可交易与现有成员”过滤对它不适用。
+	TradingStatus string
 }
+
+// BinanceTrading 是币安交易对正常交易时的原始状态。
+const BinanceTrading = "TRADING"
 
 type InstrumentSnapshot struct {
 	SnapshotID     string

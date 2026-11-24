@@ -3,7 +3,6 @@ package input
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -12,8 +11,10 @@ import (
 )
 
 // unifiedMarketSubjects 读统一数据集（方式 B）每个市场的标的与活跃状态：数据集挂的标签按标签自己的市场类型归到市场，
-// 标签的活跃成员就是这个市场的标的，同时要求标的在数据集里是活跃绑定。这样永续下架而现货还在时，标的只出现在现货里，
-// 永续不可用、现货照常可用；只在永续上市的币，不算现货缺失。返回的标的不带 series_tag（读行时不按序列过滤，读全量后按行的 series_tag 拆市场）。
+// 标签的活跃成员就是这个市场的标的，同时要求标的在数据集里是活跃或停牌的绑定。这样永续下架而现货还在时，标的只出现在现货里，
+// 永续不可用、现货照常可用；只在永续上市的币，不算现货缺失。每个市场再按成员自己的交易状态决定：trading 为 Active，
+// suspended 为 Suspended（已持有的保持持仓，见 frame.go），delisted 不产出。现货、永续同时停牌时绑定只是停牌，标的仍要逐市场判断，
+// 不能整只丢掉。返回的标的不带 series_tag（读行时不按序列过滤，读全量后按行的 series_tag 拆市场）。
 func (l Loader) unifiedMarketSubjects(ctx context.Context, spaceID, datasetID string, markets []string) (map[string][]Subject, error) {
 	tagIDs, err := datasetTagsOf(ctx, l.Client, spaceID, datasetID)
 	if err != nil {
@@ -25,9 +26,10 @@ func (l Loader) unifiedMarketSubjects(ctx context.Context, spaceID, datasetID st
 	}
 	bound := make(map[string]bool, len(bindings))
 	for _, binding := range bindings {
-		bound[binding.SubjectID] = binding.Active
+		bound[binding.SubjectID] = binding.Active || binding.Suspended
 	}
-	members := make(map[string]map[string]struct{}, len(markets))
+	// 市场 → 标的 → 是否停牌。同一市场挂了多个标签时，任一标签上可交易就算可交易（与 Storage 按绑定聚合的口径一致）。
+	members := make(map[string]map[string]bool, len(markets))
 	for _, tagID := range tagIDs {
 		tag, err := l.Client.GetTag(ctx, spaceID, tagID)
 		if err != nil {
@@ -36,15 +38,25 @@ func (l Loader) unifiedMarketSubjects(ctx context.Context, spaceID, datasetID st
 		if tag.MarketType != dsl.MarketSpot && tag.MarketType != dsl.MarketSwap {
 			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("统一数据集 %s 的标签 %s 的市场类型是 %q，只能是 spot 或 swap", datasetID, tagID, tag.MarketType)}
 		}
-		ids, err := l.Client.ListTagMembers(ctx, spaceID, tagID)
+		tagMembers, err := l.Client.ListTagMembers(ctx, spaceID, tagID)
 		if err != nil {
 			return nil, err
 		}
 		if members[tag.MarketType] == nil {
-			members[tag.MarketType] = make(map[string]struct{}, len(ids))
+			members[tag.MarketType] = make(map[string]bool, len(tagMembers))
 		}
-		for _, id := range ids {
-			members[tag.MarketType][id] = struct{}{}
+		for _, member := range tagMembers {
+			id := strings.TrimSpace(member.SubjectID)
+			switch member.TradingStatus {
+			case TradingStatusDelisted:
+				continue
+			case TradingStatusSuspended:
+				if _, seen := members[tag.MarketType][id]; !seen {
+					members[tag.MarketType][id] = true
+				}
+			default:
+				members[tag.MarketType][id] = false
+			}
 		}
 	}
 	if len(tagIDs) == 0 {
@@ -52,16 +64,13 @@ func (l Loader) unifiedMarketSubjects(ctx context.Context, spaceID, datasetID st
 	}
 	out := make(map[string][]Subject, len(markets))
 	for _, market := range markets {
-		ids := make([]string, 0, len(members[market]))
-		for id := range members[market] {
-			if bound[id] {
-				ids = append(ids, id)
+		subjects := make([]Subject, 0, len(members[market]))
+		for _, id := range sortedKeys(members[market]) {
+			if !bound[id] {
+				continue
 			}
-		}
-		sort.Strings(ids)
-		subjects := make([]Subject, 0, len(ids))
-		for _, id := range ids {
-			subjects = append(subjects, Subject{SubjectID: strings.TrimSpace(id), Active: true})
+			suspended := members[market][id]
+			subjects = append(subjects, Subject{SubjectID: id, Active: !suspended, Suspended: suspended})
 		}
 		out[market] = subjects
 	}

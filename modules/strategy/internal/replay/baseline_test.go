@@ -91,9 +91,13 @@ func (c *baselineClient) ListDatasetSubjects(context.Context, string, string) ([
 	return subjects, nil
 }
 
-func (c *baselineClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error) {
-	if members, ok := c.tags[tagID]; ok {
-		return append([]string(nil), members...), nil
+func (c *baselineClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]input.TagMember, error) {
+	if ids, ok := c.tags[tagID]; ok {
+		members := make([]input.TagMember, 0, len(ids))
+		for _, id := range ids {
+			members = append(members, input.TagMember{SubjectID: id})
+		}
+		return members, nil
 	}
 	return c.Client.ListTagMembers(ctx, spaceID, tagID)
 }

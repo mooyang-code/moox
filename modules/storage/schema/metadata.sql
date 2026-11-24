@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '18')
+VALUES ('schema_version', '19')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -161,9 +161,12 @@ CREATE TABLE IF NOT EXISTS t_subject_tags (
     c_subject_id TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'active',
     c_inactive_at DATETIME NOT NULL DEFAULT '',
+    -- 这个成员在这个标签（即这个市场）上的交易状态，由 Collector 的交易状态检测写入：trading 正常、suspended 停牌、delisted 退市
+    c_trading_status TEXT NOT NULL DEFAULT 'trading',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('active', 'inactive')),
+    CHECK (c_trading_status IN ('trading', 'suspended', 'delisted')),
     FOREIGN KEY (c_space_id, c_tag_id) REFERENCES t_tags (c_space_id, c_tag_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_subject_id) REFERENCES t_subjects (c_space_id, c_subject_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_tag_id, c_subject_id)
@@ -259,7 +262,7 @@ BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_update
-AFTER UPDATE OF c_status ON t_subject_tags
+AFTER UPDATE OF c_status, c_trading_status ON t_subject_tags
 FOR EACH ROW
 BEGIN
     INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)

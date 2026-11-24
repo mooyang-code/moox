@@ -135,9 +135,8 @@ func (api *SpotAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 		func() error {
 			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
-				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
-					return raw.Status == "TRADING"
-				})
+				// 保留全部交易对（含 BREAK 等非交易状态）：交易状态由 Collector 的交易状态检测判定，标签同步只新增 TRADING 的。
+				total, symbols, decodeErr = decodeExchangeInfo(reader, func(*exchangeInfoSymbolRaw) bool { return true })
 				return decodeErr
 			})
 		},
@@ -146,7 +145,7 @@ func (api *SpotAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 		return nil, fmt.Errorf("获取现货交易所信息失败: %w", err)
 	}
 
-	log.InfoContextf(ctx, "[SpotAPI] 获取ExchangeInfo成功，总计%d个交易对，活跃%d个",
-		total, len(symbols))
+	log.InfoContextf(ctx, "[SpotAPI] 获取ExchangeInfo成功，总计%d个交易对，正常交易%d个",
+		total, countTrading(symbols))
 	return symbols, nil
 }

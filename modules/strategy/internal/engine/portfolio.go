@@ -159,11 +159,7 @@ func fitBudget(quantized quantizedTargets, holds []Target, portfolio dsl.Portfol
 	sort.Slice(quantized.targets, func(i, j int) bool {
 		return lessKey(TargetKey(quantized.targets[i].InstrumentID, quantized.targets[i].Market), TargetKey(quantized.targets[j].InstrumentID, quantized.targets[j].Market))
 	})
-	heldNames := make([]string, 0, len(holds))
-	for _, hold := range holds {
-		heldNames = append(heldNames, hold.InstrumentID)
-	}
-	summary.Notes = append(summary.Notes, fmt.Sprintf("%d 个标的因市场不可用或只缺上一根保持持仓：%s", len(holdIDs(holds)), strings.Join(holdIDs(holds), "、")))
+	summary.Notes = append(summary.Notes, fmt.Sprintf("%d 个标的因市场不可用、停牌或只缺上一根保持持仓：%s", len(holdIDs(holds)), strings.Join(holdIDs(holds), "、")))
 	return quantized
 }
 

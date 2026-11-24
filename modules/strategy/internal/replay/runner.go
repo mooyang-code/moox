@@ -1014,10 +1014,11 @@ func cachedMembership(client input.Client, spaceID string) input.Membership {
 		if members, ok := cache[tagID]; ok {
 			return members, nil
 		}
-		members, err := client.ListTagMembers(ctx, spaceID, tagID)
+		tagMembers, err := client.ListTagMembers(ctx, spaceID, tagID)
 		if err != nil {
 			return nil, err
 		}
+		members := input.MemberIDs(tagMembers)
 		cache[tagID] = members
 		return members, nil
 	}

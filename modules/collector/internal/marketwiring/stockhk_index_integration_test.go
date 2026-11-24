@@ -59,6 +59,11 @@ type hkTagStorage struct {
 
 func (s *hkTagStorage) ListTags(context.Context) ([]*pb.Tag, error) { return s.tags, nil }
 
+// ListTagMembers 只在快照带交易所原始交易状态时用到，这里的快照都不带。
+func (s *hkTagStorage) ListTagMembers(context.Context, string, string, string) ([]*pb.TagMember, error) {
+	return nil, nil
+}
+
 func (s *hkTagStorage) ApplyTagSnapshot(_ context.Context, spaceID, tagID string, items []*pb.TagSnapshotItem) error {
 	members := make([]string, 0, len(items))
 	for _, item := range items {

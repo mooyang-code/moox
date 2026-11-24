@@ -63,6 +63,7 @@ type Service struct {
 	createTaskMu            ctxMutex
 	taskMutationLocks       keyedTaskLocker
 	subjectSyncer           SubjectSyncer
+	tradingStatus           TradingStatusRunner
 	fieldOffers             marketdata.FieldOffers
 	klineOps                KlineOps
 	fetchPlanControl        FetchPlanControl

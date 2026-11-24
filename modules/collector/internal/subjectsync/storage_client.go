@@ -16,6 +16,8 @@ type metadataClient interface {
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 	ApplyTagSnapshot(context.Context, *storagepb.ApplyTagSnapshotReq, ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error)
 	UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error)
+	ListTagMembers(context.Context, *storagepb.ListTagMembersReq, ...client.Option) (*storagepb.ListTagMembersRsp, error)
+	SetTagMemberTradingStatus(context.Context, *storagepb.SetTagMemberTradingStatusReq, ...client.Option) (*storagepb.SetTagMemberTradingStatusRsp, error)
 }
 
 // StorageClient is the narrow Storage Metadata client used by Collector's
@@ -77,6 +79,42 @@ func (c *StorageClient) UpdateSubjectAttributes(ctx context.Context, spaceID str
 		return 0, 0, err
 	}
 	return int(rsp.GetUpdated()), int(rsp.GetSkipped()), nil
+}
+
+// ListTagMembers 按页（1000 一页）读一个标签的全部成员；status 为空表示不限，否则只要这个成员状态（active、inactive）的。
+func (c *StorageClient) ListTagMembers(ctx context.Context, spaceID, tagID, status string) ([]*storagepb.TagMember, error) {
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
+	all := make([]*storagepb.TagMember, 0)
+	for page := uint32(1); ; page++ {
+		rsp, err := c.client.ListTagMembers(ctx, &storagepb.ListTagMembersReq{SpaceId: spaceID, TagId: tagID, Status: status, Page: &storagepb.Page{Page: page, Size: storagePageSize}})
+		if err != nil {
+			return nil, fmt.Errorf("list tag members %s/%s: %w", spaceID, tagID, err)
+		}
+		if err := storageOK("list tag members", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		all = append(all, rsp.GetMembers()...)
+		if len(rsp.GetMembers()) < storagePageSize || !rsp.GetPageResult().GetHasMore() {
+			return all, nil
+		}
+	}
+}
+
+// SetTagMemberTradingStatus 写标签成员的交易状态，返回实际改动的成员数（值没变的 Storage 不写）。
+func (c *StorageClient) SetTagMemberTradingStatus(ctx context.Context, spaceID, tagID string, items []*storagepb.TagMemberTradingStatus) (int, error) {
+	if err := c.checkReady(); err != nil {
+		return 0, err
+	}
+	rsp, err := c.client.SetTagMemberTradingStatus(ctx, &storagepb.SetTagMemberTradingStatusReq{SpaceId: spaceID, TagId: tagID, Items: items})
+	if err != nil {
+		return 0, fmt.Errorf("set tag member trading status %s/%s: %w", spaceID, tagID, err)
+	}
+	if err := storageOK("set tag member trading status", rsp.GetRetInfo()); err != nil {
+		return 0, err
+	}
+	return int(rsp.GetUpdated()), nil
 }
 
 func (c *StorageClient) checkReady() error {

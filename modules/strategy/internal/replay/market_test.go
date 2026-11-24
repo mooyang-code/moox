@@ -62,7 +62,7 @@ func (c *dualClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID
 	return c.byDataset(datasetID).ListDatasetSubjects(ctx, spaceID, datasetID)
 }
 
-func (c *dualClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error) {
+func (c *dualClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]input.TagMember, error) {
 	return c.spot.ListTagMembers(ctx, spaceID, tagID)
 }
 

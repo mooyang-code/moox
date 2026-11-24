@@ -22,7 +22,7 @@ type Row struct {
 // MarketInput 是一个市场的 View 本期输入：每个标的在该市场的行，以及该市场上游失败的标的。
 type MarketInput struct {
 	Rows map[string]Row
-	// Failed 记录该市场上游失败的标的：列名 → 标的 → 原因（FailedFactor、FailedSource 或 FailedMarket）。
+	// Failed 记录该市场上游失败的标的：列名 → 标的 → 原因（FailedFactor、FailedSource、FailedMarket 或 FailedSuspended）。
 	Failed map[string]map[string]string
 	// AgedOut 是这个市场里年龄不够（min_age_bars 的探针没通过）的标的：多个市场时，年龄按市场各自判断，老币刚上线永续，
 	// 不能用现货的历史让永续的行通过年龄检查。选币池构造不取这些标的在这个市场的行，但已持仓的豁免：年龄剔除只拦新进入的标的，
@@ -63,11 +63,13 @@ type Frame struct {
 }
 
 // 上游失败的原因：因子对该标的计算失败，View 本身（例如 K 线采集）声明该标的本期失败，
-// 或该标的所在市场本期整体不可用（FailedMarket：那个市场的因子本期被跳过）。只有市场不可用允许已持仓的标的冻结（见 freeze.go）。
+// 该标的所在市场本期整体不可用（FailedMarket：那个市场的因子本期被跳过），或已持有的标的在这个市场停牌（FailedSuspended）。
+// 只有市场不可用与停牌允许已持仓的标的冻结（见 freeze.go）。停牌按标的记，不能借用 FailedMarket：见到一条 FailedMarket 就判整个市场不可用。
 const (
-	FailedFactor = "factor_failed"
-	FailedSource = "source_failed"
-	FailedMarket = "market_unavailable"
+	FailedFactor    = "factor_failed"
+	FailedSource    = "source_failed"
+	FailedMarket    = "market_unavailable"
+	FailedSuspended = "suspended"
 )
 
 // HoldingClock 是一条 holding 规则本根的换仓时钟。Anchor 是 holding.anchor 换成的 bar 序号（bars/offsets 写法的相位起点，

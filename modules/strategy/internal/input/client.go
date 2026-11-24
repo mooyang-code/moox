@@ -212,7 +212,9 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 	if c == nil || c.Metadata == nil {
 		return nil, errors.New("Storage Metadata 客户端未配置")
 	}
-	bindings := make(map[string]bool)
+	// 绑定的活跃与停牌标记：suspended 只在没有活跃绑定时为真（见 storagepb.DatasetSubject.suspended）。
+	type bindingState struct{ active, suspended bool }
+	bindings := make(map[string]bindingState)
 	order := make([]string, 0)
 	for page := uint32(1); ; page++ {
 		rsp, err := c.Metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
@@ -230,7 +232,8 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 			if _, seen := bindings[id]; !seen {
 				order = append(order, id)
 			}
-			bindings[id] = binding.GetStatus() == "active"
+			active := binding.GetStatus() == "active"
+			bindings[id] = bindingState{active: active, suspended: !active && binding.GetSuspended()}
 		}
 		if !rsp.GetPageResult().GetHasMore() {
 			break
@@ -263,12 +266,14 @@ func (c *RPCClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID 
 	}
 	subjects := make([]Subject, 0, len(order))
 	for _, id := range order {
-		subject := Subject{SubjectID: id, Active: bindings[id]}
+		subject := Subject{SubjectID: id, Active: bindings[id].active, Suspended: bindings[id].suspended}
 		if detail, ok := details[id]; ok {
 			subject.SeriesTag = seriesTag(detail.GetAttributes())
-			subject.Active = subject.Active && detail.GetStatus() == "active"
+			if detail.GetStatus() != "active" {
+				subject.Active, subject.Suspended = false, false
+			}
 		} else {
-			subject.Active = false
+			subject.Active, subject.Suspended = false, false
 		}
 		subjects = append(subjects, subject)
 	}
@@ -280,12 +285,12 @@ func seriesTag(attributes map[string]string) string {
 	return strings.TrimSpace(attributes["series_tag"])
 }
 
-// ListTagMembers 返回标签的活跃成员标的 ID。
-func (c *RPCClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error) {
+// ListTagMembers 返回标签的活跃成员（按标的 ID 排序、去重）及其交易状态。
+func (c *RPCClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]TagMember, error) {
 	if c == nil || c.Metadata == nil {
 		return nil, errors.New("Storage Metadata 客户端未配置")
 	}
-	members := make([]string, 0)
+	members := make(map[string]string)
 	for page := uint32(1); ; page++ {
 		rsp, err := c.Metadata.ListTagMembers(ctx, &storagepb.ListTagMembersReq{SpaceId: spaceID, TagId: tagID, Status: "active", Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
@@ -299,14 +304,18 @@ func (c *RPCClient) ListTagMembers(ctx context.Context, spaceID, tagID string) (
 				continue
 			}
 			if id := strings.TrimSpace(member.GetSubject().GetSubjectId()); id != "" {
-				members = append(members, id)
+				members[id] = strings.TrimSpace(member.GetTradingStatus())
 			}
 		}
 		if !rsp.GetPageResult().GetHasMore() {
 			break
 		}
 	}
-	return uniqueSorted(members), nil
+	out := make([]TagMember, 0, len(members))
+	for _, id := range sortedKeys(members) {
+		out = append(out, TagMember{SubjectID: id, TradingStatus: members[id]})
+	}
+	return out, nil
 }
 
 // QueryRows 读取 [Start, End) 内的全部页面，固定活动索引与修订号，变化即返回 ErrStale。
