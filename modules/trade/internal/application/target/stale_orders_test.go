@@ -80,7 +80,7 @@ func (f *targetFixture) gtcOrder(t *testing.T, orderID, ownerID, state string) {
 func (f *targetFixture) gtcOrderBy(t *testing.T, orderID, ownerID, state, runnerID string) {
 	t.Helper()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: runnerID,
+		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: runnerID,
 		ClientOrderID: orderID, ExchangeOrderID: "exchange-" + orderID, Exchange: "BINANCE", MarketType: "SWAP",
 		InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("99.9"), ReferencePrice: "100",

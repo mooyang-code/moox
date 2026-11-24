@@ -155,7 +155,7 @@ func TestManualOrderRequestHasExactApprovedShape(t *testing.T) {
 		t.Error("limit_price must remain proto3 optional")
 	}
 	for _, forbidden := range []protoreflect.Name{
-		"source", "owner_type", "owner_id", "runner_id",
+		"source", "owner_type", "owner_id", "instance_id",
 		"strategy_result_id", "reduce_only", "reduce_position_only",
 	} {
 		if fields.ByName(forbidden) != nil {

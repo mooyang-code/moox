@@ -44,7 +44,7 @@ func TestExpiredTargetIsPersistedWithoutTouchingOpenOrders(t *testing.T) {
 		SpaceID: "space-1", OrderID: "open-child", TradingAccountID: "account-a",
 		ClientOrderID: "open-child", ExchangeOrderID: "exchange-child", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", LimitPrice: &limit, Side: "BUY", PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
-		OwnerType: "TARGET", OwnerID: "target-current", RunnerID: "instance-1",
+		OwnerType: "TARGET", OwnerID: "target-current", InstanceID: "instance-1",
 		LogicalAccountID: "logical-1", State: "OPEN", Version: 1,
 		ReservedAsset: "USDT", ReservedQuantity: "20", RemainingReservedQuantity: "20",
 	})
@@ -157,7 +157,7 @@ func TestExpiryBetweenReadAndExistingOrderActionHasNoSideEffects(t *testing.T) {
 				ClientOrderID: "old-order", ExchangeOrderID: "old-order", ExchangeSymbol: "BTCUSDT",
 				OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100",
 				PositionSide: "NET", OwnerType: owner, OwnerID: "older-target",
-				RunnerID: runner, LogicalAccountID: "logical-1", State: "OPEN", Version: 1,
+				InstanceID: runner, LogicalAccountID: "logical-1", State: "OPEN", Version: 1,
 			})
 			e := f.executor()
 			calls := 0
@@ -205,7 +205,7 @@ func TestExpiredTargetDiscardsPersistedPendingChildren(t *testing.T) {
 		ClientOrderID: "pending-child", ExchangeOrderID: "", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 		Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-current",
-		RunnerID: "instance-1", LogicalAccountID: "logical-1", State: "PENDING", Version: 1,
+		InstanceID: "instance-1", LogicalAccountID: "logical-1", State: "PENDING", Version: 1,
 		ReservedAsset: "USDT", ReservedQuantity: "20", RemainingReservedQuantity: "20",
 	})
 

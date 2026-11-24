@@ -10,7 +10,12 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_order_settings_json TEXT NOT NULL DEFAULT '{}',
     c_fund_settings_json TEXT NOT NULL DEFAULT '{}',
     c_automation_state TEXT NOT NULL DEFAULT 'PAUSED',
+    -- 暂停原因只用于展示；程序按暂停来源与减仓状态判断
     c_pause_reason TEXT NOT NULL DEFAULT '',
+    -- 暂停来源：USER 人工（含新建时的初始暂停）、SYSTEM 系统自动、MARGIN 保证金率风控；运行中为空
+    c_pause_source TEXT NOT NULL DEFAULT '',
+    -- 保证金率风控暂停的减仓状态：REDUCED 已发起减仓、PENDING 减仓待执行、UNREDUCED 未减仓已回安全线、FAILED 减仓失败、PARTIAL 只减了一部分；其他情况为空
+    c_margin_reduce_state TEXT NOT NULL DEFAULT '',
     -- 最近一次从暂停恢复自动执行的时间（毫秒）：保证金率风控据此判断“上次风控减仓之后组合是否恢复过”，不依赖进程内存
     c_resumed_at INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -25,11 +30,14 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     CHECK (json_valid(c_fund_settings_json)),
     CHECK (json_type(c_fund_settings_json) = 'object'),
     CHECK (c_automation_state IN ('ACTIVE', 'PAUSED')),
+    CHECK (c_pause_source IN ('', 'USER', 'SYSTEM', 'MARGIN')),
+    CHECK (c_margin_reduce_state IN ('', 'REDUCED', 'PENDING', 'UNREDUCED', 'FAILED', 'PARTIAL')),
     CHECK (
-        (c_automation_state = 'ACTIVE' AND c_pause_reason = '')
+        (c_automation_state = 'ACTIVE' AND c_pause_reason = '' AND c_pause_source = '')
         OR
-        (c_automation_state = 'PAUSED' AND c_pause_reason <> '')
-    )
+        (c_automation_state = 'PAUSED' AND c_pause_reason <> '' AND c_pause_source <> '')
+    ),
+    CHECK ((c_pause_source = 'MARGIN') = (c_margin_reduce_state <> ''))
 );
 
 CREATE TABLE IF NOT EXISTS t_logical_account_members (
@@ -61,15 +69,13 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
     c_target_id TEXT NOT NULL,
-    c_runner_id TEXT NOT NULL,
-    c_command_sequence INTEGER NOT NULL,
-    c_instance_id TEXT NOT NULL DEFAULT '',
-    c_session_id TEXT NOT NULL DEFAULT '',
+    c_instance_id TEXT NOT NULL,
+    c_session_id TEXT NOT NULL,
     -- 目标所属会话的开始时刻（毫秒）：比较会话先后用
     c_session_started_at INTEGER NOT NULL,
-    c_strategy_id TEXT NOT NULL DEFAULT '',
-    c_bar_end_time INTEGER NOT NULL DEFAULT 0,
-    c_valid_until INTEGER NOT NULL DEFAULT 0,
+    c_strategy_id TEXT NOT NULL,
+    c_bar_end_time INTEGER NOT NULL,
+    c_valid_until INTEGER NOT NULL,
     c_targets_json TEXT NOT NULL,
     c_status TEXT NOT NULL,
     c_blocked_targets_json TEXT NOT NULL DEFAULT '[]',
@@ -81,7 +87,6 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
         ON DELETE CASCADE,
-    CHECK (c_command_sequence > 0),
     CHECK (c_instance_id <> '' AND c_session_id <> '' AND
            c_session_started_at > 0 AND
            c_strategy_id <> '' AND c_bar_end_time > 0 AND

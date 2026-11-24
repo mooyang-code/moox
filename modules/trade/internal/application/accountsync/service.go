@@ -1668,16 +1668,15 @@ func (s *Service) pauseForExternalFact(
 		if err != nil {
 			return err
 		}
-		if current.AutomationState == "PAUSED" && store.IsAutoPauseReason(current.PauseReason) {
+		if current.Pause().Auto() {
 			log.WarnContextf(ctx, "组合 %s 的执行账户 %s 发现外部订单或成交，组合已被系统自动暂停，保留原有原因：%s",
 				logicalAccount.LogicalAccountID, tradingAccountID, current.PauseReason)
 			return nil
 		}
-		return tx.SetLogicalAccountAutomation(
+		return tx.PauseLogicalAccount(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
-			"PAUSED",
-			store.AutoPauseReason("发现外部订单或成交 EXTERNAL："+tradingAccountID),
+			store.SystemPause("发现外部订单或成交 EXTERNAL："+tradingAccountID),
 		)
 	})
 }

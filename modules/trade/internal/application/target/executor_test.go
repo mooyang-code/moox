@@ -496,7 +496,7 @@ func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
 	target, err := fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.MarginPauseReason())
+		return tx.PauseLogicalAccount("space-1", "logical-1", store.MarginPause(store.MarginReduced))
 	}))
 
 	require.NoError(t, fixture.executor().pauseLogicalAccount(ctx, logicalAccount, target, "下单冲突"))
@@ -504,7 +504,7 @@ func TestTargetExecutorPauseKeepsExistingPauseReason(t *testing.T) {
 	current, err := fixture.store.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", current.AutomationState)
-	require.Equal(t, store.MarginPauseReason(), current.PauseReason)
+	require.Equal(t, store.MarginPause(store.MarginReduced).Reason, current.PauseReason)
 	target, err = fixture.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "下单冲突", target.LastError)
@@ -521,7 +521,7 @@ func TestTargetExecutorFullOmissionWaitsForOldTargetOrder(t *testing.T) {
 		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 		PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-old",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		State: "OPEN", Version: 1,
 	})
 
@@ -697,7 +697,7 @@ func TestTargetExecutorWaitsWithoutCancelWhenExposureBecomesUnmapped(t *testing.
 		OrderType: "MARKET", Side: "BUY", Quantity: "1",
 		ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		State: "OPEN", Version: 1,
 	})
 
@@ -719,7 +719,7 @@ func TestTargetExecutorDiscardsPendingChildWithStaleQuote(t *testing.T) {
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "stale-child",
 		ClientOrderID: "stale-child", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "100", State: "PENDING",
-		OwnerType: "TARGET", OwnerID: "target-current", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		OwnerType: "TARGET", OwnerID: "target-current", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 	})
 	fixture.orders.submitErrors = map[string]error{"stale-child": orderdomain.ErrReferencePriceStale}
 
@@ -822,7 +822,7 @@ func TestTargetExecutorRejectedMemberIsNotDust(t *testing.T) {
 		ClientOrderID: "rejected-child", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "100", State: "REJECTED",
 		RejectReason: "保证金不足", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 	})
 
 	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
@@ -1069,7 +1069,7 @@ func (f *targetFixture) ensureOrderTarget(tx *store.Tx, record store.OrderRecord
 	}
 	_, _, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
 		SpaceID: record.SpaceID, LogicalAccountID: record.LogicalAccountID, TargetID: "target-seed",
-		InstanceID: record.RunnerID, SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
+		InstanceID: record.InstanceID, SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
 		BarEndTime: 1, ValidUntil: fixtureValidUntil(f.now),
 		Targets: []store.InstrumentTarget{}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 	})
@@ -1195,7 +1195,7 @@ func TestTargetExecutorMovesToNextMemberAfterRejection(t *testing.T) {
 		ClientOrderID: "rejected-child", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "100", State: "REJECTED",
 		RejectReason: "保证金不足", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 	})
 
 	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")

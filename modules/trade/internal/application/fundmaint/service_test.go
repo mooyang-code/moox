@@ -247,7 +247,7 @@ func TestBNBReserveBuysTheShortfallAsASystemOrder(t *testing.T) {
 	spec := f.orders.specs[0]
 	require.Equal(t, orderdomain.OwnerSystem, spec.Owner.Type)
 	require.Equal(t, "logical-1", spec.Owner.LogicalAccountID)
-	require.Nil(t, spec.Owner.RunnerID)
+	require.Nil(t, spec.Owner.InstanceID)
 	require.Equal(t, "BNB-USDT-SPOT", spec.InstrumentID)
 	require.Equal(t, exchange.SideBuy, spec.Side)
 	require.Equal(t, exchange.OrderTypeMarket, spec.Type)
@@ -353,7 +353,7 @@ func TestSystemTasksSkipPausedAndFlatteningAccounts(t *testing.T) {
 func TestSystemTasksRunForManualGroups(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER'`).Error)
 	_, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "REDUCE", Reason: "保证金率",
 		RequestJSON: "{}", Status: "RUNNING",

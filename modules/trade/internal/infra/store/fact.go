@@ -386,7 +386,7 @@ type OrderRecord struct {
 	OwnerType        string
 	OwnerID          string
 	LogicalAccountID string
-	RunnerID         string
+	InstanceID       string
 	PositionBefore   string
 	State            string
 	// Attempt 是伪市价单的第几次尝试，从 0 开始。
@@ -429,7 +429,7 @@ type orderRow struct {
 	OwnerType                 string    `gorm:"column:c_owner_type"`
 	OwnerID                   string    `gorm:"column:c_owner_id"`
 	LogicalAccountID          *string   `gorm:"column:c_logical_account_id"`
-	RunnerID                  *string   `gorm:"column:c_runner_id"`
+	InstanceID                *string   `gorm:"column:c_instance_id"`
 	PositionBefore            string    `gorm:"column:c_position_before"`
 	State                     string    `gorm:"column:c_state"`
 	Attempt                   int       `gorm:"column:c_attempt"`
@@ -498,7 +498,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 		record.OrderType, record.TimeInForce, record.Side, record.PositionSide,
 		record.Quantity, record.LimitPrice, record.ReferencePrice, record.ReferencePriceAt,
 		record.ReduceOnly, record.OwnerType, record.OwnerID,
-		nullableString(record.LogicalAccountID), nullableString(record.RunnerID), record.PositionBefore, record.State,
+		nullableString(record.LogicalAccountID), nullableString(record.InstanceID), record.PositionBefore, record.State,
 		record.Attempt, record.FilledQuantity, record.AveragePrice,
 		record.ReservedAsset, record.ReservedQuantity,
 		record.RemainingReservedQuantity, record.PaperExecutionPrice, record.FirstMatchPending,
@@ -507,16 +507,16 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 }
 
 func validateOrderOwnership(tx *Tx, record OrderRecord) error {
-	var runnerID *string
-	if record.RunnerID != "" {
-		value := record.RunnerID
-		runnerID = &value
+	var instanceID *string
+	if record.InstanceID != "" {
+		value := record.InstanceID
+		instanceID = &value
 	}
 	owner := orderdomain.OrderOwner{
 		Type:             orderdomain.OwnerType(record.OwnerType),
 		OwnerID:          record.OwnerID,
 		LogicalAccountID: record.LogicalAccountID,
-		RunnerID:         runnerID,
+		InstanceID:       instanceID,
 	}
 	if err := owner.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
@@ -528,13 +528,13 @@ func validateOrderOwnership(tx *Tx, record OrderRecord) error {
 		return err
 	}
 	// 目标单只能由组合当前目标行所属的实例落库：没有目标行、或目标行已换成别的实例的会话，都不落。
-	// 订单上只有实例（RunnerID）和目标号（OwnerID），会话与目标号的比较在提交前（下单服务的 checkTargetAuthorization）。
+	// 订单上只有策略实例（InstanceID）和目标号（OwnerID），会话与目标号的比较在提交前（下单服务的 checkTargetAuthorization）。
 	if owner.Type == orderdomain.OwnerTarget {
 		current, err := tx.GetCurrentTarget(record.SpaceID, record.LogicalAccountID)
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		if err != nil || current.InstanceID != record.RunnerID {
+		if err != nil || current.InstanceID != record.InstanceID {
 			return fmt.Errorf("%w: TARGET instance is not the current target's instance", ErrConflict)
 		}
 	}
@@ -1082,7 +1082,7 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		ReferencePrice: row.ReferencePrice, ReferencePriceAt: row.ReferencePriceAt,
 		ReduceOnly: row.ReduceOnly, OwnerType: row.OwnerType, OwnerID: row.OwnerID,
 		LogicalAccountID: valueOrEmpty(row.LogicalAccountID),
-		RunnerID:         valueOrEmpty(row.RunnerID), PositionBefore: row.PositionBefore, State: row.State,
+		InstanceID:       valueOrEmpty(row.InstanceID), PositionBefore: row.PositionBefore, State: row.State,
 		Attempt:        row.Attempt,
 		FilledQuantity: row.FilledQuantity, AveragePrice: row.AveragePrice,
 		ReservedAsset: row.ReservedAsset, ReservedQuantity: row.ReservedQuantity,
@@ -1930,7 +1930,7 @@ const (
 			c_exchange_order_id, c_exchange, c_market_type, c_instrument_id, c_exchange_symbol, c_order_type,
 			c_time_in_force, c_side, c_position_side, c_quantity, c_limit_price,
 			c_reference_price, c_reference_price_at, c_reduce_only, c_owner_type,
-			c_owner_id, c_logical_account_id, c_runner_id, c_position_before,
+			c_owner_id, c_logical_account_id, c_instance_id, c_position_before,
 			c_state, c_attempt, c_filled_quantity, c_average_price,
 			c_reserved_asset, c_reserved_quantity, c_remaining_reserved_quantity,
 			c_paper_execution_price, c_first_match_pending, c_reject_reason,

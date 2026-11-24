@@ -47,7 +47,7 @@ func (f *targetFixture) restingOrder(t *testing.T, orderID, side, quantity, fill
 		state = "PARTIALLY_FILLED"
 	}
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: orderID, ExchangeOrderID: "exchange-" + orderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: side, Quantity: quantity, LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		FilledQuantity: filled, OwnerType: "TARGET", OwnerID: "target-current", State: state, SubmittedAt: submittedAt.UnixMilli(), Version: 1,
@@ -353,7 +353,7 @@ func TestSystemOrdersDoNotDefeatTheWaitingFastPath(t *testing.T) {
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "child-open", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: "child-open", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: "child-open", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "5", ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
@@ -385,7 +385,7 @@ func TestRestingExpiryGoesFromWaitBackToBlocked(t *testing.T) {
 	})
 	f.setSwapPosition("BTCUSDT", "100")
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,

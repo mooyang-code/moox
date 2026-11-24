@@ -502,13 +502,10 @@ func (s *Service) Pause(
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 }
 
-// PauseIf 只在组合当前的状态和暂停原因仍是预期值时暂停（改写原因），返回是否改了。
-func (s *Service) PauseIf(ctx context.Context, spaceID, logicalAccountID, expectedState, expectedReason, reason string) (bool, error) {
+// PauseIf 只在组合当前的暂停来源与减仓状态仍是 expected（零值表示仍在自动执行）时暂停成 pause，返回是否改了。
+func (s *Service) PauseIf(ctx context.Context, spaceID, logicalAccountID string, expected, pause store.Pause) (bool, error) {
 	if s == nil || s.Store == nil {
 		return false, ErrServiceConfig
-	}
-	if strings.TrimSpace(reason) == "" {
-		return false, fmt.Errorf("%w: 暂停原因不能为空", store.ErrInvalidRecord)
 	}
 	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
 	if lockErr != nil {
@@ -518,7 +515,7 @@ func (s *Service) PauseIf(ctx context.Context, spaceID, logicalAccountID, expect
 	var paused bool
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var pauseErr error
-		paused, pauseErr = tx.PauseLogicalAccountIf(spaceID, logicalAccountID, expectedState, expectedReason, strings.TrimSpace(reason))
+		paused, pauseErr = tx.PauseLogicalAccountIf(spaceID, logicalAccountID, expected, pause)
 		return pauseErr
 	})
 	return paused, err
@@ -553,8 +550,7 @@ func (s *Service) Resume(
 	if err != nil {
 		return store.LogicalAccountRecord{}, "", err
 	}
-	if current.AutomationState != before.AutomationState ||
-		current.PauseReason != before.PauseReason {
+	if current.AutomationState != before.AutomationState || current.Pause() != before.Pause() {
 		return store.LogicalAccountRecord{}, "", fmt.Errorf(
 			"%w：恢复期间组合的状态被改动了，请重试",
 			ErrNotReady,

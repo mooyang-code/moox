@@ -90,7 +90,7 @@ func (r *Reducer) ConfirmCancel(
 			FilledQuantity: filled, State: state, Version: record.Version,
 		}
 		expectedVersion := aggregate.Version
-		if _, err := aggregate.ConfirmCancel(); err != nil {
+		if err := aggregate.ConfirmCancel(); err != nil {
 			return err
 		}
 		record.State = string(aggregate.State)
@@ -320,7 +320,7 @@ func applyOrderFill(
 	}
 	// 待提交的订单收到成交，说明交易所已经受理了它（重发前的请求其实成功了）：先认领成挂单，再入账。
 	if aggregate.State == order.Pending {
-		if _, err := aggregate.Claim(fill.ExchangeOrderID); err != nil {
+		if err := aggregate.Claim(fill.ExchangeOrderID); err != nil {
 			return err
 		}
 	}
@@ -328,7 +328,7 @@ func applyOrderFill(
 	if order.IsSyntheticOrderID(record.OrderID) {
 		applyFill = aggregate.ApplySyntheticFill
 	}
-	if _, err := applyFill(order.Fill{
+	if err := applyFill(order.Fill{
 		ID: shared.FillID(fillID), Quantity: fill.Quantity,
 	}); err != nil {
 		return err

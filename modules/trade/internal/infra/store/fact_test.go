@@ -37,7 +37,7 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "TARGET", OwnerID: "target-1",
-			LogicalAccountID: "logical-1", RunnerID: "runner-1",
+			LogicalAccountID: "logical-1", InstanceID: "runner-1",
 			State: "PENDING",
 		})
 	}))
@@ -47,7 +47,7 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 	require.Equal(t, "TARGET", got.OwnerType)
 	require.Equal(t, "target-1", got.OwnerID)
 	require.Equal(t, "logical-1", got.LogicalAccountID)
-	require.Equal(t, "runner-1", got.RunnerID)
+	require.Equal(t, "runner-1", got.InstanceID)
 
 	err = s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateOrder(OrderRecord{

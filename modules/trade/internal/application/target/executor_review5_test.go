@@ -23,7 +23,7 @@ func TestUnreflectedPositionHoldsCollectSoTheRestCanStillBeBought(t *testing.T) 
 		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.002", ReferencePrice: "50000", State: "FILLED", FilledQuantity: "0.002", AveragePrice: "50000",
 		PositionBefore: "0", SubmittedAt: f.now.Add(-time.Minute).UnixMilli(), FinishedAt: f.now.Add(-time.Minute).UnixMilli(),
-		OwnerType: "TARGET", OwnerID: "target-current", LogicalAccountID: "logical-1", RunnerID: "runner-1", Version: 1,
+		OwnerType: "TARGET", OwnerID: "target-current", LogicalAccountID: "logical-1", InstanceID: "runner-1", Version: 1,
 	})
 	ctx := context.Background()
 	executor := newExecutor()
@@ -79,7 +79,7 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "50000", State: "REJECTED",
 		RejectReason: "not permitted", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 	})
 	fakeA := &wallettest.Exchange{Spot: "10", Futures: "100000", Ask: "50000"}
 	fakeB := &wallettest.Exchange{Spot: "100000", Futures: "0", Ask: "50000"}

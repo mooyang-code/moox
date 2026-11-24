@@ -60,9 +60,9 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 		if logicalID == "" {
 			continue
 		}
-		result := tx.db.Exec(execPausePaperLogicalAccount, "模拟账户已关闭，自动执行已暂停", spaceID, logicalID)
-		if result.Error != nil {
-			return result.Error
+		// 关闭模拟账户是用户的操作，组合按人工暂停记。
+		if err := tx.PauseLogicalAccount(spaceID, logicalID, UserPause("模拟账户已关闭，自动执行已暂停")); err != nil {
+			return err
 		}
 		// 关闭后账户不再持仓和下单，移出成员，组合账户里其他成员不受影响。
 		if err := tx.db.Exec(execRemovePaperMember, spaceID, logicalID, tradingAccountID).Error; err != nil {
@@ -210,8 +210,6 @@ const (
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	sqlPaperAccountLogicalIDs = `SELECT c_logical_account_id FROM t_logical_account_members
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
-	execPausePaperLogicalAccount = `UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?`
 	execRemovePaperMember = `DELETE FROM t_logical_account_members
 		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?`
 )

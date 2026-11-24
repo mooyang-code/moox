@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,10 +37,7 @@ type LogicalAccountTargetRecord struct {
 	SpaceID          string
 	LogicalAccountID string
 	TargetID         string
-	RunnerID         string
-	CommandSequence  uint64
-	// Strategy target identity; RunnerID mirrors InstanceID and CommandSequence
-	// mirrors BarEndTime.
+	// 目标所属的策略实例与会话。
 	InstanceID string
 	SessionID  string
 	// SessionStartedAt 是目标所属会话的开始时刻（毫秒），比较会话先后用。
@@ -130,8 +126,6 @@ type logicalAccountTargetRow struct {
 	SpaceID            string    `gorm:"column:c_space_id"`
 	LogicalAccountID   string    `gorm:"column:c_logical_account_id"`
 	TargetID           string    `gorm:"column:c_target_id"`
-	RunnerID           string    `gorm:"column:c_runner_id"`
-	CommandSequence    uint64    `gorm:"column:c_command_sequence"`
 	InstanceID         string    `gorm:"column:c_instance_id"`
 	SessionID          string    `gorm:"column:c_session_id"`
 	SessionStartedAt   int64     `gorm:"column:c_session_started_at"`
@@ -178,7 +172,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, false, err
 	}
 	if blank(record.SpaceID) || blank(record.LogicalAccountID) ||
-		blank(record.TargetID) || record.CommandSequence > math.MaxInt64 ||
+		blank(record.TargetID) ||
 		record.AcceptedAt <= 0 || !validLogicalAccountTargetStatus(record.Status) {
 		return LogicalAccountTargetRecord{}, false,
 			fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
@@ -193,12 +187,6 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) || record.SessionStartedAt <= 0 ||
 		record.BarEndTime <= 0 || record.ValidUntil <= record.BarEndTime {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
-	}
-	if record.CommandSequence == 0 {
-		record.CommandSequence = uint64(record.BarEndTime)
-	}
-	if record.RunnerID == "" {
-		record.RunnerID = record.InstanceID
 	}
 	// 这里先判会话先后（含已关闭）、再判过期；接收入口先判过期。两处顺序不同只影响既过期又属于旧会话的目标
 	// 被归为 superseded 还是 expired，两种结论都不执行。
@@ -246,8 +234,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 			return LogicalAccountTargetRecord{}, false, decodeErr
 		}
 		sameSession := current.InstanceID == record.InstanceID && current.SessionID == record.SessionID
-		same := current.TargetID == record.TargetID &&
-			current.RunnerID == record.RunnerID && sameSession &&
+		same := current.TargetID == record.TargetID && sameSession &&
 			current.SessionStartedAt == record.SessionStartedAt && current.BarEndTime == record.BarEndTime &&
 			row.TargetsJSON == targetsJSON
 		if same {
@@ -262,8 +249,8 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	}
 
 	result := tx.db.Exec(execInsertLogicalAccountTarget,
-		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
-		record.CommandSequence, record.InstanceID, record.SessionID, record.SessionStartedAt, record.StrategyID,
+		record.SpaceID, record.LogicalAccountID, record.TargetID,
+		record.InstanceID, record.SessionID, record.SessionStartedAt, record.StrategyID,
 		record.BarEndTime, record.ValidUntil,
 		targetsJSON, record.Status,
 		blockedJSON, record.LastError, record.AcceptedAt,
@@ -411,20 +398,13 @@ func (s *Store) UpdateLogicalAccountTargetState(
 	if err != nil {
 		return false, err
 	}
-	query := updateTargetBySequenceSQL
-	args := []any{record.TargetID, record.CommandSequence}
-	if record.InstanceID != "" || record.SessionID != "" {
-		if record.InstanceID == "" || record.SessionID == "" || record.BarEndTime <= 0 || record.ValidUntil <= record.BarEndTime {
-			return false, fmt.Errorf("%w: invalid logical account target session update", ErrInvalidRecord)
-		}
-		query = updateTargetBySessionSQL
-		args = []any{record.TargetID, record.InstanceID, record.SessionID, record.BarEndTime}
+	if blank(record.InstanceID) || blank(record.SessionID) || record.BarEndTime <= 0 {
+		return false, fmt.Errorf("%w: invalid logical account target session update", ErrInvalidRecord)
 	}
-	args = append(args, record.SpaceID, record.LogicalAccountID)
-	values := []any{record.Status, blockedJSON, record.LastError, record.SpaceID, record.LogicalAccountID}
-	values = append(values, args[:len(args)-2]...)
-	values = append(values, record.Status)
-	result := s.db.WithContext(ctx).Exec(query, values...)
+	result := s.db.WithContext(ctx).Exec(updateTargetStateSQL,
+		record.Status, blockedJSON, record.LastError, record.SpaceID, record.LogicalAccountID,
+		record.TargetID, record.InstanceID, record.SessionID, record.BarEndTime, record.Status,
+	)
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -444,8 +424,7 @@ func logicalAccountTargetRecord(
 	}
 	return LogicalAccountTargetRecord{
 		SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
-		TargetID: row.TargetID, RunnerID: row.RunnerID,
-		CommandSequence: row.CommandSequence, Targets: targets,
+		TargetID: row.TargetID, Targets: targets,
 		InstanceID: row.InstanceID, SessionID: row.SessionID, SessionStartedAt: row.SessionStartedAt, StrategyID: row.StrategyID,
 		BarEndTime: row.BarEndTime, ValidUntil: row.ValidUntil,
 		Status: row.Status, BlockedTargets: blocked,
@@ -618,32 +597,23 @@ func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
 	return targets, nil
 }
 
-// 逻辑账户目标状态更新的两种定位方式：按指令序号，或按实例、会话与收盘时刻。
 const (
-	updateTargetBySequenceSQL = updateTargetPrefixSQL + `c_target_id = ? AND c_command_sequence = ?` + updateTargetSuffixSQL
-	updateTargetBySessionSQL  = updateTargetPrefixSQL + `c_target_id = ? AND c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?` + updateTargetSuffixSQL
-
-	updateTargetPrefixSQL = `
-	UPDATE t_logical_account_targets
-	SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?,
-		c_mtime = CURRENT_TIMESTAMP
-	WHERE c_space_id = ? AND c_logical_account_id = ?
-		AND `
-	updateTargetSuffixSQL = `
-		AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')
-`
+	// 按目标号、实例、会话与收盘时刻定位当前目标行改状态；已过期的目标只允许再写成过期。
+	updateTargetStateSQL = `UPDATE t_logical_account_targets
+		SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+			AND c_target_id = ? AND c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?
+			AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')`
 	// 覆盖当前目标行只有两种情况：开始时刻更晚的新会话，或同一会话更晚的一根（与 Go 侧的判断一致，这里再守一次）。
 	execInsertLogicalAccountTarget = `INSERT INTO t_logical_account_targets (
-			c_space_id, c_logical_account_id, c_target_id, c_runner_id,
-			c_command_sequence, c_instance_id, c_session_id, c_session_started_at, c_strategy_id,
+			c_space_id, c_logical_account_id, c_target_id,
+			c_instance_id, c_session_id, c_session_started_at, c_strategy_id,
 			c_bar_end_time, c_valid_until,
 			c_targets_json, c_status,
 			c_blocked_targets_json, c_last_error, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_logical_account_id) DO UPDATE SET
 			c_target_id = excluded.c_target_id,
-			c_runner_id = excluded.c_runner_id,
-			c_command_sequence = excluded.c_command_sequence,
 			c_instance_id = excluded.c_instance_id,
 			c_session_id = excluded.c_session_id,
 			c_session_started_at = excluded.c_session_started_at,

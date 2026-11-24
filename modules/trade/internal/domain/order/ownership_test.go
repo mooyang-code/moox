@@ -17,7 +17,7 @@ func TestOrderOwnershipRequiresTrustedShape(t *testing.T) {
 			name: "target",
 			owner: OrderOwner{
 				Type: OwnerTarget, OwnerID: "target-1",
-				LogicalAccountID: "logical-1", RunnerID: &runnerID,
+				LogicalAccountID: "logical-1", InstanceID: &runnerID,
 			},
 		},
 		{
@@ -60,7 +60,7 @@ func TestOrderOwnershipRequiresTrustedShape(t *testing.T) {
 			name: "operator with runner",
 			owner: OrderOwner{
 				Type: OwnerOperator, OwnerID: "action-1",
-				LogicalAccountID: "logical-1", RunnerID: &runnerID,
+				LogicalAccountID: "logical-1", InstanceID: &runnerID,
 			},
 			wantErr: true,
 		},

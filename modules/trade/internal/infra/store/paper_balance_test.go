@@ -16,34 +16,11 @@ func TestPaperBalanceInitializedWithAccount(t *testing.T) {
 	a.ExecutionMode = "PAPER"
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(a) }))
 	var count int64
-	err := s.db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 't_paper_balance_projections'").Scan(&count).Error
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count, "Paper accounts need durable initialized balance projections")
-	require.NoError(t, s.db.Raw("SELECT COUNT(*) FROM t_paper_balance_projections").Scan(&count).Error)
-	require.Equal(t, int64(1), count, "creation must initialize the balance in its transaction")
+	require.NoError(t, s.db.Raw("SELECT COUNT(*) FROM t_paper_asset_balances").Scan(&count).Error)
+	require.Equal(t, int64(1), count, "建账户要在同一个事务里写入结算资产的余额行")
 	snapshot, err := s.GetPaperBalanceSnapshot(context.Background(), a.SpaceID, a.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "100000", snapshot.Totals[a.SettlementAsset].String())
-}
-
-func TestPaperBalanceInitializationTimestampPersists(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "timestamp.db")
-	s, err := Open(path)
-	require.NoError(t, err)
-	seedPaperBalanceOrder(t, s)
-	var columnCount int64
-	require.NoError(t, s.db.Raw("SELECT COUNT(*) FROM pragma_table_info('t_paper_balance_projections') WHERE name = 'c_initialized_at'").Scan(&columnCount).Error)
-	require.Equal(t, int64(1), columnCount, "initialization metadata must include its audit timestamp")
-	var first int64
-	require.NoError(t, s.db.Raw("SELECT c_initialized_at FROM t_paper_balance_projections").Scan(&first).Error)
-	require.Positive(t, first)
-	require.NoError(t, s.Close())
-	s, err = Open(path)
-	require.NoError(t, err)
-	defer s.Close()
-	var reopened int64
-	require.NoError(t, s.db.Raw("SELECT c_initialized_at FROM t_paper_balance_projections").Scan(&reopened).Error)
-	require.Equal(t, first, reopened)
 }
 
 func TestPaperBalanceInitializationFailureRollsBackAccount(t *testing.T) {
@@ -53,7 +30,7 @@ func TestPaperBalanceInitializationFailureRollsBackAccount(t *testing.T) {
 	a.ExecutionMode = "PAPER"
 	err := s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(a) })
 	require.Error(t, err)
-	for _, table := range []string{"t_trading_accounts", "t_paper_account_configs", "t_paper_balance_projections", "t_paper_asset_balances"} {
+	for _, table := range []string{"t_trading_accounts", "t_paper_account_configs", "t_paper_asset_balances"} {
 		var count int64
 		require.NoError(t, s.db.Table(table).Count(&count).Error)
 		require.Zero(t, count)

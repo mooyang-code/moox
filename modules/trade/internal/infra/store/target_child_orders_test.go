@@ -36,7 +36,7 @@ func seedTargetChildren(t *testing.T, s *Store, children map[string][2]string) s
 				SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-1", ClientOrderID: orderID,
 				ExchangeSymbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC", LimitPrice: &limit,
 				Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-1",
-				LogicalAccountID: "logical-1", RunnerID: "runner-1", State: "PENDING",
+				LogicalAccountID: "logical-1", InstanceID: "runner-1", State: "PENDING",
 			}); err != nil {
 				return err
 			}

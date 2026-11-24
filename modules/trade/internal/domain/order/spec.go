@@ -40,7 +40,7 @@ type OrderOwner struct {
 	Type             OwnerType
 	OwnerID          string
 	LogicalAccountID string
-	RunnerID         *string
+	InstanceID       *string
 }
 
 func (o OrderOwner) Validate() error {
@@ -51,20 +51,20 @@ func (o OrderOwner) Validate() error {
 	switch o.Type {
 	case OwnerTarget:
 		if strings.TrimSpace(o.LogicalAccountID) == "" ||
-			o.RunnerID == nil || strings.TrimSpace(*o.RunnerID) == "" {
-			return invalidSpec("TARGET requires logical account and runner ownership")
+			o.InstanceID == nil || strings.TrimSpace(*o.InstanceID) == "" {
+			return invalidSpec("目标单必须带组合账户与策略实例")
 		}
 	case OwnerOperator:
-		if strings.TrimSpace(o.LogicalAccountID) == "" || o.RunnerID != nil {
-			return invalidSpec("OPERATOR requires logical account without runner")
+		if strings.TrimSpace(o.LogicalAccountID) == "" || o.InstanceID != nil {
+			return invalidSpec("人工单必须带组合账户、不能带策略实例")
 		}
 	case OwnerExternal:
-		if o.RunnerID != nil {
-			return invalidSpec("EXTERNAL cannot have runner ownership")
+		if o.InstanceID != nil {
+			return invalidSpec("外部单不能带策略实例")
 		}
 	case OwnerSystem:
-		if strings.TrimSpace(o.LogicalAccountID) == "" || o.RunnerID != nil {
-			return invalidSpec("SYSTEM requires logical account without runner")
+		if strings.TrimSpace(o.LogicalAccountID) == "" || o.InstanceID != nil {
+			return invalidSpec("系统单必须带组合账户、不能带策略实例")
 		}
 	default:
 		return invalidSpec("unsupported order owner type")

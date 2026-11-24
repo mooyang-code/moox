@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
@@ -24,7 +23,10 @@ type LogicalAccountRecord struct {
 	OrderSettingsJSON string
 	FundSettingsJSON  string
 	AutomationState   string
+	// PauseReason 只用于展示；程序按 PauseSource（暂停来源）与 MarginReduceState（保证金率风控的减仓状态）判断，运行中三者都为空。
 	PauseReason       string
+	PauseSource       PauseSource
+	MarginReduceState MarginReduceState
 	// ResumedAt 是最近一次从暂停恢复自动执行的时间（毫秒），没恢复过为 0。
 	ResumedAt int64
 	CreatedAt time.Time
@@ -53,6 +55,8 @@ type logicalAccountRow struct {
 	FundSettingsJSON  string    `gorm:"column:c_fund_settings_json"`
 	AutomationState   string    `gorm:"column:c_automation_state"`
 	PauseReason       string    `gorm:"column:c_pause_reason"`
+	PauseSource       string    `gorm:"column:c_pause_source"`
+	MarginReduceState string    `gorm:"column:c_margin_reduce_state"`
 	ResumedAt         int64     `gorm:"column:c_resumed_at"`
 	CreatedAt         time.Time `gorm:"column:c_ctime"`
 	UpdatedAt         time.Time `gorm:"column:c_mtime"`
@@ -90,11 +94,14 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	if blank(record.FundSettingsJSON) {
 		record.FundSettingsJSON = "{}"
 	}
+	if record.AutomationState == string(logicalaccount.AutomationPaused) && record.PauseSource == "" {
+		record.PauseSource = PauseSourceUser
+	}
 	err := tx.db.Exec(execInsertLogicalAccount,
 		record.SpaceID, record.LogicalAccountID, record.Name,
 		record.ControlMode, record.ExecutionMode, record.SettlementAsset,
 		record.OrderSettingsJSON, record.FundSettingsJSON,
-		record.AutomationState, record.PauseReason,
+		record.AutomationState, record.PauseReason, string(record.PauseSource), string(record.MarginReduceState),
 	).Error
 	return nameWriteError(err, uniqueLogicalAccountName)
 }
@@ -178,97 +185,48 @@ func (tx *Tx) SetLogicalAccountFundSettings(spaceID, logicalAccountID, settingsJ
 	return requireUpdated(result.Error, result.RowsAffected, "logical account fund settings")
 }
 
-// autoPausePrefix 区分系统自动暂停和人工暂停，自动暂停要告警。
-const autoPausePrefix = "自动暂停："
-
-// AutoPauseReason 给系统自动暂停的原因加上标记。
-func AutoPauseReason(reason string) string {
-	return autoPausePrefix + reason
+// Pause 返回组合当前的暂停状态（运行中为零值）。
+func (r LogicalAccountRecord) Pause() Pause {
+	return Pause{Source: r.PauseSource, MarginReduce: r.MarginReduceState, Reason: r.PauseReason}
 }
 
-// marginPauseText 是保证金率风控暂停原因的开头：原因文字固定、不带比值，因为暂停原因会作为 auto_paused 告警的详情上报，
-// 带变化的数字会让每次触发都产生新的指标序列。
-const marginPauseText = "保证金率过低"
-
-// MarginPauseReason 是保证金率风控暂停组合并已发起减仓的原因（固定文字）。
-func MarginPauseReason() string {
-	return AutoPauseReason(marginPauseText + "，组合已暂停并按设置的比例减仓，等待确认安全后手动恢复")
-}
-
-// MarginPausePendingReason 是保证金率风控先把组合暂停、减仓还排不进去（有下架清仓在跑）时的原因：
-// 不能写“已减仓”，用户会以为已经减过。减仓补上之后原因换成 MarginPauseReason。
-func MarginPausePendingReason() string {
-	return AutoPauseReason(marginPauseText + "，组合已暂停，减仓待执行（等待进行中的清仓结束）")
-}
-
-// MarginPauseUnreducedReason 是“减仓待执行”期间保证金率又回到安全线、减仓不会再做时的原因：组合仍暂停，没有减过仓，等用户确认后恢复。
-func MarginPauseUnreducedReason() string {
-	return AutoPauseReason(marginPauseText + "，组合已暂停但没有减仓（保证金率已回到安全线），等待确认安全后手动恢复")
-}
-
-// MarginPauseReduceFailedReason、MarginPauseReducePartialReason 是风控减仓结束但没有做完时的原因：
-// 原因不能再写“已按比例减仓”，用户要知道仓位还没减到位。
-func MarginPauseReduceFailedReason() string {
-	return AutoPauseReason(marginPauseText + "，组合已暂停，风控减仓失败，请检查持仓后手动处理并确认恢复")
-}
-
-func MarginPauseReducePartialReason() string {
-	return AutoPauseReason(marginPauseText + "，组合已暂停，风控减仓只完成了一部分，请检查持仓后手动处理并确认恢复")
-}
-
-// MarginAttentionDetail 是 margin_ratio_low 关注项的固定文字，带上减仓状态（不带比值）。
-func MarginAttentionDetail(reason string) string {
-	switch reason {
-	case MarginPausePendingReason():
-		return "保证金率风控已暂停，减仓待执行"
-	case MarginPauseUnreducedReason():
-		return "保证金率风控已暂停，没有减仓，等待确认后恢复"
-	case MarginPauseReduceFailedReason():
-		return "保证金率风控已暂停，减仓失败，需要人工处理"
-	case MarginPauseReducePartialReason():
-		return "保证金率风控已暂停，减仓只完成一部分，需要人工处理"
-	}
-	return "保证金率风控已暂停，等待确认后恢复"
-}
-
-// IsMarginPausePending 判断暂停原因是否是“已暂停、减仓待执行”。
-func IsMarginPausePending(reason string) bool { return reason == MarginPausePendingReason() }
-
-// IsMarginPauseReason 判断暂停原因是否来自保证金率风控（已减仓或减仓待执行）。
-func IsMarginPauseReason(reason string) bool {
-	return strings.HasPrefix(reason, autoPausePrefix+marginPauseText)
-}
-
-// IsAutoPauseReason 判断暂停原因是否来自系统自动暂停。
-func IsAutoPauseReason(reason string) bool {
-	return strings.HasPrefix(reason, autoPausePrefix)
-}
-
+// SetLogicalAccountAutomation 恢复自动执行（state 为 ACTIVE，原因为空）或人工暂停（state 为 PAUSED，来源记 USER）。
+// 系统自动暂停与保证金率风控暂停走 PauseLogicalAccount、PauseLogicalAccountIf。
 func (tx *Tx) SetLogicalAccountAutomation(
 	spaceID string,
 	logicalAccountID string,
 	state string,
 	reason string,
 ) error {
-	if state != string(logicalaccount.AutomationActive) &&
-		state != string(logicalaccount.AutomationPaused) {
-		return fmt.Errorf("%w: unsupported automation state", ErrInvalidRecord)
+	switch {
+	case state == string(logicalaccount.AutomationActive) && blank(reason):
+		result := tx.db.Exec(execResumeLogicalAccount, time.Now().UnixMilli(), spaceID, logicalAccountID)
+		return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
+	case state == string(logicalaccount.AutomationPaused):
+		return tx.PauseLogicalAccount(spaceID, logicalAccountID, UserPause(reason))
 	}
-	if (state == string(logicalaccount.AutomationActive) && !blank(reason)) ||
-		(state == string(logicalaccount.AutomationPaused) && blank(reason)) {
-		return fmt.Errorf("%w: automation state and reason disagree", ErrInvalidRecord)
+	return fmt.Errorf("%w: automation state and reason disagree", ErrInvalidRecord)
+}
+
+// PauseLogicalAccount 无条件暂停组合，写入暂停来源、减仓状态与原因。
+func (tx *Tx) PauseLogicalAccount(spaceID, logicalAccountID string, pause Pause) error {
+	if !validPause(pause) {
+		return fmt.Errorf("%w: invalid pause", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(execSetLogicalAccountAutomation, state, time.Now().UnixMilli(), state, reason, spaceID, logicalAccountID, state)
+	result := tx.db.Exec(execPauseLogicalAccount, pause.Reason, string(pause.Source), string(pause.MarginReduce), spaceID, logicalAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 
-// PauseLogicalAccountIf 只在组合当前的自动执行状态和暂停原因仍是预期值时把它暂停（改写原因），返回是否改了：
-// 风控在读到组合之后、写入之前，用户可能已经恢复、人工暂停或改写了原因，不能覆盖。
-func (tx *Tx) PauseLogicalAccountIf(spaceID, logicalAccountID, expectedState, expectedReason, reason string) (bool, error) {
-	if blank(spaceID) || blank(logicalAccountID) || blank(reason) {
+// PauseLogicalAccountIf 只在组合当前的暂停来源与减仓状态仍是 expected 时把它暂停成 pause，返回是否改了；
+// expected 为零值表示“仍在自动执行”。风控在读到组合之后、写入之前，用户可能已经恢复、人工暂停或别处改写了状态，不能覆盖。
+func (tx *Tx) PauseLogicalAccountIf(spaceID, logicalAccountID string, expected, pause Pause) (bool, error) {
+	if blank(spaceID) || blank(logicalAccountID) || !validPause(pause) {
 		return false, fmt.Errorf("%w: incomplete conditional pause", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(execPauseLogicalAccountIf, reason, spaceID, logicalAccountID, expectedState, expectedReason)
+	result := tx.db.Exec(execPauseLogicalAccountIf,
+		pause.Reason, string(pause.Source), string(pause.MarginReduce),
+		spaceID, logicalAccountID, string(expected.Source), string(expected.MarginReduce),
+	)
 	if result.Error != nil {
 		return false, writeError(result.Error)
 	}
@@ -463,7 +421,8 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		ExecutionMode:     row.ExecutionMode,
 		SettlementAsset:   row.SettlementAsset,
 		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,
-		AutomationState: row.AutomationState, PauseReason: row.PauseReason, ResumedAt: row.ResumedAt,
+		AutomationState: row.AutomationState, PauseReason: row.PauseReason,
+		PauseSource: PauseSource(row.PauseSource), MarginReduceState: MarginReduceState(row.MarginReduceState), ResumedAt: row.ResumedAt,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
@@ -483,18 +442,23 @@ const (
 			c_space_id, c_logical_account_id, c_name,
 			c_control_mode, c_execution_mode, c_settlement_asset,
 			c_order_settings_json, c_fund_settings_json,
-			c_automation_state, c_pause_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	// 改自动执行状态：从暂停恢复时记下恢复时间；只有策略控制的组合能恢复自动执行。
-	execSetLogicalAccountAutomation = `UPDATE t_logical_accounts
-		SET c_resumed_at = CASE WHEN ? = 'ACTIVE' AND c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
-			c_automation_state = ?, c_pause_reason = ?,
+			c_automation_state, c_pause_reason, c_pause_source, c_margin_reduce_state
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// 恢复自动执行：从暂停恢复时记下恢复时间，清空暂停原因、来源与减仓状态；只有策略控制的组合能恢复自动执行。
+	execResumeLogicalAccount = `UPDATE t_logical_accounts
+		SET c_resumed_at = CASE WHEN c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
+			c_automation_state = 'ACTIVE', c_pause_reason = '', c_pause_source = '', c_margin_reduce_state = '',
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND (? <> 'ACTIVE' OR c_control_mode = 'STRATEGY')`
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_control_mode = 'STRATEGY'`
+	execPauseLogicalAccount = `UPDATE t_logical_accounts
+		SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_pause_source = ?, c_margin_reduce_state = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?`
+	// 条件暂停：按当前的暂停来源与减仓状态比对（运行中两者都为空）。
 	execPauseLogicalAccountIf = `UPDATE t_logical_accounts
-		SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_automation_state = ? AND c_pause_reason = ?`
+		SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_pause_source = ?, c_margin_reduce_state = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_pause_source = ? AND c_margin_reduce_state = ?`
 	queryLogicalAccountMemberMarkets = `SELECT a.c_markets
 		FROM t_logical_account_members AS m
 		JOIN t_trading_accounts AS a

@@ -1189,7 +1189,7 @@ func (e *Executor) submitCandidate(
 	if dryRun {
 		return placement{viable: true}, true, nil
 	}
-	runnerID := target.RunnerID
+	instanceID := target.InstanceID
 	spec := orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			TradingAccountID: candidate.member.account.TradingAccountID,
@@ -1204,7 +1204,7 @@ func (e *Executor) submitCandidate(
 		ReducePositionOnly: candidate.reducing,
 		Owner: orderdomain.OrderOwner{
 			Type: orderdomain.OwnerTarget, OwnerID: target.TargetID,
-			LogicalAccountID: target.LogicalAccountID, RunnerID: &runnerID,
+			LogicalAccountID: target.LogicalAccountID, InstanceID: &instanceID,
 		},
 		PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
 	}
@@ -1420,9 +1420,8 @@ func (e *Executor) pauseLogicalAccount(
 		_, err := tx.PauseLogicalAccountIf(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
-			"ACTIVE",
-			"",
-			store.AutoPauseReason(reason),
+			store.Pause{},
+			store.SystemPause(reason),
 		)
 		return err
 	}); err != nil {

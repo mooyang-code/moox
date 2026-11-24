@@ -26,7 +26,7 @@ func (f *targetFixture) iocChild(t *testing.T, orderID string, quantity, filled 
 func (f *targetFixture) iocChildOn(t *testing.T, accountID, exchangeName, symbol, orderID string, quantity, filled string, attempt int) {
 	t.Helper()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: orderID, TradingAccountID: accountID, LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: orderID, TradingAccountID: accountID, LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: orderID, Exchange: exchangeName, MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: symbol,
 		OrderType: "LIMIT", TimeInForce: "IOC", Side: "BUY", Quantity: quantity, LimitPrice: strPtr("101.5"), ReferencePrice: "100",
 		FilledQuantity: filled, AveragePrice: "100", OwnerType: "TARGET", OwnerID: "target-current", State: "EXPIRED",
@@ -151,7 +151,7 @@ func TestPseudoMarketUnknownResultIsResolvedBeforeReplacing(t *testing.T) {
 	f := swapPolicyFixture(t, pseudoSettings)
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "unknown-ioc", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: "unknown-ioc", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: "unknown-ioc", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "IOC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("101.5"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-current", State: string(orderdomain.SubmitUnknown), SubmittedAt: 1_000, Version: 1,

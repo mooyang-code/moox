@@ -465,7 +465,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		ReferencePriceAt:   value.ReferencePriceAt,
 		ReducePositionOnly: value.ReduceOnly,
 		OwnerType:          value.OwnerType, OwnerId: value.OwnerID,
-		LogicalAccountId: value.LogicalAccountID, RunnerId: value.RunnerID,
+		LogicalAccountId: value.LogicalAccountID, InstanceId: value.InstanceID,
 		State: value.State, Attempt: int32(value.Attempt), FilledQuantity: value.FilledQuantity,
 		AveragePrice: value.AveragePrice, ReservedAsset: value.ReservedAsset,
 		ReservedQuantity:          value.ReservedQuantity,
@@ -530,7 +530,6 @@ func logicalAccountTargetToPB(
 	}
 	return &tradepb.LogicalAccountTarget{
 		TargetId: value.TargetID, LogicalAccountId: value.LogicalAccountID,
-		RunnerId: value.RunnerID, CommandSequence: value.CommandSequence,
 		InstanceId: value.InstanceID, SessionId: value.SessionID, StrategyId: value.StrategyID,
 		BarEndTime: value.BarEndTime, ValidUntil: value.ValidUntil,
 		Targets: targets, Status: value.Status, BlockedTargets: blocked,
