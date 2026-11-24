@@ -21,7 +21,7 @@ for trigger in '采集数据' 'K-line' 'K线' '行情' 'BTC-USDT' 'crypto market
   grep -Fiq "${trigger}" <<<"${description}" || fail "skill description is missing the ${trigger} trigger"
 done
 
-grep -Fq 'loaded `SKILL.md`' "${REFERENCE}" || fail "reference does not derive the wrapper path from the loaded skill"
+grep -Fq '已加载的 `SKILL.md`' "${REFERENCE}" || fail "reference does not derive the wrapper path from the loaded skill"
 grep -Fq '/scripts/data-kline.sh' "${REFERENCE}" || fail "reference does not use the bundled wrapper"
 if grep -Eq '"\$(CLI|CONFIG)"|(^|[[:space:]])moox-cli data skill kline get|/opt/' "${REFERENCE}"; then
   fail "reference still relies on cross-block CLI/config shell variables"
@@ -29,10 +29,10 @@ fi
 meta_assignment="SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'"
 [[ "$(grep -Fxc "${meta_assignment}" "${REFERENCE}")" -ge 4 ]] || fail "each query example must define the SKILL_ROOT metavalue"
 [[ "$(grep -Fxc '"$SKILL_ROOT/scripts/data-kline.sh" \' "${REFERENCE}")" -ge 4 ]] || fail "each query example must invoke the resolved wrapper"
-for summary_field in 'data type' 'exchange' 'symbol' 'interval' 'row count' 'returned time range'; do
+for summary_field in '数据类型' '交易所' '标的' '周期' '行数' '返回的时间范围'; do
   grep -Fq "${summary_field}" "${REFERENCE}" || fail "reference summary is missing ${summary_field}"
 done
-grep -Fq 'Never include Gateway secrets' "${REFERENCE}" || fail "reference does not prohibit credential disclosure"
+grep -Fq '不要包含 Gateway 密钥' "${REFERENCE}" || fail "reference does not prohibit credential disclosure"
 
 SKILL_ROOT="${TEST_ROOT}/install/skills/moox"
 mkdir -p "${SKILL_ROOT}/scripts" "${SKILL_ROOT}/config" "${TEST_ROOT}/path-bin"

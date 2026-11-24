@@ -11,8 +11,8 @@
 
 `metadata.yaml` 的 Space 包含 `stockcn`、`stockhk`、`stockus` 和 `crypto`，都是业务空间；主机快照存在 Monitor 自己的库里，Storage 没有系统空间。
 
-SCF 采集函数的云账号、地域网络与空间在根目录 `moox.toml` 的 `[scf_plan]` 声明；函数数量由 Collector 按标的数与每函数标的数自动计算，每个空间使用独立 namespace。
-发布校验会拒绝包含辅助函数后超过配额的配置。
+SCF 采集函数的云账号、地域网络与空间在根目录 `moox.toml` 的 `[scf_plan]` 声明；函数数量由 Collector 按标的数与每函数标的数自动计算，每个空间使用独立 namespace；
+一个 namespace 最多放 50 个函数，超过后依次分到 `<namespace>-2`、`-3`。
 
 初始化可重复执行。已有资源与声明一致时报告 unchanged；契约不一致时失败，不覆盖已有
 配置和数据。Dataset 建好即为 active，可以直接写入，
@@ -32,8 +32,9 @@ moox-cli setup init \
 `metadata.yaml` 创建 Admin 业务空间并完成 Storage 元数据初始化；Monitor 的
 `dataset-health-policy.yaml` 和 Collector 的 `collection-tasks.yaml` 由打包与原生安装流程放入各组件配置目录，分别在模块启动时读取。
 
-启用 SCF 时，每个采集地域都要有一台同地域、带私网地址、写了 `external_entry = true` 的入口主机；函数在该地域 VPC 里经
-它的外部入口私网地址写入，规则见 `skills/moox/references/private-network.md`。
+启用 SCF 时，采集地域分两种：vpc 地域要有一台同地域、带私网地址、写了 `external_entry = true` 的入口主机，函数在该地域 VPC 里经
+它的外部入口私网地址写入；没有 MooX 主机的地域写 `network = "public"` 和 `entry_host`，函数不绑 VPC，经公网连入口主机的 11004。
+规则见 `skills/moox/references/private-network.md`。
 
 默认因子任务在 `factor-tasks.yaml`：`tasks` 声明因子任务（`id`、`name`、`space_id`、`source_dataset_id`、`freq`），
 任务的成员用内嵌的 `members` 写：`{factor: ema, params: {span: 20, warmup: 50000}}` 是固定成员，`{factor: ma, var: true}` 是可变成员（由关联的策略逐期提交参数）；

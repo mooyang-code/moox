@@ -2,10 +2,10 @@ package command
 
 const (
 	walletTransferReason    = "人工结束一条钱包划转记录要先到交易所核对划转记录再判断到账与否，Agent 不代用户判断；用户确认后用 gateway call 调用"
-	secretWriteReason       = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
+	secretWriteReason       = "密钥的新建、修改、启停与删除由用户在管理台“系统设置 › 密钥管理”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
 	sshReason               = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
 	authReason              = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
-	cloudAccountWriteReason = "云账号的新建与修改在管理台运行状态页“函数”区的“云账号”对话框做（初始账号由 setup init 登记）；密钥本身在“设置 › 密钥”"
+	cloudAccountWriteReason = "云账号的新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里“函数”区的“云账号”对话框做（初始账号由 setup init 登记）；密钥本身在“系统设置 › 密钥管理”"
 	spaceDupReason          = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
 )
 
@@ -118,7 +118,7 @@ var consoleOnly = map[string]string{
 
 	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「事件中心」的“订阅”页签新建，密钥只在那里显示一次，不经过 Agent",
 
-	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「监控 › 告警渠道」做；初始渠道由 setup init 在 Monitor 还没有渠道时写入一次",
+	"trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel": "告警渠道的增删改在管理台「资源与运维 › 监控告警」的“消息通知设置”做；初始渠道由 setup init 在 Monitor 还没有渠道时写入一次",
 
 	"trpc.moox.ops.SecretMgr/CreateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":       secretWriteReason,
@@ -133,5 +133,5 @@ var consoleOnly = map[string]string{
 	"trpc.moox.storage.Metadata/ListSpaces":  spaceDupReason,
 
 	"trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer": walletTransferReason,
-	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":     "解除下架禁止请用户在管理台交易页的下架名单里查看与解除（事件中心取消执行也会解除）：解除后策略会恢复买入，Agent 不代用户解除",
+	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":     "解除下架禁止请用户在管理台“交易管理 › 下架名单”里查看与解除（事件中心取消执行也会解除）：解除后策略会恢复买入，Agent 不代用户解除",
 }

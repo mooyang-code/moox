@@ -815,7 +815,7 @@ type orderPayload struct {
 // ListOpenOrders 列出本市场全部挂单。统一账户现货走 /papi/v1/margin/openOrders 且不传 symbol：
 // 官方文档（SDK 里转录的原文）写明 “If symbol is not sent, order records for all symbols are returned”，
 // 同时说明不传时限频按“当前交易中的标的数量”计权重（传 symbol 时权重 5）。SDK 的参数校验把 symbol 标成必填，
-// 与文档说明不一致，这里以文档说明为准；真实行为未实测，V3 小额实测要核对这个接口，必填的话改为按相关标的逐个查询。
+// 与文档说明不一致，这里以文档说明为准；真实行为未实测，实盘小额验证时要核对这个接口，必填的话改为按相关标的逐个查询。
 // 不传 symbol 的全量查询只在会话启动和手动全量同步时用；周期对账走 PortfolioMargin.ListOpenOrdersForSymbols，按标的逐个查。
 func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
 	return a.listOpenOrders(ctx, nil)

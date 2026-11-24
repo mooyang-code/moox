@@ -1,6 +1,6 @@
 # Host Agent 运维
 
-Host Agent 是只支持 Linux `amd64`/`arm64` 的主机服务。它只采集 CPU、内存、文件系统、磁盘和网络，使用共享 JetStream 客户端把 `HostMetric` 发布到 EventBus；不保存 SQLite、outbox 或重放队列。
+Host Agent 是主机服务：程序只能在 Linux `amd64`、`arm64` 上运行，其他平台启动即报错；发布包只提供 linux/amd64，arm64 主机要自己编译后用 `setup deploy --binary-dir` 部署（见 [install.md](install.md)）。它只采集 CPU、内存、文件系统、磁盘和网络，使用共享 JetStream 客户端把 `HostMetric` 发布到 EventBus；不保存 SQLite、outbox 或重放队列。
 
 ## 安装
 

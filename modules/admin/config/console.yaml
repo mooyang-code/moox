@@ -18,7 +18,7 @@ console:
   # /api/admin/{console_name}/{method} 从共享 servicecatalog 解析服务和 console ACL。
   # Admin 自身服务进程内调用；其余服务由 gatewayclient 透传原始 JSON。
   # 目录直接读取 Admin 的主机/部署表，启动不依赖本机网关。
-  # console 签名密钥读取已初始化的加密数据库，不在此配置密钥。
+  # console 调用用控制机的主机签名私钥签名：MOOX_ADMIN_HOST_KEY_FILE，没设时是 Admin 主密钥同目录的 host.key；不在此配置密钥。
   # 私有 CA 使用 MOOX_ADMIN_PKI_DIR/ca.crt；默认位于 Admin 主密钥同目录的 pki/。
   # 浏览器入口（HTTPS 9527）不在这个文件里配置：控制机地址取 MOOX_ADMIN_WEB_ADDRESS，监听地址取 MOOX_ADMIN_WEB_LISTEN
   # （默认 0.0.0.0:9527）；网页证书由 Admin 用上面的 MooX CA 签，放在数据目录的 web-cert/。

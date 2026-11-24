@@ -7,7 +7,7 @@
 #     build    构建纯 Go 的 Linux 二进制（交叉编译）：git、固定版本的 Go
 #     cgo      build + 构建 Storage（DuckDB，需要 CGO）：Docker 在运行
 #     web      build + 构建前端（内嵌进 admin）：Node、pnpm
-#     verify   build + 推送前本地预检（scripts/ci/local-verify.sh）：make、rg、python3、jq、rsync、Node、pnpm
+#     verify   build + 推送前本地预检（scripts/ci/local-verify.sh）：make、rg、python3、jq、rsync、Node、pnpm、Rust 工具链
 #     release  cgo + 发布到线上主机：ssh、scp
 #     all      以上全部
 #   --json     输出 JSON，方便 Agent 解析；退出码仍表示有没有缺项。
@@ -61,6 +61,9 @@ ARCH="$(detect_arch)"
 GO_WANT="$(tr -d '[:space:]' < "${ROOT}/.go-version")"
 GO_HOME_BIN="${HOME}/.local/go${GO_WANT}/bin"
 NODE_RANGE='^20.19.0 || ^22.13.0 || >=24.0.0'
+# 固定版本的 Rust：make test-rust 在 sdk/rust 下运行，cargo 按那里的 rust-toolchain.toml 选工具链。
+RUST_WANT="$(sed -n 's/^channel *= *"\(.*\)".*/\1/p' "${ROOT}/sdk/rust/rust-toolchain.toml")"
+RUST_TARGET=wasm32-unknown-unknown
 
 # ---------------------------------------------------------------- 安装建议
 # install_hint <工具>：按本机包管理器给出安装命令；没有把握的写成指引而不是编造命令。
@@ -98,6 +101,9 @@ install_hint() {
         *) printf 'sudo systemctl enable --now docker；当前用户要在 docker 组里（sudo usermod -aG docker "$USER" 后重新登录）' ;;
       esac ;;
     ssh) case "${PM}" in apt-get) printf 'sudo apt-get install -y openssh-client' ;; dnf|yum) printf 'sudo %s install -y openssh-clients' "${PM}" ;; winget) printf 'Windows 自带 OpenSSH 客户端；Git Bash 里也有 ssh/scp' ;; *) printf '安装 OpenSSH 客户端' ;; esac ;;
+    rust)
+      case "${PM}" in brew) printf 'brew install rustup && export PATH="$(brew --prefix)/opt/rustup/bin:$PATH" && %s   # Homebrew 的 rustup 不进 PATH，这一句 export 要写进 shell 配置' "$(install_hint rust-toolchain)" ;; winget) printf 'winget install --id Rustlang.Rustup -e，然后 %s' "$(install_hint rust-toolchain)" ;; *) printf '先装 rustup（https://rustup.rs），然后 %s' "$(install_hint rust-toolchain)" ;; esac ;;
+    rust-toolchain) printf 'rustup toolchain install %s --profile minimal --component clippy --component rustfmt --target %s' "${RUST_WANT}" "${RUST_TARGET}" ;;
     sha256) printf 'macOS 自带 shasum；Linux 的 coreutils 自带 sha256sum' ;;
     *) printf '' ;;
   esac
@@ -195,6 +201,28 @@ check_rg() {
   else record rg "ripgrep" missing "" "PATH 里有可执行文件 rg（shell 别名不算）" "$(install_hint rg)"; fi
 }
 
+check_rust() {
+  local label="Rust ${RUST_WANT}" need="rustc、cargo ${RUST_WANT}，带 ${RUST_TARGET} 目标（sdk/rust/rust-toolchain.toml）" found sysroot
+  local -a rustc_cmd=(rustc)
+  if ! has cargo || ! has rustc; then record rust "${label}" missing "" "${need}" "$(install_hint rust)"; return; fi
+  if has rustup; then
+    # cargo、rustc 是 rustup 的代理；只看固定版本装没装，不在 sdk/rust 下直接调用（那样会触发下载）。
+    if ! rustup toolchain list 2>/dev/null | grep -q "^${RUST_WANT}-"; then
+      record rust "${label}" outdated "rustup 里没有工具链 ${RUST_WANT}" "${need}" "$(install_hint rust-toolchain)"
+      return
+    fi
+    rustc_cmd=(rustup run "${RUST_WANT}" rustc)
+  fi
+  found="$("${rustc_cmd[@]}" --version 2>/dev/null | head -n 1 || true)"
+  if [[ "${found} " != "rustc ${RUST_WANT} "* ]]; then
+    record rust "${label}" outdated "${found:-未知}" "${need}" "$(install_hint rust)"
+    return
+  fi
+  sysroot="$("${rustc_cmd[@]}" --print sysroot 2>/dev/null || true)"
+  if [[ -d "${sysroot}/lib/rustlib/${RUST_TARGET}" ]]; then record rust "${label}" ok "${found}" "${need}" ""
+  else record rust "${label}" outdated "${found}，没有 ${RUST_TARGET} 目标" "${need}" "$(install_hint rust-toolchain)"; fi
+}
+
 check_docker() {
   if ! has docker; then
     record docker "Docker" missing "" "docker 命令" "$(install_hint docker)"
@@ -237,6 +265,7 @@ if wants verify; then
   simple_tool python3 "Python 3" python3 'python3 --version'
   simple_tool jq "jq" jq 'jq --version'
   simple_tool rsync "rsync" rsync 'rsync --version'
+  check_rust
 fi
 if wants release; then
   simple_tool ssh "ssh" ssh 'ssh -V 2>&1'

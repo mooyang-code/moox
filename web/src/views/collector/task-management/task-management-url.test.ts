@@ -55,11 +55,4 @@ describe("采集任务的页签容器", () => {
     await flushPromises();
     expect(ctx.route.query).toEqual({ detail: "t1" });
   });
-
-  it("执行器页签已删除，旧链接 ?tab=executors 打开运行状态", async () => {
-    const wrapper = setup({ tab: "executors" });
-    await flushPromises();
-    expect(wrapper.text()).toContain("status");
-    expect(wrapper.text()).not.toContain("tasks");
-  });
 });

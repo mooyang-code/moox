@@ -15,4 +15,6 @@ go test -count=1 ./modules/strategy/...
 
 ## 配置
 
-`config/app.yaml`（Trade 接线、EventBus）、`config/trpc_go.yaml`；schema 在 `schema/`。
+`config/app.yaml`（EventBus、`gateway_client`、访问 Trade、FactorMgr 与 Storage 的超时、结果与回放的保留期、历史回放参数）、`config/trpc_go.yaml`；schema 在 `schema/`。
+
+StrategyMgr 使用 loopback 原生 tRPC 11430，经主机网关调用；健康端口 11431。访问 Storage、FactorMgr 与 Trade 统一经本机主机网关，以 `strategy` 的身份签名。历史回放（`replay`）用同一套 DSL 逐根重算，因子值由因子引擎的 EngineControl 提供。

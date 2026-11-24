@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -44,13 +43,6 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		log.ErrorContextf(ctx, "初始化 monitor 数据库失败: %v", err)
 		return nil, err
 	}
-	// 部署配置里的推送地址只在首次建库时写入；之后渠道由监控页增删，删光了重启也不会自动加回来。
-	channelsExisted, err := mgr.TableExists(domain.NotificationChannel{}.TableName())
-	if err != nil {
-		_ = mgr.Close()
-		log.ErrorContextf(ctx, "检查 monitor 数据库失败: %v", err)
-		return nil, err
-	}
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		_ = mgr.Close()
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
@@ -58,13 +50,6 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	}
 	// Monitor 自己的重要日志直接写库，不绕 EventBus；要赶在创建指标上报之前接上（先接入者生效）。
 	attachOwnLogs(mgr.Repositories().Logs)
-	if !channelsExisted {
-		if err := seedNotificationChannel(ctx, mgr.Repositories()); err != nil {
-			_ = mgr.Close()
-			log.ErrorContextf(ctx, "写入初始通知渠道失败: %v", err)
-			return nil, err
-		}
-	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
 	runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "monitor gateway directory refresh: %v", err) })

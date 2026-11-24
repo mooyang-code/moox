@@ -153,7 +153,7 @@ func init() {
 
 		rpcSpec{Path: []string{"data", "records", "search"}, Short: "检索记录型 View（Bleve）的数据", Service: dataViewSvc, Method: "SearchRecordRows", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("view-id", "view_id", "View ID"), strFlag("text-query", "text_query", "全文检索语句"), listFlag("column", "column_names", "返回的列，可重复"), jsonFlag("filter", "filter", "过滤条件 JSON")}},
-		rpcSpec{Path: []string{"data", "view", "query"}, Short: "按 View 查询时序行（管理台“数据浏览”用的接口；selectors、过滤与排序写在 --data 或对应参数里）", Service: dataViewSvc, Method: "QueryTimeSeriesRows", SpaceField: "space_id", Page: rpcPageSize,
+		rpcSpec{Path: []string{"data", "view", "query"}, Short: "按 View 查询时序行（管理台看采集结果、因子结果用的接口；selectors、过滤与排序写在 --data 或对应参数里）", Service: dataViewSvc, Method: "QueryTimeSeriesRows", SpaceField: "space_id", Page: rpcPageSize,
 			Flags: []rpcFlag{reqFlag("view-id", "view_id", "View ID"), jsonFlag("selectors", "selectors", `序列选择器 JSON，如 '[{"space_id":"crypto","dataset_id":"d","subject_id":"BTC-USDT","freq":"1m"}]'`),
 				timeFlag("from", "time_range.start_time", "起点（RFC3339，含）", false), timeFlag("to", "time_range.end_time", "终点（RFC3339，不含）", false), listFlag("column", "column_names", "返回的列，可重复"),
 				jsonFlag("filter", "filter", "过滤条件 JSON"), jsonFlag("sorts", "sorts", `排序 JSON，如 '[{"field_name":"data_time","desc":true}]'`), intFlag("limit", "limit", "最多返回多少行")}},

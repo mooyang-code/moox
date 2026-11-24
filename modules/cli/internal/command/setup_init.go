@@ -658,7 +658,7 @@ func describeSetupBrowserTrust(snapshot *setupSnapshot) *setupBrowserTrustSummar
 		CAPath:      caPath,
 		Fingerprint: tlstrust.Fingerprint(caPath),
 		Note:        "这一步要这台电脑的管理员授权，Agent 做不了，请在自己的终端运行 moox-cli setup trust-browser。不做时管理台能打开，但浏览器有安全提示",
-		OtherMachines: fmt.Sprintf("换电脑或迁移机器：打开 https://%s:9527 的登录页或“秘钥管理”页，点“下载并安装根证书”，下载安装包后核对指纹，"+
+		OtherMachines: fmt.Sprintf("换电脑或迁移机器：打开 https://%s:9527 的登录页或“系统设置 › 密钥管理”页，点“下载并安装根证书”，下载安装包后核对指纹，"+
 			"向运维或已信任的机器取得根证书指纹，按安装包里 AGENT-INSTALL.md 的“直接安装”用系统命令安装（可把该文件交给 Agent，由它先向你确认指纹）；"+
 			"不要不加检查地运行包内脚本。有仓库、moox.toml 和控制机 SSH 权限的机器更稳妥：先用可信渠道拿到 SSH 主机指纹，运行 "+
 			"moox-cli setup trust-host --file moox.toml --host control --fingerprint <指纹>，再运行 moox-cli setup trust-browser --file moox.toml", host.Address),

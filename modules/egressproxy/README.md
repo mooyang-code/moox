@@ -2,7 +2,7 @@
 
 `moox-egress-proxy` 提供 `trpc.moox.egress.Proxy`，原生 tRPC 仅监听 loopback 11440。主机网关按组件目录验证内部签名与方法权限，仅允许 Collector 调用；无需额外公网监听或代理凭据。
 
-`Do` 只发送 HTTPS GET/POST。`config/app.yaml` 的 `domains` 支持精确 DNS 名和 `*.` 子域后缀，后缀不包含根域。路径与已编码查询分别传入，不允许地址、端口或 URL 覆盖目标。只转发 Accept、Accept-Language、Content-Type、User-Agent；不转发 Cookie、Authorization 或内部元数据，也不读取系统代理环境。解析后直接连接经过检查的公网 IP，保留原域名的 TLS 验证与 SNI，不跟随重定向。
+`Do` 只发送 HTTPS GET/POST。`config/app.yaml` 的 `domains` 支持精确 DNS 名和 `*.` 子域后缀，后缀不包含根域。路径与已编码查询分别传入，不允许地址、端口或 URL 覆盖目标。只转发 Accept、Accept-Language、Content-Type、User-Agent，另对 `api.binance.com` 放行 `X-MBX-APIKEY`（币安行情数据类接口要的只读 Key 标识，别的域名带了也丢弃）；不转发 Cookie、Authorization 或内部元数据，也不读取系统代理环境。解析后直接连接经过检查的公网 IP，保留原域名的 TLS 验证与 SNI，不跟随重定向。
 
 上游状态码（包括 429/5xx）原样返回，`ret_info` 只报告代理错误。响应支持 gzip、deflate、Brotli 解压，解压后最多 32 MiB；正文不做业务层压缩，大响应由 tRPC 帧层统一压缩；请求正文最多 1 MiB，查询与路径总计最多 16 KiB，头部最多 32 KiB。返回内容类型、缓存信息、Retry-After 与 Binance 用量头，去掉编码、长度、Cookie 和逐跳头。组件目录预留 48 MiB RPC 报文预算，以容纳 32 MiB 正文的 PB/JSON 包装。共享原生传输在启动前设置 64 MiB 帧上限，方法级目录限制仍然生效。单请求预算最多 60 秒，调用方取消可提前结束。
 

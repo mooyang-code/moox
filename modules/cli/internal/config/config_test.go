@@ -73,3 +73,11 @@ func TestCLIConfigRejectsRemovedRPCFields(t *testing.T) {
 		})
 	}
 }
+
+// 仓库自带的 cli.yaml 必须能按当前字段解析（未知字段会让 doctor 直接报错）。
+func TestShippedCLIConfigParses(t *testing.T) {
+	t.Setenv("MOOX_CONFIG", filepath.Join("..", "..", "config", "cli.yaml"))
+	cfg, err := LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "config/setup/dataset-health-policy.yaml", cfg.Doctor.DatasetHealthPolicyPath)
+}

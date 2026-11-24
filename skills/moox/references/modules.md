@@ -25,7 +25,7 @@
 
 ## 事件中心
 
-- **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓；处理器随交易计划 T27 之后上线）。管理台叫「事件中心」。
+- **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓）。管理台叫「事件中心」。
 - **在哪**：组件 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
 - **常用**：
 
@@ -38,7 +38,7 @@
 
 - 手工登记下架的后果：登记后立即禁止买入，到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。管理台「事件中心」“事件”页签里“标的即将下架”一行的“手工登记”效果相同。
 
-- 库文件没有迁移：事件中心启动时发现表结构是旧的（报“数据库是旧版本的结构”）就拒绝启动，要先停服务、删库文件（`data/moox_callback_dispatcher.db*`）再启动，和用户确认后再做。
+- 库文件没有迁移：事件中心启动时发现表结构是旧的（报“数据库是旧版本的结构”）就拒绝启动，要先停服务、删库文件（部署根下的 `data/callback-dispatcher/moox_callback_dispatcher.db*`）再启动，和用户确认后再做。
 - 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`event_center_attention`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 采集
@@ -72,7 +72,7 @@
 - 云函数由 Collector 的对账器按采集计划自动建、自动修，不需要手工创建或部署：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，落后的函数自动升级）、
   `list`（现场读回计划里的函数与期望比对，`--drift` 只看不一致的；计划外的同前缀函数单列，定时器已被停掉）、`delete`（按名字或前缀删函数，默认只预览；`--namespace`、`--region` 只删这个命名空间、地域里的，删旧命名空间里的同名副本时必带，否则在用的同名函数也会被删；计划里的函数删掉后下一轮重建）、
   `probe-egress`（取各采集函数此刻的公网出口 IP）。
-- 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台运行状态页的“云账号”对话框，初始账号由 `setup init` 登记。
+- 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里的“云账号”对话框，初始账号由 `setup init` 登记。
   换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `setup inspect-scf` 查出来再到腾讯云控制台手工删。
 - 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
 - **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `collector_attention:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
@@ -88,7 +88,7 @@
   - 维护：`storage repair-view|delete-view`
     （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）。
 - **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间。
-- **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重装对应单元才生效。
+- **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重新部署对应主机才生效（`setup deploy --host <主机>`）。
 - 协议与命名规则：[`protocol.md`](protocol.md)。
 
 ## 因子
@@ -111,7 +111,7 @@
 - **做什么**：声明式 DSL（`rank` 规则、止损止盈），每个周期在因子结果上求值，输出截面目标权重；可历史回放。
 - **在哪**：管理台机。
 - **常用**：写与校验 DSL、创建定义与实例按 [`strategy-dsl.md`](strategy-dsl.md)；
-  `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、
+  `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable|confirm|delete`、`strategy result list|show`、`strategy target list`、
   `strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
   迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
 - **市场模式**：DSL 顶层 `market` 的 `select`（从现货、永续还是两边选币）与 `prefer`（两边都能交易时优先在哪个市场下单）只有 5 种合法组合，
@@ -140,15 +140,15 @@
 ./bin/moox-cli trade logical pause|resume --logical-account-id <ID> --yes   # 暂停、恢复组合的自动执行
 ```
 
-- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台交易页的下架名单里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
+- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台“交易管理 › 下架名单”里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
 - 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`trade_attention`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控
 
 - **做什么**：组件健康、数据新鲜度、主机资源、告警推送（企业微信、飞书、钉钉、通用 Webhook）。管理台首页的“需要处理”来自这里。
 - **常用**：`./bin/moox-cli doctor alerts`（[`monitor-attention.md`](monitor-attention.md)）、`doctor bootstrap`、`doctor diagnose`；
-  `monitor health|arrival|hosts|host-metrics` 看总览、数据到达历史与主机资源曲线；`monitor mute|unmute|mute-status` 临时屏蔽推送；
-  告警渠道以管理台「监控 › 告警渠道」为准；初始渠道由 `setup init` 在 Monitor 还没有渠道时从 `moox.secrets.toml` 写入一次。
+  `monitor health|arrival|hosts|host-metrics` 看总览、数据到达历史与主机资源曲线；`monitor logs` 看各服务 Error 及以上的重要日志；`monitor mute|unmute|mute-status` 临时屏蔽推送；
+  告警渠道以管理台「资源与运维 › 监控告警」的“消息通知设置”为准；初始渠道由 `setup init` 在 Monitor 还没有渠道时从 `moox.secrets.toml` 写入一次。
 
 ## 网关与接入
 
@@ -160,7 +160,7 @@
 
 ## 主机与运维
 
-- 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host <主机>`。
+- 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
 - 部署、升级与回滚：[`source-deploy.md`](source-deploy.md)；主机代理：[`host-agent.md`](host-agent.md)。
 - 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
@@ -204,5 +204,5 @@ worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺�
 ## 空间、密钥与配置
 
 - 空间：`space list|show|create|update|delete`；新空间还要在 Storage 建元数据（数据来源、数据集、字段），用 `metadata apply` 从 `config/setup/metadata.yaml` 的写法导入。
-- 密钥（交易所、云账户等）：请用户在管理台“设置 › 密钥”自己填写，Agent 只用 `secret list|show` 看清单（值已打码）。`gateway call` 拒绝返回明文的方法。
+- 密钥（交易所、云账户等）：请用户在管理台“系统设置 › 密钥管理”自己填写，Agent 只用 `secret list|show` 看清单（值已打码）。`gateway call` 拒绝返回明文的方法。
 - `moox.toml`：Agent 用 `config get` / `config set` 读写（[`config-access.md`](config-access.md)），不直接读文件；用户要看或改时运行 `config edit`，让用户在自己的浏览器里操作；`config backup` 备份到管理台，换电脑 `config restore`。

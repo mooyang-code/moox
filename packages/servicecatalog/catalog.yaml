@@ -538,7 +538,7 @@ components:
           - name: ProbeFunctionEgress
             operators: [moox-cli]
             timeout_ms: 120000
-          # 模块生命周期（设计 3.7）：管理台与命令行都能读；暂停、恢复、放行只给命令行（moox-cli lifecycle、system）。
+          # 模块生命周期：管理台与命令行都能读；暂停、恢复、放行只给命令行（moox-cli lifecycle、system）。
           # 读追赶进度（system resume 每次轮询都带 refresh_catchup）要对每个空间把整个暂停区间跑一遍 K 线核对，
           # 与 CheckKline、SubmitKlineBackfill 同一量级，给 330 秒；暂停要等 SCF 定时器停用确认与在途补采分块结束（最长 5 分钟）。
           - name: GetLifecycle
@@ -722,7 +722,7 @@ components:
           - name: GetUdf
             read_only: true
           - name: ActivateUdf
-          # 模块生命周期（设计 3.7）：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module factor-mgr）。
+          # 模块生命周期：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module factor-mgr）。
           - name: GetLifecycle
             read_only: true
           - name: ControlLifecycle
@@ -832,7 +832,7 @@ components:
             operators: [moox-cli]
           - name: ClearArchiveUnrecoverable
             operators: [moox-cli]
-          # 模块生命周期（设计 3.7）：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module archive-mgr）。
+          # 模块生命周期：不参与系统暂停；管理台与命令行都能读，暂停、恢复只给命令行（moox-cli lifecycle --module archive-mgr）。
           - name: GetLifecycle
             read_only: true
           - name: ControlLifecycle
@@ -936,7 +936,7 @@ components:
           - name: GetStrategyDisplaySettings
             read_only: true
           - name: SetStrategyDisplaySettings
-          # 模块生命周期（设计 3.7）：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途求值结束、目标发布完（最长 30 秒）。
+          # 模块生命周期：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途求值结束、目标发布完（最长 30 秒）。
           - name: GetLifecycle
             read_only: true
             timeout_ms: 60000
@@ -1370,7 +1370,7 @@ components:
             timeout_ms: 15000
           - name: ListOperatorActions
             read_only: true
-          # 模块生命周期（设计 3.7）：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途订单提交结束（最长 30 秒）。
+          # 模块生命周期：管理台与命令行都能读；暂停、恢复、放行只给命令行。暂停要等在途订单提交结束（最长 30 秒）。
           - name: GetLifecycle
             read_only: true
             timeout_ms: 60000

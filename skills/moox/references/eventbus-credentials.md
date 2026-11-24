@@ -79,7 +79,7 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 - 每台主机的 `secrets/moox-ca.crt` 的 SHA-256 与控制机的根证书一致。
 - Host Agent：Monitor 收到新样本，日志没有 `Authorization Violation` / `certificate signature failure`。
 - EventBus `ss`：`FIN-WAIT-2` 不因某一客户端 IP 持续堆积。
-- Storage View：日志里没有 `delivery ack failed: nats: connection closed`。
+- Storage View（只向 EventBus 发布就绪事件，不消费）：日志里没有 `View 就绪事件发布器重连 EventBus 失败`。
 - Monitor：Host snapshot 与 View 水位在轮换后继续前进。
 
 ## 常见借口
@@ -89,8 +89,8 @@ Collector 的发布权限也会随版本多一个主题（`moox.event.collector.
 | 只换了二进制 | 手工换二进制不会带上新的 token，要 `setup deploy` |
 | control 已经 export | 那只是导出；副本还在别的机器 |
 | 上次能连，证书不用动 | EventBus 重启后用磁盘上当前的主机证书；客户端手里的根证书不是签它的那张（控制机重装过）就会 `signature failure` |
-| Host Agent 不是这次发布目标 | 它仍连同一 EventBus；漏同步会泄漏 TCP 并拖死 View |
-| 代码里已经有 trackingDialer | 那只能减轻泄漏，不能代替正确的根证书和 token |
+| Host Agent 不是这次发布目标 | 它仍连同一 EventBus；漏同步的那台连不上、反复重连或退出，主机指标断报，Monitor 的主机快照不再更新 |
+| 代码里已经有 trackingDialer | 它只是让每个 JetStream 客户端重连前先关掉上一条 TCP 连接，EventBus 一侧不再堆积 `FIN-WAIT-2`；凭据不对的客户端照样连不上 |
 
 ## 禁止
 

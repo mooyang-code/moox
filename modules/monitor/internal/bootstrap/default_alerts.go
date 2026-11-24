@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
 
@@ -114,26 +112,4 @@ func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories)
 		}
 	}
 	return nil, fmt.Errorf("default alert checks exceed %d pages", maxDefaultCheckPages)
-}
-
-// seedNotificationChannel 在首次建库时按部署配置（MOOX_NOTIFICATION_*）写入第一个推送渠道；没有配置推送地址时不写入。
-// MOOX_NOTIFICATION_SECRET 选填，企业微信不使用。
-func seedNotificationChannel(ctx context.Context, repositories *store.Repositories) error {
-	if repositories == nil || repositories.Notifications == nil {
-		return fmt.Errorf("notification repository is unavailable")
-	}
-	typ := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_CHANNEL_TYPE"))
-	if typ == "" {
-		typ = string(notification.ChannelTypeWeCom)
-	}
-	url := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_WEBHOOK_URL"))
-	if url == "" {
-		return nil
-	}
-	secret := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_SECRET"))
-	if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url, Secret: secret}); err != nil {
-		return fmt.Errorf("notification channel: %w", err)
-	}
-	_, err := repositories.Notifications.Add(ctx, typ, url, secret)
-	return err
 }

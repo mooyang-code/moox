@@ -39,7 +39,7 @@ var (
 var collectorFunctionListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "列出空间的采集函数与补采函数：计划里应有的内容、云上读回的状态，计划外的函数单列（--drift 只看不一致的）",
-	Long: "Collector 现场读回空间计划里的每个函数（定时采集函数与补采函数），与期望比对：是否存在、定时器、受管环境、代码包是否最新。" +
+	Long: "Collector 现场读回空间计划里的每个函数（定时采集函数与补采函数），与期望比对：是否存在、定时器、标的分配、代码包是否最新。" +
 		"符合本空间命名格式但不在计划里的函数列在 unplanned 里：对账器已停掉它们的定时器，不会自动删除，要清理用 collector function delete。" +
 		"读回要逐个调腾讯云，函数多时需要一两分钟。",
 	Args: cobra.NoArgs,
@@ -77,7 +77,7 @@ func init() {
 		cmd.Flags().StringVar(&flags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 		cmd.Flags().StringVar(&flags.SpaceID, "space-id", "", "空间 ID")
 	}
-	collectorFunctionListCmd.Flags().BoolVar(&collectorFunctionListFlags.Drift, "drift", false, "只列出与期望不一致的函数（没读到、不存在、定时器或环境不一致、代码包落后）")
+	collectorFunctionListCmd.Flags().BoolVar(&collectorFunctionListFlags.Drift, "drift", false, "只列出与期望不一致的函数（没读到、不存在、定时器或标的分配不一致、代码包落后）")
 	deleteFlags := collectorFunctionDeleteCmd.Flags()
 	deleteFlags.StringArrayVar(&collectorFunctionDeleteFlags.Names, "name", nil, "要删的函数名，可重复")
 	deleteFlags.StringVar(&collectorFunctionDeleteFlags.Prefix, "prefix", "", "按函数名前缀删（必须是本空间的前缀）")

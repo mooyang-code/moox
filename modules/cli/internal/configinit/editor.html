@@ -147,7 +147,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       <div class="block"><h2>账号与通知</h2><table class="kv" id="accounts"></table></div>
       <div class="block" id="xkeys-block" hidden><h2>交易所密钥</h2>
         <table id="xkeys"><thead><tr><th>名称</th><th>交易所 · 环境</th><th>固定 ID</th><th>API Key</th><th>Secret Key</th><th>Passphrase</th></tr></thead><tbody></tbody></table>
-        <p class="desc">写进密钥管理（setup init）之后以管理台为准：这里改了不会覆盖已有的密钥，要换密钥请到管理台「设置 › 秘钥管理」。部署完成后在海外机上检测：<span class="mono">moox-cli trade inspect-credential</span>。</p>
+        <p class="desc">写进密钥管理（setup init）之后以管理台为准：这里改了不会覆盖已有的密钥，要换密钥请到管理台「系统设置 › 密钥管理」。部署完成后在海外机上检测：<span class="mono">moox-cli trade inspect-credential</span>。</p>
       </div>
     </section>
 
@@ -372,7 +372,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       field('对象存储地址', ctl.os.endpoint, '主机名，可带端口，不写 https://'), field('地域', ctl.os.region, 'COS 填地域，R2 填 auto'),
       field('桶名', ctl.os.bucket, 'COS 的桶名带 APPID'), field('对象键前缀', ctl.os.prefix, '权限策略按它限定，以 / 结尾'),
       field('地址风格', ctl.os.urlStyle, 'COS 新建的桶只接受虚拟主机风格'), field('协议', ctl.os.useTLS),
-      field('存储类型', ctl.os.storageClass, '例如 STANDARD_IA（低频）'), field('密钥 secret_id', ctl.os.secretID, '管理台“设置 › 密钥”里那条的 secret_id，不是密钥值')
+      field('存储类型', ctl.os.storageClass, '例如 STANDARD_IA（低频）'), field('密钥 secret_id', ctl.os.secretID, '管理台“系统设置 › 密钥管理”里那条的 secret_id，不是密钥值')
     ]);
     var syncOS = function () { osFields.hidden = !ctl.os.enabled.checked; };
     ctl.os.enabled.addEventListener('change', syncOS);

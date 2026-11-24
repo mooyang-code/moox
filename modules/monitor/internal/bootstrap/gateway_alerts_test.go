@@ -17,7 +17,6 @@ import (
 )
 
 func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
@@ -76,7 +75,6 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 
 // 旧版本每台主机三条网关检查（心跳、实例冲突、路由同步）合并成一条后，旧检查及其规则必须被停用并删除。
 func TestGatewayAlertsMigrateLegacyPerSignalChecks(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })

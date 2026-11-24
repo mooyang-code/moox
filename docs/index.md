@@ -3,7 +3,7 @@ home: true
 title: MooX
 hero:
   name: MooX
-  text: 面向个人的一站式量化平台
+  text: 自托管的分布式实时量化平台
   tagline: 行情采集、数据存储、因子计算、策略选股、交易执行与全链路监控
   image:
     src: /logo.svg
@@ -23,7 +23,7 @@ hero:
       link: https://github.com/mooyang-code/moox
 
 features:
-  - title: 云函数采集
+  - title: 行情采集
     details: Collector 下发采集计划，执行端通过 WS 推送或 SCF Timer 拉取收盘 K 线并提交到 Storage，缺口由检查与补采修复。
   - title: 字段级事实存储
     details: storage-primary 以 Pebble 保存字段级事实并记录变更日志；DuckDB / Bleve View 跟随变更日志，是可重建的查询索引。

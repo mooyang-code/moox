@@ -25,25 +25,6 @@ func openNotificationTestDB(t *testing.T) *Store {
 	return mgr
 }
 
-// TableExists 让启动流程分辨首次建库：只有首次建库才写入部署配置里的推送渠道。
-func TestTableExistsDistinguishesFreshDatabase(t *testing.T) {
-	mgr, err := Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = mgr.Close() })
-	table := domain.NotificationChannel{}.TableName()
-	if exists, err := mgr.TableExists(table); err != nil || exists {
-		t.Fatalf("fresh database reports %s exists=%t err=%v", table, exists, err)
-	}
-	if err := mgr.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	if exists, err := mgr.TableExists(table); err != nil || !exists {
-		t.Fatalf("after schema %s exists=%t err=%v", table, exists, err)
-	}
-}
-
 func TestNotificationChannelsAddListDelete(t *testing.T) {
 	repos := openNotificationTestDB(t).Repositories()
 	ctx := t.Context()

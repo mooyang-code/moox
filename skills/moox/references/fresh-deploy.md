@@ -22,7 +22,7 @@
 ## 1. 清空前核对
 
 1. Trade 只有纸面账户：`moox-cli trade account list`、`trade order list --only-open` 看有没有实盘账户、持仓和未完成订单；有就停下来问用户。
-2. 四台主机（control、storage、overseas、factor）`setup validate` 都通过；控制机磁盘小（约 39G），装完应还有 ≥8G。
+2. 四台主机（control、storage、overseas、factor）`setup validate` 都通过；控制机磁盘小，先确认有余量（部署盘可用空间不足 2 GB 时 `setup validate` 的 `warnings` 会提醒）。
 3. 记下要保留的东西：因子机 `/data/moox/import`（历史导入包，重新下载很贵，清空前挪到 `~/moox-import-keep`）。其余数据按用户说法全部删除。
 4. 管理台里后来改过或新加的密钥（交易所密钥、告警渠道、云账号）只在线上有，秘密文件里只是初始值：清空前让用户在管理台导出或记下来。
 5. 手工调过的组件配置应该已经写在 `moox.toml` 的 `[overrides]` 里（重装自动带上）；没写进去的手工改动清空后会丢，汇报时一并说明。保留期以 `[storage_retention]` 为准。
@@ -80,13 +80,13 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | --- | --- | --- |
 | 0 | `setup operator` | 这台电脑没有 `~/.config/moox/moox-cli.key` 就生成一把签名私钥，有就复用（重跑不换） |
 | 1 | 防火墙 | 放行各主机对外的端口 |
-| 2 | `setup deploy --host control --component admin,host-gateway,host-agent` | 先在控制机上执行 `moox-admin-cli bootstrap`（建库、CA、主密钥、管理员、登记全部主机与部署、登记这台电脑的 `moox-cli` 公钥、签发控制机的签名密钥，只建不改），再装这三个组件；控制机的根证书同时记到这台电脑 |
+| 2 | `setup deploy --host control --component admin,host-gateway,host-agent` | 先在控制机上执行 `moox-admin-cli bootstrap`（建库、CA、主密钥、管理员、登记这台电脑的 `moox-cli` 公钥、签发控制机的签名密钥，只建不改；全部主机与部署按 `moox.toml` 同步），再装这三个组件；控制机的根证书同时记到这台电脑 |
 | 3 | `setup deploy --host storage` | Storage、EventBus，存储机的网关同时开外部入口（11004）；Storage 主库启动前自动初始化元数据库 |
 | 4 | `setup init --stage storage` | 业务空间、初始秘密、元数据。Collector 启动时要核对内置任务的元数据，所以排在控制机其余组件之前 |
 | 5 | `setup deploy --host control` | 控制机其余组件（Monitor、Collector、因子管理、归档管理、策略） |
 | 6 | `setup deploy --host overseas`，再 `--host factor` | 海外机（Trade、出口代理、collector-stream、事件中心，网关开外部入口）；因子机（因子引擎、归档 worker、内置对象存储）排最后 |
-| 7 | 等全部组件就绪 | 各台的本机 `/readyz` |
-| 8 | `setup init` | 告警渠道、云账户、日志服务、采集计划、登录校验（这些要等 Collector、Monitor 起来） |
+| 7 | 等全部组件就绪 | 各台的本机 `/readyz`，最长 5 分钟 |
+| 8 | `setup init` | 告警渠道、云账户、日志服务、云函数代码包、登录校验（这些要等 Collector、Monitor 起来） |
 | 9 | 备份配置、`setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
 
 - `setup verify` 不把“有限保留期的数据集还没有归档任务”算作没装好（全新安装一定没有归档任务，这一项在 `doctor alerts` 里照常显示）：装完后按需要用 `moox-cli archive tasks create` 或管理台“数据归档 › 归档任务”建任务。
@@ -118,13 +118,13 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 ## 5. 默认初始化的范围
 
 “系统默认配置”取字面意思：仓库 `config/setup/*.yaml` 的种子（Space、元数据、默认采集任务、数据集健康策略、默认因子任务 `factor-tasks.yaml`）。Collector 首次启动会把随部署放到 `<部署根>/config/collector/collection-tasks.yaml` 的种子写成默认采集任务
-（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认有币安现货 1m、币安合约 1m（crypto 空间）、A 股 5m 和两条 A 股日线（stockcn，沪深 300 成分股；一条纯日线，一条带复权、申万行业、财务的附加字段，见 [`ashare-daily.md`](ashare-daily.md)），都是停用状态，`setup start --space-id <空间>` 才启用（会启用这个空间里停用的 K 线任务；两条日线任务标了 `start: manual`，`setup start` 跳过并在输出里提示，要用 `collector task update --enabled=true` 显式启用），安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 的内置任务采集方式是 `stream`（由 collector-stream 推送采集并补采，市场默认值），A 股与港美股是 `scf`，不需要手工切换；crypto 不依赖云函数，首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认。`ingest-mode get` 建好任务就能查到。
+（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认有币安现货 1m、币安合约 1m（crypto 空间）、A 股 5m 和两条 A 股日线（stockcn，沪深 300 成分股；一条纯日线，一条带复权、申万行业、财务、换手率、股本的附加字段，见 [`ashare-daily.md`](ashare-daily.md)）、港股 5m（stockhk，恒指成分 `hk_hsi`）和美股 5m（stockus，标普 500 成分 `us_spx`），都是停用状态，`setup start --space-id <空间>` 才启用（会启用这个空间里停用的 K 线任务；两条日线任务标了 `start: manual`，`setup start` 跳过并在输出里提示，要用 `collector task update --enabled=true` 显式启用），安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 的内置任务采集方式是 `stream`（由 collector-stream 推送采集并补采，市场默认值），A 股与港美股是 `scf`，不需要手工切换；crypto 不依赖云函数，首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认。`ingest-mode get` 建好任务就能查到。
 
 ### 默认展示策略（合约双均线）
 
 `setup start --space-id crypto` 自动创建：[`examples/strategies/dual_ma_swap_1m.yaml`](../../../examples/strategies/dual_ma_swap_1m.yaml)，绑定合约 1m 因子任务 `ftask_swap_1m`，固定 ID `default_dual_ma_swap_1m`，观察实例，不挂账户、只计算不投递。重复运行不会重复创建。
 
-快线 `ma__5` 在慢线 `ma__10` 之上的合约都持有，等权，单个最多 5%。前几根 `ma__10` 为空时记 `too_many_missing`，第一个 ok 之前按积累处理，上限 30 分钟或 20 个周期，所以约 15 分钟内看到第一个结果。示例不写 `factor_params`，不独占关联因子任务：用户自己的实例也引用 `ftask_swap_1m` 时照常创建，两个实例共用这个任务。
+快线 `ma__5` 在慢线 `ma__10` 之上的合约都持有，等权，单个最多 5%。前几根 `ma__10` 为空时记 `too_many_missing`，第一个 ok 之前按积累处理，上限是 30 分钟与 20 个周期中较长的那个；`ma__10` 攒够 10 根 1m K 线就有值，所以十几分钟内看到第一个结果。示例不写 `factor_params`，不独占关联因子任务：用户自己的实例也引用 `ftask_swap_1m` 时照常创建，两个实例共用这个任务。
 
 ### A 股空间（stockcn）
 
@@ -133,7 +133,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 `setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写入口主机所在地域，优先存储机所在地域，该地域要有写了 `external_entry = true`、配了 `private_address` 的主机）。它依次：
 
 1. 启用任务时，任务绑定的标签还没有成员（全新部署时自动标签要等 Collector 下一轮标签巡检才首次同步）就先立即同步再启用：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
-2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只，函数个数按各源权重、限速和标的数估算，约 4 个，每 5 分钟触发一次、收盘后 1 秒同时取数，午休、收盘后、非交易日函数直接返回 `no_work`）；
+2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只；函数个数由每个函数带多少标的决定：空间写了 `symbols_per_function` 就按它切分，否则按 `auto_size` 用各源权重、限速和标的数估算；每 5 分钟触发一次、收盘后 1 秒同时取数，午休、收盘后、非交易日函数直接返回 `no_work`）；
 3. 导入因子任务 `ftask_cn_5m`（只有 `ma__5`、`ma__10`），创建观察实例 `default_dual_ma_cn_5m`（[`examples/strategies/dual_ma_cn_5m.yaml`](../../../examples/strategies/dual_ma_cn_5m.yaml)，不挂账户）。
 
 A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14:55），11:25 那根之后是 13:00 那根；午休、隔夜、周末 Monitor 不报停滞。
@@ -141,7 +141,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ### 港股空间（stockhk）
 
-港股的采集上线步骤（`[scf_plan]` 加 stockhk、上传代码包、建标签与任务）见 `docs/模块/采集.md` 第 4c 节。`setup start --space-id stockhk` 在启用采集之后：
+全新部署时标签 `hk_hsi` 与任务“港股 K 线 5m”已由种子建好（默认停用）；其余采集上线步骤（`[scf_plan]` 加 stockhk、上传代码包）见 `docs/模块/采集.md` 第 4c 节。`setup start --space-id stockhk` 在启用采集之后：
 
 1. 导入因子任务 `ftask_hk_5m`（只有 `ma__5`、`ma__10`）；
 2. 创建观察实例 `default_dual_ma_hk_5m`（[`examples/strategies/dual_ma_hk_5m.yaml`](../../../examples/strategies/dual_ma_hk_5m.yaml)，不挂账户）。这个策略分两批、每批每个交易日重选一次（两批错开半天），预算 0.98（留 2% 现金），
@@ -162,7 +162,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 3. 美股：纽交所公布下一年的假期表后（[假期与提前收市日](https://www.nyse.com/trade/hours-calendars)），把落在工作日上的休市日和半日市（感恩节次日、平安夜等，13:00 收市）写进 `packages/marketcalendar/internal/genus/main.go` 的 `closures`、`earlyCloses`，网址写进 `source`，在 `packages/marketcalendar` 下运行 `go run ./internal/genus`（整份重新生成，只写美股的两个文件）。不套“节假日逢周六提前一天补休”之类的规则，一律照假期页逐日登记；夏令时不用管，`barclock` 按纽约时区换算。补登或改动半日市会让之后的交易序号整体平移，因子本地存储要重建；
 4. `scripts/marketdata/validate-calendar.sh` 校验全部日历后，重新构建并发布 Collector、因子引擎、Strategy、Monitor、CLI，并重新上传 stockcn、stockhk、stockus 三个 SCF 代码包（`moox-cli collector function upload`，每个空间各传一次）。日历编在代码包里：漏传港股或美股包，旧日历的覆盖期一过，对应函数每期都返回 `no_work`，不报错。
 
-**必须在 12 月中旬前完成**：采集计划预检要求日历覆盖期至少还剩 14 天，否则拒绝新计划；到期前 60 天起每天告警。
+**必须在 12 月中旬前完成**：采集计划预检要求日历覆盖期至少还剩 14 天，否则拒绝新计划，不足 60 天时 Collector 每次预检记一条告警日志；Strategy 把可用截止日算在日历最后一个交易日往前 2 个交易日，到它之前 30 天起提示日历将到期，过了就报未就绪。
 
 ## 6. 验收
 
@@ -189,7 +189,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
    $CLI collector fetch-plan --space-id stockcn
    $CLI collector function list --space-id stockcn
    ```
-   计划在 10 分钟内变成已生效，Collector 日志里没有 `already exists`；函数列表里每个函数存在、定时器一致、代码包最新。上一次安装留下、不在计划里的函数列在 `unplanned`，第一次读回之后定时器都是停用（第二片及以后的命名空间里的也是）。
+   等计划变成已生效，Collector 日志里没有 `already exists`；函数列表里每个函数存在、定时器一致、代码包最新。上一次安装留下、不在计划里的函数列在 `unplanned`，第一次读回之后定时器都是停用（第二片及以后的命名空间里的也是）。
    按各行给出的删除命令（`collector function delete --space-id stockcn --name <函数名> --namespace <命名空间> --region <地域>`，先不带 `--yes` 看预览）清掉之后，列表里不再出现。
    全新库里 crypto 的内置任务采集方式是 `stream`，Collector 启动没有因为写内置任务失败而退出。
 5. **采集方式**：`$CLI collector ingest-mode get --space-id crypto` 全是 `stream`，`--space-id stockcn` 全是 `scf`。再选一个 crypto 的 1h 数据集做一次往返切换（分钟第 20～40 秒执行）：
@@ -218,7 +218,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
    暂停命令返回完成时全部定时器已停用，5 分钟后复查仍是停用（没有后台操作把它重新打开）；恢复后一轮内全部启用。在计划还没生效、函数还在创建时再做一遍，结果相同。
 10. **代码包升级**：`$CLI collector function upload --space-id stockcn --cloud-account-id <云账号 ID> --version <新版本> --collector-root $WT/modules/collector` 之后几分钟内，`collector function list` 里全部函数的代码包变成新版本，期间采集不中断（有缺口由自动补采补上）。
 11. **重启续做**：在第 4 步计划还没生效时重启 Collector，计划仍然走完，腾讯云上没有重复或残缺的函数。
-12. **监控**：在管理台“设置 › 密钥”停用云账号密钥，Monitor 报“调用腾讯云失败”，恢复密钥后告警消除（这一步要用户在管理台操作）。
+12. **监控**：在管理台“系统设置 › 密钥管理”停用云账号密钥，Monitor 报“调用腾讯云失败”，恢复密钥后告警消除（这一步要用户在管理台操作）。
 13. **依赖边界**（在仓库里）：
     ```bash
     cd $WT/modules/collector && go list -deps ./cmd/scf/market_data ./cmd/stream | grep -E 'sqlite|gorm|internal/store|internal/fetchplan|moox/modules/cloud|scfinvoker'; echo "exit=$?"
@@ -286,7 +286,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     要在真机上做时，在因子机上用本机主机密钥对海外机 `11003` 发 Trade 下单请求，四次都应被拒：以 `factor-engine` 身份，被调用名单拒绝；
     以 `host-gateway` 身份带 `X-Moox-Origin-Caller: moox-cli` 或 `scf-collector`，原因都是 `origin_host`（先判签名主机，因子机不是入口主机）；
     在存储机上以 `host-gateway` 身份带 `X-Moox-Origin-Caller: moox-cli`，原因是 `origin_identity`。原因看目标主机网关 `/metrics` 的 `moox_gateway_external_denials_total{reason=…}`。
-29. **系统暂停与恢复**（先问用户）：`$CLI system pause --yes`，等过一个 1m 周期，`$CLI system resume`：采集、因子、策略依次追平后放行（实测 7～12 分钟，因子追赶可能要等一次 5 分钟的缺口巡检），期间没有下单，“K 线结果”“行情探针”不出新告警；首页依次显示全部暂停、恢复追赶、正常。
+29. **系统暂停与恢复**（先问用户）：`$CLI system pause --yes`，等过一个 1m 周期，`$CLI system resume`：采集、因子、策略依次追平后放行（耗时随暂停时长与补采量而定；因子追赶可能要等一次缺口巡检，巡检每 5 分钟一轮），期间没有下单，“K 线结果”“行情探针”不出新告警；首页依次显示全部暂停、恢复追赶、正常。
 30. **健康上报与直推**（在测试窗口内做，先问用户；每一项做完恢复再做下一项）：
     - 停掉海外机的 `egress-proxy` 两分钟（`setup stop` / `setup start-component`）：Monitor 报“停止上报”，恢复后自动消除。
     - 停掉存储机的 `eventbus` 五分钟：只收到一条“观测输入中断”，没有逐个组件的“停止上报”（K 线确实停产，“K 线结果”可能另有告警）。
@@ -315,7 +315,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 | `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup start` 报 `CreateFactorTask failed ... metadata row not found` | 种子里有源数据集不存在的因子任务 | 见第 4 节“`setup start` 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 装不下一期计算 | 按第 4 节用 `tune` 的建议值写 `[overrides]` 后重新部署因子引擎 |
-| 引擎重启后一段时间 `lease conflict`、`not_ready` | 上一个进程的租约还没过期 | 等几十秒，再等窗口载入（约 20 秒）和 warming |
+| 引擎重启后一段时间 `not_ready` | 各因子任务在重新载入窗口；`/readyz` 里 `lease_conflict=true` 则是另一个 `engine_id` 的引擎还在心跳 | 等窗口载入和 warming 结束；`lease_conflict` 时停掉多余的引擎 |
 | 仓库里多出二进制文件 | `go build ./...` 交叉编译在单 main 模块里留了产物 | 立即删除；别 `git add -A` |
 
 ## 8. 收尾

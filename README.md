@@ -153,9 +153,9 @@ Agent 会按 [安装与初始化](skills/moox/references/install.md) 执行部�
 
 **交易执行**
 
-- 模拟盘（实现中）
-- Binance、OKX（实现中）
-- A 股、港股、美股券商（实现中）
+- 模拟盘：加密货币（现货、永续）、A 股、港股
+- Binance、OKX 实盘：已实现，默认关闭，需显式配置 `live_trading_enabled=true`
+- A 股实盘（QMT 执行端）尚未接入；港股没有实盘通道；美股暂无交易支持
 
 **基础设施与云平台**
 
@@ -230,7 +230,7 @@ MooX 定位于多机协作的完整运行系统，侧重分钟级及以上周期
 
 | 维度 | 措施 |
 | --- | --- |
-| 依赖漏洞扫描 | Go 依赖通过 [govulncheck](https://go.dev/doc/security/vuln/) 进行符号级可达性扫描，前端依赖通过 `pnpm audit` 检查；2026-11-03 起 Go 可达漏洞与前端已知漏洞均为 0 |
+| 依赖漏洞扫描 | Go 依赖通过 [govulncheck](https://go.dev/doc/security/vuln/) 进行符号级可达性扫描，前端依赖通过 `pnpm audit` 检查；两项都是手工执行，尚未接入 CI |
 | 工具链锁定 | Go 版本由 `.go-version` 锁定并随安全更新升级（当前为 1.27.3）；Linux 编译镜像中的 Go 安装包校验 SHA-256，构建脚本拒绝不一致的工具链版本 |
 | 模块独立依赖 | 各模块通过独立的 `go.mod` 维护依赖，不依赖工作区隐式合并；存储引擎等核心依赖在 `go.work` 中固定版本，防止被传递依赖升级顺带抬高 |
 | 密钥防泄露 | 每次合并请求在 CNB 与 GitHub CI 中分别执行 gitleaks 增量提交扫描；配置默认拒绝，例外规则须注明原因 |
@@ -252,7 +252,7 @@ MooX 定位于多机协作的完整运行系统，侧重分钟级及以上周期
 ```bash
 bash scripts/build/check-build-env.sh --profile all   # 检查 Go（版本见 .go-version）、Docker、Node、pnpm
 make build      # 构建默认目标
-make test       # Go 与前端测试
+make test       # Go、前端与 Rust（自定义算子 SDK）测试
 make verify     # 提交前的完整检查（与 CI 一致）
 scripts/release/build-release.sh vX.Y.Z               # 生成发布产物
 ```

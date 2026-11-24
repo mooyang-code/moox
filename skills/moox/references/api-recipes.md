@@ -1,7 +1,7 @@
 # 管理台操作与命令对照（专用命令优先，gateway call 兜底）
 
 管理台上的每个操作都有对应的 `moox-cli` 专用命令（下面按页面列出）。专用命令把参数映射到请求字段，帮你省去拼 JSON，并对破坏性操作默认只预览。
-只有底层接口（Storage 数据面）没有专用命令，才用 `moox-cli gateway call` 直接调用内部服务（见文末）。
+只有少数接口（Storage 数据面的底层读写、人工结束钱包划转记录）没有专用命令，才用 `moox-cli gateway call` 直接调用内部服务（见文末）。
 交易模块已支持现货、永续多市场执行与人工下单。`trade` 命令覆盖查询和写操作，写操作默认只预览，`--yes` 才执行；实盘账户上的写操作（下单、撤单、清仓、暂停恢复、改设置、改杠杆）执行前要先得到用户在对话里的明确同意，模拟账户可以直接做。解除下架禁止仍由用户在管理台操作。
 
 改组合的资金预留比例（换算目标时从权益里扣掉的比例）：`moox-cli trade logical fund-settings --logical-account-id <组合> --reserve-ratio 0.05 --yes`。命令先取回已有资金设置再合并，其余设置不变。
@@ -12,30 +12,32 @@
 - 每个命令的 `--help` 写明对应的服务与方法。**字段名就是 proto 字段名（`snake_case`）**；字段多的写操作用 `--data @文件` 给出完整请求（`-` 读标准输入），各参数优先于 `--data`。
 - 输出是 JSON；`ret_info.code` 非 0 时先打印响应、再以非 0 退出。分页命令用 `--page`、`--page-size`（默认 1、50）。
 - **破坏性命令默认只预览**：不带 `--yes` 输出 `preview: true` 的 JSON（将要发出的请求），**把预览给用户看，确认后再加 `--yes`**。
-- 带 DSL、长文本的参数用文件：`--spec-file`、`--dsl-file`、`--template-file`（`-` 读标准输入），不要在命令行里拼多行 YAML。
+- 带 DSL、长文本的参数用文件：`--spec-file`、`--dsl-file`（`-` 读标准输入），不要在命令行里拼多行 YAML。
 - 带 `--space-id` 的命令默认空间是 `crypto`；策略服务按请求头里的空间取上下文，这些命令也都带 `--space-id`。
 
 ## 对照表
 
 | 管理台 | 用途 | 命令 |
 | --- | --- | --- |
-| 设置 › 空间 | 列出、查看、新建、修改、删除 | `space list`、`space show --space-id`、`space create|update --space-id … --name …`、`space delete --space-id`（预览） |
-| 设置 › 密钥 | 看清单（值已打码） | `secret list`、`secret show --secret-id`；新建、修改请用户在管理台填写 |
-| 数据 › 来源 | 数据来源 | `metadata source list|show|create|update|delete` |
-| 数据 › 标的 | 标的、标签与成员 | `metadata subject list|show|upsert|resolve`、`metadata tag list|show|upsert|delete|list-members|member-status`、`metadata tag members|clone` |
-| 数据 › 字段 | 字段与分组 | `metadata field list|show|create|update|batch-update`、`metadata field-group list|show|create|update|delete` |
-| 数据 › 数据集、View | 数据集、列、View | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`、`metadata view list|show|columns|create|update|delete` |
-| 数据 › 浏览、导入 | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query`、`data records search`、`import` |
-| 采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
-| 采集 › 运行状态 | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
-| 采集 › 运行状态 › 云账号、代码包、云上状态 | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
-| 因子 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
-| 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
-| 策略 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |
-| 交易 | 账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者；写操作默认只预览 | `trade account list|show|create|update|leverage|sync|reinspect|flatten`、`trade logical list|show|target|create|update|order-settings|fund-settings|add-member|remove-member|pause|resume|flatten`、`trade order list|show|submit|cancel`、`trade paper create|close`、`trade fills|positions|holdings|equity|capabilities|action|actions|pnl|holders`、`trade blocked list` |
-| 运维 › 监控 | 总览、到达历史、主机资源、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
-| 运维 › 主机、部署 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
-| 运维 › 活动日志 | 活动日志 | `activity list` |
+| 系统设置 › 空间管理 | 列出、查看、新建、修改、删除 | `space list`、`space show --space-id`、`space create|update --space-id … --name …`、`space delete --space-id`（预览） |
+| 系统设置 › 密钥管理 | 看清单（值已打码） | `secret list`、`secret show --secret-id`；新建、修改请用户在管理台填写 |
+| 数据采集 › 数据源 | 数据来源 | `metadata source list|show|create|update|delete` |
+| 数据采集 › 数据对象 | 标的、标签与成员 | `metadata subject list|show|upsert|resolve`、`metadata tag list|show|upsert|delete|list-members|member-status`、`metadata tag members|clone` |
+| 数据采集 › 基础字段 | 字段与分组 | `metadata field list|show|create|update|batch-update`、`metadata field-group list|show|create|update|delete` |
+| 数据集、View（没有单独的页面） | 数据集、列、View | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`、`metadata view list|show|columns|create|update|delete` |
+| 数据采集 › 采集任务（“采集结果”页签看数据；导入没有页面） | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`、`import` |
+| 数据采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
+| 数据采集 › 采集任务（“运行状态”“补采”页签） | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |
+| 数据采集 › 采集任务（“运行状态”页签里的云账号、代码包、云上状态） | 账号（只读与删除）、代码包、函数的云上状态与计划外的函数 | `collector account list|regions|delete`、`collector package list|delete`、`collector function list|delete|upload|probe-egress` |
+| 因子计算 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
+| 因子计算 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params|status|apply`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
+| 策略管理 | 定义、实例、结果、回放 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable|confirm|delete`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy display get|set` |
+| 交易管理 | 账户、组合、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者；写操作默认只预览 | `trade account list|show|create|update|leverage|sync|reinspect|flatten`、`trade logical list|show|target|create|update|order-settings|fund-settings|add-member|remove-member|pause|resume|flatten`、`trade order list|show|submit|cancel`、`trade paper create|close`、`trade fills|positions|holdings|equity|ledger|instruments|capabilities|inspect-credential|action|actions|pnl|holders`、`trade shadow list`、`trade blocked list` |
+| 数据归档 | 归档任务、运行、分区、CSV 导入 | `archive overview`、`archive tasks list|prepare|preview|create|update|run|backfill|delete|clear-unrecoverable`、`archive runs list|get|cancel`、`archive partitions list|get`、`archive import`、`archive import template` |
+| 事件中心 | 可配置的事件、事件规则、执行记录 | `event catalog`、`event rules list|get|update|delete|test`、`event executions list|get|retry|cancel|ack`；新建规则请用户在管理台操作（会返回验证密钥明文） |
+| 资源与运维 › 监控告警 | 总览、到达历史、主机资源、重要日志、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|logs|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
+| 资源与运维 › 主机工作台、服务管理 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
+| 资源与运维 › 日志中心（“活动日志”页签） | 活动日志 | `activity list` |
 
 常用写法：
 
@@ -44,7 +46,7 @@
 ./bin/moox-cli factor validate --spec-file my.yaml
 ./bin/moox-cli factor create --factor-id ma --name 均线 --spec-file my.yaml
 ./bin/moox-cli factor member add --task-id <任务> --factor-id ma --param window=20
-./bin/moox-cli factor member enable --task-id <任务> --member-key ma__20
+./bin/moox-cli factor member enable --task-id <任务> --member-key ma__60
 ./bin/moox-cli factor recalc submit --task-id <任务> --from 2026-10-01T00:00:00Z --to 2026-10-02T00:00:00Z
 
 # 策略：校验 DSL、创建定义与实例（实例新建后停用，确认无误再启用）
@@ -60,7 +62,7 @@
 
 ## gateway call（兜底）
 
-没有专用命令的底层接口，用 `gateway call` 直接调用。目前只剩 Storage 数据面（`trpc.moox.storage.PrimaryStore` 的 `ReadRows`、`ReadDatasetChanges`、`CountTimeSeriesRows` 等底层读写）：
+没有专用命令的底层接口，用 `gateway call` 直接调用。目前是 Storage 数据面（`trpc.moox.storage.PrimaryStore` 的 `ReadRows`、`ReadDatasetChanges`、`CountTimeSeriesRows` 等底层读写）和下面的人工结束钱包划转记录：
 
 ```bash
 # 列出可调用的服务与方法（读内嵌服务目录，不连网），可带关键字过滤；会标出只读/写、moox-cli 是否有权调用、是否被 gateway call 禁用
@@ -73,7 +75,7 @@
 
 - 业务失败（`ret_info.code` 非 0，`0` 或 `SUCCESS` 才算成功）时先打印响应、再以非 0 退出。
 - **写方法不带 `--yes` 只预览**（输出将要发出的请求）：把预览给用户看，确认后再加 `--yes`；`gateway methods` 标为“写”的都算，只读方法不受影响。
-- **`gateway call` 不能调用返回密钥明文或完整 webhook 的方法**（`SecretMgr.GetSecretValue`、`MonitorMgr.ListNotificationChannels`），也拒绝密钥的新建、修改、启停、删除（`CreateSecret`、`UpdateSecret`、`ToggleSecretStatus`、`DeleteSecret`，由用户在管理台操作）：云账户凭证由专用命令在进程内使用，告警渠道请用户到管理台「监控 › 告警渠道」查看。
+- **`gateway call` 不能调用返回密钥明文或完整 webhook 的方法**（`SecretMgr.GetSecretValue`、`MonitorMgr.ListNotificationChannels`），也拒绝密钥的新建、修改、启停、删除（`CreateSecret`、`UpdateSecret`、`ToggleSecretStatus`、`DeleteSecret`，由用户在管理台操作）：云账户凭证由专用命令在进程内使用，告警渠道请用户到管理台「资源与运维 › 监控告警」的“消息通知设置”查看。
 - 请求字段以 `modules/<模块>/proto/*.proto` 为准；分页字段因服务而异（策略用 `{"page":{"page":1,"page_size":50}}`，其余用 `{"page":{"page":1,"size":50}}`）。
 
 ### 人工结束钱包划转记录（`trpc.moox.trade.TradeConsoleService` 的 `ResolveWalletTransfer`）
@@ -90,4 +92,4 @@
 
 ## 密钥（trpc.moox.ops.SecretMgr）
 
-只用 `secret list` / `secret show` 查看有哪些密钥（不返回明文）。新建、修改密钥会让明文经过 Agent，**不要代用户写入**：请用户在管理台“设置 › 密钥”页自己填写。
+只用 `secret list` / `secret show` 查看有哪些密钥（不返回明文）。新建、修改密钥会让明文经过 Agent，**不要代用户写入**：请用户在管理台“系统设置 › 密钥管理”页自己填写。

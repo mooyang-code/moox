@@ -83,7 +83,7 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
   out/factor-tasks.yaml            # 因子任务文件（格式同 config/setup/factor-tasks.yaml），用 factor task apply --file 导入
 ```
 
-因子任务不再写进 `moox.toml`：新的配置包遇到 `[[factors.*]]` 会拒绝整份文件。转换脚本输出一份独立的因子任务文件
+因子任务不写进 `moox.toml`：配置里出现 `[factors]`、`[[factors.*]]` 会被拒绝。转换脚本输出一份独立的因子任务文件
 （`source_dir`、`tasks`、`definitions` 三项），用 `moox-cli factor task apply --file local/<名称>/out/factor-tasks.yaml` 导入：
 它先只读核对，线上已有同 ID 且内容不同时逐项列出差异、一项都不写。不需要合并脚本，也不碰用户的 `moox.toml`。
 
@@ -134,7 +134,7 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
   python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected py.csv --actual dsl.csv --freq 5m --check check.jsonl --factor-id my_factor
   ```
 
-- **上线后**：最好从结果 View 读出因子列，与原版逐行对比（相对误差 ≤ 1e-10）。读 View 需要调用方身份，**不要借用服务身份**。拿不到时，以 5.3 节"权重逐期一致"替代，并在记录里写明原因和精度边界。
+- **上线后**：用 `moox-cli data rows export` 从因子结果数据集读出因子列（做法见 [factor-dsl.md](factor-dsl.md) 第 9 节第 4 条），与原版逐行对比（相对误差 ≤ 1e-10）。没做这一步时，以 5.3 节"权重逐期一致"替代，并在记录里写明原因和精度边界。
 
 ### 5.2 参数一致（上线后）
 
@@ -240,15 +240,15 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 
 ## 6. 上线
 
-按 [source-deploy.md](source-deploy.md) 和项目里的执行计划执行。顺序如下：
+按 [source-deploy.md](source-deploy.md) 执行。顺序如下：
 
-1. **因子侧先于策略**：factor-mgr、因子引擎。只换二进制；因子机的 `engine.yaml` 不重装。发布后确认现有任务每期都正常。
+1. **因子侧先于策略**：factor-mgr、因子引擎。`setup deploy` 每次都会重新生成因子机的 `<部署根>/config/factor-engine/engine.yaml`（部署根默认 `/data/moox`），直接改在目标机上的内容会被覆盖；要保留的改动先写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`（5.7 节）。发布后确认现有任务每期都正常。
 2. **strategy 与 admin（管理台内嵌在 admin 里）**：发布后确认现有实例仍然每期都是 ok。
-3. **写入因子**：因子定义用 `moox-factor-mgr-cli import --file local/<名称>/factors.yaml` 或管理台写入；因子任务与成员直接执行 `moox-cli factor task apply --file local/<名称>/out/factor-tasks.yaml`（有差异时它不写入、退出码非 0，先看输出再决定）。新任务要复用因子机上已有的预热数据，不要另导一份。
+3. **写入因子**：因子定义在操作机上用 `moox-cli factor create` 或在管理台写入；也可以把文件传到控制机，用那里的本地工具导入：`<部署根>/bin/moox-factor-mgr-cli import --config <部署根>/config/factor-mgr/app.yaml --file <文件> [--factor-id <ID>]`（文件里有多个因子时要带 `--factor-id`）。这个工具直接写 factor-mgr 的数据库，必须用 `--config` 指向已部署的配置或用 `--db` 指向数据库文件，默认的 `./config/app.yaml` 只在模块源码目录里才对；因子任务与成员直接执行 `moox-cli factor task apply --file local/<名称>/out/factor-tasks.yaml`（有差异时它不写入、退出码非 0，先看输出再决定）。新任务要复用因子机上已有的预热数据，不要另导一份。
 4. **建策略**：建策略定义；读回 DSL 核对（5.2 节）；建观察实例，关联各自的因子任务，不挂账户。
 5. **分批启用**：先启用最便宜的那个，观察 1 小时内引擎内存、单期耗时，以及现有任务的耗时，再启用下一个。
 6. **首期检查**：规则数、选中币数符合预期；状态在 256 KB 以内。
-7. **撤回**：先停用实例，再停用任务（不能删除）。二进制用备份回滚。
+7. **撤回**：先停用实例，再停用任务（`factor task disable`）；确定不再用时才 `factor task delete`（默认只预览，`--purge` 连结果数据一起删、不可恢复）。二进制用备份回滚。
 
 已在运行的因子要改定义（例如换算子名）时：被已启用成员引用的定义不能改，先停用这些成员，再 `UpdateFactor`，重新启用并等预热完成；
 定义哈希变了的因子，引用它的策略实例要重新启用。完整流程、兼容限制（不能增删改参数与输出）和“新建因子并行切换”的替代做法见
@@ -256,25 +256,23 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 
 ## 7. 数据获取与操作安全
 
-- Skill 的 K 线查询（[data-query.md](data-query.md)）只能读取打包目录里已登记的市场与频率；当前默认目录的 crypto/binance 现货含 1m、1h，stockcn/cn_a_share 含 1m，不包含本例的 5m 合约数据。按实际目录检查所需频率与市场，不能把 1m 数据当成 5m。目录不能满足时，参考数据用两部分拼起来：
+- Skill 的 K 线查询（[data-query.md](data-query.md)）只能读取打包目录里已登记的市场与频率；目录按内置采集任务生成（`config/setup/collection-tasks.yaml`：币安现货 1m，A 股沪深 300 的 5m 与 1d），不包含本例的 5m 合约数据。按实际目录检查所需频率与市场，不能把 1m 数据当成 5m。目录不能满足时，参考数据用两部分拼起来：
   - 用户的历史导入包（[initial-import.md](initial-import.md) 用的那份 CSV）；
   - 交易所公开行情接口拉到的近期 K 线（不需要凭据）。
 - **不要在生产采集机上大批量下载，也不要从它往外整包传输**：海外机（collector-stream 所在）的上行带宽很小。2026-10-26 一次 81 MB 的 rsync，让采集写入 Storage 和币安 WS 接连超时，1m 因子最多晚了 8 分钟。
   - 必须在这台机器上拉时，只拉增量，压缩后用 `rsync --bwlimit=200` 限速传输。
   - REST 请求控制在交易所的权重上限以内（币安合约每分钟 2400），每请求一次停 0.25 秒。
 - 长时间的远程任务用 `nohup … &` 放到后台，再轮询它的日志，不要依赖一条长 SSH 连接。
-- 结果 View 和 Storage 的 Pebble 库都不能被验收脚本直接读取：View 需要调用方身份；Pebble 被运行中的 storage-primary 占用，不能只读打开。策略库（SQLite）可以只读打开，`strategy_check.py` 用的就是这条路径。
+- Storage 的 Pebble 库被运行中的 storage-primary 占用，验收脚本不能直接打开；因子结果用 `moox-cli data rows export`（数据集）或 `moox-cli data view query`（View）读。策略库（SQLite）可以只读打开，`strategy_check.py` 用的就是这条路径。
 
 ## 8. 陷阱清单（实际遇到过的）
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 长 EMA 的因子任务每期 compute 37～48 秒 | 执行器按"标的数 × 输出行数"判断是否并行，实时只输出 1 行，所以永远单线程；`compute.workers` 默认只有 4 | 已修复为按窗口长度判断；因子机 `engine.yaml` 手工设了 `compute.workers: 32`，重装单元前要确认 |
-| 参数里的 NaN、Inf 绕过了校验 | 校验时只比较了大小 | 校验已拒绝非有限值 |
+| 长 EMA 的因子任务每期 compute 很慢 | `compute.workers` 默认是 min(4, 核数)，核数多的因子机没用满 | 按因子机核数调大 `compute.workers`，写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`（5.7 节），不要直接改目标机上的文件 |
 | `min_universe` 把成交量为 0 的币算了进去 | `min_universe` 比较的是进入 filter 之前的可用标的数，`filter: "volume > 0"` 淘汰的标的也计入 | 按这个口径设 `min_universe`；要它不参与，就让它不在标的池里 |
 | 原框架在新版 pandas 下报错 | `between(inclusive=bool)` | 在副本里打兼容补丁（5.3 节） |
 | 新上市标的的因子和原版不一致 | 原版 `min_periods`、ewm 从首根递推，DSL 是严格窗口 | 改用 relaxed 算子（factor-dsl.md） |
-| 系统暂停恢复后权重与原框架分歧约一个持有期 | 追赶期不求值，规则状态缺了这几期 | 已修复：追赶期与迟到周期也求值、只推进状态 |
 | 后台 SSH 任务退出码 255 | 网络抖动导致长连接断开 | 改用 nohup 放到后台，再轮询它的日志 |
 | 验收期间采集出现延迟 | 从采集机整包 rsync | 第 7 节 |
 | 把读取变慢归因成"互相争用" | 没有逐跳证据就下结论 | 5.5 节 |

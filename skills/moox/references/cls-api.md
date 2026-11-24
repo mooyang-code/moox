@@ -13,7 +13,7 @@
 `--endpoint` / `CLS_ENDPOINT` 覆盖。公网端点可显式指定为 `cls.tencentcloudapi.com`。
 
 凭据来自 CLI 参数、`CLS_SECRET_ID` / `CLS_SECRET_KEY` 或 `.env`；`.env` 加载需要可选依赖
-`python-dotenv`。仓库不存在 `cls_query.CLSClient` 封装，不能使用旧示例中的该导入路径。
+`python-dotenv`。
 
 ## 脚本发送的字段
 

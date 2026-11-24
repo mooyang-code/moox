@@ -15,7 +15,6 @@ import (
 )
 
 func TestEnsureDefaultCheckAlertRulesSkipsDisabledChecks(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
 	repositories := openMonitorTestRepositories(t)
 	ctx := t.Context()
 	for _, check := range []domain.Check{

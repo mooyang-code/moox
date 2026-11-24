@@ -103,7 +103,7 @@
 | `data rows count` | 按 View 统计时序行数（selectors 与时间范围写在 --data 里） |
 | `data rows export` | 导出 Dataset 行为 JSON |
 | `data skill kline get` | 获取 K 线数据 |
-| `data view query` | 按 View 查询时序行（管理台“数据浏览”用的接口；selectors、过滤与排序写在 --data 或对应参数里） |
+| `data view query` | 按 View 查询时序行（管理台看采集结果、因子结果用的接口；selectors、过滤与排序写在 --data 或对应参数里） |
 | `data view state` | 查看 View 的索引状态：活动索引、代次、已建列、覆盖范围与跟随变更日志的进度 |
 | `data view wait-applied` | 等 View 跟上此刻的变更日志头部（之前的写入都已可查） |
 
@@ -288,7 +288,7 @@
 | `ops tencent lighthouse firewall add` | 添加轻量应用服务器防火墙规则 |
 | `ops tencent lighthouse firewall open` | 通过控制面云账户凭证开放轻量防火墙端口 |
 
-## secret：密钥：只列清单与打码后的信息；新建、修改请用户在管理台“设置 › 密钥”填写
+## secret：密钥：只列清单与打码后的信息；新建、修改请用户在管理台“系统设置 › 密钥管理”填写
 
 | 命令 | 说明 |
 | --- | --- |
@@ -361,7 +361,7 @@
 | `strategy display set` | 设置实例要隐藏的分类、成员与列 |
 | `strategy instance confirm` | 确认试运行中的实例转为实盘：下一期起按目标下单（先用 `trade shadow list` 看影子目标；策略池预热没完成时被拒；默认只预览，--yes 才执行；不给 --session-id 时预览里显示当前会话号） |
 | `strategy instance create` | 创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用） |
-| `strategy instance delete` | 删除已停用的策略实例，连同关联到它的因子任务和结果数据集（还被别的实例引用时拒绝；默认只预览，--yes 才执行） |
+| `strategy instance delete` | 删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（没绑定到它的任务如公共任务保留不动；有回放或补算在进行、结果数据集有归档任务或被其他 View 引用时拒绝；默认只预览，--yes 才执行） |
 | `strategy instance disable` | 停用策略实例；对已停用的实例再执行一次会重新通知 Trade 关闭最近一次挂账户的会话（默认只预览，--yes 才执行） |
 | `strategy instance enable` | 启用策略实例（挂了账户的实例启用后先试运行：目标只记为影子目标、不下单，确认实盘后才下单；默认只预览，--yes 才执行） |
 | `strategy instance list` | 列出策略实例（--space-id 过滤空间，默认 crypto） |

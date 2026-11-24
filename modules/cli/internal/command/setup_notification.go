@@ -15,7 +15,7 @@ import (
 const monitorService = "trpc.moox.monitor.MonitorMgr"
 
 // 告警渠道的初始值（秘密文件的 [notification]）只在 Monitor 还没有任何渠道时由 setup init 写入一次；
-// 之后以管理台「监控 › 告警渠道」为准，这里不比对、不改、不删。
+// 之后以管理台「资源与运维 › 监控告警」的“消息通知设置”为准，这里不比对、不改、不删。
 const (
 	notificationCreated = "created" // 本次写入
 	notificationKept    = "kept"    // Monitor 已有渠道，以管理台为准，没有写入
@@ -35,7 +35,7 @@ type setupNotificationSummary struct {
 func ensureInitialNotification(ctx context.Context, gateway gatewayclient.Invoker, initial topology.Notification) (*setupNotificationSummary, error) {
 	initial.WebhookURL = strings.TrimSpace(initial.WebhookURL)
 	if initial.WebhookURL == "" {
-		return &setupNotificationSummary{Status: notificationSkipped, Note: "秘密文件里没有填告警渠道的 Webhook 地址；部署后在管理台「监控 › 告警渠道」里添加"}, nil
+		return &setupNotificationSummary{Status: notificationSkipped, Note: "秘密文件里没有填告警渠道的 Webhook 地址；部署后在管理台「资源与运维 › 监控告警」的“消息通知设置”里添加"}, nil
 	}
 	channelType := strings.TrimSpace(initial.ChannelType)
 	if channelType == "" {
