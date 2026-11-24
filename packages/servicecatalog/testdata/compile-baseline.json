@@ -395,6 +395,7 @@
         {"service":"trpc.moox.trade.TradeConsoleService","method":"InspectExchangeCredential","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":15000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"ListAccountLedger","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":15000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"ListBlockedInstruments","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["callback-dispatcher","console","moox-cli"]},
+        {"service":"trpc.moox.trade.TradeConsoleService","method":"ListDelists","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"ListFills","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"ListHoldings","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"ListInstrumentHolders","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["callback-dispatcher","console","moox-cli"]},

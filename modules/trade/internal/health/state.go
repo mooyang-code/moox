@@ -20,15 +20,17 @@ type SessionSource interface {
 }
 
 type Readiness struct {
-	DatabaseReady      func(context.Context) error
-	EventBusEnabled    bool
-	EventBusReady      func() bool
-	Sessions           SessionSource
-	TargetWorker       func() traderuntime.TargetWorkerSnapshot
-	OperatorWorker     func() traderuntime.OperatorWorkerSnapshot
-	PaperMatcherWorker func() (bool, string)
-	PaperAccountErrors func() map[string]paper.MatcherState
-	ConfigErrors       func() []string
+	DatabaseReady   func(context.Context) error
+	EventBusEnabled bool
+	EventBusReady   func() bool
+	// DelistConsumerRunning 是下架事件消费者是否在运行，只进健康详情，不计入就绪（配错不能拖住目标执行）。
+	DelistConsumerRunning func() bool
+	Sessions              SessionSource
+	TargetWorker          func() traderuntime.TargetWorkerSnapshot
+	OperatorWorker        func() traderuntime.OperatorWorkerSnapshot
+	PaperMatcherWorker    func() (bool, string)
+	PaperAccountErrors    func() map[string]paper.MatcherState
+	ConfigErrors          func() []string
 }
 
 func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
@@ -65,7 +67,12 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 	if r.PaperAccountErrors != nil {
 		paperAccountErrors = r.PaperAccountErrors()
 	}
+	delistConsumerRunning := false
+	if r.DelistConsumerRunning != nil {
+		delistConsumerRunning = r.DelistConsumerRunning()
+	}
 	return ready, map[string]any{
+		"delist_consumer_running":      delistConsumerRunning,
 		"database_ready":               databaseReady,
 		"eventbus_enabled":             r.EventBusEnabled,
 		"eventbus_ready":               eventBusReady,

@@ -27,19 +27,17 @@ func delistServer(t *testing.T) (*ConsoleServer, *int) {
 	}, &wakes
 }
 
-// 名单的三个方法和 ListInstrumentHolders 是全局方法：没有空间头也能调用。
+// 名单、持有者与下架记录的查询都是全局方法：没有空间头也能调用。
 func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	server, wakes := delistServer(t)
 	ctx := context.Background() // 没有空间
+	delistAt := time.Now().Add(72 * time.Hour).Truncate(time.Millisecond)
 
-	blocked, err := server.BlockInstrument(ctx, &tradepb.BlockInstrumentReq{
-		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT,
-		ExchangeSymbol: "FOOUSDT", Reason: "公告下架", EventId: "evt-1", Owner: "exec-1",
+	intake, err := server.Delist.Intake(ctx, delistapp.Event{
+		EventID: "evt-1", OccurredAt: time.Now(), Key: delistapp.Key{Exchange: "binance", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"},
+		Scope: store.DelistScopePaperOnly, DelistAt: delistAt, Source: "MANUAL",
 	})
 	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, blocked.GetRetInfo().GetCode())
-	require.True(t, blocked.GetInstrumentUnknown(), "没有开通对应市场的账户：照常写入，带无此标的标记")
-	require.True(t, blocked.GetCreated())
 	require.Equal(t, 1, *wakes, "写入名单后唤醒目标重新判断")
 
 	list, err := server.ListBlockedInstruments(ctx, &tradepb.ListBlockedInstrumentsReq{})
@@ -47,8 +45,19 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, list.GetRetInfo().GetCode())
 	require.Len(t, list.GetInstruments(), 1)
 	require.Equal(t, tradepb.Exchange_EXCHANGE_BINANCE, list.GetInstruments()[0].GetExchange())
-	require.Equal(t, "evt-1", list.GetInstruments()[0].GetSourceEventId())
-	require.Equal(t, "exec-1", list.GetInstruments()[0].GetOwner(), "写入者带回：事件中心据此判断名单项是不是自己写的")
+	require.Equal(t, store.DelistScopePaperOnly, list.GetInstruments()[0].GetScope())
+	require.Equal(t, intake.DelistID, list.GetInstruments()[0].GetDelistId())
+
+	delists, err := server.ListDelists(ctx, &tradepb.ListDelistsReq{ActiveOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, delists.GetRetInfo().GetCode())
+	require.Len(t, delists.GetDelists(), 1)
+	got := delists.GetDelists()[0]
+	require.Equal(t, intake.DelistID, got.GetDelistId())
+	require.Equal(t, tradepb.MarketType_MARKET_TYPE_SPOT, got.GetMarketType())
+	require.Equal(t, delistAt.UnixMilli(), got.GetDelistAtMs())
+	require.Equal(t, store.DelistActive, got.GetStatus())
+	require.Equal(t, "evt-1", got.GetSourceEventId())
 
 	holders, err := server.ListInstrumentHolders(ctx, &tradepb.ListInstrumentHoldersReq{
 		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, ExchangeSymbol: "FOOUSDT",
@@ -65,13 +74,19 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, removed.GetRemoved())
 	require.Equal(t, 2, *wakes)
+	delists, err = server.ListDelists(ctx, &tradepb.ListDelistsReq{})
+	require.NoError(t, err)
+	require.Equal(t, store.DelistCanceled, delists.GetDelists()[0].GetStatus(), "解除名单一并取消进行中的下架记录")
 }
 
 func TestDelistRequestsAreValidated(t *testing.T) {
 	server, _ := delistServer(t)
-	rsp, err := server.BlockInstrument(context.Background(), &tradepb.BlockInstrumentReq{ExchangeSymbol: "FOOUSDT", Reason: "r"})
+	rsp, err := server.UnblockInstrument(context.Background(), &tradepb.UnblockInstrumentReq{ExchangeSymbol: "FOOUSDT"})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	listed, err := server.ListDelists(context.Background(), &tradepb.ListDelistsReq{Limit: 501})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, listed.GetRetInfo().GetCode())
 }
 
 func logicalSeed(t *testing.T, server *ConsoleServer) {

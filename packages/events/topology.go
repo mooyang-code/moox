@@ -128,6 +128,8 @@ var (
 	FactorBackfilledConsumer  = declareConsumer("factor_kline_backfilled_v1", CollectorKlineBackfilled)
 	StrategyViewReadyConsumer = declareConsumer("strategy_view_data_ready_v1", ViewDataReady)
 	TradeTargetConsumer       = declareConsumer("trade_target_weight_v1", LogicalAccountTargetWeightRequested)
+	// TradeDelistConsumer 是 Trade 收 Collector 下架事件的消费者（在 MOOX_COLLECTOR 上）。
+	TradeDelistConsumer = declareConsumer("trade_instrument_delist_v1", InstrumentDelistScheduled)
 	// Collector 的 K 线合成在每个登记了交易日历的空间各建一个（空间集合见 barclock.Markets()）。
 	CollectorResamplePeriodConsumer     = DurableConsumer{name: "collector_resample_period_%s_v1", events: []Event{DatasetPeriodCompleted}, perSpace: true}
 	CollectorResampleBackfilledConsumer = DurableConsumer{name: "collector_resample_backfilled_%s_v1", events: []Event{CollectorKlineBackfilled}, perSpace: true}
@@ -158,7 +160,7 @@ var Roles = []Role{
 	{Username: "storage-eventbus", File: "storage-eventbus", SecretKey: "eventbus_storage", Publishes: []Event{DatasetPeriodCompleted, ViewDataReady}},
 	{Username: "factor-eventbus", File: "factor-eventbus", SecretKey: "eventbus_factor", Consumers: []DurableConsumer{FactorPeriodConsumer, FactorBackfilledConsumer}},
 	{Username: "strategy-eventbus", File: "strategy-eventbus", SecretKey: "eventbus_strategy", Publishes: []Event{LogicalAccountTargetWeightRequested}, Consumers: []DurableConsumer{StrategyViewReadyConsumer}},
-	{Username: "trade-eventbus", File: "trade-eventbus", SecretKey: "eventbus_trade", Consumers: []DurableConsumer{TradeTargetConsumer}},
+	{Username: "trade-eventbus", File: "trade-eventbus", SecretKey: "eventbus_trade", Consumers: []DurableConsumer{TradeTargetConsumer, TradeDelistConsumer}},
 	{Username: "collector-eventbus", File: "collector-eventbus", SecretKey: "eventbus_collector", Publishes: []Event{CollectorKlineBackfilled, InstrumentDelistScheduled}, Consumers: []DurableConsumer{CollectorResamplePeriodConsumer, CollectorResampleBackfilledConsumer}},
 	// 事件中心只消费、不发布。
 	{Username: "callback-dispatcher-eventbus", File: "callback-dispatcher-eventbus", SecretKey: "eventbus_callback_dispatcher", Consumers: callbackDispatcherConsumers()},

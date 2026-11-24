@@ -124,30 +124,36 @@ func spotBalance(total string) []store.AssetBalance {
 	return []store.AssetBalance{{Wallet: "", Asset: "FOO", Available: total, Total: total}}
 }
 
-// 未知标的：照常写入名单、不算失败，返回无此标的的标记；持有者查询返回空数组加同样的标记。
-func TestBlockUnknownInstrumentIsStoredAndReported(t *testing.T) {
+// event 是一条范围为 ALL、下架时间为 delistAt 的下架事件。
+func event(key Key, id string, delistAt time.Time) Event {
+	return Event{EventID: id, OccurredAt: delistAt.Add(-48 * time.Hour), Key: key, Scope: store.DelistScopeAll, DelistAt: delistAt, Source: "MANUAL"}
+}
+
+// 未知标的：照常建记录、写入名单、不算失败；持有者查询返回空数组和无此标的的标记。
+func TestIntakeUnknownInstrumentIsStoredAndReported(t *testing.T) {
 	tradeStore := newDelistStore(t)
 	service := &Service{Store: tradeStore}
 	calls := 0
 	service.OnChanged = func() { calls++ }
 	key := Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BARUSDT"}
+	delistAt := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
 
-	result, err := service.Block(context.Background(), key, "公告下架", "evt-1", "exec-1")
+	result, err := service.Intake(context.Background(), event(key, "evt-1", delistAt))
 	require.NoError(t, err)
-	require.True(t, result.InstrumentUnknown)
-	require.True(t, result.Created)
+	require.NotEmpty(t, result.DelistID)
+	require.True(t, result.BlockChanged)
 	require.Equal(t, 1, calls)
 
-	again, err := service.Block(context.Background(), key, "公告下架", "evt-1", "exec-2")
+	again, err := service.Intake(context.Background(), event(key, "evt-1", delistAt))
 	require.NoError(t, err)
-	require.False(t, again.Created, "重复写入不报错也不改动")
+	require.Empty(t, again.DelistID, "重投不产生第二条记录")
 	require.Equal(t, 1, calls, "没有变化不唤醒")
 
 	list, err := service.List(context.Background())
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, "", list[0].InstrumentID, "查不到标的时内部 ID 留空")
-	require.Equal(t, "exec-1", list[0].Owner, "重复写入保留第一个写入者")
+	require.Equal(t, result.DelistID, list[0].DelistID)
 
 	holders, err := service.Holders(context.Background(), key, false)
 	require.NoError(t, err)
@@ -161,32 +167,41 @@ func TestBlockUnknownInstrumentIsStoredAndReported(t *testing.T) {
 	require.Equal(t, 2, calls)
 }
 
-func TestBlockRecordsInstrumentIDAndBaseAssetWhenKnown(t *testing.T) {
+func TestIntakeRecordsInstrumentIDAndBaseAssetWhenKnown(t *testing.T) {
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
 	service := &Service{Store: tradeStore}
 
-	result, err := service.Block(context.Background(), Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"}, "公告下架", "", "")
+	_, err := service.Intake(context.Background(), event(Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"}, "evt-1", time.Now().Add(72*time.Hour)))
 	require.NoError(t, err)
-	require.False(t, result.InstrumentUnknown)
 	list, err := service.List(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "FOO-USDT-SWAP", list[0].InstrumentID)
 	require.Equal(t, "FOO", list[0].BaseAsset)
 }
 
-func TestBlockValidatesTheKey(t *testing.T) {
+func TestIntakeValidatesTheEvent(t *testing.T) {
 	service := &Service{Store: newDelistStore(t)}
+	delistAt := time.Now().Add(72 * time.Hour)
 	for _, key := range []Key{
 		{Exchange: "", MarketType: "SPOT", ExchangeSymbol: "A"},
 		{Exchange: "BINANCE", MarketType: "STOCK", ExchangeSymbol: "A"},
 		{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: " "},
 	} {
-		_, err := service.Block(context.Background(), key, "r", "", "")
+		_, err := service.Intake(context.Background(), event(key, "evt", delistAt))
 		require.ErrorIs(t, err, ErrInvalidRequest, "%+v", key)
 	}
-	_, err := service.Block(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "A"}, " ", "", "")
-	require.ErrorIs(t, err, ErrInvalidRequest, "reason 必填")
+	valid := event(Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "A"}, "evt", delistAt)
+	for name, mutate := range map[string]func(*Event){
+		"缺事件 ID": func(e *Event) { e.EventID = " " },
+		"缺范围":    func(e *Event) { e.Scope = "" },
+		"缺下架时间":  func(e *Event) { e.DelistAt = time.Time{} },
+	} {
+		broken := valid
+		mutate(&broken)
+		_, err := service.Intake(context.Background(), broken)
+		require.ErrorIs(t, err, ErrInvalidRequest, name)
+	}
 }
 
 // 只算策略持有：受管现货、非零永续；只看该交易所；不在组合的、测试网、没有受管的、已停用的都不算。
@@ -366,9 +381,8 @@ func TestKeysAreCaseInsensitive(t *testing.T) {
 	service := &Service{Store: tradeStore}
 	lower := Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "foousdt"}
 
-	result, err := service.Block(context.Background(), lower, "公告下架", "", "")
+	_, err := service.Intake(context.Background(), event(lower, "evt-1", time.Now().Add(72*time.Hour)))
 	require.NoError(t, err)
-	require.False(t, result.InstrumentUnknown)
 	list, err := service.List(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "FOOUSDT", list[0].ExchangeSymbol)

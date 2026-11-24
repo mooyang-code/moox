@@ -540,7 +540,7 @@ func (e *Executor) loadMembers(
 				symbols[key] = instrument.InstrumentID
 				continue
 			}
-			if blockedSet.ContainsInstrument(account.Exchange, instrument) {
+			if blockedSet.ContainsInstrument(account, instrument) {
 				continue
 			}
 			skip[instrument.InstrumentID] = true
@@ -550,7 +550,7 @@ func (e *Executor) loadMembers(
 			}
 		}
 		for _, instrument := range instrumentRecords {
-			if blockedSet.ContainsInstrument(account.Exchange, instrument) {
+			if blockedSet.ContainsInstrument(account, instrument) {
 				if _, tradable := instruments[instrument.InstrumentID]; tradable {
 					reduceOnly[instrument.InstrumentID] = true
 				} else {
@@ -561,7 +561,7 @@ func (e *Executor) loadMembers(
 				skip[instrument.InstrumentID] = true
 			}
 		}
-		blockedAssets := blockedSet.SpotBaseAssets(account.Exchange, instrumentRecords)
+		blockedAssets := blockedSet.SpotBaseAssets(account, instrumentRecords)
 		positions := make(map[string]shared.Decimal)
 		sellable := make(map[string]shared.Decimal)
 		t1 := make(map[string]shared.Decimal)
@@ -643,7 +643,7 @@ func (e *Executor) loadMembers(
 				if instrument, known := instruments[instrumentID]; known && settings.IsArbitrageBase(instrument.BaseAsset) {
 					continue
 				}
-				if instrumentID == "" && blockedSet.Contains(account.Exchange, position.MarketType, position.ExchangeSymbol) {
+				if instrumentID == "" && blockedSet.Contains(account, position.MarketType, position.ExchangeSymbol) {
 					continue // 名单里已经不能交易的永续：不阻塞组合，整项跳过
 				}
 				if instrumentID == "" {

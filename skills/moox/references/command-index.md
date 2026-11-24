@@ -385,6 +385,7 @@
 | `trade actions` | 列出组合的人工操作记录（人工单、撤单、清仓、减仓、下架清仓）；`--action-type` 按类型过滤 |
 | `trade blocked list` | 列出下架名单（全局，名单里的标的只减不增） |
 | `trade capabilities` | 查看交易账户的执行能力 |
+| `trade delist list` | 列出下架记录（全局，按创建时间倒序）：状态、已规划轮次、各轮各组合的清仓动作；`--active-only` 只列进行中的 |
 | `trade inspect-credential` | 检测一把交易所密钥的账户类型和权限（只读，不落库，不下单）；`--markets` 指定要开通的市场 |
 | `trade instruments` | 列出交易账户可下单的标的 |
 | `trade equity` | 查询权益曲线；起止为 0 时默认最近 30 天，跨度超过 2 天按 15 分钟、超过 30 天按小时取每桶最后一点，最多 3000 点 |

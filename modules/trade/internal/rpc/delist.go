@@ -41,7 +41,7 @@ func (s *ConsoleServer) BlockInstrument(ctx context.Context, req *tradepb.BlockI
 	if s.Delist == nil {
 		return &tradepb.BlockInstrumentRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	result, err := s.Delist.Block(ctx, delistKey(req.GetExchange(), req.GetMarketType(), req.GetExchangeSymbol()), req.GetReason(), req.GetEventId(), req.GetOwner())
+	result, err := s.Delist.Block(ctx, delistKey(req.GetExchange(), req.GetMarketType(), req.GetExchangeSymbol()), req.GetReason(), req.GetOwner())
 	return &tradepb.BlockInstrumentRsp{
 		RetInfo: errorInfo(err), InstrumentUnknown: result.InstrumentUnknown, Created: result.Created,
 	}, nil
@@ -73,7 +73,7 @@ func (s *ConsoleServer) ListBlockedInstruments(ctx context.Context, req *tradepb
 		rsp.Instruments = append(rsp.Instruments, &tradepb.BlockedInstrument{
 			Exchange: exchangeToPB(record.Exchange), MarketType: marketToPB(record.MarketType), ExchangeSymbol: record.ExchangeSymbol,
 			InstrumentId: record.InstrumentID, BaseAsset: record.BaseAsset, Reason: record.Reason,
-			SourceEventId: record.SourceEventID, BlockedAt: record.BlockedAt, Owner: record.Owner,
+			BlockedAt: record.BlockedAt, Scope: record.Scope, DelistId: record.DelistID,
 		})
 	}
 	return rsp, nil
@@ -139,4 +139,37 @@ func (s *ConsoleServer) FlattenInstrument(ctx context.Context, req *tradepb.Flat
 		return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err), Busy: true}, nil
 	}
 	return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err), Action: operatorActionToPB(action), Unblocked: unblocked}, nil
+}
+
+// ListDelists 列出下架记录（按创建时间倒序），带各轮各组合的动作状态。全局方法，不检查空间。
+func (s *ConsoleServer) ListDelists(ctx context.Context, req *tradepb.ListDelistsReq) (*tradepb.ListDelistsRsp, error) {
+	if err := validatePB(req); err != nil {
+		return &tradepb.ListDelistsRsp{RetInfo: invalidInfo(err)}, nil
+	}
+	if s.Delist == nil {
+		return &tradepb.ListDelistsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	views, err := s.Delist.ListDelists(ctx, req.GetActiveOnly(), int(req.GetLimit()))
+	if err != nil {
+		return &tradepb.ListDelistsRsp{RetInfo: errorInfo(err)}, nil
+	}
+	rsp := &tradepb.ListDelistsRsp{RetInfo: success(), Delists: make([]*tradepb.Delist, 0, len(views))}
+	for _, view := range views {
+		delist := &tradepb.Delist{
+			DelistId: view.DelistID, Exchange: exchangeToPB(view.Exchange), MarketType: marketToPB(view.MarketType),
+			ExchangeSymbol: view.ExchangeSymbol, Scope: view.Scope, DelistAtMs: view.DelistAt,
+			NoticeSource: view.Source, SourceEventId: view.SourceEventID, Status: view.Status, PlannedRound: int32(view.PlannedRound),
+			Note: view.Note, Result: view.Result, CreatedAtMs: view.CreatedAt, FinishedAtMs: view.FinishedAt,
+			Flattens: make([]*tradepb.DelistFlatten, 0, len(view.Flattens)),
+		}
+		for _, flatten := range view.Flattens {
+			delist.Flattens = append(delist.Flattens, &tradepb.DelistFlatten{
+				Round: int32(flatten.Round), SpaceId: flatten.SpaceID, LogicalAccountId: flatten.LogicalAccountID,
+				ActionId: flatten.ActionID, ActionStatus: flatten.ActionStatus, LastError: flatten.LastError,
+				CreatedAtMs: flatten.CreatedAt,
+			})
+		}
+		rsp.Delists = append(rsp.Delists, delist)
+	}
+	return rsp, nil
 }

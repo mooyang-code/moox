@@ -349,3 +349,16 @@ func TestReduceOnlyWarningChecksDedupeBeforeFetchingAQuote(t *testing.T) {
 	}
 	require.Equal(t, 1, calls, "已经告警过，之后不再取报价")
 }
+
+// 演练的名单行（仅模拟盘）对模拟盘组合同样只减不增。
+func TestPaperOnlyBlockRestrictsPaperMembers(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.setSwapPosition("BTCUSDT", "5")
+	_, err := f.store.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Scope: store.DelistScopePaperOnly, Reason: "演练", BlockedAt: 1,
+	})
+	require.NoError(t, err)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "20"}})
+	f.converged(t)
+	require.Empty(t, f.orders.specs, "模拟盘组合加仓被截掉")
+}

@@ -3,9 +3,9 @@
   "summary": {
     "components": 18,
     "services": 25,
-    "methods": 327,
-    "read_only_methods": 149,
-    "retryable_methods": 151,
+    "methods": 328,
+    "read_only_methods": 150,
+    "retryable_methods": 152,
     "callers": 22,
     "principals": 2
   },
@@ -1988,6 +1988,12 @@
           "timeout_ms": 5000
         },
         {
+          "name": "ListDelists",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
           "name": "ListFills",
           "read_only": true,
           "retryable": true,
@@ -2451,6 +2457,7 @@
       "trpc.moox.trade.TradeConsoleService/InspectExchangeCredential",
       "trpc.moox.trade.TradeConsoleService/ListAccountLedger",
       "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListDelists",
       "trpc.moox.trade.TradeConsoleService/ListFills",
       "trpc.moox.trade.TradeConsoleService/ListHoldings",
       "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
@@ -2847,6 +2854,7 @@
       "trpc.moox.trade.TradeConsoleService/InspectExchangeCredential",
       "trpc.moox.trade.TradeConsoleService/ListAccountLedger",
       "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListDelists",
       "trpc.moox.trade.TradeConsoleService/ListFills",
       "trpc.moox.trade.TradeConsoleService/ListHoldings",
       "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",

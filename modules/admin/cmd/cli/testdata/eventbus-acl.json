@@ -168,11 +168,17 @@
   },
   "trade-eventbus": {
     "publish": [
+      "$JS.ACK.MOOX_COLLECTOR.trade_instrument_delist_v1.>",
       "$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>",
+      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.trade_instrument_delist_v1",
+      "$JS.API.CONSUMER.CREATE.MOOX_COLLECTOR.trade_instrument_delist_v1.>",
       "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1",
       "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>",
+      "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_COLLECTOR.trade_instrument_delist_v1",
       "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1",
+      "$JS.API.CONSUMER.INFO.*.trade_instrument_delist_v1",
       "$JS.API.CONSUMER.INFO.*.trade_target_weight_v1",
+      "$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.trade_instrument_delist_v1",
       "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1",
       "$JS.API.STREAM.NAMES"
     ],

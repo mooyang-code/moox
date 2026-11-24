@@ -288,7 +288,7 @@ func (s *Service) delistBlockState(ctx context.Context, spaceID, tradingAccountI
 	if err != nil {
 		return false, false, err
 	}
-	return set.ContainsInstrument(account.Exchange, instrument), true, nil
+	return set.ContainsInstrument(account, instrument), true, nil
 }
 
 // stopIfUnblocked 在下架清仓的每一轮开头先查名单：已经解除禁止就撤掉本动作的订单，撤单之后同步并确认它们都结束了，

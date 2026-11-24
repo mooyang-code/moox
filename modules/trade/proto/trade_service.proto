@@ -957,6 +957,7 @@ service TradeConsoleService {
   rpc ListBlockedInstruments(ListBlockedInstrumentsReq) returns (ListBlockedInstrumentsRsp);
   rpc ListInstrumentHolders(ListInstrumentHoldersReq) returns (ListInstrumentHoldersRsp);
   rpc FlattenInstrument(FlattenInstrumentReq) returns (FlattenInstrumentRsp);
+  rpc ListDelists(ListDelistsReq) returns (ListDelistsRsp);
   rpc SummarizeAccountPnl(SummarizeAccountPnlReq) returns (SummarizeAccountPnlRsp);
   rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
   // GetLifecycle 读 Trade 模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
@@ -1048,6 +1049,10 @@ message BlockedInstrument {
   int64 blocked_at = 8;
   // 写入者的标识：第一个把它写进名单的调用方传的 owner，后来的重复写入不会覆盖；没传为空。
   string owner = 9;
+  // 范围：ALL 对所有账户生效；PAPER_ONLY 只对模拟盘账户生效（演练）。
+  string scope = 10;
+  // 写入或把范围升级为 ALL 的那条下架记录。
+  string delist_id = 11;
 }
 message ListBlockedInstrumentsReq {}
 message ListBlockedInstrumentsRsp {
@@ -1113,6 +1118,51 @@ message FlattenInstrumentRsp {
   bool busy = 3;
   // true 表示标的已被解除禁止而提前结束，动作记 COMPLETED，不要重试（结果 JSON 顶层也带 unblocked）。
   bool unblocked = 4;
+}
+
+// 下架记录里一轮一个组合的清仓。
+message DelistFlatten {
+  int32 round = 1;
+  string space_id = 2;
+  string logical_account_id = 3;
+  string action_id = 4;
+  // 动作状态：RUNNING、COMPLETED、PARTIAL、FAILED；空表示还没发起
+  string action_status = 5;
+  string last_error = 6;
+  int64 created_at_ms = 7;
+}
+// 一条下架记录：一个（标的、范围、下架时间）。改期时旧记录记 RESCHEDULED，由新记录接着处理。
+message Delist {
+  string delist_id = 1;
+  Exchange exchange = 2;
+  MarketType market_type = 3;
+  string exchange_symbol = 4;
+  // ALL 或 PAPER_ONLY
+  string scope = 5;
+  int64 delist_at_ms = 6;
+  // 下架消息的来源：BINANCE_SPOT_SCHEDULE、BINANCE_SWAP_EXCHANGE_INFO、OKX_SWAP_INSTRUMENTS、MANUAL
+  string notice_source = 7;
+  string source_event_id = 8;
+  // ACTIVE、COMPLETED、FAILED、CANCELED、RESCHEDULED
+  string status = 9;
+  // 已规划到第几轮：0 还没到 T−24h，1 已按 T−24h 规划，2 已按 T−2h 规划
+  int32 planned_round = 10;
+  string note = 11;
+  string result = 12;
+  int64 created_at_ms = 13;
+  int64 finished_at_ms = 14;
+  repeated DelistFlatten flattens = 15;
+}
+// 列出下架记录。全局方法，不分空间，Trade 不检查空间头。
+message ListDelistsReq {
+  // 只列进行中的；为假时列全部（按创建时间倒序）
+  bool active_only = 1;
+  // 默认 100，最多 500。
+  int32 limit = 2;
+}
+message ListDelistsRsp {
+  common.RetInfo ret_info = 1;
+  repeated Delist delists = 2;
 }
 
 // ===== 收益拆解与人工操作记录 =====

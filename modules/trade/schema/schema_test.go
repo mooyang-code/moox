@@ -44,6 +44,8 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_logical_account_target_history",
 		"t_trade_wallet_transfers",
 		"t_trade_blocked_instruments",
+		"t_trade_delists",
+		"t_trade_delist_flattens",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, tables)
@@ -55,7 +57,7 @@ func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
 		"logical_account.sql": logicalAccountSQL, "paper_account_config.sql": paperAccountConfigSQL,
 		"paper_balance.sql": paperBalanceSQL, "paper_funding.sql": paperFundingSQL, "equity.sql": equitySQL,
 		"target_history.sql": targetHistorySQL, "execution.sql": executionSQL,
-		"wallet_transfer.sql": walletTransferSQL, "blocked_instrument.sql": blockedInstrumentSQL,
+		"wallet_transfer.sql": walletTransferSQL, "delist.sql": delistSQL,
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -310,17 +312,17 @@ func TestNewTablesRejectInvalidRows(t *testing.T) {
 	require.NoError(t, db.Exec(`PRAGMA foreign_keys = OFF`).Error)
 
 	require.NoError(t, db.Exec(`
-		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_reason, c_blocked_at)
-		VALUES ('BINANCE', 'SPOT', 'FOOUSDT', '交易所公告下架', 1)
+		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_scope, c_reason, c_delist_id, c_blocked_at)
+		VALUES ('BINANCE', 'SPOT', 'FOOUSDT', 'ALL', '交易所公告下架', 'd1', 1)
 	`).Error)
 	require.Error(t, db.Exec(`
-		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_reason, c_blocked_at)
-		VALUES ('BINANCE', 'SPOT', 'FOOUSDT', '重复', 2)
+		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_scope, c_reason, c_delist_id, c_blocked_at)
+		VALUES ('BINANCE', 'SPOT', 'FOOUSDT', 'ALL', '重复', 'd2', 2)
 	`).Error)
 	// 同名代码在另一个市场是另一条记录。
 	require.NoError(t, db.Exec(`
-		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_reason, c_blocked_at)
-		VALUES ('BINANCE', 'SWAP', 'FOOUSDT', '永续下架', 3)
+		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_scope, c_reason, c_delist_id, c_blocked_at)
+		VALUES ('BINANCE', 'SWAP', 'FOOUSDT', 'PAPER_ONLY', '永续下架', 'd3', 3)
 	`).Error)
 
 	transfer := func(id, direction, state string) error {

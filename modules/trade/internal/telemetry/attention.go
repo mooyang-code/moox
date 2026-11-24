@@ -54,6 +54,11 @@ const (
 	AttentionClockSkew = "clock_skew"
 	// AttentionIsolatedPosition 是交易所账户里有逐仓持仓：moox 只支持全仓单向，该持仓不入投影，所在组合已暂停（已暂停的不改原因）。
 	AttentionIsolatedPosition = "isolated_position"
+	// AttentionDelistDetected 是收到新的下架记录，且有组合持有或有账户没能判断是否持有（3 分钟窗口）。
+	AttentionDelistDetected = "delist_detected"
+	// AttentionDelistFailed 是下架处理需要人看：当前轮清仓失败或只平了一部分、30 分钟还没能发起、
+	// 下架事件消费者没有运行、核对失败的记录在结束后 24 小时内。
+	AttentionDelistFailed = "delist_failed"
 )
 
 // attentionKinds 是 Trade 声明的全部关注项：名称是告警标题，全部是故障级。每种都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -79,6 +84,8 @@ var attentionKinds = []report.AttentionKind{
 	{Kind: AttentionFillIngestFailed, Name: "成交没能记进账本，账户卡在同一笔", Severity: report.AttentionCritical},
 	{Kind: AttentionClockSkew, Name: "本机时钟与交易所相差过大，请检查 NTP", Severity: report.AttentionCritical},
 	{Kind: AttentionIsolatedPosition, Name: "交易所账户里有逐仓持仓，moox 只支持全仓单向", Severity: report.AttentionCritical},
+	{Kind: AttentionDelistDetected, Name: "发现标的即将下架", Severity: report.AttentionCritical},
+	{Kind: AttentionDelistFailed, Name: "下架处理需人工处理", Severity: report.AttentionCritical},
 }
 
 // Attention 是 Trade 的关注项指标（moox_attention_active）。

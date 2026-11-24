@@ -672,6 +672,16 @@ func (r *ListInstrumentHoldersReq) Validate() error {
 	return validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol)
 }
 
+func (r *ListDelistsReq) Validate() error {
+	if r == nil {
+		return fmt.Errorf("request is required")
+	}
+	if r.Limit < 0 || r.Limit > 500 {
+		return fmt.Errorf("limit must be between 0 and 500")
+	}
+	return nil
+}
+
 func (r *FlattenInstrumentReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.ActionId) == "" ||

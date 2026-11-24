@@ -106,6 +106,8 @@ type TradeConsoleServiceService interface {
 
 	FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq) (*FlattenInstrumentRsp, error)
 
+	ListDelists(ctx context.Context, req *ListDelistsReq) (*ListDelistsRsp, error)
+
 	SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq) (*SummarizeAccountPnlRsp, error)
 
 	ListOperatorActions(ctx context.Context, req *ListOperatorActionsReq) (*ListOperatorActionsRsp, error)
@@ -889,6 +891,24 @@ func TradeConsoleServiceService_FlattenInstrument_Handler(svr interface{}, ctx c
 	return rsp, nil
 }
 
+func TradeConsoleServiceService_ListDelists_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListDelistsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ListDelists(ctx, reqbody.(*ListDelistsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func TradeConsoleServiceService_SummarizeAccountPnl_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SummarizeAccountPnlReq{}
 	filters, err := f(req)
@@ -1139,6 +1159,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_FlattenInstrument_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ListDelists",
+			Func: TradeConsoleServiceService_ListDelists_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/SummarizeAccountPnl",
 			Func: TradeConsoleServiceService_SummarizeAccountPnl_Handler,
 		},
@@ -1297,6 +1321,9 @@ func (s *UnimplementedTradeConsoleService) ListInstrumentHolders(ctx context.Con
 func (s *UnimplementedTradeConsoleService) FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq) (*FlattenInstrumentRsp, error) {
 	return nil, errors.New("rpc FlattenInstrument of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) ListDelists(ctx context.Context, req *ListDelistsReq) (*ListDelistsRsp, error) {
+	return nil, errors.New("rpc ListDelists of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq) (*SummarizeAccountPnlRsp, error) {
 	return nil, errors.New("rpc SummarizeAccountPnl of service TradeConsoleService is not implemented")
 }
@@ -1407,6 +1434,8 @@ type TradeConsoleServiceClientProxy interface {
 	ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq, opts ...client.Option) (rsp *ListInstrumentHoldersRsp, err error)
 
 	FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq, opts ...client.Option) (rsp *FlattenInstrumentRsp, err error)
+
+	ListDelists(ctx context.Context, req *ListDelistsReq, opts ...client.Option) (rsp *ListDelistsRsp, err error)
 
 	SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq, opts ...client.Option) (rsp *SummarizeAccountPnlRsp, err error)
 
@@ -2280,6 +2309,26 @@ func (c *TradeConsoleServiceClientProxyImpl) FlattenInstrument(ctx context.Conte
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &FlattenInstrumentRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ListDelists(ctx context.Context, req *ListDelistsReq, opts ...client.Option) (*ListDelistsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListDelists")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ListDelists")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListDelistsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

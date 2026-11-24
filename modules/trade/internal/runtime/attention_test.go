@@ -158,3 +158,23 @@ func TestAttentionReportsMarginReduceOfAManualGroupOnlyWhileRecent(t *testing.T)
 	require.Len(t, scan(time.Now()), 1, "刚结束，窗口内照报，保证 Monitor 采得到")
 	require.Empty(t, scan(time.Now().Add(rejectionWindow+time.Minute)), "结束超过窗口，告警自己消失")
 }
+
+// 下架事件消费者从启动或断开起 3 分钟仍没在运行才上报；没启用 EventBus（DelistConsumer 为空）时不上报。
+func TestAttentionReportsDelistConsumerDownAfterGrace(t *testing.T) {
+	since := time.UnixMilli(1_000_000)
+	running := false
+	worker := &AttentionWorker{DelistConsumer: func() (bool, time.Time) { return running, since }}
+	items, err := worker.delistFailed(context.Background(), since.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.Empty(t, items)
+	items, err = worker.delistFailed(context.Background(), since.Add(3*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, []string{"下架事件消费者没有运行"}, items)
+	running = true
+	items, err = worker.delistFailed(context.Background(), since.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, items)
+	items, err = (&AttentionWorker{}).delistFailed(context.Background(), since.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, items)
+}
