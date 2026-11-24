@@ -115,7 +115,7 @@
         {"service":"trpc.moox.collector.CollectMgr","method":"DeleteFunctionPackage","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"DeleteTask","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"DisableTask","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console","moox-cli"]},
-        {"service":"trpc.moox.collector.CollectMgr","method":"GetCollectorStatus","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["archive-mgr","console","moox-cli"]},
+        {"service":"trpc.moox.collector.CollectMgr","method":"GetCollectorStatus","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetDataTypeConfigWithFields","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetDataTypeConfigs","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.collector.CollectMgr","method":"GetIngestMode","component":"collector","port":11402,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console","moox-cli"]},

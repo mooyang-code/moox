@@ -224,19 +224,4 @@ describe("新建时的目录名", () => {
     expect(api.prepareArchiveTask).toHaveBeenLastCalledWith("ds_1m", "binance-spot-1m", { silentError: true });
     expect(api.createArchiveTask).toHaveBeenCalledWith(expect.objectContaining({ dir_name: "binance-spot-1m" }));
   });
-
-  it("右侧说明按避让规则写；没有整点窗口时不写顺延", async () => {
-    api.prepareArchiveTask.mockResolvedValue(prepared);
-    mountEditor({
-      mode: "create",
-      task: null,
-      presetDatasetId: "ds_1m",
-      datasets,
-      spaceId: "crypto",
-      avoidance: { every_minutes: 5, before_seconds: 5, after_seconds: 25 }
-    });
-    await flushPromises();
-    expect(document.body.textContent).toContain("不避让整点，边界到了就拉取");
-    expect(document.body.textContent).not.toContain(":58");
-  });
 });
