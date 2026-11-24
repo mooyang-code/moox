@@ -3,7 +3,6 @@ package events
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"

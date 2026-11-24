@@ -36,7 +36,7 @@ func TestOnBackfilledMarksPeriodsFilledAndKicksTasksOfTheDataset(t *testing.T) {
 		Start: timestamppb.New(start), End: timestamppb.New(start.Add(10 * time.Minute)),
 		Absent: []*storagepb.CollectorKlineAbsent{
 			{SubjectId: "ETH-USDT", Start: timestamppb.New(start), End: timestamppb.New(start.Add(2 * time.Minute))},
-			{SubjectId: "BTC-USDT", SeriesTag: "swap", Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Minute))},
+			{SubjectId: "BTC-USDT", Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Minute))},
 		},
 	}
 	r.onBackfilled("stockcn", payload)
