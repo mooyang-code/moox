@@ -112,8 +112,8 @@ func TestNewKlinePipelineRejectsSourcesMissingFromTheCatalog(t *testing.T) {
 		{"crypto", marketdata.InstrumentSwap, "unknown"},
 		{"crypto", marketdata.InstrumentSwap, ""},
 		{"crypto", marketdata.InstrumentEquity, "binance"},
-		{"crypto", marketdata.InstrumentIndex, "sina"},
-		{"stockcn", marketdata.InstrumentConvertibleBond, "tencent"},
+		{"crypto", "index", "sina"},
+		{"stockcn", "convertible_bond", "tencent"},
 		{"stockcn", "futures", "eastmoney"},
 		{"stockjp", marketdata.InstrumentEquity, "eastmoney"},
 	} {

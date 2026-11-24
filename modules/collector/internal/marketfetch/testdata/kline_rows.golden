@@ -3120,31 +3120,6 @@ space=stockcn dataset=dataset_stock_task subject=600519.XSHG freq=5m data_time=2
   amount_unit string "cny"
   source_provider string "eastmoney"
   amount double 18820
-## stockcn index 普通行（1 行）
-space=stockcn dataset=dataset_index subject=000300.XSHG freq=5m data_time=2026-11-05T01:30:00Z series_tag=default
-  open double 10
-  high double 10.5
-  low double 9.5
-  close double 10.2
-  volume double 12345
-  amount double 125919
-  index_code string "sh000300"
-  provider_id string "eastmoney"
-  source_id string "index_http"
-  provider_symbol string "sh000300"
-  funding_rate double 0.0001
-## stockcn convertible_bond 普通行（1 行）
-space=stockcn dataset=dataset_bond subject=113050.XSHG freq=5m data_time=2026-11-05T01:30:00Z series_tag=default
-  open double 10
-  high double 10.5
-  low double 9.5
-  close double 10.2
-  volume double 12345
-  amount double 125919
-  provider_id string "sina"
-  source_id string "convertible_bond_http"
-  provider_symbol string "sh113050"
-  funding_rate double 0.0001
 ## stockcn equity 未带品种的提交器（1 行）
 space=stockcn dataset=dataset_equity subject=600000.XSHG freq=5m data_time=2026-11-05T01:30:00Z series_tag=default
   open double 10

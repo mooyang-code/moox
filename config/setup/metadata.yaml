@@ -57,10 +57,6 @@ data_sources:
   name: 新浪财经
   status: active
 - space_id: stockcn
-  data_source_id: baidu
-  name: 百度行情
-  status: active
-- space_id: stockcn
   data_source_id: ths
   name: 同花顺
   status: active

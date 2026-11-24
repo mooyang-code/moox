@@ -31,4 +31,7 @@ func TestCheckKlineFrequencyFollowsCatalogAndRoutes(t *testing.T) {
 	require.ErrorContains(t, CheckKlineFrequency("stockhk", "equity", "eastmoney", "1m"), "不支持 1m")
 	require.ErrorContains(t, CheckKlineFrequency("crypto", "spot", "binance", "4h"), "不支持 4h")
 	require.ErrorContains(t, CheckKlineFrequency("crypto", "spot", "okx", "1m"), "行情源目录里没有")
+	// A 股的指数、可转债没有数据源：这类标签建任务时被拒。
+	require.ErrorContains(t, CheckKlineFrequency("stockcn", "index", "eastmoney", "5m"), "行情源目录里没有")
+	require.ErrorContains(t, CheckKlineFrequency("stockcn", "convertible_bond", "sina", "1d"), "行情源目录里没有")
 }

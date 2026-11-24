@@ -43,7 +43,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		}
 	}
 	require.ElementsMatch(t, []string{
-		"stockcn", "quantclass_stock", "eastmoney", "tdx", "tencent", "sina", "baidu", "ths", "market_data",
+		"stockcn", "quantclass_stock", "eastmoney", "tdx", "tencent", "sina", "ths", "market_data",
 	}, stockCNSources)
 	// A 股采集结果由采集任务派生（dataset_<task_id>），种子里没有 A 股行情 Dataset 与 View。
 	for _, item := range seed.Views {

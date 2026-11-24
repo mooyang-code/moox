@@ -25,5 +25,5 @@ func TestCatalogRegisterAndLookup(t *testing.T) {
 	_, err = catalog.Lookup("stockcn", InstrumentEquity, "tdx", "anything")
 	require.NoError(t, err)
 	require.True(t, catalog.Has("stockcn", InstrumentEquity))
-	require.False(t, catalog.Has("stockcn", InstrumentIndex))
+	require.False(t, catalog.Has("stockcn", InstrumentSpot))
 }

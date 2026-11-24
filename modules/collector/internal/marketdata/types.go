@@ -40,12 +40,9 @@ func (key SourceKey) Validate() error {
 }
 
 const (
-	InstrumentEquity          InstrumentType = "equity"
-	InstrumentETF             InstrumentType = "etf"
-	InstrumentIndex           InstrumentType = "index"
-	InstrumentConvertibleBond InstrumentType = "convertible_bond"
-	InstrumentSpot            InstrumentType = "spot"
-	InstrumentSwap            InstrumentType = "swap"
+	InstrumentEquity InstrumentType = "equity"
+	InstrumentSpot   InstrumentType = "spot"
+	InstrumentSwap   InstrumentType = "swap"
 )
 
 // HasTradeCount 报告这个品种的 K 线是否带报价成交量（quote_volume）和成交笔数（trade_num）：现货、永续带，
