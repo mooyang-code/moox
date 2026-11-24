@@ -20,15 +20,8 @@ const action = (result_json: string): OperatorAction => ({
 });
 
 describe("人工操作记录", () => {
-  it("六种类型都有中文名，未知类型原样显示", () => {
-    expect(operatorActionTypeOptions.map(item => item.label)).toEqual([
-      "人工下单",
-      "提交订单",
-      "撤单",
-      "整组清仓",
-      "按比例减仓",
-      "下架清仓"
-    ]);
+  it("五种类型都有中文名，未知类型原样显示", () => {
+    expect(operatorActionTypeOptions.map(item => item.label)).toEqual(["人工下单", "撤单", "整组清仓", "按比例减仓", "下架清仓"]);
     expect(operatorActionTypeText("REDUCE")).toBe("按比例减仓");
     expect(operatorActionTypeText("NEW_TYPE")).toBe("NEW_TYPE");
     expect(operatorActionTypeText("")).toBe("未知");

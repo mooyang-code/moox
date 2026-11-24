@@ -2,8 +2,10 @@ package rpc
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
@@ -135,7 +137,90 @@ func errorInfo(err error) *tradepb.RetInfo {
 		}
 		return retInfo(code, internalErrorMessage)
 	}
-	return retInfo(code, err.Error())
+	return retInfo(code, userFacingMessage(err))
+}
+
+// userFacingMessage 是回给调用方的错误文案：沿 fmt.Errorf 的 %w 包装链逐层判断，某一层自己写的文字（如“%w: 原因”里的
+// 原因）整层没有汉字、又是带空格的英文句子时去掉这一层的文字（标的代码、ID 这类标识保留），原文写日志；例如冲突包着的 stale order version 不再显示到页面上。
+// 一层之内不再切分；被包装的错误本身（交易所错误、自定义错误类型等）原样保留，不丢交易所原文。
+// 整条结果一个汉字都没有的（不是 Trade 自己的错误）原样返回，不吞掉唯一的线索。
+func userFacingMessage(err error) string {
+	raw := err.Error()
+	text, dropped := userFacingLayers(err)
+	if !dropped || !containsHan(text) {
+		return raw
+	}
+	log.Infof("交易服务返回的错误去掉了英文内部原因，原文：%s", raw)
+	return text
+}
+
+// userFacingLayers 渲染一层错误；dropped 表示这一层或更里面的层去掉了英文文字。
+func userFacingLayers(err error) (string, bool) {
+	if !isStdWrapper(err) {
+		return err.Error(), false
+	}
+	var children []error
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		children = multi.Unwrap()
+	} else if child := errors.Unwrap(err); child != nil {
+		children = []error{child}
+	}
+	msg := err.Error()
+	if fmt.Sprintf("%T", err) == "*errors.joinError" {
+		parts := make([]string, 0, len(children))
+		dropped := false
+		for _, child := range children {
+			text, childDropped := userFacingLayers(child)
+			parts, dropped = append(parts, text), dropped || childDropped
+		}
+		return strings.Join(parts, "\n"), dropped
+	}
+	// 按顺序在消息里找出每个被包装错误的位置，其余部分是这一层自己写的文字。
+	var own strings.Builder
+	rendered := make([]string, 0, len(children))
+	var withChildren strings.Builder
+	dropped := false
+	cursor := 0
+	for _, child := range children {
+		childText := child.Error()
+		at := strings.Index(msg[cursor:], childText)
+		if at < 0 {
+			return msg, false
+		}
+		own.WriteString(msg[cursor : cursor+at])
+		text, childDropped := userFacingLayers(child)
+		dropped = dropped || childDropped
+		withChildren.WriteString(msg[cursor : cursor+at])
+		withChildren.WriteString(text)
+		rendered = append(rendered, text)
+		cursor += at + len(childText)
+	}
+	own.WriteString(msg[cursor:])
+	withChildren.WriteString(msg[cursor:])
+	ownText := strings.Trim(own.String(), " :：;；,，\n")
+	// 只去掉英文句子（带空格、没有汉字）：标的代码、账户 ID 这类不带空格的标识照样保留。
+	if ownText == "" || containsHan(ownText) || !strings.Contains(ownText, " ") {
+		return withChildren.String(), dropped
+	}
+	return strings.Join(rendered, ": "), true
+}
+
+// isStdWrapper 报告错误是不是 fmt.Errorf 或 errors.Join 生成的包装：只有这两种按层拆，其余错误类型原样渲染。
+func isStdWrapper(err error) bool {
+	switch fmt.Sprintf("%T", err) {
+	case "*fmt.wrapError", "*fmt.wrapErrors", "*errors.joinError":
+		return true
+	}
+	return false
+}
+
+func containsHan(value string) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 type pageSpec struct {

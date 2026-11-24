@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
@@ -117,7 +116,7 @@ func TestDefinitionsAreCompiledWithTheActiveVersion(t *testing.T) {
 	require.Equal(t, hash1, domain.DefinitionHash(list[0]))
 }
 
-func TestPinsOverrideTheActiveVersion(t *testing.T) {
+func TestOverridesTakePrecedenceOverTheActiveVersion(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	v1 := putExample(t, s, "ts_mean")
@@ -134,15 +133,10 @@ func TestPinsOverrideTheActiveVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, v1.Hash, live.UDFs["ts_mean_udf"].Hash)
 
-	pinned, err := s.GetFactor(WithUDFPins(ctx, map[string]string{"ts_mean_udf": v2.Hash}), "f")
+	// 请求级覆盖优先于启用版本。
+	env, err := s.ResolveUDFs(ctx, []string{"ts_mean_udf"}, map[string]string{"ts_mean_udf": v2.Hash})
 	require.NoError(t, err)
-	require.Equal(t, v2.Hash, pinned.UDFs["ts_mean_udf"].Hash, "固定绑定优先于启用版本")
-	require.NotEqual(t, domain.DefinitionHash(live), domain.DefinitionHash(pinned), "绑定不同，definition_hash 不同")
-
-	// 请求级覆盖优先于固定绑定。
-	env, err := s.ResolveUDFs(WithUDFPins(ctx, map[string]string{"ts_mean_udf": v2.Hash}), []string{"ts_mean_udf"}, map[string]string{"ts_mean_udf": v1.Hash})
-	require.NoError(t, err)
-	require.Equal(t, v1.Hash, env["ts_mean_udf"].Hash)
+	require.Equal(t, v2.Hash, env["ts_mean_udf"].Hash)
 
 	// 指向不存在的版本是错误，不是静默回退。
 	_, err = s.ResolveUDFs(ctx, []string{"ts_mean_udf"}, map[string]string{"ts_mean_udf": "nope"})
@@ -221,39 +215,4 @@ func TestUdfReferencesFindCallsWrittenWithWhitespace(t *testing.T) {
 	refs, err := s.UdfReferences(ctx, v.Name)
 	require.NoError(t, err)
 	require.Equal(t, []string{"f_ws"}, refs)
-}
-
-// 补算作业的绑定记在作业行上：没固化过读不到；空绑定也算固化过；已经固化的不被覆盖。
-func TestJobBindingsArePinnedOnce(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
-	for _, id := range []string{"job-1", "job-2"} {
-		_, err := s.CreateRecalcJob(ctx, RecalcJob{JobID: id, RequestID: "req-" + id, TaskID: "task_prices", StartTime: 100, EndTime: 1000})
-		require.NoError(t, err)
-	}
-	_, found, err := s.JobBindings(ctx, "job-1")
-	require.NoError(t, err)
-	require.False(t, found)
-
-	pinned, err := s.SaveJobBindings(ctx, "job-1", map[string]string{})
-	require.NoError(t, err)
-	require.Empty(t, pinned)
-	pinned, found, err = s.JobBindings(ctx, "job-1")
-	require.NoError(t, err)
-	require.True(t, found, "空绑定也算固化过")
-	require.Empty(t, pinned)
-
-	before := time.Now().UTC()
-	_, err = s.SaveJobBindings(ctx, "job-2", map[string]string{"u": "h1"})
-	require.NoError(t, err)
-	saved, err := s.GetRecalcJob(ctx, "job-2")
-	require.NoError(t, err)
-	require.False(t, saved.UpdatedAt.Before(before), "固化时写入带小数秒的更新时间，不落到触发器的秒级时间上")
-	pinned, err = s.SaveJobBindings(ctx, "job-2", map[string]string{"u": "h2"})
-	require.NoError(t, err)
-	require.Equal(t, map[string]string{"u": "h1"}, pinned, "已经固化的不覆盖")
-
-	_, err = s.SaveJobBindings(ctx, "missing", map[string]string{})
-	require.Error(t, err)
 }

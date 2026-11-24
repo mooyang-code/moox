@@ -34,7 +34,6 @@ type HealthStore interface {
 	AutoChunksSince(context.Context, string, time.Time, int) ([]store.BackfillChunk, error)
 	FailedChunkCounts(context.Context, string, time.Time) (map[string]int, error)
 	AbsentBars(context.Context, string) (map[string]int, error)
-	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
 }
 
 // DatasetHealth 是一个正在采集的数据集（某个频率）的健康度。
@@ -52,7 +51,6 @@ type DatasetHealth struct {
 	GapBars      int
 	GapSubjects  int
 	FailedChunks int
-	History      *store.HistoryScan
 	AbsentBars   int
 	Level        string
 	Reasons      []string
@@ -78,10 +76,6 @@ func Health(ctx context.Context, source TimelineSource, repo HealthStore, spaceI
 		return nil, err
 	}
 	absent, err := repo.AbsentBars(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	scans, err := repo.HistoryScans(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -132,9 +126,6 @@ func Health(ctx context.Context, source TimelineSource, repo HealthStore, spaceI
 		if stat := gaps[key]; stat != nil {
 			health.GapBars, health.GapSubjects = stat.bars, len(stat.subjects)
 		}
-		if scan, ok := scans[key]; ok {
-			health.History = &scan
-		}
 		health.Level, health.Reasons = assess(health)
 		out = append(out, health)
 	}
@@ -165,13 +156,6 @@ func assess(health DatasetHealth) (string, []string) {
 	}
 	if health.FailedChunks > 0 {
 		raise(HealthWarn, fmt.Sprintf("24 小时内 %d 个补采分块失败", health.FailedChunks))
-	}
-	if history := health.History; history != nil {
-		if history.LastError != "" {
-			raise(HealthWarn, "历史缺口扫描失败："+history.LastError)
-		} else if history.GapBars > 0 {
-			raise(HealthWarn, fmt.Sprintf("历史缺口 %d 根（%d 个标的）待补采确认", history.GapBars, history.GapSubjects))
-		}
 	}
 	return level, reasons
 }

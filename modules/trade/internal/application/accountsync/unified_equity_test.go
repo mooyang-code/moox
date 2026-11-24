@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,7 +108,7 @@ func TestSyncWritesUnifiedEquity(t *testing.T) {
 				}); err != nil {
 					return err
 				}
-				return tx.CreateOrder(store.OrderRecord{
+				return storetest.CreateFilledOrder(tx, store.OrderRecord{
 					SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought", ClientOrderID: "bought",
 					Exchange: tc.exchange, MarketType: "SPOT", ExchangeSymbol: tc.symbol, InstrumentID: "BTC-USDT-SPOT",
 					OrderType: "MARKET", Side: "BUY", Quantity: "0.01", FilledQuantity: "0.01", ReferencePrice: "50000",

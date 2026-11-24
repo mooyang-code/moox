@@ -276,7 +276,7 @@ func TestBNBReserveCountsAllWalletsAndWaitsForTheOpenOrder(t *testing.T) {
 	// 上一次的补买单还没结束：不再重复下。
 	g := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	require.NoError(t, g.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "open-bnb", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "open-bnb",
 			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BNB-USDT-SPOT", ExchangeSymbol: "BNBUSDT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "0.3", ReferencePrice: "600", OwnerType: "SYSTEM", OwnerID: "bnb-reserve",
@@ -389,7 +389,7 @@ func (f *fixture) markManaged(bases ...string) {
 	f.t.Helper()
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		for _, base := range bases {
-			if err := tx.CreateOrder(store.OrderRecord{
+			if err := storetest.CreateFilledOrder(tx, store.OrderRecord{
 				SpaceID: "space-1", OrderID: "traded-" + base, TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "traded-" + base,
 				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: base + "-USDT-SPOT", ExchangeSymbol: base + "USDT",
 				OrderType: "MARKET", Side: "BUY", Quantity: "1", FilledQuantity: "1", ReferencePrice: "1", AveragePrice: "1",
@@ -544,7 +544,7 @@ func TestBNBDiscountDoesNotWaitForTheLogicalAccountLock(t *testing.T) {
 func TestStablecoinCancelsLastRoundsUnfilledBuyBeforeRecalculating(t *testing.T) {
 	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
 			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
@@ -562,7 +562,7 @@ func TestStablecoinCancelsLastRoundsUnfilledBuyBeforeRecalculating(t *testing.T)
 func TestStablecoinDoesNotReplaceTheBuyWhileTheAccountIsNotReady(t *testing.T) {
 	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
 			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
@@ -581,7 +581,7 @@ func TestStablecoinDoesNotReplaceTheBuyWhileTheAccountIsNotReady(t *testing.T) {
 func TestStablecoinKeepsARecentBuyUntilTheNextScheduledCheck(t *testing.T) {
 	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
 			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
@@ -653,7 +653,7 @@ func TestDustConvertBacksOffAfterAFailure(t *testing.T) {
 func TestStaleStableBuyIsCancelledEvenWhenBNBTopUpIsBusy(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200","stablecoin_margin":{"USDT":"0.6","USDC":"0.4"}}`, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
 			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",

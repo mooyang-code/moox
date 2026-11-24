@@ -12,12 +12,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -88,10 +86,14 @@ type BackfillStore interface {
 	Watermark(context.Context, string, string, string) (time.Time, error)
 	SetWatermark(context.Context, string, string, string, time.Time) error
 	AddAbsences(context.Context, []store.SourceAbsence) error
-	AbsencesIn(context.Context, string, string, string, string, []string, time.Time, time.Time) ([]store.SourceAbsence, error)
+	AbsencesIn(context.Context, string, string, string, []string, time.Time, time.Time) ([]store.SourceAbsence, error)
 	ClearAbsences(context.Context, string, string, string) (int64, error)
-	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
-	SaveHistoryScan(context.Context, store.HistoryScan) error
+}
+
+// RouteSource 由当前的采集任务给出补采数据集（某个频率）用的来源、拉取参数与输出字段，由 *fetchplan.BackfillRoutes 实现。
+// 返回的计划只用 Market、Fetch 与 Datasets 里这个数据集的输出字段；没有写这个数据集的任务（已删除）时 found 为假。
+type RouteSource interface {
+	BackfillRoute(ctx context.Context, spaceID, datasetID, frequency string) (plan *marketfetch.Plan, found bool, err error)
 }
 
 // FunctionProvider 保证补采函数存在并返回函数名。
@@ -111,8 +113,8 @@ type Backfiller struct {
 
 	Checker *Checker
 	Store   BackfillStore
-	// Plans 是全部采集计划记录，只用来找补采分块当时的市场与符号映射；时间线读 Checker.Timeline。
-	Plans     PlanHistory
+	// Routes 给出补采用的来源与参数（取当前任务）；交易所符号按 Checker.Timeline 取分块起点那一段的。
+	Routes    RouteSource
 	Invoker   Invoker
 	Functions func(spaceID string) FunctionProvider
 	// Executor 返回数据集的补采执行端（scf 或 local），为空时按 scf；Local 是本地执行端（collector-stream 里的 MarketFetchExecutor）。
@@ -139,9 +141,7 @@ type Backfiller struct {
 	lastScan map[string]time.Time
 	// refetchedDay 是每个空间最近一次已提交收市后整天重取的那天（范围起点），只在内存里，防止同一轮里重复提交。
 	refetchedDay map[string]time.Time
-	// lastHistoryRun 是每个空间最近一次历史缺口扫描的时间（见 ScanHistory）；每个数据集的扫描记录保存在库里。
-	lastHistoryRun map[string]time.Time
-	workers        sync.WaitGroup
+	workers      sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
 }
@@ -182,11 +182,8 @@ func splitGap(gap Gap, frequency marketdata.Frequency) [][2]time.Time {
 	return parts
 }
 
-// chunkID 是分块的稳定标识；统一数据集（seriesTag 非空）在标的之后带上序列，单序列数据集的标识与以前一致。
-func chunkID(jobID, datasetID, frequency, subject, seriesTag string, from time.Time) string {
-	if seriesTag != "" {
-		return fmt.Sprintf("bf|%s|%s|%s|%s|%s|%d", jobID, datasetID, frequency, subject, seriesTag, from.Unix())
-	}
+// chunkID 是分块的稳定标识。
+func chunkID(jobID, datasetID, frequency, subject string, from time.Time) string {
 	return fmt.Sprintf("bf|%s|%s|%s|%s|%d", jobID, datasetID, frequency, subject, from.Unix())
 }
 
@@ -207,15 +204,16 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	if b == nil || b.Checker == nil || b.Store == nil {
 		return "", 0, fmt.Errorf("backfiller is not initialized")
 	}
-	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force, BeforeFirstPlan: request.Force, IncludeOpenBar: request.IncludeOpenBar})
+	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force, IncludeOpenBar: request.IncludeOpenBar})
 	if err != nil {
 		return "", 0, err
 	}
-	if len(result.Gaps) == 0 {
-		return "", 0, nil
-	}
 	if result.Truncated {
 		return "", 0, fmt.Errorf("%w: more than %d gaps", errTooManyChunks, MaxGaps)
+	}
+	gaps, err := b.gapsWithTask(ctx, request, result.Gaps)
+	if err != nil || len(gaps) == 0 {
+		return "", 0, err
 	}
 	job := store.BackfillJob{SpaceID: request.SpaceID, Source: source, Kind: store.BackfillKindGap, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To}
 	if request.Force {
@@ -224,7 +222,36 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	if request.Watermark != nil {
 		job.DatasetID, job.Frequency, job.AdvanceWatermark = request.Watermark.DatasetID, request.Watermark.Frequency, true
 	}
-	return b.createJob(ctx, job, result.Gaps, maxChunks)
+	return b.createJob(ctx, job, gaps, maxChunks)
+}
+
+// gapsWithTask 只留下仍有采集任务的数据集的缺口：补采的来源、参数取当前任务，任务删除后不能补采
+// （时间线里停止采集的历史段仍在，不过滤的话会把它们列成缺口，建出的分块逐个失败）。
+// 指定了数据集而它没有任务时明确拒绝；不指定数据集时跳过这些数据集。
+func (b *Backfiller) gapsWithTask(ctx context.Context, request JobRequest, gaps []Gap) ([]Gap, error) {
+	if b.Routes == nil {
+		return nil, fmt.Errorf("backfill routes are not configured")
+	}
+	found := map[string]bool{}
+	var kept []Gap
+	for _, gap := range gaps {
+		key := DatasetKey(gap.DatasetID, gap.Frequency)
+		ok, seen := found[key]
+		if !seen {
+			_, exists, err := b.Routes.BackfillRoute(ctx, request.SpaceID, gap.DatasetID, gap.Frequency)
+			if err != nil {
+				return nil, err
+			}
+			ok, found[key] = exists, exists
+			if !exists && request.DatasetID != "" {
+				return nil, fmt.Errorf("数据集 %s（%s）没有对应的采集任务（任务已删除），不能补采", gap.DatasetID, gap.Frequency)
+			}
+		}
+		if ok {
+			kept = append(kept, gap)
+		}
+	}
+	return kept, nil
 }
 
 // createJob 把缺口拆成分块并保存作业，返回作业 ID 与分块数。作业没写频率时，若全部缺口属于同一频率就补上。
@@ -240,7 +267,7 @@ func (b *Backfiller) createJob(ctx context.Context, job store.BackfillJob, gaps 
 			return "", 0, err
 		}
 		for _, part := range splitGap(gap, frequency) {
-			chunks = append(chunks, store.BackfillChunk{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, SeriesTag: gap.SeriesTag, From: part[0], To: part[1], ChunkID: chunkID(jobID, gap.DatasetID, gap.Frequency, gap.SubjectID, gap.SeriesTag, part[0])})
+			chunks = append(chunks, store.BackfillChunk{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: part[0], To: part[1], ChunkID: chunkID(jobID, gap.DatasetID, gap.Frequency, gap.SubjectID, part[0])})
 		}
 	}
 	if len(chunks) > maxChunks {
@@ -325,7 +352,7 @@ func (b *Backfiller) Retry(ctx context.Context, jobID string) (int, error) {
 	return b.Store.RetryJob(ctx, jobID)
 }
 
-// ClearAbsences 清掉一个数据集已确认的行情源缺失，并让历史扫描重新进行；返回清掉的区间数。
+// ClearAbsences 清掉一个数据集已确认的行情源缺失，之后的检查与补采重新判断这些 K 线；返回清掉的区间数。
 func (b *Backfiller) ClearAbsences(ctx context.Context, spaceID, datasetID, frequency string) (int64, error) {
 	return b.Store.ClearAbsences(ctx, spaceID, datasetID, frequency)
 }
@@ -352,10 +379,6 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	sort.SliceStable(jobs, func(i, j int) bool {
 		return jobs[i].Kind != store.BackfillKindForce && jobs[j].Kind == store.BackfillKindForce
 	})
-	// 采集计划记录每轮只读一次（第一次认领到分块时），本轮各作业认领的分块共用。
-	var history *planHistory
-	var historyErr error
-	historyLoaded := false
 	for _, job := range jobs {
 		inFlight, err := b.Store.InFlightChunks(ctx, spaceID)
 		if err != nil {
@@ -371,10 +394,6 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 				if err := b.Store.SetJobStatus(ctx, job.JobID, store.BackfillRunning, ""); err != nil {
 					return err
 				}
-				if !historyLoaded {
-					history, historyErr = b.loadPlanHistory(ctx, spaceID)
-					historyLoaded = true
-				}
 			}
 			for _, chunk := range claimed {
 				b.workers.Add(1)
@@ -383,7 +402,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 					// 分块执行完（成功或失败）后立刻补位认领下一块，不等下一次定时调度：
 					// 否则吞吐被限制为每次调度一批（每分钟约 5 块），大窗口要排很久。
 					// 退回名额、结果不明的分块不触发补位，避免函数未就绪时空转。
-					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce, history, historyErr) && b.Refill {
+					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce) && b.Refill {
 						if err := b.Tick(b.baseContext(), spaceID); err != nil {
 							log.WarnContextf(b.baseContext(), "collector backfill refill failed space=%s: %v", spaceID, err)
 						}
@@ -420,108 +439,29 @@ func (b *Backfiller) baseContext() context.Context {
 	return context.Background()
 }
 
-// planHistory 是一个空间的全部采集计划记录（按先后）连同解码后的内容。补采按它找历史上负责某个标的的函数计划。
-// 每轮补采调度（Tick）读一次、解码一次，本轮认领的分块共用；不跨轮缓存。
-type planHistory struct {
-	records  []*store.FetchPlanRecord
-	contents []*fetchplan.FetchPlanContent
-}
-
-// loadPlanHistory 读出并解码空间的全部采集计划记录。
-func (b *Backfiller) loadPlanHistory(ctx context.Context, spaceID string) (*planHistory, error) {
-	records, err := b.Plans.ListAll(ctx, spaceID)
+// chunkPlan 返回分块用的计划：来源、拉取参数、输出字段取当前任务（Routes），交易所符号取标的时间线上覆盖分块起点的那一段
+// （改名或换合约的标的，旧区间要用旧符号，否则会取到别的交易对并写入）。
+func (b *Backfiller) chunkPlan(ctx context.Context, spaceID string, chunk store.BackfillChunk) (*marketfetch.Plan, error) {
+	if b.Routes == nil {
+		return nil, fmt.Errorf("backfill routes are not configured")
+	}
+	plan, found, err := b.Routes.BackfillRoute(ctx, spaceID, chunk.DatasetID, chunk.Frequency)
 	if err != nil {
 		return nil, err
 	}
-	history := &planHistory{records: records, contents: make([]*fetchplan.FetchPlanContent, len(records))}
-	for i := range records {
-		if history.contents[i], err = fetchplan.DecodeFetchPlanContent(records[i].Plan); err != nil {
-			return nil, err
-		}
+	if !found {
+		return nil, fmt.Errorf("数据集 %s（%s）没有对应的采集任务（任务已删除），不能补采", chunk.DatasetID, chunk.Frequency)
 	}
-	return history, nil
-}
-
-// datasetMarket 从采集计划里找到负责该标的的那份函数计划（市场与交易所符号映射）。
-// 例外符号只保存在负责该标的的函数计划里，所以必须按数据集、频率、标的与时间定位，不能借用同一数据集的其他分片。
-// 优先选择在 at 时已生效的计划份，找不到时退回最近一份包含该标的的计划。
-// 统一数据集（seriesTag 非空）里同一标的有现货、永续两条序列，分属不同市场的函数：只选市场与该序列一致的计划，
-// 补采才会用对应市场的路由取数，写出的行 tag 与缺口一致，不会把永续的缺口补成现货行。
-func (h *planHistory) datasetMarket(datasetID, frequency, subjectID, seriesTag string, at time.Time) (*marketfetch.Plan, error) {
-	wantMarket := ""
-	if seriesTag != "" {
-		wantMarket = seriesset.SeriesTagMarket(seriesTag)
+	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
+	if err != nil {
+		return nil, err
 	}
-	records, contents := h.records, h.contents
-	key := DatasetKey(datasetID, frequency)
-	// resolve 返回选中的计划；标的的符号映射按原始新旧计划与时间重新判定，避免过渡计划合并后的映射用错。
-	resolve := func(content *fetchplan.FetchPlanContent, function *fetchplan.PlanFunctionChange, plan *marketfetch.Plan) *marketfetch.Plan {
-		symbol, ok := content.SymbolAt(function, key, subjectID, at)
-		if !ok || plan.ExchangeSymbol(subjectID) == symbol {
-			return plan
-		}
-		patched := *plan
-		patched.SymbolExceptions = map[string]string{}
-		for id, value := range plan.SymbolExceptions {
-			patched.SymbolExceptions[id] = value
-		}
-		patched.SymbolExceptions[subjectID] = symbol
-		return &patched
+	symbol, ok := timeline.SymbolAt(DatasetKey(chunk.DatasetID, chunk.Frequency), chunk.SubjectID, chunk.From)
+	if !ok {
+		return nil, fmt.Errorf("标的时间线里没有 %s 在 %s 的交易所符号", chunk.SubjectID, chunk.From.UTC().Format(time.RFC3339))
 	}
-	for i := range records {
-		content := contents[i]
-		// 纯符号映射变更没有数据集生效边界：不知道旧映射适用到何时，变更之前的历史数据拒绝补采，避免取错交易对。
-		for _, name := range content.SortedFunctionNames() {
-			if !content.SymbolChangedWithoutBoundary(content.Functions[name], key, subjectID) {
-				continue
-			}
-			// 未完成的计划还在更新（进度、错误、停用收尾都会改 UpdatedAt），无法证明映射何时切换：一律拒绝。
-			// 已生效的计划不再更新，UpdatedAt 是确认完成的保守上界：此前的历史数据拒绝，此后的照常。
-			if records[i].Status != store.FetchPlanApplied {
-				return nil, fmt.Errorf("symbol mapping of %s is changing in an unfinished fetch plan without an effective boundary; backfill is refused until it is applied", subjectID)
-			}
-			if at.Before(records[i].UpdatedAt) {
-				return nil, fmt.Errorf("symbol mapping of %s changed at %s without an effective boundary; backfill of earlier data is refused", subjectID, records[i].UpdatedAt.UTC().Format(time.RFC3339))
-			}
-		}
-	}
-	var fallback *marketfetch.Plan
-	for i := len(records) - 1; i >= 0; i-- {
-		content := contents[i]
-		for _, name := range content.SortedFunctionNames() {
-			function := content.Functions[name]
-			for _, plan := range []*marketfetch.Plan{content.FinalPlan(function), content.TransitionalPlan(function)} {
-				if plan == nil || (wantMarket != "" && !strings.EqualFold(plan.Market.MarketType, wantMarket)) {
-					continue
-				}
-				for _, dataset := range plan.Datasets {
-					if marketfetch.PlanDatasetKeyOf(dataset) != key {
-						continue
-					}
-					for _, copyView := range dataset.Copies {
-						for _, subject := range copyView.Subjects {
-							if !strings.EqualFold(subject.ID, subjectID) {
-								continue
-							}
-							if copyView.From <= at.Unix() {
-								return resolve(content, function, plan), nil
-							}
-							if fallback == nil {
-								fallback = resolve(content, function, plan)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	if fallback != nil {
-		return fallback, nil
-	}
-	if seriesTag != "" {
-		return nil, fmt.Errorf("subject %s (series %s) of dataset %s %s is not part of any fetch plan", subjectID, seriesTag, datasetID, frequency)
-	}
-	return nil, fmt.Errorf("subject %s of dataset %s %s is not part of any fetch plan", subjectID, datasetID, frequency)
+	plan.SymbolExceptions = map[string]string{chunk.SubjectID: symbol}
+	return plan, nil
 }
 
 // chunkRequest 构造补采分块的调用请求：一个标的、一段连续时间，只写行，不涉及周期。force 是强制重拉作业的分块：
@@ -564,8 +504,8 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 }
 
 // runChunk 调用补采函数执行一个分块，随后复查该块的缺口。force 表示分块属于强制重拉作业：函数报失败时退回重试
-// （见下文），而不是直接记失败。history、historyErr 是本轮调度读出的采集计划记录（读取失败时分块记失败）。
-func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force bool, history *planHistory, historyErr error) (finished bool) {
+// （见下文），而不是直接记失败。
+func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force bool) (finished bool) {
 	fail := func(err error) {
 		finished = true
 		log.WarnContextf(ctx, "collector backfill chunk failed space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
@@ -581,11 +521,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(errors.New(reason))
 		return
 	}
-	if historyErr != nil {
-		fail(historyErr)
-		return
-	}
-	plan, err := history.datasetMarket(chunk.DatasetID, chunk.Frequency, chunk.SubjectID, chunk.SeriesTag, chunk.From)
+	plan, err := b.chunkPlan(ctx, spaceID, chunk)
 	if err != nil {
 		fail(err)
 		return
@@ -664,8 +600,8 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		}
 		return false
 	}
-	// 复查带上 BeforeFirstPlan：强制重拉早于计划生效点的分块要真的读回来确认；范围在计划内的分块不受影响。
-	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, SeriesTag: chunk.SeriesTag, From: chunk.From, To: chunk.To, BeforeFirstPlan: true})
+	// 复查与检查同一口径：早于时间线起点的分块同样读回确认。
+	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, From: chunk.From, To: chunk.To})
 	if err != nil {
 		fail(fmt.Errorf("verify chunk: %w", err))
 		return
@@ -720,7 +656,7 @@ func missingKey(gaps []Gap) string {
 func absencesOf(spaceID string, gaps []Gap) []store.SourceAbsence {
 	out := make([]store.SourceAbsence, 0, len(gaps))
 	for _, gap := range gaps {
-		out = append(out, store.SourceAbsence{SpaceID: spaceID, DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, SeriesTag: gap.SeriesTag, From: gap.From, To: gap.To, Bars: gap.Missing})
+		out = append(out, store.SourceAbsence{SpaceID: spaceID, DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: gap.From, To: gap.To, Bars: gap.Missing})
 	}
 	return out
 }

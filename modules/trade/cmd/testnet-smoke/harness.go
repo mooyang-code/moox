@@ -297,10 +297,10 @@ func runSubmitPhase(
 		return err
 	}
 	clientOrderID := xid.New().String()
-	result, err := harness.operator.PlaceManualOrder(
+	result, err := harness.operator.PlaceOrder(
 		ctx,
 		operatorapp.ManualOrderCommand{
-			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
+			SpaceID: smokeSpaceID, ActionID: xid.New().String(), LogicalAccountID: harness.identity.LogicalAccountID,
 			TradingAccountID: harness.identity.AccountID,
 			ClientOrderID:    clientOrderID, InstrumentID: instrument.InstrumentID,
 			Type: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyGTC,
@@ -654,10 +654,10 @@ func cleanupTestExposure(
 	if quantity.Cmp(mustDecimal(instrument.MinExchangeQuantity).Mul(contractValue)) < 0 {
 		return delta, errors.New("test fill is below the Exchange cleanup minimum")
 	}
-	cleanup, err := harness.operator.PlaceManualOrder(
+	cleanup, err := harness.operator.PlaceOrder(
 		ctx,
 		operatorapp.ManualOrderCommand{
-			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
+			SpaceID: smokeSpaceID, ActionID: xid.New().String(), LogicalAccountID: state.LogicalAccountID,
 			TradingAccountID: state.AccountID, ClientOrderID: xid.New().String(),
 			InstrumentID: state.InstrumentID, Type: exchange.OrderTypeMarket,
 			Side: exchange.SideSell, PositionSide: exchange.RuleFor(state.MarketType).PositionSide, Quantity: quantity,

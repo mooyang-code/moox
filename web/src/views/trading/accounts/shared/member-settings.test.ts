@@ -55,7 +55,7 @@ describe("执行账户设置", () => {
     expect(wrapper.text()).toContain("初始资金");
     expect(wrapper.text()).toContain("创建后都不能改");
     expect(wrapper.text()).toContain("当前5 天");
-    expect(wrapper.text()).toContain("只有纯永续模拟账户");
+    expect(wrapper.text()).toContain("所有模拟账户都按它清理");
     expect(wrapper.findAll("input")).toHaveLength(1);
     expect(wrapper.findAll("button").map(item => item.text())).toContain("保存");
     expect(wrapper.findAll("button").map(item => item.text())).not.toContain("设置");

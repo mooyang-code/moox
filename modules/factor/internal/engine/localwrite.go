@@ -124,11 +124,7 @@ func (w *localWriter) write(ctx context.Context, req *factorpb.WriteSeriesReq) (
 	if opts.RecordPending && opts.PendingReason == "" {
 		opts.PendingReason = "import"
 	}
-	scoped, err := w.data.UnifiedDataset(ctx, src)
-	if err != nil {
-		return nil, innerWrite(err)
-	}
-	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows, Scoped: scoped}}, opts)
+	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows}}, opts)
 	if err != nil {
 		var gap *seriesstore.GapError
 		if errors.As(err, &gap) || errors.Is(err, seriesstore.ErrInvalidWrite) || errors.Is(err, seriesstore.ErrSchema) {

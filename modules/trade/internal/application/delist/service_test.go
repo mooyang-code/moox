@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,7 +111,7 @@ func markManaged(t *testing.T, tradeStore *store.Store, accountID, orderID strin
 		logicalID = logical.LogicalAccountID
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: accountID, OrderID: orderID, ClientOrderID: orderID,
 			Exchange: account.Exchange, MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", InstrumentID: "FOO-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "5", FilledQuantity: "5", ReferencePrice: "1",

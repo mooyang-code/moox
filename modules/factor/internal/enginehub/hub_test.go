@@ -22,7 +22,7 @@ func newTestHub(t *testing.T) (*Hub, *store.Store, *fakeClock) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	clock := &fakeClock{now: time.Unix(1_000_000, 0).UTC()}
-	return New(db, WithClock(clock.Now), WithEngineLeaseTTL(45*time.Second), WithJobLeaseTTL(time.Minute)), db, clock
+	return New(db, WithClock(clock.Now), WithEngineLeaseTTL(45*time.Second)), db, clock
 }
 
 func seedTask(t *testing.T, db *store.Store, taskID string, members map[string]string) domain.FactorTask {

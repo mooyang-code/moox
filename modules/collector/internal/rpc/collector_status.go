@@ -163,10 +163,6 @@ func datasetStatusToPB(item klinecheck.DatasetHealth, functions int) *pb.Collect
 	if !item.InspectedUntil.IsZero() {
 		out.InspectedUntil = item.InspectedUntil.UTC().Format(time.RFC3339)
 	}
-	if history := item.History; history != nil {
-		out.HistoryScannedAt = history.ScannedAt.UTC().Format(time.RFC3339)
-		out.HistoryGapBars, out.HistoryGapSubjects, out.HistoryError = int32(history.GapBars), int32(history.GapSubjects), history.LastError
-	}
 	return out
 }
 

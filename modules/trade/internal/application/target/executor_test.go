@@ -1053,7 +1053,7 @@ func (f *targetFixture) order(t *testing.T, record store.OrderRecord) {
 		if err := f.ensureOrderTarget(tx, record); err != nil {
 			return err
 		}
-		return tx.CreateOrder(record)
+		return storetest.CreateFilledOrder(tx, record)
 	}))
 }
 

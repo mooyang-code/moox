@@ -92,7 +92,7 @@ func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", Start: start, End: start.Add(time.Hour), Origin: "resample", JobID: "job-2"},
 	}))
 	require.NoError(t, mgr.Backfill().AddAbsences(ctx, []store.SourceAbsence{
-		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", SeriesTag: "swap", From: start.Add(-10 * time.Minute), To: start.Add(10 * time.Minute), Bars: 4},
+		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", From: start.Add(-10 * time.Minute), To: start.Add(10 * time.Minute), Bars: 4},
 		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "ETH", From: start, To: start.Add(5 * time.Minute), Bars: 1},
 		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", From: start.Add(2 * time.Hour), To: start.Add(3 * time.Hour), Bars: 12},
 	}))
@@ -117,7 +117,7 @@ func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 		require.Empty(t, other.GetSeriesTag())
 		absent := value.GetAbsent()[0]
 		require.Equal(t, "BTC", absent.GetSubjectId())
-		require.Equal(t, "swap", absent.GetSeriesTag())
+		require.Empty(t, absent.GetSeriesTag(), "数据集里每个标的只有一条序列，不带 series_tag")
 		require.Equal(t, start, absent.GetStart().AsTime(), "截到事件范围内")
 		require.Equal(t, start.Add(10*time.Minute), absent.GetEnd().AsTime())
 	}

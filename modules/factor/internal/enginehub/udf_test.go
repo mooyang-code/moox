@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
@@ -68,8 +67,8 @@ func TestSnapshotCarriesUdfBindingsAndTheirSwitchChangesTheCatalogHash(t *testin
 	require.Equal(t, v2.Hash, sets[0].Members[0].Factor.UDFs["ts_mean_udf"].Hash)
 }
 
-// 补算作业首次领取时固化绑定：之后切换启用版本，续跑与重新领取仍用领取时的版本；新提交的作业领取时固化新版本。
-func TestRecalcJobPinsUdfBindingsAtFirstLease(t *testing.T) {
+// 补算作业领取时按当前启用版本下发定义（切换版本要求没有已经开始的作业，所以不需要按作业固化绑定）。
+func TestRecalcJobUsesActiveUdfVersionAtPull(t *testing.T) {
 	hub, db, _ := newTestHub(t)
 	ctx := context.Background()
 	v1 := seedUdf(t, db, "")
@@ -84,33 +83,11 @@ func TestRecalcJobPinsUdfBindingsAtFirstLease(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, v1.Hash, set.Members[0].Factor.UDFs["ts_mean_udf"].Hash)
-	pinned, ok, err := db.JobBindings(ctx, job.JobID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, map[string]string{"ts_mean_udf": v1.Hash}, pinned)
-
-	// 切换启用版本；分块上报时的复核也要按固化的绑定通过。
-	require.NoError(t, db.SetActiveUdf(ctx, v2.Name, v2.Hash))
-	_, err = hub.Report(ctx, engineA, job.JobID, job.LeaseToken, time.Unix(60, 0), store.RecalcStatusRunning, "", nil)
-	require.NoError(t, err)
-	got, err := db.GetRecalcJob(ctx, job.JobID)
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusRunning, got.Status, "复核没有因为切换而失败")
-
-	// 租约过期后重新领取：仍用固化的版本。
-	sqlDB, err := db.SQLDB()
-	require.NoError(t, err)
-	_, err = sqlDB.Exec(`UPDATE t_factor_recalc_jobs SET c_lease_expires_at = 1 WHERE c_job_id = ?`, job.JobID)
-	require.NoError(t, err)
-	_, set, found, err = hub.Pull(ctx, engineA)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, v1.Hash, set.Members[0].Factor.UDFs["ts_mean_udf"].Hash, "重新领取沿用首次领取固化的绑定")
-
-	// 新提交的作业在领取时固化新版本。
-	seedJob(t, db, "job-2", "task_u")
 	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(j *store.RecalcJob) error { j.Status = store.RecalcStatusSucceeded; return nil })
 	require.NoError(t, err)
+
+	require.NoError(t, db.SetActiveUdf(ctx, v2.Name, v2.Hash))
+	seedJob(t, db, "job-2", "task_u")
 	_, set, found, err = hub.Pull(ctx, engineA)
 	require.NoError(t, err)
 	require.True(t, found)

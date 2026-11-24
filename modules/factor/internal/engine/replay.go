@@ -30,7 +30,7 @@ import (
 // 回放不写结果、不发周期完成事件、不改连续水位。
 //
 //	OpenReplay   建立会话：校验数据、按预热区间读快照、预留内存
-//	StepReplay   从某一期起算若干期，按（标的, series_tag）返回请求的列、上一期的同名列、生效参数与年龄
+//	StepReplay   从某一期起算若干期，按标的返回请求的列、上一期的同名列、生效参数与年龄
 //	CloseReplay  结束会话，释放内存
 
 const (
@@ -125,11 +125,9 @@ type replaySession struct {
 	lookback int
 	columns  replayColumns
 	view     *serieswindow.View
-	// earliest 是标的在本地数据里的第一根（各 series_tag 取最早）：本期的标的全集只含已经上市的标的。
+	// earliest 是标的在本地数据里的第一根：本期的标的全集只含已经上市的标的，年龄也从它算起。
 	earliest map[string]time.Time
-	// seriesEarliest 是每条序列在本地数据里的第一根：年龄按序列算。
-	seriesEarliest map[seriesset.Series]time.Time
-	release        func()
+	release  func()
 
 	mu       sync.Mutex
 	closed   bool // 已关闭（预算已归还）：此后取得会话指针的请求不能再执行
@@ -286,7 +284,6 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	var subjects []string
 	var excluded []ReplayExcluded
 	earliest := map[string]time.Time{}
-	seriesEarliest := map[seriesset.Series]time.Time{}
 	for _, subject := range uniqueStrings(candidates) {
 		b, has, err := m.deps.Store.Bounds(src, subject)
 		if err != nil {
@@ -302,13 +299,6 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		default:
 			subjects = append(subjects, subject)
 			earliest[subject] = b.Earliest
-			tags, err := m.deps.Store.TagBounds(src, subject)
-			if err != nil {
-				return ReplayOpenResponse{}, err
-			}
-			for tag, bounds := range tags {
-				seriesEarliest[seriesset.Series{SubjectID: subject, SeriesTag: tag}] = bounds.Earliest
-			}
 		}
 	}
 	if len(subjects) == 0 {
@@ -376,7 +366,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, axis: axis, step: step, from: from, to: to, start: start,
 		subjects: subjects, history: history, lookback: lookback, columns: columns, view: view,
-		earliest: earliest, seriesEarliest: seriesEarliest, release: release,
+		earliest: earliest, release: release,
 		cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
@@ -561,11 +551,8 @@ func (s *replaySession) stepPeriod(ctx context.Context, runner *pipeline.Runner,
 	now, prev := period.Unix(), prevAt.Unix()
 	stepSecs := int64(s.step / time.Second)
 	for _, subject := range s.subjects {
-		for _, sv := range s.view.Series(subject) {
-			// 这条序列本期在快照里没有行（还没上市、已经结束）时不出行；出不出行与请求了哪些列无关。
-			if !seriesHasRow(s.view, sv, now) {
-				continue
-			}
+		// 一个标的一期只有一条序列，每个标的至多出一行。本期在快照里没有行（还没上市、已经结束）时不出行；出不出行与请求了哪些列无关。
+		if sv, ok := periodSeriesOf(s.view, subject, now); ok && sv.RealRowAt(s.view.Step, now) {
 			key := seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag}
 			row := ReplayRow{Series: key, Values: map[string]float64{}}
 			for _, name := range s.columns.source {
@@ -589,7 +576,7 @@ func (s *replaySession) stepPeriod(ctx context.Context, runner *pipeline.Runner,
 			if s.columns.params {
 				row.Params = current.paramValues[subject]
 			}
-			if first, ok := s.seriesEarliest[key]; ok {
+			if first, ok := s.earliest[subject]; ok {
 				row.AgeBars = int((now-first.Unix())/stepSecs) + 1
 			}
 			frame.Rows = append(frame.Rows, row)
@@ -612,7 +599,6 @@ func (r *ReplayRow) setPrevious(name string, v float64) {
 }
 
 // seriesValue 返回一条序列在 atSec 那一根某个数值字段的值；没有这一根、值为 NaN 时 ok 为 false。
-// 不用 View.ValueAt：它在标的的各序列里取第一条覆盖这一时刻的，统一数据集上两条序列会拿到同一个值。
 func seriesValue(view *serieswindow.View, sv serieswindow.SeriesView, field string, atSec int64) (float64, bool) {
 	idx, ok := view.FieldIndex(field)
 	if !ok || atSec < sv.Start || atSec > sv.End(view.Step) {
@@ -625,35 +611,26 @@ func seriesValue(view *serieswindow.View, sv serieswindow.SeriesView, field stri
 	return value, true
 }
 
-// periodSeries 返回这些标的在 atSec 那一期已经开始、还没结束（sv.Start ≤ atSec ≤ 最后一根）的序列，按标的、序列的先后。
+// periodSeriesOf 返回标的在 atSec 那一期已经开始、还没结束（sv.Start ≤ atSec ≤ 最后一根）的序列：一个标的一期只有一条序列
+// （改过 tag 时新旧序列先后衔接，不重叠）。
+func periodSeriesOf(view *serieswindow.View, subject string, atSec int64) (serieswindow.SeriesView, bool) {
+	for _, sv := range view.Series(subject) {
+		if sv.N > 0 && sv.Start <= atSec && atSec <= sv.End(view.Step) {
+			return sv, true
+		}
+	}
+	return serieswindow.SeriesView{}, false
+}
+
+// periodSeries 返回这些标的在 atSec 那一期的序列，按标的的先后。
 func periodSeries(view *serieswindow.View, subjects []string, atSec int64) []seriesset.Series {
 	var out []seriesset.Series
 	for _, subject := range subjects {
-		for _, sv := range view.Series(subject) {
-			if sv.N > 0 && sv.Start <= atSec && atSec <= sv.End(view.Step) {
-				out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
-			}
+		if sv, ok := periodSeriesOf(view, subject, atSec); ok {
+			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
 		}
 	}
 	return out
-}
-
-// seriesHasRow 报告这条序列在 atSec 那一根有没有真实的源行：有任何一个数值字段的值、且不是填充行。填充行是同步补上的缺失周期
-// （OHLC 取上一根收盘、成交量为 0），与实时一样不算本期有行（实时把目标那一根是填充行的序列判为本期不可用，见 localdata.missingTagsAt）。
-func seriesHasRow(view *serieswindow.View, sv serieswindow.SeriesView, atSec int64) bool {
-	if atSec < sv.Start || atSec > sv.End(view.Step) {
-		return false
-	}
-	i := (atSec - sv.Start) / view.Step
-	if int(i) < len(sv.Filled) && sv.Filled[i] {
-		return false
-	}
-	for _, col := range sv.Cols {
-		if !math.IsNaN(col[i]) {
-			return true
-		}
-	}
-	return false
 }
 
 // udfHashes 返回现有回放会话引用的自定义算子版本：目录切换后这些版本仍不能卸载（会话的计算还要用）。
@@ -749,8 +726,6 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		}
 	}
 	// 回放按标的选范围：本期的序列全集取这些标的在快照里本期已经开始、还没结束的序列（实时取完成事件的序列全集）。
-	// 不能取快照里出现过的全部序列：统一数据集上永续晚上市或早结束时，那条序列在这一期本来就不存在，记成缺失会让
-	// 不允许部分全集的截面因子整个 tag 被跳过。
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
 		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period,
 		UniverseSeries: periodSeries(s.view, universe, period.Unix()),
@@ -758,19 +733,13 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	if err != nil {
 		return nil, err
 	}
-	// 本期可用按序列判断，与实时一致：这条序列本期有真实的源行（填充行不算）；至少有一条可用序列的标的才是可用标的。
+	// 本期可用与实时一致：标的这一期的序列有真实的源行（填充行不算）。
 	var available []string
 	var availableSeries []seriesset.Series
 	for _, subject := range universe {
-		has := false
-		for _, sv := range s.view.Series(subject) {
-			if seriesHasRow(s.view, sv, period.Unix()) {
-				has = true
-				availableSeries = append(availableSeries, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
-			}
-		}
-		if has {
+		if sv, ok := periodSeriesOf(s.view, subject, period.Unix()); ok && sv.RealRowAt(s.view.Step, period.Unix()) {
 			available = append(available, subject)
+			availableSeries = append(availableSeries, seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag})
 		}
 	}
 	plan.Available = available

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
@@ -15,9 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/factorudf"
 	"gorm.io/gorm"
 )
-
-// EngineView 返回管理端看到的引擎状态（心跳里的模块生命周期）：切换自定义算子版本之前据此确认引擎已暂停且本次暂停已收敛。
-type EngineView func(ctx context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error)
 
 // UDFVerifier 是发布时复核模块用的运行时与测试限制。它与引擎的运行时、试算的运行时分开：发布测试串行执行
 // （持有全局 UDF 锁），有自己的时限与内存上限。
@@ -29,16 +25,6 @@ type UDFVerifier struct {
 
 // WithUDFVerifier 配置发布复核。
 func WithUDFVerifier(v UDFVerifier) Option { return func(s *Service) { s.verifier = &v } }
-
-// WithEngineView 配置引擎状态来源（切换版本的前提检查用）。
-func WithEngineView(view EngineView) Option { return func(s *Service) { s.engineView = view } }
-
-// 引擎心跳的新鲜度：切换前提的“已暂停且已收敛”要来自足够新的心跳，并在提交前由之后的另一次心跳复核。
-const (
-	engineStatusMaxAge   = 30 * time.Second
-	engineRecheckTimeout = 25 * time.Second
-	engineRecheckPoll    = 250 * time.Millisecond
-)
 
 // ---------------------------------------------------------------- 发布
 
@@ -167,10 +153,9 @@ type ActivateResult struct {
 	Notes         []string
 }
 
-// ActivateUdf 切换名称启用的版本。切换在因子引擎模块暂停期间进行：影响清单（引用它的定义 → 成员 → 因子任务 → 策略实例）、
-// 前提一（引擎已暂停且本次暂停已收敛，提交前由之后的另一次心跳复核）、前提二（受影响任务没有已领取且未结束的补算作业）、
-// 用新版本重新编译并重做成员校验、报告新旧 definition_hash 与回看。dryRun 只返回影响清单与各前提的检查结果。
-// 没有任何已启用成员引用它时（例如首次启用）没有计算在用旧版本，不要求引擎暂停。
+// ActivateUdf 切换名称启用的版本：影响清单（引用它的定义 → 成员 → 因子任务 → 策略实例）、与 UpdateFactor 相同的两项前提
+// （没有已启用的成员引用它、受影响任务没有已经开始的补算作业，见 definitionPrerequisites）、用新版本重新编译并重做成员校验、
+// 报告新旧 definition_hash 与回看。dryRun 只返回影响清单与各前提的检查结果。
 func (s *Service) ActivateUdf(ctx context.Context, name, hash string, dryRun bool) (*ActivateResult, error) {
 	unlock, err := s.locks.LockUdfContext(ctx)
 	if err != nil {
@@ -205,7 +190,8 @@ func (s *Service) ActivateUdf(ctx context.Context, name, hash string, dryRun boo
 	}
 	// 引用清单在全局 UDF 锁下是稳定的（改变引用关系的入口都要先取它）；成员的增删与启停、任务的启停另有各自的锁，
 	// 所以再按锁顺序取引用它的定义的锁与受影响任务的锁（定义锁 → 任务锁，各自按 ID 升序）：校验与提交期间不会有成员或任务
-	// 在别处启用，“没有已启用成员所以不要求暂停引擎”的判断才不会被并发的启用推翻。
+	// 在别处启用，“没有已启用的成员引用它”才不会被并发的启用推翻。补算作业只算已启用的成员，所以成员都停用后，
+	// 新领取的作业也用不到这个定义；已经开始的作业由第二项前提挡住。
 	sortedRefs := append([]string(nil), refs...)
 	sort.Strings(sortedRefs)
 	for _, factorID := range sortedRefs {
@@ -238,10 +224,9 @@ func (s *Service) ActivateUdf(ctx context.Context, name, hash string, dryRun boo
 		defer unlockTask()
 	}
 	taskSet := map[string]domain.FactorTask{}
-	enabledImpact := false
 	var impactErrs []string
 	for _, factorID := range refs {
-		impact, err := s.impactOf(ctx, factorID, name, hash, usages[factorID], taskSet, &enabledImpact)
+		impact, err := s.impactOf(ctx, factorID, name, hash, usages[factorID], taskSet)
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +249,11 @@ func (s *Service) ActivateUdf(ctx context.Context, name, hash string, dryRun boo
 	sort.Strings(result.Instances)
 	s.lookbackNotes(result)
 
-	result.Prerequisites = s.prerequisites(ctx, enabledImpact, current.ActiveHash != "", result.Tasks)
+	var referencing []domain.FactorUsage
+	for _, factorID := range refs {
+		referencing = append(referencing, usages[factorID]...)
+	}
+	result.Prerequisites = s.definitionPrerequisites(ctx, referencing, result.Tasks)
 	recompiled := Prerequisite{Name: "用新版本重新编译并重做成员校验", OK: len(impactErrs) == 0}
 	if !recompiled.OK {
 		recompiled.Detail = strings.Join(impactErrs, "；")
@@ -273,22 +262,8 @@ func (s *Service) ActivateUdf(ctx context.Context, name, hash string, dryRun boo
 	if dryRun {
 		return result, nil
 	}
-	for _, p := range result.Prerequisites {
-		if !p.OK {
-			return result, fmt.Errorf("%w: 前提不满足：%s：%s", store.ErrConflict, p.Name, p.Detail)
-		}
-	}
-	if enabledImpact {
-		// 提交前复核：等一次新的心跳，确认引擎仍然处于同一次暂停且已收敛。
-		if err := s.recheckEngine(ctx); err != nil {
-			return result, fmt.Errorf("%w: 前提不满足：提交前复核引擎状态：%v", store.ErrConflict, err)
-		}
-		again := s.prerequisites(ctx, enabledImpact, current.ActiveHash != "", result.Tasks)
-		for _, p := range again {
-			if !p.OK {
-				return result, fmt.Errorf("%w: 前提不满足：%s：%s", store.ErrConflict, p.Name, p.Detail)
-			}
-		}
+	if err := checkPrerequisites(result.Prerequisites); err != nil {
+		return result, err
 	}
 	if err := s.db.SetActiveUdf(ctx, name, hash); err != nil {
 		return result, err
@@ -299,7 +274,7 @@ func (s *Service) ActivateUdf(ctx context.Context, name, hash string, dryRun boo
 
 // impactOf 用新版本重新编译一个引用它的定义，并对每个引用它的成员重做成员校验（规则同 UpdateFactor）。
 func (s *Service) impactOf(ctx context.Context, factorID, name, hash string, usages []domain.FactorUsage,
-	tasks map[string]domain.FactorTask, enabledImpact *bool) (UdfImpact, error) {
+	tasks map[string]domain.FactorTask) (UdfImpact, error) {
 	impact := UdfImpact{FactorID: factorID}
 	old, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
@@ -331,9 +306,6 @@ func (s *Service) impactOf(ctx context.Context, factorID, name, hash string, usa
 			return impact, err
 		}
 		tasks[task.TaskID] = task
-		if usage.Status == domain.MemberStatusEnabled && task.Status == domain.TaskStatusEnabled {
-			*enabledImpact = true
-		}
 		member, err := s.db.GetMember(ctx, usage.TaskID, usage.MemberKey)
 		if err != nil {
 			return impact, err
@@ -364,55 +336,36 @@ func (s *Service) lookbackNotes(r *ActivateResult) {
 	}
 }
 
-// prerequisites 检查切换的前提一与前提二。没有已启用成员受影响时两项都不要求。
-func (s *Service) prerequisites(ctx context.Context, enabledImpact, hadActive bool, tasks []string) []Prerequisite {
-	out := []Prerequisite{s.enginePaused(ctx, enabledImpact, hadActive), s.noRunningJobs(ctx, tasks)}
-	return out
+// ---------------------------------------------------------------- 定义变更与锁
+
+// definitionPrerequisites 是改变一个定义实际算法的两项前提，切换自定义算子版本（ActivateUdf）与改写定义（UpdateFactor）共用：
+//   - 没有已启用的成员引用它：停用成员后实时计算不再用它，不需要暂停引擎；
+//   - 受影响任务没有已经开始的补算作业：作业的定义在领取时下发，已经开始的作业归还或引擎重启后再领取会拿到新定义，
+//     前半段旧算法、后半段新算法一起写进正式结果。“已经开始”指正在运行（引擎手里已有旧定义），或进度已越过起点（领取过又归还）。
+func (s *Service) definitionPrerequisites(ctx context.Context, usages []domain.FactorUsage, tasks []string) []Prerequisite {
+	return []Prerequisite{noEnabledMembers(usages), s.noStartedJobs(ctx, tasks)}
 }
 
-func (s *Service) enginePaused(ctx context.Context, required, hadActive bool) Prerequisite {
-	p := Prerequisite{Name: "因子引擎模块已暂停且本次暂停已收敛"}
-	if !required && hadActive && s.engineView != nil {
-		// 数据库里没有已启用的成员引用它，不等于引擎已经停止使用：停用刚发生、引擎还没同步目录时，它仍按缓存的目录运行旧版本。
-		// 引擎目录还没同步到最新、或状态已经不可信（没收到过心跳——管理端重启后心跳状态在内存里，离线、心跳过期、读取失败）时
-		// 无法确认它没有在用旧版本：同样要求暂停。
-		// 这个名称从来没有启用过版本（首次启用）时引擎不可能在用它，不受影响；已有启用版本时，成员被停用或移除也不等于引擎已经不再使用。
-		info, _, seen, err := s.engineView(ctx)
-		if err != nil || !seen || !info.Online || !info.CatalogInSync || time.Since(info.LastHeartbeatAt) > engineStatusMaxAge {
-			required = true
+func noEnabledMembers(usages []domain.FactorUsage) Prerequisite {
+	p := Prerequisite{Name: "没有已启用的成员引用它"}
+	var enabled []string
+	for _, usage := range usages {
+		if usage.Status == domain.MemberStatusEnabled {
+			enabled = append(enabled, usage.TaskID+"/"+usage.MemberKey)
 		}
 	}
-	if !required {
-		p.OK, p.Detail = true, "没有已启用的成员引用它，引擎的目录也已同步，没有计算在用旧版本，不要求暂停引擎"
+	if len(enabled) > 0 {
+		sort.Strings(enabled)
+		p.Detail = "先停用这些成员（moox-cli factor member disable）：" + strings.Join(enabled, "、")
 		return p
 	}
-	if s.engineView == nil {
-		p.Detail = "没有配置引擎状态来源"
-		return p
-	}
-	info, status, seen, err := s.engineView(ctx)
-	switch {
-	case err != nil:
-		p.Detail = "读取引擎状态失败：" + err.Error()
-	case !seen:
-		p.Detail = "没有收到过引擎心跳，无法确认引擎已暂停"
-	case !info.Online:
-		p.Detail = "引擎离线（心跳已过期）：先让引擎上线并暂停，再切换"
-	case time.Since(info.LastHeartbeatAt) > engineStatusMaxAge:
-		p.Detail = fmt.Sprintf("引擎最近一次心跳是 %s 前，状态不够新", time.Since(info.LastHeartbeatAt).Round(time.Second))
-	case status.Lifecycle.Stage != "paused":
-		p.Detail = fmt.Sprintf("因子引擎模块处于 %q，不是暂停：先执行 moox-cli lifecycle pause --module factor-engine 并等待收敛", status.Lifecycle.Stage)
-	case !status.Lifecycle.Quiesced:
-		p.Detail = "引擎已暂停，但本次暂停还没有收敛（在途的计算还没结束）：等待片刻再试"
-	default:
-		p.OK, p.Detail = true, fmt.Sprintf("引擎已暂停，收敛于 %s", status.Lifecycle.QuiescedAt.Format(time.RFC3339))
-	}
+	p.OK = true
 	return p
 }
 
-func (s *Service) noRunningJobs(ctx context.Context, tasks []string) Prerequisite {
-	p := Prerequisite{Name: "受影响任务没有已领取且未结束的补算作业"}
-	var running []string
+func (s *Service) noStartedJobs(ctx context.Context, tasks []string) Prerequisite {
+	p := Prerequisite{Name: "受影响任务没有已经开始的补算作业"}
+	var started []string
 	for _, taskID := range tasks {
 		jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusAccepted, store.RecalcStatusRunning}})
 		if err != nil {
@@ -420,59 +373,28 @@ func (s *Service) noRunningJobs(ctx context.Context, tasks []string) Prerequisit
 			return p
 		}
 		for _, job := range jobs {
-			// 领取过又被引擎归还的作业状态回到 accepted，但绑定已经固化：重新领取后仍按旧版本写完剩下的范围，同样要先取消。
-			if job.Status == store.RecalcStatusAccepted {
-				_, pinned, err := s.db.JobBindings(ctx, job.JobID)
-				if err != nil {
-					p.Detail = "读取补算作业的绑定失败：" + err.Error()
-					return p
-				}
-				if !pinned {
-					continue
-				}
+			if job.Status == store.RecalcStatusRunning || job.ProgressTime > job.StartTime {
+				started = append(started, job.JobID+"（任务 "+taskID+"）")
 			}
-			running = append(running, job.JobID+"（任务 "+taskID+"）")
 		}
 	}
-	if len(running) > 0 {
-		p.Detail = "有已领取的补算作业（含领取后被引擎归还、等待重新领取的），先用 CancelRecalcJob 取消（引擎暂停期间不会领取新作业）：" + strings.Join(running, "、")
+	if len(started) > 0 {
+		p.Detail = "先用 CancelRecalcJob 取消这些作业（改完再重新提交补算）：" + strings.Join(started, "、")
 		return p
 	}
 	p.OK = true
 	return p
 }
 
-// recheckEngine 等待一次比当前状态更新的心跳，确认引擎仍处于同一次暂停且已收敛。
-func (s *Service) recheckEngine(ctx context.Context) error {
-	if s.engineView == nil {
-		return errors.New("没有配置引擎状态来源")
-	}
-	first, firstStatus, seen, err := s.engineView(ctx)
-	if err != nil || !seen {
-		return fmt.Errorf("读取引擎状态失败：%v", err)
-	}
-	deadline := time.Now().Add(engineRecheckTimeout)
-	for time.Now().Before(deadline) {
-		info, status, seen, err := s.engineView(ctx)
-		if err != nil || !seen {
-			return fmt.Errorf("读取引擎状态失败：%v", err)
-		}
-		if info.LastHeartbeatAt.After(first.LastHeartbeatAt) {
-			if !status.Lifecycle.Quiesced || status.Lifecycle.Stage != "paused" || !status.Lifecycle.QuiescedAt.Equal(firstStatus.Lifecycle.QuiescedAt) {
-				return errors.New("引擎在复核期间离开了暂停状态或重新暂停过")
-			}
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(engineRecheckPoll):
+// checkPrerequisites 返回第一项不满足的前提对应的冲突错误。
+func checkPrerequisites(list []Prerequisite) error {
+	for _, p := range list {
+		if !p.OK {
+			return fmt.Errorf("%w: 前提不满足：%s：%s", store.ErrConflict, p.Name, p.Detail)
 		}
 	}
-	return errors.New("等不到引擎的新心跳")
+	return nil
 }
-
-// ---------------------------------------------------------------- 定义变更与锁
 
 // lockUdfIfReferenced 在新旧定义文本任一方引用自定义算子时先取全局 UDF 锁（锁顺序：UDF 锁 → 定义锁 → 任务锁）。
 // 绑定解析与最终的编译校验都在锁内完成，引用清单直到事务提交之前不会变化。返回的函数释放锁，没有取锁时是空操作。

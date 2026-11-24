@@ -241,22 +241,3 @@ func TestReportNotifiesSinkAfterMarkerWritten(t *testing.T) {
 	require.NoError(t, runner.Report(context.Background(), plan, Outcome{Status: "complete"}))
 	require.Equal(t, []int{1}, sink.markersAtKick, "补算不写 marker，也不通知")
 }
-
-// 补算类计划里期望序列是推测的：成员有 tag 因此被跳过（或整个成员 skipped）时 Outcome.DerivedSkipped 为真；
-// 冻结全集（非推测）、只填充、没有跳过都不置位。
-func TestOutcomeDerivedSkipped(t *testing.T) {
-	factor := domain.FactorDef{FactorID: "rank", FactorType: domain.FactorTypeCrossSection}
-	members := domain.AsMembers(factor)
-	state := func(status string, skippedTags ...string) Computation {
-		member := storageio.FactorState{MemberKey: members[0].Key, FactorID: "rank", Status: status, SkippedSeriesTags: skippedTags}
-		return Computation{FactorStates: map[string]storageio.FactorState{members[0].Key: member}}
-	}
-	derived := Plan{Members: members, ExpectedSeriesDerived: true}
-	require.True(t, outcomeFor(derived, LoadResult{}, state("degraded", "swap")).DerivedSkipped)
-	require.True(t, outcomeFor(derived, LoadResult{}, state("skipped")).DerivedSkipped)
-	require.False(t, outcomeFor(derived, LoadResult{}, state("complete")).DerivedSkipped)
-	frozen := Plan{Members: members}
-	require.False(t, outcomeFor(frozen, LoadResult{}, state("degraded", "swap")).DerivedSkipped, "冻结全集的跳过是确定的")
-	fill := Plan{Members: members, ExpectedSeriesDerived: true, FillOnly: true}
-	require.False(t, outcomeFor(fill, LoadResult{}, state("degraded", "swap")).DerivedSkipped, "只填充不写 NULL，也不涉及待办保留")
-}

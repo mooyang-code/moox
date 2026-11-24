@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -209,7 +208,7 @@ func extraFieldType(spec marketdata.FieldSpec) storagepb.FieldValueType {
 func extraColumnAttributes(spec marketdata.FieldSpec) map[string]string {
 	attributes := map[string]string{"display_name": spec.Name}
 	if spec.Name == "" {
-		attributes["display_name"] = resultColumnDisplayName(spec.ID)
+		attributes["display_name"] = "结果字段"
 	}
 	if spec.Fill != "" {
 		attributes["fill"] = spec.Fill
@@ -292,10 +291,8 @@ type tagReader interface {
 	GetTag(context.Context, *storagepb.GetTagReq) (*storagepb.GetTagRsp, error)
 }
 
-// resultDataSource 返回任务全部标签共享的数据源与市场类型：
-//   - 数据源与市场都相同：返回它们；
-//   - 数据源相同、市场是现货与永续两个：统一数据集，市场类型为 multi，数据源保留；
-//   - 其余（数据源不同，或市场组合不是现货加永续）：返回空值。建任务时已按同样的规则拒绝，这里只是兜底。
+// resultDataSource 返回任务全部标签共享的数据源与市场类型；数据源或市场不全相同时返回空值
+// （建任务时已按同样的规则拒绝，这里只是兜底）。
 func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectTags []string) (source, marketType string, err error) {
 	reader, ok := m.metadata.(tagReader)
 	if !ok || len(subjectTags) == 0 {
@@ -323,9 +320,6 @@ func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectT
 		for market := range markets {
 			return source, market, nil
 		}
-	}
-	if tagattr.IsSpotSwap(markets) {
-		return source, seriesset.MarketMulti, nil
 	}
 	return "", "", nil
 }
@@ -920,110 +914,55 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID string, 
 	return nil
 }
 
+// OutputField 是结果数据集能建的一列：字段名、值类型与管理台显示名。
+type OutputField struct {
+	Name        string
+	Kind        storagepb.FieldValueType
+	DisplayName string
+}
+
+// KlineOutputFields 是 K 线（时序）结果数据集的基础输出字段，按建列顺序；任务的输出字段只能从这里与附加字段里选。
+// 管理台的任务表单经 GetDataTypeConfigWithFields 读它，不另抄一份。
+var KlineOutputFields = []OutputField{
+	{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "开盘"}, {"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最高"},
+	{"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最低"}, {"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "收盘"},
+	{"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交量"}, {"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交额"},
+	{"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "成交笔数"}, {"amount", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交额"},
+	{"instrument_name", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "标的名称"}, {"provider_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "数据提供方"},
+	{"source_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "来源"}, {"provider_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "原始标的"},
+	{"volume_unit", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "量单位"}, {"amount_unit", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "额单位"},
+	{"trade_date", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "交易日期"}, {"close_time", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "收盘时间"},
+	{"provider_timestamp", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "源时间"}, {"fetched_at", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "采集时间"},
+	{"request_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "请求标识"}, {"route_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "路由"},
+	{"route_rank", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "路由序号"}, {"source_provider", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "源提供方"},
+	{"quality_status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "质量状态"}, {"amount_quality", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "金额质量"},
+}
+
+// recordOutputFields 是记录型结果数据集（标的快照）的列。
+var recordOutputFields = []OutputField{
+	{"symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""}, {"external_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""},
+	{"base_asset", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""}, {"quote_asset", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""},
+	{"status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""}, {"min_qty", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, ""},
+	{"max_qty", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, ""}, {"tick_size", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, ""},
+	{"lot_size", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, ""}, {"security_code", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""},
+	{"provider_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "原始标的"}, {"exchange", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""},
+	{"instrument_name", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "标的名称"}, {"instrument_status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""},
+	{"snapshot_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, ""}, {"source_provider", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "源提供方"},
+	{"fetched_at", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME, "采集时间"},
+}
+
 // resultDatasetColumns 返回结果数据集的列定义：按数据类型取默认字段；指定了输出字段时只取选中的那些，并校验字段都受支持。
 func (m *Manager) resultDatasetColumns(spaceID string, kind storagepb.DataKind, outputFields []string) ([]*storagepb.DatasetColumn, error) {
-	fields := []struct {
-		name string
-		kind storagepb.FieldValueType
-	}{
-		{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT},
-	}
+	fields := append([]OutputField(nil), KlineOutputFields...)
 	if kind == storagepb.DataKind_DATA_KIND_RECORD {
-		fields = []struct {
-			name string
-			kind storagepb.FieldValueType
-		}{
-			{"symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"external_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			{"base_asset", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"quote_asset", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			{"status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"min_qty", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-			{"max_qty", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"tick_size", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-			{"lot_size", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"security_code", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			{"provider_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"exchange", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			{"instrument_name", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"instrument_status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			{"snapshot_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING}, {"source_provider", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			{"fetched_at", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME},
-		}
-	} else {
-		fields = append(fields,
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"amount", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"instrument_name", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"provider_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"source_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"provider_symbol", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"volume_unit", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"amount_unit", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"trade_date", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"close_time", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"provider_timestamp", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"fetched_at", storagepb.FieldValueType_FIELD_VALUE_TYPE_TIME},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"request_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"route_id", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"route_rank", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"source_provider", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"quality_status", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-			struct {
-				name string
-				kind storagepb.FieldValueType
-			}{"amount_quality", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-		)
+		fields = append([]OutputField(nil), recordOutputFields...)
 	}
 	extra := map[string]marketdata.FieldSpec{}
 	if len(outputFields) > 0 && kind != storagepb.DataKind_DATA_KIND_RECORD {
 		// 附加字段只在显式选中时建列；输出字段为空（默认字段）时不建。
 		for _, spec := range m.fields.Specs(spaceID) {
 			extra[spec.ID] = spec
-			fields = append(fields, struct {
-				name string
-				kind storagepb.FieldValueType
-			}{spec.ID, extraFieldType(spec)})
+			fields = append(fields, OutputField{Name: spec.ID, Kind: extraFieldType(spec)})
 		}
 	}
 	if len(outputFields) > 0 {
@@ -1036,9 +975,9 @@ func (m *Manager) resultDatasetColumns(spaceID string, kind storagepb.DataKind, 
 		}
 		filtered := fields[:0]
 		for _, field := range fields {
-			if _, ok := selected[field.name]; ok {
+			if _, ok := selected[field.Name]; ok {
 				filtered = append(filtered, field)
-				delete(selected, field.name)
+				delete(selected, field.Name)
 			}
 		}
 		if len(selected) > 0 {
@@ -1056,23 +995,17 @@ func (m *Manager) resultDatasetColumns(spaceID string, kind storagepb.DataKind, 
 	}
 	columns := make([]*storagepb.DatasetColumn, 0, len(fields))
 	for _, field := range fields {
-		attributes := map[string]string{"display_name": resultColumnDisplayName(field.name)}
-		if spec, ok := extra[field.name]; ok {
+		displayName := field.DisplayName
+		if displayName == "" {
+			displayName = "结果字段"
+		}
+		attributes := map[string]string{"display_name": displayName}
+		if spec, ok := extra[field.Name]; ok {
 			attributes = extraColumnAttributes(spec)
 		}
-		columns = append(columns, &storagepb.DatasetColumn{ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name, ValueType: field.kind, Required: true, Status: "active", Attributes: attributes})
+		columns = append(columns, &storagepb.DatasetColumn{ColumnName: field.Name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.Name, ValueType: field.Kind, Required: true, Status: "active", Attributes: attributes})
 	}
 	return columns, nil
-}
-
-func resultColumnDisplayName(name string) string {
-	names := map[string]string{
-		"open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "quote_volume": "成交额", "trade_num": "成交笔数", "amount": "成交额", "instrument_name": "标的名称", "provider_id": "数据提供方", "source_id": "来源", "provider_symbol": "原始标的", "volume_unit": "量单位", "amount_unit": "额单位", "trade_date": "交易日期", "close_time": "收盘时间", "provider_timestamp": "源时间", "fetched_at": "采集时间", "request_id": "请求标识", "route_id": "路由", "route_rank": "路由序号", "source_provider": "源提供方", "quality_status": "质量状态", "amount_quality": "金额质量",
-	}
-	if displayName := names[name]; displayName != "" {
-		return displayName
-	}
-	return "结果字段"
 }
 
 func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, cfg Config) error {

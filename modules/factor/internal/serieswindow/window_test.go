@@ -222,3 +222,14 @@ func TestBytesPerSeriesMatchesStats(t *testing.T) {
 	_, err := New(Config{Source: src}, 60, nil)
 	require.Error(t, err)
 }
+
+// 真实行：有这一行、不是填充行、至少一个数值字段非 NaN。
+func TestSeriesViewRealRowAt(t *testing.T) {
+	nan := math.NaN()
+	sv := SeriesView{Subject: "BTC", Tag: "t", Start: 60, N: 3, Cols: [][]float64{{1, 2, nan}, {nan, 5, nan}}, Filled: []bool{false, true, false}}
+	require.True(t, sv.RealRowAt(60, 60))
+	require.False(t, sv.RealRowAt(60, 120), "填充行")
+	require.False(t, sv.RealRowAt(60, 180), "数值字段全是 NaN")
+	require.False(t, sv.RealRowAt(60, 240), "序列之外")
+	require.False(t, sv.RealRowAt(60, 90), "没有对齐到周期")
+}

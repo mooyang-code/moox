@@ -34,13 +34,13 @@ func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 			}
 			raw := `{"error_code":"` + code + `"}`
 			_, _, err := db.CreateOperatorAction(ctx, store.OperatorActionRecord{SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER", Status: "FAILED", Reason: "manual intervention", LastError: "retained failure detail", ResultJSON: &raw,
-				RequestJSON: `{"trading_account_id":"account-1","client_order_id":"client-1","instrument_id":"BTC-USDT-SPOT","order_type":"MARKET","side":"BUY","position_side":"NET","quantity":"1"}`})
+				RequestJSON: `{"logical_account_id":"logical-1","trading_account_id":"account-1","client_order_id":"client-1","instrument_id":"BTC-USDT-SPOT","order_type":"MARKET","side":"BUY","position_side":"NET","quantity":"1"}`})
 			if err != nil {
 				t.Fatal(err)
 			}
 			service := &operator.Service{Store: db, Orders: &orderapp.Service{Store: db}, Syncer: manualReplayDependencies{}, Prices: manualReplayDependencies{}}
 			h := &ExecutionServer{Store: db, Submit: func(ctx context.Context, c SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, err := service.PlaceOrder(ctx, operator.SubmitOrderCommand{LogicalAccountID: c.LogicalAccountID, ManualOrderCommand: operator.ManualOrderCommand{SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide, Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason}})
+				result, err := service.PlaceOrder(ctx, operator.ManualOrderCommand{LogicalAccountID: c.LogicalAccountID, SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide, Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason})
 				return result.Action, result.Order, err
 			}}
 			for attempt := 0; attempt < 2; attempt++ {

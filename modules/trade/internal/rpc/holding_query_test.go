@@ -114,7 +114,7 @@ func TestHoldingQueryListsOnlySpotWalletBalances(t *testing.T) {
 	require.Equal(t, "0.1", holdings[0].Quantity.String())
 }
 
-// 模拟盘：先一次批量预取全部要估值的标的，再逐只取价；均价一次读完成交计算，数值与原来分页读全量一致。
+// 模拟盘：先一次批量预取全部要估值的标的，再逐只取价；均价读标的汇总。
 func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 	ctx := context.Background()
 	tradeStore := openHoldingStore(t)
@@ -142,28 +142,38 @@ func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 		}
 		return nil
 	}))
-	sqlDB, err := tradeStore.DBForTest().DB()
-	require.NoError(t, err)
-	_, err = sqlDB.Exec(`INSERT INTO t_trade_orders (c_space_id, c_order_id, c_trading_account_id, c_client_order_id, c_exchange, c_market_type, c_instrument_id,
-		c_exchange_symbol, c_order_type, c_side, c_quantity, c_reference_price, c_reference_price_at, c_owner_type, c_owner_id, c_state)
-		VALUES ('space-1', 'o1', 'paper-1', 'c1', 'BINANCE', 'SPOT', 'BTC-USDT-SPOT', 'BTCUSDT', 'MARKET', 'BUY', '1', '100', 1, 'EXTERNAL', 'ext', 'FILLED')`)
-	require.NoError(t, err)
-	// BTC：同一毫秒里有一买一卖，原来的次序是同一毫秒按成交号倒序（先卖后买），均价 120；先买后卖会算成 115。
-	for _, fill := range []struct {
-		id, symbol, side, price, quantity string
-		at                                int64
-	}{
-		{"f-1", "BTCUSDT", "BUY", "100", "2", 1},
-		{"f-a", "BTCUSDT", "BUY", "130", "2", 2},
-		{"f-b", "BTCUSDT", "SELL", "120", "1", 2},
-		{"f-eth", "ETHUSDT", "BUY", "10", "1", 5},
-	} {
-		_, err = sqlDB.Exec(`INSERT INTO t_order_fills (c_space_id, c_fill_id, c_exchange_trade_id, c_order_id, c_trading_account_id, c_exchange,
-			c_market_type, c_instrument_id, c_exchange_symbol, c_side, c_price, c_quantity, c_traded_at)
-			VALUES ('space-1', ?, ?, 'o1', 'paper-1', 'BINANCE', 'SPOT', 'x', ?, ?, ?, ?, ?)`,
-			fill.id, fill.id, fill.symbol, fill.side, fill.price, fill.quantity, fill.at)
-		require.NoError(t, err)
-	}
+	// 成交经 InsertFill 入账，标的汇总在同一个事务里累计。模拟盘的成交按时间顺序产生：BTC 同一毫秒里先卖后买，均价 120。
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		for _, order := range []struct{ base, side string }{{"BTC", "BUY"}, {"BTC", "SELL"}, {"ETH", "BUY"}} {
+			id := order.base + "-" + order.side
+			if err := tx.CreateOrder(store.OrderRecord{
+				SpaceID: "space-1", OrderID: "o-" + id, TradingAccountID: "paper-1", ClientOrderID: "c-" + id,
+				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: order.base + "-USDT-SPOT", ExchangeSymbol: order.base + "USDT",
+				OrderType: "MARKET", Side: order.side, Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 1,
+				OwnerType: "EXTERNAL", OwnerID: "ext-" + id, State: "FILLED", Version: 1,
+			}); err != nil {
+				return err
+			}
+		}
+		for _, fill := range []struct {
+			id, base, side, price, quantity string
+			at                              int64
+		}{
+			{"f-1", "BTC", "BUY", "100", "2", 1},
+			{"f-b", "BTC", "SELL", "120", "1", 2},
+			{"f-a", "BTC", "BUY", "130", "2", 2},
+			{"f-eth", "ETH", "BUY", "10", "1", 5},
+		} {
+			if _, err := tx.InsertFill(store.FillRecord{
+				SpaceID: "space-1", FillID: fill.id, ExchangeTradeID: fill.id, OrderID: "o-" + fill.base + "-" + fill.side,
+				Side: fill.side, Price: fill.price, Quantity: fill.quantity, Fee: "0", FeeAsset: "USDT",
+				SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: fill.at,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
 	quotes := &holdingQuoteStub{prices: map[string]string{"BTCUSDT": "150"}}
 	query := &HoldingQuery{Store: tradeStore, Adapters: holdingAdaptersStub{adapter: quotes}}
 
@@ -195,22 +205,4 @@ func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 	require.Empty(t, doge.InstrumentID, "没有标的的资产照样展示，不估值")
 	require.True(t, doge.MarkPrice.IsZero())
 
-	// 与原来的做法（按时间倒序分页读出全部成交再算均价）逐项对比。
-	for _, item := range []struct {
-		symbol string
-		got    shared.Decimal
-	}{{"BTCUSDT", btc.AverageCost}, {"ETHUSDT", eth.AverageCost}} {
-		var all []store.FillRecord
-		for offset := 0; ; offset++ {
-			page, total, pageErr := tradeStore.ListFills(ctx, "space-1", store.FillQuery{
-				TradingAccountID: "paper-1", Market: "SPOT", ExchangeSymbol: item.symbol, Offset: offset, Limit: 1,
-			})
-			require.NoError(t, pageErr)
-			all = append(all, page...)
-			if len(page) == 0 || int64(offset+len(page)) >= total {
-				break
-			}
-		}
-		require.Equal(t, paperAverageCostFromFills(all).String(), item.got.String(), item.symbol)
-	}
 }

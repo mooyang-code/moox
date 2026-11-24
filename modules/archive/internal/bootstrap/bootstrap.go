@@ -78,7 +78,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err != nil {
 		return nil, fmt.Errorf("open archive lifecycle: %w", err)
 	}
-	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway), service.WithCollector(newGatewayCollector(runtime.gateway)), service.WithLifecycle(life))
+	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway), service.WithLifecycle(life))
 	if err != nil {
 		return nil, err
 	}

@@ -114,33 +114,29 @@ func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *s
 		if !ok || !bucket.End.Equal(period.Add(task.Source.Duration)) {
 			continue
 		}
-		if _, err := t.Engine.RunBucketMembers(ctx, task, bucket, periodMembers(task, payload), ""); err != nil {
+		if _, err := t.Engine.RunBucket(ctx, task, bucket, periodSubjects(task, payload), ""); err != nil {
 			errs = append(errs, fmt.Errorf("task %s: %w", task.Spec.TaskID, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// periodMembers 由周期完成事件的序列名单算出每条源序列可以合成的成员：失败的序列不合成，其他序列照常。
-func periodMembers(task *Task, payload *storagepb.DatasetPeriodCompleted) Members {
+// periodSubjects 由周期完成事件的序列名单算出可以合成的标的：只取任务源序列的 tag，失败的序列不合成。
+func periodSubjects(task *Task, payload *storagepb.DatasetPeriodCompleted) []string {
 	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
 	for _, series := range payload.GetFailedSeries() {
 		failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())] = struct{}{}
 	}
-	wanted := make(map[string]struct{}, len(task.Tags))
-	for _, tag := range task.Tags {
-		wanted[tag] = struct{}{}
-	}
-	members := Members{}
+	var subjects []string
 	for _, series := range payload.GetUniverseSeries() {
-		if _, ok := wanted[series.GetSeriesTag()]; !ok {
+		if series.GetSeriesTag() != task.Spec.SourceSeriesTag {
 			continue
 		}
 		if _, bad := failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())]; !bad {
-			members[series.GetSeriesTag()] = append(members[series.GetSeriesTag()], series.GetSubjectId())
+			subjects = append(subjects, series.GetSubjectId())
 		}
 	}
-	return members.normalized()
+	return uniqueSorted(subjects)
 }
 
 // BackfillTrigger 处理 event.collector.kline.backfilled：源数据被补写后，对依赖它的合成任务提交历史合成作业。
@@ -170,12 +166,9 @@ func (t *BackfillTrigger) OnBackfilled(ctx context.Context, spaceID, eventID str
 	}
 	var errs []error
 	for _, task := range tasks {
-		if !task.coversAnyTag(payload.GetSeriesTags()) {
-			continue // 补采只写了任务不合成的序列
-		}
 		_, _, err := SubmitJob(ctx, t.State, task, SubmitJobRequest{
 			SpaceID: task.Spec.SpaceID, TaskID: task.Spec.TaskID, RequestID: eventID, Origin: store.ResampleOriginSourceBackfill,
-			Subjects: payload.GetSubjectIds(), SeriesTags: payload.GetSeriesTags(), Start: payload.GetStart().AsTime(), End: payload.GetEnd().AsTime(), NotBefore: payload.GetConfirmedAt().AsTime().Add(t.SettleAfter),
+			Subjects: payload.GetSubjectIds(), Start: payload.GetStart().AsTime(), End: payload.GetEnd().AsTime(), NotBefore: payload.GetConfirmedAt().AsTime().Add(t.SettleAfter),
 		}, newID, now)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("task %s: %w", task.Spec.TaskID, err))

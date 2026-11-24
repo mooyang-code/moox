@@ -18,7 +18,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
 	require.Equal(t, "../../secrets/host.key", cfg.GatewayClient.KeyFile)
 	require.Equal(t, 45*time.Second, cfg.Engine.LeaseTTL)
-	require.Equal(t, 15*time.Minute, cfg.Engine.JobLeaseTTL)
 }
 
 func TestLoadConfigRejectsShortEngineLease(t *testing.T) {

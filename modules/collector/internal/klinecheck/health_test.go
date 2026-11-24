@@ -36,15 +36,7 @@ func TestHealthReportsLagGapsAndHistory(t *testing.T) {
 	require.Equal(t, 4, health[0].GapBars)
 	require.Equal(t, 2, health[0].GapSubjects)
 
-	// 未确认的历史缺口与扫描失败都需要关注。
-	require.NoError(t, repo.SaveHistoryScan(ctx, store.HistoryScan{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", ScannedAt: now, GapBars: 6, GapSubjects: 2}))
-	health, err = Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
-	require.NoError(t, err)
-	require.Equal(t, HealthWarn, health[0].Level)
-	require.Equal(t, []string{"历史缺口 6 根（2 个标的）待补采确认"}, health[0].Reasons)
-
 	// 已确认的行情源缺失只计数，不影响等级。
-	require.NoError(t, repo.SaveHistoryScan(ctx, store.HistoryScan{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", ScannedAt: now}))
 	require.NoError(t, repo.AddAbsences(ctx, []store.SourceAbsence{{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", SubjectID: "BTC-USDT", From: base, To: base.Add(2 * time.Minute), Bars: 2}}))
 	health, err = Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
 	require.NoError(t, err)

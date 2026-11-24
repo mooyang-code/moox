@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 统一数据集：同一个标的的两条序列各自同步到哪里要分开看；并集的 Latest 会被走得快的序列盖住。
+// 改过 tag 的标的有新旧两条序列：各自的边界分开记，并集的 Latest 取较晚的那条。
 func TestTagBoundsKeepsLaggingSeriesApart(t *testing.T) {
 	store := openTest(t, t.TempDir())
 	rows := NewColumns(testFields, 6)

@@ -344,8 +344,8 @@ func (s *Store) Bounds(src Source, subject string) (Bounds, bool, error) {
 	return Bounds{Earliest: time.Unix(e, 0).UTC(), Latest: time.Unix(l, 0).UTC()}, true, nil
 }
 
-// TagBounds 返回标的各 series_tag 本地数据的边界（series_tag → 边界）：统一数据集的各市场序列各自同步到哪里，
-// 不能用并集的 Latest（落后的序列会被另一条序列盖住）。没有数据时返回空 map。
+// TagBounds 返回标的各 series_tag 本地数据的边界（series_tag → 边界）：改过 tag 的标的有新旧两条序列，
+// 取“这个数据集现在用哪个 tag”时用它。没有数据时返回空 map。
 func (s *Store) TagBounds(src Source, subject string) (map[string]Bounds, error) {
 	if err := src.check(); err != nil {
 		return nil, err

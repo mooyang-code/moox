@@ -17,12 +17,9 @@ type MetaCache struct {
 	subjects map[string][]Subject
 	members  map[string][]TagMember
 	tags     map[string]TagInfo
-	// datasetTags 是数据集挂的标的范围标签：数据集的标的范围变化也会让标的修订号递增。
-	datasetTags map[string][]string
 
 	// ages 缓存已证明“年龄足够”的标的：上市时间只会越来越久，探针通过一次后不必每期重查。
 	// 键是（View、min_age_bars、市场），槽里记着当时的活动索引，索引重建（换了活动索引）后自动作废。
-	// 统一数据集的两个市场在同一个 View 里每期交替探针，所以每个键各占一个槽。
 	ages map[string]*ageSlot
 	// Ages 非空时，年龄探针通过的标的会持久化，重启后第一期也不必重新探针；读写失败只影响缓存效果，不影响探针结果。
 	Ages AgeStore
@@ -34,7 +31,7 @@ type ageSlot struct {
 	ok      map[string]struct{}
 }
 
-// AgeKey 标识一组年龄探针结果：某个 View 的某个活动索引、某个 min_age_bars、某个市场（统一数据集上一个 View 里现货、永续各有各的历史）。
+// AgeKey 标识一组年龄探针结果：某个 View 的某个活动索引、某个 min_age_bars、View 所属的市场。
 type AgeKey struct {
 	SpaceID    string
 	ViewID     string
@@ -60,7 +57,6 @@ func (m *MetaCache) reset() {
 	m.subjects = map[string][]Subject{}
 	m.members = map[string][]TagMember{}
 	m.tags = map[string]TagInfo{}
-	m.datasetTags = map[string][]string{}
 }
 
 // sync 登记空间的修订号；与已缓存的不一致（或换了空间）时丢弃全部缓存。
@@ -274,29 +270,4 @@ func (m *MetaCache) ageSlotLocked(ctx context.Context, key AgeKey) *ageSlot {
 		}
 	}
 	return slot
-}
-
-// datasetTagsOf 返回数据集挂的标的范围标签（统一数据集按它们的市场类型划分各市场的标的）。事件内装配器经 MetaCache 按标的修订号缓存，
-// 其他客户端每次直接读取数据集。
-func datasetTagsOf(ctx context.Context, client Client, spaceID, datasetID string) ([]string, error) {
-	cache, cached := client.(*eventClient)
-	key := spaceID + "\x00" + datasetID
-	if cached {
-		cache.meta.mu.Lock()
-		tags, ok := cache.meta.datasetTags[key]
-		cache.meta.mu.Unlock()
-		if ok {
-			return append([]string(nil), tags...), nil
-		}
-	}
-	dataset, err := client.GetDataset(ctx, spaceID, datasetID)
-	if err != nil {
-		return nil, err
-	}
-	if cached {
-		cache.meta.mu.Lock()
-		cache.meta.datasetTags[key] = dataset.SubjectTags
-		cache.meta.mu.Unlock()
-	}
-	return append([]string(nil), dataset.SubjectTags...), nil
 }

@@ -88,24 +88,6 @@
           </template>
         </section>
 
-        <section class="block" aria-label="避让时段">
-          <h3>避让时段</h3>
-          <div class="muted intro">
-            执行器读取 Storage 时避开采集函数的触发时刻；规则由 archive-mgr 按有归档任务的空间里生效的采集频率推出，约每 10
-            分钟重算，有任务的空间变化时 1 分钟内重算。
-          </div>
-          <a-descriptions v-if="avoidance" :column="{ xs: 1, sm: 1, md: 2 }" size="small" bordered>
-            <a-descriptions-item label="每分钟">{{ minuteWindowText(avoidance) }}</a-descriptions-item>
-            <a-descriptions-item label="触发时刻">{{ triggerText }}</a-descriptions-item>
-            <a-descriptions-item label="整点">{{ hourQuietText(avoidance) }}</a-descriptions-item>
-            <a-descriptions-item label="计算时间">
-              {{ avoidance.computed_at ? formatInstant(avoidance.computed_at, "UTC") : "还在用启动默认值" }}
-            </a-descriptions-item>
-            <a-descriptions-item label="依据" :span="2">{{ avoidanceBasisText(avoidance) }}</a-descriptions-item>
-          </a-descriptions>
-          <div v-else class="muted">archive-mgr 没有返回避让规则。</div>
-        </section>
-
         <section class="block" aria-label="目录对照表">
           <h3>目录对照表</h3>
           <div class="text">
@@ -133,11 +115,8 @@ import { formatInstant } from "@/utils/time-zone";
 import { relativeTime } from "@/views/home/home-model";
 import {
   archiveUnavailableHint,
-  avoidanceBasisText,
   diskStatus,
-  hourQuietText,
   isBuiltinObjectStore,
-  minuteWindowText,
   storageClassText,
   toNum,
   workerHostText
@@ -145,7 +124,7 @@ import {
 import { useArchiveWorkerHost } from "../shared/use-archive-worker-host";
 
 /**
- * 数据归档 › 归档存储：归档放在哪（执行器所在主机、根目录、对象存储）、磁盘用量、避让时段与目录对照表。
+ * 数据归档 › 归档存储：归档放在哪（执行器所在主机、根目录、对象存储）、磁盘用量与目录对照表。
  * 执行器与空间无关，时间按 UTC；概览接口要带空间请求头，所以等拿到空间再读，30 秒轮询。
  */
 const spaceStore = useSpaceStore();
@@ -191,13 +170,6 @@ const worker = computed(() => overview.value?.worker);
 const store = computed(() => worker.value?.object_store);
 const builtin = computed(() => isBuiltinObjectStore(store.value?.endpoint));
 const disk = computed(() => diskStatus(worker.value));
-const avoidance = computed(() => overview.value?.avoidance);
-// 触发时刻是分钟数为 every_minutes 倍数的第 0 秒；0 表示没有低于 1 小时的采集频率
-const triggerText = computed(() => {
-  const every = avoidance.value?.every_minutes || 0;
-  if (!every) return "没有低于 1 小时的采集频率";
-  return every === 1 ? "每分钟第 0 秒" : `分钟数为 ${every} 的倍数时的第 0 秒`;
-});
 const rootDir = computed(() => worker.value?.root_dir || "<归档根目录>");
 const unavailableHint = computed(() => archiveUnavailableHint(error.value));
 </script>
@@ -229,10 +201,6 @@ h3 {
 .note {
   margin-top: 8px;
   line-height: 22px;
-}
-
-.intro {
-  margin-bottom: 8px;
 }
 
 .text {

@@ -149,20 +149,20 @@ func TestRecalcJobDefaultFilledRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, job.DefaultFilled)
 	now := time.Unix(500, 0)
-	pulled, found, err := s.PullRecalcJob(ctx, "engine-1", now, time.Minute, nil, 0)
+	pulled, found, err := s.PullRecalcJob(ctx, now, nil)
 	require.NoError(t, err)
 	require.True(t, found)
 
 	filled := map[string][]TimeRange{"ema__var": {{Start: 100, End: 160}, {Start: 300, End: 300}}}
-	updated, err := s.ReportRecalcProgress(ctx, pulled.JobID, pulled.LeaseToken, 400, RecalcStatusRunning, "", filled, now, time.Minute)
+	updated, err := s.ReportRecalcProgress(ctx, pulled.JobID, 400, RecalcStatusRunning, "", filled, now)
 	require.NoError(t, err)
 	require.Equal(t, filled, updated.DefaultFilled)
 
 	// nil 表示没有变化；非 nil 整体替换。
-	updated, err = s.ReportRecalcProgress(ctx, pulled.JobID, pulled.LeaseToken, 500, RecalcStatusRunning, "", nil, now, time.Minute)
+	updated, err = s.ReportRecalcProgress(ctx, pulled.JobID, 500, RecalcStatusRunning, "", nil, now)
 	require.NoError(t, err)
 	require.Equal(t, filled, updated.DefaultFilled)
-	done, err := s.ReportRecalcProgress(ctx, pulled.JobID, pulled.LeaseToken, 1000, RecalcStatusSucceeded, "", map[string][]TimeRange{}, now, time.Minute)
+	done, err := s.ReportRecalcProgress(ctx, pulled.JobID, 1000, RecalcStatusSucceeded, "", map[string][]TimeRange{}, now)
 	require.NoError(t, err)
 	require.Empty(t, done.DefaultFilled)
 }

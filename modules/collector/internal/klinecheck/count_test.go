@@ -34,11 +34,15 @@ func (c *countingRows) CountTimeSeriesRows(_ context.Context, req *storagepb.Cou
 	}
 	start, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetStartTime())
 	end, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetEndTime())
+	// 夹具只造了范围前几天的数据：从很早开始的计数（例如“范围之前有没有数据”）只数最近 7 天，不逐分钟走到 1970 年。
+	if horizon := end.Add(-7 * 24 * time.Hour); start.Before(horizon) {
+		start = horizon
+	}
 	rsp := &storagepb.CountTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}
 	for _, selector := range req.GetSelectors() {
 		rows := 0
 		for t := start; t.Before(end); t = t.Add(time.Minute) {
-			if !c.missing[selector.GetSubjectId()][t.Unix()] {
+			if c.has(selector.GetSubjectId(), t) {
 				rows++
 			}
 		}
@@ -133,30 +137,6 @@ func TestCheckFallsBackToRowReadsWhenCountingFails(t *testing.T) {
 		Request{SpaceID: "crypto", From: base, To: base.Add(10 * time.Minute), Deep: true})
 	require.NoError(t, err)
 	require.Zero(t, deep.countCalls)
-}
-
-// 历史扫描先计数：一根都没有的标的（没有历史）与根数齐全的标的都不读行，结果与逐行比对一致。
-func TestCheckHistoryCountsFirst(t *testing.T) {
-	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	horizon := base.Add(-historyScanBars * time.Minute)
-	missing := map[string]map[int64]bool{}
-	hole := base.Add(-30 * time.Minute)
-	markMissingIn(missing, "A-USDT", hole, hole.Add(3*time.Minute))
-	markMissingIn(missing, "B-USDT", horizon, base.Add(-100*time.Minute))
-	markMissingIn(missing, "C-USDT", horizon, base)
-	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT", "B-USDT", "C-USDT", "G-USDT")}
-	now := func() time.Time { return base.Add(2 * time.Hour) }
-
-	counted := newCountingRows(missing)
-	result, err := (&Checker{Timeline: fakePlans{records}, Rows: counted, Now: now}).CheckHistory(context.Background(), "crypto", "ds", "1m")
-	require.NoError(t, err)
-	require.Equal(t, []string{"A-USDT", "B-USDT"}, counted.readSubjects(), "C 没有历史、G 齐全，都不读行")
-
-	expected, err := (&Checker{Timeline: fakePlans{records}, Rows: &fakeRows{missing: missing}, Now: now}).CheckHistory(context.Background(), "crypto", "ds", "1m")
-	require.NoError(t, err)
-	require.Equal(t, expected, result)
-	require.Equal(t, 3, result.WithHistory)
-	require.Len(t, result.Gaps, 1)
 }
 
 func markMissingIn(missing map[string]map[int64]bool, subject string, from, to time.Time) {

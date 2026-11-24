@@ -35,15 +35,6 @@ const overview = (over: Record<string, unknown> = {}) => ({
     last_heartbeat_at: "2026-11-08T00:00:00Z",
     object_store: { endpoint: "127.0.0.1:11473", bucket: "moox-archive", prefix: "moox-archive/" },
     ...over
-  },
-  avoidance: {
-    every_minutes: 1,
-    before_seconds: 5,
-    after_seconds: 25,
-    hour_quiet_from: "58:00",
-    hour_quiet_until: "04:00",
-    basis: "crypto：1m、1h 等（每分钟触发，有 1h 及以上）",
-    computed_at: "2026-11-08T00:00:00Z"
   }
 });
 
@@ -66,7 +57,7 @@ async function mountPage() {
 }
 
 describe("归档存储页", () => {
-  it("执行器所在主机、根目录、磁盘、内置对象存储、避让时段", async () => {
+  it("执行器所在主机、根目录、磁盘、内置对象存储", async () => {
     const text = await mountPage();
     expect(api.listDeployments).toHaveBeenCalledWith({
       component_id: "archive-worker",
@@ -79,9 +70,6 @@ describe("归档存储页", () => {
     expect(text).not.toContain("磁盘空间不足");
     expect(text).toContain("内置 SeaweedFS");
     expect(text).toContain("不防整盘故障");
-    expect(text).toContain("每分钟只在第 25～55 秒读取");
-    expect(text).toContain("每小时 :58:00～:04:00 不拉取");
-    expect(text).toContain("crypto：1m、1h 等");
     expect(text).toContain("datasets.csv");
   });
 
@@ -91,14 +79,9 @@ describe("归档存储页", () => {
     expect(text).toContain("磁盘空间不足（可用低于下限 5 GB），已暂停领取新运行");
   });
 
-  it("没有算出过避让规则时写启动默认值；没配对象存储时说明不能下载", async () => {
-    api.getArchiveOverview.mockResolvedValue({
-      ...overview({ object_store: {} }),
-      avoidance: { every_minutes: 1, before_seconds: 5, after_seconds: 25, basis: "" }
-    });
+  it("没配对象存储时说明不能下载", async () => {
+    api.getArchiveOverview.mockResolvedValue(overview({ object_store: {} }));
     const text = await mountPage();
-    expect(text).toContain("还在用启动默认值");
-    expect(text).toContain("未取到采集频率，使用默认值");
     expect(text).toContain("没有配置对象存储");
   });
 

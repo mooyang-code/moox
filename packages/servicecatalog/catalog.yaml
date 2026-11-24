@@ -363,12 +363,9 @@ components:
             read_only: true
           - name: CancelKlineBackfill
           - name: RetryKlineBackfill
-          - name: ConfirmHistoryGaps
           - name: ClearSourceAbsences
-          # 归档避让：archive-mgr 只读各空间生效中的采集函数（服务的数据集与频率），据此推出避让时段。
           - name: GetCollectorStatus
             read_only: true
-            callers: [archive-mgr]
           - name: ReregisterFetchPlan
             operators: [moox-cli]
           - name: TriggerFetchPlan

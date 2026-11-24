@@ -66,8 +66,6 @@ type fakeChunks struct {
 	// statusFor 按标的给出逐项结果，优先于 status。
 	statusFor func(subject string) pipeline.ItemStatus
 	err       error
-	// derivedSkipped 让每次运行的结果带上“推测期望缺数被跳过”标记（失效重算据此保留待办）。
-	derivedSkipped bool
 }
 
 func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.SelectionSource, start, end time.Time, after func(recalcexec.Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
@@ -79,7 +77,7 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 		return pipeline.Outcome{}, err
 	}
 	f.calls = append(f.calls, runCall{selection: selection, start: start, end: end})
-	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}, DerivedSkipped: f.derivedSkipped}
+	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}}
 	for _, member := range selection.Members {
 		for _, subject := range selection.Subjects {
 			for at := start; at.Before(end); at = at.Add(time.Minute) {

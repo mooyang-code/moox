@@ -21,6 +21,8 @@ type factorsFake struct {
 	calls   []input.ParamSubmission
 	results []input.MemberSubmitResult
 	err     error
+	// taskErr 是只对某个任务返回的错误（任务 → 错误）。
+	taskErr map[string]error
 }
 
 func (f *factorsFake) BindFactorTask(context.Context, string, string) (input.BoundTask, error) {
@@ -31,6 +33,9 @@ func (f *factorsFake) GetFactorTask(context.Context, string) (input.FactorTaskRe
 }
 func (f *factorsFake) SubmitFactorParams(_ context.Context, submission input.ParamSubmission) ([]input.MemberSubmitResult, error) {
 	f.calls = append(f.calls, submission)
+	if err := f.taskErr[submission.TaskID]; err != nil {
+		return nil, err
+	}
 	return f.results, f.err
 }
 
@@ -58,6 +63,11 @@ func commit(t *testing.T, db *store.Store, bar int) string {
 // harness 建一个启用的实例和它的第 0 期结果（带下一期参数，目标期在 now 之后一小时）。
 func harness(t *testing.T) (*store.Store, *Submitter, *factorsFake) {
 	t.Helper()
+	return harnessWith(t, map[string]string{"spot": "ftask_i1"}, `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`)
+}
+
+func harnessWith(t *testing.T, tasks map[string]string, resolved string) (*store.Store, *Submitter, *factorsFake) {
+	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	if err != nil {
 		t.Fatal(err)
@@ -70,11 +80,10 @@ func harness(t *testing.T) (*store.Store, *Submitter, *factorsFake) {
 	if err := db.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: "sha256:x", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_i1"}, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: tasks, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := json.RawMessage(`{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`)
-	if err := db.EnableInstance(ctx, store.Session{SessionID: "session-1", InstanceID: "i1", DSLHash: "sha256:x", ResolvedJSON: string(resolved), CreatedAt: now}, "name: demo"); err != nil {
+	if err := db.EnableInstance(ctx, store.Session{SessionID: "session-1", InstanceID: "i1", DSLHash: "sha256:x", ResolvedJSON: resolved, CreatedAt: now}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, db, 0)
@@ -179,6 +188,43 @@ func TestSubmitterRetriesTransientWithBackoff(t *testing.T) {
 	}
 	if got := result(t, db, "r0"); got.ParamsDeliveredAt == nil {
 		t.Fatalf("重试成功应记送达：%+v", got)
+	}
+}
+
+// 现货加永续两个主帧任务：同一份参数按现货、永续的先后提交给两个任务，都接受才记送达；第二个任务调用失败时整条退避重试，
+// 重投第一个任务只是幂等重复；任一任务拒绝就整条记被拒绝，原因带上任务。
+func TestSubmitterDeliversToEveryMainTask(t *testing.T) {
+	db, submitter, fake := harnessWith(t, map[string]string{"spot": "ftask_s", "swap": "ftask_w"},
+		`{"market":{"select":"both","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_s","factor_task_id":"ftask_s"},"swap":{"view_id":"view_factor_w","factor_task_id":"ftask_w"}}}`)
+	fake.taskErr = map[string]error{"ftask_w": errors.New("dial tcp: connection refused")}
+	if _, err := submitter.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.calls) != 2 || fake.calls[0].TaskID != "ftask_s" || fake.calls[1].TaskID != "ftask_w" {
+		t.Fatalf("应先现货后永续：%+v", fake.calls)
+	}
+	if got := result(t, db, "r0"); got.ParamsDeliveredAt != nil || got.ParamsError != "" {
+		t.Fatalf("永续没送到时保持待送达：%+v", got)
+	}
+	submitter.Now = func() time.Time { return now.Add(5 * time.Second) }
+	fake.taskErr = nil
+	if _, err := submitter.RunOnce(context.Background()); err != nil || len(fake.calls) != 4 {
+		t.Fatalf("退避期过后整条重试：calls=%d err=%v", len(fake.calls), err)
+	}
+	if fake.calls[2].RequestID != "r0" || fake.calls[3].TaskID != "ftask_w" {
+		t.Fatalf("重试用同一个 request_id：%+v", fake.calls[2:])
+	}
+	if got := result(t, db, "r0"); got.ParamsDeliveredAt == nil {
+		t.Fatalf("两个任务都接受后记送达：%+v", got)
+	}
+
+	commit(t, db, 1)
+	fake.results = []input.MemberSubmitResult{{Member: "bias__var", Result: input.SubmitRejected, Reason: "超出范围"}}
+	if _, err := submitter.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := result(t, db, "r1"); got.ParamsDeliveredAt != nil || !strings.Contains(got.ParamsError, "因子任务 ftask_s") {
+		t.Fatalf("拒绝应整条记被拒绝并带上任务：%+v", got)
 	}
 }
 

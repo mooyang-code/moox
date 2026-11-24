@@ -42,7 +42,7 @@ import { relativeTime } from "@/views/home/home-model";
 import { archiveUnavailableHint, diskStatus, systemAlerts, workerHostText, type WorkerHost } from "../shared/archive-model";
 
 /**
- * 归档任务页顶部的执行器状态：一行文字，在线与否、所在主机，磁盘不足时标出；存放位置、磁盘、避让时段在“归档存储”页。
+ * 归档任务页顶部的执行器状态：一行文字，在线与否、所在主机，磁盘不足时标出；存放位置、磁盘在“归档存储”页。
  * 首次读取失败只显示失败和重试；成功过之后失败保留上次的数据，末尾写“读取失败 · 上次成功”。
  */
 const props = defineProps<{

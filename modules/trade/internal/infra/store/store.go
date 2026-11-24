@@ -37,8 +37,8 @@ const (
 )
 
 var (
-	ErrConflict           = errors.New("trade store: conflict")
-	ErrInvalidRecord      = errors.New("trade store: invalid record")
+	ErrConflict           = errors.New("数据已经被修改，刷新后再试")
+	ErrInvalidRecord      = errors.New("数据不合法")
 	ErrIncompatibleSchema = errors.New("trade store: incompatible schema")
 )
 
@@ -228,13 +228,14 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_logical_accounts":            {}, "t_logical_account_members": {},
 		"t_logical_account_targets": {}, "t_operator_actions": {},
 		"t_paper_account_configs": {}, "t_account_equity_points": {},
-		"t_paper_asset_balances": {}, "t_shadow_targets": {},
-		"t_logical_account_equity_points":   {},
-		"t_logical_account_target_receipts": {},
-		"t_trade_wallet_transfers":          {},
-		"t_trade_blocked_instruments":       {},
-		"t_paper_funding_fees":              {},
-		"t_order_fill_hourly_summaries":     {},
+		"t_paper_asset_balances":           {},
+		"t_logical_account_equity_points":  {},
+		"t_logical_account_target_history": {},
+		"t_trade_wallet_transfers":         {},
+		"t_trade_blocked_instruments":      {},
+		"t_paper_funding_fees":             {},
+		"t_order_fill_hourly_summaries":    {},
+		"t_account_instrument_summaries":   {},
 	}
 	for _, table := range tables {
 		if _, found := approved[table]; !found {

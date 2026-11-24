@@ -314,8 +314,8 @@ var udfCmd = &cobra.Command{
   moox-cli udf activate <名称>@<哈希> [--yes]         切换启用版本：默认只给出影响清单与前提检查，--yes 才切换
   moox-cli udf list | show <名称>                     查看版本、引用关系与各引擎的模块状态
 
-切换启用版本要在因子引擎模块暂停期间进行：lifecycle pause（默认连因子引擎，按 moox.toml 自动解析；等收敛）→ 取消列出的已领取补算作业 →
-udf activate --yes → lifecycle resume（追赶：同步目录、备齐模块、用新版本补算暂停期间的周期，再放行）。`,
+切换启用版本与 factor update 同一组前提：udf activate 预览 → 停用列出的已启用成员（factor member disable）、取消列出的已经开始的补算作业 →
+udf activate --yes → 重新启用成员，停用期间的周期用 factor recalc submit 按新版本补算。`,
 }
 
 func newUdfCommands() *cobra.Command {

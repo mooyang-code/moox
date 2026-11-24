@@ -11,10 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	importSpotTag = "venue:binance|market:spot|source:spot_http"
-	importSwapTag = "venue:binance|market:swap|source:swap_http"
-)
+const importSpotTag = "venue:binance|market:spot|source:spot_http"
 
 func taggedWireRequest(tag string, minutes ...int) *factorpb.WriteSeriesReq {
 	req := wireRequest(minutes...)
@@ -38,24 +35,8 @@ func storedTags(t *testing.T, store *seriesstore.Store) map[string]int {
 	return counts
 }
 
-// 统一数据集：现货、永续分两次导入（EngineControl 的 WriteSeries），互不覆盖；重复导入同一个市场是幂等的。
-func TestLocalWriteSpotThenSwapImportsDoNotOverwriteEachOther(t *testing.T) {
-	w, store := newTestWriterFor(t, true)
-	out := post(t, w, taggedWireRequest(importSpotTag, 0, 1, 2))
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, out.GetRetInfo().GetCode(), out.GetRetInfo().GetMsg())
-	require.Equal(t, map[string]int{importSpotTag: 3}, storedTags(t, store))
-
-	out = post(t, w, taggedWireRequest(importSwapTag, 0, 1, 2))
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, out.GetRetInfo().GetCode(), out.GetRetInfo().GetMsg())
-	require.Equal(t, map[string]int{importSpotTag: 3, importSwapTag: 3}, storedTags(t, store), "导入永续没有删掉现货")
-
-	out = post(t, w, taggedWireRequest(importSpotTag, 0, 1, 2))
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, out.GetRetInfo().GetCode(), out.GetRetInfo().GetMsg())
-	require.Equal(t, map[string]int{importSpotTag: 3, importSwapTag: 3}, storedTags(t, store), "再次导入现货：幂等，永续仍在")
-}
-
-// 单市场数据集保持原来的整段替换：换一个 tag 再导入，标的原有的序列被这一批替换，不会留下旧 tag 的行。
-func TestLocalWriteSingleMarketKeepsWholeRangeReplacement(t *testing.T) {
+// 导入整段替换：换一个 tag 再导入，标的原有的序列被这一批替换，不会留下旧 tag 的行。
+func TestLocalWriteReplacesTheWholeRange(t *testing.T) {
 	w, store := newTestWriter(t)
 	out := post(t, w, taggedWireRequest(importSpotTag, 0, 1, 2))
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, out.GetRetInfo().GetCode(), out.GetRetInfo().GetMsg())

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
@@ -382,21 +383,59 @@ func TestEncodeInstrumentTargetsRejectsHoldWithQuantity(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
-// 回执只有换算过数量的目标才要求权益快照：全部是保持标的时没有换算，不要求；混有换算项仍要求。
-func TestInsertTargetReceiptRequiresEquityOnlyForConvertedTargets(t *testing.T) {
+// 正式目标只有换算过数量的才要求权益快照：全部是保持标的时没有换算，不要求；混有换算项仍要求。
+func TestInsertTargetHistoryRequiresEquityOnlyForConvertedTargets(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
-	receipt := func(id, quantityTargets string) TargetReceiptRecord {
-		return TargetReceiptRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1",
+	receipt := func(id, quantityTargets string) TargetHistoryRecord {
+		return TargetHistoryRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1",
 			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1", BarEndTime: 1, ValidUntil: 2,
-			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, AcceptedAt: 1}
+			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, SessionStartedAt: 1, RecordedAt: 1}
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.InsertTargetReceipt(receipt("all-hold", `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`))
+		return tx.InsertTargetHistory(receipt("all-hold", `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`))
 	}))
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		return tx.InsertTargetReceipt(receipt("mixed", `[{"instrument_id":"ETH-USDT-SPOT","hold":true},{"instrument_id":"BTC-USDT-SPOT","quantity":"1"}]`))
+		return tx.InsertTargetHistory(receipt("mixed", `[{"instrument_id":"ETH-USDT-SPOT","hold":true},{"instrument_id":"BTC-USDT-SPOT","quantity":"1"}]`))
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
+}
+
+// 影子目标与正式目标同表：重投查重、换手检查只看正式目标；同一会话同一根 K 线的唯一约束也只管正式目标。
+func TestTargetHistoryQueriesSkipShadowRows(t *testing.T) {
+	s := openTestStore(t)
+	seedLogicalAccount(t, s, "runner-1")
+	ctx := context.Background()
+	record := func(id string, barEnd int64) TargetHistoryRecord {
+		return TargetHistoryRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1",
+			InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1, StrategyID: "strategy-1",
+			BarEndTime: barEnd, ValidUntil: barEnd + 60_000, RequestHash: "hash-" + id,
+			WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: barEnd}
+	}
+	// 两个影子目标落在同一根 K 线上也能记。
+	for _, id := range []string{"shadow-1", "shadow-2"} {
+		added, err := s.RecordShadowTarget(ctx, record(id, 1_000))
+		require.NoError(t, err)
+		require.True(t, added)
+	}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.InsertTargetHistory(record("formal-1", 1_000)) }))
+
+	_, err := s.GetAcceptedTargetHistory(ctx, "space-1", "shadow-1")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	formal, err := s.GetAcceptedTargetHistory(ctx, "space-1", "formal-1")
+	require.NoError(t, err)
+	require.False(t, formal.Shadow)
+
+	history, err := s.ListAcceptedTargetHistorySince(ctx, "space-1", "logical-1", 0)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	require.Equal(t, "formal-1", history[0].TargetID)
+
+	shadows, err := s.ListShadowTargets(ctx, "space-1", "runner-1", 0)
+	require.NoError(t, err)
+	require.Len(t, shadows, 2)
+	for _, shadow := range shadows {
+		require.True(t, shadow.Shadow)
+	}
 }

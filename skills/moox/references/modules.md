@@ -59,7 +59,7 @@
 # 不给 --output-field 就输出合成的全部固定字段，资金费率与附加字段不合成）；要历史数据再用 collector resample backfill
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
-./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
+./bin/moox-cli collector kline absences-clear ...                    # 行情源后来补上数据时清除“行情源本来没有”的确认
 ./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
 ./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）
@@ -116,9 +116,8 @@
   迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
 - **市场模式**：DSL 顶层 `market` 的 `select`（从现货、永续还是两边选币）与 `prefer`（两边都能交易时优先在哪个市场下单）只有 5 种合法组合，
   决定实例要绑几个因子任务（[`strategy-dsl.md`](strategy-dsl.md) 的“market：市场模式”）。
-- **双任务与统一数据集**：同时涉及现货和永续时有两种绑法——现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
-  一个市场的因子本期被跳过时只让这个市场不可用）；或绑统一数据集（同一数据集里放现货、永续两条序列）上的一个任务，写 `--factor-task multi=…`，只能单独绑定，到达即求值，
-  不支持 `factor_params`、不能进策略池。
+- **双任务**：同时涉及现货和永续时，现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
+  一个市场的因子本期被跳过时只让这个市场不可用）。
 - **策略池**：定义里写 `strategy_pool`（与 `rules` 互斥），成员引用已有策略定义，各自在模拟账本里算净值，按 `fixed` 比例或 `rotation` 轮动分配资金；
   启用后先预热，预热完成前不求值、不能 `confirm`；研究回放支持，只能用结果 View 来源（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
 - **注意**：一个因子任务可以被多个实例引用，只有写了 `factor_params` 的实例启用时独占关联它（一个任务只关联一个实例）；实例的任务在创建时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
@@ -170,8 +169,8 @@
 ## 归档
 
 把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：每收盘 N 根（`--pull-every-bars`，默认 1）拉一次新收盘的几根，
-低于 1d 的另有每小时第 34 分的复核（推进水位），1d 及以上每天一次。读取避开采集触发时刻：规则由 archive-mgr 按有任务的空间的采集频率推出并下发给 worker，`archive overview` 的 `avoidance` 可见。
-管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录、磁盘与避让规则；CSV 导入与按时间区间清除无法补齐区间只有命令行（`archive import`、`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
+低于 1d 的另有每小时第 34 分的复核（推进水位），1d 及以上每天一次。读取 Storage 只在每分钟第 25～55 秒、且避开每小时 :58～:04（写死，worker 的 `pacing.minute_window` 可关掉秒窗口）。
+管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录与磁盘；CSV 导入与按时间区间清除无法补齐区间只有命令行（`archive import`、`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
 分区路径 `<空间>/<用途>/<目录名>/<yyyy>/<yyyymmdd>.csv.gz`（1d 及以上是月分区 `<yyyymm>`；worker 配置 `export_format: csv` 时扩展名为 `.csv`），用途 `collect`（采集结果）/ `factor`（因子结果）/ `data`，目录名建任务时定（`tasks prepare` 给建议值，`tasks create --dir-name` 可改），建好后不改；归档根目录的 `datasets.csv` 是目录与数据集的对照表。
 
 ```bash

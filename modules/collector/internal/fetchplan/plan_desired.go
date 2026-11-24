@@ -76,6 +76,22 @@ type PlanDatasetState struct {
 	OutputFields []string `json:"output_fields,omitempty"`
 	// Ingest 是数据集所在的执行端（scf、stream、local），空表示 scf。
 	Ingest string `json:"ingest,omitempty"`
+	// Symbols 是每个标的的交易所符号（标的 → 符号，与函数计划的 ExchangeSymbol 一致）。不进 Hash；
+	// 变化时数据集同样要选生效周期，并在标的时间线上写一行，补采按时间线取改名前的旧符号。
+	Symbols map[string]string `json:"symbols,omitempty"`
+}
+
+// sameSymbols 比较两份交易所符号映射。
+func sameSymbols(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for subject, symbol := range left {
+		if other, ok := right[subject]; !ok || other != symbol {
+			return false
+		}
+	}
+	return true
 }
 
 // IngestOrSCF 返回数据集的执行端，空视为 scf。
@@ -87,7 +103,7 @@ func (s PlanDatasetState) IngestOrSCF() string {
 }
 
 // DesiredDataset 是期望状态里的一个数据集，带完整序列（标的加 series_tag，规范顺序，序号即下标）。
-// 统一数据集（现货加永续）的序列包含两个市场的 tag，由两个市场的函数各自提交自己那几位。
+// 一个数据集只来自一个市场，序列的 tag 都相同。
 type DesiredDataset struct {
 	PlanDatasetState
 	Series []seriesset.Series
@@ -158,8 +174,9 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		pairs      map[string]string
 	}
 	markets := map[string]*market{}
-	// subjectSets 是每个数据集在每个市场里的标的集合：统一数据集有两个市场，各自的标的互不并集。
-	subjectSets := map[string]map[string]map[string]struct{}{}
+	// subjectSets 是每个数据集的标的集合；datasetMarket 是数据集所属的市场（一个数据集只来自一个市场）。
+	subjectSets := map[string]map[string]struct{}{}
+	datasetMarket := map[string]string{}
 	for _, group := range groups {
 		if strings.TrimSpace(group.DatasetID) == "" || strings.TrimSpace(group.Frequency) == "" {
 			return nil, errors.New("task group requires dataset_id and frequency")
@@ -187,17 +204,15 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			dataset = &DesiredDataset{PlanDatasetState: PlanDatasetState{DatasetID: group.DatasetID, Frequency: group.Frequency,
 				LatenessS: latenessS, OutputFields: normalizeOutputFields(group.OutputFields), Ingest: executor}}
 			state.Datasets[datasetKey] = dataset
-			subjectSets[datasetKey] = map[string]map[string]struct{}{}
+			subjectSets[datasetKey] = map[string]struct{}{}
+			datasetMarket[datasetKey] = key
+			info.datasetIDs[executor] = append(info.datasetIDs[executor], datasetKey)
+		} else if datasetMarket[datasetKey] != key {
+			// 一个数据集只放一个市场的序列：建任务时已拒绝跨市场的标签，这里兜底。
+			return nil, fmt.Errorf("dataset %s %s is fed by two markets (%s and %s)", group.DatasetID, group.Frequency, datasetMarket[datasetKey], key)
 		} else if dataset.Ingest != executor {
 			// 一个数据集只有一个写入方：建任务与切换时已保证一致，这里兜底。
 			return nil, fmt.Errorf("dataset %s %s has conflicting ingest %s and %s", group.DatasetID, group.Frequency, dataset.Ingest, executor)
-		} else if latenessS > dataset.LatenessS {
-			// 统一数据集的两个市场各有截止时间，取较大的：周期要等较慢的那个市场。
-			dataset.LatenessS = latenessS
-		}
-		if subjectSets[datasetKey][key] == nil {
-			subjectSets[datasetKey][key] = map[string]struct{}{}
-			info.datasetIDs[executor] = append(info.datasetIDs[executor], datasetKey)
 		}
 		if info.subjects[executor] == nil {
 			info.subjects[executor] = map[string]struct{}{}
@@ -207,7 +222,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			if subject == "" {
 				continue
 			}
-			subjectSets[datasetKey][key][subject] = struct{}{}
+			subjectSets[datasetKey][subject] = struct{}{}
 			info.subjects[executor][subject] = struct{}{}
 			if external := strings.TrimSpace(group.ExternalSymbols[subject]); external != "" {
 				info.external[subject] = external
@@ -230,13 +245,12 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 	}
 	sort.Strings(marketKeys)
 
-	// 先算每个数据集的规范序列、序号与 hash：序列是各市场（标的、该市场的 series_tag）的并集。
+	// 先算每个数据集的规范序列、序号与 hash：序列是（标的、数据集所属市场的 series_tag）。
 	for datasetKey, dataset := range state.Datasets {
+		tag := markets[datasetMarket[datasetKey]].tag
 		var series []seriesset.Series
-		for marketKey, subjects := range subjectSets[datasetKey] {
-			for subject := range subjects {
-				series = append(series, seriesset.Series{SubjectID: subject, SeriesTag: markets[marketKey].tag})
-			}
+		for subject := range subjectSets[datasetKey] {
+			series = append(series, seriesset.Series{SubjectID: subject, SeriesTag: tag})
 		}
 		if len(series) == 0 {
 			delete(state.Datasets, datasetKey)
@@ -247,6 +261,16 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			return nil, fmt.Errorf("dataset %s %s: %w", dataset.DatasetID, dataset.Frequency, err)
 		}
 		dataset.Series, dataset.Hash, dataset.Count = set.Series, set.Hash, uint32(len(set.Series))
+		// 交易所符号与函数计划同一规则：有外部符号用它，否则去掉连字符（见 marketfetch.Plan.ExchangeSymbol）。
+		external := markets[datasetMarket[datasetKey]].external
+		dataset.Symbols = make(map[string]string, len(subjectSets[datasetKey]))
+		for subject := range subjectSets[datasetKey] {
+			symbol := external[subject]
+			if symbol == "" {
+				symbol = strings.ReplaceAll(subject, "-", "")
+			}
+			dataset.Symbols[subject] = symbol
+		}
 		dataset.index = make(map[string]uint32, len(set.Series))
 		for i, item := range set.Series {
 			dataset.index[item.Key()] = uint32(i)

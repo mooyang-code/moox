@@ -59,7 +59,7 @@ func TestHandleShadowTargetRecordsWithoutAccepting(t *testing.T) {
 	require.Contains(t, shadows[0].QuantityTargetsJSON, "BTC-USDT-SPOT")
 	_, err = tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.Error(t, err, "影子目标不能成为账户的正式目标")
-	_, err = tradeStore.GetTargetReceipt(context.Background(), "space-1", "shadow-1")
+	_, err = tradeStore.GetAcceptedTargetHistory(context.Background(), "space-1", "shadow-1")
 	require.Error(t, err, "影子目标不写回执")
 }
 

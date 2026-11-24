@@ -47,26 +47,13 @@ func (h *Handler) checkReadyFor(p *period, resolved input.Resolved, adjacent *st
 	merged := mergedReadiness{Results: map[string]readiness.Result{}, Unavailable: map[string]string{}}
 	var dataReason, dataDetail string
 	markets := resolved.Markets()
-	check := func(key string) readiness.Result {
-		var previous *readiness.Record
-		if adjacent != nil {
-			previous = &readiness.Record{Factors: adjacent.Views[resolved.Tasks[key].ViewID].Factors}
-		}
-		return readiness.Check(resolved.ReadinessBinding(), previous, p.events[key])
-	}
-	// 统一数据集只有一个 View 和一条事件：判断一次，再按序列拆成各市场的结论（每个市场的失败、被跳过的 tag 各自判断）。
-	var unified readiness.Result
-	if resolved.Unified() {
-		unified = check(input.MarketMulti)
-	}
 	for _, market := range markets {
 		viewID := resolved.TaskOf(market).ViewID
-		var result readiness.Result
-		if resolved.Unified() {
-			result = unified.ForMarket(market)
-		} else {
-			result = check(market)
+		var previous *readiness.Record
+		if adjacent != nil {
+			previous = &readiness.Record{Factors: adjacent.Views[viewID].Factors}
 		}
+		result := readiness.Check(resolved.ReadinessBinding(), previous, p.events[market])
 		merged.Results[market] = result
 		// 策略池里多个成员可能用同一个 View：各成员的因子指纹合并成一份。
 		view := p.input.Views[viewID]
@@ -140,19 +127,12 @@ func (h *Handler) checkSourcesReady(p *period, resolved input.Resolved, merged *
 	}
 }
 
-// eventUniverses 返回各市场事件里的标的名单（市场 → 名单）。统一数据集只有一条事件，名单是各市场标的的并集（事件里没有按序列的名单），
-// 每个市场用它再与自己的活跃标的求交。
-func (p *period) eventUniverses(resolved input.Resolved) map[string][]string {
+// eventUniverses 返回各市场事件里的标的名单（市场 → 名单）。
+func (p *period) eventUniverses() map[string][]string {
 	universes := make(map[string][]string, len(p.events))
 	for key, event := range p.events {
 		if source, _ := dsl.SplitTaskKey(key); source != "" {
 			continue // 附加来源的事件不提供基础集合
-		}
-		if resolved.Unified() && key == input.MarketMulti {
-			for _, market := range resolved.Markets() {
-				universes[market] = eventUniverse(event)
-			}
-			continue
 		}
 		universes[key] = eventUniverse(event)
 	}

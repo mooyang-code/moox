@@ -171,26 +171,24 @@ func TestManagerClientPreservesNativeFailureAndRejectsMissingBusinessStatus(t *t
 	require.False(t, errors.Is(err, ErrLeaseConflict))
 }
 
-func TestManagerClientPullDecodesWindowAndProgressRetainsFence(t *testing.T) {
+func TestManagerClientPullDecodesWindowAndReportsProgress(t *testing.T) {
 	client := managerClientFor(t, func(_ context.Context, method string, body []byte) (proto.Message, error) {
 		if method == "ReportRecalcProgress" {
 			var request factorpb.ReportRecalcProgressReq
 			require.NoError(t, proto.Unmarshal(body, &request))
-			require.Equal(t, "token", request.GetLeaseToken())
 			require.Equal(t, "job-1", request.GetJobId())
 			return &factorpb.ReportRecalcProgressRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, JobStatus: "running"}, nil
 		}
 		require.Equal(t, "PullRecalcJob", method)
-		return &factorpb.PullRecalcJobRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Found: true, LeaseToken: "token", Job: &factorpb.RecalcJob{JobId: "job-1", StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z", ProgressTime: "2026-10-04T00:30:00Z", Subjects: []string{"BTC"}}, Task: &factorpb.EngineTask{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}}}, nil
+		return &factorpb.PullRecalcJobRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Found: true, Job: &factorpb.RecalcJob{JobId: "job-1", StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z", ProgressTime: "2026-10-04T00:30:00Z", Subjects: []string{"BTC"}}, Task: &factorpb.EngineTask{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}}}, nil
 	})
 	job, found, err := client.PullRecalcJob(t.Context())
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "token", job.LeaseToken)
 	require.Equal(t, time.Date(2026, 10, 4, 0, 30, 0, 0, time.UTC), job.Window.Progress)
 	require.Equal(t, []string{"BTC"}, job.Subjects)
 	require.Equal(t, "ftask_a", job.Set.Set.TaskID)
-	status, err := client.ReportRecalcProgress(t.Context(), job.JobID, job.LeaseToken, job.Window.Progress, "running", "", nil)
+	status, err := client.ReportRecalcProgress(t.Context(), job.JobID, job.Window.Progress, "running", "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "running", status)
 }

@@ -47,7 +47,7 @@ const accepted = () => ({
   action: {
     action_id: "action",
     logical_account_id: "logical",
-    action_type: "SUBMIT_ORDER",
+    action_type: "MANUAL_ORDER",
     status: "RUNNING",
     result_json: '{"order_id":"order"}'
   } as OperatorAction,

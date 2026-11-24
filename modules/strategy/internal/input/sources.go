@@ -14,7 +14,7 @@ import (
 )
 
 // 本文件是附加列来源（S7）与参考市场（S3）的绑定：
-//   - 附加来源：实例为每个来源另外绑定一组因子任务，任务键与主帧相同（市场，或统一数据集的 multi），登记为 来源名:市场。
+//   - 附加来源：实例为每个来源另外绑定一组因子任务，任务键与主帧相同（市场），登记为 来源名:市场。
 //     每根主帧按 as-of 读来源里收盘时刻不晚于这根主帧收盘时刻的最新一根，列以 来源名.列名 并进主帧的行。
 //   - 参考市场：单市场策略额外绑定另一个市场的任务，只用于 age_markets: all 的年龄判定，不读行、不参与选择与下单。
 
@@ -62,7 +62,7 @@ func (r Resolved) SourceNames() []string { return sortedKeys(r.Sources) }
 func (r Resolved) Gathers() bool { return len(r.Tasks) > 1 || r.HasSources() }
 
 // ViewRole 说明一个 View 在绑定里的角色：主帧（source 为空、reference 为假）、附加来源（source 是来源名）或参考市场（reference 为真）。
-// key 是主帧与来源的任务键（市场或 multi），参考市场是市场。
+// key 是主帧、来源与参考市场的任务键（市场）。
 func (r Resolved) ViewRole(viewID string) (key, source string, reference, ok bool) {
 	if key, ok := r.TaskKeyOfView(viewID); ok {
 		return key, "", false, true
@@ -239,13 +239,10 @@ func ResolveTasks(ctx context.Context, client Client, spaceID string, tasks map[
 	return bindViewsWith(ctx, client, spaceID, views, strategy, bound)
 }
 
-// bindReferences 解析参考市场：每个参考任务的市场必须就是登记的市场，周期、日历与主帧相同。统一数据集已同时覆盖现货与永续，不能再写参考市场。
+// bindReferences 解析参考市场：每个参考任务的市场必须就是登记的市场，周期、日历与主帧相同。
 func bindReferences(ctx context.Context, client Client, spaceID string, resolved *Resolved, references map[string]string) ([]resolvedView, error) {
 	if len(references) == 0 {
 		return nil, nil
-	}
-	if resolved.Unified() {
-		return nil, errors.New("统一数据集上的任务已同时覆盖现货与永续，不能再写 market.reference")
 	}
 	views := make([]resolvedView, 0, len(references))
 	resolved.References = make(map[string]TaskBinding, len(references))

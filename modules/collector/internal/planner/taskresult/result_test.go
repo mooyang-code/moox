@@ -528,8 +528,8 @@ func TestDeleteRefusesWhenExtraViewReferencesResultDatasetAndKeepsData(t *testin
 	require.Contains(t, fake.views, ids.ViewID, "存在额外 View 时不得删除结果自身的 View")
 }
 
-// 同一数据源的现货、永续两个标签：统一数据集，market_type 为 multi，数据源保留；单市场的标签写它自己的市场。
-func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
+// 单市场的标签写它自己的市场与数据源；市场或数据源不全相同的（建任务时已拒绝）两者都留空，不会写出 multi。
+func TestEnsureWritesTheSingleMarketOfTheTags(t *testing.T) {
 	fake := taggedResultMetadataFake{newResultMetadataFake(),
 		map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_swap": "okx"},
 		map[string]string{"binance_spot": "spot", "binance_swap": "swap", "okx_swap": "swap"}}
@@ -539,14 +539,13 @@ func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
 		require.NoError(t, err)
 		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
 	}
-	unified := ensure("unified", "binance_spot", "binance_swap")
-	require.Equal(t, "multi", unified.GetAttributes()["market_type"])
-	require.Equal(t, "binance", unified.GetDataSourceId(), "统一数据集保留数据源")
+	spotSwap := ensure("spot_swap", "binance_spot", "binance_swap")
+	require.Empty(t, spotSwap.GetAttributes()["market_type"], "现货加永续不再是一个数据集")
 	single := ensure("single", "binance_swap")
 	require.Equal(t, "swap", single.GetAttributes()["market_type"], "单标签任务不变")
 	require.Equal(t, "binance", single.GetDataSourceId())
 	mixed := ensure("mixed", "binance_spot", "okx_swap")
-	require.Empty(t, mixed.GetDataSourceId(), "数据源不同不能成为统一数据集")
+	require.Empty(t, mixed.GetDataSourceId(), "数据源不同")
 	require.Empty(t, mixed.GetAttributes()["market_type"])
 }
 

@@ -3,7 +3,9 @@ package klinecheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -12,18 +14,28 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-// fakePlans 是内存里的计划记录：补采按它找历史计划，检查按 timelineRows 从它得到时间线行。
+// fakePlans 是内存里的计划记录：检查按 timelineRows 从它得到时间线行。
 type fakePlans struct{ records []*store.FetchPlanRecord }
 
-func (f fakePlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, error) {
-	return f.records, nil
+// fakeRoutes 是补采的路由夹具：除 gone 里的数据集外都有采集任务，来源是币安现货。
+type fakeRoutes struct{ gone map[string]bool }
+
+func (f fakeRoutes) BackfillRoute(_ context.Context, _, datasetID, frequency string) (*marketfetch.Plan, bool, error) {
+	if f.gone[datasetID] {
+		return nil, false, nil
+	}
+	return &marketfetch.Plan{V: 1, Fetch: marketfetch.PlanFetch{Concurrency: 1},
+		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "binance", MarketType: "spot"},
+		Datasets: []marketfetch.PlanDataset{{DatasetID: datasetID, Frequency: frequency}}}, true, nil
 }
 
 func (f fakePlans) ListBySpace(context.Context, string) ([]store.SeriesTimelineEntry, error) {
@@ -56,11 +68,19 @@ func timelineRows(records []*store.FetchPlanRecord) []store.SeriesTimelineEntry 
 				continue
 			}
 			entry := store.SeriesTimelineEntry{SpaceID: record.SpaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P}
+			symbols := change.Symbols
+			if symbols == nil {
+				// 手写的计划夹具没有符号：按函数计划的默认规则（去掉连字符）补上。
+				symbols = map[string]string{}
+				for _, series := range change.Series {
+					symbols[series.SubjectID] = strings.ReplaceAll(series.SubjectID, "-", "")
+				}
+			}
 			switch {
 			case change.Gone:
 				entries = append(entries, entry)
-			case change.HashChanged && (record.Status == store.FetchPlanApplied || progress.Registered[key]):
-				entry.SeriesHash, entry.Series, entry.LatenessS, entry.OutputFields = change.Hash, change.Series, change.LatenessS, change.OutputFields
+			case change.SymbolsChanged || (change.HashChanged && (record.Status == store.FetchPlanApplied || progress.Registered[key])):
+				entry.SeriesHash, entry.Series, entry.Symbols, entry.LatenessS, entry.OutputFields = change.Hash, change.Series, symbols, change.LatenessS, change.OutputFields
 				entries = append(entries, entry)
 			}
 		}
@@ -74,12 +94,22 @@ func appliedTimeline(spaceID, plan string) []store.SeriesTimelineEntry {
 }
 
 // fakeRows 按“标的 → 缺失的开始时间”返回行；深度检查时缺 open 字段的时间点单独登记。
+// listed 非空时，标的在这个时间之前一根数据都没有（上市或开始有历史的时间）。
 type fakeRows struct {
 	mu       sync.Mutex
 	from, to time.Time
 	missing  map[string]map[int64]bool
 	noOpen   map[string]map[int64]bool
+	listed   map[string]time.Time
 	reads    int
+}
+
+// has 报告标的在 t 这一根有没有行。
+func (f *fakeRows) has(subject string, t time.Time) bool {
+	if listed, ok := f.listed[subject]; ok && t.Before(listed) {
+		return false
+	}
+	return !f.missing[subject][t.Unix()]
 }
 
 func (f *fakeRows) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
@@ -94,7 +124,7 @@ func (f *fakeRows) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTime
 	rsp := &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, PageResult: &storagepb.PageResult{}}
 	for _, selector := range req.GetSelectors() {
 		for t := start; t.Before(end); t = t.Add(time.Minute) {
-			if f.missing[selector.GetSubjectId()][t.Unix()] {
+			if !f.has(selector.GetSubjectId(), t) {
 				continue
 			}
 			row := &storagepb.TimeSeriesRow{Key: &storagepb.TimeSeriesKey{SubjectId: selector.GetSubjectId(), DataTime: t.Format(time.RFC3339)}}
@@ -154,33 +184,52 @@ func TestCheckFindsMergedGapsAcrossSubjectChanges(t *testing.T) {
 	require.Equal(t, 10, one.Expected)
 }
 
-// 采集计划只覆盖生效点之后：默认检查不看更早的时间；显式要求时把最早一段前移，更早的范围按最早一段的标的计算。
-func TestCheckReachesBeforeTheFirstPlanOnlyWhenAsked(t *testing.T) {
+// 范围可以早于时间线起点（最早的计划生效点），更早的时间按最早一段的标的计算；早于起点的部分每个标的从自己的第一根起算：
+// 范围之前已有数据的标的，范围开头的缺口照常报；之前没有数据的（新上市），第一根之前不报，一根都没有的整段不报。
+// 时间线之内不裁剪；强制重拉不读数据，也不裁剪。
+func TestCheckBeforeTheTimelineCountsFromEachSubjectsFirstBar(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	rows := &fakeRows{missing: map[string]map[int64]bool{"BTC-USDT": {}, "ETH-USDT": {}}}
-	checker := &Checker{Timeline: fakePlans{[]*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "BTC-USDT", "ETH-USDT")}}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
 	from, to := base.Add(-10*time.Minute), base.Add(5*time.Minute)
+	subjects := []string{"OLD-USDT", "NEW-USDT", "NONE-USDT", "LATE-USDT"}
+	rows := newCountingRows(map[string]map[int64]bool{})
+	markMissingIn(rows.missing, "OLD-USDT", from, from.Add(2*time.Minute))                   // 范围开头的真实缺口：更早有数据
+	markMissingIn(rows.missing, "LATE-USDT", base.Add(time.Minute), base.Add(2*time.Minute)) // 时间线之内的缺口
+	rows.listed = map[string]time.Time{
+		"NEW-USDT":  base.Add(-5 * time.Minute), // 范围中间才开始有数据
+		"NONE-USDT": base,                       // 时间线起点之前一根都没有
+		"LATE-USDT": base.Add(3 * time.Minute),  // 时间线之内也晚到：整段缺失照报
+	}
+	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), subjects...)}
+	checker := &Checker{Timeline: fakePlans{records}, Rows: rows, Now: func() time.Time { return base.Add(time.Hour) }}
 
-	plain, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, AssumeMissing: true})
+	result, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to})
 	require.NoError(t, err)
-	require.Equal(t, 2*5, plain.Expected, "不带 BeforeFirstPlan 时只算生效点之后的 5 根")
+	gaps := map[string][]Gap{}
+	for _, gap := range result.Gaps {
+		gaps[gap.SubjectID] = append(gaps[gap.SubjectID], gap)
+	}
+	require.Equal(t, []Gap{{DatasetID: "ds", Frequency: "1m", SubjectID: "OLD-USDT", From: from, To: from.Add(2 * time.Minute), Missing: 2}}, gaps["OLD-USDT"], "更早有数据，范围开头的缺口照报")
+	require.Empty(t, gaps["NEW-USDT"], "第一根之前不报")
+	require.Empty(t, gaps["NONE-USDT"], "时间线起点之前一根都没有的不报")
+	require.Equal(t, []Gap{{DatasetID: "ds", Frequency: "1m", SubjectID: "LATE-USDT", From: base, To: base.Add(3 * time.Minute), Missing: 3}}, gaps["LATE-USDT"], "时间线之内不裁剪")
+	require.Equal(t, 4*15-5-10-10, result.Expected, "裁掉的 K 线不算应有")
 
-	reach, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, AssumeMissing: true, BeforeFirstPlan: true})
+	// 补采的复查用同一口径：历史中段的分块不会因为范围开头缺失被当成“尚无历史”。
+	middle, err := checker.Check(context.Background(), Request{SpaceID: "crypto", SubjectID: "OLD-USDT", From: from, To: from.Add(time.Minute)})
 	require.NoError(t, err)
-	require.Equal(t, 2*15, reach.Expected)
-	require.Len(t, reach.Gaps, 2)
-	require.Equal(t, from, reach.Gaps[0].From, "缺口从范围起点开始，不被生效点截断")
-	require.Equal(t, 15, reach.Gaps[0].Missing)
+	require.Equal(t, 1, middle.Missing)
 
-	// 读行的检查同样：生效点之前读到的缺失才会报出来。
-	rows.missing["BTC-USDT"][base.Add(-3*time.Minute).Unix()] = true
-	read, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, BeforeFirstPlan: true})
+	force, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to, AssumeMissing: true})
 	require.NoError(t, err)
-	require.Len(t, read.Gaps, 1)
-	require.Equal(t, base.Add(-3*time.Minute), read.Gaps[0].From)
-	hidden, err := checker.Check(context.Background(), Request{SpaceID: "crypto", From: from, To: to})
+	require.Equal(t, 4*15, force.Expected, "强制重拉覆盖整个范围")
+	require.Equal(t, from, force.Gaps[0].From, "缺口从范围起点开始，不被时间线起点截断")
+	require.Equal(t, 15, force.Gaps[0].Missing)
+
+	// 没有计数能力时不裁剪：宁可多报。
+	plain := &Checker{Timeline: fakePlans{records}, Rows: rows.fakeRows, Now: func() time.Time { return base.Add(time.Hour) }}
+	untrimmed, err := plain.Check(context.Background(), Request{SpaceID: "crypto", SubjectID: "NONE-USDT", From: from, To: to})
 	require.NoError(t, err)
-	require.Empty(t, hidden.Gaps, "默认检查看不到生效点之前的缺口")
+	require.Equal(t, 10, untrimmed.Missing)
 }
 
 func TestCheckReadsManySubjectsInBatches(t *testing.T) {
@@ -308,4 +357,60 @@ func TestDeepFieldsExcludeExtraFields(t *testing.T) {
 	require.Equal(t, []string{"open", "high", "low", "close"}, checker.deepFields("stockcn", []string{"adj_factor"}), "只选了附加字段时按 OHLC")
 	require.Equal(t, []string{"open", "high", "low", "close"}, checker.deepFields("stockcn", nil))
 	require.Equal(t, []string{"close", "adj_factor"}, checker.deepFields("crypto", []string{"close", "adj_factor"}), "别的市场里它不是附加字段")
+}
+
+func openBackfillStore(t *testing.T) *store.BackfillRepository {
+	t.Helper()
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = db.Close() })
+	return db.Backfill()
+}
+
+// markMissing 把 [from, to) 内每分钟登记为缺失。
+func markMissing(rows *fakeRows, subject string, from, to time.Time) {
+	if rows.missing[subject] == nil {
+		rows.missing[subject] = map[int64]bool{}
+	}
+	for t := from; t.Before(to); t = t.Add(time.Minute) {
+		rows.missing[subject][t.Unix()] = true
+	}
+}
+
+// goneRecord 构造把数据集移出采集计划的记录（任务删除后对账产生）。
+func goneRecord(t *testing.T, id int64, dataset string, p int64) *store.FetchPlanRecord {
+	t.Helper()
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDatasetChange{Changed: true, Gone: true, P: p}
+	change.DatasetID, change.Frequency = dataset, "1m"
+	content.Datasets[dataset+"|1m"] = change
+	return &store.FetchPlanRecord{ID: id, SpaceID: "crypto", Status: store.FetchPlanApplied, Plan: mustJSON(content), Progress: "{}"}
+}
+
+// failingRows 的每次读取都失败。
+type failingRows struct{ err error }
+
+func (f failingRows) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	return nil, f.err
+}
+
+// 已停止采集的数据集（结果数据可能已随任务删除）不再参与自动补采，否则会因读不到 View 反复失败。
+func TestAutoScanSkipsDatasetsThatStoppedCollecting(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	records := []*store.FetchPlanRecord{
+		recordFor(t, 1, "removed", store.FetchPlanApplied, base.Unix(), "A-USDT"),
+		goneRecord(t, 2, "removed", base.Add(5*time.Minute).Unix()),
+	}
+	timeline := BuildTimeline(timelineRows(records))
+	require.False(t, timeline.Active("removed|1m"))
+
+	now := base.Add(48 * time.Hour)
+	repo := openBackfillStore(t)
+	backfiller := &Backfiller{Checker: &Checker{Timeline: fakePlans{records}, Rows: failingRows{errors.New("dataset has no active view")}, Now: func() time.Time { return now }}, Store: repo, Routes: fakeRoutes{},
+		Now: func() time.Time { return now.Truncate(autoScanInterval).Add(autoScanOffset + time.Second) }}
+	require.NoError(t, backfiller.AutoScan(context.Background(), "crypto"))
+	jobs, err := repo.ActiveJobs(context.Background(), "crypto")
+	require.NoError(t, err)
+	require.Empty(t, jobs)
 }

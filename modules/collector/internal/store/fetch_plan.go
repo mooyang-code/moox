@@ -49,7 +49,9 @@ func (row fetchPlanRow) record() *FetchPlanRecord {
 	return &FetchPlanRecord{ID: row.ID, SpaceID: row.SpaceID, Status: row.Status, Plan: row.Plan, Progress: row.Progress, LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
-// FetchPlanRepository 保存采集计划。每个空间同一时间最多一份未生效的计划，由唯一索引保证。
+// FetchPlanRepository 保存采集计划。每个空间同一时间最多一份未生效的计划，由唯一索引保证；
+// 一份计划生效时删掉同空间更早的已生效计划，所以每个空间只留未生效的一份与最近已生效的一份。
+// 旧计划没有读者：对账只读最近已生效的一份，补采的来源取当前任务、交易所符号取标的时间线。
 type FetchPlanRepository struct{ db *gorm.DB }
 
 func NewFetchPlanRepository(db *gorm.DB) *FetchPlanRepository { return &FetchPlanRepository{db: db} }
@@ -127,7 +129,7 @@ func (r *FetchPlanRepository) Create(ctx context.Context, spaceID, plan, progres
 	return row.record(), nil
 }
 
-// Update 更新计划的状态、进度与最近错误。
+// Update 更新计划的状态、进度与最近错误；状态改成已生效时，同一个事务里删掉同空间更早的已生效计划。
 // timeline 是随这次进度一起成立的时间线行（Storage 刚确认登记的数据集从生效周期起的序列），与进度在同一个事务里写入。
 func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, progress, lastError string, timeline ...SeriesTimelineEntry) error {
 	if r == nil || r.db == nil {
@@ -148,6 +150,15 @@ func (r *FetchPlanRepository) Update(ctx context.Context, id int64, status, prog
 		}
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
+		}
+		if status == FetchPlanApplied {
+			var row fetchPlanRow
+			if err := tx.Where("c_id = ?", id).Take(&row).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("c_space_id = ? AND c_status = ? AND c_id < ?", row.SpaceID, FetchPlanApplied, id).Delete(&fetchPlanRow{}).Error; err != nil {
+				return err
+			}
 		}
 		return appendSeriesTimeline(tx, timeline)
 	})
@@ -204,23 +215,6 @@ func (r *FetchPlanRepository) ReregisterAppliedPlan(ctx context.Context, id int6
 		}
 		return deleteSeriesTimeline(tx, row.SpaceID)
 	})
-}
-
-// ListAll 按先后顺序返回该空间全部采集计划（含未生效的）。只剩补采一个读者：按历史计划找当时负责某个标的的函数
-// 与交易所符号映射（klinecheck 的 loadPlanHistory）。标的时间线不再由它重放，见 SeriesTimelineRepository。
-func (r *FetchPlanRepository) ListAll(ctx context.Context, spaceID string) ([]*FetchPlanRecord, error) {
-	if r == nil || r.db == nil {
-		return nil, fmt.Errorf("fetch plan repository is not initialized")
-	}
-	var rows []fetchPlanRow
-	if err := r.db.WithContext(ctx).Where("c_space_id = ?", strings.TrimSpace(spaceID)).Order("c_id ASC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	records := make([]*FetchPlanRecord, 0, len(rows))
-	for _, row := range rows {
-		records = append(records, row.record())
-	}
-	return records, nil
 }
 
 type fetchPlanPauseRow struct {

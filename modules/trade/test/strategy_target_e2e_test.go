@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -194,7 +195,7 @@ func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) 
 func seedManagedHoldings(t *testing.T, f *fixture) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "managed-buy",
 			ClientOrderID: "managed-buy", ExchangeSymbol: testSymbol, OrderType: "MARKET",
 			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: testInstrumentID(exchange.MarketTypeSpot),
@@ -210,7 +211,7 @@ func seedTargetPaperHoldings(t *testing.T, f *fixture) {
 	// A historical buy at 5000 leaves 50000 USDT and 10 BTC from initial cash.
 	ctx := context.Background()
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.CreateOrder(store.OrderRecord{
+		if err := storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "historical-buy",
 			ClientOrderID: "historical-buy", ExchangeSymbol: testSymbol, OrderType: "MARKET",
 			Side: "BUY", Quantity: "10", ReferencePrice: "5000", State: "FILLED",

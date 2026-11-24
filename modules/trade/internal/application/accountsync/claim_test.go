@@ -221,7 +221,7 @@ func TestFillIngestFailureLeavesAccountNotReadyWithAttention(t *testing.T) {
 	notes := telemetry.Recent(telemetry.AttentionFillIngestFailed, time.UnixMilli(3_000), time.Hour)
 	require.True(t, containsDetail(notes, "filled-order-client"), "关注项要带订单号：%v", notes)
 	require.True(t, containsDetail(notes, "trade-over"), "关注项要带成交号：%v", notes)
-	require.True(t, containsDetail(notes, "transition"), "关注项要带原因：%v", notes)
+	require.True(t, containsDetail(notes, "订单当前状态不允许这个操作"), "关注项要带原因：%v", notes)
 }
 
 // B1(c)：交易所查不到原单时按成交合成外部订单。REST 一批只取本批成交之和，第二批到达时订单放大数量、保持已成交。

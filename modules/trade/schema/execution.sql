@@ -117,12 +117,6 @@ CREATE INDEX IF NOT EXISTS idx_trade_orders_fill_gap
 ON t_trade_orders (c_space_id, c_trading_account_id)
 WHERE c_observed_filled_quantity != '0' AND c_observed_filled_quantity <> c_filled_quantity;
 
--- 受管标的：账户上有成交的策略或人工订单涉及的标的，部分索引只含有成交的这两类订单；
--- 带上条件里的来源和成交量两列才能只读索引（SQLite 不会因为部分索引的 WHERE 已经保证了条件就不再回表取这两列）。
-CREATE INDEX IF NOT EXISTS idx_trade_orders_managed_instruments
-ON t_trade_orders (c_space_id, c_trading_account_id, c_instrument_id, c_owner_type, c_filled_quantity)
-WHERE c_owner_type IN ('TARGET', 'OPERATOR') AND c_filled_quantity != '0' AND c_instrument_id != '';
-
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_owner_state
 ON t_trade_orders (
     c_space_id,
@@ -225,6 +219,29 @@ CREATE TABLE IF NOT EXISTS t_order_fill_hourly_summaries (
 -- 按组合汇总收益（含已移出成员的历史成交）走这条。
 CREATE INDEX IF NOT EXISTS idx_order_fill_hourly_summaries_logical
 ON t_order_fill_hourly_summaries (c_space_id, c_logical_account_id, c_bucket_time);
+
+-- 标的汇总：持仓来自余额的市场（现货、股票）里每个（执行账户，市场，代码）一行，成交入账的同一个事务里更新，行不删除。
+-- 订单与成交按保留期清理之后，受管判断、持仓均价、取不到价时的最近成交价都读这张表，不再从成交历史现算。
+-- c_managed：这个标的上有过 TARGET 或 OPERATOR 订单的成交（MooX 买过，目标不再包含时要能卖掉）；置位后不清。
+-- c_quantity、c_cost：按每一笔成交（不分订单来源）累计的数量与成本，卖出按当时均价扣成本，数量归零时成本归零。
+-- c_last_price：成交时间最晚（同一毫秒取成交号最大）的那笔成交的价格。数量与金额是十进制字符串，由程序计算。
+CREATE TABLE IF NOT EXISTS t_account_instrument_summaries (
+    c_space_id TEXT NOT NULL,
+    c_trading_account_id TEXT NOT NULL,
+    c_market_type TEXT NOT NULL,
+    c_exchange_symbol TEXT NOT NULL,
+    c_instrument_id TEXT NOT NULL DEFAULT '',
+    c_managed INTEGER NOT NULL DEFAULT 0,
+    c_quantity TEXT NOT NULL DEFAULT '0',
+    c_cost TEXT NOT NULL DEFAULT '0',
+    c_last_price TEXT NOT NULL,
+    c_last_traded_at INTEGER NOT NULL,
+    c_last_fill_id TEXT NOT NULL,
+    CHECK (c_managed IN (0, 1)),
+    PRIMARY KEY (c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+);
 
 CREATE TABLE IF NOT EXISTS t_trading_positions (
     c_space_id TEXT NOT NULL,

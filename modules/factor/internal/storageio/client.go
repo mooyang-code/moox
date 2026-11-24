@@ -89,9 +89,6 @@ type FactorState struct {
 	DefinitionHash string
 	// FailedSeries 是按序列的失败名单（口径同 FailedSubjects）。
 	FailedSeries []seriesset.Series
-	// SkippedSeriesTags 是被跳过的 series_tag（截面因子全集缺数）：这些序列的结果写 NULL。
-	// 全部 tag 都跳过时 Status 为 skipped；只跳过一部分时 Status 为 degraded，并在这里列出。
-	SkippedSeriesTags []string
 }
 
 type Store interface {

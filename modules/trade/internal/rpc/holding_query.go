@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -77,12 +76,15 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	execution.PrefetchQuotes(ctx, quoteSource, keys)
 	for i, at := range valued {
 		item, key := &result[at], keys[i]
+		var summary store.InstrumentSummaryRecord
+		var traded bool
 		if paper {
-			averageCost, costErr := q.paperAverageCost(ctx, spaceID, accountID, key)
-			if costErr != nil {
-				return nil, costErr
+			var summaryErr error
+			summary, traded, summaryErr = q.Store.GetInstrumentSummary(ctx, spaceID, accountID, key)
+			if summaryErr != nil {
+				return nil, summaryErr
 			}
-			item.AverageCost = averageCost
+			item.AverageCost = summary.AverageCost()
 		}
 		if quoteSource != nil {
 			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, key); quoteErr == nil {
@@ -91,20 +93,10 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 				item.SourceTime = quote.UpdatedAt
 			}
 		} else if paper {
-			// Closed Paper accounts have no live quote stream. Preserve a useful
-			// historical mark from the latest fill when one exists; otherwise
-			// return identity and quantity without fabricating a valuation.
-			fills, _, fillErr := q.Store.ListFills(ctx, spaceID, store.FillQuery{
-				TradingAccountID: accountID, Market: string(key.Market), ExchangeSymbol: key.Symbol, Limit: 1,
-			})
-			if fillErr != nil {
-				return nil, fillErr
-			}
-			if len(fills) > 0 {
-				if price, parseErr := shared.ParseDecimal(fills[0].Price); parseErr == nil {
-					item.MarkPrice, item.MarketValue = price, item.Quantity.Mul(price)
-					item.SourceTime = time.UnixMilli(fills[0].TradedAt).UTC()
-				}
+			// 已关闭的模拟账户没有行情：有成交过时用标的汇总里的最近成交价估值，没有就只给标的和数量，不编造估值。
+			if traded {
+				item.MarkPrice, item.MarketValue = summary.LastPrice, item.Quantity.Mul(summary.LastPrice)
+				item.SourceTime = time.UnixMilli(summary.LastTradedAt).UTC()
 			}
 		}
 		if paper && !item.AverageCost.IsZero() && !item.MarkPrice.IsZero() {
@@ -149,47 +141,6 @@ func balanceInstrument(index map[holdingKey]exchange.Instrument, markets []strin
 		}
 	}
 	return exchange.Instrument{}, false
-}
-
-// paperAverageCost 一次读完这个标的的全部成交（按时间升序，不数总数、不分页）算均价。
-func (q *HoldingQuery) paperAverageCost(ctx context.Context, spaceID, accountID string, key exchange.SymbolKey) (shared.Decimal, error) {
-	fills, err := q.Store.ListSymbolFillsAscending(ctx, spaceID, accountID, key)
-	if err != nil {
-		return shared.Zero(), err
-	}
-	return paperAverageCostFromFills(fills), nil
-}
-
-func paperAverageCostFromFills(fills []store.FillRecord) shared.Decimal {
-	sort.SliceStable(fills, func(i, j int) bool { return fills[i].TradedAt < fills[j].TradedAt })
-	quantity := shared.Zero()
-	cost := shared.Zero()
-	for _, fill := range fills {
-		fillQuantity, quantityErr := shared.ParseDecimal(fill.Quantity)
-		fillPrice, priceErr := shared.ParseDecimal(fill.Price)
-		if quantityErr != nil || priceErr != nil || fillQuantity.IsZero() {
-			continue
-		}
-		if strings.EqualFold(fill.Side, string(exchange.SideBuy)) {
-			quantity = quantity.Add(fillQuantity)
-			cost = cost.Add(fillQuantity.Mul(fillPrice))
-			continue
-		}
-		if !strings.EqualFold(fill.Side, string(exchange.SideSell)) || quantity.IsZero() {
-			continue
-		}
-		reduce := fillQuantity
-		if reduce.Cmp(quantity) > 0 {
-			reduce = quantity
-		}
-		average := cost.Div(quantity)
-		quantity = quantity.Sub(reduce)
-		cost = cost.Sub(average.Mul(reduce))
-	}
-	if quantity.IsZero() {
-		return shared.Zero()
-	}
-	return cost.Div(quantity)
 }
 
 func unixMillis(value int64) (resultTime time.Time) {

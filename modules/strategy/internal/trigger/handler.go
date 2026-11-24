@@ -587,7 +587,7 @@ func (h *Handler) withReads(ctx context.Context, p *period, key string, read fun
 func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved input.Resolved, program *dsl.Program, ready mergedReadiness, previous engine.State) (loaded input.Loaded, skip *input.SkipError, terminal bool, err error) {
 	skip, terminal, err = h.withReads(ctx, p, key, func() error {
 		var readErr error
-		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets(), SourceDown: ready.SourceDown})
+		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets(), SourceDown: ready.SourceDown})
 		return readErr
 	})
 	// 附加来源读到的修订号写进本期的输入记录（只有写了来源的实例才有）。

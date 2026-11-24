@@ -38,12 +38,9 @@ type RecalcJob struct {
 	Error           string   `json:"error"`
 	// DefaultFilled 是按默认参数新补的期次（成员键 → 闭区间 [起始秒, 结束秒] 列表，相邻期次已合并）：
 	// 原行不存在、或原行的 __params 里没有这个成员，只能用默认参数算出来，与当时的实时结果不保证一致。
-	DefaultFilled  map[string][]TimeRange `json:"default_filled,omitempty"`
-	EngineID       string                 `json:"engine_id"`
-	LeaseToken     string                 `json:"-"`
-	LeaseExpiresAt int64                  `json:"-"`
-	CreatedAt      time.Time              `json:"created_at"`
-	UpdatedAt      time.Time              `json:"updated_at"`
+	DefaultFilled map[string][]TimeRange `json:"default_filled,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
 // TimeRange 是 Unix 秒的闭区间。
@@ -81,7 +78,7 @@ func decodeDefaultFilled(raw string) (map[string][]TimeRange, error) {
 // order of recalcJobRow.
 const recalcJobColumns = `c_job_id, c_request_id, c_task_id, c_members_json, c_subjects_json,
 	 c_members_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
-	 c_default_filled_json, c_engine_id, c_lease_token, c_lease_expires_at, c_ctime, c_mtime`
+	 c_default_filled_json, c_ctime, c_mtime`
 
 type recalcJobRow struct {
 	JobID           string    `gorm:"column:c_job_id"`
@@ -97,9 +94,6 @@ type recalcJobRow struct {
 	ProgressTime    int64     `gorm:"column:c_progress_time"`
 	Error           string    `gorm:"column:c_error"`
 	DefaultFilled   string    `gorm:"column:c_default_filled_json"`
-	EngineID        string    `gorm:"column:c_engine_id"`
-	LeaseToken      string    `gorm:"column:c_lease_token"`
-	LeaseExpiresAt  int64     `gorm:"column:c_lease_expires_at"`
 	CreatedAt       time.Time `gorm:"column:c_ctime"`
 	UpdatedAt       time.Time `gorm:"column:c_mtime"`
 }
@@ -122,7 +116,7 @@ func (r recalcJobRow) job() (RecalcJob, error) {
 		Members: members, Subjects: subjects,
 		MembersOmitted: r.MembersOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
 		EndTime: r.EndTime, Status: r.Status, ProgressTime: r.ProgressTime,
-		Error: r.Error, DefaultFilled: filled, EngineID: r.EngineID, LeaseToken: r.LeaseToken, LeaseExpiresAt: r.LeaseExpiresAt,
+		Error: r.Error, DefaultFilled: filled,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
 }

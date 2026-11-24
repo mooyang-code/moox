@@ -200,7 +200,7 @@ func (s *Service) sourceDataset(ctx context.Context, set domain.FactorTask) (sto
 	if source.Status != storageio.DatasetStatusActive {
 		return storageio.DatasetInfo{}, nil, errors.New("source dataset must be active")
 	}
-	// Collector 的 K 线合成结果不声明单一数据来源（统一数据集可能有多个），源 K 线的来源记在属性里：
+	// Collector 的 K 线合成结果不声明单一数据来源，源 K 线的来源记在属性里：
 	// 因子结果数据集要绑定一个数据来源，取它。
 	if source.DataSourceID == "" && source.Attributes["dataset_role"] == datasetRoleKlineResample {
 		source.DataSourceID = source.Attributes["source_data_source_id"]

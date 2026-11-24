@@ -35,7 +35,7 @@ func stockFlattenFixture(t *testing.T, total, available string) *operatorFixture
 		}); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
 			Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 			OrderType: "MARKET", Side: "BUY", Quantity: total, FilledQuantity: total, ReferencePrice: "10", State: "FILLED",
@@ -120,8 +120,8 @@ func TestManualOrderRejectedOutsideAShareSession(t *testing.T) {
 		Exchange: exchange.ExchangeAShare, Session: session, SessionHours: "A 股 09:30-11:30、13:00-14:57",
 	}}
 	service.Now = func() time.Time { return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) } // 12:00 午休
-	_, err = service.PlaceManualOrder(context.Background(), ManualOrderCommand{
-		SpaceID: "space-1", ActionID: "manual-stock", TradingAccountID: "account-a", ClientOrderID: "manual-stock-client",
+	_, err = service.PlaceOrder(context.Background(), ManualOrderCommand{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", ActionID: "manual-stock", TradingAccountID: "account-a", ClientOrderID: "manual-stock-client",
 		InstrumentID: "600519.XSHG", Type: exchange.OrderTypeMarket, Side: exchange.SideSell, Quantity: shared.MustDecimal("100"), Reason: "测试",
 	})
 	require.ErrorIs(t, err, ErrInvalidCommand)

@@ -169,7 +169,7 @@ func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now t
 		job.Status = store.ResampleJobSyncing
 		return r.finish(ctx, job, task, cfg)
 	}
-	members, err := r.jobMembers(ctx, task, job)
+	subjects, err := r.jobSubjects(ctx, task, job)
 	if err != nil {
 		return r.fail(ctx, job, err, false)
 	}
@@ -182,7 +182,7 @@ func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now t
 		if current, getErr := r.State.GetJob(ctx, job.SpaceID, job.JobID); getErr == nil && current.Status != store.ResampleJobRunning {
 			return nil
 		}
-		result, runErr := r.Engine.RunBucketMembers(ctx, task, bucket, members, job.JobID)
+		result, runErr := r.Engine.RunBucket(ctx, task, bucket, subjects, job.JobID)
 		if runErr != nil {
 			if progressErr := r.State.AdvanceJob(ctx, job.JobID, progress); progressErr != nil {
 				log.WarnContextf(ctx, "[Collector] save resample job progress failed job=%s: %v", job.JobID, progressErr)
@@ -195,11 +195,7 @@ func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now t
 		progress.Skipped += int64(len(result.Skipped))
 		for _, skipped := range result.Skipped {
 			if len(progress.SkippedSamples) < 5 {
-				who := skipped.SubjectID
-				if skipped.SeriesTag != "" {
-					who += "[" + skipped.SeriesTag + "]"
-				}
-				progress.SkippedSamples = append(progress.SkippedSamples, fmt.Sprintf("%s@%s：%s", who, bucket.Key.Format(time.RFC3339), skipped.Reason))
+				progress.SkippedSamples = append(progress.SkippedSamples, fmt.Sprintf("%s@%s：%s", skipped.SubjectID, bucket.Key.Format(time.RFC3339), skipped.Reason))
 			}
 		}
 	}
@@ -235,41 +231,20 @@ func (r *JobRunner) countBuckets(task *Task, start, end time.Time) (int, error) 
 	return len(buckets), err
 }
 
-// jobMembers 返回作业要合成的序列：作业指定了标的就取它与源数据集各序列成员的交集，否则取全部成员；
-// 作业指定了源序列（补采只写了其中几条）就只取这些序列。
-func (r *JobRunner) jobMembers(ctx context.Context, task *Task, job store.ResampleJob) (Members, error) {
-	all, err := SourceMembers(ctx, r.Source, task)
-	if err != nil {
-		return nil, err
+// jobSubjects 返回作业要合成的标的：作业指定了标的就取它与源数据集标的的交集，否则取全部。
+func (r *JobRunner) jobSubjects(ctx context.Context, task *Task, job store.ResampleJob) ([]string, error) {
+	all, err := SourceSubjects(ctx, r.Source, task)
+	if err != nil || len(job.Subjects) == 0 {
+		return all, err
 	}
-	var tags map[string]struct{}
-	if len(job.SeriesTags) > 0 {
-		tags = make(map[string]struct{}, len(job.SeriesTags))
-		for _, tag := range job.SeriesTags {
-			tags[tag] = struct{}{}
-		}
+	wanted := make(map[string]struct{}, len(job.Subjects))
+	for _, subject := range job.Subjects {
+		wanted[subject] = struct{}{}
 	}
-	var wanted map[string]struct{}
-	if len(job.Subjects) > 0 {
-		wanted = make(map[string]struct{}, len(job.Subjects))
-		for _, subject := range job.Subjects {
-			wanted[subject] = struct{}{}
-		}
-	}
-	out := Members{}
-	for tag, subjects := range all {
-		if tags != nil {
-			if _, ok := tags[tag]; !ok {
-				continue
-			}
-		}
-		for _, subject := range subjects {
-			if wanted != nil {
-				if _, ok := wanted[subject]; !ok {
-					continue
-				}
-			}
-			out[tag] = append(out[tag], subject)
+	var out []string
+	for _, subject := range all {
+		if _, ok := wanted[subject]; ok {
+			out = append(out, subject)
 		}
 	}
 	return out, nil
@@ -329,10 +304,8 @@ type SubmitJobRequest struct {
 	RequestID string
 	Origin    string
 	Subjects  []string
-	// SeriesTags 限定要合成的源序列；为空表示任务的全部源序列（单序列任务恒为空）。
-	SeriesTags []string
-	Start      time.Time
-	End        time.Time
+	Start     time.Time
+	End       time.Time
 	// NotBefore 是最早开始时间；为零表示立即。
 	NotBefore time.Time
 }
@@ -364,7 +337,7 @@ func SubmitJob(ctx context.Context, state *store.ResampleStateRepository, task *
 		notBefore = now
 	}
 	return state.SubmitJob(ctx, store.ResampleJob{
-		JobID: newID(), SpaceID: req.SpaceID, TaskID: req.TaskID, RequestID: req.RequestID, Origin: origin, Subjects: req.Subjects, SeriesTags: req.SeriesTags,
+		JobID: newID(), SpaceID: req.SpaceID, TaskID: req.TaskID, RequestID: req.RequestID, Origin: origin, Subjects: req.Subjects,
 		Start: aligned[0].Start, End: aligned[len(aligned)-1].End, NotBefore: notBefore.UTC(), TotalBuckets: len(aligned),
 	})
 }

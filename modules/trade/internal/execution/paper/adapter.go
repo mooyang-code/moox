@@ -27,6 +27,7 @@ type FactStore interface {
 	ListActiveOrdersForAccount(context.Context, string, string) ([]store.OrderRecord, error)
 	GetOrderByExchangeID(context.Context, string, string, exchange.SymbolKey, string) (store.OrderRecord, error)
 	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
+	GetInstrumentSummary(context.Context, string, string, exchange.SymbolKey) (store.InstrumentSummaryRecord, bool, error)
 	ListPositions(context.Context, string, string, exchange.SymbolKey) ([]store.PositionRecord, error)
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
 }
@@ -300,18 +301,14 @@ func (a *Adapter) degradedPrice(
 	}
 	var lastFill execution.LastFillPrice
 	if instrument != nil && a.Store != nil {
+		// 最近成交价取标的汇总里记的：订单与成交按保留期清理之后仍在。
 		lastFill = func(ctx context.Context) (shared.Decimal, bool, error) {
-			records, _, err := a.Store.ListFills(ctx, account.SpaceID, store.FillQuery{
-				TradingAccountID: account.TradingAccountID, Market: instrument.MarketType, ExchangeSymbol: instrument.ExchangeSymbol, Limit: 1,
-			})
+			summary, found, err := a.Store.GetInstrumentSummary(ctx, account.SpaceID, account.TradingAccountID,
+				exchange.NewSymbolKey(exchange.MarketType(instrument.MarketType), instrument.ExchangeSymbol))
 			if err != nil {
 				return shared.Zero(), false, storageError(err)
 			}
-			if len(records) == 0 {
-				return shared.Zero(), false, nil
-			}
-			price, parseErr := shared.ParseDecimal(records[0].Price)
-			return price, parseErr == nil, nil
+			return summary.LastPrice, found && !summary.LastPrice.IsZero(), nil
 		}
 	}
 	value, err := execution.DegradedPrice(ctx, failure, a.lastPrice(asset), a.lastPriceFresh(execution.LastPriceMaxAge), lastFill, cause)

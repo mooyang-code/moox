@@ -74,8 +74,7 @@ describe("Trade public API", () => {
       "DELIST_FLATTEN",
       "FLATTEN",
       "MANUAL_ORDER",
-      "REDUCE",
-      "SUBMIT_ORDER"
+      "REDUCE"
     ]);
   });
 

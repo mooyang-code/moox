@@ -195,15 +195,14 @@ func RunSummaryToPB(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 	factors := make([]*factorpb.FactorPeriodState, 0, len(summary.Factors))
 	for _, factor := range summary.Factors {
 		factors = append(factors, &factorpb.FactorPeriodState{
-			FactorId:          factor.FactorID,
-			MemberKey:         factor.MemberKey,
-			MemberKind:        factor.MemberKind,
-			Status:            factor.Status,
-			FailedSubjects:    CloneStrings(factor.FailedSubjects),
-			SpecHash:          factor.SpecHash,
-			DefinitionHash:    factor.DefinitionHash,
-			FailedSeries:      seriesToPB(factor.FailedSeries),
-			SkippedSeriesTags: CloneStrings(factor.SkippedSeriesTags),
+			FactorId:       factor.FactorID,
+			MemberKey:      factor.MemberKey,
+			MemberKind:     factor.MemberKind,
+			Status:         factor.Status,
+			FailedSubjects: CloneStrings(factor.FailedSubjects),
+			SpecHash:       factor.SpecHash,
+			DefinitionHash: factor.DefinitionHash,
+			FailedSeries:   seriesToPB(factor.FailedSeries),
 		})
 	}
 	return &factorpb.TaskRunSummary{
@@ -223,7 +222,6 @@ func RunSummaryFromPB(pb *factorpb.TaskRunSummary) domain.TaskRunSummary {
 			FactorID: factor.GetFactorId(), MemberKey: factor.GetMemberKey(), MemberKind: factor.GetMemberKind(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SpecHash: factor.GetSpecHash(),
 			DefinitionHash: factor.GetDefinitionHash(), FailedSeries: seriesFromPB(factor.GetFailedSeries()),
-			SkippedSeriesTags: CloneStrings(factor.GetSkippedSeriesTags()),
 		})
 	}
 	return domain.TaskRunSummary{
@@ -328,8 +326,8 @@ func UDFModulesFromPB(modules []*factorpb.UdfModuleStatus) []domain.UDFModuleSta
 // LifecycleToPB 转换引擎模块级的生命周期状态。
 func LifecycleToPB(life domain.EngineLifecycle) *factorpb.EngineLifecycleStatus {
 	out := &factorpb.EngineLifecycleStatus{
-		Stage: life.Stage, PausedSince: FormatTime(life.PausedSince), QuiescedAt: FormatTime(life.QuiescedAt),
-		Quiesced: life.Quiesced, CatchupBlocked: life.CatchupBlocked, PauseKind: life.PauseKind, PauseReason: life.PauseReason,
+		Stage: life.Stage, PausedSince: FormatTime(life.PausedSince),
+		CatchupBlocked: life.CatchupBlocked, PauseKind: life.PauseKind, PauseReason: life.PauseReason,
 	}
 	if c := life.Catchup; c != nil {
 		out.Catchup = &commonpb.CatchupProgress{Since: FormatTime(c.Since), Target: FormatTime(c.Target), Done: c.Done, Total: c.Total,
@@ -344,10 +342,9 @@ func LifecycleFromPB(pb *factorpb.EngineLifecycleStatus) domain.EngineLifecycle 
 		return domain.EngineLifecycle{}
 	}
 	pausedSince, _ := ParseTime(pb.GetPausedSince())
-	quiescedAt, _ := ParseTime(pb.GetQuiescedAt())
 	out := domain.EngineLifecycle{
-		Stage: pb.GetStage(), PausedSince: pausedSince, QuiescedAt: quiescedAt,
-		Quiesced: pb.GetQuiesced(), CatchupBlocked: pb.GetCatchupBlocked(), PauseKind: pb.GetPauseKind(), PauseReason: pb.GetPauseReason(),
+		Stage: pb.GetStage(), PausedSince: pausedSince,
+		CatchupBlocked: pb.GetCatchupBlocked(), PauseKind: pb.GetPauseKind(), PauseReason: pb.GetPauseReason(),
 	}
 	if c := pb.GetCatchup(); c != nil {
 		since, _ := ParseTime(c.GetSince())

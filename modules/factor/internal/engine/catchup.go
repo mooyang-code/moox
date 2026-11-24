@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -95,12 +94,7 @@ func (r *Runtime) onBackfilled(spaceID string, payload *storagepb.CollectorKline
 				log.Warnf("factor_kline_backfilled_absent_invalid task_id=%s subject=%s error=%v", set.TaskID, absent.GetSubjectId(), err)
 				continue
 			}
-			// 带 series_tag 的只扣这一条序列（统一数据集），同标的的另一个市场照常算；不带的扣整个标的。
-			if tag := absent.GetSeriesTag(); tag != "" {
-				r.continuity.NoteAbsent(set.TaskID, absentFrom, absentTo, axis.Step(), nil, []seriesset.Series{{SubjectID: absent.GetSubjectId(), SeriesTag: tag}})
-			} else {
-				r.continuity.NoteAbsent(set.TaskID, absentFrom, absentTo, axis.Step(), []string{absent.GetSubjectId()}, nil)
-			}
+			r.continuity.NoteAbsent(set.TaskID, absentFrom, absentTo, axis.Step(), []string{absent.GetSubjectId()})
 		}
 		log.Infof("factor_kline_backfilled task_id=%s from=%s to=%s origin=%s absent=%d", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), payload.GetOrigin(), len(payload.GetAbsent()))
 		select {

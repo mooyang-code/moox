@@ -71,9 +71,6 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 	bound := make([]string, 0, len(views))
 	boundEquity := false
 	for _, item := range views {
-		if item.market == MarketMulti {
-			return PoolResolved{}, fmt.Errorf("因子任务 %s 在统一数据集上，策略池暂不支持：成员账本估值与预热按市场分别读取 View，统一数据集上的任务只能用于普通策略", item.taskID)
-		}
 		boundEquity = boundEquity || item.market == dsl.MarketEquity
 		bound = append(bound, item.market)
 	}

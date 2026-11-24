@@ -231,24 +231,8 @@ func udfReferences(ctx context.Context, db *gorm.DB, name string) ([]string, err
 
 // ---------------------------------------------------------------- 绑定解析
 
-type pinsKey struct{}
-
-// WithUDFPins 返回带固定绑定（名称 → 版本哈希）的上下文：读取定义时，pins 里的名称按固定版本解析而不是当前启用版本。
-// 补算作业用它：首次领取时固化的绑定在续跑、重领、重启后都不变。
-func WithUDFPins(ctx context.Context, pins map[string]string) context.Context {
-	if len(pins) == 0 {
-		return ctx
-	}
-	return context.WithValue(ctx, pinsKey{}, pins)
-}
-
-func pinsFrom(ctx context.Context) map[string]string {
-	pins, _ := ctx.Value(pinsKey{}).(map[string]string)
-	return pins
-}
-
-// ResolveUDFs 按名称解析自定义算子（固定绑定优先，否则取当前启用版本）。没有启用版本的名称带空哈希返回，
-// 编译时据此报“没有启用的版本”；不存在的名称不在结果里。overrides 是请求级覆盖（名称 → 版本哈希），优先于固定绑定与启用版本。
+// ResolveUDFs 按名称解析自定义算子（取当前启用版本）。没有启用版本的名称带空哈希返回，
+// 编译时据此报“没有启用的版本”；不存在的名称不在结果里。overrides 是请求级覆盖（名称 → 版本哈希），优先于启用版本。
 func (s *Store) ResolveUDFs(ctx context.Context, names []string, overrides map[string]string) (map[string]factorexpr.UDF, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
@@ -260,13 +244,9 @@ func resolveUDFs(ctx context.Context, db *gorm.DB, names []string, overrides map
 	if len(names) == 0 {
 		return nil, nil
 	}
-	pins := pinsFrom(ctx)
 	out := make(map[string]factorexpr.UDF, len(names))
 	for _, name := range names {
 		hash := overrides[name]
-		if hash == "" {
-			hash = pins[name]
-		}
 		if hash == "" {
 			var active string
 			result := db.WithContext(ctx).Raw(`SELECT c_active_hash FROM t_factor_udfs WHERE c_name = ?`, name).Scan(&active)
@@ -348,64 +328,4 @@ func (s *Store) resolveDef(ctx context.Context, db *gorm.DB, row factorDefRow) (
 		def = compiled
 	}
 	return def, nil
-}
-
-// ---------------------------------------------------------------- 补算作业的绑定
-
-// JobBindings 返回补算作业首次领取时固化的绑定（名称 → 版本哈希）；还没有固化时 found 为假。
-func (s *Store) JobBindings(ctx context.Context, jobID string) (bindings map[string]string, found bool, err error) {
-	if s == nil || s.db == nil {
-		return nil, false, fmt.Errorf("factor database is not open")
-	}
-	// 作业不存在和还没固化（列为 NULL）都按没有固化返回。
-	var row struct {
-		Bindings *string `gorm:"column:c_udf_bindings"`
-	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_udf_bindings FROM t_factor_recalc_jobs WHERE c_job_id = ?`, jobID).Scan(&row).Error; err != nil {
-		return nil, false, err
-	}
-	if row.Bindings == nil {
-		return nil, false, nil
-	}
-	if err := json.Unmarshal([]byte(*row.Bindings), &bindings); err != nil {
-		return nil, false, fmt.Errorf("job %s bindings are not valid JSON: %w", jobID, err)
-	}
-	return bindings, true, nil
-}
-
-// SaveJobBindings 固化补算作业的绑定；已经固化过的不覆盖（重新领取、续跑都用第一次的），返回生效的绑定。
-func (s *Store) SaveJobBindings(ctx context.Context, jobID string, bindings map[string]string) (map[string]string, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("factor database is not open")
-	}
-	raw, err := json.Marshal(bindings)
-	if err != nil {
-		return nil, err
-	}
-	// 一起写 c_mtime：不写的话触发器会填秒级的 CURRENT_TIMESTAMP，与别处写入的带小数秒的时间混在一列，同一秒内排序会有偏差。
-	if err := s.db.WithContext(ctx).Exec(`UPDATE t_factor_recalc_jobs SET c_udf_bindings = ?, c_mtime = ? WHERE c_job_id = ? AND c_udf_bindings IS NULL`,
-		string(raw), time.Now().UTC(), jobID).Error; err != nil {
-		return nil, err
-	}
-	effective, found, err := s.JobBindings(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fmt.Errorf("job %s bindings were not saved", jobID)
-	}
-	return effective, nil
-}
-
-// UDFBindingsOf 汇总成员定义引用的自定义算子版本（名称 → 版本哈希）；编译失败的定义不贡献绑定。
-func UDFBindingsOf(members []domain.MemberDef) map[string]string {
-	out := map[string]string{}
-	for _, member := range members {
-		if compiled := member.Factor.Compiled(); compiled != nil {
-			for _, ref := range compiled.UDFs {
-				out[ref.Name] = ref.Hash
-			}
-		}
-	}
-	return out
 }
