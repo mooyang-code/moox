@@ -16,11 +16,12 @@ subject_sync:
   instrument_type: spot
   cron: "10 8 * * *"
   timezone: Asia/Shanghai
-# 交易状态检测：每 10 分钟按币安 exchangeInfo 的原始状态判定（BREAK、HALT 停牌，永续交割、结算与已到期的现货下架记退市）；
-# 推送侧发现疑似下架时立即再跑一次。需要出口代理，跟随部署配置的 delist.auto_detect 开关。
+# 交易状态检测：每小时第 25 分按币安 exchangeInfo 的原始状态判定（BREAK、HALT 停牌，永续交割、结算与已到期的现货下架记退市），
+# 与整点后的标签同步（第 13、17 分）错开；推送侧发现疑似下架时立即再跑一次，停牌分钟级生效靠这一路。
+# 每次都全量拉 exchangeInfo（现货十几 MB）经海外机的出口代理，海外机带宽小，所以不更频繁。需要出口代理，跟随 delist.auto_detect 开关。
 trading_status:
-  - {market_type: spot, source: binance, cron: "*/10 * * * *", timezone: UTC}
-  - {market_type: swap, source: binance, cron: "*/10 * * * *", timezone: UTC}
+  - {market_type: spot, source: binance, cron: "25 * * * *", timezone: UTC}
+  - {market_type: swap, source: binance, cron: "25 * * * *", timezone: UTC}
 # 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
 scf_plan:
   # 币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按品种推迟取数；
