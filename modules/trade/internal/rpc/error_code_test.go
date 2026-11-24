@@ -11,6 +11,7 @@ import (
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
@@ -133,8 +134,16 @@ func TestUserFacingMessageDropsEnglishInternalReasons(t *testing.T) {
 		{fmt.Errorf("%w: missing logical account", store.ErrInvalidRecord), "数据不合法"},
 		{fmt.Errorf("%w: quantity must be positive", orderdomain.ErrInvalidSpec), "订单参数不合法"},
 		{fmt.Errorf("%w: %w: 数量必须大于 0", operatorapp.ErrInvalidCommand, orderdomain.ErrInvalidSpec), "人工操作参数不合法: 订单参数不合法: 数量必须大于 0"},
-		{errors.Join(fmt.Errorf("%w: stale paper order", store.ErrConflict), errors.New("执行账户 a 同步失败")), "数据已经被修改，刷新后再试；执行账户 a 同步失败"},
+		{errors.Join(fmt.Errorf("%w: stale paper order", store.ErrConflict), errors.New("执行账户 a 同步失败")), "数据已经被修改，刷新后再试\n执行账户 a 同步失败"},
 		{errors.New("unexpected payload"), "unexpected payload"},
+		// 一层之内不再切分：交易所原文里的半角冒号原样保留。
+		{fmt.Errorf("交易所返回：%w", errors.New("Filter failure: PRICE_FILTER")), "交易所返回：Filter failure: PRICE_FILTER"},
+		{fmt.Errorf("执行账户 a：%w", &exchange.Error{Kind: exchange.ErrorRejected, HTTPStatus: 400, Code: "-4131",
+			Err: errors.New("The counterparty's best price does not meet the PERCENT_PRICE filter limit")}),
+			"执行账户 a：" + (&exchange.Error{Kind: exchange.ErrorRejected, HTTPStatus: 400, Code: "-4131",
+				Err: errors.New("The counterparty's best price does not meet the PERCENT_PRICE filter limit")}).Error()},
+		// 英文的包装层去掉，里面的交易所错误照样保留。
+		{fmt.Errorf("%w: submit failed: %w", orderdomain.ErrInvalidSpec, errors.New("Filter failure: LOT_SIZE")), "订单参数不合法: Filter failure: LOT_SIZE"},
 	} {
 		if got := userFacingMessage(tc.err); got != tc.want {
 			t.Fatalf("userFacingMessage(%q) = %q, want %q", tc.err.Error(), got, tc.want)

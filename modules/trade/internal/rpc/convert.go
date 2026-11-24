@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -139,42 +140,78 @@ func errorInfo(err error) *tradepb.RetInfo {
 	return retInfo(code, userFacingMessage(err))
 }
 
-// userFacingMessage 是回给调用方的错误文案：错误按“%w: 原因”逐层包装，只保留含中文的那几层，
-// 英文的内部原因（例如冲突时的 stale order version、校验时的英文字段说明）只写日志。
-// 没有英文层的原样返回；一层中文都没有的（不是 Trade 自己的错误常量）也原样返回，不吞掉唯一的线索。
+// userFacingMessage 是回给调用方的错误文案：沿 fmt.Errorf 的 %w 包装链逐层判断，某一层自己写的文字（如“%w: 原因”里的
+// 原因）整层没有汉字、又是带空格的英文句子时去掉这一层的文字（标的代码、ID 这类标识保留），原文写日志；例如冲突包着的 stale order version 不再显示到页面上。
+// 一层之内不再切分；被包装的错误本身（交易所错误、自定义错误类型等）原样保留，不丢交易所原文。
+// 整条结果一个汉字都没有的（不是 Trade 自己的错误）原样返回，不吞掉唯一的线索。
 func userFacingMessage(err error) string {
-	return userFacingText(err.Error())
-}
-
-// userFacingText 是 userFacingMessage 的文本版，也用于落库后回给页面的错误（人工操作、目标的 last_error）。
-func userFacingText(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	lines := strings.Split(raw, "\n")
-	kept := make([]string, 0, len(lines))
-	dropped := false
-	for _, line := range lines {
-		var parts []string
-		for _, part := range strings.Split(line, ": ") {
-			if part = strings.TrimSpace(part); part == "" {
-				continue
-			}
-			if containsHan(part) {
-				parts = append(parts, part)
-			} else {
-				dropped = true
-			}
-		}
-		if len(parts) > 0 {
-			kept = append(kept, strings.Join(parts, "："))
-		}
-	}
-	if len(kept) == 0 || !dropped {
+	raw := err.Error()
+	text, dropped := userFacingLayers(err)
+	if !dropped || !containsHan(text) {
 		return raw
 	}
 	log.Infof("交易服务返回的错误去掉了英文内部原因，原文：%s", raw)
-	return strings.Join(kept, "；")
+	return text
+}
+
+// userFacingLayers 渲染一层错误；dropped 表示这一层或更里面的层去掉了英文文字。
+func userFacingLayers(err error) (string, bool) {
+	if !isStdWrapper(err) {
+		return err.Error(), false
+	}
+	var children []error
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		children = multi.Unwrap()
+	} else if child := errors.Unwrap(err); child != nil {
+		children = []error{child}
+	}
+	msg := err.Error()
+	if fmt.Sprintf("%T", err) == "*errors.joinError" {
+		parts := make([]string, 0, len(children))
+		dropped := false
+		for _, child := range children {
+			text, childDropped := userFacingLayers(child)
+			parts, dropped = append(parts, text), dropped || childDropped
+		}
+		return strings.Join(parts, "\n"), dropped
+	}
+	// 按顺序在消息里找出每个被包装错误的位置，其余部分是这一层自己写的文字。
+	var own strings.Builder
+	rendered := make([]string, 0, len(children))
+	var withChildren strings.Builder
+	dropped := false
+	cursor := 0
+	for _, child := range children {
+		childText := child.Error()
+		at := strings.Index(msg[cursor:], childText)
+		if at < 0 {
+			return msg, false
+		}
+		own.WriteString(msg[cursor : cursor+at])
+		text, childDropped := userFacingLayers(child)
+		dropped = dropped || childDropped
+		withChildren.WriteString(msg[cursor : cursor+at])
+		withChildren.WriteString(text)
+		rendered = append(rendered, text)
+		cursor += at + len(childText)
+	}
+	own.WriteString(msg[cursor:])
+	withChildren.WriteString(msg[cursor:])
+	ownText := strings.Trim(own.String(), " :：;；,，\n")
+	// 只去掉英文句子（带空格、没有汉字）：标的代码、账户 ID 这类不带空格的标识照样保留。
+	if ownText == "" || containsHan(ownText) || !strings.Contains(ownText, " ") {
+		return withChildren.String(), dropped
+	}
+	return strings.Join(rendered, ": "), true
+}
+
+// isStdWrapper 报告错误是不是 fmt.Errorf 或 errors.Join 生成的包装：只有这两种按层拆，其余错误类型原样渲染。
+func isStdWrapper(err error) bool {
+	switch fmt.Sprintf("%T", err) {
+	case "*fmt.wrapError", "*fmt.wrapErrors", "*errors.joinError":
+		return true
+	}
+	return false
 }
 
 func containsHan(value string) bool {
@@ -581,7 +618,7 @@ func logicalAccountTargetToPB(
 		InstanceId: value.InstanceID, SessionId: value.SessionID, StrategyId: value.StrategyID,
 		BarEndTime: value.BarEndTime, ValidUntil: value.ValidUntil,
 		Targets: targets, Status: value.Status, BlockedTargets: blocked,
-		LastError: userFacingText(value.LastError), AcceptedAt: value.AcceptedAt,
+		LastError: value.LastError, AcceptedAt: value.AcceptedAt,
 		UpdatedAt: unixMilli(value.UpdatedAt),
 	}
 }
@@ -597,7 +634,7 @@ func operatorActionToPB(value store.OperatorActionRecord) *tradepb.OperatorActio
 	return &tradepb.OperatorAction{
 		ActionId: value.ActionID, LogicalAccountId: value.LogicalAccountID,
 		ActionType: value.ActionType, Reason: value.Reason, Status: value.Status,
-		ResultJson: result, LastError: userFacingText(value.LastError),
+		ResultJson: result, LastError: value.LastError,
 		CreatedAt: unixMilli(value.CreatedAt), UpdatedAt: unixMilli(value.UpdatedAt),
 	}
 }

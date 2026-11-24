@@ -46,7 +46,7 @@ func (a Action) Validate() error {
 	if blank(a.SpaceID) || blank(a.ID) || blank(a.LogicalAccountID) ||
 		blank(a.Reason) || blank(a.RequestJSON) ||
 		!validType(a.Type) || !validStatus(a.Status) {
-		return fmt.Errorf("%w: missing or unsupported required field", ErrInvalidAction)
+		return fmt.Errorf("%w: 缺少必填字段或取值不受支持", ErrInvalidAction)
 	}
 	return nil
 }

@@ -81,7 +81,7 @@ func (a Account) Validate() error {
 		!a.ExecutionMode.Valid() ||
 		blank(a.SettlementAsset) ||
 		!validStatus(a.Status) {
-		return invalidAccount("missing or unsupported required field")
+		return invalidAccount("缺少必填字段或取值不受支持（名称、交易所、执行方式、结算资产、状态）")
 	}
 	if err := a.validateMarkets(); err != nil {
 		return err
@@ -93,18 +93,18 @@ func (a Account) Validate() error {
 		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
 	}
 	if (a.Live == nil) == (a.Paper == nil) {
-		return invalidAccount("exactly one of LIVE and PAPER config is required")
+		return invalidAccount("实盘配置与模拟配置必须且只能有一个")
 	}
 	if a.ExecutionMode == exchange.ExecutionModeLive {
 		if a.Live == nil || !a.Live.Environment.ValidLive() || blank(a.Live.CredentialSecretID) {
-			return invalidAccount("LIVE requires environment and credential")
+			return invalidAccount("实盘账户必须带环境和密钥")
 		}
 	} else if a.Paper == nil && a.Environment == exchange.AccountEnvironmentPaper {
 		a.Paper = &PaperConfig{InitialBalance: shared.MustDecimal("1"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(), OrderRetentionDays: DefaultOrderRetentionDays}
 	} else if a.Paper == nil {
-		return invalidAccount("PAPER requires paper config")
+		return invalidAccount("模拟账户必须带模拟配置")
 	} else if a.Paper.InitialBalance.Cmp(shared.Zero()) <= 0 || a.Paper.MakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.TakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 || !ValidOrderRetentionDays(a.Paper.OrderRetentionDays) {
-		return invalidAccount("invalid paper config")
+		return invalidAccount("模拟配置不合法：初始资金要大于 0，费率不能为负，滑点在 0～10000 基点之间，订单保留天数在允许范围内")
 	}
 	switch {
 	case !a.HasLeverageMarket():
