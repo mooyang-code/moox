@@ -267,7 +267,7 @@ func TestManualStaleQuoteRecoversWithoutNewAction(t *testing.T) {
 	result, err := service.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", result.Action.Status)
-	require.Contains(t, result.Action.LastError, "stale")
+	require.Contains(t, result.Action.LastError, "参考价已过期")
 	require.Zero(t, f.fake.placeCalls)
 	service.Prices = logicalAccountE2EPriceSource{at: testNow}
 	runManualRecoveryWorker(t, f, service)

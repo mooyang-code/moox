@@ -10,7 +10,7 @@ import (
 
 var (
 	ErrInvalidOrder      = errors.New("订单不合法")
-	ErrInvalidTransition = errors.New("trade: invalid order transition")
+	ErrInvalidTransition = errors.New("订单当前状态不允许这个操作")
 )
 
 // SyntheticOrderIDPrefix 是合成外部订单的订单号前缀：交易所查不到原单时，按收到的成交合成的外部订单。

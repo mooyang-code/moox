@@ -17,7 +17,7 @@ import (
 
 type FillOrigin string
 
-var ErrDuplicateFill = errors.New("trade: duplicate fill")
+var ErrDuplicateFill = errors.New("重复的成交")
 
 const (
 	OriginPrivateSocket FillOrigin = "private_stream"

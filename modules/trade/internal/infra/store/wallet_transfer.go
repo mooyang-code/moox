@@ -9,7 +9,7 @@ import (
 )
 
 // ErrNotPending 表示要推进的划转记录已经不是 PENDING（被对账的另一轮或人工结束抢先处理了）。
-var ErrNotPending = errors.New("trade store: wallet transfer is not pending")
+var ErrNotPending = errors.New("钱包划转已不在待处理状态")
 
 // 钱包划转的方向：普通账户的 USDT 平时放在合约钱包，现货买入前划进现货钱包，买完把多余的归集回合约钱包。
 const (

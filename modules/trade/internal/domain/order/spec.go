@@ -12,7 +12,7 @@ import (
 
 var ErrInvalidSpec = errors.New("订单参数不合法")
 
-var ErrReferencePriceStale = errors.New("reference price is stale")
+var ErrReferencePriceStale = errors.New("参考价已过期")
 
 type ClientOrderSpec struct {
 	TradingAccountID string

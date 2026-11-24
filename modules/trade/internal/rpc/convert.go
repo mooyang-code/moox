@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
@@ -135,7 +136,54 @@ func errorInfo(err error) *tradepb.RetInfo {
 		}
 		return retInfo(code, internalErrorMessage)
 	}
-	return retInfo(code, err.Error())
+	return retInfo(code, userFacingMessage(err))
+}
+
+// userFacingMessage 是回给调用方的错误文案：错误按“%w: 原因”逐层包装，只保留含中文的那几层，
+// 英文的内部原因（例如冲突时的 stale order version、校验时的英文字段说明）只写日志。
+// 没有英文层的原样返回；一层中文都没有的（不是 Trade 自己的错误常量）也原样返回，不吞掉唯一的线索。
+func userFacingMessage(err error) string {
+	return userFacingText(err.Error())
+}
+
+// userFacingText 是 userFacingMessage 的文本版，也用于落库后回给页面的错误（人工操作、目标的 last_error）。
+func userFacingText(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	lines := strings.Split(raw, "\n")
+	kept := make([]string, 0, len(lines))
+	dropped := false
+	for _, line := range lines {
+		var parts []string
+		for _, part := range strings.Split(line, ": ") {
+			if part = strings.TrimSpace(part); part == "" {
+				continue
+			}
+			if containsHan(part) {
+				parts = append(parts, part)
+			} else {
+				dropped = true
+			}
+		}
+		if len(parts) > 0 {
+			kept = append(kept, strings.Join(parts, "："))
+		}
+	}
+	if len(kept) == 0 || !dropped {
+		return raw
+	}
+	log.Infof("交易服务返回的错误去掉了英文内部原因，原文：%s", raw)
+	return strings.Join(kept, "；")
+}
+
+func containsHan(value string) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 type pageSpec struct {
@@ -533,7 +581,7 @@ func logicalAccountTargetToPB(
 		InstanceId: value.InstanceID, SessionId: value.SessionID, StrategyId: value.StrategyID,
 		BarEndTime: value.BarEndTime, ValidUntil: value.ValidUntil,
 		Targets: targets, Status: value.Status, BlockedTargets: blocked,
-		LastError: value.LastError, AcceptedAt: value.AcceptedAt,
+		LastError: userFacingText(value.LastError), AcceptedAt: value.AcceptedAt,
 		UpdatedAt: unixMilli(value.UpdatedAt),
 	}
 }
@@ -549,7 +597,7 @@ func operatorActionToPB(value store.OperatorActionRecord) *tradepb.OperatorActio
 	return &tradepb.OperatorAction{
 		ActionId: value.ActionID, LogicalAccountId: value.LogicalAccountID,
 		ActionType: value.ActionType, Reason: value.Reason, Status: value.Status,
-		ResultJson: result, LastError: value.LastError,
+		ResultJson: result, LastError: userFacingText(value.LastError),
 		CreatedAt: unixMilli(value.CreatedAt), UpdatedAt: unixMilli(value.UpdatedAt),
 	}
 }
