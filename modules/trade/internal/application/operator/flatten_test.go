@@ -346,7 +346,7 @@ func activeOrder(
 		LogicalAccountID: "logical-1", State: "OPEN", Version: 1,
 	}
 	if ownerType == "TARGET" {
-		record.RunnerID = "runner-1"
+		record.InstanceID = "runner-1"
 	}
 	return record
 }

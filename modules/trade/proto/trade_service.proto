@@ -229,7 +229,8 @@ message Order {
   string owner_type = 18;
   string owner_id = 19;
   string logical_account_id = 20;
-  string runner_id = 21;
+  // 目标子单所属的策略实例；其他订单为空
+  string instance_id = 21;
   string state = 22;
   string filled_quantity = 23;
   string average_price = 24;
@@ -307,8 +308,6 @@ message BlockedTarget {
 message LogicalAccountTarget {
   string target_id = 1;
   string logical_account_id = 2;
-  string runner_id = 3;
-  uint64 command_sequence = 4;
   repeated InstrumentTarget targets = 5;
   string status = 6;
   repeated BlockedTarget blocked_targets = 7;

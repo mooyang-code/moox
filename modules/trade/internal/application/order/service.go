@@ -460,7 +460,7 @@ func (s *Service) authorizeTargetSubmit(
 		record.LogicalAccountID == "" {
 		return nil
 	}
-	key := strings.Join([]string{record.SpaceID, record.TradingAccountID, record.LogicalAccountID, record.RunnerID, record.OwnerID}, "\x00")
+	key := strings.Join([]string{record.SpaceID, record.TradingAccountID, record.LogicalAccountID, record.InstanceID, record.OwnerID}, "\x00")
 	return reuseAuthorization(ctx, key, func() error { return s.checkTargetAuthorization(ctx, record) })
 }
 
@@ -525,7 +525,7 @@ func (s *Service) checkTargetAuthorization(
 	if err != nil {
 		return err
 	}
-	if currentTarget.TargetID != record.OwnerID || currentTarget.InstanceID != record.RunnerID {
+	if currentTarget.TargetID != record.OwnerID || currentTarget.InstanceID != record.InstanceID {
 		return ErrTargetOwnerConflict
 	}
 	now := s.now().UTC().UnixMilli()
@@ -1546,7 +1546,7 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		ReduceOnly:       value.Spec.ReducePositionOnly,
 		OwnerType:        string(value.Spec.Owner.Type), OwnerID: value.Spec.Owner.OwnerID,
 		LogicalAccountID: value.Spec.Owner.LogicalAccountID,
-		RunnerID:         ownerRunnerID(value.Spec.Owner),
+		InstanceID:       ownerInstanceID(value.Spec.Owner),
 		PositionBefore:   value.Spec.PositionBefore,
 		State:            string(value.State), Attempt: value.Spec.Attempt, FilledQuantity: "0", AveragePrice: "0",
 		ReservedAsset:             validation.ReservedAsset,
@@ -1650,7 +1650,7 @@ func domainOrder(record store.OrderRecord) (orderdomain.Order, error) {
 			Owner: orderdomain.OrderOwner{
 				Type: orderdomain.OwnerType(record.OwnerType), OwnerID: record.OwnerID,
 				LogicalAccountID: record.LogicalAccountID,
-				RunnerID:         optionalString(record.RunnerID),
+				InstanceID:       optionalString(record.InstanceID),
 			},
 			PositionBefore: record.PositionBefore,
 			Attempt:        record.Attempt,
@@ -1689,7 +1689,7 @@ func sameSpec(record store.OrderRecord, spec orderdomain.OrderSpec) bool {
 		stored.Spec.Owner.Type == spec.Owner.Type &&
 		stored.Spec.Owner.OwnerID == spec.Owner.OwnerID &&
 		stored.Spec.Owner.LogicalAccountID == spec.Owner.LogicalAccountID &&
-		equalOptionalString(stored.Spec.Owner.RunnerID, spec.Owner.RunnerID)
+		equalOptionalString(stored.Spec.Owner.InstanceID, spec.Owner.InstanceID)
 }
 
 func equalOptionalDecimal(left, right *shared.Decimal) bool {
@@ -1699,11 +1699,11 @@ func equalOptionalDecimal(left, right *shared.Decimal) bool {
 	return left.Cmp(*right) == 0
 }
 
-func ownerRunnerID(owner orderdomain.OrderOwner) string {
-	if owner.RunnerID == nil {
+func ownerInstanceID(owner orderdomain.OrderOwner) string {
+	if owner.InstanceID == nil {
 		return ""
 	}
-	return *owner.RunnerID
+	return *owner.InstanceID
 }
 
 func optionalString(value string) *string {

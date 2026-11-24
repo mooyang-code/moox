@@ -199,7 +199,7 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 		PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 		ReferencePriceAt: fixture.now.UnixMilli(),
 		OwnerType:        "TARGET", OwnerID: "target-1",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		State: "OPEN", Version: 1,
 	})
 
@@ -230,7 +230,7 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 	require.Equal(t, orderdomain.OwnerOperator, fixture.orders.specs[0].Owner.Type)
 	require.Equal(t, "manual-1", fixture.orders.specs[0].Owner.OwnerID)
 	require.Equal(t, "logical-1", fixture.orders.specs[0].Owner.LogicalAccountID)
-	require.Nil(t, fixture.orders.specs[0].Owner.RunnerID)
+	require.Nil(t, fixture.orders.specs[0].Owner.InstanceID)
 	require.Equal(t, []string{"BTCUSDT"}, *fixture.prices.calls)
 	account, err := fixture.store.GetLogicalAccount(
 		context.Background(), "space-1", "logical-1",
@@ -501,7 +501,7 @@ func TestManualOrderRejectsTargetDiscoveredDuringCancellationSync(t *testing.T) 
 			Quantity: "0.1", ReferencePrice: "100",
 			ReferencePriceAt: fixture.now.UnixMilli(),
 			OwnerType:        "TARGET", OwnerID: "target-1",
-			LogicalAccountID: "logical-1", RunnerID: "runner-1",
+			LogicalAccountID: "logical-1", InstanceID: "runner-1",
 			State: "OPEN", Version: 1,
 		})
 		return nil
@@ -748,7 +748,7 @@ func (f *operatorFixture) order(t *testing.T, record store.OrderRecord) {
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		// 目标单只能由组合当前目标行所属的实例落库：只想搭一笔目标单的用例补上这个前提。
 		if record.OwnerType == "TARGET" {
-			if err := storetest.EnsureCurrentTarget(tx, record.SpaceID, record.LogicalAccountID, record.RunnerID); err != nil {
+			if err := storetest.EnsureCurrentTarget(tx, record.SpaceID, record.LogicalAccountID, record.InstanceID); err != nil {
 				return err
 			}
 		}
@@ -822,8 +822,8 @@ func (s *operatorOrderStub) Place(
 		value := spec.LimitPrice.String()
 		record.LimitPrice = &value
 	}
-	if spec.Owner.RunnerID != nil {
-		record.RunnerID = *spec.Owner.RunnerID
+	if spec.Owner.InstanceID != nil {
+		record.InstanceID = *spec.Owner.InstanceID
 	}
 	if err := s.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateOrder(record)

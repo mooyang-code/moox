@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_owner_type TEXT NOT NULL,
     c_owner_id TEXT NOT NULL,
     c_logical_account_id TEXT,
-    c_runner_id TEXT,
+    -- 目标子单所属的策略实例；其他订单为空
+    c_instance_id TEXT,
     -- 目标子单下单前该执行账户在这个标的上的持仓，用于发现持仓没反映已成交子单；其他订单为空
     c_position_before TEXT NOT NULL DEFAULT '',
     c_state TEXT NOT NULL,
@@ -56,24 +57,24 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
         (
             c_owner_type = 'TARGET'
             AND c_logical_account_id IS NOT NULL
-            AND c_runner_id IS NOT NULL
+            AND c_instance_id IS NOT NULL
         )
         OR
         (
             c_owner_type = 'OPERATOR'
             AND c_logical_account_id IS NOT NULL
-            AND c_runner_id IS NULL
+            AND c_instance_id IS NULL
         )
         OR
         (
             c_owner_type = 'EXTERNAL'
-            AND c_runner_id IS NULL
+            AND c_instance_id IS NULL
         )
         OR
         (
             c_owner_type = 'SYSTEM'
             AND c_logical_account_id IS NOT NULL
-            AND c_runner_id IS NULL
+            AND c_instance_id IS NULL
         )
     )
 );

@@ -55,7 +55,7 @@ func TestReleaseTargetOrdersCoversEveryTarget(t *testing.T) {
 	f.now = time.Now().UTC()
 	f.restingOrder(t, "resting-1", "BUY", "10", "0", f.now)
 	base := store.OrderRecord{
-		SpaceID: "space-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-old", Version: 1,
 	}
@@ -100,7 +100,7 @@ func TestReleaseTargetOrdersConfirmsUnknownCancel(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "cancel-unknown", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: "cancel-unknown", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: "cancel-unknown", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "CANCEL_UNKNOWN", SubmittedAt: f.now.UnixMilli(), Version: 1,
@@ -143,7 +143,7 @@ func TestExpiredNewTargetStopsPreviousRestingOrders(t *testing.T) {
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "100")
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: "old-resting", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-old", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
@@ -254,7 +254,7 @@ func TestReleaseTargetOrdersResolvesEveryUnknownOrder(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	base := store.OrderRecord{
-		SpaceID: "space-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-old",
 		State: "SUBMIT_UNKNOWN", SubmittedAt: f.now.UnixMilli(), Version: 1,

@@ -64,8 +64,7 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 	)
 	require.NoError(t, err)
 	require.Equal(t, "target-3", current.TargetID)
-	// Target ordering is derived from bar_end_time.
-	require.Equal(t, uint64(now.UnixMilli()), current.CommandSequence)
+	require.Equal(t, now.UnixMilli(), current.BarEndTime)
 	require.Equal(t, "0.03", current.Targets[0].Quantity)
 	require.Equal(t, int32(2), wakes.Load(), "stale command must not wake convergence")
 

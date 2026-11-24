@@ -135,7 +135,7 @@ export interface Order {
   owner_type: string;
   owner_id: string;
   logical_account_id: string;
-  runner_id: string;
+  instance_id: string;
   state: string;
   filled_quantity: string;
   average_price: string;
@@ -276,8 +276,6 @@ export interface TargetLane {
 export interface LogicalAccountTarget {
   target_id: string;
   logical_account_id: string;
-  runner_id?: string;
-  command_sequence?: string;
   targets: InstrumentTarget[];
   status: string;
   blocked_targets: BlockedTarget[];

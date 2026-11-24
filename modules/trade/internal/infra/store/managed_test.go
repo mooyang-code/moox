@@ -54,8 +54,8 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 				runnerID = "runner-1"
 			}
 			if err := tx.CreateOrder(OrderRecord{
-				RunnerID: runnerID,
-				SpaceID:  "space-1", OrderID: id, TradingAccountID: "account-1", LogicalAccountID: "logical-1",
+				InstanceID: runnerID,
+				SpaceID:    "space-1", OrderID: id, TradingAccountID: "account-1", LogicalAccountID: "logical-1",
 				ClientOrderID: id, Exchange: "BINANCE", MarketType: order.market, InstrumentID: instrument.InstrumentID,
 				ExchangeSymbol: instrument.ExchangeSymbol, OrderType: "MARKET", Side: "BUY",
 				Quantity: "1", FilledQuantity: "1", ReferencePrice: "100",

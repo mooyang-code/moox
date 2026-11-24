@@ -100,7 +100,7 @@ func TestSyncAccountExternalErrorsCarryAccountIdentity(t *testing.T) {
 						SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "account-1", ClientOrderID: "client-1",
 						ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 						Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 1000, OwnerType: "TARGET", OwnerID: "target-1",
-						LogicalAccountID: "logical-1", RunnerID: "runner-1", State: "OPEN", FilledQuantity: "0", Version: 1,
+						LogicalAccountID: "logical-1", InstanceID: "runner-1", State: "OPEN", FilledQuantity: "0", Version: 1,
 					})
 				}))
 			}

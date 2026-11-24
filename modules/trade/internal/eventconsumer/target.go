@@ -213,11 +213,7 @@ func acceptTarget(
 	// already been superseded. The transactional accept path remains the
 	// authority, but this read-only fast path prevents stale redeliveries from
 	// blocking a durable consumer on unavailable market data.
-	// The target table stores a sequence for ordering. It is derived from the
-	// immutable bar timestamp, never supplied as an authorization fallback.
 	barEnd := request.GetBarEndTime().AsTime().UnixMilli()
-	sequence := uint64(barEnd)
-	instanceID := request.GetInstanceId()
 	if current, currentErr := opts.Store.GetCurrentTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); currentErr == nil {
 		if current.InstanceID == request.GetInstanceId() && current.SessionID == request.GetSessionId() &&
 			(current.BarEndTime > barEnd || (current.BarEndTime == barEnd && current.TargetID != request.GetTargetId())) {
@@ -257,8 +253,6 @@ func acceptTarget(
 		SpaceID:          message.GetSpaceId(),
 		LogicalAccountID: request.GetLogicalAccountId(),
 		TargetID:         request.GetTargetId(),
-		RunnerID:         instanceID,
-		CommandSequence:  sequence,
 		InstanceID:       request.GetInstanceId(),
 		SessionID:        request.GetSessionId(),
 		SessionStartedAt: request.GetSessionStartedAt(),
@@ -287,10 +281,8 @@ func acceptTarget(
 	if marshalErr != nil {
 		return retryTarget(marshalErr)
 	}
-	// Keep the historical receipt index unique across independent sessions.
-	receiptRunnerID := instanceID + "@" + request.GetSessionId()
 	receipt := store.TargetReceiptRecord{
-		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), RunnerID: receiptRunnerID, InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), CommandSequence: sequence, BarEndTime: record.BarEndTime, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
+		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), BarEndTime: record.BarEndTime, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
 	}
 	var accepted bool
 	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)

@@ -164,7 +164,7 @@ func TestCollectSkippedWhileSpotBuyIsDeferredByHourlyCap(t *testing.T) {
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "30"}})
 	at := f.now.Truncate(time.Hour).Add(time.Second).UnixMilli()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		ClientOrderID: "used", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "100", AveragePrice: "100", FilledQuantity: "10",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "FILLED", SubmittedAt: at, FinishedAt: at, Version: 1,

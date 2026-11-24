@@ -450,7 +450,7 @@ func setTestOwner(spec *orderdomain.OrderSpec, ownerType orderdomain.OwnerType) 
 	}
 	if ownerType == orderdomain.OwnerTarget {
 		runnerID := "runner-1"
-		spec.Owner.RunnerID = &runnerID
+		spec.Owner.InstanceID = &runnerID
 	}
 }
 

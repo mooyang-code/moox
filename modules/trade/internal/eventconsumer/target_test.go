@@ -46,8 +46,8 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "target-2", got.TargetID)
-	require.Equal(t, "runner-1", got.RunnerID)
-	require.Equal(t, uint64(now.UnixMilli()), got.CommandSequence)
+	require.Equal(t, "runner-1", got.InstanceID)
+	require.Equal(t, now.UnixMilli(), got.BarEndTime)
 	require.Equal(t, []store.InstrumentTarget{{
 		InstrumentID: "BTC-USDT-SPOT", Quantity: "2.5",
 	}}, got.Targets)

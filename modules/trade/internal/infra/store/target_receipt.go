@@ -13,9 +13,7 @@ import (
 type TargetReceiptRecord struct {
 	SpaceID             string
 	TargetID            string
-	RunnerID            string
 	LogicalAccountID    string
-	CommandSequence     uint64
 	InstanceID          string
 	SessionID           string
 	StrategyID          string
@@ -34,9 +32,7 @@ type TargetReceiptRecord struct {
 type targetReceiptRow struct {
 	SpaceID             string `gorm:"column:c_space_id"`
 	TargetID            string `gorm:"column:c_target_id"`
-	RunnerID            string `gorm:"column:c_runner_id"`
 	LogicalAccountID    string `gorm:"column:c_logical_account_id"`
-	CommandSequence     uint64 `gorm:"column:c_command_sequence"`
 	InstanceID          string `gorm:"column:c_instance_id"`
 	SessionID           string `gorm:"column:c_session_id"`
 	StrategyID          string `gorm:"column:c_strategy_id"`
@@ -78,14 +74,11 @@ func (tx *Tx) InsertTargetReceipt(record TargetReceiptRecord) error {
 	if converted > 0 && (record.Equity == "" || record.EquitySourceTime <= 0) {
 		return fmt.Errorf("%w: conversion receipt requires equity snapshot", ErrInvalidRecord)
 	}
-	if record.CommandSequence == 0 && record.BarEndTime > 0 {
-		record.CommandSequence = uint64(record.BarEndTime)
-	}
 	if record.SignalTime == 0 && record.BarEndTime > 0 {
 		record.SignalTime = record.BarEndTime
 	}
-	err := tx.db.Exec(execInsertTargetReceipt, record.SpaceID, record.TargetID, record.RunnerID, record.LogicalAccountID,
-		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
+	err := tx.db.Exec(execInsertTargetReceipt, record.SpaceID, record.TargetID, record.LogicalAccountID,
+		record.InstanceID, record.SessionID, record.StrategyID,
 		record.BarEndTime, record.ValidUntil,
 		record.RequestHash, record.SignalTime, record.WeightsJSON,
 		record.Equity, record.EquitySourceTime, record.ReferencePricesJSON,
@@ -134,7 +127,7 @@ func (s *Store) ListTargetReceiptsSince(ctx context.Context, spaceID, logicalAcc
 }
 
 func (r targetReceiptRow) targetReceipt() TargetReceiptRecord {
-	return TargetReceiptRecord{SpaceID: r.SpaceID, TargetID: r.TargetID, RunnerID: r.RunnerID, LogicalAccountID: r.LogicalAccountID, CommandSequence: r.CommandSequence, InstanceID: r.InstanceID, SessionID: r.SessionID, StrategyID: r.StrategyID, BarEndTime: r.BarEndTime, ValidUntil: r.ValidUntil, RequestHash: r.RequestHash, SignalTime: r.SignalTime, WeightsJSON: r.WeightsJSON, Equity: r.Equity, EquitySourceTime: r.EquitySourceTime, ReferencePricesJSON: r.ReferencePricesJSON, QuantityTargetsJSON: r.QuantityTargetsJSON, AcceptedAt: r.AcceptedAt}
+	return TargetReceiptRecord{SpaceID: r.SpaceID, TargetID: r.TargetID, LogicalAccountID: r.LogicalAccountID, InstanceID: r.InstanceID, SessionID: r.SessionID, StrategyID: r.StrategyID, BarEndTime: r.BarEndTime, ValidUntil: r.ValidUntil, RequestHash: r.RequestHash, SignalTime: r.SignalTime, WeightsJSON: r.WeightsJSON, Equity: r.Equity, EquitySourceTime: r.EquitySourceTime, ReferencePricesJSON: r.ReferencePricesJSON, QuantityTargetsJSON: r.QuantityTargetsJSON, AcceptedAt: r.AcceptedAt}
 }
 
 func (r TargetReceiptRecord) AcceptedAtTime() time.Time { return time.UnixMilli(r.AcceptedAt).UTC() }
@@ -210,13 +203,13 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
 	execInsertTargetReceipt = `INSERT INTO t_logical_account_target_receipts (
-			c_space_id, c_target_id, c_runner_id, c_logical_account_id,
-			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
+			c_space_id, c_target_id, c_logical_account_id,
+			c_instance_id, c_session_id, c_strategy_id,
 			c_bar_end_time, c_valid_until,
 			c_request_hash, c_signal_time, c_weights_json,
 			c_equity, c_equity_source_time, c_reference_prices_json,
 			c_quantity_targets_json, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	// 用 rowid 子查询限制每批行数：SQLite 默认不支持 DELETE ... LIMIT。c_valid_until 排在大 JSON 列之前，判断不用读溢出页。
 	execDeleteTargetReceiptsBefore = `DELETE FROM t_logical_account_target_receipts WHERE rowid IN (
 			SELECT rowid FROM t_logical_account_target_receipts WHERE c_valid_until < ? LIMIT ?

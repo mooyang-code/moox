@@ -247,7 +247,7 @@ func TestBNBReserveBuysTheShortfallAsASystemOrder(t *testing.T) {
 	spec := f.orders.specs[0]
 	require.Equal(t, orderdomain.OwnerSystem, spec.Owner.Type)
 	require.Equal(t, "logical-1", spec.Owner.LogicalAccountID)
-	require.Nil(t, spec.Owner.RunnerID)
+	require.Nil(t, spec.Owner.InstanceID)
 	require.Equal(t, "BNB-USDT-SPOT", spec.InstrumentID)
 	require.Equal(t, exchange.SideBuy, spec.Side)
 	require.Equal(t, exchange.OrderTypeMarket, spec.Type)

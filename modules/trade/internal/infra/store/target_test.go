@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"math"
 	"strconv"
 	"sync"
 	"testing"
@@ -73,7 +72,7 @@ func TestAcceptLogicalAccountTargetOrdersSessionsByStartTime(t *testing.T) {
 	ctx := context.Background()
 	record := func(targetID, instanceID, sessionID string, startedAt int64) LogicalAccountTargetRecord {
 		value := validLogicalAccountTarget()
-		value.TargetID, value.InstanceID, value.RunnerID, value.SessionID, value.SessionStartedAt = targetID, instanceID, instanceID, sessionID, startedAt
+		value.TargetID, value.InstanceID, value.SessionID, value.SessionStartedAt = targetID, instanceID, sessionID, startedAt
 		return value
 	}
 
@@ -222,9 +221,6 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 		{"session", func(v *LogicalAccountTargetRecord) { v.SessionID = "" }},
 		{"session started at", func(v *LogicalAccountTargetRecord) { v.SessionStartedAt = 0 }},
 		{"validity", func(v *LogicalAccountTargetRecord) { v.ValidUntil = v.BarEndTime }},
-		{"sequence overflow", func(v *LogicalAccountTargetRecord) {
-			v.CommandSequence = uint64(math.MaxInt64) + 1
-		}},
 		{"accepted time", func(v *LogicalAccountTargetRecord) { v.AcceptedAt = 0 }},
 		{"status", func(v *LogicalAccountTargetRecord) { v.Status = "RUNNING" }},
 		{"instrument", func(v *LogicalAccountTargetRecord) { v.Targets[0].InstrumentID = "" }},
@@ -270,7 +266,7 @@ func TestCloseTargetSessionShortensOnlyLiveClosedTarget(t *testing.T) {
 			seedLogicalAccount(t, s, "runner-1")
 			ctx := context.Background()
 			record := validLogicalAccountTarget()
-			record.SessionStartedAt, record.BarEndTime, record.ValidUntil, record.CommandSequence = test.startedAt, test.barEnd.UnixMilli(), test.validUntil.UnixMilli(), 0
+			record.SessionStartedAt, record.BarEndTime, record.ValidUntil = test.startedAt, test.barEnd.UnixMilli(), test.validUntil.UnixMilli()
 			current, accepted, err := s.AcceptLogicalAccountTarget(ctx, record)
 			require.NoError(t, err)
 			require.True(t, accepted)
@@ -322,7 +318,6 @@ func validLogicalAccountTarget() LogicalAccountTargetRecord {
 // setTargetBar 把目标放在基准之后第 n 根 K 线。
 func setTargetBar(record *LogicalAccountTargetRecord, n int64) {
 	record.BarEndTime = targetBarBase + n
-	record.CommandSequence = 0
 }
 
 // seedCurrentTarget 给 logical-1 写一行 instanceID 的当前目标（空目标、有效一小时）：目标单只能由当前目标行所属的实例落库。
@@ -393,7 +388,7 @@ func TestInsertTargetReceiptRequiresEquityOnlyForConvertedTargets(t *testing.T) 
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
 	receipt := func(id, quantityTargets string) TargetReceiptRecord {
-		return TargetReceiptRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1", RunnerID: "runner-1", CommandSequence: 1,
+		return TargetReceiptRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1",
 			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1", BarEndTime: 1, ValidUntil: 2,
 			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, AcceptedAt: 1}
 	}

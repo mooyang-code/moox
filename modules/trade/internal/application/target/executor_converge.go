@@ -115,7 +115,7 @@ func (e *Executor) releaseConflictsAndStale(
 			// 别的组合的目标单出现在成员账户上，或者本目标号却不是本实例下的：说不清来历，暂停。
 			current.OwnerType == string(orderdomain.OwnerTarget) &&
 				(current.LogicalAccountID != logicalAccountID ||
-					current.OwnerID == target.TargetID && current.RunnerID != target.RunnerID):
+					current.OwnerID == target.TargetID && current.InstanceID != target.InstanceID):
 			owner := "别的来源的目标"
 			switch current.OwnerType {
 			case string(orderdomain.OwnerExternal):

@@ -61,15 +61,13 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
     c_target_id TEXT NOT NULL,
-    c_runner_id TEXT NOT NULL,
-    c_command_sequence INTEGER NOT NULL,
-    c_instance_id TEXT NOT NULL DEFAULT '',
-    c_session_id TEXT NOT NULL DEFAULT '',
+    c_instance_id TEXT NOT NULL,
+    c_session_id TEXT NOT NULL,
     -- 目标所属会话的开始时刻（毫秒）：比较会话先后用
     c_session_started_at INTEGER NOT NULL,
-    c_strategy_id TEXT NOT NULL DEFAULT '',
-    c_bar_end_time INTEGER NOT NULL DEFAULT 0,
-    c_valid_until INTEGER NOT NULL DEFAULT 0,
+    c_strategy_id TEXT NOT NULL,
+    c_bar_end_time INTEGER NOT NULL,
+    c_valid_until INTEGER NOT NULL,
     c_targets_json TEXT NOT NULL,
     c_status TEXT NOT NULL,
     c_blocked_targets_json TEXT NOT NULL DEFAULT '[]',
@@ -81,7 +79,6 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
         ON DELETE CASCADE,
-    CHECK (c_command_sequence > 0),
     CHECK (c_instance_id <> '' AND c_session_id <> '' AND
            c_session_started_at > 0 AND
            c_strategy_id <> '' AND c_bar_end_time > 0 AND

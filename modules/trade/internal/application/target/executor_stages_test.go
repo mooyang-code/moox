@@ -184,7 +184,7 @@ func TestOnlyRestingOrdersConvergeWithRetryAfterValidUntil(t *testing.T) {
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
+		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
 		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", Version: 1,
@@ -207,7 +207,7 @@ func TestExpiryAndNewTargetCancelRestingOrders(t *testing.T) {
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	record := store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
+		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
 		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: string(orderdomain.Open), Version: 1,
@@ -331,7 +331,7 @@ func TestNewTargetCancelsPreviousTargetRestingOrder(t *testing.T) {
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
+		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
 		ClientOrderID: "old-resting", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "previous-target", State: "OPEN", Version: 1,
@@ -361,7 +361,7 @@ func TestArbitrageBaseSwapLegIsNotFlattenedToZero(t *testing.T) {
 
 func restingEthOrder(target store.LogicalAccountTargetRecord) store.OrderRecord {
 	return store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-eth", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
+		SpaceID: "space-1", OrderID: "resting-eth", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
 		ClientOrderID: "resting-eth", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "2", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", Version: 1,

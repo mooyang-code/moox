@@ -204,8 +204,7 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
         target: {
           target_id: "result-8",
           logical_account_id: "logical-paper",
-          runner_id: "runner-paper",
-          command_sequence: "8",
+          instance_id: "runner-paper",
           targets: [{ instrument_id: "ETH-USDT-SPOT", quantity: "2" }],
           status: "CONVERGING",
           valid_until: String(Date.now() + 3_600_000)

@@ -117,7 +117,7 @@ func TestSyncUnknownTailPropagatesLockDeadline(t *testing.T) {
 			SpaceID: "space-1", OrderID: "unknown-order", TradingAccountID: "account-1", ClientOrderID: "unknown-client",
 			ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET", Quantity: "1",
 			ReferencePrice: "100", ReferencePriceAt: 1_000, OwnerType: "TARGET", OwnerID: "target-1",
-			LogicalAccountID: "logical-1", RunnerID: "runner-1", State: "SUBMIT_UNKNOWN", FilledQuantity: "0",
+			LogicalAccountID: "logical-1", InstanceID: "runner-1", State: "SUBMIT_UNKNOWN", FilledQuantity: "0",
 			ReservedAsset: "USDT", ReservedQuantity: "100", RemainingReservedQuantity: "100", Version: 1, SubmittedAt: 1_000,
 		})
 	}))

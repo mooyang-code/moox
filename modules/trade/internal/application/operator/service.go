@@ -628,7 +628,7 @@ func (s *Service) recoverChild(ctx context.Context, action store.OperatorActionR
 // across a failed idempotency lookup or action-link write.
 func matchesRecoveryChild(child store.OrderRecord, action store.OperatorActionRecord, command ManualOrderCommand) bool {
 	if child.SpaceID != action.SpaceID || child.TradingAccountID != command.TradingAccountID || child.ClientOrderID != command.ClientOrderID ||
-		child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != action.ActionID || child.LogicalAccountID != action.LogicalAccountID || child.RunnerID != "" ||
+		child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != action.ActionID || child.LogicalAccountID != action.LogicalAccountID || child.InstanceID != "" ||
 		child.InstrumentID != command.InstrumentID || child.OrderType != string(command.Type) || child.TimeInForce != string(command.FillPolicy) ||
 		child.Side != string(command.Side) || child.PositionSide != string(command.PositionSide) {
 		return false

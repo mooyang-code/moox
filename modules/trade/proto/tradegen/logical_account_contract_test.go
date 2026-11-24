@@ -78,7 +78,7 @@ func TestTradeExecutionRPCUsesManualOrderAndLogicalTarget(t *testing.T) {
 		"source",
 		"owner_type",
 		"owner_id",
-		"runner_id",
+		"instance_id",
 		"strategy_result_id",
 		"reduce_position_only",
 		"reduce_only",

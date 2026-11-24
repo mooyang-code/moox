@@ -36,9 +36,9 @@ func TestTargetHistoryPrunerDeletesOnlyRowsExpiredMoreThanSevenDays(t *testing.T
 		for i, validUntil := range validUntils {
 			barEnd := validUntil.Add(-time.Minute).UnixMilli()
 			if err := tx.InsertTargetReceipt(store.TargetReceiptRecord{
-				SpaceID: "space-1", TargetID: fmt.Sprintf("target-%d", i), RunnerID: "runner-1@session-1",
-				LogicalAccountID: "logical-1", CommandSequence: uint64(barEnd),
-				InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+				SpaceID: "space-1", TargetID: fmt.Sprintf("target-%d", i),
+				LogicalAccountID: "logical-1",
+				InstanceID:       "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
 				BarEndTime: barEnd, ValidUntil: validUntil.UnixMilli(),
 				RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]",
 				AcceptedAt: barEnd,

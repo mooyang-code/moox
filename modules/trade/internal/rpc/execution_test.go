@@ -110,7 +110,7 @@ func TestOrderConversionPreservesOwnershipAndExecutionFields(t *testing.T) {
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "60000",
 		ReferencePriceAt: 1000, ReduceOnly: true,
 		OwnerType: "TARGET", OwnerID: "target-1",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 		State: "OPEN", FilledQuantity: "0", AveragePrice: "0",
 		ReservedQuantity: "0", RemainingReservedQuantity: "0",
 	}
@@ -123,7 +123,7 @@ func TestOrderConversionPreservesOwnershipAndExecutionFields(t *testing.T) {
 		converted.GetOwnerType() != "TARGET" ||
 		converted.GetOwnerId() != "target-1" ||
 		converted.GetLogicalAccountId() != "logical-1" ||
-		converted.GetRunnerId() != "runner-1" ||
+		converted.GetInstanceId() != "runner-1" ||
 		converted.LimitPrice != nil {
 		t.Fatalf("converted order = %+v", converted)
 	}
@@ -215,7 +215,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 				OrderType: "MARKET", Side: "BUY", Quantity: "1",
 				ReferencePrice: "100", OwnerType: "TARGET",
 				OwnerID: "target-1", LogicalAccountID: "logical-1",
-				RunnerID: "runner-1", State: "OPEN",
+				InstanceID: "runner-1", State: "OPEN",
 			},
 			{
 				SpaceID: "space-1", OrderID: "order-2",
@@ -227,7 +227,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 			},
 		} {
 			if record.OwnerType == "TARGET" {
-				if err := storetest.EnsureCurrentTarget(tx, record.SpaceID, record.LogicalAccountID, record.RunnerID); err != nil {
+				if err := storetest.EnsureCurrentTarget(tx, record.SpaceID, record.LogicalAccountID, record.InstanceID); err != nil {
 					return err
 				}
 			}
