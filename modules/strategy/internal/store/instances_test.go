@@ -51,6 +51,14 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("启用列表不符：%+v err=%v", listed, err)
 	}
+	// 绑定解析只存在会话里：停用后读最近一次会话的那份。
+	if err := repo.DisableInstance(ctx, "i1", "session-1", testNow); err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := repo.GetInstance(ctx, "i1")
+	if err != nil || disabled.Enabled || string(disabled.ResolvedJSON) != spotResolved {
+		t.Fatalf("停用后应读最近一次会话的绑定解析：%+v err=%v", disabled, err)
+	}
 }
 
 // 启用、停用各是一个事务（批 3 的 3.6）：没有“挂着会话的停用实例”，停用之后马上能改实例；启用期间实例被改了就整体回滚。

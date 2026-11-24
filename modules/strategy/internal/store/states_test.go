@@ -23,7 +23,7 @@ func TestCommitResultWritesStateInSameTransaction(t *testing.T) {
 		t.Fatalf("提交失败：%v %v", created, err)
 	}
 	state, found, err := repo.GetState(ctx, "i1")
-	if err != nil || !found || state.SessionID != "session-1" || state.DSLHash != testHash || !state.BarEndTime.Equal(first.BarEndTime) || string(state.StateJSON) != `{"rules":{"r":{"held":["BTC-USDT"]}}}` {
+	if err != nil || !found || state.SessionID != "session-1" || !state.BarEndTime.Equal(first.BarEndTime) || string(state.StateJSON) != `{"rules":{"r":{"held":["BTC-USDT"]}}}` {
 		t.Fatalf("状态行不符：%+v found=%v err=%v", state, found, err)
 	}
 	// 同一周期重复提交返回已有记录，状态不被第二次的内容覆盖。

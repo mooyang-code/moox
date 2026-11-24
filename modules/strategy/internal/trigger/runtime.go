@@ -17,7 +17,6 @@ type runtime struct {
 	sessionID string
 	// sessionStartedAt 是会话开始时刻（毫秒），随目标事件发给 Trade 比较会话先后。
 	sessionStartedAt int64
-	dslHash          string
 	resolved         input.Resolved
 	program          *dsl.Program
 	// pool 非空表示策略池会话：program 是池自己的程序（没有规则），成员各自的绑定与程序在 pool 里。
@@ -73,28 +72,27 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 	}
 	resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
 	if err != nil {
-		// 会话快照损坏：退回实例上的同一份副本取日历与周期，跳过记录才能按正确的周期写；两者都坏时调用方只记日志与计数。
-		fallback, _ := input.ParseResolved(instance.ResolvedJSON)
-		return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: fallback}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+		// 会话快照损坏：没有日历与周期，算不出这一期的 bar_end，调用方只记日志与计数、不写跳过记录。
+		return &runtime{sessionID: sessionID}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 	}
 	// 编译失败时仍用快照里的日历与周期记录跳过：零值会让周期按 crypto 日历换算，写错 bar_end 与有效期。
 	compiled, program, err := input.Compile(resolved, version.DSLYaml)
 	if err != nil {
-		return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: resolved}, &input.SkipError{Reason: input.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
+		return &runtime{sessionID: sessionID, resolved: resolved}, &input.SkipError{Reason: input.SkipConfigError, Detail: fmt.Sprintf("按会话快照重新编译 DSL 失败：%v", err)}
 	}
-	loaded := &runtime{sessionID: sessionID, sessionStartedAt: session.StartedAt, dslHash: session.DSLHash, resolved: compiled, program: program}
+	loaded := &runtime{sessionID: sessionID, sessionStartedAt: session.StartedAt, resolved: compiled, program: program}
 	if session.MembersJSON != "" {
 		members, programs, err := input.ParseMembers(session.MembersJSON)
 		if err != nil {
-			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+			return &runtime{sessionID: sessionID, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}
 		clock, err := input.PoolClock(compiled.Calendar, compiled.Bar, *program.Strategy.Pool)
 		if err != nil {
-			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+			return &runtime{sessionID: sessionID, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}
 		config, err := pool.NewConfig(program.Strategy, compiled.Market, input.MemberStrategies(members, programs), clock)
 		if err != nil {
-			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+			return &runtime{sessionID: sessionID, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}
 		config.Degrading = func(reason string) bool { return degradingReasons[reason] }
 		loaded.pool = &poolRuntime{config: config, members: members, programs: programs}

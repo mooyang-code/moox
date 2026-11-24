@@ -11,9 +11,8 @@ import (
 // State 是实例的规则状态：每个实例一行，是引擎下一期求值的起点。
 type State struct {
 	InstanceID string
-	// SessionID 与 DSLHash 是状态当前所属的会话与 DSL 版本。
+	// SessionID 是状态当前所属的会话（DSL 版本取会话的）。
 	SessionID string
-	DSLHash   string
 	// BarEndTime 是状态推进到的那一期（bar_end）。
 	BarEndTime time.Time
 	// StateJSON 是 engine.State 的 JSON 对象。
@@ -24,7 +23,6 @@ type State struct {
 type stateRow struct {
 	InstanceID string    `gorm:"column:c_instance_id"`
 	SessionID  string    `gorm:"column:c_session_id"`
-	DSLHash    string    `gorm:"column:c_dsl_hash"`
 	BarEndTime int64     `gorm:"column:c_bar_end_time"`
 	StateJSON  string    `gorm:"column:c_state_json"`
 	UpdatedAt  time.Time `gorm:"column:c_mtime"`
@@ -33,12 +31,12 @@ type stateRow struct {
 // 规则状态的 SQL：整条写成常量，不在调用处拼接。
 const (
 	// sqlSelectState 读取实例的规则状态。
-	sqlSelectState = `SELECT c_instance_id, c_session_id, c_dsl_hash, c_bar_end_time, c_state_json, c_mtime FROM t_strategy_states WHERE c_instance_id = ?`
+	sqlSelectState = `SELECT c_instance_id, c_session_id, c_bar_end_time, c_state_json, c_mtime FROM t_strategy_states WHERE c_instance_id = ?`
 	// sqlUpsertState 写入或覆盖实例的规则状态。
 	sqlUpsertState = `
-	INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_dsl_hash, c_bar_end_time, c_state_json, c_mtime)
-	VALUES (?, ?, ?, ?, ?, ?)
-	ON CONFLICT (c_instance_id) DO UPDATE SET c_session_id = excluded.c_session_id, c_dsl_hash = excluded.c_dsl_hash,
+	INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_bar_end_time, c_state_json, c_mtime)
+	VALUES (?, ?, ?, ?, ?)
+	ON CONFLICT (c_instance_id) DO UPDATE SET c_session_id = excluded.c_session_id,
 		c_bar_end_time = excluded.c_bar_end_time, c_state_json = excluded.c_state_json, c_mtime = excluded.c_mtime`
 	// sqlRebindState 把实例的规则状态改挂到新会话（状态与它推进到的那一期不变）。
 	sqlRebindState = `UPDATE t_strategy_states SET c_session_id = ?, c_mtime = ? WHERE c_instance_id = ?`
@@ -58,7 +56,7 @@ func readState(tx *gorm.DB, instanceID string) (stateRow, bool, error) {
 
 // upsertState 在调用方的事务里写入或覆盖实例的规则状态。
 func upsertState(tx *gorm.DB, state State, now time.Time) error {
-	return tx.Exec(sqlUpsertState, state.InstanceID, state.SessionID, state.DSLHash, millis(state.BarEndTime), string(state.StateJSON), now.UTC()).Error
+	return tx.Exec(sqlUpsertState, state.InstanceID, state.SessionID, millis(state.BarEndTime), string(state.StateJSON), now.UTC()).Error
 }
 
 // carryState 在打开新会话的事务里决定实例已有的规则状态是否沿用：状态所属会话固化的 DSL 版本、绑定解析与策略池成员
@@ -73,7 +71,7 @@ func carryState(tx *gorm.DB, instanceID, sessionID, dslHash, resolvedJSON, membe
 	if err := tx.Raw(sqlSelectSessionByID, state.SessionID).Scan(&previous).Error; err != nil {
 		return err
 	}
-	same := previous.SessionID != "" && state.DSLHash == dslHash && previous.DSLHash == dslHash &&
+	same := previous.SessionID != "" && previous.DSLHash == dslHash &&
 		previous.ResolvedJSON == resolvedJSON && previous.MembersJSON == membersJSON
 	if !same {
 		return tx.Exec(sqlDeleteState, instanceID).Error
@@ -88,7 +86,7 @@ func (s *Store) GetState(ctx context.Context, instanceID string) (State, bool, e
 		return State{}, false, err
 	}
 	return State{
-		InstanceID: row.InstanceID, SessionID: row.SessionID, DSLHash: row.DSLHash, BarEndTime: fromMillis(row.BarEndTime),
+		InstanceID: row.InstanceID, SessionID: row.SessionID, BarEndTime: fromMillis(row.BarEndTime),
 		StateJSON: json.RawMessage(row.StateJSON), UpdatedAt: row.UpdatedAt.UTC(),
 	}, true, nil
 }

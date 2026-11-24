@@ -655,7 +655,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 	now := h.now()
 	result := store.Result{
 		ResultID: resultID, InstanceID: p.instance.InstanceID, SessionID: p.runtime.sessionID,
-		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: decision.Status, SkipReason: decision.SkipReason, DSLHash: p.runtime.dslHash,
+		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: decision.Status, SkipReason: decision.SkipReason,
 		InputJSON: inputJSON, TargetsJSON: targetsJSON, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
@@ -693,7 +693,7 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 	}
 	result := store.Result{
 		ResultID: resultID, InstanceID: p.instance.InstanceID, SessionID: p.runtime.sessionID,
-		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: store.StatusSkipped, SkipReason: reason, DSLHash: p.runtime.dslHash,
+		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: store.StatusSkipped, SkipReason: reason,
 		InputJSON: inputJSON, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: summary,
 		PublishStatus: store.PublishNone, CreatedAt: h.now(),
 	}

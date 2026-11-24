@@ -45,9 +45,7 @@ func decodeNextParams(row resultRow) (ParamDelivery, error) {
 // 参数投递的 SQL：整条写成常量，不在调用处拼接。
 const (
 	// sqlListPendingParamDeliveries 列出每个启用实例当前会话里最新一条带参数、还没送达也没被拒绝的结果；列清单与 resultRow 一一对应。
-	sqlListPendingParamDeliveries = `
-		SELECT r.c_result_id, r.c_instance_id, r.c_session_id, r.c_bar_end_time, r.c_valid_until, r.c_status, r.c_skip_reason, r.c_dsl_hash, r.c_input_json, r.c_targets_json, r.c_summary_json, r.c_event_data, r.c_publish_status, r.c_ctime, r.c_next_params_json, r.c_params_delivered_at, r.c_params_error
-		FROM t_strategy_results r
+	sqlListPendingParamDeliveries = sqlSelectResults + `
 		JOIN t_strategy_instances i ON i.c_instance_id = r.c_instance_id AND i.c_session_id = r.c_session_id AND i.c_enabled = 1
 		WHERE r.c_next_params_json <> '' AND r.c_params_delivered_at IS NULL AND r.c_params_error = ''
 		  AND r.c_bar_end_time = (

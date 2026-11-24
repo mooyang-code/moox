@@ -73,13 +73,14 @@ type InputRecord struct {
 
 // Result 是一个处理过的周期：ok 带目标，skipped 带原因。规则状态不在结果里，见 State（每个实例一行）。
 type Result struct {
-	ResultID      string
-	InstanceID    string
-	SessionID     string
-	BarEndTime    time.Time
-	ValidUntil    time.Time
-	Status        string
-	SkipReason    string
+	ResultID   string
+	InstanceID string
+	SessionID  string
+	BarEndTime time.Time
+	ValidUntil time.Time
+	Status     string
+	SkipReason string
+	// DSLHash 只读：取结果所属会话的 DSL 版本，写入时不用给。
 	DSLHash       string
 	InputJSON     json.RawMessage
 	TargetsJSON   json.RawMessage
@@ -143,43 +144,46 @@ func (r resultRow) result() Result {
 
 // 结果的 SQL：整条写成常量，不在调用处拼接；读结果的语句列清单与 resultRow 一一对应。
 const (
+	// sqlSelectResults 是读结果的公共部分：DSL 版本取结果所属会话的。
+	sqlSelectResults = `SELECT r.c_result_id, r.c_instance_id, r.c_session_id, r.c_bar_end_time, r.c_valid_until, r.c_status, r.c_skip_reason, s.c_dsl_hash,
+		r.c_input_json, r.c_targets_json, r.c_summary_json, r.c_event_data, r.c_publish_status, r.c_ctime, r.c_next_params_json, r.c_params_delivered_at, r.c_params_error
+		FROM t_strategy_results r JOIN t_strategy_sessions s ON s.c_session_id = r.c_session_id`
 	// sqlInsertResult 写入一条策略结果（参数尚未送达、没有拒绝原因）。
 	sqlInsertResult = `
-	INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')`
+	INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')`
 	// sqlInsertResultItem 写入一条解释明细。
 	sqlInsertResultItem = `INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_scale, c_ctime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	// readLatest 的两个变体：本会话最新的处理记录（ok 或 skipped）、最新的 ok 记录。同一实例、同一会话内 bar_end 唯一（表约束），
 	// 按 bar_end 倒序取一条即可直接走索引。
-	sqlSelectLatestResult   = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? ORDER BY c_bar_end_time DESC LIMIT 1`
-	sqlSelectLatestOKResult = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_status = 'ok' ORDER BY c_bar_end_time DESC LIMIT 1`
+	sqlSelectLatestResult   = sqlSelectResults + ` WHERE r.c_instance_id = ? AND r.c_session_id = ? ORDER BY r.c_bar_end_time DESC LIMIT 1`
+	sqlSelectLatestOKResult = sqlSelectResults + ` WHERE r.c_instance_id = ? AND r.c_session_id = ? AND r.c_status = 'ok' ORDER BY r.c_bar_end_time DESC LIMIT 1`
 	// sqlSelectResultAtBar 读取本会话某个周期的记录。
-	sqlSelectResultAtBar = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`
+	sqlSelectResultAtBar = sqlSelectResults + ` WHERE r.c_instance_id = ? AND r.c_session_id = ? AND r.c_bar_end_time = ?`
 	// sqlCancelSupersededResults 把本会话更早周期的待投递结果标记为 cancelled。
 	sqlCancelSupersededResults = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`
 	// sqlSelectLatestMark、sqlSelectLatestOKMark 读取实例（不分会话）最近处理的一条与最近一条 ok 的会话、周期、写入时间与跳过原因。
 	sqlSelectLatestMark   = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
 	sqlSelectLatestOKMark = `SELECT c_session_id, c_bar_end_time, c_ctime, c_skip_reason FROM t_strategy_results WHERE c_instance_id = ? AND c_status = 'ok' ORDER BY c_bar_end_time DESC, c_ctime DESC LIMIT 1`
 	// sqlSelectResultsAtBarAnySession 读取实例某一根 bar 的全部记录：当前会话优先，其次创建时间最新。
-	sqlSelectResultsAtBarAnySession = `
-		SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results
-		WHERE c_instance_id = ? AND c_bar_end_time = ?
-		ORDER BY CASE WHEN c_session_id = ? THEN 0 ELSE 1 END, c_ctime DESC, c_result_id DESC`
+	sqlSelectResultsAtBarAnySession = sqlSelectResults + `
+		WHERE r.c_instance_id = ? AND r.c_bar_end_time = ?
+		ORDER BY CASE WHEN r.c_session_id = ? THEN 0 ELSE 1 END, r.c_ctime DESC, r.c_result_id DESC`
 	// sqlSelectResultByID 按结果 ID 读取结果。
-	sqlSelectResultByID = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_result_id = ?`
+	sqlSelectResultByID = sqlSelectResults + ` WHERE r.c_result_id = ?`
 
 	// ListResults 的变体：全部会话与指定会话，各有计数与分页两条。
 	sqlCountResultsOfInstance = `SELECT COUNT(*) FROM t_strategy_results WHERE c_instance_id = ?`
 	sqlCountResultsOfSession  = `SELECT COUNT(*) FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ?`
-	sqlListResultsOfInstance  = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT ? OFFSET ?`
-	sqlListResultsOfSession   = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT ? OFFSET ?`
+	sqlListResultsOfInstance  = sqlSelectResults + ` WHERE r.c_instance_id = ? ORDER BY r.c_bar_end_time DESC, r.c_ctime DESC, r.c_result_id DESC LIMIT ? OFFSET ?`
+	sqlListResultsOfSession   = sqlSelectResults + ` WHERE r.c_instance_id = ? AND r.c_session_id = ? ORDER BY r.c_bar_end_time DESC, r.c_ctime DESC, r.c_result_id DESC LIMIT ? OFFSET ?`
 	// sqlListResultItems 读取一个结果的解释明细，按规则与标的排序。
 	sqlListResultItems = `SELECT c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_scale FROM t_strategy_result_items WHERE c_result_id = ? ORDER BY c_rule_id, c_instrument_id`
 	// sqlListPendingResults 按创建顺序列出待投递的结果。
-	sqlListPendingResults = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_publish_status = 'pending' ORDER BY c_ctime, c_result_id LIMIT ?`
+	sqlListPendingResults = sqlSelectResults + ` WHERE r.c_publish_status = 'pending' ORDER BY r.c_ctime, r.c_result_id LIMIT ?`
 	// sqlSelectPendingResultByID 读取一条仍待投递的结果。
-	sqlSelectPendingResultByID = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_result_id = ? AND c_publish_status = 'pending'`
+	sqlSelectPendingResultByID = sqlSelectResults + ` WHERE r.c_result_id = ? AND r.c_publish_status = 'pending'`
 	// sqlCancelPendingResult 把一条待投递结果标记为 cancelled。
 	sqlCancelPendingResult = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_result_id = ? AND c_publish_status = 'pending'`
 	// sqlTransitionPublishStatus 比较交换推进投递状态。
@@ -205,8 +209,8 @@ type CommitRequest struct {
 }
 
 func validateResult(result Result) error {
-	if strings.TrimSpace(result.ResultID) == "" || strings.TrimSpace(result.InstanceID) == "" || strings.TrimSpace(result.SessionID) == "" || strings.TrimSpace(result.DSLHash) == "" {
-		return errors.New("结果缺少 result_id、instance_id、session_id 或 dsl_hash")
+	if strings.TrimSpace(result.ResultID) == "" || strings.TrimSpace(result.InstanceID) == "" || strings.TrimSpace(result.SessionID) == "" {
+		return errors.New("结果缺少 result_id、instance_id 或 session_id")
 	}
 	if result.BarEndTime.IsZero() || result.ValidUntil.IsZero() || result.CreatedAt.IsZero() {
 		return errors.New("结果缺少 bar_end_time、valid_until 或创建时间")
@@ -334,7 +338,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 			committed = existing.result()
 			return nil
 		}
-		if err := tx.Exec(sqlInsertResult, result.ResultID, result.InstanceID, result.SessionID, millis(result.BarEndTime), millis(result.ValidUntil), result.Status, result.SkipReason, result.DSLHash,
+		if err := tx.Exec(sqlInsertResult, result.ResultID, result.InstanceID, result.SessionID, millis(result.BarEndTime), millis(result.ValidUntil), result.Status, result.SkipReason,
 			string(result.InputJSON), string(result.TargetsJSON), string(result.SummaryJSON), result.EventData, result.PublishStatus, result.CreatedAt.UTC(),
 			string(result.NextParamsJSON)).Error; err != nil {
 			return err
@@ -348,7 +352,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 			}
 		}
 		if len(request.State) != 0 {
-			if err := upsertState(tx, State{InstanceID: result.InstanceID, SessionID: result.SessionID, DSLHash: result.DSLHash, BarEndTime: result.BarEndTime, StateJSON: request.State}, now); err != nil {
+			if err := upsertState(tx, State{InstanceID: result.InstanceID, SessionID: result.SessionID, BarEndTime: result.BarEndTime, StateJSON: request.State}, now); err != nil {
 				return err
 			}
 		}

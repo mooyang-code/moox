@@ -127,8 +127,8 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := now.Add(-10 * time.Minute)
-	insert := fmt.Sprintf(`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime)
-		VALUES ('r1', 'i1', 'i1-session', %d, %d, 'ok', 'sha256:demo', '{}', '[]', '{}', X'%x', 'pending', '%s');`, now.UnixMilli(), now.Add(time.Hour).UnixMilli(), data, stale.Format("2006-01-02 15:04:05.999999999-07:00"))
+	insert := fmt.Sprintf(`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime)
+		VALUES ('r1', 'i1', 'i1-session', %d, %d, 'ok', '{}', '[]', '{}', X'%x', 'pending', '%s');`, now.UnixMilli(), now.Add(time.Hour).UnixMilli(), data, stale.Format("2006-01-02 15:04:05.999999999-07:00"))
 	if err := repo.ApplySchema(insert); err != nil {
 		t.Fatal(err)
 	}
