@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/cloud/cloudtest"
 	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	tcerrors "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/errors"
 )
@@ -23,7 +22,7 @@ func roundMetrics(_ *planHarness, r *PlanReconciler) *ControlMetrics {
 }
 
 func failureLabel(m *ControlMetrics, reason string) float64 {
-	return testutil.ToFloat64(m.assignmentFailure.WithLabelValues("crypto", reason))
+	return coordinationValue(m, "crypto", reason)
 }
 
 func requireNoFailure(t *testing.T, m *ControlMetrics) {
@@ -148,10 +147,10 @@ func TestSlowCloudJobIsInFlightNotAFailure(t *testing.T) {
 	startedAt := h.now
 	require.NoError(t, r.Reconcile(context.Background()))
 	requireNoFailure(t, metrics)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
-	require.Equal(t, float64(startedAt.Unix()), testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")), "pending 起点是最早在跑的操作的开始时间")
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "healthy"))
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "pending"))
+	require.Equal(t, float64(startedAt.Unix()), coordinationValue(metrics, "crypto", "pending_since"), "pending 起点是最早在跑的操作的开始时间")
+	require.Zero(t, coordinationValue(metrics, "crypto", "last_success"))
 
 	// 下一轮：操作仍在跑，本轮跳过这些函数，同样不是失败，也不会重复起操作。
 	ensures := h.cloud.countOps("ensure", "")
@@ -181,7 +180,7 @@ func TestQuotaExceededIsClassifiedSeparatelyAndRecoversWhileThePlanIsStillOpen(t
 	require.Error(t, r.Reconcile(context.Background()))
 	require.Equal(t, float64(1), failureLabel(metrics, "quota"))
 	require.Zero(t, failureLabel(metrics, "cloud"))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+	require.Zero(t, coordinationValue(metrics, "crypto", "healthy"))
 
 	// 持续超限：仍报 quota。
 	h.now = h.now.Add(3 * time.Minute)
@@ -195,8 +194,8 @@ func TestQuotaExceededIsClassifiedSeparatelyAndRecoversWhileThePlanIsStillOpen(t
 	require.NoError(t, r.Reconcile(context.Background()))
 	require.NotNil(t, h.open(), "计划尚未生效")
 	requireNoFailure(t, metrics)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-	require.Equal(t, float64(h.now.Unix()), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "配置已下发、只等窗口结束：按对账成功上报")
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "healthy"))
+	require.Equal(t, float64(h.now.Unix()), coordinationValue(metrics, "crypto", "last_success"), "配置已下发、只等窗口结束：按对账成功上报")
 }
 
 // 只有函数个数、命名空间与账号预留并发的配额超限算 quota；参数越界、连不上、鉴权失败都按 cloud 报。
@@ -271,7 +270,7 @@ func TestDriftRepairStillRunningIsInFlightNotAFailure(t *testing.T) {
 	metrics := roundMetrics(h, r)
 	appliedFleet(t, h, r)
 	r.opWaitMax = 50 * time.Millisecond
-	lastSuccess := testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto"))
+	lastSuccess := coordinationValue(metrics, "crypto", "last_success")
 	require.NotZero(t, lastSuccess)
 	name := tamperOne(h)
 	release := blockWrites(t, h, "UpdateFunctionConfiguration", name)
@@ -282,10 +281,10 @@ func TestDriftRepairStillRunningIsInFlightNotAFailure(t *testing.T) {
 	requireNoFailure(t, metrics)
 	require.True(t, r.ops().busy(opKeyOf(name)), "修复操作还在跑，结束前不会重复起")
 	require.True(t, r.lastVerified.Before(h.now), "还没核对完毕，几分钟后再读回")
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
-	require.Equal(t, float64(repairAt.Unix()), testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")))
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "pending"))
+	require.Equal(t, float64(repairAt.Unix()), coordinationValue(metrics, "crypto", "pending_since"))
 	// 操作刚开始、没有卡住：对账本身正常，成功时间照常前进（大批量升级可能连续跑十几分钟，期间一直有在跑的操作）。
-	fresh := testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto"))
+	fresh := coordinationValue(metrics, "crypto", "last_success")
 	require.Equal(t, float64(h.now.Unix()), fresh)
 	require.Greater(t, fresh, lastSuccess)
 
@@ -297,11 +296,11 @@ func TestDriftRepairStillRunningIsInFlightNotAFailure(t *testing.T) {
 
 	// 最早的操作超过 10 分钟仍在跑：说明卡住了，不再刷新成功时间，由 Monitor 的对账陈旧判定发现。
 	h.now = repairAt.Add(operationStuckAge + time.Minute)
-	stuckBefore := testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto"))
+	stuckBefore := coordinationValue(metrics, "crypto", "last_success")
 	require.NoError(t, h.reconcile(r))
 	requireNoFailure(t, metrics)
-	require.Equal(t, stuckBefore, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
-	require.Equal(t, float64(repairAt.Unix()), testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")), "pending 起点仍是最早操作的开始时间")
+	require.Equal(t, stuckBefore, coordinationValue(metrics, "crypto", "last_success"))
+	require.Equal(t, float64(repairAt.Unix()), coordinationValue(metrics, "crypto", "pending_since"), "pending 起点仍是最早操作的开始时间")
 	require.Equal(t, ensures, h.cloud.countOps("ensure", name))
 
 	// 操作结束后恢复：成功时间前进，没有在跑的操作。
@@ -309,8 +308,8 @@ func TestDriftRepairStillRunningIsInFlightNotAFailure(t *testing.T) {
 	h.waitOps(r)
 	h.now = h.now.Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
-	require.Greater(t, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), stuckBefore)
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
+	require.Greater(t, coordinationValue(metrics, "crypto", "last_success"), stuckBefore)
+	require.Zero(t, coordinationValue(metrics, "crypto", "pending"))
 	require.NotEqual(t, "tampered", h.mustFunction(name).Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"])
 }
 
@@ -329,9 +328,9 @@ func TestUpgradePendingBeforeEnableStillFinishesTheRound(t *testing.T) {
 	r.finishRound(errCodeUpgradePending)
 
 	requireNoFailure(t, metrics)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
-	require.Equal(t, float64(op.startedAt.Unix()), testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")))
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "healthy"))
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "pending"))
+	require.Equal(t, float64(op.startedAt.Unix()), coordinationValue(metrics, "crypto", "pending_since"))
 
 	// 其他错误不是等待，不恢复健康。
 	_ = r.fail("cloud", errors.New("boom"))
@@ -382,12 +381,12 @@ func TestFinishRoundDoesNotClearFailuresRecordedBetweenRounds(t *testing.T) {
 	require.NoError(t, r.Reconcile(context.Background()))
 	require.Equal(t, float64(1), failureLabel(metrics, "package"), "package 是独立的失败原因，不归为 cloud")
 	require.Zero(t, failureLabel(metrics, "cloud"))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+	require.Zero(t, coordinationValue(metrics, "crypto", "healthy"))
 
 	// 下一轮没有任何失败：恢复。
 	require.NoError(t, r.Reconcile(context.Background()))
 	requireNoFailure(t, metrics)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "healthy"))
 }
 
 func TestEnableAllReadbackFailureIsRecordedAndNotClearedByTheUpgradeWait(t *testing.T) {
@@ -411,14 +410,14 @@ func TestEnableAllReadbackFailureIsRecordedAndNotClearedByTheUpgradeWait(t *test
 	require.ErrorIs(t, err, errCodeUpgradePending)
 	require.Equal(t, float64(1), failureLabel(metrics, "cloud"))
 	require.Zero(t, failureLabel(metrics, "quota"))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+	require.Zero(t, coordinationValue(metrics, "crypto", "healthy"))
 }
 
 func TestOpenPlanWaitingForItsWindowCountsAsReconciled(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	metrics := roundMetrics(h, r)
-	lastSuccess := func() float64 { return testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")) }
+	lastSuccess := func() float64 { return coordinationValue(metrics, "crypto", "last_success") }
 
 	// 新计划的过渡配置下发完、等窗口结束：本轮按对账成功上报，计划仍然未收尾。
 	require.NoError(t, h.reconcile(r))
@@ -432,7 +431,7 @@ func TestOpenPlanWaitingForItsWindowCountsAsReconciled(t *testing.T) {
 	require.NoError(t, h.reconcile(r))
 	require.NotNil(t, h.open())
 	require.Equal(t, float64(h.now.Unix()), lastSuccess())
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")), "计划未收尾，pending 照常上报")
+	require.Equal(t, float64(1), coordinationValue(metrics, "crypto", "pending"), "计划未收尾，pending 照常上报")
 	waitingAt := h.now
 
 	// 过了窗口结束仍收不了尾（生效日志写不进去）：不再刷新，Monitor 按对账陈旧报出来。
@@ -449,12 +448,12 @@ func TestOpenPlanWaitingDoesNotHideFailuresFromTheSameRound(t *testing.T) {
 	metrics := roundMetrics(h, r)
 	require.NoError(t, h.reconcile(r))
 	require.NotNil(t, h.open())
-	before := testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto"))
+	before := coordinationValue(metrics, "crypto", "last_success")
 
 	// 本轮之前的步骤失败过：等窗口期间也不上报成功。
 	h.now = h.now.Add(10 * time.Second)
 	_ = r.fail("package", errors.New("resolve code package: unavailable"))
 	require.NoError(t, h.reconcile(r))
-	require.Equal(t, before, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
+	require.Equal(t, before, coordinationValue(metrics, "crypto", "last_success"))
 	require.Equal(t, float64(1), failureLabel(metrics, "package"))
 }

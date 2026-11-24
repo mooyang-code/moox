@@ -351,41 +351,6 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 	require.Equal(t, domain.CheckStatusOK, view.Status)
 }
 
-func TestBusinessFreshnessReporterStoresBalanceCheckInSystemSpace(t *testing.T) {
-	manager, repositories := openBusinessStore(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		seedSeries(t, db, "trade", "trade@control", "balance-success", "moox_trade_balance_sync_last_success_timestamp_seconds", "{}", float64(now.Unix()), now)
-		seedSeries(t, db, "trade", "trade@control", "balance-run", "moox_trade_balance_sync_last_run_timestamp_seconds", "{}", float64(now.Unix()), now)
-		seedSeries(t, db, "trade", "trade@control", "balance-failures", "moox_trade_balance_sync_consecutive_failures", "{}", 0, now)
-		seedSeries(t, db, "trade", "trade@control", "balance-difference", "moox_trade_balance_sync_max_difference_ratio", "{}", 0, now)
-		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
-	})
-	require.NoError(t, err)
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}, repositories)
-	require.NoError(t, run(t.Context()))
-	row := checkRow(t, repositories, events.SystemSpaceID, "balance:trade")
-	require.NotNil(t, row)
-	require.Equal(t, domain.CheckStatusOK, row.Status)
-}
-
-func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
-	manager, repositories := openBusinessStore(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		seedSeries(t, db, "storage-primary", "storage-primary@storage", "outbox-pending", "moox_storage_outbox_pending_entries", `{}`, 12, now)
-		seedSeries(t, db, "storage-primary", "storage-primary@storage", "outbox-age", "moox_storage_outbox_oldest_age_seconds", `{}`, 240, now)
-		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
-	})
-	require.NoError(t, err)
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}, repositories)
-	require.NoError(t, run(t.Context()))
-	row := checkRow(t, repositories, events.SystemSpaceID, "data_delivery:storage_outbox")
-	require.NotNil(t, row)
-	require.Equal(t, domain.CheckStatusDown, row.Status)
-	require.Contains(t, row.Reason, "积压 12 条")
-}
-
 func commitSeriesForTest(t *testing.T, messages *monmetrics.MetricMessageStore, eventID, service string, observed time.Time, names ...string) {
 	t.Helper()
 	samples := make([]monmetrics.Sample, 0, len(names))

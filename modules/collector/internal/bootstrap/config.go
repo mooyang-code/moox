@@ -46,6 +46,22 @@ type Config struct {
 	Stream StreamConfig `yaml:"stream"`
 	// Cloud 是 Collector 直接调腾讯云的参数：云函数接口限频与日志服务（CLS）开通。
 	Cloud CloudConfig `yaml:"cloud"`
+	// PlanHealth 是采集计划协调的告警线。
+	PlanHealth PlanHealthConfig `yaml:"plan_health"`
+}
+
+// PlanHealthConfig 是采集计划协调的告警线（关注项 fetch_coordination_failing）：最近一次对账成功超过 StaleAfter，
+// 或协调失败、且进行中的协调已超过 PendingGrace 时上报。
+type PlanHealthConfig struct {
+	StaleAfter   time.Duration `yaml:"stale_after"`
+	PendingGrace time.Duration `yaml:"pending_grace"`
+}
+
+func (c PlanHealthConfig) validate() error {
+	if c.StaleAfter <= 0 || c.PendingGrace <= 0 {
+		return fmt.Errorf("plan_health: stale_after 与 pending_grace 必须大于 0")
+	}
+	return nil
 }
 
 // CloudConfig 是 Collector 直接调腾讯云的参数。
@@ -221,6 +237,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Cloud.validate(); err != nil {
 		return nil, err
 	}
+	if err := cfg.PlanHealth.validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateSCFPlan(); err != nil {
 		return nil, err
 	}
@@ -307,6 +326,7 @@ func Default() *Config {
 		EgressLimits: EgressLimitsConfig{Eastmoney: cnstock.DefaultRequestLimitConfig()},
 		Stream:       defaultStreamConfig(),
 		Cloud:        CloudConfig{CLS: cloud.DefaultCLSConfig()},
+		PlanHealth:   PlanHealthConfig{StaleAfter: 15 * time.Minute, PendingGrace: 5 * time.Minute},
 		Delist:       DelistConfig{AutoDetect: true},
 		SCFEntry:     gatewayclient.ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage", Caller: "scf-collector", KeyFile: "../../secrets/scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{

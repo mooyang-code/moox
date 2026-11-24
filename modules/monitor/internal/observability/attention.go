@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -86,4 +87,13 @@ func (b Builder) buildAttentionStatuses(ctx context.Context, now time.Time) ([]B
 		out = append(out, status)
 	}
 	return out, nil
+}
+
+// labelValue 取序列标签里的一项；标签不是合法 JSON 时返回空。
+func labelValue(labelsJSON, key string) string {
+	var labels map[string]string
+	if json.Unmarshal([]byte(labelsJSON), &labels) != nil {
+		return ""
+	}
+	return labels[key]
 }

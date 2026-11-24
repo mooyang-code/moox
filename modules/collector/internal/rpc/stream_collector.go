@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -40,7 +41,9 @@ type StreamService struct {
 	syncer      SubjectSyncer
 	// tradingStatus 在疑似下架触发的立即同步之后，对那个市场再检测一次交易状态，让停牌分钟级生效（可为空）。
 	tradingStatus TradingStatusRunner
-	now           func() time.Time
+	// attention 上报推送连续缺失（stream_periods_missing，见 stream_attention.go；可为空）。
+	attention *report.Attention
+	now       func() time.Time
 
 	mu      sync.Mutex
 	recent  map[string][]*pb.StreamPeriodStat
@@ -157,7 +160,7 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 		s.metrics.ObservePeriod(spaceID, fetchplan.StreamPeriodObservation{
 			Market: period.GetMarket(), DatasetID: period.GetDatasetId(), Frequency: period.GetFrequency(), Expected: int(period.GetExpected()), Arrived: int(period.GetArrived()),
 			Missing: int(period.GetMissing()), Suspected: int(period.GetSuspected()), Committed: period.GetCommitted(),
-			CommitDone: time.Duration(period.GetCommitDoneMs()) * time.Millisecond, FailedStreak: s.streaks[key],
+			CommitDone: time.Duration(period.GetCommitDoneMs()) * time.Millisecond,
 		})
 		recent := append(s.recent[spaceID], period)
 		if len(recent) > recentStreamPeriods {
@@ -165,6 +168,7 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 		}
 		s.recent[spaceID] = recent
 	}
+	s.publishMissingLocked()
 	markets := map[string][]string{}
 	for _, suspect := range req.GetSuspects() {
 		markets[suspect.GetMarket()] = append(markets[suspect.GetMarket()], suspect.GetSubjectId()+"（"+suspect.GetReason()+"）")

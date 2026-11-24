@@ -12,13 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 索引文件超限的 View 列进关注项 view_file_over_limit，清空后回到 0；没设上报器（storage-primary 进程）时什么都不做。
 func TestViewMetricsViewFileOverLimit(t *testing.T) {
 	metrics, err := NewViewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
-	metrics.SetViewFileOverLimitCount(2)
-	assert.Equal(t, float64(2), testutil.ToFloat64(metrics.viewFileOverLimit))
-	metrics.SetViewFileOverLimitCount(-1)
-	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.viewFileOverLimit))
+	metrics.SetViewFilesOverLimit([]string{"crypto/b"})
+	attention, err := NewViewAttention(prometheus.NewRegistry())
+	require.NoError(t, err)
+	metrics.SetAttention(attention)
+	metrics.SetViewFilesOverLimit([]string{"crypto/b", "crypto/a"})
+	assert.True(t, strings.HasPrefix(attention.Active()[AttentionViewFileOverLimit], "crypto/a；crypto/b。"))
+	metrics.SetViewFilesOverLimit(nil)
+	assert.Empty(t, attention.Active())
 }
 
 func TestViewMetricsSummarizeSubjectsPerView(t *testing.T) {

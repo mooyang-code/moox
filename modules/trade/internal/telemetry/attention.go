@@ -54,6 +54,8 @@ const (
 	AttentionClockSkew = "clock_skew"
 	// AttentionIsolatedPosition 是交易所账户里有逐仓持仓：moox 只支持全仓单向，该持仓不入投影，所在组合已暂停（已暂停的不改原因）。
 	AttentionIsolatedPosition = "isolated_position"
+	// AttentionBalanceSyncFailing 是交易账户余额同步异常：连续失败 3 次、超过 15 分钟没成功，或本地与交易所余额差异超过 runtime.balance_difference_threshold。
+	AttentionBalanceSyncFailing = "balance_sync_failing"
 )
 
 // attentionKinds 是 Trade 声明的全部关注项：名称是告警标题，全部是故障级。每种都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -79,6 +81,7 @@ var attentionKinds = []report.AttentionKind{
 	{Kind: AttentionFillIngestFailed, Name: "成交没能记进账本，账户卡在同一笔", Severity: report.AttentionCritical},
 	{Kind: AttentionClockSkew, Name: "本机时钟与交易所相差过大，请检查 NTP", Severity: report.AttentionCritical},
 	{Kind: AttentionIsolatedPosition, Name: "交易所账户里有逐仓持仓，moox 只支持全仓单向", Severity: report.AttentionCritical},
+	{Kind: AttentionBalanceSyncFailing, Name: "账户余额同步异常", Severity: report.AttentionCritical},
 }
 
 // Attention 是 Trade 的关注项指标（moox_attention_active）。

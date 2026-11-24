@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -43,4 +44,26 @@ func TestStreamHeartbeatAttention(t *testing.T) {
 
 	require.NoError(t, db.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: "crypto", InstanceID: "hk-1", Applied: "{}", Status: "{}", HeartbeatAt: now}))
 	require.Empty(t, refresh(build(now.Add(-time.Hour), now)), "心跳恢复后回到 0")
+}
+
+// 连续 3 期有失败标的才上报，期数增加 detail 不变；有一期正常即恢复。
+func TestStreamPeriodsMissingAttention(t *testing.T) {
+	_, db := newReregisterFixture(t)
+	ctx := context.Background()
+	attn := attention.New(prometheus.NewRegistry())
+	stream := NewStreamService(db, StreamSettings{}, nil, nil)
+	stream.SetAttention(attn)
+	report := func(missing int32) string {
+		_, err := stream.ReportStreamPeriods(ctx, &pb.ReportStreamPeriodsReq{SpaceId: "crypto", Periods: []*pb.StreamPeriodStat{
+			{Market: "swap", Frequency: "1m", DatasetId: "ds_swap", Expected: 10, Arrived: 10 - missing, Missing: missing, Committed: true},
+		}})
+		require.NoError(t, err)
+		return attn.Active()[attention.KindStreamPeriodsMissing]
+	}
+	require.Empty(t, report(1))
+	require.Empty(t, report(1))
+	first := report(1)
+	require.Contains(t, first, "crypto/swap/ds_swap 1m")
+	require.Equal(t, first, report(2), "期数增加 detail 不变")
+	require.Empty(t, report(0))
 }

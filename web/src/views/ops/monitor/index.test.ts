@@ -144,7 +144,7 @@ describe("monitor page", () => {
           reason: "采集计划指标已停止上报",
           raw_error: "metrics stale",
           triggered_at: "2026-10-16T02:58:20Z",
-          object: { type: "business", kind: "market_fetch" }
+          object: { type: "business", kind: "kline_freshness" }
         },
         {
           id: "reporter",

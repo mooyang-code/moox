@@ -666,12 +666,10 @@ export function pipelineStages(
 const KIND_LABELS: Record<string, string> = {
   kline_freshness: "K 线新鲜度",
   market_canary: "行情探针",
-  market_fetch: "采集计划对账",
-  data_delivery: "数据投递",
-  view_file: "View 索引文件",
   metrics_ingest: "指标入库",
   module: "模块运行",
-  balance: "账户余额同步",
+  archive_coverage: "数据归档",
+  observation: "观测输入",
   attention: "关注项",
   subject_tag: "标的标签巡检"
 };

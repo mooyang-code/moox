@@ -49,18 +49,11 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
 		t.Fatalf("observability defaults = %+v", cfg.Observability)
 	}
-	if cfg.Observability.BalanceDifferenceThreshold != 0.05 {
-		t.Fatalf("balance difference threshold = %v", cfg.Observability.BalanceDifferenceThreshold)
-	}
 	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
 		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
 	}
 	if cfg.MarketCanary.Enabled || len(cfg.MarketCanary.Subjects) != 0 {
 		t.Fatalf("market canary must come from deployment config, defaults = %+v", cfg.MarketCanary)
-	}
-	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
-		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute {
-		t.Fatalf("market health defaults = %+v", cfg.MarketHealth)
 	}
 }
 
@@ -359,7 +352,7 @@ func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
+func TestMonitorConfigValidatesMarketCanaryCoverage(t *testing.T) {
 	cfg := Default()
 	cfg.Deployment.Enabled = false
 	cfg.MarketCanary.Enabled = true
@@ -367,20 +360,14 @@ func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
 		t.Fatalf("Validate() error = %v, want closed_bar_min_coverage error", err)
 	}
-
-	cfg = Default()
-	cfg.Deployment.Enabled = false
-	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
-		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
-	}
 }
 
-// 发布租约已删除，宽限期配置项 timer_coordination_lease_grace 随之删除；严格解码下再写就报错。
-func TestMonitorConfigRejectsRemovedLeaseGrace(t *testing.T) {
-	_, err := Load(writeConfig(t, "market_health:\n  timer_coordination_lease_grace: 10m\n"))
-	if err == nil || !strings.Contains(err.Error(), "timer_coordination_lease_grace") {
-		t.Fatalf("Load() error = %v, want unknown field timer_coordination_lease_grace", err)
+// 采集计划协调与余额同步的告警线已交给 Collector、Trade 自己判断，market_health 段与余额差异上限随之删除；严格解码下再写就报错。
+func TestMonitorConfigRejectsRemovedThresholds(t *testing.T) {
+	for _, raw := range []string{"market_health:\n  timer_coordination_stale_after: 15m\n", "observability:\n  balance_difference_threshold: 0.05\n"} {
+		if _, err := Load(writeConfig(t, raw)); err == nil {
+			t.Fatalf("Load(%q) 应拒绝已删除的配置项", raw)
+		}
 	}
 }
 

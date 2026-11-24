@@ -117,6 +117,7 @@ func runPrimaryRole() error {
 		return fmt.Errorf("initialize storage-primary attention: %w", err)
 	}
 	deadlineRejections := observability.NewDeadlineRejections(attention)
+	attention.AddSource("outbox", storagerelay.OutboxAttention(observability.DefaultViewMetrics))
 	svc, err := primarystore.New(primarystore.Options{
 		Store: store, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot,
 		DatasetMetrics: datasetMetrics, DeadlineRejections: deadlineRejections,

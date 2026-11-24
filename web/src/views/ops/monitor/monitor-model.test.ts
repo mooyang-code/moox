@@ -30,7 +30,7 @@ describe("current alerts", () => {
         title: "行情采集 scf_timer 协调",
         reason: "采集计划指标已停止上报",
         triggered_at: at(2, 20),
-        object: { type: "business", kind: "market_fetch" }
+        object: { type: "business", kind: "kline_freshness" }
       },
       {
         id: "reporter",
@@ -385,9 +385,9 @@ describe("layers", () => {
             reason: "已停用或移除，不再检查"
           },
           {
-            check_id: "market_fetch:scf_timer",
-            kind: "market_fetch",
-            module: "scf_timer",
+            check_id: "attention:collector:fetch_coordination_failing",
+            kind: "attention",
+            module: "collector",
             status: "down",
             reason: "采集计划指标已停止上报"
           }
@@ -398,9 +398,9 @@ describe("layers", () => {
     );
     expect(kinds.map(kind => [kind.label, kind.healthy, kind.total, kind.inactive, kind.tone])).toEqual([
       ["K 线新鲜度", 1, 2, 1, "ok"],
-      ["采集计划对账", 0, 1, 0, "bad"]
+      ["关注项", 0, 1, 0, "bad"]
     ]);
-    expect(kinds[1].items[0]).toMatchObject({ title: "采集计划对账 · scf_timer", attention: true });
+    expect(kinds[1].items[0]).toMatchObject({ title: "关注项 · collector", attention: true });
   });
 
   it("draws host meters against their alert thresholds", () => {

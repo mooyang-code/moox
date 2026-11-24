@@ -14,16 +14,22 @@ const (
 	AttentionDeadlineRejected = "deadline_rejected"
 	// AttentionViewFollowLagging 是 storage-view 有 View 距上次追上变更日志头部超过 2 分钟。
 	AttentionViewFollowLagging = "view_follow_lagging"
+	// AttentionViewFileOverLimit 是 storage-view 有 View 的索引文件超过 max_view_file_bytes（只告警，不动数据）。
+	AttentionViewFileOverLimit = "view_file_over_limit"
+	// AttentionOutboxBacklog 是 storage-primary 的数据变更投递有积压、最早一条已等待超过 2 分钟。
+	AttentionOutboxBacklog = "outbox_backlog"
 )
 
 // PrimaryAttentionKinds 是 storage-primary 声明的关注项。
 var PrimaryAttentionKinds = []report.AttentionKind{
 	{Kind: AttentionDeadlineRejected, Name: "存储截止拒绝", Severity: report.AttentionCritical},
+	{Kind: AttentionOutboxBacklog, Name: "数据变更投递积压", Severity: report.AttentionCritical},
 }
 
 // ViewAttentionKinds 是 storage-view 声明的关注项。
 var ViewAttentionKinds = []report.AttentionKind{
 	{Kind: AttentionViewFollowLagging, Name: "View 跟随数据变更落后", Severity: report.AttentionCritical},
+	{Kind: AttentionViewFileOverLimit, Name: "View 索引文件超过告警线", Severity: report.AttentionCritical},
 }
 
 // NewPrimaryAttention 注册 storage-primary 的关注项指标。

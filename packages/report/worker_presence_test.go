@@ -1,11 +1,9 @@
 package report
 
 import (
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestEvaluatePresence(t *testing.T) {
@@ -27,25 +25,20 @@ func TestEvaluatePresence(t *testing.T) {
 	}
 }
 
-// 换了一台机器后只保留当前这台的标签；两个指标都被 Monitor 采集。
-func TestWorkerPresenceKeepsOnlyCurrentWorker(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	presence, err := NewWorkerPresence(registry, "factor")
-	if err != nil {
-		t.Fatal(err)
+// 离线才报，detail 写机器与最后心跳；从没心跳过的单独说明。
+func TestPresenceAttention(t *testing.T) {
+	last := time.Date(2026, 10, 18, 6, 0, 0, 0, time.UTC)
+	if got := PresenceAttention(PresenceOnline, "factor-engine@m1", last); got != nil {
+		t.Fatalf("在线不应上报: %v", got)
 	}
-	last := time.Unix(1_800_000_000, 0)
-	presence.Set(PresenceOnline, "factor-engine@old", last)
-	presence.Set(PresenceOffline, "factor-engine@new", last)
-	if n := testutil.CollectAndCount(registry, "moox_factor_worker_presence_state"); n != 1 {
-		t.Fatalf("presence series = %d", n)
+	if got := PresenceAttention(PresenceNotRequired, "", time.Time{}); got != nil {
+		t.Fatalf("不需要时不应上报: %v", got)
 	}
-	if v := testutil.ToFloat64(presence.state.WithLabelValues("factor-engine@new")); v != PresenceOffline {
-		t.Fatalf("state = %v", v)
+	got := PresenceAttention(PresenceOffline, "factor-engine@m1", last)
+	if len(got) != 1 || !strings.Contains(got[0], "factor-engine@m1 最后心跳 10-18 06:00 UTC") {
+		t.Fatalf("离线 detail 不对: %v", got)
 	}
-	for _, name := range []string{"moox_factor_worker_presence_state", "moox_archive_worker_last_heartbeat_timestamp_seconds"} {
-		if !IsMonitoredMetric(name) {
-			t.Fatalf("%s must be reported to Monitor", name)
-		}
+	if got := PresenceAttention(PresenceOffline, "", time.Time{}); len(got) != 1 || !strings.Contains(got[0], "从未收到心跳") {
+		t.Fatalf("从未心跳 detail 不对: %v", got)
 	}
 }

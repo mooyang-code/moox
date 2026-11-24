@@ -101,3 +101,36 @@ func (h *StreamHeartbeatAttention) hasStreamingTask(ctx context.Context, spaceID
 	}
 	return false, nil
 }
+
+// streamMissingStreak 是推送连续多少个周期有失败标的（不含疑似下架）才上报 stream_periods_missing；缺的由补采补齐。
+const streamMissingStreak = 3
+
+// SetAttention 注入关注项上报器（推送连续缺失）。
+func (s *StreamService) SetAttention(attn *report.Attention) { s.attention = attn }
+
+// publishMissingLocked 按各数据集当前的连续缺失期数上报 stream_periods_missing；只随周期上报变化，Collector 重启后从零数。
+// 调用方持有 s.mu。detail 只写对象，不写期数（期数每期都变）。
+func (s *StreamService) publishMissingLocked() {
+	if s.attention == nil {
+		return
+	}
+	var missing []string
+	for key, streak := range s.streaks {
+		if streak < streamMissingStreak {
+			continue
+		}
+		// key 是 空间|市场|频率|数据集。
+		parts := strings.Split(key, "|")
+		if len(parts) != 4 {
+			continue
+		}
+		missing = append(missing, fmt.Sprintf("%s/%s/%s %s", parts[0], parts[1], parts[3], parts[2]))
+	}
+	if len(missing) == 0 {
+		s.attention.Set("stream_missing", nil)
+		return
+	}
+	sort.Strings(missing)
+	detail := fmt.Sprintf("推送连续 %d 个周期以上有标的没到（不含疑似下架，由补采补齐）：", streamMissingStreak) + strings.Join(missing, "；")
+	s.attention.Set("stream_missing", map[string][]string{attention.KindStreamPeriodsMissing: {detail}})
+}

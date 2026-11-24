@@ -146,6 +146,10 @@ func initialize(
 		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
 	manager.OnSessionRemoved = balanceMetrics.Remove
+	balanceLimit := cfg.Runtime.BalanceDifferenceThreshold
+	telemetry.Attention.AddSource("balance", func(now time.Time) map[string][]string {
+		return balanceMetrics.Attention(telemetry.AttentionBalanceSyncFailing, balanceLimit, now)
+	})
 	equityService := &equityapp.Service{Store: tradeStore, Adapters: manager, Exchanges: registry}
 	equitySampler := traderuntime.NewEquitySampler(equityService)
 	registerEquitySamplerTimer(serverInstance, equitySampler)

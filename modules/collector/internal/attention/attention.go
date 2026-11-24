@@ -22,6 +22,10 @@ const (
 	KindEastMoneyCooling = "eastmoney_cooling_down"
 	// KindStreamHeartbeatLost 是有启用推送数据集的空间，collector-stream 心跳不存在或超过 stream.heartbeat_timeout_seconds。
 	KindStreamHeartbeatLost = "stream_heartbeat_lost"
+	// KindStreamPeriodsMissing 是推送数据集连续 3 个周期有截止时仍缺的标的（疑似下架不计）。
+	KindStreamPeriodsMissing = "stream_periods_missing"
+	// KindCoordinationFailing 是采集计划协调失败，或最近一次对账成功超过 plan_health.stale_after。
+	KindCoordinationFailing = "fetch_coordination_failing"
 )
 
 // Kinds 是 Collector 声明的全部关注项。warning 只需提醒、不算故障：缺币安只读 Key 时只是现货下架改为手工登记；
@@ -33,6 +37,8 @@ var Kinds = []report.AttentionKind{
 	{Kind: KindConsumerFailed, Name: "Collector EventBus 消费者启动失败", Severity: report.AttentionCritical},
 	{Kind: KindEastMoneyCooling, Name: "东方财富请求被限流，Collector 已暂停访问", Severity: report.AttentionWarning},
 	{Kind: KindStreamHeartbeatLost, Name: "行情推送 collector-stream 心跳中断", Severity: report.AttentionCritical},
+	{Kind: KindStreamPeriodsMissing, Name: "行情推送连续缺失", Severity: report.AttentionCritical},
+	{Kind: KindCoordinationFailing, Name: "采集计划协调异常", Severity: report.AttentionCritical},
 }
 
 // Attention 是 Collector 的关注项上报器。
