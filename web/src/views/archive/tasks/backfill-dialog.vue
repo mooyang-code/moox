@@ -51,7 +51,7 @@ watch(
     prepareError.value = "";
     const request = guard.begin();
     try {
-      const rsp = await prepareArchiveTask(props.task.dataset_id, "", { silentError: true });
+      const rsp = await prepareArchiveTask(props.task.dataset_id, "");
       if (request.isLatest()) earliestMs.value = toInstantMs(rsp.earliest_backfill_from);
     } catch (cause) {
       if (request.isLatest()) prepareError.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";

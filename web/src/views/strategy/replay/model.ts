@@ -129,12 +129,9 @@ export function replayTasksText(replay: Pick<Replay, "tasks">): string {
   return tasksText(Object.fromEntries(Object.entries(replay.tasks ?? {}).map(([market, task]) => [market, task.factor_task_id])));
 }
 
-/**
- * 回放是否读取永续：永续相关的列、费率与“未计资金费与强平”的说明只在这时显示。
- * 统一数据集上的任务（键 multi）同时带现货与永续，也算读取永续。
- */
+/** 回放是否读取永续：永续相关的列、费率与“未计资金费与强平”的说明只在这时显示。 */
 export function replayUsesSwap(replay: Pick<Replay, "tasks"> | null | undefined): boolean {
-  return Boolean(replay?.tasks?.swap || replay?.tasks?.multi);
+  return Boolean(replay?.tasks?.swap);
 }
 
 /** 回放计资金费用的列：单策略回放写在回放任务上，策略池回放取池 DSL 的 strategy_pool.fees.funding_column；不计时为空串。 */
@@ -284,10 +281,9 @@ export function replayMetricsLine(raw?: string): string {
   return `累计收益 ${(metrics.total_return * 100).toFixed(2)}% · 最大回撤 ${(metrics.max_drawdown * 100).toFixed(2)}%`;
 }
 
-/** 按某个回放的配置重新发起时的表单值；用了统一数据集上的任务（multi）时返回 null，要从实例详情发起。 */
+/** 按某个回放的配置重新发起时的表单值。 */
 export function replayFormFromReplay(replay: Replay) {
   const tasks = Object.fromEntries(Object.entries(replay.tasks || {}).map(([market, task]) => [market, task.factor_task_id]));
-  if ("multi" in tasks) return null;
   const start = Date.parse(replay.start_time);
   const end = Date.parse(replay.end_time);
   return {

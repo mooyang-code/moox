@@ -16,7 +16,7 @@ vi.mock("@/store/modules/space", () => ({
 }));
 vi.mock("@/store/modules/user-info", () => ({ useUserInfoStore: () => ({ account: { user: { userName: "admin123" } } }) }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn(async () => ({ overview: ctx.overview })) } }));
-vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(async () => ({ page: { total: 4 } })) }));
+vi.mock("@/api/http", () => ({ call: vi.fn(async () => ({ page: { total: 4 } })) }));
 vi.mock("@/api/admin/activity", () => ({
   listActivityLogs: vi.fn(async () => ({
     items: [
@@ -233,7 +233,7 @@ describe("home page", () => {
   it("reads the monitor overview for all spaces so the verdict matches the monitor page", async () => {
     await render();
     // 不带空间；后台读取不弹全局提示
-    expect(monitorApi.getOverview).toHaveBeenLastCalledWith({}, { silentError: true });
+    expect(monitorApi.getOverview).toHaveBeenLastCalledWith({});
   });
 
   it("does not claim everything is normal when a tile fails to load, and keeps the last update time", async () => {

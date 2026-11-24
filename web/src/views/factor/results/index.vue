@@ -112,7 +112,7 @@ import { listAllViewColumns, listViews } from "@/api/storage/metadata";
 import type { TimeSeriesKey, View, ViewColumn } from "@/api/storage/types";
 import { getStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden } from "@/api/strategy-types";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard, type LatestRequest } from "@/utils/latest-request";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
 import TaskTabs from "@/views/factor/shared/task-tabs.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
@@ -152,7 +152,7 @@ const resultView = ref<View | null>(null);
 const viewLoading = ref(false);
 const refreshKey = ref(0);
 const readAt = ref("");
-const viewGate = new RequestGate();
+const viewGate = createLatestRequestGuard();
 
 // 有效范围的原料：视图列、分类与策略外显设置；成员清单直接来自 store（随轮询更新）。
 const viewColumns = ref<ViewColumn[]>([]);
@@ -192,7 +192,7 @@ function stamp() {
 
 async function loadResultView() {
   const current = activeInfo.value?.factor_task;
-  const token = viewGate.next();
+  const token = viewGate.begin();
   resultView.value = null;
   scopeReady.value = false;
   scopeError.value = "";
@@ -209,18 +209,17 @@ async function loadResultView() {
       status: "active",
       page: { page: 1, size: 100 }
     });
-    if (!viewGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     resultView.value = pickResultView(rsp.views || [], current);
     if (resultView.value) await loadScope(current, resultView.value, token);
   } catch (error) {
-    if (viewGate.isCurrent(token))
-      viewError.value = `结果视图读取失败：${error instanceof Error ? error.message : String(error)}`;
+    if (token.isLatest()) viewError.value = `结果视图读取失败：${error instanceof Error ? error.message : String(error)}`;
   } finally {
-    if (viewGate.isCurrent(token)) viewLoading.value = false;
+    if (token.isLatest()) viewLoading.value = false;
   }
 }
 
-async function loadScope(current: FactorTaskInfo["factor_task"], view: View, token: number) {
+async function loadScope(current: FactorTaskInfo["factor_task"], view: View, token: LatestRequest) {
   try {
     const [columns, categoryList, hidden] = await Promise.all([
       listAllViewColumns(current.space_id, view.view_id),
@@ -231,7 +230,7 @@ async function loadScope(current: FactorTaskInfo["factor_task"], view: View, tok
         ? getStrategyDisplaySettings(current.bound_instance_id).catch(() => undefined)
         : Promise.resolve(undefined)
     ]);
-    if (!viewGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     viewColumns.value = columns;
     categories.value = categoryList;
     displayHidden.value = hidden;
@@ -239,7 +238,7 @@ async function loadScope(current: FactorTaskInfo["factor_task"], view: View, tok
     applyRouteConditions(true);
     scopeReady.value = true;
   } catch (error) {
-    if (!viewGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     scopeError.value = `结果列读取失败：${error instanceof Error ? error.message : String(error)}`;
   }
 }

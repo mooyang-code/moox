@@ -1,20 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { Strategy } from "@/api/strategy-types";
-import {
-  type ReplayFormState,
-  replayDateOnly,
-  replayFactorTasks,
-  replayDeclared,
-  replayDriftHint,
-  replayFundingColumn,
-  replayIsPool,
-  replayMarkets,
-  replayPool,
-  replaySourceOf,
-  replayTuned,
-  validateReplayForm,
-  wholeDays
-} from "./replay-form-model";
+import { fixtureRequirement } from "../../../../tests/strategy-requirement";
+import * as model from "./replay-form-model";
+import { replaySourceOf, wholeDays, type ReplayFormState } from "./replay-form-model";
+
+// 页面会把后端按定义或 DSL 草稿推出的要求写进 form.requirement；这里按同样的规则模拟，测试仍按（表单, 定义列表）调用。
+function withRequirement(form: ReplayFormState, list: Strategy[]): ReplayFormState {
+  const lookup = (id: string) => list.find(item => item.strategy_id === id)?.dsl_yaml ?? null;
+  // 从实例发起时按实例引用的定义读
+  const dsl = form.instance_id ? (lookup(form.instance_strategy_id ?? "") ?? "") : model.replayDslText(form, list);
+  return { ...form, requirement: dsl ? fixtureRequirement(dsl, lookup) : null };
+}
+const replayPool = (form: ReplayFormState, list: Strategy[]) => model.replayPool(withRequirement(form, list));
+const replayDeclared = (form: ReplayFormState, list: Strategy[]) => model.replayDeclared(withRequirement(form, list));
+const replayMarkets = (form: ReplayFormState, list: Strategy[]) => model.replayMarkets(withRequirement(form, list));
+const replayFactorTasks = (form: ReplayFormState, list: Strategy[]) => model.replayFactorTasks(withRequirement(form, list));
+const replayDateOnly = (form: ReplayFormState, list: Strategy[], tasks: Parameters<typeof model.replayDateOnly>[1]) =>
+  model.replayDateOnly(withRequirement(form, list), tasks);
+const replayFundingColumn = (form: ReplayFormState, list: Strategy[] = []) =>
+  model.replayFundingColumn(withRequirement(form, list), list);
+const validateReplayForm = (form: ReplayFormState, list: Strategy[] = []) =>
+  model.validateReplayForm(withRequirement(form, list), list);
+const replayIsPool = (form: ReplayFormState, list: Strategy[]) => model.replayIsPool(withRequirement(form, list), list);
+const { replayDriftHint, replayTuned } = model;
 
 const strategies = [
   { strategy_id: "s1", dsl_yaml: "name: a\nmarket: {select: both, prefer: spot}\n" },
@@ -52,9 +60,6 @@ describe("replay form model", () => {
       "spot"
     ]);
     expect(replayMarkets({ ...base, instance_id: "i1", tasks: { swap: "b", spot: "a" } }, strategies)).toEqual(["spot", "swap"]);
-    // 统一数据集上的实例：任务键是 multi，回放读这一个任务。
-    expect(replayMarkets({ ...base, instance_id: "i1", tasks: { multi: "u" } }, strategies)).toEqual(["multi"]);
-    expect(replayFactorTasks({ ...base, instance_id: "i1", tasks: { multi: "u" } }, strategies)).toEqual({ multi: "u" });
     expect(replayMarkets({ ...base, strategy_id: "s3", single_market: "" }, strategies)).toEqual([]);
     expect(replayMarkets({ ...base, strategy_id: "s3", single_market: "equity" }, strategies)).toEqual(["equity"]);
   });
@@ -140,6 +145,35 @@ describe("replay form model", () => {
   });
 });
 
+describe("写了参考市场的策略", () => {
+  // 主帧只有现货，参考市场永续只用于年龄判定：回放也要登记参考市场的任务，资金费与股票判断只看主帧
+  const withReference = [
+    {
+      strategy_id: "r",
+      dsl_yaml: "name: r\nbar: 1h\nmarket: {select: spot, reference: [swap]}\nuniverse: {min_age_bars: 3, age_markets: all}\n"
+    }
+  ] as Strategy[];
+  const form = { ...base, strategy_id: "r", tasks: { spot: "ftask_spot", swap: "ftask_swap" }, funding_column: "funding_rate" };
+
+  it("参考市场的任务也提交，因子现算可用，不带资金费列", () => {
+    expect(replayMarkets(form, withReference)).toEqual(["spot", "swap"]);
+    expect(replayFactorTasks(form, withReference)).toEqual({ spot: "ftask_spot", swap: "ftask_swap" });
+    expect(model.replayMainMarkets(withRequirement(form, withReference))).toEqual(["spot"]);
+    expect(model.replayIsReference(withRequirement(form, withReference), "swap")).toBe(true);
+    expect(validateReplayForm({ ...form, input: "compute" }, withReference)).toBe("");
+    expect(replayFundingColumn(form, withReference)).toBe("");
+  });
+
+  it("从实例发起时原样提交实例的任务键，资金费列只看主帧", () => {
+    const instanceForm = { ...form, instance_id: "i1", instance_strategy_id: "r" };
+    expect(replayFactorTasks(instanceForm, withReference)).toEqual({ spot: "ftask_spot", swap: "ftask_swap" });
+    expect(validateReplayForm({ ...instanceForm, input: "compute" }, withReference)).toBe("");
+    expect(replayFundingColumn(instanceForm, withReference)).toBe("");
+    // 实例引用的定义还没读到时按全部市场算，永续在内就带资金费列
+    expect(replayFundingColumn({ ...instanceForm, instance_strategy_id: "" }, withReference)).toBe("funding_rate");
+  });
+});
+
 describe("策略池回放表单", () => {
   const members = [
     { strategy_id: "m_spot", dsl_yaml: "name: a\nbar: 1h\nmarket: {select: spot}\n" },
@@ -158,7 +192,7 @@ describe("策略池回放表单", () => {
 
   it("策略池读成员所需市场的并集，不用先选任务所属的市场", () => {
     const catalog = [...members, both];
-    expect(replayPool(form(both), catalog)).toEqual({ markets: ["spot", "swap"], problems: [] });
+    expect(replayPool(form(both), catalog)).toMatchObject({ pool: true, taskKeys: ["spot", "swap"], problems: [] });
     expect(replayDeclared(form(both), catalog)).toBe(true);
     expect(replayMarkets(form(both), catalog)).toEqual(["spot", "swap"]);
     expect(replayFactorTasks(form(both), catalog)).toEqual({ spot: "ftask_spot", swap: "ftask_swap" });
@@ -172,7 +206,7 @@ describe("策略池回放表单", () => {
     const ghost = pool("    - {id: a, strategy: m_spot}\n    - {id: b, strategy: ghost}\n");
     expect(validateReplayForm(form(ghost), [...members, ghost])).toContain("成员 b 引用的策略 ghost 不存在");
     const mixed = pool("    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_stock}\n");
-    expect(validateReplayForm(form(mixed), [...members, mixed])).toContain("策略池的成员还不能回放");
+    expect(validateReplayForm(form(mixed), [...members, mixed])).toContain("这份定义还不能回放");
   });
 
   it("策略池的资金费写在池 DSL 里，表单里的资金费列不提交", () => {
@@ -231,9 +265,10 @@ describe("策略池回放表单", () => {
     expect(replayTuned({ ...base, strategy_id: "", instance_id: "i1", instance_strategy_id: "t1" }, tuned)).toBe(true);
     expect(validateReplayForm(form, tuned)).toContain("因子现算");
     expect(validateReplayForm({ ...form, input: "compute" }, tuned)).toBe("");
+    // 现货加永续各开一个现算会话：两个主帧任务都放行
     expect(
       validateReplayForm({ ...base, strategy_id: "s1", tasks: { spot: "a", swap: "b" }, input: "compute" }, strategies)
-    ).toContain("只支持一个计算任务");
+    ).toBe("");
     expect(
       validateReplayForm(
         { ...base, strategy_id: "s3", single_market: "equity", tasks: { equity: "e" }, input: "compute" },

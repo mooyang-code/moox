@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue, { Message } from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TradeResponseError, type LogicalAccount, type TradingAccount } from "@/api/trade";
+import { type LogicalAccount, type TradingAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({ addLogicalAccountMember: vi.fn() }));
 vi.mock("@/api/trade", async () => ({
@@ -9,6 +9,11 @@ vi.mock("@/api/trade", async () => ({
   ...mocks
 }));
 import MemberDialog from "./member-dialog.vue";
+import { RequestError } from "@/api/http";
+
+// 交易服务的业务失败：消息就是 ret_info.msg，响应体原样带上
+const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
+  new RequestError(response.ret_info.msg, response);
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -63,7 +68,7 @@ describe("编辑组合成员", () => {
     expect(document.body.textContent).not.toContain("接管账户里已有的持仓");
     vm.form.enabled = true;
     mocks.addLogicalAccountMember.mockRejectedValueOnce(
-      new TradeResponseError({ ret_info: { code: 20, msg: "执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位" } })
+      tradeFailure({ ret_info: { code: 20, msg: "执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位" } })
     );
     expect(await vm.save()).toBe(false);
     await flushPromises();

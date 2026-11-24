@@ -1,5 +1,5 @@
 import { onMounted, onUnmounted, ref } from "vue";
-import { serverNow } from "@/api/admin/http";
+import { serverNow } from "@/api/http";
 
 // 比较服务端给出的时间（目标有效期等）要用服务端时钟：浏览器时钟可能不准；还没读到服务端时间时用浏览器时钟。
 const now = () => serverNow() ?? Date.now();

@@ -127,7 +127,7 @@ import {
   upsertFactorCategory
 } from "@/api/factor";
 import type { FactorCategory, FactorInfo, FactorTaskInfo } from "@/api/factor/types";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import {
   categoryCounts,
@@ -168,7 +168,7 @@ const loadError = ref("");
 const detailId = computed(() => (typeof route.query.detail === "string" ? route.query.detail : ""));
 const selectedKeys = ref<string[]>([]);
 const pagination = reactive({ current: 1, pageSize: 20, pageSizeOptions: [20, 50, 100], showPageSize: true, showTotal: true });
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** 使用情况下拉清空时回到“全部”。 */
@@ -223,7 +223,7 @@ function changePageSize(size: number) {
   pagination.current = 1;
 }
 
-/** 选中的分类写进 ?category=；路由声明了 reuseOnQuery，页面不重建，关键词等筛选保持。 */
+/** 选中的分类写进 ?category=；query 变化时页面不重建，关键词等筛选保持。 */
 function selectCategory(categoryId: string) {
   mobileTreeVisible.value = false;
   if (categoryId === selectedCategory.value) return;
@@ -325,7 +325,7 @@ async function moveSelected(categoryId: string) {
 
 /** 列表默认不带源码（D24）；详情抽屉再按需 GetFactor。 */
 async function load() {
-  const token = gate.next();
+  const token = gate.begin();
   loading.value = true;
   try {
     const all: FactorInfo[] = [];
@@ -335,15 +335,15 @@ async function load() {
       all.push(...batch);
       if (!rsp.page_result?.has_more || !batch.length) break;
     }
-    if (!gate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     items.value = all;
     loadError.value = "";
     const present = new Set(all.map(item => item.factor.factor_id));
     selectedKeys.value = selectedKeys.value.filter(id => present.has(id));
   } catch (error) {
-    if (gate.isCurrent(token)) loadError.value = error instanceof Error ? error.message : "因子定义加载失败";
+    if (token.isLatest()) loadError.value = error instanceof Error ? error.message : "因子定义加载失败";
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 

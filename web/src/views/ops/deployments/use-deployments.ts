@@ -161,23 +161,22 @@ export function useDeployments() {
     drawerKey.value = "";
     await router.replace({ query: next });
   }
-  /** background：后台轮询，不弹全局提示，失败写在页面上并保留上次的数据。 */
-  async function refresh(background = false) {
+  /** 后台轮询与手动刷新共用：失败写在页面上并保留上次的数据。 */
+  async function refresh() {
     const request = guard.begin();
     loading.value = true;
-    const options = { silentError: background };
     try {
       const [rawCatalog, hostRows, deploymentItems, health] = await Promise.all([
-        getCatalog(options),
-        listAllDeploymentHosts(options),
-        listAllDeployments(options),
+        getCatalog(),
+        listAllDeploymentHosts(),
+        listAllDeployments(),
         monitorApi
-          .getOverview({}, options)
+          .getOverview({})
           .then(result => ({ overview: result.overview, error: "" }))
           .catch(reason => ({ overview: undefined, error: reason instanceof Error ? reason.message : String(reason) }))
       ]);
       const definition = decodeCatalog(rawCatalog);
-      const snapshots = await loadHostRoutes(hostRows, hostId => getHostRoutes(hostId, options));
+      const snapshots = await loadHostRoutes(hostRows, hostId => getHostRoutes(hostId));
       if (!request.isLatest()) return;
       catalog.value = definition;
       catalogHash.value = rawCatalog.sha256;
@@ -198,7 +197,7 @@ export function useDeployments() {
     }
   }
   // 每 15 秒后台刷新一次（页面隐藏时暂停、不叠加）
-  usePolling(() => refresh(true), 15_000);
+  usePolling(() => refresh(), 15_000);
   onMounted(() => void refresh());
   onBeforeUnmount(() => {
     guard.invalidate();

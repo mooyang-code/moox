@@ -12,7 +12,7 @@
     <div class="aside">
       <Logo />
       <a-layout-sider class="layout_side" :width="220">
-        <a-scrollbar style="height: 100%; overflow: auto" outer-class="scrollbar"><Menu :route-tree="routeTree" /></a-scrollbar>
+        <a-scrollbar style="height: 100%; overflow: auto" outer-class="scrollbar"><Menu /></a-scrollbar>
       </a-layout-sider>
     </div>
   </a-drawer>
@@ -23,11 +23,8 @@ import Logo from "@/layout/components/Logo/index.vue";
 import Menu from "@/layout/components/Menu/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
-import { useRoutesConfigStore } from "@/store/modules/route-config";
 const themeStore = useThemeConfig();
 const { collapsed } = storeToRefs(themeStore);
-const routerStore = useRoutesConfigStore();
-const { routeTree } = storeToRefs(routerStore);
 
 const handleCancel = () => {
   collapsed.value = true;

@@ -125,7 +125,7 @@ import {
 } from "@/api/archive";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { formatBytes } from "@/api/modules/host-monitor";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatInstant } from "@/utils/time-zone";
 import { downloadBlockedReason, partitionStatusLabel, remoteStateLabel, toNum, type ArchiveQuery } from "../shared/archive-model";
 import PartitionPreview from "./partition-preview.vue";
@@ -145,10 +145,10 @@ const total = ref(0);
 const loading = ref(false);
 const loaded = ref(false);
 const error = ref("");
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 
 async function load() {
-  const token = gate.next();
+  const token = gate.begin();
   loading.value = true;
   try {
     const rsp = await listArchivePartitions({
@@ -157,16 +157,16 @@ async function load() {
       to_month: props.query.to || undefined,
       page: { page: props.query.ppage, size: PAGE_SIZE }
     });
-    if (!gate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     partitions.value = rsp.partitions || [];
     total.value = Number(rsp.page_result?.total || partitions.value.length);
     loaded.value = true;
     error.value = "";
   } catch (cause) {
-    if (cause instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
+    if (cause instanceof StaleSpaceRequestError || !token.isLatest()) return;
     error.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 

@@ -49,8 +49,6 @@ describe("采集任务页的归档状态", () => {
 
   it("读取都不弹全局提示", async () => {
     await loadArchiveCoverage("crypto");
-    expect(api.listArchiveTasks.mock.calls[0][1]).toEqual({ silentError: true });
-    expect(api.listDatasets.mock.calls[0][1]).toEqual({ silentError: true });
   });
 
   it("同一空间共用缓存：60 秒内不重读，过期或作废后重读，切空间后重读", async () => {

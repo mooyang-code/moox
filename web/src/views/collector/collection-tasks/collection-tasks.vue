@@ -271,19 +271,12 @@
                 </a-option>
               </a-select>
               <span class="field-hint"
-                >同一任务的标签必须来自同一来源；同时选现货、永续两个市场的标签时，可以合并成一个统一数据集。</span
+                >同一任务的标签必须来自同一来源；同时选现货、永续两个市场的标签时，按市场拆成两个任务。</span
               >
             </a-form-item>
-            <a-form-item v-if="!editing && crossMarketSelected" label="组织方式">
-              <a-radio-group v-model="organization">
-                <a-radio value="unified">合并为一个数据集</a-radio>
-                <a-radio value="split">按市场拆成两个任务</a-radio>
-              </a-radio-group>
-              <span class="field-hint"
-                >合并后现货、永续放在同一个数据集里，只要一个计算任务和一个
-                View；两个市场共用采集周期，一个市场延迟会拖慢另一个。只用一个市场的策略建议按市场拆成两个任务。</span
-              >
-            </a-form-item>
+            <a-alert v-if="!editing && crossMarketSelected" type="info" show-icon class="cross-market-hint"
+              >选了现货、永续两个市场的标签：提交时按市场拆成两个任务，任务名后加市场名；同时用两个市场的策略各绑一个计算任务。</a-alert
+            >
           </template>
           <a-alert v-else-if="editor.data_type !== 'kline_resample'" type="info" show-icon
             >当前执行任务类型没有标的范围，此项留空。</a-alert
@@ -326,9 +319,7 @@
             <a-descriptions v-if="resamplePreview" :column="2" size="small" bordered class="resample-source-info">
               <a-descriptions-item label="源数据集">{{ resamplePreview.source_dataset_id || "-" }}</a-descriptions-item>
               <a-descriptions-item label="源周期">{{ resamplePreview.source_frequency || "-" }}</a-descriptions-item>
-              <a-descriptions-item label="序列标签">{{
-                resamplePreview.source_series_tags?.join("、") || resamplePreview.source_series_tag || "-"
-              }}</a-descriptions-item>
+              <a-descriptions-item label="序列标签">{{ resamplePreview.source_series_tag || "-" }}</a-descriptions-item>
               <a-descriptions-item label="采集标的"
                 >继承源任务，共 {{ resamplePreview.subject_count ?? 0 }} 个标的</a-descriptions-item
               >
@@ -494,7 +485,7 @@
           <a-descriptions v-if="detailData.data_type === 'kline_resample'" :column="2" bordered class="detail-resample-info">
             <a-descriptions-item label="源任务">{{ resampleSourceSummary(detailData) }}</a-descriptions-item>
             <a-descriptions-item label="源周期 / 序列标签">
-              {{ stringParam(detailData, "source_frequency") || "-" }} / {{ resampleSeriesTags(detailData) || "-" }}
+              {{ stringParam(detailData, "source_frequency") || "-" }} / {{ stringParam(detailData, "source_series_tag") || "-" }}
             </a-descriptions-item>
           </a-descriptions>
           <div v-if="detailDependents.length" class="detail-dependents">
@@ -573,6 +564,7 @@
 </template>
 
 <script setup lang="ts">
+import { RequestError, reportError } from "@/api/http";
 import { buildResultsQuery } from "@/views/collector/task-results/task-results-model";
 import ArchiveCoverageText from "@/views/archive/shared/archive-coverage-text.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
@@ -610,7 +602,7 @@ import {
   collectionTaskNameError,
   isCrossMarketSelection,
   availableExtraFieldIds,
-  extraFieldOptionsPresent,
+  baseOutputFieldIds,
   outputFieldSelectable,
   outputFieldVisible,
   pruneUnavailableFields,
@@ -625,7 +617,6 @@ import {
   type CollectionTaskInput,
   type CollectionTaskMarket,
   type CollectionTaskRecord,
-  type TaskOrganization,
   type TaskTagRoute
 } from "./collection-task-params";
 import ResampleJobsDrawer from "./resample-jobs-drawer.vue";
@@ -675,8 +666,6 @@ const jobsTarget = ref<{ taskId: string; taskName: string; targetFrequency: stri
 
 const frequencyValue = ref("");
 const subjectTagIds = ref<string[]>([]);
-// 选了现货、永续两个市场的标签时，创建任务的组织方式：合并成一个统一数据集，或按市场拆成两个任务。
-const organization = ref<TaskOrganization>("unified");
 // 新建 K 线任务的采集方式；空表示按市场默认。
 const ingest = ref("");
 const selectedOutputFields = ref<string[]>([]);
@@ -685,7 +674,9 @@ const outputFieldDraft = ref<string[]>([]);
 const originalOutputFields = ref<string[]>([]);
 // 接口给出的附加字段清单（随执行任务类型读取）；读到之前不能判断已选的附加字段是否还可选。
 const extraFieldOptions = ref<ExtraFieldOption[]>([]);
+// 字段清单（基础输出字段与附加字段）读到了才按它清理已选字段
 const extraFieldOptionsLoaded = ref(false);
+const baseOutputFields = ref<Set<string>>(new Set());
 const outputFieldsVisible = ref(false);
 const outputFieldCatalog = ref<Field[]>([]);
 const outputFieldGroups = ref<FieldGroup[]>([]);
@@ -699,7 +690,7 @@ let taskTypeFieldRequestToken = 0;
 const outputFieldSections = computed(() => {
   const grouped = new Map<string, Field[]>();
   for (const field of outputFieldCatalog.value) {
-    if (!outputFieldVisible(field.field_id, availableExtraFields.value)) continue;
+    if (!outputFieldVisible(field.field_id, availableExtraFields.value, baseOutputFields.value)) continue;
     const groupID = field.group_id || "";
     const list = grouped.get(groupID) || [];
     list.push(field);
@@ -817,9 +808,9 @@ const dropUnavailableFields = computed(() =>
 watch(
   [dropUnavailableFields, availableExtraFields, selectedOutputFields, outputFieldDraft],
   ([drop, available]) => {
-    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop);
+    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop, baseOutputFields.value);
     if (selected !== selectedOutputFields.value) selectedOutputFields.value = selected;
-    const draft = pruneUnavailableFields(outputFieldDraft.value, available, drop);
+    const draft = pruneUnavailableFields(outputFieldDraft.value, available, drop, baseOutputFields.value);
     if (draft !== outputFieldDraft.value) outputFieldDraft.value = draft;
   },
   { immediate: true }
@@ -1044,7 +1035,6 @@ function resetEditor() {
   editor.creator = account.value?.user?.userName || "";
   frequencyValue.value = "";
   subjectTagIds.value = [];
-  organization.value = "unified";
   ingest.value = "";
   sourceTaskId.value = "";
   resamplePreview.value = null;
@@ -1089,7 +1079,6 @@ function onUpdate(record: CollectionTaskRecord) {
           source_dataset_id: input.sourceId || "",
           source_frequency: input.sourceFrequency || "",
           source_series_tag: input.sourceSeriesTag || "",
-          source_series_tags: input.sourceSeriesTags || [],
           subject_count: 0,
           market_id: "",
           provider: input.provider,
@@ -1199,7 +1188,7 @@ function setOutputField(fieldID: string, checked: boolean | string | number) {
 
 /** 编辑已有任务时输出字段只能减少：不在任务原有字段里的不能勾。 */
 function canSelectOutputField(fieldID: string): boolean {
-  return outputFieldSelectable(fieldID, editing.value, originalOutputFields.value);
+  return outputFieldSelectable(fieldID, editing.value, originalOutputFields.value, baseOutputFields.value);
 }
 
 /** 一组里能勾上的字段（编辑任务时不含不能新增的那些）。 */
@@ -1232,6 +1221,7 @@ async function loadTaskTypeFields() {
   const dataType = editor.data_type;
   extraFieldOptions.value = [];
   extraFieldOptionsLoaded.value = false;
+  baseOutputFields.value = new Set();
   taskTypeFields.value = [];
   if (!dataType) return;
   try {
@@ -1239,7 +1229,8 @@ async function loadTaskTypeFields() {
     if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
     taskTypeFields.value = [...(response.detail?.fields || [])].sort((a, b) => a.sort_order - b.sort_order);
     extraFieldOptions.value = response.detail?.extra_fields || [];
-    extraFieldOptionsLoaded.value = extraFieldOptionsPresent(response.detail);
+    baseOutputFields.value = baseOutputFieldIds(response.detail?.base_output_fields);
+    extraFieldOptionsLoaded.value = true;
   } catch (error) {
     if (token === taskTypeFieldRequestToken) {
       taskTypeFields.value = [];
@@ -1266,7 +1257,12 @@ function currentTaskInput(): CollectionTaskInput {
     sourceTaskId: sourceTaskId.value,
     ingest: ingest.value,
     // 提交前按条件再过滤一次：条件不满足的附加字段不带。
-    outputFields: pruneUnavailableFields(selectedOutputFields.value, availableExtraFields.value, dropUnavailableFields.value)
+    outputFields: pruneUnavailableFields(
+      selectedOutputFields.value,
+      availableExtraFields.value,
+      dropUnavailableFields.value,
+      baseOutputFields.value
+    )
   };
 }
 
@@ -1313,8 +1309,7 @@ async function saveEditor() {
   try {
     if (editorMode.value === "create") {
       const input = currentTaskInput();
-      const groups =
-        input.dataType === "kline" ? planTaskGroups(selectedTagRoutes.value, organization.value) : [{ suffix: "", tagIds: [] }];
+      const groups = input.dataType === "kline" ? planTaskGroups(selectedTagRoutes.value) : [{ suffix: "", tagIds: [] }];
       const created: string[] = [];
       for (const group of groups) {
         const groupInput = group.tagIds.length ? { ...input, subjectTags: group.tagIds } : input;
@@ -1458,13 +1453,6 @@ async function loadSourceTasks() {
 function stringParam(task: CollectionTaskRecord, key: string): string {
   const value = task.collect_params?.[key];
   return typeof value === "string" ? value.trim() : "";
-}
-
-// 合成源的序列标签：统一数据集是 source_series_tags（每个市场一条），单序列的源是 source_series_tag。
-function resampleSeriesTags(task: CollectionTaskRecord): string {
-  const tags = task.collect_params?.source_series_tags;
-  if (Array.isArray(tags) && tags.length) return tags.filter(tag => typeof tag === "string").join("、");
-  return stringParam(task, "source_series_tag");
 }
 
 // 列表“合成来源”列：源任务名 → 目标频率；老任务没有 source_task_id 时显示源数据集。
@@ -1651,8 +1639,9 @@ async function openDetailById(taskId: string) {
     const response = await GetTaskDetail({ space_id: spaceId, task_id: taskId });
     if (token !== detailRequestToken || spaceId !== selectedSpaceId.value) return;
     if (response.task) onViewDetails(normalizeCollectionTask(response.task));
-  } catch {
-    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；网络错误由请求层提示，业务错误不另提示
+  } catch (error) {
+    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；只提示网络错误，业务错误不另提示
+    if (!(error instanceof RequestError && error.response)) reportError(error);
     if (token === detailRequestToken) syncListQuery();
   }
 }

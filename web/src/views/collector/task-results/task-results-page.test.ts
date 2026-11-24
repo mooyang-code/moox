@@ -1,7 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { reactive } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 
 const mocks = vi.hoisted(() => ({
@@ -390,7 +390,7 @@ describe("collector task result page deep links", () => {
         task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
       })
       .mockRejectedValueOnce(
-        new ControlRequestError("task no longer exists", {
+        new RequestError("task no longer exists", {
           ret_info: { code: 5, msg: "task no longer exists" }
         })
       );

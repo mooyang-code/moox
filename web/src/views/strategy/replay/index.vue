@@ -297,10 +297,9 @@ import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getInstance, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
 import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
-import { reportControlError, serverNow } from "@/api/admin/http";
-import { listFactorTasks } from "@/api/factor";
+import { reportError, serverNow } from "@/api/http";
+import { listAllFactorTasks } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
-import { loadUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
@@ -556,20 +555,10 @@ async function loadTasks() {
   if (!spaceId) return;
   tasksLoading.value = true;
   try {
-    const items: FactorTask[] = [];
-    for (let page = 1; ; page += 1) {
-      const rsp = await listFactorTasks({ page: { page, size: 200 } });
-      if (gen !== generation) return;
-      items.push(...(rsp.factor_tasks || []).map(info => info.factor_task));
-      if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) break;
-    }
-    const unifiedIds = await loadUnifiedDatasetIds(spaceId);
+    const items = (await listAllFactorTasks()).map(info => info.factor_task);
     if (gen !== generation) return;
-    // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）；统一数据集上的任务要登记为 multi，这里的表单按市场选任务，
-    // 不列它们（要回放统一数据集上的实例，从实例详情发起）。
-    tasks.value = items.filter(
-      task => task.space_id === spaceId && task.status !== "pending" && !unifiedIds.has(task.source_dataset_id)
-    );
+    // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）。
+    tasks.value = items.filter(task => task.space_id === spaceId && task.status !== "pending");
     errors.tasks = "";
   } catch (err) {
     if (gen === generation) errors.tasks = `计算任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
@@ -579,15 +568,10 @@ async function loadTasks() {
 }
 
 /** 从已加载的 brief 记录之后增量读取；isCurrent 为假表示请求已被新选择或空间切换取代，返回 null。 */
-async function fetchSeries(
-  replayId: string,
-  known: ReplayBar[],
-  isCurrent: () => boolean,
-  silent = false
-): Promise<ReplayBar[] | null> {
+async function fetchSeries(replayId: string, known: ReplayBar[], isCurrent: () => boolean): Promise<ReplayBar[] | null> {
   let merged = known;
   for (let page = Math.floor(known.length / seriesPageSize) + 1; ; page += 1) {
-    const next = await listReplayBars(replayId, { page, page_size: seriesPageSize, brief: true }, { silent });
+    const next = await listReplayBars(replayId, { page, page_size: seriesPageSize, brief: true });
     if (!isCurrent()) return null;
     merged = mergeBars(merged, next.items);
     if (next.items.length < seriesPageSize || merged.length >= next.page.total) return merged;
@@ -607,7 +591,7 @@ async function loadTablePage(replayId: string, isCurrent: () => boolean, silent 
   const page = tablePage.value;
   if (!silent) tableLoading.value = true;
   try {
-    const result = await listReplayBars(replayId, { page, page_size: tablePageSize }, { silent });
+    const result = await listReplayBars(replayId, { page, page_size: tablePageSize });
     if (!live()) return;
     tableRows.value = result.items;
     tableTotal.value = result.page.total;
@@ -752,9 +736,9 @@ async function refreshSelected() {
   const requestId = selectRequest;
   const gen = generation;
   const isCurrent = () => requestId === selectRequest && gen === generation && selectedId.value === replayId;
-  const replay = await getReplay(replayId, { silent: true });
+  const replay = await getReplay(replayId);
   if (!isCurrent()) return;
-  const all = await fetchSeries(replayId, series.value, isCurrent, true);
+  const all = await fetchSeries(replayId, series.value, isCurrent);
   if (all === null) return;
   selected.value = replay;
   if (all.length !== series.value.length) {
@@ -842,7 +826,7 @@ async function start() {
   try {
     const started = await startReplay({
       ...source,
-      factor_tasks: replayFactorTasks(form, strategyStore.strategyCatalog),
+      factor_tasks: replayFactorTasks(form),
       start_time: startTime,
       end_time: endTime,
       spot_fee_bps: Number(form.spot_fee_bps) || 0,
@@ -895,8 +879,8 @@ async function cancel() {
     if (gen === generation && selectedId.value === replayId)
       await select(replayId, { observedCancel: true, keepTablePage: true });
   } catch (err) {
-    // 请求层已提示过的错误不再重复；切换空间后，旧空间的取消失败不再提示。
-    if (gen === generation) reportControlError(err);
+    // 切换空间后，旧空间的取消失败不再提示。
+    if (gen === generation) reportError(err);
   } finally {
     cancelling.value = false;
   }
@@ -914,10 +898,6 @@ async function rerunWithConfig() {
   rerunning.value = true;
   try {
     const next = replayFormFromReplay(await getReplay(replayId));
-    if (!next) {
-      Message.info("这个回放用的是统一数据集上的任务，发起表单不能选，请从实例详情发起");
-      return;
-    }
     Object.assign(form, { ...next, single_market: Object.keys(next.tasks).length === 1 ? Object.keys(next.tasks)[0] : "" });
     openCreate();
   } catch (err) {
@@ -950,7 +930,7 @@ function applyPrefill() {
 async function loadInstanceStrategy(instanceId: string) {
   form.instance_strategy_id = "";
   try {
-    const instance = await getInstance(instanceId, { silent: true });
+    const instance = await getInstance(instanceId);
     if (form.instance_id === instanceId) form.instance_strategy_id = instance.strategy_id;
   } catch {
     // 读不到实例时保持空值
@@ -974,7 +954,7 @@ async function pollTick() {
     const page = replayPage.value;
     try {
       // 轮询请求不弹全局错误：失败由下面的计数在页面上统一提示，断网时不会每 5 秒弹出一串错误。
-      const result = await listReplays({ page, page_size: replayPageSize }, { silent: true });
+      const result = await listReplays({ page, page_size: replayPageSize });
       if (gen !== generation) return;
       applyReplayList(gen, seq, page, result);
       await refreshSelected();

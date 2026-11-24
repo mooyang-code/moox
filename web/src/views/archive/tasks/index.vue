@@ -84,6 +84,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { computed, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
@@ -101,7 +102,7 @@ import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatRetention } from "@/utils/retention";
 import {
   archivableDataset,
@@ -122,7 +123,7 @@ import WorkerLine from "./worker-line.vue";
 
 /**
  * 数据归档 › 归档任务。状态都在 URL 里（任务详情、页签、筛选、页码、新建），不依赖页面缓存；
- * 读取失败显示失败，不显示“正常”；后台轮询带 silentError，错误由页面自己显示。
+ * 读取失败显示失败，不显示“正常”；错误由页面自己显示。
  */
 const route = useRoute();
 const router = useRouter();
@@ -149,30 +150,27 @@ const nowMs = ref(Date.now());
 const runsRefreshKey = ref(0);
 // 行内按钮按任务记“处理中”，不共用一个 busy
 const busy = ref<Record<string, boolean>>({});
-const mainGate = new RequestGate();
-const datasetGate = new RequestGate();
+const mainGate = createLatestRequestGuard();
+const datasetGate = createLatestRequestGuard();
 
 const errorText = (error: unknown) => (error instanceof Error && error.message ? error.message : "请稍后重试");
 
 async function loadMain() {
   if (!spaceId.value) return;
-  const token = mainGate.next();
+  const token = mainGate.begin();
   try {
-    const [nextOverview, list] = await Promise.all([
-      getArchiveOverview({ silentError: true }),
-      listArchiveTasks({ page: 1, size: 100 }, { silentError: true })
-    ]);
-    if (!mainGate.isCurrent(token)) return;
+    const [nextOverview, list] = await Promise.all([getArchiveOverview(), listArchiveTasks({ page: 1, size: 100 })]);
+    if (!token.isLatest()) return;
     overview.value = nextOverview;
     tasks.value = list.tasks || [];
     mainLoaded.value = true;
     mainError.value = "";
     lastOkAt.value = Date.now();
   } catch (error) {
-    if (error instanceof StaleSpaceRequestError || !mainGate.isCurrent(token)) return;
+    if (error instanceof StaleSpaceRequestError || !token.isLatest()) return;
     mainError.value = errorText(error);
   } finally {
-    if (mainGate.isCurrent(token)) nowMs.value = Date.now();
+    if (token.isLatest()) nowMs.value = Date.now();
   }
 }
 
@@ -180,15 +178,15 @@ async function loadMain() {
 async function loadDatasets() {
   const space = spaceId.value;
   if (!space) return;
-  const token = datasetGate.next();
+  const token = datasetGate.begin();
   datasetsError.value = "";
   try {
-    const all = await listAllDatasets(space, { silentError: true });
-    if (!datasetGate.isCurrent(token)) return;
+    const all = await listAllDatasets(space);
+    if (!token.isLatest()) return;
     datasets.value = all;
     datasetsLoaded.value = true;
   } catch (error) {
-    if (error instanceof StaleSpaceRequestError || !datasetGate.isCurrent(token)) return;
+    if (error instanceof StaleSpaceRequestError || !token.isLatest()) return;
     datasetsError.value = errorText(error);
   }
 }
@@ -312,7 +310,8 @@ async function runNow(task: ArchiveTask) {
   await withBusy(id, async () => {
     try {
       await runArchiveTaskNow(id);
-    } catch {
+    } catch (error) {
+      reportError(error);
       return;
     }
     Message.success("已排队");
@@ -330,7 +329,8 @@ function toggleTask(task: ArchiveTask) {
     void withBusy(id, async () => {
       try {
         await updateArchiveTask({ dataset_id: id, status: "enabled" });
-      } catch {
+      } catch (error) {
+        reportError(error);
         return;
       }
       Message.success("已启用，下一次检查立即复核");
@@ -347,7 +347,8 @@ function toggleTask(task: ArchiveTask) {
     onBeforeOk: async () => {
       try {
         await updateArchiveTask({ dataset_id: id, status: "paused" });
-      } catch {
+      } catch (error) {
+        reportError(error);
         return false;
       }
       Message.success("已停用");
@@ -368,7 +369,8 @@ function removeTask(task: ArchiveTask) {
     onBeforeOk: async () => {
       try {
         await deleteArchiveTask(id);
-      } catch {
+      } catch (error) {
+        reportError(error);
         return false;
       }
       Message.success("已删除");

@@ -123,9 +123,9 @@ async function load() {
   targets.value = [];
   try {
     const [logicalRsp, accountsRsp, shadowRsp] = await Promise.all([
-      getLogicalAccount(logicalId.value, { silent: true }),
-      listTradingAccounts({ page: { page: 1, size: 200 } }, { silent: true }),
-      listShadowTargets(instanceId.value, 20, { silent: true })
+      getLogicalAccount(logicalId.value),
+      listTradingAccounts({ page: { page: 1, size: 200 } }),
+      listShadowTargets(instanceId.value, 20)
     ]);
     if (seq !== loadSeq) return;
     accounts.value = new Map((accountsRsp.accounts || []).map(item => [item.trading_account_id, item]));

@@ -31,7 +31,6 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { withDialogErrors } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
 import EnvMark from "./env-mark.vue";
 import { confirmTier, nameConfirmed, type Environment } from "./environment";
@@ -86,7 +85,7 @@ async function handleOk() {
   const submission = scope.begin();
   error.value = "";
   try {
-    const result = await withDialogErrors(() => props.submit(reason.value.trim()));
+    const result = await props.submit(reason.value.trim());
     if (!submission.isCurrent()) return false;
     return result !== false;
   } catch (cause) {

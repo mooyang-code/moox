@@ -110,7 +110,7 @@ import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { formatBytes } from "@/api/modules/host-monitor";
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatInstant } from "@/utils/time-zone";
 import { relativeTime } from "@/views/home/home-model";
 import {
@@ -135,23 +135,23 @@ const loaded = ref(false);
 const error = ref("");
 const lastOkAt = ref<number | null>(null);
 const nowMs = ref(Date.now());
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 
 async function load() {
   if (!spaceId.value) return;
-  const token = gate.next();
+  const token = gate.begin();
   try {
-    const rsp = await getArchiveOverview({ silentError: true });
-    if (!gate.isCurrent(token)) return;
+    const rsp = await getArchiveOverview();
+    if (!token.isLatest()) return;
     overview.value = rsp;
     loaded.value = true;
     error.value = "";
     lastOkAt.value = Date.now();
   } catch (cause) {
-    if (cause instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
+    if (cause instanceof StaleSpaceRequestError || !token.isLatest()) return;
     error.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
   } finally {
-    if (gate.isCurrent(token)) nowMs.value = Date.now();
+    if (token.isLatest()) nowMs.value = Date.now();
   }
 }
 

@@ -540,12 +540,12 @@ function othersText(titles: string[]) {
   return titles.length > 2 ? `${titles.slice(0, 2).join("、")} 等 ${titles.length} 项` : titles.join("、");
 }
 
-/** background：30 秒的后台刷新，不弹全局提示，失败写在页面上（保留上次的数据）。 */
-async function refresh(background = false) {
+/** 30 秒的后台刷新与手动刷新共用：失败写在页面上（保留上次的数据）。 */
+async function refresh() {
   const request = refreshGuard.begin();
   loading.value = true;
   try {
-    const rsp = await monitorApi.getOverview({}, { silentError: background });
+    const rsp = await monitorApi.getOverview({});
     if (!rsp.overview) throw new Error("健康概览响应缺失");
     if (request.isLatest()) {
       overview.value = rsp.overview;
@@ -670,7 +670,7 @@ watch(notificationVisible, () => notificationScope.invalidate());
 
 // 编辑通知设置时暂停轮询，避免刷新打断表单。
 usePolling(
-  () => refresh(true),
+  () => refresh(),
   30000,
   () => !notificationVisible.value
 );

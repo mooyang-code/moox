@@ -86,7 +86,7 @@ import { useRouter } from "vue-router";
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import { listViews } from "@/api/storage/metadata";
 import { useFactorStore } from "@/store/modules/factor";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { taskHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import { taskStatusTag } from "@/views/factor/shared/status";
@@ -118,10 +118,10 @@ const sourceName = computed(() =>
   set.value ? store.datasetNames[set.value.source_dataset_id] || set.value.source_dataset_id : ""
 );
 const resultViewId = ref("");
-const viewGate = new RequestGate();
+const viewGate = createLatestRequestGuard();
 
 async function loadResultView(current?: FactorTask) {
-  const token = viewGate.next();
+  const token = viewGate.begin();
   resultViewId.value = "";
   if (!current) return;
   try {
@@ -131,7 +131,7 @@ async function loadResultView(current?: FactorTask) {
       status: "active",
       page: { page: 1, size: 100 }
     });
-    if (!viewGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     const view = (rsp.views || []).find(
       item => item.attributes?.owner_module === "factor" && item.attributes?.view_role === "factor_result"
     );

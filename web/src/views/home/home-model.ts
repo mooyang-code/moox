@@ -7,7 +7,7 @@ import { freqSeconds, runBarLag, taskHealth } from "@/views/factor/shared/health
 import { statusLabel } from "@/views/ops/monitor/health-display";
 import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
-import { pendingItems, stateOf } from "@/views/strategy/overview/overview-model";
+import { pendingItems, stateOf } from "@/views/strategy/attention-model";
 import { sortInstancesForResults } from "@/views/strategy/results/results-model";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { formatInstant, marketTime } from "@/utils/time-zone";
@@ -322,7 +322,7 @@ export function attentionItems(input: {
       ...(alert.object?.space_id ? { spaceId: alert.object.space_id } : {})
     };
   });
-  for (const item of pendingItems({ ...input.strategy, replays: [], nowMs: input.nowMs })) {
+  for (const item of pendingItems({ ...input.strategy, nowMs: input.nowMs })) {
     items.push({
       key: `strategy-${item.kind}-${item.instanceId}`,
       tone: item.kind === "degraded" ? "bad" : "warn",

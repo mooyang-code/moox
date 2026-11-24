@@ -30,6 +30,7 @@ vi.mock("@/store/modules/space", () => ({
 }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: mocks.messageError }, Modal: { confirm: vi.fn() } }));
 
+import { RequestError } from "@/api/http";
 import ViewBrowse from "./index.vue";
 
 function deferred<T>() {
@@ -152,7 +153,6 @@ describe("View result refresh", () => {
     await vi.advanceTimersByTimeAsync(0);
     await flushPromises();
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(1);
-    expect(mocks.queryTimeSeries.mock.lastCall?.[1]).toEqual({ silentError: true });
 
     // 手动刷新失败：页面提示一次（请求层静默，不会弹两次），错误条出现
     mocks.queryTimeSeries.mockRejectedValueOnce(new Error("Storage unavailable"));
@@ -321,7 +321,7 @@ describe("View 索引状态", () => {
     });
     const wrapper = mountPage();
     await flushPromises();
-    expect(mocks.viewState).toHaveBeenCalledWith({ space_id: "crypto", view_id: "view-known" }, { silentError: true });
+    expect(mocks.viewState).toHaveBeenCalledWith({ space_id: "crypto", view_id: "view-known" });
     expect(tagText(wrapper)).toBe("已构建");
     expect(wrapper.text()).toContain("已建列: 1/2");
     expect(wrapper.text()).toContain("覆盖: 2026-01-01 00:00:00");
@@ -335,7 +335,9 @@ describe("View 索引状态", () => {
     expect(tagText(wrapper)).toBe("构建中");
     expect(wrapper.text()).not.toContain("已建列");
 
-    mocks.viewState.mockRejectedValueOnce(Object.assign(new Error("not found"), { retCode: "VIEW_NOT_FOUND" }));
+    mocks.viewState.mockRejectedValueOnce(
+      new RequestError("not found", { ret_info: { code: "VIEW_NOT_FOUND", msg: "not found" } })
+    );
     await wrapper.setProps({ refreshKey: 1 });
     await flushPromises();
     expect(tagText(wrapper)).toBe("未构建");

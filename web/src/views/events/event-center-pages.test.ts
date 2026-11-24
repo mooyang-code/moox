@@ -22,7 +22,7 @@ vi.mock("@/api/callback-dispatcher", async () => ({
   ...(await vi.importActual<typeof import("@/api/callback-dispatcher")>("@/api/callback-dispatcher")),
   ...mocks
 }));
-vi.mock("@/api/admin/http", () => ({ reportControlError: vi.fn(), callControl: vi.fn() }));
+vi.mock("@/api/http", () => ({ reportError: vi.fn(), call: vi.fn() }));
 
 import RuleDialog from "./subscriptions/rule-dialog.vue";
 import EventRules from "./subscriptions/index.vue";
@@ -348,7 +348,6 @@ describe("执行记录的 URL", () => {
     (wrapper!.vm as unknown as { onDrawerVisible(visible: boolean): void }).onDrawerVisible(false);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(mocks.listEventExecutions).toHaveBeenCalledTimes(2);
-    expect(mocks.listEventExecutions.mock.lastCall?.[1]).toEqual({ silentError: true });
     vi.useRealTimers();
   });
 

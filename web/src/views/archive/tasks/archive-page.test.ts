@@ -132,11 +132,10 @@ describe("归档任务页", () => {
     expect(text).toContain("未归档提醒暂不可用");
   });
 
-  it("后台读取都带 silentError", async () => {
+  it("打开页面读执行器状态与任务列表", async () => {
     await mountPage();
-    expect(api.getArchiveOverview).toHaveBeenCalledWith({ silentError: true });
-    expect(api.listArchiveTasks).toHaveBeenCalledWith({ page: 1, size: 100 }, { silentError: true });
-    expect(api.listDatasets.mock.calls[0][1]).toEqual({ silentError: true });
+    expect(api.getArchiveOverview).toHaveBeenCalledWith();
+    expect(api.listArchiveTasks).toHaveBeenCalledWith({ page: 1, size: 100 });
   });
 
   it("健康原因直接写在单元格里", async () => {

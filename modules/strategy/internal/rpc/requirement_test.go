@@ -29,8 +29,11 @@ func TestStrategyTaskRequirement(t *testing.T) {
 		t.Fatalf("来源：%+v", got.GetSources())
 	}
 	reference := "name: r\nbar: 1h\nmarket: {select: swap, reference: [spot]}\nuniverse: {min_age_bars: 3, age_markets: all}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n"
-	if got := validate(reference); keys(got) != "swap,spot" {
+	if got := validate(reference); keys(got) != "swap,spot" || strings.Join(got.GetReferenceMarkets(), ",") != "spot" {
 		t.Fatalf("参考市场：%+v", got)
+	}
+	if got := validate(demoDSL); len(got.GetReferenceMarkets()) != 0 {
+		t.Fatalf("没写参考市场时为空：%+v", got)
 	}
 	if got := validate(demoDSL); got.GetMarketDeclared() || len(got.GetTaskKeys()) != 0 {
 		t.Fatalf("没写 market 时市场待定：%+v", got)

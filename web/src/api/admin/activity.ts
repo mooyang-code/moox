@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 
 export interface ActivityLogItem {
   id?: number | string;
@@ -29,6 +29,6 @@ export interface ListActivityLogsResponse {
   page?: { page?: number; size?: number; total?: number; has_more?: boolean };
 }
 
-export function listActivityLogs(request: ListActivityLogsRequest, options: { silentError?: boolean } = {}) {
-  return callControl<ListActivityLogsRequest, ListActivityLogsResponse>("activity", "ListActivityLogs", request, options);
+export function listActivityLogs(request: ListActivityLogsRequest) {
+  return call<ListActivityLogsRequest, ListActivityLogsResponse>("activity", "ListActivityLogs", request);
 }

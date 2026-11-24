@@ -21,21 +21,6 @@ describe("collector task management workbench", () => {
     expect(normalized).toContain('typeCollectorTaskTab="tasks"|"status"|"backfills"|"results"');
   });
 
-  it("keeps one visible task menu and removes retired collector URLs", () => {
-    const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
-    const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
-    const normalizedMenu = normalizeSource(menu);
-    const normalizedRoutes = normalizeSource(routes);
-
-    expect(normalizedMenu).toContain('menu("0303","03","/collector/tasks","collector-tasks"');
-    expect(normalizedMenu).not.toContain('menu("0304"');
-    expect(normalizedRoutes).toContain('component:()=>import("@/views/collector/task-management/index.vue")');
-    expect(normalizedRoutes).toContain('path:"/collector/tasks"');
-    for (const retired of ["/collector/rules", "/collector/data-management", "/collector/datasets", "/collector/packages"]) {
-      expect(normalizedRoutes).not.toContain(`path:"${retired}"`);
-    }
-  });
-
   it("keeps the create action in the task search row", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "../collection-tasks/collection-tasks.vue"), "utf8");
     const firstToolbarEnd = source.indexOf("</a-space>");

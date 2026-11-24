@@ -53,7 +53,7 @@ async function setup(query: Record<string, string>) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: "/strategy/definitions", name: "strategy-definitions", component: OverviewPage, meta: { reuseOnQuery: true } },
+      { path: "/strategy/definitions", name: "strategy-definitions", component: OverviewPage },
       { path: "/strategy/tasks", name: "strategy-tasks", component: { template: "<div />" } }
     ]
   });

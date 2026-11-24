@@ -96,8 +96,8 @@ const logOut = () => {
         // 用户退出
         await userStore.logOut();
         router.replace("/login");
-        // 清除路由数据
-        useRoutesConfigStore().resetRoute();
+        // 清空标签页
+        useRoutesConfigStore().clearTabs();
         return true;
       } catch {
         return false;

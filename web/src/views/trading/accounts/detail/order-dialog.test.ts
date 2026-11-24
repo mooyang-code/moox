@@ -15,9 +15,13 @@ vi.mock("@/api/trade", async () => ({
   ...(await vi.importActual<typeof import("@/api/trade")>("@/api/trade")),
   ...mocks
 }));
-import { TradeResponseError } from "@/api/trade";
 import { useActionTracker, type ActionTracker } from "./action-tracker";
 import OrderDialog from "./order-dialog.vue";
+import { RequestError } from "@/api/http";
+
+// 交易服务的业务失败：消息就是 ret_info.msg，响应体原样带上
+const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
+  new RequestError(response.ret_info.msg, response);
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -158,9 +162,7 @@ describe("下单对话框", () => {
 
   it("响应码非零时保留操作编号，查询暂时失败也继续轮询", async () => {
     const vm = await openEntry();
-    mocks.submitOrder.mockRejectedValueOnce(
-      new TradeResponseError({ ...accepted(), ret_info: { code: 9, msg: "price timeout" } })
-    );
+    mocks.submitOrder.mockRejectedValueOnce(tradeFailure({ ...accepted(), ret_info: { code: 9, msg: "price timeout" } }));
     mocks.getOperatorAction.mockRejectedValueOnce(new Error("query timeout"));
     expect(await vm.submitManual()).toBe(false);
     expect(tracker.action.value?.action_id).toBe("action");
@@ -215,7 +217,7 @@ describe("下单对话框", () => {
     "明确被拒绝的请求可以修改后重填，不轮询（%s）",
     async code => {
       const vm = await openEntry();
-      mocks.submitOrder.mockRejectedValueOnce(new TradeResponseError({ ret_info: { code, msg: "request rejected" } }));
+      mocks.submitOrder.mockRejectedValueOnce(tradeFailure({ ret_info: { code, msg: "request rejected" } }));
       expect(await vm.submitManual()).toBe(false);
       await vi.advanceTimersByTimeAsync(1600);
       expect(mocks.getOperatorAction).not.toHaveBeenCalled();
@@ -237,7 +239,7 @@ describe("下单对话框", () => {
     );
     const submitting = vm.submitManual();
     logicalRef.value = makeLogical({ logical_account_id: "another" });
-    reject(new TradeResponseError({ ...accepted(), ret_info: { code: 4, msg: "late timeout" } }));
+    reject(tradeFailure({ ...accepted(), ret_info: { code: 4, msg: "late timeout" } }));
     await submitting;
     expect(tracker.action.value).toBeNull();
     await vi.advanceTimersByTimeAsync(1600);
@@ -255,7 +257,7 @@ describe("下单对话框", () => {
     expect(tracker.action.value?.status).toBe("RUNNING");
     expect(tracker.submittedOrder.value).toBeNull();
     expect(mocks.getOrder).not.toHaveBeenCalled();
-    expect(mocks.getOperatorAction).toHaveBeenCalledWith("action", { silent: true });
+    expect(mocks.getOperatorAction).toHaveBeenCalledWith("action");
   });
 
   it("生产环境要输入组合名称才能提交", async () => {

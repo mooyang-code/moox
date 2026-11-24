@@ -1,5 +1,9 @@
-import { callStorage } from "./http";
+import { call, type CallOptions } from "@/api/http";
 import type { Page, PageResult, RetInfo } from "./types";
+
+/** Storage 的调用；读取带短时缓存，见 @/api/http。 */
+const callStorage = <TReq extends object, TRsp>(method: string, req: TReq, options?: CallOptions) =>
+  call<TReq, TRsp>("storage", method, req, options);
 
 /** 空间只登记在 Storage：管理台与 moox-cli 的增删改查都调 Storage 元数据接口。 */
 export interface Space {

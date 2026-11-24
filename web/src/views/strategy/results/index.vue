@@ -37,8 +37,8 @@
             <a-tab-pane v-for="tab in tabs" :key="tab.instanceId" :title="tab.title" />
           </a-tabs>
 
-          <a-alert v-if="store.detailError" type="error" show-icon class="page-alert">
-            实例读取失败：{{ store.detailError }}
+          <a-alert v-if="detail.detailError" type="error" show-icon class="page-alert">
+            实例读取失败：{{ detail.detailError }}
             <template #action><a-button size="mini" @click="load()">重试</a-button></template>
           </a-alert>
 
@@ -50,7 +50,7 @@
                   current.logical_account_id ? "交易模式" : "仅计算"
                 }}</a-tag>
                 <span class="cell-sub"
-                  >定义 <span class="mono">{{ store.strategy?.name || current.strategy_id }}</span></span
+                  >定义 <span class="mono">{{ detail.strategy?.name || current.strategy_id }}</span></span
                 >
                 <span class="cell-sub">计算任务 <FactorTaskLinks :tasks="current.factor_tasks" /></span>
                 <span class="cell-sub"
@@ -66,21 +66,21 @@
             </div>
             <InstanceResults
               :instance="current"
-              :snapshot="store.targetSnapshot"
+              :snapshot="detail.targetSnapshot"
               :target-state="targetState"
-              :results="store.results"
-              :total="store.totalResults"
+              :results="detail.results"
+              :total="detail.totalResults"
               :page="resultPage"
               :page-size="resultPageSize"
               :scope="resultScope"
-              :loading="store.resultsLoading"
-              :error="store.resultsError"
+              :loading="detail.resultsLoading"
+              :error="detail.resultsError"
               :initial-loading="initialLoading"
               @page="loadResults"
               @retry="loadResults(resultPage, resultScope)"
             />
           </template>
-          <div v-else-if="store.detailLoading || listLoading" class="results-loading"><a-spin tip="正在读取结果" /></div>
+          <div v-else-if="detail.detailLoading || listLoading" class="results-loading"><a-spin tip="正在读取结果" /></div>
         </template>
       </template>
     </div>
@@ -95,7 +95,8 @@ import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { listAllInstances } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
-import { RequestGate } from "@/utils/request-gate";
+import { useStrategyStore } from "@/store/modules/strategy";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import InfoTip from "@/components/info-tip/index.vue";
 import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
@@ -117,7 +118,7 @@ const listLoading = ref(false);
 const listLoaded = ref(false);
 const listError = ref("");
 const autoRefresh = ref(true);
-const listGate = new RequestGate();
+const listGate = createLatestRequestGuard();
 
 function isCurrentTab() {
   return route.name === STRATEGY_TASKS_ROUTE && normalizeTaskTab(route.query.tab) === "results";
@@ -127,7 +128,7 @@ function isCurrentTab() {
 const selectedId = computed(() => (isCurrentTab() ? queryString(route.query.instance as string) : ""));
 
 const {
-  store,
+  detail,
   resultPage,
   resultScope,
   resultPageSize,
@@ -140,6 +141,7 @@ const {
   loadResults,
   start
 } = useInstanceResults(selectedId, { autoRefresh });
+const store = useStrategyStore();
 
 const tabs = computed(() => {
   const list = instanceTabs(instances.value, store.strategyCatalog);
@@ -149,7 +151,7 @@ const tabs = computed(() => {
   }
   return list;
 });
-const current = computed(() => (store.instance && store.instance.instance_id === selectedId.value ? store.instance : null));
+const current = computed(() => (detail.instance && detail.instance.instance_id === selectedId.value ? detail.instance : null));
 
 function writeInstance(instanceId: string, mode: "push" | "replace" = "replace") {
   if (!isCurrentTab()) return;
@@ -165,19 +167,19 @@ function selectInstance(key: string | number) {
 
 /** 读取当前空间的全部实例（用作结果页的实例 Tab）。 */
 async function loadInstanceList() {
-  const token = listGate.next();
+  const token = listGate.begin();
   listLoading.value = true;
   listError.value = "";
   try {
     const all = await listAllInstances();
-    if (!listGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     instances.value = all;
     listLoaded.value = true;
   } catch (error) {
-    if (error instanceof StaleSpaceRequestError || !listGate.isCurrent(token)) return;
+    if (error instanceof StaleSpaceRequestError || !token.isLatest()) return;
     listError.value = `实例列表读取失败：${error instanceof Error ? error.message : "未知错误"}`;
   } finally {
-    if (listGate.isCurrent(token)) listLoading.value = false;
+    if (token.isLatest()) listLoading.value = false;
   }
 }
 
@@ -211,7 +213,7 @@ watch(
 // 空间初始化（无 → 有）只是首次加载，保留 URL 里的实例；真正切换空间时清掉旧空间的实例并重新选默认实例。
 watch(spaceId, (next, previous) => {
   if (!next) return;
-  listGate.next();
+  listGate.invalidate();
   instances.value = [];
   listLoaded.value = false;
   if (previous) writeInstance("");

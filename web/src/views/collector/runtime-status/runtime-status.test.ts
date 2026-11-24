@@ -152,7 +152,7 @@ describe("collector runtime status page", () => {
   const page = readFileSync(resolve(__dirname, "runtime-status.vue"), "utf8");
 
   it("leads with the overall verdict, dataset health and the function list", () => {
-    expect(page).toContain("getCollectorStatus(spaceId, { silentError: background })");
+    expect(page).toContain("getCollectorStatus(spaceId)");
     expect(page.indexOf('class="status-card"')).toBeLessThan(page.indexOf("<h3>数据集健康</h3>"));
     expect(page.indexOf("<h3>数据集健康</h3>")).toBeLessThan(page.indexOf('class="function-section"'));
     expect(page).toContain('category="collector.subject_change"');
@@ -207,9 +207,9 @@ describe("collector runtime status page", () => {
   });
 
   it("offers the dataset actions and opens the backfill tab for new jobs", () => {
-    expect(page).toContain("confirmHistoryGaps(");
+    expect(page).not.toContain("confirmHistoryGaps(");
+    expect(page).not.toContain("历史缺口");
     expect(page).toContain("clearSourceAbsences(");
-    expect(page).toContain("补采确认");
     expect(page).toContain("清除并重新检查");
     expect(page).toContain('tab: "backfills"');
   });

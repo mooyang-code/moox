@@ -4,8 +4,6 @@ import type { FactorTaskInfo } from "@/api/factor/types";
 /** 创建实例时可选的计算任务：列出任务的全部结果列名，策略 DSL 里直接写这些列名。 */
 export interface TaskOption {
   taskId: string;
-  /** 任务的源数据集：它的 market_type 是 multi 时任务在统一数据集上。 */
-  sourceDatasetId: string;
   /** 展示名：任务名（没有名称时用任务 ID）。 */
   name: string;
   freq: string;
@@ -28,7 +26,6 @@ export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOpti
     .filter(info => info.factor_task.space_id === spaceId && info.factor_task.status === "enabled")
     .map(info => ({
       taskId: info.factor_task.task_id,
-      sourceDatasetId: info.factor_task.source_dataset_id,
       name: info.factor_task.name || info.factor_task.task_id,
       freq: info.factor_task.freq,
       columns: taskColumns(info),
@@ -59,14 +56,9 @@ export function selectableTask(task: Pick<TaskOption, "boundInstanceId">, tuned:
   return !(tuned && !source && task.boundInstanceId);
 }
 
-/** 任务是否在统一数据集上（源数据集的 market_type 是 multi，一个任务同时覆盖现货与永续）。 */
-export function isUnifiedTask(task: Pick<TaskOption, "sourceDatasetId">, unifiedDatasetIds: ReadonlySet<string>): boolean {
-  return unifiedDatasetIds.has(task.sourceDatasetId);
-}
-
 /**
  * 带可变成员的任务能不能登记在这个任务键下：附加来源的任务不能有可变成员（factor_params 只作用于主帧的任务，与 Strategy 的
- * input/sources.go 一致）；主帧任务都能选，不写 factor_params 的实例（含策略池、统一数据集、双市场）只读可变成员的列。
+ * input/sources.go 一致）；主帧任务都能选，不写 factor_params 的实例（含策略池、双市场）只读可变成员的列。
  * 能选时返回空串，否则返回原因。
  */
 export function varMemberBlockReason(source: string): string {

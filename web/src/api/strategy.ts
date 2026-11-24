@@ -1,4 +1,5 @@
-import { callControl, ControlRequestError } from "@/api/admin/http";
+import { call, RequestError } from "@/api/http";
+import { readAllPages } from "@/api/read-all-pages";
 import type {
   DisplayHidden,
   InstrumentTarget,
@@ -14,6 +15,7 @@ import type {
   StrategyResultDetail,
   StrategyResultItem,
   StrategyTargetSnapshot,
+  StrategyTaskRequirement,
   ValidateStrategyResult
 } from "./strategy-types";
 
@@ -25,6 +27,18 @@ function normalizeStrategy(value: any): Strategy {
     dsl_hash: value?.dsl_hash ?? "",
     created_at: value?.created_at ?? "",
     updated_at: value?.updated_at ?? ""
+  };
+}
+
+function normalizeRequirement(value: any): StrategyTaskRequirement | null {
+  if (!value) return null;
+  return {
+    pool: Boolean(value.pool),
+    marketDeclared: Boolean(value.market_declared),
+    taskKeys: (value.task_keys ?? []).map(String),
+    sources: (value.sources ?? []).map((item: any) => ({ name: String(item?.name ?? ""), bar: String(item?.bar ?? "") })),
+    problems: (value.problems ?? []).map(String),
+    referenceMarkets: (value.reference_markets ?? []).map(String)
   };
 }
 
@@ -148,44 +162,41 @@ function pageRequest(params: PageRequest): Required<PageRequest> {
   return { page: params.page ?? 1, page_size: params.page_size ?? 20 };
 }
 
-/** 请求选项：silent 为 true 时失败不弹全局错误提示（后台轮询由页面自己提示）。 */
-export interface RequestOptions {
-  silent?: boolean;
-}
-
-async function call<Req extends object, Rsp extends Record<string, any>>(
-  method: string,
-  request: Req,
-  options: RequestOptions = {}
-): Promise<Rsp> {
-  // callControl 已把业务失败（ret_info.code 非成功）抛成 ControlRequestError。
-  return callControl<Req, Rsp>("strategy", method, request, options.silent ? { silentError: true } : undefined);
+function callStrategy<Req extends object, Rsp extends Record<string, any>>(method: string, request: Req): Promise<Rsp> {
+  return call<Req, Rsp>("strategy", method, request);
 }
 
 export async function createStrategy(strategy: { strategy_id?: string; dsl_yaml: string }) {
-  const response = await call<{ strategy: typeof strategy }, { strategy?: Strategy }>("CreateStrategy", { strategy });
+  const response = await callStrategy<{ strategy: typeof strategy }, { strategy?: Strategy }>("CreateStrategy", { strategy });
   return normalizeStrategy(response.strategy);
 }
 
 export async function updateStrategy(strategy_id: string, dsl_yaml: string) {
-  const response = await call<{ strategy_id: string; dsl_yaml: string }, { strategy?: Strategy }>("UpdateStrategy", {
+  const response = await callStrategy<{ strategy_id: string; dsl_yaml: string }, { strategy?: Strategy }>("UpdateStrategy", {
     strategy_id,
     dsl_yaml
   });
   return normalizeStrategy(response.strategy);
 }
 
-export async function getStrategy(strategy_id: string, options: RequestOptions = {}) {
-  const response = await call<{ strategy_id: string }, { strategy?: Strategy }>("GetStrategy", { strategy_id }, options);
-  return normalizeStrategy(response.strategy);
+export async function getStrategy(strategy_id: string) {
+  return (await getStrategyWithRequirement(strategy_id)).strategy;
+}
+
+/** 读取定义，连同后端按 DSL 推出的、建实例要绑定的因子任务。 */
+export async function getStrategyWithRequirement(strategy_id: string) {
+  const response = await callStrategy<{ strategy_id: string }, { strategy?: Strategy; requirement?: unknown }>("GetStrategy", {
+    strategy_id
+  });
+  return { strategy: normalizeStrategy(response.strategy), requirement: normalizeRequirement(response.requirement) };
 }
 
 export async function deleteStrategy(strategy_id: string) {
-  await call<{ strategy_id: string }, Record<string, never>>("DeleteStrategy", { strategy_id });
+  await callStrategy<{ strategy_id: string }, Record<string, never>>("DeleteStrategy", { strategy_id });
 }
 
 export async function listStrategies(params: PageRequest = {}): Promise<PageResult<Strategy>> {
-  const response = await call<
+  const response = await callStrategy<
     { page: Required<PageRequest> },
     { strategies?: Strategy[]; total?: number; page?: number; page_size?: number }
   >("ListStrategies", { page: pageRequest(params) });
@@ -207,18 +218,14 @@ export async function validateStrategy(
 ): Promise<ValidateStrategyResult> {
   let response: any;
   try {
-    response = await callControl<{ dsl_yaml: string; factor_tasks?: Record<string, string> }, any>(
-      "strategy",
-      "ValidateStrategy",
-      {
-        dsl_yaml,
-        factor_tasks: Object.keys(factor_tasks).length ? factor_tasks : undefined
-      }
-    );
+    response = await callStrategy<{ dsl_yaml: string; factor_tasks?: Record<string, string> }, any>("ValidateStrategy", {
+      dsl_yaml,
+      factor_tasks: Object.keys(factor_tasks).length ? factor_tasks : undefined
+    });
   } catch (error) {
     // 只有服务端明确返回“参数无效”的校验失败才转成诊断结果；断网、HTTP、认证、空间失效等请求错误继续抛出，由页面按请求错误展示。
-    const rejected = error instanceof ControlRequestError ? (error.response as any) : undefined;
-    if (!(error instanceof ControlRequestError) || !isInvalidParam(rejected?.ret_info?.code)) throw error;
+    const rejected = error instanceof RequestError ? (error.response as any) : undefined;
+    if (!(error instanceof RequestError) || !isInvalidParam(rejected?.ret_info?.code)) throw error;
     const diagnostics: unknown = rejected?.diagnostics;
     const messages = Array.isArray(diagnostics)
       ? diagnostics.filter((item): item is string => typeof item === "string" && item !== "")
@@ -227,14 +234,16 @@ export async function validateStrategy(
       diagnostics: messages.length ? messages : [error.message],
       resolved_json: "",
       trial: null,
-      trial_items: []
+      trial_items: [],
+      requirement: normalizeRequirement(rejected?.requirement)
     };
   }
   return {
     diagnostics: response?.diagnostics ?? [],
     resolved_json: response?.resolved_json ?? "",
     trial: response?.trial ? normalizeResult(response.trial) : null,
-    trial_items: (response?.trial_items ?? []).map(normalizeItem)
+    trial_items: (response?.trial_items ?? []).map(normalizeItem),
+    requirement: normalizeRequirement(response?.requirement)
   };
 }
 
@@ -244,39 +253,32 @@ export async function createInstance(instance: {
   factor_tasks: Record<string, string>;
   logical_account_id?: string;
 }) {
-  const response = await call<{ instance: typeof instance & { enabled: false } }, { instance?: StrategyInstance }>(
+  const response = await callStrategy<{ instance: typeof instance & { enabled: false } }, { instance?: StrategyInstance }>(
     "CreateStrategyInstance",
     { instance: { ...instance, enabled: false } }
   );
   return normalizeInstance(response.instance);
 }
 
-export async function getInstance(instance_id: string, options: RequestOptions = {}) {
-  const response = await call<{ instance_id: string }, { instance?: StrategyInstance }>(
-    "GetStrategyInstance",
-    { instance_id },
-    options
-  );
+export async function getInstance(instance_id: string) {
+  const response = await callStrategy<{ instance_id: string }, { instance?: StrategyInstance }>("GetStrategyInstance", {
+    instance_id
+  });
   return normalizeInstance(response.instance);
 }
 
 export async function listInstances(
-  params: PageRequest & { strategy_id?: string; enabled?: boolean } = {},
-  options: RequestOptions = {}
+  params: PageRequest & { strategy_id?: string; enabled?: boolean } = {}
 ): Promise<PageResult<StrategyInstance>> {
-  const response = await call<
+  const response = await callStrategy<
     { page: Required<PageRequest>; strategy_id?: string; enabled?: boolean },
     { instances?: StrategyInstance[]; total?: number; page?: number; page_size?: number }
-  >(
-    "ListStrategyInstances",
-    {
-      page: pageRequest(params),
-      strategy_id: params.strategy_id || undefined,
-      // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
-      enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
-    },
-    options
-  );
+  >("ListStrategyInstances", {
+    page: pageRequest(params),
+    strategy_id: params.strategy_id || undefined,
+    // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
+    enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
+  });
   return {
     items: (response.instances ?? []).map(normalizeInstance),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -284,18 +286,17 @@ export async function listInstances(
 }
 
 /** 读当前空间的全部实例：每页 200 个，最多读 10 页（单用户场景下足够）。 */
-export async function listAllInstances(options: RequestOptions = {}): Promise<StrategyInstance[]> {
-  const all: StrategyInstance[] = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const rsp = await listInstances({ page, page_size: 200 }, options);
-    all.push(...rsp.items);
-    if (!rsp.items.length || all.length >= rsp.page.total) break;
-  }
-  return all;
+export function listAllInstances(): Promise<StrategyInstance[]> {
+  let read = 0;
+  return readAllPages(async page => {
+    const rsp = await listInstances({ page, page_size: 200 });
+    read += rsp.items.length;
+    return { items: rsp.items, hasMore: read < rsp.page.total };
+  });
 }
 
 export async function setInstanceEnabled(instance_id: string, enabled: boolean) {
-  const response = await call<{ instance_id: string; enabled: boolean }, { instance?: StrategyInstance }>(
+  const response = await callStrategy<{ instance_id: string; enabled: boolean }, { instance?: StrategyInstance }>(
     "SetStrategyInstanceEnabled",
     { instance_id, enabled }
   );
@@ -307,28 +308,26 @@ export async function setInstanceEnabled(instance_id: string, enabled: boolean) 
  * 实例之后又重新启用过时被拒；失败由调用方提示。
  */
 export async function confirmInstance(instance_id: string, session_id: string) {
-  const response = await call<{ instance_id: string; session_id: string }, { instance?: StrategyInstance }>(
+  const response = await callStrategy<{ instance_id: string; session_id: string }, { instance?: StrategyInstance }>(
     "ConfirmStrategyInstance",
-    { instance_id, session_id },
-    { silent: true }
+    { instance_id, session_id }
   );
   return normalizeInstance(response.instance);
 }
 
 /** 删除已停用的实例，连同它关联的计算任务和结果数据集；失败由调用方提示（超时时删除可能已做了一部分，重试安全）。 */
 export async function deleteInstance(instance_id: string) {
-  await call<{ instance_id: string }, Record<string, never>>("DeleteStrategyInstance", { instance_id }, { silent: true });
+  await callStrategy<{ instance_id: string }, Record<string, never>>("DeleteStrategyInstance", { instance_id });
 }
 
 export async function listStrategyResults(
   instance_id: string,
-  params: PageRequest & { session_id?: string } = {},
-  options: RequestOptions = {}
+  params: PageRequest & { session_id?: string } = {}
 ): Promise<PageResult<StrategyResult>> {
-  const response = await call<
+  const response = await callStrategy<
     { instance_id: string; session_id?: string; page: Required<PageRequest> },
     { results?: StrategyResult[]; total?: number; page?: number; page_size?: number }
-  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page: pageRequest(params) }, options);
+  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page: pageRequest(params) });
   return {
     items: (response.results ?? []).map(normalizeResult),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -337,7 +336,7 @@ export async function listStrategyResults(
 
 /** 读取一个结果及其解释明细、所属会话固化的 DSL 版本与绑定解析。 */
 export async function getStrategyResult(result_id: string): Promise<StrategyResultDetail> {
-  const response = await call<
+  const response = await callStrategy<
     { result_id: string },
     { result?: StrategyResult; items?: StrategyResultItem[]; dsl_yaml?: string; resolved_json?: string }
   >("GetStrategyResult", { result_id });
@@ -349,11 +348,11 @@ export async function getStrategyResult(result_id: string): Promise<StrategyResu
   };
 }
 
-export async function listStrategyTargets(instance_id: string, options: RequestOptions = {}): Promise<StrategyTargetSnapshot> {
-  const response = await call<
+export async function listStrategyTargets(instance_id: string): Promise<StrategyTargetSnapshot> {
+  const response = await callStrategy<
     { instance_id: string },
     { targets?: InstrumentTarget[]; session_id?: string; bar_end_time?: string; valid_until?: string; result_id?: string }
-  >("ListStrategyTargets", { instance_id }, options);
+  >("ListStrategyTargets", { instance_id });
   return {
     targets: (response.targets ?? []).map(normalizeTarget),
     session_id: response.session_id ?? "",
@@ -364,7 +363,7 @@ export async function listStrategyTargets(instance_id: string, options: RequestO
 }
 
 export async function startReplay(request: StartReplayRequest): Promise<StartedReplay> {
-  const response = await call<
+  const response = await callStrategy<
     StartReplayRequest,
     { replay?: Replay; bar_count?: number; first_bar_end?: string; last_bar_end?: string }
   >("StartReplay", request);
@@ -376,16 +375,16 @@ export async function startReplay(request: StartReplayRequest): Promise<StartedR
   };
 }
 
-export async function getReplay(replay_id: string, options: RequestOptions = {}) {
-  const response = await call<{ replay_id: string }, { replay?: Replay }>("GetReplay", { replay_id }, options);
+export async function getReplay(replay_id: string) {
+  const response = await callStrategy<{ replay_id: string }, { replay?: Replay }>("GetReplay", { replay_id });
   return normalizeReplay(response.replay);
 }
 
-export async function listReplays(params: PageRequest = {}, options: RequestOptions = {}): Promise<PageResult<Replay>> {
-  const response = await call<
+export async function listReplays(params: PageRequest = {}): Promise<PageResult<Replay>> {
+  const response = await callStrategy<
     { page: Required<PageRequest> },
     { replays?: Replay[]; total?: number; page?: number; page_size?: number }
-  >("ListReplays", { page: pageRequest(params) }, options);
+  >("ListReplays", { page: pageRequest(params) });
   return {
     items: (response.replays ?? []).map(normalizeReplay),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -398,21 +397,16 @@ export async function listReplays(params: PageRequest = {}, options: RequestOpti
  */
 export async function listReplayBars(
   replay_id: string,
-  params: PageRequest & { brief?: boolean } = {},
-  options: RequestOptions = {}
+  params: PageRequest & { brief?: boolean } = {}
 ): Promise<PageResult<ReplayBar>> {
-  const response = await call<
+  const response = await callStrategy<
     { replay_id: string; page: Required<PageRequest>; brief: boolean },
     { bars?: ReplayBar[]; total?: number; page?: number; page_size?: number }
-  >(
-    "ListReplayBars",
-    {
-      replay_id,
-      page: { page: params.page ?? 1, page_size: params.page_size ?? 50 },
-      brief: Boolean(params.brief)
-    },
-    options
-  );
+  >("ListReplayBars", {
+    replay_id,
+    page: { page: params.page ?? 1, page_size: params.page_size ?? 50 },
+    brief: Boolean(params.brief)
+  });
   return {
     items: (response.bars ?? []).map(normalizeReplayBar),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -420,7 +414,7 @@ export async function listReplayBars(
 }
 
 export async function cancelReplay(replay_id: string) {
-  const response = await call<{ replay_id: string }, { replay?: Replay }>("CancelReplay", { replay_id });
+  const response = await callStrategy<{ replay_id: string }, { replay?: Replay }>("CancelReplay", { replay_id });
   return normalizeReplay(response.replay);
 }
 
@@ -430,13 +424,15 @@ function normalizeHidden(value: any): DisplayHidden {
 
 /** 读取实例的外显设置（隐藏的分类、成员与列；没有设置时全部展示）。 */
 export async function getStrategyDisplaySettings(instance_id: string): Promise<DisplayHidden> {
-  const response = await call<{ instance_id: string }, { hidden?: DisplayHidden }>("GetStrategyDisplaySettings", { instance_id });
+  const response = await callStrategy<{ instance_id: string }, { hidden?: DisplayHidden }>("GetStrategyDisplaySettings", {
+    instance_id
+  });
   return normalizeHidden(response.hidden);
 }
 
 /** 保存实例的外显设置；改了立即生效，不进会话快照与哈希。 */
 export async function setStrategyDisplaySettings(instance_id: string, hidden: DisplayHidden): Promise<DisplayHidden> {
-  const response = await call<{ instance_id: string; hidden: DisplayHidden }, { hidden?: DisplayHidden }>(
+  const response = await callStrategy<{ instance_id: string; hidden: DisplayHidden }, { hidden?: DisplayHidden }>(
     "SetStrategyDisplaySettings",
     {
       instance_id,

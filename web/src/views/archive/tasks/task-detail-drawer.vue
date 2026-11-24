@@ -127,6 +127,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { Message, Modal } from "@arco-design/web-vue";
 import { updateArchiveTask, type ArchiveTask } from "@/api/archive";
 import { formatInstant } from "@/utils/time-zone";
@@ -186,7 +187,8 @@ function confirmClearUnrecoverable() {
     onBeforeOk: async () => {
       try {
         await updateArchiveTask({ dataset_id: id, clear_unrecoverable: true });
-      } catch {
+      } catch (error) {
+        reportError(error);
         return false;
       }
       Message.success("已清除");

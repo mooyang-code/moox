@@ -126,13 +126,14 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { computed, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { cancelArchiveRun, listArchiveRuns, type ArchiveRun } from "@/api/archive";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { formatBytes } from "@/api/modules/host-monitor";
 import { usePolling } from "@/hooks/usePolling";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatInstant } from "@/utils/time-zone";
 import {
   RUN_STATUSES,
@@ -174,31 +175,28 @@ const loading = ref(false);
 const loaded = ref(false);
 const error = ref("");
 const canceling = ref<Record<string, boolean>>({});
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 
 async function load() {
-  const token = gate.next();
+  const token = gate.begin();
   loading.value = true;
   try {
-    const rsp = await listArchiveRuns(
-      {
-        dataset_id: props.datasetId,
-        status: props.query.status,
-        include_ticks: props.query.ticks,
-        page: { page: props.query.rpage, size: PAGE_SIZE }
-      },
-      { silentError: true }
-    );
-    if (!gate.isCurrent(token)) return;
+    const rsp = await listArchiveRuns({
+      dataset_id: props.datasetId,
+      status: props.query.status,
+      include_ticks: props.query.ticks,
+      page: { page: props.query.rpage, size: PAGE_SIZE }
+    });
+    if (!token.isLatest()) return;
     runs.value = rsp.runs || [];
     total.value = Number(rsp.page_result?.total || runs.value.length);
     loaded.value = true;
     error.value = "";
   } catch (cause) {
-    if (cause instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
+    if (cause instanceof StaleSpaceRequestError || !token.isLatest()) return;
     error.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 
@@ -229,7 +227,8 @@ function confirmCancel(run: ArchiveRun) {
       canceling.value = { ...canceling.value, [id]: true };
       try {
         await cancelArchiveRun(id);
-      } catch {
+      } catch (error) {
+        reportError(error);
         return false;
       } finally {
         canceling.value = Object.fromEntries(Object.entries(canceling.value).filter(([key]) => key !== id));

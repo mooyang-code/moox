@@ -19,7 +19,17 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  if (method === "GetTaskList") {
+  if (method === "GetTaskList" || method === "GetTaskDetail") {
+    const task = {
+      space_id: "crypto",
+      task_id: "task-binance-spot-kline-1m",
+      task_name: "Binance 现货 K 线 1m",
+      data_type: "kline",
+      provider: "binance",
+      result: { result_name: "采集结果", view_id: "view_binance_kline_1m", status: "active", data_kind: "time_series" },
+      enabled: true
+    };
+    if (method === "GetTaskDetail") return route.fulfill({ json: ok({ task }) });
     return route.fulfill({
       json: ok({
         tasks: [
@@ -34,6 +44,36 @@ async function mockGateway(route: Route) {
           }
         ],
         page: { page: 1, size: 20, total: 1, has_more: false }
+      })
+    });
+  }
+  // 按 ID 读单个数据集、View：采集结果页按任务的 View 定位
+  if (method === "GetDataset") {
+    return route.fulfill({
+      json: ok({
+        dataset: {
+          space_id: "crypto",
+          dataset_id: "dataset_binance_kline_1m",
+          name: "现货K线",
+          data_kind: "DATA_KIND_TIME_SERIES",
+          freq: "1m",
+          status: "active",
+          attributes: { owner_module: "collector", dataset_role: "raw_collection" }
+        }
+      })
+    });
+  }
+  if (method === "GetView") {
+    return route.fulfill({
+      json: ok({
+        view: {
+          space_id: "crypto",
+          view_id: "view_binance_kline_1m",
+          name: "现货K线视图",
+          dataset_id: "dataset_binance_kline_1m",
+          status: "active",
+          attributes: { owner_module: "collector", view_role: "collection_browse" }
+        }
       })
     });
   }
@@ -185,7 +225,7 @@ test.beforeEach(async ({ page }) => {
 
 test("data collection owns base assets and has no top-level data assets menu", async ({ page }) => {
   await page.goto("/#/home");
-  await expect(page.getByRole("heading", { name: "量化系统驾驶舱" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "常用入口" })).toBeVisible();
   await expect(page.getByText("数据资产", { exact: true })).toHaveCount(0);
   await expect(page.getByText("数据采集", { exact: true })).toBeVisible();
 
@@ -207,13 +247,14 @@ test("refresh and direct routes stay available for collection pages", async ({ p
   await page.reload();
   await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
   await page.goto("/#/collector/tasks?tab=results");
-  await expect(page.getByRole("heading", { name: "Binance 现货 K 线 1m" })).toBeVisible();
+  await expect(page.getByText("Binance 现货 K 线 1m", { exact: true }).first()).toBeVisible();
 });
 
-test("opens the retired executors tab link on runtime status", async ({ page }) => {
+test("runtime status hosts cloud accounts and code packages, not an executors tab", async ({ page }) => {
   await page.goto("/#/collector/tasks?tab=executors");
   await expect(page.getByLabel("采集任务")).toBeVisible();
   await expect(page.getByText("执行器", { exact: true })).toHaveCount(0);
+  await page.goto("/#/collector/tasks?tab=status");
   await expect(page.getByRole("button", { name: "云账号", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "代码包", exact: true })).toBeVisible();
 });

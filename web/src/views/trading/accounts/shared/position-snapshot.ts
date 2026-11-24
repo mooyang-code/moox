@@ -15,17 +15,16 @@ export interface PositionSnapshot {
  */
 export async function loadPositionSnapshot(
   logical: LogicalAccount,
-  accounts: ReadonlyMap<string, TradingAccount>,
-  options: { silent?: boolean } = {}
+  accounts: ReadonlyMap<string, TradingAccount>
 ): Promise<PositionSnapshot> {
   const balanceMembers = (logical.members || []).filter(
     member => member.enabled && accounts.get(member.trading_account_id)?.markets?.some(market => market === 1 || market === 3)
   );
   const [positions, holdings] = await Promise.all([
     logical.markets?.includes(2)
-      ? listPositions({ logical_account_id: logical.logical_account_id }, options)
+      ? listPositions({ logical_account_id: logical.logical_account_id })
       : Promise.resolve({ positions: [] as Position[] }),
-    Promise.all(balanceMembers.map(member => listHoldings(member.trading_account_id, options)))
+    Promise.all(balanceMembers.map(member => listHoldings(member.trading_account_id)))
   ]);
   return {
     swapPositions: (positions.positions || []).filter(item => item.market_type === 2 && Number(item.signed_quantity) !== 0),

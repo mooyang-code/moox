@@ -8,6 +8,8 @@
           <template #action><a-button size="mini" @click="reload">重试</a-button></template>
         </a-alert>
 
+        <EngineStatusStrip ref="engineStatus" />
+
         <div class="result-toolbar">
           <span class="result-count">
             共 {{ filteredTasks.length }} 个计算任务
@@ -174,13 +176,16 @@ import {
 } from "./compute-tasks-model";
 import TaskCreateModal from "./task-create-modal.vue";
 import TaskDetailDrawer from "./task-detail-drawer.vue";
+import EngineStatusStrip from "./engine-status-strip.vue";
 
 defineOptions({ name: "FactorComputeTasks" });
 
 // 页面时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
 const route = useRoute();
-const { store, spaceId, navigate, reload } = useFactorScope();
+// 顶部状态条的补算作业和计算任务、引擎状态同一轮刷新
+const engineStatus = ref<InstanceType<typeof EngineStatusStrip>>();
+const { store, spaceId, navigate, reload } = useFactorScope({ extraPoll: async () => engineStatus.value?.loadJobs() });
 
 const statusOptions = [
   { value: "enabled", label: "运行中" },

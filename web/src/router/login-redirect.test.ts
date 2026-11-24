@@ -4,9 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const session = vi.hoisted(() => ({ accountFails: false, calls: 0, logouts: 0 }));
 vi.mock("@/config/nprogress", () => ({ default: { start: vi.fn(), done: vi.fn() } }));
 vi.mock("@/router/route-output", () => ({ currentlyRoute: vi.fn() }));
-vi.mock("@/store/modules/route-config", () => ({
-  useRoutesConfigStore: () => ({ initSetRouter: vi.fn(async () => undefined) })
-}));
 vi.mock("@/store/modules/user-info", async () => {
   const { defineStore } = await import("pinia");
   const { ref } = await import("vue");
@@ -48,9 +45,9 @@ beforeEach(async () => {
 describe("路由守卫按 GetUserInfo 判断登录", () => {
   it("没有会话时去别的页面：请求一次 GetUserInfo，失败后跳登录页并带上原地址（含查询参数）", async () => {
     session.accountFails = true;
-    await router.push("/strategy/overview?instance=a");
+    await router.push("/strategy/tasks?instance=a");
     expect(router.currentRoute.value.path).toBe("/login");
-    expect(router.currentRoute.value.query.redirect).toBe("/strategy/overview?instance=a");
+    expect(router.currentRoute.value.query.redirect).toBe("/strategy/tasks?instance=a");
     expect(session.calls).toBe(1);
     expect(session.logouts).toBe(0);
   });

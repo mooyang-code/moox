@@ -46,7 +46,7 @@
         <section class="field-workbench">
           <aside class="group-panel">
             <a-alert v-if="groupError" type="error" class="inline-error"
-              >字段组加载失败 <a-link @click="loadGroups">重试</a-link></a-alert
+              >字段组加载失败：{{ groupError }} <a-link @click="loadGroups">重试</a-link></a-alert
             >
             <FieldGroupTree
               :groups="groups"
@@ -72,7 +72,7 @@
               @clear="selectedKeys = []"
             />
             <a-alert v-if="fieldError" type="error" class="table-error"
-              >字段列表加载失败 <a-link @click="loadFields">重试</a-link></a-alert
+              >字段列表加载失败：{{ fieldError }} <a-link @click="loadFields">重试</a-link></a-alert
             >
             <FieldTable
               :rows="rows"
@@ -133,6 +133,8 @@
 </template>
 
 <script setup lang="ts">
+import { createLatestRequestGuard } from "@/utils/latest-request";
+import { errorMessage, reportError } from "@/api/http";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
@@ -160,13 +162,7 @@ import FieldEditorDrawer from "./components/FieldEditorDrawer.vue";
 import FieldGroupDialog from "./components/FieldGroupDialog.vue";
 import FieldGroupTree from "./components/FieldGroupTree.vue";
 import FieldTable from "./components/FieldTable.vue";
-import {
-  buildFieldGroupDeleteRequest,
-  fieldQueryFromRoute,
-  fieldQueryToRoute,
-  isSpaceRequestCurrent,
-  RequestGate
-} from "./field-workbench";
+import { buildFieldGroupDeleteRequest, fieldQueryFromRoute, fieldQueryToRoute, isSpaceRequestCurrent } from "./field-workbench";
 
 defineOptions({ name: "DataFields" });
 const route = useRoute();
@@ -183,8 +179,9 @@ const ungroupedFieldCount = ref(0);
 const selectedKeys = ref<string[]>([]);
 const loading = ref(false);
 const groupsLoading = ref(false);
-const fieldError = ref(false);
-const groupError = ref(false);
+// 读取失败的原因；空串表示没有失败
+const fieldError = ref("");
+const groupError = ref("");
 const batchLoading = ref(false);
 const fieldSaving = ref(false);
 const groupSaving = ref(false);
@@ -198,8 +195,8 @@ const newGroupParentID = ref("");
 const routeReady = ref(false);
 const replacingRoute = ref(false);
 const pagination = reactive({ ...defaultPagination(), pageSizeOptions: [20, 50, 100], showPageSize: true, showTotal: true });
-const fieldGate = new RequestGate();
-const groupGate = new RequestGate();
+const fieldGate = createLatestRequestGuard();
+const groupGate = createLatestRequestGuard();
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let revertingSpace = false;
 
@@ -220,14 +217,14 @@ async function replaceQuery() {
 
 async function loadGroups() {
   if (!selectedSpaceId.value) return;
-  const token = groupGate.next();
+  const token = groupGate.begin();
   groupsLoading.value = true;
-  groupError.value = false;
+  groupError.value = "";
   try {
     const all: FieldGroup[] = [];
     for (let page = 1; ; page += 1) {
       const rsp = await listFieldGroups({ space_id: selectedSpaceId.value, page: { page, size: 200 } });
-      if (!groupGate.isCurrent(token)) return;
+      if (!token.isLatest()) return;
       all.push(...(rsp.field_groups || []));
       if (page === 1) {
         fieldCounts.value = rsp.field_counts || {};
@@ -242,18 +239,18 @@ async function loadGroups() {
       state.page = 1;
       await replaceQuery();
     }
-  } catch {
-    if (groupGate.isCurrent(token)) groupError.value = true;
+  } catch (error) {
+    if (token.isLatest()) groupError.value = errorMessage(error, "请稍后重试");
   } finally {
-    if (groupGate.isCurrent(token)) groupsLoading.value = false;
+    if (token.isLatest()) groupsLoading.value = false;
   }
 }
 
 async function loadFields() {
   if (!selectedSpaceId.value) return;
-  const token = fieldGate.next();
+  const token = fieldGate.begin();
   loading.value = true;
-  fieldError.value = false;
+  fieldError.value = "";
   try {
     const selected = groups.value.find(item => item.group_id === state.group);
     const rsp = await listFields({
@@ -268,15 +265,15 @@ async function loadFields() {
       sort_order: state.order,
       page: { page: state.page, size: state.pageSize }
     });
-    if (!fieldGate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     rows.value = rsp.fields || [];
     pagination.current = state.page;
     pagination.pageSize = state.pageSize;
     applyPageResult(pagination, rsp.page_result);
-  } catch {
-    if (fieldGate.isCurrent(token)) fieldError.value = true;
+  } catch (error) {
+    if (token.isLatest()) fieldError.value = errorMessage(error, "请稍后重试");
   } finally {
-    if (fieldGate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 
@@ -345,8 +342,8 @@ function closeFieldDrawer() {
 }
 
 async function resetForSpace() {
-  fieldGate.next();
-  groupGate.next();
+  fieldGate.invalidate();
+  groupGate.invalidate();
   closeFieldDrawer();
   groupDialogToken += 1;
   groupSaving.value = false;
@@ -447,7 +444,7 @@ function confirmDeleteGroup(group: FieldGroup) {
   });
 }
 
-/** 批量改字段组或状态，返回是否成功（失败提示由请求层弹出）。 */
+/** 批量改字段组或状态，返回是否成功（失败时提示一次）。 */
 async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" | "deleted" }) {
   if (!selectedKeys.value.length) return false;
   batchLoading.value = true;
@@ -457,7 +454,8 @@ async function applyBatch(change: { target_group_id?: string; target_status?: "a
     selectedKeys.value = [];
     await loadAll();
     return true;
-  } catch {
+  } catch (error) {
+    reportError(error);
     return false;
   } finally {
     batchLoading.value = false;

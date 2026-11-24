@@ -16,7 +16,7 @@ import (
 //
 // 读不到成员定义等问题记进 problems，不报错：页面照常展示定义，只是不能据此建实例。
 func (s *Service) taskRequirement(ctx context.Context, strategy dsl.Strategy) *strategypb.StrategyTaskRequirement {
-	requirement := &strategypb.StrategyTaskRequirement{Pool: strategy.IsPool(), TaskKeys: []string{}, Sources: []*strategypb.StrategySourceRequirement{}, Problems: []string{}}
+	requirement := &strategypb.StrategyTaskRequirement{Pool: strategy.IsPool(), TaskKeys: []string{}, Sources: []*strategypb.StrategySourceRequirement{}, Problems: []string{}, ReferenceMarkets: []string{}}
 	for _, source := range strategy.Sources {
 		requirement.Sources = append(requirement.Sources, &strategypb.StrategySourceRequirement{Name: source.Name, Bar: source.Bar})
 	}
@@ -32,6 +32,7 @@ func (s *Service) taskRequirement(ctx context.Context, strategy dsl.Strategy) *s
 	requirement.MarketDeclared = true
 	requirement.TaskKeys = append(requirement.TaskKeys, markets...)
 	requirement.TaskKeys = append(requirement.TaskKeys, strategy.ReferenceMarkets...)
+	requirement.ReferenceMarkets = append(requirement.ReferenceMarkets, strategy.ReferenceMarkets...)
 	for _, source := range strategy.Sources {
 		for _, market := range markets {
 			requirement.TaskKeys = append(requirement.TaskKeys, dsl.TaskKey(source.Name, market))

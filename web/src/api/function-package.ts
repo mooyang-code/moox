@@ -1,5 +1,5 @@
 import { readSelectedSpaceId } from "./admin/space-header";
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 import forge from "node-forge";
 
 /** 代码包状态：pending 已发上传地址，available COS 对象已核对、可以部署。 */
@@ -49,10 +49,10 @@ export function formatFileSize(value: number | string) {
 }
 
 // 上传流程的各个请求显式带上发起时的空间（请求头与请求体是同一个值）：用户在上传期间切换空间时，完成请求仍要落在包所属的空间。
-const spaceHeaders = (spaceId: string) => (spaceId ? { headers: { "X-Space-Id": spaceId } } : undefined);
+const spaceHeaders = (spaceId: string) => ({ spaceId });
 
 export const uploadFunctionPackage = async (data: UploadPackageRequest, file: File, spaceId = readSelectedSpaceId()) => {
-  const initRsp = await callControl<UploadPackageRequest & { space_id: string; filename: string }, InitPackageUploadResponse>(
+  const initRsp = await call<UploadPackageRequest & { space_id: string; filename: string }, InitPackageUploadResponse>(
     "collector",
     "InitPackageUpload",
     { ...data, space_id: spaceId, filename: file.name },
@@ -70,7 +70,7 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest, file: Fi
     binary += String.fromCharCode(bytes[i]);
   }
   const md5Hex = forge.md.md5.create().update(binary).digest().toHex();
-  const rsp = await callControl<
+  const rsp = await call<
     { space_id: string; package_id: string; file_size: number; file_md5: string },
     { package?: FunctionPackage }
   >(
@@ -84,7 +84,7 @@ export const uploadFunctionPackage = async (data: UploadPackageRequest, file: Fi
 
 /** 按上传先后倒序，不分页。 */
 export const listFunctionPackages = async (spaceId: string): Promise<FunctionPackage[]> => {
-  const rsp = await callControl<{ space_id: string }, { packages?: FunctionPackage[] }>(
+  const rsp = await call<{ space_id: string }, { packages?: FunctionPackage[] }>(
     "collector",
     "ListFunctionPackages",
     { space_id: spaceId },
@@ -94,7 +94,7 @@ export const listFunctionPackages = async (spaceId: string): Promise<FunctionPac
 };
 
 export const deleteFunctionPackage = async (spaceId: string, packageId: string): Promise<void> => {
-  await callControl<{ space_id: string; package_id: string }, Record<string, never>>(
+  await call<{ space_id: string; package_id: string }, Record<string, never>>(
     "collector",
     "DeleteFunctionPackage",
     { space_id: spaceId, package_id: packageId },

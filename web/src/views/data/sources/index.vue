@@ -126,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
@@ -219,8 +220,8 @@ async function loadExtraFieldSources() {
     }
     if (!request.isLatest()) return;
     extraFieldSources.value = buildExtraFieldSources(mine, spaceId, names);
-  } catch {
-    // 失败原因由请求层提示；这块只读展示留空。
+  } catch (error) {
+    reportError(error);
   }
 }
 
@@ -258,7 +259,7 @@ function openEdit(record: DataSource) {
   visible.value = true;
 }
 
-/** 弹窗的“确定”：校验或保存失败时返回 false，弹窗保持打开，填的内容不丢（失败原因由请求层提示）。 */
+/** 弹窗的“确定”：校验或保存失败时返回 false，弹窗保持打开，填的内容不丢（失败时提示原因）。 */
 async function submit(): Promise<boolean> {
   const spaceId = spaceStore.requireSpaceId();
   // 表单属于打开它时的空间：切换空间后不能把它写进新空间（会覆盖新空间里相同 ID 的数据源）。
@@ -276,7 +277,8 @@ async function submit(): Promise<boolean> {
   try {
     if (editing.value) await updateDataSource(payload);
     else await createDataSource(payload);
-  } catch {
+  } catch (error) {
+    reportError(error);
     return false;
   }
   Message.success("数据源已保存");

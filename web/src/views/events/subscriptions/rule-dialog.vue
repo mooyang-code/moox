@@ -60,7 +60,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createEventRule, updateEventRule, type EventRule, type SubscribableEvent } from "@/api/callback-dispatcher";
-import { reportControlError } from "@/api/admin/http";
+import { reportError } from "@/api/http";
 import { notifyUrlError, sameScope, scopeFromForm, scopeToForm } from "../shared/event-center-utils";
 import EventInfo from "../shared/event-info.vue";
 
@@ -160,7 +160,7 @@ async function submit(): Promise<boolean> {
     }
     return true;
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
     return false;
   } finally {
     saving.value = false;

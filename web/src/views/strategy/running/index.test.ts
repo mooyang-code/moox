@@ -16,6 +16,8 @@ vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.
 vi.mock("@/views/strategy/components/instance-toggle", () => ({ confirmInstanceToggle: api.confirmToggle }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => api.store }));
+// 实例列表与定义目录在测试里共用同一个假对象
+vi.mock("@/views/strategy/use-instance-list", () => ({ useInstanceList: () => api.store }));
 
 import RunningPage from "./index.vue";
 

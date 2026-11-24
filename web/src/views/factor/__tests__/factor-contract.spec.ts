@@ -22,7 +22,6 @@ import recalcTab from "@/views/factor/recalc/index.vue?raw";
 import recalcModel from "@/views/factor/recalc/recalc-model.ts?raw";
 import resultsTab from "@/views/factor/results/index.vue?raw";
 import resultsModel from "@/views/factor/results/results-model.ts?raw";
-import overviewPage from "@/views/factor/overview/index.vue?raw";
 
 describe("factor API contract", () => {
   it("uses explicit generic time-series fields", () => {
@@ -124,7 +123,7 @@ describe("factor pages contract", () => {
     expect(taskHost).toContain("PageTitleTabs");
     expect(factorScope).toContain("route.query.task");
     expect(factorScope).toContain("usePolling");
-    expect(overviewPage).toContain("extraPoll");
+    expect(computeTasks).toContain("extraPoll");
   });
 
   it("changes member status only through setFactorMemberStatus without a backfill job", () => {

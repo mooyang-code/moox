@@ -1,19 +1,7 @@
 <template>
-  <SvgIcon v-if="props.svgIcon" :name="props.svgIcon" :size="25" />
-  <component v-else-if="props.icon" :is="props.icon"></component>
+  <SvgIcon :name="props.svgIcon" :size="25" />
 </template>
 
 <script setup lang="ts">
-const props = defineProps({
-  svgIcon: {
-    type: String,
-    default: ""
-  },
-  icon: {
-    type: String,
-    default: ""
-  }
-});
+const props = defineProps<{ svgIcon: string }>();
 </script>
-
-<style lang="scss" scoped></style>

@@ -96,6 +96,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import StatusMark from "@/views/trading/accounts/shared/status-mark.vue";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -192,8 +193,8 @@ async function submit(): Promise<boolean> {
   try {
     if (creating) await createSpace(submitted);
     else await updateSpace(submitted);
-  } catch {
-    // 失败原因已由 Storage 请求层提示
+  } catch (error) {
+    reportError(error);
     return false;
   }
   Message.success("空间已保存");
@@ -216,7 +217,8 @@ function confirmDelete(record: Space) {
     onBeforeOk: async () => {
       try {
         await deleteSpace(record.space_id);
-      } catch {
+      } catch (error) {
+        reportError(error);
         return false;
       }
       Message.success("空间已删除");

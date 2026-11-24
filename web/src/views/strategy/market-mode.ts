@@ -1,69 +1,16 @@
-import { parseDocument } from "yaml";
+import type { StrategyTaskRequirement } from "@/api/strategy-types";
 
 /** 策略涉及的市场，顺序固定：现货、永续、股票。 */
 export const MARKET_ORDER = ["spot", "swap", "equity"] as const;
 
-/** 统一数据集上的计算任务登记的键：一个任务同时覆盖现货与永续（数据集的 market_type 是 multi）。 */
-export const UNIFIED_TASK_KEY = "multi";
-
-/** 计算任务的键，顺序固定：三个市场，然后是统一数据集上的任务。 */
-export const TASK_KEY_ORDER = [...MARKET_ORDER, UNIFIED_TASK_KEY] as const;
-
-export const marketLabels: Record<string, string> = {
+const marketLabels: Record<string, string> = {
   spot: "现货",
   swap: "永续",
-  equity: "股票",
-  [UNIFIED_TASK_KEY]: "统一数据集"
+  equity: "股票"
 };
 
 export function marketLabel(market: string): string {
   return marketLabels[market] || market || "-";
-}
-
-export interface MarketRequirement {
-  /** DSL 里写了 market。没写时只绑一个任务，市场由用户在创建时选定。 */
-  declared: boolean;
-  /** 需要绑定计算任务的市场（现货在前）。没写 market 时为空。 */
-  markets: string[];
-}
-
-/**
- * 从 DSL 文本读出市场模式需要的计算任务：select 为 both 或 prefer 与 select 不同要现货、永续各一个，其余只要一个。
- * 解析失败或没写 market 时 declared 为 false（后端校验保存时的写法是否合法）。
- */
-export function marketRequirement(dslYaml: string): MarketRequirement {
-  try {
-    const market = parseDocument(dslYaml).toJS()?.market;
-    if (!market || typeof market !== "object") return { declared: false, markets: [] };
-    const select = String(market.select ?? "");
-    const prefer = String(market.prefer ?? select);
-    if (select === "both" || (select && prefer && select !== prefer)) return { declared: true, markets: ["spot", "swap"] };
-    if (select === "spot" || select === "swap") return { declared: true, markets: [select] };
-  } catch {
-    // 语法错误由后端校验报告
-  }
-  return { declared: false, markets: [] };
-}
-
-/** 附加来源与参考市场：sources 是 DSL 声明的附加来源（名字与周期，声明顺序），references 是 market.reference 写出的参考市场。 */
-export interface SourceRequirement {
-  sources: { name: string; bar: string }[];
-  references: string[];
-}
-
-/** 从 DSL 文本读出附加来源与参考市场；解析失败或都没写时为空（后端校验写法）。 */
-export function sourceRequirement(dslYaml: string): SourceRequirement {
-  try {
-    const document = parseDocument(dslYaml).toJS();
-    const sources = document?.sources && typeof document.sources === "object" ? document.sources : {};
-    const reference = Array.isArray(document?.market?.reference) ? document.market.reference : [];
-    return {
-      sources: Object.entries(sources).map(([name, value]: [string, any]) => ({ name, bar: String(value?.bar ?? "") })),
-      references: reference.map((item: unknown) => String(item)).filter((item: string) => item === "spot" || item === "swap")
-    };
-  } catch {
-    return { sources: [], references: [] };
-  }
 }
 
 /** 附加来源的任务键：来源名:市场（市场与主帧的任务键一一对应）。 */
@@ -85,70 +32,40 @@ export function taskKeyLabel(key: string): string {
 
 const sourceNamePattern = /^[a-z][a-z0-9_]{0,31}$/;
 
-/** 策略池的成员引用；DSL 不是策略池（没有 strategy_pool）或无法解析时返回 null。 */
-export function poolMembers(dslYaml: string): { id: string; strategyId: string }[] | null {
-  try {
-    const pool = parseDocument(dslYaml).toJS()?.strategy_pool;
-    if (pool === undefined || pool === null) return null;
-    const members = Array.isArray(pool?.members) ? pool.members : [];
-    return members.map((member: any) => ({ id: String(member?.id ?? ""), strategyId: String(member?.strategy ?? "") }));
-  } catch {
-    return null;
-  }
-}
-
-export interface PoolRequirement {
-  /** 池要绑定计算任务的市场：各成员所需市场的并集（现货在前）；有问题时为空。 */
-  markets: string[];
-  /** 阻止创建的问题（中文）：成员定义读不到、没写 market、是策略池等。 */
-  problems: string[];
-}
-
 /**
- * 策略池要绑定的计算任务：成员引用的策略定义各自按 marketRequirement 解析市场，取并集。
- * lookup 返回成员策略的 DSL 文本；null 表示确认不存在，undefined 表示还在读取。不是策略池时返回 null。
+ * 要绑定的任务键：后端已确定主帧市场时就是它给的键；没确定（股票策略不写 market）时按用户选的市场，
+ * 主帧一个任务，附加来源各一个（来源名:市场）。还没读到要求或没选市场时为空。
  */
-export function poolRequirement(
-  dslYaml: string,
-  lookup: (strategyId: string) => string | null | undefined
-): PoolRequirement | null {
-  const members = poolMembers(dslYaml);
-  if (!members) return null;
-  if (!members.length) return { markets: [], problems: ["策略池没有写成员（strategy_pool.members）"] };
-  const problems: string[] = [];
-  const markets = new Set<string>();
-  // 股票策略不写 market：没写 market 的成员按股票成员处理，池绑定股票任务；股票成员不能与现货、永续成员混用。
-  const stockMembers: string[] = [];
-  for (const member of members) {
-    const label = `成员 ${member.id || "?"}`;
-    if (!member.strategyId) {
-      problems.push(`${label} 没有写 strategy`);
-      continue;
-    }
-    const memberDsl = lookup(member.strategyId);
-    if (memberDsl === undefined) {
-      problems.push(`正在读取${label}引用的策略 ${member.strategyId}…`);
-    } else if (memberDsl === null) {
-      problems.push(`${label} 引用的策略 ${member.strategyId} 不存在（定义已删除，或读取失败）`);
-    } else if (poolMembers(memberDsl)) {
-      problems.push(`${label} 引用的策略 ${member.strategyId} 本身是策略池，策略池不能嵌套`);
-    } else {
-      const requirement = marketRequirement(memberDsl);
-      if (!requirement.declared) stockMembers.push(label);
-      else requirement.markets.forEach(market => markets.add(market));
-    }
-  }
-  if (stockMembers.length && markets.size)
-    problems.push(
-      `${stockMembers.join("、")} 引用的策略没有写 market，按股票成员处理；股票成员不能与现货、永续成员放在同一个池里（现货、永续成员要显式写 market）`
-    );
-  else if (stockMembers.length) markets.add("equity");
-  return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
+export function requirementTaskKeys(requirement: StrategyTaskRequirement | null | undefined, singleMarket: string): string[] {
+  if (!requirement) return [];
+  if (requirement.marketDeclared) return requirement.taskKeys;
+  if (!singleMarket) return [];
+  return [singleMarket, ...requirement.sources.map(source => sourceTaskKey(source.name, singleMarket))];
 }
 
-/** 实例绑定的计算任务，按市场先后排列（统一数据集上的任务键是 multi，排在市场之后），附加来源的任务（来源名:市场）按键排在最后。 */
+/** 参考市场（只用于年龄判定）：要求里给出、并且在任务键里的。 */
+export function requirementReferenceMarkets(
+  requirement: StrategyTaskRequirement | null | undefined,
+  keys: readonly string[]
+): string[] {
+  return (requirement?.referenceMarkets ?? []).filter(market => keys.includes(market));
+}
+
+/** 任务键里的市场（不带来源的键，含参考市场），顺序同任务键。 */
+export function taskKeyMarkets(keys: readonly string[]): string[] {
+  return keys.filter(key => !splitTaskKey(key).source);
+}
+
+/** 主帧市场：任务键里不带来源、也不是参考市场的键，顺序同任务键。建实例的账户筛选、股票判断与资金费列按它判断。 */
+export function mainMarkets(requirement: StrategyTaskRequirement | null | undefined, singleMarket: string): string[] {
+  const keys = requirementTaskKeys(requirement, singleMarket);
+  const references = requirementReferenceMarkets(requirement, keys);
+  return keys.filter(key => !splitTaskKey(key).source && !references.includes(key));
+}
+
+/** 实例绑定的计算任务，按市场先后排列，附加来源的任务（来源名:市场）按键排在最后。 */
 export function instanceTasks(tasks: Record<string, string> | undefined): { market: string; taskId: string }[] {
-  const plain = TASK_KEY_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
+  const plain = MARKET_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
   const sources = Object.keys(tasks ?? {})
     .filter(key => splitTaskKey(key).source)
     .sort()
@@ -170,13 +87,13 @@ export function formatFactorTasks(tasks: Record<string, string> | undefined): st
     .join(",");
 }
 
-/** 解析 URL 里的计算任务；只认现货、永续、股票三个市场与统一数据集（multi），以及附加来源的 来源名:市场，其余与格式不对的项忽略。 */
+/** 解析 URL 里的计算任务；只认现货、永续、股票三个市场，以及附加来源的 来源名:市场，其余与格式不对的项忽略。 */
 export function parseFactorTasks(raw: string): Record<string, string> {
   const tasks: Record<string, string> = {};
   for (const part of raw.split(",")) {
     const [key, taskId] = part.split("=").map(item => item.trim());
     const { source, market } = splitTaskKey(key ?? "");
-    const knownMarket = (TASK_KEY_ORDER as readonly string[]).includes(market);
+    const knownMarket = (MARKET_ORDER as readonly string[]).includes(market);
     if (taskId && knownMarket && (!key.includes(":") || sourceNamePattern.test(source))) tasks[key] = taskId;
   }
   return tasks;

@@ -6,8 +6,7 @@ import {
   fieldQueryFromRoute,
   fieldQueryToRoute,
   groupPath,
-  isSpaceRequestCurrent,
-  RequestGate
+  isSpaceRequestCurrent
 } from "./field-workbench";
 
 const groups: FieldGroup[] = [
@@ -32,14 +31,6 @@ describe("field workbench helpers", () => {
     const state = fieldQueryFromRoute({ group: "quote", keyword: " close ", page: "3", page_size: "50", order: "desc" });
     expect(state).toMatchObject({ group: "quote", keyword: "close", page: 3, pageSize: 50, sort: "sort_order", order: "desc" });
     expect(fieldQueryToRoute(state)).toEqual({ group: "quote", keyword: "close", page: "3", page_size: "50", order: "desc" });
-  });
-
-  it("rejects stale request tokens", () => {
-    const gate = new RequestGate();
-    const first = gate.next();
-    const second = gate.next();
-    expect(gate.isCurrent(first)).toBe(false);
-    expect(gate.isCurrent(second)).toBe(true);
   });
 
   it("keeps a delayed group deletion bound to its original space", () => {

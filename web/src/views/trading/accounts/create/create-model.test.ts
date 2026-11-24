@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { TradeResponseError } from "@/api/trade/http";
 import {
   applyExchangeDefaults,
   buildLiveRequest,
@@ -11,6 +10,11 @@ import {
   toggleMarket,
   validateStep
 } from "./create-model";
+import { RequestError } from "@/api/http";
+
+// 交易服务的业务失败：消息就是 ret_info.msg，响应体原样带上
+const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
+  new RequestError(response.ret_info.msg, response);
 
 describe("A 股模拟账户", () => {
   it("选 A 股后市场固定为股票、人民币结算、默认 5000 万元、佣金 0.025%，换回加密货币恢复默认", () => {
@@ -181,8 +185,7 @@ describe("新建账户", () => {
 
   it("加入组合只在会话还没建起来（TRADE_SESSION_NOT_READY）时重试，其他错误直接抛出", async () => {
     const sleep = () => Promise.resolve();
-    const notReady = (code: number | string) =>
-      new TradeResponseError({ ret_info: { code, msg: "交易账户会话还没有启动，请稍后重试" } });
+    const notReady = (code: number | string) => tradeFailure({ ret_info: { code, msg: "交易账户会话还没有启动，请稍后重试" } });
     const call = vi.fn().mockRejectedValueOnce(notReady(19)).mockResolvedValueOnce("ok");
     await expect(retryWhileSessionStarting(call, { sleep })).resolves.toBe("ok");
     expect(call).toHaveBeenCalledTimes(2);

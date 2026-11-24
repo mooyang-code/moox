@@ -84,5 +84,3 @@ export function buildFieldGroupDeleteRequest(group: FieldGroup) {
 export function isSpaceRequestCurrent(request: { space_id: string }, currentSpaceID: string) {
   return request.space_id !== "" && request.space_id === currentSpaceID.trim();
 }
-
-export { RequestGate } from "@/utils/request-gate";

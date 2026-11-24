@@ -9,8 +9,8 @@ describe("resolveSelectedKeys", () => {
   });
 
   it("falls back to the route name", () => {
-    expect(resolveSelectedKeys({ name: "factor-overview", meta: {} })).toEqual(["factor-overview"]);
-    expect(resolveSelectedKeys({ name: "factor-overview" })).toEqual(["factor-overview"]);
+    expect(resolveSelectedKeys({ name: "factor-tasks", meta: {} })).toEqual(["factor-tasks"]);
+    expect(resolveSelectedKeys({ name: "factor-tasks" })).toEqual(["factor-tasks"]);
   });
 
   it("returns no key for an unnamed route", () => {

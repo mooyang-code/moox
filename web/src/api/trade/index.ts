@@ -1,5 +1,19 @@
-import { callTrade } from "./http";
-export { isTradeAdoptionRequired, isTradeNotFound, isTradeSessionNotReady, TradeResponseError, withDialogErrors } from "./http";
+import { call, RequestError } from "@/api/http";
+
+/** 交易账户的交易所会话还没有启动（ErrorCode.TRADE_SESSION_NOT_READY = 19）：请求没有发到交易所，等几秒重试即可。 */
+export function isTradeSessionNotReady(error: unknown): boolean {
+  return error instanceof RequestError && error.hasCode(19, "TRADE_SESSION_NOT_READY");
+}
+
+/** 执行账户上已有持仓或挂单，加入组合要确认接管（ErrorCode.TRADE_ADOPTION_REQUIRED = 20）。 */
+export function isTradeAdoptionRequired(error: unknown): boolean {
+  return error instanceof RequestError && error.hasCode(20, "TRADE_ADOPTION_REQUIRED");
+}
+
+/** 对象不存在（ErrorCode.NOT_FOUND）。 */
+export function isTradeNotFound(error: unknown): boolean {
+  return error instanceof RequestError && error.hasCode(5, "NOT_FOUND");
+}
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
@@ -44,34 +58,27 @@ import type {
 export * from "./types";
 
 export function createTradingAccount(req: CreateTradingAccountReq) {
-  return callTrade<CreateTradingAccountReq, AccountResponse>("console", "CreateTradingAccount", req, {
-    silent: true
-  });
+  return call<CreateTradingAccountReq, AccountResponse>("trade", "CreateTradingAccount", req);
 }
 
-/** silent：错误由调用方显示（例如确认框里），这里不再弹一次。 */
-export function updateTradingAccount(req: UpdateTradingAccountReq, options: { silent?: boolean } = {}) {
-  return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req, options);
+export function updateTradingAccount(req: UpdateTradingAccountReq) {
+  return call<UpdateTradingAccountReq, AccountResponse>("trade", "UpdateTradingAccount", req);
 }
 
-export function listTradingAccounts(req: ListTradingAccountsReq = {}, options: { silent?: boolean } = {}) {
-  return callTrade<ListTradingAccountsReq, { ret_info: RetInfo; accounts: TradingAccount[]; page_result: PageResult }>(
-    "console",
+export function listTradingAccounts(req: ListTradingAccountsReq = {}) {
+  return call<ListTradingAccountsReq, { ret_info: RetInfo; accounts: TradingAccount[]; page_result: PageResult }>(
+    "trade",
     "ListTradingAccounts",
-    req,
-    options
+    req
   );
 }
 
-export function setLeverage(
-  req: { trading_account_id: string; instrument_id: string; leverage: string },
-  options: { silent?: boolean } = {}
-) {
-  return callTrade<typeof req, AccountResponse>("console", "SetLeverage", req, options);
+export function setLeverage(req: { trading_account_id: string; instrument_id: string; leverage: string }) {
+  return call<typeof req, AccountResponse>("trade", "SetLeverage", req);
 }
 
 export function syncTradingAccount(trading_account_id: string) {
-  return callTrade<
+  return call<
     { trading_account_id: string },
     {
       ret_info: RetInfo;
@@ -83,260 +90,220 @@ export function syncTradingAccount(trading_account_id: string) {
       ready: boolean;
       warnings: string[];
     }
-  >("console", "SyncTradingAccount", { trading_account_id });
+  >("trade", "SyncTradingAccount", { trading_account_id });
 }
 
 // 只读检测一把交易所密钥，不保存；检测没有完成（超时、限频）时返回业务错误，不代表密钥有问题。
 export function inspectExchangeCredential(req: InspectExchangeCredentialReq) {
-  return callTrade<InspectExchangeCredentialReq, { ret_info: RetInfo; inspection: ExchangeInspection }>(
-    "console",
+  return call<InspectExchangeCredentialReq, { ret_info: RetInfo; inspection: ExchangeInspection }>(
+    "trade",
     "InspectExchangeCredential",
-    req,
-    { silent: true }
+    req
   );
 }
 
 // 对已有账户重新检测，结果写回账户类型和检测结果。
 export function reinspectTradingAccount(trading_account_id: string) {
-  return callTrade<
+  return call<
     { trading_account_id: string },
     { ret_info: RetInfo; inspection: ExchangeInspection; account: TradingAccount; mode_changed: boolean }
-  >("console", "ReinspectTradingAccount", { trading_account_id }, { silent: true });
+  >("trade", "ReinspectTradingAccount", { trading_account_id });
 }
 
 export function createPaperSimulation(req: CreatePaperSimulationReq) {
-  return callTrade<CreatePaperSimulationReq, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
-    "console",
+  return call<CreatePaperSimulationReq, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
+    "trade",
     "CreatePaperSimulation",
-    req,
-    { silent: true }
+    req
   );
 }
 
 export function closePaperSimulation(trading_account_id: string) {
-  return callTrade<
-    { trading_account_id: string },
-    { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }
-  >("console", "ClosePaperSimulation", { trading_account_id }, { silent: true });
+  return call<{ trading_account_id: string }, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
+    "trade",
+    "ClosePaperSimulation",
+    { trading_account_id }
+  );
 }
 
 export function getExecutionCapabilities(trading_account_id: string) {
-  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; capabilities: ExecutionCapabilities }>(
-    "console",
+  return call<{ trading_account_id: string }, { ret_info: RetInfo; capabilities: ExecutionCapabilities }>(
+    "trade",
     "GetExecutionCapabilities",
     { trading_account_id }
   );
 }
 
 export function listTradableInstruments(trading_account_id: string) {
-  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; instruments: TradableInstrument[] }>(
-    "console",
+  return call<{ trading_account_id: string }, { ret_info: RetInfo; instruments: TradableInstrument[] }>(
+    "trade",
     "ListTradableInstruments",
     { trading_account_id }
   );
 }
 
-export function queryEquityCurve(
-  req: {
-    trading_account_id?: string;
-    logical_account_id?: string;
-    start_time?: string;
-    end_time?: string;
-  },
-  options: { silent?: boolean } = {}
-) {
-  return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req, options);
+export function queryEquityCurve(req: {
+  trading_account_id?: string;
+  logical_account_id?: string;
+  start_time?: string;
+  end_time?: string;
+}) {
+  return call<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("trade", "QueryEquityCurve", req);
 }
 
-export function listHoldings(trading_account_id: string, options: { silent?: boolean } = {}) {
-  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>(
-    "console",
-    "ListHoldings",
-    { trading_account_id },
-    options
-  );
+export function listHoldings(trading_account_id: string) {
+  return call<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("trade", "ListHoldings", {
+    trading_account_id
+  });
 }
 
 /** 从交易所即查资金流水（手续费、资金费、已实现盈亏、划转等），按时间倒序 */
 export function listAccountLedger(req: ListAccountLedgerReq) {
-  return callTrade<ListAccountLedgerReq, { ret_info: RetInfo; entries: LedgerEntry[]; has_more: boolean }>(
-    "console",
+  return call<ListAccountLedgerReq, { ret_info: RetInfo; entries: LedgerEntry[]; has_more: boolean }>(
+    "trade",
     "ListAccountLedger",
     req
   );
 }
 
 /** 下架名单：被禁止买入的标的，全局，不分空间 */
-export function listBlockedInstruments(options: { silent?: boolean } = {}) {
-  return callTrade<Record<string, never>, { ret_info: RetInfo; instruments: BlockedInstrument[] }>(
-    "console",
+export function listBlockedInstruments() {
+  return call<Record<string, never>, { ret_info: RetInfo; instruments: BlockedInstrument[] }>(
+    "trade",
     "ListBlockedInstruments",
-    {},
-    options
+    {}
   );
 }
 
 /** 解除一个标的的买入禁止；不在名单里不算错误，removed 为 false。对应的下架清仓还在跑时会提前结束 */
-export function unblockInstrument(req: UnblockInstrumentReq, options: { silent?: boolean } = {}) {
-  return callTrade<UnblockInstrumentReq, { ret_info: RetInfo; removed: boolean }>("console", "UnblockInstrument", req, options);
+export function unblockInstrument(req: UnblockInstrumentReq) {
+  return call<UnblockInstrumentReq, { ret_info: RetInfo; removed: boolean }>("trade", "UnblockInstrument", req);
 }
 
 /** 只平组合账户里的这一个执行账户；组合账户会被暂停 */
 export function flattenTradingAccount(action_id: string, trading_account_id: string, reason: string) {
-  return callTrade<
-    { action_id: string; trading_account_id: string; reason: string },
-    { ret_info: RetInfo; action: OperatorAction }
-  >("console", "FlattenTradingAccount", { action_id, trading_account_id, reason }, { silent: true });
-}
-
-export function createLogicalAccount(req: CreateLogicalAccountReq) {
-  return callTrade<CreateLogicalAccountReq, LogicalAccountResponse>("console", "CreateLogicalAccount", req, { silent: true });
-}
-
-export function getLogicalAccount(logical_account_id: string, options: { silent?: boolean } = {}) {
-  return callTrade<{ logical_account_id: string }, LogicalAccountResponse>(
-    "console",
-    "GetLogicalAccount",
-    { logical_account_id },
-    options
+  return call<{ action_id: string; trading_account_id: string; reason: string }, { ret_info: RetInfo; action: OperatorAction }>(
+    "trade",
+    "FlattenTradingAccount",
+    { action_id, trading_account_id, reason }
   );
 }
 
-export function listLogicalAccounts(page: Page = {}, options: { silent?: boolean } = {}) {
-  return callTrade<{ page: Page }, { ret_info: RetInfo; logical_accounts: LogicalAccount[]; page_result: PageResult }>(
-    "console",
+export function createLogicalAccount(req: CreateLogicalAccountReq) {
+  return call<CreateLogicalAccountReq, LogicalAccountResponse>("trade", "CreateLogicalAccount", req);
+}
+
+export function getLogicalAccount(logical_account_id: string) {
+  return call<{ logical_account_id: string }, LogicalAccountResponse>("trade", "GetLogicalAccount", { logical_account_id });
+}
+
+export function listLogicalAccounts(page: Page = {}) {
+  return call<{ page: Page }, { ret_info: RetInfo; logical_accounts: LogicalAccount[]; page_result: PageResult }>(
+    "trade",
     "ListLogicalAccounts",
-    { page },
-    options
+    { page }
   );
 }
 
 export function updateLogicalAccount(logical_account_id: string, name: string) {
-  return callTrade<{ logical_account_id: string; name: string }, LogicalAccountResponse>(
-    "console",
-    "UpdateLogicalAccount",
-    { logical_account_id, name },
-    { silent: true }
-  );
-}
-
-export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
-  return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req, {
-    silent: true
+  return call<{ logical_account_id: string; name: string }, LogicalAccountResponse>("trade", "UpdateLogicalAccount", {
+    logical_account_id,
+    name
   });
 }
 
+export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
+  return call<AddLogicalAccountMemberReq, LogicalAccountResponse>("trade", "AddLogicalAccountMember", req);
+}
+
 export function removeLogicalAccountMember(logical_account_id: string, trading_account_id: string) {
-  return callTrade<{ logical_account_id: string; trading_account_id: string }, LogicalAccountResponse>(
-    "console",
+  return call<{ logical_account_id: string; trading_account_id: string }, LogicalAccountResponse>(
+    "trade",
     "RemoveLogicalAccountMember",
-    { logical_account_id, trading_account_id },
-    { silent: true }
+    { logical_account_id, trading_account_id }
   );
 }
 
 export function pauseLogicalAccount(logical_account_id: string, reason: string) {
-  return callTrade<{ logical_account_id: string; reason: string }, LogicalAccountResponse>(
-    "console",
-    "PauseLogicalAccount",
-    {
-      logical_account_id,
-      reason
-    },
-    { silent: true }
-  );
+  return call<{ logical_account_id: string; reason: string }, LogicalAccountResponse>("trade", "PauseLogicalAccount", {
+    logical_account_id,
+    reason
+  });
 }
 
 export function resumeLogicalAccount(logical_account_id: string) {
-  return callTrade<{ logical_account_id: string }, LogicalAccountResponse & { warning?: string }>(
-    "console",
-    "ResumeLogicalAccount",
-    { logical_account_id },
-    { silent: true }
-  );
+  return call<{ logical_account_id: string }, LogicalAccountResponse & { warning?: string }>("trade", "ResumeLogicalAccount", {
+    logical_account_id
+  });
 }
 
 export function flattenLogicalAccount(action_id: string, logical_account_id: string, reason: string) {
-  return callTrade<
-    { action_id: string; logical_account_id: string; reason: string },
-    { ret_info: RetInfo; action: OperatorAction }
-  >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason }, { silent: true });
+  return call<{ action_id: string; logical_account_id: string; reason: string }, { ret_info: RetInfo; action: OperatorAction }>(
+    "trade",
+    "FlattenLogicalAccount",
+    { action_id, logical_account_id, reason }
+  );
 }
 
 /** 人工下单的唯一入口：要不要先暂停组合由后端按控制模式决定。策略驱动的组合提交被顺延时响应里没有 order。 */
 export function submitOrder(req: SubmitOrderReq) {
-  return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order?: Order }>("console", "SubmitOrder", req, {
-    silent: true
-  });
+  return call<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order?: Order }>("trade", "SubmitOrder", req);
 }
 
 export function cancelOrder(action_id: string, order_id: string, reason: string) {
-  return callTrade<
+  return call<
     { action_id: string; order_id: string; reason: string },
     { ret_info: RetInfo; action: OperatorAction; order: Order }
-  >("console", "CancelOrder", { action_id, order_id, reason }, { silent: true });
+  >("trade", "CancelOrder", { action_id, order_id, reason });
 }
 
-export function getOperatorAction(action_id: string, options: { silent?: boolean } = {}) {
-  return callTrade<{ action_id: string }, { ret_info: RetInfo; action: OperatorAction }>(
-    "console",
-    "GetOperatorAction",
-    { action_id },
-    options
-  );
+export function getOperatorAction(action_id: string) {
+  return call<{ action_id: string }, { ret_info: RetInfo; action: OperatorAction }>("trade", "GetOperatorAction", { action_id });
 }
 
-export function getLogicalAccountTarget(logical_account_id: string, options: { silent?: boolean } = {}) {
-  return callTrade<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget; lanes?: TargetLane[] }>(
-    "console",
+export function getLogicalAccountTarget(logical_account_id: string) {
+  return call<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget; lanes?: TargetLane[] }>(
+    "trade",
     "GetLogicalAccountTarget",
-    { logical_account_id },
-    options
+    { logical_account_id }
   );
 }
 
 /** 列出策略实例最近的影子目标（从新到旧）：确认实盘前先看它们。 */
-export function listShadowTargets(instance_id: string, limit = 20, options: { silent?: boolean } = {}) {
-  return callTrade<{ instance_id: string; limit: number }, { ret_info: RetInfo; targets?: ShadowTarget[] }>(
-    "console",
+export function listShadowTargets(instance_id: string, limit = 20) {
+  return call<{ instance_id: string; limit: number }, { ret_info: RetInfo; targets?: ShadowTarget[] }>(
+    "trade",
     "ListShadowTargets",
-    { instance_id, limit },
-    options
+    { instance_id, limit }
   );
 }
 
-export function getOrder(order_id: string, options: { silent?: boolean } = {}) {
-  return callTrade<{ order_id: string }, { ret_info: RetInfo; order: Order }>("console", "GetOrder", { order_id }, options);
+export function getOrder(order_id: string) {
+  return call<{ order_id: string }, { ret_info: RetInfo; order: Order }>("trade", "GetOrder", { order_id });
 }
 
-export function listOrders(req: ListOrdersReq = {}, options: { silent?: boolean } = {}) {
-  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>(
-    "console",
-    "ListOrders",
-    req,
-    options
-  );
+export function listOrders(req: ListOrdersReq = {}) {
+  return call<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>("trade", "ListOrders", req);
 }
 
 export function listFills(req: ListFillsReq = {}) {
-  return callTrade<ListFillsReq, { ret_info: RetInfo; fills: Fill[]; page_result: PageResult }>("console", "ListFills", req);
+  return call<ListFillsReq, { ret_info: RetInfo; fills: Fill[]; page_result: PageResult }>("trade", "ListFills", req);
 }
 
-export function listPositions(req: ListPositionsReq, options: { silent?: boolean } = {}) {
-  return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req, options);
+export function listPositions(req: ListPositionsReq) {
+  return call<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("trade", "ListPositions", req);
 }
 
 /** 收益拆解：手续费、已实现盈亏按资产分别汇总，资金费从交易所即查，不折算 */
 export function summarizeAccountPnl(req: SummarizeAccountPnlReq) {
-  return callTrade<SummarizeAccountPnlReq, SummarizeAccountPnlRsp>("console", "SummarizeAccountPnl", req);
+  return call<SummarizeAccountPnlReq, SummarizeAccountPnlRsp>("trade", "SummarizeAccountPnl", req);
 }
 
-export function listOperatorActions(req: ListOperatorActionsReq, options: { silent?: boolean } = {}) {
-  return callTrade<ListOperatorActionsReq, { ret_info: RetInfo; actions?: OperatorAction[]; page_result?: PageResult }>(
-    "console",
+export function listOperatorActions(req: ListOperatorActionsReq) {
+  return call<ListOperatorActionsReq, { ret_info: RetInfo; actions?: OperatorAction[]; page_result?: PageResult }>(
+    "trade",
     "ListOperatorActions",
-    req,
-    options
+    req
   );
 }
 

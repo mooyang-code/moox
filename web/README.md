@@ -17,7 +17,8 @@ pnpm test                     # vitest 单元测试
 pnpm build:prod               # vue-tsc 类型检查 + 生产构建，输出 dist/
 pnpm lint:eslint:check        # ESLint（零 warning）
 pnpm lint:prettier:check      # Prettier
-pnpm check:menu               # 其余 check:* 为页面结构契约检查脚本
+pnpm test:e2e                 # Playwright 页面测试；本机有 Google Chrome 时加 PLAYWRIGHT_CHANNEL=chrome
+pnpm check:deployments        # 其余 check:* 为页面结构契约检查脚本
 ```
 
 ## 本地联调
@@ -41,7 +42,7 @@ tests/            跨页面的契约与 e2e 测试
 src/api/          后端 API 封装
 src/components/   通用组件（自动注册）
 src/layout/       管理台布局
-src/router/       路由；菜单在 src/api/modules/system/static-menu.ts
+src/router/       路由表（route.ts），侧栏菜单由它生成
 src/store/        Pinia 状态
 src/views/        页面
 ```

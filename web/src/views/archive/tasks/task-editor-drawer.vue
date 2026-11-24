@@ -124,6 +124,7 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
@@ -282,7 +283,7 @@ async function prepare(datasetId: string, fill: boolean) {
   resetDirCheck();
   if (!datasetId) return;
   try {
-    const rsp = await prepareArchiveTask(datasetId, "", { silentError: true });
+    const rsp = await prepareArchiveTask(datasetId, "");
     if (!request.isLatest()) return;
     prepared.value = rsp;
     if (fill) {
@@ -319,7 +320,7 @@ function onDirNameChange() {
 async function checkDirName(datasetId: string, name: string) {
   const request = dirGuard.begin();
   try {
-    const rsp = await prepareArchiveTask(datasetId, name, { silentError: true });
+    const rsp = await prepareArchiveTask(datasetId, name);
     if (request.isLatest()) Object.assign(dirCheck, { name, conflict: Boolean(rsp.dir_name_conflict), error: "" });
   } catch (cause) {
     if (request.isLatest())
@@ -350,10 +351,10 @@ onBeforeUnmount(() => {
 async function loadPreview() {
   const request = previewGuard.begin();
   try {
-    const rsp = await previewArchiveSchedule(
-      { dataset_id: currentDatasetId.value, pull_every_bars: Number(form.pullEveryBars) || 1 },
-      { silentError: true }
-    );
+    const rsp = await previewArchiveSchedule({
+      dataset_id: currentDatasetId.value,
+      pull_every_bars: Number(form.pullEveryBars) || 1
+    });
     if (request.isLatest()) preview.value = rsp;
   } catch (cause) {
     if (request.isLatest()) previewError.value = cause instanceof Error && cause.message ? cause.message : "预览失败";
@@ -411,8 +412,8 @@ async function submit() {
       emit("update:visible", false);
       emit("updated");
     }
-  } catch {
-    // 失败原因由接口封装提示，抽屉保持打开
+  } catch (error) {
+    reportError(error);
   } finally {
     submitting.value = false;
   }

@@ -1,4 +1,5 @@
 import { callFactor } from "./http";
+import { readAllPages } from "@/api/read-all-pages";
 import type {
   EngineStatus,
   FactorCategory,
@@ -51,16 +52,21 @@ export function deleteFactorTask(task_id: string, purge = false) {
   return callFactor<{ task_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorTask", { task_id, purge });
 }
 
-export function listFactorTasks(params: ListFactorTasksReq = {}, options: { silentError?: boolean } = {}) {
-  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params, options);
+export function listFactorTasks(params: ListFactorTasksReq = {}) {
+  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
 }
 
-/** 读取一个计算任务；任务不存在时抛出 ret_info.code 为 NOT_FOUND 的 ControlRequestError。silent 为 true 时失败不弹全局提示。 */
-export async function getFactorTask(task_id: string, options: { silent?: boolean } = {}) {
-  type Rsp = FactorRetRsp<{ factor_task: FactorTask }>;
-  const rsp = options.silent
-    ? await callFactor<{ task_id: string }, Rsp>("GetFactorTask", { task_id }, { silentError: true })
-    : await callFactor<{ task_id: string }, Rsp>("GetFactorTask", { task_id });
+/** 全部计算任务（翻完所有页，不限空间：调用方按 space_id 过滤）。 */
+export function listAllFactorTasks() {
+  return readAllPages(async page => {
+    const rsp = await listFactorTasks({ page: { page, size: 200 } });
+    return { items: rsp.factor_tasks || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  });
+}
+
+/** 读取一个计算任务；任务不存在时抛出错误码为 NOT_FOUND 的 RequestError。 */
+export async function getFactorTask(task_id: string) {
+  const rsp = await callFactor<{ task_id: string }, FactorRetRsp<{ factor_task: FactorTask }>>("GetFactorTask", { task_id });
   return rsp.factor_task;
 }
 
@@ -115,12 +121,8 @@ export async function setFactorMemberStatus(
   return { member: rsp.member };
 }
 
-export async function listFactorCategories(options: { silentError?: boolean } = {}) {
-  const rsp = await callFactor<Record<string, never>, FactorRetRsp<{ categories: FactorCategory[] }>>(
-    "ListFactorCategories",
-    {},
-    options
-  );
+export async function listFactorCategories() {
+  const rsp = await callFactor<Record<string, never>, FactorRetRsp<{ categories: FactorCategory[] }>>("ListFactorCategories", {});
   return rsp.categories || [];
 }
 
@@ -173,12 +175,12 @@ export async function cancelRecalcJob(job_id: string) {
   return rsp.job;
 }
 
-export function listRecalcJobs(params: ListRecalcJobsReq, options: { silentError?: boolean } = {}) {
-  return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params, options);
+export function listRecalcJobs(params: ListRecalcJobsReq) {
+  return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params);
 }
 
-export function getFactorStatus(options: { silentError?: boolean } = {}) {
-  return callFactor<Record<string, never>, EngineStatus>("GetStatus", {}, options);
+export function getFactorStatus() {
+  return callFactor<Record<string, never>, EngineStatus>("GetStatus", {});
 }
 
 /** 编译一个定义：定义不合法时 valid=false，诊断带字段路径与行列（不是接口错误）。 */

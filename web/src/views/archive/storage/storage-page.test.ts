@@ -59,10 +59,11 @@ async function mountPage() {
 describe("归档存储页", () => {
   it("执行器所在主机、根目录、磁盘、内置对象存储", async () => {
     const text = await mountPage();
-    expect(api.listDeployments).toHaveBeenCalledWith(
-      { component_id: "archive-worker", status: "enabled", page: { page: 1, size: 100 } },
-      { silentError: true }
-    );
+    expect(api.listDeployments).toHaveBeenCalledWith({
+      component_id: "archive-worker",
+      status: "enabled",
+      page: { page: 1, size: 100 }
+    });
     expect(text).toContain("因子机（192.168.0.103）");
     expect(text).toContain("/data/moox/archive");
     expect(text).toContain("已用 30 GB / 共 100 GB，可用 65 GB");

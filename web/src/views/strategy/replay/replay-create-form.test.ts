@@ -4,6 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { reactive } from "vue";
 import type { ReplayFormState } from "./replay-form-model";
 import ReplayCreateForm from "./replay-create-form.vue";
+import { registerFixtureDefinitions } from "../../../../tests/strategy-requirement";
+
+// 挂载前把表单的定义列表登记给要求的模拟（页面按定义 ID 向后端读要求）
+function mountWithDefinitions(options: { props: { strategies: unknown }; global?: Record<string, unknown> }) {
+  registerFixtureDefinitions(options.props.strategies as { strategy_id: string; dsl_yaml?: string }[]);
+  return mount(ReplayCreateForm, options as never);
+}
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -26,7 +33,7 @@ describe("回放表单的区间", () => {
       funding_column: "",
       input: "view"
     };
-    const wrapper = mount(ReplayCreateForm, {
+    const wrapper = mountWithDefinitions({
       props: {
         modelValue: form,
         strategies: [{ strategy_id: "s1", name: "日线", dsl_yaml: "name: a\n" }] as never,
@@ -67,7 +74,7 @@ describe("回放表单的资金费列", () => {
     input: "view"
   });
   const mountForm = (form: ReplayFormState) =>
-    mount(ReplayCreateForm, {
+    mountWithDefinitions({
       props: {
         modelValue: form,
         strategies: strategies as never,
@@ -95,7 +102,7 @@ describe("回放表单的资金费列", () => {
 describe("回放表单的因子数据来源", () => {
   const tunedDSL = 'name: t\nfactor_params:\n  ma__var:\n    window: {default: "close"}\nrules: []\n';
   const mountForm = (form: ReplayFormState, dsl: string) =>
-    mount(ReplayCreateForm, {
+    mountWithDefinitions({
       props: {
         modelValue: form,
         strategies: [{ strategy_id: "s1", name: "策略", dsl_yaml: dsl }] as never,
@@ -138,4 +145,7 @@ describe("回放表单的因子数据来源", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("不受 View 保留根数限制");
   });
-});
+}); // 要绑定的任务由后端按 DSL 推出：测试里按 DSL 与登记的定义模拟
+vi.mock("@/views/strategy/use-task-requirement", async () => ({
+  useTaskRequirement: (await import("../../../../tests/strategy-requirement")).useFixtureTaskRequirement
+}));

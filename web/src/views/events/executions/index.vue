@@ -116,7 +116,7 @@ import {
   type ExecutionStatus,
   type SubscribableEvent
 } from "@/api/callback-dispatcher";
-import { reportControlError } from "@/api/admin/http";
+import { reportError } from "@/api/http";
 import { defaultPagination } from "@/views/data/shared/metadata-utils";
 import { usePolling } from "@/hooks/usePolling";
 import ExecutionDrawer from "./execution-drawer.vue";
@@ -163,14 +163,11 @@ async function load(background = false) {
   const seq = ++loadSeq;
   if (!background) loading.value = true;
   try {
-    const rsp = await listEventExecutions(
-      {
-        rule_id: filters.rule_id || undefined,
-        status: filters.status || undefined,
-        page: { page: pagination.current, size: pagination.pageSize }
-      },
-      { silentError: background }
-    );
+    const rsp = await listEventExecutions({
+      rule_id: filters.rule_id || undefined,
+      status: filters.status || undefined,
+      page: { page: pagination.current, size: pagination.pageSize }
+    });
     if (seq !== loadSeq) return;
     const total = rsp.page_result?.total ?? rsp.executions.length;
     // 按状态筛选时，取消、确认可能让最后一页仅有的一行移出筛选结果：回到现在的最后一页再读一次。
@@ -183,7 +180,7 @@ async function load(background = false) {
     rows.value = rsp.executions;
     pagination.total = total;
   } catch (error) {
-    if (seq === loadSeq && !background) reportControlError(error);
+    if (seq === loadSeq && !background) reportError(error);
   } finally {
     if (seq === loadSeq) loading.value = false;
   }
@@ -196,7 +193,7 @@ async function loadOptions() {
       listAllEventRules()
     ]);
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
   }
 }
 
@@ -282,7 +279,7 @@ async function act(kind: "retry" | "cancel" | "ack", item: EventExecution) {
       kind === "retry" ? "已重新开始执行" : kind === "cancel" ? (item.cleanup_pending ? "善后已完成" : "已取消") : "已确认"
     );
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
   } finally {
     acting.value = "";
     // 不管成败，列表和抽屉里的详情都按最新状态重读：取消可能已生效而善后失败，失败时列表上的状态也已经变了。

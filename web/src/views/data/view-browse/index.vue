@@ -21,7 +21,6 @@
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
-            <span v-if="currentDatasetUnified">{{ datasetMarketText("multi") }}</span>
             <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="viewIndexTag.color">{{ viewIndexTag.text }}</a-tag>
@@ -415,7 +414,7 @@ import type {
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useSpaceStore } from "@/store/modules/space";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
-import { datasetMarketText, isUnifiedMarketType, seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
+import { seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
 import {
   adaptiveColumnWidth,
   recordRowsToTableRows,
@@ -637,9 +636,6 @@ const currentDatasetRetention = computed(() => {
   return `${formatRetention(dataset.retention)}（${retentionSourceLabel(dataset.retention_source)}）`;
 });
 
-// 统一数据集（market_type 为 multi）：同一个数据集里放现货、永续两条序列。
-const currentDatasetUnified = computed(() => isUnifiedMarketType(primaryDataset.value?.attributes?.market_type));
-
 const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.dataset_id));
 const modeText = computed(() => {
   if (mode.value === "time_series") return "时序视图 / DuckDB";
@@ -828,7 +824,7 @@ async function refreshViewIndex() {
   if (!space_id || !view_id) return;
   const isCurrent = () => selectedSpaceId.value === space_id && activeView.value?.view_id === view_id;
   try {
-    const state = await getViewState({ space_id, view_id }, { silentError: true });
+    const state = await getViewState({ space_id, view_id });
     if (isCurrent()) viewIndex.value = { status: state.index_id ? "ready" : "building", state };
   } catch (error) {
     if (!isCurrent()) return;
@@ -928,19 +924,16 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false, { background = 
   try {
     const timeRange = defaultTimeSeriesPreviewRange();
     const projection = props.projectColumns ?? explicitViewColumnNames.value;
-    const rsp = await queryTimeSeriesRows(
-      {
-        space_id,
-        view_id: view.view_id,
-        ...(timeRange ? { time_range: timeRange } : {}),
-        ...(projection.length > 0 ? { column_names: projection } : {}),
-        filter: activeFilterExprs(),
-        sorts: buildViewSorts(sortState),
-        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
-        total_mode: "NONE"
-      },
-      { silentError: true }
-    );
+    const rsp = await queryTimeSeriesRows({
+      space_id,
+      view_id: view.view_id,
+      ...(timeRange ? { time_range: timeRange } : {}),
+      ...(projection.length > 0 ? { column_names: projection } : {}),
+      filter: activeFilterExprs(),
+      sorts: buildViewSorts(sortState),
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
+      total_mode: "NONE"
+    });
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||
@@ -991,17 +984,14 @@ async function loadRecordViewRows(retainRowsOnError = false, { background = fals
   loading.value = true;
   if (!background) queryError.value = "";
   try {
-    const rsp = await searchRecordRows(
-      {
-        space_id,
-        view_id: view.view_id,
-        text_query: recordKeyword.value.trim(),
-        filter: activeFilterExprs(),
-        sorts: buildViewSorts(sortState),
-        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
-      },
-      { silentError: true }
-    );
+    const rsp = await searchRecordRows({
+      space_id,
+      view_id: view.view_id,
+      text_query: recordKeyword.value.trim(),
+      filter: activeFilterExprs(),
+      sorts: buildViewSorts(sortState),
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
+    });
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||

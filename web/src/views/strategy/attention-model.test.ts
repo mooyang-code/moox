@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Replay, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
-import {
-  CARD_CHIP_LIMIT,
-  activeReplays,
-  instanceCards,
-  overviewStats,
-  pendingItems,
-  stateOf,
-  type OverviewInput
-} from "./overview-model";
+import { activeReplays, pendingItems, stateOf, type AttentionInput } from "./attention-model";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 
@@ -37,73 +29,17 @@ function snapshot(validUntil: string, weights: Record<string, string> = { "BTC-U
     result_id: "r"
   };
 }
-function input(overrides: Partial<OverviewInput> = {}): OverviewInput {
-  return { instances: [], targets: {}, replays: [], catalog: [], nowMs: NOW, ...overrides };
+function input(overrides: Partial<AttentionInput> = {}): AttentionInput {
+  return { instances: [], targets: {}, catalog: [], nowMs: NOW, ...overrides };
 }
 
-describe("strategy overview model", () => {
+describe("策略的待处理与进行中的回放", () => {
   it("derives the target state, treating unread enabled instances as unknown", () => {
     const targets = { a: snapshot("2026-10-10T13:00:00Z"), b: snapshot("2026-10-10T11:30:00Z") };
     expect(stateOf(instance("a"), targets, NOW)).toBe("valid");
     expect(stateOf(instance("b"), targets, NOW)).toBe("expired");
     expect(stateOf(instance("c"), targets, NOW)).toBe("unknown");
     expect(stateOf(instance("d", { enabled: false }), targets, NOW)).toBe("inactive");
-  });
-
-  it("summarizes instances, valid targets, attention items and running replays", () => {
-    const stats = overviewStats(
-      input({
-        instances: [instance("a"), instance("b", { health: "degraded" }), instance("c", { enabled: false, session_id: "" })],
-        targets: { a: snapshot("2026-10-10T13:00:00Z"), b: snapshot("2026-10-10T13:00:00Z") },
-        replays: [{ status: "running" }, { status: "done" }, { status: "pending" }] as Replay[]
-      })
-    );
-    expect(Object.fromEntries(stats.map(item => [item.key, item.value]))).toEqual({
-      instances: "2 / 3",
-      valid: "2 / 2",
-      attention: "1",
-      replays: "2"
-    });
-    expect(stats.find(item => item.key === "attention")?.tone).toBe("danger");
-  });
-
-  it("puts the largest weights on the card and folds the rest", () => {
-    const weights = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`I${i}`, String((i + 1) / 100)]));
-    weights.SHORT = "-0.5";
-    const [card] = instanceCards(
-      input({
-        instances: [instance("a")],
-        targets: { a: snapshot("2026-10-10T13:00:00Z", weights) },
-        catalog: [{ strategy_id: "s1", name: "动量" }] as never
-      }),
-      "UTC"
-    );
-    expect(card.title).toBe("动量");
-    expect(card.period).toBe("最近一期 2026-10-10 11:00:00 UTC");
-    expect(card.chips).toHaveLength(CARD_CHIP_LIMIT);
-    expect(card.chips[0]).toEqual({ instrumentId: "SHORT", text: "SHORT -50.00%", short: true });
-    expect(card.more).toBe(9 - CARD_CHIP_LIMIT);
-    expect(card.stateTag.label).toBe("目标有效");
-    expect(card.links.results).toEqual({ name: "strategy-tasks", query: { tab: "results", instance: "a" } });
-    expect(card.trial).toBe(false);
-  });
-
-  it("marks enabled instances with an account but no confirmation as trial", () => {
-    const cards = instanceCards(
-      input({
-        instances: [
-          instance("trial", { logical_account_id: "acc", confirmed_at: "" }),
-          instance("live", { logical_account_id: "acc", confirmed_at: "2026-10-10T00:00:00Z" }),
-          instance("off", { logical_account_id: "acc", confirmed_at: "", enabled: false })
-        ]
-      }),
-      "UTC"
-    );
-    expect(Object.fromEntries(cards.map(card => [card.instanceId, card.trial]))).toEqual({
-      trial: true,
-      live: false,
-      off: false
-    });
   });
 
   it("lists one pending item per instance by severity", () => {

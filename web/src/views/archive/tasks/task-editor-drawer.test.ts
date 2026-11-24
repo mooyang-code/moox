@@ -99,10 +99,7 @@ describe("拉取预览", () => {
     expect(api.previewArchiveSchedule).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(api.previewArchiveSchedule).toHaveBeenCalledTimes(2);
-    expect(api.previewArchiveSchedule).toHaveBeenLastCalledWith(
-      { dataset_id: "ds_1m", pull_every_bars: 3 },
-      { silentError: true }
-    );
+    expect(api.previewArchiveSchedule).toHaveBeenLastCalledWith({ dataset_id: "ds_1m", pull_every_bars: 3 });
 
     // 第一次的结果晚到：丢弃，不覆盖第二次的
     resolveFirst({ next_runs: ["2030-01-01T00:00:00Z"], next_reviews: [] });
@@ -143,7 +140,7 @@ describe("新建时的目录名", () => {
     api.createArchiveTask.mockClear();
     mountEditor({ mode: "create", task: null, presetDatasetId: "ds_1m", datasets, spaceId: "crypto" });
     await flushPromises();
-    expect(api.prepareArchiveTask).toHaveBeenCalledWith("ds_1m", "", { silentError: true });
+    expect(api.prepareArchiveTask).toHaveBeenCalledWith("ds_1m", "");
     expect(dirInput().value).toBe("binance-spot-kline-1m");
     expect(document.body.textContent).toContain("建好后不能改");
     expect(document.body.textContent).toContain("crypto/collect/binance-spot-kline-1m/<yyyy>/<yyyymmdd>.csv.gz");
@@ -181,7 +178,7 @@ describe("新建时的目录名", () => {
     vm.form.dirName = "binance-spot-1m";
     await vi.advanceTimersByTimeAsync(400);
     await flushPromises();
-    expect(api.prepareArchiveTask).toHaveBeenLastCalledWith("ds_1m", "binance-spot-1m", { silentError: true });
+    expect(api.prepareArchiveTask).toHaveBeenLastCalledWith("ds_1m", "binance-spot-1m");
     expect(document.body.textContent).toContain("目录名已被这个空间的其他任务使用");
   });
 
@@ -221,7 +218,7 @@ describe("新建时的目录名", () => {
     expect(document.body.textContent).toContain("检查目录名失败：超时");
     okButton().click();
     await flushPromises();
-    expect(api.prepareArchiveTask).toHaveBeenLastCalledWith("ds_1m", "binance-spot-1m", { silentError: true });
+    expect(api.prepareArchiveTask).toHaveBeenLastCalledWith("ds_1m", "binance-spot-1m");
     expect(api.createArchiveTask).toHaveBeenCalledWith(expect.objectContaining({ dir_name: "binance-spot-1m" }));
   });
 });
