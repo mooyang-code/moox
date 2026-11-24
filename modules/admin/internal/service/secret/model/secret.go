@@ -3,8 +3,6 @@ package model
 import (
 	"strings"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/events/systemspace"
 )
 
 // 主机的 SSH 登录凭据（密码或私钥）由 SSH 服务按主机维护，不经过通用的 SecretMgr API。
@@ -22,24 +20,16 @@ func (s *Secret) IsSystem() bool {
 	return strings.HasPrefix(s.SecretID, SSHHostIDPrefix)
 }
 
-// ConfigBackupID 是配置备份（moox-cli 用管理员密码加密的 moox.toml）在 t_secrets 里的固定标识；整个系统只有一份，
-// 属于本环境，秘钥迁移不导出也不导入它。
-const ConfigBackupID = "moox-config-backup"
-
-// SystemSpacePrefix 是系统内部空间的前缀：EventBus 内部凭据等由部署工具在系统空间（systemspace.ID）下生成，属于本环境。
-const SystemSpacePrefix = systemspace.ID
-
 // EventBus 内部凭据（各角色令牌）的分类与提供方，由 eventbus-credentials ensure 生成，按 key_id 读取。
 const (
 	EventBusCategory = "eventbus"
 	EventBusProvider = "moox_eventbus"
 )
 
-// EnvironmentBound 判断秘钥是否属于本环境（系统空间里的、网关密钥环、主机 SSH 凭据、EventBus 内部凭据、配置备份）：
+// EnvironmentBound 判断秘钥是否属于本环境（主机 SSH 凭据、EventBus 内部凭据）：
 // 这些秘钥由部署工具生成并按固定标识读取，迁移到另一套环境会和那里自己的同名凭据冲突，所以不导出也不导入。
 func (s *Secret) EnvironmentBound() bool {
-	return strings.HasPrefix(s.SpaceID, SystemSpacePrefix) || s.SecretID == ConfigBackupID || s.IsSystem() ||
-		(s.Category == EventBusCategory && s.Provider == EventBusProvider)
+	return s.IsSystem() || (s.Category == EventBusCategory && s.Provider == EventBusProvider)
 }
 
 // ExchangeSecretID 返回交易所密钥的固定秘钥 ID：exchange-<交易所>-<环境>-<名称>，三段一律小写。
@@ -50,10 +40,7 @@ func ExchangeSecretID(exchange, environment, name string) string {
 
 // Secret 秘钥管理表
 type Secret struct {
-	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
-	// SpaceID 预留多租户隔离字段，当前为全局共享模式，默认空字符串。
-	// 未来如需空间隔离，在 DAO 层的 Create/List/Get/Update/Delete 中读写并过滤此字段。
-	SpaceID     string    `gorm:"column:c_space_id;not null;default:''" json:"space_id"`
+	ID          int       `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`
 	SecretID    string    `gorm:"column:c_secret_id;not null" json:"secret_id"`
 	Name        string    `gorm:"column:c_name;not null" json:"name"`
 	Description string    `gorm:"column:c_description;not null;default:''" json:"description"`

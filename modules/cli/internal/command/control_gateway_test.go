@@ -2,15 +2,16 @@ package command
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -59,13 +60,13 @@ func TestCommandGatewaySurvivesCanceledOperationAndThenCloses(t *testing.T) {
 	gateway, err := openCommandGateway(ctx, "", snapshot)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
-	client := &adminclient.Client{Gateway: gateway}
+	client := &rpcclient.Client{Gateway: gateway}
 	cancel()
 	_, err = client.ListCloudAccounts(ctx, "")
 	require.Error(t, err)
 	accounts, err := client.ListCloudAccounts(context.WithoutCancel(ctx), "")
 	require.NoError(t, err)
-	require.Equal(t, "account-1", accounts[0].AccountID)
+	require.Equal(t, "account-1", accounts[0].GetAccountId())
 	require.NoError(t, gateway.Close())
 	_, err = client.ListCloudAccounts(context.WithoutCancel(ctx), "")
 	require.Error(t, err)

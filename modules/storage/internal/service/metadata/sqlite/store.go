@@ -174,7 +174,7 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 		return err
 	}
 	if version != metadataSchemaVersion {
-		return fmt.Errorf("incompatible storage metadata schema v%s; remove the metadata database and run init/import-seed", version)
+		return fmt.Errorf("incompatible storage metadata schema v%s; remove the metadata database and run init and metadata apply", version)
 	}
 	return nil
 }

@@ -21,8 +21,6 @@ import (
 
 type editorHarness struct {
 	t       *testing.T
-	backups []ConfigPair // 每次同步时的两份配置
-	syncErr error
 	base    string
 	host    string
 	path    string
@@ -55,11 +53,7 @@ func startEditor(t *testing.T, rendered *Rendered) *editorHarness {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		result, err := RunEditor(ctx, EditorOptions{File: h.path, Timeout: time.Minute, KeyStore: h.keys, Open: func(u string) error { urls <- u; return nil },
-			Backup: func(_ context.Context, pair ConfigPair) (BackupResult, error) {
-				h.backups = append(h.backups, pair)
-				return BackupResult{}, h.syncErr
-			}})
+		result, err := RunEditor(ctx, EditorOptions{File: h.path, Timeout: time.Minute, KeyStore: h.keys, Open: func(u string) error { urls <- u; return nil }})
 		h.done <- editorOutcome{result, err}
 	}()
 	select {
@@ -294,16 +288,12 @@ func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 	if !strings.Contains(h.plain(), "# 告警渠道的初始值") {
 		t.Fatal("秘密文件里的注释应保留")
 	}
-	if len(h.backups) != 1 || string(h.backups[0].ConfigText) != config || string(h.backups[0].SecretsText) != h.plain() || !strings.Contains(saved.Sync, "已同步") {
-		t.Fatalf("保存后应把两份文件同步到管理后台: %d 次, %q", len(h.backups), saved.Sync)
-	}
 	// 只改拓扑时不重写秘密文件。
 	sealed, _ := os.ReadFile(h.secrets)
-	h.syncErr = errors.New("连不上管理台")
 	form.Retention.ViewBars = 6000
-	status, saved, _ = h.call("config/update", form, nil)
-	if status != http.StatusOK || !strings.Contains(saved.Sync, "本机已保存") || !strings.Contains(h.config(), "view_rows_per_series = 6000") {
-		t.Fatalf("同步失败不影响本机保存: %d %q", status, saved.Sync)
+	status, _, _ = h.call("config/update", form, nil)
+	if status != http.StatusOK || !strings.Contains(h.config(), "view_rows_per_series = 6000") {
+		t.Fatalf("只改拓扑应能保存: %d", status)
 	}
 	if again, _ := os.ReadFile(h.secrets); !bytes.Equal(again, sealed) {
 		t.Fatal("秘密没有变化时不应重写秘密文件")

@@ -3,10 +3,11 @@ package command
 import (
 	"context"
 	"errors"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/lifecycle"

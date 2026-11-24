@@ -218,7 +218,6 @@ func SetConfig(path, target, value string, write bool, keys configcrypt.KeyStore
 		return report, err
 	}
 	report.Backup, report.Written = backup, true
-	report.NextAction = "运行一次 moox-cli config backup 更新管理后台的备份"
 	return report, nil
 }
 

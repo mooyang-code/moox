@@ -202,21 +202,10 @@ func (s Service) MethodNames() []string {
 	return names
 }
 
-// Doctor keeps the diagnostics metadata in the same source of truth without
-// making this package depend on Doctor or a service implementation.
+// Doctor 是诊断要用的两项：健康怎么到达 Monitor（transport），功能观测是否已接入（functional_observability）。
 type Doctor struct {
-	Role                     string   `yaml:"role" json:"role"`
-	Description              string   `yaml:"description" json:"description"`
-	Duties                   []string `yaml:"duties" json:"duties"`
-	Inputs                   []string `yaml:"inputs" json:"inputs"`
-	Outputs                  []string `yaml:"outputs" json:"outputs"`
-	Dependencies             []string `yaml:"dependencies" json:"dependencies"`
-	Transport                string   `yaml:"transport" json:"transport"`
-	FunctionalObservability  string   `yaml:"functional_observability" json:"functional_observability"`
-	ConfigPaths              []string `yaml:"config_paths" json:"config_paths"`
-	WritablePaths            []string `yaml:"writable_paths" json:"writable_paths"`
-	RecoveryActionIDs        []string `yaml:"recovery_action_ids" json:"recovery_action_ids"`
-	RequiredInDefaultProfile bool     `yaml:"required_in_default_profile" json:"required_in_default_profile"`
+	Transport               string `yaml:"transport" json:"transport"`
+	FunctionalObservability string `yaml:"functional_observability" json:"functional_observability"`
 }
 
 // UnitName 是组件的 systemd 用户服务名：全部组件都由 systemd 用户服务托管。

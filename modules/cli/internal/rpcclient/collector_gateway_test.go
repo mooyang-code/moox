@@ -1,15 +1,16 @@
-package adminclient
+package rpcclient
 
 import (
 	"context"
 	"fmt"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"

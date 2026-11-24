@@ -40,20 +40,18 @@ func TestAdminUserEnsureCreatesSuperAdminAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
-// 管理员密码不能修改；需要另一个账号时新建一个管理员，原账号的密码不受影响。
-func TestAdminPasswordCannotBeResetButNewAdminsCanBeAdded(t *testing.T) {
+// 管理员密码可以改：set-password 只改已有管理员，ensure 仍然只建不改。
+func TestAdminPasswordCanBeChanged(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
 	runAdminUserForTest(t, []string{"user", "ensure", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, "first password\n")
-	var stdout, stderr bytes.Buffer
-	err := runAdminUserCommand([]string{"user", "reset-password", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, strings.NewReader("new password\n"), &stdout, &stderr)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown user subcommand")
-
-	added := runAdminUserForTest(t, []string{"user", "ensure", "--db-path", dbPath, "--username", "ops", "--password-stdin"}, "ops password\n")
-	assert.Equal(t, "created", added["action"])
+	changed := runAdminUserForTest(t, []string{"user", "set-password", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, "new password\n")
+	assert.Equal(t, "updated", changed["action"])
 	db := openUserTestDB(t, dbPath)
-	assert.True(t, mooxsecurity.VerifyPassword("first password", readAdminUser(t, db, "admin").PasswordHash))
-	assert.True(t, mooxsecurity.VerifyPassword("ops password", readAdminUser(t, db, "ops").PasswordHash))
+	assert.True(t, mooxsecurity.VerifyPassword("new password", readAdminUser(t, db, "admin").PasswordHash))
+
+	var stdout, stderr bytes.Buffer
+	err := runAdminUserCommand([]string{"user", "set-password", "--db-path", dbPath, "--username", "nobody", "--password-stdin"}, strings.NewReader("x\n"), &stdout, &stderr)
+	require.ErrorContains(t, err, "不存在")
 }
 
 func TestAdminUserRejectsUnsafePasswordInput(t *testing.T) {

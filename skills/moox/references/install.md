@@ -170,8 +170,8 @@ cd moox-${VER}
 
 ### 装过时这样问用户
 
-先确认配置来源：这台电脑上的 `moox.toml`、`moox.secrets.toml` 是不是当初装这套系统用的那两份（或用 `config restore` 取回的）。
-刚在这台电脑上用 `config init` 重新生成的（例如换了电脑）就停下，按“保留数据与换电脑”取回原来的配置再回到这里：用新生成的配置覆盖更新会登记新的操作身份、按新配置重新渲染全部主机，最后还会用它覆盖管理台里的配置备份。
+先确认配置来源：这台电脑上的 `moox.toml`、`moox.secrets.toml` 是不是当初装这套系统用的那两份（换电脑时从原电脑拷过来的也算）。
+刚在这台电脑上用 `config init` 重新生成的（例如换了电脑）就停下，按“保留数据与换电脑”取回原来的配置再回到这里：用新生成的配置覆盖更新会登记新的操作身份、按新配置重新渲染全部主机。
 
 再按 `components` 列一张表（主机、IP、版本、已部署的组件、没部署的组件），再问。选择对整套部署统一做，不逐台选：
 
@@ -304,26 +304,21 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 要保留线上数据时不卸载，用覆盖更新（`setup update`）。
 
-换了电脑（没有原来的两份配置）时，先从管理台取回配置。前提：管理台能打开，线上做过 `config backup`，并且知道**初始**管理员密码。
+换了电脑时，从原电脑拷过来三样东西：`moox.toml`、`moox.secrets.toml`，以及解密秘密文件的密钥（在原电脑的系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`）。
+系统不再把配置备份到管理台；原电脑已经找不回这两份文件时，只能用 `config init` 重新生成，再按“装过时这样问用户”处理。如实告诉用户：
 
-```bash
-./bin/moox-cli config restore
-```
-
-取回的是 `moox.toml` 与 `moox.secrets.toml` 两份。如实告诉用户：
-
-- `setup validate`、`setup status`、`setup logs`、`setup firewall`、`config backup` 这类只靠 SSH、云密钥或管理台登录的命令，取回配置后就能用（SSH 密钥路径要重新核对）。
+- `setup validate`、`setup status`、`setup logs`、`setup firewall` 这类只靠 SSH、云密钥的命令，拷过来就能用（SSH 密钥路径要重新核对）。
 - 经网关调用的命令（`doctor`、`collector`、`factor`、`trade` 等）和其余主机的 `setup deploy` 要这台电脑有操作员身份。新电脑上按顺序做两步（都要先问用户）：
   1. `./bin/moox-cli setup operator --register`：在这台电脑生成 `moox-cli` 的签名私钥，并经 SSH 把公钥登记到控制机。它**替换**原来登记的公钥，原来那台电脑随即不能再用，两台电脑不能同时用。约 10 秒后各主机网关生效。
   2. `./bin/moox-cli setup deploy --host control`：取回控制机的根证书（之后部署别的主机、连因子机都要用）；它重新执行 Admin 的初始化（只建不改），没有变化的组件不重启。
   这两步还没有在真机上验证过，做之前告诉用户。
-- 这两步和 `setup status` 都要先解开 `moox.secrets.toml`：用 `config restore` 取回的配置已经按这台电脑的密钥加密，直接可用；两份配置是从原电脑直接拷过来的，还要把解密密钥带过来（在原电脑的系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`），否则报“这台电脑上没有解密秘密文件的密钥”，改用 `config restore`。
+- 这两步和 `setup status` 都要先解开 `moox.secrets.toml`：没带解密密钥会报“这台电脑上没有解密秘密文件的密钥”，把原电脑的密钥带过来即可，不要重新生成密钥覆盖。
 - 身份目录（默认 `~/.config/moox`）的路径里不能有符号链接：报 `private material directory must be physical` 时按提示用 `--operator-dir` 指到实际路径。
 - 不要手动拷贝或恢复 `~/.config/moox` 下的身份文件。
 
 ## 升级到新版本
 
-下载新版本的产物包与 CLI（同一版本），把原来的 `moox.toml` 和 `moox.secrets.toml` 放进新目录（或 `config restore` 取回），然后覆盖更新：
+下载新版本的产物包与 CLI（同一版本），把原来的 `moox.toml` 和 `moox.secrets.toml` 放进新目录，然后覆盖更新：
 
 ```bash
 ./bin/moox-cli setup validate                     # 看各主机现在的版本与组件

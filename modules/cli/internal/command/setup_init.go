@@ -5,16 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
-	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
-
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
@@ -281,7 +279,7 @@ func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupSnapshot) (*se
 		return &setupCLSSummary{Enabled: true, Status: "failed", Warning: "open gateway failed"}, nil
 	}
 	defer gateway.Close()
-	client := &adminclient.Client{Gateway: gateway}
+	client := &rpcclient.Client{Gateway: gateway}
 	return provisionSetupCLS(ctx, client, defaultCLSFactory, snapshot.Manifest.SCFCloudAccount().AccountID, snapshot.Manifest.Logging.RetentionDays), nil
 }
 
@@ -319,47 +317,48 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupSnaps
 		return nil, fmt.Errorf("cloud_accounts: open gateway: %w", err)
 	}
 	defer gateway.Close()
-	client := &adminclient.Client{Gateway: gateway}
+	client := &rpcclient.Client{Gateway: gateway}
 	existingAccounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return nil, fmt.Errorf("cloud_accounts: list Tencent cloud accounts: %w", err)
 	}
-	existing := make(map[string]adminclient.CloudAccount, len(existingAccounts))
+	existing := make(map[string]*collectorpb.CloudAccount, len(existingAccounts))
 	for _, account := range existingAccounts {
-		if account.Provider == "tencent" && strings.TrimSpace(account.AccountID) != "" {
-			existing[account.AccountID] = account
+		if account.GetProvider() == "tencent" && strings.TrimSpace(account.GetAccountId()) != "" {
+			existing[account.GetAccountId()] = account
 		}
 	}
 
 	account := snapshot.Manifest.SCFCloudAccount()
-	input := adminclient.CloudAccountInput{
-		AccountID: account.AccountID, AccountName: account.AccountName,
-		Provider: "tencent", CredentialSecretID: account.CredentialSecretID,
-		AppID: account.AppID, COSRegion: account.COSRegion, COSBucket: account.COSBucket,
+	input := &collectorpb.CloudAccount{
+		AccountId: account.AccountID, AccountName: account.AccountName,
+		Provider: "tencent", CredentialSecretId: account.CredentialSecretID,
+		AppId: account.AppID, CosRegion: account.COSRegion, CosBucket: account.COSBucket,
 	}
-	if strings.TrimSpace(input.AccountID) == "" || strings.TrimSpace(input.AccountName) == "" || strings.TrimSpace(input.CredentialSecretID) == "" || strings.TrimSpace(input.AppID) == "" || strings.TrimSpace(input.COSRegion) == "" || strings.TrimSpace(input.COSBucket) == "" {
+	if strings.TrimSpace(input.AccountId) == "" || strings.TrimSpace(input.AccountName) == "" || strings.TrimSpace(input.CredentialSecretId) == "" || strings.TrimSpace(input.AppId) == "" || strings.TrimSpace(input.CosRegion) == "" || strings.TrimSpace(input.CosBucket) == "" {
 		return nil, fmt.Errorf("cloud_accounts: incomplete Tencent account in scf_plan.cloud_account")
 	}
 
 	summary := &setupCloudAccountSummary{Enabled: true, Planned: 1}
-	if existingAccount, ok := existing[input.AccountID]; ok {
+	if existingAccount, ok := existing[input.AccountId]; ok {
 		if !sameSetupCloudAccount(existingAccount, input) {
-			return nil, fmt.Errorf("cloud_accounts: existing Tencent account %q differs from moox.toml", input.AccountID)
+			return nil, fmt.Errorf("cloud_accounts: existing Tencent account %q differs from moox.toml", input.AccountId)
 		}
 		summary.Unchanged++
 		return summary, nil
 	}
 	if _, err := client.CreateCloudAccount(ctx, input); err != nil {
-		return nil, fmt.Errorf("cloud_accounts: register Tencent account %q: %w", input.AccountID, err)
+		return nil, fmt.Errorf("cloud_accounts: register Tencent account %q: %w", input.AccountId, err)
 	}
 	summary.Registered++
 	return summary, nil
 }
 
-func sameSetupCloudAccount(account adminclient.CloudAccount, input adminclient.CloudAccountInput) bool {
-	return account.AccountID == input.AccountID && account.AccountName == input.AccountName &&
-		account.Provider == input.Provider && account.CredentialSecretID == input.CredentialSecretID &&
-		account.AppID == input.AppID && account.COSRegion == input.COSRegion && account.COSBucket == input.COSBucket
+// sameSetupCloudAccount 比较登记内容；时间戳不算。
+func sameSetupCloudAccount(account, input *collectorpb.CloudAccount) bool {
+	return account.GetAccountId() == input.GetAccountId() && account.GetAccountName() == input.GetAccountName() &&
+		account.GetProvider() == input.GetProvider() && account.GetCredentialSecretId() == input.GetCredentialSecretId() &&
+		account.GetAppId() == input.GetAppId() && account.GetCosRegion() == input.GetCosRegion() && account.GetCosBucket() == input.GetCosBucket()
 }
 
 func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
@@ -375,9 +374,6 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	if err != nil {
 		return setupInitBundle{}, err
 	}
-	if err := validateSetupMetadataDependencies(seed); err != nil {
-		return setupInitBundle{}, err
-	}
 	calls, err := buildMetadataImportCalls(seed)
 	if err != nil {
 		return setupInitBundle{}, err
@@ -385,185 +381,8 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	return setupInitBundle{SpaceIDs: spaceIDs, Calls: calls}, nil
 }
 
-func validateSetupMetadataDependencies(seed metadataSeed) error {
-	if len(seed.Subjects) > 0 {
-		return fmt.Errorf("default setup metadata cannot contain runtime subject catalog entries")
-	}
-	spaces := make(map[string]struct{}, len(seed.Spaces))
-	for _, item := range seed.Spaces {
-		if err := addSetupMetadataKey(spaces, item.SpaceID, "space"); err != nil {
-			return err
-		}
-	}
-	requireSpace := func(resource, spaceID string) error {
-		if _, ok := spaces[strings.TrimSpace(spaceID)]; !ok {
-			return fmt.Errorf("%s references undefined space %q", resource, spaceID)
-		}
-		return nil
-	}
-
-	sources := make(map[string]struct{}, len(seed.DataSources))
-	for _, item := range seed.DataSources {
-		if err := requireSpace("data_source", item.SpaceID); err != nil {
-			return err
-		}
-		if err := addSetupMetadataKey(sources, setupMetadataKey(item.SpaceID, item.DataSourceID), "data_source"); err != nil {
-			return err
-		}
-	}
-	datasets := make(map[string]struct{}, len(seed.Datasets))
-	datasetDefinitions := make(map[string]seedDataset, len(seed.Datasets))
-	for _, item := range seed.Datasets {
-		if err := requireSpace("dataset", item.SpaceID); err != nil {
-			return err
-		}
-		if _, ok := sources[setupMetadataKey(item.SpaceID, item.DataSourceID)]; !ok {
-			return fmt.Errorf("dataset %s/%s references undefined data_source %q", item.SpaceID, item.DatasetID, item.DataSourceID)
-		}
-		if err := addSetupMetadataKey(datasets, setupMetadataKey(item.SpaceID, item.DatasetID), "dataset"); err != nil {
-			return err
-		}
-		if kind, kindErr := parseDataKind(item.DataKind); kindErr == nil && kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-			if !frequencypkg.IsCanonical(item.Freq) {
-				return fmt.Errorf("dataset %s/%s freq %q is not canonical; use one of %s", item.SpaceID, item.DatasetID, item.Freq, strings.Join(frequencypkg.StandardStrings(), ", "))
-			}
-		}
-		datasetDefinitions[setupMetadataKey(item.SpaceID, item.DatasetID)] = item
-	}
-	groups := make(map[string]struct{}, len(seed.FieldGroups))
-	for _, item := range seed.FieldGroups {
-		if err := requireSpace("field_group", item.SpaceID); err != nil {
-			return err
-		}
-		if err := addSetupMetadataKey(groups, setupMetadataKey(item.SpaceID, item.GroupID), "field_group"); err != nil {
-			return err
-		}
-	}
-	fields := make(map[string]struct{}, len(seed.Fields))
-	for _, item := range seed.Fields {
-		if err := requireSpace("field", item.SpaceID); err != nil {
-			return err
-		}
-		if strings.TrimSpace(item.GroupID) != "" {
-			if _, ok := groups[setupMetadataKey(item.SpaceID, item.GroupID)]; !ok {
-				return fmt.Errorf("field %s/%s references undefined field_group %q", item.SpaceID, item.FieldID, item.GroupID)
-			}
-		}
-		if err := addSetupMetadataKey(fields, setupMetadataKey(item.SpaceID, item.FieldID), "field"); err != nil {
-			return err
-		}
-	}
-	datasetColumns := make(map[string]struct{}, len(seed.DatasetColumns))
-	for _, item := range seed.DatasetColumns {
-		if _, ok := datasets[setupMetadataKey(item.SpaceID, item.DatasetID)]; !ok {
-			return fmt.Errorf("dataset_column references undefined dataset %s/%s", item.SpaceID, item.DatasetID)
-		}
-		columnKey := setupMetadataColumnKey(item.SpaceID, item.DatasetID, item.ColumnName)
-		if _, ok := datasetColumns[columnKey]; ok {
-			return fmt.Errorf(
-				"duplicate metadata dataset_column %s/%s/%s",
-				item.SpaceID,
-				item.DatasetID,
-				item.ColumnName,
-			)
-		}
-		datasetColumns[columnKey] = struct{}{}
-		originType, err := parseDatasetColumnOriginType(item.OriginType)
-		if err != nil {
-			return err
-		}
-		switch originType {
-		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
-			if err := validateSetupFieldColumnOrigin(fields, item); err != nil {
-				return err
-			}
-		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
-			// 自定义列由写入方自己定义，Storage 元数据里不预检。
-		}
-	}
-	views := make(map[string]struct{}, len(seed.Views))
-	viewDatasets := make(map[string]string, len(seed.Views))
-	for _, item := range seed.Views {
-		if err := requireSpace("view", item.SpaceID); err != nil {
-			return err
-		}
-		primaryDatasetID := strings.TrimSpace(item.PrimaryDatasetID)
-		if primaryDatasetID == "" || item.PrimaryDatasetID != primaryDatasetID {
-			return fmt.Errorf(
-				"view %s/%s dataset_id must be explicit and trimmed",
-				item.SpaceID,
-				item.ViewID,
-			)
-		}
-		viewKey := setupMetadataKey(item.SpaceID, item.ViewID)
-		if _, ok := datasets[setupMetadataKey(item.SpaceID, primaryDatasetID)]; !ok {
-			return fmt.Errorf("view %s/%s references undefined dataset %q", item.SpaceID, item.ViewID, primaryDatasetID)
-		}
-		if err := validateCanonicalSetupView(item, datasetDefinitions); err != nil {
-			return err
-		}
-		if err := addSetupMetadataKey(views, viewKey, "view"); err != nil {
-			return err
-		}
-		viewDatasets[viewKey] = primaryDatasetID
-	}
-	return nil
-}
-
-func addSetupMetadataKey(seen map[string]struct{}, raw, resource string) error {
-	key := strings.TrimSpace(raw)
-	if key == "" {
-		return fmt.Errorf("%s id is required", resource)
-	}
-	if _, ok := seen[key]; ok {
-		return fmt.Errorf("duplicate metadata %s %q", resource, key)
-	}
-	seen[key] = struct{}{}
-	return nil
-}
-
 func setupMetadataKey(spaceID, id string) string {
 	return strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(id)
-}
-
-func setupMetadataColumnKey(spaceID, parentID, columnName string) string {
-	return strings.Join([]string{
-		strings.TrimSpace(spaceID),
-		strings.TrimSpace(parentID),
-		strings.TrimSpace(columnName),
-	}, "\x00")
-}
-
-func validateSetupFieldColumnOrigin(fields map[string]struct{}, item seedDatasetColumn) error {
-	if _, ok := fields[setupMetadataKey(item.SpaceID, item.OriginID)]; ok {
-		return nil
-	}
-	return fmt.Errorf(
-		"dataset_column %s/%s/%s references undefined field %q",
-		item.SpaceID,
-		item.DatasetID,
-		item.ColumnName,
-		item.OriginID,
-	)
-}
-
-func validateCanonicalSetupView(view seedView, datasets map[string]seedDataset) error {
-	normalized, err := canonicalMetadataView(view, datasets)
-	if err != nil {
-		return err
-	}
-	if !slices.Equal(view.GrainKeys, normalized.GrainKeys) {
-		return fmt.Errorf("view %s/%s grain_keys must be canonical", view.SpaceID, view.ViewID)
-	}
-	if view.Engine != normalized.Engine {
-		return fmt.Errorf(
-			"view %s/%s engine must be %q",
-			view.SpaceID,
-			view.ViewID,
-			normalized.Engine,
-		)
-	}
-	return nil
 }
 
 func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seedView, error) {

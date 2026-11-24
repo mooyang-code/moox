@@ -87,16 +87,15 @@ func userCtx() context.Context {
 
 const testPassphrase = "迁移口令-correct-horse"
 
-// 导出全部秘钥（含明文、停用的也导出），不导出网关密钥环和配置备份；迁移包里只有密文，换口令解不开。
+// 导出全部秘钥（含明文、停用的也导出），不导出主机 SSH 凭据与 EventBus 内部凭据；迁移包里只有密文，换口令解不开。
 // 导入到另一套环境保留 secret_id 与状态，创建人记为导入的管理员。
 func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 	source := newMemSecrets(
 		model.Secret{SecretID: "sec_okx", Name: "OKX 主账户", Category: "exchange", Provider: "okx", SecretType: "api_key", KeyID: "ak-1",
 			SecretValue: "plain-okx-secret", ExtraConfig: `{"passphrase":"p@ss"}`, Status: "active", Creator: "alice"},
 		model.Secret{SecretID: "sec_ssh", Name: "跳板机", Category: "ssh", SecretType: "ssh_key", SecretValue: "-----BEGIN KEY-----", Status: "inactive"},
-		model.Secret{SecretID: model.ConfigBackupID, Name: "MooX 配置备份", Category: "other", SecretValue: "MOOX-CONFIG-BACKUP v1\n..."},
 		model.Secret{SecretID: model.SSHHostSecretID("storage"), Name: "SSH", Category: model.SSHCategory, SecretType: "password", SecretValue: "k"},
-		model.Secret{SpaceID: "mooxsys", SecretID: "eb-admin", Name: "EventBus internal-admin", Category: "eventbus", Provider: "moox_eventbus",
+		model.Secret{SecretID: "eb-admin", Name: "EventBus internal-admin", Category: "eventbus", Provider: "moox_eventbus",
 			SecretType: "token", KeyID: "eventbus_internal_admin", SecretValue: "source-env-token"},
 	)
 	exported, err := NewService(source).ExportSecrets(userCtx(), &pb.ExportSecretsReq{Passphrase: testPassphrase})
@@ -106,7 +105,7 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 	require.NotContains(t, exported.GetBundle(), "plain-okx-secret", "迁移包里没有明文")
 	// 密文是随机 base64，短片段（如 "OKX"）会偶然出现；用含空格和中文的完整名称，base64 字母表里不可能有。
 	require.NotContains(t, exported.GetBundle(), "OKX 主账户")
-	// EventBus 内部凭据由部署工具在 mooxsys 空间生成、按 key_id 读取：带到另一套环境会和那里的同名令牌冲突，不导出。
+	// EventBus 内部凭据由部署工具生成、按 key_id 读取：带到另一套环境会和那里的同名令牌冲突，不导出。
 	var outer map[string]any
 	require.NoError(t, json.Unmarshal([]byte(exported.GetBundle()), &outer))
 	require.Equal(t, bundleFormat, outer["format"])
@@ -131,7 +130,7 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 	require.Equal(t, "ak-1", okx.KeyID)
 	require.Equal(t, "ops", okx.Creator)
 	require.Equal(t, "inactive", target.byID["sec_ssh"].Status)
-	require.NotContains(t, target.byID, model.ConfigBackupID)
+	require.NotContains(t, target.byID, "eb-admin")
 }
 
 // 同一 secret_id 已存在：默认跳过，overwrite 时用迁移包里的内容覆盖。
@@ -168,7 +167,6 @@ func TestImportSecretsReportsInvalidItems(t *testing.T) {
 		{SecretID: "sec_ok", Name: "OK", Category: "exchange", SecretValue: "v"},
 		{SecretID: "sec_masked", Name: "Masked", Category: "exchange", SecretValue: "ab" + maskChar + "cd"},
 		{SecretID: "sec_cat", Name: "BadCategory", Category: "nope", SecretValue: "v"},
-		{SecretID: model.ConfigBackupID, Name: "Backup", Category: "other", SecretValue: "v"},
 		{Name: "NoID", Category: "other", SecretValue: "v"},
 		{SecretID: "eb-admin", Name: "EventBus", Category: "eventbus", Provider: "moox_eventbus", KeyID: "eventbus_internal_admin", SecretValue: "t"},
 	}, testPassphrase, time.Now())
@@ -177,7 +175,7 @@ func TestImportSecretsReportsInvalidItems(t *testing.T) {
 	rsp, err := NewService(target).ImportSecrets(userCtx(), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, rsp.GetCreated())
-	require.Equal(t, []string{"Masked：秘钥值是脱敏后的值", "BadCategory：分类无效", "Backup：系统秘钥不导入", "EventBus：系统秘钥不导入"}, rsp.GetFailed())
+	require.Equal(t, []string{"Masked：秘钥值是脱敏后的值", "BadCategory：分类无效", "EventBus：系统秘钥不导入"}, rsp.GetFailed())
 	require.Len(t, target.byID, 2)
 	require.Contains(t, target.byID, "sec_ok")
 	for id, record := range target.byID {

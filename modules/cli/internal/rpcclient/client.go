@@ -1,4 +1,5 @@
-package adminclient
+// Package rpcclient 是 moox-cli 经 SSH 网关以 JSON 调各模块的客户端：Collector 的采集任务、云账号、代码包与云函数，Admin 的密钥读取。
+package rpcclient
 
 import (
 	"strings"

@@ -4,14 +4,14 @@ import (
 	"context"
 	"io"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
 type commandGateway interface {
-	adminclient.GatewayForwarder
+	rpcclient.GatewayForwarder
 	gatewayclient.Invoker
 	io.Closer
 }

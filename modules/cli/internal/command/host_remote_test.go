@@ -3,13 +3,14 @@ package command
 import (
 	"context"
 	"errors"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"

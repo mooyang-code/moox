@@ -13,7 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 )
@@ -56,7 +56,7 @@ type setupStartSummary struct {
 
 // setupStartClient 是 setup start 要用的线上操作。
 type setupStartClient interface {
-	Tasks(ctx context.Context, spaceID string) ([]adminclient.CollectionTaskSummary, error)
+	Tasks(ctx context.Context, spaceID string) ([]rpcclient.CollectionTaskSummary, error)
 	EnableTask(ctx context.Context, spaceID, taskID string) error
 	// SyncSubjects 立即同步一个自动标签，返回同步后的成员数；Collector 正在跑别的同步时返回 errSubjectSyncBusy。
 	SyncSubjects(ctx context.Context, spaceID, tagID string) (int, error)
@@ -199,7 +199,7 @@ var errSubjectSyncBusy = errors.New("collector 正在同步标的")
 // setupStartEnableTask 启用任务。全新部署时任务绑定的自动标签可能还没同步过（如 A 股的沪深 300 成分标签要到次日 08:40
 // 才定时同步），控制面会以“没有有效标的”拒绝启用：这时立即同步任务绑定的标签再重试；标的刚同步完、标签暂时解析不出成员也等一会儿再试。
 // 其他错误原样返回。
-func setupStartEnableTask(ctx context.Context, client setupStartClient, spaceID string, task adminclient.CollectionTaskSummary, poll time.Duration) error {
+func setupStartEnableTask(ctx context.Context, client setupStartClient, spaceID string, task rpcclient.CollectionTaskSummary, poll time.Duration) error {
 	deadline := time.Now().Add(setupStartSubjectWait)
 	synced := false
 	for {
@@ -347,11 +347,11 @@ func defaultSetupOpenStart(ctx context.Context, file string, snapshot *setupSnap
 	return gatewayStartClient{gateway}, func() { gateway.Close() }, nil
 }
 
-func (c gatewayStartClient) admin(spaceID string) *adminclient.Client {
-	return &adminclient.Client{Gateway: c.gateway, SpaceID: spaceID}
+func (c gatewayStartClient) admin(spaceID string) *rpcclient.Client {
+	return &rpcclient.Client{Gateway: c.gateway, SpaceID: spaceID}
 }
 
-func (c gatewayStartClient) Tasks(ctx context.Context, spaceID string) ([]adminclient.CollectionTaskSummary, error) {
+func (c gatewayStartClient) Tasks(ctx context.Context, spaceID string) ([]rpcclient.CollectionTaskSummary, error) {
 	return c.admin(spaceID).ListTasks(ctx, spaceID, "kline", nil)
 }
 

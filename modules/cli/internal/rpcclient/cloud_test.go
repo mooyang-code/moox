@@ -1,4 +1,4 @@
-package adminclient
+package rpcclient
 
 import (
 	"context"
@@ -8,7 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
@@ -29,24 +32,24 @@ func TestListCloudAccountsCallsCollectorAndFiltersProvider(t *testing.T) {
 	accounts, err := collectorTestClient(server).ListCloudAccounts(context.Background(), "tencent")
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
-	assert.Equal(t, "a1", accounts[0].AccountID)
+	assert.Equal(t, "a1", accounts[0].GetAccountId())
 }
 
 func TestCreateCloudAccountSendsTheWholeAccount(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/admin/collector/CreateCloudAccount", r.URL.Path)
 		var body struct {
-			Account CloudAccountInput `json:"account"`
+			Account map[string]any `json:"account"`
 		}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		assert.Equal(t, "tencent-scf", body.Account.AccountID)
-		assert.Equal(t, "ap-singapore", body.Account.COSRegion)
+		assert.Equal(t, "tencent-scf", body.Account["account_id"])
+		assert.Equal(t, "ap-singapore", body.Account["cos_region"])
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"account":{"account_id":"tencent-scf"}}`))
 	}))
 	defer server.Close()
-	account, err := collectorTestClient(server).CreateCloudAccount(context.Background(), CloudAccountInput{AccountID: "tencent-scf", COSRegion: "ap-singapore"})
+	account, err := collectorTestClient(server).CreateCloudAccount(context.Background(), &collectorpb.CloudAccount{AccountId: "tencent-scf", CosRegion: "ap-singapore"})
 	require.NoError(t, err)
-	assert.Equal(t, "tencent-scf", account.AccountID)
+	assert.Equal(t, "tencent-scf", account.GetAccountId())
 }
 
 // 返回码非 0 或缺 ret_info 都是错误，消息里带上 Collector 给的原因。
@@ -111,24 +114,25 @@ func TestUploadPackageInitPutsAndCompletesInTheSameSpace(t *testing.T) {
 		case "/api/admin/collector/CompletePackageUpload":
 			assert.Equal(t, "pkg-1", body["package_id"])
 			assert.Equal(t, hex.EncodeToString(sum[:]), body["file_md5"])
-			assert.EqualValues(t, len(data), body["file_size"])
+			// proto JSON 把 int64 写成字符串。
+			assert.Equal(t, strconv.Itoa(len(data)), body["file_size"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"package":{"package_id":"pkg-1","status":"available"}}`))
 		default:
 			t.Fatalf("意外的请求 %s", r.URL.Path)
 		}
 	}))
 	defer server.Close()
-	pkg, err := spaceTestClient(server, "stockcn").UploadPackage(context.Background(), UploadPackageRequest{
-		PackageName: "moox-collector-stockcn-plan", Version: "v1", Runtime: "Go1", CloudAccountID: "account-1", Filename: "pkg.zip",
+	pkg, err := spaceTestClient(server, "stockcn").UploadPackage(context.Background(), &collectorpb.InitPackageUploadReq{
+		PackageName: "moox-collector-stockcn-plan", Version: "v1", Runtime: "Go1", CloudAccountId: "account-1", Filename: "pkg.zip",
 	}, data)
 	require.NoError(t, err)
-	assert.Equal(t, "pkg-1", pkg.PackageID)
-	assert.Equal(t, "available", pkg.Status)
+	assert.Equal(t, "pkg-1", pkg.GetPackageId())
+	assert.Equal(t, "available", pkg.GetStatus())
 	assert.Equal(t, []string{"/api/admin/collector/InitPackageUpload", "/api/admin/collector/CompletePackageUpload"}, methods)
 }
 
 func TestUploadPackageRequiresASpace(t *testing.T) {
-	_, err := (&Client{}).UploadPackage(context.Background(), UploadPackageRequest{}, nil)
+	_, err := (&Client{}).UploadPackage(context.Background(), &collectorpb.InitPackageUploadReq{}, nil)
 	require.ErrorContains(t, err, "空间")
 }
 

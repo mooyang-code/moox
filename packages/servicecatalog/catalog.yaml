@@ -29,30 +29,8 @@ components:
     health:
       port: 11012
     doctor:
-      role: host-gateway
-      description: 按主机提供签名校验与本机 tRPC 转发
-      duties:
-        - 同步路由、服务目录与校验密钥
-        - 校验签名和 ACL 并仅转发本机服务
-        - 标了外部入口的主机另开 11004，接收外部身份的签名请求，目标不在本机时以 host-gateway 身份转给目标主机
-      inputs:
-        - 签名 tRPC 请求
-        - 外部身份（scf-collector、moox-skill、collector-operator）的签名 tRPC 请求
-        - GatewayControl 快照
-      outputs:
-        - 本机服务响应
-        - 服务目录与同步状态
-      dependencies: []
       transport: reporter
       functional_observability: not_applicable
-      config_paths:
-        - host-gateway/config/app.yaml
-        - host-gateway/config/trpc_go.yaml
-      writable_paths:
-        - data/host-gateway
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
   - id: host-agent
     name: 主机采集器
     binary: moox-host-agent
@@ -86,26 +64,8 @@ components:
             callers: [monitor]
             operators: [moox-cli]
     doctor:
-      role: host-agent
-      description: Host resource snapshot agent
-      duties:
-        - collect bounded host resource snapshots
-      inputs:
-        - host operating system facts
-      outputs:
-        - host snapshots
-      dependencies:
-        - eventbus
       transport: host_snapshot
       functional_observability: not_applicable
-      config_paths:
-        - host-agent/config/trpc_go.yaml
-      writable_paths:
-        - data/hostagent
-      recovery_action_ids:
-        - free_disk_space
-        - restart_service_manually
-      required_in_default_profile: false
   - id: admin
     name: 管理后台
     binary: moox-admin
@@ -251,30 +211,8 @@ components:
             callers: [host-gateway]
             operators: []
     doctor:
-      role: admin
-      description: 认证、空间、密钥、部署与网关控制面
-      duties:
-        - 提供浏览器控制台与 Admin RPC
-        - 管理主机、部署、调用方密钥与路由快照
-      inputs:
-        - 用户会话与控制台请求
-        - CLI 部署登记与网关心跳
-      outputs:
-        - 管理数据
-        - 按主机编译的路由、目录与校验密钥
-      dependencies:
-        - eventbus
       transport: reporter
       functional_observability: active
-      config_paths:
-        - admin/config/app.yaml
-        - admin/config/trpc_go.yaml
-      writable_paths:
-        - data/admin
-        - secrets/pki
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
   - id: eventbus
     name: 消息总线
     binary: moox-eventbus
@@ -308,26 +246,8 @@ components:
           - name: GetConsumer
             read_only: true
     doctor:
-      role: eventbus
-      description: NATS JetStream event transport
-      duties:
-        - transport metrics and business events
-      inputs:
-        - published events
-      outputs:
-        - durable subscriptions
-      dependencies: []
       transport: reporter
       functional_observability: not_applicable
-      config_paths:
-        - eventbus/config/app.yaml
-        - eventbus/config/trpc_go.yaml
-      writable_paths:
-        - data/eventbus
-      recovery_action_ids:
-        - verify_eventbus_credentials
-        - restart_service_manually
-      required_in_default_profile: true
   - id: monitor
     name: 监控服务
     binary: moox-monitor
@@ -377,29 +297,8 @@ components:
           - name: GetAlertMute
             read_only: true
     doctor:
-      role: monitor
-      description: Single-instance monitoring fact store and alert evaluator
-      duties:
-        - ingest monitoring facts
-        - evaluate alerts
-        - serve bounded context
-      inputs:
-        - metrics and host snapshots
-      outputs:
-        - monitoring observations
-      dependencies:
-        - eventbus
       transport: reporter
       functional_observability: active
-      config_paths:
-        - monitor/config/app.yaml
-        - monitor/config/trpc_go.yaml
-      writable_paths:
-        - data/monitor
-      recovery_action_ids:
-        - verify_eventbus_credentials
-        - restart_service_manually
-      required_in_default_profile: true
   - id: collector
     name: 行情采集服务
     binary: moox-collector
@@ -547,30 +446,8 @@ components:
             callers: [collector-stream]
             operators: []
     doctor:
-      role: collector
-      description: Market data collection planner and executor
-      duties:
-        - plan and execute collection tasks
-        - 同步标的标签与属性
-      inputs:
-        - collector rules and market windows
-      outputs:
-        - committed collection tasks
-      dependencies:
-        - eventbus
-        - storage-primary
-        - admin
       transport: reporter
       functional_observability: active
-      config_paths:
-        - collector/config/app.yaml
-        - collector/config/trpc_go.yaml
-      writable_paths:
-        - data/collector
-      recovery_action_ids:
-        - inspect_health_check_input
-        - restart_service_manually
-      required_in_default_profile: true
   - id: collector-stream
     name: 行情推送采集
     binary: moox-collector-stream
@@ -597,30 +474,8 @@ components:
             callers: [collector]
             operators: []
     doctor:
-      role: collector-stream
-      description: 常驻接收交易所 WebSocket 收盘 K 线并按周期提交 Storage，同进程提供本地执行端
-      duties:
-        - 按采集计划订阅推送并在截止前提交周期
-        - 执行补采与本地定时拉取
-      inputs:
-        - 交易所 WebSocket 收盘推送
-        - Collector 下发的推送与本地执行端计划
-      outputs:
-        - Storage 周期提交与补采写入
-        - 心跳与周期统计
-      dependencies:
-        - collector
-        - storage-primary
       transport: reporter
       functional_observability: active
-      config_paths:
-        - collector-stream/config/app.yaml
-        - collector-stream/config/trpc_go.yaml
-      writable_paths:
-        - data/collector-stream
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   - id: factor-mgr
     name: 因子管理服务
     binary: moox-factor-mgr
@@ -734,28 +589,8 @@ components:
             callers: [factor-engine]
             operators: []
     doctor:
-      role: factor-mgr
-      description: Factor catalog manager serving definitions, tasks and recalc jobs to the compute engine
-      duties:
-        - manage factor definitions
-        - tasks and recalc jobs
-      inputs:
-        - factor inputs
-      outputs:
-        - factor results
-      dependencies:
-        - storage-primary
       transport: reporter
       functional_observability: active
-      config_paths:
-        - factor-mgr/config/app.yaml
-        - factor-mgr/config/trpc_go.yaml
-      writable_paths:
-        - data/factor-mgr
-      recovery_action_ids:
-        - replay_factor_window_manually
-        - restart_service_manually
-      required_in_default_profile: true
   - id: archive-mgr
     name: 数据归档管理服务
     binary: moox-archive-mgr
@@ -838,28 +673,8 @@ components:
             callers: [archive-worker]
             operators: []
     doctor:
-      role: archive-mgr
-      description: Archive task manager scheduling runs and registering partitions for the archive worker
-      duties:
-        - schedule archive runs
-        - register archive partitions
-      inputs:
-        - archive tasks and worker reports
-      outputs:
-        - archive runs and partition registry
-      dependencies:
-        - storage-primary
-        - collector
       transport: reporter
       functional_observability: deferred
-      config_paths:
-        - archive-mgr/config/app.yaml
-        - archive-mgr/config/trpc_go.yaml
-      writable_paths:
-        - data/archive-mgr
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   - id: strategy
     name: 策略服务
     binary: moox-strategy
@@ -927,29 +742,8 @@ components:
             operators: [moox-cli]
             timeout_ms: 60000
     doctor:
-      role: strategy
-      description: Strategy evaluation and target generation service
-      duties:
-        - evaluate strategies and persist targets
-      inputs:
-        - factor and view inputs
-      outputs:
-        - strategy evaluations
-      dependencies:
-        - factor-mgr
-        - storage-view
-        - eventbus
       transport: reporter
       functional_observability: active
-      config_paths:
-        - strategy/config/app.yaml
-        - strategy/config/trpc_go.yaml
-      writable_paths:
-        - data/strategy
-      recovery_action_ids:
-        - inspect_health_check_input
-        - restart_service_manually
-      required_in_default_profile: true
   - id: storage-primary
     name: 存储主服务
     binary: moox-storage-primary
@@ -1120,29 +914,8 @@ components:
             callers: [collector, factor-engine, factor-mgr, monitor, strategy]
             operators: [moox-cli]
     doctor:
-      role: storage-primary
-      description: Storage 元数据与事实数据主服务
-      duties:
-        - 管理空间、数据集、字段与视图
-        - 持久化数据集字段与周期完成状态，跟随变更日志转发完成事件
-        - 向 EventBus 发布周期完成等跨机事件
-      inputs:
-        - 元数据管理与数据读写请求
-      outputs:
-        - 元数据与主存储响应
-        - 数据变更事件
-      dependencies:
-        - eventbus
       transport: reporter
       functional_observability: deferred
-      config_paths:
-        - storage-primary/config/app.yaml
-        - storage-primary/config/trpc_go.yaml
-      writable_paths:
-        - data/storage-primary
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
   - id: storage-view
     name: 存储视图服务
     binary: moox-storage-view
@@ -1182,28 +955,8 @@ components:
             callers: [collector, factor-mgr, monitor, strategy]
             timeout_ms: 35000
     doctor:
-      role: storage-view
-      description: Storage 可重建查询视图服务
-      duties:
-        - 构建数据集查询视图与索引
-        - 执行时间序列与记录查询
-      inputs:
-        - 主存储数据变更与视图查询
-      outputs:
-        - 视图查询结果与构建状态
-      dependencies:
-        - eventbus
-        - storage-primary
       transport: reporter
       functional_observability: deferred
-      config_paths:
-        - storage-view/config/app.yaml
-        - storage-view/config/trpc_go.yaml
-      writable_paths:
-        - data/storage-view
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
   - id: egress-proxy
     name: 出口代理
     binary: moox-egress-proxy
@@ -1228,25 +981,8 @@ components:
             callers: [collector]
             operators: []
     doctor:
-      role: egress-proxy
-      description: 受限网络出口
-      duties:
-        - 按域名白名单代理 Collector 请求
-      inputs:
-        - Collector 的出口请求
-      outputs:
-        - 上游响应
-      dependencies: []
       transport: reporter
       functional_observability: not_applicable
-      config_paths:
-        - egress-proxy/config/app.yaml
-        - egress-proxy/config/trpc_go.yaml
-      writable_paths:
-        - data/egress-proxy
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   - id: trade
     name: 交易服务
     binary: moox-trade
@@ -1361,27 +1097,8 @@ components:
             operators: [moox-cli]
             timeout_ms: 60000
     doctor:
-      role: trade
-      description: Trade execution and reconciliation service
-      duties:
-        - execute orders and reconcile state
-      inputs:
-        - target positions
-      outputs:
-        - orders and reconciliations
-      dependencies:
-        - eventbus
-        - admin
       transport: reporter
       functional_observability: active
-      config_paths:
-        - trade/config/app.yaml
-        - trade/config/trpc_go.yaml
-      writable_paths:
-        - data/trade
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   # 事件中心：接收 EventBus 事件，按用户配置的规则向用户接口发通知或执行系统动作。全局服务，不分空间。
   - id: callback-dispatcher
     name: 事件中心
@@ -1425,29 +1142,8 @@ components:
           - name: CancelEventExecution
           - name: AcknowledgeEventExecution
     doctor:
-      role: callback-dispatcher
-      description: 事件中心：按规则把 EventBus 事件通知到用户接口或执行系统动作
-      duties:
-        - 消费可订阅事件并按规则匹配
-        - 投递通知并重试，记录每次执行
-      inputs:
-        - EventBus 事件
-        - 用户配置的事件规则
-      outputs:
-        - 通知请求与执行记录
-        - 事件中心关注项
-      dependencies:
-        - eventbus
       transport: reporter
       functional_observability: active
-      config_paths:
-        - callback-dispatcher/config/app.yaml
-        - callback-dispatcher/config/trpc_go.yaml
-      writable_paths:
-        - data/callback-dispatcher
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   # 外部程序：运行在登记主机上（通常是只能出站的因子机），和别的组件一样用所在主机的密钥、以自己的组件 ID 签名，直连存储机与控制机的主机网关；
   # 由 systemd 用户服务托管；健康由管理端按心跳代报给 Monitor（doctor.transport: delegated），Monitor 不探测健康端口。
   # 外部程序可以声明只监听本机的服务，由所在主机的网关路由（出站主机经 control 中转）。
@@ -1506,27 +1202,8 @@ components:
             read_only: true
             operators: [moox-cli]
     doctor:
-      role: factor-engine
-      description: Factor compute engine that consumes period events and writes factor results through the storage host gateway
-      duties:
-        - compute factor periods and recalculation jobs
-        - serve replay compute sessions to strategy through the host gateway
-      inputs:
-        - period completion events and source windows
-      outputs:
-        - factor result rows and period markers
-      dependencies:
-        - factor-mgr
-        - storage-primary
       transport: delegated
       functional_observability: deferred
-      config_paths:
-        - factor-engine/config/engine.yaml
-      writable_paths:
-        - factor-engine/data
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   - id: archive-worker
     name: 数据归档执行器
     binary: moox-archive-worker
@@ -1546,26 +1223,8 @@ components:
       callers:
         - console
     doctor:
-      role: archive-worker
-      description: Archive worker that pulls archive runs and exports partitions
-      duties:
-        - export archive partitions
-      inputs:
-        - archive runs from archive-mgr
-      outputs:
-        - archive partitions
-      dependencies:
-        - archive-mgr
-        - storage-primary
       transport: delegated
       functional_observability: deferred
-      config_paths:
-        - archive-worker/config/app.yaml
-      writable_paths:
-        - archive-worker/data
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: false
   # 内置对象存储（第三方程序 SeaweedFS，固定版本见 scripts/build/seaweedfs-sha256.txt）：只给同机的 archive-worker 用，
   # 所有端口只听 127.0.0.1（gRPC 端口为 HTTP 端口 + 10000）；访问密钥在目标机上生成一次，桶由部署脚本建。
   # 不写在 [deployments] 里：装了 archive-worker 且没配 [archive_object_store] 的主机自动部署它。

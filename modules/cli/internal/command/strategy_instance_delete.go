@@ -9,7 +9,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/spf13/cobra"
@@ -74,7 +74,7 @@ func newStrategyInstanceDeleteCommand() *cobra.Command {
 }
 
 func runStrategyInstanceDelete(ctx context.Context, cmd *cobra.Command, gateway commandGateway, spaceID, instanceID string, yes bool) error {
-	client := &adminclient.Client{Gateway: gateway, SpaceID: spaceID}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: spaceID}
 	instance, found, err := readStrategyDeleteInstance(ctx, client, instanceID)
 	if err != nil {
 		return err
@@ -129,7 +129,7 @@ func runStrategyInstanceDelete(ctx context.Context, cmd *cobra.Command, gateway 
 }
 
 // readStrategyDeleteInstance 读取实例；实例不存在时 found 为假。
-func readStrategyDeleteInstance(ctx context.Context, client *adminclient.Client, instanceID string) (strategyDeleteInstance, bool, error) {
+func readStrategyDeleteInstance(ctx context.Context, client *rpcclient.Client, instanceID string) (strategyDeleteInstance, bool, error) {
 	var rsp struct {
 		RetInfo struct {
 			Code json.RawMessage `json:"code"`

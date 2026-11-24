@@ -138,8 +138,7 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"identity shares a regular component ID", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "monitor", External: true}) }},
 		{"identity uses an operator ID", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "moox-cli", External: true}) }},
 		{"host gateway on business service", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"host-gateway"} }},
-		{"unsafe doctor path", func(c *Catalog) { c.Components[0].Doctor.WritablePaths = []string{"../outside"} }},
-		{"unknown dependency", func(c *Catalog) { c.Components[0].Doctor.Dependencies = []string{"unknown"} }},
+		{"invalid doctor transport", func(c *Catalog) { c.Components[0].Doctor.Transport = "push" }},
 		{"identity shares an external program ID", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "factor-engine", External: true}) }},
 		{"external program declares a port", func(c *Catalog) { componentPtr(c, "archive-worker").Ports = []int{11999} }},
 		{"external program service reuses its health port", func(c *Catalog) {

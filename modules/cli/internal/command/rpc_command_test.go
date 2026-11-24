@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"

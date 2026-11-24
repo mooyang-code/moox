@@ -1,13 +1,11 @@
 package command
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -106,22 +104,6 @@ func TestSeedToPBHelpers(t *testing.T) {
 	dataset, err := (seedDataset{SpaceID: "crypto", DatasetID: "kline", DataKind: "TIME_SERIES"}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, pb.DataKind_DATA_KIND_TIME_SERIES, dataset.GetDataKind())
-}
-
-func TestRunMetadataImportWithNoCalls(t *testing.T) {
-	summary, err := runMetadataImport(context.Background(), nil, nil, false)
-	require.NoError(t, err)
-	assert.Equal(t, 0, summary.Applied)
-}
-
-func TestBuildFirewallAddPreviewDryRun(t *testing.T) {
-	cmd := &cobra.Command{}
-	cmd.SetOut(&bytesBuffer{})
-	preview, err := buildFirewallAddPreview(lighthouseFirewallAddOptions{
-		InstanceID: "lhins-1", Ports: "20201", Protocol: "TCP", Cidr: "0.0.0.0/0",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "lhins-1", preview["instance_id"])
 }
 
 func TestFirstNonEmpty(t *testing.T) {

@@ -15,23 +15,10 @@ import (
 )
 
 type cliResult struct {
-	Module  string      `json:"module"`
-	Action  string      `json:"action"`
-	Status  string      `json:"status"`
-	DBPath  string      `json:"db_path"`
-	Seed    string      `json:"seed_path,omitempty"`
-	Summary interface{} `json:"summary,omitempty"`
-}
-
-type importSummary struct {
-	Spaces         int `json:"spaces"`
-	DataSources    int `json:"data_sources"`
-	Subjects       int `json:"subjects"`
-	Tags           int `json:"tags"`
-	Datasets       int `json:"datasets"`
-	Fields         int `json:"fields"`
-	DatasetColumns int `json:"dataset_columns"`
-	Views          int `json:"views"`
+	Module string `json:"module"`
+	Action string `json:"action"`
+	Status string `json:"status"`
+	DBPath string `json:"db_path"`
 }
 
 type operationResult struct {
@@ -56,19 +43,17 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, repair-view, or delete-view")
+		return fmt.Errorf("expected command: init, repair-view, or delete-view")
 	}
 	switch args[0] {
 	case "init":
 		return runInit(args[1:], stdout, stderr)
-	case "import-seed":
-		return runImportSeed(args[1:], stdout, stderr)
 	case "repair-view":
 		return runRepairView(args[1:], stdout, stderr)
 	case "delete-view":
 		return runDeleteView(args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, repair-view, or delete-view", args[0])
+		return fmt.Errorf("unknown command %q: use init, repair-view, or delete-view", args[0])
 	}
 }
 
@@ -106,54 +91,9 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) error {
 	})
 }
 
-func runImportSeed(args []string, stdout io.Writer, stderr io.Writer) error {
-	fs := flag.NewFlagSet("import-seed", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	opts := commandOptions{}
-	registerCommonFlags(fs, &opts)
-	fs.StringVar(&opts.seedPath, "seed", "", "metadata seed yaml path")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected import-seed arguments: %s", strings.Join(fs.Args(), " "))
-	}
-	storage, err := loadStorage(opts.storageConf)
-	if err != nil {
-		return err
-	}
-	seedPath := resolveSeedPath(opts.seedPath, opts.storageConf)
-	result, err := metadata.ImportSeed(trpc.BackgroundContext(), metadata.SeedOptions{
-		Storage:    storage,
-		SchemaPath: resolveSchemaPath(opts.schemaPath),
-		SeedPath:   seedPath,
-	})
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(stdout).Encode(cliResult{
-		Module: "storage",
-		Action: "import-seed",
-		Status: "ok",
-		DBPath: metadataDBPath(storage),
-		Seed:   seedPath,
-		Summary: importSummary{
-			Spaces:         result.Spaces,
-			DataSources:    result.DataSources,
-			Subjects:       result.Subjects,
-			Tags:           result.Tags,
-			Datasets:       result.Datasets,
-			Fields:         result.Fields,
-			DatasetColumns: result.DatasetColumns,
-			Views:          result.Views,
-		},
-	})
-}
-
 type commandOptions struct {
 	storageConf string
 	schemaPath  string
-	seedPath    string
 }
 
 func registerCommonFlags(fs *flag.FlagSet, opts *commandOptions) {
@@ -213,16 +153,6 @@ func resolveSchemaPath(path string) string {
 		}
 	}
 	return candidates[0]
-}
-
-func resolveSeedPath(path string, _ string) string {
-	if path != "" {
-		return path
-	}
-	if path := os.Getenv("STORAGE_SEED_FILE"); path != "" {
-		return path
-	}
-	return ""
 }
 
 func printError(stderr io.Writer, err error) {

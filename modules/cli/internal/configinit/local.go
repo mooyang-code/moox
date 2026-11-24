@@ -172,8 +172,6 @@ type response struct {
 	Value      string       `json:"value,omitempty"`
 	// Fingerprint 是待用户核对的管理台证书指纹（证书不被这台电脑信任时）。
 	Fingerprint string `json:"fingerprint,omitempty"`
-	// Sync 说明这次保存有没有同步到管理后台的配置备份。
-	Sync string `json:"sync,omitempty"`
 }
 
 func reply(w http.ResponseWriter, status int, body response) {

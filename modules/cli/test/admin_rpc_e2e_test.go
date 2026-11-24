@@ -8,9 +8,9 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -59,7 +59,7 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	gateway, err := gatewayio.Open(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
-	client := &adminclient.Client{Gateway: gateway, SpaceID: "crypto"}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: "crypto"}
 	secret, err := client.GetSecretValue(t.Context(), "secret-1")
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", secret.SecretValue)

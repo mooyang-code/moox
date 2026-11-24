@@ -36,7 +36,7 @@ func specByPath(t *testing.T, path ...string) rpcSpec {
 
 func TestSpaceUpdateMergesExistingSpaceInsteadOfClearingFields(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"GetSpace": `{"ret_info":{"code":0},"space":{"space_id":"crypto","name":"加密货币","description":"行情","owner":"quant","market":"crypto","timezone":"UTC","status":"disabled","attributes":{"k":"1"},"created_at":"2026-01-01","updated_at":"2026-01-02"}}`,
+		"GetSpace":    `{"ret_info":{"code":0},"space":{"space_id":"crypto","name":"加密货币","description":"行情","owner":"quant","market":"crypto","timezone":"UTC","status":"disabled","attributes":{"k":"1"},"created_at":"2026-01-01","updated_at":"2026-01-02"}}`,
 		"UpdateSpace": `{"ret_info":{"code":0}}`,
 	}}
 	useRPCGateway(t, gateway)
@@ -246,15 +246,6 @@ func TestFunctionDeleteAndFirewallAndUdfPreviewAtCommandLevel(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
 	assert.Equal(t, true, body["dry_run"], "没有 --yes 只发预览，不删除")
-
-	var fwOut bytes.Buffer
-	lighthouseFirewallAddFlags = lighthouseFirewallAddOptions{InstanceID: "lhins-1", Ports: "20201", Protocol: "TCP", Cidr: "0.0.0.0/0", Action: "ACCEPT"}
-	t.Cleanup(func() { lighthouseFirewallAddFlags = lighthouseFirewallAddOptions{} })
-	lighthouseFirewallAddCmd.SetOut(&fwOut)
-	lighthouseFirewallAddCmd.SetErr(&bytes.Buffer{})
-	lighthouseFirewallAddCmd.SetContext(context.Background())
-	require.NoError(t, lighthouseFirewallAddCmd.RunE(lighthouseFirewallAddCmd, nil))
-	assert.Equal(t, "CreateFirewallRules", parsePreview(t, fwOut.String())["action"], "没有 --yes 只预览，不调用腾讯云")
 }
 
 func TestUdfActivateWithoutYesAsksServerForDryRunOnly(t *testing.T) {
