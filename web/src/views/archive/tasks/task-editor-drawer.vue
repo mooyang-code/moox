@@ -1,7 +1,7 @@
 <template>
   <a-drawer
     :visible="visible"
-    :width="'min(880px, 100vw)'"
+    :width="'min(640px, 100vw)'"
     :title="mode === 'create' ? '新建归档任务' : '编辑归档任务'"
     :ok-text="mode === 'create' ? '创建' : '保存'"
     :ok-loading="submitting"
@@ -58,67 +58,41 @@
           </template>
         </a-form-item>
 
-        <a-form-item
-          label="拉取间隔（每收盘多少根拉取一次）"
-          :validate-status="pullError ? 'error' : undefined"
-          :help="pullError || undefined"
-        >
-          <a-input-number
-            v-model="form.pullEveryBars"
-            :min="1"
-            :max="1440"
-            :precision="0"
-            :disabled="daily"
-            style="width: 160px"
-          />
-          <template v-if="daily" #extra>每天收盘后拉取一次</template>
-        </a-form-item>
-
-        <template v-if="mode === 'create' || (task && showBackfillField(task))">
-          <a-form-item label="回补起点" :validate-status="backfillError ? 'error' : undefined" :help="backfillError || undefined">
+        <template v-if="mode === 'create'">
+          <a-form-item
+            label="回补起点"
+            :required="foreverRetention"
+            :validate-status="backfillError ? 'error' : undefined"
+            :help="backfillError || undefined"
+          >
             <ZonedDatePicker v-model="form.backfillFrom" :zone="zone" allow-clear style="width: 100%" />
             <template v-if="!backfillError" #extra>{{
-              mode === "create" ? "从线上还保留的最早数据开始归档" : "只有改了才重新校验；留空表示不修改，不能用来清除"
+              foreverRetention
+                ? "线上永久保留：必须填写从哪里开始归档；建好后不能改"
+                : "默认从线上保留期起点开始归档；留空同默认；建好后不能改"
             }}</template>
           </a-form-item>
         </template>
-        <div v-else class="hint">
-          首次复核已完成，回补起点不再使用；要补更早的数据请用<a-link @click="task && emit('openBackfill', task)"
-            >补拉区间</a-link
-          >
-        </div>
+        <template v-else>
+          <a-form-item label="回补起点">
+            <span>{{ formatInstant(task?.backfill_from, zone) }}</span>
+            <template #extra
+              >建好后不能改；要补更早的数据，保留期内用<a-link @click="task && emit('openBackfill', task)">补拉区间</a-link
+              >，保留期外用 moox-cli import --target archive</template
+            >
+          </a-form-item>
+          <a-form-item label="启用">
+            <a-switch v-model="form.enabled" />
+            <template #extra>停用后不再跟随；重新启用后从原位点继续</template>
+          </a-form-item>
+        </template>
 
         <a-form-item v-if="mode === 'create'" label="创建后立即启用">
           <a-switch v-model="form.enabled" />
         </a-form-item>
       </a-form>
 
-      <aside class="preview" aria-label="拉取预览">
-        <h4>接下来</h4>
-        <div v-if="!currentDatasetId" class="sub">选好数据集后显示接下来的拉取与复核</div>
-        <div v-else-if="previewError" class="is-bad">{{ previewError }}</div>
-        <div v-else-if="!preview" class="sub">读取中…</div>
-        <template v-else>
-          <div class="block">
-            <div class="label">接下来 5 次拉取</div>
-            <div v-for="at in preview.next_runs || []" :key="at">{{ formatInstant(at, zone) }}</div>
-          </div>
-          <div class="block">
-            <div class="label">接下来 3 次复核</div>
-            <div v-for="at in preview.next_reviews || []" :key="at">{{ formatInstant(at, zone) }}</div>
-          </div>
-          <div class="block">
-            复核间隔 {{ intervalText(preview.interval_seconds) }}，每次复核读取约
-            {{ durationText(preview.read_span_seconds || 0) }}
-          </div>
-          <div v-if="preview.partition_export_estimates?.length" class="block">
-            <div class="label">分区预计导出</div>
-            <div v-for="text in preview.partition_export_estimates" :key="text">{{ exportEstimateText(text, zone) }}</div>
-          </div>
-        </template>
-        <div class="sub fixed">{{ ARCHIVE_SCHEDULE_NOTE }}</div>
-        <div class="sub">到点拉取只读新收盘的几根，补采由复核兜底。</div>
-      </aside>
+      <div class="sub note">{{ ARCHIVE_SCHEDULE_NOTE }}</div>
     </div>
   </a-drawer>
 </template>
@@ -130,11 +104,9 @@ import { Message } from "@arco-design/web-vue";
 import {
   createArchiveTask,
   prepareArchiveTask,
-  previewArchiveSchedule,
   updateArchiveTask,
   type ArchiveTask,
-  type PrepareArchiveTaskRsp,
-  type PreviewArchiveScheduleRsp
+  type PrepareArchiveTaskRsp
 } from "@/api/archive";
 import type { Dataset } from "@/api/storage/types";
 import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
@@ -145,19 +117,13 @@ import {
   ARCHIVE_SCHEDULE_NOTE,
   backfillFromError,
   dirNameError,
-  durationText,
-  exportEstimateText,
-  intervalText,
-  isDailyFreq,
   dirNameOwner,
-  partitionPathPreview,
-  pullEveryBarsError,
-  showBackfillField
+  partitionPathPreview
 } from "../shared/archive-model";
 
 /**
- * 新建 / 编辑归档任务。新建：选数据集后 Prepare 给出推荐的拉取间隔与最早回补起点（默认就填它）；
- * 编辑：数据集不可改，回补起点只在还没有成功的复核时可改。右侧按数据集与间隔防抖预览接下来的拉取与复核。
+ * 新建 / 编辑归档任务。新建：选数据集后 Prepare 给出最早回补起点（线上保留期起点，默认就填它；永久保留时必填）；
+ * 编辑：只能启用、停用，回补起点建好后不改。
  * 目录名：新建时默认填建议值，可改；改过的值防抖后用 Prepare 带 dir_name 检查是否被占用，冲突时标红；建好后不能改。
  */
 const props = defineProps<{
@@ -183,7 +149,6 @@ const emit = defineEmits<{
 
 const form = reactive({
   datasetId: "",
-  pullEveryBars: 1 as number | undefined,
   backfillFrom: null as number | null,
   enabled: true,
   dirName: ""
@@ -194,25 +159,17 @@ const dirGuard = createLatestRequestGuard();
 let dirTimer: ReturnType<typeof setTimeout> | undefined;
 const prepared = ref<PrepareArchiveTaskRsp | null>(null);
 const prepareError = ref("");
-const preview = ref<PreviewArchiveScheduleRsp | null>(null);
-const previewError = ref("");
 const submitting = ref(false);
 const prepareGuard = createLatestRequestGuard();
-const previewGuard = createLatestRequestGuard();
-let previewTimer: ReturnType<typeof setTimeout> | undefined;
-// 编辑时打开抽屉那一刻的回补起点：没改就不提交，也不校验（后端对没改的值保留原值，即使已超出保留期）
-const originalBackfill = ref<number | null>(null);
 
 const taskIds = computed(() => new Set(props.tasks.map(item => item.dataset_id)));
-const currentDatasetId = computed(() => (props.mode === "edit" ? props.task?.dataset_id || "" : form.datasetId));
-const freq = computed(() => (props.mode === "edit" ? props.task?.freq : prepared.value?.freq) || "");
-const daily = computed(() => isDailyFreq(freq.value));
 const earliestMs = computed(() => toInstantMs(prepared.value?.earliest_backfill_from));
-const pullError = computed(() => (freq.value ? pullEveryBarsError(freq.value, Number(form.pullEveryBars)) : ""));
-const backfillChanged = computed(() => props.mode === "create" || form.backfillFrom !== originalBackfill.value);
-const backfillError = computed(() =>
-  backfillFromError(backfillChanged.value ? form.backfillFrom : null, earliestMs.value, Date.now(), props.zone)
-);
+const foreverRetention = computed(() => prepared.value?.retention === "forever");
+const backfillError = computed(() => {
+  if (props.mode !== "create") return "";
+  if (foreverRetention.value && form.backfillFrom === null) return "线上永久保留的数据集必须填写回补起点";
+  return backfillFromError(form.backfillFrom, earliestMs.value, Date.now(), props.zone);
+});
 const dirError = computed(() => {
   if (props.mode !== "create" || !prepared.value) return "";
   const local = dirNameError(form.dirName);
@@ -251,20 +208,15 @@ watch(
     if (!open) return;
     prepared.value = null;
     prepareError.value = "";
-    preview.value = null;
-    previewError.value = "";
     if (props.mode === "edit" && props.task) {
-      originalBackfill.value = toInstantMs(props.task.backfill_from);
       Object.assign(form, {
         datasetId: props.task.dataset_id || "",
-        pullEveryBars: props.task.pull_every_bars || 1,
-        backfillFrom: originalBackfill.value,
-        enabled: true,
+        backfillFrom: toInstantMs(props.task.backfill_from),
+        enabled: props.task.status !== "paused",
         dirName: props.task.dir_name || ""
       });
-      void prepare(props.task.dataset_id || "", false);
     } else {
-      Object.assign(form, { datasetId: props.presetDatasetId, pullEveryBars: 1, backfillFrom: null, enabled: true, dirName: "" });
+      Object.assign(form, { datasetId: props.presetDatasetId, backfillFrom: null, enabled: true, dirName: "" });
       if (props.presetDatasetId) void prepare(props.presetDatasetId, true);
     }
   },
@@ -275,7 +227,7 @@ function onDatasetChange(value: unknown) {
   void prepare(String(value || ""), true);
 }
 
-/** 读数据集的归档信息；新建时用推荐的间隔和最早回补起点填表。 */
+/** 读数据集的归档信息；新建时用最早回补起点（线上保留期起点）与建议目录名填表。 */
 async function prepare(datasetId: string, fill: boolean) {
   const request = prepareGuard.begin();
   prepared.value = null;
@@ -287,7 +239,6 @@ async function prepare(datasetId: string, fill: boolean) {
     if (!request.isLatest()) return;
     prepared.value = rsp;
     if (fill) {
-      form.pullEveryBars = rsp.recommended_pull_every_bars || 1;
       form.backfillFrom = toInstantMs(rsp.earliest_backfill_from);
       // 建议值的占用情况已经在这次 Prepare 里
       form.dirName = rsp.suggested_dir_name || "";
@@ -334,32 +285,9 @@ async function checkDirName(datasetId: string, name: string) {
   }
 }
 
-// 数据集或间隔变化后防抖 400ms 预览；服务端校验失败显示在预览区，过期的结果丢弃
-watch([currentDatasetId, () => form.pullEveryBars, () => props.visible], () => {
-  if (previewTimer) clearTimeout(previewTimer);
-  previewGuard.invalidate();
-  preview.value = null;
-  previewError.value = "";
-  if (!props.visible || !currentDatasetId.value) return;
-  previewTimer = setTimeout(() => void loadPreview(), 400);
-});
 onBeforeUnmount(() => {
-  if (previewTimer) clearTimeout(previewTimer);
   if (dirTimer) clearTimeout(dirTimer);
 });
-
-async function loadPreview() {
-  const request = previewGuard.begin();
-  try {
-    const rsp = await previewArchiveSchedule({
-      dataset_id: currentDatasetId.value,
-      pull_every_bars: Number(form.pullEveryBars) || 1
-    });
-    if (request.isLatest()) preview.value = rsp;
-  } catch (cause) {
-    if (request.isLatest()) previewError.value = cause instanceof Error && cause.message ? cause.message : "预览失败";
-  }
-}
 
 function openExisting() {
   emit("update:visible", false);
@@ -384,8 +312,8 @@ async function submit() {
       return;
     }
   }
-  if (pullError.value || backfillError.value) {
-    Message.warning(pullError.value || backfillError.value);
+  if (backfillError.value) {
+    Message.warning(backfillError.value);
     return;
   }
   submitting.value = true;
@@ -393,7 +321,6 @@ async function submit() {
     if (props.mode === "create") {
       await createArchiveTask({
         dataset_id: form.datasetId,
-        pull_every_bars: Number(form.pullEveryBars) || 1,
         backfill_from: iso(form.backfillFrom),
         paused: !form.enabled,
         dir_name: form.dirName
@@ -402,12 +329,10 @@ async function submit() {
       emit("update:visible", false);
       emit("created", form.datasetId);
     } else if (props.task) {
-      const changedBackfill = form.backfillFrom !== null && form.backfillFrom !== originalBackfill.value;
-      await updateArchiveTask({
-        dataset_id: props.task.dataset_id || "",
-        pull_every_bars: Number(form.pullEveryBars) === props.task.pull_every_bars ? 0 : Number(form.pullEveryBars) || 0,
-        backfill_from: changedBackfill ? iso(form.backfillFrom) : ""
-      });
+      const status = form.enabled ? "enabled" : "paused";
+      if (status !== (props.task.status === "paused" ? "paused" : "enabled")) {
+        await updateArchiveTask({ dataset_id: props.task.dataset_id || "", status });
+      }
       Message.success("已保存");
       emit("update:visible", false);
       emit("updated");
@@ -421,58 +346,14 @@ async function submit() {
 </script>
 
 <style scoped>
-.editor {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: var(--moox-space-4);
-}
-
-@media (max-width: 720px) {
-  .editor {
-    grid-template-columns: 1fr;
-  }
-}
-
-.preview {
-  padding-left: var(--moox-space-3);
-  border-left: 1px solid var(--color-border-2);
-}
-
-@media (max-width: 720px) {
-  .preview {
-    padding-left: 0;
-    border-left: none;
-  }
-}
-
-h4 {
-  margin: 0 0 8px;
-  font-size: 14px;
-}
-
-.block {
-  margin-bottom: 10px;
-  line-height: 22px;
-}
-
-.label {
-  color: var(--color-text-3);
-  font-size: 12px;
+.note {
+  margin-top: var(--moox-space-3);
 }
 
 .sub {
   color: var(--color-text-3);
   font-size: 12px;
   line-height: 20px;
-}
-
-.fixed {
-  margin-top: 12px;
-}
-
-.hint {
-  margin-bottom: var(--moox-space-3);
-  color: var(--color-text-2);
 }
 
 .exists {

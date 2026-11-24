@@ -28,11 +28,11 @@
     <template v-else>
       <div v-if="error" class="load-error">读取最新数据失败：{{ error }} · <a-link @click="load(cursor)">重试</a-link></div>
       <div v-if="result" class="sub head-note">
-        <template v-if="result.staged_until"
-          >暂存库已从 Storage 读到 {{ formatInstant(result.staged_until, zone) }}，之后的行可能还没读到</template
+        <template v-if="lastSuccessAt"
+          >最近一次跟随 {{ formatInstant(lastSuccessAt, zone, "minute") }}，之后写进 Storage 的行可能还没进暂存库</template
         >
-        <template v-else>暂存库还没有从 Storage 读过</template>；这里包括还没导出成文件的行，暂存行保留到分区定稿，至少有最近 3
-        天。
+        <template v-else>还没有成功的跟随，暂存库可能还没有从 Storage 读过</template
+        >；这里包括还没导出成文件的行，暂存行保留到分区定稿，至少有最近 3 天。
       </div>
       <a-table
         size="small"
@@ -79,7 +79,14 @@ import { recentCellText } from "../shared/archive-model";
  */
 const PAGE_SIZE = 200;
 
-const props = defineProps<{ spaceId: string; datasetId: string; subject: string; zone: string }>();
+const props = defineProps<{
+  spaceId: string;
+  datasetId: string;
+  subject: string;
+  zone: string;
+  /** 任务最近一次成功的跟随（或整段重读）时刻 */
+  lastSuccessAt?: string;
+}>();
 const emit = defineEmits<{ "update:subject": [subject: string] }>();
 
 // ---- 标的搜索：Storage 的 ListSubjects，keyword 匹配对象 ID 与名称 ----

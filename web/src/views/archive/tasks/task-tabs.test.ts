@@ -52,7 +52,7 @@ describe("分区下载", () => {
     task: "ds",
     tab: "partitions",
     status: "",
-    ticks: false,
+    follow: false,
     rpage: 1,
     ppage: 1,
     from: "",
@@ -162,21 +162,17 @@ describe("最新数据", () => {
   ];
   const row = (time: string): (string | null)[] => [time, "BTC", "", "1.5", null];
 
-  function mountRecent(subject = "BTC") {
+  function mountRecent(subject = "BTC", lastSuccessAt = "2026-11-07T04:41:00Z") {
     wrapper = mount(TaskRecent, {
-      props: { spaceId: "crypto", datasetId: "ds", subject, zone: "UTC" },
+      props: { spaceId: "crypto", datasetId: "ds", subject, zone: "UTC", lastSuccessAt },
       global: { plugins: [ArcoVue] },
       attachTo: document.body
     });
     return wrapper;
   }
 
-  it("按标的读取，表头写读取水位，null 与空串分开显示", async () => {
-    api.fetchArchiveRecentRows.mockResolvedValue({
-      columns,
-      rows: [row("2026-11-07T04:40:00Z")],
-      staged_until: "2026-11-07T04:41:00Z"
-    });
+  it("按标的读取，表头写最近一次跟随，null 与空串分开显示", async () => {
+    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: [row("2026-11-07T04:40:00Z")] });
     mountRecent();
     await flushPromises();
     expect(api.fetchArchiveRecentRows).toHaveBeenCalledWith(
@@ -184,15 +180,15 @@ describe("最新数据", () => {
       expect.any(AbortSignal)
     );
     const text = wrapper.text();
-    expect(text).toContain("暂存库已从 Storage 读到 2026-11-07 04:41:00 UTC，之后的行可能还没读到");
+    expect(text).toContain("最近一次跟随 2026-11-07 04:41 UTC，之后写进 Storage 的行可能还没进暂存库");
     expect(text).not.toContain("暂存到");
     expect(text).toContain('""');
     expect(text).toContain("—");
     wrapper.unmount();
-    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: [], staged_until: "" });
-    mountRecent();
+    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: [] });
+    mountRecent("BTC", "");
     await flushPromises();
-    expect(wrapper.text()).toContain("暂存库还没有从 Storage 读过");
+    expect(wrapper.text()).toContain("还没有成功的跟随");
     // 不满一页：没有更早的行
     expect(
       wrapper
@@ -204,7 +200,7 @@ describe("最新数据", () => {
 
   it("满一页时“更早”用最后一行的时间翻页，“回到最新”不带 before", async () => {
     const page = Array.from({ length: 200 }, (_, i) => row(new Date(Date.UTC(2026, 10, 7, 4, 40 - i)).toISOString()));
-    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: page, staged_until: "" });
+    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: page });
     mountRecent();
     await flushPromises();
     await wrapper
@@ -228,7 +224,7 @@ describe("最新数据", () => {
   });
 
   it("切空间时重读标的下拉", async () => {
-    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: [], staged_until: "" });
+    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: [] });
     mountRecent();
     await flushPromises();
     expect(api.listSubjects).toHaveBeenLastCalledWith({ space_id: "crypto", keyword: undefined, page: { page: 1, size: 20 } });

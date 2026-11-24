@@ -23,9 +23,6 @@ export const prepareArchiveTask = (datasetId: string, dirName = "") =>
     dirName ? { dataset_id: datasetId, dir_name: dirName } : { dataset_id: datasetId }
   );
 
-export const previewArchiveSchedule = (req: T.PreviewArchiveScheduleReq) =>
-  callArchive<T.PreviewArchiveScheduleReq, T.PreviewArchiveScheduleRsp>("PreviewArchiveSchedule", req);
-
 export const createArchiveTask = (req: T.CreateArchiveTaskReq) =>
   callArchive<T.CreateArchiveTaskReq, T.ArchiveTaskRsp>("CreateArchiveTask", req);
 
