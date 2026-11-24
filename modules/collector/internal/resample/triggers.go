@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -114,26 +113,24 @@ func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *s
 		if !ok || !bucket.End.Equal(period.Add(task.Source.Duration)) {
 			continue
 		}
-		if _, err := t.Engine.RunBucket(ctx, task, bucket, periodSubjects(task, payload), ""); err != nil {
+		if _, err := t.Engine.RunBucket(ctx, task, bucket, periodSubjects(payload), ""); err != nil {
 			errs = append(errs, fmt.Errorf("task %s: %w", task.Spec.TaskID, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// periodSubjects 由周期完成事件的序列名单算出可以合成的标的：只取任务源序列的 tag，失败的序列不合成。
-func periodSubjects(task *Task, payload *storagepb.DatasetPeriodCompleted) []string {
-	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
-	for _, series := range payload.GetFailedSeries() {
-		failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())] = struct{}{}
+// periodSubjects 由周期完成事件算出可以合成的标的：全集减去失败的标的。不按 tag 过滤：源任务换过主来源、tag 变了的标的
+// 照样交给 RunBucket，它按任务的 SourceSeriesTag 读源行，读不到就按“源窗口不完整”跳过（不写、不等待）。
+func periodSubjects(payload *storagepb.DatasetPeriodCompleted) []string {
+	failed := make(map[string]struct{}, len(payload.GetFailedSubjects()))
+	for _, subject := range payload.GetFailedSubjects() {
+		failed[subject] = struct{}{}
 	}
 	var subjects []string
-	for _, series := range payload.GetUniverseSeries() {
-		if series.GetSeriesTag() != task.Spec.SourceSeriesTag {
-			continue
-		}
-		if _, bad := failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())]; !bad {
-			subjects = append(subjects, series.GetSubjectId())
+	for _, subject := range payload.GetUniverseSubjectIds() {
+		if _, bad := failed[subject]; !bad {
+			subjects = append(subjects, subject)
 		}
 	}
 	return uniqueSorted(subjects)
