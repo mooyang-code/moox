@@ -25,7 +25,7 @@ type FileConfig struct {
 	Pool PoolConfig `yaml:"pool"`
 }
 
-// ExternalFileConfig 是外部身份（moox-skill、collector-operator、scf-collector）的配置：固定的一个外部入口，
+// ExternalFileConfig 是外部身份（moox-skill、scf-collector）的配置：固定的一个外部入口，
 // 不做目录发现。KeyFile 是这个身份自己的签名私钥。
 type ExternalFileConfig struct {
 	// Address 是入口主机网关的外部入口地址（主机地址加 11004），Host 是这台主机的 ID（签名的目标主机）。

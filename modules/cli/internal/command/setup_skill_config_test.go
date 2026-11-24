@@ -135,24 +135,6 @@ func TestExportSkillConfigGeneratesKeyLocallyAndRegistersPublicKey(t *testing.T)
 	require.NoFileExists(t, failed)
 }
 
-func TestRegisterIdentityCommand(t *testing.T) {
-	h := newIdentityHarness(t)
-	keyFile := filepath.Join(t.TempDir(), "keys", "collector-operator.key")
-	result, err := h.run(t, "register-identity", "--identity", "collector-operator", "--key-file", keyFile)
-	require.NoError(t, err)
-	key, err := gatewayauth.ReadSigningKey(keyFile)
-	require.NoError(t, err)
-	require.Equal(t, [][2]string{{"collector-operator", identitybundle.PublicKey(key)}}, h.registered)
-	require.Equal(t, "registered", result["status"])
-	require.NotContains(t, result, "notes", "公钥随网关快照下发，登记完不用再推到哪台主机")
-	// 只能登记外部身份：组件名、moox-cli、scf-collector（它的私钥随控制机的身份包签发）都不行。
-	for _, identity := range []string{"moox-cli", "trade", "console", "scf-collector", "factor-engine"} {
-		_, err := h.run(t, "register-identity", "--identity", identity, "--key-file", keyFile)
-		require.Error(t, err, identity)
-	}
-	require.Len(t, h.registered, 1)
-}
-
 // setup operator：本机已有私钥就复用；--register 把这台电脑的公钥登记成 moox-cli 的公钥（换电脑）。
 func TestSetupOperatorReusesKeyAndRegistersOnRequest(t *testing.T) {
 	h := newIdentityHarness(t)

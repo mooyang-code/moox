@@ -114,7 +114,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupAttachSCFVPCCommand(deps),
 		newSetupInvokeSCFCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
-		newSetupRegisterIdentityCommand(deps),
 		newSetupFirewallCommand(deps),
 		newSetupHostStatusCommand(deps, defaultStatusEnv),
 		newSetupDeploymentStatusCommand(deps, defaultStatusEnv),

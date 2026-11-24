@@ -315,7 +315,6 @@
 | `setup package-components` | 按服务目录把编译好的 Linux 二进制打成每个组件一个包（发布脚本用） |
 | `setup operator` | 准备这台电脑的操作身份：生成 moox-cli 的签名私钥；--register 把公钥登记到已经装好的控制机 |
 | `setup reboot-host` | 重启无响应的腾讯云主机（默认只预览，--yes 才重启） |
-| `setup register-identity` | 给不属于主机的外部身份准备签名私钥并登记公钥（如采集名单干预工具的 collector-operator） |
 | `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
 | `setup restart` | 重启一个组件（systemctl --user restart；默认只预览，--yes 才执行） |
 | `setup start` | 启动一个空间：启用采集任务，导入默认因子任务，创建默认示例策略 |

@@ -20,7 +20,7 @@ import (
 
 const collectMgr = "trpc.moox.collector.CollectMgr"
 
-var externalIdentities = []string{"scf-collector", "moox-skill", "collector-operator"}
+var externalIdentities = []string{"scf-collector", "moox-skill"}
 
 type remoteFunc func(context.Context, string, string, int, []byte) ([]byte, error)
 
@@ -28,11 +28,17 @@ func (f remoteFunc) Forward(ctx context.Context, service, method string, seriali
 	return f(ctx, service, method, serialization, body)
 }
 
-// entryFixture 是存储机的网关：本机部署 storage-primary，登记成外部入口，三个外部身份都登记了公钥；
+// entryFixture 是存储机的网关：本机部署 storage-primary，登记成外部入口，外部身份都登记了公钥；
 // 另有一台也是外部入口的海外机，和不是入口的控制机。
 func entryFixture(t *testing.T, forwarder Forwarder, remote RemoteForwarder) (*Proxy, *snapshot.State, *prometheus.Registry) {
 	t.Helper()
-	raw := testsnapshot.New(t, "storage", "storage-primary")
+	return entryFixtureWith(t, forwarder, remote, "storage-primary")
+}
+
+// entryFixtureWith 同 entryFixture，但本机只部署 components；没列出的组件都在控制机上。
+func entryFixtureWith(t *testing.T, forwarder Forwarder, remote RemoteForwarder, components ...string) (*Proxy, *snapshot.State, *prometheus.Registry) {
+	t.Helper()
+	raw := testsnapshot.New(t, "storage", components...)
 	testsnapshot.Host(t, raw, "storage").ExternalEntry = true
 	testsnapshot.AddHost(t, raw, "overseas", "192.0.2.3", true)
 	for _, identity := range externalIdentities {
@@ -127,19 +133,20 @@ func TestExternalEntryForwardsLocalServiceWithOnlySpaceAndTrace(t *testing.T) {
 }
 
 // 外部入口：目标不在本机时交给进程内的网关客户端（它以 host-gateway 的身份带来源头转给目标主机）。
+// 这里存储机是入口，storage-primary 却部署在控制机上。
 func TestExternalEntryForwardsRemoteServiceThroughGatewayClient(t *testing.T) {
 	var calls atomic.Int32
-	p, _, _ := entryFixture(t, forwardFunc(func(context.Context, servicecatalog.Route, int, []byte, codec.MetaData) ([]byte, error) {
-		t.Fatal("CollectMgr 不在存储机上")
+	p, _, _ := entryFixtureWith(t, forwardFunc(func(context.Context, servicecatalog.Route, int, []byte, codec.MetaData) ([]byte, error) {
+		t.Fatal("storage-primary 不在入口主机上")
 		return nil, nil
 	}), remoteFunc(func(_ context.Context, service, method string, _ int, body []byte) ([]byte, error) {
 		calls.Add(1)
-		require.Equal(t, collectMgr, service)
-		require.Equal(t, "SetSubjectExclusions", method)
+		require.Equal(t, primary, service)
+		require.Equal(t, "UpsertFields", method)
 		return body, nil
 	}))
 	body := []byte{0x0a, 1, 'x'}
-	response, err := call(p, true, collectMgr, "SetSubjectExclusions", body, sign(t, testsnapshot.Credential("collector-operator", ""), collectMgr, "SetSubjectExclusions", body))
+	response, err := call(p, true, primary, "UpsertFields", body, sign(t, testsnapshot.Credential("scf-collector", ""), primary, "UpsertFields", body))
 	require.NoError(t, err)
 	require.Equal(t, body, response)
 	require.EqualValues(t, 1, calls.Load())

@@ -251,7 +251,7 @@ func ListIdentityKeys(ctx context.Context, control setupssh.Client, cfg *topolog
 	return listing.Identities, nil
 }
 
-// RegisterIdentity 经 SSH 在控制机上登记（或替换）一个不属于主机的身份的公钥：moox-cli、moox-skill、collector-operator。
+// RegisterIdentity 经 SSH 在控制机上登记（或替换）一个不属于主机的身份的公钥：moox-cli、moox-skill。
 // 信任根是这台电脑到控制机的 SSH：能 SSH 上控制机就能登记。各网关在下一次取快照时（几秒内）认新公钥，旧私钥随即作废。
 func RegisterIdentity(ctx context.Context, control setupssh.Client, cfg *topology.Config, identity, publicKey string) error {
 	if _, err := gatewayauth.ParsePublicKey(publicKey); err != nil {

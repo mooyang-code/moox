@@ -124,7 +124,6 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 	t.Setenv("MOOX_ENTRY_HOST", "unrelated")
 	for _, principal := range []struct{ caller, service, method string }{
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch"},
-		{"collector-operator", "trpc.moox.collector.CollectMgr", "SyncSubjects"},
 		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"},
 	} {
 		t.Run(principal.caller, func(t *testing.T) {

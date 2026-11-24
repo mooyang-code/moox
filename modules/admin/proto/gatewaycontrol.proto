@@ -35,7 +35,7 @@ message SnapshotDeployment {
   bool enabled = 3;
 }
 
-// 不属于主机的身份：moox-cli、scf-collector、moox-skill、collector-operator。
+// 不属于主机的身份：moox-cli、scf-collector、moox-skill。
 message SnapshotIdentity {
   string identity = 1;
   // ed25519 公钥，32 字节。
