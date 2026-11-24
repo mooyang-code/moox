@@ -91,7 +91,7 @@ func init() {
 	flags.StringSliceVar(&collectorTaskCreateFlagsValue.TagIDs, "tag-id", nil, "标的标签，可重复")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Frequency, "frequency", "1m", "K 线频率；合成任务是目标周期，必须显式给出")
 	flags.StringVar(&collectorTaskCreateFlagsValue.SourceTaskID, "source-task-id", "", "建 K 线合成任务：源采集任务 ID（源数据集、源周期由服务端推导；先用 collector resample preview 看目标周期是否可行）")
-	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段；默认值是现货、永续行的字段，股票任务用 --all-output-fields")
+	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段；默认值是现货、永续行的字段，股票任务用 --all-output-fields；合成任务不给就输出合成的全部固定字段")
 	flags.BoolVar(&collectorTaskCreateFlagsValue.AllFields, "all-output-fields", false, "不指定输出字段：输出该品种行的全部字段，与内置任务不写 output_fields 相同（股票任务用它）；不能与 --output-field 同时用")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Symbols, "symbols-per-function", 0, "定时模式下每个函数负责的标的数（0 为默认 50）")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
@@ -99,7 +99,7 @@ func init() {
 	flags.StringVar(&collectorTaskCreateFlagsValue.Ingest, "ingest", "", "采集方式：stream（collector-stream 接收推送）、scf（云函数定时拉取）或 local（collector-stream 本地定时拉取）；留空用市场默认值")
 }
 
-// fieldsGiven 只对合成任务有意义：没显式给 --output-field 时不发 output_fields，沿用源任务的字段。
+// fieldsGiven 只对合成任务有意义：没显式给 --output-field 时不发 output_fields，输出合成的全部固定字段（资金费率、股票附加字段不合成）。
 func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorTaskCreateFlags, fieldsGiven bool) error {
 	resample := strings.TrimSpace(flags.SourceTaskID) != ""
 	if strings.TrimSpace(flags.SpaceID) == "" || strings.TrimSpace(flags.Name) == "" {

@@ -36,7 +36,7 @@ func TestCollectorTaskCreateFieldsHint(t *testing.T) {
 	require.Empty(t, collectorTaskCreateFieldsHint(flags, false))
 }
 
-// 合成任务只发源任务与目标周期；没显式给 --output-field 时不带 output_fields，沿用源任务的字段。
+// 合成任务只发源任务与目标周期；没显式给 --output-field 时不带 output_fields，输出合成的全部固定字段（资金费率、股票附加字段不合成）。
 func TestCollectorResampleTaskParams(t *testing.T) {
 	flags := collectorTaskCreateFlags{SourceTaskID: " src1 ", Frequency: "5m", Fields: []string{"open", "close"}}
 	require.Equal(t, map[string]any{"source_task_id": "src1", "target_frequency": "5m"}, collectorResampleTaskParams(flags, false))
