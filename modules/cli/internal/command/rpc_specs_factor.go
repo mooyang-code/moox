@@ -34,6 +34,8 @@ func init() {
 			Flags: []rpcFlag{strFlag("task-id", "task_id", "取数据的因子计算任务"), fileFlag("spec-file", "spec", "因子表达式 YAML 文件；- 为标准输入", true),
 				listFlag("subject", "subjects", "展示的标的，可重复或逗号分隔"), intFlag("periods", "periods", "最近多少期"), strFlag("factor-id", "factor_id", "因子 ID"),
 				boolFlag("allow-partial-universe", "allow_partial_universe", "截面因子允许标的不完整"), jsonFlag("params", "params", "成员参数 JSON"), jsonFlag("udf-versions", "udf_versions", "自定义算子版本 JSON")}},
+		rpcSpec{Path: []string{"factor", "purge-dataset"}, Short: "删除没有因子任务引用的孤立因子结果数据集（行与元数据，不可恢复；默认只预览，--yes 才执行）", Service: factorMgr, Method: "PurgeResultDataset", Destructive: true, SpaceField: "space_id",
+			Flags: []rpcFlag{reqFlag("dataset-id", "dataset_id", "因子结果数据集 ID")}},
 		rpcSpec{Path: []string{"factor", "functions"}, Short: "列出表达式里可用的函数", Service: factorMgr, Method: "ListFactorFunctions"},
 		rpcSpec{Path: []string{"factor", "status"}, Short: "因子运行状态（各任务的预热、排队、暂停与计算前检查；单个任务的检查看 factor task status）", Service: factorMgr, Method: "GetStatus"},
 

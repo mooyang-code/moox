@@ -248,6 +248,27 @@ message CreateFactorRsp {
   FactorDef factor = 2;
 }
 
+// ImportFactorCatalog 一次导入一个因子库目录：每个文件是 [{factor_id, name, category_id, category_name, spec,
+// allow_partial_universe}] 列表（字段严格校验），factor_id 在全部文件内必须唯一。任一因子已存在或编译失败时整批拒绝，
+// 什么都不写；带 category_name 的分类先建立或更新。
+message FactorCatalogFile {
+  string name = 1;     // 文件名，只用于报错定位
+  string content = 2;  // YAML 原文
+}
+message ImportFactorCatalogReq { repeated FactorCatalogFile files = 1; }
+message ImportFactorCatalogRsp {
+  common.RetInfo ret_info = 1;
+  repeated FactorDef factors = 2;
+}
+
+// PurgeResultDataset 删除一个孤立的因子结果数据集（行与元数据），例如重建因子库后遗留的旧结果。
+// 只允许因子结果数据集；仍是某个因子任务的结果数据集时拒绝。
+message PurgeResultDatasetReq {
+  string space_id = 1;
+  string dataset_id = 2;
+}
+message PurgeResultDatasetRsp { common.RetInfo ret_info = 1; }
+
 message UpdateFactorReq { FactorDef factor = 1; }
 message UpdateFactorRsp {
   common.RetInfo ret_info = 1;
@@ -572,6 +593,8 @@ service FactorMgr {
   rpc GetFactorTask(GetFactorTaskReq) returns (GetFactorTaskRsp);
   rpc ListFactorTasks(ListFactorTasksReq) returns (ListFactorTasksRsp);
   rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
+  rpc ImportFactorCatalog(ImportFactorCatalogReq) returns (ImportFactorCatalogRsp);
+  rpc PurgeResultDataset(PurgeResultDatasetReq) returns (PurgeResultDatasetRsp);
   rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
   rpc DeleteFactor(DeleteFactorReq) returns (DeleteFactorRsp);
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);

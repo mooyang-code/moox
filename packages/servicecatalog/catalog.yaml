@@ -645,7 +645,6 @@ components:
     replicas: single
     protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
-    tools: [moox-factor-mgr-cli]
     config_files:
       - from: modules/factor/config/app.yaml
       - from: modules/factor/config/trpc_go.yaml
@@ -671,6 +670,8 @@ components:
             read_only: true
             callers: [strategy]
           - name: CreateFactor
+          - name: ImportFactorCatalog
+          - name: PurgeResultDataset
           - name: UpdateFactor
           - name: DeleteFactor
           - name: GetFactor

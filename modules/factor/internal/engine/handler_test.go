@@ -48,7 +48,7 @@ func periodDelivery(t *testing.T, datasetID string) *jetstream.Delivery {
 
 func newCatalogHandler(t *testing.T, cache *CatalogCache, runner *planRecorder) *eventconsumer.Handler {
 	t.Helper()
-	handler := eventconsumer.NewHandler(cache, periodStoreFake{}, runner, setlock.New(""), eventconsumer.HandlerConfig{})
+	handler := eventconsumer.NewHandler(cache, periodStoreFake{}, runner, setlock.New(), eventconsumer.HandlerConfig{})
 	t.Cleanup(handler.Close)
 	return handler
 }

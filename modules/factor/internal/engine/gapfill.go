@@ -330,7 +330,7 @@ func logExpired(expired []gapledger.Entry, giveUp time.Duration) {
 		bySubject[entry.Set+"/"+entry.Subject]++
 	}
 	for name, count := range bySubject {
-		log.Errorf("factor_gap_gave_up target=%s entries=%d after=%s hint=先用 moox-cli collector kline backfill 补采缺口，再用 moox-factor-mgr-cli recalc 手工重算", name, count, giveUp)
+		log.Errorf("factor_gap_gave_up target=%s entries=%d after=%s hint=先用 moox-cli collector kline backfill 补采缺口，再用 moox-cli factor recalc submit 手工重算", name, count, giveUp)
 	}
 }
 

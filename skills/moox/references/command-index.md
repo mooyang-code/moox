@@ -154,12 +154,14 @@
 | `factor create` | 创建因子定义（表达式写在 --spec-file 里，写法见 skill 的 factor-dsl） |
 | `factor delete` | 删除因子定义（默认只预览，--yes 才执行） |
 | `factor functions` | 列出表达式里可用的函数 |
+| `factor import` | 按目录批量导入因子定义（目录下全部 *.yaml；任一因子已存在或编译失败时整批拒绝） |
 | `factor list` | 列出因子定义 |
 | `factor member add` | 给计算任务加因子成员（固定参数用 --param 名=数值） |
 | `factor member disable` | 停用因子成员（默认只预览，--yes 才执行） |
 | `factor member enable` | 启用因子成员 |
 | `factor member remove` | 移除计算任务的因子成员（默认只预览，--yes 才执行） |
 | `factor preview` | 在真实数据上试算因子表达式（不落库） |
+| `factor purge-dataset` | 删除没有因子任务引用的孤立因子结果数据集（行与元数据，不可恢复；默认只预览，--yes 才执行） |
 | `factor recalc cancel` | 取消补算作业 |
 | `factor recalc list` | 列出补算作业 |
 | `factor recalc show` | 查看一个补算作业 |

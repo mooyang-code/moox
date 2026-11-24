@@ -59,6 +59,8 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.collector.CollectMgr/ClearSubjectExclusions": "collector subjects unexclude",
 	"trpc.moox.collector.CollectMgr/ListSubjectExclusions":  "collector subjects exclusions",
 
+	"trpc.moox.factor.FactorMgr/ImportFactorCatalog": "factor import",
+
 	"trpc.moox.factor.FactorMgr/PublishUdf":  "udf publish",
 	"trpc.moox.factor.FactorMgr/ListUdfs":    "udf list",
 	"trpc.moox.factor.FactorMgr/GetUdf":      "udf show",
