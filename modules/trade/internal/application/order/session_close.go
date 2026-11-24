@@ -142,7 +142,7 @@ func (c *SessionCloser) closeOrder(ctx context.Context, current store.OrderRecor
 			Spec:           orderdomain.OrderSpec{ClientOrderSpec: orderdomain.ClientOrderSpec{Quantity: quantity}},
 			FilledQuantity: filled, State: orderdomain.State(record.State), Version: record.Version,
 		}
-		if _, err := aggregate.ConfirmCancel(); err != nil {
+		if err := aggregate.ConfirmCancel(); err != nil {
 			return err
 		}
 		reducer := &consumer.Reducer{Store: c.Store, Now: c.Now}

@@ -10,74 +10,79 @@ import (
 )
 
 func TestOrderLifecycle(t *testing.T) {
-	order, events, err := New("order-1", validSpec())
+	order, err := New("order-1", validSpec())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if order.State != Pending || order.Version != 1 || len(events) != 1 {
-		t.Fatalf("new order = %+v, events = %+v", order, events)
+	if order.State != Pending || order.Version != 1 {
+		t.Fatalf("new order = %+v", order)
 	}
 
 	steps := []struct {
 		name string
-		run  func() ([]Event, error)
+		run  func() error
 		want State
 	}{
 		{"begin submit", order.BeginSubmit, Submitting},
-		{"acknowledge", func() ([]Event, error) { return order.Acknowledge("exchange-1") }, Open},
-		{"partial fill", func() ([]Event, error) {
+		{"acknowledge", func() error { return order.Acknowledge("exchange-1") }, Open},
+		{"partial fill", func() error {
 			return order.ApplyFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")})
 		}, PartiallyFilled},
-		{"fill", func() ([]Event, error) {
+		{"fill", func() error {
 			return order.ApplyFill(Fill{ID: "fill-2", Quantity: shared.MustDecimal("0.6")})
 		}, Filled},
 	}
 	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
-			if _, err := step.run(); err != nil {
+			before := order.Version
+			if err := step.run(); err != nil {
 				t.Fatalf("transition error = %v", err)
+			}
+			// 版本号是存储层乐观锁的期望值，每次成功的状态变化都要加一。
+			if order.Version != before+1 {
+				t.Fatalf("version = %d, want %d", order.Version, before+1)
 			}
 			if order.State != step.want {
 				t.Fatalf("state = %s, want %s", order.State, step.want)
 			}
 		})
 	}
-	if _, err := order.BeginCancel(); !errors.Is(err, ErrInvalidTransition) {
+	if err := order.BeginCancel(); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("terminal transition error = %v", err)
 	}
 }
 
 func TestDiscardPendingIsLocalTerminalTransition(t *testing.T) {
-	value, _, err := New("order-1", validSpec())
+	value, err := New("order-1", validSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := value.DiscardPending(); err != nil {
+	if err := value.DiscardPending(); err != nil {
 		t.Fatal(err)
 	}
 	if value.State != Canceled {
 		t.Fatalf("state = %s, want %s", value.State, Canceled)
 	}
-	if _, err := value.DiscardPending(); !errors.Is(err, ErrInvalidTransition) {
+	if err := value.DiscardPending(); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("second DiscardPending() error = %v", err)
 	}
 }
 
 func TestAbortUnsentSubmitReturnsToPending(t *testing.T) {
-	value, _, err := New("order-1", validSpec())
+	value, err := New("order-1", validSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := value.BeginSubmit(); err != nil {
+	if err := value.BeginSubmit(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := value.AbortSubmit(); err != nil {
+	if err := value.AbortSubmit(); err != nil {
 		t.Fatal(err)
 	}
 	if value.State != Pending {
 		t.Fatalf("state = %s, want %s", value.State, Pending)
 	}
-	if _, err := value.AbortSubmit(); !errors.Is(err, ErrInvalidTransition) {
+	if err := value.AbortSubmit(); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("second AbortSubmit() error = %v", err)
 	}
 }
@@ -123,20 +128,20 @@ func TestCancelAndFillRaceMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			value, _, _ := New("order-1", validSpec())
-			_, _ = value.BeginSubmit()
-			_, _ = value.Acknowledge("exchange-1")
+			value, _ := New("order-1", validSpec())
+			_ = value.BeginSubmit()
+			_ = value.Acknowledge("exchange-1")
 			if tt.initialFill != "" {
-				_, _ = value.ApplyFill(Fill{
+				_ = value.ApplyFill(Fill{
 					ID:       "fill-before-cancel",
 					Quantity: shared.MustDecimal(tt.initialFill),
 				})
 			}
-			_, _ = value.BeginCancel()
+			_ = value.BeginCancel()
 			if tt.cancelUnknown {
-				_, _ = value.MarkCancelUnknown()
+				_ = value.MarkCancelUnknown()
 			}
-			if _, err := value.ApplyFill(Fill{
+			if err := value.ApplyFill(Fill{
 				ID:       "fill-during-cancel",
 				Quantity: shared.MustDecimal(tt.lateFill),
 			}); err != nil {
@@ -146,10 +151,10 @@ func TestCancelAndFillRaceMatrix(t *testing.T) {
 				t.Fatalf("state before ConfirmCancel = %s, want %s", value.State, tt.wantBefore)
 			}
 			if value.State == Filled {
-				if _, err := value.ConfirmCancel(); !errors.Is(err, ErrInvalidTransition) {
+				if err := value.ConfirmCancel(); !errors.Is(err, ErrInvalidTransition) {
 					t.Fatalf("ConfirmCancel() error = %v, want terminal protection", err)
 				}
-			} else if _, err := value.ConfirmCancel(); err != nil {
+			} else if err := value.ConfirmCancel(); err != nil {
 				t.Fatalf("ConfirmCancel() error = %v", err)
 			}
 			if value.State != tt.wantFinal {
@@ -168,28 +173,28 @@ func TestTerminalOrderAcceptsUniqueLateFills(t *testing.T) {
 		{
 			name: "CANCELED becomes PARTIALLY_CANCELED",
 			terminal: func(value *Order) {
-				_, _ = value.BeginSubmit()
-				_, _ = value.Acknowledge("exchange-1")
-				_, _ = value.BeginCancel()
-				_, _ = value.ConfirmCancel()
+				_ = value.BeginSubmit()
+				_ = value.Acknowledge("exchange-1")
+				_ = value.BeginCancel()
+				_ = value.ConfirmCancel()
 			},
 			want: PartiallyCanceled,
 		},
 		{
 			name: "PARTIALLY_CANCELED accepts another partial Fill",
 			terminal: func(value *Order) {
-				_, _ = value.BeginSubmit()
-				_, _ = value.Acknowledge("exchange-1")
-				_, _ = value.ApplyFill(Fill{ID: "fill-before-cancel", Quantity: shared.MustDecimal("0.2")})
-				_, _ = value.BeginCancel()
-				_, _ = value.ConfirmCancel()
+				_ = value.BeginSubmit()
+				_ = value.Acknowledge("exchange-1")
+				_ = value.ApplyFill(Fill{ID: "fill-before-cancel", Quantity: shared.MustDecimal("0.2")})
+				_ = value.BeginCancel()
+				_ = value.ConfirmCancel()
 			},
 			want: PartiallyCanceled,
 		},
 		{
 			name: "REJECTED repairs to PARTIALLY_CANCELED",
 			terminal: func(value *Order) {
-				_, _ = value.Reject()
+				_ = value.Reject()
 			},
 			want: PartiallyCanceled,
 		},
@@ -197,9 +202,9 @@ func TestTerminalOrderAcceptsUniqueLateFills(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			value, _, _ := New("order-1", validSpec())
+			value, _ := New("order-1", validSpec())
 			tt.terminal(value)
-			if _, err := value.ApplyFill(Fill{
+			if err := value.ApplyFill(Fill{
 				ID:       "unique-late-fill",
 				Quantity: shared.MustDecimal("0.3"),
 			}); err != nil {
@@ -213,9 +218,9 @@ func TestTerminalOrderAcceptsUniqueLateFills(t *testing.T) {
 }
 
 func TestLateFillCanCompleteTerminalOrder(t *testing.T) {
-	value, _, _ := New("order-1", validSpec())
-	_, _ = value.Reject()
-	if _, err := value.ApplyFill(Fill{
+	value, _ := New("order-1", validSpec())
+	_ = value.Reject()
+	if err := value.ApplyFill(Fill{
 		ID:       "late-full-fill",
 		Quantity: shared.MustDecimal("1"),
 	}); err != nil {
@@ -227,29 +232,28 @@ func TestLateFillCanCompleteTerminalOrder(t *testing.T) {
 }
 
 func TestApplyFillIsIdempotentByFillIDAndRejectsOverfill(t *testing.T) {
-	value, _, _ := New("order-1", validSpec())
-	_, _ = value.BeginSubmit()
-	_, _ = value.Acknowledge("exchange-1")
+	value, _ := New("order-1", validSpec())
+	_ = value.BeginSubmit()
+	_ = value.Acknowledge("exchange-1")
 	fill := Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")}
-	events, err := value.ApplyFill(fill)
-	if err != nil || len(events) != 1 {
-		t.Fatalf("first ApplyFill() events = %v, error = %v", events, err)
+	before := value.Version
+	if err := value.ApplyFill(fill); err != nil || value.Version != before+1 {
+		t.Fatalf("first ApplyFill() version = %d → %d, error = %v", before, value.Version, err)
 	}
 	version := value.Version
-	events, err = value.ApplyFill(fill)
-	if err != nil || len(events) != 0 {
-		t.Fatalf("duplicate ApplyFill() events = %v, error = %v", events, err)
+	if err := value.ApplyFill(fill); err != nil {
+		t.Fatalf("duplicate ApplyFill() error = %v", err)
 	}
 	if value.Version != version || value.FilledQuantity.String() != "0.4" {
 		t.Fatalf("duplicate mutated order = %+v", value)
 	}
-	if _, err := value.ApplyFill(Fill{
+	if err := value.ApplyFill(Fill{
 		ID:       "fill-over",
 		Quantity: shared.MustDecimal("0.7"),
 	}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("overfill error = %v", err)
 	}
-	if _, err := value.ApplyFill(Fill{
+	if err := value.ApplyFill(Fill{
 		ID:       "fill-1",
 		Quantity: shared.MustDecimal("0.5"),
 	}); !errors.Is(err, ErrInvalidTransition) {
@@ -258,21 +262,21 @@ func TestApplyFillIsIdempotentByFillIDAndRejectsOverfill(t *testing.T) {
 }
 
 func TestOrderUnknownStates(t *testing.T) {
-	order, _, _ := New("order-1", validSpec())
-	_, _ = order.BeginSubmit()
-	if _, err := order.MarkSubmitUnknown(); err != nil {
+	order, _ := New("order-1", validSpec())
+	_ = order.BeginSubmit()
+	if err := order.MarkSubmitUnknown(); err != nil {
 		t.Fatalf("MarkSubmitUnknown() error = %v", err)
 	}
-	if _, err := order.Acknowledge("exchange-1"); err != nil {
+	if err := order.Acknowledge("exchange-1"); err != nil {
 		t.Fatalf("Acknowledge() error = %v", err)
 	}
-	if _, err := order.BeginCancel(); err != nil {
+	if err := order.BeginCancel(); err != nil {
 		t.Fatalf("BeginCancel() error = %v", err)
 	}
-	if _, err := order.MarkCancelUnknown(); err != nil {
+	if err := order.MarkCancelUnknown(); err != nil {
 		t.Fatalf("MarkCancelUnknown() error = %v", err)
 	}
-	if _, err := order.ConfirmCancel(); err != nil {
+	if err := order.ConfirmCancel(); err != nil {
 		t.Fatalf("ConfirmCancel() error = %v", err)
 	}
 	if order.State != Canceled {
@@ -281,14 +285,14 @@ func TestOrderUnknownStates(t *testing.T) {
 }
 
 func TestCancelRejectedRestoresExecutableState(t *testing.T) {
-	value, _, _ := New("order-1", validSpec())
-	_, _ = value.BeginSubmit()
-	_, _ = value.Acknowledge("exchange-1")
-	_, _ = value.ApplyFill(Fill{
+	value, _ := New("order-1", validSpec())
+	_ = value.BeginSubmit()
+	_ = value.Acknowledge("exchange-1")
+	_ = value.ApplyFill(Fill{
 		ID: "fill-before-cancel", Quantity: shared.MustDecimal("0.2"),
 	})
-	_, _ = value.BeginCancel()
-	if _, err := value.CancelRejected(); err != nil {
+	_ = value.BeginCancel()
+	if err := value.CancelRejected(); err != nil {
 		t.Fatalf("CancelRejected() error = %v", err)
 	}
 	if value.State != PartiallyFilled {
@@ -297,12 +301,12 @@ func TestCancelRejectedRestoresExecutableState(t *testing.T) {
 }
 
 func TestAcknowledgementCanFollowFillRace(t *testing.T) {
-	value, _, _ := New("order-1", validSpec())
-	_, _ = value.BeginSubmit()
-	_, _ = value.ApplyFill(Fill{
+	value, _ := New("order-1", validSpec())
+	_ = value.BeginSubmit()
+	_ = value.ApplyFill(Fill{
 		ID: "fill-before-ack", Quantity: shared.MustDecimal("1"),
 	})
-	if _, err := value.Acknowledge("exchange-1"); err != nil {
+	if err := value.Acknowledge("exchange-1"); err != nil {
 		t.Fatalf("Acknowledge() error = %v", err)
 	}
 	if value.State != Filled || value.ExchangeOrderID != "exchange-1" {
@@ -326,7 +330,7 @@ func TestOrderRequiresPositiveQuantityAndIdentity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			spec := validSpec()
 			tt.mutate(&spec)
-			if _, _, err := New(tt.id, spec); !errors.Is(err, ErrInvalidOrder) {
+			if _, err := New(tt.id, spec); !errors.Is(err, ErrInvalidOrder) {
 				t.Fatalf("New() error = %v, want ErrInvalidOrder", err)
 			}
 		})
@@ -334,10 +338,10 @@ func TestOrderRequiresPositiveQuantityAndIdentity(t *testing.T) {
 }
 
 func TestOrderAcceptsAuthoritativeExternalCancelWhileOpen(t *testing.T) {
-	value, _, _ := New("order-1", validSpec())
-	_, _ = value.BeginSubmit()
-	_, _ = value.Acknowledge("exchange-1")
-	if _, err := value.ConfirmCancel(); err != nil {
+	value, _ := New("order-1", validSpec())
+	_ = value.BeginSubmit()
+	_ = value.Acknowledge("exchange-1")
+	if err := value.ConfirmCancel(); err != nil {
 		t.Fatalf("ConfirmCancel() error = %v", err)
 	}
 	if value.State != Canceled {
@@ -363,32 +367,33 @@ func validSpec() OrderSpec {
 
 // 订单状态同步可能先看到 EXPIRED、成交回报后到：迟到的真实成交必须被接收（去重与超量检查保持），不能让整个成交事务回滚。
 func TestExpiredOrderStillAcceptsLateFills(t *testing.T) {
-	order, _, err := New("order-1", validSpec())
+	order, err := New("order-1", validSpec())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	for _, step := range []func() ([]Event, error){
+	for _, step := range []func() error{
 		order.BeginSubmit,
-		func() ([]Event, error) { return order.Acknowledge("exchange-1") },
+		func() error { return order.Acknowledge("exchange-1") },
 		order.Expire,
 	} {
-		if _, err := step(); err != nil {
+		if err := step(); err != nil {
 			t.Fatalf("setup error = %v", err)
 		}
 	}
-	if _, err := order.ApplyFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")}); err != nil {
+	if err := order.ApplyFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")}); err != nil {
 		t.Fatalf("late partial fill error = %v", err)
 	}
 	if order.State != Expired || order.FilledQuantity.Cmp(shared.MustDecimal("0.4")) != 0 {
 		t.Fatalf("after partial fill state = %s filled = %s", order.State, order.FilledQuantity)
 	}
-	if events, err := order.ApplyFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")}); err != nil || len(events) != 0 {
-		t.Fatalf("duplicate fill = %v, %v", events, err)
+	before := order.Version
+	if err := order.ApplyFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")}); err != nil || order.Version != before {
+		t.Fatalf("duplicate fill version = %d → %d, error = %v", before, order.Version, err)
 	}
-	if _, err := order.ApplyFill(Fill{ID: "fill-big", Quantity: shared.MustDecimal("0.7")}); !errors.Is(err, ErrInvalidTransition) {
+	if err := order.ApplyFill(Fill{ID: "fill-big", Quantity: shared.MustDecimal("0.7")}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("over-quantity fill error = %v", err)
 	}
-	if _, err := order.ApplyFill(Fill{ID: "fill-2", Quantity: shared.MustDecimal("0.6")}); err != nil {
+	if err := order.ApplyFill(Fill{ID: "fill-2", Quantity: shared.MustDecimal("0.6")}); err != nil {
 		t.Fatalf("late final fill error = %v", err)
 	}
 	if order.State != Filled {
