@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 )
@@ -63,4 +64,39 @@ func TestSymbolChangeWritesATimelineRowFromP(t *testing.T) {
 
 	planBaselineSettle(t, h, r)
 	require.Equal(t, registered, h.registrar.calls, "符号变化不重新登记快照")
+}
+
+// 补采的路由由当前任务推出，与对账器为同一数据集生成的函数计划一致：市场身份（含来源，决定写行的 series_tag）、
+// 拉取参数、输出字段都相同。任务删掉、频率不匹配时找不到路由。
+func TestBackfillRouteMatchesThePlanOfTheTask(t *testing.T) {
+	h := newPlanHarness(t, 3)
+	h.tasks.tasks[0].CollectParams = `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot","frequency":"1m","output_fields":["close","open","volume"]}`
+	r := h.reconciler()
+	planBaselineSettle(t, h, r)
+	applied, err := h.store.LatestApplied(context.Background(), "crypto")
+	require.NoError(t, err)
+	content := h.content(applied)
+	var planned *marketfetch.Plan
+	for _, name := range content.SortedFunctionNames() {
+		planned = content.FinalPlan(content.Functions[name])
+		break
+	}
+	require.NotNil(t, planned)
+
+	routes := &BackfillRoutes{Tasks: h.tasks, Tags: h.symbols, Options: func(string) (PlanOptions, error) { return testPlanOptions(), nil }}
+	route, found, err := routes.BackfillRoute(context.Background(), "crypto", "ds_spot", "1m")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, planned.Market, route.Market)
+	require.Equal(t, planned.Fetch, route.Fetch)
+	require.Equal(t, findPlanDataset(planned, "ds_spot|1m").OutputFields, route.Datasets[0].OutputFields)
+	require.Equal(t, marketfetch.PlanSeriesTag("crypto", planned.Market), marketfetch.PlanSeriesTag("crypto", route.Market), "写行的 series_tag 与计划一致")
+
+	_, found, err = routes.BackfillRoute(context.Background(), "crypto", "ds_spot", "5m")
+	require.NoError(t, err)
+	require.False(t, found, "频率不匹配")
+	h.tasks.tasks = nil
+	_, found, err = routes.BackfillRoute(context.Background(), "crypto", "ds_spot", "1m")
+	require.NoError(t, err)
+	require.False(t, found, "任务已删除")
 }

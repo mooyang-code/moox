@@ -179,6 +179,18 @@ func (s *planTasksStub) ListEnabled(context.Context, string) ([]domain.Collectio
 	return append([]domain.CollectionTask(nil), s.tasks...), nil
 }
 
+// ListKline 按结果数据集筛任务（补采路由用）；任务参数里的 target_dataset_id 就是结果数据集。
+func (s *planTasksStub) ListKline(_ context.Context, _, datasetID string) ([]domain.CollectionTask, error) {
+	var out []domain.CollectionTask
+	for _, task := range s.tasks {
+		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+		if err == nil && params.Target.DatasetID == datasetID {
+			out = append(out, task)
+		}
+	}
+	return out, nil
+}
+
 type planSymbolsStub struct{ subjects []string }
 
 func (s *planSymbolsStub) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
