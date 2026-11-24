@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -26,6 +27,9 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
 	}
+	if err := validateSpaceTimezone(space); err != nil {
+		return &pb.CreateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
+	}
 	created, err := s.metadata.CreateSpace(ctx, space)
 	if err != nil {
 		return &pb.CreateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
@@ -45,6 +49,9 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
 	}
+	if err := validateSpaceTimezone(space); err != nil {
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
+	}
 	updated, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
 		return &pb.UpdateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
@@ -53,6 +60,19 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 		return &pb.UpdateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.UpdateSpaceRsp{RetInfo: retinfo.Success("success"), Space: updated}, nil
+}
+
+// validateSpaceTimezone 要求时区是 IANA 名称：管理台全站时间按它显示，写错了页面只能回退到浏览器本地时区。
+func validateSpaceTimezone(space *pb.Space) error {
+	space.Timezone = strings.TrimSpace(space.GetTimezone())
+	space.Market = strings.TrimSpace(space.GetMarket())
+	if space.Timezone == "" {
+		return nil
+	}
+	if _, err := time.LoadLocation(space.Timezone); err != nil {
+		return storeerr.Invalidf("空间时区 %q 不是有效的 IANA 时区名", space.Timezone)
+	}
+	return nil
 }
 
 func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.DeleteSpaceRsp, error) {
@@ -113,7 +133,7 @@ func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpa
 }
 
 func (s *Service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {
-	items, page, err := s.metadata.ListSpaces(ctx, req.GetOwner(), req.GetPage())
+	items, page, err := s.metadata.ListSpaces(ctx, req.GetOwner(), req.GetStatus(), req.GetPage())
 	if err != nil {
 		return &pb.ListSpacesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}

@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeStartClient struct {
-	tasks     []adminclient.CollectionTaskSummary
+	tasks     []rpcclient.CollectionTaskSummary
 	instances []setupStartInstance
 	online    bool
 	enabled   []string
@@ -31,7 +31,7 @@ type fakeStartClient struct {
 	syncSubjects  int
 }
 
-func (f *fakeStartClient) Tasks(context.Context, string) ([]adminclient.CollectionTaskSummary, error) {
+func (f *fakeStartClient) Tasks(context.Context, string) ([]rpcclient.CollectionTaskSummary, error) {
 	return f.tasks, nil
 }
 func (f *fakeStartClient) EnableTask(_ context.Context, _, taskID string) error {
@@ -99,7 +99,7 @@ func startRepository(t *testing.T) string {
 }
 
 func startClient() *fakeStartClient {
-	return &fakeStartClient{online: true, tasks: []adminclient.CollectionTaskSummary{{TaskID: "a"}, {TaskID: "b"}}}
+	return &fakeStartClient{online: true, tasks: []rpcclient.CollectionTaskSummary{{TaskID: "a"}, {TaskID: "b"}}}
 }
 
 func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
@@ -115,7 +115,7 @@ func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
 
 func TestSetupStartSkipsManualStartTasks(t *testing.T) {
 	client := startClient()
-	client.tasks = append(client.tasks, adminclient.CollectionTaskSummary{TaskID: "m", TaskName: "手动任务"})
+	client.tasks = append(client.tasks, rpcclient.CollectionTaskSummary{TaskID: "m", TaskName: "手动任务"})
 	summary, err := runSetupStart(context.Background(), setupDeps{}, client, testSetupSnapshot(t), startRepository(t), "crypto", time.Millisecond)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, client.enabled, "start: manual 的任务不启用；别的空间的同名标记不影响")
@@ -161,7 +161,7 @@ func TestSetupStartPrerequisitesDependOnSpace(t *testing.T) {
 
 func TestSetupStartEnableTaskRetriesWhileSubjectsNotResolvable(t *testing.T) {
 	client := &fakeStartClient{subjectMisses: 2, syncBusy: 1, syncSubjects: 300}
-	task := adminclient.CollectionTaskSummary{TaskID: "a", TagIDs: []string{"cn_hs300"}}
+	task := rpcclient.CollectionTaskSummary{TaskID: "a", TagIDs: []string{"cn_hs300"}}
 	require.NoError(t, setupStartEnableTask(context.Background(), client, "stockcn", task, time.Millisecond))
 	require.Equal(t, 3, client.enableCalls, "Collector 忙时下一轮再同步，同步完再启用")
 	require.Equal(t, 2, client.syncs)
@@ -173,7 +173,7 @@ func TestSetupStartEnableTaskRetriesWhileSubjectsNotResolvable(t *testing.T) {
 
 func TestSetupStartEnableTaskDoesNotRetryOtherErrors(t *testing.T) {
 	client := &fakeStartClient{otherErr: errors.New("UpdateTask rejected: 其他原因")}
-	require.Error(t, setupStartEnableTask(context.Background(), client, "crypto", adminclient.CollectionTaskSummary{TaskID: "a"}, time.Millisecond))
+	require.Error(t, setupStartEnableTask(context.Background(), client, "crypto", rpcclient.CollectionTaskSummary{TaskID: "a"}, time.Millisecond))
 	require.Equal(t, 1, client.enableCalls)
 }
 

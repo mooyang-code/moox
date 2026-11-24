@@ -1,4 +1,4 @@
-package adminclient
+package rpcclient
 
 import (
 	"context"

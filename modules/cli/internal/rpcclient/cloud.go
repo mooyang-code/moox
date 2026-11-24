@@ -1,15 +1,21 @@
-package adminclient
+package rpcclient
 
 import (
 	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // 云账号、代码包与云函数（CollectMgr）：Collector 直接调腾讯云，密钥本身在 Admin 的 SecretMgr，这里只登记密钥 ID。
@@ -23,47 +29,6 @@ var newPackageUploadHTTPClient = func() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = false
 	return &http.Client{Timeout: packageUploadTimeout, Transport: transport}
-}
-
-// CloudAccount 是一个云账号（不含密钥明文）。
-type CloudAccount struct {
-	AccountID          string `json:"account_id"`
-	AccountName        string `json:"account_name"`
-	Provider           string `json:"provider"`
-	CredentialSecretID string `json:"credential_secret_id"`
-	AppID              string `json:"app_id"`
-	COSRegion          string `json:"cos_region"`
-	COSBucket          string `json:"cos_bucket"`
-}
-
-// CloudAccountInput 登记一个腾讯云账号与代码包上传用的 COS 桶；同一个账号可以在所有配置的地域建函数。不含 SecretID/SecretKey。
-type CloudAccountInput struct {
-	AccountID          string `json:"account_id"`
-	AccountName        string `json:"account_name"`
-	Provider           string `json:"provider"`
-	CredentialSecretID string `json:"credential_secret_id"`
-	AppID              string `json:"app_id"`
-	COSRegion          string `json:"cos_region"`
-	COSBucket          string `json:"cos_bucket"`
-}
-
-// UploadPackageRequest 是上传代码包的参数；空间取 Client.SpaceID。
-type UploadPackageRequest struct {
-	PackageName    string `json:"package_name"`
-	Version        string `json:"version"`
-	Runtime        string `json:"runtime"`
-	CloudAccountID string `json:"cloud_account_id"`
-	Filename       string `json:"filename,omitempty"`
-}
-
-// FunctionPackage 是一次上传的代码包；Status 是 pending（已发上传地址）或 available（COS 对象已核对）。
-type FunctionPackage struct {
-	SpaceID        string `json:"space_id"`
-	PackageID      string `json:"package_id"`
-	PackageName    string `json:"package_name"`
-	Version        string `json:"version"`
-	Status         string `json:"status"`
-	CloudAccountID string `json:"cloud_account_id"`
 }
 
 // functionPackageAvailable 是 COS 对象已核对、可以部署的代码包状态（与 Collector 的 store.FunctionPackageAvailable 一致）。
@@ -115,6 +80,35 @@ type FunctionEgress struct {
 	Error string `json:"error,omitempty"`
 }
 
+// collectorProtoRsp 是 CollectMgr 生成的响应消息：都带 ret_info。
+type collectorProtoRsp interface {
+	proto.Message
+	GetRetInfo() *commonpb.RetInfo
+}
+
+// callCollectorProto 以 proto JSON 调 CollectMgr，请求与响应都是生成的消息，并检查 ret_info。
+func (c *Client) callCollectorProto(ctx context.Context, method string, request proto.Message, response collectorProtoRsp) error {
+	body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("%s: %w", method, err)
+	}
+	raw, err := c.gatewayJSON(ctx, "trpc.moox.collector.CollectMgr", method, json.RawMessage(body))
+	if err != nil {
+		return fmt.Errorf("%s: %w", method, err)
+	}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(raw, response); err != nil {
+		return fmt.Errorf("decode %s response: %w", method, err)
+	}
+	info := response.GetRetInfo()
+	if info == nil {
+		return fmt.Errorf("%s: 响应缺少 ret_info", method)
+	}
+	if code := int(info.GetCode()); !isRetInfoSuccess(code) {
+		return fmt.Errorf("%s: code %d: %s", method, code, info.GetMsg())
+	}
+	return nil
+}
+
 // callCollectorChecked 调 CollectMgr 并检查 ret_info：缺 ret_info 或返回码非 0 都报错。
 func (c *Client) callCollectorChecked(ctx context.Context, method string, body any, response interface{ retInfo() *retInfo }) error {
 	if err := c.callCollectorJSON(ctx, method, body, response); err != nil {
@@ -136,50 +130,42 @@ type collectorRsp struct {
 
 func (r *collectorRsp) retInfo() *retInfo { return r.RetInfo }
 
-// ListCloudAccounts 返回云账号；provider 非空时只留这个厂商的（目前只有 tencent）。
-func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]CloudAccount, error) {
-	var rsp struct {
-		collectorRsp
-		Accounts []CloudAccount `json:"accounts"`
-	}
-	if err := c.callCollectorChecked(ctx, "ListCloudAccounts", map[string]any{}, &rsp); err != nil {
+// ListCloudAccounts 返回云账号（不含密钥明文）；provider 非空时只留这个厂商的（目前只有 tencent）。
+func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]*collectorpb.CloudAccount, error) {
+	rsp := &collectorpb.ListCloudAccountsRsp{}
+	if err := c.callCollectorProto(ctx, "ListCloudAccounts", &collectorpb.ListCloudAccountsReq{}, rsp); err != nil {
 		return nil, err
 	}
 	provider = strings.TrimSpace(provider)
-	accounts := make([]CloudAccount, 0, len(rsp.Accounts))
-	for _, account := range rsp.Accounts {
-		if provider == "" || account.Provider == provider {
+	accounts := make([]*collectorpb.CloudAccount, 0, len(rsp.GetAccounts()))
+	for _, account := range rsp.GetAccounts() {
+		if provider == "" || account.GetProvider() == provider {
 			accounts = append(accounts, account)
 		}
 	}
 	return accounts, nil
 }
 
-// CreateCloudAccount 登记一个云账号；同 ID 的账号已存在时 Collector 拒绝。
-func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput) (*CloudAccount, error) {
-	var rsp struct {
-		collectorRsp
-		Account *CloudAccount `json:"account"`
-	}
-	if err := c.callCollectorChecked(ctx, "CreateCloudAccount", map[string]any{"account": input}, &rsp); err != nil {
+// CreateCloudAccount 登记一个腾讯云账号与代码包上传用的 COS 桶（只登记密钥 ID，不含 SecretID/SecretKey）；
+// 同 ID 的账号已存在时 Collector 拒绝。
+func (c *Client) CreateCloudAccount(ctx context.Context, account *collectorpb.CloudAccount) (*collectorpb.CloudAccount, error) {
+	rsp := &collectorpb.CreateCloudAccountRsp{}
+	if err := c.callCollectorProto(ctx, "CreateCloudAccount", &collectorpb.CreateCloudAccountReq{Account: account}, rsp); err != nil {
 		return nil, err
 	}
-	if rsp.Account == nil || strings.TrimSpace(rsp.Account.AccountID) == "" {
+	if strings.TrimSpace(rsp.GetAccount().GetAccountId()) == "" {
 		return nil, fmt.Errorf("CreateCloudAccount 没有返回账号")
 	}
-	return rsp.Account, nil
+	return rsp.GetAccount(), nil
 }
 
 // ListFunctionPackages 返回 Client.SpaceID 空间的代码包，按上传先后倒序。
-func (c *Client) ListFunctionPackages(ctx context.Context) ([]FunctionPackage, error) {
-	var rsp struct {
-		collectorRsp
-		Packages []FunctionPackage `json:"packages"`
-	}
-	if err := c.callCollectorChecked(ctx, "ListFunctionPackages", map[string]any{"space_id": c.SpaceID}, &rsp); err != nil {
+func (c *Client) ListFunctionPackages(ctx context.Context) ([]*collectorpb.FunctionPackage, error) {
+	rsp := &collectorpb.ListFunctionPackagesRsp{}
+	if err := c.callCollectorProto(ctx, "ListFunctionPackages", &collectorpb.ListFunctionPackagesReq{SpaceId: c.SpaceID}, rsp); err != nil {
 		return nil, err
 	}
-	return rsp.Packages, nil
+	return rsp.GetPackages(), nil
 }
 
 // LatestPackage 返回 Client.SpaceID 空间里指定名称的最新可用代码包 ID；没有则 found=false。
@@ -189,34 +175,30 @@ func (c *Client) LatestPackage(ctx context.Context, name string) (id string, fou
 		return "", false, err
 	}
 	for _, pkg := range packages {
-		if pkg.PackageName == name && pkg.Status == functionPackageAvailable && pkg.PackageID != "" {
-			return pkg.PackageID, true, nil
+		if pkg.GetPackageName() == name && pkg.GetStatus() == functionPackageAvailable && pkg.GetPackageId() != "" {
+			return pkg.GetPackageId(), true, nil
 		}
 	}
 	return "", false, nil
 }
 
 // UploadPackage 两步上传：InitPackageUpload 取预签名地址 → PUT 到 COS → CompletePackageUpload 核对大小与 MD5。
-func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, data []byte) (*FunctionPackage, error) {
+// 请求里的空间一律取 Client.SpaceID。
+func (c *Client) UploadPackage(ctx context.Context, req *collectorpb.InitPackageUploadReq, data []byte) (*collectorpb.FunctionPackage, error) {
 	if strings.TrimSpace(c.SpaceID) == "" {
 		return nil, fmt.Errorf("上传代码包要指定空间")
 	}
-	var initRsp struct {
-		collectorRsp
-		Package   *FunctionPackage `json:"package"`
-		UploadURL string           `json:"upload_url"`
-	}
-	if err := c.callCollectorChecked(ctx, "InitPackageUpload", map[string]any{
-		"space_id": c.SpaceID, "package_name": req.PackageName, "version": req.Version, "runtime": req.Runtime,
-		"cloud_account_id": req.CloudAccountID, "filename": req.Filename,
-	}, &initRsp); err != nil {
+	init := proto.Clone(req).(*collectorpb.InitPackageUploadReq)
+	init.SpaceId = c.SpaceID
+	initRsp := &collectorpb.InitPackageUploadRsp{}
+	if err := c.callCollectorProto(ctx, "InitPackageUpload", init, initRsp); err != nil {
 		return nil, err
 	}
-	if initRsp.Package == nil || initRsp.Package.PackageID == "" || initRsp.UploadURL == "" {
+	if initRsp.GetPackage().GetPackageId() == "" || initRsp.GetUploadUrl() == "" {
 		return nil, fmt.Errorf("InitPackageUpload 没有返回 package_id 或上传地址")
 	}
 
-	putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, initRsp.UploadURL, bytes.NewReader(data))
+	putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, initRsp.GetUploadUrl(), bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -231,19 +213,17 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 	}
 
 	sum := md5.Sum(data)
-	var completeRsp struct {
-		collectorRsp
-		Package *FunctionPackage `json:"package"`
+	completeRsp := &collectorpb.CompletePackageUploadRsp{}
+	complete := &collectorpb.CompletePackageUploadReq{
+		SpaceId: c.SpaceID, PackageId: initRsp.GetPackage().GetPackageId(), FileMd5: hex.EncodeToString(sum[:]), FileSize: int64(len(data)),
 	}
-	if err := c.callCollectorChecked(ctx, "CompletePackageUpload", map[string]any{
-		"space_id": c.SpaceID, "package_id": initRsp.Package.PackageID, "file_md5": hex.EncodeToString(sum[:]), "file_size": len(data),
-	}, &completeRsp); err != nil {
+	if err := c.callCollectorProto(ctx, "CompletePackageUpload", complete, completeRsp); err != nil {
 		return nil, err
 	}
-	if completeRsp.Package != nil {
-		return completeRsp.Package, nil
+	if completeRsp.GetPackage() != nil {
+		return completeRsp.GetPackage(), nil
 	}
-	return initRsp.Package, nil
+	return initRsp.GetPackage(), nil
 }
 
 // ListCloudFunctions 读回 Client.SpaceID 空间计划里的函数与计划外的同前缀函数（Collector 现场调腾讯云读回）。

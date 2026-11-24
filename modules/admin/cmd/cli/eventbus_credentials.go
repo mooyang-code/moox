@@ -217,7 +217,7 @@ func ensureToken(ctx context.Context, d *dao.SecretDAO, key, role string) (strin
 		return "", err
 	}
 	value := base64.RawURLEncoding.EncodeToString(raw)
-	err = d.Create(ctx, &model.Secret{SpaceID: events.SystemSpaceID, SecretID: uuid.New().String(), Name: "EventBus " + role, Description: "permanent EventBus role token", Category: "eventbus", Provider: "moox_eventbus", SecretType: "token", KeyID: key, SecretValue: value, ExtraConfig: `{}`})
+	err = d.Create(ctx, &model.Secret{SecretID: uuid.New().String(), Name: "EventBus " + role, Description: "permanent EventBus role token", Category: "eventbus", Provider: "moox_eventbus", SecretType: "token", KeyID: key, SecretValue: value, ExtraConfig: `{}`})
 	return value, err
 }
 func listEventbus(d *dao.SecretDAO, ctx context.Context) (map[string]model.Secret, error) {

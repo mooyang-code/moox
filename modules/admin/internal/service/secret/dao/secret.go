@@ -57,7 +57,7 @@ func (d *SecretDAO) Update(ctx context.Context, secret *model.Secret) error {
 	}
 	secret.ModifyTime = time.Now()
 	result := d.db.WithContext(ctx).Scopes(userSecrets).Model(secret).Where("c_secret_id = ? AND c_is_deleted = ?", secret.SecretID, softdelete.IsDeletedFalse).
-		Select("*").Omit("c_id", "c_ctime", "c_secret_id", "c_space_id").Updates(secret)
+		Select("*").Omit("c_id", "c_ctime", "c_secret_id").Updates(secret)
 	if result.Error != nil {
 		return result.Error
 	}

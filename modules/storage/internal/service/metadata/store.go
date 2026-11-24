@@ -63,7 +63,7 @@ func RequestSnapshotFromContext(ctx context.Context) RequestSnapshot {
 // Reader 定义元数据存储的只读查询接口。
 type Reader interface {
 	GetSpace(ctx context.Context, spaceID string) (*pb.Space, error)
-	ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error)
+	ListSpaces(ctx context.Context, owner, status string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error)
 
 	GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error)
 	ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error)

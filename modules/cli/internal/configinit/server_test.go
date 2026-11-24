@@ -230,7 +230,7 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 
 // 录入、修改、恢复三个本地页面固定深色，不随系统切换。
 func TestLocalPagesUseTheDarkTheme(t *testing.T) {
-	for name, source := range map[string]string{"page.html": pageSource, "editor.html": editorSource, "restore.html": restoreSource} {
+	for name, source := range map[string]string{"page.html": pageSource, "editor.html": editorSource} {
 		if !strings.Contains(source, "color-scheme: dark;") || strings.Contains(source, "prefers-color-scheme") {
 			t.Fatalf("%s 应固定深色，不跟随系统", name)
 		}

@@ -34,6 +34,11 @@ func (w *storageOperationsWire) CreateSpace(ctx context.Context, req *pb.CreateS
 	return &pb.CreateSpaceRsp{RetInfo: &pb.RetInfo{}}, nil
 }
 
+// GetSpace 报空间不存在，metadata apply 随后新建。
+func (*storageOperationsWire) GetSpace(context.Context, *pb.GetSpaceReq) (*pb.GetSpaceRsp, error) {
+	return &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SPACE_NOT_FOUND, Msg: "space not found"}}, nil
+}
+
 func (*storageOperationsWire) GetDataset(context.Context, *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {
 	return &pb.GetDatasetRsp{RetInfo: &pb.RetInfo{}, Dataset: &pb.Dataset{SpaceId: "crypto", DatasetId: "prices", Freq: "1m"}}, nil
 }
@@ -119,7 +124,7 @@ func TestStorageOperationsUseSSHNativeGateway(t *testing.T) {
 	seed := filepath.Join(dir, "seed.yaml")
 	require.NoError(t, os.WriteFile(seed, []byte("spaces:\n- space_id: crypto\n  name: Crypto\n"), 0600))
 	var imported map[string]any
-	require.NoError(t, json.Unmarshal(run("metadata", "import", "--seed", seed, "--file", manifest), &imported))
+	require.NoError(t, json.Unmarshal(run("metadata", "apply", "--seed", seed, "--file", manifest), &imported))
 	require.Equal(t, float64(1), imported["applied"])
 	var exported map[string]any
 	require.NoError(t, json.Unmarshal(run("data", "rows", "export", "--file", manifest, "--space-id", "crypto", "--dataset-id", "prices", "--subject", "BTC-USDT", "--columns", "close", "--from", "2026-10-01T00:00:00Z", "--to", "2026-10-02T00:00:00Z"), &exported))

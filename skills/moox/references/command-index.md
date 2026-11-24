@@ -86,12 +86,10 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `config backup` | 把 moox.toml 与 moox.secrets.toml 加密备份到自己的管理后台 |
 | `config edit` | 在本机打开配置页，查看并修改两份配置 |
 | `config encrypt` | 把明文保存的 moox.secrets.toml 加密保存 |
 | `config get` | 读取 moox.toml 或 moox.secrets.toml 里的配置（--file 指定哪一份，密钥类默认打码） |
 | `config init` | 在本机打开一次性表单，填写部署信息，生成 moox.toml 与 moox.secrets.toml |
-| `config restore` | 换电脑时从管理台恢复两份配置 |
 | `config set` | 修改 moox.toml 或 moox.secrets.toml 里一个已有的单值配置（默认只预览） |
 
 ## data：量化数据读写工具
@@ -222,7 +220,7 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `metadata apply` | 创建并校验存储元数据 seed |
+| `metadata apply` | 导入元数据种子：缺的建上，已有的核对一致（空间、标签以管理台为准不比对），可重复运行 |
 | `metadata dataset add-column` | 给数据集加列（或修改列） |
 | `metadata dataset columns` | 列出数据集的列 |
 | `metadata dataset create` | 创建数据集（保留期不在这里设：由 Storage 的保留策略文件按空间与频率决定） |
@@ -241,7 +239,6 @@
 | `metadata field-group list` | 列出字段分组 |
 | `metadata field-group show` | 查看字段分组 |
 | `metadata field-group update` | 修改字段分组 |
-| `metadata import` | 导入存储元数据 seed |
 | `metadata source create` | 创建数据来源 |
 | `metadata source delete` | 删除数据来源（默认只预览，--yes 才执行） |
 | `metadata source list` | 列出数据来源 |
@@ -285,10 +282,7 @@
 | 命令 | 说明 |
 | --- | --- |
 | `ops tencent cls bootstrap` | 幂等开通 CLS 并创建 MooX 日志集、主题和索引 |
-| `ops tencent cls prepare` | 发布前从 MooX 云账户准备固定 CLS 资源 |
 | `ops tencent cls resolve` | 查询既有 MooX CLS 资源，不创建或修改资源 |
-| `ops tencent lighthouse firewall add` | 添加轻量应用服务器防火墙规则 |
-| `ops tencent lighthouse firewall open` | 通过控制面云账户凭证开放轻量防火墙端口 |
 
 ## secret：密钥：只列清单与打码后的信息；新建、修改请用户在管理台“系统设置 › 密钥管理”填写
 
@@ -318,7 +312,6 @@
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
 | `setup install` | 一条命令装完：防火墙、逐台部署、初始化、启动和验收（默认只预检） |
 | `setup invoke-scf` | 直接调用腾讯云函数 |
-| `setup metadata-import` | 通过 Storage SSH 隧道导入选定业务空间 |
 | `setup package-components` | 按服务目录把编译好的 Linux 二进制打成每个组件一个包（发布脚本用） |
 | `setup operator` | 准备这台电脑的操作身份：生成 moox-cli 的签名私钥；--register 把公钥登记到已经装好的控制机 |
 | `setup reboot-host` | 重启无响应的腾讯云主机（默认只预览，--yes 才重启） |
@@ -336,15 +329,15 @@
 | `setup validate` | 校验两份配置和连接，检测每台主机上各组件是否已部署，给出可选的部署方式（modes）和接下来要运行的命令（next_steps） |
 | `setup wipe` | 卸载：彻底清空 moox.toml 所列主机上的 MooX 部署（默认只预览，不可恢复） |
 
-## space：空间：一组相互隔离的业务数据（调用 SpaceMgr）
+## space：空间：一组相互隔离的业务数据（只登记在 Storage）
 
 | 命令 | 说明 |
 | --- | --- |
-| `space create` | 新建空间（还要在 Storage 建元数据：数据来源、数据集、字段，见 metadata apply） |
-| `space delete` | 删除空间（默认只预览，--yes 才执行） |
+| `space create` | 新建空间（建好即可建数据来源、数据集等元数据，见 metadata apply） |
+| `space delete` | 删除空间：会清空该空间全部数据（数据集、View 与全部行情、因子数据），不能恢复；采集任务、交易、策略里按该空间存的记录不跟着删（默认只预览，--yes 才执行） |
 | `space list` | 列出空间 |
-| `space show` | 查看 Storage 里一个空间的元数据 |
-| `space update` | 修改空间 |
+| `space show` | 查看一个空间 |
+| `space update` | 修改空间（停用后 Collector 不再采它） |
 
 ## storage：View 维护
 

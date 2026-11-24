@@ -163,8 +163,8 @@
 - 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
 - 部署、升级与回滚：[`source-deploy.md`](source-deploy.md)；主机代理：[`host-agent.md`](host-agent.md)。
-- 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
-  `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
+- 腾讯云：`setup firewall`（按拓扑放行所需端口）、`setup reboot-host`（重启无响应的主机）、
+  `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
 - 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup status` 看各主机的版本与组件状态（`setup validate` 同样按组件报告是否已部署，并给出新安装、覆盖更新、卸载三种方式里可选的那些），`setup logs` 看组件日志。
 
 ## 归档
@@ -203,6 +203,6 @@ worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺�
 
 ## 空间、密钥与配置
 
-- 空间：`space list|show|create|update|delete`；新空间还要在 Storage 建元数据（数据来源、数据集、字段），用 `metadata apply` 从 `config/setup/metadata.yaml` 的写法导入。
+- 空间：`space list|show|create|update|delete`（空间只登记在 Storage；`space delete` 会清空该空间全部数据，执行前必须向用户说明）；建好后用 `metadata apply` 从 `config/setup/metadata.yaml` 的写法导入数据来源、数据集、字段。
 - 密钥（交易所、云账户等）：请用户在管理台“系统设置 › 密钥管理”自己填写，Agent 只用 `secret list|show` 看清单（值已打码）。`gateway call` 拒绝返回明文的方法。
-- `moox.toml`：Agent 用 `config get` / `config set` 读写（[`config-access.md`](config-access.md)），不直接读文件；用户要看或改时运行 `config edit`，让用户在自己的浏览器里操作；`config backup` 备份到管理台，换电脑 `config restore`。
+- `moox.toml`：Agent 用 `config get` / `config set` 读写（[`config-access.md`](config-access.md)），不直接读文件；用户要看或改时运行 `config edit`，让用户在自己的浏览器里操作；换电脑时把两份文件连同解密密钥一起拷过去。

@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,16 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type fakeSpaceAuthorizer struct {
-	err     error
-	spaceID string
-}
-
-func (a *fakeSpaceAuthorizer) AuthorizeSpaceRequest(_ context.Context, spaceID string) error {
-	a.spaceID = spaceID
-	return a.err
-}
 
 func TestHTTPRequestHandler_ParseRequestParams_ValidPath_ShouldReturnServiceAndMethod(t *testing.T) {
 	h := NewHTTPRequestHandler()

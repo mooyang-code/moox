@@ -244,9 +244,9 @@ func (s *countingPanicStore) GetSpace(ctx context.Context, id string) (*pb.Space
 	s.guard("GetSpace")
 	return s.Store.GetSpace(ctx, id)
 }
-func (s *countingPanicStore) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
+func (s *countingPanicStore) ListSpaces(ctx context.Context, owner, status string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	s.guard("ListSpaces")
-	return s.Store.ListSpaces(ctx, owner, page)
+	return s.Store.ListSpaces(ctx, owner, status, page)
 }
 func (s *countingPanicStore) GetView(ctx context.Context, space, id string) (*pb.View, error) {
 	s.guard("GetView")

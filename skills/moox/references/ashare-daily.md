@@ -13,7 +13,7 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 - **换手率有完整历史，股本这一组只有开通以后的值。** 股本、每股股利、是否 ST 来自只有当日值的接口，补历史时这些列是空的（只有最近一个交易日可能写上）；所以市值、市盈率这类因子只能从开通日起用。平日某天没采到，那一天的股本也补不回来（内置的市值、估值因子会沿用最近 20 个交易日里的值）。
 - **沪深 300 里没有 ST 股**，`is_st` 在这个股票池里基本恒为 0。
 
-全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`（`collector kline`、`collector status`、`collector fetch-plan`、`collector task create/delete` 没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`、`metadata field list`）都要写 `--space-id stockcn`；`metadata import`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
+全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`（`collector kline`、`collector status`、`collector fetch-plan`、`collector task create/delete` 没有默认值，必须写），下面带这个参数的命令（`collector`、`factor`、`strategy`、`metadata field list`）都要写 `--space-id stockcn`；`metadata apply`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
 
 ## 0. 前提
 
@@ -34,8 +34,8 @@ A 股日线任务可以在每根日线上带五组附加字段，共 27 个：�
 缺的话从种子补导入（写线上元数据，先给用户看预览再执行）：
 
 ```bash
-./bin/moox-cli metadata import --seed config/setup/metadata.yaml --spaces stockcn --dry-run          # 只输出计划，不发请求
-./bin/moox-cli metadata import --seed config/setup/metadata.yaml --spaces stockcn --if-not-exists    # 已存在的资源跳过，只建缺的
+./bin/moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn --dry-run   # 只输出计划，不发请求
+./bin/moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn             # 缺的建上，已有的核对一致
 ```
 
 - 要带 `--if-not-exists`：不带时会对已有的空间、数据集、字段再发一次新建请求。带了之后标的（subjects）仍会按种子再写一次，它没有“已存在就跳过”的判断。

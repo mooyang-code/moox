@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	setupservice "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
@@ -26,7 +25,6 @@ type Services struct {
 	DBManager *database.Manager
 
 	// 各模块服务
-	SpaceMgr space.Service
 
 	// SSH 服务
 	SSHService ssh.Service
@@ -98,10 +96,6 @@ func initializeDatabase(dbCfg *config.DatabaseConfig) (*database.Manager, error)
 func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *Config) (*Services, error) {
 	log.Info("[Bootstrap] 正在创建核心服务...")
 
-	// 创建 Space 服务
-	log.Info("[Bootstrap] 正在创建 Space 服务...")
-	spaceService := space.NewService(dbManager)
-
 	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
 	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
 	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
@@ -125,12 +119,11 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	log.Info("[Bootstrap] 核心服务创建完成")
 	services := &Services{
 		DBManager:     dbManager,
-		SpaceMgr:      spaceService,
 		SSHService:    sshService,
 		SecretService: secretService,
 		Setup:         setupService,
 		SysDeploy:     sysDeployService,
-		ActivityLog:   activitylog.NewService(db, spaceService),
+		ActivityLog:   activitylog.NewService(db),
 	}
 
 	return services, nil

@@ -38,7 +38,6 @@ const (
 	installInitMetadata = "init-metadata"
 	installReady        = "ready"
 	installInit         = "init"
-	installBackup       = "backup"
 	installStart        = "start"
 	installVerify       = "verify"
 )
@@ -63,7 +62,7 @@ func hostHasAny(manifest *topology.Config, host string, components []string) boo
 
 // setupInstallSteps 排出安装顺序：这台电脑的 moox-cli 签名私钥（已有就复用，重跑不换）；防火墙；控制机先装 Admin 与主机级组件（别的主机要向它要身份）；
 // 再装带 EventBus、Storage 的主机；导入业务空间与元数据（Collector 启动要它）；控制机其余组件；其余主机（外部程序所在的排最后）；
-// 统一等一次全部就绪；完整初始化（云账号、日志服务、采集计划、告警渠道——这些要等 Collector、Monitor 起来）；备份配置；启动空间；验收。
+// 统一等一次全部就绪；完整初始化（云账号、日志服务、采集计划、告警渠道——这些要等 Collector、Monitor 起来）；启动空间；验收。
 func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstallStep {
 	control := manifest.ControlHost().Name
 	first := []string{"admin", "host-gateway", "host-agent"}
@@ -100,7 +99,6 @@ func setupInstallSteps(manifest *topology.Config, spaceID string) []setupInstall
 	return append(steps,
 		setupInstallStep{Kind: installReady, Command: "moox-cli setup status"},
 		setupInstallStep{Kind: installInit, Command: "moox-cli setup init --storage-host " + storage},
-		setupInstallStep{Kind: installBackup, Command: "moox-cli config backup"},
 		setupInstallStep{Kind: installStart, Command: "moox-cli setup start --space-id " + spaceID},
 		setupInstallStep{Kind: installVerify, Command: "moox-cli setup verify --space-id " + spaceID},
 	)
@@ -113,7 +111,7 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 		Short: "一条命令装完：防火墙、逐台部署、初始化、启动和验收（默认只预检）",
 		Long: `不带 --yes 只读预检：输出路线、安装步骤、要用户先在目标机上做的事，以及（装过时）清空范围。
 带 --yes 按顺序执行：控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，导入业务空间与元数据，
-然后装控制机其余组件和其余主机，统一等一次全部就绪，再做完整初始化、备份配置、启动空间和验收。
+然后装控制机其余组件和其余主机，统一等一次全部就绪，再做完整初始化、启动空间和验收。
 中途失败直接重跑同一条命令：每一步都可以重做，没有变化的组件不会重启。
 配置模板、云函数代码包、元数据种子、默认因子任务和默认策略都从 --source-dir（默认当前目录）取：要装哪个分支或工作副本的代码，就在那里运行或把它指过去。
 目标机装过时不带 --wipe 是接着做完上次没装完的安装（数据保留）；要卸载后重装，带 --wipe <预检输出的清空摘要>。进度逐行输出到标准错误。
@@ -254,8 +252,6 @@ func executeSetupInstallStep(cmd *cobra.Command, deps setupDeps, snapshot *setup
 		}
 		_, err = deps.initStorage(ctx, snapshot, storageHost, options.source.root, bundle)
 		return err
-	case installBackup:
-		return deps.backupConfig(ctx, options.file)
 	case installStart:
 		client, closeClient, err := deps.openStart(ctx, options.file, snapshot)
 		if err != nil {

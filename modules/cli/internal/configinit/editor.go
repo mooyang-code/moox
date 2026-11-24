@@ -40,9 +40,6 @@ type EditorOptions struct {
 	Notice io.Writer
 	// KeyStore 为空时用本机的系统钥匙串（没有钥匙串时用仅本人可读的密钥文件）。
 	KeyStore configcrypt.KeyStore
-	// Backup 在每次保存后把两份配置备份到管理后台；为空时用秘密文件里的管理员账号登录管理台上传。
-	// 测试里替换，避免连接真实的管理台。
-	Backup func(context.Context, ConfigPair) (BackupResult, error)
 }
 
 // EditorResult 只说明发生了什么，不含任何配置值。Encrypted 说的是秘密文件。
@@ -100,11 +97,7 @@ func RunEditor(ctx context.Context, options EditorOptions) (EditorResult, error)
 	if keys == nil {
 		keys = configcrypt.Default()
 	}
-	backup := options.Backup
-	if backup == nil {
-		backup = backupPlain
-	}
-	editor := &editorSession{path: path, secretsPath: topology.SecretsPathFor(path), keys: keys, backup: backup, result: make(chan EditorResult, 1)}
+	editor := &editorSession{path: path, secretsPath: topology.SecretsPathFor(path), keys: keys, result: make(chan EditorResult, 1)}
 	if _, err := editor.load(); err != nil {
 		return EditorResult{}, err
 	}
@@ -145,7 +138,6 @@ type editorSession struct {
 	*localPage
 	path, secretsPath string
 	keys              configcrypt.KeyStore
-	backup            func(context.Context, ConfigPair) (BackupResult, error)
 	result            chan EditorResult
 
 	// digest、secretsDigest 是最近一次读到或写入的两份文件的摘要；保存前核对，避免覆盖别处的改动。
@@ -320,7 +312,7 @@ func (e *editorSession) write(w http.ResponseWriter, r *http.Request, before loa
 		return
 	}
 	view := describe(state, e.keys.Where())
-	reply(w, http.StatusOK, response{OK: true, Overview: &view, Sync: e.sync(r.Context(), state)})
+	reply(w, http.StatusOK, response{OK: true, Overview: &view})
 }
 
 // saveLocked 在文件锁内核对两份文件没被别处改过，再替换有变化的那份（秘密文件加密后写），返回新读到的配置。
@@ -352,17 +344,6 @@ func (e *editorSession) saveLocked(before loaded, config, secrets []byte, sealSe
 		return loaded{}, http.StatusInternalServerError, err
 	}
 	return state, http.StatusOK, nil
-}
-
-// sync 在本机保存成功后把配置备份到管理后台（不持锁，失败只提示，不影响本机保存）。
-func (e *editorSession) sync(ctx context.Context, state loaded) string {
-	if e.backup == nil {
-		return ""
-	}
-	if _, err := e.backup(ctx, state.ConfigPair); err != nil {
-		return "本机已保存；暂时没能同步到管理后台（" + err.Error() + "）。管理台部署好后，再保存一次或让 Agent 运行一次同步即可。"
-	}
-	return "已同步到你的管理后台（用管理员密码加密备份，换电脑时可以恢复）。"
 }
 
 func (e *editorSession) close(w http.ResponseWriter, r *http.Request) {

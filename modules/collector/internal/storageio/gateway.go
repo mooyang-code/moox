@@ -64,6 +64,10 @@ func invoke[T any](ctx context.Context, gateway gatewayclient.Invoker, service, 
 	return response, nil
 }
 
+func (c *Client) ListSpaces(ctx context.Context, request *storagepb.ListSpacesReq, options ...client.Option) (*storagepb.ListSpacesRsp, error) {
+	return invoke[storagepb.ListSpacesRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ListSpaces", request, options)
+}
+
 func (c *Client) GetTag(ctx context.Context, request *storagepb.GetTagReq, options ...client.Option) (*storagepb.GetTagRsp, error) {
 	return invoke[storagepb.GetTagRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetTag", request, options)
 }

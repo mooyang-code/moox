@@ -11,13 +11,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/stretchr/testify/require"

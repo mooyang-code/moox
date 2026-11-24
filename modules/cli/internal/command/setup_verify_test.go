@@ -3,10 +3,11 @@ package command
 import (
 	"context"
 	"errors"
-	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
-	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"testing"
 	"time"
+
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"

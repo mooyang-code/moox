@@ -14,66 +14,16 @@ const (
 )
 
 var (
-	metadataImportFile        string
-	metadataImportManifest    string
-	metadataImportDryRun      bool
-	metadataImportIfNotExists bool
-	metadataImportSpaces      []string
-	metadataSpacesFile        string
-	metadataApplyFile         string
-	metadataApplyManifest     string
-	metadataApplyDryRun       bool
+	metadataSpacesFile    string
+	metadataApplyFile     string
+	metadataApplyManifest string
+	metadataApplyDryRun   bool
+	metadataApplySpaces   []string
 )
 
 var metadataCmd = &cobra.Command{
 	Use:   "metadata",
 	Short: "存储元数据管理工具",
-}
-
-var metadataImportCmd = &cobra.Command{
-	Use:   "import",
-	Short: "导入存储元数据 seed",
-	Long: `通过 moox-storage MetadataService 导入存储元数据 seed。
-
-示例:
-  moox-cli metadata import --seed ../../config/setup/metadata.yaml --file ./moox.toml --if-not-exists
-  moox-cli metadata import --seed ../../config/setup/metadata.yaml --spaces crypto --dry-run`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if strings.TrimSpace(metadataImportFile) == "" {
-			return fmt.Errorf("必须指定 --seed")
-		}
-		seed, err := loadMetadataSeed(metadataImportFile)
-		if err != nil {
-			return err
-		}
-		seed, err = selectMetadataSpaces(seed, metadataImportSpaces)
-		if err != nil {
-			return err
-		}
-		calls, err := buildMetadataImportCalls(seed)
-		if err != nil {
-			return err
-		}
-		if metadataImportDryRun {
-			return writeMetadataImportSummary(metadataImportSummary{
-				Status:    "dry_run",
-				DryRun:    true,
-				Service:   metadataServiceName,
-				Planned:   len(calls),
-				Resources: countMetadataCalls(calls),
-			})
-		}
-		gateway, err := openCommandGateway(cmd.Context(), metadataImportManifest, nil)
-		if err != nil {
-			return err
-		}
-		defer gateway.Close()
-		summary, err := runMetadataImport(cmd.Context(), gateway, calls, metadataImportIfNotExists)
-		if err != nil {
-			return err
-		}
-		return writeMetadataImportSummary(summary)
-	},
 }
 
 var metadataSpacesCmd = &cobra.Command{
@@ -93,12 +43,22 @@ var metadataSpacesCmd = &cobra.Command{
 
 var metadataApplyCmd = &cobra.Command{
 	Use:   "apply",
-	Short: "创建并校验存储元数据 seed",
+	Short: "导入元数据种子：缺的建上，已有的核对一致（空间、标签以管理台为准不比对），可重复运行",
+	Long: `按依赖顺序导入元数据种子（空间、数据来源、标签、数据集、字段、列、View）：缺的建上，已有的核对与种子一致，
+不一致时报错不改写；空间与标签在管理台可改，已有的以管理台为准不比对。引用是否成立由 Storage 校验。
+
+示例:
+  moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn --dry-run
+  moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataApplyFile) == "" {
 			return fmt.Errorf("必须指定 --seed")
 		}
 		seed, err := loadMetadataSeed(metadataApplyFile)
+		if err != nil {
+			return err
+		}
+		seed, err = selectMetadataSpaces(seed, metadataApplySpaces)
 		if err != nil {
 			return err
 		}

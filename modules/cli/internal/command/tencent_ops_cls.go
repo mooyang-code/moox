@@ -72,7 +72,6 @@ func init() {
 	tencentOpsCmd.AddCommand(clsOpsCmd)
 	clsOpsCmd.AddCommand(clsBootstrapCmd)
 	clsOpsCmd.AddCommand(newCLSResolveCommand())
-	clsOpsCmd.AddCommand(newCLSPrepareCommand())
 	f := clsBootstrapCmd.Flags()
 	f.StringVar(&clsBootstrapFlags.SecretID, "secret-id", "", "腾讯云 SecretId；默认使用 SDK 凭证链")
 	f.StringVar(&clsBootstrapFlags.SecretKey, "secret-key", "", "腾讯云 SecretKey；默认使用 SDK 凭证链")

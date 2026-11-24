@@ -59,18 +59,17 @@ func TestBusinessSpacesSortByID(t *testing.T) {
 		},
 	}}
 
-	spaces, err := businessSetupSpaces(seed)
+	ids, err := businessSpaceIDs(seed)
 	require.NoError(t, err)
-	require.Len(t, spaces, 2)
-	assert.Equal(t, "crypto", spaces[0].SpaceID)
-	assert.Equal(t, "stockcn", spaces[1].SpaceID)
-	assert.Equal(t, "CN", spaces[1].Market)
-	assert.Equal(t, "Asia/Shanghai", spaces[1].Timezone)
-	assert.Equal(t, `{"managed_by":"moox-cli"}`, spaces[1].AttributesJSON)
+	assert.Equal(t, []string{"crypto", "stockcn"}, ids)
+	// 市场与时区随空间写进 Storage。
+	space := seed.Spaces[0].toPB()
+	assert.Equal(t, "CN", space.GetMarket())
+	assert.Equal(t, "Asia/Shanghai", space.GetTimezone())
 }
 
 func TestBusinessSpacesRejectDuplicateID(t *testing.T) {
-	_, err := businessSetupSpaces(metadataSeed{Spaces: []seedSpace{
+	_, err := businessSpaceIDs(metadataSeed{Spaces: []seedSpace{
 		{SpaceID: "crypto", Name: "Crypto", Market: "crypto", Timezone: "UTC"},
 		{SpaceID: "crypto", Name: "Crypto 2", Market: "crypto", Timezone: "UTC"},
 	}})
@@ -424,88 +423,6 @@ func writeProtoJSON(w http.ResponseWriter, msg proto.Message) {
 	w.Header().Set("Content-Type", "application/json")
 	raw, _ := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
 	_, _ = w.Write(raw)
-}
-
-func TestRunMetadataImportCreatesResource(t *testing.T) {
-	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-		"CreateSpace": func(w http.ResponseWriter, r *http.Request) {
-			writeProtoJSON(w, &pb.CreateSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
-		},
-	})
-	defer server.Close()
-
-	space := &pb.Space{SpaceId: "crypto", Name: "Crypto", Status: "active"}
-	calls := []metadataImportCall{{
-		Resource: "spaces", Method: "CreateSpace",
-		Request: &pb.CreateSpaceReq{Space: space}, Response: &pb.CreateSpaceRsp{},
-	}}
-	summary, err := runMetadataImport(context.Background(), server, calls, false)
-	require.NoError(t, err)
-	assert.Equal(t, 1, summary.Applied)
-	assert.Equal(t, 0, summary.Skipped)
-}
-
-func TestRunMetadataImportSkipsWhenExists(t *testing.T) {
-	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-		"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-			writeProtoJSON(w, &pb.GetSpaceRsp{
-				RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-				Space:   &pb.Space{SpaceId: "crypto", Name: "Crypto"},
-			})
-		},
-	})
-	defer server.Close()
-
-	space := &pb.Space{SpaceId: "crypto", Name: "Crypto", Status: "active"}
-	calls := []metadataImportCall{{
-		Resource: "spaces", Method: "CreateSpace",
-		Request: &pb.CreateSpaceReq{Space: space}, Response: &pb.CreateSpaceRsp{},
-		Exists: &metadataExistsProbe{
-			Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{},
-		},
-	}}
-	summary, err := runMetadataImport(context.Background(), server, calls, true)
-	require.NoError(t, err)
-	assert.Equal(t, 0, summary.Applied)
-	assert.Equal(t, 1, summary.Skipped)
-}
-
-func TestMetadataResourceExists(t *testing.T) {
-	t.Run("found", func(t *testing.T) {
-		server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-			"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-				writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
-			},
-		})
-		defer server.Close()
-		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		ok, err := metadataResourceExists(context.Background(), server, probe)
-		require.NoError(t, err)
-		assert.True(t, ok)
-	})
-	t.Run("not found", func(t *testing.T) {
-		server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-			"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-				writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SPACE_NOT_FOUND, Msg: "missing"}})
-			},
-		})
-		defer server.Close()
-		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		ok, err := metadataResourceExists(context.Background(), server, probe)
-		require.NoError(t, err)
-		assert.False(t, ok)
-	})
-	t.Run("error", func(t *testing.T) {
-		server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-			"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-				writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "boom"}})
-			},
-		})
-		defer server.Close()
-		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		_, err := metadataResourceExists(context.Background(), server, probe)
-		require.Error(t, err)
-	})
 }
 
 func TestRunMetadataApplyCreatesWhenMissing(t *testing.T) {

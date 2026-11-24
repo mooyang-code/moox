@@ -413,10 +413,10 @@ func TestProtoIndexCatchesWrongSpecs(t *testing.T) {
 	assert.False(t, ok)
 	assert.Contains(t, why, "没有字段")
 
-	// 同名消息分属不同的包：admin 的 Space 有 market，storage 的没有。
-	_, ok, _ = index.checkPath(index.rpcs["trpc.moox.admin.SpaceMgr/CreateSpace"], "space.market")
-	assert.True(t, ok)
+	// 嵌套消息里的字段。
 	_, ok, _ = index.checkPath(index.rpcs["trpc.moox.storage.Metadata/CreateSpace"], "space.market")
+	assert.True(t, ok)
+	_, ok, _ = index.checkPath(index.rpcs["trpc.moox.storage.Metadata/CreateSpace"], "space.no_such_field")
 	assert.False(t, ok)
 
 	// 嵌套消息与公共包里的分页。

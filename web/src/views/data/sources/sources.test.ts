@@ -31,7 +31,7 @@ const collector = vi.hoisted(() => ({
   }))
 }));
 vi.mock("@/api/collector", () => collector);
-vi.mock("@/api/admin/spaces", () => ({
+vi.mock("@/api/storage/spaces", () => ({
   listSpaces: vi.fn(async () => ({ spaces: [{ space_id: "crypto", name: "crypto", status: "active", timezone: "UTC" }] }))
 }));
 vi.mock("@/api/admin/http", () => ({ reportControlError: vi.fn() }));

@@ -33,7 +33,6 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 - 写法 `表名.键=值`，根部的键直接写键名。值按 `true`/`false`、整数、小数识别，其余按字符串。
 - 只改**已有的单值键**，只动那一行，注释与其余内容原样保留；表或键不存在、表是 `[[数组表]]`、键的现值是数组或多行值，都会报错，不会凭空创建。
 - 改后先按这份文件的格式校验，通过且带 `--yes` 才写回：原文件备份为 `<文件名>.bak-<时间>`，秘密文件的新内容重新加密。预览与写回的输出里都没有配置值。
-- 写回后提醒用户跑一次 `moox-cli config backup`（用管理员密码加密备份到管理台；Agent 不代跑）。
 - 改的是本机文件；要让线上生效，还得按各项的说明重新部署对应主机或重启对应组件（见下表）。
 
 ## 结构性改动：直接编辑 `moox.toml`
@@ -47,8 +46,8 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
   字段：`name`（只允许小写字母、数字、连字符）、`exchange`（`binance`、`okx`）、`environment`（`production`、`testnet`）、`api_key`、`secret_key`、`passphrase`（OKX 必填）、`readonly`（可选，默认 false）。
   `setup init` 把它们写进密钥管理，固定 ID 为 `exchange-<交易所>-<环境>-<名称>`；**只建不改**：管理台里已有这个 ID 的不覆盖（以管理台为准），已在管理台删除的不重建，从秘密文件删掉条目也不会删除管理台里的密钥。部署 Trade 之后用 `trade inspect-credential` 检测。
 - 手写的明文 `moox.secrets.toml`：`moox-cli config encrypt` 加密。
-- 新电脑：`moox-cli config restore` 从管理台恢复。
-- `config get` 报“这台电脑上没有解密秘密文件的密钥”：文件来自另一台电脑或钥匙串条目被删，用 `config restore`；不要重新生成密钥覆盖。
+- 新电脑：从原电脑拷两份文件和解密密钥（系统钥匙串里的，或 `~/.config/moox/config.key`）。
+- `config get` 报“这台电脑上没有解密秘密文件的密钥”：文件来自另一台电脑或钥匙串条目被删，把原电脑的解密密钥带过来；不要重新生成密钥覆盖。
 
 ## 不经录入页生成两份配置（Agent 已知全部取值时）
 

@@ -38,28 +38,23 @@ var NewConsoleHandle = func() *ConsoleHandle {
 
 // HTTPRouter HTTP路由管理器
 type HTTPRouter struct {
-	console         *ConsoleHandle
-	catalog         servicecatalog.Catalog
-	local           *LocalDispatcher
-	gateway         RPCForwarder
-	sessions        *session.Store
-	limiters        methodLimiters
-	allowedOrigins  []string
-	spaceAuthorizer SpaceAuthorizer
+	console        *ConsoleHandle
+	catalog        servicecatalog.Catalog
+	local          *LocalDispatcher
+	gateway        RPCForwarder
+	sessions       *session.Store
+	limiters       methodLimiters
+	allowedOrigins []string
 }
 
 // NewHTTPRouter 创建控制台路由；sessions 是与认证服务共用的会话表，限额与开发来源取 SetConfig 设置的配置。
-func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store, authorizers ...SpaceAuthorizer) (*HTTPRouter, error) {
+func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store) (*HTTPRouter, error) {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return nil, err
 	}
 	if console == nil || sessions == nil {
 		return nil, errors.New("console handle and session store are required")
-	}
-	var authorizer SpaceAuthorizer
-	if len(authorizers) > 0 {
-		authorizer = authorizers[0]
 	}
 	cfg := GetConfig()
 	var allowedOrigins []string
@@ -68,20 +63,20 @@ func NewHTTPRouter(console *ConsoleHandle, local *LocalDispatcher, gateway RPCFo
 	}
 	return &HTTPRouter{
 		console: console, catalog: catalog, local: local, gateway: gateway, sessions: sessions,
-		limiters: newMethodLimiters(cfg), allowedOrigins: allowedOrigins, spaceAuthorizer: authorizer,
+		limiters: newMethodLimiters(cfg), allowedOrigins: allowedOrigins,
 	}, nil
 }
 
 // NewHandler 在两个分派器都就绪后建浏览器接口 /api/admin/{服务}/{方法} 的处理器，交给 Admin 的浏览器入口（9527）；
 // sessions 是与认证服务共用的会话表。
-func NewHandler(local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store, authorizers ...SpaceAuthorizer) (http.Handler, error) {
+func NewHandler(local *LocalDispatcher, gateway RPCForwarder, sessions *session.Store) (http.Handler, error) {
 	if GetConfig() == nil {
 		return nil, errors.New("控制台配置未初始化")
 	}
 	if local == nil || gateway == nil || sessions == nil {
 		return nil, errors.New("控制台需要本地分派器、网关客户端及会话表")
 	}
-	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, sessions, authorizers...)
+	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, sessions)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +174,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		writeRequestBodyError(w, err)
 		return
 	}
-	authorizedSpace, injectSpace, status, err := hr.authorizeRequest(ctx, r, serviceID, method, body)
+	authorizedSpace, injectSpace, status, err := hr.authorizeRequest(r, serviceID, method, body)
 	if err != nil {
 		log.WarnContextf(ctx, "console request denied service=%s method=%s: %v", serviceID, method, err)
 		if status == http.StatusBadRequest {
@@ -241,9 +236,9 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	writeForwardResponse(w, response, headers)
 }
 
-// authorizeRequest 在转发前完成空间授权，返回最终授权的空间（可能来自请求体）。
-// 系统只有一个超级用户：全局方法不做空间授权，空间内服务只核对空间存在且可用。
-func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, serviceID, method string, body []byte) (string, bool, int, error) {
+// authorizeRequest 在转发前定下请求作用的空间（可能来自请求体），只核对请求头与请求体里的空间一致。
+// 系统只有一个超级用户，不按空间放行：空间是否存在、是否停用不在这里判断（见管理后台.md 已知差别）。
+func (hr *HTTPRouter) authorizeRequest(r *http.Request, serviceID, method string, body []byte) (string, bool, int, error) {
 	if serviceID == "storage" && storageGlobalMethods[method] {
 		return "", false, 0, nil
 	}
@@ -268,12 +263,6 @@ func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, ser
 		}
 		// Storage、Factor 的无空间请求属于全局运维接口。
 		return "", false, 0, nil
-	}
-	if hr.spaceAuthorizer == nil {
-		return "", false, http.StatusForbidden, errors.New("space authorizer is unavailable")
-	}
-	if err := hr.spaceAuthorizer.AuthorizeSpaceRequest(ctx, spaceID); err != nil {
-		return "", false, http.StatusForbidden, err
 	}
 	return spaceID, inject, 0, nil
 }

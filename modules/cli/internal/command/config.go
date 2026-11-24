@@ -14,10 +14,10 @@ func newConfigCommand() *cobra.Command {
 config init 在本机打开一次性表单，填写部署信息，生成这两份文件；
 config edit 在本机打开配置页，查看并修改两份文件（秘密文件保存后重新加密）；
 config get / config set 读取、修改其中一份里的单个值（--file 指定哪一份，秘密默认打码）；
-config encrypt 把明文保存的 moox.secrets.toml 加密保存；
-config backup 把两份文件用管理员密码加密备份到管理后台，config restore 换电脑时从管理台恢复。`,
+config encrypt 把明文保存的 moox.secrets.toml 加密保存。
+换电脑时把两份文件一起拷过去，再带上解密秘密文件的密钥（系统钥匙串里的，或 ~/.config/moox/config.key）。`,
 		SilenceUsage: true,
 	}
-	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigGetCommand(), newConfigSetCommand(), newConfigBackupCommand(), newConfigRestoreCommand())
+	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigGetCommand(), newConfigSetCommand())
 	return cmd
 }

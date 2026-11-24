@@ -71,12 +71,12 @@ func TestConfigCommandRegistersInitEditAndEncrypt(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	for _, want := range []string{"init", "edit", "encrypt", "get", "set", "backup", "restore"} {
+	for _, want := range []string{"init", "edit", "encrypt", "get", "set"} {
 		if !names[want] {
 			t.Fatalf("config 命令下应有 %s", want)
 		}
 	}
-	for _, removed := range []string{"migrate", "notification"} {
+	for _, removed := range []string{"migrate", "notification", "backup", "restore"} {
 		if names[removed] {
 			t.Fatalf("config %s 已删除", removed)
 		}

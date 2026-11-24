@@ -299,7 +299,7 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
     - 给某个服务加一个方法后只部署该组件：这台主机的 `host-gateway` 被一起升级并重启。
     - 再跑一次 `$CLI setup install $SRC --space-id crypto --yes`：不报错，没有组件被重启，操作电脑的 `~/.config/moox/moox-cli.key` 没有变（它会再执行一次 `setup start`，手工停用过的内置采集任务与默认因子任务成员会被重新启用；只升级用 `setup update`）。
     - 在控制机第一次装完、存储机装到一半时中断安装，重跑同一条命令能接着装完。
-33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥（在系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`；带不过去就用 `config restore` 取回配置），`$CLI setup operator --register` 再 `$CLI setup deploy $SRC --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
+33. **换电脑与清空预览**：另一台电脑上放两份配置文件、SSH 私钥、解密密钥（在系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`），`$CLI setup operator --register` 再 `$CLI setup deploy $SRC --host control`、`$CLI setup status` 成功，原电脑的调用被拒（先问用户，做完要在原电脑上重新登记）。
     `$CLI setup wipe` 的预览单独列出归档文件与 SeaweedFS 数据的大小，并提醒先导出管理台里的密钥。
 
 ## 7. 踩坑清单
@@ -322,6 +322,6 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 - `setup wipe` 默认不清理腾讯云上的函数：同名的由 Collector 接管，计划外的按第 6 节第 4 步用 `collector function delete` 清掉（先预览、给用户确认）；换过云账号的，提醒用户到腾讯云控制台按 `moox-fetch-plan-` 前缀找出旧账号下的函数并删除。
 - 汇报：做了什么、验收结果、没做的事（第 5 节）、重建后丢失的手工配置、需要用户做的事（清理旧 CA 等）。
-- 把发布过程中临时改过的代码或脚本提交并推送；配置有变更时提醒用户 `moox-cli config backup`（两份文件一起备份）。
+- 把发布过程中临时改过的代码或脚本提交并推送；配置有变更时提醒用户自己留好两份配置文件。
 - 更新记忆（部署状态、踩坑）。
 - 不要擅自合并 PR；合并要用户明确说。

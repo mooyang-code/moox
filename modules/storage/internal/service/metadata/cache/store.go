@@ -222,9 +222,9 @@ func (s *Store) GetSpace(ctx context.Context, spaceID string) (*pb.Space, error)
 	return getProto(s, ctx, kindSpace, "", spaceID, func() *pb.Space { return &pb.Space{} })
 }
 
-func (s *Store) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
+func (s *Store) ListSpaces(ctx context.Context, owner, status string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	items, err := decodeEntries(s.list(kindSpace, func(item entry) bool {
-		return owner == "" || item.Owner == owner
+		return (owner == "" || item.Owner == owner) && (status == "" || item.Status == status)
 	}), func() *pb.Space { return &pb.Space{} })
 	if err != nil {
 		return nil, nil, err
@@ -556,7 +556,7 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 
 func (s *Store) fetchSpaces(ctx context.Context, out []entry) ([]entry, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
-		return s.base.ListSpaces(ctx, "", page)
+		return s.base.ListSpaces(ctx, "", "", page)
 	})
 	if err != nil {
 		return nil, err

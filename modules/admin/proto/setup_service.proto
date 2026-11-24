@@ -16,17 +16,6 @@ message SetupTencentCloud {
   string secret_key = 2;
 }
 
-message SetupSpace {
-  string space_id = 1;
-  string name = 2;
-  string description = 3;
-  string owner = 4;
-  string market = 5;
-  string timezone = 6;
-  string status = 7;
-  string attributes_json = 8;
-}
-
 // moox.toml 的 [[exchange_keys]]：交易所密钥。固定 ID 为 exchange-<交易所>-<环境>-<名称>，只建不改。
 message SetupExchangeKey {
   string name = 1;
@@ -49,7 +38,6 @@ message SetupExchangeKeyResult {
 message ApplySetupReq {
   SetupAdmin admin = 1;
   SetupTencentCloud tencent_cloud = 2;
-  repeated SetupSpace spaces = 5;
   repeated SetupExchangeKey exchange_keys = 6;
 }
 
@@ -58,18 +46,14 @@ message ApplySetupRsp {
   string action = 2;
   int32 users = 3;
   int32 secrets = 4;
-  int32 spaces = 6;
-  int32 spaces_created = 7;
-  int32 spaces_unchanged = 8;
   repeated SetupExchangeKeyResult exchange_keys = 9;
-  // kept 是库里已有、与 moox.toml 不一致而以管理台为准保留（没有改写）的项：admin、tencent_cloud、space:<ID>。
+  // kept 是库里已有、与 moox.toml 不一致而以管理台为准保留（没有改写）的项：admin、tencent_cloud。
   repeated string kept = 10;
 }
 
 message GetSetupStatusReq {
   SetupAdmin admin = 1;
   SetupTencentCloud tencent_cloud = 2;
-  repeated SetupSpace spaces = 5;
   repeated SetupExchangeKey exchange_keys = 6;
 }
 
@@ -79,34 +63,12 @@ message GetSetupStatusRsp {
   int32 users = 3;
   int32 secrets = 4;
   int32 missing = 6;
-  int32 spaces = 8;
   repeated SetupExchangeKeyResult exchange_keys = 9;
   // kept 同 ApplySetupRsp.kept。
   repeated string kept = 10;
 }
 
-// 配置备份：CLI 用管理员密码派生的密钥加密整份 moox.toml 后上传，服务端只保存密文信封（解不开），
-// 入库时再用管理后台主密钥加密一层。换电脑时登录管理台取回，在本机用管理员密码解开。
-message PutConfigBackupReq {
-  string envelope = 1;  // 以 "MOOX-CONFIG-BACKUP v1" 开头的密文信封
-}
-
-message PutConfigBackupRsp {
-  common.RetInfo ret_info = 1;
-  int64 updated_at = 2;  // Unix 秒
-}
-
-message GetConfigBackupReq {}
-
-message GetConfigBackupRsp {
-  common.RetInfo ret_info = 1;
-  string envelope = 2;
-  int64 updated_at = 3;  // Unix 秒
-}
-
 service Setup {
   rpc ApplySetup(ApplySetupReq) returns (ApplySetupRsp);
   rpc GetSetupStatus(GetSetupStatusReq) returns (GetSetupStatusRsp);
-  rpc PutConfigBackup(PutConfigBackupReq) returns (PutConfigBackupRsp);
-  rpc GetConfigBackup(GetConfigBackupReq) returns (GetConfigBackupRsp);
 }

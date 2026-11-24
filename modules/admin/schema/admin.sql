@@ -2,25 +2,6 @@
 
 PRAGMA foreign_keys = ON;
 
--- ************ 平台空间表 ************
-CREATE TABLE IF NOT EXISTS t_spaces (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_description TEXT NOT NULL DEFAULT '',
-    c_owner TEXT NOT NULL DEFAULT '',
-    c_market TEXT NOT NULL DEFAULT '',
-    c_timezone TEXT NOT NULL DEFAULT '',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_attributes TEXT NOT NULL DEFAULT '{}',
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_space_id_deleted
-ON t_spaces (c_space_id, c_is_deleted);
-
 -- ************ 用户表 ************
 -- 系统只有一个超级用户：没有角色、状态和个人资料；登录记录写入全局活动日志（auth.login）。
 CREATE TABLE IF NOT EXISTS t_users (
@@ -137,7 +118,6 @@ CREATE TABLE IF NOT EXISTS t_host_gateway_status (
 -- ************ 秘钥管理表 ************
 CREATE TABLE IF NOT EXISTS t_secrets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
-    c_space_id TEXT NOT NULL DEFAULT '',                        -- 空间ID
     c_secret_id TEXT NOT NULL,                                  -- 秘钥唯一标识 (UUID)
     c_name TEXT NOT NULL,                                       -- 秘钥名称
     c_description TEXT NOT NULL DEFAULT '',                     -- 秘钥描述/备注
@@ -159,16 +139,10 @@ CREATE TABLE IF NOT EXISTS t_secrets (
 );
 
 -- ************ 秘钥管理相关索引 ************
-CREATE INDEX IF NOT EXISTS idx_secrets_space_id ON t_secrets (c_space_id);
+-- 秘钥只有几十条，按 ID 查以外的列表与过滤直接扫表，不另建索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_secret_id_deleted ON t_secrets (c_secret_id, c_is_deleted);
-CREATE INDEX IF NOT EXISTS idx_secrets_category ON t_secrets (c_category);
-CREATE INDEX IF NOT EXISTS idx_secrets_provider ON t_secrets (c_provider);
-CREATE INDEX IF NOT EXISTS idx_secrets_status ON t_secrets (c_status);
-CREATE INDEX IF NOT EXISTS idx_secrets_name ON t_secrets (c_name);
-CREATE INDEX IF NOT EXISTS idx_secrets_deleted ON t_secrets (c_is_deleted);
-CREATE INDEX IF NOT EXISTS idx_secrets_ctime ON t_secrets (c_ctime DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_eventbus_active_key
-ON t_secrets (c_space_id, c_category, c_provider, c_key_id)
+ON t_secrets (c_category, c_provider, c_key_id)
 WHERE c_is_deleted = 0 AND c_status = 'active' AND c_category = 'eventbus';
 
 -- ************ 秘钥管理触发器 ************

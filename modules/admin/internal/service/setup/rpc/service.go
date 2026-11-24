@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -12,8 +11,6 @@ import (
 type setupDomain interface {
 	Apply(context.Context, setup.Manifest) (setup.Result, error)
 	Inspect(context.Context, setup.Manifest) (setup.Status, error)
-	PutBackup(context.Context, string) (time.Time, error)
-	GetBackup(context.Context) (setup.Backup, error)
 }
 
 type Service struct {
@@ -38,10 +35,8 @@ func (s *Service) ApplySetup(ctx context.Context, request *pb.ApplySetupReq) (*p
 	return &pb.ApplySetupRsp{
 		RetInfo: setupRetOK(), Action: result.Action,
 		Users: int32(result.Users), Secrets: int32(result.Secrets),
-		Spaces: int32(result.Spaces), SpacesCreated: int32(result.SpacesCreated),
-		SpacesUnchanged: int32(result.SpacesUnchanged),
-		ExchangeKeys:    exchangeKeyResultsToPB(result.ExchangeKeys),
-		Kept:            result.Kept,
+		ExchangeKeys: exchangeKeyResultsToPB(result.ExchangeKeys),
+		Kept:         result.Kept,
 	}, nil
 }
 
@@ -58,55 +53,28 @@ func (s *Service) GetSetupStatus(ctx context.Context, request *pb.GetSetupStatus
 	return &pb.GetSetupStatusRsp{
 		RetInfo: setupRetOK(), State: status.State,
 		Users: int32(status.Users), Secrets: int32(status.Secrets),
-		Missing: int32(status.Missing), Kept: status.Kept, Spaces: int32(status.Spaces),
+		Missing: int32(status.Missing), Kept: status.Kept,
 		ExchangeKeys: exchangeKeyResultsToPB(status.ExchangeKeys),
 	}, nil
-}
-
-// PutConfigBackup 保存 CLI 加密好的配置备份（服务端解不开）。
-func (s *Service) PutConfigBackup(ctx context.Context, request *pb.PutConfigBackupReq) (*pb.PutConfigBackupRsp, error) {
-	if s.domain == nil {
-		return &pb.PutConfigBackupRsp{RetInfo: setupRetError(pb.ErrorCode_INNER_ERR, "setup_storage_failed")}, nil
-	}
-	updated, err := s.domain.PutBackup(ctx, request.GetEnvelope())
-	if err != nil {
-		code, message := mapSetupError(err)
-		return &pb.PutConfigBackupRsp{RetInfo: setupRetError(code, message)}, nil
-	}
-	return &pb.PutConfigBackupRsp{RetInfo: setupRetOK(), UpdatedAt: updated.Unix()}, nil
-}
-
-// GetConfigBackup 取回配置备份，由 CLI 在本机用管理员密码解开。
-func (s *Service) GetConfigBackup(ctx context.Context, _ *pb.GetConfigBackupReq) (*pb.GetConfigBackupRsp, error) {
-	if s.domain == nil {
-		return &pb.GetConfigBackupRsp{RetInfo: setupRetError(pb.ErrorCode_INNER_ERR, "setup_storage_failed")}, nil
-	}
-	backup, err := s.domain.GetBackup(ctx)
-	if err != nil {
-		code, message := mapSetupError(err)
-		return &pb.GetConfigBackupRsp{RetInfo: setupRetError(code, message)}, nil
-	}
-	return &pb.GetConfigBackupRsp{RetInfo: setupRetOK(), Envelope: backup.Envelope, UpdatedAt: backup.UpdatedAt.Unix()}, nil
 }
 
 func applyManifest(request *pb.ApplySetupReq) (setup.Manifest, error) {
 	if request == nil {
 		return setup.Manifest{}, setup.ErrInvalid
 	}
-	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetSpaces(), request.GetExchangeKeys())
+	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetExchangeKeys())
 }
 
 func statusManifest(request *pb.GetSetupStatusReq) (setup.Manifest, error) {
 	if request == nil {
 		return setup.Manifest{}, setup.ErrInvalid
 	}
-	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetSpaces(), request.GetExchangeKeys())
+	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetExchangeKeys())
 }
 
 func manifestFromPB(
 	admin *pb.SetupAdmin,
 	cloud *pb.SetupTencentCloud,
-	spaces []*pb.SetupSpace,
 	exchangeKeys []*pb.SetupExchangeKey,
 ) (setup.Manifest, error) {
 	if admin == nil || cloud == nil {
@@ -115,13 +83,6 @@ func manifestFromPB(
 	manifest := setup.Manifest{
 		Admin:        setup.Admin{Username: admin.GetUsername(), Password: admin.GetPassword()},
 		TencentCloud: setup.TencentCloud{SecretID: cloud.GetSecretId(), SecretKey: cloud.GetSecretKey()},
-		Spaces:       make([]setup.Space, 0, len(spaces)),
-	}
-	for _, space := range spaces {
-		if space == nil {
-			return setup.Manifest{}, setup.ErrInvalid
-		}
-		manifest.Spaces = append(manifest.Spaces, spaceFromPB(space))
 	}
 	for _, key := range exchangeKeys {
 		if key == nil {
@@ -143,22 +104,12 @@ func exchangeKeyResultsToPB(results []setup.ExchangeKeyResult) []*pb.SetupExchan
 	return out
 }
 
-func spaceFromPB(space *pb.SetupSpace) setup.Space {
-	return setup.Space{
-		SpaceID: space.GetSpaceId(), Name: space.GetName(), Description: space.GetDescription(),
-		Owner: space.GetOwner(), Market: space.GetMarket(), Timezone: space.GetTimezone(),
-		Status: space.GetStatus(), AttributesJSON: space.GetAttributesJson(),
-	}
-}
-
 func mapSetupError(err error) (pb.ErrorCode, string) {
 	switch {
 	case errors.Is(err, setup.ErrInvalid):
 		return pb.ErrorCode_INVALID_PARAM, "setup_invalid"
-	case errors.Is(err, setup.ErrBackupInvalid):
-		return pb.ErrorCode_INVALID_PARAM, "config_backup_invalid"
-	case errors.Is(err, setup.ErrBackupMissing):
-		return pb.ErrorCode_NOT_FOUND, "config_backup_missing"
+	case errors.Is(err, setup.ErrAdminMissing):
+		return pb.ErrorCode_INVALID_PARAM, "setup_admin_missing：还没有管理员，先用 setup deploy 部署控制机（会建管理员）"
 	default:
 		return pb.ErrorCode_INNER_ERR, "setup_storage_failed"
 	}

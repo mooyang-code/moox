@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,8 +117,6 @@ func TestDestructiveCommandsNoLongerHaveLegacyConfirmFlags(t *testing.T) {
 	}{
 		{"collector task delete-result", func(n string) bool { return collectorResultDeleteCmd.Flags().Lookup(n) != nil }},
 		{"collector function delete", func(n string) bool { return collectorFunctionDeleteCmd.Flags().Lookup(n) != nil }},
-		{"firewall add", func(n string) bool { return lighthouseFirewallAddCmd.Flags().Lookup(n) != nil }},
-		{"firewall open", func(n string) bool { return lighthouseFirewallOpenCmd.Flags().Lookup(n) != nil }},
 	} {
 		assert.True(t, cmd.flag("yes"), cmd.name+" 要有 --yes")
 		for _, legacy := range []string{"dry-run", "confirm", "apply"} {

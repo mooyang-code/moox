@@ -39,7 +39,6 @@ func TestDefaultSetupBundleDefinesBusinessSpaces(t *testing.T) {
 func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, validateSetupMetadataDependencies(seed))
 	_, err = buildMetadataImportCalls(seed)
 	require.NoError(t, err)
 

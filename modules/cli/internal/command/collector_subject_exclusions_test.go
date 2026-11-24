@@ -3,9 +3,10 @@ package command
 import (
 	"bytes"
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/stretchr/testify/require"

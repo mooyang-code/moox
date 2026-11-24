@@ -24,6 +24,7 @@ import (
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -133,12 +134,12 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	manager := &fetchplan.PlanManager{
 		Configured: managed,
 		Spaces: func(ctx context.Context) ([]string, error) {
-			// 运行集合：管理集合 ∩ Admin 中仍启用的空间 − 暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
+			// 运行集合：管理集合 ∩ Storage 中仍启用的空间 − 暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
 			spaces, err := managed(ctx)
 			if err != nil {
 				return nil, err
 			}
-			active, err := admin.ListActiveSpaceIDs(ctx)
+			active, err := activeSpaceIDs(ctx, storageio.NewGatewayClient(process.gateway))
 			if err != nil {
 				return nil, err
 			}
@@ -377,5 +378,25 @@ func backfillExecutor(tasks *store.TaskRepository, defaultIngest func(string) st
 			return marketfetch.PlanExecutorLocal, nil
 		}
 		return marketfetch.PlanExecutorSCF, nil
+	}
+}
+
+// activeSpaceIDs 返回 Storage 中处于启用状态的空间 ID（小写）；采集计划对账据此启停各空间的协程。
+func activeSpaceIDs(ctx context.Context, storage *storageio.Client) (map[string]struct{}, error) {
+	active := map[string]struct{}{}
+	for page := uint32(1); ; page++ {
+		rsp, err := storage.ListSpaces(ctx, &storagepb.ListSpacesReq{Status: "active", Page: &storagepb.Page{Page: page, Size: 200}})
+		if err != nil {
+			return nil, err
+		}
+		if rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return nil, fmt.Errorf("list spaces: %s", rsp.GetRetInfo().GetMsg())
+		}
+		for _, space := range rsp.GetSpaces() {
+			active[strings.ToLower(space.GetSpaceId())] = struct{}{}
+		}
+		if !rsp.GetPageResult().GetHasMore() {
+			return active, nil
+		}
 	}
 }

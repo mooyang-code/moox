@@ -34,12 +34,13 @@ type setupSnapshot struct {
 }
 
 type setupDeps struct {
-	load                  func(string) (*setupSnapshot, error)
-	loadInitBundle        func(string) (setupInitBundle, error)
-	validate              func(context.Context, *setupSnapshot) (setupvalidate.Result, error)
-	trustHost             func(context.Context, *setupSnapshot, string, string) error
-	applySpaces           func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error)
-	statusSpaces          func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	load           func(string) (*setupSnapshot, error)
+	loadInitBundle func(string) (setupInitBundle, error)
+	validate       func(context.Context, *setupSnapshot) (setupvalidate.Result, error)
+	trustHost      func(context.Context, *setupSnapshot, string, string) error
+	// applySecrets 把秘密文件里的初始秘密写进管理台（只建不改）；setupStatus 核对它们是否都在。
+	applySecrets          func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error)
+	setupStatus           func(context.Context, *setupSnapshot) (setupclient.StatusResult, error)
 	registerCloudAccounts func(context.Context, *setupSnapshot) (*setupCloudAccountSummary, error)
 	provisionCLS          func(context.Context, *setupSnapshot) (*setupCLSSummary, error)
 	// ensureSCFPlan 的最后一个参数是源码或产物包目录：云函数代码包从它下面的 modules/collector 构建。
@@ -52,7 +53,6 @@ type setupDeps struct {
 	// initStorage 的参数依次是存储机、源码或产物包目录、种子。
 	initStorage       func(context.Context, *setupSnapshot, string, string, setupInitBundle) (setupInitSummary, error)
 	initMetadata      func(context.Context, *setupSnapshot, string, setupInitBundle) (setupInitStorageSummary, error)
-	importMetadata    func(context.Context, *setupSnapshot, string, string, []string) (metadataImportSummary, error)
 	exportSkillConfig func(context.Context, *setupSnapshot, string) (dataAccessConfig, error)
 	// ensureOperatorKey 确保这台电脑的身份目录里有 moox-cli 的签名私钥（已有就复用），返回公钥与是否新生成。
 	ensureOperatorKey func(string) (string, bool, error)
@@ -70,10 +70,9 @@ type setupDeps struct {
 	operate   func(context.Context, topology.Host, string, string) (string, error)
 	readLogs  func(context.Context, topology.Host, string, []string, string, int, bool) ([]deploy.LogSection, error)
 	openStart func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error)
-	// backupConfig、verifySpace 是 setup install 的最后两步，测试里替换。
-	backupConfig func(context.Context, string) error
-	verifySpace  func(context.Context, string, *setupSnapshot, string) error
-	regionCloud  func(*setupSnapshot, string) (setupFunctionCloud, error)
+	// verifySpace 是 setup install 的最后一步，测试里替换。
+	verifySpace func(context.Context, string, *setupSnapshot, string) error
+	regionCloud func(*setupSnapshot, string) (setupFunctionCloud, error)
 }
 
 func init() {
@@ -114,7 +113,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInspectSCFCommand(deps),
 		newSetupAttachSCFVPCCommand(deps),
 		newSetupInvokeSCFCommand(deps),
-		newSetupMetadataImportCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupRegisterIdentityCommand(deps),
 		newSetupFirewallCommand(deps),
@@ -497,30 +495,6 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
-	var file, seed, storageHost string
-	var spaces []string
-	cmd := &cobra.Command{Use: "metadata-import", Short: "通过 Storage SSH 隧道导入选定业务空间", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		result, err := deps.importMetadata(cmd.Context(), snapshot, storageHost, seed, spaces)
-		if err != nil {
-			return err
-		}
-		return writeSetupJSON(cmd, result)
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&seed, "seed", "config/setup/metadata.yaml", "metadata seed YAML")
-	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
-	cmd.Flags().StringSliceVar(&spaces, "spaces", nil, "要导入的 Space ID 或中文名")
-	_ = cmd.MarkFlagRequired("storage-host")
-	_ = cmd.MarkFlagRequired("spaces")
-	return cmd
-}
-
 // completeSetupDeps 是默认依赖的唯一补全入口：测试只替换自己关心的那几项，其余用默认实现。
 // 子命令里不要再判空补默认值：那样只改到子命令自己的副本，聚合命令 setup install 拿到的还是空的。
 func completeSetupDeps(deps setupDeps) setupDeps {
@@ -529,8 +503,8 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.loadInitBundle, defaults.loadInitBundle)
 	fillSetupDep(&deps.validate, defaults.validate)
 	fillSetupDep(&deps.trustHost, defaults.trustHost)
-	fillSetupDep(&deps.applySpaces, defaults.applySpaces)
-	fillSetupDep(&deps.statusSpaces, defaults.statusSpaces)
+	fillSetupDep(&deps.applySecrets, defaults.applySecrets)
+	fillSetupDep(&deps.setupStatus, defaults.setupStatus)
 	fillSetupDep(&deps.registerCloudAccounts, defaults.registerCloudAccounts)
 	fillSetupDep(&deps.provisionCLS, defaults.provisionCLS)
 	fillSetupDep(&deps.ensureSCFPlan, defaults.ensureSCFPlan)
@@ -538,7 +512,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.openInitStorage, defaults.openInitStorage)
 	fillSetupDep(&deps.openInitFactor, defaults.openInitFactor)
 	fillSetupDep(&deps.ensureNotification, defaults.ensureNotification)
-	fillSetupDep(&deps.importMetadata, defaults.importMetadata)
 	fillSetupDep(&deps.exportSkillConfig, defaults.exportSkillConfig)
 	fillSetupDep(&deps.ensureOperatorKey, defaults.ensureOperatorKey)
 	fillSetupDep(&deps.registerIdentity, defaults.registerIdentity)
@@ -551,7 +524,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	fillSetupDep(&deps.operate, defaults.operate)
 	fillSetupDep(&deps.readLogs, defaults.readLogs)
 	fillSetupDep(&deps.openStart, defaults.openStart)
-	fillSetupDep(&deps.backupConfig, defaults.backupConfig)
 	fillSetupDep(&deps.verifySpace, defaults.verifySpace)
 	fillSetupDep(&deps.regionCloud, defaults.regionCloud)
 	if deps.initStorage == nil {
@@ -593,10 +565,6 @@ func loadSetupSnapshot(path string) (*setupSnapshot, error) {
 func defaultSetupDeps() setupDeps {
 	return setupDeps{
 		load: loadSetupSnapshot,
-		backupConfig: func(ctx context.Context, file string) error {
-			_, err := backupConfigFile(ctx, file)
-			return err
-		},
 		verifySpace: func(ctx context.Context, file string, snapshot *setupSnapshot, spaceID string) error {
 			_, err := runSetupVerifySpace(ctx, file, snapshot, spaceID, setupVerifyTimeout)
 			return err
@@ -612,8 +580,8 @@ func defaultSetupDeps() setupDeps {
 		openStart:             defaultSetupOpenStart,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
-		applySpaces:           defaultSetupApplyWithSpaces,
-		statusSpaces:          defaultSetupStatusWithSpaces,
+		applySecrets:          defaultSetupApplySecrets,
+		setupStatus:           defaultSetupStatus,
 		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
 		provisionCLS:          defaultSetupProvisionCLS,
 		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
@@ -622,7 +590,6 @@ func defaultSetupDeps() setupDeps {
 			return defaultOpenSetupFactor(ctx, snapshot.Manifest)
 		},
 		ensureNotification:  defaultSetupEnsureNotification,
-		importMetadata:      defaultSetupImportMetadata,
 		exportSkillConfig:   defaultSetupExportSkillConfig,
 		ensureOperatorKey:   defaultSetupEnsureOperatorKey,
 		registerIdentity:    defaultSetupRegisterIdentity,
@@ -649,35 +616,6 @@ func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupSnapsh
 	}
 	login, err := deps.login(ctx, snapshot)
 	return login, "", err
-}
-
-func defaultSetupImportMetadata(ctx context.Context, snapshot *setupSnapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {
-	status, err := defaultSetupStatusWithSpaces(ctx, snapshot, nil)
-	if err != nil || status.State != "completed" {
-		return metadataImportSummary{}, fmt.Errorf("setup_incomplete")
-	}
-	seed, err := loadMetadataSeed(seedPath)
-	if err != nil {
-		return metadataImportSummary{}, err
-	}
-	seed, err = selectMetadataSpaces(seed, spaces)
-	if err != nil {
-		return metadataImportSummary{}, err
-	}
-	calls, err := buildMetadataImportCalls(seed)
-	if err != nil {
-		return metadataImportSummary{}, err
-	}
-	_, err = findSetupHost(snapshot.Manifest, hostName)
-	if err != nil {
-		return metadataImportSummary{}, err
-	}
-	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
-	if err != nil {
-		return metadataImportSummary{}, err
-	}
-	defer gateway.Close()
-	return runMetadataImport(ctx, gateway, calls, true)
 }
 
 func defaultSetupValidate(ctx context.Context, snapshot *setupSnapshot) (setupvalidate.Result, error) {
@@ -822,30 +760,22 @@ func manualBrowserTrustCommand(caPath string) string {
 // refreshSetupConsoleCA 在测试里替换。
 var refreshSetupConsoleCA = configinit.RefreshConsoleCA
 
-func defaultSetupApplyWithSpaces(
-	ctx context.Context,
-	snapshot *setupSnapshot,
-	spaces []setupclient.Space,
-) (setupclient.ApplyResult, error) {
+func defaultSetupApplySecrets(ctx context.Context, snapshot *setupSnapshot) (setupclient.ApplyResult, error) {
 	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return setupclient.ApplyResult{}, err
 	}
 	defer gateway.Close()
-	return setupclient.New(gateway).ApplyWithSpaces(ctx, snapshot.Secrets, spaces)
+	return setupclient.New(gateway).Apply(ctx, snapshot.Secrets)
 }
 
-func defaultSetupStatusWithSpaces(
-	ctx context.Context,
-	snapshot *setupSnapshot,
-	spaces []setupclient.Space,
-) (setupclient.StatusResult, error) {
+func defaultSetupStatus(ctx context.Context, snapshot *setupSnapshot) (setupclient.StatusResult, error) {
 	gateway, err := openCommandGateway(ctx, "", snapshot.Manifest)
 	if err != nil {
 		return setupclient.StatusResult{}, err
 	}
 	defer gateway.Close()
-	return setupclient.New(gateway).StatusWithSpaces(ctx, snapshot.Secrets, spaces)
+	return setupclient.New(gateway).Status(ctx, snapshot.Secrets)
 }
 
 func dialSetupHost(ctx context.Context, host topology.Host) (setupssh.Client, error) {

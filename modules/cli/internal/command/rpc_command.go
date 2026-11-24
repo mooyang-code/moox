@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/spf13/cobra"
 )
 
@@ -78,7 +78,7 @@ func invokeRPC(ctx context.Context, inv rpcInvocation) (json.RawMessage, error) 
 		return nil, err
 	}
 	defer gateway.Close()
-	client := &adminclient.Client{Gateway: gateway, SpaceID: inv.SpaceID, HostID: inv.HostID}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: inv.SpaceID, HostID: inv.HostID}
 	var response json.RawMessage
 	if err := client.CallGatewayJSON(ctx, inv.Service, inv.Method, inv.Request, &response); err != nil {
 		return nil, err

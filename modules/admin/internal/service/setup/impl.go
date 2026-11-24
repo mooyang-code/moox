@@ -3,16 +3,12 @@ package setup
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
-	"io"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
-	adminspace "github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 )
@@ -24,44 +20,32 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 	if err := validateManifest(manifest, s.db, s.encryptionKey); err != nil {
 		return Result{}, err
 	}
-	spaces, err := normalizeSpaces(manifest.Spaces)
-	if err != nil {
-		return Result{}, err
-	}
 	keys, err := normalizeExchangeKeys(manifest.ExchangeKeys)
 	if err != nil {
 		return Result{}, err
 	}
 	created := 0
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 管理员、腾讯云密钥、业务空间与 moox.toml 不一致时以管理台为准：不改、不报错，记进 Kept（安装后在管理台改过密码、换过密钥都属正常）。
+		// 管理员由部署时的 moox-admin-cli user ensure 建，这里只核对：密码与秘密文件不一致（在管理台改过）记进 Kept。
+		// 腾讯云密钥与 moox.toml 不一致时同样以管理台为准：不改、不报错，记进 Kept。
 		result.Kept = result.Kept[:0]
-		n, kept, err := s.ensureAdmin(ctx, tx, manifest.Admin)
+		adminState, err := s.inspectAdmin(ctx, tx, manifest.Admin)
 		if err != nil {
 			return err
 		}
-		created += n
-		if kept {
+		switch adminState {
+		case recordMissing:
+			return ErrAdminMissing
+		case recordKept:
 			result.Kept = append(result.Kept, keptAdmin)
 		}
-		n, kept, err = s.ensureTencentSecret(ctx, tx, manifest.TencentCloud)
+		n, kept, err := s.ensureTencentSecret(ctx, tx, manifest.TencentCloud)
 		if err != nil {
 			return err
 		}
 		created += n
 		if kept {
 			result.Kept = append(result.Kept, keptTencentCloud)
-		}
-		for _, space := range spaces {
-			n, kept, err = s.ensureSpace(ctx, tx, space)
-			if err != nil {
-				return err
-			}
-			created += n
-			result.SpacesCreated += n
-			if kept {
-				result.Kept = append(result.Kept, keptSpacePrefix+space.SpaceID)
-			}
 		}
 		// 交易所密钥只建不改，不进整体冲突判断：已存在或已在管理台删除的都原样保留。
 		result.ExchangeKeys = result.ExchangeKeys[:0]
@@ -93,7 +77,6 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 	if created > 0 {
 		result.Action = "created"
 	}
-	result.SpacesUnchanged = result.Spaces - result.SpacesCreated
 	return result, nil
 }
 
@@ -101,15 +84,11 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 	if err := validateManifest(manifest, s.db, s.encryptionKey); err != nil {
 		return Status{}, err
 	}
-	spaces, err := normalizeSpaces(manifest.Spaces)
-	if err != nil {
-		return Status{}, err
-	}
 	keys, err := normalizeExchangeKeys(manifest.ExchangeKeys)
 	if err != nil {
 		return Status{}, err
 	}
-	status := Status{State: "completed", Users: 1, Secrets: 1 + len(keys), Spaces: len(spaces)}
+	status := Status{State: "completed", Users: 1, Secrets: 1 + len(keys)}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		state, err := s.inspectAdmin(ctx, tx, manifest.Admin)
 		if err != nil {
@@ -121,13 +100,6 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			return err
 		}
 		status.add(state, keptTencentCloud)
-		for _, space := range spaces {
-			state, err = s.inspectSpace(ctx, tx, space)
-			if err != nil {
-				return err
-			}
-			status.add(state, keptSpacePrefix+space.SpaceID)
-		}
 		for _, key := range keys {
 			keyState, err := s.inspectExchangeKey(ctx, tx, key)
 			if err != nil {
@@ -165,19 +137,13 @@ func secretsPresent(keyCount int, results []ExchangeKeyResult) int {
 
 // expectedResult 的 Secrets 是 moox.toml 要求存在的密钥数：腾讯云一把加每把交易所密钥。
 func expectedResult(manifest Manifest) Result {
-	return Result{
-		Users: 1, Secrets: 1 + len(manifest.ExchangeKeys),
-		Spaces: len(manifest.Spaces), SpacesUnchanged: len(manifest.Spaces),
-	}
+	return Result{Users: 1, Secrets: 1 + len(manifest.ExchangeKeys)}
 }
 
 func validateManifest(manifest Manifest, db *gorm.DB, encryptionKey string) error {
 	if db == nil || encryptionKey == "" || strings.TrimSpace(manifest.Admin.Username) == "" || manifest.Admin.Password == "" ||
 		strings.TrimSpace(manifest.TencentCloud.SecretID) == "" || manifest.TencentCloud.SecretKey == "" {
 		return ErrInvalid
-	}
-	if _, err := normalizeSpaces(manifest.Spaces); err != nil {
-		return err
 	}
 	if _, err := normalizeExchangeKeys(manifest.ExchangeKeys); err != nil {
 		return err
@@ -194,11 +160,10 @@ const (
 	recordKept
 )
 
-// Kept 里的名称：管理员、腾讯云密钥、业务空间（space:<ID>）。
+// Kept 里的名称：管理员、腾讯云密钥。
 const (
 	keptAdmin        = "admin"
 	keptTencentCloud = "tencent_cloud"
-	keptSpacePrefix  = "space:"
 )
 
 func (s *Status) add(state recordState, name string) {
@@ -208,29 +173,6 @@ func (s *Status) add(state recordState, name string) {
 	case recordKept:
 		s.Kept = append(s.Kept, name)
 	}
-}
-
-func (s *Service) ensureAdmin(ctx context.Context, tx *gorm.DB, input Admin) (int, bool, error) {
-	state, err := s.inspectAdmin(ctx, tx, input)
-	if err != nil || state == recordMatch || state == recordKept {
-		return 0, state == recordKept, err
-	}
-	hash, err := mooxsecurity.HashPassword(input.Password)
-	if err != nil {
-		return 0, false, ErrInvalid
-	}
-	now := time.Now()
-	user := &authmodel.User{
-		UserID: uuid.NewString(), Username: strings.TrimSpace(input.Username), PasswordHash: hash,
-		CreatedAt: now, UpdatedAt: now,
-	}
-	if err := tx.WithContext(ctx).Create(user).Error; err != nil {
-		return 0, false, ErrStorage
-	}
-	if err := s.afterWrite("admin"); err != nil {
-		return 0, false, err
-	}
-	return 1, false, nil
 }
 
 func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (recordState, error) {
@@ -301,106 +243,8 @@ func (s *Service) inspectTencentSecret(ctx context.Context, tx *gorm.DB, input T
 	return recordKept, nil
 }
 
-func (s *Service) ensureSpace(ctx context.Context, tx *gorm.DB, input Space) (int, bool, error) {
-	state, err := s.inspectSpace(ctx, tx, input)
-	if err != nil || state == recordMatch || state == recordKept {
-		return 0, state == recordKept, err
-	}
-	now := time.Now()
-	item := &adminspace.Space{
-		SpaceID: input.SpaceID, Name: input.Name, Description: input.Description,
-		Owner: input.Owner, Market: input.Market, Timezone: input.Timezone,
-		Status: input.Status, Attributes: input.AttributesJSON,
-		CreatedAt: now, UpdatedAt: now,
-	}
-	if err := tx.WithContext(ctx).Create(item).Error; err != nil {
-		return 0, false, ErrStorage
-	}
-	if err := s.afterWrite("space:" + input.SpaceID); err != nil {
-		return 0, false, err
-	}
-	return 1, false, nil
-}
-
-func (s *Service) inspectSpace(ctx context.Context, tx *gorm.DB, input Space) (recordState, error) {
-	var stored adminspace.Space
-	err := tx.WithContext(ctx).
-		Where("c_space_id = ? AND c_is_deleted = 0", input.SpaceID).
-		First(&stored).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return recordMissing, nil
-	}
-	if err != nil {
-		return recordKept, ErrStorage
-	}
-	storedAttributes, err := canonicalJSONObject(stored.Attributes)
-	if err != nil {
-		return recordKept, nil
-	}
-	if stored.SpaceID == input.SpaceID &&
-		stored.Name == input.Name &&
-		stored.Description == input.Description &&
-		stored.Owner == input.Owner &&
-		stored.Market == input.Market &&
-		stored.Timezone == input.Timezone &&
-		stored.Status == input.Status &&
-		storedAttributes == input.AttributesJSON {
-		return recordMatch, nil
-	}
-	return recordKept, nil
-}
-
 func secretEqual(left, right string) bool {
 	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
-}
-
-func normalizeSpaces(inputs []Space) ([]Space, error) {
-	spaces := make([]Space, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
-	for _, input := range inputs {
-		input.SpaceID = strings.TrimSpace(input.SpaceID)
-		input.Name = strings.TrimSpace(input.Name)
-		input.Description = strings.TrimSpace(input.Description)
-		input.Owner = strings.TrimSpace(input.Owner)
-		input.Market = strings.TrimSpace(input.Market)
-		input.Timezone = strings.TrimSpace(input.Timezone)
-		input.Status = strings.TrimSpace(input.Status)
-		if input.Status == "" {
-			input.Status = "active"
-		}
-		attributes, err := canonicalJSONObject(input.AttributesJSON)
-		if err != nil || input.SpaceID == "" || input.Name == "" || input.Market == "" || input.Timezone == "" {
-			return nil, ErrInvalid
-		}
-		if _, ok := seen[input.SpaceID]; ok {
-			return nil, ErrInvalid
-		}
-		seen[input.SpaceID] = struct{}{}
-		input.AttributesJSON = attributes
-		spaces = append(spaces, input)
-	}
-	return spaces, nil
-}
-
-func canonicalJSONObject(raw string) (string, error) {
-	if strings.TrimSpace(raw) == "" {
-		return "{}", nil
-	}
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.UseNumber()
-	var value map[string]any
-	if err := decoder.Decode(&value); err != nil || value == nil {
-		return "", ErrInvalid
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return "", ErrInvalid
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return "", ErrInvalid
-	}
-	return string(encoded), nil
 }
 
 func (s *Service) afterWrite(stage string) error {
@@ -417,6 +261,8 @@ func normalizeError(err error) error {
 	switch {
 	case errors.Is(err, ErrInvalid):
 		return ErrInvalid
+	case errors.Is(err, ErrAdminMissing):
+		return ErrAdminMissing
 	default:
 		return ErrStorage
 	}

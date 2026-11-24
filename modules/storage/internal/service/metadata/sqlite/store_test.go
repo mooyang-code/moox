@@ -72,7 +72,7 @@ func TestInitSchemaRejectsV13WithRebuildInstructions(t *testing.T) {
 	if err == nil {
 		t.Fatal("InitSchema accepted metadata schema v13")
 	}
-	for _, want := range []string{"schema v13", "remove", "init/import-seed"} {
+	for _, want := range []string{"schema v13", "remove", "init and metadata apply"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("InitSchema error %q missing %q", err, want)
 		}

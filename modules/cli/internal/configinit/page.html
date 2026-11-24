@@ -248,7 +248,7 @@ button.ghost.away { visibility: hidden; }
             <dt>只留在这台电脑</dt><dd>配置分成两份文件：服务器与部署设置一份，不含秘密；密码和密钥单独一份，用 AES-256 加密后保存，只有你本人能读。解密密钥放在<span id="key-store">系统钥匙串</span>，不写进配置文件。</dd>
             <dt>SSH 密码不保存</dt><dd>只用来第一次开通免密登录，用完即丢。</dd>
             <dt>自己验证登录</dt><dd>MooX 用专用密钥，要写 <code>ssh -i ~/.ssh/moox_ed25519 用户@IP</code>；普通 ssh 询问密码不代表没开通。</dd>
-            <dt>换电脑能找回</dt><dd>部署完成后，两份文件会用你设的管理员密码再加密一次，备份到你自己的管理后台。</dd>
+            <dt>换电脑</dt><dd>把这两份文件一起拷到新电脑，再带上解密密钥（系统钥匙串里的，或 <code>~/.config/moox/config.key</code>）。</dd>
           </dl>
         </div>
       </section>
@@ -310,10 +310,10 @@ button.ghost.away { visibility: hidden; }
       <h1>管理员与告警</h1>
       <p class="lede">登录管理台的账号，以及出问题时通知你的方式。</p>
       <div class="block">
-        <div><h2>管理员账号</h2><p>登录管理台的超级管理员。密码设定后不能修改；以后需要别的账号可以新建管理员。</p></div>
+        <div><h2>管理员账号</h2><p>登录管理台的超级管理员，部署控制机时按这里建好。</p></div>
         <div class="fields two">
           <label class="f"><span>用户名</span><input type="text" id="admin-username" value="admin" autocomplete="off"></label>
-          <label class="f"><span>密码</span><span class="withbtn"><input type="password" id="admin-password" data-secret autocomplete="new-password"><button type="button" id="generate">随机生成</button></span><small>设定后不能修改，请记好：换电脑恢复配置时要用它解开备份。建议 12 位以上，生成后会直接显示。</small></label>
+          <label class="f"><span>密码</span><span class="withbtn"><input type="password" id="admin-password" data-secret autocomplete="new-password"><button type="button" id="generate">随机生成</button></span><small>请记好，登录管理台要用。建议 12 位以上，生成后会直接显示。</small></label>
         </div>
       </div>
       <div class="block">

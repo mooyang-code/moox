@@ -35,6 +35,34 @@ func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
 	}
 }
 
+// Collector 只采启用中的空间，靠 ListSpaces 的状态过滤；市场与时区随空间存取。
+func TestListSpacesFiltersByStatusAndKeepsMarketTimezone(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	for _, item := range []*pb.Space{
+		{SpaceId: "crypto", Name: "加密货币", Market: "crypto", Timezone: "UTC", Status: "active"},
+		{SpaceId: "stockcn", Name: "A股", Market: "cn_a_share", Timezone: "Asia/Shanghai", Status: "disabled"},
+	} {
+		if _, err := store.CreateSpace(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active, page, err := store.ListSpaces(ctx, "", "active", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].GetSpaceId() != "crypto" || page.GetTotal() != 1 {
+		t.Fatalf("active spaces = %+v total=%d", active, page.GetTotal())
+	}
+	all, _, err := store.ListSpaces(ctx, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[1].GetMarket() != "cn_a_share" || all[1].GetTimezone() != "Asia/Shanghai" {
+		t.Fatalf("all spaces = %+v", all)
+	}
+}
+
 func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)

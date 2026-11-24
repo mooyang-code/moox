@@ -19,7 +19,7 @@
 
 | 管理台 | 用途 | 命令 |
 | --- | --- | --- |
-| 系统设置 › 空间管理 | 列出、查看、新建、修改、删除 | `space list`、`space show --space-id`、`space create|update --space-id … --name …`、`space delete --space-id`（预览） |
+| 系统设置 › 空间管理 | 列出、查看、新建、修改、删除 | `space list`、`space show --space-id`、`space create|update --space-id … --name …`、`space delete --space-id`（预览；会清空该空间全部数据，执行前必须向用户说明并得到同意） |
 | 系统设置 › 密钥管理 | 看清单（值已打码） | `secret list`、`secret show --secret-id`；新建、修改请用户在管理台填写 |
 | 数据采集 › 数据源 | 数据来源 | `metadata source list|show|create|update|delete` |
 | 数据采集 › 数据对象 | 标的、标签与成员 | `metadata subject list|show|upsert|resolve`、`metadata tag list|show|upsert|delete|list-members|member-status`、`metadata tag members|clone` |

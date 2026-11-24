@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"

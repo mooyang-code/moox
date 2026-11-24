@@ -247,32 +247,6 @@ func normalizeFieldGroups(seed metadataSeed) (metadataSeed, error) {
 	return seed, nil
 }
 
-func runMetadataImport(ctx context.Context, gateway gatewayclient.Invoker, calls []metadataImportCall, ifNotExists bool) (metadataImportSummary, error) {
-	summary := metadataImportSummary{
-		Status:    "ok",
-		Service:   metadataServiceName,
-		Planned:   len(calls),
-		Resources: countMetadataCalls(calls),
-	}
-	for _, call := range calls {
-		if ifNotExists && call.Exists != nil {
-			exists, err := metadataResourceExists(ctx, gateway, call.Exists)
-			if err != nil {
-				return summary, err
-			}
-			if exists {
-				summary.Skipped++
-				continue
-			}
-		}
-		if err := postStorage(ctx, gateway, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
-			return summary, err
-		}
-		summary.Applied++
-	}
-	return summary, nil
-}
-
 // metadataApplyConcurrency 是元数据导入同时进行的调用数。
 const metadataApplyConcurrency = 16
 
@@ -385,7 +359,8 @@ func finishMetadataCall(ctx context.Context, gateway gatewayclient.Invoker, call
 		record(true)
 		return nil
 	}
-	if call.Resource != "tags" {
+	// 空间与标签在管理台可改（空间的名称、时区、停用，标签成员），已有的以管理台为准，不比对。
+	if call.Resource != "tags" && call.Resource != "spaces" {
 		if err := verifyMetadataResource(call.Resource, call.Request, actual); err != nil {
 			return err
 		}
@@ -516,8 +491,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 	}
 	var expected proto.Message
 	switch req := request.(type) {
-	case *pb.CreateSpaceReq:
-		expected = req.GetSpace()
 	case *pb.CreateDataSourceReq:
 		expected = req.GetDataSource()
 	case *pb.CreateDatasetReq:
@@ -547,10 +520,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 }
 
 func metadataContractsEqual(resource string, a, b proto.Message) bool {
-	if resource == "spaces" {
-		x, y := a.(*pb.Space), b.(*pb.Space)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetName() == y.GetName() && x.GetDescription() == y.GetDescription() && x.GetOwner() == y.GetOwner() && x.GetStatus() == y.GetStatus() && maps.Equal(x.GetAttributes(), y.GetAttributes())
-	}
 	if resource == "data_sources" {
 		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
 		return x.GetSpaceId() == y.GetSpaceId() &&
@@ -625,23 +594,6 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	return proto.Equal(a, b)
 }
 
-func metadataResourceExists(ctx context.Context, gateway gatewayclient.Invoker, probe *metadataExistsProbe) (bool, error) {
-	if err := postStorageRaw(ctx, gateway, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
-		return false, err
-	}
-	retInfo, ok := responseRetInfo(probe.Response)
-	if !ok || retInfo == nil {
-		return false, fmt.Errorf("%s/%s failed: missing ret_info", metadataServiceName, probe.Method)
-	}
-	if retInfo.GetCode() == pb.ErrorCode_SUCCESS {
-		return true, nil
-	}
-	if metadataNotFound(retInfo) {
-		return false, nil
-	}
-	return false, fmt.Errorf("%s/%s failed: %s", metadataServiceName, probe.Method, retInfo.GetMsg())
-}
-
 func countMetadataCalls(calls []metadataImportCall) map[string]int {
 	counts := make(map[string]int)
 	for _, call := range calls {
@@ -681,7 +633,7 @@ func (s seedCommon) status() string {
 }
 
 func (s seedSpace) toPB() *pb.Space {
-	return &pb.Space{SpaceId: s.SpaceID, Name: s.Name, Description: s.Description, Owner: s.Owner, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.Space{SpaceId: s.SpaceID, Name: s.Name, Description: s.Description, Owner: s.Owner, Market: s.Market, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedDataSource) toPB() *pb.DataSource {
@@ -812,17 +764,12 @@ func normalizeEnum(value string) string {
 
 func init() {
 	rootCmd.AddCommand(metadataCmd)
-	metadataCmd.AddCommand(metadataImportCmd)
 	metadataCmd.AddCommand(metadataApplyCmd)
 	metadataCmd.AddCommand(metadataSpacesCmd)
 
-	metadataImportCmd.Flags().StringVar(&metadataImportFile, "seed", "", "metadata seed YAML 文件路径")
-	metadataImportCmd.Flags().StringVar(&metadataImportManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
-	metadataImportCmd.Flags().BoolVar(&metadataImportDryRun, "dry-run", false, "只解析并输出导入计划，不发送 RPC")
-	metadataImportCmd.Flags().BoolVar(&metadataImportIfNotExists, "if-not-exists", false, "资源已存在时跳过 create 类调用")
-	metadataImportCmd.Flags().StringSliceVar(&metadataImportSpaces, "spaces", nil, "仅导入指定 Space ID 或中文名，逗号分隔")
 	metadataSpacesCmd.Flags().StringVar(&metadataSpacesFile, "seed", "", "metadata seed YAML 文件路径")
 	metadataApplyCmd.Flags().StringVar(&metadataApplyFile, "seed", "", "metadata seed YAML 文件路径")
 	metadataApplyCmd.Flags().StringVar(&metadataApplyManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	metadataApplyCmd.Flags().BoolVar(&metadataApplyDryRun, "dry-run", false, "只解析并输出应用计划，不发送 RPC")
+	metadataApplyCmd.Flags().StringSliceVar(&metadataApplySpaces, "spaces", nil, "只导入这些空间（空间 ID 或中文名，逗号分隔）；不写导入全部")
 }

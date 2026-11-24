@@ -22,7 +22,7 @@ func TestCompositeIDDoesNotCollideOnDots(t *testing.T) {
 		t.Fatal("composite metadata IDs collide")
 	}
 }
-func (stubMetadataReader) ListSpaces(context.Context, string, *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
+func (stubMetadataReader) ListSpaces(context.Context, string, string, *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	return []*pb.Space{{
 		SpaceId: "crypto",
 		Name:    "Crypto",
@@ -120,7 +120,7 @@ func TestStore_ListSpaces_ShouldFilterByOwner(t *testing.T) {
 		require.NoError(t, store.Close())
 	})
 
-	spaces, page, err := store.ListSpaces(ctx, "tester", nil)
+	spaces, page, err := store.ListSpaces(ctx, "tester", "", nil)
 	require.NoError(t, err)
 	require.Len(t, spaces, 1)
 	assert.Equal(t, "crypto", spaces[0].GetSpaceId())

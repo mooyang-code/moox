@@ -17,19 +17,6 @@ export interface PageResult {
   has_more?: boolean;
 }
 
-export interface Space {
-  space_id: string;
-  name: string;
-  description?: string;
-  owner?: string;
-  market?: string;
-  timezone?: string;
-  status: string;
-  attributes?: Record<string, string> | string;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export type DeploymentStatus = "enabled" | "disabled";
 export interface DeploymentHost {
   host_id: string;

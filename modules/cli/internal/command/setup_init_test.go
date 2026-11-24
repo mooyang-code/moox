@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"testing"
+
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"testing"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +65,7 @@ func TestSetupInitRequiresStorageHost(t *testing.T) {
 func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	bundle, err := loadSetupInitBundle(defaultSetupBundlePath())
 	require.NoError(t, err)
-	require.Len(t, bundle.Spaces, 4)
+	assert.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, bundle.SpaceIDs)
 	require.NotEmpty(t, bundle.Calls)
 	// 种子只剩 A 股财务两个数据集、没有 View：行情数据集由采集任务派生，主机快照改存 Monitor。
 	resources := map[string]int{}
@@ -71,10 +74,6 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	}
 	require.Equal(t, 2, resources["datasets"])
 	require.Zero(t, resources["views"])
-	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
-	assert.Equal(t, "stockcn", bundle.Spaces[1].SpaceID)
-	assert.Equal(t, "stockhk", bundle.Spaces[2].SpaceID)
-	assert.Equal(t, "stockus", bundle.Spaces[3].SpaceID)
 }
 
 func TestSetupInitRunsStagesInOrder(t *testing.T) {
@@ -83,16 +82,12 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	storage := &fakeSetupInitStorage{record: func(stage string) {
 		stages = append(stages, stage)
 	}}
-	spaces := []setupclient.Space{{
-		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
-		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
-	}}
 	deps := setupDeps{
 		loadInitBundle: func(string) (setupInitBundle, error) {
 			stages = append(stages, "load-bundle")
 			return setupInitBundle{
-				Spaces: spaces,
-				Calls:  make([]metadataImportCall, 3),
+				SpaceIDs: []string{"crypto"},
+				Calls:    make([]metadataImportCall, 3),
 			}, nil
 		},
 		load: func(string) (*setupSnapshot, error) {
@@ -103,15 +98,13 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 			stages = append(stages, "firewall")
 			return setupFirewallSummary{Status: "ready", Targets: 3}, nil
 		},
-		applySpaces: func(_ context.Context, _ *setupSnapshot, got []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
-			require.Equal(t, spaces, got)
-			return setupclient.ApplyResult{Action: "created", Spaces: 1, SpacesCreated: 1}, nil
+			return setupclient.ApplyResult{Action: "created", Secrets: 1}, nil
 		},
-		statusSpaces: func(_ context.Context, _ *setupSnapshot, got []setupclient.Space) (setupclient.StatusResult, error) {
+		setupStatus: func(context.Context, *setupSnapshot) (setupclient.StatusResult, error) {
 			stages = append(stages, "admin-status")
-			require.Equal(t, spaces, got)
-			return setupclient.StatusResult{State: "completed", Spaces: 1}, nil
+			return setupclient.StatusResult{State: "completed"}, nil
 		},
 		ensureNotification: func(context.Context, *setupSnapshot) (*setupNotificationSummary, error) {
 			stages = append(stages, "notification")
@@ -145,7 +138,6 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"login",
 		"storage-apply",
 		"verify",
-		"admin-status",
 	}, stages)
 	var summary map[string]any
 	require.NoError(t, json.Unmarshal(output.Bytes(), &summary))
@@ -158,7 +150,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"firewall":{"status":"ready","targets":3,"rules":0,"skipped":0,"already_open":0,"created":0},
 		"business_spaces":1,
 		"business_space_ids":["crypto"],
-		"admin":{"action":"created","users":0,"secrets":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
+		"admin":{"action":"created","users":0,"secrets":1},
 		"notification":{"status":"kept","existing":1},
 		"cloud_accounts":{"enabled":true,"planned":1,"registered":1,"unchanged":0},
 		"admin_state":"completed",
@@ -184,7 +176,7 @@ func TestSetupInitStopsAfterAdminFailure(t *testing.T) {
 			stages = append(stages, "firewall")
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
 			return setupclient.ApplyResult{}, errors.New("setup_invalid")
 		},
@@ -203,7 +195,7 @@ func TestSetupInitStopsOnPartialFirewall(t *testing.T) {
 		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "partial", Targets: 3, Skipped: 1}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			adminApplied = true
 			return setupclient.ApplyResult{}, nil
 		},
@@ -211,178 +203,6 @@ func TestSetupInitStopsOnPartialFirewall(t *testing.T) {
 	cmd.SetArgs([]string{"init", "--storage-host", "compute"})
 	require.ErrorContains(t, cmd.Execute(), "firewall_incomplete")
 	assert.False(t, adminApplied)
-}
-
-func TestSetupInitRejectsMissingMetadataDependencies(t *testing.T) {
-	err := validateSetupMetadataDependencies(metadataSeed{
-		Spaces: []seedSpace{{SpaceID: "crypto"}},
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "missing",
-		}},
-	})
-	require.ErrorContains(t, err, `undefined data_source "missing"`)
-}
-
-func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
-	base := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freq: "1h",
-		}},
-	}
-	tests := []struct {
-		name   string
-		column seedDatasetColumn
-		want   string
-	}{
-		{
-			name: "field",
-			column: seedDatasetColumn{
-				SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
-				OriginType: "field", OriginID: "missing",
-			},
-			want: `references undefined field "missing"`,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			seed := base
-			seed.DatasetColumns = []seedDatasetColumn{tc.column}
-			err := validateSetupMetadataDependencies(seed)
-			require.ErrorContains(t, err, tc.want)
-		})
-	}
-}
-
-func TestSetupInitAllowsRawDatasetFieldColumnOrigin(t *testing.T) {
-	seed := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance"}},
-		Datasets: []seedDataset{
-			{
-				SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-				DataSourceID: "binance", DataKind: "time_series", Freq: "1m",
-			},
-		},
-		Fields: []seedField{{SpaceID: "crypto", FieldID: "open"}},
-		DatasetColumns: []seedDatasetColumn{{
-			SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-			ColumnName: "open",
-			OriginType: "field", OriginID: "open",
-		}},
-	}
-	require.NoError(t, validateSetupMetadataDependencies(seed))
-
-	seed.DatasetColumns[0].OriginID = "missing"
-	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined field "missing"`)
-
-	seed.DatasetColumns[0].OriginID = "dataset_missing_source__open"
-	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `undefined field "dataset_missing_source__open"`)
-}
-
-func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testing.T) {
-	seed := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance"}},
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", DataSourceID: "binance",
-			DataKind: "time_series", Freq: "1m",
-		}},
-		DatasetColumns: []seedDatasetColumn{{
-			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", ColumnName: "bias_20",
-			OriginType: "CUSTOM", ValueType: "DOUBLE",
-		}},
-	}
-	require.NoError(t, validateSetupMetadataDependencies(seed))
-}
-
-func TestSetupInitRejectsDuplicateDatasetColumns(t *testing.T) {
-	base := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freq: "1h",
-		}},
-		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
-		DatasetColumns: []seedDatasetColumn{
-			{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
-			{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
-		},
-	}
-	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata dataset_column")
-}
-
-func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
-	base := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freq: "1h",
-		}},
-	}
-	canonical := seedView{
-		SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-		Engine:    "duckdb",
-	}
-	tests := []struct {
-		name string
-		view seedView
-		want string
-	}{
-		{
-			name: "missing primary",
-			view: func() seedView {
-				item := canonical
-				item.PrimaryDatasetID = ""
-				return item
-			}(),
-			want: "dataset_id must be explicit",
-		},
-		{
-			name: "grain keys",
-			view: func() seedView {
-				item := canonical
-				item.GrainKeys = []string{"subject_id", "data_time"}
-				return item
-			}(),
-			want: "grain_keys must be canonical",
-		},
-		{
-			name: "engine",
-			view: func() seedView {
-				item := canonical
-				item.Engine = "pebble"
-				return item
-			}(),
-			want: `engine must be "duckdb"`,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			seed := base
-			seed.Views = []seedView{tc.view}
-			require.ErrorContains(t, validateSetupMetadataDependencies(seed), tc.want)
-		})
-	}
-	seed := base
-	seed.Views = []seedView{canonical}
-	require.NoError(t, validateSetupMetadataDependencies(seed))
-
-	seed.Datasets[0].Freq = "1H"
-	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `freq "1H" is not canonical`)
-}
-
-func testCanonicalTimeSeriesView(spaceID, viewID, datasetID string) seedView {
-	return seedView{
-		SpaceID: spaceID, ViewID: viewID, PrimaryDatasetID: datasetID,
-		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-		Engine:    "duckdb",
-	}
 }
 
 func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
@@ -395,10 +215,10 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			return setupclient.ApplyResult{Action: "unchanged"}, nil
 		},
-		statusSpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error) {
+		setupStatus: func(context.Context, *setupSnapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
 		login: func(context.Context, *setupSnapshot) (setupclient.LoginResult, error) {
@@ -436,12 +256,12 @@ func TestSetupInitKeepsExistingChannelsAndSecrets(t *testing.T) {
 		ensureFirewall: func(context.Context, *setupSnapshot) (setupFirewallSummary, error) {
 			return setupFirewallSummary{Status: "ready"}, nil
 		},
-		applySpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
+		applySecrets: func(context.Context, *setupSnapshot) (setupclient.ApplyResult, error) {
 			applied++
 			return setupclient.ApplyResult{Action: "unchanged", Kept: []string{"admin", "tencent_cloud"},
 				ExchangeKeys: []setupclient.ExchangeKeyResult{{SecretID: "exchange-binance-production-main", State: setupclient.ExchangeKeyExists}}}, nil
 		},
-		statusSpaces: func(context.Context, *setupSnapshot, []setupclient.Space) (setupclient.StatusResult, error) {
+		setupStatus: func(context.Context, *setupSnapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
 		login: func(context.Context, *setupSnapshot) (setupclient.LoginResult, error) {
@@ -532,12 +352,12 @@ func TestProvisionSetupCLSReportsReadyAndNeverBlocksInit(t *testing.T) {
 
 type clsAccountSource struct{}
 
-func (clsAccountSource) ListCloudAccounts(context.Context, string) ([]adminclient.CloudAccount, error) {
-	return []adminclient.CloudAccount{{AccountID: "a", Provider: "tencent", CredentialSecretID: "s"}}, nil
+func (clsAccountSource) ListCloudAccounts(context.Context, string) ([]*collectorpb.CloudAccount, error) {
+	return []*collectorpb.CloudAccount{{AccountId: "a", Provider: "tencent", CredentialSecretId: "s"}}, nil
 }
 
-func (clsAccountSource) GetSecretValue(context.Context, string) (*adminclient.SecretMaterial, error) {
-	return &adminclient.SecretMaterial{Category: "cloud", Provider: "tencent", Status: "active", KeyID: "id", SecretValue: "key"}, nil
+func (clsAccountSource) GetSecretValue(context.Context, string) (*rpcclient.SecretMaterial, error) {
+	return &rpcclient.SecretMaterial{Category: "cloud", Provider: "tencent", Status: "active", KeyID: "id", SecretValue: "key"}, nil
 }
 
 type clsReadyAPI struct{}

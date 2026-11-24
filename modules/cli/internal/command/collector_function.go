@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/spf13/cobra"
 )
 
@@ -88,7 +88,7 @@ func init() {
 }
 
 // openCollectorFunctionClient 校验空间并打开网关；返回的 close 必须调用。
-func openCollectorFunctionClient(ctx context.Context, flags collectorFunctionFlags) (*adminclient.Client, func() error, error) {
+func openCollectorFunctionClient(ctx context.Context, flags collectorFunctionFlags) (*rpcclient.Client, func() error, error) {
 	spaceID := strings.ToLower(strings.TrimSpace(flags.SpaceID))
 	if spaceID == "" {
 		return nil, nil, errors.New("--space-id is required")
@@ -97,32 +97,32 @@ func openCollectorFunctionClient(ctx context.Context, flags collectorFunctionFla
 	if err != nil {
 		return nil, nil, err
 	}
-	return &adminclient.Client{Gateway: gateway, SpaceID: spaceID}, gateway.Close, nil
+	return &rpcclient.Client{Gateway: gateway, SpaceID: spaceID}, gateway.Close, nil
 }
 
 type collectorFunctionListView struct {
-	SpaceID    string                      `json:"space_id"`
-	Total      int                         `json:"total"`
-	DriftCount int                         `json:"drift_count"`
-	Functions  []adminclient.CloudFunction `json:"functions"`
-	Unplanned  []unplannedFunctionView     `json:"unplanned"`
-	Note       string                      `json:"note,omitempty"`
+	SpaceID    string                    `json:"space_id"`
+	Total      int                       `json:"total"`
+	DriftCount int                       `json:"drift_count"`
+	Functions  []rpcclient.CloudFunction `json:"functions"`
+	Unplanned  []unplannedFunctionView   `json:"unplanned"`
+	Note       string                    `json:"note,omitempty"`
 }
 
 // unplannedFunctionView 是计划外的一个函数，带上只删它自己的命令（限定命名空间与地域，不碰在用的同名函数）。
 type unplannedFunctionView struct {
-	adminclient.CloudFunction
+	rpcclient.CloudFunction
 	DeleteCommand string `json:"delete_command"`
 }
 
 // unplannedDeleteCommand 是只删一个函数的命令：同名函数在别的命名空间里可能正在用，所以一定带上命名空间与地域。
-func unplannedDeleteCommand(spaceID string, function adminclient.CloudFunction) string {
+func unplannedDeleteCommand(spaceID string, function rpcclient.CloudFunction) string {
 	return fmt.Sprintf("moox-cli collector function delete --space-id %s --name %s --namespace %s --region %s", spaceID, function.Name, function.Namespace, function.Region)
 }
 
 // buildCollectorFunctionList 把读回分成计划内与计划外两组；drift 为 true 时计划内只留不一致的。
-func buildCollectorFunctionList(spaceID string, functions []adminclient.CloudFunction, drift bool) collectorFunctionListView {
-	view := collectorFunctionListView{SpaceID: spaceID, Total: len(functions), Functions: []adminclient.CloudFunction{}, Unplanned: []unplannedFunctionView{}}
+func buildCollectorFunctionList(spaceID string, functions []rpcclient.CloudFunction, drift bool) collectorFunctionListView {
+	view := collectorFunctionListView{SpaceID: spaceID, Total: len(functions), Functions: []rpcclient.CloudFunction{}, Unplanned: []unplannedFunctionView{}}
 	for _, function := range functions {
 		if function.Drifted() {
 			view.DriftCount++
@@ -170,14 +170,14 @@ func runCollectorFunctionDelete(cmd *cobra.Command, flags collectorFunctionFlags
 		return err
 	}
 	defer closeGateway()
-	request := adminclient.DeleteCloudFunctionsRequest{Names: names, Prefix: prefix, Namespace: strings.TrimSpace(flags.Namespace), Region: strings.ToLower(strings.TrimSpace(flags.Region))}
+	request := rpcclient.DeleteCloudFunctionsRequest{Names: names, Prefix: prefix, Namespace: strings.TrimSpace(flags.Namespace), Region: strings.ToLower(strings.TrimSpace(flags.Region))}
 	if !flags.Yes {
 		request.DryRun = true
 		preview, err := client.DeleteCloudFunctions(ctx, request)
 		if err != nil {
 			return err
 		}
-		targets, refused := []adminclient.CloudFunctionDeletion{}, []adminclient.CloudFunctionDeletion{}
+		targets, refused := []rpcclient.CloudFunctionDeletion{}, []rpcclient.CloudFunctionDeletion{}
 		for _, item := range preview {
 			if item.Error != "" {
 				refused = append(refused, item)
@@ -218,14 +218,14 @@ func runCollectorFunctionDelete(cmd *cobra.Command, flags collectorFunctionFlags
 }
 
 type collectorProbeReport struct {
-	SpaceID             string                       `json:"space_id"`
-	Results             []adminclient.FunctionEgress `json:"results"`
-	DistinctOutboundIPs []string                     `json:"distinct_outbound_ips"`
-	DistinctCount       int                          `json:"distinct_count"`
-	FailedCount         int                          `json:"failed_count"`
+	SpaceID             string                     `json:"space_id"`
+	Results             []rpcclient.FunctionEgress `json:"results"`
+	DistinctOutboundIPs []string                   `json:"distinct_outbound_ips"`
+	DistinctCount       int                        `json:"distinct_count"`
+	FailedCount         int                        `json:"failed_count"`
 }
 
-func buildCollectorProbeReport(spaceID string, probes []adminclient.FunctionEgress) collectorProbeReport {
+func buildCollectorProbeReport(spaceID string, probes []rpcclient.FunctionEgress) collectorProbeReport {
 	report := collectorProbeReport{SpaceID: spaceID, Results: probes, DistinctOutboundIPs: []string{}}
 	seen := map[string]bool{}
 	for _, probe := range probes {
