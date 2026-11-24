@@ -28,7 +28,7 @@ func CanonicalInstrumentID(
 }
 
 // ErrInvalidInstrumentID 表示上游传入的标的 ID 无法识别，或与账户市场不一致。
-var ErrInvalidInstrumentID = errors.New("trade Exchange: invalid instrument ID")
+var ErrInvalidInstrumentID = errors.New("标的 ID 不合法")
 
 // NormalizeInstrumentID 把上游传入的标的 ID 标准化成 Trade 内部 ID。
 // 采集和策略用不带市场后缀的 BTC-USDT，Trade 内部用 BTC-USDT-SPOT、BTC-USDT-SWAP。

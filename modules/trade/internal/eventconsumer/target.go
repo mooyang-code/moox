@@ -139,7 +139,7 @@ func admitTarget(
 	if err := store.CheckClosedTargetSession(account, request.GetSessionStartedAt()); err != nil {
 		return admittedTarget{}, sessionRejection(err), true
 	}
-	// 影子目标只做上面三步，不与正式目标行比较（3.6）。会话先后在回执检查之前判断，同一会话的 bar 先后在回执检查之后（acceptTarget）。
+	// 影子目标只做上面三步，不与正式目标行比较（3.6）。会话先后在历史查重之前判断，同一会话的 bar 先后在历史查重之后（acceptTarget）。
 	if !request.GetShadow() {
 		current, currentErr := opts.Store.GetCurrentTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId())
 		switch {
@@ -151,7 +151,7 @@ func admitTarget(
 			return admittedTarget{}, retryTarget(currentErr), true
 		}
 	}
-	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
+	// 上游标的 ID 不带市场后缀，目标历史和目标只保存标准化后的 Trade 内部 ID。
 	tradable, err := opts.Store.LogicalAccountMarkets(ctx, message.GetSpaceId(), account.LogicalAccountID)
 	if err != nil {
 		return admittedTarget{}, retryTarget(err), true
@@ -189,7 +189,7 @@ func sessionRejection(err error) jetstream.HandlerResult {
 	return targetRejection("authorization_conflict", err)
 }
 
-// acceptTarget 把已通过校验的真实目标换算成数量快照，在账户锁内连同回执一起落库，成功后唤醒执行器。
+// acceptTarget 把已通过校验的真实目标换算成数量快照，在账户锁内连同目标历史一起落库，成功后唤醒执行器。
 func acceptTarget(
 	ctx context.Context,
 	delivery *jetstream.Delivery,
@@ -201,9 +201,9 @@ func acceptTarget(
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
-	if existing, lookupErr := opts.Store.GetTargetReceipt(ctx, message.GetSpaceId(), request.GetTargetId()); lookupErr == nil {
+	if existing, lookupErr := opts.Store.GetAcceptedTargetHistory(ctx, message.GetSpaceId(), request.GetTargetId()); lookupErr == nil {
 		if existing.RequestHash != requestHash {
-			return targetRejection("receipt_conflict", fmt.Errorf("%w: 同一目标的回执请求哈希冲突", store.ErrConflict))
+			return targetRejection("receipt_conflict", fmt.Errorf("%w: 同一目标的历史请求哈希冲突", store.ErrConflict))
 		}
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -225,8 +225,8 @@ func acceptTarget(
 		return retryTarget(currentErr)
 	}
 	// Membership and account snapshots must remain stable from the resolver's
-	// exchange selection through receipt acceptance. Otherwise a concurrent member
-	// removal can leave an immutable receipt pointing at an exchange that no longer
+	// exchange selection through history acceptance. Otherwise a concurrent member
+	// removal can leave an immutable history row pointing at an exchange that no longer
 	// belongs to the logical account.
 	// 拿锁阶段也受处理预算约束：完整同步等长时间持锁的操作不能让串行消费的目标消息一直卡在这里。
 	// 超时按可重试处理，只延后这一条；消费者并发处理（见 targetBatchSize），其他组合的消息照常处理。
@@ -281,11 +281,11 @@ func acceptTarget(
 	if marshalErr != nil {
 		return retryTarget(marshalErr)
 	}
-	receipt := store.TargetReceiptRecord{
-		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), BarEndTime: record.BarEndTime, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), AcceptedAt: now.UnixMilli(),
+	history := store.TargetHistoryRecord{
+		SpaceID: message.GetSpaceId(), TargetID: request.GetTargetId(), InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(), StrategyID: request.GetStrategyId(), LogicalAccountID: request.GetLogicalAccountId(), BarEndTime: record.BarEndTime, ValidUntil: record.ValidUntil, RequestHash: requestHash, SignalTime: conversion.SignalTime, WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime, ReferencePricesJSON: string(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets), RecordedAt: now.UnixMilli(),
 	}
 	var accepted bool
-	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)
+	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithHistoryLocked(ctx, record, history)
 	if err != nil {
 		// 入口检查之后、拿到组合锁之前会话被关闭、来了更晚会话的目标或组合改成人工控制：落库时按同样的规则分类。
 		if errors.Is(err, store.ErrTargetSuperseded) || errors.Is(err, store.ErrTargetSessionConflict) || errors.Is(err, store.ErrTargetAuthorization) {
@@ -350,7 +350,12 @@ func handleShadowTarget(
 	if err != nil {
 		return conversionFailure(delivery, accountName, "试运行目标换算失败：", err, now)
 	}
-	_, err = opts.Store.RecordShadowTarget(ctx, store.ShadowTargetRecord{
+	requestHash, err := targetapp.RequestHash(request)
+	if err != nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
+	_, err = opts.Store.RecordShadowTarget(ctx, store.TargetHistoryRecord{
+		RequestHash: requestHash, SignalTime: conversion.SignalTime,
 		SpaceID: spaceID, TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
 		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(), StrategyID: request.GetStrategyId(),
 		BarEndTime: request.GetBarEndTime().AsTime().UTC().UnixMilli(), ValidUntil: request.GetValidUntil().AsTime().UTC().UnixMilli(),
@@ -367,8 +372,8 @@ func handleShadowTarget(
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
-// referencePriceByInstrument 整理回执里的参考价：按 instrument_id 为键的对象，有完整报价证据时值就是证据，
-// 没有时用换算给出的价格兜底，保持回执列的 JSON 形状稳定。
+// referencePriceByInstrument 整理目标历史里的参考价：按 instrument_id 为键的对象，有完整报价证据时值就是证据，
+// 没有时用换算给出的价格兜底，保持这一列的 JSON 形状稳定。
 func referencePriceByInstrument(conversion targetapp.WeightConversion) map[string]targetapp.ReferencePriceEvidence {
 	result := make(map[string]targetapp.ReferencePriceEvidence, len(conversion.ReferencePriceEvidence))
 	for _, evidence := range conversion.ReferencePriceEvidence {

@@ -267,7 +267,7 @@ func validatePB(value validatable) error {
 }
 
 func invalidInfo(err error) *tradepb.RetInfo {
-	return retInfo(tradepb.ErrorCode_INVALID_PARAM, err.Error())
+	return retInfo(tradepb.ErrorCode_INVALID_PARAM, userFacingMessage(err))
 }
 
 func invalidOrErrorInfo(err error) *tradepb.RetInfo {

@@ -29,6 +29,13 @@ func (f delistedFacts) ListFills(_ context.Context, _ string, query store.FillQu
 	return nil, 0, nil
 }
 
+func (f delistedFacts) GetInstrumentSummary(_ context.Context, _, _ string, key exchange.SymbolKey) (store.InstrumentSummaryRecord, bool, error) {
+	if key.Symbol == "HALTUSDT" && f.haltFill != "" {
+		return store.InstrumentSummaryRecord{LastPrice: shared.MustDecimal(f.haltFill)}, true, nil
+	}
+	return store.InstrumentSummaryRecord{}, false, nil
+}
+
 func (f delistedFacts) LoadBlockedSet(context.Context) (store.BlockedSet, error) {
 	return store.NewBlockedSet(f.blocked), nil
 }

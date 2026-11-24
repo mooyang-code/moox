@@ -150,8 +150,8 @@ func TestConflictHidesSQLiteConstraintText(t *testing.T) {
 	}
 
 	stale := fmt.Errorf("%w: stale order version", store.ErrConflict)
-	if info := errorInfo(stale); info.GetCode() != tradepb.ErrorCode_CONFLICT || info.GetMsg() != stale.Error() {
-		t.Fatalf("版本冲突：info = %+v", info)
+	if info := errorInfo(stale); info.GetCode() != tradepb.ErrorCode_CONFLICT || info.GetMsg() != "数据已经被修改，刷新后再试" {
+		t.Fatalf("版本冲突只回中文说明，英文内部原因只写日志：info = %+v", info)
 	}
 	if len(capture.errors) != 0 {
 		t.Fatalf("冲突不算内部错误，不该写错误日志：%v", capture.errors)

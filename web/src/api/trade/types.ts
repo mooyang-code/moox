@@ -86,7 +86,7 @@ export interface PaperConfig {
   maker_fee_rate: string;
   taker_fee_rate: string;
   slippage_bps: string;
-  /** 已结束订单与成交保留的天数，0 表示不清理；只有纯永续模拟账户（没开现货、股票）会被清理 */
+  /** 已结束订单与成交保留的天数，0 表示不清理；所有模拟账户都按它清理 */
   order_retention_days?: number;
 }
 
@@ -442,7 +442,7 @@ export interface CreatePaperSimulationReq {
   logical_account_id?: string;
   /** 加入已有组合时的优先级；不填排在现有成员之后 */
   priority?: number;
-  /** 订单保留天数（0～365，0 表示不清理），不传取 5；只有纯永续模拟账户会被清理 */
+  /** 订单保留天数（0～365，0 表示不清理），不传取 5；所有模拟账户都按它清理 */
   order_retention_days?: number;
 }
 
@@ -571,8 +571,8 @@ export interface SummarizeAccountPnlRsp {
   funding_from?: string;
 }
 
-/** 操作类型：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN */
-export type OperatorActionType = "MANUAL_ORDER" | "SUBMIT_ORDER" | "CANCEL_ORDER" | "FLATTEN" | "REDUCE" | "DELIST_FLATTEN";
+/** 操作类型：MANUAL_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN */
+export type OperatorActionType = "MANUAL_ORDER" | "CANCEL_ORDER" | "FLATTEN" | "REDUCE" | "DELIST_FLATTEN";
 
 export interface ListOperatorActionsReq {
   logical_account_id: string;

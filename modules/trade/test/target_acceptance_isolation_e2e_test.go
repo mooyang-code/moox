@@ -107,7 +107,7 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 	current, err := f.store.GetLogicalAccountTarget(ctx, testSpace, "logical-other")
 	require.NoError(t, err)
 	require.Equal(t, "other-target", current.TargetID)
-	_, err = f.store.GetTargetReceipt(ctx, testSpace, "other-target")
+	_, err = f.store.GetAcceptedTargetHistory(ctx, testSpace, "other-target")
 	require.NoError(t, err, "ACK must follow durable receipt and target acceptance")
 }
 

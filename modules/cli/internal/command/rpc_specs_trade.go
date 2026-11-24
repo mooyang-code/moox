@@ -55,7 +55,7 @@ func init() {
 		rpcSpec{Path: []string{"trade", "action"}, Short: "查看一次操作的执行结果", Service: tradeConsole, Method: "GetOperatorAction",
 			Flags: []rpcFlag{reqFlag("action-id", "action_id", "操作 ID")}},
 		rpcSpec{Path: []string{"trade", "actions"}, Short: "列出组合的人工操作记录（人工单、撤单、清仓、减仓、下架清仓）", Service: tradeConsole, Method: "ListOperatorActions", Page: rpcPageSize,
-			Flags: []rpcFlag{reqFlag("logical-account-id", "logical_account_id", "逻辑账户 ID"), strFlag("action-type", "action_type", "按动作类型过滤：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN"),
+			Flags: []rpcFlag{reqFlag("logical-account-id", "logical_account_id", "逻辑账户 ID"), strFlag("action-type", "action_type", "按动作类型过滤：MANUAL_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN"),
 				intFlag("start-time", "start_time", "起点（毫秒时间戳）"), intFlag("end-time", "end_time", "终点（毫秒时间戳）")}},
 		rpcSpec{Path: []string{"trade", "pnl"}, Short: "收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断）", Service: tradeConsole, Method: "SummarizeAccountPnl",
 			Flags: []rpcFlag{strFlag("logical-account-id", "logical_account_id", "逻辑账户 ID（与 --account-id 二选一）"), strFlag("account-id", "trading_account_id", "交易账户 ID（与 --logical-account-id 二选一）"),

@@ -798,8 +798,8 @@ type PaperConfig struct {
 	MakerFeeRate   string `protobuf:"bytes,2,opt,name=maker_fee_rate,json=makerFeeRate,proto3" json:"maker_fee_rate,omitempty"`
 	TakerFeeRate   string `protobuf:"bytes,3,opt,name=taker_fee_rate,json=takerFeeRate,proto3" json:"taker_fee_rate,omitempty"`
 	SlippageBps    string `protobuf:"bytes,4,opt,name=slippage_bps,json=slippageBps,proto3" json:"slippage_bps,omitempty"`
-	// 已结束订单与成交保留的天数：0 表示不清理，1～365 天，默认 5。所有模拟账户都能设置，
-	// 但只有纯合约模拟账户（没开通现货、股票）会被清理；收益拆解的手续费、已实现盈亏和笔数另有小时汇总，不受清理影响。
+	// 已结束订单与成交保留的天数：0 表示不清理，1～365 天，默认 5。所有模拟账户都按它清理；
+	// 收益拆解的手续费、已实现盈亏和笔数另有小时汇总，不受清理影响。
 	OrderRetentionDays *int32 `protobuf:"varint,5,opt,name=order_retention_days,json=orderRetentionDays,proto3,oneof" json:"order_retention_days,omitempty"`
 }
 
@@ -2887,7 +2887,7 @@ type UpdateTradingAccountReq struct {
 	MarginMode         string `protobuf:"bytes,5,opt,name=margin_mode,json=marginMode,proto3" json:"margin_mode,omitempty"`
 	Status             string `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
 	// 模拟账户的订单保留天数：0 表示不清理，1～365 天；不传表示不改。只有模拟账户能改（创建后唯一能改的模拟配置），
-	// 实盘账户传了会被拒绝；只有纯合约模拟账户会被清理（见 PaperConfig）。
+	// 实盘账户传了会被拒绝；所有模拟账户都按它清理（见 PaperConfig）。
 	OrderRetentionDays *int32 `protobuf:"varint,7,opt,name=order_retention_days,json=orderRetentionDays,proto3,oneof" json:"order_retention_days,omitempty"`
 }
 
@@ -7194,7 +7194,7 @@ type CreatePaperSimulationReq struct {
 	LogicalAccountId string `protobuf:"bytes,12,opt,name=logical_account_id,json=logicalAccountId,proto3" json:"logical_account_id,omitempty"`
 	// 加入已有组合时的优先级；不填就排在现有成员之后。
 	Priority int32 `protobuf:"varint,13,opt,name=priority,proto3" json:"priority,omitempty"`
-	// 订单保留天数：0 表示不清理，1～365 天，不传取 5。只有纯合约模拟账户会被清理（见 PaperConfig）。
+	// 订单保留天数：0 表示不清理，1～365 天，不传取 5。所有模拟账户都按它清理（见 PaperConfig）。
 	OrderRetentionDays *int32 `protobuf:"varint,14,opt,name=order_retention_days,json=orderRetentionDays,proto3,oneof" json:"order_retention_days,omitempty"`
 }
 
@@ -9809,7 +9809,7 @@ type ListOperatorActionsReq struct {
 	unknownFields protoimpl.UnknownFields
 
 	LogicalAccountId string `protobuf:"bytes,1,opt,name=logical_account_id,json=logicalAccountId,proto3" json:"logical_account_id,omitempty"`
-	// 按动作类型过滤：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
+	// 按动作类型过滤：MANUAL_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
 	ActionType string         `protobuf:"bytes,2,opt,name=action_type,json=actionType,proto3" json:"action_type,omitempty"`
 	StartTime  int64          `protobuf:"varint,3,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
 	EndTime    int64          `protobuf:"varint,4,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`

@@ -1150,6 +1150,7 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		Side             string  `gorm:"column:c_side"`
 		PositionSide     string  `gorm:"column:c_position_side"`
 		LogicalAccountID *string `gorm:"column:c_logical_account_id"`
+		OwnerType        string  `gorm:"column:c_owner_type"`
 	}
 	result := tx.db.Raw(queryOrderIdentity, record.SpaceID, record.OrderID).Scan(&orderIdentity)
 	if result.Error != nil {
@@ -1222,6 +1223,9 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		return false, conflict
 	}
 	if err := tx.applyPaperFill(record); err != nil {
+		return false, err
+	}
+	if err := tx.applyInstrumentSummary(record, orderIdentity.OwnerType); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1313,18 +1317,6 @@ func (s *Store) ListFills(ctx context.Context, spaceID string, query FillQuery) 
 		return nil, 0, err
 	}
 	return fillRecordsFromRows(rows), total, nil
-}
-
-// ListSymbolFillsAscending 一次读出账户某个标的的全部成交，按成交时间升序；不数总数、不分页，
-// 给持币均价这类必须读全量的计算用（分页查询每页先 COUNT 再 OFFSET，读全量时耗时随成交数平方增长）。
-// 只有管理台的持币查询用，经只读视图调用。
-func (s *Store) ListSymbolFillsAscending(ctx context.Context, spaceID, tradingAccountID string, key exchange.SymbolKey) ([]FillRecord, error) {
-	var rows []fillRow
-	if err := s.db.WithContext(ctx).Raw(querySymbolFillsAscending, spaceID, tradingAccountID, string(key.Market), key.Symbol).
-		Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	return fillRecordsFromRows(rows), nil
 }
 
 func fillRecordsFromRows(rows []fillRow) []FillRecord {
@@ -1951,7 +1943,7 @@ const (
 	execUpdatePendingOrderReference = `UPDATE t_trade_orders SET c_reference_price = ?, c_reference_price_at = ?, c_paper_execution_price = ?
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'PENDING' AND c_submitted_at = 0`
 	queryOrderIdentity = `SELECT c_trading_account_id, c_exchange_order_id, c_exchange, c_market_type,
-			c_instrument_id, c_exchange_symbol, c_side, c_position_side, c_logical_account_id
+			c_instrument_id, c_exchange_symbol, c_side, c_position_side, c_logical_account_id, c_owner_type
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_order_id = ?`
 	execInsertOrderFill = `INSERT INTO t_order_fills (
@@ -1975,12 +1967,6 @@ const (
 		FROM t_order_fills
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_exchange_trade_id = ?`
-	// 账户某个标的的全部成交，按时间升序；同一毫秒按成交号倒序，与原先按时间倒序分页读出、再按时间稳定排序的次序一致。
-	// c_traded_at 前面的 + 让查询按（账户，市场，代码）走成交的唯一键、只读这个标的的成交再排序，
-	// 不走只按（空间，账户）定位的 idx_order_fills_paper_balance_history（会扫账户全部成交）。
-	querySymbolFillsAscending = `SELECT * FROM t_order_fills
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
-		ORDER BY +c_traded_at, c_fill_id DESC`
 	queryAccountIdentity = `SELECT c_exchange, c_markets, c_live_environment AS c_environment, c_execution_mode
 		FROM t_trading_accounts
 		WHERE c_space_id = ? AND c_trading_account_id = ?`

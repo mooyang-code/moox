@@ -426,21 +426,16 @@ func degradeReason(err error) string {
 	return err.Error()
 }
 
-// latestFillPrice 取这个标的在本账户最近一笔成交的价格。
-func latestFillPrice(ctx context.Context, fills interface {
-	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
+// latestFillPrice 取这个标的在本账户最近一笔成交的价格（标的汇总里记的，订单与成交清理后仍在）。
+func latestFillPrice(ctx context.Context, summaries interface {
+	GetInstrumentSummary(context.Context, string, string, exchange.SymbolKey) (store.InstrumentSummaryRecord, bool, error)
 }, account store.TradingAccountRecord, instrument store.InstrumentRecord) (shared.Decimal, bool, error) {
-	records, _, err := fills.ListFills(ctx, account.SpaceID, store.FillQuery{
-		TradingAccountID: account.TradingAccountID, Market: instrument.MarketType, ExchangeSymbol: instrument.ExchangeSymbol, Limit: 1,
-	})
-	if err != nil || len(records) == 0 {
+	summary, found, err := summaries.GetInstrumentSummary(ctx, account.SpaceID, account.TradingAccountID,
+		exchange.NewSymbolKey(exchange.MarketType(instrument.MarketType), instrument.ExchangeSymbol))
+	if err != nil || !found || summary.LastPrice.IsZero() {
 		return shared.Zero(), false, err
 	}
-	price, err := shared.ParseDecimal(records[0].Price)
-	if err != nil {
-		return shared.Zero(), false, nil
-	}
-	return price, true, nil
+	return summary.LastPrice, true, nil
 }
 
 // stablecoinPrice 返回稳定币折成结算币的价格：取它对结算币的现货标的参考价；

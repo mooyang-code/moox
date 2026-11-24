@@ -378,7 +378,6 @@ export const actionStateLabels: Record<string, string> = {
 /** 人工操作的类型名：操作记录、页头进度条都用这一张表，同一个动作处处叫法一致。 */
 export const operatorActionTypeLabels: Record<OperatorActionType, string> = {
   MANUAL_ORDER: "人工下单",
-  SUBMIT_ORDER: "提交订单",
   CANCEL_ORDER: "撤单",
   FLATTEN: "整组清仓",
   REDUCE: "按比例减仓",

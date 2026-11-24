@@ -48,7 +48,7 @@ func (s *ConsoleServer) ListShadowTargets(
 }
 
 // shadowTargetToPB 把一条影子目标记录转成响应：权重、参考价、换算出的数量在库里是 JSON，按写入时的形状解开。
-func shadowTargetToPB(record store.ShadowTargetRecord) (*tradepb.ShadowTarget, error) {
+func shadowTargetToPB(record store.TargetHistoryRecord) (*tradepb.ShadowTarget, error) {
 	var weights []struct {
 		InstrumentID string `json:"instrument_id"`
 		TargetWeight string `json:"target_weight"`

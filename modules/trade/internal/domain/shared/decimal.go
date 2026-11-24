@@ -9,7 +9,7 @@ import (
 
 var decimalPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
-var ErrInvalidDecimal = errors.New("trade: invalid decimal")
+var ErrInvalidDecimal = errors.New("数值格式不合法")
 
 // Decimal is an exact base-10 value. Its zero value is numeric zero.
 type Decimal struct{ v *big.Rat }

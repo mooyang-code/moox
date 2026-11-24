@@ -86,7 +86,7 @@ func (a Account) Validate() error {
 	if blank(a.SpaceID) || blank(a.ID) || blank(a.Name) ||
 		!a.ExecutionMode.Valid() ||
 		blank(a.SettlementAsset) {
-		return fmt.Errorf("%w: missing or unsupported required field", ErrInvalidAccount)
+		return fmt.Errorf("%w: 缺少必填字段或取值不受支持", ErrInvalidAccount)
 	}
 	switch a.AutomationState {
 	case AutomationActive:

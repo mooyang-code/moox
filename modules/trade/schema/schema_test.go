@@ -34,14 +34,14 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_operator_actions",
 		"t_order_fills",
 		"t_order_fill_hourly_summaries",
+		"t_account_instrument_summaries",
 		"t_trade_orders",
 		"t_paper_account_configs",
-		"t_shadow_targets",
 		"t_paper_asset_balances",
 		"t_paper_funding_fees",
 		"t_account_equity_points",
 		"t_logical_account_equity_points",
-		"t_logical_account_target_receipts",
+		"t_logical_account_target_history",
 		"t_trade_wallet_transfers",
 		"t_trade_blocked_instruments",
 	}
@@ -54,9 +54,8 @@ func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
 		"account.sql": accountSQL, "instrument.sql": instrumentSQL,
 		"logical_account.sql": logicalAccountSQL, "paper_account_config.sql": paperAccountConfigSQL,
 		"paper_balance.sql": paperBalanceSQL, "paper_funding.sql": paperFundingSQL, "equity.sql": equitySQL,
-		"target_receipt.sql": targetReceiptSQL, "execution.sql": executionSQL,
+		"target_history.sql": targetHistorySQL, "execution.sql": executionSQL,
 		"wallet_transfer.sql": walletTransferSQL, "blocked_instrument.sql": blockedInstrumentSQL,
-		"shadow_target.sql": shadowTargetSQL,
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

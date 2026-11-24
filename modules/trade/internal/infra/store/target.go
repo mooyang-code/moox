@@ -56,9 +56,9 @@ type LogicalAccountTargetRecord struct {
 var (
 	// ErrTargetExpired is returned before any quote/equity or receipt fast path
 	// can accept a target whose validity window has elapsed.
-	ErrTargetExpired = errors.New("trade store: target expired")
+	ErrTargetExpired = errors.New("交易目标已过有效期")
 	// ErrTargetAuthorization 是组合不是策略控制的（人工控制），不接受策略目标。
-	ErrTargetAuthorization = errors.New("trade store: target authorization mismatch")
+	ErrTargetAuthorization = errors.New("交易目标与组合的控制方式或会话不符")
 	// ErrTargetSuperseded 是目标所属的会话已关闭（开始时刻不大于组合的 c_closed_through），
 	// 或组合上已是开始时刻更晚的会话的目标：旧会话的目标，按被取代结束。
 	ErrTargetSuperseded = fmt.Errorf("%w: target session closed or superseded", ErrConflict)

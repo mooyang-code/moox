@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +40,7 @@ func spotMemberFixture(t *testing.T, btc string) (*Service, *store.Store) {
 			return err
 		}
 		// 有成交的人工单让 BTC 成为受管资产。
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "manual-btc", TradingAccountID: "account-s", ClientOrderID: "manual-btc",
 			MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "0.01", FilledQuantity: "0.01", ReferencePrice: "50000", ReferencePriceAt: 1_000,
@@ -98,7 +99,7 @@ func TestDisableMemberRejectsManagedHoldingOrOpenOrder(t *testing.T) {
 
 	service, tradeStore = spotMemberFixture(t, "0")
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "external-open", TradingAccountID: "account-s", ClientOrderID: "external-open",
 			ExchangeOrderID: "42", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", OrderType: "LIMIT", Side: "BUY",
 			Quantity: "0.01", LimitPrice: stringPointer("40000"), ReferencePrice: "40000", ReferencePriceAt: 1_000,

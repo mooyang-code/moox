@@ -307,11 +307,11 @@ func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.Logica
 		return false, nil
 	}
 
-	receipts, err := w.Store.ListTargetReceiptsSince(ctx, logical.SpaceID, logical.LogicalAccountID, since)
+	targets, err := w.Store.ListAcceptedTargetHistorySince(ctx, logical.SpaceID, logical.LogicalAccountID, since)
 	if err != nil {
 		return false, err
 	}
-	required, err := requiredTurnover(receipts, since)
+	required, err := requiredTurnover(targets, since)
 	if err != nil {
 		return false, err
 	}
@@ -319,35 +319,35 @@ func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.Logica
 }
 
 // requiredTurnover 累加相邻目标之间的数量变化额。保持（Hold）的标的沿用上一个已知数量。
-func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float64, error) {
+func requiredTurnover(targets []store.TargetHistoryRecord, since int64) (float64, error) {
 	previous := map[string]float64{}
 	lastPrice := map[string]float64{}
 	required := 0.0
 	// 窗口前的基准和窗口内第一张相隔超过两个目标有效期（策略停过），持仓不再等于基准，改为从空仓算起。
-	if len(receipts) > 1 && receipts[0].AcceptedAt <= since {
-		interval := receipts[1].ValidUntil - receipts[1].BarEndTime
-		if interval > 0 && receipts[1].AcceptedAt-receipts[0].AcceptedAt > 2*interval {
-			receipts = receipts[1:]
+	if len(targets) > 1 && targets[0].RecordedAt <= since {
+		interval := targets[1].ValidUntil - targets[1].BarEndTime
+		if interval > 0 && targets[1].RecordedAt-targets[0].RecordedAt > 2*interval {
+			targets = targets[1:]
 		}
 	}
-	for index, receipt := range receipts {
-		var targets []store.InstrumentTarget
-		if err := json.Unmarshal([]byte(receipt.QuantityTargetsJSON), &targets); err != nil {
+	for index, entry := range targets {
+		var quantities []store.InstrumentTarget
+		if err := json.Unmarshal([]byte(entry.QuantityTargetsJSON), &quantities); err != nil {
 			return 0, err
 		}
-		// 回执的参考价按标的存证据对象（targetapp.ReferencePriceEvidence），这里只取价格。
+		// 目标历史的参考价按标的存证据对象（targetapp.ReferencePriceEvidence），这里只取价格。
 		var prices map[string]struct {
 			Price string `json:"price"`
 		}
-		if err := json.Unmarshal([]byte(receipt.ReferencePricesJSON), &prices); err != nil {
+		if err := json.Unmarshal([]byte(entry.ReferencePricesJSON), &prices); err != nil {
 			return 0, err
 		}
-		current := make(map[string]float64, len(targets))
+		current := make(map[string]float64, len(quantities))
 		for instrumentID, quantity := range previous {
 			current[instrumentID] = quantity
 		}
-		listed := make(map[string]bool, len(targets))
-		for _, target := range targets {
+		listed := make(map[string]bool, len(quantities))
+		for _, target := range quantities {
 			listed[target.InstrumentID] = true
 			if target.Hold {
 				continue
@@ -370,7 +370,7 @@ func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float6
 			}
 		}
 		// 窗口前的那条只作基准，不计入。清掉的标的这次没有参考价，沿用最近一次的。
-		if !(index == 0 && receipt.AcceptedAt <= since) {
+		if !(index == 0 && entry.RecordedAt <= since) {
 			for instrumentID, quantity := range current {
 				required += math.Abs(quantity-previous[instrumentID]) * lastPrice[instrumentID]
 			}

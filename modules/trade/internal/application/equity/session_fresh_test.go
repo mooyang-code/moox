@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,7 +69,7 @@ func seedStockAccount(t *testing.T, lastSync time.Time) *store.Store {
 		}); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "stock-1", OrderID: "bought", ClientOrderID: "bought",
 			Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 			OrderType: "MARKET", Side: "BUY", Quantity: "100", FilledQuantity: "100", ReferencePrice: "1450", State: "FILLED",

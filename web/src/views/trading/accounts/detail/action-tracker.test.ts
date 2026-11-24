@@ -44,7 +44,7 @@ describe("操作跟踪", () => {
   it("下一轮操作查到了、订单还没返回时，错误保持到订单也查成功才清除", async () => {
     const { tracker, wrapper } = setup();
     mocks.getOperatorAction.mockResolvedValue({
-      action: { ...running.action, action_type: "SUBMIT_ORDER", result_json: '{"order_id":"o1"}' }
+      action: { ...running.action, action_type: "MANUAL_ORDER", result_json: '{"order_id":"o1"}' }
     });
     let resolveOrder!: (value: unknown) => void;
     mocks.getOrder

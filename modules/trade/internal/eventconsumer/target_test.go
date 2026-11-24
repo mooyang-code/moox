@@ -65,7 +65,7 @@ func TestHandleTargetDirectedWakeOnlyAfterNewAcceptance(t *testing.T) {
 	opts.WakeTarget = func(space, logical string) {
 		record, err := tradeStore.GetLogicalAccountTarget(context.Background(), space, logical)
 		require.NoError(t, err)
-		_, err = tradeStore.GetTargetReceipt(context.Background(), space, record.TargetID)
+		_, err = tradeStore.GetAcceptedTargetHistory(context.Background(), space, record.TargetID)
 		require.NoError(t, err, "receipt must be committed before wake")
 		wakes = append(wakes, space+"/"+logical)
 	}
@@ -131,7 +131,7 @@ func TestHandleLogicalAccountTargetAcceptsBeforeBarEnd(t *testing.T) {
 	target, err := db.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, effective.UnixMilli(), target.BarEndTime)
-	receipt, err := db.GetTargetReceipt(context.Background(), "space-1", "future-target")
+	receipt, err := db.GetAcceptedTargetHistory(context.Background(), "space-1", "future-target")
 	require.NoError(t, err)
 	require.Equal(t, effective.UnixMilli(), receipt.BarEndTime)
 }
@@ -703,7 +703,7 @@ func TestHandleTargetSessionChangedWhileWaitingIsClassifiedAtCommit(t *testing.T
 			require.Equal(t, jetstream.TERM, result.Decision)
 			require.Equal(t, test.code, targetErrorCode(result))
 			require.Equal(t, test.needsHumanAttention, attentionCode(targetErrorCode(result)))
-			_, err := tradeStore.GetTargetReceipt(context.Background(), "space-1", "target-session-changed")
+			_, err := tradeStore.GetAcceptedTargetHistory(context.Background(), "space-1", "target-session-changed")
 			require.Error(t, err, "会话已变的目标不写回执")
 		})
 	}
