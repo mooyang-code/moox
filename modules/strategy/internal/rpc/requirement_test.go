@@ -18,7 +18,9 @@ func TestStrategyTaskRequirement(t *testing.T) {
 		requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 		return rsp.GetRequirement()
 	}
-	keys := func(requirement *strategypb.StrategyTaskRequirement) string { return strings.Join(requirement.GetTaskKeys(), ",") }
+	keys := func(requirement *strategypb.StrategyTaskRequirement) string {
+		return strings.Join(requirement.GetTaskKeys(), ",")
+	}
 
 	dual := "name: d\nbar: 1h\nmarket: {select: both, prefer: swap}\nsources:\n  daily: {bar: 1d}\nrules:\n  - {id: r, type: rank, score: daily.close, select: {top: 1}, weight: 1}\n"
 	got := validate(dual)
