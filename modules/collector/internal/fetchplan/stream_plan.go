@@ -13,43 +13,36 @@ type StreamPlanItem struct {
 	Plan     *marketfetch.Plan
 }
 
-// StreamPlanState 返回 collector-stream 此刻应应用的计划版本与各项：未完成的计划已进入下发阶段时用它的过渡或最终计划，
-// 否则用最近一份已生效计划的最终计划；空间暂停时下发空计划（停止推送接收与本地拉取）。
-func StreamPlanState(open, applied *store.FetchPlanRecord, paused bool) (int64, string, []StreamPlanItem, error) {
+// StreamPlanState 返回 collector-stream 此刻应应用的计划号与各项：未生效的计划已开始下发（StreamPushed）时给它的 Target，
+// 否则给最近一份已生效计划的 Target；空间暂停时下发空计划（停止推送接收与本地拉取）。
+func StreamPlanState(open, applied *store.FetchPlanRecord, paused bool) (int64, []StreamPlanItem, error) {
 	if paused {
-		return 0, StreamStagePaused, nil, nil
+		return 0, nil, nil
 	}
-	record, stage := applied, StreamStageFinal
+	record := applied
 	if open != nil {
 		progress, err := decodeFetchPlanProgress(open.Progress)
 		if err != nil {
-			return 0, "", nil, err
+			return 0, nil, err
 		}
-		if progress.StreamStage != "" {
-			record, stage = open, progress.StreamStage
+		if progress.StreamPushed {
+			record = open
 		}
 	}
 	if record == nil {
-		return 0, "", nil, nil
+		return 0, nil, nil
 	}
 	content, err := decodeFetchPlanContent(record.Plan)
 	if err != nil {
-		return 0, "", nil, err
+		return 0, nil, err
 	}
 	var items []StreamPlanItem
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		if function.IsSCF() {
+		if function.IsSCF() || function.Target == nil || len(function.Target.Datasets) == 0 {
 			continue
 		}
-		plan := content.FinalPlan(function)
-		if stage == StreamStageTransition {
-			plan = content.TransitionalPlan(function)
-		}
-		if plan == nil || len(plan.Datasets) == 0 {
-			continue
-		}
-		items = append(items, StreamPlanItem{Name: name, Executor: function.Executor, Market: plan.Market.MarketType, Plan: plan})
+		items = append(items, StreamPlanItem{Name: name, Executor: function.Executor, Market: function.Target.Market.MarketType, Plan: function.Target})
 	}
-	return record.ID, stage, items, nil
+	return record.ID, items, nil
 }

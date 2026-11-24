@@ -26,7 +26,7 @@ func finalSubjects(t *testing.T, content *FetchPlanContent) []string {
 	t.Helper()
 	var subjects []string
 	for _, name := range content.SortedFunctionNames() {
-		plan := content.FinalPlan(content.Functions[name])
+		plan := content.Functions[name].Target
 		if plan == nil {
 			continue
 		}
@@ -51,13 +51,15 @@ func TestSubjectExclusionsChangeThePlanAndExpire(t *testing.T) {
 	// 别的市场的排除不影响现货。
 	exclusions.items = []store.SubjectExclusion{{SpaceID: "crypto", SubjectID: "S007-USDT", MarketType: "swap"}}
 	h.now = h.now.Add(time.Minute)
+	last := h.lastRecord().ID
 	require.NoError(t, h.reconcile(h.r))
 	require.Nil(t, h.open())
+	require.Equal(t, last, h.lastRecord().ID)
 
 	exclusions.items = []store.SubjectExclusion{{SpaceID: "crypto", SubjectID: "S007-USDT", ExpiresAt: h.now.Add(time.Hour)}}
 	require.NoError(t, h.reconcile(h.r))
-	record := h.open()
-	require.NotNil(t, record, "排除名单一变下一轮就生成新计划")
+	record := h.lastRecord()
+	require.NotEqual(t, last, record.ID, "排除名单一变下一轮就生成新计划")
 	change := h.content(record).Datasets["ds_spot_1m|1m"]
 	require.Equal(t, []string{"S007-USDT"}, change.Removed)
 	require.NotEqual(t, before, change.Hash)
@@ -73,7 +75,7 @@ func TestSubjectExclusionsChangeThePlanAndExpire(t *testing.T) {
 	require.Contains(t, finalSubjects(t, content), "S007-USDT")
 }
 
-// 交接进行中设置排除：已打开的交接计划先推进完，排除在下一份计划里生效。
+// 交接进行中设置排除：未生效的交接计划先推进完，排除在下一份计划里生效。
 func TestSubjectExclusionWaitsForAnOpenHandoff(t *testing.T) {
 	h := newIngestHarness(t, ingestSCF, "1m")
 	exclusions := &memExclusions{}
@@ -83,7 +85,7 @@ func TestSubjectExclusionWaitsForAnOpenHandoff(t *testing.T) {
 	require.NoError(t, h.reconcile(h.r))
 	handoff := h.open()
 	require.NotNil(t, handoff)
-	require.Equal(t, marketfetch.PlanExecutorSCF, h.content(handoff).Datasets["ds_spot_1m|1m"].OldIngest)
+	require.Positive(t, h.content(handoff).Datasets["ds_spot_1m|1m"].HandoffFrom())
 
 	exclusions.items = []store.SubjectExclusion{{SpaceID: "crypto", SubjectID: "S001-USDT"}}
 	h.now = h.now.Add(20 * time.Second)
@@ -91,11 +93,12 @@ func TestSubjectExclusionWaitsForAnOpenHandoff(t *testing.T) {
 	require.Equal(t, handoff.ID, h.open().ID, "交接计划不被排除打断")
 	require.Contains(t, finalSubjects(t, h.content(handoff)), "S001-USDT")
 
-	last := h.settle(true)
-	require.Equal(t, handoff.ID, last.ID)
+	h.workers.apply(handoff.ID)
 	require.NoError(t, h.reconcile(h.r))
-	next := h.open()
-	require.NotNil(t, next)
+	require.Nil(t, h.open(), "交接计划确认就生效")
+	require.NoError(t, h.reconcile(h.r))
+	next := h.lastRecord()
+	require.NotEqual(t, handoff.ID, next.ID)
 	require.Equal(t, []string{"S001-USDT"}, h.content(next).Datasets["ds_spot_1m|1m"].Removed)
 	h.settle(true)
 	content := h.applied()
@@ -128,19 +131,22 @@ func TestExcludingEverySubjectRetiresTheDatasetAndExpiryBringsItBack(t *testing.
 	}
 	exclusions.items = all
 	// 数据集整体消失要经过去抖（与任务暂时取不到分组同一规则）才退出计划。
-	for i := 0; i < planGoneDebounce && h.open() == nil; i++ {
+	last := h.lastRecord().ID
+	for i := 0; i < planGoneDebounce && h.lastRecord().ID == last; i++ {
 		require.NoError(t, h.reconcile(h.r))
 		h.now = h.now.Add(20 * time.Second)
 	}
-	require.NotNil(t, h.open())
+	require.NotEqual(t, last, h.lastRecord().ID)
+	stop := h.content(h.lastRecord()).Datasets["ds_spot_1m|1m"]
+	require.True(t, stop.Stopped, "数据集从生效点起停止")
 	h.settle(true)
 	content := h.applied()
-	require.True(t, content.Datasets["ds_spot_1m|1m"].Gone, "数据集退出计划")
+	require.Nil(t, content.Datasets["ds_spot_1m|1m"], "停止份过了生效点，数据集退出计划")
 	require.Empty(t, finalSubjects(t, content))
 
 	h.now = h.now.Add(time.Hour)
 	h.settle(true)
 	content = h.applied()
-	require.False(t, content.Datasets["ds_spot_1m|1m"].Gone)
+	require.NotNil(t, content.Datasets["ds_spot_1m|1m"])
 	require.Len(t, finalSubjects(t, content), 60)
 }

@@ -17,10 +17,9 @@ import (
 // StreamCollectorService 是 Collector 上供 collector-stream 调用的服务。
 const StreamCollectorService = "trpc.moox.collector.StreamCollector"
 
-// PlanVersion 是计划记录 ID 与阶段（transition、final）。
+// PlanVersion 是要求应用的计划记录（ID 为 0 表示没有计划或空间暂停）。
 type PlanVersion struct {
-	ID    int64
-	Stage string
+	ID int64
 }
 
 // PlanClient 是 StreamCollector 的客户端：心跳、拉计划、上报周期统计。
@@ -51,7 +50,7 @@ func retError(method string, info *pb.RetInfo) error {
 
 // Heartbeat 上报已应用的计划版本与连接状态，返回 Collector 要求的最新版本。
 func (c *PlanClient) Heartbeat(ctx context.Context, applied PlanVersion, markets []MarketStatus) (PlanVersion, error) {
-	request := &pb.StreamHeartbeatReq{SpaceId: c.SpaceID, InstanceId: c.InstanceID, AppliedPlanId: applied.ID, AppliedStage: applied.Stage, SentAtMs: time.Now().UnixMilli(), Version: c.Version}
+	request := &pb.StreamHeartbeatReq{SpaceId: c.SpaceID, InstanceId: c.InstanceID, AppliedPlanId: applied.ID, SentAtMs: time.Now().UnixMilli(), Version: c.Version}
 	for _, market := range markets {
 		for _, conn := range market.Conns {
 			status := &pb.StreamConnStatus{Market: market.Market, Frequency: conn.Group, Streams: int32(conn.Streams), Reconnects: conn.Reconnects, Subscribed: conn.Subscribed, Endpoint: conn.Endpoint}
@@ -69,7 +68,7 @@ func (c *PlanClient) Heartbeat(ctx context.Context, applied PlanVersion, markets
 		return PlanVersion{}, err
 	}
 	c.reserve.Store(int64(response.GetCommitReserveMs()))
-	return PlanVersion{ID: response.GetPlanId(), Stage: response.GetStage()}, nil
+	return PlanVersion{ID: response.GetPlanId()}, nil
 }
 
 // CommitReserve 返回最近一次心跳下发的提交预留（0 表示还没有）。
@@ -99,7 +98,7 @@ func (c *PlanClient) Pull(ctx context.Context) (PlanVersion, []PlanItem, time.Du
 		}
 		items = append(items, PlanItem{Name: item.GetName(), Executor: item.GetExecutor(), Market: item.GetMarket(), Plan: &plan})
 	}
-	return PlanVersion{ID: response.GetPlanId(), Stage: response.GetStage()}, items, time.Duration(response.GetCommitReserveMs()) * time.Millisecond, nil
+	return PlanVersion{ID: response.GetPlanId()}, items, time.Duration(response.GetCommitReserveMs()) * time.Millisecond, nil
 }
 
 // Report 批量上报周期统计与疑似下架的标的。

@@ -20,8 +20,8 @@ import (
 //     补采函数与删除照常放行（恢复追赶时系统暂停还开着，补采却要跑）。
 //  2. 取消还没拿到并发名额的这类操作。
 //  3. 等正在跑的这类操作结束（不取消，避免留下建到一半的函数）；还没结束就返回未完成，空间协程每分钟重试。
-//  4. 清掉这些操作留下的结果，免得恢复后被当成某个阶段的确认。
-//  5. 作废未生效计划里的下发与收尾确认并持久化。
+//  4. 清掉这些操作留下的结果，免得恢复后被当成计划的确认。
+//  5. 作废未生效计划里的下发确认并持久化。
 //  6. 对每个定时函数起“停用定时器”的操作并等它们结束。
 //  7. 读回全部定时函数，确认定时器都是停用，才宣布完成。
 func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
@@ -103,7 +103,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	}
 	defer r.mu.Unlock()
 	_ = r.collectFinishedOps(ctx) // 失败已计入对账失败
-	// 期望按已确认的状态算：进程重启时未生效计划里已确认过渡的函数要保持过渡的 cron，不能按已生效计划改回旧 cron。
+	// 期望按已确认的状态算：进程重启时未生效计划里已确认下发的函数要保持新的 cron，不能按已生效计划改回旧 cron。
 	targets, err := r.confirmedTargets(ctx)
 	if err != nil {
 		return false, err
@@ -199,7 +199,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	return allOK, nil
 }
 
-// invalidateConfirmations 作废未完成计划里的下发与收尾确认（保留 Registered 与原 P）：停用之后这些确认不再代表云端状态，
+// invalidateConfirmations 作废未完成计划里的下发确认（Pushed、StreamPushed；保留 Registered）：停用之后这些确认不再代表云端状态，
 // 重新启用时按原计划重推（Ensure 是幂等的）。必须在停用定时器之前持久化：否则部分停用后崩溃，重启时空间已重新启用，
 // 旧确认会让计划一直跳过这些函数，计划里新建的函数恢复后一直停用。
 func (r *PlanReconciler) invalidateConfirmations(ctx context.Context, openRecord *store.FetchPlanRecord) error {
@@ -210,10 +210,10 @@ func (r *PlanReconciler) invalidateConfirmations(ctx context.Context, openRecord
 	if err != nil {
 		return err
 	}
-	if len(progress.Transitioned) == 0 && len(progress.Finalized) == 0 {
+	if len(progress.Pushed) == 0 && !progress.StreamPushed {
 		return nil
 	}
-	progress.Transitioned, progress.Finalized = nil, nil
+	progress.Pushed, progress.StreamPushed = nil, false
 	if err := r.saveProgress(ctx, openRecord, progress, openRecord.Status, openRecord.LastError); err != nil {
 		return err
 	}

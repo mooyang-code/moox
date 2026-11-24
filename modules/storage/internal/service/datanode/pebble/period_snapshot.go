@@ -59,8 +59,9 @@ func (PeriodDeadlinePassedError) StoreErrorKind() storeerr.Kind { return storeer
 // maxEffectiveFromLead 限制生效周期 P 最远能登记到多久之后：生效表只追加，误登记的远期 P 会让该数据集无法再变更标的。
 const maxEffectiveFromLead = 7 * 24 * time.Hour
 
-// StaleEffectiveFromError 表示生效周期 P 已不在未来（或其后已有周期），且该 P 尚未登记；
-// 调用方（Collector）可据此重新选择 P。错误文本以 effective_from_stale 开头，供客户端识别。
+// StaleEffectiveFromError 表示生效周期 P 不可用：P 已不在未来、不晚于最后一条、其后已有周期，
+// 或 P 已登记了另一份快照且不能覆盖（不是最后一条、已不在未来、其后已有周期）。
+// 调用方（Collector）据此撤回这次变更、下一轮重新选择 P。错误文本以 effective_from_stale 开头，供客户端识别。
 type StaleEffectiveFromError struct{ Reason string }
 
 func (e StaleEffectiveFromError) Error() string { return "effective_from_stale: " + e.Reason }
@@ -89,8 +90,10 @@ func periodAligned(_ frequencypkg.Frequency, at int64) bool {
 	return at > 0 && at%60 == 0
 }
 
-// RegisterSeriesSnapshot 保存完整标的列表，并在生效表追加“从 effectiveFrom 起使用该快照”。
-// 与周期提交共用 periodMu，检查与追加在同一把锁内完成。
+// RegisterSeriesSnapshot 保存完整标的列表，并在生效表登记“从 effectiveFrom 起使用该快照”。
+// 新生效点必须严格晚于最后一条、在未来、其后没有周期；已有的生效点同 hash 视为重放，
+// 不同 hash 只在它是最后一条、仍在未来、其后没有周期时覆盖（周期在第一次提交时才按生效表建立，未来的 P 还没有周期）。
+// 与周期提交共用 periodMu，检查与写入在同一把锁内完成。
 func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (RegisterSnapshotResult, error) {
 	spaceID, datasetID, frequency = strings.TrimSpace(spaceID), strings.TrimSpace(datasetID), strings.TrimSpace(frequency)
 	if spaceID == "" || datasetID == "" {
@@ -140,34 +143,52 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 	s.periodMu.Lock()
 	defer s.periodMu.Unlock()
 	result := RegisterSnapshotResult{SeriesHash: hash, ExpectedCount: uint32(len(series))}
-	// 同 P 的重放：同 hash 直接成功（即使 P 已过），不同 hash 拒绝。
-	if existing, found, err := s.readEffectiveHash(spaceID, datasetID, frequency, effectiveFrom); err != nil {
-		return RegisterSnapshotResult{}, err
-	} else if found {
-		if existing != hash {
-			return RegisterSnapshotResult{}, PeriodConflictError{SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, PeriodTime: effectiveFrom}
-		}
-		result.AlreadyRegistered = true
-		return result, nil
-	}
+	now := s.periodNow().UTC().Unix()
 	lastFrom, _, hasLast, err := s.lastEffective(spaceID, datasetID, frequency)
 	if err != nil {
 		return RegisterSnapshotResult{}, err
 	}
-	if hasLast && effectiveFrom <= lastFrom {
-		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be strictly later than the last registered effective period"}
-	}
-	if effectiveFrom > s.periodNow().UTC().Add(maxEffectiveFromLead).Unix() {
-		return RegisterSnapshotResult{}, invalid("effective_from is too far in the future")
-	}
-	if effectiveFrom <= s.periodNow().UTC().Unix() {
-		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be in the future"}
+	// 同 P 已有条目：同 hash 是重放（即使 P 已过）；不同 hash 只有“未来、最后一条、其后没有周期”时覆盖。
+	replaced := ""
+	if existing, found, err := s.readEffectiveHash(spaceID, datasetID, frequency, effectiveFrom); err != nil {
+		return RegisterSnapshotResult{}, err
+	} else if found {
+		if existing == hash {
+			result.AlreadyRegistered = true
+			return result, nil
+		}
+		if !hasLast || lastFrom != effectiveFrom {
+			return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from is already registered with another snapshot and is not the last effective period"}
+		}
+		if effectiveFrom <= now {
+			return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from is already registered with another snapshot and is no longer in the future"}
+		}
+		replaced = existing
+	} else {
+		if hasLast && effectiveFrom <= lastFrom {
+			return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be strictly later than the last registered effective period"}
+		}
+		if effectiveFrom > s.periodNow().UTC().Add(maxEffectiveFromLead).Unix() {
+			return RegisterSnapshotResult{}, invalid("effective_from is too far in the future")
+		}
+		if effectiveFrom <= now {
+			return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "effective_from must be in the future"}
+		}
 	}
 	// P 之后不能已有周期：已建立的周期不可更换快照。
 	if has, err := s.hasPeriodAtOrAfter(spaceID, datasetID, frequency, effectiveFrom); err != nil {
 		return RegisterSnapshotResult{}, err
 	} else if has {
 		return RegisterSnapshotResult{}, StaleEffectiveFromError{Reason: "a dataset period at or after effective_from already exists"}
+	}
+	// 被覆盖的旧 hash 只在 P 这一条上出现过时随之删掉快照：保留期清理只删被过期条目引用的快照，删不到它。
+	dropReplaced := false
+	if replaced != "" {
+		referenced, err := s.effectiveHashReferenced(spaceID, datasetID, frequency, replaced, effectiveFrom)
+		if err != nil {
+			return RegisterSnapshotResult{}, err
+		}
+		dropReplaced = !referenced
 	}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
@@ -180,6 +201,11 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 	}
 	if err := batch.Set(seriesEffectiveKey(spaceID, datasetID, frequency, effectiveFrom), []byte(hash), s.writeOptions); err != nil {
 		return RegisterSnapshotResult{}, err
+	}
+	if dropReplaced {
+		if err := batch.Delete(seriesSnapshotKey(spaceID, datasetID, frequency, replaced), s.writeOptions); err != nil {
+			return RegisterSnapshotResult{}, err
+		}
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return RegisterSnapshotResult{}, err
@@ -196,6 +222,24 @@ func (s *Store) readEffectiveHash(spaceID, datasetID, frequency string, from int
 		return "", false, err
 	}
 	return string(value), true, nil
+}
+
+// effectiveHashReferenced 判断该数据集该频率的生效表里，除起点 except 那一条外是否还有条目引用 hash。
+// 生效表条目很少，遍历一遍即可。
+func (s *Store) effectiveHashReferenced(spaceID, datasetID, frequency, hash string, except int64) (bool, error) {
+	prefix := seriesEffectivePrefixFor(spaceID, datasetID, frequency)
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(prefix), UpperBound: prefixUpperBound(prefix)})
+	if err != nil {
+		return false, err
+	}
+	defer iter.Close()
+	exceptKey := string(seriesEffectiveKey(spaceID, datasetID, frequency, except))
+	for ok := iter.First(); ok; ok = iter.Next() {
+		if string(iter.Key()) != exceptKey && string(iter.Value()) == hash {
+			return true, nil
+		}
+	}
+	return false, iter.Error()
 }
 
 // lastEffective 返回该数据集该频率生效表中起点最大的一行。

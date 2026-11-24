@@ -89,7 +89,7 @@ func ingestModeView(rsp interface {
 	view := map[string]any{"modes": modes}
 	if stream := rsp.GetStream(); stream != nil {
 		view["stream"] = map[string]any{"instance_id": stream.GetInstanceId(), "online": stream.GetOnline(), "heartbeat_at": stream.GetHeartbeatAt(),
-			"applied_plan": fmt.Sprintf("%d/%s", stream.GetAppliedPlanId(), stream.GetAppliedStage()), "connections": len(stream.GetConns()), "version": stream.GetVersion()}
+			"applied_plan": stream.GetAppliedPlanId(), "connections": len(stream.GetConns()), "version": stream.GetVersion()}
 	} else {
 		view["stream"] = "没有 collector-stream 实例的心跳"
 	}

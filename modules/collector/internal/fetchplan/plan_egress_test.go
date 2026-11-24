@@ -26,7 +26,7 @@ func TestPlanReconcilerRecreatesNewFunctionsThatShareAnEgressIP(t *testing.T) {
 	r.Egress = balancer
 	require.NoError(t, h.reconcile(r))
 	require.True(t, balancer.Pending(), "计划新建了函数：标记要做出口 IP 去重")
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	change := h.content(h.lastRecord()).Datasets["ds_spot|1m"]
 	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
