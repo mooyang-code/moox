@@ -13,7 +13,7 @@ export interface HostMonitorRow {
   key: string;
   hostId: string;
   host: DeploymentHost;
-  /** 该主机最近上报的采集器；没有上报时为空 */
+  /** 该主机最近一次上报；没有上报时为空 */
   monitor?: HostMetrics;
   /** 中文名，没有登记中文名时回退为主机 ID */
   displayName: string;
@@ -62,21 +62,11 @@ function summarize(monitor?: HostMetrics) {
   };
 }
 
-function reportedAt(monitor: HostMetrics) {
-  const time = Date.parse(monitor.timestamp);
-  return Number.isFinite(time) ? time : 0;
-}
-
-// 按登记主机关联采集器：多个采集器（如重装后换了 agent_id）时取最近上报的。
+// 每台登记主机一行：Monitor 按主机 ID 记录上报，直接按 host_id 对上。
 export function buildHostMonitorRows(hosts: DeploymentHost[], monitors: HostMetrics[]): HostMonitorRow[] {
-  const latest = new Map<string, HostMetrics>();
-  for (const monitor of monitors) {
-    if (!monitor.host_id) continue;
-    const current = latest.get(monitor.host_id);
-    if (!current || reportedAt(monitor) > reportedAt(current)) latest.set(monitor.host_id, monitor);
-  }
+  const byHost = new Map(monitors.map(monitor => [monitor.host_id, monitor]));
   return hosts.map(host => {
-    const monitor = latest.get(host.host_id);
+    const monitor = byHost.get(host.host_id);
     return {
       key: host.host_id,
       hostId: host.host_id,
@@ -87,12 +77,6 @@ export function buildHostMonitorRows(hosts: DeploymentHost[], monitors: HostMetr
       ...summarize(monitor)
     };
   });
-}
-
-// 没有登记主机 ID、或主机 ID 不在登记里的采集器只统计数量，不进入主机列表。
-export function countUnregisteredAgents(hosts: DeploymentHost[], monitors: HostMetrics[]) {
-  const registered = new Set(hosts.map(host => host.host_id));
-  return new Set(monitors.filter(monitor => !registered.has(monitor.host_id)).map(monitor => monitor.agent_id)).size;
 }
 
 export function normalizeMonitorViewMode(value: string | null): MonitorViewMode {

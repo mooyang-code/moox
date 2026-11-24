@@ -19,7 +19,7 @@ import (
 
 // Check IDs are code-owned namespaces. Parse their identity fields exactly;
 // human names and substring matches never determine an alert's target.
-func alertObject(spaceID, checkID string, facts observability.Overview) *pb.HealthObject {
+func alertObject(spaceID, checkID string) *pb.HealthObject {
 	object := &pb.HealthObject{Type: "business", SpaceId: spaceID}
 	parts := strings.Split(checkID, ":")
 	object.Kind = parts[0]
@@ -30,13 +30,7 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 		case "gateway":
 			object.Type, object.HostId, object.ComponentId, object.Kind = "host", parts[1], "host-gateway", parts[2]
 		case "host":
-			object.Type, object.AgentId, object.Kind = "host", parts[1], parts[2]
-			for _, host := range facts.Hosts {
-				if host.AgentID == object.AgentId {
-					object.HostId = host.HostID
-					break
-				}
-			}
+			object.Type, object.HostId, object.Kind = "host", parts[1], parts[2]
 		}
 	}
 	// 关注项检查按登记过的种类给出 attention_kind，前端不用再从告警编号里截取。
@@ -69,9 +63,6 @@ func fallbackTitle(checkID string, object *pb.HealthObject, facts observability.
 		return object.DatasetId + " · " + object.Freq
 	case object.Type == "host":
 		identity := object.HostId
-		if identity == "" {
-			identity = object.AgentId
-		}
 		switch object.Kind {
 		case "presence":
 			return "主机 " + identity + " · 失联"
@@ -150,7 +141,7 @@ func eventProcesses(event domain.AlertEvent) []*pb.AlertProcess {
 }
 
 func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, facts observability.Overview, titles *checkTitles) (*pb.HealthAlert, error) {
-	object := alertObject(state.SpaceID, state.CheckID, facts)
+	object := alertObject(state.SpaceID, state.CheckID)
 	title, err := titles.title(ctx, state.SpaceID, state.CheckID, object, facts)
 	if err != nil {
 		return nil, err
@@ -198,7 +189,7 @@ func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, fact
 			break
 		}
 	}
-	if object.Type == "host" && object.AgentId != "" && b.Alerts != nil {
+	if _, _, hostCheck := hostmetrics.ParseCheckID(state.CheckID); hostCheck && b.Alerts != nil {
 		event, err := b.Alerts.LatestFiringEvent(ctx, state.SpaceID, state.RuleID, state.CheckID)
 		if err != nil {
 			return nil, err

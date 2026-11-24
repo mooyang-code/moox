@@ -291,7 +291,7 @@ async function loadHistory() {
   if (!monitor) return;
   historyLoading.value = true;
   try {
-    const response = await getHistoryMetrics(monitor.agent_id, duration.value);
+    const response = await getHistoryMetrics(monitor.host_id, duration.value);
     if (requestID !== historyRequestID) return;
     historyData.value = response.history;
     historyNotice.value = response.data_gap ? "当前时间范围存在历史数据缺口" : "";
@@ -304,7 +304,7 @@ async function loadHistory() {
   }
 }
 
-watch([() => props.row?.monitor?.agent_id, duration, () => props.refreshKey], loadHistory, { immediate: true });
+watch([() => props.row?.monitor?.host_id, duration, () => props.refreshKey], loadHistory, { immediate: true });
 onUnmounted(() => {
   historyRequestID++;
   trendChart?.release();

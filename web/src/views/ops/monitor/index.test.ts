@@ -80,7 +80,7 @@ const healthy: HealthOverview = {
   generated_at: generated,
   topology_known: true,
   components: [{ host_id: "control", component_id: "admin", name: "管理后台", status: "healthy" }],
-  hosts: [{ host_id: "control", agent_id: "pwU2", status: "healthy", cpu_available: true, cpu_percent: 3, cpu_threshold: 80 }],
+  hosts: [{ host_id: "control", status: "healthy", cpu_available: true, cpu_percent: 3, cpu_threshold: 80 }],
   incident_window_hours: 48
 };
 const refreshButton = (page: VueWrapper) => page.findAll("button.refresh")[0];

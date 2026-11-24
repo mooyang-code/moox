@@ -60,7 +60,6 @@ components:
     replicas: single
     protected: false
     args: ["-config={config}/app.yaml", "-conf={config}/trpc_go.yaml"]
-    tools: [moox-host-agent-cli]
     config_files:
       - from: modules/hostagent/config/app.yaml
       - from: modules/hostagent/config/trpc_go.yaml

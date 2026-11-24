@@ -70,9 +70,7 @@ export interface ProcessUsage {
 }
 
 export interface HostMetrics {
-  /** 采集器 ID：同一台主机重装后会换新的采集器 */
-  agent_id: string;
-  /** 采集器登记的主机 ID（t_hosts.c_host_id）；没有登记时为空 */
+  /** 上报的主机 ID（t_hosts.c_host_id），每台主机一行 */
   host_id: string;
   hostname: string;
   status: "online" | "offline" | "error";
@@ -143,15 +141,13 @@ type WireNumber = number | string;
 
 interface HostAgent {
   host_id?: string;
-  agent_id?: string;
   hostname?: string;
   last_seen_at?: string;
-  archived?: boolean;
   snapshot?: HostSnapshot;
 }
 
 interface HostHistoryPoint {
-  agent_id?: string;
+  host_id?: string;
   observed_at?: string;
   snapshot?: HostSnapshot;
 }
@@ -167,14 +163,14 @@ export const getCurrentMetrics = (options: { silentError?: boolean } = {}) => {
 /** 历史曲线最多取的点数：1 小时是原始的每分钟一点，更长的范围由服务端等间隔抽取。 */
 const HISTORY_POINT_LIMIT = 500;
 
-export const getHistoryMetrics = (agentID: string, duration = "1h") => {
+export const getHistoryMetrics = (hostID: string, duration = "1h") => {
   const end = new Date();
   const start = new Date(end.getTime() - durationMilliseconds(duration));
   return callControl<
-    { agent_id: string; start_at: string; end_at: string; limit: number },
+    { host_id: string; start_at: string; end_at: string; limit: number },
     { points?: HostHistoryPoint[]; data_gap?: boolean }
   >("monitor", "QueryHostMetricHistory", {
-    agent_id: agentID,
+    host_id: hostID,
     start_at: start.toISOString(),
     end_at: end.toISOString(),
     // 服务端在所选范围内等间隔抽取最多这么多点，曲线总是覆盖整段时间。
@@ -190,10 +186,9 @@ export const toHostMetrics = (agent: HostAgent): HostMetrics => {
   const cpu = snapshot.cpu ?? {};
   const memory = snapshot.memory ?? {};
   return {
-    agent_id: agent.agent_id ?? "",
     host_id: agent.host_id ?? "",
     hostname: agent.hostname ?? "",
-    status: agent.archived ? "offline" : isFresh(agent.last_seen_at) ? "online" : "offline",
+    status: isFresh(agent.last_seen_at) ? "online" : "offline",
     timestamp: agent.last_seen_at ?? "",
     cpu: {
       usage: cpu.usage_percent ?? 0,
@@ -247,7 +242,7 @@ export const toHostMetrics = (agent: HostAgent): HostMetrics => {
 };
 
 const toHistoryPoint = (point: HostHistoryPoint): HistoryPoint => {
-  const metric = toHostMetrics({ agent_id: point.agent_id, snapshot: point.snapshot, last_seen_at: point.observed_at });
+  const metric = toHostMetrics({ host_id: point.host_id, snapshot: point.snapshot, last_seen_at: point.observed_at });
   const filesystemUsage = maxAvailableFilesystemUsage(metric.filesystems);
   const networkRate = aggregateNetworkRate(metric.networks);
   return {

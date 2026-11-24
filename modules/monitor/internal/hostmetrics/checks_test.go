@@ -24,12 +24,12 @@ func TestTopProcessesIgnoresUnusableEntries(t *testing.T) {
 
 func TestCheckIDRoundTrip(t *testing.T) {
 	for _, kind := range append([]string{CheckKindPresence, CheckKindAgent}, Metrics...) {
-		agent, parsed, ok := ParseCheckID(CheckID("agent-1", kind))
+		agent, parsed, ok := ParseCheckID(CheckID("control", kind))
 		require.True(t, ok, kind)
-		require.Equal(t, "agent-1", agent)
+		require.Equal(t, "control", agent)
 		require.Equal(t, kind, parsed)
 	}
-	for _, id := range []string{"host::cpu", "host:agent-1:unknown", "other:agent-1:cpu", "host:agent-1", "host:agent-1:cpu:extra"} {
+	for _, id := range []string{"host::cpu", "host:control:unknown", "other:control:cpu", "host:control", "host:control:cpu:extra"} {
 		_, _, ok := ParseCheckID(id)
 		require.False(t, ok, id)
 	}

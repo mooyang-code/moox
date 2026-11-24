@@ -65,12 +65,12 @@ func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 	}
 	for _, host := range value.Hosts {
 		rsp.HostResources = append(rsp.HostResources, &monitorpb.HostAgentInfo{
-			HostId: host.HostID, AgentId: host.AgentID, Hostname: host.Hostname, BootId: host.BootID,
-			LastSeenAt: host.LastSeenAt, Archived: host.Archived, Snapshot: host.Snapshot,
+			HostId: host.HostID, Hostname: host.Hostname, BootId: host.BootID,
+			LastSeenAt: host.LastSeenAt, Snapshot: host.Snapshot,
 			Reachable: host.Reachable, StaleSeconds: host.StaleSeconds,
 		})
-		for _, forecast := range value.Forecasts[host.AgentID] {
-			rsp.DiskForecasts = append(rsp.DiskForecasts, &monitorpb.DoctorDiskForecast{NodeId: host.Hostname, AgentId: host.AgentID, Mountpoint: forecast.Mountpoint, Status: forecast.Status, GrowthBytesPerDay: forecast.GrowthBytesPerDay, RemainingDays: forecast.RemainingDays, ValidIntervals: uint32(forecast.ValidIntervals), Summary: forecast.Summary})
+		for _, forecast := range value.Forecasts[host.HostID] {
+			rsp.DiskForecasts = append(rsp.DiskForecasts, &monitorpb.DoctorDiskForecast{NodeId: host.HostID, Mountpoint: forecast.Mountpoint, Status: forecast.Status, GrowthBytesPerDay: forecast.GrowthBytesPerDay, RemainingDays: forecast.RemainingDays, ValidIntervals: uint32(forecast.ValidIntervals), Summary: forecast.Summary})
 		}
 	}
 	for _, event := range value.Alerts {

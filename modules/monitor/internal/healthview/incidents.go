@@ -98,7 +98,7 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 	}
 	out := make([]*pb.AlertIncident, 0, len(all))
 	for _, item := range all {
-		object := alertObject(item.key.space, item.key.check, facts)
+		object := alertObject(item.key.space, item.key.check)
 		title, err := titles.title(ctx, item.key.space, item.key.check, object, facts)
 		if err != nil {
 			return nil, err

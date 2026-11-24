@@ -24,7 +24,7 @@ func TestListHostAgentsReadsPersistedPresenceAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 	t0 := time.Now().UTC().Add(-4 * time.Minute).Truncate(time.Second)
 	_, err = registry.Observe(ctx, hostmetrics.HostObservation{
-		AgentID: "agent-a", Hostname: "host-a", BootID: "boot-a",
+		HostID: "control", Hostname: "host-a", BootID: "boot-a",
 		OccurredAt: t0, EventID: "event-0",
 	})
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestListHostAgentsReadsPersistedPresenceAfterRestart(t *testing.T) {
 	rsp, err := service.ListHostAgents(ctx, &monitorpb.ListHostAgentsReq{})
 	require.NoError(t, err)
 	require.Len(t, rsp.GetAgents(), 1)
-	require.Equal(t, "agent-a", rsp.GetAgents()[0].GetAgentId())
+	require.Equal(t, "control", rsp.GetAgents()[0].GetHostId())
 	require.False(t, rsp.GetAgents()[0].GetReachable())
 	require.GreaterOrEqual(t, rsp.GetAgents()[0].GetStaleSeconds(), int64(240))
 }

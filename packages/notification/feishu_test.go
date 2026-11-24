@@ -27,7 +27,7 @@ func TestFeishuSenderSendsInteractiveMessage(t *testing.T) {
 		}
 		content := payload["content"].(map[string]any)
 		text, _ := content["text"].(string)
-		if !strings.Contains(text, "告警标识: test-key") || !strings.Contains(text, "agent_id=AB12") || !strings.Contains(text, "[严重]") {
+		if !strings.Contains(text, "告警标识: test-key") || !strings.Contains(text, "host_id=control") || !strings.Contains(text, "[严重]") {
 			t.Fatalf("text lost notification metadata: %q", text)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -41,7 +41,7 @@ func TestFeishuSenderSendsInteractiveMessage(t *testing.T) {
 	}
 	sender.client = server.Client()
 	sender.webhookURL = server.URL
-	if err := sender.Send(context.Background(), Message{Key: "test-key", Severity: SeverityCritical, Title: "测试", Body: "消息", Labels: map[string]string{"agent_id": "AB12"}}); err != nil {
+	if err := sender.Send(context.Background(), Message{Key: "test-key", Severity: SeverityCritical, Title: "测试", Body: "消息", Labels: map[string]string{"host_id": "control"}}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 }

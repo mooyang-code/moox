@@ -38,7 +38,7 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: string(rune('a' + seq)), SpaceID: space, RuleID: "default:" + check, CheckID: check, EventType: eventType, Status: "firing", Payload: payload, CreatedAt: at}))
 	}
 	reporter, strategy, strategyCheck, fetch := "reporter:control:collector", "dataset:strategy:s1:1m", "ready:control:strategy", "market_fetch:scf_timer"
-	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
+	presence := hostmetrics.CheckID("control", hostmetrics.CheckKindPresence)
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{SpaceID: "mooxsys", CheckID: reporter, Name: "行情采集服务（control 节点）· 运行指标上报", Kind: domain.CheckKindExternal, Enabled: true}))
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{CheckID: strategyCheck, Name: "控制台前端（control）· 就绪", Kind: domain.CheckKindExternal, Enabled: true}))
 
@@ -87,7 +87,7 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 	require.Empty(t, item.ResolvedAt)
 
 	item = byCheck["presence"]
-	require.Equal(t, "主机 AGENT01 · 失联", item.Title)
+	require.Equal(t, "主机 control · 失联", item.Title)
 	require.Equal(t, "主机采集代理停止上报", item.Reason)
 	require.Equal(t, stamp(now.Add(-3*time.Hour+10*time.Minute)), item.ResolvedAt)
 
@@ -191,7 +191,7 @@ func TestIncidentsCarryProcessesRecordedAtTrigger(t *testing.T) {
 	repos := openRepositories(t)
 	ctx := t.Context()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
-	cpu, memory, old, other := "host:AGENT01:cpu", "host:AGENT01:memory", "host:AGENT02:cpu", "deployment:control:strategy"
+	cpu, memory, old, other := "host:control:cpu", "host:control:memory", "host:storage:cpu", "deployment:control:strategy"
 	create := func(id, check, eventType, payload string, at time.Time) {
 		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: events.SystemSpaceID, RuleID: "default:" + check, CheckID: check, EventType: eventType, Payload: payload, CreatedAt: at}))
 	}
@@ -235,12 +235,12 @@ func TestActiveHostAlertCarriesLatestProcesses(t *testing.T) {
 	repos := openRepositories(t)
 	ctx := t.Context()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
-	check := "host:AGENT01:memory"
+	check := "host:control:memory"
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{CheckID: check, Name: "主机 control · 内存使用率", Kind: domain.CheckKindExternal, Enabled: true}))
 	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + check, CheckID: check, Enabled: true}))
 	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + check, CheckID: check, Status: domain.AlertStatusFiring, DedupeKey: check, TriggeredAt: ptr(now.Add(-time.Hour)), UpdatedAt: now}))
 	create := func(id, eventType, name string, at time.Time) {
-		payload := fmt.Sprintf(`{"agent_id":"AGENT01","metric":"memory","value":95,"threshold":90,"top_processes":[{"pid":1,"name":"small","rss_bytes":1048576,"cpu_percent":90},{"pid":2,"name":%q,"rss_bytes":8589934592}]}`, name)
+		payload := fmt.Sprintf(`{"metric":"memory","value":95,"threshold":90,"top_processes":[{"pid":1,"name":"small","rss_bytes":1048576,"cpu_percent":90},{"pid":2,"name":%q,"rss_bytes":8589934592}]}`, name)
 		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, RuleID: "default:" + check, CheckID: check, EventType: eventType, Payload: payload, CreatedAt: at}))
 	}
 	create("t", domain.AlertEventTriggered, "at-trigger", now.Add(-time.Hour))

@@ -35,9 +35,6 @@
     </section>
 
     <a-alert v-if="loadError" type="warning" show-icon class="monitor-alert">{{ loadError }}</a-alert>
-    <a-alert v-if="unregisteredCount > 0" type="info" show-icon class="monitor-alert">
-      有 {{ unregisteredCount }} 个采集器没有关联登记主机，已忽略；清理旧采集器请通过 moox skill 操作。
-    </a-alert>
 
     <div v-if="!rows.length && loading" class="monitor-empty"><a-spin /></div>
     <a-empty v-else-if="!rows.length" description="还没有登记主机，请通过 moox skill 初始化部署" class="monitor-empty" />
@@ -68,12 +65,7 @@ import type { DeploymentHost } from "@/api/admin/types";
 import HostMonitorCardGrid from "./host-monitor-card-grid.vue";
 import HostMonitorMasterDetail from "./host-monitor-master-detail.vue";
 import HostMonitorDetail from "./host-monitor-detail.vue";
-import {
-  buildHostMonitorRows,
-  countUnregisteredAgents,
-  normalizeMonitorViewMode,
-  type MonitorViewMode
-} from "./host-monitor-mapping";
+import { buildHostMonitorRows, normalizeMonitorViewMode, type MonitorViewMode } from "./host-monitor-mapping";
 
 const route = useRoute();
 const requestedHostID = computed(() => (typeof route.query.host_id === "string" ? route.query.host_id : ""));
@@ -90,7 +82,6 @@ const viewMode = ref<MonitorViewMode>(normalizeMonitorViewMode(localStorage.getI
 let requestID = 0;
 
 const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value));
-const unregisteredCount = computed(() => countUnregisteredAgents(hosts.value, monitors.value));
 const selectedRow = computed(() => rows.value.find(row => row.key === selectedKey.value) || null);
 const onlineCount = computed(() => rows.value.filter(row => row.state === "online").length);
 const attentionCount = computed(() => rows.value.filter(row => row.attention || row.state === "offline").length);

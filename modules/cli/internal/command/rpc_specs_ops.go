@@ -23,9 +23,9 @@ func init() {
 		rpcSpec{Path: []string{"monitor", "logs"}, Short: "重要日志：各服务的 Error 及以上日志和关键事件，新的在前（普通日志在 CLS 里查）", Service: monitorMgr, Method: "QueryLogRecords", NoSpace: true,
 			Flags: []rpcFlag{strFlag("host-id", "host_id", "主机 ID"), strFlag("component", "component", "组件，如 storage-primary"), strFlag("level", "level", "最低级别：error 只看错误，info 连关键事件一起看"), strFlag("keyword", "keyword", "在正文、事件名、代码位置里查找"),
 				timeFlag("from", "start_at", "起点（RFC3339）", false), timeFlag("to", "end_at", "终点（RFC3339）", false), intFlag("before-id", "before_id", "只看 id 更小的记录（向更早翻页）"), intFlag("limit", "limit", "最多返回多少条（默认 100，最多 200）")}},
-		rpcSpec{Path: []string{"monitor", "hosts"}, Short: "列出已上报资源的主机代理", Service: monitorMgr, Method: "ListHostAgents", NoSpace: true},
+		rpcSpec{Path: []string{"monitor", "hosts"}, Short: "列出各主机最近一次资源上报（每台主机一行）", Service: monitorMgr, Method: "ListHostAgents", NoSpace: true},
 		rpcSpec{Path: []string{"monitor", "host-metrics"}, Short: "主机资源指标的历史曲线", Service: monitorMgr, Method: "QueryHostMetricHistory", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("agent-id", "agent_id", "主机代理 ID（monitor hosts 里取）"), timeFlag("from", "start_at", "起点（RFC3339）", false), timeFlag("to", "end_at", "终点（RFC3339）", false), intFlag("limit", "limit", "最多返回多少点")}},
+			Flags: []rpcFlag{reqFlag("host-id", "host_id", "主机 ID（host list 里取）"), timeFlag("from", "start_at", "起点（RFC3339）", false), timeFlag("to", "end_at", "终点（RFC3339）", false), intFlag("limit", "limit", "最多返回多少点")}},
 
 		rpcSpec{Path: []string{"eventbus", "overview"}, Short: "EventBus 概览：连接数、流、消费者与积压", Service: eventBusMgr, Method: "GetOverview", NoSpace: true},
 		rpcSpec{Path: []string{"eventbus", "streams"}, Short: "列出流", Service: eventBusMgr, Method: "ListStreams", NoSpace: true, Page: rpcPageSize},

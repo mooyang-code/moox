@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/collector"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
-	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"google.golang.org/protobuf/proto"
@@ -22,7 +21,6 @@ import (
 
 type Agent struct {
 	cfg       *config.Config
-	id        identity.File
 	collector snapshotCollector
 	// connectMu 串行化建连（可能阻塞到超时）；stateMu 只保护 publisher 指针，持锁期间不做网络操作，
 	// 健康检查只读 stateMu，EventBus 建连停滞不会拖慢 /healthz。
@@ -52,17 +50,13 @@ func New(ctx context.Context, cfg *config.Config, version string) (*Agent, error
 	if cfg == nil {
 		return nil, fmt.Errorf("hostagent config is nil")
 	}
-	id, err := identity.LoadOrCreate(cfg.IdentityPath)
-	if err != nil {
-		return nil, err
-	}
 	hostname, _ := os.Hostname()
 	hostname = resolveHostName(hostname, cfg.HostName)
 	boot := ""
 	if b, readErr := os.ReadFile("/proc/sys/kernel/random/boot_id"); readErr == nil {
 		boot = strings.TrimSpace(string(b))
 	}
-	return &Agent{cfg: cfg, id: id, collector: collector.New(), hostname: hostname, bootID: boot, version: version}, nil
+	return &Agent{cfg: cfg, collector: collector.New(), hostname: hostname, bootID: boot, version: version}, nil
 }
 
 func resolveHostName(systemName, configuredName string) string {
@@ -109,7 +103,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		a.recordError(err)
 		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
 	}
-	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{HostId: a.cfg.HostID, AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
+	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{HostId: a.cfg.HostID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
 	if err != nil {
 		a.dropped.Add(1)
 		a.recordError(err)
@@ -142,7 +136,7 @@ func (a *Agent) eventPublisher(ctx context.Context) (eventpublisher.Publisher, e
 	factory := a.newPublisher
 	if factory == nil {
 		factory = func(ctx context.Context) (eventpublisher.Publisher, error) {
-			return eventpublisher.New(ctx, a.cfg.EventBusConfig, a.id.AgentID)
+			return eventpublisher.New(ctx, a.cfg.EventBusConfig, a.cfg.HostID)
 		}
 	}
 	publisher, err := factory(ctx)
@@ -203,7 +197,7 @@ func (a *Agent) publisherReady() bool {
 func (a *Agent) GetStatus(context.Context, *hostagentpb.GetStatusReq) (*hostagentpb.GetStatusRsp, error) {
 	a.latestMu.RLock()
 	defer a.latestMu.RUnlock()
-	rsp := &hostagentpb.GetStatusRsp{AgentId: a.id.AgentID, Version: a.version, Hostname: a.hostname, BootId: a.bootID, LastError: a.lastErr, Collected: a.collected.Load(), Published: a.published.Load(), Dropped: a.dropped.Load(), Skipped: a.skipped.Load(), EventbusConnected: a.publisherReady()}
+	rsp := &hostagentpb.GetStatusRsp{HostId: a.cfg.HostID, Version: a.version, Hostname: a.hostname, BootId: a.bootID, LastError: a.lastErr, Collected: a.collected.Load(), Published: a.published.Load(), Dropped: a.dropped.Load(), Skipped: a.skipped.Load(), EventbusConnected: a.publisherReady()}
 	if !a.lastCollect.IsZero() {
 		rsp.LastCollectAt = a.lastCollect.Format(time.RFC3339Nano)
 	}

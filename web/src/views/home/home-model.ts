@@ -393,8 +393,8 @@ export function hostRows(hosts: HealthHost[]): HostRow[] {
     };
     const status = toneOf(host.status);
     return {
-      key: host.host_id || host.agent_id || host.hostname || "",
-      name: host.hostname || host.host_id || host.agent_id || "",
+      key: host.host_id || "",
+      name: host.hostname || host.host_id || "",
       tone: status === "ok" && (hot.cpu || hot.memory || hot.disk) ? "warn" : status,
       cpu: percentText(host.cpu_percent, host.cpu_available),
       memory: percentText(host.memory_percent, host.memory_available),

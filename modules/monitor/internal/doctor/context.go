@@ -232,7 +232,7 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 				out.MissingObservations = append(out.MissingObservations, missing)
 				continue
 			}
-			agent, ok := latestAgent(agents, expected.NodeID)
+			agent, ok := findHost(agents, expected.NodeID)
 			if !ok {
 				out.MissingObservations = append(out.MissingObservations, missing)
 				continue
@@ -243,7 +243,7 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 				summary = "host snapshot is stale"
 			}
 			out.HealthObservations = append(out.HealthObservations, Observation{
-				Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: agent.AgentID,
+				Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, InstanceID: agent.HostID,
 				NodeID: expected.NodeID, BootID: agent.BootID, Status: "OK", ObservedAt: seen, Stale: !agent.Reachable,
 				AgeSeconds: observationAge(now, seen), Summary: summary,
 			})
@@ -275,17 +275,14 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 	return nil
 }
 
-// latestAgent 取这台主机最近一次主机快照。
-func latestAgent(agents []hostmetrics.AgentView, hostID string) (hostmetrics.AgentView, bool) {
-	var found hostmetrics.AgentView
-	ok := false
+// findHost 按主机 ID 取这台主机的上报；每台主机只有一行。
+func findHost(agents []hostmetrics.AgentView, hostID string) (hostmetrics.AgentView, bool) {
 	for _, agent := range agents {
-		if agent.HostID != hostID || (ok && parseTimestamp(agent.LastSeenAt).Before(parseTimestamp(found.LastSeenAt))) {
-			continue
+		if agent.HostID == hostID {
+			return agent, true
 		}
-		found, ok = agent, true
 	}
-	return found, ok
+	return hostmetrics.AgentView{}, false
 }
 
 func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, healthCheckIDs []string, now time.Time, out *Context) error {
@@ -426,17 +423,17 @@ func (b Builder) addHosts(ctx context.Context, nodeID string, now time.Time, out
 		return err
 	}
 	for _, host := range hosts {
-		if nodeID != "" && host.Hostname != nodeID && host.AgentID != nodeID {
+		if nodeID != "" && host.HostID != nodeID {
 			continue
 		}
 		out.Hosts = append(out.Hosts, host)
-		history, err := b.Hosts.History(ctx, host.AgentID, now.Add(-hostmetrics.SampleRetention), now, hostmetrics.ForecastHistoryLimit)
+		history, err := b.Hosts.History(ctx, host.HostID, now.Add(-hostmetrics.SampleRetention), now, hostmetrics.ForecastHistoryLimit)
 		if err != nil {
 			return err
 		}
-		out.Forecasts[host.AgentID] = hostmetrics.ForecastDisks(history, now)
-		if len(out.Forecasts[host.AgentID]) == 0 {
-			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "disk_forecast", NodeID: host.Hostname, InstanceID: host.AgentID, Status: "UNKNOWN", Summary: "insufficient disk history"})
+		out.Forecasts[host.HostID] = hostmetrics.ForecastDisks(history, now)
+		if len(out.Forecasts[host.HostID]) == 0 {
+			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "disk_forecast", NodeID: host.HostID, Status: "UNKNOWN", Summary: "insufficient disk history"})
 		}
 	}
 	return nil

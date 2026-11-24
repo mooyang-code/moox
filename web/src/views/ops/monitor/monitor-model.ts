@@ -809,9 +809,9 @@ export function capacityText(used: number | string | undefined, total: number | 
 
 export function hostCards(overview: HealthOverview | undefined, nowMs: number): HostCard[] {
   return (overview?.hosts || []).map((host: HealthHost) => ({
-    key: `${host.host_id}:${host.agent_id}`,
-    title: host.host_id || host.agent_id || host.hostname || "",
-    subtitle: [host.host_id ? "" : "未关联部署主机", host.address || host.hostname].filter(Boolean).join(" · "),
+    key: host.host_id || "",
+    title: host.host_id || "",
+    subtitle: host.address || host.hostname || "",
     tone: classify(host.status).tone,
     status: statusLabel(host.status),
     reason: host.reason || "",

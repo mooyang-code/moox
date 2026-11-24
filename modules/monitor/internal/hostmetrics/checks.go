@@ -12,7 +12,7 @@ import (
 // DefaultHostStaleAfter 是采集器的停报时限：HostAgent 每分钟上报一次，连续三次没收到就算停报。
 const DefaultHostStaleAfter = 3 * time.Minute
 
-// 主机类检查的种类。主机的在线情形和资源使用率都是普通检查，check_id 为 host:<agent_id>:<种类>，
+// 主机类检查的种类。主机的在线情形和资源使用率都是普通检查，check_id 为 host:<host_id>:<种类>，
 // 和其他检查走同一条评估、记状态、推送、展示的路径。
 const (
 	// CheckKindPresence 是主机失联：采集器停报，主机网关心跳也不正常。
@@ -28,12 +28,12 @@ const (
 const checkPrefix = "host:"
 
 // CheckID 返回主机类检查的 check_id。
-func CheckID(agentID, kind string) string {
-	return checkPrefix + strings.TrimSpace(agentID) + ":" + kind
+func CheckID(hostID, kind string) string {
+	return checkPrefix + strings.TrimSpace(hostID) + ":" + kind
 }
 
-// ParseCheckID 拆出主机类检查的采集器 ID 与种类；不是主机类检查时 ok 为 false。
-func ParseCheckID(checkID string) (agentID, kind string, ok bool) {
+// ParseCheckID 拆出主机类检查的主机 ID 与种类；不是主机类检查时 ok 为 false。
+func ParseCheckID(checkID string) (hostID, kind string, ok bool) {
 	parts := strings.Split(checkID, ":")
 	if len(parts) != 3 || parts[0]+":" != checkPrefix || strings.TrimSpace(parts[1]) == "" {
 		return "", "", false

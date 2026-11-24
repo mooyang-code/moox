@@ -377,7 +377,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 		switch id {
 		case "host-agent":
 			set("host_id", r.Host.Name)
-			set("identity_path", path.Join(data, "identity.yaml"))
 			set("eventbus_config", credential)
 			set("host_policy_path", layout.HostPolicy())
 			set("gateway_client", map[string]string{})

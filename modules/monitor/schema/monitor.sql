@@ -81,9 +81,9 @@ CREATE TABLE IF NOT EXISTS t_monitor_gateway_observations (
     c_read_error TEXT NOT NULL DEFAULT ''
 );
 
+-- 每台登记主机最近一次上报：以 Admin 登记的主机 ID 为键，重装 HostAgent 沿用同一行。
 CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
-    c_agent_id TEXT PRIMARY KEY,
-    c_host_id TEXT NOT NULL DEFAULT '',
+    c_host_id TEXT NOT NULL PRIMARY KEY,
     c_hostname TEXT NOT NULL,
     c_boot_id TEXT NOT NULL,
     c_last_seen_at DATETIME NOT NULL,
@@ -96,10 +96,10 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
 -- 按采样时间保留 7 天，由数据清理定时任务删除。时间均为 UTC。
 CREATE TABLE IF NOT EXISTS t_monitor_host_samples (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_agent_id TEXT NOT NULL,
+    c_host_id TEXT NOT NULL,
     c_observed_at DATETIME NOT NULL,
     c_snapshot BLOB NOT NULL,
-    UNIQUE (c_agent_id, c_observed_at)
+    UNIQUE (c_host_id, c_observed_at)
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitor_host_samples_observed ON t_monitor_host_samples (c_observed_at);

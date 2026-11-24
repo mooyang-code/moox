@@ -11,11 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/collector"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
-	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
@@ -39,10 +37,9 @@ func testAgent(t *testing.T) *Agent {
 	dir := t.TempDir()
 	return &Agent{
 		cfg: &config.Config{
-			IdentityPath:   filepath.Join(dir, "identity.yaml"),
+			HostID:         "control",
 			EventBusConfig: writeEventBusConfig(t, dir),
 		},
-		id:        identity.File{AgentID: uuid.New().String()},
 		collector: collector.New(),
 		hostname:  "test-host",
 		bootID:    "boot-id",
@@ -100,7 +97,7 @@ func TestNew_UnsupportedPlatform_ShouldReturnError(t *testing.T) {
 		t.Skip("linux amd64/arm64 supports New")
 	}
 	_, err := New(context.Background(), &config.Config{
-		IdentityPath:   filepath.Join(t.TempDir(), "identity.yaml"),
+		HostID:         "control",
 		EventBusConfig: writeEventBusConfig(t, t.TempDir()),
 	}, "dev")
 	assert.Error(t, err)
@@ -120,7 +117,7 @@ func TestAgent_GetStatus_ShouldExposeCountersAndLatest(t *testing.T) {
 
 	rsp, err := a.GetStatus(context.Background(), &hostagentpb.GetStatusReq{})
 	require.NoError(t, err)
-	assert.Equal(t, a.id.AgentID, rsp.GetAgentId())
+	assert.Equal(t, a.cfg.HostID, rsp.GetHostId())
 	assert.Equal(t, a.version, rsp.GetVersion())
 	assert.Equal(t, a.hostname, rsp.GetHostname())
 	assert.Equal(t, a.bootID, rsp.GetBootId())
@@ -209,7 +206,7 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	assert.Empty(t, a.lastErr)
 	publisher := a.publisher.(*fakeEventPublisher)
 	require.Equal(t, "control", publisher.metric.GetHostId())
-	require.Equal(t, a.id.AgentID, publisher.metric.GetAgentId())
+	require.Equal(t, a.cfg.HostID, publisher.metric.GetHostId())
 }
 
 func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {
@@ -332,7 +329,7 @@ func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
 		proxy := hostagentpb.NewHostAgentMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithProtocol("trpc"), client.WithNetwork("tcp"), client.WithSerializationType(serialization), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
 		status, err := proxy.GetStatus(t.Context(), &hostagentpb.GetStatusReq{})
 		require.NoError(t, err)
-		require.Equal(t, agent.id.AgentID, status.GetAgentId())
+		require.Equal(t, agent.cfg.HostID, status.GetHostId())
 		require.Equal(t, agent.hostname, status.GetHostname())
 		snapshot, err := proxy.GetSnapshot(t.Context(), &hostagentpb.GetSnapshotReq{})
 		require.NoError(t, err)

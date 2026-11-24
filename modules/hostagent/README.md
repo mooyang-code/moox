@@ -13,6 +13,6 @@ go test -count=1 ./modules/hostagent/...
 
 ## 配置
 
-`config/app.yaml`（身份文件、EventBus 凭据文件、`host_id`、`host_name`、`gateway_client`、`host_policy_path`）、`config/trpc_go.yaml`（服务端口、健康端口与采样定时器）。它是每台主机都有的主机级组件，随 `moox-cli setup deploy --host <主机>` 安装，EventBus 凭据在部署时从 Admin 导出，写到 `<部署根>/secrets/eventbus/`。
+`config/app.yaml`（`host_id`（必填，Admin 登记的主机 ID）、`host_name`、EventBus 凭据文件、`gateway_client`、`host_policy_path`，均由部署渲染）、`config/trpc_go.yaml`（服务端口、健康端口与采样定时器）。它是每台主机都有的主机级组件，随 `moox-cli setup deploy --host <主机>` 安装，EventBus 凭据在部署时从 Admin 导出，写到 `<部署根>/secrets/eventbus/`。
 
 HostAgentMgr 管理接口使用 loopback 原生 tRPC 11426，经主机网关调用；健康端口 11425 只听 127.0.0.1。

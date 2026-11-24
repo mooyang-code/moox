@@ -10,7 +10,7 @@ describe("health display", () => {
     expect(statusLabel("stale")).toBe("未知");
   });
   it("links each alert to the page that handles it", () => {
-    expect(alertLink({ type: "host", host_id: "control", agent_id: "pwU2" })).toEqual({
+    expect(alertLink({ type: "host", host_id: "control" })).toEqual({
       href: "#/ops/hosts?tab=monitor&host_id=control",
       label: "查看主机"
     });

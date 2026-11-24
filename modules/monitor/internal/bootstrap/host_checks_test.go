@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -109,11 +108,11 @@ func newHostCheckHarness(t *testing.T) *hostCheckHarness {
 	return h
 }
 
-// report 模拟采集器 agentID 在当前时刻上报一份快照。
-func (h *hostCheckHarness) report(agentID string, cpu float64) {
+// report 模拟 storage 主机的 host-agent 在当前时刻上报一份快照。
+func (h *hostCheckHarness) report(cpu float64) {
 	h.t.Helper()
 	h.sequence++
-	metric := &hostmetricpb.HostMetric{HostId: "storage", AgentId: agentID, Hostname: "VM-0-9", BootId: "boot", Snapshot: &hostmetricpb.HostSnapshot{
+	metric := &hostmetricpb.HostMetric{HostId: "storage", Hostname: "VM-0-9", BootId: "boot", Snapshot: &hostmetricpb.HostSnapshot{
 		Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: cpu},
 		Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
 		TopProcesses: []*hostmetricpb.ProcessMetric{
@@ -175,9 +174,9 @@ func requireSameAsPush(t *testing.T, alert *pb.HealthAlert, pushed notification.
 // 同一次主机失联（采集器停报、网关心跳也停了）：页面与推送是同一个标题、级别和原因；恢复后页面告警消失并推送恢复。
 func TestHostLostShowsTheSameAlertOnPageAndPush(t *testing.T) {
 	h := newHostCheckHarness(t)
-	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
+	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 	require.Empty(t, h.sender.forCheck(presence))
 	require.Nil(t, h.pageAlert(hostmetrics.CheckKindPresence))
@@ -200,14 +199,14 @@ func TestHostLostShowsTheSameAlertOnPageAndPush(t *testing.T) {
 	requireSameAsPush(t, alert, pushed[0])
 	require.Equal(t, "storage", alert.Object.HostId)
 	require.Nil(t, h.pageAlert(hostmetrics.CheckKindAgent), "主机失联时不再另报 host-agent 停止上报")
-	require.Empty(t, h.sender.forCheck(hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindAgent)))
+	require.Empty(t, h.sender.forCheck(hostmetrics.CheckID("storage", hostmetrics.CheckKindAgent)))
 	host := h.overview().Hosts[0]
 	require.Equal(t, "down", host.Status)
 	require.Equal(t, alert.Reason, host.Reason, "主机卡片与告警是同一段原因")
 
 	h.advance(time.Minute)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 	pushed = h.sender.forCheck(presence)
 	require.Len(t, pushed, 2)
@@ -222,10 +221,10 @@ func TestHostLostShowsTheSameAlertOnPageAndPush(t *testing.T) {
 // 之后网关心跳也停了，改报主机失联。
 func TestAgentOnlyStopIsAWarningOnPageAndPush(t *testing.T) {
 	h := newHostCheckHarness(t)
-	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
-	agent := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindAgent)
+	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
+	agent := hostmetrics.CheckID("storage", hostmetrics.CheckKindAgent)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 
 	h.advance(3*time.Minute + 10*time.Second)
@@ -261,14 +260,14 @@ func TestAgentOnlyStopIsAWarningOnPageAndPush(t *testing.T) {
 // 推送与页面是同一个标题、级别（警告）和原因，并带上进程排行。
 func TestHostThresholdAlertCountsSamplesAndMatchesPage(t *testing.T) {
 	h := newHostCheckHarness(t)
-	cpu := hostmetrics.CheckID("AGENT01", hostmetrics.HostMetricCPU)
+	cpu := hostmetrics.CheckID("storage", hostmetrics.HostMetricCPU)
 	failures := func() int {
 		state, err := h.repos.Alerts.GetState(t.Context(), events.SystemSpaceID, "default:"+cpu, cpu)
 		require.NoError(t, err)
 		return state.FailureCount
 	}
 	h.gateway(true)
-	h.report("AGENT01", 95)
+	h.report(95)
 	h.evaluate()
 	require.Equal(t, 1, failures())
 	// 30 秒后的下一轮没有新采样：不产生结果，不累计。
@@ -276,12 +275,12 @@ func TestHostThresholdAlertCountsSamplesAndMatchesPage(t *testing.T) {
 	h.evaluate()
 	require.Equal(t, 1, failures())
 	h.advance(30 * time.Second)
-	h.report("AGENT01", 95)
+	h.report(95)
 	h.evaluate()
 	require.Equal(t, 2, failures())
 	require.Empty(t, h.sender.forCheck(cpu))
 	h.advance(time.Minute)
-	h.report("AGENT01", 95)
+	h.report(95)
 	h.evaluate()
 	pushed := h.sender.forCheck(cpu)
 	require.Len(t, pushed, 1)
@@ -296,7 +295,7 @@ func TestHostThresholdAlertCountsSamplesAndMatchesPage(t *testing.T) {
 
 	// 回落到告警线以下、恢复线以上：仍在告警，不恢复。
 	h.advance(time.Minute)
-	h.report("AGENT01", 75)
+	h.report(75)
 	h.evaluate()
 	require.Len(t, h.sender.forCheck(cpu), 1)
 	alert = h.pageAlert(hostmetrics.HostMetricCPU)
@@ -304,7 +303,7 @@ func TestHostThresholdAlertCountsSamplesAndMatchesPage(t *testing.T) {
 	require.Equal(t, "CPU 使用率 75.0%，还没有回落到恢复线 70%", alert.Reason)
 
 	h.advance(time.Minute)
-	h.report("AGENT01", 65)
+	h.report(65)
 	h.evaluate()
 	pushed = h.sender.forCheck(cpu)
 	require.Len(t, pushed, 2)
@@ -315,7 +314,7 @@ func TestHostThresholdAlertCountsSamplesAndMatchesPage(t *testing.T) {
 
 	// 没有在告警时，落在两条线之间不算超限。
 	h.advance(time.Minute)
-	h.report("AGENT01", 75)
+	h.report(75)
 	h.evaluate()
 	require.Zero(t, failures())
 }
@@ -323,9 +322,9 @@ func TestHostThresholdAlertCountsSamplesAndMatchesPage(t *testing.T) {
 // 观测输入中断时主机类检查冻结：不新增失联告警，也不恢复已有告警；恢复后照常判定。
 func TestHostChecksFreezeWhileObservationIsSuspended(t *testing.T) {
 	h := newHostCheckHarness(t)
-	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
+	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 
 	h.suspended = true
@@ -342,36 +341,34 @@ func TestHostChecksFreezeWhileObservationIsSuspended(t *testing.T) {
 	h.suspended = true
 	h.advance(time.Minute)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 	require.Len(t, h.sender.forCheck(presence), 1, "冻结期间也不恢复")
 	require.NotNil(t, h.pageAlert(hostmetrics.CheckKindPresence))
 }
 
-// 主机失联后换了新的采集器上报（重装）：旧采集器的失联告警恢复，新采集器接着被检查。停用主机后不再检查。
-func TestReplacedAgentResolvesTheOldPresenceAlert(t *testing.T) {
+// 主机失联后重装 HostAgent 恢复上报：同一台主机的失联告警恢复（主机 ID 不变，检查也不变）。停用主机后不再告警。
+func TestReinstalledAgentResolvesThePresenceAlert(t *testing.T) {
 	h := newHostCheckHarness(t)
-	old := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
+	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 	h.advance(4 * time.Minute)
 	h.gateway(false)
 	h.evaluate()
-	require.Len(t, h.sender.forCheck(old), 1)
+	require.Len(t, h.sender.forCheck(presence), 1)
 
 	h.advance(time.Minute)
 	h.gateway(true)
-	h.report("AGENT02", 20)
+	h.report(20)
 	h.evaluate()
-	pushed := h.sender.forCheck(old)
+	pushed := h.sender.forCheck(presence)
 	require.Len(t, pushed, 2)
 	require.Equal(t, notification.SeverityInfo, pushed[1].Severity)
 	require.Nil(t, h.pageAlert(hostmetrics.CheckKindPresence))
-	_, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, hostmetrics.CheckID("AGENT02", hostmetrics.CheckKindPresence))
-	require.NoError(t, err)
 
-	// 主机停用后新采集器停报不告警。
+	// 主机停用后 host-agent 停报不告警。
 	snapshot, err := h.repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	snapshot.Hosts[0].Status = servicecatalog.Disabled
@@ -380,18 +377,16 @@ func TestReplacedAgentResolvesTheOldPresenceAlert(t *testing.T) {
 	h.advance(10 * time.Minute)
 	h.gateway(false)
 	h.evaluate()
-	for _, message := range h.sender.forCheck(hostmetrics.CheckID("AGENT02", hostmetrics.CheckKindPresence)) {
-		require.False(t, strings.Contains(message.Body, "新告警"), "停用的主机不产生失联告警")
-	}
+	require.Len(t, h.sender.forCheck(presence), 2, "停用的主机不产生失联告警")
 }
 
 // 业务评估整体失败（例如存储机宕机、读 Storage 超时）时，主机类检查独立先跑、只读本地库：失联照样产出结果并告警。
 // 业务评估自己跑的时候也不会把主机类检查标成“不再检查”把告警恢复掉。
 func TestHostChecksDoNotDependOnBusinessEvaluation(t *testing.T) {
 	h := newHostCheckHarness(t)
-	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
+	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	require.NoError(t, h.hostRun(t.Context()))
 
 	// 业务评估这一轮没有跑成；调用方的上下文也已经超时，主机类检查用自己的时限。
@@ -420,10 +415,10 @@ func TestHostChecksDoNotDependOnBusinessEvaluation(t *testing.T) {
 // 资源告警在告警中时主机被停用：主机类检查不再检查这台主机，资源告警随之恢复，不会一直挂着。
 func TestDisabledHostResolvesItsResourceAlert(t *testing.T) {
 	h := newHostCheckHarness(t)
-	cpu := hostmetrics.CheckID("AGENT01", hostmetrics.HostMetricCPU)
+	cpu := hostmetrics.CheckID("storage", hostmetrics.HostMetricCPU)
 	h.gateway(true)
 	for range 3 {
-		h.report("AGENT01", 95)
+		h.report(95)
 		h.evaluate()
 		h.advance(time.Minute)
 	}
@@ -440,31 +435,17 @@ func TestDisabledHostResolvesItsResourceAlert(t *testing.T) {
 	require.Nil(t, h.pageAlert(hostmetrics.HostMetricCPU))
 	pushed := h.sender.forCheck(cpu)
 	require.Equal(t, notification.SeverityInfo, pushed[len(pushed)-1].Severity)
-	require.Len(t, h.sender.forCheck(hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)), 0, "停用的主机不报失联")
-}
-
-// 同一主机新旧两个采集器同时在报（重装重叠）：只有最近上报的那个有主机类检查，不会出两份同名的资源检查。
-func TestOnlyTheSelectedAgentHasResourceChecks(t *testing.T) {
-	h := newHostCheckHarness(t)
-	h.gateway(true)
-	h.report("AGENT01", 95)
-	h.advance(time.Second)
-	h.report("AGENT02", 95)
-	h.evaluate()
-	_, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, hostmetrics.CheckID("AGENT02", hostmetrics.HostMetricCPU))
-	require.NoError(t, err)
-	_, err = h.repos.Checks.Get(t.Context(), events.SystemSpaceID, hostmetrics.CheckID("AGENT01", hostmetrics.HostMetricCPU))
-	require.Error(t, err, "被取代的采集器没有资源检查")
+	require.Len(t, h.sender.forCheck(hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)), 0, "停用的主机不报失联")
 }
 
 // host-agent 停报期间网关状态读取时好时坏：上一次读到的心跳还在 2 分钟内就仍算正常，
 // 告警保持“host-agent 停止上报”，不会在停报与失联之间来回切换。
 func TestGatewayReadErrorsDoNotFlipAgentStopIntoHostLost(t *testing.T) {
 	h := newHostCheckHarness(t)
-	presence := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindPresence)
-	agent := hostmetrics.CheckID("AGENT01", hostmetrics.CheckKindAgent)
+	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
+	agent := hostmetrics.CheckID("storage", hostmetrics.CheckKindAgent)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 	h.advance(3*time.Minute + 10*time.Second)
 	h.gateway(true)
@@ -487,13 +468,13 @@ func TestGatewayReadErrorsDoNotFlipAgentStopIntoHostLost(t *testing.T) {
 // 观测输入冻结期间到的超限采样不会被吃掉：解冻后照常计入。
 func TestSampleArrivingWhileSuspendedIsEvaluatedAfterwards(t *testing.T) {
 	h := newHostCheckHarness(t)
-	cpu := hostmetrics.CheckID("AGENT01", hostmetrics.HostMetricCPU)
+	cpu := hostmetrics.CheckID("storage", hostmetrics.HostMetricCPU)
 	h.gateway(true)
-	h.report("AGENT01", 20)
+	h.report(20)
 	h.evaluate()
 	h.advance(time.Minute)
 	h.suspended = true
-	h.report("AGENT01", 95)
+	h.report(95)
 	h.evaluate()
 	h.suspended = false
 	h.advance(30 * time.Second)
