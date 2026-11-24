@@ -116,7 +116,7 @@ func TestApplyRetriesAfterSendFailure(t *testing.T) {
 	check := "dataset:storage:a:1m"
 	require.NoError(t, f.apply(Round{Domain: DomainBusiness, Facts: []Fact{failing(check)}}))
 	require.NoError(t, f.apply(Round{Domain: DomainBusiness, Facts: []Fact{failing(check)}}))
-	require.Error(t, f.apply(Round{Domain: DomainBusiness, Facts: []Fact{failing(check)}}))
+	require.NoError(t, f.apply(Round{Domain: DomainBusiness, Facts: []Fact{failing(check)}}), "推送失败只记事件，不让整轮失败")
 	row := f.row(check)
 	require.True(t, row.Firing())
 	require.Nil(t, row.NotifiedAt, "推送没送达，下一轮重发")
@@ -130,7 +130,7 @@ func TestApplyRetriesAfterSendFailure(t *testing.T) {
 
 	f.sender.err = errors.New("渠道不可用")
 	passed := Fact{SpaceID: "s", CheckID: check, Name: "检查", Status: domain.CheckStatusOK}
-	require.Error(t, f.apply(Round{Domain: DomainBusiness, Facts: []Fact{passed}}))
+	require.NoError(t, f.apply(Round{Domain: DomainBusiness, Facts: []Fact{passed}}))
 	row = f.row(check)
 	require.True(t, row.Firing(), "恢复没送达，改回告警中")
 	require.Zero(t, row.SuccessCount)

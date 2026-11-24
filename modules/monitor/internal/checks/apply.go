@@ -2,7 +2,6 @@ package checks
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -61,7 +60,8 @@ type pending struct {
 }
 
 // Apply 推进一轮：有事实的检查按 Step 推进；本域里既没有事实、也没有冻结的旧行删除，删除时在告警的写一条恢复事件。
-// 所有行的更新、删除和事件在一个事务里写入，提交后再逐条推送。
+// 所有行的更新、删除和事件在一个事务里写入，提交后再逐条推送。只有写库失败才返回错误：推送失败已记成 send_failed 事件
+// 并改回检查行（下一轮重发），只写日志，不能让一次渠道故障把整轮评估判成失败（那会让 Monitor 判自己评估停滞、主机采样被重复计数）。
 func (a *Applier) Apply(ctx context.Context, round Round) error {
 	rows, err := a.Load(ctx, round.Domain)
 	if err != nil {
@@ -116,17 +116,17 @@ func (a *Applier) Apply(ctx context.Context, round Round) error {
 	if err := a.Checks.SaveRound(ctx, upserts, deletes, events); err != nil {
 		return err
 	}
-	return a.send(ctx, sends)
+	a.send(ctx, sends)
+	return nil
 }
 
 // send 逐条推送。triggered、reminder 全部渠道失败：记 send_failed、把 c_notified_at 置空（下一轮按提醒重发）；
 // resolved 全部失败：记 send_failed、改回告警中并清零成功计数（下一次达到恢复阈值时重发）。部分渠道送达只记 send_failed，不重试。
-// 因删除而写的恢复推送失败只记 send_failed。
-func (a *Applier) send(ctx context.Context, sends []pending) error {
+// 因删除而写的恢复推送失败只记 send_failed。失败都写日志。
+func (a *Applier) send(ctx context.Context, sends []pending) {
 	if a.Sender == nil || len(sends) == 0 {
-		return nil
+		return
 	}
-	var errs []error
 	for _, item := range sends {
 		sender, err := a.Sender(ctx)
 		if err == nil && sender == nil {
@@ -145,17 +145,12 @@ func (a *Applier) send(ctx context.Context, sends []pending) error {
 			continue
 		}
 		partial := notifier.IsPartial(err)
+		// 部分渠道已送达时不按未送达重试，免得已收到的群重复收到。
 		if fixErr := a.recordSendFailure(ctx, item, err, !partial); fixErr != nil {
-			errs = append(errs, fixErr)
+			log.ErrorContextf(ctx, "monitor alert send failure not recorded check=%s: %v", item.event.CheckID, fixErr)
 		}
-		if partial {
-			// 已有渠道送达：不按未送达重试，免得已收到的群重复收到。
-			log.WarnContextf(ctx, "monitor alert notification partially failed check=%s: %v", item.event.CheckID, err)
-			continue
-		}
-		errs = append(errs, err)
+		log.WarnContextf(ctx, "monitor alert notification failed check=%s partial=%t: %v", item.event.CheckID, partial, err)
 	}
-	return errors.Join(errs...)
 }
 
 func (a *Applier) recordSendFailure(ctx context.Context, item pending, sendErr error, retry bool) error {

@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -31,13 +32,15 @@ import (
 type capturedSender struct {
 	mu       sync.Mutex
 	messages []notification.Message
+	// err 不为空时每次推送都失败（渠道故障）。
+	err error
 }
 
 func (s *capturedSender) Send(_ context.Context, message notification.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, message)
-	return nil
+	return s.err
 }
 
 // forCheck 返回某项系统空间检查推送过的消息（推送的 Key 是 空间/检查ID）。
@@ -455,4 +458,29 @@ func TestSampleArrivingWhileSuspendedIsEvaluatedAfterwards(t *testing.T) {
 	row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, cpu)
 	require.NoError(t, err)
 	require.Equal(t, 1, row.FailureCount)
+}
+
+// 推送渠道一直故障：主机类检查照常成功返回（不让 Monitor 判自己评估停滞），同一次采样只计一次，下一次新采样才累计。
+func TestHostChecksKeepRunningWhileNotificationsFail(t *testing.T) {
+	h := newHostCheckHarness(t)
+	h.sender.err = errors.New("渠道不可用")
+	cpu := hostmetrics.CheckID("storage", hostmetrics.HostMetricCPU)
+	failures := func() int {
+		row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, cpu)
+		require.NoError(t, err)
+		return row.FailureCount
+	}
+	h.gateway(true)
+	for i := 1; i <= 4; i++ {
+		h.report(95)
+		require.NoError(t, h.hostRun(t.Context()))
+		require.Equal(t, i, failures())
+		h.advance(30 * time.Second)
+		require.NoError(t, h.hostRun(t.Context()), "没有新采样的一轮也照常返回")
+		require.Equal(t, i, failures(), "同一次采样不重复计数")
+		h.advance(30 * time.Second)
+	}
+	row, err := h.repos.Checks.Get(t.Context(), events.SystemSpaceID, cpu)
+	require.NoError(t, err)
+	require.True(t, row.Firing())
 }
