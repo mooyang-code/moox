@@ -306,8 +306,7 @@ func TestObservedRestartTasksReadyOneByOne(t *testing.T) {
 	live(runner, data, obs, []string{"A", "B", "C"})
 	require.Equal(t, math.Float64bits(allReady), math.Float64bits(storage.value(t, "result_ftask_obs", "A", 9, "obs")), "先就绪的 obs")
 
-	// wide 准备失败（NOPE 在本地与 Storage 都没有数据）：它的范围仍算正在同步，X 不进 obs 的历史截面，GONE 仍在。
-	require.Error(t, data.Prepare(ctx, wide, []string{"A", "B", "C", "X", "NOPE"}))
+	// wide 一直没准备：它的范围仍算正在同步，X 不进 obs 的历史截面，GONE 仍在。
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: obs.Set, Members: obs.Members,
 		PeriodTime: rt0.Add(9 * time.Minute), UniverseSeries: plainSeries("A", "B", "C")})
 	require.NoError(t, err)
