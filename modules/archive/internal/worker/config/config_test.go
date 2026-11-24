@@ -34,7 +34,7 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Pacing.RequestSeconds != [2]int{25, 55} || cfg.Pacing.HourQuiet != [2]string{"58:00", "04:00"} || cfg.Pacing.RequestInterval != 200*time.Millisecond ||
+	if !cfg.Pacing.MinuteWindow || cfg.Pacing.RequestInterval != 200*time.Millisecond ||
 		cfg.Pacing.MaxBytesPerSecond != 512<<10 || cfg.Pacing.MaxConcurrentRuns != 4 || cfg.Pacing.MaxStorageRuns != 2 || cfg.Pacing.PageRows != 500 {
 		t.Fatalf("pacing = %+v", cfg.Pacing)
 	}
@@ -62,7 +62,7 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 		"bad format":        "",
 		"wrong caller":      "",
 		"low free":          "",
-		"bad quiet":         "",
+		"removed quiet":     "pacing:\n  hour_quiet: [\"58:00\", \"04:00\"]\n",
 		"too many pages":    "",
 		"bad maintenance":   "",
 		"storage runs over": "",
@@ -87,8 +87,6 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 			body = strings.Replace(base, "caller: archive-worker", "caller: factor-engine", 1)
 		case "low free":
 			body = base + "  min_free_bytes: -1\n"
-		case "bad quiet":
-			body = base + "pacing:\n  hour_quiet: [\"61:00\", \"04:00\"]\n"
 		case "too many pages":
 			body = base + "pacing:\n  page_rows: 5000\n"
 		case "bad maintenance":

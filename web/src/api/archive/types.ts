@@ -161,21 +161,6 @@ export interface ArchiveWorkerInfo {
   object_store?: ArchiveObjectStore;
 }
 
-/**
- * 避开采集触发时刻的规则，由 archive-mgr 按各空间生效中的采集频率推出。
- * 触发时刻是分钟数为 every_minutes 倍数的第 0 秒，[触发 − before_seconds, 触发 + after_seconds) 不发请求；every_minutes 为 0 表示不限秒。
- * hour_quiet_from / hour_quiet_until（"MM:SS"）是每小时不发请求的区间，都为空表示不避让整点。computed_at 为空表示还在用启动默认值。
- */
-export interface AvoidanceRules {
-  every_minutes?: number;
-  before_seconds?: number;
-  after_seconds?: number;
-  hour_quiet_from?: string;
-  hour_quiet_until?: string;
-  basis?: string;
-  computed_at?: string;
-}
-
 export interface GetArchiveOverviewRsp {
   worker?: ArchiveWorkerInfo;
   /** 只算当前空间 */
@@ -184,7 +169,6 @@ export interface GetArchiveOverviewRsp {
   enabled_task_count?: number;
   queued_run_count?: number;
   alerts?: string[];
-  avoidance?: AvoidanceRules;
 }
 
 export interface ListArchiveTasksRsp {

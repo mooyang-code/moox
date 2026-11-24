@@ -116,7 +116,7 @@
             <div v-for="text in preview.partition_export_estimates" :key="text">{{ exportEstimateText(text, zone) }}</div>
           </div>
         </template>
-        <div class="sub fixed">{{ avoidanceText || "避让时段读取中" }}</div>
+        <div class="sub fixed">{{ ARCHIVE_SCHEDULE_NOTE }}</div>
         <div class="sub">到点拉取只读新收盘的几根，补采由复核兜底。</div>
       </aside>
     </div>
@@ -132,7 +132,6 @@ import {
   previewArchiveSchedule,
   updateArchiveTask,
   type ArchiveTask,
-  type AvoidanceRules,
   type PrepareArchiveTaskRsp,
   type PreviewArchiveScheduleRsp
 } from "@/api/archive";
@@ -142,7 +141,7 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatRetention } from "@/utils/retention";
 import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import {
-  avoidanceScheduleText,
+  ARCHIVE_SCHEDULE_NOTE,
   backfillFromError,
   dirNameError,
   durationText,
@@ -170,8 +169,6 @@ const props = defineProps<{
   tasks: ArchiveTask[];
   zone: string;
   spaceId: string;
-  /** 当前的避让规则（概览接口），右侧说明按它写 */
-  avoidance?: AvoidanceRules;
   /** 执行器的归档根目录；有就把路径预览写成绝对路径 */
   rootDir?: string;
 }>();
@@ -246,7 +243,6 @@ const pathPreview = computed(() =>
         props.rootDir
       )
 );
-const avoidanceText = computed(() => avoidanceScheduleText(props.avoidance));
 
 watch(
   () => props.visible,

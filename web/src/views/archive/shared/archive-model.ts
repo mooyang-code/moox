@@ -12,8 +12,7 @@ import type {
   ArchiveRunKind,
   ArchiveRunStatus,
   ArchiveTask,
-  ArchiveWorkerInfo,
-  AvoidanceRules
+  ArchiveWorkerInfo
 } from "@/api/archive";
 import type { ComponentDeployment, DeploymentHost } from "@/api/admin/types";
 import { formatBytes } from "@/api/modules/host-monitor";
@@ -283,46 +282,11 @@ export function storageClassText(store: Pick<ArchiveObjectStore, "storage_class"
   return store.storage_class === "STANDARD_IA" ? "低频（STANDARD_IA）" : store.storage_class;
 }
 
-// ---- 避让时段 ----
+// ---- 拉取时刻说明 ----
 
-/** "04:00" → 下一个检查时刻 ":04:25"（mgr 每分钟第 25 秒检查）。 */
-function nextCheckAfter(mmss: string): string {
-  const match = /^(\d{2}):(\d{2})$/.exec(mmss);
-  if (!match) return "";
-  let minute = Number(match[1]);
-  if (Number(match[2]) > 25) minute = (minute + 1) % 60;
-  return `:${String(minute).padStart(2, "0")}:25`;
-}
-
-export const hasHourQuiet = (rules: AvoidanceRules) => Boolean(rules.hour_quiet_from && rules.hour_quiet_until);
-
-/** 每分钟的秒窗口：不限秒、每分钟只在第 25～55 秒读取、每 N 分钟的触发时刻前后不读取。 */
-export function minuteWindowText(rules: AvoidanceRules): string {
-  const every = rules.every_minutes || 0;
-  const before = rules.before_seconds || 0;
-  const after = rules.after_seconds || 0;
-  if (every <= 0) return "不限秒";
-  if (every === 1) return `每分钟只在第 ${after}～${60 - before} 秒读取`;
-  return `每 ${every} 分钟的触发时刻前 ${before} 秒到后 ${after} 秒不读取`;
-}
-
-export function hourQuietText(rules: AvoidanceRules): string {
-  return hasHourQuiet(rules) ? `每小时 :${rules.hour_quiet_from}～:${rules.hour_quiet_until} 不拉取` : "不避让整点";
-}
-
-/** 新建抽屉里的说明：拉取何时检查、整点窗口里的边界顺延到哪；没读到规则时为空。 */
-export function avoidanceScheduleText(rules: AvoidanceRules | undefined): string {
-  if (!rules) return "";
-  const hour = hasHourQuiet(rules)
-    ? `${hourQuietText(rules)}，这段时间的边界顺延到 ${nextCheckAfter(rules.hour_quiet_until || "")}`
-    : "不避让整点，边界到了就拉取";
-  return `每分钟第 25 秒检查；${hour}；执行器读取 Storage 时${minuteWindowText(rules)}。`;
-}
-
-/** 依据：computed_at 为空表示还没算出过，用的是启动默认值。 */
-export function avoidanceBasisText(rules: AvoidanceRules): string {
-  return rules.basis || (rules.computed_at ? "—" : "未取到采集频率，使用默认值");
-}
+/** 新建抽屉里的说明：避让的两个窗口写死在 archive-mgr 与 worker 里（见 docs/模块/归档.md 第 3 节）。 */
+export const ARCHIVE_SCHEDULE_NOTE =
+  "每分钟第 25 秒检查；每小时 :58～:04 不拉取，这段时间的边界顺延到 :04:25；执行器每分钟只在第 25～55 秒读取 Storage。";
 
 // ---- 目录名 ----
 

@@ -70,7 +70,7 @@ message ArchiveTask {
   // 最近一次已处理的拉取边界与复核边界；为空表示还没处理过（下一次检查立即复核）。
   string last_boundary = 11;
   string last_review = 12;
-  // 下一次拉取的时刻（下一个拉取边界之后的第一次检查，避让区间内的顺延到 :04:25）；停用时为空。
+  // 下一次拉取的时刻（下一个拉取边界之后的第一次检查，落在整点窗口 :58～:04 的顺延到 :04:25）；停用时为空。
   string next_pull_at = 13;
   uint32 consecutive_skips = 14;
   string last_success_at = 15;
@@ -189,8 +189,6 @@ message GetArchiveOverviewRsp {
   uint32 enabled_task_count = 6;
   uint32 queued_run_count = 7;
   repeated string alerts = 8;
-  // 当前生效的避让规则（由各空间的采集频率推出）与依据。
-  AvoidanceRules avoidance = 9;
 }
 
 message ListArchiveTasksReq {
@@ -235,7 +233,7 @@ message PreviewArchiveScheduleReq {
 }
 message PreviewArchiveScheduleRsp {
   common.RetInfo ret_info = 1;
-  // 接下来 5 个拉取时刻（避让区间内的顺延到 :04:25，去重）。
+  // 接下来 5 个拉取时刻（落在整点窗口 :58～:04 的顺延到 :04:25，去重）。
   repeated string next_runs = 2;
   // 复核间隔（秒）。
   uint32 interval_seconds = 3;
@@ -456,22 +454,6 @@ message ArchiveWorkerHeartbeatRsp {
   repeated string cancel_run_ids = 4;
   // 当前全部任务：worker 维护时删掉不在列表里的数据集的暂存状态。
   repeated TaskRef tasks = 5;
-  // 避让规则：worker 收到后替换本地 pacing 的生效分钟、前后秒数与整点静默（pacing.minute_window=false 时仍整分钟可发）。
-  AvoidanceRules avoidance = 6;
-}
-
-// AvoidanceRules 是避开采集触发时刻的规则，由 archive-mgr 按各空间生效中的采集频率推出。
-// 触发时刻 T 是 Unix 纪元起分钟数为 every_minutes 倍数的第 0 秒，[T − before_seconds, T + after_seconds) 不发请求；
-// every_minutes 为 0 表示不限秒。hour_quiet_from/hour_quiet_until（"MM:SS"）是每小时不发请求的区间，都为空表示不避让整点。
-message AvoidanceRules {
-  uint32 every_minutes = 1;
-  uint32 before_seconds = 2;
-  uint32 after_seconds = 3;
-  string hour_quiet_from = 4;
-  string hour_quiet_until = 5;
-  // basis 是给人看的依据，computed_at 是计算时间（RFC3339）。
-  string basis = 6;
-  string computed_at = 7;
 }
 
 message PullArchiveRunReq {

@@ -31,7 +31,7 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 	if err != nil {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
 	}
-	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success(), Avoidance: avoidanceToPB(s.avoidance())}
+	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success()}
 	canceled, err := s.store.RunningRunIDsCanceled(ctx, req.GetRunningRunIds())
 	if err != nil {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil

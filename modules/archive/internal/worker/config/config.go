@@ -93,12 +93,10 @@ type StagingSection struct {
 	CacheSize ByteSize `yaml:"cache_size"`
 }
 
-// PacingSection 是节奏与并发。RequestSeconds 与 HourQuiet 只在还没收到 mgr 下发的避让规则时使用。
+// PacingSection 是节奏与并发。避让的两个窗口（每分钟第 25～55 秒、整点 :58～:04）写死在代码里，不进配置。
 type PacingSection struct {
-	RequestSeconds [2]int `yaml:"request_seconds"`
-	// MinuteWindow 控制是否按秒窗口避让，默认 true；设为 false 则整分钟都可发（优先于 mgr 下发的规则，整点静默仍生效）。
+	// MinuteWindow 控制是否按每分钟第 25～55 秒的秒窗口避让，默认 true；设为 false 则整分钟都可发（整点窗口仍生效）。
 	MinuteWindow      bool          `yaml:"minute_window"`
-	HourQuiet         [2]string     `yaml:"hour_quiet"`
 	RequestInterval   time.Duration `yaml:"request_interval"`
 	MaxBytesPerSecond ByteSize      `yaml:"max_bytes_per_second"`
 	MaxConcurrentRuns int           `yaml:"max_concurrent_runs"`
@@ -134,7 +132,7 @@ func Default() *Config {
 		},
 		Staging: StagingSection{CacheSize: ByteSize(256 << 20)},
 		Pacing: PacingSection{
-			RequestSeconds: [2]int{25, 55}, MinuteWindow: true, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond,
+			MinuteWindow: true, RequestInterval: 200 * time.Millisecond,
 			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxStorageRuns: 2, PageRows: 500,
 		},
 		Health:      HealthSection{Addr: "127.0.0.1:11418"},
@@ -329,8 +327,7 @@ func (c *Config) resolve(path string) string {
 // PacingConfig 转成节奏包的配置。
 func (c *Config) PacingConfig() pacing.Config {
 	return pacing.Config{
-		RequestSeconds: c.Pacing.RequestSeconds, MinuteWindow: c.Pacing.MinuteWindow, HourQuiet: c.Pacing.HourQuiet,
-		RequestInterval: c.Pacing.RequestInterval, MaxBytesPerSecond: int64(c.Pacing.MaxBytesPerSecond),
+		MinuteWindow: c.Pacing.MinuteWindow, RequestInterval: c.Pacing.RequestInterval, MaxBytesPerSecond: int64(c.Pacing.MaxBytesPerSecond),
 	}
 }
 

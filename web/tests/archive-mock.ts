@@ -184,16 +184,7 @@ async function gateway(route: Route) {
           },
           running_runs: [],
           queued_run_count: 1,
-          alerts: [],
-          avoidance: {
-            every_minutes: 1,
-            before_seconds: 5,
-            after_seconds: 25,
-            hour_quiet_from: "58:00",
-            hour_quiet_until: "04:00",
-            basis: "crypto：1m、1h 等（每分钟触发，有 1h 及以上）",
-            computed_at: iso(NOW - 5 * MINUTE)
-          }
+          alerts: []
         })
       });
     case "ListDeployments":

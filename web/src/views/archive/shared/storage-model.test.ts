@@ -2,16 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { ComponentDeployment, DeploymentHost } from "@/api/admin/types";
 import {
   archiveQueryFor,
-  avoidanceBasisText,
-  avoidanceScheduleText,
   dirNameError,
   dirNameOwner,
   diskStatus,
   downloadBlockedReason,
   hostText,
-  hourQuietText,
   isBuiltinObjectStore,
-  minuteWindowText,
   parseArchiveQuery,
   partitionPathPreview,
   recentCellText,
@@ -108,35 +104,6 @@ describe("对象存储", () => {
     expect(isBuiltinObjectStore("http://127.0.0.1:11473/")).toBe(true);
     expect(isBuiltinObjectStore("cos.ap-shanghai.myqcloud.com")).toBe(false);
     expect(isBuiltinObjectStore("")).toBe(false);
-  });
-});
-
-describe("避让时段", () => {
-  const base = { before_seconds: 5, after_seconds: 25 };
-  it.each([
-    [{ ...base, every_minutes: 0 }, "不限秒"],
-    [{ ...base, every_minutes: 1 }, "每分钟只在第 25～55 秒读取"],
-    [{ ...base, every_minutes: 5 }, "每 5 分钟的触发时刻前 5 秒到后 25 秒不读取"]
-  ])("每分钟规则 %j", (rules, text) => {
-    expect(minuteWindowText(rules)).toBe(text);
-  });
-
-  it("整点窗口：有时写区间和顺延时刻，没有时不顺延", () => {
-    const quiet = { ...base, every_minutes: 1, hour_quiet_from: "58:00", hour_quiet_until: "04:00" };
-    expect(hourQuietText(quiet)).toBe("每小时 :58:00～:04:00 不拉取");
-    expect(avoidanceScheduleText(quiet)).toBe(
-      "每分钟第 25 秒检查；每小时 :58:00～:04:00 不拉取，这段时间的边界顺延到 :04:25；执行器读取 Storage 时每分钟只在第 25～55 秒读取。"
-    );
-    expect(avoidanceScheduleText({ ...quiet, hour_quiet_until: "04:30" })).toContain("顺延到 :05:25");
-    const none = { ...base, every_minutes: 5 };
-    expect(hourQuietText(none)).toBe("不避让整点");
-    expect(avoidanceScheduleText(none)).toContain("不避让整点，边界到了就拉取");
-    expect(avoidanceScheduleText(undefined)).toBe("");
-  });
-
-  it("依据：没算出过时写默认值", () => {
-    expect(avoidanceBasisText({ basis: "crypto：1m" })).toBe("crypto：1m");
-    expect(avoidanceBasisText({})).toBe("未取到采集频率，使用默认值");
   });
 });
 

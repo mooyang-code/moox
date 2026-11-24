@@ -2173,7 +2173,6 @@
   "callers": {
     "admin": [],
     "archive-mgr": [
-      "trpc.moox.collector.CollectMgr/GetCollectorStatus",
       "trpc.moox.storage.Metadata/GetDataset"
     ],
     "archive-worker": [

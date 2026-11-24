@@ -2,8 +2,8 @@
 //
 // mgr 每分钟第 25 秒检查一次：每个任务按频率 × N 对齐出「最近一个已收盘的拉取边界」，边界比上次记下的晚才生成运行；
 // 低于 1d 的任务另有每小时第 34 分的复核；1d 及以上每天一个边界，只生成复核。
-// 避让规则（Avoidance，由各空间采集频率推出）里有整点窗口时，落在窗口里的检查整次跳过；
-// 每分钟的秒窗口由 worker 的 pacing 执行，mgr 的检查固定在第 25 秒，恰好是触发时刻 + 25 秒，不受它影响。
+// 避让规则写死两个窗口：落在整点窗口 :58～:04（UTC）里的检查整次跳过；每分钟只在第 25～55 秒读取的秒窗口
+// 由 worker 的 pacing 执行，mgr 的检查固定在第 25 秒，不受它影响。
 package schedule
 
 import (
@@ -29,13 +29,20 @@ const (
 	MaxPullEveryBars     = 1440
 	// maxEnumerate 限制枚举边界的次数，防止异常输入死循环。
 	maxEnumerate = 100000
+
+	// AllowFromSecond、AllowUntilSecond：每分钟只在 [第 25 秒, 第 55 秒) 读取 Storage，避开采集函数在第 0 秒的触发与写入。
+	AllowFromSecond  = 25
+	AllowUntilSecond = 55
+	// HourQuietFrom、HourQuietUntil：每小时 [:58:00, :04:00)（UTC，跨整点，小时内的秒偏移）不读取，避开 1h 及以上数据集在整点的集中收盘。
+	HourQuietFrom  = 58 * 60
+	HourQuietUntil = 4 * 60
 )
 
 // Action 是一次检查对一个任务的处理。
 type Action int
 
 const (
-	// ActionNone：不到点，或落在避让区间，什么都不做、不写记录。
+	// ActionNone：不到点，或落在整点窗口，什么都不做、不写记录。
 	ActionNone Action = iota
 	// ActionReview：生成复核运行（scheduled），沿用回看规则读取并推进水位。
 	ActionReview
@@ -51,8 +58,6 @@ type Timing struct {
 	// Loc 与 LocalClose 是空间时区与本地收盘时刻（"15:00"，空串表示全天交易）；只影响 1d 及以上。
 	Loc        *time.Location
 	LocalClose string
-	// Avoid 是当前的避让规则（运行中会刷新，调用方传入一份不再改动的快照）；nil 按 DefaultAvoidance。
-	Avoid *Avoidance
 }
 
 // timing 是解析后的时序信息。
@@ -65,44 +70,19 @@ type timing struct {
 	hasClose bool
 	closeH   int
 	closeM   int
-	quiet    hourQuiet
 }
 
-// hourQuiet 是每小时不检查的区间 [from, until)（小时内的秒偏移）；on 为假表示不避让整点。
-type hourQuiet struct {
-	from, until int
-	on          bool
-}
-
-func newHourQuiet(a *Avoidance) (hourQuiet, error) {
-	if a == nil {
-		d := DefaultAvoidance()
-		a = &d
-	}
-	if err := a.Validate(); err != nil {
-		return hourQuiet{}, err
-	}
-	from, until, on, err := parseHourQuiet(a.HourQuiet)
-	return hourQuiet{from: from, until: until, on: on}, err
-}
-
-// contains 报告 t 是否落在整点窗口里（UTC）。
-func (q hourQuiet) contains(t time.Time) bool {
-	if !q.on {
-		return false
-	}
+// InHourQuiet 报告 t 是否落在整点窗口 [:58:00, :04:00) 里（UTC）。
+func InHourQuiet(t time.Time) bool {
 	t = t.UTC()
 	offset := t.Minute()*60 + t.Second()
-	if q.from > q.until {
-		return offset >= q.from || offset < q.until
-	}
-	return offset >= q.from && offset < q.until
+	return offset >= HourQuietFrom || offset < HourQuietUntil
 }
 
-// end 返回 t 所在整点窗口的结束时刻（t 必须落在窗口里）。
-func (q hourQuiet) end(t time.Time) time.Time {
+// HourQuietEnd 返回 t 所在整点窗口的结束时刻（t 必须落在窗口里）。
+func HourQuietEnd(t time.Time) time.Time {
 	t = t.UTC()
-	end := t.Truncate(time.Hour).Add(time.Duration(q.until) * time.Second)
+	end := t.Truncate(time.Hour).Add(HourQuietUntil * time.Second)
 	if !end.After(t) {
 		end = end.Add(time.Hour)
 	}
@@ -154,11 +134,7 @@ func (t Timing) parse() (timing, error) {
 	if err := ValidatePullEveryBars(n); err != nil {
 		return timing{}, err
 	}
-	quiet, err := newHourQuiet(t.Avoid)
-	if err != nil {
-		return timing{}, err
-	}
-	out := timing{n: n, loc: t.Loc, quiet: quiet}
+	out := timing{n: n, loc: t.Loc}
 	if out.loc == nil {
 		out.loc = time.UTC
 	}
@@ -260,13 +236,11 @@ func nextCheck(t time.Time) time.Time {
 	return at
 }
 
-// pullAt 返回边界 b 实际被拉取的时刻：b 之后（含）第一个检查时刻（第 25 秒），落在整点窗口的顺延到窗口结束后的第一个检查时刻；
-// 没有整点窗口时不顺延。
-func (q hourQuiet) pullAt(b time.Time) time.Time {
+// pullAt 返回边界 b 实际被拉取的时刻：b 之后（含）第一个检查时刻（第 25 秒），落在整点窗口的顺延到窗口结束后的第一个检查时刻（:04:25）。
+func pullAt(b time.Time) time.Time {
 	at := nextCheck(b)
-	// 窗口结束后的第一个检查时刻一定在窗口外（窗口按整秒，检查在第 25 秒）；循环只为防御异常窗口。
-	for i := 0; i < 3 && q.contains(at); i++ {
-		at = nextCheck(q.end(at))
+	if InHourQuiet(at) {
+		at = nextCheck(HourQuietEnd(at))
 	}
 	return at
 }
@@ -275,7 +249,7 @@ func (q hourQuiet) pullAt(b time.Time) time.Time {
 func (t timing) pullsAfter(after time.Time, count int) []time.Time {
 	out := make([]time.Time, 0, count)
 	for b, i := t.boundary(after), 0; len(out) < count && i < maxEnumerate; b, i = t.next(b), i+1 {
-		at := t.quiet.pullAt(b)
+		at := pullAt(b)
 		if !at.After(after) || (len(out) > 0 && !at.After(out[len(out)-1])) {
 			continue
 		}
@@ -291,7 +265,7 @@ func (t timing) reviewsAfter(after time.Time, count int) []time.Time {
 	}
 	out := make([]time.Time, 0, count)
 	for r := t.reviewBoundary(after); len(out) < count; r = r.Add(time.Hour) {
-		if at := t.quiet.pullAt(r); at.After(after) {
+		if at := pullAt(r); at.After(after) {
 			out = append(out, at)
 		}
 	}
@@ -347,7 +321,7 @@ type Decision struct {
 }
 
 // Decide 按任务记下的两个边界判定这次检查要做什么（不考虑已有运行：有排队中或运行中的运行时由调用方跳过、边界不前进）。
-//   - 落在避让规则的整点窗口：什么都不做；
+//   - 落在整点窗口 :58～:04：什么都不做；
 //   - 1d 及以上：拉取边界前进就生成复核，两个边界都记成这个边界；
 //   - 低于 1d：复核边界前进就生成复核（拉取边界也到点时一并记下，复核已覆盖）；否则拉取边界前进就生成到点拉取，
 //     读 [上次边界 − 2 根, now)，上次边界为空或比本次早 60 根以上时读 [本次边界 − (N + 2) 根, now)。
@@ -357,7 +331,7 @@ func Decide(t Timing, lastBoundary, lastReview, now time.Time) (Decision, error)
 		return Decision{}, err
 	}
 	now = now.UTC()
-	if parsed.quiet.contains(now) {
+	if InHourQuiet(now) {
 		return Decision{}, nil
 	}
 	b := parsed.boundary(now)
