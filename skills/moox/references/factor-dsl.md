@@ -578,7 +578,7 @@ members:
 - 因子已被任务引用时，还要求定义兼容：**不能增删参数、改参数名、调参数顺序、改参数类型、改参数默认值**（成员键依赖默认值），**不能增删、改名、重排输出**。可以改的是表达式本身，以及参数的 `min` / `max`。
 - 已有成员的参数值必须仍满足新的范围，否则报“参数不再合法”；新定义让某个成员无法通过校验，整次更新失败。
 - 没有被任何任务引用的因子可以随便改（不受上面两条兼容限制）。
-- `moox-cli factor task apply` 遇到“已存在但定义不同”只报 `conflict`，`moox-factor-mgr-cli import` 遇到已存在的因子 ID 直接报 `already exists`（不比较内容），都**不会替换**；改定义必须走 `factor update`。
+- `moox-cli factor task apply` 遇到“已存在但定义不同”只报 `conflict`，`moox-cli factor import --dir` 遇到已存在的因子 ID 直接报“已存在”并整批拒绝（不比较内容），都**不会替换**；改定义必须走 `factor update`。
 
 **流程**（运维机，用户的 `moox.toml`）：
 

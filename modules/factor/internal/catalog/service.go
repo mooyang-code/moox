@@ -19,8 +19,6 @@ import (
 
 type Option func(*Service)
 
-func WithLockDir(path string) Option { return func(s *Service) { s.locks = setlock.New(path) } }
-
 // WithReadyRecorder receives whether each set's result dataset accepted its
 // columns; the compute engine only writes to ready sets.
 func WithReadyRecorder(record func(taskID string, ready bool)) Option {
@@ -41,7 +39,7 @@ type Service struct {
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
-	s := &Service{db: db, metadata: metadata, now: time.Now, locks: setlock.New("")}
+	s := &Service{db: db, metadata: metadata, now: time.Now, locks: setlock.New()}
 	for _, option := range options {
 		if option != nil {
 			option(s)

@@ -95,6 +95,8 @@ var cliOnlyCoverage = map[string]string{
 	"trpc.moox.factor.EngineControl/GetLifecycle":          "lifecycle status",
 	"trpc.moox.factor.EngineControl/ControlLifecycle":      "lifecycle pause",
 	"trpc.moox.factor.EngineControl/CheckTask":             "factor task status",
+	"trpc.moox.factor.FactorMgr/ImportFactorCatalog":       "factor import",
+	"trpc.moox.factor.FactorMgr/PurgeResultDataset":        "factor purge-dataset",
 	"trpc.moox.factor.EngineControl/WriteSeries":           "import",
 	"trpc.moox.factor.EngineControl/GetSeriesFields":       "import",
 	"trpc.moox.factor.EngineControl/CheckSeriesSubject":    "import",

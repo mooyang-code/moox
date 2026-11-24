@@ -244,7 +244,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 
 1. **因子侧先于策略**：factor-mgr、因子引擎。`setup deploy` 每次都会重新生成因子机的 `<部署根>/config/factor-engine/engine.yaml`（部署根默认 `/data/moox`），直接改在目标机上的内容会被覆盖；要保留的改动先写进 `moox.toml` 的 `[overrides."factor-engine"."engine.yaml"]`（5.7 节）。发布后确认现有任务每期都正常。
 2. **strategy 与 admin（管理台内嵌在 admin 里）**：发布后确认现有实例仍然每期都是 ok。
-3. **写入因子**：因子定义在操作机上用 `moox-cli factor create` 或在管理台写入；也可以把文件传到控制机，用那里的本地工具导入：`<部署根>/bin/moox-factor-mgr-cli import --config <部署根>/config/factor-mgr/app.yaml --file <文件> [--factor-id <ID>]`（文件里有多个因子时要带 `--factor-id`）。这个工具直接写 factor-mgr 的数据库，必须用 `--config` 指向已部署的配置或用 `--db` 指向数据库文件，默认的 `./config/app.yaml` 只在模块源码目录里才对；因子任务与成员直接执行 `moox-cli factor task apply --file local/<名称>/out/factor-tasks.yaml`（有差异时它不写入、退出码非 0，先看输出再决定）。新任务要复用因子机上已有的预热数据，不要另导一份。
+3. **写入因子**：因子定义在操作机上用 `moox-cli factor create` 或在管理台写入；整个因子库目录用 `moox-cli factor import --dir <目录>`（任一因子已存在时整批拒绝）；因子任务与成员直接执行 `moox-cli factor task apply --file local/<名称>/out/factor-tasks.yaml`（有差异时它不写入、退出码非 0，先看输出再决定）。新任务要复用因子机上已有的预热数据，不要另导一份。
 4. **建策略**：建策略定义；读回 DSL 核对（5.2 节）；建观察实例，关联各自的因子任务，不挂账户。
 5. **分批启用**：先启用最便宜的那个，观察 1 小时内引擎内存、单期耗时，以及现有任务的耗时，再启用下一个。
 6. **首期检查**：规则数、选中币数符合预期；状态在 256 KB 以内。

@@ -108,7 +108,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}
 	r := &Runtime{
 		writes: newInflight(), cfg: cfg, identity: domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: bootID, Version: version},
-		runs: newRunTracker(), monitor: NewHealth(cfg.Pipeline.PeriodBudgetMax), locks: setlock.New(""),
+		runs: newRunTracker(), monitor: NewHealth(cfg.Pipeline.PeriodBudgetMax), locks: setlock.New(),
 		lease: &leaseState{}, health: factorhealth.New("factor-engine", cfg.Engine.ID, version, ""),
 	}
 	appCtx, cancel := context.WithCancel(ctx)

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
+-- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时把解析结果固化在会话里（实例读当前会话，停用后读最近一次会话）。因子任务在创建时写定，不能修改；
 -- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。c_session_id 只在启用时非空（启用、停用各是一个事务）。
 -- c_confirmed_at 为空表示试运行：目标只发影子、不下单。没挂账户的实例启用时直接写入；挂了账户的启用后为空，由用户确认实盘时写入；
 -- 停用、修改实例都清空它，重新启用从试运行开始。
@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_enabled INTEGER NOT NULL DEFAULT 0,
     c_confirmed_at DATETIME,
     c_session_id TEXT,
-    c_resolved_json TEXT NOT NULL DEFAULT '{}',
     c_health TEXT NOT NULL DEFAULT 'ok',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -84,12 +83,11 @@ CREATE TABLE IF NOT EXISTS t_strategy_sessions (
 CREATE INDEX IF NOT EXISTS idx_t_strategy_sessions_instance ON t_strategy_sessions (c_instance_id, c_started_at);
 
 -- 规则状态：每个实例一行，是引擎下一期求值的起点（各规则的状态与组合目标，策略池另有成员状态与池账本），与结果在同一个事务里更新。
--- c_bar_end_time 是状态推进到的那一期（bar_end，毫秒）；c_session_id、c_dsl_hash 是它当前所属的会话与 DSL 版本。
+-- c_bar_end_time 是状态推进到的那一期（bar_end，毫秒）；c_session_id 是它当前所属的会话（DSL 版本取会话的）。
 -- 新会话固化的 DSL 版本、绑定解析与成员和它所属会话的完全一致时改挂到新会话继续沿用，否则删除，从头开始
 CREATE TABLE IF NOT EXISTS t_strategy_states (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
     c_session_id TEXT NOT NULL,
-    c_dsl_hash TEXT NOT NULL,
     c_bar_end_time INTEGER NOT NULL,
     c_state_json TEXT NOT NULL,
     c_mtime DATETIME NOT NULL,
@@ -97,7 +95,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_states (
     FOREIGN KEY (c_session_id) REFERENCES t_strategy_sessions (c_session_id)
 );
 
--- 每个处理过的周期一行：ok 带目标，skipped 带原因；ok 行参与目标投递。
+-- 每个处理过的周期一行：ok 带目标，skipped 带原因；ok 行参与目标投递；DSL 版本取所属会话的。
 -- c_next_params_json 是这一期算出的下一期可变成员参数（没有可变成员时为空），与结果在同一个事务里写入；
 -- c_params_delivered_at 是它被因子侧接受的时间，c_params_error 是被因子侧明确拒绝的原因（不再重试）。
 CREATE TABLE IF NOT EXISTS t_strategy_results (
@@ -108,7 +106,6 @@ CREATE TABLE IF NOT EXISTS t_strategy_results (
     c_valid_until INTEGER NOT NULL,
     c_status TEXT NOT NULL,
     c_skip_reason TEXT NOT NULL DEFAULT '',
-    c_dsl_hash TEXT NOT NULL,
     c_input_json TEXT NOT NULL,
     c_targets_json TEXT NOT NULL,
     c_summary_json TEXT NOT NULL,

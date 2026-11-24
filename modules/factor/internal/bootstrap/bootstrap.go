@@ -102,7 +102,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.udfRuntimes = append(runtime.udfRuntimes, previewRuntime)
 	catalogService := catalog.NewService(db, storage,
-		catalog.WithLockDir(cfg.Database.Path+".locks"),
 		catalog.WithReadyRecorder(hub.SetResultReady),
 		catalog.WithUDFVerifier(catalog.UDFVerifier{Runtime: verifyRuntime, Conformance: factorudf.ConformanceOptions{Timeout: udfVerifyTimeout}}),
 		catalog.WithEngineView(hub.Engine),

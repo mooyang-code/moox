@@ -24,12 +24,12 @@ func seedInstanceRows(t *testing.T, repo *Store, instanceID, taskID, viewID stri
 		{`INSERT INTO t_strategy_sessions (c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_started_at, c_ctime, c_closed_at)
 			VALUES (?, ?, ?, '{}', (SELECT COALESCE(MAX(c_started_at), 0) + 1 FROM t_strategy_sessions), ?, ?)`,
 			[]any{sessionID, instanceID, testHash, at, at}},
-		{`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_summary_json)
-			VALUES (?, ?, ?, 1, 2, 'ok', ?, '{}', '[]', '{}')`, []any{resultID, instanceID, sessionID, testHash}},
+		{`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_input_json, c_targets_json, c_summary_json)
+			VALUES (?, ?, ?, 1, 2, 'ok', '{}', '[]', '{}')`, []any{resultID, instanceID, sessionID}},
 		{`INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_stage, c_ctime) VALUES (?, 'r', 'BTC-USDT', 'weighted', ?)`,
 			[]any{resultID, at}},
-		{`INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_dsl_hash, c_bar_end_time, c_state_json, c_mtime) VALUES (?, ?, ?, 1, '{}', ?)`,
-			[]any{instanceID, sessionID, testHash, at}},
+		{`INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_bar_end_time, c_state_json, c_mtime) VALUES (?, ?, 1, '{}', ?)`,
+			[]any{instanceID, sessionID, at}},
 		{`INSERT INTO t_strategy_ready_events (c_instance_id, c_session_id, c_view_id, c_bar_end_time, c_event_id, c_event_bytes) VALUES (?, ?, ?, 1, 'evt', x'00')`,
 			[]any{instanceID, sessionID, viewID}},
 		{`INSERT INTO t_strategy_replays (c_replay_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_status)

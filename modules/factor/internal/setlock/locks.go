@@ -2,35 +2,25 @@ package setlock
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
-// Lock order: the global udf lock (LockUdfContext) comes first, then a definition
-// lock (LockFactorContext), then set locks:
-// a definition lock (LockFactorContext) is always taken before any set lock, and several set locks are taken in ascending task_id order.
+// 锁顺序：全局自定义算子锁（LockUdfContext）在前，然后是定义锁（LockFactorContext），最后是任务锁；
+// 定义锁总是先于任何任务锁，多个任务锁按 task_id 升序取。
 
-// Locks serializes catalog changes with live and recalculation work for a set.
-// The in-process lock is a one-slot channel: blocked acquirers are served in
-// arrival order, so a recalc job that releases and immediately re-acquires
-// between chunks cannot starve a live period that is already waiting.
+// Locks 在进程内串行化同一任务的目录修改、实时计算与补算。每把锁是一个单槽通道：等待者按到达顺序拿到锁，
+// 补算在分段之间释放后立刻重取时，不会饿死已经在等的实时周期。
 type Locks struct {
 	mu    sync.Mutex
 	locks map[string]chan struct{}
-	dir   string
 }
 
-// New returns set locks; a non-empty lockDir adds filesystem locks shared with
-// other processes (moox-factor-mgr and its CLI) that open the same database.
-func New(lockDir string) *Locks { return &Locks{dir: lockDir} }
+// New 返回一组进程内的任务锁。
+func New() *Locks { return &Locks{} }
 
-// Lock acquires the stable mutex for taskID and returns its unlock function.
+// Lock 取 taskID 的锁并返回释放函数。
 func (l *Locks) Lock(taskID string) func() {
 	unlock, err := l.LockContext(context.Background(), taskID)
 	if err != nil {
@@ -39,8 +29,7 @@ func (l *Locks) Lock(taskID string) func() {
 	return unlock
 }
 
-// LockContext acquires the per-set in-process lock and, when configured, a
-// filesystem lock shared with other moox-factor processes using the same DB.
+// LockContext 取 taskID 的进程内锁，ctx 结束时放弃等待。
 func (l *Locks) LockContext(ctx context.Context, taskID string) (func(), error) {
 	if l == nil {
 		return func() {}, nil
@@ -67,49 +56,11 @@ func (l *Locks) LockContext(ctx context.Context, taskID string) (func(), error) 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	release := func() { <-slot }
-	if l.dir == "" {
-		var once sync.Once
-		return func() { once.Do(release) }, nil
-	}
-	file, err := l.openFileLock(taskID)
-	if err != nil {
-		release()
-		return nil, err
-	}
-	// 非阻塞加锁，被占用时每 10 毫秒重试，直到拿到或 ctx 结束。
-	for {
-		locked, err := file.tryLock()
-		if err != nil {
-			_ = file.close()
-			release()
-			return nil, err
-		}
-		if locked {
-			break
-		}
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			_ = file.close()
-			release()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
 	var once sync.Once
-	return func() {
-		once.Do(func() {
-			file.unlock()
-			_ = file.close()
-			release()
-		})
-	}, nil
+	return func() { once.Do(func() { <-slot }) }, nil
 }
 
-// LockFactorContext acquires the lock for one definition. Its key carries a
-// "factor:" prefix so it never collides with a set lock.
+// LockFactorContext 取一个定义的锁。键带 "factor:" 前缀，不会与任务锁冲突。
 func (l *Locks) LockFactorContext(ctx context.Context, factorID string) (func(), error) {
 	factorID = strings.TrimSpace(factorID)
 	if factorID == "" {
@@ -128,11 +79,3 @@ const (
 	factorLockPrefix = "factor:"
 	udfLockKey       = "udf:global"
 )
-
-func (l *Locks) openFileLock(taskID string) (*fileLock, error) {
-	if err := os.MkdirAll(l.dir, 0o700); err != nil {
-		return nil, err
-	}
-	digest := sha256.Sum256([]byte(taskID))
-	return openLockFile(filepath.Join(l.dir, hex.EncodeToString(digest[:])+".lock"))
-}

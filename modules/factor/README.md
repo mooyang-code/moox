@@ -7,7 +7,7 @@
 ## 构建与测试
 
 ```bash
-./scripts/build/build.sh factor-mgr      # moox-factor-mgr 与 moox-factor-mgr-cli
+./scripts/build/build.sh factor-mgr      # moox-factor-mgr
 ./scripts/build/build.sh factor-engine
 go test -count=1 ./modules/factor/...
 ```

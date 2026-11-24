@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorlib"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
@@ -29,6 +30,8 @@ type CatalogAPI interface {
 	GetTask(ctx context.Context, taskID string) (domain.FactorTask, []domain.TaskMember, error)
 	ListTasks(ctx context.Context) ([]domain.FactorTask, error)
 	CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error)
+	ImportCatalog(ctx context.Context, files []factorlib.File) ([]domain.FactorDef, error)
+	PurgeResultDataset(ctx context.Context, spaceID, datasetID string) error
 	UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error)
 	DeleteFactor(ctx context.Context, factorID string) error
 	GetFactor(ctx context.Context, factorID string) (domain.FactorInfo, error)
@@ -328,6 +331,48 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.CreateFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(created)}, nil
+}
+
+// ImportFactorCatalog 整批导入一个因子库目录（解析与校验在 FactorMgr 侧，见 catalog.ImportCatalog）。
+func (s *Service) ImportFactorCatalog(ctx context.Context, req *factorpb.ImportFactorCatalogReq) (*factorpb.ImportFactorCatalogRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.ImportFactorCatalogRsp{RetInfo: unavailable(err)}, nil
+	}
+	if len(req.GetFiles()) == 0 {
+		return &factorpb.ImportFactorCatalogRsp{RetInfo: invalid(fmt.Errorf("files 不能为空"))}, nil
+	}
+	files := make([]factorlib.File, 0, len(req.GetFiles()))
+	for _, file := range req.GetFiles() {
+		files = append(files, factorlib.File{Name: file.GetName(), Content: []byte(file.GetContent())})
+	}
+	imported, err := s.catalog.ImportCatalog(ctx, files)
+	if err != nil {
+		return &factorpb.ImportFactorCatalogRsp{RetInfo: inner(err)}, nil
+	}
+	out := make([]*factorpb.FactorDef, 0, len(imported))
+	for _, factor := range imported {
+		out = append(out, factorwire.DefToPB(factor))
+	}
+	return &factorpb.ImportFactorCatalogRsp{RetInfo: success(), Factors: out}, nil
+}
+
+// PurgeResultDataset 删除一个孤立的因子结果数据集；带空间头的调用只能删本空间的。
+func (s *Service) PurgeResultDataset(ctx context.Context, req *factorpb.PurgeResultDatasetReq) (*factorpb.PurgeResultDatasetRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.PurgeResultDatasetRsp{RetInfo: unavailable(err)}, nil
+	}
+	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &factorpb.PurgeResultDatasetRsp{RetInfo: invalid(fmt.Errorf("space_id 和 dataset_id 不能为空"))}, nil
+	}
+	if space, scoped, err := callerSpace(ctx); err != nil {
+		return &factorpb.PurgeResultDatasetRsp{RetInfo: invalid(err)}, nil
+	} else if scoped && space != strings.TrimSpace(req.GetSpaceId()) {
+		return &factorpb.PurgeResultDatasetRsp{RetInfo: invalid(fmt.Errorf("数据集不属于空间 %q", space))}, nil
+	}
+	if err := s.catalog.PurgeResultDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+		return &factorpb.PurgeResultDatasetRsp{RetInfo: inner(err)}, nil
+	}
+	return &factorpb.PurgeResultDatasetRsp{RetInfo: success()}, nil
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorReq) (*factorpb.UpdateFactorRsp, error) {

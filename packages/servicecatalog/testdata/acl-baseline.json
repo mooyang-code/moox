@@ -3,7 +3,7 @@
   "summary": {
     "components": 18,
     "services": 26,
-    "methods": 336,
+    "methods": 338,
     "read_only_methods": 152,
     "retryable_methods": 153,
     "callers": 23,
@@ -947,6 +947,12 @@
           "timeout_ms": 120000
         },
         {
+          "name": "ImportFactorCatalog",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
           "name": "ListFactorCategories",
           "read_only": true,
           "retryable": true,
@@ -990,6 +996,12 @@
         },
         {
           "name": "PublishUdf",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "PurgeResultDataset",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 120000
@@ -2777,6 +2789,7 @@
       "trpc.moox.factor.FactorMgr/GetRecalcJob",
       "trpc.moox.factor.FactorMgr/GetStatus",
       "trpc.moox.factor.FactorMgr/GetUdf",
+      "trpc.moox.factor.FactorMgr/ImportFactorCatalog",
       "trpc.moox.factor.FactorMgr/ListFactorCategories",
       "trpc.moox.factor.FactorMgr/ListFactorFunctions",
       "trpc.moox.factor.FactorMgr/ListFactorTasks",
@@ -2785,6 +2798,7 @@
       "trpc.moox.factor.FactorMgr/ListUdfs",
       "trpc.moox.factor.FactorMgr/PreviewFactor",
       "trpc.moox.factor.FactorMgr/PublishUdf",
+      "trpc.moox.factor.FactorMgr/PurgeResultDataset",
       "trpc.moox.factor.FactorMgr/RecalcFactors",
       "trpc.moox.factor.FactorMgr/RemoveTaskMember",
       "trpc.moox.factor.FactorMgr/SetFactorCategory",

@@ -12,7 +12,7 @@ MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `
 | [egressproxy](./egressproxy/) | `moox-egress-proxy` | 受限 HTTPS 出口与 DNS 解析 | [出口代理](../docs/模块/出口代理.md) |
 | [collector](./collector/) | `moox-collector`、`moox-collector-stream`、`moox-collector-scf`、`moox-collector-cli` | 采集控制面（含云账号、代码包与云函数管理）、WS 执行端与 SCF Timer 运行时 | [采集](../docs/模块/采集.md) |
 | [callbackdispatcher](./callbackdispatcher/) | `moox-callback-dispatcher` | 事件中心：按规则向用户接口发通知或执行系统动作 | [事件中心](../docs/模块/事件中心.md) |
-| [factor](./factor/) | `moox-factor-mgr`、`moox-factor-engine`、`moox-factor-mgr-cli` | 因子管理与计算 | [因子](../docs/模块/因子.md) |
+| [factor](./factor/) | `moox-factor-mgr`、`moox-factor-engine` | 因子管理与计算 | [因子](../docs/模块/因子.md) |
 | [strategy](./strategy/) | `moox-strategy`、`moox-strategy-cli` | 策略 DSL 与目标权重 | [策略](../docs/模块/策略.md) |
 | [trade](./trade/) | `moox-trade` | 交易执行与交易事实 | [交易](../docs/模块/交易.md) |
 | [monitor](./monitor/) | `moox-monitor` | 健康检查与告警 | [监控](../docs/模块/监控.md) |
