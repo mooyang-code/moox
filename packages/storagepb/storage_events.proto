@@ -71,17 +71,13 @@ message CollectorKlineBackfilled {
   string origin = 6;
   string job_id = 7;
   google.protobuf.Timestamp confirmed_at = 9;
-  // series_tags 是补采写入的序列（series_tag）；统一数据集的消费方只重算这些序列，空表示数据集的全部序列。
-  repeated string series_tags = 10;
   // absent 是 [start, end) 内补采确认行情源没有的 K 线（只有补采来源的事件会带）：因子据此不把这些标的算进缺失比例。
   repeated CollectorKlineAbsent absent = 11;
 }
 
 // CollectorKlineAbsent 是补采确认行情源没有 K 线的一段：标的在 [start, end) 没有行情。
-// series_tag 非空表示只有这一条序列没有（统一数据集），同标的的其他序列不受影响；为空表示整个标的没有。
 message CollectorKlineAbsent {
   string subject_id = 1;
-  string series_tag = 2;
   // start 含、end 不含，是 K 线开始时间。
   google.protobuf.Timestamp start = 3;
   google.protobuf.Timestamp end = 4;

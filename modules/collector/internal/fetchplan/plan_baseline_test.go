@@ -20,7 +20,7 @@ import (
 
 // 批 2 的基线金样（Collector 这一层）。
 //
-// plan_environment.golden.json：对已有的几个对账场景（单市场、标的变更、退役、交接、统一数据集），把每份采集计划里每个函数的
+// plan_environment.golden.json：对已有的几个对账场景（单市场、标的变更、退役、交接），把每份采集计划里每个函数的
 // 过渡与最终内容落成文件：云函数记 functionEnvironment 的输出（其中 MOOX_MARKET_FETCH_PLAN 就是下发给函数的
 // Plan JSON，函数严格解码，一个字节都不能变）与两个 cron；推送与本地执行项没有函数环境，记 Plan JSON。要重新生成时设 MOOX_UPDATE_GOLDEN=1。
 //

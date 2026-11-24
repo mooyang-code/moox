@@ -65,24 +65,3 @@ func TestDatasetPeriodCompletedSeriesValidation(t *testing.T) {
 		require.Error(t, err, name)
 	}
 }
-
-func TestCollectorKlineBackfilledSeriesTags(t *testing.T) {
-	registry, err := DefaultRegistry()
-	require.NoError(t, err)
-	start := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
-	payload := &storagepb.CollectorKlineBackfilled{
-		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"},
-		Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)),
-		Origin: "auto", JobId: "job-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
-		SeriesTags: []string{"venue:binance|market:swap|source:swap_http"},
-	}
-	options := PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"}
-	_, err = registry.Encode(CollectorKlineBackfilled, payload, options)
-	require.NoError(t, err)
-	payload.SeriesTags = []string{"a", "a"}
-	_, err = registry.Encode(CollectorKlineBackfilled, payload, options)
-	require.Error(t, err)
-	payload.SeriesTags = []string{strings.Repeat("x", 129)}
-	_, err = registry.Encode(CollectorKlineBackfilled, payload, options)
-	require.Error(t, err, "series_tag 与行键同一套规则")
-}

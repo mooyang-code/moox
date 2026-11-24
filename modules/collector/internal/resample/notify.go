@@ -144,7 +144,7 @@ func (p *NoticePublisher) sealGroup(ctx context.Context, group *noticeGroup) err
 		subjects = append(subjects, subject)
 	}
 	sort.Strings(subjects)
-	// 数据集里每个标的只有一条序列，事件不带 series_tags（字段留到事件协议收尾时删除）。
+	// 数据集里每个标的只有一条序列，事件按标的给出范围。
 	now := p.now()
 	var err error
 	payload := &storagepb.CollectorKlineBackfilled{

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 统一数据集：同一个标的的现货序列正常、永续序列落后时，监控能看出来；
+// 同一个 View 里同一标的有两条序列（Storage 的序列口径不限条数）：一条正常、另一条落后时，监控能看出来；
 // 永续落后不会被现货的最新一根盖住，名单里仍是标的名，水位取落后序列最老的一根。
 func TestViewSubjectTrackerFlagsLaggingMarketOfUnifiedDataset(t *testing.T) {
 	const spot, swap = "venue:binance|market:spot|source:spot_http", "venue:binance|market:swap|source:swap_http"

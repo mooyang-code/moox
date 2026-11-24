@@ -96,7 +96,7 @@ var entries = []Entry{
 			{Key: "source", Title: "怎样判定完成：ledger 按账本判定，producer 由写入方报告"},
 			{Key: "universe_subject_ids", Title: "这一期应有的全部标的"},
 			{Key: "failed_subjects", Title: "这一期没写成功的标的（只在 degraded 时出现）"},
-			{Key: "universe_series", Title: "按序列（标的、series_tag）的全部成员；一个数据集含多个序列时同一标的出现多次"},
+			{Key: "universe_series", Title: "按序列（标的、series_tag）的全部成员；每个标的一条序列"},
 			{Key: "failed_series", Title: "按序列的失败名单（只在 degraded 时出现）"},
 			{Key: "completed_at", Title: "判定完成的时刻（UTC）"},
 			{Key: "cause_event_id", Title: "触发这次计算的事件 ID（source 为 producer 时）"},
@@ -148,8 +148,7 @@ var entries = []Entry{
 			{Key: "origin", Title: "补写来源：auto 自动补采，manual 手工补采，force 强制补采，resample 历史合成"},
 			{Key: "job_id", Title: "补采或合成作业的 ID"},
 			{Key: "confirmed_at", Title: "读回确认写入的时刻（UTC）"},
-			{Key: "series_tags", Title: "补写的序列（series_tag）；不出现表示数据集的全部序列"},
-			{Key: "absent", Title: "范围内补采确认行情源没有的 K 线（标的、series_tag、起止时刻）；没有时不出现"},
+			{Key: "absent", Title: "范围内补采确认行情源没有的 K 线（标的、起止时刻）；没有时不出现"},
 		},
 	},
 	{

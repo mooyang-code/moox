@@ -32,7 +32,6 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 - 用户指明了交易所就加 `--exchange`。否则省略，使用该数据类型配置的默认值；`crypto` 目前默认 `binance`。
 - 用户给的 `--symbol` 原样传入。不要把 `BTC-USDT` 改写成 `BTCUSDT`，不要改大小写，也不要猜交易对。
 - 按用户要求传 `--interval`，并严格按包内目录来。当前的初始目录导出了币安现货 `1m`，以及 A 股（`stockcn`，沪深 300）的 `5m` 和 `1d`；旧的包里条目可能更少。采集任务变更后要重新生成包。
-- 统一数据集（一个数据集同时存放同一标的的现货和永续序列）用 `--market spot|swap` 读取。CLI 先探测数据集里这个标的有哪些序列，选出 `series_tag` 属于该市场的那一条（看 `market:spot` / `market:swap` 段；不带 `market:` 段的标签算现货），再读取它，所以 `--limit` 和时间范围只作用于这一个市场。不带 `--market` 时使用交易所配置的 `series_tag`（只读一次，行为不变）。数据集里这个标的没有该市场的序列，或者有不止一条时，命令报错。
 - 用户要指定条数时用 `--limit`（`1..1000`）；否则 CLI 默认 `100`。
 - 只有用户给了时间范围才用 RFC3339 的 `--from` 和 `--to`。起始时间必须严格早于结束时间。
 - 需要额外字段时用 `--columns`（逗号分隔）；默认是 `open,high,low,close,volume`，所以 `quote_volume` 和 `trade_num` 要显式选上。用 `--timeout` 覆盖默认 15 秒的 RPC 超时；只有用户要结果文件时才用 `--output`。

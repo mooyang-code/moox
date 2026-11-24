@@ -81,7 +81,7 @@ func TestNoticePublisherWithoutEventBusKeepsNoticesForRetention(t *testing.T) {
 	require.Len(t, left, 1)
 }
 
-// 补采来源的事件带上范围内全部标的已确认“行情源没有”的 K 线（截到事件范围内，统一数据集带 series_tag），
+// 补采来源的事件带上范围内全部标的已确认“行情源没有”的 K 线（截到事件范围内），
 // 包括这批没有补写的标的：因子要看到一期里所有确认缺失的标的才放行。合成来源的事件、范围外的确认缺失不带。
 func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 	mgr := openState(t)

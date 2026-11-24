@@ -18,7 +18,6 @@ replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/facto
 
 replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
 
-replace github.com/mooyang-code/moox/packages/seriesset => ../../packages/seriesset
 
 replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
 
@@ -47,7 +46,6 @@ require (
 	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/seriesset v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10

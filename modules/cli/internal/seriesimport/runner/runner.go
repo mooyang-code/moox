@@ -75,9 +75,6 @@ type Request struct {
 	// TimeColumn 是时间列名，默认 data_time；SeriesTag 统一指定 series_tag。
 	TimeColumn string
 	SeriesTag  string
-	// FileSeriesTags 按文件（与 Paths 展开后的路径一致）单独指定 series_tag，覆盖 SeriesTag：
-	// 统一数据集的现货、永续文件可以放在同一次导入里，各用自己的 tag。
-	FileSeriesTags map[string]string
 	// BatchRows 是每批最多行数（不会拆开同一个时间点）。
 	BatchRows    int
 	AllowMissing bool
@@ -253,16 +250,9 @@ func (r Request) batchRows() int {
 	return r.BatchRows
 }
 
-// seriesTagFor 返回文件使用的统一 series_tag：文件单独指定的优先，否则取 SeriesTag；都没有就是空（按文件里的 series_tag 列）。
-func (r Request) seriesTagFor(file string) string {
-	if tag, ok := r.FileSeriesTags[file]; ok {
-		return tag
-	}
-	return r.SeriesTag
-}
-
+// options 返回读文件的选项：SeriesTag 为空时按文件里的 series_tag 列。
 func (r Request) options(file string, meta Meta) seriesformat.Options {
-	return seriesformat.Options{Fields: meta.Fields, TimeColumn: r.TimeColumn, SeriesTag: r.seriesTagFor(file)}
+	return seriesformat.Options{Fields: meta.Fields, TimeColumn: r.TimeColumn, SeriesTag: r.SeriesTag}
 }
 
 // scan 流式读完一个文件做通用校验，返回连续性报告；启用尾部窗口时同时返回最后 TailRows 行的时间（升序，可能含同一时间的多行）。
@@ -599,10 +589,6 @@ func stableJobID(req Request, files []string) string {
 		info, err := os.Stat(f)
 		if err != nil {
 			continue
-		}
-		// 文件单独指定的 series_tag 进身份：同一批文件改了 tag 再导入，不能沿用旧 tag 的断点。
-		if tag, ok := req.FileSeriesTags[f]; ok {
-			fmt.Fprintf(h, "%s|", tag)
 		}
 		fmt.Fprintf(h, "%s|%d|%d;", f, info.Size(), info.ModTime().UnixNano())
 	}

@@ -232,14 +232,6 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 			return fmt.Errorf("collector kline backfilled subject_id %q is invalid", subject)
 		}
 	}
-	if _, err := validateUniqueTokens(payload.GetSeriesTags(), false, "collector kline backfilled series_tags"); err != nil {
-		return err
-	}
-	for _, tag := range payload.GetSeriesTags() {
-		if err := validateSeriesTag(tag); err != nil {
-			return fmt.Errorf("collector kline backfilled series_tag %q: %w", tag, err)
-		}
-	}
 	start, end := payload.GetStart(), payload.GetEnd()
 	if start == nil || end == nil || start.CheckValid() != nil || end.CheckValid() != nil || !end.AsTime().After(start.AsTime()) {
 		return fmt.Errorf("collector kline backfilled range is invalid")
@@ -250,11 +242,6 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	for _, absent := range payload.GetAbsent() {
 		if !validRequiredToken(absent.GetSubjectId()) {
 			return fmt.Errorf("collector kline backfilled absent subject_id %q is invalid", absent.GetSubjectId())
-		}
-		if tag := absent.GetSeriesTag(); tag != "" {
-			if err := validateSeriesTag(tag); err != nil {
-				return fmt.Errorf("collector kline backfilled absent series_tag %q: %w", tag, err)
-			}
 		}
 		from, to := absent.GetStart(), absent.GetEnd()
 		if from == nil || to == nil || from.CheckValid() != nil || to.CheckValid() != nil || !to.AsTime().After(from.AsTime()) {
