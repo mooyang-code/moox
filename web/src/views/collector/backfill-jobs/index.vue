@@ -8,9 +8,7 @@
             <a-radio-group v-model="segment" type="button" aria-label="补采作业筛选" @change="onFilterChange">
               <a-radio v-for="item in JOB_SEGMENTS" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
             </a-radio-group>
-            <InfoTip
-              text="自动补采发现实时缺口时建作业；手动补采、历史缺口的补采确认也在这里。有进行中的作业时每 5 秒自动刷新。"
-            />
+            <InfoTip text="自动补采发现实时缺口时建作业；手动补采也在这里。有进行中的作业时每 5 秒自动刷新。" />
           </span>
           <a-space wrap>
             <a-select v-model="datasetId" placeholder="全部数据集" allow-clear style="width: 220px" @change="onFilterChange">

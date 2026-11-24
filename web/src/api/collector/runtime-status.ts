@@ -25,10 +25,6 @@ export interface CollectorDatasetStatus {
   gap_bars_24h?: number;
   gap_subjects_24h?: number;
   failed_chunks_24h?: number;
-  history_scanned_at?: string;
-  history_gap_bars?: number;
-  history_gap_subjects?: number;
-  history_error?: string;
   absent_bars?: number;
   level?: HealthLevel;
   reasons?: string[];
@@ -234,14 +230,6 @@ export function retryKlineBackfill(spaceId: string, jobId: string) {
     job_id: jobId,
     space_id: spaceId
   });
-}
-
-export function confirmHistoryGaps(spaceId: string, datasetId: string, frequency: string) {
-  return call<{ space_id: string; dataset_id: string; frequency: string }, { job_id?: string; chunks?: number }>(
-    "collector",
-    "ConfirmHistoryGaps",
-    { space_id: spaceId, dataset_id: datasetId, frequency }
-  );
 }
 
 export function clearSourceAbsences(spaceId: string, datasetId: string, frequency: string) {

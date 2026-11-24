@@ -16,7 +16,7 @@ describe("collector backfill helpers", () => {
   it("labels job states, kinds and datasets", () => {
     expect(jobStatusInfo("failed").color).toBe("red");
     expect(jobStatusInfo(undefined).text).toBe("未知");
-    expect(jobKindText("history")).toBe("确认历史缺口");
+    expect(jobKindText("force")).toBe("整段重拉");
     expect(jobDatasetText({ dataset_id: "ds", dataset_name: "Binance 现货 K 线 1m" })).toBe("Binance 现货 K 线 1m");
     expect(jobDatasetText({ dataset_id: "ds" })).toBe("ds");
     expect(jobDatasetText({})).toBe("全部数据集");

@@ -207,9 +207,9 @@ describe("collector runtime status page", () => {
   });
 
   it("offers the dataset actions and opens the backfill tab for new jobs", () => {
-    expect(page).toContain("confirmHistoryGaps(");
+    expect(page).not.toContain("confirmHistoryGaps(");
+    expect(page).not.toContain("历史缺口");
     expect(page).toContain("clearSourceAbsences(");
-    expect(page).toContain("补采确认");
     expect(page).toContain("清除并重新检查");
     expect(page).toContain('tab: "backfills"');
   });

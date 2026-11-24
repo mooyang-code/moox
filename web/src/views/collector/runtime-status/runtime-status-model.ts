@@ -90,7 +90,7 @@ export function inspectionInfo(
 
 /** 自动巡检列的说明。 */
 export const INSPECTION_TIP =
-  "自动巡检每 5 分钟检查一次已收盘的 K 线，发现缺口会自动补采。落后时，这段时间的缺口暂时不会被发现和补上，不代表数据缺失；数据是否齐全看“24h 实时缺口”和“历史缺口”。";
+  "自动巡检每 5 分钟检查一次已收盘的 K 线，发现缺口会自动补采。落后时，这段时间的缺口暂时不会被发现和补上，不代表数据缺失；数据是否齐全看“24h 实时缺口”，更早的区间用“检查缺口”。";
 
 export interface StatusSummary {
   functions: number;

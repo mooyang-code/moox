@@ -12,7 +12,7 @@ export function jobStatusInfo(status?: string) {
   return jobStatuses[status || ""] || { text: status || "未知", color: "gray" };
 }
 
-const jobKinds: Record<string, string> = { gap: "按缺口", force: "整段重拉", history: "确认历史缺口" };
+const jobKinds: Record<string, string> = { gap: "按缺口", force: "整段重拉" };
 
 export function jobKindText(kind?: string) {
   return jobKinds[kind || ""] || kind || "-";
