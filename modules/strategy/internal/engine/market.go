@@ -197,7 +197,7 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex, columns []string) 
 	}
 	// 上期在某个市场持有空头、而这个市场本期对它的失败证据全都可冻结时，只取这个市场的行（有行取行，没行按无行），证据随之归到这个市场，
 	// 由冻结逻辑保持，不退回另一个市场的行；否则空头（取行顺序是 prefer 加另一个市场，粘住只看正权重）会改用现货的因子值重新排名，
-	// 在永续上平仓或改仓。条件两条都要满足：① 这个市场对这个币至少有一条证据，并且每条都是整体不可用（FailedMarket）；
+	// 在永续上平仓或改仓。条件两条都要满足：① 这个市场对这个币至少有一条证据，并且每条都是整体不可用（FailedMarket）或停牌（FailedSuspended）；
 	// 混有 factor_failed 等逐币原因时单市场下也不冻结，照常按 pickOrder 取行。
 	// ② 这个市场本期有它的行（失败序列写成 NULL 行），或者证据覆盖策略引用的全部列（没有行、只有部分列有证据时，其余列是无证据的缺失，
 	// 单市场下同样不冻结，也按 pickOrder）。冻结按币：同一个币持有现货多头又持有永续空头时，满足条件就把现货多头一起冻结（保守，已知边界）。
@@ -208,7 +208,7 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex, columns []string) 
 			if !failed {
 				continue
 			}
-			if reason != FailedMarket {
+			if reason != FailedMarket && reason != FailedSuspended {
 				return false
 			}
 			covered[column] = struct{}{}

@@ -290,7 +290,7 @@ func (c *countingClient) ListDatasetSubjects(ctx context.Context, spaceID, datas
 	return c.fakeClient.ListDatasetSubjects(ctx, spaceID, datasetID)
 }
 
-func (c *countingClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error) {
+func (c *countingClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]TagMember, error) {
 	c.members++
 	return c.fakeClient.ListTagMembers(ctx, spaceID, tagID)
 }

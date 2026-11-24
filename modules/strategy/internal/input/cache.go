@@ -15,7 +15,7 @@ type MetaCache struct {
 	revision uint64
 	known    bool
 	subjects map[string][]Subject
-	members  map[string][]string
+	members  map[string][]TagMember
 	tags     map[string]TagInfo
 	// datasetTags 是数据集挂的标的范围标签：数据集的标的范围变化也会让标的修订号递增。
 	datasetTags map[string][]string
@@ -58,7 +58,7 @@ func NewMetaCache() *MetaCache {
 
 func (m *MetaCache) reset() {
 	m.subjects = map[string][]Subject{}
-	m.members = map[string][]string{}
+	m.members = map[string][]TagMember{}
 	m.tags = map[string]TagInfo{}
 	m.datasetTags = map[string][]string{}
 }
@@ -203,7 +203,7 @@ func (c *eventClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetI
 	return append([]Subject(nil), subjects...), nil
 }
 
-func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]string, error) {
+func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string) ([]TagMember, error) {
 	key := spaceID + "\x00" + tagID
 	c.meta.mu.Lock()
 	members, ok := c.meta.members[key]
@@ -217,7 +217,7 @@ func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string)
 		c.meta.members[key] = members
 		c.meta.mu.Unlock()
 	}
-	return append([]string(nil), members...), nil
+	return append([]TagMember(nil), members...), nil
 }
 
 // ageSplit 把候选标的按是否已证明年龄足够拆成两组；键变化（换了活动索引或 min_age_bars）时换一份缓存，

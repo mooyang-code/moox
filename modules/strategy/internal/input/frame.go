@@ -73,7 +73,7 @@ type marketLoad struct {
 	// key 是这个市场的行所在的任务键（方式 A 就是市场自己，方式 B 是 multi，两个市场共用统一数据集的一个 View）。
 	key  string
 	view ViewInfo
-	// active 是该市场的活跃标的；universe 是本期该市场的基础集合（事件名单 ∩ 活跃标的）。
+	// active 是该市场的活跃标的（含停牌持仓）；universe 是本期该市场的基础集合（事件名单 ∩ 活跃标的，再加上停牌持仓）。
 	active   map[string]Subject
 	universe map[string]Subject
 	// unavailable 非空表示该市场本期整体不可用（不读行）。
@@ -229,11 +229,18 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		} else if subjects, err = l.Client.ListDatasetSubjects(ctx, spaceID, load.view.DatasetID); err != nil {
 			return Loaded{}, err
 		}
+		// 停牌持仓：上期在这个市场持有、这个市场只是停牌的标的当作活跃标的（Active 置为 true，否则集合划分会滤掉它），
+		// 下面再绕过事件名单放进基础集合，由引擎按 suspended_hold 保持持仓。没持有的照旧不进。
+		listed := make([]Subject, 0, len(subjects))
 		load.active = make(map[string]Subject, len(subjects))
 		for _, subject := range subjects {
+			if _, held := bar.Held[load.market][subject.SubjectID]; subject.Suspended && held {
+				subject.Active = true
+			}
 			if subject.Active {
 				load.active[subject.SubjectID] = subject
 			}
+			listed = append(listed, subject)
 		}
 		load.universe = make(map[string]Subject, len(load.active))
 		if names, ok := bar.EventUniverse[load.market]; ok && names != nil {
@@ -248,11 +255,16 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 				load.universe[id] = subject
 			}
 		}
+		for id, subject := range load.active {
+			if subject.Suspended {
+				load.universe[id] = subject // 停牌后不再产出行，事件名单里没有它
+			}
+		}
 		// 基础集合只由选币市场构成：select 为单个市场时，另一个市场只提供可用标记（决定下单市场），它独有的标的不进入集合。
 		if resolved.Market.Select != dsl.MarketBoth && resolved.Market.Select != load.market {
 			continue
 		}
-		mergedActive = append(mergedActive, subjects...)
+		mergedActive = append(mergedActive, listed...)
 		for id := range load.universe {
 			mergedUniverse = append(mergedUniverse, id)
 		}
@@ -266,7 +278,8 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 	}
 	members := func(ctx context.Context, tagID string) ([]string, error) {
-		return l.Client.ListTagMembers(ctx, spaceID, tagID)
+		tagMembers, err := l.Client.ListTagMembers(ctx, spaceID, tagID)
+		return MemberIDs(tagMembers), err
 	}
 	began = time.Now()
 	sets, err := BuildSets(ctx, members, program.Strategy, mergedActive, eventUniverse)
@@ -537,6 +550,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		} else {
 			input.Failed = failedColumns(resolved, program, ready[load.market])
 		}
+		markSuspended(input.Failed, program, load.universe)
 		frame.Markets[load.market] = input
 	}
 	unavailable := make(map[string]string, len(loads))
@@ -649,6 +663,23 @@ func marketUnavailable(program *dsl.Program, universe map[string]Subject, held m
 		}
 	}
 	return failed
+}
+
+// markSuspended 给基础集合里的停牌持仓（Subject.Suspended，只有已持有的才会进基础集合）在每个引用列上记 FailedSuspended，引擎据此冻结。
+// 必须覆盖写：停牌当天它可能已在因子或 K 线的失败名单里（留着 factor_failed 会按缺数清掉），市场不可用时也已记成 FailedMarket
+// （留着会按 market_hold 延后批次重建、计入守门缺数）。
+func markSuspended(failed map[string]map[string]string, program *dsl.Program, universe map[string]Subject) {
+	for id, subject := range universe {
+		if !subject.Suspended {
+			continue
+		}
+		for _, column := range uniqueSorted(append(append([]string(nil), program.Columns...), program.PreviousColumns...)) {
+			if failed[column] == nil {
+				failed[column] = make(map[string]string)
+			}
+			failed[column][id] = engine.FailedSuspended
+		}
+	}
 }
 
 // MissingColumns 返回策略需要、但 View 已不提供的列：当期列、bars[-1] 列，以及 min_age_bars 探针读取的 close。

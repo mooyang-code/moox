@@ -7,8 +7,8 @@ import (
 )
 
 // ruleSets 是一条规则的集合划分：预期 E(r)、年龄剔除 G(r)、可用 A(r)、缺数 M(r)，以及保持持仓的冻结集合 F(r)。
-// 冻结的标的（因市场不可用或只缺上一根而缺数的已持仓标的，见 freeze.go）既不算可用也不算缺数：规则对它们不求值，持仓保持不动；
-// 但守门仍把它们计入缺数比例，保护中的标的不能伪装成可用。
+// 冻结的标的（因市场不可用、停牌或只缺上一根而缺数的已持仓标的，见 freeze.go）既不算可用也不算缺数：规则对它们不求值，持仓保持不动；
+// 但守门仍把它们计入缺数比例（停牌保持的除外，见 guardedFrozen），保护中的标的不能伪装成可用。
 type ruleSets struct {
 	expected []string
 	agedOut  map[string]struct{}
@@ -17,10 +17,21 @@ type ruleSets struct {
 	available     []string
 	missing       map[string]string
 	frozen        map[string]struct{}
-	// holdReason 是冻结标的的明细原因（prev_hold 或 market_hold，见 frozenSet）。
+	// holdReason 是冻结标的的明细原因（prev_hold、market_hold、suspended_hold 或 missing_kept，见 frozenSet）。
 	holdReason map[string]string
 	// waived 表示规则本期不守门（永续整体不可用时的空头规则，见 waivesShortGuard）：规则只保持冻结的持仓，holding 规则不重建批次。
 	waived bool
+}
+
+// frozenExcept 返回去掉明细原因为 reason 的冻结标的（新集合）。
+func (s ruleSets) frozenExcept(reason string) map[string]struct{} {
+	out := make(map[string]struct{}, len(s.frozen))
+	for id := range s.frozen {
+		if s.holdReason[id] != reason {
+			out[id] = struct{}{}
+		}
+	}
+	return out
 }
 
 // partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列上游对该标的失败，都算缺数。
