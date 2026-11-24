@@ -113,10 +113,10 @@ func TestTradingStatusFiltersActiveQueriesPerTagMember(t *testing.T) {
 	}
 	rows = datasetSubjects(t, ctx, store, "dataset_unified")
 	if rows["A"].GetStatus() != "active" || rows["A"].GetSuspended() {
-		t.Fatalf("统一数据集里 A 的永续可交易，标的仍活跃：%v", rows["A"])
+		t.Fatalf("挂两个标签的数据集里 A 在永续可交易，标的仍活跃：%v", rows["A"])
 	}
 	if rows["B"].GetStatus() != "inactive" || !rows["B"].GetSuspended() {
-		t.Fatalf("统一数据集里 B 两边都停牌：%v", rows["B"])
+		t.Fatalf("挂两个标签的数据集里 B 两边都停牌：%v", rows["B"])
 	}
 
 	// ListTagMembers 不过滤，带出交易状态。

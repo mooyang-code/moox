@@ -19,8 +19,6 @@ func TestDefaultInstrumentType(t *testing.T) {
 	require.Equal(t, marketdata.InstrumentSpot, rules.DefaultInstrumentType(""))
 	require.Equal(t, marketdata.InstrumentSpot, rules.DefaultInstrumentType("spot"))
 	require.Equal(t, marketdata.InstrumentSwap, rules.DefaultInstrumentType(" SWAP "))
-	// 现货加永续的统一数据集不是具体品种，按默认品种。
-	require.Equal(t, marketdata.InstrumentSpot, rules.DefaultInstrumentType("multi"))
 }
 
 // Code 是交易所的 symbol，现货与永续相同；写法不能变。

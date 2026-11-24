@@ -123,12 +123,8 @@ message FactorPeriodState {
   string member_key = 7;
   // member_kind 是成员类型：fixed 或 var。
   string member_kind = 8;
-  // failed_series 是按序列（标的、series_tag）的失败名单，只有统一数据集（多个 series_tag）才填，
-  // failed_subjects 的口径不变。
+  // failed_series 是按序列（标的、series_tag）的失败名单（每个标的只有一条序列，与 failed_subjects 对应），3E 收成按标的一份时删除。
   repeated SeriesRef failed_series = 9;
-  // skipped_series_tags 是被跳过的 series_tag（例如截面因子的全集缺数）：这些序列的结果写 NULL。
-  // 全部 tag 都跳过时 status 为 skipped，只跳过一部分时 status 为 degraded 并在这里列出。
-  repeated string skipped_series_tags = 11;
 }
 
 // PeriodDetail 是因子结果数据集一期完成时放进 DatasetPeriodCompleted.detail 的明细（detail_type = moox.factor.PeriodDetail.v1）。

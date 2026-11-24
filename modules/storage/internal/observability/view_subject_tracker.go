@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	// maxViewSeriesObservations 是每个进程跟踪的序列（标的加 series_tag）上限，免得格式错误或失控的 View 让跟踪表无限增长。
-	// 按 2 万个标的估算：统一数据集每个标的有现货、永续两条序列，所以是 4 万条序列。
+	// maxViewSeriesObservations 是每个进程跟踪的序列（View 里的标的加 series_tag）上限，免得格式错误或失控的 View 让跟踪表无限增长。
+	// 每个 View 里一个标的只有一条序列；按全部 K 线 View 合计约 2 万个标的、留一倍余量估算为 4 万条。
 	maxViewSeriesObservations      = 40000
 	maxViewDatasetMetricLabelBytes = 256
 	// ViewLaggingSubjectsReported caps the named lagging subjects per View;

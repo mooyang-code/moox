@@ -14,12 +14,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// series_tag 的形状校验：补写事件的 series_tags 按同一规则检查。
+// series_tag 的形状校验：完成事件里按序列的名单与行键同一套规则。
 func TestSeriesTagShapeValidation(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
 	tests := []struct {
 		name    string
 		tag     string
@@ -35,17 +31,8 @@ func TestSeriesTagShapeValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			start := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
-			payload := &storagepb.CollectorKlineBackfilled{
-				DatasetId: "dataset", Frequency: "1m", SubjectIds: []string{"BTC-USDT"}, Origin: "auto",
-				Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)), ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
-			}
-			if tt.tag != "" {
-				payload.SeriesTags = []string{tt.tag}
-			}
-			_, err := registry.Encode(CollectorKlineBackfilled, payload, validationOptions("backfill-event-1", "space", "dataset"))
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Encode() error = %v, wantErr %v", err, tt.wantErr)
+			if err := validateSeriesTag(tt.tag); (err != nil) != tt.wantErr {
+				t.Fatalf("validateSeriesTag() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
