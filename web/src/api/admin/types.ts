@@ -87,18 +87,11 @@ export interface CatalogResponse {
   sha256: string;
   control_host_id: string;
 }
+/** 网关最近一次拉取快照时 Admin 记下的状态（拉取约每 5 秒一次，兼作心跳）。 */
 export interface HostGatewayRuntimeStatus {
-  instance_id?: string;
-  version?: string;
   expected_hash?: string;
   applied_hash?: string;
-  route_count?: number | string;
   last_seen_at?: string;
-  last_error?: string;
-  previous_instance_id?: string;
-  replaced_at?: string;
-  conflict_instance_id?: string;
-  conflict_seen_at?: string;
 }
 export interface HostGatewayRoute {
   component_id: string;

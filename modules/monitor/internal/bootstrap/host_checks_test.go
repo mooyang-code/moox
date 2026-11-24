@@ -2,18 +2,17 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -21,9 +20,11 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -57,6 +58,7 @@ type hostCheckHarness struct {
 	t         *testing.T
 	repos     *store.Repositories
 	hosts     *hostmetrics.Store
+	messages  *monmetrics.MetricMessageStore
 	sender    *capturedSender
 	clock     time.Time
 	suspended bool
@@ -81,16 +83,18 @@ func newHostCheckHarness(t *testing.T) *hostCheckHarness {
 	require.NoError(t, err)
 	h.hosts = hostmetrics.NewStore(samples)
 	h.hosts.SetRegistry(registry)
+	h.messages, err = store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
 
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
 	err = h.repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: h.clock,
 		Hosts:       []domain.TopologyHost{{HostID: "storage", Address: "storage.example.test", Status: servicecatalog.Enabled}},
-		Deployments: []domain.TopologyDeployment{{HostID: "storage", ComponentID: "host-agent", Status: servicecatalog.Enabled}}})
+		Deployments: []domain.TopologyDeployment{{HostID: "storage", ComponentID: "host-agent", Status: servicecatalog.Enabled}, {HostID: "storage", ComponentID: "host-gateway", Status: servicecatalog.Enabled}}})
 	require.NoError(t, err)
 
 	now := func() time.Time { return h.clock }
-	facts := &observability.Builder{Hosts: h.hosts, Checks: h.repos.Checks, Results: h.repos.Results, Topology: h.repos.Topology, Gateways: h.repos.Gateways, Now: now}
+	facts := &observability.Builder{Metrics: monmetrics.NewQueryService(h.messages, nil), Hosts: h.hosts, Checks: h.repos.Checks, Results: h.repos.Results, Topology: h.repos.Topology, Now: now}
 	evaluator := alerting.NewEvaluator(h.repos.Alerts, alerting.Options{Sender: func(context.Context) (notification.Sender, error) { return h.sender, nil }})
 	hook := func(ctx context.Context, check domain.Check, result domain.CheckResult) {
 		require.NoError(t, evaluator.Evaluate(ctx, check, result))
@@ -124,17 +128,17 @@ func (h *hostCheckHarness) report(cpu float64) {
 	require.NoError(h.t, h.hosts.Persist(h.t.Context(), message, metric))
 }
 
-// gateway 写入主机网关的心跳：alive 为 false 时最近一次心跳停在 5 分钟前。
+// gateway 写入主机网关的组件上报：alive 为 false 时最近一次上报停在 5 分钟前。
 func (h *hostCheckHarness) gateway(alive bool) {
 	h.t.Helper()
 	seen := h.clock
 	if !alive {
 		seen = h.clock.Add(-5 * time.Minute)
 	}
-	raw, err := json.Marshal(&adminpb.HostGatewayRuntimeStatus{InstanceId: "gw", LastSeenAt: seen.Format(time.RFC3339Nano)})
+	h.sequence++
+	_, err := h.messages.CommitIngest(h.t.Context(), &eventpb.EventMessage{EventId: fmt.Sprintf("gateway-%d", h.sequence), OccurredAt: timestamppb.New(seen)},
+		&metricspb.MetricReport{ServiceName: "host-gateway", InstanceId: "host-gateway@storage", NodeId: "storage", BootId: "boot", Ready: proto.Bool(true)}, nil)
 	require.NoError(h.t, err)
-	row := domain.GatewayObservation{HostID: "storage", StatusJSON: string(raw), ExpectedHash: "hash", AppliedHash: "hash", HostEnabledAt: h.clock.Add(-time.Hour)}
-	require.NoError(h.t, h.repos.Gateways.Reconcile(h.t.Context(), []domain.GatewayObservation{row}, h.clock))
 }
 
 func (h *hostCheckHarness) advance(d time.Duration) { h.clock = h.clock.Add(d) }
@@ -171,7 +175,7 @@ func requireSameAsPush(t *testing.T, alert *pb.HealthAlert, pushed notification.
 	require.Contains(t, pushed.Body, "状态：新告警\n问题："+alert.Reason+"\n")
 }
 
-// 同一次主机失联（采集器停报、网关心跳也停了）：页面与推送是同一个标题、级别和原因；恢复后页面告警消失并推送恢复。
+// 同一次主机失联（采集器停报、网关也停报了）：页面与推送是同一个标题、级别和原因；恢复后页面告警消失并推送恢复。
 func TestHostLostShowsTheSameAlertOnPageAndPush(t *testing.T) {
 	h := newHostCheckHarness(t)
 	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
@@ -194,7 +198,7 @@ func TestHostLostShowsTheSameAlertOnPageAndPush(t *testing.T) {
 	require.Len(t, pushed, 1, "停报满 3 分钟后的第一轮评估就告警，不再另等 60 秒")
 	require.Equal(t, "主机 storage · 失联", pushed[0].Title)
 	require.Equal(t, notification.SeverityCritical, pushed[0].Severity)
-	require.Contains(t, pushed[0].Body, "主机网关心跳也已停止")
+	require.Contains(t, pushed[0].Body, "主机网关也已停止上报")
 	alert := h.pageAlert(hostmetrics.CheckKindPresence)
 	requireSameAsPush(t, alert, pushed[0])
 	require.Equal(t, "storage", alert.Object.HostId)
@@ -217,8 +221,8 @@ func TestHostLostShowsTheSameAlertOnPageAndPush(t *testing.T) {
 	require.Equal(t, "healthy", h.overview().Hosts[0].Status)
 }
 
-// 采集器停报但主机网关心跳正常：主机在线，页面与推送都是警告级的“host-agent 停止上报”，不是“失联”。
-// 之后网关心跳也停了，改报主机失联。
+// 采集器停报但主机网关仍在上报：主机在线，页面与推送都是警告级的“host-agent 停止上报”，不是“失联”。
+// 之后网关也停报了，改报主机失联。
 func TestAgentOnlyStopIsAWarningOnPageAndPush(t *testing.T) {
 	h := newHostCheckHarness(t)
 	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
@@ -234,7 +238,7 @@ func TestAgentOnlyStopIsAWarningOnPageAndPush(t *testing.T) {
 	require.Len(t, pushed, 1)
 	require.Equal(t, "主机 storage · host-agent 停止上报", pushed[0].Title)
 	require.Equal(t, notification.SeverityWarning, pushed[0].Severity)
-	require.Contains(t, pushed[0].Body, "主机网关心跳正常")
+	require.Contains(t, pushed[0].Body, "主机网关仍在上报")
 	requireSameAsPush(t, h.pageAlert(hostmetrics.CheckKindAgent), pushed[0])
 	require.Empty(t, h.sender.forCheck(presence))
 	require.Nil(t, h.pageAlert(hostmetrics.CheckKindPresence))
@@ -436,33 +440,6 @@ func TestDisabledHostResolvesItsResourceAlert(t *testing.T) {
 	pushed := h.sender.forCheck(cpu)
 	require.Equal(t, notification.SeverityInfo, pushed[len(pushed)-1].Severity)
 	require.Len(t, h.sender.forCheck(hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)), 0, "停用的主机不报失联")
-}
-
-// host-agent 停报期间网关状态读取时好时坏：上一次读到的心跳还在 2 分钟内就仍算正常，
-// 告警保持“host-agent 停止上报”，不会在停报与失联之间来回切换。
-func TestGatewayReadErrorsDoNotFlipAgentStopIntoHostLost(t *testing.T) {
-	h := newHostCheckHarness(t)
-	presence := hostmetrics.CheckID("storage", hostmetrics.CheckKindPresence)
-	agent := hostmetrics.CheckID("storage", hostmetrics.CheckKindAgent)
-	h.gateway(true)
-	h.report(20)
-	h.evaluate()
-	h.advance(3*time.Minute + 10*time.Second)
-	h.gateway(true)
-	h.evaluate()
-	require.Len(t, h.sender.forCheck(agent), 1)
-
-	for range 3 {
-		h.advance(30 * time.Second)
-		failed := domain.GatewayObservation{HostID: "storage", ReadError: "GetHostRoutes unavailable", HostEnabledAt: h.clock.Add(-time.Hour)}
-		require.NoError(t, h.repos.Gateways.Reconcile(t.Context(), []domain.GatewayObservation{failed}, h.clock))
-		h.evaluate()
-		h.advance(30 * time.Second)
-		h.gateway(true)
-		h.evaluate()
-	}
-	require.Empty(t, h.sender.forCheck(presence), "读取出错不能把在线主机报成失联")
-	require.Len(t, h.sender.forCheck(agent), 1, "停报告警保持，不反复恢复再告警")
 }
 
 // 观测输入冻结期间到的超限采样不会被吃掉：解冻后照常计入。

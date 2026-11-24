@@ -1227,10 +1227,10 @@ func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *t
 }
 
 func TestObservationIndependentChecksKeepRunning(t *testing.T) {
-	for _, id := range []string{"gateway:storage:status", "kline_freshness:crypto:1m", "market_canary:binance", tagCheckPrefix + "x", observationIngestCheckID} {
+	for _, id := range []string{"kline_freshness:crypto:1m", "market_canary:binance", tagCheckPrefix + "x", observationIngestCheckID} {
 		require.True(t, observationIndependent(id), id)
 	}
-	for _, id := range []string{"reporter:node-a:collector", "ready:node-a:collector", "restart:node-a:collector", "dataset:storage:ds:1m", "balance:trade", "data_delivery:storage", "factor_watermark:x"} {
+	for _, id := range []string{"gateway:storage:status", "reporter:node-a:collector", "ready:node-a:collector", "restart:node-a:collector", "dataset:storage:ds:1m", "balance:trade", "data_delivery:storage", "factor_watermark:x"} {
 		require.False(t, observationIndependent(id), id)
 	}
 }

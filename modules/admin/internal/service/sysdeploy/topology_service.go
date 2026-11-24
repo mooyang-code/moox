@@ -196,7 +196,7 @@ func statusToProto(status *HostGatewayStatus) *pb.HostGatewayRuntimeStatus {
 		}
 		return t.UTC().Format(time.RFC3339Nano)
 	}
-	result := &pb.HostGatewayRuntimeStatus{InstanceId: status.InstanceID, Version: status.Version, ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, RouteCount: status.RouteCount, LastSeenAt: format(status.LastSeenAt), LastError: status.LastError, PreviousInstanceId: status.PreviousInstanceID, ReplacedAt: format(status.ReplacedAt), ConflictInstanceId: status.ConflictInstanceID, ConflictSeenAt: format(status.ConflictSeenAt)}
+	result := &pb.HostGatewayRuntimeStatus{ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, LastSeenAt: format(status.LastSeenAt)}
 	if status.RelaySessions != "" {
 		// 写入时已校验；读不出时宁可不展示，也不让整个状态查询失败。
 		_ = json.Unmarshal([]byte(status.RelaySessions), &result.RelaySessions)

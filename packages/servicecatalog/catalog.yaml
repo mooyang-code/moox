@@ -166,7 +166,6 @@ components:
             callers: [monitor]
           - name: GetHostRoutes
             read_only: true
-            callers: [monitor]
           - name: SetHostStatus
             operators: [moox-cli]
           - name: SetDeploymentStatus
@@ -201,9 +200,6 @@ components:
         max_body_bytes: 4194304
         methods:
           - name: PullSnapshot
-            callers: [host-gateway]
-            operators: []
-          - name: ReportStatus
             callers: [host-gateway]
             operators: []
     doctor:

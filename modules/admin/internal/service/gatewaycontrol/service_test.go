@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -257,34 +256,41 @@ func TestSnapshotsCarryHostsDeploymentsAndPublicKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, unknown.GetRetInfo().GetCode())
 	require.Nil(t, unknown.Snapshot)
-	report, err := f.service.ReportStatus(hostContext("ghost"), &pb.ReportStatusReq{HostId: "ghost", InstanceId: "G", Version: "v1"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_NOT_FOUND, report.GetRetInfo().GetCode())
+	var ghost int64
+	require.NoError(t, f.db.Model(&sysdeploy.HostGatewayStatus{}).Where("c_host_id = ?", "ghost").Count(&ghost).Error)
+	require.Zero(t, ghost, "没登记的主机不写状态")
 }
 
 func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 	f := newControlFixture(t)
 	before := f.snapshot(t, "storage")
 	writerDB := openControlDB(t, f.path)
+	// 读到一半时另一个连接改主机地址并登记新身份：拉取持有写锁，写入要等它结束，快照不会新旧混在一起。
 	var changed atomic.Bool
+	written := make(chan error, 1)
 	require.NoError(t, f.db.Callback().Query().After("gorm:query").Register("fixture:rotate-after-topology", func(tx *gorm.DB) {
 		if tx.Statement.Table != "t_deployments" || !changed.CompareAndSwap(false, true) {
 			return
 		}
-		require.NoError(t, writerDB.Transaction(func(writer *gorm.DB) error {
-			if err := writer.Exec("UPDATE t_hosts SET c_address='new.storage.example.test' WHERE c_host_id='storage'").Error; err != nil {
-				return err
-			}
-			store, err := keys.NewStore(writer)
-			if err != nil {
-				return err
-			}
-			return store.SetIdentity(context.Background(), "moox-skill", publicKey("moox-skill"))
-		}))
+		go func() {
+			written <- writerDB.Transaction(func(writer *gorm.DB) error {
+				if err := writer.Exec("UPDATE t_hosts SET c_address='new.storage.example.test' WHERE c_host_id='storage'").Error; err != nil {
+					return err
+				}
+				store, err := keys.NewStore(writer)
+				if err != nil {
+					return err
+				}
+				return store.SetIdentity(context.Background(), "moox-skill", publicKey("moox-skill"))
+			})
+		}()
+		// 给写入方一点时间撞上写锁。
+		time.Sleep(50 * time.Millisecond)
 	}))
 	t.Cleanup(func() { _ = f.db.Callback().Query().Remove("fixture:rotate-after-topology") })
 	during := f.snapshot(t, "storage")
 	require.True(t, changed.Load())
+	require.NoError(t, <-written)
 	require.Equal(t, before.Hash, during.Hash, "mid-read commits must not mix old hosts with new keys")
 	after := f.snapshot(t, "storage")
 	require.NotEqual(t, before.Hash, after.Hash)
@@ -294,11 +300,11 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 	require.NotNil(t, snapshotIdentity(after, "moox-skill"))
 }
 
-func (f *controlFixture) report(t *testing.T, instance string) {
+func (f *controlFixture) pull(t *testing.T, host, current string, sessions []*pb.RelaySessionStatus) *pb.PullSnapshotRsp {
 	t.Helper()
-	rsp, err := f.service.ReportStatus(hostContext("storage"), &pb.ReportStatusReq{HostId: "storage", InstanceId: instance, Version: "v-test-" + instance, RouteCount: 7, AppliedHash: strings.Repeat("a", 64)})
+	rsp, err := f.service.PullSnapshot(hostContext(host), &pb.PullSnapshotReq{HostId: host, CurrentHash: current, RelaySessions: sessions})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	return rsp
 }
 
 func (f *controlFixture) status(t *testing.T) sysdeploy.HostGatewayStatus {
@@ -308,78 +314,45 @@ func (f *controlFixture) status(t *testing.T) sysdeploy.HostGatewayStatus {
 	return status
 }
 
-func TestHeartbeatsDistinguishReplacementConflictAndExpiry(t *testing.T) {
+// 每次拉取都记下期望快照、网关带来的已应用快照与时间，哈希没变也写（拉取兼作心跳）。
+func TestPullRecordsExpectedAppliedAndHeartbeat(t *testing.T) {
 	f := newControlFixture(t)
-	f.report(t, "A")
-	initial := f.status(t)
-	require.Equal(t, f.snapshot(t, "storage").Hash, initial.ExpectedHash)
-	require.Empty(t, initial.PreviousInstanceID)
-	f.clock.Add(int64(time.Minute))
-	f.report(t, "B")
-	replaced := f.status(t)
-	require.Equal(t, "A", replaced.PreviousInstanceID)
-	require.NotNil(t, replaced.ReplacedAt)
-	require.Empty(t, replaced.ConflictInstanceID)
-	f.clock.Add(int64(time.Minute))
-	f.report(t, "A")
-	conflict := f.status(t)
-	require.Equal(t, "B", conflict.ConflictInstanceID)
-	require.NotNil(t, conflict.ConflictSeenAt)
-	f.clock.Add(int64(time.Minute))
-	f.report(t, "B")
+	first := f.pull(t, "storage", "", nil)
+	require.True(t, first.Changed)
+	status := f.status(t)
+	require.Equal(t, first.Snapshot.Hash, status.ExpectedHash)
+	require.Empty(t, status.AppliedHash)
+	require.NotNil(t, status.LastSeenAt)
+	f.clock.Add(int64(5 * time.Second))
+	unchanged := f.pull(t, "storage", first.Snapshot.Hash, nil)
+	require.False(t, unchanged.Changed)
 	renewed := f.status(t)
-	require.Equal(t, "A", renewed.ConflictInstanceID)
-	require.True(t, renewed.ConflictSeenAt.After(*conflict.ConflictSeenAt))
-	f.clock.Add(int64(5*time.Minute - time.Nanosecond))
-	f.report(t, "B")
-	require.NotEmpty(t, f.status(t).ConflictInstanceID)
-	f.clock.Add(1)
-	f.report(t, "B")
-	require.Empty(t, f.status(t).ConflictInstanceID)
-	require.Nil(t, f.status(t).ConflictSeenAt)
-	f.report(t, "C")
-	require.Empty(t, f.status(t).ConflictInstanceID)
-	// Reads expire old conflicts even when the gateway stops heartbeating.
-	past := time.Now().Add(-6 * time.Minute)
-	require.NoError(t, f.db.Model(&sysdeploy.HostGatewayStatus{}).Where("c_host_id='storage'").Updates(map[string]any{"c_conflict_instance_id": "B", "c_conflict_seen_at": &past}).Error)
-	read, err := f.topology.GetGatewayStatus(context.Background(), "storage")
-	require.NoError(t, err)
-	require.Empty(t, read.ConflictInstanceID)
-	require.Nil(t, read.ConflictSeenAt)
+	require.Equal(t, first.Snapshot.Hash, renewed.AppliedHash)
+	require.True(t, renewed.LastSeenAt.After(*status.LastSeenAt))
 }
 
-func TestInvalidHeartbeatsDoNotOverwriteLastGoodStatus(t *testing.T) {
+func TestInvalidPullsDoNotOverwriteLastGoodStatus(t *testing.T) {
 	f := newControlFixture(t)
-	f.report(t, "A")
+	hash := f.pull(t, "storage", "", nil).Snapshot.Hash
+	f.pull(t, "storage", hash, nil)
 	before := f.status(t)
-	for _, mutate := range []func(*pb.ReportStatusReq){
-		func(r *pb.ReportStatusReq) { r.InstanceId = "" }, func(r *pb.ReportStatusReq) { r.InstanceId = "../bad" },
-		func(r *pb.ReportStatusReq) { r.Version = "" }, func(r *pb.ReportStatusReq) { r.AppliedHash = "bad" },
-		func(r *pb.ReportStatusReq) { r.RouteCount = -1 }, func(r *pb.ReportStatusReq) { r.RouteCount = 10001 },
-		func(r *pb.ReportStatusReq) { r.Error = strings.Repeat("x", 4097) },
-		// 只有 control 网关能上报反向连接会话。
-		func(r *pb.ReportStatusReq) {
-			r.RelaySessions = []*pb.RelaySessionStatus{{HostId: "home", Online: true}}
-		},
-	} {
-		req := &pb.ReportStatusReq{HostId: "storage", InstanceId: "B", Version: "v2"}
-		mutate(req)
-		rsp, err := f.service.ReportStatus(hostContext("storage"), req)
-		require.NoError(t, err)
-		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-		require.Equal(t, before, f.status(t))
-	}
-	_, err := f.service.ReportStatus(hostContext("control"), &pb.ReportStatusReq{HostId: "storage", InstanceId: "B", Version: "v2"})
+	f.clock.Add(int64(time.Second))
+	// 当前哈希不合法；只有 control 网关能带反向连接会话。
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, f.pull(t, "storage", "bad", nil).GetRetInfo().GetCode())
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, f.pull(t, "storage", hash, []*pb.RelaySessionStatus{{HostId: "home", Online: true}}).GetRetInfo().GetCode())
+	require.Equal(t, before, f.status(t))
+	_, err := f.service.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "storage", CurrentHash: hash})
 	require.Error(t, err)
 	require.Equal(t, before, f.status(t))
 }
 
-func TestIndependentStatusWritersSerializeInstanceHistory(t *testing.T) {
+// 两个 Admin 连接同时写同一台主机的状态：写锁让它们串行，都成功，最后一份完整。
+func TestIndependentStatusWritersSerialize(t *testing.T) {
 	f := newControlFixture(t)
-	f.report(t, "A")
+	hash := f.pull(t, "storage", "", nil).Snapshot.Hash
 	other := f.newService(t, openControlDB(t, f.path))
 	var wg sync.WaitGroup
-	responses := make([]*pb.ReportStatusRsp, 2)
+	responses := make([]*pb.PullSnapshotRsp, 2)
 	errorsSeen := make([]error, 2)
 	start := make(chan struct{})
 	for i, service := range []*Service{f.service, other} {
@@ -387,8 +360,7 @@ func TestIndependentStatusWritersSerializeInstanceHistory(t *testing.T) {
 		go func(i int, service *Service) {
 			defer wg.Done()
 			<-start
-			instance := []string{"B", "C"}[i]
-			responses[i], errorsSeen[i] = service.ReportStatus(hostContext("storage"), &pb.ReportStatusReq{HostId: "storage", InstanceId: instance, Version: "v-" + instance})
+			responses[i], errorsSeen[i] = service.PullSnapshot(hostContext("storage"), &pb.PullSnapshotReq{HostId: "storage", CurrentHash: hash})
 		}(i, service)
 	}
 	close(start)
@@ -398,11 +370,8 @@ func TestIndependentStatusWritersSerializeInstanceHistory(t *testing.T) {
 		require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 	}
 	status := f.status(t)
-	require.Contains(t, []string{"B", "C"}, status.InstanceID)
-	require.Contains(t, []string{"B", "C"}, status.PreviousInstanceID)
-	require.NotEqual(t, status.InstanceID, status.PreviousInstanceID)
-	require.Equal(t, "v-"+status.InstanceID, status.Version)
-	require.Empty(t, status.ConflictInstanceID)
+	require.Equal(t, hash, status.ExpectedHash)
+	require.Equal(t, hash, status.AppliedHash)
 }
 
 // 新登记、还没签发身份包的主机不影响别的主机取快照，读快照也不会替它生成密钥；签发之后它的公钥才进快照。
@@ -426,33 +395,27 @@ func TestNewHostWithoutKeyDoesNotBlockSnapshots(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestFailedStatusWritePreservesInstanceHistory(t *testing.T) {
+func TestFailedStatusWritePreservesLastStatus(t *testing.T) {
 	f := newControlFixture(t)
-	f.report(t, "A")
+	hash := f.pull(t, "storage", "", nil).Snapshot.Hash
 	before := f.status(t)
 	require.NoError(t, f.db.Exec("CREATE TRIGGER reject_status BEFORE INSERT ON t_host_gateway_status BEGIN SELECT RAISE(ABORT, 'fixture rejection'); END").Error)
-	response, err := f.service.ReportStatus(hostContext("storage"), &pb.ReportStatusReq{HostId: "storage", InstanceId: "B", Version: "v-new"})
-	require.NoError(t, err)
+	response := f.pull(t, "storage", hash, nil)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
 	require.Equal(t, before, f.status(t))
 }
 
-// control 网关的心跳携带反向连接会话，经主机状态查询原样返回；非法会话拒绝。
-func TestControlHeartbeatCarriesRelaySessions(t *testing.T) {
+// control 网关拉取时带上反向连接会话，经主机状态查询原样返回；非法会话拒绝。
+func TestControlPullCarriesRelaySessions(t *testing.T) {
 	f := newControlFixture(t)
-	report := func(sessions []*pb.RelaySessionStatus) *pb.ReportStatusRsp {
-		rsp, err := f.service.ReportStatus(hostContext("control"), &pb.ReportStatusReq{HostId: "control", InstanceId: "C", Version: "v1", RelaySessions: sessions})
-		require.NoError(t, err)
-		return rsp
-	}
 	sessions := []*pb.RelaySessionStatus{{HostId: "home", Online: true, InstanceId: "abc", ConnectedAt: "2026-10-18T01:00:00Z", Reconnects: 2, Streams: 1}}
-	require.Equal(t, pb.ErrorCode_SUCCESS, report(sessions).GetRetInfo().GetCode())
+	require.Equal(t, pb.ErrorCode_SUCCESS, f.pull(t, "control", "", sessions).GetRetInfo().GetCode())
 	var status sysdeploy.HostGatewayStatus
 	require.NoError(t, f.db.Where("c_host_id = ?", "control").First(&status).Error)
 	require.Contains(t, status.RelaySessions, `"host_id":"home"`)
 	for _, bad := range [][]*pb.RelaySessionStatus{
 		{{HostId: "home"}, {HostId: "home"}}, {{HostId: "bad/id"}}, {{HostId: "home", ConnectedAt: "yesterday"}}, {{HostId: "home", Reconnects: -1}},
 	} {
-		require.Equal(t, pb.ErrorCode_INVALID_PARAM, report(bad).GetRetInfo().GetCode())
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, f.pull(t, "control", "", bad).GetRetInfo().GetCode())
 	}
 }

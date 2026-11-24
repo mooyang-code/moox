@@ -117,7 +117,6 @@ type Overview struct {
 	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
-	GatewaySignals []GatewaySignal
 }
 
 type Builder struct {
@@ -125,7 +124,6 @@ type Builder struct {
 	Hosts                      *hostmetrics.Store
 	Checks                     *store.CheckRepository
 	Topology                   *store.TopologyRepository
-	Gateways                   *store.GatewayRepository
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
 	BalanceDifferenceThreshold float64
@@ -230,9 +228,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, seriesLimit...)
-	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
-		return Overview{}, err
-	}
 	out.BusinessChecks = uniqueBusinessChecks(out.BusinessChecks)
 	sortOverview(&out)
 	return out, nil
@@ -429,8 +424,8 @@ func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, n
 	}}, nil
 }
 
-// HostFacts 只取主机类检查需要的事实：部署拓扑、各采集器最近一次上报与最新快照、主机网关信号。
-// 这些都在 Monitor 自己的库和内存里，不读 Storage、不查服务指标：别的机器宕机或 Storage 超时都不影响它。
+// HostFacts 只取主机类检查需要的事实：部署拓扑、各采集器最近一次上报与最新快照、各部署的组件上报（用到主机网关那一项）。
+// 这些都在 Monitor 自己的库和内存里，不读 Storage：别的机器宕机或 Storage 超时都不影响它。
 func (b Builder) HostFacts(ctx context.Context) (Overview, error) {
 	now := time.Now().UTC()
 	if b.Now != nil {
@@ -447,7 +442,7 @@ func (b Builder) HostFacts(ctx context.Context) (Overview, error) {
 	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
 		return Overview{}, err
 	}
-	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
+	if out.Services, _, _, err = b.buildServices(ctx, now, out.Hosts); err != nil {
 		return Overview{}, err
 	}
 	return out, nil

@@ -193,13 +193,6 @@ export interface HealthBusinessCheck {
   raw_error?: string;
   checked_at?: string;
 }
-export interface HealthGatewaySignal {
-  kind?: string;
-  signal?: HealthSignal;
-  pending_since?: string;
-  expected_hash?: string;
-  applied_hash?: string;
-}
 export interface HealthHost {
   host_id?: string;
   hostname?: string;
@@ -214,7 +207,6 @@ export interface HealthHost {
   disk_available?: boolean;
   cpu_available?: boolean;
   last_reported_at?: string;
-  gateway_signals?: HealthGatewaySignal[];
   /** 告警阈值（百分比）；0 或缺省表示没有对应规则。 */
   cpu_threshold?: number;
   memory_threshold?: number;

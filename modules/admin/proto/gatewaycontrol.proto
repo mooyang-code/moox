@@ -42,9 +42,13 @@ message SnapshotIdentity {
   bytes sign_public_key = 2;
 }
 
+// 网关每次刷新（约 5 秒）调一次，兼作心跳：Admin 每次都记下期望快照、这台网关已应用的快照（current_hash）与时间。
 message PullSnapshotReq {
   string host_id = 1;
+  // 网关当前已应用的快照哈希；还没有快照时为空。
   string current_hash = 2;
+  // 只有 control 网关带上：各出站主机的反向连接会话。
+  repeated RelaySessionStatus relay_sessions = 3;
 }
 
 message PullSnapshotRsp {
@@ -64,24 +68,8 @@ message RelaySessionStatus {
   int32 streams = 6;
 }
 
-message ReportStatusReq {
-  string host_id = 1;
-  string instance_id = 2;
-  string version = 3;
-  string applied_hash = 4;
-  string error = 5;
-  int32 route_count = 6;
-  // 只有 control 网关上报。
-  repeated RelaySessionStatus relay_sessions = 7;
-}
-
-message ReportStatusRsp {
-  common.RetInfo ret_info = 1;
-}
-
 // 只有各主机的网关能调：控制机网关验过签名后转给本机的 Admin，并把验过的签名主机 ID 放在 x-moox-verified-host
 // 元数据头里（控制机网关自己直连时也带上）；服务要求请求里的 host_id 与它一致。
 service GatewayControl {
   rpc PullSnapshot(PullSnapshotReq) returns (PullSnapshotRsp);
-  rpc ReportStatus(ReportStatusReq) returns (ReportStatusRsp);
 }

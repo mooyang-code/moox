@@ -112,14 +112,12 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	waitForE2E(t, 15*time.Second, "both actual gateway heartbeats", func() bool {
 		for _, host := range []string{"control", "storage"} {
 			status, err := f.topology.GetGatewayStatus(ctx, host)
-			if err != nil || status.InstanceID == "" || status.AppliedHash != status.ExpectedHash || status.Version != "control-e2e" {
+			if err != nil || status.LastSeenAt == nil || status.AppliedHash != status.ExpectedHash {
 				return false
 			}
 		}
 		return true
 	})
-	initialInstance := f.status(t).InstanceID
-	initialControlInstance := controlProcess.instance(t, f)
 
 	collector, console := authtest.Component("collector", "control"), authtest.Component("console", "control")
 	local := map[string]gatewayauth.Credentials{"control": collector, "storage": authtest.Component("monitor", "storage")}
@@ -294,9 +292,6 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		var rsp pb.PullSnapshotRsp
 		return codec.Unmarshal(codec.SerializationTypePB, raw, &rsp) == nil && rsp.Changed && snapshotHost(rsp.GetSnapshot(), "joining") != nil
 	})
-	controlStatus, err := f.topology.GetGatewayStatus(ctx, "control")
-	require.NoError(t, err)
-	require.Equal(t, initialControlInstance, controlStatus.InstanceID)
 	t.Log("SCENARIO PASS new-caller-next-snapshot-without-restart")
 
 	require.NoError(t, f.topology.SetDeploymentStatus(ctx, "storage", "storage-primary", servicecatalog.Disabled))
@@ -331,18 +326,12 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	storageProcess.stop(t)
 	storageProcess = startGatewayExecutable(t, binary, framework, configs["storage"])
-	waitForE2E(t, 15*time.Second, "normal process replacement heartbeat", func() bool { return f.status(t).InstanceID != initialInstance })
-	require.Empty(t, f.status(t).ConflictInstanceID)
-	require.Equal(t, initialInstance, f.status(t).PreviousInstanceID)
-	// A second genuine process uses separate sockets/cache but the same host
-	// identity. Its real timer and the original timer must reveal the conflict.
-	duplicate := configs["storage"]
-	duplicate.Server = hostgatewayconfig.Server{RemoteAddr: unusedE2EAddress(t), LocalAddr: unusedE2EAddress(t), HealthAddr: unusedE2EAddress(t)}
-	duplicate.Store.Path = filepath.Join(root, "duplicate-cache")
-	duplicateProcess := startGatewayExecutable(t, binary, framework, duplicate)
-	waitForE2E(t, 31*time.Second, "alternating real processes detected as conflict", func() bool { return f.status(t).ConflictInstanceID != "" })
-	duplicateProcess.stop(t)
-	t.Log("SCENARIO PASS normal-restart-and-live-instance-conflict")
+	restartedAt := time.Now().UTC()
+	waitForE2E(t, 15*time.Second, "restarted process pulls again", func() bool {
+		status := f.status(t)
+		return status.LastSeenAt != nil && status.LastSeenAt.After(restartedAt) && status.AppliedHash == status.ExpectedHash
+	})
+	t.Log("SCENARIO PASS normal-restart")
 
 	// Keep control's business route active, but stop the actual Admin control
 	// listener. Both gateways retain their previously authenticated snapshots.
@@ -461,22 +450,6 @@ func (p *gatewayExecutable) stop(t *testing.T) {
 		<-p.done
 		t.Errorf("gateway %s failed to stop", p.host)
 	}
-}
-
-func (p *gatewayExecutable) instance(t *testing.T, f *controlFixture) string {
-	t.Helper()
-	status, err := f.topology.GetGatewayStatus(context.Background(), p.host)
-	require.NoError(t, err)
-	return status.InstanceID
-}
-
-func unusedE2EAddress(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	address := l.Addr().String()
-	require.NoError(t, l.Close())
-	return address
 }
 
 func startEchoBackend(t *testing.T, address, path string, calls *atomic.Int64) {

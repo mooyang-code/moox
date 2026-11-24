@@ -18,7 +18,6 @@ type Repositories struct {
 	Checks          *CheckRepository
 	Topology        *TopologyRepository
 	ComponentHealth *ComponentHealthRepository
-	Gateways        *GatewayRepository
 	Results         *ResultRepository
 	Alerts          *AlertRepository
 	Notifications   *NotificationRepository
@@ -30,7 +29,6 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Checks:          NewCheckRepository(db),
 		Topology:        &TopologyRepository{db: db},
 		ComponentHealth: &ComponentHealthRepository{db: db},
-		Gateways:        &GatewayRepository{db: db},
 		Results:         NewResultRepository(db),
 		Alerts:          NewAlertRepository(db),
 		Notifications:   NewNotificationRepository(db),

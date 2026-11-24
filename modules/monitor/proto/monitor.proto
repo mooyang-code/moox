@@ -214,14 +214,6 @@ message HealthBusinessCheck {
   // 检查名称，与推送标题一致。
   string name = 9;
 }
-message HealthGatewaySignal {
-  string kind = 1;
-  HealthSignal signal = 2;
-  // Persisted first observation of the current desired/applied mismatch.
-  string pending_since = 3;
-  string expected_hash = 4;
-  string applied_hash = 5;
-}
 message HealthHost {
   string host_id = 1;
   string hostname = 3;
@@ -234,7 +226,6 @@ message HealthHost {
   bool metrics_available = 10;
   bool cpu_available = 11;
   string last_reported_at = 12;
-  repeated HealthGatewaySignal gateway_signals = 13;
   bool memory_available = 14;
   bool disk_available = 15;
   // 告警阈值（百分比）；0 表示没有对应的告警规则。

@@ -134,7 +134,7 @@ func TestTopologyProtectsControlAndDeletesOnlyEmptyHosts(t *testing.T) {
 	compute := topologySpecs()[2]
 	compute.Components = nil
 	require.NoError(t, dao.SyncHostDeployments(ctx, compute))
-	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "overseas", InstanceID: "previous-process"}).Error)
+	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "overseas", ExpectedHash: "previous"}).Error)
 	require.NoError(t, dao.DeleteHost(ctx, "overseas"))
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)

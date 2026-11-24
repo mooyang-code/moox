@@ -36,20 +36,13 @@ message ComponentDeployment {
   string updated_at = 5;
 }
 
+// 网关最近一次拉取快照时 Admin 记下的状态：期望快照、网关已应用的快照、拉取时间。网关是否在运行看 Monitor 的组件上报。
 message HostGatewayRuntimeStatus {
-  string instance_id = 1;
-  string version = 2;
-  string expected_hash = 3;
-  string applied_hash = 4;
-  int64 route_count = 5;
-  string last_seen_at = 6;
-  string last_error = 7;
-  string previous_instance_id = 8;
-  string replaced_at = 9;
-  string conflict_instance_id = 10;
-  string conflict_seen_at = 11;
-  // control 网关上报的各出站主机反向连接会话。
-  repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 12;
+  string expected_hash = 1;
+  string applied_hash = 2;
+  string last_seen_at = 3;
+  // control 网关带来的各出站主机反向连接会话。
+  repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 4;
 }
 
 message GetCatalogReq {}

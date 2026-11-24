@@ -71,7 +71,7 @@ $CLI setup status --file <moox.toml> --host <主机>
 ## 发布后验证（只读）
 
 1. `setup status`：组件都是 `active`，`version.json` 的版本与提交是这次的。
-2. 告警：发布期间 Monitor 会短暂出现“运行指标上报”“网关心跳”“行情探针”告警，**几分钟内自动恢复就是正常**；超过 5 分钟仍未恢复才查：`moox-cli doctor alerts --format text`。
+2. 告警：发布期间 Monitor 会短暂出现“运行指标上报”“行情探针”告警，**几分钟内自动恢复就是正常**；超过 5 分钟仍未恢复才查：`moox-cli doctor alerts --format text`。
 3. 日志：用 `moox-cli monitor logs --component <组件> --from <发布时刻>` 看新进程启动之后的记录。**先确认里面有这次启动的 `process_started`**：它同时证明新二进制已经在跑、EventBus 的发布权限没问题、Monitor 入库正常。
    看不到它时不能当成“没有错误”。崩溃信息（panic）在 journald 里：`setup logs --host <主机> --component <组件> --journal`；完整的文件日志在 `<部署根>/logs/<组件>/trpc.log`。
 4. 前端（内嵌在 `moox-admin` 里）：`curl -sk https://<控制机地址>:9527/ | grep -o 'static/js/index-[^"]*\.js'` 应等于构建输出里“moox-admin 内嵌前端”那一行的入口文件。页面需登录，由用户自己在浏览器验证。

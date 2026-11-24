@@ -44,13 +44,11 @@ type State struct {
 	storage            atomic.Pointer[storageCheck]
 	syncErrors         atomic.Uint64
 	validationFailures atomic.Uint64
-	reportErrors       atomic.Uint64
 	authFailures       atomic.Uint64
 	replayFailures     atomic.Uint64
 	connectionFailures atomic.Uint64
 	timeoutFailures    atomic.Uint64
 	lastSyncUnix       atomic.Int64
-	lastReportUnix     atomic.Int64
 	staleAfterSeconds  atomic.Int64
 	clockMu            sync.RWMutex
 	clock              func() time.Time
@@ -118,11 +116,10 @@ func (state *State) Ready() bool {
 		staleAfter = 90
 	}
 	lastSync := state.lastSyncUnix.Load()
-	lastReport := state.lastReportUnix.Load()
-	return lastSync > 0 && lastReport > 0 && now >= lastSync && now-lastSync <= staleAfter && now >= lastReport && now-lastReport <= staleAfter
+	return lastSync > 0 && now >= lastSync && now-lastSync <= staleAfter
 }
 
-// Readiness 是 /readyz 用的就绪判断，也随指标上报带给 Monitor：本地状态存储可用，并且路由快照在时限内同步、上报过。
+// Readiness 是 /readyz 用的就绪判断，也随指标上报带给 Monitor：本地状态存储可用，并且路由快照在时限内同步过。
 func (state *State) Readiness(context.Context) (bool, string) {
 	if check := state.storage.Load(); check != nil {
 		if err := check.check(); err != nil {
@@ -133,7 +130,7 @@ func (state *State) Readiness(context.Context) (bool, string) {
 		return false, "还没有应用路由快照"
 	}
 	if !state.Ready() {
-		return false, "路由快照同步或上报已过期"
+		return false, "路由快照同步已过期"
 	}
 	return true, ""
 }
@@ -158,18 +155,11 @@ func (state *State) Current() (string, int) {
 
 func (state *State) RouteSyncFailed()       { state.syncErrors.Add(1) }
 func (state *State) RouteValidationFailed() { state.validationFailures.Add(1) }
-func (state *State) RouteReportFailed() {
-	state.reportErrors.Add(1)
-}
-func (state *State) AuthFailed()   { state.authFailures.Add(1) }
-func (state *State) ReplayFailed() { state.replayFailures.Add(1) }
+func (state *State) AuthFailed()            { state.authFailures.Add(1) }
+func (state *State) ReplayFailed()          { state.replayFailures.Add(1) }
 
 func (state *State) RouteSyncSucceeded(at time.Time) {
 	state.lastSyncUnix.Store(at.Unix())
-}
-
-func (state *State) RouteReportSucceeded(at time.Time) {
-	state.lastReportUnix.Store(at.Unix())
 }
 
 func (state *State) UpstreamFailed(kind string) {
@@ -230,7 +220,6 @@ func (state *State) writeHealth(response http.ResponseWriter, ready bool) {
 func (state *State) writeMetrics(response http.ResponseWriter) {
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_sync_errors_total counter\nhost_gateway_route_sync_errors_total %d\n", state.syncErrors.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_validation_failures_total counter\nhost_gateway_route_validation_failures_total %d\n", state.validationFailures.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_report_errors_total counter\nhost_gateway_route_report_errors_total %d\n", state.reportErrors.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_auth_failures_total counter\nhost_gateway_auth_failures_total %d\n", state.authFailures.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_replay_failures_total counter\nhost_gateway_replay_failures_total %d\n", state.replayFailures.Load())
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_upstream_failures_total counter\nhost_gateway_upstream_failures_total{type=\"connection\"} %d\nhost_gateway_upstream_failures_total{type=\"timeout\"} %d\n", state.connectionFailures.Load(), state.timeoutFailures.Load())
@@ -238,7 +227,6 @@ func (state *State) writeMetrics(response http.ResponseWriter) {
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_routes_current gauge\nhost_gateway_routes_current %d\n", count)
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_info gauge\nhost_gateway_route_info{route_hash=\"%s\"} 1\n", escapeLabel(hash))
 	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_last_sync_timestamp_seconds gauge\nhost_gateway_route_last_sync_timestamp_seconds %d\n", state.lastSyncUnix.Load())
-	_, _ = fmt.Fprintf(response, "# TYPE host_gateway_route_last_report_timestamp_seconds gauge\nhost_gateway_route_last_report_timestamp_seconds %d\n", state.lastReportUnix.Load())
 	stale := 1
 	if state.Ready() {
 		stale = 0

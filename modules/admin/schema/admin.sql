@@ -96,20 +96,11 @@ END;
 
 CREATE TABLE IF NOT EXISTS t_host_gateway_status (
     c_host_id TEXT NOT NULL PRIMARY KEY,
-    c_instance_id TEXT NOT NULL DEFAULT '',
-    c_version TEXT NOT NULL DEFAULT '',
     c_expected_hash TEXT NOT NULL DEFAULT '',
     c_applied_hash TEXT NOT NULL DEFAULT '',
-    c_route_count INTEGER NOT NULL DEFAULT 0,
     c_last_seen_at DATETIME,
-    c_last_error TEXT NOT NULL DEFAULT '',
-    c_previous_instance_id TEXT NOT NULL DEFAULT '',
-    c_replaced_at DATETIME,
-    c_conflict_instance_id TEXT NOT NULL DEFAULT '',
-    c_conflict_seen_at DATETIME,
-    -- control 网关上报的反向连接会话（JSON 数组），其他主机为空
+    -- control 网关带来的反向连接会话（JSON 数组），其他主机为空
     c_relay_sessions TEXT NOT NULL DEFAULT '',
-    CHECK (c_route_count >= 0),
     FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
 );
 

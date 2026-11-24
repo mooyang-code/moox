@@ -60,7 +60,7 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitordeployment.NewSyncer(runtime.Repositories.Topology, monitordeployment.NewClientSource(runtime.Gateway), runtime.Repositories.Gateways)
+	syncer := monitordeployment.NewSyncer(runtime.Repositories.Topology, monitordeployment.NewClientSource(runtime.Gateway))
 	handler := monitorSyncHandler(serializedMonitorSync(syncer.Sync))
 	registerMonitorSyncTimer(s, handler)
 

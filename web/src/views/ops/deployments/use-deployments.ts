@@ -122,10 +122,6 @@ export function useDeployments() {
   });
   const currentRoutes = computed(() => routes.value[selectedHostId.value]);
   const currentRouteError = computed(() => routeErrors.value[selectedHostId.value] || "");
-  const gatewaySignal = (hostId: string, kind: string) =>
-    monitorError.value || error.value
-      ? undefined
-      : overview.value?.hosts?.find(host => host.host_id === hostId)?.gateway_signals?.find(signal => signal.kind === kind);
 
   function applyLocator() {
     const requested = requestedHost.value;
@@ -238,7 +234,6 @@ export function useDeployments() {
     requestedComponent,
     clearLocator,
     selectRouteHost,
-    gatewaySignal,
     refresh
   };
 }

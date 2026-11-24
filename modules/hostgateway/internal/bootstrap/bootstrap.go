@@ -36,7 +36,6 @@ type snapshotStore interface {
 }
 type controlClient interface {
 	Pull(context.Context, string) (*snapshot.View, error)
-	Report(context.Context, string, int32, string) error
 }
 
 type Options struct {
@@ -142,28 +141,17 @@ func (r *Runtime) refresh(ctx context.Context) error {
 			r.dirty = false
 		}
 	}
-	lastError := ""
 	if err != nil {
 		r.health.RouteSyncFailed()
 		if errors.Is(err, snapshot.ErrInvalid) {
 			r.health.RouteValidationFailed()
 		}
 		r.noteSyncFailure()
-		// Reports and logs deliberately exclude upstream response/error bodies.
-		lastError = "host snapshot synchronization or persistence failed"
 	} else {
 		r.failureSince, r.lastWarning = time.Time{}, time.Time{}
 		r.health.RouteSyncSucceeded(r.now())
 	}
-	hash, count := r.health.Current()
-	reportErr := r.control.Report(ctx, hash, int32(count), lastError)
-	if reportErr != nil {
-		r.health.RouteReportFailed()
-		r.warn("host gateway heartbeat failed: host_id=" + r.hostID)
-	} else {
-		r.health.RouteReportSucceeded(r.now())
-	}
-	return errors.Join(err, reportErr)
+	return err
 }
 
 func (r *Runtime) noteSyncFailure() {
@@ -191,7 +179,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	var closeTimersOnce sync.Once
 	closeTimers := func() { closeTimersOnce.Do(func() { _ = timers.Close(nil) }) }
 	defer closeTimers()
-	control, err := controlplane.NewRPC(cfg, material, credentials, version)
+	control, err := controlplane.NewRPC(cfg, material, credentials)
 	if err != nil {
 		return err
 	}

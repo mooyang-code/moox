@@ -224,7 +224,7 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListHosts", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListDeployments", true},
-		{"monitor", "trpc.moox.ops.SysDeploy", "GetHostRoutes", true},
+		{"monitor", "trpc.moox.ops.SysDeploy", "GetHostRoutes", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "SetHostStatus", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
@@ -388,7 +388,7 @@ func TestReadOnlyMethodsDoNotIncludeWrites(t *testing.T) {
 		{"trpc.moox.storage.PrimaryStore", "ReportDatasetPeriodCompleted", false},
 		{"trpc.moox.factor.FactorEngine", "PullRecalcJob", false},
 		{"trpc.moox.egress.Proxy", "Do", false},
-		{GatewayControlPath, "ReportStatus", false},
+		{GatewayControlPath, "PullSnapshot", false},
 		{"trpc.moox.unknown.Service", "GetValue", false},
 	} {
 		if c.ReadOnly(tc.path, tc.method) != tc.want {

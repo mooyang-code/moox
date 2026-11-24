@@ -90,7 +90,7 @@ func NewConsumer(ctx context.Context, client *jetstream.Client, registry *events
 	pull, err := client.NewConsumer(ctx, jetstream.ConsumerConfig{
 		Stream: events.MonitorObservabilityConsumer.Stream(), Durable: DefaultConsumer,
 		FilterSubjects: events.MonitorObservabilityConsumer.FilterSubjects(),
-		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.MaxAckPending,
+		AckWait:        cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.MaxAckPending,
 		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: cfg.DeliverPolicy,
 		DeliverDecodeErrors: true,
 	})

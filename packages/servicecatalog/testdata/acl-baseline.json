@@ -3,7 +3,7 @@
   "summary": {
     "components": 18,
     "services": 25,
-    "methods": 332,
+    "methods": 331,
     "read_only_methods": 150,
     "retryable_methods": 151,
     "callers": 22,
@@ -35,12 +35,6 @@
       "methods": [
         {
           "name": "PullSnapshot",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ReportStatus",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -2571,8 +2565,7 @@
       "trpc.moox.monitor.MonitorMgr/GetHostPolicy"
     ],
     "host-gateway": [
-      "trpc.moox.admin.GatewayControl/PullSnapshot",
-      "trpc.moox.admin.GatewayControl/ReportStatus"
+      "trpc.moox.admin.GatewayControl/PullSnapshot"
     ],
     "monitor": [
       "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
@@ -2589,7 +2582,6 @@
       "trpc.moox.hostagent.HostAgentMgr/GetStatus",
       "trpc.moox.hostagent.HostAgentMgr/RunOnce",
       "trpc.moox.ops.SysDeploy/GetCatalog",
-      "trpc.moox.ops.SysDeploy/GetHostRoutes",
       "trpc.moox.ops.SysDeploy/ListDeployments",
       "trpc.moox.ops.SysDeploy/ListHosts",
       "trpc.moox.storage.DataView/CountTimeSeriesRows",

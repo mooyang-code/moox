@@ -41,22 +41,16 @@ describe("deployment presentation", () => {
     ).toBe("disabled");
     expect(componentPorts(component)).toEqual([11011, 11012]);
   });
-  it("uses server observation time for heartbeat age and keeps never-reported and conflict distinct", () => {
+  it("uses server observation time for heartbeat age and keeps never-reported distinct", () => {
     expect(gatewayLabel(snapshot)).toBe("在线");
     expect(gatewayLabel({ ...snapshot, compiled_at: "2026-10-09T12:02:01Z" })).toBe("离线");
     expect(gatewayLabel({ ...snapshot, gateway_status: {} })).toBe("从未上报");
-    expect(gatewayLabel({ ...snapshot, gateway_status: { conflict_instance_id: "other" } })).toBe("重复实例");
     expect(gatewayLabel()).toBe("状态未知");
   });
-  it("shows persisted pending time only for the same expected and applied snapshot pair", () => {
-    const signal = { kind: "route_sync", expected_hash: "new", applied_hash: "old", pending_since: "2026-10-09T11:59:00Z" };
-    expect(routeSync(snapshot, signal)).toEqual({ label: "待同步", pendingSince: signal.pending_since });
-    expect(routeSync(snapshot, { ...signal, expected_hash: "retired" }).pendingSince).toBe("");
-    expect(routeSync(snapshot, { ...signal, applied_hash: "different" }).pendingSince).toBe("");
-    expect(routeSync({ ...snapshot, gateway_status: { expected_hash: "new", applied_hash: "new" } }, signal)).toEqual({
-      label: "已同步",
-      pendingSince: ""
-    });
+  it("compares the expected and applied snapshot", () => {
+    expect(routeSync(snapshot)).toBe("待同步");
+    expect(routeSync({ ...snapshot, gateway_status: { expected_hash: "new", applied_hash: "new" } })).toBe("已同步");
+    expect(routeSync({ ...snapshot, gateway_status: {} })).toBe("同步状态未知");
   });
   it("filters callers and methods on the same route and preserves each method ACL", () => {
     const base = {
