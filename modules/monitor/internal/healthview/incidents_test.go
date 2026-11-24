@@ -50,7 +50,7 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 		if payload == "" {
 			payload = "{}"
 		}
-		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: string(rune('a' + seq)), SpaceID: space, CheckID: check, Title: titles[check], Severity: checks.Severity(check), EventType: eventType, Payload: payload, CreatedAt: at}))
+		require.NoError(t, repos.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: string(rune('a' + seq)), SpaceID: space, CheckID: check, Title: titles[check], Severity: checks.Severity(check), EventType: eventType, Payload: payload, CreatedAt: at}}))
 	}
 
 	// 窗口内触发、通知失败、29 秒后恢复
@@ -130,7 +130,7 @@ func TestIncidentsKeepFailedRecoveryNotificationInOneIncident(t *testing.T) {
 	seq := 0
 	event := func(check, eventType string, at time.Time) {
 		seq++
-		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: fmt.Sprintf("e%d", seq), SpaceID: "crypto", CheckID: check, Title: check, Severity: domain.SeverityCritical, EventType: eventType, Payload: "{}", CreatedAt: at}))
+		require.NoError(t, repos.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: fmt.Sprintf("e%d", seq), SpaceID: "crypto", CheckID: check, Title: check, Severity: domain.SeverityCritical, EventType: eventType, Payload: "{}", CreatedAt: at}}))
 	}
 	retried, refailed := "market_fetch:scf_timer", "market_canary:btc"
 	event(retried, domain.AlertEventTriggered, now.Add(-30*time.Minute))
@@ -165,9 +165,9 @@ func TestIncidentsRecoverTriggerCutByEventLimit(t *testing.T) {
 	maxIncidentEvents = 3
 	t.Cleanup(func() { maxIncidentEvents = limit })
 	check := "dataset:strategy:s1:1m"
-	require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: "trigger", SpaceID: "crypto", CheckID: check, Title: "策略 s1", Severity: domain.SeverityCritical, EventType: domain.AlertEventTriggered, Payload: `{"reason":"一直运行失败"}`, CreatedAt: now.Add(-10 * time.Hour)}))
+	require.NoError(t, repos.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: "trigger", SpaceID: "crypto", CheckID: check, Title: "策略 s1", Severity: domain.SeverityCritical, EventType: domain.AlertEventTriggered, Payload: `{"reason":"一直运行失败"}`, CreatedAt: now.Add(-10 * time.Hour)}}))
 	for i := range 5 {
-		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: fmt.Sprintf("reminder-%d", i), SpaceID: "crypto", CheckID: check, Title: "策略 s1", Severity: domain.SeverityCritical, EventType: domain.AlertEventReminder, Payload: "{}", CreatedAt: now.Add(time.Duration(i-5) * time.Hour)}))
+		require.NoError(t, repos.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: fmt.Sprintf("reminder-%d", i), SpaceID: "crypto", CheckID: check, Title: "策略 s1", Severity: domain.SeverityCritical, EventType: domain.AlertEventReminder, Payload: "{}", CreatedAt: now.Add(time.Duration(i-5) * time.Hour)}}))
 	}
 	view, err := (Builder{Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(ctx, "")
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestIncidentsCarryProcessesRecordedAtTrigger(t *testing.T) {
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	cpu, memory, old, other := "host:control:cpu", "host:control:memory", "host:storage:cpu", "deployment:control:strategy"
 	create := func(id, check, eventType, payload string, at time.Time) {
-		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: events.SystemSpaceID, CheckID: check, Title: check, Severity: domain.SeverityWarning, EventType: eventType, Payload: payload, CreatedAt: at}))
+		require.NoError(t, repos.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: id, SpaceID: events.SystemSpaceID, CheckID: check, Title: check, Severity: domain.SeverityWarning, EventType: eventType, Payload: payload, CreatedAt: at}}))
 	}
 	const top = `"top_processes":[{"pid":4321,"name":"busy","rss_bytes":50331648,"cpu_percent":182.5},{"pid":88,"name":"big","rss_bytes":8589934592,"cpu_percent":3},{"pid":77,"name":"kswapd0","rss_bytes":0}]`
 	create("t1", cpu, domain.AlertEventTriggered, `{"metric":"cpu","value":95,"threshold":90,`+top+`}`, now.Add(-3*time.Hour))
@@ -247,7 +247,7 @@ func TestActiveHostAlertCarriesLatestProcesses(t *testing.T) {
 	seedFiring(t, repos, "", check, "主机 control · 内存使用率", domain.SeverityWarning, now.Add(-time.Hour), now)
 	create := func(id, eventType, name string, at time.Time) {
 		payload := fmt.Sprintf(`{"metric":"memory","value":95,"threshold":90,"top_processes":[{"pid":1,"name":"small","rss_bytes":1048576,"cpu_percent":90},{"pid":2,"name":%q,"rss_bytes":8589934592}]}`, name)
-		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, CheckID: check, Title: "主机 control · 内存使用率", Severity: domain.SeverityWarning, EventType: eventType, Payload: payload, CreatedAt: at}))
+		require.NoError(t, repos.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: id, CheckID: check, Title: "主机 control · 内存使用率", Severity: domain.SeverityWarning, EventType: eventType, Payload: payload, CreatedAt: at}}))
 	}
 	create("t", domain.AlertEventTriggered, "at-trigger", now.Add(-time.Hour))
 	create("r", domain.AlertEventReminder, "at-reminder", now.Add(-10*time.Minute))
@@ -268,8 +268,8 @@ func TestIncidentKeepsEventTitleAfterCheckRemoved(t *testing.T) {
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
 	check := "attention:collector:delist_readonly_key_missing"
 	for i, eventType := range []string{domain.AlertEventTriggered, domain.AlertEventResolved} {
-		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: fmt.Sprintf("e%d", i), SpaceID: events.SystemSpaceID, CheckID: check,
-			Title: "下架检测缺少币安只读 Key", Severity: domain.SeverityWarning, EventType: eventType, Payload: `{"reason":"已停用或移除，不再检查"}`, CreatedAt: now.Add(time.Duration(i-2) * time.Hour)}))
+		require.NoError(t, repos.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: fmt.Sprintf("e%d", i), SpaceID: events.SystemSpaceID, CheckID: check,
+			Title: "下架检测缺少币安只读 Key", Severity: domain.SeverityWarning, EventType: eventType, Payload: `{"reason":"已停用或移除，不再检查"}`, CreatedAt: now.Add(time.Duration(i-2) * time.Hour)}}))
 	}
 	view, err := (Builder{Checks: repos.Checks, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(ctx, "")
 	require.NoError(t, err)

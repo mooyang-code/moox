@@ -19,10 +19,6 @@ func NewAlertRepository(db *gorm.DB) *AlertRepository {
 	return &AlertRepository{db: db}
 }
 
-func (r *AlertRepository) CreateEvent(ctx context.Context, event *domain.AlertEvent) error {
-	return r.db.WithContext(ctx).Create(event).Error
-}
-
 // ListRecentEvents returns recent alert transitions across all spaces.
 func (r *AlertRepository) ListRecentEvents(ctx context.Context, limit int) ([]domain.AlertEvent, error) {
 	if limit <= 0 {

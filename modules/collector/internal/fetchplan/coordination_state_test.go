@@ -10,7 +10,7 @@ func coordinationValue(m *ControlMetrics, spaceID, field string) float64 {
 	}
 	switch field {
 	case "healthy":
-		if state.healthy {
+		if state.failure == "" {
 			return 1
 		}
 	case "pending":

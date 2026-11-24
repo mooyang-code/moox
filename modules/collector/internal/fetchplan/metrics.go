@@ -148,7 +148,7 @@ func (m *ControlMetrics) ObserveAssignmentSuccess(spaceID string, reconciledAt i
 	}
 	m.coordination.update(spaceID, func(state *coordinationState) {
 		state.lastSuccess = time.Unix(reconciledAt, 0).UTC()
-		state.failure, state.healthy = "", true
+		state.failure = ""
 	})
 }
 
@@ -174,7 +174,7 @@ func (m *ControlMetrics) ObserveAssignmentFailure(spaceID, reason string) {
 		return
 	}
 	reason = normalizeAssignmentFailureReason(reason)
-	m.coordination.update(spaceID, func(state *coordinationState) { state.failure, state.healthy = reason, false })
+	m.coordination.update(spaceID, func(state *coordinationState) { state.failure = reason })
 	m.ObserveAssignmentError(spaceID, reason)
 }
 
@@ -184,7 +184,7 @@ func (m *ControlMetrics) ObserveAssignmentRoundOK(spaceID string) {
 	if m == nil || strings.TrimSpace(spaceID) == "" {
 		return
 	}
-	m.coordination.update(spaceID, func(state *coordinationState) { state.failure, state.healthy = "", true })
+	m.coordination.update(spaceID, func(state *coordinationState) { state.failure = "" })
 }
 
 // ClearAssignmentFailure 清除本空间上一轮的协调失败原因。

@@ -124,10 +124,10 @@ func TestMuteStateIgnoresOtherPauses(t *testing.T) {
 func TestMuteSummaryListsOpenAndRecoveredAlerts(t *testing.T) {
 	_, runtime := newMuteTestEnv(t)
 	ctx := context.Background()
-	alerts := runtime.Repositories.Alerts
+	alerts := runtime.Repositories.Checks
 	base := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
 	event := func(id, check, kind string, at time.Time) {
-		require.NoError(t, alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: "crypto", CheckID: check, Title: "标题 " + check, Severity: domain.SeverityCritical, EventType: kind, CreatedAt: at}))
+		require.NoError(t, alerts.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: id, SpaceID: "crypto", CheckID: check, Title: "标题 " + check, Severity: domain.SeverityCritical, EventType: kind, CreatedAt: at}}))
 	}
 	// c_open：期间触发并仍未恢复；c_done：触发后又恢复；c_old：屏蔽前就在触发。
 	event("e1", "c_open", domain.AlertEventTriggered, base.Add(10*time.Minute))
@@ -232,10 +232,10 @@ func TestMuteSummaryStatesWhenTruncated(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
 	for i := 0; i < muteSummaryEventLimit; i++ {
-		require.NoError(t, runtime.Repositories.Alerts.CreateEvent(ctx, &domain.AlertEvent{
+		require.NoError(t, runtime.Repositories.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{
 			EventID: fmt.Sprintf("e%d", i), SpaceID: "crypto", CheckID: fmt.Sprintf("c%d", i%7), Title: "c", Severity: domain.SeverityCritical,
 			EventType: domain.AlertEventTriggered, CreatedAt: base.Add(time.Duration(i) * time.Second),
-		}))
+		}}))
 	}
 	body, _, ok, err := runtime.buildMuteSummary(ctx, base, base.Add(2*time.Hour))
 	require.NoError(t, err)

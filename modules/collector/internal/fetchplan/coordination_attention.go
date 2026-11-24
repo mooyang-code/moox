@@ -15,8 +15,6 @@ type coordinationState struct {
 	lastSuccess time.Time
 	// failure 是最近一轮协调失败的原因（见 assignmentFailureReasons）；空表示没有失败。
 	failure string
-	// healthy 表示最近一轮协调完成（对账成功或整轮没有失败）。
-	healthy bool
 	// pending 表示有进行中的协调（未生效的计划或在跑的云端操作）；pendingSince 是它开始的时刻（可能不知道，为零值）。
 	pending      bool
 	pendingSince time.Time
