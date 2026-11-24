@@ -287,8 +287,14 @@ func (r *TaskRepository) ListKline(ctx context.Context, spaceID, datasetID strin
 		query = query.Where("c_result_dataset_id = ?", datasetID)
 	}
 	var tasks []domain.CollectionTask
-	err := query.Order("c_task_id ASC").Limit(MaxEnabledTasks).Find(&tasks).Error
-	return tasks, err
+	if err := query.Order("c_task_id ASC").Limit(MaxEnabledTasks).Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	// 标签不在任务表里（gorm:"-"），补采路由要靠它推出来源与市场。
+	if err := r.attachTaskTags(ctx, tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 // SetIngest 切换 K 线任务的采集方式：datasetID 为空时改空间的全部 K 线任务，否则改写这个结果数据集的任务。

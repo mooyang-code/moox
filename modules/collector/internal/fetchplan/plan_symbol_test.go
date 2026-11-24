@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -99,4 +100,28 @@ func TestBackfillRouteMatchesThePlanOfTheTask(t *testing.T) {
 	_, found, err = routes.BackfillRoute(context.Background(), "crypto", "ds_spot", "1m")
 	require.NoError(t, err)
 	require.False(t, found, "任务已删除")
+}
+
+// 用真实的任务仓库：ListKline 要带上任务的标签（标签存在单独的表里），补采路由才推得出来源与市场。
+func TestBackfillRouteReadsTagsFromTheTaskRepository(t *testing.T) {
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "spot-1m", TaskName: "spot-1m", DataType: "kline", Ingest: domain.IngestSCF, Enabled: true, TagIDs: []string{"binance_spot"},
+		CollectParams: `{"target_dataset_id":"ds_spot","frequency":"1m"}`, ResultDatasetID: "ds_spot", ResultViewID: "view_spot",
+	}))
+
+	routes := &BackfillRoutes{Tasks: db.Tasks(), Tags: &planSymbolsStub{}, Options: func(string) (PlanOptions, error) { return testPlanOptions(), nil }}
+	route, found, err := routes.BackfillRoute(ctx, "crypto", "ds_spot", "1m")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "binance", route.Market.Provider)
+	require.Equal(t, "spot", route.Market.MarketType)
+
+	_, found, err = routes.BackfillRoute(ctx, "crypto", "ds_other", "1m")
+	require.NoError(t, err)
+	require.False(t, found)
 }
