@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -178,12 +179,13 @@ func TestFetchKlines1dDropsTheUnfinishedDay(t *testing.T) {
 func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testing.T) {
 	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/qt/clist/get", r.URL.Path)
+		require.Equal(t, cnstock.EastMoneyAllAShareFilter, r.URL.Query().Get("fs"))
 		switch r.URL.Query().Get("pn") {
 		case "1":
 			_, _ = w.Write([]byte(`{
 				"data": {
 					"pagecount": 2,
-					"total": 3,
+					"total": 4,
 					"diff": [
 						{"f12": "600000", "f13": 1, "f14": "Pudong Bank"},
 						{"f12": "000001", "f13": 0, "f14": "Ping An Bank"}
@@ -194,9 +196,10 @@ func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testi
 			_, _ = w.Write([]byte(`{
 				"data": {
 					"pagecount": 2,
-					"total": 3,
+					"total": 4,
 					"diff": [
-						{"f12": "920000", "f13": 2, "f14": "Beijing Stock"}
+						{"f12": "688981", "f13": 1, "f14": "STAR Stock"},
+						{"f12": "920000", "f13": 0, "f14": "Beijing Stock"}
 					]
 				}
 			}`))
@@ -215,11 +218,13 @@ func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testi
 	require.NoError(t, err)
 	require.True(t, snapshot.Complete)
 	require.Equal(t, 2, snapshot.PageCount)
-	require.Equal(t, map[string]int{"XBSE": 1, "XSHG": 1, "XSHE": 1}, snapshot.ExchangeCounts)
-	require.Len(t, snapshot.Instruments, 3)
+	require.Equal(t, map[string]int{"XBSE": 1, "XSHG": 2, "XSHE": 1}, snapshot.ExchangeCounts)
+	require.Len(t, snapshot.Instruments, 4)
 	require.Equal(t, "sh600000", snapshot.Instruments[0].ProviderSymbol)
 	require.Equal(t, "sz000001", snapshot.Instruments[1].ProviderSymbol)
-	require.Equal(t, "bj920000", snapshot.Instruments[2].ProviderSymbol)
+	require.Equal(t, "sh688981", snapshot.Instruments[2].ProviderSymbol)
+	// 东方财富把北交所记成市场 0，按代码认成 XBSE。
+	require.Equal(t, "bj920000", snapshot.Instruments[3].ProviderSymbol)
 }
 
 func TestFetchInstrumentSnapshotDoesNotTreatShortPageAsCompleteWithoutTerminalEvidence(t *testing.T) {

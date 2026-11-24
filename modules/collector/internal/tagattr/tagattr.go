@@ -21,7 +21,7 @@ const (
 	// 成分来源是 tencent）；不写时等于 KeySyncSource。只在配置了 KeySyncIndex 时有意义。
 	KeySyncIndexSource = "sync.index_source"
 	// KeySyncFallbackSource 是全部标的快照的备用来源，可选：sync.source 重试后仍失败（含冷却中）时改用它取一次。
-	// 备用结果只加不减：只按主来源的范围加入新标的，当前成员一个都不移出（见 subjectsync.TagRunner.fallbackSnapshot）。
+	// 备用来源须与主来源同一口径；结果只加不减，当前成员一个都不移出（见 subjectsync.TagRunner.fallbackSnapshot）。
 	// 只对全部标的的标签有意义，指数成分标签不用。
 	KeySyncFallbackSource = "sync.fallback_source"
 	// KeySyncCron 是标的同步的 cron 表达式；KeySyncTimezone 是它的时区。

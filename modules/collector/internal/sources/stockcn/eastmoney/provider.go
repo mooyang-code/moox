@@ -125,7 +125,7 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 	if req.SnapshotAt.IsZero() {
 		fetchedAt = p.now().UTC()
 	}
-	snapshot, _, err := p.fetchClistSnapshot(ctx, eastMoneyAShareFilter, p.InstrumentSpec().PageSize, fetchedAt)
+	snapshot, _, err := p.fetchClistSnapshot(ctx, cnstock.EastMoneyAllAShareFilter, p.InstrumentSpec().PageSize, fetchedAt)
 	return snapshot, err
 }
 
@@ -163,7 +163,7 @@ func (p *Provider) fetchClistSnapshot(ctx context.Context, fs string, pageSize i
 	result, err := cnstock.FetchClist(ctx, cnstock.ClistQuery{
 		BaseURL: p.baseURL, Filter: fs, PageSize: pageSize, HTTPClient: p.client, UserAgent: "moox-collector/1.0",
 	}, func(item cnstock.ClistItem) error {
-		instrument, err := commonsrc.InstrumentFromFields(item.Code, item.Symbol, item.Market, item.Name, item.Status)
+		instrument, err := commonsrc.InstrumentFromFields(item.Code, item.Symbol, clistExchange(item), item.Name, item.Status)
 		if err != nil {
 			return err
 		}
@@ -177,6 +177,17 @@ func (p *Provider) fetchClistSnapshot(ctx context.Context, fs string, pageSize i
 	}
 	snapshot, err := builder.Snapshot()
 	return snapshot, result.Total, err
+}
+
+// clistExchange 返回 clist 条目的交易所：东方财富把北交所和深交所一样记成市场 0（secid 也是 0.代码），
+// 北交所代码（4、8、9 开头）按代码认成 XBSE，否则会被判成“不属于深交所”、整份快照失败。
+func clistExchange(item cnstock.ClistItem) string {
+	if strings.TrimSpace(item.Market) == "0" {
+		if id, err := commonsrc.SubjectID(item.Code); err == nil && strings.HasSuffix(id, ".XBSE") {
+			return "XBSE"
+		}
+	}
+	return item.Market
 }
 
 // collectorError 把 cnstock 的错误类别映射回采集的错误类型；采集自己产生的错误（标的转换失败等）原样返回。
@@ -198,27 +209,9 @@ func collectorError(err error) error {
 const (
 	providerID        = "eastmoney"
 	eastMoneyPushHost = "push2.eastmoney.com"
-	// eastMoneyAShareFilter 是全部 A 股的 clist 筛选条件：深主板、创业板、沪主板。
-	eastMoneyAShareFilter = "m:0 t:6,m:0 t:80,m:1 t:2"
 	// 成交量单位是手：同一根 5m 东方财富 6735、通达信 673500 股（2026-11-04 实测 600519），乘 100 换成股。
 	volumeMultiplier = 100
 )
-
-// InAShareScope 判断标的是否在 eastMoneyAShareFilter 的范围内（沪深主板与创业板）：上交所去掉科创板（688、689），
-// 北交所全部不在。给标签同步的备用来源用，让口径更宽的来源（新浪 hs_a）不把范围外的标的加进来。
-func InAShareScope(subjectID string) bool {
-	code, exchange, ok := strings.Cut(subjectID, ".")
-	switch {
-	case !ok:
-		return false
-	case exchange == "XSHE":
-		return true
-	case exchange == "XSHG":
-		return !strings.HasPrefix(code, "688") && !strings.HasPrefix(code, "689")
-	default:
-		return false
-	}
-}
 
 // klineFrequencies 是 A 股支持的 K 线周期。
 var klineFrequencies = []string{"1m", "5m", "1d"}
