@@ -132,14 +132,15 @@ func (s *memPlanStore) SavePlan(ctx context.Context, id int64, plan string) erro
 
 // fakeRegistrar 按 Storage 的真实规则（pebble.RegisterSeriesSnapshot）维护每个“数据集|频率”的生效表：
 // 新生效点必须严格晚于最后一条并且在未来；同 P 同 hash 是重放；同 P 不同 hash 只在它是最后一条、仍在未来时覆盖；其余返回 effective_from_stale。
-// clock 为空时不检查“在未来”。stale、failures 是注入的失败次数。
+// clock 为空时不检查“在未来”。stale、failures 是注入的失败次数；lostReplies 是登记成功但回复丢失（返回错误）的次数。
 type fakeRegistrar struct {
-	stale      int
-	failures   int
-	registered map[string][]int64
-	calls      int
-	clock      func() time.Time
-	effective  map[string]map[int64]string
+	stale       int
+	failures    int
+	lostReplies int
+	registered  map[string][]int64
+	calls       int
+	clock       func() time.Time
+	effective   map[string]map[int64]string
 }
 
 func (f *fakeRegistrar) RegisterSeriesSnapshot(_ context.Context, _, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (marketstorage.SnapshotRegistration, error) {
@@ -184,6 +185,10 @@ func (f *fakeRegistrar) RegisterSeriesSnapshot(_ context.Context, _, datasetID, 
 		f.registered = map[string][]int64{}
 	}
 	f.registered[key] = append(f.registered[key], effectiveFrom)
+	if f.lostReplies > 0 {
+		f.lostReplies--
+		return marketstorage.SnapshotRegistration{}, errors.New("connection reset after commit")
+	}
 	return marketstorage.SnapshotRegistration{Hash: set.Hash, Count: uint32(len(set.Series))}, nil
 }
 

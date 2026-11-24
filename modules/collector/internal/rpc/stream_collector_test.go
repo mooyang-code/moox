@@ -162,3 +162,23 @@ func TestSetIngestModeSwitchesKlineTasksAndRequiresAnOnlineStream(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }
+
+// ingest-mode get 从已生效状态里读交接生效点：两份执行端不同的数据集，生效点是后一份的 From。
+func TestIngestModeReadsTheHandoffPeriodFromTheAppliedState(t *testing.T) {
+	service, db := newReregisterFixture(t)
+	ctx := context.Background()
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "task_ds1", TaskName: "ds1", DataType: domain.DataTypeKline, Ingest: domain.IngestStreaming,
+		Enabled: true, TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: "ds1", ResultViewID: "view_ds1"}))
+	content := fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{"ds1|1m": {
+		PlanDatasetState: fetchplan.PlanDatasetState{DatasetID: "ds1", Frequency: "1m", Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"},
+		Copies:           []fetchplan.DatasetCopy{{From: 1000, Hash: "h", Count: 1, LatenessS: 15}, {From: 1800, Hash: "h", Count: 1, LatenessS: 5, Ingest: "stream"}},
+		Action:           fetchplan.PlanActionAppend, P: 1800,
+	}}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	raw, err := json.Marshal(content)
+	require.NoError(t, err)
+	applyPlan(t, db, "crypto", string(raw))
+	got, err := service.GetIngestMode(ctx, &pb.GetIngestModeReq{SpaceId: "crypto", DatasetId: "ds1"})
+	require.NoError(t, err)
+	require.Len(t, got.GetModes(), 1)
+	require.Equal(t, map[string]string{"1m": time.Unix(1800, 0).UTC().Format(time.RFC3339)}, got.GetModes()[0].GetEffectivePeriods())
+}
