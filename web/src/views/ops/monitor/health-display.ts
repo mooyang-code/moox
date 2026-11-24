@@ -106,16 +106,7 @@ export function alertLink(object?: HealthObject): AlertLink {
   switch (object?.kind) {
     case "kline_freshness":
     case "market_canary":
-    case "market_fetch":
       return COLLECTOR_RESULTS;
-    // 数据投递队列（Storage 的 Outbox）由 storage-primary 转发
-    case "data_delivery":
-      return {
-        href: "#/ops/deployments?" + new URLSearchParams({ tab: "services", component_id: "storage-primary" }),
-        label: "查看服务"
-      };
-    case "balance":
-      return { href: "#/trading/live", label: "查看交易账户" };
     case "attention":
       // 下架处理的两种关注项去下架名单页（上段是下架处理记录）
       if (object.component_id === "trade" && object.attention_kind?.startsWith("delist_"))

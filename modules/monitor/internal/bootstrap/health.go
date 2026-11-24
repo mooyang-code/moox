@@ -47,7 +47,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime) healthz.Snapsho
 		var activeChecks int64
 		var checksErr error
 		if runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil {
-			activeChecks, checksErr = runtime.Repositories.Checks.CountEnabled(ctx)
+			activeChecks, checksErr = runtime.Repositories.Checks.Count(ctx)
 		}
 		databaseReady := runtime != nil && runtime.Store != nil && runtime.Store.Ping(ctx) == nil && runtime.Repositories != nil && checksErr == nil
 		ready := databaseReady

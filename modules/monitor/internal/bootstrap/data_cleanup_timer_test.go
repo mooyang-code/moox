@@ -17,18 +17,15 @@ import (
 )
 
 func TestRunMonitorDataCleanupAttemptsEveryStore(t *testing.T) {
-	wantErr := errors.New("result cleanup failed")
+	wantErr := errors.New("alert event cleanup failed")
 	var calls []string
 	err := runMonitorDataCleanup(context.Background(), monitorDataCleanupOps{
 		retention: 24 * time.Hour,
 		now:       func() time.Time { return time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC) },
-		deleteResults: func(context.Context, time.Time) error {
-			calls = append(calls, "results")
-			return wantErr
-		},
-		deleteAlerts: func(context.Context, time.Time) error {
+		deleteAlerts: func(_ context.Context, cutoff time.Time) error {
 			calls = append(calls, "alerts")
-			return nil
+			assert.Equal(t, time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC), cutoff)
+			return wantErr
 		},
 		pruneDedupe: func(context.Context, time.Time) error {
 			calls = append(calls, "dedupe")
@@ -40,18 +37,13 @@ func TestRunMonitorDataCleanupAttemptsEveryStore(t *testing.T) {
 		},
 		pruneArrivals: func(_ context.Context, cutoff time.Time) error {
 			calls = append(calls, "arrivals")
-			// 到达记录固定保留 7 天，不跟检查结果的保留天数走。
+			// 到达记录固定保留 7 天，不跟告警事件的保留天数走。
 			assert.Equal(t, time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), cutoff)
-			return nil
-		},
-		pruneChecks: func(_ context.Context, now time.Time) error {
-			calls = append(calls, "checks")
-			assert.Equal(t, time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC), now)
 			return nil
 		},
 	})
 	require.ErrorIs(t, err, wantErr)
-	assert.Equal(t, []string{"results", "alerts", "dedupe", "series", "arrivals", "checks"}, calls)
+	assert.Equal(t, []string{"alerts", "dedupe", "series", "arrivals"}, calls)
 }
 
 func TestRunMonitorDataCleanupAllowsUnavailableStores(t *testing.T) {

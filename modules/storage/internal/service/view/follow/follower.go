@@ -288,6 +288,7 @@ func (f *follower) lag(now time.Time) Lag {
 			since = f.startedAt
 		}
 		lag.Seconds = max(now.Sub(since).Seconds(), 0)
+		lag.Since = since
 	}
 	return lag
 }

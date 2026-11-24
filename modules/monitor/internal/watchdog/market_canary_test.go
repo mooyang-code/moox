@@ -108,9 +108,9 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	}
 	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.False(t, result.Success)
-	require.Equal(t, "相邻K线收盘价从 100 变为 110，波动 10.00%，超过 5.00% 阈值", result.ErrorMessage)
+	require.Equal(t, "相邻K线收盘价从 100 变为 110，波动 10.00%，超过 5.00% 阈值", result.Reason)
 	var diagnostic marketCanaryThresholdDiagnostic
-	require.NoError(t, json.Unmarshal([]byte(result.BodyExcerpt), &diagnostic))
+	require.NoError(t, json.Unmarshal([]byte(result.Diagnostic), &diagnostic))
 	require.Equal(t, "market_canary_threshold", diagnostic.Type)
 	require.Equal(t, 100.0, diagnostic.PreviousClose)
 	require.Equal(t, 110.0, diagnostic.CurrentClose)
@@ -164,7 +164,7 @@ func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
 		},
 	}).Run(t.Context())
 
-	require.Equal(t, "storage_rejected_query:7:dataset disabled", result.ErrorMessage)
+	require.Equal(t, "storage_rejected_query:7:dataset disabled", result.Reason)
 }
 
 func TestMarketCanaryExactWindowCoversConfiguredFreshness(t *testing.T) {
@@ -199,7 +199,7 @@ func TestMarketCanaryRejectsInvalidFrequency(t *testing.T) {
 		},
 	}).Run(t.Context())
 
-	require.Equal(t, "invalid_config", result.ErrorMessage)
+	require.Equal(t, "invalid_config", result.Reason)
 	require.Nil(t, reader.request)
 }
 
@@ -252,7 +252,7 @@ func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
 	earlyReader := &canaryReader{}
 	earlyResult := (MarketCanary{Reader: earlyReader, Config: config, Now: func() time.Time { return early }}).Run(t.Context())
 	require.True(t, earlyResult.Success)
-	require.JSONEq(t, `{"state":"idle"}`, earlyResult.BodyExcerpt)
+	require.JSONEq(t, `{"state":"idle"}`, earlyResult.Diagnostic)
 	require.Nil(t, earlyReader.request)
 
 	now := shanghai(2026, 8, 28, 15, 1, 5)
@@ -277,7 +277,7 @@ func TestMarketCanaryStockCNMiddayAndClosedDayAreIdleHealthy(t *testing.T) {
 		reader := &canaryReader{}
 		result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 		require.True(t, result.Success)
-		require.JSONEq(t, `{"state":"idle"}`, result.BodyExcerpt)
+		require.JSONEq(t, `{"state":"idle"}`, result.Diagnostic)
 		require.Nil(t, reader.request)
 	}
 }
@@ -321,13 +321,13 @@ func TestMarketCanaryStockCN5mExpectedBars(t *testing.T) {
 			}
 			reader := &canaryReader{rows: rows}
 			result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return tc.now }}).Run(t.Context())
-			require.True(t, result.Success, result.ErrorMessage)
+			require.True(t, result.Success, result.Reason)
 			if len(tc.want) == 0 {
-				require.JSONEq(t, `{"state":"idle"}`, result.BodyExcerpt)
+				require.JSONEq(t, `{"state":"idle"}`, result.Diagnostic)
 				require.Nil(t, reader.request)
 				return
 			}
-			require.Empty(t, result.BodyExcerpt)
+			require.Empty(t, result.Diagnostic)
 			require.Equal(t, want, requestedTimes(reader))
 			require.Equal(t, "5m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
 		})
@@ -341,7 +341,7 @@ func TestMarketCanaryStockCN5mReportsMissingBars(t *testing.T) {
 		stockCanaryRow(shanghai(2026, 8, 28, 14, 50, 0), "tdx"),
 	}}
 	result := (MarketCanary{Reader: reader, Config: stockCanaryConfig("5m"), Now: func() time.Time { return now }}).Run(t.Context())
-	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
+	require.Equal(t, "closed_bar_coverage_below_threshold", result.Reason)
 }
 
 func TestMarketCanaryStockCNRejectsPeriodThatDoesNotDivideSessions(t *testing.T) {
@@ -349,7 +349,7 @@ func TestMarketCanaryStockCNRejectsPeriodThatDoesNotDivideSessions(t *testing.T)
 	result := (MarketCanary{Reader: reader, Config: stockCanaryConfig("45m"), Now: func() time.Time {
 		return shanghai(2026, 8, 28, 10, 0, 0)
 	}}).Run(t.Context())
-	require.Equal(t, "invalid_config", result.ErrorMessage)
+	require.Equal(t, "invalid_config", result.Reason)
 	require.Nil(t, reader.request)
 	require.Error(t, ValidateMarketCanary(stockCanaryConfig("45m")))
 	require.NoError(t, ValidateMarketCanary(stockCanaryConfig("5m")))
@@ -366,7 +366,7 @@ func TestMarketCanaryRejectsUnregisteredMarket(t *testing.T) {
 	reader := &canaryReader{}
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return time.Now().UTC() }}).Run(t.Context())
 	require.False(t, result.Success)
-	require.Equal(t, "invalid_config", result.ErrorMessage)
+	require.Equal(t, "invalid_config", result.Reason)
 	require.Nil(t, reader.request)
 }
 
@@ -377,10 +377,10 @@ func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {
 	config := stockCanaryConfig("1m")
 	expired := shanghai(last.Year(), last.Month(), last.Day()+1, 10, 0, 0)
 	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return expired }}).Run(t.Context())
-	require.Equal(t, "calendar_expired", result.ErrorMessage)
+	require.Equal(t, "calendar_expired", result.Reason)
 	expiring := shanghai(last.Year(), last.Month(), last.Day()-7, 10, 0, 0)
 	result = (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return expiring }}).Run(t.Context())
-	require.Equal(t, "calendar_expiring", result.ErrorMessage)
+	require.Equal(t, "calendar_expiring", result.Reason)
 
 	now := shanghai(2026, 8, 28, 9, 33, 5)
 	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
@@ -389,11 +389,11 @@ func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {
 		stockCanaryRow(shanghai(2026, 8, 28, 9, 32, 0), "sina"),
 	}}
 	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
-	require.Equal(t, "missing_source_provider", result.ErrorMessage)
+	require.Equal(t, "missing_source_provider", result.Reason)
 
 	reader.rows = reader.rows[1:]
 	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
-	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
+	require.Equal(t, "closed_bar_coverage_below_threshold", result.Reason)
 }
 
 func TestMarketCanaryStockCNEnforcesConfiguredClosedBarCoverage(t *testing.T) {
@@ -407,8 +407,8 @@ func TestMarketCanaryStockCNEnforcesConfiguredClosedBarCoverage(t *testing.T) {
 
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 
-	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
-	require.JSONEq(t, `{"type":"closed_bar_coverage","expected":3,"actual":2,"coverage":0.6666666666666666,"minimum":0.99}`, result.BodyExcerpt)
+	require.Equal(t, "closed_bar_coverage_below_threshold", result.Reason)
+	require.JSONEq(t, `{"type":"closed_bar_coverage","expected":3,"actual":2,"coverage":0.6666666666666666,"minimum":0.99}`, result.Diagnostic)
 }
 
 func TestMarketCanaryStockCNReportsNoClosedBarData(t *testing.T) {
@@ -417,7 +417,7 @@ func TestMarketCanaryStockCNReportsNoClosedBarData(t *testing.T) {
 
 	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 
-	require.Equal(t, "no_closed_bar_data", result.ErrorMessage)
+	require.Equal(t, "no_closed_bar_data", result.Reason)
 }
 
 func TestMarketCanaryStockCNReportsNoEligibleKlineFeed(t *testing.T) {
@@ -426,7 +426,7 @@ func TestMarketCanaryStockCNReportsNoEligibleKlineFeed(t *testing.T) {
 	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time {
 		return shanghai(2026, 8, 28, 9, 33, 5)
 	}}).Run(t.Context())
-	require.Equal(t, "no_eligible_kline_feed", result.ErrorMessage)
+	require.Equal(t, "no_eligible_kline_feed", result.Reason)
 }
 
 // 空间 ID 即市场 ID：stockcn 空间的探针不配 market_id 也按 A 股交易时段判断。
@@ -436,7 +436,7 @@ func TestMarketCanaryStockCNMarketDefaultsToSpace(t *testing.T) {
 	reader := &canaryReader{}
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return shanghai(2026, 8, 28, 12, 0, 0) }}).Run(t.Context())
 	require.True(t, result.Success)
-	require.JSONEq(t, `{"state":"idle"}`, result.BodyExcerpt)
+	require.JSONEq(t, `{"state":"idle"}`, result.Diagnostic)
 }
 
 func stockCanaryConfig(frequency string) MarketCanaryConfig {

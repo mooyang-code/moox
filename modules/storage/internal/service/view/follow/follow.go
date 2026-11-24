@@ -81,6 +81,8 @@ type Lag struct {
 	Changes uint64
 	// Seconds 是距离上一次追上日志头部的时长；正在服务端等待新变更（已追上）时为 0。
 	Seconds float64
+	// Since 是这一次落后的起点：上一次追上日志头部的时刻（还没追上过时是跟随器启动时刻）；已追上时为零值。
+	Since time.Time
 }
 
 // Manager 管理全部跟随器。

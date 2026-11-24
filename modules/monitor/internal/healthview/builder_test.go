@@ -2,13 +2,12 @@ package healthview
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -41,7 +40,7 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 		Datasets:     []observability.DatasetFrequencyStatus{{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Status: "degraded", Reason: "输出水位已落后", LastRunAt: now, LastSuccessAt: now.Add(-time.Minute), InputWatermarkAt: now, OutputWatermarkAt: now.Add(-2 * time.Minute), LastReportedAt: now, LatestBarClose: now.Add(-time.Minute), OutputArrivedAt: now.Add(-time.Minute + 3*time.Second), DelaySeconds: 3, DelayKnown: true, ExpectedBarAt: now.Add(-2 * time.Minute), ExpectedBarClose: now.Add(-time.Minute), LatenessLimitSeconds: 600, Timezone: "UTC"}},
 	}
 	view := projectFacts(facts)
-	hostAlert, err := (Builder{}).projectAlert(t.Context(), domain.AlertState{CheckID: "host:offline:cpu", DedupeKey: "host-alert", TriggeredAt: &now, UpdatedAt: now}, facts, newCheckTitles(nil))
+	hostAlert, err := (Builder{}).projectAlert(t.Context(), domain.Check{CheckID: "host:offline:cpu", Name: "主机 offline · CPU 使用率", Severity: domain.SeverityWarning, Status: domain.CheckStatusDown, AlertStatus: domain.AlertStatusFiring, TriggeredAt: &now, CheckedAt: now}, facts)
 	require.NoError(t, err)
 	view.Alerts = append(view.Alerts, hostAlert)
 	view.Summary.AlertCount = int32(len(view.Alerts))
@@ -87,18 +86,16 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 	repos := manager.Repositories()
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	checkID := "ready:control:strategy"
-	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: checkID, Name: "任意名称", Kind: domain.CheckKindExternal, Enabled: true}))
-	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "failed", CheckID: checkID, Status: "down", ErrorMessage: "组件未就绪：证书过期", RawError: "x509: 原始错误\ncertificate expired", CheckedAt: now.Add(-time.Hour)}))
-	for i := 0; i < 20; i++ {
-		require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: fmt.Sprintf("success-%d", i), CheckID: checkID, Status: "ok", Success: true, CheckedAt: now.Add(time.Duration(i) * time.Second)}))
-	}
-	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: "host:control:cpu", Name: "主机 control · CPU 使用率", Kind: domain.CheckKindExternal, Enabled: true}))
-	for _, id := range []string{checkID, "host:control:cpu"} {
-		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{RuleID: "default:" + id, CheckID: id, Enabled: true}))
-		require.NoError(t, repos.Alerts.UpsertState(t.Context(), &domain.AlertState{RuleID: "default:" + id, CheckID: id, Status: domain.AlertStatusFiring, DedupeKey: id, TriggeredAt: &now, UpdatedAt: now}))
-	}
-	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "host-failed", CheckID: "host:control:cpu", Status: "down", ErrorMessage: "CPU 使用率 95.0%，超过阈值 80%", CheckedAt: now}))
-	view, err := (Builder{Checks: repos.Checks, Results: repos.Results, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(t.Context(), "crypto")
+	failedAt := now.Add(-time.Hour)
+	require.NoError(t, repos.Checks.SaveRound(t.Context(), []domain.Check{
+		// 最近一次已通过、还在等恢复确认：原因取最近一次失败。
+		{SpaceID: "mooxsys", CheckID: checkID, Name: "任意名称", Severity: domain.SeverityCritical, Status: domain.CheckStatusOK, CheckedAt: now.Add(19 * time.Second),
+			FailureReason: "组件未就绪：证书过期", FailureRawError: "x509: 原始错误\ncertificate expired", FailedAt: &failedAt,
+			AlertStatus: domain.AlertStatusFiring, TriggeredAt: &now, CreatedAt: now},
+		{SpaceID: "mooxsys", CheckID: "host:control:cpu", Name: "主机 control · CPU 使用率", Severity: domain.SeverityWarning, Status: domain.CheckStatusDown,
+			Reason: "CPU 使用率 95.0%，超过阈值 80%", CheckedAt: now, AlertStatus: domain.AlertStatusFiring, TriggeredAt: &now, CreatedAt: now},
+	}, nil, nil))
+	view, err := (Builder{Checks: repos.Checks, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(t.Context(), "crypto")
 	require.NoError(t, err)
 	require.Len(t, view.Alerts, 2, "global host/component alerts remain visible when a space is selected")
 	var hostFound bool
@@ -168,8 +165,8 @@ func TestAgentOfRemovedHostIsNeitherListedNorAlerted(t *testing.T) {
 func TestSeriesLimitAlertIsAWarning(t *testing.T) {
 	object := alertObject("mooxsys", "metrics_ingest:series_limit")
 	require.Equal(t, "metrics_ingest", object.Kind)
-	require.Equal(t, "warning", alerting.Severity("metrics_ingest:series_limit"))
-	require.Equal(t, "critical", alerting.Severity("dataset:storage:bars:1m"), "数据集告警仍是严重")
+	require.Equal(t, "warning", checks.Severity("metrics_ingest:series_limit"))
+	require.Equal(t, "critical", checks.Severity("dataset:storage:bars:1m"), "数据集告警仍是严重")
 }
 
 // 每台登记主机一行：上报按 host_id 对到登记主机；未登记的主机不进入主机列表，登记了但没上报的显示未上报。

@@ -14,20 +14,17 @@ import (
 // ControlMetrics 是 Collector 主进程的采集控制面指标：对账健康度、库与维护任务的运维统计、周期上报。
 // 执行面（云函数程序、collector-stream）不注册这些指标。
 type ControlMetrics struct {
-	storeBytes               *prometheus.GaugeVec
-	storeRows                *prometheus.GaugeVec
-	storeRowsCapped          *prometheus.GaugeVec
-	storeStatsHealthy        *prometheus.GaugeVec
-	storeStatsLastSuccess    *prometheus.GaugeVec
-	maintenanceDeleted       *prometheus.GaugeVec
-	maintenanceDuration      *prometheus.GaugeVec
-	maintenancePasses        *prometheus.CounterVec
-	maintenanceLastSuccess   *prometheus.GaugeVec
-	assignmentLastSuccess    *prometheus.GaugeVec
-	assignmentHealthy        *prometheus.GaugeVec
-	assignmentFailure        *prometheus.GaugeVec
-	assignmentPending        *prometheus.GaugeVec
-	assignmentPendingSince   *prometheus.GaugeVec
+	storeBytes             *prometheus.GaugeVec
+	storeRows              *prometheus.GaugeVec
+	storeRowsCapped        *prometheus.GaugeVec
+	storeStatsHealthy      *prometheus.GaugeVec
+	storeStatsLastSuccess  *prometheus.GaugeVec
+	maintenanceDeleted     *prometheus.GaugeVec
+	maintenanceDuration    *prometheus.GaugeVec
+	maintenancePasses      *prometheus.CounterVec
+	maintenanceLastSuccess *prometheus.GaugeVec
+	// coordination 是各空间的采集计划协调状态，判断关注项 fetch_coordination_failing 用（见 coordination_attention.go）。
+	coordination             coordinationStates
 	assignmentErrors         *prometheus.CounterVec
 	periodPending            *prometheus.GaugeVec
 	periodPendingMu          sync.Mutex
@@ -46,11 +43,6 @@ func NewControlMetrics(reg prometheus.Registerer) *ControlMetrics {
 		maintenanceDuration:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_maintenance_duration_seconds", Help: "Elapsed duration of the latest process-level maintenance pass."}, nil),
 		maintenancePasses:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_maintenance_passes_total", Help: "Process-level maintenance passes by bounded outcome."}, []string{"status"}),
 		maintenanceLastSuccess:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_maintenance_last_success_timestamp_seconds", Help: "Last fully successful process-level maintenance pass timestamp."}, nil),
-		assignmentLastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", Help: "Last successful Timer assignment reconciliation timestamp."}, []string{"space_id"}),
-		assignmentHealthy:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
-		assignmentFailure:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_failure", Help: "Current Timer coordination failure reason (1 current, 0 inactive)."}, []string{"space_id", "reason"}),
-		assignmentPending:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending", Help: "Whether a Timer assignment reconciliation batch is pending or running (1 pending, 0 idle)."}, []string{"space_id"}),
-		assignmentPendingSince:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", Help: "Unix timestamp when the current Timer assignment reconciliation batch started."}, []string{"space_id"}),
 		assignmentErrors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
 		periodPending:            prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_pending_total", Help: "Collector periods waiting to be reported."}, []string{"space_id", "frequency"}),
 		periodPendingFrequencies: make(map[string]map[string]struct{}),
@@ -65,11 +57,6 @@ func NewControlMetrics(reg prometheus.Registerer) *ControlMetrics {
 	metrics.maintenanceDuration = registerGaugeVec(reg, metrics.maintenanceDuration)
 	metrics.maintenancePasses = registerCounterVec(reg, metrics.maintenancePasses)
 	metrics.maintenanceLastSuccess = registerGaugeVec(reg, metrics.maintenanceLastSuccess)
-	metrics.assignmentLastSuccess = registerGaugeVec(reg, metrics.assignmentLastSuccess)
-	metrics.assignmentHealthy = registerGaugeVec(reg, metrics.assignmentHealthy)
-	metrics.assignmentFailure = registerGaugeVec(reg, metrics.assignmentFailure)
-	metrics.assignmentPending = registerGaugeVec(reg, metrics.assignmentPending)
-	metrics.assignmentPendingSince = registerGaugeVec(reg, metrics.assignmentPendingSince)
 	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
 	metrics.periodPending = registerGaugeVec(reg, metrics.periodPending)
 	metrics.periodReportRetry = registerCounterVec(reg, metrics.periodReportRetry)
@@ -159,36 +146,35 @@ func (m *ControlMetrics) ObserveAssignmentSuccess(spaceID string, reconciledAt i
 	if m == nil || reconciledAt <= 0 {
 		return
 	}
-	m.assignmentLastSuccess.WithLabelValues(spaceID).Set(float64(reconciledAt))
-	m.assignmentHealthy.WithLabelValues(spaceID).Set(1)
-	m.ClearAssignmentFailure(spaceID)
+	m.coordination.update(spaceID, func(state *coordinationState) {
+		state.lastSuccess = time.Unix(reconciledAt, 0).UTC()
+		state.failure = ""
+	})
 }
 
 // ObserveAssignmentPending 上报本空间的协调是否还在进行：有未生效的计划（since 是计划的创建时间），
-// 或有云端操作在跑（since 是最早一个在跑操作的开始时间）。Monitor 据此区分“还在进行”和“协调失败”。
+// 或有云端操作在跑（since 是最早一个在跑操作的开始时间）。据此区分“还在进行”和“协调失败”。
 func (m *ControlMetrics) ObserveAssignmentPending(spaceID string, pending bool, since time.Time) {
 	if m == nil || strings.TrimSpace(spaceID) == "" {
 		return
 	}
-	if !pending {
-		m.assignmentPending.WithLabelValues(spaceID).Set(0)
-		m.assignmentPendingSince.WithLabelValues(spaceID).Set(0)
-		return
-	}
-	m.assignmentPending.WithLabelValues(spaceID).Set(1)
-	if !since.IsZero() {
-		m.assignmentPendingSince.WithLabelValues(spaceID).Set(float64(since.UTC().Unix()))
-	}
+	m.coordination.update(spaceID, func(state *coordinationState) {
+		state.pending = pending
+		switch {
+		case !pending:
+			state.pendingSince = time.Time{}
+		case !since.IsZero():
+			state.pendingSince = since.UTC()
+		}
+	})
 }
 
 func (m *ControlMetrics) ObserveAssignmentFailure(spaceID, reason string) {
 	if m == nil {
 		return
 	}
-	m.assignmentHealthy.WithLabelValues(spaceID).Set(0)
 	reason = normalizeAssignmentFailureReason(reason)
-	m.clearFailureLabels(spaceID)
-	m.assignmentFailure.WithLabelValues(spaceID, reason).Set(1)
+	m.coordination.update(spaceID, func(state *coordinationState) { state.failure = reason })
 	m.ObserveAssignmentError(spaceID, reason)
 }
 
@@ -198,30 +184,20 @@ func (m *ControlMetrics) ObserveAssignmentRoundOK(spaceID string) {
 	if m == nil || strings.TrimSpace(spaceID) == "" {
 		return
 	}
-	m.assignmentHealthy.WithLabelValues(spaceID).Set(1)
-	m.ClearAssignmentFailure(spaceID)
+	m.coordination.update(spaceID, func(state *coordinationState) { state.failure = "" })
 }
 
-// ClearAssignmentFailure 把全部失败原因标签置 0（而不是删掉序列），Monitor 下一次抓取就不再沿用上一次的失败原因。
+// ClearAssignmentFailure 清除本空间上一轮的协调失败原因。
 func (m *ControlMetrics) ClearAssignmentFailure(spaceID string) {
 	if m == nil || strings.TrimSpace(spaceID) == "" {
 		return
 	}
-	m.clearFailureLabels(spaceID)
-}
-
-func (m *ControlMetrics) clearFailureLabels(spaceID string) {
-	if strings.TrimSpace(spaceID) == "" {
-		return
-	}
-	for _, reason := range assignmentFailureReasons {
-		m.assignmentFailure.WithLabelValues(spaceID, reason).Set(0)
-	}
+	m.coordination.update(spaceID, func(state *coordinationState) { state.failure = "" })
 }
 
 // assignmentFailureReasons 是协调失败原因的白名单，与 fail 的调用点一一对应；白名单之外的一律按 cloud 上报。
 // cloud 是调腾讯云失败，quota 是腾讯云的函数个数或命名空间配额超限。
-// Monitor 的 coordinationFailureTexts 为每个原因给出告警文案，新增原因时两边要一起改。
+// coordinationFailureTexts 为每个原因给出告警文案，新增原因时一起加。
 var assignmentFailureReasons = []string{
 	"cloud", "quota", "environment", "rules", "store", "storage", "package", "dataset", "activity", "preflight", "capacity",
 }

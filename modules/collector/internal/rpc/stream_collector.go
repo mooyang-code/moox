@@ -13,11 +13,12 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	// DefaultStreamHeartbeatTimeout 是 collector-stream 心跳的超时：超过视为离线（只用于运行状态、告警与切换前检查）。
+	// DefaultStreamHeartbeatTimeout 是 collector-stream 心跳的超时：超过视为离线（用于运行状态、心跳中断关注项与切换前检查）。
 	DefaultStreamHeartbeatTimeout = 180 * time.Second
 	// DefaultStreamCommitReserveMS 是下发给周期闸门的提交预留。
 	DefaultStreamCommitReserveMS = 1000
@@ -40,7 +41,9 @@ type StreamService struct {
 	syncer      SubjectSyncer
 	// tradingStatus 在疑似下架触发的立即同步之后，对那个市场再检测一次交易状态，让停牌分钟级生效（可为空）。
 	tradingStatus TradingStatusRunner
-	now           func() time.Time
+	// attention 上报推送连续缺失（stream_periods_missing，见 stream_attention.go；可为空）。
+	attention *report.Attention
+	now       func() time.Time
 
 	mu      sync.Mutex
 	recent  map[string][]*pb.StreamPeriodStat
@@ -157,7 +160,7 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 		s.metrics.ObservePeriod(spaceID, fetchplan.StreamPeriodObservation{
 			Market: period.GetMarket(), DatasetID: period.GetDatasetId(), Frequency: period.GetFrequency(), Expected: int(period.GetExpected()), Arrived: int(period.GetArrived()),
 			Missing: int(period.GetMissing()), Suspected: int(period.GetSuspected()), Committed: period.GetCommitted(),
-			CommitDone: time.Duration(period.GetCommitDoneMs()) * time.Millisecond, FailedStreak: s.streaks[key],
+			CommitDone: time.Duration(period.GetCommitDoneMs()) * time.Millisecond,
 		})
 		recent := append(s.recent[spaceID], period)
 		if len(recent) > recentStreamPeriods {
@@ -165,6 +168,7 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 		}
 		s.recent[spaceID] = recent
 	}
+	s.publishMissingLocked()
 	markets := map[string][]string{}
 	for _, suspect := range req.GetSuspects() {
 		markets[suspect.GetMarket()] = append(markets[suspect.GetMarket()], suspect.GetSubjectId()+"（"+suspect.GetReason()+"）")
@@ -230,7 +234,6 @@ func (s *StreamService) WorkerStatus(ctx context.Context, spaceID string) (*pb.S
 		return nil, err
 	}
 	online := s.now().Sub(worker.HeartbeatAt) <= s.settings.HeartbeatTimeout
-	s.metrics.ObserveOnline(spaceID, online)
 	var applied fetchplan.StreamApplied
 	_ = json.Unmarshal([]byte(worker.Applied), &applied)
 	var status streamWorkerStatus
@@ -255,15 +258,6 @@ func (s *StreamService) Online(ctx context.Context, spaceID string) (bool, error
 		return false, err
 	}
 	return status != nil && status.GetOnline(), nil
-}
-
-// RefreshOnline 定时刷新各空间的在线指标（心跳中断时指标也要变）。
-func (s *StreamService) RefreshOnline(ctx context.Context, spaces []string) {
-	for _, space := range spaces {
-		if _, err := s.WorkerStatus(ctx, space); err != nil {
-			log.WarnContextf(ctx, "collector-stream status space=%s: %v", space, err)
-		}
-	}
 }
 
 func mustMarshal(value any) string {

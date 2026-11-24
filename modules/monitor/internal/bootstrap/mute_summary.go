@@ -108,23 +108,17 @@ func (r *Runtime) buildMuteSummary(ctx context.Context, since, until time.Time) 
 	if err != nil {
 		return "", "", false, err
 	}
-	firing, err := r.Repositories.Alerts.ListFiringStates(ctx, "", muteSummaryFiringLimit)
+	firing, err := r.Repositories.Checks.ListFiring(ctx, "", muteSummaryFiringLimit)
 	if err != nil {
 		return "", "", false, err
 	}
 	// 事件和触发态都有上限：达到上限时汇总只覆盖最近的部分，在正文里写明，不能悄悄少报。
 	truncated := len(events) >= muteSummaryEventLimit || len(firing) >= muteSummaryFiringLimit
 	stillFiring := make(map[string]bool, len(firing))
-	for _, state := range firing {
-		stillFiring[state.SpaceID+"/"+state.CheckID] = true
+	for _, check := range firing {
+		stillFiring[check.SpaceID+"/"+check.CheckID] = true
 	}
 	byCheck := map[string]*mutedCheck{}
-	label := func(spaceID, checkID string) string {
-		if check, err := r.Repositories.Checks.Get(ctx, spaceID, checkID); err == nil && check != nil && check.Name != "" {
-			return check.Name
-		}
-		return checkID
-	}
 	for _, event := range events {
 		if event.EventType != domain.AlertEventTriggered && event.EventType != domain.AlertEventResolved {
 			continue
@@ -132,7 +126,7 @@ func (r *Runtime) buildMuteSummary(ctx context.Context, since, until time.Time) 
 		key := event.SpaceID + "/" + event.CheckID
 		item := byCheck[key]
 		if item == nil {
-			item = &mutedCheck{name: label(event.SpaceID, event.CheckID), first: event.CreatedAt}
+			item = &mutedCheck{name: firstNonEmptyString(event.Title, event.CheckID), first: event.CreatedAt}
 			byCheck[key] = item
 		}
 		item.end = event.CreatedAt
@@ -156,11 +150,11 @@ func (r *Runtime) buildMuteSummary(ctx context.Context, since, until time.Time) 
 			recovered = append(recovered, fmt.Sprintf("%s（触发 %d 次，恢复 %d 次，%s ～ %s）", item.name, item.triggers, item.resolved, alerttext.Time(item.first), alerttext.Time(item.end)))
 		}
 	}
-	// 屏蔽前就已在触发、期间没有新事件的告警也属于「仍未恢复」，不能漏。
-	for _, state := range firing {
-		key := state.SpaceID + "/" + state.CheckID
+	// 屏蔽前就已在触发、期间没有新事件的告警也属于「仍未恢复」，不能漏；标题取检查行的名称。
+	for _, check := range firing {
+		key := check.SpaceID + "/" + check.CheckID
 		if byCheck[key] == nil {
-			open = append(open, fmt.Sprintf("%s（屏蔽前已在触发）", label(state.SpaceID, state.CheckID)))
+			open = append(open, fmt.Sprintf("%s（屏蔽前已在触发）", firstNonEmptyString(check.Name, check.CheckID)))
 		}
 	}
 	if len(open) == 0 && len(recovered) == 0 {

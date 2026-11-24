@@ -34,6 +34,8 @@ type DatabaseConfig struct {
 // RuntimeConfig contains process-local execution settings.
 type RuntimeConfig struct {
 	LiveTradingEnabled bool `yaml:"live_trading_enabled"`
+	// BalanceDifferenceThreshold 是余额同步时本地与交易所余额允许的最大相对差异（默认 0.05），超过就上报关注项 balance_sync_failing。
+	BalanceDifferenceThreshold float64 `yaml:"balance_difference_threshold"`
 }
 
 type EventBusConfig struct {
@@ -55,7 +57,7 @@ func DefaultConfig() *AppConfig {
 		Database: DatabaseConfig{
 			Path: "./data/moox_trade.db",
 		},
-		Runtime:       RuntimeConfig{},
+		Runtime:       RuntimeConfig{BalanceDifferenceThreshold: 0.05},
 		GatewayClient: gatewayclient.FileConfig{Caller: "trade", KeyFile: "../../secrets/host.key"},
 		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer, DelistConsumer: DelistConsumer},
 	}
@@ -114,6 +116,9 @@ func (c *AppConfig) Validate() error {
 	}
 	if err := c.GatewayClient.Validate(); err != nil {
 		return err
+	}
+	if c.Runtime.BalanceDifferenceThreshold <= 0 || c.Runtime.BalanceDifferenceThreshold > 1 {
+		return fmt.Errorf("runtime.balance_difference_threshold 必须在 (0, 1] 之间")
 	}
 	if c.Database.Path == "" {
 		return fmt.Errorf("database path is required")

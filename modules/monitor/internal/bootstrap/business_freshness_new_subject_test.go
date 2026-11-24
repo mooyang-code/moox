@@ -75,15 +75,14 @@ func TestBusinessFreshnessRecordsNewSubjectsAsDegradedWithoutFailing(t *testing.
 	}}, 20)
 	evaluator.SetSubjectFirstSeenStore(newSubjectFirstSeen{"NEW1": time.Date(2026, 10, 21, 12, 13, 31, 0, time.UTC)})
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return now },
-	}, repositories, nil, evaluator)
+		Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now },
+	}, repositories, evaluator)
 	require.NoError(t, run(t.Context()))
 
-	results, err := repositories.Results.Recent(t.Context(), "crypto", "kline_freshness:crypto:view:1h", 1)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.True(t, results[0].Success, "宽限期内不能按失败记录，否则会触发告警")
-	require.Equal(t, domain.CheckStatusDegraded, results[0].Status)
-	require.True(t, strings.Contains(results[0].ErrorMessage, "1 个新上线对象等待首根K线"), results[0].ErrorMessage)
-	require.Contains(t, results[0].ErrorMessage, "22:15", "宽限截止时间用北京时间展示")
+	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:view:1h")
+	require.NotNil(t, row)
+	require.Equal(t, domain.CheckStatusDegraded, row.Status, "宽限期内不能按失败记录，否则会触发告警")
+	require.Zero(t, row.FailureCount)
+	require.True(t, strings.Contains(row.Reason, "1 个新上线对象等待首根K线"), row.Reason)
+	require.Contains(t, row.Reason, "22:15", "宽限截止时间用北京时间展示")
 }

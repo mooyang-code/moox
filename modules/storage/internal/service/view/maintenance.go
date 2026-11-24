@@ -139,9 +139,9 @@ func (s *Service) observeViewFileSize(view *pb.View, indexID string, stats viewi
 	} else {
 		delete(s.fileOverLimit, ref)
 	}
-	count := len(s.fileOverLimit)
+	over := s.fileOverLimitViewsLocked()
 	s.fileOverLimitMu.Unlock()
-	s.metrics.SetViewFileOverLimitCount(int64(count))
+	s.metrics.SetViewFilesOverLimit(over)
 	if exceeded && !wasExceeded {
 		log.Warnf("storage view 索引文件超过告警线 space=%s view=%s index=%s 文件=%d 告警线=%d", view.GetSpaceId(), view.GetViewId(), indexID, stats.PhysicalBytes, opts.MaxViewFileBytes)
 	}
@@ -155,9 +155,18 @@ func (s *Service) retainFileOverLimit(active map[observability.ViewKey]struct{})
 			delete(s.fileOverLimit, ref)
 		}
 	}
-	count := len(s.fileOverLimit)
+	over := s.fileOverLimitViewsLocked()
 	s.fileOverLimitMu.Unlock()
-	s.metrics.SetViewFileOverLimitCount(int64(count))
+	s.metrics.SetViewFilesOverLimit(over)
+}
+
+// fileOverLimitViewsLocked 列出索引文件超过告警线的 View（空间/View）；调用方持有 fileOverLimitMu。
+func (s *Service) fileOverLimitViewsLocked() []string {
+	out := make([]string, 0, len(s.fileOverLimit))
+	for ref := range s.fileOverLimit {
+		out = append(out, ref.spaceID+"/"+ref.viewID)
+	}
+	return out
 }
 
 func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts MaintenanceOptions) func() {

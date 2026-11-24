@@ -4,9 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"gorm.io/gorm"
 )
@@ -63,40 +61,3 @@ func TestNotificationChannelsAddListDelete(t *testing.T) {
 		t.Fatalf("channels after delete = %+v err=%v", channels, err)
 	}
 }
-
-func TestListEnabledFiringStatesFiltersBeforeLimit(t *testing.T) {
-	repos := openNotificationTestDB(t).Repositories()
-	ctx := t.Context()
-	for _, check := range []domain.Check{
-		{SpaceID: "crypto", CheckID: "good", Name: "good", Kind: domain.CheckKindExternal, Enabled: true},
-		{SpaceID: "crypto", CheckID: "disabled", Name: "disabled", Kind: domain.CheckKindExternal, Enabled: true},
-	} {
-		if err := repos.Checks.Create(ctx, &check); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, rule := range []domain.AlertRule{
-		{SpaceID: "crypto", RuleID: "default:good", CheckID: "good", Enabled: true},
-		{SpaceID: "crypto", RuleID: "default:disabled", CheckID: "disabled", Enabled: true},
-		{SpaceID: "crypto", RuleID: "custom:good", CheckID: "good", Enabled: true},
-	} {
-		if err := repos.Alerts.CreateRule(ctx, &rule); err != nil {
-			t.Fatal(err)
-		}
-		if err := repos.Alerts.UpsertState(ctx, &domain.AlertState{SpaceID: rule.SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, Status: domain.AlertStatusFiring, TriggeredAt: ptrTime(time.Now().UTC())}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := repos.Checks.Update(ctx, &domain.Check{SpaceID: "crypto", CheckID: "disabled", Enabled: false}); err != nil {
-		t.Fatal(err)
-	}
-	states, err := repos.Alerts.ListEnabledFiringStates(ctx, "crypto", 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(states) != 1 || states[0].RuleID != "default:good" {
-		t.Fatalf("enabled firing states = %+v", states)
-	}
-}
-
-func ptrTime(value time.Time) *time.Time { return &value }

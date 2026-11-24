@@ -3,13 +3,14 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -39,21 +40,36 @@ type factorDatasetObserver struct {
 	observed map[string]observedPeriod
 	// graced 是本进程里已经处理过首期等待宽限的任务（见 graceNewTasksLocked）。
 	graced map[string]bool
-	// blocked 是各任务连续水位阻塞的起始时间（0 表示没有阻塞），Monitor 据此对停滞超过 30 分钟告警。
-	blocked *prometheus.GaugeVec
+	// blocked 是各任务连续水位阻塞的起始时间（只记正在阻塞的任务），按最近一次引擎心跳整份替换；采集指标时据此判断停滞。
+	blocked map[string]blockedWatermark
 }
 
-// watermarkBlockedMetric 是因子任务连续水位阻塞起始时间的指标。
-const watermarkBlockedMetric = "moox_factor_task_watermark_blocked_since_timestamp_seconds"
+// blockedWatermark 是一个任务连续水位阻塞的空间与起始时刻。
+type blockedWatermark struct {
+	spaceID string
+	since   time.Time
+}
 
-func newWatermarkBlockedGauge(registerer prometheus.Registerer) *prometheus.GaugeVec {
-	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: watermarkBlockedMetric, Help: "因子任务连续水位阻塞开始的 Unix 时间，0 表示没有阻塞。"}, []string{"space_id", "task_id"})
-	if err := registerer.Register(gauge); err != nil {
-		if existing, ok := err.(prometheus.AlreadyRegisteredError); ok {
-			return existing.ExistingCollector.(*prometheus.GaugeVec)
+// watermarkStallAfter 是因子任务连续水位阻塞多久上报关注项：不自动跳过，交给人工（手动补采、确认缺失）。
+const watermarkStallAfter = 30 * time.Minute
+
+// watermarkAttention 列出连续水位阻塞超过 30 分钟的任务：<空间>/<任务> 自 hh:mm 起。阻塞起始时刻以引擎心跳为准，同一次阻塞内不变。
+func (o *factorDatasetObserver) watermarkAttention(now time.Time) map[string][]string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var stalled []string
+	for taskID, item := range o.blocked {
+		if now.Sub(item.since) > watermarkStallAfter {
+			stalled = append(stalled, fmt.Sprintf("%s/%s 自 %s 起", item.spaceID, taskID, report.AttentionTime(item.since)))
 		}
 	}
-	return gauge
+	if len(stalled) == 0 {
+		return nil
+	}
+	sort.Strings(stalled)
+	// 合成一条：对象按序在前、处理提示在后（多条会被重新排序）。
+	detail := "前面有还没补到的周期，不会自动跳过：" + strings.Join(stalled, "；") + "。请检查补采，或确认行情源缺失"
+	return map[string][]string{attentionWatermarkStalled: {detail}}
 }
 
 // observedPeriod 是一个任务已记录的最新一期与它的结果等级。同一期只接受结果变好的升级（缺口补算补齐了预热中或空洞跳过的项）：
@@ -120,19 +136,14 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		return engineErr
 	}
 	o.graceNewTasksLocked(keys, paused, status.RecentRuns)
-	if o.blocked != nil {
-		for _, item := range status.Watermarks {
-			key, known := keys[item.TaskID]
-			if !known {
-				continue
-			}
-			value := 0.0
-			if !item.BlockedSince.IsZero() {
-				value = float64(item.BlockedSince.Unix())
-			}
-			o.blocked.WithLabelValues(key.SpaceID, item.TaskID).Set(value)
+	blocked := make(map[string]blockedWatermark)
+	for _, item := range status.Watermarks {
+		key, known := keys[item.TaskID]
+		if known && !item.BlockedSince.IsZero() {
+			blocked[item.TaskID] = blockedWatermark{spaceID: key.SpaceID, since: item.BlockedSince.UTC()}
 		}
 	}
+	o.blocked = blocked
 	finishedAt := o.now().UTC()
 	for _, run := range status.RecentRuns {
 		key, expected := keys[run.TaskID]

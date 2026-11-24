@@ -40,7 +40,7 @@ const (
 	planGoneDebounce = 5
 	// planLeadTimeHandoff 是采集方式交接时 P 的最短提前量。
 	planLeadTimeHandoff = 3 * time.Minute
-	// operationStuckAge 是云端操作的卡住年龄：最早一个在跑的操作超过它，对账不再刷新成功时间，由 Monitor 的对账陈旧判定发现。
+	// operationStuckAge 是云端操作的卡住年龄：最早一个在跑的操作超过它，对账不再刷新成功时间，由对账陈旧判定（关注项 fetch_coordination_failing）发现。
 	operationStuckAge = 10 * time.Minute
 )
 
@@ -347,7 +347,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 	}
 	// 没有未生效的计划（或本轮刚把计划推进到生效），并且自上一轮结束以来没有失败：对账成功。
 	// 在跑的云端操作只要还没超过卡住年龄就不影响成功：大批量升级可能连续跑十几分钟；
-	// 最早的操作卡住时不再刷新成功时间，由 Monitor 的对账陈旧判定（默认 15 分钟）发现。
+	// 最早的操作卡住时不再刷新成功时间，由对账陈旧判定（关注项 fetch_coordination_failing，plan_health.stale_after 默认 15 分钟）发现。
 	if r.Metrics != nil && r.failCount == r.roundFailCount && !r.operationStuck() {
 		if still, openErr := r.Store.Open(ctx, r.SpaceID); openErr == nil && still == nil {
 			r.Metrics.ObserveAssignmentPending(r.SpaceID, false, time.Time{})

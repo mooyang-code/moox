@@ -24,26 +24,13 @@ func eventToPB(event domain.AlertEvent) *monitorpb.AlertEvent {
 	return &monitorpb.AlertEvent{
 		EventId:     event.EventID,
 		SpaceId:     event.SpaceID,
-		RuleId:      event.RuleID,
 		CheckId:     event.CheckID,
 		EventType:   alertEventTypeToPB(event.EventType),
-		Status:      alertStatusToPB(event.Status),
+		Title:       event.Title,
+		Severity:    event.Severity,
 		Message:     event.Message,
 		PayloadJson: event.Payload,
 		CreatedAt:   timeToString(event.CreatedAt),
-	}
-}
-
-func alertStatusToPB(status string) monitorpb.AlertStatus {
-	switch status {
-	case domain.AlertStatusOK:
-		return monitorpb.AlertStatus_ALERT_STATUS_OK
-	case domain.AlertStatusFiring:
-		return monitorpb.AlertStatus_ALERT_STATUS_FIRING
-	case domain.AlertStatusResolved:
-		return monitorpb.AlertStatus_ALERT_STATUS_RESOLVED
-	default:
-		return monitorpb.AlertStatus_ALERT_STATUS_UNSPECIFIED
 	}
 }
 

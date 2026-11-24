@@ -2,15 +2,16 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
+	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 func TestMarketCanaryTagChecks(t *testing.T) {
@@ -61,9 +62,7 @@ func (f fakeTagSyncStatus) ListTagSyncStatus(_ context.Context, spaceID string) 
 }
 
 // 标签巡检覆盖所有空间的内置标签，不限于行情探针所在空间；非内置标签不巡检；同名标签按空间区分同步记录。
-func TestRunSubjectTagChecksCoversBuiltinTagsInAllSpaces(t *testing.T) {
-	repositories := openMonitorTestRepositories(t)
-	ctx := t.Context()
+func TestSubjectTagFactsCoverBuiltinTagsInAllSpaces(t *testing.T) {
 	now := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
 	attrs := map[string]string{"sync.cron": "0 * * * *", "sync.timezone": "UTC"}
 	tags := fakeTagLister{tags: []*storagepb.Tag{
@@ -77,23 +76,50 @@ func TestRunSubjectTagChecksCoversBuiltinTagsInAllSpaces(t *testing.T) {
 		{SpaceId: "crypto", TagId: "cn_hs300", LastRunAt: "2026-11-12T09:00:00Z", LastStatus: "failed"},
 		{SpaceId: "stockhk", TagId: "hk_hsi", LastRunAt: "2026-11-12T09:00:00Z", LastStatus: "success"},
 	}}
-	results := map[string]domain.CheckResult{}
-	hook := func(_ context.Context, check domain.Check, result domain.CheckResult) {
-		results[check.SpaceID+"/"+check.CheckID] = result
-	}
-
-	require.NoError(t, runSubjectTagChecks(ctx, repositories, tags, runs, hook, now))
-	require.Len(t, results, 2)
-	hs300 := results["stockcn/"+subjectTagCheckID("stockcn", "cn_hs300")]
-	require.True(t, hs300.Success, hs300.ErrorMessage)
-	hsi := results["stockhk/"+subjectTagCheckID("stockhk", "hk_hsi")]
-	require.False(t, hsi.Success)
-	_, err := repositories.Checks.Get(ctx, "stockcn", subjectTagCheckID("stockcn", "my_pick"))
-	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-
-	// 第二轮不改检查名：新建与修复用同一个名称
-	require.NoError(t, runSubjectTagChecks(ctx, repositories, tags, runs, hook, now.Add(time.Minute)))
-	check, err := repositories.Checks.Get(ctx, "stockcn", subjectTagCheckID("stockcn", "cn_hs300"))
+	facts, available, err := subjectTagFacts(t.Context(), tags, runs, now)
 	require.NoError(t, err)
-	require.Equal(t, "采集对象标签 · 沪深300", check.Name)
+	require.True(t, available)
+	byKey := map[string]checks.Fact{}
+	for _, fact := range facts {
+		byKey[fact.SpaceID+"/"+fact.CheckID] = fact
+	}
+	require.Len(t, byKey, 2)
+	hs300 := byKey["stockcn/"+subjectTagCheckID("stockcn", "cn_hs300")]
+	require.True(t, hs300.Passed(), hs300.Reason)
+	require.Equal(t, "采集对象标签 · 沪深300", hs300.Name)
+	require.False(t, byKey["stockhk/"+subjectTagCheckID("stockhk", "hk_hsi")].Passed())
+	require.Equal(t, checks.DomainCanary, checks.DomainOf(hs300.CheckID))
+}
+
+type failingTagSyncStatus struct{}
+
+func (failingTagSyncStatus) ListTagSyncStatus(context.Context, string) ([]*collectorpb.TagSyncStatus, error) {
+	return nil, errors.New("collector unavailable")
+}
+
+// Collector 的标签同步状态读不到时不报错、不产出事实，并告诉调用方标签检查本轮无法判断（整类冻结）。
+func TestSubjectTagFactsUnavailableWhenCollectorStatusFails(t *testing.T) {
+	tags := fakeTagLister{tags: []*storagepb.Tag{{SpaceId: "stockcn", TagId: "cn_hs300", Builtin: true}}}
+	facts, available, err := subjectTagFacts(t.Context(), tags, failingTagSyncStatus{}, time.Now())
+	require.NoError(t, err)
+	require.False(t, available)
+	require.Empty(t, facts)
+}
+
+// 行情探针关闭时，启动时把探针域的旧检查全部删掉：在告警的推一条恢复；别的域不受影响。
+func TestRetireMarketCanariesRemovesCanaryDomain(t *testing.T) {
+	_, repositories := openBusinessStore(t)
+	canary := "market_canary:crypto/ds/BTC-USDT/1m/"
+	tag := subjectTagCheckID("crypto", "binance_spot")
+	seedCheckRow(t, repositories, "crypto", canary, true)
+	seedCheckRow(t, repositories, "crypto", tag, false)
+	seedCheckRow(t, repositories, "crypto", "dataset:storage:ds:1m", true)
+	applier := testApplier(repositories)
+	require.NoError(t, retireMarketCanaries(t.Context(), &config.Config{MarketCanary: config.MarketCanaryConfig{Enabled: true}}, applier))
+	require.NotNil(t, checkRow(t, repositories, "crypto", canary), "探针开启时不动")
+
+	require.NoError(t, retireMarketCanaries(t.Context(), &config.Config{}, applier))
+	requireRemovedWithRecovery(t, repositories, "crypto", canary)
+	require.Nil(t, checkRow(t, repositories, "crypto", tag))
+	require.NotNil(t, checkRow(t, repositories, "crypto", "dataset:storage:ds:1m"), "不删业务域的检查")
 }

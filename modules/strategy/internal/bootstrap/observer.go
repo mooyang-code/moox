@@ -62,12 +62,11 @@ type instanceObserver struct {
 	datasets *report.DatasetMetrics
 	module   *report.ModuleMetrics
 	periods  *prometheus.CounterVec
-	// paramSubmits 统计可变成员参数投递的终态；paramStale 是各实例的参数投递是否已连续多期没有送达。
+	// paramSubmits 统计可变成员参数投递的终态；attention 上报关注项 param_delivery_stale（实例的参数投递已连续多期没有送达）。
 	paramSubmits *prometheus.CounterVec
-	paramStale   *prometheus.GaugeVec
-	// staleAlertPeriods 是触发 paramStale 的连续未送达期数（0 表示不告警）。
+	attention    *report.Attention
+	// staleAlertPeriods 是触发 param_delivery_stale 的连续未送达期数（0 表示不告警）。
 	staleAlertPeriods int
-	staleExported     map[string]string
 	now               func() time.Time
 	logf              func(format string, args ...any)
 
@@ -124,11 +123,11 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 	for _, status := range []string{paramsubmit.ResultDelivered, paramsubmit.ResultRejected} {
 		paramSubmits.WithLabelValues(status)
 	}
-	paramStale := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: paramStaleMetric, Help: "实例有可变成员、并且最近连续多期的结果都没有把参数送达因子侧为 1，否则为 0。"}, []string{"space_id", "instance_id"})
-	if err := registerer.Register(paramStale); err != nil {
-		return nil, fmt.Errorf("注册因子参数投递滞后指标失败：%w", err)
+	attention, err := report.NewAttention(registerer, attentionKinds)
+	if err != nil {
+		return nil, fmt.Errorf("注册策略关注项指标失败：%w", err)
 	}
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, paramSubmits: paramSubmits, paramStale: paramStale, staleExported: map[string]string{}, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, restored: map[string]string{}, accumulatingSince: map[string]time.Time{}}, nil
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, paramSubmits: paramSubmits, attention: attention, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, restored: map[string]string{}, accumulatingSince: map[string]time.Time{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。数据集标识只接受小写：实例 ID 区分大小写，
@@ -569,8 +568,14 @@ func (o *instanceObserver) log(format string, args ...any) {
 	}
 }
 
-// paramStaleMetric 是参数投递滞后告警的指标名（设计 6.5、S7）。
-const paramStaleMetric = "moox_strategy_param_delivery_stale"
+// attentionParamDeliveryStale 是关注项：实例在运行、有可变成员，并且最近连续多期的结果都没有把参数送达因子侧（设计 6.5、S7）。
+// 可变成员在沿用旧参数，继续沿用、不自动回退默认值，只告警让人看。
+const attentionParamDeliveryStale = "param_delivery_stale"
+
+// attentionKinds 是策略模块声明的全部关注项。
+var attentionKinds = []report.AttentionKind{
+	{Kind: attentionParamDeliveryStale, Name: "策略参数投递滞后", Severity: report.AttentionCritical},
+}
 
 // SetHalted 设置“模块是否被有意停下”的判断（生命周期控制器的 Halted）。
 func (o *instanceObserver) SetHalted(halted func() bool) {
@@ -582,44 +587,38 @@ func (o *instanceObserver) SetHalted(halted func() bool) {
 // SetStaleAlertPeriods 设置触发参数投递滞后告警的连续未送达期数；0 表示不告警。
 func (o *instanceObserver) SetStaleAlertPeriods(periods int) { o.staleAlertPeriods = periods }
 
-// observeParamDelivery 导出各实例的参数投递是否已连续多期没有送达：实例在运行、DSL 有可变成员（固化的解析里有可变成员的参数声明）、
-// 并且当前会话最近 N 期带参数的结果都没有送达时为 1，否则为 0；不再启用的实例把已导出的序列清零。
+// observeParamDelivery 按库里的状态重算参数投递滞后的关注项：实例在运行、DSL 有可变成员（固化的解析里有可变成员的参数声明）、
+// 并且当前会话最近 N 期带参数的结果都没有送达时列出它；不再启用的实例不在 instances 里，随之消失。读某个实例失败时这一轮整份不改。
 func (o *instanceObserver) observeParamDelivery(ctx context.Context, instances []store.Instance) {
-	if o.paramStale == nil {
+	if o.attention == nil {
 		return
 	}
-	current := make(map[string]string, len(instances))
+	var stale []string
 	for _, instance := range instances {
 		resolved, err := input.ParseResolved(instance.ResolvedJSON)
 		if err != nil || len(resolved.FactorParams) == 0 || instance.SessionID == nil {
 			continue
 		}
-		stale := false
-		if o.staleAlertPeriods > 0 {
-			var err error
-			if stale, err = o.store.ParamDeliveryStale(ctx, instance.InstanceID, *instance.SessionID, o.staleAlertPeriods); err != nil {
-				o.log("读取实例 %s 的参数投递状态失败：%v", instance.InstanceID, err)
-				continue
-			}
+		if o.staleAlertPeriods <= 0 {
+			continue
 		}
-		current[instance.InstanceID] = instance.SpaceID
-		value := 0.0
-		if stale {
-			value = 1
+		delayed, err := o.store.ParamDeliveryStale(ctx, instance.InstanceID, *instance.SessionID, o.staleAlertPeriods)
+		if err != nil {
+			o.log("读取实例 %s 的参数投递状态失败：%v", instance.InstanceID, err)
+			return
 		}
-		o.paramStale.WithLabelValues(instance.SpaceID, instance.InstanceID).Set(value)
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	for id, space := range o.staleExported {
-		if _, still := current[id]; !still {
-			o.paramStale.WithLabelValues(space, id).Set(0)
-			delete(o.staleExported, id)
+		if delayed {
+			stale = append(stale, instance.SpaceID+"/"+instance.InstanceID)
 		}
 	}
-	for id, space := range current {
-		o.staleExported[id] = space
+	if len(stale) == 0 {
+		o.attention.Set("params", nil)
+		return
 	}
+	sort.Strings(stale)
+	// 合成一条：说明在前、实例按序在后（多条会被重新排序）。
+	detail := "策略连续多期没有把参数送达因子侧（可变成员在沿用旧参数）：" + strings.Join(stale, "；")
+	o.attention.Set("params", map[string][]string{attentionParamDeliveryStale: {detail}})
 }
 
 // ParamSubmitted 记录一条可变成员参数投递的终态（delivered、rejected）。

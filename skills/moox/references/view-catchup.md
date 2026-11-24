@@ -45,7 +45,7 @@ Storage 的路径都在存储机的部署根（默认 `/data/moox`）下：
 
 ## Storage View：单个 View 跟随停滞
 
-Primary 水位前进而某个 View 长时间不动时，用 `moox-cli data view state` 看它的 `index_id` 与 `applied_cursor` 是否前进，对照该 View 的 `moox_storage_view_follow_lag_seconds` / `follow_lag_changes`（Monitor 检查 `view_follow:storage_view` 落后超过 2 分钟告警），再看 `storage-view` 日志里的索引写入错误或就绪事件发布失败。`index_id` 为空表示首次建索引或断档重建中，等它建完即可；就绪事件发不出去时该 View 停在那条完成标记上重试，先修 EventBus。
+Primary 水位前进而某个 View 长时间不动时，用 `moox-cli data view state` 看它的 `index_id` 与 `applied_cursor` 是否前进，对照该 View 的 `moox_storage_view_follow_lag_seconds` / `follow_lag_changes`（落后超过 2 分钟时 storage-view 上报关注项 `attention:storage-view:view_follow_lagging`），再看 `storage-view` 日志里的索引写入错误或就绪事件发布失败。`index_id` 为空表示首次建索引或断档重建中，等它建完即可；就绪事件发不出去时该 View 停在那条完成标记上重试，先修 EventBus。
 
 只有索引损坏、要按新的 `view_rows_per_series` 回填，或要丢弃 View 的全部内容时，才在操作机用 `moox-cli storage repair-view` 重建指定 View（经 SSH 在存储机上执行同版本程序；路径参数自动补齐），先只读预演（不带 `--yes` 就是预演）：
 

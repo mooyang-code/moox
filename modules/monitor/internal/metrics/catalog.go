@@ -370,6 +370,32 @@ func (c *MetricCatalog) ListFreshSeriesForInstanceAt(
 	return rows, nil
 }
 
+// ListFreshSeriesByMetricAt 返回某个指标在 at 时仍未过期的全部序列（不限服务与实例），过期截止比无数据时限再多放 extra：
+// 序列的最后上报时刻用样本时刻，服务行用接收时刻，多放一点免得生产者刚停报时序列比服务判定先过期。
+// 只按最后上报时刻筛，过期的历史序列不会占用上限；超过 limit 条时报错，不截断。
+func (c *MetricCatalog) ListFreshSeriesByMetricAt(ctx context.Context, metricName string, at time.Time, extra time.Duration, limit int) ([]MetricSeries, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	cutoff := at.UTC().Add(-c.noDataAfter - extra)
+	var rows []MetricSeries
+	err := c.messageStore.db.WithContext(ctx).
+		Where("c_metric_name = ? AND c_last_seen_at >= ?", metricName, cutoff).
+		Order("c_series_id ASC").
+		Limit(limit + 1).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > limit {
+		return nil, fmt.Errorf("指标 %s 未过期的序列超过上限 %d 条", metricName, limit)
+	}
+	return rows, nil
+}
+
 func (c *MetricCatalog) markSeriesStale(rows []MetricSeries) {
 	c.markSeriesStaleAt(rows, time.Now().UTC())
 }

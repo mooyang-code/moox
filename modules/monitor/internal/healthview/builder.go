@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -13,9 +14,9 @@ import (
 )
 
 type Builder struct {
-	Facts           *observability.Builder
+	Facts *observability.Builder
+	// Checks 是检查表：当前告警与业务检查列表都读它（上一轮评估的结果）。
 	Checks          *store.CheckRepository
-	Results         *store.ResultRepository
 	Alerts          *store.AlertRepository
 	ComponentHealth *store.ComponentHealthRepository
 	Notifications   *store.NotificationRepository
@@ -59,25 +60,37 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 			}
 		}
 	}
-	titles := newCheckTitles(b.Checks)
 	active := make(map[incidentKey]bool)
-	if b.Alerts != nil {
-		states, err := b.Alerts.ListEnabledFiringStates(ctx, spaceID, 1501)
+	if b.Checks != nil {
+		rows, err := b.Checks.List(ctx, spaceID)
 		if err != nil {
 			return nil, err
 		}
-		if len(states) > 1500 {
-			return nil, fmt.Errorf("health overview exceeds 1500 active alerts")
+		for _, row := range rows {
+			if check := projectBusinessCheck(row); check != nil {
+				out.BusinessChecks = append(out.BusinessChecks, check)
+				countSummary(out.Summary, check.Status)
+			}
 		}
-		for _, state := range states {
-			alert, err := b.projectAlert(ctx, state, facts, titles)
+		firing, err := b.Checks.ListFiring(ctx, spaceID, maxActiveAlerts+1)
+		if err != nil {
+			return nil, err
+		}
+		if len(firing) > maxActiveAlerts {
+			return nil, fmt.Errorf("health overview exceeds %d active alerts", maxActiveAlerts)
+		}
+		for _, check := range firing {
+			alert, err := b.projectAlert(ctx, check, facts)
 			if err != nil {
 				return nil, err
 			}
 			out.Alerts = append(out.Alerts, alert)
-			active[incidentKey{space: state.SpaceID, check: state.CheckID}] = true
+			active[incidentKey{space: check.SpaceID, check: check.CheckID}] = true
 		}
-		out.Incidents, err = b.incidents(ctx, spaceID, facts, active, titles, now)
+	}
+	if b.Alerts != nil {
+		var err error
+		out.Incidents, err = b.incidents(ctx, spaceID, active, now)
 		if err != nil {
 			return nil, err
 		}
@@ -124,15 +137,6 @@ func projectFacts(facts observability.Overview) *Overview {
 	}
 	out.Summary.UnregisteredCount = int32(len(out.Unregistered))
 	out.Summary.AttentionCount += out.Summary.UnregisteredCount
-	for _, item := range facts.BusinessChecks {
-		status := domain.HealthStatus(item.Status)
-		checkID := item.CheckID
-		if checkID == "" {
-			checkID = item.Kind + ":" + item.Module
-		}
-		out.BusinessChecks = append(out.BusinessChecks, &pb.HealthBusinessCheck{CheckId: checkID, Name: item.Name, Kind: item.Kind, Module: item.Module, SpaceId: item.SpaceID, Status: status, Reason: ChineseReason(item.Reason), RawError: unhealthyRaw(status, item.Reason, item.RawError), CheckedAt: stamp(item.LastCheckedAt)})
-		countSummary(out.Summary, status)
-	}
 	out.Pipeline = projectPipeline(facts)
 	for _, stage := range out.Pipeline {
 		for _, dataset := range stage.Datasets {
@@ -220,4 +224,29 @@ func unhealthyRaw(status, reason, raw string) string {
 		return ""
 	}
 	return rawReason(reason, raw)
+}
+
+// maxActiveAlerts 是概览一次列出的告警上限。
+const maxActiveAlerts = 1500
+
+// projectBusinessCheck 把检查表的一行投影成页面的业务检查；主机、组件、数据集三类在各自的栏里展示，不进业务检查列表。
+// 生产者声明为 warning 的关注项失败时显示“需关注”（degraded），告警级别同样是 warning。
+func projectBusinessCheck(row domain.Check) *pb.HealthBusinessCheck {
+	kind, module, _ := strings.Cut(row.CheckID, ":")
+	switch kind {
+	case "host", "reporter", "ready", "restart", "dataset":
+		return nil
+	}
+	// module 是检查 ID 里种类之后的部分；关注项是服务名。
+	if service, _, ok := observability.ParseAttentionCheckID(row.CheckID); ok {
+		module = service
+	}
+	status := domain.HealthStatus(row.Status)
+	if kind == observability.AttentionCheckKind && row.Status == domain.CheckStatusDown && row.Severity == domain.SeverityWarning {
+		status = domain.HealthStatus(domain.CheckStatusDegraded)
+	}
+	return &pb.HealthBusinessCheck{
+		CheckId: row.CheckID, Name: row.Name, Kind: kind, Module: module, SpaceId: row.SpaceID, Status: status,
+		Reason: ChineseReason(row.Reason), RawError: unhealthyRaw(status, row.Reason, row.RawError), CheckedAt: stamp(row.CheckedAt),
+	}
 }

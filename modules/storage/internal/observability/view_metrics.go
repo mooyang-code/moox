@@ -3,6 +3,7 @@ package observability
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,9 +38,10 @@ type ViewMetrics struct {
 	restoreDuration         prometheus.Gauge
 	restoreReady            prometheus.Gauge
 	restoreFailures         prometheus.Counter
-	viewFileOverLimit       prometheus.Gauge
 	// followLag 是各 View 跟随变更日志的落后情况，采集时现算。
-	followLag                        *viewFollowLagCollector
+	followLag *viewFollowLagCollector
+	// attention 是 storage-view 的关注项上报器，只在 View 角色里设置。
+	attention                        viewAttention
 	followingSnapshot                atomic.Bool
 	viewWatermarkMu                  sync.Mutex
 	viewWatermarks                   map[string]int64
@@ -167,10 +169,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "restore_failures_total",
 			Help: "Number of failed active View restore passes.",
 		}),
-		viewFileOverLimit: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "file_over_limit",
-			Help: "Number of active Views whose index file is at or above max_view_file_bytes; alert only, no data is touched.",
-		}),
 		followLag:      newViewFollowLagCollector(),
 		viewWatermarks: make(map[string]int64),
 	}
@@ -195,9 +193,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.outboxPublisherUnavailableAge, err = registerOrReuse(registerer, metrics.outboxPublisherUnavailableAge); err != nil {
-		return nil, err
-	}
-	if metrics.viewFileOverLimit, err = registerOrReuse(registerer, metrics.viewFileOverLimit); err != nil {
 		return nil, err
 	}
 	if metrics.followLag, err = registerOrReuse(registerer, metrics.followLag); err != nil {
@@ -248,15 +243,38 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	return metrics, nil
 }
 
-// SetViewFileOverLimitCount 导出索引文件超过告警线的 View 数量，只告警，不动数据。
-func (m *ViewMetrics) SetViewFileOverLimitCount(count int64) {
-	if m == nil || m.viewFileOverLimit == nil {
+// SetViewFilesOverLimit 上报索引文件超过 max_view_file_bytes 的 View（空间/View），关注项 view_file_over_limit：只告警，不动数据，
+// 由人判断是调大告警线、调小保留根数还是减列。
+func (m *ViewMetrics) SetViewFilesOverLimit(views []string) {
+	if m == nil {
 		return
 	}
-	if count < 0 {
-		count = 0
+	attention := m.attention.attention.Load()
+	if attention == nil {
+		return
 	}
-	m.viewFileOverLimit.Set(float64(count))
+	if len(views) == 0 {
+		attention.Set("view_file", nil)
+		return
+	}
+	sorted := append([]string(nil), views...)
+	sort.Strings(sorted)
+	// 合成一条：对象按序在前、处理提示在后（多条会被重新排序）。
+	detail := strings.Join(sorted, "；") + "。数据不受影响，确认后调大告警线或减少保留根数"
+	attention.Set("view_file", map[string][]string{AttentionViewFileOverLimit: {detail}})
+}
+
+// OutboxOldest 返回 Outbox 最近一次快照的积压条数与最早一条的时刻（没有积压时为零值）。
+func (m *ViewMetrics) OutboxOldest() (int64, time.Time) {
+	if m == nil {
+		return 0, time.Time{}
+	}
+	pending := m.outboxPendingSnapshot.Load()
+	nanos := m.outboxOldestEventAt.Load()
+	if pending <= 0 || nanos <= 0 {
+		return pending, time.Time{}
+	}
+	return pending, time.Unix(0, nanos).UTC()
 }
 
 // ObserveViewDatasetOutput records a successful active View index commit.
