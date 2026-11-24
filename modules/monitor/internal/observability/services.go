@@ -196,7 +196,7 @@ func withHostSnapshot(item ServiceStatus, hosts []HostStatus) ServiceStatus {
 		if host.HostID != item.NodeID || !host.LastSeenAt.After(item.LastSeenAt) {
 			continue
 		}
-		item.InstanceID, item.LastSeenAt = host.AgentID, host.LastSeenAt.UTC()
+		item.InstanceID, item.LastSeenAt = host.HostID, host.LastSeenAt.UTC()
 		item.ReporterStatus, item.Status, item.Reason = "healthy", "healthy", "reporter fresh"
 		if host.Status != "healthy" {
 			item.ReporterStatus, item.Status, item.Reason = "stale", silentStatus(item, "stale"), "reporter stale"

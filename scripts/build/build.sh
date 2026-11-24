@@ -109,7 +109,6 @@ build_hostagent() {
   [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-host-agent supports linux only" >&2; exit 1; }
   case "${TARGET_GOARCH}" in amd64|arm64) ;; *) echo "moox-host-agent supports amd64/arm64 only" >&2; exit 1 ;; esac
   build_go modules/hostagent ./cmd/server moox-host-agent 0
-  build_go modules/hostagent ./cmd/cli moox-host-agent-cli 0
 }
 
 build_collector_market_data_scf() {

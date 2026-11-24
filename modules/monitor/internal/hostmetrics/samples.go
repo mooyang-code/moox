@@ -24,7 +24,7 @@ const defaultHistoryLimit = 500
 
 type hostSampleRecord struct {
 	ID         int64     `gorm:"column:c_id;primaryKey"`
-	AgentID    string    `gorm:"column:c_agent_id"`
+	HostID     string    `gorm:"column:c_host_id"`
 	ObservedAt time.Time `gorm:"column:c_observed_at"`
 	Snapshot   []byte    `gorm:"column:c_snapshot"`
 }
@@ -39,12 +39,12 @@ type SampleStore struct {
 func NewSampleStore(db *gorm.DB) *SampleStore { return &SampleStore{db: db} }
 
 // Write 按（主机，分钟）写入一份快照；同一分钟重复写入时覆盖，重放是幂等的。
-func (s *SampleStore) Write(ctx context.Context, agentID string, observedAt time.Time, snapshot *hostmetricpb.HostSnapshot) error {
+func (s *SampleStore) Write(ctx context.Context, hostID string, observedAt time.Time, snapshot *hostmetricpb.HostSnapshot) error {
 	if s == nil || s.db == nil {
 		return errors.New("主机快照库未初始化")
 	}
-	if agentID == "" || snapshot == nil {
-		return errors.New("主机快照缺少采集代理编号或内容")
+	if hostID == "" || snapshot == nil {
+		return errors.New("主机快照缺少主机 ID 或内容")
 	}
 	// 进程排行和采集器状态只用于当前快照（告警正文、详情页），历史里不存，行也更小。
 	stored := proto.Clone(snapshot).(*hostmetricpb.HostSnapshot)
@@ -53,21 +53,21 @@ func (s *SampleStore) Write(ctx context.Context, agentID string, observedAt time
 	if err != nil {
 		return fmt.Errorf("编码主机快照: %w", err)
 	}
-	record := hostSampleRecord{AgentID: agentID, ObservedAt: observedAt.UTC().Truncate(time.Minute), Snapshot: encoded}
+	record := hostSampleRecord{HostID: hostID, ObservedAt: observedAt.UTC().Truncate(time.Minute), Snapshot: encoded}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "c_agent_id"}, {Name: "c_observed_at"}},
+		Columns:   []clause.Column{{Name: "c_host_id"}, {Name: "c_observed_at"}},
 		DoUpdates: clause.AssignmentColumns([]string{"c_snapshot"}),
 	}).Create(&record).Error
 }
 
 // History 返回 [start, end] 内的快照，按时间升序，最多 limit 份：行数超过 limit 时在整个范围内等间隔抽取
 // （首尾两行一定在内），曲线覆盖所选的整段时间。limit 不大于 0 时取默认值，最多 ForecastHistoryLimit。
-func (s *SampleStore) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
+func (s *SampleStore) History(ctx context.Context, hostID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("主机快照库未初始化")
 	}
-	if agentID == "" {
-		return nil, errors.New("缺少采集代理编号")
+	if hostID == "" {
+		return nil, errors.New("缺少主机 ID")
 	}
 	if limit <= 0 {
 		limit = defaultHistoryLimit
@@ -76,7 +76,7 @@ func (s *SampleStore) History(ctx context.Context, agentID string, start, end ti
 	// 先只读行号，抽好要返回的行再读快照内容。
 	var ids []int64
 	if err := s.db.WithContext(ctx).Model(&hostSampleRecord{}).
-		Where("c_agent_id = ? AND c_observed_at >= ? AND c_observed_at <= ?", agentID, start.UTC(), end.UTC()).
+		Where("c_host_id = ? AND c_observed_at >= ? AND c_observed_at <= ?", hostID, start.UTC(), end.UTC()).
 		Order("c_observed_at").Pluck("c_id", &ids).Error; err != nil {
 		return nil, fmt.Errorf("读取主机快照历史: %w", err)
 	}
@@ -92,9 +92,9 @@ func (s *SampleStore) History(ctx context.Context, agentID string, start, end ti
 	for _, record := range records {
 		snapshot := new(hostmetricpb.HostSnapshot)
 		if err := proto.Unmarshal(record.Snapshot, snapshot); err != nil {
-			return nil, fmt.Errorf("解码主机快照 agent_id=%s observed_at=%s: %w", agentID, record.ObservedAt.UTC().Format(time.RFC3339), err)
+			return nil, fmt.Errorf("解码主机快照 host_id=%s observed_at=%s: %w", hostID, record.ObservedAt.UTC().Format(time.RFC3339), err)
 		}
-		out = append(out, HistoryPoint{AgentID: agentID, ObservedAt: record.ObservedAt.UTC().Format(time.RFC3339Nano), Snapshot: snapshot})
+		out = append(out, HistoryPoint{HostID: hostID, ObservedAt: record.ObservedAt.UTC().Format(time.RFC3339Nano), Snapshot: snapshot})
 	}
 	return out, nil
 }

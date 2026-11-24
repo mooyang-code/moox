@@ -40,7 +40,6 @@ message HealthObject {
   string component_id = 3;
   string dataset_id = 4;
   string freq = 5;
-  string agent_id = 6;
   string kind = 7;
   string space_id = 8;
   string producer = 9;
@@ -225,7 +224,6 @@ message HealthGatewaySignal {
 }
 message HealthHost {
   string host_id = 1;
-  string agent_id = 2;
   string hostname = 3;
   string address = 4;
   string status = 5;
@@ -344,24 +342,23 @@ message GetHostPolicyRsp {
 }
 
 message HostAgentInfo {
-  string agent_id = 1;
+  // host_id 是 Admin 登记的主机 ID，每台主机一行。
+  string host_id = 1;
   string hostname = 2;
   string boot_id = 3;
   string last_seen_at = 4;
-  bool archived = 5;
-  trpc.moox.hostagent.HostSnapshot snapshot = 6;
-  bool reachable = 7;
-  int64 stale_seconds = 8;
-  string host_id = 9;
+  trpc.moox.hostagent.HostSnapshot snapshot = 5;
+  bool reachable = 6;
+  int64 stale_seconds = 7;
 }
 message ListHostAgentsReq {}
 message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; }
 message HostMetricHistoryPoint {
-  string agent_id = 1;
+  string host_id = 1;
   string observed_at = 2;
   trpc.moox.hostagent.HostSnapshot snapshot = 3;
 }
-message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
+message QueryHostMetricHistoryReq { string host_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
 // data_gap：所请求的范围超出可查的最近 7 天被截掉了一部分，或这段时间没有快照。
 message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool data_gap = 3; }
 
@@ -452,8 +449,8 @@ message DoctorWatermark {
   string status = 6;
 }
 message DoctorDiskForecast {
+  // node_id 是主机 ID。
   string node_id = 1;
-  string agent_id = 2;
   string mountpoint = 3;
   string status = 4;
   double growth_bytes_per_day = 5;

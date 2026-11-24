@@ -68,12 +68,9 @@ func main() {
 	_ = a.Close()
 }
 
-// startPolicySync 在部署配置了主机策略缓存时，定期经网关从 Monitor 拉取主机策略。
+// startPolicySync 定期经网关从 Monitor 拉取主机策略。
 // 打不开网关客户端就返回错误，由调用方退出进程：不在这里重试，交给 systemd 拉起。
 func startPolicySync(ctx context.Context, cfg *config.Config) (func(), error) {
-	if !cfg.PolicySyncEnabled() {
-		return func() {}, nil
-	}
 	gateway, err := cfg.OpenGateway(func(err error) { log.Warnf("host-agent gateway directory refresh failed: %v", err) })
 	if err != nil {
 		return nil, fmt.Errorf("open gateway client: %w", err)

@@ -163,7 +163,7 @@ func TestDelegatedAndHostSnapshotSources(t *testing.T) {
 		Deployments: []domain.TopologyDeployment{{HostID: "factor", ComponentID: "factor-engine", Status: "enabled"}, {HostID: "factor", ComponentID: "host-agent", Status: "enabled"}},
 	}))
 	services, unregistered, _, err := (Builder{Metrics: query, Topology: repos.Topology}).buildServices(t.Context(), now,
-		[]HostStatus{{HostID: "factor", AgentID: "agent-1", Status: "healthy", LastSeenAt: now}})
+		[]HostStatus{{HostID: "factor", Status: "healthy", LastSeenAt: now}})
 	require.NoError(t, err)
 	require.Empty(t, unregistered, "代报行不是未登记的进程")
 	byID := map[string]ServiceStatus{}
@@ -178,10 +178,10 @@ func TestDelegatedAndHostSnapshotSources(t *testing.T) {
 	agent := byID["host-agent"]
 	require.Equal(t, SourceHostSnapshot, agent.Source)
 	require.Equal(t, "healthy", agent.Status)
-	require.Equal(t, "agent-1", agent.InstanceID)
+	require.Equal(t, "factor", agent.InstanceID)
 
 	services, _, _, err = (Builder{Metrics: query, Topology: repos.Topology}).buildServices(t.Context(), now,
-		[]HostStatus{{HostID: "factor", AgentID: "agent-1", Status: "down", LastSeenAt: now.Add(-10 * time.Minute)}})
+		[]HostStatus{{HostID: "factor", Status: "down", LastSeenAt: now.Add(-10 * time.Minute)}})
 	require.NoError(t, err)
 	for _, service := range services {
 		if service.ServiceName == "host-agent" {

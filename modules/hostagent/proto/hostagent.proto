@@ -8,7 +8,7 @@ option go_package = "github.com/mooyang-code/moox/modules/hostagent/proto/hostag
 
 message GetStatusReq {}
 message GetStatusRsp {
-  string agent_id = 1;
+  string host_id = 1;
   string version = 2;
   string hostname = 3;
   string boot_id = 4;

@@ -35,7 +35,7 @@ func healthHandler(agent *Agent) http.Handler {
 			rsp.Status = "ok"
 		}
 		rsp.Details = map[string]any{
-			"agent_id":           status.GetAgentId(),
+			"host_id":            status.GetHostId(),
 			"eventbus_connected": status.GetEventbusConnected(),
 			"last_collect_at":    status.GetLastCollectAt(),
 			"last_publish_at":    status.GetLastPublishAt(),

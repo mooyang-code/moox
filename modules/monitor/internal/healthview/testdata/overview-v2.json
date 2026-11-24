@@ -5,7 +5,6 @@
       "id": "host-alert",
       "last_checked_at": "2026-10-09T12:00:00Z",
       "object": {
-        "agent_id": "PHYSICAL01",
         "attention_kind": "",
         "component_id": "",
         "dataset_id": "",
@@ -130,7 +129,6 @@
   "hosts": [
     {
       "address": "control.test",
-      "agent_id": "",
       "cpu_available": false,
       "cpu_cores": 0,
       "cpu_percent": 0,
@@ -156,7 +154,6 @@
     },
     {
       "address": "offline.test",
-      "agent_id": "PHYSICAL01",
       "cpu_available": false,
       "cpu_cores": 0,
       "cpu_percent": 0,

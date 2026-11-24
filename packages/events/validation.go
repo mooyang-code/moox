@@ -23,13 +23,14 @@ func validateObservabilityHostSnapshotReported(message *eventpb.EventMessage, va
 	if !ok {
 		return fmt.Errorf("host metric payload has type %T", value)
 	}
-	if !hostmetricpb.IsAgentID(payload.GetAgentId()) ||
+	// host_id 的格式由部署登记约束，Monitor 收到后再按登记规则校验一次。
+	if strings.TrimSpace(payload.GetHostId()) == "" ||
 		strings.TrimSpace(payload.GetHostname()) == "" ||
 		payload.GetSnapshot() == nil {
-		return fmt.Errorf("host metric identity or snapshot is incomplete")
+		return fmt.Errorf("主机快照缺少 host_id、主机名或快照内容")
 	}
-	if payload.GetAgentId() != message.GetSubjectId() {
-		return fmt.Errorf("host metric agent_id does not match subject_id")
+	if payload.GetHostId() != message.GetSubjectId() {
+		return fmt.Errorf("主机快照的 host_id 与 subject_id 不一致")
 	}
 	return nil
 }

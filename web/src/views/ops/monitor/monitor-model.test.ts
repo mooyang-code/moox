@@ -409,7 +409,6 @@ describe("layers", () => {
         hosts: [
           {
             host_id: "control",
-            agent_id: "pwU2",
             address: "203.0.113.10",
             status: "healthy",
             cpu_available: true,

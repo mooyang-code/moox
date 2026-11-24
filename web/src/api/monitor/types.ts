@@ -84,7 +84,6 @@ export interface HealthObject {
   type?: "component" | "dataset" | "host" | "business";
   host_id?: string;
   component_id?: string;
-  agent_id?: string;
   dataset_id?: string;
   freq?: string;
   kind?: string;
@@ -203,7 +202,6 @@ export interface HealthGatewaySignal {
 }
 export interface HealthHost {
   host_id?: string;
-  agent_id?: string;
   hostname?: string;
   address?: string;
   status?: HealthStatus;

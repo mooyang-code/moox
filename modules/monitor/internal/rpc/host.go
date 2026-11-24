@@ -21,8 +21,8 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 	out := make([]*monitorpb.HostAgentInfo, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, &monitorpb.HostAgentInfo{
-			HostId: row.HostID, AgentId: row.AgentID, Hostname: row.Hostname, BootId: row.BootID,
-			LastSeenAt: row.LastSeenAt, Archived: row.Archived, Snapshot: row.Snapshot,
+			HostId: row.HostID, Hostname: row.Hostname, BootId: row.BootID,
+			LastSeenAt: row.LastSeenAt, Snapshot: row.Snapshot,
 			Reachable: row.Reachable, StaleSeconds: row.StaleSeconds,
 		})
 	}
@@ -33,8 +33,8 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 const historyClockSlack = 5 * time.Minute
 
 func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.QueryHostMetricHistoryReq) (*monitorpb.QueryHostMetricHistoryRsp, error) {
-	if req.GetAgentId() == "" {
-		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(errors.New("缺少 agent_id"))}, nil
+	if req.GetHostId() == "" {
+		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(errors.New("缺少 host_id"))}, nil
 	}
 	end := time.Now().UTC()
 	start := end.Add(-time.Hour)
@@ -72,13 +72,13 @@ func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.Que
 	if end.Before(start) {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), DataGap: true}, nil
 	}
-	rows, err := s.hostStore.History(ctx, req.GetAgentId(), start, end, int(req.GetLimit()))
+	rows, err := s.hostStore.History(ctx, req.GetHostId(), start, end, int(req.GetLimit()))
 	if err != nil {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: inner(err)}, nil
 	}
 	out := make([]*monitorpb.HostMetricHistoryPoint, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &monitorpb.HostMetricHistoryPoint{AgentId: row.AgentID, ObservedAt: row.ObservedAt, Snapshot: row.Snapshot})
+		out = append(out, &monitorpb.HostMetricHistoryPoint{HostId: row.HostID, ObservedAt: row.ObservedAt, Snapshot: row.Snapshot})
 	}
 	return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), Points: out, DataGap: truncated || len(out) == 0}, nil
 }

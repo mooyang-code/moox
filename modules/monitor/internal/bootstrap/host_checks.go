@@ -20,7 +20,7 @@ import (
 // 这些结果和业务检查写入同一张检查结果表，由同一个告警评估器记状态、推送，页面也从同一份告警状态展示，
 // 所以同一件事在页面和推送里是同一个标题、同一个级别、同一段原因。
 type hostChecks struct {
-	// evaluated 记录每个采集器已经评估过的最近一次采样时间。HostAgent 每分钟采样一次，评估每 30 秒一轮：
+	// evaluated 记录每台主机已经评估过的最近一次采样时间（键为主机 ID）。HostAgent 每分钟采样一次，评估每 30 秒一轮：
 	// 同一次采样只算一次，“连续 N 次采样超限才告警”才成立；结果写入成功后才更新。重启后清空，最多把重启前最后一次采样多算一次。
 	evaluated map[string]time.Time
 }
@@ -41,15 +41,8 @@ func hostCheckFailureThreshold(checkID string) (int, bool) {
 	return 1, true
 }
 
-// hostTitle 是主机在告警标题里的称呼：优先用登记的主机 ID（页面主机卡片也用它），其次主机名、采集器 ID。
-func hostTitle(host monitorobservability.HostStatus) string {
-	for _, name := range []string{host.HostID, host.Hostname} {
-		if name != "" {
-			return name
-		}
-	}
-	return host.AgentID
-}
+// hostTitle 是主机在告警标题里的称呼：登记的主机 ID，与页面主机卡片一致。
+func hostTitle(host monitorobservability.HostStatus) string { return host.HostID }
 
 // hostCheckTimeout 是主机类检查一轮的时限。它只读写 Monitor 自己的库，不沿用检查定时器那一轮剩下的时间。
 const hostCheckTimeout = 10 * time.Second
@@ -85,7 +78,7 @@ func buildHostCheckReporter(
 		for _, item := range list {
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
-		// 本轮既没有结果也不保持原状态的旧检查（主机从登记里移除或停用、采集器被取代）按“不再检查”收尾，已有告警随之恢复。
+		// 本轮既没有结果也不保持原状态的旧检查（主机从登记里移除或停用）按“不再检查”收尾，已有告警随之恢复。
 		enabled := true
 		for page := 1; ; page++ {
 			batch, err := repositories.Checks.List(ctx, store.ListChecksOptions{
@@ -111,25 +104,25 @@ func buildHostCheckReporter(
 			return ensureDefaultRules(ctx, repositories, checks)
 		})
 		// 结果写进去之后才把采样记为已评估：写失败的采样下一轮重新评估，不会被吃掉。
-		for agentID, at := range sampled {
+		for hostID, at := range sampled {
 			done := true
 			for _, metric := range hostmetrics.Metrics {
-				key := events.SystemSpaceID + "\x00" + hostmetrics.CheckID(agentID, metric)
+				key := events.SystemSpaceID + "\x00" + hostmetrics.CheckID(hostID, metric)
 				if _, produced := items[key]; produced && !written[key] {
 					done = false
 				}
 			}
 			if done {
-				hosts.evaluated[agentID] = at
+				hosts.evaluated[hostID] = at
 			}
 		}
 		return err
 	}
 }
 
-// items 返回本轮的主机类检查结果、本轮要保持原状态的检查（键为 空间\x00检查ID），以及本轮评估了新采样的采集器及其采样时间。
+// items 返回本轮的主机类检查结果、本轮要保持原状态的检查（键为 空间\x00检查ID），以及本轮评估了新采样的主机及其采样时间。
 // 资源检查在没有新采样、主机失联或指标不可用时不产生结果，既不累计失败也不恢复。
-// 只有登记主机上最近上报、且主机与采集部署都没有停用的采集器才有主机类检查；其余采集器的旧检查由调用方按“不再检查”收尾。
+// 只有上报过、且主机与 host-agent 部署都没有停用的登记主机才有主机类检查；其余主机的旧检查由调用方按“不再检查”收尾。
 func (h *hostChecks) items(ctx context.Context, overview monitorobservability.Overview, alerts *store.AlertRepository) ([]businessFreshnessItem, map[string]bool, map[string]time.Time, error) {
 	var items []businessFreshnessItem
 	frozen := make(map[string]bool)
@@ -139,14 +132,14 @@ func (h *hostChecks) items(ctx context.Context, overview monitorobservability.Ov
 		if presence.Disabled {
 			continue
 		}
-		selected[presence.Host.AgentID] = true
+		selected[presence.Host.HostID] = true
 		title := "主机 " + hostTitle(presence.Host)
 		lost := businessFreshnessItem{
-			spaceID: events.SystemSpaceID, checkID: hostmetrics.CheckID(presence.Host.AgentID, hostmetrics.CheckKindPresence),
+			spaceID: events.SystemSpaceID, checkID: hostmetrics.CheckID(presence.Host.HostID, hostmetrics.CheckKindPresence),
 			name: title + " · 失联", success: true, reason: "主机在线",
 		}
 		agent := businessFreshnessItem{
-			spaceID: events.SystemSpaceID, checkID: hostmetrics.CheckID(presence.Host.AgentID, hostmetrics.CheckKindAgent),
+			spaceID: events.SystemSpaceID, checkID: hostmetrics.CheckID(presence.Host.HostID, hostmetrics.CheckKindAgent),
 			name: title + " · host-agent 停止上报", success: true, reason: "host-agent 正常上报",
 		}
 		switch presence.State {
@@ -160,10 +153,10 @@ func (h *hostChecks) items(ctx context.Context, overview monitorobservability.Ov
 		items = append(items, lost, agent)
 	}
 	for _, host := range overview.Hosts {
-		if !selected[host.AgentID] {
+		if !selected[host.HostID] {
 			continue
 		}
-		fresh := host.Status == "healthy" && host.LastSeenAt.After(h.evaluated[host.AgentID])
+		fresh := host.Status == "healthy" && host.LastSeenAt.After(h.evaluated[host.HostID])
 		values := map[string]struct {
 			value     float64
 			available bool
@@ -173,7 +166,7 @@ func (h *hostChecks) items(ctx context.Context, overview monitorobservability.Ov
 			hostmetrics.HostMetricFilesystemUsage: {host.FilesystemMaxPercent, host.DiskAvailable},
 		}
 		for _, metric := range hostmetrics.Metrics {
-			checkID := hostmetrics.CheckID(host.AgentID, metric)
+			checkID := hostmetrics.CheckID(host.HostID, metric)
 			current := values[metric]
 			if !fresh || !current.available {
 				frozen[events.SystemSpaceID+"\x00"+checkID] = true
@@ -186,7 +179,7 @@ func (h *hostChecks) items(ctx context.Context, overview monitorobservability.Ov
 			items = append(items, item)
 		}
 		if fresh {
-			sampled[host.AgentID] = host.LastSeenAt
+			sampled[host.HostID] = host.LastSeenAt
 		}
 	}
 	return items, frozen, sampled, nil
@@ -195,7 +188,7 @@ func (h *hostChecks) items(ctx context.Context, overview monitorobservability.Ov
 // hostMetricItem 判断一次采样的资源使用率。达到告警线算超限；已经在告警的，要回落到恢复线及以下才算恢复。
 func hostMetricItem(ctx context.Context, alerts *store.AlertRepository, host monitorobservability.HostStatus, metric string, value float64) (businessFreshnessItem, error) {
 	threshold, label := hostmetrics.MetricThreshold(metric), hostmetrics.MetricLabel(metric)
-	checkID := hostmetrics.CheckID(host.AgentID, metric)
+	checkID := hostmetrics.CheckID(host.HostID, metric)
 	percent := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) + "%" }
 	item := businessFreshnessItem{
 		spaceID: events.SystemSpaceID, checkID: checkID, name: "主机 " + hostTitle(host) + " · " + label,

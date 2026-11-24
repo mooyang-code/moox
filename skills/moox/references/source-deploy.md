@@ -41,7 +41,7 @@ $CLI setup status --file <moox.toml> --host <主机>
 ```
 
 - `--binary-dir` 里要有这次部署的每个组件的二进制和配套命令行（例如 `admin` 要 `moox-admin` 与 `moox-admin-cli`），缺了会报 `binary_missing` 并指出是哪个文件。
-  构建目标和组件基本同名：`host-gateway`、`admin`、`collector`、`factor-mgr`、`strategy` 目标同时产出对应的 `-cli`，`hostagent` 目标产出 `moox-host-agent` 与 `moox-host-agent-cli`，
+  构建目标和组件基本同名：`host-gateway`、`admin`、`collector`、`factor-mgr`、`strategy` 目标同时产出对应的 `-cli`，`hostagent` 目标产出 `moox-host-agent`，
   `storage` 目标产出两个 Storage 二进制，`storage-cli` 是独立目标，`archive-worker` 目标带上 `weed`。
 - 部署按二进制摘要和渲染出的配置判断变化：**只有变了的组件会重启**，没变的只核对在运行。结果里每个组件是 `started`、`restarted`、`unchanged` 或 `paused`（被 `setup stop` 停用的，只更新文件）。
 - 部署最后等这次装的组件就绪（本机 `/readyz`），到时限没就绪会列出来并返回失败：先看 `setup logs --host <主机> --component <组件> --journal`。

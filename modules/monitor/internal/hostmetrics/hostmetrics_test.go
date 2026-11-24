@@ -14,7 +14,7 @@ import (
 )
 
 func validHostMetric() *hostmetricpb.HostMetric {
-	return &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host", BootId: "boot", AgentVersion: "test", Snapshot: &hostmetricpb.HostSnapshot{
+	return &hostmetricpb.HostMetric{HostId: "control", Hostname: "host", BootId: "boot", AgentVersion: "test", Snapshot: &hostmetricpb.HostSnapshot{
 		Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 25},
 		Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
 	}}
@@ -24,7 +24,7 @@ func validHostMessage(t *testing.T) *eventpb.EventMessage {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.ObservabilityHostSnapshotReported, validHostMetric(), events.PublishOptions{EventID: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", OccurredAt: time.Now().UTC(), SpaceID: events.SystemSpaceID, SubjectID: validHostMetric().GetAgentId()})
+	encoded, err := registry.Encode(events.ObservabilityHostSnapshotReported, validHostMetric(), events.PublishOptions{EventID: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", OccurredAt: time.Now().UTC(), SpaceID: events.SystemSpaceID, SubjectID: validHostMetric().GetHostId()})
 	require.NoError(t, err)
 	return encoded.Message
 }
@@ -33,7 +33,7 @@ func TestValidateHostMetricContract(t *testing.T) {
 	message := validHostMessage(t)
 	metric, err := ValidateMessage(message)
 	require.NoError(t, err)
-	assert.Equal(t, message.GetSubjectId(), metric.GetAgentId())
+	assert.Equal(t, message.GetSubjectId(), metric.GetHostId())
 	message.SpaceId = "crypto"
 	assert.Error(t, func() error { _, err := ValidateMessage(message); return err }())
 }
@@ -56,7 +56,7 @@ func TestStorePersistsSnapshotLocally(t *testing.T) {
 	require.NotNil(t, agents[0].Snapshot)
 
 	occurred := message.GetOccurredAt().AsTime().UTC()
-	history, err := store.History(context.Background(), metric.GetAgentId(), occurred.Add(-time.Hour), occurred.Add(time.Hour), 0)
+	history, err := store.History(context.Background(), metric.GetHostId(), occurred.Add(-time.Hour), occurred.Add(time.Hour), 0)
 	require.NoError(t, err)
 	require.Len(t, history, 1)
 	assert.Equal(t, occurred.Truncate(time.Minute).Format(time.RFC3339Nano), history[0].ObservedAt)
@@ -90,11 +90,11 @@ func TestSampleStoreHistorySpansTheRangeAndPrunes(t *testing.T) {
 	for i := range 5 {
 		snapshot := &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 1, UsagePercent: float64(i)}, Memory: &hostmetricpb.MemoryMetric{},
 			TopProcesses: []*hostmetricpb.ProcessMetric{{Pid: 1, Name: "storage"}}, Collectors: []*hostmetricpb.CollectorStatus{{}}}
-		require.NoError(t, samples.Write(context.Background(), "agent", base.Add(time.Duration(i)*time.Minute+10*time.Second), snapshot))
+		require.NoError(t, samples.Write(context.Background(), "control", base.Add(time.Duration(i)*time.Minute+10*time.Second), snapshot))
 	}
-	require.NoError(t, samples.Write(context.Background(), "other", base, &hostmetricpb.HostSnapshot{}))
+	require.NoError(t, samples.Write(context.Background(), "storage", base, &hostmetricpb.HostSnapshot{}))
 
-	history, err := samples.History(context.Background(), "agent", base, base.Add(time.Hour), 3)
+	history, err := samples.History(context.Background(), "control", base, base.Add(time.Hour), 3)
 	require.NoError(t, err)
 	require.Len(t, history, 3)
 	for i, point := range history {
@@ -103,14 +103,14 @@ func TestSampleStoreHistorySpansTheRangeAndPrunes(t *testing.T) {
 		assert.Empty(t, point.Snapshot.GetTopProcesses())
 		assert.Empty(t, point.Snapshot.GetCollectors())
 	}
-	all, err := samples.History(context.Background(), "agent", base, base.Add(time.Hour), 0)
+	all, err := samples.History(context.Background(), "control", base, base.Add(time.Hour), 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 5, "不超过条数时原样返回")
 
 	deleted, err := samples.DeleteBefore(context.Background(), base.Add(2*time.Minute))
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, deleted, "agent 的前两分钟加上 other 的一行")
-	history, err = samples.History(context.Background(), "agent", base, base.Add(time.Hour), 0)
+	assert.EqualValues(t, 3, deleted, "control 的前两分钟加上 storage 的一行")
+	history, err = samples.History(context.Background(), "control", base, base.Add(time.Hour), 0)
 	require.NoError(t, err)
 	assert.Len(t, history, 3)
 }

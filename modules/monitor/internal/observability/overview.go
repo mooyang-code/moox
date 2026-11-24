@@ -47,7 +47,7 @@ type ServiceStatus struct {
 }
 
 type HostStatus struct {
-	HostID, AgentID, Hostname, Status, Reason       string
+	HostID, Hostname, Status, Reason                string
 	LastSeenAt                                      time.Time
 	CPUPercent, MemoryPercent, FilesystemMaxPercent float64
 	// 资源总量：CPU 逻辑核数、内存总量与已用量；磁盘是使用率最高的文件系统（与 FilesystemMaxPercent 同一个）。
@@ -467,7 +467,7 @@ func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, e
 		if !row.Reachable {
 			status, reason = "down", "agent unreachable"
 		}
-		item := HostStatus{HostID: row.HostID, AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
+		item := HostStatus{HostID: row.HostID, Hostname: row.Hostname, Status: status, Reason: reason}
 		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
 		if snapshot := row.Snapshot; snapshot != nil {
 			item.MetricsAvailable = true

@@ -4,7 +4,7 @@ import { formatBytes, toHostMetrics } from "./host-monitor";
 describe("host monitor wire conversion", () => {
   it("converts protobuf JSON uint64 strings into numeric metrics", () => {
     const metrics = toHostMetrics({
-      agent_id: "agent-1",
+      host_id: "control",
       last_seen_at: new Date().toISOString(),
       snapshot: {
         memory: {
@@ -53,13 +53,9 @@ describe("host monitor wire conversion", () => {
 });
 
 describe("host monitor identity mapping", () => {
-  it("keeps the agent id and the registered host id apart and never fakes an address", () => {
-    const metrics = toHostMetrics({ agent_id: "pwU2", host_id: "control", hostname: "VM-0-1" } as any);
-    expect(metrics).toMatchObject({ agent_id: "pwU2", host_id: "control", hostname: "VM-0-1" });
+  it("keeps the registered host id and never fakes an address", () => {
+    const metrics = toHostMetrics({ host_id: "control", hostname: "VM-0-1" });
+    expect(metrics).toMatchObject({ host_id: "control", hostname: "VM-0-1" });
     expect(metrics).not.toHaveProperty("address");
-  });
-
-  it("leaves host_id empty for an agent that has no registered host", () => {
-    expect(toHostMetrics({ agent_id: "stray" } as any)).toMatchObject({ agent_id: "stray", host_id: "", hostname: "" });
   });
 });

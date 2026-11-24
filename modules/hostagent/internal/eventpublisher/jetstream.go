@@ -18,13 +18,13 @@ type JetStreamPublisher struct {
 	publisher *events.Publisher
 }
 
-func New(ctx context.Context, configPath, agentID string) (*JetStreamPublisher, error) {
+func New(ctx context.Context, configPath, hostID string) (*JetStreamPublisher, error) {
 	eventBusConfig, err := config.LoadEventBus(configPath)
 	if err != nil {
 		return nil, err
 	}
 	client, err := jetstream.Connect(ctx, jetstream.Config{
-		URLs: eventBusConfig.URLs, Name: "moox-host-agent-" + agentID,
+		URLs: eventBusConfig.URLs, Name: "moox-host-agent-" + hostID,
 		Username: eventBusConfig.Username, Password: eventBusConfig.EventBusToken,
 		TLSCAFile: eventBusConfig.CAFile, ReconnectBufferBytes: 0,
 		ConnectTimeout: 20 * time.Second, MaxReconnects: -1,
@@ -55,7 +55,7 @@ func (p *JetStreamPublisher) PublishHostMetric(ctx context.Context, messageID st
 		return errors.New("host metric publisher is not initialized")
 	}
 	_, err := p.publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, metric, events.PublishOptions{
-		EventID: messageID, OccurredAt: occurredAt, SpaceID: events.SystemSpaceID, SubjectID: metric.GetAgentId(),
+		EventID: messageID, OccurredAt: occurredAt, SpaceID: events.SystemSpaceID, SubjectID: metric.GetHostId(),
 	})
 	return err
 }
