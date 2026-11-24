@@ -73,8 +73,9 @@ func TestAppliedStreamPlanKeepsChangingWhileWorkerIsOffline(t *testing.T) {
 	h.settle(true)
 	h.r.StreamOnline = func(context.Context) (bool, error) { return false, nil }
 	h.setSubjects(70)
+	before := h.lastRecord().ID
 	require.NoError(t, h.reconcile(h.r))
-	require.NotNil(t, h.open(), "已有计划的标的变更不等 collector-stream")
+	require.NotEqual(t, before, h.lastRecord().ID, "已有计划的标的变更不等 collector-stream")
 }
 
 func TestPullDatasetWithoutSCFRegionReportsTheReason(t *testing.T) {

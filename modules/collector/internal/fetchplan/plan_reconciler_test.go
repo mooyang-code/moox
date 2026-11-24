@@ -70,9 +70,9 @@ func TestPlanReconcilerFullLifecycle(t *testing.T) {
 	r := h.reconciler()
 	require.NoError(t, h.reconcile(r))
 
-	record := h.open()
-	require.NotNil(t, record, "the plan stays open until the window ends")
-	require.Equal(t, store.FetchPlanApplying, record.Status)
+	require.Nil(t, h.open(), "下发确认就生效，不等任何窗口")
+	record := h.lastRecord()
+	require.Equal(t, store.FetchPlanApplied, record.Status)
 	content := h.content(record)
 	change := content.Datasets["ds_spot|1m"]
 	require.Equal(t, time.Date(2026, 10, 12, 8, 37, 0, 0, time.UTC).Unix(), change.P)
@@ -92,14 +92,10 @@ func TestPlanReconcilerFullLifecycle(t *testing.T) {
 		require.NotContains(t, function.Info.Environment, "MOOX_CREATE_RESERVATION_ID")
 	}
 
-	// 窗口结束前什么都不做；之后收尾并标记已生效。
-	h.now = time.Unix(change.P, 0).Add(10 * time.Second)
-	require.NoError(t, h.reconcile(r))
-	require.NotNil(t, h.open())
+	require.Len(t, h.activity.entries, 2)
 	h.now = time.Unix(change.P, 0).Add(30 * time.Second)
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
-	require.Len(t, h.activity.entries, 2)
 
 	// 没有变化：不会产生新计划，也不改云上状态（云端校验另有测试，这里让它保持已完成）。
 	writes := len(h.scf.Writes())
@@ -118,22 +114,21 @@ func TestPlanReconcilerSubjectChangeUsesTwoCopies(t *testing.T) {
 
 	h.setSubjects(119)
 	require.NoError(t, h.reconcile(r))
-	record := h.open()
-	require.NotNil(t, record)
-	content := h.content(record)
+	require.Nil(t, h.open(), "下发确认就生效")
+	content := h.appliedContent()
 	change := content.Datasets["ds_spot|1m"]
 	require.Equal(t, []string{"S119-USDT"}, change.Removed)
-	require.NotEmpty(t, change.OldHash)
+	require.Len(t, change.Copies, 2)
 	require.Len(t, h.registrar.registered["ds_spot|1m"], 2)
 	for _, name := range h.cloudTimers() {
 		copies := h.cloudPlan(name).Datasets[0].Copies
 		require.Len(t, copies, 2, name)
 		require.Equal(t, change.P, copies[1].From)
 		require.Equal(t, change.Hash, copies[1].Hash)
-		require.Equal(t, change.OldHash, copies[0].Hash)
+		require.Equal(t, change.Copies[0].Hash, copies[0].Hash)
 	}
 
-	// 收尾：每个函数只留最新一份。
+	// 旧份过窗口后：下一份计划只裁剪，每个函数只留最新一份。
 	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
@@ -147,6 +142,10 @@ func TestPlanReconcilerSubjectChangeUsesTwoCopies(t *testing.T) {
 		}
 	}
 	require.Equal(t, 2, logged, "second plan writes a created and an applied entry")
+	for key := range h.activity.entries {
+		require.NotContains(t, key, ".3.", "只裁剪的计划不写活动日志")
+	}
+	require.Len(t, h.store.records, 3)
 }
 
 func TestPlanReconcilerRetriesOnlyFailedFunctions(t *testing.T) {
@@ -158,8 +157,8 @@ func TestPlanReconcilerRetriesOnlyFailedFunctions(t *testing.T) {
 	record := h.open()
 	progress, err := decodeFetchPlanProgress(record.Progress)
 	require.NoError(t, err)
-	require.True(t, progress.Transitioned[names[0]])
-	require.False(t, progress.Transitioned[names[1]])
+	require.True(t, progress.Pushed[names[0]])
+	require.False(t, progress.Pushed[names[1]])
 	require.Contains(t, record.LastError, names[1])
 	_, exists := h.cloudFunction(names[1])
 	require.False(t, exists)
@@ -181,33 +180,41 @@ func TestPlanReconcilerRestartContinuesWithoutNewPeriod(t *testing.T) {
 	require.Equal(t, store.FetchPlanPending, record.Status)
 	period := h.content(record).Datasets["ds_spot|1m"].P
 
-	// 重启：新的对账器实例，晚一些恢复，但没有登记成功过，P 仍然在未来则不重选。
+	// 重启：新的对账器实例，晚一些恢复，用同一个请求重放，内容不改。
 	h.now = h.now.Add(20 * time.Second)
 	restarted := h.reconciler()
 	require.NoError(t, h.reconcile(restarted))
-	record = h.open()
-	require.Equal(t, period, h.content(record).Datasets["ds_spot|1m"].P)
+	require.Nil(t, h.open())
+	require.Equal(t, period, h.content(h.lastRecord()).Datasets["ds_spot|1m"].P)
 	require.Equal(t, []int64{period}, h.registrar.registered["ds_spot|1m"])
 	require.Len(t, h.cloudTimers(), 2)
 }
 
-func TestPlanReconcilerReselectsPeriodOnlyOnExplicitStaleRejection(t *testing.T) {
+// 结果不明的登记下一轮用同一个请求重放；Storage 明确拒绝生效点时，这个数据集从计划里撤回（不在本计划里重选 P），
+// 计划里没有别的变化就删掉这条未生效记录，下一轮重新查表。
+func TestPlanReconcilerWithdrawsADatasetOnExplicitStaleRejection(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	h.registrar.failures = 1
 	r := h.reconciler()
 	require.Error(t, h.reconcile(r), "an unknown outcome is replayed, not reselected")
-	original := h.content(h.open()).Datasets["ds_spot|1m"].P
+	original := h.open()
 	require.Empty(t, h.registrar.registered)
 
-	// 保存计划后 Collector 宕机，恢复时 P 已过：Storage 明确拒绝，重选更晚的 P。
+	// 保存计划后 Collector 宕机，恢复时 Storage 明确拒绝：撤回，计划里没有别的变化，未生效记录被删掉。
 	h.now = h.now.Add(10 * time.Minute)
 	h.registrar.stale = 1
 	require.NoError(t, h.reconcile(r))
-	reselected := h.content(h.open()).Datasets["ds_spot|1m"].P
-	require.Greater(t, reselected, original)
+	require.Nil(t, h.open(), "撤回后什么变化都没有，删掉未生效记录")
+	require.Contains(t, r.Issue(), "已撤回")
 	require.Empty(t, h.registrar.registered)
+	require.Empty(t, h.cloudTimers(), "所有登记完成之前不下发")
 
+	// 下一轮重新查表，用新的生效点登记。
 	require.NoError(t, h.reconcile(r))
+	latest := h.lastRecord()
+	require.NotEqual(t, original.ID, latest.ID)
+	reselected := h.content(latest).Datasets["ds_spot|1m"].P
+	require.Greater(t, reselected, h.content(original).Datasets["ds_spot|1m"].P)
 	require.Equal(t, []int64{reselected}, h.registrar.registered["ds_spot|1m"])
 	for _, name := range h.cloudTimers() {
 		require.Equal(t, reselected, h.cloudPlan(name).Datasets[0].Copies[0].From)
@@ -218,11 +225,11 @@ func TestPlanReconcilerActivityLogFailureKeepsPlanOpenAndDoesNotDuplicate(t *tes
 	h := newPlanHarness(t, 60)
 	h.activity.failures = 3
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
-	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.Error(t, h.reconcile(r))
 	require.NotNil(t, h.open(), "the plan is not applied before both entries are written")
+	h.now = h.now.Add(20 * time.Second)
+	require.Error(t, h.reconcile(r))
+	require.NotNil(t, h.open())
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
 	require.Len(t, h.activity.entries, 2)
@@ -235,8 +242,8 @@ func TestPlanReconcilerRetiresFunctionsWhenSubjectsShrink(t *testing.T) {
 
 	h.setSubjects(40)
 	require.NoError(t, h.reconcile(r))
-	record := h.open()
-	content := h.content(record)
+	require.Nil(t, h.open())
+	content := h.appliedContent()
 	var retired []string
 	for name, function := range content.Functions {
 		if function.New == nil {
@@ -248,16 +255,20 @@ func TestPlanReconcilerRetiresFunctionsWhenSubjectsShrink(t *testing.T) {
 	for _, name := range retired {
 		transitional[name] = h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName]
 	}
+	for _, name := range retired {
+		require.True(t, h.timerEnabled(name), "旧份过窗口之前 %s 照常带旧份、定时器开着", name)
+		require.Len(t, h.cloudPlan(name).Datasets[0].Copies, 2)
+	}
 	h.now = time.Unix(content.Datasets["ds_spot|1m"].P, 0).Add(time.Minute)
 	ensures := h.cloud.countOps("ensure", "")
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
 	for _, name := range retired {
 		require.False(t, h.timerEnabled(name), "%s must be disabled after the window", name)
-		require.Equal(t, transitional[name], h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName], "退役的函数保留过渡环境")
+		require.Equal(t, transitional[name], h.mustFunction(name).Info.Environment[marketfetch.PlanEnvName], "退役的函数保留原来的环境")
 		require.Equal(t, 1, h.cloud.countOps("timer", name), "退役只停定时器")
 	}
-	require.Equal(t, ensures+1, h.cloud.countOps("ensure", ""), "收尾只给留下的那个函数下发最终计划")
+	require.Equal(t, ensures+1, h.cloud.countOps("ensure", ""), "裁剪只给留下的那个函数下发一次")
 }
 
 func TestPlanReconcilerKeepsStateWhenEnabledTasksHaveNoSubjects(t *testing.T) {
@@ -369,8 +380,8 @@ func TestPlanReconcilerCreateFailureDoesNotBlockExistingFunctions(t *testing.T) 
 	require.Error(t, h.reconcile(r))
 	progress, err := decodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.Len(t, progress.Transitioned, 3, "the three existing functions still receive their transitional environment")
-	require.False(t, progress.Transitioned[failing])
+	require.Len(t, progress.Pushed, 3, "the three existing functions still receive their new target")
+	require.False(t, progress.Pushed[failing])
 	_, exists := h.cloudFunction(failing)
 	require.False(t, exists)
 	recover()
@@ -384,7 +395,7 @@ func TestPlanReconcilerRetiredFunctionsGetAValidCronWhenDisabled(t *testing.T) {
 	h.applyFirstPlan(r)
 	h.setSubjects(40)
 	require.NoError(t, h.reconcile(r))
-	p := h.content(h.open()).Datasets["ds_spot|1m"].P
+	p := h.content(h.lastRecord()).Datasets["ds_spot|1m"].P
 	h.now = time.Unix(p, 0).Add(time.Minute)
 	require.NoError(t, h.reconcile(r), "retiring only stops the timer")
 	require.Nil(t, h.open())
@@ -420,19 +431,21 @@ func TestPlanReconcilerRecreatesMissingFunctionsAndDetectsEntryDrift(t *testing.
 	}
 }
 
-func TestTransitionalPlanDropsRemovedSymbolExceptions(t *testing.T) {
+func TestComposeTargetDropsRemovedSymbolExceptions(t *testing.T) {
 	old := &marketfetch.Plan{V: 1, Market: marketfetch.PlanMarket{MarketID: "crypto", Provider: "binance", SourceID: "s", MarketType: "spot"}, Fetch: marketfetch.PlanFetch{Concurrency: 5},
 		SymbolExceptions: map[string]string{"1000SHIB-USDT": "1000SHIBUSDT"},
 		Datasets:         []marketfetch.PlanDataset{{DatasetID: "d", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{From: 100, Hash: "h", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "1000SHIB-USDT", Index: 0}, {ID: "BTC-USDT", Index: 1}}}}}}}
 	next := &marketfetch.Plan{V: 1, Market: old.Market, Fetch: old.Fetch,
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "d", Frequency: "1m", LatenessS: 15, Copies: []marketfetch.PlanCopy{{Hash: "h2", Count: 2, Subjects: []marketfetch.PlanSubject{{ID: "1000SHIB-USDT", Index: 0}, {ID: "BTC-USDT", Index: 1}}}}}}}
-	content := &FetchPlanContent{Datasets: map[string]*PlanDatasetChange{"d|1m": {Changed: true, HashChanged: true, P: 200, PlanDatasetState: PlanDatasetState{DatasetID: "d", Frequency: "1m", Hash: "h2", Count: 2}}}}
+	content := &FetchPlanContent{Datasets: map[string]*PlanDataset{"d|1m": {Action: PlanActionAppend, P: 200, PlanDatasetState: PlanDatasetState{DatasetID: "d", Frequency: "1m", Hash: "h2", Count: 2},
+		Copies: []DatasetCopy{{From: 100, Hash: "h", Count: 2}, {From: 200, Hash: "h2", Count: 2}}}}}
 	function := &PlanFunctionChange{Name: "f", Old: old, New: next}
-	transitional := content.TransitionalPlan(function)
-	require.Empty(t, transitional.SymbolExceptions, "an exception that was removed from the new plan must not survive")
+	target := content.composeTarget(function)
+	require.Len(t, findPlanDataset(target, "d|1m").Copies, 2)
+	require.Empty(t, target.SymbolExceptions, "an exception that was removed from the new plan must not survive")
 
 	next.SymbolExceptions = map[string]string{"1000SHIB-USDT": "1000SHIBUSDT"}
-	require.Equal(t, "1000SHIBUSDT", content.TransitionalPlan(function).SymbolExceptions["1000SHIB-USDT"])
+	require.Equal(t, "1000SHIBUSDT", content.composeTarget(function).SymbolExceptions["1000SHIB-USDT"])
 }
 
 func TestBuildDesiredStateRejectsMarketTypeClash(t *testing.T) {
@@ -448,7 +461,7 @@ func TestPlanLeadIsLongerWhenFunctionsMustBeCreated(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	require.NoError(t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	change := h.content(h.lastRecord()).Datasets["ds_spot|1m"]
 	require.GreaterOrEqual(t, change.P-h.now.Unix(), int64(planLeadTimeWithCreate/time.Second))
 }
 
@@ -628,7 +641,7 @@ func TestInFlightPlanJobsAlsoBlockAuxiliaryChanges(t *testing.T) {
 		function.Info.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "tampered"
 	})
 	release := make(chan struct{})
-	_, err := r.ops().start(opKeyOf(names[0]), planOpKey(99, planStageTransition), true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
+	_, err := r.ops().start(opKeyOf(names[0]), planOpKey(99), true, func(ctx context.Context, _ *functionOp) error { <-release; return nil })
 	require.NoError(t, err)
 	h.now = h.now.Add(2 * time.Hour)
 	ensures := h.cloud.countOps("ensure", names[0])
@@ -724,8 +737,10 @@ func TestDisableAllDoesNotTrustAReadbackTakenBeforeInFlightJobsSettle(t *testing
 func TestReenableAfterDisableRepushesAnUnfinishedPlan(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
-	require.NotNil(t, h.open(), "计划在等待生效边界，尚未收尾")
+	// 生效日志写不进去：计划下发完也留在未生效状态。
+	h.activity.failures = 1000
+	_ = h.reconcile(r)
+	require.NotNil(t, h.open(), "计划尚未生效")
 	for _, name := range h.cloudTimers() {
 		require.True(t, h.timerEnabled(name), name)
 	}
@@ -738,9 +753,10 @@ func TestReenableAfterDisableRepushesAnUnfinishedPlan(t *testing.T) {
 	}
 	progress, err := DecodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.Empty(t, progress.Transitioned, "停用后下发确认作废")
+	require.Empty(t, progress.Pushed, "停用后下发确认作废")
 
 	// 重新启用（恢复时空间协程用新的对账器）：原计划的下发确认已作废，函数的定时器被重新打开。
+	h.activity.failures = 0
 	resumed := h.reconciler()
 	require.NoError(t, h.reconcile(resumed))
 	for _, name := range h.cloudTimers() {
@@ -751,11 +767,12 @@ func TestReenableAfterDisableRepushesAnUnfinishedPlan(t *testing.T) {
 func TestDisableAllInvalidatesConfirmationsBeforeSubmittingDisables(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
-	require.NoError(t, h.reconcile(r))
+	h.activity.failures = 1000
+	_ = h.reconcile(r)
 	require.NotNil(t, h.open())
 	before, err := DecodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.NotEmpty(t, before.Transitioned)
+	require.NotEmpty(t, before.Pushed)
 
 	// 停用定时器时失败（进程崩溃的等价情形）：确认位已经先持久化作废，重启后的对账器重新启用就会重推。
 	names := h.cloudTimers()
@@ -764,10 +781,11 @@ func TestDisableAllInvalidatesConfirmationsBeforeSubmittingDisables(t *testing.T
 	require.Error(t, err)
 	after, err := DecodeFetchPlanProgress(h.open().Progress)
 	require.NoError(t, err)
-	require.Empty(t, after.Transitioned)
-	require.Empty(t, after.Finalized)
+	require.Empty(t, after.Pushed)
+	require.False(t, after.StreamPushed)
 
 	recover()
+	h.activity.failures = 0
 	require.NoError(t, h.reconcile(h.reconciler()))
 	for _, name := range names {
 		require.True(t, h.timerEnabled(name), name)
@@ -782,7 +800,7 @@ func TestPlanReconcilerResolvesTheLatestPackageByNameAndUpgradesWhenANewOneIsUpl
 	require.Equal(t, "pkg-v1", r.packageID())
 
 	// 上传了新版本：超过刷新间隔后自动解析到新包，落后的函数随之升级，不需要改配置。
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	change := h.content(h.lastRecord()).Datasets["ds_spot|1m"]
 	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
 	h.cloud.setPackages("pkg-v1", "pkg-v2")

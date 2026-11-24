@@ -236,7 +236,7 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	desired, err := fetchplan.BuildDesiredState(hkE2EPlanOptions(), []fetchplan.TaskGroup{hkE2EGroup("00700.XHKG")}, nil)
 	require.NoError(t, err)
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime("2026-11-10 09:30:00").Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: hkTime("2026-11-10 09:30:00")})
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)

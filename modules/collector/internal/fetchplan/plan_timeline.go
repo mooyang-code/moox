@@ -1,56 +1,46 @@
 package fetchplan
 
 import (
-	"sort"
-
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // 标的时间线（t_collector_series_timeline）只在三处写入，都与采集计划记录在同一个事务里：
 //
-//	计划建立时：不再采集的数据集（Gone）写一行空序列，从它的生效周期起停止；只有交易所符号变了的数据集（SymbolsChanged）
-//	写一行同样的序列、新的符号，从生效周期起生效（planCreatedTimeline）；
-//	Storage 确认登记后：标的集合变了的数据集写一行新序列（连同符号），从生效周期起生效（seriesTimelineEntry）；
+//	计划建立时：不用登记的行——只改符号（symbols）、停止行、hash 没变的原地替换与加一份（planCreatedTimeline）；
+//	Storage 确认登记后：要登记的数据集从 P 起的新序列（连同符号，seriesTimelineEntry）；
 //	重新登记时：整个空间的行全部删掉（ClearRegisteredSnapshots）。
 //
-// 未生效的计划不会被撤销或被新计划取代：一个空间同时只有一份未生效的计划（唯一索引，Create 返回 ErrFetchPlanOpen），
-// 对账遇到它只会继续推进（advance），没有删计划记录的路径，重新登记也要求没有未生效的计划。
-// 计划里唯一会改的是登记之前因生效周期过期而重选的 P，那时这个数据集还没有写过时间线；只有符号变化的数据集不登记，P 不会重选。
-// 所以登记后就写、不等生效，与改造前“已登记或已生效的计划都算”的重放结果一致，也不会留下没生效的行。
-// 下一份计划要等这份过了窗口结束（每个变更数据集的 P 加允许迟到）才建，选出的 P 一定更晚，同一生效点不会重复写入。
+// 写不写行只看内容：新内容与时间线在这个生效点上的有效内容（最后一行）相比，序列 hash（停止也算一种内容）和符号都没变，
+// 就不写（只改分配的原地替换与加一份因此不写）。写了行的数据集，计划把 TimelineFrom 记成这一行的生效点。
+//
+// 单调性：同一数据集同一频率的新行生效点从不早于已有的最后一行。原地替换写在头份的 From，决策表要求它不早于 TimelineFrom；
+// 只改符号与加一份写在 Q = max(P_new, TimelineFrom)。同一生效点只覆盖最后一行（store 先删后插），BuildTimeline 的重放
+// 不会出现结束早于开始的段；这一点与每轮的提前量取多少无关。
+// 未生效计划里数据集的内容一旦发出过登记请求就不再改，只能撤回（撤回的数据集还没写过行）或推进，所以登记后就写、不等生效。
 
-// seriesTimelineEntry 是序列或符号变化的数据集在时间线上的一行：从 P 起应有 change.Series，交易所符号是 change.Symbols。
-func seriesTimelineEntry(spaceID string, change *PlanDatasetChange) store.SeriesTimelineEntry {
-	symbols := make(map[string]string, len(change.Symbols))
-	for subject, symbol := range change.Symbols {
+// seriesTimelineEntry 是数据集在时间线上从 P 起的一行：停止份是空序列，其余是 dataset.Series 与交易所符号。
+func seriesTimelineEntry(spaceID string, dataset *PlanDataset) store.SeriesTimelineEntry {
+	entry := store.SeriesTimelineEntry{SpaceID: spaceID, DatasetID: dataset.DatasetID, Frequency: dataset.Frequency, EffectiveFrom: dataset.P}
+	if head := dataset.Head(); head != nil && head.Stop {
+		return entry
+	}
+	symbols := make(map[string]string, len(dataset.Symbols))
+	for subject, symbol := range dataset.Symbols {
 		symbols[subject] = symbol
 	}
-	return store.SeriesTimelineEntry{
-		SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P,
-		SeriesHash: change.Hash, Series: append([]seriesset.Series(nil), change.Series...), Symbols: symbols,
-		LatenessS: change.LatenessS, OutputFields: append([]string(nil), change.OutputFields...),
-	}
+	entry.SeriesHash, entry.Series, entry.Symbols = dataset.Hash, append([]seriesset.Series(nil), dataset.Series...), symbols
+	entry.LatenessS, entry.OutputFields = dataset.LatenessS, append([]string(nil), dataset.OutputFields...)
+	return entry
 }
 
-// planCreatedTimeline 返回这份计划一建立就成立的时间线行，按“数据集|频率”排序：不再采集的数据集的停止行（空序列），
-// 与只有交易所符号变了的数据集从 P 起的新符号行。
+// planCreatedTimeline 返回这份计划一建立就成立的时间线行（不用登记的），按“数据集|频率”排序。
 func (c *FetchPlanContent) planCreatedTimeline(spaceID string) []store.SeriesTimelineEntry {
-	keys := make([]string, 0, len(c.Datasets))
-	for key, change := range c.Datasets {
-		if change.Changed && change.P > 0 && (change.Gone || change.SymbolsChanged) {
-			keys = append(keys, key)
+	var entries []store.SeriesTimelineEntry
+	for _, key := range c.sortedDatasetKeys() {
+		if dataset := c.Datasets[key]; dataset.Timeline && !dataset.Register {
+			entries = append(entries, seriesTimelineEntry(spaceID, dataset))
 		}
-	}
-	sort.Strings(keys)
-	entries := make([]store.SeriesTimelineEntry, 0, len(keys))
-	for _, key := range keys {
-		change := c.Datasets[key]
-		if change.Gone {
-			entries = append(entries, store.SeriesTimelineEntry{SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P})
-			continue
-		}
-		entries = append(entries, seriesTimelineEntry(spaceID, change))
 	}
 	return entries
 }

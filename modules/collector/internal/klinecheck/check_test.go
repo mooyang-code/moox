@@ -43,9 +43,8 @@ func (f fakePlans) ListBySpace(context.Context, string) ([]store.SeriesTimelineE
 }
 
 // timelineRows 按对账器写时间线的规则，把测试里构造的计划记录换成时间线行（按记录先后）：
-// 不再采集的数据集（Gone）在计划建立时写一行空序列；标的集合变了的数据集在 Storage 确认登记后
-// （进度里已登记，或计划已生效）写一行序列。这只是检查类测试的夹具，真实写入路径与旧算法的等价
-// 由 fetchplan 的 TestLegacyTimelineMatchesBuildTimeline 驱动对账器证明。
+// 本计划要写行（Timeline）的数据集，不用登记的在计划建立时写，要登记的在 Storage 确认登记后（进度里已登记，或计划已生效）写；
+// 头份是停止份的写空序列。这只是检查类测试的夹具，真实写入路径由 fetchplan 的对账测试驱动。
 func timelineRows(records []*store.FetchPlanRecord) []store.SeriesTimelineEntry {
 	var entries []store.SeriesTimelineEntry
 	for _, record := range records {
@@ -63,26 +62,25 @@ func timelineRows(records []*store.FetchPlanRecord) []store.SeriesTimelineEntry 
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			change := content.Datasets[key]
-			if !change.Changed || change.P <= 0 {
+			dataset := content.Datasets[key]
+			if !dataset.Timeline || dataset.P <= 0 || (dataset.Register && record.Status != store.FetchPlanApplied && !progress.Registered[key]) {
 				continue
 			}
-			entry := store.SeriesTimelineEntry{SpaceID: record.SpaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P}
-			symbols := change.Symbols
+			entry := store.SeriesTimelineEntry{SpaceID: record.SpaceID, DatasetID: dataset.DatasetID, Frequency: dataset.Frequency, EffectiveFrom: dataset.P}
+			if head := dataset.Head(); head != nil && head.Stop {
+				entries = append(entries, entry)
+				continue
+			}
+			symbols := dataset.Symbols
 			if symbols == nil {
 				// 手写的计划夹具没有符号：按函数计划的默认规则（去掉连字符）补上。
 				symbols = map[string]string{}
-				for _, series := range change.Series {
+				for _, series := range dataset.Series {
 					symbols[series.SubjectID] = strings.ReplaceAll(series.SubjectID, "-", "")
 				}
 			}
-			switch {
-			case change.Gone:
-				entries = append(entries, entry)
-			case change.SymbolsChanged || (change.HashChanged && (record.Status == store.FetchPlanApplied || progress.Registered[key])):
-				entry.SeriesHash, entry.Series, entry.Symbols, entry.LatenessS, entry.OutputFields = change.Hash, change.Series, symbols, change.LatenessS, change.OutputFields
-				entries = append(entries, entry)
-			}
+			entry.SeriesHash, entry.Series, entry.Symbols, entry.LatenessS, entry.OutputFields = dataset.Hash, dataset.Series, symbols, dataset.LatenessS, dataset.OutputFields
+			entries = append(entries, entry)
 		}
 	}
 	return entries
@@ -148,12 +146,14 @@ func record(t *testing.T, id int64, status string, p int64, subjects ...string) 
 // recordFor 构造只含一个“数据集|1m”变更的计划记录。hash 和真实计划一样非空。
 func recordFor(t *testing.T, id int64, dataset, status string, p int64, subjects ...string) *store.FetchPlanRecord {
 	t.Helper()
-	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
-	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: p}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDataset{Action: fetchplan.PlanActionAppend, Register: true, Timeline: true, P: p}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = dataset, "1m", 15, "hash:"+strings.Join(subjects, ",")
 	for _, subject := range subjects {
 		change.Series = append(change.Series, seriesOf(subject))
 	}
+	change.Count = uint32(len(subjects))
+	change.Copies = []fetchplan.DatasetCopy{{From: p, Hash: change.Hash, Count: change.Count, LatenessS: change.LatenessS}}
 	content.Datasets[dataset+"|1m"] = change
 	return &store.FetchPlanRecord{ID: id, SpaceID: "crypto", Status: status, Plan: mustJSON(content), Progress: "{}"}
 }
@@ -381,8 +381,8 @@ func markMissing(rows *fakeRows, subject string, from, to time.Time) {
 // goneRecord 构造把数据集移出采集计划的记录（任务删除后对账产生）。
 func goneRecord(t *testing.T, id int64, dataset string, p int64) *store.FetchPlanRecord {
 	t.Helper()
-	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
-	change := &fetchplan.PlanDatasetChange{Changed: true, Gone: true, P: p}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDataset{Action: fetchplan.PlanActionAppend, Timeline: true, P: p, Copies: []fetchplan.DatasetCopy{{From: p, Stop: true}}}
 	change.DatasetID, change.Frequency = dataset, "1m"
 	content.Datasets[dataset+"|1m"] = change
 	return &store.FetchPlanRecord{ID: id, SpaceID: "crypto", Status: store.FetchPlanApplied, Plan: mustJSON(content), Progress: "{}"}

@@ -77,8 +77,10 @@ type PlanDatasetState struct {
 	// Ingest 是数据集所在的执行端（scf、stream、local），空表示 scf。
 	Ingest string `json:"ingest,omitempty"`
 	// Symbols 是每个标的的交易所符号（标的 → 符号，与函数计划的 ExchangeSymbol 一致）。不进 Hash；
-	// 变化时数据集同样要选生效周期，并在标的时间线上写一行，补采按时间线取改名前的旧符号。
+	// 变化时数据集在标的时间线上写一行，补采按时间线取改名前的旧符号。
 	Symbols map[string]string `json:"symbols,omitempty"`
+	// Stopped 表示已生效状态里这个数据集的头份是停止份（不再采集，生效点还没到）；期望状态里总是 false。
+	Stopped bool `json:"stopped,omitempty"`
 }
 
 // sameSymbols 比较两份交易所符号映射。

@@ -101,6 +101,23 @@ func (s *memPlanStore) Update(ctx context.Context, id int64, status, progress, l
 	return nil
 }
 
+// DeleteOpen 删掉一份 pending 的未生效计划（记录留在切片里、空间清空，编号仍按下标）。
+func (s *memPlanStore) DeleteOpen(ctx context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shadow != nil {
+		if err := s.shadow.DeleteOpen(ctx, id); err != nil {
+			return err
+		}
+	}
+	record := s.records[id-1]
+	if record.Status != store.FetchPlanPending {
+		return fmt.Errorf("fetch plan %d is %s", id, record.Status)
+	}
+	record.SpaceID = ""
+	return nil
+}
+
 func (s *memPlanStore) SavePlan(ctx context.Context, id int64, plan string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,11 +130,16 @@ func (s *memPlanStore) SavePlan(ctx context.Context, id int64, plan string) erro
 	return nil
 }
 
+// fakeRegistrar 按 Storage 的真实规则（pebble.RegisterSeriesSnapshot）维护每个“数据集|频率”的生效表：
+// 新生效点必须严格晚于最后一条并且在未来；同 P 同 hash 是重放；同 P 不同 hash 只在它是最后一条、仍在未来时覆盖；其余返回 effective_from_stale。
+// clock 为空时不检查“在未来”。stale、failures 是注入的失败次数。
 type fakeRegistrar struct {
 	stale      int
 	failures   int
 	registered map[string][]int64
 	calls      int
+	clock      func() time.Time
+	effective  map[string]map[int64]string
 }
 
 func (f *fakeRegistrar) RegisterSeriesSnapshot(_ context.Context, _, datasetID, frequency string, series []seriesset.Series, effectiveFrom int64) (marketstorage.SnapshotRegistration, error) {
@@ -134,12 +156,46 @@ func (f *fakeRegistrar) RegisterSeriesSnapshot(_ context.Context, _, datasetID, 
 	if err != nil {
 		return marketstorage.SnapshotRegistration{}, err
 	}
+	key := datasetID + "|" + frequency
+	if f.effective == nil {
+		f.effective = map[string]map[int64]string{}
+	}
+	entries := f.effective[key]
+	if entries == nil {
+		entries = map[int64]string{}
+		f.effective[key] = entries
+	}
+	last, hasLast := int64(0), false
+	for from := range entries {
+		if !hasLast || from > last {
+			last, hasLast = from, true
+		}
+	}
+	future := f.clock == nil || effectiveFrom > f.clock().Unix()
+	if existing, found := entries[effectiveFrom]; found {
+		if existing != set.Hash && (last != effectiveFrom || !future) {
+			return marketstorage.SnapshotRegistration{}, marketstorage.ErrStaleEffectiveFrom
+		}
+	} else if (hasLast && effectiveFrom <= last) || !future {
+		return marketstorage.SnapshotRegistration{}, marketstorage.ErrStaleEffectiveFrom
+	}
+	entries[effectiveFrom] = set.Hash
 	if f.registered == nil {
 		f.registered = map[string][]int64{}
 	}
-	key := datasetID + "|" + frequency
 	f.registered[key] = append(f.registered[key], effectiveFrom)
 	return marketstorage.SnapshotRegistration{Hash: set.Hash, Count: uint32(len(set.Series))}, nil
+}
+
+// effectiveHash 返回生效表在 at 上的有效 hash（起点不晚于 at 的最后一条）。
+func (f *fakeRegistrar) effectiveHash(key string, at int64) (string, bool) {
+	best, hash, found := int64(0), "", false
+	for from, value := range f.effective[key] {
+		if from <= at && (!found || from > best) {
+			best, hash, found = from, value, true
+		}
+	}
+	return hash, found
 }
 
 type fakeActivity struct {
@@ -163,9 +219,16 @@ func (a *fakeActivity) AppendActivityLogs(_ context.Context, _ string, entries [
 	return nil
 }
 
-type fakeLateness struct{ values map[string]int }
+// fakeLateness 记下每个数据集最后设的截止；failFor 里的数据集一律失败。
+type fakeLateness struct {
+	values  map[string]int
+	failFor map[string]bool
+}
 
 func (l *fakeLateness) EnsureAllowedLateness(_ context.Context, _, datasetID string, seconds int) error {
+	if l.failFor[datasetID] {
+		return errors.New("storage unavailable")
+	}
 	if l.values == nil {
 		l.values = map[string]int{}
 	}
@@ -393,6 +456,7 @@ func newPlanHarness(t *testing.T, subjectCount int) *planHarness {
 		symbols: &planSymbolsStub{}, now: time.Date(2026, 10, 12, 8, 30, 20, 0, time.UTC), scf: cloudtest.NewSCF(),
 	}
 	h.cloud = newTestCloud(t, h.scf, func() time.Time { return h.now })
+	h.registrar.clock = func() time.Time { return h.now }
 	h.setSubjects(subjectCount)
 	h.tasks = &planTasksStub{tasks: []domain.CollectionTask{{
 		SpaceID: "crypto", TaskID: "spot-1m", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
@@ -445,14 +509,54 @@ func (h *planHarness) content(record *store.FetchPlanRecord) *FetchPlanContent {
 	return content
 }
 
-// applyFirstPlan 跑完第一份计划（建函数、过渡、收尾），断言计划已生效。
+// applyFirstPlan 跑完第一份计划（建函数、登记、下发确认即生效），把时间推到生效点之后一分钟，断言没有未生效的计划。
 func (h *planHarness) applyFirstPlan(r *PlanReconciler) {
 	h.t.Helper()
 	require.NoError(h.t, h.reconcile(r))
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	require.Nil(h.t, h.open(), "下发确认就生效")
+	change := h.appliedContent().Datasets["ds_spot|1m"]
 	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.NoError(h.t, h.reconcile(r))
 	require.Nil(h.t, h.open())
+}
+
+// converged 判断已生效状态里每个数据集只有一份、不是停止份，并且已到生效点。
+func (h *planHarness) converged() bool {
+	record, err := h.store.LatestApplied(context.Background(), "crypto")
+	require.NoError(h.t, err)
+	if record == nil {
+		return false
+	}
+	for _, dataset := range h.content(record).Datasets {
+		if len(dataset.Copies) != 1 || dataset.Copies[0].Stop || dataset.Copies[0].From > h.now.Unix() {
+			return false
+		}
+	}
+	return true
+}
+
+// lastRecord 返回最近建的一份计划（不论是否已生效）。
+func (h *planHarness) lastRecord() *store.FetchPlanRecord {
+	h.t.Helper()
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	for i := len(h.store.records) - 1; i >= 0; i-- {
+		if h.store.records[i].SpaceID == "crypto" {
+			clone := *h.store.records[i]
+			return &clone
+		}
+	}
+	h.t.Fatal("还没有计划")
+	return nil
+}
+
+// appliedContent 返回最近一份已生效计划的内容。
+func (h *planHarness) appliedContent() *FetchPlanContent {
+	h.t.Helper()
+	record, err := h.store.LatestApplied(context.Background(), "crypto")
+	require.NoError(h.t, err)
+	require.NotNil(h.t, record)
+	return h.content(record)
 }
 
 // scfRef 返回函数在假腾讯云里的位置：地域取函数名的倒数第二段，命名空间按 NamespaceFor（测试里不分片）。

@@ -180,27 +180,21 @@ func planFunctions(source *store.FetchPlanRecord) ([]*pb.CollectorFunctionStatus
 	var out []*pb.CollectorFunctionStatus
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		plan := content.TransitionalPlan(function)
-		if plan == nil {
-			continue
-		}
 		executor := function.Executor
 		if executor == "" {
 			executor = marketfetch.PlanExecutorSCF
 		}
-		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: content.TransitionalCron(function), Executor: executor}
+		// 未生效计划里 Push 且未确认的是 pending；Target 为空的是退役（已生效计划里不再列出）。
+		plan := function.Target
+		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: function.Cron, Executor: executor}
 		switch {
-		case function.New == nil:
-			if appliedPlan {
+		case plan == nil:
+			if appliedPlan || function.Old == nil {
 				continue
 			}
-			state.State = "retiring"
-		case !appliedPlan && function.Push && !progress.Finalized[name]:
+			plan, state.State = function.Old, "retiring"
+		case !appliedPlan && function.Push && !progress.Pushed[name]:
 			state.State = "pending"
-		}
-		if final := content.FinalPlan(function); appliedPlan && final != nil {
-			plan = final
-			state.Cron = content.FinalCron(function)
 		}
 		for _, dataset := range plan.Datasets {
 			if len(dataset.Copies) == 0 {
