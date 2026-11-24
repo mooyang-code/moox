@@ -670,8 +670,11 @@ components:
             read_only: true
             callers: [strategy]
           - name: CreateFactor
+          # 整批导入因子库与清孤立结果数据集只给命令行（管理台没有对应页面）。
           - name: ImportFactorCatalog
+            operators: [moox-cli]
           - name: PurgeResultDataset
+            operators: [moox-cli]
           - name: UpdateFactor
           - name: DeleteFactor
           - name: GetFactor
