@@ -35,7 +35,7 @@ func TestPoolReplaySnapshotsCurrentMembers(t *testing.T) {
 	h.createStrategy("member_swap", swapMemberDSL)
 	h.createStrategy("pool_1", poolDefDSL)
 	h.createStrategy("plain", demoDSL)
-	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: poolReplayTasks, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: poolReplayTasks, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 	if members := replayMembers(t, h, rsp.GetReplay().GetReplayId()); members["a"] != spotMemberDSL || members["b"] != swapMemberDSL {
 		t.Fatalf("成员快照不符：%v", members)
@@ -49,7 +49,7 @@ func TestPoolReplaySnapshotsCurrentMembers(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].MembersJSON != "" {
 		t.Fatalf("列表不带成员快照：%+v %v", listed, err)
 	}
-	plain, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "plain", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	plain, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "plain", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireOK(t, int32(plain.GetRetInfo().GetCode()), plain.GetRetInfo().GetMsg())
 	if stored, _ := h.service.Store.GetReplay(h.ctx, plain.GetReplay().GetReplayId()); stored.MembersJSON != "" {
 		t.Fatalf("单策略回放不写成员快照：%q", stored.MembersJSON)
@@ -68,12 +68,12 @@ func TestPoolReplayFromInstanceUsesSessionMembers(t *testing.T) {
 	if rsp, _ := h.service.UpdateStrategy(h.ctx, &strategypb.UpdateStrategyReq{StrategyId: "member_spot", DslYaml: changed}); rsp.GetRetInfo().GetCode() != 0 {
 		t.Fatal(rsp.GetRetInfo().GetMsg())
 	}
-	fromInstance, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "p1", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	fromInstance, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "p1", StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireOK(t, int32(fromInstance.GetRetInfo().GetCode()), fromInstance.GetRetInfo().GetMsg())
 	if members := replayMembers(t, h, fromInstance.GetReplay().GetReplayId()); members["a"] != spotMemberDSL {
 		t.Fatalf("从实例发起应回放会话里的成员版本：%q", members["a"])
 	}
-	fromDefinition, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: poolReplayTasks, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	fromDefinition, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: poolReplayTasks, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireOK(t, int32(fromDefinition.GetRetInfo().GetCode()), fromDefinition.GetRetInfo().GetMsg())
 	if members := replayMembers(t, h, fromDefinition.GetReplay().GetReplayId()); members["a"] != changed {
 		t.Fatalf("从定义发起应回放成员的当前定义：%q", members["a"])
@@ -108,7 +108,7 @@ func TestPoolReplayStartMustEqualDriftStart(t *testing.T) {
 	h.createStrategy("drift_start", driftPoolDSL+"    start: \"2026-09-01T05:00:00Z\"\n")
 	h.createStrategy("drift_initial", driftPoolDSL+"    initial: {at: \"2026-09-01T05:00:00Z\", ratios: {a: 0.5, b: 0.5}}\n")
 	start := func(strategyID, from string) *strategypb.StartReplayRsp {
-		rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: strategyID, FactorTasks: poolReplayTasks, StartTime: from, EndTime: "2026-09-02T00:00:00Z"})
+		rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: strategyID, FactorTasks: poolReplayTasks, StartTime: ms(from), EndTime: ms("2026-09-02T00:00:00Z")})
 		return rsp
 	}
 	free := start("drift_free", "2026-09-01T03:00:00Z")
@@ -134,11 +134,11 @@ func TestPoolReplayRejectsInvalidRequests(t *testing.T) {
 	h.createStrategy("member_spot", spotMemberDSL)
 	h.createStrategy("member_swap", swapMemberDSL)
 	h.createStrategy("pool_1", poolDefDSL)
-	ghost, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: strings.Replace(poolDefDSL, "member_swap", "ghost", 1), FactorTasks: poolReplayTasks, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	ghost, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: strings.Replace(poolDefDSL, "member_swap", "ghost", 1), FactorTasks: poolReplayTasks, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireFail(t, int32(ghost.GetRetInfo().GetCode()), ghost.GetRetInfo().GetMsg(), "ghost 不存在")
-	oneTask, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	oneTask, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireFail(t, int32(oneTask.GetRetInfo().GetCode()), oneTask.GetRetInfo().GetMsg(), "策略池的成员需要绑定")
-	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: poolReplayTasks, StartTime: "2025-12-01", EndTime: "2026-01-02"})
+	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: poolReplayTasks, StartTime: ms("2025-12-01"), EndTime: ms("2026-01-02")})
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "太早")
 	listed, _, err := h.service.Store.ListReplays(h.ctx, "crypto", 0, 10)
 	if err != nil || len(listed) != 0 {

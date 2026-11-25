@@ -1,4 +1,5 @@
 import type { StrategyInstance } from "@/api/strategy-types";
+import { toInstantMs } from "@/utils/time-zone";
 import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 
 export type EnabledFilter = "" | "true" | "false";
@@ -62,5 +63,5 @@ export function emptyKind(options: { loading: boolean; error: string; count: num
 export function isTrialInstance(
   instance: Pick<StrategyInstance, "enabled" | "logical_account_id" | "confirmed_at"> | null | undefined
 ): boolean {
-  return Boolean(instance?.enabled && instance.logical_account_id && !instance.confirmed_at);
+  return Boolean(instance?.enabled && instance.logical_account_id && toInstantMs(instance.confirmed_at) === null);
 }

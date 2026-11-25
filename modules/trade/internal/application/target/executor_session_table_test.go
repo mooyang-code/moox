@@ -36,7 +36,7 @@ func becomeCurrentSession(t *testing.T, f *targetFixture, sessionID, targetID st
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
 			InstanceID: "runner-1", SessionID: sessionID, SessionStartedAt: sessionStartedAt(sessionID), StrategyID: "strategy-1",
 			BarEndTime: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
-			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
+			Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 			Status:  StatusPending, AcceptedAt: f.now.UnixMilli(),
 		})
 		if err == nil && !accepted {

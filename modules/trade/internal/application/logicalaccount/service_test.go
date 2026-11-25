@@ -325,7 +325,7 @@ func acceptModernSessionTarget(t *testing.T, tradeStore *store.Store, session st
 		InstanceID: "instance-1", SessionID: session, SessionStartedAt: modernSessionStartedAt(session), StrategyID: "strategy-1",
 		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: now.UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
+		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 	})
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -471,7 +471,7 @@ func acceptSessionTarget(t *testing.T, tradeStore *store.Store, targetID string)
 		InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: 2_000,
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
+		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 	})
 	require.NoError(t, err)
 }

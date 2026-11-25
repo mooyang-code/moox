@@ -153,8 +153,8 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		}
 		// 到达时间用引擎写完这一期的时刻（补算补齐时是补齐的时刻）；引擎没有给出时（重启前的期次）退回观测时刻。
 		observedAt := finishedAt
-		if run.CompletedAt > 0 {
-			observedAt = time.Unix(run.CompletedAt, 0).UTC()
+		if !run.CompletedAt.IsZero() {
+			observedAt = run.CompletedAt.UTC()
 		}
 		observation := report.DatasetObservation{Key: key, Result: datasetResult(run), FinishedAt: observedAt}
 		// Warming results are not formal, so they do not advance the output.

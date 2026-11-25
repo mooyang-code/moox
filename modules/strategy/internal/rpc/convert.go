@@ -17,44 +17,45 @@ var (
 )
 
 func definitionProto(value store.Definition) *strategypb.Strategy {
-	return &strategypb.Strategy{StrategyId: value.StrategyID, Name: value.Name, DslYaml: value.DSLYaml, DslHash: value.DSLHash, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt)}
+	return &strategypb.Strategy{StrategyId: value.StrategyID, Name: value.Name, DslYaml: value.DSLYaml, DslHash: value.DSLHash, CreatedAt: millis(value.CreatedAt), UpdatedAt: millis(value.UpdatedAt)}
 }
 
 func instanceProto(value store.Instance) *strategypb.StrategyInstance {
 	return &strategypb.StrategyInstance{
 		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTasks: value.FactorTasks,
 		LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID),
-		ResolvedJson: string(value.ResolvedJSON), Health: value.Health, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
-		ConfirmedAt: formatOptionalTime(value.ConfirmedAt),
+		ResolvedJson: string(value.ResolvedJSON), Health: value.Health, CreatedAt: millis(value.CreatedAt), UpdatedAt: millis(value.UpdatedAt),
+		ConfirmedAt: optionalMillis(value.ConfirmedAt),
 	}
 }
 
 func resultProto(value store.Result) *strategypb.StrategyResult {
 	return &strategypb.StrategyResult{
 		ResultId: value.ResultID, InstanceId: value.InstanceID, SessionId: value.SessionID,
-		BarEndTime: formatTime(value.BarEndTime), ValidUntil: formatTime(value.ValidUntil),
+		BarEndTime: millis(value.BarEndTime), ValidUntil: millis(value.ValidUntil),
 		Status: value.Status, SkipReason: value.SkipReason, DslHash: value.DSLHash,
 		Targets: targetProtos(value.TargetsJSON), SummaryJson: string(value.SummaryJSON), InputJson: string(value.InputJSON),
-		PublishStatus: string(value.PublishStatus), CreatedAt: formatTime(value.CreatedAt),
-		NextParamsJson: string(value.NextParamsJSON), ParamsError: value.ParamsError, ParamsDeliveredAt: formatOptionalTime(value.ParamsDeliveredAt),
+		PublishStatus: string(value.PublishStatus), CreatedAt: millis(value.CreatedAt),
+		NextParamsJson: string(value.NextParamsJSON), ParamsError: value.ParamsError, ParamsDeliveredAt: optionalMillis(value.ParamsDeliveredAt),
 	}
 }
 
-func formatOptionalTime(value *time.Time) string {
+// optionalMillis 把可选时刻写成 Unix 毫秒，没有写 0。
+func optionalMillis(value *time.Time) int64 {
 	if value == nil {
-		return ""
+		return 0
 	}
-	return formatTime(*value)
+	return millis(*value)
 }
 
-func targetProtos(raw json.RawMessage) []*strategypb.InstrumentTarget {
+func targetProtos(raw json.RawMessage) []*strategypb.InstrumentWeight {
 	targets, err := trigger.DecodeTargets(raw)
 	if err != nil {
-		return []*strategypb.InstrumentTarget{}
+		return []*strategypb.InstrumentWeight{}
 	}
-	out := make([]*strategypb.InstrumentTarget, 0, len(targets))
+	out := make([]*strategypb.InstrumentWeight, 0, len(targets))
 	for _, target := range targets {
-		out = append(out, &strategypb.InstrumentTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Market: target.Market})
+		out = append(out, &strategypb.InstrumentWeight{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Market: target.Market})
 	}
 	return out
 }
@@ -80,9 +81,9 @@ func itemProtos(items []store.ResultItem) []*strategypb.StrategyResultItem {
 func replayProto(value store.Replay) *strategypb.Replay {
 	replay := &strategypb.Replay{
 		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID,
-		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), SpotFeeBps: value.SpotFeeBps, SwapFeeBps: value.SwapFeeBps, SlippageBps: value.SlippageBps, FundingColumn: value.FundingColumn, Status: value.Status,
-		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
-		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID), Calendar: value.Calendar, Input: value.Input,
+		StartTime: millis(value.StartTime), EndTime: millis(value.EndTime), SpotFeeBps: value.SpotFeeBps, SwapFeeBps: value.SwapFeeBps, SlippageBps: value.SlippageBps, FundingColumn: value.FundingColumn, Status: value.Status,
+		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: millis(value.CreatedAt), UpdatedAt: millis(value.UpdatedAt),
+		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID), Calendar: value.Calendar, Input: value.Input, ProgressTime: optionalMillis(value.ProgressTime),
 	}
 	if len(value.Tasks) > 0 {
 		replay.Tasks = make(map[string]*strategypb.ReplayTask, len(value.Tasks))
@@ -90,15 +91,12 @@ func replayProto(value store.Replay) *strategypb.Replay {
 			replay.Tasks[market] = &strategypb.ReplayTask{FactorTaskId: task.FactorTaskID, DatasetId: task.DatasetID}
 		}
 	}
-	if value.ProgressTime != nil {
-		replay.ProgressTime = formatTime(*value.ProgressTime)
-	}
 	return replay
 }
 
 func replayBarProto(value store.ReplayBar) *strategypb.ReplayBar {
 	return &strategypb.ReplayBar{
-		BarEndTime: formatTime(value.BarEndTime), Status: value.Status, Targets: targetProtos(value.TargetsJSON), PositionsJson: string(value.PositionsJSON), SummaryJson: string(value.SummaryJSON), ParamsJson: string(value.ParamsJSON),
+		BarEndTime: millis(value.BarEndTime), Status: value.Status, Targets: targetProtos(value.TargetsJSON), PositionsJson: string(value.PositionsJSON), SummaryJson: string(value.SummaryJSON), ParamsJson: string(value.ParamsJSON),
 		BarReturn: value.Return, Equity: value.Equity, Turnover: value.Turnover, Fee: value.Fee, SpotValue: value.SpotValue, SwapValue: value.SwapValue,
 		Holdings: int32(value.Holdings), Frozen: int32(value.Frozen), SkipReason: value.SkipReason, Unfilled: int32(value.Unfilled), Liquidated: int32(value.Liquidated),
 	}
@@ -139,9 +137,10 @@ func dereference(value *string) string {
 	return *value
 }
 
-func formatTime(value time.Time) string {
+// millis 把时刻写成 RPC 里的 Unix 毫秒，零时间写 0。
+func millis(value time.Time) int64 {
 	if value.IsZero() {
-		return ""
+		return 0
 	}
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.UnixMilli()
 }

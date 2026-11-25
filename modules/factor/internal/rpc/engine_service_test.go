@@ -109,7 +109,7 @@ func TestEngineHeartbeatPassesStatus(t *testing.T) {
 
 	rsp, err := svc.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine, Status: &factorpb.EngineRuntimeStatus{
 		ConsumerRunning: true, ComputeWorkers: 8, ExprVersion: "expr/1", CatalogHash: "hash-1",
-		CatalogSyncedAt: syncedAt.Format(time.RFC3339Nano),
+		CatalogSyncedAt: syncedAt.UnixMilli(),
 		Runners:         []*factorpb.FactorRunnerStatus{{TaskId: "ftask_a", Queued: 1, Active: true}},
 		RecentRuns:      []*factorpb.TaskRunSummary{{TaskId: "ftask_a", LastPeriodTime: 900, LastStatus: "complete"}},
 	}})
@@ -241,7 +241,7 @@ func TestGetStatusReadsEngineHeartbeat(t *testing.T) {
 	require.Equal(t, "factor-engine@mac", rsp.GetEngine().GetEngineId())
 	require.True(t, rsp.GetEngine().GetOnline())
 	require.True(t, rsp.GetEngine().GetCatalogInSync())
-	require.Equal(t, heartbeat.Format(time.RFC3339Nano), rsp.GetEngine().GetLastHeartbeatAt())
+	require.Equal(t, heartbeat.UnixMilli(), rsp.GetEngine().GetLastHeartbeatAt())
 }
 
 func TestGetStatusEngineOfflineWhenNoHeartbeat(t *testing.T) {

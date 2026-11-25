@@ -365,7 +365,7 @@ func requiredTurnover(targets []store.TargetHistoryRecord, since int64) (float64
 		}
 	}
 	for index, entry := range targets {
-		var quantities []store.InstrumentTarget
+		var quantities []store.InstrumentQuantity
 		if err := json.Unmarshal([]byte(entry.QuantityTargetsJSON), &quantities); err != nil {
 			return 0, err
 		}

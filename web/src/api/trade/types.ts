@@ -195,7 +195,7 @@ export interface Position {
   updated_at: string;
 }
 
-export interface InstrumentTarget {
+export interface InstrumentQuantity {
   instrument_id: string;
   quantity: string;
   hold?: boolean;
@@ -222,7 +222,7 @@ export interface ShadowTarget {
   equity?: string;
   equity_source_time?: number | string;
   reference_prices?: Record<string, string>;
-  targets?: InstrumentTarget[];
+  targets?: InstrumentQuantity[];
   recorded_at?: number | string;
 }
 
@@ -234,7 +234,7 @@ export interface TradableInstrument {
   price_tick: string;
 }
 
-export interface BlockedTarget extends InstrumentTarget {
+export interface BlockedTarget extends InstrumentQuantity {
   reason: string;
   /** 不是未执行，而是被单币每小时上限顺延到下一个整点：用中性色显示“顺延”，不计入“未执行” */
   deferred?: boolean;
@@ -279,7 +279,7 @@ export interface TargetLane {
 export interface LogicalAccountTarget {
   target_id: string;
   logical_account_id: string;
-  targets: InstrumentTarget[];
+  targets: InstrumentQuantity[];
   status: string;
   blocked_targets: BlockedTarget[];
   last_error: string;

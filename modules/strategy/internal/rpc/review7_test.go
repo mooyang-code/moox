@@ -14,7 +14,7 @@ import (
 func TestReplayLookupMapsSpaceAndStoreErrors(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02", EndTime: "2026-09-03"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-02"), EndTime: ms("2026-09-03")})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	id := started.GetReplay().GetReplayId()
 
@@ -60,7 +60,7 @@ func TestStartReplayRecordsCalendar(t *testing.T) {
 	h.resolver.calendar = "cn_stock"
 	h.resolver.view = input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
 	h.createStrategy("s1", demoDSL)
-	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-10-01"})
+	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-10-01")})
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 	if rsp.GetReplay().GetCalendar() != "cn_stock" {
 		t.Fatalf("回放记录应带上日历：%q", rsp.GetReplay().GetCalendar())
@@ -76,7 +76,7 @@ func TestInstanceReplayUsesInstanceTasks(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	h.createInstance("i1", "s1", "ftask_i1", "", true)
-	window := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: "2026-09-02", EndTime: "2026-09-03"}
+	window := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: ms("2026-09-02"), EndTime: ms("2026-09-03")}
 
 	omitted, _ := h.service.StartReplay(h.ctx, window)
 	requireOK(t, int32(omitted.GetRetInfo().GetCode()), omitted.GetRetInfo().GetMsg())
@@ -84,11 +84,11 @@ func TestInstanceReplayUsesInstanceTasks(t *testing.T) {
 		t.Fatalf("省略 factor_tasks 应读实例关联的任务：%+v", omitted.GetReplay().GetTasks())
 	}
 
-	mismatch := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: "2026-09-02", EndTime: "2026-09-03", FactorTasks: map[string]string{"spot": "ftask_a"}}
+	mismatch := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: ms("2026-09-02"), EndTime: ms("2026-09-03"), FactorTasks: map[string]string{"spot": "ftask_a"}}
 	rejected, _ := h.service.StartReplay(h.ctx, mismatch)
 	requireFail(t, int32(rejected.GetRetInfo().GetCode()), rejected.GetRetInfo().GetMsg(), "必须读取实例关联的因子任务")
 
-	same := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: "2026-09-02", EndTime: "2026-09-03", FactorTasks: map[string]string{"spot": "ftask_i1"}}
+	same := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: ms("2026-09-02"), EndTime: ms("2026-09-03"), FactorTasks: map[string]string{"spot": "ftask_i1"}}
 	accepted, _ := h.service.StartReplay(h.ctx, same)
 	requireOK(t, int32(accepted.GetRetInfo().GetCode()), accepted.GetRetInfo().GetMsg())
 
@@ -98,7 +98,7 @@ func TestInstanceReplayUsesInstanceTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireOK(t, int32(dual.GetRetInfo().GetCode()), dual.GetRetInfo().GetMsg())
-	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i2", StartTime: "2026-09-02", EndTime: "2026-09-03", SwapFeeBps: 5})
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i2", StartTime: ms("2026-09-02"), EndTime: ms("2026-09-03"), SwapFeeBps: 5})
 	requireOK(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg())
 	if tasks := both.GetReplay().GetTasks(); len(tasks) != 2 || tasks["spot"].GetFactorTaskId() != "ftask_d1" || tasks["swap"].GetFactorTaskId() != "ftask_d2swap" || both.GetReplay().GetInstanceId() != "i2" {
 		t.Fatalf("双任务实例的回放应按两个任务读取：%+v", both.GetReplay())

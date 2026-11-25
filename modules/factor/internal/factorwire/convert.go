@@ -26,22 +26,14 @@ func SetToPB(set domain.FactorTask) *factorpb.FactorTask {
 		ResultDatasetId: set.ResultDatasetID,
 		BoundInstanceId: set.BoundInstanceID,
 		Status:          set.Status,
-		CreatedAt:       FormatTime(set.CreatedAt),
-		UpdatedAt:       FormatTime(set.UpdatedAt),
+		CreatedAt:       Millis(set.CreatedAt),
+		UpdatedAt:       Millis(set.UpdatedAt),
 	}
 }
 
 func SetFromPB(pb *factorpb.FactorTask) (domain.FactorTask, error) {
 	if pb == nil {
 		return domain.FactorTask{}, fmt.Errorf("factor_task is required")
-	}
-	createdAt, err := ParseTime(pb.GetCreatedAt())
-	if err != nil {
-		return domain.FactorTask{}, fmt.Errorf("created_at: %w", err)
-	}
-	updatedAt, err := ParseTime(pb.GetUpdatedAt())
-	if err != nil {
-		return domain.FactorTask{}, fmt.Errorf("updated_at: %w", err)
 	}
 	return domain.FactorTask{
 		TaskID:          pb.GetTaskId(),
@@ -52,8 +44,8 @@ func SetFromPB(pb *factorpb.FactorTask) (domain.FactorTask, error) {
 		ResultDatasetID: pb.GetResultDatasetId(),
 		BoundInstanceID: pb.GetBoundInstanceId(),
 		Status:          pb.GetStatus(),
-		CreatedAt:       createdAt,
-		UpdatedAt:       updatedAt,
+		CreatedAt:       FromMillis(pb.GetCreatedAt()),
+		UpdatedAt:       FromMillis(pb.GetUpdatedAt()),
 	}, nil
 }
 
@@ -78,8 +70,8 @@ func DefToPB(factor domain.FactorDef) *factorpb.FactorDef {
 		LookbackPeriods:      int32(factor.LookbackPeriods),
 		AllowPartialUniverse: factor.AllowPartialUniverse,
 		DefinitionHash:       domain.DefinitionHash(factor),
-		CreatedAt:            FormatTime(factor.CreatedAt),
-		UpdatedAt:            FormatTime(factor.UpdatedAt),
+		CreatedAt:            Millis(factor.CreatedAt),
+		UpdatedAt:            Millis(factor.UpdatedAt),
 		Udfs:                 UDFsToPB(factor.UDFs),
 	}
 }
@@ -154,14 +146,6 @@ func DefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 	if pb == nil {
 		return domain.FactorDef{}, fmt.Errorf("factor is required")
 	}
-	createdAt, err := ParseTime(pb.GetCreatedAt())
-	if err != nil {
-		return domain.FactorDef{}, fmt.Errorf("created_at: %w", err)
-	}
-	updatedAt, err := ParseTime(pb.GetUpdatedAt())
-	if err != nil {
-		return domain.FactorDef{}, fmt.Errorf("updated_at: %w", err)
-	}
 	// 派生字段（类型、输入、输出、回看）不从请求读取，由接收方编译 Spec 得到。
 	def := domain.FactorDef{
 		FactorID:             pb.GetFactorId(),
@@ -170,8 +154,8 @@ func DefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 		Spec:                 pb.GetSpec(),
 		SpecHash:             pb.GetSpecHash(),
 		AllowPartialUniverse: pb.GetAllowPartialUniverse(),
-		CreatedAt:            createdAt,
-		UpdatedAt:            updatedAt,
+		CreatedAt:            FromMillis(pb.GetCreatedAt()),
+		UpdatedAt:            FromMillis(pb.GetUpdatedAt()),
 	}
 	udfs, err := UDFsFromPB(pb.GetUdfs())
 	if err != nil {
@@ -204,7 +188,7 @@ func RunSummaryToPB(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 	}
 	return &factorpb.TaskRunSummary{
 		TaskId:         summary.TaskID,
-		LastPeriodTime: summary.LastPeriodTime, WarmingSubjects: summary.WarmingSubjects, CompletedAt: summary.CompletedAt,
+		LastPeriodTime: summary.LastPeriodTime, WarmingSubjects: summary.WarmingSubjects, CompletedAt: Millis(summary.CompletedAt),
 		LastStatus:     summary.LastStatus,
 		LagSeconds:     summary.LagSeconds,
 		Factors:        factors,
@@ -224,7 +208,7 @@ func RunSummaryFromPB(pb *factorpb.TaskRunSummary) domain.TaskRunSummary {
 	return domain.TaskRunSummary{
 		TaskID: pb.GetTaskId(), LastPeriodTime: pb.GetLastPeriodTime(), LastStatus: pb.GetLastStatus(),
 		LagSeconds: pb.GetLagSeconds(), Factors: factors, FailedSubjects: CloneStrings(pb.GetFailedSubjects()),
-		WarmingSubjects: pb.GetWarmingSubjects(), CompletedAt: pb.GetCompletedAt(),
+		WarmingSubjects: pb.GetWarmingSubjects(), CompletedAt: FromMillis(pb.GetCompletedAt()),
 	}
 }
 
@@ -291,12 +275,12 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 	watermarks := make([]*factorpb.TaskWatermarkStatus, 0, len(status.Watermarks))
 	for _, item := range status.Watermarks {
 		watermarks = append(watermarks, &factorpb.TaskWatermarkStatus{TaskId: item.TaskID, CommittedThrough: FormatTime(item.CommittedThrough), Target: FormatTime(item.Target),
-			BlockedSince: FormatTime(item.BlockedSince), BlockedPeriod: FormatTime(item.BlockedPeriod), BlockedReason: item.BlockedReason})
+			BlockedSince: Millis(item.BlockedSince), BlockedPeriod: FormatTime(item.BlockedPeriod), BlockedReason: item.BlockedReason})
 	}
 	return &factorpb.EngineRuntimeStatus{
 		ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers, ExprVersion: status.ExprVersion,
 		Runners: RunnersToPB(status.Runners), RecentRuns: runs,
-		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
+		CatalogHash: status.CatalogHash, CatalogSyncedAt: Millis(status.CatalogSyncedAt), Watermarks: watermarks,
 		Lifecycle: LifecycleToPB(status.Lifecycle), UdfModules: UDFModulesToPB(status.UDFModules),
 		Ready: status.Ready, NotReadyReason: status.NotReadyReason,
 	}
@@ -323,7 +307,7 @@ func UDFModulesFromPB(modules []*factorpb.UdfModuleStatus) []domain.UDFModuleSta
 // LifecycleToPB 转换引擎模块级的生命周期状态。
 func LifecycleToPB(life domain.EngineLifecycle) *factorpb.EngineLifecycleStatus {
 	out := &factorpb.EngineLifecycleStatus{
-		Stage: life.Stage, PausedSince: FormatTime(life.PausedSince),
+		Stage: life.Stage, PausedSince: Millis(life.PausedSince),
 		CatchupBlocked: life.CatchupBlocked, PauseKind: life.PauseKind, PauseReason: life.PauseReason,
 	}
 	if c := life.Catchup; c != nil {
@@ -337,21 +321,16 @@ func LifecycleFromPB(pb *factorpb.EngineLifecycleStatus) domain.EngineLifecycle 
 	if pb == nil {
 		return domain.EngineLifecycle{}
 	}
-	pausedSince, _ := ParseTime(pb.GetPausedSince())
 	out := domain.EngineLifecycle{
-		Stage: pb.GetStage(), PausedSince: pausedSince,
+		Stage: pb.GetStage(), PausedSince: FromMillis(pb.GetPausedSince()),
 		CatchupBlocked: pb.GetCatchupBlocked(), PauseKind: pb.GetPauseKind(), PauseReason: pb.GetPauseReason(),
 	}
-	// 解析失败的字段按零值处理，与 paused_since 一致。
+	// 追赶进度解析失败按零值处理。
 	out.Catchup, _ = lifecycle.CatchupFromProgress(pb.GetCatchup())
 	return out
 }
 
-func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, error) {
-	syncedAt, err := ParseTime(pb.GetCatalogSyncedAt())
-	if err != nil {
-		return domain.EngineStatus{}, fmt.Errorf("catalog_synced_at: %w", err)
-	}
+func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) domain.EngineStatus {
 	runs := make([]domain.TaskRunSummary, 0, len(pb.GetRecentRuns()))
 	for _, run := range pb.GetRecentRuns() {
 		runs = append(runs, RunSummaryFromPB(run))
@@ -360,16 +339,15 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 	for _, item := range pb.GetWatermarks() {
 		committed, _ := ParseTime(item.GetCommittedThrough())
 		target, _ := ParseTime(item.GetTarget())
-		blockedSince, _ := ParseTime(item.GetBlockedSince())
 		blockedPeriod, _ := ParseTime(item.GetBlockedPeriod())
-		watermarks = append(watermarks, domain.SetWatermark{TaskID: item.GetTaskId(), CommittedThrough: committed, Target: target, BlockedSince: blockedSince, BlockedPeriod: blockedPeriod, BlockedReason: item.GetBlockedReason()})
+		watermarks = append(watermarks, domain.SetWatermark{TaskID: item.GetTaskId(), CommittedThrough: committed, Target: target, BlockedSince: FromMillis(item.GetBlockedSince()), BlockedPeriod: blockedPeriod, BlockedReason: item.GetBlockedReason()})
 	}
 	return domain.EngineStatus{
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
-		Runners: RunnersFromPB(pb.GetRunners()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
+		Runners: RunnersFromPB(pb.GetRunners()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: FromMillis(pb.GetCatalogSyncedAt()), Watermarks: watermarks,
 		Lifecycle: LifecycleFromPB(pb.GetLifecycle()), UDFModules: UDFModulesFromPB(pb.GetUdfModules()),
 		Ready: pb.GetReady(), NotReadyReason: pb.GetNotReadyReason(),
-	}, nil
+	}
 }
 
 // EngineTaskToPB includes each member's definition spec: the engine compiles it.
@@ -431,33 +409,42 @@ func SnapshotFromPB(params map[string]*factorpb.ParamValue) domain.ParamSnapshot
 
 // MemberParamStateToPB 转换一个可变成员最近一次被接受的提交。
 func MemberParamStateToPB(member domain.MemberParamState) *factorpb.MemberParamState {
-	state := &factorpb.MemberParamState{
+	return &factorpb.MemberParamState{
 		MemberKey: member.MemberKey, Params: SnapshotToPB(member.Params),
-		LastSubmittedPeriod: member.LastSubmittedPeriod, LastRequestId: member.LastRequestID,
+		LastSubmittedPeriod: member.LastSubmittedPeriod, LastRequestId: member.LastRequestID, LastSubmittedAt: Millis(member.LastSubmittedAt),
 	}
-	if !member.LastSubmittedAt.IsZero() {
-		state.LastSubmittedAt = FormatTime(member.LastSubmittedAt)
-	}
-	return state
 }
 
 // MemberParamState 是引擎和策略读到的可变成员的最近一次提交。
 type MemberParamState = domain.MemberParamState
 
 // MemberParamStateFromPB 还原一个可变成员最近一次被接受的提交。
-func MemberParamStateFromPB(pb *factorpb.MemberParamState) (MemberParamState, error) {
-	submittedAt, err := ParseTime(pb.GetLastSubmittedAt())
-	if err != nil {
-		return MemberParamState{}, fmt.Errorf("member %s last_submitted_at: %w", pb.GetMemberKey(), err)
-	}
+func MemberParamStateFromPB(pb *factorpb.MemberParamState) MemberParamState {
 	var params domain.ParamSnapshot
 	if len(pb.GetParams()) > 0 {
 		params = SnapshotFromPB(pb.GetParams())
 	}
 	return MemberParamState{MemberKey: pb.GetMemberKey(), Params: params, LastSubmittedPeriod: pb.GetLastSubmittedPeriod(),
-		LastRequestID: pb.GetLastRequestId(), LastSubmittedAt: submittedAt}, nil
+		LastRequestID: pb.GetLastRequestId(), LastSubmittedAt: FromMillis(pb.GetLastSubmittedAt())}
 }
 
+// Millis 把墙钟时刻（创建、更新、心跳、暂停、阻塞开始等）写成 RPC 里的 Unix 毫秒；零时间写 0。
+func Millis(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.UnixMilli()
+}
+
+// FromMillis 还原 RPC 里的 Unix 毫秒；0 与负数（没有）还原成零时间。
+func FromMillis(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(value).UTC()
+}
+
+// FormatTime 只用于数据坐标（data_time 及其上下界、补算区间与进度、水位）：RFC3339 文本，零时间写空串。
 func FormatTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
@@ -465,6 +452,7 @@ func FormatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
 
+// ParseTime 解析数据坐标的 RFC3339 文本，空串还原成零时间。
 func ParseTime(value string) (time.Time, error) {
 	if value == "" {
 		return time.Time{}, nil

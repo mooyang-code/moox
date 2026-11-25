@@ -35,7 +35,7 @@ function instance(id: string, overrides: Record<string, unknown> = {}) {
     resolved_json: "{}",
     health: "ok",
     created_at: "",
-    updated_at: "2026-10-01T00:00:00Z",
+    updated_at: "1790812800000",
     ...overrides
   };
 }
@@ -78,7 +78,7 @@ describe("strategy results tab", () => {
   beforeEach(() => {
     ctx.space = reactive({ selectedSpaceId: "crypto" });
     ctx.listInstances.mockReset().mockResolvedValue({
-      items: [instance("off", { enabled: false }), instance("on-1"), instance("on-2", { updated_at: "2026-10-05T00:00:00Z" })],
+      items: [instance("off", { enabled: false }), instance("on-1"), instance("on-2", { updated_at: "1791158400000" })],
       page: { total: 3 }
     });
     ctx.store = reactive({

@@ -61,7 +61,11 @@ export function fullTime(value: string | number | null | undefined, zone = "UTC"
 
 /** 相对时间：刚刚、N 分钟前、N 小时前、N 天前；晚于现在（时钟偏差）时写 zone 下的绝对时间。 */
 export function relativeTime(value: string | number | null | undefined, nowMs: number, zone = "UTC"): string {
-  const at = toMillis(value);
+  return relativeMs(toMillis(value), nowMs, zone);
+}
+
+/** 同 relativeTime，入参是已解析好的 Unix 毫秒（null 表示没有）。 */
+export function relativeMs(at: number | null, nowMs: number, zone = "UTC"): string {
   if (at === null) return "—";
   const diff = Math.round((nowMs - at) / 1000);
   if (diff < 0) return marketTime(at, zone, nowMs);
@@ -265,8 +269,8 @@ export function strategyRows(
       holdingCount: ranked.length,
       gross,
       cash: snapshot && instance.enabled ? { text: percent(cashRatio, 1), ratio: barMax > 0 ? cashRatio / barMax : 0 } : null,
-      lastBar: snapshot?.bar_end_time ? relativeTime(snapshot.bar_end_time, nowMs, zone) : "—",
-      lastBarTitle: snapshot?.bar_end_time ? fullTime(snapshot.bar_end_time, zone) : "",
+      lastBar: relativeMs(toInstantMs(snapshot?.bar_end_time), nowMs, zone),
+      lastBarTitle: toInstantMs(snapshot?.bar_end_time) === null ? "" : formatInstant(snapshot?.bar_end_time, zone),
       link: resultsLink(instance.instance_id)
     };
   });

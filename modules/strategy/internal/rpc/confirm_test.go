@@ -24,14 +24,14 @@ func TestConfirmStrategyInstanceThenReenableReturnsToTrial(t *testing.T) {
 	created := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
 	first := created.GetInstance()
-	if first.GetConfirmedAt() != "" {
+	if first.GetConfirmedAt() != 0 {
 		t.Fatalf("挂了账户的实例启用后应在试运行：%+v", first)
 	}
 
 	h.now = h.now.Add(time.Minute)
 	confirmed := h.confirm("i1", first.GetSessionId())
 	requireOK(t, int32(confirmed.GetRetInfo().GetCode()), confirmed.GetRetInfo().GetMsg())
-	if confirmed.GetInstance().GetConfirmedAt() == "" {
+	if confirmed.GetInstance().GetConfirmedAt() == 0 {
 		t.Fatalf("确认后应带确认时间：%+v", confirmed.GetInstance())
 	}
 	// 再确认一次是成功，确认时间不变。
@@ -39,12 +39,12 @@ func TestConfirmStrategyInstanceThenReenableReturnsToTrial(t *testing.T) {
 	again := h.confirm("i1", "")
 	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
 	if again.GetInstance().GetConfirmedAt() != confirmed.GetInstance().GetConfirmedAt() {
-		t.Fatalf("重复确认不应改确认时间：%s → %s", confirmed.GetInstance().GetConfirmedAt(), again.GetInstance().GetConfirmedAt())
+		t.Fatalf("重复确认不应改确认时间：%d → %d", confirmed.GetInstance().GetConfirmedAt(), again.GetInstance().GetConfirmedAt())
 	}
 
 	disabled := h.setEnabled("i1", false)
 	requireOK(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg())
-	if disabled.GetInstance().GetConfirmedAt() != "" {
+	if disabled.GetInstance().GetConfirmedAt() != 0 {
 		t.Fatalf("停用应清空确认时间：%+v", disabled.GetInstance())
 	}
 	stopped := h.confirm("i1", "")
@@ -52,19 +52,19 @@ func TestConfirmStrategyInstanceThenReenableReturnsToTrial(t *testing.T) {
 
 	reenabled := h.setEnabled("i1", true)
 	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
-	if reenabled.GetInstance().GetConfirmedAt() != "" {
+	if reenabled.GetInstance().GetConfirmedAt() != 0 {
 		t.Fatalf("停用再启用应回到试运行：%+v", reenabled.GetInstance())
 	}
 	stale := h.confirm("i1", first.GetSessionId())
 	requireFail(t, int32(stale.GetRetInfo().GetCode()), stale.GetRetInfo().GetMsg(), "已重新启用")
-	if got, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "i1"}); got.GetInstance().GetConfirmedAt() != "" {
+	if got, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "i1"}); got.GetInstance().GetConfirmedAt() != 0 {
 		t.Fatal("被拒绝的确认不应写入确认时间")
 	}
 
 	h.createStrategy("s2", demoDSL)
 	observer := h.createInstance("observer", "s2", "ftask_o", "", true)
 	requireOK(t, int32(observer.GetRetInfo().GetCode()), observer.GetRetInfo().GetMsg())
-	if observer.GetInstance().GetConfirmedAt() == "" {
+	if observer.GetInstance().GetConfirmedAt() == 0 {
 		t.Fatalf("没挂账户的实例启用即确认：%+v", observer.GetInstance())
 	}
 	needless := h.confirm("observer", "")
@@ -99,7 +99,7 @@ func TestConfirmRejectedWhileWarmUpIncomplete(t *testing.T) {
 	delete(warmer.blocked, "p1")
 	restarted := h.confirm("p1", session)
 	requireFail(t, int32(restarted.GetRetInfo().GetCode()), restarted.GetRetInfo().GetMsg(), "策略池预热未完成")
-	if got, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "p1"}); got.GetInstance().GetConfirmedAt() != "" {
+	if got, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "p1"}); got.GetInstance().GetConfirmedAt() != 0 {
 		t.Fatal("预热没完成时不应写入确认时间")
 	}
 
@@ -108,7 +108,7 @@ func TestConfirmRejectedWhileWarmUpIncomplete(t *testing.T) {
 	}
 	done := h.confirm("p1", session)
 	requireOK(t, int32(done.GetRetInfo().GetCode()), done.GetRetInfo().GetMsg())
-	if done.GetInstance().GetConfirmedAt() == "" {
+	if done.GetInstance().GetConfirmedAt() == 0 {
 		t.Fatalf("预热完成后可以确认：%+v", done.GetInstance())
 	}
 }

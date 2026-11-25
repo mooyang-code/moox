@@ -32,7 +32,7 @@ describe("replay model helpers", () => {
   it("builds an equity series and summarizes the ledger", () => {
     const series = equitySeries([
       {
-        bar_end_time: "2026-09-01T01:00:00Z",
+        bar_end_time: "1788224400000",
         status: "ok",
         targets: [],
         positions_json: "{}",
@@ -107,7 +107,7 @@ describe("replay model helpers", () => {
 
   it("parses a bar's ledger and summary for the detail row", () => {
     const bar = {
-      bar_end_time: "2026-09-01T01:00:00Z",
+      bar_end_time: "1788224400000",
       status: "ok",
       targets: [],
       positions_json:
@@ -147,7 +147,7 @@ describe("replay model helpers", () => {
 
   it("labels positions by market, orders by absolute value and keeps shorts negative", () => {
     const bar = {
-      bar_end_time: "2026-09-01T01:00:00Z",
+      bar_end_time: "1788224400000",
       status: "ok",
       targets: [],
       positions_json:
@@ -224,23 +224,20 @@ describe("replay model helpers", () => {
 
   it("labels A-share daily ranges with dates in the space zone, other ranges with times", () => {
     const sh = "Asia/Shanghai";
-    expect(
-      replayRangeLabel({ calendar: "cn_stock", start_time: "2026-08-31T16:00:00Z", end_time: "2026-09-30T16:00:00Z" }, sh)
-    ).toBe("2026-09-01 UTC+8 → 2026-10-01 UTC+8（不含结束日）");
-    expect(
-      replayRangeLabel({ calendar: "crypto_24x7", start_time: "2026-09-01T00:00:00Z", end_time: "2026-09-02T00:00:00Z" }, "UTC")
-    ).toBe("2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC");
+    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "1788192000000", end_time: "1790784000000" }, sh)).toBe(
+      "2026-09-01 UTC+8 → 2026-10-01 UTC+8（不含结束日）"
+    );
+    expect(replayRangeLabel({ calendar: "crypto_24x7", start_time: "1788220800000", end_time: "1788307200000" }, "UTC")).toBe(
+      "2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC"
+    );
     // 港股日线同样按日期写（空间时区 Asia/Hong_Kong）。
     expect(
-      replayRangeLabel(
-        { calendar: "hk_stock", start_time: "2026-10-31T16:00:00Z", end_time: "2026-11-17T16:00:00Z" },
-        "Asia/Hong_Kong"
-      )
+      replayRangeLabel({ calendar: "hk_stock", start_time: "1793462400000", end_time: "1794931200000" }, "Asia/Hong_Kong")
     ).toBe("2026-11-01 UTC+8 → 2026-11-18 UTC+8（不含结束日）");
     // A 股日内的区间是真实时刻，按空间时区写时刻。
-    expect(
-      replayRangeLabel({ calendar: "cn_stock", start_time: "2026-10-08T03:00:00Z", end_time: "2026-10-08T05:30:00Z" }, sh)
-    ).toBe("2026-10-08 11:00 UTC+8 → 2026-10-08 13:30 UTC+8");
+    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "1791428400000", end_time: "1791437400000" }, sh)).toBe(
+      "2026-10-08 11:00 UTC+8 → 2026-10-08 13:30 UTC+8"
+    );
   });
 });
 
@@ -256,8 +253,8 @@ describe("回放对比", () => {
       strategy_id: "s1",
       dsl_yaml: "name: demo",
       tasks: { swap: { factor_task_id: "ft1", dataset_id: "v1" } },
-      start_time: "2026-10-01T00:00:00Z",
-      end_time: "2026-10-02T00:00:00Z",
+      start_time: "1790812800000",
+      end_time: "1790899200000",
       spot_fee_bps: 8,
       swap_fee_bps: 5,
       slippage_bps: 2

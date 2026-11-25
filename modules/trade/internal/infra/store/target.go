@@ -17,7 +17,8 @@ import (
 	"gorm.io/gorm"
 )
 
-type InstrumentTarget struct {
+// InstrumentQuantity 是一个标的的目标数量。
+type InstrumentQuantity struct {
 	InstrumentID string `json:"instrument_id"`
 	// Quantity 在 Hold 为 true 时为空：保持标的不换算数量。
 	Quantity string `json:"quantity,omitempty"`
@@ -45,7 +46,7 @@ type LogicalAccountTargetRecord struct {
 	StrategyID       string
 	BarEndTime       int64
 	ValidUntil       int64
-	Targets          []InstrumentTarget
+	Targets          []InstrumentQuantity
 	Status           string
 	BlockedTargets   []BlockedTarget
 	LastError        string
@@ -442,8 +443,8 @@ func validLogicalAccountTargetStatus(status string) bool {
 	}
 }
 
-func encodeInstrumentTargets(targets []InstrumentTarget) (string, error) {
-	canonical := make([]InstrumentTarget, len(targets))
+func encodeInstrumentTargets(targets []InstrumentQuantity) (string, error) {
+	canonical := make([]InstrumentQuantity, len(targets))
 	copy(canonical, targets)
 	seen := make(map[string]struct{}, len(canonical))
 	for i := range canonical {
@@ -517,32 +518,32 @@ var targetDecodeCache sync.Map
 
 type decodedTargets struct {
 	raw     string
-	targets []InstrumentTarget
+	targets []InstrumentQuantity
 }
 
-func decodeCurrentTargetsCached(key, raw string) ([]InstrumentTarget, error) {
+func decodeCurrentTargetsCached(key, raw string) ([]InstrumentQuantity, error) {
 	if value, ok := targetDecodeCache.Load(key); ok {
 		if entry := value.(decodedTargets); entry.raw == raw {
-			return append(make([]InstrumentTarget, 0, len(entry.targets)), entry.targets...), nil
+			return append(make([]InstrumentQuantity, 0, len(entry.targets)), entry.targets...), nil
 		}
 	}
 	targets, err := decodeCurrentTargets(raw)
 	if err != nil {
 		return nil, err
 	}
-	targetDecodeCache.Store(key, decodedTargets{raw: raw, targets: append(make([]InstrumentTarget, 0, len(targets)), targets...)})
+	targetDecodeCache.Store(key, decodedTargets{raw: raw, targets: append(make([]InstrumentQuantity, 0, len(targets)), targets...)})
 	return targets, nil
 }
 
 // Current executable targets are not receipts: unknown fields must never
 // silently disappear when a worker reads them.
-func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
+func decodeCurrentTargets(raw string) ([]InstrumentQuantity, error) {
 	d := json.NewDecoder(strings.NewReader(raw))
 	tok, err := d.Token()
 	if err != nil || tok != json.Delim('[') {
 		return nil, fmt.Errorf("%w: target must be an array", ErrInvalidRecord)
 	}
-	targets := []InstrumentTarget{}
+	targets := []InstrumentQuantity{}
 	for d.More() {
 		tok, err = d.Token()
 		if err != nil || tok != json.Delim('{') {
@@ -583,7 +584,7 @@ func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
 		if _, err := d.Token(); err != nil {
 			return nil, err
 		}
-		targets = append(targets, InstrumentTarget{InstrumentID: fields["instrument_id"], Quantity: fields["quantity"], Hold: fields["hold"] == "true"})
+		targets = append(targets, InstrumentQuantity{InstrumentID: fields["instrument_id"], Quantity: fields["quantity"], Hold: fields["hold"] == "true"})
 	}
 	if _, err := d.Token(); err != nil {
 		return nil, err

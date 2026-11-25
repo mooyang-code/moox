@@ -60,27 +60,27 @@ describe("strategy API", () => {
 
   it("confirms a trial instance for its session and keeps confirmed_at", async () => {
     call.mockResolvedValueOnce({
-      instance: { instance_id: "i-1", enabled: true, logical_account_id: "la-1", confirmed_at: "2026-11-15T01:00:00Z" }
+      instance: { instance_id: "i-1", enabled: true, logical_account_id: "la-1", confirmed_at: "1794704400000" }
     });
     const instance = await confirmInstance("i-1", "session-1");
     expect(call).toHaveBeenCalledWith("strategy", "ConfirmStrategyInstance", { instance_id: "i-1", session_id: "session-1" });
-    expect(instance.confirmed_at).toBe("2026-11-15T01:00:00Z");
+    expect(instance.confirmed_at).toBe("1794704400000");
     call.mockResolvedValueOnce({ instances: [{ instance_id: "i-2", enabled: true }], total: 1 });
     const page = await listInstances();
-    expect(page.items[0].confirmed_at).toBe("");
+    expect(page.items[0].confirmed_at).toBe("0");
   });
 
   it("reads results with status, skip reason and explanation items", async () => {
     call.mockResolvedValueOnce({
       targets: [],
       session_id: "s1",
-      bar_end_time: "2026-09-06T01:00:00Z",
-      valid_until: "2026-09-06T03:00:00Z",
+      bar_end_time: "1788656400000",
+      valid_until: "1788663600000",
       result_id: "r1"
     });
     call.mockResolvedValueOnce({
       results: [
-        { result_id: "r1", bar_end_time: "2026-09-06T01:00:00Z", status: "skipped", skip_reason: "factor_missing", targets: [] }
+        { result_id: "r1", bar_end_time: "1788656400000", status: "skipped", skip_reason: "factor_missing", targets: [] }
       ],
       total: 1
     });
@@ -168,15 +168,15 @@ describe("strategy API", () => {
         dsl_hash: "sha256:x"
       },
       bar_count: 30,
-      first_bar_end: "2026-09-01T01:00:00Z",
-      last_bar_end: "2026-09-02T06:00:00Z"
+      first_bar_end: "1788224400000",
+      last_bar_end: "1788328800000"
     });
     await expect(
       startReplay({
         instance_id: "i-1",
         factor_tasks: { spot: "ftask_a" },
-        start_time: "2026-09-01T00:00:00Z",
-        end_time: "2026-09-30T00:00:00Z",
+        start_time: "1788220800000",
+        end_time: "1790726400000",
         spot_fee_bps: 10,
         swap_fee_bps: 0
       })
@@ -189,7 +189,7 @@ describe("strategy API", () => {
         dsl_hash: "sha256:x"
       },
       bar_count: 30,
-      last_bar_end: "2026-09-02T06:00:00Z"
+      last_bar_end: "1788328800000"
     });
   });
 

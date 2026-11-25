@@ -21,9 +21,9 @@ func (testTargetWeightResolver) Resolve(
 	_ string,
 ) (targetapp.WeightConversion, error) {
 	signalTime := request.GetBarEndTime()
-	targets := make([]store.InstrumentTarget, 0, len(request.GetTargets()))
+	targets := make([]store.InstrumentQuantity, 0, len(request.GetTargets()))
 	for _, target := range request.GetTargets() {
-		targets = append(targets, store.InstrumentTarget{
+		targets = append(targets, store.InstrumentQuantity{
 			InstrumentID: target.GetInstrumentId(),
 			Quantity:     target.GetTargetWeight(),
 		})
