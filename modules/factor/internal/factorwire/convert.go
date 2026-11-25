@@ -188,7 +188,7 @@ func RunSummaryToPB(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 	}
 	return &factorpb.TaskRunSummary{
 		TaskId:         summary.TaskID,
-		LastPeriodTime: summary.LastPeriodTime, WarmingSubjects: summary.WarmingSubjects, CompletedAt: summary.CompletedAt,
+		LastPeriodTime: summary.LastPeriodTime, WarmingSubjects: summary.WarmingSubjects, CompletedAt: Millis(summary.CompletedAt),
 		LastStatus:     summary.LastStatus,
 		LagSeconds:     summary.LagSeconds,
 		Factors:        factors,
@@ -208,7 +208,7 @@ func RunSummaryFromPB(pb *factorpb.TaskRunSummary) domain.TaskRunSummary {
 	return domain.TaskRunSummary{
 		TaskID: pb.GetTaskId(), LastPeriodTime: pb.GetLastPeriodTime(), LastStatus: pb.GetLastStatus(),
 		LagSeconds: pb.GetLagSeconds(), Factors: factors, FailedSubjects: CloneStrings(pb.GetFailedSubjects()),
-		WarmingSubjects: pb.GetWarmingSubjects(), CompletedAt: pb.GetCompletedAt(),
+		WarmingSubjects: pb.GetWarmingSubjects(), CompletedAt: FromMillis(pb.GetCompletedAt()),
 	}
 }
 

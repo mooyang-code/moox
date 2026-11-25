@@ -989,7 +989,7 @@ type TaskRunSummary struct {
 	// warming_subjects were left out of the period while their lookback window
 	// loads; their results are not formal.
 	WarmingSubjects int32 `protobuf:"varint,7,opt,name=warming_subjects,json=warmingSubjects,proto3" json:"warming_subjects,omitempty"`
-	// completed_at 是引擎写完 last_period_time 这一期的 Unix 秒；0 表示未知。
+	// completed_at 是引擎写完 last_period_time 这一期的时刻；0 表示未知。
 	CompletedAt int64 `protobuf:"varint,8,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
 }
 

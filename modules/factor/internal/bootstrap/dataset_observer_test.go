@@ -69,7 +69,7 @@ func TestFactorDatasetObserverAcceptsSamePeriodUpgradedByRepair(t *testing.T) {
 	repaired := period.Add(time.Hour + 4*time.Minute)
 	engine := &fakeEngineView{
 		sets: []domain.EngineTask{{Set: domain.FactorTask{TaskID: "spot_1h", SpaceID: "crypto", ResultDatasetID: "dataset_factor_spot_1h", Freq: "1h"}, ResultReady: true}},
-		runs: []domain.TaskRunSummary{{TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: live.Unix(), LastStatus: "degraded", WarmingSubjects: 511, FailedSubjects: []string{"A"}}},
+		runs: []domain.TaskRunSummary{{TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: live, LastStatus: "degraded", WarmingSubjects: 511, FailedSubjects: []string{"A"}}},
 	}
 	observer := newFactorDatasetObserver(engine, datasets)
 	observer.now = func() time.Time { return repaired.Add(time.Second) }
@@ -93,7 +93,7 @@ func TestFactorDatasetObserverAcceptsSamePeriodUpgradedByRepair(t *testing.T) {
 	requireDatasetValue(t, registry, "moox_factor_dataset_last_partial_timestamp_seconds", "dataset_factor_spot_1h", float64(live.Unix()))
 
 	// 补算补齐后同一期升级为完成：记一次成功，产出水位前进，到达时间是补齐的时刻。
-	engine.runs = []domain.TaskRunSummary{{TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: repaired.Unix(), LastStatus: "complete"}}
+	engine.runs = []domain.TaskRunSummary{{TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: repaired, LastStatus: "complete"}}
 	require.NoError(t, observer.observe(context.Background()))
 	requireDatasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_spot_1h", float64(period.Unix()))
 	requireDatasetValue(t, registry, "moox_factor_dataset_output_arrival_timestamp_seconds", "dataset_factor_spot_1h", float64(repaired.Unix()))
@@ -114,7 +114,7 @@ func TestFactorDatasetObserverFlushesWhenFormalPeriodTurnsSuccessful(t *testing.
 	require.NoError(t, err)
 	period := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
 	partial := domain.TaskRunSummary{
-		TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: period.Add(time.Hour).Unix(), LastStatus: "degraded", FailedSubjects: []string{"A"},
+		TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: period.Add(time.Hour), LastStatus: "degraded", FailedSubjects: []string{"A"},
 		Factors: []domain.FactorPeriodState{{FactorID: "f1", Status: "degraded", FailedSubjects: []string{"A"}}},
 	}
 	engine := &fakeEngineView{
@@ -130,7 +130,7 @@ func TestFactorDatasetObserverFlushesWhenFormalPeriodTurnsSuccessful(t *testing.
 	require.Zero(t, flushed, "新的一期由水位前进触发补报，观察器不重复触发")
 
 	repaired := period.Add(time.Hour + 20*time.Minute)
-	engine.runs = []domain.TaskRunSummary{{TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: repaired.Unix(), LastStatus: "complete"}}
+	engine.runs = []domain.TaskRunSummary{{TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: repaired, LastStatus: "complete"}}
 	require.NoError(t, observer.observe(context.Background()))
 	require.Equal(t, 1, flushed)
 	requireDatasetValue(t, registry, "moox_factor_dataset_last_success_timestamp_seconds", "dataset_factor_spot_1h", float64(repaired.Unix()))
@@ -264,7 +264,7 @@ func TestFactorDatasetObserverGracesNewTasksBeforeFirstPeriod(t *testing.T) {
 	period := time.Date(2026, 10, 9, 6, 55, 0, 0, time.UTC)
 	engine := &fakeEngineView{
 		sets: []domain.EngineTask{set("stock_new", "dataset_factor_new"), set("stock_old", "dataset_factor_old")},
-		runs: []domain.TaskRunSummary{{TaskID: "stock_old", LastPeriodTime: period.Unix(), CompletedAt: period.Add(5*time.Minute + 3*time.Second).Unix(), LastStatus: "complete"}},
+		runs: []domain.TaskRunSummary{{TaskID: "stock_old", LastPeriodTime: period.Unix(), CompletedAt: period.Add(5*time.Minute + 3*time.Second), LastStatus: "complete"}},
 	}
 	graced := float64(created.Add(30 * time.Hour).Unix())
 	for restart := 0; restart < 2; restart++ {

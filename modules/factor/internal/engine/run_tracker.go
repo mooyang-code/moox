@@ -241,12 +241,8 @@ func summaryOf(taskID string, run trackedRun, now time.Time) domain.TaskRunSumma
 		lagErrors.report(taskID, err)
 		lag = max(0, int64(now.Sub(lastPeriod)/time.Second))
 	}
-	var completedAt int64
-	if !run.completedAt.IsZero() {
-		completedAt = run.completedAt.Unix()
-	}
 	return domain.TaskRunSummary{
-		TaskID: taskID, LastPeriodTime: lastPeriod.Unix(), CompletedAt: completedAt, LastStatus: run.status, LagSeconds: lag,
+		TaskID: taskID, LastPeriodTime: lastPeriod.Unix(), CompletedAt: run.completedAt, LastStatus: run.status, LagSeconds: lag,
 		Factors: run.factors, FailedSubjects: run.failedSubjects, WarmingSubjects: int32(run.warming),
 	}
 }

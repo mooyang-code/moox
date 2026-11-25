@@ -38,3 +38,18 @@ func TestEngineStatusRoundTripsReadinessAndLifecycle(t *testing.T) {
 		t.Fatalf("catchup = %+v, want %+v", got.Lifecycle.Catchup, status.Lifecycle.Catchup)
 	}
 }
+
+// 运行摘要的完成时刻在 RPC 里是 Unix 毫秒（不是秒）：往返后精确到毫秒，零值写 0 并还原成零时间。
+func TestRunSummaryCompletedAtIsMillis(t *testing.T) {
+	completed := time.Date(2026, 11, 24, 8, 0, 3, 456_000_000, time.UTC)
+	pb := RunSummaryToPB(domain.TaskRunSummary{TaskID: "t", LastPeriodTime: 1786032000, CompletedAt: completed})
+	if pb.GetCompletedAt() != completed.UnixMilli() || pb.GetLastPeriodTime() != 1786032000 {
+		t.Fatalf("completed_at = %d, last_period_time = %d", pb.GetCompletedAt(), pb.GetLastPeriodTime())
+	}
+	if got := RunSummaryFromPB(pb); !got.CompletedAt.Equal(completed) {
+		t.Fatalf("round trip completed_at = %v, want %v", got.CompletedAt, completed)
+	}
+	if unknown := RunSummaryToPB(domain.TaskRunSummary{TaskID: "t"}); unknown.GetCompletedAt() != 0 || !RunSummaryFromPB(unknown).CompletedAt.IsZero() {
+		t.Fatalf("unknown completed_at = %d", unknown.GetCompletedAt())
+	}
+}
