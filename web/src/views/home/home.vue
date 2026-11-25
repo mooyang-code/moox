@@ -272,7 +272,7 @@ import { getCollectorStatus } from "@/api/collector/runtime-status";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
-import { listAllDatasets, listAllViews, listDataSources } from "@/api/storage/metadata";
+import { listAllDatasets, listDataSources } from "@/api/storage/metadata";
 import { listInstances, listStrategies, listStrategyTargets } from "@/api/strategy";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { listTradingAccounts } from "@/api/trade";
@@ -314,7 +314,7 @@ const updatedAt = ref("");
 const refreshing = ref(false);
 
 // 空间范围的名称与资产数量：切空间时整体重读，旧空间晚到的响应由 spaceLoadGate 丢弃。
-const names = reactive<NameBook>({ datasets: {}, views: {} });
+const names = reactive<NameBook>({ datasets: {} });
 const counts = reactive<Record<string, number | null>>({
   sources: null,
   rules: null,
@@ -469,7 +469,7 @@ function errorText(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-/** 空间范围：数据集 / View 名称、资产数量与策略定义名称。单项失败不影响其它项。 */
+/** 空间范围：数据集名称、资产数量与策略定义名称。单项失败不影响其它项。 */
 async function loadSpaceScoped() {
   const token = spaceLoadGate.begin();
   const spaceId = selectedSpaceId.value;
@@ -477,10 +477,9 @@ async function loadSpaceScoped() {
   const isCurrent = () => token.isLatest() && selectedSpaceId.value === spaceId;
   const page = { page: 1, size: 1 };
   await Promise.allSettled([
-    Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]).then(([datasets, views]) => {
+    listAllDatasets(spaceId).then(datasets => {
       if (!isCurrent()) return;
       names.datasets = Object.fromEntries(datasets.map(item => [item.dataset_id, item.name || item.dataset_id]));
-      names.views = Object.fromEntries(views.map(item => [item.view_id, item.name || item.view_id]));
       counts.datasets = datasets.filter(
         item =>
           !isLikelyFactorResultDataset(item) &&
@@ -598,7 +597,6 @@ async function manualRefresh() {
 function resetSpace() {
   Object.keys(counts).forEach(key => (counts[key] = null));
   names.datasets = {};
-  names.views = {};
   overview.value = undefined;
   monitorError.value = "";
   factorTasks.value = [];

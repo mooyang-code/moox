@@ -26,7 +26,7 @@ async function mockGateway(route: Route) {
       task_name: "Binance 现货 K 线 1m",
       data_type: "kline",
       provider: "binance",
-      result: { result_name: "采集结果", view_id: "view_binance_kline_1m", status: "active", data_kind: "time_series" },
+      result: { result_name: "采集结果", dataset_id: "dataset_binance_kline_1m", status: "active", data_kind: "time_series" },
       enabled: true
     };
     if (method === "GetTaskDetail") return route.fulfill({ json: ok({ task }) });
@@ -39,7 +39,12 @@ async function mockGateway(route: Route) {
             task_name: "Binance 现货 K 线 1m",
             data_type: "kline",
             provider: "binance",
-            result: { result_name: "采集结果", view_id: "view_binance_kline_1m", status: "active", data_kind: "time_series" },
+            result: {
+              result_name: "采集结果",
+              dataset_id: "dataset_binance_kline_1m",
+              status: "active",
+              data_kind: "time_series"
+            },
             enabled: true
           }
         ],
@@ -47,7 +52,7 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  // 按 ID 读单个数据集、View：采集结果页按任务的 View 定位
+  // 按 ID 读单个数据集：采集结果页按任务的结果数据集定位
   if (method === "GetDataset") {
     return route.fulfill({
       json: ok({
@@ -59,20 +64,6 @@ async function mockGateway(route: Route) {
           freq: "1m",
           status: "active",
           attributes: { owner_module: "collector", dataset_role: "raw_collection" }
-        }
-      })
-    });
-  }
-  if (method === "GetView") {
-    return route.fulfill({
-      json: ok({
-        view: {
-          space_id: "crypto",
-          view_id: "view_binance_kline_1m",
-          name: "现货K线视图",
-          dataset_id: "dataset_binance_kline_1m",
-          status: "active",
-          attributes: { owner_module: "collector", view_role: "collection_browse" }
         }
       })
     });
@@ -92,42 +83,6 @@ async function mockGateway(route: Route) {
           }
         ],
         page_result: { page: 1, size: 20, total: 1, has_more: false }
-      })
-    });
-  }
-  if (method === "ListViews") {
-    return route.fulfill({
-      json: ok({
-        views: [
-          {
-            space_id: "crypto",
-            view_id: "view_binance_kline_1m",
-            name: "现货K线视图",
-            dataset_id: "dataset_binance_kline_1m",
-            status: "active",
-            attributes: { owner_module: "collector", view_role: "collection_browse" }
-          }
-        ],
-        page_result: { page: 1, size: 20, total: 1, has_more: false }
-      })
-    });
-  }
-  if (method === "ListFields") {
-    return route.fulfill({
-      json: ok({
-        fields: [{ space_id: "crypto", field_id: "close", name: "收盘价", status: "active" }],
-        page_result: { page: 1, size: 20, total: 1, has_more: false }
-      })
-    });
-  }
-  if (method === "ListFieldGroups") {
-    return route.fulfill({
-      json: ok({
-        field_groups: [{ space_id: "crypto", group_id: "market", name: "市场数据", status: "active" }],
-        field_counts: { market: 1 },
-        total_field_count: 1,
-        ungrouped_field_count: 0,
-        page_result: { page: 1, size: 200, total: 1, has_more: false }
       })
     });
   }
@@ -166,20 +121,12 @@ async function mockGateway(route: Route) {
   if (method === "ListDatasetColumns") {
     return route.fulfill({
       json: ok({
-        columns: [{ column_name: "close", origin_type: "DATASET_COLUMN_ORIGIN_TYPE_FIELD", origin_id: "close" }],
-        page_result: { page: 1, size: 20, total: 1, has_more: false }
-      })
-    });
-  }
-  if (method === "ListViewColumns") {
-    return route.fulfill({
-      json: ok({
         columns: [
-          { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-          { column_name: "high", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-          { column_name: "low", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-          { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-          { column_name: "volume", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
+          { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "开盘价", status: "active" },
+          { column_name: "high", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "最高价", status: "active" },
+          { column_name: "low", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "最低价", status: "active" },
+          { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "收盘价", status: "active" },
+          { column_name: "volume", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "成交量", status: "active" }
         ],
         page_result: { page: 1, size: 20, total: 5, has_more: false }
       })
@@ -233,8 +180,6 @@ test("data collection owns base assets and has no top-level data assets menu", a
   await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
   await page.goto("/#/data/subjects");
   await expect(page.getByLabel("数据对象")).toBeVisible();
-  await page.goto("/#/data/fields");
-  await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
   await page.goto("/#/collector/tasks");
   await expect(page.getByLabel("采集任务")).toBeVisible();
   await page.goto("/#/collector/tasks?tab=results");
@@ -242,10 +187,10 @@ test("data collection owns base assets and has no top-level data assets menu", a
 });
 
 test("refresh and direct routes stay available for collection pages", async ({ page }) => {
-  await page.goto("/#/data/fields");
-  await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
+  await page.goto("/#/data/sources");
+  await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "数据源" })).toBeVisible();
   await page.goto("/#/collector/tasks?tab=results");
   await expect(page.getByText("Binance 现货 K 线 1m", { exact: true }).first()).toBeVisible();
 });
@@ -262,7 +207,7 @@ test("runtime status hosts cloud accounts and code packages, not an executors ta
 test("shows task-owned real data and the K-line modal", async ({ page }) => {
   await page.goto("/#/collector/tasks?tab=results");
 
-  await expect(page.getByText("时序视图 / DuckDB", { exact: true })).toBeVisible();
+  await expect(page.getByText("时序数据 / DuckDB", { exact: true })).toBeVisible();
   await expect(page.getByText("BTC-USDT", { exact: true })).toBeVisible();
   await expect(page.getByText("123.45", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "K线", exact: true })).toBeVisible();
@@ -289,25 +234,4 @@ test("data subjects status filter applies immediately", async ({ page }) => {
   await statusFilter.click();
   await page.locator(".arco-select-dropdown").getByText("停用", { exact: true }).first().click();
   await expect.poll(() => tagMemberRequests.at(-1)?.status).toBe("disabled");
-});
-
-test("desktop and mobile collection toolbars do not overlap", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/#/data/fields");
-  const search = page.getByPlaceholder("搜索字段 ID、中文名或描述");
-  const create = page.getByRole("button", { name: "新建字段" });
-  const [searchBox, createBox] = await Promise.all([search.boundingBox(), create.boundingBox()]);
-  expect(searchBox && createBox).toBeTruthy();
-  expect((createBox?.x || 0) + 8).toBeGreaterThan((searchBox?.x || 0) + (searchBox?.width || 0));
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/#/data/fields");
-  const mobileSearch = page.getByPlaceholder("搜索字段 ID、中文名或描述");
-  const mobileCreate = page.getByRole("button", { name: "新建字段" });
-  await expect(mobileSearch).toBeVisible();
-  await expect(mobileCreate).toBeVisible();
-  const [ms, mc] = await Promise.all([mobileSearch.boundingBox(), mobileCreate.boundingBox()]);
-  const searchBottom = (ms?.y || 0) + (ms?.height || 0);
-  const createTop = mc?.y || 0;
-  expect(createTop + 1).toBeGreaterThanOrEqual(searchBottom - 4);
 });

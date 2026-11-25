@@ -124,10 +124,10 @@ export interface ValidateStrategyResult {
   requirement: StrategyTaskRequirement | null;
 }
 
-/** 回放在一个市场读取的计算任务与它的结果 View。 */
+/** 回放在一个市场读取的计算任务与它的结果数据集。 */
 export interface ReplayTask {
   factor_task_id: string;
-  view_id: string;
+  dataset_id: string;
 }
 
 /** 基于 View 的研究回放任务。 */

@@ -23,25 +23,4 @@ describe("metadata catalog pages", () => {
     expect(subjects).toContain('label: "标签"');
     expect(subjects).toContain('label: "标签成员"');
   });
-
-  it("shows the field title in the search toolbar", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "fields/index.vue"), "utf8");
-    const toolbarStart = source.indexOf('<div class="toolbar">');
-    const workbenchStart = source.indexOf('<section class="field-workbench">');
-    const toolbar = source.slice(toolbarStart, workbenchStart);
-
-    expect(toolbar).toContain('<h2 class="page-title">字段管理</h2>');
-    expect(toolbar.indexOf("字段管理")).toBeLessThan(toolbar.indexOf("<a-input-search"));
-    expect(source).toMatch(/\.toolbar-main\s*\{[^}]*display:\s*flex;/);
-  });
-
-  it("说明字段注册后不能删除，只能停用或隐藏；批量栏也叫“隐藏”", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "fields/index.vue"), "utf8");
-    const batchBar = fs.readFileSync(path.resolve(__dirname, "fields/components/FieldBatchBar.vue"), "utf8");
-
-    expect(source).toContain("字段注册后不能删除");
-    expect(source).toContain("可以停用，或者隐藏");
-    expect(batchBar).toContain("隐藏</a-button");
-    expect(batchBar).not.toContain("删除</a-button");
-  });
 });

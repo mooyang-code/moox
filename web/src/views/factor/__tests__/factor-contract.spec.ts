@@ -21,7 +21,6 @@ import factorEditor from "@/views/factor/editor/index.vue?raw";
 import recalcTab from "@/views/factor/recalc/index.vue?raw";
 import recalcModel from "@/views/factor/recalc/recalc-model.ts?raw";
 import resultsTab from "@/views/factor/results/index.vue?raw";
-import resultsModel from "@/views/factor/results/results-model.ts?raw";
 
 describe("factor API contract", () => {
   it("uses explicit generic time-series fields", () => {
@@ -183,9 +182,8 @@ describe("factor pages contract", () => {
     expect(computeTasks).toContain("setFactorTaskStatus");
   });
 
-  it("scopes results to the factor result view of the selected set", () => {
-    expect(resultsModel).toContain('view.attributes?.view_role === "factor_result"');
-    expect(resultsModel).toContain("result_dataset_id");
+  it("scopes results to the result dataset of the selected set", () => {
+    expect(resultsTab).toContain("current.result_dataset_id");
     expect(resultsTab).not.toContain("ViewDefinitions");
     expect(resultsTab).toContain("result-toolbar");
     expect(resultsTab).toContain("#status-extra");

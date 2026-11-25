@@ -1,7 +1,6 @@
 import type {
   Dataset,
   DatasetColumn,
-  Field,
   FieldValue,
   FieldValueType,
   FilterCond,
@@ -9,9 +8,7 @@ import type {
   RecordRow,
   SortSpec,
   TimeSeriesRow,
-  TypedValue,
-  View,
-  ViewColumn
+  TypedValue
 } from "@/api/storage/types";
 import { formatInstant, toInstantMs, wallClockToMs } from "@/utils/time-zone";
 
@@ -86,8 +83,7 @@ export type ViewFilterFieldOption = {
 /** 逐列搜索项：系统键加业务列；传了 onlyColumns 时业务列只取其中的列（系统键始终保留）。 */
 export function buildViewFilterFieldOptions(
   mode: ViewBrowseMode,
-  viewColumns: Array<Pick<ViewColumn, "column_name" | "value_type">>,
-  datasetColumns: Array<Pick<DatasetColumn, "column_name" | "value_type">>,
+  columns: Array<Pick<DatasetColumn, "column_name" | "value_type">>,
   labels: Record<string, string> = {},
   onlyColumns?: string[]
 ): ViewFilterFieldOption[] {
@@ -107,18 +103,17 @@ export function buildViewFilterFieldOptions(
     push("record_id", "记录ID", "FIELD_VALUE_TYPE_STRING");
     push("version", "版本", "FIELD_VALUE_TYPE_STRING");
   }
-  const projected = viewColumns.some(column => column.column_name) ? viewColumns : datasetColumns;
   const only = onlyColumns ? new Set(onlyColumns) : undefined;
-  for (const column of projected) {
+  for (const column of columns) {
     if (!column.column_name || (only && !only.has(column.column_name))) continue;
     push(column.column_name, labels[column.column_name] || column.column_name, column.value_type || "FIELD_VALUE_TYPE_STRING");
   }
   return options;
 }
 
-export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
-  if (!view) return "";
-  return view.name || view.view_id || "";
+export function datasetDisplayName(dataset?: Pick<Dataset, "dataset_id" | "name"> | null) {
+  if (!dataset) return "";
+  return dataset.name || dataset.dataset_id || "";
 }
 
 // 新加“序列标签”筛选时的默认值：当前结果里只有一种序列标签时用它（例如 A 股恒为 default），有多种或还没有结果时不填。
@@ -127,50 +122,20 @@ export function defaultSeriesTag(rows: Array<{ seriesTag?: string }>) {
   return tags.size === 1 ? [...tags][0] : "";
 }
 
-export function viewModeFromPrimaryDataset(
-  datasets: Array<Pick<Dataset, "dataset_id" | "data_kind">>,
-  primaryDatasetId?: string
-): ViewBrowseMode {
-  if (!primaryDatasetId) return "missing";
-  const dataset = datasets.find(item => item.dataset_id === primaryDatasetId);
+export function viewModeFromDataset(dataset?: Pick<Dataset, "data_kind"> | null): ViewBrowseMode {
   if (!dataset) return "missing";
   return isTimeSeriesDataKind(dataset.data_kind) ? "time_series" : "record";
 }
 
-// 一个视图索引一个数据集，视图里的数据集列按它读取的数据集列命名，所以 origin_id 就是 view.dataset_id 下的裸列名。
-export function buildViewColumnLabels(
-  viewColumns: ViewColumn[],
-  datasetColumns: DatasetColumn[],
-  fields: Field[],
-  view?: Pick<View, "dataset_id"> | null
-) {
-  const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields);
-  const datasetId = view?.dataset_id || "";
-  const datasetColumnByName = new Map<string, DatasetColumn>();
-  for (const column of datasetColumns) {
-    if (!column.column_name || (datasetId && column.dataset_id && column.dataset_id !== datasetId)) continue;
-    datasetColumnByName.set(column.column_name, column);
-  }
-
+/** 列标题：因子输出列用技术列名（成员键），其余用列自己的显示名，没有时用列名。 */
+export function buildColumnLabels(columns: Array<Pick<DatasetColumn, "column_name" | "display_name" | "attributes">>) {
   const labels: Record<string, string> = {};
-  for (const column of viewColumns) {
+  for (const column of columns) {
     if (!column.column_name) continue;
-    const fromDataset = datasetColumnByName.get(column.origin_id);
-    if (fromDataset) {
-      labels[column.column_name] =
-        factorOutputName(column.attributes, column.column_name) ||
-        factorOutputName(fromDataset.attributes, fromDataset.column_name) ||
-        displayName(column.attributes) ||
-        datasetColumnLabels[qualifiedDatasetColumnName(fromDataset)] ||
-        datasetColumnLabels[fromDataset.column_name] ||
-        readableViewColumnLabel(column.column_name);
-      continue;
-    }
     labels[column.column_name] =
       factorOutputName(column.attributes, column.column_name) ||
-      displayName(column.attributes) ||
-      systemViewLabels[column.origin_id] ||
-      readableViewColumnLabel(column.column_name);
+      column.display_name?.trim() ||
+      readableColumnLabel(column.column_name);
   }
   return labels;
 }
@@ -293,63 +258,13 @@ export function exactSeriesTagFromFilters(filters: ViewFilterState[]) {
   return value || undefined;
 }
 
-function readableViewColumnLabel(columnName: string) {
+function readableColumnLabel(columnName: string) {
   return systemViewLabels[columnName] || columnName;
-}
-
-function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field[]) {
-  const fieldByID = new Map(fields.map(item => [item.field_id, item]));
-  const labels: Record<string, string> = {};
-  for (const column of datasetColumns) {
-    if (!column.column_name) continue;
-    const labelKey = qualifiedDatasetColumnName(column);
-    const columnDisplayName = displayName(column.attributes);
-    if (columnDisplayName) {
-      labels[labelKey] = columnDisplayName;
-      if (!column.dataset_id) labels[column.column_name] = columnDisplayName;
-      continue;
-    }
-    if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FIELD", 1)) {
-      const label = readableMetadataLabel(
-        column.column_name,
-        fieldByID.get(column.origin_id)?.name || fieldByID.get(column.column_name)?.name
-      );
-      labels[labelKey] = label;
-      if (!column.dataset_id) labels[column.column_name] = label;
-      continue;
-    }
-    if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_CUSTOM", 2)) {
-      const label = readableMetadataLabel(column.column_name);
-      labels[labelKey] = label;
-      if (!column.dataset_id) labels[column.column_name] = label;
-      continue;
-    }
-    const label = systemViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
-    labels[labelKey] = label;
-    if (!column.dataset_id) labels[column.column_name] = label;
-  }
-  return labels;
-}
-
-function readableMetadataLabel(columnName: string, metadataName?: string) {
-  return metadataName || systemViewLabels[columnName] || columnName;
-}
-
-function qualifiedDatasetColumnName(column: Pick<DatasetColumn, "dataset_id" | "column_name">) {
-  return column.dataset_id ? `${column.dataset_id}.${column.column_name}` : column.column_name;
-}
-
-function displayName(attributes?: Record<string, string>) {
-  return attributes?.display_name?.trim() || "";
 }
 
 /** 因子输出列（column_kind=output）的标签就是它的技术列名（成员键 [__输出名]）。 */
 function factorOutputName(attributes: Record<string, string> | undefined, columnName: string) {
   return attributes?.column_kind === "output" ? columnName : "";
-}
-
-function isOriginType(value: unknown, name: string, alias: number) {
-  return value === name || value === alias;
 }
 
 function isTimeSeriesDataKind(value: unknown) {

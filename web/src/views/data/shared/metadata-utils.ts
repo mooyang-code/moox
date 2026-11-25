@@ -76,21 +76,10 @@ export function jsonText(value?: string) {
   return value?.trim() || "{}";
 }
 
-const internalFieldPrefixPattern = /^dataset_[0-9a-z_]+__(.+)$/;
-
-export function displayFieldId(fieldId: string | undefined) {
-  const id = (fieldId || "").trim();
-  const matched = internalFieldPrefixPattern.exec(id);
-  return matched?.[1] || id;
-}
-
 export const statusOptions: SelectOption[] = [
   { label: "启用", value: "active" },
   { label: "禁用", value: "disabled" }
 ];
-
-// 字段只在逻辑上删除，字段管理要能看到已删除的字段。
-export const fieldStatusOptions: SelectOption[] = [...statusOptions, { label: "已删除", value: "deleted" }];
 
 export const dataKindOptions: SelectOption<DataKind>[] = [
   { label: "记录", value: "DATA_KIND_RECORD", aliases: [1, "record"] },

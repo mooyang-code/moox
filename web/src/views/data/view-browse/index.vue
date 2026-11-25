@@ -8,19 +8,24 @@
           {{ metaError }}
           <a-button type="text" size="mini" :loading="metaLoading" @click="loadMeta">重试</a-button>
         </a-alert>
-        <a-empty v-if="visibleViews.length === 0" :description="props.emptyDescription" />
+        <a-empty v-if="datasets.length === 0" :description="props.emptyDescription" />
 
         <template v-else>
-          <section v-if="visibleViews.length > 1" class="view-tabs-row">
-            <a-tabs v-model:active-key="activeViewKey" type="rounded" size="medium" class="view-tabs" @change="onViewChange">
-              <a-tab-pane v-for="view in visibleViews" :key="view.view_id" :title="viewDisplayName(view)" />
+          <section v-if="datasets.length > 1" class="view-tabs-row">
+            <a-tabs
+              v-model:active-key="activeDatasetKey"
+              type="rounded"
+              size="medium"
+              class="view-tabs"
+              @change="onDatasetChange"
+            >
+              <a-tab-pane v-for="dataset in datasets" :key="dataset.dataset_id" :title="datasetDisplayName(dataset)" />
             </a-tabs>
           </section>
 
           <section class="view-status-line">
-            <span>View: {{ activeView?.view_id || "-" }}</span>
-            <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
-            <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
+            <span>数据集: {{ currentDatasetName }} ({{ activeDataset?.dataset_id || "-" }})</span>
+            <span v-if="activeDataset?.freq">频率: {{ activeDataset.freq }}</span>
             <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="viewIndexTag.color">{{ viewIndexTag.text }}</a-tag>
@@ -38,343 +43,56 @@
           </a-alert>
 
           <div class="view-query-controls">
-            <section v-if="activeView" class="view-query-panel">
-              <div class="filter-grid">
-                <div v-if="mode === 'record'" class="filter-item record-keyword-filter">
-                  <label>全文检索:</label>
-                  <div class="filter-control">
-                    <a-input v-model="recordKeyword" allow-clear placeholder="关键词" @press-enter="onRecordSearch" />
-                    <span class="operator-static">⌕</span>
-                  </div>
-                </div>
-
-                <div
-                  v-for="filter in filters"
-                  :key="filter.fieldName"
-                  class="filter-item"
-                  :class="{ 'range-filter-item': filter.operator === 'range' }"
-                >
-                  <label :title="filterFieldLabel(filter.fieldName)">{{ filterFieldLabel(filter.fieldName) }}:</label>
-                  <div
-                    class="filter-control"
-                    :class="{ 'empty-filter-control': filter.operator === 'empty' || filter.operator === 'not_empty' }"
-                  >
-                    <template v-if="filter.operator === 'range'">
-                      <a-input
-                        v-model="filter.startValue"
-                        allow-clear
-                        :placeholder="filterPlaceholder(filter.fieldName, '开始值')"
-                        @press-enter="applyQueryControls"
-                      />
-                      <span class="range-separator">-</span>
-                      <a-input
-                        v-model="filter.endValue"
-                        allow-clear
-                        :placeholder="filterPlaceholder(filter.fieldName, '结束值')"
-                        @press-enter="applyQueryControls"
-                      />
-                    </template>
-                    <a-input
-                      v-else-if="filter.operator !== 'empty' && filter.operator !== 'not_empty'"
-                      v-model="filter.value"
-                      allow-clear
-                      :placeholder="filterPlaceholder(filter.fieldName, '检索值')"
-                      @press-enter="applyQueryControls"
-                    />
-                    <span v-else class="empty-filter-placeholder">{{ filter.operator === "empty" ? "为空" : "非空" }}</span>
-                    <a-dropdown trigger="click" @select="setFilterOperator(filter, $event)">
-                      <button class="operator-button" type="button" :title="filterOperatorTitle(filter.operator)">
-                        {{ filterOperatorSymbol(filter.operator) }}
-                      </button>
-                      <template #content>
-                        <a-doption v-for="option in filterOperatorOptions" :key="option.value" :value="option.value">
-                          {{ option.label }}
-                        </a-doption>
-                      </template>
-                    </a-dropdown>
-                  </div>
-                </div>
-              </div>
-
-              <div class="query-actions">
-                <a-button size="small" type="primary" :loading="loading" @click="applyQueryControls">查询</a-button>
-                <a-button
-                  v-if="mode === 'time_series' && klineAvailable"
-                  size="small"
-                  type="outline"
-                  :loading="klineLoading"
-                  @click="openKlineModal"
-                >
-                  <template #icon><icon-bar-chart /></template>
-                  K线
-                </a-button>
-                <a-button size="small" @click="resetQueryControls">清空</a-button>
-                <slot name="toolbar-extra" />
-              </div>
-
-              <div v-if="$slots['query-extra']" class="query-extra">
-                <slot name="query-extra" />
-              </div>
-              <p v-if="previewRangeText" class="preview-range-hint">{{ previewRangeText }}</p>
-            </section>
+            <QueryControls
+              v-if="activeDataset"
+              v-model:filters="filters"
+              v-model:record-keyword="recordKeyword"
+              :mode="mode"
+              :field-options="filterFieldOptions"
+              :column-title="columnTitle"
+              :loading="loading"
+              :kline-available="klineAvailable"
+              :kline-loading="klineLoading"
+              :preview-range-text="previewRangeText"
+              :zone="props.zone"
+              @query="applyQueryControls"
+              @record-search="onRecordSearch"
+              @reset="resetQueryControls"
+              @kline="openKlineModal"
+            >
+              <template v-if="$slots['toolbar-extra']" #toolbar-extra><slot name="toolbar-extra" /></template>
+              <template v-if="$slots['query-extra']" #query-extra><slot name="query-extra" /></template>
+            </QueryControls>
           </div>
 
-          <div class="view-result-table">
-            <section v-if="mode === 'time_series'" class="result-pane">
-              <a-table
-                row-key="id"
-                size="small"
-                :bordered="{ cell: true }"
-                :loading="loading || contextLoading"
-                :data="tableRows"
-                :pagination="false"
-                :scroll="{ x: 'max-content', y: 500 }"
-              >
-                <template #columns>
-                  <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{
-                      (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1
-                    }}</template>
-                  </a-table-column>
-                  <a-table-column data-index="key" :width="180" fixed="left">
-                    <template #title
-                      ><span class="sortable-title"
-                        >数据ID<span class="sort-arrows"
-                          ><button :class="sortArrowClass('subject_id', 'asc')" @click.stop="setSort('subject_id', 'asc')">
-                            ▲</button
-                          ><button :class="sortArrowClass('subject_id', 'desc')" @click.stop="setSort('subject_id', 'desc')">
-                            ▼
-                          </button></span
-                        ></span
-                      ></template
-                    >
-                  </a-table-column>
-                  <a-table-column v-if="showSystemColumn('freq')" data-index="freq" :width="96">
-                    <template #title
-                      ><span class="sortable-title"
-                        >频率<span class="sort-arrows"
-                          ><button :class="sortArrowClass('freq', 'asc')" @click.stop="setSort('freq', 'asc')">▲</button
-                          ><button :class="sortArrowClass('freq', 'desc')" @click.stop="setSort('freq', 'desc')">▼</button></span
-                        ></span
-                      ></template
-                    >
-                  </a-table-column>
-                  <a-table-column v-if="showSystemColumn('series_tag')" data-index="seriesTag" :width="120">
-                    <template #title
-                      ><span class="sortable-title"
-                        >序列标签<span class="sort-arrows"
-                          ><button :class="sortArrowClass('series_tag', 'asc')" @click.stop="setSort('series_tag', 'asc')">
-                            ▲</button
-                          ><button :class="sortArrowClass('series_tag', 'desc')" @click.stop="setSort('series_tag', 'desc')">
-                            ▼
-                          </button></span
-                        ></span
-                      ></template
-                    >
-                    <template #cell="{ record }"
-                      ><span :title="record.seriesTag || undefined">{{ seriesTagDisplay(record.seriesTag) }}</span></template
-                    >
-                  </a-table-column>
-                  <a-table-column data-index="version" :width="230">
-                    <template #cell="{ record }">{{ formatInstant(record.version, zone) }}</template>
-                    <template #title
-                      ><span class="sortable-title"
-                        >时间<span class="sort-arrows"
-                          ><button :class="sortArrowClass('data_time', 'asc')" @click.stop="setSort('data_time', 'asc')">▲</button
-                          ><button :class="sortArrowClass('data_time', 'desc')" @click.stop="setSort('data_time', 'desc')">
-                            ▼
-                          </button></span
-                        ></span
-                      ></template
-                    >
-                  </a-table-column>
-                  <a-table-column
-                    v-for="column in visibleColumnNames"
-                    :key="column"
-                    :width="dynamicColumnWidth(column)"
-                    :ellipsis="true"
-                    :tooltip="true"
-                  >
-                    <template #title>
-                      <span class="sortable-title">
-                        {{ columnTitle(column) }}
-                        <span class="sort-arrows">
-                          <button :class="sortArrowClass(column, 'asc')" @click.stop="setSort(column, 'asc')">▲</button>
-                          <button :class="sortArrowClass(column, 'desc')" @click.stop="setSort(column, 'desc')">▼</button>
-                        </span>
-                      </span>
-                    </template>
-                    <template #cell="{ record }">{{ record.values[column] || "-" }}</template>
-                  </a-table-column>
-                  <a-table-column v-if="$slots['row-extra']" :title="props.rowExtraTitle" :width="150" align="center">
-                    <template #cell="{ record }">
-                      <slot name="row-extra" :row-key="record.rawKey" :values="record.values" />
-                    </template>
-                  </a-table-column>
-                  <a-table-column title="操作" :width="120" align="center" fixed="right">
-                    <template #cell="{ record }">
-                      <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
-                      <a-button
-                        v-if="klineAvailable"
-                        type="text"
-                        size="mini"
-                        :disabled="!record.rawKey?.subject_id"
-                        @click="openRowKline(record)"
-                        >K 线</a-button
-                      >
-                    </template>
-                  </a-table-column>
-                </template>
-              </a-table>
-              <div v-if="hasQueried" class="preview-pager">
-                <div class="preview-pager__actions">
-                  <a-tooltip content="上一页">
-                    <a-button
-                      size="small"
-                      shape="circle"
-                      :disabled="pagination.current <= 1 || loading || contextLoading"
-                      aria-label="上一页"
-                      @click="onPreviewPrevPage"
-                    >
-                      <template #icon><icon-left /></template>
-                    </a-button>
-                  </a-tooltip>
-                  <a-tooltip content="下一页">
-                    <a-button
-                      size="small"
-                      shape="circle"
-                      :disabled="!previewHasMore || loading || contextLoading"
-                      aria-label="下一页"
-                      @click="onPreviewNextPage"
-                    >
-                      <template #icon><icon-right /></template>
-                    </a-button>
-                  </a-tooltip>
-                </div>
-              </div>
-            </section>
-
-            <section v-else-if="mode === 'record'" class="result-pane">
-              <a-table
-                row-key="id"
-                size="small"
-                :bordered="{ cell: true }"
-                :loading="loading || contextLoading"
-                :data="tableRows"
-                :pagination="false"
-                :scroll="{ x: 'max-content', y: 460 }"
-              >
-                <template #columns>
-                  <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{
-                      (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1
-                    }}</template>
-                  </a-table-column>
-                  <a-table-column data-index="key" :width="200" fixed="left">
-                    <template #title
-                      ><span class="sortable-title"
-                        >记录ID<span class="sort-arrows"
-                          ><button :class="sortArrowClass('record_id', 'asc')" @click.stop="setSort('record_id', 'asc')">▲</button
-                          ><button :class="sortArrowClass('record_id', 'desc')" @click.stop="setSort('record_id', 'desc')">
-                            ▼
-                          </button></span
-                        ></span
-                      ></template
-                    >
-                  </a-table-column>
-                  <a-table-column data-index="version" :width="230">
-                    <template #title
-                      ><span class="sortable-title"
-                        >版本<span class="sort-arrows"
-                          ><button :class="sortArrowClass('version', 'asc')" @click.stop="setSort('version', 'asc')">▲</button
-                          ><button :class="sortArrowClass('version', 'desc')" @click.stop="setSort('version', 'desc')">
-                            ▼
-                          </button></span
-                        ></span
-                      ></template
-                    >
-                  </a-table-column>
-                  <a-table-column
-                    v-for="column in visibleColumnNames"
-                    :key="column"
-                    :width="dynamicColumnWidth(column)"
-                    :ellipsis="true"
-                    :tooltip="true"
-                  >
-                    <template #title>
-                      <span class="sortable-title">
-                        {{ columnTitle(column) }}
-                        <span class="sort-arrows">
-                          <button :class="sortArrowClass(column, 'asc')" @click.stop="setSort(column, 'asc')">▲</button>
-                          <button :class="sortArrowClass(column, 'desc')" @click.stop="setSort(column, 'desc')">▼</button>
-                        </span>
-                      </span>
-                    </template>
-                    <template #cell="{ record }">{{ record.values[column] || "-" }}</template>
-                  </a-table-column>
-                  <a-table-column title="操作" :width="92" align="center" fixed="right">
-                    <template #cell="{ record }">
-                      <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
-                    </template>
-                  </a-table-column>
-                </template>
-              </a-table>
-              <div v-if="hasQueried" class="preview-pager">
-                <div class="preview-pager__actions">
-                  <a-tooltip content="上一页">
-                    <a-button
-                      size="small"
-                      shape="circle"
-                      :disabled="pagination.current <= 1 || loading || contextLoading"
-                      aria-label="上一页"
-                      @click="onPreviewPrevPage"
-                    >
-                      <template #icon><icon-left /></template>
-                    </a-button>
-                  </a-tooltip>
-                  <a-tooltip content="下一页">
-                    <a-button
-                      size="small"
-                      shape="circle"
-                      :disabled="!previewHasMore || loading || contextLoading"
-                      aria-label="下一页"
-                      @click="onPreviewNextPage"
-                    >
-                      <template #icon><icon-right /></template>
-                    </a-button>
-                  </a-tooltip>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <a-empty v-if="mode !== 'time_series' && mode !== 'record'" description="无法识别该视图的主数据集类型" />
+          <ResultTable
+            :mode="mode"
+            :rows="tableRows"
+            :column-names="visibleColumnNames"
+            :all-column-names="tableColumnNames"
+            :restrict-detail-columns="Boolean(props.displayColumns)"
+            :column-title="columnTitle"
+            :system-columns="props.displayColumns?.system"
+            :sort-field="sortState.fieldName"
+            :sort-direction="sortState.direction"
+            :loading="loading || contextLoading"
+            :has-queried="hasQueried"
+            :has-more="previewHasMore"
+            :page="pagination.current"
+            :page-size="DEFAULT_VIEW_PAGE_SIZE"
+            :kline-available="klineAvailable"
+            :row-extra-title="props.rowExtraTitle"
+            :zone="props.zone"
+            @sort="setSort"
+            @prev="onPreviewPrevPage"
+            @next="onPreviewNextPage"
+            @row-kline="openRowKline"
+          >
+            <template v-if="$slots['row-extra']" #row-extra="slotProps"><slot name="row-extra" v-bind="slotProps" /></template>
+          </ResultTable>
         </template>
       </a-spin>
     </div>
-
-    <a-modal v-model:visible="detailVisible" title="视图数据详情" width="820px" :footer="false">
-      <div v-if="detailRow" class="detail-body">
-        <a-descriptions :column="2" bordered>
-          <a-descriptions-item :label="mode === 'time_series' ? '数据ID' : '记录ID'">{{ detailRow.key }}</a-descriptions-item>
-          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{
-            mode === "time_series" ? formatInstant(detailRow.version, zone) : detailRow.version
-          }}</a-descriptions-item>
-          <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="市场">{{
-            seriesTagMarketText(detailRow.seriesTag)
-          }}</a-descriptions-item>
-          <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="序列标签">{{
-            detailRow.seriesTag
-          }}</a-descriptions-item>
-        </a-descriptions>
-        <a-table :data="detailColumns" :pagination="false" :bordered="{ cell: true }" size="small" class="detail-table">
-          <template #columns>
-            <a-table-column title="字段名" data-index="name" :width="220" />
-            <a-table-column title="字段值" data-index="value" :ellipsis="true" :tooltip="true" />
-          </template>
-        </a-table>
-      </div>
-    </a-modal>
 
     <KlineModal
       v-model:visible="klineVisible"
@@ -383,7 +101,7 @@
       :freq="klineFreq"
       :records="klineRecords"
       :loading="klineLoading"
-      :zone="zone"
+      :zone="props.zone"
       @reload="reloadKlineRecords"
     />
   </div>
@@ -392,7 +110,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { listAllDatasets, listAllViews, listDatasetColumns, listAllViewColumns, listFields } from "@/api/storage/metadata";
+import { listAllDatasetColumns } from "@/api/storage/metadata";
 import {
   getViewState,
   isViewNotFoundError,
@@ -400,51 +118,30 @@ import {
   searchRecordRows,
   type GetViewStateRsp
 } from "@/api/storage/view";
-import type {
-  Dataset,
-  DatasetColumn,
-  Field,
-  FieldValueType,
-  RecordRow,
-  TimeSeriesKey,
-  TimeSeriesRow,
-  View,
-  ViewColumn
-} from "@/api/storage/types";
-import { createLatestRequestGuard } from "@/utils/latest-request";
+import type { Dataset, DatasetColumn, FieldValueType } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
-import { seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
 import {
-  adaptiveColumnWidth,
+  buildColumnLabels,
+  buildViewFilterExprs,
+  buildViewFilterFieldOptions,
+  buildViewSorts,
+  datasetDisplayName,
+  defaultSeriesTag,
   recordRowsToTableRows,
   rowsToColumnNames,
   timeSeriesRowsToTableRows,
-  type BrowseTableRow,
-  buildKlineChartRecords,
-  buildKlineQuerySorts,
-  buildViewColumnLabels,
-  buildViewFilterFieldOptions,
-  buildViewFilterExprs,
-  buildViewSorts,
-  defaultSeriesTag,
+  viewModeFromDataset,
   type ViewFilterFieldOption,
-  DEFAULT_KLINE_LIMIT,
-  exactSeriesTagFromFilters,
-  klineRowsHaveFreq,
-  klineSubjectIdFromFilters,
-  normalizeKlineLimit,
-  type KlineChartRecord,
-  viewDisplayName,
-  viewModeFromPrimaryDataset,
-  type ViewFilterOperator,
   type ViewFilterState,
   type ViewSortDirection
 } from "./view-browse-utils";
-import { viewMatchesAttribution, type OwnerModule, type ViewRole } from "@/views/data/shared/module-attribution";
 import KlineModal from "./kline-modal.vue";
-import { loadTargetedViewCatalog } from "./composables/view-browse-catalog";
-import { formatInstant, zoneSuffix } from "@/utils/time-zone";
+import QueryControls from "./query-controls.vue";
+import ResultTable from "./result-table.vue";
+import { loadTargetedDatasets } from "./composables/view-browse-catalog";
+import { useViewKline, type ViewBrowseTableRow } from "./composables/use-view-kline";
+import { formatInstant } from "@/utils/time-zone";
 import { usePolling } from "@/hooks/usePolling";
 
 defineOptions({ name: "DataViewBrowse" });
@@ -453,17 +150,16 @@ const props = withDefaults(
   defineProps<{
     emptyDescription?: string;
     emptyRowsDescription?: string;
-    viewOwnerModules?: OwnerModule[];
-    viewRoles?: ViewRole[];
     autoRefreshIntervalMs?: number;
-    viewIds?: string[];
-    activeViewId?: string;
+    /** 要浏览的数据集（每个数据集恰好有一个查询索引）；多个时按页签切换。 */
+    datasetIds?: string[];
+    activeDatasetId?: string;
     refreshKey?: number;
     /** 为 false 时只加载元数据、不发查询：调用方先准备好投影与附加条件，再放行首查。 */
     queryReady?: boolean;
     /** 表格显示的系统键（数据ID、时间始终显示）与业务列及其顺序；不传时显示全部列。 */
     displayColumns?: { system: string[]; business: string[] };
-    /** 时序查询的 column_names，只含业务列且不能为空；不传时投影全部视图列。 */
+    /** 时序查询的 column_names，只含业务列且不能为空；不传时投影数据集全部启用的列。 */
     projectColumns?: string[];
     /** 逐列搜索只为这些业务列生成（系统键始终保留）；不传时为全部列。 */
     searchColumns?: string[];
@@ -476,13 +172,11 @@ const props = withDefaults(
   }>(),
   {
     zone: "UTC",
-    emptyDescription: "暂无查询视图",
-    emptyRowsDescription: "当前视图查询成功，但结果为空。",
-    viewOwnerModules: undefined,
-    viewRoles: undefined,
+    emptyDescription: "暂无数据集",
+    emptyRowsDescription: "当前数据集查询成功，但结果为空。",
     autoRefreshIntervalMs: 0,
-    viewIds: undefined,
-    activeViewId: "",
+    datasetIds: undefined,
+    activeDatasetId: "",
     refreshKey: 0,
     queryReady: true,
     displayColumns: undefined,
@@ -495,38 +189,21 @@ const props = withDefaults(
 
 const emit = defineEmits<{ (event: "cleared"): void }>();
 
-type ViewBrowseTableRow = BrowseTableRow & { freq?: string; rawKey?: TimeSeriesKey };
-
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 
-const views = ref<View[]>([]);
 const datasets = ref<Dataset[]>([]);
-const targetedViewIds = computed(() => [...new Set((props.viewIds || []).map(viewId => viewId.trim()).filter(Boolean))]);
-// 给了 viewIds 时只显示这些 View；没给时按所属模块和用途筛选。
-const visibleViews = computed(() => {
-  const allowedViewIds = new Set(targetedViewIds.value);
-  return views.value.filter(view => {
-    if (allowedViewIds.size > 0) return allowedViewIds.has(view.view_id);
-    return viewMatchesAttribution(view, { ownerModules: props.viewOwnerModules, viewRoles: props.viewRoles });
-  });
-});
-const viewColumns = ref<ViewColumn[]>([]);
-const datasetColumns = ref<DatasetColumn[]>([]);
+const targetedDatasetIds = computed(() => [...new Set((props.datasetIds || []).map(id => id.trim()).filter(Boolean))]);
+/** 数据集启用的列；停用的列读取时隐藏。 */
+const columns = ref<DatasetColumn[]>([]);
 let metaLoadSequence = 0;
 let viewContextSequence = 0;
 let viewRowsRequestSequence = 0;
-const fields = ref<Field[]>([]);
-const activeViewKey = ref("");
+const activeDatasetKey = ref("");
 const tableRows = ref<ViewBrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
 const visibleColumnNames = computed(() => props.displayColumns?.business ?? tableColumnNames.value);
 
-function showSystemColumn(name: string) {
-  return !props.displayColumns || props.displayColumns.system.includes(name);
-}
-const detailRow = ref<ViewBrowseTableRow>();
-const detailVisible = ref(false);
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
 // 时序预览先回答“最新一根是哪根”：不显式排序时 DuckDB 按索引顺序返回，
@@ -549,10 +226,10 @@ function isViewIndexNotReadyError(value: string) {
 function viewQueryErrorMessage(error: unknown, fallback: string) {
   const message = error instanceof Error ? error.message : fallback;
   queryErrorIsPreparing.value = isViewIndexNotReadyError(message);
-  return queryErrorIsPreparing.value ? "视图创建中，索引就绪后请刷新查看。" : message;
+  return queryErrorIsPreparing.value ? "查询索引创建中，就绪后请刷新查看。" : message;
 }
 
-/** View 索引状态：读不到时按“未知”显示，不影响查询。 */
+/** 查询索引状态：读不到时按“未知”显示，不影响查询。 */
 const viewIndex = ref<{ status: "unknown" | "ready" | "building" | "unregistered"; state?: GetViewStateRsp }>({
   status: "unknown"
 });
@@ -571,7 +248,7 @@ const viewIndexTag = computed(() => {
 const viewIndexColumnsText = computed(() => {
   const built = viewIndex.value.status === "ready" ? viewIndex.value.state?.columns?.length : undefined;
   if (built === undefined) return "";
-  const declared = viewColumns.value.length;
+  const declared = columns.value.length;
   return declared && declared !== built ? `已建列: ${built}/${declared}` : `已建列: ${built}`;
 });
 const viewIndexCoverageText = computed(() => {
@@ -582,12 +259,6 @@ const viewIndexCoverageText = computed(() => {
 
 const hasQueried = ref(false);
 const previewHasMore = ref(false);
-const klineVisible = ref(false);
-const klineSubjectId = ref("");
-const klineFreq = ref("");
-const klineRecords = ref<KlineChartRecord[]>([]);
-const klineLoading = ref(false);
-const klineLimit = ref(DEFAULT_KLINE_LIMIT);
 const VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24;
 const VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS = 7;
 const DEFAULT_VIEW_PAGE_SIZE = 25;
@@ -597,88 +268,51 @@ const pagination = reactive({
   current: 1
 });
 
-const filterOperatorOptions: Array<{ label: string; value: ViewFilterOperator }> = [
-  { label: "% 类似", value: "like" },
-  { label: "ABC 开头等于", value: "prefix" },
-  { label: "ABC 结尾等于", value: "suffix" },
-  { label: "= 等于", value: "eq" },
-  { label: "≠ 不等于", value: "neq" },
-  { label: "⊂ 包含", value: "contains" },
-  { label: "⊄ 不包含", value: "not_contains" },
-  { label: "↔ 范围", value: "range" },
-  { label: "○ 为空", value: "empty" },
-  { label: "Ø 非空", value: "not_empty" }
-];
-const filterOperatorSymbols: Partial<Record<ViewFilterOperator, string>> = {
-  like: "%",
-  prefix: "Ab",
-  suffix: "bA",
-  eq: "=",
-  neq: "≠",
-  contains: "⊂",
-  not_contains: "⊄",
-  range: "↔",
-  empty: "○",
-  not_empty: "Ø"
-};
-
-const activeView = computed(() => visibleViews.value.find(item => item.view_id === activeViewKey.value));
-const primaryDataset = computed(() => datasets.value.find(item => item.dataset_id === activeView.value?.dataset_id));
-const currentDatasetName = computed(() => {
-  const dataset = primaryDataset.value;
-  if (!dataset) return "-";
-  return dataset.name || dataset.dataset_id;
-});
-const currentDatasetId = computed(() => activeView.value?.dataset_id || "-");
+const activeDataset = computed(() => datasets.value.find(item => item.dataset_id === activeDatasetKey.value));
+const currentDatasetName = computed(() => datasetDisplayName(activeDataset.value) || "-");
 const currentDatasetRetention = computed(() => {
-  const dataset = primaryDataset.value;
+  const dataset = activeDataset.value;
   if (!dataset?.retention) return "";
   return `${formatRetention(dataset.retention)}（${retentionSourceLabel(dataset.retention_source)}）`;
 });
 
-const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.dataset_id));
+const mode = computed(() => viewModeFromDataset(activeDataset.value));
 const modeText = computed(() => {
-  if (mode.value === "time_series") return "时序视图 / DuckDB";
-  if (mode.value === "record") return "记录视图 / Bleve";
+  if (mode.value === "time_series") return "时序数据 / DuckDB";
+  if (mode.value === "record") return "记录数据 / Bleve";
   return "未知类型";
 });
 
-const explicitViewColumnNames = computed(() => viewColumns.value.map(item => item.column_name).filter(Boolean));
-const datasetColumnNames = computed(() => datasetColumns.value.map(item => item.column_name).filter(Boolean));
-const preferredColumnNames = computed(() =>
-  explicitViewColumnNames.value.length > 0 ? explicitViewColumnNames.value : datasetColumnNames.value
-);
-const klineColumnNames = computed(() => {
-  const names = preferredColumnNames.value;
-  const out: string[] = [];
-  for (const basename of KLINE_COLUMN_BASENAMES) {
-    if (names.includes(basename)) out.push(basename);
-  }
-  return out;
-});
-// 有开高低收四列才能画 K 线（因子结果等 View 没有）：没有时不显示 K 线入口
+const columnNames = computed(() => columns.value.map(item => item.column_name).filter(Boolean));
+const klineColumnNames = computed(() => KLINE_COLUMN_BASENAMES.filter(name => columnNames.value.includes(name)));
+// 有开高低收四列才能画 K 线（因子结果等数据集没有）：没有时不显示 K 线入口
 const klineAvailable = computed(() => ["open", "high", "low", "close"].every(name => klineColumnNames.value.includes(name)));
-const columnLabels = computed(() => {
-  const labels = buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, activeView.value);
-  for (const column of datasetColumns.value) {
-    if (!column.column_name || labels[column.column_name]) continue;
-    labels[column.column_name] = column.attributes?.display_name?.trim() || column.column_name;
-  }
-  return labels;
-});
+const columnLabels = computed(() => buildColumnLabels(columns.value));
 const filterFieldOptions = computed(() =>
-  buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value, props.searchColumns)
+  buildViewFilterFieldOptions(mode.value, columns.value, columnLabels.value, props.searchColumns)
 );
-const detailColumns = computed(() => {
-  const row = detailRow.value;
-  if (!row) return [];
-  // 调用方指定了显示列时只列这些列：其余列没有投影，列出来只会是一排“-”。
-  const names = props.displayColumns
-    ? visibleColumnNames.value
-    : rowsToColumnNames([rowToSyntheticRecord(row)], tableColumnNames.value);
-  return names.map(name => ({ name: columnTitle(name), value: row.values[name] || "-" }));
+
+const {
+  klineVisible,
+  klineSubjectId,
+  klineFreq,
+  klineRecords,
+  klineLoading,
+  klineLimit,
+  openRowKline,
+  openKlineModal,
+  reloadKlineRecords,
+  closeKlineModal,
+  invalidateKline
+} = useViewKline({
+  spaceId: () => spaceStore.requireSpaceId(),
+  datasetId: () => activeDataset.value?.dataset_id,
+  zone: () => props.zone,
+  filters,
+  columnNames: () => klineColumnNames.value,
+  ownFilterExprs: () => activeFilterExprs(false),
+  previewRange: () => defaultTimeSeriesPreviewRange()
 });
-const normalizedKlineLimit = computed(() => normalizeKlineLimit(klineLimit.value));
 
 async function loadMeta() {
   const sequence = ++metaLoadSequence;
@@ -691,35 +325,14 @@ async function loadMeta() {
   metaLoading.value = true;
   metaError.value = "";
   try {
-    const page = { page: 1, size: 1000 };
-    // 首页结果只依赖视图和数据集；字段只用来显示列名，可以晚到，
-    // 不放进首查路径，免得元数据读得慢拖住查询。
-    if (targetedViewIds.value.length > 0) {
-      const catalog = await loadTargetedViewCatalog(space_id, targetedViewIds.value);
-      if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
-      views.value = catalog.views;
-      datasets.value = catalog.datasets;
-    } else {
-      const [viewItems, datasetItems] = await Promise.all([listAllViews(space_id), listAllDatasets(space_id)]);
-      if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
-      views.value = viewItems;
-      datasets.value = datasetItems;
-    }
-    ensureSelectedView();
+    const items = await loadTargetedDatasets(space_id, targetedDatasetIds.value);
+    if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
+    datasets.value = items;
+    ensureSelectedDataset();
     await loadViewContext();
-
-    // 这几项尽力而为：标签目录读不到时，不能藏掉已读到的行，也不能让页面一直转圈。
-    void listFields({ space_id, page })
-      .then(fieldRsp => {
-        if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
-        fields.value = fieldRsp.fields || [];
-      })
-      .catch(error => {
-        console.warn("加载字段标签失败", error);
-      });
   } catch (error) {
     if (sequence === metaLoadSequence) {
-      metaError.value = error instanceof Error ? error.message : "加载视图失败";
+      metaError.value = error instanceof Error ? error.message : "加载数据集失败";
       Message.error(metaError.value);
     }
   } finally {
@@ -727,37 +340,25 @@ async function loadMeta() {
   }
 }
 
-function ensureSelectedView() {
-  if (!visibleViews.value.length) {
-    activeViewKey.value = "";
+function ensureSelectedDataset() {
+  if (!datasets.value.length) {
+    activeDatasetKey.value = "";
     return;
   }
-  const requestedViewId = props.activeViewId || activeViewKey.value;
-  if (requestedViewId && visibleViews.value.some(item => item.view_id === requestedViewId)) {
-    activeViewKey.value = requestedViewId;
-  } else if (!activeViewKey.value || !visibleViews.value.some(item => item.view_id === activeViewKey.value)) {
-    activeViewKey.value = visibleViews.value[0].view_id;
+  const requested = props.activeDatasetId || activeDatasetKey.value;
+  if (requested && datasets.value.some(item => item.dataset_id === requested)) {
+    activeDatasetKey.value = requested;
+  } else if (!activeDatasetKey.value || !datasets.value.some(item => item.dataset_id === activeDatasetKey.value)) {
+    activeDatasetKey.value = datasets.value[0].dataset_id;
   }
 }
 
 watch(
-  () => visibleViews.value.map(item => item.view_id).join("|"),
-  async () => {
-    const current = activeViewKey.value;
-    ensureSelectedView();
-    if (activeViewKey.value !== current) {
-      clearViewState();
-      await loadViewContext();
-    }
-  }
-);
-
-watch(
-  () => props.activeViewId,
+  () => props.activeDatasetId,
   () => {
-    const current = activeViewKey.value;
-    ensureSelectedView();
-    if (activeViewKey.value !== current) {
+    const current = activeDatasetKey.value;
+    ensureSelectedDataset();
+    if (activeDatasetKey.value !== current) {
       clearViewState();
       void loadViewContext();
     }
@@ -765,12 +366,11 @@ watch(
 );
 
 watch(
-  () => targetedViewIds.value.join("\u0000"),
+  () => targetedDatasetIds.value.join("\u0000"),
   (next, previous) => {
     if (next === previous) return;
-    views.value = [];
     datasets.value = [];
-    activeViewKey.value = "";
+    activeDatasetKey.value = "";
     clearViewState();
     void loadMeta();
   }
@@ -784,13 +384,13 @@ watch(
 );
 
 // 查询或上下文加载期间的刷新合并成之后的一次补读，不在忙时悄悄丢掉用户的刷新。
-watch([pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id], () => {
-  if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
+watch([pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeDataset.value?.dataset_id], () => {
+  if (!pendingRowsRefresh.value || !activeDataset.value || loading.value || contextLoading.value || metaLoading.value) return;
   pendingRowsRefresh.value = false;
   void reloadRows(true);
 });
 
-async function onViewChange() {
+async function onDatasetChange() {
   clearViewState();
   await loadViewContext();
 }
@@ -800,13 +400,11 @@ function clearViewState() {
   viewRowsRequestSequence += 1;
   contextLoading.value = false;
   loading.value = false;
-  viewColumns.value = [];
-  datasetColumns.value = [];
+  columns.value = [];
   tableRows.value = [];
   tableColumnNames.value = [];
   filters.value = [];
   resetSortState();
-  detailRow.value = undefined;
   closeKlineModal();
   queryError.value = "";
   rowsStale.value = false;
@@ -817,67 +415,54 @@ function clearViewState() {
   viewIndex.value = { status: "unknown" };
 }
 
-/** 读取当前 View 的索引状态；尽力而为，失败只把状态记为未知。 */
+/** 读取当前数据集查询索引的状态；尽力而为，失败只把状态记为未知。 */
 async function refreshViewIndex() {
   const space_id = selectedSpaceId.value;
-  const view_id = activeView.value?.view_id;
-  if (!space_id || !view_id) return;
-  const isCurrent = () => selectedSpaceId.value === space_id && activeView.value?.view_id === view_id;
+  const dataset_id = activeDataset.value?.dataset_id;
+  if (!space_id || !dataset_id) return;
+  const isCurrent = () => selectedSpaceId.value === space_id && activeDataset.value?.dataset_id === dataset_id;
   try {
-    const state = await getViewState({ space_id, view_id });
+    const state = await getViewState({ space_id, dataset_id });
     if (isCurrent()) viewIndex.value = { status: state.index_id ? "ready" : "building", state };
   } catch (error) {
     if (!isCurrent()) return;
     viewIndex.value = { status: isViewNotFoundError(error) ? "unregistered" : "unknown" };
-    if (!isViewNotFoundError(error)) console.warn("读取视图索引状态失败", error);
+    if (!isViewNotFoundError(error)) console.warn("读取查询索引状态失败", error);
   }
 }
 
 async function loadViewContext() {
   const requestSequence = ++viewContextSequence;
   const space_id = selectedSpaceId.value;
-  const view = activeView.value;
-  if (!space_id || !view) {
+  const dataset = activeDataset.value;
+  if (!space_id || !dataset) {
     contextLoading.value = false;
     return;
   }
 
   contextLoading.value = true;
   try {
-    const contextViewId = view.view_id;
+    const datasetId = dataset.dataset_id;
     void refreshViewIndex();
-    const isCurrent = () =>
-      requestSequence === viewContextSequence &&
-      selectedSpaceId.value === space_id &&
-      activeView.value?.view_id === contextViewId;
-    const datasetColumnsPromise = loadDatasetColumns(space_id, view).catch(error => {
-      console.warn("加载数据集列失败", error);
-      return [] as DatasetColumn[];
-    });
-    const loadedViewColumns = await listAllViewColumns(space_id, contextViewId);
-    if (!isCurrent()) return;
-    viewColumns.value = loadedViewColumns;
-    const loadedDatasetColumns = await datasetColumnsPromise;
-    if (!isCurrent()) return;
-    datasetColumns.value = loadedDatasetColumns;
+    const loaded = await listAllDatasetColumns(space_id, datasetId);
+    if (
+      requestSequence !== viewContextSequence ||
+      selectedSpaceId.value !== space_id ||
+      activeDataset.value?.dataset_id !== datasetId
+    ) {
+      return;
+    }
+    columns.value = loaded.filter(column => column.status === "active");
     resetFilterRows();
     resetSortState();
     await reloadRows();
   } catch (error) {
     if (requestSequence === viewContextSequence) {
-      Message.error(error instanceof Error ? error.message : "加载视图上下文失败");
+      Message.error(error instanceof Error ? error.message : "加载数据集列失败");
     }
   } finally {
     if (requestSequence === viewContextSequence) contextLoading.value = false;
   }
-}
-
-async function loadDatasetColumns(space_id: string, view: View) {
-  const datasetIds = new Set([view.dataset_id].filter(Boolean));
-  const results = await Promise.all(
-    Array.from(datasetIds).map(dataset_id => listDatasetColumns({ space_id, dataset_id, page: { page: 1, size: 1000 } }))
-  );
-  return results.flatMap(rsp => rsp.columns || []);
 }
 
 /**
@@ -890,43 +475,74 @@ interface ReloadOptions {
 
 async function reloadRows(retainRowsOnError = false, options: ReloadOptions = {}) {
   if (!props.queryReady) return;
-  if (!retainRowsOnError || !lastRowsReadAt.value) tableColumnNames.value = preferredColumnNames.value;
-  if (!activeView.value) return;
+  if (!retainRowsOnError || !lastRowsReadAt.value) tableColumnNames.value = columnNames.value;
+  if (!activeDataset.value) return;
   if (mode.value === "time_series") {
-    await loadTimeSeriesViewRows(retainRowsOnError, options);
+    await loadTimeSeriesRows(retainRowsOnError, options);
     return;
   }
   if (mode.value === "record") {
-    await loadRecordViewRows(retainRowsOnError, options);
+    await loadRecordRows(retainRowsOnError, options);
   }
 }
 
 async function refreshRowsInBackground() {
   pendingRowsRefresh.value = true;
   void refreshViewIndex();
-  if (!activeView.value && !metaLoading.value) await loadMeta();
+  if (!activeDataset.value && !metaLoading.value) await loadMeta();
 }
 
-/** 自动刷新的一轮：正在读取时跳过，不排队；视图元数据没读到时不自动重试（会弹提示），等用户点“刷新”。 */
+/** 自动刷新的一轮：正在读取时跳过，不排队；数据集元数据没读到时不自动重试（会弹提示），等用户点“刷新”。 */
 async function pollRows() {
-  if (loading.value || contextLoading.value || metaLoading.value || !activeView.value) return;
+  if (loading.value || contextLoading.value || metaLoading.value || !activeDataset.value) return;
   void refreshViewIndex();
   await reloadRows(true, { background: true });
 }
 
-async function loadTimeSeriesViewRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
+/** 结果属于发起时的空间与数据集：切走后迟到的响应丢弃。 */
+function rowsRequestIsCurrent(requestSequence: number, space_id: string, dataset_id: string) {
+  return (
+    requestSequence === viewRowsRequestSequence &&
+    selectedSpaceId.value === space_id &&
+    activeDataset.value?.dataset_id === dataset_id
+  );
+}
+
+function applyRows(rows: ViewBrowseTableRow[], rawRows: Parameters<typeof rowsToColumnNames>[0], hasMore: boolean) {
+  tableRows.value = rows;
+  tableColumnNames.value = rowsToColumnNames(rawRows, columnNames.value);
+  previewHasMore.value = hasMore;
+  hasQueried.value = true;
+  rowsStale.value = false;
+  queryError.value = "";
+  lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
+}
+
+function applyRowsError(error: unknown, fallback: string, retainRowsOnError: boolean, background: boolean) {
+  queryError.value = viewQueryErrorMessage(error, fallback);
+  rowsStale.value = retainRowsOnError && !!lastRowsReadAt.value;
+  if (!rowsStale.value) {
+    tableRows.value = [];
+    previewHasMore.value = false;
+    lastRowsReadAt.value = "";
+  }
+  hasQueried.value = true;
+  if (!viewIndexPreparing.value && !background) Message.error(queryError.value);
+}
+
+async function loadTimeSeriesRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
   const space_id = spaceStore.requireSpaceId();
-  const view = activeView.value;
-  if (!view) return;
+  const dataset_id = activeDataset.value?.dataset_id;
+  if (!dataset_id) return;
   const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
   if (!background) queryError.value = "";
   try {
     const timeRange = defaultTimeSeriesPreviewRange();
-    const projection = props.projectColumns ?? explicitViewColumnNames.value;
+    const projection = props.projectColumns ?? columnNames.value;
     const rsp = await queryTimeSeriesRows({
       space_id,
-      view_id: view.view_id,
+      dataset_id,
       ...(timeRange ? { time_range: timeRange } : {}),
       ...(projection.length > 0 ? { column_names: projection } : {}),
       filter: activeFilterExprs(),
@@ -934,96 +550,45 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false, { background = 
       page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
       total_mode: "NONE"
     });
-    if (
-      requestSequence !== viewRowsRequestSequence ||
-      selectedSpaceId.value !== space_id ||
-      activeView.value?.view_id !== view.view_id
-    ) {
-      return;
-    }
+    if (!rowsRequestIsCurrent(requestSequence, space_id, dataset_id)) return;
     const rows = rsp.rows || [];
-    tableRows.value = timeSeriesRowsToTableRows(rows, props.zone).map((row, index) => ({
+    const tableItems = timeSeriesRowsToTableRows(rows, props.zone).map((row, index) => ({
       ...row,
       freq: rows[index]?.key?.freq || "-",
       seriesTag: rows[index]?.key?.series_tag || "",
       rawKey: rows[index]?.key
     }));
-    tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    previewHasMore.value = !!rsp.page_result?.has_more;
-    hasQueried.value = true;
-    rowsStale.value = false;
-    queryError.value = "";
-    lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
+    applyRows(tableItems, rows, !!rsp.page_result?.has_more);
   } catch (error) {
-    if (
-      requestSequence !== viewRowsRequestSequence ||
-      selectedSpaceId.value !== space_id ||
-      activeView.value?.view_id !== view.view_id
-    ) {
-      return;
-    }
-    queryError.value = viewQueryErrorMessage(error, "查询时序视图失败");
-    rowsStale.value = retainRowsOnError && !!lastRowsReadAt.value;
-    if (!rowsStale.value) {
-      tableRows.value = [];
-      previewHasMore.value = false;
-      lastRowsReadAt.value = "";
-    }
-    hasQueried.value = true;
-    if (!viewIndexPreparing.value && !background) Message.error(queryError.value);
+    if (!rowsRequestIsCurrent(requestSequence, space_id, dataset_id)) return;
+    applyRowsError(error, "查询时序数据失败", retainRowsOnError, background);
   } finally {
     if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
 }
 
-async function loadRecordViewRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
+async function loadRecordRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
   const space_id = spaceStore.requireSpaceId();
-  const view = activeView.value;
-  if (!view) return;
+  const dataset_id = activeDataset.value?.dataset_id;
+  if (!dataset_id) return;
   const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
   if (!background) queryError.value = "";
   try {
     const rsp = await searchRecordRows({
       space_id,
-      view_id: view.view_id,
+      dataset_id,
       text_query: recordKeyword.value.trim(),
       filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
       page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
     });
-    if (
-      requestSequence !== viewRowsRequestSequence ||
-      selectedSpaceId.value !== space_id ||
-      activeView.value?.view_id !== view.view_id
-    ) {
-      return;
-    }
+    if (!rowsRequestIsCurrent(requestSequence, space_id, dataset_id)) return;
     const rows = rsp.rows || [];
-    tableRows.value = recordRowsToTableRows(rows, props.zone);
-    tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    previewHasMore.value = !!rsp.page_result?.has_more;
-    hasQueried.value = true;
-    rowsStale.value = false;
-    queryError.value = "";
-    lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
+    applyRows(recordRowsToTableRows(rows, props.zone), rows, !!rsp.page_result?.has_more);
   } catch (error) {
-    if (
-      requestSequence !== viewRowsRequestSequence ||
-      selectedSpaceId.value !== space_id ||
-      activeView.value?.view_id !== view.view_id
-    ) {
-      return;
-    }
-    queryError.value = viewQueryErrorMessage(error, "查询记录视图失败");
-    rowsStale.value = retainRowsOnError && !!lastRowsReadAt.value;
-    if (!rowsStale.value) {
-      tableRows.value = [];
-      previewHasMore.value = false;
-      lastRowsReadAt.value = "";
-    }
-    hasQueried.value = true;
-    if (!viewIndexPreparing.value && !background) Message.error(queryError.value);
+    if (!rowsRequestIsCurrent(requestSequence, space_id, dataset_id)) return;
+    applyRowsError(error, "查询记录数据失败", retainRowsOnError, background);
   } finally {
     if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
@@ -1071,7 +636,7 @@ function resetFilterRows() {
 watch(
   () => filterFieldOptions.value.map(option => option.value).join("\u0000"),
   () => {
-    if (!viewColumns.value.length && !datasetColumns.value.length) return;
+    if (!columns.value.length) return;
     const existing = new Map(filters.value.map(filter => [filter.fieldName, filter]));
     filters.value = filterFieldOptions.value.map(option => existing.get(option.value) ?? createFilterState(option));
   }
@@ -1088,46 +653,6 @@ function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
   };
 }
 
-function setFilterOperator(filter: ViewFilterState, value: string | number | Record<string, unknown> | undefined) {
-  const next = typeof value === "string" ? value : "";
-  if (!isViewFilterOperator(next)) return;
-  filter.operator = next;
-  if (next === "empty" || next === "not_empty") {
-    filter.value = "";
-    filter.startValue = "";
-    filter.endValue = "";
-  } else if (next === "range") {
-    filter.value = "";
-  } else {
-    filter.startValue = "";
-    filter.endValue = "";
-  }
-}
-
-function isViewFilterOperator(value: string): value is ViewFilterOperator {
-  return filterOperatorOptions.some(option => option.value === value);
-}
-
-function filterOperatorSymbol(operator: ViewFilterOperator) {
-  return filterOperatorSymbols[operator] || "%";
-}
-
-function filterOperatorTitle(operator: ViewFilterOperator) {
-  return filterOperatorOptions.find(option => option.value === operator)?.label || "检索类型";
-}
-
-function filterFieldLabel(fieldName: string) {
-  return filterFieldOptions.value.find(item => item.value === fieldName)?.label || columnTitle(fieldName);
-}
-
-/** TIME 字段的输入框写清格式和时区，其余用原来的占位。 */
-function filterPlaceholder(fieldName: string, fallback: string) {
-  const type = filterValueType(fieldName);
-  return type === "FIELD_VALUE_TYPE_TIME" || type === 5
-    ? `YYYY-MM-DD HH:mm:ss（${zoneSuffix(Date.now(), props.zone)}）`
-    : fallback;
-}
-
 function activeFilterExprs(includeExtra = true) {
   const own: ViewFilterState[] = filters.value.map(filter => ({
     ...filter,
@@ -1139,11 +664,11 @@ function activeFilterExprs(includeExtra = true) {
 const extraFiltersKey = computed(() => JSON.stringify(props.extraFilters ?? []));
 const projectionKey = computed(() => JSON.stringify([props.projectColumns ?? null, props.displayColumns?.business ?? null]));
 
-// 调用方放行首查；放行前已经加载好的视图上下文在这里补查第一页。
+// 调用方放行首查；放行前已经加载好的上下文在这里补查第一页。
 watch(
   () => props.queryReady,
   ready => {
-    if (!ready || !activeView.value || contextLoading.value) return;
+    if (!ready || !activeDataset.value || contextLoading.value) return;
     pagination.current = 1;
     void reloadRows();
   }
@@ -1151,12 +676,12 @@ watch(
 
 // 附加条件变化回到第一页；投影变化重查当前页。首查之前的变化由首查本身带上。
 watch(extraFiltersKey, () => {
-  if (!hasQueried.value || !activeView.value || contextLoading.value) return;
+  if (!hasQueried.value || !activeDataset.value || contextLoading.value) return;
   pagination.current = 1;
   void reloadRows();
 });
 watch(projectionKey, () => {
-  if (!hasQueried.value || !activeView.value || contextLoading.value) return;
+  if (!hasQueried.value || !activeDataset.value || contextLoading.value) return;
   void reloadRows();
 });
 
@@ -1182,7 +707,7 @@ function hasExactSubjectIDFilter() {
 /** 有任何筛选条件（含父页传入的）：结果为空时说“没有符合条件的行”，而不是“结果为空”。 */
 const hasAnyFilter = computed(() => Boolean(activeFilterExprs()) || Boolean(recordKeyword.value.trim()));
 
-/** 时序视图没有按数据时间筛选时，只查最近一段时间：写在查询区，免得以为“查不到”就是没有数据。 */
+/** 时序数据没有按数据时间筛选时，只查最近一段时间：写在查询区，免得以为“查不到”就是没有数据。 */
 const previewRangeText = computed(() => {
   if (mode.value !== "time_series" || hasActiveDataTimeFilter()) return "";
   return hasExactSubjectIDFilter()
@@ -1224,10 +749,6 @@ function columnTitle(columnName: string) {
   return columnLabels.value[columnName] || columnName;
 }
 
-function dynamicColumnWidth(columnName: string) {
-  return adaptiveColumnWidth(columnName, columnTitle(columnName), tableRows.value);
-}
-
 async function setSort(fieldName: string, direction: ViewSortDirection) {
   if (sortState.fieldName === fieldName && sortState.direction === direction) {
     sortState.fieldName = "";
@@ -1240,206 +761,21 @@ async function setSort(fieldName: string, direction: ViewSortDirection) {
   await reloadRows();
 }
 
-function sortArrowClass(fieldName: string, direction: ViewSortDirection) {
-  return {
-    "sort-arrow": true,
-    active: sortState.fieldName === fieldName && sortState.direction === direction
-  };
-}
-
-function openDetail(row: ViewBrowseTableRow) {
-  detailRow.value = row;
-  detailVisible.value = true;
-}
-
-// 从行操作打开的 K 线：用那一行的标的和序列标签筛，不用查询区的筛选；从工具栏打开时为空。
-const klineRowFilter = ref<{ subjectId: string; seriesTag: string } | null>(null);
-
-function rowKlineFilter(subjectId: string, seriesTag: string) {
-  return buildViewFilterExprs(
-    [
-      { fieldName: "subject_id", operator: "eq", value: subjectId },
-      seriesTag ? { fieldName: "series_tag", operator: "eq", value: seriesTag } : { fieldName: "series_tag", operator: "empty" }
-    ],
-    props.zone
-  );
-}
-
-/** 行操作“K 线”：直接用这一行的标的和序列标签打开图表。 */
-async function openRowKline(record: { rawKey?: { subject_id?: string; series_tag?: string } }) {
-  const subjectId = record.rawKey?.subject_id;
-  if (!subjectId) return;
-  const seriesTag = record.rawKey?.series_tag ?? "";
-  klineRowFilter.value = { subjectId, seriesTag };
-  klineSubjectId.value = subjectId;
-  const ok = await loadKlineRecords(subjectId, seriesTag, rowKlineFilter(subjectId, seriesTag));
-  if (ok) klineVisible.value = true;
-}
-
-async function openKlineModal() {
-  klineRowFilter.value = null;
-  const subjectId = klineSubjectIdFromFilters(filters.value);
-  if (!subjectId) {
-    Message.warning("请先在数据ID检索框输入要查看的标的");
-    return;
-  }
-  const seriesTag = exactSeriesTagFromFilters(filters.value);
-  if (seriesTag === undefined) {
-    Message.warning("请先精确选择序列标签；默认序列请输入 default");
-    return;
-  }
-
-  klineSubjectId.value = subjectId;
-  const ok = await loadKlineRecords(subjectId, seriesTag);
-  if (!ok) return;
-  klineVisible.value = true;
-}
-
-async function reloadKlineRecords() {
-  const row = klineRowFilter.value;
-  if (row) {
-    await loadKlineRecords(row.subjectId, row.seriesTag, rowKlineFilter(row.subjectId, row.seriesTag));
-    return;
-  }
-  const subjectId = klineSubjectId.value || klineSubjectIdFromFilters(filters.value);
-  if (!subjectId) {
-    Message.warning("请先在数据ID检索框输入要查看的标的");
-    return;
-  }
-  const seriesTag = exactSeriesTagFromFilters(filters.value);
-  if (seriesTag === undefined) {
-    Message.warning("请先精确选择序列标签；默认序列请输入 default");
-    return;
-  }
-  klineSubjectId.value = subjectId;
-  await loadKlineRecords(subjectId, seriesTag);
-}
-
-// K 线加载只服务于发起时的 View：切换 View/空间、关闭弹窗或卸载都会使在途请求失效，迟到的响应不能重新打开弹窗或写入旧数据
-const klineRequestGuard = createLatestRequestGuard();
-
-async function loadKlineRecords(subjectId: string, seriesTag: string, filterOverride?: ReturnType<typeof activeFilterExprs>) {
-  const view = activeView.value;
-  if (!view) return false;
-  const request = klineRequestGuard.begin();
-  // 发起时固定整次查询的筛选、投影列、排序与数量：加载期间修改筛选框不能让后续分页读取另一套条件
-  const query = {
-    filter: filterOverride ?? activeFilterExprs(false),
-    columnNames: [...klineColumnNames.value],
-    sorts: buildKlineQuerySorts(),
-    limit: normalizedKlineLimit.value
-  };
-  klineLoading.value = true;
-  try {
-    const rows = await fetchKlineTableRows(view.view_id, query, () => request.isLatest());
-    if (!request.isLatest()) return false;
-    if (!klineRowsHaveFreq(rows)) {
-      Message.warning("当前查询结果缺少 freq 字段，无法展示K线");
-      return false;
-    }
-
-    const records = buildKlineChartRecords(rows, subjectId, seriesTag);
-    if (records.length === 0) {
-      Message.warning("当前结果缺少 open/high/low/close 字段，无法生成K线图");
-      return false;
-    }
-
-    klineLimit.value = query.limit;
-    klineFreq.value = firstKlineFreq(subjectId, rows);
-    klineRecords.value = records;
-    return true;
-  } catch (error) {
-    if (!request.isLatest()) return false;
-    Message.error(error instanceof Error ? error.message : "加载K线数据失败");
-    return false;
-  } finally {
-    if (request.isLatest()) klineLoading.value = false;
-  }
-}
-
-interface KlineQuerySnapshot {
-  filter: ReturnType<typeof activeFilterExprs>;
-  columnNames: string[];
-  sorts: ReturnType<typeof buildKlineQuerySorts>;
-  limit: number;
-}
-
-async function fetchKlineTableRows(
-  viewId: string,
-  query: KlineQuerySnapshot,
-  isCurrent: () => boolean = () => true
-): Promise<ViewBrowseTableRow[]> {
-  const space_id = spaceStore.requireSpaceId();
-  const timeRange = defaultTimeSeriesPreviewRange();
-  const rows: TimeSeriesRow[] = [];
-  const limit = query.limit;
-  for (let pageNo = 1; rows.length < limit; pageNo += 1) {
-    const rsp = await queryTimeSeriesRows({
-      space_id,
-      view_id: viewId,
-      ...(timeRange ? { time_range: timeRange } : {}),
-      ...(query.columnNames.length > 0 ? { column_names: query.columnNames } : {}),
-      filter: query.filter,
-      sorts: query.sorts,
-      limit,
-      page: { page: pageNo, size: DEFAULT_VIEW_PAGE_SIZE },
-      total_mode: "NONE"
-    });
-    if (!isCurrent()) break; // 已失效：不再翻页
-    const pageRows = rsp.rows || [];
-    rows.push(...pageRows);
-    if (!rsp.page_result?.has_more || pageRows.length === 0) break;
-  }
-  return timeSeriesRowsToTableRows(rows).map((row, index) => ({
-    ...row,
-    freq: rows[index]?.key?.freq || "-",
-    seriesTag: rows[index]?.key?.series_tag || "",
-    rawKey: rows[index]?.key
-  }));
-}
-
-function firstKlineFreq(subjectId: string, rows = tableRows.value) {
-  const row =
-    rows.find(item => item.key === subjectId && item.freq && item.freq !== "-") ||
-    rows.find(item => item.freq && item.freq !== "-");
-  return row?.freq || "-";
-}
-
-function closeKlineModal() {
-  klineRequestGuard.invalidate();
-  klineLoading.value = false;
-  klineVisible.value = false;
-  klineRecords.value = [];
-  klineSubjectId.value = "";
-  klineFreq.value = "";
-}
-
-function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
-  return {
-    key: { space_id: "", dataset_id: "", record_id: row.key, version: row.version },
-    fields: Object.keys(row.values).map(name => ({
-      field_id: name,
-      value: { string_value: row.values[name] }
-    }))
-  };
-}
-
 onMounted(loadMeta);
 // 自动刷新（调用方给了间隔时）：页面隐藏时暂停、不叠加；后台读取失败不弹提示，保留上次的数据并标出“待刷新”
 usePolling(pollRows, props.autoRefreshIntervalMs || 60_000, () => (props.autoRefreshIntervalMs || 0) > 0);
 onBeforeUnmount(() => {
-  klineRequestGuard.invalidate();
+  invalidateKline();
 });
 watch(selectedSpaceId, () => {
-  activeViewKey.value = "";
+  activeDatasetKey.value = "";
   clearViewState();
   loadMeta();
 });
 </script>
 
 <style scoped>
-.view-query-controls,
-.view-result-table {
+.view-query-controls {
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -1483,232 +819,10 @@ watch(selectedSpaceId, () => {
   margin-bottom: var(--moox-space-3);
 }
 
-.view-query-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px 18px;
-  align-items: start;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  margin-bottom: var(--moox-space-3);
-  padding: 18px var(--moox-space-5);
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
-}
-
-.filter-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
-  gap: 14px 28px;
-  width: 100%;
-  min-width: 0;
-}
-
-.filter-item {
-  display: grid;
-  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
-  gap: var(--moox-space-2);
-  align-items: center;
-  min-width: 0;
-}
-
-.filter-item label {
-  overflow: hidden;
-  max-width: 84px;
-  color: var(--color-text-2);
-  font-weight: 500;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.filter-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
-  gap: var(--moox-space-2);
-  align-items: center;
-  min-width: 0;
-}
-
-.range-filter-item {
-  grid-column: span 2;
-}
-
-.range-filter-item .filter-control {
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 34px;
-}
-
-.empty-filter-control {
-  grid-template-columns: minmax(0, 1fr) 34px;
-}
-
-.range-separator {
-  color: var(--color-text-3);
-}
-
-.empty-filter-placeholder {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  padding: 0 var(--moox-space-3);
-  border: 1px solid var(--color-border-2);
-  border-radius: 4px;
-  color: var(--color-text-3);
-  background: var(--color-fill-1);
-}
-
-.operator-button,
-.operator-static {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 32px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  color: var(--color-text-2);
-  font-weight: 600;
-  background: var(--color-bg-1);
-}
-
-.operator-button {
-  cursor: pointer;
-}
-
-.operator-button:hover {
-  border-color: rgb(var(--primary-6));
-  color: rgb(var(--primary-6));
-}
-
-/* 调用方追加的检索行（例如因子条件）横跨整行，放在栅格与操作按钮下方。 */
-.preview-range-hint {
-  margin: 8px 0 0;
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.query-extra {
-  grid-column: 1 / -1;
-  min-width: 0;
-}
-
-.query-actions {
-  display: flex;
-  gap: var(--moox-space-2);
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 126px;
-}
-
-.result-pane {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  box-sizing: border-box;
-  padding: var(--moox-space-3);
-  overflow: hidden;
-  border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-  background: var(--color-bg-2);
-}
-
-.result-pane :deep(.arco-table),
-.result-pane :deep(.arco-table-container) {
-  width: 100%;
-}
-
-.preview-pager {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px var(--moox-space-4);
-  align-items: center;
-  justify-content: flex-end;
-  margin-top: var(--moox-space-3);
-  color: var(--color-text-2);
-  font-size: 13px;
-}
-
-.preview-pager__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.detail-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moox-space-4);
-  max-height: min(680px, calc(100vh - 220px));
-  padding-right: var(--moox-space-1);
-  overflow-y: auto;
-}
-
-.detail-table {
-  margin-top: var(--moox-space-1);
-}
-
-.sortable-title {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  max-width: 100%;
-  white-space: nowrap;
-}
-
-.sort-arrows {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 1px;
-  width: 12px;
-}
-
-.sort-arrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 12px;
-  height: 9px;
-  padding: 0;
-  border: 0;
-  color: var(--color-text-4);
-  font-size: 9px;
-  line-height: 1;
-  background: transparent;
-  cursor: pointer;
-}
-
-.sort-arrow:hover,
-.sort-arrow.active {
-  color: rgb(var(--primary-6));
-}
-
 @media (max-width: 560px) {
   .view-status-line {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .view-query-panel {
-    grid-template-columns: 1fr;
-  }
-
-  .filter-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .range-filter-item {
-    grid-column: span 1;
-  }
-
-  .query-actions {
-    justify-content: flex-start;
-  }
-
-  .filter-item {
-    grid-template-columns: 92px minmax(0, 1fr);
   }
 }
 </style>

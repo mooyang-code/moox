@@ -5,8 +5,8 @@ import { formatInstant } from "@/utils/time-zone";
 export interface FactorBinding {
   /** 实例关联的计算任务 ID（也是参数提交的目标）。 */
   taskId: string;
-  /** 事件路由与求值用的结果 View（任务的结果 View）。 */
-  viewId: string;
+  /** 事件路由与求值用的结果数据集（任务的结果数据集）。 */
+  datasetId: string;
   /** 策略逐期提交参数的可变成员（成员键，排序）。 */
   members: string[];
   /** 各可变成员可调参数的名称（声明顺序）。 */
@@ -24,7 +24,7 @@ function parseObject(raw?: string): Record<string, any> {
 
 export function parseFactorBinding(resolvedJson?: string): FactorBinding | null {
   const value = parseObject(resolvedJson);
-  const tasks = Object.values((value.tasks ?? {}) as Record<string, { factor_task_id?: string; view_id?: string }>);
+  const tasks = Object.values((value.tasks ?? {}) as Record<string, { factor_task_id?: string; dataset_id?: string }>);
   // 动态参数回写只用于只绑一个计算任务的实例。
   if (tasks.length !== 1 || !tasks[0]?.factor_task_id) return null;
   const declared = (value.factor_params ?? {}) as Record<string, Array<{ name?: string }>>;
@@ -33,7 +33,7 @@ export function parseFactorBinding(resolvedJson?: string): FactorBinding | null 
     params[member] = (list ?? []).map(item => item?.name ?? "").filter(Boolean);
   return {
     taskId: tasks[0].factor_task_id as string,
-    viewId: tasks[0].view_id ?? "",
+    datasetId: tasks[0].dataset_id ?? "",
     members: Object.keys(declared).sort(),
     params
   };

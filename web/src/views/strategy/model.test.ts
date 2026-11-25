@@ -62,16 +62,16 @@ describe("strategy model helpers", () => {
     expect(summary.notes).toEqual(["n"]);
     expect(parseSummary("not json").rules).toEqual({});
     const resolved = parseResolved(
-      '{"market":{"select":"both","prefer":"swap"},"tasks":{"swap":{"view_id":"v2","factor_task_id":"t2"},"spot":{"view_id":"v","factor_task_id":"t1"}},"bar":"1h","calendar":"crypto_24x7","columns":{"ma_20":{"source":"factor","factor_id":"ma","definition_hash":"sha256:x"},"close":{"source":"dataset"}}}'
+      '{"market":{"select":"both","prefer":"swap"},"tasks":{"swap":{"dataset_id":"v2","factor_task_id":"t2"},"spot":{"dataset_id":"v","factor_task_id":"t1"}},"bar":"1h","calendar":"crypto_24x7","columns":{"ma_20":{"source":"factor","factor_id":"ma","definition_hash":"sha256:x"},"close":{"source":"dataset"}}}'
     );
     expect(resolved?.columns.map(column => column.name)).toEqual(["close", "ma_20"]);
     expect(resolved?.columns[1]).toMatchObject({ factor_id: "ma", definition_hash: "sha256:x" });
     expect(resolved?.market).toEqual({ select: "both", prefer: "swap" });
-    expect(resolved?.tasks.map(task => `${task.market}:${task.view_id}`)).toEqual(["spot:v", "swap:v2"]);
+    expect(resolved?.tasks.map(task => `${task.market}:${task.dataset_id}`)).toEqual(["spot:v", "swap:v2"]);
     expect(parseResolved("{}")).toBeNull();
     const aged = parseResolved(
       JSON.stringify({
-        tasks: { spot: { view_id: "v" } },
+        tasks: { spot: { dataset_id: "v" } },
         rule_ages: { b: { max_bars: 30, all_markets: true }, a: { min_bars: 5 } }
       })
     );

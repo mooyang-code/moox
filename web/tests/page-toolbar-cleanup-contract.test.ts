@@ -22,11 +22,6 @@ describe("page toolbar cleanup contract", () => {
     expect(secrets).not.toContain("<icon-refresh />");
     expect(secrets.indexOf("<h2>密钥管理</h2>")).toBeLessThan(secrets.indexOf('placeholder="搜索名称或描述"'));
 
-    const fields = read("data/fields/index.vue");
-    expect(fields).not.toContain('class="field-total"');
-    expect(fields).not.toContain('content="刷新"');
-    expect(fields).toContain("<template #icon><icon-search /></template>查询");
-
     const sources = read("data/sources/index.vue");
     expect(sources).not.toContain("<icon-refresh />");
     expect(sources).toMatch(/\.page-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);

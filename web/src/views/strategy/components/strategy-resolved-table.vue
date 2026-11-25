@@ -26,12 +26,7 @@
               ><span class="mono">{{ record.factor_task_id }}</span></template
             ></a-table-column
           >
-          <a-table-column title="结果 View" :width="200"
-            ><template #cell="{ record }"
-              ><span class="mono">{{ record.view_id }}</span></template
-            ></a-table-column
-          >
-          <a-table-column title="数据集 / 源数据集"
+          <a-table-column title="结果数据集 / 源数据集"
             ><template #cell="{ record }"
               ><span class="mono">{{ record.dataset_id }} / {{ record.source_dataset_id || "-" }}</span></template
             ></a-table-column

@@ -24,7 +24,7 @@ describe("菜单由路由表生成", () => {
   });
 
   it("各目录下的菜单与顺序；隐藏路由不进菜单", () => {
-    expect(children("compute-collector")).toEqual(["采集任务", "数据源", "数据对象", "基础字段"]);
+    expect(children("compute-collector")).toEqual(["采集任务", "数据源", "数据对象"]);
     expect(children("factor-compute")).toEqual(["因子定义", "计算任务"]);
     expect(children("strategy")).toEqual(["策略定义", "策略运行"]);
     expect(children("trading")).toEqual(["模拟账户", "测试账户", "实盘账户", "下架名单"]);

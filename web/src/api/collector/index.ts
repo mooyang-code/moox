@@ -12,8 +12,6 @@ export interface CollectorTaskResult {
   result_name?: string;
   /** 结果写入的数据集；采集任务页据此显示归档状态 */
   dataset_id?: string;
-  view_id?: string;
-  view_ids?: string[];
   status?: string;
   last_data_time?: string;
   coverage_start?: string;
@@ -201,9 +199,13 @@ export interface DataTypeFieldConfig {
   sort_order: number;
 }
 
-/** K 线任务可以在输出字段里选的一个附加字段及其适用范围；显示名、分组以 Storage 字段目录为准。 */
+/** K 线任务可以在输出字段里选的一个附加字段及其适用范围；显示名、分组只在 Collector 的字段规格里登记。 */
 export interface ExtraFieldOption {
   field_id: string;
+  /** 中文显示名 */
+  display_name: string;
+  /** 中文分组名（一级） */
+  group?: string;
   /** 适用的市场（空间） */
   market_id: string;
   /** 适用的品种，对应标签的 market_type */
@@ -226,7 +228,12 @@ export interface DataTypeConfigDetail {
 /** K 线任务可以选的一个基础输出字段。 */
 export interface OutputFieldOption {
   field_id: string;
+  /** 中文显示名，取自 Collector 字段规格 */
   display_name: string;
+  /** 中文分组名（一级） */
+  group?: string;
+  /** 值类型：double、int、string、bool 或 time */
+  value_type?: string;
 }
 
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {

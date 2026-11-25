@@ -16,7 +16,7 @@ import {
   verdict
 } from "./monitor-model";
 
-const names = { datasets: { dataset_abc: "现货分钟K线" }, views: {} };
+const names = { datasets: { dataset_abc: "现货分钟K线" } };
 const now = Date.parse("2026-10-16T03:00:00Z");
 const at = (minutesAgo: number, seconds = 0) => new Date(now - minutesAgo * 60_000 + seconds * 1000).toISOString();
 

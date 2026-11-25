@@ -108,7 +108,7 @@ function normalizeReplay(value: any): Replay {
     tasks: Object.fromEntries(
       Object.entries(value?.tasks ?? {}).map(([market, task]: [string, any]) => [
         market,
-        { factor_task_id: task?.factor_task_id ?? "", view_id: task?.view_id ?? "" }
+        { factor_task_id: task?.factor_task_id ?? "", dataset_id: task?.dataset_id ?? "" }
       ])
     ),
     start_time: value?.start_time ?? "",

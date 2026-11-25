@@ -1,86 +1,53 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  getDataset: vi.fn(),
-  getView: vi.fn()
+  getDataset: vi.fn()
 }));
 
 vi.mock("@/api/storage/metadata", async () => {
   const actual = await vi.importActual<typeof import("@/api/storage/metadata")>("@/api/storage/metadata");
-  return { ...actual, getDataset: mocks.getDataset, getView: mocks.getView };
+  return { ...actual, getDataset: mocks.getDataset };
 });
 
-import { loadTargetedViewCatalog } from "./view-browse-catalog";
+import { loadTargetedDatasets } from "./view-browse-catalog";
 
-describe("loadTargetedViewCatalog", () => {
+describe("loadTargetedDatasets", () => {
   beforeEach(() => {
     mocks.getDataset.mockReset();
-    mocks.getView.mockReset();
   });
 
-  it("fetches only the requested views and their unique datasets", async () => {
-    mocks.getView.mockImplementation(({ view_id }: { view_id: string }) =>
-      Promise.resolve({ view: { space_id: "crypto", view_id, dataset_id: "dataset-a" } })
+  it("fetches only the requested unique datasets", async () => {
+    mocks.getDataset.mockImplementation(({ dataset_id }: { dataset_id: string }) =>
+      Promise.resolve({ dataset: { space_id: "crypto", dataset_id } })
     );
-    mocks.getDataset.mockResolvedValue({ dataset: { space_id: "crypto", dataset_id: "dataset-a" } });
 
-    const result = await loadTargetedViewCatalog("crypto", [" view-a ", "view-b", "view-a", ""]);
+    const result = await loadTargetedDatasets("crypto", [" dataset_a ", "dataset_b", "dataset_a", ""]);
 
-    expect(mocks.getView).toHaveBeenCalledTimes(2);
-    expect(mocks.getView).toHaveBeenNthCalledWith(1, { space_id: "crypto", view_id: "view-a" });
-    expect(mocks.getView).toHaveBeenNthCalledWith(2, { space_id: "crypto", view_id: "view-b" });
-    expect(mocks.getDataset).toHaveBeenCalledTimes(1);
-    expect(mocks.getDataset).toHaveBeenCalledWith({ space_id: "crypto", dataset_id: "dataset-a" });
-    expect(result.views).toHaveLength(2);
-    expect(result.datasets).toHaveLength(1);
+    expect(mocks.getDataset).toHaveBeenCalledTimes(2);
+    expect(mocks.getDataset).toHaveBeenNthCalledWith(1, { space_id: "crypto", dataset_id: "dataset_a" });
+    expect(mocks.getDataset).toHaveBeenNthCalledWith(2, { space_id: "crypto", dataset_id: "dataset_b" });
+    expect(result.map(item => item.dataset_id)).toEqual(["dataset_a", "dataset_b"]);
   });
 
-  it("avoids metadata calls without a space or view IDs", async () => {
-    await expect(loadTargetedViewCatalog("crypto", [])).resolves.toEqual({ views: [], datasets: [] });
-    await expect(loadTargetedViewCatalog("", ["view-a"])).resolves.toEqual({ views: [], datasets: [] });
-    expect(mocks.getView).not.toHaveBeenCalled();
+  it("avoids metadata calls without a space or dataset IDs", async () => {
+    await expect(loadTargetedDatasets("crypto", [])).resolves.toEqual([]);
+    await expect(loadTargetedDatasets("", ["dataset_a"])).resolves.toEqual([]);
     expect(mocks.getDataset).not.toHaveBeenCalled();
   });
 
-  it("rejects a partial catalog when any requested view or dataset is unavailable", async () => {
-    mocks.getView.mockImplementation(({ view_id }: { view_id: string }) =>
-      view_id === "missing-view"
-        ? Promise.reject(new Error("view not found"))
-        : Promise.resolve({ view: { space_id: "crypto", view_id, dataset_id: `dataset-${view_id}` } })
-    );
-
-    await expect(loadTargetedViewCatalog("crypto", ["view-a", "missing-view", "view-b"])).rejects.toThrow("view not found");
-  });
-
-  it("rejects a partial dataset catalog", async () => {
-    mocks.getView.mockImplementation(({ view_id }: { view_id: string }) =>
-      Promise.resolve({ view: { space_id: "crypto", view_id, dataset_id: `dataset-${view_id}` } })
-    );
+  it("rejects a partial catalog when any requested dataset is unavailable", async () => {
     mocks.getDataset.mockImplementation(({ dataset_id }: { dataset_id: string }) =>
-      dataset_id === "dataset-view-b"
+      dataset_id === "dataset_b"
         ? Promise.reject(new Error("dataset not found"))
         : Promise.resolve({ dataset: { space_id: "crypto", dataset_id } })
     );
 
-    await expect(loadTargetedViewCatalog("crypto", ["view-a", "view-b"])).rejects.toThrow("dataset not found");
+    await expect(loadTargetedDatasets("crypto", ["dataset_a", "dataset_b"])).rejects.toThrow("dataset not found");
   });
 
   it("rejects metadata whose identities do not match the requested space and IDs", async () => {
-    mocks.getView.mockResolvedValue({ view: { space_id: "other", view_id: "view-a", dataset_id: "dataset-a" } });
+    mocks.getDataset.mockResolvedValue({ dataset: { space_id: "other", dataset_id: "dataset_a" } });
 
-    await expect(loadTargetedViewCatalog("crypto", ["view-a"])).rejects.toThrow("视图身份与请求不一致");
-  });
-
-  it("surfaces an error when no requested view has an available dataset", async () => {
-    mocks.getView.mockResolvedValue({ view: { space_id: "crypto", view_id: "view-a", dataset_id: "dataset-a" } });
-    mocks.getDataset.mockRejectedValue(new Error("dataset unavailable"));
-
-    await expect(loadTargetedViewCatalog("crypto", ["view-a"])).rejects.toThrow("dataset unavailable");
-  });
-
-  it("surfaces an error when no requested view can be loaded", async () => {
-    mocks.getView.mockRejectedValue(new Error("view unavailable"));
-
-    await expect(loadTargetedViewCatalog("crypto", ["view-a", "view-b"])).rejects.toThrow("view unavailable");
+    await expect(loadTargetedDatasets("crypto", ["dataset_a"])).rejects.toThrow("数据集身份与请求不一致");
   });
 });

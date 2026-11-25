@@ -12,8 +12,7 @@ import type {
   TimeSeriesSelector,
   TimeSeriesRow,
   TotalMode,
-  VersionRange,
-  ViewColumn
+  VersionRange
 } from "./types";
 
 /** Storage 的调用；读取带短时缓存，见 @/api/http。 */
@@ -22,7 +21,7 @@ const callStorage = <TReq extends object, TRsp>(method: string, req: TReq, optio
 
 export interface QueryTimeSeriesRowsReq {
   space_id: string;
-  view_id: string;
+  dataset_id: string;
   selectors?: TimeSeriesSelector[];
   time_range?: TimeRange;
   column_names?: string[];
@@ -35,7 +34,7 @@ export interface QueryTimeSeriesRowsReq {
 
 export interface SearchRecordRowsReq {
   space_id: string;
-  view_id: string;
+  dataset_id: string;
   keys?: RecordKey[];
   text_query?: string;
   version_range?: VersionRange;
@@ -61,7 +60,7 @@ export function searchRecordRows(req: SearchRecordRowsReq, options: CallOptions 
 
 export interface GetViewStateReq {
   space_id: string;
-  view_id: string;
+  dataset_id: string;
 }
 
 /** View 跟随数据集变更日志已扫描到的位置。 */
@@ -81,7 +80,7 @@ export interface GetViewStateRsp {
   view_revision?: number | string;
   view_schema_hash?: string;
   /** 已建进活动索引的列。 */
-  columns?: ViewColumn[];
+  columns?: ResultColumn[];
   /** 活动索引覆盖的最早、最晚业务时间（两端都含，可能为空）。 */
   indexed_from?: string;
   indexed_to?: string;
@@ -92,7 +91,7 @@ export function getViewState(req: GetViewStateReq, options: CallOptions = {}) {
   return callStorage<GetViewStateReq, GetViewStateRsp>("GetViewState", req, options);
 }
 
-/** storage-view 还没登记这个 View（ret_info.code 为 VIEW_NOT_FOUND）。 */
+/** storage-view 还没有这个数据集的查询索引（ret_info.code 为 VIEW_NOT_FOUND）。 */
 export function isViewNotFoundError(error: unknown): boolean {
   return error instanceof RequestError && error.hasCode(10, "VIEW_NOT_FOUND");
 }

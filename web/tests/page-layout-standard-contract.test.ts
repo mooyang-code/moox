@@ -82,7 +82,7 @@ describe("page layout standards", () => {
     expect(running).not.toContain('class="filters"');
   });
 
-  // 因子定义页没有标签页，按字段管理的工作台布局用提示条说明规则，不在此列。
+  // 因子定义页没有标签页，用工作台布局与提示条说明规则，不在此列。
   it("keeps factor tab explanations in info tips instead of rows under the tabs", () => {
     for (const file of ["factor/compute-tasks/index.vue", "factor/recalc/index.vue"]) {
       const source = read(file);

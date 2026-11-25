@@ -616,7 +616,7 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
   const expected = expectedBar(item, delay, nowMs);
   return {
     key: `${item.producer}/${item.space_id}/${id}/${item.freq}`,
-    name: item.display_name || names.datasets[id] || names.views[id] || id,
+    name: item.display_name || names.datasets[id] || id,
     producer: PRODUCER_LABELS[item.producer || ""] || item.producer || "",
     spaceId: item.space_id || "",
     freq: item.freq || "",

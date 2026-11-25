@@ -53,7 +53,6 @@ vi.mock("@/api/factor", () => ({
 }));
 vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(async () => [{ dataset_id: "dataset_abc", name: "现货K线", attributes: {} }]),
-  listAllViews: vi.fn(async () => []),
   listDataSources: vi.fn(async () => ({ data_sources: [], page_result: { total: 3 } }))
 }));
 vi.mock("@/api/strategy", () => ({
@@ -92,7 +91,6 @@ function instance(id: string, overrides: Record<string, unknown> = {}) {
     instance_id: id,
     strategy_id: "s1",
     space_id: "crypto",
-    view_id: "v",
     logical_account_id: "",
     enabled: true,
     session_id: "sess",

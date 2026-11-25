@@ -91,7 +91,7 @@ describe("strategy API", () => {
         { rule_id: "r", instrument_id: "ETH-USDT", stage: "weighted", rank: 2, weight: "0.5" }
       ],
       dsl_yaml: "name: a",
-      resolved_json: '{"view_id":"v"}'
+      resolved_json: '{"dataset_id":"d"}'
     });
     await expect(listStrategyTargets("i-1")).resolves.toMatchObject({ session_id: "s1", result_id: "r1" });
     const page = await listStrategyResults("i-1", { session_id: "s1", page: 2, page_size: 10 });
@@ -142,10 +142,10 @@ describe("strategy API", () => {
   });
 
   it("passes success-path diagnostics (trial notes) through untouched", async () => {
-    call.mockResolvedValueOnce({ diagnostics: ["试算未完成：View 暂无数据"], resolved_json: '{"view_id":"v"}' });
+    call.mockResolvedValueOnce({ diagnostics: ["试算未完成：View 暂无数据"], resolved_json: '{"dataset_id":"d"}' });
     await expect(validateStrategy("name: x", "v")).resolves.toMatchObject({
       diagnostics: ["试算未完成：View 暂无数据"],
-      resolved_json: '{"view_id":"v"}',
+      resolved_json: '{"dataset_id":"d"}',
       trial: null
     });
   });
@@ -164,7 +164,7 @@ describe("strategy API", () => {
         replay_id: "p1",
         status: "pending",
         spot_fee_bps: 10,
-        tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
+        tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" } },
         dsl_hash: "sha256:x"
       },
       bar_count: 30,

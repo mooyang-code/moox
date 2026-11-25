@@ -29,7 +29,6 @@ function instance(id: string, overrides: Record<string, unknown> = {}) {
     instance_id: id,
     strategy_id: "s1",
     space_id: "crypto",
-    view_id: "v",
     logical_account_id: "",
     enabled: true,
     session_id: "sess",

@@ -106,12 +106,7 @@ const storageReadMethods = new Set([
   "ListTagMembers",
   "GetDataset",
   "ListDatasets",
-  "ListFieldGroups",
-  "ListFields",
   "ListDatasetColumns",
-  "GetView",
-  "ListViews",
-  "ListViewColumns",
   "QueryTimeSeriesRows",
   "SearchRecordRows",
   "GetViewState"

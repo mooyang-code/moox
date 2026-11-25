@@ -18,19 +18,11 @@ function factorIdError(id: string): string {
   }
 }
 
-function isSystemColumn(column: DatasetColumn) {
-  const origin = column.origin_type;
-  return origin === 3 || (typeof origin === "string" && origin.endsWith("_SYSTEM"));
-}
-
-/** 与后端一致：active、非系统、非保留列才能作为因子输入（参考数据集的提示用）。 */
+/** 与后端一致：active、非保留列才能作为因子输入（参考数据集的提示用）。 */
 export function sourceInputColumns(columns: DatasetColumn[]) {
   const reserved = new Set(RESERVED_COLUMNS);
   return columns
-    .filter(
-      column =>
-        column.column_name && !isSystemColumn(column) && (!column.status || column.status.toLowerCase().includes("active"))
-    )
+    .filter(column => column.column_name && column.status === "active")
     .map(column => column.column_name)
     .filter(name => !reserved.has(name))
     .sort();

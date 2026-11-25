@@ -23,21 +23,17 @@ export interface ExtraFieldSourceRow {
 
 /**
  * 把接口给出的附加字段按提供方归并成“附加字段来源”的行：只取当前空间的，保持接口给出的顺序。
- * 字段显示名取 Storage 字段目录，目录里没有的显示字段 ID。
+ * 字段显示名取 Collector 字段规格（接口直接给出），没有时显示字段 ID。
  */
-export function buildExtraFieldSources(
-  options: ReadonlyArray<ExtraFieldOption>,
-  spaceId: string,
-  fieldNames: ReadonlyMap<string, string>
-): ExtraFieldSourceRow[] {
+export function buildExtraFieldSources(options: ReadonlyArray<ExtraFieldOption>, spaceId: string): ExtraFieldSourceRow[] {
   const space = spaceId.trim().toLowerCase();
-  const grouped = new Map<string, { instruments: Set<string>; frequencies: Set<string>; fields: Set<string> }>();
+  const grouped = new Map<string, { instruments: Set<string>; frequencies: Set<string>; fields: Map<string, string> }>();
   for (const option of options) {
     if ((option.market_id || "").trim().toLowerCase() !== space || !option.provider_id || !option.field_id) continue;
-    const group = grouped.get(option.provider_id) || { instruments: new Set(), frequencies: new Set(), fields: new Set() };
+    const group = grouped.get(option.provider_id) || { instruments: new Set(), frequencies: new Set(), fields: new Map() };
     group.instruments.add(option.instrument_type);
     for (const frequency of option.frequencies || []) group.frequencies.add(frequency);
-    group.fields.add(option.field_id);
+    group.fields.set(option.field_id, option.display_name?.trim() || option.field_id);
     grouped.set(option.provider_id, group);
   }
   return [...grouped.entries()].map(([providerId, group]) => ({
@@ -45,6 +41,6 @@ export function buildExtraFieldSources(
     name: PROVIDER_NAMES[providerId] || providerId,
     instruments: [...group.instruments].map(item => marketLabel(item)).join("、"),
     frequencies: [...group.frequencies].join("、"),
-    fields: [...group.fields].map(id => ({ field_id: id, name: fieldNames.get(id) || id }))
+    fields: [...group.fields].map(([field_id, name]) => ({ field_id, name }))
   }));
 }

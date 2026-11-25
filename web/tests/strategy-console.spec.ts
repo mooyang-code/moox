@@ -55,7 +55,7 @@ test("instance detail distinguishes valid target weight from trade fills and exp
   await installShell(page);
   const resolved = JSON.stringify({
     market: { select: "spot", prefer: "spot" },
-    tasks: { spot: { factor_task_id: "ftask_ma", view_id: "view_factor_1h", dataset_id: "ds" } },
+    tasks: { spot: { factor_task_id: "ftask_ma", dataset_id: "ds" } },
     bar: "1h",
     calendar: "crypto_24x7",
     columns: { ma_20: { source: "factor", member: "ma_20", factor_id: "ma", definition_hash: "sha256:abc" } },

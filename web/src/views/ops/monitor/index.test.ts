@@ -30,8 +30,7 @@ vi.mock("@visactor/vchart", () => ({
   }
 }));
 vi.mock("@/api/storage/metadata", () => ({
-  listAllDatasets: vi.fn(async () => [{ dataset_id: "dataset_abc", name: "现货分钟K线" }]),
-  listAllViews: vi.fn(async () => [])
+  listAllDatasets: vi.fn(async () => [{ dataset_id: "dataset_abc", name: "现货分钟K线" }])
 }));
 const mockedCallControl = vi.mocked(call);
 const box = defineComponent({ template: "<div><slot /></div>" });

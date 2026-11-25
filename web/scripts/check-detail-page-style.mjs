@@ -11,7 +11,6 @@ const pageShellFiles = [
   "src/views/ops/deployments/index.vue",
   "src/views/data/sources/index.vue",
   "src/views/data/subjects/index.vue",
-  "src/views/data/fields/index.vue",
   "src/views/data/view-browse/index.vue",
   "src/views/factor/definitions/index.vue",
   "src/views/factor/editor/index.vue",
@@ -33,7 +32,8 @@ const tableFiles = [
   "src/views/collector/cloud-account/cloud-account-manage.vue",
   // 代码包只以抽屉方式打开，不套页面外壳，只查表格样式
   "src/views/collector/cloud-function/function-package-manage.vue",
-  "src/views/collector/backfill-jobs/kline-range-dialog.vue"
+  "src/views/collector/backfill-jobs/kline-range-dialog.vue",
+  "src/views/data/view-browse/result-table.vue"
 ];
 
 function read(relativePath) {
@@ -64,7 +64,7 @@ const taskResults = read("src/views/collector/task-results/index.vue");
 const taskManagement = read("src/views/collector/task-management/index.vue");
 const routes = read("src/router/route.ts");
 assert(viewBrowse.includes("defineProps"), "view-browse must remain the shared detail implementation");
-assert(viewBrowse.includes("viewIds?: string[]"), "view-browse must expose View filtering");
+assert(viewBrowse.includes("datasetIds?: string[]"), "view-browse must expose dataset filtering");
 assert(taskResults.includes("task-results-model"), "task-results must use its pure model");
 assert(taskResults.includes("暂无采集任务"), "task-results must define the no-task empty state");
 assert(taskResults.includes("结果准备中，请稍后刷新"), "task-results must define the pending result state");

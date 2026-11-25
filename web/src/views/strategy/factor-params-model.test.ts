@@ -26,13 +26,13 @@ describe("parseFactorBinding", () => {
   it("reads the task, result view and the variable members with their parameters", () => {
     const binding = parseFactorBinding(
       JSON.stringify({
-        tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
+        tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" } },
         factor_params: { ma__var: [{ name: "span" }], bias__var: [{ name: "window" }, { name: "k" }] }
       })
     );
     expect(binding).toEqual({
       taskId: "ftask_a",
-      viewId: "view_factor_a",
+      datasetId: "dataset_factor_a",
       members: ["bias__var", "ma__var"],
       params: { ma__var: ["span"], bias__var: ["window", "k"] }
     });

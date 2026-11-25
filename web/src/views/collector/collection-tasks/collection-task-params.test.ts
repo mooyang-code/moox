@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildOutputFieldCatalog,
+  outputFieldLabels,
+  outputFieldSections,
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
   INGEST_OPTIONS,
@@ -184,11 +187,11 @@ describe("collection task params", () => {
       tag_ids: ["source_tag"],
       enabled: "false",
       collect_params: '{"provider":"moox","market_type":"spot","target_frequency":"5m"}',
-      result: { view_id: "view-1", status: "ready" }
+      result: { dataset_id: "dataset-1", status: "ready" }
     });
 
     expect(task.enabled).toBe(false);
-    expect(task.result?.view_id).toBe("view-1");
+    expect(task.result?.dataset_id).toBe("dataset-1");
     expect(taskFrequency(task)).toBe("5m");
     expect(parseCollectionTaskInput(task)).toMatchObject({
       dataType: "kline_resample",
@@ -199,7 +202,7 @@ describe("collection task params", () => {
 });
 
 describe("collection task result label", () => {
-  const result = (status: string) => ({ view_id: "view_task_kline_1m", status });
+  const result = (status: string) => ({ dataset_id: "dataset_task_kline_1m", status });
 
   it("treats an uninspected list entry of a prepared task as available", () => {
     expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("unknown") })).toBe("结果可用");
@@ -336,5 +339,42 @@ describe("选了现货、永续两个市场的标签时按市场拆任务", () =
     ]);
     expect(splitTaskName(" 币安 1 分钟 ", "永续")).toBe("币安 1 分钟（永续）");
     expect(splitTaskName("币安", "")).toBe("币安");
+  });
+});
+
+describe("输出字段目录", () => {
+  it("基础字段在前、附加字段按字段 ID 去重，没写分组的归到“其他”", () => {
+    const catalog = buildOutputFieldCatalog(
+      [{ field_id: "close", display_name: "收盘价", group: "行情价格" }],
+      [
+        {
+          field_id: "funding_rate",
+          display_name: "资金费率",
+          group: "合约指标",
+          market_id: "crypto",
+          instrument_type: "swap",
+          provider_id: "binance"
+        },
+        {
+          field_id: "funding_rate",
+          display_name: "资金费率",
+          group: "合约指标",
+          market_id: "crypto",
+          instrument_type: "swap",
+          provider_id: "okx"
+        },
+        { field_id: "x", display_name: "", market_id: "crypto", instrument_type: "swap", provider_id: "binance" }
+      ]
+    );
+    expect(catalog).toEqual([
+      { field_id: "close", display_name: "收盘价", group: "行情价格" },
+      { field_id: "funding_rate", display_name: "资金费率", group: "合约指标" },
+      { field_id: "x", display_name: "x", group: "其他" }
+    ]);
+    expect(outputFieldLabels(["close", "gone"], catalog)).toEqual([
+      { id: "close", name: "收盘价" },
+      { id: "gone", name: "gone" }
+    ]);
+    expect(outputFieldSections(catalog, id => id !== "x", "资金").map(section => section.name)).toEqual(["合约指标"]);
   });
 });

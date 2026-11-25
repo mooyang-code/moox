@@ -28,7 +28,6 @@ function instance(id: string) {
     instance_id: id,
     strategy_id: "s1",
     space_id: "crypto",
-    view_id: "view_a",
     logical_account_id: "",
     enabled: false,
     session_id: "",
@@ -60,7 +59,7 @@ describe("instance quick drawer", () => {
     await buttons.find(item => item.text() === "打开完整详情")!.trigger("click");
     await buttons.find(item => item.text() === "按实例会话回放")!.trigger("click");
     expect(wrapper.emitted("openDetail")).toEqual([["i1"]]);
-    expect(wrapper.emitted("replay")![0][0]).toMatchObject({ instance_id: "i1", view_id: "view_a" });
+    expect(wrapper.emitted("replay")![0][0]).toMatchObject({ instance_id: "i1" });
   });
 
   it("shows a failure with retry and clears the previous object when switching", async () => {

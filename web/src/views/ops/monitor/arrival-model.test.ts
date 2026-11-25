@@ -14,8 +14,7 @@ import {
 } from "./arrival-model";
 
 const names = {
-  datasets: { dataset_spot_1m: "现货分钟K线", dataset_factor_spot_1m: "现货分钟因子" },
-  views: { view_spot_kline_1m: "现货分钟K线视图" }
+  datasets: { dataset_spot_1m: "现货分钟K线", dataset_factor_spot_1m: "现货分钟因子", dataset_spot_kline_1m: "现货分钟K线视图" }
 };
 const now = Date.parse("2026-10-16T19:00:00Z");
 
@@ -56,7 +55,7 @@ const history: ArrivalHistory = {
     },
     {
       stage: "view",
-      dataset_id: "view_spot_kline_1m",
+      dataset_id: "dataset_spot_kline_1m",
       lateness_limit_seconds: "30",
       points: [{ close_at: "2026-10-16T18:55:00Z", delay_seconds: "3" }]
     },

@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
-
 import {
   buildKlineChartRecords,
-  buildViewColumnLabels,
+  buildColumnLabels,
   buildViewFilterExprs,
   buildViewFilterFieldOptions,
   defaultSeriesTag,
@@ -12,7 +10,7 @@ import {
   rowsToColumnNames,
   timeSeriesRowsToTableRows,
   typedValueText,
-  viewModeFromPrimaryDataset
+  viewModeFromDataset
 } from "./view-browse-utils";
 
 const double = "FIELD_VALUE_TYPE_DOUBLE" as const;
@@ -60,7 +58,7 @@ describe("buildViewFilterFieldOptions 指定搜索列", () => {
   ];
 
   it("未指定时为全部列，指定时只含指定列与系统键", () => {
-    expect(buildViewFilterFieldOptions("time_series", columns, []).map(item => item.value)).toEqual([
+    expect(buildViewFilterFieldOptions("time_series", columns).map(item => item.value)).toEqual([
       "subject_id",
       "freq",
       "series_tag",
@@ -68,7 +66,7 @@ describe("buildViewFilterFieldOptions 指定搜索列", () => {
       "close",
       "rsi"
     ]);
-    expect(buildViewFilterFieldOptions("time_series", columns, [], {}, ["close"]).map(item => item.value)).toEqual([
+    expect(buildViewFilterFieldOptions("time_series", columns, {}, ["close"]).map(item => item.value)).toEqual([
       "subject_id",
       "freq",
       "series_tag",
@@ -103,18 +101,6 @@ describe("buildViewFilterExprs 时间列", () => {
     expect(conds("昨天", "UTC")).toBeUndefined();
     // 纯数字不当成毫秒
     expect(conds("20261107", "UTC")).toBeUndefined();
-  });
-});
-
-describe("记录模式的版本列", () => {
-  it("版本是任意字符串（1、v1），原样显示，不按时间格式化", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { resolve } = await import("node:path");
-    const page = readFileSync(resolve(__dirname, "index.vue"), "utf8");
-    const recordColumn = page.slice(page.lastIndexOf('<a-table-column data-index="version"'), page.indexOf(">版本<"));
-    expect(recordColumn).not.toContain("formatInstant");
-    const timeColumn = page.slice(page.indexOf('<a-table-column data-index="version"'), page.indexOf(">时间<"));
-    expect(timeColumn).toContain("formatInstant(record.version, zone)");
   });
 });
 
@@ -192,90 +178,36 @@ describe("rowsToColumnNames", () => {
 });
 
 describe("buildViewFilterFieldOptions", () => {
-  it("keeps search fields aligned with the table projection", () => {
-    const labels = {
-      open: "开盘价",
-      close: "收盘价",
-      amount: "成交额"
-    };
+  it("只为数据集的列生成搜索项，标题用给出的列标题", () => {
     const options = buildViewFilterFieldOptions(
       "time_series",
       [
         { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
         { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
       ],
-      [
-        { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-        { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-        { column_name: "amount", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
-      ],
-      labels
+      { open: "开盘价", close: "收盘价" }
     );
-
     expect(options.map(item => item.value)).toEqual(["subject_id", "freq", "series_tag", "data_time", "open", "close"]);
-    expect(options.map(item => item.label)).not.toContain("成交额");
-  });
-
-  it("falls back to dataset columns only when the view has no projection", () => {
-    const options = buildViewFilterFieldOptions(
-      "time_series",
-      [],
-      [{ column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" }],
-      { open: "开盘价" }
-    );
-    expect(options.map(item => item.value)).toEqual(["subject_id", "freq", "series_tag", "data_time", "open"]);
+    expect(options.map(item => item.label)).toContain("开盘价");
   });
 });
 
-describe("view factor column labels", () => {
-  it("uses the factor output name stored in result metadata", () => {
-    const labels = buildViewColumnLabels(
-      [
-        {
-          column_name: "bias_5",
-          origin_id: "bias_5",
-          attributes: { display_name: "乖离率", column_kind: "output", member_key: "bias__5" }
-        } as ViewColumn
-      ],
-      [
-        {
-          dataset_id: "dataset_factor_btc_1m",
-          column_name: "bias_5",
-          origin_type: 2,
-          origin_id: "Bias",
-          attributes: { display_name: "bias_5", column_kind: "output", member_key: "bias__5" }
-        } as DatasetColumn
-      ],
-      [],
-      { dataset_id: "dataset_factor_btc_1m" }
-    );
-
-    expect(labels.bias_5).toBe("bias_5");
-  });
-
-  it("labels a column from the View's own Dataset only", () => {
-    const labels = buildViewColumnLabels(
-      [{ column_name: "close", origin_id: "close" } as ViewColumn],
-      [
-        { dataset_id: "dataset_other", column_name: "close", attributes: { display_name: "其他收盘" } } as DatasetColumn,
-        { dataset_id: "dataset_kline", column_name: "close", attributes: { display_name: "收盘价" } } as DatasetColumn
-      ],
-      [],
-      { dataset_id: "dataset_kline" }
-    );
-
-    expect(labels.close).toBe("收盘价");
+describe("buildColumnLabels", () => {
+  it("因子输出列用技术列名，其余用列自己的显示名", () => {
+    const labels = buildColumnLabels([
+      { column_name: "bias_5", display_name: "乖离率", attributes: { column_kind: "output", member_key: "bias__5" } },
+      { column_name: "close", display_name: "收盘价" },
+      { column_name: "data_time", display_name: "" }
+    ]);
+    expect(labels).toEqual({ bias_5: "bias_5", close: "收盘价", data_time: "时间" });
   });
 });
 
-describe("viewBoundDatasetId", () => {
+describe("viewModeFromDataset", () => {
   it("treats SQL time_series data_kind as a time-series dataset", () => {
-    expect(
-      viewModeFromPrimaryDataset(
-        [{ dataset_id: "dataset_binance_kline_1m", data_kind: "time_series" as never }],
-        "dataset_binance_kline_1m"
-      )
-    ).toBe("time_series");
+    expect(viewModeFromDataset({ data_kind: "time_series" as never })).toBe("time_series");
+    expect(viewModeFromDataset({ data_kind: "DATA_KIND_RECORD" })).toBe("record");
+    expect(viewModeFromDataset(undefined)).toBe("missing");
   });
 });
 
