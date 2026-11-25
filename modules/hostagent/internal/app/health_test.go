@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +31,6 @@ func TestHealthHandlerSeparatesLivenessAndReadiness(t *testing.T) {
 
 func TestHealthHandler_ReadyAgent_ShouldReturnOK(t *testing.T) {
 	a := testAgent(t)
-	a.publisher = &fakeEventPublisher{ready: true}
 	a.lastCollect = time.Now().UTC()
 	handler := healthHandler(a)
 
@@ -43,7 +41,6 @@ func TestHealthHandler_ReadyAgent_ShouldReturnOK(t *testing.T) {
 
 func TestHealthHandler_RequiredCollectionFailureMakesAgentUnready(t *testing.T) {
 	a := testAgent(t)
-	a.publisher = &fakeEventPublisher{ready: true}
 	a.collector = fakeSnapshotCollector{err: errors.New("required host collectors failed: cpu")}
 	_, err := a.RunOnce(context.Background(), nil)
 	require.Error(t, err)
@@ -60,33 +57,17 @@ func TestHealthHandler_BeforeFirstCollectionIsUnready(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
-// EventBus 不可达（连不上、发布失败）时，只要采集正常就必须就绪：
-// 否则 EventBus 部署之前、或 EventBus 所在主机宕机时，部署流程会反复杀掉 HostAgent。
-func TestHealthHandler_EventBusUnavailableDoesNotMakeAgentUnready(t *testing.T) {
+// Monitor 不可达（上报失败）时，只要采集正常就必须就绪：否则控制机或 Monitor 宕机时，部署流程会反复杀掉 HostAgent。
+func TestHealthHandler_ReportFailureDoesNotMakeAgentUnready(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
-		return nil, errors.New("eventbus unreachable")
-	}
+	a.report = (&fakeReporter{err: errors.New("monitor unreachable")}).report
 	_, err := a.RunOnce(context.Background(), nil)
 	require.Error(t, err)
 
 	status, statusErr := a.GetStatus(context.Background(), nil)
 	require.NoError(t, statusErr)
-	assert.False(t, status.GetEventbusConnected())
-	assert.NotEmpty(t, status.GetLastError(), "发布错误仍然记在状态详情里")
-
-	rr := httptest.NewRecorder()
-	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	assert.Equal(t, http.StatusOK, rr.Code)
-}
-
-func TestHealthHandler_PublishFailureDoesNotMakeAgentUnready(t *testing.T) {
-	a := testAgent(t)
-	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.publisher = &fakeEventPublisher{ready: true, err: errors.New("publish failed")}
-	_, err := a.RunOnce(context.Background(), nil)
-	require.Error(t, err)
+	assert.NotEmpty(t, status.GetLastError(), "上报错误仍然记在状态详情里")
 
 	rr := httptest.NewRecorder()
 	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -95,7 +76,6 @@ func TestHealthHandler_PublishFailureDoesNotMakeAgentUnready(t *testing.T) {
 
 func TestHealthHandler_CollectionRecoveryClearsUnready(t *testing.T) {
 	a := testAgent(t)
-	a.publisher = &fakeEventPublisher{ready: true}
 	a.collector = fakeSnapshotCollector{err: errors.New("cpu")}
 	_, err := a.RunOnce(context.Background(), nil)
 	require.Error(t, err)

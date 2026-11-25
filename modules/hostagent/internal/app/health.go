@@ -28,23 +28,22 @@ func healthHandler(agent *Agent) http.Handler {
 			rsp.Details = map[string]any{"agent_ready": false, "error": err.Error()}
 			return rsp
 		}
-		// 就绪只看采集：发布错误和 EventBus 连接状态放在详情与指标里，不参与就绪。
+		// 就绪只看采集：上报错误放在详情里，不参与就绪。
 		ready, collectErr := agent.collectionState()
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"
 		}
 		rsp.Details = map[string]any{
-			"agent_id":           status.GetAgentId(),
-			"eventbus_connected": status.GetEventbusConnected(),
-			"last_collect_at":    status.GetLastCollectAt(),
-			"last_publish_at":    status.GetLastPublishAt(),
-			"last_error":         status.GetLastError(),
-			"collect_error":      collectErr,
-			"collected_total":    status.GetCollected(),
-			"published_total":    status.GetPublished(),
-			"dropped_total":      status.GetDropped(),
-			"skipped_total":      status.GetSkipped(),
+			"host_id":         status.GetHostId(),
+			"last_collect_at": status.GetLastCollectAt(),
+			"last_report_at":  status.GetLastReportAt(),
+			"last_error":      status.GetLastError(),
+			"collect_error":   collectErr,
+			"collected_total": status.GetCollected(),
+			"reported_total":  status.GetReported(),
+			"dropped_total":   status.GetDropped(),
+			"skipped_total":   status.GetSkipped(),
 		}
 		return rsp
 	}

@@ -29,14 +29,14 @@ func TestDelistedSymbolsUsesLatestNoticePerSymbol(t *testing.T) {
 			})
 		require.NoError(t, err)
 	}
-	register("SPOT", "GONEUSDT", "ALL", now.Add(-time.Hour))
-	register("SPOT", "LATERUSDT", "ALL", now.Add(time.Hour))
-	register("SPOT", "MOVEDUSDT", "ALL", now.Add(-2*time.Hour))
-	register("SPOT", "MOVEDUSDT", "ALL", now.Add(24*time.Hour)) // 推迟了：以最新一行为准
-	register("SPOT", "DRILLUSDT", "PAPER_ONLY", now.Add(-time.Hour))
-	register("SWAP", "SWAPUSDT", "ALL", now.Add(-time.Hour))
+	register("spot", "GONEUSDT", "ALL", now.Add(-time.Hour))
+	register("spot", "LATERUSDT", "ALL", now.Add(time.Hour))
+	register("spot", "MOVEDUSDT", "ALL", now.Add(-2*time.Hour))
+	register("spot", "MOVEDUSDT", "ALL", now.Add(24*time.Hour)) // 推迟了：以最新一行为准
+	register("spot", "DRILLUSDT", "PAPER_ONLY", now.Add(-time.Hour))
+	register("swap", "SWAPUSDT", "ALL", now.Add(-time.Hour))
 
-	got, err := repo.DelistedSymbols(ctx, "binance", "SPOT", "ALL", now)
+	got, err := repo.DelistedSymbols(ctx, "binance", "spot", "ALL", now)
 	require.NoError(t, err)
 	require.Equal(t, map[string]bool{"GONEUSDT": true}, got)
 }

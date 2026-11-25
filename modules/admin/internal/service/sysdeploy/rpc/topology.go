@@ -22,18 +22,6 @@ func (s *Service) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesReq) (
 	return s.svc.GetHostRoutes(ctx, req)
 }
 
-func (s *Service) SetHostStatus(ctx context.Context, req *pb.SetHostStatusReq) (*pb.SetHostStatusRsp, error) {
-	return s.svc.SetHostStatus(ctx, req)
-}
-
-func (s *Service) SetDeploymentStatus(ctx context.Context, req *pb.SetDeploymentStatusReq) (*pb.SetDeploymentStatusRsp, error) {
-	return s.svc.SetDeploymentStatus(ctx, req)
-}
-
-func (s *Service) SyncHostDeployments(ctx context.Context, req *pb.SyncHostDeploymentsReq) (*pb.SyncHostDeploymentsRsp, error) {
-	return s.svc.SyncHostDeployments(ctx, req)
-}
-
-func (s *Service) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHostReq) (*pb.DeleteDeploymentHostRsp, error) {
-	return s.svc.DeleteHost(ctx, req)
+func (s *Service) SyncTopology(ctx context.Context, req *pb.SyncTopologyReq) (*pb.SyncTopologyRsp, error) {
+	return s.svc.SyncTopology(ctx, req)
 }

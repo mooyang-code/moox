@@ -1,4 +1,4 @@
-import type { BlockedTarget, Holding, InstrumentTarget, Position, TargetLane } from "@/api/trade/types";
+import type { BlockedTarget, Holding, InstrumentQuantity, MarketType, Position, TargetLane } from "@/api/trade/types";
 import { coinOf, marketOfInstrument } from "../shared/markets";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
 
@@ -58,7 +58,7 @@ export interface CoinRow {
 }
 
 export interface BuildCoinRowsInput {
-  targets: readonly InstrumentTarget[];
+  targets: readonly InstrumentQuantity[];
   blocked: readonly BlockedTarget[];
   swapPositions: readonly Position[];
   spotHoldings: readonly Holding[];
@@ -167,9 +167,9 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     };
     const row = rowOf(coinOf(target.instrument_id));
     const market = marketOfInstrument(target.instrument_id);
-    if (market === 2) row.targetSwap = cell;
+    if (market === "swap") row.targetSwap = cell;
     else row.targetSpot = cell;
-    if (market === 3) row.stock = true;
+    if (market === "equity") row.stock = true;
   }
   for (const item of input.blocked) {
     const row = rowOf(coinOf(item.instrument_id));
@@ -204,14 +204,14 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
       row.markSpot ||= Number(holding.mark_price) || 0;
       addPnl(row, quantity, holding.unrealized_pnl, pnlMissing);
       addMember(row.memberSpot, holding.trading_account_id, quantity);
-      if (marketOfInstrument(holding.instrument_id) === 3) row.stock = true;
+      if (marketOfInstrument(holding.instrument_id) === "equity") row.stock = true;
     }
   }
 
   // 后端的结论按内部标的 ID 给，这里按（币，市场）对到行上
   const lanes = new Map<string, TargetLane>();
   for (const lane of input.lanes)
-    lanes.set(`${coinOf(lane.instrument_id)}|${marketOfInstrument(lane.instrument_id) === 2 ? "swap" : "spot"}`, lane);
+    lanes.set(`${coinOf(lane.instrument_id)}|${marketOfInstrument(lane.instrument_id) === "swap" ? "swap" : "spot"}`, lane);
   const result: CoinRow[] = [];
   for (const row of rows.values()) {
     const entry = entryCost.get(row);
@@ -283,8 +283,8 @@ function addMember(members: Record<string, number>, accountId: string, quantity:
  * 一样大时取靠前的。候选账户都没有持仓时返回 undefined，由调用方按原来的选法取第一个候选。
  * 多成员组合里卖出差额要在持仓所在的账户上下，否则会在别的账户上开出反向仓。
  */
-export function largestHolder(row: CoinRow, market: 1 | 2 | 3, candidates: readonly string[]): string | undefined {
-  const members = market === 2 ? row.memberSwap : row.memberSpot;
+export function largestHolder(row: CoinRow, market: MarketType, candidates: readonly string[]): string | undefined {
+  const members = market === "swap" ? row.memberSwap : row.memberSpot;
   let best: string | undefined;
   let size = 0;
   for (const accountId of candidates) {
@@ -298,7 +298,7 @@ export function largestHolder(row: CoinRow, market: 1 | 2 | 3, candidates: reado
 }
 
 export interface OrderHint {
-  market: 1 | 2 | 3;
+  market: MarketType;
   instrumentId: string;
   /** 与目标有差额时预填的方向：差额为正要买入，为负要卖出；没有目标或保持当前持仓时为空 */
   side?: 1 | 2;
@@ -322,13 +322,13 @@ export function rowOrderHints(row: CoinRow, quote: string): OrderHint[] {
   // 股票的标的 ID 就是代码本身（600519.XSHG），只有一个市场
   if (row.stock) {
     if (!row.targetSpot && row.actualSpot === 0) return hints;
-    const hint: OrderHint = { market: 3, instrumentId: row.coin };
+    const hint: OrderHint = { market: "equity", instrumentId: row.coin };
     setDeviation(hint, row.deviationSpotText);
     return [hint];
   }
   const markets = [
-    { market: 1 as const, target: row.targetSpot, actual: row.actualSpot, deviation: row.deviationSpotText, suffix: "SPOT" },
-    { market: 2 as const, target: row.targetSwap, actual: row.actualSwap, deviation: row.deviationSwapText, suffix: "SWAP" }
+    { market: "spot" as const, target: row.targetSpot, actual: row.actualSpot, deviation: row.deviationSpotText, suffix: "SPOT" },
+    { market: "swap" as const, target: row.targetSwap, actual: row.actualSwap, deviation: row.deviationSwapText, suffix: "SWAP" }
   ];
   for (const item of markets) {
     if (!item.target && item.actual === 0) continue;
@@ -340,7 +340,7 @@ export function rowOrderHints(row: CoinRow, quote: string): OrderHint[] {
 }
 
 /** 目标里涉及的币的个数：同一个币的现货、永续目标算一个。 */
-export function targetCoinCount(targets: readonly InstrumentTarget[]): number {
+export function targetCoinCount(targets: readonly InstrumentQuantity[]): number {
   return new Set(targets.map(item => coinOf(item.instrument_id))).size;
 }
 

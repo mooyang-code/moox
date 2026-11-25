@@ -63,7 +63,11 @@ func historySeedMaps(seeds []*collectorpb.HistorySeed) []map[string]any {
 			"dataset_id": seed.GetDatasetId(), "frequency": seed.GetFrequency(), "status": seed.GetStatus(),
 			"progress":    fmt.Sprintf("%d/%d", seed.GetDoneChunks(), seed.GetTotalChunks()),
 			"done_chunks": seed.GetDoneChunks(), "total_chunks": seed.GetTotalChunks(), "failed_chunks": seed.GetFailedChunks(),
-			"target_from": seed.GetTargetFrom(), "started_at": seed.GetStartedAt(), "finished_at": seed.GetFinishedAt(),
+			"target_from": seed.GetTargetFrom(), "started_at": seed.GetStartedAt(),
+		}
+		// started_at、finished_at 是 Unix 毫秒；还没结束的不输出 finished_at。
+		if finished := seed.GetFinishedAt(); finished > 0 {
+			item["finished_at"] = finished
 		}
 		if seed.GetStatus() == "running" {
 			item["eta_seconds"] = seed.GetEtaSeconds()

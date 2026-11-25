@@ -7,10 +7,10 @@ import (
 )
 
 // marketOrder 是市场集合的固定排列顺序，库里存的逗号分隔文本也按这个顺序。
-var marketOrder = []MarketType{MarketTypeSpot, MarketTypeSwap, MarketTypeStock}
+var marketOrder = []MarketType{MarketTypeSpot, MarketTypeSwap, MarketTypeEquity}
 
 // NormalizeMarkets 校验并规范化账户已开通的市场集合：去重、按固定顺序排列。
-// 加密货币账户取 SPOT、SWAP 的子集，股票账户只有 STOCK，两类不能混合。
+// 加密货币账户取 spot、swap 的子集，股票账户只有 equity，两类不能混合。
 func NormalizeMarkets(markets []MarketType) ([]MarketType, error) {
 	if len(markets) == 0 {
 		return nil, fmt.Errorf("至少要开通一个市场")
@@ -26,13 +26,13 @@ func NormalizeMarkets(markets []MarketType) ([]MarketType, error) {
 			return nil, fmt.Errorf("不支持的市场 %q", market)
 		}
 	}
-	if slices.Contains(result, MarketTypeStock) && len(result) > 1 {
+	if slices.Contains(result, MarketTypeEquity) && len(result) > 1 {
 		return nil, fmt.Errorf("股票市场不能和现货、合约混合开通")
 	}
 	return result, nil
 }
 
-// JoinMarkets 把市场集合写成库里存的逗号分隔文本，例如 SPOT,SWAP。
+// JoinMarkets 把市场集合写成库里存的逗号分隔文本，例如 spot,swap。
 func JoinMarkets(markets []MarketType) string {
 	parts := make([]string, len(markets))
 	for i, market := range markets {
@@ -62,7 +62,7 @@ func ParseMarkets(raw string) ([]MarketType, error) {
 // 没有后缀只可能是股票代码，且账户要开通了股票市场；否则返回空串，由调用方报错。
 func ResolveInstrumentMarket(instrumentID string, markets []MarketType) MarketType {
 	market := MarketOfInstrumentID(instrumentID)
-	if market == MarketTypeStock && !slices.Contains(markets, MarketTypeStock) {
+	if market == MarketTypeEquity && !slices.Contains(markets, MarketTypeEquity) {
 		return ""
 	}
 	return market

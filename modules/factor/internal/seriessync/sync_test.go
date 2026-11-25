@@ -403,7 +403,6 @@ func TestFrameConversionRoundTrip(t *testing.T) {
 		{ColumnName: "meta", ValueType: storageio.ColumnTypeJSON, Attributes: map[string]string{"fill": "prev"}},
 		{ColumnName: "volume", ValueType: storageio.ColumnTypeDouble, Attributes: map[string]string{"fill": "zero"}},
 		{ColumnName: "subject_id", ValueType: storageio.ColumnTypeString},
-		{ColumnName: "sys", ValueType: storageio.ColumnTypeString, OriginType: storageio.ColumnOriginSystem},
 		{ColumnName: "off", ValueType: storageio.ColumnTypeString, Status: "disabled"},
 	}
 	fs := FieldsFromColumns(cols)
@@ -411,7 +410,7 @@ func TestFrameConversionRoundTrip(t *testing.T) {
 	for i, f := range fs {
 		names[i] = f.Name
 	}
-	require.Equal(t, []string{"close", "closed", "meta", "trades", "ts", "volume"}, names, "系统列、保留列、停用列不进本地存储")
+	require.Equal(t, []string{"close", "closed", "meta", "trades", "ts", "volume"}, names, "保留列、停用列不进本地存储")
 	fill := map[string]seriesstore.FillRule{}
 	for _, f := range fs {
 		fill[f.Name] = f.Fill

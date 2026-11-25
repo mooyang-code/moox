@@ -64,10 +64,10 @@ func TestPaperManualRefreshReplacesReflectedReservationE2E(t *testing.T) {
 			service := &operator.Service{Store: f.store, Orders: manualSubmitDispatchLoss{Service: f.orders},
 				Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow},
 				Now: func() time.Time { return now }, ManualSubmitWindow: 2 * time.Minute}
-			command := operator.ManualOrderCommand{SpaceID: testSpace, ActionID: "reflected-refresh", TradingAccountID: testAccount,
+			command := operator.ManualOrderCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, ActionID: "reflected-refresh", TradingAccountID: testAccount,
 				ClientOrderID: "reflected-refresh", InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket,
 				Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("18"), Reason: "delayed paper order"}
-			initial, err := service.PlaceManualOrder(ctx, command)
+			initial, err := service.PlaceOrder(ctx, command)
 			require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 			_, err = f.sync.SyncAccount(ctx, testAccount)
 			require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestPaperManualRefreshReplacesReflectedReservationE2E(t *testing.T) {
 			f.fake.reference.Price = f.fake.reference.Price.Mul(shared.MustDecimal(factor))
 			f.fake.reference.UpdatedAt = now
 			service.Orders = f.orders
-			result, err := service.PlaceManualOrder(ctx, command)
+			result, err := service.PlaceOrder(ctx, command)
 			require.NoError(t, err)
 			require.Equal(t, initial.Order.OrderID, result.Order.OrderID)
 			if factor == "1.2" {

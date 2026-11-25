@@ -1,4 +1,4 @@
-import { marketTime } from "@/utils/time-zone";
+import { marketTime, toInstantMs } from "@/utils/time-zone";
 import type { CollectorTask } from "@/api/collector";
 
 export type TaskResultState = "ready" | "preparing" | "stale" | "error";
@@ -8,13 +8,13 @@ export interface TaskResultTab {
   taskId: string;
   title: string;
   resample: boolean;
-  viewIds: string[];
+  datasetIds: string[];
   state: TaskResultState;
 }
 
 export function sortTasksByCreatedAt(tasks: CollectorTask[]): CollectorTask[] {
   return [...tasks].sort((left, right) => {
-    const timeDifference = timestamp(right.create_time) - timestamp(left.create_time);
+    const timeDifference = (toInstantMs(right.created_at) ?? 0) - (toInstantMs(left.created_at) ?? 0);
     if (timeDifference !== 0) return timeDifference;
     return String(left.task_id).localeCompare(String(right.task_id));
   });
@@ -26,7 +26,7 @@ export function buildTaskResultTabs(tasks: CollectorTask[]): TaskResultTab[] {
     taskId: task.task_id,
     title: (task.task_name?.trim() || task.task_id) + (isResampleTask(task) ? " · 合成" : ""),
     resample: isResampleTask(task),
-    viewIds: getTaskResultViewIds(task),
+    datasetIds: getTaskResultDatasetIds(task),
     state: getTaskResultState(task)
   }));
 }
@@ -61,9 +61,10 @@ export function resampleEmptyDescription(task: CollectorTask, frequencyMinutes: 
   return `等待第一个目标桶收盘（预计 ${marketTime(next, zone, now)}，交易时段市场遇休市会顺延）`;
 }
 
-export function getTaskResultViewIds(task: CollectorTask): string[] {
-  const ids = [...(task.result?.view_ids || []), task.result?.view_id || ""].map(value => value.trim()).filter(Boolean);
-  return [...new Set(ids)];
+/** 任务的结果数据集；每个数据集恰好有一个查询索引，按数据集浏览。 */
+export function getTaskResultDatasetIds(task: CollectorTask): string[] {
+  const id = task.result?.dataset_id?.trim() || "";
+  return id ? [id] : [];
 }
 
 export function getTaskResultState(task: CollectorTask): TaskResultState {
@@ -73,7 +74,7 @@ export function getTaskResultState(task: CollectorTask): TaskResultState {
     return "error";
   }
   if (["stale", "unknown"].includes(resultStatus)) return "stale";
-  if (getTaskResultViewIds(task).length > 0 && !["pending", "preparing", "waiting_view"].includes(resultStatus)) {
+  if (getTaskResultDatasetIds(task).length > 0 && !["pending", "preparing", "waiting_view"].includes(resultStatus)) {
     return "ready";
   }
   return "preparing";
@@ -99,12 +100,6 @@ export function resolveActiveTask(
 export function buildResultsQuery(taskId: string): { tab: "results"; resultTask?: string } {
   const normalized = taskId.trim();
   return normalized ? { tab: "results", resultTask: normalized } : { tab: "results" };
-}
-
-function timestamp(value?: string) {
-  if (!value) return 0;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function queryString(value: unknown) {

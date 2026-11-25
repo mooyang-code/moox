@@ -1,4 +1,4 @@
-import { callControl } from "./http";
+import { call } from "@/api/http";
 
 export interface Secret {
   id?: number;
@@ -13,8 +13,9 @@ export interface Secret {
   extra_config?: string;
   status?: string;
   creator?: string;
-  create_time?: string;
-  modify_time?: string;
+  /** 创建、修改时刻：Unix 毫秒的数字字符串 */
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface ListSecretsReq {
@@ -57,23 +58,23 @@ export interface ToggleSecretStatusReq {
 }
 
 export function listSecrets(req: ListSecretsReq = {}) {
-  return callControl<ListSecretsReq, ListSecretsRsp>("secret", "ListSecrets", req);
+  return call<ListSecretsReq, ListSecretsRsp>("secret", "ListSecrets", req);
 }
 
 export function createSecret(secret: Secret) {
-  return callControl<CreateSecretReq, CreateSecretRsp>("secret", "CreateSecret", { secret });
+  return call<CreateSecretReq, CreateSecretRsp>("secret", "CreateSecret", { secret });
 }
 
 export function updateSecret(req: UpdateSecretReq) {
-  return callControl<UpdateSecretReq, Record<string, never>>("secret", "UpdateSecret", req);
+  return call<UpdateSecretReq, Record<string, never>>("secret", "UpdateSecret", req);
 }
 
 export function deleteSecret(secretId: string) {
-  return callControl<{ secret_id: string }, Record<string, never>>("secret", "DeleteSecret", { secret_id: secretId });
+  return call<{ secret_id: string }, Record<string, never>>("secret", "DeleteSecret", { secret_id: secretId });
 }
 
 export function toggleSecretStatus(secretId: string, status: string) {
-  return callControl<ToggleSecretStatusReq, Record<string, never>>("secret", "ToggleSecretStatus", {
+  return call<ToggleSecretStatusReq, Record<string, never>>("secret", "ToggleSecretStatus", {
     secret_id: secretId,
     status
   });
@@ -99,10 +100,10 @@ export interface ImportSecretsRsp {
 
 /** 导出全部密钥为口令加密的迁移包。明文只在服务端出现，返回的迁移包里只有密文。 */
 export function exportSecrets(passphrase: string) {
-  return callControl<{ passphrase: string }, ExportSecretsRsp>("secret", "ExportSecrets", { passphrase });
+  return call<{ passphrase: string }, ExportSecretsRsp>("secret", "ExportSecrets", { passphrase });
 }
 
 /** 用导出口令导入迁移包，按 secret_id 导入；overwrite 为 true 时覆盖同一 secret_id 的已有密钥。 */
 export function importSecrets(req: ImportSecretsReq) {
-  return callControl<ImportSecretsReq, ImportSecretsRsp>("secret", "ImportSecrets", req);
+  return call<ImportSecretsReq, ImportSecretsRsp>("secret", "ImportSecrets", req);
 }

@@ -45,15 +45,15 @@ func stockDeciderFixture(t *testing.T) (*Decider, *deciderAdapter, store.OrderRe
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "ASHARE", Environment: "PRODUCTION", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG",
+			Exchange: "ashare", Environment: "PRODUCTION", MarketType: "equity", ExchangeSymbol: "600519.XSHG",
 			InstrumentID: "600519.XSHG", BaseAsset: "600519.XSHG", QuoteAsset: "CNY", SettlementAsset: "CNY",
 			ExchangeQuantityStep: "100", MinExchangeQuantity: "100", PriceTick: "0.01", Status: "TRADING",
 		}); err != nil {
 			return err
 		}
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space", TradingAccountID: "paper", Name: "A 股", Exchange: "ASHARE",
-			Markets: []string{"STOCK"}, ExecutionMode: "PAPER", SettlementAsset: "CNY", Status: "ENABLED",
+			SpaceID: "space", TradingAccountID: "paper", Name: "A 股", Exchange: "ashare",
+			Markets: []string{"equity"}, ExecutionMode: "PAPER", SettlementAsset: "CNY", Status: "ENABLED",
 			PaperConfig: &store.PaperAccountConfigRecord{SpaceID: "space", TradingAccountID: "paper",
 				InitialBalance: "50000000", MakerFeeRate: "0.00025", TakerFeeRate: "0.00025", SlippageBPS: "0"},
 		})
@@ -69,7 +69,7 @@ func stockDeciderFixture(t *testing.T) (*Decider, *deciderAdapter, store.OrderRe
 	limit := "10.2"
 	return &Decider{Store: db, Adapters: deciderAdapters{adapter}, Exchanges: ashareCatalog(t), Now: func() time.Time { return now }}, adapter, store.OrderRecord{
 		SpaceID: "space", TradingAccountID: "paper", OrderID: "order", ClientOrderID: "client", ExchangeOrderID: "exchange-order",
-		InstrumentID: "600519.XSHG", ExchangeSymbol: "600519.XSHG", MarketType: "STOCK", Side: "BUY",
+		InstrumentID: "600519.XSHG", ExchangeSymbol: "600519.XSHG", MarketType: "equity", Side: "BUY",
 		OrderType: "LIMIT", TimeInForce: "IOC", LimitPrice: &limit, FirstMatchPending: true,
 		Quantity: "100", ReferencePrice: "10", ReservedAsset: "CNY", RemainingReservedQuantity: "1005.01",
 	}, db
@@ -84,7 +84,7 @@ func TestStockDeciderChargesMinimumCommissionAndTransferFee(t *testing.T) {
 	require.Equal(t, "10", decision.Fill.Price.String())
 	require.Equal(t, "5.01", decision.Fill.Fee.String(), "佣金 0.25 不足 5 元按 5 元，过户费 0.01")
 	require.Equal(t, "CNY", decision.Fill.FeeAsset)
-	require.Equal(t, order.RemainingReservedQuantity, exchange.RuleAt(exchange.ExchangeAShare, exchange.MarketTypeStock).BuyCost(shared.MustDecimal("1000"), shared.MustDecimal("0.00025")).String(),
+	require.Equal(t, order.RemainingReservedQuantity, exchange.RuleAt(exchange.ExchangeAShare, exchange.MarketTypeEquity).BuyCost(shared.MustDecimal("1000"), shared.MustDecimal("0.00025")).String(),
 		"下单预留和撮合扣费是同一个函数")
 }
 
@@ -131,7 +131,7 @@ func TestMatcherSkipsOutsideSession(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	limit := "10"
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Name: "a", Exchange: "ASHARE", Markets: []string{"STOCK"}, ExecutionMode: "PAPER", SettlementAsset: "CNY", Status: "ENABLED"}); err != nil {
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Name: "a", Exchange: "ashare", Markets: []string{"equity"}, ExecutionMode: "PAPER", SettlementAsset: "CNY", Status: "ENABLED"}); err != nil {
 			return err
 		}
 		for _, item := range []struct {
@@ -139,7 +139,7 @@ func TestMatcherSkipsOutsideSession(t *testing.T) {
 			first bool
 		}{{"fresh", true}, {"resting", false}} {
 			if err := tx.CreateOrder(store.OrderRecord{SpaceID: "s", TradingAccountID: "a", OrderID: item.id, ClientOrderID: item.id, ExchangeOrderID: item.id,
-				MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG", OrderType: "LIMIT", TimeInForce: "GTC", LimitPrice: &limit,
+				MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG", OrderType: "LIMIT", TimeInForce: "GTC", LimitPrice: &limit,
 				Side: "BUY", Quantity: "100", ReferencePrice: "10", OwnerType: "EXTERNAL", OwnerID: item.id, State: "OPEN", FirstMatchPending: item.first}); err != nil {
 				return err
 			}
@@ -181,12 +181,12 @@ func (d stockPublicData) GetReferencePrice(context.Context, exchange.SymbolKey) 
 // 模拟盘估值：周六用周五收盘价，账户快照照常算出来（不触发 valuation_degraded）；时段内照原来的 10 秒。
 func TestStockValuationQuoteUsesCloseOutsideSession(t *testing.T) {
 	adapter := &Adapter{
-		Account:    store.TradingAccountRecord{Exchange: "ASHARE"},
+		Account:    store.TradingAccountRecord{Exchange: "ashare"},
 		MarketData: stockPublicData{price: exchange.ReferencePrice{Price: shared.MustDecimal("1453"), UpdatedAt: beijingTime("2026-11-06 16:14:58")}},
 		Exchanges:  ashareCatalog(t),
 		Now:        func() time.Time { return beijingTime("2026-11-07 10:00:00") },
 	}
-	key := exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG")
+	key := exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG")
 	price, err := adapter.valuationQuote(context.Background(), key)
 	require.NoError(t, err)
 	require.Equal(t, "1453", price.String())
@@ -201,7 +201,7 @@ func TestDegradedLastPriceFollowsSession(t *testing.T) {
 	catalog := ashareCatalog(t)
 	fresh := func(now time.Time) func(time.Time) bool {
 		return func(at time.Time) bool {
-			return execution.QuoteFresh(catalog, "ASHARE", at, now, execution.LastPriceMaxAge)
+			return execution.QuoteFresh(catalog, "ashare", at, now, execution.LastPriceMaxAge)
 		}
 	}
 	last := execution.LastPrice{Price: shared.MustDecimal("10"), At: beijingTime("2026-11-06 15:00:03")}
@@ -231,7 +231,7 @@ func TestApplyT1SubtractsTodayBuys(t *testing.T) {
 	adapter := &Adapter{Store: source, Now: func() time.Time { return beijingTime("2026-11-06 10:00:00") }}
 	rows := paperBalances(map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("300"), "CNY": shared.MustDecimal("100")},
 		map[string]shared.Decimal{"600519.XSHG": shared.MustDecimal("50")})
-	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "ASHARE", Markets: []string{"STOCK"}}, rows))
+	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "ashare", Markets: []string{"equity"}}, rows))
 	byAsset := map[string]exchange.AssetBalance{}
 	for _, row := range rows {
 		byAsset[row.Asset] = row
@@ -245,12 +245,12 @@ func TestApplyT1SubtractsTodayBuys(t *testing.T) {
 	hkSource := &t1Store{bought: map[string]shared.Decimal{"00700.XHKG": shared.MustDecimal("200")}}
 	hkAdapter := &Adapter{Store: hkSource, Now: func() time.Time { return beijingTime("2026-11-06 10:00:00") }}
 	hkRows := paperBalances(map[string]shared.Decimal{"00700.XHKG": shared.MustDecimal("300")}, nil)
-	require.NoError(t, hkAdapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "HKEX", Markets: []string{"STOCK"}}, hkRows))
+	require.NoError(t, hkAdapter.applyT1(context.Background(), store.TradingAccountRecord{Exchange: "hkex", Markets: []string{"equity"}}, hkRows))
 	require.Equal(t, "300", hkRows[0].Available.String())
 	require.Zero(t, hkSource.since, "T+0 的场所不查当日买入")
 
 	// 加密货币账户不查当日买入。
 	source.since = 0
-	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Markets: []string{"SPOT"}}, rows))
+	require.NoError(t, adapter.applyT1(context.Background(), store.TradingAccountRecord{Markets: []string{"spot"}}, rows))
 	require.Zero(t, source.since)
 }

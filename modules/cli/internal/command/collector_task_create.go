@@ -223,28 +223,28 @@ func init() {
 	flags.StringVar(&collectorTaskDeleteFlagsValue.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	flags.StringVar(&collectorTaskDeleteFlagsValue.SpaceID, "space-id", "", "空间 ID")
 	flags.StringVar(&collectorTaskDeleteFlagsValue.TaskID, "task-id", "", "任务 ID")
-	flags.BoolVar(&collectorTaskDeleteFlagsValue.KeepResult, "keep-result", false, "只删任务，保留结果数据集与 View")
+	flags.BoolVar(&collectorTaskDeleteFlagsValue.KeepResult, "keep-result", false, "只删任务，保留结果数据集")
 	flags.BoolVar(&collectorTaskDeleteFlagsValue.Yes, "yes", false, "确认删除；不加只预览")
 }
 
 var collectorResultDeleteFlagsValue struct {
-	File, SpaceID       string
-	DatasetIDs, ViewIDs []string
-	Yes                 bool
+	File, SpaceID string
+	DatasetIDs    []string
+	Yes           bool
 }
 
-// collectorResultDeleteCmd 删除已没有任务引用的采集结果（View、行数据、数据集）。
+// collectorResultDeleteCmd 删除已没有任务引用的采集结果（数据集、行数据与它的查询索引）。
 var collectorResultDeleteCmd = &cobra.Command{
 	Use:   "delete-result",
-	Short: "删除没有任务引用的采集结果（View、行数据与数据集；默认只预览，--yes 才执行）",
+	Short: "删除没有任务引用的采集结果（数据集、行数据与它的查询索引；默认只预览，--yes 才执行）",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		flags := collectorResultDeleteFlagsValue
-		if flags.SpaceID == "" || (len(flags.DatasetIDs) == 0 && len(flags.ViewIDs) == 0) {
-			return errors.New("--space-id and at least one --dataset-id/--view-id are required")
+		if flags.SpaceID == "" || len(flags.DatasetIDs) == 0 {
+			return errors.New("必须指定 --space-id 与至少一个 --dataset-id")
 		}
 		if !flags.Yes {
-			return writePreview(cmd, map[string]any{"action": "delete_result", "space_id": flags.SpaceID, "views": flags.ViewIDs, "datasets": flags.DatasetIDs})
+			return writePreview(cmd, map[string]any{"action": "delete_result", "space_id": flags.SpaceID, "datasets": flags.DatasetIDs})
 		}
 		metadata, closer, err := newCollectorStorageMetadataClient(cmd.Context(), flags.File)
 		if err != nil {
@@ -252,16 +252,13 @@ var collectorResultDeleteCmd = &cobra.Command{
 		}
 		defer closer.Close()
 		var objects collectorOwnedMetadata
-		for _, id := range flags.ViewIDs {
-			objects.views = appendUniqueStorageObject(objects.views, flags.SpaceID, id)
-		}
 		for _, id := range flags.DatasetIDs {
 			objects.datasets = appendUniqueStorageObject(objects.datasets, flags.SpaceID, id)
 		}
 		if err := deleteCollectorOwnedMetadata(cmd.Context(), metadata, objects); err != nil {
 			return err
 		}
-		return printJSON(cmd.OutOrStdout(), map[string]any{"status": "deleted", "views": flags.ViewIDs, "datasets": flags.DatasetIDs})
+		return printJSON(cmd.OutOrStdout(), map[string]any{"status": "deleted", "datasets": flags.DatasetIDs})
 	},
 }
 
@@ -270,7 +267,6 @@ func init() {
 	flags := collectorResultDeleteCmd.Flags()
 	flags.StringVar(&collectorResultDeleteFlagsValue.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	flags.StringVar(&collectorResultDeleteFlagsValue.SpaceID, "space-id", "", "空间 ID")
-	flags.StringArrayVar(&collectorResultDeleteFlagsValue.DatasetIDs, "dataset-id", nil, "要删除的数据集（连同行数据），可重复")
-	flags.StringArrayVar(&collectorResultDeleteFlagsValue.ViewIDs, "view-id", nil, "要删除的 View，可重复；先于数据集删除")
+	flags.StringArrayVar(&collectorResultDeleteFlagsValue.DatasetIDs, "dataset-id", nil, "要删除的数据集（连同行数据与查询索引），可重复")
 	flags.BoolVar(&collectorResultDeleteFlagsValue.Yes, "yes", false, "确认删除；不加只预览")
 }

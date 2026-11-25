@@ -85,7 +85,7 @@ func TestConvertMemberRoundTrip(t *testing.T) {
 	require.Equal(t, "ftask_a", full.GetTaskId())
 	require.Equal(t, "rolling_mean", full.GetFactorId())
 	require.Equal(t, domain.MemberStatusEnabled, full.GetStatus())
-	require.Equal(t, "2026-10-04T10:12:12Z", full.GetUpdatedAt())
+	require.Equal(t, time.Date(2026, 10, 4, 10, 12, 12, 0, time.UTC).UnixMilli(), full.GetUpdatedAt())
 	require.Equal(t, def.Spec, full.GetFactor().GetSpec())
 	got, err := factorwire.DefFromPB(full.GetFactor())
 	require.NoError(t, err)
@@ -160,7 +160,6 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 	job.Subjects = factorwire.CloneStrings(pb.GetSubjects())
 	job.Status = pb.GetStatus()
 	job.Error = pb.GetError()
-	job.EngineID = pb.GetEngineId()
 	timeFields := []struct {
 		name   string
 		value  string
@@ -169,8 +168,6 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 		{name: "start_time", value: pb.GetStartTime(), target: &job.StartTime},
 		{name: "end_time", value: pb.GetEndTime(), target: &job.EndTime},
 		{name: "progress_time", value: pb.GetProgressTime(), target: &job.ProgressTime},
-		{name: "created_at", value: pb.GetCreatedAt(), target: &job.CreatedAt},
-		{name: "updated_at", value: pb.GetUpdatedAt(), target: &job.UpdatedAt},
 	}
 	for _, field := range timeFields {
 		parsed, err := factorwire.ParseTime(field.value)
@@ -179,5 +176,6 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 		}
 		*field.target = parsed
 	}
+	job.CreatedAt, job.UpdatedAt = factorwire.FromMillis(pb.GetCreatedAt()), factorwire.FromMillis(pb.GetUpdatedAt())
 	return job, nil
 }

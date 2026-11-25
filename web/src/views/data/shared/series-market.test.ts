@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  datasetMarketText,
-  isUnifiedMarketType,
-  marketLabel,
-  seriesTagDisplay,
-  seriesTagExplicitMarket,
-  seriesTagMarketText
-} from "./series-market";
+import { marketLabel, seriesTagDisplay, seriesTagExplicitMarket, seriesTagMarketText } from "./series-market";
 
 describe("series tag market", () => {
   it("parses the market segment of the production tags", () => {
@@ -30,12 +23,5 @@ describe("series tag market", () => {
     expect(seriesTagDisplay("")).toBe("-");
     expect(marketLabel("futures")).toBe("futures");
     expect(marketLabel("")).toBe("-");
-  });
-
-  it("describes unified datasets", () => {
-    expect(isUnifiedMarketType(" Multi ")).toBe(true);
-    expect(isUnifiedMarketType("spot")).toBe(false);
-    expect(datasetMarketText("multi")).toBe("统一数据集（现货、永续）");
-    expect(datasetMarketText("swap")).toBe("永续");
   });
 });

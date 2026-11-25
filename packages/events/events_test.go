@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestBuiltInEvents(t *testing.T) {
@@ -20,7 +19,6 @@ func TestBuiltInEvents(t *testing.T) {
 	want := []string{
 		"event.collector.instrument.delist_scheduled@1",
 		"event.collector.kline.backfilled@1",
-		"event.observability.host.snapshot.reported@1",
 		"event.observability.log.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
 		"event.storage.dataset.period.completed@1",
@@ -30,7 +28,6 @@ func TestBuiltInEvents(t *testing.T) {
 	wantOwners := map[string]string{
 		"event.collector.instrument.delist_scheduled@1":   "collector",
 		"event.collector.kline.backfilled@1":              "collector",
-		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.log.reported@1":              "service",
 		"event.observability.metrics.snapshot.reported@1": "service",
 		"event.storage.dataset.period.completed@1":        "storage",
@@ -72,7 +69,7 @@ func TestRegistryRejectsEventWithoutPrefix(t *testing.T) {
 func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	now := timestamppb.Now()
+	now := time.Now().UnixMilli()
 	tests := []struct {
 		name      string
 		event     Event
@@ -92,7 +89,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		{
 			name: "view data ready", event: ViewDataReady,
 			payload:   validViewDataReady(now),
-			subjectID: "view-1",
+			subjectID: "dataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeViewDataReady(registry, raw, subject, id)
 				return payload, err
@@ -112,7 +109,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			encoded, err := registry.Encode(tt.event, tt.payload, PublishOptions{
-				EventID: "event-1", OccurredAt: now.AsTime(), SpaceID: "space", SubjectID: tt.subjectID,
+				EventID: "event-1", OccurredAt: time.UnixMilli(now), SpaceID: "space", SubjectID: tt.subjectID,
 			})
 			require.NoError(t, err)
 			raw, err := proto.Marshal(encoded.Message)
@@ -129,7 +126,7 @@ func TestObservabilityEventsShareOneStream(t *testing.T) {
 	require.NoError(t, err)
 	for _, event := range []Event{
 		ObservabilityMetricsSnapshotReported,
-		ObservabilityHostSnapshotReported,
+		ObservabilityLogReported,
 	} {
 		require.Equal(t, "MOOX_OBSERVABILITY", event.Stream())
 		family, err := registry.FamilyPattern(event)
@@ -194,32 +191,30 @@ func TestLogicalAccountTargetWeightRequestedContract(t *testing.T) {
 	}
 }
 
-func validLedgerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.DatasetPeriodCompleted {
+func validLedgerPeriodCompleted(now int64) *storagepb.DatasetPeriodCompleted {
 	return &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "ledger",
 		SnapshotRef:        "series-hash-1",
 		UniverseSubjectIds: []string{"BTC-USDT"},
-		UniverseSeries:     []*storagepb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: "venue:binance"}},
 		CompletedAt:        now,
 	}
 }
 
-func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
+func validViewDataReady(now int64) *storagepb.ViewDataReady {
 	return &storagepb.ViewDataReady{
-		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "period-completed-1",
-		DatasetId: "dataset", Status: "complete", VisibleScope: "universe:dataset:1m",
+		CompletionEventId: "period-completed-1",
+		DatasetId:         "dataset", Status: "complete",
 		Frequency: "1m", PeriodTime: 1786032000,
 		ReadyAt: now,
 	}
 }
 
 // validProducerPeriodCompleted 是写入方自己报告的完成：明细是不透明字节，Storage 只要求带类型。
-func validProducerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.DatasetPeriodCompleted {
+func validProducerPeriodCompleted(now int64) *storagepb.DatasetPeriodCompleted {
 	return &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset_result", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
 		UniverseSubjectIds: []string{"BTC-USDT"}, CauseEventId: "period-completed-1", CompletedAt: now,
-		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: "venue:binance"}},
-		DetailType:     "test.Detail.v1", Detail: []byte("opaque"),
+		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
 	}
 }
 
@@ -229,8 +224,8 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	start := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC", "ETH"},
-		Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)),
-		Origin: "auto", JobId: "job-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
+		Start: start.Unix(), End: start.Add(time.Hour).Unix(),
+		Origin: "auto", JobId: "job-1", ConfirmedAt: start.Add(2 * time.Hour).UnixMilli(),
 	}
 	raw, err := registry.MarshalMessage(CollectorKlineBackfilled, payload, PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
@@ -240,12 +235,20 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, subject, "moox.event.collector.kline.backfilled.v1.")
 	require.Equal(t, "MOOX_COLLECTOR", CollectorKlineBackfilled.Stream())
+	decoded := new(storagepb.CollectorKlineBackfilled)
+	require.NoError(t, proto.Unmarshal(message.GetPayload(), decoded))
+	require.Equal(t, int64(1792576800), decoded.GetStart(), "start 是 Unix 秒")
+	require.Equal(t, start.Add(time.Hour).Unix(), decoded.GetEnd())
 
 	for name, mutate := range map[string]func(*storagepb.CollectorKlineBackfilled){
 		"dataset mismatch": func(p *storagepb.CollectorKlineBackfilled) { p.DatasetId = "other" },
 		"no subjects":      func(p *storagepb.CollectorKlineBackfilled) { p.SubjectIds = nil },
 		"empty range":      func(p *storagepb.CollectorKlineBackfilled) { p.End = p.Start },
-		"bad origin":       func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
+		"zero start":       func(p *storagepb.CollectorKlineBackfilled) { p.Start = 0 },
+		"bad absent range": func(p *storagepb.CollectorKlineBackfilled) {
+			p.Absent = []*storagepb.CollectorKlineAbsent{{SubjectId: "BTC", Start: p.End, End: p.Start}}
+		},
+		"bad origin": func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
 	} {
 		broken := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
 		mutate(broken)

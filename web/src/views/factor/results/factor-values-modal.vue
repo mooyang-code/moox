@@ -26,7 +26,7 @@
             @input="page = 1"
             @clear="page = 1"
           />
-          <a-tooltip :disabled="Boolean(props.scope.paramsColumn)" content="结果视图没有 __params 列">
+          <a-tooltip :disabled="Boolean(props.scope.paramsColumn)" content="结果数据集没有 __params 列">
             <span>
               <a-switch v-model="showParams" size="small" :disabled="!props.scope.paramsColumn" />
               <span class="values-switch-label">显示参数</span>
@@ -90,7 +90,7 @@ import {
 const displayZone = useDisplayZone();
 const props = defineProps<{
   visible: boolean;
-  viewId: string;
+  datasetId: string;
   rowKey?: TimeSeriesKey;
   scope: FactorScope;
 }>();
@@ -144,7 +144,7 @@ async function load() {
   loading.value = true;
   loaded.value = false;
   try {
-    const rsp = await queryTimeSeriesRows(rowValuesRequest(props.viewId, key, columns));
+    const rsp = await queryTimeSeriesRows(rowValuesRequest(props.datasetId, key, columns));
     if (!request.isLatest()) return;
     const next: Record<string, string> = {};
     for (const field of rsp.rows?.[0]?.fields ?? []) next[field.field_id] = fieldText(field.value);

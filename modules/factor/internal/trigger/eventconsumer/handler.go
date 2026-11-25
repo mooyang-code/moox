@@ -14,8 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/seriesset"
-	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -170,7 +168,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 
 	event := periodEvent{
 		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(), eventID: message.GetEventId(),
-		universeSeries: eventSeries(payload.GetUniverseSeries()), failedSeries: eventSeries(payload.GetFailedSeries()),
+		universe: payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
 	}
 	// 同一个源数据集可以有多个任务：事件同时分给每个启用的任务，各自在自己的串行通道里计算（同一任务内部的期次仍按顺序），
 	// 全部返回后再汇总错误。任一任务遇到基础设施错误时整条事件重投；已经算完的任务靠“同一触发事件的 marker 已存在”跳过。
@@ -263,30 +261,18 @@ func transient(err error) bool {
 type periodEvent struct {
 	periodTime time.Time
 	eventID    string
-	// universeSeries、failedSeries 是事件里按序列的全集与失败名单（所有数据集的事件都带）。
-	universeSeries []seriesset.Series
-	failedSeries   []seriesset.Series
+	// universe、failed 是事件里的全集与失败标的（universe_subject_ids、failed_subjects）。
+	universe []string
+	failed   []string
 }
 
-// periodScope 是一期要算的范围：按序列（标的、series_tag）的期望全集与上游失败名单。
+// periodScope 是一期要算的范围：期望标的与上游失败的标的。
 type periodScope struct {
-	universeSeries, failedSeries []seriesset.Series
+	universe, failed []string
 }
 
 func (e periodEvent) scope() periodScope {
-	return periodScope{universeSeries: e.universeSeries, failedSeries: e.failedSeries}
-}
-
-// eventSeries 把事件里的序列名单转成引擎内部的形式。
-func eventSeries(values []*storagepb.SeriesRef) []seriesset.Series {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]seriesset.Series, len(values))
-	for i, value := range values {
-		out[i] = seriesset.Series{SubjectID: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()}
-	}
-	return out
+	return periodScope{universe: e.universe, failed: e.failed}
 }
 
 // computePeriod 计算一期：已经算过（同一触发事件的 marker 已存在）就跳过；开算之前先取得这一期的参数
@@ -365,7 +351,7 @@ func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members [
 	}
 	return pipeline.BuildLivePlan(clock, pipeline.LiveInput{
 		Set: set, Members: members, Params: params, PeriodTime: period,
-		UniverseSeries: scope.universeSeries, UpstreamFailedSeries: scope.failedSeries,
+		UniverseSubjects: scope.universe, UpstreamFailed: scope.failed,
 		CarryColumns: carryColumns, TriggerEventID: triggerEventID, Budget: budget,
 	})
 }

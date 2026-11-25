@@ -15,12 +15,13 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 // ViewDataReadyConsumerName 是默认的 durable 消费者名。
-const ViewDataReadyConsumerName = "strategy_view_data_ready_v1"
+var ViewDataReadyConsumerName = events.StrategyViewReadyConsumer.Name()
 
 // ErrInvalidEvent 表示事件本身不可处理（处理器未配置或事件为空），重投无意义。
 var ErrInvalidEvent = errors.New("事件不可处理")
@@ -133,9 +134,9 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 	if h.exhausted == nil {
 		h.exhausted = make(map[string]string)
 	}
-	instances, err := h.Store.EnabledInstancesByView(ctx, message.GetSpaceId(), payload.GetViewId())
+	instances, err := h.Store.EnabledInstancesByDataset(ctx, message.GetSpaceId(), payload.GetDatasetId())
 	if err != nil {
-		return fmt.Errorf("读取 View %s 的启用实例：%w", payload.GetViewId(), err)
+		return fmt.Errorf("读取 View %s 的启用实例：%w", payload.GetDatasetId(), err)
 	}
 	// 同一事件内多个实例绑定同一 View：元数据（View、标的绑定、标签成员）只读一次。
 	loader := h.Loader
@@ -271,7 +272,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 	}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
-	taskKey, sourceName, reference, bound := rt.resolved.ViewRole(payload.GetViewId())
+	taskKey, sourceName, reference, bound := rt.resolved.RoleOfDataset(payload.GetDatasetId())
 	switch {
 	case bound && reference:
 		// 参考市场只用于年龄判定，按需读取，不等它的就绪事件。
@@ -281,7 +282,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	}
 	if !bound {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
-			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetViewId())
+			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetDatasetId())
 			h.observe(ctx, instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
 		}
 		return nil
@@ -309,7 +310,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		return nil
 	}
 	p := &period{timing: periodTiming{start: h.now()}, shadow: instance.Trial(), loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
-	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetViewId(): {EventID: message.GetEventId()}}}
+	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetDatasetId(): {EventID: message.GetEventId()}}}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 	}
@@ -370,7 +371,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			if err != nil {
 				return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 			}
-			_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, rt.resolved.ViewIDs(), bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
+			_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, rt.resolved.DatasetIDs(), bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
 			if err != nil {
 				return err
 			}
@@ -593,14 +594,14 @@ func (h *Handler) withReads(ctx context.Context, p *period, key string, read fun
 func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved input.Resolved, program *dsl.Program, ready mergedReadiness, previous engine.State) (loaded input.Loaded, skip *input.SkipError, terminal bool, err error) {
 	skip, terminal, err = h.withReads(ctx, p, key, func() error {
 		var readErr error
-		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets(), SourceDown: ready.SourceDown})
+		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets(), SourceDown: ready.SourceDown})
 		return readErr
 	})
 	// 附加来源读到的修订号写进本期的输入记录（只有写了来源的实例才有）。
-	for viewID, revision := range loaded.SourceRevisions {
-		view := p.input.Views[viewID]
+	for datasetID, revision := range loaded.SourceRevisions {
+		view := p.input.Views[datasetID]
 		view.Revision = revision
-		p.input.Views[viewID] = view
+		p.input.Views[datasetID] = view
 	}
 	return loaded, skip, terminal, err
 }
@@ -661,7 +662,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 	now := h.now()
 	result := store.Result{
 		ResultID: resultID, InstanceID: p.instance.InstanceID, SessionID: p.runtime.sessionID,
-		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: decision.Status, SkipReason: decision.SkipReason, DSLHash: p.runtime.dslHash,
+		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: decision.Status, SkipReason: decision.SkipReason,
 		InputJSON: inputJSON, TargetsJSON: targetsJSON, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
@@ -699,7 +700,7 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 	}
 	result := store.Result{
 		ResultID: resultID, InstanceID: p.instance.InstanceID, SessionID: p.runtime.sessionID,
-		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: store.StatusSkipped, SkipReason: reason, DSLHash: p.runtime.dslHash,
+		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: store.StatusSkipped, SkipReason: reason,
 		InputJSON: inputJSON, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: summary,
 		PublishStatus: store.PublishNone, CreatedAt: h.now(),
 	}
@@ -764,9 +765,10 @@ func (h *Handler) observe(ctx context.Context, instance store.Instance, bar stri
 // “K 线至就绪”是 K 线结束到 View 数据就绪（上游因子计算、写入与 View 刷新）。
 func (h *Handler) logTiming(p *period, payload *storagepb.ViewDataReady, status string, steps []input.Step) {
 	var wait, upstream time.Duration
-	if ready := payload.GetReadyAt(); ready != nil {
-		wait = p.timing.start.Sub(ready.AsTime())
-		upstream = ready.AsTime().Sub(p.boundary.BarEnd)
+	if ready := payload.GetReadyAt(); ready > 0 {
+		readyAt := time.UnixMilli(ready)
+		wait = p.timing.start.Sub(readyAt)
+		upstream = readyAt.Sub(p.boundary.BarEnd)
 	}
 	var detail []string
 	for _, step := range steps {

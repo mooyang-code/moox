@@ -1,5 +1,11 @@
 import { MARKET_ORDER, marketLabel } from "@/views/strategy/market-mode";
-import type { InstrumentTarget, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type { InstrumentWeight, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
+import { toInstantMs } from "@/utils/time-zone";
+
+/** 时刻字段（毫秒数字字符串）排序用的数值；没有时为 0。 */
+export function instantOrZero(value: string | null | undefined): number {
+  return toInstantMs(value) ?? 0;
+}
 
 export type TargetState = "inactive" | "unknown" | "empty" | "expired" | "zero" | "valid";
 
@@ -11,11 +17,11 @@ export function deriveTargetState(
   if (!instance.enabled) return "inactive";
   if (!instance.session_id) return "unknown";
   if (!snapshot) return "unknown";
-  if (!snapshot.bar_end_time && !snapshot.valid_until && snapshot.targets.length === 0) return "empty";
+  const barEnd = toInstantMs(snapshot.bar_end_time);
+  const validUntil = toInstantMs(snapshot.valid_until);
+  if (barEnd === null && validUntil === null && snapshot.targets.length === 0) return "empty";
   if (snapshot.session_id !== instance.session_id) return "unknown";
-  const barEnd = Date.parse(snapshot.bar_end_time);
-  const validUntil = Date.parse(snapshot.valid_until);
-  if (!Number.isFinite(barEnd) || !Number.isFinite(validUntil)) return "unknown";
+  if (barEnd === null || validUntil === null) return "unknown";
   if (validUntil <= nowMs) return "expired";
   return snapshot.targets.length === 0 ? "zero" : "valid";
 }
@@ -40,7 +46,7 @@ function marketRank(market: string): number {
 }
 
 /** 目标按权重绝对值从大到小排列，并给出相对最大权重的比例（0~1），用于权重条。 */
-export function rankTargets(targets: InstrumentTarget[]): { target: InstrumentTarget; weight: number; ratio: number }[] {
+export function rankTargets(targets: InstrumentWeight[]): { target: InstrumentWeight; weight: number; ratio: number }[] {
   const rows = targets.map(target => ({ target, weight: Number(target.target_weight) }));
   const valid = rows.filter(row => Number.isFinite(row.weight));
   const max = Math.max(0, ...valid.map(row => Math.abs(row.weight)));
@@ -55,7 +61,7 @@ export function rankTargets(targets: InstrumentTarget[]): { target: InstrumentTa
     .map(row => ({ ...row, ratio: max > 0 ? Math.abs(row.weight) / max : 0 }));
 }
 
-export function targetWeightPercent(target: InstrumentTarget): string {
+export function targetWeightPercent(target: InstrumentWeight): string {
   return percent(target.target_weight);
 }
 
@@ -298,11 +304,10 @@ export interface ResolvedColumn {
   definition_hash: string;
 }
 
-/** 一个市场绑定的计算任务与结果 View。 */
+/** 一个市场绑定的计算任务与结果数据集。 */
 export interface ResolvedTask {
   market: string;
   factor_task_id: string;
-  view_id: string;
   dataset_id: string;
   source_dataset_id: string;
 }
@@ -326,7 +331,6 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     .map(([market, task]) => ({
       market,
       factor_task_id: task?.factor_task_id ?? "",
-      view_id: task?.view_id ?? "",
       dataset_id: task?.dataset_id ?? "",
       source_dataset_id: task?.source_dataset_id ?? ""
     }))
@@ -400,19 +404,19 @@ export function cashOrNetText(summary: Pick<ResultSummary, "cash" | "spotNet" | 
  * 跳过期不改变该会话的比较基线，成员变化跨过跳过期比较。
  */
 export function buildResultInsights(results: ResultLike[]): Record<string, ResultInsight> {
-  const ordered = [...results].sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
+  const ordered = [...results].sort((a, b) => instantOrZero(a.bar_end_time) - instantOrZero(b.bar_end_time));
   const insights: Record<string, ResultInsight> = {};
   const baselines = new Map<string, Set<string>>();
   const markets = new Set(ordered.flatMap(item => item.targets.map(target => target.market || "")));
-  const keyOf = (target: InstrumentTarget) => `${target.instrument_id}\u0000${target.market || ""}`;
+  const keyOf = (target: InstrumentWeight) => `${target.instrument_id}\u0000${target.market || ""}`;
   const labelOf = (key: string) => {
     const [id, market] = key.split("\u0000");
     return markets.size > 1 && market ? `${id}（${marketLabel(market)}）` : id;
   };
   for (const item of ordered) {
-    const barEnd = Date.parse(item.bar_end_time);
-    const created = Date.parse(item.created_at);
-    const delayMs = Number.isFinite(barEnd) && Number.isFinite(created) ? created - barEnd : null;
+    const barEnd = toInstantMs(item.bar_end_time);
+    const created = toInstantMs(item.created_at);
+    const delayMs = barEnd !== null && created !== null ? created - barEnd : null;
     const insight: ResultInsight = { added: [], removed: [], comparable: false, delayMs };
     if (item.status === "ok") {
       const current = new Set(item.targets.map(keyOf));
@@ -450,7 +454,7 @@ export interface ResultOverview {
 
 export function buildResultOverview(results: ResultLike[] & Pick<StrategyResult, "summary_json">[]): ResultOverview {
   const insights = buildResultInsights(results);
-  const ordered = [...results].sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
+  const ordered = [...results].sort((a, b) => instantOrZero(a.bar_end_time) - instantOrZero(b.bar_end_time));
   const reasons = new Map<string, number>();
   const delays: number[] = [];
   const trend: ResultOverview["trend"] = [];

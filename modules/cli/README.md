@@ -1,6 +1,6 @@
 # moox-cli
 
-运维命令行：初始化、部署、SCF 发布、元数据与历史数据导入、数据读取和诊断，以及各模块的管理命令（采集、因子、策略、交易、归档、事件中心、监控、生命周期）；没有专用命令的接口用 `gateway call`。
+运维命令行：初始化、部署、SCF 发布、元数据与历史数据导入、数据读取和诊断，以及各模块的管理命令（采集、因子、策略、交易、归档、监控、生命周期）；没有专用命令的接口用 `gateway call`。
 
 设计文档：[命令行工具](../../docs/模块/命令行工具.md)
 
@@ -35,4 +35,4 @@ Doctor 的 Monitor 与 SysDeploy 查询共用命令持有的隧道客户端；�
 
 Metadata 的 `import/apply` 用 `--seed` 选择本地 seed 文件，历史数据导入 `moox-cli import` 用 `--path` 或 `--pack` 选择数据文件，两者都用 `--file ./moox.toml` 选择 SSH 主机；`data rows export --file ./moox.toml` 与 Doctor 同样经操作员网关访问原生 RPC。Storage 没有自己的调用方凭据，只靠网关的签名与访问控制。建连失败且请求未发出时最多重试一次；请求可能已发出后的传输重试只允许只读方法与服务目录明确列出的幂等写方法。其他写请求结果未知时返回错误，由操作员核对状态后再决定是否重跑。
 
-部署登记通过 SysDeploy `SyncHostDeployments` 同步主机的完整业务组件列表，主机组件由 Admin 自动补齐并保留既有启用/停用状态。Doctor 只读取主机和组件部署，健康地址来自服务目录。
+部署登记通过 SysDeploy `SyncTopology` 把 `moox.toml` 的全部主机与部署（含启停状态）整份覆盖给 Admin，主机组件由 Admin 自动补齐。Doctor 只读取主机和组件部署，健康地址来自服务目录。

@@ -50,7 +50,6 @@ import-pack/
 - `series_tag` 必须与实时采集写入的**完全一致**，否则历史和增量会变成两条序列。第 3 步核对。
 - 数据集选了 `funding_rate`（币安永续 1h/1d）时，CSV 也要带这一列：值是结算时刻落在 `[data_time, data_time + 一根)` 内的资金费率之和（小数原值，本根没有结算写 0；结算可能晚 1 毫秒，按原始毫秒归属）。
   公开数据站的资金费只有月度文件，按每个合约的结算间隔检查结算是否连续，缺月时报错，不能写成 0。这一列的 `fill` 是 `zero`，缺周期的填充行写 0。
-- 统一数据集（同一数据集里放现货、永续两条序列）：清单里的文件可以各自带 `series_tag`（覆盖清单默认值），例如 `5m/spot/BTC-USDT.csv` 写现货 tag、`5m/swap/BTC-USDT.csv` 写永续 tag；同一个标的、同一个 tag 只能出现一次。因子机本地的整段替换只替换文件里出现的序列，所以现货、永续可以放在一个包里，也可以分两次导入，互不覆盖。
 
 ## 2. 预检（操作机，只读）
 
@@ -126,7 +125,7 @@ ls <包目录>/<频率>/*.csv | xargs -P 1 -I{} sh -c 'env -u HTTP_PROXY -u HTTP
 ## 7. Storage 窗口（操作机，可与第 6 步同时进行）
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing \
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing --wait-view=false \
   --file ./moox.toml --job-db ./storage-import.db > storage-import.json
 ```
 
@@ -134,11 +133,18 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 
 只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 写入时按当前时钟进行的年龄过滤。Storage 写入在 storage-primary 的 Pebble 库内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
 `--job-db` 保留着，中断后原样重跑自动续传。失败的批（Storage 写超时）重跑即可。
+`--wait-view=false`：`import` 默认写完后最多等 30 秒让该数据集的 View 跟上，长历史导入 View 要追更久，这里不等，按第 8 步单独确认追平。
+
+### 7a. 长历史进归档（可选）
+
+保留期内的数据写进 Storage 后会被归档每分钟跟随；**需要保留期之外的长历史进归档时**，在第 6 步或单独一次导入里加 `--target archive`（可与 `storage,factor` 组合，也可只写归档）。前提：数据集已有归档任务、归档 worker 在线；`series_tag` 必须非空（导入包清单或 `--series-tag` 给出）。
+导入要先在 worker 暂存库里装下整次导入：按约 `(40 + 10 × 值列数) × 1.5` 字节/行估算，再加上时间范围内已登记分区的行数（落在已定稿分区的批次会把整个分区读回）。预检超过 worker 可用空间减 `min_free_bytes` 就拒绝，这时按时间拆成几次导入。
+因子机只出站时行经 control 中转写进 worker，较慢；导入期间该任务的分钟跟随暂停，结束后接着读。
 
 ## 8. 等本数据集的 View 追平
 
 - `moox-cli doctor alerts --file ./moox.toml` 里该 View 不再报“等待中”（屏蔽期间告警仍照常评估与记录，只是不推送）；
-- 对比 View 与 Primary 的输出水位指标，或通过 DataView 查询目标 View；`data kline get --limit 1` 只读 Primary，不能证明 View 已追平。
+- 对比 View 与 Primary 的输出水位指标，或通过 DataView 按数据集查询（`data view state --dataset-id <数据集>`）；`data kline get --limit 1` 只读 Primary，不能证明 View 已追平。
 - 历史行已超过 View 年龄上限时，缺行属于预期；查看 `moox_storage_view_expired_rows_dropped_total{space,freq}`，用未超期的补采或实时行验证 View 追平，不要求 View 与整个 Primary 导入尾窗行数相等。
 
 追不平就停下汇报，不要靠重启或重建 View 解决（`repair-view` 是破坏性运维，需要用户确认，见 `cli-operations.md`）。

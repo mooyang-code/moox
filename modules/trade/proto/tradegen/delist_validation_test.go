@@ -9,8 +9,8 @@ import (
 )
 
 func TestDelistRequestsRequireExchangeMarketAndSymbol(t *testing.T) {
-	valid := func() (Exchange, MarketType, string) {
-		return Exchange_EXCHANGE_BINANCE, MarketType_MARKET_TYPE_SPOT, "FOOUSDT"
+	valid := func() (string, string, string) {
+		return "binance", "spot", "FOOUSDT"
 	}
 	exchange, market, symbol := valid()
 	if err := (&ListInstrumentHoldersReq{Exchange: exchange, MarketType: market, ExchangeSymbol: symbol}).Validate(); err != nil {
@@ -18,13 +18,9 @@ func TestDelistRequestsRequireExchangeMarketAndSymbol(t *testing.T) {
 	}
 	for name, req := range map[string]interface{ Validate() error }{
 		"缺交易所":     &ListInstrumentHoldersReq{MarketType: market, ExchangeSymbol: symbol},
-		"市场不是现货永续": &ListInstrumentHoldersReq{Exchange: exchange, MarketType: MarketType_MARKET_TYPE_STOCK, ExchangeSymbol: symbol},
+		"市场不是现货永续": &ListInstrumentHoldersReq{Exchange: exchange, MarketType: "equity", ExchangeSymbol: symbol},
 		"缺代码":      &UnblockInstrumentReq{Exchange: exchange, MarketType: market},
 		"代码带空白":    &UnblockInstrumentReq{Exchange: exchange, MarketType: market, ExchangeSymbol: " FOOUSDT"},
-		"封禁缺原因":    &BlockInstrumentReq{Exchange: exchange, MarketType: market, ExchangeSymbol: symbol},
-		"清仓缺动作号":   &FlattenInstrumentReq{LogicalAccountId: "l", Exchange: exchange, MarketType: market, ExchangeSymbol: symbol, Reason: "r"},
-		"清仓缺组合":    &FlattenInstrumentReq{ActionId: "a", Exchange: exchange, MarketType: market, ExchangeSymbol: symbol, Reason: "r"},
-		"清仓缺原因":    &FlattenInstrumentReq{ActionId: "a", LogicalAccountId: "l", Exchange: exchange, MarketType: market, ExchangeSymbol: symbol},
 	} {
 		if err := req.Validate(); err == nil {
 			t.Errorf("%s：无效请求被接受", name)
@@ -67,7 +63,7 @@ func TestListOrdersOwnerTypeAndOperatorActionTypeAreChecked(t *testing.T) {
 	}
 }
 
-// 事件中心的前端按“没有持有者也有 holders 字段”判断“确认没人持有”：经网关的 JSON 序列化必须带上空数组。
+// 下架名单页的手工登记对话框按“没有持有者也有 holders 字段”判断“确认没人持有”：经网关的 JSON 序列化必须带上空数组。
 func TestListInstrumentHoldersResponseKeepsEmptyHoldersInJSON(t *testing.T) {
 	raw := marshalWithTRPCJSON(t, &ListInstrumentHoldersRsp{RetInfo: &RetInfo{}})
 	if !strings.Contains(raw, `"holders":[]`) {

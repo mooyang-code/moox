@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/adminrpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/cloud"
 	"github.com/mooyang-code/moox/modules/collector/internal/cloud/tencentscf"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -24,6 +25,7 @@ import (
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -50,7 +52,7 @@ func managedSpaces(ctx context.Context, cfg *Config, dbm *store.Store) ([]string
 }
 
 // registerFetchPlanManager 启动采集计划对账：管理集合里的每个空间一个独立协程。对账器始终启动，推送采集不依赖云函数配置。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *fetchplan.ControlMetrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime) error {
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *fetchplan.ControlMetrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl, bus *eventBusRuntime, attn *attention.Attention) error {
 	managed := func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, dbm) }
 	// 启动时先逐个云函数空间检查部署参数，配置错误尽早暴露。
 	for _, space := range cfg.scfSpaces() {
@@ -75,11 +77,34 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	operations := make(chan struct{}, cfg.SCFPlan.MaxConcurrentOperations)
 	reconcilers := &fetchplan.Reconcilers{}
 	var autoScans sync.Map
+	// planOptions 是空间的采集计划配置：对账器与补采的路由用同一份。
+	planOptions := func(spaceID string) (fetchplan.PlanOptions, error) {
+		latenessSeconds, err := defaultLatenessSeconds(spaceID)
+		if err != nil {
+			return fetchplan.PlanOptions{}, err
+		}
+		options := fetchplan.PlanOptions{
+			StreamLatenessS: cfg.Stream.LatenessS,
+			SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], BackfillRegion: cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].BackfillRegion, SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
+			Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
+			DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID),
+			BackfillReservedConcurrency: cfg.SCFPlan.BackfillReservedConcurrency,
+		}
+		// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
+		options.DeriveFetch = fetchplan.RouteFetchLimits(spaceID)
+		// 每函数标的数的估算看 market.yaml 的 scf_plan.auto_size 配没配；同样只对有路由文件的市场算得出来。
+		if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
+			options.AutoSize = fetchplan.RouteAutoSize(spaceID, *sizing)
+		}
+		return options, nil
+	}
 	checker := &klinecheck.Checker{Timeline: dbm.SeriesTimeline(), Rows: storageio.NewGatewayClient(process.gateway), Absences: dbm.Backfill(), Fields: marketwiring.FieldOffers()}
 	// 应有时间点与函数侧同一套过滤：只有该市场此频率的交易桶才应有 K 线。
 	checker.Calendar = markets.TradingBar
 	backfiller := &klinecheck.Backfiller{
-		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: reconcilers, BaseCtx: process.ctx, Refill: true,
+		Checker: checker, Store: dbm.Backfill(), Invoker: reconcilers, BaseCtx: process.ctx, Refill: true,
+		// 补采的来源与参数取当前任务（与计划同一套推导），交易所符号取标的时间线。
+		Routes: &fetchplan.BackfillRoutes{Tasks: dbm.Tasks(), Tags: source, ResolveSourceID: marketwiring.DefaultSourceID, Options: planOptions},
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
 			space := strings.ToLower(spaceID)
 			manual, err := dbm.FetchPlans().ManuallyPausedSpaces(ctx)
@@ -134,12 +159,12 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	manager := &fetchplan.PlanManager{
 		Configured: managed,
 		Spaces: func(ctx context.Context) ([]string, error) {
-			// 运行集合：管理集合 ∩ Admin 中仍启用的空间 − 暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
+			// 运行集合：管理集合 ∩ Storage 中仍启用的空间 − 暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
 			spaces, err := managed(ctx)
 			if err != nil {
 				return nil, err
 			}
-			active, err := admin.ListActiveSpaceIDs(ctx)
+			active, err := activeSpaceIDs(ctx, storageio.NewGatewayClient(process.gateway))
 			if err != nil {
 				return nil, err
 			}
@@ -157,22 +182,9 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return running, nil
 		},
 		Factory: func(spaceID string) (*fetchplan.PlanReconciler, error) {
-			latenessSeconds, err := defaultLatenessSeconds(spaceID)
+			options, err := planOptions(spaceID)
 			if err != nil {
 				return nil, err
-			}
-			options := fetchplan.PlanOptions{
-				StreamLatenessS: cfg.Stream.LatenessS,
-				SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], BackfillRegion: cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].BackfillRegion, SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
-				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
-				DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
-				BackfillReservedConcurrency: cfg.SCFPlan.BackfillReservedConcurrency,
-			}
-			// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
-			options.DeriveFetch = fetchplan.RouteFetchLimits(spaceID)
-			// 每函数标的数的估算看 market.yaml 的 scf_plan.auto_size 配没配；同样只对有路由文件的市场算得出来。
-			if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
-				options.AutoSize = fetchplan.RouteAutoSize(spaceID, *sizing)
 			}
 			deploy, err := cfg.fetchPlanDeploy(spaceID)
 			if err != nil {
@@ -226,10 +238,6 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				if err := backfiller.AutoScan(scanCtx, spaceID); err != nil {
 					log.WarnContextf(scanCtx, "collector auto backfill scan failed space=%s: %v", spaceID, err)
 				}
-				// 早于数据集最早生效点的历史缺口，检查与自动补采都看不到：定期读回并写日志，不补采。
-				if _, err := backfiller.ScanHistory(scanCtx, spaceID); err != nil {
-					log.WarnContextf(scanCtx, "collector history scan failed space=%s: %v", spaceID, err)
-				}
 			}) {
 				autoScans.Delete(spaceID)
 			}
@@ -242,7 +250,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	if !process.launch(func() { control.runRecovery(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}
-	// 心跳中断时在线指标也要变：定时按心跳超时刷新。
+	heartbeat := collectsvc.NewStreamHeartbeatAttention(dbm, time.Duration(cfg.Stream.HeartbeatTimeoutSeconds)*time.Second, attn)
+	// 心跳中断由关注项判断：每 30 秒读库重算，心跳停了值也会变。
 	if !process.launch(func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -251,7 +260,9 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			case <-process.ctx.Done():
 				return
 			case <-ticker.C:
-				stream.RefreshOnline(process.ctx, control.managed(process.ctx))
+				if err := heartbeat.Refresh(process.ctx, control.managed(process.ctx)); err != nil {
+					log.WarnContextf(process.ctx, "collector-stream 心跳关注项未刷新: %v", err)
+				}
 			}
 		}
 	}) {
@@ -383,5 +394,25 @@ func backfillExecutor(tasks *store.TaskRepository, defaultIngest func(string) st
 			return marketfetch.PlanExecutorLocal, nil
 		}
 		return marketfetch.PlanExecutorSCF, nil
+	}
+}
+
+// activeSpaceIDs 返回 Storage 中处于启用状态的空间 ID（小写）；采集计划对账据此启停各空间的协程。
+func activeSpaceIDs(ctx context.Context, storage *storageio.Client) (map[string]struct{}, error) {
+	active := map[string]struct{}{}
+	for page := uint32(1); ; page++ {
+		rsp, err := storage.ListSpaces(ctx, &storagepb.ListSpacesReq{Status: "active", Page: &storagepb.Page{Page: page, Size: 200}})
+		if err != nil {
+			return nil, err
+		}
+		if rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return nil, fmt.Errorf("list spaces: %s", rsp.GetRetInfo().GetMsg())
+		}
+		for _, space := range rsp.GetSpaces() {
+			active[strings.ToLower(space.GetSpaceId())] = struct{}{}
+		}
+		if !rsp.GetPageResult().GetHasMore() {
+			return active, nil
+		}
 	}
 }

@@ -1,11 +1,10 @@
-// Package adminrpc 是 Collector 经网关调 Admin 的两件事：写全局活动日志、读启用中的空间。
+// Package adminrpc 是 Collector 经网关调 Admin 写全局活动日志。
 package adminrpc
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -54,27 +53,6 @@ func (c *Client) AppendActivityLogs(ctx context.Context, spaceID string, entries
 		return fmt.Errorf("append activity logs: %s", rsp.GetRetInfo().GetMsg())
 	}
 	return nil
-}
-
-// ListActiveSpaceIDs 返回 Admin 中处于启用状态的空间 ID（小写）；采集计划对账据此启停各空间的协程。
-func (c *Client) ListActiveSpaceIDs(ctx context.Context) (map[string]struct{}, error) {
-	active := map[string]struct{}{}
-	for page := uint32(1); ; page++ {
-		var rsp adminpb.ListSpacesRsp
-		request := &adminpb.ListSpacesReq{Status: "active", Page: &adminpb.Page{Page: page, Size: 200}}
-		if err := c.invoke(ctx, "", "trpc.moox.admin.SpaceMgr", "ListSpaces", request, &rsp); err != nil {
-			return nil, err
-		}
-		if rsp.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
-			return nil, fmt.Errorf("list spaces: %s", rsp.GetRetInfo().GetMsg())
-		}
-		for _, space := range rsp.GetSpaces() {
-			active[strings.ToLower(space.GetSpaceId())] = struct{}{}
-		}
-		if !rsp.GetPageResult().GetHasMore() {
-			return active, nil
-		}
-	}
 }
 
 func (c *Client) invoke(ctx context.Context, spaceID, service, method string, request, response proto.Message) error {

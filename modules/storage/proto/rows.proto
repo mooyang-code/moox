@@ -155,7 +155,8 @@ message DatasetChange {
   string space_id = 2;
   string dataset_id = 3;
   repeated DatasetChangeRange ranges = 4;
-  string created_at = 5;
+  // Unix 毫秒。
+  int64 created_at = 5;
   repeated RecordRowKey records = 6;
   bytes marker = 7;
 }

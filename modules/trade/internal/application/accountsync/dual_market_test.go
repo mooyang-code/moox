@@ -19,7 +19,7 @@ func newDualMarketSync(t *testing.T) (*Service, *store.Store) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "account-1", Name: "dual",
-			Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "LIVE", Environment: "PRODUCTION",
+			Exchange: "binance", Markets: []string{"spot", "swap"}, ExecutionMode: "LIVE", Environment: "PRODUCTION",
 			AccountMode:        string(exchange.AccountModeBinanceStandard),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS",
 			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "5"},
@@ -27,13 +27,13 @@ func newDualMarketSync(t *testing.T) (*Service, *store.Store) {
 		}); err != nil {
 			return err
 		}
-		for _, market := range []string{"SPOT", "SWAP"} {
+		for _, market := range []string{"spot", "swap"} {
 			record := store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + market,
+				Exchange: "binance", MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(market),
 				BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}
-			if market == "SWAP" {
+			if market == "swap" {
 				record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", "BTC"
 			}
 			if err := tx.UpsertInstrument(record); err != nil {
@@ -77,8 +77,8 @@ func TestSameNamedOrdersInTwoMarketsImportAndUpdateSeparately(t *testing.T) {
 	swap, err := tradeStore.GetOrderByClientID(ctx, "space-1", "account-1", exchange.MarketTypeSwap, "same-client")
 	require.NoError(t, err)
 	require.NotEqual(t, spot.OrderID, swap.OrderID, "同号的现货单和合约单是两条记录")
-	require.Equal(t, "SPOT", spot.MarketType)
-	require.Equal(t, "SWAP", swap.MarketType)
+	require.Equal(t, "spot", spot.MarketType)
+	require.Equal(t, "swap", swap.MarketType)
 
 	// 合约订单撤销只改合约那一条。
 	require.NoError(t, service.ApplyOrder(ctx, "account-1", dualOrder(exchange.MarketTypeSwap, "0", exchange.OrderStatusCanceled)))

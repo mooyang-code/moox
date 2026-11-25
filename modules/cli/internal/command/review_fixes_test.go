@@ -36,31 +36,28 @@ func specByPath(t *testing.T, path ...string) rpcSpec {
 
 func TestSpaceUpdateMergesExistingSpaceInsteadOfClearingFields(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"ListSpaces": `{"ret_info":{"code":0},"spaces":[
-			{"id":"1","space_id":"stockcn","name":"A 股"},
-			{"id":"2","space_id":"crypto","name":"加密货币","description":"行情","owner":"quant","market":"crypto","timezone":"UTC","status":"disabled","attributes":"{\"k\":1}","created_at":"2026-01-01"}],
-			"page_result":{"has_more":false}}`,
+		"GetSpace":    `{"ret_info":{"code":0},"space":{"space_id":"crypto","name":"加密货币","description":"行情","owner":"quant","market":"crypto","timezone":"UTC","status":"disabled","attributes":{"k":"1"},"created_at":"1767225600000","updated_at":"1767312000000"}}`,
 		"UpdateSpace": `{"ret_info":{"code":0}}`,
 	}}
 	useRPCGateway(t, gateway)
 	_, _, err := runSpecCommand(t, specByPath(t, "space", "update"), "--space-id", "crypto", "--name", "新名")
 	require.NoError(t, err)
+	var get map[string]any
+	require.NoError(t, json.Unmarshal(gateway.bodies["GetSpace"], &get))
+	assert.Equal(t, "crypto", get["space_id"])
 	var request struct {
 		Space map[string]any `json:"space"`
 	}
 	require.NoError(t, json.Unmarshal(gateway.bodies["UpdateSpace"], &request))
 	assert.Equal(t, map[string]any{
 		"space_id": "crypto", "name": "新名", "description": "行情", "owner": "quant", "market": "crypto",
-		"timezone": "UTC", "status": "disabled", "attributes": `{"k":1}`,
-	}, request.Space, "只改名称：其余字段原样带回，停用状态不能被重置成 active，id 与时间戳不回传")
-
-	_, _, err = runSpecCommand(t, specByPath(t, "space", "update"), "--space-id", "nowhere", "--name", "x")
-	require.ErrorContains(t, err, "不存在")
+		"timezone": "UTC", "status": "disabled", "attributes": map[string]any{"k": "1"},
+	}, request.Space, "只改名称：其余字段原样带回，停用状态不能被重置成 active，时间戳不回传")
 }
 
 func TestCollectorTaskUpdateKeepsNameAndDescriptionWhenOnlyTogglingEnabled(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"GetTaskDetail": `{"ret_info":{"code":0},"task":{"space_id":"crypto","task_id":"t1","task_name":"合约 5m","description":"说明","enabled":true,"creator":"x","create_time":"t","definition_hash":"h"}}`,
+		"GetTaskDetail": `{"ret_info":{"code":0},"task":{"space_id":"crypto","task_id":"t1","task_name":"合约 5m","description":"说明","enabled":true,"creator":"x","created_at":"1767225600000","definition_hash":"h"}}`,
 		"UpdateTask":    `{"ret_info":{"code":0}}`,
 	}}
 	useRPCGateway(t, gateway)
@@ -249,15 +246,6 @@ func TestFunctionDeleteAndFirewallAndUdfPreviewAtCommandLevel(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(gateway.bodies["DeleteCloudFunctions"], &body))
 	assert.Equal(t, true, body["dry_run"], "没有 --yes 只发预览，不删除")
-
-	var fwOut bytes.Buffer
-	lighthouseFirewallAddFlags = lighthouseFirewallAddOptions{InstanceID: "lhins-1", Ports: "20201", Protocol: "TCP", Cidr: "0.0.0.0/0", Action: "ACCEPT"}
-	t.Cleanup(func() { lighthouseFirewallAddFlags = lighthouseFirewallAddOptions{} })
-	lighthouseFirewallAddCmd.SetOut(&fwOut)
-	lighthouseFirewallAddCmd.SetErr(&bytes.Buffer{})
-	lighthouseFirewallAddCmd.SetContext(context.Background())
-	require.NoError(t, lighthouseFirewallAddCmd.RunE(lighthouseFirewallAddCmd, nil))
-	assert.Equal(t, "CreateFirewallRules", parsePreview(t, fwOut.String())["action"], "没有 --yes 只预览，不调用腾讯云")
 }
 
 func TestUdfActivateWithoutYesAsksServerForDryRunOnly(t *testing.T) {

@@ -34,7 +34,7 @@ func orderCurrentSession(t *testing.T, db *store.Store, instanceID, sessionID, t
 			InstanceID: instanceID, SessionID: sessionID, SessionStartedAt: orderSessionStartedAt(sessionID), StrategyID: "strategy-1",
 			BarEndTime: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 			Status: "PENDING", AcceptedAt: 1,
-			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}},
+			Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}},
 		})
 		if err == nil && current.TargetID != targetID {
 			err = errors.New("目标没有写成当前目标")
@@ -89,7 +89,7 @@ func TestTargetOrderSessionTable(t *testing.T) {
 
 			if test.placeRejected {
 				require.Error(t, err, "目标单落库应被拒")
-				_, lookupErr := db.GetOrderByClientID(context.Background(), "space-1", "account-1", "SPOT", spec.ClientOrderID)
+				_, lookupErr := db.GetOrderByClientID(context.Background(), "space-1", "account-1", "spot", spec.ClientOrderID)
 				require.ErrorIs(t, lookupErr, gorm.ErrRecordNotFound, "被拒的目标单不落库")
 				require.Zero(t, adapter.placeCalls, "被拒的目标单不发往交易所")
 				return

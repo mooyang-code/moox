@@ -28,12 +28,12 @@ const (
 	ReplayInputCompute = "compute"
 )
 
-// ReplayTask 是回放在一个市场读取的因子任务及其结果 View。
+// ReplayTask 是回放在一个市场读取的因子任务及其结果数据集。
 type ReplayTask struct {
 	FactorTaskID string `json:"factor_task_id"`
-	// ViewID 是任务的结果 View；ViewGeneration 是提交时校验区间所用的活动索引代次：同一代索引只追加、不删除行，
+	// DatasetID 是任务的结果数据集；ViewGeneration 是提交时校验区间所用的活动索引代次：同一代索引只追加、不删除行，
 	// 执行时代次没变就沿用提交时的区间。
-	ViewID         string `json:"view_id"`
+	DatasetID      string `json:"dataset_id"`
 	ViewGeneration string `json:"view_generation"`
 }
 
@@ -50,7 +50,7 @@ type Replay struct {
 	DSLHash  string
 	Calendar string
 	SpaceID  string
-	// Tasks 是各任务键（市场 spot、swap、equity，统一数据集上的任务是 multi；附加来源是 来源名:市场）读取的因子任务与结果 View。
+	// Tasks 是各任务键（市场 spot、swap、equity；附加来源是 来源名:市场）读取的因子任务与结果 View。
 	Tasks map[string]ReplayTask
 	// Input 是主帧的输入来源（ReplayInputView 或 ReplayInputCompute）；登记时为空按 view。附加来源与参考市场总是读 View。
 	Input     string
@@ -215,8 +215,8 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		return fmt.Errorf("回放的因子任务：%w", err)
 	}
 	for key, task := range replay.Tasks {
-		if strings.TrimSpace(task.ViewID) == "" || strings.TrimSpace(task.ViewGeneration) == "" {
-			return fmt.Errorf("回放的 %s 任务缺少 view_id 或 View 索引代次", key)
+		if strings.TrimSpace(task.DatasetID) == "" || strings.TrimSpace(task.ViewGeneration) == "" {
+			return fmt.Errorf("回放的 %s 任务缺少 dataset_id 或 View 索引代次", key)
 		}
 	}
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {

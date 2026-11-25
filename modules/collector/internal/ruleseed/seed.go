@@ -134,11 +134,7 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 	if err != nil {
 		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
-	frequency := params.Frequency
-	if strings.EqualFold(dataType, "kline_resample") {
-		frequency = params.TargetFrequency
-	}
-	resultIDs := taskresult.ResultIDsForTask(spaceID, taskID, dataType, frequency)
+	resultIDs := taskresult.ResultIDs(taskID)
 	collectParams["target_dataset_id"] = resultIDs.DatasetID
 	rawParams, err = json.Marshal(collectParams)
 	if err != nil {
@@ -176,7 +172,6 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 		Enabled:         item.Enabled,
 		Creator:         strings.TrimSpace(item.Creator),
 		ResultDatasetID: resultIDs.DatasetID,
-		ResultViewID:    resultIDs.ViewID,
 	}, nil
 }
 

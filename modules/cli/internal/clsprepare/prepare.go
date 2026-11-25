@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
@@ -22,18 +21,11 @@ const (
 )
 
 type AccountSource interface {
-	ListCloudAccounts(context.Context, string) ([]adminclient.CloudAccount, error)
-	GetSecretValue(context.Context, string) (*adminclient.SecretMaterial, error)
+	ListCloudAccounts(context.Context, string) ([]*collectorpb.CloudAccount, error)
+	GetSecretValue(context.Context, string) (*rpcclient.SecretMaterial, error)
 }
 
 type Factory func(secretID, secretKey string) (tencent.CLSAPI, error)
-
-type Options struct {
-	CloudAccountID    string
-	CredentialsOutput string
-	// RetentionDays 是新建日志主题时的保留天数；不大于 0 时用默认值。已有的主题不会被改动。
-	RetentionDays int64
-}
 
 type Result struct {
 	AccountID     string `json:"account_id"`
@@ -49,76 +41,56 @@ type Result struct {
 	IndexFieldsChanged bool `json:"index_fields_changed"`
 }
 
-// Prepare 幂等开通 CLS（服务、日志集、主题、索引字段）并把云账号凭证写入 CredentialsOutput，供打包 SCF 代码时使用。
-func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Options) (Result, error) {
-	if strings.TrimSpace(opts.CredentialsOutput) == "" {
-		return Result{}, fmt.Errorf("credentials output is required")
-	}
-	result, secret, err := provision(ctx, source, factory, opts.CloudAccountID, opts.RetentionDays)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := writeCredentials(opts.CredentialsOutput, secret.KeyID, secret.SecretValue); err != nil {
-		return Result{}, err
-	}
-	return result, nil
-}
-
 // Provision 幂等开通 CLS（服务、日志集、主题、索引字段），不写任何凭证文件：系统初始化用它保证日志服务开箱可用。
 // retentionDays 是新建日志主题时的保留天数（来自配置的 [logging] retention_days），不大于 0 时用默认值。
 func Provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string, retentionDays int64) (Result, error) {
-	result, _, err := provision(ctx, source, factory, cloudAccountID, retentionDays)
-	return result, err
-}
-
-func provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string, retentionDays int64) (Result, *adminclient.SecretMaterial, error) {
 	if retentionDays <= 0 {
 		retentionDays = RetentionDays
 	}
 	if source == nil {
-		return Result{}, nil, fmt.Errorf("account source is required")
+		return Result{}, fmt.Errorf("account source is required")
 	}
 	if factory == nil {
-		return Result{}, nil, fmt.Errorf("CLS factory is required")
+		return Result{}, fmt.Errorf("CLS factory is required")
 	}
 
 	accounts, err := source.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
-		return Result{}, nil, safeUpstreamError("list Tencent cloud accounts", err)
+		return Result{}, safeUpstreamError("list Tencent cloud accounts", err)
 	}
 	account, err := selectAccount(accounts, cloudAccountID)
 	if err != nil {
-		return Result{}, nil, err
+		return Result{}, err
 	}
-	secret, err := source.GetSecretValue(ctx, account.CredentialSecretID)
+	secret, err := source.GetSecretValue(ctx, account.GetCredentialSecretId())
 	if err != nil {
-		return Result{}, nil, safeUpstreamError(fmt.Sprintf("reveal cloud account %q", account.AccountID), err)
+		return Result{}, safeUpstreamError(fmt.Sprintf("reveal cloud account %q", account.GetAccountId()), err)
 	}
-	if secret == nil || account.CredentialSecretID == "" {
-		return Result{}, nil, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
+	if secret == nil || account.GetCredentialSecretId() == "" {
+		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.GetAccountId())
 	}
 	if secret.Provider != "tencent" || secret.Category != "cloud" || secret.Status != "active" ||
 		strings.TrimSpace(secret.KeyID) == "" || strings.TrimSpace(secret.SecretValue) == "" {
-		return Result{}, nil, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
+		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.GetAccountId())
 	}
 
 	api, err := factory(secret.KeyID, secret.SecretValue)
 	if err != nil {
-		return Result{}, nil, safeUpstreamError("create CLS client", err)
+		return Result{}, safeUpstreamError("create CLS client", err)
 	}
 	resources, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
 		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: retentionDays, Partitions: Partitions,
 		IndexFields: tencent.MarketFetchLogIndexFields,
 	})
 	if err != nil {
-		return Result{}, nil, safeUpstreamError("prepare fixed CLS resources", err)
+		return Result{}, safeUpstreamError("prepare fixed CLS resources", err)
 	}
 	return Result{
-		AccountID: account.AccountID, Region: Region, Host: Host,
+		AccountID: account.GetAccountId(), Region: Region, Host: Host,
 		LogsetID: resources.LogsetID, TopicID: resources.TopicID,
 		ServiceOpened: resources.ServiceOpened, LogsetCreated: resources.LogsetCreated,
 		TopicCreated: resources.TopicCreated, IndexCreated: resources.IndexCreated, IndexFieldsChanged: resources.IndexFieldsChanged,
-	}, secret, nil
+	}, nil
 }
 
 type sanitizedUpstreamError struct {
@@ -142,65 +114,18 @@ func safeUpstreamError(operation string, err error) error {
 	return sanitizedUpstreamError{operation: operation, cause: cause}
 }
 
-func selectAccount(accounts []adminclient.CloudAccount, requested string) (adminclient.CloudAccount, error) {
+func selectAccount(accounts []*collectorpb.CloudAccount, requested string) (*collectorpb.CloudAccount, error) {
 	requested = strings.TrimSpace(requested)
 	for _, account := range accounts {
-		if account.Provider != "tencent" {
+		if account.GetProvider() != "tencent" {
 			continue
 		}
-		if requested == "" || account.AccountID == requested {
+		if requested == "" || account.GetAccountId() == requested {
 			return account, nil
 		}
 	}
 	if requested != "" {
-		return adminclient.CloudAccount{}, fmt.Errorf("cloud account %q not found", requested)
+		return nil, fmt.Errorf("cloud account %q not found", requested)
 	}
-	return adminclient.CloudAccount{}, fmt.Errorf("no Tencent cloud account is configured")
-}
-
-func writeCredentials(path, secretID, secretKey string) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".cls.env.*")
-	if err != nil {
-		return fmt.Errorf("create CLS credential file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	content := fmt.Sprintf(
-		"MOOX_CLS_SECRET_ID=%s\nMOOX_CLS_SECRET_KEY=%s\nMOOX_CLS_REGION=%s\nMOOX_CLS_HOST=%s\nMOOX_CLS_AUTO_BOOTSTRAP=0\n",
-		quoteEnv(secretID), quoteEnv(secretKey), quoteEnv(Region), quoteEnv(Host),
-	)
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("protect CLS credential file: %w", err)
-	}
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write CLS credential file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync CLS credential file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close CLS credential file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("install CLS credential file: %w", err)
-	}
-
-	directory, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open CLS credential directory: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync CLS credential directory: %w", err)
-	}
-	return nil
-}
-
-func quoteEnv(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+	return nil, fmt.Errorf("no Tencent cloud account is configured")
 }

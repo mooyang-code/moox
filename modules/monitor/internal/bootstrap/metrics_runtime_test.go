@@ -19,7 +19,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -41,50 +40,35 @@ func TestReporterExpectationUsesStableDeploymentIdentity(t *testing.T) {
 	repos := manager.Repositories()
 	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}, repos, nil)
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}, repos)
 	require.NoError(t, run(t.Context()))
 	const id = "reporter:control:factor-mgr"
-	results, err := repos.Results.Recent(t.Context(), "mooxsys", id, 10)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.False(t, results[0].Success, "登记了部署就要求上报：从没上报过按停止上报处理")
-	require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: timestamppb.New(now)}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}))
+	result, ok := latestResult(t, repos, "mooxsys", id)
+	require.True(t, ok)
+	require.False(t, result.Success, "登记了部署就要求上报：从没上报过按停止上报处理")
+	require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: now.UnixMilli()}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}))
 	require.NoError(t, run(t.Context()))
-	results, err = repos.Results.Recent(t.Context(), "mooxsys", id, 10)
+	result, _ = latestResult(t, repos, "mooxsys", id)
+	require.True(t, result.Success, "the first report resolves the same check identity")
+	rows, err := repos.Checks.List(t.Context(), "")
 	require.NoError(t, err)
-	require.Len(t, results, 2)
-	require.True(t, results[0].Success, "the first report resolves the same check identity")
-	checks, err := repos.Checks.List(t.Context(), store.ListChecksOptions{Source: domain.CheckSourceObservability, Page: store.Page{PageSize: 10}})
-	require.NoError(t, err)
-	require.Len(t, checks, 2, "停止上报一条、反复重启一条；上报里没有就绪判断时不生成未就绪检查")
+	require.Len(t, rows, 2, "停止上报一条、反复重启一条；上报里没有就绪判断时不生成未就绪检查")
 	snapshot.Deployments[0].Status = "disabled"
 	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
-	check, err := repos.Checks.Get(t.Context(), "mooxsys", id)
-	require.NoError(t, err)
-	require.False(t, check.Enabled)
-	results, err = repos.Results.Recent(t.Context(), "mooxsys", id, 10)
-	require.NoError(t, err)
-	require.Len(t, results, 2, "disable does not fabricate a successful report")
+	require.Nil(t, checkRow(t, repos, "mooxsys", id), "停用部署后组件检查不再产出，当轮删除")
+	require.Empty(t, alertEvents(t, repos, id), "没在告警的检查删除时不写恢复事件")
 	snapshot.Deployments[0].Status = "enabled"
 	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
-	check, err = repos.Checks.Get(t.Context(), "mooxsys", id)
-	require.NoError(t, err)
-	require.True(t, check.Enabled, "reenabled deployments restore reporter checks")
-	results, err = repos.Results.Recent(t.Context(), "mooxsys", id, 10)
-	require.NoError(t, err)
-	require.Len(t, results, 3)
+	require.NotNil(t, checkRow(t, repos, "mooxsys", id), "重新启用的部署恢复组件检查")
 	snapshot.Deployments = nil
 	err = repos.Topology.Reconcile(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
-	check, err = repos.Checks.Get(t.Context(), "mooxsys", id)
-	require.NoError(t, err)
-	require.False(t, check.Enabled, "deleting a deployment retires its reporter check")
-
+	require.Nil(t, checkRow(t, repos, "mooxsys", id), "删除部署后组件检查删除")
 }
 
 func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *testing.T) {
@@ -103,7 +87,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	route := metricsObservabilityRoute(messages, nil, nil, true)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	raw := []byte("# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n")
+	raw := []byte("# TYPE moox_collector_runs_total gauge\nmoox_collector_runs_total 1\n")
 	sum := sha256.Sum256(raw)
 	report := &metricspb.MetricReport{
 		ServiceName: "collector", InstanceId: "collector@control", NodeId: "control", BootId: "boot-1",
@@ -127,7 +111,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	encoded := encode("unregistered", now, report)
 	require.NoError(t, ingest(encoded))
 	require.NoError(t, ingest(encoded))
-	series, err := messages.ListSeries(t.Context(), "collector", "moox_collector_kline_resample_claims_total", 10)
+	series, err := messages.ListSeries(t.Context(), "collector", "moox_collector_runs_total", 10)
 	require.NoError(t, err)
 	require.Len(t, series, 1, "redelivery stays idempotent")
 	got, err := (monitorobservability.Builder{Metrics: query, Topology: manager.Repositories().Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
@@ -185,7 +169,7 @@ func TestMetricsRouteCountsFilteredSamplesAndRejectReasons(t *testing.T) {
 			Data: []byte(raw), DataSha256: sum[:], SampleCount: 2}
 	}
 	// 一个在白名单里、一个不在：后者按白名单过滤并计数。
-	raw := "# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n# TYPE not_a_health_metric gauge\nnot_a_health_metric 5\n"
+	raw := "# TYPE moox_collector_runs_total gauge\nmoox_collector_runs_total 1\n# TYPE not_a_health_metric gauge\nnot_a_health_metric 5\n"
 	before := counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"})
 	good := &metricspb.MetricReport{ServiceName: "filter-svc", InstanceId: "filter-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}
 	require.NoError(t, ingest("filter-1", "mooxsys", good))
@@ -269,9 +253,9 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
 	require.NoError(t, err)
 	now := time.Now().UTC()
-	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
+	labels := `{"space_id":"crypto","dataset_id":"dataset","freq":"1m"}`
 	_, err = store.WithDatabase(manager, func(db *gorm.DB) error {
-		for _, row := range []monmetrics.MetricLatest{
+		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
 			{SeriesID: "subjects", MetricName: monmetrics.ViewOutputSubjectsMetric, MetricType: "gauge", LabelsJSON: labels, Value: 1, ObservedAt: now},
 		} {
@@ -289,16 +273,16 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "collector", Status: "enabled"}},
 	}))
 	report := func(stage string) {
-		require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: timestamppb.New(now)},
+		require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: now.UnixMilli()},
 			&metricspb.MetricReport{ServiceName: "collector", NodeId: "control", InstanceId: "collector@control", BootId: "boot-1",
 				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}))
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
-	builder := &monitorobservability.Builder{Metrics: query, Checks: repos.Checks, Topology: repos.Topology, Results: repos.Results, Now: func() time.Time { return now }}
-	run := buildBusinessFreshnessReporter(builder, repos, nil, evaluator)
-	const id = "kline_freshness:crypto:view:1m"
+	builder := &monitorobservability.Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}
+	run := buildBusinessFreshnessReporter(builder, repos, evaluator)
+	const id = "kline_freshness:crypto:dataset:1m"
 
 	for _, stage := range []string{"paused", "resuming"} {
 		report(stage)
@@ -306,9 +290,8 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, collectorHalted(services), stage)
 		require.NoError(t, run(t.Context()))
-		results, err := repos.Results.Recent(t.Context(), "crypto", id, 10)
-		require.NoError(t, err)
-		require.Empty(t, results, "Collector %s 时不评估 K 线结果", stage)
+		_, judged := latestResult(t, repos, "crypto", id)
+		require.False(t, judged, "Collector %s 时不评估 K 线结果", stage)
 	}
 
 	report("running")
@@ -316,8 +299,7 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, collectorHalted(services))
 	require.NoError(t, run(t.Context()))
-	results, err := repos.Results.Recent(t.Context(), "crypto", id, 10)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.False(t, results[0].Success, "放行后照常判定")
+	result, judged := latestResult(t, repos, "crypto", id)
+	require.True(t, judged)
+	require.False(t, result.Success, "放行后照常判定")
 }

@@ -342,7 +342,7 @@ func (a *Adapter) GetReferencePrice(
 }
 
 func (a *Adapter) allPrices(ctx context.Context) (map[exchange.SymbolKey]shared.Decimal, error) {
-	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/tickers", url.Values{"instType": []string{string(a.config.Market())}}, nil, false)
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/tickers", url.Values{"instType": []string{a.instrumentType()}}, nil, false)
 	if err != nil {
 		return nil, err
 	}

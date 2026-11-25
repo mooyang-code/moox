@@ -25,48 +25,43 @@ type metadataAPI interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
 	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
-	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
-	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
-	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 }
 
 // Catalog is the narrow Metadata API needed to provision a task-owned target
-// dataset and its query View.
+// dataset; its query View is created by Storage together with the dataset.
 type Catalog struct {
 	Metadata metadataAPI
-	// View 用来等目标 View 的列建好。
+	// View 用来等目标数据集的查询索引把列建好。
 	View ViewWaiter
 }
 
+// klineField 是合成任务取的一列与它是否必填；类型、显示名与分组取自 taskresult.KlineOutputFields。
 type klineField struct {
 	name     string
-	type_    storagepb.FieldValueType
-	label    string
 	required bool
 }
 
 var priceFields = []klineField{
-	{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "开盘价", true},
-	{"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最高价", true},
-	{"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最低价", true},
-	{"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "收盘价", true},
-	{"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交量", true},
+	{"open", true},
+	{"high", true},
+	{"low", true},
+	{"close", true},
+	{"volume", true},
 }
 
-// fieldsFor 返回市场的合成结果字段：加密货币带报价成交量和成交笔数；A 股只有成交额，且可以为空。
+// fieldsFor 返回市场的合成结果字段：加密货币带计价币成交额和成交笔数；A 股只有成交额，且可以为空。
 func fieldsFor(tradeCount bool) []klineField {
 	if tradeCount {
 		return append(append([]klineField(nil), priceFields...),
-			klineField{"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "报价成交量", true},
-			klineField{"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "成交笔数", true})
+			klineField{"quote_volume", true},
+			klineField{"trade_num", true})
 	}
 	return append(append([]klineField(nil), priceFields...),
-		klineField{"amount", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交额", false})
+		klineField{"amount", false})
 }
 
-// PrepareTarget creates or validates the target Dataset, columns, subject
-// bindings and View. Existing resources with a mismatched immutable contract
+// PrepareTarget creates or validates the target Dataset and its columns. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
 func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.Subject) error {
 	if c == nil || c.Metadata == nil {
@@ -87,9 +82,9 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if err != nil {
 		return err
 	}
-	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
+	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 	params.TargetDatasetID = ids.DatasetID
-	targetDatasetID, targetViewID := ids.DatasetID, ids.ViewID
+	targetDatasetID := ids.DatasetID
 	// 逐级合成时源本身是合成结果、没有数据来源：沿用它记下的原始 K 线来源，因子任务据此绑定数据来源。
 	sourceDataSourceID := source.DataSourceID
 	if sourceDataSourceID == "" {
@@ -99,19 +94,19 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "market_type": strings.ToLower(params.MarketType),
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": sourceDataSourceID,
-		"source_freq": params.SourceFrequency, "source_series_tag": strings.Join(params.SourceTags(), ","),
+		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
 		"target_freq": targetFreq.Storage,
 	}
-	createdDataset, createdView := false, false
+	createdDataset := false
 	compensate := func(original error) error {
 		if original == nil {
 			return nil
 		}
-		// View 还没追上只是需要等：资源的 ID 是确定的，保留它们，下一轮准备时继续等，不能每轮删了重建。
-		if errors.Is(original, ErrTargetViewNotReady) {
+		// 查询索引还没追上只是需要等：资源的 ID 是确定的，保留它们，下一轮准备时继续等，不能每轮删了重建。
+		if errors.Is(original, ErrTargetViewNotReady) || !createdDataset {
 			return original
 		}
-		if cleanupErr := c.cleanupCreatedTarget(ctx, task.SpaceID, targetDatasetID, targetViewID, createdView, createdDataset); cleanupErr != nil {
+		if cleanupErr := c.cleanupCreatedTarget(ctx, task.SpaceID, targetDatasetID); cleanupErr != nil {
 			return errors.Join(original, cleanupErr)
 		}
 		return original
@@ -168,64 +163,29 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			}
 		}
 	}
-	viewResp, viewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: task.SpaceID, ViewId: targetViewID})
-	if viewErr != nil {
-		return compensate(fmt.Errorf("get target View: %w", viewErr))
-	}
-	if viewResp.GetRetInfo() == nil {
-		return compensate(errors.New("get target View: empty ret_info"))
-	}
-	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
-		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{CreateOnly: true, View: &storagepb.View{
-			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
-			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", Status: "active",
-			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse"},
-		}})
-		if createErr != nil {
-			return compensate(fmt.Errorf("create target View: %w", createErr))
-		}
-		if err := ensureMetadataSuccess("create target View", created.GetRetInfo()); err != nil {
-			return compensate(err)
-		}
-		createdView = true
-		viewResp.View = created.GetView()
-	} else if err := ensureMetadataSuccess("get target View", viewResp.GetRetInfo()); err != nil {
-		return compensate(err)
-	} else if err := validateTargetView(viewResp.GetView(), task, params, targetFreq.Storage); err != nil {
-		return compensate(err)
-	}
-	// View 的列由 Storage 按目标数据集启用的列推出；重新读一次 View，按它现在的列（即目标数据集的列）等列建进索引。
-	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: task.SpaceID, ViewId: targetViewID})
-	if finalViewErr != nil {
-		return compensate(fmt.Errorf("reread target View: %w", finalViewErr))
-	}
-	if err := ensureMetadataSuccess("reread target View", finalViewResp.GetRetInfo()); err != nil {
-		return compensate(err)
-	}
-	finalView := finalViewResp.GetView()
-	if finalView == nil {
-		return compensate(errors.New("reread target View is empty"))
-	}
-	err = waitTargetViewColumns(ctx, c.View, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second)
-	if err != nil && ctx.Err() == nil && task.PrepareState == domain.PrepareStateReady && !createdDataset && !createdView {
-		// 已经 Ready 的任务只在这里复核列：storage-view 不可达、恢复或重建期间 View 暂时查不到，不能让任务掉出 Ready，
+	// 查询索引随目标数据集由 Storage 建好；等声明的列都建进索引再放行采集。
+	err = waitTargetViewColumns(ctx, c.View, task.SpaceID, targetDatasetID, columns, 5*time.Second)
+	if err != nil && ctx.Err() == nil && task.PrepareState == domain.PrepareStateReady && !createdDataset {
+		// 已经 Ready 的任务只在这里复核列：storage-view 不可达、恢复或重建期间索引暂时查不到，不能让任务掉出 Ready，
 		// 否则触发、历史作业与兜底都停下，恢复后更早的桶补不回来。只记日志，下一轮再看。
-		log.Warnf("collector 合成任务 %s/%s 的目标 View %s 暂不可用，保持就绪：%v", task.SpaceID, task.TaskID, targetViewID, err)
+		log.Warnf("collector 合成任务 %s/%s 的目标数据集 %s 的查询索引暂不可用，保持就绪：%v", task.SpaceID, task.TaskID, targetDatasetID, err)
 		return nil
 	}
 	return compensate(err)
 }
 
 // targetDatasetColumns 返回目标数据集的列定义：市场的合成字段，指定了输出字段时只取选中的那些。
+// 显示名与分组按字段名取自采集结果的基础字段（taskresult.KlineOutputFields），合成任务不另起名字。
 func targetDatasetColumns(tradeCount bool, outputFields []string) []*storagepb.DatasetColumn {
 	var columns []*storagepb.DatasetColumn
 	for _, field := range fieldsFor(tradeCount) {
 		if len(outputFields) > 0 && !containsOutputField(outputFields, field.name) {
 			continue
 		}
+		spec, _ := taskresult.KlineOutputField(field.name)
 		columns = append(columns, &storagepb.DatasetColumn{
-			ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
-			ValueType: field.type_, Required: field.required, Status: "active", Attributes: map[string]string{"display_name": field.label},
+			ColumnName: field.name, ValueType: spec.Kind, DisplayName: spec.DisplayName, Group: spec.Group,
+			Required: field.required, Status: "active",
 		})
 	}
 	return columns
@@ -240,35 +200,19 @@ func containsOutputField(fields []string, name string) bool {
 	return false
 }
 
-func (c *Catalog) cleanupCreatedTarget(ctx context.Context, spaceID, datasetID, viewID string, deleteView, deleteDataset bool) error {
+// cleanupCreatedTarget 删掉本轮刚建的目标数据集；它的查询索引由 storage-view 随之摘掉。
+func (c *Catalog) cleanupCreatedTarget(ctx context.Context, spaceID, datasetID string) error {
 	if c == nil || c.Metadata == nil {
 		return errors.New("resample catalog metadata is not configured")
 	}
-	var cleanupErrors []error
-	if deleteView {
-		view, err := c.Metadata.DeleteView(ctx, &storagepb.DeleteViewReq{SpaceId: spaceID, ViewId: viewID})
-		if err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete newly-created target View: %w", err))
-		} else if view == nil || (view.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && view.GetRetInfo().GetCode() != storagepb.ErrorCode_VIEW_NOT_FOUND && view.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
-			cleanupErrors = append(cleanupErrors, catalogMetadataError("delete newly-created target View", nil, retInfoViewDelete(view)))
-		}
+	dataset, err := c.Metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return fmt.Errorf("delete newly-created target Dataset: %w", err)
 	}
-	if deleteDataset {
-		dataset, err := c.Metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
-		if err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete newly-created target Dataset: %w", err))
-		} else if dataset == nil || (dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
-			cleanupErrors = append(cleanupErrors, catalogMetadataError("delete newly-created target Dataset", nil, retInfoDatasetDelete(dataset)))
-		}
+	if dataset == nil || (dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_DATASET_NOT_FOUND && dataset.GetRetInfo().GetCode() != storagepb.ErrorCode_NOT_FOUND) {
+		return catalogMetadataError("delete newly-created target Dataset", nil, retInfoDatasetDelete(dataset))
 	}
-	return errors.Join(cleanupErrors...)
-}
-
-func retInfoViewDelete(resp *storagepb.DeleteViewRsp) *storagepb.RetInfo {
-	if resp == nil {
-		return nil
-	}
-	return resp.GetRetInfo()
+	return nil
 }
 
 func retInfoDatasetDelete(resp *storagepb.DeleteDatasetRsp) *storagepb.RetInfo {
@@ -298,9 +242,9 @@ func uniqueResampleDisplayName(targetDatasetID string) string {
 	return "重" + strings.ToLower(suffix[:9])
 }
 
-// waitTargetViewColumns 等到 View 的活动索引建好、声明的列都已建进索引才放行采集。View 还没开始建索引
+// waitTargetViewColumns 等到目标数据集的活动索引建好、声明的列都已建进索引才放行采集。storage-view 还没发现这个数据集
 // （VIEW_NOT_FOUND）或索引还在建（index_id 为空）都继续等，超时返回 ErrTargetViewNotReady，下一轮准备时再等。
-func waitTargetViewColumns(ctx context.Context, view ViewWaiter, spaceID, viewID string, columns []*storagepb.ViewColumn, timeout time.Duration) error {
+func waitTargetViewColumns(ctx context.Context, view ViewWaiter, spaceID, datasetID string, columns []*storagepb.DatasetColumn, timeout time.Duration) error {
 	if view == nil {
 		return errors.New("合成需要 DataView 客户端")
 	}
@@ -310,7 +254,7 @@ func waitTargetViewColumns(ctx context.Context, view ViewWaiter, spaceID, viewID
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {
-		response, err := view.GetViewState(waitCtx, &storagepb.GetViewStateReq{SpaceId: spaceID, ViewId: viewID})
+		response, err := view.GetViewState(waitCtx, &storagepb.GetViewStateReq{SpaceId: spaceID, DatasetId: datasetID})
 		if err != nil {
 			if waitCtx.Err() != nil {
 				if ctx.Err() != nil {
@@ -341,7 +285,7 @@ func waitTargetViewColumns(ctx context.Context, view ViewWaiter, spaceID, viewID
 	}
 }
 
-func targetViewColumnsReady(state *storagepb.GetViewStateRsp, columns []*storagepb.ViewColumn) bool {
+func targetViewColumnsReady(state *storagepb.GetViewStateRsp, columns []*storagepb.DatasetColumn) bool {
 	if strings.TrimSpace(state.GetIndexId()) == "" {
 		return false
 	}
@@ -355,34 +299,6 @@ func targetViewColumnsReady(state *storagepb.GetViewStateRsp, columns []*storage
 		}
 	}
 	return true
-}
-
-func validateTargetView(view *storagepb.View, task domain.CollectionTask, params *domain.CollectParams, frequency string) error {
-	if view == nil {
-		return errors.New("target View is empty")
-	}
-	if view.GetDatasetId() != params.TargetDatasetID {
-		return errors.New("target View immutable Dataset contract does not match task")
-	}
-	if view.GetFreq() != frequency || view.GetEngine() != "duckdb" {
-		return errors.New("target View immutable frequency contract does not match task")
-	}
-	wantGrain := []string{"subject_id", "freq", "data_time", "series_tag"}
-	if len(view.GetGrainKeys()) != len(wantGrain) {
-		return errors.New("target View grain contract does not match task")
-	}
-	for i := range wantGrain {
-		if view.GetGrainKeys()[i] != wantGrain[i] {
-			return errors.New("target View grain contract does not match task")
-		}
-	}
-	if strings.TrimSpace(task.TaskID) != "" {
-		attributes := view.GetAttributes()
-		if attributes["owner_module"] != "collector" || attributes["collector_task_id"] != task.TaskID {
-			return errors.New("target View owner contract does not match task")
-		}
-	}
-	return nil
 }
 
 func cloneStringMap(input map[string]string) map[string]string {

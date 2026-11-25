@@ -122,9 +122,9 @@ func TestRunDiagnoseFreshScrapeDoesNotMaskStaleLastSuccess(t *testing.T) {
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:     embeddedManifestChecksum(t),
 		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "factor-mgr", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
-		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano)}},
+		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "factor-mgr", Status: "FRESH", Stale: false, ObservedAt: now.UnixMilli()}},
 		ModuleObservations: []*monitorpb.DoctorObservation{
-			{Kind: "module", ComponentId: "factor-mgr", Summary: "moox_factor_last_success_timestamp_seconds", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano), Value: float64(now.Add(-2 * time.Hour).Unix()), DetailsJson: `{"stage":"calculate","health_check":"factor-calc"}`},
+			{Kind: "module", ComponentId: "factor-mgr", Summary: "moox_factor_last_success_timestamp_seconds", Status: "FRESH", Stale: false, ObservedAt: now.UnixMilli(), Value: float64(now.Add(-2 * time.Hour).Unix()), DetailsJson: `{"stage":"calculate","health_check":"factor-calc"}`},
 		},
 	}
 	healthChecks := []report.ModuleHealthCheck{{

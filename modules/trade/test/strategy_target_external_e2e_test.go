@@ -45,7 +45,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
-	created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "external-paper", LogicalAccountName: "external-strategy", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY})
+	created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "external-paper", LogicalAccountName: "external-strategy", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
 	logicalID, testAccount := created.GetLogicalAccount().GetLogicalAccountId(), created.GetAccount().GetTradingAccountId()
@@ -54,7 +54,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.NoError(t, err)
 	fake := newFakeExchange(exchange.MarketTypeSpot)
 	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", Environment: "PRODUCTION", ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID(exchange.MarketTypeSpot), BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", MinNotional: "5", Status: "TRADING", ExchangeUpdatedAt: testNow.UnixMilli()})
+		return tx.UpsertInstrument(store.InstrumentRecord{Exchange: "binance", MarketType: "spot", Environment: "PRODUCTION", ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID(exchange.MarketTypeSpot), BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", MinNotional: "5", Status: "TRADING", ExchangeUpdatedAt: testNow.UnixMilli()})
 	}))
 	adapter := &paperexec.Adapter{Store: db, Account: accountRecord, MarketData: fake, Now: func() time.Time { return testNow }}
 	f := buildFixture(db, path, fake, recordingAdapter{ExecutionAdapter: adapter, recorder: fake})
@@ -123,7 +123,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.Positive(t, accountReads.Load(), "Strategy 启用前要只读核对一次组合账户")
 	current, err := f.store.GetLogicalAccountTarget(ctx, testSpace, logicalID)
 	require.NoError(t, err)
-	receipt, err := f.store.GetTargetReceipt(ctx, testSpace, current.TargetID)
+	receipt, err := f.store.GetAcceptedTargetHistory(ctx, testSpace, current.TargetID)
 	require.NoError(t, err)
 	require.Equal(t, "instance-e2e", receipt.InstanceID)
 	require.Equal(t, "session-e2e", receipt.SessionID)
@@ -174,7 +174,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	reopened, err := store.Open(path)
 	require.NoError(t, err)
 	defer reopened.Close()
-	persistedReceipt, err := reopened.GetTargetReceipt(ctx, testSpace, current.TargetID)
+	persistedReceipt, err := reopened.GetAcceptedTargetHistory(ctx, testSpace, current.TargetID)
 	require.NoError(t, err)
 	require.Equal(t, receipt, persistedReceipt)
 	persistedOrder, err := reopened.GetOrder(ctx, testSpace, orders[0].OrderID)

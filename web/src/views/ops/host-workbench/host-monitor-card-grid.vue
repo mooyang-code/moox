@@ -51,6 +51,7 @@
 <script setup lang="ts">
 import { formatBytesPerSecond } from "@/api/modules/host-monitor";
 import type { HostMonitorRow } from "./host-monitor-mapping";
+import { toInstantMs } from "@/utils/time-zone";
 
 defineProps<{ rows: HostMonitorRow[]; selectedKey: string }>();
 defineEmits<{ select: [key: string] }>();
@@ -62,8 +63,10 @@ const progressColor = (value: number | null) =>
 const stateText = (row: HostMonitorRow) => (row.state === "online" ? "在线" : row.state === "offline" ? "离线" : "未上报");
 const lastSeenText = (row: HostMonitorRow) => {
   if (!row.monitor) return "尚未收到主机指标";
-  const age = Date.now() - Date.parse(row.monitor.timestamp);
-  if (!Number.isFinite(age) || age < 0) return "刚刚上报";
+  const at = toInstantMs(row.monitor.timestamp);
+  if (at === null) return "刚刚上报";
+  const age = Date.now() - at;
+  if (age < 0) return "刚刚上报";
   if (age < 60_000) return `${Math.max(1, Math.floor(age / 1_000))} 秒前上报`;
   if (age < 3_600_000) return `${Math.floor(age / 60_000)} 分钟前上报`;
   return `${Math.floor(age / 3_600_000)} 小时前上报`;

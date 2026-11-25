@@ -17,19 +17,6 @@ export interface PageResult {
   has_more?: boolean;
 }
 
-export interface Space {
-  space_id: string;
-  name: string;
-  description?: string;
-  owner?: string;
-  market?: string;
-  timezone?: string;
-  status: string;
-  attributes?: Record<string, string> | string;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export type DeploymentStatus = "enabled" | "disabled";
 export interface DeploymentHost {
   host_id: string;
@@ -47,6 +34,7 @@ export interface DeploymentHost {
   /** 这台主机的网关是否开外部入口（11004），云函数、Skill 等外部身份从这里进来 */
   external_entry?: boolean;
   description?: string;
+  /** 创建、更新时刻：Unix 毫秒的数字字符串 */
   created_at?: string;
   updated_at?: string;
 }
@@ -54,6 +42,7 @@ export interface ComponentDeployment {
   host_id: string;
   component_id: string;
   status: DeploymentStatus;
+  /** 创建、更新时刻：Unix 毫秒的数字字符串 */
   created_at?: string;
   updated_at?: string;
 }
@@ -100,18 +89,12 @@ export interface CatalogResponse {
   sha256: string;
   control_host_id: string;
 }
+/** 网关最近一次拉取快照时 Admin 记下的状态（拉取约每 5 秒一次，兼作心跳）。 */
 export interface HostGatewayRuntimeStatus {
-  instance_id?: string;
-  version?: string;
   expected_hash?: string;
   applied_hash?: string;
-  route_count?: number | string;
+  /** 最近一次拉取的时刻：Unix 毫秒的数字字符串，没拉取过为 "0" */
   last_seen_at?: string;
-  last_error?: string;
-  previous_instance_id?: string;
-  replaced_at?: string;
-  conflict_instance_id?: string;
-  conflict_seen_at?: string;
 }
 export interface HostGatewayRoute {
   component_id: string;
@@ -128,5 +111,6 @@ export interface HostRoutesResponse {
   routes?: HostGatewayRoute[];
   gateway_status?: HostGatewayRuntimeStatus;
   snapshot_schema_version: number;
+  /** 这次响应计算的时刻：Unix 毫秒的数字字符串 */
   compiled_at: string;
 }

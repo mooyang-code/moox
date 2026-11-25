@@ -21,48 +21,56 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	if err != nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}, nil
 	}
+	// DSL 能解析时，不论后面的绑定与试算是否通过，都带上建实例要绑定的任务。
+	rsp := s.validate(ctx, req, strategy)
+	rsp.Requirement = s.taskRequirement(ctx, strategy)
+	return rsp, nil
+}
+
+// validate 是 ValidateStrategy 在 DSL 解析之后的部分：策略池成员校验，给了 factor_tasks 时解析绑定并在最新周期试算。
+func (s *Service) validate(ctx context.Context, req *strategypb.ValidateStrategyReq, strategy dsl.Strategy) *strategypb.ValidateStrategyRsp {
 	rsp := &strategypb.ValidateStrategyRsp{RetInfo: success(), Diagnostics: []string{}}
 	members, err := s.checkPool(ctx, strategy)
 	if err != nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}, nil
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}
 	}
 	if len(req.GetFactorTasks()) == 0 {
-		return rsp, nil
+		return rsp
 	}
 	tasks, err := normalizeFactorTasks(req.GetFactorTasks())
 	if err != nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}
 	}
 	scoped, err := requireSpaceID(ctx)
 	if err != nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err)}, nil
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err)}
 	}
 	if s.Resolver == nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errDependenciesUnavailable), Diagnostics: []string{errDependenciesUnavailable.Error()}}, nil
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errDependenciesUnavailable), Diagnostics: []string{errDependenciesUnavailable.Error()}}
 	}
 	if strategy.IsPool() {
-		return s.validatePool(ctx, rsp, scoped, tasks, strategy, members), nil
+		return s.validatePool(ctx, rsp, scoped, tasks, strategy, members)
 	}
 	resolved, program, err := s.Resolver.Resolve(ctx, scoped, tasks, strategy)
 	if err != nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}
 	}
 	if err := input.CheckResolvedMarkets(resolved, tasks); err != nil {
-		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}
 	}
 	resolvedJSON, _ := json.Marshal(resolved)
 	rsp.ResolvedJson = string(resolvedJSON)
 	loaded, err := s.Resolver.LoadLatest(ctx, scoped, resolved, program, s.nowTime())
 	if err != nil {
 		rsp.Diagnostics = append(rsp.Diagnostics, "试算未完成："+publicMessage(err))
-		return rsp, nil
+		return rsp
 	}
 	decision, err := engine.Evaluate(program, loaded.Frame, engine.State{})
 	if err != nil {
 		rsp.Diagnostics = append(rsp.Diagnostics, "试算失败："+err.Error())
-		return rsp, nil
+		return rsp
 	}
-	rsp.Trial = trialProto(decision, loaded, resolved.ViewIDs())
+	rsp.Trial = trialProto(decision, loaded, resolved.DatasetIDs())
 	rsp.TrialItems = itemProtos(trigger.ResultItems(decision.Items))
 	for _, note := range loaded.Sets.Notes {
 		rsp.Diagnostics = append(rsp.Diagnostics, note)
@@ -70,15 +78,15 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	for _, note := range decision.Summary.Notes {
 		rsp.Diagnostics = append(rsp.Diagnostics, note)
 	}
-	return rsp, nil
+	return rsp
 }
 
-func trialProto(decision engine.Decision, loaded input.Loaded, viewIDs []string) *strategypb.StrategyResult {
+func trialProto(decision engine.Decision, loaded input.Loaded, datasetIDs []string) *strategypb.StrategyResult {
 	_, targetsJSON, _ := trigger.EncodeTargets(decision.Targets)
 	summary, _ := trigger.EncodeSummary(decision.Summary, loaded.Sets.Notes)
-	views := make(map[string]store.ViewInput, len(viewIDs))
-	for _, viewID := range viewIDs {
-		views[viewID] = store.ViewInput{}
+	views := make(map[string]store.ViewInput, len(datasetIDs))
+	for _, datasetID := range datasetIDs {
+		views[datasetID] = store.ViewInput{}
 	}
 	inputJSON, _ := json.Marshal(store.InputRecord{Views: views, BarStart: loaded.Boundary.StorageStart})
 	result := store.Result{BarEndTime: loaded.Boundary.BarEnd, Status: decision.Status, SkipReason: decision.SkipReason, TargetsJSON: targetsJSON, SummaryJSON: summary, InputJSON: inputJSON, PublishStatus: store.PublishNone}

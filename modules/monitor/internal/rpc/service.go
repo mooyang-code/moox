@@ -1,12 +1,14 @@
 package rpc
 
 import (
+	"context"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 )
 
@@ -25,6 +27,8 @@ type Options struct {
 	// EvaluationStale 返回检查评估停滞的原因（最近 3 分钟没有一次完整成功的评估），正常时为空；为 nil 时不判断。
 	// 停滞时 GetHostPolicy 返回失败，由各主机 HostAgent 的“连续 3 次拉取失败”直推告警。
 	EvaluationStale func() string
+	// HostReports 处理 HostAgent 随 GetHostPolicy 带来的主机快照；为 nil 时丢弃快照。
+	HostReports func(context.Context, *monitorpb.HostReport) error
 }
 
 type Service struct {
@@ -37,6 +41,7 @@ type Service struct {
 	healthView    *healthview.Builder
 	lifecycle     func() *lifecycle.Controller
 	evalStale     func() string
+	hostReports   func(context.Context, *monitorpb.HostReport) error
 }
 
 func New(repos *store.Repositories, opts Options) *Service {
@@ -53,5 +58,6 @@ func New(repos *store.Repositories, opts Options) *Service {
 		healthView:    opts.HealthView,
 		lifecycle:     opts.Lifecycle,
 		evalStale:     opts.EvaluationStale,
+		hostReports:   opts.HostReports,
 	}
 }

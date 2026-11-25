@@ -30,9 +30,9 @@ func TestRunStorageMaintenanceBinaryDelegatesRepairView(t *testing.T) {
 func TestStorageRemoteArgsAddPathDefaultsAndDefaultToPreview(t *testing.T) {
 	repair := storageMaintenanceActions[0]
 	require.Equal(t, "repair-view", repair.Action)
-	args := storageRemoteArgs(repair, "/data/moox", []string{"--space-id", "crypto", "--view-id", "v1"})
+	args := storageRemoteArgs(repair, "/data/moox", []string{"--space-id", "crypto", "--dataset-id", "dataset_v1"})
 	require.Equal(t, []string{
-		"--space-id", "crypto", "--view-id", "v1",
+		"--space-id", "crypto", "--dataset-id", "dataset_v1",
 		"--storage-conf", "/data/moox/config/storage-primary/storage.yaml",
 		"--view-conf", "/data/moox/config/storage-view/storage.yaml",
 		"--dry-run",
@@ -43,19 +43,6 @@ func TestStorageRemoteArgsAddPathDefaultsAndDefaultToPreview(t *testing.T) {
 
 	args = storageRemoteArgs(repair, "/r", []string{"--dry-run"})
 	require.NotContains(t, args[1:], "--dry-run", "已经有 --dry-run 不重复加")
-}
-
-func TestStorageDeleteViewHasNoImplicitDryRun(t *testing.T) {
-	var deleteView storageMaintenanceAction
-	for _, action := range storageMaintenanceActions {
-		if action.Action == "delete-view" {
-			deleteView = action
-		}
-	}
-	require.Equal(t, "delete-view", deleteView.Action)
-	args := storageRemoteArgs(deleteView, "/data/moox", []string{"--view", "crypto/v1"})
-	require.NotContains(t, args, "--dry-run", "delete-view 没有 --dry-run，不带 --yes 由存储机上的程序拒绝")
-	require.Contains(t, args, "/data/moox/data/storage-primary/metadata/storage_metadata.db")
 }
 
 func TestStorageMaintenanceRunsOnStorageHostWithLogScript(t *testing.T) {
@@ -72,7 +59,7 @@ func TestStorageMaintenanceRunsOnStorageHostWithLogScript(t *testing.T) {
 	repair.SetOut(&out)
 	repair.SetErr(&errOut)
 	repair.SetContext(context.Background())
-	require.NoError(t, repair.RunE(repair, []string{"--host", "storage", "--space-id", "crypto", "--view-id", "v1", "--consumer", "view_0123456789ab"}))
+	require.NoError(t, repair.RunE(repair, []string{"--host", "storage", "--space-id", "crypto", "--dataset-id", "dataset_v1", "--consumer", "view_0123456789ab"}))
 	require.Len(t, fake.ran, 1)
 	argv := fake.ran[0]
 	require.Equal(t, []string{"sh", "-c"}, argv[:2])

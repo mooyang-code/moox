@@ -98,7 +98,7 @@ function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[]
   if (delay.text !== "—") facts.push({ label: "到达", value: delay.text });
   const limit = toSeconds(dataset.lateness_limit_seconds);
   if (limit) facts.push({ label: "允许迟到", value: humanizeDuration(limit) });
-  if (dataset.last_success_at)
+  if (toMillis(dataset.last_success_at) !== null)
     facts.push({
       label: "最近成功",
       value: relativeTime(dataset.last_success_at, nowMs),
@@ -167,7 +167,7 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
     };
   }
   // 已按交易日历识别出最新一根、只是生产者没上报到达时间时说明原因；没有交易日历的空间不判断到达延迟，不提示。
-  if (item.latest_bar_close_at) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
+  if (toMillis(item.latest_bar_close_at) !== null) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
   return { text: "—", tone: "idle", title: "", ratio: 0 };
 }
 
@@ -621,7 +621,7 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
   const expected = expectedBar(item, delay, nowMs);
   return {
     key: `${item.producer}/${item.space_id}/${id}/${item.freq}`,
-    name: item.display_name || names.datasets[id] || names.views[id] || id,
+    name: item.display_name || names.datasets[id] || id,
     producer: PRODUCER_LABELS[item.producer || ""] || item.producer || "",
     spaceId: item.space_id || "",
     freq: item.freq || "",
@@ -671,16 +671,11 @@ export function pipelineStages(
 const KIND_LABELS: Record<string, string> = {
   kline_freshness: "K 线新鲜度",
   market_canary: "行情探针",
-  market_fetch: "采集计划对账",
-  data_delivery: "数据投递",
-  view_file: "View 索引文件",
-  view_follow: "View 跟随数据变更",
   metrics_ingest: "指标入库",
   module: "模块运行",
-  balance: "账户余额同步",
-  trade_attention: "交易关注项",
-  event_center_attention: "事件中心关注项",
-  collector_attention: "采集关注项",
+  archive_coverage: "数据归档",
+  observation: "观测输入",
+  attention: "关注项",
   subject_tag: "标的标签巡检"
 };
 
@@ -774,13 +769,10 @@ export interface HostCard {
   status: string;
   reason: string;
   meters: Meter[];
-  gatewayIssues: Fact[];
   lastReported: string;
   lastReportedTitle: string;
   href: string;
 }
-
-const GATEWAY_LABELS: Record<string, string> = { heartbeat: "网关心跳", instance_conflict: "网关实例", route_sync: "路由同步" };
 
 function meter(
   label: string,
@@ -814,9 +806,9 @@ export function capacityText(used: number | string | undefined, total: number | 
 
 export function hostCards(overview: HealthOverview | undefined, nowMs: number): HostCard[] {
   return (overview?.hosts || []).map((host: HealthHost) => ({
-    key: `${host.host_id}:${host.agent_id}`,
-    title: host.host_id || host.agent_id || host.hostname || "",
-    subtitle: [host.host_id ? "" : "未关联部署主机", host.address || host.hostname].filter(Boolean).join(" · "),
+    key: host.host_id || "",
+    title: host.host_id || "",
+    subtitle: host.address || host.hostname || "",
     tone: classify(host.status).tone,
     status: statusLabel(host.status),
     reason: host.reason || "",
@@ -838,12 +830,6 @@ export function hostCards(overview: HealthOverview | undefined, nowMs: number): 
         host.disk_mountpoint ? `使用率最高的挂载点：${host.disk_mountpoint}` : ""
       )
     ],
-    gatewayIssues: (host.gateway_signals || [])
-      .filter(signal => signal.signal?.status && signal.signal.status !== "healthy")
-      .map(signal => ({
-        label: GATEWAY_LABELS[signal.kind || ""] || signal.kind || "网关",
-        value: signal.signal?.reason || statusLabel(signal.signal?.status)
-      })),
     lastReported: relativeTime(host.last_reported_at, nowMs),
     lastReportedTitle: fullTime(host.last_reported_at),
     href: hostHref(host.host_id)

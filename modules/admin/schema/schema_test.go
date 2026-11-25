@@ -19,8 +19,8 @@ func TestAdminSchemaUsesBoolSoftDelete(t *testing.T) {
 			t.Fatalf("admin schema must not use string defaults for c_is_deleted")
 		}
 	}
-	if got := strings.Count(sql, "c_is_deleted INTEGER NOT NULL DEFAULT 0"); got != 2 {
-		t.Fatalf("expected 2 bool soft-delete columns, got %d", got)
+	if got := strings.Count(sql, "c_is_deleted INTEGER NOT NULL DEFAULT 0"); got != 1 {
+		t.Fatalf("expected 1 bool soft-delete column, got %d", got)
 	}
 }
 

@@ -11,6 +11,8 @@ vi.mock("@/api/strategy", () => ({
 }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => ctx.store }));
+// 实例详情与定义目录在测试里共用同一个假对象
+vi.mock("@/views/strategy/use-instance-detail", () => ({ useInstanceDetail: () => ctx.store }));
 vi.mock("@/views/strategy/components/strategy-instance-results.vue", () => ({
   default: defineComponent({
     props: ["instance", "targetState"],
@@ -27,14 +29,13 @@ function instance(id: string, overrides: Record<string, unknown> = {}) {
     instance_id: id,
     strategy_id: "s1",
     space_id: "crypto",
-    view_id: "v",
     logical_account_id: "",
     enabled: true,
     session_id: "sess",
     resolved_json: "{}",
     health: "ok",
     created_at: "",
-    updated_at: "2026-10-01T00:00:00Z",
+    updated_at: "1790812800000",
     ...overrides
   };
 }
@@ -77,7 +78,7 @@ describe("strategy results tab", () => {
   beforeEach(() => {
     ctx.space = reactive({ selectedSpaceId: "crypto" });
     ctx.listInstances.mockReset().mockResolvedValue({
-      items: [instance("off", { enabled: false }), instance("on-1"), instance("on-2", { updated_at: "2026-10-05T00:00:00Z" })],
+      items: [instance("off", { enabled: false }), instance("on-1"), instance("on-2", { updated_at: "1791158400000" })],
       page: { total: 3 }
     });
     ctx.store = reactive({

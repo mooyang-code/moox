@@ -214,7 +214,6 @@ func (s *Store) MarkExported(ctx context.Context, spaceID, datasetID, key string
 }
 
 // Finalize 把分区定稿：每个分区一个事务，删除它的暂存行、状态置为 final，并把统计记进分区状态。
-// 水位由调用方随后用 AdvanceWatermark 单独推进：只定稿成功时最多多一次读回，只推进水位成功时留到下次再定稿，都不丢数据。
 func (s *Store) Finalize(ctx context.Context, task Task, keys []string, finalizedAt time.Time) error {
 	for _, key := range keys {
 		if err := s.tx(ctx, func(tx *sql.Tx) error { return finalizeOne(ctx, tx, task, key, finalizedAt) }); err != nil {

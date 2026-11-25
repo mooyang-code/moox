@@ -58,7 +58,7 @@ import { computed, ref, watch } from "vue";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { getInstance } from "@/api/strategy";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
 import { formatInstant } from "@/utils/time-zone";
@@ -78,7 +78,7 @@ const { account: logicalAccount, error: logicalAccountError } = useLogicalAccoun
 const loading = ref(false);
 const error = ref("");
 const readAt = ref("-");
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 const strategyName = computed(
   () =>
     props.strategies.find(item => item.strategy_id === instance.value?.strategy_id)?.name ||
@@ -86,7 +86,7 @@ const strategyName = computed(
 );
 
 async function load() {
-  const token = gate.next();
+  const token = gate.begin();
   const keep = instance.value?.instance_id === props.instanceId ? instance.value : null;
   instance.value = keep;
   error.value = "";
@@ -97,17 +97,17 @@ async function load() {
   loading.value = true;
   try {
     const loaded = await getInstance(props.instanceId);
-    if (!gate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     instance.value = loaded;
     readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch (err) {
     if (err instanceof StaleSpaceRequestError) return;
-    if (gate.isCurrent(token)) {
+    if (token.isLatest()) {
       instance.value = null;
       error.value = err instanceof Error ? `实例读取失败：${err.message}` : "实例读取失败";
     }
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 

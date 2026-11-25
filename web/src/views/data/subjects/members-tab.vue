@@ -96,7 +96,7 @@
           </template>
         </a-table-column>
         <a-table-column v-if="selectedTagId" title="失效时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.inactive_at, displayZone) }}</template>
+          <template #cell="{ record }">{{ formatInstant(record.inactive_at, displayZone) }}</template>
         </a-table-column>
         <a-table-column v-if="!selectedTagId" title="状态" :width="90">
           <template #cell="{ record }">
@@ -180,7 +180,8 @@ import {
 } from "@/api/storage/metadata";
 import type { Subject, Tag, TagMember } from "@/api/storage/types";
 import { mergeAttributes, subjectCurrency, subjectMarket, subjectType, tagSource } from "@/views/data/shared/catalog-attributes";
-import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 页面时间按当前空间登记的时区显示

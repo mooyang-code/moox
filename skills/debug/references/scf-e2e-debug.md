@@ -73,7 +73,7 @@ rg -n "fetch plan|backfill|Collector-Cloud|Collector-TencentSCF" /data/moox/logs
 
 1. 行用的是交易所的 K 线时间，不是本地时间；只写入已收盘的 K 线。
 2. `moox-cli collector kline check --space-id <space> --dataset-id <dataset> --from <RFC3339> --to <RFC3339>` 列出缺失的 K 线。
-3. 任务的结果 View（`view_<task>_kline_<freq>`）里，该标的出现在预期的 `data_time`。
+3. 任务的结果数据集（`dataset_<任务 ID>`）里，该标的出现在预期的 `data_time`。
 
 ## 常见根因
 

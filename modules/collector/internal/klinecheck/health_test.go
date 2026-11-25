@@ -36,15 +36,7 @@ func TestHealthReportsLagGapsAndHistory(t *testing.T) {
 	require.Equal(t, 4, health[0].GapBars)
 	require.Equal(t, 2, health[0].GapSubjects)
 
-	// 未确认的历史缺口与扫描失败都需要关注。
-	require.NoError(t, repo.SaveHistoryScan(ctx, store.HistoryScan{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", ScannedAt: now, GapBars: 6, GapSubjects: 2}))
-	health, err = Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
-	require.NoError(t, err)
-	require.Equal(t, HealthWarn, health[0].Level)
-	require.Equal(t, []string{"历史缺口 6 根（2 个标的）待补采确认"}, health[0].Reasons)
-
 	// 已确认的行情源缺失只计数，不影响等级。
-	require.NoError(t, repo.SaveHistoryScan(ctx, store.HistoryScan{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", ScannedAt: now}))
 	require.NoError(t, repo.AddAbsences(ctx, []store.SourceAbsence{{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", SubjectID: "BTC-USDT", From: base, To: base.Add(2 * time.Minute), Bars: 2}}))
 	health, err = Health(ctx, backfiller.Checker.Timeline, repo, "crypto", now)
 	require.NoError(t, err)
@@ -64,8 +56,8 @@ func TestFormatDuration(t *testing.T) {
 // 低频数据集整点刚过、扫描槽还没到时，水位比“应扫到的时间”落后一个周期是正常的，不算滞后。
 func TestHealthLagIsMeasuredFromWhenTheNextBarBecomesScannable(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
-	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
-	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: base.Unix()}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDataset{Action: fetchplan.PlanActionAppend, Register: true, Timeline: true, P: base.Unix()}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = "ds", "1h", 60, "hash:BTC-USDT"
 	change.Series = append(change.Series, seriesOf("BTC-USDT"))
 	content.Datasets["ds|1h"] = change

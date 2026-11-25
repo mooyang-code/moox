@@ -2,6 +2,14 @@
 export const NETWORK_ERROR_MESSAGE =
   "无法连接管理台。请检查网络；如果浏览器提示证书不安全，请先安装管理台的根证书（登录页或“密钥管理”页的“HTTPS 根证书”），然后彻底重启浏览器";
 
+/** 网关转发或服务内部超时的英文原文（i/o timeout、context deadline exceeded）。 */
+const TIMEOUT_TEXT = /i\/o timeout|context deadline exceeded|deadline_exceeded/i;
+
+/** 服务返回的超时错误换成一句中文，其余原样返回。 */
+export function explainTimeout(message: string): string {
+  return TIMEOUT_TEXT.test(message) ? "服务响应超时，请稍后重试" : message;
+}
+
 /** 请求没有拿到响应（axios 的 ERR_NETWORK / “Network Error”），区别于服务端返回了错误。 */
 export function isNetworkFailure(error: unknown): boolean {
   const failure = error as { response?: unknown; code?: unknown; message?: unknown } | null;

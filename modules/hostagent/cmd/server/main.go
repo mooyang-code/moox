@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/hostagent/internal/policysync"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/rpc"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
@@ -23,7 +24,7 @@ import (
 
 var Version = "dev"
 
-// monitorService 是拉取主机策略的服务。
+// monitorService 是拉取主机策略、接收主机快照的服务。
 const monitorService = "trpc.moox.monitor.MonitorMgr"
 
 func main() {
@@ -37,7 +38,18 @@ func main() {
 		log.Errorf("host-agent config failed: %v", err)
 		os.Exit(1)
 	}
-	a, err := app.New(ctx, cfg, Version)
+	// 主机策略经网关从 Monitor 拉取，同一次调用带上主机快照。打不开网关客户端就退出：常见于首装时本机网关还没监听，
+	// 交给 systemd 拉起重试，否则主机策略永远不同步（证书巡检、控制机不可达推送都发不出），主机快照也报不出去。
+	gateway, syncer, err := openPolicySync(cfg)
+	if err != nil {
+		log.Errorf("host-agent host policy sync failed to start: %v", err)
+		os.Exit(1)
+	}
+	defer gateway.Close()
+	a, err := app.New(ctx, cfg, Version, func(ctx context.Context, report *monitorpb.HostReport) error {
+		_, err := syncer.SyncOnce(ctx, report)
+		return err
+	})
 	if err != nil {
 		log.Errorf("host-agent startup failed: %v", err)
 		os.Exit(1)
@@ -50,56 +62,35 @@ func main() {
 		log.Errorf("host-agent health register failed: %v", err)
 		os.Exit(1)
 	}
+	// 采样定时器启动时跑一次、之后每分钟一次：采集后随拉取主机策略上报。
 	if err := app.RegisterSampleTimer(s, a); err != nil {
 		log.Errorf("host-agent sample timer register failed: %v", err)
-		os.Exit(1)
-	}
-	stopSync, err := startPolicySync(ctx, cfg)
-	if err != nil {
-		// 常见于首装：本机网关还没监听，取不到目录。退出让 systemd 拉起重试，否则主机策略永远不同步（证书巡检、控制机不可达推送都发不出）。
-		log.Errorf("host-agent host policy sync failed to start: %v", err)
 		os.Exit(1)
 	}
 	if err := s.Serve(); err != nil {
 		log.Errorf("host-agent server failed: %v", err)
 		os.Exit(1)
 	}
-	stopSync()
-	_ = a.Close()
 }
 
-// startPolicySync 在部署配置了主机策略缓存时，定期经网关从 Monitor 拉取主机策略。
-// 打不开网关客户端就返回错误，由调用方退出进程：不在这里重试，交给 systemd 拉起。
-func startPolicySync(ctx context.Context, cfg *config.Config) (func(), error) {
-	if !cfg.PolicySyncEnabled() {
-		return func() {}, nil
-	}
+// openPolicySync 打开经网关访问 Monitor 的客户端与主机策略同步器。
+func openPolicySync(cfg *config.Config) (*gatewayclient.Client, *policysync.Syncer, error) {
 	gateway, err := cfg.OpenGateway(func(err error) { log.Warnf("host-agent gateway directory refresh failed: %v", err) })
 	if err != nil {
-		return nil, fmt.Errorf("open gateway client: %w", err)
+		return nil, nil, fmt.Errorf("open gateway client: %w", err)
 	}
-	syncer, err := policysync.New(cfg.HostPolicyPath, func(ctx context.Context) (*monitorpb.GetHostPolicyRsp, error) {
+	syncer, err := policysync.New(cfg.HostPolicyPath, func(ctx context.Context, req *monitorpb.GetHostPolicyReq) (*monitorpb.GetHostPolicyRsp, error) {
 		rsp := &monitorpb.GetHostPolicyRsp{}
-		err := gateway.Invoke(ctx, monitorService, "GetHostPolicy", &monitorpb.GetHostPolicyReq{}, rsp)
+		err := gateway.Invoke(ctx, monitorService, "GetHostPolicy", req, rsp)
 		return rsp, err
 	})
 	if err != nil {
 		_ = gateway.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	// 控制机或 Monitor 不可达、Monitor 反复重启这两条由非控制机推送：本机部署了 Monitor 时不推（按网关目录判断）。
 	syncer.SetWatch(policysync.NewWatch(gateway.LocalHostID(), cfg.HostPolicyPath, func() bool {
 		return slices.Contains(gateway.Directory().Services[monitorService], gateway.LocalHostID())
 	}, log.Warnf))
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		syncer.Run(ctx, policysync.Interval, func(err error) { log.Warnf("host-agent host policy sync failed: %v", err) })
-	}()
-	return func() {
-		cancel()
-		<-done
-		_ = gateway.Close()
-	}, nil
+	return gateway, syncer, nil
 }

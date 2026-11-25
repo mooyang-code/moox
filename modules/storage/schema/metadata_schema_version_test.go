@@ -18,7 +18,7 @@ func TestMetadataSchemaContract(t *testing.T) {
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '19')",
+		"VALUES ('schema_version', '21')",
 		"CREATE TABLE IF NOT EXISTS t_tags (",
 		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
 		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
@@ -31,7 +31,6 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0)",
 		"c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled'))",
 		"c_dataset_id TEXT NOT NULL",
-		"CREATE INDEX IF NOT EXISTS idx_t_views_dataset ON t_views (c_space_id, c_dataset_id, c_status)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("metadata schema missing %q", want)
@@ -63,6 +62,11 @@ func TestMetadataSchemaContract(t *testing.T) {
 		"t_view_period_dataset_states",
 		"t_view_sync_points",
 		"t_view_columns",
+		"t_views",
+		"t_fields",
+		"t_field_groups",
+		"c_origin_type",
+		"c_origin_id",
 		"c_active_index_id",
 		"c_view_revision",
 		"c_active_columns_json",
@@ -99,8 +103,8 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "19" {
-		t.Fatalf("persisted schema version = %q, want 19", version)
+	if version != "21" {
+		t.Fatalf("persisted schema version = %q, want 21", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
@@ -114,8 +118,8 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name LIKE 't\_%' ESCAPE '\'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 12 {
-		t.Fatalf("metadata tables = %d, want 12", tables)
+	if tables != 9 {
+		t.Fatalf("metadata tables = %d, want 9", tables)
 	}
 	for _, table := range []string{
 		"t_" + "primary" + "_" + "store" + "_" + "nodes",
@@ -124,6 +128,9 @@ func TestMetadataSchemaDDLExecutes(t *testing.T) {
 		"t_data_nodes",
 		"t_storage_devices",
 		"t_view_columns",
+		"t_views",
+		"t_fields",
+		"t_field_groups",
 	} {
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {

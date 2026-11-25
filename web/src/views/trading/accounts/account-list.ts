@@ -1,5 +1,5 @@
 import type { EquityPoint, LogicalAccount, TradingAccount } from "@/api/trade/types";
-import { exchangeLabels } from "@/api/trade";
+import { exchangeLabel } from "@/api/trade";
 import { logicalInEnvironment, accountEnvironment, type Environment } from "@/components/trade-confirm/environment";
 
 export function accountMapOf(accounts: readonly TradingAccount[]): Map<string, TradingAccount> {
@@ -94,7 +94,7 @@ export function comboRows(
         members.push(account);
         if (member.enabled) enabled.push(account);
       }
-      const exchanges = [...new Set(members.map(item => exchangeLabels[item.exchange] || "-"))];
+      const exchanges = [...new Set(members.map(item => exchangeLabel(item.exchange)))];
       return {
         key: logical.logical_account_id,
         logical,

@@ -15,8 +15,8 @@ func (f *targetFixture) submittedChild(t *testing.T, orderID, state, quantity, f
 	t.Helper()
 	at := submittedAt.UnixMilli()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: orderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
+		ClientOrderID: orderID, Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: quantity, ReferencePrice: price, AveragePrice: price,
 		FilledQuantity: filled, OwnerType: "TARGET", OwnerID: "target-current", State: state, SubmittedAt: at, Version: 1,
 		FinishedAt: map[bool]int64{true: at, false: 0}[state == "FILLED" || state == "CANCELED"],
@@ -28,7 +28,7 @@ const capSettings = `{"order_mode":"MARKET","min_notional_swap":"0","hourly_cap_
 func TestHourlyCapClipsTheSliceToTheRemainingAllowance(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.converge(t)
 	require.Len(t, f.orders.specs, 1)
 	require.Equal(t, "10", f.orders.specs[0].Quantity.String(), "额度 1000 ÷ 价格 100 = 10")
@@ -37,7 +37,7 @@ func TestHourlyCapClipsTheSliceToTheRemainingAllowance(t *testing.T) {
 func TestHourlyCapCountsOnlyWhatWasActuallySubmittedThisHour(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	hour := f.now.Truncate(time.Hour)
 	// 本小时已成交 9 个（900）：剩余额度 100，只下 1 个。
 	f.submittedChild(t, "used", "FILLED", "9", "9", "100", hour.Add(time.Second))
@@ -55,7 +55,7 @@ func TestHourlyCapCountsOnlyWhatWasActuallySubmittedThisHour(t *testing.T) {
 func TestHourlyCapCountsInFlightOrdersAtFullSize(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	// 还没结束的单按全部数量算，不能等它成交了才扣额度。
 	f.submittedChild(t, "open", "FILLED", "9", "9", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	rows, err := f.store.ListSubmittedTargetOrders(context.Background(), "space-1", "logical-1", 0, f.now.Add(time.Hour).UnixMilli())
@@ -73,7 +73,7 @@ func TestHourlyCapCountsInFlightOrdersAtFullSize(t *testing.T) {
 func TestHourlyCapExhaustedDefersToNextHour(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	result := f.converge(t)
 	require.Empty(t, f.orders.specs)
@@ -94,7 +94,7 @@ func TestHourlyCapExhaustedDefersToNextHour(t *testing.T) {
 func TestHourlyCapAllowanceResetsAtTheNextHour(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	f.converge(t)
 	require.Empty(t, f.orders.specs)
@@ -109,7 +109,7 @@ func TestHourlyCapAllowanceResetsAtTheNextHour(t *testing.T) {
 func TestHourlyCapRemainderBelowMinimumIsDeferredNotBlocked(t *testing.T) {
 	f := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"50","hourly_cap_swap":{"*":"1000"}}`)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.submittedChild(t, "used", "FILLED", "9.7", "9.7", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	result := f.converge(t)
 	require.Empty(t, f.orders.specs)
@@ -122,7 +122,7 @@ func TestHourlyCapDeferredLaneDoesNotStallLaterStages(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","hourly_cap_swap":{"*":"1000"}}`)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 	})
@@ -134,7 +134,7 @@ func TestHourlyCapDeferredLaneDoesNotStallLaterStages(t *testing.T) {
 
 func TestHourlyCapIsOnlyQueriedWhenConfigured(t *testing.T) {
 	f := swapPolicyFixture(t, legacyOrderSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	executor := f.executor()
 	env := executor.newLaneEnv(context.Background(), "space-1", "logical-1", mustSettings(t, legacyOrderSettings), nil, nil)
 	require.False(t, env.settings.HasHourlyCaps())
@@ -162,7 +162,7 @@ func TestHourlyCapNeverBlocksReductions(t *testing.T) {
 	reducing := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0","rebalance_threshold_mode":"ALWAYS","hourly_cap_swap":{"BTC-USDT-SWAP":"1000"}}`)
 	reducing.now = time.Now().UTC()
 	reducing.position(t, "account-a", "BTCUSDT", "10")
-	reducing.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "4"}})
+	reducing.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "4"}})
 	reducing.submittedChild(t, "bought", "FILLED", "10", "10", "100", reducing.now.Truncate(time.Hour).Add(time.Second))
 	reducing.converge(t)
 	require.Len(t, reducing.orders.specs, 1, "减仓不受上限限制")
@@ -175,7 +175,7 @@ func TestHourlyCapStillCountsReductionNotional(t *testing.T) {
 	f.now = time.Now().UTC()
 	hour := f.now.Truncate(time.Hour)
 	f.submittedChild(t, "sold", "FILLED", "4", "4", "100", hour.Add(time.Second))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.converge(t)
 	require.Len(t, f.orders.specs, 1)
 	require.Equal(t, "6", f.orders.specs[0].Quantity.String(), "额度 1000 − 已提交 400 = 600")
@@ -188,7 +188,7 @@ func TestHourlyCapDeferralAfterARealBlockKeepsTheRealReasonFirst(t *testing.T) {
 	f.now = time.Now().UTC()
 	// BTC 现货买单金额低于交易所最小名义金额，下不了单（真实阻塞）；BTC 合约额度用满（顺延）。
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 	})
@@ -209,7 +209,7 @@ func TestHourlyCapDeferralAfterARealBlockKeepsTheRealReasonFirst(t *testing.T) {
 func TestHourlyCapDeferralRecoversAfterTheHourAndClearsTheList(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	first := f.converge(t)
 	require.Equal(t, StatusConverged, first.Status)
@@ -232,7 +232,7 @@ func TestHourlyCapDeferralRecoversAfterTheHourAndClearsTheList(t *testing.T) {
 func TestHourlyCapDeferralSurvivesANewTargetAndNeverBlocksItsReductions(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	require.Equal(t, StatusConverged, f.converge(t).Status)
 	require.Empty(t, f.orders.specs)
@@ -241,7 +241,7 @@ func TestHourlyCapDeferralSurvivesANewTargetAndNeverBlocksItsReductions(t *testi
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: f.now.UnixMilli() + 1, ValidUntil: fixtureValidUntil(f.now),
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "200"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli() + 1,
+		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "200"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli() + 1,
 	})
 	require.NoError(t, err)
 	require.True(t, accepted)

@@ -45,7 +45,7 @@ func seedEnabledInstance(t *testing.T, repo *Store, instanceID, sessionID string
 	if err := repo.CreateInstance(ctx, Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, LogicalAccountID: account, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.EnableInstance(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.EnableInstance(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 }

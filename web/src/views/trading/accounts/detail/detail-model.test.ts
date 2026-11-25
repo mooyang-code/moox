@@ -66,7 +66,7 @@ describe("详情页模型", () => {
     const action = (action_type: string, status: string) => ({ action_type, status }) as OperatorAction;
     expect(isFlattenRunning(action("FLATTEN", "RUNNING"))).toBe(true);
     expect(isFlattenRunning(action("FLATTEN", "COMPLETED"))).toBe(false);
-    expect(isFlattenRunning(action("SUBMIT_ORDER", "RUNNING"))).toBe(false);
+    expect(isFlattenRunning(action("MANUAL_ORDER", "RUNNING"))).toBe(false);
     expect(isFlattenRunning(null)).toBe(false);
   });
 });

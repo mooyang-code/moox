@@ -21,7 +21,7 @@ async function tabText(wrapper: VueWrapper, expected: string) {
 async function setup(query: Record<string, string>) {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/strategy/tasks", name: "strategy-tasks", component: Workbench, meta: { reuseOnQuery: true } }]
+    routes: [{ path: "/strategy/tasks", name: "strategy-tasks", component: Workbench }]
   });
   await router.push({ path: "/strategy/tasks", query });
   const wrapper = mount(Workbench, { global: { plugins: [router] } });

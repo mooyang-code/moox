@@ -13,9 +13,11 @@ import {
   shiftArrivalAnchor
 } from "./arrival-model";
 
+// Monitor 接口里的时刻是毫秒数字字符串。
+const ms = (text: string) => String(Date.parse(text));
+
 const names = {
-  datasets: { dataset_spot_1m: "现货分钟K线", dataset_factor_spot_1m: "现货分钟因子" },
-  views: { view_spot_kline_1m: "现货分钟K线视图" }
+  datasets: { dataset_spot_1m: "现货分钟K线", dataset_factor_spot_1m: "现货分钟因子", dataset_spot_kline_1m: "现货分钟K线视图" }
 };
 const now = Date.parse("2026-10-16T19:00:00Z");
 
@@ -41,30 +43,30 @@ const overview: HealthOverview = {
 const history: ArrivalHistory = {
   timezone: "UTC",
   day: "2026-10-16",
-  start_at: "2026-10-16T00:00:00Z",
-  end_at: "2026-10-17T00:00:00Z",
+  start_at: ms("2026-10-16T00:00:00Z"),
+  end_at: ms("2026-10-17T00:00:00Z"),
   series: [
     {
       stage: "storage",
       dataset_id: "dataset_spot_1m",
       lateness_limit_seconds: "30",
       points: [
-        { close_at: "2026-10-16T18:55:00Z", delay_seconds: "1" },
-        { close_at: "2026-10-16T18:56:00Z", delay_seconds: "45" },
-        { close_at: "2026-10-16T18:59:00Z", delay_seconds: "3", skipped_bars: 2 }
+        { close_at: ms("2026-10-16T18:55:00Z"), delay_seconds: "1" },
+        { close_at: ms("2026-10-16T18:56:00Z"), delay_seconds: "45" },
+        { close_at: ms("2026-10-16T18:59:00Z"), delay_seconds: "3", skipped_bars: 2 }
       ]
     },
     {
       stage: "view",
-      dataset_id: "view_spot_kline_1m",
+      dataset_id: "dataset_spot_kline_1m",
       lateness_limit_seconds: "30",
-      points: [{ close_at: "2026-10-16T18:55:00Z", delay_seconds: "3" }]
+      points: [{ close_at: ms("2026-10-16T18:55:00Z"), delay_seconds: "3" }]
     },
     {
       stage: "strategy",
       dataset_id: "strategy_abc",
       lateness_limit_seconds: "60",
-      points: [{ close_at: "2026-10-16T18:55:00Z", delay_seconds: "15" }]
+      points: [{ close_at: ms("2026-10-16T18:55:00Z"), delay_seconds: "15" }]
     }
   ]
 };
@@ -104,7 +106,7 @@ describe("arrival model", () => {
 
   it("builds a time axis in the market zone with the lateness limits marked", () => {
     const model = arrivalModel(
-      { ...history, timezone: "Asia/Shanghai", start_at: "2026-10-16T16:00:00Z", end_at: "2026-10-17T16:00:00Z" },
+      { ...history, timezone: "Asia/Shanghai", start_at: ms("2026-10-16T16:00:00Z"), end_at: ms("2026-10-17T16:00:00Z") },
       names
     );
     const spec = arrivalChartSpec(model, now) as any;
@@ -129,7 +131,7 @@ describe("arrival model", () => {
             dataset_id: "dataset_spot_1m",
             lateness_limit_seconds: "30",
             points: Array.from({ length: 60 }, (_, i) => ({
-              close_at: new Date(Date.parse("2026-10-16T00:01:00Z") + i * 60_000).toISOString(),
+              close_at: String(Date.parse("2026-10-16T00:01:00Z") + i * 60_000),
               delay_seconds: "1"
             }))
           }

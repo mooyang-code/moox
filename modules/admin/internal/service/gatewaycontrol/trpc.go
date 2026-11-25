@@ -34,7 +34,6 @@ func Register(service server.Service, implementation *Service) error {
 		ServiceName: servicecatalog.GatewayControlPath, HandlerType: (*pb.GatewayControlService)(nil),
 		Methods: []server.Method{
 			{Name: "/" + servicecatalog.GatewayControlPath + "/PullSnapshot", Func: implementation.handle},
-			{Name: "/" + servicecatalog.GatewayControlPath + "/ReportStatus", Func: implementation.handle},
 		},
 	}
 	return service.Register(description, implementation)
@@ -74,27 +73,18 @@ func (s *Service) handle(_ interface{}, ctx context.Context, decode server.Filte
 		}
 		path := message.ServerRPCName()
 		method := strings.TrimPrefix(path, "/"+servicecatalog.GatewayControlPath+"/")
-		if path != "/"+servicecatalog.GatewayControlPath+"/"+method || method != "PullSnapshot" && method != "ReportStatus" {
+		if path != "/"+servicecatalog.GatewayControlPath+"/"+method || method != "PullSnapshot" {
 			return nil, errors.New("unknown gateway control method")
 		}
 		verified, err := verified(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var response interface{}
-		if method == "PullSnapshot" {
-			request := &pb.PullSnapshotReq{}
-			if err := codec.Unmarshal(serialization, body.Data, request); err != nil {
-				return nil, errors.New("invalid gateway control request encoding")
-			}
-			response, err = s.PullSnapshot(verified, request)
-		} else {
-			request := &pb.ReportStatusReq{}
-			if err := codec.Unmarshal(serialization, body.Data, request); err != nil {
-				return nil, errors.New("invalid gateway control request encoding")
-			}
-			response, err = s.ReportStatus(verified, request)
+		request := &pb.PullSnapshotReq{}
+		if err := codec.Unmarshal(serialization, body.Data, request); err != nil {
+			return nil, errors.New("invalid gateway control request encoding")
 		}
+		response, err := s.PullSnapshot(verified, request)
 		if err != nil {
 			return nil, err
 		}

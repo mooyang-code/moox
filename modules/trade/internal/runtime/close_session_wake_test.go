@@ -88,7 +88,7 @@ func TestClosedConvergedTargetCancelsRestingOrderWithinSeconds(t *testing.T) {
 	limitPrice := "99.9"
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main", Exchange: "BINANCE", Markets: []string{"SWAP"},
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main", Exchange: "binance", Markets: []string{"swap"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED", Ready: true,
 		}); err != nil {
 			return err
@@ -111,13 +111,13 @@ func TestClosedConvergedTargetCancelsRestingOrderWithinSeconds(t *testing.T) {
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
 			InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 			BarEndTime: now.Add(-time.Minute).UnixMilli(), ValidUntil: now.Add(2 * time.Hour).UnixMilli(),
-			Targets: []store.InstrumentTarget{}, Status: targetapp.StatusPending, AcceptedAt: now.UnixMilli(),
+			Targets: []store.InstrumentQuantity{}, Status: targetapp.StatusPending, AcceptedAt: now.UnixMilli(),
 		}); err != nil {
 			return err
 		}
 		return tx.CreateOrder(store.OrderRecord{
-			SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-1", LogicalAccountID: "logical-1", RunnerID: "instance-1",
-			ClientOrderID: "resting-1", ExchangeOrderID: "exchange-resting-1", Exchange: "BINANCE", MarketType: "SWAP",
+			SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-1", LogicalAccountID: "logical-1", InstanceID: "instance-1",
+			ClientOrderID: "resting-1", ExchangeOrderID: "exchange-resting-1", Exchange: "binance", MarketType: "swap",
 			InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY",
 			Quantity: "1", LimitPrice: &limitPrice, ReferencePrice: "100", FilledQuantity: "0", OwnerType: "TARGET", OwnerID: "target-1",
 			State: "OPEN", SubmittedAt: now.UnixMilli(), Version: 1,

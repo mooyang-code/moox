@@ -86,7 +86,7 @@ func requireCode(t *testing.T, info *commonpb.RetInfo, want commonpb.ErrorCode, 
 	}
 }
 
-// createOnly 只创建任务（不生成运行；启用的任务在下一次检查时复核）。
+// createOnly 只创建任务（不生成运行；启用的任务在下一次检查时生成 follow）。
 func (h *harness) createOnly(dataset string, mutate func(*archivepb.CreateArchiveTaskReq)) *archivepb.CreateArchiveTaskRsp {
 	h.t.Helper()
 	req := &archivepb.CreateArchiveTaskReq{SpaceId: "crypto", DatasetId: dataset}
@@ -123,7 +123,7 @@ func TestCreateArchiveTaskValidatesTheDatasetAndSchedule(t *testing.T) {
 		{"unknown dataset", "nope", nil, commonpb.ErrorCode_DATASET_NOT_FOUND, "nope"},
 		{"record dataset", "rec", nil, commonpb.ErrorCode_INVALID_PARAM, "不是时序数据集"},
 		{"inactive dataset", "off", nil, commonpb.ErrorCode_INVALID_PARAM, "状态不是 active"},
-		{"pull every too many bars", "ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.PullEveryBars = 1441 }, commonpb.ErrorCode_INVALID_PARAM, "pull_every_bars"},
+		{"forever needs backfill", "ds_1h", nil, commonpb.ErrorCode_INVALID_PARAM, "forever"},
 		{"backfill in future", "ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-18T00:00:00Z" }, commonpb.ErrorCode_INVALID_PARAM, "早于当前时间"},
 		{"backfill beyond retention", "ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-01T00:00:00Z" }, commonpb.ErrorCode_INVALID_PARAM, "不能早于"},
 		{"missing space", "ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId = "" }, commonpb.ErrorCode_INVALID_PARAM, "space_id"},
@@ -139,37 +139,41 @@ func TestCreateArchiveTaskValidatesTheDatasetAndSchedule(t *testing.T) {
 	}
 }
 
-func TestCreateArchiveTaskFillsTheTimingAndWaitsForTheNextCheck(t *testing.T) {
+// D8：回补起点没填时取「现在 − 线上保留期 + 1 天」（首次运行整段读线上保留期）；保留期为 forever 时必须填写。
+func TestCreateArchiveTaskDefaultsTheBackfillToTheRetentionStart(t *testing.T) {
 	h := newHarness(t)
-	rsp := h.createOnly("ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-15T00:00:00Z" })
+	rsp := h.createOnly("ds_1m", nil)
 	requireOK(t, rsp.GetRetInfo())
 	task := rsp.GetTask()
-	if task.GetFreq() != "1m" || task.GetPartitionUnit() != "day" || task.GetIntervalSeconds() != 3600 || task.GetPullEveryBars() != 1 || task.GetStatus() != "enabled" ||
-		task.GetRetention() != "168h" || task.GetBackfillFrom() != "2026-10-15T00:00:00Z" ||
-		task.GetLastBoundary() != "" || task.GetLastReview() != "" {
+	if task.GetFreq() != "1m" || task.GetPartitionUnit() != "day" || task.GetStatus() != "enabled" || task.GetRetention() != "168h" ||
+		task.GetBackfillFrom() != "2026-10-11T01:00:00Z" {
 		t.Fatalf("task = %v", task)
 	}
-	// 01:00:00 在整点避让区间里，01:00 的边界在 01:04:25 拉取。
-	if task.GetNextPullAt() != "2026-10-17T01:04:25Z" {
-		t.Fatalf("next_pull_at = %s", task.GetNextPullAt())
-	}
-	if runs, _ := h.mgr.ListArchiveRuns(context.Background(), &archivepb.ListArchiveRunsReq{IncludeTicks: true}); len(runs.GetRuns()) != 0 {
+	if runs, _ := h.mgr.ListArchiveRuns(context.Background(), &archivepb.ListArchiveRunsReq{IncludeFollow: true}); len(runs.GetRuns()) != 0 {
 		t.Fatalf("创建任务不立即生成运行: %v", runs.GetRuns())
 	}
 	dup := h.createOnly("ds_1m", nil)
 	requireCode(t, dup.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "已经有归档任务")
 
-	n4 := h.createOnly("ds_1h", func(r *archivepb.CreateArchiveTaskReq) { r.PullEveryBars, r.Paused = 4, true })
-	requireOK(t, n4.GetRetInfo())
-	if n4.GetTask().GetStatus() != "paused" || n4.GetTask().GetNextPullAt() != "" || n4.GetTask().GetPullEveryBars() != 4 || n4.GetTask().GetRetention() != "forever" {
-		t.Fatalf("paused task = %v", n4.GetTask())
+	// 填了的回补起点原样保存（在保留期内）。
+	cn := h.createOnly("cn_1m", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId, r.BackfillFrom = "stockcn", "2026-10-15T00:00:00Z" })
+	requireOK(t, cn.GetRetInfo())
+	if cn.GetTask().GetBackfillFrom() != "2026-10-15T00:00:00Z" {
+		t.Fatalf("stockcn task = %v", cn.GetTask())
+	}
+	// 保留期为 forever：必须填，填了任意过去的时刻都行。
+	missing := h.createOnly("ds_1h", nil)
+	requireCode(t, missing.GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "forever")
+	forever := h.createOnly("ds_1h", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom, r.Paused = "2020-01-01T00:00:00Z", true })
+	requireOK(t, forever.GetRetInfo())
+	if forever.GetTask().GetStatus() != "paused" || forever.GetTask().GetBackfillFrom() != "2020-01-01T00:00:00Z" || forever.GetTask().GetRetention() != "forever" {
+		t.Fatalf("forever task = %v", forever.GetTask())
 	}
 	h.datasets.datasets["crypto/ds_1d"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
-	daily := h.createOnly("ds_1d", func(r *archivepb.CreateArchiveTaskReq) { r.PullEveryBars = 7 })
+	daily := h.createOnly("ds_1d", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2020-01-01T00:00:00Z" })
 	requireOK(t, daily.GetRetInfo())
-	if daily.GetTask().GetIntervalSeconds() != 86400 || daily.GetTask().GetPullEveryBars() != 1 || daily.GetTask().GetPartitionUnit() != "month" ||
-		daily.GetTask().GetNextPullAt() != "2026-10-18T00:04:25Z" {
-		t.Fatalf("1d 任务每天一次、N 固定为 1: %v", daily.GetTask())
+	if daily.GetTask().GetPartitionUnit() != "month" {
+		t.Fatalf("1d 任务按月分区: %v", daily.GetTask())
 	}
 }
 
@@ -229,63 +233,48 @@ func TestUpdateArchiveTaskKeepsAnUnfinishedBackfillStartEvenWhenItAgedOutOfReten
 	}
 }
 
-func TestUpdateArchiveTaskChangesPullEveryBarsAndResumeClearsBoundaries(t *testing.T) {
+func TestUpdateArchiveTaskOnlyChangesTheStatus(t *testing.T) {
 	h := newHarness(t)
 	requireOK(t, h.createOnly("ds_1m", nil).GetRetInfo())
 	ctx := context.Background()
-	updated, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", PullEveryBars: 5})
-	requireOK(t, updated.GetRetInfo())
-	if updated.GetTask().GetPullEveryBars() != 5 || updated.GetTask().GetIntervalSeconds() != 3600 || updated.GetTask().GetStatus() != "enabled" ||
-		updated.GetTask().GetNextPullAt() != "2026-10-17T01:04:25Z" {
-		t.Fatalf("updated = %v", updated.GetTask())
-	}
-	// 0 表示不修改。
 	kept, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m"})
-	if kept.GetTask().GetPullEveryBars() != 5 {
-		t.Fatalf("kept = %v", kept.GetTask())
+	requireOK(t, kept.GetRetInfo())
+	if kept.GetTask().GetStatus() != "enabled" {
+		t.Fatalf("空 status 不修改: %v", kept.GetTask())
 	}
-	bad, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", PullEveryBars: 2000})
-	requireCode(t, bad.GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "pull_every_bars")
 	badStatus, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", Status: "weird"})
 	requireCode(t, badStatus.GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "status")
 
-	h.now = time.Date(2026, 10, 17, 1, 10, 25, 0, time.UTC)
-	if err := h.svc.Trigger(ctx); err != nil {
-		t.Fatal(err)
-	}
+	h.trigger(at(1, 10, 25))
 	paused, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", Status: "paused"})
 	requireOK(t, paused.GetRetInfo())
-	if paused.GetTask().GetStatus() != "paused" || paused.GetTask().GetNextPullAt() != "" || paused.GetTask().GetLastBoundary() != "2026-10-17T01:10:00Z" {
+	if paused.GetTask().GetStatus() != "paused" {
 		t.Fatalf("paused = %v", paused.GetTask())
 	}
 	if queued, _ := h.mgr.ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{Status: "queued"}); len(queued.GetRuns()) != 0 {
-		t.Fatalf("停用取消排队中的复核: %v", queued.GetRuns())
+		t.Fatalf("停用取消排队中的 follow: %v", queued.GetRuns())
 	}
-	h.now = h.now.Add(2 * time.Hour)
+	h.trigger(at(1, 11, 25))
+	if queued, _ := h.mgr.ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{Status: "queued"}); len(queued.GetRuns()) != 0 {
+		t.Fatalf("停用的任务不生成 follow: %v", queued.GetRuns())
+	}
 	resumed, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", Status: "enabled"})
 	requireOK(t, resumed.GetRetInfo())
-	if resumed.GetTask().GetLastBoundary() != "" || resumed.GetTask().GetLastReview() != "" {
-		t.Fatalf("重新启用清空两个边界: %v", resumed.GetTask())
-	}
-	// 下一次检查立即复核。
-	if err := h.svc.Trigger(ctx); err != nil {
-		t.Fatal(err)
-	}
+	h.trigger(at(1, 12, 25))
 	queued, _ := h.mgr.ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{Status: "queued"})
-	if len(queued.GetRuns()) != 1 || queued.GetRuns()[0].GetKind() != "scheduled" {
-		t.Fatalf("重新启用后下一次检查复核: %v", queued.GetRuns())
+	if len(queued.GetRuns()) != 1 || queued.GetRuns()[0].GetKind() != "follow" {
+		t.Fatalf("重新启用后下一分钟生成 follow: %v", queued.GetRuns())
 	}
 	missing, _ := h.mgr.UpdateArchiveTask(ctx, &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "nope"})
 	requireCode(t, missing.GetRetInfo(), commonpb.ErrorCode_NOT_FOUND, "")
 }
 
-func TestPrepareAndPreviewReportPullTimesAndReadSpans(t *testing.T) {
+func TestPrepareArchiveTaskReportsTheEarliestBackfill(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	prep, _ := h.mgr.PrepareArchiveTask(ctx, &archivepb.PrepareArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, prep.GetRetInfo())
-	if prep.GetFreq() != "1m" || prep.GetPartitionUnit() != "day" || prep.GetRecommendedPullEveryBars() != 1 ||
-		prep.GetEarliestBackfillFrom() != "2026-10-11T01:00:00Z" || prep.GetExists() {
+	if prep.GetFreq() != "1m" || prep.GetPartitionUnit() != "day" || prep.GetEarliestBackfillFrom() != "2026-10-11T01:00:00Z" || prep.GetExists() {
 		t.Fatalf("prepare = %v", prep)
 	}
 	forever, _ := h.mgr.PrepareArchiveTask(ctx, &archivepb.PrepareArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1h"})
@@ -297,41 +286,6 @@ func TestPrepareAndPreviewReportPullTimesAndReadSpans(t *testing.T) {
 	if !again.GetExists() {
 		t.Fatal("已有任务时 exists 应为真")
 	}
-
-	// crypto 1m、N=5，现在 01:00：01:00 的边界顺延到 01:04:25，之后每 5 分钟；复核读 1 小时 + 15 分钟 + 1 根。
-	preview, _ := h.mgr.PreviewArchiveSchedule(ctx, &archivepb.PreviewArchiveScheduleReq{SpaceId: "crypto", DatasetId: "ds_1m", PullEveryBars: 5})
-	requireOK(t, preview.GetRetInfo())
-	want := []string{"2026-10-17T01:04:25Z", "2026-10-17T01:05:25Z", "2026-10-17T01:10:25Z", "2026-10-17T01:15:25Z", "2026-10-17T01:20:25Z"}
-	if preview.GetIntervalSeconds() != 3600 || preview.GetReadSpanSeconds() != 76*60 || strings.Join(preview.GetNextRuns(), ",") != strings.Join(want, ",") {
-		t.Fatalf("preview = %v", preview)
-	}
-	if strings.Join(preview.GetNextReviews(), ",") != "2026-10-17T01:34:25Z,2026-10-17T02:34:25Z,2026-10-17T03:34:25Z" {
-		t.Fatalf("reviews = %v", preview.GetNextReviews())
-	}
-	// 今天的分区明天 00:00 收盘 + 15 分钟，之后第一次是 00:15:25 的到点拉取。
-	estimates := strings.Join(preview.GetPartitionExportEstimates(), "|")
-	if len(preview.GetPartitionExportEstimates()) != 2 || !strings.Contains(estimates, "分区 2026-10-17：预计 2026-10-18T00:15:25Z") {
-		t.Fatalf("estimates = %v", preview.GetPartitionExportEstimates())
-	}
-	bad, _ := h.mgr.PreviewArchiveSchedule(ctx, &archivepb.PreviewArchiveScheduleReq{SpaceId: "crypto", DatasetId: "ds_1m", PullEveryBars: 1441})
-	requireCode(t, bad.GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "pull_every_bars")
-	// stockcn 1m：当日分区 15:00 收盘 + 15 分钟 = 07:15 UTC，07:15:25 的到点拉取导出。
-	cnPreview, _ := h.mgr.PreviewArchiveSchedule(ctx, &archivepb.PreviewArchiveScheduleReq{SpaceId: "stockcn", DatasetId: "cn_1m"})
-	requireOK(t, cnPreview.GetRetInfo())
-	if joined := strings.Join(cnPreview.GetPartitionExportEstimates(), "|"); !strings.Contains(joined, "2026-10-17T07:15:25Z") {
-		t.Fatalf("stockcn estimates = %v", cnPreview.GetPartitionExportEstimates())
-	}
-	if cnPreview.GetReadSpanSeconds() != uint32(3600+15*60+60) {
-		t.Fatalf("stockcn read span = %d", cnPreview.GetReadSpanSeconds())
-	}
-	// stockcn 1d：15:00 收盘落在整点避让区间，15:04:25（07:04:25 UTC）拉取，拉取即复核。
-	h.datasets.datasets["stockcn/cn_1d"] = Dataset{SpaceID: "stockcn", DatasetID: "cn_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
-	daily, _ := h.mgr.PreviewArchiveSchedule(ctx, &archivepb.PreviewArchiveScheduleReq{SpaceId: "stockcn", DatasetId: "cn_1d"})
-	requireOK(t, daily.GetRetInfo())
-	if daily.GetIntervalSeconds() != 86400 || len(daily.GetNextRuns()) != 5 || daily.GetNextRuns()[0] != "2026-10-17T07:04:25Z" || daily.GetNextRuns()[1] != "2026-10-18T07:04:25Z" ||
-		strings.Join(daily.GetNextReviews(), ",") != strings.Join(daily.GetNextRuns()[:3], ",") {
-		t.Fatalf("stockcn 1d preview = %v", daily)
-	}
 }
 
 func TestBackfillAndRunNowRules(t *testing.T) {
@@ -341,7 +295,7 @@ func TestBackfillAndRunNowRules(t *testing.T) {
 	run, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, run.GetRetInfo())
 	again, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
-	requireCode(t, again.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "排队中或运行中")
+	requireCode(t, again.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "排队中的 manual 运行")
 	cancel, _ := h.mgr.CancelArchiveRun(ctx, &archivepb.CancelArchiveRunReq{RunId: run.GetRun().GetRunId()})
 	requireOK(t, cancel.GetRetInfo())
 	if cancel.GetRun().GetStatus() != "canceled" {
@@ -409,8 +363,8 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 	}
 	run := runs[0]
 	if run.GetLeaseToken() == "" || run.GetKind() != "manual" || run.GetFreq() != "1m" || run.GetPartitionUnit() != "day" ||
-		run.GetMinLookbackSeconds() != 900 || run.GetStagingRetentionSeconds() != 72*3600 || run.GetSpaceTz() != "UTC" || run.GetLocalClose() != "" ||
-		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != "2026-10-17T01:00:00Z" || run.GetIntervalSeconds() != 3600 || run.GetLeaseTtlSeconds() != 600 ||
+		run.GetAllowedLatenessSeconds() != 900 || run.GetStagingRetentionSeconds() != 72*3600 || run.GetSpaceTz() != "UTC" || run.GetLocalClose() != "" ||
+		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != rfcMillis("2026-10-17T01:00:00Z") || run.GetLeaseTtlSeconds() != 600 ||
 		run.GetPurpose() != "data" || run.GetDirName() != "ds-1m" {
 		t.Fatalf("assignment = %v", run)
 	}
@@ -491,7 +445,7 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 	good.Unrecoverable = []*archivepb.UnrecoverableRange{{SubjectId: "BTC-USDT", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}
 	good.Partitions = []*archivepb.PartitionReport{{
 		PartitionKey: "2026-10-16", Status: "exported", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", RowCount: 100, SubjectCount: 2,
-		FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileBytes: 10, FileSha256: "abc", Columns: []string{"open", "close"}, ExportCount: 1, ExportedAt: "2026-10-17T01:05:00Z",
+		FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileBytes: 10, FileSha256: "abc", Columns: []string{"open", "close"}, ExportCount: 1, ExportedAt: rfcMillis("2026-10-17T01:05:00Z"),
 	}}
 	rsp, _ := h.worker.CompleteArchiveRun(ctx, good)
 	requireOK(t, rsp.GetRetInfo())
@@ -537,7 +491,7 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 	}
 	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: runs[0].GetRunId(), LeaseToken: runs[0].GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", Status: "exported", RowCount: 100, SubjectCount: 2,
-			FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileSha256: "abc", ExportedAt: "2026-10-17T01:05:00Z"}}})
+			FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileSha256: "abc", ExportedAt: rfcMillis("2026-10-17T01:05:00Z")}}})
 	requireOK(t, done.GetRetInfo())
 	part, _ := h.mgr.GetArchivePartition(context.Background(), &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
 	if part.GetPartition().GetFileBytes() != 10 {
@@ -549,7 +503,7 @@ func TestDeleteArchiveTaskNotifiesTheWorkerAndKeepsPartitionedTasks(t *testing.T
 	h := newHarness(t)
 	ctx := context.Background()
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
-	requireOK(t, h.create("ds_1h", nil).GetRetInfo())
+	requireOK(t, h.create("ds_1h", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-01-01T00:00:00Z" }).GetRetInfo())
 	h.heartbeat("w1")
 	run := h.pull(1)[0]
 	done := &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded", Partitions: []*archivepb.PartitionReport{{
@@ -620,10 +574,10 @@ func (h *harness) trigger(now time.Time) {
 	}
 }
 
-// allRuns 按计划时刻倒序列出全部运行（含成功的 tick）。
+// allRuns 按计划时刻倒序列出全部运行（含成功的 follow）。
 func (h *harness) allRuns() []*archivepb.ArchiveRun {
 	h.t.Helper()
-	rsp, _ := h.mgr.ListArchiveRuns(context.Background(), &archivepb.ListArchiveRunsReq{IncludeTicks: true, Page: &commonpb.Page{Size: 200}})
+	rsp, _ := h.mgr.ListArchiveRuns(context.Background(), &archivepb.ListArchiveRunsReq{IncludeFollow: true, Page: &commonpb.Page{Size: 200}})
 	return rsp.GetRuns()
 }
 
@@ -636,153 +590,58 @@ func (h *harness) task(space, dataset string) store.Task {
 	return task
 }
 
-func TestTriggerGeneratesReviewsAndTicksByBoundary(t *testing.T) {
+// 每分钟给启用、空闲的任务生成一条 follow；整点窗口内照常生成；follow 成功推进最近成功时间，成功的只保留 24 小时。
+func TestTriggerGeneratesOneFollowRunPerIdleTaskEveryMinute(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	requireOK(t, h.createOnly("ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-15T00:00:00Z" }).GetRetInfo())
+	h.datasets.datasets["crypto/ds_1d"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
+	requireOK(t, h.createOnly("ds_1d", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-01-01T00:00:00Z" }).GetRetInfo())
 
-	// 新任务首次检查即复核（拉取边界一并记下）。
-	h.trigger(at(1, 10, 25))
+	// 整点窗口内（01:59:25）照常生成，日线任务同样每分钟一条。
+	h.trigger(at(1, 59, 25))
 	runs := h.allRuns()
-	if len(runs) != 1 || runs[0].GetKind() != "scheduled" || runs[0].GetRangeStart() != "" || runs[0].GetScheduledAt() != "2026-10-17T01:10:25Z" {
+	if len(runs) != 2 || runs[0].GetKind() != "follow" || runs[1].GetKind() != "follow" || runs[0].GetScheduledAt() != rfcMillis("2026-10-17T01:59:25Z") || runs[0].GetRangeStart() != "" {
 		t.Fatalf("首次检查 = %v", runs)
 	}
-	if task := h.task("crypto", "ds_1m"); !task.LastBoundary.Equal(at(1, 10, 0)) || !task.LastReview.Equal(at(0, 34, 0)) {
-		t.Fatalf("边界 = %s %s", task.LastBoundary, task.LastReview)
+	// 上一条还在排队：同一分钟或下一分钟都不再生成。
+	h.trigger(at(2, 0, 25))
+	if len(h.allRuns()) != 2 {
+		t.Fatal("有排队中的运行时不应生成 follow")
 	}
-	// 同一分钟再检查一次：不到点，不写记录。
-	h.trigger(at(1, 10, 40))
-	if len(h.allRuns()) != 1 {
-		t.Fatal("不到点不应写运行记录")
-	}
-	// 复核还在运行：到点也跳过，累加跳过次数，边界不前进。
 	h.heartbeat("w1")
-	review := h.pull(1)[0]
-	if review.GetKind() != "scheduled" || review.GetBackfillFrom() != "2026-10-15T00:00:00Z" || review.GetIntervalSeconds() != 3600 {
-		t.Fatalf("复核下发 = %v", review)
+	follow := h.pull(10)
+	if len(follow) != 2 || follow[0].GetKind() != "follow" || follow[0].GetAllowedLatenessSeconds() != 900 || follow[0].GetRangeStart() != "" {
+		t.Fatalf("follow 下发 = %v", follow)
 	}
-	h.trigger(at(1, 11, 25))
-	h.trigger(at(1, 12, 25))
-	if task := h.task("crypto", "ds_1m"); task.ConsecutiveSkips != 2 || !task.LastBoundary.Equal(at(1, 10, 0)) || len(h.allRuns()) != 1 {
-		t.Fatalf("跳过后 = %+v", task)
+	// 运行中也不生成。
+	h.trigger(at(2, 1, 25))
+	if len(h.allRuns()) != 2 {
+		t.Fatal("有运行中的运行时不应生成 follow")
 	}
-	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: review.GetRunId(), LeaseToken: review.GetLeaseToken(), Status: "succeeded"})
-	requireOK(t, done.GetRetInfo())
-	reviewed := h.task("crypto", "ds_1m")
-	if !reviewed.LastSuccessAt.Equal(at(1, 10, 40)) || !reviewed.BackfillFrom.IsZero() {
-		t.Fatalf("复核成功推进最近成功时间并清回补起点: %+v", reviewed)
+	for _, run := range follow {
+		rsp, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded"})
+		requireOK(t, rsp.GetRetInfo())
 	}
-
-	// 运行结束后的到点拉取从上次边界往前 2 根读起，补上跳过的那几分钟。
-	h.trigger(at(1, 13, 25))
-	tick := h.allRuns()[0]
-	if tick.GetKind() != "tick" || tick.GetRangeStart() != "2026-10-17T01:08:00Z" || tick.GetRangeEnd() != "2026-10-17T01:13:25Z" {
-		t.Fatalf("tick = %v", tick)
+	if task := h.task("crypto", "ds_1m"); !task.LastSuccessAt.Equal(at(2, 0, 25)) || !task.BackfillFrom.Equal(time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("follow 成功推进最近成功时间、不动回补起点: %+v", task)
 	}
-	if task := h.task("crypto", "ds_1m"); task.ConsecutiveSkips != 0 || !task.LastBoundary.Equal(at(1, 13, 0)) || !task.LastReview.Equal(at(0, 34, 0)) {
-		t.Fatalf("tick 后 = %+v", task)
-	}
-	// tick 下发区间；成功后不推进最近成功时间。
-	assigned := h.finishQueued()
-	if len(assigned) != 1 || assigned[0].GetKind() != "tick" || assigned[0].GetRangeStart() != "2026-10-17T01:08:00Z" || assigned[0].GetRangeEnd() != "2026-10-17T01:13:25Z" {
-		t.Fatalf("tick 下发 = %v", assigned)
-	}
-	if task := h.task("crypto", "ds_1m"); !task.LastSuccessAt.Equal(reviewed.LastSuccessAt) {
-		t.Fatalf("tick 推进了最近成功时间: %s → %s", reviewed.LastSuccessAt, task.LastSuccessAt)
-	}
-	h.trigger(at(1, 14, 25))
+	h.trigger(at(2, 2, 25))
 	h.finishQueued()
-
-	// 第 34 分：复核与拉取同时到点，只生成复核，两个边界都前进。
-	h.trigger(at(1, 34, 25))
-	if latest := h.allRuns()[0]; latest.GetKind() != "scheduled" {
-		t.Fatalf("复核与拉取同时到点只生成复核: %v", latest)
+	if len(h.allRuns()) != 4 {
+		t.Fatalf("下一分钟再生成: %v", h.allRuns())
 	}
-	if task := h.task("crypto", "ds_1m"); !task.LastBoundary.Equal(at(1, 34, 0)) || !task.LastReview.Equal(at(1, 34, 0)) {
-		t.Fatalf("复核后 = %+v", task)
-	}
-	h.finishQueued()
-
-	// 整点避让区间：:58～:04 整次跳过；出了区间第一次检查补上前进的边界。
-	h.trigger(at(1, 57, 25))
-	h.finishQueued()
-	count := len(h.allRuns())
-	for _, now := range []time.Time{at(1, 58, 25), at(1, 59, 25), at(2, 0, 25), at(2, 3, 25)} {
-		h.trigger(now)
-	}
-	if len(h.allRuns()) != count {
-		t.Fatal("避让区间里不应生成运行")
-	}
-	h.trigger(at(2, 4, 25))
-	if after := h.allRuns()[0]; after.GetKind() != "tick" || after.GetRangeStart() != "2026-10-17T01:55:00Z" || after.GetRangeEnd() != "2026-10-17T02:04:25Z" {
-		t.Fatalf("出避让区间的到点拉取 = %v", after)
-	}
-	h.finishQueued()
-
-	// 运行列表默认不列成功的 tick。
-	listed, _ := h.mgr.ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{})
-	if len(listed.GetRuns()) != 2 {
+	// 运行列表默认不列成功的 follow。
+	if listed, _ := h.mgr.ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{}); len(listed.GetRuns()) != 0 {
 		t.Fatalf("默认列表 = %v", listed.GetRuns())
 	}
-	for _, run := range listed.GetRuns() {
-		if run.GetKind() == "tick" {
-			t.Fatalf("默认列表不应有成功的 tick: %v", run)
-		}
-	}
-
-	// 成功的 tick 只保留 24 小时，复核保留 30 天。
+	// 成功的 follow 只保留 24 小时。
 	h.now = at(2, 10, 0).Add(24 * time.Hour)
 	if err := h.svc.Maintain(ctx); err != nil {
 		t.Fatal(err)
 	}
-	left := h.allRuns()
-	if len(left) != 2 {
-		t.Fatalf("应只剩两次复核: %v", left)
-	}
-	for _, run := range left {
-		if run.GetKind() != "scheduled" {
-			t.Fatalf("超过 24 小时的成功 tick 应被清理: %v", run)
-		}
-	}
-}
-
-func TestTriggerDailyTasksOnlyReviewOncePerDay(t *testing.T) {
-	h := newHarness(t)
-	h.datasets.datasets["crypto/ds_1d"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
-	h.datasets.datasets["stockcn/cn_1d"] = Dataset{SpaceID: "stockcn", DatasetID: "cn_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
-	requireOK(t, h.createOnly("ds_1d", nil).GetRetInfo())
-	requireOK(t, h.createOnly("cn_1d", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId = "stockcn" }).GetRetInfo())
-	h.trigger(at(1, 10, 25))
-	if runs := h.allRuns(); len(runs) != 2 || runs[0].GetKind() != "scheduled" || runs[1].GetKind() != "scheduled" {
-		t.Fatalf("首次检查都复核: %v", runs)
-	}
-	h.finishQueued()
-	// 当天之后的检查都不到点（包括第 34 分）；A 股 10-17 的收盘在 07:00 UTC，首次复核时已经记下 10-16 的收盘。
-	for _, now := range []time.Time{at(1, 34, 25), at(6, 59, 25)} {
-		h.trigger(now)
-	}
-	if runs := h.allRuns(); len(runs) != 2 {
-		t.Fatalf("不到点不应再生成运行: %v", runs)
-	}
-	// A 股 15:00（07:00 UTC）收盘：15:04:25 复核。
-	h.trigger(at(7, 4, 25))
-	if runs := h.allRuns(); len(runs) != 3 || runs[0].GetSpaceId() != "stockcn" || runs[0].GetKind() != "scheduled" {
-		t.Fatalf("stockcn 1d 收盘后复核: %v", runs)
-	}
-	h.finishQueued()
-	h.trigger(at(23, 59, 25))
-	// crypto 第二天 00:04:25 复核。
-	h.trigger(time.Date(2026, 10, 18, 0, 4, 25, 0, time.UTC))
-	if runs := h.allRuns(); len(runs) != 4 || runs[0].GetSpaceId() != "crypto" || runs[0].GetKind() != "scheduled" {
-		t.Fatalf("crypto 1d 第二天复核: %v", runs)
-	}
-	for _, run := range h.allRuns() {
-		if run.GetKind() == "tick" {
-			t.Fatalf("1d 只生成复核: %v", run)
-		}
-	}
-	if task := h.task("stockcn", "cn_1d"); !task.LastBoundary.Equal(at(7, 0, 0)) || !task.LastReview.Equal(at(7, 0, 0)) {
-		t.Fatalf("stockcn 1d 边界 = %+v", task)
+	if left := h.allRuns(); len(left) != 0 {
+		t.Fatalf("超过 24 小时的成功 follow 应被清理: %v", left)
 	}
 }
 
@@ -816,9 +675,9 @@ func TestMaintainRefreshesDatasetInfoOncePerHour(t *testing.T) {
 func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	base := store.Task{SpaceID: "crypto", DatasetID: "ds", Freq: "1m", PartitionUnit: "day", Retention: "168h", Status: store.StatusEnabled,
-		IntervalSeconds: 3600, CreatedAt: now.Add(-24 * time.Hour), LastSuccessAt: now.Add(-10 * time.Minute)}
+		CreatedAt: now.Add(-24 * time.Hour), LastSuccessAt: now.Add(-10 * time.Minute)}
 	eval := func(mutate func(*healthInput)) (string, string) {
-		in := healthInput{Now: now, Task: base, Lookback: 15 * time.Minute, SpaceTZ: "UTC"}
+		in := healthInput{Now: now, Task: base, Lateness: 15 * time.Minute, SpaceTZ: "UTC"}
 		if mutate != nil {
 			mutate(&in)
 		}
@@ -830,19 +689,9 @@ func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 	if level, _ := eval(func(in *healthInput) { in.Task.Status = store.StatusPaused }); level != HealthPaused {
 		t.Fatalf("paused = %s", level)
 	}
-	// 复核失败后跟着一次成功的到点拉取：仍要提示复核失败。
-	if level, reason := eval(func(in *healthInput) {
-		in.LastRun = &store.Run{RunID: "tick", Kind: store.KindTick, Status: store.RunSucceeded}
-		in.LastReview = &store.Run{RunID: "review", Kind: store.KindScheduled, Status: store.RunFailed, Message: "boom"}
-	}); level != HealthWarning || !strings.Contains(reason, "最近一次复核失败：boom") {
-		t.Fatalf("failed review hidden by tick = %s %s", level, reason)
-	}
 	// 168h 保留期：最近成功超过 120h（保留期 − 2 天）→ 异常。
 	if level, reason := eval(func(in *healthInput) { in.Task.LastSuccessAt = now.Add(-121 * time.Hour) }); level != HealthError || !strings.Contains(reason, "保留期") {
 		t.Fatalf("stale success = %s %s", level, reason)
-	}
-	if level, _ := eval(func(in *healthInput) { in.Task.LastSuccessAt = now.Add(-119 * time.Hour) }); level != HealthOK {
-		t.Fatalf("just inside = %s", level)
 	}
 	// 从未成功过：按创建时间算。
 	if level, _ := eval(func(in *healthInput) {
@@ -851,12 +700,12 @@ func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 	}); level != HealthError {
 		t.Fatalf("never succeeded = %s", level)
 	}
-	// 保留期不限的任务不按保留期判断。
-	if level, _ := eval(func(in *healthInput) {
+	// 保留期不限的任务不按保留期判断（仍有“最近成功跟随超过 30 分钟”的需关注）。
+	if level, reason := eval(func(in *healthInput) {
 		in.Task.Retention = "forever"
 		in.Task.LastSuccessAt = now.Add(-1000 * time.Hour)
-	}); level != HealthOK {
-		t.Fatalf("forever = %s", level)
+	}); level != HealthWarning || strings.Contains(reason, "保留期") {
+		t.Fatalf("forever = %s %s", level, reason)
 	}
 	// 无法补齐的区间按任务累积：不论最近一次运行有没有，都一直显示异常。
 	if level, _ := eval(func(in *healthInput) { in.Task.Unrecoverable = []store.Unrecoverable{{StartTime: "a", EndTime: "b"}} }); level != HealthError {
@@ -866,9 +715,8 @@ func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 		t.Fatalf("读不到保留期时应显示异常，不能当永久: %s", level)
 	}
 	// 有到期运行时 worker 离线超过 30 分钟 → 异常；30 分钟内只是排队。
-	queuedLong := now.Add(-45 * time.Minute)
 	if level, _ := eval(func(in *healthInput) {
-		in.OldestQueued, in.WorkerLastSeen = queuedLong, now.Add(-40*time.Minute)
+		in.OldestQueued, in.WorkerLastSeen = now.Add(-45*time.Minute), now.Add(-40*time.Minute)
 	}); level != HealthError {
 		t.Fatalf("worker offline = %s", level)
 	}
@@ -877,39 +725,43 @@ func TestHealthLevelsFollowTheDesignTable(t *testing.T) {
 	}); level != HealthOK {
 		t.Fatalf("recently offline = %s", level)
 	}
-	// 需关注。
-	failedRun := &store.Run{Status: store.RunFailed, Message: "boom"}
-	if level, reason := eval(func(in *healthInput) { in.LastRun = failedRun }); level != HealthWarning || !strings.Contains(reason, "boom") {
+	// 需关注：最近一次运行（任何种类）失败。
+	if level, reason := eval(func(in *healthInput) {
+		in.LastRun = &store.Run{Kind: store.KindRange, Status: store.RunFailed, Message: "boom"}
+	}); level != HealthWarning || !strings.Contains(reason, "最近一次运行失败：boom") {
 		t.Fatalf("failed = %s %s", level, reason)
 	}
-	if level, _ := eval(func(in *healthInput) { in.Task.ConsecutiveSkips = 10 }); level != HealthWarning {
-		t.Fatalf("skips = %s", level)
+	// 需关注：最近一次成功的跟随距今超过 30 分钟；从未成功时按创建时间。
+	if level, reason := eval(func(in *healthInput) { in.Task.LastSuccessAt = now.Add(-31 * time.Minute) }); level != HealthWarning || !strings.Contains(reason, "跟随") {
+		t.Fatalf("follow stale = %s %s", level, reason)
 	}
-	if level, _ := eval(func(in *healthInput) { in.Task.ConsecutiveSkips = 9 }); level != HealthOK {
-		t.Fatalf("skips 9 = %s", level)
+	if level, _ := eval(func(in *healthInput) { in.Task.LastSuccessAt = now.Add(-29 * time.Minute) }); level != HealthOK {
+		t.Fatalf("follow fresh = %s", level)
 	}
-	// 复核耗时超过复核间隔（1 小时）的一半 → 需关注；只看复核与手动运行。
-	slow := &store.Run{Kind: store.KindScheduled, Status: store.RunSucceeded, StartedAt: now.Add(-40 * time.Minute), FinishedAt: now.Add(-5 * time.Minute)}
-	if level, reason := eval(func(in *healthInput) { in.LastReview = slow }); level != HealthWarning || !strings.Contains(reason, "一半") {
-		t.Fatalf("slow = %s %s", level, reason)
+	if level, _ := eval(func(in *healthInput) {
+		in.Task.LastSuccessAt, in.Task.CreatedAt = time.Time{}, now.Add(-10*time.Minute)
+	}); level != HealthOK {
+		t.Fatalf("刚创建的任务 = %s", level)
 	}
-	if level, _ := eval(func(in *healthInput) { in.LastRun = slow }); level != HealthOK {
-		t.Fatalf("耗时规则不看最近一次运行（多半是 tick）: %s", level)
-	}
-	fast := &store.Run{Kind: store.KindScheduled, Status: store.RunSucceeded, StartedAt: now.Add(-20 * time.Minute), FinishedAt: now.Add(-5 * time.Minute)}
-	if level, _ := eval(func(in *healthInput) { in.LastReview = fast }); level != HealthOK {
-		t.Fatalf("fast = %s", level)
-	}
-	// 分区到时间（日末 + 回看 + 2 个复核间隔 = 02:15）仍未导出。
+	// 需关注：分区到时间（日末 + 允许迟到 15 分钟）超过 1 小时（01:15）仍未导出。
 	open := store.Partition{PartitionKey: "2026-10-16", RangeStart: time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), RangeEnd: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)}
-	if level, reason := eval(func(in *healthInput) { in.OpenParts = []store.Partition{open} }); level != HealthWarning || !strings.Contains(reason, "未导出") {
+	if level, reason := eval(func(in *healthInput) { in.OpenParts = []store.Partition{open} }); level != HealthWarning || !strings.Contains(reason, "超过 1 小时仍未导出") {
 		t.Fatalf("overdue partition = %s %s", level, reason)
 	}
 	if level, _ := eval(func(in *healthInput) {
-		in.Now = time.Date(2026, 10, 17, 2, 10, 0, 0, time.UTC)
+		in.Now = time.Date(2026, 10, 17, 1, 10, 0, 0, time.UTC)
+		in.Task.LastSuccessAt = in.Now.Add(-time.Minute)
 		in.OpenParts = []store.Partition{open}
 	}); level != HealthOK {
 		t.Fatalf("not yet overdue = %s", level)
+	}
+	// 整段重读进行中（最近一次成功的 follow 消息带重读进度）不判到期未导出；最近一次运行是排队中的 follow 也一样。
+	if level, reason := eval(func(in *healthInput) {
+		in.OpenParts = []store.Partition{open}
+		in.LastRun = &store.Run{Kind: store.KindFollow, Status: store.RunQueued}
+		in.LastFollow = &store.Run{Kind: store.KindFollow, Status: store.RunSucceeded, Message: "整段重读进度：已读到 2026-10-12T00:00:00Z，截止 2026-10-17T11:00:00Z"}
+	}); level != HealthOK {
+		t.Fatalf("重读进行中不判未导出 = %s %s", level, reason)
 	}
 	// 异常优先，原因合并。
 	if level, reason := eval(func(in *healthInput) {
@@ -1013,31 +865,30 @@ func TestShrinkingPartitionReportIsRejected(t *testing.T) {
 	}
 }
 
-func TestSuccessfulRunClearsBackfillAndAssignmentCarriesRegistry(t *testing.T) {
+func TestSuccessfulRunKeepsBackfillAndAssignmentCarriesRegistry(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	requireOK(t, h.create("ds_1m", func(r *archivepb.CreateArchiveTaskReq) {
-		r.BackfillFrom = h.now.Add(-48 * time.Hour).Format(time.RFC3339)
-	}).GetRetInfo())
+	backfill := h.now.Add(-48 * time.Hour).Format(time.RFC3339)
+	requireOK(t, h.create("ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = backfill }).GetRetInfo())
 	h.heartbeat("w1")
 	run := h.pull(1)[0]
-	if run.GetBackfillFrom() == "" || run.GetLastSuccessAt() != "" || run.GetTaskId() == "" {
-		t.Fatalf("首次运行应带回补起点、没有水位: %v", run)
+	if run.GetBackfillFrom() != backfill || run.GetLastSuccessAt() != 0 || run.GetTaskId() == "" {
+		t.Fatalf("首次运行应带回补起点、没有最近成功时间: %v", run)
 	}
 	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
-			FilePath: "f", FileSha256: "abc", RowCount: 10, SubjectCount: 1, FinalizedAt: "2026-10-20T00:00:00Z"}},
+			FilePath: "f", FileSha256: "abc", RowCount: 10, SubjectCount: 1, FinalizedAt: rfcMillis("2026-10-20T00:00:00Z")}},
 		Unrecoverable: []*archivepb.UnrecoverableRange{{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}})
 	requireOK(t, r.GetRetInfo())
 	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
-	if !task.BackfillFrom.IsZero() || task.LastSuccessAt.IsZero() || len(task.Unrecoverable) != 1 {
-		t.Fatalf("成功后应清掉回补起点、记下水位并累积无法补齐区间: %+v", task)
+	if fmtRFC(task.BackfillFrom) != backfill || task.LastSuccessAt.IsZero() || len(task.Unrecoverable) != 1 {
+		t.Fatalf("成功后保留回补起点、记下最近成功并累积无法补齐区间: %+v", task)
 	}
 	now, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, now.GetRetInfo())
 	next := h.pull(1)[0]
-	if next.GetBackfillFrom() != "" || next.GetLastSuccessAt() == "" || len(next.GetRegisteredPartitions()) != 1 || next.GetRegisteredPartitions()[0].GetStatus() != "final" {
-		t.Fatalf("下发应带水位与分区登记、不再带回补起点: %v", next)
+	if next.GetBackfillFrom() != backfill || next.GetLastSuccessAt() == 0 || len(next.GetRegisteredPartitions()) != 1 || next.GetRegisteredPartitions()[0].GetStatus() != "final" {
+		t.Fatalf("下发应带回补起点、最近成功时间与分区登记: %v", next)
 	}
 	list, _ := h.mgr.ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
 	if got := list.GetTasks()[0]; len(got.GetUnrecoverable()) != 1 || got.GetHealth() != HealthError {
@@ -1078,14 +929,118 @@ func TestTaskCarriesDatasetMetadataToTheWorkerAndRefreshesIt(t *testing.T) {
 	}
 }
 
-func TestPullEveryBarsStepIsAtMostOneDay(t *testing.T) {
-	if _, err := pullEveryBars("1h", 24, 1); err != nil {
-		t.Fatalf("1h × 24 = 1 天应允许: %v", err)
+func TestStartArchiveImportNeedsATaskAnOnlineWorkerAndNoBlockingRun(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	req := &archivepb.StartArchiveImportReq{SpaceId: "crypto", DatasetId: "ds_1m"}
+	noTask, _ := h.mgr.StartArchiveImport(ctx, req)
+	requireCode(t, noTask.GetRetInfo(), commonpb.ErrorCode_NOT_FOUND, "")
+	requireOK(t, h.createOnly("ds_1m", nil).GetRetInfo())
+	offline, _ := h.mgr.StartArchiveImport(ctx, req)
+	requireCode(t, offline.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "不在线")
+	h.heartbeat("archive-worker@host-a")
+	// 排队中的 follow 让位给导入。
+	h.trigger(h.now)
+	ok, _ := h.mgr.StartArchiveImport(ctx, req)
+	requireOK(t, ok.GetRetInfo())
+	if ok.GetWorkerId() != "archive-worker@host-a" || ok.GetRun().GetKind() != store.KindImport || ok.GetRun().GetStatus() != store.RunQueued {
+		t.Fatalf("start = %v", ok)
 	}
-	if _, err := pullEveryBars("4h", 7, 1); err == nil || !strings.Contains(err.Error(), "不能超过 1 天") {
-		t.Fatalf("4h × 7 超过 1 天应拒绝: %v", err)
+	queued, _ := h.mgr.ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{Status: "queued", IncludeFollow: true})
+	if len(queued.GetRuns()) != 1 || queued.GetRuns()[0].GetKind() != store.KindImport {
+		t.Fatalf("排队中的 follow 应被取消: %v", queued.GetRuns())
 	}
-	if n, err := pullEveryBars("1d", 5, 1); err != nil || n != 1 {
-		t.Fatalf("1d 的 N 统一为 1: %d %v", n, err)
+	// 已有排队中的导入：冲突并写明挡住它的运行。
+	again, _ := h.mgr.StartArchiveImport(ctx, req)
+	requireCode(t, again.GetRetInfo(), commonpb.ErrorCode_CONFLICT, ok.GetRun().GetRunId())
+	// 导入占住任务：期间不生成 follow。
+	h.trigger(h.now.Add(time.Minute))
+	if all := h.allRuns(); len(all) != 2 {
+		t.Fatalf("导入排队期间不应生成 follow: %v", all)
 	}
+}
+
+func TestImportRunCarriesAllPartitionsAndDoesNotAdvanceLastSuccess(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo()) // 保留期 168h
+	h.heartbeat("w1")
+	first := h.pull(1)[0]
+	old := &archivepb.PartitionReport{PartitionKey: "2026-01-05", Status: "final", RangeStart: "2026-01-05T00:00:00Z", RangeEnd: "2026-01-06T00:00:00Z",
+		FilePath: "crypto/collect/x/2026/20260105.csv.gz", FileSha256: "old", RowCount: 5, SubjectCount: 1, FinalizedAt: rfcMillis("2026-02-01T00:00:00Z")}
+	recent := &archivepb.PartitionReport{PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
+		FilePath: "crypto/collect/x/2026/20261016.csv.gz", FileSha256: "new", RowCount: 5, SubjectCount: 1, FinalizedAt: rfcMillis("2026-10-17T00:30:00Z")}
+	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: first.GetRunId(), LeaseToken: first.GetLeaseToken(), Status: "succeeded",
+		Partitions: []*archivepb.PartitionReport{old, recent}})
+	requireOK(t, r.GetRetInfo())
+	before, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
+
+	// follow 只下发保留期内的登记（没启用对象存储）。
+	h.trigger(h.now.Add(time.Minute))
+	follow := h.pull(1)[0]
+	if follow.GetKind() != store.KindFollow || len(follow.GetRegisteredPartitions()) != 1 {
+		t.Fatalf("follow 应只带保留期内的登记: %v", follow.GetRegisteredPartitions())
+	}
+	r, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: follow.GetRunId(), LeaseToken: follow.GetLeaseToken(), Status: "canceled"})
+	requireOK(t, r.GetRetInfo())
+
+	h.now = h.now.Add(time.Hour)
+	h.heartbeat("w1")
+	imp, _ := h.mgr.StartArchiveImport(ctx, &archivepb.StartArchiveImportReq{SpaceId: "crypto", DatasetId: "ds_1m"})
+	requireOK(t, imp.GetRetInfo())
+	assigned := h.pull(1)
+	if len(assigned) != 1 || assigned[0].GetKind() != store.KindImport {
+		t.Fatalf("assignment = %v", assigned)
+	}
+	if regs := assigned[0].GetRegisteredPartitions(); len(regs) != 2 || regs[0].GetPartitionKey() != "2026-01-05" {
+		t.Fatalf("导入应下发全部登记: %v", regs)
+	}
+	r, _ = h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: assigned[0].GetRunId(), LeaseToken: assigned[0].GetLeaseToken(),
+		Status: "succeeded", Message: "导入 3 行", RowsAdded: 3})
+	requireOK(t, r.GetRetInfo())
+	after, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
+	if !after.LastSuccessAt.Equal(before.LastSuccessAt) {
+		t.Fatalf("导入不应更新最近成功时间: %s → %s", before.LastSuccessAt, after.LastSuccessAt)
+	}
+	run, _ := h.mgr.GetArchiveRun(ctx, &archivepb.GetArchiveRunReq{RunId: assigned[0].GetRunId()})
+	if run.GetRun().GetStatus() != store.RunSucceeded || run.GetRun().GetRowsAdded() != 3 {
+		t.Fatalf("run = %v", run.GetRun())
+	}
+}
+
+func TestClearArchiveUnrecoverableRemovesOnlyWholeRangesInside(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	h.heartbeat("w1")
+	run := h.pull(1)[0]
+	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
+		Unrecoverable: []*archivepb.UnrecoverableRange{
+			{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"},
+			{StartTime: "2026-10-03T00:00:00Z", EndTime: "2026-10-05T00:00:00Z"},
+			{StartTime: "2026-09-30T00:00:00Z", EndTime: "2026-10-01T12:00:00Z"},
+		}})
+	requireOK(t, r.GetRetInfo())
+	bad, _ := h.mgr.ClearArchiveUnrecoverable(ctx, &archivepb.ClearArchiveUnrecoverableReq{SpaceId: "crypto", DatasetId: "ds_1m", Start: "2026-10-05T00:00:00Z", End: "2026-10-01T00:00:00Z"})
+	requireCode(t, bad.GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "start")
+	rsp, _ := h.mgr.ClearArchiveUnrecoverable(ctx, &archivepb.ClearArchiveUnrecoverableReq{SpaceId: "crypto", DatasetId: "ds_1m", Start: "2026-10-01T00:00:00Z", End: "2026-10-05T00:00:00Z"})
+	requireOK(t, rsp.GetRetInfo())
+	if len(rsp.GetRemoved()) != 2 {
+		t.Fatalf("应删掉整段落在范围内的两条: %v", rsp.GetRemoved())
+	}
+	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
+	if len(task.Unrecoverable) != 1 || task.Unrecoverable[0].StartTime != "2026-09-30T00:00:00Z" {
+		t.Fatalf("跨出范围的区间应保留: %+v", task.Unrecoverable)
+	}
+	missing, _ := h.mgr.ClearArchiveUnrecoverable(ctx, &archivepb.ClearArchiveUnrecoverableReq{SpaceId: "crypto", DatasetId: "nope", Start: "2026-10-01T00:00:00Z", End: "2026-10-05T00:00:00Z"})
+	requireCode(t, missing.GetRetInfo(), commonpb.ErrorCode_NOT_FOUND, "")
+}
+
+// rfcMillis 把测试里写的 RFC3339 时刻换成 Unix 毫秒。
+func rfcMillis(text string) int64 {
+	at, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		panic(err)
+	}
+	return at.UnixMilli()
 }

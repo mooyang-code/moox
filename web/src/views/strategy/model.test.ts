@@ -24,8 +24,8 @@ describe("strategy model helpers", () => {
     const snapshot = {
       targets: [{ instrument_id: "BTC-USDT", target_weight: "0.5" }],
       session_id: "s1",
-      bar_end_time: "2026-10-01T01:00:00Z",
-      valid_until: "2026-10-01T03:00:00Z",
+      bar_end_time: "1790816400000",
+      valid_until: "1790823600000",
       result_id: "r1"
     };
     expect(deriveTargetState(instance, snapshot, Date.parse("2026-10-01T02:00:00Z"))).toBe("valid");
@@ -62,16 +62,16 @@ describe("strategy model helpers", () => {
     expect(summary.notes).toEqual(["n"]);
     expect(parseSummary("not json").rules).toEqual({});
     const resolved = parseResolved(
-      '{"market":{"select":"both","prefer":"swap"},"tasks":{"swap":{"view_id":"v2","factor_task_id":"t2"},"spot":{"view_id":"v","factor_task_id":"t1"}},"bar":"1h","calendar":"crypto_24x7","columns":{"ma_20":{"source":"factor","factor_id":"ma","definition_hash":"sha256:x"},"close":{"source":"dataset"}}}'
+      '{"market":{"select":"both","prefer":"swap"},"tasks":{"swap":{"dataset_id":"v2","factor_task_id":"t2"},"spot":{"dataset_id":"v","factor_task_id":"t1"}},"bar":"1h","calendar":"crypto_24x7","columns":{"ma_20":{"source":"factor","factor_id":"ma","definition_hash":"sha256:x"},"close":{"source":"dataset"}}}'
     );
     expect(resolved?.columns.map(column => column.name)).toEqual(["close", "ma_20"]);
     expect(resolved?.columns[1]).toMatchObject({ factor_id: "ma", definition_hash: "sha256:x" });
     expect(resolved?.market).toEqual({ select: "both", prefer: "swap" });
-    expect(resolved?.tasks.map(task => `${task.market}:${task.view_id}`)).toEqual(["spot:v", "swap:v2"]);
+    expect(resolved?.tasks.map(task => `${task.market}:${task.dataset_id}`)).toEqual(["spot:v", "swap:v2"]);
     expect(parseResolved("{}")).toBeNull();
     const aged = parseResolved(
       JSON.stringify({
-        tasks: { spot: { view_id: "v" } },
+        tasks: { spot: { dataset_id: "v" } },
         rule_ages: { b: { max_bars: 30, all_markets: true }, a: { min_bars: 5 } }
       })
     );
@@ -109,14 +109,14 @@ describe("strategy model helpers", () => {
 
 describe("result insights", () => {
   const base = { summary_json: "{}", skip_reason: "", session_id: "s1" };
-  const at = (minute: number) => `2026-10-01T01:0${minute}:00Z`;
+  const at = (minute: number) => String(Date.parse(`2026-10-01T01:0${minute}:00Z`));
   const ok = (id: string, minute: number, ids: string[], delaySec = 2, session_id = "s1") => ({
     ...base,
     session_id,
     result_id: id,
     status: "ok",
     bar_end_time: at(minute),
-    created_at: new Date(Date.parse(at(minute)) + delaySec * 1000).toISOString(),
+    created_at: String(Number(at(minute)) + delaySec * 1000),
     targets: ids.map(instrument_id => ({ instrument_id, target_weight: "0.2" }))
   });
 

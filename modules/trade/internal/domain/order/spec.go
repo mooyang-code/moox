@@ -10,9 +10,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-var ErrInvalidSpec = errors.New("trade: invalid order specification")
+var ErrInvalidSpec = errors.New("订单参数不合法")
 
-var ErrReferencePriceStale = errors.New("reference price is stale")
+var ErrReferencePriceStale = errors.New("参考价已过期")
 
 type ClientOrderSpec struct {
 	TradingAccountID string
@@ -40,34 +40,34 @@ type OrderOwner struct {
 	Type             OwnerType
 	OwnerID          string
 	LogicalAccountID string
-	RunnerID         *string
+	InstanceID       *string
 }
 
 func (o OrderOwner) Validate() error {
 	if strings.TrimSpace(string(o.Type)) == "" ||
 		strings.TrimSpace(o.OwnerID) == "" {
-		return invalidSpec("missing order ownership")
+		return invalidSpec("缺少订单归属")
 	}
 	switch o.Type {
 	case OwnerTarget:
 		if strings.TrimSpace(o.LogicalAccountID) == "" ||
-			o.RunnerID == nil || strings.TrimSpace(*o.RunnerID) == "" {
-			return invalidSpec("TARGET requires logical account and runner ownership")
+			o.InstanceID == nil || strings.TrimSpace(*o.InstanceID) == "" {
+			return invalidSpec("目标单必须带组合账户与策略实例")
 		}
 	case OwnerOperator:
-		if strings.TrimSpace(o.LogicalAccountID) == "" || o.RunnerID != nil {
-			return invalidSpec("OPERATOR requires logical account without runner")
+		if strings.TrimSpace(o.LogicalAccountID) == "" || o.InstanceID != nil {
+			return invalidSpec("人工单必须带组合账户、不能带策略实例")
 		}
 	case OwnerExternal:
-		if o.RunnerID != nil {
-			return invalidSpec("EXTERNAL cannot have runner ownership")
+		if o.InstanceID != nil {
+			return invalidSpec("外部单不能带策略实例")
 		}
 	case OwnerSystem:
-		if strings.TrimSpace(o.LogicalAccountID) == "" || o.RunnerID != nil {
-			return invalidSpec("SYSTEM requires logical account without runner")
+		if strings.TrimSpace(o.LogicalAccountID) == "" || o.InstanceID != nil {
+			return invalidSpec("系统单必须带组合账户、不能带策略实例")
 		}
 	default:
-		return invalidSpec("unsupported order owner type")
+		return invalidSpec("不支持的订单归属类型")
 	}
 	return nil
 }
@@ -93,22 +93,22 @@ func (s OrderSpec) Validate(
 	if strings.TrimSpace(s.TradingAccountID) == "" ||
 		strings.TrimSpace(s.ClientOrderID) == "" ||
 		strings.TrimSpace(s.InstrumentID) == "" {
-		return invalidSpec("missing identity")
+		return invalidSpec("缺少执行账户、客户端单号或标的")
 	}
 	if err := s.Owner.Validate(); err != nil {
 		return err
 	}
 	if !market.Valid() {
-		return invalidSpec("unsupported market type")
+		return invalidSpec("不支持的市场类型")
 	}
 	if !s.Side.Valid() {
-		return invalidSpec("unsupported side")
+		return invalidSpec("不支持的买卖方向")
 	}
 	if s.Quantity.Cmp(shared.Zero()) <= 0 {
-		return invalidSpec("quantity must be positive")
+		return invalidSpec("数量必须大于 0")
 	}
 	if s.ReferencePrice.Cmp(shared.Zero()) <= 0 {
-		return invalidSpec("reference price must be positive")
+		return invalidSpec("参考价必须大于 0")
 	}
 	age := now.Sub(s.ReferencePriceAt)
 	if maxReferenceAge <= 0 || s.ReferencePriceAt.IsZero() || age < 0 || age > maxReferenceAge {
@@ -118,25 +118,25 @@ func (s OrderSpec) Validate(
 	switch s.Type {
 	case exchange.OrderTypeMarket:
 		if s.LimitPrice != nil || s.FillPolicy != exchange.FillPolicyUnspecified {
-			return invalidSpec("MARKET cannot have limit price or time in force")
+			return invalidSpec("市价单不能带限价或有效方式")
 		}
 	case exchange.OrderTypeLimit:
 		if s.LimitPrice == nil || s.LimitPrice.Cmp(shared.Zero()) <= 0 {
-			return invalidSpec("LIMIT requires a positive limit price")
+			return invalidSpec("限价单必须带大于 0 的限价")
 		}
 		if !s.FillPolicy.ValidForLimit() {
-			return invalidSpec("LIMIT requires GTC, IOC, or FOK")
+			return invalidSpec("限价单的有效方式必须是 GTC、IOC 或 FOK")
 		}
 	default:
-		return invalidSpec("unsupported order type")
+		return invalidSpec("不支持的订单类型")
 	}
 
 	if rule := exchange.RuleFor(market); market.Valid() {
 		if s.PositionSide != rule.PositionSide {
-			return invalidSpec("position side does not match market")
+			return invalidSpec("持仓方向与市场不符")
 		}
 		if s.ReducePositionOnly && !rule.ReduceOnly {
-			return invalidSpec("market cannot have reduce-only orders")
+			return invalidSpec("这个市场不支持只减仓订单")
 		}
 	}
 	return nil

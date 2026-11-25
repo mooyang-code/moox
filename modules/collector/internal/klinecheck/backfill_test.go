@@ -107,7 +107,7 @@ func newBackfillFixtureAged(t *testing.T, ingest string, age time.Duration) (*Ba
 		Subjects: []string{"BTC-USDT", "ETH-USDT"}, Ingest: ingest,
 	}}, nil)
 	require.NoError(t, err)
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: base})
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func newBackfillFixtureAged(t *testing.T, ingest string, age time.Duration) (*Ba
 	checker := &Checker{Timeline: db.SeriesTimeline(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
 	invoker := &healingInvoker{rows: rows}
 	backfiller := &Backfiller{
-		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: invoker, BaseCtx: context.Background(), Now: func() time.Time { return now },
+		Checker: checker, Store: db.Backfill(), Routes: fakeRoutes{}, Invoker: invoker, BaseCtx: context.Background(), Now: func() time.Time { return now },
 		Functions: func(string) FunctionProvider { return fakeFunctions{} },
 	}
 	return backfiller, invoker, rows, base
@@ -178,9 +178,8 @@ func TestBackfillForceSplitsLongRangesAndRespectsInFlightLimit(t *testing.T) {
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
 }
 
-// 强制重拉可以补采早于采集计划生效点的缺口（数据来自旧的采集方式，计划时间线之外），分块完成后读回确认；
-// 不强制时同一范围没有缺口可补。
-func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
+// 普通补采可以补早于时间线起点（最早的计划生效点）的缺口（数据来自旧的采集方式或历史导入），分块完成后读回确认。
+func TestBackfillFillsAGapBeforeTheTimeline(t *testing.T) {
 	backfiller, invoker, rows, base := newBackfillFixture(t)
 	ctx := context.Background()
 	gapAt := base.Add(-30 * time.Minute)
@@ -188,12 +187,7 @@ func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
 	rows.missing["BTC-USDT"][gapAt.Unix()] = true
 	rows.mu.Unlock()
 
-	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(time.Minute)}, "manual")
-	require.NoError(t, err)
-	require.Empty(t, jobID)
-	require.Zero(t, chunks, "不强制时生效点之前不在检查范围内")
-
-	jobID, chunks, err = backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(time.Minute), Force: true}, "manual")
+	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt.Add(-time.Minute), To: gapAt.Add(time.Minute)}, "manual")
 	require.NoError(t, err)
 	require.NotEmpty(t, jobID)
 	require.Equal(t, 1, chunks)
@@ -210,7 +204,7 @@ func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
 	require.False(t, rows.missing["BTC-USDT"][gapAt.Unix()], "函数写入后复查已读到这根 K 线")
 }
 
-// 早于计划生效点的分块完成后同样读回确认：函数“成功”却没有写入时不会被当成已补齐，
+// 早于时间线起点的强制重拉分块完成后同样读回确认：函数“成功”却没有写入时不会被当成已补齐，
 // 先退回重跑，两次缺的一样才确认为行情源没有，写入根数为 0。
 func TestBackfillBeforeTheFirstPlanIsVerifiedByReadingBack(t *testing.T) {
 	backfiller, invoker, rows, base := newBackfillFixture(t)
@@ -482,64 +476,85 @@ func TestBackfillTreatsSourceEmptyFailureOfASingleBarAsAbsent(t *testing.T) {
 	require.Empty(t, auto)
 }
 
-// 纯符号映射变更（标的集合不变）没有数据集生效边界：变更之前的历史数据拒绝补采，之后的照常。
-func TestDatasetMarketRefusesHistoryBeforeAMappingOnlyChange(t *testing.T) {
+// 改过交易所符号的标的：补改名之前的区间取旧符号，之后取新符号（符号从标的时间线取，不倒查历史计划）。
+// 两份计划都已生效：第二份只改了符号（不重新登记快照），对账器在计划建立时就写下从 P 起的新符号行。
+func TestBackfillUsesTheTimelineSymbolOfTheChunk(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
 
-	base := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	const slot = 5 * time.Minute
+	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
+	base := now.Add(-2 * time.Hour).Truncate(time.Hour)
+	renamedAt := base.Add(30 * time.Minute)
 	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
-	build := func(previous *fetchplan.FetchPlanContent, external string) *fetchplan.FetchPlanContent {
+	build := func(previous *fetchplan.FetchPlanContent, external string, p time.Time) *fetchplan.FetchPlanContent {
 		desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 			Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
 			Subjects: []string{"BTC-USDT"}, ExternalSymbols: map[string]string{"BTC-USDT": external},
 		}}, nil)
 		require.NoError(t, err)
 		var prevFunctions map[string]*fetchplan.PlanFunction
-		var prevDatasets map[string]*fetchplan.PlanDatasetState
+		var prevDatasets map[string]*fetchplan.PlanDataset
 		if previous != nil {
 			prevFunctions, prevDatasets = previous.Applied()
 		}
-		content, _, err := fetchplan.BuildPlanContent(prevFunctions, prevDatasets, desired, func(string) (int64, error) { return base.Unix(), nil })
+		content, _, _, err := fetchplan.BuildPlanContent(prevFunctions, prevDatasets, desired, fetchplan.PlanTiming{Now: p})
 		require.NoError(t, err)
 		return content
 	}
-	first := build(nil, "BTCOLD")
-	second := build(first, "BTCNEW")
+	first := build(nil, "BTCOLD", base)
+	second := build(first, "BTCNEW", renamedAt)
+	change := second.Datasets["ds|1m"]
+	require.Equal(t, fetchplan.PlanActionSymbols, change.Action, "只改符号也算数据集变更")
+	require.False(t, change.Register, "标的集合没变，不重新登记快照")
+	require.Equal(t, renamedAt.Unix(), change.P)
 	for _, content := range []*fetchplan.FetchPlanContent{first, second} {
 		raw, err := json.Marshal(content)
 		require.NoError(t, err)
 		record, err := db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
 		require.NoError(t, err)
-		require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", ""))
-	}
-	backfiller := &Backfiller{Plans: db.FetchPlans(), BaseCtx: ctx, Now: func() time.Time { return base.Add(time.Hour) }}
-	datasetMarket := func(at time.Time) (*marketfetch.Plan, error) {
-		history, err := backfiller.loadPlanHistory(ctx, "crypto")
-		require.NoError(t, err)
-		return history.datasetMarket("ds", "1m", "BTC-USDT", "", at)
+		require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanApplied, "{}", "", appliedTimeline("crypto", string(raw))...))
 	}
 
-	// 更新时间是“现在”：此前的历史数据拒绝补采。
-	_, err = datasetMarket(time.Now().Add(-time.Hour))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "without an effective boundary")
-	// 变更之后的数据取新映射。
-	plan, err := datasetMarket(time.Now().Add(time.Minute))
+	rows := &fakeRows{missing: map[string]map[int64]bool{"BTC-USDT": {
+		base.Add(10 * time.Minute).Unix(): true, renamedAt.Add(10 * time.Minute).Unix(): true,
+	}}}
+	invoker := &healingInvoker{rows: rows}
+	backfiller := &Backfiller{
+		Checker: &Checker{Timeline: db.SeriesTimeline(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }},
+		Store:   db.Backfill(), Routes: fakeRoutes{}, Invoker: invoker, BaseCtx: ctx, Now: func() time.Time { return now },
+		Functions: func(string) FunctionProvider { return fakeFunctions{} },
+	}
+	_, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", DatasetID: "ds", From: base, To: base.Add(time.Hour)}, "manual")
 	require.NoError(t, err)
-	require.Equal(t, "BTCNEW", plan.ExchangeSymbol("BTC-USDT"))
+	require.Equal(t, 2, chunks)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	symbols := map[string]string{}
+	for _, event := range invoker.events {
+		item := event["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
+		symbols[item["start_time"].(string)] = item["symbol"].(string)
+	}
+	require.Equal(t, map[string]string{
+		base.Add(10 * time.Minute).Format(time.RFC3339):      "BTCOLD",
+		renamedAt.Add(10 * time.Minute).Format(time.RFC3339): "BTCNEW",
+	}, symbols)
+}
 
-	// 变更所在的计划还没生效（进度仍在更新）：UpdatedAt 不是可靠边界，任何时间的补采都拒绝。
-	raw, err := json.Marshal(build(second, "BTCNEWER"))
+// 补采的来源取当前任务：任务删掉后，指定这个数据集的补采明确拒绝；不指定数据集时跳过它，其余数据集照常。
+func TestBackfillRefusesADatasetWithoutATask(t *testing.T) {
+	backfiller, _, _, base := newBackfillFixture(t)
+	ctx := context.Background()
+	backfiller.Routes = fakeRoutes{gone: map[string]bool{"ds": true}}
+	_, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", DatasetID: "ds", From: base, To: base.Add(time.Hour)}, "manual")
+	require.ErrorContains(t, err, "没有对应的采集任务")
+	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
 	require.NoError(t, err)
-	_, err = db.FetchPlans().Create(ctx, "crypto", string(raw), "{}")
-	require.NoError(t, err)
-	_, err = datasetMarket(time.Now().Add(time.Hour))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unfinished fetch plan")
+	require.Empty(t, jobID)
+	require.Zero(t, chunks)
 }
 
 // 开启补位后，分块执行完立刻认领下一块：一次调度就能处理完多块，且任何时刻都不超过并发上限。

@@ -31,14 +31,25 @@ func IntField(value int64) FieldValue {
 	return FieldValue{Type: FieldTypeInt, Int: value}
 }
 
+// 附加字段的分组：一级中文名，与基础 K 线字段（taskresult.KlineOutputFields）共用一套。
+const (
+	GroupTrading     = "成交估值"
+	GroupFinance     = "财务数据"
+	GroupIndustry    = "行业"
+	GroupAdjust      = "复权"
+	GroupDerivatives = "合约指标"
+)
+
 // FieldSpec 描述一个附加字段：采集任务可以在输出字段里选它，默认不选。
-// 分组、单位以 Storage 字段目录（config/setup/metadata.yaml）为准，这里不重复。
+// 字段的中文名与分组只在这里登记，建结果数据集的列时原样写进列上。
 type FieldSpec struct {
 	// ID 是输出字段名，同一市场内唯一，例如 adj_factor。
 	ID string
-	// Name 是结果数据集这一列的显示名。
+	// Name 是结果数据集这一列的中文显示名。
 	Name string
-	Type FieldValueType
+	// Group 是这一列在管理台上的中文分组名（一级）。
+	Group string
+	Type  FieldValueType
 	// Fill 写进数据集列属性的 fill：prev 或 zero。
 	Fill string
 	// Frequencies 是适用的 K 线频率。

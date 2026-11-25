@@ -15,8 +15,8 @@ message DeploymentHost {
   string region = 4;
   string status = 5;
   string description = 6;
-  string created_at = 7;
-  string updated_at = 8;
+  int64 created_at = 7;  // Unix 毫秒
+  int64 updated_at = 8;  // Unix 毫秒
   // direct 或 outbound（只能出站，经 control 网关反向连接中转）。
   string reachability = 9;
   // 控制台展示用的中文名，如“控制机”。
@@ -32,24 +32,17 @@ message ComponentDeployment {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
-  string created_at = 4;
-  string updated_at = 5;
+  int64 created_at = 4;  // Unix 毫秒
+  int64 updated_at = 5;  // Unix 毫秒
 }
 
+// 网关最近一次拉取快照时 Admin 记下的状态：期望快照、网关已应用的快照、拉取时间。网关是否在运行看 Monitor 的组件上报。
 message HostGatewayRuntimeStatus {
-  string instance_id = 1;
-  string version = 2;
-  string expected_hash = 3;
-  string applied_hash = 4;
-  int64 route_count = 5;
-  string last_seen_at = 6;
-  string last_error = 7;
-  string previous_instance_id = 8;
-  string replaced_at = 9;
-  string conflict_instance_id = 10;
-  string conflict_seen_at = 11;
-  // control 网关上报的各出站主机反向连接会话。
-  repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 12;
+  string expected_hash = 1;
+  string applied_hash = 2;
+  int64 last_seen_at = 3;  // Unix 毫秒，没拉取过为 0
+  // control 网关带来的各出站主机反向连接会话。
+  repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 4;
 }
 
 message GetCatalogReq {}
@@ -108,27 +101,12 @@ message GetHostRoutesRsp {
   // expected_hash 是当前登记内容对应的快照哈希，全部主机相同。
   HostGatewayRuntimeStatus gateway_status = 4;
   uint32 snapshot_schema_version = 5;
-  // 这次响应实际计算的时间，不是网关应用快照的时间。
-  string compiled_at = 6;
+  // 这次响应实际计算的时刻（Unix 毫秒），不是网关应用快照的时间。
+  int64 compiled_at = 6;
 }
 
-message SetHostStatusReq {
-  string host_id = 1;
-  string status = 2;
-}
-message SetHostStatusRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-}
-message SetDeploymentStatusReq {
-  string host_id = 1;
-  string component_id = 2;
-  string status = 3;
-}
-message SetDeploymentStatusRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-}
-
-message SyncHostDeploymentsReq {
+// SyncTopologyHost 是 moox.toml 里一台主机的完整声明，含启停状态。
+message SyncTopologyHost {
   string host_id = 1;
   string address = 2;
   string private_address = 3;
@@ -148,15 +126,18 @@ message SyncHostDeploymentsReq {
   string ssh_passphrase = 13;
   // 这台主机的网关是否开外部入口（11004）；只能出站的主机不能开。
   bool external_entry = 14;
-}
-message SyncHostDeploymentsRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
+  // [hosts.<ID>].enabled；停用的主机只剩 host-gateway 能签名。
+  bool enabled = 15;
+  // component_ids 里记为停用的组件（[deployments_disabled]）。
+  repeated string disabled_component_ids = 16;
 }
 
-message DeleteDeploymentHostReq {
-  string host_id = 1;
+// SyncTopologyReq 是 moox.toml 的整份主机与部署声明：Admin 按它覆盖登记，多出的主机与部署删除，
+// 签名公钥与 SSH 指纹保留。setup deploy、setup update 部署每台主机前都发一次。
+message SyncTopologyReq {
+  repeated SyncTopologyHost hosts = 1;
 }
-message DeleteDeploymentHostRsp {
+message SyncTopologyRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
@@ -165,8 +146,5 @@ service SysDeploy {
   rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
   rpc ListDeployments(ListDeploymentsReq) returns (ListDeploymentsRsp);
   rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
-  rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
-  rpc SetDeploymentStatus(SetDeploymentStatusReq) returns (SetDeploymentStatusRsp);
-  rpc SyncHostDeployments(SyncHostDeploymentsReq) returns (SyncHostDeploymentsRsp);
-  rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
+  rpc SyncTopology(SyncTopologyReq) returns (SyncTopologyRsp);
 }

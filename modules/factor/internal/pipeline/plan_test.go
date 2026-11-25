@@ -20,15 +20,13 @@ func TestBuildLivePlanUsesEventUniverse(t *testing.T) {
 			domain.FactorDef{FactorID: "short", LookbackPeriods: 5},
 			domain.FactorDef{FactorID: "long", LookbackPeriods: 20},
 		),
-		PeriodTime: target, UniverseSeries: singleSeries("SOL", "ETH", "BTC", "BTC"),
-		UpstreamFailedSeries: singleSeries("ETH", "SOL"), CarryColumns: []string{"volume", "close"}, TriggerEventID: "evt-1",
+		PeriodTime: target, UniverseSubjects: []string{"SOL", "ETH", "BTC", "BTC"},
+		UpstreamFailed: []string{"ETH", "SOL", "DOGE"}, CarryColumns: []string{"volume", "close"}, TriggerEventID: "evt-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC", "ETH", "SOL"}, plan.Expected)
 	require.Equal(t, []string{"BTC"}, plan.Available)
 	require.Equal(t, []string{"ETH", "SOL"}, plan.UpstreamFailed)
-	require.Equal(t, singleSeries("BTC", "ETH", "SOL"), plan.ExpectedSeries)
-	require.Equal(t, singleSeries("ETH", "SOL"), plan.UpstreamFailedSeries)
 	require.Equal(t, target.Add(-19*time.Minute), plan.TargetStart)
 	require.Equal(t, target, plan.PeriodTime)
 	require.Equal(t, target.Add(time.Minute), plan.TargetEnd)

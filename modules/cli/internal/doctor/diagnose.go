@@ -86,7 +86,7 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 	result.RunID = newRunID()
 	result.ManifestChecksum = manifest.Checksum
 	for _, observation := range snapshot.GetMissingObservations() {
-		result.MissingObservations = append(result.MissingObservations, core.Observation{Source: observation.GetKind(), ObservedAt: parseWireTime(observation.GetObservedAt()), Summary: observation.GetSummary()})
+		result.MissingObservations = append(result.MissingObservations, core.Observation{Source: observation.GetKind(), ObservedAt: wireTime(observation.GetObservedAt()), Summary: observation.GetSummary()})
 	}
 	return result, nil
 }
@@ -582,7 +582,18 @@ func firstNode(snapshot *monitorpb.GetDoctorContextRsp) string {
 	return "local"
 }
 
-func parseWireTime(value string) time.Time {
-	parsed, _ := time.Parse(time.RFC3339Nano, value)
-	return parsed
+// wireTime 把 Monitor 接口里的毫秒时刻转成 time.Time；0 是零值。
+func wireTime(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
+}
+
+// msText 把 Monitor 接口里的毫秒时刻转成报告里显示的 RFC3339 UTC 文本；0 是空串。
+func msText(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
 }

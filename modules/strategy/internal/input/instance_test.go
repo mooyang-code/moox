@@ -67,9 +67,9 @@ type lateColumns struct {
 	after int
 }
 
-func (c *lateColumns) GetView(ctx context.Context, space, viewID string) (ViewInfo, error) {
-	view, err := c.fakeClient.GetView(ctx, space, viewID)
-	if viewID != "view_factor_i1" {
+func (c *lateColumns) GetView(ctx context.Context, space, datasetID string) (ViewInfo, error) {
+	view, err := c.fakeClient.GetView(ctx, space, datasetID)
+	if datasetID != "dataset_factor_i1" {
 		return view, err
 	}
 	c.reads++
@@ -83,7 +83,11 @@ func (c *lateColumns) GetView(ctx context.Context, space, viewID string) (ViewIn
 func tunedClient() *fakeClient {
 	client := newFakeClient("spot")
 	client.factors["bias"] = FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
-	client.views["view_factor_i1"] = ViewInfo{ViewID: "view_factor_i1", DatasetID: "ds_factor", Frequency: "1h", Status: "active", ActiveIndexID: "idx_f", Columns: []ViewColumn{
+	dataset := client.datasets["dataset_factor_1h"]
+	dataset.DatasetID = "dataset_factor_i1"
+	client.datasets["dataset_factor_i1"] = dataset
+	client.subjects["dataset_factor_i1"] = client.subjects["dataset_factor_1h"]
+	client.views["dataset_factor_i1"] = ViewInfo{DatasetID: "dataset_factor_i1", Frequency: "1h", Status: "active", ActiveIndexID: "idx_f", Columns: []ViewColumn{
 		plainColumn("close"), memberColumn("ma", "ma", "ma", "fixed"), memberColumn("bias__var", "bias__var", "bias", "var"), paramsColumn(),
 	}}
 	return client
@@ -100,7 +104,7 @@ func TestResolveInstanceBindsFactorTask(t *testing.T) {
 	if len(tasks.binds) != 1 || tasks.binds[0] != "ftask_i1@i1" {
 		t.Fatalf("应关联一次任务：%v", tasks.binds)
 	}
-	if resolved.Primary().ViewID != "view_factor_i1" || resolved.Primary().FactorTaskID != "ftask_i1" {
+	if resolved.Primary().DatasetID != "dataset_factor_i1" || resolved.Primary().FactorTaskID != "ftask_i1" {
 		t.Fatalf("应绑定任务的结果 View：%+v", resolved)
 	}
 	if got := resolved.Columns["bias__var"]; got.Source != SourceFactor || got.Member != "bias__var" || got.FactorID != "bias" || got.MemberKind != "var" || got.DefinitionHash != "sha256:bias" {
@@ -135,9 +139,9 @@ func TestResolveRejectsMismatchedFactorParams(t *testing.T) {
 	// 声明了 factor_params 的策略要驱动任务的全部可变成员：任务另有一个可变成员 ema__var 没有输出时拒绝。
 	twoVars := tunedClient()
 	twoVars.factors["ema"] = FactorInfo{FactorID: "ema", DefinitionHash: "sha256:ema", Params: []ParamDecl{{Name: "span", Type: "int", Min: 2, Max: 60, Default: 9}}}
-	view := twoVars.views["view_factor_i1"]
+	view := twoVars.views["dataset_factor_i1"]
 	view.Columns = append(view.Columns, memberColumn("ema__var", "ema__var", "ema", "var"))
-	twoVars.views["view_factor_i1"] = view
+	twoVars.views["dataset_factor_i1"] = view
 	if _, _, err := (Service{Client: twoVars, Sets: &tasksFake{}}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, tunedDSL)); err == nil || !strings.Contains(err.Error(), "ema__var 在 factor_params 里没有输出") {
 		t.Fatalf("可变成员没有输出应拒绝：%v", err)
 	}

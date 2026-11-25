@@ -90,10 +90,7 @@ func (s *Service) ListTagSyncStatus(ctx context.Context, req *pb.ListTagSyncStat
 	}
 	rsp := &pb.ListTagSyncStatusRsp{RetInfo: retOK()}
 	for _, run := range runs {
-		item := &pb.TagSyncStatus{SpaceId: run.SpaceID, TagId: run.TagID, LastRunAt: run.LastRunAt.Format(time.RFC3339), LastStatus: run.LastStatus, LastError: run.LastError}
-		if !run.LastSuccessAt.IsZero() {
-			item.LastSuccessAt = run.LastSuccessAt.Format(time.RFC3339)
-		}
+		item := &pb.TagSyncStatus{SpaceId: run.SpaceID, TagId: run.TagID, LastRunAt: unixMillis(run.LastRunAt), LastStatus: run.LastStatus, LastError: run.LastError, LastSuccessAt: unixMillis(run.LastSuccessAt)}
 		rsp.Items = append(rsp.Items, item)
 	}
 	return rsp, nil

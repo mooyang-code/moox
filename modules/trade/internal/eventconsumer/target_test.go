@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
@@ -30,7 +29,7 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-2", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "2.5",
+			InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "2.5",
 		}},
 	), func() TargetOptions {
 		opts := targetOptions(tradeStore, now)
@@ -46,9 +45,9 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "target-2", got.TargetID)
-	require.Equal(t, "runner-1", got.RunnerID)
-	require.Equal(t, uint64(now.UnixMilli()), got.CommandSequence)
-	require.Equal(t, []store.InstrumentTarget{{
+	require.Equal(t, "runner-1", got.InstanceID)
+	require.Equal(t, now.UnixMilli(), got.BarEndTime)
+	require.Equal(t, []store.InstrumentQuantity{{
 		InstrumentID: "BTC-USDT-SPOT", Quantity: "2.5",
 	}}, got.Targets)
 	require.Equal(t, "PENDING", got.Status)
@@ -65,7 +64,7 @@ func TestHandleTargetDirectedWakeOnlyAfterNewAcceptance(t *testing.T) {
 	opts.WakeTarget = func(space, logical string) {
 		record, err := tradeStore.GetLogicalAccountTarget(context.Background(), space, logical)
 		require.NoError(t, err)
-		_, err = tradeStore.GetTargetReceipt(context.Background(), space, record.TargetID)
+		_, err = tradeStore.GetAcceptedTargetHistory(context.Background(), space, record.TargetID)
 		require.NoError(t, err, "receipt must be committed before wake")
 		wakes = append(wakes, space+"/"+logical)
 	}
@@ -131,7 +130,7 @@ func TestHandleLogicalAccountTargetAcceptsBeforeBarEnd(t *testing.T) {
 	target, err := db.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, effective.UnixMilli(), target.BarEndTime)
-	receipt, err := db.GetTargetReceipt(context.Background(), "space-1", "future-target")
+	receipt, err := db.GetAcceptedTargetHistory(context.Background(), "space-1", "future-target")
 	require.NoError(t, err)
 	require.Equal(t, effective.UnixMilli(), receipt.BarEndTime)
 }
@@ -229,7 +228,7 @@ func TestHandleTargetFromOldSessionIsSupersededNotConflict(t *testing.T) {
 			})
 			result := HandleTarget(context.Background(), logicalTargetDeliveryWithTimes(
 				t, barEnd, validUntil, "old-session-target", "runner-1", "logical-1",
-				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
+				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 			), opts)
 			require.Equal(t, jetstream.TERM, result.Decision)
 			require.Equal(t, test.code, targetErrorCode(result))
@@ -251,7 +250,7 @@ func seedSessionTarget(t *testing.T, db *store.Store, targetID, instanceID, sess
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
 			InstanceID: instanceID, SessionID: sessionID, SessionStartedAt: startedAt, StrategyID: "strategy-1",
 			BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
-			Targets: []store.InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+			Targets: []store.InstrumentQuantity{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 		})
 		if err == nil && !accepted {
 			err = errors.New("目标没有写成当前目标")
@@ -268,7 +267,7 @@ func TestHandleLogicalAccountTargetRejectsUnsupportedInstrument(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "ETH-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "ETH-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -282,7 +281,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDC",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDC",
 			InstrumentID: "BTC-USDC-SPOT", BaseAsset: "BTC", QuoteAsset: "USDC",
 			SettlementAsset: "USDC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -293,7 +292,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-usdc", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDC-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDC-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -307,7 +306,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 	seedLogicalTargetAccount(t, tradeStore, true, false)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "trading",
@@ -318,7 +317,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-lowercase-status", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -344,7 +343,7 @@ func TestHandleLogicalAccountTargetRetriesMissingMetadataUntilMembersReady(t *te
 			result := HandleTarget(context.Background(), logicalTargetDelivery(
 				t, now, "target-1", "runner-1", "logical-1",
 				[]*tradeeventpb.InstrumentWeightTarget{{
-					InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+					InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 				}},
 			), targetOptions(tradeStore, now))
 
@@ -364,7 +363,7 @@ func TestHandleLogicalAccountTargetRetriesWhenAllMembersDisabled(t *testing.T) {
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-disabled", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
+		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 	), targetOptions(tradeStore, now))
 
 	require.Equal(t, jetstream.RETRY, result.Decision)
@@ -386,7 +385,7 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -399,7 +398,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx",
-			Exchange: "OKX", Markets: []string{"SWAP"}, ExecutionMode: "PAPER",
+			Exchange: "okx", Markets: []string{"swap"}, ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS",
 			Status: "ENABLED", Ready: true,
 		}); err != nil {
@@ -420,7 +419,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT-SWAP",
+			Exchange: "okx", MarketType: "swap", ExchangeSymbol: "BTC-USDT-SWAP",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.01",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -432,7 +431,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "1",
+			InstrumentId: "BTC-USDT-SWAP", MarketType: "swap", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -483,7 +482,7 @@ func TestHandleTargetRejectsLegacyQuantityEvent(t *testing.T) {
 		EventVersion: 1,
 		SpaceId:      "space-1",
 		SubjectId:    "logical-1",
-		OccurredAt:   timestamppb.New(time.Now().UTC()),
+		OccurredAt:   time.Now().UTC().UnixMilli(),
 		Payload:      []byte("unregistered target payload"),
 	})
 	require.NoError(t, err)
@@ -513,7 +512,7 @@ func TestHandleTargetRejectsIncompleteModernEventBeforeAccountLookup(t *testing.
 		EventVersion: events.LogicalAccountTargetWeightRequested.Version(),
 		SpaceId:      "space-1",
 		SubjectId:    "logical-1",
-		OccurredAt:   timestamppb.New(now),
+		OccurredAt:   now.UnixMilli(),
 		Payload:      incompletePayload,
 	})
 	require.NoError(t, err)
@@ -536,15 +535,15 @@ func openTargetStore(t *testing.T) *store.Store {
 type testWeightResolver struct{}
 
 func (testWeightResolver) Resolve(_ context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
-	signalTime := request.GetBarEndTime().AsTime().UnixMilli()
+	signalTime := request.GetBarEndTime()
 	hash, err := targetapp.RequestHash(request)
 	if err != nil {
 		return targetapp.WeightConversion{}, err
 	}
-	targets := make([]store.InstrumentTarget, 0, len(request.GetTargets()))
+	targets := make([]store.InstrumentQuantity, 0, len(request.GetTargets()))
 	weights := make([]map[string]string, 0, len(request.GetTargets()))
 	for _, target := range request.GetTargets() {
-		targets = append(targets, store.InstrumentTarget{InstrumentID: target.GetInstrumentId(), Quantity: target.GetTargetWeight()})
+		targets = append(targets, store.InstrumentQuantity{InstrumentID: target.GetInstrumentId(), Quantity: target.GetTargetWeight()})
 		weights = append(weights, map[string]string{"instrument_id": target.GetInstrumentId(), "target_weight": target.GetTargetWeight()})
 	}
 	weightsJSON, _ := json.Marshal(weights)
@@ -568,7 +567,7 @@ func seedLogicalTargetAccount(
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
+			Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT",
 			Status: "ENABLED", Ready: ready,
 		}); err != nil {
@@ -592,7 +591,7 @@ func seedLogicalTargetAccount(
 			return nil
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -628,7 +627,7 @@ func logicalTargetDeliveryWithTimes(
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: instanceID, SessionId: "session-1", SessionStartedAt: testSessionStartedAt("session-1"), StrategyId: "strategy-1",
 			LogicalAccountId: logicalAccountID, Targets: targets,
-			BarEndTime: timestamppb.New(barEnd), ValidUntil: timestamppb.New(validUntil),
+			BarEndTime: barEnd.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: barEnd,
@@ -698,12 +697,12 @@ func TestHandleTargetSessionChangedWhileWaitingIsClassifiedAtCommit(t *testing.T
 			opts.WakeTarget = func(string, string) { t.Error("会话已变的目标不能唤醒执行器") }
 			result := HandleTarget(context.Background(), logicalTargetDelivery(
 				t, now, "target-session-changed", "runner-1", "logical-1",
-				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
+				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 			), opts)
 			require.Equal(t, jetstream.TERM, result.Decision)
 			require.Equal(t, test.code, targetErrorCode(result))
 			require.Equal(t, test.needsHumanAttention, attentionCode(targetErrorCode(result)))
-			_, err := tradeStore.GetTargetReceipt(context.Background(), "space-1", "target-session-changed")
+			_, err := tradeStore.GetAcceptedTargetHistory(context.Background(), "space-1", "target-session-changed")
 			require.Error(t, err, "会话已变的目标不写回执")
 		})
 	}

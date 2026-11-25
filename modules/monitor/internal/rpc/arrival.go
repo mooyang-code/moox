@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -25,7 +24,7 @@ func (s *Service) QueryPipelineArrivalHistory(ctx context.Context, req *monitorp
 	}
 	rsp := &monitorpb.QueryPipelineArrivalHistoryRsp{
 		RetInfo: success(), Timezone: history.Timezone, Day: history.Day,
-		StartAt: history.Start.UTC().Format(time.RFC3339), EndAt: history.End.UTC().Format(time.RFC3339),
+		StartAt: millis(history.Start), EndAt: millis(history.End),
 		RetentionTruncated: history.RetentionTruncated, Truncated: history.Truncated,
 	}
 	for _, task := range history.Tasks {
@@ -38,7 +37,7 @@ func (s *Service) QueryPipelineArrivalHistory(ctx context.Context, req *monitorp
 		}
 		for _, point := range series.Points {
 			out.Points = append(out.Points, &monitorpb.ArrivalHistoryPoint{
-				CloseAt: point.Close.UTC().Format(time.RFC3339), DelaySeconds: point.DelaySeconds, SkippedBars: int32(point.SkippedBars),
+				CloseAt: millis(point.Close), DelaySeconds: point.DelaySeconds, SkippedBars: int32(point.SkippedBars),
 			})
 		}
 		rsp.Series = append(rsp.Series, out)

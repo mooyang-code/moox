@@ -11,20 +11,6 @@ export type FieldValueType =
   | "FIELD_VALUE_TYPE_BYTES"
   | number;
 
-export type DatasetColumnOriginType =
-  | "DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED"
-  | "DATASET_COLUMN_ORIGIN_TYPE_FIELD"
-  | "DATASET_COLUMN_ORIGIN_TYPE_CUSTOM"
-  | "DATASET_COLUMN_ORIGIN_TYPE_SYSTEM"
-  | number;
-
-export type ColumnOriginType =
-  | "COLUMN_ORIGIN_TYPE_UNSPECIFIED"
-  | "COLUMN_ORIGIN_TYPE_DATASET_COLUMN"
-  | "COLUMN_ORIGIN_TYPE_SYSTEM"
-  | "COLUMN_ORIGIN_TYPE_EXPRESSION"
-  | number;
-
 export type TotalMode = "AUTO" | "NONE" | "FORCE_EXACT" | number;
 
 export type TotalState = "UNKNOWN" | "EXACT" | "SKIPPED" | number;
@@ -121,6 +107,7 @@ export interface DataSource {
   data_source_id: string;
   name: string;
   status: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   /** 业务含义放在属性里，Storage 原样保存。 */
@@ -133,6 +120,7 @@ export interface Subject {
   name: string;
   timezone?: string;
   status: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
@@ -150,6 +138,7 @@ export interface Tag {
   builtin?: boolean;
   active_count?: number;
   inactive_count?: number;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   /** 市场类型与同步配置放在属性里：market_type、sync.source、sync.cron、sync.timezone。 */
@@ -160,6 +149,7 @@ export interface TagMember {
   space_id: string;
   tag_id?: string;
   status?: TagMemberStatus;
+  /** 失效时刻：Unix 毫秒（数字字符串），在册成员为 "0"。 */
   inactive_at?: string;
   subject: Subject;
   tag_ids?: string[];
@@ -191,36 +181,9 @@ export interface Dataset {
   alignment?: string;
   /** 周期截止前允许迟到的秒数；0 或缺省表示用 Storage 的默认值。 */
   allowed_lateness_seconds?: number;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
-}
-
-export interface Field {
-  space_id: string;
-  group_id: string;
-  field_id: string;
-  name: string;
-  description?: string;
-  value_type: FieldValueType;
-  unit?: string;
-  validation_rule_json?: string;
-  write_example?: string;
-  sort_order?: number;
-  status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
-}
-
-export interface FieldGroup {
-  space_id: string;
-  group_id: string;
-  name: string;
-  description?: string;
-  parent_group_id?: string;
-  sort_order?: number;
-  status: string;
+  /** 查询索引维护的先后：越小越先，0（缺省）最先。 */
+  maintenance_priority?: number;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
@@ -230,47 +193,16 @@ export interface DatasetColumn {
   space_id: string;
   dataset_id: string;
   column_name: string;
-  origin_type: DatasetColumnOriginType;
-  origin_id: string;
   value_type: FieldValueType;
+  /** 界面显示名，建列时必填。 */
+  display_name: string;
+  /** 界面分组名（中文，一级），可以为空。 */
+  group?: string;
   required?: boolean;
   aliases?: string[];
+  /** active 或 disabled：disabled 的列读取时隐藏，数据保留。 */
   status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
-}
-
-export interface View {
-  space_id: string;
-  view_id: string;
-  name: string;
-  description?: string;
-  dataset_id: string;
-  grain_keys?: string[];
-  /** 所属 Dataset 的频率，由 Storage 填写。 */
-  freq?: string;
-  engine?: string;
-  status: string;
-  /** 只读：等于所属数据集里启用的列；已建进索引的列见 DataView.GetViewState。 */
-  columns?: ViewColumn[];
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
-  /** 维护顺序：越小越先，0（缺省）最先。 */
-  maintenance_priority?: number;
-  /** 由所属数据集里已停用的列推出。 */
-  hidden_columns?: string[];
-}
-
-export interface ViewColumn {
-  space_id: string;
-  view_id: string;
-  column_name: string;
-  origin_type: ColumnOriginType;
-  origin_id: string;
-  value_type: FieldValueType;
-  sort_order?: number;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
@@ -279,9 +211,7 @@ export interface ViewColumn {
 export interface ResultColumn {
   column_name: string;
   value_type: FieldValueType;
-  origin_type: ColumnOriginType;
-  dataset_id?: string;
-  origin_id?: string;
+  display_name?: string;
 }
 
 export interface TimeSeriesKey {

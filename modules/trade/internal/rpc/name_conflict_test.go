@@ -52,7 +52,7 @@ func TestClosedPaperSimulationKeepsNameTaken(t *testing.T) {
 	} {
 		rsp, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
 			AccountName: item.account, LogicalAccountName: item.logical,
-			Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT},
+			Exchange: "binance", Markets: []string{"spot"},
 			SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
 		})
 		if err != nil {
@@ -68,8 +68,8 @@ func TestClosedPaperSimulationKeepsNameTaken(t *testing.T) {
 		Store: tradeStore, NewID: func() string { return "live-1" },
 	}
 	rsp, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
-		Name: "模拟一号", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-		Markets:         []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT},
+		Name: "模拟一号", Exchange: "binance",
+		Markets:         []string{"spot"},
 		Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		SettlementAsset: "USDT",
 	})
@@ -87,7 +87,7 @@ func TestRenameAndCreateWithTakenName(t *testing.T) {
 		for index, name := range []string{"主账户", "副账户"} {
 			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 				SpaceID: "space-1", TradingAccountID: fmt.Sprintf("account-%d", index+1), Name: name,
-				Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE",
+				Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "LIVE",
 				Environment: "TESTNET", CredentialSecretID: fmt.Sprintf("secret-%d", index+1),
 				SettlementAsset: "USDT", Status: "ENABLED",
 			}); err != nil {
@@ -134,7 +134,7 @@ func TestConflictHidesSQLiteConstraintText(t *testing.T) {
 	tradeStore := openRPCStore(t)
 	account := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1", Name: "主账户",
-		Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE",
+		Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "LIVE",
 		Environment: "TESTNET", CredentialSecretID: "secret-1", SettlementAsset: "USDT", Status: "ENABLED",
 	}
 	requireNoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error { return tx.CreateTradingAccount(account) }))
@@ -150,8 +150,8 @@ func TestConflictHidesSQLiteConstraintText(t *testing.T) {
 	}
 
 	stale := fmt.Errorf("%w: stale order version", store.ErrConflict)
-	if info := errorInfo(stale); info.GetCode() != tradepb.ErrorCode_CONFLICT || info.GetMsg() != stale.Error() {
-		t.Fatalf("版本冲突：info = %+v", info)
+	if info := errorInfo(stale); info.GetCode() != tradepb.ErrorCode_CONFLICT || info.GetMsg() != "数据已经被修改，刷新后再试" {
+		t.Fatalf("版本冲突只回中文说明，英文内部原因只写日志：info = %+v", info)
 	}
 	if len(capture.errors) != 0 {
 		t.Fatalf("冲突不算内部错误，不该写错误日志：%v", capture.errors)
@@ -178,7 +178,7 @@ func TestDisableMemberWithoutSessionReturnsWarning(t *testing.T) {
 	seedRemovalExposure(t, tradeStore)
 	requireNoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SWAP",
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "swap",
 			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "0",
 			Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 2_000,
 		})

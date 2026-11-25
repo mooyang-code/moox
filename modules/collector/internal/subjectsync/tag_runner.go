@@ -18,8 +18,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const sqliteTimeLayout = "2006-01-02 15:04:05"
-
 type TagStore interface {
 	ListTags(context.Context) ([]*pb.Tag, error)
 	ApplyTagSnapshot(context.Context, string, string, []*pb.TagSnapshotItem) error
@@ -60,19 +58,12 @@ func probing(tag *pb.Tag) bool {
 	return strings.EqualFold(tag.GetMode(), "auto") && tagattr.Source(tag) != "" && tagattr.MarketType(tag) != ""
 }
 
-func parseTagTime(value string) (time.Time, error) {
-	if parsed, err := time.ParseInLocation(sqliteTimeLayout, value, time.UTC); err == nil {
-		return parsed, nil
-	}
-	return time.Parse(time.RFC3339, value)
-}
-
 // tagDue 判断标签的标的同步是否到期：没有运行记录、标签在上次运行后被改过（含同步配置），或按 cron 到点了。
 func tagDue(tag *pb.Tag, run *domain.TagSyncRun, now time.Time) (bool, error) {
 	if tag == nil || run == nil || run.LastRunAt.IsZero() {
 		return true, nil
 	}
-	if updated, err := parseTagTime(tag.GetUpdatedAt()); err == nil && updated.After(run.LastRunAt) {
+	if updated := tag.GetUpdatedAt(); updated > 0 && time.UnixMilli(updated).After(run.LastRunAt) {
 		return true, nil
 	}
 	schedule, err := cron.ParseStandard(tagattr.Cron(tag))

@@ -20,10 +20,10 @@ func (testTargetWeightResolver) Resolve(
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 	_ string,
 ) (targetapp.WeightConversion, error) {
-	signalTime := request.GetBarEndTime().AsTime().UnixMilli()
-	targets := make([]store.InstrumentTarget, 0, len(request.GetTargets()))
+	signalTime := request.GetBarEndTime()
+	targets := make([]store.InstrumentQuantity, 0, len(request.GetTargets()))
 	for _, target := range request.GetTargets() {
-		targets = append(targets, store.InstrumentTarget{
+		targets = append(targets, store.InstrumentQuantity{
 			InstrumentID: target.GetInstrumentId(),
 			Quantity:     target.GetTargetWeight(),
 		})

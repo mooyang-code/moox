@@ -34,7 +34,6 @@ func RegisterAll(
 	console.Adapters = options.Adapters
 	console.FlattenAccount = options.FlattenAccount
 	console.Delist = options.Delist
-	console.FlattenInstrumentAction = options.FlattenInstrument
 	console.Lifecycle = options.Lifecycle
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 }
@@ -48,6 +47,5 @@ type ConsoleOptions struct {
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc
 	Delist             *delistapp.Service
-	FlattenInstrument  FlattenInstrumentFunc
 	Lifecycle          *lifecycle.Controller
 }

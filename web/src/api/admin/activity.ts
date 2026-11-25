@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 
 export interface ActivityLogItem {
   id?: number | string;
@@ -9,6 +9,7 @@ export interface ActivityLogItem {
   title?: string;
   detail?: string;
   ref_id?: string;
+  /** Unix 毫秒的数字字符串 */
   created_at?: string;
 }
 
@@ -19,6 +20,7 @@ export interface ListActivityLogsRequest {
   source?: string;
   category?: string;
   ref_id?: string;
+  /** 起止是 Unix 毫秒（[since, until)），不传表示不限 */
   since?: string;
   until?: string;
   page?: { page: number; size: number };
@@ -29,6 +31,6 @@ export interface ListActivityLogsResponse {
   page?: { page?: number; size?: number; total?: number; has_more?: boolean };
 }
 
-export function listActivityLogs(request: ListActivityLogsRequest, options: { silentError?: boolean } = {}) {
-  return callControl<ListActivityLogsRequest, ListActivityLogsResponse>("activity", "ListActivityLogs", request, options);
+export function listActivityLogs(request: ListActivityLogsRequest) {
+  return call<ListActivityLogsRequest, ListActivityLogsResponse>("activity", "ListActivityLogs", request);
 }

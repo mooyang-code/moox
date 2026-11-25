@@ -2,15 +2,15 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Space } from "@/api/admin/types";
+import type { Space } from "@/api/storage/spaces";
 
 const api = vi.hoisted(() => ({
   listSpaces: vi.fn(),
   createSpace: vi.fn(async () => ({})),
-  updateSpace: vi.fn(async () => ({}))
+  updateSpace: vi.fn(async () => ({})),
+  deleteSpace: vi.fn(async () => undefined)
 }));
-vi.mock("@/api/admin/spaces", () => api);
-vi.mock("@/api/admin/http", () => ({ reportControlError: vi.fn() }));
+vi.mock("@/api/storage/spaces", () => api);
 import { useSpaceStore } from "@/store/modules/space";
 import SpacesPage from "./index.vue";
 
@@ -23,6 +23,7 @@ const space = (id: string): Space => ({ space_id: id, name: id, status: "active"
 
 interface PageVM {
   openCreate(): void;
+  confirmDelete(record: Space): void;
   openEdit(record: Space): void;
   submit(): Promise<boolean>;
   form: Space;
@@ -85,6 +86,22 @@ describe("空间设置", () => {
     vm.form.timezone = "UTC";
     api.createSpace.mockRejectedValueOnce(new Error("名称重复"));
     expect(await vm.submit()).toBe(false);
+  });
+
+  it("编辑时扩展属性原样带回：Storage 的修改是整体替换", async () => {
+    const { vm } = await mountPage();
+    vm.openEdit({ ...space("stockcn"), attributes: { managed_by: "moox-cli" } });
+    await flushPromises();
+    expect(await vm.submit()).toBe(true);
+    expect(api.updateSpace).toHaveBeenCalledWith(expect.objectContaining({ attributes: { managed_by: "moox-cli" } }));
+  });
+
+  it("删除空间的确认框写明会清空该空间全部数据", async () => {
+    const { vm } = await mountPage();
+    vm.confirmDelete(space("stockcn"));
+    await flushPromises();
+    expect(document.body.textContent).toContain("会清空该空间全部数据");
+    expect(api.deleteSpace).not.toHaveBeenCalled();
   });
 
   it("当前空间那一行标出“当前”", async () => {

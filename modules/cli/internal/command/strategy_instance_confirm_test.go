@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/errs"

@@ -1,9 +1,11 @@
 package observability
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -13,18 +15,14 @@ var (
 	defaultBalanceMetricsErr  error
 )
 
+// BalanceMetrics 记余额同步：运行次数计数供本机排查，各账户的最近状态用来判断关注项 balance_sync_failing。
 type BalanceMetrics struct {
-	runs                *prometheus.CounterVec
-	lastRun             prometheus.Gauge
-	lastSuccess         prometheus.Gauge
-	maxDifference       prometheus.Gauge
-	consecutiveFailures prometheus.Gauge
-	mu                  sync.Mutex
-	accounts            map[string]balanceState
+	runs     *prometheus.CounterVec
+	mu       sync.Mutex
+	accounts map[string]balanceState
 }
 
 type balanceState struct {
-	lastRun             float64
 	lastSuccess         float64
 	maxDifference       float64
 	consecutiveFailures float64
@@ -43,28 +41,10 @@ func NewBalanceMetrics(registerer prometheus.Registerer) (*BalanceMetrics, error
 			Name: "moox_trade_balance_sync_runs_total",
 			Help: "Trade balance synchronization runs grouped by result.",
 		}, []string{"result"}),
-		lastRun: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moox_trade_balance_sync_last_run_timestamp_seconds",
-			Help: "Unix timestamp of the last balance sync run.",
-		}),
-		lastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moox_trade_balance_sync_last_success_timestamp_seconds",
-			Help: "Unix timestamp of the last successful balance sync run.",
-		}),
-		maxDifference: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moox_trade_balance_sync_max_difference_ratio",
-			Help: "Maximum relative difference between the prior local and Exchange balances.",
-		}),
-		consecutiveFailures: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moox_trade_balance_sync_consecutive_failures",
-			Help: "Number of consecutive failed balance synchronization runs.",
-		}),
 		accounts: make(map[string]balanceState),
 	}
-	for _, collector := range []prometheus.Collector{metrics.runs, metrics.lastRun, metrics.lastSuccess, metrics.maxDifference, metrics.consecutiveFailures} {
-		if err := registerer.Register(collector); err != nil {
-			return nil, err
-		}
+	if err := registerer.Register(metrics.runs); err != nil {
+		return nil, err
 	}
 	return metrics, nil
 }
@@ -87,7 +67,6 @@ func (m *BalanceMetrics) Observe(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state := m.accounts[tradingAccountID]
-	state.lastRun = timestamp
 	if err == nil {
 		state.lastSuccess = timestamp
 		state.maxDifference = max(maxDifference, 0)
@@ -96,7 +75,6 @@ func (m *BalanceMetrics) Observe(
 		state.consecutiveFailures++
 	}
 	m.accounts[tradingAccountID] = state
-	m.updateAggregate()
 }
 
 func (m *BalanceMetrics) Remove(tradingAccountID string) {
@@ -106,22 +84,40 @@ func (m *BalanceMetrics) Remove(tradingAccountID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.accounts, tradingAccountID)
-	m.updateAggregate()
 }
 
-func (m *BalanceMetrics) updateAggregate() {
-	var latestRun, earliestSuccess, maximumDifference, maximumFailures float64
-	for _, state := range m.accounts {
-		latestRun = max(latestRun, state.lastRun)
-		if earliestSuccess == 0 ||
-			(state.lastSuccess > 0 && state.lastSuccess < earliestSuccess) {
-			earliestSuccess = state.lastSuccess
-		}
-		maximumDifference = max(maximumDifference, state.maxDifference)
-		maximumFailures = max(maximumFailures, state.consecutiveFailures)
+// 余额同步的告警线：连续失败 3 次，或最近一次成功已超过 15 分钟，或本地与交易所余额差异超过上限。
+const (
+	balanceFailureLimit = 3
+	balanceSuccessStale = 15 * time.Minute
+)
+
+// Attention 按当前时间判断各交易账户的余额同步，返回 kind 为 kind 的关注项（采集指标时现算：“超过 15 分钟没成功”要随时间翻成 1）。
+// detail 只写账户与最近成功的时刻，不写失败次数等每轮都变的量。还没成功过、失败不到 3 次的账户先不报。
+func (m *BalanceMetrics) Attention(kind string, differenceLimit float64, now time.Time) map[string][]string {
+	if m == nil {
+		return nil
 	}
-	m.lastRun.Set(latestRun)
-	m.lastSuccess.Set(earliestSuccess)
-	m.maxDifference.Set(maximumDifference)
-	m.consecutiveFailures.Set(maximumFailures)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var items []string
+	for account, state := range m.accounts {
+		lastSuccess := time.Unix(int64(state.lastSuccess), 0).UTC()
+		since := "从未成功"
+		if state.lastSuccess > 0 {
+			since = "最近成功 " + report.AttentionTime(lastSuccess)
+		}
+		switch {
+		case state.consecutiveFailures >= balanceFailureLimit:
+			items = append(items, fmt.Sprintf("%s 连续 %d 次以上同步失败（%s）", account, balanceFailureLimit, since))
+		case state.lastSuccess > 0 && now.Sub(lastSuccess) > balanceSuccessStale:
+			items = append(items, fmt.Sprintf("%s 超过 15 分钟没有同步成功（%s）", account, since))
+		case state.lastSuccess > 0 && state.maxDifference > differenceLimit:
+			items = append(items, fmt.Sprintf("%s 本地与交易所余额差异超过 %.2f%%", account, differenceLimit*100))
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return map[string][]string{kind: items}
 }

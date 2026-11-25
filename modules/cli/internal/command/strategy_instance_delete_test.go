@@ -3,8 +3,9 @@ package command
 import (
 	"bytes"
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -25,7 +26,7 @@ func (g *deleteGateway) Forward(_ context.Context, service, method string, _ int
 	switch method {
 	case "GetStrategyInstance":
 		return []byte(`{"ret_info":{"code":0},"instance":{"instance_id":"i1","strategy_id":"s1","enabled":false,
-			"factor_tasks":{"spot":"ftask_spot","swap":"ftask_swap","multi":"ftask_shared"}}}`), nil
+			"factor_tasks":{"spot":"ftask_spot","swap":"ftask_swap","equity":"ftask_shared"}}}`), nil
 	case "DeleteStrategyInstance":
 		if g.deleteErr != nil {
 			return nil, g.deleteErr

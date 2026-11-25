@@ -17,12 +17,12 @@ func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, in
 	backoff := recheckRereadBackoff
 	recheckRereadBackoff = time.Millisecond
 	t.Cleanup(func() { recheckRereadBackoff = backoff })
-	view, err := client.GetView(context.Background(), "crypto", "view_factor_a")
+	view, err := client.GetView(context.Background(), "crypto", "dataset_factor_a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar}
-	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, EndTime: origin.Add(20 * time.Hour)}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar}
+	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, EndTime: origin.Add(20 * time.Hour)}
 	return &Runner{Store: openStore(t), Client: client}, job, resolved, view
 }
 

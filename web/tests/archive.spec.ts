@@ -16,7 +16,7 @@ test("归档任务页：执行器一行（在线、所在主机）、未归档�
   await expect(line).toContainText("本空间运行中 0 · 排队 1");
   await expect(page.getByRole("heading", { name: "未归档的数据集" })).toBeVisible();
   await expect(page.getByText("现货 5 分钟 K 线")).toBeVisible();
-  await expect(page.getByText("每收盘 1 根 · 下次")).toBeVisible();
+  await expect(page.getByText("每分钟跟随变更日志")).toBeVisible();
   await line.getByRole("link", { name: "存放位置与磁盘" }).click();
   await expect(page).toHaveURL(/#\/archive\/storage/);
 });
@@ -30,8 +30,7 @@ test("建归档任务：目录名默认建议值、路径预览、冲突标红�
   const dirInput = drawer.locator(".arco-input-wrapper input").first();
   await expect(dirInput).toHaveValue("binance-spot-kline-5m");
   await expect(drawer).toContainText("/data/moox/archive/crypto/collect/binance-spot-kline-5m/<yyyy>/<yyyymmdd>.csv.gz");
-  await expect(drawer).toContainText("每小时 :58:00～:04:00 不拉取，这段时间的边界顺延到 :04:25");
-  await expect(drawer.getByText("接下来 5 次拉取")).toBeVisible();
+  await expect(drawer).toContainText("创建后每分钟按 Storage 的变更日志跟随");
   // 改成已有任务的目录名：防抖后检查，标红
   await dirInput.fill("binance-spot-kline-1m");
   await expect(drawer).toContainText("目录名已被「现货 1 分钟 K 线」使用，请改一个");
@@ -87,12 +86,12 @@ test("分区下载：已校验的直接下载（同源带 Cookie，不取票据�
   });
 });
 
-test("最新数据：标的进 URL，表头写读取水位，更早翻页带 before", async ({ page }) => {
+test("最新数据：标的进 URL，表头写最近一次跟随，更早翻页带 before", async ({ page }) => {
   await page.goto("/#/archive/tasks?task=ds_kline_1m&tab=recent&subject=BTC-USDT");
   const drawer = page.locator(".arco-drawer");
   await expect(drawer.locator(".arco-tabs-tab-active")).toHaveText("最新数据");
-  await expect(drawer).toContainText("暂存库已从 Storage 读到");
-  await expect(drawer).toContainText("之后的行可能还没读到");
+  await expect(drawer).toContainText("最近一次跟随");
+  await expect(drawer).toContainText("之后写进 Storage 的行可能还没进暂存库");
   const rows = drawer.locator(".task-recent tbody tr");
   await expect(rows).toHaveCount(200);
   expect(calls.bodies.RecentRows?.at(-1)).toMatchObject({ space: "crypto", dataset: "ds_kline_1m", subject: "BTC-USDT" });
@@ -115,15 +114,13 @@ test("归档任务页：归档服务返回 500 时显示失败和重试、没有
   expect(await page.locator(".arco-message").count()).toBeLessThanOrEqual(1);
 });
 
-test("归档存储页：所在主机、根目录、磁盘、内置对象存储、避让时段", async ({ page }) => {
+test("归档存储页：所在主机、根目录、磁盘、内置对象存储", async ({ page }) => {
   await page.goto("/#/archive/storage");
   const main = page.locator(".moox-page");
   await expect(main).toContainText("因子机（192.168.0.103）");
   await expect(main).toContainText("/data/moox/archive");
   await expect(main).toContainText("已用 137 GB / 共 1.76 TB，可用 1.53 TB");
   await expect(main).toContainText("内置 SeaweedFS");
-  await expect(main).toContainText("每分钟只在第 25～55 秒读取");
-  await expect(main).toContainText("每小时 :58:00～:04:00 不拉取");
   await expect(main).toContainText("datasets.csv");
 });
 

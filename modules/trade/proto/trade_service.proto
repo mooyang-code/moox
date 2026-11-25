@@ -8,21 +8,9 @@ option go_package = "github.com/mooyang-code/moox/modules/trade/proto/tradegen;t
 
 // Decimal values are encoded as strings. Timestamps are Unix milliseconds.
 
-enum Exchange {
-  EXCHANGE_UNSPECIFIED = 0;
-  EXCHANGE_BINANCE = 1;
-  EXCHANGE_OKX = 2;
-  EXCHANGE_ASHARE = 3;
-  // 港股（香港交易所），只有模拟盘
-  EXCHANGE_HKEX = 4;
-}
-
-enum MarketType {
-  MARKET_TYPE_UNSPECIFIED = 0;
-  MARKET_TYPE_SPOT = 1;
-  MARKET_TYPE_SWAP = 2;
-  MARKET_TYPE_STOCK = 3;
-}
+// 交易所字段（exchange）是小写文本：binance、okx、ashare（A 股）、hkex（港股，只有模拟盘）。
+// 市场类型字段（market_type、markets）是小写文本：spot 现货、swap 永续、equity 股票。
+// 标的 ID 后缀（BTC-USDT-SPOT、BTC-USDT-SWAP）与交易所代码（exchange_symbol）是原文，不随市场类型的写法变。
 
 enum ExecutionMode {
   EXECUTION_MODE_UNSPECIFIED = 0;
@@ -98,8 +86,8 @@ message PaperConfig {
   string maker_fee_rate = 2;
   string taker_fee_rate = 3;
   string slippage_bps = 4;
-  // 已结束订单与成交保留的天数：0 表示不清理，1～365 天，默认 5。所有模拟账户都能设置，
-  // 但只有纯合约模拟账户（没开通现货、股票）会被清理；收益拆解的手续费、已实现盈亏和笔数另有小时汇总，不受清理影响。
+  // 已结束订单与成交保留的天数：0 表示不清理，1～365 天，默认 5。所有模拟账户都按它清理；
+  // 收益拆解的手续费、已实现盈亏和笔数另有小时汇总，不受清理影响。
   optional int32 order_retention_days = 5;
 }
 
@@ -107,9 +95,9 @@ message TradingAccount {
   string trading_account_id = 1;
   string space_id = 2;
   string name = 3;
-  Exchange exchange = 4;
-  // 账户已开通的市场，按 SPOT、SWAP、STOCK 的固定顺序排列。
-  repeated MarketType markets = 5;
+  string exchange = 4;
+  // 账户已开通的市场，按 spot、swap、equity 的固定顺序排列。
+  repeated string markets = 5;
   ExecutionMode execution_mode = 6;
   string settlement_asset = 7;
   string margin_mode = 8;
@@ -144,7 +132,7 @@ message LogicalAccount {
   string name = 3;
   ExecutionMode execution_mode = 5;
   // 只读：启用成员已开通市场的并集，是这个组合当前可交易的市场。
-  repeated MarketType markets = 6;
+  repeated string markets = 6;
   string settlement_asset = 7;
   string automation_state = 8;
   string pause_reason = 9;
@@ -213,8 +201,8 @@ message Order {
   string trading_account_id = 2;
   string client_order_id = 3;
   string exchange_order_id = 4;
-  Exchange exchange = 5;
-  MarketType market_type = 6;
+  string exchange = 5;
+  string market_type = 6;
   string instrument_id = 7;
   string exchange_symbol = 8;
   OrderType order_type = 9;
@@ -229,7 +217,8 @@ message Order {
   string owner_type = 18;
   string owner_id = 19;
   string logical_account_id = 20;
-  string runner_id = 21;
+  // 目标子单所属的策略实例；其他订单为空
+  string instance_id = 21;
   string state = 22;
   string filled_quantity = 23;
   string average_price = 24;
@@ -252,8 +241,8 @@ message Fill {
   string order_id = 3;
   string exchange_order_id = 4;
   string trading_account_id = 5;
-  Exchange exchange = 6;
-  MarketType market_type = 7;
+  string exchange = 6;
+  string market_type = 7;
   string instrument_id = 8;
   string exchange_symbol = 9;
   OrderSide side = 10;
@@ -271,7 +260,7 @@ message Fill {
 
 message Position {
   // 持仓所属市场；现货和合约的持仓互不抵消。
-  MarketType market_type = 16;
+  string market_type = 16;
   string trading_account_id = 1;
   string instrument_id = 2;
   string exchange_symbol = 3;
@@ -289,7 +278,8 @@ message Position {
   int64 updated_at = 15;
 }
 
-message InstrumentTarget {
+// InstrumentQuantity 是一个标的的目标数量（由目标权重换算而来）。
+message InstrumentQuantity {
   string instrument_id = 1;
   string quantity = 2;
   // hold 为 true 表示保持当前持仓数量不动，此时 quantity 为空。
@@ -307,9 +297,7 @@ message BlockedTarget {
 message LogicalAccountTarget {
   string target_id = 1;
   string logical_account_id = 2;
-  string runner_id = 3;
-  uint64 command_sequence = 4;
-  repeated InstrumentTarget targets = 5;
+  repeated InstrumentQuantity targets = 5;
   string status = 6;
   repeated BlockedTarget blocked_targets = 7;
   string last_error = 8;
@@ -336,9 +324,9 @@ message OperatorAction {
 
 message CreateTradingAccountReq {
   string name = 1;
-  Exchange exchange = 2;
-  // 要开通的市场：加密货币取 SPOT、SWAP 的子集，股票只有 STOCK。
-  repeated MarketType markets = 3;
+  string exchange = 2;
+  // 要开通的市场：加密货币取 spot、swap 的子集，股票只有 equity。
+  repeated string markets = 3;
   string settlement_asset = 4;
   string margin_mode = 5;
   LiveConfig live = 7;
@@ -356,7 +344,7 @@ message UpdateTradingAccountReq {
   string margin_mode = 5;
   string status = 6;
   // 模拟账户的订单保留天数：0 表示不清理，1～365 天；不传表示不改。只有模拟账户能改（创建后唯一能改的模拟配置），
-  // 实盘账户传了会被拒绝；只有纯合约模拟账户会被清理（见 PaperConfig）。
+  // 实盘账户传了会被拒绝；所有模拟账户都按它清理（见 PaperConfig）。
   optional int32 order_retention_days = 7;
 }
 message UpdateTradingAccountRsp {
@@ -389,7 +377,7 @@ message ExchangeInspection {
   string position_mode = 10;
   bool multi_assets_margin = 11;
   // 这把密钥当前能开通的市场。
-  repeated MarketType available_markets = 12;
+  repeated string available_markets = 12;
   repeated InspectionFinding blockers = 13;
   repeated InspectionFinding warnings = 14;
   // 检测时间，毫秒。
@@ -401,11 +389,11 @@ message ExchangeInspection {
 
 // 只读检测一把交易所密钥，不落库：录入密钥和建账户前预览。
 message InspectExchangeCredentialReq {
-  Exchange exchange = 1;
+  string exchange = 1;
   AccountEnvironment environment = 2;
   string credential_secret_id = 3;
   // 要开通的市场；不传时阻断项只有和市场无关的，和市场有关的问题写在 warnings 里（开通对应市场时会被阻断）。
-  repeated MarketType markets = 4;
+  repeated string markets = 4;
 }
 message InspectExchangeCredentialRsp {
   common.RetInfo ret_info = 1;
@@ -450,9 +438,10 @@ message GetTradingAccountRsp {
 }
 
 message ListTradingAccountsReq {
-  optional Exchange exchange = 1;
-  // 过滤已开通了该市场的账户。
-  optional MarketType market_type = 2;
+  // 空串表示不按交易所过滤。
+  string exchange = 1;
+  // 过滤已开通了该市场的账户；空串表示不过滤。
+  string market_type = 2;
   optional ExecutionMode execution_mode = 3;
   string status = 5;
   common.Page page = 6;
@@ -639,7 +628,7 @@ message SubmitOrderReq {
   // Unix milliseconds; zero freezes the server default at first acceptance.
   int64 deadline_at = 13;
   // 订单所在市场。账户开通了多个市场时必填；只开通一个市场时可省略，按它处理。
-  MarketType market_type = 14;
+  string market_type = 14;
 }
 message SubmitOrderRsp {
   common.RetInfo ret_info = 1;
@@ -728,7 +717,7 @@ message ShadowTarget {
   // 换算用的参考价：标的 → 价格。
   map<string, string> reference_prices = 12;
   // 换算出的数量；保持的标的 hold 为 true、不带数量。
-  repeated InstrumentTarget targets = 13;
+  repeated InstrumentQuantity targets = 13;
   int64 recorded_at = 14;
 }
 
@@ -796,9 +785,9 @@ message ListPositionsRsp {
 message CreatePaperSimulationReq {
   string account_name = 1;
   string logical_account_name = 2;
-  Exchange exchange = 3;
+  string exchange = 3;
   // 要开通的市场集合；模拟账户用一个资金池同时撮合开通的各个市场。
-  repeated MarketType markets = 4;
+  repeated string markets = 4;
   string settlement_asset = 5;
   string margin_mode = 6;
   string initial_balance = 7;
@@ -812,7 +801,7 @@ message CreatePaperSimulationReq {
   string logical_account_id = 12;
   // 加入已有组合时的优先级；不填就排在现有成员之后。
   int32 priority = 13;
-  // 订单保留天数：0 表示不清理，1～365 天，不传取 5。只有纯合约模拟账户会被清理（见 PaperConfig）。
+  // 订单保留天数：0 表示不清理，1～365 天，不传取 5。所有模拟账户都按它清理（见 PaperConfig）。
   optional int32 order_retention_days = 14;
 }
 
@@ -953,11 +942,10 @@ service TradeConsoleService {
   rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
   rpc ListAccountLedger(ListAccountLedgerReq) returns (ListAccountLedgerRsp);
   rpc FlattenTradingAccount(FlattenTradingAccountReq) returns (FlattenTradingAccountRsp);
-  rpc BlockInstrument(BlockInstrumentReq) returns (BlockInstrumentRsp);
   rpc UnblockInstrument(UnblockInstrumentReq) returns (UnblockInstrumentRsp);
   rpc ListBlockedInstruments(ListBlockedInstrumentsReq) returns (ListBlockedInstrumentsRsp);
   rpc ListInstrumentHolders(ListInstrumentHoldersReq) returns (ListInstrumentHoldersRsp);
-  rpc FlattenInstrument(FlattenInstrumentReq) returns (FlattenInstrumentRsp);
+  rpc ListDelists(ListDelistsReq) returns (ListDelistsRsp);
   rpc SummarizeAccountPnl(SummarizeAccountPnlReq) returns (SummarizeAccountPnlRsp);
   rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
   // GetLifecycle 读 Trade 模块的暂停与恢复追赶状态（设计 3.7，请求与响应见 moox_common.proto）。
@@ -975,7 +963,7 @@ message ListAccountLedgerReq {
   // 默认 200，最多 1000。
   int32 limit = 4;
   // 要查流水的市场；账户只有一个市场支持流水时可省略。
-  MarketType market_type = 5;
+  string market_type = 5;
 }
 
 message LedgerEntry {
@@ -990,7 +978,7 @@ message LedgerEntry {
   string trade_id = 8;
   string info = 9;
   // 流水所属市场。
-  MarketType market_type = 10;
+  string market_type = 10;
 }
 
 message ListAccountLedgerRsp {
@@ -1000,34 +988,14 @@ message ListAccountLedgerRsp {
   bool has_more = 3;
 }
 
-// ===== 下架名单与下架清仓（交易计划 4.7，供事件中心调用） =====
-// 下面的接口都用（交易所、市场、交易所代码）定位标的，由 Trade 换算内部标的 ID。
-// 名单的三个接口和 ListInstrumentHolders 是全局的，不分空间，Trade 不检查空间头。
+// ===== 下架名单与下架记录 =====
+// 下架处理在 Trade 进程内完成（收下架事件、按时间线清仓、核对），下面只是给管理台和 moox-cli 的查询与人工解除。
+// 一律用（交易所、市场、交易所代码）定位标的，由 Trade 换算内部标的 ID；全局的，不分空间，Trade 不检查空间头。
 
-// 写入下架名单。名单标的“只减不增”：还能交易时目标里加仓的部分被截掉、减仓照常，不能交易时整项跳过。
-message BlockInstrumentReq {
-  Exchange exchange = 1;
-  // 只收 MARKET_TYPE_SPOT、MARKET_TYPE_SWAP。
-  MarketType market_type = 2;
-  string exchange_symbol = 3;
-  string reason = 4;
-  // 来源事件 ID，只用于审计。
-  string event_id = 5;
-  // 写入者的标识（事件中心的下架处理传它的执行记录 ID）。已在名单里时保留第一个写入者；可以为空。
-  string owner = 6;
-}
-message BlockInstrumentRsp {
-  common.RetInfo ret_info = 1;
-  // true 表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
-  bool instrument_unknown = 2;
-  // false 表示标的已经在名单里，没有改动（原因、写入者都保留第一次写入的）。写名单的响应丢了再重试拿到的也是 false，
-  // 所以“这一项是不是自己写的”要看名单项的 owner，不能看它。
-  bool created = 3;
-}
-
+// 解除禁止：删掉名单行，并把这个标的进行中的下架记录（含演练）一并取消。
 message UnblockInstrumentReq {
-  Exchange exchange = 1;
-  MarketType market_type = 2;
+  string exchange = 1;
+  string market_type = 2;
   string exchange_symbol = 3;
 }
 message UnblockInstrumentRsp {
@@ -1037,18 +1005,19 @@ message UnblockInstrumentRsp {
 }
 
 message BlockedInstrument {
-  Exchange exchange = 1;
-  MarketType market_type = 2;
+  string exchange = 1;
+  string market_type = 2;
   string exchange_symbol = 3;
   // 写入时能从标的表查到的内部标的 ID 和基础资产，只用于展示和审计，查不到为空。
   string instrument_id = 4;
   string base_asset = 5;
   // 写入名单时的原因，只用于展示和审计。
   string reason = 6;
-  string source_event_id = 7;
-  int64 blocked_at = 8;
-  // 写入者的标识：第一个把它写进名单的调用方传的 owner，后来的重复写入不会覆盖；没传为空。
-  string owner = 9;
+  int64 blocked_at = 7;
+  // 范围：ALL 对所有账户生效；PAPER_ONLY 只对模拟盘账户生效（演练）。
+  string scope = 8;
+  // 写入或把范围升级为 ALL 的那条下架记录。
+  string delist_id = 9;
 }
 message ListBlockedInstrumentsReq {}
 message ListBlockedInstrumentsRsp {
@@ -1077,8 +1046,8 @@ message SkippedAccount {
   string reason = 2;
 }
 message ListInstrumentHoldersReq {
-  Exchange exchange = 1;
-  MarketType market_type = 2;
+  string exchange = 1;
+  string market_type = 2;
   string exchange_symbol = 3;
   // true 时只返回模拟盘。
   bool paper_only = 4;
@@ -1095,25 +1064,52 @@ message ListInstrumentHoldersRsp {
   repeated string notes = 5;
 }
 
-// 在调用时带的空间里，对组合中属于这个交易所的成员发起单标的下架清仓（DELIST_FLATTEN）：不暂停组合，只看这一个标的。
-// 同一个 action_id 要求组合、标的、reason 完全一致；已完成的直接返回旧结果；FAILED、PARTIAL 用同一个号再调会重新执行。
-message FlattenInstrumentReq {
-  string action_id = 1;
-  string logical_account_id = 2;
-  Exchange exchange = 3;
-  MarketType market_type = 4;
-  string exchange_symbol = 5;
-  string reason = 6;
-  // 截止时间（毫秒，传下架时间）：大于 0 时到点 Trade 不再下单，动作记 PARTIAL（剩余持仓写在结果里）；0 表示不限，只受 30 分钟期限约束。
-  int64 deadline_at = 7;
+// 下架记录里一轮一个组合的清仓。
+message DelistFlatten {
+  int32 round = 1;
+  string space_id = 2;
+  string logical_account_id = 3;
+  string action_id = 4;
+  // 动作状态：RUNNING、COMPLETED、PARTIAL、FAILED；空表示还没发起
+  string action_status = 5;
+  string last_error = 6;
+  // 毫秒
+  int64 created_at = 7;
 }
-message FlattenInstrumentRsp {
+// 一条下架记录：一个（标的、范围、下架时间）。改期时旧记录记 RESCHEDULED，由新记录接着处理。
+message Delist {
+  string delist_id = 1;
+  string exchange = 2;
+  string market_type = 3;
+  string exchange_symbol = 4;
+  // ALL 或 PAPER_ONLY
+  string scope = 5;
+  // 下架时刻，毫秒
+  int64 delist_at = 6;
+  // 下架消息的来源：BINANCE_SPOT_SCHEDULE、BINANCE_SWAP_EXCHANGE_INFO、OKX_SWAP_INSTRUMENTS、MANUAL
+  string notice_source = 7;
+  string source_event_id = 8;
+  // ACTIVE、COMPLETED、FAILED、CANCELED、RESCHEDULED
+  string status = 9;
+  // 已规划到第几轮：0 还没到 T−24h，1 已按 T−24h 规划，2 已按 T−2h 规划
+  int32 planned_round = 10;
+  string note = 11;
+  string result = 12;
+  // 毫秒；finished_at 为 0 表示还没结束
+  int64 created_at = 13;
+  int64 finished_at = 14;
+  repeated DelistFlatten flattens = 15;
+}
+// 列出下架记录。全局方法，不分空间，Trade 不检查空间头。
+message ListDelistsReq {
+  // 只列进行中的；为假时列全部（按创建时间倒序）
+  bool active_only = 1;
+  // 默认 100，最多 500。
+  int32 limit = 2;
+}
+message ListDelistsRsp {
   common.RetInfo ret_info = 1;
-  OperatorAction action = 2;
-  // true 表示 Trade 暂时忙（同组合有整组清仓、减仓在跑，或拿不到组合锁），稍后再试，不计入重试次数；此时 ret_info 是 CONFLICT。
-  bool busy = 3;
-  // true 表示标的已被解除禁止而提前结束，动作记 COMPLETED，不要重试（结果 JSON 顶层也带 unblocked）。
-  bool unblocked = 4;
+  repeated Delist delists = 2;
 }
 
 // ===== 收益拆解与人工操作记录 =====
@@ -1152,7 +1148,7 @@ message SummarizeAccountPnlRsp {
 
 message ListOperatorActionsReq {
   string logical_account_id = 1;
-  // 按动作类型过滤：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
+  // 按动作类型过滤：MANUAL_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
   string action_type = 2;
   int64 start_time = 3;
   int64 end_time = 4;

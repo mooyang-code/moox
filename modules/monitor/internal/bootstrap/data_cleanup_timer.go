@@ -17,16 +17,14 @@ import (
 const monitorDataCleanupTimerService = "trpc.moox.monitor.data_cleanup.timer"
 
 type monitorDataCleanupOps struct {
-	retention     time.Duration
-	now           func() time.Time
-	deleteResults func(context.Context, time.Time) error
-	deleteAlerts  func(context.Context, time.Time) error
-	pruneDedupe   func(context.Context, time.Time) error
-	pruneSeries   func(context.Context, time.Time) error
+	// retention 是告警事件的保留期（scheduler.alert_event_retention_days）。
+	retention    time.Duration
+	now          func() time.Time
+	deleteAlerts func(context.Context, time.Time) error
+	pruneDedupe  func(context.Context, time.Time) error
+	pruneSeries  func(context.Context, time.Time) error
 	// pruneArrivals 按 monmetrics.BarArrivalRetention 清理数据链路逐根到达记录（按到达时间）。
 	pruneArrivals func(context.Context, time.Time) error
-	// pruneChecks 清理失效的业务检查（对象已删除、长期不再被期望的检查及其告警规则与状态，见 stale_checks.go）。
-	pruneChecks func(context.Context, time.Time) error
 	// pruneLogs 清理重要日志：超过保留期的，以及超出行数上限的最旧记录。
 	pruneLogs func(context.Context, time.Time) error
 	// pruneHostSamples 按 hostmetrics.SampleRetention 清理主机快照历史（按采样时间）。
@@ -40,11 +38,6 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 	}
 	cutoff := now.Add(-ops.retention)
 	var errs []error
-	if ops.deleteResults != nil {
-		if err := ops.deleteResults(ctx, cutoff); err != nil {
-			errs = append(errs, fmt.Errorf("delete monitor results: %w", err))
-		}
-	}
 	if ops.deleteAlerts != nil {
 		if err := ops.deleteAlerts(ctx, cutoff); err != nil {
 			errs = append(errs, fmt.Errorf("delete monitor alert events: %w", err))
@@ -63,11 +56,6 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 	if ops.pruneArrivals != nil {
 		if err := ops.pruneArrivals(ctx, now.Add(-monmetrics.BarArrivalRetention)); err != nil {
 			errs = append(errs, fmt.Errorf("prune bar arrivals: %w", err))
-		}
-	}
-	if ops.pruneChecks != nil {
-		if err := ops.pruneChecks(ctx, now); err != nil {
-			errs = append(errs, fmt.Errorf("prune stale checks: %w", err))
 		}
 	}
 	if ops.pruneLogs != nil {
@@ -108,13 +96,9 @@ func buildMonitorDataCleanupOps(cfg *config.Config, runtime *Runtime) monitorDat
 		now: func() time.Time { return time.Now().UTC() },
 	}
 	if cfg != nil {
-		ops.retention = time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
+		ops.retention = time.Duration(cfg.Scheduler.AlertEventRetentionDays) * 24 * time.Hour
 	}
 	if runtime != nil && runtime.Store != nil && runtime.Repositories != nil && ops.retention > 0 {
-		ops.deleteResults = func(ctx context.Context, cutoff time.Time) error {
-			_, err := runtime.Repositories.Results.DeleteOlderThan(ctx, cutoff)
-			return err
-		}
 		ops.deleteAlerts = func(ctx context.Context, cutoff time.Time) error {
 			_, err := runtime.Repositories.Alerts.DeleteEventsOlderThan(ctx, cutoff)
 			return err
@@ -129,12 +113,6 @@ func buildMonitorDataCleanupOps(cfg *config.Config, runtime *Runtime) monitorDat
 	if runtime != nil && runtime.HostSamples != nil {
 		ops.pruneHostSamples = func(ctx context.Context, cutoff time.Time) error {
 			_, err := runtime.HostSamples.DeleteBefore(ctx, cutoff)
-			return err
-		}
-	}
-	if runtime != nil && runtime.Repositories != nil {
-		ops.pruneChecks = func(ctx context.Context, now time.Time) error {
-			_, err := pruneStaleChecks(ctx, runtime.Repositories, now, staleCheckPolicy{Retain: runtime.recreatedCheck})
 			return err
 		}
 	}

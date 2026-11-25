@@ -92,7 +92,7 @@ func e2eHarness(t *testing.T, space, dataset, sourceFreq, targetFreq string) (*s
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
 	params := fmt.Sprintf(`{"provider":"binance","market_type":"spot","source_dataset_id":%q,"source_frequency":%q,"source_series_tag":"venue:binance","target_dataset_id":"dataset_e2e","target_frequency":%q}`, dataset, sourceFreq, targetFreq)
-	task := domain.CollectionTask{SpaceID: space, TaskID: "e2e-resample", DataType: "kline_resample", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: params, ResultDatasetID: "dataset_e2e", ResultViewID: "view_e2e"}
+	task := domain.CollectionTask{SpaceID: space, TaskID: "e2e-resample", DataType: "kline_resample", PrepareState: domain.PrepareStateReady, Enabled: true, CollectParams: params, ResultDatasetID: "dataset_e2e"}
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	primary := newE2EPrimary()
 	return db, primary, &resample.Engine{Primary: primary, State: db.Resample(), Absences: db.Backfill(), Now: func() time.Time { return time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC) }}, task

@@ -49,16 +49,16 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney_select", SourceID: "select_http", DisplayName: "东方财富选股器", Hosts: []string{"data.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "eastmoney_select", SourceID: "select_http", DisplayName: "东方财富选股器", Hosts: []string{"data.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
 	daily := []string{"1d"}
 	return []marketdata.FieldSpec{
-		{ID: FieldTotalShares, Name: "总股本", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
-		{ID: FieldFloatShares, Name: "流通股本", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
-		{ID: FieldDividendPerShare, Name: "每股股利", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
-		{ID: FieldIsST, Name: "是否 ST", Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: daily},
+		{ID: FieldTotalShares, Name: "总股本", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
+		{ID: FieldFloatShares, Name: "流通股本", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
+		{ID: FieldDividendPerShare, Name: "每股股利", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: daily},
+		{ID: FieldIsST, Name: "是否 ST", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: daily},
 	}
 }
 

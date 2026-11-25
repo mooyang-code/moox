@@ -23,10 +23,10 @@ grep -Fq -- '--- PASS: TestHostGatewayRealAdminE2E' "${LOG}"
 for scenario in \
   object-and-exact-raw-pb-json-local-and-tls \
   tls-trust-plaintext-acl-and-durable-replay \
-  external-entry-local-and-cross-host-forward-acl-and-origin-caller-rules \
+  external-entry-cross-host-forward-acl-and-origin-caller-rules \
   new-caller-next-snapshot-without-restart \
   deployment-withdrawal-and-automatic-target-switch \
-  normal-restart-and-live-instance-conflict \
+  normal-restart \
   offline-routing-90-second-readiness-and-cache-restart; do
   grep -Fq -- "SCENARIO PASS ${scenario}" "${LOG}"
 done

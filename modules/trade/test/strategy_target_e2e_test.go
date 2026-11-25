@@ -13,13 +13,13 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -64,8 +64,7 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 	)
 	require.NoError(t, err)
 	require.Equal(t, "target-3", current.TargetID)
-	// Target ordering is derived from bar_end_time.
-	require.Equal(t, uint64(now.UnixMilli()), current.CommandSequence)
+	require.Equal(t, now.UnixMilli(), current.BarEndTime)
 	require.Equal(t, "0.03", current.Targets[0].Quantity)
 	require.Equal(t, int32(2), wakes.Load(), "stale command must not wake convergence")
 
@@ -195,10 +194,10 @@ func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) 
 func seedManagedHoldings(t *testing.T, f *fixture) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "managed-buy",
 			ClientOrderID: "managed-buy", ExchangeSymbol: testSymbol, OrderType: "MARKET",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: testInstrumentID(exchange.MarketTypeSpot),
+			Exchange: "binance", MarketType: "spot", InstrumentID: testInstrumentID(exchange.MarketTypeSpot),
 			Side: "BUY", Quantity: "1", ReferencePrice: "5000", State: "FILLED", FilledQuantity: "1", AveragePrice: "5000",
 			OwnerType: "OPERATOR", OwnerID: "managed-buy", LogicalAccountID: testLogicalAccount,
 		})
@@ -211,7 +210,7 @@ func seedTargetPaperHoldings(t *testing.T, f *fixture) {
 	// A historical buy at 5000 leaves 50000 USDT and 10 BTC from initial cash.
 	ctx := context.Background()
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.CreateOrder(store.OrderRecord{
+		if err := storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "historical-buy",
 			ClientOrderID: "historical-buy", ExchangeSymbol: testSymbol, OrderType: "MARKET",
 			Side: "BUY", Quantity: "10", ReferencePrice: "5000", State: "FILLED",
@@ -320,8 +319,8 @@ func targetDeliveryWithTargets(
 			SessionId: "session-e2e", SessionStartedAt: 1_000, StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,
 			Targets:          targets,
-			BarEndTime:       timestamppb.New(bar),
-			ValidUntil:       timestamppb.New(bar.Add(time.Hour)),
+			BarEndTime:       bar.UnixMilli(),
+			ValidUntil:       bar.Add(time.Hour).UnixMilli(),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: now,

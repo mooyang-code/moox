@@ -104,6 +104,7 @@ func TestParseRejectsRemovedSectionsAndSaysWhich(t *testing.T) {
 		"tls_enabled":             {strings.Replace(validConfig, "port = 4222", "port = 4222\ntls_enabled = true", 1), []string{"eventbus.tls_enabled 已删除"}},
 		"ssh.password":            {strings.Replace(validConfig, `username = "ubuntu"`, `username = "ubuntu", password = "p"`, 1), []string{"hosts.control.ssh.password 已删除"}},
 		"私钥口令":                    {strings.Replace(validConfig, `username = "ubuntu"`, `username = "ubuntu", private_key_passphrase = "p"`, 1), []string{"hosts.control.ssh.private_key_passphrase 已删除"}},
+		"assumed_egress_ips":      {validConfig + "\n[scf_plan]\nassumed_egress_ips = 5\n", []string{"scf_plan.assumed_egress_ips 已删除", "删掉这一行"}},
 		"control_root":            {"[paths]\ndeploy_root = \"/data/moox\"\ncontrol_root = \"/data/moox/prod\"\n" + validConfig, []string{"paths.control_root 已删除"}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -137,6 +138,9 @@ func TestParseValidatesTopology(t *testing.T) {
 		"部署根是相对路径":       {"[paths]\ndeploy_root = \"data\"\n" + validConfig, "paths.deploy_root"},
 		"CLS 缺主题":        {validConfig + "\n[logging.cls]\nenabled = true\nendpoint = \"ap-guangzhou.cls.tencentcs.com\"\n", "logging.cls.topic_id"},
 		"Collector 维护":   {validConfig + "\n[collector_retention]\nmaintenance_offset = \"2m\"\n", "maintenance_offset"},
+		"停用不在部署里的组件":     {validConfig + "\n[deployments_disabled]\ncontrol = [\"collector\"]\n", "deployments_disabled"},
+		"停用受保护组件":        {validConfig + "\n[deployments_disabled]\ncontrol = [\"admin\"]\n", "deployments"},
+		"停用控制机":          {strings.Replace(validConfig, `region = "ap-nanjing"`, "region = \"ap-nanjing\"\nenabled = false", 1), "control host"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.body))
@@ -241,3 +245,48 @@ var testKey = []byte("0123456789abcdef0123456789abcdef")
 func (memoryKeys) Load() ([]byte, error)         { return testKey, nil }
 func (memoryKeys) LoadOrCreate() ([]byte, error) { return testKey, nil }
 func (memoryKeys) Where() string                 { return "测试密钥" }
+
+// 主机 enabled 不写为启用；[deployments_disabled] 只改部署的登记状态；停用的主机只留 host-gateway 的单元在跑。
+func TestHostAndDeploymentEnablement(t *testing.T) {
+	// Declared 会读 ssh.private_key_file 指向的私钥：用临时的家目录，不依赖本机有没有 ~/.ssh/moox_ed25519。
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".ssh"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".ssh", "moox_ed25519"), []byte("test-private-key\n"), 0o600))
+	cfg, err := Parse([]byte(strings.Replace(validConfig, `control = ["admin", "eventbus"]`, `control = ["admin", "eventbus", "collector"]`, 1) + `
+[hosts.factor]
+address = "192.0.2.30"
+reachability = "outbound"
+enabled = false
+ssh = { port = 22, username = "builder" }
+
+[deployments_disabled]
+control = ["collector"]
+`))
+	require.NoError(t, err)
+	require.True(t, cfg.HostByID("control").Enabled)
+	require.False(t, cfg.HostByID("factor").Enabled)
+	require.False(t, cfg.DeploymentEnabled("control", "collector"))
+	require.True(t, cfg.DeploymentEnabled("control", "admin"))
+	require.False(t, cfg.UnitEnabled("control", "collector"))
+	require.True(t, cfg.UnitEnabled("control", "host-agent"))
+	require.True(t, cfg.UnitEnabled("factor", "host-gateway"))
+	require.False(t, cfg.UnitEnabled("factor", "host-agent"))
+	topology, err := cfg.Topology()
+	require.NoError(t, err)
+	for _, host := range topology.Hosts {
+		want := "enabled"
+		if host.ID == "factor" {
+			want = "disabled"
+		}
+		require.Equal(t, want, host.Status, host.ID)
+	}
+	declared, err := cfg.Declared()
+	require.NoError(t, err)
+	for _, host := range declared.Hosts {
+		require.Equal(t, host.HostID == "factor", host.Disabled, host.HostID)
+		if host.HostID == "control" {
+			require.Equal(t, []string{"collector"}, host.DisabledComponents)
+		}
+	}
+}

@@ -17,7 +17,7 @@ import (
 // 一轮里起完操作后最多等到本轮剩余时间减 5 秒，几秒就能做完的操作当轮就能确认。
 // 操作表只在内存里：进程重启即空，没确认的函数下一轮重新 Ensure，Ensure 先读云上状态，做完的部分不会重做。
 
-// 操作的用途（functionOp.key 的前缀）。计划推进的 key 还带计划号与阶段，见 planOpKey。
+// 操作的用途（functionOp.key 的前缀）。计划推进的 key 还带计划号，见 planOpKey。
 const (
 	opKeyRepair    = "repair"
 	opKeyUpgrade   = "upgrade"
@@ -68,7 +68,7 @@ type functionOp struct {
 	err error
 	// packageID 是操作开始时现取的代码包（补采函数的就绪缓存与读回缓存用）。
 	packageID string
-	// timerSuppressed 为 true 表示 Ensure 因为空间正在暂停把定时器设成了停用：这次成功不能算本阶段的确认。
+	// timerSuppressed 为 true 表示 Ensure 因为空间正在暂停把定时器设成了停用：这次成功不能算计划的确认。
 	timerSuppressed atomic.Bool
 }
 
@@ -207,7 +207,7 @@ func (o *functionOps) wait(ctx context.Context, ops []*functionOp, budget time.D
 }
 
 // quiesceTimerCapable 是暂停的第 2～4 步：取消还没拿到并发名额的、可能打开定时器的操作并等它们退出；
-// 已经在跑的不取消（避免留下建到一半的函数），返回还在跑的个数；已经结束的这类操作的结果一并清掉，免得恢复后被当成某个阶段的确认。
+// 已经在跑的不取消（避免留下建到一半的函数），返回还在跑的个数；已经结束的这类操作的结果一并清掉，免得恢复后被当成计划的确认。
 func (o *functionOps) quiesceTimerCapable() int {
 	o.mu.Lock()
 	var queued []*functionOp

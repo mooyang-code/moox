@@ -1315,13 +1315,13 @@ func newTestServiceForMarket(
 			InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: orderSessionStartedAt("session-1"), StrategyID: "strategy-1",
 			BarEndTime: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 			Status: "PENDING", AcceptedAt: 1,
-			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-" + string(instrument.MarketType), Quantity: "1"}},
+			Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(instrument.MarketType), Quantity: "1"}},
 		}); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(instrument.Exchange), MarketType: string(instrument.MarketType),
-			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: "BTC-USDT-" + string(instrument.MarketType),
+			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(instrument.MarketType),
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 			SettlementAsset:      instrument.SettlementAsset,
 			Linear:               instrument.Linear,

@@ -10,20 +10,19 @@ const ctx = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   GetTaskList: vi.fn(),
   GetTaskDetail: vi.fn(),
-  GetDataTypeConfigs: vi.fn(async () => ({ configs: [] }))
+  GetDataTypeConfigs: vi.fn(async () => ({ configs: [] })),
+  GetDataTypeConfigWithFields: vi.fn(async () => ({ detail: {} }))
 }));
 vi.mock("vue-router", () => ({ useRoute: () => ctx.route, useRouter: () => ({ replace: ctx.replace, push: ctx.replace }) }));
 vi.mock("@/api/collector", async importOriginal => ({
   ...(await importOriginal<typeof import("@/api/collector")>()),
   GetTaskList: api.GetTaskList,
   GetTaskDetail: api.GetTaskDetail,
-  GetDataTypeConfigs: api.GetDataTypeConfigs
+  GetDataTypeConfigs: api.GetDataTypeConfigs,
+  GetDataTypeConfigWithFields: api.GetDataTypeConfigWithFields
 }));
 vi.mock("@/api/storage/metadata", () => ({
   getDataset: vi.fn(),
-  getView: vi.fn(),
-  listFieldGroups: vi.fn(async () => ({ field_groups: [], page_result: {} })),
-  listFields: vi.fn(async () => ({ fields: [], page_result: {} })),
   listTags: vi.fn(async () => ({ tags: [], page_result: {} }))
 }));
 vi.mock("@/store/modules/space", async () => {

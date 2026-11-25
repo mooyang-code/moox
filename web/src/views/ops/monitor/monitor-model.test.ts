@@ -16,27 +16,30 @@ import {
   verdict
 } from "./monitor-model";
 
-const names = { datasets: { dataset_abc: "现货分钟K线" }, views: {} };
+// Monitor 接口里的时刻是毫秒数字字符串。
+const ms = (text: string) => String(Date.parse(text));
+
+const names = { datasets: { dataset_abc: "现货分钟K线" } };
 const now = Date.parse("2026-10-16T03:00:00Z");
 const at = (minutesAgo: number, seconds = 0) => new Date(now - minutesAgo * 60_000 + seconds * 1000).toISOString();
 
 describe("current alerts", () => {
   const overview: HealthOverview = {
-    generated_at: new Date(now).toISOString(),
+    generated_at: String(now),
     alerts: [
       {
         id: "fetch",
         severity: "critical",
         title: "行情采集 scf_timer 协调",
         reason: "采集计划指标已停止上报",
-        triggered_at: at(2, 20),
-        object: { type: "business", kind: "market_fetch" }
+        triggered_at: ms(at(2, 20)),
+        object: { type: "business", kind: "kline_freshness" }
       },
       {
         id: "reporter",
         severity: "warning",
         title: "行情采集服务（control 节点）· 运行指标上报",
-        triggered_at: at(2),
+        triggered_at: ms(at(2)),
         object: { type: "component", host_id: "control", component_id: "collector" }
       },
       {
@@ -44,17 +47,17 @@ describe("current alerts", () => {
         severity: "critical",
         title: "dataset_abc · 1m",
         reason: "任务运行结果已过期",
-        triggered_at: at(189),
+        triggered_at: ms(at(189)),
         recovering: true,
         object: { type: "dataset", producer: "factor" },
         dataset: {
           status: "stale",
           output_watermark_at: at(60),
-          latest_bar_close_at: at(59),
+          latest_bar_close_at: ms(at(59)),
           expected_bar_at: at(1),
-          expected_bar_close_at: at(0),
+          expected_bar_close_at: ms(at(0)),
           waiting_bars: 58,
-          waiting_since: at(58),
+          waiting_since: ms(at(58)),
           late_confirmed: true,
           lateness_limit_seconds: "180"
         }
@@ -99,7 +102,7 @@ describe("current alerts", () => {
 
 describe("verdict without alerts", () => {
   const healthy: HealthOverview = {
-    generated_at: new Date(now).toISOString(),
+    generated_at: String(now),
     topology_known: true,
     components: [
       { host_id: "control", component_id: "admin", status: "healthy" },
@@ -167,16 +170,22 @@ describe("历史补齐中的数据集", () => {
 
 describe("incident timeline", () => {
   const overview: HealthOverview = {
-    generated_at: new Date(now).toISOString(),
+    generated_at: String(now),
     incident_window_hours: 48,
     incidents: [
-      { id: "a", severity: "warning", title: "行情采集服务 · 运行指标上报", triggered_at: at(30), resolved_at: at(30, 29) },
+      {
+        id: "a",
+        severity: "warning",
+        title: "行情采集服务 · 运行指标上报",
+        triggered_at: ms(at(30)),
+        resolved_at: ms(at(30, 29))
+      },
       {
         id: "b",
         severity: "critical",
         title: "行情采集 scf_timer 协调",
-        triggered_at: at(30, 1),
-        resolved_at: at(30, 29),
+        triggered_at: ms(at(30, 1)),
+        resolved_at: ms(at(30, 29)),
         notify_failed: true
       },
       {
@@ -184,12 +193,12 @@ describe("incident timeline", () => {
         severity: "critical",
         title: "策略结果",
         reason: "一直运行失败",
-        triggered_at: at(600),
-        resolved_at: at(411),
+        triggered_at: ms(at(600)),
+        resolved_at: ms(at(411)),
         reminder_count: 37
       },
-      { id: "d", severity: "critical", title: "控制台前端 · 健康检查", triggered_at: at(5), active: true },
-      { id: "e", severity: "critical", title: "采集计划", triggered_at: at(120) }
+      { id: "d", severity: "critical", title: "控制台前端 · 健康检查", triggered_at: ms(at(5)), resolved_at: "0", active: true },
+      { id: "e", severity: "critical", title: "采集计划", triggered_at: ms(at(120)), resolved_at: "0" }
     ]
   };
 
@@ -224,9 +233,9 @@ describe("incident timeline", () => {
 
     const single = incidentTimeline(
       {
-        generated_at: new Date(now).toISOString(),
+        generated_at: String(now),
         incidents: [
-          { id: "cpu", severity: "warning", title: "storage CPU", triggered_at: at(30), resolved_at: at(20), processes }
+          { id: "cpu", severity: "warning", title: "storage CPU", triggered_at: ms(at(30)), resolved_at: ms(at(20)), processes }
         ]
       },
       names,
@@ -236,10 +245,10 @@ describe("incident timeline", () => {
 
     const merged = incidentTimeline(
       {
-        generated_at: new Date(now).toISOString(),
+        generated_at: String(now),
         incidents: [
-          { id: "cpu", severity: "warning", title: "storage CPU", triggered_at: at(30), resolved_at: at(20), processes },
-          { id: "web", severity: "critical", title: "控制台前端", triggered_at: at(30, 5), resolved_at: at(20) }
+          { id: "cpu", severity: "warning", title: "storage CPU", triggered_at: ms(at(30)), resolved_at: ms(at(20)), processes },
+          { id: "web", severity: "critical", title: "控制台前端", triggered_at: ms(at(30, 5)), resolved_at: ms(at(20)) }
         ]
       },
       names,
@@ -253,11 +262,18 @@ describe("incident timeline", () => {
   it("never merges incidents in different lifecycle states", () => {
     const timeline = incidentTimeline(
       {
-        generated_at: new Date(now).toISOString(),
+        generated_at: String(now),
         incidents: [
-          { id: "resolved", severity: "critical", title: "已恢复项", triggered_at: at(30), resolved_at: at(25) },
-          { id: "revoked", severity: "critical", title: "已撤销项", triggered_at: at(30, 10) },
-          { id: "ongoing", severity: "warning", title: "进行中项", triggered_at: at(30, 20), resolved_at: at(29), active: true }
+          { id: "resolved", severity: "critical", title: "已恢复项", triggered_at: ms(at(30)), resolved_at: ms(at(25)) },
+          { id: "revoked", severity: "critical", title: "已撤销项", triggered_at: ms(at(30, 10)) },
+          {
+            id: "ongoing",
+            severity: "warning",
+            title: "进行中项",
+            triggered_at: ms(at(30, 20)),
+            resolved_at: ms(at(29)),
+            active: true
+          }
         ]
       },
       names,
@@ -306,8 +322,8 @@ describe("layers", () => {
                 freq: "1m",
                 status: "healthy",
                 output_watermark_at: at(11),
-                latest_bar_close_at: close,
-                arrived_at: at(10, 5),
+                latest_bar_close_at: ms(close),
+                arrived_at: ms(at(10, 5)),
                 delay_known: true,
                 delay_seconds: "5",
                 lateness_limit_seconds: "600"
@@ -319,8 +335,8 @@ describe("layers", () => {
                 freq: "1m",
                 status: "healthy",
                 output_watermark_at: at(41),
-                latest_bar_close_at: at(40),
-                arrived_at: at(0),
+                latest_bar_close_at: ms(at(40)),
+                arrived_at: ms(at(0)),
                 delay_known: true,
                 delay_seconds: "2400",
                 lateness_limit_seconds: "600"
@@ -334,7 +350,7 @@ describe("layers", () => {
                 reason: "等待中",
                 output_watermark_at: at(15),
                 waiting_bars: 3,
-                waiting_since: at(12),
+                waiting_since: ms(at(12)),
                 late_confirmed: true,
                 overdue_seconds: "700",
                 lateness_limit_seconds: "600"
@@ -417,9 +433,9 @@ describe("layers", () => {
             reason: "已停用或移除，不再检查"
           },
           {
-            check_id: "market_fetch:scf_timer",
-            kind: "market_fetch",
-            module: "scf_timer",
+            check_id: "attention:collector:fetch_coordination_failing",
+            kind: "attention",
+            module: "collector",
             status: "down",
             reason: "采集计划指标已停止上报"
           }
@@ -430,9 +446,9 @@ describe("layers", () => {
     );
     expect(kinds.map(kind => [kind.label, kind.healthy, kind.total, kind.inactive, kind.tone])).toEqual([
       ["K 线新鲜度", 1, 2, 1, "ok"],
-      ["采集计划对账", 0, 1, 0, "bad"]
+      ["关注项", 0, 1, 0, "bad"]
     ]);
-    expect(kinds[1].items[0]).toMatchObject({ title: "采集计划对账 · scf_timer", attention: true });
+    expect(kinds[1].items[0]).toMatchObject({ title: "关注项 · collector", attention: true });
   });
 
   it("draws host meters against their alert thresholds", () => {
@@ -441,7 +457,6 @@ describe("layers", () => {
         hosts: [
           {
             host_id: "control",
-            agent_id: "pwU2",
             address: "203.0.113.10",
             status: "healthy",
             cpu_available: true,
@@ -532,17 +547,23 @@ describe("expected bar", () => {
     freq: "1m",
     status: "healthy",
     output_watermark_at: at(2),
-    latest_bar_close_at: at(1),
-    arrived_at: at(1, 1),
+    latest_bar_close_at: ms(at(1)),
+    arrived_at: ms(at(1, 1)),
     delay_known: true,
     delay_seconds: "1",
     lateness_limit_seconds: "30"
   };
-  const waiting = { ...base, expected_bar_at: at(1), expected_bar_close_at: at(0), waiting_bars: 1, waiting_since: at(0) };
+  const waiting = {
+    ...base,
+    expected_bar_at: at(1),
+    expected_bar_close_at: ms(at(0)),
+    waiting_bars: 1,
+    waiting_since: ms(at(0))
+  };
   const later = (seconds: number) => now + seconds * 1000;
 
   it("shows the expected bar next to the latest one once it has arrived", () => {
-    const arrived = { ...base, expected_bar_at: at(2), expected_bar_close_at: at(1) };
+    const arrived = { ...base, expected_bar_at: at(2), expected_bar_close_at: ms(at(1)) };
     const delay = barDelay(arrived, now);
     expect(delay).toMatchObject({ text: "延迟 1 秒", tone: "ok" });
     const expected = expectedBar(arrived, delay, now);
@@ -551,7 +572,7 @@ describe("expected bar", () => {
     expect(expected.title).toContain("已到");
     expect(expectedBar({ ...base }, delay, now)).toEqual({ text: "—", tone: "idle", title: "" });
     // 还没有任何产出：不写“已到”。
-    const empty = { ...base, output_watermark_at: undefined, expected_bar_at: at(2), expected_bar_close_at: at(1) };
+    const empty = { ...base, output_watermark_at: undefined, expected_bar_at: at(2), expected_bar_close_at: ms(at(1)) };
     expect(expectedBar(empty, barDelay(empty, now), now)).toMatchObject({ tone: "idle" });
     expect(expectedBar(empty, barDelay(empty, now), now).title).toContain("还没有任何产出");
   });
@@ -581,6 +602,21 @@ describe("expected bar", () => {
     expect(barDelay(warming, later(10)).tone).toBe("ok");
     expect(barDelay(warming, later(45))).toMatchObject({ text: "等待中，已晚 45 秒", tone: "warn" });
   });
+
+  it('接口里没有的时刻是 "0"，按没有处理', () => {
+    // 网关 JSON 输出零值：没有收线、到达、应到时刻时这几个字段是 "0"，不能当作有值。
+    const none = {
+      ...base,
+      output_watermark_at: "",
+      latest_bar_close_at: "0",
+      arrived_at: "0",
+      delay_known: false,
+      delay_seconds: "0",
+      expected_bar_close_at: "0",
+      waiting_since: "0"
+    };
+    expect(barDelay(none, now)).toEqual({ text: "—", tone: "idle", title: "", ratio: 0 });
+  });
 });
 
 describe("market time zone", () => {
@@ -594,9 +630,9 @@ describe("market time zone", () => {
       timezone: "Asia/Shanghai",
       output_watermark_at: "2026-10-16T01:30:00Z",
       expected_bar_at: "2026-10-16T01:30:00Z",
-      expected_bar_close_at: "2026-10-16T01:31:00Z",
-      latest_bar_close_at: "2026-10-16T01:31:00Z",
-      arrived_at: "2026-10-16T01:31:02Z",
+      expected_bar_close_at: ms("2026-10-16T01:31:00Z"),
+      latest_bar_close_at: ms("2026-10-16T01:31:00Z"),
+      arrived_at: ms("2026-10-16T01:31:02Z"),
       delay_known: true,
       delay_seconds: "2",
       lateness_limit_seconds: "90"
@@ -612,16 +648,16 @@ describe("当前告警的进程排行", () => {
   it("主机告警的详情里列出占用最高的进程，别的告警没有这一项", () => {
     const groups = alertGroups(
       {
-        generated_at: new Date(now).toISOString(),
+        generated_at: String(now),
         alerts: [
           {
             id: "cpu",
             severity: "warning",
             title: "storage CPU",
-            triggered_at: at(10),
+            triggered_at: ms(at(10)),
             processes: [{ pid: 9, name: "moox-storage-primary", cpu_percent: 120, cpu_available: true, rss_bytes: 1048576 }]
           },
-          { id: "web", severity: "critical", title: "控制台前端", triggered_at: at(40) }
+          { id: "web", severity: "critical", title: "控制台前端", triggered_at: ms(at(40)) }
         ]
       },
       names,

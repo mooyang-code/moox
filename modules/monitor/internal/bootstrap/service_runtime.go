@@ -6,11 +6,9 @@ import (
 
 	"github.com/mooyang-code/moox/packages/timerjob"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
@@ -37,18 +35,8 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 			_, reason := evaluationFresh(runtime, time.Now().UTC())
 			return reason
 		},
+		HostReports: hostReportIngest(hostStore, runtime),
 	}))
-}
-
-func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
-	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{
-		Sender: runtime.alertSender,
-	})
-	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
-		if err := evaluator.Evaluate(ctx, check, result); err != nil {
-			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)
-		}
-	}
 }
 
 // monitorSyncFunc 注册部署拓扑的同步定时器（Admin 里登记的主机与部署、各主机网关状态），启动时先同步一次。
@@ -60,7 +48,7 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitordeployment.NewSyncer(runtime.Repositories.Topology, monitordeployment.NewClientSource(runtime.Gateway), runtime.Repositories.Gateways)
+	syncer := monitordeployment.NewSyncer(runtime.Repositories.Topology, monitordeployment.NewClientSource(runtime.Gateway))
 	handler := monitorSyncHandler(serializedMonitorSync(syncer.Sync))
 	registerMonitorSyncTimer(s, handler)
 

@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 
 export interface CollectorPage {
   page?: number;
@@ -12,8 +12,6 @@ export interface CollectorTaskResult {
   result_name?: string;
   /** 结果写入的数据集；采集任务页据此显示归档状态 */
   dataset_id?: string;
-  view_id?: string;
-  view_ids?: string[];
   status?: string;
   last_data_time?: string;
   coverage_start?: string;
@@ -34,8 +32,9 @@ export interface CollectorTask {
   collect_params?: Record<string, unknown>;
   enabled?: boolean | string;
   creator?: string;
-  create_time?: string;
-  modify_time?: string;
+  /** 创建、更新时刻：Unix 毫秒（数字字符串）。 */
+  created_at?: string;
+  updated_at?: string;
   prepare_state?: string;
   last_error?: string;
   result?: CollectorTaskResult;
@@ -87,11 +86,11 @@ export interface GetTaskDetailResponse {
 export interface TagSyncStatus {
   space_id: string;
   tag_id: string;
-  /** 上次运行时间（RFC3339，UTC）。 */
+  /** 上次运行时刻：Unix 毫秒（数字字符串）。 */
   last_run_at?: string;
   last_status?: "success" | "failed" | string;
   last_error?: string;
-  /** 最近一次成功的时间；从未成功过为空。 */
+  /** 最近一次成功的时刻：Unix 毫秒（数字字符串）；从未成功过为 "0"。 */
   last_success_at?: string;
 }
 
@@ -141,6 +140,7 @@ export interface ResampleJob {
   start: string;
   end: string;
   next_bucket: string;
+  /** 最早开始时刻：Unix 毫秒（数字字符串），"0" 表示不限。 */
   not_before: string;
   status: string;
   total_buckets: number;
@@ -149,6 +149,7 @@ export interface ResampleJob {
   skipped: number;
   skipped_samples?: string[];
   last_error?: string;
+  /** Unix 毫秒（数字字符串）。 */
   created_at: string;
   updated_at: string;
 }
@@ -167,8 +168,6 @@ export interface ResampleSourcePreview {
   source_dataset_id: string;
   source_frequency: string;
   source_series_tag: string;
-  // 源是统一数据集（market_type 为 multi）时各条源序列的 series_tag，此时 source_series_tag 为空。
-  source_series_tags?: string[];
   subject_count: number;
   market_id: string;
   provider: string;
@@ -186,8 +185,9 @@ export interface DataTypeConfig {
   data_source_options?: Record<string, unknown>;
   sort_order: number;
   version: number;
-  create_time: string;
-  modify_time: string;
+  /** Unix 毫秒（数字字符串）。 */
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DataTypeFieldConfig {
@@ -203,9 +203,13 @@ export interface DataTypeFieldConfig {
   sort_order: number;
 }
 
-/** K 线任务可以在输出字段里选的一个附加字段及其适用范围；显示名、分组以 Storage 字段目录为准。 */
+/** K 线任务可以在输出字段里选的一个附加字段及其适用范围；显示名、分组只在 Collector 的字段规格里登记。 */
 export interface ExtraFieldOption {
   field_id: string;
+  /** 中文显示名 */
+  display_name: string;
+  /** 中文分组名（一级） */
+  group?: string;
   /** 适用的市场（空间） */
   market_id: string;
   /** 适用的品种，对应标签的 market_type */
@@ -221,19 +225,32 @@ export interface DataTypeConfigDetail {
   fields?: DataTypeFieldConfig[];
   /** K 线任务可选的附加字段，默认都不选 */
   extra_fields?: ExtraFieldOption[];
+  /** K 线任务可选的基础输出字段（结果数据集能建的列，按建列顺序）；其他任务类型为空 */
+  base_output_fields?: OutputFieldOption[];
+}
+
+/** K 线任务可以选的一个基础输出字段。 */
+export interface OutputFieldOption {
+  field_id: string;
+  /** 中文显示名，取自 Collector 字段规格 */
+  display_name: string;
+  /** 中文分组名（一级） */
+  group?: string;
+  /** 值类型：double、int、string、bool 或 time */
+  value_type?: string;
 }
 
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {
-  return callControl<GetTaskListRequest, GetTaskListResponse>("collector", "GetTaskList", params);
+  return call<GetTaskListRequest, GetTaskListResponse>("collector", "GetTaskList", params);
 }
 
 export async function GetTaskDetail(params: GetTaskDetailRequest): Promise<GetTaskDetailResponse> {
-  return callControl<GetTaskDetailRequest, GetTaskDetailResponse>("collector", "GetTaskDetail", params);
+  return call<GetTaskDetailRequest, GetTaskDetailResponse>("collector", "GetTaskDetail", params);
 }
 
 /** 读取标签同步状态；spaceId 为空表示所有空间。 */
 export async function listTagSyncStatus(spaceId = ""): Promise<TagSyncStatus[]> {
-  const rsp = await callControl<{ space_id: string }, { items?: TagSyncStatus[] }>("collector", "ListTagSyncStatus", {
+  const rsp = await call<{ space_id: string }, { items?: TagSyncStatus[] }>("collector", "ListTagSyncStatus", {
     space_id: spaceId
   });
   return rsp.items || [];
@@ -241,32 +258,32 @@ export async function listTagSyncStatus(spaceId = ""): Promise<TagSyncStatus[]> 
 
 /** 读取可用于标的同步的（来源，市场类型）组合。 */
 export async function listSubjectListers(): Promise<SubjectLister[]> {
-  const rsp = await callControl<Record<string, never>, { listers?: SubjectLister[] }>("collector", "ListSubjectListers", {});
+  const rsp = await call<Record<string, never>, { listers?: SubjectLister[] }>("collector", "ListSubjectListers", {});
   return rsp.listers || [];
 }
 
 export async function CreateTask(params: CreateTaskRequest): Promise<CreateTaskResponse> {
-  return callControl<CreateTaskRequest, CreateTaskResponse>("collector", "CreateTask", params);
+  return call<CreateTaskRequest, CreateTaskResponse>("collector", "CreateTask", params);
 }
 
 export async function UpdateTask(params: UpdateTaskRequest): Promise<UpdateTaskResponse> {
-  return callControl<UpdateTaskRequest, UpdateTaskResponse>("collector", "UpdateTask", params);
+  return call<UpdateTaskRequest, UpdateTaskResponse>("collector", "UpdateTask", params);
 }
 
 export async function DisableTask(params: DisableTaskRequest): Promise<Record<string, unknown>> {
-  return callControl<DisableTaskRequest, Record<string, unknown>>("collector", "DisableTask", params);
+  return call<DisableTaskRequest, Record<string, unknown>>("collector", "DisableTask", params);
 }
 
 export async function DeleteTask(params: DeleteTaskRequest): Promise<Record<string, unknown>> {
-  return callControl<DeleteTaskRequest, Record<string, unknown>>("collector", "DeleteTask", params);
+  return call<DeleteTaskRequest, Record<string, unknown>>("collector", "DeleteTask", params);
 }
 
 export async function GetDataTypeConfigs(): Promise<{ configs?: DataTypeConfig[] }> {
-  return callControl<Record<string, never>, { configs?: DataTypeConfig[] }>("collector", "GetDataTypeConfigs", {});
+  return call<Record<string, never>, { configs?: DataTypeConfig[] }>("collector", "GetDataTypeConfigs", {});
 }
 
 export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ detail?: DataTypeConfigDetail }> {
-  return callControl<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collector", "GetDataTypeConfigWithFields", {
+  return call<{ data_type: string }, { detail?: DataTypeConfigDetail }>("collector", "GetDataTypeConfigWithFields", {
     data_type: dataType
   });
 }
@@ -274,41 +291,28 @@ export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ d
 export async function submitKlineResampleJob(
   request: SubmitResampleJobRequest
 ): Promise<{ job?: ResampleJob; created?: boolean }> {
-  return callControl<SubmitResampleJobRequest, { job?: ResampleJob; created?: boolean }>(
-    "collector",
-    "SubmitKlineResampleJob",
-    request
-  );
+  return call<SubmitResampleJobRequest, { job?: ResampleJob; created?: boolean }>("collector", "SubmitKlineResampleJob", request);
 }
 
 export async function getKlineResampleJob(spaceId: string, jobId: string): Promise<ResampleJob | undefined> {
-  const response = await callControl<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
-    "collector",
-    "GetKlineResampleJob",
-    {
-      space_id: spaceId,
-      job_id: jobId
-    }
-  );
+  const response = await call<{ space_id: string; job_id: string }, { job?: ResampleJob }>("collector", "GetKlineResampleJob", {
+    space_id: spaceId,
+    job_id: jobId
+  });
   return response.job;
 }
 
-export async function listKlineResampleJobs(
-  spaceId: string,
-  taskId = "",
-  status = "",
-  limit = 50,
-  options: { silentError?: boolean } = {}
-): Promise<ResampleJob[]> {
-  const response = await callControl<
-    { space_id: string; task_id: string; status: string; limit: number },
-    { jobs?: ResampleJob[] }
-  >("collector", "ListKlineResampleJobs", { space_id: spaceId, task_id: taskId, status, limit }, options);
+export async function listKlineResampleJobs(spaceId: string, taskId = "", status = "", limit = 50): Promise<ResampleJob[]> {
+  const response = await call<{ space_id: string; task_id: string; status: string; limit: number }, { jobs?: ResampleJob[] }>(
+    "collector",
+    "ListKlineResampleJobs",
+    { space_id: spaceId, task_id: taskId, status, limit }
+  );
   return response.jobs || [];
 }
 
 export async function cancelKlineResampleJob(spaceId: string, jobId: string): Promise<ResampleJob | undefined> {
-  const response = await callControl<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
+  const response = await call<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
     "collector",
     "CancelKlineResampleJob",
     {
@@ -324,7 +328,7 @@ export async function previewKlineResampleSource(
   sourceTaskId: string,
   targetFrequency = ""
 ): Promise<ResampleSourcePreview> {
-  return callControl<{ space_id: string; source_task_id: string; target_frequency: string }, ResampleSourcePreview>(
+  return call<{ space_id: string; source_task_id: string; target_frequency: string }, ResampleSourcePreview>(
     "collector",
     "PreviewKlineResampleSource",
     { space_id: spaceId, source_task_id: sourceTaskId, target_frequency: targetFrequency }

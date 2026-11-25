@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -21,15 +20,15 @@ import (
 
 // 批 2 的基线金样（Collector 这一层）。
 //
-// plan_environment.golden.json：对已有的几个对账场景（单市场、标的变更、退役、交接、统一数据集），把每份采集计划里每个函数的
-// 过渡与最终内容落成文件：云函数记 functionEnvironment 的输出（其中 MOOX_MARKET_FETCH_PLAN 就是下发给函数的
-// Plan JSON，函数严格解码，一个字节都不能变）与两个 cron；推送与本地执行项没有函数环境，记 Plan JSON。要重新生成时设 MOOX_UPDATE_GOLDEN=1。
+// plan_environment.golden.json：对几个对账场景（单市场、标的变更、退役、交接），把每份采集计划里每个函数要下发的内容落成文件：
+// 云函数记 functionEnvironment 的输出（其中 MOOX_MARKET_FETCH_PLAN 就是下发给函数的 Plan JSON，函数严格解码，一个字节都不能变）与 cron；
+// 推送与本地执行项没有函数环境，记 Plan JSON。同一个文件还记下每个场景里对账器在什么时刻要哪个函数变成什么样（pushes，口径见
+// planPushesFromCalls）。要重新生成时设 MOOX_UPDATE_GOLDEN=1。
 //
-// plan_dispatch.golden.json 是 T0 用旧实现（经 CloudFunction 的作业接口）录下的“对账器在什么时刻要哪个函数变成什么样”，
-// 文件原样保留、不再重写。T5 之后对账器直接调 cloud 包（Ensure、SetTimer、UpgradeCode、Delete），请求的形状变了，
+// plan_dispatch.golden.json 是 T0 用旧实现（经 CloudFunction 的作业接口）录下的下发金样，文件原样保留、不再重写。采集计划改成
+// 按数据集推进（阶段三 3A）之后，计划相关的场景下发时刻本来就变了（不再有收尾阶段），只留与计划无关的暂停、升级代码、补采函数三个场景，
 // 比对按“函数在每个时刻被要求成为的样子”换算（见 planPushesFromGolden 与 planPushesFromCalls）：
-//   - 旧的“建函数 + 同一时刻的运行配置” = 新的一次 Ensure（建函数与下发环境、定时器合成一次）；
-//   - 旧的只停定时器的运行配置（退役、暂停）= 新的 SetTimer(停用)；
+//   - 旧的只停定时器的运行配置（暂停）= 新的 SetTimer(停用)；
 //   - 旧的部署（只换代码）= 新的 UpgradeCode；补采函数的部署、外部入口变了之后的“删掉再建” = 新的一次 Ensure（就地改写）。
 // 比的是受管环境（采集计划换成 SHA-256）、定时器、代码包；创建预留号、函数元数据这些旧实现的附带项不再存在，不比。
 
@@ -40,24 +39,22 @@ type planBaselineFunction struct {
 	Executor string `json:"executor"`
 	Push     bool   `json:"push"`
 	Create   bool   `json:"create"`
-	Retired  bool   `json:"retired"`
-	// 云函数：过渡与最终阶段的 cron 与受管环境。退役的函数没有最终环境。
-	TransitionalCron        string            `json:"transitional_cron,omitempty"`
-	FinalCron               string            `json:"final_cron,omitempty"`
-	TransitionalEnvironment map[string]string `json:"transitional_environment,omitempty"`
-	FinalEnvironment        map[string]string `json:"final_environment,omitempty"`
-	// 推送与本地执行项：过渡与最终阶段的 Plan JSON。
-	TransitionalPlan string `json:"transitional_plan,omitempty"`
-	FinalPlan        string `json:"final_plan,omitempty"`
+	// Retired 表示本计划让它退役（Target 为空，只停定时器）。
+	Retired bool `json:"retired"`
+	// 云函数：要下发的 cron 与受管环境；推送与本地执行项：要下发的 Plan JSON。
+	Cron        string            `json:"cron,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
+	Plan        string            `json:"plan,omitempty"`
 }
 
-// planBaselineScenario 是一个场景里先后产生的采集计划。
+// planBaselineScenario 是一个场景里先后产生的采集计划，与对账器在各时刻对各函数的要求。
 type planBaselineScenario struct {
-	Name  string                   `json:"name"`
-	Plans [][]planBaselineFunction `json:"plans"`
+	Name   string                   `json:"name"`
+	Plans  [][]planBaselineFunction `json:"plans"`
+	Pushes []planPush               `json:"pushes"`
 }
 
-// planBaselineDump 导出一份计划内容里全部函数的过渡与最终内容。
+// planBaselineDump 导出一份计划内容里全部函数要下发的内容。
 func planBaselineDump(t *testing.T, r *PlanReconciler, content *FetchPlanContent) []planBaselineFunction {
 	t.Helper()
 	var out []planBaselineFunction
@@ -67,30 +64,16 @@ func planBaselineDump(t *testing.T, r *PlanReconciler, content *FetchPlanContent
 		if function.IsSCF() {
 			executor = marketfetch.PlanExecutorSCF
 		}
-		item := planBaselineFunction{Name: name, Region: function.Region, Executor: executor, Push: function.Push, Create: function.Create, Retired: function.New == nil}
-		transitional, final := content.TransitionalPlan(function), content.FinalPlan(function)
-		if function.IsSCF() {
-			item.TransitionalCron, item.FinalCron = content.TransitionalCron(function), content.FinalCron(function)
-			if transitional != nil {
-				environment, err := r.functionEnvironment(function.Region, transitional)
+		item := planBaselineFunction{Name: name, Region: function.Region, Executor: executor, Push: function.Push, Create: function.Create, Retired: function.Target == nil, Cron: function.Cron}
+		if function.Target != nil {
+			if function.IsSCF() {
+				environment, err := r.functionEnvironment(function.Region, function.Target)
 				require.NoError(t, err, name)
-				item.TransitionalEnvironment = environment
-			}
-			if final != nil {
-				environment, err := r.functionEnvironment(function.Region, final)
+				item.Environment = environment
+			} else {
+				encoded, err := marketfetch.EncodePlan(function.Target)
 				require.NoError(t, err, name)
-				item.FinalEnvironment = environment
-			}
-		} else {
-			if transitional != nil {
-				encoded, err := marketfetch.EncodePlan(transitional)
-				require.NoError(t, err, name)
-				item.TransitionalPlan = encoded
-			}
-			if final != nil {
-				encoded, err := marketfetch.EncodePlan(final)
-				require.NoError(t, err, name)
-				item.FinalPlan = encoded
+				item.Plan = encoded
 			}
 		}
 		out = append(out, item)
@@ -350,12 +333,12 @@ func planBaselineCompare(t *testing.T, file string, value any, message string) {
 	require.Equal(t, string(want), string(got), message)
 }
 
-// planBaselineSettle 推进时间直到没有未生效的计划。
+// planBaselineSettle 推进时间直到没有未生效的计划，并且已生效状态收敛（见 converged）。
 func planBaselineSettle(t *testing.T, h *planHarness, r *PlanReconciler) {
 	t.Helper()
-	for i := 0; i < 400; i++ {
+	for i := 0; i < 2000; i++ {
 		require.NoError(t, h.reconcile(r))
-		if h.open() == nil {
+		if h.open() == nil && h.converged() {
 			return
 		}
 		h.now = h.now.Add(20 * time.Second)
@@ -367,7 +350,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 	var scenarios []planBaselineScenario
 	dispatched := map[string][]cloudCall{}
 
-	// 单市场：一个现货 1m 任务，120 个标的分成 3 个函数。之后标的减少一个（标的变更，过渡计划带新旧两份）。
+	// 单市场：一个现货 1m 任务，120 个标的分成 3 个函数。之后标的减少一个（标的变更：先带新旧两份，旧份过窗口后再裁掉）。
 	{
 		h := newPlanHarness(t, 120)
 		r := h.reconciler()
@@ -375,11 +358,10 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		r.lastVerified = h.now
 		h.setSubjects(119)
 		planBaselineSettle(t, h, r)
-		scenarios = append(scenarios, planBaselineScenario{Name: "single_market_then_subject_change", Plans: planBaselineRecords(t, r, h.store.records)})
-		dispatched["single_market_then_subject_change"] = h.cloud.operations()
+		scenarios = append(scenarios, planBaselineScenario{Name: "single_market_then_subject_change", Plans: planBaselineRecords(t, r, h.store.records), Pushes: planPushesFromCalls(h.cloud.operations())})
 	}
 
-	// 退役：标的从 120 个减到 40 个，后两个函数退役（保持过渡环境、只停定时器）。
+	// 退役：标的从 120 个减到 40 个，后两个函数在旧份过窗口后退役（保持原来的环境、只停定时器）。
 	{
 		h := newPlanHarness(t, 120)
 		r := h.reconciler()
@@ -387,8 +369,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		r.lastVerified = h.now
 		h.setSubjects(40)
 		planBaselineSettle(t, h, r)
-		scenarios = append(scenarios, planBaselineScenario{Name: "retire_functions", Plans: planBaselineRecords(t, r, h.store.records)})
-		dispatched["retire_functions"] = h.cloud.operations()
+		scenarios = append(scenarios, planBaselineScenario{Name: "retire_functions", Plans: planBaselineRecords(t, r, h.store.records), Pushes: planPushesFromCalls(h.cloud.operations())})
 	}
 
 	// 交接：1m 与 1h 两个数据集先由云函数采集，再切到推送，再切回云函数。
@@ -403,8 +384,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.setIngest("ds_spot_1m", ingestSCF)
 		h.setIngest("ds_spot_1h", ingestSCF)
 		h.settle(true)
-		scenarios = append(scenarios, planBaselineScenario{Name: "handoff_scf_stream_scf", Plans: planBaselineRecords(t, h.r, h.store.records)})
-		dispatched["handoff_scf_stream_scf"] = h.cloud.operations()
+		scenarios = append(scenarios, planBaselineScenario{Name: "handoff_scf_stream_scf", Plans: planBaselineRecords(t, h.r, h.store.records), Pushes: planPushesFromCalls(h.cloud.operations())})
 	}
 
 	// 交接：1m 数据集先由云函数采集，再切到本地执行端（拉取方式不变，只换执行端）。
@@ -415,19 +395,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h.setIngest("ds_spot_1m", ingestLocal)
 		h.settle(true)
 		require.Equal(t, marketfetch.PlanExecutorLocal, h.applied().Functions[localItem].Executor)
-		scenarios = append(scenarios, planBaselineScenario{Name: "handoff_scf_local", Plans: planBaselineRecords(t, h.r, h.store.records)})
-		dispatched["handoff_scf_local"] = h.cloud.operations()
-	}
-
-	// 统一数据集：同一个数据集挂现货、永续两个任务，两个市场的函数共用一份快照；之后标的减少一个。
-	{
-		h, r := newPlanBaselineUnified(t)
-		planBaselineSettle(t, h, r)
-		r.lastVerified = h.now
-		h.setSubjects(59)
-		planBaselineSettle(t, h, r)
-		scenarios = append(scenarios, planBaselineScenario{Name: "unified_dataset_then_subject_change", Plans: planBaselineRecords(t, r, h.store.records)})
-		dispatched["unified_dataset_then_subject_change"] = h.cloud.operations()
+		scenarios = append(scenarios, planBaselineScenario{Name: "handoff_scf_local", Plans: planBaselineRecords(t, h.r, h.store.records), Pushes: planPushesFromCalls(h.cloud.operations())})
 	}
 
 	for _, scenario := range scenarios {
@@ -441,6 +409,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h := newPlanHarness(t, 60)
 		r := h.reconciler()
 		planBaselineSettle(t, h, r)
+		h.now = h.now.Add(20 * time.Second) // 与 T0 金样的时刻对齐：旧实现在生效点之后多等一轮收尾
 		h.cloud.resetOperations()
 		done, err := r.DisableAll(context.Background())
 		require.NoError(t, err)
@@ -453,6 +422,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		h := newPlanHarness(t, 60)
 		r := h.reconciler()
 		planBaselineSettle(t, h, r)
+		h.now = h.now.Add(20 * time.Second) // 与 T0 金样的时刻对齐：旧实现在生效点之后多等一轮收尾
 		h.cloud.resetOperations()
 		h.cloud.setPackages("pkg", "pkg-new")
 		h.now = h.now.Add(2 * time.Hour)
@@ -486,7 +456,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		require.Equal(t, int64(320), h.mustFunction(BackfillFunctionName("crypto", "spot", "ap-nanjing")).ReservedMem)
 	}
 
-	planBaselineCompare(t, "plan_environment.golden.json", scenarios, "函数环境、过渡或最终计划、cron 与基线不一致")
+	planBaselineCompare(t, "plan_environment.golden.json", scenarios, "函数环境、计划、cron 或下发时刻与基线不一致")
 	golden := loadDispatchGolden(t)
 	require.Len(t, golden, len(dispatched))
 	for name, calls := range dispatched {
@@ -506,33 +476,4 @@ func (s planBaselineSymbols) GetTag(_ context.Context, _, tagID string) (*storag
 		marketType = "swap"
 	}
 	return &storagepb.Tag{TagId: tagID, Attributes: map[string]string{"sync.source": "binance", "market_type": marketType}}, nil
-}
-
-// newPlanBaselineUnified 构造统一数据集的夹具：同一个数据集挂现货、永续两个任务。
-func newPlanBaselineUnified(t *testing.T) (*planHarness, *PlanReconciler) {
-	h := newPlanHarness(t, 60)
-	h.tasks.tasks = []domain.CollectionTask{
-		{SpaceID: "crypto", TaskID: "unified-spot", Enabled: true, DataType: "kline", TagIDs: []string{"binance_spot"},
-			CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_unified","frequency":"1m"}`},
-		{SpaceID: "crypto", TaskID: "unified-swap", Enabled: true, DataType: "kline", TagIDs: []string{"binance_swap"},
-			CollectParams: `{"provider":"binance","market_type":"swap","subject_tags":["binance_swap"],"target_dataset_id":"ds_unified","frequency":"1m"}`},
-	}
-	r := h.reconciler()
-	r.Groups.Symbols = planBaselineSymbols{h.symbols}
-	r.Deploy.Networks["ap-hongkong"] = PlanNetwork{VPCID: "vpc-2", SubnetID: "subnet-2"}
-	return h, r
-}
-
-// 基线场景里统一数据集确实走了两个市场：防止夹具变化后场景悄悄退化成单市场。
-func TestPlanBaselineUnifiedScenarioCoversBothMarkets(t *testing.T) {
-	h, r := newPlanBaselineUnified(t)
-	require.NoError(t, h.reconcile(r))
-	record, err := h.store.Open(context.Background(), "crypto")
-	require.NoError(t, err)
-	require.NotNil(t, record)
-	regions := map[string]bool{}
-	for _, function := range h.content(record).Functions {
-		regions[function.Region] = true
-	}
-	require.Equal(t, map[string]bool{"ap-nanjing": true, "ap-hongkong": true}, regions)
 }

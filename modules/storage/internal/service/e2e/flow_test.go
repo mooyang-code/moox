@@ -78,20 +78,17 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 
 	viewRoot := filepath.Join(t.TempDir(), "view")
-	columns := []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "volume", OriginId: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	columns := []*viewindex.Column{
+		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}
-	prebuildViewIndex(t, ctx, viewRoot, viewindex.ViewIndexSchema{SpaceID: "quant", ViewID: "prices-view", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}, nil)
+	prebuildViewIndex(t, ctx, viewRoot, viewindex.ViewIndexSchema{SpaceID: "quant", DatasetID: "prices", DatasetCreatedAt: followEnvDatasetCreatedAt, ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}, nil)
 	view, err := viewservice.New(viewRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	view.SetPrimaryReader(primaryFieldReader{service: primary})
-	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Freq: "1m", Status: "active"},
-		viewindex.ViewIndexStats{Exists: true, DatasetID: "prices", ViewVersion: 1, SchemaHash: "schema-1", Columns: columns}); err != nil {
-		t.Fatal(err)
-	}
+	attachPrebuiltView(t, view, "quant", "prices", columns)
 
 	const (
 		eventUsername = "storage-e2e"
@@ -161,7 +158,7 @@ func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-			SpaceId: "quant", ViewId: "prices-view",
+			SpaceId: "quant", DatasetId: "prices",
 			Selectors: []*pb.TimeSeriesSelector{{
 				SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m",
 			}},
@@ -220,7 +217,7 @@ func assertSelectorStates(t *testing.T, ctx context.Context, view *viewservice.S
 	query := func(selector *pb.TimeSeriesSelector) []*pb.TimeSeriesRow {
 		t.Helper()
 		rsp, err := view.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-			SpaceId: "quant", ViewId: "prices-view",
+			SpaceId: "quant", DatasetId: "prices",
 			Selectors:   []*pb.TimeSeriesSelector{selector},
 			TimeRange:   &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T00:01:00Z"},
 			ColumnNames: []string{"close", "volume"},

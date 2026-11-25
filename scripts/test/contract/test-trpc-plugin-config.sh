@@ -110,12 +110,10 @@ for module in admin trade; do
 	require_text "modules/${module}/config/trpc_go.yaml" '    - masking' "missing masking filter for ${module}"
 done
 
-# Validate the project's bounded retry behavior rather than requiring the
-# removed Slime module, whose old dependency chain is no longer used.
-(cd packages/trpcretry && go test -count=1 ./...)
-# 只读重试目前只有主机网关转发在用，且只挂在只读、非 GatewayControl 的路由上。
-require_text modules/hostgateway/internal/router/upstream.go 'if route.ReadOnly && !control {' 'gateway retry must remain scoped to read-only routes'
-require_text modules/hostgateway/internal/router/upstream.go 'client.WithFilter(trpcretry.ReadOnly())' 'gateway read-only routes must use the bounded retry'
+# 主机网关只转发一次：只读调用的重发由调用方 gatewayclient 负责，网关再重试会放大上游请求量。
+if grep -Fq -- 'client.WithFilter(' modules/hostgateway/internal/router/upstream.go; then
+	fail 'host gateway upstream must not install client retry filters'
+fi
 if grep -Fq -- '          - baggage' modules/factor/config/trpc_go.yaml; then
 	fail 'arbitrary W3C baggage must not cross the Factor to Storage boundary'
 fi
@@ -125,7 +123,7 @@ require_text modules/admin/cmd/server/main.go 'packages/healthz/trpcotel' 'missi
 require_text modules/storage/cmd/server/main.go 'packages/healthz/trpcotel' 'missing storage tracing registration'
 
 # 矩阵之外的常驻服务同样要引入 logcls。
-for main in modules/archive/cmd/mgr/main.go modules/callbackdispatcher/cmd/server/main.go modules/collector/cmd/stream/main.go; do
+for main in modules/archive/cmd/mgr/main.go modules/collector/cmd/stream/main.go; do
 	[[ -f "${main}" ]] || fail "missing server entrypoint ${main}"
 	require_text "${main}" 'packages/clsreporter/logcls' "missing log sink registration"
 done

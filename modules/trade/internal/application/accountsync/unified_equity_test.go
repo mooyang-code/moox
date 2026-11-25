@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,8 +37,8 @@ func TestSyncWritesUnifiedEquity(t *testing.T) {
 		want     string
 	}{
 		{
-			name: "币安普通账户只开现货", exchange: "BINANCE", mode: exchange.AccountModeBinanceStandard,
-			markets: []string{"SPOT"}, symbol: "BTCUSDT",
+			name: "币安普通账户只开现货", exchange: "binance", mode: exchange.AccountModeBinanceStandard,
+			markets: []string{"spot"}, symbol: "BTCUSDT",
 			snapshot: exchange.AccountSnapshot{
 				Present: exchange.AccountSnapshotPresence{Balances: true},
 				Balances: []exchange.AssetBalance{
@@ -48,8 +49,8 @@ func TestSyncWritesUnifiedEquity(t *testing.T) {
 			want: "1000", // 500 + 0.01×50000
 		},
 		{
-			name: "币安普通账户现货加合约", exchange: "BINANCE", mode: exchange.AccountModeBinanceStandard,
-			markets: []string{"SPOT", "SWAP"}, symbol: "BTCUSDT",
+			name: "币安普通账户现货加合约", exchange: "binance", mode: exchange.AccountModeBinanceStandard,
+			markets: []string{"spot", "swap"}, symbol: "BTCUSDT",
 			snapshot: exchange.AccountSnapshot{
 				Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, UnrealizedPnL: true},
 				Balances: []exchange.AssetBalance{
@@ -62,8 +63,8 @@ func TestSyncWritesUnifiedEquity(t *testing.T) {
 			want: "2020", // 500 + 1000 + 20 + 0.01×50000
 		},
 		{
-			name: "OKX 现货加永续", exchange: "OKX", mode: exchange.AccountModeOKXUnified,
-			markets: []string{"SPOT", "SWAP"}, symbol: "BTC-USDT",
+			name: "OKX 现货加永续", exchange: "okx", mode: exchange.AccountModeOKXUnified,
+			markets: []string{"spot", "swap"}, symbol: "BTC-USDT",
 			snapshot: exchange.AccountSnapshot{
 				Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, UnrealizedPnL: true},
 				Balances: []exchange.AssetBalance{
@@ -101,15 +102,15 @@ func TestSyncWritesUnifiedEquity(t *testing.T) {
 					return err
 				}
 				if err := tx.UpsertInstrument(store.InstrumentRecord{
-					Exchange: tc.exchange, MarketType: "SPOT", ExchangeSymbol: tc.symbol, InstrumentID: "BTC-USDT-SPOT",
+					Exchange: tc.exchange, MarketType: "spot", ExchangeSymbol: tc.symbol, InstrumentID: "BTC-USDT-SPOT",
 					BaseAsset: "BTC", QuoteAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 					PriceTick: "0.1", Status: "TRADING",
 				}); err != nil {
 					return err
 				}
-				return tx.CreateOrder(store.OrderRecord{
+				return storetest.CreateFilledOrder(tx, store.OrderRecord{
 					SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought", ClientOrderID: "bought",
-					Exchange: tc.exchange, MarketType: "SPOT", ExchangeSymbol: tc.symbol, InstrumentID: "BTC-USDT-SPOT",
+					Exchange: tc.exchange, MarketType: "spot", ExchangeSymbol: tc.symbol, InstrumentID: "BTC-USDT-SPOT",
 					OrderType: "MARKET", Side: "BUY", Quantity: "0.01", FilledQuantity: "0.01", ReferencePrice: "50000",
 					State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
 				})

@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // TargetJSON 是 targets_json 中一个元素的结构。
@@ -86,20 +85,6 @@ func ResultItems(items []engine.Item) []store.ResultItem {
 	return out
 }
 
-// TradeMarketType 把策略的市场类型（spot、swap、equity）转成 Trade 事件契约里的市场写法。
-func TradeMarketType(marketType string) (string, error) {
-	switch marketType {
-	case "spot":
-		return "SPOT", nil
-	case "swap":
-		return "SWAP", nil
-	case "equity":
-		return "STOCK", nil
-	default:
-		return "", fmt.Errorf("策略市场 %q 不受支持，无法生成目标事件", marketType)
-	}
-}
-
 // MarshalTargetEvent 构造发给 Trade 的目标权重事件；sessionStartedAt 是结果所属会话的开始时刻（毫秒），
 // shadow 为真表示预热中的影子目标。每个目标带自己的市场。
 func MarshalTargetEvent(instance store.Instance, result store.Result, sessionStartedAt int64, targets []TargetJSON, shadow bool) ([]byte, error) {
@@ -112,16 +97,13 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, sessionSta
 	}
 	payloadTargets := make([]*tradeeventpb.InstrumentWeightTarget, 0, len(targets))
 	for _, target := range targets {
-		marketType, err := TradeMarketType(target.Market)
-		if err != nil {
-			return nil, err
-		}
-		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold, MarketType: marketType})
+		// 策略的市场写法（spot、swap、equity）就是 Trade 事件契约的写法，原样传。
+		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold, MarketType: target.Market})
 	}
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,
 		SessionId: result.SessionID, SessionStartedAt: sessionStartedAt, StrategyId: instance.StrategyID,
-		BarEndTime: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil),
+		BarEndTime: result.BarEndTime.UnixMilli(), ValidUntil: result.ValidUntil.UnixMilli(),
 		Targets: payloadTargets, Shadow: shadow,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: *instance.LogicalAccountID})

@@ -115,67 +115,93 @@ func (b ViewIndexWriteBatch) Validate() error {
 	return nil
 }
 
+// Column 是查询索引里的一列：列契约只含列名、类型与建进索引的先后。列名就是数据集的列名，回读 Primary 也按它取值。
+type Column struct {
+	ColumnName string
+	ValueType  pb.FieldValueType
+	SortOrder  uint32
+}
+
+func (c *Column) GetColumnName() string {
+	if c == nil {
+		return ""
+	}
+	return c.ColumnName
+}
+
+func (c *Column) GetValueType() pb.FieldValueType {
+	if c == nil {
+		return pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED
+	}
+	return c.ValueType
+}
+
+func (c *Column) GetSortOrder() uint32 {
+	if c == nil {
+		return 0
+	}
+	return c.SortOrder
+}
+
+// ViewIndexSchema 是一个数据集查询索引的写入契约。索引标识只由空间与数据集决定。
 type ViewIndexSchema struct {
-	SpaceID          string
-	ViewID           string
-	PrimaryDatasetID string
-	ViewVersion      uint64
-	Engine           string
-	Columns          []*pb.ViewColumn
-	SchemaHash       string
+	SpaceID     string
+	DatasetID   string
+	ViewVersion uint64
+	Engine      string
+	Columns     []*Column
+	SchemaHash  string
 	// RowsPerSeries 是建立索引时使用的每序列保留行数，写入索引自身的元数据；0 表示未知。不参与 schema 哈希。
 	RowsPerSeries uint64
-	// ViewCreatedAt 是 View 元数据的创建时间，写入索引自身的元数据，不参与 schema 哈希：
-	// 索引标识只由空间与 View 决定，删除后同 ID 重建的 View 靠它认出旧索引不是自己的。
-	ViewCreatedAt string
+	// DatasetCreatedAt 是数据集元数据的创建时刻（Unix 毫秒），写入索引自身的元数据，不参与 schema 哈希：
+	// 索引标识只由空间与数据集决定，删除后按同一 ID 重建的数据集靠它认出旧索引不是自己的。
+	DatasetCreatedAt int64
 }
 
 // BuiltColumn 是索引文件里记下的一列已建列，只含列契约（schema 哈希）用到的字段。
-// View 的已建状态只以索引文件为准，重启后由它还原写入契约。
+// 已建状态只以索引文件为准，重启后由它还原写入契约。
 type BuiltColumn struct {
-	Name       string `json:"name"`
-	OriginType int32  `json:"origin_type"`
-	OriginID   string `json:"origin_id"`
-	ValueType  int32  `json:"value_type"`
-	SortOrder  uint32 `json:"sort_order"`
+	Name      string `json:"name"`
+	ValueType int32  `json:"value_type"`
+	SortOrder uint32 `json:"sort_order"`
 }
 
 // EncodeBuiltColumns 取出要记进索引文件的列契约。
-func EncodeBuiltColumns(columns []*pb.ViewColumn) []BuiltColumn {
+func EncodeBuiltColumns(columns []*Column) []BuiltColumn {
 	built := make([]BuiltColumn, 0, len(columns))
 	for _, column := range columns {
 		if column != nil {
-			built = append(built, BuiltColumn{Name: column.GetColumnName(), OriginType: int32(column.GetOriginType()), OriginID: column.GetOriginId(), ValueType: int32(column.GetValueType()), SortOrder: column.GetSortOrder()})
+			built = append(built, BuiltColumn{Name: column.ColumnName, ValueType: int32(column.ValueType), SortOrder: column.SortOrder})
 		}
 	}
 	return built
 }
 
-// DecodeBuiltColumns 把索引文件里的列契约还原成 View 列。
-func DecodeBuiltColumns(built []BuiltColumn) []*pb.ViewColumn {
-	columns := make([]*pb.ViewColumn, 0, len(built))
+// DecodeBuiltColumns 把索引文件里的列契约还原成列。
+func DecodeBuiltColumns(built []BuiltColumn) []*Column {
+	columns := make([]*Column, 0, len(built))
 	for _, column := range built {
-		columns = append(columns, &pb.ViewColumn{ColumnName: column.Name, OriginType: pb.ColumnOriginType(column.OriginType), OriginId: column.OriginID, ValueType: pb.FieldValueType(column.ValueType), SortOrder: column.SortOrder})
+		columns = append(columns, &Column{ColumnName: column.Name, ValueType: pb.FieldValueType(column.ValueType), SortOrder: column.SortOrder})
 	}
 	return columns
 }
 
 type ViewIndexStats struct {
 	Exists bool
-	// DatasetID 与 Columns 是索引建成时记下的数据集与已建列，ViewCreatedAt 是建索引时 View 的创建时间（StatMetadata 与 Stat 都返回）。
-	DatasetID     string
-	ViewCreatedAt string
-	Columns       []*pb.ViewColumn
-	ViewVersion   uint64
-	EntryCount    int64
-	PhysicalBytes uint64
-	MinVersion    string
-	MaxVersion    string
-	SchemaHash    string
-	UpdatedAt     string
-	FreeDiskBytes uint64
-	IndexedFrom   string
-	IndexedTo     string
+	// DatasetID 与 Columns 是索引建成时记下的数据集与已建列，DatasetCreatedAt 是建索引时数据集的创建时刻（Unix 毫秒，StatMetadata 与 Stat 都返回）。
+	DatasetID        string
+	DatasetCreatedAt int64
+	Columns          []*Column
+	ViewVersion      uint64
+	EntryCount       int64
+	PhysicalBytes    uint64
+	MinVersion       string
+	MaxVersion       string
+	SchemaHash       string
+	UpdatedAt        string
+	FreeDiskBytes    uint64
+	IndexedFrom      string
+	IndexedTo        string
 	// RowsPerSeries 是索引建立时记录的每序列保留行数；0 表示未知（记录型 View 不按根数保留）。
 	RowsPerSeries uint64
 	// Follow 是落盘的跟随进度（StatMetadata 与 Stat 都返回）。
@@ -221,9 +247,7 @@ type QuerySpec struct {
 	TotalMode    pb.TotalMode
 }
 
-// Engine is the single physical View index contract. The index file is the only
-// record of a View's built state; an engine prepares, writes, queries, stats,
-// and removes an explicitly named index.
+// Engine 是查询索引的物理契约：索引文件是已建状态的唯一记录；引擎按给定的索引标识准备、写入、查询、统计与删除索引。
 type Engine interface {
 	Engine() string
 	Prepare(context.Context, string, ViewIndexSchema) error
@@ -260,11 +284,11 @@ func (e ColumnNotProjectedError) Is(target error) bool { return target == ErrCol
 
 // IsAppendOnlyViewColumns reports whether desired preserves every physical
 // column in active and appends at least one new column after its sort order.
-func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {
+func IsAppendOnlyViewColumns(active, desired []*Column) bool {
 	if len(desired) <= len(active) {
 		return false
 	}
-	activeByName := make(map[string]*pb.ViewColumn, len(active))
+	activeByName := make(map[string]*Column, len(active))
 	usedOrder := make(map[uint32]struct{}, len(desired))
 	var maxOrder uint32
 	for index, column := range active {
@@ -301,8 +325,7 @@ func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {
 			appended++
 			continue
 		}
-		if previous.GetOriginId() != column.GetOriginId() || previous.GetOriginType() != column.GetOriginType() ||
-			previous.GetValueType() != column.GetValueType() || previous.GetSortOrder() != column.GetSortOrder() {
+		if previous.GetValueType() != column.GetValueType() || previous.GetSortOrder() != column.GetSortOrder() {
 			return false
 		}
 	}
@@ -361,17 +384,17 @@ func RowKeyID(k *pb.RowKey) string {
 
 func HashViewIndexSchema(schema ViewIndexSchema) string {
 	type col struct {
-		Name, OriginID        string
-		OriginType, ValueType int32
-		SortOrder             uint32
+		Name      string
+		ValueType int32
+		SortOrder uint32
 	}
 	shape := struct {
-		SpaceID, ViewID, PrimaryDatasetID, Engine string
-		Columns                                   []col
-	}{SpaceID: schema.SpaceID, ViewID: schema.ViewID, PrimaryDatasetID: schema.PrimaryDatasetID, Engine: schema.Engine}
+		SpaceID, DatasetID, Engine string
+		Columns                    []col
+	}{SpaceID: schema.SpaceID, DatasetID: schema.DatasetID, Engine: schema.Engine}
 	for _, c := range schema.Columns {
 		if c != nil {
-			shape.Columns = append(shape.Columns, col{c.GetColumnName(), c.GetOriginId(), int32(c.GetOriginType()), int32(c.GetValueType()), c.GetSortOrder()})
+			shape.Columns = append(shape.Columns, col{c.ColumnName, int32(c.ValueType), c.SortOrder})
 		}
 	}
 	raw, _ := json.Marshal(shape)

@@ -41,18 +41,15 @@ type suspendedBar struct {
 // loadAndEvaluate 装配一根并求值，previous 是上一根的状态。
 func loadAndEvaluate(t *testing.T, client *fakeClient, resolved Resolved, program *dsl.Program, bar suspendedBar, previous engine.State) (Loaded, engine.Decision) {
 	t.Helper()
-	client.rows = func(Query) ([]Row, uint64, error) {
+	client.rows = func(query Query) ([]Row, uint64, error) {
 		var rows []Row
 		for market, values := range bar.values {
+			// 每个市场一个 View：永续的行只在永续 View 里。
+			if (market == dsl.MarketSwap) != (query.DatasetID == "dataset_factor_swap1h") {
+				continue
+			}
 			for id, value := range values {
-				tag := "venue:binance"
-				switch market {
-				case dsl.MarketSpot:
-					tag = spotTag
-				case dsl.MarketSwap:
-					tag = swapTag
-				}
-				rows = append(rows, Row{SubjectID: id, SeriesTag: tag, DataTime: bar.at, Values: map[string]float64{"ma_20": value, "close": 1}})
+				rows = append(rows, Row{SubjectID: id, SeriesTag: "venue:binance", DataTime: bar.at, Values: map[string]float64{"ma_20": value, "close": 1}})
 			}
 		}
 		return rows, 1, nil
@@ -114,7 +111,7 @@ func suspendedEquityClient(t *testing.T) (*fakeClient, Resolved, *dsl.Program) {
 	client.tags["binance_equity"] = []string{"A", "B", "C", "D", "E"}
 	client.trading = map[string]map[string]string{"binance_equity": {"E": TradingStatusSuspended}}
 	// E 一直停牌、没持有过：不进全集。
-	client.subjects["ds_factor"] = []Subject{subject("A", true), subject("B", true), subject("C", true), subject("D", true), {SubjectID: "E", SeriesTag: "venue:binance", Suspended: true}}
+	client.subjects["dataset_factor_1h"] = []Subject{subject("A", true), subject("B", true), subject("C", true), subject("D", true), {SubjectID: "E", SeriesTag: "venue:binance", Suspended: true}}
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, suspendedEquityDSL))
 	if err != nil {
 		t.Fatal(err)
@@ -127,9 +124,9 @@ func suspendedEquityClient(t *testing.T) (*fakeClient, Resolved, *dsl.Program) {
 
 // setEquitySubject 改一个标的的绑定状态。
 func setEquitySubject(client *fakeClient, id string, active, suspended bool) {
-	for i, item := range client.subjects["ds_factor"] {
+	for i, item := range client.subjects["dataset_factor_1h"] {
 		if item.SubjectID == id {
-			client.subjects["ds_factor"][i].Active, client.subjects["ds_factor"][i].Suspended = active, suspended
+			client.subjects["dataset_factor_1h"][i].Active, client.subjects["dataset_factor_1h"][i].Suspended = active, suspended
 		}
 	}
 }
@@ -230,8 +227,8 @@ func TestSuspendedHoldingRemovedOrDelistedIsDropped(t *testing.T) {
 	}
 }
 
-// suspendedUnifiedDSL 是统一数据集上没写规则级市场的策略：持有哪个市场就只取那个市场的行。
-const suspendedUnifiedDSL = `name: unified
+// suspendedDualDSL 是现货、永续各一个任务、没写规则级市场的策略：持有哪个市场就只取那个市场的行。
+const suspendedDualDSL = `name: dual
 market: {select: both, prefer: swap}
 rules:
   - id: r
@@ -242,31 +239,41 @@ rules:
 portfolio: {max_missing: 1}
 `
 
-func unifiedSuspendedClient(t *testing.T, raw string) (*fakeClient, Resolved, *dsl.Program) {
+// dualSuspendedClient 构造现货（BTC、ETH、SOL）、永续（BTC、ETH、DOGE）各一个任务的实例。
+func dualSuspendedClient(t *testing.T, raw string) (*fakeClient, Resolved, *dsl.Program) {
 	t.Helper()
-	client := newUnifiedClient()
-	client.trading = map[string]map[string]string{"binance_spot": {}, "binance_swap": {}}
-	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, raw))
+	client := newDualClient()
+	client.subjects["dataset_factor_1h"] = []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true)}
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, raw))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return client, resolved, program
 }
 
-var unifiedEvents = map[string][]string{"spot": {"BTC-USDT", "ETH-USDT", "SOL-USDT"}, "swap": {"BTC-USDT", "ETH-USDT", "DOGE-USDT"}}
+// setBinding 改一个标的在数据集上的绑定状态：停牌时 Storage 的绑定不再活跃、只标 suspended；下架时两者都不成立。
+func setBinding(client *fakeClient, datasetID, subjectID string, suspended bool) {
+	for i, item := range client.subjects[datasetID] {
+		if item.SubjectID == subjectID {
+			client.subjects[datasetID][i].Active, client.subjects[datasetID][i].Suspended = false, suspended
+		}
+	}
+}
 
-// 统一数据集：只持有 BTC 永续，永续停牌、现货照常 → 只冻结永续；现货 BTC 分数再高也不开仓，现货市场照常。
+var dualEvents = map[string][]string{"spot": {"BTC-USDT", "ETH-USDT", "SOL-USDT"}, "swap": {"BTC-USDT", "ETH-USDT", "DOGE-USDT"}}
+
+// 现货、永续各一个任务：只持有 BTC 永续，永续停牌、现货照常 → 只冻结永续；现货 BTC 分数再高也不开仓，现货市场照常。
 // 之后 BTC 永续下架（delisted）→ 照常清零。
-func TestSuspendedHoldingUnifiedSwapOnly(t *testing.T) {
-	client, resolved, program := unifiedSuspendedClient(t, suspendedUnifiedDSL)
+func TestSuspendedHoldingDualSwapOnly(t *testing.T) {
+	client, resolved, program := dualSuspendedClient(t, suspendedDualDSL)
 	_, first := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 		at:     barStart,
 		values: map[string]map[string]float64{"spot": {"BTC-USDT": 1, "ETH-USDT": 2, "SOL-USDT": 3}, "swap": {"BTC-USDT": 9, "ETH-USDT": 1, "DOGE-USDT": 2}},
-		events: unifiedEvents,
+		events: dualEvents,
 	}, engine.State{})
 	requireSuspendedTargets(t, first, map[string]string{"BTC-USDT|swap": "0.5", "SOL-USDT|spot": "0.5"})
 
-	client.trading["binance_swap"]["BTC-USDT"] = TradingStatusSuspended
+	setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 	second := suspendedBar{
 		at:     barStart.Add(time.Hour),
 		values: map[string]map[string]float64{"spot": {"BTC-USDT": 100, "ETH-USDT": 2, "SOL-USDT": 3}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 5}},
@@ -284,17 +291,17 @@ func TestSuspendedHoldingUnifiedSwapOnly(t *testing.T) {
 		t.Fatalf("BTC 的明细应是 suspended_hold：%s", reason)
 	}
 
-	client.trading["binance_swap"]["BTC-USDT"] = TradingStatusDelisted
+	setBinding(client, "dataset_factor_swap1h", "BTC-USDT", false)
 	_, delisted := loadAndEvaluate(t, client, resolved, program, second, decision.State)
 	if _, held := targetsOf(delisted)["BTC-USDT|swap"]; held {
 		t.Fatalf("下架的永续持仓应清零：%v", targetsOf(delisted))
 	}
 }
 
-// 统一数据集上持有 BTC 永续空头，永续停牌：只取永续的证据冻结，不借用现货的行重新排名、把空头平掉。
+// 持有 BTC 永续空头，永续停牌：只取永续的证据冻结，不借用现货的行重新排名、把空头平掉。
 // 第一根按 prefer: spot 取行，空头在永续可用的标的里按现货行的分数选中 BTC；第二根 BTC 现货分数最低，借用现货行就会被平掉。
-func TestSuspendedHoldingUnifiedShort(t *testing.T) {
-	raw := `name: unified
+func TestSuspendedHoldingDualShort(t *testing.T) {
+	raw := `name: dual
 market: {select: both, prefer: spot}
 rules:
   - id: l
@@ -310,18 +317,18 @@ rules:
     weight: 0.5
 portfolio: {max_missing: 1}
 `
-	client, resolved, program := unifiedSuspendedClient(t, raw)
+	client, resolved, program := dualSuspendedClient(t, raw)
 	_, first := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 		at:     barStart,
 		values: map[string]map[string]float64{"spot": {"BTC-USDT": 9, "ETH-USDT": 2, "SOL-USDT": 10}, "swap": {"BTC-USDT": 1, "ETH-USDT": 1, "DOGE-USDT": 2}},
-		events: unifiedEvents,
+		events: dualEvents,
 	}, engine.State{})
 	weight, held := targetsOf(first)["BTC-USDT|swap"]
 	if !held || !strings.HasPrefix(weight, "-") {
 		t.Fatalf("第一根应在永续做空 BTC：%v", targetsOf(first))
 	}
 
-	client.trading["binance_swap"]["BTC-USDT"] = TradingStatusSuspended
+	setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 	_, decision := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 		at:     barStart.Add(time.Hour),
 		values: map[string]map[string]float64{"spot": {"BTC-USDT": 0, "ETH-USDT": 2, "SOL-USDT": 3}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 5}},
@@ -335,9 +342,9 @@ portfolio: {max_missing: 1}
 	}
 }
 
-// 统一数据集上用规则级市场同时持有 BTC 现货与永续：只停一边只冻结那一边，另一边照常求值；两边都停就两边都冻结。
-func TestSuspendedHoldingUnifiedPerMarket(t *testing.T) {
-	raw := `name: unified
+// 用规则级市场同时持有 BTC 现货与永续：只停一边只冻结那一边，另一边照常求值；两边都停就两边都冻结。
+func TestSuspendedHoldingDualPerMarket(t *testing.T) {
+	raw := `name: dual
 market: {select: both, prefer: swap}
 rules:
   - {id: s, type: rank, market: spot, score: "ma_20", select: {top: 1}, weight: 0.5}
@@ -345,18 +352,18 @@ rules:
 portfolio: {max_missing: 1}
 `
 	first := func(t *testing.T) (*fakeClient, Resolved, *dsl.Program, engine.State) {
-		client, resolved, program := unifiedSuspendedClient(t, raw)
+		client, resolved, program := dualSuspendedClient(t, raw)
 		_, decision := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 			at:     barStart,
 			values: map[string]map[string]float64{"spot": {"BTC-USDT": 9, "ETH-USDT": 1, "SOL-USDT": 2}, "swap": {"BTC-USDT": 9, "ETH-USDT": 1, "DOGE-USDT": 2}},
-			events: unifiedEvents,
+			events: dualEvents,
 		}, engine.State{})
 		requireSuspendedTargets(t, decision, map[string]string{"BTC-USDT|spot": "0.5", "BTC-USDT|swap": "0.5"})
 		return client, resolved, program, decision.State
 	}
 	t.Run("只停永续", func(t *testing.T) {
 		client, resolved, program, state := first(t)
-		client.trading["binance_swap"]["BTC-USDT"] = TradingStatusSuspended
+		setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 		_, decision := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 			at:     barStart.Add(time.Hour),
 			values: map[string]map[string]float64{"spot": {"BTC-USDT": 1, "ETH-USDT": 2, "SOL-USDT": 9}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 9}},
@@ -373,14 +380,8 @@ portfolio: {max_missing: 1}
 	})
 	t.Run("两边都停", func(t *testing.T) {
 		client, resolved, program, state := first(t)
-		client.trading["binance_spot"]["BTC-USDT"] = TradingStatusSuspended
-		client.trading["binance_swap"]["BTC-USDT"] = TradingStatusSuspended
-		// 两边都停：Storage 的绑定不再活跃，只标 suspended。
-		for i, item := range client.subjects["ds_factor"] {
-			if item.SubjectID == "BTC-USDT" {
-				client.subjects["ds_factor"][i].Active, client.subjects["ds_factor"][i].Suspended = false, true
-			}
-		}
+		setBinding(client, "dataset_factor_1h", "BTC-USDT", true)
+		setBinding(client, "dataset_factor_swap1h", "BTC-USDT", true)
 		_, decision := loadAndEvaluate(t, client, resolved, program, suspendedBar{
 			at:     barStart.Add(time.Hour),
 			values: map[string]map[string]float64{"spot": {"ETH-USDT": 2, "SOL-USDT": 9}, "swap": {"ETH-USDT": 1, "DOGE-USDT": 9}},

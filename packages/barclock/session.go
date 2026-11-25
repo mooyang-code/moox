@@ -486,3 +486,18 @@ func (c *sessionClock) SourceTimes(b Bucket, source time.Duration) ([]time.Time,
 	}
 	return out, nil
 }
+
+// DailyBucket 返回交易时段市场的 1d 时钟在交易日 date 的那一根：键是交易日期的 UTC 零点，区间是首个时段开盘到当天实际收市，
+// 也就是这一天应收的日线；date 不是交易日时 ok 为假。按存储里的键（data_time）找日线时用它，不用 BucketAt：
+// 键是 UTC 零点，换到市场时区不一定落在这一天的交易时段里（美股的 UTC 零点是前一天晚上）。
+func DailyBucket(clock Clock, date marketcalendar.CivilDate) (Bucket, bool, error) {
+	c, ok := clock.(*sessionClock)
+	if !ok || c.period != 24*time.Hour {
+		return Bucket{}, false, fmt.Errorf("DailyBucket 只用于交易时段市场的 1d 时钟")
+	}
+	trading, err := c.isTradingDay(date)
+	if err != nil || !trading {
+		return Bucket{}, false, err
+	}
+	return c.daily(date), true, nil
+}

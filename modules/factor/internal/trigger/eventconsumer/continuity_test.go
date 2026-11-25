@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // periodRows 是读回的假 Storage：每期哪些标的有行。
@@ -37,18 +36,16 @@ func (p *periodRows) set(period time.Time, subjects ...string) {
 	}
 }
 
-func (p *periodRows) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+func (p *periodRows) RealRowsAt(_ context.Context, _ domain.FactorTask, subjects []string, period time.Time) (map[string]bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	frames := map[string]*storageio.Frame{}
-	for _, subject := range req.Subjects {
-		frame := &storageio.Frame{SubjectID: subject}
-		if p.present[req.Start.Unix()][subject] {
-			frame.Rows = [][]any{{req.Start, testSeriesTag, 1.0}}
+	out := map[string]bool{}
+	for _, subject := range subjects {
+		if p.present[period.Unix()][subject] {
+			out[subject] = true
 		}
-		frames[subject] = frame
 	}
-	return frames, nil
+	return out, nil
 }
 
 var continuityBase = time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
@@ -75,18 +72,6 @@ func minus(all []string, drop ...string) []string {
 	return out
 }
 
-// testSeriesTag 是单序列数据集测试用的 series_tag。
-const testSeriesTag = "venue:binance"
-
-// singleTagRefs 把标的配上 testSeriesTag，作为事件里的序列名单。
-func singleTagRefs(subjects []string) []*storagepb.SeriesRef {
-	refs := make([]*storagepb.SeriesRef, 0, len(subjects))
-	for _, subject := range subjects {
-		refs = append(refs, &storagepb.SeriesRef{SubjectId: subject, SeriesTag: testSeriesTag})
-	}
-	return refs
-}
-
 func periodDelivery(t *testing.T, eventID string, period time.Time, universe, failed []string) *jetstream.Delivery {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
@@ -97,8 +82,8 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 	}
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: status, Source: "ledger", SnapshotRef: "scope-1",
-		UniverseSubjectIds: universe, FailedSubjects: failed, UniverseSeries: singleTagRefs(universe), FailedSeries: singleTagRefs(failed),
-		CompletedAt: timestamppb.New(period.Add(time.Minute)),
+		UniverseSubjectIds: universe, FailedSubjects: failed,
+		CompletedAt: period.Add(time.Minute).UnixMilli(),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars"})
 	require.NoError(t, err)
@@ -126,7 +111,7 @@ func newContinuityHarness(t *testing.T) *continuityHarness {
 	store, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
 	require.NoError(t, err)
 	h.store = store
-	h.cont, err = NewContinuity(ContinuityConfig{Store: store, Reader: h.rows, Now: func() time.Time { return h.now }})
+	h.cont, err = NewContinuity(ContinuityConfig{Store: store, Local: h.rows, Now: func() time.Time { return h.now }})
 	require.NoError(t, err)
 	h.handler.SetContinuity(h.cont)
 	return h
@@ -264,7 +249,7 @@ func TestContinuityIgnoresConfirmedAbsences(t *testing.T) {
 	universe := subjectsN(20)
 	h.event(0, universe, nil)
 	missing := []string{"S00", "S01", "S02", "S03"}
-	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, missing, nil)
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, missing)
 	h.event(1, universe, missing)
 	require.Len(t, h.runner.plans, 2)
 	require.Empty(t, h.runner.plans[1].UpstreamFailed)
@@ -280,7 +265,7 @@ func TestContinuityResumesAfterRestart(t *testing.T) {
 	h.event(2, universe, nil)
 	reopened, err := watermark.Open(h.store.Path())
 	require.NoError(t, err)
-	cont, err := NewContinuity(ContinuityConfig{Store: reopened, Reader: h.rows})
+	cont, err := NewContinuity(ContinuityConfig{Store: reopened, Local: h.rows})
 	require.NoError(t, err)
 	h.handler.SetContinuity(cont)
 	h.rows.set(minuteAt(1), universe...)
@@ -311,12 +296,12 @@ func TestContinuityExcludesConfirmedAbsencesFromComputation(t *testing.T) {
 	h := newContinuityHarness(t)
 	universe := subjectsN(20)
 	h.event(0, universe, nil)
-	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, []string{"S00"}, nil)
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, []string{"S00"})
 	h.event(1, universe, []string{"S00"})
 	require.NotContains(t, h.runner.plans[1].Expected, "S00")
 	require.Len(t, h.runner.plans[1].Expected, 19)
 
-	h.cont.NoteAbsent(h.taskID, minuteAt(2), minuteAt(3), time.Minute, universe, nil)
+	h.cont.NoteAbsent(h.taskID, minuteAt(2), minuteAt(3), time.Minute, universe)
 	h.event(2, universe, universe)
 	require.Len(t, h.runner.plans, 2, "全部确认没有：这一期没有可算的")
 	require.Equal(t, minuteAt(2), h.state().CommittedThrough)
@@ -350,7 +335,7 @@ func TestContinuityNoteAbsentConcurrentWithAdvance(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 200; i++ {
-			h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(20), time.Minute, []string{fmt.Sprintf("X%03d", i)}, nil)
+			h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(20), time.Minute, []string{fmt.Sprintf("X%03d", i)})
 		}
 	}()
 	h.event(20, universe, nil)

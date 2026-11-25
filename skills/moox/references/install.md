@@ -42,7 +42,7 @@ echo "下载源: $SRC"
   | --- | --- | --- | --- |
   | 存储机 | 是 | 4 核 16G、100G 磁盘 | Storage、EventBus，网关开外部入口 |
   | 管理台 | 是，可与存储机或海外机共用 | 2 核 4G | Admin、管理台、Monitor、Collector、因子管理、归档管理、策略 |
-  | 海外机 | 采集加密货币行情时需要（建议香港） | 2 核 4G | WS 行情推送、出口代理、交易执行、事件中心 |
+  | 海外机 | 采集加密货币行情时需要（建议香港） | 2 核 4G | WS 行情推送、出口代理、交易执行 |
   | 因子机 | 可选，可以是家里或局域网的 Linux 机器 | 8 核 16G | 因子引擎、归档 Worker（systemd 用户服务） |
 
   **轻量应用服务器还是云服务器（CVM）**：区别只在云函数能不能接进来。股票行情（A 股、港股、美股）由云函数采集，
@@ -135,10 +135,10 @@ cd moox-${VER}
 - 命令结束后立即告诉用户：配置已保存，页面可以关，之后不用重填。
 - Agent **不打开、不填写、不读取**这个页面和 `moox.secrets.toml`；页面地址没能自动打开时，把命令打印的地址原样转给用户。`moox.toml` 是明文拓扑，可以直接看和改。
 - 之后要看或改配置用 `./bin/moox-cli config edit`（同样由用户在浏览器里操作）。
-- 填了交易所密钥的：`setup install` 把它们写进密钥管理（只建不改，管理台里已有或已删除的不动），安装结束后逐把检测：`moox-cli trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-<名称>`（`readonly = true` 的不检测）。输出里有阻断项就告诉用户原因，由用户在交易所或管理台处理；`检测没有完成` 是交易所接口暂时不可用，稍后重试。
+- 填了交易所密钥的：`setup install` 把它们写进密钥管理（只建不改，管理台里已有或已删除的不动），安装结束后逐把检测：`moox-cli trade inspect-credential --exchange binance --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-<名称>`（`readonly = true` 的不检测）。输出里有阻断项就告诉用户原因，由用户在交易所或管理台处理；`检测没有完成` 是交易所接口暂时不可用，稍后重试。
 - 币安只读 Key（可选）：Collector 的下架检测用它读币安现货下架计划，固定读名称为 `readonly` 的币安生产环境只读密钥（`exchange = "binance"`、`environment = "production"`、`name = "readonly"`、`readonly = true`，ID `exchange-binance-production-readonly`）。
-  不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台「事件中心」“事件”页签里“标的即将下架”一行的“手工登记”。
-  登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。
+  不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台“交易管理 › 下架名单”页的“手工登记下架”。
+  登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（名单与清仓都只对模拟盘生效，实盘照常买卖；演练核对结束后名单行自动删掉）。
   要补就让用户 `config edit` 加上，再 `setup init` 写入，下一轮检测自动恢复。
   注意 `setup init`（以及 `setup install` 里写告警渠道的那一步）对告警渠道的规则是“Monitor 一个渠道都没有就写入秘密文件里的 `[notification]`”：
   用户在管理台把渠道全部删掉之后再跑，会把秘密文件里的旧渠道写回去。不想要它就先让用户在 `config edit` 里把 Webhook 地址清空。
@@ -170,8 +170,8 @@ cd moox-${VER}
 
 ### 装过时这样问用户
 
-先确认配置来源：这台电脑上的 `moox.toml`、`moox.secrets.toml` 是不是当初装这套系统用的那两份（或用 `config restore` 取回的）。
-刚在这台电脑上用 `config init` 重新生成的（例如换了电脑）就停下，按“保留数据与换电脑”取回原来的配置再回到这里：用新生成的配置覆盖更新会登记新的操作身份、按新配置重新渲染全部主机，最后还会用它覆盖管理台里的配置备份。
+先确认配置来源：这台电脑上的 `moox.toml`、`moox.secrets.toml` 是不是当初装这套系统用的那两份（换电脑时从原电脑拷过来的也算）。
+刚在这台电脑上用 `config init` 重新生成的（例如换了电脑）就停下，按“保留数据与换电脑”取回原来的配置再回到这里：用新生成的配置覆盖更新会登记新的操作身份、按新配置重新渲染全部主机。
 
 再按 `components` 列一张表（主机、IP、版本、已部署的组件、没部署的组件），再问。选择对整套部署统一做，不逐台选：
 
@@ -195,7 +195,7 @@ cd moox-${VER}
 
 再这样问用户，不能只问“要覆盖吗”。主机来自预览的 `plan.hosts`，其中 `archive_kb`、`seaweedfs_kb` 是归档文件与内置对象存储数据的大小（-1 表示没有）；不会动的东西来自 `left_behind`：
 
-> 卸载会停掉并删除这些机器上全部 MooX 服务：`<主机、IP>`，删除部署目录里的全部内容：程序、配置、K 线、因子、策略、任务、交易记录、管理台账号与操作记录、配置备份，
+> 卸载会停掉并删除这些机器上全部 MooX 服务：`<主机、IP>`，删除部署目录里的全部内容：程序、配置、K 线、因子、策略、任务、交易记录、管理台账号与操作记录，
 > 以及归档文件（`<大小>`）和内置对象存储里的归档副本（`<大小>`；配了 `[archive_object_store]` 外部对象存储时，那里的归档不删）。删除后无法恢复。
 > 管理台里后来改过或新加的密钥（交易所密钥、告警渠道、云账号）只在线上有，卸载前请先在管理台里导出或记下来。
 > 如果启用过云函数采集，请你到腾讯云控制台删除 `moox-fetch-plan-` 开头的函数（或者让我带 `--clean-functions` 一起删）；不删会继续运行并产生费用，以后启用云函数时同名函数也会创建失败。
@@ -230,7 +230,7 @@ cd moox-${VER}
   6. 其余主机，因子机排最后；
   7. 统一等一次全部组件就绪；
   8. `setup init`：云账号、日志服务、采集计划、告警渠道（这些要等 Collector、Monitor 起来）；
-  9. 备份配置、`setup start` 启动空间、`setup verify` 验收。
+  9. `setup start` 启动空间、`setup verify` 验收。
 - 每台主机的部署做的事：把登记同步到 Admin，目标机按产物包清单下载组件包（下载不了时由这台电脑下载再推送），向控制机要身份材料，
   渲染配置、环境文件和单元文件，装好后按启动顺序重启有变化的组件，写 `version.json`，再等这次装的组件就绪。
   每台主机有一把签名私钥（`<部署根>/secrets/host.key`，本机组件共用）：例行部署不换它，只重新签发主机证书；私钥丢了或和控制机登记的对不上时会自动签发新的。
@@ -247,10 +247,9 @@ cd moox-${VER}
 
 - 预览的 `hosts` 按主机列出组件：`update` 是已部署、这次重新部署的；`install` 是 `moox.toml` 里新加的组件或新主机上的组件；`remove` 是 `moox.toml` 里已经去掉、这次会停掉并删除的。
   `moves` 是换了主机的组件：旧主机上停掉删除，新主机上从空数据开始，**数据不迁移**。把它们和 `steps`、`note` 一起作为更新计划给用户确认；`remove`、`moves` 不为空时单独说明。
-- 步骤和新安装的部署顺序相同：准备操作身份、放行防火墙、控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，然后控制机其余组件和其余主机（因子机最后），统一等一次全部就绪，最后备份配置。
-- 不做初始化（不写业务空间、元数据、初始秘密和告警渠道），不启动空间（手工停用的任务保持停用，不重建云函数），数据目录（`data/`）不碰；每台主机只重启二进制或配置有变化的组件，`setup stop` 停掉的保持停用。
+- 步骤和新安装的部署顺序相同：准备操作身份、放行防火墙、控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，然后控制机其余组件和其余主机（因子机最后），统一等一次全部就绪。
+- 不做初始化（不写业务空间、元数据、初始秘密和告警渠道），不启动空间（手工停用的任务保持停用，不重建云函数），数据目录（`data/`）不碰；每台主机只重启二进制或配置有变化的组件，组件按 `moox.toml` 的声明启停（`setup stop` 临时停掉的会被重新拉起）。
 - 新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位；`moox.toml` 里新开了云函数采集（`[scf_plan]`）、日志服务或换了云账号也不会生效。需要时再运行一次 `setup init`（只建不改；告警渠道的规则见第 2 节）。
-- 最后一步备份配置用秘密文件里的管理员密码登录，用户在管理台改过密码时会失败：这时结果仍是 `updated`，`warnings` 里有原因，告诉用户即可。
 - 更新后对用户启动的空间跑一次 `setup verify --space-id <空间>` 验收；报 `collection_not_started` 说明之前的安装没做完（见第 3 节）。
 - 中途失败（`update_step_failed`）修好后重跑同一条 `setup update --yes`，报错里也有单独重跑那一步的命令；目标机都没装过，或控制机、存储机没装过时报 `update_not_installed`，改走（重跑）`setup install`。
 
@@ -263,7 +262,7 @@ cd moox-${VER}
 | `setup logs --host <主机> [--component <组件>] [--journal] [--grep <文字>]` | 只读：先看文件日志，没有再看 journald；`--journal` 只看标准输出与标准错误 |
 | `setup restart / stop / start-component --host <主机> --component <组件> --yes` | 重启；停掉并不再开机自启；恢复。不带 `--yes` 只预览 |
 
-- `setup stop` 停掉的组件，之后的部署只更新它的文件、保持停用（结果里是 `paused`），要 `setup start-component` 才恢复。
+- `setup stop` 只是临时停：之后的部署按 `moox.toml` 的声明把它重新拉起。要长期停用写进 `[deployments_disabled]`，部署结果里是 `disabled`。
 - 只部署个别组件时，如果服务目录变了，这台主机的主机网关会一起升级并重启（路由是网关按内嵌的服务目录算的）。
 - 手工调过的组件配置写在 `moox.toml` 的 `[overrides."<组件>"."<配置文件名>"]` 里，每行是 `"键路径" = 值`，部署渲染之后逐项覆盖，重新部署不会丢；
   键路径不存在会报错。例如因子引擎的回看根数与内存上限（`moox-factor-engine tune` 给出建议值）：
@@ -306,26 +305,21 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 要保留线上数据时不卸载，用覆盖更新（`setup update`）。
 
-换了电脑（没有原来的两份配置）时，先从管理台取回配置。前提：管理台能打开，线上做过 `config backup`，并且知道**初始**管理员密码。
+换了电脑时，从原电脑拷过来三样东西：`moox.toml`、`moox.secrets.toml`，以及解密秘密文件的密钥（在原电脑的系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`）。
+系统不再把配置备份到管理台；原电脑已经找不回这两份文件时，只能用 `config init` 重新生成，再按“装过时这样问用户”处理。如实告诉用户：
 
-```bash
-./bin/moox-cli config restore
-```
-
-取回的是 `moox.toml` 与 `moox.secrets.toml` 两份。如实告诉用户：
-
-- `setup validate`、`setup status`、`setup logs`、`setup firewall`、`config backup` 这类只靠 SSH、云密钥或管理台登录的命令，取回配置后就能用（SSH 密钥路径要重新核对）。
+- `setup validate`、`setup status`、`setup logs`、`setup firewall` 这类只靠 SSH、云密钥的命令，拷过来就能用（SSH 密钥路径要重新核对）。
 - 经网关调用的命令（`doctor`、`collector`、`factor`、`trade` 等）和其余主机的 `setup deploy` 要这台电脑有操作员身份。新电脑上按顺序做两步（都要先问用户）：
   1. `./bin/moox-cli setup operator --register`：在这台电脑生成 `moox-cli` 的签名私钥，并经 SSH 把公钥登记到控制机。它**替换**原来登记的公钥，原来那台电脑随即不能再用，两台电脑不能同时用。约 10 秒后各主机网关生效。
   2. `./bin/moox-cli setup deploy --host control`：取回控制机的根证书（之后部署别的主机、连因子机都要用）；它重新执行 Admin 的初始化（只建不改），没有变化的组件不重启。
   这两步还没有在真机上验证过，做之前告诉用户。
-- 这两步和 `setup status` 都要先解开 `moox.secrets.toml`：用 `config restore` 取回的配置已经按这台电脑的密钥加密，直接可用；两份配置是从原电脑直接拷过来的，还要把解密密钥带过来（在原电脑的系统钥匙串里，没有钥匙串的机器在 `~/.config/moox/config.key`），否则报“这台电脑上没有解密秘密文件的密钥”，改用 `config restore`。
+- 这两步和 `setup status` 都要先解开 `moox.secrets.toml`：没带解密密钥会报“这台电脑上没有解密秘密文件的密钥”，把原电脑的密钥带过来即可，不要重新生成密钥覆盖。
 - 身份目录（默认 `~/.config/moox`）的路径里不能有符号链接：报 `private material directory must be physical` 时按提示用 `--operator-dir` 指到实际路径。
 - 不要手动拷贝或恢复 `~/.config/moox` 下的身份文件。
 
 ## 升级到新版本
 
-下载新版本的产物包与 CLI（同一版本），把原来的 `moox.toml` 和 `moox.secrets.toml` 放进新目录（或 `config restore` 取回），然后覆盖更新：
+下载新版本的产物包与 CLI（同一版本），把原来的 `moox.toml` 和 `moox.secrets.toml` 放进新目录，然后覆盖更新：
 
 ```bash
 ./bin/moox-cli setup validate                     # 看各主机现在的版本与组件
@@ -355,7 +349,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `operator_key_mismatch` | 控制机上登记的 `moox-cli` 公钥不是这台电脑的 | 问用户是不是换了电脑；是的话 `setup operator --register`（原电脑随即不能用） |
 | `rotate_unsupported` | 对控制机用了 `--rotate-host-key` | 控制机的签名密钥不单独换，按报错的做法 |
 | `operator_trust_failed` | 这台电脑上记着另一套部署的控制机根证书（线上清空重装过，CA 变了） | 确认线上确实是重装的之后，按报错删掉 `~/.config/moox` 下列出的两个文件再重跑 |
-| `identity_invalid` | 从控制机取回的身份材料校验没通过（主机地址、组件和 Admin 里登记的不一致，或 CA 对不上） | 核对 `moox.toml` 里这台主机的地址和 `[deployments]`，`setup sync-deployments --host <主机> --yes` 后重跑 |
+| `identity_invalid` | 从控制机取回的身份材料校验没通过（主机地址、组件和 Admin 里登记的不一致，或 CA 对不上） | 核对 `moox.toml` 里这台主机的地址和 `[deployments]` 后重跑 `setup deploy --host <主机>`（部署开头会先把 `moox.toml` 的登记写进 Admin） |
 | `component_not_on_host` | `--component` 写的组件不在这台主机上 | 按报错列出的组件改 |
 | `binary_dir_required`、`binary_missing` | 在源码目录里部署，没给或缺编译好的 Linux 二进制 | 用户安装应在产物包目录里运行；维护者见 [`source-deploy.md`](source-deploy.md) |
 | `version_invalid` | 目标机的 `version.json` 损坏 | 告诉用户；确认后删掉它重跑（会把全部组件当成有变化重启一遍） |

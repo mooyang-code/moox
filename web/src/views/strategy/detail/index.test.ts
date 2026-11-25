@@ -9,6 +9,8 @@ vi.mock("vue-router", () => ({
 }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ({ selectedSpaceId: "crypto" }) }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => ctx.store }));
+// 实例详情与定义目录在测试里共用同一个假对象
+vi.mock("@/views/strategy/use-instance-detail", () => ({ useInstanceDetail: () => ctx.store }));
 vi.mock("@/views/strategy/use-now-clock", () => ({ useNowClock: () => ({ value: Date.now() }) }));
 // 子组件换成只暴露分页属性与事件的替身：这里只验证详情页对结果翻页失败的处理。
 vi.mock("@/views/strategy/components/strategy-result-table.vue", () => ({
@@ -56,7 +58,6 @@ describe("strategy detail page result paging", () => {
         enabled: false,
         session_id: "s1",
         strategy_id: "s",
-        view_id: "v",
         logical_account_id: "",
         health: "ok",
         resolved_json: "{}"

@@ -7,8 +7,8 @@ import { useNowClock } from "@/views/strategy/use-now-clock";
 const instance = { enabled: true, session_id: "s1" };
 const snapshot = {
   session_id: "s1",
-  bar_end_time: "2026-10-01T01:00:00Z",
-  valid_until: "2026-10-01T03:00:00Z",
+  bar_end_time: "1790816400000",
+  valid_until: "1790823600000",
   targets: [{ instrument_id: "BTC-USDT", target_weight: "0.5" }]
 } as never;
 

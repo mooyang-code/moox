@@ -42,15 +42,15 @@ func TestPortfolioMarginAccountSharesOneFundsPool(t *testing.T) {
 // 统一账户和 OKX 的预留互相占用：现货预留要算进合约的占用里，普通账户则按钱包分开。
 func TestMarketsSharingFundsFollowsFundsPool(t *testing.T) {
 	standard := mixedStandardAccount("1", "1")
-	require.Equal(t, []string{"SPOT"}, standard.MarketsSharingFunds(exchange.MarketTypeSpot))
-	require.Equal(t, []string{"SWAP"}, standard.MarketsSharingFunds(exchange.MarketTypeSwap))
+	require.Equal(t, []string{"spot"}, standard.MarketsSharingFunds(exchange.MarketTypeSpot))
+	require.Equal(t, []string{"swap"}, standard.MarketsSharingFunds(exchange.MarketTypeSwap))
 
 	portfolio := standard
 	portfolio.AccountMode = exchange.AccountModeBinancePortfolioMargin
-	require.Equal(t, []string{"SPOT", "SWAP"}, portfolio.MarketsSharingFunds(exchange.MarketTypeSpot))
-	require.Equal(t, []string{"SPOT", "SWAP"}, portfolio.MarketsSharingFunds(exchange.MarketTypeSwap))
+	require.Equal(t, []string{"spot", "swap"}, portfolio.MarketsSharingFunds(exchange.MarketTypeSpot))
+	require.Equal(t, []string{"spot", "swap"}, portfolio.MarketsSharingFunds(exchange.MarketTypeSwap))
 
 	okx := standard
 	okx.Exchange, okx.AccountMode = exchange.ExchangeOKX, exchange.AccountModeUnspecified
-	require.Equal(t, []string{"SPOT", "SWAP"}, okx.MarketsSharingFunds(exchange.MarketTypeSwap), "OKX 尚未检测账户类型时也按统一账户")
+	require.Equal(t, []string{"spot", "swap"}, okx.MarketsSharingFunds(exchange.MarketTypeSwap), "OKX 尚未检测账户类型时也按统一账户")
 }

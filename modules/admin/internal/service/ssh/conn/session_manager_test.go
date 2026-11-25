@@ -49,13 +49,14 @@ func TestSSHConn_RefreshActiveTime_ShouldUpdateTimestamp(t *testing.T) {
 }
 
 func TestSSHConn_MarshalJSON_ShouldHideSensitiveFields(t *testing.T) {
+	start := time.UnixMilli(1700000000123)
 	conn := &SSHConn{
 		SessionID: "s4",
 		Target: model.Target{
 			HostID: "storage", Address: "10.0.0.4", Port: 22, User: "dba", Credential: secretmodel.SSHCredential{Password: "secret"},
 		},
-		StartTime:      time.Now(),
-		LastActiveTime: time.Now(),
+		StartTime:      start,
+		LastActiveTime: start.Add(time.Second),
 		ClientIP:       "1.2.3.4",
 	}
 	data, err := conn.MarshalJSON()
@@ -63,6 +64,9 @@ func TestSSHConn_MarshalJSON_ShouldHideSensitiveFields(t *testing.T) {
 	body := string(data)
 	assert.Contains(t, body, "session_id")
 	assert.NotContains(t, body, "secret")
+	// 会话的起止时刻是 Unix 毫秒
+	assert.Contains(t, body, `"start_time":1700000000123`)
+	assert.Contains(t, body, `"last_active_time":1700000001123`)
 }
 
 func TestSSHConn_ResizeWindow_NoSession_ShouldError(t *testing.T) {

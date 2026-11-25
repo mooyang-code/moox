@@ -133,13 +133,13 @@ func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t 
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "original", Description: "before",
 		DataType: "kline", CollectParams: `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"dataset-original","frequency":"1m"}`,
 		Enabled: true, Creator: "creator", PrepareState: domain.PrepareStateReady,
-		ResultDatasetID: "dataset-original", ResultViewID: "view-original",
+		ResultDatasetID: "dataset-original",
 	}))
 
 	updated, err := repo.UpdateMutableByTaskID(ctx, "crypto", "task-1", domain.CollectionTask{
 		SpaceID: "other", TaskID: "other", TaskName: "renamed", Description: "after",
 		DataType: "kline", CollectParams: `{"target_dataset_id":"dataset-other"}`, Enabled: false,
-		Creator: "other", PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-other", ResultViewID: "view-other",
+		Creator: "other", PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-other",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "renamed", updated.TaskName)
@@ -149,7 +149,6 @@ func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t 
 	assert.Equal(t, "task-1", updated.TaskID)
 	assert.Equal(t, "kline", updated.DataType)
 	assert.Equal(t, "dataset-original", updated.ResultDatasetID)
-	assert.Equal(t, "view-original", updated.ResultViewID)
 	assert.Equal(t, "creator", updated.Creator)
 }
 

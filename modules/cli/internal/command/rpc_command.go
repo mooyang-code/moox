@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/spf13/cobra"
 )
 
@@ -27,13 +27,12 @@ import (
 const secretWriteDenied = "密钥的新建、修改、启停与删除由用户在管理台“系统设置 › 密钥管理”操作；明文不经过 Agent，误删也无法恢复"
 
 var gatewayCallDenied = map[string]string{
-	"trpc.moox.ops.SecretMgr/GetSecretValue":                                 "返回密钥明文；云账户等凭证由专用命令在进程内使用，需要查看请到管理台“系统设置 › 密钥管理”",
-	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels":                  "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
-	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「事件中心」的“订阅”页签新建，密钥只在那里显示一次，不经过 Agent",
-	"trpc.moox.ops.SecretMgr/CreateSecret":                                   secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/UpdateSecret":                                   secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":                             secretWriteDenied,
-	"trpc.moox.ops.SecretMgr/DeleteSecret":                                   secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/GetSecretValue":                "返回密钥明文；云账户等凭证由专用命令在进程内使用，需要查看请到管理台“系统设置 › 密钥管理”",
+	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "返回完整 webhook 地址；告警渠道请到管理台「资源与运维 › 监控告警」的“消息通知设置”查看",
+	"trpc.moox.ops.SecretMgr/CreateSecret":                  secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/UpdateSecret":                  secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":            secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/DeleteSecret":                  secretWriteDenied,
 }
 
 // rpcBusinessError 是服务返回了业务失败（ret_info.code 非成功）。响应已经打印，这里只负责非 0 退出。
@@ -78,7 +77,7 @@ func invokeRPC(ctx context.Context, inv rpcInvocation) (json.RawMessage, error) 
 		return nil, err
 	}
 	defer gateway.Close()
-	client := &adminclient.Client{Gateway: gateway, SpaceID: inv.SpaceID, HostID: inv.HostID}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: inv.SpaceID, HostID: inv.HostID}
 	var response json.RawMessage
 	if err := client.CallGatewayJSON(ctx, inv.Service, inv.Method, inv.Request, &response); err != nil {
 		return nil, err
@@ -119,7 +118,8 @@ const (
 	rpcFloat                 // 浮点数
 	rpcBool                  // 布尔；只在显式传入时写入请求
 	rpcStrings               // 可重复或逗号分隔的字符串列表
-	rpcTime                  // RFC3339 时间，按字符串写入
+	rpcTime                  // 数据时间（data_time 及其上下界）：RFC3339，按字符串原样写入
+	rpcInstant               // 时刻（创建、截止、查询起止等墙钟时刻）：输入 RFC3339，换成 int64 毫秒写入
 	rpcJSON                  // JSON 文本，或 @文件
 	rpcFile                  // 文件路径（- 为标准输入），内容按字符串写入
 	rpcStringMap             // k=v，可重复，按字符串映射写入
@@ -169,7 +169,7 @@ type rpcSpec struct {
 type rpcMerge func(ctx context.Context, inv rpcInvocation, request map[string]any) error
 
 // readOnlyObjectFields 是取回的对象里永远不回传的只读字段。
-var readOnlyObjectFields = map[string]bool{"id": true, "created_at": true, "updated_at": true, "create_time": true, "modify_time": true}
+var readOnlyObjectFields = map[string]bool{"id": true, "created_at": true, "updated_at": true}
 
 // mergeExisting 返回一个合并函数：fetch 取回现有对象，只保留 keep 里的字段（keep 为空表示除只读字段外全部保留），
 // 用户在 request[into] 里给出的字段覆盖它，结果写回 request[into]。
@@ -350,6 +350,13 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 			return nil, false, fmt.Errorf("--%s 需要 RFC3339 时间，例如 2026-10-01T00:00:00Z", f.Name)
 		}
 		return v, true, nil
+	case rpcInstant:
+		v, _ := flags.GetString(f.Name)
+		at, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, false, fmt.Errorf("--%s 需要 RFC3339 时刻，例如 2026-10-01T00:00:00Z 或 2026-10-01T08:00:00+08:00", f.Name)
+		}
+		return at.UnixMilli(), true, nil
 	case rpcJSON:
 		v, _ := flags.GetString(f.Name)
 		raw := []byte(v)
@@ -479,16 +486,23 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 	return request, nil
 }
 
+// kind 是帮助文本里的接口性质：破坏性命令默认只预览；其余按内嵌服务目录区分只读与写操作，目录里查不到的按写操作标。
+func (s rpcSpec) kind() string {
+	if s.Destructive {
+		return "破坏性，默认只预览"
+	}
+	if readOnly, known := gatewayMethodReadOnly(s.Service, s.Method); known && readOnly {
+		return "只读"
+	}
+	return "写操作"
+}
+
 // buildRPCCommand 由规格生成命令。
 func buildRPCCommand(spec rpcSpec) *cobra.Command {
-	kind := "只读"
-	if spec.Destructive {
-		kind = "破坏性，默认只预览"
-	}
 	cmd := &cobra.Command{
 		Use:   spec.Path[len(spec.Path)-1],
 		Short: spec.Short,
-		Long:  fmt.Sprintf("%s\n\n对应接口：%s %s（%s）。--data 可以提供完整请求 JSON，各参数优先于它。", spec.Short, spec.Service, spec.Method, kind),
+		Long:  fmt.Sprintf("%s\n\n对应接口：%s %s（%s）。--data 可以提供完整请求 JSON，各参数优先于它。", spec.Short, spec.Service, spec.Method, spec.kind()),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			request, err := spec.buildRequest(cmd, cmd.InOrStdin())
@@ -659,6 +673,11 @@ func fileFlag(name, field, usage string, required bool) rpcFlag {
 }
 func timeFlag(name, field, usage string, required bool) rpcFlag {
 	return rpcFlag{Name: name, Field: field, Kind: rpcTime, Usage: usage, Required: required}
+}
+
+// instantFlag 是“时刻”参数：用户写 RFC3339，请求里是 int64 毫秒。
+func instantFlag(name, field, usage string, required bool) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcInstant, Usage: usage, Required: required}
 }
 func mapFlag(name, field, usage string) rpcFlag {
 	return rpcFlag{Name: name, Field: field, Kind: rpcStringMap, Usage: usage}

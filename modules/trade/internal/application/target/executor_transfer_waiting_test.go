@@ -32,8 +32,8 @@ func addOKXSpotMember(t *testing.T, f *targetFixture) {
 			return err
 		}
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-okx", Name: "okx", Exchange: "OKX",
-			Markets: []string{"SPOT"}, ExecutionMode: "LIVE", AccountMode: "OKX_UNIFIED", Environment: "PRODUCTION",
+			SpaceID: "space-1", TradingAccountID: "account-okx", Name: "okx", Exchange: "okx",
+			Markets: []string{"spot"}, ExecutionMode: "LIVE", AccountMode: "OKX_UNIFIED", Environment: "PRODUCTION",
 			CredentialSecretID: "secret-2", SettlementAsset: "USDT", Status: "ENABLED", Ready: true,
 			LeverageSettings: store.LeverageSettings{"*": "1"},
 			Snapshot: store.TradingAccountSnapshot{AvailableFunds: "100000", Balances: []store.AssetBalance{
@@ -44,7 +44,7 @@ func addOKXSpotMember(t *testing.T, f *targetFixture) {
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "OKX", MarketType: "SPOT", ExchangeSymbol: "SOL-USDT", InstrumentID: "SOL-USDT-SPOT",
+			Exchange: "okx", MarketType: "spot", ExchangeSymbol: "SOL-USDT", InstrumentID: "SOL-USDT-SPOT",
 			BaseAsset: "SOL", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 		}); err != nil {
@@ -64,7 +64,7 @@ func addOKXSpotMember(t *testing.T, f *targetFixture) {
 func TestWaitingAccountOnlyBlocksItsOwnSpotBuys(t *testing.T) {
 	f := liveStandardFixture(t)
 	addOKXSpotMember(t, f)
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"},
 		{InstrumentID: "SOL-USDT-SPOT", Quantity: "5"},
 	})
@@ -97,7 +97,7 @@ func TestWaitingAccountOnlyBlocksItsOwnSpotBuys(t *testing.T) {
 func TestCollectNotSkippedWhileSpotBuyIsBlockedForNonFundsReason(t *testing.T) {
 	f := liveStandardFixture(t)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
 	transfer := &fakeTransfer{}
 	executor := f.executor()
 	executor.Transfers = transfer
@@ -114,7 +114,7 @@ func TestCollectNotSkippedWhileSpotBuyIsBlockedForNonFundsReason(t *testing.T) {
 func TestScaledBuyTooSmallWithExistingPositionIsBlockedNotSkipped(t *testing.T) {
 	f := liveStandardFixture(t)
 	f.setSpotBalance("BTC", "0.005")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
 	transfer := &fakeTransfer{
 		scale:   map[string]shared.Decimal{"account-a": mustDecimal("0.01")},
 		reasons: map[string]string{"account-a": wallet.ReasonShortfallScaled},
@@ -139,7 +139,7 @@ func TestScaledBuyTooSmallWithExistingPositionIsBlockedNotSkipped(t *testing.T) 
 func TestBelowConfiguredMinimumBuyIsSatisfiedAndNeverTransfersOrBlocks(t *testing.T) {
 	f := liveStandardFixture(t)
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"10","min_notional_swap":"0"}`)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.08"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.08"}})
 	transfer := &fakeTransfer{
 		scale:   map[string]shared.Decimal{"account-a": shared.Zero()},
 		reasons: map[string]string{"account-a": wallet.ReasonShortfallNoBuy},
@@ -161,11 +161,11 @@ func TestBelowConfiguredMinimumBuyIsSatisfiedAndNeverTransfersOrBlocks(t *testin
 func TestCollectSkippedWhileSpotBuyIsDeferredByHourlyCap(t *testing.T) {
 	f := liveStandardFixture(t)
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","hourly_cap_spot":{"BTC-USDT-SPOT":"1000"}}`)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "30"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "30"}})
 	at := f.now.Truncate(time.Hour).Add(time.Second).UnixMilli()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: "used", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
+		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
+		ClientOrderID: "used", Exchange: "binance", MarketType: "spot", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "100", AveragePrice: "100", FilledQuantity: "10",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "FILLED", SubmittedAt: at, FinishedAt: at, Version: 1,
 	})
@@ -208,7 +208,7 @@ func (f *targetFixture) setSpotBalanceOf(t *testing.T, accountID, asset, total s
 			balances = append(balances, balance)
 		}
 	}
-	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("SPOT")), Asset: asset, Available: total, Total: total})
+	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("spot")), Asset: asset, Available: total, Total: total})
 	account.Snapshot.Balances = balances
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return storetest.SeedAccount(tx, "space-1", accountID, storetest.AccountState{

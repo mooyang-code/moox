@@ -129,19 +129,28 @@ func failureText(code commonpb.ErrorCode, msg string) string {
 // Snapshot 把状态转成 RPC 消息。
 func Snapshot(s State) *commonpb.LifecycleSnapshot {
 	out := &commonpb.LifecycleSnapshot{
-		Module: s.Module, Stage: string(s.Stage), Reason: s.Reason, Since: formatTime(s.Since),
-		PausedSince: formatTime(s.PausedSince), QuiescedAt: formatTime(s.QuiescedAt), ReleasedAt: formatTime(s.ReleasedAt),
+		Module: s.Module, Stage: string(s.Stage), Reason: s.Reason, Since: toMillis(s.Since),
+		PausedSince: toMillis(s.PausedSince), QuiescedAt: toMillis(s.QuiescedAt), ReleasedAt: toMillis(s.ReleasedAt),
 	}
 	if p := s.Pause; p != nil {
-		out.Pause = &commonpb.LifecyclePause{Kind: string(p.Kind), Reason: p.Reason, By: p.By, Since: formatTime(p.Since), ExpiresAt: formatTime(p.ExpiresAt)}
+		out.Pause = &commonpb.LifecyclePause{Kind: string(p.Kind), Reason: p.Reason, By: p.By, Since: toMillis(p.Since), ExpiresAt: toMillis(p.ExpiresAt)}
 	}
 	if c := s.Catchup; c != nil {
-		out.Catchup = &commonpb.CatchupProgress{
-			Since: formatTime(c.Since), Target: formatTime(c.Target), Done: c.Done, Total: c.Total, CaughtUp: c.CaughtUp,
-			BlockedBy: c.BlockedBy, Unfillable: int32(c.Unfillable), Message: c.Message,
-		}
+		out.Catchup = c.Progress()
 	}
 	return out
+}
+
+// Progress 把恢复追赶进度转成消息（生命周期 RPC 与上报 Monitor 共用）。since 是时刻（毫秒）；target 是周期（data_time 文本）。
+func (c Catchup) Progress() *commonpb.CatchupProgress {
+	target := ""
+	if !c.Target.IsZero() {
+		target = c.Target.UTC().Format(time.RFC3339Nano)
+	}
+	return &commonpb.CatchupProgress{
+		Since: toMillis(c.Since), Target: target, Done: c.Done, Total: c.Total, CaughtUp: c.CaughtUp,
+		BlockedBy: c.BlockedBy, Unfillable: int32(c.Unfillable), Message: c.Message,
+	}
 }
 
 // StateFromSnapshot 把 RPC 消息转回状态。
@@ -151,30 +160,44 @@ func StateFromSnapshot(in *commonpb.LifecycleSnapshot) (State, error) {
 	}
 	var p timeParser
 	out := State{
-		Module: in.GetModule(), Stage: Stage(in.GetStage()), Reason: in.GetReason(), Since: p.parse("since", in.GetSince()),
-		PausedSince: p.parse("paused_since", in.GetPausedSince()), QuiescedAt: p.parse("quiesced_at", in.GetQuiescedAt()),
-		ReleasedAt: p.parse("released_at", in.GetReleasedAt()),
+		Module: in.GetModule(), Stage: Stage(in.GetStage()), Reason: in.GetReason(), Since: p.millis("since", in.GetSince()),
+		PausedSince: p.millis("paused_since", in.GetPausedSince()), QuiescedAt: p.millis("quiesced_at", in.GetQuiescedAt()),
+		ReleasedAt: p.millis("released_at", in.GetReleasedAt()),
 	}
 	if pause := in.GetPause(); pause != nil {
 		out.Pause = &PauseInfo{
 			Kind: PauseKind(pause.GetKind()), Reason: pause.GetReason(), By: pause.GetBy(),
-			Since: p.parse("pause.since", pause.GetSince()), ExpiresAt: p.parse("pause.expires_at", pause.GetExpiresAt()),
+			Since: p.millis("pause.since", pause.GetSince()), ExpiresAt: p.millis("pause.expires_at", pause.GetExpiresAt()),
 		}
 	}
 	if c := in.GetCatchup(); c != nil {
-		out.Catchup = &Catchup{
-			Since: p.parse("catchup.since", c.GetSince()), Target: p.parse("catchup.target", c.GetTarget()), Done: c.GetDone(), Total: c.GetTotal(),
-			CaughtUp: c.GetCaughtUp(), BlockedBy: c.GetBlockedBy(), Unfillable: int(c.GetUnfillable()), Message: c.GetMessage(),
-		}
+		out.Catchup = p.catchup(c)
 	}
 	return out, p.err
+}
+
+// CatchupFromProgress 把恢复追赶进度消息转回结构，是 Catchup.Progress 的反向。
+func CatchupFromProgress(in *commonpb.CatchupProgress) (*Catchup, error) {
+	if in == nil {
+		return nil, nil
+	}
+	var p timeParser
+	out := p.catchup(in)
+	return out, p.err
+}
+
+func (p *timeParser) catchup(c *commonpb.CatchupProgress) *Catchup {
+	return &Catchup{
+		Since: p.millis("catchup.since", c.GetSince()), Target: p.text("catchup.target", c.GetTarget()), Done: c.GetDone(), Total: c.GetTotal(),
+		CaughtUp: c.GetCaughtUp(), BlockedBy: c.GetBlockedBy(), Unfillable: int(c.GetUnfillable()), Message: c.GetMessage(),
+	}
 }
 
 // RequestToProto 把命令请求转成 RPC 消息。
 func RequestToProto(r Request) *commonpb.ControlLifecycleReq {
 	return &commonpb.ControlLifecycleReq{
 		Command: string(r.Command), PauseKind: string(r.PauseKind), Reason: r.Reason, By: r.By,
-		ManualRelease: r.ManualRelease, ExpiresAt: formatTime(r.ExpiresAt),
+		ManualRelease: r.ManualRelease, ExpiresAt: toMillis(r.ExpiresAt),
 	}
 }
 
@@ -192,21 +215,37 @@ func RequestFromProto(in *commonpb.ControlLifecycleReq) (Request, error) {
 	}
 	var p timeParser
 	out := Request{Command: command, PauseKind: kind, Reason: in.GetReason(), By: in.GetBy(), ManualRelease: in.GetManualRelease(),
-		ExpiresAt: p.parse("expires_at", in.GetExpiresAt())}
+		ExpiresAt: p.millis("expires_at", in.GetExpiresAt())}
 	return out, p.err
 }
 
-func formatTime(t time.Time) string {
+// toMillis 把时刻转成 Unix 毫秒，零值时间是 0（表示没有）。
+func toMillis(t time.Time) int64 {
 	if t.IsZero() {
-		return ""
+		return 0
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UnixMilli()
 }
 
 // timeParser 解析一串时间字段，记下第一个错误。
 type timeParser struct{ err error }
 
-func (p *timeParser) parse(field, value string) time.Time {
+// millis 把 Unix 毫秒转回时刻：0 是没有，负数是错误。
+func (p *timeParser) millis(field string, value int64) time.Time {
+	switch {
+	case value == 0:
+		return time.Time{}
+	case value < 0:
+		if p.err == nil {
+			p.err = fmt.Errorf("%s 不是有效的毫秒时刻：%d", field, value)
+		}
+		return time.Time{}
+	}
+	return time.UnixMilli(value).UTC()
+}
+
+// text 解析数据坐标的 RFC3339 文本（追赶目标），空串是没有。
+func (p *timeParser) text(field, value string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}

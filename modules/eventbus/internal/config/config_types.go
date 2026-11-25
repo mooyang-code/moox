@@ -1,12 +1,17 @@
 // Package config owns the explicit, validated EventBus configuration.
 package config
 
-import "time"
+import (
+	"time"
+
+	"github.com/mooyang-code/moox/packages/events"
+)
 
 type Config struct {
 	Broker         BrokerConfig         `yaml:"broker"`
 	InternalClient InternalClientConfig `yaml:"internal_client"`
-	Streams        []StreamConfig       `yaml:"streams"`
+	// Streams 不从配置文件读：由 packages/events 的拓扑声明推出（见 events.Streams）。
+	Streams []events.StreamSpec `yaml:"-"`
 }
 
 type BrokerConfig struct {
@@ -37,17 +42,4 @@ type TLSConfig struct {
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
 	CAFile   string `yaml:"ca_file"`
-}
-
-type StreamConfig struct {
-	Name        string        `yaml:"name"`
-	Subjects    []string      `yaml:"subjects"`
-	Retention   string        `yaml:"retention"`
-	Discard     string        `yaml:"discard"`
-	Storage     string        `yaml:"storage"`
-	MaxAge      time.Duration `yaml:"max_age"`
-	Duplicates  time.Duration `yaml:"duplicates"`
-	MaxBytes    int64         `yaml:"max_bytes"`
-	MaxMsgs     int64         `yaml:"max_msgs"`
-	Description string        `yaml:"description"`
 }

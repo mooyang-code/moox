@@ -42,7 +42,7 @@ func (r *viewMetadataReader) ListDatasetColumns(context.Context, string, string,
 	items := make([]*pb.DatasetColumn, 0, len(r.columns))
 	for _, name := range r.columns {
 		items = append(items, &pb.DatasetColumn{
-			SpaceId: "crypto", DatasetId: "dataset_kline_5m", ColumnName: name, OriginId: name,
+			SpaceId: "crypto", DatasetId: "dataset_kline_5m", ColumnName: name, DisplayName: name,
 			Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		})
 	}

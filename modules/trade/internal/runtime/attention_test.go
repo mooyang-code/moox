@@ -107,21 +107,22 @@ func TestAttentionReportsMarginPauseUntilTheUserResumes(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tradeStore.Close() })
 	worker := &AttentionWorker{Store: tradeStore, blockedSince: map[string]time.Time{}}
-	scan := func(reason string) map[string][]string {
+	scan := func(pause store.Pause) map[string][]string {
 		items := map[string][]string{}
-		logical := store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "实盘组合", PauseReason: reason}
+		logical := store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "实盘组合",
+			PauseReason: pause.Reason, PauseSource: pause.Source, MarginReduceState: pause.MarginReduce}
 		require.NoError(t, worker.scanLogicalAccount(context.Background(), logical, time.Now(), items, map[string]time.Time{}))
 		return items
 	}
 
-	items := scan(store.MarginPauseReason())
+	items := scan(store.MarginPause(store.MarginReduced))
 	require.Equal(t, []string{"实盘组合：保证金率风控已暂停，等待确认后恢复"}, items[telemetry.AttentionMarginRatioLow])
 	require.Len(t, items[telemetry.AttentionAutoPaused], 1, "同时仍是自动暂停")
 	require.NotContains(t, items[telemetry.AttentionAutoPaused][0], "0.")
 
-	require.Empty(t, scan(store.AutoPauseReason("发现外部订单"))[telemetry.AttentionMarginRatioLow])
-	require.Empty(t, scan("人工暂停")[telemetry.AttentionMarginRatioLow])
-	require.Empty(t, scan("")[telemetry.AttentionMarginRatioLow], "恢复之后告警消失")
+	require.Empty(t, scan(store.SystemPause("发现外部订单"))[telemetry.AttentionMarginRatioLow])
+	require.Empty(t, scan(store.UserPause("人工暂停"))[telemetry.AttentionMarginRatioLow])
+	require.Empty(t, scan(store.Pause{})[telemetry.AttentionMarginRatioLow], "恢复之后告警消失")
 }
 
 // 自主下单组合减仓不暂停、也没有恢复：最近一次风控减仓还在跑或结束不到 5 分钟就报 margin_ratio_low，之后自己消失。
@@ -148,7 +149,7 @@ func TestAttentionReportsMarginReduceOfAManualGroupOnlyWhileRecent(t *testing.T)
 	require.Empty(t, scan(time.Now()), "没有风控减仓")
 	_, _, err = tradeStore.CreateOperatorAction(ctx, store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: store.MarginActionIDPrefix + "logical-1-1", LogicalAccountID: "logical-1", ActionType: "REDUCE",
-		Reason: store.MarginPauseReason(), RequestJSON: `{"logical_account_id":"logical-1","reduce_ratio":"0.1"}`, Status: "RUNNING",
+		Reason: store.MarginPause(store.MarginReduced).Reason, RequestJSON: `{"logical_account_id":"logical-1","reduce_ratio":"0.1"}`, Status: "RUNNING",
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"自主组合：保证金率过低，风控正在或刚刚按比例减仓"}, scan(time.Now().Add(time.Hour)), "还在跑就一直报")
@@ -156,4 +157,24 @@ func TestAttentionReportsMarginReduceOfAManualGroupOnlyWhileRecent(t *testing.T)
 	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
 	require.Len(t, scan(time.Now()), 1, "刚结束，窗口内照报，保证 Monitor 采得到")
 	require.Empty(t, scan(time.Now().Add(rejectionWindow+time.Minute)), "结束超过窗口，告警自己消失")
+}
+
+// 下架事件消费者从启动或断开起 3 分钟仍没在运行才上报；没启用 EventBus（DelistConsumer 为空）时不上报。
+func TestAttentionReportsDelistConsumerDownAfterGrace(t *testing.T) {
+	since := time.UnixMilli(1_000_000)
+	running := false
+	worker := &AttentionWorker{DelistConsumer: func() (bool, time.Time) { return running, since }}
+	items, err := worker.delistFailed(context.Background(), since.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.Empty(t, items)
+	items, err = worker.delistFailed(context.Background(), since.Add(3*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, []string{"下架事件消费者没有运行"}, items)
+	running = true
+	items, err = worker.delistFailed(context.Background(), since.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, items)
+	items, err = (&AttentionWorker{}).delistFailed(context.Background(), since.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, items)
 }

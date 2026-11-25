@@ -29,20 +29,20 @@ func inspectionHandler(t *testing.T, inspector inspectorStub) (*AccountServer, *
 func TestInspectExchangeCredentialDoesNotRequireSpaceAndReturnsInspection(t *testing.T) {
 	handler, _ := inspectionHandler(t, inspectorStub{})
 	rsp, err := handler.InspectExchangeCredential(context.Background(), &tradepb.InspectExchangeCredentialReq{
-		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,
+		Exchange: "binance", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,
 		CredentialSecretId: "secret-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, "BINANCE_STANDARD", rsp.GetInspection().GetAccountMode())
-	require.Equal(t, []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.MarketType_MARKET_TYPE_SWAP}, rsp.GetInspection().GetAvailableMarkets())
+	require.Equal(t, []string{"spot", "swap"}, rsp.GetInspection().GetAvailableMarkets())
 	require.NotZero(t, rsp.GetInspection().GetInspectedAt())
 }
 
 func TestInspectExchangeCredentialRejectsInvalidRequest(t *testing.T) {
 	handler, _ := inspectionHandler(t, inspectorStub{})
 	rsp, err := handler.InspectExchangeCredential(context.Background(), &tradepb.InspectExchangeCredentialReq{
-		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, CredentialSecretId: "secret-1",
+		Exchange: "binance", CredentialSecretId: "secret-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
@@ -51,7 +51,7 @@ func TestInspectExchangeCredentialRejectsInvalidRequest(t *testing.T) {
 func TestInspectExchangeCredentialInconclusiveIsNotReportedAsABlocker(t *testing.T) {
 	handler, _ := inspectionHandler(t, inspectorStub{err: errors.Join(exchange.ErrInspectionInconclusive, errors.New("timeout"))})
 	rsp, err := handler.InspectExchangeCredential(context.Background(), &tradepb.InspectExchangeCredentialReq{
-		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,
+		Exchange: "binance", Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,
 		CredentialSecretId: "secret-1",
 	})
 	require.NoError(t, err)
@@ -77,8 +77,8 @@ func TestReinspectTradingAccountWritesResultAndFollowsUp(t *testing.T) {
 	handler, tradeStore := inspectionHandler(t, inspectorStub{})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	created, err := handler.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
-		Name: "main", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-		Markets:         []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT},
+		Name: "main", Exchange: "binance",
+		Markets:         []string{"spot"},
 		Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		SettlementAsset: "USDT",
 	})
@@ -123,8 +123,8 @@ func TestReinspectTradingAccountInconclusiveKeepsLastResultAndReportsUnavailable
 	handler, _ := inspectionHandler(t, inspectorStub{})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	_, err := handler.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
-		Name: "main", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-		Markets:         []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT},
+		Name: "main", Exchange: "binance",
+		Markets:         []string{"spot"},
 		Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		SettlementAsset: "USDT",
 	})

@@ -28,3 +28,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright 运行产物
+/test-results/
+/playwright-report/

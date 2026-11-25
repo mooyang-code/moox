@@ -272,18 +272,18 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 import { getCollectorStatus, type HistorySeed } from "@/api/collector/runtime-status";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
-import { listAllDatasets, listAllViews, listDataSources } from "@/api/storage/metadata";
+import { listAllDatasets, listDataSources } from "@/api/storage/metadata";
 import { listInstances, listStrategies, listStrategyTargets } from "@/api/strategy";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { listTradingAccounts } from "@/api/trade";
 import { usePolling } from "@/hooks/usePolling";
 import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { datasetMatchesAttribution, isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
 import { alertHref } from "@/views/ops/monitor/health-display";
 import { instancesLink, replayLink, resultsLink } from "@/views/strategy/links";
@@ -321,7 +321,7 @@ const updatedAt = ref("");
 const refreshing = ref(false);
 
 // 空间范围的名称与资产数量：切空间时整体重读，旧空间晚到的响应由 spaceLoadGate 丢弃。
-const names = reactive<NameBook>({ datasets: {}, views: {} });
+const names = reactive<NameBook>({ datasets: {} });
 const counts = reactive<Record<string, number | null>>({
   sources: null,
   rules: null,
@@ -332,7 +332,7 @@ const counts = reactive<Record<string, number | null>>({
   accounts: null,
   nodes: null
 });
-const spaceLoadGate = new RequestGate();
+const spaceLoadGate = createLatestRequestGuard();
 
 // 实时部分：监控概览、计算任务、策略实例与目标、最近动态，定时刷新。
 const overview = ref<HealthOverview>();
@@ -348,7 +348,7 @@ const activityLoaded = ref(false);
 // 监控以外各路读取的失败原因：读不到的部分不能显示成正常，也不能刷新“更新于”。
 const liveErrors = reactive({ factor: "", strategy: "", activity: "" });
 const failedCount = computed(() => Object.values(liveErrors).filter(Boolean).length);
-const liveLoadGate = new RequestGate();
+const liveLoadGate = createLatestRequestGuard();
 // 各空间的历史补齐记录：逐个空间读取，读不到的空间不显示这一行，不影响首页其他内容。
 const seedsBySpace = ref<Record<string, HistorySeed[]>>({});
 const seedLines = computed(() =>
@@ -484,18 +484,17 @@ function errorText(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-/** 空间范围：数据集 / View 名称、资产数量与策略定义名称。单项失败不影响其它项。 */
+/** 空间范围：数据集名称、资产数量与策略定义名称。单项失败不影响其它项。 */
 async function loadSpaceScoped() {
-  const token = spaceLoadGate.next();
+  const token = spaceLoadGate.begin();
   const spaceId = selectedSpaceId.value;
   if (!spaceId) return;
-  const isCurrent = () => spaceLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
+  const isCurrent = () => token.isLatest() && selectedSpaceId.value === spaceId;
   const page = { page: 1, size: 1 };
   await Promise.allSettled([
-    Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]).then(([datasets, views]) => {
+    listAllDatasets(spaceId).then(datasets => {
       if (!isCurrent()) return;
       names.datasets = Object.fromEntries(datasets.map(item => [item.dataset_id, item.name || item.dataset_id]));
-      names.views = Object.fromEntries(views.map(item => [item.view_id, item.name || item.view_id]));
       counts.datasets = datasets.filter(
         item =>
           !isLikelyFactorResultDataset(item) &&
@@ -509,7 +508,7 @@ async function loadSpaceScoped() {
     listDataSources({ space_id: spaceId, page }).then(rsp => {
       if (isCurrent()) counts.sources = Number(rsp.page_result?.total ?? rsp.data_sources?.length ?? 0);
     }),
-    callControl<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page?: { total?: number } }>(
+    call<{ space_id: string; page: { page: number; size: number } }, { tasks?: unknown[]; page?: { total?: number } }>(
       "collector",
       "GetTaskList",
       { space_id: spaceId, page: { page: 1, size: 1 } }
@@ -520,7 +519,7 @@ async function loadSpaceScoped() {
       if (isCurrent()) counts.accounts = Number(rsp.page_result?.total ?? rsp.accounts?.length ?? 0);
     }),
     // 云函数个数取采集计划里由 SCF 执行的函数（推送与本地执行端不算）
-    getCollectorStatus(spaceId, { silentError: true }).then(rsp => {
+    getCollectorStatus(spaceId).then(rsp => {
       if (isCurrent()) counts.nodes = (rsp.functions || []).filter(item => (item.executor || "scf") === "scf").length;
     }),
     listStrategies({ page: 1, page_size: 200 }).then(rsp => {
@@ -534,15 +533,15 @@ async function loadSpaceScoped() {
  * 动态多取一些（30 条）：“新增 0、移除 0”的无变化记录会被过滤掉，仍要凑满磁贴的固定条数。
  */
 async function loadLive() {
-  const token = liveLoadGate.next();
+  const token = liveLoadGate.begin();
   const spaceId = selectedSpaceId.value;
   if (!spaceId) return;
-  const isCurrent = () => liveLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
+  const isCurrent = () => token.isLatest() && selectedSpaceId.value === spaceId;
   await Promise.allSettled([
     // 不带空间：首页的健康结论要和监控页一致，别的空间断了数据也要看得到
     // 首页每路读取的失败都写在页面上，后台读取一律不弹全局提示
     monitorApi
-      .getOverview({}, { silentError: true })
+      .getOverview({})
       .then(result => {
         if (!isCurrent()) return;
         overview.value = result.overview;
@@ -551,7 +550,7 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) monitorError.value = error instanceof Error ? error.message : String(error);
       }),
-    listFactorTasks({ page: { page: 1, size: 500 } }, { silentError: true })
+    listFactorTasks({ page: { page: 1, size: 500 } })
       .then(rsp => {
         if (!isCurrent()) return;
         factorTasks.value = rsp.factor_tasks ?? [];
@@ -572,7 +571,7 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) liveErrors.strategy = errorText(error);
       }),
-    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } }, { silentError: true })
+    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } })
       .then(rsp => {
         if (!isCurrent()) return;
         activityItems.value = rsp.items ?? [];
@@ -588,7 +587,7 @@ async function loadLive() {
 
 async function loadSeeds(isCurrent: () => boolean) {
   const ids = new Set([...(spaceStore.spaces || []).map(item => item.space_id), selectedSpaceId.value].filter(Boolean));
-  const settled = await Promise.allSettled([...ids].map(id => getCollectorStatus(id, { silentError: true })));
+  const settled = await Promise.allSettled([...ids].map(id => getCollectorStatus(id, { spaceId: id })));
   if (!isCurrent()) return;
   const next: Record<string, HistorySeed[]> = {};
   [...ids].forEach((id, index) => {
@@ -599,10 +598,10 @@ async function loadSeeds(isCurrent: () => boolean) {
 }
 
 async function loadStrategies(isCurrent: () => boolean) {
-  const page = await listInstances({ page: 1, page_size: 200 }, { silent: true });
+  const page = await listInstances({ page: 1, page_size: 200 });
   if (!isCurrent()) return;
   const enabled = page.items.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
-  const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id, { silent: true })));
+  const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));
   if (!isCurrent()) return;
   const next: Record<string, StrategyTargetSnapshot> = {};
   settled.forEach((result, index) => {
@@ -626,7 +625,6 @@ async function manualRefresh() {
 function resetSpace() {
   Object.keys(counts).forEach(key => (counts[key] = null));
   names.datasets = {};
-  names.views = {};
   overview.value = undefined;
   monitorError.value = "";
   factorTasks.value = [];

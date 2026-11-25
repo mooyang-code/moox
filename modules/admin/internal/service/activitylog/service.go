@@ -7,23 +7,21 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Service 实现全局活动日志的写入与查询。写入只允许内部组件（服务目录 ACL 限定），
-// 浏览器用户查询时必须指定一个可用的空间，或查询不属于任何空间的全局事件。
+// 浏览器用户查询时必须指定一个空间，或查询不属于任何空间的全局事件。
 type Service struct {
 	pb.UnimplementedActivityLog
-	dao        *DAO
-	authorizer space.Service
-	now        func() time.Time
+	dao *DAO
+	now func() time.Time
 }
 
-func NewService(db *gorm.DB, authorizer space.Service) *Service {
-	return &Service{dao: NewDAO(db), authorizer: authorizer, now: time.Now}
+func NewService(db *gorm.DB) *Service {
+	return &Service{dao: NewDAO(db), now: time.Now}
 }
 
 func ret(code pb.ErrorCode, message string) *pb.RetInfo { return &pb.RetInfo{Code: code, Msg: message} }
@@ -58,16 +56,12 @@ func (s *Service) AppendActivityLogs(ctx context.Context, req *pb.AppendActivity
 	return &pb.AppendActivityLogsRsp{RetInfo: ret(pb.ErrorCode_SUCCESS, "ok"), Inserted: int32(inserted)}, nil
 }
 
-func parseTimeFilter(name, value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
+// millisFilter 把请求里的 Unix 毫秒换成时刻，0 表示不限。
+func millisFilter(ms int64) time.Time {
+	if ms == 0 {
+		return time.Time{}
 	}
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("%s must be RFC3339", name)
-	}
-	return parsed, nil
+	return time.UnixMilli(ms).UTC()
 }
 
 func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogsReq) (*pb.ListActivityLogsRsp, error) {
@@ -78,25 +72,13 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 	if req.GetGlobal() && spaceID != "" {
 		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id and global are mutually exclusive")}, nil
 	}
-	if _, _, err := utils.GetUserInfoFromCtx(ctx); err == nil && !req.GetGlobal() {
-		if spaceID == "" {
-			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id or global is required")}, nil
-		}
-		if s.authorizer == nil {
-			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INNER_ERR, "space authorizer is unavailable")}, nil
-		}
-		if err := s.authorizer.AuthorizeSpaceRequest(ctx, spaceID); err != nil {
-			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_NO_PERMISSION, "space is unavailable")}, nil
-		}
+	if isBrowserCaller(ctx) && !req.GetGlobal() && spaceID == "" {
+		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id or global is required")}, nil
 	}
-	since, err := parseTimeFilter("since", req.GetSince())
-	if err != nil {
-		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	if req.GetSince() < 0 || req.GetUntil() < 0 {
+		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "since 与 until 必须是非负的 Unix 毫秒")}, nil
 	}
-	until, err := parseTimeFilter("until", req.GetUntil())
-	if err != nil {
-		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
+	since, until := millisFilter(req.GetSince()), millisFilter(req.GetUntil())
 	filter := Filter{SpaceID: spaceID, Global: req.GetGlobal(), Source: strings.TrimSpace(req.GetSource()), Category: strings.TrimSpace(req.GetCategory()), RefID: strings.TrimSpace(req.GetRefId()), Since: since, Until: until, Page: int(req.GetPage().GetPage()), Size: int(req.GetPage().GetSize())}
 	items, total, err := s.dao.List(ctx, filter)
 	if err != nil {
@@ -112,7 +94,7 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 	for _, item := range items {
 		rsp.Items = append(rsp.Items, &pb.ActivityLogItem{
 			Id: item.ID, SpaceId: item.SpaceID, Source: item.Source, Category: item.Category, Level: item.Level, Title: item.Title,
-			Detail: item.Detail, RefId: item.RefID, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339),
+			Detail: item.Detail, RefId: item.RefID, CreatedAt: item.CreatedAt.UnixMilli(),
 		})
 	}
 	return rsp, nil

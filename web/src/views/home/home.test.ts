@@ -16,7 +16,7 @@ vi.mock("@/store/modules/space", () => ({
 }));
 vi.mock("@/store/modules/user-info", () => ({ useUserInfoStore: () => ({ account: { user: { userName: "admin123" } } }) }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn(async () => ({ overview: ctx.overview })) } }));
-vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(async () => ({ page: { total: 4 } })) }));
+vi.mock("@/api/http", () => ({ call: vi.fn(async () => ({ page: { total: 4 } })) }));
 vi.mock("@/api/admin/activity", () => ({
   listActivityLogs: vi.fn(async () => ({
     items: [
@@ -25,7 +25,7 @@ vi.mock("@/api/admin/activity", () => ({
         category: "collector.subject_change",
         level: "info",
         title: "dataset_abc 1h：新增 1 个",
-        created_at: new Date().toISOString()
+        created_at: String(Date.now())
       }
     ]
   }))
@@ -53,7 +53,6 @@ vi.mock("@/api/factor", () => ({
 }));
 vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(async () => [{ dataset_id: "dataset_abc", name: "现货K线", attributes: {} }]),
-  listAllViews: vi.fn(async () => []),
   listDataSources: vi.fn(async () => ({ data_sources: [], page_result: { total: 3 } }))
 }));
 vi.mock("@/api/strategy", () => ({
@@ -92,7 +91,6 @@ function instance(id: string, overrides: Record<string, unknown> = {}) {
     instance_id: id,
     strategy_id: "s1",
     space_id: "crypto",
-    view_id: "v",
     logical_account_id: "",
     enabled: true,
     session_id: "sess",
@@ -132,8 +130,8 @@ describe("home page", () => {
       i1: {
         targets: [{ instrument_id: "BTC-USDT", target_weight: "0.2" }],
         session_id: "sess",
-        bar_end_time: new Date(Date.now() - 60_000).toISOString(),
-        valid_until: new Date(Date.now() + 60_000).toISOString(),
+        bar_end_time: String(Date.now() - 60_000),
+        valid_until: String(Date.now() + 60_000),
         result_id: "r"
       }
     };
@@ -233,7 +231,7 @@ describe("home page", () => {
   it("reads the monitor overview for all spaces so the verdict matches the monitor page", async () => {
     await render();
     // 不带空间；后台读取不弹全局提示
-    expect(monitorApi.getOverview).toHaveBeenLastCalledWith({}, { silentError: true });
+    expect(monitorApi.getOverview).toHaveBeenLastCalledWith({});
   });
 
   it("does not claim everything is normal when a tile fails to load, and keeps the last update time", async () => {
@@ -253,7 +251,7 @@ describe("home page", () => {
         id: "a1",
         severity: "warning",
         title: "数据中断",
-        triggered_at: new Date().toISOString(),
+        triggered_at: String(Date.now()),
         object: { type: "dataset", producer: "collector", dataset_id: "ds_cn", freq: "5m", space_id: "stockcn" }
       }
     ];
@@ -276,7 +274,7 @@ describe("home page", () => {
             dataset_id: "dataset_abc",
             freq: "1m",
             status: "degraded",
-            latest_bar_close_at: new Date(Date.now() - 52980_000).toISOString(),
+            latest_bar_close_at: String(Date.now() - 52980_000),
             waiting_bars: 882,
             overdue_seconds: "52920"
           }

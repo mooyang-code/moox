@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,36 +19,15 @@ func loadRepositoryConfig(t *testing.T) *Config {
 func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("MOOX_EVENTBUS_PORT", "4333")
 	t.Setenv("MOOX_EVENTBUS_STORE_DIR", t.TempDir())
-	t.Setenv("MOOX_EVENTBUS_STREAM_MAX_BYTES", "104857600")
 	cfg := loadRepositoryConfig(t)
 	assert.Equal(t, 4333, cfg.Broker.Port)
-	for _, stream := range cfg.Streams {
-		assert.Equal(t, int64(104857600), stream.MaxBytes)
-	}
-}
-
-func TestRejectMissingGovernedEventFamily(t *testing.T) {
-	cfg := loadRepositoryConfig(t)
-	for i := range cfg.Streams {
-		if cfg.Streams[i].Name == "MOOX_TRADE" {
-			cfg.Streams[i].Subjects = []string{"moox.event.trade.other.>"}
-		}
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "governed event")
 }
 
 func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 	tests := map[string]func(*Config){
-		"root store":       func(c *Config) { c.Broker.StoreDir = "/" },
-		"duplicate stream": func(c *Config) { c.Streams = append(c.Streams, c.Streams[0]) },
-		"bad TLS":          func(c *Config) { c.Broker.TLS.Enabled = true; c.Broker.TLS.CertFile = "cert" },
-		"bad auth":         func(c *Config) { c.Broker.Auth.Enabled = true },
-		"overlap": func(c *Config) {
-			c.Streams[0].Subjects = []string{"moox.event.observability.>"}
-		},
-		"negative duplicates": func(c *Config) { c.Streams[0].Duplicates = -time.Second },
+		"root store": func(c *Config) { c.Broker.StoreDir = "/" },
+		"bad TLS":    func(c *Config) { c.Broker.TLS.Enabled = true; c.Broker.TLS.CertFile = "cert" },
+		"bad auth":   func(c *Config) { c.Broker.Auth.Enabled = true },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -56,21 +36,6 @@ func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 			require.Error(t, cfg.Validate())
 		})
 	}
-}
-
-func TestSubjectValidation(t *testing.T) {
-	require.NoError(t, validateSubject("moox.event.storage.>", true))
-	require.Error(t, validateSubject("", true))
-	require.Error(t, validateSubject("moox..storage", true))
-	require.Error(t, validateSubject("moox.>", false))
-	require.Error(t, validateSubject("moox.*.rows", false))
-
-}
-
-func TestPatternOverlap(t *testing.T) {
-	assert.True(t, patternsOverlap("moox.>", "moox.storage"))
-	assert.True(t, patternsOverlap("moox.event.*.rows", "moox.event.storage.rows"))
-	assert.False(t, patternsOverlap("moox.storage", "moox.factor"))
 }
 
 func TestUnsafeStoreDir(t *testing.T) {
@@ -84,44 +49,26 @@ func TestDefaultProvidesOnlyProcessDefaults(t *testing.T) {
 	cfg := Default()
 	assert.Equal(t, 8*1024*1024, cfg.Broker.MaxPayloadBytes)
 	assert.Equal(t, 10*time.Second, cfg.Broker.StartupTimeout)
-	assert.Empty(t, cfg.Streams)
+	assert.Equal(t, events.Streams(), cfg.Streams)
 }
 
-func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
+// Stream 来自拓扑声明：配置文件里不再写 streams。
+func TestRepositoryConfigTakesStreamsFromTopology(t *testing.T) {
 	cfg := loadRepositoryConfig(t)
-	require.Len(t, cfg.Streams, 4)
-	want := map[string]string{
-		"MOOX_COLLECTOR":     "limits",
-		"MOOX_OBSERVABILITY": "limits",
-		"MOOX_STORAGE":       "limits",
-		"MOOX_TRADE":         "work_queue",
-	}
+	want := map[string]bool{"MOOX_COLLECTOR": false, "MOOX_OBSERVABILITY": false, "MOOX_STORAGE": false, "MOOX_TRADE": true}
+	require.Len(t, cfg.Streams, len(want))
 	for _, stream := range cfg.Streams {
-		retention, ok := want[stream.Name]
-		if !ok {
-			t.Fatalf("unexpected stream %q", stream.Name)
-		}
-		assert.Equal(t, retention, stream.Retention, stream.Name)
-		if stream.Name == "MOOX_TRADE" {
+		workQueue, ok := want[stream.Name]
+		require.True(t, ok, stream.Name)
+		assert.Equal(t, workQueue, stream.WorkQueue, stream.Name)
+		switch stream.Name {
+		case "MOOX_TRADE":
 			assert.Equal(t, []string{"moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
-		}
-		if stream.Name == "MOOX_COLLECTOR" {
-			assert.Equal(t, []string{"moox.event.collector.kline.backfilled.v1.>", "moox.event.collector.instrument.delist_scheduled.v1.>"}, stream.Subjects)
-		}
-		if stream.Name == "MOOX_STORAGE" {
-			assert.Equal(t, []string{
-				"moox.event.storage.dataset.period.completed.v1.>",
-				"moox.event.storage.view.data.ready.v2.>",
-			}, stream.Subjects)
+		case "MOOX_COLLECTOR":
+			assert.Equal(t, []string{"moox.event.collector.instrument.delist_scheduled.v1.>", "moox.event.collector.kline.backfilled.v1.>"}, stream.Subjects)
+		case "MOOX_STORAGE":
+			assert.Equal(t, []string{"moox.event.storage.dataset.period.completed.v1.>", "moox.event.storage.view.data.ready.v2.>"}, stream.Subjects)
 			assert.Equal(t, int64(2147483648), stream.MaxBytes)
-		}
-		delete(want, stream.Name)
-	}
-	assert.Empty(t, want, "missing streams")
-	for _, stream := range cfg.Streams {
-		assert.NotEqual(t, "MOOX_METRICS", stream.Name)
-		if stream.Name == "MOOX_OBSERVABILITY" {
-			assert.Equal(t, []string{"moox.event.observability.>"}, stream.Subjects)
 		}
 	}
 }

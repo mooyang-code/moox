@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +24,7 @@ func at(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
 type bar struct {
 	at            time.Time
 	close, volume float64
-	// tag 是行的 series_tag：单序列测试用 plainTag，统一数据集的测试用 putTag 写现货、永续两条序列。
+	// tag 是行的 series_tag：测试一般用 plainTag，改 tag 的测试用 putTag 写另一个 tag。
 	tag string
 }
 
@@ -38,8 +37,6 @@ type fakeStorage struct {
 	markers []storageio.PeriodMarker
 	// retention 是源数据集的保留期（如 "8d"）；空表示 forever。
 	retention string
-	// marketType 是源数据集的 market_type 属性；统一数据集为 "multi"。
-	marketType string
 	// readErr 不为空时 ReadWindow 一律失败。
 	readErr error
 }
@@ -50,15 +47,6 @@ func newFakeStorage() *fakeStorage {
 
 // plainTag 是只有一个 series_tag 的测试数据集用的 tag（Storage 不接受空 tag）。
 const plainTag = "venue:binance"
-
-// plainSeries 把标的逐个配上 plainTag。
-func plainSeries(subjects ...string) []seriesset.Series {
-	out := make([]seriesset.Series, 0, len(subjects))
-	for _, subject := range subjects {
-		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: plainTag})
-	}
-	return out
-}
 
 func (f *fakeStorage) put(subject string, base float64, minutes ...int) {
 	f.putTag(subject, plainTag, base, minutes...)
@@ -103,7 +91,7 @@ func (f *fakeStorage) GetDataset(context.Context, string, string) (storageio.Dat
 	if retention == "" {
 		retention = "forever"
 	}
-	return storageio.DatasetInfo{Retention: retention, Attributes: map[string]string{"market_type": f.marketType}}, nil
+	return storageio.DatasetInfo{Retention: retention, Attributes: map[string]string{}}, nil
 }
 
 func (f *fakeStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
@@ -236,7 +224,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 func (fx *fixture) live(t *testing.T, target time.Time, subjects []string) pipeline.Outcome {
 	t.Helper()
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, UniverseSeries: plainSeries(subjects...), CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, UniverseSubjects: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
 	})
 	require.NoError(t, err)
 	outcome, err := fx.runner.Run(context.Background(), plan)
@@ -637,7 +625,7 @@ func TestCatchUpStopsAtTheLatestClosedBar(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(100))
 	require.NoError(t, err)
 	require.Equal(t, 1, pulled)
-	require.Equal(t, at(10), fx.tagLatest(t, "BTC", plainTag))
+	require.Equal(t, at(10), fx.latest(t, "BTC"))
 }
 
 // 有标的从 Storage 读取失败时要报出来：否则补算照样写出 0 行、作业成功，而且没有任何日志。
@@ -654,7 +642,7 @@ func TestCatchUpReportsReadFailures(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(11))
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.Zero(t, pulled)
-	require.Equal(t, at(9), fx.tagLatest(t, "BTC", plainTag))
+	require.Equal(t, at(9), fx.latest(t, "BTC"))
 }
 
 // 只拉任务范围内的标的：任务收窄之后，本地还留着的其他标的不拉，也不会被加回窗口。
@@ -672,47 +660,12 @@ func TestCatchUpPullsOnlySubjectsInTheTask(t *testing.T) {
 	pulled, err := fx.data.CatchUp(context.Background(), fx.set, nil, at(11))
 	require.NoError(t, err)
 	require.Equal(t, 1, pulled)
-	require.Equal(t, at(10), fx.tagLatest(t, "BTC", plainTag))
-	require.Equal(t, at(9), fx.tagLatest(t, "ETH", plainTag))
+	require.Equal(t, at(10), fx.latest(t, "BTC"))
+	require.Equal(t, at(9), fx.latest(t, "ETH"))
 	// 显式给出的标的同样限定在任务范围内。
 	pulled, err = fx.data.CatchUp(context.Background(), fx.set, []string{"ETH", "SOL"}, at(11))
 	require.NoError(t, err)
 	require.Zero(t, pulled)
-}
-
-// 统一数据集按各序列自己的进度拉：永续晚到时，它落后的那几根按 Storage 里的真实行拉进来，不会被现货的最新时间盖住而写成填充行。
-func TestCatchUpPullsLaggingSeriesOfUnifiedDatasetAsRealRows(t *testing.T) {
-	fx := newFixture(t, mean3())
-	fx.st.marketType = "multi"
-	subjects := []string{"BTC"}
-	fx.st.putTag("BTC", spotTag, 100, 5, 6, 7, 8, 9)
-	fx.st.putTag("BTC", swapTag, 200, 5, 6, 7, 8, 9)
-	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
-
-	// 第 10 根：现货到了、永续没到，实时算过这一期，本地现货到第 10 根、永续停在第 9 根。
-	fx.st.putTag("BTC", spotTag, 100, 10)
-	fx.now = at(11)
-	fx.liveSeries(t, at(10), subjects)
-	require.Equal(t, at(9), fx.tagLatest(t, "BTC", swapTag))
-
-	// 永续补上第 10、11 根，现货到第 11 根；补算把本地拉到第 12 根之前。
-	fx.st.putTag("BTC", swapTag, 200, 10, 11)
-	fx.st.putTag("BTC", spotTag, 100, 11)
-	fx.now = at(12)
-	pulled, err := fx.data.CatchUp(context.Background(), fx.set, subjects, at(12))
-	require.NoError(t, err)
-	require.Equal(t, 1, pulled)
-	require.Equal(t, at(11), fx.tagLatest(t, "BTC", swapTag))
-
-	// 下一期实时：永续第 10 根是真实行（210），不是沿用第 9 根的填充值。
-	fx.st.putTag("BTC", swapTag, 200, 12)
-	fx.st.putTag("BTC", spotTag, 100, 12)
-	fx.now = at(13)
-	outcome := fx.liveSeries(t, at(12), subjects)
-	require.Equal(t, "complete", outcome.Status)
-	value, ok := fx.resultTag("BTC", swapTag, 12)
-	require.True(t, ok)
-	require.InDelta(t, (210+211+212)/3.0, value, 1e-9)
 }
 
 // 第一次准备在取同步基线之前就失败（这里是窗口内存超限）：数据源已经登记，但本地没有数据、也没有同步位点。

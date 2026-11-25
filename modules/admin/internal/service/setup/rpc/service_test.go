@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -19,20 +18,6 @@ type fakeSetupService struct {
 	status      setup.Status
 	statusErr   error
 	manifest    setup.Manifest
-	backup      setup.Backup
-	backupErr   error
-}
-
-func (f *fakeSetupService) PutBackup(_ context.Context, envelope string) (time.Time, error) {
-	if f.backupErr != nil {
-		return time.Time{}, f.backupErr
-	}
-	f.backup = setup.Backup{Envelope: envelope, UpdatedAt: time.Unix(1700000000, 0)}
-	return f.backup.UpdatedAt, nil
-}
-
-func (f *fakeSetupService) GetBackup(context.Context) (setup.Backup, error) {
-	return f.backup, f.backupErr
 }
 
 func (f *fakeSetupService) Apply(_ context.Context, manifest setup.Manifest) (setup.Result, error) {
@@ -49,40 +34,22 @@ func setupRequest() *pb.ApplySetupReq {
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: "admin", Password: "recognizable-admin-password"},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: "recognizable-secret-id", SecretKey: "recognizable-secret-key"},
-		Spaces: []*pb.SetupSpace{{
-			SpaceId: "stockcn", Name: "A股市场", Description: "A股行情",
-			Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai",
-			Status: "active", AttributesJson: `{"managed_by":"moox-cli"}`,
-		}},
 	}
 }
 
 func statusRequest() *pb.GetSetupStatusReq {
 	request := setupRequest()
-	return &pb.GetSetupStatusReq{
-		Admin: request.Admin, TencentCloud: request.TencentCloud,
-		Spaces: request.Spaces,
-	}
+	return &pb.GetSetupStatusReq{Admin: request.Admin, TencentCloud: request.TencentCloud}
 }
 
 func TestApplySetupMapsRequestAndSanitizesResponse(t *testing.T) {
-	fake := &fakeSetupService{applyResult: setup.Result{
-		Action: "created", Users: 1, Secrets: 1,
-		Spaces: 1, SpacesCreated: 1,
-	}}
+	fake := &fakeSetupService{applyResult: setup.Result{Action: "created", Users: 1, Secrets: 1}}
 	response, err := NewService(fake).ApplySetup(context.Background(), setupRequest())
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 	assert.Equal(t, "created", response.GetAction())
 	assert.Equal(t, "admin", fake.manifest.Admin.Username)
 	assert.Equal(t, "recognizable-secret-key", fake.manifest.TencentCloud.SecretKey)
-	require.Len(t, fake.manifest.Spaces, 1)
-	assert.Equal(t, "CN", fake.manifest.Spaces[0].Market)
-	assert.Equal(t, "Asia/Shanghai", fake.manifest.Spaces[0].Timezone)
-	assert.Equal(t, `{"managed_by":"moox-cli"}`, fake.manifest.Spaces[0].AttributesJSON)
-	assert.Equal(t, int32(1), response.GetSpaces())
-	assert.Equal(t, int32(1), response.GetSpacesCreated())
-	assert.Zero(t, response.GetSpacesUnchanged())
 
 	raw, err := protojson.Marshal(response)
 	require.NoError(t, err)
@@ -99,6 +66,7 @@ func TestApplySetupMapsDomainErrors(t *testing.T) {
 		msg  string
 	}{
 		{name: "invalid", err: setup.ErrInvalid, code: pb.ErrorCode_INVALID_PARAM, msg: "setup_invalid"},
+		{name: "admin missing", err: setup.ErrAdminMissing, code: pb.ErrorCode_INVALID_PARAM, msg: "setup_admin_missing：还没有管理员，先用 setup deploy 部署控制机（会建管理员）"},
 		{name: "storage", err: setup.ErrStorage, code: pb.ErrorCode_INNER_ERR, msg: "setup_storage_failed"},
 		{name: "unknown", err: errors.New("recognizable-secret-key"), code: pb.ErrorCode_INNER_ERR, msg: "setup_storage_failed"},
 	} {
@@ -113,13 +81,12 @@ func TestApplySetupMapsDomainErrors(t *testing.T) {
 }
 
 func TestGetSetupStatusReturnsRecordDerivedState(t *testing.T) {
-	fake := &fakeSetupService{status: setup.Status{State: "incomplete", Users: 1, Secrets: 1, Spaces: 1, Missing: 1}}
+	fake := &fakeSetupService{status: setup.Status{State: "incomplete", Users: 1, Secrets: 1, Missing: 1}}
 	response, err := NewService(fake).GetSetupStatus(context.Background(), statusRequest())
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 	assert.Equal(t, "incomplete", response.GetState())
 	assert.Equal(t, int32(1), response.GetMissing())
-	assert.Equal(t, int32(1), response.GetSpaces())
 	assert.Equal(t, "recognizable-admin-password", fake.manifest.Admin.Password)
 
 	raw, err := protojson.Marshal(response)
@@ -132,29 +99,6 @@ func TestApplySetupRejectsMissingSections(t *testing.T) {
 	response, err := NewService(&fakeSetupService{}).ApplySetup(context.Background(), &pb.ApplySetupReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, response.GetRetInfo().GetCode())
-}
-
-func TestConfigBackupRPCs(t *testing.T) {
-	fake := &fakeSetupService{}
-	service := NewService(fake)
-	put, err := service.PutConfigBackup(context.Background(), &pb.PutConfigBackupReq{Envelope: "MOOX-CONFIG-BACKUP v1\nx"})
-	if err != nil || put.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || put.GetUpdatedAt() != 1700000000 {
-		t.Fatalf("保存: %+v %v", put, err)
-	}
-	got, err := service.GetConfigBackup(context.Background(), &pb.GetConfigBackupReq{})
-	if err != nil || got.GetEnvelope() != "MOOX-CONFIG-BACKUP v1\nx" {
-		t.Fatalf("取回: %+v %v", got, err)
-	}
-	fake.backupErr = setup.ErrBackupMissing
-	got, _ = service.GetConfigBackup(context.Background(), &pb.GetConfigBackupReq{})
-	if got.GetRetInfo().GetCode() != pb.ErrorCode_NOT_FOUND || got.GetRetInfo().GetMsg() != "config_backup_missing" {
-		t.Fatalf("没有备份时应返回 NOT_FOUND: %+v", got.GetRetInfo())
-	}
-	fake.backupErr = setup.ErrBackupInvalid
-	put, _ = service.PutConfigBackup(context.Background(), &pb.PutConfigBackupReq{Envelope: "plain"})
-	if put.GetRetInfo().GetMsg() != "config_backup_invalid" {
-		t.Fatalf("非法信封: %+v", put.GetRetInfo())
-	}
 }
 
 func TestSetupMapsExchangeKeysAndNeverEchoesTheirValues(t *testing.T) {

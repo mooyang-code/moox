@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorlib"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -277,7 +278,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 
 	want := []string{
 		"CreateFactorTask", "SetFactorTaskStatus", "DeleteFactorTask", "GetFactorTask", "ListFactorTasks",
-		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
+		"CreateFactor", "ImportFactorCatalog", "PurgeResultDataset", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
 		"AddTaskMember", "RemoveTaskMember", "SetTaskMemberStatus", "BindFactorTask", "DeleteBoundTask",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
 		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions",
@@ -334,6 +335,10 @@ func (f *catalogFake) CreateFactor(_ context.Context, in domain.FactorDef) (doma
 	f.createFactorCalls++
 	return in, f.err
 }
+func (f *catalogFake) ImportCatalog(context.Context, []factorlib.File) ([]domain.FactorDef, error) {
+	return nil, f.err
+}
+func (f *catalogFake) PurgeResultDataset(context.Context, string, string) error { return f.err }
 func (f *catalogFake) UpdateFactor(_ context.Context, in domain.FactorDef) (domain.FactorDef, error) {
 	return in, f.err
 }

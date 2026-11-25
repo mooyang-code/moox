@@ -16,7 +16,7 @@ import { defineComponent, h } from "vue";
 import { createMemoryHistory, createRouter, RouterView } from "vue-router";
 import { routeViewKey } from "./route-view-key";
 
-// 用真实路由与真实的 key 规则验证：reuseOnQuery 页面在 query 变化时复用组件，其余页面按完整路径重建。
+// 用真实路由与真实的 key 规则验证：query 变化时复用组件，换 path 时重建。
 describe("route view reuse with a real router", () => {
   function setup() {
     const counts = { reuse: 0, plain: 0 };
@@ -30,7 +30,7 @@ describe("route view reuse with a real router", () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: "/reuse", name: "reuse", component: make("reuse"), meta: { reuseOnQuery: true } },
+        { path: "/reuse", name: "reuse", component: make("reuse") },
         { path: "/plain", name: "plain", component: make("plain") }
       ]
     });
@@ -41,7 +41,7 @@ describe("route view reuse with a real router", () => {
     return { counts, router, App };
   }
 
-  it("keeps the instance across query changes on reuseOnQuery routes", async () => {
+  it("keeps the instance across query changes", async () => {
     const { counts, router, App } = setup();
     await router.push("/reuse");
     mount(App, { global: { plugins: [router] } });
@@ -50,16 +50,6 @@ describe("route view reuse with a real router", () => {
     await router.replace({ path: "/reuse", query: { page: "2", instance_id: "i1" } });
     await flushPromises();
     expect(counts.reuse).toBe(1);
-  });
-
-  it("rebuilds other routes when the query changes", async () => {
-    const { counts, router, App } = setup();
-    await router.push("/plain");
-    mount(App, { global: { plugins: [router] } });
-    await flushPromises();
-    await router.push({ path: "/plain", query: { tab: "b" } });
-    await flushPromises();
-    expect(counts.plain).toBe(2);
   });
 
   it("unmounts when leaving for another path", async () => {

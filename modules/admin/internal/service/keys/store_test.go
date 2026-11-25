@@ -36,7 +36,7 @@ func public(label string) string {
 func TestOnlyNonHostIdentitiesCanBeRegistered(t *testing.T) {
 	store, _ := testStore(t)
 	ctx := context.Background()
-	for _, identity := range []string{"moox-cli", "scf-collector", "moox-skill", "collector-operator"} {
+	for _, identity := range []string{"moox-cli", "scf-collector", "moox-skill"} {
 		require.NoError(t, store.SetIdentity(ctx, identity, public(identity)), identity)
 	}
 	for _, identity := range []string{"console", "host-gateway", "host-gateway@control", "trade", "factor-engine", "archive-worker", "access", "admin", "", "unknown", "MOOX-CLI"} {
@@ -49,8 +49,8 @@ func TestOnlyNonHostIdentitiesCanBeRegistered(t *testing.T) {
 	}
 	rows, err := store.Identities(ctx)
 	require.NoError(t, err)
-	require.Len(t, rows, 4)
-	require.Equal(t, "collector-operator", rows[0].Identity, "按名字排序")
+	require.Len(t, rows, 3)
+	require.Equal(t, []string{"moox-cli", "moox-skill", "scf-collector"}, []string{rows[0].Identity, rows[1].Identity, rows[2].Identity}, "按名字排序")
 }
 
 // 一个身份只有一把公钥：SetIdentity 直接替换（换电脑），EnsureIdentity 只建不改（bootstrap 重复执行）。

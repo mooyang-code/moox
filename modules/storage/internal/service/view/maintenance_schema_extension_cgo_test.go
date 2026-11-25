@@ -11,17 +11,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-const (
-	extensionDatasetID = "dataset_factor_btc_1m"
-	extensionViewID    = "view_factor_btc_1m"
-)
-
-func extensionColumn(name string) *pb.ViewColumn {
-	return &pb.ViewColumn{
-		SpaceId: "space", ViewId: extensionViewID, ColumnName: name, OriginId: name,
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-	}
-}
+const extensionDatasetID = "dataset_factor_btc_1m"
 
 func closeServiceEngines(service *Service) {
 	for _, engine := range service.engines {
@@ -38,10 +28,10 @@ func prepareBuiltExtensionIndex(t *testing.T, ctx context.Context, svc *Service)
 	if engine == nil {
 		t.Fatal("DuckDB engine is unavailable")
 	}
-	indexID := viewindex.ViewIndexID("space", extensionViewID)
+	indexID := viewindex.IndexID("space", extensionDatasetID)
 	schema := viewindex.ViewIndexSchema{
-		SpaceID: "space", ViewID: extensionViewID, PrimaryDatasetID: extensionDatasetID, ViewVersion: 1,
-		Engine: "duckdb", Columns: numberedViewColumns([]*pb.ViewColumn{extensionColumn("close")}),
+		SpaceID: "space", DatasetID: extensionDatasetID, ViewVersion: 1, DatasetCreatedAt: testCreatedAt,
+		Engine: "duckdb", Columns: extensionSpec("close").Columns,
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	if err := engine.Prepare(ctx, indexID, schema); err != nil {
@@ -64,15 +54,12 @@ func prepareBuiltExtensionIndex(t *testing.T, ctx context.Context, svc *Service)
 	return indexID
 }
 
-func extensionView(columns ...string) *pb.View {
-	view := &pb.View{SpaceId: "space", ViewId: extensionViewID, DatasetId: extensionDatasetID, Engine: "duckdb", Status: "active", Freq: "1m"}
-	for _, name := range columns {
-		view.Columns = append(view.Columns, extensionColumn(name))
-	}
-	return view
+// extensionSpec 是因子结果数据集的声明，列按给定顺序。
+func extensionSpec(columns ...string) *viewSpec {
+	return timeSeriesSpec("space", extensionDatasetID, "1m", columns...)
 }
 
-// 数据集加了一列（元数据里 View 的列随之多一列）：定时任务原地给索引加列，不重建、不需要任何 View 侧的调用；
+// 数据集加了一列：定时任务原地给索引加列，不重建、不需要任何 View 侧的调用；
 // GetViewState 返回的已建列和查询都能看到新列，已有行的新列为空。
 func TestDatasetColumnAddExtendsIndexWithoutRebuild(t *testing.T) {
 	ctx := context.Background()
@@ -82,11 +69,11 @@ func TestDatasetColumnAddExtendsIndexWithoutRebuild(t *testing.T) {
 	}
 	defer closeServiceEngines(svc)
 	indexID := prepareBuiltExtensionIndex(t, ctx, svc)
-	metadata := &maintenanceMetadata{view: extensionView("close")}
+	metadata := metadataFor(extensionSpec("close"))
 	if err := svc.RestoreActiveViews(ctx, MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	metadata.view = extensionView("close", "bias_20")
+	*metadata = *metadataFor(extensionSpec("close", "bias_20"))
 	svc.setMetadataClient(metadata)
 	svc.extendViewSchemasRound(ctx)
 	svc.extendViewSchemasRound(ctx)
@@ -96,10 +83,10 @@ func TestDatasetColumnAddExtendsIndexWithoutRebuild(t *testing.T) {
 	if err != nil || stats.ViewVersion != 2 || len(stats.Columns) != 2 || stats.Columns[1].GetColumnName() != "bias_20" || stats.Columns[1].GetSortOrder() != 1 {
 		t.Fatalf("索引文件记下的契约 = %#v err=%v，想要修订号 2、两列", stats, err)
 	}
-	if schema := svc.schemas[indexID]; schema.ViewVersion != 2 || schema.SchemaHash != stats.SchemaHash {
+	if schema := svc.runtimeOf(datasetRef{spaceID: "space", datasetID: extensionDatasetID}).queryState().schema; schema.ViewVersion != 2 || schema.SchemaHash != stats.SchemaHash {
 		t.Fatalf("内存契约 = %+v，应与索引文件一致", schema)
 	}
-	state, err := svc.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: "space", ViewId: extensionViewID})
+	state, err := svc.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: "space", DatasetId: extensionDatasetID})
 	if err != nil || state.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("GetViewState = %v err=%v", state, err)
 	}
@@ -124,14 +111,14 @@ func TestRestartRestoresContractFromIndexFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	indexID := prepareBuiltExtensionIndex(t, ctx, first)
-	metadata := &maintenanceMetadata{view: extensionView("close")}
+	metadata := metadataFor(extensionSpec("close"))
 	if err := first.RestoreActiveViews(ctx, MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatal(err)
 	}
-	metadata.view = extensionView("close", "bias_20")
+	*metadata = *metadataFor(extensionSpec("close", "bias_20"))
 	first.setMetadataClient(metadata)
 	first.extendViewSchemasRound(ctx)
-	extended := first.schemas[indexID]
+	extended := first.runtimeOf(datasetRef{spaceID: "space", datasetID: extensionDatasetID}).queryState().schema
 	closeServiceEngines(first)
 
 	restarted, err := New(root)
@@ -142,11 +129,11 @@ func TestRestartRestoresContractFromIndexFile(t *testing.T) {
 	if err := restarted.RestoreActiveViews(ctx, MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatalf("restore after restart: %v", err)
 	}
-	restored := restarted.schemas[indexID]
+	restored := restarted.runtimeOf(datasetRef{spaceID: "space", datasetID: extensionDatasetID}).queryState().schema
 	if restored.ViewVersion != 2 || restored.SchemaHash != extended.SchemaHash || viewindex.HashViewIndexSchema(restored) != extended.SchemaHash {
 		t.Fatalf("重启后的契约 = %+v，想要与加列后一致（%s）", restored, extended.SchemaHash)
 	}
-	metadata.view = extensionView("close", "bias_20", "volume")
+	*metadata = *metadataFor(extensionSpec("close", "bias_20", "volume"))
 	restarted.setMetadataClient(metadata)
 	restarted.extendViewSchemasRound(ctx)
 	stats, err := restarted.engines["duckdb"].(viewindex.MetadataStatReader).StatMetadata(ctx, indexID)

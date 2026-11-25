@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -36,10 +34,10 @@ type Selection struct {
 	Set      domain.FactorTask
 	Members  []domain.MemberDef
 	Subjects []string
-	// Series 是冻结的期望序列全集（标的、series_tag）：缺口恢复从周期 marker 读到时带上，有值时 Subjects 是它涉及的标的。
-	// 为空表示没有冻结全集可用（人工补算、失效重算、读不到 marker 的恢复），期望序列由数据层给出（pipeline.SeriesExpecter）。
-	Series  []seriesset.Series
-	Columns []string
+	// FrozenUniverse 为真表示 Subjects 是从周期 marker 读到的冻结全集（已按本批标的过滤）；为假表示只是调用方选的标的
+	// （人工补算、失效重算、读不到 marker 的恢复），由数据层收窄期望标的（pipeline.SubjectExpecter）。
+	FrozenUniverse bool
+	Columns        []string
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞与失败都不写任何字段，也不写 carry 列。用于 K 线空洞补齐后的恢复。
 	FillOnly bool
 	// FillCarry 让只填充同时按源数据写 carry 列：预热中被跳过的周期在实时路径上一行都没写，恢复时要把 carry 列一并补上。
@@ -430,8 +428,8 @@ func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time, his
 	}
 	periods := e.chunkPeriods
 	if e.memoryBudget > 0 {
-		// 序列数按标的数估计（每个标的一个 series_tag）；带着冻结全集时按冻结的序列数。
-		fit, err := pipeline.MaxPeriodsWithin(selection.Members, max(len(selection.Subjects), len(selection.Series))+history, len(selection.Columns), periods, e.memoryBudget)
+		// 序列数按标的数估计（每个标的一个 series_tag）。
+		fit, err := pipeline.MaxPeriodsWithin(selection.Members, len(selection.Subjects)+history, len(selection.Columns), periods, e.memoryBudget)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -467,30 +465,15 @@ type paramRows struct {
 	byPeriod map[int64]map[string]map[string]map[string]float64
 }
 
-// newParamRows 按期次和标的整理已有行的 __params。参数按标的给，统一数据集同一标的的几条序列（tag）各存一份：
-// 按成员合并，某个 tag 当期失败或被跳过时写的是 {}，不能盖掉另一个 tag 记下的参数；按 tag 排序后合并，结果与遍历顺序无关。
+// newParamRows 按期次和标的整理已有行的 __params（一个标的一期只有一行）。
 func newParamRows(rows map[pipeline.RowKey]map[string]map[string]float64) paramRows {
-	keys := make([]pipeline.RowKey, 0, len(rows))
-	for key := range rows {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].Tag < keys[j].Tag })
 	byPeriod := make(map[int64]map[string]map[string]map[string]float64)
-	for _, key := range keys {
+	for key, params := range rows {
 		at := key.At.UTC().Unix()
 		if byPeriod[at] == nil {
 			byPeriod[at] = make(map[string]map[string]map[string]float64)
 		}
-		merged := byPeriod[at][key.Subject]
-		if merged == nil {
-			merged = make(map[string]map[string]float64, len(rows[key]))
-			byPeriod[at][key.Subject] = merged
-		}
-		for member, params := range rows[key] {
-			if _, ok := merged[member]; !ok {
-				merged[member] = params
-			}
-		}
+		byPeriod[at][key.Subject] = params
 	}
 	return paramRows{rows: rows, byPeriod: byPeriod}
 }
@@ -610,7 +593,6 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 		into.Status = "degraded"
 	}
 	into.FailedSubjects = append(into.FailedSubjects, next.FailedSubjects...)
-	into.FailedSeries = append(into.FailedSeries, next.FailedSeries...)
 	into.RowsWritten += next.RowsWritten
 	into.Warming += next.Warming
 	if into.Items == nil && next.Items != nil {
@@ -639,8 +621,6 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 			into.Factors[i].Status = state.Status
 		}
 		into.Factors[i].FailedSubjects = append(into.Factors[i].FailedSubjects, state.FailedSubjects...)
-		into.Factors[i].FailedSeries = append(into.Factors[i].FailedSeries, state.FailedSeries...)
-		into.Factors[i].SkippedSeriesTags = append(into.Factors[i].SkippedSeriesTags, state.SkippedSeriesTags...)
 	}
 	return into
 }
@@ -652,7 +632,7 @@ func plan(selection Selection, seg segment, start time.Time, history []string) p
 		TargetStart: start, TargetEnd: seg.end,
 		Expected:       append([]string(nil), selection.Subjects...),
 		Available:      append([]string(nil), selection.Subjects...),
-		ExpectedSeries: append([]seriesset.Series(nil), selection.Series...),
+		FrozenUniverse: selection.FrozenUniverse,
 		CarryColumns:   selection.Columns, WriteCarry: !selection.FillOnly || selection.FillCarry, FillOnly: selection.FillOnly,
 	}
 }

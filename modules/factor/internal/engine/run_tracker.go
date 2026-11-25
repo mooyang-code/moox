@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // runTracker keeps the latest live period per factor task in memory. The period
@@ -69,15 +68,13 @@ func (t *runTracker) record(taskID string, axis periodclock.Axis, periodTime tim
 	factors := make([]domain.FactorPeriodState, 0, len(outcome.Factors))
 	for _, factor := range outcome.Factors {
 		factors = append(factors, domain.FactorPeriodState{
-			MemberKey:         factor.MemberKey,
-			MemberKind:        factor.MemberKind,
-			FactorID:          factor.FactorID,
-			Status:            factor.Status,
-			FailedSubjects:    factor.FailedSubjects,
-			SpecHash:          factor.SourceHash,
-			DefinitionHash:    factor.DefinitionHash,
-			FailedSeries:      factor.FailedSeries,
-			SkippedSeriesTags: factor.SkippedSeriesTags,
+			MemberKey:      factor.MemberKey,
+			MemberKind:     factor.MemberKind,
+			FactorID:       factor.FactorID,
+			Status:         factor.Status,
+			FailedSubjects: factor.FailedSubjects,
+			SpecHash:       factor.SourceHash,
+			DefinitionHash: factor.DefinitionHash,
 		})
 	}
 	t.runs[taskID] = trackedRun{
@@ -147,15 +144,9 @@ func (run trackedRun) withRepairs(completedAt time.Time) trackedRun {
 		fixed := run.repaired[factor.MemberKey]
 		next := factor
 		next.FailedSubjects = subjectsWithout(factor.FailedSubjects, fixed)
-		// 统一数据集：补齐的标的（它的各条序列都写成了）从按序列的名单里一并去掉。
-		next.FailedSeries = seriesWithout(factor.FailedSeries, fixed)
-		// 整因子跳过（含只跳过一部分 series_tag）的因子实时路径没写被跳过的行：补算重算时没写成的标的仍然缺结果。
-		if factor.Status == "skipped" || len(factor.SkippedSeriesTags) > 0 {
+		// 整因子跳过的因子实时路径没写被跳过的行：补算重算时没写成的标的仍然缺结果。
+		if factor.Status == "skipped" {
 			next.FailedSubjects = mergeSubjects(next.FailedSubjects, run.unwritten[factor.MemberKey], fixed)
-		}
-		// 跳过的 series_tag 要等该成员没有失败的标的了才算补齐。
-		if len(next.FailedSubjects) == 0 {
-			next.SkippedSeriesTags = nil
 		}
 		// 只因标的失败（含预热中）而不完整的因子，这些标的都补齐后记为完成；没有列出标的的整因子失败保持原状。
 		if next.Status != "complete" && len(factor.FailedSubjects) > 0 && len(next.FailedSubjects) == 0 {
@@ -209,20 +200,6 @@ func mergeSubjects(subjects []string, extra, skip map[string]struct{}) []string 
 	return out
 }
 
-// seriesWithout 去掉属于 drop 里标的的序列。
-func seriesWithout(values []seriesset.Series, drop map[string]struct{}) []seriesset.Series {
-	if len(drop) == 0 {
-		return values
-	}
-	var out []seriesset.Series
-	for _, value := range values {
-		if _, ok := drop[value.SubjectID]; !ok {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
 func subjectsWithout(subjects []string, drop map[string]struct{}) []string {
 	if len(drop) == 0 {
 		return subjects
@@ -264,12 +241,8 @@ func summaryOf(taskID string, run trackedRun, now time.Time) domain.TaskRunSumma
 		lagErrors.report(taskID, err)
 		lag = max(0, int64(now.Sub(lastPeriod)/time.Second))
 	}
-	var completedAt int64
-	if !run.completedAt.IsZero() {
-		completedAt = run.completedAt.Unix()
-	}
 	return domain.TaskRunSummary{
-		TaskID: taskID, LastPeriodTime: lastPeriod.Unix(), CompletedAt: completedAt, LastStatus: run.status, LagSeconds: lag,
+		TaskID: taskID, LastPeriodTime: lastPeriod.Unix(), CompletedAt: run.completedAt, LastStatus: run.status, LagSeconds: lag,
 		Factors: run.factors, FailedSubjects: run.failedSubjects, WarmingSubjects: int32(run.warming),
 	}
 }

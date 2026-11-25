@@ -3,22 +3,21 @@ package view
 import (
 	"testing"
 
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
 
-// 维护顺序由 View 的 maintenance_priority 决定：越小越先，没有设置（0）最先，同级按空间与 ID。
+// 维护顺序由数据集的 maintenance_priority 决定：越小越先，没有设置（0）最先，同级按空间与数据集 ID。
 func TestMaintenanceOrderFollowsDeclaredPriority(t *testing.T) {
-	views := []*pb.View{
-		{SpaceId: "s", ViewId: "view_late", MaintenancePriority: 90},
-		{SpaceId: "s", ViewId: "view_result", MaintenancePriority: 10},
-		{SpaceId: "s", ViewId: "view_first"},
-		{SpaceId: "s", ViewId: "view_default"},
+	specs := []*viewSpec{
+		{SpaceID: "s", DatasetID: "dataset_late", MaintenancePriority: 90},
+		{SpaceID: "s", DatasetID: "dataset_result", MaintenancePriority: 10},
+		{SpaceID: "s", DatasetID: "dataset_first"},
+		{SpaceID: "s", DatasetID: "dataset_default"},
 	}
-	sortViewsForMaintenance(views)
+	sortSpecsForMaintenance(specs)
 	var order []string
-	for _, view := range views {
-		order = append(order, view.GetViewId())
+	for _, spec := range specs {
+		order = append(order, spec.DatasetID)
 	}
-	require.Equal(t, []string{"view_default", "view_first", "view_result", "view_late"}, order)
+	require.Equal(t, []string{"dataset_default", "dataset_first", "dataset_result", "dataset_late"}, order)
 }

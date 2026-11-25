@@ -35,13 +35,13 @@ func TestTargetHistoryPrunerDeletesOnlyRowsExpiredMoreThanSevenDays(t *testing.T
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		for i, validUntil := range validUntils {
 			barEnd := validUntil.Add(-time.Minute).UnixMilli()
-			if err := tx.InsertTargetReceipt(store.TargetReceiptRecord{
-				SpaceID: "space-1", TargetID: fmt.Sprintf("target-%d", i), RunnerID: "runner-1@session-1",
-				LogicalAccountID: "logical-1", CommandSequence: uint64(barEnd),
-				InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+			if err := tx.InsertTargetHistory(store.TargetHistoryRecord{
+				SpaceID: "space-1", TargetID: fmt.Sprintf("target-%d", i),
+				LogicalAccountID: "logical-1",
+				InstanceID:       "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
 				BarEndTime: barEnd, ValidUntil: validUntil.UnixMilli(),
 				RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]",
-				AcceptedAt: barEnd,
+				SessionStartedAt: 1_000, RecordedAt: barEnd,
 			}); err != nil {
 				return err
 			}
@@ -49,20 +49,17 @@ func TestTargetHistoryPrunerDeletesOnlyRowsExpiredMoreThanSevenDays(t *testing.T
 		return nil
 	}))
 	for i, validUntil := range validUntils {
-		_, err := tradeStore.RecordShadowTarget(ctx, store.ShadowTargetRecord{
+		_, err := tradeStore.RecordShadowTarget(ctx, store.TargetHistoryRecord{
 			SpaceID: "space-1", TargetID: fmt.Sprintf("shadow-%d", i), LogicalAccountID: "logical-1",
 			InstanceID: "runner-2", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 			BarEndTime: validUntil.Add(-time.Minute).UnixMilli(), ValidUntil: validUntil.UnixMilli(),
-			WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: validUntil.UnixMilli(),
+			RequestHash: "hash", WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: validUntil.UnixMilli(),
 		})
 		require.NoError(t, err)
 	}
 
 	// 一批只删 limit 行。
-	deleted, err := tradeStore.DeleteTargetReceiptsBefore(ctx, cutoff.UnixMilli(), 2)
-	require.NoError(t, err)
-	require.Equal(t, int64(2), deleted)
-	deleted, err = tradeStore.DeleteShadowTargetsBefore(ctx, cutoff.UnixMilli(), 2)
+	deleted, err := tradeStore.DeleteTargetHistoryBefore(ctx, cutoff.UnixMilli(), 2)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), deleted)
 
@@ -70,11 +67,11 @@ func TestTargetHistoryPrunerDeletesOnlyRowsExpiredMoreThanSevenDays(t *testing.T
 	pruner := &TargetHistoryPruner{Store: tradeStore, Now: func() time.Time { return now }, batch: 2}
 	require.NoError(t, pruner.RunAll(ctx))
 	for i := range validUntils {
-		_, receiptErr := tradeStore.GetTargetReceipt(ctx, "space-1", fmt.Sprintf("target-%d", i))
+		_, receiptErr := tradeStore.GetAcceptedTargetHistory(ctx, "space-1", fmt.Sprintf("target-%d", i))
 		if i < 5 {
-			require.Error(t, receiptErr, "回执 %d 已过期超过 7 天，应删掉", i)
+			require.Error(t, receiptErr, "目标 %d 已过期超过 7 天，应删掉", i)
 		} else {
-			require.NoError(t, receiptErr, "回执 %d 在 7 天内，应保留", i)
+			require.NoError(t, receiptErr, "目标 %d 在 7 天内，应保留", i)
 		}
 	}
 	shadows, err := tradeStore.ListShadowTargets(ctx, "space-1", "runner-2", 100)

@@ -10,7 +10,7 @@ describe("health display", () => {
     expect(statusLabel("stale")).toBe("未知");
   });
   it("links each alert to the page that handles it", () => {
-    expect(alertLink({ type: "host", host_id: "control", agent_id: "pwU2" })).toEqual({
+    expect(alertLink({ type: "host", host_id: "control" })).toEqual({
       href: "#/ops/hosts?tab=monitor&host_id=control",
       label: "查看主机"
     });
@@ -22,17 +22,21 @@ describe("health display", () => {
       spaceId: "stockcn"
     });
     expect(alertLink({ type: "business", kind: "market_canary" }).label).toBe("查看采集结果");
-    // 事件中心关注项按种类跳转；认不出种类时看全部执行记录
-    const eventCenter = (attention_kind?: string) =>
-      alertLink({ type: "business", kind: "event_center_attention", attention_kind });
-    expect(eventCenter("execution_failed").href).toBe("#/events?tab=executions&status=failed");
-    // 系统动作处理失败的记录不一定是“失败”状态（善后未完成、步骤失败等），不带筛选
-    expect(eventCenter("action_failed").href).toBe("#/events?tab=executions");
-    expect(eventCenter("delist_detected").href).toBe("#/events?tab=executions");
-    expect(eventCenter("something_new")).toEqual({ href: "#/events?tab=executions", label: "查看执行记录" });
-    expect(eventCenter().href).toBe("#/events?tab=executions");
+    expect(alertLink({ type: "business", kind: "attention", component_id: "trade", attention_kind: "auto_paused" }).href).toBe(
+      "#/trading/live"
+    );
+    // 下架处理的两种关注项去下架名单页
+    const tradeAttention = (attention_kind?: string) =>
+      alertLink({ type: "business", kind: "attention", component_id: "trade", attention_kind });
+    expect(tradeAttention("delist_detected")).toEqual({ href: "#/trading/blocked", label: "查看下架处理" });
+    expect(tradeAttention("delist_failed").href).toBe("#/trading/blocked");
     // 缺币安只读 Key：首页跳监控页看说明；说明分三种情况写，被禁用的那种给密钥页入口
-    const readonlyMissing = { type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" };
+    const readonlyMissing = {
+      type: "business",
+      kind: "attention",
+      component_id: "collector",
+      attention_kind: "delist_readonly_key_missing"
+    };
     expect(alertLink(readonlyMissing).href).toBe("#/ops/monitor");
     const note = alertNote(readonlyMissing);
     expect(note?.link).toEqual({ href: "#/settings/secrets", label: "已禁用的话到密钥管理页启用" });
@@ -46,14 +50,16 @@ describe("health display", () => {
     expect(deleted).toContain("删除过");
     expect(deleted).toContain("setup init 不会重建");
     expect(manual).toContain("moox-cli collector delist register");
-    expect(manual).toContain("事件中心");
+    expect(manual).toContain("下架名单页");
     expect(note?.lines.join("")).not.toContain("生产环境");
-    expect(alertNote({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" })).toBeNull();
-    expect(alertLink({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" }).href).not.toBe(
-      "#/settings/secrets"
-    );
+    expect(
+      alertNote({ type: "business", kind: "attention", component_id: "collector", attention_kind: "delist_source_failed" })
+    ).toBeNull();
+    expect(
+      alertLink({ type: "business", kind: "attention", component_id: "collector", attention_kind: "delist_source_failed" }).href
+    ).not.toBe("#/settings/secrets");
     // 只认 attention_kind，不再从告警编号里截取
-    expect(alertLink({ type: "business", kind: "collector_attention" }).href).not.toBe("#/settings/secrets");
+    expect(alertLink({ type: "business", kind: "attention", component_id: "collector" }).href).not.toBe("#/settings/secrets");
     expect(alertLink({ type: "component", host_id: "control", component_id: "collector" }).href).toBe(
       "#/ops/deployments?tab=services&host_id=control&component_id=collector"
     );

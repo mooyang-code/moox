@@ -34,17 +34,18 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_operator_actions",
 		"t_order_fills",
 		"t_order_fill_hourly_summaries",
+		"t_account_instrument_summaries",
 		"t_trade_orders",
 		"t_paper_account_configs",
-		"t_paper_balance_projections",
-		"t_shadow_targets",
 		"t_paper_asset_balances",
 		"t_paper_funding_fees",
 		"t_account_equity_points",
 		"t_logical_account_equity_points",
-		"t_logical_account_target_receipts",
+		"t_logical_account_target_history",
 		"t_trade_wallet_transfers",
 		"t_trade_blocked_instruments",
+		"t_trade_delists",
+		"t_trade_delist_flattens",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, tables)
@@ -55,9 +56,8 @@ func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
 		"account.sql": accountSQL, "instrument.sql": instrumentSQL,
 		"logical_account.sql": logicalAccountSQL, "paper_account_config.sql": paperAccountConfigSQL,
 		"paper_balance.sql": paperBalanceSQL, "paper_funding.sql": paperFundingSQL, "equity.sql": equitySQL,
-		"target_receipt.sql": targetReceiptSQL, "execution.sql": executionSQL,
-		"wallet_transfer.sql": walletTransferSQL, "blocked_instrument.sql": blockedInstrumentSQL,
-		"shadow_target.sql": shadowTargetSQL,
+		"target_history.sql": targetHistorySQL, "execution.sql": executionSQL,
+		"wallet_transfer.sql": walletTransferSQL, "delist.sql": delistSQL,
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -94,6 +94,7 @@ func TestAllSQLHasNoRetiredTables(t *testing.T) {
 		"t_ledger_transactions",
 		"t_ledger_entries",
 		"t_trade_balance_projections",
+		"t_paper_balance_projections",
 	}
 	for _, table := range retired {
 		var count int64
@@ -155,7 +156,6 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_target_id"}},
 		{"t_operator_actions", []string{"c_space_id", "c_action_id"}},
-		{"t_paper_balance_projections", []string{"c_space_id", "c_trading_account_id"}},
 		{"t_paper_asset_balances", []string{"c_space_id", "c_trading_account_id", "c_asset"}},
 	}
 	for _, tt := range tests {
@@ -213,25 +213,25 @@ func TestTradingAccountSchemaRestrictsMarketsAndCredentialUse(t *testing.T) {
 				c_space_id, c_trading_account_id, c_name, c_exchange, c_markets,
 				c_execution_mode, c_live_environment, c_credential_secret_id,
 				c_settlement_asset, c_account_mode, c_status
-			) VALUES ('space', ?, ?, 'BINANCE', ?, 'LIVE', 'PRODUCTION', 'secret-1', 'USDT', ?, ?)
+			) VALUES ('space', ?, ?, 'binance', ?, 'LIVE', 'PRODUCTION', 'secret-1', 'USDT', ?, ?)
 		`, id, id, markets, mode, status).Error
 	}
-	require.NoError(t, insert("a1", "SPOT,SWAP", "BINANCE_STANDARD", "ENABLED"))
+	require.NoError(t, insert("a1", "spot,swap", "BINANCE_STANDARD", "ENABLED"))
 	// 同一把密钥只能有一个启用的实盘账户，跨空间也一样；停用的账户不占用。
-	require.Error(t, insert("a2", "SPOT", "", "ENABLED"))
-	require.NoError(t, insert("a3", "SPOT", "", "DISABLED"))
+	require.Error(t, insert("a2", "spot", "", "ENABLED"))
+	require.NoError(t, insert("a3", "spot", "", "DISABLED"))
 	require.Error(t, db.Exec(`UPDATE t_trading_accounts SET c_status = 'ENABLED' WHERE c_trading_account_id = 'a3'`).Error)
 	require.Error(t, db.Exec(`
 		INSERT INTO t_trading_accounts (
 			c_space_id, c_trading_account_id, c_name, c_exchange, c_markets,
 			c_execution_mode, c_live_environment, c_credential_secret_id,
 			c_settlement_asset, c_status
-		) VALUES ('other-space', 'a4', 'a4', 'BINANCE', 'SPOT', 'LIVE', 'PRODUCTION', 'secret-1', 'USDT', 'ENABLED')
+		) VALUES ('other-space', 'a4', 'a4', 'binance', 'spot', 'LIVE', 'PRODUCTION', 'secret-1', 'USDT', 'ENABLED')
 	`).Error)
 	// 市场集合必须是有序的合法写法，账户类型只给加密货币实盘账户。
 	require.Error(t, insert("a5", "SWAP,SPOT", "", "DISABLED"))
-	require.Error(t, insert("a6", "STOCK", "OKX_UNIFIED", "DISABLED"))
-	require.Error(t, insert("a7", "SPOT", "UNKNOWN_MODE", "DISABLED"))
+	require.Error(t, insert("a6", "equity", "OKX_UNIFIED", "DISABLED"))
+	require.Error(t, insert("a7", "spot", "UNKNOWN_MODE", "DISABLED"))
 }
 
 func TestExecutionSchemaKeysIncludeMarket(t *testing.T) {
@@ -241,13 +241,13 @@ func TestExecutionSchemaKeysIncludeMarket(t *testing.T) {
 	require.NoError(t, db.Exec(`PRAGMA foreign_keys = OFF`).Error)
 
 	// 币安现货和合约的代码同名，订单号、成交号是两套独立序列：不同市场的记录必须能共存，同市场重复仍被拒绝。
-	for _, market := range []string{"SPOT", "SWAP"} {
+	for _, market := range []string{"spot", "swap"} {
 		require.NoError(t, db.Exec(`
 			INSERT INTO t_trade_orders (
 				c_space_id, c_order_id, c_trading_account_id, c_client_order_id, c_exchange_order_id,
 				c_exchange, c_market_type, c_instrument_id, c_exchange_symbol, c_order_type, c_side,
 				c_quantity, c_reference_price, c_reference_price_at, c_owner_type, c_owner_id, c_state
-			) VALUES ('s', ?, 'a', ?, '100', 'BINANCE', ?, 'BTC-USDT', 'BTCUSDT', 'MARKET', 'BUY',
+			) VALUES ('s', ?, 'a', ?, '100', 'binance', ?, 'BTC-USDT', 'BTCUSDT', 'MARKET', 'BUY',
 				'1', '1', 1, 'EXTERNAL', 'x', 'OPEN')
 		`, "order-"+market, "client-"+market, market).Error)
 		require.NoError(t, db.Exec(`
@@ -255,7 +255,7 @@ func TestExecutionSchemaKeysIncludeMarket(t *testing.T) {
 				c_space_id, c_fill_id, c_exchange_trade_id, c_order_id, c_trading_account_id,
 				c_exchange, c_market_type, c_instrument_id, c_exchange_symbol, c_side, c_price,
 				c_quantity, c_traded_at
-			) VALUES ('s', ?, '7', ?, 'a', 'BINANCE', ?, 'BTC-USDT', 'BTCUSDT', 'BUY', '1', '1', 1)
+			) VALUES ('s', ?, '7', ?, 'a', 'binance', ?, 'BTC-USDT', 'BTCUSDT', 'BUY', '1', '1', 1)
 		`, "fill-"+market, "order-"+market, market).Error)
 		require.NoError(t, db.Exec(`
 			INSERT INTO t_trading_positions (c_space_id, c_trading_account_id, c_market_type, c_instrument_id, c_exchange_symbol, c_position_side)
@@ -271,7 +271,7 @@ func TestExecutionSchemaKeysIncludeMarket(t *testing.T) {
 			c_space_id, c_order_id, c_trading_account_id, c_client_order_id, c_exchange_order_id,
 			c_exchange, c_market_type, c_instrument_id, c_exchange_symbol, c_order_type, c_side,
 			c_quantity, c_reference_price, c_reference_price_at, c_owner_type, c_owner_id, c_state
-		) VALUES ('s', 'order-dup', 'a', 'client-dup', '100', 'BINANCE', 'SPOT', 'BTC-USDT', 'BTCUSDT',
+		) VALUES ('s', 'order-dup', 'a', 'client-dup', '100', 'binance', 'spot', 'BTC-USDT', 'BTCUSDT',
 			'MARKET', 'BUY', '1', '1', 1, 'EXTERNAL', 'x', 'OPEN')
 	`).Error)
 	require.Error(t, db.Exec(`
@@ -279,7 +279,7 @@ func TestExecutionSchemaKeysIncludeMarket(t *testing.T) {
 			c_space_id, c_fill_id, c_exchange_trade_id, c_order_id, c_trading_account_id,
 			c_exchange, c_market_type, c_instrument_id, c_exchange_symbol, c_side, c_price,
 			c_quantity, c_traded_at
-		) VALUES ('s', 'fill-dup', '7', 'order-SPOT', 'a', 'BINANCE', 'SPOT', 'BTC-USDT', 'BTCUSDT', 'BUY', '1', '1', 1)
+		) VALUES ('s', 'fill-dup', '7', 'order-SPOT', 'a', 'binance', 'spot', 'BTC-USDT', 'BTCUSDT', 'BUY', '1', '1', 1)
 	`).Error)
 }
 
@@ -289,16 +289,16 @@ func TestOrderSchemaAcceptsSystemOwnerOnlyWithLogicalAccount(t *testing.T) {
 	require.NoError(t, db.Exec(AllSQL()).Error)
 	require.NoError(t, db.Exec(`PRAGMA foreign_keys = OFF`).Error)
 
-	insert := func(logicalAccountID any, runnerID any) error {
+	insert := func(logicalAccountID any, instanceID any) error {
 		return db.Exec(`
 			INSERT INTO t_trade_orders (
 				c_space_id, c_order_id, c_trading_account_id, c_client_order_id, c_exchange,
 				c_market_type, c_instrument_id, c_exchange_symbol, c_order_type, c_side, c_quantity,
 				c_reference_price, c_reference_price_at, c_owner_type, c_owner_id,
-				c_logical_account_id, c_runner_id, c_state
-			) VALUES ('s', lower(hex(randomblob(4))), 'a', lower(hex(randomblob(4))), 'BINANCE',
-				'SPOT', 'BNB-USDT', 'BNBUSDT', 'MARKET', 'BUY', '1', '1', 1, 'SYSTEM', 'bnb-topup', ?, ?, 'OPEN')
-		`, logicalAccountID, runnerID).Error
+				c_logical_account_id, c_instance_id, c_state
+			) VALUES ('s', lower(hex(randomblob(4))), 'a', lower(hex(randomblob(4))), 'binance',
+				'spot', 'BNB-USDT', 'BNBUSDT', 'MARKET', 'BUY', '1', '1', 1, 'SYSTEM', 'bnb-topup', ?, ?, 'OPEN')
+		`, logicalAccountID, instanceID).Error
 	}
 	require.NoError(t, insert("logical-1", nil))
 	require.Error(t, insert(nil, nil))
@@ -312,17 +312,17 @@ func TestNewTablesRejectInvalidRows(t *testing.T) {
 	require.NoError(t, db.Exec(`PRAGMA foreign_keys = OFF`).Error)
 
 	require.NoError(t, db.Exec(`
-		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_reason, c_blocked_at)
-		VALUES ('BINANCE', 'SPOT', 'FOOUSDT', '交易所公告下架', 1)
+		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_scope, c_reason, c_delist_id, c_blocked_at)
+		VALUES ('binance', 'spot', 'FOOUSDT', 'ALL', '交易所公告下架', 'd1', 1)
 	`).Error)
 	require.Error(t, db.Exec(`
-		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_reason, c_blocked_at)
-		VALUES ('BINANCE', 'SPOT', 'FOOUSDT', '重复', 2)
+		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_scope, c_reason, c_delist_id, c_blocked_at)
+		VALUES ('binance', 'spot', 'FOOUSDT', 'ALL', '重复', 'd2', 2)
 	`).Error)
 	// 同名代码在另一个市场是另一条记录。
 	require.NoError(t, db.Exec(`
-		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_reason, c_blocked_at)
-		VALUES ('BINANCE', 'SWAP', 'FOOUSDT', '永续下架', 3)
+		INSERT INTO t_trade_blocked_instruments (c_exchange, c_market_type, c_exchange_symbol, c_scope, c_reason, c_delist_id, c_blocked_at)
+		VALUES ('binance', 'swap', 'FOOUSDT', 'PAPER_ONLY', '永续下架', 'd3', 3)
 	`).Error)
 
 	transfer := func(id, direction, state string) error {

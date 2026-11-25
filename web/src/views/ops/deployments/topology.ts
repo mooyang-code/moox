@@ -35,7 +35,6 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "archive-mgr": "business",
   strategy: "business",
   trade: "business",
-  "callback-dispatcher": "business",
   "egress-proxy": "business",
   "storage-primary": "storage",
   "storage-view": "storage",
@@ -50,7 +49,6 @@ const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   "scf-collector": { name: "SCF 采集函数", note: "腾讯云函数" },
   console: { name: "管理台", note: "浏览器 · HTTPS 9527" },
   "moox-cli": { name: "moox-cli", note: "运维命令行" },
-  "collector-operator": { name: "采集运维", note: "外部调用方" },
   "moox-skill": { name: "Skill", note: "外部调用方" }
 };
 // 管理台入口是 Admin 自己监听的 HTTPS 9527：静态页面、根证书下载与 /api/admin/* 都在这里。

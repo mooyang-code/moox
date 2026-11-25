@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -153,7 +152,7 @@ func TestRegisterPublishesEachNoticeOnlyOnce(t *testing.T) {
 	message, err := registry.UnmarshalMessage(pending[0].Payload)
 	require.NoError(t, err)
 	require.Equal(t, events.SystemSpaceID, message.GetSpaceId())
-	require.Equal(t, "binance:SPOT:FOOUSDT", message.GetSubjectId())
+	require.Equal(t, "binance:spot:FOOUSDT", message.GetSubjectId())
 	require.Equal(t, eventID, message.GetEventId())
 	event, err := registry.ValidateMessage(message)
 	require.NoError(t, err)
@@ -161,7 +160,7 @@ func TestRegisterPublishesEachNoticeOnlyOnce(t *testing.T) {
 	var payload storagepb.InstrumentDelistScheduled
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), &payload))
 	require.Equal(t, events.DelistScopeAll, payload.GetScope())
-	require.Equal(t, notice.DelistAt, payload.GetDelistAt().AsTime())
+	require.Equal(t, notice.DelistAt, time.UnixMilli(payload.GetDelistAt()).UTC())
 
 	// 同一条（来源换了也一样）再次被报告：只更新最后报告时间，不再发布。
 	again := notice
@@ -259,19 +258,19 @@ func TestDetectorPublishesOncePerNoticeAndRaisesAttention(t *testing.T) {
 	pending, err := db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindReadonlyKeyMissing, "币安现货"+readonlyKeyMissingDetail)))
+	require.Equal(t, 1.0, attention.Value(attn, attention.KindReadonlyKeyMissing, "币安现货"+readonlyKeyMissingDetail))
 	require.Less(t, len("币安现货"+readonlyKeyMissingDetail), 480, "detail 超过 Collector 关注项的字节上限会被截断")
-	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")))
+	require.Equal(t, 0.0, attention.Value(attn, attention.KindSourceFailed, ""))
 
 	detector.RunOnce(ctx) // 币安现货补上 Key 后恢复；OKX 第 1 次失败
 	detector.RunOnce(ctx) // 第 2 次失败
-	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindReadonlyKeyMissing, "")))
-	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")), "连续失败不到 3 次不告警")
+	require.Equal(t, 0.0, attention.Value(attn, attention.KindReadonlyKeyMissing, ""))
+	require.Equal(t, 0.0, attention.Value(attn, attention.KindSourceFailed, ""), "连续失败不到 3 次不告警")
 	detector.RunOnce(ctx) // 第 3 次失败
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 连续 3 次以上失败：超时")))
+	require.Equal(t, 1.0, attention.Value(attn, attention.KindSourceFailed, "OKX 连续 3 次以上失败：超时"))
 
 	detector.RunOnce(ctx) // 恢复，同一条下架不再重复发布
-	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")))
+	require.Equal(t, 0.0, attention.Value(attn, attention.KindSourceFailed, ""))
 	pending, err = db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "同一条只发布一次")
@@ -332,7 +331,7 @@ func TestRegisterUppercasesSymbolBeforeValidating(t *testing.T) {
 	pending, err := db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	require.Equal(t, "okx:SWAP:FOO-USDT-SWAP", pending[0].SubjectToken)
+	require.Equal(t, "okx:swap:FOO-USDT-SWAP", pending[0].SubjectToken)
 }
 
 // 来源返回的条目被校验拒绝（交易所、市场不对，代码带冒号等）：这一条没有发布，等于漏报，要按来源故障关注项报出来，下一轮不再被拒就恢复。
@@ -350,10 +349,10 @@ func TestDetectorReportsRejectedNotices(t *testing.T) {
 	pending, err := db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "合法的照常发布，不因一条被拒绝而整批失败")
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 有下架条目被校验拒绝、没有发布（可能漏报），详见 Collector 日志")))
+	require.Equal(t, 1.0, attention.Value(attn, attention.KindSourceFailed, "OKX 有下架条目被校验拒绝、没有发布（可能漏报），详见 Collector 日志"))
 
 	detector.RunOnce(ctx)
-	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")), "下一轮不再被拒就恢复")
+	require.Equal(t, 0.0, attention.Value(attn, attention.KindSourceFailed, ""), "下一轮不再被拒就恢复")
 }
 
 // 被拒条目的关注项 detail 是每个来源一段固定文字：被拒条数、来源返回顺序变化都不会换成新的指标序列。
@@ -369,7 +368,7 @@ func TestRejectedAttentionDetailIsStable(t *testing.T) {
 	const detail = "OKX 有下架条目被校验拒绝、没有发布（可能漏报），详见 Collector 日志"
 	for i := 0; i < 3; i++ {
 		detector.RunOnce(ctx)
-		require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, detail)), "第 %d 轮", i)
+		require.Equal(t, 1.0, attention.Value(attn, attention.KindSourceFailed, detail), "第 %d 轮", i)
 	}
 }
 

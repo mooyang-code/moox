@@ -37,14 +37,14 @@ func TestLiveWriteBaseline(t *testing.T) {
 	klineCols := []string{"close", "high", "low", "open", "quote_volume", "volume"}
 	factorCols := []string{"bias_20", "bias_q_20", "cci", "minmax_20", "quote_volume_mean_20", "quote_volume_mean_q_20",
 		"volume_mean_q_20", "zf_abs_mean_20", "zf_mean_q_20", "zf_std_20", "zscore_abs_mean_q_20"}
-	var columns []*pb.ViewColumn
+	var columns []*viewindex.Column
 	for i, name := range append(append([]string{}, klineCols...), factorCols...) {
-		columns = append(columns, &pb.ViewColumn{ColumnName: name, OriginId: name, SortOrder: uint32(i),
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
+		columns = append(columns, &viewindex.Column{ColumnName: name, SortOrder: uint32(i),
+			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
 	}
-	columns = append(columns, &pb.ViewColumn{ColumnName: "trade_num", OriginId: "trade_num", SortOrder: 99,
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT})
-	schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "bench", PrimaryDatasetID: "dataset_factor_bench_1m",
+	columns = append(columns, &viewindex.Column{ColumnName: "trade_num", SortOrder: 99,
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT})
+	schema := viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "dataset_factor_bench_1m",
 		ViewVersion: 1, Engine: "duckdb", Columns: columns}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	if err := manager.Prepare(ctx, "bench-a", schema); err != nil {
@@ -83,7 +83,7 @@ func TestLiveWriteBaseline(t *testing.T) {
 				fields = append(fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(s) + 0.5}}})
 			}
 			writes = append(writes, viewindex.RowWrite{
-				Key:        viewindex.RowKey{Key: duckRowKey("space", schema.PrimaryDatasetID, fmt.Sprintf("SYM%04d-USDT", s), "1m", barTime(bar).Format(time.RFC3339Nano), "")},
+				Key:        viewindex.RowKey{Key: duckRowKey("space", schema.DatasetID, fmt.Sprintf("SYM%04d-USDT", s), "1m", barTime(bar).Format(time.RFC3339Nano), "")},
 				Fields:     fields,
 				Attributes: map[string]*pb.TypedValue{"factor.source_hash": {Value: &pb.TypedValue_StringValue{StringValue: "sha256:abcdef"}}},
 			})

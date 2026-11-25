@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-func inputJSON(viewID string, factors map[string]string) json.RawMessage {
-	raw, _ := json.Marshal(InputRecord{Views: map[string]ViewInput{viewID: {Factors: factors}}, Bar: "1h", Calendar: "crypto_24x7", BarStart: testNow})
+func inputJSON(datasetID string, factors map[string]string) json.RawMessage {
+	raw, _ := json.Marshal(InputRecord{Views: map[string]ViewInput{datasetID: {Factors: factors}}, Bar: "1h", Calendar: "crypto_24x7", BarStart: testNow})
 	return raw
 }
 
@@ -243,7 +243,7 @@ func TestAdjacentRecordTrustRules(t *testing.T) {
 	if err := repo.DisableInstance(ctx, "i1", "session-1", testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.EnableInstance(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.EnableInstance(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	record, input, found, err := repo.AdjacentRecord(ctx, "i1", []string{"view_a"}, "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2")

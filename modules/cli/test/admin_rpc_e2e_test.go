@@ -8,9 +8,9 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -24,7 +24,6 @@ type adminRPCWire struct {
 	adminpb.UnimplementedSecretMgr
 	adminpb.UnimplementedSetup
 	adminpb.UnimplementedSysDeploy
-	adminpb.UnimplementedSpaceMgr
 }
 
 func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
@@ -36,7 +35,6 @@ func startAdminGateway(t *testing.T, wire *adminRPCWire) string {
 	monitorpb.RegisterMonitorMgrService(service, wire)
 	adminpb.RegisterSetupService(service, wire)
 	adminpb.RegisterSysDeployService(service, wire)
-	adminpb.RegisterSpaceMgrService(service, wire)
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { _ = service.Close(nil) })
 	temp := t.TempDir()
@@ -61,7 +59,7 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	gateway, err := gatewayio.Open(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
-	client := &adminclient.Client{Gateway: gateway, SpaceID: "crypto"}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: "crypto"}
 	secret, err := client.GetSecretValue(t.Context(), "secret-1")
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", secret.SecretValue)
@@ -72,7 +70,7 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	applied, err := setup.Apply(t.Context(), secrets)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
-	require.NoError(t, setup.SyncHostDeployments(t.Context(), cfg, cfg.ControlHost().Name))
+	require.NoError(t, setup.SyncTopology(t.Context(), cfg))
 	doctor := doctorcli.New(gateway)
 	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
 	require.NoError(t, err)
@@ -80,9 +78,6 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	rows, err := doctor.ListDeployments(t.Context(), "control")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	var space adminpb.CreateSpaceRsp
-	require.NoError(t, gateway.Invoke(t.Context(), "trpc.moox.admin.SpaceMgr", "CreateSpace", &adminpb.CreateSpaceReq{Space: &adminpb.Space{SpaceId: "fixture"}}, &space))
-	require.Equal(t, "fixture", space.GetSpace().GetSpaceId())
 	// 只给 Collector 的读云密钥方法，操作员调不到。
 	var forbidden adminpb.GetCloudCredentialRsp
 	require.Error(t, gateway.Invoke(t.Context(), "trpc.moox.ops.SecretMgr", "GetCloudCredential", &adminpb.GetCloudCredentialReq{SecretId: "secret-1"}, &forbidden))
@@ -110,20 +105,16 @@ func (w *adminRPCWire) ListDeployments(_ context.Context, req *adminpb.ListDeplo
 	return &adminpb.ListDeploymentsRsp{RetInfo: &adminpb.RetInfo{}, Deployments: []*adminpb.ComponentDeployment{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
 }
 
-func (w *adminRPCWire) CreateSpace(_ context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
-	return &adminpb.CreateSpaceRsp{RetInfo: &adminpb.RetInfo{}, Space: req.GetSpace()}, nil
-}
-
 func (*adminRPCWire) GetDoctorContext(_ context.Context, req *monitorpb.GetDoctorContextReq) (*monitorpb.GetDoctorContextRsp, error) {
 	if req.GetNodeId() != "control" {
 		return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM}}, nil
 	}
-	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
+	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UnixMilli()}, nil
 }
 
-func (w *adminRPCWire) SyncHostDeployments(_ context.Context, req *adminpb.SyncHostDeploymentsReq) (*adminpb.SyncHostDeploymentsRsp, error) {
-	if req.GetHostId() == "" || len(req.GetComponentIds()) == 0 {
-		return &adminpb.SyncHostDeploymentsRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INVALID_PARAM}}, nil
+func (w *adminRPCWire) SyncTopology(_ context.Context, req *adminpb.SyncTopologyReq) (*adminpb.SyncTopologyRsp, error) {
+	if len(req.GetHosts()) == 0 || len(req.GetHosts()[0].GetComponentIds()) == 0 {
+		return &adminpb.SyncTopologyRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INVALID_PARAM}}, nil
 	}
-	return &adminpb.SyncHostDeploymentsRsp{RetInfo: &adminpb.RetInfo{}}, nil
+	return &adminpb.SyncTopologyRsp{RetInfo: &adminpb.RetInfo{}}, nil
 }

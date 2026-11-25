@@ -37,7 +37,8 @@ func EvaluateParams(program *dsl.Program, frame Frame, decls map[string][]dsl.Pa
 	if program == nil || len(program.Params) == 0 {
 		return outcome
 	}
-	// 参数输出只用于只绑一个因子任务的策略：选币池构造时不会有持仓市场的取舍。
+	// 选币池构造不带持仓：单市场时没有取舍；现货加永续时每个标的按 prefer 取行，不像规则求值那样粘住上期持仓的市场，
+	// 持仓在非 prefer 市场的标的，参数表达式读到的可能是另一个市场的行（已知差别，见 docs/模块/策略.md）。
 	frame = selectPool(program.Strategy.Market, frame, nil, nil)
 	ids := make([]string, 0, len(frame.Rows))
 	for _, id := range frame.Universe {

@@ -9,7 +9,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/spf13/cobra"
@@ -49,7 +49,7 @@ func newStrategyInstanceDeleteCommand() *cobra.Command {
 		Short: "删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（默认只预览，--yes 才执行）",
 		Long: "删除已停用、没有运行会话的策略实例，连同绑定到它的因子任务和任务的结果数据集，结果数据不可恢复；\n" +
 			"没绑定到它的任务（例如公共任务）保留不动。有回放或补算在进行、结果数据集有归档任务时拒绝。\n" +
-			"有回放或补算在进行、结果数据集被其他 View 引用时也拒绝。不带 --yes 只分两组列出将删除和保留的因子任务；\n" +
+			"不带 --yes 只分两组列出将删除和保留的因子任务；\n" +
 			"中途失败或超时后再执行一次即可接着删完。Trade 里的历史目标与订单不删。\n\n" +
 			"对应接口：trpc.moox.strategy.StrategyMgr DeleteStrategyInstance（破坏性，默认只预览）。",
 		Args: cobra.NoArgs,
@@ -74,7 +74,7 @@ func newStrategyInstanceDeleteCommand() *cobra.Command {
 }
 
 func runStrategyInstanceDelete(ctx context.Context, cmd *cobra.Command, gateway commandGateway, spaceID, instanceID string, yes bool) error {
-	client := &adminclient.Client{Gateway: gateway, SpaceID: spaceID}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: spaceID}
 	instance, found, err := readStrategyDeleteInstance(ctx, client, instanceID)
 	if err != nil {
 		return err
@@ -129,7 +129,7 @@ func runStrategyInstanceDelete(ctx context.Context, cmd *cobra.Command, gateway 
 }
 
 // readStrategyDeleteInstance 读取实例；实例不存在时 found 为假。
-func readStrategyDeleteInstance(ctx context.Context, client *adminclient.Client, instanceID string) (strategyDeleteInstance, bool, error) {
+func readStrategyDeleteInstance(ctx context.Context, client *rpcclient.Client, instanceID string) (strategyDeleteInstance, bool, error) {
 	var rsp struct {
 		RetInfo struct {
 			Code json.RawMessage `json:"code"`
@@ -154,7 +154,7 @@ func readStrategyDeleteInstance(ctx context.Context, client *adminclient.Client,
 // 没关联的保留，Factor 里已经不存在的标为已删除。
 func strategyDeleteTasks(ctx context.Context, gateway commandGateway, spaceID string, instance strategyDeleteInstance) ([]strategyDeleteTask, error) {
 	var tasks []strategyDeleteTask
-	for _, market := range []string{"spot", "swap", "equity", "multi"} {
+	for _, market := range []string{"spot", "swap", "equity"} {
 		taskID, ok := instance.FactorTasks[market]
 		if !ok {
 			continue

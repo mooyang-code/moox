@@ -24,7 +24,7 @@ func newWalletIntegration(t *testing.T) (*targetFixture, *wallettest.Exchange, f
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION',
 		c_credential_secret_id = 'secret-1', c_account_mode = 'BINANCE_STANDARD'`).Error)
 	f.setSpotBalance("ETH", "0")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
 	f.now = time.Now().UTC()
 	fake := &wallettest.Exchange{Spot: "10", Futures: "100000", Ask: "50000"}
 	// 每次调用都新建服务和执行器：等价于进程重启，状态只在库里（划转表）。
@@ -237,8 +237,8 @@ func TestWalletHourlyCapUsedUpNeitherTransfersNorCollects(t *testing.T) {
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","hourly_cap_spot":{"BTC-USDT-SPOT":"1000"}}`)
 	hourStart := time.Now().UTC().Truncate(time.Hour).Add(time.Second).UnixMilli()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: "used", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
+		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
+		ClientOrderID: "used", Exchange: "binance", MarketType: "spot", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "100", AveragePrice: "100", FilledQuantity: "10",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "FILLED", SubmittedAt: hourStart, FinishedAt: hourStart, Version: 1,
 	})
@@ -276,8 +276,8 @@ func TestWalletCollectDoesNotTakeBackFundsForDeferredBuy(t *testing.T) {
 	// 划转到账后、买入之前，这个小时的额度被别处用完。
 	hourStart := time.Now().UTC().Truncate(time.Hour).Add(time.Second).UnixMilli()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: "used", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
+		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
+		ClientOrderID: "used", Exchange: "binance", MarketType: "spot", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "100", AveragePrice: "100", FilledQuantity: "10",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "FILLED", SubmittedAt: hourStart, FinishedAt: hourStart, Version: 1,
 	})

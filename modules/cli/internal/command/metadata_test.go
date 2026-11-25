@@ -59,18 +59,17 @@ func TestBusinessSpacesSortByID(t *testing.T) {
 		},
 	}}
 
-	spaces, err := businessSetupSpaces(seed)
+	ids, err := businessSpaceIDs(seed)
 	require.NoError(t, err)
-	require.Len(t, spaces, 2)
-	assert.Equal(t, "crypto", spaces[0].SpaceID)
-	assert.Equal(t, "stockcn", spaces[1].SpaceID)
-	assert.Equal(t, "CN", spaces[1].Market)
-	assert.Equal(t, "Asia/Shanghai", spaces[1].Timezone)
-	assert.Equal(t, `{"managed_by":"moox-cli"}`, spaces[1].AttributesJSON)
+	assert.Equal(t, []string{"crypto", "stockcn"}, ids)
+	// 市场与时区随空间写进 Storage。
+	space := seed.Spaces[0].toPB()
+	assert.Equal(t, "CN", space.GetMarket())
+	assert.Equal(t, "Asia/Shanghai", space.GetTimezone())
 }
 
 func TestBusinessSpacesRejectDuplicateID(t *testing.T) {
-	_, err := businessSetupSpaces(metadataSeed{Spaces: []seedSpace{
+	_, err := businessSpaceIDs(metadataSeed{Spaces: []seedSpace{
 		{SpaceID: "crypto", Name: "Crypto", Market: "crypto", Timezone: "UTC"},
 		{SpaceID: "crypto", Name: "Crypto 2", Market: "crypto", Timezone: "UTC"},
 	}})
@@ -82,11 +81,8 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	seed := metadataSeed{
 		Spaces:         []seedSpace{{SpaceID: "stockcn", Name: "A股市场"}, {SpaceID: "crypto", Name: "加密货币市场"}},
 		DataSources:    []seedDataSource{{SpaceID: "stockcn", DataSourceID: "stock"}, {SpaceID: "crypto", DataSourceID: "binance"}},
-		FieldGroups:    []seedFieldGroup{{SpaceID: "stockcn", GroupID: "quote"}, {SpaceID: "crypto", GroupID: "quote"}},
-		Fields:         []seedField{{SpaceID: "stockcn", FieldID: "close", GroupID: "quote"}, {SpaceID: "crypto", FieldID: "close", GroupID: "quote"}},
 		Datasets:       []seedDataset{{SpaceID: "stockcn", DatasetID: "kline"}, {SpaceID: "crypto", DatasetID: "kline"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "stockcn", DatasetID: "kline", ColumnName: "close"}, {SpaceID: "crypto", DatasetID: "kline", ColumnName: "close"}},
-		Views:          []seedView{{SpaceID: "stockcn", ViewID: "kline"}, {SpaceID: "crypto", ViewID: "kline"}},
 	}
 
 	selected, err := selectMetadataSpaces(seed, []string{" A股市场 "})
@@ -94,11 +90,8 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	require.Len(t, selected.Spaces, 1)
 	require.Equal(t, "stockcn", selected.Spaces[0].SpaceID)
 	require.Len(t, selected.DataSources, 1)
-	require.Len(t, selected.FieldGroups, 1)
-	require.Len(t, selected.Fields, 1)
 	require.Len(t, selected.Datasets, 1)
 	require.Len(t, selected.DatasetColumns, 1)
-	require.Len(t, selected.Views, 1)
 }
 
 func TestSelectMetadataSpacesRejectsUnknownAndDuplicateSelection(t *testing.T) {
@@ -137,25 +130,6 @@ func TestSeedDatasetToPBDefaultsToActive(t *testing.T) {
 	assert.Equal(t, "active", dataset.GetStatus())
 }
 
-func TestBuildMetadataImportCallsCanonicalizesViewAsStorage(t *testing.T) {
-	calls, err := buildMetadataImportCalls(metadataSeed{
-		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "TIME_SERIES",
-			Freq:     "1h",
-		}},
-		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-			GrainKeys: []string{"wrong"}, Engine: "pebble",
-		}},
-	})
-	require.NoError(t, err)
-	view := calls[1].Request.(*pb.CreateViewReq).GetView()
-	require.Equal(t, "kline", view.GetDatasetId())
-	require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, view.GetGrainKeys())
-	require.Equal(t, "duckdb", view.GetEngine())
-}
-
 func TestParseDataKind(t *testing.T) {
 	kind, err := parseDataKind("TIME_SERIES")
 	require.NoError(t, err)
@@ -172,15 +146,6 @@ func TestParseFieldValueType(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestParseDatasetColumnOriginType(t *testing.T) {
-	typ, err := parseDatasetColumnOriginType("FIELD")
-	require.NoError(t, err)
-	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, typ)
-	typ, err = parseDatasetColumnOriginType("CUSTOM")
-	require.NoError(t, err)
-	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, typ)
-}
-
 func TestNormalizeEnum(t *testing.T) {
 	assert.Equal(t, "TIME_SERIES", normalizeEnum("data_kind_time_series"))
 	assert.Equal(t, "DOUBLE", normalizeEnum("FIELD_VALUE_TYPE_DOUBLE"))
@@ -194,12 +159,7 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 		Subjects:       []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
 		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}}},
 		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", Freq: "1m", SubjectTags: []string{"binance_spot"}}},
-		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
-		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
-		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "v1", Name: "View", PrimaryDatasetID: "kline", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-			Engine: "duckdb",
-		}},
+		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", ValueType: "DOUBLE", DisplayName: "收盘价", Group: "行情价格"}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
@@ -209,64 +169,17 @@ func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	}
 }
 
-func TestBuildMetadataImportCallsBackfillsColumnDisplayName(t *testing.T) {
-	seed := metadataSeed{
-		Fields: []seedField{{SpaceID: "crypto", FieldID: "close", Name: "收盘价", ValueType: "DOUBLE"}},
-		DatasetColumns: []seedDatasetColumn{{
-			SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
-			OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE",
-		}},
-	}
-	calls, err := buildMetadataImportCalls(seed)
+// 列自描述：显示名与分组原样取自种子里的列，不再按字段目录补。
+func TestBuildMetadataImportCallsCarriesColumnDisplayNameAndGroup(t *testing.T) {
+	calls, err := buildMetadataImportCalls(metadataSeed{DatasetColumns: []seedDatasetColumn{{
+		SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", ValueType: "DOUBLE", DisplayName: "收盘价", Group: "行情价格",
+	}}})
 	require.NoError(t, err)
-	for _, call := range calls {
-		if call.Resource != "dataset_columns" {
-			continue
-		}
-		column := call.Request.(*pb.UpsertDatasetColumnReq).GetColumn()
-		assert.Equal(t, "收盘价", column.GetAttributes()["display_name"])
-		return
-	}
-	t.Fatal("dataset_columns call missing")
-}
-
-func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *testing.T) {
-	seed := metadataSeed{
-		Fields: []seedField{
-			{SpaceID: "stockcn", FieldID: "close", Name: "股票收盘价", ValueType: "DOUBLE"},
-			{SpaceID: "crypto", FieldID: "close", Name: "币种收盘价", ValueType: "DOUBLE"},
-			{SpaceID: "crypto", FieldID: "alpha", Name: "普通指标", ValueType: "DOUBLE"},
-		},
-		DatasetColumns: []seedDatasetColumn{
-			{
-				SpaceID: "stockcn", DatasetID: "stock", ColumnName: "close",
-				OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE",
-			},
-			{
-				SpaceID: "crypto", DatasetID: "spot", ColumnName: "close",
-				OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE",
-			},
-			{
-				SpaceID: "crypto", DatasetID: "spot", ColumnName: "alpha_field",
-				OriginType: "FIELD", OriginID: "alpha", ValueType: "DOUBLE",
-			},
-		},
-	}
-	calls, err := buildMetadataImportCalls(seed)
-	require.NoError(t, err)
-	got := map[string]string{}
-	for _, call := range calls {
-		if call.Resource != "dataset_columns" {
-			continue
-		}
-		column := call.Request.(*pb.UpsertDatasetColumnReq).GetColumn()
-		got[column.GetSpaceId()+"/"+column.GetColumnName()] = column.GetAttributes()["display_name"]
-	}
-	require.Equal(t, map[string]string{
-		"stockcn/close":      "股票收盘价",
-		"crypto/close":       "币种收盘价",
-		"crypto/alpha_field": "普通指标",
-	}, got)
+	require.Len(t, calls, 1)
+	column := calls[0].Request.(*pb.UpsertDatasetColumnReq).GetColumn()
+	assert.Equal(t, "收盘价", column.GetDisplayName())
+	assert.Equal(t, "行情价格", column.GetGroup())
+	assert.Empty(t, column.GetAttributes())
 }
 
 func TestMetadataContractsEqualAllResources(t *testing.T) {
@@ -277,10 +190,6 @@ func TestMetadataContractsEqualAllResources(t *testing.T) {
 	assert.True(t, metadataContractsEqual("datasets",
 		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
 		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
-	))
-	assert.True(t, metadataContractsEqual("fields",
-		&pb.Field{SpaceId: "crypto", FieldId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
-		&pb.Field{SpaceId: "crypto", FieldId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 	))
 	assert.True(t, metadataContractsEqual("dataset_columns",
 		&pb.DatasetColumn{SpaceId: "crypto", DatasetId: "kline", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
@@ -356,36 +265,12 @@ func TestParseEnumsAllValues(t *testing.T) {
 	}
 }
 
-func TestBuildMetadataImportCallsRejectsUndefinedExplicitFieldGroup(t *testing.T) {
-	_, err := buildMetadataImportCalls(metadataSeed{Fields: []seedField{{
-		SpaceID: "stockcn", GroupID: "missing", FieldID: "close", Name: "收盘价", ValueType: "double",
-	}}})
-	require.ErrorContains(t, err, `undefined field_group "missing"`)
-}
-
-func TestBuildMetadataImportCallsValidatesFieldGroupHierarchy(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		groups []seedFieldGroup
-		want   string
-	}{
-		{name: "duplicate", groups: []seedFieldGroup{{SpaceID: "s", GroupID: "g", Name: "G"}, {SpaceID: "s", GroupID: "g", Name: "G2"}}, want: "duplicate field_group"},
-		{name: "missing parent", groups: []seedFieldGroup{{SpaceID: "s", GroupID: "child", ParentGroupID: "missing", Name: "Child"}}, want: "undefined parent"},
-		{name: "third level", groups: []seedFieldGroup{{SpaceID: "s", GroupID: "root", Name: "Root"}, {SpaceID: "s", GroupID: "child", ParentGroupID: "root", Name: "Child"}, {SpaceID: "s", GroupID: "leaf", ParentGroupID: "child", Name: "Leaf"}}, want: "two-level hierarchy"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := buildMetadataImportCalls(metadataSeed{FieldGroups: tc.groups})
-			require.ErrorContains(t, err, tc.want)
-		})
-	}
-}
-
 func TestMetadataNotFoundAcceptsGenericNotFound(t *testing.T) {
 	require.True(t, metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND, Msg: "sql: no rows"}))
 }
 
 func TestProtoMessageSpaceIDFindsNestedMetadataResource(t *testing.T) {
-	req := &pb.CreateFieldReq{Field: &pb.Field{SpaceId: "stockcn", FieldId: "close"}}
+	req := &pb.CreateDatasetReq{Dataset: &pb.Dataset{SpaceId: "stockcn", DatasetId: "dataset_close"}}
 	assert.Equal(t, "stockcn", protoMessageSpaceID(req.ProtoReflect()))
 	assert.Empty(t, protoMessageSpaceID((&pb.ListSpacesReq{}).ProtoReflect()))
 }
@@ -394,16 +279,12 @@ func TestSeedToPBAllTypes(t *testing.T) {
 	assert.Equal(t, "binance", (seedDataSource{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance"}).toPB().GetDataSourceId())
 	assert.Equal(t, "BTC", (seedSubject{SpaceID: "crypto", SubjectID: "BTC"}).toPB().GetSubjectId())
 	assert.Equal(t, "binance_spot", (seedTag{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance spot", Mode: "auto"}).toPB().GetTagId())
-	field, err := (seedField{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}).toPB()
-	require.NoError(t, err)
-	assert.Equal(t, pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, field.GetValueType())
-	col, err := (seedDatasetColumn{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}).toPB()
+	col, err := (seedDatasetColumn{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", ValueType: "DOUBLE"}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, "close", col.GetColumnName())
 	dataset, err := (seedDataset{SpaceID: "crypto", DatasetID: "kline", SubjectTags: []string{"binance_spot"}}).toPB()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"binance_spot"}, dataset.GetSubjectTags())
-	assert.Equal(t, "v1", (seedView{SpaceID: "crypto", ViewID: "v1"}).toPB().GetViewId())
 }
 
 func metadataTestServer(t *testing.T, handlers map[string]func(w http.ResponseWriter, r *http.Request)) *testfixture.HandlerGateway {
@@ -424,88 +305,6 @@ func writeProtoJSON(w http.ResponseWriter, msg proto.Message) {
 	w.Header().Set("Content-Type", "application/json")
 	raw, _ := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
 	_, _ = w.Write(raw)
-}
-
-func TestRunMetadataImportCreatesResource(t *testing.T) {
-	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-		"CreateSpace": func(w http.ResponseWriter, r *http.Request) {
-			writeProtoJSON(w, &pb.CreateSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
-		},
-	})
-	defer server.Close()
-
-	space := &pb.Space{SpaceId: "crypto", Name: "Crypto", Status: "active"}
-	calls := []metadataImportCall{{
-		Resource: "spaces", Method: "CreateSpace",
-		Request: &pb.CreateSpaceReq{Space: space}, Response: &pb.CreateSpaceRsp{},
-	}}
-	summary, err := runMetadataImport(context.Background(), server, calls, false)
-	require.NoError(t, err)
-	assert.Equal(t, 1, summary.Applied)
-	assert.Equal(t, 0, summary.Skipped)
-}
-
-func TestRunMetadataImportSkipsWhenExists(t *testing.T) {
-	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-		"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-			writeProtoJSON(w, &pb.GetSpaceRsp{
-				RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-				Space:   &pb.Space{SpaceId: "crypto", Name: "Crypto"},
-			})
-		},
-	})
-	defer server.Close()
-
-	space := &pb.Space{SpaceId: "crypto", Name: "Crypto", Status: "active"}
-	calls := []metadataImportCall{{
-		Resource: "spaces", Method: "CreateSpace",
-		Request: &pb.CreateSpaceReq{Space: space}, Response: &pb.CreateSpaceRsp{},
-		Exists: &metadataExistsProbe{
-			Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{},
-		},
-	}}
-	summary, err := runMetadataImport(context.Background(), server, calls, true)
-	require.NoError(t, err)
-	assert.Equal(t, 0, summary.Applied)
-	assert.Equal(t, 1, summary.Skipped)
-}
-
-func TestMetadataResourceExists(t *testing.T) {
-	t.Run("found", func(t *testing.T) {
-		server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-			"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-				writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
-			},
-		})
-		defer server.Close()
-		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		ok, err := metadataResourceExists(context.Background(), server, probe)
-		require.NoError(t, err)
-		assert.True(t, ok)
-	})
-	t.Run("not found", func(t *testing.T) {
-		server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-			"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-				writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SPACE_NOT_FOUND, Msg: "missing"}})
-			},
-		})
-		defer server.Close()
-		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		ok, err := metadataResourceExists(context.Background(), server, probe)
-		require.NoError(t, err)
-		assert.False(t, ok)
-	})
-	t.Run("error", func(t *testing.T) {
-		server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
-			"GetSpace": func(w http.ResponseWriter, r *http.Request) {
-				writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "boom"}})
-			},
-		})
-		defer server.Close()
-		probe := &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "crypto"}, Response: &pb.GetSpaceRsp{}}
-		_, err := metadataResourceExists(context.Background(), server, probe)
-		require.Error(t, err)
-	})
 }
 
 func TestRunMetadataApplyCreatesWhenMissing(t *testing.T) {
@@ -637,31 +436,15 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "行情",
 			Description: "小时行情", DataKind: "TIME_SERIES", Freq: "1h",
 		}},
-		FieldGroups: []seedFieldGroup{{
-			SpaceID: "crypto", GroupID: "quote", Name: "行情", Description: "行情字段", SortOrder: 1,
-		}},
-		Fields: []seedField{{
-			SpaceID: "crypto", GroupID: "quote", FieldID: "close", Name: "收盘价",
-			Description: "收盘价格", ValueType: "DOUBLE", Unit: "USDT",
-			ValidationRuleJSON: "{}", WriteExample: "1.5", SortOrder: 1,
-		}},
 		DatasetColumns: []seedDatasetColumn{{
 			SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
-			OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE", Required: true,
-			Aliases: []string{"收盘"}, seedCommon: seedCommon{Attributes: map[string]string{"display_name": "收盘价"}},
-		}},
-		Views: []seedView{{
-			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
-			PrimaryDatasetID: "kline",
-			GrainKeys:        []string{"subject_id", "freq", "data_time", "series_tag"},
-			Engine:           "duckdb",
+			ValueType: "DOUBLE", DisplayName: "收盘价", Group: "行情价格", Required: true,
+			Aliases: []string{"收盘"},
 		}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
 	require.NoError(t, err)
 	dataset, err := seed.Datasets[0].toPB()
-	require.NoError(t, err)
-	field, err := seed.Fields[0].toPB()
 	require.NoError(t, err)
 	datasetColumn, err := seed.DatasetColumns[0].toPB()
 	require.NoError(t, err)
@@ -676,17 +459,8 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 		"GetDataset": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.GetDatasetRsp{RetInfo: storageOK(), Dataset: dataset})
 		},
-		"GetFieldGroup": func(w http.ResponseWriter, _ *http.Request) {
-			writeProtoJSON(w, &pb.GetFieldGroupRsp{RetInfo: storageOK(), FieldGroup: seed.FieldGroups[0].toPB()})
-		},
-		"GetField": func(w http.ResponseWriter, _ *http.Request) {
-			writeProtoJSON(w, &pb.GetFieldRsp{RetInfo: storageOK(), Field: field})
-		},
 		"ListDatasetColumns": func(w http.ResponseWriter, _ *http.Request) {
 			writeProtoJSON(w, &pb.ListDatasetColumnsRsp{RetInfo: storageOK(), Columns: []*pb.DatasetColumn{datasetColumn}})
-		},
-		"GetView": func(w http.ResponseWriter, _ *http.Request) {
-			writeProtoJSON(w, &pb.GetViewRsp{RetInfo: storageOK(), View: seed.Views[0].toPB()})
 		},
 	})
 	defer server.Close()
@@ -747,24 +521,18 @@ func TestMetadataContractsEqualComparesDataSourceAttributes(t *testing.T) {
 }
 
 func TestMetadataApplyStagesKeepDependencies(t *testing.T) {
-	group := func(id, parent string) metadataImportCall {
-		return metadataImportCall{Resource: "field_groups", Request: &pb.CreateFieldGroupReq{FieldGroup: &pb.FieldGroup{GroupId: id, ParentGroupId: parent}}}
-	}
 	column := func(dataset, name string) metadataImportCall {
 		return metadataImportCall{Resource: "dataset_columns", Request: &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{DatasetId: dataset, ColumnName: name}}}
 	}
 	stages := metadataApplyStages([]metadataImportCall{
 		{Resource: "spaces"}, {Resource: "spaces"},
-		group("child", "parent"), group("parent", ""),
 		column("a", "1"), column("b", "1"), column("a", "2"),
 	})
-	require.Len(t, stages, 4)
+	require.Len(t, stages, 2)
 	assert.Len(t, stages[0], 2, "同类资源并发")
-	assert.Equal(t, "parent", stages[1][0][0].Request.(*pb.CreateFieldGroupReq).GetFieldGroup().GetGroupId(), "父分组先写")
-	assert.Equal(t, "child", stages[2][0][0].Request.(*pb.CreateFieldGroupReq).GetFieldGroup().GetGroupId())
-	require.Len(t, stages[3], 2, "按数据集分组")
-	require.Len(t, stages[3][0], 2)
-	assert.Equal(t, "2", stages[3][0][1].Request.(*pb.UpsertDatasetColumnReq).GetColumn().GetColumnName(), "组内保持写入顺序")
+	require.Len(t, stages[1], 2, "按数据集分组")
+	require.Len(t, stages[1][0], 2)
+	assert.Equal(t, "2", stages[1][0][1].Request.(*pb.UpsertDatasetColumnReq).GetColumn().GetColumnName(), "组内保持写入顺序")
 }
 
 func TestRunMetadataApplyListsColumnsOncePerDataset(t *testing.T) {

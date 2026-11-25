@@ -20,13 +20,6 @@ func main() {
 		}
 		return
 	}
-	if isTopologyRecoveryCommand(os.Args) {
-		if err := runTopologyRecoveryCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-			printInitError(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 	if isPKICommand(os.Args) {
 		if err := runPKICommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 			printInitError(os.Stderr, err)
@@ -64,7 +57,7 @@ func main() {
 	}
 
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, host, deployment, init, user, random-secret, eventbus-credentials, keys, pki"))
+		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, init, user, random-secret, eventbus-credentials, keys, pki"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

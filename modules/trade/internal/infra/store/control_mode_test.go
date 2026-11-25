@@ -19,7 +19,7 @@ func TestTargetReceiptPreservesAccountReadFailure(t *testing.T) {
 		}
 	}))
 	t.Cleanup(func() { require.NoError(t, s.db.Callback().Query().Remove("fail_control_mode_read")) })
-	_, accepted, err := s.AcceptLogicalAccountTargetWithReceipt(context.Background(), validLogicalAccountTarget(), TargetReceiptRecord{})
+	_, accepted, err := s.AcceptLogicalAccountTargetWithHistoryLocked(context.Background(), validLogicalAccountTarget(), TargetHistoryRecord{})
 	require.False(t, accepted)
 	require.ErrorIs(t, err, injected)
 	require.NotErrorIs(t, err, ErrTargetAuthorization)
@@ -57,9 +57,9 @@ func TestManualControlRejectsTargetReplay(t *testing.T) {
 	require.NoError(t, s.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
 	_, _, err = s.AcceptLogicalAccountTarget(ctx, target)
 	require.Error(t, err)
-	receipt := TargetReceiptRecord{SpaceID: "space-1", TargetID: target.TargetID, LogicalAccountID: "logical-1", RunnerID: "runner-1", InstanceID: target.InstanceID, SessionID: target.SessionID, StrategyID: target.StrategyID, BarEndTime: target.BarEndTime, ValidUntil: target.ValidUntil, CommandSequence: 1, RequestHash: "hash", SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", AcceptedAt: 1}
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.InsertTargetReceipt(receipt) }))
-	_, _, err = s.AcceptLogicalAccountTargetWithReceipt(ctx, target, receipt)
+	receipt := TargetHistoryRecord{SpaceID: "space-1", TargetID: target.TargetID, LogicalAccountID: "logical-1", InstanceID: target.InstanceID, SessionID: target.SessionID, StrategyID: target.StrategyID, SessionStartedAt: target.SessionStartedAt, BarEndTime: target.BarEndTime, ValidUntil: target.ValidUntil, RequestHash: "hash", SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: 1}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.InsertTargetHistory(receipt) }))
+	_, _, err = s.AcceptLogicalAccountTargetWithHistoryLocked(ctx, target, receipt)
 	require.ErrorIs(t, err, ErrTargetAuthorization)
 }
 

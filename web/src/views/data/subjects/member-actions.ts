@@ -1,3 +1,4 @@
+import { reportError } from "@/api/http";
 import { Message, Modal } from "@arco-design/web-vue";
 
 /** 移出标签成员前的说明：引用这个标签的采集任务会跟着缩小采集范围。 */
@@ -7,7 +8,7 @@ export function removeMembersConfirmText(count: number): string {
 
 /**
  * 移出标签会缩小引用它的采集任务的范围，先确认：点“移出”才发请求，取消什么也不做；
- * 失败时确认框保持打开（原因由请求层提示），成功后调用 done 刷新列表。
+ * 失败时提示原因、确认框保持打开，成功后调用 done 刷新列表。
  */
 export function confirmRemoveMembers(count: number, remove: () => Promise<unknown>, done: () => void) {
   Modal.confirm({
@@ -19,7 +20,8 @@ export function confirmRemoveMembers(count: number, remove: () => Promise<unknow
     onBeforeOk: async () => {
       try {
         await remove();
-      } catch {
+      } catch (error) {
+        reportError(error);
         return false;
       }
       Message.success("已移出标签");

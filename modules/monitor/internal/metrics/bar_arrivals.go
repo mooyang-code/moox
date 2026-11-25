@@ -25,7 +25,7 @@ const (
 var barArrivalProducers = map[string]struct{}{"storage": {}, "storage_view": {}, "factor": {}, "strategy": {}}
 
 // BarArrival 是一次输出水位前进：生产者在 ArrivedAt 写完了开盘时间为 BarAt 的那一根。PreviousBarAt 是上一份快照里的水位，
-// 两者之间若隔了几根（补数据时一批写完），那几根不单独记录。DatasetID 对 View 是 view_id，PrimaryDatasetID 是它服务的数据集。
+// 两者之间若隔了几根（补数据时一批写完），那几根不单独记录。PrimaryDatasetID 只对 View 填写，等于它所属的数据集（每个数据集恰好一个 View），用来把 View 的到达归到源数据集的链路上。
 type BarArrival struct {
 	ID               uint64     `gorm:"column:c_id;primaryKey"`
 	Producer         string     `gorm:"column:c_producer"`
@@ -77,7 +77,7 @@ func detectBarArrivals(samples []Sample, previous map[string]float64) []BarArriv
 		spaceID, freq := sample.Labels["space_id"], sample.Labels["freq"]
 		datasetID, primaryDatasetID := sample.Labels["dataset_id"], ""
 		if producer == "storage_view" {
-			datasetID, primaryDatasetID = sample.Labels["view_id"], sample.Labels["dataset_id"]
+			primaryDatasetID = datasetID
 		}
 		if spaceID == "" || datasetID == "" || freq == "" {
 			continue
@@ -126,7 +126,7 @@ func recordBarArrivals(tx *gorm.DB, samples []Sample) error {
 	if len(seriesIDs) == 0 {
 		return nil
 	}
-	var rows []MetricLatest
+	var rows []MetricSeries
 	if err := tx.Select("c_series_id", "c_value").Where("c_series_id IN ?", seriesIDs).Find(&rows).Error; err != nil {
 		return err
 	}

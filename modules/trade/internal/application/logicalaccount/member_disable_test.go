@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +18,7 @@ func spotMemberFixture(t *testing.T, btc string) (*Service, *store.Store) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-s", Name: "现货账户",
-			Exchange: "BINANCE", Markets: []string{"SPOT"},
+			Exchange: "binance", Markets: []string{"spot"},
 			ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-account-s",
 			SettlementAsset: "USDT", Status: "ENABLED", Ready: true,
 			Snapshot:           spotSnapshot(btc),
@@ -26,7 +27,7 @@ func spotMemberFixture(t *testing.T, btc string) (*Service, *store.Store) {
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", Environment: "TESTNET", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "0.0001", MinExchangeQuantity: "0.0001",
 			PriceTick: "0.1", MinNotional: "5", Status: "TRADING",
@@ -39,9 +40,9 @@ func spotMemberFixture(t *testing.T, btc string) (*Service, *store.Store) {
 			return err
 		}
 		// 有成交的人工单让 BTC 成为受管资产。
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "manual-btc", TradingAccountID: "account-s", ClientOrderID: "manual-btc",
-			MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			MarketType: "spot", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "0.01", FilledQuantity: "0.01", ReferencePrice: "50000", ReferencePriceAt: 1_000,
 			OwnerType: "OPERATOR", OwnerID: "action-btc", LogicalAccountID: "logical-1", State: "FILLED",
 		})
@@ -98,9 +99,9 @@ func TestDisableMemberRejectsManagedHoldingOrOpenOrder(t *testing.T) {
 
 	service, tradeStore = spotMemberFixture(t, "0")
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "external-open", TradingAccountID: "account-s", ClientOrderID: "external-open",
-			ExchangeOrderID: "42", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", OrderType: "LIMIT", Side: "BUY",
+			ExchangeOrderID: "42", MarketType: "spot", ExchangeSymbol: "BTCUSDT", OrderType: "LIMIT", Side: "BUY",
 			Quantity: "0.01", LimitPrice: stringPointer("40000"), ReferencePrice: "40000", ReferencePriceAt: 1_000,
 			OwnerType: "EXTERNAL", OwnerID: "42", State: "OPEN",
 		})

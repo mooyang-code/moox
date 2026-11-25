@@ -26,7 +26,15 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 			}
 		}
 	}
-	decorate := func(host *pb.HealthHost) {
+	// 主机网关的组件上报：没有 host-agent 上报（或已停用）的主机按它判断在不在线。
+	gateway := make(map[string]string)
+	for _, service := range facts.Services {
+		if service.ServiceName == "host-gateway" && service.Source == observability.SourceReporter {
+			gateway[service.NodeID] = service.ReporterStatus
+		}
+	}
+	// reported 表示这台主机有过 host-agent 上报。
+	decorate := func(host *pb.HealthHost, reported bool) {
 		if agentDisabled[host.HostId] {
 			host.Status, host.Reason = "unknown", "主机资源采集已停用，等待网关状态"
 		}
@@ -36,21 +44,14 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 				host.Status, host.Reason = "disabled", "主机已停用"
 			}
 		}
-		for _, signal := range facts.GatewaySignals {
-			if signal.HostID != host.HostId {
-				continue
-			}
-			host.GatewaySignals = append(host.GatewaySignals, &pb.HealthGatewaySignal{Kind: signal.Kind, PendingSince: stamp(signal.PendingSince), ExpectedHash: signal.ExpectedHash, AppliedHash: signal.AppliedHash, Signal: &pb.HealthSignal{Status: domain.HealthStatus(signal.Status), Reason: signal.Reason, RawError: signal.RawError, CheckedAt: stamp(signal.CheckedAt)}})
-			if host.Status == "disabled" {
-				continue
-			}
-			if signal.Kind == "heartbeat" && (host.AgentId == "" || agentDisabled[host.HostId]) && !expectedAgent[host.HostId] {
-				host.Status, host.Reason = domain.HealthStatus(signal.Status), signal.Reason
-			}
-			// 已按主机失联显示的主机保留失联的原因（与告警同一段文字），不被单项网关信号的说明盖掉。
-			if signal.Status == "down" && host.Status != "down" {
-				host.Status, host.Reason = "down", signal.Reason
-			}
+		if host.Status == "disabled" || reported && !agentDisabled[host.HostId] || expectedAgent[host.HostId] {
+			return
+		}
+		switch gateway[host.HostId] {
+		case "healthy":
+			host.Status, host.Reason = "healthy", "主机网关在上报"
+		case "stale", "missing":
+			host.Status, host.Reason = "down", "主机网关停止上报"
 		}
 	}
 	var out []*pb.HealthHost
@@ -59,14 +60,14 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 	statuses := map[string]string{observability.HostOnline: "healthy", observability.HostAgentStopped: "degraded", observability.HostLost: "down"}
 	for _, presence := range facts.HostPresences() {
 		item := presence.Host
-		host := &pb.HealthHost{HostId: item.HostID, AgentId: item.AgentID, Hostname: item.Hostname, Status: statuses[presence.State], Reason: presence.Reason, CpuPercent: item.CPUPercent, MemoryPercent: item.MemoryPercent, DiskPercent: item.FilesystemMaxPercent, MemoryAvailable: item.MemoryAvailable, DiskAvailable: item.DiskAvailable, MetricsAvailable: item.MetricsAvailable, CpuAvailable: item.CPUAvailable, LastReportedAt: stamp(item.LastSeenAt),
+		host := &pb.HealthHost{HostId: item.HostID, Hostname: item.Hostname, Status: statuses[presence.State], Reason: presence.Reason, CpuPercent: item.CPUPercent, MemoryPercent: item.MemoryPercent, DiskPercent: item.FilesystemMaxPercent, MemoryAvailable: item.MemoryAvailable, DiskAvailable: item.DiskAvailable, MetricsAvailable: item.MetricsAvailable, CpuAvailable: item.CPUAvailable, LastReportedAt: stamp(item.LastSeenAt),
 			CpuCores: item.CPUCores, MemoryTotalBytes: item.MemoryTotalBytes, MemoryUsedBytes: item.MemoryUsedBytes,
 			DiskTotalBytes: item.FilesystemTotalBytes, DiskUsedBytes: item.FilesystemUsedBytes, DiskMountpoint: item.FilesystemMountpoint,
 			// 告警阈值，页面据此画出阈值刻度。
 			CpuThreshold:    hostmetrics.MetricThreshold(hostmetrics.HostMetricCPU).Alert,
 			MemoryThreshold: hostmetrics.MetricThreshold(hostmetrics.HostMetricMemory).Alert,
 			DiskThreshold:   hostmetrics.MetricThreshold(hostmetrics.HostMetricFilesystemUsage).Alert}
-		decorate(host)
+		decorate(host, true)
 		out = append(out, host)
 		covered[item.HostID] = true
 	}
@@ -76,10 +77,10 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 				continue
 			}
 			host := &pb.HealthHost{HostId: item.HostID, Status: "unknown", Reason: "尚未收到主机指标"}
-			decorate(host)
+			decorate(host, false)
 			out = append(out, host)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].HostId+"\x00"+out[i].AgentId < out[j].HostId+"\x00"+out[j].AgentId })
+	sort.Slice(out, func(i, j int) bool { return out[i].HostId < out[j].HostId })
 	return out
 }

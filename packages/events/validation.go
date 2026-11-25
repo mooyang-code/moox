@@ -8,31 +8,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type EventValidator func(*eventpb.EventMessage, proto.Message) error
-
-func validateObservabilityHostSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*hostmetricpb.HostMetric)
-	if !ok {
-		return fmt.Errorf("host metric payload has type %T", value)
-	}
-	if !hostmetricpb.IsAgentID(payload.GetAgentId()) ||
-		strings.TrimSpace(payload.GetHostname()) == "" ||
-		payload.GetSnapshot() == nil {
-		return fmt.Errorf("host metric identity or snapshot is incomplete")
-	}
-	if payload.GetAgentId() != message.GetSubjectId() {
-		return fmt.Errorf("host metric agent_id does not match subject_id")
-	}
-	return nil
-}
 
 func validateObservabilityMetricsSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*metricspb.MetricReport)
@@ -74,7 +56,7 @@ func validateObservabilityLogReported(message *eventpb.EventMessage, value proto
 		return fmt.Errorf("log report must carry 1 to %d records", MaxLogReportRecords)
 	}
 	for _, record := range payload.GetRecords() {
-		if record.GetSequence() == 0 || record.GetTimeUnixNano() <= 0 || strings.TrimSpace(record.GetLevel()) == "" {
+		if record.GetSequence() == 0 || record.GetLoggedAt() <= 0 || strings.TrimSpace(record.GetLevel()) == "" {
 			return fmt.Errorf("log record sequence, time and level are required")
 		}
 		if len(record.GetMessage()) > MaxLogMessageBytes || len(record.GetFields()) > MaxLogRecordFields {
@@ -126,9 +108,6 @@ func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.M
 	if payload.GetStatus() == "complete" && len(failed) != 0 {
 		return fmt.Errorf("%s complete status has failed_subjects", label)
 	}
-	if err := validatePeriodSeries(payload, subjects, failed, label); err != nil {
-		return err
-	}
 	// 明细对 Storage 是不透明字节：只要求有明细就有类型，不解析内容。
 	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") || (payload.GetDetailType() != "" && !validRequiredToken(payload.GetDetailType())) {
 		return fmt.Errorf("%s detail and detail_type must be provided together", label)
@@ -136,96 +115,36 @@ func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.M
 	return nil
 }
 
-// validatePeriodSeries 校验按序列的全集与失败名单：序列不重复、失败名单是全集的子集；
-// 序列全集必填，它包含的标的必须正好是 universe_subject_ids（没有任何标的的事件两者都为空）。
-// 失败序列的标的必须在 failed_subjects 里：标的口径沿用原有定义（统一数据集执行计划 3.4），有一条序列失败的标的就记入失败标的，
-// 只读按标的字段的消费方（单市场任务、K 线 View）才不会把失败序列的标的当成可用。
-func validatePeriodSeries(payload *storagepb.DatasetPeriodCompleted, subjects, failedSubjects map[string]struct{}, label string) error {
-	universe := make(map[string]struct{}, len(payload.GetUniverseSeries()))
-	seenSubjects := make(map[string]struct{}, len(subjects))
-	for i, series := range payload.GetUniverseSeries() {
-		key, err := seriesRefKey(series)
-		if err != nil {
-			return fmt.Errorf("%s universe_series item %d: %w", label, i, err)
-		}
-		if _, ok := universe[key]; ok {
-			return fmt.Errorf("%s universe_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
-		}
-		universe[key] = struct{}{}
-		if _, ok := subjects[series.GetSubjectId()]; !ok {
-			return fmt.Errorf("%s universe_series subject %q is not in universe_subject_ids", label, series.GetSubjectId())
-		}
-		seenSubjects[series.GetSubjectId()] = struct{}{}
-	}
-	if len(seenSubjects) != len(subjects) {
-		return fmt.Errorf("%s universe_series does not cover every subject in universe_subject_ids", label)
-	}
-	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
-	for i, series := range payload.GetFailedSeries() {
-		key, err := seriesRefKey(series)
-		if err != nil {
-			return fmt.Errorf("%s failed_series item %d: %w", label, i, err)
-		}
-		if _, ok := failed[key]; ok {
-			return fmt.Errorf("%s failed_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
-		}
-		failed[key] = struct{}{}
-		if _, ok := universe[key]; !ok {
-			return fmt.Errorf("%s failed_series %q is not in universe_series", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
-		}
-		if _, ok := failedSubjects[series.GetSubjectId()]; !ok {
-			return fmt.Errorf("%s failed_series subject %q is not in failed_subjects", label, series.GetSubjectId())
-		}
-	}
-	if payload.GetStatus() == "complete" && len(failed) != 0 {
-		return fmt.Errorf("%s complete status has failed_series", label)
-	}
-	return nil
-}
-
-// seriesRefKey 校验一条序列引用并返回它的键。series_tag 与行键里的 series_tag 同一套规则（validateSeriesTag），
-// 否则事件里的序列可能对不上 Storage 实际存下的序列。
-func seriesRefKey(series *storagepb.SeriesRef) (string, error) {
-	if series == nil || !validRequiredToken(series.GetSubjectId()) || !validRequiredToken(series.GetSeriesTag()) {
-		return "", fmt.Errorf("subject_id and series_tag are required")
-	}
-	if err := validateSeriesTag(series.GetSeriesTag()); err != nil {
-		return "", fmt.Errorf("series_tag: %w", err)
-	}
-	return series.GetSubjectId() + "\x00" + series.GetSeriesTag(), nil
-}
-
 func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*storagepb.ViewDataReady)
 	if !ok {
 		return fmt.Errorf("view data ready payload has type %T", value)
 	}
-	if err := validateStoragePeriod(message, payload.GetViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view data ready"); err != nil {
+	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view data ready"); err != nil {
 		return err
 	}
 	if !validRequiredToken(payload.GetCompletionEventId()) {
 		return fmt.Errorf("view data ready completion_event_id is required")
 	}
-	if !validRequiredToken(payload.GetViewConfigId()) {
-		return fmt.Errorf("view data ready view_config_id is required")
-	}
-	if !validRequiredToken(payload.GetDatasetId()) {
-		return fmt.Errorf("view data ready dataset_id is required")
-	}
-	if !validRequiredToken(payload.GetVisibleScope()) {
-		return fmt.Errorf("view data ready visible_scope is required")
-	}
-	if payload.GetStatus() == "complete" && validRequiredToken(payload.GetFailedScopeRef()) {
-		return fmt.Errorf("view data ready complete status has failed_scope_ref")
-	}
-	if payload.GetStatus() == "degraded" && !validRequiredToken(payload.GetFailedScopeRef()) {
-		return fmt.Errorf("view data ready degraded status requires failed_scope_ref")
-	}
 	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") {
 		return fmt.Errorf("view data ready detail and detail_type must be provided together")
 	}
-	if _, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids"); err != nil {
+	universe, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids")
+	if err != nil {
 		return err
+	}
+	// failed_subjects 原样取自周期完成事件：是全集的子集，complete 时为空；degraded 时可以为空（降级但说不出具体标的）。
+	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, "view data ready failed_subjects")
+	if err != nil {
+		return err
+	}
+	if payload.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("view data ready complete status has failed_subjects")
+	}
+	for subject := range failed {
+		if _, ok := universe[subject]; !ok {
+			return fmt.Errorf("view data ready failed_subject %q is not in universe_subject_ids", subject)
+		}
 	}
 	return nil
 }
@@ -249,33 +168,19 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 			return fmt.Errorf("collector kline backfilled subject_id %q is invalid", subject)
 		}
 	}
-	if _, err := validateUniqueTokens(payload.GetSeriesTags(), false, "collector kline backfilled series_tags"); err != nil {
-		return err
+	// start、end 是 Unix 秒（数据坐标），都要为正且 end 晚于 start。
+	if start, end := payload.GetStart(), payload.GetEnd(); start <= 0 || end <= start {
+		return fmt.Errorf("K 线补写事件的 start、end 必须是正的 Unix 秒且 end 晚于 start")
 	}
-	for _, tag := range payload.GetSeriesTags() {
-		if err := validateSeriesTag(tag); err != nil {
-			return fmt.Errorf("collector kline backfilled series_tag %q: %w", tag, err)
-		}
-	}
-	start, end := payload.GetStart(), payload.GetEnd()
-	if start == nil || end == nil || start.CheckValid() != nil || end.CheckValid() != nil || !end.AsTime().After(start.AsTime()) {
-		return fmt.Errorf("collector kline backfilled range is invalid")
-	}
-	if payload.GetConfirmedAt() == nil || payload.GetConfirmedAt().CheckValid() != nil {
-		return fmt.Errorf("collector kline backfilled confirmed_at is invalid")
+	if payload.GetConfirmedAt() <= 0 {
+		return fmt.Errorf("K 线补写事件的 confirmed_at 必须是正的 Unix 毫秒")
 	}
 	for _, absent := range payload.GetAbsent() {
 		if !validRequiredToken(absent.GetSubjectId()) {
 			return fmt.Errorf("collector kline backfilled absent subject_id %q is invalid", absent.GetSubjectId())
 		}
-		if tag := absent.GetSeriesTag(); tag != "" {
-			if err := validateSeriesTag(tag); err != nil {
-				return fmt.Errorf("collector kline backfilled absent series_tag %q: %w", tag, err)
-			}
-		}
-		from, to := absent.GetStart(), absent.GetEnd()
-		if from == nil || to == nil || from.CheckValid() != nil || to.CheckValid() != nil || !to.AsTime().After(from.AsTime()) {
-			return fmt.Errorf("collector kline backfilled absent range is invalid")
+		if from, to := absent.GetStart(), absent.GetEnd(); from <= 0 || to <= from {
+			return fmt.Errorf("K 线补写事件 absent 的 start、end 必须是正的 Unix 秒且 end 晚于 start")
 		}
 	}
 	switch payload.GetOrigin() {
@@ -286,7 +191,8 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	}
 }
 
-func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency string, periodTime int64, status string, timestamp *timestamppb.Timestamp, label string) error {
+// validateStoragePeriod 校验周期事件的公共部分；at 是事件里的时刻（Unix 毫秒），必须为正。
+func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency string, periodTime int64, status string, at int64, label string) error {
 	if !validRequiredToken(routeID) || message == nil || routeID != message.GetSubjectId() {
 		return fmt.Errorf("%s route identity does not match subject_id", label)
 	}
@@ -296,8 +202,8 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	if !validCompletionStatus(status) {
 		return fmt.Errorf("%s status %q is invalid", label, status)
 	}
-	if timestamp == nil || timestamp.CheckValid() != nil {
-		return fmt.Errorf("%s timestamp is invalid", label)
+	if at <= 0 {
+		return fmt.Errorf("%s 的时刻必须是正的 Unix 毫秒", label)
 	}
 	return nil
 }
@@ -347,18 +253,11 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if payload.GetSessionStartedAt() <= 0 {
 		return fmt.Errorf("trade target weight session_started_at must be positive")
 	}
-	if payload.GetBarEndTime() == nil || payload.GetValidUntil() == nil {
-		return fmt.Errorf("trade target weight timestamps are required")
+	if payload.GetBarEndTime() <= 0 {
+		return fmt.Errorf("目标权重事件的 bar_end_time 必须是正的 Unix 毫秒")
 	}
-	for name, timestamp := range map[string]*timestamppb.Timestamp{
-		"bar_end_time": payload.GetBarEndTime(), "valid_until": payload.GetValidUntil(),
-	} {
-		if err := timestamp.CheckValid(); err != nil {
-			return fmt.Errorf("trade target weight %s: %w", name, err)
-		}
-	}
-	if !payload.GetValidUntil().AsTime().After(payload.GetBarEndTime().AsTime()) {
-		return fmt.Errorf("trade target weight valid_until must be after bar_end_time")
+	if payload.GetValidUntil() <= payload.GetBarEndTime() {
+		return fmt.Errorf("目标权重事件的 valid_until 必须晚于 bar_end_time")
 	}
 	type instrumentKey struct{ instrumentID, marketType string }
 	seenInstruments := make(map[instrumentKey]struct{}, len(payload.GetTargets()))
@@ -373,7 +272,7 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 		}
 		marketType := target.GetMarketType()
 		if !validTargetMarketType(marketType) {
-			return fmt.Errorf("trade target weight %d market_type %q must be SPOT, SWAP or STOCK", i, marketType)
+			return fmt.Errorf("trade target weight %d market_type %q must be spot, swap or equity", i, marketType)
 		}
 		key := instrumentKey{instrumentID: instrumentID, marketType: marketType}
 		if _, exists := seenInstruments[key]; exists {
@@ -407,7 +306,7 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 
 // validTargetMarketType 判断目标里的市场是否是 Trade 认识的三种市场之一。
 func validTargetMarketType(value string) bool {
-	return value == "SPOT" || value == "SWAP" || value == "STOCK"
+	return value == "spot" || value == "swap" || value == "equity"
 }
 
 func validateSeriesTag(value string) error {

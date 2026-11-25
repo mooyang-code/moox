@@ -2,8 +2,6 @@ package sysdeploy
 
 import "time"
 
-const GatewayConflictWindow = 5 * time.Minute
-
 type HostRecord struct {
 	HostID         string `gorm:"column:c_host_id;primaryKey"`
 	Label          string `gorm:"column:c_label"`
@@ -36,37 +34,23 @@ type DeploymentRecord struct {
 
 func (DeploymentRecord) TableName() string { return "t_deployments" }
 
+// HostGatewayStatus 是网关最近一次拉取快照时记下的状态：拉取兼作心跳，每次都写。
 type HostGatewayStatus struct {
-	HostID             string     `gorm:"column:c_host_id;primaryKey"`
-	InstanceID         string     `gorm:"column:c_instance_id"`
-	Version            string     `gorm:"column:c_version"`
-	ExpectedHash       string     `gorm:"column:c_expected_hash"`
-	AppliedHash        string     `gorm:"column:c_applied_hash"`
-	RouteCount         int64      `gorm:"column:c_route_count"`
-	LastSeenAt         *time.Time `gorm:"column:c_last_seen_at"`
-	LastError          string     `gorm:"column:c_last_error"`
-	PreviousInstanceID string     `gorm:"column:c_previous_instance_id"`
-	ReplacedAt         *time.Time `gorm:"column:c_replaced_at"`
-	ConflictInstanceID string     `gorm:"column:c_conflict_instance_id"`
-	ConflictSeenAt     *time.Time `gorm:"column:c_conflict_seen_at"`
-	// RelaySessions 是 control 网关上报的反向连接会话（JSON 数组），其他主机为空。
+	HostID       string     `gorm:"column:c_host_id;primaryKey"`
+	ExpectedHash string     `gorm:"column:c_expected_hash"`
+	AppliedHash  string     `gorm:"column:c_applied_hash"`
+	LastSeenAt   *time.Time `gorm:"column:c_last_seen_at"`
+	// RelaySessions 是 control 网关带来的反向连接会话（JSON 数组），其他主机为空。
 	RelaySessions string `gorm:"column:c_relay_sessions"`
 }
 
 func (HostGatewayStatus) TableName() string { return "t_host_gateway_status" }
 
-// ClearExpiredConflict gives readers the same expiry even when an offline
-// gateway sends no further heartbeat. The next status write persists it.
-func (s *HostGatewayStatus) ClearExpiredConflict(now time.Time) {
-	if s.ConflictSeenAt != nil && !now.Before(s.ConflictSeenAt.Add(GatewayConflictWindow)) {
-		s.ConflictInstanceID, s.ConflictSeenAt = "", nil
-	}
-}
-
-// HostSpec contains deployment input, not runtime status. Synchronization keeps
-// the existing host and deployment enablement values.
+// HostSpec 是 moox.toml 里一台主机的完整声明，含启停状态：部署时整份覆盖 Admin 的主机与部署。
 type HostSpec struct {
-	HostID         string
+	HostID string
+	// Enabled 为 false 时主机记为停用。
+	Enabled        bool
 	Label          string
 	Address        string
 	PrivateAddress string
@@ -77,6 +61,8 @@ type HostSpec struct {
 	Region        string
 	Description   string
 	Components    []string
+	// DisabledComponents 是 Components 里记为停用的组件（[deployments_disabled]）。
+	DisabledComponents []string
 	// SSH 为空表示控制台不能 SSH 到这台主机，已存的凭据同时被清除。
 	SSH *SSHSpec
 }

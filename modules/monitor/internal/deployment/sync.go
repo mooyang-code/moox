@@ -9,17 +9,16 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 )
 
-// Syncer 定期从 Admin 同步部署拓扑（每台主机应该有哪些组件）与各主机网关的状态。
-// 组件健康只看上报（设计 3.8），这里不生成任何探测检查。
+// Syncer 定期从 Admin 同步部署拓扑（每台主机应该有哪些组件）。
+// 组件健康（含主机网关）只看上报（设计 3.8），这里不生成任何探测检查。
 type Syncer struct {
 	topology *store.TopologyRepository
 	source   Source
-	gateways *store.GatewayRepository
 	now      func() time.Time
 }
 
-func NewSyncer(topology *store.TopologyRepository, source Source, gateways *store.GatewayRepository) *Syncer {
-	return &Syncer{topology: topology, source: source, gateways: gateways, now: time.Now}
+func NewSyncer(topology *store.TopologyRepository, source Source) *Syncer {
+	return &Syncer{topology: topology, source: source, now: time.Now}
 }
 
 func (s *Syncer) Sync(ctx context.Context) error {
@@ -30,11 +29,8 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// 拓扑写库前整份校验（目录、主机与部署不重复、状态合法），不合法时不写入、也不同步网关状态。
-	if err := s.topology.Reconcile(ctx, topologySnapshot(snapshot, s.now().UTC())); err != nil {
-		return err
-	}
-	return s.syncGateways(ctx, snapshot)
+	// 拓扑写库前整份校验（目录、主机与部署不重复、状态合法），不合法时不写入。
+	return s.topology.Reconcile(ctx, topologySnapshot(snapshot, s.now().UTC()))
 }
 
 func topologySnapshot(snapshot Snapshot, now time.Time) domain.TopologySnapshot {

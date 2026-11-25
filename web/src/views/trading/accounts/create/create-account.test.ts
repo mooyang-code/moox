@@ -2,7 +2,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
-import { TradeResponseError, type LogicalAccount } from "@/api/trade";
+import { type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
   createPaperSimulation: vi.fn(),
@@ -17,6 +17,11 @@ vi.mock("@/api/trade", async () => ({
 }));
 vi.mock("../shared/exchange-secrets", () => ({ loadExchangeSecrets: vi.fn(async () => []) }));
 import CreateAccount from "./index.vue";
+import { RequestError } from "@/api/http";
+
+// 交易服务的业务失败：消息就是 ret_info.msg，响应体原样带上
+const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
+  new RequestError(response.ret_info.msg, response);
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -43,7 +48,7 @@ async function openDialog(logicals: LogicalAccount[] = [existing]) {
   wrapper = mount(CreateAccount, { props: { logicals, accounts: [] }, global: { plugins: [ArcoVue] } });
   const vm = wrapper.vm as unknown as DialogVM;
   vm.open("paper");
-  Object.assign(vm.form, { name: "新账户", markets: [1, 2], join: "exist", existingLogicalId: "la-existing" });
+  Object.assign(vm.form, { name: "新账户", markets: ["spot", "swap"], join: "exist", existingLogicalId: "la-existing" });
   // 打开对话框会使进行中的提交失效，等监听跑完再提交
   await flushPromises();
   return vm;
@@ -68,7 +73,7 @@ describe("新建账户提交", () => {
     await vm.submit();
     expect(mocks.createPaperSimulation).toHaveBeenCalledTimes(1);
     expect(mocks.createPaperSimulation).toHaveBeenCalledWith(
-      expect.objectContaining({ logical_account_id: "la-existing", logical_account_name: "", markets: [1, 2] })
+      expect.objectContaining({ logical_account_id: "la-existing", logical_account_name: "", markets: ["spot", "swap"] })
     );
     expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
     expect(wrapper.emitted("created")).toEqual([["paper"]]);
@@ -187,21 +192,21 @@ describe("新建账户提交", () => {
       expect(nextButton()?.disabled).toBe(true);
 
       mocks.inspectExchangeCredential.mockResolvedValueOnce({
-        inspection: { account_mode: "BINANCE_STANDARD", available_markets: [1, 2] }
+        inspection: { account_mode: "BINANCE_STANDARD", available_markets: ["spot", "swap"] }
       });
       Object.assign(vm.form, { secretId: "s3" });
       await flushPromises();
       await vi.waitFor(() => expect(nextButton()?.disabled).toBe(false));
     });
 
-    const liveForm = { kind: "testnet", secretId: "s1", name: "实盘账户", markets: [2] };
+    const liveForm = { kind: "testnet", secretId: "s1", name: "实盘账户", markets: ["swap"] };
 
     it("第三步按所选市场再检测一次：和市场有关的阻断项在这里拦，第二步只拦和市场无关的", async () => {
       const vm = await openDialog();
       vm.open("prod");
-      Object.assign(vm.form, { step: 1, name: "实盘账户", secretId: "s1", markets: [1, 2] });
+      Object.assign(vm.form, { step: 1, name: "实盘账户", secretId: "s1", markets: ["spot", "swap"] });
       mocks.inspectExchangeCredential.mockResolvedValueOnce({
-        inspection: { account_mode: "BINANCE_STANDARD", available_markets: [1, 2] }
+        inspection: { account_mode: "BINANCE_STANDARD", available_markets: ["spot", "swap"] }
       });
       await flushPromises();
       await vi.waitFor(() => expect(nextButton()?.disabled).toBe(false));
@@ -214,25 +219,25 @@ describe("新建账户提交", () => {
       vm.form.step = 2;
       await flushPromises();
       await vi.waitFor(() => expect(document.body.textContent).toContain("合约是双向持仓"));
-      expect(mocks.inspectExchangeCredential.mock.calls[1][0].markets).toEqual([1, 2]);
+      expect(mocks.inspectExchangeCredential.mock.calls[1][0].markets).toEqual(["spot", "swap"]);
       expect(nextButton()?.disabled).toBe(true);
     });
 
     it("币安测试网一个账户只能开通一个市场：勾另一个市场是切换，不是追加", async () => {
       const vm = await openDialog();
       vm.open("testnet");
-      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", markets: [2] });
+      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", markets: ["swap"] });
       await flushPromises();
       const spot = [...document.querySelectorAll<HTMLElement>(".arco-checkbox")].find(item => item.textContent?.includes("现货"));
       spot!.querySelector("input")!.click();
       await flushPromises();
-      expect(vm.form.markets).toEqual([1]);
+      expect(vm.form.markets).toEqual(["spot"]);
     });
 
     it("币安测试网单选：取消勾选照常生效；已勾两个市场时换成测试网会收成一个", async () => {
       const vm = await openDialog();
       vm.open("testnet");
-      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", markets: [2] });
+      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", markets: ["swap"] });
       await flushPromises();
       const checkbox = (label: string) =>
         [...document.querySelectorAll<HTMLElement>(".arco-checkbox")]
@@ -243,12 +248,12 @@ describe("新建账户提交", () => {
       expect(vm.form.markets, "取消勾选生效").toEqual([]);
 
       // OKX 测试网可以勾两个市场；换成币安后收成一个，之后能正常取消。
-      Object.assign(vm.form, { exchange: 2, markets: [1, 2] });
+      Object.assign(vm.form, { exchange: "okx", markets: ["spot", "swap"] });
       await flushPromises();
-      expect(vm.form.markets).toEqual([1, 2]);
-      vm.form.exchange = 1;
+      expect(vm.form.markets).toEqual(["spot", "swap"]);
+      vm.form.exchange = "binance";
       await flushPromises();
-      expect(vm.form.markets).toEqual([1]);
+      expect(vm.form.markets).toEqual(["spot"]);
       checkbox("现货").click();
       await flushPromises();
       expect(vm.form.markets).toEqual([]);
@@ -257,7 +262,7 @@ describe("新建账户提交", () => {
     it("收成一个市场后默认费率跟着重算：OKX 测试网勾两个市场后换成币安测试网，费率按现货默认", async () => {
       const vm = await openDialog();
       vm.open("testnet");
-      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", exchange: 2, markets: [2] });
+      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", exchange: "okx", markets: ["swap"] });
       await flushPromises();
       const checkbox = (label: string) =>
         [...document.querySelectorAll<HTMLElement>(".arco-checkbox")]
@@ -265,18 +270,18 @@ describe("新建账户提交", () => {
           .querySelector("input")!;
       checkbox("现货").click();
       await flushPromises();
-      expect(vm.form.markets).toEqual([1, 2]);
+      expect(vm.form.markets).toEqual(["spot", "swap"]);
       expect([vm.form.makerFeeRate, vm.form.takerFeeRate]).toEqual(["0.0002", "0.0005"]);
 
-      vm.form.exchange = 1;
+      vm.form.exchange = "binance";
       await flushPromises();
-      expect(vm.form.markets).toEqual([1]);
+      expect(vm.form.markets).toEqual(["spot"]);
       expect([vm.form.makerFeeRate, vm.form.takerFeeRate], "按现货的默认费率").toEqual(["0.001", "0.001"]);
 
       // 手工改过费率的不覆盖。
-      Object.assign(vm.form, { exchange: 2, markets: [1, 2], makerFeeRate: "0.0003", feesEdited: true });
+      Object.assign(vm.form, { exchange: "okx", markets: ["spot", "swap"], makerFeeRate: "0.0003", feesEdited: true });
       await flushPromises();
-      vm.form.exchange = 1;
+      vm.form.exchange = "binance";
       await flushPromises();
       expect(vm.form.makerFeeRate).toBe("0.0003");
     });
@@ -355,13 +360,13 @@ describe("新建账户提交", () => {
       expect(document.body.textContent).toContain("接管账户里已有的持仓");
       // 普通的参数不合法不再猜测是要接管
       mocks.addLogicalAccountMember.mockRejectedValueOnce(
-        new TradeResponseError({ ret_info: { code: 1, msg: "组合成员的环境和结算资产必须一致" } })
+        tradeFailure({ ret_info: { code: 1, msg: "组合成员的环境和结算资产必须一致" } })
       );
       await vm.submit();
       await flushPromises();
       expect(document.body.textContent).not.toContain("后再点一次。");
       mocks.addLogicalAccountMember.mockRejectedValueOnce(
-        new TradeResponseError({
+        tradeFailure({
           ret_info: { code: 20, msg: "执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位" }
         })
       );

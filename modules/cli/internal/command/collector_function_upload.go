@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/spf13/cobra"
 )
 
@@ -76,15 +77,15 @@ func runCollectorFunctionUpload(ctx context.Context, out io.Writer, opts collect
 		return err
 	}
 	defer gateway.Close()
-	client := &adminclient.Client{Gateway: gateway, SpaceID: opts.SpaceID}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: opts.SpaceID}
 	packageName := defaultFlag(strings.TrimSpace(opts.PackageName), "moox-collector-"+opts.SpaceID+"-plan")
-	pkg, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
+	pkg, err := client.UploadPackage(ctx, &collectorpb.InitPackageUploadReq{
 		PackageName: packageName, Version: defaultFlag(opts.Version, "dev"), Runtime: collectorFunctionRuntime,
-		CloudAccountID: opts.CloudAccountID, Filename: filepath.Base(zipPath),
+		CloudAccountId: opts.CloudAccountID, Filename: filepath.Base(zipPath),
 	}, data)
 	if err != nil {
 		return err
 	}
-	return printJSON(out, map[string]any{"status": pkg.Status, "package_id": pkg.PackageID, "package_name": packageName, "zip": zipPath, "bytes": len(data),
+	return printJSON(out, map[string]any{"status": pkg.GetStatus(), "package_id": pkg.GetPackageId(), "package_name": packageName, "zip": zipPath, "bytes": len(data),
 		"message": "Collector 按包名自动使用最新可用版本，落后的函数会自动升级，无需修改配置"})
 }

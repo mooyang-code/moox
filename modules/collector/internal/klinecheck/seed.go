@@ -16,13 +16,13 @@ import (
 
 // 历史补齐（首次接入时把历史补到保留期与行情源都允许的深度）。
 //
-// 流程：时间线里一个数据集刚出现（最早生效点在最近 seedRecentWindow 内）→ 建补齐记录（此刻起下游不生效）→
-// 按标的分批拼缺口、建补采作业 → 作业全部结束（失败分块自动重试一次）→ 记 done，下游放行。
-// 已有数据的数据集（最早生效点更早）不补，所以功能上线不会让线上已有的数据集进入不生效状态。
+// 流程：采集计划的决策表为一个数据集写下第一行时间线（新数据集的“加一份”，或重新登记之后的第一份）→
+// 时间线里有这个数据集、却还没有补齐记录 → 建补齐记录（此刻起下游不生效）→ 按标的分批拼缺口、建补采作业 →
+// 作业全部结束（失败分块自动重试一次）→ 记 done，下游放行。
+// “首次接入”只看补齐记录在不在：时间线只由决策表写，重新登记（Reset）把时间线与补齐记录一起清掉；
+// 记录按（空间, 数据集, 频率）唯一，停掉后又加回来的数据集已有记录，不再补。
 
 const (
-	// seedRecentWindow 是“新数据集”的判定窗口：最早生效点在这个时间内才补。
-	seedRecentWindow = 24 * time.Hour
 	// seedDefaultSubjectsPerJob 是一个补齐作业最多放的标的数。
 	seedDefaultSubjectsPerJob = 500
 	// seedSampleWindow 是估计剩余时间用的采样窗口。
@@ -141,7 +141,7 @@ func (b *Backfiller) SeedTick(ctx context.Context, spaceID string) error {
 	return b.advanceSeeds(ctx, spaceID)
 }
 
-// startSeeds 为时间线里刚出现的数据集建补齐记录并在后台拼作业。
+// startSeeds 为时间线里还没有补齐记录的数据集建记录并在后台拼作业。
 func (b *Backfiller) startSeeds(ctx context.Context, spaceID string) error {
 	timeline, err := loadTimeline(ctx, b.Checker.Timeline, spaceID)
 	if err != nil {
@@ -152,16 +152,12 @@ func (b *Backfiller) startSeeds(ctx context.Context, spaceID string) error {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	now := b.now()
 	for _, key := range keys {
 		segments := timeline[key]
 		if len(segments) == 0 || !timeline.Active(key) {
 			continue
 		}
 		effective := time.Unix(segments[0].From, 0).UTC()
-		if now.Sub(effective) > seedRecentWindow {
-			continue
-		}
 		datasetID, frequency, _ := strings.Cut(key, "|")
 		if _, exists, err := b.Store.HistorySeedOf(ctx, spaceID, datasetID, frequency); err != nil {
 			return err
@@ -198,7 +194,11 @@ func (b *Backfiller) beginSeed(ctx context.Context, spaceID, datasetID, frequenc
 	if err != nil || !created || seed.Status == store.SeedDone {
 		return err
 	}
-	b.prepareAsync(spaceID, seed, first)
+	// 第一行时间线在 Storage 确认登记时写，生效点还在未来（提前量几分钟）：记录先建好、下游先不生效，
+	// 作业等到生效点之后再拼（advanceSeeds 接着做），补齐范围才能一直补到生效点，不在生效点前留几分钟的空洞。
+	if !now.Before(effective) {
+		b.prepareAsync(spaceID, seed, first)
+	}
 	return nil
 }
 
@@ -241,12 +241,10 @@ func (b *Backfiller) prepareAsync(spaceID string, seed store.HistorySeed, first 
 }
 
 // seedBatchSize 估计一次检查放多少个标的：检查的（标的 × K 线）总数、返回的缺口数都有上限。
-// gaps 是每个标的（每个 tag）预计的缺口数：合并时约 K 线数 ÷ MaxChunkBars，不合并时每个交易时段一段。
-func seedBatchSize(perJob, bars, groups, gaps int) int {
-	points := max(bars*max(groups, 1), 1)
-	batch := min(perJob, max(MaxCheckPoints/points, 1))
-	gapsPerSubject := max(gaps, 1) * max(groups, 1)
-	return min(batch, max(MaxGaps*3/4/gapsPerSubject, 1))
+// gaps 是每个标的预计的缺口数：合并时约 K 线数 ÷ MaxChunkBars，不合并时每个交易时段一段。
+func seedBatchSize(perJob, bars, gaps int) int {
+	batch := min(perJob, max(MaxCheckPoints/max(bars, 1), 1))
+	return min(batch, max(MaxGaps*3/4/max(gaps, 1), 1))
 }
 
 // sessionCount 数应有的 K 线里连续的段数（休市区间把它们隔开）。
@@ -276,13 +274,7 @@ func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store
 	if limit := alignDown(frequency, b.now()); limit.Before(to) {
 		to = limit
 	}
-	subjects := append([]string(nil), first.Subjects...)
-	if len(subjects) == 0 {
-		for _, group := range first.groups() {
-			subjects = append(subjects, group.Subjects...)
-		}
-	}
-	subjects = uniqueSorted(subjects)
+	subjects := uniqueSorted(first.Subjects)
 	expected, err := b.Checker.expectedBars(spaceID, frequency, seed.Frequency, seed.TargetFrom, to, 0)
 	if err != nil {
 		return err
@@ -292,7 +284,7 @@ func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store
 	if !merge {
 		gapsPerSubject += sessionCount(expected, frequency)
 	}
-	batchSize := seedBatchSize(b.seedSubjectsPerJob(), len(expected), len(first.groups()), gapsPerSubject)
+	batchSize := seedBatchSize(b.seedSubjectsPerJob(), len(expected), gapsPerSubject)
 	jobs := 0
 	for from := 0; from < len(subjects); from += batchSize {
 		batch := subjects[from:min(from+batchSize, len(subjects))]
@@ -339,9 +331,12 @@ func (b *Backfiller) cancelJobs(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// submitSeedBatch 检查一批标的的缺口并建一个补采作业；检查结果被截断时把批对半拆开重来。没有缺口返回空作业 ID。
+// submitSeedBatch 检查一批标的的缺口并建一个补采作业；没有缺口返回空作业 ID。
+// 检查结果被截断（缺口数超过 MaxGaps）时直接返回错误，不拆批重来：记录停在 preparing，advanceSeeds 每分钟重拼同一批、
+// 再次截断，下游一直不生效，只能 collector history-seed skip 放行。批大小按全新数据集的缺口数估计（seedBatchSize），
+// 只有补齐区间里已有零碎数据、缺口数远超估计时才会截断（已知差别，见采集.md 第 3b 节）。
 func (b *Backfiller) submitSeedBatch(ctx context.Context, spaceID string, seed store.HistorySeed, batch []string, to time.Time, merge bool) (string, error) {
-	request := Request{SpaceID: spaceID, DatasetID: seed.DatasetID, Subjects: batch, From: seed.TargetFrom, To: to, BeforeFirstPlan: true}
+	request := Request{SpaceID: spaceID, DatasetID: seed.DatasetID, Subjects: batch, From: seed.TargetFrom, To: to, FullHistory: true}
 	if merge {
 		request.MergeSessions, request.MaxGapBars = true, MaxChunkBars
 	}
@@ -393,17 +388,26 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 		key := seedKey(spaceID, seed.DatasetID, seed.Frequency)
 		switch seed.Status {
 		case store.SeedPreparing:
-			// 本进程没有在拼它（进程重启过）：重新拼。
+			// 本进程没有在拼它（进程重启过，或生效点刚到）：重新拼。
 			b.mu.Lock()
 			busy := b.seedPreparing[key]
 			b.mu.Unlock()
-			if !busy {
+			if !busy && !now.Before(seed.EffectiveFrom) {
 				first, ok, err := b.firstSegment(ctx, spaceID, seed)
 				if err != nil {
 					return err
 				}
 				if ok {
 					b.prepareAsync(spaceID, seed, first)
+					continue
+				}
+				// 时间线里已经没有这个数据集（生效点之前又停止了采集）：没有可补的标的，记 done 放行，不让记录一直挡着下游。
+				if err := b.cancelJobs(ctx, seed.JobIDs); err != nil {
+					return err
+				}
+				seed.Status, seed.FinishedAt, seed.Note = store.SeedDone, &now, "生效前已停止采集，不补"
+				if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing); err != nil {
+					return err
 				}
 			}
 		case store.SeedRunning:

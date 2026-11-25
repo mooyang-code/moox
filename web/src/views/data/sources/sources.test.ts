@@ -7,11 +7,7 @@ import type { DataSource } from "@/api/storage/types";
 const api = vi.hoisted(() => ({
   listDataSources: vi.fn(async () => ({ data_sources: [], page_result: { total: 0 } })),
   createDataSource: vi.fn(async () => ({})),
-  updateDataSource: vi.fn(async () => ({})),
-  listFields: vi.fn(async () => ({
-    fields: [{ field_id: "funding_rate", name: "资金费率" }],
-    page_result: { has_more: false }
-  }))
+  updateDataSource: vi.fn(async () => ({}))
 }));
 vi.mock("@/api/storage/metadata", () => api);
 const collector = vi.hoisted(() => ({
@@ -20,21 +16,30 @@ const collector = vi.hoisted(() => ({
       extra_fields: [
         {
           field_id: "funding_rate",
+          display_name: "资金费率",
+          group: "合约指标",
           market_id: "crypto",
           instrument_type: "swap",
           frequencies: ["1h", "1d"],
           provider_id: "binance"
         },
-        { field_id: "adj_factor", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "sina_hfq" }
+        {
+          field_id: "adj_factor",
+          display_name: "后复权因子",
+          market_id: "stockcn",
+          instrument_type: "equity",
+          frequencies: ["1d"],
+          provider_id: "sina_hfq"
+        }
       ]
     }
   }))
 }));
 vi.mock("@/api/collector", () => collector);
-vi.mock("@/api/admin/spaces", () => ({
+vi.mock("@/api/storage/spaces", () => ({
   listSpaces: vi.fn(async () => ({ spaces: [{ space_id: "crypto", name: "crypto", status: "active", timezone: "UTC" }] }))
 }));
-vi.mock("@/api/admin/http", () => ({ reportControlError: vi.fn() }));
+vi.mock("@/api/http", () => ({ reportError: vi.fn() }));
 import { useSpaceStore } from "@/store/modules/space";
 import SourcesPage from "./index.vue";
 import { buildExtraFieldSources } from "./extra-field-sources";
@@ -105,8 +110,22 @@ describe("数据源弹窗", () => {
 
 describe("附加字段来源", () => {
   const options = [
-    { field_id: "adj_factor", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "sina_hfq" },
-    { field_id: "sw_l1", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "swsresearch" },
+    {
+      field_id: "adj_factor",
+      display_name: "后复权因子",
+      market_id: "stockcn",
+      instrument_type: "equity",
+      frequencies: ["1d"],
+      provider_id: "sina_hfq"
+    },
+    {
+      field_id: "sw_l1",
+      display_name: "申万一级行业",
+      market_id: "stockcn",
+      instrument_type: "equity",
+      frequencies: ["1d"],
+      provider_id: "swsresearch"
+    },
     { field_id: "sw_l2", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "swsresearch" },
     {
       field_id: "fin_revenue",
@@ -115,15 +134,18 @@ describe("附加字段来源", () => {
       frequencies: ["1d"],
       provider_id: "sina_finance"
     },
-    { field_id: "funding_rate", market_id: "crypto", instrument_type: "swap", frequencies: ["1h", "1d"], provider_id: "binance" }
+    {
+      field_id: "funding_rate",
+      display_name: "资金费率",
+      market_id: "crypto",
+      instrument_type: "swap",
+      frequencies: ["1h", "1d"],
+      provider_id: "binance"
+    }
   ];
 
   it("按提供方归并当前空间的附加字段，带中文名和各自的字段", () => {
-    const names = new Map([
-      ["adj_factor", "后复权因子"],
-      ["sw_l1", "申万一级行业"]
-    ]);
-    expect(buildExtraFieldSources(options, "stockcn", names)).toEqual([
+    expect(buildExtraFieldSources(options, "stockcn")).toEqual([
       {
         provider_id: "sina_hfq",
         name: "复权因子（新浪）",
@@ -138,7 +160,7 @@ describe("附加字段来源", () => {
         frequencies: "1d",
         fields: [
           { field_id: "sw_l1", name: "申万一级行业" },
-          // 字段目录里没有的显示字段 ID
+          // 接口没给显示名时显示字段 ID
           { field_id: "sw_l2", name: "sw_l2" }
         ]
       },
@@ -150,10 +172,10 @@ describe("附加字段来源", () => {
         fields: [{ field_id: "fin_revenue", name: "fin_revenue" }]
       }
     ]);
-    expect(buildExtraFieldSources(options, "crypto", new Map()).map(row => [row.name, row.instruments, row.frequencies])).toEqual(
-      [["资金费率（币安）", "永续", "1h、1d"]]
-    );
-    expect(buildExtraFieldSources(options, "other", new Map())).toEqual([]);
+    expect(buildExtraFieldSources(options, "crypto").map(row => [row.name, row.instruments, row.frequencies])).toEqual([
+      ["资金费率（币安）", "永续", "1h、1d"]
+    ]);
+    expect(buildExtraFieldSources(options, "other")).toEqual([]);
   });
 
   it("数据源页面列出当前空间的附加字段来源", async () => {
@@ -165,7 +187,7 @@ describe("附加字段来源", () => {
     const section = wrapper.find(".extra-sources");
     expect(section.exists()).toBe(true);
     expect(section.text()).toContain("资金费率（币安）");
-    expect(section.text()).toContain("funding_rate");
+    expect(section.text()).toContain("资金费率");
     // 别的空间的来源不出现
     expect(section.text()).not.toContain("复权因子");
   });

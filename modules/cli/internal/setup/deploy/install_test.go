@@ -147,7 +147,7 @@ func TestInstallScriptInstallsHostGatewayAndHostAgent(t *testing.T) {
 	units := filepath.Join(client.home, ".config", "systemd", "user")
 	require.NoError(t, os.WriteFile(filepath.Join(units, "moox-old.service"), []byte("[Unit]\n"), 0o644))
 
-	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 1 0\nhost-agent 1 0\n", "moox-host-gateway.service", "moox-host-agent.service"), nil)
+	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 1 1\nhost-agent 1 1\n", "moox-host-gateway.service", "moox-host-agent.service"), nil)
 	require.NoError(t, err, output.Stderr)
 	require.Equal(t, "removed moox-old\ncomponent host-gateway started\ncomponent host-agent started\n", output.Stdout)
 	require.NoFileExists(t, filepath.Join(units, "moox-old.service"))
@@ -169,24 +169,33 @@ func TestInstallScriptInstallsHostGatewayAndHostAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, leftovers, "上传的包和解包目录用完就删")
 
-	// 重跑：没有变化且在运行的不重启；上次装好之后被停用的保持停用。
+	// 重跑：没有变化且在运行的不重启。
 	require.NoError(t, os.WriteFile(filepath.Join(state, "calls.log"), nil, 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(state, "disabled", "moox-host-agent.service"), nil, 0o600))
-	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 1 1\n"), nil)
+	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 0 1\n"), nil)
 	require.NoError(t, err, output.Stderr)
-	require.Equal(t, "component host-gateway unchanged\ncomponent host-agent paused\n", output.Stdout)
+	require.Equal(t, "component host-gateway unchanged\ncomponent host-agent unchanged\n", output.Stdout)
 	calls, err = os.ReadFile(filepath.Join(state, "calls.log"))
 	require.NoError(t, err)
 	require.NotContains(t, string(calls), "restart")
 
-	// 上次没装完（部署记录里没有它）时，即使单元是 disabled 也照常启用：重跑能接着装完。
-	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 1 0\n"), nil)
+	// 声明启用的组件被 setup stop 临时停掉后，即使没变化，下次部署也按声明拉起。
+	require.NoError(t, os.Remove(filepath.Join(state, "active", "moox-host-agent.service")))
+	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 0 1\n"), nil)
 	require.NoError(t, err, output.Stderr)
-	require.Contains(t, output.Stdout, "component host-agent restarted")
+	require.Equal(t, "component host-gateway unchanged\ncomponent host-agent started\n", output.Stdout)
+
+	// moox.toml 声明停用的组件只装文件：停掉单元、不开机自启，不重启。
+	require.NoError(t, os.WriteFile(filepath.Join(state, "calls.log"), nil, 0o600))
+	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 0 0\n"), nil)
+	require.NoError(t, err, output.Stderr)
+	require.Equal(t, "component host-gateway unchanged\ncomponent host-agent disabled\n", output.Stdout)
+	calls, err = os.ReadFile(filepath.Join(state, "calls.log"))
+	require.NoError(t, err)
+	require.Contains(t, string(calls), "disable --now moox-host-agent.service")
+	require.NotContains(t, string(calls), "restart")
 
 	// 没有运行的组件即使没变化也会被拉起。
 	require.NoError(t, os.Remove(filepath.Join(state, "active", "moox-host-gateway.service")))
-	require.NoError(t, os.Remove(filepath.Join(state, "disabled", "moox-host-agent.service")))
 	output, err = runInstall(ctx, client, layout, "apply", applyEntries("host-gateway 0 1\nhost-agent 0 1\n"), nil)
 	require.NoError(t, err, output.Stderr)
 	require.Equal(t, "component host-gateway started\ncomponent host-agent unchanged\n", output.Stdout)

@@ -42,8 +42,8 @@
               <EnvMark :env="accountEnvironment(item.account)" class="member-env" />
             </div>
             <div class="tx-muted">
-              {{ exchangeLabels[item.account.exchange] || "-" }} · {{ marketsText(item.account.markets) }} · 优先级
-              {{ item.priority }}{{ item.enabled ? "" : " · 已停用" }}
+              {{ exchangeLabel(item.account.exchange) }} · {{ marketsText(item.account.markets) }} · 优先级 {{ item.priority
+              }}{{ item.enabled ? "" : " · 已停用" }}
             </div>
             <StatusMark :tone="item.account.ready ? 'ok' : 'bad'">
               {{ item.account.ready ? "就绪" : item.account.last_error || "未就绪" }}
@@ -76,7 +76,7 @@
 <script setup lang="ts">
 import { computed, inject } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { exchangeLabels, targetStateLabels } from "@/api/trade";
+import { exchangeLabel, targetStateLabels } from "@/api/trade";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import EquityCurve from "../shared/equity-curve.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";

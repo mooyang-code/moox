@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call, type CallOptions } from "@/api/http";
 
 export type HealthLevel = "ok" | "warn" | "error";
 
@@ -6,6 +6,7 @@ export interface FetchPlanSummary {
   id?: number | string;
   status?: string;
   last_error?: string;
+  /** Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
 }
@@ -25,10 +26,6 @@ export interface CollectorDatasetStatus {
   gap_bars_24h?: number;
   gap_subjects_24h?: number;
   failed_chunks_24h?: number;
-  history_scanned_at?: string;
-  history_gap_bars?: number;
-  history_gap_subjects?: number;
-  history_error?: string;
   absent_bars?: number;
   level?: HealthLevel;
   reasons?: string[];
@@ -60,7 +57,7 @@ export interface CollectorFunctionStatus {
   cloud_exists?: boolean;
   cloud_timer_matches?: boolean;
   cloud_package_latest?: boolean;
-  /** 读回时间（RFC3339），空表示还没有读回。 */
+  /** 读回时刻：Unix 毫秒（数字字符串），"0" 表示还没有读回。 */
   cloud_read_at?: string;
 }
 
@@ -75,6 +72,7 @@ export interface StreamConnStatus {
   market?: string;
   frequency?: string;
   streams?: number;
+  /** 最近一条消息的时刻：Unix 毫秒（数字字符串）。 */
   last_message_at?: string;
   reconnects?: number | string;
   subscribed?: boolean;
@@ -102,9 +100,9 @@ export interface StreamPeriodStat {
 export interface StreamWorkerStatus {
   instance_id?: string;
   online?: boolean;
+  /** 心跳时刻：Unix 毫秒（数字字符串）。 */
   heartbeat_at?: string;
   applied_plan_id?: number | string;
-  applied_stage?: string;
   conns?: StreamConnStatus[];
   recent?: StreamPeriodStat[];
   clock_offset_ms?: number | string;
@@ -134,6 +132,7 @@ export interface HistorySeed {
   failed_chunks?: number;
   /** 按最近速率估计的剩余秒数，0 表示不能估计。 */
   eta_seconds?: number | string;
+  /** 开始、结束时刻：Unix 毫秒（数字字符串），还没结束时 finished_at 为 "0" 或不下发。 */
   started_at?: string;
   finished_at?: string;
   note?: string;
@@ -148,6 +147,7 @@ export interface GetCollectorStatusResponse {
   functions?: CollectorFunctionStatus[];
   active_backfills?: number;
   failed_backfills_24h?: number;
+  /** Unix 毫秒（数字字符串）。 */
   generated_at?: string;
   stream?: StreamWorkerStatus;
   ingest_modes?: IngestMode[];
@@ -171,6 +171,7 @@ export interface KlineBackfillJob {
   to?: string;
   status?: string;
   last_error?: string;
+  /** Unix 毫秒（数字字符串）。 */
   created_at?: string;
   updated_at?: string;
   pending?: number;
@@ -192,15 +193,12 @@ export interface KlineBackfillChunk {
   attempts?: number;
   last_error?: string;
   rows?: number;
-  series_tag?: string;
 }
 
 export interface KlineGap {
   dataset_id?: string;
   frequency?: string;
   subject_id?: string;
-  /** 统一数据集（现货加永续）时缺口所属的序列。 */
-  series_tag?: string;
   from?: string;
   to?: string;
   missing?: number;
@@ -228,8 +226,10 @@ export interface BackfillJobFilter {
   dataset_id?: string;
 }
 
-export function getCollectorStatus(spaceId: string, options: { silentError?: boolean } = {}) {
-  return callControl<{ space_id: string }, GetCollectorStatusResponse>(
+// 网关要求请求体里的 space_id 与 X-Space-Id 一致：读当前所选空间以外的空间（首页逐个空间读历史补齐）时传 { spaceId }。
+// 显式空间的请求不随切换空间取消，只在确实要跨空间读取时传。
+export function getCollectorStatus(spaceId: string, options: CallOptions = {}) {
+  return call<{ space_id: string }, GetCollectorStatusResponse>(
     "collector",
     "GetCollectorStatus",
     { space_id: spaceId },
@@ -237,21 +237,15 @@ export function getCollectorStatus(spaceId: string, options: { silentError?: boo
   );
 }
 
-export function listKlineBackfills(
-  spaceId: string,
-  filter: BackfillJobFilter,
-  page = 1,
-  size = 20,
-  options: { silentError?: boolean } = {}
-) {
-  return callControl<
+export function listKlineBackfills(spaceId: string, filter: BackfillJobFilter, page = 1, size = 20) {
+  return call<
     { space_id: string; page: { page: number; size: number } } & BackfillJobFilter,
     { items?: KlineBackfillJob[]; page?: { total?: number; has_more?: boolean } }
-  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter }, options);
+  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter });
 }
 
 export function getKlineBackfill(spaceId: string, jobId: string) {
-  return callControl<{ job_id: string; space_id: string }, { job?: KlineBackfillJob; failed_chunks?: KlineBackfillChunk[] }>(
+  return call<{ job_id: string; space_id: string }, { job?: KlineBackfillJob; failed_chunks?: KlineBackfillChunk[] }>(
     "collector",
     "GetKlineBackfill",
     { job_id: jobId, space_id: spaceId }
@@ -259,29 +253,21 @@ export function getKlineBackfill(spaceId: string, jobId: string) {
 }
 
 export function cancelKlineBackfill(spaceId: string, jobId: string) {
-  return callControl<{ job_id: string; space_id: string }, Record<string, never>>("collector", "CancelKlineBackfill", {
+  return call<{ job_id: string; space_id: string }, Record<string, never>>("collector", "CancelKlineBackfill", {
     job_id: jobId,
     space_id: spaceId
   });
 }
 
 export function retryKlineBackfill(spaceId: string, jobId: string) {
-  return callControl<{ job_id: string; space_id: string }, { chunks?: number }>("collector", "RetryKlineBackfill", {
+  return call<{ job_id: string; space_id: string }, { chunks?: number }>("collector", "RetryKlineBackfill", {
     job_id: jobId,
     space_id: spaceId
   });
 }
 
-export function confirmHistoryGaps(spaceId: string, datasetId: string, frequency: string) {
-  return callControl<{ space_id: string; dataset_id: string; frequency: string }, { job_id?: string; chunks?: number }>(
-    "collector",
-    "ConfirmHistoryGaps",
-    { space_id: spaceId, dataset_id: datasetId, frequency }
-  );
-}
-
 export function clearSourceAbsences(spaceId: string, datasetId: string, frequency: string) {
-  return callControl<{ space_id: string; dataset_id: string; frequency: string }, { cleared?: number | string }>(
+  return call<{ space_id: string; dataset_id: string; frequency: string }, { cleared?: number | string }>(
     "collector",
     "ClearSourceAbsences",
     { space_id: spaceId, dataset_id: datasetId, frequency }
@@ -292,7 +278,7 @@ export function clearSourceAbsences(spaceId: string, datasetId: string, frequenc
 const klineOpsRequestConfig = { timeout: 330000 };
 
 export function submitKlineBackfill(request: KlineRangeRequest & { force?: boolean }) {
-  return callControl<typeof request, { job_id?: string; chunks?: number }>(
+  return call<typeof request, { job_id?: string; chunks?: number }>(
     "collector",
     "SubmitKlineBackfill",
     request,
@@ -301,5 +287,5 @@ export function submitKlineBackfill(request: KlineRangeRequest & { force?: boole
 }
 
 export function checkKline(request: KlineRangeRequest & { deep?: boolean }) {
-  return callControl<typeof request, CheckKlineResponse>("collector", "CheckKline", request, klineOpsRequestConfig);
+  return call<typeof request, CheckKlineResponse>("collector", "CheckKline", request, klineOpsRequestConfig);
 }

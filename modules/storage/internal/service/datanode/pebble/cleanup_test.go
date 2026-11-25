@@ -8,7 +8,6 @@ import (
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *testing.T) {
@@ -80,7 +79,7 @@ func TestDeleteDatasetRowsMakesMarkersUnpublishable(t *testing.T) {
 	if err := store.UpsertFields(context.Background(), "s", "delete-me", []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	marker, _, err := BuildLedgerPeriodCompletedMessage("s", &LedgerPeriodCompleted{DatasetID: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", SnapshotRef: "cfg-1", CompletedAt: timestamppb.New(time.Unix(1, 0))})
+	marker, _, err := BuildLedgerPeriodCompletedMessage("s", &LedgerPeriodCompleted{DatasetID: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", SnapshotRef: "cfg-1", CompletedAt: time.Unix(1, 0).UnixMilli()})
 	if err != nil {
 		t.Fatal(err)
 	}

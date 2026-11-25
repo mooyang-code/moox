@@ -29,39 +29,64 @@ type Entry struct {
 	File string `yaml:"-"`
 }
 
-// LoadFile 读取一个因子库文件。字段严格校验：未知字段、缺少 factor_id/name/spec 都报错。
-func LoadFile(path string) ([]Entry, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("读取因子库 %s：%w", path, err)
-	}
+// File 是一个因子库文件：名称只用于报错定位。
+type File struct {
+	Name    string
+	Content []byte
+}
+
+// Parse 解析一个因子库文件。字段严格校验：未知字段、缺少 factor_id/name/spec 都报错。
+func Parse(name string, raw []byte) ([]Entry, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	var entries []Entry
 	if err := decoder.Decode(&entries); err != nil {
 		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("因子库 %s 是空文件", path)
+			return nil, fmt.Errorf("因子库 %s 是空文件", name)
 		}
-		return nil, fmt.Errorf("解析因子库 %s：%w", path, err)
+		return nil, fmt.Errorf("解析因子库 %s：%w", name, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("因子库 %s 只能包含一个 YAML 文档", path)
+		return nil, fmt.Errorf("因子库 %s 只能包含一个 YAML 文档", name)
 	}
 	seen := make(map[string]bool, len(entries))
 	for i := range entries {
 		entry := &entries[i]
-		entry.FactorID, entry.Name, entry.File = strings.TrimSpace(entry.FactorID), strings.TrimSpace(entry.Name), path
+		entry.FactorID, entry.Name, entry.File = strings.TrimSpace(entry.FactorID), strings.TrimSpace(entry.Name), name
 		entry.CategoryID, entry.CategoryName = strings.TrimSpace(entry.CategoryID), strings.TrimSpace(entry.CategoryName)
 		if entry.FactorID == "" || entry.Name == "" || strings.TrimSpace(entry.Spec) == "" {
-			return nil, fmt.Errorf("因子库 %s 第 %d 项缺少 factor_id、name 或 spec", path, i+1)
+			return nil, fmt.Errorf("因子库 %s 第 %d 项缺少 factor_id、name 或 spec", name, i+1)
 		}
 		if seen[entry.FactorID] {
-			return nil, fmt.Errorf("因子库 %s 里 %s 重复", path, entry.FactorID)
+			return nil, fmt.Errorf("因子库 %s 里 %s 重复", name, entry.FactorID)
 		}
 		seen[entry.FactorID] = true
 	}
 	return entries, nil
+}
+
+// ParseFiles 按给定顺序解析多个因子库文件；factor_id 在全部文件内必须唯一。
+func ParseFiles(files []File) ([]Entry, error) {
+	if len(files) == 0 {
+		return nil, errors.New("没有因子库文件")
+	}
+	var all []Entry
+	owner := map[string]string{}
+	for _, file := range files {
+		entries, err := Parse(file.Name, file.Content)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if previous, duplicate := owner[entry.FactorID]; duplicate {
+				return nil, fmt.Errorf("因子 %s 同时出现在 %s 与 %s", entry.FactorID, previous, file.Name)
+			}
+			owner[entry.FactorID] = file.Name
+			all = append(all, entry)
+		}
+	}
+	return all, nil
 }
 
 // LoadDir 读取目录下全部 *.yaml，按文件名排序；factor_id 在整个目录内必须唯一。
@@ -74,20 +99,13 @@ func LoadDir(dir string) ([]Entry, error) {
 		return nil, fmt.Errorf("因子库目录 %s 里没有 *.yaml", dir)
 	}
 	sort.Strings(paths)
-	var all []Entry
-	owner := map[string]string{}
+	files := make([]File, 0, len(paths))
 	for _, path := range paths {
-		entries, err := LoadFile(path)
+		raw, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("读取因子库 %s：%w", path, err)
 		}
-		for _, entry := range entries {
-			if previous, duplicate := owner[entry.FactorID]; duplicate {
-				return nil, fmt.Errorf("因子 %s 同时出现在 %s 与 %s", entry.FactorID, previous, path)
-			}
-			owner[entry.FactorID] = path
-			all = append(all, entry)
-		}
+		files = append(files, File{Name: path, Content: raw})
 	}
-	return all, nil
+	return ParseFiles(files)
 }

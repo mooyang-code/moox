@@ -31,7 +31,7 @@ func seedSummaryOrders(t *testing.T, s *Store, orders []summarySeedOrder) {
 	t.Helper()
 	ctx := context.Background()
 	account := testAccount()
-	account.Markets, account.MarginMode = []string{"SWAP"}, "CROSS"
+	account.Markets, account.MarginMode = []string{"swap"}, "CROSS"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
@@ -48,7 +48,7 @@ func seedSummaryOrders(t *testing.T, s *Store, orders []summarySeedOrder) {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+			Exchange: "binance", Environment: "PRODUCTION", MarketType: "swap", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
 			BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: true, ContractValue: "1", ContractValueAsset: "BTC",
 			PriceTick: "0.01", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", Status: "TRADING",
 		}); err != nil {
@@ -60,7 +60,7 @@ func seedSummaryOrders(t *testing.T, s *Store, orders []summarySeedOrder) {
 				owner = "EXTERNAL"
 			}
 			if err := tx.CreateOrder(OrderRecord{
-				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: order.id, ClientOrderID: order.id, Exchange: "BINANCE", MarketType: "SWAP",
+				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: order.id, ClientOrderID: order.id, Exchange: "binance", MarketType: "swap",
 				ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 				Quantity: "100", ReferencePrice: "100", OwnerType: owner, OwnerID: order.id, LogicalAccountID: order.logical, State: "OPEN", Version: 1,
 			}); err != nil {
@@ -69,7 +69,7 @@ func seedSummaryOrders(t *testing.T, s *Store, orders []summarySeedOrder) {
 			for i, fill := range order.fills {
 				if _, err := tx.InsertFill(FillRecord{
 					SpaceID: "space-1", TradingAccountID: "account-1", FillID: fmt.Sprintf("%s-f%d", order.id, i),
-					ExchangeTradeID: fmt.Sprintf("%s-t%d", order.id, i), OrderID: order.id, Exchange: "BINANCE", MarketType: "SWAP",
+					ExchangeTradeID: fmt.Sprintf("%s-t%d", order.id, i), OrderID: order.id, Exchange: "binance", MarketType: "swap",
 					InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT", Side: "BUY", PositionSide: "NET",
 					Price: "100", Quantity: "1", SettlementAsset: "USDT",
 					Fee: fill.fee, FeeAsset: fill.feeAsset, RealizedPnL: fill.realized, TradedAt: fill.at,

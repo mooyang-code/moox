@@ -9,7 +9,11 @@ export interface PageResponse {
   page_size?: number;
 }
 
-export interface InstrumentTarget {
+// 时刻字段（*_at、bar_end_time、valid_until、回放的起止与进度、首末根）在 JSON 里是 Unix 毫秒的数字字符串，"0" 表示没有；
+// 读取一律经 utils/time-zone 的 toInstantMs / formatInstant，不要直接 Date.parse 或按真值判断有没有。
+
+/** 一个标的的目标权重。 */
+export interface InstrumentWeight {
   instrument_id: string;
   target_weight: string;
   /** 目标所在的市场（spot | swap | equity）：同一个标的的现货、永续各是一个目标。 */
@@ -41,8 +45,8 @@ export interface StrategyInstance {
   updated_at: string;
   /** 引用的、已在因子服务里不存在的任务（只对停用实例检查）：删除实例没做完，或任务被另外删掉；删除实例即可清理。 */
   missing_factor_tasks?: string[];
-  /** 确认实盘的时间；空表示试运行（挂了账户的实例启用后只发影子目标、不下单）。没挂账户的实例启用时写入，停用、修改都清空。 */
-  confirmed_at?: string;
+  /** 确认实盘的时刻；"0" 表示试运行（挂了账户的实例启用后只发影子目标、不下单）。没挂账户的实例启用时写入，停用、修改都清空。 */
+  confirmed_at: string;
 }
 
 /** 一个处理过的周期：ok 带目标，skipped 带原因。 */
@@ -55,14 +59,14 @@ export interface StrategyResult {
   status: "ok" | "skipped" | string;
   skip_reason: string;
   dsl_hash: string;
-  targets: InstrumentTarget[];
+  targets: InstrumentWeight[];
   summary_json: string;
   input_json: string;
   publish_status: "none" | "pending" | "sent" | "cancelled" | string;
   created_at: string;
   /** 这一期算出的下一期可变成员参数（JSON：成员键 → 参数名 → {default, overrides}）；没有可变成员时为空串。 */
   next_params_json: string;
-  /** 被因子侧接受的时间；空表示还没送达。 */
+  /** 被因子侧接受的时刻；"0" 表示还没送达。 */
   params_delivered_at: string;
   /** 被因子侧明确拒绝的原因（不再重试）。 */
   params_error: string;
@@ -91,11 +95,28 @@ export interface StrategyResultDetail {
 }
 
 export interface StrategyTargetSnapshot {
-  targets: InstrumentTarget[];
+  targets: InstrumentWeight[];
   session_id: string;
   bar_end_time: string;
   valid_until: string;
   result_id: string;
+}
+
+/**
+ * 建实例要绑定的因子任务，由后端按 DSL 推出（管理台不自己解析 DSL）。
+ * marketDeclared 为 false 时只绑一个主帧任务、市场由用户选；附加来源的任务键按所选市场拼成 来源名:市场。
+ */
+export interface StrategyTaskRequirement {
+  pool: boolean;
+  marketDeclared: boolean;
+  /** 要绑定的任务键（市场确定时才有）：主帧市场（现货在前）、参考市场、附加来源的 来源名:市场 */
+  taskKeys: string[];
+  /** 附加来源（声明顺序） */
+  sources: { name: string; bar: string }[];
+  /** 据此建不了实例的问题（中文） */
+  problems: string[];
+  /** 参考市场（market.reference）：也在 taskKeys 里，只用于年龄判定，不是主帧市场 */
+  referenceMarkets: string[];
 }
 
 export interface ValidateStrategyResult {
@@ -103,12 +124,14 @@ export interface ValidateStrategyResult {
   resolved_json: string;
   trial: StrategyResult | null;
   trial_items: StrategyResultItem[];
+  /** DSL 能解析时给出 */
+  requirement: StrategyTaskRequirement | null;
 }
 
-/** 回放在一个市场读取的计算任务与它的结果 View。 */
+/** 回放在一个市场读取的计算任务与它的结果数据集。 */
 export interface ReplayTask {
   factor_task_id: string;
-  view_id: string;
+  dataset_id: string;
 }
 
 /** 基于 View 的研究回放任务。 */
@@ -152,7 +175,7 @@ export type ReplayInput = "view" | "compute";
 export interface ReplayBar {
   bar_end_time: string;
   status: string;
-  targets: InstrumentTarget[];
+  targets: InstrumentWeight[];
   positions_json: string;
   summary_json: string;
   /** 这一期因子实际生效的、由回放逐期提交的可变成员参数（成员键 → 参数名 → {default, overrides}）；只有因子现算的调参策略有内容。 */
@@ -178,8 +201,9 @@ export interface StartReplayRequest {
   instance_id?: string;
   /** 市场 → 回放读取的计算任务；从实例发起时可省略（读实例关联的任务），给了必须一致。 */
   factor_tasks: Record<string, string>;
-  start_time: string;
-  end_time: string;
+  /** 回放区间 [start_time, end_time)，Unix 毫秒。 */
+  start_time: number;
+  end_time: number;
   spot_fee_bps: number;
   swap_fee_bps: number;
   /** 滑点（bps，0～200）：成交价在收盘价上按方向加减这个比例。 */

@@ -12,7 +12,7 @@ import (
 // 批量提交遇到其它错误（不是拒单、不是目标级冲突）：错误留给下一轮重试，目标状态和最近错误照常刷新。
 func TestBatchOtherErrorStillRefreshesTargetState(t *testing.T) {
 	f := swapPolicyFixture(t, legacyOrderSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
 	require.NoError(t, f.store.DBForTest().Exec(
 		`UPDATE t_logical_account_targets SET c_last_error = '上一轮的旧错误' WHERE c_logical_account_id = 'logical-1'`).Error)
 	submitFailed := errors.New("交易所暂时不可用")

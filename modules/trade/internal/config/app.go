@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -33,6 +34,8 @@ type DatabaseConfig struct {
 // RuntimeConfig contains process-local execution settings.
 type RuntimeConfig struct {
 	LiveTradingEnabled bool `yaml:"live_trading_enabled"`
+	// BalanceDifferenceThreshold 是余额同步时本地与交易所余额允许的最大相对差异（默认 0.05），超过就上报关注项 balance_sync_failing。
+	BalanceDifferenceThreshold float64 `yaml:"balance_difference_threshold"`
 }
 
 type EventBusConfig struct {
@@ -40,9 +43,13 @@ type EventBusConfig struct {
 	URLs           []string `yaml:"urls"`
 	CredentialFile string   `yaml:"credential_file"`
 	TargetConsumer string   `yaml:"-"`
+	DelistConsumer string   `yaml:"-"`
 }
 
-const TargetConsumer = "trade_target_weight_v1"
+var (
+	TargetConsumer = events.TradeTargetConsumer.Name()
+	DelistConsumer = events.TradeDelistConsumer.Name()
+)
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {
@@ -50,9 +57,9 @@ func DefaultConfig() *AppConfig {
 		Database: DatabaseConfig{
 			Path: "./data/moox_trade.db",
 		},
-		Runtime:       RuntimeConfig{},
+		Runtime:       RuntimeConfig{BalanceDifferenceThreshold: 0.05},
 		GatewayClient: gatewayclient.FileConfig{Caller: "trade", KeyFile: "../../secrets/host.key"},
-		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
+		EventBus:      EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer, DelistConsumer: DelistConsumer},
 	}
 }
 
@@ -110,6 +117,9 @@ func (c *AppConfig) Validate() error {
 	if err := c.GatewayClient.Validate(); err != nil {
 		return err
 	}
+	if c.Runtime.BalanceDifferenceThreshold <= 0 || c.Runtime.BalanceDifferenceThreshold > 1 {
+		return fmt.Errorf("runtime.balance_difference_threshold 必须在 (0, 1] 之间")
+	}
 	if c.Database.Path == "" {
 		return fmt.Errorf("database path is required")
 	}
@@ -123,6 +133,9 @@ func (c *AppConfig) Validate() error {
 		}
 		if c.EventBus.TargetConsumer == "" {
 			return fmt.Errorf("eventbus target consumer is required")
+		}
+		if c.EventBus.DelistConsumer == "" {
+			return fmt.Errorf("eventbus delist consumer is required")
 		}
 	}
 	return nil

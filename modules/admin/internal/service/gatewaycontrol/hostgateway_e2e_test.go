@@ -69,24 +69,25 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	f := newControlFixture(t)
 	f.service.now = time.Now
 	ctx := context.Background()
-	controlSpec := sysdeploy.HostSpec{HostID: "control", Address: "127.0.0.1", Components: []string{"admin", "collector"}}
-	// 存储机登记成外部入口：它的网关多开 11004，接外部身份的请求。
-	storageSpec := sysdeploy.HostSpec{HostID: "storage", Address: "127.0.0.2", ExternalEntry: true, Components: []string{"storage-primary", "storage-view", "monitor"}}
-	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{controlSpec, storageSpec}))
-	for _, identity := range []string{"scf-collector", "moox-skill", "collector-operator"} {
+	// 控制机登记成外部入口：它的网关多开 11004，接外部身份的请求。外部身份能调的方法都在存储机上，
+	// 入口放在控制机，外部请求都要由控制机网关带来源头转到存储机，跨主机转发因此有真实进程覆盖。
+	controlSpec := sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: []string{"admin", "collector"}}
+	storageSpec := sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-primary", "storage-view", "monitor"}}
+	f.specs = []sysdeploy.HostSpec{controlSpec, storageSpec}
+	require.NoError(t, f.declare())
+	for _, identity := range []string{"scf-collector", "moox-skill"} {
 		require.NoError(t, f.keys.SetIdentity(ctx, identity, publicKey("identity/"+identity)))
 	}
 
-	opened, err := net.Listen("tcp", "127.0.0.1:11112")
+	listened, err := net.Listen("tcp", "127.0.0.1:11112")
 	require.NoError(t, err)
+	opened := &trackedListener{Listener: listened}
 	controlService := server.New(server.WithServiceName(servicecatalog.GatewayControlPath), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithListener(opened), server.WithAddress(opened.Addr().String()), ServerOption())
 	require.NoError(t, Register(controlService, f.service))
 	go func() { _ = controlService.Serve() }()
 	t.Cleanup(func() { _ = controlService.Close(nil) })
-	var backendCalls, collectorCalls atomic.Int64
+	var backendCalls atomic.Int64
 	startEchoBackend(t, "127.0.0.1:20102", primaryPath, &backendCalls)
-	// CollectMgr 在控制机上：外部身份从存储机的外部入口进来，由存储机网关带来源头转到控制机。
-	startEchoBackend(t, "127.0.0.1:11402", collectPath, &collectorCalls)
 
 	root := t.TempDir()
 	ca, err := pki.Open(filepath.Join(root, "pki"))
@@ -100,7 +101,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		require.NoError(t, err)
 		cfg := hostgatewayconfig.Default(host.id, "control", "127.0.0.1")
 		cfg.Server = hostgatewayconfig.Server{LocalAddr: net.JoinHostPort(host.ip, "11002"), RemoteAddr: net.JoinHostPort(host.ip, "11003"), HealthAddr: net.JoinHostPort(host.ip, "11012")}
-		if host.id == "storage" {
+		if host.id == "control" {
 			cfg.Server.ExternalAddr = net.JoinHostPort(host.ip, "11004")
 		}
 		cfg.TLS = hostgatewayconfig.TLS{CertificateFile: issued.Certificate, KeyFile: issued.Key, CAFile: issued.CA}
@@ -113,14 +114,12 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	waitForE2E(t, 15*time.Second, "both actual gateway heartbeats", func() bool {
 		for _, host := range []string{"control", "storage"} {
 			status, err := f.topology.GetGatewayStatus(ctx, host)
-			if err != nil || status.InstanceID == "" || status.AppliedHash != status.ExpectedHash || status.Version != "control-e2e" {
+			if err != nil || status.LastSeenAt == nil || status.AppliedHash != status.ExpectedHash {
 				return false
 			}
 		}
 		return true
 	})
-	initialInstance := f.status(t).InstanceID
-	initialControlInstance := controlProcess.instance(t, f)
 
 	collector, console := authtest.Component("collector", "control"), authtest.Component("console", "control")
 	local := map[string]gatewayauth.Credentials{"control": collector, "storage": authtest.Component("monitor", "storage")}
@@ -213,82 +212,76 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	}
 	t.Log("SCENARIO PASS tls-trust-plaintext-acl-and-durable-replay")
 
-	// 外部入口（存储机的 11004，明文加签名）：外部身份签名的目标主机是入口主机。
-	entry := configs["storage"].Server.ExternalAddr
-	controlTrust := e2eTrust(t, configs["control"].TLS.CAFile, "control")
-	scf, skill, operator := authtest.Identity("scf-collector"), authtest.Identity("moox-skill"), authtest.Identity("collector-operator")
+	// 外部入口（控制机的 11004，明文加签名）：外部身份签名的目标主机是入口主机。
+	entry := configs["control"].Server.ExternalAddr
+	scf, skill := authtest.Identity("scf-collector"), authtest.Identity("moox-skill")
 	external := func(credential gatewayauth.Credentials, service, method string) ([]byte, error) {
-		return e2eRawCall(entry, nil, service, method, codec.SerializationTypePB, body, signedE2E(t, credential, "storage", service, method, body))
+		return e2eRawCall(entry, nil, service, method, codec.SerializationTypePB, body, signedE2E(t, credential, "control", service, method, body))
 	}
-	// 正向：目标在本机（scf-collector 写行情、moox-skill 读行情）与目标在别的主机（collector-operator 调控制机上的 Collector）。
+	// 正向：目标在别的主机，控制机网关带来源头转到存储机（scf-collector 写行情、moox-skill 读行情）。
 	reached = backendCalls.Load()
 	for _, permitted := range []struct {
 		credential gatewayauth.Credentials
 		method     string
 	}{{scf, "CommitTimeSeriesBatch"}, {scf, "UpsertFields"}, {skill, "ReadTimeSeriesRows"}} {
 		echoed, err = external(permitted.credential, primaryPath, permitted.method)
-		require.NoError(t, err, "%s 经外部入口调 %s", permitted.credential.Caller, permitted.method)
+		require.NoError(t, err, "%s 经控制机入口调存储机的 %s", permitted.credential.Caller, permitted.method)
 		require.Equal(t, body, echoed)
 	}
 	require.Equal(t, reached+3, backendCalls.Load())
-	echoed, err = external(operator, collectPath, "SetSubjectExclusions")
-	require.NoError(t, err, "collector-operator 经存储机入口转到控制机")
-	require.Equal(t, body, echoed)
-	require.EqualValues(t, 1, collectorCalls.Load())
 	// 名单外的方法、不是外部身份的调用方、重放：都在入口被拒，到不了服务。
 	for _, denied := range []struct {
 		credential      gatewayauth.Credentials
 		service, method string
 	}{
 		{skill, primaryPath, "UpsertFields"}, {scf, primaryPath, "ReadTimeSeriesRows"}, {scf, collectPath, "SetSubjectExclusions"},
-		{operator, primaryPath, "CommitTimeSeriesBatch"}, {collector, primaryPath, "ReadTimeSeriesRows"}, {authtest.Identity("moox-cli"), primaryPath, "ReadTimeSeriesRows"},
+		{collector, primaryPath, "ReadTimeSeriesRows"}, {authtest.Identity("moox-cli"), primaryPath, "ReadTimeSeriesRows"},
 	} {
 		_, err = external(denied.credential, denied.service, denied.method)
 		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "%s 经外部入口调 %s/%s", denied.credential.Caller, denied.service, denied.method)
 	}
-	replayed := signedE2E(t, skill, "storage", primaryPath, "ReadTimeSeriesRows", body)
+	replayed := signedE2E(t, skill, "control", primaryPath, "ReadTimeSeriesRows", body)
 	_, err = e2eRawCall(entry, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, replayed)
 	require.NoError(t, err)
 	_, err = e2eRawCall(entry, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, replayed)
 	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "同一个签名第二次出现在外部入口")
-	// 外部身份的签名拿到 11003 上直接用不行；控制机没开外部入口，11004 上没有监听。
+	// 外部身份的签名拿到 11003 上直接用不行；存储机没开外部入口，11004 上没有监听。
 	_, err = e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, skill, "storage", primaryPath, "ReadTimeSeriesRows", body))
 	require.EqualValues(t, gatewayauth.RetRejected, errs.Code(err), "外部身份不走 11003")
-	_, err = e2eRawCall("127.0.0.1:11004", nil, collectPath, "SetSubjectExclusions", codec.SerializationTypePB, body, signedE2E(t, operator, "control", collectPath, "SetSubjectExclusions", body))
-	require.Error(t, err, "控制机不开外部入口")
+	_, err = e2eRawCall("127.0.0.2:11004", nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, skill, "storage", primaryPath, "ReadTimeSeriesRows", body))
+	require.Error(t, err, "存储机不开外部入口")
 	// 伪造来源头（X-Moox-Origin-Caller）：三条检查缺一条就拒。
-	forwarded := func(address string, trust *tls.Config, credential gatewayauth.Credentials, target, origin, service, method string) error {
-		headers := signedE2E(t, credential, target, service, method, body)
+	forwarded := func(credential gatewayauth.Credentials, origin, method string) error {
+		headers := signedE2E(t, credential, "storage", primaryPath, method, body)
 		headers.Set(gatewayauth.HeaderOriginCaller, origin)
-		_, err := e2eRawCall(address, trust, service, method, codec.SerializationTypePB, body, headers)
+		_, err := e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, method, codec.SerializationTypePB, body, headers)
 		return err
 	}
 	storageGateway, controlGateway := authtest.Component("host-gateway", "storage"), authtest.Component("host-gateway", "control")
-	reached, collected := backendCalls.Load(), collectorCalls.Load()
+	reached = backendCalls.Load()
 	for name, forgedErr := range map[string]error{
-		"控制机不是外部入口，它的 host-gateway 带来源头不认":      forwarded(configs["storage"].Server.RemoteAddr, storageTLS, controlGateway, "storage", "scf-collector", primaryPath, "CommitTimeSeriesBatch"),
-		"带来源头的不是 host-gateway（控制机上的 collector）": forwarded(configs["storage"].Server.RemoteAddr, storageTLS, collector, "storage", "scf-collector", primaryPath, "CommitTimeSeriesBatch"),
-		"入口主机的 host-gateway 冒充 moox-cli":        forwarded(configs["control"].Server.RemoteAddr, controlTrust, storageGateway, "control", "moox-cli", collectPath, "SetSubjectExclusions"),
-		"入口主机的 host-gateway 冒充 console":         forwarded(configs["control"].Server.RemoteAddr, controlTrust, storageGateway, "control", "console", collectPath, "SetSubjectExclusions"),
-		"入口主机的 host-gateway 冒充组件":               forwarded(configs["control"].Server.RemoteAddr, controlTrust, storageGateway, "control", "collector", collectPath, "SetSubjectExclusions"),
-		"外部身份不在这个方法的名单上":                        forwarded(configs["control"].Server.RemoteAddr, controlTrust, storageGateway, "control", "scf-collector", collectPath, "SetSubjectExclusions"),
+		"存储机不是外部入口，它的 host-gateway 带来源头不认":      forwarded(storageGateway, "scf-collector", "CommitTimeSeriesBatch"),
+		"带来源头的不是 host-gateway（控制机上的 collector）": forwarded(collector, "scf-collector", "CommitTimeSeriesBatch"),
+		"入口主机的 host-gateway 冒充 moox-cli":        forwarded(controlGateway, "moox-cli", "ReadTimeSeriesRows"),
+		"入口主机的 host-gateway 冒充 console":         forwarded(controlGateway, "console", "ReadTimeSeriesRows"),
+		"入口主机的 host-gateway 冒充组件":               forwarded(controlGateway, "collector", "ReadTimeSeriesRows"),
+		"外部身份不在这个方法的名单上":                        forwarded(controlGateway, "moox-skill", "CommitTimeSeriesBatch"),
 		"不带来源头的 host-gateway 调业务方法": func() error {
-			_, err := e2eRawCall(configs["control"].Server.RemoteAddr, controlTrust, collectPath, "SetSubjectExclusions", codec.SerializationTypePB, body, signedE2E(t, storageGateway, "control", collectPath, "SetSubjectExclusions", body))
+			_, err := e2eRawCall(configs["storage"].Server.RemoteAddr, storageTLS, primaryPath, "CommitTimeSeriesBatch", codec.SerializationTypePB, body, signedE2E(t, controlGateway, "storage", primaryPath, "CommitTimeSeriesBatch", body))
 			return err
 		}(),
 	} {
 		require.EqualValues(t, gatewayauth.RetRejected, errs.Code(forgedErr), name)
 	}
 	require.Equal(t, reached, backendCalls.Load(), "伪造来源头的请求没有到达 Storage")
-	require.Equal(t, collected, collectorCalls.Load(), "伪造来源头的请求没有到达 Collector")
 	// 对照：入口主机的 host-gateway 带名单上的外部身份，目标网关放行。
-	require.NoError(t, forwarded(configs["control"].Server.RemoteAddr, controlTrust, storageGateway, "control", "collector-operator", collectPath, "SetSubjectExclusions"))
-	require.Equal(t, collected+1, collectorCalls.Load())
-	t.Log("SCENARIO PASS external-entry-local-and-cross-host-forward-acl-and-origin-caller-rules")
+	require.NoError(t, forwarded(controlGateway, "scf-collector", "CommitTimeSeriesBatch"))
+	require.Equal(t, reached+1, backendCalls.Load())
+	t.Log("SCENARIO PASS external-entry-cross-host-forward-acl-and-origin-caller-rules")
 
 	// A newly registered host is also a new caller. Its signature must become
 	// accepted through the already running control gateway after the next pull.
-	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
+	require.NoError(t, f.declareHost(sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
 	require.NoError(t, f.keys.SetHostPublicKey(ctx, "joining", publicKey("host/joining")))
 	joining := authtest.Component("host-gateway", "joining")
 	joiningBody, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "joining"})
@@ -301,20 +294,17 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		var rsp pb.PullSnapshotRsp
 		return codec.Unmarshal(codec.SerializationTypePB, raw, &rsp) == nil && rsp.Changed && snapshotHost(rsp.GetSnapshot(), "joining") != nil
 	})
-	controlStatus, err := f.topology.GetGatewayStatus(ctx, "control")
-	require.NoError(t, err)
-	require.Equal(t, initialControlInstance, controlStatus.InstanceID)
 	t.Log("SCENARIO PASS new-caller-next-snapshot-without-restart")
 
-	require.NoError(t, f.topology.SetDeploymentStatus(ctx, "storage", "storage-primary", servicecatalog.Disabled))
+	f.specs[1].DisabledComponents = []string{"storage-primary"}
+	require.NoError(t, f.declare())
 	waitForE2E(t, 15*time.Second, "disabled deployment explicitly rejected", func() bool {
 		_, err := clients["control"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
 		return err != nil && (strings.Contains(err.Error(), "no enabled deployment") || strings.Contains(err.Error(), "not deployed"))
 	})
-	require.NoError(t, f.topology.SyncHosts(ctx, []sysdeploy.HostSpec{
-		{HostID: "storage", Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}},
-		{HostID: "control", Address: "127.0.0.1", Components: append(slices.Clone(controlSpec.Components), "storage-primary")},
-	}))
+	f.specs[0] = sysdeploy.HostSpec{HostID: "control", Enabled: true, Address: "127.0.0.1", ExternalEntry: true, Components: append(slices.Clone(controlSpec.Components), "storage-primary")}
+	f.specs[1] = sysdeploy.HostSpec{HostID: "storage", Enabled: true, Address: "127.0.0.2", Components: []string{"storage-view", "monitor"}}
+	require.NoError(t, f.declare())
 	// PrimaryStore 换到 control：control 的客户端改成直连本机服务端口，storage 的客户端改成跨主机经 control 网关的 11003。
 	waitForE2E(t, 15*time.Second, "existing clients automatically switch deployment target", func() bool {
 		for _, c := range clients {
@@ -338,23 +328,20 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	storageProcess.stop(t)
 	storageProcess = startGatewayExecutable(t, binary, framework, configs["storage"])
-	waitForE2E(t, 15*time.Second, "normal process replacement heartbeat", func() bool { return f.status(t).InstanceID != initialInstance })
-	require.Empty(t, f.status(t).ConflictInstanceID)
-	require.Equal(t, initialInstance, f.status(t).PreviousInstanceID)
-	// A second genuine process uses separate sockets/cache but the same host
-	// identity. Its real timer and the original timer must reveal the conflict.
-	duplicate := configs["storage"]
-	duplicate.Server = hostgatewayconfig.Server{RemoteAddr: unusedE2EAddress(t), LocalAddr: unusedE2EAddress(t), HealthAddr: unusedE2EAddress(t)}
-	duplicate.Store.Path = filepath.Join(root, "duplicate-cache")
-	duplicateProcess := startGatewayExecutable(t, binary, framework, duplicate)
-	waitForE2E(t, 31*time.Second, "alternating real processes detected as conflict", func() bool { return f.status(t).ConflictInstanceID != "" })
-	duplicateProcess.stop(t)
-	t.Log("SCENARIO PASS normal-restart-and-live-instance-conflict")
+	restartedAt := time.Now().UTC()
+	waitForE2E(t, 15*time.Second, "restarted process pulls again", func() bool {
+		status := f.status(t)
+		return status.LastSeenAt != nil && status.LastSeenAt.After(restartedAt) && status.AppliedHash == status.ExpectedHash
+	})
+	t.Log("SCENARIO PASS normal-restart")
 
 	// Keep control's business route active, but stop the actual Admin control
 	// listener. Both gateways retain their previously authenticated snapshots.
 	// storage 的客户端跨主机经 control 网关调到 PrimaryStore：验签与路由都靠 control 网关手里的快照。
+	// tRPC 服务关闭只关监听，已建立的连接还会再处理一个请求才断：网关连接池里留着的连接会让关闭后的下一次拉取照样成功，
+	// 最近一次成功同步就晚于这里，94 秒等不到降级。一并断开已接受的连接，才和 Admin 进程退出一样，从此刻起拉取全部失败。
 	require.NoError(t, controlService.Close(nil))
+	opened.closeAccepted()
 	require.Equal(t, http.StatusOK, e2eHealth(t, configs["control"].Server.HealthAddr))
 	before := backendCalls.Load()
 	result, err := clients["storage"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
@@ -470,20 +457,31 @@ func (p *gatewayExecutable) stop(t *testing.T) {
 	}
 }
 
-func (p *gatewayExecutable) instance(t *testing.T, f *controlFixture) string {
-	t.Helper()
-	status, err := f.topology.GetGatewayStatus(context.Background(), p.host)
-	require.NoError(t, err)
-	return status.InstanceID
+// trackedListener 记下 Admin 监听接受过的连接，停 Admin 时由 closeAccepted 一并断开。
+type trackedListener struct {
+	net.Listener
+	mu       sync.Mutex
+	accepted []net.Conn
 }
 
-func unusedE2EAddress(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	address := l.Addr().String()
-	require.NoError(t, l.Close())
-	return address
+func (l *trackedListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.mu.Lock()
+		l.accepted = append(l.accepted, c)
+		l.mu.Unlock()
+	}
+	return c, err
+}
+
+func (l *trackedListener) closeAccepted() {
+	l.mu.Lock()
+	accepted := l.accepted
+	l.accepted = nil
+	l.mu.Unlock()
+	for _, c := range accepted {
+		_ = c.Close()
+	}
 }
 
 func startEchoBackend(t *testing.T, address, path string, calls *atomic.Int64) {

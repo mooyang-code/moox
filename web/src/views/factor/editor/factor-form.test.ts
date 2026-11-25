@@ -28,10 +28,9 @@ const column = (name: string, patch: Partial<DatasetColumn> = {}): DatasetColumn
   space_id: "crypto",
   dataset_id: "d",
   column_name: name,
-  origin_type: "DATASET_COLUMN_ORIGIN_TYPE_FIELD",
-  origin_id: name,
   value_type: "FIELD_VALUE_TYPE_DOUBLE",
-  status: "COLUMN_STATUS_ACTIVE",
+  display_name: name,
+  status: "active",
   ...patch
 });
 
@@ -53,15 +52,9 @@ const failing = (form: FactorFormState, compile: CompileState = ok(form)) =>
   factorChecklist(form, compile).filter(item => !item.ok);
 
 describe("sourceInputColumns", () => {
-  it("keeps active business columns and drops system or reserved ones", () => {
+  it("keeps active business columns and drops disabled or reserved ones", () => {
     expect(
-      sourceInputColumns([
-        column("close"),
-        column("open"),
-        column("data_time"),
-        column("sys", { origin_type: "DATASET_COLUMN_ORIGIN_TYPE_SYSTEM" }),
-        column("old", { status: "COLUMN_STATUS_RETIRED" })
-      ])
+      sourceInputColumns([column("close"), column("open"), column("data_time"), column("old", { status: "disabled" })])
     ).toEqual(["close", "open"]);
   });
 });

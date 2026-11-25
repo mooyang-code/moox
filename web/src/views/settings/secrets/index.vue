@@ -78,7 +78,7 @@
           </a-table-column>
           <a-table-column title="创建人" data-index="creator" :width="100" />
           <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.modify_time) }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.updated_at, "UTC") }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="260" align="center" :fixed="'right'">
             <template #cell="{ record }">
@@ -176,7 +176,7 @@
         @close="resetExport"
       >
         <a-alert type="warning" class="transfer-alert">
-          迁移包包含全部密钥的明文（系统密钥与配置备份除外），用下面的口令加密；在新环境“导入”时需要同一口令。
+          迁移包包含全部密钥的明文（系统密钥除外），用下面的口令加密；在新环境“导入”时需要同一口令。
           口令丢失无法找回，迁移包和口令请分开保管。
         </a-alert>
         <a-form :model="exportForm" auto-label-width>
@@ -248,11 +248,12 @@ import {
   type ImportSecretsRsp,
   type Secret
 } from "@/api/admin/secret";
-import { reportControlError } from "@/api/admin/http";
+import { reportError } from "@/api/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 import InspectionTestDialog from "@/components/trade-inspection/inspection-test-dialog.vue";
 import { canTestConnection } from "@/components/trade-inspection/inspection-request";
-import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { defaultPagination } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { secretDeleteText, secretToggleText } from "./secret-actions";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
 
@@ -425,8 +426,8 @@ async function submit(): Promise<boolean> {
     await load();
     return true;
   } catch (error) {
-    // 业务错误（ret_info）不经过全局提示，这里展示；已提示过的网络错误不会重复。
-    reportControlError(error);
+    // 失败原因在这里提示一次。
+    reportError(error);
     return false;
   }
 }
@@ -492,7 +493,7 @@ async function submitExport(): Promise<boolean> {
     resetExport();
     return true;
   } catch (error) {
-    reportControlError(error);
+    reportError(error);
     return false;
   } finally {
     exporting.value = false;
@@ -547,8 +548,8 @@ async function submitImport(): Promise<boolean> {
     importForm.passphrase = "";
     await load();
   } catch (error) {
-    // 口令错误、文件不对等是业务错误，不经过全局提示，这里展示；弹窗保持打开以便重试。
-    reportControlError(error);
+    // 口令错误、文件不对等在这里提示；弹窗保持打开以便重试。
+    reportError(error);
   } finally {
     importing.value = false;
   }

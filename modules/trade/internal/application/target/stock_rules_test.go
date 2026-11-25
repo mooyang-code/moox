@@ -67,7 +67,7 @@ func newStockExchangeFixture(t *testing.T, exchangeName exchange.Exchange, settl
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "stock-a", Name: "stock-a",
-			Exchange: string(exchangeName), Markets: []string{"STOCK"}, ExecutionMode: "PAPER", Environment: "PAPER",
+			Exchange: string(exchangeName), Markets: []string{"equity"}, ExecutionMode: "PAPER", Environment: "PAPER",
 			SettlementAsset: settlement, Status: "ENABLED", Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
 				AvailableFunds: "50000000",
@@ -102,7 +102,7 @@ func newStockExchangeFixture(t *testing.T, exchangeName exchange.Exchange, settl
 
 func stockInstrument(id, step, minimum string) store.InstrumentRecord {
 	return store.InstrumentRecord{
-		Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: id, InstrumentID: id,
+		Exchange: "ashare", MarketType: "equity", ExchangeSymbol: id, InstrumentID: id,
 		BaseAsset: id, QuoteAsset: "CNY", SettlementAsset: "CNY",
 		ExchangeQuantityStep: step, MinExchangeQuantity: minimum, PriceTick: "0.01",
 		MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98", Status: "TRADING",
@@ -123,7 +123,7 @@ func (f *stockFixture) executor(t *testing.T) *Executor {
 	}
 }
 
-func (f *stockFixture) target(t *testing.T, targets ...store.InstrumentTarget) store.LogicalAccountTargetRecord {
+func (f *stockFixture) target(t *testing.T, targets ...store.InstrumentQuantity) store.LogicalAccountTargetRecord {
 	t.Helper()
 	// 接收目标时按真实时间检查有效期：有效期末取“目标时刻 + 1 小时”和“现在 + 1 小时”里更晚的。
 	validUntil := f.now.Add(time.Hour)
@@ -194,7 +194,7 @@ func requireDeferred(t *testing.T, current store.LogicalAccountTargetRecord, ins
 // 买入不足一手视为已满足：开新仓也一样，不记 BLOCKED，过期时也不算未到位。
 func TestStockBuyBelowOneLotIsSatisfied(t *testing.T) {
 	fixture := newStockFixture(t)
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "50"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "50"})
 
 	result, current := fixture.converge(t)
 
@@ -207,7 +207,7 @@ func TestStockBuyBelowOneLotIsSatisfied(t *testing.T) {
 // 买入向下取整到整手。
 func TestStockBuyFloorsToLot(t *testing.T) {
 	fixture := newStockFixture(t)
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "250"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "250"})
 
 	result, _ := fixture.converge(t)
 
@@ -221,7 +221,7 @@ func TestStockBuyFloorsToLot(t *testing.T) {
 func TestStockSellsOddLotWhenTargetIsZero(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.holding(t, "600519.XSHG", "50", "50")
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "0"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "0"})
 	require.True(t, fixture.hasDifference(t), "还有可卖零股，算差额")
 
 	result, _ := fixture.converge(t)
@@ -236,7 +236,7 @@ func TestStockSellsOddLotWhenTargetIsZero(t *testing.T) {
 func TestStockSellAllSellableIncludingOddLot(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.holding(t, "600519.XSHG", "150", "150")
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "0"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "0"})
 
 	fixture.converge(t)
 
@@ -248,7 +248,7 @@ func TestStockSellAllSellableIncludingOddLot(t *testing.T) {
 func TestStockT1SellIsDeferred(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.holding(t, "600519.XSHG", "300", "0")
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "0"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "0"})
 
 	result, current := fixture.converge(t)
 
@@ -262,7 +262,7 @@ func TestStockT1SellIsDeferred(t *testing.T) {
 func TestStockT1SellsYesterdayShares(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.holding(t, "600519.XSHG", "300", "100")
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "0"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "0"})
 
 	fixture.converge(t)
 
@@ -273,7 +273,7 @@ func TestStockT1SellsYesterdayShares(t *testing.T) {
 func TestStockHaltedIsDeferred(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.quotes["600519.XSHG"] = Quote{Price: shared.MustDecimal("10"), UpdatedAt: stockNow, Halted: true}
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 
 	result, current := fixture.converge(t)
 
@@ -291,7 +291,7 @@ func TestStockLimitUpBuyAndLimitDownSellAreDeferred(t *testing.T) {
 			Price: shared.MustDecimal("11"), UpdatedAt: stockNow, LimitUp: shared.MustDecimal("11"), LimitDown: shared.MustDecimal("9"),
 			Bid: shared.MustDecimal("11"),
 		}
-		fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+		fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 		_, current := fixture.converge(t)
 		require.Empty(t, fixture.orders.specs)
 		requireDeferred(t, current, "600519.XSHG", reasonLimitUp)
@@ -304,7 +304,7 @@ func TestStockLimitUpBuyAndLimitDownSellAreDeferred(t *testing.T) {
 			Price: shared.MustDecimal("9"), UpdatedAt: stockNow, LimitUp: shared.MustDecimal("11"), LimitDown: shared.MustDecimal("9"),
 			Ask: shared.MustDecimal("9"),
 		}
-		fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "0"})
+		fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "0"})
 		_, current := fixture.converge(t)
 		require.Empty(t, fixture.orders.specs)
 		requireDeferred(t, current, "600519.XSHG", reasonLimitDown)
@@ -316,7 +316,7 @@ func TestStockLimitUpBuyAndLimitDownSellAreDeferred(t *testing.T) {
 			Price: shared.MustDecimal("11"), UpdatedAt: stockNow, LimitUp: shared.MustDecimal("11"), LimitDown: shared.MustDecimal("9"),
 			Bid: shared.MustDecimal("10.99"), Ask: shared.MustDecimal("11"),
 		}
-		fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+		fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 		fixture.converge(t)
 		require.Len(t, fixture.orders.specs, 1)
 	})
@@ -326,7 +326,7 @@ func TestStockLimitUpBuyAndLimitDownSellAreDeferred(t *testing.T) {
 func TestStockPlaceHaltedErrorIsDeferred(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.orders.placeErrors = map[string]error{"stock-a": orderapp.ErrInstrumentHalted}
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 
 	result, current := fixture.converge(t)
 
@@ -344,7 +344,7 @@ func TestStockPseudoMarketPriceClampedToLimitUp(t *testing.T) {
 		Price: shared.MustDecimal("10"), UpdatedAt: stockNow, LimitUp: shared.MustDecimal("10.05"), LimitDown: shared.MustDecimal("9"),
 		Bid: shared.MustDecimal("9.99"), Ask: shared.MustDecimal("10"),
 	}
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 
 	fixture.converge(t)
 
@@ -357,7 +357,7 @@ func TestStockPseudoMarketPriceClampedToLimitUp(t *testing.T) {
 func TestStockOutOfSessionReasons(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.now = time.Date(2026, 11, 6, 6, 58, 0, 0, time.UTC) // 14:58
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 	result, current := fixture.converge(t)
 	require.Equal(t, StatusPaused, result.Status)
 	require.Equal(t, execution.ReasonOutOfSession, current.LastError)
@@ -365,7 +365,7 @@ func TestStockOutOfSessionReasons(t *testing.T) {
 
 	expired := newStockFixture(t)
 	expired.now = time.Date(2028, 1, 4, 2, 0, 0, 0, time.UTC)
-	expired.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	expired.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 	_, current = expired.converge(t)
 	require.Equal(t, ashare.ReasonCalendarExpired, current.LastError)
 }
@@ -376,7 +376,7 @@ func TestStockOutOfSessionKeepsReasonPrecedence(t *testing.T) {
 	notReady.now = time.Date(2026, 11, 6, 6, 58, 0, 0, time.UTC) // 14:58
 	require.NoError(t, notReady.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_ready = 0 WHERE c_trading_account_id = 'stock-a'`).Error)
 	notReady.store.InvalidateCaches()
-	notReady.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	notReady.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 	result, current := notReady.converge(t)
 	require.Equal(t, StatusPaused, result.Status)
 	require.Equal(t, "成员 stock-a 未就绪", current.LastError)
@@ -384,7 +384,7 @@ func TestStockOutOfSessionKeepsReasonPrecedence(t *testing.T) {
 	broken := newStockFixture(t)
 	broken.now = time.Date(2026, 11, 6, 6, 58, 0, 0, time.UTC)
 	require.NoError(t, broken.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"margin_coins":["ETH"]}'`).Error)
-	broken.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	broken.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 	result, current = broken.converge(t)
 	require.Equal(t, StatusPaused, result.Status)
 	require.Contains(t, current.LastError, "资金设置的排除字段无法解析")
@@ -404,7 +404,7 @@ func TestClampToPriceBandUsesWiderOfRatioAndTicks(t *testing.T) {
 	require.Equal(t, "9.98", CageBasis(quote, exchange.SideSell).String())
 	require.Equal(t, "10", CageBasis(Quote{Price: shared.MustDecimal("10")}, exchange.SideBuy).String())
 	// 加密货币没有价位数，行为不变。
-	crypto := store.InstrumentRecord{MarketType: "SPOT", PriceTick: "0.01", MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98"}
+	crypto := store.InstrumentRecord{MarketType: "spot", PriceTick: "0.01", MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98"}
 	require.Equal(t, "1.01", ClampToPriceBand(shared.MustDecimal("1.2"), shared.MustDecimal("1"), exchange.SideBuy, crypto).String())
 }
 
@@ -431,21 +431,21 @@ func TestQuoteFreshnessCheckpointsFollowSession(t *testing.T) {
 	closeQuote := time.Date(2026, 11, 6, 8, 14, 58, 0, time.UTC)
 
 	resolver := &WeightResolver{Exchanges: catalog, Now: func() time.Time { return saturday }}
-	require.True(t, resolver.priceFresh("ASHARE", closeQuote), "周六换算用周五收盘价")
-	require.False(t, resolver.priceFresh("BINANCE", closeQuote))
+	require.True(t, resolver.priceFresh("ashare", closeQuote), "周六换算用周五收盘价")
+	require.False(t, resolver.priceFresh("binance", closeQuote))
 	resolver.Now = func() time.Time { return stockNow }
-	require.False(t, resolver.priceFresh("ASHARE", stockNow.Add(-31*time.Second)), "时段内照原来的 30 秒")
+	require.False(t, resolver.priceFresh("ashare", stockNow.Add(-31*time.Second)), "时段内照原来的 30 秒")
 
 	source := ExchangePriceSource{
 		Adapters:  bookAdapters{bookAdapter{quote: execution.MarketQuote{Bid: shared.MustDecimal("9"), Ask: shared.MustDecimal("10"), SourceTime: closeQuote}}},
 		Exchanges: catalog, Now: func() time.Time { return saturday },
 	}
-	bid, ask, err := source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"))
+	bid, ask, err := source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"))
 	require.NoError(t, err)
 	require.Equal(t, "9", bid.String())
 	require.Equal(t, "10", ask.String())
 	source.Now = func() time.Time { return stockNow }
-	_, _, err = source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"))
+	_, _, err = source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"))
 	require.ErrorContains(t, err, "过期")
 }
 
@@ -455,7 +455,7 @@ func TestExchangePriceSourceCarriesLimitsForStock(t *testing.T) {
 		Bid: shared.MustDecimal("9.99"), Ask: shared.MustDecimal("10"), Last: shared.MustDecimal("10"), SourceTime: stockNow,
 		LimitUp: shared.MustDecimal("11"), LimitDown: shared.MustDecimal("9"), Halted: true,
 	}}}}
-	quote, err := source.LatestPrice(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"))
+	quote, err := source.LatestPrice(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"))
 	require.NoError(t, err)
 	require.Equal(t, "10", quote.Price.String())
 	require.Equal(t, "11", quote.LimitUp.String())
@@ -471,7 +471,7 @@ func TestStockHighPriceBuysOneLotAboveChildCap(t *testing.T) {
 		Price: shared.MustDecimal("1450"), UpdatedAt: stockNow, LimitUp: shared.MustDecimal("1595"), LimitDown: shared.MustDecimal("1305"),
 		Bid: shared.MustDecimal("1449.9"), Ask: shared.MustDecimal("1450"),
 	}
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 
 	result, current := fixture.converge(t)
 
@@ -485,7 +485,7 @@ func TestStockHighPriceBuysOneLotAboveChildCap(t *testing.T) {
 func TestStockDeferredTargetRetriesWithinValidity(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.quotes["600519.XSHG"] = Quote{Price: shared.MustDecimal("10"), UpdatedAt: stockNow, Halted: true}
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 
 	result, _ := fixture.converge(t)
 
@@ -497,7 +497,7 @@ func TestStockDeferredTargetRetriesWithinValidity(t *testing.T) {
 func TestStockLockedByOrdersIsNotT1(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.holdingLocked(t, "600519.XSHG", "300", "0", "300")
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "0"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "0"})
 
 	_, current := fixture.converge(t)
 
@@ -510,7 +510,7 @@ func TestStockLockedByOrdersIsNotT1(t *testing.T) {
 func TestStockOutOfSessionDoesNotRewritePendingTarget(t *testing.T) {
 	fixture := newStockFixture(t)
 	fixture.now = time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) // 12:00 午休
-	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	fixture.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 	_, first := fixture.converge(t)
 	require.Equal(t, execution.ReasonOutOfSession, first.LastError)
 	time.Sleep(1100 * time.Millisecond)

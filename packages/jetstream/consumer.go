@@ -43,12 +43,6 @@ type ConsumerInfo struct {
 
 const consumerOwnershipInspectionTimeout = 250 * time.Millisecond
 
-// ConsumerState is a point-in-time server view of one durable's backlog.
-type ConsumerState struct {
-	NumPending    uint64
-	NumAckPending int
-}
-
 // NewConsumer keeps the established ensure-then-bind behavior.
 func (c *Client) NewConsumer(ctx context.Context, cfg ConsumerConfig) (*Consumer, error) {
 	if _, err := c.EnsureConsumer(ctx, cfg); err != nil {
@@ -264,30 +258,6 @@ func (c *Client) inspectConsumerWithJS(ctx context.Context, js nats.JetStreamCon
 		return nil, err
 	}
 	return info, nil
-}
-
-// ConsumerState returns the server-side delivery backlog for one durable.
-func (c *Client) ConsumerState(ctx context.Context, stream, durable string) (ConsumerState, error) {
-	if ctx == nil {
-		ctx = trpc.BackgroundContext()
-	}
-	if err := contextErr(ctx, "before consumer state inspection"); err != nil {
-		return ConsumerState{}, err
-	}
-	js, err := c.jetStream()
-	if err != nil {
-		return ConsumerState{}, fmt.Errorf("%w: inspect consumer state: %w", ErrConnection, err)
-	}
-	info, err := c.inspectConsumerWithJS(ctx, js, stream, durable)
-	switch {
-	case errors.Is(err, nats.ErrConsumerNotFound):
-		return ConsumerState{}, fmt.Errorf("%w: %s/%s", ErrConsumerNotFound, strings.TrimSpace(stream), strings.TrimSpace(durable))
-	case errors.Is(err, ErrConnection):
-		return ConsumerState{}, err
-	case err != nil:
-		return ConsumerState{}, classifyConsumerError("inspect consumer state", err)
-	}
-	return ConsumerState{NumPending: info.NumPending, NumAckPending: info.NumAckPending}, nil
 }
 
 func contextErr(ctx context.Context, operation string) error {

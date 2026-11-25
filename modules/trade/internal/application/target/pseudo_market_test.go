@@ -20,14 +20,14 @@ const pseudoSettings = `{"min_notional_swap":"0","min_notional_spot":"0"}`
 // iocChild 建一笔本目标已提交、已结束的伪市价子单（account-a，合约）。
 func (f *targetFixture) iocChild(t *testing.T, orderID string, quantity, filled string, attempt int) {
 	t.Helper()
-	f.iocChildOn(t, "account-a", "BINANCE", "BTCUSDT", orderID, quantity, filled, attempt)
+	f.iocChildOn(t, "account-a", "binance", "BTCUSDT", orderID, quantity, filled, attempt)
 }
 
 func (f *targetFixture) iocChildOn(t *testing.T, accountID, exchangeName, symbol, orderID string, quantity, filled string, attempt int) {
 	t.Helper()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: orderID, TradingAccountID: accountID, LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: orderID, Exchange: exchangeName, MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: symbol,
+		SpaceID: "space-1", OrderID: orderID, TradingAccountID: accountID, LogicalAccountID: "logical-1", InstanceID: "runner-1",
+		ClientOrderID: orderID, Exchange: exchangeName, MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: symbol,
 		OrderType: "LIMIT", TimeInForce: "IOC", Side: "BUY", Quantity: quantity, LimitPrice: strPtr("101.5"), ReferencePrice: "100",
 		FilledQuantity: filled, AveragePrice: "100", OwnerType: "TARGET", OwnerID: "target-current", State: "EXPIRED",
 		Attempt: attempt, SubmittedAt: int64(1_000 + attempt), FinishedAt: int64(1_100 + attempt), Version: 1,
@@ -36,7 +36,7 @@ func (f *targetFixture) iocChildOn(t *testing.T, accountID, exchangeName, symbol
 
 func TestPseudoMarketBuyIsLimitIOCAtReferencePlusSlippage(t *testing.T) {
 	f := swapPolicyFixture(t, pseudoSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.converge(t)
 	require.Len(t, f.orders.specs, 1)
 	spec := f.orders.specs[0]
@@ -57,7 +57,7 @@ func TestPseudoMarketSellRoundsDownAndAnOrderModeSwitchGivesPlainMarket(t *testi
 	require.Equal(t, exchange.SideSell, f.orders.specs[0].Side)
 
 	market := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0"}`)
-	market.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	market.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	market.converge(t)
 	require.Equal(t, exchange.OrderTypeMarket, market.orders.specs[0].Type)
 	require.Nil(t, market.orders.specs[0].LimitPrice)
@@ -79,7 +79,7 @@ func TestPseudoMarketPriceRoundingFollowsThePriceTick(t *testing.T) {
 // 部分成交时只补剩余量，滑点按第二次重算；单号带尝试次数。
 func TestPseudoMarketRetryOrdersOnlyTheRemainderWithWiderSlippage(t *testing.T) {
 	f := swapPolicyFixture(t, pseudoSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.iocChild(t, "ioc-0", "10", "4", 0)
 	f.position(t, "account-a", "BTCUSDT", "4")
 	f.converge(t)
@@ -109,11 +109,11 @@ func TestPseudoMarketAttemptsCountOnlyTheTrailingUnfilledRun(t *testing.T) {
 // 用满次数仍没成交完：记为未到位，不再下单，告警一次；不卡住别的标的。
 func TestPseudoMarketExhaustedAttemptsAreUnfilledAndAlertedOnce(t *testing.T) {
 	f := swapPolicyFixture(t, pseudoSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	for attempt := 0; attempt < 4; attempt++ {
 		// 两个成员都用满了次数：换成员也没用。
 		f.iocChild(t, "ioc-a"+string(rune('a'+attempt)), "10", "0", attempt)
-		f.iocChildOn(t, "account-b", "OKX", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
+		f.iocChildOn(t, "account-b", "okx", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
 	}
 	executor := f.executor()
 	executor.MinBatchInterval = 0
@@ -133,7 +133,7 @@ func TestPseudoMarketExhaustedAttemptsAreUnfilledAndAlertedOnce(t *testing.T) {
 func TestPseudoMarketExhaustedLaneDoesNotStallLaterStages(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setOrderSettings(t, `{"min_notional_swap":"0","min_notional_spot":"0"}`)
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 	})
@@ -149,10 +149,10 @@ func TestPseudoMarketExhaustedLaneDoesNotStallLaterStages(t *testing.T) {
 // 结果不明（提交中、提交结果未知）的伪市价单先查单，确认结果前不重下。
 func TestPseudoMarketUnknownResultIsResolvedBeforeReplacing(t *testing.T) {
 	f := swapPolicyFixture(t, pseudoSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "unknown-ioc", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: "unknown-ioc", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		SpaceID: "space-1", OrderID: "unknown-ioc", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
+		ClientOrderID: "unknown-ioc", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "IOC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("101.5"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-current", State: string(orderdomain.SubmitUnknown), SubmittedAt: 1_000, Version: 1,
 	})
@@ -178,7 +178,7 @@ func TestPseudoMarketSpotSellNeverExceedsSellableBalance(t *testing.T) {
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: 1_900, LastSyncAt: 1_900,
 		})
 	}))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "0"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "0"}})
 	f.converge(t)
 	require.Len(t, f.orders.specs, 1)
 	require.Equal(t, "4", f.orders.specs[0].Quantity.String())
@@ -188,7 +188,7 @@ func TestPseudoMarketSpotSellNeverExceedsSellableBalance(t *testing.T) {
 // 尝试次数按（目标，标的）统计，不是按成员：account-a 已经用满 4 次，换 account-b 也不会从头再来第 5 笔。
 func TestPseudoMarketAttemptsAreCountedPerInstrumentNotPerMember(t *testing.T) {
 	f := swapPolicyFixture(t, pseudoSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	for attempt := 0; attempt < 4; attempt++ {
 		f.iocChild(t, "ioc-a"+string(rune('a'+attempt)), "10", "0", attempt)
 	}

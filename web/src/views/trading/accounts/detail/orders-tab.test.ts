@@ -27,7 +27,7 @@ Object.defineProperty(window, "matchMedia", {
 
 let wrapper: VueWrapper;
 
-function mountTab(markets = [1]) {
+function mountTab(markets = ["spot"]) {
   const logical = ref({
     logical_account_id: "l-1",
     markets,
@@ -73,8 +73,8 @@ describe("订单筛选写在地址里", () => {
 
   it("地址里的市场读回成数字，永续不会被重置成现货", async () => {
     mocks.listOrders.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
-    nav.route = reactive({ query: { tab: "orders", osymbol: "BTC", omarket: "2" } });
-    mountTab([1, 2]);
+    nav.route = reactive({ query: { tab: "orders", osymbol: "BTC", omarket: "swap" } });
+    mountTab(["spot", "swap"]);
     await flushPromises();
     expect(mocks.listOrders.mock.calls[0][0].instrument_id).toBe("BTC-USDT-SWAP");
   });
@@ -101,7 +101,7 @@ describe("订单页的来源筛选", () => {
     mocks.listOrders.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
     const logical = ref({
       logical_account_id: "l-1",
-      markets: [1],
+      markets: ["spot"],
       members: [],
       settlement_asset: "USDT"
     } as unknown as LogicalAccount);
@@ -127,8 +127,7 @@ describe("订单页的来源筛选", () => {
     tab.search();
     await flushPromises();
     expect(mocks.listOrders).toHaveBeenLastCalledWith(
-      expect.objectContaining({ logical_account_id: "l-1", owner_type: "SYSTEM", page: { page: 1, size: 20 } }),
-      { silent: false }
+      expect.objectContaining({ logical_account_id: "l-1", owner_type: "SYSTEM", page: { page: 1, size: 20 } })
     );
 
     tab.ownerType = "";
@@ -165,7 +164,6 @@ describe("未完成订单的后台刷新", () => {
     mocks.listOrders.mockRejectedValue(new Error("网络错误"));
     await vi.advanceTimersByTimeAsync(5000);
     expect(mocks.listOrders).toHaveBeenCalledTimes(2);
-    expect(mocks.listOrders.mock.lastCall?.[1]).toEqual({ silent: true });
     expect(tab.orders).toHaveLength(1);
     expect(tab.error).toBe("");
   });
@@ -196,7 +194,7 @@ describe("未完成订单的后台刷新", () => {
     tab.openDrawer(row);
     mocks.listOrders.mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
     await vi.advanceTimersByTimeAsync(5000);
-    expect(mocks.getOrder).toHaveBeenCalledWith("o-1", { silent: true });
+    expect(mocks.getOrder).toHaveBeenCalledWith("o-1");
     expect(tab.drawerOrder?.state).toBe("FILLED");
   });
 

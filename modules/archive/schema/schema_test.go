@@ -2,6 +2,7 @@ package schema
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -15,9 +16,7 @@ func TestArchiveSchemaContainsTheFourManagerTables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS t_archive_runs",
 		"CREATE TABLE IF NOT EXISTS t_archive_partitions",
 		"CREATE TABLE IF NOT EXISTS t_archive_workers",
-		"CHECK (c_interval_seconds IN (3600, 86400))",
-		"CHECK (c_pull_every_bars BETWEEN 1 AND 1440)",
-		"CHECK (c_kind IN ('scheduled', 'manual', 'tick', 'range', 'import'))",
+		"CHECK (c_kind IN ('follow', 'manual', 'range', 'import'))",
 		"CHECK (c_purpose IN ('collect', 'factor', 'data'))",
 		"UNIQUE (c_space_id, c_dataset_id)",
 		"UNIQUE (c_space_id, c_purpose, c_dir_name)",
@@ -70,8 +69,8 @@ func TestArchiveSchemaConstraints(t *testing.T) {
 		_, err := db.Exec(query, args...)
 		return err
 	}
-	insertTask := `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_interval_seconds)
-VALUES (?, ?, ?, ?, '1m', 'day', 3600)`
+	insertTask := `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_backfill_from)
+VALUES (?, ?, ?, ?, '1m', 'day', '2026-11-01 00:00:00.000')`
 	if err := exec(insertTask, "crypto", "ds_a", "collect", "binance-spot-kline-1m"); err != nil {
 		t.Fatal(err)
 	}
@@ -92,19 +91,28 @@ VALUES (?, ?, ?, ?, '1m', 'day', 3600)`
 		t.Fatal("目录名不能为空")
 	}
 
-	insertRun := `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_import_file, c_overwrite, c_scheduled_at)
+	if err := exec(`INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit)
+VALUES ('crypto', 'ds_g', 'data', 'g', '1m', 'day')`); err == nil {
+		t.Fatal("归档起点不能为空")
+	}
+
+	insertRun := `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_scheduled_at)
 VALUES (?, 'crypto', 'ds_a', ?, ?, ?, '2026-11-08 00:00:00.000')`
-	if err := exec(insertRun, "r1", "import", nil, 0); err == nil {
-		t.Fatal("导入运行必须带 c_import_file")
+	if err := exec(insertRun, "r1", "range", nil, nil); err == nil {
+		t.Fatal("补拉区间必须带起止时间")
 	}
-	if err := exec(insertRun, "r2", "import", "/data/moox/archive/.import/i1/a.csv", 1); err != nil {
-		t.Fatalf("合法的导入运行: %v", err)
+	if err := exec(insertRun, "r2", "range", "2026-11-01 00:00:00.000", "2026-11-02 00:00:00.000"); err != nil {
+		t.Fatalf("合法的补拉区间: %v", err)
 	}
-	if err := exec(insertRun, "r3", "manual", nil, 2); err == nil {
-		t.Fatal("c_overwrite 只能是 0 或 1")
+	for i, kind := range []string{"follow", "manual", "import"} {
+		if err := exec(insertRun, fmt.Sprintf("r3_%d", i), kind, nil, nil); err != nil {
+			t.Fatalf("合法的 %s 运行: %v", kind, err)
+		}
 	}
-	if err := exec(insertRun, "r4", "unknown", nil, 0); err == nil {
-		t.Fatal("未知的运行类型必须被拒")
+	for i, kind := range []string{"unknown", "tick", "scheduled"} {
+		if err := exec(insertRun, fmt.Sprintf("r4_%d", i), kind, nil, nil); err == nil {
+			t.Fatalf("运行类型 %s 必须被拒", kind)
+		}
 	}
 
 	if err := exec(`INSERT INTO t_archive_workers (c_worker_id, c_disk_used_bytes, c_min_free_bytes) VALUES ('w', -1, 0)`); err == nil {

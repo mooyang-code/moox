@@ -1,6 +1,6 @@
 import { UNCATEGORIZED, type FactorCategory, type FactorMember } from "@/api/factor/types";
 import type { DisplayHidden } from "@/api/strategy-types";
-import type { TimeSeriesKey, ViewColumn } from "@/api/storage/types";
+import type { DatasetColumn, TimeSeriesKey } from "@/api/storage/types";
 import type { QueryTimeSeriesRowsReq } from "@/api/storage/view";
 import { PARAMS_COLUMN, parseParams } from "@/utils/factor-name";
 
@@ -45,7 +45,7 @@ export interface FactorScope {
   /** 按分类顺序、成员顺序排列的全部可见输出项。 */
   outputs: FactorOutputItem[];
   outputByColumn: Map<string, FactorOutputItem>;
-  /** 结果视图里记录各成员实际参数的系统列（__params）；视图没有时为空串。它默认不展示，由“显示参数”开关按需读取。 */
+  /** 结果数据集里记录各成员实际参数的系统列（__params）；没有时为空串。它默认不展示，由“显示参数”开关按需读取。 */
   paramsColumn: string;
   /** 默认显示的基础行情列（按视图列顺序）。 */
   baseMarket: string[];
@@ -58,7 +58,8 @@ export interface FactorScope {
 }
 
 export interface FactorScopeInput {
-  viewColumns: ViewColumn[];
+  /** 结果数据集启用的列。 */
+  columns: DatasetColumn[];
   members: FactorMember[];
   categories: FactorCategory[];
   /** 关联策略实例的外显设置；任务还没有关联实例时为空。 */
@@ -67,8 +68,8 @@ export interface FactorScopeInput {
 
 const systemKeySet = new Set<string>(SYSTEM_KEYS);
 
-function isSystemColumn(column: ViewColumn) {
-  return systemKeySet.has(column.column_name) || column.origin_type === "COLUMN_ORIGIN_TYPE_SYSTEM";
+function isSystemColumn(column: DatasetColumn) {
+  return systemKeySet.has(column.column_name);
 }
 
 function categoryOf(member: FactorMember) {
@@ -76,14 +77,14 @@ function categoryOf(member: FactorMember) {
 }
 
 /**
- * 结果页的有效范围：因子目录只认当前成员清单（已移除成员留在视图里的残留列不算），分类取成员当前定义；
+ * 结果页的有效范围：因子目录只认当前成员清单（已移除成员留在结果数据集里的残留列不算），分类取成员当前定义；
  * 策略外显设置按分类、成员、单列三种规则逐列隐藏；行情列是不带 column_kind 的业务列。
  */
 export function buildFactorScope(input: FactorScopeInput): FactorScope {
   const hiddenCategories = new Set(input.hidden?.categories ?? []);
   const hiddenMembers = new Set(input.hidden?.members ?? []);
   const hiddenColumns = new Set(input.hidden?.columns ?? []);
-  const viewByName = new Map(input.viewColumns.map(column => [column.column_name, column]));
+  const columnByName = new Map(input.columns.map(column => [column.column_name, column]));
 
   const categoryNames = new Map(input.categories.map(category => [category.category_id, category.name]));
   const categoryRank = new Map(input.categories.map((category, index) => [category.category_id, index]));
@@ -91,7 +92,7 @@ export function buildFactorScope(input: FactorScopeInput): FactorScope {
     categoryId === UNCATEGORIZED ? Number.MAX_SAFE_INTEGER : (categoryRank.get(categoryId) ?? Number.MAX_SAFE_INTEGER - 1);
 
   const memberColumns = new Set<string>();
-  const paramsColumn = input.viewColumns.find(column => column.column_name === PARAMS_COLUMN)?.column_name ?? "";
+  const paramsColumn = input.columns.find(column => column.column_name === PARAMS_COLUMN)?.column_name ?? "";
   const visibleMembers: Array<{ member: FactorMember; categoryId: string; index: number }> = [];
   input.members.forEach((member, index) => {
     for (const column of member.output_columns ?? []) memberColumns.add(column);
@@ -104,7 +105,7 @@ export function buildFactorScope(input: FactorScopeInput): FactorScope {
   const outputs: FactorOutputItem[] = [];
   const usedCategories: string[] = [];
   for (const { member, categoryId } of visibleMembers) {
-    const visible = (column: string) => viewByName.has(column) && !hiddenColumns.has(column);
+    const visible = (column: string) => columnByName.has(column) && !hiddenColumns.has(column);
     const outputNames = member.factor?.outputs ?? [];
     let added = false;
     (member.output_columns ?? []).forEach((column, index) => {
@@ -126,7 +127,7 @@ export function buildFactorScope(input: FactorScopeInput): FactorScope {
   const baseSet = new Set(BASE_MARKET_COLUMNS);
   const baseMarket: string[] = [];
   const otherSource: string[] = [];
-  for (const column of input.viewColumns) {
+  for (const column of input.columns) {
     const name = column.column_name;
     if (!name || isSystemColumn(column) || hiddenColumns.has(name)) continue;
     if (column.attributes?.column_kind || memberColumns.has(name)) continue;
@@ -182,12 +183,12 @@ export function valueColumnsFor(scope: FactorScope, items: FactorOutputItem[], w
 }
 
 /** 精确读取一行：完整 selector（显式带 series_tag，默认序列为空串）加 [t, t+1ms)，不统计总数。 */
-export function rowValuesRequest(viewId: string, key: TimeSeriesKey, columns: string[]): QueryTimeSeriesRowsReq {
+export function rowValuesRequest(datasetId: string, key: TimeSeriesKey, columns: string[]): QueryTimeSeriesRowsReq {
   const start = new Date(key.data_time || "");
   const end = new Date(start.getTime() + 1);
   return {
     space_id: key.space_id,
-    view_id: viewId,
+    dataset_id: datasetId,
     selectors: [
       {
         space_id: key.space_id,

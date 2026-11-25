@@ -22,7 +22,7 @@ func TestDatasetCreateIsActiveAndCarriesColumns(t *testing.T) {
 		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source",
 		Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		Status: "disabled", Revision: 99,
-	}, &pb.DatasetColumn{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
+	}, &pb.DatasetColumn{ColumnName: "close", DisplayName: "收盘价", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,29 +50,23 @@ func TestDatasetCreateIsActiveAndCarriesColumns(t *testing.T) {
 	}
 }
 
-func TestDeleteDatasetRejectsReferencedOrdinaryDatasetWithoutDeletingView(t *testing.T) {
+func TestDeleteDatasetRemovesItsColumnsInOneCall(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset-ordinary", DataSourceId: "source",
 		Name: "Ordinary", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
-	}); err != nil {
+	}, &pb.DatasetColumn{ColumnName: "close", DisplayName: "收盘价", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateView(ctx, &pb.View{
-		SpaceId: "space", ViewId: "view-ordinary", Name: "Ordinary view", DatasetId: "dataset-ordinary", Engine: "duckdb",
-	}); err != nil {
+	// 查询索引不单独登记，删数据集一次调用即可。
+	if err := store.DeleteDataset(ctx, "space", "dataset-ordinary"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.DeleteDataset(ctx, "space", "dataset-ordinary"); err == nil {
-		t.Fatal("DeleteDataset() succeeded while an ordinary View references the Dataset")
-	}
-	if _, err := store.GetDataset(ctx, "space", "dataset-ordinary"); err != nil {
-		t.Fatalf("Dataset was deleted after rejected request: %v", err)
-	}
-	if _, err := store.GetView(ctx, "space", "view-ordinary"); err != nil {
-		t.Fatalf("ordinary View was deleted after rejected request: %v", err)
+	columns, _, err := store.ListDatasetColumns(ctx, "space", "dataset-ordinary", nil)
+	if err != nil || len(columns) != 0 {
+		t.Fatalf("删数据集后列应随之删除：%v, %v", columns, err)
 	}
 }
 
@@ -274,27 +268,6 @@ func TestTimeSeriesDatasetRequiresOneCanonicalImmutableFreq(t *testing.T) {
 	}
 }
 
-func TestViewTakesItsDatasetFreq(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	createTestDataset(t, ctx, store, "dataset")
-	view, err := store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if view.GetFreq() != "1m" {
-		t.Fatalf("view freq = %q, want the Dataset freq 1m", view.GetFreq())
-	}
-	stored, err := store.GetView(ctx, "space", "view")
-	if err != nil || stored.GetFreq() != "1m" {
-		t.Fatalf("stored view freq = %q, %v", stored.GetFreq(), err)
-	}
-	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "view", Name: "View", DatasetId: "dataset", Engine: "duckdb", Freq: "1h"}); err == nil || !strings.Contains(err.Error(), "a View takes its Dataset's freq") {
-		t.Fatalf("mismatched view freq error = %v", err)
-	}
-}
-
 // 元数据库的错误带类别，由 retinfo.Code 统一映射：参数错误、不存在、冲突，与错误文字无关。
 func TestMetadataStoreErrorsCarryKinds(t *testing.T) {
 	ctx := context.Background()
@@ -310,11 +283,33 @@ func TestMetadataStoreErrorsCarryKinds(t *testing.T) {
 	if _, err := store.GetDataset(ctx, "space", "missing"); retinfo.Code(err) != pb.ErrorCode_NOT_FOUND {
 		t.Fatalf("不存在的数据集 = %v（%v），想要 NOT_FOUND", retinfo.Code(err), err)
 	}
-	view := &pb.View{SpaceId: "space", ViewId: "view_dup", Name: "视图", DatasetId: "dataset"}
-	if _, err := store.CreateView(ctx, view); err != nil {
-		t.Fatal(err)
+}
+
+// 数据集的 created_at 是查询索引的归属标识：停用、启用、改优先级之后列出时必须不变，否则索引会被当成不属于它而重建。
+func TestDatasetCreatedAtSurvivesUpdates(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	createTestDataset(t, ctx, store, "dataset")
+	createdAt := func() int64 {
+		t.Helper()
+		listed, _, err := store.ListDatasets(ctx, DatasetQuery{SpaceID: "space"})
+		if err != nil || len(listed) != 1 {
+			t.Fatalf("list = %v, %v", listed, err)
+		}
+		return listed[0].GetCreatedAt()
 	}
-	if _, err := store.CreateView(ctx, proto.Clone(view).(*pb.View)); retinfo.Code(err) != pb.ErrorCode_CONFLICT {
-		t.Fatalf("重复建 View = %v（%v），想要 CONFLICT", retinfo.Code(err), err)
+	before := createdAt()
+	for _, update := range []*pb.Dataset{
+		{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", Status: "disabled"},
+		{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", Status: "active"},
+		{SpaceId: "space", DatasetId: "dataset", Name: "Dataset", MaintenancePriority: 10},
+	} {
+		if _, err := store.UpdateDataset(ctx, update); err != nil {
+			t.Fatal(err)
+		}
+		if got := createdAt(); got != before {
+			t.Fatalf("更新后 created_at = %d，原来是 %d", got, before)
+		}
 	}
 }

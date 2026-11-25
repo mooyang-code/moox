@@ -3,10 +3,11 @@ package command
 import (
 	"context"
 	"errors"
-	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
-	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"testing"
 	"time"
+
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -142,13 +143,13 @@ func TestSetupVerifyFailsOnSilentComponents(t *testing.T) {
 func TestCriticalAlertLinesSkipReadonlyKeyMissing(t *testing.T) {
 	overview := &monitorpb.HealthOverview{
 		Alerts: []*monitorpb.HealthAlert{
-			{Id: "collector_attention:delist_readonly_key_missing", Severity: "warning", Title: "下架检测缺少币安只读 Key",
-				Object: &monitorpb.HealthObject{Type: "business", Kind: "collector_attention", AttentionKind: "delist_readonly_key_missing"}},
-			{Id: "collector_attention:delist_source_failed", Severity: "critical", Title: "下架检测来源连续失败",
-				Object: &monitorpb.HealthObject{Type: "business", Kind: "collector_attention", AttentionKind: "delist_source_failed"}},
+			{Id: "mooxsys/attention:collector:delist_readonly_key_missing", Severity: "warning", Title: "下架检测缺少币安只读 Key",
+				Object: &monitorpb.HealthObject{Type: "business", Kind: "attention", ComponentId: "collector", AttentionKind: "delist_readonly_key_missing"}},
+			{Id: "mooxsys/attention:collector:delist_source_failed", Severity: "critical", Title: "下架检测来源连续失败",
+				Object: &monitorpb.HealthObject{Type: "business", Kind: "attention", ComponentId: "collector", AttentionKind: "delist_source_failed"}},
 		},
 		BusinessChecks: []*monitorpb.HealthBusinessCheck{
-			{CheckId: "collector_attention:delist_readonly_key_missing", Name: "下架检测缺少币安只读 Key", Status: "degraded"},
+			{CheckId: "attention:collector:delist_readonly_key_missing", Name: "下架检测缺少币安只读 Key", Status: "degraded"},
 		},
 	}
 	lines := criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items)
@@ -213,7 +214,7 @@ func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp 
 		if g.tasksDisabled && req.(*collectorpb.GetTaskListReq).Enabled != nil {
 			return nil
 		}
-		out.Tasks = []*collectorpb.CollectionTask{{TaskId: "task_a", Result: &collectorpb.TaskResult{ViewId: "view_task_a_kline_1m", DatasetId: "dataset_task_a"}}}
+		out.Tasks = []*collectorpb.CollectionTask{{TaskId: "task_a", Result: &collectorpb.TaskResult{DatasetId: "dataset_task_a"}}}
 	case *collectorpb.GetCollectorStatusRsp:
 		out.Datasets = []*collectorpb.CollectorDatasetStatus{{DatasetId: "dataset_task_a", Frequency: "1m"}}
 		out.Applied = &collectorpb.FetchPlanSummary{}

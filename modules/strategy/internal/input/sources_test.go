@@ -29,13 +29,13 @@ portfolio: {max_missing: 1}
 // withDailySource 在 fake 上加一个日线因子 View（任务 ftask_d1d）：K 线列 close 与因子列 ma__20（成员 dma）。calendar 非空时
 // 主帧与来源的数据集都声明这个日历。
 func withDailySource(client *fakeClient, marketType, calendar string) {
-	client.views["view_factor_d1d"] = ViewInfo{ViewID: "view_factor_d1d", DatasetID: "ds_factor_d", Frequency: "1d", Status: "active", ActiveIndexID: "idx_d",
+	client.views["dataset_factor_d1d"] = ViewInfo{DatasetID: "dataset_factor_d1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx_d",
 		Columns: []ViewColumn{plainColumn("close"), factorColumn("ma__20", "dma")}}
-	client.datasets["ds_factor_d"] = DatasetInfo{DatasetID: "ds_factor_d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{"source_dataset_id": "ds_kline_d"}}
+	client.datasets["dataset_factor_d1d"] = DatasetInfo{DatasetID: "dataset_factor_d1d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{"source_dataset_id": "ds_kline_d"}}
 	client.datasets["ds_kline_d"] = DatasetInfo{DatasetID: "ds_kline_d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + marketType}}
 	client.factors["dma"] = FactorInfo{FactorID: "dma", DefinitionHash: "sha256:dma"}
 	if calendar != "" {
-		for id, sourceID := range map[string]string{"ds_factor": "ds_kline", "ds_factor_d": "ds_kline_d"} {
+		for id, sourceID := range map[string]string{"dataset_factor_1h": "ds_kline", "dataset_factor_d1d": "ds_kline_d"} {
 			dataset := client.datasets[id]
 			dataset.Attributes = map[string]string{"source_dataset_id": sourceID, "calendar": calendar}
 			client.datasets[id] = dataset
@@ -56,7 +56,7 @@ func TestResolveTasksBindsSource(t *testing.T) {
 		t.Fatalf("解析失败：%v", err)
 	}
 	source, ok := resolved.Sources["daily"]
-	if !ok || source.Bar != "1d" || source.Calendar != DefaultCalendar || source.Tasks["spot"].ViewID != "view_factor_d1d" {
+	if !ok || source.Bar != "1d" || source.Calendar != DefaultCalendar || source.Tasks["spot"].DatasetID != "dataset_factor_d1d" {
 		t.Fatalf("来源绑定不符：%+v", resolved.Sources)
 	}
 	if source.Factors["dma"] != "sha256:dma|fixed" || len(source.Factors) != 1 || source.Columns["ma__20"].Member != "dma" || source.Columns["close"].Source != SourceDataset {
@@ -119,20 +119,20 @@ func TestResolveTasksRejectsBadSource(t *testing.T) {
 		"未声明的来源":    {func(*fakeClient) {}, sourceDSL, map[string]string{"spot": "ftask_1h", "daily:spot": "ftask_d1d", "weekly:spot": "ftask_d1d"}, "没有声明 weekly"},
 		"声明的来源没绑任务": {func(*fakeClient) {}, sourceDSL, map[string]string{"spot": "ftask_1h"}, "需要为它绑定因子任务"},
 		"周期不是整数倍": {func(c *fakeClient) {
-			v := c.views["view_factor_d1d"]
+			v := c.views["dataset_factor_d1d"]
 			v.Frequency = "90m"
-			c.views["view_factor_d1d"] = v
+			c.views["dataset_factor_d1d"] = v
 		}, strings.Replace(sourceDSL, "{bar: 1d}", "{bar: 90m}", 1), sourceTasks(), "必须是主帧周期 1h 的整数倍"},
 		"来源周期与 DSL 不符": {func(*fakeClient) {}, strings.Replace(sourceDSL, "{bar: 1d}", "{bar: 4h}", 1), sourceTasks(), "bar 断言为 4h"},
 		"可变成员": {func(c *fakeClient) {
-			v := c.views["view_factor_d1d"]
+			v := c.views["dataset_factor_d1d"]
 			v.Columns = append(append([]ViewColumn(nil), v.Columns...), memberColumn("w__var", "w__var", "w", "var"))
-			c.views["view_factor_d1d"] = v
+			c.views["dataset_factor_d1d"] = v
 		}, sourceDSL, sourceTasks(), "来源任务不能有可变成员"},
 		"缺来源列": {func(c *fakeClient) {
-			v := c.views["view_factor_d1d"]
+			v := c.views["dataset_factor_d1d"]
 			v.Columns = []ViewColumn{plainColumn("close")}
-			c.views["view_factor_d1d"] = v
+			c.views["dataset_factor_d1d"] = v
 		}, sourceDSL, sourceTasks(), "列 ma__20 不存在于来源 daily"},
 		"来源市场不对": {func(c *fakeClient) {
 			c.datasets["ds_kline_d"] = DatasetInfo{DatasetID: "ds_kline_d", Status: "active", Frequency: "1d", Attributes: map[string]string{}, SubjectTags: []string{"binance_swap"}}
@@ -167,7 +167,7 @@ func TestLoadBarReadsSourceAsOf(t *testing.T) {
 	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC) // 2026-10-01 00:00 收盘的日线
 	var sourceStarts []time.Time
 	client.rows = func(query Query) ([]Row, uint64, error) {
-		if query.ViewID == "view_factor_d1d" {
+		if query.DatasetID == "dataset_factor_d1d" {
 			sourceStarts = append(sourceStarts, query.Start)
 			if !query.End.Equal(query.Start.Add(time.Nanosecond)) {
 				t.Fatalf("来源只读应读的那一根：%s ~ %s", query.Start, query.End)
@@ -194,7 +194,7 @@ func TestLoadBarReadsSourceAsOf(t *testing.T) {
 		if _, has := rows["ETH-USDT"].Values["daily.close"]; has {
 			t.Fatalf("%s：来源缺一期时不应读到旧行：%+v", name, rows["ETH-USDT"].Values)
 		}
-		if loaded.SourceRevisions["view_factor_d1d"] != 7 {
+		if loaded.SourceRevisions["dataset_factor_d1d"] != 7 {
 			t.Fatalf("%s：应记下来源的修订号：%v", name, loaded.SourceRevisions)
 		}
 		// BTC 过 filter（10 > 9），SOL 不过，ETH 缺数：选 BTC。
@@ -224,7 +224,7 @@ func TestLoadBarReadsSourceAsOf(t *testing.T) {
 func TestLoadBarStockSourceAsOf(t *testing.T) {
 	client := newFakeClient("spot")
 	withDailySource(client, "spot", "cn_stock")
-	for _, id := range []string{"view_factor_1h", "view_factor_d1d"} {
+	for _, id := range []string{"dataset_factor_1h", "dataset_factor_d1d"} {
 		view := client.views[id]
 		view.IndexedFrom, view.IndexedTo = time.Time{}, time.Time{}
 		client.views[id] = view
@@ -238,7 +238,7 @@ func TestLoadBarStockSourceAsOf(t *testing.T) {
 	}
 	var sourceStart time.Time
 	client.rows = func(query Query) ([]Row, uint64, error) {
-		if query.ViewID == "view_factor_d1d" {
+		if query.DatasetID == "dataset_factor_d1d" {
 			sourceStart = query.Start
 			return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 2, "ma__20": 1}}), 3, nil
 		}
@@ -275,14 +275,14 @@ func TestExpectedViewsBySourceAlignment(t *testing.T) {
 		t.Fatal(err)
 	}
 	aligned, err := resolved.ExpectedViews(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
-	if err != nil || strings.Join(aligned, ",") != "view_factor_1h,view_factor_d1d" {
+	if err != nil || strings.Join(aligned, ",") != "dataset_factor_1h,dataset_factor_d1d" {
 		t.Fatalf("对齐的那根要等两边：%v %v", aligned, err)
 	}
 	other, err := resolved.ExpectedViews(time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC))
-	if err != nil || strings.Join(other, ",") != "view_factor_1h" {
+	if err != nil || strings.Join(other, ",") != "dataset_factor_1h" {
 		t.Fatalf("其余时刻只等主帧：%v %v", other, err)
 	}
-	if key, source, reference, ok := resolved.ViewRole("view_factor_d1d"); !ok || source != "daily" || key != "spot" || reference {
+	if key, source, reference, ok := resolved.RoleOfDataset("dataset_factor_d1d"); !ok || source != "daily" || key != "spot" || reference {
 		t.Fatalf("来源 View 的角色：%s %s %v %v", key, source, reference, ok)
 	}
 }
@@ -303,7 +303,7 @@ portfolio: {max_missing: 1}
 // S3 参考市场：单市场加参考市场时 age_markets: all 读参考市场的历史判年龄；参考市场不进帧、不参与选择与下单。
 func TestReferenceMarketAgeJudgement(t *testing.T) {
 	client := newDualClient()
-	for _, id := range []string{"view_factor_1h", "view_factor_swap1h"} {
+	for _, id := range []string{"dataset_factor_1h", "dataset_factor_swap1h"} {
 		view := client.views[id]
 		view.SeriesBars = 1000
 		client.views[id] = view
@@ -313,24 +313,24 @@ func TestReferenceMarketAgeJudgement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
-	if resolved.Market.Select != "swap" || len(resolved.Tasks) != 1 || resolved.References["spot"].ViewID != "view_factor_1h" || resolved.Gathers() {
+	if resolved.Market.Select != "swap" || len(resolved.Tasks) != 1 || resolved.References["spot"].DatasetID != "dataset_factor_1h" || resolved.Gathers() {
 		t.Fatalf("参考市场不进主帧：%+v", resolved)
 	}
 	if err := CheckResolvedMarkets(resolved, tasks); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, reference, ok := resolved.ViewRole("view_factor_1h"); !ok || !reference {
+	if _, _, reference, ok := resolved.RoleOfDataset("dataset_factor_1h"); !ok || !reference {
 		t.Fatal("现货 View 是参考市场")
 	}
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		if len(query.Columns) == 1 && query.Columns[0] == "close" && query.End.Before(barStart) {
 			// 年龄探针：永续上 BTC、ETH 都满 3 根；现货上只有 BTC。
-			if query.ViewID == "view_factor_swap1h" {
+			if query.DatasetID == "dataset_factor_swap1h" {
 				return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 1}, "ETH-USDT": {"close": 1}}), 1, nil
 			}
 			return rowsAt(query.Start, map[string]map[string]float64{"BTC-USDT": {"close": 1}}), 1, nil
 		}
-		if query.ViewID == "view_factor_1h" {
+		if query.DatasetID == "dataset_factor_1h" {
 			t.Fatalf("参考市场不读行：%+v", query)
 		}
 		return rowsAt(barStart, map[string]map[string]float64{"BTC-USDT": {"ma_20": 1}, "ETH-USDT": {"ma_20": 2}, "DOGE-USDT": {"ma_20": 3}}), 1, nil
@@ -391,9 +391,9 @@ func TestLoadBarGroupBySourceColumn(t *testing.T) {
 	if _, _, err := ResolveTasks(context.Background(), client, "space", sourceTasks(), parseStrategy(t, groupSourceDSL)); err == nil || !strings.Contains(err.Error(), "industry") {
 		t.Fatalf("来源 View 没有 group.by 的列时应报错：%v", err)
 	}
-	view := client.views["view_factor_d1d"]
+	view := client.views["dataset_factor_d1d"]
 	view.Columns = append(view.Columns, plainColumn("industry"))
-	client.views["view_factor_d1d"] = view
+	client.views["dataset_factor_d1d"] = view
 	resolved, program, err := ResolveTasks(context.Background(), client, "space", sourceTasks(), parseStrategy(t, groupSourceDSL))
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
@@ -405,7 +405,7 @@ func TestLoadBarGroupBySourceColumn(t *testing.T) {
 	evaluate := func(daily map[string]map[string]float64) engine.Decision {
 		t.Helper()
 		client.rows = func(query Query) ([]Row, uint64, error) {
-			if query.ViewID == "view_factor_d1d" {
+			if query.DatasetID == "dataset_factor_d1d" {
 				if len(query.Columns) != 1 || query.Columns[0] != "industry" {
 					t.Fatalf("来源应只读 industry：%v", query.Columns)
 				}
@@ -459,10 +459,10 @@ func tunedSourceClient() *fakeClient {
 	withDailySource(client, "spot", "")
 	client.factors["bias"] = FactorInfo{FactorID: "bias", DefinitionHash: "sha256:bias", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
 	client.factors["w"] = FactorInfo{FactorID: "w", DefinitionHash: "sha256:w", Params: []ParamDecl{{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}
-	for viewID, column := range map[string]ViewColumn{"view_factor_1h": memberColumn("bias__var", "bias__var", "bias", "var"), "view_factor_d1d": memberColumn("w__var", "w__var", "w", "var")} {
-		view := client.views[viewID]
+	for datasetID, column := range map[string]ViewColumn{"dataset_factor_1h": memberColumn("bias__var", "bias__var", "bias", "var"), "dataset_factor_d1d": memberColumn("w__var", "w__var", "w", "var")} {
+		view := client.views[datasetID]
 		view.Columns = append(append([]ViewColumn(nil), view.Columns...), column, paramsColumn())
-		client.views[viewID] = view
+		client.views[datasetID] = view
 	}
 	return client
 }
@@ -509,9 +509,9 @@ func TestTunedInstanceBindsOnlyAfterResolvePasses(t *testing.T) {
 
 	// 解析通过：关联主帧任务，来源任务不关联。
 	plainSource := tunedSourceClient()
-	view := plainSource.views["view_factor_d1d"]
+	view := plainSource.views["dataset_factor_d1d"]
 	view.Columns = view.Columns[:2]
-	plainSource.views["view_factor_d1d"] = view
+	plainSource.views["dataset_factor_d1d"] = view
 	ok := &tasksFake{}
 	if _, _, err := (Service{Client: plainSource, Sets: ok}).ResolveInstance(context.Background(), "a", "space", sourceTasks(), parseStrategy(t, tunedSource)); err != nil {
 		t.Fatalf("来源没有可变成员时应通过：%v", err)

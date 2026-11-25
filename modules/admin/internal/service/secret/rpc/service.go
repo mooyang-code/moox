@@ -381,8 +381,8 @@ func secretModelToPB(s *model.Secret) *pb.Secret {
 		ExtraConfig: redactExtraConfig(s.ExtraConfig),
 		Status:      s.Status,
 		Creator:     s.Creator,
-		CreateTime:  formatTime(s.CreateTime),
-		ModifyTime:  formatTime(s.ModifyTime),
+		CreatedAt:   unixMilli(s.CreateTime),
+		UpdatedAt:   unixMilli(s.ModifyTime),
 	}
 }
 
@@ -443,12 +443,12 @@ func maskSecretValue(value string) string {
 	return value[:prefix] + strings.Repeat(maskChar, n-prefix-suffix) + value[n-suffix:]
 }
 
-// formatTime 输出带时区的 UTC 时间（RFC3339），前端按页面的显示时区换算；不带时区的字符串前端无法正确换算。
-func formatTime(t time.Time) string {
+// unixMilli 把时刻换成 Unix 毫秒，零时间给 0。
+func unixMilli(t time.Time) int64 {
 	if t.IsZero() {
-		return ""
+		return 0
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.UnixMilli()
 }
 
 const maskedExtraValue = "******"

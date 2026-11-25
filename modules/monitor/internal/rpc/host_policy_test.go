@@ -1,6 +1,8 @@
 package rpc
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -50,4 +52,38 @@ func TestGetHostPolicyReturnsChannels(t *testing.T) {
 	unavailable, err := (&Service{}).GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{})
 	require.NoError(t, err)
 	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, unavailable.GetRetInfo().GetCode())
+}
+
+// 主机快照先收下再判评估停滞：评估停了快照照常入库；快照收不下时策略照常返回，不让 HostAgent 当成 Monitor 不可达。
+func TestGetHostPolicyIngestsHostReportBeforeStalenessCheck(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.ApplySchema(schema.SQL()))
+	var received []*monitorpb.HostReport
+	var ingestErr error
+	service := New(db.Repositories(), Options{
+		HostReports: func(_ context.Context, report *monitorpb.HostReport) error {
+			received = append(received, report)
+			return ingestErr
+		},
+		EvaluationStale: func() string { return "last complete business evaluation was 5m0s ago" },
+	})
+	report := &monitorpb.HostReport{ReportId: "r1"}
+	stalled, err := service.GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{Host: report})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, stalled.GetRetInfo().GetCode())
+	require.Equal(t, []*monitorpb.HostReport{report}, received)
+
+	service.evalStale = nil
+	ingestErr = errors.New("主机快照的采集时间不合法")
+	policy, err := service.GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{Host: report})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, policy.GetRetInfo().GetCode())
+	require.Len(t, received, 2)
+
+	// 采集失败的那一分钟不带快照，只拉策略。
+	_, err = service.GetHostPolicy(t.Context(), &monitorpb.GetHostPolicyReq{})
+	require.NoError(t, err)
+	require.Len(t, received, 2)
 }

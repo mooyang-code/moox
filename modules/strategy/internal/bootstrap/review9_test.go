@@ -14,7 +14,7 @@ import (
 // 否则周五 ok、周一重启后第一条跳过会让期望间隔退回 24 小时，周一 15:10 就报 success stale。
 func TestStockBasesLoadedAfterEventsArrivedFirst(t *testing.T) {
 	repo := openStore(t)
-	stockJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1d","calendar":"cn_stock","columns":{},"view_columns":["close"]}`
+	stockJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1d","calendar":"cn_stock","columns":{},"view_columns":["close"]}`
 	seedEnabled(t, repo, "i1", nil, stockJSON)
 	shanghai := time.FixedZone("CST", 8*3600)
 	friday := time.Date(2026, 10, 9, 15, 0, 0, 0, shanghai)

@@ -242,7 +242,7 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	desired, err := fetchplan.BuildDesiredState(hkE2EPlanOptions(), []fetchplan.TaskGroup{hkE2EGroup("00700.XHKG")}, nil)
 	require.NoError(t, err)
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime("2026-11-10 09:30:00").Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: hkTime("2026-11-10 09:30:00")})
 	require.NoError(t, err)
 	raw, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func TestStockHKRefetchAfterCloseOverwritesTheCloseBar(t *testing.T) {
 	invoker := &hkFunctionInvoker{t: t, handler: handler}
 	checker := &klinecheck.Checker{Timeline: db.SeriesTimeline(), Rows: storage, Absences: db.Backfill(), Now: clock, Calendar: markets.TradingBar}
 	backfiller := &klinecheck.Backfiller{
-		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: invoker, BaseCtx: context.Background(), Now: clock,
+		Checker: checker, Store: db.Backfill(), Routes: contentRoutes{content}, Invoker: invoker, BaseCtx: context.Background(), Now: clock,
 		Functions:    func(string) klinecheck.FunctionProvider { return hkBackfillFunctions{} },
 		CloseRefetch: markets.CloseRefetchDay,
 	}
@@ -417,8 +417,23 @@ func firstPlanTimeline(spaceID string, content *fetchplan.FetchPlanContent) []st
 	for _, change := range content.Datasets {
 		entries = append(entries, store.SeriesTimelineEntry{
 			SpaceID: spaceID, DatasetID: change.DatasetID, Frequency: change.Frequency, EffectiveFrom: change.P,
-			SeriesHash: change.Hash, Series: change.Series, LatenessS: change.LatenessS, OutputFields: change.OutputFields,
+			SeriesHash: change.Hash, Series: change.Series, Symbols: change.Symbols, LatenessS: change.LatenessS, OutputFields: change.OutputFields,
 		})
 	}
 	return entries
+}
+
+// contentRoutes 用计划里唯一市场的函数计划当作补采路由（生产取当前任务，见 fetchplan.BackfillRoutes）。
+type contentRoutes struct{ content *fetchplan.FetchPlanContent }
+
+func (r contentRoutes) BackfillRoute(_ context.Context, _, datasetID, frequency string) (*marketfetch.Plan, bool, error) {
+	for _, name := range r.content.SortedFunctionNames() {
+		plan := r.content.Functions[name].New
+		for _, dataset := range plan.Datasets {
+			if dataset.DatasetID == datasetID && dataset.Frequency == frequency {
+				return &marketfetch.Plan{V: 1, Market: plan.Market, Fetch: plan.Fetch, Datasets: []marketfetch.PlanDataset{{DatasetID: datasetID, Frequency: frequency, OutputFields: dataset.OutputFields}}}, true, nil
+			}
+		}
+	}
+	return nil, false, nil
 }

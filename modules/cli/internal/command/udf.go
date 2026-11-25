@@ -245,6 +245,14 @@ func orNone(list []string) string {
 	return strings.Join(list, "、")
 }
 
+// instantText 把接口里的 Unix 毫秒写成 RFC3339（UTC），0 写“（无）”。
+func instantText(ms int64) string {
+	if ms <= 0 {
+		return "（无）"
+	}
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
+}
+
 // ---------------------------------------------------------------- list / show
 
 func runUdfList(ctx context.Context, out io.Writer, file string, asJSON bool) error {
@@ -264,7 +272,7 @@ func runUdfList(ctx context.Context, out io.Writer, file string, asJSON bool) er
 		if active == "" {
 			active = "（未启用）"
 		}
-		fmt.Fprintf(out, "%s\t启用 %s\t版本 %d\t被 %d 个因子定义引用\t更新 %s\n", udf.GetName(), active, len(udf.GetVersions()), len(udf.GetReferencedBy()), udf.GetUpdatedAt())
+		fmt.Fprintf(out, "%s\t启用 %s\t版本 %d\t被 %d 个因子定义引用\t更新 %s\n", udf.GetName(), active, len(udf.GetVersions()), len(udf.GetReferencedBy()), instantText(udf.GetUpdatedAt()))
 	}
 	return nil
 }
@@ -295,7 +303,7 @@ func runUdfShow(ctx context.Context, out io.Writer, file, name string, asJSON bo
 		}
 		states := modules[v.GetHash()]
 		sort.Strings(states)
-		fmt.Fprintf(out, "   %s %s  来源 %s  %s  引擎模块：%s\n", mark, v.GetHash(), v.GetSourceRef(), v.GetCreatedAt(), orNone(states))
+		fmt.Fprintf(out, "   %s %s  来源 %s  %s  引擎模块：%s\n", mark, v.GetHash(), v.GetSourceRef(), instantText(v.GetCreatedAt()), orNone(states))
 	}
 	return nil
 }
@@ -314,8 +322,8 @@ var udfCmd = &cobra.Command{
   moox-cli udf activate <名称>@<哈希> [--yes]         切换启用版本：默认只给出影响清单与前提检查，--yes 才切换
   moox-cli udf list | show <名称>                     查看版本、引用关系与各引擎的模块状态
 
-切换启用版本要在因子引擎模块暂停期间进行：lifecycle pause（默认连因子引擎，按 moox.toml 自动解析；等收敛）→ 取消列出的已领取补算作业 →
-udf activate --yes → lifecycle resume（追赶：同步目录、备齐模块、用新版本补算暂停期间的周期，再放行）。`,
+切换启用版本与 factor update 同一组前提：udf activate 预览 → 停用列出的已启用成员（factor member disable）、取消列出的已经开始的补算作业 →
+udf activate --yes → 重新启用成员，停用期间的周期用 factor recalc submit 按新版本补算。`,
 }
 
 func newUdfCommands() *cobra.Command {

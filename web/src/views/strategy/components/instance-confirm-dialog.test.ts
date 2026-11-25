@@ -108,7 +108,7 @@ describe("确认实盘", () => {
       [shadow(), shadow({ target_id: "t-old", session_id: "session-1" })],
       onSettled
     );
-    expect(api.listShadowTargets).toHaveBeenCalledWith("inst-1", 20, { silent: true });
+    expect(api.listShadowTargets).toHaveBeenCalledWith("inst-1", 20);
     const text = document.body.textContent || "";
     expect(text).toContain("主组合");
     expect(text).toContain("生产环境");

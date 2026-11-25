@@ -19,7 +19,7 @@ func openDualMarketAccount(t *testing.T) *store.Store {
 	tradeStore := openRPCStore(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "dual-1", Name: "dual", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"},
+			SpaceID: "space-1", TradingAccountID: "dual-1", Name: "dual", Exchange: "binance", Markets: []string{"spot", "swap"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))
@@ -32,24 +32,24 @@ func TestRequestInstrumentIDUsesExplicitMarket(t *testing.T) {
 	ctx := context.Background()
 	handler := &ExecutionServer{Store: openDualMarketAccount(t)}
 
-	got, err := handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT", tradepb.MarketType_MARKET_TYPE_SWAP)
+	got, err := handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT", "swap")
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT-SWAP", got)
-	got, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT", tradepb.MarketType_MARKET_TYPE_SPOT)
+	got, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT", "spot")
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT-SPOT", got)
 
 	// 没给市场时回到账户规则：开通多个市场必须带后缀。
-	_, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT", tradepb.MarketType_MARKET_TYPE_UNSPECIFIED)
+	_, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT", "")
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
-	got, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT-SWAP", tradepb.MarketType_MARKET_TYPE_UNSPECIFIED)
+	got, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT-SWAP", "")
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT-SWAP", got)
 
 	// 请求的市场账户没开通，或后缀与请求的市场矛盾。
-	_, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "600519", tradepb.MarketType_MARKET_TYPE_STOCK)
+	_, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "600519", "equity")
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
-	_, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT-SWAP", tradepb.MarketType_MARKET_TYPE_SPOT)
+	_, err = handler.requestInstrumentID(ctx, "space-1", "dual-1", "BTC-USDT-SWAP", "spot")
 	require.Error(t, err)
 }
 
@@ -77,30 +77,30 @@ func (s singleLedgerSource) Adapter(string) (execution.ExecutionAdapter, error) 
 func TestListAccountLedgerPassesMarketAndStampsEntries(t *testing.T) {
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	adapter := &marketLedgerAdapter{}
-	multi, err := execution.NewMultiMarket("BINANCE", []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}, map[exchange.MarketType]execution.ExecutionAdapter{
+	multi, err := execution.NewMultiMarket("binance", []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}, map[exchange.MarketType]execution.ExecutionAdapter{
 		exchange.MarketTypeSpot: &marketLedgerAdapter{}, exchange.MarketTypeSwap: adapter,
 	})
 	require.NoError(t, err)
 	handler := &ConsoleServer{Store: openDualMarketAccount(t), Adapters: singleLedgerSource{adapter: multi}}
 
 	rsp, err := handler.ListAccountLedger(ctx, &tradepb.ListAccountLedgerReq{
-		TradingAccountId: "dual-1", MarketType: tradepb.MarketType_MARKET_TYPE_SWAP,
+		TradingAccountId: "dual-1", MarketType: "swap",
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().String())
 	require.Equal(t, exchange.MarketTypeSwap, adapter.seen)
 	require.Len(t, rsp.GetEntries(), 2)
-	require.Equal(t, tradepb.MarketType_MARKET_TYPE_SWAP, rsp.GetEntries()[0].GetMarketType())
-	require.Equal(t, tradepb.MarketType_MARKET_TYPE_UNSPECIFIED, rsp.GetEntries()[1].GetMarketType(), "划转是账户级流水，不属于某个市场")
+	require.Equal(t, "swap", rsp.GetEntries()[0].GetMarketType())
+	require.Equal(t, "", rsp.GetEntries()[1].GetMarketType(), "划转是账户级流水，不属于某个市场")
 
 	// 账户没开通的市场被拒绝。
 	rejected, err := handler.ListAccountLedger(ctx, &tradepb.ListAccountLedgerReq{
-		TradingAccountId: "dual-1", MarketType: tradepb.MarketType_MARKET_TYPE_STOCK,
+		TradingAccountId: "dual-1", MarketType: "equity",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rejected.GetRetInfo().GetCode())
 
 	// 市场枚举不合法在校验里就被拒绝。
-	require.Error(t, (&tradepb.ListAccountLedgerReq{TradingAccountId: "dual-1", MarketType: tradepb.MarketType(99)}).Validate())
+	require.Error(t, (&tradepb.ListAccountLedgerReq{TradingAccountId: "dual-1", MarketType: "SWAP"}).Validate())
 }

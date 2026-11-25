@@ -100,13 +100,13 @@ func initialize(
 	// 股票场所（A 股、港股）的公共行情整个进程各一份：快照缓存、标的列表都共用；列表加载完之前用库里已有的标的。
 	stockSeed := func(name exchange.Exchange) stockfeed.Seed {
 		return func(seedCtx context.Context) ([]exchange.Instrument, error) {
-			records, listErr := tradeStore.ListInstruments(seedCtx, string(name), string(exchange.MarketTypeStock))
+			records, listErr := tradeStore.ListInstruments(seedCtx, string(name), string(exchange.MarketTypeEquity))
 			if listErr != nil {
 				return nil, listErr
 			}
 			instruments := make([]exchange.Instrument, 0, len(records))
 			for _, record := range records {
-				instruments = append(instruments, instrumentFromRecord(name, exchange.MarketTypeStock, record))
+				instruments = append(instruments, instrumentFromRecord(name, exchange.MarketTypeEquity, record))
 			}
 			return instruments, nil
 		}
@@ -146,6 +146,10 @@ func initialize(
 		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
 	manager.OnSessionRemoved = balanceMetrics.Remove
+	balanceLimit := cfg.Runtime.BalanceDifferenceThreshold
+	telemetry.Attention.AddSource("balance", func(now time.Time) map[string][]string {
+		return balanceMetrics.Attention(telemetry.AttentionBalanceSyncFailing, balanceLimit, now)
+	})
 	equityService := &equityapp.Service{Store: tradeStore, Adapters: manager, Exchanges: registry}
 	equitySampler := traderuntime.NewEquitySampler(equityService)
 	registerEquitySamplerTimer(serverInstance, equitySampler)
@@ -258,10 +262,10 @@ func initialize(
 	marginService := &marginmonitor.Service{
 		Store: tradeStore,
 		Reduce: func(
-			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, pause store.Pause,
 		) (store.OperatorActionRecord, error) {
 			result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
-				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: pause.Reason, ReduceRatio: ratio, PauseAs: pause,
 			})
 			return result.Action, reduceErr
 		},
@@ -279,10 +283,28 @@ func initialize(
 	targetHistoryWorker := &traderuntime.FundWorker{
 		Maintainer: &traderuntime.TargetHistoryPruner{Store: tradeStore}, Interval: 6 * time.Hour, Name: "目标回执与影子目标清理",
 	}
-	// 结束超过保留天数（模拟账户配置，默认 5 天）的订单与成交的清理（只清纯合约模拟账户，见 OrderHistoryPruner）：启动时一次，之后每小时一次，分批让出连接（积压清完后每轮只有一小时的量）。
+	// 结束超过保留天数（模拟账户配置，默认 5 天）的订单与成交的清理（所有模拟账户，见 OrderHistoryPruner）：启动时一次，之后每小时一次，分批让出连接（积压清完后每轮只有一小时的量）。
 	orderHistoryWorker := &traderuntime.FundWorker{
 		Maintainer: &traderuntime.OrderHistoryPruner{Store: tradeStore}, Interval: time.Hour, Name: "历史订单清理",
 	}
+	// 下架处理：收事件、名单查询与定时推进共用这一个实例。清仓在进程内直接调用 FlattenLogicalAccount。
+	delistService := &delistapp.Service{
+		Store: tradeStore, OnChanged: targetWorker.Wake,
+		Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
+		Flatten: func(callCtx context.Context, request delistapp.FlattenRequest) error {
+			_, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+				SpaceID: request.SpaceID, ActionID: request.ActionID, LogicalAccountID: request.LogicalAccountID,
+				Reason: request.Reason, InstrumentID: request.InstrumentID, Exchange: request.Exchange,
+				DeadlineAt: request.DeadlineAt,
+			})
+			if errors.Is(flattenErr, operatorapp.ErrLogicalAccountBusy) {
+				return delistapp.ErrFlattenBusy
+			}
+			return flattenErr
+		},
+	}
+	// 下架定时任务：每 30 秒按记录推进时间线；暂停、恢复追赶时不推进（收事件、写名单照常）。
+	delistWorker := &traderuntime.FundWorker{Maintainer: delistService, Interval: 30 * time.Second, Gate: lifeGate.Open, Name: "下架处理"}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 		ActionScoped: operatorapp.ActionScopedError,
@@ -361,6 +383,7 @@ func initialize(
 
 	var eventBus *jetstream.Client
 	var targetConsumerReady atomic.Bool
+	delistConsumerState := eventconsumer.NewRunState(time.Now())
 	if cfg.EventBus.Enabled {
 		clientConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-trade")
 		if cfg.EventBus.CredentialFile != "" {
@@ -381,7 +404,7 @@ func initialize(
 	// 控制器构造时只读状态文件、不调用任何钩子，健康检查注册和 Recover、Run 仍留在后面。
 	readiness := newReadiness(
 		tradeStore, manager, targetWorker, operatorWorker, paperMatcherWorker, paperMatcher,
-		cfg.EventBus.Enabled, eventBus, &targetConsumerReady,
+		cfg.EventBus.Enabled, eventBus, &targetConsumerReady, delistConsumerState,
 	)
 	life, err := newLifecycle(
 		cfg.Database.Path, targetWorker.Quiesce,
@@ -423,7 +446,12 @@ func initialize(
 	runWorker(marginWorker.Run)
 	runWorker(targetHistoryWorker.Run)
 	runWorker(orderHistoryWorker.Run)
-	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
+	runWorker(delistWorker.Run)
+	attentionWorker := &traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor, Delist: delistService}
+	if eventBus != nil {
+		attentionWorker.DelistConsumer = delistConsumerState.Status
+	}
+	runWorker(attentionWorker.Run)
 	// 收盘撤单：有日收盘的场所（A 股、港股）日收盘后先全量同步，再把收盘前提交、仍在途的订单按已撤结束；重启后第一轮就补做。
 	sessionCloser := &orderapp.SessionCloser{
 		Store: tradeStore, Exchanges: registry,
@@ -445,6 +473,12 @@ func initialize(
 				WeightResolver: weightResolver,
 				Intake:         lifeGate.Open,
 				Exchanges:      registry,
+			})
+		})
+		runWorker(func(workerCtx context.Context) error {
+			return eventconsumer.RunDelist(workerCtx, eventconsumer.DelistOptions{
+				Client: client, ConsumerName: cfg.EventBus.DelistConsumer,
+				Delist: delistService, State: delistConsumerState,
 			})
 		})
 	}
@@ -475,16 +509,13 @@ func initialize(
 			Store: tradeStore,
 			Lanes: targetExecutor.LaneStatuses,
 			Submit: func(callCtx context.Context, command rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, submitErr := operatorService.PlaceOrder(callCtx, operatorapp.SubmitOrderCommand{
-					LogicalAccountID: command.LogicalAccountID,
-					ManualOrderCommand: operatorapp.ManualOrderCommand{
-						SpaceID: command.SpaceID, ActionID: command.ActionID,
-						TradingAccountID: command.TradingAccountID, ClientOrderID: command.ClientOrderID,
-						InstrumentID: command.InstrumentID, Type: command.OrderType, FillPolicy: command.FillPolicy,
-						Side: command.Side, PositionSide: command.PositionSide,
-						Quantity: command.Quantity, LimitPrice: command.LimitPrice,
-						Reason: command.Reason, DeadlineAt: command.DeadlineAt,
-					},
+				result, submitErr := operatorService.PlaceOrder(callCtx, operatorapp.ManualOrderCommand{
+					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
+					TradingAccountID: command.TradingAccountID, ClientOrderID: command.ClientOrderID,
+					InstrumentID: command.InstrumentID, Type: command.OrderType, FillPolicy: command.FillPolicy,
+					Side: command.Side, PositionSide: command.PositionSide,
+					Quantity: command.Quantity, LimitPrice: command.LimitPrice,
+					Reason: command.Reason, DeadlineAt: command.DeadlineAt,
 				})
 				return result.Action, result.Order, submitErr
 			},
@@ -513,16 +544,8 @@ func initialize(
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore.ReadOnly(), Adapters: manager},
 			Adapters:           manager,
-			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry}},
+			Delist:             delistService,
 			Lifecycle:          life,
-			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
-				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
-					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
-					Reason: command.Reason, InstrumentID: command.InstrumentID, Exchange: command.Exchange,
-					DeadlineAt: command.DeadlineAt,
-				})
-				return result.Action, result.Unblocked, flattenErr
-			},
 			FlattenAccount: func(
 				callCtx context.Context, spaceID, actionID, tradingAccountID, reason string,
 			) (store.OperatorActionRecord, error) {
@@ -637,7 +660,7 @@ func registerBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *st
 		Exchange:         exchange.ExchangeAShare,
 		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
 		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
-		Markets:          []exchange.MarketType{exchange.MarketTypeStock},
+		Markets:          []exchange.MarketType{exchange.MarketTypeEquity},
 		SettlementAssets: []string{ashare.SettlementAsset},
 		LiveUnavailable:  errASharePending.Error(),
 		Session:          session,
@@ -657,7 +680,7 @@ func registerBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *st
 		Exchange:         exchange.ExchangeHKEX,
 		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
 		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
-		Markets:          []exchange.MarketType{exchange.MarketTypeStock},
+		Markets:          []exchange.MarketType{exchange.MarketTypeEquity},
 		SettlementAssets: []string{hkex.SettlementAsset},
 		LiveUnavailable:  errHKEXPaperOnly.Error(),
 		Session:          hkSession,
@@ -954,6 +977,7 @@ func newReadiness(
 	eventBusEnabled bool,
 	eventBus *jetstream.Client,
 	targetConsumerReady *atomic.Bool,
+	delistConsumerState *eventconsumer.RunState,
 ) health.Readiness {
 	return health.Readiness{
 		DatabaseReady: func(ctx context.Context) error {
@@ -963,6 +987,10 @@ func newReadiness(
 		EventBusReady: func() bool {
 			return eventBus != nil && eventBus.Ready() &&
 				targetConsumerReady != nil && targetConsumerReady.Load()
+		},
+		DelistConsumerRunning: func() bool {
+			running, _ := delistConsumerState.Status()
+			return running
 		},
 		Sessions:           manager,
 		TargetWorker:       targetWorker.Snapshot,

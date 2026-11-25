@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -31,14 +30,6 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 			outcome.Status = "degraded"
 		}
 	}
-	if plan.ExpectedSeriesDerived && !plan.FillOnly {
-		for _, state := range outcome.Factors {
-			if state.Status == "skipped" || len(state.SkippedSeriesTags) > 0 {
-				outcome.DerivedSkipped = true
-			}
-		}
-	}
-	outcome.FailedSeries = uniqueSeriesSorted(append(append([]seriesset.Series(nil), plan.UpstreamFailedSeries...), loaded.FailedSeries...))
 	if len(outcome.FailedSubjects) > 0 {
 		outcome.Status = "degraded"
 	}
@@ -69,7 +60,6 @@ func (r *Runner) Report(ctx context.Context, plan Plan, outcome Outcome) error {
 		SourceDatasetID: plan.Set.SourceDatasetID, Frequency: plan.Set.Freq,
 		PeriodTime: target.Unix(), Status: outcome.Status,
 		UniverseSubjects: uniqueSorted(plan.Expected), FailedSubjects: uniqueSorted(outcome.FailedSubjects),
-		UniverseSeries: plan.ExpectedSeries, FailedSeries: outcome.FailedSeries,
 		Factors:        append([]storageio.FactorState(nil), outcome.Factors...),
 		TriggerEventID: plan.TriggerEventID, ComputedAt: time.Now().UTC(),
 	}
@@ -97,26 +87,21 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	if _, err := planTarget(r.clock, plan); err != nil {
 		return Outcome{}, err
 	}
-	if plan.Mode == ModeRecalc && len(plan.ExpectedSeries) == 0 && len(plan.Members) > 0 {
-		// 补算类计划没有冻结的序列全集：由数据层给出（只有一个 tag 的数据集是确定值，统一数据集按本地存储推测）。
-		expecter, ok := r.data.(SeriesExpecter)
+	if plan.Mode == ModeRecalc && !plan.FrozenUniverse && len(plan.Members) > 0 {
+		// 补算类计划没有冻结全集：由数据层排除区间结束时还没上市的标的（这些标的不读、不算缺数）。
+		expecter, ok := r.data.(SubjectExpecter)
 		if !ok {
-			return Outcome{StageDurations: outcome.StageDurations}, errors.New("补算计划没有期望序列，数据层也不能给出")
+			return Outcome{StageDurations: outcome.StageDurations}, errors.New("补算计划没有冻结全集，数据层也不能给出期望标的")
 		}
-		series, derived, err := expecter.ExpectedSeries(ctx, plan)
+		subjects, err := expecter.ExpectedSubjects(ctx, plan)
 		if err != nil {
-			return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望序列: %w", err)
+			return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望标的: %w", err)
 		}
-		plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, derived
-		if !derived {
-			// 只有一个 tag 的数据集：数据层排除了区间结束时还没上市的标的，期望标的随之收窄，
-			// 按标的与按序列的名单保持一致（这些标的不读、不算缺数、不进周期标记的全集）。
-			plan.Expected = seriesSubjects(series)
-			plan.Available = intersectLists(plan.Available, plan.Expected)
-		}
+		plan.Expected = uniqueSorted(subjects)
+		plan.Available = intersectLists(plan.Available, plan.Expected)
 	}
 	if plan.Observed() && plan.HistorySubjects == nil {
-		// observed 成员的历史截面要用本地存储里本期不可用的标的：在内存预检之前取得，预检按扩大后的序列数估算。
+		// observed 成员的历史截面要用本地存储里本期不可用的标的：在内存预检之前取得，预检按扩大后的标的数估算。
 		history, err := r.HistorySubjects(ctx, plan)
 		if err != nil {
 			return Outcome{StageDurations: outcome.StageDurations}, err

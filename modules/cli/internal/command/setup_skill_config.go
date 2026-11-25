@@ -139,42 +139,6 @@ func ensureAndRegisterIdentity(ctx context.Context, deps setupDeps, snapshot *se
 	return deps.registerIdentity(ctx, snapshot, identity, identitybundle.PublicKey(key))
 }
 
-func newSetupRegisterIdentityCommand(deps setupDeps) *cobra.Command {
-	var file, identity, keyFile string
-	cmd := &cobra.Command{
-		Use:   "register-identity",
-		Short: "给不属于主机的外部身份准备签名私钥并登记公钥（如采集名单干预工具的 collector-operator）",
-		Long: `外部身份（collector-operator、moox-skill）的私钥只在使用它的电脑上：这条命令在 --key-file 生成一把（已有就复用），
-经 SSH 把公钥登记到控制机，各台网关几秒内随快照认到。一个身份只有一把公钥，再登记一次就是替换，旧私钥随即不能用。
-moox-skill 平时用 setup export-skill-config（它会顺带登记）；moox-cli 自己的密钥用 setup operator。`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if identity != "collector-operator" && identity != "moox-skill" {
-				return fmt.Errorf("--identity 只能是 collector-operator 或 moox-skill")
-			}
-			path, err := filepath.Abs(strings.TrimSpace(keyFile))
-			if err != nil || strings.TrimSpace(keyFile) == "" {
-				return fmt.Errorf("--key-file is required")
-			}
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			if err := ensureAndRegisterIdentity(cmd.Context(), deps, snapshot, identity, path); err != nil {
-				return err
-			}
-			return writeSetupJSON(cmd, map[string]any{"status": "registered", "identity": identity, "key_file": path})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 的路径")
-	cmd.Flags().StringVar(&identity, "identity", "", "外部身份：collector-operator 或 moox-skill")
-	cmd.Flags().StringVar(&keyFile, "key-file", "", "签名私钥文件（没有就生成；所在目录要只有自己能进）")
-	_ = cmd.MarkFlagRequired("identity")
-	_ = cmd.MarkFlagRequired("key-file")
-	return cmd
-}
-
 func buildSkillDataAccessConfig(spaceID string, klineDatasets skillKlineDatasets) (dataAccessConfig, error) {
 	if klineDatasets == nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: dependencies are required")

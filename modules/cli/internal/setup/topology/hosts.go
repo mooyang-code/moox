@@ -37,8 +37,10 @@ type HostDefinition struct {
 	// Reachability：direct（默认）或 outbound（只能出站，经控制机网关反向连接）。
 	Reachability string `toml:"reachability"`
 	// ExternalEntry：这台主机的网关开外部入口（11004），云函数、Skill、采集名单工具从这里进来。只能出站的主机不能开。
-	ExternalEntry bool      `toml:"external_entry"`
-	SSH           SSHConfig `toml:"ssh"`
+	ExternalEntry bool `toml:"external_entry"`
+	// Enabled 不写时为启用。停用的主机在 Admin 里记为停用（各网关只认它的 host-gateway），部署时只留 host-gateway 在跑。
+	Enabled *bool     `toml:"enabled"`
+	SSH     SSHConfig `toml:"ssh"`
 }
 
 func (d *HostDefinition) normalize() {
@@ -63,7 +65,9 @@ type Host struct {
 	// Reachability 为空表示可直达，outbound 表示只能出站。
 	Reachability string
 	// ExternalEntry 表示这台主机的网关开外部入口（11004）。
-	ExternalEntry  bool
+	ExternalEntry bool
+	// Enabled 是 [hosts.<ID>].enabled，不写为启用。
+	Enabled        bool
 	Port           int
 	Username       string
 	PrivateKeyFile string
@@ -99,9 +103,25 @@ func (c *Config) HostByID(id string) Host {
 	}
 	return Host{
 		Name: id, Label: label, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region,
-		Provider: definition.Provider, Reachability: reachability, ExternalEntry: definition.ExternalEntry, Port: definition.SSH.Port, Username: definition.SSH.Username,
-		PrivateKeyFile: definition.SSH.PrivateKeyFile,
+		Provider: definition.Provider, Reachability: reachability, ExternalEntry: definition.ExternalEntry, Enabled: definition.Enabled == nil || *definition.Enabled,
+		Port: definition.SSH.Port, Username: definition.SSH.Username, PrivateKeyFile: definition.SSH.PrivateKeyFile,
 	}
+}
+
+// DeploymentEnabled 报告组件部署在 Admin 里的登记状态：不在 [deployments_disabled] 里就是启用。主机停用不改部署的状态，
+// Monitor 与网关都按“主机启用且部署启用”判断。
+func (c *Config) DeploymentEnabled(hostID, component string) bool {
+	return !slices.Contains(c.DeploymentsDisabled[hostID], component)
+}
+
+// UnitEnabled 报告部署时组件的 systemd 单元该不该运行：停用的主机只留 host-gateway（各网关只认它，别的组件调不通，
+// 例如 host-agent 拉主机策略会一直失败、误推“控制机或 Monitor 不可达”）；启用的主机按部署的登记状态。
+// 内置对象存储（seaweedfs）不登记，随主机启停。
+func (c *Config) UnitEnabled(hostID, component string) bool {
+	if !c.HostByID(hostID).Enabled {
+		return component == "host-gateway"
+	}
+	return c.DeploymentEnabled(hostID, component)
 }
 
 // EntryHost 返回默认的外部入口主机：存储机标了 external_entry 就用它（多数外部调用的目标是 Storage，少一跳），
@@ -175,17 +195,24 @@ func (c *Config) Topology() (servicecatalog.Topology, error) {
 	}
 	topology := servicecatalog.Topology{ControlHostID: c.ComponentHost("admin")}
 	for _, host := range c.Hosts() {
-		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability, ExternalEntry: host.ExternalEntry})
+		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: status(host.Enabled), Reachability: host.Reachability, ExternalEntry: host.ExternalEntry})
 		for _, component := range catalog.Components {
 			if component.Scope == servicecatalog.ScopeHost {
 				topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.Name, ComponentID: component.ID, Status: servicecatalog.Enabled})
 			}
 		}
 		for _, id := range c.Deployments[host.Name] {
-			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.Name, ComponentID: id, Status: servicecatalog.Enabled})
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.Name, ComponentID: id, Status: status(c.DeploymentEnabled(host.Name, id))})
 		}
 	}
 	return topology, nil
+}
+
+func status(enabled bool) string {
+	if enabled {
+		return servicecatalog.Enabled
+	}
+	return servicecatalog.Disabled
 }
 
 var providerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
@@ -267,6 +294,16 @@ func (c *Config) validateDeployments() error {
 			}
 		}
 	}
+	for host, components := range c.DeploymentsDisabled {
+		seen := map[string]bool{}
+		for _, id := range components {
+			if seen[id] || !slices.Contains(c.Deployments[host], id) {
+				return fmt.Errorf("config_invalid: [deployments_disabled] 主机 %s 的组件 %q 重复，或不在 [deployments] 里这台主机的列表中", host, id)
+			}
+			seen[id] = true
+		}
+	}
+	// 停用控制机、停用受保护组件都由这里按 Admin 同一套规则拒绝。
 	topology, err := c.Topology()
 	if err != nil {
 		return err

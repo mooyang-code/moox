@@ -39,15 +39,14 @@ func TestLoadTaskSeed(t *testing.T) {
 	assert.Equal(t, []string{"binance_spot"}, task.TagIDs)
 	assert.Equal(t, "moox-setup", task.Creator)
 	assert.True(t, task.Enabled)
-	ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, "kline", "1m")
+	ids := taskresult.ResultIDs(task.TaskID)
 	assert.Equal(t, ids.DatasetID, task.ResultDatasetID)
-	assert.Equal(t, ids.ViewID, task.ResultViewID)
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	require.NoError(t, err)
 	assert.Equal(t, ids.DatasetID, params.TargetDatasetID)
 }
 
-// Every collection task owns exactly one result Dataset/View derived from its
+// Every collection task owns exactly one result Dataset derived from its
 // own task ID; no seeded task may share another task's result.
 func TestSeededTasksEachOwnTheirResultDataset(t *testing.T) {
 	tasks, err := LoadFile(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
@@ -55,9 +54,8 @@ func TestSeededTasksEachOwnTheirResultDataset(t *testing.T) {
 	require.NotEmpty(t, tasks)
 	owners := make(map[string]string, len(tasks))
 	for _, task := range tasks {
-		ids := taskresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, taskResultFrequency(t, task))
+		ids := taskresult.ResultIDs(task.TaskID)
 		assert.Equal(t, ids.DatasetID, task.ResultDatasetID, "task %s", task.TaskID)
-		assert.Equal(t, ids.ViewID, task.ResultViewID, "task %s", task.TaskID)
 		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 		require.NoError(t, err)
 		assert.Equal(t, ids.DatasetID, params.TargetDatasetID)
@@ -72,16 +70,9 @@ func TestSeededTasksEachOwnTheirResultDataset(t *testing.T) {
 func TestLoadTaskSeedRejectsConfiguredResultIdentity(t *testing.T) {
 	seed := strings.Replace(validSeed,
 		"    creator: moox-setup\n",
-		"    creator: moox-setup\n    result_dataset_id: dataset_arbitrary\n    result_view_id: view_arbitrary\n", 1)
+		"    creator: moox-setup\n    result_dataset_id: dataset_arbitrary\n", 1)
 	_, err := Load(strings.NewReader(seed))
 	require.Error(t, err)
-}
-
-func taskResultFrequency(t *testing.T, task domain.CollectionTask) string {
-	t.Helper()
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-	require.NoError(t, err)
-	return params.Frequency
 }
 
 func TestLoadTaskSeedAcceptsOnlyManualStartMarker(t *testing.T) {

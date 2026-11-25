@@ -132,7 +132,7 @@ func (s *secretDTO) UnmarshalJSON(data []byte) error {
 		}
 	}
 	*s = secretDTO(decoded)
-	s.Exchange = exchange.Exchange(strings.ToUpper(strings.TrimSpace(externalExchange)))
+	s.Exchange = exchange.Exchange(strings.ToLower(strings.TrimSpace(externalExchange)))
 	return nil
 }
 

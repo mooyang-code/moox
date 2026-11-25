@@ -23,8 +23,6 @@ type SCFPlan struct {
 	MemoryMB int `toml:"memory_mb"`
 	// SymbolsPerFunction 是每个函数负责的标的数，默认 50；按空间可覆盖。
 	SymbolsPerFunction int `toml:"symbols_per_function"`
-	// AssumedEgressIPs 是函数出口 IP 个数的估计，只用于频控估算与告警，默认 1。
-	AssumedEgressIPs int `toml:"assumed_egress_ips"`
 	// BackfillReservedConcurrency 是补采函数的最大并发实例数（平台的函数级预留并发），默认 5；
 	// 历史补齐的并发是 地域数 × 它，要补得更快可以调到 10，前提是账号的预留并发总额够用。
 	BackfillReservedConcurrency int `toml:"backfill_reserved_concurrency"`

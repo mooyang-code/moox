@@ -9,14 +9,13 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func appendRelayTestMarker(t *testing.T, store *Store, cause string) string {
 	t.Helper()
 	raw, _, err := BuildProducerPeriodCompletedMessage("s", &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "d", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		CauseEventId: cause, CompletedAt: timestamppb.New(time.Unix(1786032060, 0)),
+		CauseEventId: cause, CompletedAt: time.Unix(1786032060, 0).UnixMilli(),
 	})
 	require.NoError(t, err)
 	id, err := store.AppendDatasetMarker(context.Background(), raw)

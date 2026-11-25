@@ -173,7 +173,7 @@ func TestReconcilerPathsMatchTheCloudBaseline(t *testing.T) {
 	// 路径一：建定时采集函数（过渡计划）。建函数与下发环境、定时器合成一次 Ensure，所以定时器结束时是启用的。
 	require.NoError(t, h.reconcile(r))
 	compare("create_timer_function", h, key, "moox-collector_v1", func(want *cloudtest.FunctionSnapshot) { want.Timer.Enabled = true })
-	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	change := h.content(h.lastRecord()).Datasets["ds_spot|1m"]
 	h.now = time.Unix(change.P, 0).Add(time.Minute)
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())

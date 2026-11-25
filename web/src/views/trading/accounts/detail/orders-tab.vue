@@ -165,15 +165,12 @@ async function load(background = false) {
     error.value = "";
   }
   try {
-    const rsp = await listOrders(
-      {
-        ...queryParams(),
-        state: state.value,
-        owner_type: ownerType.value || undefined,
-        page: { page: page.value, size: pageSize }
-      },
-      { silent: background }
-    );
+    const rsp = await listOrders({
+      ...queryParams(),
+      state: state.value,
+      owner_type: ownerType.value || undefined,
+      page: { page: page.value, size: pageSize }
+    });
     if (!request.isLatest()) return;
     orders.value = rsp.orders || [];
     void refreshDrawerOrder();
@@ -202,7 +199,7 @@ async function refreshDrawerOrder() {
     return;
   }
   try {
-    const rsp = await getOrder(current.order_id, { silent: true });
+    const rsp = await getOrder(current.order_id);
     if (drawerVisible.value && drawerOrder.value?.order_id === current.order_id && rsp.order) drawerOrder.value = rsp.order;
   } catch {
     // 读不到时保留抽屉里的内容，下次刷新再试

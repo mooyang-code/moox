@@ -1,9 +1,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { flatRoutes, notFoundRoutes, staticRoutes } from "@/router/route";
 
 const srcRoot = resolve(__dirname, "../src");
-const read = (relative: string) => readFileSync(resolve(srcRoot, relative), "utf8");
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -13,7 +13,7 @@ function sourceFiles(directory: string): string[] {
   });
 }
 
-/** 注册过的页面路径：静态路由、菜单条目和 404 兜底。带参数的路由（如 /strategy/detail/:instanceId）只登记前缀。 */
+/** 注册过的页面路径：路由表和 404 兜底。带参数的路由（如 /strategy/detail/:instanceId）只登记前缀。 */
 function knownPaths(): { exact: Set<string>; prefixes: string[] } {
   // /404 没有单独注册，是有意落到兜底的 not-found 路由
   const exact = new Set<string>(["/", "/login", "/404"]);
@@ -25,12 +25,7 @@ function knownPaths(): { exact: Set<string>; prefixes: string[] } {
     if (index > 0) prefixes.push(path.slice(0, index + 1));
     else exact.add(path);
   };
-  for (const match of read("router/route.ts").matchAll(/path:\s*"([^"]+)"/g)) add(match[1]);
-  for (const match of read("api/modules/system/static-menu.ts").matchAll(
-    /(?:menu|directory)\(\s*"[^"]+",\s*"[^"]+",\s*"([^"]+)"/g
-  ))
-    add(match[1]);
-  for (const match of read("router/index.ts").matchAll(/path:\s*"([^"]+)"/g)) add(match[1]);
+  for (const route of [...staticRoutes, ...flatRoutes()]) add(route.path);
   return { exact, prefixes };
 }
 
@@ -68,8 +63,9 @@ describe("站内跳转的路径都有对应的路由", () => {
 
   it("错误页只保留 404 兜底", () => {
     expect(readdirSync(resolve(srcRoot, "views/error"))).toEqual(["404.vue"]);
-    const routes = read("router/route.ts");
-    expect(routes).not.toMatch(/path:\s*"\/(401|500)"/);
-    expect(routes).toContain('import("@/views/error/404.vue")');
+    const paths = [...staticRoutes, ...flatRoutes(), ...notFoundRoutes].map(route => route.path);
+    expect(paths).not.toContain("/401");
+    expect(paths).not.toContain("/500");
+    expect(notFoundRoutes.map(route => route.name)).toEqual(["not-found"]);
   });
 });

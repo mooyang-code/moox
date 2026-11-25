@@ -260,7 +260,7 @@ func (m *Manager) recordFailure(ctx context.Context, instanceID, sessionID strin
 	}
 	_, _, err = m.Store.CommitResult(ctx, store.CommitRequest{Now: now, Result: store.Result{
 		ResultID: resultID, InstanceID: instanceID, SessionID: sessionID, BarEndTime: boundary.BarEnd, ValidUntil: validUntil,
-		Status: store.StatusSkipped, SkipReason: store.SkipPoolWarmupFailed, DSLHash: session.DSLHash,
+		Status: store.StatusSkipped, SkipReason: store.SkipPoolWarmupFailed,
 		InputJSON: record, TargetsJSON: json.RawMessage(`[]`), SummaryJSON: json.RawMessage(`{}`),
 		PublishStatus: store.PublishNone, CreatedAt: now,
 	}})

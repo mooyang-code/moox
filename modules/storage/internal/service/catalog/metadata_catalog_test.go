@@ -101,30 +101,18 @@ func TestGetSpaceDistinguishesMissingFromStoreFailure(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SPACE_NOT_FOUND, missing.GetRetInfo().GetCode())
 }
 
-func TestTimeSeriesViewGrainIncludesSeriesTag(t *testing.T) {
-	require.Equal(t,
-		[]string{"subject_id", "freq", "data_time", "series_tag"},
-		defaultViewGrainKeys(pb.DataKind_DATA_KIND_TIME_SERIES),
-	)
-}
-
 func TestReservedTimeSeriesSystemColumnNamesAreRejected(t *testing.T) {
 	svc := &Service{}
 	for _, name := range []string{
 		"subject_id", "freq", "data_time", "series_tag",
 		"Subject_ID", "FREQ", "Data_Time", "Series_Tag",
 	} {
-		t.Run("field/"+name, func(t *testing.T) {
-			field := &pb.Field{SpaceId: "space", GroupId: "group", FieldId: name}
-			createRsp, err := svc.CreateField(context.Background(), &pb.CreateFieldReq{Field: field})
+		t.Run("column/"+name, func(t *testing.T) {
+			column := &pb.DatasetColumn{SpaceId: "space", DatasetId: "dataset_x", ColumnName: name, DisplayName: name}
+			rsp, err := svc.UpsertDatasetColumn(context.Background(), &pb.UpsertDatasetColumnReq{Column: column})
 			require.NoError(t, err)
-			require.Equal(t, pb.ErrorCode_INVALID_PARAM, createRsp.GetRetInfo().GetCode())
-			require.Contains(t, createRsp.GetRetInfo().GetMsg(), "reserved system column")
-
-			updateRsp, err := svc.UpdateField(context.Background(), &pb.UpdateFieldReq{Field: field})
-			require.NoError(t, err)
-			require.Equal(t, pb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
-			require.Contains(t, updateRsp.GetRetInfo().GetMsg(), "reserved system column")
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			require.Contains(t, rsp.GetRetInfo().GetMsg(), "reserved system column")
 		})
 	}
 }

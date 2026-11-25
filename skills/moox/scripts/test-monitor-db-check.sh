@@ -33,61 +33,43 @@ db = sqlite3.connect(path)
 db.executescript(open(schema, encoding="utf-8").read())
 now = datetime.datetime.now(datetime.timezone.utc)
 old = (now - datetime.timedelta(hours=3)).isoformat()
-RETIRED = "已停用或移除，不再检查"
 
-def check(check_id, enabled, source="observability", group="business"):
-    db.execute("INSERT INTO t_monitor_checks (c_space_id, c_check_id, c_name, c_group_name, c_kind, c_enabled, c_source) "
-               "VALUES ('crypto', ?, ?, ?, 'external', ?, ?)", (check_id, check_id, group, enabled, source))
+def check(check_id, status, reason, alert="ok", triggered=None, failure=""):
+    db.execute("INSERT INTO t_monitor_checks (c_space_id, c_check_id, c_name, c_severity, c_status, c_reason, c_checked_at, "
+               "c_failure_reason, c_alert_status, c_triggered_at) VALUES ('crypto', ?, ?, 'critical', ?, ?, ?, ?, ?, ?)",
+               (check_id, check_id, status, reason, now.isoformat(), failure, alert, triggered))
 
-def result(check_id, message, ago=0):
-    stamp = (now - datetime.timedelta(minutes=ago)).isoformat()
-    db.execute("INSERT INTO t_monitor_check_results (c_result_id, c_space_id, c_check_id, c_instance_id, c_success, c_status, c_error_message, c_checked_at) "
-               "VALUES (?, 'crypto', ?, 'monitor', 1, 'healthy', ?, ?)", (f"{check_id}-{ago}", check_id, message, stamp))
-
-check("dataset:firing:1m", 1)
-result("dataset:firing:1m", "数据落后 3 根")
-check("dataset:gone:1m", 1)
-result("dataset:gone:1m", RETIRED)
-check("deployment:control:admin", 1, "deployment", "components")
-# 主机类检查和其他业务检查一样有检查记录，它的默认规则不是孤儿。
-check("host:abcd:cpu", 1)
-result("host:abcd:cpu", "CPU 使用率 20.0%")
-db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "
-           "VALUES ('crypto', 'default:dataset:firing:1m', 'dataset:firing:1m', 1, 1, 1, 'Default MooX monitoring notification')")
-db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "
-           "VALUES ('crypto', 'default:dataset:orphan:1m', 'dataset:orphan:1m', 1, 1, 1, 'Default MooX monitoring notification')")
-db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "
-           "VALUES ('crypto', 'default:host:abcd:cpu', 'host:abcd:cpu', 3, 1, 1, 'Default MooX monitoring notification')")
-db.execute("INSERT INTO t_monitor_alert_states (c_space_id, c_rule_id, c_check_id, c_status, c_triggered_at) "
-           "VALUES ('crypto', 'default:dataset:firing:1m', 'dataset:firing:1m', 'firing', ?)", (old,))
-db.execute("INSERT INTO t_monitor_alert_states (c_space_id, c_rule_id, c_check_id, c_status) "
-           "VALUES ('crypto', 'default:other:1m', 'other:1m', 'ok')")
-label = '{"view_id":"view_quiet_kline_1h"}'
-db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at) "
-           "VALUES ('storage-view', 'sv@control', 's1', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?)", (label, old))
-fresh = '{"view_id":"view_live_kline_1m"}'
-db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at) "
-           "VALUES ('storage-view', 'sv@control', 's2', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?)", (fresh, now.isoformat()))
+check("dataset:storage:firing:1m", "down", "数据落后 3 根", "firing", old, "数据落后 3 根")
+check("dataset:storage:recovering:1m", "ok", "正常", "firing", old, "数据落后 5 根")
+check("dataset:storage:other:1m", "ok", "正常")
+check("host:abcd:cpu", "ok", "CPU 使用率 20.0%")
+db.execute("INSERT INTO t_monitor_alert_events (c_event_id, c_space_id, c_check_id, c_title, c_severity, c_event_type, c_created_at) "
+           "VALUES ('e1', 'crypto', 'dataset:storage:firing:1m', '行情数据集', 'critical', 'triggered', ?)", (old,))
+label = '{"dataset_id":"dataset_quiet_kline_1h"}'
+db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at, c_value, c_observed_at) "
+           "VALUES ('storage-view', 'sv@control', 's1', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?, 0, ?)", (label, old, old))
+fresh = '{"dataset_id":"dataset_live_kline_1m"}'
+db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at, c_value, c_observed_at) "
+           "VALUES ('storage-view', 'sv@control', 's2', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?, 0, ?)", (fresh, now.isoformat(), now.isoformat()))
 db.commit()
 db.close()
 EOF
-printf '%s\n' '2026-10-24 10:35:52.437	INFO	monitor_stale_checks_pruned count=1 checks=[dataset:old:1m]' 'other line' >"${LOG}"
+printf '%s\n' '2026-10-24 10:35:52.437	WARN	monitor alert notification partially failed check=dataset:storage:firing:1m' 'other line' >"${LOG}"
 
 export PATH="${STUBS}:${PATH}"
 export MOOX_MONITOR_DB="${DB}" MOOX_MONITOR_LOG="${LOG}"
 before="$(shasum "${DB}" | cut -d' ' -f1)"
 
 out="$("${SCRIPT}" --host ubuntu@control.example.com)" || fail "脚本执行失败：${out}"
-grep -q "default:dataset:firing:1m \[firing\]" <<<"${out}" || fail "缺少未恢复告警：${out}"
+grep -q "crypto/dataset:storage:firing:1m \[critical\]" <<<"${out}" || fail "缺少未恢复告警：${out}"
 grep -q "最近一次检查：数据落后 3 根" <<<"${out}" || fail "缺少最近一次检查结果：${out}"
-grep -q "default:other:1m" <<<"${out}" && fail "ok 状态的告警不该列出"
-grep -q "启用 · observability · business：3" <<<"${out}" || fail "检查概况不对：${out}"
-grep -q -- "- dataset:gone:1m" <<<"${out}" || fail "缺少失效但未清理的检查：${out}"
-grep -q -- "- default:dataset:orphan:1m" <<<"${out}" || fail "缺少孤儿规则：${out}"
-grep -q "default:host:abcd:cpu" <<<"${out}" && fail "有检查记录的主机规则不该算孤儿"
-grep -q "view_quiet_kline_1h" <<<"${out}" || fail "缺少静默视图序列：${out}"
-grep -q "view_live_kline_1m" <<<"${out}" && fail "刚上报的视图不该列为静默"
-grep -q "monitor_stale_checks_pruned count=1" <<<"${out}" || fail "缺少清理日志：${out}"
+grep -q "等待恢复确认（最近失败：数据落后 5 根）" <<<"${out}" || fail "恢复确认中的告警应显示最近失败：${out}"
+grep -q "crypto/dataset:storage:other:1m" <<<"${out}" && fail "没在告警的检查不该列出"
+grep -q "dataset · ok：2" <<<"${out}" || fail "检查概况不对：${out}"
+grep -q "triggered crypto/dataset:storage:firing:1m（行情数据集）" <<<"${out}" || fail "缺少告警事件：${out}"
+grep -q "dataset_quiet_kline_1h" <<<"${out}" || fail "缺少静默视图序列：${out}"
+grep -q "dataset_live_kline_1m" <<<"${out}" && fail "刚上报的视图不该列为静默"
+grep -q "partially failed" <<<"${out}" || fail "缺少推送失败日志：${out}"
 [[ "$(shasum "${DB}" | cut -d' ' -f1)" == "${before}" ]] || fail "数据库被修改了"
 
 # 参数校验：没给主机、主机不是 user@host、路径带危险字符。

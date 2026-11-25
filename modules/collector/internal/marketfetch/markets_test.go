@@ -40,7 +40,7 @@ func TestMarketFilesAreEmbedded(t *testing.T) {
 	providers, err := LoadSourceRuntimes(route)
 	require.NoError(t, err)
 	require.Contains(t, providers, "tdx")
-	for _, source := range []string{"sina_hfq", "swsresearch", "sina_finance", "eastmoney_turnover", "eastmoney_select", "baidu"} {
+	for _, source := range []string{"sina_hfq", "swsresearch", "sina_finance", "eastmoney_turnover", "eastmoney_select"} {
 		_, found, err := LoadSourceRuntime(StockCNSpaceID, source)
 		require.NoError(t, err, source)
 		require.True(t, found, source)

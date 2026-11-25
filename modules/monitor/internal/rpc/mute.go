@@ -98,12 +98,10 @@ func muteState(self lifecycle.State) *monitorpb.AlertMuteState {
 	}
 	state := &monitorpb.AlertMuteState{
 		Muted:  true,
-		Since:  self.Pause.Since.UTC().Format(time.RFC3339),
+		Since:  millis(self.Pause.Since),
 		Reason: strings.TrimPrefix(strings.TrimPrefix(self.Pause.Reason, muteReasonPrefix), "："),
 		By:     self.Pause.By,
 	}
-	if !self.Pause.ExpiresAt.IsZero() {
-		state.ExpiresAt = self.Pause.ExpiresAt.UTC().Format(time.RFC3339)
-	}
+	state.ExpiresAt = millis(self.Pause.ExpiresAt)
 	return state
 }

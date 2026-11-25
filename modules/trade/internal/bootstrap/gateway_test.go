@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"

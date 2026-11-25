@@ -150,10 +150,6 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 			return fmt.Errorf("upsert factor result columns: %w", err)
 		}
 	}
-	// 默认 View 由 factor-mgr 自己维护：启动对账补齐缺失的 View；View 的列由 Storage 按数据集的列推出，上面补的列会自动出现在 View 里。
-	if err := s.metadata.EnsureResultView(ctx, set.SpaceID, set.ResultDatasetID); err != nil {
-		return fmt.Errorf("ensure factor result default View: %w", err)
-	}
 	return nil
 }
 
@@ -173,10 +169,11 @@ func refreshedColumnAttributes(existing, wanted storageio.ColumnInfo) (map[strin
 }
 
 func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {
-	if existing.OriginType != wanted.OriginType || existing.OriginID != wanted.OriginID || existing.ValueType != wanted.ValueType {
+	if existing.ValueType != wanted.ValueType {
 		return false
 	}
-	if wanted.OriginType == storageio.ColumnOriginCustom {
+	// 因子自己建的列（输出列与 __params）还要比身份属性；从源数据集复制的列只比类型。
+	if wanted.Attributes["column_kind"] != "" {
 		return existing.Attributes["column_kind"] == wanted.Attributes["column_kind"] &&
 			existing.Attributes["member_key"] == wanted.Attributes["member_key"] &&
 			existing.Attributes["output_name"] == wanted.Attributes["output_name"] &&
@@ -200,7 +197,7 @@ func (s *Service) sourceDataset(ctx context.Context, set domain.FactorTask) (sto
 	if source.Status != storageio.DatasetStatusActive {
 		return storageio.DatasetInfo{}, nil, errors.New("source dataset must be active")
 	}
-	// Collector 的 K 线合成结果不声明单一数据来源（统一数据集可能有多个），源 K 线的来源记在属性里：
+	// Collector 的 K 线合成结果不声明单一数据来源，源 K 线的来源记在属性里：
 	// 因子结果数据集要绑定一个数据来源，取它。
 	if source.DataSourceID == "" && source.Attributes["dataset_role"] == datasetRoleKlineResample {
 		source.DataSourceID = source.Attributes["source_data_source_id"]

@@ -7,13 +7,6 @@ import "host_metric.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen;monitorpb";
 
-enum AlertStatus {
-  ALERT_STATUS_UNSPECIFIED = 0;
-  ALERT_STATUS_OK = 1;
-  ALERT_STATUS_FIRING = 2;
-  ALERT_STATUS_RESOLVED = 3;
-}
-
 enum AlertEventType {
   ALERT_EVENT_TYPE_UNSPECIFIED = 0;
   ALERT_EVENT_TYPE_TRIGGERED = 1;
@@ -21,16 +14,20 @@ enum AlertEventType {
   ALERT_EVENT_TYPE_RESOLVED = 3;
 }
 
+// 本文件的墙钟时刻（*_at、since 等 int64 字段）都是 Unix 纪元起算的毫秒，0 表示没有；
+// 例外是 HealthDataset 的 input_watermark_at、output_watermark_at、expected_bar_at：它们是 data_time（开盘时间）文本，与 Storage 行键同一口径。
+
+// AlertEvent 是一条告警事件；标题与级别是写事件时检查的名称与级别，检查删除后仍能显示。
 message AlertEvent {
   string event_id = 1;
   string space_id = 2;
-  string rule_id = 3;
-  string check_id = 4;
-  AlertEventType event_type = 5;
-  AlertStatus status = 6;
-  string message = 8;
-  string payload_json = 9;
-  string created_at = 10;
+  string check_id = 3;
+  AlertEventType event_type = 4;
+  string title = 5;
+  string severity = 6;
+  string message = 7;
+  string payload_json = 8;
+  int64 created_at = 9;
 }
 
 // Health overview v2: identities are explicit; status has six canonical values.
@@ -40,12 +37,11 @@ message HealthObject {
   string component_id = 3;
   string dataset_id = 4;
   string freq = 5;
-  string agent_id = 6;
   string kind = 7;
   string space_id = 8;
   string producer = 9;
-  // attention_kind 是关注项检查（kind 为 trade_attention、event_center_attention、collector_attention，检查 ID 形如 <kind>:<种类>）的种类，
-  // 例如 delist_readonly_key_missing；只填 Monitor 登记过的种类，前端据此决定处理入口。
+  // attention_kind 是关注项检查（kind 为 attention，检查 ID 形如 attention:<服务名>:<种类>）的种类，例如 delist_readonly_key_missing；
+  // 服务名填在 component_id。前端据此决定处理入口。
   string attention_kind = 10;
 }
 // severity：critical 表示服务不可用或数据中断，warning 表示资源吃紧、指标上报中断等需要关注的风险。
@@ -56,8 +52,8 @@ message HealthAlert {
   string title = 4;
   string reason = 5;
   string raw_error = 6;
-  string triggered_at = 7;
-  string last_checked_at = 8;
+  int64 triggered_at = 7;
+  int64 last_checked_at = 8;
   // 最近一次检查已经通过，正在等待连续成功确认恢复。
   bool recovering = 9;
   // 数据集告警对应的数据集事实（水位、最近成功、允许落后）。
@@ -78,14 +74,14 @@ message HealthSignal {
   string status = 1;
   string reason = 2;
   string raw_error = 3;
-  string checked_at = 4;
+  int64 checked_at = 4;
 }
 message HealthReporter {
   string instance_id = 1;
   string boot_id = 2;
   string version = 3;
   string status = 4;
-  string last_reported_at = 5;
+  int64 last_reported_at = 5;
 }
 message HealthComponent {
   string host_id = 1;
@@ -96,7 +92,7 @@ message HealthComponent {
   // reporter 是组件上报的新鲜度：组件健康只看上报（设计 3.8）。
   HealthSignal reporter = 7;
   repeated HealthReporter instances = 8;
-  string status_since = 9;
+  int64 status_since = 9;
   // 模块自己的生命周期状态（设计 3.8），取最近一次新鲜的上报；模块没有生命周期或已停止上报时为空。
   HealthLifecycle lifecycle = 12;
   // readiness 是最近一次上报的就绪判断：ready、not_ready，空表示上报里没有；not_ready_reason 是未就绪的原因。
@@ -119,11 +115,11 @@ message HealthPause {
   string kind = 1;
   string reason = 2;
   string by = 3;
-  string since = 4;
+  int64 since = 4;
 }
 // HealthCatchup 是恢复追赶进度：暂停期间缺失的数据补采、增量进入，追平后才放行。
 message HealthCatchup {
-  string since = 1;
+  int64 since = 1;
   int64 done = 2;
   int64 total = 3;
   bool caught_up = 4;
@@ -146,8 +142,8 @@ message HealthSystem {
   int32 module_count = 5;
   // 暂停的模块按类型计数：manual | system。
   map<string, int32> pause_kinds = 6;
-  // 最早的暂停时间（RFC3339）。
-  string paused_since = 7;
+  // 最早的暂停时刻（毫秒）。
+  int64 paused_since = 7;
   // 恢复追赶中的模块数与其中已追平（待放行）的模块数。
   int32 resuming_modules = 8;
   int32 caught_up_modules = 9;
@@ -165,23 +161,24 @@ message HealthDataset {
   string status = 5;
   string reason = 6;
   string raw_error = 7;
+  // 两个水位是 data_time 文本（开盘时间，与 Storage 行键同一口径），不是毫秒；下面三个 *_at 是墙钟时刻（毫秒）。
   string input_watermark_at = 8;
   string output_watermark_at = 9;
-  string last_success_at = 10;
-  string last_run_at = 11;
-  string last_reported_at = 12;
+  int64 last_success_at = 10;
+  int64 last_run_at = 11;
+  int64 last_reported_at = 12;
   // 生产者随期望清单上报的展示名称（例如策略实例名）；为空时由页面按 Storage 名称或数据集 ID 展示。
   string display_name = 13;
-  // 最新一根 K 线：output_watermark_at 是它的 data_time（开盘时间），latest_bar_close_at 是按市场交易日历算出的收线时间，
-  // arrived_at 是生产者写完它的时刻。延迟 = 到达 − 收线，到达那一刻定值；生产者没上报到达时间时 delay_known 为 false。
-  string latest_bar_close_at = 14;
-  string arrived_at = 15;
+  // 最新一根 K 线：output_watermark_at 是它的 data_time（开盘时间），latest_bar_close_at 是按市场交易日历算出的收线时刻（毫秒），
+  // arrived_at 是生产者写完它的时刻（毫秒）。延迟 = 到达 − 收线，到达那一刻定值；生产者没上报到达时间时 delay_known 为 false。
+  int64 latest_bar_close_at = 14;
+  int64 arrived_at = 15;
   int64 delay_seconds = 16;
   bool delay_known = 17;
-  // 此刻应已收线却还没到的根数；waiting_since 是其中最早一根的收线时间（应到时间），overdue_seconds 是它已晚多久
+  // 此刻应已收线却还没到的根数；waiting_since 是其中最早一根的收线时刻（应到时间，毫秒），overdue_seconds 是它已晚多久
   // （当前时间 − 应到时间，持续增长）。
   int32 waiting_bars = 18;
-  string waiting_since = 19;
+  int64 waiting_since = 19;
   int64 overdue_seconds = 20;
   // 允许迟到的秒数：生产者的上报确认应到的那根超过它仍未到时判为过期并告警（生产者每 30 秒上报一次，最多晚一次上报才判定）；
   // 已到的根延迟超过它只标为迟到，不影响当前状态。
@@ -189,9 +186,9 @@ message HealthDataset {
   // 无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
   string clock_issue = 22;
   // 预期 K 线：按市场交易日历此刻应已收线的最新一根。expected_bar_at 是它的 data_time（开盘时间，与 output_watermark_at 同一口径，
-  // 两者相同即已到），expected_bar_close_at 是收线时间；无法按交易日历判断时为空。
+  // 两者相同即已到；文本），expected_bar_close_at 是收线时刻（毫秒）；无法按交易日历判断时两者分别为空与 0。
   string expected_bar_at = 23;
-  string expected_bar_close_at = 24;
+  int64 expected_bar_close_at = 24;
   // 应到的那根已由生产者的上报确认迟到：上报那一刻它已晚超过允许迟到仍没有，数据集据此判为过期并告警。
   bool late_confirmed = 25;
   // 市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；没有交易日历的系统数据为 UTC。页面按它显示 K 线时间并标注时区。
@@ -211,21 +208,12 @@ message HealthBusinessCheck {
   string status = 5;
   string reason = 6;
   string raw_error = 7;
-  string checked_at = 8;
+  int64 checked_at = 8;
   // 检查名称，与推送标题一致。
   string name = 9;
 }
-message HealthGatewaySignal {
-  string kind = 1;
-  HealthSignal signal = 2;
-  // Persisted first observation of the current desired/applied mismatch.
-  string pending_since = 3;
-  string expected_hash = 4;
-  string applied_hash = 5;
-}
 message HealthHost {
   string host_id = 1;
-  string agent_id = 2;
   string hostname = 3;
   string address = 4;
   string status = 5;
@@ -235,8 +223,7 @@ message HealthHost {
   double disk_percent = 9;
   bool metrics_available = 10;
   bool cpu_available = 11;
-  string last_reported_at = 12;
-  repeated HealthGatewaySignal gateway_signals = 13;
+  int64 last_reported_at = 12;
   bool memory_available = 14;
   bool disk_available = 15;
   // 告警阈值（百分比）；0 表示没有对应的告警规则。
@@ -267,7 +254,7 @@ message HealthSummary {
   HealthCounts components = 6;
 }
 message HealthOverview {
-  string generated_at = 1;
+  int64 generated_at = 1;
   bool topology_known = 2;
   HealthSummary summary = 3;
   repeated HealthAlert alerts = 4;
@@ -291,10 +278,10 @@ message AlertIncident {
   string title = 4;
   string reason = 5;
   // 触发时间早于窗口且找不到触发记录时为空。
-  string triggered_at = 6;
+  int64 triggered_at = 6;
   // 为空表示尚未收到恢复记录。
-  string resolved_at = 7;
-  // 告警是否仍在进行；检查被停用或删除时告警直接撤销，没有恢复记录，active 为 false。
+  int64 resolved_at = 7;
+  // 告警是否仍在进行；检查不再产出（对象停用或删除）时会写一条恢复记录，active 为 false。
   bool active = 8;
   int32 reminder_count = 9;
   bool notify_failed = 10;
@@ -316,7 +303,7 @@ message NotificationChannel {
   string channel_id = 1;
   string channel_type = 2;
   string webhook_url = 3;
-  string created_at = 4;
+  int64 created_at = 4;
   bool has_secret = 5;
 }
 message ListNotificationChannelsReq {}
@@ -327,9 +314,20 @@ message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationCha
 message DeleteNotificationChannelReq { string channel_id = 1; }
 message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 
-// GetHostPolicyReq 由每台主机的 HostAgent 定期调用，拉取主机策略并缓存到 <部署根>/data/host-agent/host-policy.json，
-// 供 HostAgent 的对端检查与证书巡检直接推送告警。只允许调用方 host-agent。
-message GetHostPolicyReq {}
+// GetHostPolicyReq 由每台主机的 HostAgent 每分钟调用一次：带上这一分钟采到的主机快照，拉回主机策略缓存到
+// <部署根>/data/host-agent/host-policy.json，供 HostAgent 的对端检查与证书巡检直接推送告警。只允许调用方 host-agent。
+message GetHostPolicyReq {
+  // 这次采集的主机快照；采集失败时为空，策略照常返回。
+  HostReport host = 1;
+}
+// HostReport 是一次主机快照上报。
+message HostReport {
+  // UUIDv7，Monitor 按它与采集时间去重。
+  string report_id = 1;
+  // 采集时刻（毫秒）。
+  int64 collected_at = 2;
+  trpc.moox.hostagent.HostMetric metric = 3;
+}
 // HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。secret 是渠道密钥（没有时为空）。
 message HostPolicyChannel {
   string channel_type = 1;
@@ -339,29 +337,28 @@ message HostPolicyChannel {
 message GetHostPolicyRsp {
   common.RetInfo ret_info = 1;
   repeated HostPolicyChannel channels = 2;
-  // monitor_started_at 是 Monitor 进程的启动时间（RFC3339Nano）：各主机采集器按它的变化发现 Monitor 反复重启。
-  string monitor_started_at = 3;
+  // monitor_started_at 是 Monitor 进程的启动时刻（毫秒）：各主机采集器按它的变化发现 Monitor 反复重启。
+  int64 monitor_started_at = 3;
 }
 
 message HostAgentInfo {
-  string agent_id = 1;
+  // host_id 是 Admin 登记的主机 ID，每台主机一行。
+  string host_id = 1;
   string hostname = 2;
   string boot_id = 3;
-  string last_seen_at = 4;
-  bool archived = 5;
-  trpc.moox.hostagent.HostSnapshot snapshot = 6;
-  bool reachable = 7;
-  int64 stale_seconds = 8;
-  string host_id = 9;
+  int64 last_seen_at = 4;
+  trpc.moox.hostagent.HostSnapshot snapshot = 5;
+  bool reachable = 6;
+  int64 stale_seconds = 7;
 }
 message ListHostAgentsReq {}
 message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; }
 message HostMetricHistoryPoint {
-  string agent_id = 1;
-  string observed_at = 2;
+  string host_id = 1;
+  int64 observed_at = 2;
   trpc.moox.hostagent.HostSnapshot snapshot = 3;
 }
-message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
+message QueryHostMetricHistoryReq { string host_id = 1; int64 start_at = 2; int64 end_at = 3; uint32 limit = 4; }
 // data_gap：所请求的范围超出可查的最近 7 天被截掉了一部分，或这段时间没有快照。
 message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool data_gap = 3; }
 
@@ -383,8 +380,8 @@ message ArrivalTask {
   string result_dataset_id = 3;
 }
 message ArrivalHistoryPoint {
-  // 收线时间（UTC，RFC3339）。
-  string close_at = 1;
+  // 收线时刻（毫秒）。
+  int64 close_at = 1;
   // 到达 − 收线（秒），在到达那一刻定值。
   int64 delay_seconds = 2;
   // 和上一份快照里的水位之间跳过的根数：补数据时一批写完，中间几根不单独记录；0 表示连续。
@@ -394,7 +391,7 @@ message ArrivalHistorySeries {
   // 环节：storage（入库）、view（视图）、factor（因子）、factor_view（因子视图）、strategy（策略计算，按同空间同周期列出）。
   string stage = 1;
   string producer = 2;
-  // 数据集 ID；View 为 view_id，primary_dataset_id 是它服务的数据集。
+  // 数据集 ID；primary_dataset_id 只对 View 填写，等于它所属的数据集（每个数据集恰好一个 View）。
   string dataset_id = 3;
   string primary_dataset_id = 4;
   int64 lateness_limit_seconds = 5;
@@ -405,9 +402,9 @@ message QueryPipelineArrivalHistoryRsp {
   // 市场时区（IANA 名称），day 按它切分。
   string timezone = 2;
   string day = 3;
-  // 这一天的起止（UTC，RFC3339，左闭右开），时间点按收线时间落在其中。
-  string start_at = 4;
-  string end_at = 5;
+  // 这一天的起止时刻（毫秒，左闭右开），时间点按收线时间落在其中。
+  int64 start_at = 4;
+  int64 end_at = 5;
   repeated ArrivalHistorySeries series = 6;
   // 记录只保留 7 天：这一天的开头早于保留期时为 true，曲线可能不完整。
   bool retention_truncated = 7;
@@ -434,7 +431,7 @@ message DoctorObservation {
   string node_id = 5;
   string boot_id = 6;
   string status = 7;
-  string observed_at = 8;
+  int64 observed_at = 8;
   string summary = 9;
   string details_json = 10;
   bool stale = 11;
@@ -447,13 +444,13 @@ message DoctorWatermark {
   string module = 1;
   string stage = 2;
   string health_check_id = 3;
-  string observed_at = 4;
+  int64 observed_at = 4;
   double value = 5;
   string status = 6;
 }
 message DoctorDiskForecast {
+  // node_id 是主机 ID。
   string node_id = 1;
-  string agent_id = 2;
   string mountpoint = 3;
   string status = 4;
   double growth_bytes_per_day = 5;
@@ -468,7 +465,7 @@ message GetDoctorContextReq {
 }
 message GetDoctorContextRsp {
   common.RetInfo ret_info = 1;
-  string generated_at = 2;
+  int64 generated_at = 2;
   string manifest_checksum = 3;
   repeated DoctorExpectedComponent expected_components = 4;
   repeated DoctorObservation health_observations = 5;
@@ -484,9 +481,9 @@ message GetDoctorContextRsp {
 // AlertMuteState 是告警屏蔽的当前状态。屏蔽只停推送：入库、告警评估与记录照常，到期自动恢复。
 message AlertMuteState {
   bool muted = 1;
-  // since 与 expires_at 为 RFC3339 UTC；未屏蔽时为空。
-  string since = 2;
-  string expires_at = 3;
+  // since 与 expires_at 是毫秒；未屏蔽时为 0。
+  int64 since = 2;
+  int64 expires_at = 3;
   string reason = 4;
   string by = 5;
 }
@@ -530,8 +527,8 @@ message LogRecord {
   map<string, string> fields = 9;
   // merged_count 大于 0 表示在这条之前，同一代码位置另有这么多条日志因为太密被合并掉了。
   int32 merged_count = 10;
-  // logged_at 是日志时间（UTC，RFC 3339）。
-  string logged_at = 11;
+  // logged_at 是日志时刻（毫秒）。
+  int64 logged_at = 11;
 }
 // QueryLogRecordsReq 查询重要日志，新的在前。各条件都是可选的。
 message QueryLogRecordsReq {
@@ -541,9 +538,9 @@ message QueryLogRecordsReq {
   string level = 3;
   // keyword 在正文、事件名、代码位置里按子串匹配。带关键字又没有给 start_at 时只查最近 7 天。
   string keyword = 4;
-  // start_at、end_at 是日志时间的范围（RFC 3339，含起点、不含终点）。
-  string start_at = 5;
-  string end_at = 6;
+  // start_at、end_at 是日志时刻的范围（毫秒，含起点、不含终点）。
+  int64 start_at = 5;
+  int64 end_at = 6;
   // before_id 大于 0 时只返回 id 更小的记录，用上一页最后一条的 id 向更早翻页。
   int64 before_id = 7;
   // limit 默认 100，最多 200。
@@ -553,8 +550,8 @@ message QueryLogRecordsReq {
 }
 // LogBucket 是一个小时里的日志条数。
 message LogBucket {
-  // start_at 是这个小时的起点（UTC，RFC 3339）。
-  string start_at = 1;
+  // start_at 是这个小时的起点（毫秒）。
+  int64 start_at = 1;
   // errors 是 Error 及以上的条数，events 是其余的（关键事件）。
   int32 errors = 2;
   int32 events = 3;

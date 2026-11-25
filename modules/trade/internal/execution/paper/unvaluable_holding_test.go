@@ -29,6 +29,13 @@ func (f delistedFacts) ListFills(_ context.Context, _ string, query store.FillQu
 	return nil, 0, nil
 }
 
+func (f delistedFacts) GetInstrumentSummary(_ context.Context, _, _ string, key exchange.SymbolKey) (store.InstrumentSummaryRecord, bool, error) {
+	if key.Symbol == "HALTUSDT" && f.haltFill != "" {
+		return store.InstrumentSummaryRecord{LastPrice: shared.MustDecimal(f.haltFill)}, true, nil
+	}
+	return store.InstrumentSummaryRecord{}, false, nil
+}
+
 func (f delistedFacts) LoadBlockedSet(context.Context) (store.BlockedSet, error) {
 	return store.NewBlockedSet(f.blocked), nil
 }
@@ -44,9 +51,9 @@ func (f delistedFacts) GetPaperBalanceSnapshot(context.Context, string, string) 
 }
 func (f delistedFacts) ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error) {
 	return []store.InstrumentRecord{
-		{MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
-		{MarketType: "SPOT", ExchangeSymbol: "DEADUSDT", InstrumentID: "DEAD-USDT", BaseAsset: "DEAD", QuoteAsset: "USDT", Status: "TRADING"},
-		{MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", InstrumentID: "HALT-USDT", BaseAsset: "HALT", QuoteAsset: "USDT", Status: "BREAK"},
+		{MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
+		{MarketType: "spot", ExchangeSymbol: "DEADUSDT", InstrumentID: "DEAD-USDT", BaseAsset: "DEAD", QuoteAsset: "USDT", Status: "TRADING"},
+		{MarketType: "spot", ExchangeSymbol: "HALTUSDT", InstrumentID: "HALT-USDT", BaseAsset: "HALT", QuoteAsset: "USDT", Status: "BREAK"},
 		// GONE 没有估值标的：已从标的列表里移除。
 	}, nil
 }
@@ -63,9 +70,9 @@ type delistedMarket struct {
 
 func (m *delistedMarket) LoadInstruments(context.Context) ([]exchange.Instrument, error) {
 	return []exchange.Instrument{
-		{MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT"},
-		{MarketType: "SPOT", ExchangeSymbol: "DEADUSDT", InstrumentID: "DEAD-USDT"},
-		{MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", InstrumentID: "HALT-USDT"},
+		{MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT"},
+		{MarketType: "spot", ExchangeSymbol: "DEADUSDT", InstrumentID: "DEAD-USDT"},
+		{MarketType: "spot", ExchangeSymbol: "HALTUSDT", InstrumentID: "HALT-USDT"},
 	}, nil
 }
 func (m *delistedMarket) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
@@ -85,7 +92,7 @@ func (m *delistedMarket) GetReferencePrice(_ context.Context, key exchange.Symbo
 
 func delistedPaperAccount() store.TradingAccountRecord {
 	return store.TradingAccountRecord{
-		SpaceID: "space", TradingAccountID: "paper", Name: "模拟盘", Exchange: "BINANCE", Markets: []string{"SPOT"},
+		SpaceID: "space", TradingAccountID: "paper", Name: "模拟盘", Exchange: "binance", Markets: []string{"spot"},
 		ExecutionMode: "PAPER", SettlementAsset: "USDT",
 	}
 }
@@ -93,7 +100,7 @@ func delistedPaperAccount() store.TradingAccountRecord {
 // 规则与实盘权益采样一致（execution.DegradedPrice）：交易所确认不存在（DEAD）、没有估值标的（GONE）按 0 计；
 // 停止交易（HALT）按最近一笔成交价计；BTC 暂时限流时沿用不超龄的最后已知价。
 func TestPaperSnapshotDegradesUnvaluableHoldingsAndSpotSellSkipsSnapshot(t *testing.T) {
-	d, _, order := deciderFixture(t, "SPOT")
+	d, _, order := deciderFixture(t, "spot")
 	now := d.Now()
 	market := &delistedMarket{now: now}
 	paperAdapter := &Adapter{
@@ -147,7 +154,7 @@ func TestPaperSnapshotKeepsFailingOnTransientQuoteErrorWithoutLastPrice(t *testi
 func TestPaperSnapshotBlockedTradingHoldingKeepsFailingOnQuoteError(t *testing.T) {
 	now := time.Now().UTC()
 	facts := delistedFacts{account: delistedPaperAccount(), haltFill: "7",
-		blocked: []store.BlockedInstrumentRecord{{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT"}}}
+		blocked: []store.BlockedInstrumentRecord{{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT"}}}
 	paperAdapter := &Adapter{
 		Account: store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"}, Store: facts,
 		MarketData: &delistedMarket{now: now, failed: true}, Now: func() time.Time { return now },
@@ -167,7 +174,7 @@ func TestPaperSnapshotHaltedHoldingNeedsFillOrDelisting(t *testing.T) {
 	_, err := paperAdapter.GetAccountSnapshot(context.Background())
 	require.ErrorContains(t, err, "HALTUSDT 状态为 BREAK")
 
-	facts.blocked = []store.BlockedInstrumentRecord{{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT"}}
+	facts.blocked = []store.BlockedInstrumentRecord{{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "HALTUSDT"}}
 	paperAdapter.Store = facts
 	snapshot, err := paperAdapter.GetAccountSnapshot(context.Background())
 	require.NoError(t, err)

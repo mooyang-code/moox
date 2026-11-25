@@ -24,7 +24,7 @@ func openTwoMarketStore(t *testing.T) *store.Store {
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "two-market",
-			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT", "SWAP"},
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot", "swap"},
 			ExecutionMode: string(exchange.ExecutionModePaper), Environment: string(exchange.AccountEnvironmentPaper),
 			SettlementAsset: "USDT", MarginMode: string(exchange.MarginModeCross),
 			Status:           string(exchange.AccountStatusEnabled),
@@ -35,7 +35,7 @@ func openTwoMarketStore(t *testing.T) *store.Store {
 		for _, market := range []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
 				Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
-				ExchangeSymbol: sameSymbol, InstrumentID: "BTC-USDT-" + string(market),
+				ExchangeSymbol: sameSymbol, InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(market),
 				BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 				Linear: market == exchange.MarketTypeSwap, ContractValue: "1", ContractValueAsset: "BTC",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -95,12 +95,12 @@ func TestSameSymbolOrdersAndFillsInSpotAndSwapStaySeparate(t *testing.T) {
 	for _, fill := range fills {
 		byMarket[fill.MarketType] = fill
 	}
-	require.Equal(t, testAccount+":SPOT:BTCUSDT:7", byMarket["SPOT"].FillID)
-	require.Equal(t, testAccount+":SWAP:BTCUSDT:7", byMarket["SWAP"].FillID)
-	require.Equal(t, "order-SPOT", byMarket["SPOT"].OrderID)
-	require.Equal(t, "order-SWAP", byMarket["SWAP"].OrderID)
-	require.Equal(t, "BTC-USDT-SPOT", byMarket["SPOT"].InstrumentID)
-	require.Equal(t, "BTC-USDT-SWAP", byMarket["SWAP"].InstrumentID)
+	require.Equal(t, testAccount+":spot:BTCUSDT:7", byMarket["spot"].FillID)
+	require.Equal(t, testAccount+":swap:BTCUSDT:7", byMarket["swap"].FillID)
+	require.Equal(t, "order-spot", byMarket["spot"].OrderID)
+	require.Equal(t, "order-swap", byMarket["swap"].OrderID)
+	require.Equal(t, "BTC-USDT-SPOT", byMarket["spot"].InstrumentID)
+	require.Equal(t, "BTC-USDT-SWAP", byMarket["swap"].InstrumentID)
 
 	// 同一笔成交重放仍是重复，不会因为市场不同而漏判或误判。
 	applied, err := reducer.ApplyFill(ctx, exchange.Fill{
@@ -125,7 +125,7 @@ func TestSameSymbolOrdersAndFillsInSpotAndSwapStaySeparate(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "1", position.SignedQuantity)
-	require.Equal(t, "SWAP", position.MarketType)
+	require.Equal(t, "swap", position.MarketType)
 	_, found, err = s.GetPosition(ctx, testSpace, testAccount, exchange.SymbolKey{Market: exchange.MarketTypeSpot, Symbol: sameSymbol}, string(exchange.PositionSideNet))
 	require.NoError(t, err)
 	require.False(t, found)
@@ -141,19 +141,19 @@ func TestSamePositionKeyInTwoMarketsCoexistsAndTombstonesAreSeparate(t *testing.
 		}
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
-		for _, record := range []store.PositionRecord{positionOf("SPOT", "3"), positionOf("SWAP", "-2")} {
+		for _, record := range []store.PositionRecord{positionOf("spot", "3"), positionOf("swap", "-2")} {
 			if err := tx.UpsertPosition(record); err != nil {
 				return err
 			}
 		}
 		// 权威快照里只剩合约持仓：现货那条被删除并留下现货的墓碑，合约的墓碑不受影响。
-		return tx.ReplacePositionsForAccount(testSpace, testAccount, []store.PositionRecord{positionOf("SWAP", "-2")}, 2_000, 0)
+		return tx.ReplacePositionsForAccount(testSpace, testAccount, []store.PositionRecord{positionOf("swap", "-2")}, 2_000, 0)
 	}))
 
 	positions, err := s.ListPositions(ctx, testSpace, testAccount, exchange.SymbolKey{})
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
-	require.Equal(t, "SWAP", positions[0].MarketType)
+	require.Equal(t, "swap", positions[0].MarketType)
 	require.Equal(t, "-2", positions[0].SignedQuantity)
 
 	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {

@@ -26,8 +26,8 @@ func TestRelayAllowlistIsComputedOnControl(t *testing.T) {
 	require.Equal(t, "home", relay.HostID)
 	require.Len(t, relay.Ports, 1, "只有网关跨主机端口，组件健康端口不经中转")
 	require.Equal(t, servicecatalog.HostGatewayRemotePort, relay.Ports[0].Port)
-	// 出站主机上只有主机级组件：能调它们的 monitor 与 moox-cli 可以打开，调不到它任何服务的 trade 与没登记的名字不行。
-	require.True(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
+	// 出站主机上只有主机级组件：能调它们的 moox-cli 可以打开，调不到它任何服务的 monitor、trade 与没登记的名字不行。
+	require.False(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
 	require.True(t, relay.Allowed("moox-cli", servicecatalog.HostGatewayRemotePort))
 	require.False(t, relay.Allowed("trade", servicecatalog.HostGatewayRemotePort))
 	require.False(t, relay.Allowed("nobody", servicecatalog.HostGatewayRemotePort))
@@ -76,8 +76,8 @@ func TestRelayAllowlistOnlyOnControl(t *testing.T) {
 	require.True(t, ok)
 }
 
-// 归档 worker 部署在出站主机上时，它的数据端口只对 console 开放，monitor 与 moox-cli 打不开。
-func TestRelayDataPortOnlyForConsole(t *testing.T) {
+// 归档 worker 部署在出站主机上时，它的数据端口只对 console（下载与预览）与 moox-cli（导入写入）开放，monitor 打不开。
+func TestRelayDataPortOnlyForConsoleAndCLI(t *testing.T) {
 	raw := testsnapshot.NewWithOutbound(t, "control", "home")
 	testsnapshot.Deployment(t, raw, "control", "archive-worker").HostId = "home"
 	testsnapshot.Rehash(t, raw)
@@ -87,8 +87,8 @@ func TestRelayDataPortOnlyForConsole(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, relay.Allowed("console", archiveDataPort))
 	require.False(t, relay.Allowed("monitor", archiveDataPort))
-	require.False(t, relay.Allowed("moox-cli", archiveDataPort))
-	require.True(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
+	require.True(t, relay.Allowed("moox-cli", archiveDataPort))
+	require.True(t, relay.Allowed("moox-cli", servicecatalog.HostGatewayRemotePort))
 	require.Len(t, relay.Ports, 2)
 
 	// 归档 worker 被停用后数据端口不再开放。

@@ -39,15 +39,10 @@ type Consumer struct {
 	registry *Registry
 }
 
+// ConsumerConfig 是一个持久消费者的配置：一个 durable 只消费一种事件（Event）的全部主题。
 type ConsumerConfig struct {
-	Name   string
-	Event  Event
-	Stream string
-	// Events binds one durable to multiple governed families in the same Stream.
-	Events []Event
-	// FilterSubjects binds one durable to an explicit set of exact subjects.
-	// It is mutually exclusive with Event/Events and requires Stream.
-	FilterSubjects      []string
+	Name                string
+	Event               Event
 	AckWait             time.Duration
 	MaxDeliver          int
 	MaxAckPending       int
@@ -64,11 +59,11 @@ type SpaceConsumerConfig struct {
 }
 
 func NewConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig) (*Consumer, error) {
-	stream, filters, err := consumerEventFilters(registry, cfg)
+	filter, err := consumerEventFilter(registry, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return newConsumer(ctx, client, registry, cfg, stream, filters)
+	return newConsumer(ctx, client, registry, cfg, filter)
 }
 
 func NewSpaceConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SpaceConsumerConfig) (*Consumer, error) {
@@ -76,7 +71,18 @@ func NewSpaceConsumer(ctx context.Context, client *jetstream.Client, registry *R
 	if err != nil {
 		return nil, err
 	}
-	return newConsumer(ctx, client, registry, cfg.ConsumerConfig, cfg.Event.Stream(), []string{filter})
+	return newConsumer(ctx, client, registry, cfg.ConsumerConfig, filter)
+}
+
+// consumerEventFilter 返回一种事件全部主题的过滤模式。
+func consumerEventFilter(registry *Registry, cfg ConsumerConfig) (string, error) {
+	if err := registry.Validate(); err != nil {
+		return "", err
+	}
+	if cfg.Event.Name() == "" {
+		return "", fmt.Errorf("event consumer Event is required")
+	}
+	return registry.FamilyPattern(cfg.Event)
 }
 
 func spaceConsumerFilter(registry *Registry, cfg SpaceConsumerConfig) (string, error) {
@@ -86,108 +92,30 @@ func spaceConsumerFilter(registry *Registry, cfg SpaceConsumerConfig) (string, e
 	if err := registry.Validate(); err != nil {
 		return "", err
 	}
-	event, err := singleConsumerEvent(cfg.ConsumerConfig)
-	if err != nil {
-		return "", err
+	if cfg.Event.Name() == "" {
+		return "", fmt.Errorf("event consumer Event is required")
 	}
-	return registry.SpacePattern(event, cfg.SpaceID)
+	return registry.SpacePattern(cfg.Event, cfg.SpaceID)
 }
 
-func newConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig, stream string, filters []string) (*Consumer, error) {
+func newConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg ConsumerConfig, filter string) (*Consumer, error) {
 	if client == nil {
 		return nil, fmt.Errorf("event consumer client is nil")
 	}
-	consumer, err := client.NewConsumer(ctx, jetstreamConsumerConfig(cfg, stream, filters))
+	consumer, err := client.NewConsumer(ctx, jetstreamConsumerConfig(cfg, filter))
 	if err != nil {
 		return nil, err
 	}
 	return &Consumer{consumer: consumer, registry: registry}, nil
 }
 
-func jetstreamConsumerConfig(cfg ConsumerConfig, stream string, filters []string) jetstream.ConsumerConfig {
-	transport := jetstream.ConsumerConfig{
-		Stream: stream, Durable: cfg.Name,
+func jetstreamConsumerConfig(cfg ConsumerConfig, filter string) jetstream.ConsumerConfig {
+	return jetstream.ConsumerConfig{
+		Stream: cfg.Event.Stream(), Durable: cfg.Name, FilterSubject: filter,
 		AckWait: cfg.AckWait, MaxDeliver: cfg.MaxDeliver, MaxAckPending: cfg.MaxAckPending,
 		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: cfg.DeliverPolicy,
 		DeliverDecodeErrors: cfg.DeliverDecodeErrors,
 	}
-	if len(filters) == 1 {
-		transport.FilterSubject = filters[0]
-	} else {
-		transport.FilterSubjects = append([]string(nil), filters...)
-	}
-	return transport
-}
-
-func consumerEventFilters(registry *Registry, cfg ConsumerConfig) (string, []string, error) {
-	if err := registry.Validate(); err != nil {
-		return "", nil, err
-	}
-	if len(cfg.FilterSubjects) != 0 {
-		if cfg.Event.Name() != "" || len(cfg.Events) != 0 {
-			return "", nil, fmt.Errorf("event consumer exact filters cannot be combined with Event/Events")
-		}
-		stream := strings.TrimSpace(cfg.Stream)
-		if stream == "" {
-			return "", nil, fmt.Errorf("event consumer exact filters require stream")
-		}
-		filters := make([]string, 0, len(cfg.FilterSubjects))
-		seen := make(map[string]struct{}, len(cfg.FilterSubjects))
-		for _, raw := range cfg.FilterSubjects {
-			filter := strings.TrimSpace(raw)
-			if filter == "" || strings.ContainsAny(filter, ">* ") {
-				return "", nil, fmt.Errorf("event consumer exact filter %q is invalid", raw)
-			}
-			if _, ok := seen[filter]; ok {
-				return "", nil, fmt.Errorf("event consumer exact filter %q is duplicated", filter)
-			}
-			seen[filter] = struct{}{}
-			filters = append(filters, filter)
-		}
-		return stream, filters, nil
-	}
-	if strings.TrimSpace(cfg.Stream) != "" {
-		return "", nil, fmt.Errorf("event consumer stream requires exact filter subjects")
-	}
-	if cfg.Event.Name() != "" && len(cfg.Events) != 0 {
-		return "", nil, fmt.Errorf("event consumer Event and Events are mutually exclusive")
-	}
-	eventList := cfg.Events
-	if cfg.Event.Name() != "" {
-		eventList = []Event{cfg.Event}
-	}
-	if len(eventList) == 0 {
-		return "", nil, fmt.Errorf("event consumer requires at least one event")
-	}
-	stream := eventList[0].Stream()
-	seen := make(map[string]struct{}, len(eventList))
-	filters := make([]string, 0, len(eventList))
-	for _, event := range eventList {
-		key := eventKey(event)
-		if _, ok := seen[key]; ok {
-			return "", nil, fmt.Errorf("event consumer event %s is duplicated", key)
-		}
-		seen[key] = struct{}{}
-		if event.Stream() != stream {
-			return "", nil, fmt.Errorf("event consumer events must share one stream")
-		}
-		filter, err := registry.FamilyPattern(event)
-		if err != nil {
-			return "", nil, err
-		}
-		filters = append(filters, filter)
-	}
-	return stream, filters, nil
-}
-
-func singleConsumerEvent(cfg ConsumerConfig) (Event, error) {
-	if len(cfg.Events) != 0 {
-		return Event{}, fmt.Errorf("space and subject consumers require exactly one Event")
-	}
-	if cfg.Event.Name() == "" {
-		return Event{}, fmt.Errorf("event consumer Event is required")
-	}
-	return cfg.Event, nil
 }
 
 func (c *Consumer) Fetch(ctx context.Context, batch int) ([]*jetstream.Delivery, error) {
@@ -202,24 +130,6 @@ func (c *Consumer) MaxDeliver() int {
 		return 0
 	}
 	return c.consumer.MaxDeliver()
-}
-
-func (c *Consumer) FetchEvents(ctx context.Context, batch int) ([]*EventDelivery, error) {
-	rawDeliveries, fetchErr := c.Fetch(ctx, batch)
-	deliveries := make([]*EventDelivery, 0, len(rawDeliveries))
-	var firstErr error
-	if fetchErr != nil {
-		firstErr = fetchErr
-	}
-	for _, raw := range rawDeliveries {
-		delivery := DecodeDelivery(c.registry, raw)
-		if delivery.Err != nil {
-			deliveries = append(deliveries, delivery)
-			continue
-		}
-		deliveries = append(deliveries, delivery)
-	}
-	return deliveries, firstErr
 }
 
 func (c *Consumer) Close() error {

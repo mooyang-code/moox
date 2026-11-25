@@ -210,22 +210,11 @@ func Open(path string, opts Options) (*Store, error) {
 			return nil, fmt.Errorf("create staging state tables: %w", err)
 		}
 	}
-	// 不写迁移：旧版本建的 task_state 缺变更日志位点两列时拒绝启动。
-	have, err := s.tableColumns(context.Background(), "task_state")
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	for _, column := range []string{"change_store_id", "change_sequence"} {
-		if !have[column] {
-			_ = db.Close()
-			return nil, fmt.Errorf("暂存库 %s 是旧版本建的（task_state 缺少 %s 列）：停掉 worker，删除 staging.db 及其 -wal、-shm 文件后重启，分区登记会从 mgr 重建", path, column)
-		}
-	}
 	return s, nil
 }
 
-// 两张永久表。task_state.purpose、dir_name 是任务的用途与目录名（绑定任务时记下）；
+// 两张永久表。task_state.purpose、dir_name 是任务的用途与目录名（绑定任务时记下）；change_store_id、change_sequence 是
+// Storage 变更日志的位点；rescan_from、rescan_until（纳秒）是整段重读的进度，只在重读期间有值，表示 [rescan_from, rescan_until) 还没读；
 // task_state.meta_remote_sha256 是已上传到对象存储的 dataset.json 的 sha256；partition_state.remote_* 是分区的远端副本，
 // remote_sha256 = file_sha256 且 remote_verified_at 非空时远端是当前版本（“已复制”，与 mgr 同一个口径）。
 const (
@@ -233,15 +222,14 @@ const (
 CREATE TABLE IF NOT EXISTS task_state (
     space_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
-    scan_watermark INTEGER,
-    first_start INTEGER,
-    resume_from INTEGER,
     task_id TEXT NOT NULL DEFAULT '',
     purpose TEXT NOT NULL DEFAULT '',
     dir_name TEXT NOT NULL DEFAULT '',
     meta_remote_sha256 TEXT NOT NULL DEFAULT '',
     change_store_id TEXT NOT NULL DEFAULT '',
     change_sequence INTEGER NOT NULL DEFAULT 0,
+    rescan_from INTEGER,
+    rescan_until INTEGER,
     PRIMARY KEY (space_id, dataset_id)
 ) WITHOUT ROWID`
 	partitionStateDDL = `

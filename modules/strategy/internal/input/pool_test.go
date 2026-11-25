@@ -48,10 +48,10 @@ func TestResolvePoolBindsUnionOfMemberMarkets(t *testing.T) {
 		t.Fatalf("成员数不符：%d", len(pooled.Members))
 	}
 	spot, swap := pooled.Members[0].Resolved, pooled.Members[1].Resolved
-	if spot.Market != dsl.SingleMarket(dsl.MarketSpot) || len(spot.Tasks) != 1 || spot.Tasks["spot"].ViewID != "view_factor_1h" {
+	if spot.Market != dsl.SingleMarket(dsl.MarketSpot) || len(spot.Tasks) != 1 || spot.Tasks["spot"].DatasetID != "dataset_factor_1h" {
 		t.Fatalf("现货成员只绑现货任务：%+v", spot)
 	}
-	if swap.Market != dsl.SingleMarket(dsl.MarketSwap) || len(swap.Tasks) != 1 || swap.Tasks["swap"].ViewID != "view_factor_swap1h" {
+	if swap.Market != dsl.SingleMarket(dsl.MarketSwap) || len(swap.Tasks) != 1 || swap.Tasks["swap"].DatasetID != "dataset_factor_swap1h" {
 		t.Fatalf("永续成员只绑永续任务：%+v", swap)
 	}
 	if len(pooled.Resolved.Factors) == 0 || pooled.Resolved.Factors["ma"] == "" {
@@ -78,15 +78,15 @@ func TestResolvePoolRejectsInconsistentBindings(t *testing.T) {
 		"多绑一个市场": {func(*fakeClient) {}, []string{"ftask_1h", "ftask_swap1h"}, []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "spot")}, "实际绑定了 spot、swap"},
 		"成员定义缺失": {func(*fakeClient) {}, []string{"ftask_1h"}, []PoolMemberDef{memberDef(t, "a", "spot")}, "不存在"},
 		"View 没有 close": {func(c *fakeClient) {
-			v := c.views["view_factor_swap1h"]
+			v := c.views["dataset_factor_swap1h"]
 			v.Columns = []ViewColumn{factorColumn("ma_20", "ma")}
-			c.views["view_factor_swap1h"] = v
+			c.views["dataset_factor_swap1h"] = v
 		}, []string{"ftask_1h", "ftask_swap1h"}, []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}, "没有 close 列"},
 		"成员缺列": {func(c *fakeClient) {
-			v := c.views["view_factor_swap1h"]
+			v := c.views["dataset_factor_swap1h"]
 			v.Columns = []ViewColumn{plainColumn("close")}
-			c.views["view_factor_swap1h"] = v
-		}, []string{"ftask_1h", "ftask_swap1h"}, []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}, "成员 b：列 ma_20 不存在于 View view_factor_swap1h"},
+			c.views["dataset_factor_swap1h"] = v
+		}, []string{"ftask_1h", "ftask_swap1h"}, []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}, "成员 b：列 ma_20 不存在于 View dataset_factor_swap1h"},
 	}
 	for name, tc := range cases {
 		client := newDualClient()
@@ -141,7 +141,7 @@ func TestCheckPoolWarmCoverageUsesActualHistory(t *testing.T) {
 	}
 	// 覆盖未知（View 还没有数据）时无法确认，同样拒绝。
 	pooled, client = resolve("100")
-	for _, id := range []string{"view_factor_1h", "view_factor_swap1h"} {
+	for _, id := range []string{"dataset_factor_1h", "dataset_factor_swap1h"} {
 		view := client.views[id]
 		view.IndexedFrom, view.IndexedTo = time.Time{}, time.Time{}
 		client.views[id] = view

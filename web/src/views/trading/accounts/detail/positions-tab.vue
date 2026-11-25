@@ -202,7 +202,7 @@ const filters = computed(() => [
 ]);
 const rows = computed(() => filterCoinRows(coinRows.value, filter.value, search.value));
 // 股票组合（A 股、港股）：一列股票、加“可卖”列，没有永续
-const stockMode = computed(() => Boolean(logical.value.markets?.includes(3)));
+const stockMode = computed(() => Boolean(logical.value.markets?.includes("equity")));
 const spotTitle = computed(() => (stockMode.value ? "股票" : "现货"));
 // 组合里完全没有现货（或永续）一侧的目标和持仓时，不显示那一侧的列
 const showSpot = computed(() => stockMode.value || hasSpotSide(coinRows.value));
@@ -215,7 +215,7 @@ function targetText(cell?: TargetCell) {
 }
 function actualText(value: number, market: "spot" | "swap") {
   if (value !== 0) return fmtQtyShort(cleanNumber(value));
-  const opened = market === "spot" ? (stockMode.value ? 3 : 1) : 2;
+  const opened = market === "spot" ? (stockMode.value ? "equity" : "spot") : "swap";
   return logical.value.markets?.includes(opened) ? "0" : "—";
 }
 function signed(value: number) {

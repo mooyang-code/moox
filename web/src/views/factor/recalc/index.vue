@@ -60,8 +60,8 @@
               </a-table-column>
               <a-table-column title="时间范围" :width="260">
                 <template #cell="{ record }">
-                  {{ formatTime(record.job.start_time, displayZone) }}<br />
-                  → {{ formatTime(record.job.end_time, displayZone) }}
+                  {{ formatInstant(record.job.start_time, displayZone) }}<br />
+                  → {{ formatInstant(record.job.end_time, displayZone) }}
                 </template>
               </a-table-column>
               <a-table-column title="状态" :width="200">
@@ -80,11 +80,8 @@
                   <a-progress :percent="record.progress / 100" :status="record.job.status === 'failed' ? 'danger' : undefined" />
                 </template>
               </a-table-column>
-              <a-table-column title="执行引擎" :width="180" :ellipsis="true" :tooltip="true">
-                <template #cell="{ record }">{{ engineText(record.job) }}</template>
-              </a-table-column>
               <a-table-column title="创建时间" :width="180">
-                <template #cell="{ record }">{{ formatTime(record.job.created_at, displayZone) }}</template>
+                <template #cell="{ record }">{{ formatInstant(record.job.created_at, displayZone) }}</template>
               </a-table-column>
               <a-table-column title="操作" :width="90" align="center" fixed="right">
                 <template #cell="{ record }">
@@ -110,14 +107,15 @@ import { Message } from "@arco-design/web-vue";
 import { cancelRecalcJob, listRecalcJobs } from "@/api/factor";
 import type { FactorTask, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
-import { RequestGate } from "@/utils/request-gate";
-import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { createLatestRequestGuard } from "@/utils/latest-request";
+import { applyPageResult, defaultPagination } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import InfoTip from "@/components/info-tip/index.vue";
 import TaskTabs from "@/views/factor/shared/task-tabs.vue";
 import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
-import { STATUS_SEGMENTS, engineText, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
+import { STATUS_SEGMENTS, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 页面时间按当前空间登记的时区显示
@@ -139,7 +137,7 @@ const loading = ref(false);
 const createVisible = ref(false);
 const segment = ref<StatusSegment>("all");
 const pagination = reactive(defaultPagination());
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 
 const rows = computed(() =>
   jobs.value.map(job => ({
@@ -154,7 +152,7 @@ const rowClass = (record: { job_id?: string }) =>
 
 async function load(options: { silent?: boolean } = {}) {
   const current = currentTask.value;
-  const token = gate.next();
+  const token = gate.begin();
   if (!current) {
     jobs.value = [];
     return;
@@ -162,22 +160,19 @@ async function load(options: { silent?: boolean } = {}) {
   if (!options.silent) loading.value = true;
   try {
     const statuses = segmentStatuses(segment.value);
-    const rsp = await listRecalcJobs(
-      {
-        task_id: current.task_id,
-        ...(statuses ? { statuses } : {}),
-        page: { page: pagination.current, size: pagination.pageSize }
-      },
-      { silentError: Boolean(options.silent) }
-    );
-    if (!gate.isCurrent(token)) return;
+    const rsp = await listRecalcJobs({
+      task_id: current.task_id,
+      ...(statuses ? { statuses } : {}),
+      page: { page: pagination.current, size: pagination.pageSize }
+    });
+    if (!token.isLatest()) return;
     jobs.value = rsp.jobs || [];
     applyPageResult(pagination, rsp.page_result);
     void scrollToHighlight();
   } catch (error) {
-    if (gate.isCurrent(token) && !options.silent) Message.error(error instanceof Error ? error.message : "补算作业加载失败");
+    if (token.isLatest() && !options.silent) Message.error(error instanceof Error ? error.message : "补算作业加载失败");
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 

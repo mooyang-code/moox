@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -98,33 +97,34 @@ func MarketCanaryTarget(config MarketCanaryConfig) string {
 	return strings.Join([]string{config.SpaceID, config.DatasetID, config.SubjectID, config.Frequency, tag}, "/")
 }
 
-func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
+// Result 是一次探针的结果：Success 为假时 Reason 是失败原因；Diagnostic 是阈值明细等机器诊断，只随告警事件记下。
+type Result struct {
+	SpaceID, CheckID string
+	Success          bool
+	Reason           string
+	Diagnostic       string
+	CheckedAt        time.Time
+}
+
+func (c MarketCanary) Run(ctx context.Context) Result {
 	now := time.Now().UTC()
 	if c.Now != nil {
 		now = c.Now().UTC()
 	}
 	config := c.Config
-	result := domain.CheckResult{
-		ResultID:   domain.ScopedResultID(config.SpaceID, MarketCanaryCheckID(config), now),
-		SpaceID:    config.SpaceID,
-		CheckID:    MarketCanaryCheckID(config),
-		InstanceID: "monitor",
-		Status:     domain.CheckStatusDown,
-		CheckedAt:  now,
-		CreatedAt:  now,
-	}
+	result := Result{SpaceID: config.SpaceID, CheckID: MarketCanaryCheckID(config), CheckedAt: now}
 	if c.Reader == nil || strings.TrimSpace(config.SpaceID) == "" || strings.TrimSpace(config.DatasetID) == "" ||
 		strings.TrimSpace(config.SubjectID) == "" || strings.TrimSpace(config.Frequency) == "" ||
 		config.SeriesTag == nil ||
 		config.Freshness <= 0 || config.ReturnThreshold <= 0 {
-		result.ErrorMessage = "invalid_config"
+		result.Reason = "invalid_config"
 		return result
 	}
 	clock, err := newMarketCanaryClock(config.market(), config.Frequency)
 	if err != nil {
-		result.ErrorMessage = "invalid_config"
+		result.Reason = "invalid_config"
 		if errors.Is(err, barclock.ErrNoCalendar) {
-			result.ErrorMessage = "calendar_unavailable"
+			result.Reason = "calendar_unavailable"
 		}
 		return result
 	}
@@ -199,112 +199,106 @@ func newMarketCanaryClock(marketID, frequency string) (marketCanaryClock, error)
 }
 
 // runContinuous 检查 24 小时连续市场：最近一根已收盘 K 线足够新，且与上一根的收盘价波动不超过阈值。
-func (c MarketCanary) runContinuous(ctx context.Context, result domain.CheckResult, now time.Time, config MarketCanaryConfig, clock marketCanaryClock) domain.CheckResult {
+func (c MarketCanary) runContinuous(ctx context.Context, result Result, now time.Time, config MarketCanaryConfig, clock marketCanaryClock) Result {
 	candidateCount, err := marketCanaryCandidateCount(config.Freshness, clock.clock.Period())
 	if err != nil {
-		result.ErrorMessage = "invalid_config"
+		result.Reason = "invalid_config"
 		return result
 	}
 	buckets, err := clock.clock.ClosedBefore(now, candidateCount)
 	if err != nil {
-		result.ErrorMessage = "invalid_config"
+		result.Reason = "invalid_config"
 		return result
 	}
-	startedAt := time.Now()
 	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
 		Keys:        recentMarketCanaryKeys(config, clock.frequency, bucketKeys(buckets)),
 		ColumnNames: []string{"close"},
 	})
-	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
-		result.ErrorMessage = "storage_unreachable"
+		result.Reason = "storage_unreachable"
 		return result
 	}
 	if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != 0 {
-		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
+		result.Reason = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
 	bars, err := decodeMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
 	if err != nil {
-		result.ErrorMessage = err.Error()
+		result.Reason = err.Error()
 		return result
 	}
 	if len(bars) < 2 {
-		result.ErrorMessage = "insufficient_closed_bars"
+		result.Reason = "insufficient_closed_bars"
 		return result
 	}
 	sort.Slice(bars, func(i, j int) bool { return bars[i].DataTime.Before(bars[j].DataTime) })
 	previous, current := bars[len(bars)-2], bars[len(bars)-1]
 	if age := now.Sub(current.DataTime); age < 0 || age > config.Freshness {
-		result.ErrorMessage = "stale_watermark"
+		result.Reason = "stale_watermark"
 		return result
 	}
 	priceReturn := math.Abs(current.Close/previous.Close - 1)
 	if priceReturn >= config.ReturnThreshold {
-		result.ErrorMessage = fmt.Sprintf(
+		result.Reason = fmt.Sprintf(
 			"相邻K线收盘价从 %s 变为 %s，波动 %.2f%%，超过 %.2f%% 阈值",
 			strconv.FormatFloat(previous.Close, 'f', -1, 64),
 			strconv.FormatFloat(current.Close, 'f', -1, 64),
 			priceReturn*100,
 			config.ReturnThreshold*100,
 		)
-		result.BodyExcerpt = marketCanaryThresholdDetails(previous, current, priceReturn, config)
+		result.Diagnostic = marketCanaryThresholdDetails(previous, current, priceReturn, config)
 		return result
 	}
 	result.Success = true
-	result.Connected = true
-	result.Status = domain.CheckStatusOK
 	return result
 }
 
 // runSession 检查交易时段市场（A 股）：最近 ClosedBarCount 根已收盘 K 线的覆盖率、OHLCV 与来源。
 // 休市时间（午休、收盘后、非交易日、开盘前）不读存储，直接报空闲健康。
-func (c MarketCanary) runSession(ctx context.Context, result domain.CheckResult, now time.Time, config MarketCanaryConfig, clock marketCanaryClock) domain.CheckResult {
+func (c MarketCanary) runSession(ctx context.Context, result Result, now time.Time, config MarketCanaryConfig, clock marketCanaryClock) Result {
 	if config.SettleDelay < 0 || config.PostCloseDelay < 0 || config.CalendarWarningLead <= 0 || config.ClosedBarCount <= 0 ||
 		config.ClosedBarMinCoverage <= 0 || config.ClosedBarMinCoverage > 1 {
-		result.ErrorMessage = "invalid_config"
+		result.Reason = "invalid_config"
 		return result
 	}
 	if len(config.EligibleKlineProviders) == 0 {
-		result.ErrorMessage = "no_eligible_kline_feed"
+		result.Reason = "no_eligible_kline_feed"
 		return result
 	}
 	if !now.Before(clock.coverageEnd) {
-		result.ErrorMessage = "calendar_expired"
+		result.Reason = "calendar_expired"
 		return result
 	}
 	if clock.coverageEnd.Sub(now) < config.CalendarWarningLead {
-		result.ErrorMessage = "calendar_expiring"
+		result.Reason = "calendar_expiring"
 		return result
 	}
 	expected, active, err := sessionExpectedBuckets(clock.clock, now, config.SettleDelay, config.PostCloseDelay, config.Freshness, config.ClosedBarCount)
 	if err != nil {
-		result.ErrorMessage = "invalid_config"
+		result.Reason = "invalid_config"
 		if errors.Is(err, barclock.ErrOutOfCoverage) {
-			result.ErrorMessage = "calendar_expired"
+			result.Reason = "calendar_expired"
 		}
 		return result
 	}
 	if !active {
 		return healthyIdleResult(result)
 	}
-	startedAt := time.Now()
 	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
 		Keys:        recentMarketCanaryKeys(config, clock.frequency, bucketKeys(expected)),
 		ColumnNames: []string{"open", "high", "low", "close", "volume", "amount", "source_provider"},
 	})
-	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
-		result.ErrorMessage = "storage_unreachable"
+		result.Reason = "storage_unreachable"
 		return result
 	}
 	if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != 0 {
-		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
+		result.Reason = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
 	bars, err := decodeStockMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
 	if err != nil {
-		result.ErrorMessage = err.Error()
+		result.Reason = err.Error()
 		return result
 	}
 	byTime := make(map[int64]marketBar, len(bars))
@@ -314,7 +308,7 @@ func (c MarketCanary) runSession(ctx context.Context, result domain.CheckResult,
 	}
 	for _, bar := range bars {
 		if _, ok := eligible[strings.ToLower(bar.SourceProvider)]; !ok {
-			result.ErrorMessage = "source_provider_not_eligible"
+			result.Reason = "source_provider_not_eligible"
 			return result
 		}
 		byTime[bar.DataTime.Unix()] = bar
@@ -326,20 +320,20 @@ func (c MarketCanary) runSession(ctx context.Context, result domain.CheckResult,
 		}
 	}
 	if present == 0 {
-		result.ErrorMessage = "no_closed_bar_data"
+		result.Reason = "no_closed_bar_data"
 		return result
 	}
 	coverage := float64(present) / float64(len(expected))
 	if coverage < config.ClosedBarMinCoverage {
-		result.ErrorMessage = "closed_bar_coverage_below_threshold"
+		result.Reason = "closed_bar_coverage_below_threshold"
 		diagnostic, _ := json.Marshal(closedBarCoverageDiagnostic{
 			Type: "closed_bar_coverage", Expected: len(expected), Actual: present,
 			Coverage: coverage, Minimum: config.ClosedBarMinCoverage,
 		})
-		result.BodyExcerpt = string(diagnostic)
+		result.Diagnostic = string(diagnostic)
 		return result
 	}
-	result.Success, result.Connected, result.Status = true, true, domain.CheckStatusOK
+	result.Success = true
 	return result
 }
 
@@ -379,9 +373,9 @@ func bucketKeys(buckets []barclock.Bucket) []time.Time {
 	return keys
 }
 
-func healthyIdleResult(result domain.CheckResult) domain.CheckResult {
-	result.Success, result.Connected, result.Status = true, true, domain.CheckStatusOK
-	result.BodyExcerpt = `{"state":"idle"}`
+func healthyIdleResult(result Result) Result {
+	result.Success = true
+	result.Diagnostic = `{"state":"idle"}`
 	return result
 }
 

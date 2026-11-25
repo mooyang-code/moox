@@ -104,8 +104,8 @@ test("新建模拟账户四步，测试网和生产环境也可选，请求带�
   expect(calls.paper[0]).toMatchObject({
     account_name: "演示账户",
     logical_account_name: "演示组合",
-    exchange: 1,
-    markets: [1, 2],
+    exchange: "binance",
+    markets: ["spot", "swap"],
     margin_mode: "CROSS",
     settlement_asset: "USDT",
     order_retention_days: 5

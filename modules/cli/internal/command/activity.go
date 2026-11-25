@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/spf13/cobra"
@@ -53,17 +54,13 @@ func init() {
 }
 
 func runActivityList(ctx context.Context, out io.Writer, flags activityListFlags) error {
-	since, until := strings.TrimSpace(flags.Since), strings.TrimSpace(flags.Until)
-	var err error
-	if since != "" {
-		if since, err = parseKlineTime("since", since); err != nil {
-			return err
-		}
+	since, err := activityMillis("since", flags.Since)
+	if err != nil {
+		return err
 	}
-	if until != "" {
-		if until, err = parseKlineTime("until", until); err != nil {
-			return err
-		}
+	until, err := activityMillis("until", flags.Until)
+	if err != nil {
+		return err
 	}
 	gateway, err := openCommandGateway(ctx, flags.File, nil)
 	if err != nil {
@@ -94,4 +91,20 @@ func jsonRawOrString(value string) any {
 		return value
 	}
 	return parsed
+}
+
+// activityMillis 把 --since/--until 的时间换成 Unix 毫秒；留空为 0（不限）。
+func activityMillis(name, value string) (int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	text, err := parseKlineTime(name, value)
+	if err != nil {
+		return 0, err
+	}
+	at, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		return 0, err
+	}
+	return at.UnixMilli(), nil
 }

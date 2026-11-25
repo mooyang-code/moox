@@ -1,5 +1,6 @@
 import { listInstances, listStrategies } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
+import { toInstantMs } from "@/utils/time-zone";
 
 export interface StrategyLink {
   instanceId: string;
@@ -22,7 +23,7 @@ export interface LogicalRef {
 export function chooseInstance(candidates: readonly StrategyInstance[]): StrategyInstance | undefined {
   const enabled = candidates.find(item => item.enabled);
   if (enabled) return enabled;
-  return [...candidates].sort((a, b) => Date.parse(b.created_at || "") - Date.parse(a.created_at || "") || 0)[0];
+  return [...candidates].sort((a, b) => (toInstantMs(b.created_at) ?? 0) - (toInstantMs(a.created_at) ?? 0))[0];
 }
 
 /** 把实例和策略定义合成每个组合账户的关联策略，键是组合账户编号。 */

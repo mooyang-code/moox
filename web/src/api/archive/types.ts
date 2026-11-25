@@ -8,8 +8,8 @@ import type { Page, PageResult } from "@/api/storage/types";
 
 export type { Page, PageResult };
 
-/** import：moox-cli 导入本地 CSV */
-export type ArchiveRunKind = "scheduled" | "manual" | "tick" | "range" | "import";
+/** follow：每分钟按 Storage 变更日志跟随；manual：整段重读线上保留期；range：补拉区间；import：moox-cli import 的归档目标 */
+export type ArchiveRunKind = "follow" | "manual" | "range" | "import";
 export type ArchiveRunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type ArchiveTaskStatus = "enabled" | "paused";
 export type ArchiveHealth = "ok" | "warning" | "error" | "paused";
@@ -33,6 +33,7 @@ export interface ArchiveRun {
   range_start?: string;
   range_end?: string;
   status?: ArchiveRunStatus;
+  /** 计划、开始、结束与租约到期时刻：Unix 毫秒的数字字符串，没有时为 "0" */
   scheduled_at?: string;
   started_at?: string;
   finished_at?: string;
@@ -49,10 +50,6 @@ export interface ArchiveRun {
   partitions_uploaded?: number;
   unrecoverable?: UnrecoverableRange[];
   message?: string;
-  /** 导入的文件（kind=import）：相对归档根目录下 .import 的 "<import_id>/<文件名>" */
-  import_file?: string;
-  /** 导入时同键已存在的行是否覆盖（kind=import）；默认只补空缺 */
-  overwrite?: boolean;
 }
 
 export interface ArchiveTask {
@@ -62,19 +59,14 @@ export interface ArchiveTask {
   /** day：按空间本地日；month：按月 */
   partition_unit?: "day" | "month" | string;
   retention?: string;
-  /** 每收盘多少根拉取一次（1～1440）；1d 及以上每天一次 */
-  pull_every_bars?: number;
-  /** 复核间隔（秒）：低于 1d 为 3600，1d 及以上为 86400 */
-  interval_seconds?: number;
+  /** 回补起点（归档起点）：创建时确定，之后不改 */
   backfill_from?: string;
   status?: ArchiveTaskStatus;
-  last_boundary?: string;
-  last_review?: string;
-  next_pull_at?: string;
-  consecutive_skips?: number;
+  /** 最近一次成功的跟随或整段重读的开始时刻：Unix 毫秒的数字字符串，没有时为 "0" */
   last_success_at?: string;
   final_until?: string;
   creator?: string;
+  /** 创建、更新时刻：Unix 毫秒的数字字符串 */
   created_at?: string;
   updated_at?: string;
   health?: ArchiveHealth;
@@ -115,6 +107,7 @@ export interface ArchivePartition {
   /** 表头加前 20 行的 CSV */
   preview?: string;
   export_count?: number;
+  /** 以下时刻（含 remote_verified_at）是 Unix 毫秒的数字字符串，没有时为 "0" */
   last_changed_at?: string;
   exported_at?: string;
   finalized_at?: string;
@@ -135,7 +128,7 @@ export interface ArchiveObjectStore {
   url_style?: string;
   /** 最近一次探测失败的原因，空表示正常 */
   probe_error?: string;
-  /** 连续探测失败的起始时刻 */
+  /** 连续探测失败的起始时刻：Unix 毫秒的数字字符串，正常时为 "0" */
   unavailable_since?: string;
 }
 
@@ -155,25 +148,11 @@ export interface ArchiveWorkerInfo {
   maintaining?: boolean;
   pacing_json?: string;
   running_run_ids?: string[];
+  /** 最近一次心跳的时刻：Unix 毫秒的数字字符串 */
   last_heartbeat_at?: string;
   /** 最近 2 分钟内有心跳 */
   active?: boolean;
   object_store?: ArchiveObjectStore;
-}
-
-/**
- * 避开采集触发时刻的规则，由 archive-mgr 按各空间生效中的采集频率推出。
- * 触发时刻是分钟数为 every_minutes 倍数的第 0 秒，[触发 − before_seconds, 触发 + after_seconds) 不发请求；every_minutes 为 0 表示不限秒。
- * hour_quiet_from / hour_quiet_until（"MM:SS"）是每小时不发请求的区间，都为空表示不避让整点。computed_at 为空表示还在用启动默认值。
- */
-export interface AvoidanceRules {
-  every_minutes?: number;
-  before_seconds?: number;
-  after_seconds?: number;
-  hour_quiet_from?: string;
-  hour_quiet_until?: string;
-  basis?: string;
-  computed_at?: string;
 }
 
 export interface GetArchiveOverviewRsp {
@@ -184,7 +163,6 @@ export interface GetArchiveOverviewRsp {
   enabled_task_count?: number;
   queued_run_count?: number;
   alerts?: string[];
-  avoidance?: AvoidanceRules;
 }
 
 export interface ListArchiveTasksRsp {
@@ -197,7 +175,6 @@ export interface PrepareArchiveTaskRsp {
   partition_unit?: string;
   retention?: string;
   earliest_backfill_from?: string;
-  recommended_pull_every_bars?: number;
   exists?: boolean;
   purpose?: string;
   /** 按“交易所 + 品种 + 类型 + 频率”生成的建议目录名 */
@@ -206,23 +183,9 @@ export interface PrepareArchiveTaskRsp {
   dir_name_conflict?: boolean;
 }
 
-export interface PreviewArchiveScheduleReq {
-  dataset_id: string;
-  pull_every_bars: number;
-}
-
-export interface PreviewArchiveScheduleRsp {
-  next_runs?: string[];
-  interval_seconds?: number;
-  read_span_seconds?: number;
-  partition_export_estimates?: string[];
-  next_reviews?: string[];
-}
-
 export interface CreateArchiveTaskReq {
   dataset_id: string;
-  pull_every_bars: number;
-  /** 空串表示不指定 */
+  /** 空串表示取线上保留期起点；保留期为 forever 时必填 */
   backfill_from: string;
   paused: boolean;
   /** 空表示取建议值 */
@@ -231,10 +194,6 @@ export interface CreateArchiveTaskReq {
 
 export interface UpdateArchiveTaskReq {
   dataset_id: string;
-  /** 0 表示不修改 */
-  pull_every_bars?: number;
-  /** 空串表示不修改，不能用来清除 */
-  backfill_from?: string;
   status?: ArchiveTaskStatus;
   clear_unrecoverable?: boolean;
 }
@@ -258,8 +217,8 @@ export interface ListArchiveRunsReq {
   dataset_id: string;
   /** 为空表示全部状态 */
   status?: ArchiveRunStatus | "";
-  /** 是否列出成功的到点拉取（每分钟一条），默认不列 */
-  include_ticks?: boolean;
+  /** 是否列出成功的跟随运行（每分钟一条），默认不列 */
+  include_follow?: boolean;
   page: Page;
 }
 
@@ -296,6 +255,4 @@ export interface ArchiveRecentRowsRsp {
   columns?: ArchiveRecentColumn[];
   /** 单元格按归档 CSV 的规则格式化（时间 RFC3339 UTC、布尔 true/false），缺失值为 null，与空字符串不同 */
   rows?: (string | null)[][];
-  /** 扫描水位：暂存库已从 Storage 完整读到的时刻；之后可能还有行没读到 */
-  staged_until?: string;
 }

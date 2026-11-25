@@ -33,7 +33,7 @@ func (p *flakyInventoryProvider) FetchTaskResultInventory(context.Context) (Task
 func TestInventoryCacheSurvivesCollectorOutageAndRestart(t *testing.T) {
 	now := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	provider := &flakyInventoryProvider{snapshot: TaskResultInventorySnapshot{ID: "inv-1", ObservedAt: now, Entries: []TaskResultInventoryEntry{{
-		SpaceID: "crypto", TaskID: "t", DatasetID: "d", ViewID: "v", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
+		SpaceID: "crypto", TaskID: "t", DatasetID: "d", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
 		ObservedAt: now, AllowedLatenessSeconds: 15,
 	}}}}
 	store := &memInventoryStore{}

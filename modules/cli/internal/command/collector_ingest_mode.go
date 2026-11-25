@@ -89,7 +89,7 @@ func ingestModeView(rsp interface {
 	view := map[string]any{"modes": modes}
 	if stream := rsp.GetStream(); stream != nil {
 		view["stream"] = map[string]any{"instance_id": stream.GetInstanceId(), "online": stream.GetOnline(), "heartbeat_at": stream.GetHeartbeatAt(),
-			"applied_plan": fmt.Sprintf("%d/%s", stream.GetAppliedPlanId(), stream.GetAppliedStage()), "connections": len(stream.GetConns()), "version": stream.GetVersion()}
+			"applied_plan": stream.GetAppliedPlanId(), "connections": len(stream.GetConns()), "version": stream.GetVersion()}
 	} else {
 		view["stream"] = "没有 collector-stream 实例的心跳"
 	}
@@ -144,7 +144,7 @@ func runIngestModeSet(ctx context.Context, out io.Writer, flags ingestModeFlags)
 	}
 	if err := collectorRetError("set ingest mode", rsp.GetRetInfo()); err != nil {
 		if stream := rsp.GetStream(); stream != nil {
-			return fmt.Errorf("%w（collector-stream %s 最近心跳 %s）", err, stream.GetInstanceId(), stream.GetHeartbeatAt())
+			return fmt.Errorf("%w（collector-stream %s 最近心跳 %s）", err, stream.GetInstanceId(), time.UnixMilli(stream.GetHeartbeatAt()).UTC().Format(time.RFC3339))
 		}
 		return err
 	}

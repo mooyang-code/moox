@@ -6,8 +6,6 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
-
-	"github.com/mooyang-code/moox/packages/events"
 )
 
 func (c *Config) Validate() error {
@@ -45,76 +43,6 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("non-loopback broker requires authentication and TLS CA")
 		}
 	}
-	seenStreams := map[string]struct{}{}
-	for i := range c.Streams {
-		s := &c.Streams[i]
-		if strings.TrimSpace(s.Name) == "" {
-			return fmt.Errorf("streams[%d].name is required", i)
-		}
-		if _, ok := seenStreams[s.Name]; ok {
-			return fmt.Errorf("duplicate stream name %q", s.Name)
-		}
-		seenStreams[s.Name] = struct{}{}
-		if s.Retention != "limits" && s.Retention != "work_queue" {
-			return fmt.Errorf("stream %q retention %q is invalid", s.Name, s.Retention)
-		}
-		if s.Storage != "file" && s.Storage != "memory" {
-			return fmt.Errorf("stream %q storage %q is invalid", s.Name, s.Storage)
-		}
-		if s.Discard != "" && s.Discard != "old" && s.Discard != "new" {
-			return fmt.Errorf("stream %q discard %q is invalid", s.Name, s.Discard)
-		}
-		if s.Duplicates < 0 {
-			return fmt.Errorf("stream %q duplicates must not be negative", s.Name)
-		}
-		if len(s.Subjects) == 0 {
-			return fmt.Errorf("stream %q must have subjects", s.Name)
-		}
-		for _, subject := range s.Subjects {
-			if err := validateSubject(subject, true); err != nil {
-				return fmt.Errorf("stream %q subject: %w", s.Name, err)
-			}
-		}
-	}
-	for i := range c.Streams {
-		for j := i + 1; j < len(c.Streams); j++ {
-			for _, left := range c.Streams[i].Subjects {
-				for _, right := range c.Streams[j].Subjects {
-					if patternsOverlap(left, right) {
-						return fmt.Errorf("stream subjects %q and %q overlap", left, right)
-					}
-				}
-			}
-		}
-	}
-	if err := validateGovernedEventFamilies(c); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateGovernedEventFamilies(c *Config) error {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return fmt.Errorf("load event registry: %w", err)
-	}
-	for _, event := range registry.Events() {
-		want, err := registry.FamilyPattern(event)
-		if err != nil {
-			return fmt.Errorf("derive governed event %s@%d topic family: %w", event.Name(), event.Version(), err)
-		}
-		matches := 0
-		for _, stream := range c.Streams {
-			for _, subject := range stream.Subjects {
-				if stream.Name == event.Stream() && patternCovers(subject, want) {
-					matches++
-				}
-			}
-		}
-		if matches != 1 {
-			return fmt.Errorf("governed event %s@%d must be covered by exactly one stream family %q in stream %q, got %d", event.Name(), event.Version(), want, event.Stream(), matches)
-		}
-	}
 	return nil
 }
 
@@ -136,20 +64,6 @@ func publicHost(value string) bool {
 	return value == "0.0.0.0" || value == "::" || !isLoopback(value)
 }
 
-func patternCovers(cover, subjectPattern string) bool {
-	coverParts := strings.Split(cover, ".")
-	subjectParts := strings.Split(subjectPattern, ".")
-	for i, part := range coverParts {
-		if part == ">" {
-			return i < len(subjectParts)
-		}
-		if i >= len(subjectParts) || subjectParts[i] == ">" || (part != "*" && part != subjectParts[i]) {
-			return false
-		}
-	}
-	return len(coverParts) == len(subjectParts)
-}
-
 func unsafeStoreDir(dir string) bool {
 	dir = strings.TrimSpace(dir)
 	if dir == "" || dir == "." || dir == string(filepath.Separator) {
@@ -160,39 +74,4 @@ func unsafeStoreDir(dir string) bool {
 		return true
 	}
 	return abs == string(filepath.Separator) || abs == filepath.Dir(abs) && abs == "/"
-}
-
-func validateSubject(subject string, wildcard bool) error {
-	subject = strings.TrimSpace(subject)
-	if subject == "" {
-		return fmt.Errorf("subject is empty")
-	}
-	tokens := strings.Split(subject, ".")
-	for i, token := range tokens {
-		if token == "" || strings.ContainsAny(token, " \t\r\n") {
-			return fmt.Errorf("subject %q contains invalid token", subject)
-		}
-		if token == ">" && (!wildcard || i != len(tokens)-1) {
-			return fmt.Errorf("subject %q has invalid > wildcard", subject)
-		}
-		if token == "*" && !wildcard {
-			return fmt.Errorf("subject %q must be concrete", subject)
-		}
-	}
-	return nil
-}
-
-func patternsOverlap(a, b string) bool {
-	aa, bb := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; ; i++ {
-		if i >= len(aa) || i >= len(bb) {
-			return i >= len(aa) && i >= len(bb)
-		}
-		if aa[i] == ">" || bb[i] == ">" {
-			return true
-		}
-		if aa[i] != "*" && bb[i] != "*" && aa[i] != bb[i] {
-			return false
-		}
-	}
 }

@@ -97,6 +97,12 @@ func open(ctx context.Context, hosts []sshHost, control, identityDirectory strin
 	return &Client{Client: shared, source: source, tunnels: resolver}, nil
 }
 
+// ForwardLocal 经到 hostID 的 SSH 隧道把本机一个临时端口转发到该主机的 remote（如 "127.0.0.1:11428"），返回本机地址。
+// 只给能 SSH 直达的主机用；只出站的主机用内嵌客户端的 DialRelay 经 control 中转。
+func (c *Client) ForwardLocal(ctx context.Context, hostID, remote string) (string, error) {
+	return c.tunnels.forward(ctx, "forward/"+hostID+"/"+remote, hostID, remote)
+}
+
 func (c *Client) Close() error {
 	if c == nil {
 		return nil

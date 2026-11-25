@@ -58,7 +58,7 @@
             </template>
           </a-table-column>
           <a-table-column title="上传时间" :width="190">
-            <template #cell="{ record }">{{ formatTime(record.create_time) }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.created_at, "UTC") }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="80" align="center" fixed="right">
             <template #cell="{ record }">
@@ -344,9 +344,6 @@ async function onDelete(record: FunctionPackage) {
 }
 
 const errorText = (error: unknown) => (error instanceof Error && error.message ? error.message : "未知原因");
-
-// 代码包的时间按 UTC 带后缀
-const formatTime = (time: string | undefined) => formatInstant(time, "UTC");
 </script>
 
 <style scoped>

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,13 +11,14 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
+	"github.com/mooyang-code/moox/modules/archive/internal/worker/dataapi"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
-	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 type fakeManager struct {
@@ -139,6 +139,7 @@ func (f *fakeSource) ReadRange(ctx context.Context, req source.Range) (source.Pa
 
 type instantPacer struct{}
 
+func (instantPacer) AllowedAt(t time.Time) time.Time            { return t }
 func (instantPacer) WaitTurn(context.Context) error             { return nil }
 func (instantPacer) Throttle(context.Context, int64) error      { return nil }
 func (instantPacer) Sleep(context.Context, time.Duration) error { return nil }
@@ -191,9 +192,9 @@ func newHarness(t *testing.T) *harness {
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
-		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
-		StartedAt: "2026-10-17T01:04:43Z", ScheduledAt: "2026-10-17T01:04:43Z",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
+		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
+		StartedAt: rfcMillis("2026-10-17T01:04:43Z"), ScheduledAt: rfcMillis("2026-10-17T01:04:43Z"),
 	}
 	if mutate != nil {
 		mutate(a)
@@ -284,50 +285,14 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	}
 }
 
-// 心跳回包的避让规则替换 pacer 的生效规则；心跳的 pacing_json 报生效值；没下发或不合法时保留原规则。
-func TestHeartbeatAppliesAvoidanceRulesToThePacer(t *testing.T) {
+// 心跳的 pacing_json 报配置里的秒窗口开关与带宽（两个避让窗口写死，不再上报）。
+func TestHeartbeatReportsThePacingConfig(t *testing.T) {
 	h := newHarness(t)
-	ctx := context.Background()
-	pacer, err := pacing.New(h.cfg.PacingConfig(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.app.opts.Pacer = pacer
-	h.app.heartbeatOnce(ctx)
-	if js := h.mgr.heartbeats[0].GetPacingJson(); !strings.Contains(js, `"source":"config"`) || !strings.Contains(js, `"every_minutes":1`) {
-		t.Fatalf("未收到下发时报 app.yaml 的值: %s", js)
-	}
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Avoidance: &archivepb.AvoidanceRules{
-		EveryMinutes: 5, BeforeSeconds: 5, AfterSeconds: 25, Basis: "stockcn：5m", ComputedAt: "2026-11-08T10:00:00Z",
-	}}
-	h.app.heartbeatOnce(ctx) // 本次心跳报的仍是旧值，回包后替换
-	if r := pacer.Rules(); r.Source != "mgr" || r.EveryMinutes != 5 || r.HourQuiet != nil || r.ComputedAt != "2026-11-08T10:00:00Z" {
-		t.Fatalf("rules = %+v", r)
-	}
-	at := time.Date(2026, 11, 8, 10, 4, 56, 0, time.UTC)
-	if got := pacer.AllowedAt(at); !got.Equal(time.Date(2026, 11, 8, 10, 5, 25, 0, time.UTC)) {
-		t.Fatalf("AllowedAt = %s", got)
-	}
-	h.app.heartbeatOnce(ctx)
-	js := h.mgr.heartbeats[2].GetPacingJson()
-	if !strings.Contains(js, `"source":"mgr"`) || !strings.Contains(js, `"every_minutes":5`) || !strings.Contains(js, `"hour_quiet":null`) || !strings.Contains(js, `"minute_window":true`) {
-		t.Fatalf("应报生效值: %s", js)
-	}
-	// 不合法的规则被忽略；回包没有规则时保留。
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Avoidance: &archivepb.AvoidanceRules{EveryMinutes: 7}}
-	h.app.heartbeatOnce(ctx)
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{}
-	h.app.heartbeatOnce(ctx)
-	if r := pacer.Rules(); r.EveryMinutes != 5 {
-		t.Fatalf("应保留原规则: %+v", r)
-	}
-	// 带整点窗口的规则。
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Avoidance: &archivepb.AvoidanceRules{
-		EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuietFrom: "58:00", HourQuietUntil: "04:00",
-	}}
-	h.app.heartbeatOnce(ctx)
-	if r := pacer.Rules(); r.HourQuiet == nil || *r.HourQuiet != [2]string{"58:00", "04:00"} {
-		t.Fatalf("rules = %+v", r)
+	h.cfg.Pacing.MinuteWindow = false
+	h.app.heartbeatOnce(context.Background())
+	js := h.mgr.heartbeats[0].GetPacingJson()
+	if !strings.Contains(js, `"minute_window":false`) || !strings.Contains(js, `"request_interval":"200ms"`) || strings.Contains(js, "every_minutes") {
+		t.Fatalf("pacing_json = %s", js)
 	}
 }
 
@@ -445,7 +410,7 @@ func TestPulledRunsAreExecutedAndReportedWithStatsAndPartitions(t *testing.T) {
 	}
 	h.idle()
 	// 同样的数据再跑一次：没有新增。
-	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(x *archivepb.RunAssignment) { x.StartedAt = "2026-10-17T02:04:43Z" })}
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(x *archivepb.RunAssignment) { x.StartedAt = rfcMillis("2026-10-17T02:04:43Z") })}
 	h.now = h.now.Add(time.Hour)
 	h.app.heartbeatOnce(ctx) // 一小时后租约需要靠新的心跳续上
 	h.app.pullOnce(ctx)
@@ -484,7 +449,8 @@ func TestRunsOfTheSameDatasetNeverOverlapLocally(t *testing.T) {
 	}
 	h.src.delay = 150 * time.Millisecond
 	// mgr 取消旧运行后立刻为同一个数据集派发了新运行：两个运行同时在 worker 里，但必须一个接一个执行。
-	h.mgr.assignments = []*archivepb.RunAssignment{assignment("old", nil), assignment("new", nil)}
+	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = day.Format(time.RFC3339) }
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("old", backfill), assignment("new", backfill)}
 	h.app.heartbeatOnce(ctx)
 	h.app.pullOnce(ctx)
 	h.waitComplete()
@@ -536,7 +502,7 @@ func (h *harness) seed(ds, taskID string) {
 	ref := func(time.Time) staging.PartitionRef {
 		return staging.PartitionRef{Key: "2026-10-17", Start: day, End: day.AddDate(0, 0, 1)}
 	}
-	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: day, Values: []any{1.0}}}, ref, h.now, staging.StageReplace); err != nil {
+	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: day, Values: []any{1.0}}}, ref, h.now); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -618,7 +584,7 @@ func TestPartitionsAreMarkedReportedOnlyAfterTheManagerAcknowledges(t *testing.T
 	}
 	// 第二次：上报成功，随后清除标记。
 	h.now = h.now.Add(time.Hour)
-	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(a *archivepb.RunAssignment) { a.StartedAt = "2026-10-17T02:04:43Z" })}
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(a *archivepb.RunAssignment) { a.StartedAt = rfcMillis("2026-10-17T02:04:43Z") })}
 	h.app.heartbeatOnce(ctx)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
@@ -750,74 +716,74 @@ func TestRunStartsCleansLeftoversAndStopsGracefully(t *testing.T) {
 	}
 }
 
-// 维护删除超过 7 天的导入目录（失败的导入留着供核对），7 天内的保留。
-func TestMaintenanceRemovesImportDirectoriesOlderThanSevenDays(t *testing.T) {
-	h := newHarness(t)
-	for name, age := range map[string]time.Duration{"imp_old": 8 * 24 * time.Hour, "imp_new": time.Hour} {
-		dir := filepath.Join(h.root, ".import", name)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(dir, h.now.Add(-age), h.now.Add(-age)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h.app.maintainOnce(context.Background())
-	if _, err := os.Stat(filepath.Join(h.root, ".import", "imp_old")); !os.IsNotExist(err) {
-		t.Fatalf("超过 7 天的导入目录应删除: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(h.root, ".import", "imp_new")); err != nil {
-		t.Fatalf("7 天内的应保留: %v", err)
-	}
-}
-
-// 导入目录在 mgr 确认导入运行成功之后才删；上报被拒或导入失败时保留。
-func TestImportDirectoryIsRemovedOnlyAfterTheManagerConfirmsSuccess(t *testing.T) {
+// 导入写接口只接受正在执行的导入运行：未知运行与 follow 运行 404，磁盘不足 507，批次不合法 400；finish 之后运行导出并记成功。
+func TestImportSinkDeliversBatchesToTheRunningImport(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	place := func(id, content string) string {
-		dir := filepath.Join(h.root, ".import", id)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "import.csv"), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return dir
+	h.app.heartbeatOnce(ctx)
+	h.src.block = true
+	h.mgr.assignments = []*archivepb.RunAssignment{
+		assignment("run_imp", func(a *archivepb.RunAssignment) { a.Kind = "import" }),
+		assignment("run_follow", func(a *archivepb.RunAssignment) { a.DatasetId, a.DirName = "ds_other", "kline-other" }),
 	}
-	run := func(id string) {
-		h.mgr.assignments = []*archivepb.RunAssignment{assignment("run_"+id, func(a *archivepb.RunAssignment) { a.Kind, a.ImportFile = "import", id+"/import.csv" })}
-		h.app.heartbeatOnce(ctx)
-		h.app.pullOnce(ctx)
-		h.idle()
+	h.app.pullOnce(ctx)
+	row := func(subject string, close float64) *storagepb.PrimaryUpsertFieldsReq {
+		return &storagepb.PrimaryUpsertFieldsReq{SpaceId: "crypto", DatasetId: "ds_1m", Rows: []*storagepb.RowFieldUpsert{{
+			Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "ds_1m", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: subject, Freq: "1m", DataTime: "2026-09-01T00:00:00Z"}}},
+			Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: close}}}},
+		}}}
 	}
-	good := "data_time,subject_id,series_tag,close\n2026-09-01T00:00:00Z,BTC,,1\n"
-	ok := place("imp_ok", good)
-	run("imp_ok")
-	if req := h.mgr.completes[len(h.mgr.completes)-1]; req.GetStatus() != "succeeded" {
+	for _, id := range []string{"run_missing", "run_follow"} {
+		if _, err := h.app.Write(ctx, id, row("BTC", 1)); !errors.Is(err, dataapi.ErrImportNotFound) {
+			t.Fatalf("%s: err = %v", id, err)
+		}
+		if err := h.app.Finish(id); !errors.Is(err, dataapi.ErrImportNotFound) {
+			t.Fatalf("%s finish: err = %v", id, err)
+		}
+	}
+	got, err := h.app.Write(ctx, "run_imp", row("BTC", 1))
+	if err != nil || got.Added != 1 {
+		h.mgr.mu.Lock()
+		t.Fatalf("got = %+v err=%v completes=%v", got, err, h.mgr.completes)
+	}
+	bad := row("BTC", 1)
+	bad.Rows[0].Fields[0].FieldId = "volume"
+	if _, err := h.app.Write(ctx, "run_imp", bad); !errors.Is(err, dataapi.ErrInvalidBatch) {
+		t.Fatalf("err = %v", err)
+	}
+	h.app.mu.Lock()
+	h.app.diskInsufficient = true
+	h.app.mu.Unlock()
+	if _, err := h.app.Write(ctx, "run_imp", row("ETH", 2)); !errors.Is(err, dataapi.ErrDiskInsufficient) {
+		t.Fatalf("err = %v", err)
+	}
+	h.app.mu.Lock()
+	h.app.diskInsufficient = false
+	h.app.mu.Unlock()
+	if err := h.app.Finish("run_imp"); err != nil {
+		t.Fatal(err)
+	}
+	req := h.waitComplete()
+	if req.GetRunId() != "run_imp" || req.GetStatus() != "succeeded" || len(req.GetPartitions()) != 1 || req.GetPartitions()[0].GetFilePath() == "" {
 		t.Fatalf("complete = %v", req)
 	}
-	if _, err := os.Stat(ok); !os.IsNotExist(err) {
-		t.Fatalf("确认成功后应删除导入目录: %v", err)
+	if _, err := h.app.Write(ctx, "run_imp", row("ETH", 2)); !errors.Is(err, dataapi.ErrImportNotFound) {
+		t.Fatalf("结束后的写入应 404: %v", err)
 	}
-	bad := place("imp_bad", "data_time,subject_id,series_tag,close\n2026-09-01T00:00:30Z,BTC,,1\n")
-	run("imp_bad")
-	if req := h.mgr.completes[len(h.mgr.completes)-1]; req.GetStatus() != "failed" {
-		t.Fatalf("complete = %v", req)
-	}
-	if _, err := os.Stat(bad); err != nil {
-		t.Fatalf("失败的导入应保留导入目录: %v", err)
-	}
-	rejected := place("imp_rejected", good)
-	h.mgr.mu.Lock()
-	h.mgr.completeErrs = []error{manager.ErrConflict}
-	h.mgr.mu.Unlock()
-	run("imp_rejected")
-	if _, err := os.Stat(rejected); err != nil {
-		t.Fatalf("mgr 没有确认时应保留导入目录: %v", err)
-	}
+	h.app.cancelAll()
+	h.idle()
 }
 
 func (f *fakeSource) ReadChanges(context.Context, string, string, *source.ChangeCursor) (source.Changes, error) {
 	return source.Changes{Next: source.ChangeCursor{StoreID: "store"}}, nil
+}
+
+// rfcMillis 把测试里写的 RFC3339 时刻换成 Unix 毫秒。
+func rfcMillis(text string) int64 {
+	at, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		panic(err)
+	}
+	return at.UnixMilli()
 }

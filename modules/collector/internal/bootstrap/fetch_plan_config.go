@@ -35,8 +35,6 @@ type SCFPlanConfig struct {
 	BackfillReservedConcurrency int `yaml:"backfill_reserved_concurrency"`
 	// MaxConcurrentOperations 限制各空间同时进行的云函数操作（建函数、改配置、换代码、设定时器、删除）。
 	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
-	// AssumedEgressIPs 是函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警。
-	AssumedEgressIPs int `yaml:"assumed_egress_ips"`
 	// EntryRoutes 是采集计划函数访问外部入口的地址（按地域；vpc 地域是私网，public 地域是公网）。
 	EntryRoutes map[string]SCFEntryEndpoint `yaml:"entry_routes"`
 	Fetch       SCFPlanFetchConfig          `yaml:"fetch"`
@@ -52,12 +50,6 @@ type SCFPlanFetchConfig struct {
 	FeedConcurrency  int `yaml:"feed_concurrency"`
 	RequestTimeoutMS int `yaml:"request_timeout_ms"`
 	StorageTimeoutMS int `yaml:"storage_timeout_ms"`
-	// StandbyMS 大于 0 时启用备援请求（行情请求超过这么多毫秒没有结果就并发再发一个备援请求，先成功的为准），默认关闭；
-	// StandbyHourOnly 为真时只在整点那一分钟启用。
-	StandbyMS       int  `yaml:"standby_ms"`
-	StandbyHourOnly bool `yaml:"standby_hour_only"`
-	// ConnReuse 为真时函数进程在多次调用之间复用到行情源的 HTTP 连接，默认关闭。
-	ConnReuse bool `yaml:"conn_reuse"`
 	// NotBeforeMS 是相对收盘的最早取数时刻（毫秒）：行情源 REST 要到收盘后一段时间才返回定稿值（币安合约约 8 秒）。
 	NotBeforeMS int `yaml:"not_before_ms"`
 }
@@ -74,8 +66,7 @@ func (f SCFPlanFetchConfig) filled(base SCFPlanFetchConfig) SCFPlanFetchConfig {
 		Concurrency: pick(f.Concurrency, base.Concurrency), RPS: pick(f.RPS, base.RPS), Burst: pick(f.Burst, base.Burst),
 		FeedConcurrency: pick(f.FeedConcurrency, base.FeedConcurrency), RequestTimeoutMS: pick(f.RequestTimeoutMS, base.RequestTimeoutMS),
 		StorageTimeoutMS: pick(f.StorageTimeoutMS, base.StorageTimeoutMS),
-		StandbyMS:        pick(f.StandbyMS, base.StandbyMS), StandbyHourOnly: f.StandbyHourOnly || base.StandbyHourOnly,
-		ConnReuse: f.ConnReuse || base.ConnReuse, NotBeforeMS: pick(f.NotBeforeMS, base.NotBeforeMS),
+		NotBeforeMS:      pick(f.NotBeforeMS, base.NotBeforeMS),
 	}
 }
 
@@ -157,9 +148,7 @@ func (c SCFPlanConfig) fetchFor(spaceID, marketType string) marketfetch.PlanFetc
 	}
 	return marketfetch.PlanFetch{
 		Concurrency: fetch.Concurrency, RPS: fetch.RPS, Burst: fetch.Burst, FeedConcurrency: fetch.FeedConcurrency,
-		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS,
-		StandbyMS: fetch.StandbyMS, StandbyHourOnly: fetch.StandbyHourOnly,
-		ConnReuse: fetch.ConnReuse, NotBeforeMS: fetch.NotBeforeMS,
+		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS, NotBeforeMS: fetch.NotBeforeMS,
 	}
 }
 

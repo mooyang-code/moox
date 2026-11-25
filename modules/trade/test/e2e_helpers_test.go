@@ -35,7 +35,7 @@ const (
 // testInstrumentID 是 Trade 内部标的 ID：从交易所加载的标的都带市场后缀，而策略目标发的是 testSubjectID。
 // 两边都用真实格式，防止标的标准化再次对不上。
 func testInstrumentID(market exchange.MarketType) string {
-	return testSubjectID + "-" + string(market)
+	return testSubjectID + "-" + exchange.InstrumentSuffix(market)
 }
 
 // Target validity is checked against the real Trade clock. Keep the shared
@@ -549,7 +549,7 @@ type positionSource struct{ store *store.Store }
 func (s positionSource) GetPosition(ctx context.Context, accountID, symbol string) (exchange.Position, error) {
 	record, found, err := s.store.GetPosition(ctx, testSpace, accountID, exchange.NewSymbolKey(exchange.MarketTypeSwap, symbol), string(exchange.PositionSideNet))
 	if !found && err == nil {
-		if instrument, instrumentErr := s.store.GetInstrumentByIDScoped(ctx, symbol, "BINANCE", "SWAP"); instrumentErr == nil {
+		if instrument, instrumentErr := s.store.GetInstrumentByIDScoped(ctx, symbol, "binance", "swap"); instrumentErr == nil {
 			record, found, err = s.store.GetPosition(ctx, testSpace, accountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol), string(exchange.PositionSideNet))
 		}
 	}

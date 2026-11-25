@@ -29,29 +29,24 @@ func (r recoveryFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRows
 	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
-// prepareActiveIndex 在进程内准备空索引并把它转为 View 的活动索引，与建索引完成时相同。
-func prepareActiveIndex(t *testing.T, svc *Service, view *pb.View, schema viewindex.ViewIndexSchema) string {
+// prepareActiveIndex 在进程内准备空索引并把它转为数据集的活动索引，与建索引完成时相同。
+func prepareActiveIndex(t *testing.T, svc *Service, spec *viewSpec, schema viewindex.ViewIndexSchema) *viewRuntime {
 	t.Helper()
-	indexID := viewindex.ViewIndexID(view.GetSpaceId(), view.GetViewId())
-	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	if _, err := svc.prepareIndex(context.Background(), ref, func(*viewRuntime) (viewindex.ViewIndexSchema, error) { return schema, nil }); err != nil {
-		t.Fatalf("prepare %s: %v", indexID, err)
+	runtime := testRuntime(svc, spec)
+	if _, err := svc.prepareIndex(context.Background(), runtime, func(*viewRuntime) (viewindex.ViewIndexSchema, error) { return schema, nil }); err != nil {
+		t.Fatalf("prepare %s: %v", runtime.indexID, err)
 	}
-	if err := svc.activateBuiltIndex(view, schema, indexID); err != nil {
-		t.Fatalf("activate %s: %v", indexID, err)
+	if err := svc.activateBuiltIndex(runtime, spec, schema); err != nil {
+		t.Fatalf("activate %s: %v", runtime.indexID, err)
 	}
-	return indexID
+	return runtime
 }
 
 // writeTestRows 按 schema 的契约实时写入索引。
-func writeTestRows(t *testing.T, svc *Service, indexID string, schema viewindex.ViewIndexSchema, rows []viewindex.RowWrite) {
+func writeTestRows(t *testing.T, svc *Service, runtime *viewRuntime, schema viewindex.ViewIndexSchema, rows []viewindex.RowWrite) {
 	t.Helper()
-	engine, err := svc.engineFor(indexID)
-	if err == nil {
-		err = svc.writeIndex(context.Background(), indexID, engine, viewindex.ViewIndexWriteBatch{RowWrites: rows, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
-	}
-	if err != nil {
-		t.Fatalf("write %s: %v", indexID, err)
+	if err := svc.writeIndex(context.Background(), runtime, viewindex.ViewIndexWriteBatch{RowWrites: rows, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatalf("write %s: %v", runtime.indexID, err)
 	}
 }
 
@@ -61,15 +56,15 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
-	schema := viewindex.ViewIndexSchema{SpaceID: "quant", ViewID: "prices-view", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}
-	indexID := prepareActiveIndex(t, svc, &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Status: "active"}, schema)
+	columns := []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	schema := viewindex.ViewIndexSchema{SpaceID: "quant", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "schema-1", Columns: columns}
+	runtime := prepareActiveIndex(t, svc, timeSeriesSpec("quant", "prices", "1m", "close"), schema)
 	key := &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "venue:okx"}}}
 	value := &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}
-	writeTestRows(t, svc, indexID, schema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: key}, Fields: []*pb.FieldValue{value}}})
+	writeTestRows(t, svc, runtime, schema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: key}, Fields: []*pb.FieldValue{value}}})
 	tag := "venue:okx"
 	rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-		SpaceId: "quant", ViewId: "prices-view",
+		SpaceId: "quant", DatasetId: "prices",
 		Selectors:   []*pb.TimeSeriesSelector{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &tag}},
 		ColumnNames: []string{"close"},
 	})
@@ -120,15 +115,13 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}
-	prepare := func(id string) (string, viewindex.ViewIndexSchema) {
+	columns := []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}
+	prepare := func(spec *viewSpec) (*viewRuntime, viewindex.ViewIndexSchema) {
 		t.Helper()
-		engine := map[string]string{"times": "duckdb", "records": "bleve"}[id]
-		dataset := map[string]string{"times": "prices", "records": "records"}[id]
-		schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: id, PrimaryDatasetID: dataset, ViewVersion: 1, Engine: engine, SchemaHash: "hash", Columns: columns}
-		return prepareActiveIndex(t, svc, &pb.View{SpaceId: "space", ViewId: id, DatasetId: dataset, Engine: engine, Status: "active"}, schema), schema
+		schema := viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: spec.DatasetID, ViewVersion: 1, Engine: spec.engineName(), SchemaHash: "hash", Columns: columns}
+		return prepareActiveIndex(t, svc, spec, schema), schema
 	}
-	timesID, timesSchema := prepare("times")
+	timesID, timesSchema := prepare(timeSeriesSpec("space", "prices", "1d", "close", "title"))
 	timeRows := []viewindex.RowWrite{}
 	for _, at := range []string{"2026-07-19T00:00:00Z", "2026-07-20T00:00:00Z"} {
 		timeRows = append(timeRows, viewindex.RowWrite{
@@ -138,17 +131,17 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 	}
 	writeTestRows(t, svc, timesID, timesSchema, timeRows)
 	timeRsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
-		SpaceId: "space", ViewId: "times",
+		SpaceId: "space", DatasetId: "prices",
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T23:59:59Z"},
 	})
 	if err != nil || timeRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(timeRsp.GetRows()) != 1 {
 		t.Fatalf("time rsp=%v err=%v", timeRsp, err)
 	}
 
-	recordsID, recordsSchema := prepare("records")
+	recordsID, recordsSchema := prepare(recordSpec("space", "records", "close", "title"))
 	recordKey := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
 	writeTestRows(t, svc, recordsID, recordsSchema, []viewindex.RowWrite{{Key: viewindex.RowKey{Key: recordKey}, Fields: []*pb.FieldValue{{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "market research"}}}}}})
-	recordRsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{SpaceId: "space", ViewId: "records", TextQuery: "research"})
+	recordRsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{SpaceId: "space", DatasetId: "records", TextQuery: "research"})
 	if err != nil || recordRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(recordRsp.GetRows()) != 1 {
 		t.Fatalf("record rsp=%v err=%v", recordRsp, err)
 	}

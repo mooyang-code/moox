@@ -1,0 +1,556 @@
+package runner
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesformat"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/checkpoint"
+	"github.com/stretchr/testify/require"
+)
+
+var fields = []seriesformat.Field{{Name: "close", Type: seriesformat.TypeDouble}, {Name: "volume", Type: seriesformat.TypeDouble}}
+
+type recorder struct {
+	name   string
+	mu     sync.Mutex
+	chunks []Chunk
+	failAt int // 第几次写入失败（从 1 开始），0 表示不失败
+	calls  int
+}
+
+func (r *recorder) Name() string { return r.name }
+
+func (r *recorder) Write(_ context.Context, c Chunk) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if r.failAt > 0 && r.calls == r.failAt {
+		return errors.New("boom")
+	}
+	r.chunks = append(r.chunks, c)
+	return nil
+}
+
+func writeCSV(t *testing.T, dir, name, header string, rows []string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte(header+"\n"+strings.Join(rows, "\n")+"\n"), 0o600))
+	return path
+}
+
+func minuteRows(from, to int) []string {
+	var rows []string
+	for m := from; m < to; m++ {
+		rows = append(rows, fmt.Sprintf("2026-10-01 %02d:%02d:00,%d,%d", m/60, m%60, 100+m, m))
+	}
+	return rows
+}
+
+func baseRequest(paths ...string) Request {
+	return Request{Space: "crypto", Dataset: "spot", Freq: "1m", Paths: paths, Step: time.Minute, BatchRows: 4}
+}
+
+func TestRunBatchesFilesAndWritesEveryTarget(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 10))
+	a, b := &recorder{name: "storage"}, &recorder{name: "factor"}
+	sum, err := Run(context.Background(), baseRequest(file), Meta{Fields: fields}, []Target{a, b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "imported", sum.Status)
+	require.Equal(t, 10, sum.Rows)
+	require.Equal(t, "BTCUSDT", sum.Files[0].Subject, "文件名是标的 ID")
+	for _, tgt := range []*recorder{a, b} {
+		require.Len(t, tgt.chunks, 3, "10 行按每批 4 行分成 4+4+2")
+		first, last := tgt.chunks[0], tgt.chunks[2]
+		require.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), first.From)
+		require.Equal(t, time.Date(2026, 10, 1, 0, 4, 0, 0, time.UTC), first.To, "批的区间是 [首行, 末行 + 一个周期)")
+		require.Equal(t, time.Date(2026, 10, 1, 0, 10, 0, 0, time.UTC), last.To)
+		require.Equal(t, "crypto", first.Space)
+		require.False(t, first.AllowMissing)
+	}
+	require.Equal(t, map[string]int64{"storage": 3, "factor": 3}, sum.Files[0].Batches)
+}
+
+// 同一个时间点的多个序列不会被拆到两批里：整段替换会删除区间内所有序列，拆开会让后一批删掉前一批写的行。
+func TestRebatchingNeverSplitsATimestamp(t *testing.T) {
+	dir := t.TempDir()
+	var rows []string
+	for m := 0; m < 6; m++ {
+		for _, tag := range []string{"a", "b", "c"} {
+			rows = append(rows, fmt.Sprintf("2026-10-01 00:%02d:00,%s,%d,1", m, tag, 100+m))
+		}
+	}
+	file := writeCSV(t, dir, "ETH.csv", "data_time,series_tag,close,volume", rows)
+	rec := &recorder{name: "factor"}
+	req := baseRequest(file)
+	req.BatchRows = 4
+	_, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{rec}, nil)
+	require.NoError(t, err)
+	total := 0
+	for _, c := range rec.chunks {
+		total += c.Batch.Len()
+		// 批内每个时间点都有全部三个序列。
+		counts := map[time.Time]int{}
+		for _, at := range c.Batch.Times {
+			counts[at]++
+		}
+		for at, n := range counts {
+			require.Equal(t, 3, n, "时间点 %s 被拆开了", at)
+		}
+	}
+	require.Equal(t, 18, total)
+	require.Greater(t, len(rec.chunks), 1)
+}
+
+func TestRunValidatesEverythingBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	good := writeCSV(t, dir, "A.csv", "data_time,close,volume", minuteRows(0, 5))
+	bad := writeCSV(t, dir, "B.csv", "data_time,close,volume", append(minuteRows(0, 2), minuteRows(4, 6)...)) // 缺 t2 t3
+	rec := &recorder{name: "factor"}
+
+	_, err := Run(context.Background(), baseRequest(good, bad), Meta{Fields: fields}, []Target{rec}, nil)
+	require.ErrorContains(t, err, "缺 2 个周期")
+	require.ErrorContains(t, err, "--allow-missing")
+	require.Empty(t, rec.chunks, "有文件不合法时，不写任何内容")
+
+	// 允许缺期：校验通过，目标收到 AllowMissing，报告里列出缺的周期。
+	req := baseRequest(good, bad)
+	req.AllowMissing = true
+	sum, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{rec}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, sum.Files[1].MissingPeriods)
+	require.Equal(t, []string{"2026-10-01T00:02:00Z", "2026-10-01T00:03:00Z"}, sum.Files[1].Missing)
+	for _, c := range rec.chunks {
+		require.True(t, c.AllowMissing)
+	}
+}
+
+func TestRunRejectsStructuralProblems(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	run := func(file string, meta Meta) error {
+		_, err := Run(ctx, baseRequest(file), meta, []Target{&recorder{name: "t"}}, nil)
+		return err
+	}
+	require.ErrorContains(t, run(writeCSV(t, dir, "a.csv", "data_time,close", minuteRows(0, 2)[:0]), Meta{Fields: fields}), "缺少数据集字段")
+	require.ErrorContains(t, run(writeCSV(t, dir, "b.csv", "data_time,close,volume", nil), Meta{Fields: fields}), "没有数据行")
+	require.ErrorContains(t, run(writeCSV(t, dir, "c.csv", "data_time,close,volume", []string{"2026-10-01 00:00:30,1,1"}), Meta{Fields: fields}), "没有按")
+	require.ErrorContains(t, run(writeCSV(t, dir, "d.csv", "data_time,close,volume", []string{"2026-10-01 00:01:00,1,1", "2026-10-01 00:00:00,1,1"}), Meta{Fields: fields}), "升序")
+	require.ErrorContains(t, run(filepath.Join(dir, "missing.csv"), Meta{Fields: fields}), "no such file")
+
+	// 标的不在数据集的标签范围内：拒绝，不自动绑定。
+	scoped := Meta{Fields: fields, SubjectInScope: func(context.Context, string) (bool, error) { return false, nil }}
+	require.ErrorContains(t, run(writeCSV(t, dir, "e.csv", "data_time,close,volume", minuteRows(0, 2)), scoped), "不在数据集的标签范围内")
+
+	_, err := Run(ctx, Request{}, Meta{Fields: fields}, nil, nil)
+	require.Error(t, err)
+	_, err = Run(ctx, baseRequest(writeCSV(t, dir, "f.csv", "data_time,close,volume", minuteRows(0, 2))), Meta{}, nil, nil)
+	require.ErrorContains(t, err, "没有可导入的字段")
+	_, err = Run(ctx, baseRequest(writeCSV(t, dir, "g.csv", "data_time,close,volume", minuteRows(0, 2))), Meta{Fields: fields}, nil, nil)
+	require.ErrorContains(t, err, "没有写入目标")
+	req := baseRequest(writeCSV(t, dir, "h.csv", "data_time,close,volume", minuteRows(0, 2)))
+	req.SubjectColumn, req.Subject = true, "X"
+	_, err = Run(ctx, req, Meta{Fields: fields}, []Target{&recorder{name: "t"}}, nil)
+	require.ErrorContains(t, err, "不能再给 --subject")
+	// 多标的文件不允许时（写 Storage 或因子机本地）报错。
+	multi := writeCSV(t, dir, "m.csv", "data_time,subject_id,close,volume", []string{"2026-10-01 00:00:00,A,1,1"})
+	require.ErrorContains(t, run(multi, Meta{Fields: fields}), "多标的文件只能只写归档")
+}
+
+func TestDryRunValidatesWithoutWriting(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTC.csv", "data_time,close,volume", minuteRows(0, 5))
+	rec := &recorder{name: "factor"}
+	req := baseRequest(file)
+	req.DryRun = true
+	sum, err := Run(context.Background(), req, Meta{Fields: fields}, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "dry_run", sum.Status)
+	require.Equal(t, 5, sum.Rows)
+	require.Empty(t, rec.chunks)
+}
+
+func TestDirectoryExpansionAndSubjectOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeCSV(t, dir, "BTC.csv", "data_time,close,volume", minuteRows(0, 3))
+	writeCSV(t, dir, "ETH.csv", "data_time,close,volume", minuteRows(0, 3))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignored"), 0o600))
+	rec := &recorder{name: "factor"}
+	sum, err := Run(context.Background(), baseRequest(dir), Meta{Fields: fields}, []Target{rec}, nil)
+	require.NoError(t, err)
+	require.Len(t, sum.Files, 2)
+	require.Equal(t, []string{"BTC", "ETH"}, []string{sum.Files[0].Subject, sum.Files[1].Subject})
+
+	one := writeCSV(t, t.TempDir(), "whatever.csv", "data_time,close,volume", minuteRows(0, 3))
+	req := baseRequest(one)
+	req.Subject = "SOL"
+	rec = &recorder{name: "factor"}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{rec}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "SOL", rec.chunks[0].Subject)
+
+	_, err = Run(context.Background(), baseRequest(t.TempDir()), Meta{Fields: fields}, []Target{rec}, nil)
+	require.ErrorContains(t, err, "没有找到可导入的文件")
+}
+
+// 写入中途失败：已写完的批有断点，重跑同一请求从下一批继续；整个文件写完后再重跑直接跳过。
+func TestResumeFromCheckpointAndRecalcFlag(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTC.csv", "data_time,close,volume", minuteRows(0, 12))
+	cps, err := checkpoint.Open(filepath.Join(t.TempDir(), "importer.db"))
+	require.NoError(t, err)
+	defer cps.Close()
+	req := baseRequest(file)
+	req.Recalc = true
+
+	flaky := &recorder{name: "factor", failAt: 3} // 12 行分 3 批，第 3 批失败
+	sum, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{flaky}, cps)
+	require.Error(t, err)
+	require.Equal(t, "failed", sum.Status)
+	require.Len(t, flaky.chunks, 2)
+	for _, c := range flaky.chunks {
+		require.True(t, c.RecordPending, "--recalc 要求目标记失效重算")
+	}
+	entries, err := cps.List(sum.JobID)
+	require.NoError(t, err)
+	require.Equal(t, "failed", entries[0].Status)
+	require.Equal(t, "boom", entries[0].Error)
+
+	// 重跑：前两批跳过，只写第 3 批。
+	healthy := &recorder{name: "factor"}
+	sum, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{healthy}, cps)
+	require.NoError(t, err)
+	require.Len(t, healthy.chunks, 1)
+	require.Equal(t, int64(2), sum.Files[0].Skipped["factor"])
+	require.Equal(t, time.Date(2026, 10, 1, 0, 8, 0, 0, time.UTC), healthy.chunks[0].From)
+
+	// 全部完成之后再跑：整文件跳过。
+	again := &recorder{name: "factor"}
+	sum, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{again}, cps)
+	require.NoError(t, err)
+	require.Empty(t, again.chunks)
+	require.Equal(t, int64(3), sum.Files[0].Skipped["factor"])
+
+	// 文件内容变了（大小不同）：任务 ID 变化，重新导入。
+	require.NoError(t, os.WriteFile(file, []byte("data_time,close,volume\n"+strings.Join(minuteRows(0, 13), "\n")+"\n"), 0o600))
+	changed := &recorder{name: "factor"}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{changed}, cps)
+	require.NoError(t, err)
+	require.NotEmpty(t, changed.chunks)
+}
+
+type finishing struct {
+	recorder
+	finished int
+	err      error
+}
+
+func (f *finishing) Finish(context.Context) error { f.finished++; return f.err }
+
+func TestFinisherRunsOnceAfterAllFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeCSV(t, dir, "A.csv", "data_time,close,volume", minuteRows(0, 3))
+	writeCSV(t, dir, "B.csv", "data_time,close,volume", minuteRows(0, 3))
+	tgt := &finishing{recorder: recorder{name: "storage"}}
+	_, err := Run(context.Background(), baseRequest(dir), Meta{Fields: fields}, []Target{tgt}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, tgt.finished)
+	require.Len(t, tgt.chunks, 2)
+
+	tgt = &finishing{recorder: recorder{name: "storage"}, err: errors.New("view 没有追平")}
+	sum, err := Run(context.Background(), baseRequest(dir), Meta{Fields: fields}, []Target{tgt}, nil)
+	require.ErrorContains(t, err, "view 没有追平")
+	require.Equal(t, "failed", sum.Status)
+}
+
+// 多目标导入：前一个目标收尾失败，后面的目标（归档目标通知 worker 导出）照样收尾，错误合并返回。
+func TestEveryTargetFinishesEvenWhenAnEarlierOneFails(t *testing.T) {
+	dir := t.TempDir()
+	writeCSV(t, dir, "A.csv", "data_time,close,volume", minuteRows(0, 3))
+	storage := &finishing{recorder: recorder{name: "storage"}, err: errors.New("view 没有追平")}
+	archive := &finishing{recorder: recorder{name: "archive"}, err: errors.New("worker 拒绝结束")}
+	sum, err := Run(context.Background(), baseRequest(dir), Meta{Fields: fields}, []Target{storage, archive}, nil)
+	require.Equal(t, 1, storage.finished)
+	require.Equal(t, 1, archive.finished)
+	require.ErrorContains(t, err, "目标 storage 收尾：view 没有追平")
+	require.ErrorContains(t, err, "目标 archive 收尾：worker 拒绝结束")
+	require.Equal(t, "failed", sum.Status)
+}
+
+// 补更早的历史（文件完全早于本地已有数据）：批从后往前写，每一批都与已有数据或刚写的那一批相接；
+// 断点按这个顺序计数，中断后续跑不会漏批。
+func TestRunWritesBatchesBackwardsWhenPrependingHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCSV(t, dir, "BTC.csv", "data_time,close,volume", minuteRows(0, 10))
+	local := time.Date(2026, 10, 1, 0, 10, 0, 0, time.UTC)
+	meta := Meta{Fields: fields, LocalBounds: func(context.Context, string) (time.Time, time.Time, bool, error) {
+		return local, local.Add(5 * time.Minute), true, nil
+	}}
+	rec := &recorder{name: "factor"}
+	_, err := Run(context.Background(), baseRequest(path), meta, []Target{rec}, nil)
+	require.NoError(t, err)
+	require.Len(t, rec.chunks, 3)
+	require.Equal(t, local.Add(-2*time.Minute), rec.chunks[0].From, "先写最晚的一批：[8, 10)，与本地起点相接")
+	require.Equal(t, local, rec.chunks[0].To)
+	require.Equal(t, local.Add(-6*time.Minute), rec.chunks[1].From)
+	require.Equal(t, local.Add(-10*time.Minute), rec.chunks[2].From)
+
+	// 文件不完全早于本地数据（有重叠）：保持从前往后。
+	rec2 := &recorder{name: "factor"}
+	overlap := Meta{Fields: fields, LocalBounds: func(context.Context, string) (time.Time, time.Time, bool, error) {
+		return local.Add(-3 * time.Minute), local.Add(5 * time.Minute), true, nil
+	}}
+	_, err = Run(context.Background(), baseRequest(path), overlap, []Target{rec2}, nil)
+	require.NoError(t, err)
+	require.Equal(t, local.Add(-10*time.Minute), rec2.chunks[0].From)
+}
+
+// 倒序补历史写到一半中断：续传时本地最早时间已经前移，方向仍要保持倒序，否则按断点跳过前几批会漏掉最早的批。
+func TestReverseImportResumesInTheSameDirection(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTC.csv", "data_time,close,volume", minuteRows(0, 10))
+	cps, err := checkpoint.Open(filepath.Join(t.TempDir(), "importer.db"))
+	require.NoError(t, err)
+	defer cps.Close()
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	boundsAt := func(earliestMinute int) Meta {
+		return Meta{Fields: fields, LocalBounds: func(context.Context, string) (time.Time, time.Time, bool, error) {
+			return base.Add(time.Duration(earliestMinute) * time.Minute), base.Add(20 * time.Minute), true, nil
+		}}
+	}
+	flaky := &recorder{name: "factor", failAt: 3} // 10 行每批 4 行：[8,10)、[4,8)、[0,4)；第 3 批失败
+	_, err = Run(context.Background(), baseRequest(file), boundsAt(10), []Target{flaky}, cps)
+	require.Error(t, err)
+	require.Len(t, flaky.chunks, 2)
+
+	// 重跑时本地最早已是第 4 分钟（前两批写完了）：仍按倒序，只剩 [0,4) 没写。
+	healthy := &recorder{name: "factor"}
+	_, err = Run(context.Background(), baseRequest(file), boundsAt(4), []Target{healthy}, cps)
+	require.NoError(t, err)
+	require.Len(t, healthy.chunks, 1)
+	require.Equal(t, base, healthy.chunks[0].From)
+	require.Equal(t, base.Add(4*time.Minute), healthy.chunks[0].To)
+}
+
+// tailRecorder 是只写尾部的目标（Storage 的角色）。
+type tailRecorder struct{ recorder }
+
+func (*tailRecorder) TailOnly() bool { return true }
+
+func chunkTimes(chunks []Chunk) []time.Time {
+	var out []time.Time
+	for _, c := range chunks {
+		out = append(out, c.Batch.Times...)
+	}
+	return out
+}
+
+// 尾部窗口：只对 TailOnly 的目标生效，每个文件取最后 TailRows 行；其余目标仍写全量。
+func TestTailRowsOnlyAffectsTailTargets(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	storage, factor := &tailRecorder{recorder{name: "storage"}}, &recorder{name: "factor"}
+	req := baseRequest(file)
+	req.TailRows = 12
+	sum, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{storage, factor}, nil)
+	require.NoError(t, err)
+
+	storageTimes, factorTimes := chunkTimes(storage.chunks), chunkTimes(factor.chunks)
+	require.Len(t, factorTimes, 50, "因子机本地写全量")
+	require.Len(t, storageTimes, 12, "Storage 只写最后 12 行")
+	require.Equal(t, factorTimes[38], storageTimes[0])
+	require.Equal(t, factorTimes[49], storageTimes[11])
+	require.Equal(t, 12, sum.Files[0].TailRows)
+	require.Equal(t, storageTimes[0].Format(time.RFC3339), sum.Files[0].TailFrom)
+	for _, c := range storage.chunks {
+		require.Equal(t, c.Batch.Times[0], c.From, "切出来的批起点要对上 Chunk.From")
+	}
+}
+
+// 早于保留期的行不写：尾部窗口再按 TailCutoff 截。
+func TestTailCutoffDropsRowsOlderThanRetention(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	storage := &tailRecorder{recorder{name: "storage"}}
+	req := baseRequest(file)
+	req.TailRows = 30
+	req.TailCutoff = time.Date(2026, 10, 1, 0, 40, 0, 0, time.UTC)
+	_, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{storage}, nil)
+	require.NoError(t, err)
+	times := chunkTimes(storage.chunks)
+	require.Len(t, times, 10)
+	require.Equal(t, req.TailCutoff, times[0])
+
+	// 窗口里的行全部早于保留期：什么都不写。
+	empty := &tailRecorder{recorder{name: "storage"}}
+	req.TailCutoff = time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	sum, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{empty}, nil)
+	require.NoError(t, err)
+	require.Empty(t, empty.chunks)
+	require.Equal(t, 0, sum.Files[0].TailRows)
+}
+
+// 尾部窗口按批切边界，批比窗口小也不丢行；断点续传时批边界不变。
+func TestTailRowsResumeKeepsBatchBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	cps, err := checkpoint.Open(filepath.Join(dir, "cp.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cps.Close() })
+	req := baseRequest(file)
+	req.TailRows, req.JobID = 13, "tail-job"
+
+	first := &tailRecorder{recorder{name: "storage", failAt: 2}}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{first}, cps)
+	require.Error(t, err)
+	resumed := &tailRecorder{recorder{name: "storage"}}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{resumed}, cps)
+	require.NoError(t, err)
+
+	all := append(chunkTimes(first.chunks), chunkTimes(resumed.chunks)...)
+	require.Len(t, all, 13, "失败前写的加续传写的，恰好是窗口里的 13 行，不重复不遗漏")
+	for i := 1; i < len(all); i++ {
+		require.True(t, all[i].After(all[i-1]))
+	}
+}
+
+// 尾部窗口行数进断点身份：先按尾部 5 行导入、再改成 12 行并复用同一个断点库时，新增的行必须写进去，
+// 不能因为「文件已写完」的断点被跳过。
+func TestChangingTailRowsDoesNotReuseTheCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	cps, err := checkpoint.Open(filepath.Join(dir, "cp.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cps.Close() })
+
+	small := &tailRecorder{recorder{name: "storage"}}
+	req := baseRequest(file)
+	req.TailRows = 5
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{small}, cps)
+	require.NoError(t, err)
+	require.Len(t, chunkTimes(small.chunks), 5)
+
+	large := &tailRecorder{recorder{name: "storage"}}
+	req.TailRows = 12
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{large}, cps)
+	require.NoError(t, err)
+	require.Len(t, chunkTimes(large.chunks), 12, "窗口变大后不能沿用旧窗口的断点")
+
+	// 同样的窗口重跑才续传：已写完，什么都不再写。
+	again := &tailRecorder{recorder{name: "storage"}}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{again}, cps)
+	require.NoError(t, err)
+	require.Empty(t, again.chunks)
+}
+
+// forwardRecorder 是只按正序写的目标（归档的角色）。
+type forwardRecorder struct{ recorder }
+
+func (*forwardRecorder) ForwardOnly() bool { return true }
+
+func writeGzipCSV(t *testing.T, dir, name, header string, rows []string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, _ = gz.Write([]byte(header + "\n" + strings.Join(rows, "\n") + "\n"))
+	require.NoError(t, gz.Close())
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o600))
+	return path
+}
+
+func TestGzipFilesExpandAndNameSubjectsWithoutExtension(t *testing.T) {
+	dir := t.TempDir()
+	writeGzipCSV(t, dir, "BTCUSDT.csv.gz", "data_time,close,volume", minuteRows(0, 3))
+	writeCSV(t, dir, "ETH.CSV", "data_time,close,volume", minuteRows(0, 3))
+	rec := &recorder{name: "archive"}
+	sum, err := Run(context.Background(), baseRequest(dir), Meta{Fields: fields}, []Target{rec}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTCUSDT", "ETH"}, []string{sum.Files[0].Subject, sum.Files[1].Subject})
+	require.Equal(t, "BTCUSDT", rec.chunks[0].Subject)
+}
+
+func TestMultiSubjectFileAndScopeWarnings(t *testing.T) {
+	dir := t.TempDir()
+	var rows []string
+	for m := 0; m < 3; m++ {
+		for _, subject := range []string{"A", "B"} {
+			rows = append(rows, fmt.Sprintf("2026-10-01 00:%02d:00,%s,1,1", m, subject))
+		}
+	}
+	file := writeCSV(t, dir, "all.csv", "data_time,subject_id,close,volume", rows)
+	req := baseRequest(file)
+	req.SubjectColumn = true
+	meta := Meta{Fields: fields, ScopeWarnOnly: true, SubjectInScope: func(_ context.Context, s string) (bool, error) { return s == "A", nil }}
+	rec := &recorder{name: "archive"}
+	sum, err := Run(context.Background(), req, meta, []Target{rec}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "多标的（2 个）", sum.Files[0].Subject)
+	require.Equal(t, 2, sum.SubjectCount)
+	require.Equal(t, []string{"B"}, sum.OutOfScope)
+	var subjects []string
+	for _, c := range rec.chunks {
+		require.Empty(t, c.Subject)
+		require.Len(t, c.Batch.Subjects, c.Batch.Len())
+		subjects = append(subjects, c.Batch.Subjects...)
+	}
+	require.Equal(t, []string{"A", "B", "A", "B", "A", "B"}, subjects)
+}
+
+func TestBeforeWriteRunsBeforeAnyWrite(t *testing.T) {
+	file := writeCSV(t, t.TempDir(), "BTC.csv", "data_time,close,volume", minuteRows(0, 5))
+	calls := 0
+	meta := Meta{Fields: fields, BeforeWrite: func(_ context.Context, s Summary) error {
+		calls++
+		require.Equal(t, 5, s.Rows)
+		return errors.New("磁盘不够")
+	}}
+	rec := &recorder{name: "archive"}
+	_, err := Run(context.Background(), baseRequest(file), meta, []Target{rec}, nil)
+	require.ErrorContains(t, err, "磁盘不够")
+	require.Empty(t, rec.chunks)
+	req := baseRequest(file)
+	req.DryRun = true
+	_, err = Run(context.Background(), req, meta, nil, nil)
+	require.ErrorContains(t, err, "磁盘不够")
+	require.Equal(t, 2, calls)
+}
+
+func TestForwardOnlyTargetIgnoresReverseOrder(t *testing.T) {
+	path := writeCSV(t, t.TempDir(), "BTC.csv", "data_time,close,volume", minuteRows(0, 10))
+	local := time.Date(2026, 10, 1, 0, 10, 0, 0, time.UTC)
+	meta := Meta{Fields: fields, LocalBounds: func(context.Context, string) (time.Time, time.Time, bool, error) {
+		return local, local.Add(5 * time.Minute), true, nil
+	}}
+	factor, archive := &recorder{name: "factor"}, &forwardRecorder{recorder: recorder{name: "archive"}}
+	_, err := Run(context.Background(), baseRequest(path), meta, []Target{factor, archive}, nil)
+	require.NoError(t, err)
+	require.Equal(t, local.Add(-2*time.Minute), factor.chunks[0].From, "因子机本地倒序")
+	require.Equal(t, local.Add(-10*time.Minute), archive.chunks[0].From, "归档按正序")
+}
+
+func TestArchiveTargetResumesFromCheckpoint(t *testing.T) {
+	file := writeCSV(t, t.TempDir(), "BTC.csv", "data_time,close,volume", minuteRows(0, 12))
+	cps, err := checkpoint.Open(filepath.Join(t.TempDir(), "importer.db"))
+	require.NoError(t, err)
+	defer cps.Close()
+	flaky := &forwardRecorder{recorder: recorder{name: "archive", failAt: 3}}
+	_, err = Run(context.Background(), baseRequest(file), Meta{Fields: fields}, []Target{flaky}, cps)
+	require.Error(t, err)
+	require.Len(t, flaky.chunks, 2)
+	healthy := &forwardRecorder{recorder: recorder{name: "archive"}}
+	sum, err := Run(context.Background(), baseRequest(file), Meta{Fields: fields}, []Target{healthy}, cps)
+	require.NoError(t, err)
+	require.Len(t, healthy.chunks, 1)
+	require.Equal(t, int64(2), sum.Files[0].Skipped["archive"])
+}

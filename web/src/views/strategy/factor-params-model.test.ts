@@ -6,7 +6,7 @@ const result = (patch: Partial<StrategyResult> = {}): StrategyResult => ({
   result_id: "r1",
   instance_id: "i1",
   session_id: "s1",
-  bar_end_time: "2026-10-26T10:00:00Z",
+  bar_end_time: "1793008800000",
   valid_until: "",
   status: "ok",
   skip_reason: "",
@@ -26,13 +26,13 @@ describe("parseFactorBinding", () => {
   it("reads the task, result view and the variable members with their parameters", () => {
     const binding = parseFactorBinding(
       JSON.stringify({
-        tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
+        tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" } },
         factor_params: { ma__var: [{ name: "span" }], bias__var: [{ name: "window" }, { name: "k" }] }
       })
     );
     expect(binding).toEqual({
       taskId: "ftask_a",
-      viewId: "view_factor_a",
+      datasetId: "dataset_factor_a",
       members: ["bias__var", "ma__var"],
       params: { ma__var: ["span"], bias__var: ["window", "k"] }
     });
@@ -58,11 +58,11 @@ describe("params summaries", () => {
   });
 
   it("classifies the delivery state of a result", () => {
-    expect(deliveryStatus(result({ params_delivered_at: "2026-10-26T10:01:00Z" })).key).toBe("delivered");
+    expect(deliveryStatus(result({ params_delivered_at: "1793008860000" })).key).toBe("delivered");
     expect(deliveryStatus(result({ params_error: "超出范围" }))).toMatchObject({ key: "rejected", hint: "超出范围" });
     expect(deliveryStatus(result()).key).toBe("pending");
     // 已送达优先于遗留的拒绝原因。
-    expect(deliveryStatus(result({ params_delivered_at: "x", params_error: "y" })).key).toBe("delivered");
+    expect(deliveryStatus(result({ params_delivered_at: "1", params_error: "y" })).key).toBe("delivered");
   });
 
   it("lists only results that carry next params, newest first", () => {
@@ -71,12 +71,12 @@ describe("params summaries", () => {
       [
         result({
           result_id: "old",
-          bar_end_time: "2026-10-26T09:00:00Z",
+          bar_end_time: "1793005200000",
           next_params_json: envelope,
-          params_delivered_at: "2026-10-26T09:01:00Z"
+          params_delivered_at: "1793005260000"
         }),
-        result({ result_id: "none", bar_end_time: "2026-10-26T09:30:00Z" }),
-        result({ result_id: "new", bar_end_time: "2026-10-26T10:00:00Z", next_params_json: envelope, params_error: "被拒绝" })
+        result({ result_id: "none", bar_end_time: "1793007000000" }),
+        result({ result_id: "new", bar_end_time: "1793008800000", next_params_json: envelope, params_error: "被拒绝" })
       ],
       "UTC"
     );

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
@@ -62,7 +61,7 @@ func newRoutedKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	registry := marketdata.NewRegistry()
 	for _, source := range kline.Sources() {
 		runtime, ok := runtimes[source.Provider]
-		if !ok || !runtime.KlineEnabled || runtime.KlineShadow {
+		if !ok || !runtime.KlineEnabled {
 			return nil, fmt.Errorf("%s K 线来源 %q 在数据源配置里没有启用", marketID, source.Provider)
 		}
 		provider, providerErr := newRoutedProvider(marketID, instrumentType, source.Provider, source.SourceID, runtime)
@@ -115,7 +114,7 @@ func newSingleSourceKlinePipeline(storage marketfetch.Storage, marketID string, 
 		return nil, fmt.Errorf("行情源目录里没有 %s 的 %s 数据源 %q", marketID, instrumentType, providerID)
 	}
 	sourceID := entry.Key.SourceID
-	provider, err := entry.Build(marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled(), SourceID: sourceID, Settings: marketdata.SourceSettings{RateLimit: feedRateLimit(limits)}})
+	provider, err := entry.Build(marketdata.Deps{SourceID: sourceID, Settings: marketdata.SourceSettings{RateLimit: feedRateLimit(limits)}})
 	if err != nil {
 		return nil, err
 	}

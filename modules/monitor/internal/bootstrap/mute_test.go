@@ -55,8 +55,7 @@ func TestMuteAlertsSilencesPushesUntilUnmuted(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.True(t, rsp.GetState().GetMuted())
 	require.Equal(t, "初始数据导入", rsp.GetState().GetReason())
-	expires, err := time.Parse(time.RFC3339, rsp.GetState().GetExpiresAt())
-	require.NoError(t, err)
+	expires := time.UnixMilli(rsp.GetState().GetExpiresAt())
 	require.WithinDuration(t, time.Now().Add(time.Hour), expires, 5*time.Second)
 	sender, err = runtime.alertSender(ctx)
 	require.NoError(t, err)
@@ -124,10 +123,10 @@ func TestMuteStateIgnoresOtherPauses(t *testing.T) {
 func TestMuteSummaryListsOpenAndRecoveredAlerts(t *testing.T) {
 	_, runtime := newMuteTestEnv(t)
 	ctx := context.Background()
-	alerts := runtime.Repositories.Alerts
+	alerts := runtime.Repositories.Checks
 	base := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
 	event := func(id, check, kind string, at time.Time) {
-		require.NoError(t, alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: "crypto", RuleID: "default:" + check, CheckID: check, EventType: kind, Status: kind, CreatedAt: at}))
+		require.NoError(t, alerts.SaveRound(ctx, nil, nil, []domain.AlertEvent{{EventID: id, SpaceID: "crypto", CheckID: check, Title: "标题 " + check, Severity: domain.SeverityCritical, EventType: kind, CreatedAt: at}}))
 	}
 	// c_open：期间触发并仍未恢复；c_done：触发后又恢复；c_old：屏蔽前就在触发。
 	event("e1", "c_open", domain.AlertEventTriggered, base.Add(10*time.Minute))
@@ -135,18 +134,24 @@ func TestMuteSummaryListsOpenAndRecoveredAlerts(t *testing.T) {
 	event("e3", "c_done", domain.AlertEventResolved, base.Add(40*time.Minute))
 	event("e0", "c_before", domain.AlertEventTriggered, base.Add(-time.Hour))
 	for _, check := range []string{"c_open", "c_old"} {
-		require.NoError(t, alerts.UpsertState(ctx, &domain.AlertState{SpaceID: "crypto", RuleID: "default:" + check, CheckID: check, Status: domain.AlertStatusFiring, DedupeKey: check}))
+		at := base
+		require.NoError(t, runtime.Repositories.Checks.SaveRound(ctx, []domain.Check{{SpaceID: "crypto", CheckID: check, Name: "检查名 " + check, Severity: domain.SeverityCritical,
+			Status: domain.CheckStatusDown, CheckedAt: at, AlertStatus: domain.AlertStatusFiring, TriggeredAt: &at, CreatedAt: at}}, nil, nil))
 	}
+	// 屏蔽期间被删除的检查（对象移除）写的恢复事件同样计入“期间触发后已恢复”，标题取事件里记下的。
+	event("e4", "c_removed", domain.AlertEventTriggered, base.Add(15*time.Minute))
+	event("e5", "c_removed", domain.AlertEventResolved, base.Add(25*time.Minute))
 
 	body, severity, ok, err := runtime.buildMuteSummary(ctx, base, base.Add(time.Hour))
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, notification.SeverityWarning, severity, "仍有未恢复的告警时用警告级别")
 	require.Contains(t, body, "仍未恢复（2 项）")
-	require.Contains(t, body, "c_open（触发 1 次")
-	require.Contains(t, body, "c_old（屏蔽前已在触发）")
-	require.Contains(t, body, "期间触发后已恢复（1 项）")
-	require.Contains(t, body, "c_done（触发 1 次，恢复 1 次")
+	require.Contains(t, body, "标题 c_open（触发 1 次")
+	require.Contains(t, body, "检查名 c_old（屏蔽前已在触发）", "屏蔽前就在告警、期间没有事件的取检查行的名称")
+	require.Contains(t, body, "期间触发后已恢复（2 项）")
+	require.Contains(t, body, "标题 c_done（触发 1 次，恢复 1 次")
+	require.Contains(t, body, "标题 c_removed（触发 1 次，恢复 1 次")
 	require.NotContains(t, body, "c_before", "静默开始之前的事件不属于这次汇总")
 }
 
@@ -226,10 +231,10 @@ func TestMuteSummaryStatesWhenTruncated(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
 	for i := 0; i < muteSummaryEventLimit; i++ {
-		require.NoError(t, runtime.Repositories.Alerts.CreateEvent(ctx, &domain.AlertEvent{
-			EventID: fmt.Sprintf("e%d", i), SpaceID: "crypto", RuleID: "default:c", CheckID: fmt.Sprintf("c%d", i%7),
-			EventType: domain.AlertEventTriggered, Status: "firing", CreatedAt: base.Add(time.Duration(i) * time.Second),
-		}))
+		require.NoError(t, runtime.Repositories.Checks.SaveRound(ctx, nil, nil, []domain.AlertEvent{{
+			EventID: fmt.Sprintf("e%d", i), SpaceID: "crypto", CheckID: fmt.Sprintf("c%d", i%7), Title: "c", Severity: domain.SeverityCritical,
+			EventType: domain.AlertEventTriggered, CreatedAt: base.Add(time.Duration(i) * time.Second),
+		}}))
 	}
 	body, _, ok, err := runtime.buildMuteSummary(ctx, base, base.Add(2*time.Hour))
 	require.NoError(t, err)

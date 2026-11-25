@@ -105,11 +105,9 @@ func (f *seriesFollower) recompute(ctx context.Context) {
 		if len(pending) == 0 {
 			continue
 		}
-		done, kept := true, false
+		done := true
 		for _, taskID := range bySource[src] {
-			derived, err := f.recomputeTask(ctx, taskID, pending)
-			kept = kept || derived
-			if err != nil {
+			if err := f.recomputeTask(ctx, taskID, pending); err != nil {
 				done = false
 				if ctx.Err() == nil && !errors.Is(err, recalcexec.ErrGated) {
 					log.WarnContextf(ctx, "factor_series_recompute_failed task_id=%s error=%v", taskID, err)
@@ -119,25 +117,21 @@ func (f *seriesFollower) recompute(ctx context.Context) {
 		if !done {
 			continue
 		}
-		if kept {
-			// 有成员因推测的期望缺数被跳过，旧值保留、没有真正重算：这一段待办留着，下一轮再算。
-			continue
-		}
 		if err := f.data.Store().ClearPending(src, pending); err != nil {
 			log.WarnContextf(ctx, "factor_series_pending_clear_failed source=%s error=%v", src, err)
 		}
 	}
 }
 
-// recomputeTask 重算一个任务受失效影响的范围；derivedSkipped 为真表示有成员因推测的期望缺数被跳过（旧值保留，待办不能清）。
-func (f *seriesFollower) recomputeTask(ctx context.Context, taskID string, pending []seriesstore.PendingSpan) (derivedSkipped bool, err error) {
+// recomputeTask 重算一个任务受失效影响的范围。
+func (f *seriesFollower) recomputeTask(ctx context.Context, taskID string, pending []seriesstore.PendingSpan) error {
 	set, lookup := f.sets.SetByID(taskID)
 	if lookup != SetFound {
-		return false, nil // 任务已停用或删除：不影响同源的其他任务
+		return nil // 任务已停用或删除：不影响同源的其他任务
 	}
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
-		return false, err
+		return err
 	}
 	lookback := maxLookbackOf(set)
 	cross := false
@@ -180,19 +174,17 @@ func (f *seriesFollower) recomputeTask(ctx context.Context, taskID string, pendi
 			if end.After(j.to) {
 				end = j.to
 			}
-			skipped, err := f.run(ctx, set, j.subjects, cross, start, end)
-			if err != nil {
-				return derivedSkipped, err
+			if err := f.run(ctx, set, j.subjects, cross, start, end); err != nil {
+				return err
 			}
-			derivedSkipped = derivedSkipped || skipped
 			start = end
 		}
 	}
-	return derivedSkipped, nil
+	return nil
 }
 
 // run 在 [start, end) 上重算一批标的的全部因子（非只填充，覆盖已经算出的旧值）。截面因子用任务的全部标的重算。
-func (f *seriesFollower) run(ctx context.Context, set domain.EngineTask, changed map[string]struct{}, cross bool, start, end time.Time) (derivedSkipped bool, err error) {
+func (f *seriesFollower) run(ctx context.Context, set domain.EngineTask, changed map[string]struct{}, cross bool, start, end time.Time) error {
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
 		if f.active != nil && !f.active() {
 			return recalcexec.Selection{}, nil
@@ -220,16 +212,13 @@ func (f *seriesFollower) run(ctx context.Context, set domain.EngineTask, changed
 		sort.Strings(subjects)
 		return recalcexec.Selection{Set: current.Set, Members: current.Members, Subjects: subjects, Columns: columns}, nil
 	}
-	_, err = f.exec.RunChunkWith(ctx, source, start, end, func(_ recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
-		if runErr == nil && outcome.DerivedSkipped {
-			derivedSkipped = true
-		}
+	_, err := f.exec.RunChunkWith(ctx, source, start, end, func(_ recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
 		if runErr == nil && outcome.Status == "degraded" {
 			log.WarnContextf(ctx, "factor_series_recompute_degraded task_id=%s from=%s to=%s failed_subjects=%d", set.Set.TaskID,
 				periodclock.FormatPeriod(set.Set.SpaceID, set.Set.Freq, start), periodclock.FormatPeriod(set.Set.SpaceID, set.Set.Freq, end), len(outcome.FailedSubjects))
 		}
 	})
-	return derivedSkipped, err
+	return err
 }
 
 func minTime(a, b time.Time) time.Time {

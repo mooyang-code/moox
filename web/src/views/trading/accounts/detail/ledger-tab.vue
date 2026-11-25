@@ -93,7 +93,7 @@ const { logical, accounts } = inject(detailContextKey)!;
 const LEDGER_LIMIT = 500;
 
 const accountId = ref("");
-const market = ref<MarketType>(1);
+const market = ref<MarketType>("spot");
 const range = ref<[number, number] | null>(defaultLedgerRange(displayZone.value));
 const typeFilter = ref<string>();
 const entries = ref<LedgerEntry[]>([]);

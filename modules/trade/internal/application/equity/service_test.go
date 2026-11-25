@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 )
 
 type equityTestAdapter struct {
@@ -76,7 +77,7 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		}); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought", ClientOrderID: "bought",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSpot),
 			ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT", OrderType: "MARKET", Side: "BUY",

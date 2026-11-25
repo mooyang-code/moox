@@ -20,13 +20,13 @@ func TestCompileFailureKeepsSnapshotCalendar(t *testing.T) {
 rules:
   - {id: r, type: rank, score: "missing_col", select: {top: 1}, weight: 1}
 `
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}}
 	h := newHarnessWith(t, brokenDSL, nil, resolved)
 	shanghai := time.FixedZone("CST", 8*3600)
 	periodStart := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC) // 日期键
 	h.now = time.Date(2026, 10, 9, 15, 5, 0, 0, shanghai)
 	message := &eventpb.EventMessage{EventId: "event-stock", EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: periodStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: periodStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	barEnd := time.Date(2026, 10, 9, 15, 0, 0, 0, shanghai)
 	result, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, barEnd)

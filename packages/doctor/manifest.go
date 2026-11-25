@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -43,33 +42,11 @@ type Manifest struct {
 }
 
 type Component struct {
-	ComponentID              string                  `yaml:"component_id" json:"component_id"`
-	ServiceName              string                  `yaml:"service_name" json:"service_name"`
-	Role                     string                  `yaml:"role" json:"role"`
-	Description              string                  `yaml:"description" json:"description"`
-	Duties                   []string                `yaml:"duties" json:"duties"`
-	Inputs                   []string                `yaml:"inputs" json:"inputs"`
-	Outputs                  []string                `yaml:"outputs" json:"outputs"`
-	Dependencies             []string                `yaml:"dependencies" json:"dependencies"`
-	Transport                Transport               `yaml:"transport" json:"transport"`
-	FunctionalObservability  FunctionalObservability `yaml:"functional_observability" json:"functional_observability"`
-	HealthPort               int                     `yaml:"health_port" json:"health_port"` // 只听本机的健康端口，doctor 在目标机上请求它
-	ConfigPaths              []string                `yaml:"config_paths" json:"config_paths"`
-	WritablePaths            []string                `yaml:"writable_paths" json:"writable_paths"`
-	RecoveryActionIDs        []string                `yaml:"recovery_action_ids" json:"recovery_action_ids"`
-	RequiredInDefaultProfile bool                    `yaml:"required_in_default_profile" json:"required_in_default_profile"`
-}
-
-var allowedRecoveryActions = map[string]bool{
-	"sync_host_deployments":         true,
-	"verify_service_identity":       true,
-	"repair_path_permissions":       true,
-	"verify_eventbus_credentials":   true,
-	"restart_service_manually":      true,
-	"inspect_health_check_input":    true,
-	"replay_factor_window_manually": true,
-	"free_disk_space":               true,
-	"run_bootstrap":                 true,
+	ComponentID             string                  `yaml:"component_id" json:"component_id"`
+	ServiceName             string                  `yaml:"service_name" json:"service_name"`
+	Transport               Transport               `yaml:"transport" json:"transport"`
+	FunctionalObservability FunctionalObservability `yaml:"functional_observability" json:"functional_observability"`
+	HealthPort              int                     `yaml:"health_port" json:"health_port"` // 只听本机的健康端口，doctor 在目标机上请求它
 }
 
 func LoadEmbeddedManifest() (Manifest, error) {
@@ -100,15 +77,11 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 		if component.ThirdParty {
 			continue
 		}
-		metadata := component.Doctor
 		manifest.Components = append(manifest.Components, Component{
 			ComponentID: component.ID, ServiceName: component.ID,
-			Role: metadata.Role, Description: metadata.Description,
-			Duties: metadata.Duties, Inputs: metadata.Inputs, Outputs: metadata.Outputs,
-			Dependencies: metadata.Dependencies, Transport: Transport(metadata.Transport),
-			FunctionalObservability: FunctionalObservability(metadata.FunctionalObservability),
-			HealthPort:              component.Health.Port, ConfigPaths: metadata.ConfigPaths, WritablePaths: metadata.WritablePaths,
-			RecoveryActionIDs: metadata.RecoveryActionIDs, RequiredInDefaultProfile: metadata.RequiredInDefaultProfile,
+			Transport:               Transport(component.Doctor.Transport),
+			FunctionalObservability: FunctionalObservability(component.Doctor.FunctionalObservability),
+			HealthPort:              component.Health.Port,
 		})
 	}
 	sum := sha256.Sum256(raw)
@@ -144,25 +117,12 @@ func (m Manifest) Validate() error {
 		}
 		serviceNames[component.ServiceName] = true
 	}
-	for _, component := range m.Components {
-		for _, dependency := range component.Dependencies {
-			if dependency == component.ComponentID {
-				return fmt.Errorf("component %q depends on itself", component.ComponentID)
-			}
-			if !componentIDs[dependency] {
-				return fmt.Errorf("component %q depends on unknown component %q", component.ComponentID, dependency)
-			}
-		}
-	}
 	return nil
 }
 
 func (c Component) validate() error {
 	if strings.TrimSpace(c.ComponentID) == "" || strings.TrimSpace(c.ServiceName) == "" {
 		return errors.New("component_id and service_name are required")
-	}
-	if strings.TrimSpace(c.Role) == "" || strings.TrimSpace(c.Description) == "" {
-		return errors.New("role and description are required")
 	}
 	if forbiddenServiceName(c.ServiceName) {
 		return fmt.Errorf("service_name %q is not an independently deployed process", c.ServiceName)
@@ -183,19 +143,6 @@ func (c Component) validate() error {
 	if c.HealthPort <= 0 || c.HealthPort > 65535 {
 		return fmt.Errorf("invalid health_port %d", c.HealthPort)
 	}
-	for _, candidate := range append(append([]string{}, c.ConfigPaths...), c.WritablePaths...) {
-		if err := validateRelativePath(candidate); err != nil {
-			return fmt.Errorf("path %q: %w", candidate, err)
-		}
-	}
-	if len(c.RecoveryActionIDs) == 0 {
-		return errors.New("at least one recovery_action_id is required")
-	}
-	for _, action := range c.RecoveryActionIDs {
-		if !allowedRecoveryActions[action] {
-			return fmt.Errorf("unknown recovery_action_id %q", action)
-		}
-	}
 	return nil
 }
 
@@ -207,17 +154,4 @@ func forbiddenServiceName(serviceName string) bool {
 		return true
 	}
 	return strings.HasPrefix(serviceName, "storage-") && strings.HasSuffix(serviceName, "-rpc")
-}
-
-func validateRelativePath(candidate string) error {
-	if candidate == "" {
-		return errors.New("empty path")
-	}
-	if strings.HasPrefix(candidate, "/") || path.Clean(candidate) != candidate || candidate == "." || strings.HasPrefix(candidate, "../") {
-		return errors.New("path must be a clean release-relative path")
-	}
-	if strings.ContainsAny(candidate, "*?[]{}$`\\") {
-		return errors.New("path templates, globbing, shell expansion, and backslashes are not allowed")
-	}
-	return nil
 }

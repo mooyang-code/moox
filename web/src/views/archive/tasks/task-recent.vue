@@ -28,11 +28,11 @@
     <template v-else>
       <div v-if="error" class="load-error">读取最新数据失败：{{ error }} · <a-link @click="load(cursor)">重试</a-link></div>
       <div v-if="result" class="sub head-note">
-        <template v-if="result.staged_until"
-          >暂存库已从 Storage 读到 {{ formatInstant(result.staged_until, zone) }}，之后的行可能还没读到</template
+        <template v-if="toInstantMs(lastSuccessAt) !== null"
+          >最近一次跟随 {{ formatInstant(lastSuccessAt, zone, "minute") }}，之后写进 Storage 的行可能还没进暂存库</template
         >
-        <template v-else>暂存库还没有从 Storage 读过</template>；这里包括还没导出成文件的行，暂存行保留到分区定稿，至少有最近 3
-        天。
+        <template v-else>还没有成功的跟随，暂存库可能还没有从 Storage 读过</template
+        >；这里包括还没导出成文件的行，暂存行保留到分区定稿，至少有最近 3 天。
       </div>
       <a-table
         size="small"
@@ -69,8 +69,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { fetchArchiveRecentRows, type ArchiveRecentColumn, type ArchiveRecentRowsRsp } from "@/api/archive";
 import { listSubjects } from "@/api/storage/metadata";
 import type { Subject } from "@/api/storage/types";
-import { RequestGate } from "@/utils/request-gate";
-import { formatInstant } from "@/utils/time-zone";
+import { createLatestRequestGuard } from "@/utils/latest-request";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { recentCellText } from "../shared/archive-model";
 
 /**
@@ -79,13 +79,20 @@ import { recentCellText } from "../shared/archive-model";
  */
 const PAGE_SIZE = 200;
 
-const props = defineProps<{ spaceId: string; datasetId: string; subject: string; zone: string }>();
+const props = defineProps<{
+  spaceId: string;
+  datasetId: string;
+  subject: string;
+  zone: string;
+  /** 任务最近一次成功的跟随（或整段重读）时刻 */
+  lastSuccessAt?: string;
+}>();
 const emit = defineEmits<{ "update:subject": [subject: string] }>();
 
 // ---- 标的搜索：Storage 的 ListSubjects，keyword 匹配对象 ID 与名称 ----
 const options = ref<Subject[]>([]);
 const searching = ref(false);
-const searchGate = new RequestGate();
+const searchGate = createLatestRequestGuard();
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 function search(keyword: string) {
@@ -94,16 +101,16 @@ function search(keyword: string) {
 }
 
 async function loadOptions(keyword: string) {
-  const token = searchGate.next();
+  const token = searchGate.begin();
   searching.value = true;
   try {
     const rsp = await listSubjects({ space_id: props.spaceId, keyword: keyword || undefined, page: { page: 1, size: 20 } });
-    if (searchGate.isCurrent(token)) options.value = rsp.subjects || [];
+    if (token.isLatest()) options.value = rsp.subjects || [];
   } catch {
     // 搜索失败不影响手动输入标的 ID
-    if (searchGate.isCurrent(token)) options.value = [];
+    if (token.isLatest()) options.value = [];
   } finally {
-    if (searchGate.isCurrent(token)) searching.value = false;
+    if (token.isLatest()) searching.value = false;
   }
 }
 
@@ -114,7 +121,7 @@ const error = ref("");
 /** 已经翻过的页的 before（第一页没有）；当前页的 before 是最后一个 */
 const cursors = ref<string[]>([]);
 const cursor = computed(() => cursors.value.at(-1) || "");
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 let controller: AbortController | null = null;
 
 const columns = computed<ArchiveRecentColumn[]>(() => result.value?.columns || []);
@@ -124,7 +131,7 @@ const hasEarlier = computed(() => tableRows.value.length >= PAGE_SIZE);
 
 async function load(before: string) {
   if (!props.subject) return;
-  const token = gate.next();
+  const token = gate.begin();
   controller?.abort();
   controller = new AbortController();
   loading.value = true;
@@ -134,13 +141,13 @@ async function load(before: string) {
       { space: props.spaceId, dataset: props.datasetId, subject: props.subject, before: before || undefined, limit: PAGE_SIZE },
       controller.signal
     );
-    if (!gate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     result.value = rsp;
   } catch (cause) {
-    if (!gate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     error.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 

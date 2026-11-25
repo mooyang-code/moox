@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,8 +65,6 @@ type fakeChunks struct {
 	// statusFor 按标的给出逐项结果，优先于 status。
 	statusFor func(subject string) pipeline.ItemStatus
 	err       error
-	// derivedSkipped 让每次运行的结果带上“推测期望缺数被跳过”标记（失效重算据此保留待办）。
-	derivedSkipped bool
 }
 
 func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.SelectionSource, start, end time.Time, after func(recalcexec.Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
@@ -79,7 +76,7 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 		return pipeline.Outcome{}, err
 	}
 	f.calls = append(f.calls, runCall{selection: selection, start: start, end: end})
-	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}, DerivedSkipped: f.derivedSkipped}
+	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}}
 	for _, member := range selection.Members {
 		for _, subject := range selection.Subjects {
 			for at := start; at.Before(end); at = at.Add(time.Minute) {
@@ -102,13 +99,12 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 
 type fakeUniverse struct {
 	subjects []string
-	series   []seriesset.Series
 	found    bool
 	err      error
 }
 
 func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, int64) (storageio.Universe, bool, error) {
-	return storageio.Universe{Subjects: f.subjects, Series: f.series}, f.found, f.err
+	return storageio.Universe{Subjects: f.subjects}, f.found, f.err
 }
 
 type gapFixture struct {
@@ -236,6 +232,7 @@ func TestGapFillerCrossSectionUsesFrozenUniverse(t *testing.T) {
 	f.filler.tick(context.Background())
 	require.Len(t, f.chunks.calls, 1)
 	require.Equal(t, []string{"BTC", "ETH", "SOL"}, f.chunks.calls[0].selection.Subjects, "用冻结全集，不是只有 ETH")
+	require.True(t, f.chunks.calls[0].selection.FrozenUniverse)
 	require.Zero(t, f.ledger.PendingCount())
 
 	missing := newGapFixture(t, fakeUniverse{found: false}, factor)
@@ -351,11 +348,10 @@ type repairedCall struct {
 // 每批补齐后按周期回调，账本里这一期没有待办了才算补齐。
 func TestGapFillerRepairsWarmingSkipsOnceTaskIsWarm(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
-	// 这一期的 marker 已经写好（冻结全集是全部标的 × 唯一的 tag）：恢复不必等 marker。
+	// 这一期的 marker 已经写好（冻结全集是全部标的）：恢复不必等 marker。
 	frozen := fakeUniverse{found: true}
 	for i := 0; i < maxFillSubjects+1; i++ {
 		frozen.subjects = append(frozen.subjects, fmt.Sprintf("S%03d", i))
-		frozen.series = append(frozen.series, seriesset.Series{SubjectID: fmt.Sprintf("S%03d", i), SeriesTag: gapSpotTag})
 	}
 	f := newGapFixture(t, frozen, factor)
 	state := pipeline.WarmupWarming

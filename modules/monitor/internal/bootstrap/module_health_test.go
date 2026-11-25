@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -47,32 +48,32 @@ func TestModuleHealthItemsFlagFailingModulesOnly(t *testing.T) {
 			labels := fmt.Sprintf(`{"health_check":%q,"stage":"evaluate"}`, item.check)
 			name := report.ModuleMetricName(item.module, item.metric)
 			require.NoError(t, db.Create(&monmetrics.MetricSeries{ServiceName: "moox_" + item.module, InstanceID: "i", SeriesID: seriesID, MetricName: name, MetricType: "gauge", LabelsJSON: labels, LastSeenAt: now}).Error)
-			require.NoError(t, db.Create(&monmetrics.MetricLatest{SeriesID: seriesID, ServiceName: "moox_" + item.module, InstanceID: "i", MetricName: name, MetricType: "gauge", LabelsJSON: labels, Value: float64(item.at.Unix()), ObservedAt: now}).Error)
+			require.NoError(t, db.Clauses(metricLatestUpsert).Create(&monmetrics.MetricSeries{SeriesID: seriesID, ServiceName: "moox_" + item.module, InstanceID: "i", MetricName: name, MetricType: "gauge", LabelsJSON: labels, Value: float64(item.at.Unix()), ObservedAt: now}).Error)
 		}
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
 	require.NoError(t, err)
 
 	// 内置清单之外再加两项只在测试里用的检查，覆盖“失败但 MaxLag 内成功过”与“闲置”两种判定。
-	checks := append(report.BuiltInModuleHealthChecks(),
+	healthChecks := append(report.BuiltInModuleHealthChecks(),
 		report.ModuleHealthCheck{ID: "test-within-lag", Module: "factor", MaxLag: 10 * time.Minute, Enabled: true},
 		report.ModuleHealthCheck{ID: "test-idle", Module: "collector", MaxLag: 5 * time.Minute, Enabled: true})
-	items, err := moduleHealthItems(context.Background(), query, checks, now)
+	items, err := moduleHealthItems(context.Background(), query, healthChecks, now)
 	require.NoError(t, err)
-	byID := map[string]businessFreshnessItem{}
+	byID := map[string]checks.Fact{}
 	for _, item := range items {
-		byID[item.checkID] = item
+		byID[item.CheckID] = item
 	}
 	require.Len(t, byID, 5, "modules that never reported a run get no check")
-	require.False(t, byID["module:strategy-targets"].success)
-	require.Equal(t, "策略目标生成", byID["module:strategy-targets"].name)
-	require.Contains(t, byID["module:strategy-targets"].reason, "已 1 小时没有成功运行")
-	require.True(t, byID["module:trade-rebalance"].success)
-	require.True(t, byID["module:test-within-lag"].success)
-	require.True(t, byID["module:test-idle"].success)
-	require.Contains(t, byID["module:test-idle"].reason, "之后已 2 小时没有新的运行，按闲置处理")
-	require.False(t, byID["module:monitor-metrics"].success)
-	require.Contains(t, byID["module:monitor-metrics"].reason, "且从未成功过")
+	require.False(t, byID["module:strategy-targets"].Passed())
+	require.Equal(t, "策略目标生成", byID["module:strategy-targets"].Name)
+	require.Contains(t, byID["module:strategy-targets"].Reason, "已 1 小时没有成功运行")
+	require.True(t, byID["module:trade-rebalance"].Passed())
+	require.True(t, byID["module:test-within-lag"].Passed())
+	require.True(t, byID["module:test-idle"].Passed())
+	require.Contains(t, byID["module:test-idle"].Reason, "之后已 2 小时没有新的运行，按闲置处理")
+	require.False(t, byID["module:monitor-metrics"].Passed())
+	require.Contains(t, byID["module:monitor-metrics"].Reason, "且从未成功过")
 }
 
 func TestKlineReasonTextForViewBehindCompletedPeriod(t *testing.T) {

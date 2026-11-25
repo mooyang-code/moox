@@ -18,7 +18,7 @@ func realWalletFixture(t *testing.T, price, spot, futures, targetQty string) (*t
 	t.Helper()
 	f := liveStandardFixture(t)
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"10","min_notional_swap":"5"}`)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: targetQty}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: targetQty}})
 	fake := &wallettest.Exchange{Spot: spot, Futures: futures, Ask: price}
 	newExecutor := func() *Executor {
 		executor := f.executor()
@@ -57,10 +57,10 @@ func TestRejectedAccountBuyNeverTransfers(t *testing.T) {
 	f, fake, newExecutor := realWalletFixture(t, "50000", "10", "600", "0.01")
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child", ClientOrderID: "rejected-child",
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "50000", State: "REJECTED",
 		RejectReason: "This symbol is not permitted for this account", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 	})
 	ctx := context.Background()
 	executor := newExecutor()

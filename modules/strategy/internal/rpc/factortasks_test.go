@@ -26,7 +26,7 @@ func TestInstanceFactorTaskIsRequiredAndShared(t *testing.T) {
 	h.createStrategy("s1", demoDSL)
 	missing := h.createInstance("i1", "s1", "", "", false)
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "factor_tasks")
-	badID := h.createInstance("i1", "s1", "view_a", "", false)
+	badID := h.createInstance("i1", "s1", "dataset_factor_a", "", false)
 	requireFail(t, int32(badID.GetRetInfo().GetCode()), badID.GetRetInfo().GetMsg(), "不合法")
 
 	created := h.createInstance("i1", "s1", "ftask_shared", "", false)
@@ -64,7 +64,7 @@ func TestEnableBindsFactorTaskAndSnapshotsItsView(t *testing.T) {
 	if !instance.GetEnabled() || len(h.resolver.bound) != 1 || h.resolver.bound[0] != "i1@ftask_i1" {
 		t.Fatalf("启用应关联任务：%+v bound=%v", instance, h.resolver.bound)
 	}
-	if !strings.Contains(instance.GetResolvedJson(), `"view_id":"view_factor_i1"`) || !strings.Contains(instance.GetResolvedJson(), `"factor_task_id":"ftask_i1"`) {
+	if !strings.Contains(instance.GetResolvedJson(), `"dataset_id":"dataset_factor_i1"`) || !strings.Contains(instance.GetResolvedJson(), `"factor_task_id":"ftask_i1"`) {
 		t.Fatalf("会话应固化任务与它的结果 View：%s", instance.GetResolvedJson())
 	}
 	again := h.setEnabled("i1", true)
@@ -86,16 +86,16 @@ func TestValidateAndReplayByFactorTask(t *testing.T) {
 	h.resolver.columns = []string{"close", "bias__var"}
 	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: tunedDSL, FactorTasks: map[string]string{"spot": "ftask_x"}})
 	requireOK(t, int32(validated.GetRetInfo().GetCode()), validated.GetRetInfo().GetMsg())
-	if !strings.Contains(validated.GetResolvedJson(), `"factor_task_id":"ftask_x"`) || !strings.Contains(validated.GetResolvedJson(), `"view_id":"view_factor_x"`) {
+	if !strings.Contains(validated.GetResolvedJson(), `"factor_task_id":"ftask_x"`) || !strings.Contains(validated.GetResolvedJson(), `"dataset_id":"dataset_factor_x"`) {
 		t.Fatalf("校验应按任务解析并返回绑定：%s", validated.GetResolvedJson())
 	}
 	if len(h.resolver.bound) != 0 {
 		t.Fatalf("校验只读，不能关联任务：%v", h.resolver.bound)
 	}
 
-	noTask, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	noTask, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, StartTime: ms("2026-09-01T00:00:00Z"), EndTime: ms("2026-09-02T00:00:00Z")})
 	requireFail(t, int32(noTask.GetRetInfo().GetCode()), noTask.GetRetInfo().GetMsg(), "factor_tasks")
-	tuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTasks: map[string]string{"spot": "ftask_x"}, StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	tuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTasks: map[string]string{"spot": "ftask_x"}, StartTime: ms("2026-09-01T00:00:00Z"), EndTime: ms("2026-09-02T00:00:00Z")})
 	requireFail(t, int32(tuned.GetRetInfo().GetCode()), tuned.GetRetInfo().GetMsg(), "factor_params")
 }
 
@@ -185,19 +185,15 @@ func TestCreateInstanceChecksTaskMarkets(t *testing.T) {
 	requireFail(t, int32(unknown.GetRetInfo().GetCode()), unknown.GetRetInfo().GetMsg(), "无法确定因子任务 ftask_new 的市场")
 }
 
-// factor_tasks 的 multi 键：统一数据集上的任务只能单独绑定。
-func TestNormalizeFactorTasksUnified(t *testing.T) {
-	tasks, err := normalizeFactorTasks(map[string]string{"multi": " ftask_unified "})
-	if err != nil || tasks["multi"] != "ftask_unified" || len(tasks) != 1 {
-		t.Fatalf("multi 单独绑定应通过：%v err=%v", tasks, err)
-	}
+// factor_tasks 的键只能是现货、永续、股票（或 来源名:市场）。
+func TestNormalizeFactorTasksRejectsUnknownMarkets(t *testing.T) {
 	for name, raw := range map[string]map[string]string{
-		"与现货混用": {"multi": "ftask_a", "spot": "ftask_b"},
-		"与永续混用": {"multi": "ftask_a", "swap": "ftask_b"},
-		"未知市场":  {"future": "ftask_a"},
+		"multi":     {"multi": "ftask_a"},
+		"未知市场":      {"future": "ftask_a"},
+		"来源的 multi": {"spot": "ftask_a", "daily:multi": "ftask_b"},
 	} {
-		if _, err := normalizeFactorTasks(raw); err == nil {
-			t.Errorf("%s应被拒绝", name)
+		if _, err := normalizeFactorTasks(raw); err == nil || !strings.Contains(err.Error(), "不受支持") {
+			t.Errorf("%s应被拒绝：%v", name, err)
 		}
 	}
 }

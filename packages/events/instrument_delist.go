@@ -15,8 +15,8 @@ import (
 
 // 标的下架事件里 payload 的取值。
 const (
-	DelistMarketSpot = "SPOT"
-	DelistMarketSwap = "SWAP"
+	DelistMarketSpot = "spot"
+	DelistMarketSwap = "swap"
 
 	DelistSourceBinanceSpotSchedule     = "BINANCE_SPOT_SCHEDULE"
 	DelistSourceBinanceSwapExchangeInfo = "BINANCE_SWAP_EXCHANGE_INFO"
@@ -61,11 +61,11 @@ func validateInstrumentDelistScheduled(message *eventpb.EventMessage, value prot
 	if message == nil || message.GetSubjectId() != InstrumentDelistSubjectID(payload.GetExchange(), payload.GetMarket(), payload.GetExchangeSymbol()) {
 		return fmt.Errorf("instrument delist scheduled instrument does not match subject_id")
 	}
-	if delistAt := payload.GetDelistAt(); delistAt == nil || delistAt.CheckValid() != nil || delistAt.AsTime().IsZero() {
-		return fmt.Errorf("instrument delist scheduled delist_at is invalid")
+	if payload.GetDelistAt() <= 0 {
+		return fmt.Errorf("下架事件的 delist_at 必须是正的 Unix 毫秒")
 	}
-	if firstSeen := payload.GetFirstSeenAt(); firstSeen == nil || firstSeen.CheckValid() != nil {
-		return fmt.Errorf("instrument delist scheduled first_seen_at is invalid")
+	if payload.GetFirstSeenAt() <= 0 {
+		return fmt.Errorf("下架事件的 first_seen_at 必须是正的 Unix 毫秒")
 	}
 	switch payload.GetSource() {
 	case DelistSourceBinanceSpotSchedule, DelistSourceBinanceSwapExchangeInfo, DelistSourceOKXSwapInstruments, DelistSourceManual:

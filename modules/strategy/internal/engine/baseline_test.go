@@ -11,13 +11,12 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
 // 基线金样（第 0 期）：用合成帧多期驱动引擎，导出每期的目标、规则状态（rule_states_json，与实盘写库同样用 json.Marshal(decision.State)）、
 // 摘要与解释明细，存为 testdata/baseline/<场景>.json。覆盖 rank 的 holding/offsets、buffer、stop、filter_after、固定标的择时（显式 pool 加 hold），
-// 五种市场模式（含市场不可用时的冻结）与统一数据集。金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成。
+// 五种市场模式（含市场不可用时的冻结）与现货、永续两个市场的多空。金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成。
 
 // baselineUpdate 报告本次是否重新生成基线金样。
 func baselineUpdate() bool { return os.Getenv("UPDATE_BASELINE") == "1" }
@@ -412,46 +411,27 @@ func baselineFreezeBars() []baselineEngineBar {
 	return bars
 }
 
-// 统一数据集的 series_tag：同一个数据集里现货、永续各一条序列，按 tag 的 market 段拆进两个市场。
-const (
-	baselineSpotTag = "venue:binance|market:spot|source:spot_http"
-	baselineSwapTag = "venue:binance|market:swap|source:swap_http"
-)
-
-type baselineTaggedRow struct {
-	subject, tag string
-	values       map[string]float64
-}
-
-// baselineUnifiedBars 是统一数据集场景的数据：S1～S4 各有现货、永续两条序列，S4 的永续新上市（前 3 期年龄不够）；
-// 第 3 期 S3 的永续序列取不到（source_failed），第 5 期 S1 的现货序列取不到。行按 seriesset.SeriesTagMarket 拆进两个市场。
-func baselineUnifiedBars() []baselineEngineBar {
+// baselineDualBars 是两个市场的多空场景数据：S1～S4 在现货、永续各有一行，S4 的永续新上市（前 3 期年龄不够）；
+// 第 3 期 S3 的永续行取不到（source_failed），第 5 期 S1 的现货行取不到。
+func baselineDualBars() []baselineEngineBar {
 	spot := [][]float64{{4, 3, 2, 1}, {4, 3, 2, 1}, {1, 3, 2, 4}, {1, 3, 2, 4}, {1, 2, 4, 3}, {3, 2, 4, 1}}
 	swap := [][]float64{{1, 2, 3, 9}, {2, 1, 3, 9}, {2, 1, 3, 9}, {4, 1, 3, 9}, {4, 1, 2, 9}, {4, 3, 2, 1}}
 	subjects := []string{"S1", "S2", "S3", "S4"}
 	bars := make([]baselineEngineBar, len(spot))
 	for bar := range bars {
-		var tagged []baselineTaggedRow
+		rows := map[string]map[string]map[string]float64{dsl.MarketSpot: {}, dsl.MarketSwap: {}}
 		failed := map[string]map[string]map[string]string{}
 		for k, subject := range subjects {
 			if bar == 5 && subject == "S1" {
 				failed[dsl.MarketSpot] = map[string]map[string]string{"m": {subject: FailedSource}}
 			} else {
-				tagged = append(tagged, baselineTaggedRow{subject: subject, tag: baselineSpotTag, values: map[string]float64{"m": spot[bar][k]}})
+				rows[dsl.MarketSpot][subject] = map[string]float64{"m": spot[bar][k]}
 			}
 			if bar == 3 && subject == "S3" {
 				failed[dsl.MarketSwap] = map[string]map[string]string{"m": {subject: FailedSource}}
 			} else {
-				tagged = append(tagged, baselineTaggedRow{subject: subject, tag: baselineSwapTag, values: map[string]float64{"m": swap[bar][k]}})
+				rows[dsl.MarketSwap][subject] = map[string]float64{"m": swap[bar][k]}
 			}
-		}
-		rows := map[string]map[string]map[string]float64{}
-		for _, row := range tagged {
-			market := seriesset.SeriesTagMarket(row.tag)
-			if rows[market] == nil {
-				rows[market] = map[string]map[string]float64{}
-			}
-			rows[market][row.subject] = row.values
 		}
 		bars[bar] = baselineEngineBar{Rows: rows}
 		if len(failed) > 0 {
@@ -672,7 +652,7 @@ portfolio:
 			columns: []string{"m"}, bars: baselineFreezeBars(), check: freeze},
 		baselineEngineScenario{name: "market_freeze_spot_swap", mode: dsl.Market{Select: dsl.MarketSpot, Prefer: dsl.MarketSwap}, dsl: baselineMarketDSL,
 			columns: []string{"m"}, bars: baselineFreezeBars(), check: freeze},
-		baselineEngineScenario{name: "unified", dsl: `name: baseline_unified
+		baselineEngineScenario{name: "dual_long_short", dsl: `name: baseline_dual_long_short
 market: {select: both, prefer: swap}
 rules:
   - id: l
@@ -689,7 +669,7 @@ rules:
 portfolio:
   leverage: 2
   max_missing: 1
-`, columns: []string{"m"}, bars: baselineUnifiedBars(), check: func(t *testing.T, decisions []Decision) {
+`, columns: []string{"m"}, bars: baselineDualBars(), check: func(t *testing.T, decisions []Decision) {
 			for i, decision := range decisions[:3] {
 				_, swapHeld := baselineTargetKeys(decision)[TargetKey("S4", dsl.MarketSwap)]
 				require.False(t, swapHeld, "第 %d 期 S4 的永续年龄不够，不能用永续的行入选", i)
@@ -700,7 +680,7 @@ portfolio:
 					markets[target.Market] = true
 				}
 			}
-			require.True(t, markets[dsl.MarketSpot] && markets[dsl.MarketSwap], "统一数据集的两个市场都应出现目标：%v", markets)
+			require.True(t, markets[dsl.MarketSpot] && markets[dsl.MarketSwap], "两个市场都应出现目标：%v", markets)
 		}},
 	)
 	return scenarios

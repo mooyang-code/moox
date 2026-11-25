@@ -1,6 +1,5 @@
 // 序列所属的市场：采集写行时生成的 series_tag 形如 `venue:binance|market:swap|source:swap_http`，
-// 按 `|` 分段，取 `market:` 段的值（小写），与后端 packages/seriesset 的 SeriesTagMarket 解析方式相同。
-// 后端把没有这一段的（例如 `venue:binance`、`default`）当作现货；管理台展示时不硬说成现货，只说没写市场。
+// 按 `|` 分段，取 `market:` 段的值（小写）。没有这一段的（例如 `venue:binance`、`default`）管理台不硬说成现货，只说没写市场。
 
 const MARKET_SEGMENT = "market:";
 
@@ -42,17 +41,4 @@ export function seriesTagDisplay(tag: string | undefined | null): string {
 export function seriesTagMarketText(tag: string | undefined | null): string {
   const market = seriesTagExplicitMarket(tag);
   return market ? marketLabel(market) : "序列标签里没有写市场";
-}
-
-/** 统一数据集：同一个数据集里同时放现货、永续两条序列，数据集的 market_type 是 multi。 */
-export const UNIFIED_MARKET_TYPE = "multi";
-
-export function isUnifiedMarketType(marketType: string | undefined | null): boolean {
-  return (marketType ?? "").trim().toLowerCase() === UNIFIED_MARKET_TYPE;
-}
-
-/** 数据集市场类型的展示文字：统一数据集写成“统一数据集（现货、永续）”。 */
-export function datasetMarketText(marketType: string | undefined | null): string {
-  if (isUnifiedMarketType(marketType)) return "统一数据集（现货、永续）";
-  return marketLabel(marketType);
 }

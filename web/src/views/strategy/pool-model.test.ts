@@ -230,7 +230,7 @@ function driftPeriod(pool: Record<string, unknown>, extra: Record<string, unknow
   return parsePoolPeriod({
     result_id: "r",
     session_id: "s",
-    bar_end_time: "2026-11-01T01:00:00Z",
+    bar_end_time: "1793494800000",
     status: "ok",
     summary_json: JSON.stringify({
       pool: { method: "drift", members: [{ id: "a", status: "ok", ratio: "0.3" }], ...pool },
@@ -376,7 +376,7 @@ describe("策略池的漂移与组合约束明细", () => {
   });
 
   it("parsePoolSummary 直接读已解析的摘要对象（回放的 decision 用它）", () => {
-    const source = { result_id: "x", session_id: "replay", bar_end_time: "2026-11-01T02:00:00Z", status: "skipped" };
+    const source = { result_id: "x", session_id: "replay", bar_end_time: "1793498400000", status: "skipped" };
     const parsed = parsePoolSummary({ pool: { method: "drift", members: [{ id: "a" }], drift }, limits: [] }, source)!;
     expect(parsed).toMatchObject({ resultId: "x", sessionId: "replay", resultStatus: "skipped", method: "drift" });
     expect(parsed.drift?.phase).toBe("drift");

@@ -1,4 +1,5 @@
 import { installStaleSpaceToastFilter } from "@/api/admin/stale-space";
+import { RequestError, reportError } from "@/api/http";
 import { installMessageDedupe } from "@/utils/message-dedupe";
 import { createApp } from "vue";
 import "@/style.css";
@@ -40,8 +41,19 @@ installStaleSpaceToastFilter();
 installMessageDedupe();
 const app = createApp(App);
 
+// 请求层不弹提示，页面自己处理失败；页面没有处理、一路抛到这里的请求失败在这里提示一次，不会无声无息。
+function reportUnhandledRequest(error: unknown): boolean {
+  if (!(error instanceof RequestError)) return false;
+  reportError(error);
+  return true;
+}
+window.addEventListener("unhandledrejection", event => {
+  if (reportUnhandledRequest(event.reason)) event.preventDefault();
+});
+
 // 全局错误处理
 app.config.errorHandler = (err, instance, info) => {
+  if (reportUnhandledRequest(err)) return;
   console.error("全局错误捕获:", err);
   console.error("错误实例:", instance);
   console.error("错误信息:", info);

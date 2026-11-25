@@ -27,8 +27,8 @@ message CollectionTask {
   google.protobuf.Struct collect_params = 7;
   optional bool enabled = 8;
   string creator = 9;
-  string create_time = 10;    // RFC3339
-  string modify_time = 11;    // RFC3339
+  int64 created_at = 10; // Unix 毫秒
+  int64 updated_at = 11; // Unix 毫秒
   string definition_hash = 12;
   string prepare_state = 13;  // pending/waiting_view/ready/error
   string last_error = 14;
@@ -41,7 +41,6 @@ message CollectionTask {
 // TaskResult 是采集任务唯一结果的用户可读摘要。
 message TaskResult {
   string result_name = 1;
-  string view_id = 2;
   string status = 3;
   string last_data_time = 4;
   string data_kind = 5;
@@ -88,7 +87,6 @@ message TaskResultInventoryEntry {
   string space_id = 1;
   string task_id = 2;
   string dataset_id = 3;
-  string view_id = 4;
   string frequency = 5;
   string market_id = 6;
   string calendar_id = 7;
@@ -97,7 +95,7 @@ message TaskResultInventoryEntry {
   string latest_completed_period = 10; // RFC3339; complete or degraded
   string latest_completed_status = 11;
   string view_last_data_time = 12; // RFC3339 when Storage provides one
-  string observed_at = 13; // RFC3339 metadata observation time
+  int64 observed_at = 13; // 元数据观察时刻，Unix 毫秒
   bool enabled = 14;
   bool ownership_verified = 15;
   string result_status = 16; // ready/pending/error
@@ -120,7 +118,8 @@ message GetTaskResultInventoryRsp {
   repeated TaskResultInventoryEntry entries = 2;
   common.PageResult page = 3;
   string snapshot_id = 4;
-  string observed_at = 5;
+  // Unix 毫秒。
+  int64 observed_at = 5;
 }
 
 message CreateTaskReq {
@@ -173,8 +172,8 @@ message DataTypeConfig {
   google.protobuf.Struct data_source_options = 5;
   int32 sort_order = 6;
   int32 version = 7;
-  string create_time = 8;          // RFC3339
-  string modify_time = 9;          // RFC3339
+  int64 created_at = 8; // Unix 毫秒
+  int64 updated_at = 9; // Unix 毫秒
 }
 
 // DataTypeFieldConfig 字段配置。
@@ -189,8 +188,8 @@ message DataTypeFieldConfig {
   google.protobuf.Struct field_options = 8;
   google.protobuf.Struct data_source_options = 9;
   int32 sort_order = 10;
-  string create_time = 11;         // RFC3339
-  string modify_time = 12;         // RFC3339
+  int64 created_at = 11; // Unix 毫秒
+  int64 updated_at = 12; // Unix 毫秒
 }
 
 // DataTypeConfigDetail 数据类型配置详情（含字段）。
@@ -198,16 +197,28 @@ message DataTypeConfigDetail {
   DataTypeConfig config = 1;
   repeated DataTypeFieldConfig fields = 2;
   repeated ExtraFieldOption extra_fields = 3;  // K 线任务可选的附加字段，默认都不选
+  // K 线任务可选的基础输出字段（结果数据集能建的列，按建列顺序）；附加字段另见 extra_fields。其他任务类型为空。
+  repeated OutputFieldOption base_output_fields = 4;
+}
+
+// OutputFieldOption 是 K 线任务可以选的一个基础输出字段。
+message OutputFieldOption {
+  string field_id = 1;      // 输出字段名
+  string display_name = 2;  // 中文显示名，取自 Collector 字段规格
+  string group = 3;         // 中文分组名（一级），取自 Collector 字段规格
+  string value_type = 4;    // 值类型：double、int、string、bool 或 time
 }
 
 // ExtraFieldOption 是 K 线任务可以在输出字段里选的一个附加字段，以及它适用的范围。
-// 显示名、分组以 Storage 字段目录为准。
+// 显示名、分组只在 Collector 的字段规格里登记。
 message ExtraFieldOption {
   string field_id = 1;              // 输出字段名
-  string market_id = 2;             // 适用的市场（空间）
-  string instrument_type = 3;       // 适用的品种，对应标签的 market_type
-  repeated string frequencies = 4;  // 适用的 K 线频率
-  string provider_id = 5;           // 来源提供方
+  string display_name = 2;          // 中文显示名
+  string group = 3;                 // 中文分组名（一级）
+  string market_id = 4;             // 适用的市场（空间）
+  string instrument_type = 5;       // 适用的品种，对应标签的 market_type
+  repeated string frequencies = 6;  // 适用的 K 线频率
+  string provider_id = 7;           // 来源提供方
 }
 
 message GetDataTypeConfigsReq {}
@@ -238,8 +249,8 @@ message ResampleJob {
   string start = 6;
   string end = 7;
   string next_bucket = 8;
-  // 最早开始时间，之前不开始。
-  string not_before = 9;
+  // 最早开始时刻（Unix 毫秒），之前不开始；0 表示不限。
+  int64 not_before = 9;
   // queued / running / syncing / succeeded / failed / cancelled
   string status = 10;
   uint32 total_buckets = 11;
@@ -248,8 +259,9 @@ message ResampleJob {
   uint64 skipped = 14;
   repeated string skipped_samples = 15;
   string last_error = 16;
-  string created_at = 17;
-  string updated_at = 18;
+  // Unix 毫秒。
+  int64 created_at = 17;
+  int64 updated_at = 18;
 }
 
 message SubmitKlineResampleJobReq {
@@ -327,8 +339,6 @@ message PreviewKlineResampleSourceRsp {
   repeated string allowed_frequencies = 10;
   // 目标频率不满足合成规则时的原因；为空表示通过或未给出目标频率。
   string validation_error = 11;
-  // 源是统一数据集（现货加永续，market_type 为 multi）时，各条源序列的 series_tag；此时 source_series_tag 为空。
-  repeated string source_series_tags = 12;
 }
 
 message SyncSubjectsReq {
@@ -366,12 +376,12 @@ message SyncSubjectsRsp {
 message TagSyncStatus {
   string space_id = 1;
   string tag_id = 2;
-  // 上次运行时间（RFC3339，UTC）与结果（success / failed）。
-  string last_run_at = 3;
+  // 上次运行时刻（Unix 毫秒）与结果（success / failed）。
+  int64 last_run_at = 3;
   string last_status = 4;
   string last_error = 5;
-  // 最近一次成功的时间；从未成功过为空。
-  string last_success_at = 6;
+  // 最近一次成功的时刻（Unix 毫秒）；从未成功过为 0。
+  int64 last_success_at = 6;
 }
 
 message ListTagSyncStatusReq {
@@ -419,8 +429,6 @@ message KlineGap {
   // to 是缺失区间的右开端点。
   string to = 5;
   int32 missing = 6;
-  // series_tag 只在统一数据集（同一数据集里有多个 series_tag）时有值：缺口属于（标的、该 tag）这一条序列，如永续。
-  string series_tag = 7;
 }
 
 message CheckKlineRsp {
@@ -462,14 +470,12 @@ message KlineBackfillChunk {
   int32 rows = 9;
   // dataset_name 是数据集的展示名（所属采集任务名），任务已删除时为空。
   string dataset_name = 10;
-  // series_tag 只在统一数据集时有值：该分块补的是这一条序列。
-  string series_tag = 11;
 }
 
 message KlineBackfillJob {
   string job_id = 1;
   string space_id = 2;
-  // source 取值 manual、auto；kind 取值 gap（按缺口）、force（整段重拉）、history（确认历史缺口）。
+  // source 取值 manual、auto；kind 取值 gap（按缺口）、force（整段重拉）。
   string source = 3;
   string kind = 4;
   // dataset_id、frequency、subject_id 为空表示全部。
@@ -480,8 +486,9 @@ message KlineBackfillJob {
   string to = 9;
   string status = 10;
   string last_error = 11;
-  string created_at = 12;
-  string updated_at = 13;
+  // Unix 毫秒。
+  int64 created_at = 12;
+  int64 updated_at = 13;
   int32 pending = 14;
   int32 running = 15;
   int32 succeeded = 16;
@@ -538,21 +545,7 @@ message RetryKlineBackfillRsp {
   int32 chunks = 2;
 }
 
-// ConfirmHistoryGaps 按最近一次历史扫描记下的缺口建立补采作业；补完后行情源没有的部分自动确认，不再报告。
-message ConfirmHistoryGapsReq {
-  string space_id = 1;
-  string dataset_id = 2;
-  string frequency = 3;
-}
-
-message ConfirmHistoryGapsRsp {
-  common.RetInfo ret_info = 1;
-  // job_id 为空表示没有待确认的历史缺口。
-  string job_id = 2;
-  int32 chunks = 3;
-}
-
-// ClearSourceAbsences 清掉一个数据集已确认的“行情源缺失”，并让历史缺口扫描重新进行。
+// ClearSourceAbsences 清掉一个数据集已确认的“行情源缺失”，之后的检查与补采重新判断这些 K 线。
 message ClearSourceAbsencesReq {
   string space_id = 1;
   string dataset_id = 2;
@@ -575,8 +568,9 @@ message FetchPlanSummary {
   int64 id = 1;
   string status = 2;
   string last_error = 3;
-  string created_at = 4;
-  string updated_at = 5;
+  // Unix 毫秒。
+  int64 created_at = 4;
+  int64 updated_at = 5;
 }
 
 // CollectorDatasetStatus 是一个正在采集的数据集（某个频率）的健康度。
@@ -595,11 +589,6 @@ message CollectorDatasetStatus {
   int32 gap_bars_24h = 8;
   int32 gap_subjects_24h = 9;
   int32 failed_chunks_24h = 10;
-  // history_* 是最近一次历史缺口扫描的结果（扣除已确认缺失）；没有扫描过时 history_scanned_at 为空。
-  string history_scanned_at = 11;
-  int32 history_gap_bars = 12;
-  int32 history_gap_subjects = 13;
-  string history_error = 14;
   // absent_bars 是已确认行情源没有的根数，不影响健康等级。
   int32 absent_bars = 15;
   // level 取值 ok、warn、error。
@@ -637,8 +626,8 @@ message CollectorFunctionStatus {
   bool cloud_exists = 10;
   bool cloud_timer_matches = 11;
   bool cloud_package_latest = 12;
-  // cloud_read_at 是读回时间（RFC3339），没有读回时为空。
-  string cloud_read_at = 13;
+  // cloud_read_at 是读回时刻（Unix 毫秒），没有读回时为 0。
+  int64 cloud_read_at = 13;
 }
 
 message GetCollectorStatusRsp {
@@ -654,7 +643,8 @@ message GetCollectorStatusRsp {
   repeated CollectorFunctionStatus functions = 7;
   int32 active_backfills = 8;
   int32 failed_backfills_24h = 9;
-  string generated_at = 10;
+  // Unix 毫秒。
+  int64 generated_at = 10;
   // stream 是该空间 collector-stream 实例的状态（心跳、连接、最近周期），没有实例时为空。
   StreamWorkerStatus stream = 11;
   // ingest_modes 是各启用的 K 线任务的采集方式。
@@ -680,8 +670,9 @@ message HistorySeed {
   int32 failed_chunks = 9;
   // eta_seconds 按最近 10 分钟的速率估计剩余时间，不能估计时为 0。
   int64 eta_seconds = 10;
-  string started_at = 11;
-  string finished_at = 12;
+  // started_at、finished_at 是补齐开始与结束的时刻，Unix 毫秒；没结束时 finished_at 为 0。
+  int64 started_at = 11;
+  int64 finished_at = 12;
   // note 是补齐的说明，例如退回本地执行端的原因。
   string note = 13;
 }
@@ -718,7 +709,7 @@ message CollectorUnplannedFunction {
 
 // ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
 // “快照未登记”，下一轮对账会生成新计划、重新登记序列快照并选新的生效周期；同时清掉该空间的补采作业、
-// 自动补采水位与历史扫描记录。此后数据集的时间线（检查、自动补采与历史扫描的范围）从新的生效周期开始，
+// 自动补采水位。此后数据集的时间线（检查与自动补采的范围）从新的生效周期开始，
 // 清库前的计划段不再参与。
 message ReregisterFetchPlanReq {
   string space_id = 1;
@@ -809,9 +800,9 @@ message SubjectExclusion {
   string reason = 4;
   // operator 是设置人（moox-cli 填本机用户与主机，旁路程序填自己的名字）。
   string operator = 5;
-  // created_at、expires_at 为 RFC3339；expires_at 为空表示不过期。
-  string created_at = 6;
-  string expires_at = 7;
+  // created_at、expires_at 为 Unix 毫秒；expires_at 为 0 表示不过期。
+  int64 created_at = 6;
+  int64 expires_at = 7;
 }
 
 // SetSubjectExclusions 按空间加入一批排除；同一标的重复设置时更新原因与到期时间。
@@ -821,8 +812,8 @@ message SetSubjectExclusionsReq {
   string market_type = 3;
   string reason = 4;
   string operator = 5;
-  // expires_at 为 RFC3339，空表示不过期；必须晚于当前时间。
-  string expires_at = 6;
+  // expires_at 为 Unix 毫秒，0 表示不过期；必须晚于当前时间。
+  int64 expires_at = 6;
 }
 
 message SetSubjectExclusionsRsp {
@@ -858,7 +849,8 @@ message StreamConnStatus {
   string market = 1;
   string frequency = 2;
   int32 streams = 3;
-  string last_message_at = 4;
+  // Unix 毫秒，没有收到过消息为 0。
+  int64 last_message_at = 4;
   int64 reconnects = 5;
   bool subscribed = 6;
   string endpoint = 7;
@@ -887,9 +879,9 @@ message StreamPeriodStat {
 message StreamWorkerStatus {
   string instance_id = 1;
   bool online = 2;
-  string heartbeat_at = 3;
+  // Unix 毫秒。
+  int64 heartbeat_at = 3;
   int64 applied_plan_id = 4;
-  string applied_stage = 5;
   repeated StreamConnStatus conns = 6;
   repeated StreamPeriodStat recent = 7;
   // clock_offset_ms 是实例时钟减 Collector 时钟的估计值。
@@ -900,20 +892,20 @@ message StreamWorkerStatus {
 message StreamHeartbeatReq {
   string space_id = 1;
   string instance_id = 2;
-  // applied_plan_id 与 applied_stage 是实例已应用的计划记录与阶段（transition、final）。
+  // applied_plan_id 是实例已应用的计划记录。
   int64 applied_plan_id = 3;
-  string applied_stage = 4;
   repeated StreamConnStatus conns = 5;
-  int64 sent_at_ms = 6;
+  // Unix 毫秒。
+  int64 sent_at = 6;
   string version = 7;
 }
 
 message StreamHeartbeatRsp {
   common.RetInfo ret_info = 1;
-  // plan_id 与 stage 是 Collector 当前要求推送与本地执行端应用的计划版本。
+  // plan_id 是 Collector 当前要求推送与本地执行端应用的计划记录。
   int64 plan_id = 2;
-  string stage = 3;
-  int64 server_time_ms = 4;
+  // Unix 毫秒。
+  int64 server_time = 4;
   // commit_reserve_ms 是周期闸门当前的提交预留：配置变化不改计划版本，随心跳下发，已有闸门从下一个周期起使用。
   int32 commit_reserve_ms = 5;
 }
@@ -935,7 +927,6 @@ message PullStreamPlanReq {
 message PullStreamPlanRsp {
   common.RetInfo ret_info = 1;
   int64 plan_id = 2;
-  string stage = 3;
   repeated StreamPlanItem items = 4;
   // commit_reserve_ms 是周期闸门的提交预留：最晚开始提交 = 收盘 + 截止 − 预留。
   int32 commit_reserve_ms = 5;
@@ -988,11 +979,11 @@ service MarketFetchExecutor {
 message RegisterDelistNoticeReq {
   // exchange 为小写交易所代码：binance、okx。
   string exchange = 1;
-  // market 为 SPOT 或 SWAP。
+  // market 为 spot（现货）或 swap（永续）。
   string market = 2;
   string exchange_symbol = 3;
-  // delist_at_ms 是下架时间（Unix 毫秒）。
-  int64 delist_at_ms = 4;
+  // delist_at 是下架时刻（Unix 毫秒）。
+  int64 delist_at = 4;
   // paper_only 为真时事件的范围是 PAPER_ONLY：只处理模拟盘，用于演练。
   bool paper_only = 5;
 }
@@ -1035,7 +1026,6 @@ service CollectMgr {
   rpc ListKlineBackfills(ListKlineBackfillsReq) returns (ListKlineBackfillsRsp);
   rpc CancelKlineBackfill(CancelKlineBackfillReq) returns (CancelKlineBackfillRsp);
   rpc RetryKlineBackfill(RetryKlineBackfillReq) returns (RetryKlineBackfillRsp);
-  rpc ConfirmHistoryGaps(ConfirmHistoryGapsReq) returns (ConfirmHistoryGapsRsp);
   rpc ClearSourceAbsences(ClearSourceAbsencesReq) returns (ClearSourceAbsencesRsp);
 
   // ----- 运行状态与采集计划 -----
@@ -1096,8 +1086,8 @@ message CloudAccount {
   string app_id = 5;
   string cos_region = 6;
   string cos_bucket = 7;
-  string create_time = 8; // RFC3339
-  string modify_time = 9; // RFC3339
+  int64 created_at = 8; // Unix 毫秒
+  int64 updated_at = 9; // Unix 毫秒
 }
 
 message ListCloudAccountsReq {}
@@ -1107,7 +1097,7 @@ message ListCloudAccountsRsp {
   repeated CloudAccount accounts = 2;
 }
 
-// CreateCloudAccountReq 与 UpdateCloudAccountReq 都是整行写入；create_time、modify_time 不用填。
+// CreateCloudAccountReq 与 UpdateCloudAccountReq 都是整行写入；created_at、updated_at 不用填。
 message CreateCloudAccountReq {
   CloudAccount account = 1;
 }
@@ -1166,8 +1156,8 @@ message FunctionPackage {
   string cos_bucket = 10;
   string cos_path = 11;
   string status = 12;
-  string create_time = 13; // RFC3339
-  string modify_time = 14; // RFC3339
+  int64 created_at = 13; // Unix 毫秒
+  int64 updated_at = 14; // Unix 毫秒
 }
 
 // InitPackageUploadReq 登记一个待上传的代码包并返回 COS 预签名上传地址；filename 为空时用“包名-版本.zip”。
@@ -1184,7 +1174,7 @@ message InitPackageUploadRsp {
   common.RetInfo ret_info = 1;
   FunctionPackage package = 2;
   string upload_url = 3;
-  string expires_at = 4; // RFC3339
+  int64 expires_at = 4; // Unix 毫秒
 }
 
 // CompletePackageUploadReq 在上传完成后核对 COS 对象的大小与 MD5，通过后代码包变成可用。
@@ -1249,7 +1239,7 @@ message CloudFunction {
   string timer_cron = 14;
   bool timer_enabled = 15;
   string timer_available_status = 16;
-  string read_at = 17; // RFC3339
+  int64 read_at = 17; // Unix 毫秒
   string read_error = 18;
   // 读回与期望的比对。
   bool timer_matches = 19;

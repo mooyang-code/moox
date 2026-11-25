@@ -14,6 +14,7 @@ import (
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -85,9 +86,11 @@ type Service struct {
 	DelistAttemptInterval time.Duration
 }
 
+// ManualOrderCommand 是一笔人工下单：给 LogicalAccountID 组合里的执行账户 TradingAccountID 下单。
 type ManualOrderCommand struct {
 	SpaceID          string
 	ActionID         string
+	LogicalAccountID string
 	TradingAccountID string
 	ClientOrderID    string
 	InstrumentID     string
@@ -115,6 +118,7 @@ type OperatorAccountError struct {
 
 type manualOrderRequest struct {
 	DeadlineAt       int64   `json:"deadline_at,omitempty"`
+	LogicalAccountID string  `json:"logical_account_id"`
 	TradingAccountID string  `json:"trading_account_id"`
 	ClientOrderID    string  `json:"client_order_id"`
 	InstrumentID     string  `json:"instrument_id"`
@@ -126,7 +130,9 @@ type manualOrderRequest struct {
 	LimitPrice       *string `json:"limit_price,omitempty"`
 }
 
+// manualOrderActionResult 是人工下单动作的进度与结果。Takeover 在建动作时按组合的控制模式定下（见 PlaceOrder），之后不再改。
 type manualOrderActionResult struct {
+	Takeover   bool                   `json:"takeover,omitempty"`
 	ErrorCode  string                 `json:"error_code,omitempty"`
 	DeadlineAt int64                  `json:"deadline_at,omitempty"`
 	OrderID    string                 `json:"order_id,omitempty"`
@@ -188,16 +194,29 @@ func manualPersistedError(message, code string) error {
 	return manualFailureError{message: message, cause: recordedFailure{message: message}}
 }
 
-func (s *Service) PlaceManualOrder(
+// PlaceOrder 是人工下单的唯一入口，动作类型 MANUAL_ORDER。走哪条流程在第一次受理时按组合的控制模式定下，
+// 记进动作结果（takeover），同一个 action_id 重试、后台恢复都沿用它，不因为期间控制模式变了换一条：
+//   - 接管（策略驱动的组合）：受理时暂停组合，下单前撤掉活动的 TARGET 订单，RPC 里同步提交到交易所，完成后组合保持暂停；
+//   - 直接下单（自主下单的组合，MANUAL）：不暂停、不撤别的订单，本地受理即返回，交易所提交由后台工作线程完成。
+//
+// 两条流程共同的前提：执行账户是 command.LogicalAccountID 的启用成员（页面是在这个组合里发起的，不能暂停到别的组合上）；
+// 新建动作时执行账户已启用、当前在交易时段内。
+func (s *Service) PlaceOrder(ctx context.Context, command ManualOrderCommand) (ManualOrderResult, error) {
+	return s.placeOrder(ctx, command, false)
+}
+
+// placeOrder 是 PlaceOrder 的实现。resume 为真表示后台工作线程在恢复运行中的动作：直接下单的流程也在这里把子单推进到交易所。
+func (s *Service) placeOrder(
 	ctx context.Context,
 	command ManualOrderCommand,
+	resume bool,
 ) (result ManualOrderResult, retErr error) {
-	// Both RPC calls and worker recovery remain owned by their caller, with a
-	// finite attempt budget. Durable RUNNING actions survive a canceled attempt.
+	// RPC 和后台恢复都只给有限的时长；运行中的动作落了库，这一次超时不影响下一次接着做。
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var knownAction store.OperatorActionRecord
 	var knownOrderID string
+	takeover := false
 	defer func() {
 		if retErr == nil || knownAction.ActionID == "" {
 			return
@@ -212,197 +231,123 @@ func (s *Service) PlaceManualOrder(
 				result.Order.OrderID = knownOrderID
 			}
 		}
-		if result.Action.Status == string(operatordomain.StatusRunning) && allSubmissionErrors(retErr, func(err error) bool {
+		// 接管流程是同步提交：只是暂时没做完（行情、账户就绪等）的，动作仍在运行、由后台接着做，对调用方算受理成功。
+		// 直接下单本来就由后台提交，原样返回这次的原因。
+		if takeover && result.Action.Status == string(operatordomain.StatusRunning) && allSubmissionErrors(retErr, func(err error) bool {
 			_, deferred := err.(submissionDeferredError)
 			return deferred
 		}) {
 			retErr = nil
 		}
 	}()
-	if err := s.validate(); err != nil {
-		return ManualOrderResult{}, err
+	if s == nil || s.Store == nil || s.Orders == nil || s.Prices == nil {
+		return ManualOrderResult{}, ErrServiceConfig
 	}
 	requestJSON, err := manualOrderRequestJSON(command)
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	var runningAction *store.OperatorActionRecord
-	if existing, getErr := s.Store.GetOperatorAction(
-		ctx, command.SpaceID, command.ActionID,
-	); getErr == nil {
-		expected := store.OperatorActionRecord{
-			SpaceID: command.SpaceID, ActionID: command.ActionID,
-			LogicalAccountID: existing.LogicalAccountID,
-			ActionType:       string(operatordomain.ActionManualOrder), Reason: strings.TrimSpace(command.Reason),
-			RequestJSON: requestJSON,
-		}
-		current, _, matchErr := s.existingAction(ctx, expected)
-		if matchErr != nil {
-			return ManualOrderResult{}, matchErr
-		}
-		if current.Status != string(operatordomain.StatusRunning) {
-			return s.loadManualOrderResult(ctx, current)
-		}
-		runningAction = &current
-		knownAction = current
-	} else if !errors.Is(getErr, gorm.ErrRecordNotFound) {
-		return ManualOrderResult{}, getErr
-	}
-	if runningAction != nil {
-		unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, command.SpaceID, runningAction.LogicalAccountID)
-		if lockErr != nil {
-			current, err := s.deferActionLock(ctx, *runningAction, lockErr)
-			return submissionIdentity(current), err
-		}
-		current, getErr := s.Store.GetOperatorAction(ctx, command.SpaceID, command.ActionID)
-		if getErr != nil {
-			unlock()
-			return ManualOrderResult{}, getErr
-		}
-		result, handled, recoverErr := s.recoverManualChild(ctx, current, command)
-		unlock()
-		if handled || recoverErr != nil {
-			return result, recoverErr
-		}
-	}
-	if runningAction == nil {
-		if err := s.checkManualSession(ctx, command.TradingAccountID); err != nil {
-			return ManualOrderResult{}, err
-		}
-	}
-	logicalAccount, unlock, err := s.lockCurrentLogicalAccount(
-		ctx, command.SpaceID, command.TradingAccountID,
-	)
-	if err != nil {
-		if runningAction != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) && !errors.Is(err, ErrInvalidCommand) && !errors.Is(err, store.ErrConflict) {
-				return ManualOrderResult{}, err
-			}
-			return s.failManualAction(
-				ctx,
-				*runningAction,
-				manualFailureError{message: manualNotMemberText, cause: err},
-				[]OperatorAccountError{{
-					TradingAccountID: command.TradingAccountID,
-					Error:            manualNotMemberText,
-				}},
-			)
-		}
-		return ManualOrderResult{}, err
-	}
-	if runningAction != nil &&
-		runningAction.LogicalAccountID != logicalAccount.LogicalAccountID {
-		unlock()
-		return s.failManualAction(
-			ctx,
-			*runningAction,
-			ErrInvalidCommand,
-			[]OperatorAccountError{{
-				TradingAccountID: command.TradingAccountID,
-				Error:            "执行账户已移到别的组合，人工单没有发出",
-			}},
-		)
-	}
-	defer unlock()
-
-	expectedAction := store.OperatorActionRecord{
+	expected := store.OperatorActionRecord{
 		SpaceID: command.SpaceID, ActionID: command.ActionID,
-		LogicalAccountID: logicalAccount.LogicalAccountID,
+		LogicalAccountID: command.LogicalAccountID,
 		ActionType:       string(operatordomain.ActionManualOrder), Reason: strings.TrimSpace(command.Reason),
 		RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 	}
-	existing, found, err := s.existingAction(ctx, expectedAction)
+	existing, found, err := s.existingAction(ctx, expected)
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	if found && existing.Status != string(operatordomain.StatusRunning) {
-		return s.loadManualOrderResult(ctx, existing)
+	if found {
+		if existing.Status != string(operatordomain.StatusRunning) {
+			return s.loadManualOrderResult(ctx, existing)
+		}
+		knownAction = existing
+		takeover = recordedTakeover(existing)
+	} else if err := s.checkManualSession(ctx, command.TradingAccountID); err != nil {
+		return ManualOrderResult{}, err
 	}
-	var action store.OperatorActionRecord
-	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			command.SpaceID,
-			logicalAccount.LogicalAccountID,
-			"PAUSED",
-			strings.TrimSpace(command.Reason),
-		); err != nil {
-			return err
+	unlock, err := s.Store.LockLogicalAccountContext(ctx, command.SpaceID, command.LogicalAccountID)
+	if err != nil {
+		if found {
+			current, diagnosticErr := s.deferActionLock(ctx, knownAction, err)
+			return submissionIdentity(current), diagnosticErr
 		}
-		var ensureErr error
-		expectedAction.CreatedAt = time.Now().UTC()
-		if s.Now != nil {
-			expectedAction.CreatedAt = s.Now().UTC()
-		}
-		deadline := command.DeadlineAt
-		if deadline == 0 {
-			deadline = s.manualDeadlineFrom(expectedAction.CreatedAt)
-		}
-		progress, _ := json.Marshal(manualOrderActionResult{DeadlineAt: deadline})
-		raw := string(progress)
-		expectedAction.ResultJSON = &raw
-		action, _, ensureErr = tx.EnsureOperatorAction(expectedAction)
-		return ensureErr
-	})
+		return ManualOrderResult{}, err
+	}
+	defer unlock()
+	// 拿到锁之后重读：等锁期间别的调用可能已经建了、做完了这个动作。
+	action, found, err := s.existingAction(ctx, expected)
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	knownAction = action
-	if result, handled, recoverErr := s.recoverManualChild(ctx, action, command); handled || recoverErr != nil {
-		return result, recoverErr
+	if found {
+		knownAction = action
+		progress, progressErr := s.manualProgress(ctx, &action)
+		if progressErr != nil {
+			return ManualOrderResult{}, progressErr
+		}
+		takeover = progress.Takeover
+		// 先找回已经落库的子单，再做撤单、取行情这些新工作；Place 按客户端单号幂等，比对完整的下单参数。
+		if result, handled, err := s.recoverChild(ctx, action, command, takeover || resume); handled || err != nil {
+			return result, err
+		}
 	}
-	action, err = s.Store.GetOperatorAction(ctx, action.SpaceID, action.ActionID)
-	if err != nil {
+	logical, member, err := s.Store.FindLogicalAccountByTradingAccount(ctx, command.SpaceID, command.TradingAccountID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return ManualOrderResult{}, err
 	}
-	accountErrors := s.cancelLogicalAccountOrders(
-		ctx,
-		command.SpaceID,
-		logicalAccount.LogicalAccountID,
-		command.ActionID,
-		true,
-	)
-	if len(accountErrors) > 0 {
-		cause := errors.Join(accountErrorsAsErrors(accountErrors)...)
-		result, saveErr := s.submissionDiagnostic(ctx, action, cause, accountErrors...)
-		if saveErr != nil {
-			return result, errors.Join(cause, saveErr)
+	if membershipErr := manualMembershipError(err, logical, member, command.LogicalAccountID, found, takeover); membershipErr != nil {
+		if found {
+			return s.failManualAction(ctx, action, membershipErr, []OperatorAccountError{{
+				TradingAccountID: command.TradingAccountID, Error: membershipErr.Error(),
+			}})
 		}
-		if !submissionAccountError(cause) {
-			return result, cause
-		}
-		return result, nil
+		return ManualOrderResult{}, membershipErr
 	}
-	instrument, err := s.Store.GetInstrumentByIDForAccount(
-		ctx, logicalAccount.SpaceID, command.TradingAccountID, command.InstrumentID,
-	)
+	if !found {
+		takeover = logical.ControlMode != "MANUAL"
+		if action, err = s.createManualAction(ctx, expected, command, takeover); err != nil {
+			return ManualOrderResult{}, err
+		}
+		knownAction = action
+		// 建动作与上面的崩溃缺口：上一次可能已经建了子单但没来得及记进动作。
+		if result, handled, err := s.recoverChild(ctx, action, command, takeover || resume); handled || err != nil {
+			return result, err
+		}
+	}
+	if takeover {
+		if s.Syncer == nil {
+			return ManualOrderResult{Action: action}, ErrServiceConfig
+		}
+		accountErrors := s.cancelLogicalAccountOrders(ctx, command.SpaceID, command.LogicalAccountID, command.ActionID, true)
+		if len(accountErrors) > 0 {
+			cause := errors.Join(accountErrorsAsErrors(accountErrors)...)
+			result, saveErr := s.submissionDiagnostic(ctx, action, cause, accountErrors...)
+			if saveErr != nil {
+				return result, errors.Join(cause, saveErr)
+			}
+			if !submissionAccountError(cause) {
+				return result, cause
+			}
+			return result, nil
+		}
+	}
+	instrument, err := s.Store.GetInstrumentByIDForAccount(ctx, command.SpaceID, command.TradingAccountID, command.InstrumentID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			cause := fmt.Errorf("%w: 执行账户没有标的 %s", ErrInvalidCommand, command.InstrumentID)
-			return s.failManualAction(ctx, action, cause, nil)
+			return s.failManualAction(ctx, action, fmt.Errorf("%w: 执行账户没有标的 %s", ErrInvalidCommand, command.InstrumentID), nil)
 		}
 		return ManualOrderResult{Action: action}, err
 	}
-	quote, err := s.Prices.LatestPrice(
-		ctx, command.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
-	)
+	quote, err := s.Prices.LatestPrice(ctx, command.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 	if err != nil {
 		return s.deferSubmission(ctx, action, err)
 	}
-	spec := orderdomain.OrderSpec{
-		ClientOrderSpec: orderdomain.ClientOrderSpec{
-			TradingAccountID: command.TradingAccountID,
-			ClientOrderID:    command.ClientOrderID, InstrumentID: command.InstrumentID,
-			Type: command.Type, FillPolicy: command.FillPolicy,
-			Side: command.Side, PositionSide: command.PositionSide,
-			Quantity: command.Quantity, LimitPrice: command.LimitPrice,
-		},
-		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
-		Owner: orderdomain.OrderOwner{
-			Type: orderdomain.OwnerOperator, OwnerID: command.ActionID,
-			LogicalAccountID: logicalAccount.LogicalAccountID,
-		},
-	}
-	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)
+	placed, err := s.Orders.Place(ctx, command.SpaceID, orderdomain.OrderSpec{
+		ClientOrderSpec: command.clientSpec(),
+		ReferencePrice:  quote.Price, ReferencePriceAt: quote.UpdatedAt,
+		Owner: command.owner(),
+	})
 	if err != nil {
 		if submissionBusinessError(err) && manualErrorCode(err) != "" {
 			return s.failManualAction(ctx, action, err, nil)
@@ -415,24 +360,127 @@ func (s *Service) PlaceManualOrder(
 		return ManualOrderResult{}, err
 	}
 	progress.OrderID = string(placed.ID)
+	previousAction := action
 	if err := s.saveManualProgress(ctx, &action, progress); err != nil {
-		return ManualOrderResult{}, err
+		result := submissionIdentity(previousAction)
+		result.Order.OrderID = string(placed.ID)
+		return result, err
 	}
-	return s.advanceManualChild(ctx, action, progress)
+	if takeover || resume {
+		return s.advanceManualChild(ctx, action, progress)
+	}
+	return s.loadManualOrderResult(ctx, action)
+}
+
+// manualMembershipError 检查执行账户还能不能在这个组合里人工下单（调用方持有组合锁，成员关系不会再变）。
+// 直接下单的动作还要求组合仍是自主下单：组合改回策略驱动后再不暂停就下单，会和策略的订单打架。
+func manualMembershipError(
+	lookupErr error,
+	logical store.LogicalAccountRecord,
+	member store.LogicalAccountMemberRecord,
+	logicalAccountID string,
+	found, takeover bool,
+) error {
+	switch {
+	case lookupErr != nil || !member.Enabled:
+		if found {
+			return fmt.Errorf("%w: %s", ErrInvalidCommand, manualNotMemberText)
+		}
+		return fmt.Errorf("%w: 执行账户不是这个组合的启用成员", ErrInvalidCommand)
+	case logical.LogicalAccountID != logicalAccountID:
+		if found {
+			return fmt.Errorf("%w: 执行账户已移到别的组合，人工单没有发出", ErrInvalidCommand)
+		}
+		return fmt.Errorf("%w: 执行账户不在这个组合里", ErrInvalidCommand)
+	case found && !takeover && logical.ControlMode != "MANUAL":
+		return fmt.Errorf("%w: 组合已改成策略驱动，人工单没有发出", ErrInvalidCommand)
+	}
+	return nil
+}
+
+// createManualAction 建动作：执行账户必须已启用；接管流程在同一个事务里暂停组合。动作结果先记下提交期限和流程。
+func (s *Service) createManualAction(
+	ctx context.Context,
+	expected store.OperatorActionRecord,
+	command ManualOrderCommand,
+	takeover bool,
+) (store.OperatorActionRecord, error) {
+	account, err := s.Store.GetTradingAccount(ctx, command.SpaceID, command.TradingAccountID)
+	if err != nil {
+		return store.OperatorActionRecord{}, err
+	}
+	if account.Status != "ENABLED" {
+		return store.OperatorActionRecord{}, fmt.Errorf("%w: %w", ErrInvalidCommand, tradingaccount.ErrAccountNotExecutable)
+	}
+	if takeover && s.Syncer == nil {
+		return store.OperatorActionRecord{}, ErrServiceConfig
+	}
+	expected.CreatedAt = time.Now().UTC()
+	if s.Now != nil {
+		expected.CreatedAt = s.Now().UTC()
+	}
+	deadline := command.DeadlineAt
+	if deadline == 0 {
+		deadline = s.manualDeadlineFrom(expected.CreatedAt)
+	}
+	progress, err := json.Marshal(manualOrderActionResult{DeadlineAt: deadline, Takeover: takeover})
+	if err != nil {
+		return store.OperatorActionRecord{}, err
+	}
+	raw := string(progress)
+	expected.ResultJSON = &raw
+	var action store.OperatorActionRecord
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if takeover {
+			if err := tx.SetLogicalAccountAutomation(command.SpaceID, command.LogicalAccountID, "PAUSED", strings.TrimSpace(command.Reason)); err != nil {
+				return err
+			}
+		}
+		var ensureErr error
+		action, _, ensureErr = tx.EnsureOperatorAction(expected)
+		return ensureErr
+	})
+	return action, err
+}
+
+// recordedTakeover 读动作结果里落库的流程；结果读不出来时按直接下单算，拿到锁之后 manualProgress 会照常报错。
+func recordedTakeover(action store.OperatorActionRecord) bool {
+	var progress manualOrderActionResult
+	if action.ResultJSON != nil {
+		_ = json.Unmarshal([]byte(*action.ResultJSON), &progress)
+	}
+	return progress.Takeover
+}
+
+func (c ManualOrderCommand) clientSpec() orderdomain.ClientOrderSpec {
+	return orderdomain.ClientOrderSpec{
+		TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID,
+		Type: c.Type, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide,
+		Quantity: c.Quantity, LimitPrice: c.LimitPrice,
+	}
+}
+
+func (c ManualOrderCommand) owner() orderdomain.OrderOwner {
+	return orderdomain.OrderOwner{Type: orderdomain.OwnerOperator, OwnerID: c.ActionID, LogicalAccountID: c.LogicalAccountID}
 }
 
 func (s *Service) ResumeOperatorAction(
 	ctx context.Context,
 	action store.OperatorActionRecord,
 ) error {
-	if action.ActionType == string(operatordomain.ActionSubmitOrder) && action.Status == string(operatordomain.StatusRunning) {
-		return s.resumeSubmission(ctx, action)
+	if action.Status != string(operatordomain.StatusRunning) {
+		return nil
+	}
+	if action.ActionType == string(operatordomain.ActionManualOrder) {
+		command, err := manualOrderCommand(action)
+		if err != nil {
+			return err
+		}
+		result, err := s.placeOrder(ctx, command, true)
+		return submissionRecoveryError(result, err)
 	}
 	if err := s.validate(); err != nil {
 		return err
-	}
-	if action.Status != string(operatordomain.StatusRunning) {
-		return nil
 	}
 	switch action.ActionType {
 	case string(operatordomain.ActionFlatten), string(operatordomain.ActionReduce), string(operatordomain.ActionDelistFlatten):
@@ -442,13 +490,6 @@ func (s *Service) ResumeOperatorAction(
 		}
 		result, err := s.FlattenLogicalAccount(ctx, command)
 		return submissionRecoveryError(ManualOrderResult{Action: result.Action}, err)
-	case string(operatordomain.ActionManualOrder):
-		command, err := manualOrderCommand(action)
-		if err != nil {
-			return err
-		}
-		result, err := s.PlaceManualOrder(ctx, command)
-		return submissionRecoveryError(result, err)
 	case string(operatordomain.ActionCancelOrder):
 		var request cancelOrderRequest
 		if err := json.Unmarshal([]byte(action.RequestJSON), &request); err != nil {
@@ -460,7 +501,7 @@ func (s *Service) ResumeOperatorAction(
 		})
 		return submissionRecoveryError(ManualOrderResult{Action: result.Action}, err)
 	default:
-		return fmt.Errorf("%w: unsupported action type %q", ErrInvalidCommand, action.ActionType)
+		return fmt.Errorf("%w: 不支持的操作类型 %q", ErrInvalidCommand, action.ActionType)
 	}
 }
 
@@ -628,7 +669,7 @@ func (s *Service) recoverChild(ctx context.Context, action store.OperatorActionR
 // across a failed idempotency lookup or action-link write.
 func matchesRecoveryChild(child store.OrderRecord, action store.OperatorActionRecord, command ManualOrderCommand) bool {
 	if child.SpaceID != action.SpaceID || child.TradingAccountID != command.TradingAccountID || child.ClientOrderID != command.ClientOrderID ||
-		child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != action.ActionID || child.LogicalAccountID != action.LogicalAccountID || child.RunnerID != "" ||
+		child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != action.ActionID || child.LogicalAccountID != action.LogicalAccountID || child.InstanceID != "" ||
 		child.InstrumentID != command.InstrumentID || child.OrderType != string(command.Type) || child.TimeInForce != string(command.FillPolicy) ||
 		child.Side != string(command.Side) || child.PositionSide != string(command.PositionSide) {
 		return false
@@ -674,7 +715,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 		if membershipErr != nil && !errors.Is(membershipErr, gorm.ErrRecordNotFound) {
 			return ManualOrderResult{}, membershipErr
 		}
-		if membershipErr != nil || !member.Enabled || owner.LogicalAccountID != action.LogicalAccountID || (action.ActionType == string(operatordomain.ActionSubmitOrder) && owner.ControlMode != "MANUAL") {
+		if membershipErr != nil || !member.Enabled || owner.LogicalAccountID != action.LogicalAccountID || (!progress.Takeover && owner.ControlMode != "MANUAL") {
 			if _, discardErr := s.Orders.DiscardPending(ctx, action.SpaceID, child.OrderID); discardErr != nil {
 				return s.submissionOrderError(ctx, action, discardErr)
 			}
@@ -770,7 +811,7 @@ func (s *Service) deferManualAction(ctx context.Context, action store.OperatorAc
 }
 
 func manualOrderRequestJSON(command ManualOrderCommand) (string, error) {
-	if blank(command.SpaceID) || blank(command.ActionID) ||
+	if blank(command.SpaceID) || blank(command.ActionID) || blank(command.LogicalAccountID) ||
 		blank(command.TradingAccountID) || blank(command.ClientOrderID) ||
 		blank(command.InstrumentID) || blank(command.Reason) ||
 		(command.Type != exchange.OrderTypeMarket &&
@@ -786,6 +827,7 @@ func manualOrderRequestJSON(command ManualOrderCommand) (string, error) {
 	}
 	data, err := json.Marshal(manualOrderRequest{
 		DeadlineAt:       command.DeadlineAt,
+		LogicalAccountID: command.LogicalAccountID,
 		TradingAccountID: command.TradingAccountID,
 		ClientOrderID:    command.ClientOrderID, InstrumentID: command.InstrumentID,
 		OrderType: string(command.Type), FillPolicy: string(command.FillPolicy),
@@ -817,6 +859,7 @@ func manualOrderCommand(
 	return ManualOrderCommand{
 		DeadlineAt: request.DeadlineAt,
 		SpaceID:    action.SpaceID, ActionID: action.ActionID,
+		LogicalAccountID: request.LogicalAccountID,
 		TradingAccountID: request.TradingAccountID,
 		ClientOrderID:    request.ClientOrderID, InstrumentID: request.InstrumentID,
 		Type:         exchange.OrderType(request.OrderType),
@@ -904,10 +947,7 @@ func (s *Service) failManualAction(
 		action.ResultJSON = &raw
 	}
 	if err := s.updateAction(ctx, action); err != nil {
-		if action.ActionType == string(operatordomain.ActionSubmitOrder) {
-			return submissionIdentity(previousAction), errors.Join(cause, err)
-		}
-		return submissionIdentity(previousAction), err
+		return submissionIdentity(previousAction), errors.Join(cause, err)
 	}
 	return s.loadManualOrderResult(ctx, action)
 }
@@ -1051,41 +1091,6 @@ func (s *Service) existingAction(
 		return store.OperatorActionRecord{}, false, store.ErrConflict
 	}
 	return current, true, nil
-}
-
-func (s *Service) lockCurrentLogicalAccount(
-	ctx context.Context,
-	spaceID string,
-	tradingAccountID string,
-) (store.LogicalAccountRecord, func(), error) {
-	for attempts := 0; attempts < 4; attempts++ {
-		current, member, err := s.Store.FindLogicalAccountByTradingAccount(
-			ctx, spaceID, tradingAccountID,
-		)
-		if err != nil {
-			return store.LogicalAccountRecord{}, nil, err
-		}
-		if !member.Enabled {
-			return store.LogicalAccountRecord{}, nil, ErrInvalidCommand
-		}
-		unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, current.LogicalAccountID)
-		if lockErr != nil {
-			return store.LogicalAccountRecord{}, nil, lockErr
-		}
-		confirmed, confirmedMember, err := s.Store.FindLogicalAccountByTradingAccount(
-			ctx, spaceID, tradingAccountID,
-		)
-		if err == nil && confirmedMember.Enabled &&
-			confirmed.LogicalAccountID == current.LogicalAccountID {
-			return confirmed, unlock, nil
-		}
-		unlock()
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return store.LogicalAccountRecord{}, nil, err
-		}
-	}
-	return store.LogicalAccountRecord{}, nil,
-		fmt.Errorf("%w: 执行账户的组合成员关系刚变过", store.ErrConflict)
 }
 
 func appendAccountErrors(

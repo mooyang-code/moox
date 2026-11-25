@@ -43,7 +43,7 @@ func TestListAccountLedgerMergesLocalTransfers(t *testing.T) {
 	tradeStore := openRPCStore(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "dual-1", Name: "dual", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"},
+			SpaceID: "space-1", TradingAccountID: "dual-1", Name: "dual", Exchange: "binance", Markets: []string{"spot", "swap"},
 			ExecutionMode: "LIVE", AccountMode: "BINANCE_STANDARD", Environment: "PRODUCTION", CredentialSecretID: "s", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED", LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "1"},
 		}); err != nil {
@@ -62,13 +62,13 @@ func TestListAccountLedgerMergesLocalTransfers(t *testing.T) {
 		})
 	}))
 	adapter := &marketLedgerAdapter{}
-	multi, err := execution.NewMultiMarket("BINANCE", []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}, map[exchange.MarketType]execution.ExecutionAdapter{
+	multi, err := execution.NewMultiMarket("binance", []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}, map[exchange.MarketType]execution.ExecutionAdapter{
 		exchange.MarketTypeSpot: &marketLedgerAdapter{}, exchange.MarketTypeSwap: adapter,
 	})
 	require.NoError(t, err)
 	handler := &ConsoleServer{Store: tradeStore, Adapters: singleLedgerSource{adapter: multi}}
 	rsp, err := handler.ListAccountLedger(ctx, &tradepb.ListAccountLedgerReq{
-		TradingAccountId: "dual-1", MarketType: tradepb.MarketType_MARKET_TYPE_SWAP,
+		TradingAccountId: "dual-1", MarketType: "swap",
 		StartTime: time.Now().Add(-24 * time.Hour).UnixMilli(), EndTime: time.Now().UnixMilli(),
 	})
 	require.NoError(t, err)

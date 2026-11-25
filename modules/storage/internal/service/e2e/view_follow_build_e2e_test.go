@@ -14,7 +14,6 @@ import (
 
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -50,7 +49,7 @@ func (r *readyWaiter) received(within time.Duration) bool {
 func TestFollowSkipsReadyDuringInitialBuild(t *testing.T) {
 	ctx := context.Background()
 	factor := readyBenchDataset{
-		datasetID: "bench_factor_build", viewID: "bench_factor_build_view", subjects: []string{"BTC-USDT", "ETH-USDT"},
+		datasetID: "bench_factor_build", subjects: []string{"BTC-USDT", "ETH-USDT"},
 		columns: []readyBenchColumn{{"factor_000", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}
 	blocking := &blockingRangeReader{entered: make(chan struct{}), release: make(chan struct{})}
@@ -71,12 +70,12 @@ func TestFollowSkipsReadyDuringInitialBuild(t *testing.T) {
 		writeRowsInBatches(t, ctx, env, factor, rows)
 		reportProducerCompleted(t, ctx, env, factor, period, factor.subjects, fmt.Sprintf("build-cause-%d", period.Unix()))
 	}
-	during := env.Watcher().Expect(factor.viewID, readyBenchBase.Unix())
+	during := env.Watcher().Expect(factor.datasetID, readyBenchBase.Unix())
 	writePeriod(readyBenchBase, 0)
 	close(blocking.release)
-	state := env.WaitBuilt(t, ctx, factor.viewID)
-	env.WaitApplied(t, ctx, factor.viewID)
-	requireViewRows(t, ctx, env, factor.viewID, readyBenchBase, readyBenchBase.Add(readyBenchStep), uint64(len(factor.subjects)))
+	state := env.WaitBuilt(t, ctx, factor.datasetID)
+	env.WaitApplied(t, ctx, factor.datasetID)
+	requireViewRows(t, ctx, env, factor.datasetID, readyBenchBase, readyBenchBase.Add(readyBenchStep), uint64(len(factor.subjects)))
 	if during.received(500 * time.Millisecond) {
 		t.Fatal("建索引期间的周期完成不应在建成后发布就绪事件")
 	}
@@ -85,18 +84,18 @@ func TestFollowSkipsReadyDuringInitialBuild(t *testing.T) {
 	}
 
 	after := readyBenchBase.Add(readyBenchStep)
-	waiter := env.Watcher().Expect(factor.viewID, after.Unix())
+	waiter := env.Watcher().Expect(factor.datasetID, after.Unix())
 	writePeriod(after, 1)
 	waiter.Wait(t, ctx)
-	requireViewRows(t, ctx, env, factor.viewID, after, after.Add(readyBenchStep), uint64(len(factor.subjects)))
+	requireViewRows(t, ctx, env, factor.datasetID, after, after.Add(readyBenchStep), uint64(len(factor.subjects)))
 }
 
 // View 停机期间的日志被清理（相当于停机超过保留期）：重启后断档，索引按原契约重建，停机期间的写入照样可查，之后照常跟随。
 func TestFollowRebuildsAfterGap(t *testing.T) {
 	ctx := context.Background()
-	kline := readyBenchDataset{datasetID: "bench_kline_gap", viewID: "bench_kline_gap_view", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
+	kline := readyBenchDataset{datasetID: "bench_kline_gap", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
 	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{})
-	env.WaitBuilt(t, ctx, kline.viewID)
+	env.WaitBuilt(t, ctx, kline.datasetID)
 	write := func(period time.Time, round int) {
 		rows := make([]*pb.RowFieldUpsert, len(kline.subjects))
 		for i, subject := range kline.subjects {
@@ -105,8 +104,8 @@ func TestFollowRebuildsAfterGap(t *testing.T) {
 		writeRowsInBatches(t, ctx, env, kline, rows)
 	}
 	write(readyBenchBase, 0)
-	env.WaitApplied(t, ctx, kline.viewID)
-	before := env.WaitBuilt(t, ctx, kline.viewID)
+	env.WaitApplied(t, ctx, kline.datasetID)
+	before := env.WaitBuilt(t, ctx, kline.datasetID)
 
 	env.stopFollowing()
 	stopped := readyBenchBase.Add(readyBenchStep)
@@ -120,7 +119,7 @@ func TestFollowRebuildsAfterGap(t *testing.T) {
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		state := env.WaitBuilt(t, ctx, kline.viewID)
+		state := env.WaitBuilt(t, ctx, kline.datasetID)
 		if state.GetGeneration() != before.GetGeneration() {
 			break
 		}
@@ -129,21 +128,21 @@ func TestFollowRebuildsAfterGap(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	requireViewRows(t, ctx, env, kline.viewID, readyBenchBase, stopped.Add(readyBenchStep), uint64(2*len(kline.subjects)))
+	requireViewRows(t, ctx, env, kline.datasetID, readyBenchBase, stopped.Add(readyBenchStep), uint64(2*len(kline.subjects)))
 	next := stopped.Add(readyBenchStep)
 	write(next, 2)
-	env.WaitApplied(t, ctx, kline.viewID)
-	requireViewRows(t, ctx, env, kline.viewID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
+	env.WaitApplied(t, ctx, kline.datasetID)
+	requireViewRows(t, ctx, env, kline.datasetID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
 }
 
 // 空闲数据集：别的数据集持续写入，空闲 View 的游标照样前进并落盘；日志清理（相当于 8 天没有写入）后重启不断档、不重建，之后的写入照常应用。
 func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
 	ctx := context.Background()
-	idle := readyBenchDataset{datasetID: "bench_idle_ds", viewID: "bench_idle_ds_view", subjects: []string{"BTC-USDT"}, columns: readyBenchKlineColumns}
-	busy := readyBenchDataset{datasetID: "bench_busy_ds", viewID: "bench_busy_ds_view", subjects: []string{"ETH-USDT"}, columns: readyBenchKlineColumns}
+	idle := readyBenchDataset{datasetID: "bench_idle_ds", subjects: []string{"BTC-USDT"}, columns: readyBenchKlineColumns}
+	busy := readyBenchDataset{datasetID: "bench_busy_ds", subjects: []string{"ETH-USDT"}, columns: readyBenchKlineColumns}
 	env := newFollowEnv(t, []readyBenchDataset{idle, busy}, followEnvOptions{})
-	before := env.WaitBuilt(t, ctx, idle.viewID)
-	env.WaitBuilt(t, ctx, busy.viewID)
+	before := env.WaitBuilt(t, ctx, idle.datasetID)
+	env.WaitBuilt(t, ctx, busy.datasetID)
 	env.stopFollowing()
 	env.follow.Wait, env.follow.PersistInterval = time.Second, 10*time.Millisecond
 	var err error
@@ -159,7 +158,7 @@ func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
-	for env.WaitBuilt(t, ctx, idle.viewID).GetAppliedCursor().GetSequence() < head.GetSequence() {
+	for env.WaitBuilt(t, ctx, idle.datasetID).GetAppliedCursor().GetSequence() < head.GetSequence() {
 		if time.Now().After(deadline) {
 			t.Fatal("空闲 View 的游标没有扫过别的数据集的条目")
 		}
@@ -174,9 +173,9 @@ func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
 	}
 	row := readyBenchRow(idle, idle.subjects[0], readyBenchBase, 0)
 	writeRowsInBatches(t, ctx, env, idle, []*pb.RowFieldUpsert{row})
-	env.WaitApplied(t, ctx, idle.viewID)
-	requireViewRows(t, ctx, env, idle.viewID, readyBenchBase, readyBenchBase.Add(readyBenchStep), 1)
-	if after := env.WaitBuilt(t, ctx, idle.viewID); after.GetGeneration() != before.GetGeneration() {
+	env.WaitApplied(t, ctx, idle.datasetID)
+	requireViewRows(t, ctx, env, idle.datasetID, readyBenchBase, readyBenchBase.Add(readyBenchStep), 1)
+	if after := env.WaitBuilt(t, ctx, idle.datasetID); after.GetGeneration() != before.GetGeneration() {
 		t.Fatalf("空闲 View 不应重建：建成序号 %d → %d", before.GetGeneration(), after.GetGeneration())
 	}
 }
@@ -223,36 +222,29 @@ func (r *controlledRangeReader) set(fn func(r *controlledRangeReader)) {
 	fn(r)
 }
 
-func (m *followEnvMetadata) setViews(views []*pb.View) {
+// setStatus 改全部数据集的状态（active 或 disabled）。
+func (m *followEnvMetadata) setStatus(status string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.views = views
-}
-
-func (m *followEnvMetadata) snapshotViews() []*pb.View {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]*pb.View, len(m.views))
-	for i, view := range m.views {
-		out[i] = proto.Clone(view).(*pb.View)
+	for _, dataset := range m.datasets {
+		dataset.Status = status
 	}
-	return out
 }
 
 // newGapEnv 建好一个 K 线 View，写一期后停掉跟随、再写一期并清掉日志，制造断档；返回环境、读取控制与断档前的建成序号。
 func newGapEnv(t *testing.T) (*followEnv, *controlledRangeReader, readyBenchDataset, uint64) {
 	t.Helper()
 	ctx := context.Background()
-	kline := readyBenchDataset{datasetID: "bench_kline_gap", viewID: "bench_kline_gap_view", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
+	kline := readyBenchDataset{datasetID: "bench_kline_gap", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
 	reader := &controlledRangeReader{}
 	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{rangeReader: func(inner viewservice.TimeSeriesRangeReader) viewservice.TimeSeriesRangeReader {
 		reader.inner = inner
 		return reader
 	}})
-	env.WaitBuilt(t, ctx, kline.viewID)
+	env.WaitBuilt(t, ctx, kline.datasetID)
 	writeGapPeriod(t, env, kline, readyBenchBase, 0)
-	env.WaitApplied(t, ctx, kline.viewID)
-	before := env.WaitBuilt(t, ctx, kline.viewID).GetGeneration()
+	env.WaitApplied(t, ctx, kline.datasetID)
+	before := env.WaitBuilt(t, ctx, kline.datasetID).GetGeneration()
 	env.stopFollowing()
 	writeGapPeriod(t, env, kline, readyBenchBase.Add(readyBenchStep), 1)
 	if _, err := env.store.CleanupChangeLog(ctx, time.Now().Add(time.Second)); err != nil {
@@ -276,7 +268,7 @@ func waitRebuilt(t *testing.T, env *followEnv, dataset readyBenchDataset, before
 	ctx := context.Background()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		rsp, err := env.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: dataset.viewID})
+		rsp, err := env.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, DatasetId: dataset.datasetID})
 		if err == nil && rsp.GetIndexId() != "" && rsp.GetGeneration() != before {
 			break
 		}
@@ -285,7 +277,7 @@ func waitRebuilt(t *testing.T, env *followEnv, dataset readyBenchDataset, before
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	requireViewRows(t, ctx, env, dataset.viewID, readyBenchBase, readyBenchBase.Add(2*readyBenchStep), uint64(2*len(dataset.subjects)))
+	requireViewRows(t, ctx, env, dataset.datasetID, readyBenchBase, readyBenchBase.Add(2*readyBenchStep), uint64(2*len(dataset.subjects)))
 }
 
 // 重建失败后 View 不可读；进程重启（跟随器重新启动）后接着重建，成功后恢复可读并照常跟随。
@@ -310,7 +302,7 @@ func TestFollowRetriesFailedRebuild(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if rsp, _ := env.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, ViewId: kline.viewID}); rsp.GetIndexId() != "" {
+	if rsp, _ := env.view.GetViewState(ctx, &pb.GetViewStateReq{SpaceId: readyBenchSpace, DatasetId: kline.datasetID}); rsp.GetIndexId() != "" {
 		t.Fatalf("重建失败期间 View 不应可读：%v", rsp)
 	}
 	// 模拟进程重启：跟随器重新启动时，索引里没有进度、运行时仍是待重建。
@@ -322,12 +314,12 @@ func TestFollowRetriesFailedRebuild(t *testing.T) {
 	waitRebuilt(t, env, kline, before)
 	next := readyBenchBase.Add(2 * readyBenchStep)
 	writeGapPeriod(t, env, kline, next, 2)
-	env.WaitApplied(t, ctx, kline.viewID)
-	requireViewRows(t, ctx, env, kline.viewID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
+	env.WaitApplied(t, ctx, kline.datasetID)
+	requireViewRows(t, ctx, env, kline.datasetID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
 }
 
 // 重建中途 View 被停用（跟随器被停掉），再启用后接着重建。
-func TestFollowRebuildResumesAfterViewReenabled(t *testing.T) {
+func TestFollowRebuildResumesAfterDatasetReenabled(t *testing.T) {
 	ctx := context.Background()
 	env, reader, kline, before := newGapEnv(t)
 	entered := make(chan struct{})
@@ -341,11 +333,10 @@ func TestFollowRebuildResumesAfterViewReenabled(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("没有开始重建")
 	}
-	views := env.metadata.snapshotViews()
-	env.metadata.setViews(nil) // 停用：维护流程停掉它的跟随器，重建中途取消
+	env.metadata.setStatus("disabled") // 停用：维护流程摘掉 View、停掉它的跟随器，重建中途取消
 	time.Sleep(500 * time.Millisecond)
 	reader.set(func(r *controlledRangeReader) { r.block = nil })
-	env.metadata.setViews(views) // 再启用
+	env.metadata.setStatus("active") // 再启用
 	waitRebuilt(t, env, kline, before)
 }
 
@@ -353,12 +344,12 @@ func TestFollowRebuildResumesAfterViewReenabled(t *testing.T) {
 // 删除前后的写入都可查，之后照常跟随。
 func TestFollowRebuildsWhenActiveIndexFileRemoved(t *testing.T) {
 	ctx := context.Background()
-	kline := readyBenchDataset{datasetID: "bench_kline_lost", viewID: "bench_kline_lost_view", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
+	kline := readyBenchDataset{datasetID: "bench_kline_lost", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
 	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{})
-	env.WaitBuilt(t, ctx, kline.viewID)
+	env.WaitBuilt(t, ctx, kline.datasetID)
 	writeGapPeriod(t, env, kline, readyBenchBase, 0)
-	env.WaitApplied(t, ctx, kline.viewID)
-	before := env.WaitBuilt(t, ctx, kline.viewID)
+	env.WaitApplied(t, ctx, kline.datasetID)
+	before := env.WaitBuilt(t, ctx, kline.datasetID)
 
 	path := filepath.Join(env.root, "duckdb", before.GetIndexId()+".duckdb")
 	for _, file := range []string{path, path + ".wal"} {
@@ -371,17 +362,17 @@ func TestFollowRebuildsWhenActiveIndexFileRemoved(t *testing.T) {
 
 	next := readyBenchBase.Add(2 * readyBenchStep)
 	writeGapPeriod(t, env, kline, next, 2)
-	env.WaitApplied(t, ctx, kline.viewID)
-	requireViewRows(t, ctx, env, kline.viewID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
+	env.WaitApplied(t, ctx, kline.datasetID)
+	requireViewRows(t, ctx, env, kline.datasetID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
 }
 
 // 删掉数据集与 View 后按同样的 ID 重建（Collector 的结果数据集与 View 由任务 ID 推出）：索引标识不变，
 // 新 View 不能挂上旧索引、查出已删数据集的行；维护流程按创建时间认出旧索引并重建。建好的索引在之后的维护轮次里不重复重建。
-func TestRecreatedViewDoesNotReuseOldIndex(t *testing.T) {
+func TestRecreatedDatasetDoesNotReuseOldIndex(t *testing.T) {
 	ctx := context.Background()
-	kline := readyBenchDataset{datasetID: "bench_kline_recreate", viewID: "bench_kline_recreate_view", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
+	kline := readyBenchDataset{datasetID: "bench_kline_recreate", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
 	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{})
-	env.WaitBuilt(t, ctx, kline.viewID)
+	env.WaitBuilt(t, ctx, kline.datasetID)
 	write := func(period time.Time, round int) {
 		rows := make([]*pb.RowFieldUpsert, len(kline.subjects))
 		for i, subject := range kline.subjects {
@@ -390,27 +381,27 @@ func TestRecreatedViewDoesNotReuseOldIndex(t *testing.T) {
 		writeRowsInBatches(t, ctx, env, kline, rows)
 	}
 	write(readyBenchBase, 0)
-	env.WaitApplied(t, ctx, kline.viewID)
-	requireViewRows(t, ctx, env, kline.viewID, readyBenchBase, readyBenchBase.Add(readyBenchStep), uint64(len(kline.subjects)))
+	env.WaitApplied(t, ctx, kline.datasetID)
+	requireViewRows(t, ctx, env, kline.datasetID, readyBenchBase, readyBenchBase.Add(readyBenchStep), uint64(len(kline.subjects)))
 	// 建成之后日志头部已前进：维护（每 100 毫秒一轮）若重复重建，建成序号就会变。
-	before := env.WaitBuilt(t, ctx, kline.viewID)
+	before := env.WaitBuilt(t, ctx, kline.datasetID)
 	time.Sleep(600 * time.Millisecond)
-	if again := env.WaitBuilt(t, ctx, kline.viewID); again.GetGeneration() != before.GetGeneration() {
+	if again := env.WaitBuilt(t, ctx, kline.datasetID); again.GetGeneration() != before.GetGeneration() {
 		t.Fatalf("建好的索引不应在维护轮次里重建：before=%d after=%d", before.GetGeneration(), again.GetGeneration())
 	}
 
-	// 删除数据集的行，并在两轮维护之间按同样的 ID 重建 View：只有创建时间不同。
+	// 删除数据集的行，并在两轮维护之间按同样的 ID 重建数据集：只有创建时间不同。
 	if _, err := env.store.DeleteDatasetRows(ctx, readyBenchSpace, kline.datasetID); err != nil {
 		t.Fatal(err)
 	}
 	env.metadata.mu.Lock()
-	env.metadata.views[0].CreatedAt = "2026-11-02 00:00:00"
+	env.metadata.datasets[0].CreatedAt = 1793577600000
 	env.metadata.mu.Unlock()
 	next := readyBenchBase.Add(readyBenchStep)
 	write(next, 1)
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		state := env.WaitBuilt(t, ctx, kline.viewID)
+		state := env.WaitBuilt(t, ctx, kline.datasetID)
 		if state.GetGeneration() != before.GetGeneration() {
 			break
 		}
@@ -421,7 +412,7 @@ func TestRecreatedViewDoesNotReuseOldIndex(t *testing.T) {
 	}
 	// 重建刚完成时跟随器可能还没起来（WaitViewApplied 返回未就绪），等新写入的行出现。
 	for {
-		got, err := env.CountViewRows(ctx, kline.viewID, "", next, next.Add(readyBenchStep))
+		got, err := env.CountViewRows(ctx, kline.datasetID, "", next, next.Add(readyBenchStep))
 		if err == nil && got == uint64(len(kline.subjects)) {
 			break
 		}
@@ -430,5 +421,5 @@ func TestRecreatedViewDoesNotReuseOldIndex(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	requireViewRows(t, ctx, env, kline.viewID, readyBenchBase, next, 0)
+	requireViewRows(t, ctx, env, kline.datasetID, readyBenchBase, next, 0)
 }

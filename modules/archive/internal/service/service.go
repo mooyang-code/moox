@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
-	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -33,9 +32,10 @@ type Dataset struct {
 	RetentionSource string
 	SubjectTags     []string
 	Attributes      map[string]string
-	CreatedAt       string
-	UpdatedAt       string
-	Revision        uint64
+	// CreatedAt、UpdatedAt 是 Storage 元数据的创建、更新时刻（Unix 毫秒）。
+	CreatedAt int64
+	UpdatedAt int64
+	Revision  uint64
 }
 
 // DatasetProvider 读取数据集信息；数据集不存在时返回 ErrDatasetNotFound。
@@ -54,10 +54,7 @@ type Service struct {
 	store    *store.Store
 	cfg      *config.Config
 	datasets DatasetProvider
-	// collector 读取各空间的采集频率，用来推出避让规则；nil 时一直用默认值。
-	collector CollectorFrequencies
-	now       func() time.Time
-	avoid     avoidanceState
+	now      func() time.Time
 	// life 是模块的生命周期控制器：ArchiveMgr 的 GetLifecycle、ControlLifecycle 转给它（见 lifecycle.go）。
 	life *lifecycle.Controller
 
@@ -95,16 +92,6 @@ func (s *Service) Mgr() *MgrService { return &MgrService{svc: s} }
 func (s *Service) Worker() *WorkerService { return &WorkerService{svc: s} }
 
 func (s *Service) clock() time.Time { return s.now().UTC() }
-
-// timing 返回任务算拉取边界用的时序信息（空间时区与本地收盘时刻取自配置，时区无效时按 UTC；避让规则取当前快照）。
-func (s *Service) timing(spaceID, freq string, pullEveryBars int) schedule.Timing {
-	spaceCfg := s.cfg.Space(spaceID)
-	loc, err := time.LoadLocation(spaceCfg.TZ)
-	if err != nil {
-		loc = time.UTC
-	}
-	return schedule.Timing{Freq: freq, PullEveryBars: pullEveryBars, Loc: loc, LocalClose: spaceCfg.LocalClose, Avoid: s.avoidance()}
-}
 
 func success() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS, Msg: "success"}

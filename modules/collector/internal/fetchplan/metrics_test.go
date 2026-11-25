@@ -6,8 +6,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -62,12 +60,29 @@ func TestOperationalMetricsZeroResetBoundedLabelsAndFailedRefresh(t *testing.T) 
 	}
 }
 
-func TestMetricsClearAssignmentPending(t *testing.T) {
+// coordination 返回本空间当前的协调关注项（采集时按 now 现算）。
+func coordination(metrics *ControlMetrics, now time.Time) string {
+	items := metrics.CoordinationAttention("k", 15*time.Minute, 5*time.Minute)(now)["k"]
+	if len(items) == 0 {
+		return ""
+	}
+	return items[0]
+}
+
+// 进行中且不满 5 分钟不报；超过宽限、或进行中结束后仍失败照常报；对账成功超过 15 分钟写明最后成功的时刻。
+func TestCoordinationAttention(t *testing.T) {
 	metrics := NewControlMetrics(prometheus.NewRegistry())
-	metrics.ObserveAssignmentPending("crypto", true, time.Unix(1722652200, 0))
+	now := time.Unix(1_700_000_000, 0).UTC()
+	metrics.ObserveAssignmentSuccess("crypto", now.Unix())
+	require.Empty(t, coordination(metrics, now.Add(time.Minute)))
+	require.Contains(t, coordination(metrics, now.Add(16*time.Minute)), "最后对账成功 11-14 22:13 UTC")
+
+	metrics.ObserveAssignmentFailure("crypto", "quota")
+	metrics.ObserveAssignmentPending("crypto", true, now)
+	require.Empty(t, coordination(metrics, now.Add(4*time.Minute)), "协调进行中、不满宽限不报")
+	require.Contains(t, coordination(metrics, now.Add(6*time.Minute)), "配额超限")
 	metrics.ObserveAssignmentPending("crypto", false, time.Time{})
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto")))
+	require.Contains(t, coordination(metrics, now.Add(time.Minute)), "crypto：函数个数")
 }
 
 func TestMetricsUseFixedErrorReasons(t *testing.T) {
@@ -97,24 +112,16 @@ func TestMetricsUseFixedErrorReasons(t *testing.T) {
 	}
 }
 
-func TestMetricsRecoveryCanSucceedWithoutAssignmentScopes(t *testing.T) {
-	metrics := NewControlMetrics(prometheus.NewRegistry())
-	metrics.ObserveAssignmentFailure("crypto", "rules")
-	metrics.ObserveAssignmentSuccess("crypto", 1722772800)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-}
-
 func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
 	metrics := NewControlMetrics(prometheus.NewRegistry())
+	now := time.Unix(1722772800, 0).UTC()
 	metrics.ObserveAssignmentFailure("crypto", "quota")
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "quota")))
-
+	require.Contains(t, coordination(metrics, now), "配额超限")
 	metrics.ObserveAssignmentFailure("crypto", "cloud")
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "quota")))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloud")))
-
-	metrics.ObserveAssignmentSuccess("crypto", 1722772800)
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloud")))
+	require.Contains(t, coordination(metrics, now), "调用腾讯云失败")
+	require.NotContains(t, coordination(metrics, now), "配额超限")
+	metrics.ObserveAssignmentSuccess("crypto", now.Unix())
+	require.Empty(t, coordination(metrics, now))
 }
 
 func metricFamily(t *testing.T, families []*dto.MetricFamily, name string) *dto.MetricFamily {
@@ -148,12 +155,12 @@ func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(
 	metrics := NewControlMetrics(prometheus.NewRegistry())
 	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_000)
 	metrics.ObserveAssignmentFailure("crypto", "quota")
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+	success := time.Unix(1_700_000_000, 0).UTC()
+	require.Contains(t, coordination(metrics, success), "配额超限")
 
 	metrics.ObserveAssignmentRoundOK("crypto")
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "quota")))
-	require.Equal(t, float64(1_700_000_000), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "恢复健康本身不刷新最近一次对账成功时间")
+	require.Empty(t, coordination(metrics, success))
+	require.Contains(t, coordination(metrics, success.Add(16*time.Minute)), "最后对账成功", "恢复健康本身不刷新最近一次对账成功时间")
 	require.NotPanics(t, func() { (*ControlMetrics)(nil).ObserveAssignmentRoundOK("crypto") })
 }
 
@@ -195,12 +202,9 @@ func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
 	}
 }
 
-// 每个白名单原因都要在 Monitor 里有专属告警文案，否则 Monitor 只能显示通用提示。
-func TestEveryFailureReasonHasAMonitorText(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "monitor", "internal", "observability", "overview.go"))
-	require.NoError(t, err)
-	source := string(raw)
+// 每个白名单原因都要有专属告警文案（coordinationFailureTexts），否则关注项只能显示通用提示。
+func TestEveryFailureReasonHasAText(t *testing.T) {
 	for _, reason := range assignmentFailureReasons {
-		require.Containsf(t, source, "{\""+reason+"\", \"", "Monitor 的 coordinationFailureTexts 缺少原因 %q 的告警文案", reason)
+		require.NotEmptyf(t, coordinationFailureTexts[reason], "coordinationFailureTexts 缺少原因 %q 的告警文案", reason)
 	}
 }

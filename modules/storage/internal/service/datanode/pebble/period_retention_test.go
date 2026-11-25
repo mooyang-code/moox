@@ -9,7 +9,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // 超过保留期后，账本与完成标记随行一起按同一截止时间清理；截止时间及之后的周期保留。
@@ -30,8 +29,8 @@ func TestCleanupExpiredBucketsRemovesLedgerAndMarkersBeforeCutoff(t *testing.T) 
 		require.Equal(t, "complete", result.Status)
 		raw, _, err := BuildProducerPeriodCompletedMessage(goldenSpace, &pb.DatasetPeriodCompletedMarker{
 			DatasetId: goldenDataset, Frequency: goldenFreq, PeriodTime: period.Unix(), Status: "complete",
-			UniverseSubjectIds: []string{"BTC-USDT"}, UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC-USDT", SeriesTag: goldenTag}},
-			CauseEventId: "source-ready", CompletedAt: timestamppb.New(period.Add(time.Minute)),
+			UniverseSubjectIds: []string{"BTC-USDT"},
+			CauseEventId:       "source-ready", CompletedAt: period.Add(time.Minute).UnixMilli(),
 		})
 		require.NoError(t, err)
 		_, err = store.AppendDatasetMarker(ctx, raw)

@@ -39,14 +39,14 @@ type handle struct {
 }
 
 type indexMeta struct {
-	SpaceID          string `json:"space_id"`
-	ViewVersion      uint64 `json:"view_version"`
-	SchemaHash       string `json:"schema_hash"`
-	PrimaryDatasetID string `json:"primary_dataset_id"`
-	// ViewCreatedAt 是建索引时 View 的创建时间，见 viewindex.ViewIndexSchema.ViewCreatedAt。
-	ViewCreatedAt string                       `json:"view_created_at"`
-	UpdatedAt     string                       `json:"updated_at"`
-	Columns       map[string]pb.FieldValueType `json:"columns"`
+	SpaceID     string `json:"space_id"`
+	ViewVersion uint64 `json:"view_version"`
+	SchemaHash  string `json:"schema_hash"`
+	DatasetID   string `json:"dataset_id"`
+	// DatasetCreatedAt 是建索引时数据集的创建时刻（Unix 毫秒），见 viewindex.ViewIndexSchema.DatasetCreatedAt。
+	DatasetCreatedAt int64                        `json:"dataset_created_at"`
+	UpdatedAt        string                       `json:"updated_at"`
+	Columns          map[string]pb.FieldValueType `json:"columns"`
 	// BuiltColumns 是已建列的完整契约（含排序），重启后由它还原写入契约。
 	BuiltColumns []viewindex.BuiltColumn `json:"built_columns"`
 	// ChangeStoreID、ChangeSequence、BuiltSequence 是跟随变更日志的进度，见 viewindex.FollowState。
@@ -79,7 +79,7 @@ func (i *Index) Prepare(_ context.Context, id string, schema viewindex.ViewIndex
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
-	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, PrimaryDatasetID: schema.PrimaryDatasetID, ViewCreatedAt: schema.ViewCreatedAt, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns), BuiltColumns: viewindex.EncodeBuiltColumns(schema.Columns)}
+	meta := indexMeta{SpaceID: schema.SpaceID, ViewVersion: schema.ViewVersion, SchemaHash: schema.SchemaHash, DatasetID: schema.DatasetID, DatasetCreatedAt: schema.DatasetCreatedAt, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Columns: schemaColumns(schema.Columns), BuiltColumns: viewindex.EncodeBuiltColumns(schema.Columns)}
 	index, err := blevelib.New(path, buildMapping(meta.Columns))
 	if err != nil {
 		return err
@@ -93,8 +93,8 @@ func (i *Index) Prepare(_ context.Context, id string, schema viewindex.ViewIndex
 // ExtendColumns 原地追加列。Bleve 的字段映射建好后不能改，新列按动态映射写入（存储并索引），字符串列不再有精确匹配的
 // keyword 字段；这里只更新索引自身记录的列清单和修订号。
 func (i *Index) ExtendColumns(_ context.Context, id string, current, next viewindex.ViewIndexSchema) error {
-	if id == "" || current.SpaceID == "" || current.ViewID == "" || current.Engine != "bleve" || next.Engine != current.Engine ||
-		next.SpaceID != current.SpaceID || next.ViewID != current.ViewID || next.PrimaryDatasetID != current.PrimaryDatasetID ||
+	if id == "" || current.SpaceID == "" || current.DatasetID == "" || current.Engine != "bleve" || next.Engine != current.Engine ||
+		next.SpaceID != current.SpaceID || next.DatasetID != current.DatasetID ||
 		current.ViewVersion == 0 || next.ViewVersion <= current.ViewVersion || next.SchemaHash == "" {
 		return fmt.Errorf("%w：Bleve 要求索引身份一致且修订号递增", viewindex.ErrSchemaExtensionConflict)
 	}
@@ -110,7 +110,7 @@ func (i *Index) ExtendColumns(_ context.Context, id string, current, next viewin
 	if h.meta.ViewVersion == next.ViewVersion && h.meta.SchemaHash == next.SchemaHash {
 		return nil
 	}
-	if h.meta.ViewVersion != current.ViewVersion || h.meta.SchemaHash != current.SchemaHash || h.meta.PrimaryDatasetID != current.PrimaryDatasetID {
+	if h.meta.ViewVersion != current.ViewVersion || h.meta.SchemaHash != current.SchemaHash || h.meta.DatasetID != current.DatasetID {
 		return fmt.Errorf("%w：Bleve 物理状态（修订号 %d）不是这次加列的起点", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
 	}
 	meta := h.meta
@@ -335,7 +335,7 @@ func halfPrepared(path string) bool {
 
 // stats 返回索引自身记录的契约与进度（不含行数）。
 func (m indexMeta) stats() viewindex.ViewIndexStats {
-	return viewindex.ViewIndexStats{Exists: true, DatasetID: m.PrimaryDatasetID, ViewCreatedAt: m.ViewCreatedAt, Columns: viewindex.DecodeBuiltColumns(m.BuiltColumns), ViewVersion: m.ViewVersion, SchemaHash: m.SchemaHash, UpdatedAt: m.UpdatedAt, Follow: m.followState()}
+	return viewindex.ViewIndexStats{Exists: true, DatasetID: m.DatasetID, DatasetCreatedAt: m.DatasetCreatedAt, Columns: viewindex.DecodeBuiltColumns(m.BuiltColumns), ViewVersion: m.ViewVersion, SchemaHash: m.SchemaHash, UpdatedAt: m.UpdatedAt, Follow: m.followState()}
 }
 
 func (i *Index) Exists(_ context.Context, id string) (bool, error) {
@@ -449,7 +449,7 @@ func (i *Index) ListManagedIndexes(ctx context.Context) ([]string, error) {
 		if !entry.IsDir() || strings.Contains(entry.Name(), ".prepare-") {
 			continue
 		}
-		if _, err := viewindex.ParseViewIndexID(entry.Name()); err != nil {
+		if _, err := viewindex.ParseIndexID(entry.Name()); err != nil {
 			continue
 		}
 		ids = append(ids, entry.Name())
@@ -541,7 +541,7 @@ func buildMapping(columns map[string]pb.FieldValueType) mapping.IndexMapping {
 	return indexMapping
 }
 
-func schemaColumns(columns []*pb.ViewColumn) map[string]pb.FieldValueType {
+func schemaColumns(columns []*viewindex.Column) map[string]pb.FieldValueType {
 	out := make(map[string]pb.FieldValueType, len(columns))
 	for _, column := range columns {
 		if column != nil && column.GetColumnName() != "" {
@@ -656,7 +656,7 @@ func existingDocument(ctx context.Context, index blevelib.Index, id string, meta
 func storedRow(hit *blevesearch.DocumentMatch, meta indexMeta) (*pb.RowFieldValues, error) {
 	recordID := storedString(hit.Fields["record_id"])
 	version := storedString(hit.Fields["version"])
-	row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: meta.SpaceID, DatasetId: meta.PrimaryDatasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: recordID, Version: version}}}}
+	row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: meta.SpaceID, DatasetId: meta.DatasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: recordID, Version: version}}}}
 	for name, valueType := range meta.Columns {
 		value, ok := hit.Fields[name]
 		if !ok || value == nil {

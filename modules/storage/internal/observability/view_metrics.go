@@ -3,6 +3,7 @@ package observability
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,9 +38,10 @@ type ViewMetrics struct {
 	restoreDuration         prometheus.Gauge
 	restoreReady            prometheus.Gauge
 	restoreFailures         prometheus.Counter
-	viewFileOverLimit       prometheus.Gauge
 	// followLag 是各 View 跟随变更日志的落后情况，采集时现算。
-	followLag                        *viewFollowLagCollector
+	followLag *viewFollowLagCollector
+	// attention 是 storage-view 的关注项上报器，只在 View 角色里设置。
+	attention                        viewAttention
 	followingSnapshot                atomic.Bool
 	viewWatermarkMu                  sync.Mutex
 	viewWatermarks                   map[string]int64
@@ -127,17 +129,17 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		viewOutputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
 			Help: "Latest business timestamp successfully committed to an active Storage View.",
-		}, []string{"space_id", "view_id", "dataset_id", "freq"}),
+		}, []string{"space_id", "dataset_id", "freq"}),
 		viewOutputArrival: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_arrival_timestamp_seconds",
 			Help: "View 输出水位最近一次前进时的墙上时间（这批数据提交完成的时刻）。",
-		}, []string{"space_id", "view_id", "dataset_id", "freq"}),
+		}, []string{"space_id", "dataset_id", "freq"}),
 		now:          time.Now,
 		viewSubjects: newViewSubjectTracker(),
 		readyPublishRetry: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
 			Help: "View source/result ready event publishes that need retry.",
-		}, []string{"view", "event"}),
+		}, []string{"space_id", "dataset_id", "event"}),
 		expiredRowsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "expired_rows_dropped_total",
 			Help: "Rows not written to a View because data_time is older than the maximum View age of its frequency.",
@@ -145,7 +147,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		oldestRowsDeleted: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "oldest_rows_deleted_total",
 			Help: "Oldest rows deleted from time-series Views because their series exceeded the configured bars.",
-		}, []string{"space", "view"}),
+		}, []string{"space_id", "dataset_id"}),
 		oldestDeleteLockSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "oldest_delete_lock_seconds",
 			Help:    "Time one oldest-row delete batch held the View index write lock.",
@@ -166,10 +168,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		restoreFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "restore_failures_total",
 			Help: "Number of failed active View restore passes.",
-		}),
-		viewFileOverLimit: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "moox", Subsystem: "storage_view", Name: "file_over_limit",
-			Help: "Number of active Views whose index file is at or above max_view_file_bytes; alert only, no data is touched.",
 		}),
 		followLag:      newViewFollowLagCollector(),
 		viewWatermarks: make(map[string]int64),
@@ -195,9 +193,6 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.outboxPublisherUnavailableAge, err = registerOrReuse(registerer, metrics.outboxPublisherUnavailableAge); err != nil {
-		return nil, err
-	}
-	if metrics.viewFileOverLimit, err = registerOrReuse(registerer, metrics.viewFileOverLimit); err != nil {
 		return nil, err
 	}
 	if metrics.followLag, err = registerOrReuse(registerer, metrics.followLag); err != nil {
@@ -248,15 +243,38 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	return metrics, nil
 }
 
-// SetViewFileOverLimitCount 导出索引文件超过告警线的 View 数量，只告警，不动数据。
-func (m *ViewMetrics) SetViewFileOverLimitCount(count int64) {
-	if m == nil || m.viewFileOverLimit == nil {
+// SetViewFilesOverLimit 上报索引文件超过 max_view_file_bytes 的 View（空间/View），关注项 view_file_over_limit：只告警，不动数据，
+// 由人判断是调大告警线、调小保留根数还是减列。
+func (m *ViewMetrics) SetViewFilesOverLimit(views []string) {
+	if m == nil {
 		return
 	}
-	if count < 0 {
-		count = 0
+	attention := m.attention.attention.Load()
+	if attention == nil {
+		return
 	}
-	m.viewFileOverLimit.Set(float64(count))
+	if len(views) == 0 {
+		attention.Set("view_file", nil)
+		return
+	}
+	sorted := append([]string(nil), views...)
+	sort.Strings(sorted)
+	// 合成一条：对象按序在前、处理提示在后（多条会被重新排序）。
+	detail := strings.Join(sorted, "；") + "。数据不受影响，确认后调大告警线或减少保留根数"
+	attention.Set("view_file", map[string][]string{AttentionViewFileOverLimit: {detail}})
+}
+
+// OutboxOldest 返回 Outbox 最近一次快照的积压条数与最早一条的时刻（没有积压时为零值）。
+func (m *ViewMetrics) OutboxOldest() (int64, time.Time) {
+	if m == nil {
+		return 0, time.Time{}
+	}
+	pending := m.outboxPendingSnapshot.Load()
+	nanos := m.outboxOldestEventAt.Load()
+	if pending <= 0 || nanos <= 0 {
+		return pending, time.Time{}
+	}
+	return pending, time.Unix(0, nanos).UTC()
 }
 
 // ObserveViewDatasetOutput records a successful active View index commit.
@@ -265,12 +283,9 @@ func (m *ViewMetrics) ObserveViewDatasetOutput(observation ViewDatasetObservatio
 	return m.viewSubjects.observe(observation)
 }
 
-// ObserveViewOutputWatermark advances the committed watermark for one active
-// View. View IDs remain the metric identity so the monitor can create an
-// independent freshness check, while dataset_id lets it associate the View
-// with the Collector dataset that it serves.
-func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, datasetID, frequency string, watermark time.Time) {
-	if m == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || strings.TrimSpace(datasetID) == "" || watermark.IsZero() {
+// ObserveViewOutputWatermark 推进一个数据集查询索引已提交的输出水位；指标按 (空间, 数据集, 频率) 标识。
+func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, datasetID, frequency string, watermark time.Time) {
+	if m == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || watermark.IsZero() {
 		return
 	}
 	frequency = strings.TrimSpace(frequency)
@@ -278,25 +293,24 @@ func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, datasetID, fre
 		return
 	}
 	spaceID = strings.TrimSpace(spaceID)
-	viewID = strings.TrimSpace(viewID)
 	datasetID = strings.TrimSpace(datasetID)
 	watermarkUnix := watermark.UTC().Unix()
-	key := strings.Join([]string{spaceID, viewID, datasetID, frequency}, "\x00")
+	key := strings.Join([]string{spaceID, datasetID, frequency}, "\x00")
 	m.viewWatermarkMu.Lock()
 	defer m.viewWatermarkMu.Unlock()
 	if previous, ok := m.viewWatermarks[key]; ok && watermarkUnix <= previous {
 		return
 	}
 	m.viewWatermarks[key] = watermarkUnix
-	m.viewOutputWatermark.WithLabelValues(spaceID, viewID, datasetID, frequency).Set(float64(watermarkUnix))
-	m.viewOutputArrival.WithLabelValues(spaceID, viewID, datasetID, frequency).Set(float64(m.now().UTC().Unix()))
+	m.viewOutputWatermark.WithLabelValues(spaceID, datasetID, frequency).Set(float64(watermarkUnix))
+	m.viewOutputArrival.WithLabelValues(spaceID, datasetID, frequency).Set(float64(m.now().UTC().Unix()))
 	report.NotifyOutputAdvanced()
 }
 
-// ViewKey identifies a View by space and view ID.
+// ViewKey 按空间与数据集标识一个查询索引。
 type ViewKey struct {
-	SpaceID string
-	ViewID  string
+	SpaceID   string
+	DatasetID string
 }
 
 // RetainViews drops the per-View output series of Views that are no longer
@@ -311,10 +325,10 @@ func (m *ViewMetrics) RetainViews(active map[ViewKey]struct{}) {
 	m.viewWatermarkMu.Lock()
 	for key := range m.viewWatermarks {
 		parts := strings.Split(key, "\x00")
-		if len(parts) != 4 {
+		if len(parts) != 3 {
 			continue
 		}
-		if _, keep := active[ViewKey{SpaceID: parts[0], ViewID: parts[1]}]; keep {
+		if _, keep := active[ViewKey{SpaceID: parts[0], DatasetID: parts[1]}]; keep {
 			continue
 		}
 		m.viewOutputWatermark.DeleteLabelValues(parts...)
@@ -325,11 +339,11 @@ func (m *ViewMetrics) RetainViews(active map[ViewKey]struct{}) {
 	m.viewSubjects.retain(active)
 }
 
-func (m *ViewMetrics) ObserveReadyPublishRetry(view, event string) {
+func (m *ViewMetrics) ObserveReadyPublishRetry(spaceID, datasetID, event string) {
 	if m == nil {
 		return
 	}
-	m.readyPublishRetry.WithLabelValues(view, event).Inc()
+	m.readyPublishRetry.WithLabelValues(spaceID, datasetID, event).Inc()
 }
 
 // ObserveViewExpiredRowsDropped 累计因超过最长保留期而未写入 View 的行数。
@@ -341,13 +355,13 @@ func (m *ViewMetrics) ObserveViewExpiredRowsDropped(space, freq string, rows int
 }
 
 // ObserveViewOldestRowsDeleted 记录一批删除最旧数据：删除的行数与这一批持有写锁的时长。
-func (m *ViewMetrics) ObserveViewOldestRowsDeleted(space, view string, rows uint64, lockHeld time.Duration) {
+func (m *ViewMetrics) ObserveViewOldestRowsDeleted(spaceID, datasetID string, rows uint64, lockHeld time.Duration) {
 	if m == nil {
 		return
 	}
 	m.oldestDeleteLockSeconds.Observe(lockHeld.Seconds())
 	if rows > 0 {
-		m.oldestRowsDeleted.WithLabelValues(space, view).Add(float64(rows))
+		m.oldestRowsDeleted.WithLabelValues(spaceID, datasetID).Add(float64(rows))
 	}
 }
 

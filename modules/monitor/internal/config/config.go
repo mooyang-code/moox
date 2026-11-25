@@ -22,11 +22,9 @@ type Config struct {
 	Instance       InstanceConfig           `yaml:"instance"`
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
 	Deployment     DeploymentConfig         `yaml:"deployment"`
-	Alert          AlertConfig              `yaml:"alert"`
 	Observability  ObservabilityConfig      `yaml:"observability"`
 	Metrics        MetricsConfig            `yaml:"metrics"`
 	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
-	MarketHealth   MarketHealthConfig       `yaml:"market_health"`
 	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
 }
 
@@ -43,18 +41,14 @@ type InstanceConfig struct {
 	InstanceID string `yaml:"instance_id"`
 }
 
-// SchedulerConfig 是检查结果的保留天数（检查由检查定时器每 30 秒评估，没有单独的调度并发）。
+// SchedulerConfig 是告警事件的保留天数（检查由检查定时器每 30 秒评估，没有单独的调度并发；检查结果不保存历史）。
 type SchedulerConfig struct {
-	ResultRetentionDays int `yaml:"result_retention_days"`
+	AlertEventRetentionDays int `yaml:"alert_event_retention_days"`
 }
 
 // DeploymentConfig 控制是否从 Admin 同步部署拓扑（每台主机应该有哪些组件）；组件健康只看上报，不做探测。
 type DeploymentConfig struct {
 	Enabled bool `yaml:"enabled"`
-}
-
-type AlertConfig struct {
-	SendTimeoutSeconds int `yaml:"send_timeout_seconds"`
 }
 
 type MetricsConfig struct {
@@ -68,11 +62,10 @@ type MetricsConfig struct {
 }
 
 type ObservabilityConfig struct {
-	Enabled                    bool     `yaml:"enabled"`
-	DeliverPolicy              string   `yaml:"deliver_policy"`
-	EventBusURLs               []string `yaml:"eventbus_urls"`
-	CredentialFile             string   `yaml:"credential_file"`
-	BalanceDifferenceThreshold float64  `yaml:"balance_difference_threshold"`
+	Enabled        bool     `yaml:"enabled"`
+	DeliverPolicy  string   `yaml:"deliver_policy"`
+	EventBusURLs   []string `yaml:"eventbus_urls"`
+	CredentialFile string   `yaml:"credential_file"`
 }
 
 type MarketCanaryConfig struct {
@@ -85,11 +78,6 @@ type MarketCanaryConfig struct {
 	ClosedBarCount       int                   `yaml:"closed_bar_count"`
 	ClosedBarMinCoverage float64               `yaml:"closed_bar_min_coverage"`
 	Subjects             []MarketCanarySubject `yaml:"subjects"`
-}
-
-type MarketHealthConfig struct {
-	TimerCoordinationStaleAfter   time.Duration `yaml:"timer_coordination_stale_after"`
-	TimerCoordinationPendingGrace time.Duration `yaml:"timer_coordination_pending_grace"`
 }
 
 type KlineFreshnessConfig struct {
@@ -155,17 +143,13 @@ func Default() *Config {
 			InstanceID: defaultInstanceID(),
 		},
 		Scheduler: SchedulerConfig{
-			ResultRetentionDays: 14,
+			AlertEventRetentionDays: 14,
 		},
-		Deployment: DeploymentConfig{Enabled: true},
-		Alert: AlertConfig{
-			SendTimeoutSeconds: 10,
-		},
-		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
+		Deployment:    DeploymentConfig{Enabled: true},
+		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}},
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
 		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
-		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute},
 		KlineFreshness: KlineFreshnessConfig{
 			Enabled: false, SpaceIDs: registeredMarketIDs(), EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
@@ -197,11 +181,8 @@ func (c *Config) applyDefaults() {
 	if c.Instance.InstanceID == "" {
 		c.Instance.InstanceID = defaults.Instance.InstanceID
 	}
-	if c.Scheduler.ResultRetentionDays == 0 {
-		c.Scheduler.ResultRetentionDays = defaults.Scheduler.ResultRetentionDays
-	}
-	if c.Alert.SendTimeoutSeconds == 0 {
-		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
+	if c.Scheduler.AlertEventRetentionDays == 0 {
+		c.Scheduler.AlertEventRetentionDays = defaults.Scheduler.AlertEventRetentionDays
 	}
 	metricsDefaults := Default().Metrics
 	observabilityDefaults := Default().Observability
@@ -211,9 +192,6 @@ func (c *Config) applyDefaults() {
 	}
 	if len(c.Observability.EventBusURLs) == 0 {
 		c.Observability.EventBusURLs = observabilityDefaults.EventBusURLs
-	}
-	if c.Observability.BalanceDifferenceThreshold == 0 {
-		c.Observability.BalanceDifferenceThreshold = observabilityDefaults.BalanceDifferenceThreshold
 	}
 	canaryDefaults := Default().MarketCanary
 	if c.MarketCanary.Freshness == 0 {
@@ -227,13 +205,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MarketCanary.ClosedBarMinCoverage == 0 {
 		c.MarketCanary.ClosedBarMinCoverage = canaryDefaults.ClosedBarMinCoverage
-	}
-	marketHealthDefaults := Default().MarketHealth
-	if c.MarketHealth.TimerCoordinationStaleAfter == 0 {
-		c.MarketHealth.TimerCoordinationStaleAfter = marketHealthDefaults.TimerCoordinationStaleAfter
-	}
-	if c.MarketHealth.TimerCoordinationPendingGrace == 0 {
-		c.MarketHealth.TimerCoordinationPendingGrace = marketHealthDefaults.TimerCoordinationPendingGrace
 	}
 	klineDefaults := Default().KlineFreshness
 	if c.KlineFreshness.EvaluationInterval == 0 {
@@ -297,9 +268,6 @@ func (c *Config) Validate() error {
 	if c.Instance.InstanceID == "" {
 		return fmt.Errorf("instance.instance_id must not be empty")
 	}
-	if c.Alert.SendTimeoutSeconds <= 0 || c.Alert.SendTimeoutSeconds > 300 {
-		return fmt.Errorf("alert.send_timeout_seconds must be between 1 and 300")
-	}
 	if c.Observability.Enabled {
 		if len(c.Observability.EventBusURLs) == 0 {
 			return fmt.Errorf("observability.eventbus_urls must not be empty")
@@ -308,9 +276,6 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(url) == "" {
 				return fmt.Errorf("observability.eventbus_urls must not contain empty values")
 			}
-		}
-		if c.Observability.BalanceDifferenceThreshold <= 0 || c.Observability.BalanceDifferenceThreshold > 1 {
-			return fmt.Errorf("observability.balance_difference_threshold must be in (0, 1]")
 		}
 	}
 	if err := c.validateKlineFreshness(); err != nil {
@@ -341,12 +306,6 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("market_canary 探针 %s/%s：%w", subject.SpaceID, subject.Symbol, err)
 			}
 		}
-	}
-	if c.MarketHealth.TimerCoordinationStaleAfter <= 0 {
-		return fmt.Errorf("market_health.timer_coordination_stale_after must be positive")
-	}
-	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
-		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
 	}
 	if c.GatewayClient.Caller != "monitor" {
 		return fmt.Errorf("gateway_client.caller must be monitor")

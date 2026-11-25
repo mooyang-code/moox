@@ -1,4 +1,4 @@
-// Package gatewaycontrol 给各主机的网关提供快照并记录它们的心跳。服务只听本机回环端口：别的主机的请求由控制机网关
+// Package gatewaycontrol 给各主机的网关提供快照；每次拉取兼作心跳，记下期望快照、已应用快照与时间。服务只听本机回环端口：别的主机的请求由控制机网关
 // 验签后转进来，并在 x-moox-verified-host 头里带上验过的签名主机；控制机网关自己直连时也带这个头。这里不再验第二遍。
 package gatewaycontrol
 
@@ -7,11 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
@@ -20,8 +18,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-var instancePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 type Service struct {
 	db            *gorm.DB
@@ -64,6 +60,8 @@ func result(err error) *pb.RetInfo {
 	return &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "网关控制状态读写失败"}
 }
 
+// PullSnapshot 返回快照，并在同一事务里记下这台网关的状态：期望哈希与快照读自同一时刻。
+// 每次拉取都写（哈希没变也写），因为它兼作心跳；没登记的主机拿不到快照，也不写状态（表上有外键）。
 func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*pb.PullSnapshotRsp, error) {
 	if !sameHost(ctx, req.GetHostId()) {
 		return nil, errors.New("gateway control caller must match request host")
@@ -71,31 +69,45 @@ func (s *Service) PullSnapshot(ctx context.Context, req *pb.PullSnapshotReq) (*p
 	if req.GetCurrentHash() != "" && !validHash(req.GetCurrentHash()) {
 		return &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "current_hash 必须为 SHA-256"}}, nil
 	}
-	dao, err := sysdeploy.NewTopologyDAO(s.db, s.controlHostID)
+	if !validRelaySessions(req.GetRelaySessions()) || len(req.GetRelaySessions()) != 0 && req.GetHostId() != s.controlHostID {
+		return &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "无效的反向连接会话"}}, nil
+	}
+	relaySessions := ""
+	if sessions := req.GetRelaySessions(); len(sessions) != 0 {
+		raw, err := json.Marshal(sessions)
+		if err != nil {
+			return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
+		}
+		relaySessions = string(raw)
+	}
+	var snapshot *pb.HostGatewaySnapshot
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 先取写锁，与拓扑、密钥的写入串行：期望哈希与状态描述的是同一份库内状态。
+		if err := tx.Exec("UPDATE t_host_gateway_status SET c_host_id = c_host_id WHERE 0").Error; err != nil {
+			return err
+		}
+		dao, err := sysdeploy.NewTopologyDAO(tx, s.controlHostID)
+		if err != nil {
+			return err
+		}
+		if snapshot, err = dao.Snapshot(ctx); err != nil {
+			return err
+		}
+		// 快照对全部主机相同；没登记的主机拿不到。
+		if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
+			return gorm.ErrRecordNotFound
+		}
+		now := s.now().UTC()
+		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId(), ExpectedHash: snapshot.Hash, AppliedHash: req.GetCurrentHash(), LastSeenAt: &now, RelaySessions: relaySessions}
+		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, UpdateAll: true}).Create(&status).Error
+	})
 	if err != nil {
 		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
-	}
-	snapshot, err := dao.Snapshot(ctx)
-	if err != nil {
-		return &pb.PullSnapshotRsp{RetInfo: result(err)}, nil
-	}
-	// 快照对全部主机相同；没登记的主机拿不到。
-	if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
-		return &pb.PullSnapshotRsp{RetInfo: result(gorm.ErrRecordNotFound)}, nil
 	}
 	if snapshot.Hash == req.GetCurrentHash() {
 		return &pb.PullSnapshotRsp{RetInfo: success()}, nil
 	}
 	return &pb.PullSnapshotRsp{RetInfo: success(), Changed: true, Snapshot: snapshot}, nil
-}
-
-func validReport(req *pb.ReportStatusReq) bool {
-	return instancePattern.MatchString(req.GetInstanceId()) &&
-		req.GetVersion() != "" && len(req.GetVersion()) <= 128 && utf8.ValidString(req.GetVersion()) &&
-		req.GetVersion() == strings.TrimSpace(req.GetVersion()) && !strings.ContainsFunc(req.GetVersion(), unicode.IsControl) &&
-		(req.GetAppliedHash() == "" || validHash(req.GetAppliedHash())) &&
-		req.GetRouteCount() >= 0 && req.GetRouteCount() <= 10000 &&
-		len(req.GetError()) <= 4096 && utf8.ValidString(req.GetError()) && validRelaySessions(req.GetRelaySessions())
 }
 
 func validRelaySessions(sessions []*pb.RelaySessionStatus) bool {
@@ -105,77 +117,10 @@ func validRelaySessions(sessions []*pb.RelaySessionStatus) bool {
 	seen := map[string]bool{}
 	for _, item := range sessions {
 		if item == nil || !servicecatalog.ValidHostID(item.GetHostId()) || seen[item.GetHostId()] || item.GetReconnects() < 0 || item.GetStreams() < 0 ||
-			len(item.GetInstanceId()) > 128 || !utf8.ValidString(item.GetInstanceId()) {
+			item.GetConnectedAt() < 0 || len(item.GetInstanceId()) > 128 || !utf8.ValidString(item.GetInstanceId()) {
 			return false
-		}
-		if at := item.GetConnectedAt(); at != "" {
-			if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
-				return false
-			}
 		}
 		seen[item.GetHostId()] = true
 	}
 	return true
-}
-
-func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*pb.ReportStatusRsp, error) {
-	if !sameHost(ctx, req.GetHostId()) {
-		return nil, errors.New("gateway control caller must match request host")
-	}
-	if !validReport(req) || len(req.GetRelaySessions()) != 0 && req.GetHostId() != s.controlHostID {
-		return &pb.ReportStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "无效的网关心跳"}}, nil
-	}
-	relaySessions := ""
-	if sessions := req.GetRelaySessions(); len(sessions) != 0 {
-		raw, err := json.Marshal(sessions)
-		if err != nil {
-			return &pb.ReportStatusRsp{RetInfo: result(err)}, nil
-		}
-		relaySessions = string(raw)
-	}
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Serialize read/modify/write with all live/offline topology and key
-		// writers. ExpectedHash and status describe the same database state.
-		if err := tx.Exec("UPDATE t_host_gateway_status SET c_host_id = c_host_id WHERE 0").Error; err != nil {
-			return err
-		}
-		dao, err := sysdeploy.NewTopologyDAO(tx, s.controlHostID)
-		if err != nil {
-			return err
-		}
-		snapshot, err := dao.Snapshot(ctx)
-		if err != nil {
-			return err
-		}
-		if !slices.ContainsFunc(snapshot.Hosts, func(host *pb.SnapshotHost) bool { return host.HostId == req.GetHostId() }) {
-			return gorm.ErrRecordNotFound
-		}
-		status := sysdeploy.HostGatewayStatus{HostID: req.GetHostId()}
-		err = tx.Where("c_host_id = ?", req.GetHostId()).First(&status).Error
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		now := s.now().UTC()
-		updateInstance(&status, req.GetInstanceId(), now)
-		status.Version, status.ExpectedHash, status.AppliedHash = req.GetVersion(), snapshot.Hash, req.GetAppliedHash()
-		status.RouteCount, status.LastError, status.LastSeenAt = int64(req.GetRouteCount()), req.GetError(), &now
-		status.RelaySessions = relaySessions
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, UpdateAll: true}).Create(&status).Error
-	})
-	return &pb.ReportStatusRsp{RetInfo: result(err)}, nil
-}
-
-func updateInstance(status *sysdeploy.HostGatewayStatus, instance string, now time.Time) {
-	status.ClearExpiredConflict(now)
-	if status.InstanceID == "" {
-		status.InstanceID = instance
-		return
-	}
-	if status.InstanceID == instance {
-		return
-	}
-	if status.PreviousInstanceID == instance && status.ReplacedAt != nil && now.Before(status.ReplacedAt.Add(sysdeploy.GatewayConflictWindow)) {
-		status.ConflictInstanceID, status.ConflictSeenAt = status.InstanceID, &now
-	}
-	status.PreviousInstanceID, status.ReplacedAt, status.InstanceID = status.InstanceID, &now, instance
 }

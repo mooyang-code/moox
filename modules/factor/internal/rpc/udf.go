@@ -122,7 +122,7 @@ func (s *Service) engineModules(ctx context.Context) []domain.UDFModuleStatus {
 func udfInfoToPB(info catalog.UdfInfo, modules []domain.UDFModuleStatus) *factorpb.UdfInfo {
 	out := &factorpb.UdfInfo{
 		Name: info.Name.Name, ActiveHash: info.Name.ActiveHash,
-		CreatedAt: factorwire.FormatTime(info.Name.CreatedAt), UpdatedAt: factorwire.FormatTime(info.Name.UpdatedAt),
+		CreatedAt: factorwire.Millis(info.Name.CreatedAt), UpdatedAt: factorwire.Millis(info.Name.UpdatedAt),
 		ReferencedBy: factorwire.CloneStrings(info.Referenced),
 	}
 	own := map[string]bool{}
@@ -130,7 +130,7 @@ func udfInfoToPB(info catalog.UdfInfo, modules []domain.UDFModuleStatus) *factor
 		own[v.Hash] = true
 		out.Versions = append(out.Versions, &factorpb.UdfVersionInfo{
 			Hash: v.Hash, Name: v.Name, Manifest: v.Manifest, SourceRef: v.SourceRef, SdkVersion: v.SDKVersion, Toolchain: v.Toolchain,
-			Report: v.Report, CreatedAt: factorwire.FormatTime(v.CreatedAt), Active: v.Hash == info.Name.ActiveHash,
+			Report: v.Report, CreatedAt: factorwire.Millis(v.CreatedAt), Active: v.Hash == info.Name.ActiveHash,
 		})
 	}
 	for _, m := range modules {

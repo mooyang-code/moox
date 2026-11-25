@@ -87,9 +87,9 @@
             <a-tag size="small">{{ record.mode }}</a-tag>
           </template>
         </a-table-column>
-        <a-table-column title="修改时间" data-index="mod_time" :width="180">
+        <a-table-column title="修改时间" data-index="modified_at" :width="180">
           <template #cell="{ record }">
-            {{ formatInstant(record.mod_time, "UTC") }}
+            {{ formatInstant(record.modified_at, "UTC") }}
           </template>
         </a-table-column>
         <a-table-column title="操作" :width="80">

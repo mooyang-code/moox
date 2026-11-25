@@ -3,7 +3,6 @@ package servicecatalog
 import (
 	"fmt"
 	"net"
-	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -125,7 +124,7 @@ func (c Catalog) Validate() error {
 		if component.ThirdParty {
 			continue
 		}
-		if err := validateDoctor(component, ids); err != nil {
+		if err := validateDoctor(component); err != nil {
 			return err
 		}
 		if err := c.validateRelayHTTP(component, ids, external); err != nil {
@@ -242,31 +241,10 @@ func (c Catalog) validateRelayHTTP(component Component, ids, external map[string
 	return nil
 }
 
-func validateDoctor(component Component, ids map[string]bool) error {
+func validateDoctor(component Component) error {
 	d := component.Doctor
-	if d.Role == "" || d.Description == "" || len(d.Duties) == 0 || len(d.Inputs) == 0 || len(d.Outputs) == 0 {
-		return fmt.Errorf("component %q has incomplete doctor metadata", component.ID)
-	}
 	if !slices.Contains([]string{"reporter", "host_snapshot", "delegated"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
 		return fmt.Errorf("component %q has invalid doctor transport or observability", component.ID)
-	}
-	seen := map[string]bool{}
-	for _, dep := range d.Dependencies {
-		if !ids[dep] || dep == component.ID || seen[dep] {
-			return fmt.Errorf("component %q has unknown, duplicate or self dependency %q", component.ID, dep)
-		}
-		seen[dep] = true
-	}
-	for _, p := range append(slices.Clone(d.ConfigPaths), d.WritablePaths...) {
-		if p == "" || path.IsAbs(p) || path.Clean(p) != p || p == "." || p == ".." || strings.HasPrefix(p, "../") || strings.ContainsAny(p, "\\\x00\r\n") {
-			return fmt.Errorf("component %q has unsafe doctor path", component.ID)
-		}
-	}
-	allowed := []string{"verify_service_identity", "repair_path_permissions", "verify_eventbus_credentials", "restart_service_manually", "inspect_health_check_input", "replay_factor_window_manually", "free_disk_space", "run_bootstrap"}
-	for _, action := range d.RecoveryActionIDs {
-		if !slices.Contains(allowed, action) {
-			return fmt.Errorf("component %q has unknown recovery action %q", component.ID, action)
-		}
 	}
 	return nil
 }

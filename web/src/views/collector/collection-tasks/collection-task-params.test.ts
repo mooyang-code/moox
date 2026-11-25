@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildOutputFieldCatalog,
+  outputFieldLabels,
+  outputFieldSections,
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
   INGEST_OPTIONS,
@@ -7,7 +10,7 @@ import {
   parseKlineResampleParams,
   collectionTaskNameError,
   availableExtraFieldIds,
-  extraFieldOptionsPresent,
+  baseOutputFieldIds,
   outputFieldSelectable,
   outputFieldVisible,
   pruneUnavailableFields,
@@ -15,7 +18,12 @@ import {
   collectionTaskResultLabel,
   normalizeCollectionTask,
   parseCollectionTaskInput,
-  taskFrequency
+  taskFrequency,
+  isCrossMarketSelection,
+  planTaskGroups,
+  splitTaskName,
+  taskTagSelectionError,
+  type TaskTagRoute
 } from "./collection-task-params";
 
 describe("collection task params", () => {
@@ -108,24 +116,6 @@ describe("collection task params", () => {
     expect(parseCollectionTaskInput(task)).toMatchObject({ provider: "moox", market: "spot", sourceTaskId: "task-1m" });
   });
 
-  it("统一数据集的合成源：读出 source_series_tags，source_series_tag 为空", () => {
-    const params = {
-      source_task_id: "task-uni",
-      source_dataset_id: "uni-bars",
-      source_frequency: "1m",
-      source_series_tags: ["venue:binance|market:spot", "venue:binance|market:swap"],
-      target_frequency: "5m"
-    };
-    expect(parseKlineResampleParams(params)).toMatchObject({
-      source_series_tag: "",
-      source_series_tags: ["venue:binance|market:spot", "venue:binance|market:swap"]
-    });
-    expect(
-      parseCollectionTaskInput({ data_type: "kline_resample", tag_ids: [], collect_params: params }).sourceSeriesTags
-    ).toEqual(["venue:binance|market:spot", "venue:binance|market:swap"]);
-    expect(parseKlineResampleParams({ ...params, source_series_tags: undefined })).not.toHaveProperty("source_series_tags");
-  });
-
   it("emits result_config separately from the task payload", () => {
     const task = buildCollectionTaskPayload(
       {
@@ -197,11 +187,11 @@ describe("collection task params", () => {
       tag_ids: ["source_tag"],
       enabled: "false",
       collect_params: '{"provider":"moox","market_type":"spot","target_frequency":"5m"}',
-      result: { view_id: "view-1", status: "ready" }
+      result: { dataset_id: "dataset-1", status: "ready" }
     });
 
     expect(task.enabled).toBe(false);
-    expect(task.result?.view_id).toBe("view-1");
+    expect(task.result?.dataset_id).toBe("dataset-1");
     expect(taskFrequency(task)).toBe("5m");
     expect(parseCollectionTaskInput(task)).toMatchObject({
       dataType: "kline_resample",
@@ -212,7 +202,7 @@ describe("collection task params", () => {
 });
 
 describe("collection task result label", () => {
-  const result = (status: string) => ({ view_id: "view_task_kline_1m", status });
+  const result = (status: string) => ({ dataset_id: "dataset_task_kline_1m", status });
 
   it("treats an uninspected list entry of a prepared task as available", () => {
     expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("unknown") })).toBe("结果可用");
@@ -262,71 +252,129 @@ describe("附加输出字段", () => {
     expect(available(" StockCN ", "1D", [equity])).toEqual(["adj_factor", "sw_l1"]);
   });
 
-  it("资金费率的显示与原来一致：只在永续、1h 或 1d、非统一数据集时出现", () => {
+  it("资金费率的显示与原来一致：只在永续、1h 或 1d、没有同时选现货时出现", () => {
     expect(available("crypto", "1h", [swap])).toEqual(["funding_rate"]);
     expect(available("crypto", "1d", [swap, swap])).toEqual(["funding_rate"]);
     for (const frequency of ["1m", "5m", "30m", "4h", "1w", "1mo", ""]) {
       expect(available("crypto", frequency, [swap])).toEqual([]);
     }
     expect(available("crypto", "1h", [spot])).toEqual([]);
-    // 现货加永续的统一数据集选不了
+    // 同时选了现货、永续的标签时选不了
     expect(available("crypto", "1h", [spot, swap])).toEqual([]);
     expect(available("crypto", "1h", [])).toEqual([]);
     expect(available("crypto", "1h", [swap], "kline_resample")).toEqual([]);
   });
 
-  it("字段清单只显示基础 K 线字段和当前可选的附加字段", () => {
+  // 基础输出字段来自 GetDataTypeConfigWithFields 的 base_output_fields
+  const base = baseOutputFieldIds([
+    { field_id: "open", display_name: "开盘价" },
+    { field_id: "close", display_name: "收盘价" },
+    { field_id: "volume", display_name: "成交量" }
+  ]);
+
+  it("字段清单只显示基础输出字段和当前可选的附加字段", () => {
     const now = new Set(["adj_factor"]);
-    expect(outputFieldVisible("close", now)).toBe(true);
-    expect(outputFieldVisible("adj_factor", now)).toBe(true);
-    expect(outputFieldVisible("sw_l1", now)).toBe(false);
-    expect(outputFieldVisible("funding_rate", new Set())).toBe(false);
+    expect(outputFieldVisible("close", now, base)).toBe(true);
+    expect(outputFieldVisible("adj_factor", now, base)).toBe(true);
+    expect(outputFieldVisible("sw_l1", now, base)).toBe(false);
+    expect(outputFieldVisible("funding_rate", new Set(), base)).toBe(false);
+    expect(baseOutputFieldIds(undefined).size).toBe(0);
   });
 
   it("条件不满足时去掉已选的附加字段", () => {
     const selected = ["close", "adj_factor", "sw_l1"];
     // 频率从 1d 改成 5m：两个附加字段都去掉
-    expect(pruneUnavailableFields(selected, new Set(available("stockcn", "5m", [equity])), true)).toEqual(["close"]);
+    expect(pruneUnavailableFields(selected, new Set(available("stockcn", "5m", [equity])), true, base)).toEqual(["close"]);
     // 只剩一个可选
-    expect(pruneUnavailableFields(selected, new Set(["adj_factor"]), true)).toEqual(["close", "adj_factor"]);
+    expect(pruneUnavailableFields(selected, new Set(["adj_factor"]), true, base)).toEqual(["close", "adj_factor"]);
     // 没有要去掉的、或不该去掉时原样返回同一个数组
-    expect(pruneUnavailableFields(selected, new Set(["adj_factor", "sw_l1"]), true)).toBe(selected);
-    expect(pruneUnavailableFields(selected, new Set(), false)).toBe(selected);
+    expect(pruneUnavailableFields(selected, new Set(["adj_factor", "sw_l1"]), true, base)).toBe(selected);
+    expect(pruneUnavailableFields(selected, new Set(), false, base)).toBe(selected);
     const plain = ["close"];
-    expect(pruneUnavailableFields(plain, new Set(), true)).toBe(plain);
+    expect(pruneUnavailableFields(plain, new Set(), true, base)).toBe(plain);
   });
 
-  it("旧版 Collector 的响应没有 extra_fields 时不算读到附加字段清单", () => {
-    expect(extraFieldOptionsPresent({ extra_fields: [] })).toBe(true);
-    expect(extraFieldOptionsPresent({ extra_fields: [{ field_id: "funding_rate" }] })).toBe(true);
-    expect(extraFieldOptionsPresent({})).toBe(false);
-    expect(extraFieldOptionsPresent({ extra_fields: null })).toBe(false);
-    expect(extraFieldOptionsPresent(undefined)).toBe(false);
-    // 编辑带 funding_rate 的任务：旧版响应下保留这一列，新版响应明确给出空清单时才去掉
-    const selected = ["close", "funding_rate"];
-    const drop = (detail: { extra_fields?: unknown }) => shouldDropUnavailableFields(true, 1, extraFieldOptionsPresent(detail));
-    expect(pruneUnavailableFields(selected, new Set(), drop({}))).toBe(selected);
-    expect(pruneUnavailableFields(selected, new Set(), drop({ extra_fields: [] }))).toEqual(["close"]);
-  });
-
-  it("编辑任务时标签或附加字段清单还没读到就不去掉已选项", () => {
+  it("字段清单没读到、或编辑任务时标签没读到，就不去掉已选项", () => {
     expect(shouldDropUnavailableFields(true, 0, true)).toBe(false);
     expect(shouldDropUnavailableFields(true, 1, false)).toBe(false);
+    expect(shouldDropUnavailableFields(false, 1, false)).toBe(false);
     expect(shouldDropUnavailableFields(true, 1, true)).toBe(true);
-    // 新建时没有要保护的已选项，照常清理
-    expect(shouldDropUnavailableFields(false, 0, false)).toBe(true);
-    expect(shouldDropUnavailableFields(false, 1, true)).toBe(true);
+    expect(shouldDropUnavailableFields(false, 0, true)).toBe(true);
   });
 
   it("编辑任务时不能新增字段，只能取消或重新勾上原有的", () => {
     // 新建：都能勾
-    expect(outputFieldSelectable("adj_factor", false, [])).toBe(true);
+    expect(outputFieldSelectable("adj_factor", false, [], base)).toBe(true);
     // 编辑：原来有的可以重新勾上，原来没有的（基础字段也一样）不能勾
-    expect(outputFieldSelectable("adj_factor", true, ["close", "adj_factor"])).toBe(true);
-    expect(outputFieldSelectable("sw_l1", true, ["close", "adj_factor"])).toBe(false);
-    expect(outputFieldSelectable("volume", true, ["close", "adj_factor"])).toBe(false);
+    expect(outputFieldSelectable("adj_factor", true, ["close", "adj_factor"], base)).toBe(true);
+    expect(outputFieldSelectable("sw_l1", true, ["close", "adj_factor"], base)).toBe(false);
+    expect(outputFieldSelectable("volume", true, ["close", "adj_factor"], base)).toBe(false);
     // 原来没有显式选择（默认字段）：可以收窄到基础字段，不能勾附加字段
-    expect(outputFieldSelectable("close", true, [])).toBe(true);
-    expect(outputFieldSelectable("adj_factor", true, [])).toBe(false);
+    expect(outputFieldSelectable("close", true, [], base)).toBe(true);
+    expect(outputFieldSelectable("adj_factor", true, [], base)).toBe(false);
+  });
+});
+
+describe("选了现货、永续两个市场的标签时按市场拆任务", () => {
+  const spotTag: TaskTagRoute = { tag_id: "tag_spot", source: "binance", market: "spot" };
+  const swapTag: TaskTagRoute = { tag_id: "tag_swap", source: "binance", market: "swap" };
+
+  it("识别跨市场的选择", () => {
+    expect(isCrossMarketSelection([spotTag])).toBe(false);
+    expect(isCrossMarketSelection([spotTag, { ...spotTag, tag_id: "tag_spot_2" }])).toBe(false);
+    expect(isCrossMarketSelection([spotTag, swapTag])).toBe(true);
+  });
+
+  it("来源不同、或现货永续之外的跨市场选择不能一起建", () => {
+    expect(taskTagSelectionError([spotTag, swapTag])).toBe("");
+    expect(taskTagSelectionError([spotTag, { ...swapTag, source: "okx" }])).toContain("同一来源");
+    expect(taskTagSelectionError([spotTag, swapTag, { ...spotTag, tag_id: "e", market: "equity" }])).toContain("现货和永续");
+  });
+
+  it("一个市场时只建一个任务；跨市场时按市场各一个，现货在前", () => {
+    expect(planTaskGroups([spotTag])).toEqual([{ suffix: "", tagIds: ["tag_spot"] }]);
+    expect(planTaskGroups([swapTag, spotTag])).toEqual([
+      { suffix: "现货", tagIds: ["tag_spot"] },
+      { suffix: "永续", tagIds: ["tag_swap"] }
+    ]);
+    expect(splitTaskName(" 币安 1 分钟 ", "永续")).toBe("币安 1 分钟（永续）");
+    expect(splitTaskName("币安", "")).toBe("币安");
+  });
+});
+
+describe("输出字段目录", () => {
+  it("基础字段在前、附加字段按字段 ID 去重，没写分组的归到“其他”", () => {
+    const catalog = buildOutputFieldCatalog(
+      [{ field_id: "close", display_name: "收盘价", group: "行情价格" }],
+      [
+        {
+          field_id: "funding_rate",
+          display_name: "资金费率",
+          group: "合约指标",
+          market_id: "crypto",
+          instrument_type: "swap",
+          provider_id: "binance"
+        },
+        {
+          field_id: "funding_rate",
+          display_name: "资金费率",
+          group: "合约指标",
+          market_id: "crypto",
+          instrument_type: "swap",
+          provider_id: "okx"
+        },
+        { field_id: "x", display_name: "", market_id: "crypto", instrument_type: "swap", provider_id: "binance" }
+      ]
+    );
+    expect(catalog).toEqual([
+      { field_id: "close", display_name: "收盘价", group: "行情价格" },
+      { field_id: "funding_rate", display_name: "资金费率", group: "合约指标" },
+      { field_id: "x", display_name: "x", group: "其他" }
+    ]);
+    expect(outputFieldLabels(["close", "gone"], catalog)).toEqual([
+      { id: "close", name: "收盘价" },
+      { id: "gone", name: "gone" }
+    ]);
+    expect(outputFieldSections(catalog, id => id !== "x", "资金").map(section => section.name)).toEqual(["合约指标"]);
   });
 });

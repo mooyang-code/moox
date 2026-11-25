@@ -17,6 +17,7 @@ import type { Exchange, MarketType } from "@/api/trade/types";
 import InspectionResult from "./inspection-result.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import type { InspectionView } from "./inspection";
+import { sortMarkets } from "@/views/trading/accounts/shared/markets";
 import { previewAllowsNext, runPreview, type PreviewState } from "./inspection-actions";
 
 defineOptions({ name: "TradeInspectionPreview" });
@@ -55,7 +56,7 @@ async function run() {
     exchange: props.exchange,
     environment: props.environment,
     credential_secret_id: props.secretId,
-    ...(props.markets?.length ? { markets: [...props.markets].sort((a, b) => a - b) } : {})
+    ...(props.markets?.length ? { markets: sortMarkets(props.markets) } : {})
   });
   if (mine !== sequence) return;
   state.value = result.state;

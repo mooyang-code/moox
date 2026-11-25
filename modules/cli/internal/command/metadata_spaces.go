@@ -1,12 +1,9 @@
 package command
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-
-	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 )
 
 type metadataSpaceChoice struct {
@@ -23,8 +20,10 @@ func metadataSpaceCatalog(seed metadataSeed) []metadataSpaceChoice {
 	return choices
 }
 
-func businessSetupSpaces(seed metadataSeed) ([]setupclient.Space, error) {
-	spaces := make([]setupclient.Space, 0, len(seed.Spaces))
+// businessSpaceIDs 校验种子里的业务空间（名称、市场、时区必填，ID 不重复），按 ID 排序返回。
+// 空间只登记在 Storage：随元数据经 metadata apply 写入。
+func businessSpaceIDs(seed metadataSeed) ([]string, error) {
+	ids := make([]string, 0, len(seed.Spaces))
 	seen := make(map[string]struct{}, len(seed.Spaces))
 	for _, item := range seed.Spaces {
 		spaceID := strings.TrimSpace(item.SpaceID)
@@ -38,23 +37,10 @@ func businessSetupSpaces(seed metadataSeed) ([]setupclient.Space, error) {
 		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.Market) == "" || strings.TrimSpace(item.Timezone) == "" {
 			return nil, fmt.Errorf("metadata space %q requires name, market, and timezone", spaceID)
 		}
-		attributes := item.Attributes
-		if attributes == nil {
-			attributes = map[string]string{}
-		}
-		attributesJSON, err := json.Marshal(attributes)
-		if err != nil {
-			return nil, fmt.Errorf("encode metadata space %q attributes: %w", spaceID, err)
-		}
-		spaces = append(spaces, setupclient.Space{
-			SpaceID: spaceID, Name: strings.TrimSpace(item.Name),
-			Description: strings.TrimSpace(item.Description), Owner: strings.TrimSpace(item.Owner),
-			Market: strings.TrimSpace(item.Market), Timezone: strings.TrimSpace(item.Timezone),
-			Status: item.status(), AttributesJSON: string(attributesJSON),
-		})
+		ids = append(ids, spaceID)
 	}
-	sort.Slice(spaces, func(i, j int) bool { return spaces[i].SpaceID < spaces[j].SpaceID })
-	return spaces, nil
+	sort.Strings(ids)
+	return ids, nil
 }
 
 func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, error) {
@@ -107,24 +93,9 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 			out.Datasets = append(out.Datasets, item)
 		}
 	}
-	for _, item := range seed.FieldGroups {
-		if keep(item.SpaceID) {
-			out.FieldGroups = append(out.FieldGroups, item)
-		}
-	}
-	for _, item := range seed.Fields {
-		if keep(item.SpaceID) {
-			out.Fields = append(out.Fields, item)
-		}
-	}
 	for _, item := range seed.DatasetColumns {
 		if keep(item.SpaceID) {
 			out.DatasetColumns = append(out.DatasetColumns, item)
-		}
-	}
-	for _, item := range seed.Views {
-		if keep(item.SpaceID) {
-			out.Views = append(out.Views, item)
 		}
 	}
 	return out, nil

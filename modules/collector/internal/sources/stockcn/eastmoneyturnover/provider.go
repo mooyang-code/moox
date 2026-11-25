@@ -43,12 +43,12 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney_turnover", SourceID: "turnover_http", DisplayName: "东方财富换手率", Hosts: []string{"push2his.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "eastmoney_turnover", SourceID: "turnover_http", DisplayName: "东方财富换手率", Hosts: []string{"push2his.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 // FieldSpecs：停牌日补出的行换手率是 0（fill=zero），与成交量一致。
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
-	return []marketdata.FieldSpec{{ID: FieldTurnoverRate, Name: "换手率", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1d"}}}
+	return []marketdata.FieldSpec{{ID: FieldTurnoverRate, Name: "换手率", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1d"}}}
 }
 
 // FetchFields 一次请求取 [Start, End) 内各交易日的换手率。来源没有这只股票、某天没有这一行、那一天的换手率不是数字时不出值。

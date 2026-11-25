@@ -20,19 +20,6 @@ type DatasetSubject struct {
 	Status      string
 }
 
-// TaskSpec is an adapter output before persistence fields are added.
-type TaskSpec struct {
-	RouteID    string
-	Provider   string
-	SourceID   string
-	MarketType string
-	DataType   string
-	DatasetID  string
-	SubjectID  string
-	Frequency  string
-	Params     map[string]any
-}
-
 // WriteTarget 是一次采集请求里某个任务结果数据集的写入目标（序号、hash、总数随请求下发）。
 type WriteTarget struct {
 	ID             string     `json:"write_target_id"`
@@ -40,7 +27,6 @@ type WriteTarget struct {
 	InstanceID     string     `json:"instance_id"`
 	TaskID         string     `json:"task_id"`
 	DatasetID      string     `json:"dataset_id"`
-	ViewID         string     `json:"view_id,omitempty"`
 	OutputFields   string     `json:"output_fields_json,omitempty"`
 	SeriesIndex    uint32     `json:"series_index"`
 	SeriesHash     string     `json:"series_hash"`

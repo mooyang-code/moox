@@ -42,7 +42,7 @@ func deciderFixture(t *testing.T, market string) (*Decider, *deciderAdapter, sto
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: market, ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", Environment: "PRODUCTION", MarketType: market, ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			Linear: true, ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -50,7 +50,7 @@ func deciderFixture(t *testing.T, market string) (*Decider, *deciderAdapter, sto
 			return err
 		}
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space", TradingAccountID: "paper", Name: "Decider", Exchange: "BINANCE",
+			SpaceID: "space", TradingAccountID: "paper", Name: "Decider", Exchange: "binance",
 			Markets: []string{market}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{"BTC-USDT": "10"},
 			PaperConfig: &store.PaperAccountConfigRecord{SpaceID: "space", TradingAccountID: "paper",
@@ -74,7 +74,7 @@ func deciderFixture(t *testing.T, market string) (*Decider, *deciderAdapter, sto
 func TestDeciderFrozenMarketAndFirstLimitPrices(t *testing.T) {
 	for _, orderType := range []string{"MARKET", "LIMIT"} {
 		t.Run(orderType, func(t *testing.T) {
-			d, adapter, order := deciderFixture(t, "SPOT")
+			d, adapter, order := deciderFixture(t, "spot")
 			price := "100"
 			order.OrderType, order.TimeInForce = orderType, "GTC"
 			if orderType == "MARKET" {
@@ -113,7 +113,7 @@ func TestDeciderLiveQuotePoliciesAndFees(t *testing.T) {
 		{"fok-marketable", "LIMIT", "FOK", "101", "BUY", "101", "0.202", "TAKER", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, _, order := deciderFixture(t, "SPOT")
+			d, _, order := deciderFixture(t, "spot")
 			order.OrderType, order.TimeInForce, order.Side = tc.kind, tc.policy, tc.side
 			if tc.limit != "" {
 				order.LimitPrice = &tc.limit
@@ -146,7 +146,7 @@ func TestDeciderFirstMatchLimitTakesWithSlippageCappedAtLimit(t *testing.T) {
 		{"卖单减滑点低于限价按限价", "SELL", "100", "99.5", "99.5", "0.199"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, adapter, order := deciderFixture(t, "SPOT")
+			d, adapter, order := deciderFixture(t, "spot")
 			limit := tc.limit
 			order.OrderType, order.TimeInForce, order.Side = "LIMIT", "GTC", tc.side
 			order.LimitPrice, order.FirstMatchPending, order.ReferencePrice = &limit, true, tc.reference
@@ -167,7 +167,7 @@ func TestDeciderFirstMatchLimitTakesWithSlippageCappedAtLimit(t *testing.T) {
 func TestDeciderStaleQuoteUsesInjectedClock(t *testing.T) {
 	for _, policy := range []string{"GTC", "IOC", "FOK"} {
 		t.Run(policy, func(t *testing.T) {
-			d, adapter, order := deciderFixture(t, "SPOT")
+			d, adapter, order := deciderFixture(t, "spot")
 			limit := "102"
 			order.OrderType, order.TimeInForce, order.LimitPrice = "LIMIT", policy, &limit
 			adapter.quote.SourceTime = d.Now().Add(-11 * time.Second)
@@ -181,7 +181,7 @@ func TestDeciderStaleQuoteUsesInjectedClock(t *testing.T) {
 func TestDeciderQuoteFailureRemainsRetryableForEveryPolicy(t *testing.T) {
 	for _, policy := range []string{"GTC", "IOC", "FOK"} {
 		t.Run(policy, func(t *testing.T) {
-			d, adapter, order := deciderFixture(t, "SPOT")
+			d, adapter, order := deciderFixture(t, "spot")
 			limit := "102"
 			order.OrderType, order.TimeInForce, order.LimitPrice = "LIMIT", policy, &limit
 			failure := errors.New("quote provider unavailable")
@@ -194,14 +194,14 @@ func TestDeciderQuoteFailureRemainsRetryableForEveryPolicy(t *testing.T) {
 }
 
 func TestDeciderReservationUsesAvailablePlusOwnReserve(t *testing.T) {
-	for _, market := range []string{"SPOT", "SWAP"} {
+	for _, market := range []string{"spot", "swap"} {
 		t.Run(market, func(t *testing.T) {
 			d, adapter, order := deciderFixture(t, market)
 			price := "100"
 			order.PaperExecutionPrice = &price
 			order.RemainingReservedQuantity = "10.1"
 			available := "90.1"
-			if market == "SWAP" {
+			if market == "swap" {
 				available = "0.1"
 			}
 			adapter.snapshot.AvailableFunds = shared.MustDecimal(available)
@@ -223,7 +223,7 @@ func TestDeciderSwapRealizedPnLCapsClosingQuantity(t *testing.T) {
 		{"0.4", "SELL", "8"}, {"-0.4", "BUY", "-8"}, {"0.4", "BUY", "0"}, {"-0.4", "SELL", "0"},
 	} {
 		t.Run(tc.position+tc.side, func(t *testing.T) {
-			d, _, order := deciderFixture(t, "SWAP")
+			d, _, order := deciderFixture(t, "swap")
 			require.NoError(t, d.Store.Transaction(context.Background(), func(tx *store.Tx) error {
 				return tx.UpsertPosition(store.PositionRecord{SpaceID: "space", TradingAccountID: "paper", InstrumentID: "BTC-USDT",
 					ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: tc.position, EntryPrice: "100", Leverage: "10"})
@@ -251,10 +251,10 @@ func TestDeciderStorageFailureIsInfrastructureError(t *testing.T) {
 
 // 现货手续费按成交额（报价币）计价和扣除：USDT 结算账户交易 ETH/BTC 时手续费币种是 BTC，而不是账户结算币 USDT。
 func TestDeciderSpotFeeAssetIsQuoteAssetOfThePair(t *testing.T) {
-	d, adapter, order := deciderFixture(t, "SPOT")
+	d, adapter, order := deciderFixture(t, "spot")
 	require.NoError(t, d.Store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: "ETHBTC",
+			Exchange: "binance", Environment: "PRODUCTION", MarketType: "spot", ExchangeSymbol: "ETHBTC",
 			InstrumentID: "ETH-BTC", BaseAsset: "ETH", QuoteAsset: "BTC", SettlementAsset: "BTC",
 			Linear: true, ContractValue: "1", ContractValueAsset: "ETH", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.00001", Status: "TRADING",

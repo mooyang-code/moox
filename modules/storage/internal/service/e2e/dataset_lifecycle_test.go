@@ -174,7 +174,7 @@ func createDataset(t *testing.T, ctx context.Context, service *catalog.Service, 
 	t.Helper()
 	rsp, err := service.CreateDataset(ctx, &pb.CreateDatasetReq{
 		Dataset: &pb.Dataset{SpaceId: "quant", DatasetId: datasetID, DataSourceId: "source_a", Name: name, DataKind: pb.DataKind_DATA_KIND_RECORD},
-		Columns: []*pb.DatasetColumn{{ColumnName: "value", OriginId: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", Attributes: map[string]string{"display_name": "数值"}}},
+		Columns: []*pb.DatasetColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active", DisplayName: "数值"}},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("create Dataset %s: rsp=%v err=%v", datasetID, rsp, err)
@@ -244,25 +244,9 @@ func (s *countingPanicStore) GetSpace(ctx context.Context, id string) (*pb.Space
 	s.guard("GetSpace")
 	return s.Store.GetSpace(ctx, id)
 }
-func (s *countingPanicStore) ListSpaces(ctx context.Context, owner string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
+func (s *countingPanicStore) ListSpaces(ctx context.Context, owner, status string, page *pb.Page) ([]*pb.Space, *pb.PageResult, error) {
 	s.guard("ListSpaces")
-	return s.Store.ListSpaces(ctx, owner, page)
-}
-func (s *countingPanicStore) GetView(ctx context.Context, space, id string) (*pb.View, error) {
-	s.guard("GetView")
-	return s.Store.GetView(ctx, space, id)
-}
-func (s *countingPanicStore) ListViews(ctx context.Context, space, dataset, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
-	s.guard("ListViews")
-	return s.Store.ListViews(ctx, space, dataset, status, page)
-}
-func (s *countingPanicStore) ListViewsByDataset(ctx context.Context, space, dataset string) ([]*pb.View, error) {
-	s.guard("ListViewsByDataset")
-	return s.Store.ListViewsByDataset(ctx, space, dataset)
-}
-func (s *countingPanicStore) ListViewColumns(ctx context.Context, space, view string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	s.guard("ListViewColumns")
-	return s.Store.ListViewColumns(ctx, space, view, page)
+	return s.Store.ListSpaces(ctx, owner, status, page)
 }
 func (s *countingPanicStore) GetDataSource(ctx context.Context, space, source string) (*pb.DataSource, error) {
 	s.guard("GetDataSource")
@@ -291,26 +275,6 @@ func (s *countingPanicStore) ListDatasets(ctx context.Context, query coremetadat
 func (s *countingPanicStore) ListDatasetSubjects(ctx context.Context, space, dataset, subject string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
 	s.guard("ListDatasetSubjects")
 	return s.Store.ListDatasetSubjects(ctx, space, dataset, subject, page)
-}
-func (s *countingPanicStore) GetFieldGroup(ctx context.Context, space, group string) (*pb.FieldGroup, error) {
-	s.guard("GetFieldGroup")
-	return s.Store.GetFieldGroup(ctx, space, group)
-}
-func (s *countingPanicStore) ListFieldGroups(ctx context.Context, space, parent string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
-	s.guard("ListFieldGroups")
-	return s.Store.ListFieldGroups(ctx, space, parent, page)
-}
-func (s *countingPanicStore) GetField(ctx context.Context, space, field string) (*pb.Field, error) {
-	s.guard("GetField")
-	return s.Store.GetField(ctx, space, field)
-}
-func (s *countingPanicStore) ListFields(ctx context.Context, query coremetadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
-	s.guard("ListFields")
-	return s.Store.ListFields(ctx, query)
-}
-func (s *countingPanicStore) CountFieldsByGroup(ctx context.Context, space string) (coremetadata.FieldGroupCounts, error) {
-	s.guard("CountFieldsByGroup")
-	return s.Store.CountFieldsByGroup(ctx, space)
 }
 func (s *countingPanicStore) ListDatasetColumns(ctx context.Context, space, dataset string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	s.guard("ListDatasetColumns")

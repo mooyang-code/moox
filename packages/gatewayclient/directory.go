@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/client"
 )

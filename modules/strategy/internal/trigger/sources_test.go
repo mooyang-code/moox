@@ -30,12 +30,12 @@ portfolio:
   max_missing: 1
 `
 
-const dailyView = "view_factor_d"
+const dailyView = "dataset_factor_d"
 
 // alignedBar 是收盘时刻（bar0 + 24h，即次日 00:00）与日线收盘对齐的那根 1h 主帧的序号。
 const alignedBar = 23
 
-// newSourceHarness 是 1h 主帧（view_factor_a）加 1d 来源 daily（view_factor_d，成员 g）的实例。
+// newSourceHarness 是 1h 主帧（dataset_factor_a）加 1d 来源 daily（dataset_factor_d，成员 g）的实例。
 func newSourceHarness(t *testing.T) *harness {
 	t.Helper()
 	return newSourceHarnessWith(t, sourceRankDSL)
@@ -43,11 +43,11 @@ func newSourceHarness(t *testing.T) *harness {
 
 func newSourceHarnessWith(t *testing.T, dslYaml string) *harness {
 	t.Helper()
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}},
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}},
 		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"},
 		Sources: map[string]input.SourceBinding{"daily": {Bar: "1d", Calendar: input.DefaultCalendar,
-			Tasks:   map[string]input.TaskBinding{"spot": {ViewID: dailyView, FactorTaskID: "ftask_d", DatasetID: "ds_d"}},
+			Tasks:   map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_d", DatasetID: dailyView}},
 			Columns: map[string]input.ColumnBinding{"g": {Source: input.SourceFactor, Member: "g", FactorID: "g", DefinitionHash: "h2"}},
 			Factors: map[string]string{"g": "h2|fixed"}, ViewColumns: []string{"close", "g"}}}}
 	h := newHarnessWith(t, dslYaml, nil, resolved)
@@ -61,7 +61,7 @@ func newSourceHarnessWith(t *testing.T, dslYaml string) *harness {
 // dailyEvent 构造日线来源的就绪事件：period_time 是收盘于 alignedBar 的那根日线的 bar_start（bar0）。
 func (h *harness) dailyEvent(status, hash string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
 	message, payload := h.event(0, map[string]string{"g": hash}, status)
-	payload.ViewId, payload.Frequency, payload.PeriodTime = dailyView, "1d", bar0.Unix()
+	payload.DatasetId, payload.Frequency, payload.PeriodTime = dailyView, "1d", bar0.Unix()
 	message.EventId = fmt.Sprintf("%s-%s-%s", dailyView, status, hash)
 	return message, payload
 }
@@ -194,14 +194,14 @@ func TestSingleTaskInstanceWritesNoArrival(t *testing.T) {
 
 // 参考市场的事件只确认，不求值、不计入健康失败。
 func TestReferenceViewEventIgnored(t *testing.T) {
-	resolved := input.Resolved{Market: dsl.SingleMarket("swap"), Tasks: map[string]input.TaskBinding{"swap": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}},
-		References: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_r", FactorTaskID: "ftask_r", DatasetID: "ds_r"}},
+	resolved := input.Resolved{Market: dsl.SingleMarket("swap"), Tasks: map[string]input.TaskBinding{"swap": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}},
+		References: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_r", DatasetID: "dataset_factor_r"}},
 		Bar:        "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	referenceDSL := "name: ref\nmarket: {select: swap, reference: [spot]}\nuniverse: {min_age_bars: 1, age_markets: all}\nrules:\n  - {id: r, type: rank, score: m, select: {top: 1}, weight: 1}\nportfolio: {max_missing: 1}\n"
 	h := newHarnessWith(t, referenceDSL, nil, resolved)
 	message, payload := h.event(1, map[string]string{"f": "h1"})
-	payload.ViewId = "view_factor_r"
+	payload.DatasetId = "dataset_factor_r"
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	if h.resultCount() != 0 || h.loader.calls != 0 || len(h.observer.results) != 0 {
 		t.Fatalf("参考市场的事件不应求值或记录：results=%d calls=%d observed=%v", h.resultCount(), h.loader.calls, h.observer.results)

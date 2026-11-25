@@ -26,10 +26,10 @@ rows = [
     ("inst-a", base + 900000, "skipped", "expired", []),
 ]
 for n, (iid, bar, status, reason, targets) in enumerate(rows):
-    c.execute("INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_summary_json) "
-              "VALUES (?, ?, 'sess-a', ?, ?, ?, ?, 'sha256:a', '{}', ?, '{}')", ("res-%d" % n, iid, bar, bar + 600000, status, reason, json.dumps(targets)))
+    c.execute("INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_input_json, c_targets_json, c_summary_json) "
+              "VALUES (?, ?, 'sess-a', ?, ?, ?, ?, '{}', ?, '{}')", ("res-%d" % n, iid, bar, bar + 600000, status, reason, json.dumps(targets)))
 # 规则状态每个实例一行：200 字节，推进到最后一个求值的期
-c.execute("INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_dsl_hash, c_bar_end_time, c_state_json, c_mtime) VALUES ('inst-a', 'sess-a', 'sha256:a', ?, ?, '2026-10-26 18:15:00')",
+c.execute("INSERT INTO t_strategy_states (c_instance_id, c_session_id, c_bar_end_time, c_state_json, c_mtime) VALUES ('inst-a', 'sess-a', ?, ?, '2026-10-26 18:15:00')",
           (base + 900000, "x" * 200))
 c.commit()
 PY

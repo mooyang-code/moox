@@ -23,24 +23,6 @@
 | Field / 列 | 数据集的字段；因子结果是结果数据集的列 |
 | View | 面向查询的宽表，由 Storage 异步构建，可重建 |
 
-## 事件中心
-
-- **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓）。管理台叫「事件中心」。
-- **在哪**：组件 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
-- **常用**：
-
-```bash
-./bin/moox-cli event catalog                                      # 可配置的事件与可限定的范围
-./bin/moox-cli event rules list|get|update|delete|test            # 事件规则；新建规则返回验证密钥明文，Agent 不新建，请用户在管理台「事件中心」的“订阅”页签新建
-./bin/moox-cli event executions list|get|retry|cancel|ack         # 执行记录：失败重试、取消（下架处理会同时解除禁止）、确认
-./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架（会触发系统规则）
-```
-
-- 手工登记下架的后果：登记后立即禁止买入，到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。管理台「事件中心」“事件”页签里“标的即将下架”一行的“手工登记”效果相同。
-
-- 库文件没有迁移：事件中心启动时发现表结构是旧的（报“数据库是旧版本的结构”）就拒绝启动，要先停服务、删库文件（部署根下的 `data/callback-dispatcher/moox_callback_dispatcher.db*`）再启动，和用户确认后再做。
-- 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`event_center_attention`）见 [`monitor-attention.md`](monitor-attention.md)。
-
 ## 采集
 
 - **做什么**：按采集任务定时拉取或经 WebSocket 推送 K 线，写入 Storage；巡检缺口、补采、K 线合成（重采样）、每小时同步交易所标的。
@@ -59,7 +41,7 @@
 # 不给 --output-field 就输出合成的全部固定字段，资金费率与附加字段不合成）；要历史数据再用 collector resample backfill
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
-./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
+./bin/moox-cli collector kline absences-clear ...                    # 行情源后来补上数据时清除“行情源本来没有”的确认
 ./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
 ./bin/moox-cli collector ingest-mode get|set                          # 采集方式 stream / scf / local（set --ingest ...，没有 --force）
@@ -75,20 +57,20 @@
 - 云账号与代码包：`collector account list|regions|delete`、`collector package list|delete`；云账号的新建与修改在管理台“数据采集 › 采集任务”的“运行状态”页签里的“云账号”对话框，初始账号由 `setup init` 登记。
   换过云账号之后，旧账号下建的函数 Collector 管不到，`collector function delete` 也删不到，用 `setup inspect-scf` 查出来再到腾讯云控制台手工删。
 - 附加字段（K 线行情之外的可选列：币安永续的资金费率，A 股日线的复权因子、申万行业、财务）只能在建任务时用 `--output-field` 选全，任务建好后只能减少、不能新增；`collector data-type show` 的 `extra_fields` 列出每个字段适用的市场、品种和频率。A 股日线的完整步骤见 [`ashare-daily.md`](ashare-daily.md)。
-- **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `collector_attention:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
+- **东方财富限流**：控制机上 Collector 直连东方财富（A 股标的列表、美股交易所对照）默认每秒 2 个请求、顺序发出；连续 5 次传输层失败或一次 429、403 就对该主机冷却（首次 10 分钟，翻倍，最长 60 分钟），期间不发请求，结束后自动探测恢复；push2 单独冷却会回退 push2test、不告警，push2 与 push2test 都冷却才上报关注项 `attention:collector:eastmoney_cooling_down`。被限流后等冷却结束，不要手工狂打、不要重启 Collector；**禁止在生产主机上跑没有上限的临时脚本访问东方财富**，实测用临时云函数（南京出口）并设请求总数上限，或写进 Collector 复用限流器；一次性探测也要总请求数硬上限、每秒不超过 1～2 个、连续失败 3 次立即停止（`docs/模块/采集.md` 第 6a 节）。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。
 
 ## 存储（Storage）
 
-- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含周期账本、保留期清理，完成事件跟随变更日志转发）；storage-view 管可重建的 View（DuckDB/Bleve）。
+- **做什么**：storage-primary 管元数据目录（SQLite）和字段级事实（Pebble，含周期账本、保留期清理，完成事件跟随变更日志转发）；storage-view 管可重建的 View：每个数据集恰好一个查询索引（时序 DuckDB、记录 Bleve），随数据集建删，按数据集 ID 寻址。
 - **在哪**：存储机，两个角色同机。数据集建好即可写入，不需要激活。
 - **常用**：
-  - 元数据：`metadata source|subject|tag|dataset|field|field-group|view list|show|create|update|delete`；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
+  - 元数据：`metadata source|subject|tag|dataset list|show|create|update|delete`（列用 `metadata dataset columns|add-column`）；种子导入 `metadata apply|import`；手动标签 `metadata tag members|clone`。
   - 读数据：`data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`。
-  - 维护：`storage repair-view|delete-view`
+  - 维护：`storage repair-view`
     （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）。
 - **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间。
-- **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重新部署对应主机才生效（`setup deploy --host <主机>`）。
+- **注意**：新建数据集（即新建 View）、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重新部署对应主机才生效（`setup deploy --host <主机>`）。
 - 协议与命名规则：[`protocol.md`](protocol.md)。
 
 ## 因子
@@ -116,16 +98,15 @@
   迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
 - **市场模式**：DSL 顶层 `market` 的 `select`（从现货、永续还是两边选币）与 `prefer`（两边都能交易时优先在哪个市场下单）只有 5 种合法组合，
   决定实例要绑几个因子任务（[`strategy-dsl.md`](strategy-dsl.md) 的“market：市场模式”）。
-- **双任务与统一数据集**：同时涉及现货和永续时有两种绑法——现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
-  一个市场的因子本期被跳过时只让这个市场不可用）；或绑统一数据集（同一数据集里放现货、永续两条序列）上的一个任务，写 `--factor-task multi=…`，只能单独绑定，到达即求值，
-  不支持 `factor_params`、不能进策略池。
+- **双任务**：同时涉及现货和永续时，现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
+  一个市场的因子本期被跳过时只让这个市场不可用）。
 - **策略池**：定义里写 `strategy_pool`（与 `rules` 互斥），成员引用已有策略定义，各自在模拟账本里算净值，按 `fixed` 比例或 `rotation` 轮动分配资金；
   启用后先预热，预热完成前不求值、不能 `confirm`；研究回放支持，只能用结果 View 来源（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
 - **注意**：一个因子任务可以被多个实例引用，只有写了 `factor_params` 的实例启用时独占关联它（一个任务只关联一个实例）；实例的任务在创建时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
 
 ## 交易
 
-- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘（币安、OKX、A 股、港股；A 股与港股只有模拟盘，港股按港元结算、每手股数逐只不同、当日买入可卖）；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
+- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘（币安、OKX、A 股、港股；A 股与港股只有模拟盘，港股按港元结算、每手股数逐只不同、当日买入可卖）；实盘风控：下架处理（收到下架事件立即把标的写进名单、只减不增，T−24h、T−2h 两轮自动清仓策略持有的部分，T+10 分钟核对；演练只对模拟盘生效）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
 - **在哪**：组件 `trade`，默认海外机（`[deployments]` 决定）。
 - **常用**（查询；写操作见 `command-index.md` 的 trade 一节，默认只预览，`--yes` 才执行）：
 
@@ -135,13 +116,15 @@
 ./bin/moox-cli trade actions --logical-account-id <ID> [--action-type REDUCE]   # 人工操作记录（清仓、减仓、下架清仓…）
 ./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
 ./bin/moox-cli trade blocked list                                  # 下架名单（全局）
-./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+./bin/moox-cli trade holders --exchange binance --market-type spot --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+./bin/moox-cli trade delist list [--active-only]                   # 下架记录：状态、已规划轮次、各轮各组合的清仓动作
+./bin/moox-cli collector delist register --exchange binance --market spot --symbol FOOUSDT --delist-at <RFC3339，如 2026-12-10T08:00:00Z> [--paper-only] --yes   # 手工登记下架
 ./bin/moox-cli trade logical fund-settings --logical-account-id <ID> --reserve-ratio 0.05 --yes   # 改资金预留比例（先取回已有设置再合并）
 ./bin/moox-cli trade logical pause|resume --logical-account-id <ID> --yes   # 暂停、恢复组合的自动执行
 ```
 
-- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台“交易管理 › 下架名单”里操作。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
-- 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`trade_attention`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
+- **注意**：实盘账户上的写操作（建账户、下单、撤单、清仓、暂停恢复、改设置）执行前先得到用户在对话里的明确同意，模拟账户可以直接做；下单或清仓超时后先用 `trade actions`、`trade order list` 查是否已执行，重试用 `--data` 带上原 `action_id`、`client_order_id`，避免重复下单。解除下架禁止由用户在管理台“交易管理 › 下架名单”里操作（会一并取消进行中的下架处理，含演练）。手工登记下架的后果：登记后立即禁止买入，到下架前 24 小时（已不足 24 小时的立即）自动卖出策略持有的仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`，名单与清仓都只对模拟盘生效，演练核对结束后名单行自动删掉。Trade 暂停期间照常收事件、写名单，但时间线不推进（不清仓）。保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后再恢复（`trade logical resume` 或管理台）。
+- 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`attention:trade:*`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控
 
@@ -163,30 +146,30 @@
 - 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog`、`host agent status|snapshot|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
 - 部署、升级与回滚：[`source-deploy.md`](source-deploy.md)；主机代理：[`host-agent.md`](host-agent.md)。
-- 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
-  `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
+- 腾讯云：`setup firewall`（按拓扑放行所需端口）、`setup reboot-host`（重启无响应的主机）、
+  `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
 - 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup status` 看各主机的版本与组件状态（`setup validate` 同样按组件报告是否已部署，并给出新安装、覆盖更新、卸载三种方式里可选的那些），`setup logs` 看组件日志。
 
 ## 归档
 
-把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：每收盘 N 根（`--pull-every-bars`，默认 1）拉一次新收盘的几根，
-低于 1d 的另有每小时第 34 分的复核（推进水位），1d 及以上每天一次。读取避开采集触发时刻：规则由 archive-mgr 按有任务的空间的采集频率推出并下发给 worker，`archive overview` 的 `avoidance` 可见。
-管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录、磁盘与避让规则；CSV 导入与按时间区间清除无法补齐区间只有命令行（`archive import`、`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
+把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：mgr 每分钟给每个任务生成一条跟随（follow）运行，worker 按 Storage 的变更日志读改动过的行，到期的分区导出、定稿；
+首次运行或位点失效（worker 停机超过 7 天）时从回补起点（默认线上保留期起点）整段重读，crypto 1m 要十几个小时，进度见任务的最近运行。读取 Storage 只在每分钟第 25～55 秒、且避开每小时 :58～:04（写死，worker 的 `pacing.minute_window` 可关掉秒窗口）。
+保留期内的数据只要写进 Storage 就会进归档；保留期之外的历史用 `moox-cli import --target archive` 导入（见 [`initial-import.md`](initial-import.md)）。
+管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录与磁盘；按时间区间清除无法补齐区间只有命令行（`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
 分区路径 `<空间>/<用途>/<目录名>/<yyyy>/<yyyymmdd>.csv.gz`（1d 及以上是月分区 `<yyyymm>`；worker 配置 `export_format: csv` 时扩展名为 `.csv`），用途 `collect`（采集结果）/ `factor`（因子结果）/ `data`，目录名建任务时定（`tasks prepare` 给建议值，`tasks create --dir-name` 可改），建好后不改；归档根目录的 `datasets.csv` 是目录与数据集的对照表。
 
 ```bash
-./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期与推荐的拉取间隔
-./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> [--pull-every-bars 5]
-./bin/moox-cli archive tasks list|preview               # 列出任务；预览接下来的拉取、复核时刻与分区导出时间
-./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
-./bin/moox-cli archive tasks backfill|run|update|delete ...
-./bin/moox-cli archive import template --space-id crypto --dataset-id <数据集>        # 导入文件的表头
-./bin/moox-cli archive import --space-id crypto --dataset-id <数据集> --csv <文件.csv|.csv.gz> [--overwrite] --wait --yes
+./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期、最早回补起点与建议目录名
+./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> [--backfill-from <RFC3339>]
+./bin/moox-cli archive tasks list
+./bin/moox-cli archive overview | runs list [--include-follow]|get|cancel | partitions list|get
+./bin/moox-cli archive tasks backfill|run|update|delete ...      # run 是整段重读线上保留期
+./bin/moox-cli import --space-id crypto --dataset-id <数据集> --frequency 1m --path <文件.csv|.csv.gz|目录> --target archive --series-tag <tag> [--allow-missing] [--dry-run]
 ./bin/moox-cli archive tasks clear-unrecoverable --space-id crypto --dataset-id <数据集> --start <RFC3339> --end <RFC3339> --yes
 ```
 
-导入：经 SSH 把文件传到 archive-worker 所在主机的 `<归档根目录>/.import/<import_id>/`，worker 先整份校验（有一行不对就整份拒绝、什么都不写，消息列前 20 条带行号的错误），再分块写入；默认同键已存在时只补空缺，`--overwrite` 覆盖（必须带齐全部值列）。
-导入不推进水位、不自动清无法补齐区间，补齐历史缺口后确认再用 `clear-unrecoverable` 清。规则细节见 `docs/模块/归档.md` 第 9 节“CSV 导入”。
+导入（`import --target archive`）：CLI 先整份校验全部文件（与写 Storage 同一套规则），再建一条占住任务的导入运行，行经 worker 数据端口（只出站主机经 control 中转，较慢）写进暂存区，命令结束时统一导出；同键已归档的一律覆盖，`series_tag` 必须非空；只写归档时可用带 `subject_id` 列的多标的文件、不检查标签范围。
+预检按行数估算 worker 暂存库要的磁盘，不够时按时间拆成几次导入。导入不自动清无法补齐区间，补齐历史缺口后确认再用 `clear-unrecoverable` 清。规则细节见 `docs/模块/归档.md` 第 9 节“导入运行”。
 
 对象存储副本：默认用随 archive-worker 部署的内置 SeaweedFS（`moox-seaweedfs`，只听 127.0.0.1，和归档文件同盘，不防整盘故障）；要异地副本就在 `moox.toml` 写 `[archive_object_store]` 改用外部 S3（只写 endpoint、region、bucket、url_style、storage_class 与管理台密钥的 `secret_id`，不写密钥值；第一次加只能用 `config edit` 的“归档对象存储”一组）。
 worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺文件从远端取回；用外部 S3 时换机器不用拷目录。对象存储连续不可用超过 5 分钟，Monitor 推送“归档对象存储”告警。看状态：`archive tasks list` 的 `remote_pending_count` / `remote_verified_count`，
@@ -203,6 +186,6 @@ worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺�
 
 ## 空间、密钥与配置
 
-- 空间：`space list|show|create|update|delete`；新空间还要在 Storage 建元数据（数据来源、数据集、字段），用 `metadata apply` 从 `config/setup/metadata.yaml` 的写法导入。
+- 空间：`space list|show|create|update|delete`（空间只登记在 Storage；`space delete` 会清空该空间全部数据，执行前必须向用户说明）；建好后用 `metadata apply` 从 `config/setup/metadata.yaml` 的写法导入数据来源、数据集、字段。
 - 密钥（交易所、云账户等）：请用户在管理台“系统设置 › 密钥管理”自己填写，Agent 只用 `secret list|show` 看清单（值已打码）。`gateway call` 拒绝返回明文的方法。
-- `moox.toml`：Agent 用 `config get` / `config set` 读写（[`config-access.md`](config-access.md)），不直接读文件；用户要看或改时运行 `config edit`，让用户在自己的浏览器里操作；`config backup` 备份到管理台，换电脑 `config restore`。
+- `moox.toml`：Agent 用 `config get` / `config set` 读写（[`config-access.md`](config-access.md)），不直接读文件；用户要看或改时运行 `config edit`，让用户在自己的浏览器里操作；换电脑时把两份文件连同解密密钥一起拷过去。

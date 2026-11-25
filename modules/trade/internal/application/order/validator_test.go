@@ -411,7 +411,7 @@ func executableAccount(market exchange.MarketType) tradingaccount.Account {
 
 func testInstrument(market exchange.MarketType) exchange.Instrument {
 	instrument := exchange.Instrument{
-		Exchange: exchange.ExchangeBinance, MarketType: market, ExchangeSymbol: "BTC-USDT", InstrumentID: "BTC-USDT-" + string(market),
+		Exchange: exchange.ExchangeBinance, MarketType: market, ExchangeSymbol: "BTC-USDT", InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(market),
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.1"),
 		MinExchangeQuantity:  shared.MustDecimal("0.1"),
@@ -450,7 +450,7 @@ func setTestOwner(spec *orderdomain.OrderSpec, ownerType orderdomain.OwnerType) 
 	}
 	if ownerType == orderdomain.OwnerTarget {
 		runnerID := "runner-1"
-		spec.Owner.RunnerID = &runnerID
+		spec.Owner.InstanceID = &runnerID
 	}
 }
 

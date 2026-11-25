@@ -5,6 +5,8 @@ import { installE2ESession } from "./e2e-session";
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
 const NOW = Date.now();
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+// 墙钟时刻（开始、结束、心跳等）是 Unix 毫秒的十进制文本；数据时间（分区范围、min/max_data_time）是 RFC3339 文本
+const ms = (value: number) => String(value);
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 
@@ -12,7 +14,7 @@ const datasets = [
   {
     dataset_id: "ds_kline_1m",
     name: "现货 1 分钟 K 线",
-    data_kind: "DATA_KIND_TIME_SERIES",
+    data_kind: 2,
     freq: "1m",
     status: "active",
     retention: "840h"
@@ -20,12 +22,12 @@ const datasets = [
   {
     dataset_id: "ds_kline_5m",
     name: "现货 5 分钟 K 线",
-    data_kind: "DATA_KIND_TIME_SERIES",
+    data_kind: 2,
     freq: "5m",
     status: "active",
     retention: "840h"
   },
-  { dataset_id: "ds_subjects", name: "标的清单", data_kind: "DATA_KIND_RECORD", status: "active", retention: "forever" }
+  { dataset_id: "ds_subjects", name: "标的清单", data_kind: 1, status: "active", retention: "forever" }
 ];
 
 const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
@@ -34,13 +36,10 @@ const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
   freq: "1m",
   partition_unit: "day",
   retention: "840h",
-  pull_every_bars: 1,
-  interval_seconds: 3600,
   status: "enabled",
   purpose: "collect",
   dir_name: "binance-spot-kline-1m",
-  next_pull_at: iso(NOW + 2 * MINUTE),
-  last_success_at: iso(NOW - 30 * MINUTE),
+  last_success_at: ms(NOW - 30 * MINUTE),
   health: "ok",
   health_reason: "",
   partition_count: 3,
@@ -50,10 +49,10 @@ const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
   max_data_time: iso(NOW - MINUTE),
   last_run: {
     run_id: "run-1",
-    kind: "scheduled",
+    kind: "follow",
     status: "succeeded",
-    started_at: iso(NOW - 30 * MINUTE),
-    finished_at: iso(NOW - 29 * MINUTE)
+    started_at: ms(NOW - 30 * MINUTE),
+    finished_at: ms(NOW - 29 * MINUTE)
   },
   ...over
 });
@@ -62,20 +61,20 @@ const runs = [
   {
     run_id: "run-q",
     dataset_id: "ds_kline_1m",
-    kind: "tick",
+    kind: "range",
     status: "queued",
-    scheduled_at: iso(NOW),
-    range_start: iso(NOW - 2 * MINUTE),
-    range_end: iso(NOW)
+    scheduled_at: ms(NOW),
+    range_start: iso(NOW - 2 * DAY),
+    range_end: iso(NOW - DAY)
   },
   {
     run_id: "run-1",
     dataset_id: "ds_kline_1m",
-    kind: "scheduled",
+    kind: "follow",
     status: "succeeded",
-    scheduled_at: iso(NOW - 30 * MINUTE),
-    started_at: iso(NOW - 30 * MINUTE),
-    finished_at: iso(NOW - 29 * MINUTE),
+    scheduled_at: ms(NOW - 30 * MINUTE),
+    started_at: ms(NOW - 30 * MINUTE),
+    finished_at: ms(NOW - 29 * MINUTE),
     rows_read: "1440",
     rows_added: "60",
     rows_changed: "0",
@@ -172,7 +171,7 @@ async function gateway(route: Route) {
           worker: {
             worker_id: "archive-worker@factor",
             active: true,
-            last_heartbeat_at: iso(NOW - 12_000),
+            last_heartbeat_at: ms(NOW - 12_000),
             root_dir: "/data/moox/archive",
             version: "v0.6.0",
             disk_total_bytes: String(1800 * GiB),
@@ -184,16 +183,7 @@ async function gateway(route: Route) {
           },
           running_runs: [],
           queued_run_count: 1,
-          alerts: [],
-          avoidance: {
-            every_minutes: 1,
-            before_seconds: 5,
-            after_seconds: 25,
-            hour_quiet_from: "58:00",
-            hour_quiet_until: "04:00",
-            basis: "crypto：1m、1h 等（每分钟触发，有 1h 及以上）",
-            computed_at: iso(NOW - 5 * MINUTE)
-          }
+          alerts: []
         })
       });
     case "ListDeployments":
@@ -219,7 +209,7 @@ async function gateway(route: Route) {
       });
     case "RecentRows":
       return route.fulfill({
-        json: { columns: recentColumns, rows: recentRows(url.searchParams.get("before")), staged_until: iso(NOW - MINUTE) }
+        json: { columns: recentColumns, rows: recentRows(url.searchParams.get("before")) }
       });
     case "PartitionDownload":
       return route.fulfill({
@@ -239,26 +229,11 @@ async function gateway(route: Route) {
           partition_unit: "day",
           retention: "840h",
           earliest_backfill_from: iso(NOW - 34 * DAY),
-          recommended_pull_every_bars: 1,
           exists: tasks.some(item => item.dataset_id === body.dataset_id),
           purpose: "collect",
           suggested_dir_name: "binance-spot-kline-5m",
           // 已有任务的目录名算冲突
           dir_name_conflict: tasks.some(item => item.dir_name === (body.dir_name || "binance-spot-kline-5m"))
-        })
-      });
-    case "PreviewArchiveSchedule":
-      return route.fulfill({
-        json: ok({
-          next_runs: [1, 2, 3, 4, 5].map(i => iso(NOW + i * 5 * MINUTE)),
-          next_reviews: [1, 2, 3].map(i => iso(NOW + i * 60 * MINUTE)),
-          interval_seconds: 3600,
-          read_span_seconds: 4560,
-          // 后端给的是文本，不是时刻
-          partition_export_estimates: [
-            `分区 2026-11-06：预计 ${iso(NOW + 10 * MINUTE)} 导出`,
-            `分区 2026-11-07：预计 ${iso(NOW + DAY)} 导出`
-          ]
         })
       });
     case "CreateArchiveTask":

@@ -22,8 +22,8 @@ func TestDeleteBeforeRemovesOldRowsInBatches(t *testing.T) {
 		if i >= old {
 			at = cutoff.Add(time.Duration(i) * time.Minute)
 		}
-		require.NoError(t, mgr.db.Exec(`INSERT INTO t_monitor_alert_events (c_event_id, c_rule_id, c_check_id, c_event_type, c_status, c_created_at)
-VALUES (?, 'r', 'c', 'fired', 'firing', ?)`, "e"+time.Duration(i).String(), at).Error)
+		require.NoError(t, mgr.db.Exec(`INSERT INTO t_monitor_alert_events (c_event_id, c_space_id, c_check_id, c_title, c_severity, c_event_type, c_created_at)
+VALUES (?, 's', 'c', 't', 'critical', 'triggered', ?)`, "e"+time.Duration(i).String(), at).Error)
 	}
 	deleted, err := DeleteBefore(context.Background(), mgr.db, "t_monitor_alert_events", "c_created_at", cutoff)
 	require.NoError(t, err)
@@ -33,6 +33,6 @@ VALUES (?, 'r', 'c', 'fired', 'firing', ?)`, "e"+time.Duration(i).String(), at).
 	require.EqualValues(t, 5, left)
 
 	var plan []struct{ Detail string }
-	require.NoError(t, mgr.db.Raw("EXPLAIN QUERY PLAN SELECT c_id FROM t_monitor_check_results WHERE c_checked_at < ? ORDER BY c_checked_at LIMIT 10", cutoff).Scan(&plan).Error)
-	require.Contains(t, plan[0].Detail, "idx_monitor_results_checked_at")
+	require.NoError(t, mgr.db.Raw("EXPLAIN QUERY PLAN SELECT c_id FROM t_monitor_alert_events WHERE c_created_at < ? ORDER BY c_created_at LIMIT 10", cutoff).Scan(&plan).Error)
+	require.Contains(t, plan[0].Detail, "idx_t_monitor_alert_events_created_at")
 }

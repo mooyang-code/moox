@@ -35,7 +35,7 @@ func TestTargetResolutionHasDeadlineAndTimeoutDoesNotAccept(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(t, now, "target-timeout", "runner-1", "logical-1", nil), opts)
 	require.Equal(t, jetstream.RETRY, result.Decision)
 	require.ErrorIs(t, result.Err, context.DeadlineExceeded)
-	_, err := tradeStore.GetTargetReceipt(context.Background(), "space-1", "target-timeout")
+	_, err := tradeStore.GetAcceptedTargetHistory(context.Background(), "space-1", "target-timeout")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	_, err = tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)

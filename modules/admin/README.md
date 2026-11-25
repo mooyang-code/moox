@@ -29,15 +29,15 @@ Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密�
 重跑复用 CA、主密钥和已登记的公钥，保留主机与组件启停状态；每次部署重新签发主机证书。已存在加密记录却丢失主密钥，或已经登记过签名公钥却丢失 CA 时，必须恢复原件。
 数据库提交后的输出错误可直接重跑：这次生成的私钥没有送到目标机，下一次目标机上的公钥和登记的对不上，会再签发一把。失败暂存目录不会成为可安装包。
 
-后续主机部署先通过 `SyncHostDeployments` 登记，再经 control 的可信 SSH 执行 `moox-admin-cli host-bundle --host-id <目标主机> --control-host-id <控制主机> --db-path <现有数据库> --encryption-key-file <持久主密钥> --pki-dir <持久CA目录> --output-dir <私密输出父目录> [--current-sign-public-key <公钥>] [--rotate-sign-key]`。
+后续主机部署先通过 `SyncTopology` 按 `moox.toml` 整份覆盖登记，再经 control 的可信 SSH 执行 `moox-admin-cli host-bundle --host-id <目标主机> --control-host-id <控制主机> --db-path <现有数据库> --encryption-key-file <持久主密钥> --pki-dir <持久CA目录> --output-dir <私密输出父目录> [--current-sign-public-key <公钥>] [--rotate-sign-key]`。
 该命令只使用现有数据库和 CA，从持久拓扑读取目标地址与完整部署，按上面的规则决定这台主机的签名密钥（`--rotate-sign-key` 显式更换），再为本次部署重签主机证书并发布新的 0700 包；所有文件为 0600。
 停用主机的材料也可签发，启停状态保持不变。未登记主机、错误控制主机、丢失或损坏的 CA 都会失败，不发布任何包。
 
 身份包里只有：`host.key`（新签发时）、`host.crt`、`host.tls.key`、`moox-ca.crt`，部署了 collector 的主机另有 `scf-collector.key`（新签发时），以及清单 `bundle.json`。
 CA 私钥和 Admin 主密钥不进入任何输出包。`bundle.json` 的 `files` 覆盖全部载荷文件（自身除外），记录 SHA256 与长度，供部署端传输时核对。
-`moox-admin-cli keys set|list|delete` 登记、列出、删除不属于主机的身份的公钥（`moox-cli`、`scf-collector`、`moox-skill`、`collector-operator`）；组件名与 `console` 不能登记成身份。
+`moox-admin-cli keys set|list|delete` 登记、列出、删除不属于主机的身份的公钥（`moox-cli`、`scf-collector`、`moox-skill`）；组件名与 `console` 不能登记成身份。
 
-离线恢复使用 `host set-status` 或 `deployment set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
+主机与组件的启停只在 `moox.toml` 里声明，部署时整份覆盖登记；没有单独改状态的离线命令。
 
 `moox-cli setup deploy` 经 SSH 从控制机取回身份包，校验摘要后把身份与配置装到目标机，并安装操作员身份；部署操作见[部署与运维](../../docs/部署与运维.md)。代码能力不代表任一环境已经完成部署，实际状态以部署记录与就绪检查为准。
 
@@ -47,4 +47,4 @@ Admin 启动时及每天检查 MooX CA 和数据库中全部主机的公有证�
 
 `MOOX_ADMIN_PKI_DIR` 指向 bootstrap 的持久 `--pki-dir`；未设置时使用 Admin 主密钥文件同目录下的 `pki/`，未提供主密钥文件路径时默认为 `../secrets/pki`。主机证书巡检只读取 `ca.crt` 与 `hosts/<host-id>.crt`，不读取私钥或签名密钥，不创建或修复主机证书。同一个定时任务还检查 9527 的网页证书：这一步会读 CA 私钥 `ca.key`，需要时重签并写入数据目录的 `web-cert/`（不动 `hosts/` 与主机证书）。首次初始化时其他主机可能尚未签发证书，这类发现会告警并保留定时巡检，允许控制面启动，以便后续部署和换发证书。
 
-Admin 的 Auth、Ssh、SpaceMgr、SecretMgr、SysDeploy、Setup、GatewayControl 与 ActivityLog 八个内部服务仅在 loopback 提供原生 tRPC，端口为 11100、11106～11110、11112、11113；Setup 启动预检同时校验此协议。健康接口使用 HTTP。浏览器入口是 Admin 自己监听的 HTTPS 9527（`internal/webserver`：管理台页面、`/ca/*` 根证书下载与 `/api/admin/*`；控制机地址 `MOOX_ADMIN_WEB_ADDRESS`，监听地址 `MOOX_ADMIN_WEB_LISTEN`，网页证书由 `MOOX_ADMIN_PKI_DIR` 的 MooX CA 签、存在数据目录的 `web-cert/`）。浏览器调用由生成的 handler 在进程内分派，机器调用经主机网关校验各自身份。
+Admin 的 Auth、Ssh、SecretMgr、SysDeploy、Setup、GatewayControl 与 ActivityLog 七个内部服务仅在 loopback 提供原生 tRPC，端口为 11100、11106、11108～11110、11112、11113；Setup 启动预检同时校验此协议。健康接口使用 HTTP。浏览器入口是 Admin 自己监听的 HTTPS 9527（`internal/webserver`：管理台页面、`/ca/*` 根证书下载与 `/api/admin/*`；控制机地址 `MOOX_ADMIN_WEB_ADDRESS`，监听地址 `MOOX_ADMIN_WEB_LISTEN`，网页证书由 `MOOX_ADMIN_PKI_DIR` 的 MooX CA 签、存在数据目录的 `web-cert/`）。浏览器调用由生成的 handler 在进程内分派，机器调用经主机网关校验各自身份。

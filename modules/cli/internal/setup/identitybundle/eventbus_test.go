@@ -16,9 +16,9 @@ import (
 )
 
 func TestEventBusClientRelayPinsFilesAndRejectsBrokerKeysAndChangedBytes(t *testing.T) {
-	roles := []string{"hostagent-publisher", "metrics-publisher"}
+	roles := []string{"metrics-publisher", "trade-eventbus"}
 	metadata := hostbundle.ClientMetadata{Version: 1, Status: "ok", OutputDir: "/control/material-exports/client-only", Roles: roles}
-	files := map[string][]byte{"hostagent-publisher.yaml": []byte("synthetic-private-host-token\n"), "metrics-publisher.yaml": []byte("synthetic-private-metrics-token\n")}
+	files := map[string][]byte{"trade-eventbus.yaml": []byte("synthetic-private-host-token\n"), "metrics-publisher.yaml": []byte("synthetic-private-metrics-token\n")}
 	for name, raw := range files {
 		metadata.Files = append(metadata.Files, hostbundle.File{Path: name, SHA256: digest(raw), Size: int64(len(raw))})
 	}
@@ -47,7 +47,7 @@ func TestEventBusClientRelayPinsFilesAndRejectsBrokerKeysAndChangedBytes(t *test
 	entries, err := os.ReadDir(destination)
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
-	files["hostagent-publisher.yaml"][0] = 'X'
+	files["trade-eventbus.yaml"][0] = 'X'
 	refused := filepath.Join(privateParent(t), "refused")
 	require.Error(t, FetchEventBusClients(t.Context(), download, metadata, roles, refused))
 	_, err = os.Lstat(refused)

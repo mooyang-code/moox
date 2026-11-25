@@ -45,7 +45,7 @@ func normalizeTag(item *pb.Tag) error {
 func tagItemJSON(item *pb.Tag) (string, error) {
 	stored := proto.Clone(item).(*pb.Tag)
 	stored.ActiveCount, stored.InactiveCount = 0, 0
-	stored.CreatedAt, stored.UpdatedAt = "", ""
+	stored.CreatedAt, stored.UpdatedAt = 0, 0
 	return marshal(stored)
 }
 
@@ -115,7 +115,12 @@ func scanTag(row rowScanner) (*pb.Tag, error) {
 		return nil, fmt.Errorf("解析标签：%w", err)
 	}
 	item.Builtin = builtin == 1
-	item.CreatedAt, item.UpdatedAt = createdAt, updatedAt
+	if err := setTimestampField(item, "created_at", createdAt); err != nil {
+		return nil, err
+	}
+	if err := setTimestampField(item, "updated_at", updatedAt); err != nil {
+		return nil, err
+	}
 	item.ActiveCount, item.InactiveCount = active, inactive
 	return item, nil
 }

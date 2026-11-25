@@ -338,3 +338,46 @@ func BenchmarkSessionOrdinalRoundTrip(b *testing.B) {
 		}
 	}
 }
+
+// 日线按交易日取：键是交易日期的 UTC 零点（美股的 UTC 零点在纽约是前一天晚上，BucketAt 会落到前一天），区间到当天收市。
+func TestDailyBucketTakesTheTradingDate(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("没有时区数据")
+	}
+	days := weekdays{}
+	clock, err := NewSession(days, newYork, []string{"09:30-16:00"}, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	friday, _ := marketcalendar.NewCivilDate(2026, time.October, 16)
+	bucket, ok, err := DailyBucket(clock, friday)
+	if err != nil || !ok {
+		t.Fatalf("DailyBucket = %v, %v", ok, err)
+	}
+	if !bucket.Key.Equal(time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)) || !bucket.End.Equal(time.Date(2026, 10, 16, 16, 0, 0, 0, newYork)) {
+		t.Fatalf("bucket = %+v", bucket)
+	}
+	saturday, _ := marketcalendar.NewCivilDate(2026, time.October, 17)
+	if _, ok, err := DailyBucket(clock, saturday); ok || err != nil {
+		t.Fatalf("非交易日 ok = %v, err = %v", ok, err)
+	}
+	intraday, err := NewSession(days, newYork, []string{"09:30-16:00"}, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := DailyBucket(intraday, friday); err == nil {
+		t.Fatal("日内时钟不能按交易日取")
+	}
+}
+
+// weekdays 是周一到周五都交易、没有覆盖范围限制的测试日历。
+type weekdays struct{}
+
+func (weekdays) Status(date marketcalendar.CivilDate) (marketcalendar.CoverageStatus, error) {
+	switch time.Date(date.Year(), date.Month(), date.Day(), 12, 0, 0, 0, time.UTC).Weekday() {
+	case time.Saturday, time.Sunday:
+		return marketcalendar.NonTradingDay, nil
+	}
+	return marketcalendar.TradingDay, nil
+}

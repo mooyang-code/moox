@@ -117,7 +117,7 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 		report.Notes = append(report.Notes, "Monitor 没有返回健康概览")
 		return report
 	}
-	report.GeneratedAt = overview.GetGeneratedAt()
+	report.GeneratedAt = msText(overview.GetGeneratedAt())
 	report.SystemState = overview.GetSystem().GetHealth()
 	report.AlertCount = overview.GetSummary().GetAlertCount()
 
@@ -129,7 +129,7 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 		}
 		report.Items = append(report.Items, AlertItem{
 			Source: AlertSourceAlert, Severity: alertSeverity(alert.GetSeverity()), Title: alert.GetTitle(), Reason: reason,
-			RawError: alert.GetRawError(), Since: alert.GetTriggeredAt(), Object: objectLabel(alert.GetObject()),
+			RawError: alert.GetRawError(), Since: msText(alert.GetTriggeredAt()), Object: objectLabel(alert.GetObject()),
 			Hint: alertHint(alert.GetReason(), alert.GetRawError()),
 		})
 		if object := alert.GetObject(); object != nil && object.GetType() == "dataset" {
@@ -148,7 +148,7 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 			title := fmt.Sprintf("[%s] %s · %s · %s", stage.GetName(), dataset.GetProducer(), dataset.GetDatasetId(), dataset.GetFreq())
 			report.Items = append(report.Items, AlertItem{
 				Source: AlertSourceDataset, Severity: severity, Title: title, Reason: dataset.GetReason(), RawError: dataset.GetRawError(),
-				Since: dataset.GetLastReportedAt(), Object: dataset.GetSpaceId() + "/" + dataset.GetDatasetId() + "/" + dataset.GetFreq(),
+				Since: msText(dataset.GetLastReportedAt()), Object: dataset.GetSpaceId() + "/" + dataset.GetDatasetId() + "/" + dataset.GetFreq(),
 				Hint: alertHint(dataset.GetReason(), dataset.GetRawError()),
 			})
 		}
@@ -161,7 +161,7 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 			}
 			report.Items = append(report.Items, AlertItem{
 				Source: AlertSourceBusinessCheck, Severity: severity, Title: title, Reason: check.GetReason(), RawError: check.GetRawError(),
-				Since: check.GetCheckedAt(), Object: check.GetCheckId(), Hint: alertHint(check.GetReason(), check.GetRawError()),
+				Since: msText(check.GetCheckedAt()), Object: check.GetCheckId(), Hint: alertHint(check.GetReason(), check.GetRawError()),
 			})
 		}
 	}
@@ -169,7 +169,7 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 		if severity := statusSeverity(component.GetStatus()); severity != "" {
 			report.Items = append(report.Items, AlertItem{
 				Source: AlertSourceComponent, Severity: severity, Title: component.GetHostId() + " / " + component.GetComponentId(),
-				Reason: component.GetReason(), Since: component.GetStatusSince(), Object: component.GetHostId() + "/" + component.GetComponentId(),
+				Reason: component.GetReason(), Since: msText(component.GetStatusSince()), Object: component.GetHostId() + "/" + component.GetComponentId(),
 				Hint: alertHint(component.GetReason()),
 			})
 		}
@@ -178,7 +178,7 @@ func BuildAlertsReport(overview *monitorpb.HealthOverview) AlertsReport {
 		if severity := statusSeverity(host.GetStatus()); severity != "" {
 			report.Items = append(report.Items, AlertItem{
 				Source: AlertSourceHost, Severity: severity, Title: "主机 " + host.GetHostId(), Reason: host.GetReason(),
-				Since: host.GetLastReportedAt(), Object: host.GetHostId(), Hint: alertHint(host.GetReason()),
+				Since: msText(host.GetLastReportedAt()), Object: host.GetHostId(), Hint: alertHint(host.GetReason()),
 			})
 		}
 	}

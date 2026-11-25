@@ -2,8 +2,10 @@ package rpc
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
@@ -135,7 +137,90 @@ func errorInfo(err error) *tradepb.RetInfo {
 		}
 		return retInfo(code, internalErrorMessage)
 	}
-	return retInfo(code, err.Error())
+	return retInfo(code, userFacingMessage(err))
+}
+
+// userFacingMessage 是回给调用方的错误文案：沿 fmt.Errorf 的 %w 包装链逐层判断，某一层自己写的文字（如“%w: 原因”里的
+// 原因）整层没有汉字、又是带空格的英文句子时去掉这一层的文字（标的代码、ID 这类标识保留），原文写日志；例如冲突包着的 stale order version 不再显示到页面上。
+// 一层之内不再切分；被包装的错误本身（交易所错误、自定义错误类型等）原样保留，不丢交易所原文。
+// 整条结果一个汉字都没有的（不是 Trade 自己的错误）原样返回，不吞掉唯一的线索。
+func userFacingMessage(err error) string {
+	raw := err.Error()
+	text, dropped := userFacingLayers(err)
+	if !dropped || !containsHan(text) {
+		return raw
+	}
+	log.Infof("交易服务返回的错误去掉了英文内部原因，原文：%s", raw)
+	return text
+}
+
+// userFacingLayers 渲染一层错误；dropped 表示这一层或更里面的层去掉了英文文字。
+func userFacingLayers(err error) (string, bool) {
+	if !isStdWrapper(err) {
+		return err.Error(), false
+	}
+	var children []error
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		children = multi.Unwrap()
+	} else if child := errors.Unwrap(err); child != nil {
+		children = []error{child}
+	}
+	msg := err.Error()
+	if fmt.Sprintf("%T", err) == "*errors.joinError" {
+		parts := make([]string, 0, len(children))
+		dropped := false
+		for _, child := range children {
+			text, childDropped := userFacingLayers(child)
+			parts, dropped = append(parts, text), dropped || childDropped
+		}
+		return strings.Join(parts, "\n"), dropped
+	}
+	// 按顺序在消息里找出每个被包装错误的位置，其余部分是这一层自己写的文字。
+	var own strings.Builder
+	rendered := make([]string, 0, len(children))
+	var withChildren strings.Builder
+	dropped := false
+	cursor := 0
+	for _, child := range children {
+		childText := child.Error()
+		at := strings.Index(msg[cursor:], childText)
+		if at < 0 {
+			return msg, false
+		}
+		own.WriteString(msg[cursor : cursor+at])
+		text, childDropped := userFacingLayers(child)
+		dropped = dropped || childDropped
+		withChildren.WriteString(msg[cursor : cursor+at])
+		withChildren.WriteString(text)
+		rendered = append(rendered, text)
+		cursor += at + len(childText)
+	}
+	own.WriteString(msg[cursor:])
+	withChildren.WriteString(msg[cursor:])
+	ownText := strings.Trim(own.String(), " :：;；,，\n")
+	// 只去掉英文句子（带空格、没有汉字）：标的代码、账户 ID 这类不带空格的标识照样保留。
+	if ownText == "" || containsHan(ownText) || !strings.Contains(ownText, " ") {
+		return withChildren.String(), dropped
+	}
+	return strings.Join(rendered, ": "), true
+}
+
+// isStdWrapper 报告错误是不是 fmt.Errorf 或 errors.Join 生成的包装：只有这两种按层拆，其余错误类型原样渲染。
+func isStdWrapper(err error) bool {
+	switch fmt.Sprintf("%T", err) {
+	case "*fmt.wrapError", "*fmt.wrapErrors", "*errors.joinError":
+		return true
+	}
+	return false
+}
+
+func containsHan(value string) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 type pageSpec struct {
@@ -167,67 +252,13 @@ func pageResult(page pageSpec, total int64) *tradepb.PageResult {
 	}
 }
 
-// exchangePBNames 是 proto 枚举与场所名的对照，新增场所时加一行。
-var exchangePBNames = map[tradepb.Exchange]exchange.Exchange{
-	tradepb.Exchange_EXCHANGE_BINANCE: exchange.ExchangeBinance,
-	tradepb.Exchange_EXCHANGE_OKX:     exchange.ExchangeOKX,
-	tradepb.Exchange_EXCHANGE_ASHARE:  exchange.ExchangeAShare,
-	tradepb.Exchange_EXCHANGE_HKEX:    exchange.ExchangeHKEX,
-}
-
-func exchangeFromPB(value tradepb.Exchange) exchange.Exchange {
-	return exchangePBNames[value]
-}
-
-func exchangeToPB(value string) tradepb.Exchange {
-	for pb, name := range exchangePBNames {
-		if string(name) == value {
-			return pb
-		}
-	}
-	return tradepb.Exchange_EXCHANGE_UNSPECIFIED
-}
-
-func marketFromPB(value tradepb.MarketType) exchange.MarketType {
-	switch value {
-	case tradepb.MarketType_MARKET_TYPE_SPOT:
-		return exchange.MarketTypeSpot
-	case tradepb.MarketType_MARKET_TYPE_SWAP:
-		return exchange.MarketTypeSwap
-	case tradepb.MarketType_MARKET_TYPE_STOCK:
-		return exchange.MarketTypeStock
-	default:
-		return exchange.MarketTypeUnspecified
-	}
-}
-
-func marketsFromPB(values []tradepb.MarketType) []exchange.MarketType {
-	result := make([]exchange.MarketType, len(values))
+// 交易所与市场类型在接口上就是 Trade 内部的小写取值，不再转换；市场集合只换元素类型（反方向见 console.go 的 marketTypes）。
+func marketStrings[T ~string](values []T) []string {
+	result := make([]string, len(values))
 	for i, value := range values {
-		result[i] = marketFromPB(value)
+		result[i] = string(value)
 	}
 	return result
-}
-
-func marketsToPB[T ~string](values []T) []tradepb.MarketType {
-	result := make([]tradepb.MarketType, len(values))
-	for i, value := range values {
-		result[i] = marketToPB(string(value))
-	}
-	return result
-}
-
-func marketToPB(value string) tradepb.MarketType {
-	switch exchange.MarketType(value) {
-	case exchange.MarketTypeSpot:
-		return tradepb.MarketType_MARKET_TYPE_SPOT
-	case exchange.MarketTypeSwap:
-		return tradepb.MarketType_MARKET_TYPE_SWAP
-	case exchange.MarketTypeStock:
-		return tradepb.MarketType_MARKET_TYPE_STOCK
-	default:
-		return tradepb.MarketType_MARKET_TYPE_UNSPECIFIED
-	}
 }
 
 func executionModeFromPB(value tradepb.ExecutionMode) exchange.ExecutionMode {
@@ -372,8 +403,8 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 	}
 	account := &tradepb.TradingAccount{
 		TradingAccountId: value.TradingAccountID, SpaceId: value.SpaceID,
-		Name: value.Name, Exchange: exchangeToPB(value.Exchange),
-		Markets:     marketsToPB(value.Markets),
+		Name: value.Name, Exchange: value.Exchange,
+		Markets:     marketStrings(value.Markets),
 		AccountMode: value.AccountMode, InspectionJson: value.InspectionJSON,
 		ExecutionMode:   executionModeToPB(value.ExecutionMode),
 		SettlementAsset: value.SettlementAsset, MarginMode: value.MarginMode,
@@ -435,7 +466,7 @@ func logicalAccountToPB(
 		Name:             value.Name,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
 		ControlMode:      controlModeToPB(value.ControlMode),
-		Markets:          marketsToPB(markets),
+		Markets:          marketStrings(markets),
 		SettlementAsset:  value.SettlementAsset,
 		AutomationState:  value.AutomationState,
 		PauseReason:      value.PauseReason,
@@ -456,7 +487,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 	return &tradepb.Order{
 		OrderId: value.OrderID, TradingAccountId: value.TradingAccountID,
 		ClientOrderId: value.ClientOrderID, ExchangeOrderId: value.ExchangeOrderID,
-		Exchange: exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
+		Exchange: value.Exchange, MarketType: value.MarketType,
 		InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
 		OrderType:  orderTypeToPB(value.OrderType),
 		FillPolicy: fillPolicyToPB(value.TimeInForce), Side: sideToPB(value.Side),
@@ -465,7 +496,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		ReferencePriceAt:   value.ReferencePriceAt,
 		ReducePositionOnly: value.ReduceOnly,
 		OwnerType:          value.OwnerType, OwnerId: value.OwnerID,
-		LogicalAccountId: value.LogicalAccountID, RunnerId: value.RunnerID,
+		LogicalAccountId: value.LogicalAccountID, InstanceId: value.InstanceID,
 		State: value.State, Attempt: int32(value.Attempt), FilledQuantity: value.FilledQuantity,
 		AveragePrice: value.AveragePrice, ReservedAsset: value.ReservedAsset,
 		ReservedQuantity:          value.ReservedQuantity,
@@ -481,7 +512,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 		FillId: value.FillID, ExchangeTradeId: value.ExchangeTradeID,
 		OrderId: value.OrderID, ExchangeOrderId: value.ExchangeOrderID,
 		TradingAccountId: value.TradingAccountID,
-		Exchange:         exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
+		Exchange:         value.Exchange, MarketType: value.MarketType,
 		InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol, Side: sideToPB(value.Side),
 		PositionSide: positionSideToPB(value.PositionSide),
 		Price:        value.Price, Quantity: value.Quantity, Fee: value.Fee,
@@ -493,7 +524,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 
 func positionToPB(value store.PositionRecord) *tradepb.Position {
 	return &tradepb.Position{
-		MarketType:       marketToPB(value.MarketType),
+		MarketType:       value.MarketType,
 		TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
 		PositionSide:   positionSideToPB(value.PositionSide),
 		SignedQuantity: value.SignedQuantity, EntryPrice: value.EntryPrice,
@@ -511,9 +542,9 @@ func logicalAccountTargetToPB(
 	if value.LogicalAccountID == "" {
 		return nil
 	}
-	targets := make([]*tradepb.InstrumentTarget, 0, len(value.Targets))
+	targets := make([]*tradepb.InstrumentQuantity, 0, len(value.Targets))
 	for _, target := range value.Targets {
-		targets = append(targets, &tradepb.InstrumentTarget{
+		targets = append(targets, &tradepb.InstrumentQuantity{
 			InstrumentId: target.InstrumentID,
 			Quantity:     target.Quantity,
 			Hold:         target.Hold,
@@ -530,7 +561,6 @@ func logicalAccountTargetToPB(
 	}
 	return &tradepb.LogicalAccountTarget{
 		TargetId: value.TargetID, LogicalAccountId: value.LogicalAccountID,
-		RunnerId: value.RunnerID, CommandSequence: value.CommandSequence,
 		InstanceId: value.InstanceID, SessionId: value.SessionID, StrategyId: value.StrategyID,
 		BarEndTime: value.BarEndTime, ValidUntil: value.ValidUntil,
 		Targets: targets, Status: value.Status, BlockedTargets: blocked,

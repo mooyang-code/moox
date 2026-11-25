@@ -16,11 +16,9 @@ import {
   parseMemberKey,
   parseParams,
   parseResultDatasetId,
-  parseResultViewId,
   parseTaskId,
   parseValue,
   resultDatasetId,
-  resultViewId,
   taskId,
   validateOutputName,
   validateOutputs,
@@ -53,7 +51,7 @@ interface Vectors {
   }[];
   canonical_params: { input: Record<string, Record<string, number>>; text?: string; error?: boolean }[];
   canonical_values: { input: Record<string, number>; text?: string; error?: boolean }[];
-  id: { suffix: string; task: string; dataset: string; view: string }[];
+  id: { suffix: string; task: string; dataset: string }[];
   suffix_invalid: string[];
   id_parse_invalid: string[];
 }
@@ -146,10 +144,8 @@ describe("shared vectors", () => {
     for (const c of vectors.id) {
       expect(taskId(c.suffix)).toBe(c.task);
       expect(resultDatasetId(c.suffix)).toBe(c.dataset);
-      expect(resultViewId(c.suffix)).toBe(c.view);
       expect(parseTaskId(c.task)).toBe(c.suffix);
       expect(parseResultDatasetId(c.dataset)).toBe(c.suffix);
-      expect(parseResultViewId(c.view)).toBe(c.suffix);
     }
     for (const suffix of vectors.suffix_invalid) expect(() => validateSuffix(suffix), suffix).toThrow();
     for (const id of vectors.id_parse_invalid) expect(() => parseTaskId(id), id).toThrow();

@@ -32,8 +32,6 @@ import (
 )
 
 const (
-	// planFinalizeMargin 是旧份保留窗口结束后再多等的时间，让最后一批旧周期提交落地。
-	planFinalizeMargin = 5 * time.Second
 	// planUpgradeCheckInterval 是检查函数代码包是否落后的间隔。
 	planUpgradeCheckInterval = 2 * time.Minute
 	// planVerifyInterval 是全量读回云端配置的间隔；读回不完整或修复还在跑时按 planVerifyRetry 重试。
@@ -43,7 +41,7 @@ const (
 	planGoneDebounce = 5
 	// planLeadTimeHandoff 是采集方式交接时 P 的最短提前量。
 	planLeadTimeHandoff = 3 * time.Minute
-	// operationStuckAge 是云端操作的卡住年龄：最早一个在跑的操作超过它，对账不再刷新成功时间，由 Monitor 的对账陈旧判定发现。
+	// operationStuckAge 是云端操作的卡住年龄：最早一个在跑的操作超过它，对账不再刷新成功时间，由对账陈旧判定（关注项 fetch_coordination_failing）发现。
 	operationStuckAge = 10 * time.Minute
 )
 
@@ -59,8 +57,7 @@ type StreamWorkerSource interface {
 
 // StreamApplied 是 collector-stream 已应用的计划版本（t_collector_stream_workers.c_applied）。
 type StreamApplied struct {
-	ID    int64  `json:"id"`
-	Stage string `json:"stage"`
+	ID int64 `json:"id"`
 }
 
 type planStore interface {
@@ -70,6 +67,8 @@ type planStore interface {
 	Create(context.Context, string, string, string, ...store.SeriesTimelineEntry) (*store.FetchPlanRecord, error)
 	Update(context.Context, int64, string, string, string, ...store.SeriesTimelineEntry) error
 	SavePlan(context.Context, int64, string) error
+	// DeleteOpen 删掉一份 pending 的未生效计划（数据集全部撤回之后已经没有变化时）。
+	DeleteOpen(context.Context, int64) error
 }
 
 // PlanSnapshotRegistrar 把数据集标的快照登记到 Storage。
@@ -121,8 +120,8 @@ func (d PlanDeploy) NamespaceFor(functionName string) string {
 	return d.Namespace
 }
 
-// PlanReconciler 是一个空间的采集计划对账器：由任务与标签成员算出期望状态，
-// 与已生效的计划比较，有变化时先保存采集计划，再登记快照、下发环境、收尾。
+// PlanReconciler 是一个空间的采集计划对账器：由任务与标签成员算出期望状态，按数据集与已生效状态比较（决策表），
+// 有变化时先保存采集计划，再登记快照、下发；下发确认就生效。
 // 改云上状态的调用只经操作表（function_ops.go）。
 type PlanReconciler struct {
 	SpaceID  string
@@ -172,7 +171,7 @@ type PlanReconciler struct {
 	// verifyRequested 由 RPC 删除函数之后置位：下一轮对账立即读回，不等 lastVerified 的间隔。
 	verifyRequested atomic.Bool
 	// deletedFunctions 是 RPC 删掉的计划内函数（键是 refKey：地域/命名空间/函数名，受 readMu 保护）：未生效计划里已经确认的函数被删后，
-	// 下一轮去掉它在本阶段的确认、按阶段期望重推，不等到最终阶段。只在内存里，重启就丢，那时退回到等最终阶段（或读回修复）。
+	// 下一轮去掉它的确认、按 Target 重推。只在内存里，重启就丢，那时由计划生效后的读回修复重建。
 	deletedFunctions map[string]bool
 	// 操作表（第一次用时创建）与“正在暂停”的标记：暂停时置位，空间的对账协程重新启动（恢复）时随新的对账器清掉。
 	opsOnce    sync.Once
@@ -318,11 +317,17 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 	if err != nil {
 		return r.fail("store", fmt.Errorf("read open fetch plan: %w", err))
 	}
+	// 交接截止每轮到点幂等地改，与计划推进无关；返回本轮已改成功的数据集，裁旧份以它为前提。
+	// 改不成功不挡住本轮别的数据集，结束时按失败返回。
+	latenessOK, latenessErr := r.applyHandoffLateness(ctx, open)
+	if collectErr == nil {
+		collectErr = latenessErr
+	}
 	if open != nil {
 		if r.Metrics != nil {
 			r.Metrics.ObserveAssignmentPending(r.SpaceID, true, open.CreatedAt)
 		}
-		// 计划推进可能持续很久（整点频率要等到下一个整点才收尾），期间不受该计划影响的函数照常做云端校验与修复。
+		// 未生效的计划通常几分钟内生效，期间不受该计划影响的函数照常做云端校验与修复。
 		if err := r.verifyUntouched(ctx, open); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan verification skipped space=%s: %v", r.SpaceID, err)
 		}
@@ -332,19 +337,19 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 		if err := r.advance(ctx, open); err != nil {
 			return err
 		}
-		return collectErr
-	}
-	r.takeDeletedFunctions() // 没有未生效的计划：删掉的函数由读回修复重建（verifyRequested）
-	if err := r.planChange(ctx); err != nil {
-		return err
+	} else {
+		r.takeDeletedFunctions() // 没有未生效的计划：删掉的函数由读回修复重建（verifyRequested）
+		if err := r.planChange(ctx, latenessOK); err != nil {
+			return err
+		}
 	}
 	if collectErr != nil {
 		return collectErr
 	}
-	// 没有未生效的计划（或本轮刚把计划推进到生效）：对账成功。
+	// 没有未生效的计划（或本轮刚把计划推进到生效），并且自上一轮结束以来没有失败：对账成功。
 	// 在跑的云端操作只要还没超过卡住年龄就不影响成功：大批量升级可能连续跑十几分钟；
-	// 最早的操作卡住时不再刷新成功时间，由 Monitor 的对账陈旧判定（默认 15 分钟）发现。
-	if r.Metrics != nil && !r.operationStuck() {
+	// 最早的操作卡住时不再刷新成功时间，由对账陈旧判定（关注项 fetch_coordination_failing，plan_health.stale_after 默认 15 分钟）发现。
+	if r.Metrics != nil && r.failCount == r.roundFailCount && !r.operationStuck() {
 		if still, openErr := r.Store.Open(ctx, r.SpaceID); openErr == nil && still == nil {
 			r.Metrics.ObserveAssignmentPending(r.SpaceID, false, time.Time{})
 			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
@@ -371,9 +376,9 @@ func (r *PlanReconciler) managedTasks(ctx context.Context) (map[string]struct{},
 	return datasets, nil
 }
 
-func (r *PlanReconciler) planChange(ctx context.Context) error {
+func (r *PlanReconciler) planChange(ctx context.Context, latenessOK map[string]bool) error {
 	var previousFunctions map[string]*PlanFunction
-	var previousDatasets map[string]*PlanDatasetState
+	var previousDatasets map[string]*PlanDataset
 	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
 	if err != nil {
 		return r.fail("store", fmt.Errorf("read applied fetch plan: %w", err))
@@ -385,6 +390,7 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		}
 		previousFunctions, previousDatasets = content.Applied()
 	}
+	previousStates := activeStates(previousDatasets)
 	groups, err := r.Groups.groups(ctx, r.SpaceID)
 	if err != nil {
 		return r.fail("rules", err)
@@ -400,7 +406,7 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		return nil
 	}
 	// 排除名单叠加在标签成员之上，放在“标的暂时取不到”的保护之后：全部标的都被排除是操作员的决定，照常生效。
-	// 它的变化与标的变更一样生成新计划（已打开的计划，包括进行中的交接，先推进完）。
+	// 它的变化与标的变更一样生成新计划（已打开的计划先推进完）。
 	if r.Exclusions != nil {
 		exclusions, err := r.Exclusions.Active(ctx, r.SpaceID, r.now())
 		if err != nil {
@@ -413,50 +419,44 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		return r.fail("rules", err)
 	}
 	// 交接与标的变更分开：有数据集的标的集合在变时，本轮先按已生效的执行端完成标的变更，交接等下一份计划。
-	if handoffPending(desired, previousDatasets) && subjectsChanging(desired, previousDatasets) {
-		if desired, err = BuildDesiredState(r.Options, appliedIngest(groups, previousDatasets), previousFunctions); err != nil {
+	if handoffPending(desired, previousStates) && subjectsChanging(desired, previousStates) {
+		if desired, err = BuildDesiredState(r.Options, appliedIngest(groups, previousStates), previousFunctions); err != nil {
 			return r.fail("rules", err)
 		}
 		log.InfoContextf(ctx, "collector fetch plan defers the ingest handoff until the subject change is applied space=%s", r.SpaceID)
 	}
-	handoff := handoffPending(desired, previousDatasets)
-	if r.holdMissingDatasets(ctx, desired, previousDatasets, managed) {
+	handoff := handoffPending(desired, previousStates)
+	if r.holdMissingDatasets(ctx, desired, previousStates, managed) {
 		return nil
 	}
 	if blocked, err := r.waitForStream(ctx, desired, previousFunctions); blocked || err != nil {
 		return err
-	}
-	for _, estimate := range EstimateRateBudget(scfFunctions(desired.Functions), r.Options.AssumedEgressIPs) {
-		if estimate.Exceeds() {
-			log.WarnContextf(ctx, "collector fetch plan may hit the provider rate limit space=%s %s: add functions or egress IPs, or lower symbols per function", r.SpaceID, estimate)
-		}
 	}
 	// 计划里有需要新建的函数时拉长提前量：创建 VPC 函数比改环境慢得多。
 	lead := planLeadTime
 	if handoff {
 		lead = planLeadTimeHandoff
 	}
+	creates := false
 	for name, function := range desired.Functions {
 		if previousFunctions[name] == nil && function.Executor == "" {
-			lead = planLeadTimeWithCreate
-			r.Egress.Arm() // 新建函数的出口 IP 要去重：计划生效后探测一次
+			lead, creates = planLeadTimeWithCreate, true
 			break
 		}
 	}
-	if firstStreamPlan(desired, previousFunctions, previousDatasets) {
+	if firstStreamPlan(desired, previousFunctions, previousStates) {
 		lead = planLeadTimePushOnly
 	}
-	choose := func(frequency string) (int64, error) {
-		return ChoosePeriodStartWithLead(frequency, r.now(), lead)
-	}
-	content, changed, err := BuildPlanContent(previousFunctions, previousDatasets, desired, choose)
+	content, changed, waiting, err := BuildPlanContent(previousFunctions, previousDatasets, desired, PlanTiming{Now: r.now(), Lead: lead, LatenessOK: latenessOK})
 	if err != nil {
 		return r.fail("rules", err)
+	}
+	if len(waiting) > 0 {
+		r.waiting = strings.Join(waiting, "；")
 	}
 	if !changed {
 		return r.verifyFleet(ctx, scfFunctions(previousFunctions))
 	}
-	content.LeadSeconds = int(lead / time.Second)
 	if r.Preflight != nil {
 		if err := r.Preflight(ctx); err != nil {
 			return r.fail("preflight", err)
@@ -465,20 +465,29 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	if err := r.validateContent(content); err != nil {
 		return r.fail("capacity", err)
 	}
+	if creates {
+		for _, function := range content.Functions {
+			if function.Create {
+				r.Egress.Arm() // 新建函数的出口 IP 要去重：计划生效后探测一次
+				break
+			}
+		}
+	}
 	if r.Lateness != nil {
-		for _, change := range content.Datasets {
-			// 交接中的数据集在 drain 结束时再改：此刻改会让旧执行端最后几个周期按新截止建立。
-			if change.Gone || change.HandoffLateness() {
+		for _, key := range content.sortedDatasetKeys() {
+			dataset := content.Datasets[key]
+			// 停止的数据集不改；交接中的数据集由每轮对账到点再改（applyHandoffLateness）：此刻改会让旧执行端最后几个周期按新截止建立。
+			if dataset.Stopped || dataset.HandoffFrom() > 0 {
 				continue
 			}
-			if err := r.Lateness.EnsureAllowedLateness(ctx, r.SpaceID, change.DatasetID, change.LatenessS); err != nil {
-				return r.fail("dataset", fmt.Errorf("set allowed lateness of dataset %s: %w", change.DatasetID, err))
+			if err := r.Lateness.EnsureAllowedLateness(ctx, r.SpaceID, dataset.DatasetID, dataset.LatenessS); err != nil {
+				return r.fail("dataset", fmt.Errorf("set allowed lateness of dataset %s: %w", dataset.DatasetID, err))
 			}
 		}
 	}
 	progress := &FetchPlanProgress{}
-	// 不再采集的数据集从计划建立起就在时间线上停止，和计划记录一起落库。
-	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress), content.stoppedTimeline(r.SpaceID)...)
+	// 不用登记的时间线行（停止行、只改符号的行等）和计划记录一起落库。
+	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress), content.planCreatedTimeline(r.SpaceID)...)
 	if errors.Is(err, store.ErrFetchPlanOpen) {
 		return nil
 	}
@@ -594,37 +603,32 @@ func (r *PlanReconciler) functionEnvironment(region string, plan *marketfetch.Pl
 	return environment, nil
 }
 
-// validateContent 在保存计划前确认每个函数的过渡与最终环境都能放进 SCF 环境变量上限。
+// validateContent 在保存计划前确认每个要下发的函数的 Target 能放进 SCF 环境变量上限（每数据集最多两份由决策表保证）。
 func (r *PlanReconciler) validateContent(content *FetchPlanContent) error {
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		if !function.Push {
+		if !function.Push || function.Target == nil {
 			continue
 		}
-		for _, plan := range []*marketfetch.Plan{content.TransitionalPlan(function), content.FinalPlan(function)} {
-			if plan == nil {
-				continue
+		if !function.IsSCF() {
+			if err := function.Target.Validate(); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
 			}
-			if !function.IsSCF() {
-				if err := plan.Validate(); err != nil {
-					return fmt.Errorf("%s: %w", name, err)
-				}
-				continue
-			}
-			environment, err := r.functionEnvironment(function.Region, plan)
-			if err != nil {
-				return fmt.Errorf("function %s: %w", name, err)
-			}
-			merged := map[string]string{"MOOX_CODE_PACKAGE_ID": r.packageID()}
-			for key, value := range r.Deploy.BaseEnvironment {
-				merged[key] = value
-			}
-			for key, value := range environment {
-				merged[key] = value
-			}
-			if size := tencent.SCFEnvironmentBytes(merged); size > maxSCFEnvironmentBytes {
-				return fmt.Errorf("function %s environment is %d bytes; reduce symbols_per_function", name, size)
-			}
+			continue
+		}
+		environment, err := r.functionEnvironment(function.Region, function.Target)
+		if err != nil {
+			return fmt.Errorf("function %s: %w", name, err)
+		}
+		merged := map[string]string{"MOOX_CODE_PACKAGE_ID": r.packageID()}
+		for key, value := range r.Deploy.BaseEnvironment {
+			merged[key] = value
+		}
+		for key, value := range environment {
+			merged[key] = value
+		}
+		if size := tencent.SCFEnvironmentBytes(merged); size > maxSCFEnvironmentBytes {
+			return fmt.Errorf("function %s environment is %d bytes; reduce symbols_per_function", name, size)
 		}
 	}
 	return nil
@@ -651,9 +655,8 @@ func (r *PlanReconciler) takeDeletedFunctions() map[string]bool {
 	return deleted
 }
 
-// reconfirmDeleted 把 RPC 删掉、而在未生效计划里已经确认的函数的本阶段确认去掉并保存进度：已确认收尾的去掉 Finalized
-// （最终计划与过渡计划相同、收尾时不再下发的，连 Transitioned 一起去掉），只确认了过渡的去掉 Transitioned。随后的推进按阶段期望重推（Ensure 建出来），不等到最终阶段，也不等每小时的读回。
-// 调用方持有 r.mu（对账协程）。
+// reconfirmDeleted 把 RPC 删掉、而在未生效计划里已经确认下发的函数的确认去掉并保存进度：随后的推进按 Target 重推（Ensure 建出来），
+// 不等每小时的读回。调用方持有 r.mu（对账协程）。
 func (r *PlanReconciler) reconfirmDeleted(ctx context.Context, record *store.FetchPlanRecord) error {
 	deleted := r.takeDeletedFunctions()
 	if len(deleted) == 0 {
@@ -670,22 +673,11 @@ func (r *PlanReconciler) reconfirmDeleted(ctx context.Context, record *store.Fet
 	changed := false
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		if function == nil || !function.IsSCF() || !deleted[refKey(r.functionRef(name, function.Region))] {
+		if function == nil || !function.IsSCF() || !deleted[refKey(r.functionRef(name, function.Region))] || !progress.Pushed[name] {
 			continue
 		}
-		switch {
-		case progress.Finalized[name] && r.finalDiffers(content, function):
-			delete(progress.Finalized, name)
-			changed = true
-		case progress.Finalized[name]:
-			// 最终计划与过渡计划相同（收尾时不再下发）：去掉两个确认，由过渡阶段按同一份内容重建。
-			delete(progress.Finalized, name)
-			delete(progress.Transitioned, name)
-			changed = true
-		case progress.Transitioned[name]:
-			delete(progress.Transitioned, name)
-			changed = true
-		}
+		delete(progress.Pushed, name)
+		changed = true
 	}
 	if !changed {
 		return nil
@@ -694,7 +686,7 @@ func (r *PlanReconciler) reconfirmDeleted(ctx context.Context, record *store.Fet
 	return r.saveProgress(ctx, record, progress, record.Status, record.LastError)
 }
 
-// advance 续跑一份未生效的采集计划。
+// advance 续跑一份未生效的采集计划：登记快照、写“开始”日志、下发，全部确认并写完“已生效”日志就记 applied。
 func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRecord) error {
 	content, err := decodeFetchPlanContent(record.Plan)
 	if err != nil {
@@ -708,7 +700,7 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if err != nil || !ready {
 		return err
 	}
-	// 登记成功后才记“开始”日志：登记因 P 过期而重选时，日志里的生效周期必须是 Storage 确认的那个。
+	// 登记完成后才记“开始”日志：被撤回的数据集不会出现在日志里。
 	if !progress.LoggedStart {
 		if r.logPlan(ctx, record, content, false) == nil {
 			progress.LoggedStart = true
@@ -722,27 +714,7 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 			return err
 		}
 	}
-	// 交接数据集的截止各自在自己的窗口里改（旧周期都已建立之后、新执行端的第一个周期建立之前），只看时间：
-	// 不等过渡阶段的确认，也不等整份计划收尾。旧端迟迟不确认（失联、云端作业慢）时，晚改截止会让新执行端的周期整期被拒。
-	if err := r.applyHandoffLateness(ctx, record, content, progress, false); err != nil {
-		return err
-	}
-	done, err := r.pushFunctions(ctx, record, content, progress, false)
-	if err != nil || !done {
-		return err
-	}
-	if end := content.WindowEnd(); !end.IsZero() && r.now().Before(end.Add(planFinalizeMargin)) {
-		// 过渡配置都已下发，只是在等旧周期的窗口结束（1h 最长约一小时，1d 要等到下一个 UTC 零点）：
-		// 这段时间按对账成功上报，Monitor 不会把正常的等待判成对账陈旧。过了窗口结束仍没收尾的不再刷新，卡住的计划照样报出来。
-		if r.Metrics != nil && r.failCount == r.roundFailCount && !r.operationStuck() {
-			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
-		}
-		return nil
-	}
-	if err := r.applyHandoffLateness(ctx, record, content, progress, true); err != nil {
-		return err
-	}
-	done, err = r.pushFunctions(ctx, record, content, progress, true)
+	done, err := r.pushFunctions(ctx, record, content, progress)
 	if err != nil || !done {
 		return err
 	}
@@ -764,103 +736,137 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	return nil
 }
 
-// registerSnapshots 为 hash 变化的数据集登记快照；只有 Storage 明确拒绝“P 已过期”时才重选 P。
+// registerSnapshots 为要登记的数据集登记快照。Storage 返回“生效点不可用”时把这个数据集从本计划里撤回（withdraw），
+// 下一份计划重新查表，不在本计划里重选 P（重选可能需要第三份）；其他错误下一轮用同一个请求重放。
+// 未生效计划里数据集的内容一旦发出过登记请求就不再改：崩溃后重放同一个请求，Storage 对同 P 同 hash 一定返回成功。
 func (r *PlanReconciler) registerSnapshots(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress) (bool, error) {
-	keys := make([]string, 0, len(content.Datasets))
-	for key, change := range content.Datasets {
-		if change.HashChanged && !progress.Registered[key] {
-			keys = append(keys, key)
+	for _, key := range content.sortedDatasetKeys() {
+		dataset := content.Datasets[key]
+		if !dataset.Register || progress.Registered[key] {
+			continue
 		}
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		change := content.Datasets[key]
-		registration, err := r.Storage.RegisterSeriesSnapshot(ctx, r.SpaceID, change.DatasetID, change.Frequency, change.Series, change.P)
+		registration, err := r.Storage.RegisterSeriesSnapshot(ctx, r.SpaceID, dataset.DatasetID, dataset.Frequency, dataset.Series, dataset.P)
 		switch {
 		case errors.Is(err, marketstorage.ErrStaleEffectiveFrom):
-			lead := planLeadTimeWithCreate
-			if content.LeadSeconds > 0 {
-				lead = time.Duration(content.LeadSeconds) * time.Second
-			}
-			p, chooseErr := ChoosePeriodStartWithLead(change.Frequency, r.now(), lead)
-			if chooseErr != nil {
-				return false, r.fail("storage", chooseErr)
-			}
-			change.P = p
-			if saveErr := r.Store.SavePlan(ctx, record.ID, mustJSON(content)); saveErr != nil {
-				return false, r.fail("store", saveErr)
-			}
-			record.Plan = mustJSON(content)
-			log.WarnContextf(ctx, "collector fetch plan reselected period space=%s dataset=%s p=%d", r.SpaceID, key, p)
-			return false, nil
+			return false, r.withdraw(ctx, record, content, progress, key)
 		case err != nil:
 			// 结果不明或暂时失败：下一轮用同一份请求重放。
 			_ = r.saveProgress(ctx, record, progress, record.Status, err.Error())
 			return false, r.fail("storage", fmt.Errorf("register series snapshot %s: %w", key, err))
-		case registration.Hash != change.Hash || registration.Count != change.Count:
-			return false, r.fail("storage", fmt.Errorf("Storage computed hash %s/%d for %s, Collector computed %s/%d", registration.Hash, registration.Count, key, change.Hash, change.Count))
+		case registration.Hash != dataset.Hash || registration.Count != dataset.Count:
+			return false, r.fail("storage", fmt.Errorf("Storage computed hash %s/%d for %s, Collector computed %s/%d", registration.Hash, registration.Count, key, dataset.Hash, dataset.Count))
 		}
-		// Storage 已确认登记：登记标记与时间线上“从 P 起是这份序列”的一行一起落库。P 只在登记之前重选，
-		// 所以写进时间线的生效点不会再变。
+		// Storage 已确认登记：登记标记与时间线上“从 P 起是这份序列”的一行一起落库。
 		progress.mark(&progress.Registered, key)
-		if err := r.saveProgress(ctx, record, progress, record.Status, "", seriesTimelineEntry(r.SpaceID, change)); err != nil {
+		var timeline []store.SeriesTimelineEntry
+		if dataset.Timeline {
+			timeline = append(timeline, seriesTimelineEntry(r.SpaceID, dataset))
+		}
+		if err := r.saveProgress(ctx, record, progress, record.Status, "", timeline...); err != nil {
 			return false, err
 		}
 	}
 	return true, nil
 }
 
-// pushFunctions 下发过渡（或最终）阶段：每个云函数一个 Ensure（建函数与下发环境、定时器合成一次），退役的函数只停定时器；
+// withdraw 把登记被拒（生效点已不可用）的数据集从未生效计划里撤回：动作改成 keep，份恢复成已生效状态里的样子（裁剪照做），
+// 重新组合所有函数。撤回之后计划里什么变化都没有了（这时也不可能有已登记的数据集），就删掉这条未生效记录。
+// 所有登记完成之前不下发，所以撤回时还没有任何函数用过这些内容。
+func (r *PlanReconciler) withdraw(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, key string) error {
+	var previousDatasets map[string]*PlanDataset
+	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
+	if err != nil {
+		return r.fail("store", fmt.Errorf("read applied fetch plan: %w", err))
+	}
+	if applied != nil {
+		appliedContent, err := decodeFetchPlanContent(applied.Plan)
+		if err != nil {
+			return r.fail("store", err)
+		}
+		_, previousDatasets = appliedContent.Applied()
+	}
+	dataset := content.Datasets[key]
+	withdrawDataset(content, key, previousDatasets[key])
+	content.composeFunctions()
+	reason := fmt.Sprintf("%s %s 的生效点 %s 已不可用，已撤回，下一份计划重新安排", dataset.DatasetID, dataset.Frequency, time.Unix(dataset.P, 0).UTC().Format("01-02 15:04"))
+	r.waiting = reason
+	log.WarnContextf(ctx, "collector fetch plan withdrew a dataset space=%s plan=%d dataset=%s p=%d", r.SpaceID, record.ID, key, dataset.P)
+	if !content.changedFrom(previousDatasets) && len(progress.Registered) == 0 && record.Status == store.FetchPlanPending {
+		if err := r.Store.DeleteOpen(ctx, record.ID); err != nil {
+			return r.fail("store", fmt.Errorf("delete withdrawn fetch plan: %w", err))
+		}
+		return nil
+	}
+	if err := r.Store.SavePlan(ctx, record.ID, mustJSON(content)); err != nil {
+		return r.fail("store", err)
+	}
+	record.Plan = mustJSON(content)
+	return nil
+}
+
+// withdrawDataset 把一个数据集在计划里的动作撤回：加的那一份去掉（数据集原来没有份时整个去掉），被替换的头份换回已生效的那一份。
+func withdrawDataset(content *FetchPlanContent, key string, previous *PlanDataset) {
+	dataset := content.Datasets[key]
+	if dataset == nil {
+		return
+	}
+	switch dataset.Action {
+	case PlanActionAppend:
+		dataset.Copies = dataset.Copies[:len(dataset.Copies)-1]
+	case PlanActionReplace:
+		if previous != nil {
+			for _, item := range previous.Copies {
+				if item.From == dataset.P {
+					dataset.Copies[len(dataset.Copies)-1] = item
+				}
+			}
+		}
+	}
+	if len(dataset.Copies) == 0 || previous == nil {
+		delete(content.Datasets, key)
+		return
+	}
+	dataset.PlanDatasetState, dataset.TimelineFrom = previous.PlanDatasetState, previous.TimelineFrom
+	dataset.Action, dataset.P, dataset.Register, dataset.Timeline = PlanActionKeep, 0, false, false
+	dataset.Series, dataset.Added, dataset.Removed = nil, nil, nil
+}
+
+// pushFunctions 下发：每个云函数一个 Ensure（建函数与下发环境、定时器合成一次），退役的函数只停定时器；
 // 推送与本地执行项靠 collector-stream 心跳确认。全部确认后返回 true。
 // 对每个云函数只有三种情况：没有操作在跑就起一个；有操作在跑就本轮跳过（不算失败）；
-// 操作已结束：成功且用途是本阶段就记确认，失败就按原因上报、下一轮重来。
-func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, final bool) (bool, error) {
-	confirmed, stage := &progress.Transitioned, planStageTransition
-	if final {
-		confirmed, stage = &progress.Finalized, planStageFinal
-	}
-	var todo []string
+// 操作已结束：成功且用途是本计划就记确认，失败就按原因上报、下一轮重来。
+func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress) (bool, error) {
+	var cloudNames, streamItems []string
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		if (*confirmed)[name] {
+		if !function.Push || progress.Pushed[name] {
 			continue
 		}
-		if !final && !function.Push {
-			continue
-		}
-		if final && !r.finalDiffers(content, function) {
-			progress.mark(confirmed, name)
-			continue
-		}
-		todo = append(todo, name)
-	}
-	if len(todo) == 0 {
-		return true, nil
-	}
-	var cloudNames, streamItems []string
-	for _, name := range todo {
-		if content.Functions[name].IsSCF() {
+		if function.IsSCF() {
 			cloudNames = append(cloudNames, name)
 		} else {
 			streamItems = append(streamItems, name)
 		}
 	}
+	if len(cloudNames) == 0 && len(streamItems) == 0 {
+		return true, nil
+	}
 	if len(streamItems) > 0 {
-		if err := r.confirmStream(ctx, record, content, progress, streamItems, final); err != nil {
+		if err := r.confirmStream(ctx, record, content, progress, streamItems); err != nil {
 			return false, err
 		}
 	}
 	if len(cloudNames) == 0 {
-		return r.allConfirmed(content, progress, final), nil
+		return allPushed(content, progress), nil
 	}
-	key := planOpKey(record.ID, stage)
+	key := planOpKey(record.ID)
 	ops := r.ops()
 	changed := false
 	var failures []string
 	var firstErr error
 	settle := func(name string, op *functionOp) {
 		if op.confirmed() {
-			progress.mark(confirmed, name)
+			progress.mark(&progress.Pushed, name)
 			changed = true
 			return
 		}
@@ -886,7 +892,7 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		if ops.busy(opName) {
 			continue // 另一个操作在跑：本轮跳过，等它结束
 		}
-		op, err := r.startStage(content, content.Functions[name], key, stage)
+		op, err := r.startPush(content.Functions[name], key)
 		switch {
 		case errors.Is(err, errOpBusy), errors.Is(err, errOpPausing), errors.Is(err, errOpsClosed):
 			continue
@@ -910,57 +916,40 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		}
 	}
 	if firstErr != nil {
-		return false, r.opFailure(fmt.Errorf("fetch plan %d %s stage: %d functions failed, first: %w", record.ID, stage, len(failures), firstErr))
+		return false, r.opFailure(fmt.Errorf("fetch plan %d push: %d functions failed, first: %w", record.ID, len(failures), firstErr))
 	}
-	return r.allConfirmed(content, progress, final), nil
+	return allPushed(content, progress), nil
 }
 
-// startStage 为计划推进起一个操作：期望内容由调用方传入的阶段决定；退役的函数（最终阶段没有最终计划）只停定时器。
-func (r *PlanReconciler) startStage(content *FetchPlanContent, function *PlanFunctionChange, key, stage string) (*functionOp, error) {
-	target := stageTarget(content, function, stage)
-	if stage == planStageFinal && content.FinalPlan(function) == nil {
+// startPush 为计划推进起一个操作：按 Target 与 Cron Ensure；退役的函数（Target 为空）只停定时器。
+func (r *PlanReconciler) startPush(function *PlanFunctionChange, key string) (*functionOp, error) {
+	if function.Target == nil {
 		return r.startDisableTimer(r.functionRef(function.Name, function.Region), key)
 	}
-	if target.Plan == nil {
-		return nil, fmt.Errorf("function %s has no plan for the %s stage", function.Name, stage)
-	}
-	spec, err := r.desiredSpec(target)
+	spec, err := r.desiredSpec(functionTarget{Name: function.Name, Region: function.Region, Plan: function.Target, Cron: function.Cron})
 	if err != nil {
 		return nil, err
 	}
 	return r.startEnsure(key, spec)
 }
 
-// allConfirmed 判断这一阶段需要下发的项都已确认。
-func (r *PlanReconciler) allConfirmed(content *FetchPlanContent, progress *FetchPlanProgress, final bool) bool {
-	confirmed := progress.Transitioned
-	if final {
-		confirmed = progress.Finalized
-	}
-	for _, name := range content.SortedFunctionNames() {
-		function := content.Functions[name]
-		needed := function.Push
-		if final {
-			needed = r.finalDiffers(content, function)
-		}
-		if needed && !confirmed[name] {
+// allPushed 判断需要下发的项都已确认。
+func allPushed(content *FetchPlanContent, progress *FetchPlanProgress) bool {
+	for name, function := range content.Functions {
+		if function.Push && !progress.Pushed[name] {
 			return false
 		}
 	}
 	return true
 }
 
-// confirmStream 把推送与本地执行端的项“下发”到这一阶段：记下要求的阶段（collector-stream 心跳拿到新版本后拉取），
-// 看到实例回报已应用该记录的这一阶段（或更后的阶段）才算确认。
+// confirmStream 把推送与本地执行端的项“下发”：记下要求应用这份计划（collector-stream 心跳拿到新版本后拉取），
+// 看到实例回报已应用该记录才算确认。
 // 固定规则：计划里没有数据集正切到推送或本地执行端（collector-stream 只是旧执行端，或数据集留在它上面只是标的变了），
 // 并且 collector-stream 已离线（心跳超时）时，这份计划不等它确认；有数据集正切到它上面的计划仍要等。
-func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, names []string, final bool) error {
-	stage, confirmed := StreamStageTransition, &progress.Transitioned
-	if final {
-		stage, confirmed = StreamStageFinal, &progress.Finalized
-	}
-	if streamStageRank(progress.StreamStage) < streamStageRank(stage) {
-		progress.StreamStage = stage
+func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, names []string) error {
+	if !progress.StreamPushed {
+		progress.StreamPushed = true
 		if err := r.saveProgress(ctx, record, progress, record.Status, record.LastError); err != nil {
 			return err
 		}
@@ -981,7 +970,7 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 		if worker != nil {
 			var applied StreamApplied
 			if json.Unmarshal([]byte(worker.Applied), &applied) == nil {
-				ok = applied.ID == record.ID && streamStageRank(applied.Stage) >= streamStageRank(stage)
+				ok = applied.ID == record.ID
 			}
 		}
 	}
@@ -989,7 +978,7 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 		return nil
 	}
 	for _, name := range names {
-		progress.mark(confirmed, name)
+		progress.mark(&progress.Pushed, name)
 	}
 	return r.saveProgress(ctx, record, progress, record.Status, record.LastError)
 }
@@ -1009,57 +998,59 @@ func (r *PlanReconciler) streamOffline(ctx context.Context) (bool, error) {
 
 // movesToWorker 判断计划里有数据集正从别的执行端切到推送或本地执行端（collector-stream 是新执行端）。
 func movesToWorker(content *FetchPlanContent) bool {
-	for _, change := range content.Datasets {
-		if change.Changed && change.OldIngest != "" && change.IngestOrSCF() != marketfetch.PlanExecutorSCF {
+	for _, dataset := range content.Datasets {
+		if dataset.changesCopies() && dataset.HandoffFrom() > 0 && dataset.Head().ingestOrSCF() != marketfetch.PlanExecutorSCF {
 			return true
 		}
 	}
 	return false
 }
 
-func streamStageRank(stage string) int {
-	switch stage {
-	case StreamStageTransition:
-		return 1
-	case StreamStageFinal:
-		return 2
-	default:
-		return 0
-	}
-}
-
 // handoffLatenessMaxWait 是一轮对账里为等到交接截止的可改时刻最多等待的时间（对账每分钟一轮，1m 的窗口只有约 35 秒）。
 const handoffLatenessMaxWait = 40 * time.Second
 
-// handoffLatenessDue 返回一个交接数据集可以改截止的时刻与必须改完的时刻：
-// 截止在周期第一次建立时冻结，旧执行端的最后一个周期（P 之前）到 P + 旧截止之后不能再建立；
-// 新执行端的第一个周期 P 在它收盘（P 加一个周期）之后才建立，要在那之前改成新值。
-func handoffLatenessDue(change *PlanDatasetChange) (time.Time, time.Time) {
-	start := time.Unix(change.P, 0).UTC()
-	due := start.Add(time.Duration(change.OldLatenessS)*time.Second + planFinalizeMargin)
-	deadline := start.Add(time.Minute)
-	if frequency, err := marketdata.ParseFrequency(change.Frequency); err == nil {
-		deadline = nextBoundary(frequency, start.Add(time.Second))
-	}
-	return due, deadline
-}
-
-// applyHandoffLateness 把交接数据集的截止改成新值，每个数据集在自己的窗口里改（见 handoffLatenessDue）：
-// 可改时刻在本轮 handoffLatenessMaxWait 之内就等到那一刻；all 为真（整份计划收尾、下发最终计划之前）时把剩下的都改掉。
-func (r *PlanReconciler) applyHandoffLateness(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, all bool) error {
+// applyHandoffLateness 每轮改一次交接数据集的截止，不记进度：看已生效状态的数据集，再加上未生效计划的（同一个键以未生效计划为准），
+// 凡是有两份、两份截止不同的，到“后一份 From + 旧份截止 + 余量”时调 EnsureAllowedLateness，传入当前期望的截止（幂等，到点后每轮都调）。
+// 旧执行端的最后一个周期（后一份 From 之前）到那时已经建立；新执行端的第一个周期在后一份 From 加一个周期之后才建立，要在那之前改成。
+// 可改时刻在本轮 handoffLatenessMaxWait 之内就等到那一刻。返回本轮已改成功的数据集：裁掉这类数据集的旧份要以它为前提，
+// 改成功之前旧份一直留着，这个状态本身就是“还要改”的记号。调用失败只记失败，不挡住本轮别的数据集。
+func (r *PlanReconciler) applyHandoffLateness(ctx context.Context, open *store.FetchPlanRecord) (map[string]bool, error) {
 	if r.Lateness == nil {
-		return nil
+		return nil, nil
+	}
+	datasets := map[string]*PlanDataset{}
+	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
+	if err != nil {
+		return nil, r.fail("store", fmt.Errorf("read applied fetch plan: %w", err))
+	}
+	var firstErr error
+	for _, record := range []*store.FetchPlanRecord{applied, open} {
+		if record == nil {
+			continue
+		}
+		content, err := decodeFetchPlanContent(record.Plan)
+		if err != nil {
+			return nil, r.fail("store", err)
+		}
+		for key, dataset := range content.Datasets {
+			datasets[key] = dataset
+		}
 	}
 	type pending struct {
 		key           string
 		due, deadline time.Time
 	}
 	var items []pending
-	for key, change := range content.Datasets {
-		if change.HandoffLateness() && !progress.LatenessSet[key] {
-			due, deadline := handoffLatenessDue(change)
-			items = append(items, pending{key: key, due: due, deadline: deadline})
+	for key, dataset := range datasets {
+		if len(dataset.Copies) != 2 || dataset.Copies[0].LatenessS == dataset.Copies[1].LatenessS {
+			continue
 		}
+		start := time.Unix(dataset.Copies[1].From, 0).UTC()
+		deadline := start.Add(time.Minute)
+		if frequency, err := marketdata.ParseFrequency(dataset.Frequency); err == nil {
+			deadline = nextBoundary(frequency, start.Add(time.Second))
+		}
+		items = append(items, pending{key: key, due: start.Add(time.Duration(dataset.Copies[0].LatenessS)*time.Second + copyWindowMargin), deadline: deadline})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if !items[i].due.Equal(items[j].due) {
@@ -1067,29 +1058,30 @@ func (r *PlanReconciler) applyHandoffLateness(ctx context.Context, record *store
 		}
 		return items[i].key < items[j].key
 	})
+	done := map[string]bool{}
 	for _, item := range items {
-		if wait := item.due.Sub(r.now()); wait > 0 && !all {
+		if wait := item.due.Sub(r.now()); wait > 0 {
 			if wait > handoffLatenessMaxWait {
 				continue
 			}
 			if err := r.wait(ctx, wait); err != nil {
-				return nil
+				return done, nil
 			}
 		}
-		key, change := item.key, content.Datasets[item.key]
+		dataset := datasets[item.key]
 		if r.now().After(item.deadline) {
-			log.WarnContextf(ctx, "collector fetch plan switched allowed lateness late space=%s dataset=%s: periods from %s were created with the old lateness", r.SpaceID, key, time.Unix(change.P, 0).UTC().Format(time.RFC3339))
+			log.WarnContextf(ctx, "collector fetch plan switches allowed lateness late space=%s dataset=%s: periods from %s may have been created with the old lateness", r.SpaceID, item.key, time.Unix(dataset.Copies[1].From, 0).UTC().Format(time.RFC3339))
 		}
-		if err := r.Lateness.EnsureAllowedLateness(ctx, r.SpaceID, change.DatasetID, change.LatenessS); err != nil {
-			return r.fail("dataset", fmt.Errorf("set allowed lateness of dataset %s: %w", change.DatasetID, err))
+		if err := r.Lateness.EnsureAllowedLateness(ctx, r.SpaceID, dataset.DatasetID, dataset.LatenessS); err != nil {
+			err = r.fail("dataset", fmt.Errorf("set allowed lateness of dataset %s: %w", dataset.DatasetID, err))
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
-		progress.mark(&progress.LatenessSet, key)
-		if err := r.saveProgress(ctx, record, progress, record.Status, ""); err != nil {
-			return err
-		}
-		log.InfoContextf(ctx, "collector fetch plan switched allowed lateness space=%s dataset=%s %ds -> %ds", r.SpaceID, key, change.OldLatenessS, change.LatenessS)
+		done[item.key] = true
 	}
-	return nil
+	return done, firstErr
 }
 
 // excludeSubjects 从采集组里去掉排除的标的；标的全被排除的组不再采集。
@@ -1188,17 +1180,6 @@ func scfFunctions(functions map[string]*PlanFunction) map[string]*PlanFunction {
 	return result
 }
 
-// finalDiffers 判断收尾时该函数是否还需要再下发一次。
-func (r *PlanReconciler) finalDiffers(content *FetchPlanContent, function *PlanFunctionChange) bool {
-	if !function.Push {
-		return false
-	}
-	if function.New == nil {
-		return true
-	}
-	return !plansEqual(content.TransitionalPlan(function), content.FinalPlan(function)) || content.TransitionalCron(function) != content.FinalCron(function)
-}
-
 // verifyUntouched 在有未生效计划时，对不受该计划影响的已生效函数做云端校验。
 func (r *PlanReconciler) verifyUntouched(ctx context.Context, open *store.FetchPlanRecord) error {
 	if !r.verifyRequested.Load() && !r.lastVerified.IsZero() && r.now().Sub(r.lastVerified) < planVerifyInterval {
@@ -1221,7 +1202,7 @@ func (r *PlanReconciler) verifyUntouched(ctx context.Context, open *store.FetchP
 	untouched := map[string]*PlanFunction{}
 	for name, function := range previous {
 		change := openContent.Functions[name]
-		if change != nil && (change.Push || change.Create || r.finalDiffers(openContent, change)) {
+		if change != nil && (change.Push || change.Create) {
 			continue
 		}
 		untouched[name] = function
@@ -1503,31 +1484,41 @@ func (r *PlanReconciler) collectFinishedOps(ctx context.Context) error {
 	return first
 }
 
-// logPlan 写入活动日志：计划创建（标的变更）与计划生效。写入失败返回错误，下一轮重试；幂等键保证不重复。
+// logPlan 写入活动日志：计划开始（每个换了份或符号的数据集一条）与计划生效。写入失败返回错误，下一轮重试；幂等键保证不重复。
+// 只做裁剪或只改函数内容的计划（没有 replace、append、symbols）两条都不写。
 func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, applied bool) error {
 	if r.Activity == nil {
+		return nil
+	}
+	var keys []string
+	for _, key := range content.sortedDatasetKeys() {
+		if dataset := content.Datasets[key]; dataset.changesCopies() || dataset.Action == PlanActionSymbols {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
 		return nil
 	}
 	var entries []ActivityEntry
 	refID := strconv.FormatInt(record.ID, 10)
 	if !applied {
-		keys := make([]string, 0, len(content.Datasets))
-		for key, change := range content.Datasets {
-			if change.Changed {
-				keys = append(keys, key)
-			}
-		}
-		sort.Strings(keys)
 		for _, key := range keys {
-			change := content.Datasets[key]
+			dataset := content.Datasets[key]
+			effective := time.Unix(dataset.P, 0).UTC()
 			detail := map[string]any{
-				"dataset_id": change.DatasetID, "frequency": change.Frequency, "old_hash": change.OldHash, "new_hash": change.Hash,
-				"effective_period": time.Unix(change.P, 0).UTC().Format(time.RFC3339), "added": change.Added, "removed": change.Removed, "count": change.Count,
+				"dataset_id": dataset.DatasetID, "frequency": dataset.Frequency, "action": dataset.Action, "new_hash": dataset.Hash,
+				"effective_period": effective.Format(time.RFC3339), "added": dataset.Added, "removed": dataset.Removed, "count": dataset.Count,
+			}
+			title := fmt.Sprintf("%s %s：新增 %d 个、移除 %d 个标的，将于 %s 生效", dataset.DatasetID, dataset.Frequency, len(dataset.Added), len(dataset.Removed), effective.Format("2006-01-02 15:04"))
+			switch dataset.Action {
+			case PlanActionReplace:
+				title = fmt.Sprintf("%s %s：替换 %s 起的标的（新增 %d 个、移除 %d 个）", dataset.DatasetID, dataset.Frequency, effective.Format("2006-01-02 15:04"), len(dataset.Added), len(dataset.Removed))
+			case PlanActionSymbols:
+				title = fmt.Sprintf("%s %s：交易所符号变更，将于 %s 生效", dataset.DatasetID, dataset.Frequency, effective.Format("2006-01-02 15:04"))
 			}
 			entries = append(entries, ActivityEntry{
 				SpaceID: r.SpaceID, Source: "collector", Category: "collector.subject_change", Level: "info", RefID: refID,
-				Title:    fmt.Sprintf("%s %s：新增 %d 个、移除 %d 个标的，将于 %s 生效", change.DatasetID, change.Frequency, len(change.Added), len(change.Removed), time.Unix(change.P, 0).UTC().Format("2006-01-02 15:04")),
-				Detail:   mustJSON(detail),
+				Title: title, Detail: mustJSON(detail),
 				DedupKey: fmt.Sprintf("collector.fetch_plan.%s.%d.created.%s", r.SpaceID, record.ID, key),
 			})
 		}
@@ -1536,9 +1527,6 @@ func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRec
 			SpaceID: r.SpaceID, Source: "collector", Category: "collector.fetch_plan_applied", Level: "info", RefID: refID,
 			Title: fmt.Sprintf("采集计划 %d 已生效", record.ID), Detail: "{}", DedupKey: fmt.Sprintf("collector.fetch_plan.%s.%d.applied", r.SpaceID, record.ID),
 		})
-	}
-	if len(entries) == 0 {
-		return nil
 	}
 	return r.Activity.AppendActivityLogs(ctx, r.SpaceID, entries)
 }

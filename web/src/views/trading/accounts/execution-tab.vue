@@ -19,9 +19,7 @@
       </a-table-column>
       <a-table-column title="交易所 · 市场" :width="150">
         <template #cell="{ record }">
-          <span class="tx-nowrap"
-            >{{ exchangeLabels[record.account.exchange] || "-" }} · {{ marketsText(record.account.markets) }}</span
-          >
+          <span class="tx-nowrap">{{ exchangeLabel(record.account.exchange) }} · {{ marketsText(record.account.markets) }}</span>
         </template>
       </a-table-column>
       <a-table-column title="所属组合" :width="170">
@@ -111,7 +109,7 @@ import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import TimeText from "@/components/time-text/index.vue";
-import { exchangeLabels, updateTradingAccount } from "@/api/trade";
+import { exchangeLabel, updateTradingAccount } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import { environmentLabel, logicalDetailPath, type Environment } from "@/components/trade-confirm/environment";
@@ -173,7 +171,7 @@ function setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED") {
     ...accountStatusConfirm({ accountName: account.name, enable: status === "ENABLED" }),
     name: account.name,
     run: async () => {
-      await updateTradingAccount({ trading_account_id: accountId, status }, { silent: true });
+      await updateTradingAccount({ trading_account_id: accountId, status });
       Message.success(status === "ENABLED" ? "已启用，等首次同步" : "已停用");
       emit("changed");
     }

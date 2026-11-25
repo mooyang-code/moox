@@ -20,8 +20,8 @@ type paramsClient struct {
 	columns [][]string
 }
 
-func (c *paramsClient) GetView(ctx context.Context, spaceID, viewID string) (input.ViewInfo, error) {
-	view, err := c.fakeClient.GetView(ctx, spaceID, viewID)
+func (c *paramsClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+	view, err := c.fakeClient.GetView(ctx, spaceID, datasetID)
 	view.Columns = append(view.Columns,
 		input.ViewColumn{Name: "bias__var", Attributes: map[string]string{"column_kind": "output", "member_key": "bias__var", "factor_id": "bias", "member_kind": "var", "output_name": "bias__var"}},
 		input.ViewColumn{Name: factorname.ParamsColumn, Attributes: map[string]string{"column_kind": "params"}})

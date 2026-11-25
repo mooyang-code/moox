@@ -24,15 +24,15 @@ func TestConfirmedAtFollowsEnableConfirmDisableAndEveryReadPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	enable := func(instanceID, session, taskID, viewID string) {
+	enable := func(instanceID, session, taskID, datasetID string) {
 		t.Helper()
-		resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"` + viewID + `","factor_task_id":"` + taskID + `"}}}`
+		resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"` + datasetID + `","factor_task_id":"` + taskID + `"}}}`
 		if err := repo.EnableInstance(ctx, Session{SessionID: session, InstanceID: instanceID, DSLHash: testHash, ResolvedJSON: resolved, CreatedAt: testNow}, "name: demo"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	enable("trader", "session-1", "ftask_a", "view_factor_a")
-	enable("observer", "session-2", "ftask_b", "view_factor_b")
+	enable("trader", "session-1", "ftask_a", "dataset_factor_a")
+	enable("observer", "session-2", "ftask_b", "dataset_factor_b")
 
 	if observer, err := repo.GetInstance(ctx, "observer"); err != nil || observer.ConfirmedAt == nil || observer.Trial() {
 		t.Fatalf("没挂账户的实例启用即确认：%+v err=%v", observer, err)
@@ -85,11 +85,11 @@ func TestConfirmedAtFollowsEnableConfirmDisableAndEveryReadPath(t *testing.T) {
 		}
 		confirmed("ListInstances "+name, list)
 	}
-	byView, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_a")
+	byView, err := repo.EnabledInstancesByDataset(ctx, "space", "dataset_factor_a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	confirmed("EnabledInstancesByView", byView)
+	confirmed("EnabledInstancesByDataset", byView)
 
 	// 停用清空；重新启用从试运行开始。
 	if err := repo.DisableInstance(ctx, "trader", "session-1", testNow); err != nil {
@@ -98,7 +98,7 @@ func TestConfirmedAtFollowsEnableConfirmDisableAndEveryReadPath(t *testing.T) {
 	if disabled, err := repo.GetInstance(ctx, "trader"); err != nil || disabled.ConfirmedAt != nil || disabled.Trial() {
 		t.Fatalf("停用应清空确认时间：%+v err=%v", disabled, err)
 	}
-	enable("trader", "session-3", "ftask_a", "view_factor_a")
+	enable("trader", "session-3", "ftask_a", "dataset_factor_a")
 	if reenabled, err := repo.GetInstance(ctx, "trader"); err != nil || reenabled.ConfirmedAt != nil || !reenabled.Trial() {
 		t.Fatalf("重新启用应回到试运行：%+v err=%v", reenabled, err)
 	}
@@ -138,7 +138,7 @@ func TestConfirmInstanceRowReportsAChangedSession(t *testing.T) {
 	if err := repo.CreateInstance(ctx, Instance{InstanceID: "trader", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, LogicalAccountID: &account, CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`
+	resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a"}}}`
 	if err := repo.EnableInstance(ctx, Session{SessionID: "session-1", InstanceID: "trader", DSLHash: testHash, ResolvedJSON: resolved, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}

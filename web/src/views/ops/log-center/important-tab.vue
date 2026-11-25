@@ -81,7 +81,7 @@
             @click="open(record)"
             @keydown.enter="open(record)"
           >
-            <td>{{ formatTime(record.logged_at) }}</td>
+            <td>{{ formatInstant(record.logged_at, displayZone) }}</td>
             <td>
               <span class="logs-level" :class="`is-${levelTone(record)}`">{{ levelLabel(record) }}</span>
             </td>
@@ -106,7 +106,7 @@
     <a-drawer v-model:visible="detailVisible" title="日志详情" width="min(720px, 100vw)" :footer="false">
       <dl v-if="selected" class="logs-detail">
         <dt>时间</dt>
-        <dd>{{ formatTime(selected.logged_at) }}</dd>
+        <dd>{{ formatInstant(selected.logged_at, displayZone) }}</dd>
         <dt>级别</dt>
         <dd>{{ levelLabel(selected) }}</dd>
         <dt>主机 / 组件</dt>
@@ -221,8 +221,8 @@ function request(conditions: Conditions, beforeId?: number | string) {
     host_id: conditions.host_id,
     level: conditions.level,
     keyword: conditions.keyword,
-    start_at: new Date(conditions.window.startMs).toISOString(),
-    end_at: new Date(conditions.window.endMs).toISOString(),
+    start_at: String(conditions.window.startMs),
+    end_at: String(conditions.window.endMs),
     limit: PAGE_SIZE,
     // 分布只在查第一页时取；向更早翻页时条件没变，不用再算。
     ...(beforeId ? { before_id: beforeId } : { with_buckets: true })
@@ -329,10 +329,6 @@ function barHeight(count: number) {
 function open(record: LogRecord) {
   selected.value = record;
   detailVisible.value = true;
-}
-
-function formatTime(value?: string) {
-  return formatInstant(value, displayZone.value);
 }
 
 onMounted(reload);

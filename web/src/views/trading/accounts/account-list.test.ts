@@ -6,8 +6,8 @@ const account = (id: string, extra: Partial<TradingAccount> = {}) =>
   ({
     trading_account_id: id,
     name: id,
-    exchange: 1,
-    markets: [1],
+    exchange: "binance",
+    markets: ["spot"],
     execution_mode: 1,
     status: "ENABLED",
     snapshot: { equity: "100" },
@@ -27,7 +27,7 @@ describe("账户列表模型", () => {
   it("按环境筛选组合，成员权益求和，交易所去重", () => {
     const accounts = accountMapOf([
       account("a"),
-      account("b", { exchange: 2, snapshot: { equity: "50" } as TradingAccount["snapshot"] }),
+      account("b", { exchange: "okx", snapshot: { equity: "50" } as TradingAccount["snapshot"] }),
       account("t", { execution_mode: 2, live: { environment: 1, credential_secret_id: "s" } })
     ]);
     const logicals = [logical("p", ["a", "b"]), logical("n", ["t"], { execution_mode: 2 })];

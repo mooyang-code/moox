@@ -21,8 +21,6 @@ import factorEditor from "@/views/factor/editor/index.vue?raw";
 import recalcTab from "@/views/factor/recalc/index.vue?raw";
 import recalcModel from "@/views/factor/recalc/recalc-model.ts?raw";
 import resultsTab from "@/views/factor/results/index.vue?raw";
-import resultsModel from "@/views/factor/results/results-model.ts?raw";
-import overviewPage from "@/views/factor/overview/index.vue?raw";
 
 describe("factor API contract", () => {
   it("uses explicit generic time-series fields", () => {
@@ -37,8 +35,8 @@ describe("factor API contract", () => {
       lookback_periods: 100,
       definition_hash: "sha256:definition",
       allow_partial_universe: false,
-      created_at: "2026-10-04T00:00:00Z",
-      updated_at: "2026-10-04T00:00:00Z"
+      created_at: "1791072000000",
+      updated_at: "1791072000000"
     };
     const info: FactorInfo = { factor, usages: [{ task_id: "factor_task_crypto_1m", status: "enabled" }] };
     const member: FactorMember = {
@@ -124,7 +122,7 @@ describe("factor pages contract", () => {
     expect(taskHost).toContain("PageTitleTabs");
     expect(factorScope).toContain("route.query.task");
     expect(factorScope).toContain("usePolling");
-    expect(overviewPage).toContain("extraPoll");
+    expect(computeTasks).toContain("extraPoll");
   });
 
   it("changes member status only through setFactorMemberStatus without a backfill job", () => {
@@ -184,9 +182,8 @@ describe("factor pages contract", () => {
     expect(computeTasks).toContain("setFactorTaskStatus");
   });
 
-  it("scopes results to the factor result view of the selected set", () => {
-    expect(resultsModel).toContain('view.attributes?.view_role === "factor_result"');
-    expect(resultsModel).toContain("result_dataset_id");
+  it("scopes results to the result dataset of the selected set", () => {
+    expect(resultsTab).toContain("current.result_dataset_id");
     expect(resultsTab).not.toContain("ViewDefinitions");
     expect(resultsTab).toContain("result-toolbar");
     expect(resultsTab).toContain("#status-extra");

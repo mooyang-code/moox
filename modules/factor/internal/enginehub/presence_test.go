@@ -111,5 +111,5 @@ func TestDelegatedReportCarriesEngineReadinessAndLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "factor-engine@m1", delegated.GetInstanceId())
 	require.Nil(t, delegated.Ready, "只有落库的心跳时间，不带就绪判断")
-	require.NotZero(t, delegated.GetLastHeartbeatUnix())
+	require.NotZero(t, delegated.GetLastHeartbeatAt())
 }

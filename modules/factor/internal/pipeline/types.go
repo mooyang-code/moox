@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/factorexpr/exec"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 type Mode int
@@ -36,20 +35,13 @@ type Plan struct {
 	Expected       []string
 	Available      []string
 	UpstreamFailed []string
-	// ExpectedSeries、UpstreamFailedSeries 是按序列（标的、series_tag）的期望全集与上游失败名单，所有数据集都有：
-	// 期望、缺失、跳过、失败都按序列判断，统一数据集里一个市场的缺数不连累另一个市场。
-	// Expected 是它涉及的标的，Available 是至少有一条序列没有上游失败的标的，UpstreamFailed 是有序列上游失败的标的。
-	// 实时计划取自周期完成事件；补算类计划没有带时由 Run 向数据层取（SeriesExpecter）。
-	ExpectedSeries       []seriesset.Series
-	UpstreamFailedSeries []seriesset.Series
-	// ExpectedSeriesDerived 为真表示 ExpectedSeries 是数据层在统一数据集上按本地存储推测出来的（补算、失效重算没有冻结全集可用），
-	// 不是 marker 里冻结的确定值。推测的期望可能把晚到或刚下架的序列算进来：非只填充的计划里，因这类推测缺数而被跳过的
-	// series_tag 不写 NULL，保留已有的值。只有一个 tag 的数据集不做推测，恒为假。
-	ExpectedSeriesDerived bool
-	CarryColumns          []string
-	WriteCarry            bool
-	TriggerEventID        string
-	Budget                time.Duration
+	// FrozenUniverse 只用于补算：为真表示 Expected 是从周期 marker 读到的冻结全集（已按本批标的过滤）；
+	// 为假表示 Expected 只是调用方选的标的，Run 先向数据层收窄（SubjectExpecter），排除区间结束时还没上市的标的。
+	FrozenUniverse bool
+	CarryColumns   []string
+	WriteCarry     bool
+	TriggerEventID string
+	Budget         time.Duration
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞、失败都不写任何字段（尤其不写失效 NULL），也不写 carry 列。
 	// 用于空洞补齐后的恢复。
 	FillOnly bool
@@ -79,11 +71,6 @@ type RowKey struct {
 type Outcome struct {
 	Status         string
 	FailedSubjects []string
-	// FailedSeries 是按序列的失败名单，口径同 FailedSubjects。
-	FailedSeries []seriesset.Series
-	// DerivedSkipped 表示补算类计划（期望序列是数据层推测的，ExpectedSeriesDerived）里有成员因推测的期望缺数而整个或部分 tag 被跳过：
-	// 这些行保留了旧值、没有真正重算，失效重算据此保留这一段待办，等推测不再跳过（例如已下架的序列沉默超过阈值被排除）再重算。
-	DerivedSkipped bool
 	Factors        []storageio.FactorState
 	RowsWritten    int
 	Warming        int
@@ -145,14 +132,11 @@ type LoadResult struct {
 	// Frames 是目标区间的行（series_tag 与携带列）：组装写出携带列用，不含回看窗口。
 	Frames map[string]*storageio.Frame
 	// View 是计算的列式输入：回看窗口加目标区间。
-	View           *serieswindow.View
+	View *serieswindow.View
+	// Available、FailedSubjects 是期望标的里本期可用与不可用的标的（可用：本期有真实的源行；
+	// 不可用：上游失败、本期数据还没到、同步失败、预热中）。
 	Available      []string
 	FailedSubjects []string
-	// AvailableSeries、FailedSeries 是期望序列里本期可用与不可用的序列（可用：本期有真实的源行；
-	// 不可用：上游失败、本期数据还没到、同步失败、预热中），两者合起来正好是 Plan.ExpectedSeries。
-	// 不可用序列的标的都在 FailedSubjects 里（按标的口径：任一序列失败，标的就记失败）；Available 是至少有一条可用序列的标的。
-	AvailableSeries []seriesset.Series
-	FailedSeries    []seriesset.Series
 	// WarmingSubjects are left out of the period until their lookback window
 	// is loaded; they are also listed in FailedSubjects.
 	WarmingSubjects []string
@@ -168,8 +152,6 @@ type Computation struct {
 	BudgetHit bool
 	// Warnings 是成员在目标区间内整截面没有算出的次数（成员键 → 原因 → 截面数），来自 exec.Result.Warnings。
 	Warnings map[string]map[string]int
-	// availableSeries 是本期可用的序列：成员整体计算失败时，这些序列都记为失败。
-	availableSeries []seriesset.Series
 }
 
 // ItemResult 是一个成员在一个标的（截面因子为空串）上的逐行结果：列为 data_time、series_tag、

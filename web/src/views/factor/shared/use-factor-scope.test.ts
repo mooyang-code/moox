@@ -18,9 +18,17 @@ vi.mock("vue-router", () => ({
   useRouter: () => ({ replace: hoisted.replace })
 }));
 vi.mock("@/hooks/usePolling", () => ({ usePolling: hoisted.usePolling }));
-vi.mock("@/api/factor", () => ({ listFactorTasks: vi.fn(), getFactorStatus: vi.fn().mockResolvedValue(null) }));
+vi.mock("@/api/factor", async () => {
+  const listFactorTasks = vi.fn();
+  const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
+  return {
+    listFactorTasks,
+    listAllFactorTasks: allFactorTasksFrom(listFactorTasks),
+    getFactorStatus: vi.fn().mockResolvedValue(null)
+  };
+});
 vi.mock("@/api/storage/metadata", () => ({ listDatasets: vi.fn() }));
-vi.mock("@/api/admin/spaces", () => ({ listSpaces: vi.fn() }));
+vi.mock("@/api/storage/spaces", () => ({ listSpaces: vi.fn() }));
 vi.mock("@/api/admin/space-header", async importOriginal => ({
   ...(await importOriginal<typeof import("@/api/admin/space-header")>()),
   setSelectedSpaceIdCache: vi.fn()

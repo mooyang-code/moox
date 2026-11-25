@@ -16,7 +16,7 @@ func TestQueryJSONPreservesTextAndDistinguishesJSONNull(t *testing.T) {
 	m, err := OpenIndexManager(IndexManagerOptions{Root: t.TempDir()})
 	require.NoError(t, err)
 	defer m.Close()
-	require.NoError(t, m.Prepare(ctx, "idx", viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "payload", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON}}}))
+	require.NoError(t, m.Prepare(ctx, "idx", viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*viewindex.Column{{ColumnName: "payload", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON}}}))
 	const payload = `{"large":18446744073709551615,"decimal":0.12345678901234567890123456789}`
 	var writes []viewindex.RowWrite
 	for subject, raw := range map[string]string{"BTC": payload, "ETH": "null"} {

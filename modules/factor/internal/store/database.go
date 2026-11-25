@@ -120,7 +120,7 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 			"c_job_id", "c_request_id", "c_task_id", "c_members_json", "c_subjects_json",
 			"c_members_omitted", "c_subjects_omitted",
 			"c_start_time", "c_end_time", "c_status", "c_progress_time", "c_error",
-			"c_default_filled_json", "c_engine_id", "c_lease_token", "c_lease_expires_at", "c_udf_bindings", "c_ctime", "c_mtime",
+			"c_default_filled_json", "c_ctime", "c_mtime",
 		},
 		"t_factor_tasks": {
 			"c_task_id", "c_space_id", "c_name", "c_source_dataset_id", "c_freq",

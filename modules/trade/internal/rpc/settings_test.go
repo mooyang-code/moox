@@ -144,7 +144,7 @@ func TestFundSettingsAreRestrictedToBinanceMembersAndSettlementAsset(t *testing.
 	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
 	require.NoError(t, handler.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx", Exchange: "OKX", Markets: []string{"SPOT"},
+			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx", Exchange: "okx", Markets: []string{"spot"},
 			ExecutionMode: "LIVE", AccountMode: "OKX_UNIFIED", Environment: "PRODUCTION", CredentialSecretID: "secret-okx",
 			SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
@@ -202,8 +202,8 @@ func TestAddingANonBinanceMemberIsRejectedWhenFundMaintenanceIsOn(t *testing.T) 
 	handler.LogicalAccounts.Syncer = noopSyncer{}
 	require.NoError(t, handler.Store.Transaction(ctx, func(tx *store.Tx) error {
 		for _, account := range []store.TradingAccountRecord{
-			{SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx", Exchange: "OKX", Markets: []string{"SPOT"}, AccountMode: "OKX_UNIFIED", CredentialSecretID: "secret-okx"},
-			{SpaceID: "space-1", TradingAccountID: "binance-1", Name: "binance", Exchange: "BINANCE", Markets: []string{"SPOT"}, AccountMode: "BINANCE_STANDARD", CredentialSecretID: "secret-binance"},
+			{SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx", Exchange: "okx", Markets: []string{"spot"}, AccountMode: "OKX_UNIFIED", CredentialSecretID: "secret-okx"},
+			{SpaceID: "space-1", TradingAccountID: "binance-1", Name: "binance", Exchange: "binance", Markets: []string{"spot"}, AccountMode: "BINANCE_STANDARD", CredentialSecretID: "secret-binance"},
 		} {
 			account.ExecutionMode, account.Environment, account.SettlementAsset, account.Status, account.Ready = "LIVE", "PRODUCTION", "USDT", "ENABLED", true
 			account.LastSyncAt, account.SnapshotSourceTime = time.Now().UnixMilli(), time.Now().UnixMilli()

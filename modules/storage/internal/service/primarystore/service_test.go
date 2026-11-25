@@ -12,7 +12,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // 元数据里没有或已停用的数据集，读写都在到达存储层之前被拒绝。
@@ -64,8 +63,7 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	completed, err := svc.ReportDatasetPeriodCompleted(context.Background(), &pb.ReportDatasetPeriodCompletedReq{
 		SpaceId: "space", Marker: &pb.DatasetPeriodCompletedMarker{
 			DatasetId: "factor-data", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", UniverseSubjectIds: []string{"BTC"},
-			UniverseSeries: []*pb.SeriesRef{{SubjectId: "BTC", SeriesTag: "default"}},
-			CauseEventId:   "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
+			CauseEventId: "source-ready", CompletedAt: time.Unix(1786032001, 0).UnixMilli(),
 		},
 	})
 	if err != nil || completed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {

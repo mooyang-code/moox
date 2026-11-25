@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 基线金样（第 0 期）：在现货金样（spot_golden.json）之外补永续、双市场（两个任务）与统一数据集（一个任务）的研究回放，
+// 基线金样（第 0 期）：在现货金样（spot_golden.json）之外补永续与双市场（两个任务）的研究回放，
 // 包含 universe 的标签与黑白名单、规则的显式 pool、min_age_bars（双市场按市场分别判年龄）与永续逐期结算。
 // 每份金样导出每期的目标、账本（持仓快照与本期结算摘要）、权益与各市场市值，以及最终绩效，存为 testdata/baseline/<场景>.json。
 // 策略池回放另有 testdata/baseline/pool_<场景>.json（见 pool_replay_test.go 的 poolBaselineCompare）：导出同样的逐期记录
@@ -133,7 +133,7 @@ func baselineSwapPrice(id string, hour int) float64 { return baselinePrice(id, h
 func baselineDualClient() *dualClient {
 	dual := &dualClient{
 		spot: &fakeClient{marketType: "spot", priceFn: baselinePrice},
-		swap: &fakeClient{marketType: "swap", viewName: "view_factor_b", datasetName: "ds_swap", priceFn: baselineSwapPrice},
+		swap: &fakeClient{marketType: "swap", datasetName: "dataset_factor_b", priceFn: baselineSwapPrice},
 	}
 	dual.spot.missing = map[string]map[int]bool{"D": baselineHours(0, 5)}
 	dual.swap.missing = map[string]map[int]bool{"B": baselineHours(0, 7), "A": baselineHours(9, 10)}
@@ -227,9 +227,6 @@ func baselineReplayScenarios() []baselineReplayScenario {
 		{name: "dual_two_tasks", dsl: baselineDualDSL, hours: 16,
 			client: func() input.Client { return newBaselineClient(baselineDualClient()) },
 			tasks:  map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}, check: baselineCheckDual},
-		{name: "dual_unified", dsl: baselineDualDSL, hours: 16,
-			client: func() input.Client { return newBaselineClient(&unifiedClient{dualClient: baselineDualClient()}) },
-			tasks:  map[string]store.ReplayTask{"multi": uniTask}, check: baselineCheckDual},
 	}
 }
 
@@ -334,25 +331,12 @@ func baselineTargetsByHour(t *testing.T, bars []store.ReplayBar) map[int]map[str
 }
 
 func TestBaselineReplayGoldens(t *testing.T) {
-	results := map[string][]store.ReplayBar{}
 	for _, scenario := range baselineReplayScenarios() {
 		t.Run(scenario.name, func(t *testing.T) {
 			dump, bars := baselineReplayDump(t, scenario)
 			require.Len(t, bars, scenario.hours)
 			scenario.check(t, bars)
-			results[scenario.name] = bars
 			baselineCompare(t, filepath.Join("testdata", "baseline", scenario.name+".json"), baselineJSON(t, dump))
 		})
-	}
-	// 统一数据集（一个任务）与两个任务读同样的行，逐期目标与账本应相同；只单跑其中一个子测试时不比较。
-	two, okTwo := results["dual_two_tasks"]
-	unified, okUnified := results["dual_unified"]
-	if !okTwo || !okUnified {
-		return
-	}
-	require.Len(t, unified, len(two))
-	for i := range two {
-		require.Equal(t, string(two[i].TargetsJSON), string(unified[i].TargetsJSON), "第 %d 期：统一数据集与两个任务的目标应一致", i)
-		require.Equal(t, string(two[i].PositionsJSON), string(unified[i].PositionsJSON), "第 %d 期：统一数据集与两个任务的账本应一致", i)
 	}
 }

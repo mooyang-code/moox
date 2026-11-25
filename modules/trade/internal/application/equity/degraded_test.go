@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +46,7 @@ func seedDelistingAccount(t *testing.T, haltStatus string) *store.Store {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
-			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT"}, AccountMode: string(exchange.AccountModeBinanceStandard),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"}, AccountMode: string(exchange.AccountModeBinanceStandard),
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentProduction),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
@@ -75,15 +76,15 @@ func seedDelistingAccount(t *testing.T, haltStatus string) *store.Store {
 		for asset, status := range map[string]string{"BTC": "TRADING", "DEAD": "TRADING", "HALT": haltStatus} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
 				Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentProduction),
-				MarketType: "SPOT", ExchangeSymbol: asset + "USDT", InstrumentID: asset + "-USDT-SPOT",
+				MarketType: "spot", ExchangeSymbol: asset + "USDT", InstrumentID: asset + "-USDT-SPOT",
 				BaseAsset: asset, QuoteAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 				PriceTick: "0.1", Status: status,
 			}); err != nil {
 				return err
 			}
-			if err := tx.CreateOrder(store.OrderRecord{
+			if err := storetest.CreateFilledOrder(tx, store.OrderRecord{
 				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought-" + asset, ClientOrderID: "bought-" + asset,
-				Exchange: string(exchange.ExchangeBinance), MarketType: "SPOT",
+				Exchange: string(exchange.ExchangeBinance), MarketType: "spot",
 				ExchangeSymbol: asset + "USDT", InstrumentID: asset + "-USDT-SPOT", OrderType: "MARKET", Side: "BUY",
 				Quantity: "1", FilledQuantity: "1", ReferencePrice: "1", State: "FILLED",
 				OwnerType: "OPERATOR", OwnerID: "action-" + asset, LogicalAccountID: "logical-1", Version: 1,
@@ -109,14 +110,16 @@ func latestEquity(t *testing.T, tradeStore *store.Store) (string, string) {
 	return points[len(points)-1].Equity, logical[len(logical)-1].Equity
 }
 
-// haltFill 给 HALT 记一笔成交（价格 7）：标的停止交易后按它估值。
+// haltFill 给 HALT 记一笔成交（价格 7，写进标的汇总）：标的停止交易后按它估值。
 func haltFill(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
-	require.NoError(t, tradeStore.DBForTest().Exec(`INSERT INTO t_order_fills (
-		c_space_id, c_fill_id, c_exchange_trade_id, c_order_id, c_trading_account_id, c_exchange, c_market_type,
-		c_instrument_id, c_exchange_symbol, c_side, c_price, c_quantity, c_traded_at
-	) VALUES ('space-1', 'fill-halt', 'trade-halt', 'bought-HALT', 'account-1', 'BINANCE', 'SPOT',
-		'HALT-USDT-SPOT', 'HALTUSDT', 'BUY', '7', '1', 1)`).Error)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SeedInstrumentSummaryForTest(store.InstrumentSummaryRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "spot", ExchangeSymbol: "HALTUSDT",
+			InstrumentID: "HALT-USDT-SPOT", Managed: true, Quantity: shared.MustDecimal("1"), Cost: shared.MustDecimal("7"),
+			LastPrice: shared.MustDecimal("7"), LastTradedAt: 1,
+		})
+	}))
 }
 
 // 受管资产取不到价时的降级（计划 4.6，总审查第 2 轮收窄）：
@@ -156,6 +159,13 @@ func TestSampleAccountDegradesUnvaluableManagedAssets(t *testing.T) {
 // 停止交易、不在下架名单里、没有最后已知价也没有成交记录：照旧报错，不按 0 计。
 func TestSampleAccountFailsOnHaltedAssetWithoutAnyPrice(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "BREAK")
+	// HALT 受管但没有可用的成交价（汇总里的最近成交价为 0）。
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SeedInstrumentSummaryForTest(store.InstrumentSummaryRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "spot", ExchangeSymbol: "HALTUSDT",
+			InstrumentID: "HALT-USDT-SPOT", Managed: true, Quantity: shared.Zero(), Cost: shared.Zero(), LastPrice: shared.Zero(),
+		})
+	}))
 	adapter := &delistingPriceAdapter{at: time.UnixMilli(sourceMillisDegraded + 1)}
 	service := &Service{Store: tradeStore, Adapters: equityTestAdapters{adapter: adapter}, Now: func() time.Time { return time.UnixMilli(sourceMillisDegraded + 2) }}
 	err := service.SampleAccount(context.Background(), "account-1")
@@ -165,8 +175,8 @@ func TestSampleAccountFailsOnHaltedAssetWithoutAnyPrice(t *testing.T) {
 // 停止交易而且在下架名单里：可以按 0 计，采样照常。
 func TestSampleAccountZeroesBlockedHaltedAsset(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "BREAK")
-	_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
+	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	adapter := &delistingPriceAdapter{at: time.UnixMilli(sourceMillisDegraded + 1)}
@@ -180,8 +190,8 @@ func TestSampleAccountZeroesBlockedHaltedAsset(t *testing.T) {
 // （下架之前它仍有市价，按 0 计会让权益骤降）。
 func TestSampleAccountFailsOnBlockedTradingAssetQuoteFailure(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "TRADING")
-	_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
+	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	adapter := &delistingPriceAdapter{at: time.UnixMilli(sourceMillisDegraded + 1), throttled: true}

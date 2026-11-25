@@ -126,17 +126,3 @@ func (s *ClientSource) deployments(ctx context.Context) ([]*adminpb.ComponentDep
 	}
 	return nil, fmt.Errorf("component deployments exceed limit %d", maxDeployments)
 }
-
-func (s *ClientSource) GatewayStatus(ctx context.Context, hostID string) (*adminpb.HostGatewayRuntimeStatus, error) {
-	var response adminpb.GetHostRoutesRsp
-	if err := s.invoke(ctx, "GetHostRoutes", &adminpb.GetHostRoutesReq{HostId: hostID}, &response); err != nil {
-		return nil, err
-	}
-	if err := responseError(response.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	if response.GetHostId() != hostID {
-		return nil, fmt.Errorf("gateway status host does not match %s", hostID)
-	}
-	return response.GetGatewayStatus(), nil
-}

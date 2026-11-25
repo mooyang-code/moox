@@ -4,23 +4,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesformat"
+	"github.com/mooyang-code/moox/modules/cli/internal/seriesimport/runner"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/seriesformat"
-	"github.com/mooyang-code/moox/packages/seriesimport/runner"
 	"github.com/stretchr/testify/require"
 )
 
 func TestImportTargetsAndStep(t *testing.T) {
-	s, f, err := importTargets([]string{"storage", "factor"})
+	s, f, a, err := importTargets([]string{"storage", "factor"})
 	require.NoError(t, err)
-	require.True(t, s && f)
-	s, f, err = importTargets([]string{"factor"})
+	require.True(t, s && f && !a)
+	s, f, a, err = importTargets([]string{"factor"})
 	require.NoError(t, err)
-	require.False(t, s)
+	require.False(t, s || a)
 	require.True(t, f)
-	_, _, err = importTargets([]string{"nowhere"})
+	s, f, a, err = importTargets([]string{"archive"})
+	require.NoError(t, err)
+	require.True(t, a && !s && !f)
+	_, _, _, err = importTargets([]string{"nowhere"})
 	require.ErrorContains(t, err, "未知的写入目标")
-	_, _, err = importTargets(nil)
+	_, _, _, err = importTargets(nil)
 	require.ErrorContains(t, err, "至少要有一个写入目标")
 
 	step, err := importStep("5m")
@@ -30,16 +33,14 @@ func TestImportTargetsAndStep(t *testing.T) {
 	require.ErrorContains(t, err, "不支持的频率")
 }
 
-func TestImportFieldsFromColumnsSkipsSystemAndReserved(t *testing.T) {
+func TestImportFieldsFromColumnsSkipsDisabledAndReserved(t *testing.T) {
 	columns := []*pb.DatasetColumn{
 		{ColumnName: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 		{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"},
 		{ColumnName: "trades", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_INT},
 		{ColumnName: "meta", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON, Status: "active"},
 		{ColumnName: "subject_id", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
-		{ColumnName: "sys", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM},
 		{ColumnName: "off", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "disabled"},
-		{ColumnName: "gone", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "deleted"},
 	}
 	fields, types, err := importFieldsFromColumns(columns)
 	require.NoError(t, err)
@@ -81,6 +82,14 @@ func TestImportUpsertsBuildTypedRowsAndSkipNulls(t *testing.T) {
 	require.Equal(t, "2026-10-01T00:00:00Z", rows[0].GetFields()[3].GetValue().GetTimeValue())
 	require.Len(t, rows[1].GetFields(), 5, "空值写成显式 NULL，清除该字段")
 	require.Equal(t, pb.NullValue_NULL_VALUE_NULL, rows[1].GetFields()[0].GetValue().GetNullValue())
+
+	// 多标的文件：每行的标的取 Batch.Subjects。
+	b.Subjects = []string{"A", "B"}
+	rows, err = importUpserts(runner.Chunk{Space: "crypto", Dataset: "spot", Freq: "1m", Fields: fields, Batch: b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "A", rows[0].GetKey().GetTimeSeries().GetSubjectId())
+	require.Equal(t, "B", rows[1].GetKey().GetTimeSeries().GetSubjectId())
+	b.Subjects = nil
 
 	b.Cols[4].S[0] = "{broken"
 	_, err = importUpserts(runner.Chunk{Space: "crypto", Dataset: "spot", Freq: "1m", Subject: "BTC", Fields: fields, Batch: b}, nil)

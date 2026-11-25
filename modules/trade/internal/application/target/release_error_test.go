@@ -32,7 +32,7 @@ func TestReleaseTargetOrdersErrorIsPlainChinese(t *testing.T) {
 // 撤旧单时交易所报错：账户 ID 只由外层“执行账户 X：”前缀给出一次，逐笔文本不再重复。
 func TestStaleCancelExchangeErrorShowsAccountOnce(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.gtcOrder(t, "stale-open", "target-old", "OPEN")
 	f.orders.cancelErr = &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "cancel", Err: errors.New("交易所超时")}
 
@@ -45,7 +45,7 @@ func TestStaleCancelExchangeErrorShowsAccountOnce(t *testing.T) {
 // 旧单撤单结果未知又确认不了时，收敛返回的必须是账户错误。
 func TestStaleCancelUnknownFailureIsAccountError(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.gtcOrder(t, "stale-cancel-unknown", "target-old", "CANCEL_UNKNOWN")
 
 	_, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")

@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type periodStoreFake struct{}
@@ -34,8 +33,7 @@ func periodDelivery(t *testing.T, datasetID string) *jetstream.Delivery {
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: datasetID, Frequency: "1m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1",
-		UniverseSubjectIds: []string{"BTC"}, CompletedAt: timestamppb.New(period.Add(time.Minute)),
-		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "BTC", SeriesTag: "venue:binance"}},
+		UniverseSubjectIds: []string{"BTC"}, CompletedAt: period.Add(time.Minute).UnixMilli(),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
 		EventID: "event-1", OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: datasetID,
@@ -48,7 +46,7 @@ func periodDelivery(t *testing.T, datasetID string) *jetstream.Delivery {
 
 func newCatalogHandler(t *testing.T, cache *CatalogCache, runner *planRecorder) *eventconsumer.Handler {
 	t.Helper()
-	handler := eventconsumer.NewHandler(cache, periodStoreFake{}, runner, setlock.New(""), eventconsumer.HandlerConfig{})
+	handler := eventconsumer.NewHandler(cache, periodStoreFake{}, runner, setlock.New(), eventconsumer.HandlerConfig{})
 	t.Cleanup(handler.Close)
 	return handler
 }

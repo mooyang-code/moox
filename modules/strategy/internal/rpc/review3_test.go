@@ -77,7 +77,7 @@ func TestEnableFollowsRebindWhileWaitingForLock(t *testing.T) {
 	}
 }
 
-// 从实例发起的回放记录来源实例与会话；列表不带 DSL 全文，详情带；起止时间先截到毫秒。
+// 从实例发起的回放记录来源实例与会话；列表不带 DSL 全文，详情带。
 func TestReplayRecordsSourceAndTrimsList(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
@@ -86,11 +86,11 @@ func TestReplayRecordsSourceAndTrimsList(t *testing.T) {
 	if err != nil || instance.SessionID == nil {
 		t.Fatalf("实例应已启用：%+v err=%v", instance, err)
 	}
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", FactorTasks: map[string]string{"spot": "ftask_i1"}, StartTime: "2026-09-02T00:00:00.0005Z", EndTime: "2026-09-03T00:00:00Z"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", FactorTasks: map[string]string{"spot": "ftask_i1"}, StartTime: ms("2026-09-02T00:00:00Z"), EndTime: ms("2026-09-03T00:00:00Z")})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	replay := started.GetReplay()
-	if replay.GetInstanceId() != "i1" || replay.GetSessionId() != *instance.SessionID || replay.GetStartTime() != "2026-09-02T00:00:00Z" {
-		t.Fatalf("回放应记录来源并把起点截到毫秒：%+v", replay)
+	if replay.GetInstanceId() != "i1" || replay.GetSessionId() != *instance.SessionID || replay.GetStartTime() != ms("2026-09-02T00:00:00Z") {
+		t.Fatalf("回放应记录来源与起点：%+v", replay)
 	}
 	listed, _ := h.service.ListReplays(h.ctx, &strategypb.ListReplaysReq{})
 	if len(listed.GetReplays()) != 1 || listed.GetReplays()[0].GetDslYaml() != "" || listed.GetReplays()[0].GetDslHash() == "" {

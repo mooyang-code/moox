@@ -153,7 +153,7 @@ func newFixture(t *testing.T, fundSettings string, balances []store.AssetBalance
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", Name: "a", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			SpaceID: "space-1", TradingAccountID: "account-a", Name: "a", Exchange: "binance", Markets: []string{"spot"},
 			ExecutionMode: "LIVE", AccountMode: "BINANCE_PORTFOLIO_MARGIN", Environment: "PRODUCTION", CredentialSecretID: "secret-1",
 			SettlementAsset: "USDT", Status: "ENABLED", Ready: true,
 			Snapshot:   store.TradingAccountSnapshot{Balances: balances, ExchangeUpdatedAt: testNow.UnixMilli()},
@@ -174,7 +174,7 @@ func newFixture(t *testing.T, fundSettings string, balances []store.AssetBalance
 		}
 		for _, base := range []string{"BNB", "BTC", "USDC", "FDUSD", "DOGE", "XRP", "LTC", "ETH", "SHIB"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
+				Exchange: "binance", Environment: "PRODUCTION", MarketType: "spot", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
 				BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 				MinNotional: "5", PriceTick: "0.0001", Status: "TRADING",
 			}); err != nil {
@@ -247,7 +247,7 @@ func TestBNBReserveBuysTheShortfallAsASystemOrder(t *testing.T) {
 	spec := f.orders.specs[0]
 	require.Equal(t, orderdomain.OwnerSystem, spec.Owner.Type)
 	require.Equal(t, "logical-1", spec.Owner.LogicalAccountID)
-	require.Nil(t, spec.Owner.RunnerID)
+	require.Nil(t, spec.Owner.InstanceID)
 	require.Equal(t, "BNB-USDT-SPOT", spec.InstrumentID)
 	require.Equal(t, exchange.SideBuy, spec.Side)
 	require.Equal(t, exchange.OrderTypeMarket, spec.Type)
@@ -276,9 +276,9 @@ func TestBNBReserveCountsAllWalletsAndWaitsForTheOpenOrder(t *testing.T) {
 	// 上一次的补买单还没结束：不再重复下。
 	g := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	require.NoError(t, g.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "open-bnb", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "open-bnb",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BNB-USDT-SPOT", ExchangeSymbol: "BNBUSDT",
+			Exchange: "binance", MarketType: "spot", InstrumentID: "BNB-USDT-SPOT", ExchangeSymbol: "BNBUSDT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "0.3", ReferencePrice: "600", OwnerType: "SYSTEM", OwnerID: "bnb-reserve",
 			State: "SUBMITTING", SubmittedAt: 1_000, Version: 1,
 		})
@@ -291,7 +291,7 @@ func TestBNBReserveCountsAllWalletsAndWaitsForTheOpenOrder(t *testing.T) {
 func TestBNBReserveForAStandardAccountTargetsHalfInTheSpotWallet(t *testing.T) {
 	newStandard := func(t *testing.T, balances ...store.AssetBalance) *fixture {
 		f := newFixture(t, `{"bnb_reserve_amount":"200"}`, append([]store.AssetBalance{{Wallet: "FUTURES", Asset: "USDT", Available: "1000", Total: "1000"}}, balances...))
-		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_account_mode = 'BINANCE_STANDARD', c_markets = 'SPOT,SWAP'`).Error)
+		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_account_mode = 'BINANCE_STANDARD', c_markets = 'spot,swap'`).Error)
 		return f
 	}
 	spot := func(asset, total string) store.AssetBalance {
@@ -353,7 +353,7 @@ func TestSystemTasksSkipPausedAndFlatteningAccounts(t *testing.T) {
 func TestSystemTasksRunForManualGroups(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER'`).Error)
 	_, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "REDUCE", Reason: "保证金率",
 		RequestJSON: "{}", Status: "RUNNING",
@@ -371,7 +371,7 @@ func TestSystemTasksRunForManualGroups(t *testing.T) {
 
 func TestReserveWithoutSpotMarketWarnsAndSkips(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_markets = 'SWAP'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_markets = 'swap'").Error)
 	require.NoError(t, f.run())
 	require.Empty(t, f.orders.specs)
 }
@@ -389,9 +389,9 @@ func (f *fixture) markManaged(bases ...string) {
 	f.t.Helper()
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		for _, base := range bases {
-			if err := tx.CreateOrder(store.OrderRecord{
+			if err := storetest.CreateFilledOrder(tx, store.OrderRecord{
 				SpaceID: "space-1", OrderID: "traded-" + base, TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "traded-" + base,
-				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: base + "-USDT-SPOT", ExchangeSymbol: base + "USDT",
+				Exchange: "binance", MarketType: "spot", InstrumentID: base + "-USDT-SPOT", ExchangeSymbol: base + "USDT",
 				OrderType: "MARKET", Side: "BUY", Quantity: "1", FilledQuantity: "1", ReferencePrice: "1", AveragePrice: "1",
 				OwnerType: "OPERATOR", OwnerID: "action-" + base, State: "FILLED", SubmittedAt: 1_000, FinishedAt: 1_100, Version: 1,
 			}); err != nil {
@@ -420,7 +420,7 @@ func TestDustConvertsOnlyManagedNonTargetNonExcludedBelowFiveUSDT(t *testing.T) 
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "t1", InstanceID: "i1", SessionID: "s1", SessionStartedAt: 1000, StrategyID: "st",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}}, Status: "PENDING", AcceptedAt: 2_000,
+		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"}}, Status: "PENDING", AcceptedAt: 2_000,
 	})
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -544,9 +544,9 @@ func TestBNBDiscountDoesNotWaitForTheLogicalAccountLock(t *testing.T) {
 func TestStablecoinCancelsLastRoundsUnfilledBuyBeforeRecalculating(t *testing.T) {
 	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
+			Exchange: "binance", MarketType: "spot", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
 			OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: 1_000, Version: 1,
 		})
@@ -562,9 +562,9 @@ func TestStablecoinCancelsLastRoundsUnfilledBuyBeforeRecalculating(t *testing.T)
 func TestStablecoinDoesNotReplaceTheBuyWhileTheAccountIsNotReady(t *testing.T) {
 	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
+			Exchange: "binance", MarketType: "spot", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
 			OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: 1_000, Version: 1,
 		})
@@ -581,9 +581,9 @@ func TestStablecoinDoesNotReplaceTheBuyWhileTheAccountIsNotReady(t *testing.T) {
 func TestStablecoinKeepsARecentBuyUntilTheNextScheduledCheck(t *testing.T) {
 	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
+			Exchange: "binance", MarketType: "spot", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
 			OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: testNow.Add(-10 * time.Minute).UnixMilli(), Version: 1,
 		})
@@ -616,7 +616,7 @@ func TestMaintenanceSkipsTestnetAndNonBinanceAccounts(t *testing.T) {
 	const settings = `{"bnb_discount":true,"bnb_reserve_amount":"200","dust_convert_enabled":true}`
 	for name, update := range map[string]string{
 		"测试网": "UPDATE t_trading_accounts SET c_live_environment = 'TESTNET'",
-		"OKX": "UPDATE t_trading_accounts SET c_exchange = 'OKX', c_account_mode = 'OKX_UNIFIED'",
+		"okx": "UPDATE t_trading_accounts SET c_exchange = 'okx', c_account_mode = 'OKX_UNIFIED'",
 	} {
 		f := dustFixture(t, settings, []exchange.DustAsset{{Asset: "DOGE", Quantity: shared.MustDecimal("10"), ValueBTC: shared.MustDecimal("0.00001")}})
 		require.NoError(t, f.store.DBForTest().Exec(update).Error, name)
@@ -653,9 +653,9 @@ func TestDustConvertBacksOffAfterAFailure(t *testing.T) {
 func TestStaleStableBuyIsCancelledEvenWhenBNBTopUpIsBusy(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200","stablecoin_margin":{"USDT":"0.6","USDC":"0.4"}}`, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
+			Exchange: "binance", MarketType: "spot", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
 			OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: testNow.Add(-56 * time.Minute).UnixMilli(), Version: 1,
 		})

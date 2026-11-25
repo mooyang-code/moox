@@ -36,9 +36,9 @@ func seedCloseOrders(t *testing.T) *store.Store {
 	limit := "10"
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		for _, account := range []store.TradingAccountRecord{
-			{SpaceID: "space-1", TradingAccountID: "stock-1", Name: "A 股", Exchange: "ASHARE", Markets: []string{"STOCK"},
+			{SpaceID: "space-1", TradingAccountID: "stock-1", Name: "A 股", Exchange: "ashare", Markets: []string{"equity"},
 				ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "CNY", Status: "ENABLED"},
-			{SpaceID: "space-1", TradingAccountID: "crypto-1", Name: "币安", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			{SpaceID: "space-1", TradingAccountID: "crypto-1", Name: "币安", Exchange: "binance", Markets: []string{"spot"},
 				ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"},
 		} {
 			if err := tx.CreateTradingAccount(account); err != nil {
@@ -60,9 +60,9 @@ func seedCloseOrders(t *testing.T) *store.Store {
 			if item.submitted != "" {
 				submitted = beijingAt(item.submitted).UnixMilli()
 			}
-			symbol, market := "600519.XSHG", "STOCK"
+			symbol, market := "600519.XSHG", "equity"
 			if item.account == "crypto-1" {
-				symbol, market = "BTCUSDT", "SPOT"
+				symbol, market = "BTCUSDT", "spot"
 			}
 			if err := tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", TradingAccountID: item.account, OrderID: item.id, ClientOrderID: item.id, ExchangeOrderID: item.id,

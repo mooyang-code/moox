@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type captureEventPublisher struct {
@@ -42,12 +41,12 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	publisher := &JetStreamPublisher{Publisher: client, InstanceID: "strategy-1"}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	validUntil := timestamppb.New(time.Now().UTC().Add(time.Hour))
-	bar := timestamppb.New(time.Now().UTC())
+	validUntil := time.Now().UTC().Add(time.Hour).UnixMilli()
+	bar := time.Now().UTC().UnixMilli()
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1",
 		}},
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)
@@ -65,8 +64,8 @@ func TestJetStreamPublisherAcceptsEmptyFullTargetWithoutExpiry(t *testing.T) {
 	now := time.Now().UTC()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	bar := timestamppb.New(now)
-	validUntil := timestamppb.New(now.Add(time.Hour))
+	bar := now.UnixMilli()
+	validUntil := now.Add(time.Hour).UnixMilli()
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-empty", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{},
@@ -93,10 +92,10 @@ func TestJetStreamPublisherTimesOutWithoutAck(t *testing.T) {
 	publisher := &JetStreamPublisher{Publisher: hangingEventPublisher{}, InstanceID: "strategy-1", Timeout: 50 * time.Millisecond}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	bar := timestamppb.New(time.Now().UTC())
+	bar := time.Now().UTC().UnixMilli()
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: timestamppb.New(time.Now().UTC().Add(time.Hour)),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1"}},
+		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: time.Now().UTC().Add(time.Hour).UnixMilli(),
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)
 	started := time.Now()

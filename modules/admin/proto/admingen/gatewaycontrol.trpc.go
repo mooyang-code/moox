@@ -20,8 +20,6 @@ import (
 // GatewayControlService defines service.
 type GatewayControlService interface {
 	PullSnapshot(ctx context.Context, req *PullSnapshotReq) (*PullSnapshotRsp, error)
-
-	ReportStatus(ctx context.Context, req *ReportStatusReq) (*ReportStatusRsp, error)
 }
 
 func GatewayControlService_PullSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -42,24 +40,6 @@ func GatewayControlService_PullSnapshot_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func GatewayControlService_ReportStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(GatewayControlService).ReportStatus(ctx, reqbody.(*ReportStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // GatewayControlServer_ServiceDesc descriptor for server.RegisterService.
 var GatewayControlServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.admin.GatewayControl",
@@ -68,10 +48,6 @@ var GatewayControlServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.admin.GatewayControl/PullSnapshot",
 			Func: GatewayControlService_PullSnapshot_Handler,
-		},
-		{
-			Name: "/trpc.moox.admin.GatewayControl/ReportStatus",
-			Func: GatewayControlService_ReportStatus_Handler,
 		},
 	},
 }
@@ -90,9 +66,6 @@ type UnimplementedGatewayControl struct{}
 func (s *UnimplementedGatewayControl) PullSnapshot(ctx context.Context, req *PullSnapshotReq) (*PullSnapshotRsp, error) {
 	return nil, errors.New("rpc PullSnapshot of service GatewayControl is not implemented")
 }
-func (s *UnimplementedGatewayControl) ReportStatus(ctx context.Context, req *ReportStatusReq) (*ReportStatusRsp, error) {
-	return nil, errors.New("rpc ReportStatus of service GatewayControl is not implemented")
-}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -103,8 +76,6 @@ func (s *UnimplementedGatewayControl) ReportStatus(ctx context.Context, req *Rep
 // GatewayControlClientProxy defines service client proxy
 type GatewayControlClientProxy interface {
 	PullSnapshot(ctx context.Context, req *PullSnapshotReq, opts ...client.Option) (rsp *PullSnapshotRsp, err error)
-
-	ReportStatus(ctx context.Context, req *ReportStatusReq, opts ...client.Option) (rsp *ReportStatusRsp, err error)
 }
 
 type GatewayControlClientProxyImpl struct {
@@ -130,26 +101,6 @@ func (c *GatewayControlClientProxyImpl) PullSnapshot(ctx context.Context, req *P
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PullSnapshotRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *GatewayControlClientProxyImpl) ReportStatus(ctx context.Context, req *ReportStatusReq, opts ...client.Option) (*ReportStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.admin.GatewayControl/ReportStatus")
-	msg.WithCalleeServiceName(GatewayControlServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("admin")
-	msg.WithCalleeService("GatewayControl")
-	msg.WithCalleeMethod("ReportStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

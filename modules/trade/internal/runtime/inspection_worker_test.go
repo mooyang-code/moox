@@ -13,13 +13,13 @@ import (
 )
 
 type recordedPauses struct {
-	reasons  []string
-	expected [][2]string
+	pauses   []store.Pause
+	expected []store.Pause
 }
 
-func (r *recordedPauses) PauseIf(_ context.Context, _, _, expectedState, expectedReason, reason string) (bool, error) {
-	r.reasons = append(r.reasons, reason)
-	r.expected = append(r.expected, [2]string{expectedState, expectedReason})
+func (r *recordedPauses) PauseIf(_ context.Context, _, _ string, expected, pause store.Pause) (bool, error) {
+	r.pauses = append(r.pauses, pause)
+	r.expected = append(r.expected, expected)
 	return true, nil
 }
 
@@ -74,9 +74,9 @@ func TestInspectionWorkerPausesLogicalAccountOnBlockersOrModeChange(t *testing.T
 			pauser := &recordedPauses{}
 			worker := &InspectionWorker{Store: tradeStore, Logical: pauser}
 			require.NoError(t, worker.Handle(context.Background(), "space-1", "account-1", result))
-			require.Len(t, pauser.reasons, 1)
-			require.Equal(t, [2]string{"ACTIVE", ""}, pauser.expected[0], "只在组合仍在自动执行时暂停")
-			require.True(t, store.IsAutoPauseReason(pauser.reasons[0]), "自动暂停才会告警：%s", pauser.reasons[0])
+			require.Len(t, pauser.pauses, 1)
+			require.Equal(t, store.Pause{}, pauser.expected[0], "只在组合仍在自动执行时暂停")
+			require.True(t, pauser.pauses[0].Auto(), "自动暂停才会告警：%s", pauser.pauses[0].Reason)
 		})
 	}
 }
@@ -89,7 +89,7 @@ func TestInspectionWorkerDoesNotPauseOnTransportFailureOrCleanResult(t *testing.
 	worker := &InspectionWorker{Store: tradeStore, Logical: pauser}
 	require.NoError(t, worker.Handle(context.Background(), "space-1", "account-1", accountapp.ReinspectResult{Inconclusive: true, Cause: errors.New("timeout")}))
 	require.NoError(t, worker.Handle(context.Background(), "space-1", "account-1", accountapp.ReinspectResult{}))
-	require.Empty(t, pauser.reasons)
+	require.Empty(t, pauser.pauses)
 }
 
 func TestInspectionWorkerKeepsExistingPauseReason(t *testing.T) {
@@ -99,7 +99,7 @@ func TestInspectionWorkerKeepsExistingPauseReason(t *testing.T) {
 	pauser := &recordedPauses{}
 	worker := &InspectionWorker{Store: tradeStore, Logical: pauser}
 	require.NoError(t, worker.Handle(context.Background(), "space-1", "account-1", accountapp.ReinspectResult{Blocked: true}))
-	require.Empty(t, pauser.reasons, "已经暂停的组合不覆盖暂停原因")
+	require.Empty(t, pauser.pauses, "已经暂停的组合不覆盖暂停原因")
 }
 
 func TestInspectionWorkerIgnoresAccountOutsideLogicalAccount(t *testing.T) {
@@ -108,7 +108,7 @@ func TestInspectionWorkerIgnoresAccountOutsideLogicalAccount(t *testing.T) {
 	pauser := &recordedPauses{}
 	worker := &InspectionWorker{Store: tradeStore, Logical: pauser}
 	require.NoError(t, worker.Handle(context.Background(), "space-1", "account-1", accountapp.ReinspectResult{Blocked: true}))
-	require.Empty(t, pauser.reasons)
+	require.Empty(t, pauser.pauses)
 }
 
 func TestInspectionWorkerChecksOnlyEnabledLiveAccountsAndSkipsBinanceTestnet(t *testing.T) {
@@ -116,16 +116,16 @@ func TestInspectionWorkerChecksOnlyEnabledLiveAccountsAndSkipsBinanceTestnet(t *
 	create := func(id, exchangeName, mode, environment, status string) {
 		require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 			return tx.CreateTradingAccount(store.TradingAccountRecord{
-				SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: exchangeName, Markets: []string{"SPOT"},
+				SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: exchangeName, Markets: []string{"spot"},
 				ExecutionMode: mode, Environment: environment, CredentialSecretID: "secret-" + id, SettlementAsset: "USDT", Status: status,
 			})
 		}))
 	}
-	create("binance-prod", "BINANCE", "LIVE", "PRODUCTION", "ENABLED")
-	create("binance-testnet", "BINANCE", "LIVE", "TESTNET", "ENABLED")
-	create("okx-testnet", "OKX", "LIVE", "TESTNET", "ENABLED")
-	create("binance-disabled", "BINANCE", "LIVE", "PRODUCTION", "DISABLED")
-	create("paper", "BINANCE", "PAPER", "PAPER", "ENABLED")
+	create("binance-prod", "binance", "LIVE", "PRODUCTION", "ENABLED")
+	create("binance-testnet", "binance", "LIVE", "TESTNET", "ENABLED")
+	create("okx-testnet", "okx", "LIVE", "TESTNET", "ENABLED")
+	create("binance-disabled", "binance", "LIVE", "PRODUCTION", "DISABLED")
+	create("paper", "binance", "PAPER", "PAPER", "ENABLED")
 	reinspector := &scriptedReinspector{results: map[string]accountapp.ReinspectResult{}, err: map[string]error{"okx-testnet": errors.New("boom")}}
 	worker := &InspectionWorker{Store: tradeStore, Accounts: reinspector, Logical: &recordedPauses{}}
 	err := worker.CheckAll(context.Background())
@@ -141,7 +141,7 @@ func TestInspectionAttentionReportsBlockersAndFailureStreak(t *testing.T) {
 		return raw
 	}
 	account := store.TradingAccountRecord{
-		Name: "main", Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE", Environment: "PRODUCTION", Status: "ENABLED",
+		Name: "main", Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "LIVE", Environment: "PRODUCTION", Status: "ENABLED",
 		InspectionJSON: encode(failing),
 	}
 	blocked, failingText := InspectionAttention(account)

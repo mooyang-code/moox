@@ -15,8 +15,6 @@ type SourceAbsence struct {
 	DatasetID string
 	Frequency string
 	SubjectID string
-	// SeriesTag 只在统一数据集（多个 series_tag）时有值；单序列数据集为空。
-	SeriesTag string
 	From      time.Time
 	To        time.Time
 	Bars      int
@@ -28,7 +26,6 @@ type sourceAbsenceRow struct {
 	DatasetID string    `gorm:"column:c_dataset_id;primaryKey"`
 	Frequency string    `gorm:"column:c_frequency;primaryKey"`
 	SubjectID string    `gorm:"column:c_subject_id;primaryKey"`
-	SeriesTag string    `gorm:"column:c_series_tag;primaryKey"`
 	From      time.Time `gorm:"column:c_from;primaryKey"`
 	To        time.Time `gorm:"column:c_to"`
 	Bars      int       `gorm:"column:c_bars"`
@@ -37,10 +34,10 @@ type sourceAbsenceRow struct {
 
 func (sourceAbsenceRow) TableName() string { return "t_collector_source_absences" }
 
-// upsertSourceAbsence 写入一段已确认的缺失；同一序列同一起点重复确认时取更长的区间。
-const upsertSourceAbsence = `INSERT INTO t_collector_source_absences (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from, c_to, c_bars, c_ctime)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from) DO UPDATE SET c_to = MAX(c_to, excluded.c_to), c_bars = MAX(c_bars, excluded.c_bars)`
+// upsertSourceAbsence 写入一段已确认的缺失；同一标的同一起点重复确认时取更长的区间。
+const upsertSourceAbsence = `INSERT INTO t_collector_source_absences (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from, c_to, c_bars, c_ctime)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from) DO UPDATE SET c_to = MAX(c_to, excluded.c_to), c_bars = MAX(c_bars, excluded.c_bars)`
 
 // AddAbsences 记录已确认的行情源缺失；同一起点重复确认时取更长的区间。
 func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceAbsence) error {
@@ -57,7 +54,7 @@ func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceA
 				return fmt.Errorf("absence range of %s is empty", absence.SubjectID)
 			}
 			if err := tx.Exec(upsertSourceAbsence,
-				absence.SpaceID, absence.DatasetID, absence.Frequency, absence.SubjectID, absence.SeriesTag, absence.From.UTC(), absence.To.UTC(), absence.Bars, now).Error; err != nil {
+				absence.SpaceID, absence.DatasetID, absence.Frequency, absence.SubjectID, absence.From.UTC(), absence.To.UTC(), absence.Bars, now).Error; err != nil {
 				return err
 			}
 		}
@@ -65,8 +62,8 @@ func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceA
 	})
 }
 
-// AbsencesIn 返回与 [from, to) 相交的已确认缺失；subjects 为空表示全部标的；seriesTag 为空表示不区分序列（单序列数据集）。
-func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) ([]SourceAbsence, error) {
+// AbsencesIn 返回与 [from, to) 相交的已确认缺失；subjects 为空表示全部标的。
+func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]SourceAbsence, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
@@ -74,16 +71,13 @@ func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID,
 	if len(subjects) > 0 {
 		query = query.Where("c_subject_id IN ?", subjects)
 	}
-	if seriesTag != "" {
-		query = query.Where("c_series_tag = ?", seriesTag)
-	}
 	var rows []sourceAbsenceRow
-	if err := query.Order("c_subject_id, c_series_tag, c_from").Find(&rows).Error; err != nil {
+	if err := query.Order("c_subject_id, c_from").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]SourceAbsence, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
+		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
 	}
 	return out, nil
 }
@@ -95,12 +89,12 @@ func (r *BackfillRepository) LatestAbsencesIn(ctx context.Context, spaceID, data
 	}
 	var rows []sourceAbsenceRow
 	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_from < ? AND c_to > ?", spaceID, datasetID, frequency, to.UTC(), from.UTC()).
-		Order("c_to DESC, c_subject_id, c_series_tag").Limit(limit).Find(&rows).Error; err != nil {
+		Order("c_to DESC, c_subject_id").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]SourceAbsence, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
+		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
 	}
 	return out, nil
 }
@@ -126,7 +120,7 @@ func (r *BackfillRepository) AbsentBars(ctx context.Context, spaceID string) (ma
 	return out, nil
 }
 
-// ClearAbsences 清掉一个数据集（某个频率）全部已确认缺失，并删除其历史扫描记录让下一轮重新扫描；返回清掉的区间数。
+// ClearAbsences 清掉一个数据集（某个频率）全部已确认缺失，返回清掉的区间数。
 func (r *BackfillRepository) ClearAbsences(ctx context.Context, spaceID, datasetID, frequency string) (int64, error) {
 	if err := r.ready(); err != nil {
 		return 0, err
@@ -135,14 +129,6 @@ func (r *BackfillRepository) ClearAbsences(ctx context.Context, spaceID, dataset
 	if spaceID == "" || datasetID == "" || frequency == "" {
 		return 0, fmt.Errorf("space_id, dataset_id and frequency are required")
 	}
-	var cleared int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Delete(&sourceAbsenceRow{})
-		if result.Error != nil {
-			return result.Error
-		}
-		cleared = result.RowsAffected
-		return tx.Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Delete(&historyScanRow{}).Error
-	})
-	return cleared, err
+	result := r.db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", spaceID, datasetID, frequency).Delete(&sourceAbsenceRow{})
+	return result.RowsAffected, result.Error
 }

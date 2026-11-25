@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -103,7 +104,6 @@ func (d *TopologyDAO) GetGatewayStatus(ctx context.Context, hostID string) (*Hos
 	if err := d.db.WithContext(ctx).Where("c_host_id = ?", hostID).First(status).Error; err != nil {
 		return nil, err
 	}
-	status.ClearExpiredConflict(time.Now().UTC())
 	return status, nil
 }
 
@@ -119,44 +119,68 @@ func (d *TopologyDAO) mutate(ctx context.Context, fn func(*gorm.DB) error) error
 	})
 }
 
-func (d *TopologyDAO) SyncHostDeployments(ctx context.Context, spec HostSpec) error {
-	return d.SyncHosts(ctx, []HostSpec{spec})
-}
-
-// SyncHosts supports offline bootstrap of a complete fleet in one transaction.
-// A live synchronization uses SyncHostDeployments for exactly one host.
-func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
+// ReplaceTopology 用 moox.toml 的整份声明覆盖登记：主机与部署的启停状态都取自声明；声明里没有的部署与主机删除
+// （主机连同它的网关状态、部署与控制台 SSH 凭据）；签名公钥与 SSH 指纹不是声明的内容，保留库里的值。
+// 返回连接信息变了或被删除的主机，调用方据此关掉它们的控制台会话。
+func (d *TopologyDAO) ReplaceTopology(ctx context.Context, specs []HostSpec) ([]string, error) {
 	if len(specs) == 0 || len(specs) > 1024 {
-		return fmt.Errorf("%w: host synchronization requires 1..1024 hosts", ErrInvalidTopology)
+		return nil, fmt.Errorf("%w: topology requires 1..1024 hosts", ErrInvalidTopology)
 	}
-	return d.mutate(ctx, func(tx *gorm.DB) error {
+	var touched []string
+	err := d.mutate(ctx, func(tx *gorm.DB) error {
+		touched = nil
 		hosts, deployments, err := d.records(tx)
 		if err != nil {
 			return err
 		}
+		previous := map[string]HostRecord{}
+		for _, host := range hosts {
+			previous[host.HostID] = host
+		}
+		var nextHosts []HostRecord
+		var nextDeployments []DeploymentRecord
 		seen := map[string]bool{}
-		specByHost := map[string]HostSpec{}
 		for _, spec := range specs {
-			specByHost[spec.HostID] = spec
 			if seen[spec.HostID] {
-				return fmt.Errorf("%w: duplicate host in synchronization", ErrInvalidTopology)
+				return fmt.Errorf("%w: duplicate host %q", ErrInvalidTopology, spec.HostID)
 			}
 			seen[spec.HostID] = true
-			hosts, deployments, err = d.propose(hosts, deployments, spec)
+			host, hostDeployments, err := d.declare(spec, previous, deployments)
 			if err != nil {
 				return err
 			}
+			nextHosts = append(nextHosts, host)
+			nextDeployments = append(nextDeployments, hostDeployments...)
 		}
-		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
+		if err := d.catalog.ValidateTopology(d.topology(nextHosts, nextDeployments)); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		for _, host := range hosts {
-			if !seen[host.HostID] {
+			if seen[host.HostID] {
 				continue
 			}
-			host.UpdatedAt = time.Now().UTC()
+			for _, deployment := range deployments {
+				if component, ok := d.catalog.Component(deployment.ComponentID); deployment.HostID == host.HostID && ok && component.Protected && component.Scope != servicecatalog.ScopeHost {
+					return fmt.Errorf("%w: protected component %q cannot be removed", ErrInvalidTopology, component.ID)
+				}
+			}
+			if err := deleteHostRows(tx, host.HostID); err != nil {
+				return err
+			}
+			touched = append(touched, host.HostID)
+		}
+		specByHost := map[string]HostSpec{}
+		for _, spec := range specs {
+			specByHost[spec.HostID] = spec
+		}
+		now := time.Now().UTC()
+		for _, host := range nextHosts {
+			if old, ok := previous[host.HostID]; !ok || connectionChanged(old, host) {
+				touched = append(touched, host.HostID)
+			}
+			host.UpdatedAt = now
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, DoUpdates: clause.AssignmentColumns([]string{
-				"c_label", "c_address", "c_private_address", "c_region", "c_reachability", "c_external_entry", "c_description", "c_ssh_port", "c_ssh_user", "c_mtime",
+				"c_label", "c_address", "c_private_address", "c_region", "c_status", "c_reachability", "c_external_entry", "c_description", "c_ssh_port", "c_ssh_user", "c_mtime",
 			})}).Create(&host).Error; err != nil {
 				return err
 			}
@@ -164,12 +188,12 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 				return err
 			}
 			var componentIDs []string
-			for _, deployment := range deployments {
+			for _, deployment := range nextDeployments {
 				if deployment.HostID != host.HostID {
 					continue
 				}
 				componentIDs = append(componentIDs, deployment.ComponentID)
-				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&deployment).Error; err != nil {
+				if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}, {Name: "c_component_id"}}, DoUpdates: clause.AssignmentColumns([]string{"c_status"})}).Create(&deployment).Error; err != nil {
 					return err
 				}
 			}
@@ -179,140 +203,91 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 		}
 		return nil
 	})
+	return touched, err
 }
 
-func (d *TopologyDAO) propose(hosts []HostRecord, deployments []DeploymentRecord, spec HostSpec) ([]HostRecord, []DeploymentRecord, error) {
+// connectionChanged 报告控制台连这台主机要用的信息是否变了（地址、可达性、SSH 端口与用户、启停）。
+func connectionChanged(old, next HostRecord) bool {
+	return old.Address != next.Address || old.PrivateAddress != next.PrivateAddress || old.Reachability != next.Reachability ||
+		old.SSHPort != next.SSHPort || old.SSHUser != next.SSHUser || old.Status != next.Status
+}
+
+// declare 把一台主机的声明换成登记行：主机级组件自动补上并保持启用，受保护组件不能被移除。
+func (d *TopologyDAO) declare(spec HostSpec, previous map[string]HostRecord, deployments []DeploymentRecord) (HostRecord, []DeploymentRecord, error) {
 	if len(spec.Description) > 4096 || len(spec.Components) > len(d.catalog.Components) {
-		return nil, nil, fmt.Errorf("%w: host description or component list exceeds limit", ErrInvalidTopology)
+		return HostRecord{}, nil, fmt.Errorf("%w: host description or component list exceeds limit", ErrInvalidTopology)
 	}
 	reachability, ok := servicecatalog.ParseReachability(spec.Reachability)
 	if !ok {
-		return nil, nil, fmt.Errorf("%w: unknown host reachability %q", ErrInvalidTopology, spec.Reachability)
+		return HostRecord{}, nil, fmt.Errorf("%w: unknown host reachability %q", ErrInvalidTopology, spec.Reachability)
 	}
 	if len([]rune(spec.Label)) > 64 {
-		return nil, nil, fmt.Errorf("%w: host label exceeds 64 characters", ErrInvalidTopology)
+		return HostRecord{}, nil, fmt.Errorf("%w: host label exceeds 64 characters", ErrInvalidTopology)
 	}
 	sshPort, sshUser, err := d.validateSSH(spec, reachability)
 	if err != nil {
-		return nil, nil, err
+		return HostRecord{}, nil, err
 	}
 	wanted := map[string]bool{}
 	for _, id := range spec.Components {
 		component, ok := d.catalog.Component(id)
 		// 第三方程序（SeaweedFS）不登记：它不上报，部署由 moox-cli 按拓扑推出来。
 		if !ok || wanted[id] || component.Scope == servicecatalog.ScopeHost || component.ThirdParty {
-			return nil, nil, fmt.Errorf("%w: unknown, duplicate or automatic component %q", ErrInvalidTopology, id)
+			return HostRecord{}, nil, fmt.Errorf("%w: unknown, duplicate or automatic component %q", ErrInvalidTopology, id)
 		}
 		wanted[id] = true
 	}
+	disabled := map[string]bool{}
+	for _, id := range spec.DisabledComponents {
+		if !wanted[id] || disabled[id] {
+			return HostRecord{}, nil, fmt.Errorf("%w: disabled component %q is not deployed on %q or duplicated", ErrInvalidTopology, id, spec.HostID)
+		}
+		disabled[id] = true
+	}
+	for _, deployment := range deployments {
+		if deployment.HostID != spec.HostID || wanted[deployment.ComponentID] {
+			continue
+		}
+		// 主机级组件下面会自动补上，不算移除。
+		if component, ok := d.catalog.Component(deployment.ComponentID); ok && component.Protected && component.Scope != servicecatalog.ScopeHost {
+			return HostRecord{}, nil, fmt.Errorf("%w: protected component %q cannot be removed", ErrInvalidTopology, component.ID)
+		}
+	}
+	status := func(enabled bool) string {
+		if enabled {
+			return servicecatalog.Enabled
+		}
+		return servicecatalog.Disabled
+	}
+	host := HostRecord{HostID: spec.HostID, Label: spec.Label, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), ExternalEntry: spec.ExternalEntry, Description: spec.Description, SSHPort: sshPort, SSHUser: sshUser, Status: status(spec.Enabled)}
+	if old, ok := previous[spec.HostID]; ok {
+		host.CreatedAt, host.SSHFingerprint, host.SignPublicKey = old.CreatedAt, old.SSHFingerprint, old.SignPublicKey
+	}
+	var out []DeploymentRecord
 	for _, component := range d.catalog.Components {
 		if component.Scope == servicecatalog.ScopeHost {
-			wanted[component.ID] = true
+			out = append(out, DeploymentRecord{HostID: spec.HostID, ComponentID: component.ID, Status: servicecatalog.Enabled})
 		}
 	}
-	host := HostRecord{HostID: spec.HostID, Label: spec.Label, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), ExternalEntry: spec.ExternalEntry, Description: spec.Description, SSHPort: sshPort, SSHUser: sshUser, Status: servicecatalog.Enabled}
-	if i := slices.IndexFunc(hosts, func(h HostRecord) bool { return h.HostID == spec.HostID }); i >= 0 {
-		host.Status, host.CreatedAt, host.SSHFingerprint = hosts[i].Status, hosts[i].CreatedAt, hosts[i].SSHFingerprint
-		hosts[i] = host
-	} else {
-		hosts = append(hosts, host)
+	ids := slices.Sorted(maps.Keys(wanted))
+	for _, id := range ids {
+		out = append(out, DeploymentRecord{HostID: spec.HostID, ComponentID: id, Status: status(!disabled[id])})
 	}
-	kept := make([]DeploymentRecord, 0, len(deployments)+len(wanted))
-	for _, deployment := range deployments {
-		if deployment.HostID != spec.HostID {
-			kept = append(kept, deployment)
-			continue
-		}
-		if wanted[deployment.ComponentID] {
-			kept = append(kept, deployment)
-			delete(wanted, deployment.ComponentID)
-			continue
-		}
-		if component, ok := d.catalog.Component(deployment.ComponentID); ok && component.Protected {
-			return nil, nil, fmt.Errorf("%w: protected component %q cannot be removed", ErrInvalidTopology, component.ID)
-		}
-	}
-	for id := range wanted {
-		kept = append(kept, DeploymentRecord{HostID: spec.HostID, ComponentID: id, Status: servicecatalog.Enabled})
-	}
-	return hosts, kept, nil
+	return host, out, nil
 }
 
-func (d *TopologyDAO) SetHostStatus(ctx context.Context, hostID, status string) error {
-	return d.mutate(ctx, func(tx *gorm.DB) error {
-		hosts, deployments, err := d.records(tx)
-		if err != nil {
-			return err
-		}
-		i := slices.IndexFunc(hosts, func(h HostRecord) bool { return h.HostID == hostID })
-		if i < 0 {
-			return gorm.ErrRecordNotFound
-		}
-		hosts[i].Status = status
-		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
-		}
-		return tx.Model(&HostRecord{}).Where("c_host_id = ?", hostID).Updates(map[string]interface{}{"c_status": status, "c_mtime": time.Now().UTC()}).Error
-	})
-}
-
-func (d *TopologyDAO) SetDeploymentStatus(ctx context.Context, hostID, componentID, status string) error {
-	component, ok := d.catalog.Component(componentID)
-	if !ok || component.Scope == servicecatalog.ScopeHost {
-		return fmt.Errorf("%w: unknown or automatic component", ErrInvalidTopology)
+// deleteHostRows 删一台主机的全部登记：网关状态、部署、控制台 SSH 凭据与主机行。
+func deleteHostRows(tx *gorm.DB, hostID string) error {
+	if err := tx.Where("c_host_id = ?", hostID).Delete(&HostGatewayStatus{}).Error; err != nil {
+		return err
 	}
-	return d.mutate(ctx, func(tx *gorm.DB) error {
-		hosts, deployments, err := d.records(tx)
-		if err != nil {
-			return err
-		}
-		i := slices.IndexFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == hostID && p.ComponentID == componentID })
-		if i < 0 {
-			return gorm.ErrRecordNotFound
-		}
-		deployments[i].Status = status
-		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
-		}
-		return tx.Model(&DeploymentRecord{}).Where("c_host_id = ? AND c_component_id = ?", hostID, componentID).Updates(map[string]interface{}{"c_status": status, "c_mtime": time.Now().UTC()}).Error
-	})
-}
-
-func (d *TopologyDAO) DeleteHost(ctx context.Context, hostID string) error {
-	if hostID == d.controlHostID {
-		return fmt.Errorf("%w: control host cannot be deleted", ErrInvalidTopology)
+	if err := tx.Where("c_host_id = ?", hostID).Delete(&DeploymentRecord{}).Error; err != nil {
+		return err
 	}
-	return d.mutate(ctx, func(tx *gorm.DB) error {
-		hosts, deployments, err := d.records(tx)
-		if err != nil {
-			return err
-		}
-		i := slices.IndexFunc(hosts, func(h HostRecord) bool { return h.HostID == hostID })
-		if i < 0 {
-			return gorm.ErrRecordNotFound
-		}
-		for _, deployment := range deployments {
-			component, ok := d.catalog.Component(deployment.ComponentID)
-			if deployment.HostID == hostID && (!ok || component.Scope != servicecatalog.ScopeHost) {
-				return fmt.Errorf("%w: host still has component deployments", ErrInvalidTopology)
-			}
-		}
-		hosts = slices.Delete(hosts, i, i+1)
-		deployments = slices.DeleteFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == hostID })
-		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
-		}
-		if err := tx.Where("c_host_id = ?", hostID).Delete(&HostGatewayStatus{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("c_host_id = ?", hostID).Delete(&DeploymentRecord{}).Error; err != nil {
-			return err
-		}
-		if err := secretdao.DeleteSystemSecret(tx, secretmodel.SSHHostSecretID(hostID)); err != nil {
-			return err
-		}
-		return tx.Where("c_host_id = ?", hostID).Delete(&HostRecord{}).Error
-	})
+	if err := secretdao.DeleteSystemSecret(tx, secretmodel.SSHHostSecretID(hostID)); err != nil {
+		return err
+	}
+	return tx.Where("c_host_id = ?", hostID).Delete(&HostRecord{}).Error
 }
 
 // validateSSH 校验 SSH 信息并返回要写入 t_hosts 的端口与用户；没有 SSH 信息时端口为 0。

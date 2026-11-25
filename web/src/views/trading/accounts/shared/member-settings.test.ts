@@ -21,8 +21,8 @@ Object.defineProperty(window, "matchMedia", {
 const paperAccount = {
   trading_account_id: "p1",
   name: "币安模拟",
-  exchange: 1,
-  markets: [1, 2],
+  exchange: "binance",
+  markets: ["spot", "swap"],
   execution_mode: 1,
   settlement_asset: "USDT",
   leverage_settings: { "*": "1" },
@@ -31,8 +31,8 @@ const paperAccount = {
 const liveAccount = {
   trading_account_id: "l1",
   name: "测试网账户",
-  exchange: 1,
-  markets: [2],
+  exchange: "binance",
+  markets: ["swap"],
   execution_mode: 2,
   settlement_asset: "USDT",
   leverage_settings: { "*": "3" },
@@ -55,7 +55,7 @@ describe("执行账户设置", () => {
     expect(wrapper.text()).toContain("初始资金");
     expect(wrapper.text()).toContain("创建后都不能改");
     expect(wrapper.text()).toContain("当前5 天");
-    expect(wrapper.text()).toContain("只有纯永续模拟账户");
+    expect(wrapper.text()).toContain("所有模拟账户都按它清理");
     expect(wrapper.findAll("input")).toHaveLength(1);
     expect(wrapper.findAll("button").map(item => item.text())).toContain("保存");
     expect(wrapper.findAll("button").map(item => item.text())).not.toContain("设置");
@@ -150,8 +150,7 @@ describe("测试网、生产环境下的设置要先确认", () => {
     confirmButton("更换")?.click();
     await flushPromises();
     expect(api.updateTradingAccount).toHaveBeenCalledWith(
-      expect.objectContaining({ trading_account_id: "prod-1", credential_secret_id: "s2" }),
-      { silent: true }
+      expect.objectContaining({ trading_account_id: "prod-1", credential_secret_id: "s2" })
     );
     wrapper.unmount();
   });
@@ -179,10 +178,11 @@ describe("测试网、生产环境下的设置要先确认", () => {
     expect(confirmButton("更换")?.disabled).toBe(false);
     confirmButton("更换")?.click();
     await flushPromises();
-    expect(api.updateTradingAccount).toHaveBeenCalledWith(
-      { trading_account_id: "prod-1", name: undefined, credential_secret_id: "s2" },
-      { silent: true }
-    );
+    expect(api.updateTradingAccount).toHaveBeenCalledWith({
+      trading_account_id: "prod-1",
+      name: undefined,
+      credential_secret_id: "s2"
+    });
     wrapper.unmount();
   });
 
@@ -194,10 +194,11 @@ describe("测试网、生产环境下的设置要先确认", () => {
     vm.save();
     await flushPromises();
     expect(vm.confirmVisible).toBe(false);
-    expect(api.updateTradingAccount).toHaveBeenCalledWith(
-      { trading_account_id: "prod-1", name: "新名字", credential_secret_id: undefined },
-      { silent: false }
-    );
+    expect(api.updateTradingAccount).toHaveBeenCalledWith({
+      trading_account_id: "prod-1",
+      name: "新名字",
+      credential_secret_id: undefined
+    });
     wrapper.unmount();
   });
 
@@ -228,10 +229,7 @@ describe("测试网、生产环境下的设置要先确认", () => {
     expect(document.querySelector(".tx-confirm input")).toBeNull();
     confirmButton("设置")?.click();
     await flushPromises();
-    expect(api.setLeverage).toHaveBeenCalledWith(
-      { trading_account_id: "l1", instrument_id: "ETH-USDT-SWAP", leverage: "5" },
-      { silent: true }
-    );
+    expect(api.setLeverage).toHaveBeenCalledWith({ trading_account_id: "l1", instrument_id: "ETH-USDT-SWAP", leverage: "5" });
     wrapper.unmount();
   });
 
@@ -246,10 +244,7 @@ describe("测试网、生产环境下的设置要先确认", () => {
     await typeName("生产主账户");
     confirmButton("设置")?.click();
     await flushPromises();
-    expect(api.setLeverage).toHaveBeenCalledWith(
-      { trading_account_id: "prod-1", instrument_id: "BTC-USDT-SWAP", leverage: "5" },
-      { silent: true }
-    );
+    expect(api.setLeverage).toHaveBeenCalledWith({ trading_account_id: "prod-1", instrument_id: "BTC-USDT-SWAP", leverage: "5" });
     wrapper.unmount();
   });
 });

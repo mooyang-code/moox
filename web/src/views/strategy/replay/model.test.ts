@@ -32,7 +32,7 @@ describe("replay model helpers", () => {
   it("builds an equity series and summarizes the ledger", () => {
     const series = equitySeries([
       {
-        bar_end_time: "2026-09-01T01:00:00Z",
+        bar_end_time: "1788224400000",
         status: "ok",
         targets: [],
         positions_json: "{}",
@@ -107,7 +107,7 @@ describe("replay model helpers", () => {
 
   it("parses a bar's ledger and summary for the detail row", () => {
     const bar = {
-      bar_end_time: "2026-09-01T01:00:00Z",
+      bar_end_time: "1788224400000",
       status: "ok",
       targets: [],
       positions_json:
@@ -147,7 +147,7 @@ describe("replay model helpers", () => {
 
   it("labels positions by market, orders by absolute value and keeps shorts negative", () => {
     const bar = {
-      bar_end_time: "2026-09-01T01:00:00Z",
+      bar_end_time: "1788224400000",
       status: "ok",
       targets: [],
       positions_json:
@@ -173,9 +173,9 @@ describe("replay model helpers", () => {
   });
 
   it("describes the replay tasks and fees by market", () => {
-    const single = { tasks: { spot: { factor_task_id: "ftask_a", view_id: "v" } }, spot_fee_bps: 10, swap_fee_bps: 0 };
+    const single = { tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "v" } }, spot_fee_bps: 10, swap_fee_bps: 0 };
     const mixed = {
-      tasks: { swap: { factor_task_id: "ftask_b", view_id: "w" }, spot: { factor_task_id: "ftask_a", view_id: "v" } },
+      tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "w" }, spot: { factor_task_id: "ftask_a", dataset_id: "v" } },
       spot_fee_bps: 10,
       swap_fee_bps: 5
     };
@@ -195,9 +195,6 @@ describe("replay model helpers", () => {
     expect(replayUsesSwap(single)).toBe(false);
     expect(replayUsesSwap(mixed)).toBe(true);
     expect(replayUsesSwap(null)).toBe(false);
-    const unified = { tasks: { multi: { factor_task_id: "ftask_u", view_id: "u" } }, spot_fee_bps: 10, swap_fee_bps: 5 };
-    expect(replayUsesSwap(unified), "统一数据集的任务同时带现货与永续").toBe(true);
-    expect(replayFeeText(unified)).toBe("现货 10 bps、永续 5 bps");
   });
 
   it("summarizes the equity curve in text", () => {
@@ -227,23 +224,20 @@ describe("replay model helpers", () => {
 
   it("labels A-share daily ranges with dates in the space zone, other ranges with times", () => {
     const sh = "Asia/Shanghai";
-    expect(
-      replayRangeLabel({ calendar: "cn_stock", start_time: "2026-08-31T16:00:00Z", end_time: "2026-09-30T16:00:00Z" }, sh)
-    ).toBe("2026-09-01 UTC+8 → 2026-10-01 UTC+8（不含结束日）");
-    expect(
-      replayRangeLabel({ calendar: "crypto_24x7", start_time: "2026-09-01T00:00:00Z", end_time: "2026-09-02T00:00:00Z" }, "UTC")
-    ).toBe("2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC");
+    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "1788192000000", end_time: "1790784000000" }, sh)).toBe(
+      "2026-09-01 UTC+8 → 2026-10-01 UTC+8（不含结束日）"
+    );
+    expect(replayRangeLabel({ calendar: "crypto_24x7", start_time: "1788220800000", end_time: "1788307200000" }, "UTC")).toBe(
+      "2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC"
+    );
     // 港股日线同样按日期写（空间时区 Asia/Hong_Kong）。
     expect(
-      replayRangeLabel(
-        { calendar: "hk_stock", start_time: "2026-10-31T16:00:00Z", end_time: "2026-11-17T16:00:00Z" },
-        "Asia/Hong_Kong"
-      )
+      replayRangeLabel({ calendar: "hk_stock", start_time: "1793462400000", end_time: "1794931200000" }, "Asia/Hong_Kong")
     ).toBe("2026-11-01 UTC+8 → 2026-11-18 UTC+8（不含结束日）");
     // A 股日内的区间是真实时刻，按空间时区写时刻。
-    expect(
-      replayRangeLabel({ calendar: "cn_stock", start_time: "2026-10-08T03:00:00Z", end_time: "2026-10-08T05:30:00Z" }, sh)
-    ).toBe("2026-10-08 11:00 UTC+8 → 2026-10-08 13:30 UTC+8");
+    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "1791428400000", end_time: "1791437400000" }, sh)).toBe(
+      "2026-10-08 11:00 UTC+8 → 2026-10-08 13:30 UTC+8"
+    );
   });
 });
 
@@ -253,14 +247,14 @@ describe("回放对比", () => {
     expect(replayMetricsLine("")).toBe("");
   });
 
-  it("按此配置重新发起：带上当时的 DSL、任务、区间和手续费；统一数据集上的任务不能在表单里选", () => {
+  it("按此配置重新发起：带上当时的 DSL、任务、区间和手续费", () => {
     const base = {
       replay_id: "r1",
       strategy_id: "s1",
       dsl_yaml: "name: demo",
-      tasks: { swap: { factor_task_id: "ft1", view_id: "v1" } },
-      start_time: "2026-10-01T00:00:00Z",
-      end_time: "2026-10-02T00:00:00Z",
+      tasks: { swap: { factor_task_id: "ft1", dataset_id: "v1" } },
+      start_time: "1790812800000",
+      end_time: "1790899200000",
       spot_fee_bps: 8,
       swap_fee_bps: 5,
       slippage_bps: 2
@@ -274,9 +268,6 @@ describe("回放对比", () => {
       swap_fee_bps: 5,
       slippage_bps: 2
     });
-    expect(
-      replayFormFromReplay({ ...(base as object), tasks: { multi: { factor_task_id: "u", view_id: "v" } } } as never)
-    ).toBeNull();
     // 资金费列随配置带回表单，没写时为空串。
     expect(replayFormFromReplay(base)).toMatchObject({ funding_column: "" });
     expect(replayFormFromReplay({ ...(base as object), funding_column: "funding_rate" } as never)).toMatchObject({

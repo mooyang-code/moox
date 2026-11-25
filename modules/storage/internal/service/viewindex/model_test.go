@@ -18,32 +18,32 @@ func TestViewIndexWriteBatchValidate(t *testing.T) {
 }
 
 func TestViewIndexIDRoundTrip(t *testing.T) {
-	id := ViewIndexID("space", "view")
-	ref, err := ParseViewIndexID(id)
-	if err != nil || ref.SpaceID != "space" || ref.ViewID != "view" {
+	id := IndexID("space", "dataset")
+	ref, err := ParseIndexID(id)
+	if err != nil || ref.SpaceID != "space" || ref.DatasetID != "dataset" {
 		t.Fatalf("id=%q ref=%+v err=%v", id, ref, err)
 	}
-	for _, invalid := range []string{"", "view_s00", id + "_a", "x_" + id} {
-		if _, err := ParseViewIndexID(invalid); err == nil {
-			t.Fatalf("ParseViewIndexID(%q) 应当失败", invalid)
+	for _, invalid := range []string{"", "idx_s00", id + "_a", "x_" + id} {
+		if _, err := ParseIndexID(invalid); err == nil {
+			t.Fatalf("ParseIndexID(%q) 应当失败", invalid)
 		}
 	}
 }
 
 func TestHashViewIndexSchemaChangesWithColumnType(t *testing.T) {
-	base := ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "d", Engine: "duckdb", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	base := ViewIndexSchema{SpaceID: "s", DatasetID: "d", Engine: "duckdb", Columns: []*Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
 	changed := base
-	changed.Columns = []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}
+	changed.Columns = []*Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}
 	if HashViewIndexSchema(base) == HashViewIndexSchema(changed) {
 		t.Fatal("schema hash ignored column type")
 	}
 }
 
 func TestIsAppendOnlyViewColumnsRejectsRemovalAndTypeChange(t *testing.T) {
-	active := []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
-	added := []*pb.ViewColumn{
+	active := []*Column{{ColumnName: "close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	added := []*Column{
 		active[0],
-		{ColumnName: "bias", OriginId: "bias", SortOrder: 1, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "bias", SortOrder: 1, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}
 	if !IsAppendOnlyViewColumns(active, added) {
 		t.Fatal("new trailing column was not recognized as append-only")
@@ -51,8 +51,8 @@ func TestIsAppendOnlyViewColumnsRejectsRemovalAndTypeChange(t *testing.T) {
 	if IsAppendOnlyViewColumns(active, nil) {
 		t.Fatal("column removal was recognized as append-only")
 	}
-	changedType := []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+	changedType := []*Column{
+		{ColumnName: "close", SortOrder: 0, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		added[1],
 	}
 	if IsAppendOnlyViewColumns(active, changedType) {

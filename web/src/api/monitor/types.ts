@@ -1,3 +1,8 @@
+/**
+ * Monitor 接口的类型。墙钟时刻（*_at、*_since、since 等）都是 int64 毫秒，网关 JSON 里是十进制数字字符串，
+ * 页面只经 formatInstant / marketTime 显示、经 toInstantMs 取数；0 表示没有。
+ * 例外：HealthDataset 的 input_watermark_at、output_watermark_at、expected_bar_at 是 K 线 data_time（开盘时间）的 RFC3339 文本。
+ */
 export type HealthStatus = "healthy" | "degraded" | "down" | "unknown" | "disabled" | "unchecked";
 export interface HealthSignal {
   status?: HealthStatus;
@@ -69,7 +74,7 @@ export interface HealthSystem {
   /** 受影响的模块与原因，形如「策略：系统暂停：切换行情源」。 */
   issues?: string[];
   module_count?: number;
-  /** 暂停的模块按类型计数，最早的暂停时间。 */
+  /** 暂停的模块按类型计数，最早的暂停时刻（毫秒）。 */
   pause_kinds?: Partial<Record<PauseKind, number>>;
   paused_since?: string;
   /** 恢复追赶中的模块数与其中已追平（待放行）的模块数，以及各模块的进度文字。 */
@@ -84,13 +89,12 @@ export interface HealthObject {
   type?: "component" | "dataset" | "host" | "business";
   host_id?: string;
   component_id?: string;
-  agent_id?: string;
   dataset_id?: string;
   freq?: string;
   kind?: string;
   space_id?: string;
   producer?: string;
-  /** 关注项检查（kind 为 trade_attention、event_center_attention、collector_attention）的种类，例如 delist_readonly_key_missing。 */
+  /** 关注项检查（kind 为 attention，检查 ID 形如 attention:<服务名>:<种类>）的种类，例如 delist_readonly_key_missing；服务名在 component_id。 */
   attention_kind?: string;
 }
 /** critical：服务不可用、数据中断、主机失联或网关异常；warning：资源超阈值、指标上报中断等风险。 */
@@ -147,20 +151,22 @@ export interface HealthDataset {
   status?: HealthStatus;
   reason?: string;
   raw_error?: string;
+  /** 输入、输出水位：data_time（开盘时间）的 RFC3339 文本，不是毫秒。 */
   input_watermark_at?: string;
   output_watermark_at?: string;
+  /** 最近成功、最近运行、最近上报的时刻（毫秒）。 */
   last_success_at?: string;
   last_run_at?: string;
   last_reported_at?: string;
   /** 生产者上报的展示名称（例如策略实例名）；为空时按 Storage 名称或数据集 ID 展示。 */
   display_name?: string;
-  /** 最新一根 K 线（output_watermark_at 是它的开盘时间）按交易日历的收线时间与生产者写完它的时刻。 */
+  /** 最新一根 K 线（output_watermark_at 是它的开盘时间）按交易日历的收线时刻与生产者写完它的时刻（都是毫秒）。 */
   latest_bar_close_at?: string;
   arrived_at?: string;
   /** 到达 − 收线，在到达那一刻定值；delay_known 为 false 表示生产者没上报到达时间。 */
   delay_seconds?: number | string;
   delay_known?: boolean;
-  /** 此刻应已收线却还没到的根数，其中最早一根的收线时间（应到时间），以及它已晚多久（当前时间 − 应到时间）。 */
+  /** 此刻应已收线却还没到的根数，其中最早一根的收线时刻（应到时间，毫秒），以及它已晚多久（当前时间 − 应到时间）。 */
   waiting_bars?: number;
   waiting_since?: string;
   overdue_seconds?: number | string;
@@ -170,7 +176,7 @@ export interface HealthDataset {
   lateness_limit_seconds?: number | string;
   /** 无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”。 */
   clock_issue?: string;
-  /** 预期 K 线：此刻应已收线的最新一根的开盘时间（与 output_watermark_at 同一口径，相同即已到）与收线时间。 */
+  /** 预期 K 线：此刻应已收线的最新一根的开盘时间（data_time 文本，与 output_watermark_at 同一口径，相同即已到）与收线时刻（毫秒）。 */
   expected_bar_at?: string;
   expected_bar_close_at?: string;
   /** 市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；K 线时间按它显示并标注时区。 */
@@ -194,16 +200,8 @@ export interface HealthBusinessCheck {
   raw_error?: string;
   checked_at?: string;
 }
-export interface HealthGatewaySignal {
-  kind?: string;
-  signal?: HealthSignal;
-  pending_since?: string;
-  expected_hash?: string;
-  applied_hash?: string;
-}
 export interface HealthHost {
   host_id?: string;
-  agent_id?: string;
   hostname?: string;
   address?: string;
   status?: HealthStatus;
@@ -216,7 +214,6 @@ export interface HealthHost {
   disk_available?: boolean;
   cpu_available?: boolean;
   last_reported_at?: string;
-  gateway_signals?: HealthGatewaySignal[];
   /** 告警阈值（百分比）；0 或缺省表示没有对应规则。 */
   cpu_threshold?: number;
   memory_threshold?: number;
@@ -294,13 +291,13 @@ export interface LogRecord {
   fields?: Record<string, string>;
   /** 大于 0 表示在这条之前，同一代码位置另有这么多条日志因为太密被合并掉了。 */
   merged_count?: number | string;
-  /** 日志时间（UTC，RFC 3339）。 */
+  /** 日志时刻（毫秒）。 */
   logged_at?: string;
 }
 
 /** 一个小时里的重要日志条数。 */
 export interface LogBucket {
-  /** 这个小时的起点（UTC，RFC 3339）。 */
+  /** 这个小时的起点（毫秒）。 */
   start_at?: string;
   /** Error 及以上的条数。 */
   errors?: number;
@@ -308,7 +305,7 @@ export interface LogBucket {
   events?: number;
 }
 
-/** 数据链路逐根到达历史的一个点：收线时间（UTC）、到达延迟、与上一条记录之间跳过的根数。 */
+/** 数据链路逐根到达历史的一个点：收线时刻（毫秒）、到达延迟、与上一条记录之间跳过的根数。 */
 export interface ArrivalHistoryPoint {
   close_at?: string;
   delay_seconds?: number | string;
@@ -333,6 +330,7 @@ export interface ArrivalHistory {
   /** 市场时区（IANA 名称），day 按它切分。 */
   timezone?: string;
   day?: string;
+  /** 这一天的起止时刻（毫秒，左闭右开）。 */
   start_at?: string;
   end_at?: string;
   series?: ArrivalHistorySeries[];

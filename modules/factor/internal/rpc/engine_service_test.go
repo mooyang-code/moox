@@ -50,7 +50,7 @@ func (f *hubFake) Pull(context.Context, domain.EngineIdentity) (store.RecalcJob,
 	return f.job, f.pulledTask, f.found, f.err
 }
 
-func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _, _ string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
+func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _ string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
 	f.defaultFilled = defaultFilled
 	f.progress, f.reportedErr = progress, errText
 	job := f.job
@@ -109,7 +109,7 @@ func TestEngineHeartbeatPassesStatus(t *testing.T) {
 
 	rsp, err := svc.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine, Status: &factorpb.EngineRuntimeStatus{
 		ConsumerRunning: true, ComputeWorkers: 8, ExprVersion: "expr/1", CatalogHash: "hash-1",
-		CatalogSyncedAt: syncedAt.Format(time.RFC3339Nano),
+		CatalogSyncedAt: syncedAt.UnixMilli(),
 		Runners:         []*factorpb.FactorRunnerStatus{{TaskId: "ftask_a", Queued: 1, Active: true}},
 		RecentRuns:      []*factorpb.TaskRunSummary{{TaskId: "ftask_a", LastPeriodTime: 900, LastStatus: "complete"}},
 	}})
@@ -135,10 +135,10 @@ func TestEngineHeartbeatConflictMapsToRetCode(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
 }
 
-func TestPullRecalcJobReturnsLeaseAndTask(t *testing.T) {
+func TestPullRecalcJobReturnsJobAndTask(t *testing.T) {
 	hub := &hubFake{found: true, pulledTask: engineTaskFixture(), job: store.RecalcJob{
 		JobID: "job-1", TaskID: "ftask_a", StartTime: 60, EndTime: 600, ProgressTime: 120,
-		Status: store.RecalcStatusRunning, EngineID: "factor-engine@mac", LeaseToken: "token-1",
+		Status: store.RecalcStatusRunning,
 	}}
 	svc := NewEngineService(hub, nil)
 
@@ -146,9 +146,7 @@ func TestPullRecalcJobReturnsLeaseAndTask(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, rsp.GetFound())
-	require.Equal(t, "token-1", rsp.GetLeaseToken())
 	require.Equal(t, "job-1", rsp.GetJob().GetJobId())
-	require.Equal(t, "factor-engine@mac", rsp.GetJob().GetEngineId())
 	require.Equal(t, time.Unix(120, 0).UTC().Format(time.RFC3339Nano), rsp.GetJob().GetProgressTime())
 	require.Equal(t, "ftask_a", rsp.GetTask().GetFactorTask().GetTaskId())
 }
@@ -169,7 +167,7 @@ func TestReportRecalcProgressConvertsRFC3339(t *testing.T) {
 	progress := time.Unix(300, 0).UTC()
 
 	rsp, err := svc.ReportRecalcProgress(context.Background(), &factorpb.ReportRecalcProgressReq{
-		Engine: testEngine, JobId: "job-1", LeaseToken: "token-1",
+		Engine: testEngine, JobId: "job-1",
 		ProgressTime: progress.Format(time.RFC3339), Status: store.RecalcStatusRunning, Error: "degraded: failed_subjects=1",
 	})
 
@@ -183,18 +181,18 @@ func TestReportRecalcProgressRejectsBadTime(t *testing.T) {
 	svc := NewEngineService(&hubFake{}, nil)
 
 	rsp, err := svc.ReportRecalcProgress(context.Background(), &factorpb.ReportRecalcProgressReq{
-		JobId: "job-1", LeaseToken: "token-1", ProgressTime: "yesterday",
+		JobId: "job-1", ProgressTime: "yesterday",
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestReportRecalcProgressStaleTokenIsConflict(t *testing.T) {
+func TestReportRecalcProgressNotRunningIsConflict(t *testing.T) {
 	svc := NewEngineService(&hubFake{err: fmt.Errorf("%w: stale", store.ErrConflict)}, nil)
 
 	rsp, err := svc.ReportRecalcProgress(context.Background(), &factorpb.ReportRecalcProgressReq{
-		JobId: "job-1", LeaseToken: "token-1", ProgressTime: time.Unix(300, 0).UTC().Format(time.RFC3339),
+		JobId: "job-1", ProgressTime: time.Unix(300, 0).UTC().Format(time.RFC3339),
 	})
 
 	require.NoError(t, err)
@@ -243,7 +241,7 @@ func TestGetStatusReadsEngineHeartbeat(t *testing.T) {
 	require.Equal(t, "factor-engine@mac", rsp.GetEngine().GetEngineId())
 	require.True(t, rsp.GetEngine().GetOnline())
 	require.True(t, rsp.GetEngine().GetCatalogInSync())
-	require.Equal(t, heartbeat.Format(time.RFC3339Nano), rsp.GetEngine().GetLastHeartbeatAt())
+	require.Equal(t, heartbeat.UnixMilli(), rsp.GetEngine().GetLastHeartbeatAt())
 }
 
 func TestGetStatusEngineOfflineWhenNoHeartbeat(t *testing.T) {

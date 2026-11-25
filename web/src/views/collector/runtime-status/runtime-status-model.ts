@@ -6,7 +6,7 @@ import type {
   HistorySeed
 } from "@/api/collector/runtime-status";
 
-import { marketTime } from "@/utils/time-zone";
+import { marketTime, toInstantMs } from "@/utils/time-zone";
 
 const levels: Record<HealthLevel, { text: string; color: string; icon: string }> = {
   ok: { text: "正常", color: "green", icon: "icon-check-circle" },
@@ -91,7 +91,7 @@ export function inspectionInfo(
 
 /** 自动巡检列的说明。 */
 export const INSPECTION_TIP =
-  "自动巡检每 5 分钟检查一次已收盘的 K 线，发现缺口会自动补采。落后时，这段时间的缺口暂时不会被发现和补上，不代表数据缺失；数据是否齐全看“24h 实时缺口”和“历史缺口”。";
+  "自动巡检每 5 分钟检查一次已收盘的 K 线，发现缺口会自动补采。落后时，这段时间的缺口暂时不会被发现和补上，不代表数据缺失；数据是否齐全看“24h 实时缺口”，更早的区间用“检查缺口”。";
 
 export interface StatusSummary {
   functions: number;
@@ -275,7 +275,7 @@ export function cloudStateInfo(
   >
 ): CloudStateInfo {
   if ((fn.executor || "scf") !== "scf") return { text: "—", tone: "muted" };
-  if (!fn.cloud_read_at) return { text: "未读回", tone: "muted" };
+  if (toInstantMs(fn.cloud_read_at) === null) return { text: "未读回", tone: "muted" };
   if (!fn.cloud_exists) return { text: "不存在", tone: "warn" };
   const problems = [...(fn.cloud_timer_matches ? [] : ["定时器不一致"]), ...(fn.cloud_package_latest ? [] : ["代码包落后"])];
   return problems.length ? { text: problems.join("、"), tone: "warn" } : { text: "一致", tone: "ok" };

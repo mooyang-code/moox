@@ -4,16 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
-	"unicode"
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/rpcconn"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"google.golang.org/protobuf/proto"
@@ -23,25 +20,19 @@ import (
 )
 
 type RPCClient struct {
-	cfg                 hostgatewayconfig.Config
-	credentials         gatewayauth.Credentials
-	instanceID, version string
-	pool                *rpcconn.Pool
-	transport           transport.ClientTransport
-	relayStatus         func() []*pb.RelaySessionStatus
+	cfg         hostgatewayconfig.Config
+	credentials gatewayauth.Credentials
+	pool        *rpcconn.Pool
+	transport   transport.ClientTransport
+	relayStatus func() []*pb.RelaySessionStatus
 }
 
-func NewRPC(cfg hostgatewayconfig.Config, material *tlsconfig.Material, credentials gatewayauth.Credentials, version string) (*RPCClient, error) {
+func NewRPC(cfg hostgatewayconfig.Config, material *tlsconfig.Material, credentials gatewayauth.Credentials) (*RPCClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if material == nil || material.HostID() != cfg.Host.ID || credentials.Caller != "host-gateway" || credentials.Host != cfg.Host.ID || credentials.PublicKey() == nil ||
-		version == "" || len(version) > 128 || version != strings.TrimSpace(version) || strings.ContainsFunc(version, unicode.IsControl) {
-		return nil, errors.New("control client requires matching TLS/signing identity and version")
-	}
-	instance, err := security.RandomHex(16)
-	if err != nil {
-		return nil, err
+	if material == nil || material.HostID() != cfg.Host.ID || credentials.Caller != "host-gateway" || credentials.Host != cfg.Host.ID || credentials.PublicKey() == nil {
+		return nil, errors.New("control client requires matching TLS/signing identity")
 	}
 	var pool *rpcconn.Pool
 	if cfg.Host.ID == cfg.Control.HostID {
@@ -53,20 +44,24 @@ func NewRPC(cfg hostgatewayconfig.Config, material *tlsconfig.Material, credenti
 		}
 		pool = rpcconn.New(trust)
 	}
-	return &RPCClient{cfg: cfg, credentials: credentials, instanceID: instance, version: version, pool: pool, transport: transport.NewClientTransport()}, nil
+	return &RPCClient{cfg: cfg, credentials: credentials, pool: pool, transport: transport.NewClientTransport()}, nil
 }
 
 func (c *RPCClient) String() string {
-	return "GatewayControlClient{host=" + c.cfg.Host.ID + " instance=" + c.instanceID + "}"
+	return "GatewayControlClient{host=" + c.cfg.Host.ID + "}"
 }
-func (c *RPCClient) GoString() string   { return c.String() }
-func (c *RPCClient) InstanceID() string { return c.instanceID }
-func (c *RPCClient) Close() error       { return c.pool.Close() }
+func (c *RPCClient) GoString() string { return c.String() }
+func (c *RPCClient) Close() error     { return c.pool.Close() }
 
+// Pull 拉取快照，同时把已应用的快照哈希（currentHash）带给 Admin：拉取兼作心跳。
 // A nil successful result means unchanged; there must already be a valid view.
 func (c *RPCClient) Pull(ctx context.Context, currentHash string) (*snapshot.View, error) {
+	req := &pb.PullSnapshotReq{HostId: c.cfg.Host.ID, CurrentHash: currentHash}
+	if c.relayStatus != nil {
+		req.RelaySessions = c.relayStatus()
+	}
 	rsp := &pb.PullSnapshotRsp{}
-	if err := c.invoke(ctx, "PullSnapshot", &pb.PullSnapshotReq{HostId: c.cfg.Host.ID, CurrentHash: currentHash}, rsp); err != nil {
+	if err := c.invoke(ctx, "PullSnapshot", req, rsp); err != nil {
 		return nil, err
 	}
 	if rsp.RetInfo == nil || rsp.RetInfo.Code != pb.ErrorCode_SUCCESS {
@@ -84,26 +79,8 @@ func (c *RPCClient) Pull(ctx context.Context, currentHash string) (*snapshot.Vie
 	return snapshot.Build(c.cfg.Host.ID, rsp.Snapshot)
 }
 
-// SetRelayStatus 让心跳带上反向连接会话状态，只在 control 网关上设置，须在开始同步前调用。
+// SetRelayStatus 让每次拉取带上反向连接会话状态，只在 control 网关上设置，须在开始同步前调用。
 func (c *RPCClient) SetRelayStatus(status func() []*pb.RelaySessionStatus) { c.relayStatus = status }
-
-func (c *RPCClient) Report(ctx context.Context, hash string, count int32, lastError string) error {
-	if len(lastError) > 4096 {
-		lastError = "host gateway synchronization failed"
-	}
-	req := &pb.ReportStatusReq{HostId: c.cfg.Host.ID, InstanceId: c.instanceID, Version: c.version, AppliedHash: hash, RouteCount: count, Error: lastError}
-	if c.relayStatus != nil {
-		req.RelaySessions = c.relayStatus()
-	}
-	rsp := &pb.ReportStatusRsp{}
-	if err := c.invoke(ctx, "ReportStatus", req, rsp); err != nil {
-		return err
-	}
-	if rsp.RetInfo == nil || rsp.RetInfo.Code != pb.ErrorCode_SUCCESS {
-		return errors.New("GatewayControl rejected heartbeat")
-	}
-	return nil
-}
 
 func (c *RPCClient) invoke(parent context.Context, method string, req, rsp proto.Message) error {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)

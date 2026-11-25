@@ -170,7 +170,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDC", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -243,7 +243,7 @@ func TestModernResumeIgnoresExpiredTargetMetadata(t *testing.T) {
 	service.MaxSnapshotAge = 2 * time.Hour
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDC", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -325,7 +325,7 @@ func acceptModernSessionTarget(t *testing.T, tradeStore *store.Store, session st
 		InstanceID: "instance-1", SessionID: session, SessionStartedAt: modernSessionStartedAt(session), StrategyID: "strategy-1",
 		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: now.UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
+		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 	})
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -362,7 +362,7 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -389,7 +389,7 @@ func addMember(ctx context.Context, service *Service, command AddMemberCommand) 
 func logicalFixtureAccount(id string) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: "BINANCE", Markets: []string{"SWAP"},
+		Exchange: "binance", Markets: []string{"swap"},
 		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-" + id,
 		SettlementAsset: "USDT", MarginMode: "CROSS",
 		Status: "ENABLED", Ready: true,
@@ -471,7 +471,7 @@ func acceptSessionTarget(t *testing.T, tradeStore *store.Store, targetID string)
 		InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1000, StrategyID: "strategy-1",
 		BarEndTime: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Status: "PENDING", AcceptedAt: 2_000,
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
+		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 	})
 	require.NoError(t, err)
 }

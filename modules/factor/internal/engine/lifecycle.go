@@ -251,8 +251,8 @@ func (r *Runtime) beginWrite(_ context.Context, taskID string, live, catchup boo
 // quiesce 是生命周期的 Quiesce 钩子：门禁已经关闭，等在途的写结果操作（实时计算、补算分块、追赶推进、补算领取）结束。
 func (r *Runtime) quiesce(ctx context.Context) error { return r.writes.wait(ctx, "") }
 
-// leaseAllowed 报告是否可以领取补算作业：模块在运行、因子目录已载入才领取。不用 active()，它还服务于消费者、预载与数据同步。
-func (r *Runtime) leaseAllowed() bool {
+// pullAllowed 报告是否可以领取补算作业：模块在运行、因子目录已载入才领取。不用 active()，它还服务于消费者、预载与数据同步。
+func (r *Runtime) pullAllowed() bool {
 	return (r.life == nil || r.life.Running()) && r.catalog.Loaded()
 }
 
@@ -452,14 +452,13 @@ func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) dom
 	}
 }
 
-// lifecycleStatus 是随心跳上报的模块级生命周期状态：管理端据此确认本次暂停已收敛（切换自定义算子版本的前提），
-// 并把暂停类型、原因与追赶进度代报给 Monitor（首页的系统状态读它）。
+// lifecycleStatus 是随心跳上报的模块级生命周期状态：管理端把暂停类型、原因与追赶进度代报给 Monitor（首页的系统状态读它）。
 func (r *Runtime) lifecycleStatus() domain.EngineLifecycle {
 	if r.life == nil {
 		return domain.EngineLifecycle{}
 	}
 	state := r.life.State()
-	out := domain.EngineLifecycle{Stage: string(state.Stage), QuiescedAt: state.QuiescedAt, Quiesced: state.Quiesced(), CatchupBlocked: r.catchupPreconditionFor(r.catchupMembers()), Catchup: state.Catchup}
+	out := domain.EngineLifecycle{Stage: string(state.Stage), CatchupBlocked: r.catchupPreconditionFor(r.catchupMembers()), Catchup: state.Catchup}
 	if state.Pause != nil {
 		out.PausedSince, out.PauseKind, out.PauseReason = state.Pause.Since, string(state.Pause.Kind), state.Pause.Reason
 	}

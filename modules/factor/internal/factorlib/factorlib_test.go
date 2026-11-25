@@ -42,22 +42,17 @@ func TestRepositoryLibrariesCompile(t *testing.T) {
 }
 
 func TestLoadRejectsBadLibraries(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, body string) string {
-		path := filepath.Join(dir, name)
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-		return path
+	parse := func(name, body string) error {
+		_, err := Parse(name, []byte(body))
+		return err
 	}
-	_, err := LoadFile(write("unknown.yaml", "- factor_id: A\n  name: A\n  spec: x\n  params_json: '{}'\n"))
-	require.ErrorContains(t, err, "params_json")
-	_, err = LoadFile(write("missing.yaml", "- factor_id: A\n  spec: x\n"))
-	require.ErrorContains(t, err, "缺少")
-	_, err = LoadFile(write("dup.yaml", "- {factor_id: A, name: A, spec: x}\n- {factor_id: A, name: B, spec: y}\n"))
-	require.ErrorContains(t, err, "重复")
-	_, err = LoadFile(write("multi.yaml", "- {factor_id: A, name: A, spec: x}\n---\n- {factor_id: B, name: B, spec: y}\n"))
-	require.ErrorContains(t, err, "一个 YAML 文档")
-	_, err = LoadFile(write("empty.yaml", ""))
-	require.ErrorContains(t, err, "空文件")
+	require.ErrorContains(t, parse("unknown.yaml", "- factor_id: A\n  name: A\n  spec: x\n  params_json: '{}'\n"), "params_json")
+	require.ErrorContains(t, parse("missing.yaml", "- factor_id: A\n  spec: x\n"), "缺少")
+	require.ErrorContains(t, parse("dup.yaml", "- {factor_id: A, name: A, spec: x}\n- {factor_id: A, name: B, spec: y}\n"), "重复")
+	require.ErrorContains(t, parse("multi.yaml", "- {factor_id: A, name: A, spec: x}\n---\n- {factor_id: B, name: B, spec: y}\n"), "一个 YAML 文档")
+	require.ErrorContains(t, parse("empty.yaml", ""), "空文件")
+	_, err := ParseFiles([]File{{Name: "a.yaml", Content: []byte("- {factor_id: A, name: A, spec: x}\n")}, {Name: "b.yaml", Content: []byte("- {factor_id: A, name: A2, spec: y}\n")}})
+	require.ErrorContains(t, err, "同时出现在")
 
 	split := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(split, "a.yaml"), []byte("- {factor_id: A, name: A, spec: x}\n"), 0o600))

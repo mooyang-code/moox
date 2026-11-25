@@ -1,4 +1,4 @@
-// Package input 负责从一个 View 装配引擎输入：启用时解析绑定，每期划分标的集合并读取一帧数据。
+// Package input 负责从数据集的查询索引（View）装配引擎输入：启用时解析绑定，每期划分标的集合并读取一帧数据。
 package input
 
 import (
@@ -9,13 +9,12 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // ErrStale 表示读取过程中 View 的活动索引或修订号发生变化，已读页面作废，需要整体重读。
 var ErrStale = errors.New("View 输入快照已过期")
 
-// ErrViewNotFound 表示 View 已不存在（被删除）。
+// ErrViewNotFound 表示数据集已不存在（被删除），它的 View 随之不存在。
 var ErrViewNotFound = errors.New("View 不存在")
 
 // staleError 是读取期间活动索引或修订号变化的错误：Error 只给中文说明，Storage 的原文经 Unwrap 留给日志；
@@ -75,9 +74,8 @@ const (
 	SkipHistoryInsufficient = "history_insufficient"
 )
 
-// ViewInfo 是 View 的元数据。
+// ViewInfo 是一个数据集的查询索引（View）的状态：数据集的频率与状态、活动索引与列。每个数据集恰好有一个 View。
 type ViewInfo struct {
-	ViewID        string
 	DatasetID     string
 	Frequency     string
 	Status        string
@@ -94,7 +92,7 @@ type ViewInfo struct {
 	Columns    []ViewColumn
 }
 
-// ViewColumn 是 View 的一列及其属性（因子输出列带 column_kind=output、member_key、member_kind、factor_id 等）。
+// ViewColumn 是 View 的一列（数据集里启用的列）及其属性（因子输出列带 column_kind=output、member_key、member_kind、factor_id 等）。
 type ViewColumn struct {
 	Name       string
 	Attributes map[string]string
@@ -170,7 +168,6 @@ type Row struct {
 
 // Query 是一次固定索引的分页读取。
 type Query struct {
-	ViewID           string
 	DatasetID        string
 	Frequency        string
 	Subjects         []Subject
@@ -192,10 +189,10 @@ type Coverage struct {
 
 // Client 是 Storage 与 Factor 的窄适配。
 type Client interface {
-	// GetView 读取 View 元数据与列，不含覆盖范围；需要覆盖范围时另调 ViewCoverage（见 WithCoverage）。
-	GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error)
+	// GetView 读取数据集的 View：数据集元数据、活动索引与启用的列，不含覆盖范围；需要覆盖范围时另调 ViewCoverage（见 WithCoverage）。
+	GetView(ctx context.Context, spaceID, datasetID string) (ViewInfo, error)
 	// ViewGeneration 只读取 View 活动索引的代次（不读列），用于确认读取期间索引没有换代。
-	ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error)
+	ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error)
 	// ViewCoverage 读取 View 活动索引的覆盖统计；exact 为 true 时统计未缓存也要求现算（代价是一次全量统计）。
 	ViewCoverage(ctx context.Context, spaceID string, view ViewInfo, exact bool) (Coverage, error)
 	GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error)
@@ -226,10 +223,9 @@ const (
 	SourceFactor  = "factor"
 )
 
-// TaskBinding 是一个任务键绑定的因子任务及其结果 View。
+// TaskBinding 是一个任务键绑定的因子任务及其结果数据集。
 type TaskBinding struct {
-	// ViewID 是因子任务的结果 View（由任务 ID 推导；事件路由与求值都用它），FactorTaskID 是因子任务。
-	ViewID          string `json:"view_id"`
+	// FactorTaskID 是因子任务；DatasetID 是它的结果数据集（由任务 ID 推导；事件路由与求值都用它）。
 	FactorTaskID    string `json:"factor_task_id"`
 	DatasetID       string `json:"dataset_id"`
 	SourceDatasetID string `json:"source_dataset_id,omitempty"`
@@ -239,8 +235,7 @@ type TaskBinding struct {
 type Resolved struct {
 	// Market 是有效的市场模式：DSL 写出的，或没写时按唯一绑定的因子任务的市场取的默认值。
 	Market dsl.Market `json:"market"`
-	// Tasks 是绑定的因子任务与结果 View。方式 A 的键是市场（spot、swap 或 equity），键集合恰好是 Market.Markets()；
-	// 方式 B（统一数据集）只有一个键 multi。
+	// Tasks 是绑定的因子任务与结果数据集：键是市场（spot、swap 或 equity），键集合恰好是 Market.Markets()。
 	Tasks map[string]TaskBinding `json:"tasks"`
 	// FactorParams 是任务各可变成员（成员键）的因子定义声明的可调参数：启用时固化，参数输出据此补齐默认值、取整与限幅。
 	FactorParams map[string][]ParamDecl   `json:"factor_params,omitempty"`
@@ -266,29 +261,16 @@ type Resolved struct {
 	Sources map[string]SourceBinding `json:"sources,omitempty"`
 }
 
-// MarketMulti 是统一数据集上的因子任务登记的“市场”：一个任务同时覆盖现货与永续，不是真实的市场，也不会出现在 Frame 里。
-const MarketMulti = seriesset.MarketMulti
-
-// Unified 报告实例绑定的是统一数据集（方式 B）上的一个因子任务：同一个 View 里现货、永续用 series_tag 区分。
-func (r Resolved) Unified() bool {
-	_, ok := r.Tasks[MarketMulti]
-	return ok
-}
-
-// TaskKeys 返回主帧绑定的任务键（现货、永续在前，其余按名字）：方式 A 的键是市场，方式 B 只有一个键 multi。
-// 一个键对应一个因子任务、一个结果 View；附加来源与参考市场不在其中（见 AllTasks）。
+// TaskKeys 返回主帧绑定的任务键（现货、永续在前，其余按名字）：键就是市场，一个键对应一个因子任务、一个结果数据集；
+// 附加来源与参考市场不在其中（见 AllTasks）。
 func (r Resolved) TaskKeys() []string {
 	keys := sortedKeys(r.Tasks)
 	sort.SliceStable(keys, func(i, j int) bool { return marketOrder(keys[i]) < marketOrder(keys[j]) })
 	return keys
 }
 
-// Markets 返回策略涉及的市场（现货在前、永续其次）：Frame 按市场分别带行。方式 A 里每个市场有自己的任务；
-// 方式 B 里它们共用统一数据集的那一个 View。
+// Markets 返回策略涉及的市场（现货在前、永续其次）：Frame 按市场分别带行，每个市场有自己的任务。
 func (r Resolved) Markets() []string {
-	if r.Unified() {
-		return r.Market.Markets()
-	}
 	markets := make([]string, 0, len(r.Tasks))
 	for _, market := range r.Market.Markets() {
 		if _, ok := r.Tasks[market]; ok {
@@ -298,16 +280,8 @@ func (r Resolved) Markets() []string {
 	return markets
 }
 
-// TaskKey 返回某个市场的行所在的任务键：方式 A 就是市场自己，方式 B 是 multi。
-func (r Resolved) TaskKey(market string) string {
-	if r.Unified() {
-		return MarketMulti
-	}
-	return market
-}
-
-// TaskOf 返回某个市场的行所在的任务绑定。
-func (r Resolved) TaskOf(market string) TaskBinding { return r.Tasks[r.TaskKey(market)] }
+// TaskOf 返回某个市场的任务绑定。
+func (r Resolved) TaskOf(market string) TaskBinding { return r.Tasks[market] }
 
 // Primary 返回第一个任务的绑定：只绑一个任务时就是唯一的绑定（回放、试算展示等只读一个 View 的地方使用）。
 func (r Resolved) Primary() TaskBinding {
@@ -317,19 +291,19 @@ func (r Resolved) Primary() TaskBinding {
 	return TaskBinding{}
 }
 
-// ViewIDs 返回绑定的结果 View（按任务键先后）。
-func (r Resolved) ViewIDs() []string {
+// DatasetIDs 返回绑定的结果数据集（按任务键先后）。
+func (r Resolved) DatasetIDs() []string {
 	ids := make([]string, 0, len(r.Tasks))
 	for _, key := range r.TaskKeys() {
-		ids = append(ids, r.Tasks[key].ViewID)
+		ids = append(ids, r.Tasks[key].DatasetID)
 	}
 	return ids
 }
 
-// TaskKeyOfView 返回 View 所属的任务键。
-func (r Resolved) TaskKeyOfView(viewID string) (string, bool) {
+// TaskKeyOfDataset 返回结果数据集所属的任务键。
+func (r Resolved) TaskKeyOfDataset(datasetID string) (string, bool) {
 	for key, task := range r.Tasks {
-		if task.ViewID == viewID {
+		if task.DatasetID == datasetID {
 			return key, true
 		}
 	}

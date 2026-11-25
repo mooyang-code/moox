@@ -51,7 +51,7 @@
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.updated_at, displayZone) }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
             <template #cell="{ record }">
@@ -126,23 +126,18 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { GetDataTypeConfigWithFields } from "@/api/collector";
-import { createDataSource, listDataSources, listFields, updateDataSource } from "@/api/storage/metadata";
+import { createDataSource, listDataSources, updateDataSource } from "@/api/storage/metadata";
 import type { DataSource } from "@/api/storage/types";
 import { buildExtraFieldSources, type ExtraFieldSourceRow } from "./extra-field-sources";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import {
-  applyPageResult,
-  defaultPagination,
-  formatTime,
-  statusColor,
-  statusLabel,
-  statusOptions
-} from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 页面时间按当前空间登记的时区显示
@@ -206,21 +201,9 @@ async function loadExtraFieldSources() {
     if (!request.isLatest()) return;
     const mine = options.filter(option => (option.market_id || "").trim().toLowerCase() === spaceId.trim().toLowerCase());
     if (!mine.length) return;
-    // 字段显示名取 Storage 字段目录；读不到时显示字段 ID，不影响这块展示。
-    const names = new Map<string, string>();
-    try {
-      for (let page = 1; ; page += 1) {
-        const rsp = await listFields({ space_id: spaceId, page: { page, size: 500 } });
-        for (const field of rsp.fields || []) names.set(field.field_id, field.name);
-        if (!rsp.page_result?.has_more || !(rsp.fields || []).length) break;
-      }
-    } catch {
-      names.clear();
-    }
-    if (!request.isLatest()) return;
-    extraFieldSources.value = buildExtraFieldSources(mine, spaceId, names);
-  } catch {
-    // 失败原因由请求层提示；这块只读展示留空。
+    extraFieldSources.value = buildExtraFieldSources(mine, spaceId);
+  } catch (error) {
+    reportError(error);
   }
 }
 
@@ -258,7 +241,7 @@ function openEdit(record: DataSource) {
   visible.value = true;
 }
 
-/** 弹窗的“确定”：校验或保存失败时返回 false，弹窗保持打开，填的内容不丢（失败原因由请求层提示）。 */
+/** 弹窗的“确定”：校验或保存失败时返回 false，弹窗保持打开，填的内容不丢（失败时提示原因）。 */
 async function submit(): Promise<boolean> {
   const spaceId = spaceStore.requireSpaceId();
   // 表单属于打开它时的空间：切换空间后不能把它写进新空间（会覆盖新空间里相同 ID 的数据源）。
@@ -276,7 +259,8 @@ async function submit(): Promise<boolean> {
   try {
     if (editing.value) await updateDataSource(payload);
     else await createDataSource(payload);
-  } catch {
+  } catch (error) {
+    reportError(error);
     return false;
   }
   Message.success("数据源已保存");

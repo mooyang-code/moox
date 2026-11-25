@@ -15,7 +15,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func changeRange(subject, freq string, start, end time.Time) *pb.DatasetChangeRange {
@@ -29,7 +28,7 @@ func TestPlanFollowReads(t *testing.T) {
 	t0 := maxAgeNow.Add(-time.Hour).Truncate(5 * time.Minute)
 
 	t.Run("全市场一期不带标的", func(t *testing.T) {
-		view := &pb.View{SpaceId: "crypto", ViewId: "v", DatasetId: "k", Freq: "5m"}
+		view := timeSeriesSpec("crypto", "k", "5m")
 		var ranges []*pb.DatasetChangeRange
 		for i := 0; i < 501; i++ {
 			ranges = append(ranges, changeRange(fmt.Sprintf("S%03d", i), "5m", t0, t0))
@@ -42,7 +41,7 @@ func TestPlanFollowReads(t *testing.T) {
 	})
 
 	t.Run("少量标的按 selector 读并合并相接范围", func(t *testing.T) {
-		view := &pb.View{SpaceId: "crypto", ViewId: "v", DatasetId: "k", Freq: "5m"}
+		view := timeSeriesSpec("crypto", "k", "5m")
 		reads := svc.planFollowReads(view, []*pb.DatasetChange{
 			{Sequence: 1, Ranges: []*pb.DatasetChangeRange{changeRange("A", "5m", t0, t0.Add(5*time.Minute)), changeRange("B", "5m", t0, t0.Add(5*time.Minute)), changeRange("A", "1m", t0, t0)}},
 			{Sequence: 2, Ranges: []*pb.DatasetChangeRange{changeRange("A", "5m", t0.Add(10*time.Minute), t0.Add(15*time.Minute))}},
@@ -56,7 +55,7 @@ func TestPlanFollowReads(t *testing.T) {
 	})
 
 	t.Run("max_age 截断过期部分", func(t *testing.T) {
-		view := &pb.View{SpaceId: "crypto", ViewId: "v", DatasetId: "k", Freq: "5m"}
+		view := timeSeriesSpec("crypto", "k", "5m")
 		cutoff := maxAgeNow.Add(-35 * 24 * time.Hour)
 		reads := svc.planFollowReads(view, []*pb.DatasetChange{{Sequence: 1, Ranges: []*pb.DatasetChangeRange{
 			changeRange("OLD", "5m", cutoff.Add(-48*time.Hour), cutoff.Add(-24*time.Hour)),
@@ -69,11 +68,11 @@ func TestPlanFollowReads(t *testing.T) {
 
 	t.Run("日线与月线的结束时间", func(t *testing.T) {
 		day := time.Date(2026, 1, 30, 0, 0, 0, 0, time.UTC)
-		reads := svc.planFollowReads(&pb.View{SpaceId: "crypto", ViewId: "v", DatasetId: "k", Freq: "1d"}, []*pb.DatasetChange{{Sequence: 1, Ranges: []*pb.DatasetChangeRange{changeRange("A", "1d", day, day)}}})
+		reads := svc.planFollowReads(timeSeriesSpec("crypto", "k", "1d"), []*pb.DatasetChange{{Sequence: 1, Ranges: []*pb.DatasetChangeRange{changeRange("A", "1d", day, day)}}})
 		require.Len(t, reads, 1)
 		require.Equal(t, day.Add(24*time.Hour), reads[0].end)
 		month := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-		reads = svc.planFollowReads(&pb.View{SpaceId: "crypto", ViewId: "v", DatasetId: "k", Freq: "1mo"}, []*pb.DatasetChange{{Sequence: 1, Ranges: []*pb.DatasetChangeRange{changeRange("A", "1mo", month, month)}}})
+		reads = svc.planFollowReads(timeSeriesSpec("crypto", "k", "1mo"), []*pb.DatasetChange{{Sequence: 1, Ranges: []*pb.DatasetChangeRange{changeRange("A", "1mo", month, month)}}})
 		require.Len(t, reads, 1)
 		require.Equal(t, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), reads[0].end, "月线按日历加一个月")
 	})
@@ -91,74 +90,60 @@ func (p *readyPublisherFake) Publish(_ context.Context, event events.Event, payl
 	return &jetstream.PublishAck{Stream: event.Stream(), Sequence: uint64(len(p.payloads))}, nil
 }
 
-// 跟随路径由完成标记组装的就绪事件：账本判定与写入方上报两种来源的各字段与事件 ID。
+// 跟随路径由完成标记组装的就绪事件：账本判定与写入方上报两种来源的各字段与事件 ID；subject_id 是数据集 ID。
 func TestFollowReadyEventFromMarker(t *testing.T) {
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
 	cases := []struct {
-		name string
-		view *pb.View
-		// hash 是活动索引的列契约哈希，为空表示没有活动索引。
-		hash    string
+		name    string
+		spec    *viewSpec
 		payload *storageeventpb.DatasetPeriodCompleted
 		want    *storageeventpb.ViewDataReady
 		eventID string
 	}{
 		{
 			name: "账本判定",
-			view: &pb.View{SpaceId: "quant", ViewId: "kline-view", DatasetId: "kline", Freq: "1m"},
-			hash: "hash-k",
+			spec: timeSeriesSpec("quant", "kline", "1m"),
 			payload: &storageeventpb.DatasetPeriodCompleted{
 				DatasetId: "kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "ledger", SnapshotRef: "universe:kline:1m",
-				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: timestamppb.New(occurredAt),
+				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: occurredAt.UnixMilli(),
 			},
 			want: &storageeventpb.ViewDataReady{
-				ViewId: "kline-view", ViewConfigId: "hash-k", CompletionEventId: "marker-ledger", DatasetId: "kline", Status: "degraded",
-				VisibleScope: "view:kline-view", Frequency: "1m", PeriodTime: 1786032000, FailedScopeRef: "ETH-USDT", ReadyAt: timestamppb.New(occurredAt),
+				CompletionEventId: "marker-ledger", DatasetId: "kline", Status: "degraded",
+				Frequency: "1m", PeriodTime: 1786032000, FailedSubjects: []string{"ETH-USDT"}, ReadyAt: occurredAt.UnixMilli(),
 				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
 			},
-			eventID: stableViewEventID("data-ready", "quant", "kline-view", "1m", "1786032000"),
+			eventID: stableViewEventID("data-ready", "quant", "kline", "1m", "1786032000"),
 		},
 		{
 			name: "写入方上报",
-			view: &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results"},
+			spec: timeSeriesSpec("quant", "factor-results", "1m"),
 			payload: &storageeventpb.DatasetPeriodCompleted{
 				DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, CompletedAt: timestamppb.New(occurredAt), CauseEventId: "cause-1",
+				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, CompletedAt: occurredAt.UnixMilli(), CauseEventId: "cause-1",
 				DetailType: "test.Detail.v1", Detail: []byte("detail"),
 			},
 			want: &storageeventpb.ViewDataReady{
-				ViewId: "result-view", ViewConfigId: "result-view", CompletionEventId: "marker-producer", DatasetId: "factor-results", Status: "complete",
-				VisibleScope: "view:result-view", Frequency: "1m", PeriodTime: 1786032000, ReadyAt: timestamppb.New(occurredAt),
+				CompletionEventId: "marker-producer", DatasetId: "factor-results", Status: "complete",
+				Frequency: "1m", PeriodTime: 1786032000, ReadyAt: occurredAt.UnixMilli(),
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, DetailType: "test.Detail.v1", Detail: []byte("detail"),
 			},
-			eventID: stableViewEventID("data-ready", "marker-producer", "result-view"),
+			eventID: stableViewEventID("data-ready", "marker-producer", "factor-results"),
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := proto.Marshal(tc.payload)
 			require.NoError(t, err)
-			marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-" + tc.payload.GetSource(), SpaceId: "quant", OccurredAt: timestamppb.New(occurredAt), Payload: raw})
+			marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-" + tc.payload.GetSource(), SpaceId: "quant", OccurredAt: occurredAt.UnixMilli(), Payload: raw})
 			require.NoError(t, err)
 			publisher := &readyPublisherFake{}
-			ref := viewRef{spaceID: "quant", viewID: tc.view.GetViewId()}
-			runtime := newViewRuntime()
-			schemas := map[string]viewindex.ViewIndexSchema{}
-			if tc.hash != "" {
-				runtime.active = "index-a"
-				runtime.publishReadStateLocked()
-				schemas["index-a"] = viewindex.ViewIndexSchema{SchemaHash: tc.hash}
-			}
-			svc := &Service{
-				views:          map[viewRef]*viewRuntime{ref: runtime},
-				schemas:        schemas,
-				catalogViews:   map[viewRef]*pb.View{ref: tc.view},
-				readyPublisher: publisher,
-			}
-			require.NoError(t, svc.publishFollowMarker(context.Background(), ref, &pb.DatasetChange{Sequence: 9, Marker: marker}))
+			svc := newTestService(map[string]viewindex.Engine{"duckdb": &queryEngine{}})
+			svc.readyPublisher = publisher
+			runtime := testRuntime(svc, tc.spec)
+			require.NoError(t, svc.publishFollowMarker(context.Background(), runtime.ref, &pb.DatasetChange{Sequence: 9, Marker: marker}))
 			require.Len(t, publisher.payloads, 1)
 			require.True(t, proto.Equal(tc.want, publisher.payloads[0]), "想要=%v\n实际=%v", tc.want, publisher.payloads[0])
-			require.Equal(t, events.PublishOptions{EventID: tc.eventID, OccurredAt: occurredAt, SpaceID: "quant", SubjectID: tc.view.GetViewId()}, publisher.opts[0])
+			require.Equal(t, events.PublishOptions{EventID: tc.eventID, OccurredAt: occurredAt, SpaceID: "quant", SubjectID: tc.spec.DatasetID}, publisher.opts[0])
 		})
 	}
 }
@@ -175,17 +160,20 @@ func (p *errPublisher) Publish(context.Context, events.Event, proto.Message, eve
 
 // 就绪事件发布超时：返回错误让跟随器停在这条标记上重试，并在后台重连发布器；超过消息上限这类确定性错误记日志跳过。
 func TestFollowReadyPublishErrors(t *testing.T) {
-	view := &pb.View{SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results"}
-	ref := viewRef{spaceID: "quant", viewID: view.GetViewId()}
+	spec := timeSeriesSpec("quant", "factor-results", "1m")
+	ref := spec.ref()
 	raw, err := proto.Marshal(&storageeventpb.DatasetPeriodCompleted{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-		CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1786032060, 0)),
+		CauseEventId: "cause-1", CompletedAt: time.Unix(1786032060, 0).UnixMilli(),
 	})
 	require.NoError(t, err)
-	marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-1", SpaceId: "quant", OccurredAt: timestamppb.New(time.Unix(1786032060, 0)), Payload: raw})
+	marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-1", SpaceId: "quant", OccurredAt: time.Unix(1786032060, 0).UnixMilli(), Payload: raw})
 	require.NoError(t, err)
 	newService := func(publisher ReadyEventPublisher) *Service {
-		return &Service{views: map[viewRef]*viewRuntime{ref: newViewRuntime()}, catalogViews: map[viewRef]*pb.View{ref: view}, readyPublisher: publisher}
+		svc := newTestService(map[string]viewindex.Engine{"duckdb": &queryEngine{}})
+		svc.readyPublisher = publisher
+		testRuntime(svc, spec)
+		return svc
 	}
 
 	timeout := &errPublisher{err: fmt.Errorf("发布：%w", jetstream.ErrPublishTimeout)}

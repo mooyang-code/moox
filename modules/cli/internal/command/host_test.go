@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/assert"

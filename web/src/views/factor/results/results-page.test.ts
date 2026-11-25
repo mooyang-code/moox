@@ -7,8 +7,7 @@ const hoisted = vi.hoisted(() => ({
   route: { path: "/factor/tasks", query: {} as Record<string, string | undefined> },
   navigate: vi.fn(),
   selectTask: vi.fn(),
-  listViews: vi.fn(),
-  listAllViewColumns: vi.fn(),
+  listAllDatasetColumns: vi.fn(),
   listFactorCategories: vi.fn(),
   getDisplay: vi.fn(),
   warning: vi.fn(),
@@ -25,7 +24,7 @@ vi.mock("@/views/factor/shared/use-factor-scope", () => ({
     reload: vi.fn()
   })
 }));
-vi.mock("@/api/storage/metadata", () => ({ listViews: hoisted.listViews, listAllViewColumns: hoisted.listAllViewColumns }));
+vi.mock("@/api/storage/metadata", () => ({ listAllDatasetColumns: hoisted.listAllDatasetColumns }));
 vi.mock("@/api/factor", () => ({ listFactorCategories: hoisted.listFactorCategories }));
 vi.mock("@/api/strategy", () => ({ getStrategyDisplaySettings: hoisted.getDisplay }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: vi.fn(), warning: hoisted.warning } }));
@@ -76,15 +75,15 @@ function taskInfo(taskId: string, boundInstanceId = ""): FactorTaskInfo {
 
 const column = (name: string, attributes?: Record<string, string>) => ({
   space_id: "crypto",
-  view_id: "view_a",
+  dataset_id: "r_a",
   column_name: name,
-  origin_type: "COLUMN_ORIGIN_TYPE_DATASET_COLUMN",
-  origin_id: name,
+  display_name: name,
+  status: "active",
   value_type: "FIELD_VALUE_TYPE_DOUBLE",
   attributes
 });
 
-const viewColumns = [
+const resultColumns = [
   column("open"),
   column("close"),
   column("request_id"),
@@ -128,10 +127,7 @@ describe("因子结果页", () => {
         reload: vi.fn()
       })
     );
-    hoisted.listViews.mockReset().mockResolvedValue({
-      views: [{ view_id: "view_a", space_id: "crypto", dataset_id: "r_a", attributes: { view_role: "factor_result" } }]
-    });
-    hoisted.listAllViewColumns.mockReset().mockResolvedValue(viewColumns);
+    hoisted.listAllDatasetColumns.mockReset().mockResolvedValue(resultColumns);
     hoisted.listFactorCategories.mockReset().mockResolvedValue([
       { category_id: "trend", name: "趋势类" },
       { category_id: "momentum", name: "动量类" }
@@ -139,42 +135,39 @@ describe("因子结果页", () => {
     hoisted.getDisplay.mockReset().mockResolvedValue({ categories: [], members: [], columns: [] });
   });
 
-  it("刷新结果只让表格重读行，不重建视图浏览；成员变化时只重读视图列", async () => {
+  it("刷新结果只让表格重读行，不重建浏览；成员变化时只重读结果列", async () => {
     const wrapper = mountPage();
     await flushPromises();
     const first = wrapper.findComponent(ViewBrowseStub);
-    expect(hoisted.listViews).toHaveBeenCalledTimes(1);
     await (wrapper.vm as unknown as { refreshResults(): Promise<void> }).refreshResults();
     await flushPromises();
     const after = wrapper.findComponent(ViewBrowseStub);
     expect(after.vm).toBe(first.vm);
     expect(after.props("refreshKey")).toBe(1);
-    expect(hoisted.listViews).toHaveBeenCalledTimes(1);
-    expect(hoisted.listAllViewColumns).toHaveBeenCalledTimes(2); // 刷新时也重读列
+    expect(hoisted.listAllDatasetColumns).toHaveBeenCalledTimes(2); // 刷新时也重读列
 
     // 成员启停（成员键不变）也重读列：启用时后端才补结果列
-    const enabledCalls = hoisted.listAllViewColumns.mock.calls.length;
+    const enabledCalls = hoisted.listAllDatasetColumns.mock.calls.length;
     (hoisted.store.tasks as FactorTaskInfo[])[0].members[0].status = "disabled";
     await flushPromises();
-    expect(hoisted.listAllViewColumns.mock.calls.length).toBe(enabledCalls + 1);
+    expect(hoisted.listAllDatasetColumns.mock.calls.length).toBe(enabledCalls + 1);
 
-    const columnsCalls = hoisted.listAllViewColumns.mock.calls.length;
+    const columnsCalls = hoisted.listAllDatasetColumns.mock.calls.length;
     (hoisted.store.tasks as FactorTaskInfo[])[0].members.push(member("macd", ["macd"]));
     await flushPromises();
-    expect(hoisted.listAllViewColumns.mock.calls.length).toBe(columnsCalls + 1);
-    expect(hoisted.listViews).toHaveBeenCalledTimes(1);
+    expect(hoisted.listAllDatasetColumns.mock.calls.length).toBe(columnsCalls + 1);
     expect(wrapper.findComponent(ViewBrowseStub).vm).toBe(first.vm);
   });
 
   it("列元数据就绪前不放行查询；就绪后只投影行情列，搜索只含行情列", async () => {
     let resolveColumns!: (value: unknown) => void;
-    hoisted.listAllViewColumns.mockReturnValue(new Promise(resolve => (resolveColumns = resolve)));
+    hoisted.listAllDatasetColumns.mockReturnValue(new Promise(resolve => (resolveColumns = resolve)));
     const wrapper = mountPage();
     await flushPromises();
     const browse = () => wrapper.findComponent(ViewBrowseStub);
     expect(browse().props("queryReady")).toBe(false);
 
-    resolveColumns(viewColumns);
+    resolveColumns(resultColumns);
     await flushPromises();
     expect(browse().props("queryReady")).toBe(true);
     expect(browse().props("projectColumns")).toEqual(["open", "close"]);

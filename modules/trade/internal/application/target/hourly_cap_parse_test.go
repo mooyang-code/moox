@@ -14,7 +14,7 @@ import (
 func TestHourlyCapFailsWhenSubmittedNotionalCannotBeParsed(t *testing.T) {
 	f := swapPolicyFixture(t, capSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	hour := f.now.Truncate(time.Hour)
 	f.submittedChild(t, "used", "FILLED", "9", "9", "100", hour.Add(time.Second))
 	require.NoError(t, f.store.DBForTest().Exec(

@@ -31,8 +31,8 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", Name: "account-a", Exchange: "BINANCE",
-			Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT",
+			SpaceID: "space-1", TradingAccountID: "account-a", Name: "account-a", Exchange: "binance",
+			Markets: []string{"spot", "swap"}, ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED", Ready: true,
 			LeverageSettings: store.LeverageSettings{"*": "5"},
 			Snapshot: store.TradingAccountSnapshot{
@@ -58,13 +58,13 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 		}); err != nil {
 			return err
 		}
-		for _, item := range []struct{ market, base string }{{"SPOT", "BTC"}, {"SWAP", "BTC"}, {"SPOT", "ETH"}} {
+		for _, item := range []struct{ market, base string }{{"spot", "BTC"}, {"swap", "BTC"}, {"spot", "ETH"}} {
 			record := store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: item.market, ExchangeSymbol: item.base + "USDT",
-				InstrumentID: item.base + "-USDT-" + item.market, BaseAsset: item.base, QuoteAsset: "USDT", SettlementAsset: "USDT",
+				Exchange: "binance", MarketType: item.market, ExchangeSymbol: item.base + "USDT",
+				InstrumentID: item.base + "-USDT-" + exchange.InstrumentSuffix(item.market), BaseAsset: item.base, QuoteAsset: "USDT", SettlementAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}
-			if item.market == "SWAP" {
+			if item.market == "swap" {
 				record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", item.base
 			}
 			if err := tx.UpsertInstrument(record); err != nil {
@@ -86,7 +86,7 @@ func (f *targetFixture) setSpotBalance(asset, total string) {
 			balances = append(balances, balance)
 		}
 	}
-	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("SPOT")), Asset: asset, Available: total, Total: total})
+	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("spot")), Asset: asset, Available: total, Total: total})
 	account.Snapshot.Balances = balances
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
@@ -99,7 +99,7 @@ func (f *targetFixture) setSwapPosition(symbol, quantity string) {
 	f.t.Helper()
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP",
+			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap",
 			ExchangeSymbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
 			EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
 		})
@@ -118,7 +118,7 @@ func placedInstruments(f *targetFixture) []string {
 // 最后阶段处理完才定为 CONVERGED。阶段不存储，每轮从当前持仓推出。
 func TestStagesRunReduceThenSwapAddThenSpotBuy(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "0"},
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "5"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"},
@@ -162,7 +162,7 @@ func TestBlockedReduceDoesNotStallLaterStages(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	// ETH 的现货卖出金额低于最小名义金额，下不了单；合约加仓照常下。
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'ETH-USDT-SPOT'").Error)
-	f.target(t, []store.InstrumentTarget{
+	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "0"},
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "5"},
 	})
@@ -179,13 +179,13 @@ func TestBlockedReduceDoesNotStallLaterStages(t *testing.T) {
 func TestOnlyRestingOrdersConvergeWithRetryAfterValidUntil(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	// 持仓 10、目标 11：差额 1，簿上的挂单买 1 正好覆盖。
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "11"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "11"}})
 	f.now = time.Now().UTC()
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
-		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
+		ClientOrderID: "resting-1", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", Version: 1,
 		ReservedAsset: "USDT", ReservedQuantity: "90", RemainingReservedQuantity: "90",
@@ -203,12 +203,12 @@ func TestOnlyRestingOrdersConvergeWithRetryAfterValidUntil(t *testing.T) {
 // 目标过期时撤掉本目标簿上的挂单；上一份目标留下的挂单在新目标的阶段 1 撤掉。
 func TestExpiryAndNewTargetCancelRestingOrders(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	record := store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
-		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
+		ClientOrderID: "resting-1", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: string(orderdomain.Open), Version: 1,
 	}
@@ -266,7 +266,7 @@ func TestStandardAccountTransfersBeforeSpotBuyAndCollectsAfter(t *testing.T) {
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION',
 		c_credential_secret_id = 'secret-1', c_account_mode = 'BINANCE_STANDARD'`).Error)
 	f.setSpotBalance("ETH", "0")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
 	f.now = time.Now().UTC()
 	transfer := &fakeTransfer{beforePending: true}
 	executor := f.executor()
@@ -305,7 +305,7 @@ func TestStandardAccountTransfersBeforeSpotBuyAndCollectsAfter(t *testing.T) {
 func TestPaperAccountSkipsTransferStages(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSpotBalance("ETH", "0")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
 	f.now = time.Now().UTC()
 	transfer := &fakeTransfer{beforePending: true, collectPending: true}
 	executor := f.executor()
@@ -326,13 +326,13 @@ func TestPaperAccountSkipsTransferStages(t *testing.T) {
 // 上一份目标留下的挂单在新目标的阶段 1 撤掉，不带进新目标的差额。
 func TestNewTargetCancelsPreviousTargetRestingOrder(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
 	f.now = time.Now().UTC()
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
-		ClientOrderID: "old-resting", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
+		ClientOrderID: "old-resting", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "previous-target", State: "OPEN", Version: 1,
 	})
@@ -349,7 +349,7 @@ func TestArbitrageBaseSwapLegIsNotFlattenedToZero(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":["BTC"]}'`).Error)
 	f.setSwapPosition("BTCUSDT", "-5")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
 	f.now = time.Now().UTC()
 
 	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
@@ -361,8 +361,8 @@ func TestArbitrageBaseSwapLegIsNotFlattenedToZero(t *testing.T) {
 
 func restingEthOrder(target store.LogicalAccountTargetRecord) store.OrderRecord {
 	return store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-eth", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
-		ClientOrderID: "resting-eth", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		SpaceID: "space-1", OrderID: "resting-eth", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
+		ClientOrderID: "resting-eth", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "2", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", Version: 1,
 	}
@@ -371,7 +371,7 @@ func restingEthOrder(target store.LogicalAccountTargetRecord) store.OrderRecord 
 // ETH 挂单还没成交时，不阻塞其他标的：BTC 合约照常加仓，ETH 不再追加新单。
 func TestRestingOrderDoesNotBlockOtherInstruments(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SWAP", Quantity: "5"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SWAP", Quantity: "5"}})
 	f.now = time.Now().UTC()
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -387,7 +387,7 @@ func TestRestingOrderDoesNotBlockOtherInstruments(t *testing.T) {
 // BTC 到位后只剩 ETH 挂单：定为已收敛并设唤醒时间（到有效期末），不再每秒重算。
 func TestOnlyRestingLaneLeftConvergesWithWakeUp(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SWAP", Quantity: "5"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SWAP", Quantity: "5"}})
 	f.now = time.Now().UTC()
 	f.setSwapPosition("BTCUSDT", "5")
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
@@ -406,7 +406,7 @@ func TestOnlyRestingLaneLeftConvergesWithWakeUp(t *testing.T) {
 func TestBlockedWithRestingOrderWakesUpAndCancelsAtExpiry(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
 	f.now = time.Now().UTC()
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -430,7 +430,7 @@ func TestTransferScaleShrinksSpotBuy(t *testing.T) {
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION',
 		c_credential_secret_id = 'secret-1', c_account_mode = 'BINANCE_STANDARD'`).Error)
 	f.setSpotBalance("ETH", "0")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "4"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "4"}})
 	f.now = time.Now().UTC()
 	executor := f.executor()
 	executor.Transfers = &fakeTransfer{scale: map[string]shared.Decimal{"account-a": shared.MustDecimal("0.5")}}
@@ -446,7 +446,7 @@ func TestTransferScaleShrinksSpotBuy(t *testing.T) {
 func TestBrokenFundSettingsDoNotBlockFlatteningTarget(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"reserve_ratio":"oops"}'`).Error)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "0"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "0"}})
 	f.now = time.Now().UTC()
 
 	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
@@ -459,7 +459,7 @@ func TestBrokenFundSettingsDoNotBlockFlatteningTarget(t *testing.T) {
 // 到期撤挂单失败：目标保持原状并设重试唤醒（已收敛、已阻塞的目标不会被定时器扫到）。
 func TestExpiryCancelFailureSchedulesRetry(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, restingEthOrder(target))
@@ -490,7 +490,7 @@ func expiredTargetWithStuckOrder(t *testing.T, f *targetFixture) time.Time {
 	t.Helper()
 	telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, expiryStuckDetail("logical-1"))
 	t.Cleanup(func() { telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, expiryStuckDetail("logical-1")) })
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, restingEthOrder(target))
@@ -542,7 +542,7 @@ func TestExpiryCancelStuckTimerRestartsForAnotherTarget(t *testing.T) {
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next",
 		InstanceID: "runner-2", SessionID: "session-2", SessionStartedAt: sessionStartedAt("session-2"), StrategyID: "strategy-1",
 		BarEndTime: f.now.Add(-2 * time.Second).UnixMilli(), ValidUntil: f.now.Add(-time.Second).UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
+		Targets: []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 	})
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -561,7 +561,7 @@ func TestExpiryCancelStuckTimerRestartsForAnotherTarget(t *testing.T) {
 
 // 资金设置的数值字段坏了而底仓设置还在：执行器对空目标和已接收的目标都不平掉底仓的永续对冲腿。
 func TestBrokenNumericSettingStillKeepsArbitrageHedgeLeg(t *testing.T) {
-	for name, targets := range map[string][]store.InstrumentTarget{
+	for name, targets := range map[string][]store.InstrumentQuantity{
 		"空目标（清仓）": {},
 		"非空目标":    {{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}},
 	} {
@@ -585,7 +585,7 @@ func TestUnreadableExclusionSettingStopsExecutorFromTrading(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"margin_coins":["ETH"]}'`).Error)
 	f.setSwapPosition("BTCUSDT", "-5")
-	f.target(t, []store.InstrumentTarget{})
+	f.target(t, []store.InstrumentQuantity{})
 	f.now = time.Now().UTC()
 
 	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
@@ -601,7 +601,7 @@ func TestUnreadableExclusionSettingStopsExecutorFromTrading(t *testing.T) {
 // 到期撤单成功后写“已过期”失败：设重试唤醒，已收敛、已阻塞的目标不被定时扫描，不设会一直卡住。
 func TestExpiryStatusWriteFailureSchedulesRetry(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	f.order(t, restingEthOrder(target))

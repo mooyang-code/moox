@@ -9,13 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
-
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -49,7 +47,6 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		return respond(err.Error())
 	}
 	applyPlanFetchEnvironment(plan.Fetch)
-	httpclient.SetConnReuse(plan.Fetch.ConnReuse)
 	return h.RunPlan(ctx, plan, PlanRun{RequestID: requestID, FunctionName: functionName, Scheduled: scheduled, Entry: entry})
 }
 
@@ -91,11 +88,7 @@ func (h *Handler) RunPlan(ctx context.Context, plan *Plan, run PlanRun) (*model.
 	if len(planned) == 0 {
 		return respond(true, "no_work", nil)
 	}
-	standbyMS := plan.StandbyFor(scheduled)
-	connReuse := plan.Fetch.ConnReuse
 	for index := range planned {
-		planned[index].Request.StandbyMS = standbyMS
-		planned[index].Request.ConnReuse = connReuse
 		planned[index].Request.FetchLimits = plan.Fetch.Limits()
 	}
 	// 截止时间最近的先执行：整点同时到期多个频率时，短周期不能被长周期占去预算。

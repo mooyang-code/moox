@@ -6,21 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// series_tag 的形状校验：补写事件的 series_tags 按同一规则检查。
+// series_tag 的形状校验：完成事件里按序列的名单与行键同一套规则。
 func TestSeriesTagShapeValidation(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
 	tests := []struct {
 		name    string
 		tag     string
@@ -36,17 +30,8 @@ func TestSeriesTagShapeValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			start := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
-			payload := &storagepb.CollectorKlineBackfilled{
-				DatasetId: "dataset", Frequency: "1m", SubjectIds: []string{"BTC-USDT"}, Origin: "auto",
-				Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)), ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
-			}
-			if tt.tag != "" {
-				payload.SeriesTags = []string{tt.tag}
-			}
-			_, err := registry.Encode(CollectorKlineBackfilled, payload, validationOptions("backfill-event-1", "space", "dataset"))
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Encode() error = %v, wantErr %v", err, tt.wantErr)
+			if err := validateSeriesTag(tt.tag); (err != nil) != tt.wantErr {
+				t.Fatalf("validateSeriesTag() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -55,7 +40,7 @@ func TestSeriesTagShapeValidation(t *testing.T) {
 func TestStorageCompletionEventValidation(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	now := timestamppb.Now()
+	now := time.Now().UnixMilli()
 	tests := []struct {
 		name      string
 		event     Event
@@ -81,6 +66,13 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "complete has no failed subjects", event: DatasetPeriodCompleted, subjectID: "dataset",
+			payload: validLedgerPeriodCompleted(now),
+			mutate: func(value proto.Message) {
+				value.(*storagepb.DatasetPeriodCompleted).FailedSubjects = []string{"BTC-USDT"}
+			},
+		},
+		{
 			name: "ledger needs snapshot_ref", event: DatasetPeriodCompleted, subjectID: "dataset",
 			payload: validLedgerPeriodCompleted(now),
 			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).SnapshotRef = "" },
@@ -101,9 +93,9 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).DetailType = "" },
 		},
 		{
-			name: "view data ready route", event: ViewDataReady, subjectID: "view-1",
+			name: "view data ready route", event: ViewDataReady, subjectID: "dataset",
 			payload: validViewDataReady(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.ViewDataReady).ViewId = "other" },
+			mutate:  func(value proto.Message) { value.(*storagepb.ViewDataReady).DatasetId = "other" },
 		},
 	}
 
@@ -123,8 +115,8 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 func TestDatasetPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	payload := validLedgerPeriodCompleted(timestamppb.Now())
-	payload.UniverseSubjectIds, payload.UniverseSeries = nil, nil
+	payload := validLedgerPeriodCompleted(time.Now().UnixMilli())
+	payload.UniverseSubjectIds = nil
 	payload.Frequency = "1H"
 	payload.PeriodTime = 1
 	_, err = registry.Encode(DatasetPeriodCompleted, payload, validationOptions("event-1", "space", "dataset"))
@@ -135,7 +127,7 @@ func TestDatasetPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 func TestDatasetPeriodCompletedPassesOpaqueDetailThrough(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	payload := validProducerPeriodCompleted(timestamppb.Now())
+	payload := validProducerPeriodCompleted(time.Now().UnixMilli())
 	payload.Detail = []byte{0xff, 0x00, 0x01}
 	encoded, err := registry.Encode(DatasetPeriodCompleted, payload, validationOptions("event-1", "space", "dataset_result"))
 	require.NoError(t, err)
@@ -172,12 +164,6 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 		mutate  func(proto.Message)
 	}{
 		{
-			name: "host agent", event: ObservabilityHostSnapshotReported,
-			payload: &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
-			opts:    validationOptions("host-event-1", "mooxsys", "aB3x"),
-			mutate:  func(value proto.Message) { value.(*hostmetricpb.HostMetric).AgentId = "other" },
-		},
-		{
 			name: "metrics producer", event: ObservabilityMetricsSnapshotReported,
 			payload: &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage-1", Snapshot: &metricspb.MetricSnapshot{}},
 			opts:    validationOptions("metric-event-1", "mooxsys", "storage/storage-1"),
@@ -207,16 +193,16 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}}
+	payload := &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage-1", Snapshot: &metricspb.MetricSnapshot{}}
 	encoded, err := registry.Encode(
-		ObservabilityHostSnapshotReported,
+		ObservabilityMetricsSnapshotReported,
 		payload,
-		validationOptions("host-event-1", "mooxsys", "aB3x"),
+		validationOptions("metric-event-1", "mooxsys", "storage/storage-1"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload.AgentId = "bC4y"
+	payload.InstanceId = "other"
 	encoded.Message.Payload, err = proto.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +211,7 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := DecodeRaw(registry, raw, encoded.Subject, "host-event-1", ContentType); err == nil {
+	if _, _, err := DecodeRaw(registry, raw, encoded.Subject, "metric-event-1", ContentType); err == nil {
 		t.Fatal("DecodeRaw accepted mismatched payload identity")
 	}
 	if _, err := registry.SubjectForMessage(encoded.Message); err == nil {
@@ -241,5 +227,50 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	}
 	if rawPublisher.calls != 0 {
 		t.Fatalf("invalid message reached raw publisher %d times", rawPublisher.calls)
+	}
+}
+
+// 事件里的时刻都是 Unix 毫秒：0（没填）与负数（纪元之前）一律拒绝，信封与各事件体都一样。
+func TestEventTimesRejectZeroAndNegative(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	now := time.Now().UnixMilli()
+	for _, at := range []int64{0, -1} {
+		cases := map[string]struct {
+			event     Event
+			subjectID string
+			payload   proto.Message
+		}{
+			"period completed_at": {DatasetPeriodCompleted, "dataset", func() proto.Message { p := validLedgerPeriodCompleted(now); p.CompletedAt = at; return p }()},
+			"view ready_at":       {ViewDataReady, "dataset", func() proto.Message { p := validViewDataReady(now); p.ReadyAt = at; return p }()},
+			"backfilled confirmed_at": {CollectorKlineBackfilled, "dataset_src", &storagepb.CollectorKlineBackfilled{
+				DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: 1792576800, End: 1792580400, Origin: "auto", ConfirmedAt: at,
+			}},
+			"delist delist_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &storagepb.InstrumentDelistScheduled{
+				Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: at, FirstSeenAt: now, Source: DelistSourceManual, Scope: DelistScopeAll,
+			}},
+			"delist first_seen_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &storagepb.InstrumentDelistScheduled{
+				Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: now, FirstSeenAt: at, Source: DelistSourceManual, Scope: DelistScopeAll,
+			}},
+		}
+		for name, c := range cases {
+			_, err := registry.Encode(c.event, c.payload, validationOptions("event-1", "space", c.subjectID))
+			require.Error(t, err, "%s = %d", name, at)
+		}
+
+		// 信封：编码时拒绝纪元及之前的时刻，解码与校验时拒绝 0 与负数。
+		_, err := registry.Encode(DatasetPeriodCompleted, validLedgerPeriodCompleted(now), PublishOptions{
+			EventID: "event-1", OccurredAt: time.UnixMilli(at), SpaceID: "space", SubjectID: "dataset",
+		})
+		require.Error(t, err, "encode occurred_at = %d", at)
+		encoded, err := registry.Encode(DatasetPeriodCompleted, validLedgerPeriodCompleted(now), validationOptions("event-1", "space", "dataset"))
+		require.NoError(t, err)
+		encoded.Message.OccurredAt = at
+		_, err = registry.ValidateMessage(encoded.Message)
+		require.ErrorContains(t, err, "occurred_at", "validate occurred_at = %d", at)
+		raw, err := proto.Marshal(encoded.Message)
+		require.NoError(t, err)
+		_, _, err = DecodeRaw(registry, raw, encoded.Subject, "event-1", ContentType)
+		require.ErrorContains(t, err, "occurred_at", "decode occurred_at = %d", at)
 	}
 }

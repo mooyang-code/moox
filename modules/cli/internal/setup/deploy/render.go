@@ -253,10 +253,8 @@ func (r *renderer) eventBus(component servicecatalog.Component, environment map[
 		}
 		r.put(component.ID, "secrets/eventbus/"+role+".yaml", rendered, 0o600)
 	}
-	if component.ID != "host-agent" {
-		environment["MOOX_METRICS_EVENTBUS_URL"] = url
-		environment["MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"] = path.Join(directory, "metrics-publisher.yaml")
-	}
+	environment["MOOX_METRICS_EVENTBUS_URL"] = url
+	environment["MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE"] = path.Join(directory, "metrics-publisher.yaml")
 	if role := primaryRole(component); role != "" {
 		credential := path.Join(directory, role+".yaml")
 		environment["MOOX_EVENTBUS_URL"], environment["MOOX_EVENTBUS_CREDENTIAL_FILE"] = url, credential
@@ -377,8 +375,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 		switch id {
 		case "host-agent":
 			set("host_id", r.Host.Name)
-			set("identity_path", path.Join(data, "identity.yaml"))
-			set("eventbus_config", credential)
 			set("host_policy_path", layout.HostPolicy())
 			set("gateway_client", map[string]string{})
 			if err == nil {
@@ -424,10 +420,6 @@ func (r *renderer) configFile(component servicecatalog.Component, name string, r
 			set("eventbus.credential_file", credential)
 		case "trade":
 			set("database.path", path.Join(data, "moox_trade.db"))
-			set("eventbus.urls", []string{url})
-			set("eventbus.credential_file", credential)
-		case "callback-dispatcher":
-			set("database.path", path.Join(data, "moox_callback_dispatcher.db"))
 			set("eventbus.urls", []string{url})
 			set("eventbus.credential_file", credential)
 		case "factor-engine":

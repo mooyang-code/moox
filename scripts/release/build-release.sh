@@ -36,14 +36,14 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/moox-release.XXXXXX")"
 trap 'rm -rf "${STAGE}"' EXIT
 
 # 1. 服务器二进制。目标要覆盖服务目录里每个组件的 binary 与 tools（第 3 步按服务目录打包，缺文件会报出组件与文件名）：
-#    admin 带 moox-admin-cli，host-gateway 带 moox-host-gateway-cli，hostagent 带 moox-host-agent-cli，collector、factor-mgr、
+#    admin 带 moox-admin-cli，host-gateway 带 moox-host-gateway-cli，collector、factor-mgr、
 #    strategy、storage 各带自己的 CLI，archive-worker 在 Linux 上附带内置对象存储的 weed。
 BUNDLE="moox-${VERSION}"
 mkdir -p "${STAGE}/${BUNDLE}"
 git -C "${ROOT}" archive "${COMMIT}" | tar -x -C "${STAGE}/${BUNDLE}"
 
 server_targets=(admin host-gateway eventbus egress-proxy collector collector-stream collector-scf
-  factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade callback-dispatcher monitor
+  factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade monitor
   hostagent storage-cli storage)
 VERSION="${VERSION}" GIT_COMMIT="${COMMIT:0:8}" \
   bash "${ROOT}/scripts/build/build-linux-local.sh" --out "${STAGE}/binaries" "${server_targets[@]}"

@@ -10,14 +10,9 @@ const mocks = vi.hoisted(() => ({
   messageError: vi.fn()
 }));
 
-vi.mock("./composables/view-browse-catalog", () => ({ loadTargetedViewCatalog: mocks.catalog }));
+vi.mock("./composables/view-browse-catalog", () => ({ loadTargetedDatasets: mocks.catalog }));
 vi.mock("@/api/storage/metadata", () => ({
-  listDatasetColumns: vi.fn().mockResolvedValue({ columns: [] }),
-  listAllViewColumns: mocks.columns,
-  listFields: vi.fn().mockResolvedValue({ fields: [] }),
-  listFactors: vi.fn().mockResolvedValue({ factors: [] }),
-  listAllDatasets: vi.fn(),
-  listAllViews: vi.fn()
+  listAllDatasetColumns: mocks.columns
 }));
 vi.mock("@/api/storage/view", async importOriginal => ({
   isViewNotFoundError: (await importOriginal<typeof import("@/api/storage/view")>()).isViewNotFoundError,
@@ -30,6 +25,7 @@ vi.mock("@/store/modules/space", () => ({
 }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: mocks.messageError }, Modal: { confirm: vi.fn() } }));
 
+import { RequestError } from "@/api/http";
 import ViewBrowse from "./index.vue";
 
 function deferred<T>() {
@@ -66,7 +62,7 @@ function mountPage() {
     ].map(name => [name, true])
   );
   return shallowMount(ViewBrowse, {
-    props: { viewIds: ["view-known"], activeViewId: "view-known", refreshKey: 0 },
+    props: { datasetIds: ["dataset-known"], activeDatasetId: "dataset-known", refreshKey: 0 },
     global: {
       stubs: {
         ...stubs,
@@ -85,10 +81,7 @@ function rowKeys(wrapper: { vm: unknown }): string {
 
 describe("View result refresh", () => {
   beforeEach(() => {
-    mocks.catalog.mockReset().mockResolvedValue({
-      views: [{ view_id: "view-known", dataset_id: "dataset-known" }],
-      datasets: [{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]
-    });
+    mocks.catalog.mockReset().mockResolvedValue([{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]);
     mocks.columns.mockReset().mockResolvedValue([]);
     mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [{ key: { subject_id: "BTC", freq: "1m" } }] });
     mocks.queryRecords.mockReset().mockResolvedValue({ rows: [{ key: { record_id: "record-known" } }] });
@@ -103,16 +96,13 @@ describe("View result refresh", () => {
     await wrapper.setProps({ refreshKey: 1 });
     await flushPromises();
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(2);
-    expect(mocks.queryTimeSeries.mock.lastCall?.[0].view_id).toBe("view-known");
+    expect(mocks.queryTimeSeries.mock.lastCall?.[0].dataset_id).toBe("dataset-known");
     wrapper.unmount();
   });
 
   it.each(["time_series", "record"])("retains %s rows and marks them stale after a refresh error", async mode => {
     if (mode === "record") {
-      mocks.catalog.mockResolvedValue({
-        views: [{ view_id: "view-known", dataset_id: "dataset-known" }],
-        datasets: [{ dataset_id: "dataset-known", data_kind: "DATA_KIND_RECORD" }]
-      });
+      mocks.catalog.mockResolvedValue([{ dataset_id: "dataset-known", data_kind: "DATA_KIND_RECORD" }]);
     }
     const query = mode === "record" ? mocks.queryRecords : mocks.queryTimeSeries;
     const wrapper = mountPage();
@@ -138,8 +128,8 @@ describe("View result refresh", () => {
     vi.useFakeTimers();
     const wrapper = shallowMount(ViewBrowse, {
       props: {
-        viewIds: ["view-known"],
-        activeViewId: "view-known",
+        datasetIds: ["dataset-known"],
+        activeDatasetId: "dataset-known",
         refreshKey: 0,
         autoRefreshIntervalMs: 60_000
       },
@@ -152,7 +142,6 @@ describe("View result refresh", () => {
     await vi.advanceTimersByTimeAsync(0);
     await flushPromises();
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(1);
-    expect(mocks.queryTimeSeries.mock.lastCall?.[1]).toEqual({ silentError: true });
 
     // 手动刷新失败：页面提示一次（请求层静默，不会弹两次），错误条出现
     mocks.queryTimeSeries.mockRejectedValueOnce(new Error("Storage unavailable"));
@@ -182,7 +171,7 @@ describe("View result refresh", () => {
     vi.useFakeTimers();
     mocks.catalog.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = shallowMount(ViewBrowse, {
-      props: { viewIds: ["view-known"], activeViewId: "view-known", autoRefreshIntervalMs: 60_000 },
+      props: { datasetIds: ["dataset-known"], activeDatasetId: "dataset-known", autoRefreshIntervalMs: 60_000 },
       global: { stubs: { "a-alert": { template: "<div class='alert'><slot /></div>" } } }
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -245,18 +234,12 @@ describe("View result refresh", () => {
   });
 
   it("queues a refresh requested while the View catalog is still loading", async () => {
-    const catalog = deferred<{
-      views: { view_id: string; dataset_id: string }[];
-      datasets: { dataset_id: string; data_kind: string }[];
-    }>();
+    const catalog = deferred<{ dataset_id: string; data_kind: string }[]>();
     mocks.catalog.mockReturnValueOnce(catalog.promise);
     const wrapper = mountPage();
     await wrapper.setProps({ refreshKey: 1 });
     expect(mocks.queryTimeSeries).not.toHaveBeenCalled();
-    catalog.resolve({
-      views: [{ view_id: "view-known", dataset_id: "dataset-known" }],
-      datasets: [{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]
-    });
+    catalog.resolve([{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]);
     await flushPromises();
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(2);
     wrapper.unmount();
@@ -298,11 +281,11 @@ describe("View result refresh", () => {
 
 describe("View 索引状态", () => {
   beforeEach(() => {
-    mocks.catalog.mockReset().mockResolvedValue({
-      views: [{ view_id: "view-known", dataset_id: "dataset-known" }],
-      datasets: [{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]
-    });
-    mocks.columns.mockReset().mockResolvedValue([{ column_name: "open" }, { column_name: "close" }]);
+    mocks.catalog.mockReset().mockResolvedValue([{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]);
+    mocks.columns.mockReset().mockResolvedValue([
+      { column_name: "open", status: "active" },
+      { column_name: "close", status: "active" }
+    ]);
     mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [] });
     mocks.viewState.mockReset();
     mocks.messageError.mockReset();
@@ -321,7 +304,7 @@ describe("View 索引状态", () => {
     });
     const wrapper = mountPage();
     await flushPromises();
-    expect(mocks.viewState).toHaveBeenCalledWith({ space_id: "crypto", view_id: "view-known" }, { silentError: true });
+    expect(mocks.viewState).toHaveBeenCalledWith({ space_id: "crypto", dataset_id: "dataset-known" });
     expect(tagText(wrapper)).toBe("已构建");
     expect(wrapper.text()).toContain("已建列: 1/2");
     expect(wrapper.text()).toContain("覆盖: 2026-01-01 00:00:00");
@@ -335,7 +318,9 @@ describe("View 索引状态", () => {
     expect(tagText(wrapper)).toBe("构建中");
     expect(wrapper.text()).not.toContain("已建列");
 
-    mocks.viewState.mockRejectedValueOnce(Object.assign(new Error("not found"), { retCode: "VIEW_NOT_FOUND" }));
+    mocks.viewState.mockRejectedValueOnce(
+      new RequestError("not found", { ret_info: { code: "VIEW_NOT_FOUND", msg: "not found" } })
+    );
     await wrapper.setProps({ refreshKey: 1 });
     await flushPromises();
     expect(tagText(wrapper)).toBe("未构建");

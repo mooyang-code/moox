@@ -26,15 +26,15 @@ func (s *ledgerFills) ListFills(_ context.Context, _ string, query store.FillQue
 
 func TestPaperLedgerFromFills(t *testing.T) {
 	facts := &ledgerFills{fills: []store.FillRecord{
-		{FillID: "f2", ExchangeTradeID: "t2", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Fee: "0.02", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "1.5", TradedAt: 2_000},
-		{FillID: "f1", ExchangeTradeID: "t1", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", Fee: "0.01", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: 1_000},
+		{FillID: "f2", ExchangeTradeID: "t2", MarketType: "swap", ExchangeSymbol: "BTCUSDT", Fee: "0.02", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "1.5", TradedAt: 2_000},
+		{FillID: "f1", ExchangeTradeID: "t1", MarketType: "spot", ExchangeSymbol: "BTCUSDT", Fee: "0.01", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: 1_000},
 	}}
 	adapter := &Adapter{Account: store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "paper-1"}, Store: facts}
 	page, err := adapter.ListLedger(context.Background(), exchange.LedgerQuery{Market: exchange.MarketTypeSwap, Start: time.UnixMilli(0), End: time.UnixMilli(10_000), Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts.query.TradingAccountID != "paper-1" || facts.query.EndTime != 10_000 || facts.query.Market != "SWAP" {
+	if facts.query.TradingAccountID != "paper-1" || facts.query.EndTime != 10_000 || facts.query.Market != "swap" {
 		t.Fatalf("query = %+v", facts.query)
 	}
 	// 两笔成交生成 3 条流水（第二笔没有盈亏），只要 2 条，标记还有更多。
@@ -71,7 +71,7 @@ func (s *ledgerFillsAndFunding) ListPaperFundingFees(_ context.Context, _, _ str
 func TestPaperLedgerIncludesFundingFees(t *testing.T) {
 	facts := &ledgerFillsAndFunding{
 		ledgerFills: ledgerFills{fills: []store.FillRecord{
-			{FillID: "f1", ExchangeTradeID: "t1", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Fee: "0.02", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: 2_000},
+			{FillID: "f1", ExchangeTradeID: "t1", MarketType: "swap", ExchangeSymbol: "BTCUSDT", Fee: "0.02", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: 2_000},
 		}},
 		fees: []store.PaperFundingFeeRecord{
 			{ExchangeSymbol: "BTCUSDT", SettledAt: 3_000, FundingRate: "0.0001", MarkPrice: "50000", Quantity: "2", Amount: "-10", Asset: "USDT"},
@@ -110,7 +110,7 @@ func TestPaperLedgerIncludesFundingFees(t *testing.T) {
 func TestPaperLedgerCutsAtTheOldestFetchedFundingFee(t *testing.T) {
 	facts := &ledgerFillsAndFunding{
 		ledgerFills: ledgerFills{fills: []store.FillRecord{
-			{FillID: "f1", ExchangeTradeID: "t1", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Fee: "0.02", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: 1_000},
+			{FillID: "f1", ExchangeTradeID: "t1", MarketType: "swap", ExchangeSymbol: "BTCUSDT", Fee: "0.02", FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: 1_000},
 		}},
 		fees: []store.PaperFundingFeeRecord{
 			{ExchangeSymbol: "BTCUSDT", SettledAt: 5_000, Amount: "-1", Asset: "USDT"},
@@ -129,7 +129,7 @@ func TestPaperLedgerCutsAtTheOldestFetchedFundingFee(t *testing.T) {
 }
 
 func swapFill(id string, at int64, fee string) store.FillRecord {
-	return store.FillRecord{FillID: id, ExchangeTradeID: "t" + id, MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Fee: fee, FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: at}
+	return store.FillRecord{FillID: id, ExchangeTradeID: "t" + id, MarketType: "swap", ExchangeSymbol: "BTCUSDT", Fee: fee, FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: at}
 }
 
 func fundingFee(at int64) store.PaperFundingFeeRecord {

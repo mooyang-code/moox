@@ -10,7 +10,7 @@ for (const method of ["GetCatalog", "ListHosts", "ListDeployments", "GetHostRout
   if (!api.includes(`"${method}"`)) throw new Error(`deployment API missing ${method}`);
 }
 // 机器和部署的变更只通过 moox skill，控制台不再调用写接口。
-for (const retired of ["SetHostStatus", "SetDeploymentStatus", "ListServiceDeployments", "CreateServiceDeployment", "UpdateServiceDeployment", "DeleteServiceDeployment", "ListGatewayNodes", "CreateGatewayNode", "GetGatewayNodeRoutes"]) {
+for (const retired of ["SetHostStatus", "SetDeploymentStatus", "SyncTopology", "ListServiceDeployments", "CreateServiceDeployment", "UpdateServiceDeployment", "DeleteServiceDeployment", "ListGatewayNodes", "CreateGatewayNode", "GetGatewayNodeRoutes"]) {
   if (api.includes(retired)) throw new Error(`retired API remains: ${retired}`);
   if (source.includes(retired)) throw new Error(`retired API used by page: ${retired}`);
 }

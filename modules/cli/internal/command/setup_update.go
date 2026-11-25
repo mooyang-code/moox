@@ -16,16 +16,16 @@ import (
 
 // updateStepKinds 是覆盖更新要做的步骤：安装步骤里去掉初始化、启动空间与验收，部署顺序和安装一致。
 // 不跑 setup init（含 --stage storage）：它会按种子写回业务空间与元数据；不跑 setup start：它会重新启用手工停用的任务、重建云函数。
-var updateStepKinds = []string{installOperator, installFirewall, installDeploy, installReady, installBackup}
+var updateStepKinds = []string{installOperator, installFirewall, installDeploy, installReady}
 
 // setupUpdateSteps 排出覆盖更新的顺序：和安装同样先装控制机的 Admin 与主机级组件、再装带 EventBus 与 Storage 的主机，
-// 然后控制机其余组件和其余主机（外部程序所在的排最后），统一等一次就绪，最后备份配置。
+// 然后控制机其余组件和其余主机（外部程序所在的排最后），最后统一等一次就绪。
 func setupUpdateSteps(manifest *topology.Config) []setupInstallStep {
 	return slices.DeleteFunc(setupInstallSteps(manifest, ""), func(step setupInstallStep) bool { return !slices.Contains(updateStepKinds, step.Kind) })
 }
 
 // setupUpdateNote 是覆盖更新预览里固定的说明：不做的事和它们的代价。
-const setupUpdateNote = "数据保留；不初始化、不启动空间：手工停用的任务和组件保持停用。新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位，" +
+const setupUpdateNote = "数据保留；不初始化、不启动空间：手工停用的任务保持停用，组件按 moox.toml 的声明启停（setup stop 临时停掉的会被重新拉起）。新版本带来的业务空间、数据集、内置采集任务和云函数代码包不会随覆盖更新到位，" +
 	"在 moox.toml 里新开了云函数采集、日志服务或换了云账号也不会生效，需要时再运行 setup init（只建不改）。" +
 	"配置每次部署都从这个版本的模板重新渲染，手工调过的值要写在 [overrides] 里才会保留"
 
@@ -98,10 +98,10 @@ func newSetupUpdateCommand(deps setupDeps) *cobra.Command {
 		Short: "覆盖更新已装好的系统：按安装顺序把这个版本的程序和配置重新部署到全部主机，数据保留（默认只预览）",
 		Long: `不带 --yes 只读预览：每台主机要更新、新装（moox.toml 里新加的组件或主机）、删掉（moox.toml 里去掉的组件）的组件，以及执行步骤。
 带 --yes 按顺序执行：准备这台电脑的操作身份、放行防火墙、控制机先装 Admin、主机网关与 HostAgent，再装带 EventBus、Storage 的主机，
-然后控制机其余组件和其余主机，统一等一次全部组件就绪，最后备份配置。每台主机只重启二进制或配置有变化的组件，用 setup stop 停掉的组件保持停用。
+然后控制机其余组件和其余主机，最后统一等一次全部组件就绪。每台主机只重启二进制或配置有变化的组件，组件按 moox.toml 的声明启停（[deployments_disabled] 与停用的主机），主机与部署的登记按 moox.toml 整份覆盖 Admin。
 不初始化（不写业务空间、元数据、初始秘密和告警渠道）、不启动空间（手工停用的任务保持停用，不重建云函数），数据目录不动；
 新版本带来的空间、数据集、内置任务和云函数代码包，以及 moox.toml 里新开的云函数采集、日志服务、换的云账号，要再运行 setup init 才到位。
-组件换了主机时旧主机上的会停掉删除，新主机上从空数据开始，数据不迁移（预览的 moves 单列）。备份配置失败只提醒，不算更新失败。
+组件换了主机时旧主机上的会停掉删除，新主机上从空数据开始，数据不迁移（预览的 moves 单列）。
 控制机或存储机还没装过时拒绝执行：那是安装没做完，重跑 setup install。中途失败修好后重跑同一条命令，每一步都可以重做。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -135,16 +135,10 @@ func newSetupUpdateCommand(deps setupDeps) *cobra.Command {
 				return fmt.Errorf("manual_steps_required: 先做完这些再重跑：%s", strings.Join(status.ManualSteps, "；"))
 			}
 			started := time.Now()
-			// 最后一步是备份配置：它用秘密文件里的管理员密码登录，用户在管理台改过密码时会失败，这不影响已经部署好的主机，只提醒。
-			last := len(steps) - 1
-			if err := runSetupSteps(cmd, deps, snapshot, options, steps[:last], len(steps), "update_step_failed"); err != nil {
+			if err := runSetupSteps(cmd, deps, snapshot, options, steps, len(steps), "update_step_failed"); err != nil {
 				return err
 			}
 			result := map[string]any{"status": "updated"}
-			fmt.Fprintf(cmd.ErrOrStderr(), "[%d/%d] %s\n", len(steps), len(steps), steps[last].Command)
-			if err := executeSetupInstallStep(cmd, deps, snapshot, options, steps[last]); err != nil {
-				result["warnings"] = []string{fmt.Sprintf("全部主机已更新，但备份配置失败：%v。之后可以单独运行 %s", err, steps[last].Command)}
-			}
 			result["seconds"] = time.Since(started).Round(time.Second).Seconds()
 			return writeSetupJSON(cmd, result)
 		},

@@ -1,4 +1,4 @@
-.PHONY: check-timer-startup build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-seed-contract test-build-linux-local-contract test-build-version-contract test-collector-scf-package-contract test-release-bundle-manifest test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-moox-ca package-skill clean proto
+.PHONY: check-timer-startup build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-proto-time-fields check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-seed-contract test-build-linux-local-contract test-build-version-contract test-collector-scf-package-contract test-release-bundle-manifest test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-moox-ca package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -19,6 +19,10 @@ check-timer-startup:
 
 check-module-boundaries:
 	./scripts/check/check-module-boundaries.sh
+
+check-proto-time-fields:
+	bash scripts/test/contract/test-check-proto-time-fields.sh
+	./scripts/check/check-proto-time-fields.sh
 
 check-package-boundaries:
 	./scripts/check/check-package-boundaries.sh
@@ -112,7 +116,7 @@ PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 # 新增检查时放进某一组，verify 与各组自动保持一致。组之间互不依赖：需要前端依赖的检查都放在 web 组，由 test-web 先安装。
 VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles check-go-module-graph $(PROTO_CHECK) test-greenfield-contract
 VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-seed-contract test-build-linux-local-contract test-build-version-contract test-collector-scf-package-contract test-release-bundle-manifest test-e2e-gates
-VERIFY_CORE_CHECKS := check-boundaries test-quality-gates test-docs-architecture test-moox-ca test-skill-contracts
+VERIFY_CORE_CHECKS := check-boundaries check-proto-time-fields test-quality-gates test-docs-architecture test-moox-ca test-skill-contracts
 VERIFY_STORAGE_CHECKS := test-storage-boundary test-storage-consistency
 
 verify-pr: $(VERIFY_PR_UNITS) $(VERIFY_PR_CONTRACTS)
@@ -163,20 +167,19 @@ package-skill:
 
 proto:
 	$(MAKE) -C packages/commonpb all
-	$(MAKE) -C packages/gatewayroute/proto all
+	$(MAKE) -C packages/gatewayclient/directorypb all
 	$(MAKE) -C packages/metricspb all
 	$(MAKE) -C packages/hostmetricpb all
 	$(MAKE) -C packages/tradeeventpb all
 	$(MAKE) -C packages/storagepb generate
 	$(MAKE) -C packages/events all
-	$(MAKE) -C packages/marketfetchpb all
+	$(MAKE) -C modules/collector/internal/marketfetchpb all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all
 	$(MAKE) -C modules/collector/proto all
 	$(MAKE) -C modules/egressproxy/proto all
 	$(MAKE) -C modules/factor/proto all
-	$(MAKE) -C modules/callbackdispatcher/proto all
 	$(MAKE) -C modules/monitor/proto all
 	$(MAKE) -C modules/eventbus/proto all
 	$(MAKE) -C modules/hostagent/proto all
@@ -193,7 +196,7 @@ test-deployment-packages:
 
 .PHONY: test-host-deployment
 test-host-deployment:
-	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostDeployments|TestDoctorDeployments'
+	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncTopology|TestDoctorDeployments'
 
 .PHONY: test-host-identity-bundles
 test-host-identity-bundles:

@@ -13,7 +13,7 @@ fail() {
 
 [[ -f "${REFERENCE}" ]] || fail "eventbus credentials reference is missing"
 grep -Fq 'references/eventbus-credentials.md' "${SKILL}" || fail "SKILL.md does not route EventBus rotation to the reference"
-grep -Fq '控制机上的 `export` 不会更新其他主机的 Host Agent' "${SKILL}" || fail "SKILL.md does not say control export skips remote Host Agents"
+grep -Fq '控制机上的 `export` 不会更新其他主机上的组件' "${SKILL}" || fail "SKILL.md does not say control export skips remote hosts"
 
 description="$(sed -n 's/^description: //p' "${SKILL}" | head -1)"
 for trigger in 'EventBus rotate' 'Authorization Violation' 'FIN-WAIT-2' 'certificate signature failure'; do
@@ -40,6 +40,6 @@ if grep -Eq 'BEGIN CERTIFICATE|NATS_PASSWORD|password:' "${REFERENCE}"; then
 fi
 
 grep -Fq 'setup deploy --host' "${HOST_AGENT}" || fail "host-agent.md does not document redeploying every host"
-grep -Fq 'eventbus-credentials.md' "${HOST_AGENT}" || fail "host-agent.md does not point at EventBus fan-out"
+grep -Fq "没有 EventBus 令牌" "${HOST_AGENT}" || fail "host-agent.md does not say Host Agent has no EventBus token"
 
 echo 'PASS: skill eventbus credentials contract'

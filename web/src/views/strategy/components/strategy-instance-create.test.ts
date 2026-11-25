@@ -11,8 +11,7 @@ const api = vi.hoisted(() => ({
   listInstances: vi.fn(),
   listFactorTasks: vi.fn(),
   listLogicalAccounts: vi.fn(),
-  listTradingAccounts: vi.fn(async () => ({ accounts: [] })),
-  listAllDatasets: vi.fn()
+  listTradingAccounts: vi.fn(async () => ({ accounts: [] }))
 }));
 vi.mock("@/api/strategy", () => ({
   createInstance: api.createInstance,
@@ -21,8 +20,14 @@ vi.mock("@/api/strategy", () => ({
   listInstances: api.listInstances,
   validateStrategy: api.validateStrategy
 }));
-vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
-vi.mock("@/api/storage/metadata", () => ({ listAllDatasets: api.listAllDatasets }));
+// 要绑定的任务由后端按 DSL 推出：测试里按登记的定义模拟
+vi.mock("@/views/strategy/use-task-requirement", async () => ({
+  useTaskRequirement: (await import("../../../../tests/strategy-requirement")).useFixtureTaskRequirement
+}));
+vi.mock("@/api/factor", async () => {
+  const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
+  return { listFactorTasks: api.listFactorTasks, listAllFactorTasks: allFactorTasksFrom(api.listFactorTasks) };
+});
 vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts, listTradingAccounts: api.listTradingAccounts }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
@@ -97,6 +102,10 @@ describe("strategy instance creation behavior", () => {
 
   async function open(overrides: Record<string, unknown> = {}) {
     const { flushPromises, mount } = await import("@vue/test-utils");
+    const { fixtureDefinitions } = await import("../../../../tests/strategy-requirement");
+    fixtureDefinitions.clear();
+    for (const item of (overrides.strategies ?? strategies) as { strategy_id: string; dsl_yaml: string }[])
+      fixtureDefinitions.set(item.strategy_id, item.dsl_yaml);
     const Create = (await import("./strategy-instance-create.vue")).default;
     const wrapper = mount(Create, {
       props: { visible: false, strategies, spaceId: "crypto", ...overrides } as never,
@@ -136,7 +145,6 @@ describe("strategy instance creation behavior", () => {
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
     api.listInstances.mockReset().mockResolvedValue({ items: [], page: { total: 0 } });
-    api.listAllDatasets.mockReset().mockResolvedValue([]);
   });
 
   // 运行模式的单选组是页面里最后一个单选组（前面可能还有“输入方式”）。
@@ -176,6 +184,8 @@ describe("strategy instance creation behavior", () => {
     };
     const { wrapper, flushPromises } = await open({ strategies: [withSources], presetStrategyId: "s2" });
     expect(wrapper.text()).toContain("参考市场 现货 的计算任务只用于 age_markets: all 的年龄判定");
+    // 主帧只有永续：不说成现货、永续两个主帧任务
+    expect(wrapper.text()).toContain("策略的市场模式需要绑定：永续 的计算任务");
     expect(wrapper.text()).toContain("附加来源 daily（1d）");
     expect(wrapper.text()).toContain("按主帧的市场各绑一个计算任务");
     const selects = wrapper.findAll("select");
@@ -275,7 +285,7 @@ describe("strategy instance creation behavior", () => {
 
   it("shows the account failure with a retry in trade mode and blocks submission without an account", async () => {
     api.listLogicalAccounts.mockRejectedValueOnce(new Error("账户服务不可用")).mockResolvedValueOnce({
-      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [2] }],
+      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: ["swap"] }],
       page_result: { has_more: false }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
@@ -314,8 +324,8 @@ describe("strategy instance creation behavior", () => {
   it("lists only stock accounts for A-share instances", async () => {
     api.listLogicalAccounts.mockResolvedValue({
       logical_accounts: [
-        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [1] },
-        { logical_account_id: "acc2", name: "A 股模拟", space_id: "crypto", control_mode: 1, markets: [3] }
+        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: ["spot"] },
+        { logical_account_id: "acc2", name: "A 股模拟", space_id: "crypto", control_mode: 1, markets: ["equity"] }
       ],
       page_result: { has_more: false }
     });
@@ -344,8 +354,8 @@ describe("strategy instance creation behavior", () => {
   it("已被启用实例绑定的账户显示但不可选，绑定关系读 Strategy 的实例列表", async () => {
     api.listLogicalAccounts.mockResolvedValue({
       logical_accounts: [
-        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [2] },
-        { logical_account_id: "acc2", name: "账户二", space_id: "crypto", control_mode: 1, markets: [2] }
+        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: ["swap"] },
+        { logical_account_id: "acc2", name: "账户二", space_id: "crypto", control_mode: 1, markets: ["swap"] }
       ],
       page_result: { has_more: false }
     });
@@ -438,69 +448,6 @@ describe("strategy instance creation behavior", () => {
     expect(sourceOption.text()).toContain("有可变成员，不可选");
     expect(option(sourced.wrapper, 2, "ftask_fixed").attributes("disabled")).toBeUndefined();
     expect(sourced.wrapper.text()).toContain("附加来源的任务不能有可变成员");
-  });
-
-  describe("统一数据集上的任务（方式 B）", () => {
-    const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
-    const unifiedTasks = () => {
-      api.listFactorTasks.mockResolvedValue({
-        factor_tasks: [
-          taskInfo({ name: "统一因子", source_dataset_id: "ds_uni" }, "ftask_uni"),
-          taskInfo({ name: "现货因子", source_dataset_id: "ds_spot" }, "ftask_spot"),
-          taskInfo({ name: "永续因子", source_dataset_id: "ds_swap" }, "ftask_swap")
-        ],
-        page_result: { has_more: false }
-      });
-      api.listAllDatasets.mockResolvedValue([
-        { dataset_id: "ds_uni", attributes: { market_type: "multi" } },
-        { dataset_id: "ds_spot", attributes: { market_type: "spot" } },
-        { dataset_id: "ds_swap", attributes: {} }
-      ]);
-    };
-    const optionValues = (select: { findAll: (selector: string) => any[] }) =>
-      select.findAll("option").map(item => item.attributes("value"));
-
-    it("lets a strategy with market pick one task on a unified dataset and registers it as multi", async () => {
-      unifiedTasks();
-      const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: mixed });
-      // 分开的方式里只列单市场数据集上的任务。
-      expect(optionValues(wrapper.findAll("select")[1])).not.toContain("ftask_uni");
-      wrapper.findAllComponents({ name: "RadioGroupStub" })[0].vm.$emit("update:modelValue", "unified");
-      await flushPromises();
-      const selects = wrapper.findAll("select");
-      // 定义、统一数据集任务两个选择框，只列统一数据集上的任务。
-      expect(selects).toHaveLength(2);
-      expect(optionValues(selects[1]).filter(Boolean)).toEqual(["ftask_uni"]);
-      await selects[1].setValue("ftask_uni");
-      await precheck(wrapper, flushPromises);
-      await wrapper
-        .findAll("button")
-        .find(item => item.text() === "创建停用实例")!
-        .trigger("click");
-      await flushPromises();
-      expect(api.validateStrategy).toHaveBeenCalledWith(mixed[0].dsl_yaml, { multi: "ftask_uni" });
-      expect(api.createInstance).toHaveBeenCalledWith({
-        instance_id: undefined,
-        strategy_id: "s1",
-        factor_tasks: { multi: "ftask_uni" },
-        logical_account_id: ""
-      });
-    });
-
-    it("does not offer unified datasets to a strategy without market", async () => {
-      unifiedTasks();
-      const noMarket = [{ ...strategies[0], dsl_yaml: "name: demo\n" }];
-      const { wrapper } = await open({ presetStrategyId: "s1", strategies: noMarket });
-      expect(wrapper.text()).not.toContain("统一数据集上的一个计算任务");
-    });
-
-    it("keeps listing every task and says so when the datasets cannot be read", async () => {
-      unifiedTasks();
-      api.listAllDatasets.mockRejectedValue(new Error("存储服务不可用"));
-      const { wrapper } = await open({ presetStrategyId: "s1", strategies: mixed });
-      expect(wrapper.text()).toContain("数据集信息读取失败（存储服务不可用）");
-      expect(optionValues(wrapper.findAll("select")[1])).toContain("ftask_uni");
-    });
   });
 
   it("prechecks a mixed-market strategy with both tasks", async () => {
@@ -631,8 +578,8 @@ describe("strategy instance creation behavior", () => {
   it("预检后账户列表收窄：已选的账户不在新列表里时清掉", async () => {
     api.listLogicalAccounts.mockResolvedValue({
       logical_accounts: [
-        { logical_account_id: "acc_swap", name: "永续户", space_id: "crypto", control_mode: 1, markets: [2] },
-        { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: [1, 2] }
+        { logical_account_id: "acc_swap", name: "永续户", space_id: "crypto", control_mode: 1, markets: ["swap"] },
+        { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: ["spot", "swap"] }
       ],
       page_result: { has_more: false }
     });
@@ -662,7 +609,9 @@ describe("strategy instance creation behavior", () => {
 
   it("预检前按 DSL 的市场先筛账户；一个都没有时写原因", async () => {
     api.listLogicalAccounts.mockResolvedValue({
-      logical_accounts: [{ logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: [1] }],
+      logical_accounts: [
+        { logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: ["spot"] }
+      ],
       page_result: { has_more: false }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
@@ -747,8 +696,8 @@ describe("strategy instance creation behavior", () => {
     it("还没预检时账户就按成员市场的并集过滤：只列出可交易市场包含现货与永续的账户", async () => {
       api.listLogicalAccounts.mockResolvedValue({
         logical_accounts: [
-          { logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: [1] },
-          { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: [1, 2] }
+          { logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: ["spot"] },
+          { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: ["spot", "swap"] }
         ],
         page_result: { has_more: false }
       });
@@ -762,21 +711,13 @@ describe("strategy instance creation behavior", () => {
       expect(accountSelect.findAll("option").map(item => item.attributes("value"))).toEqual(["", "acc_both"]);
     });
 
-    it("成员定义不在目录里时按需读取；读取成功后按它的市场解析", async () => {
-      api.getStrategy.mockResolvedValue(spotMember);
-      const { wrapper } = await open({ presetStrategyId: "pool", strategies: [pool("s_spot")] });
-      expect(api.getStrategy).toHaveBeenCalledWith("s_spot");
-      expect(wrapper.text()).not.toContain("暂不能创建");
-      expect(wrapper.findAll("select")).toHaveLength(2);
-    });
-
     it("成员定义缺失时给出中文提示并禁止提交", async () => {
       const { wrapper, flushPromises } = await open({ presetStrategyId: "pool", strategies: [pool("s_gone")] });
       expect(wrapper.text()).toContain("成员 m0 引用的策略 s_gone 不存在（定义已删除，或读取失败）");
       expect(wrapper.findAll("select")).toHaveLength(1);
       await create(wrapper).trigger("click");
       await flushPromises();
-      expect(wrapper.text()).toContain("策略池的成员还不能用");
+      expect(wrapper.text()).toContain("这份定义暂不能建实例");
       expect(api.createInstance).not.toHaveBeenCalled();
       expect(api.validateStrategy).not.toHaveBeenCalled();
     });

@@ -48,7 +48,6 @@ func TestSignedTLSControlProtocolAndProcessIdentity(t *testing.T) {
 			raw := testsnapshot.New(t, hostID)
 			var mu sync.Mutex
 			seen := map[string]bool{}
-			reports := make(chan *pb.ReportStatusReq, 4)
 			testrpc.Serve(t, opened, servicecatalog.GatewayControlPath, func(ctx context.Context, body []byte) ([]byte, error) {
 				message := codec.Message(ctx)
 				method := strings.TrimPrefix(message.ServerRPCName(), "/"+servicecatalog.GatewayControlPath+"/")
@@ -73,22 +72,17 @@ func TestSignedTLSControlProtocolAndProcessIdentity(t *testing.T) {
 					mu.Unlock()
 					require.False(t, duplicate)
 				}
-				if method == "PullSnapshot" {
-					req := &pb.PullSnapshotReq{}
-					require.NoError(t, proto.Unmarshal(body, req))
-					require.Equal(t, hostID, req.HostId)
-					rsp := &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}
-					if req.CurrentHash != raw.Hash {
-						rsp.Changed, rsp.Snapshot = true, raw
-					}
-					return proto.Marshal(rsp)
-				}
-				req := &pb.ReportStatusReq{}
+				require.Equal(t, "PullSnapshot", method)
+				req := &pb.PullSnapshotReq{}
 				require.NoError(t, proto.Unmarshal(body, req))
-				reports <- req
-				return proto.Marshal(&pb.ReportStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
+				require.Equal(t, hostID, req.HostId)
+				rsp := &pb.PullSnapshotRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}
+				if req.CurrentHash != raw.Hash {
+					rsp.Changed, rsp.Snapshot = true, raw
+				}
+				return proto.Marshal(rsp)
 			})
-			c, err := NewRPC(cfg, material, credential, "test-version")
+			c, err := NewRPC(cfg, material, credential)
 			require.NoError(t, err)
 			defer c.Close()
 			view, err := c.Pull(context.Background(), "")
@@ -97,15 +91,6 @@ func TestSignedTLSControlProtocolAndProcessIdentity(t *testing.T) {
 			unchanged, err := c.Pull(context.Background(), view.Hash())
 			require.NoError(t, err)
 			require.Nil(t, unchanged)
-			require.NoError(t, c.Report(context.Background(), view.Hash(), int32(view.Count()), ""))
-			report := <-reports
-			require.Equal(t, c.InstanceID(), report.InstanceId)
-			require.Equal(t, "test-version", report.Version)
-			require.Equal(t, hostID, report.HostId)
-			other, err := NewRPC(cfg, material, credential, "test-version")
-			require.NoError(t, err)
-			require.NotEqual(t, c.InstanceID(), other.InstanceID())
-			require.NoError(t, other.Close())
 			require.NoError(t, c.Close())
 			_, err = c.Pull(context.Background(), "")
 			require.Error(t, err)

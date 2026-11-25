@@ -12,41 +12,24 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// ListManagedInstruments 返回账户上有成交的策略或人工订单涉及的标的。
-// 这些是 MooX 买过的标的，目标不再包含时要能卖掉。
-func (s *Store) ListManagedInstruments(ctx context.Context, spaceID, tradingAccountID string) ([]string, error) {
-	var instruments []string
-	err := s.db.WithContext(ctx).Raw(queryManagedInstruments, spaceID, tradingAccountID).Scan(&instruments).Error
-	return instruments, err
-}
-
-// queryManagedInstruments 的条件与部分覆盖索引 idx_trade_orders_managed_instruments 的 WHERE 逐项一致（含 IN 列表的次序），
-// 规划器才会用它：只读索引里有成交的策略、人工订单，不扫账户全部订单，也不回表。
-const queryManagedInstruments = `SELECT DISTINCT c_instrument_id
-	FROM t_trade_orders
-	WHERE c_space_id = ? AND c_trading_account_id = ?
-		AND c_owner_type IN ('TARGET', 'OPERATOR') AND c_filled_quantity != '0' AND c_instrument_id != ''`
-
 // ManagedAssets 返回持仓来自余额的账户里归 MooX 管理的资产：结算资产、当前目标里的标的、
-// 有成交的策略或人工订单涉及的标的，再减去组合资金设置里的排除资产
+// 标的汇总里受管的标的（有过策略或人工订单的成交，见 ManagedSymbolKeys），再减去组合资金设置里的排除资产
 // （BNB 保留、稳定币保证金、保证金币、底仓）。其他资产不估值，也不卖出。
 func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID string) (map[string]struct{}, error) {
 	account, err := s.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return nil, err
 	}
-	// 没开通现货类市场的账户（纯永续）只有结算资产受管：合约标的不会让基础资产受管，不必扫订单历史。
+	// 没开通现货类市场的账户（纯永续）只有结算资产受管：合约标的不会让基础资产受管，不必读标的汇总。
 	if !account.HasBalanceMarket() {
 		return map[string]struct{}{account.SettlementAsset: {}}, nil
 	}
-	instrumentIDs, err := s.ListManagedInstruments(ctx, spaceID, tradingAccountID)
+	managedKeys, err := s.ManagedSymbolKeys(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return nil, err
 	}
-	managed := make(map[string]struct{}, len(instrumentIDs))
-	for _, instrumentID := range instrumentIDs {
-		managed[instrumentID] = struct{}{}
-	}
+	// targetInstruments 是当前目标里的标的（按标的 ID）。
+	targetInstruments := map[string]struct{}{}
 	// 设置按账户所属组合读（含停用成员，和清仓同一个入口）：数值字段坏了按默认处理，排除字段坏了报错、不下单。
 	settings, settingsErr := s.FundSettingsForAccount(ctx, spaceID, tradingAccountID)
 	if settingsErr != nil {
@@ -63,7 +46,7 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 			return nil, targetErr
 		}
 		for _, current := range target.Targets {
-			managed[current.InstrumentID] = struct{}{}
+			targetInstruments[current.InstrumentID] = struct{}{}
 		}
 	}
 	instruments, err := s.ListInstrumentsForAccount(ctx, tradingAccountID)
@@ -77,7 +60,9 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
 			continue
 		}
-		if _, ok := managed[instrument.InstrumentID]; ok && !settings.ExcludedFromManaged(instrument.BaseAsset) {
+		_, traded := managedKeys[exchange.NewSymbolKey(exchange.MarketType(instrument.MarketType), instrument.ExchangeSymbol)]
+		_, targeted := targetInstruments[instrument.InstrumentID]
+		if (traded || targeted) && !settings.ExcludedFromManaged(instrument.BaseAsset) {
 			assets[instrument.BaseAsset] = struct{}{}
 		}
 	}

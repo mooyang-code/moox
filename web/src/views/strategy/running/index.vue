@@ -1,17 +1,18 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <a-alert v-if="store.instancesError" type="error" show-icon class="top-alert"
-        >实例加载失败：{{ store.instancesError
+      <a-alert v-if="instanceList.instancesError" type="error" show-icon class="top-alert"
+        >实例加载失败：{{ instanceList.instancesError
         }}<template #action><a-button size="small" @click="refresh()">重试</a-button></template></a-alert
       >
       <a-alert v-if="store.catalogError" type="warning" show-icon class="top-alert"
         >策略定义目录加载失败，定义名称与筛选项可能不完整：{{ store.catalogError
         }}<template #action><a-button size="small" @click="loadCatalog">重试</a-button></template></a-alert
       >
+      <ActiveReplays />
       <div class="result-toolbar">
         <span class="result-count">
-          共 {{ store.totalInstances }} 个实例<span v-if="readAt">；状态读取：{{ readAt }}</span>
+          共 {{ instanceList.totalInstances }} 个实例<span v-if="readAt">；状态读取：{{ readAt }}</span>
           <InfoTip
             text="实例绑定一个定义、一个 View 和可选的组合账户；启用后由 View 就绪事件驱动计算，结果在「运行结果」查看。"
           />
@@ -32,7 +33,7 @@
             ><a-option value="true">已启用</a-option><a-option value="false">已停用</a-option></a-select
           >
           <a-button @click="reset">重置</a-button>
-          <a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="manualRefresh"
+          <a-button :loading="instanceList.instancesLoading" aria-label="刷新实例" @click="manualRefresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
           <a-button type="primary" status="success" :disabled="!spaceStore.selectedSpaceId" @click="openCreate"
@@ -42,8 +43,8 @@
       </div>
       <a-table
         row-key="instance_id"
-        :data="store.instances"
-        :loading="store.instancesLoading"
+        :data="instanceList.instances"
+        :loading="instanceList.instancesLoading"
         :pagination="pagination"
         :scroll="{ x: 940 }"
         @page-change="changePage"
@@ -172,6 +173,8 @@ import {
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { usePolling } from "@/hooks/usePolling";
+import ActiveReplays from "./active-replays.vue";
+import { useInstanceList } from "@/views/strategy/use-instance-list";
 
 // 页面时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
@@ -182,6 +185,7 @@ const PAGE_SIZE = 20;
 const router = useRouter();
 const route = useRoute();
 const store = useStrategyStore();
+const instanceList = useInstanceList();
 const spaceStore = useSpaceStore();
 const logicalNames = ref<Record<string, string>>({});
 void listLogicalAccounts({ page: 1, size: 500 })
@@ -192,16 +196,16 @@ void listLogicalAccounts({ page: 1, size: 500 })
 // URL 是筛选、分页、快速详情与创建抽屉的唯一来源；filters 是筛选框的绑定值，改动即时写回 URL。
 const state = computed<RunningState>(() => parseRunningQuery(route.query));
 const filters = reactive({ strategy_id: state.value.strategyId, enabled: state.value.enabled as string });
-const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_SIZE, total: store.totalInstances }));
+const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_SIZE, total: instanceList.totalInstances }));
 const readAt = ref("");
 const togglingId = ref("");
 const enableDialog = ref<InstanceType<typeof InstanceEnableDialog> | null>(null);
 const confirmDialog = ref<InstanceType<typeof InstanceConfirmDialog> | null>(null);
 const empty = computed(() =>
   emptyKind({
-    loading: store.instancesLoading,
-    error: store.instancesError,
-    count: store.instances.length,
+    loading: instanceList.instancesLoading,
+    error: instanceList.instancesError,
+    count: instanceList.instances.length,
     filtered: Boolean(state.value.strategyId || state.value.enabled)
   })
 );
@@ -217,7 +221,7 @@ async function loadHistorySeeds() {
   const spaceId = spaceStore.selectedSpaceId;
   if (!spaceId) return;
   try {
-    const rsp = await getCollectorStatus(spaceId, { silentError: true });
+    const rsp = await getCollectorStatus(spaceId);
     if (spaceId === spaceStore.selectedSpaceId) historySeeds.value = rsp.history_seeds || [];
   } catch {
     if (spaceId === spaceStore.selectedSpaceId) historySeeds.value = [];
@@ -228,7 +232,7 @@ async function refresh(background = false) {
   void loadHistorySeeds();
   const { strategyId, enabled, page } = state.value;
   try {
-    await store.loadInstances(
+    await instanceList.loadInstances(
       {
         strategy_id: strategyId || undefined,
         enabled: enabled === "" ? undefined : enabled === "true",
@@ -239,7 +243,7 @@ async function refresh(background = false) {
     );
     readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch {
-    // 错误已记入 store.instancesError，页面就近展示。
+    // 错误已记入 instanceList.instancesError，页面就近展示。
   }
 }
 // 每 30 秒后台刷新实例列表（页面隐藏时暂停、不叠加）
@@ -347,7 +351,7 @@ function remove(instance: StrategyInstance) {
 }
 onMounted(() => {
   // 进入页面先清掉 store 里可能属于其它空间的实例：期间在别的页面切过空间时，请求失败也不能继续显示旧空间的实例。
-  store.clearInstances();
+  instanceList.clearInstances();
   if (spaceStore.selectedSpaceId) void Promise.all([refresh(), loadCatalog()]);
 });
 // 空间切换的代次：快速连续切换时，较早的切换流程在等待导航之后发现自己已过期就退出，由最新一次负责读取。
@@ -359,7 +363,7 @@ watch(
     if (!next) return;
     const generation = ++spaceGeneration;
     if (previous) {
-      store.clearInstances();
+      instanceList.clearInstances();
       // 先记下新条件对应的键再改 URL：路由监听据此跳过重复读取，且显式读取用的是已更新的页码。
       const cleared = { ...state.value, page: 1, instanceId: "", create: false };
       loadedKey = listKey(cleared);

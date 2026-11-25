@@ -11,7 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"gopkg.in/yaml.v3"
@@ -124,7 +124,6 @@ func TestExternalFileConfigRealTRPCUsesAssignedCredentialAndFixedInstance(t *tes
 	t.Setenv("MOOX_ENTRY_HOST", "unrelated")
 	for _, principal := range []struct{ caller, service, method string }{
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch"},
-		{"collector-operator", "trpc.moox.collector.CollectMgr", "SyncSubjects"},
 		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows"},
 	} {
 		t.Run(principal.caller, func(t *testing.T) {

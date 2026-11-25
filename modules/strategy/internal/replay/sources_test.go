@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const slowView = "view_factor_s"
+const slowView = "dataset_factor_s"
 
 // sourceClient 在现货 1h 的 fakeClient 之外加一个 4h 的来源 View（任务 ftask_s）：列 trend 按标的与 4h 序号交替正负，
 // 列 sector 是分组用的类别（A、B 同为 1，C 为空）；A 的第 2 根 4h（origin+8h 起）没有行。
@@ -34,16 +34,16 @@ func slowTrend(id string, k int) float64 {
 	return -1
 }
 
-func (c *sourceClient) GetView(ctx context.Context, spaceID, viewID string) (input.ViewInfo, error) {
-	if viewID != slowView {
-		return c.fakeClient.GetView(ctx, spaceID, viewID)
+func (c *sourceClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+	if datasetID != slowView {
+		return c.fakeClient.GetView(ctx, spaceID, datasetID)
 	}
-	return input.ViewInfo{ViewID: slowView, DatasetID: "ds_s", Frequency: "4h", Status: "active", ActiveIndexID: "idx_s", Generation: "idx_s",
+	return input.ViewInfo{DatasetID: slowView, Frequency: "4h", Status: "active", ActiveIndexID: "idx_s", Generation: "idx_s",
 		Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "trend", Attributes: map[string]string{}}, {Name: "sector", Attributes: map[string]string{}}}}, nil
 }
 
-func (c *sourceClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	view, err := c.GetView(ctx, spaceID, viewID)
+func (c *sourceClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
+	view, err := c.GetView(ctx, spaceID, datasetID)
 	return view.Generation, err
 }
 
@@ -55,7 +55,7 @@ func (c *sourceClient) GetDataset(ctx context.Context, spaceID, datasetID string
 }
 
 func (c *sourceClient) QueryRows(ctx context.Context, spaceID string, query input.Query) ([]input.Row, uint64, error) {
-	if query.ViewID != slowView {
+	if query.DatasetID != slowView {
 		return c.fakeClient.QueryRows(ctx, spaceID, query)
 	}
 	c.sourceQueries = append(c.sourceQueries, query)
@@ -149,7 +149,7 @@ func replaySourceAgainstLive(t *testing.T, dslYaml string) (*sourceClient, map[t
 	resolved, program, err := input.ResolveTasks(context.Background(), client, "crypto", tasks, strategy)
 	require.NoError(t, err)
 	job := store.Replay{ReplayID: "s1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", SpaceID: "crypto",
-		Tasks:     map[string]store.ReplayTask{"spot": spotTask, "slow:spot": {FactorTaskID: "ftask_s", ViewID: slowView, ViewGeneration: "idx_s"}},
+		Tasks:     map[string]store.ReplayTask{"spot": spotTask, "slow:spot": {FactorTaskID: "ftask_s", DatasetID: slowView, ViewGeneration: "idx_s"}},
 		StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(22 * time.Hour), SpotFeeBps: 10, Factors: resolved.Factors, CreatedAt: origin}
 	require.NoError(t, repo.CreateReplay(context.Background(), job))
 	claimed, found, err := repo.ClaimNextReplay(context.Background(), origin)

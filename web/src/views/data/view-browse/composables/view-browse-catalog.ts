@@ -1,36 +1,19 @@
-import { getDataset, getView } from "@/api/storage/metadata";
-import type { Dataset, View } from "@/api/storage/types";
+import { getDataset } from "@/api/storage/metadata";
+import type { Dataset } from "@/api/storage/types";
 
-export async function loadTargetedViewCatalog(spaceId: string, viewIds: string[]) {
-  const uniqueViewIds = [...new Set(viewIds.map(id => id.trim()).filter(Boolean))];
-  if (!spaceId.trim() || uniqueViewIds.length === 0) {
-    return { views: [] as View[], datasets: [] as Dataset[] };
-  }
+/** 按 ID 读取调用方指定的数据集（每个数据集恰好有一个查询索引）；任何一个读不到或身份不符都报错，不返回半份目录。 */
+export async function loadTargetedDatasets(spaceId: string, datasetIds: string[]): Promise<Dataset[]> {
+  const uniqueIds = [...new Set(datasetIds.map(id => id.trim()).filter(Boolean))];
+  if (!spaceId.trim() || uniqueIds.length === 0) return [];
 
-  const viewResults = await Promise.all(uniqueViewIds.map(view_id => getView({ space_id: spaceId, view_id })));
-  const views = viewResults.map(result => result.view);
-  if (
-    views.some((view, index) => !view || view.view_id.trim() !== uniqueViewIds[index] || view.space_id.trim() !== spaceId.trim())
-  ) {
-    throw new Error("采集结果视图身份与请求不一致");
-  }
-  const datasetIds = [...new Set(views.map(view => view.dataset_id.trim()).filter(Boolean))];
-  if (datasetIds.length !== new Set(views.map(view => view.dataset_id.trim())).size) {
-    throw new Error("采集结果视图缺少数据集身份");
-  }
-  const datasetResults = await Promise.all(datasetIds.map(dataset_id => getDataset({ space_id: spaceId, dataset_id })));
-  const datasets = datasetResults.map(result => result.dataset);
+  const results = await Promise.all(uniqueIds.map(dataset_id => getDataset({ space_id: spaceId, dataset_id })));
+  const datasets = results.map(result => result.dataset);
   if (
     datasets.some(
-      (dataset, index) =>
-        !dataset || dataset.dataset_id.trim() !== datasetIds[index] || dataset.space_id.trim() !== spaceId.trim()
+      (dataset, index) => !dataset || dataset.dataset_id.trim() !== uniqueIds[index] || dataset.space_id.trim() !== spaceId.trim()
     )
   ) {
-    throw new Error("采集结果视图对应的数据集身份与请求不一致");
+    throw new Error("数据集身份与请求不一致");
   }
-
-  return {
-    views,
-    datasets
-  };
+  return datasets;
 }

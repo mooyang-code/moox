@@ -35,13 +35,11 @@ import { useRoute, useRouter } from "vue-router";
 import { safeRedirect } from "@/utils/safe-redirect";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { loginAPI } from "@/api/modules/user/index";
-import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { Message } from "@arco-design/web-vue";
-import { getErrorMessage } from "@/utils/error-handler";
+import { errorMessage } from "@/api/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 
 const userStores = useUserInfoStore();
-const routeStore = useRoutesConfigStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -191,9 +189,6 @@ const onLogin = async () => {
     // 加载用户信息
     await userStores.setAccount();
 
-    // 加载路由信息
-    await routeStore.initSetRouter();
-
     Message.success("登录成功");
 
     // 会话过期被带到登录页时回到原页面，否则回首页
@@ -202,7 +197,7 @@ const onLogin = async () => {
     console.error("登录失败:", error);
     userStores.clearAccount();
 
-    const loginErrorMessage = getErrorMessage(error, "登录失败");
+    const loginErrorMessage = errorMessage(error, "登录失败");
     Message.error(loginErrorMessage);
   } finally {
     loginLoading.value = false;

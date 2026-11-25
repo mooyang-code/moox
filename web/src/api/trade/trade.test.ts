@@ -1,58 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { callTrade } = vi.hoisted(() => ({ callTrade: vi.fn() }));
-vi.mock("./http", async importOriginal => ({
-  ...(await importOriginal<typeof import("./http")>()),
-  callTrade
+const { call } = vi.hoisted(() => ({ call: vi.fn() }));
+vi.mock("@/api/http", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/api/http")>()),
+  call
 }));
 
 import * as trade from "./index";
 
 describe("Trade public API", () => {
-  beforeEach(() => callTrade.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
+  beforeEach(() => call.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
 
   it("constructs 组合账户生命周期请求", async () => {
     await trade.createLogicalAccount({ name: "paper", execution_mode: 1, settlement_asset: "USDT" });
     await trade.pauseLogicalAccount("logical-1", "manual intervention");
     await trade.resumeLogicalAccount("logical-1");
     await trade.flattenLogicalAccount("action-1", "logical-1", "risk cleanup");
-    expect(callTrade).toHaveBeenNthCalledWith(1, "console", "CreateLogicalAccount", expect.any(Object), { silent: true });
-    expect(callTrade).toHaveBeenNthCalledWith(
-      2,
-      "console",
-      "PauseLogicalAccount",
-      {
-        logical_account_id: "logical-1",
-        reason: "manual intervention"
-      },
-      { silent: true }
-    );
-    expect(callTrade).toHaveBeenNthCalledWith(
-      3,
-      "console",
-      "ResumeLogicalAccount",
-      { logical_account_id: "logical-1" },
-      { silent: true }
-    );
-    expect(callTrade).toHaveBeenNthCalledWith(
-      4,
-      "console",
-      "FlattenLogicalAccount",
-      {
-        action_id: "action-1",
-        logical_account_id: "logical-1",
-        reason: "risk cleanup"
-      },
-      { silent: true }
-    );
+    expect(call).toHaveBeenNthCalledWith(1, "trade", "CreateLogicalAccount", expect.any(Object));
+    expect(call).toHaveBeenNthCalledWith(2, "trade", "PauseLogicalAccount", {
+      logical_account_id: "logical-1",
+      reason: "manual intervention"
+    });
+    expect(call).toHaveBeenNthCalledWith(3, "trade", "ResumeLogicalAccount", { logical_account_id: "logical-1" });
+    expect(call).toHaveBeenNthCalledWith(4, "trade", "FlattenLogicalAccount", {
+      action_id: "action-1",
+      logical_account_id: "logical-1",
+      reason: "risk cleanup"
+    });
   });
 
   it("uses canonical unified account RPC names", async () => {
     await trade.listTradingAccounts({ page: { page: 1, size: 20 } });
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListTradingAccounts", { page: { page: 1, size: 20 } }, {});
+    expect(call).toHaveBeenLastCalledWith("trade", "ListTradingAccounts", { page: { page: 1, size: 20 } });
 
     await trade.syncTradingAccount("account-1");
-    expect(callTrade).toHaveBeenLastCalledWith("console", "SyncTradingAccount", {
+    expect(call).toHaveBeenLastCalledWith("trade", "SyncTradingAccount", {
       trading_account_id: "account-1"
     });
   });
@@ -65,12 +47,12 @@ describe("Trade public API", () => {
       control_mode: 2 as const
     };
     await trade.createLogicalAccount(logical);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "CreateLogicalAccount", logical, { silent: true });
+    expect(call).toHaveBeenLastCalledWith("trade", "CreateLogicalAccount", logical);
     const paper = {
       account_name: "paper",
       logical_account_name: "manual",
-      exchange: 1 as const,
-      markets: [1, 2] as (1 | 2)[],
+      exchange: "binance" as const,
+      markets: ["spot", "swap"] as ("spot" | "swap")[],
       settlement_asset: "USDT",
       initial_balance: "1000",
       maker_fee_rate: "0",
@@ -79,7 +61,7 @@ describe("Trade public API", () => {
       control_mode: 2 as const
     };
     await trade.createPaperSimulation(paper);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "CreatePaperSimulation", paper, { silent: true });
+    expect(call).toHaveBeenLastCalledWith("trade", "CreatePaperSimulation", paper);
   });
 
   it("文案键与后端状态一一对应", () => {
@@ -92,8 +74,7 @@ describe("Trade public API", () => {
       "DELIST_FLATTEN",
       "FLATTEN",
       "MANUAL_ORDER",
-      "REDUCE",
-      "SUBMIT_ORDER"
+      "REDUCE"
     ]);
   });
 
@@ -141,9 +122,9 @@ describe("Trade public API", () => {
       deadline_at: "2000000000000"
     };
     await trade.submitOrder(request);
-    expect(callTrade).toHaveBeenCalledTimes(1);
-    expect(callTrade).toHaveBeenCalledWith("console", "SubmitOrder", request, { silent: true });
-    const sent = callTrade.mock.calls[0][2];
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call).toHaveBeenCalledWith("trade", "SubmitOrder", request);
+    const sent = call.mock.calls[0][2];
     expect(sent).not.toHaveProperty("source");
     expect(sent).not.toHaveProperty("owner_id");
     expect(sent).not.toHaveProperty("reduce_position_only");
@@ -152,14 +133,9 @@ describe("Trade public API", () => {
 
   it("reads current quantity targets and parses per-account flatten progress", async () => {
     await trade.getLogicalAccountTarget("logical-1");
-    expect(callTrade).toHaveBeenCalledWith("console", "GetLogicalAccountTarget", { logical_account_id: "logical-1" }, {});
-    await trade.listShadowTargets("instance-1", 10, { silent: true });
-    expect(callTrade).toHaveBeenLastCalledWith(
-      "console",
-      "ListShadowTargets",
-      { instance_id: "instance-1", limit: 10 },
-      { silent: true }
-    );
+    expect(call).toHaveBeenCalledWith("trade", "GetLogicalAccountTarget", { logical_account_id: "logical-1" });
+    await trade.listShadowTargets("instance-1", 10);
+    expect(call).toHaveBeenLastCalledWith("trade", "ListShadowTargets", { instance_id: "instance-1", limit: 10 });
     expect(
       trade.parseFlattenResult({
         action_id: "action-1",
@@ -183,23 +159,23 @@ describe("Trade public API", () => {
     ).toBe("0.1");
   });
 
-  it("管理台不暴露只给事件中心用的写入接口", () => {
+  it("管理台不暴露已删除的写名单和下架清仓接口", () => {
     expect(trade).not.toHaveProperty("blockInstrument");
     expect(trade).not.toHaveProperty("flattenInstrument");
   });
 
   it("下架名单只暴露读取和解除：读取不带参数，解除按（交易所、市场、代码）定位", async () => {
-    await trade.listBlockedInstruments({ silent: true });
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListBlockedInstruments", {}, { silent: true });
-    const req = { exchange: 1 as const, market_type: 1 as const, exchange_symbol: "LUNAUSDT" };
-    await trade.unblockInstrument(req, { silent: true });
-    expect(callTrade).toHaveBeenLastCalledWith("console", "UnblockInstrument", req, { silent: true });
+    await trade.listBlockedInstruments();
+    expect(call).toHaveBeenLastCalledWith("trade", "ListBlockedInstruments", {});
+    const req = { exchange: "binance" as const, market_type: "spot" as const, exchange_symbol: "LUNAUSDT" };
+    await trade.unblockInstrument(req);
+    expect(call).toHaveBeenLastCalledWith("trade", "UnblockInstrument", req);
   });
 
   it("收益拆解、操作记录和按来源筛选订单的请求原样透传", async () => {
     const pnl = { logical_account_id: "logical-1", start_time: "1000", end_time: "2000" };
     await trade.summarizeAccountPnl(pnl);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "SummarizeAccountPnl", pnl);
+    expect(call).toHaveBeenLastCalledWith("trade", "SummarizeAccountPnl", pnl);
 
     const actions = {
       logical_account_id: "logical-1",
@@ -207,17 +183,25 @@ describe("Trade public API", () => {
       page: { page: 2, size: 10 }
     };
     await trade.listOperatorActions(actions);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOperatorActions", actions, {});
+    expect(call).toHaveBeenLastCalledWith("trade", "ListOperatorActions", actions);
 
     await trade.listOrders({ logical_account_id: "logical-1", owner_type: "SYSTEM" });
-    expect(callTrade).toHaveBeenLastCalledWith(
-      "console",
-      "ListOrders",
-      {
-        logical_account_id: "logical-1",
-        owner_type: "SYSTEM"
-      },
-      {}
-    );
+    expect(call).toHaveBeenLastCalledWith("trade", "ListOrders", {
+      logical_account_id: "logical-1",
+      owner_type: "SYSTEM"
+    });
+  });
+});
+
+describe("交易所中文名", () => {
+  it("按小写键取值，未知值得到 -", () => {
+    expect(trade.exchangeLabel("binance")).toBe("币安");
+    expect(trade.exchangeLabel("okx")).toBe("OKX");
+    expect(trade.exchangeLabel("ashare")).toBe("A 股");
+    expect(trade.exchangeLabel("hkex")).toBe("港股");
+    expect(trade.exchangeLabel("BINANCE")).toBe("-");
+    expect(trade.exchangeLabel("1")).toBe("-");
+    expect(trade.exchangeLabel(undefined)).toBe("-");
+    expect(trade.exchangeLabels.binance).toBe("币安");
   });
 });

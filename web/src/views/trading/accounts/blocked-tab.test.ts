@@ -14,24 +14,26 @@ Object.defineProperty(window, "matchMedia", {
 
 const rows: BlockedInstrument[] = [
   {
-    exchange: 1,
-    market_type: 1,
+    exchange: "binance",
+    market_type: "spot",
     exchange_symbol: "LUNAUSDT",
     instrument_id: "LUNA-USDT-SPOT",
     base_asset: "LUNA",
     reason: "币安公告下架",
-    source_event_id: "evt-1",
-    blocked_at: "1700000000000"
+    blocked_at: "1700000000000",
+    scope: "ALL",
+    delist_id: "delist-1"
   },
   {
-    exchange: 2,
-    market_type: 2,
+    exchange: "okx",
+    market_type: "swap",
     exchange_symbol: "FTT-USDT-SWAP",
     instrument_id: "",
     base_asset: "",
     reason: "",
-    source_event_id: "",
-    blocked_at: "1700000100000"
+    blocked_at: "1700000100000",
+    scope: "PAPER_ONLY",
+    delist_id: ""
   }
 ];
 
@@ -57,7 +59,7 @@ afterEach(() => {
 });
 
 describe("下架名单子页签", () => {
-  it("列出交易所、市场、代码、原因和来源，缺的字段写“—”", async () => {
+  it("列出交易所、市场、代码、范围、原因和下架记录，缺的字段写“—”", async () => {
     mountTab();
     await flushPromises();
     const text = wrapper.text();
@@ -65,11 +67,20 @@ describe("下架名单子页签", () => {
     expect(text).toContain("现货");
     expect(text).toContain("币安");
     expect(text).toContain("币安公告下架");
-    expect(text).toContain("evt-1");
+    expect(text).toContain("delist-1");
+    expect(text).toContain("全部");
+    expect(text).toContain("仅模拟盘");
     expect(text).toContain("FTT-USDT-SWAP");
     expect(text).toContain("永续");
     expect(text).toContain("OKX");
     expect(wrapper.findAll("tbody tr")).toHaveLength(2);
+  });
+
+  it("点下架记录通知页面定位到上段对应的记录", async () => {
+    mountTab();
+    await flushPromises();
+    await wrapper.find("tbody .arco-link").trigger("click");
+    expect(wrapper.emitted("locate")).toEqual([["delist-1"]]);
   });
 
   it("名单为空时说明没有被禁止买入的标的", async () => {
@@ -91,12 +102,10 @@ describe("下架名单子页签", () => {
     expect(document.body.textContent).toContain("解除「LUNAUSDT」的买入禁止");
     expect(document.body.textContent).toContain("恢复正常买入");
     expect(document.body.textContent).toContain("下架清仓");
+    expect(document.body.textContent).toContain("进行中的下架处理（含演练）会一并取消");
     confirmButton("解除")?.click();
     await flushPromises();
-    expect(api.unblockInstrument).toHaveBeenCalledWith(
-      { exchange: 1, market_type: 1, exchange_symbol: "LUNAUSDT" },
-      { silent: true }
-    );
+    expect(api.unblockInstrument).toHaveBeenCalledWith({ exchange: "binance", market_type: "spot", exchange_symbol: "LUNAUSDT" });
     expect(wrapper.emitted("changed")).toHaveLength(1);
   });
 

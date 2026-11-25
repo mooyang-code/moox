@@ -1,15 +1,10 @@
 import type { Exchange, InspectExchangeCredentialReq, MarketType } from "@/api/trade/types";
+import { sortMarkets } from "@/views/trading/accounts/shared/markets";
 
-// 密钥管理里交易所密钥的“提供方”（binance、okx）对应 Trade 的交易所枚举；其他提供方不能检测。
-export function exchangeFromProvider(provider: string | undefined): Exchange {
-  switch ((provider ?? "").trim().toLowerCase()) {
-    case "binance":
-      return 1;
-    case "okx":
-      return 2;
-    default:
-      return 0;
-  }
+// 密钥管理里交易所密钥的“提供方”（binance、okx）就是 Trade 的交易所写法；其他提供方不能检测，返回 undefined。
+export function exchangeFromProvider(provider: string | undefined): Exchange | undefined {
+  const value = (provider ?? "").trim().toLowerCase();
+  return value === "binance" || value === "okx" ? value : undefined;
 }
 
 export interface InspectionRequestInput {
@@ -21,20 +16,20 @@ export interface InspectionRequestInput {
 
 export function inspectionRequest(input: InspectionRequestInput): InspectExchangeCredentialReq {
   const exchange = exchangeFromProvider(input.provider);
-  if (exchange === 0) throw new Error("只有币安和 OKX 的交易所密钥可以检测");
+  if (!exchange) throw new Error("只有币安和 OKX 的交易所密钥可以检测");
   const request: InspectExchangeCredentialReq = {
     exchange,
     environment: input.environment,
     credential_secret_id: input.secretId
   };
   // 不勾选市场表示预览：不传 markets，后端只给和市场无关的阻断项，和市场有关的问题写成提醒。
-  if (input.markets.length > 0) request.markets = [...input.markets].sort((a, b) => a - b);
+  if (input.markets.length > 0) request.markets = sortMarkets(input.markets);
   return request;
 }
 
 // 密钥是否可以做测试连接：交易所分类、币安或 OKX、启用状态。
 export function canTestConnection(secret: { category?: string; provider?: string; status?: string }): boolean {
-  return secret.category === "exchange" && exchangeFromProvider(secret.provider) !== 0 && secret.status === "active";
+  return secret.category === "exchange" && exchangeFromProvider(secret.provider) !== undefined && secret.status === "active";
 }
 
 /**

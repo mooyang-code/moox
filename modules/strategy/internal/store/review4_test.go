@@ -55,7 +55,7 @@ func TestDeleteReplaysBeyondRanksOnlyFinished(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		if err := repo.CreateReplay(ctx, Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", SpaceID: "space", Tasks: map[string]ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute)}); err != nil {
+		if err := repo.CreateReplay(ctx, Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", SpaceID: "space", Tasks: map[string]ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -88,7 +88,7 @@ func TestCreateReplayLimitsActivePerSpace(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	replay := func(id, space string) Replay {
-		return Replay{ReplayID: id, DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", SpaceID: space, Tasks: map[string]ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}
+		return Replay{ReplayID: id, DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", SpaceID: space, Tasks: map[string]ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}
 	}
 	for i := 0; i < MaxActiveReplays; i++ {
 		if err := repo.CreateReplay(ctx, replay(fmt.Sprintf("a%d", i), "a")); err != nil {
@@ -113,7 +113,7 @@ func TestCreateReplayLimitsActivePerSpace(t *testing.T) {
 func TestReplayListOmitsDSLButKeepsHash(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
-	if err := repo.CreateReplay(ctx, Replay{ReplayID: "p1", DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", SpaceID: "space", Tasks: map[string]ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx_a@b1"}}, StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}); err != nil {
+	if err := repo.CreateReplay(ctx, Replay{ReplayID: "p1", DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", SpaceID: "space", Tasks: map[string]ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx_a@b1"}}, StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	listed, _, err := repo.ListReplays(ctx, "space", 0, 10)

@@ -47,8 +47,8 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroup(t *testing.T) {
 	}
 	merged := byJob["job-1"]
 	require.Equal(t, []string{"BTC", "ETH"}, merged.GetSubjectIds())
-	require.Equal(t, start, merged.GetStart().AsTime())
-	require.Equal(t, start.Add(2*time.Hour), merged.GetEnd().AsTime(), "区间取并集")
+	require.Equal(t, start.Unix(), merged.GetStart())
+	require.Equal(t, start.Add(2*time.Hour).Unix(), merged.GetEnd(), "区间取并集")
 	require.Equal(t, "auto", merged.GetOrigin())
 	require.Equal(t, "resample", byJob["job-3"].GetOrigin())
 
@@ -81,7 +81,7 @@ func TestNoticePublisherWithoutEventBusKeepsNoticesForRetention(t *testing.T) {
 	require.Len(t, left, 1)
 }
 
-// 补采来源的事件带上范围内全部标的已确认“行情源没有”的 K 线（截到事件范围内，统一数据集带 series_tag），
+// 补采来源的事件带上范围内全部标的已确认“行情源没有”的 K 线（截到事件范围内），
 // 包括这批没有补写的标的：因子要看到一期里所有确认缺失的标的才放行。合成来源的事件、范围外的确认缺失不带。
 func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 	mgr := openState(t)
@@ -92,7 +92,7 @@ func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", Start: start, End: start.Add(time.Hour), Origin: "resample", JobID: "job-2"},
 	}))
 	require.NoError(t, mgr.Backfill().AddAbsences(ctx, []store.SourceAbsence{
-		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", SeriesTag: "swap", From: start.Add(-10 * time.Minute), To: start.Add(10 * time.Minute), Bars: 4},
+		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", From: start.Add(-10 * time.Minute), To: start.Add(10 * time.Minute), Bars: 4},
 		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "ETH", From: start, To: start.Add(5 * time.Minute), Bars: 1},
 		{SpaceID: "crypto", DatasetID: "dataset_a", Frequency: "5m", SubjectID: "BTC", From: start.Add(2 * time.Hour), To: start.Add(3 * time.Hour), Bars: 12},
 	}))
@@ -114,12 +114,10 @@ func TestNoticePublisherCarriesSourceAbsencesOfBackfills(t *testing.T) {
 		require.Len(t, value.GetAbsent(), 2, "从新到旧")
 		other := value.GetAbsent()[1]
 		require.Equal(t, "ETH", other.GetSubjectId(), "这批没有补写的标的的确认缺失也带上")
-		require.Empty(t, other.GetSeriesTag())
 		absent := value.GetAbsent()[0]
 		require.Equal(t, "BTC", absent.GetSubjectId())
-		require.Equal(t, "swap", absent.GetSeriesTag())
-		require.Equal(t, start, absent.GetStart().AsTime(), "截到事件范围内")
-		require.Equal(t, start.Add(10*time.Minute), absent.GetEnd().AsTime())
+		require.Equal(t, start.Unix(), absent.GetStart(), "截到事件范围内")
+		require.Equal(t, start.Add(10*time.Minute).Unix(), absent.GetEnd())
 	}
 }
 
@@ -171,6 +169,6 @@ func TestNoticePublisherKeepsOnlyTheLatestAbsencesBeyondTheLimit(t *testing.T) {
 	require.NoError(t, err)
 	absent := decodePayload(t, registry, message).GetAbsent()
 	require.Len(t, absent, 2)
-	require.Equal(t, start.Add(30*time.Minute), absent[0].GetStart().AsTime())
-	require.Equal(t, start.Add(20*time.Minute), absent[1].GetStart().AsTime())
+	require.Equal(t, start.Add(30*time.Minute).Unix(), absent[0].GetStart())
+	require.Equal(t, start.Add(20*time.Minute).Unix(), absent[1].GetStart())
 }

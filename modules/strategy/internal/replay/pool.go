@@ -72,7 +72,7 @@ func (c *sharedReads) QueryRows(ctx context.Context, spaceID string, query input
 	for _, subject := range query.Subjects {
 		subjects = append(subjects, subject.SubjectID+"\x00"+subject.SeriesTag)
 	}
-	key := fmt.Sprintf("%s|%d|%d|%s|%s|%d|%s", query.ViewID, query.Start.UnixNano(), query.End.UnixNano(), strings.Join(query.Columns, ","), query.ExpectedIndexID, query.ExpectedRevision, strings.Join(subjects, ","))
+	key := fmt.Sprintf("%s|%d|%d|%s|%s|%d|%s", query.DatasetID, query.Start.UnixNano(), query.End.UnixNano(), strings.Join(query.Columns, ","), query.ExpectedIndexID, query.ExpectedRevision, strings.Join(subjects, ","))
 	c.mu.Lock()
 	if hit, ok := c.cache[key]; ok {
 		c.mu.Unlock()
@@ -241,7 +241,7 @@ type readerGroup struct {
 
 func (g *readerGroup) follow(ctx context.Context, taskKey string, changed input.ViewInfo, from time.Time) error {
 	if g.switches >= maxIndexSwitches {
-		return fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", changed.ViewID)
+		return fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", changed.DatasetID)
 	}
 	g.switches++
 	view := changed
@@ -297,7 +297,7 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 	}
 	job := store.Replay{ReplayID: "pool", SpaceID: run.SpaceID, Tasks: make(map[string]store.ReplayTask, len(resolved.Tasks))}
 	for market, task := range resolved.Tasks {
-		job.Tasks[market] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: views[market].Generation}
+		job.Tasks[market] = store.ReplayTask{FactorTaskID: task.FactorTaskID, DatasetID: task.DatasetID, ViewGeneration: views[market].Generation}
 	}
 	pass := newPoolPass(shared, run.SpaceID, resolved, run.Members, run.Programs, run.Config, views, subjects, job, runner, end, newAccumulator(1, 1, 1), abort, false)
 	chunk := runner.chunkBars()

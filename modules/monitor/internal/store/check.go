@@ -7,26 +7,69 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// MaxChecks 是检查表的行数上限：覆盖 1024 台主机各自的主机、组件检查（每台数条）及业务检查。超过时本轮报错、不写。
+const MaxChecks = 1024 * 8
 
 type CheckRepository struct {
 	db *gorm.DB
-}
-
-type ListChecksOptions struct {
-	SpaceID   string
-	GroupName string
-	Source    string
-	Enabled   *bool
-	Page      Page
 }
 
 func NewCheckRepository(db *gorm.DB) *CheckRepository {
 	return &CheckRepository{db: db}
 }
 
-func (r *CheckRepository) Create(ctx context.Context, check *domain.Check) error {
-	return r.db.WithContext(ctx).Create(check).Error
+// CheckKey 是一项检查的身份。
+type CheckKey struct{ SpaceID, CheckID string }
+
+// KeyOf 返回检查行的身份。
+func KeyOf(check domain.Check) CheckKey {
+	return CheckKey{SpaceID: check.SpaceID, CheckID: check.CheckID}
+}
+
+// ListAll 读出全部检查行；超过 MaxChecks 时报错。
+func (r *CheckRepository) ListAll(ctx context.Context) ([]domain.Check, error) {
+	var checks []domain.Check
+	if err := r.db.WithContext(ctx).Order("c_space_id, c_check_id").Limit(MaxChecks + 1).Find(&checks).Error; err != nil {
+		return nil, err
+	}
+	if len(checks) > MaxChecks {
+		return nil, fmt.Errorf("监控检查超过上限 %d 项", MaxChecks)
+	}
+	return checks, nil
+}
+
+// ListFiring 返回正在告警的检查，按触发时间倒序。spaceID 不为空时只取本空间与系统空间（mooxsys）的。
+func (r *CheckRepository) ListFiring(ctx context.Context, spaceID string, limit int) ([]domain.Check, error) {
+	query := r.db.WithContext(ctx).Where("c_alert_status = ?", domain.AlertStatusFiring)
+	if spaceID != "" {
+		query = query.Where("c_space_id IN ?", []string{spaceID, "", events.SystemSpaceID})
+	}
+	query = query.Order("c_triggered_at DESC, c_space_id, c_check_id")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var checks []domain.Check
+	err := query.Find(&checks).Error
+	return checks, err
+}
+
+// List 返回检查行；spaceID 不为空时只取本空间与系统空间的。
+func (r *CheckRepository) List(ctx context.Context, spaceID string) ([]domain.Check, error) {
+	query := r.db.WithContext(ctx)
+	if spaceID != "" {
+		query = query.Where("c_space_id IN ?", []string{spaceID, "", events.SystemSpaceID})
+	}
+	var checks []domain.Check
+	if err := query.Order("c_space_id, c_check_id").Limit(MaxChecks + 1).Find(&checks).Error; err != nil {
+		return nil, err
+	}
+	if len(checks) > MaxChecks {
+		return nil, fmt.Errorf("监控检查超过上限 %d 项", MaxChecks)
+	}
+	return checks, nil
 }
 
 func (r *CheckRepository) Get(ctx context.Context, spaceID, checkID string) (*domain.Check, error) {
@@ -40,121 +83,40 @@ func (r *CheckRepository) Get(ctx context.Context, spaceID, checkID string) (*do
 	return &check, nil
 }
 
-func (r *CheckRepository) GetByCheckID(ctx context.Context, checkID string) (*domain.Check, error) {
-	var check domain.Check
-	err := r.db.WithContext(ctx).Where("c_check_id = ?", checkID).First(&check).Error
-	if err != nil {
-		return nil, err
-	}
-	return &check, nil
+func (r *CheckRepository) Count(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.db.WithContext(ctx).Model(&domain.Check{}).Count(&total).Error
+	return total, err
 }
 
-func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.Check{}).
-		Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).
-		Updates(map[string]any{
-			"c_name":             check.Name,
-			"c_group_name":       check.GroupName,
-			"c_kind":             check.Kind,
-			"c_url":              check.URL,
-			"c_connect_address":  check.ConnectAddress,
-			"c_server_name":      check.ServerName,
-			"c_trust_mode":       check.TrustMode,
-			"c_ca_file":          check.CAFile,
-			"c_ca_baseline":      check.CABaseline,
-			"c_method":           check.Method,
-			"c_headers":          check.Headers,
-			"c_body":             check.Body,
-			"c_tcp_host":         check.TCPHost,
-			"c_tcp_port":         check.TCPPort,
-			"c_interval_seconds": check.IntervalSeconds,
-			"c_timeout_ms":       check.TimeoutMS,
-			"c_expected_status":  check.ExpectedStatus,
-			"c_max_response_ms":  check.MaxResponseMS,
-			"c_body_contains":    check.BodyContains,
-			"c_enabled":          check.Enabled,
-			"c_source":           check.Source,
-			"c_labels":           check.Labels,
-			"c_description":      check.Description,
-			"c_last_checked_at":  check.LastCheckedAt,
-			"c_next_check_at":    check.NextCheckAt,
-		}).Error
+// checkColumns 是更新已有检查行时覆盖的列（c_ctime 保留首次出现的时间）。
+var checkColumns = []string{
+	"c_name", "c_severity", "c_status", "c_reason", "c_raw_error", "c_checked_at",
+	"c_failure_reason", "c_failure_raw_error", "c_failed_at", "c_failure_count", "c_success_count",
+	"c_alert_status", "c_triggered_at", "c_notified_at",
 }
 
-func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) error {
+// SaveRound 在一个事务里写入一轮的结果：更新或新建检查行、删除不再产出的行、写告警事件。
+func (r *CheckRepository) SaveRound(ctx context.Context, upserts []domain.Check, deletes []CheckKey, alertEvents []domain.AlertEvent) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var references int64
-		if err := tx.Model(&domain.AlertRule{}).
-			Where("c_space_id = ? AND c_check_id = ?", spaceID, checkID).
-			Count(&references).Error; err != nil {
-			return err
+		for index := range upserts {
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "c_space_id"}, {Name: "c_check_id"}},
+				DoUpdates: clause.AssignmentColumns(checkColumns),
+			}).Create(&upserts[index]).Error; err != nil {
+				return err
+			}
 		}
-		if references > 0 {
-			return fmt.Errorf("%w: check %q is bound to %d alert rule(s)", ErrResourceReferenced, checkID, references)
+		for _, key := range deletes {
+			if err := tx.Where("c_space_id = ? AND c_check_id = ?", key.SpaceID, key.CheckID).Delete(&domain.Check{}).Error; err != nil {
+				return err
+			}
 		}
-		if err := tx.Where("c_space_id = ? AND c_check_id = ?", spaceID, checkID).
-			Delete(&domain.CheckResult{}).Error; err != nil {
-			return err
-		}
-		deleted := tx.Where("c_space_id = ? AND c_check_id = ?", spaceID, checkID).
-			Delete(&domain.Check{})
-		if deleted.Error != nil {
-			return deleted.Error
-		}
-		if deleted.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
+		for index := range alertEvents {
+			if err := tx.Create(&alertEvents[index]).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})
-}
-
-func (r *CheckRepository) List(ctx context.Context, opts ListChecksOptions) ([]domain.Check, error) {
-	q := r.applyFilters(r.db.WithContext(ctx), opts)
-	var checks []domain.Check
-	err := q.Order("c_group_name ASC, c_name ASC").
-		Limit(opts.Page.limit()).
-		Offset(opts.Page.offset()).
-		Find(&checks).Error
-	return checks, err
-}
-
-func (r *CheckRepository) Count(ctx context.Context, opts ListChecksOptions) (int64, error) {
-	var total int64
-	err := r.applyFilters(r.db.WithContext(ctx).Model(&domain.Check{}), opts).Count(&total).Error
-	return total, err
-}
-
-func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
-	var total int64
-	err := r.db.WithContext(ctx).Model(&domain.Check{}).
-		Where("c_enabled = 1").Count(&total).Error
-	return total, err
-}
-
-func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {
-	if opts.SpaceID != "" {
-		q = q.Where("c_space_id = ?", opts.SpaceID)
-	}
-	if opts.GroupName != "" {
-		q = q.Where("c_group_name = ?", opts.GroupName)
-	}
-	if opts.Source != "" {
-		q = q.Where("c_source = ?", opts.Source)
-	}
-	if opts.Enabled != nil {
-		q = q.Where("c_enabled = ?", *opts.Enabled)
-	}
-	return q
-}
-
-// ListEnabledKinds filters structured namespaces before the response bound.
-func (r *CheckRepository) ListEnabledKinds(ctx context.Context, spaceID string, kinds []string, limit int) ([]domain.Check, error) {
-	query := r.db.WithContext(ctx).Where("c_enabled = 1 AND substr(c_check_id, 1, instr(c_check_id, ':') - 1) IN ?", kinds)
-	if spaceID != "" {
-		query = query.Where("c_space_id IN ?", []string{spaceID, "", events.SystemSpaceID})
-	}
-	var checks []domain.Check
-	err := query.Order("c_space_id, c_check_id").Limit(limit).Find(&checks).Error
-	return checks, err
 }

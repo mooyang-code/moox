@@ -1,4 +1,4 @@
-import { callTrade } from "./http";
+import { call } from "@/api/http";
 import type { LogicalAccount, RetInfo } from "./types";
 
 /** 组合账户的下单设置，数值用字符串；字段含义见 Trade 的 domain/ordersettings。 */
@@ -64,19 +64,17 @@ interface SettingsResponse {
 }
 
 export function updateLogicalAccountOrderSettings(logical_account_id: string, settings: OrderSettings) {
-  return callTrade<{ logical_account_id: string; settings: OrderSettings }, SettingsResponse>(
-    "console",
+  return call<{ logical_account_id: string; settings: OrderSettings }, SettingsResponse>(
+    "trade",
     "UpdateLogicalAccountOrderSettings",
-    { logical_account_id, settings },
-    { silent: true }
+    { logical_account_id, settings }
   );
 }
 
 export function updateLogicalAccountFundSettings(logical_account_id: string, settings: FundSettings) {
-  return callTrade<{ logical_account_id: string; settings: FundSettings }, SettingsResponse>(
-    "console",
+  return call<{ logical_account_id: string; settings: FundSettings }, SettingsResponse>(
+    "trade",
     "UpdateLogicalAccountFundSettings",
-    { logical_account_id, settings },
-    { silent: true }
+    { logical_account_id, settings }
   );
 }

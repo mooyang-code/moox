@@ -40,7 +40,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed, err := ParseResolved(raw)
-	if err != nil || parsed.Primary().ViewID != "view_factor_1h" || len(parsed.ViewColumns) != 11 {
+	if err != nil || parsed.Primary().DatasetID != "dataset_factor_1h" || len(parsed.ViewColumns) != 11 {
 		t.Fatalf("resolved_json 往返失败：%+v err=%v", parsed, err)
 	}
 	if len(parsed.PreviousFactors) != 0 {
@@ -135,9 +135,9 @@ func TestResolveRejectsMinAgeBeyondRetentionAndMissingHash(t *testing.T) {
 		t.Fatalf("缺少指纹应拒绝：%v", err)
 	}
 	client = newFakeClient("spot")
-	view := client.views["view_factor_1h"]
+	view := client.views["dataset_factor_1h"]
 	view.Status = "building"
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "active") {
 		t.Fatalf("非 active 的 View 应拒绝：%v", err)
 	}
@@ -199,10 +199,10 @@ func TestRetentionBars(t *testing.T) {
 func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 240\n", 1))
 	client := newFakeClient("spot")
-	view := client.views["view_factor_1h"]
+	view := client.views["dataset_factor_1h"]
 	view.IndexedTo = barStart
 	view.IndexedFrom = barStart.Add(-100 * time.Hour)
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
 		t.Fatalf("Resolve 不应读取覆盖统计：%v", err)
@@ -211,17 +211,17 @@ func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 		t.Fatalf("View 覆盖不足时应拒绝启用：%v", err)
 	}
 	view.IndexedFrom = barStart.Add(-300 * time.Hour)
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err != nil {
 		t.Fatalf("覆盖足够时应允许启用：%v", err)
 	}
 	view.SeriesBars = 200
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 超过每个序列保留的根数应拒绝启用：%v", err)
 	}
 	view.SeriesBars, view.IndexedFrom, view.IndexedTo = 0, time.Time{}, time.Time{}
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
 		t.Fatalf("覆盖统计未知时应拒绝启用：%v", err)
 	}
@@ -231,9 +231,9 @@ func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	}
 	delete(client.errors, "coverage")
 	noClose := newFakeClient("spot")
-	view = noClose.views["view_factor_1h"]
+	view = noClose.views["dataset_factor_1h"]
 	view.Columns = append([]ViewColumn{}, view.Columns[4:]...)
-	noClose.views["view_factor_1h"] = view
+	noClose.views["dataset_factor_1h"] = view
 	plain := parseStrategy(t, `name: no_close
 universe:
   min_age_bars: 2
@@ -271,9 +271,9 @@ func TestCheckCoverageUsesTheTaskResultView(t *testing.T) {
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 240\n", 1))
 	client := newFakeClient("spot")
 	// 结果 View 刚建立，还没有任何行。
-	empty := client.views["view_factor_1h"]
+	empty := client.views["dataset_factor_1h"]
 	empty.IndexedFrom, empty.IndexedTo = time.Time{}, time.Time{}
-	client.views["view_factor_1h"] = empty
+	client.views["dataset_factor_1h"] = empty
 	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
 		t.Fatal(err)
@@ -281,15 +281,15 @@ func TestCheckCoverageUsesTheTaskResultView(t *testing.T) {
 	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
 		t.Fatalf("空的结果 View 应拒绝：%v", err)
 	}
-	covered := client.views["view_factor_1h"]
+	covered := client.views["dataset_factor_1h"]
 	covered.IndexedFrom, covered.IndexedTo = barStart.Add(-300*time.Hour), barStart
-	client.views["view_factor_1h"] = covered
+	client.views["dataset_factor_1h"] = covered
 	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err != nil {
 		t.Fatalf("结果 View 覆盖足够时应允许启用：%v", err)
 	}
 	covered.IndexedFrom = barStart.Add(-100 * time.Hour)
-	client.views["view_factor_1h"] = covered
-	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "当前只覆盖") || !strings.Contains(err.Error(), "view_factor_1h") {
+	client.views["dataset_factor_1h"] = covered
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "当前只覆盖") || !strings.Contains(err.Error(), "dataset_factor_1h") {
 		t.Fatalf("结果 View 覆盖不足时应拒绝，并指明 View：%v", err)
 	}
 }

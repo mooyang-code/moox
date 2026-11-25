@@ -3,13 +3,13 @@ package store
 import (
 	"context"
 	"errors"
-	"math"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
@@ -26,7 +26,7 @@ func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	stale := first
 	stale.TargetID = "target-stale"
 	setTargetBar(&stale, int64(1))
-	stale.Targets = []InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "9"}}
+	stale.Targets = []InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "9"}}
 	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, stale)
 	require.ErrorIs(t, err, ErrConflict)
 	require.False(t, accepted)
@@ -34,7 +34,7 @@ func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	next := first
 	next.TargetID = "target-2"
 	setTargetBar(&next, int64(2))
-	next.Targets = []InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "2.0"}}
+	next.Targets = []InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "2.0"}}
 	current, accepted, err = s.AcceptLogicalAccountTarget(ctx, next)
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -50,7 +50,7 @@ func TestAcceptLogicalAccountTargetAllowsEmptyFullWhilePaused(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	record := validLogicalAccountTarget()
-	record.Targets = []InstrumentTarget{}
+	record.Targets = []InstrumentQuantity{}
 
 	current, accepted, err := s.AcceptLogicalAccountTarget(
 		context.Background(),
@@ -73,7 +73,7 @@ func TestAcceptLogicalAccountTargetOrdersSessionsByStartTime(t *testing.T) {
 	ctx := context.Background()
 	record := func(targetID, instanceID, sessionID string, startedAt int64) LogicalAccountTargetRecord {
 		value := validLogicalAccountTarget()
-		value.TargetID, value.InstanceID, value.RunnerID, value.SessionID, value.SessionStartedAt = targetID, instanceID, instanceID, sessionID, startedAt
+		value.TargetID, value.InstanceID, value.SessionID, value.SessionStartedAt = targetID, instanceID, sessionID, startedAt
 		return value
 	}
 
@@ -132,7 +132,7 @@ func TestAcceptLogicalAccountTargetIsIdempotentForSamePayload(t *testing.T) {
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
 	record := validLogicalAccountTarget()
-	record.Targets = []InstrumentTarget{
+	record.Targets = []InstrumentQuantity{
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "2.00"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1.0"},
 	}
@@ -145,7 +145,7 @@ func TestAcceptLogicalAccountTargetIsIdempotentForSamePayload(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, accepted)
-	require.Equal(t, []InstrumentTarget{
+	require.Equal(t, []InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "2"},
 	}, current.Targets)
@@ -222,9 +222,6 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 		{"session", func(v *LogicalAccountTargetRecord) { v.SessionID = "" }},
 		{"session started at", func(v *LogicalAccountTargetRecord) { v.SessionStartedAt = 0 }},
 		{"validity", func(v *LogicalAccountTargetRecord) { v.ValidUntil = v.BarEndTime }},
-		{"sequence overflow", func(v *LogicalAccountTargetRecord) {
-			v.CommandSequence = uint64(math.MaxInt64) + 1
-		}},
 		{"accepted time", func(v *LogicalAccountTargetRecord) { v.AcceptedAt = 0 }},
 		{"status", func(v *LogicalAccountTargetRecord) { v.Status = "RUNNING" }},
 		{"instrument", func(v *LogicalAccountTargetRecord) { v.Targets[0].InstrumentID = "" }},
@@ -238,7 +235,7 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 			s := openTestStore(t)
 			seedLogicalAccount(t, s, "runner-1")
 			record := validLogicalAccountTarget()
-			record.Targets = append([]InstrumentTarget(nil), record.Targets...)
+			record.Targets = append([]InstrumentQuantity(nil), record.Targets...)
 			tt.mutate(&record)
 			_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
 			require.Error(t, err)
@@ -270,7 +267,7 @@ func TestCloseTargetSessionShortensOnlyLiveClosedTarget(t *testing.T) {
 			seedLogicalAccount(t, s, "runner-1")
 			ctx := context.Background()
 			record := validLogicalAccountTarget()
-			record.SessionStartedAt, record.BarEndTime, record.ValidUntil, record.CommandSequence = test.startedAt, test.barEnd.UnixMilli(), test.validUntil.UnixMilli(), 0
+			record.SessionStartedAt, record.BarEndTime, record.ValidUntil = test.startedAt, test.barEnd.UnixMilli(), test.validUntil.UnixMilli()
 			current, accepted, err := s.AcceptLogicalAccountTarget(ctx, record)
 			require.NoError(t, err)
 			require.True(t, accepted)
@@ -309,7 +306,7 @@ func validLogicalAccountTarget() LogicalAccountTargetRecord {
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TargetID: "target-1", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
-		Targets: []InstrumentTarget{{
+		Targets: []InstrumentQuantity{{
 			InstrumentID: "BTC-USDT-SPOT", Quantity: "1.0",
 		}},
 		Status: "PENDING", BlockedTargets: []BlockedTarget{},
@@ -322,7 +319,6 @@ func validLogicalAccountTarget() LogicalAccountTargetRecord {
 // setTargetBar 把目标放在基准之后第 n 根 K 线。
 func setTargetBar(record *LogicalAccountTargetRecord, n int64) {
 	record.BarEndTime = targetBarBase + n
-	record.CommandSequence = 0
 }
 
 // seedCurrentTarget 给 logical-1 写一行 instanceID 的当前目标（空目标、有效一小时）：目标单只能由当前目标行所属的实例落库。
@@ -332,7 +328,7 @@ func seedCurrentTarget(tx *Tx, instanceID string) error {
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-current",
 		InstanceID: instanceID, SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
-		Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+		Targets: []InstrumentQuantity{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 	})
 	return err
 }
@@ -359,7 +355,7 @@ func TestAcceptLogicalAccountTargetKeepsHoldTargetsWithoutQuantity(t *testing.T)
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	record := validLogicalAccountTarget()
-	record.Targets = append(record.Targets, InstrumentTarget{InstrumentID: "ETH-USDT-SPOT", Hold: true})
+	record.Targets = append(record.Targets, InstrumentQuantity{InstrumentID: "ETH-USDT-SPOT", Hold: true})
 
 	_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
 
@@ -367,41 +363,79 @@ func TestAcceptLogicalAccountTargetKeepsHoldTargetsWithoutQuantity(t *testing.T)
 	require.True(t, accepted)
 	got, err := s.GetLogicalAccountTarget(context.Background(), record.SpaceID, record.LogicalAccountID)
 	require.NoError(t, err)
-	require.Equal(t, []InstrumentTarget{
+	require.Equal(t, []InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 		{InstrumentID: "ETH-USDT-SPOT", Hold: true},
 	}, got.Targets)
 }
 
 func TestEncodeInstrumentTargetsRejectsHoldWithQuantity(t *testing.T) {
-	_, err := encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "1", Hold: true}})
+	_, err := encodeInstrumentTargets([]InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "1", Hold: true}})
 	require.ErrorIs(t, err, ErrInvalidRecord)
-	encoded, err := encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Hold: true}})
+	encoded, err := encodeInstrumentTargets([]InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Hold: true}})
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`, encoded)
 	decoded, err := decodeCurrentTargets(encoded)
 	require.NoError(t, err)
-	require.Equal(t, []InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Hold: true}}, decoded)
+	require.Equal(t, []InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Hold: true}}, decoded)
 	// 非保持标的的数量仍必须是合法数字。
-	_, err = encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT"}})
+	_, err = encodeInstrumentTargets([]InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT"}})
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
-// 回执只有换算过数量的目标才要求权益快照：全部是保持标的时没有换算，不要求；混有换算项仍要求。
-func TestInsertTargetReceiptRequiresEquityOnlyForConvertedTargets(t *testing.T) {
+// 正式目标只有换算过数量的才要求权益快照：全部是保持标的时没有换算，不要求；混有换算项仍要求。
+func TestInsertTargetHistoryRequiresEquityOnlyForConvertedTargets(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
-	receipt := func(id, quantityTargets string) TargetReceiptRecord {
-		return TargetReceiptRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1", RunnerID: "runner-1", CommandSequence: 1,
+	receipt := func(id, quantityTargets string) TargetHistoryRecord {
+		return TargetHistoryRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1",
 			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1", BarEndTime: 1, ValidUntil: 2,
-			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, AcceptedAt: 1}
+			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, SessionStartedAt: 1, RecordedAt: 1}
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.InsertTargetReceipt(receipt("all-hold", `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`))
+		return tx.InsertTargetHistory(receipt("all-hold", `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`))
 	}))
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		return tx.InsertTargetReceipt(receipt("mixed", `[{"instrument_id":"ETH-USDT-SPOT","hold":true},{"instrument_id":"BTC-USDT-SPOT","quantity":"1"}]`))
+		return tx.InsertTargetHistory(receipt("mixed", `[{"instrument_id":"ETH-USDT-SPOT","hold":true},{"instrument_id":"BTC-USDT-SPOT","quantity":"1"}]`))
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
+}
+
+// 影子目标与正式目标同表：重投查重、换手检查只看正式目标；同一会话同一根 K 线的唯一约束也只管正式目标。
+func TestTargetHistoryQueriesSkipShadowRows(t *testing.T) {
+	s := openTestStore(t)
+	seedLogicalAccount(t, s, "runner-1")
+	ctx := context.Background()
+	record := func(id string, barEnd int64) TargetHistoryRecord {
+		return TargetHistoryRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1",
+			InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1, StrategyID: "strategy-1",
+			BarEndTime: barEnd, ValidUntil: barEnd + 60_000, RequestHash: "hash-" + id,
+			WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: "[]", RecordedAt: barEnd}
+	}
+	// 两个影子目标落在同一根 K 线上也能记。
+	for _, id := range []string{"shadow-1", "shadow-2"} {
+		added, err := s.RecordShadowTarget(ctx, record(id, 1_000))
+		require.NoError(t, err)
+		require.True(t, added)
+	}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.InsertTargetHistory(record("formal-1", 1_000)) }))
+
+	_, err := s.GetAcceptedTargetHistory(ctx, "space-1", "shadow-1")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	formal, err := s.GetAcceptedTargetHistory(ctx, "space-1", "formal-1")
+	require.NoError(t, err)
+	require.False(t, formal.Shadow)
+
+	history, err := s.ListAcceptedTargetHistorySince(ctx, "space-1", "logical-1", 0)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	require.Equal(t, "formal-1", history[0].TargetID)
+
+	shadows, err := s.ListShadowTargets(ctx, "space-1", "runner-1", 0)
+	require.NoError(t, err)
+	require.Len(t, shadows, 2)
+	for _, shadow := range shadows {
+		require.True(t, shadow.Shadow)
+	}
 }

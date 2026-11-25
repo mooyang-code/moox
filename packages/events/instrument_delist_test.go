@@ -7,7 +7,6 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
@@ -17,8 +16,8 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 	delistAt := seen.Add(7 * 24 * time.Hour)
 	payload := &storagepb.InstrumentDelistScheduled{
 		Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT",
-		DelistAt: timestamppb.New(delistAt), Source: DelistSourceBinanceSpotSchedule,
-		FirstSeenAt: timestamppb.New(seen), Scope: DelistScopeAll,
+		DelistAt: delistAt.UnixMilli(), Source: DelistSourceBinanceSpotSchedule,
+		FirstSeenAt: seen.UnixMilli(), Scope: DelistScopeAll,
 	}
 	subject := InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT")
 	eventID := InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", DelistScopeAll, delistAt)
@@ -40,8 +39,8 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 		"subject mismatch": func(p *storagepb.InstrumentDelistScheduled) { p.ExchangeSymbol = "BARUSDT" },
 		"upper exchange":   func(p *storagepb.InstrumentDelistScheduled) { p.Exchange = "BINANCE" },
 		"bad market":       func(p *storagepb.InstrumentDelistScheduled) { p.Market = "FUTURES" },
-		"no delist time":   func(p *storagepb.InstrumentDelistScheduled) { p.DelistAt = nil },
-		"no first seen":    func(p *storagepb.InstrumentDelistScheduled) { p.FirstSeenAt = nil },
+		"no delist time":   func(p *storagepb.InstrumentDelistScheduled) { p.DelistAt = 0 },
+		"no first seen":    func(p *storagepb.InstrumentDelistScheduled) { p.FirstSeenAt = 0 },
 		"bad source":       func(p *storagepb.InstrumentDelistScheduled) { p.Source = "OTHER" },
 		"bad scope":        func(p *storagepb.InstrumentDelistScheduled) { p.Scope = "" },
 	} {

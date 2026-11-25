@@ -3,11 +3,10 @@ package healthview
 import (
 	"context"
 	"sort"
+	"strconv"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
-	"github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/events"
 )
@@ -38,8 +37,8 @@ type incident struct {
 // incidents 把窗口内的告警事件按检查归并成一条条“触发 → 恢复”的经过。
 //   - 恢复通知发送失败时评估器已写入恢复事件、告警仍在进行，随后的发送失败、重试恢复或继续提醒都归入同一条经过；
 //   - 触发早于窗口（或被事件数上限截掉）的经过，从更早的触发事件补齐触发时间和原因；
-//   - 进行中与否以当前告警集合为准：没有恢复记录又不在告警的经过是被撤销的（检查停用或删除）。
-func (b Builder) incidents(ctx context.Context, spaceID string, facts observability.Overview, active map[incidentKey]bool, titles *checkTitles, now time.Time) ([]*pb.AlertIncident, error) {
+//   - 进行中与否以当前告警集合为准；检查不再产出（对象停用或删除）时会写一条恢复事件，经过随之结束。
+func (b Builder) incidents(ctx context.Context, spaceID string, active map[incidentKey]bool, now time.Time) ([]*pb.AlertIncident, error) {
 	since := now.Add(-IncidentWindow)
 	var spaces []string
 	if spaceID != "" {
@@ -55,10 +54,13 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 		lookupBefore = events[0].CreatedAt
 	}
 	latest := make(map[incidentKey]*incident)
+	// labels 是每个检查最近一条事件：标题与级别取它记下的，检查删除后仍能显示。
+	labels := make(map[incidentKey]domain.AlertEvent)
 	var all []*incident
 	for _, event := range events {
 		key := incidentKey{space: event.SpaceID, check: event.CheckID}
 		current := latest[key]
+		labels[key] = event
 		if event.EventType == domain.AlertEventTriggered {
 			current = &incident{key: key, triggeredAt: event.CreatedAt, firstEventAt: event.CreatedAt, reason: eventReason(event), processes: eventProcesses(event), open: true}
 			latest[key] = current
@@ -98,16 +100,12 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 	}
 	out := make([]*pb.AlertIncident, 0, len(all))
 	for _, item := range all {
-		object := alertObject(item.key.space, item.key.check, facts)
-		title, err := titles.title(ctx, item.key.space, item.key.check, object, facts)
-		if err != nil {
-			return nil, err
-		}
+		object := alertObject(item.key.space, item.key.check)
 		out = append(out, &pb.AlertIncident{
-			Id:            item.key.space + ":" + item.key.check + "@" + stamp(item.sortTime()),
-			Severity:      alerting.Severity(item.key.check),
+			Id:            item.key.space + ":" + item.key.check + "@" + strconv.FormatInt(stamp(item.sortTime()), 10),
+			Severity:      labels[item.key].Severity,
 			Object:        object,
-			Title:         title,
+			Title:         labels[item.key].Title,
 			Reason:        item.reason,
 			TriggeredAt:   stamp(item.triggeredAt),
 			ResolvedAt:    stamp(item.resolvedAt),

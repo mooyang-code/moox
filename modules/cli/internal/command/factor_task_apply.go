@@ -16,11 +16,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 
-	adminclient "github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorname"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 
@@ -409,7 +412,7 @@ func newFactorTaskApplyCommand() *cobra.Command {
 				return err
 			}
 			defer gateway.Close()
-			applier := &remoteSetupFactor{client: &adminclient.Client{Gateway: gateway}, out: cmd.ErrOrStderr()}
+			applier := &remoteSetupFactor{gateway: gateway, out: cmd.ErrOrStderr()}
 			summary, applyErr := applier.Apply(cmd.Context(), plan)
 			summary.Warnings = plan.Warnings
 			status := "applied"
@@ -476,14 +479,12 @@ type setupInitFactor interface {
 }
 
 type remoteSetupFactor struct {
-	gateway commandGateway
-	client  factorJSONClient
+	// gateway 是经 SSH 隧道的网关客户端，请求与响应都是 FactorMgr 生成的 proto 消息。
+	gateway gatewayclient.Invoker
+	// closer 为空时 Close 不关网关（网关由调用方负责）。
+	closer io.Closer
 	// out 接收逐项结果；为空时写 stderr。
 	out io.Writer
-}
-
-type factorJSONClient interface {
-	CallGatewayJSON(context.Context, string, string, any, any) error
 }
 
 func defaultOpenSetupFactor(ctx context.Context, cfg *topology.Config) (setupInitFactor, error) {
@@ -491,91 +492,30 @@ func defaultOpenSetupFactor(ctx context.Context, cfg *topology.Config) (setupIni
 	if err != nil {
 		return nil, err
 	}
-	return &remoteSetupFactor{gateway: gateway, client: &adminclient.Client{Gateway: gateway}}, nil
+	return &remoteSetupFactor{gateway: gateway, closer: gateway}, nil
 }
 
-type factorAPIRetInfo struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
+// factorResponse 是 FactorMgr 各方法的响应：都带 ret_info。
+type factorResponse interface {
+	proto.Message
+	GetRetInfo() *commonpb.RetInfo
 }
 
-// factorAPIDef 对应 FactorDef 的 proto JSON：定义不带任务和状态。
-type factorAPIDef struct {
-	FactorID             string `json:"factor_id"`
-	Name                 string `json:"name"`
-	CategoryID           string `json:"category_id"`
-	AllowPartialUniverse bool   `json:"allow_partial_universe"`
-	DefinitionHash       string `json:"definition_hash"`
-	// Params 是定义声明的可调参数；默认值用来补全成员的参数，判断文件里的成员是否已经存在。
-	Params []factorAPIParam `json:"params"`
-}
-
-// factorAPIParam 对应 FactorParamDecl 的 proto JSON（只取 CLI 用到的字段）。
-type factorAPIParam struct {
-	Name         string  `json:"name"`
-	DefaultValue float64 `json:"default_value"`
-}
-
-// factorAPIMember 对应 FactorMember 的 proto JSON。
-type factorAPIMember struct {
-	TaskID        string             `json:"task_id"`
-	FactorID      string             `json:"factor_id"`
-	MemberKey     string             `json:"member_key"`
-	Kind          string             `json:"kind"`
-	Status        string             `json:"status"`
-	Params        map[string]float64 `json:"params"`
-	OutputColumns []string           `json:"output_columns"`
-}
-
-// factorAPICategory 对应 FactorCategory 的 proto JSON。
-type factorAPICategory struct {
-	CategoryID string `json:"category_id"`
-	Name       string `json:"name"`
-}
-
-type factorAPIResponse struct {
-	RetInfo *factorAPIRetInfo `json:"ret_info"`
-	// ValidateFactorSpec 的结果。
-	Valid          bool   `json:"valid"`
-	DefinitionHash string `json:"definition_hash"`
-	Diagnostic     struct {
-		Message string `json:"message"`
-	} `json:"diagnostic"`
-	Factor     factorAPIDef `json:"factor"`
-	FactorTask struct {
-		TaskID          string `json:"task_id"`
-		Name            string `json:"name"`
-		SpaceID         string `json:"space_id"`
-		SourceDatasetID string `json:"source_dataset_id"`
-		Freq            string `json:"freq"`
-		Status          string `json:"status"`
-		BoundInstanceID string `json:"bound_instance_id"`
-		ResultDatasetID string `json:"result_dataset_id"`
-	} `json:"factor_task"`
-	// Members 是 GetFactorTask 返回的任务成员；Member 是 AddTaskMember、SetTaskMemberStatus 返回的成员。
-	Members    []factorAPIMember   `json:"members"`
-	Member     factorAPIMember     `json:"member"`
-	Categories []factorAPICategory `json:"categories"`
-}
-
-func (r factorAPIResponse) err(method string) error {
-	if r.RetInfo == nil {
-		return fmt.Errorf("FactorMgr %s failed: missing ret_info", method)
-	}
-	if r.RetInfo.Code == 0 || r.RetInfo.Code == 200 {
-		return nil
-	}
-	return fmt.Errorf("FactorMgr %s failed (%d): %s", method, r.RetInfo.Code, r.RetInfo.Msg)
-}
-
-func (r *remoteSetupFactor) call(ctx context.Context, method string, body any, response *factorAPIResponse) error {
-	if r == nil || r.client == nil {
+func (r *remoteSetupFactor) call(ctx context.Context, method string, request proto.Message, response factorResponse) error {
+	if r == nil || r.gateway == nil {
 		return errors.New("FactorMgr requires the operator SSH gateway")
 	}
-	if err := r.client.CallGatewayJSON(ctx, factorMgr, method, body, response); err != nil {
+	if err := r.gateway.Invoke(ctx, factorMgr, method, request, response); err != nil {
 		return err
 	}
-	return response.err(method)
+	ret := response.GetRetInfo()
+	if ret == nil {
+		return fmt.Errorf("FactorMgr %s failed: missing ret_info", method)
+	}
+	if code := int32(ret.GetCode()); code == 0 || code == 200 {
+		return nil
+	}
+	return fmt.Errorf("FactorMgr %s failed (%d): %s", method, int32(ret.GetCode()), ret.GetMsg())
 }
 
 // factorWrites 是只读核对后要写的内容，按写入顺序：分类、定义、任务（新建或接着建）、成员。
@@ -647,13 +587,13 @@ func (r *remoteSetupFactor) review(ctx context.Context, plan setupFactorPlan, su
 		}
 	}
 	if len(categories) > 0 {
-		listed := factorAPIResponse{}
-		if err := r.call(ctx, "ListFactorCategories", map[string]any{}, &listed); err != nil {
+		listed := &factorpb.ListFactorCategoriesRsp{}
+		if err := r.call(ctx, "ListFactorCategories", &factorpb.ListFactorCategoriesReq{}, listed); err != nil {
 			return writes, err
 		}
 		existing := map[string]string{}
-		for _, category := range listed.Categories {
-			existing[category.CategoryID] = category.Name
+		for _, category := range listed.GetCategories() {
+			existing[category.GetCategoryId()] = category.GetName()
 		}
 		for _, def := range categories {
 			name, ok := existing[def.CategoryID]
@@ -673,16 +613,16 @@ func (r *remoteSetupFactor) review(ctx context.Context, plan setupFactorPlan, su
 	changed := map[string]bool{}
 	for _, def := range plan.Definitions {
 		// 新旧定义都先校验：表达式不对时写入之前就停下，不会只写一半。
-		validated := factorAPIResponse{}
-		if err := r.call(ctx, "ValidateFactorSpec", map[string]any{"spec": def.Spec, "allow_partial_universe": def.AllowPartialUniverse}, &validated); err != nil {
+		validated := &factorpb.ValidateFactorSpecRsp{}
+		if err := r.call(ctx, "ValidateFactorSpec", &factorpb.ValidateFactorSpecReq{Spec: def.Spec, AllowPartialUniverse: def.AllowPartialUniverse}, validated); err != nil {
 			return writes, err
 		}
-		if !validated.Valid {
-			return writes, fmt.Errorf("factor %q spec is invalid: %s", def.FactorID, validated.Diagnostic.Message)
+		if !validated.GetValid() {
+			return writes, fmt.Errorf("factor %q spec is invalid: %s", def.FactorID, validated.GetDiagnostic().GetMessage())
 		}
-		get := factorAPIResponse{}
-		err := r.call(ctx, "GetFactor", map[string]any{"factor_id": def.FactorID}, &get)
-		if err != nil && !factorAPINotFound(get) {
+		get := &factorpb.GetFactorRsp{}
+		err := r.call(ctx, "GetFactor", &factorpb.GetFactorReq{FactorId: def.FactorID}, get)
+		if err != nil && !factorNotFound(get) {
 			return writes, err
 		}
 		if err != nil {
@@ -691,22 +631,23 @@ func (r *remoteSetupFactor) review(ctx context.Context, plan setupFactorPlan, su
 			continue
 		}
 		// 比较用 definition_hash：由 FactorMgr 编译得到，只改注释、格式不算不同。
+		online := get.GetFactor()
 		var diffs []string
-		if get.Factor.Name != def.Name {
-			diffs = append(diffs, fmt.Sprintf("名称：线上 %q，文件 %q", get.Factor.Name, def.Name))
+		if online.GetName() != def.Name {
+			diffs = append(diffs, fmt.Sprintf("名称：线上 %q，文件 %q", online.GetName(), def.Name))
 		}
-		if get.Factor.DefinitionHash != validated.DefinitionHash {
-			diffs = append(diffs, "表达式或参数不同（definition_hash 线上 "+get.Factor.DefinitionHash+"，文件 "+validated.DefinitionHash+"）")
+		if online.GetDefinitionHash() != validated.GetDefinitionHash() {
+			diffs = append(diffs, "表达式或参数不同（definition_hash 线上 "+online.GetDefinitionHash()+"，文件 "+validated.GetDefinitionHash()+"）")
 		}
-		if def.CategoryID != "" && get.Factor.CategoryID != def.CategoryID {
-			diffs = append(diffs, fmt.Sprintf("分类：线上 %q，文件 %q", get.Factor.CategoryID, def.CategoryID))
+		if def.CategoryID != "" && online.GetCategoryId() != def.CategoryID {
+			diffs = append(diffs, fmt.Sprintf("分类：线上 %q，文件 %q", online.GetCategoryId(), def.CategoryID))
 		}
 		if len(diffs) > 0 {
 			changed[def.FactorID] = true
 			record(setupFactorItem{Kind: "definition", ID: def.FactorID, Result: itemConflict, Detail: strings.Join(diffs, "；")})
 			continue
 		}
-		defaults[def.FactorID] = paramDefaults(get.Factor)
+		defaults[def.FactorID] = paramDefaults(online)
 		record(setupFactorItem{Kind: "definition", ID: def.FactorID, Result: itemExists})
 	}
 	for _, task := range plan.Tasks {
@@ -738,9 +679,9 @@ func (r *remoteSetupFactor) review(ctx context.Context, plan setupFactorPlan, su
 // resumeDisabled 为真时，线上停用、文件启用的同参数成员记为待启用（见 setupFactorPlan.ResumeDisabled）。
 func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask, defaults map[string]map[string]float64, changed map[string]bool, resumeDisabled bool, record func(setupFactorItem) int) (factorTaskWrite, error) {
 	write := factorTaskWrite{task: task}
-	get := factorAPIResponse{}
-	err := r.call(ctx, "GetFactorTask", map[string]any{"task_id": task.TaskID}, &get)
-	if err != nil && !factorAPINotFound(get) {
+	get := &factorpb.GetFactorTaskRsp{}
+	err := r.call(ctx, "GetFactorTask", &factorpb.GetFactorTaskReq{TaskId: task.TaskID}, get)
+	if err != nil && !factorNotFound(get) {
 		return write, err
 	}
 	addMember := func(member setupFactorMember) {
@@ -755,10 +696,10 @@ func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask
 		}
 		return write, nil
 	}
-	got := get.FactorTask
+	got := get.GetFactorTask()
 	var diffs []string
 	for _, field := range []struct{ name, online, file string }{
-		{"空间", got.SpaceID, task.SpaceID}, {"源数据集", got.SourceDatasetID, task.SourceDatasetID}, {"频率", got.Freq, task.Freq}, {"名称", got.Name, task.Name},
+		{"空间", got.GetSpaceId(), task.SpaceID}, {"源数据集", got.GetSourceDatasetId(), task.SourceDatasetID}, {"频率", got.GetFreq(), task.Freq}, {"名称", got.GetName(), task.Name},
 	} {
 		if field.online != field.file {
 			diffs = append(diffs, fmt.Sprintf("%s：线上 %q，文件 %q", field.name, field.online, field.file))
@@ -769,13 +710,13 @@ func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask
 		return write, nil
 	}
 	detail := ""
-	if got.Status == "pending" {
+	if got.GetStatus() == "pending" {
 		// 上次创建被中断，任务停在 pending；CreateFactorTask 会接着建结果数据集。
 		write.create, write.resume = true, true
 		detail = "上次创建被中断，会接着完成"
 	}
 	record(setupFactorItem{Kind: "task", ID: task.TaskID, Result: itemExists, Detail: detail})
-	existing := get.Members
+	existing := get.GetMembers()
 	matched := map[string]bool{}
 	for _, planned := range task.Members {
 		label := task.TaskID + "/" + planned.FactorID
@@ -790,45 +731,44 @@ func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask
 			continue
 		}
 		want := completeParams(decls, planned.Params)
-		var found, sameFactorVar *factorAPIMember
-		for index := range existing {
-			member := &existing[index]
-			if member.FactorID != planned.FactorID || member.Kind != planned.Kind {
+		var found, sameFactorVar *factorpb.FactorMember
+		for _, member := range existing {
+			if member.GetFactorId() != planned.FactorID || member.GetKind() != planned.Kind {
 				continue
 			}
 			if planned.Kind == "var" {
 				sameFactorVar = member
 			}
-			if sameParamValues(member.Params, want) {
+			if sameParamValues(member.GetParams(), want) {
 				found = member
 				break
 			}
 		}
 		switch {
 		case found == nil && sameFactorVar != nil:
-			matched[sameFactorVar.MemberKey] = true
-			record(setupFactorItem{Kind: "member", ID: label, Result: itemConflict, MemberKey: sameFactorVar.MemberKey,
+			matched[sameFactorVar.GetMemberKey()] = true
+			record(setupFactorItem{Kind: "member", ID: label, Result: itemConflict, MemberKey: sameFactorVar.GetMemberKey(),
 				Detail: "可变成员已存在但默认参数不同；参数加成员之后不能改，需要的话先移除成员再重新加入"})
 		case found == nil:
 			addMember(planned)
-		case resumeDisabled && found.Status == "disabled" && planned.Status == "enabled":
+		case resumeDisabled && found.GetStatus() == "disabled" && planned.Status == "enabled":
 			// 上次成员加进去了、启用那一步失败或被中断：补调一次启用。
-			matched[found.MemberKey] = true
-			index := record(setupFactorItem{Kind: "member", ID: label, Result: itemCreated, MemberKey: found.MemberKey, Columns: found.OutputColumns,
+			matched[found.GetMemberKey()] = true
+			index := record(setupFactorItem{Kind: "member", ID: label, Result: itemCreated, MemberKey: found.GetMemberKey(), Columns: found.GetOutputColumns(),
 				Detail: "上次加入后没有启用，会接着启用"})
-			write.enable = append(write.enable, factorMemberEnable{memberKey: found.MemberKey, item: index})
-		case found.Status != planned.Status:
-			matched[found.MemberKey] = true
-			record(setupFactorItem{Kind: "member", ID: label, Result: itemConflict, MemberKey: found.MemberKey,
-				Detail: fmt.Sprintf("状态：线上 %s，文件 %s", found.Status, planned.Status)})
+			write.enable = append(write.enable, factorMemberEnable{memberKey: found.GetMemberKey(), item: index})
+		case found.GetStatus() != planned.Status:
+			matched[found.GetMemberKey()] = true
+			record(setupFactorItem{Kind: "member", ID: label, Result: itemConflict, MemberKey: found.GetMemberKey(),
+				Detail: fmt.Sprintf("状态：线上 %s，文件 %s", found.GetStatus(), planned.Status)})
 		default:
-			matched[found.MemberKey] = true
-			record(setupFactorItem{Kind: "member", ID: label, Result: itemExists, MemberKey: found.MemberKey, Columns: found.OutputColumns})
+			matched[found.GetMemberKey()] = true
+			record(setupFactorItem{Kind: "member", ID: label, Result: itemExists, MemberKey: found.GetMemberKey(), Columns: found.GetOutputColumns()})
 		}
 	}
 	for _, member := range existing {
-		if !matched[member.MemberKey] {
-			record(setupFactorItem{Kind: "member", ID: task.TaskID + "/" + member.FactorID, Result: itemOrphan, MemberKey: member.MemberKey,
+		if !matched[member.GetMemberKey()] {
+			record(setupFactorItem{Kind: "member", ID: task.TaskID + "/" + member.GetFactorId(), Result: itemOrphan, MemberKey: member.GetMemberKey(),
 				Detail: "线上任务里有、文件里没有；只报告，不移除"})
 		}
 	}
@@ -838,17 +778,17 @@ func (r *remoteSetupFactor) reviewTask(ctx context.Context, task setupFactorTask
 // write 按顺序新建核对出来的缺项；成员加好后按文件里的状态启用或停用，并把成员键与列名写回逐项结果。
 func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summary *setupFactorSummary) error {
 	for _, def := range writes.categories {
-		upserted := factorAPIResponse{}
-		if err := r.call(ctx, "UpsertFactorCategory", map[string]any{"category": map[string]any{"category_id": def.CategoryID, "name": def.CategoryName}}, &upserted); err != nil {
+		request := &factorpb.UpsertFactorCategoryReq{Category: &factorpb.FactorCategory{CategoryId: def.CategoryID, Name: def.CategoryName}}
+		if err := r.call(ctx, "UpsertFactorCategory", request, &factorpb.UpsertFactorCategoryRsp{}); err != nil {
 			return err
 		}
 	}
 	for _, def := range writes.definitions {
-		created := factorAPIResponse{}
-		if err := r.call(ctx, "CreateFactor", map[string]any{"factor": map[string]any{
-			"factor_id": def.FactorID, "name": def.Name, "spec": def.Spec,
-			"allow_partial_universe": def.AllowPartialUniverse, "category_id": def.CategoryID,
-		}}, &created); err != nil {
+		request := &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
+			FactorId: def.FactorID, Name: def.Name, Spec: def.Spec,
+			AllowPartialUniverse: def.AllowPartialUniverse, CategoryId: def.CategoryID,
+		}}
+		if err := r.call(ctx, "CreateFactor", request, &factorpb.CreateFactorRsp{}); err != nil {
 			return err
 		}
 		summary.DefinitionsCreated++
@@ -856,48 +796,47 @@ func (r *remoteSetupFactor) write(ctx context.Context, writes factorWrites, summ
 	for _, write := range writes.tasks {
 		task := write.task
 		if write.create {
-			created := factorAPIResponse{}
-			if err := r.call(ctx, "CreateFactorTask", map[string]any{"factor_task": map[string]any{
-				"task_id": task.TaskID, "name": task.Name, "space_id": task.SpaceID, "source_dataset_id": task.SourceDatasetID,
-				"freq": task.Freq, "status": "pending",
-			}}, &created); err != nil {
+			created := &factorpb.CreateFactorTaskRsp{}
+			request := &factorpb.CreateFactorTaskReq{FactorTask: &factorpb.FactorTask{
+				TaskId: task.TaskID, Name: task.Name, SpaceId: task.SpaceID, SourceDatasetId: task.SourceDatasetID,
+				Freq: task.Freq, Status: "pending",
+			}}
+			if err := r.call(ctx, "CreateFactorTask", request, created); err != nil {
 				return err
 			}
 			if !write.resume {
 				summary.TasksCreated++
-				if step := archiveTaskNextStep(task, created.FactorTask.ResultDatasetID); step != "" {
+				if step := archiveTaskNextStep(task, created.GetFactorTask().GetResultDatasetId()); step != "" {
 					summary.NextSteps = append(summary.NextSteps, step)
 				}
 			}
 		}
 		for _, planned := range write.members {
-			body := map[string]any{"task_id": task.TaskID, "factor_id": planned.member.FactorID, "kind": planned.member.Kind}
-			if len(planned.member.Params) > 0 {
-				body["params"] = planned.member.Params
-			}
-			added := factorAPIResponse{}
-			if err := r.call(ctx, "AddTaskMember", body, &added); err != nil {
+			added := &factorpb.AddTaskMemberRsp{}
+			request := &factorpb.AddTaskMemberReq{TaskId: task.TaskID, FactorId: planned.member.FactorID, Kind: planned.member.Kind, Params: planned.member.Params}
+			if err := r.call(ctx, "AddTaskMember", request, added); err != nil {
 				return err
 			}
-			member := added.Member
-			if member.MemberKey == "" {
+			member := added.GetMember()
+			if member.GetMemberKey() == "" {
 				return fmt.Errorf("AddTaskMember returned no member key for factor %q in task %q", planned.member.FactorID, task.TaskID)
 			}
-			if member.Status == "" {
-				member.Status = "disabled"
+			status := member.GetStatus()
+			if status == "" {
+				status = "disabled"
 			}
-			if member.Status != planned.member.Status {
-				status := factorAPIResponse{}
-				if err := r.call(ctx, "SetTaskMemberStatus", map[string]any{"task_id": task.TaskID, "member_key": member.MemberKey, "status": planned.member.Status}, &status); err != nil {
+			if status != planned.member.Status {
+				request := &factorpb.SetTaskMemberStatusReq{TaskId: task.TaskID, MemberKey: member.GetMemberKey(), Status: planned.member.Status}
+				if err := r.call(ctx, "SetTaskMemberStatus", request, &factorpb.SetTaskMemberStatusRsp{}); err != nil {
 					return err
 				}
 			}
 			summary.MembersCreated++
-			summary.Items[planned.item].MemberKey, summary.Items[planned.item].Columns = member.MemberKey, member.OutputColumns
+			summary.Items[planned.item].MemberKey, summary.Items[planned.item].Columns = member.GetMemberKey(), member.GetOutputColumns()
 		}
 		for _, pending := range write.enable {
-			status := factorAPIResponse{}
-			if err := r.call(ctx, "SetTaskMemberStatus", map[string]any{"task_id": task.TaskID, "member_key": pending.memberKey, "status": "enabled"}, &status); err != nil {
+			request := &factorpb.SetTaskMemberStatusReq{TaskId: task.TaskID, MemberKey: pending.memberKey, Status: "enabled"}
+			if err := r.call(ctx, "SetTaskMemberStatus", request, &factorpb.SetTaskMemberStatusRsp{}); err != nil {
 				return err
 			}
 			summary.Items[pending.item].Result = itemEnabled
@@ -955,10 +894,10 @@ func (r *remoteSetupFactor) reportAll(items []setupFactorItem) {
 }
 
 // paramDefaults 取定义声明的参数默认值。
-func paramDefaults(def factorAPIDef) map[string]float64 {
-	out := make(map[string]float64, len(def.Params))
-	for _, param := range def.Params {
-		out[param.Name] = param.DefaultValue
+func paramDefaults(def *factorpb.FactorDef) map[string]float64 {
+	out := make(map[string]float64, len(def.GetParams()))
+	for _, param := range def.GetParams() {
+		out[param.GetName()] = param.GetDefaultValue()
 	}
 	return out
 }
@@ -987,14 +926,18 @@ func sameParamValues(left, right map[string]float64) bool {
 	return true
 }
 
-func factorAPINotFound(response factorAPIResponse) bool {
-	return response.RetInfo != nil && (response.RetInfo.Code == 9 || response.RetInfo.Code == 5 ||
-		(response.RetInfo.Code == 4 && strings.Contains(strings.ToLower(response.RetInfo.Msg), "not found")))
+func factorNotFound(response factorResponse) bool {
+	ret := response.GetRetInfo()
+	if ret == nil {
+		return false
+	}
+	code := int32(ret.GetCode())
+	return code == 9 || code == 5 || (code == 4 && strings.Contains(strings.ToLower(ret.GetMsg()), "not found"))
 }
 
 func (r *remoteSetupFactor) Close() error {
-	if r == nil || r.gateway == nil {
+	if r == nil || r.closer == nil {
 		return nil
 	}
-	return r.gateway.Close()
+	return r.closer.Close()
 }

@@ -1,4 +1,5 @@
 import type { StrategyResult } from "@/api/strategy-types";
+import { toInstantMs } from "@/utils/time-zone";
 
 // 策略池详情的纯函数：从每期结果的 summary_json 里取出 pool 段，整理成按时间正序的期列表，再构造净值、比例、择时序列。
 // 所有比例与权重在后端是定点小数字符串，这里只转成数字用于画图与展示，不做任何会改变含义的运算。
@@ -281,8 +282,8 @@ export function parsePoolPeriod(result: PoolPeriodSource & Pick<StrategyResult, 
 export function parsePoolSummary(summary: any, source: PoolPeriodSource): PoolPeriod | null {
   const pool = summary?.pool;
   if (!pool || typeof pool !== "object" || !Array.isArray(pool.members)) return null;
-  const timeMs = Date.parse(source.bar_end_time);
-  if (!Number.isFinite(timeMs)) return null;
+  const timeMs = toInstantMs(source.bar_end_time);
+  if (timeMs === null) return null;
   const seen = new Set<string>();
   const members: PoolMemberDetail[] = [];
   for (const raw of pool.members) {

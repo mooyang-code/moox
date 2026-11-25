@@ -10,6 +10,9 @@ export type RecalcJobStatus = "accepted" | "running" | "succeeded" | "failed" | 
 export type RecalcSubjectMode = "all" | "include";
 export type FactorType = "timeseries" | "cross_section";
 
+// 墙钟时刻（created_at、updated_at、last_heartbeat_at、catalog_synced_at、last_submitted_at）在 JSON 里是 Unix 毫秒的数字字符串，
+// "0" 表示没有，读取经 utils/time-zone 的 toInstantMs / formatInstant；补算的 start_time、end_time、progress_time 是数据时间（RFC3339 文本）。
+
 export interface FactorTask {
   task_id: string;
   space_id: string;
@@ -261,8 +264,6 @@ export interface RecalcJob {
   status: RecalcJobStatus;
   progress_time: string;
   error: string;
-  /** 领取并执行该任务的计算引擎；尚未被领取时为空。 */
-  engine_id?: string;
   /** 按默认参数新补的期次：原行不存在、或原行的 __params 里没有这个成员，与当时的实时结果不保证一致。 */
   default_filled?: MemberRanges[];
   created_at: string;
@@ -339,6 +340,7 @@ export interface MemberParamState {
   /** 目标期（Unix 秒，int64 可能是字符串）。 */
   last_submitted_period: number | string;
   last_request_id?: string;
+  /** 提交被接受的时刻（毫秒）。 */
   last_submitted_at?: string;
 }
 

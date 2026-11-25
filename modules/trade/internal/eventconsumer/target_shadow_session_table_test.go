@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // 影子目标的会话检查结果表（批 3 T14 前置 R3）：执行器层会话表（target 包的 TestExecutorSessionTable）的影子目标四行。
@@ -45,8 +44,8 @@ func shadowSessionDelivery(t *testing.T, now time.Time, targetID, sessionID stri
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: targetID, InstanceId: "runner-1", SessionId: sessionID, SessionStartedAt: testSessionStartedAt(sessionID), StrategyId: "strategy-1", LogicalAccountId: "logical-1",
-		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
-		BarEndTime: timestamppb.New(barEnd), ValidUntil: timestamppb.New(validUntil),
+		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
+		BarEndTime: barEnd.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		Shadow: true,
 	}, events.PublishOptions{EventID: targetID, OccurredAt: barEnd, SpaceID: "space-1", SubjectID: "logical-1"})
 	require.NoError(t, err)

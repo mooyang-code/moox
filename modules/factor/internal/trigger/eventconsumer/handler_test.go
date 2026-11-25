@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type handlerTaskLocator struct {
@@ -366,9 +365,7 @@ func collectorDelivery(t *testing.T, eventID string) *jetstream.Delivery {
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: "degraded",
 		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
-		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "ETH", SeriesTag: testSeriesTag}, {SubjectId: "BTC", SeriesTag: testSeriesTag}},
-		FailedSeries:   []*storagepb.SeriesRef{{SubjectId: "ETH", SeriesTag: testSeriesTag}},
-		CompletedAt:    timestamppb.New(period.Add(time.Minute)),
+		CompletedAt: period.Add(time.Minute).UnixMilli(),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
 		EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars",
@@ -483,8 +480,7 @@ func stockDelivery(t *testing.T, eventID string, period time.Time) *jetstream.De
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "stock_bars", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
 		Source: "ledger", SnapshotRef: "scope-1", UniverseSubjectIds: []string{"600000.SH"},
-		UniverseSeries: []*storagepb.SeriesRef{{SubjectId: "600000.SH", SeriesTag: "default"}},
-		CompletedAt:    timestamppb.New(period.Add(5 * time.Minute)),
+		CompletedAt: period.Add(5 * time.Minute).UnixMilli(),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
 		EventID: eventID, OccurredAt: period.Add(5 * time.Minute), SpaceID: "stockcn", SubjectID: "stock_bars",

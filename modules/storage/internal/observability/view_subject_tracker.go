@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	// maxViewSeriesObservations 是每个进程跟踪的序列（标的加 series_tag）上限，免得格式错误或失控的 View 让跟踪表无限增长。
-	// 按 2 万个标的估算：统一数据集每个标的有现货、永续两条序列，所以是 4 万条序列。
+	// maxViewSeriesObservations 是每个进程跟踪的序列（View 里的标的加 series_tag）上限，免得格式错误或失控的 View 让跟踪表无限增长。
+	// 每个 View 里一个标的只有一条序列；按全部 K 线 View 合计约 2 万个标的、留一倍余量估算为 4 万条。
 	maxViewSeriesObservations      = 40000
 	maxViewDatasetMetricLabelBytes = 256
 	// ViewLaggingSubjectsReported caps the named lagging subjects per View;
@@ -30,7 +30,6 @@ const (
 // decides whether a given View represents a K-line business stream.
 type ViewDatasetObservation struct {
 	SpaceID   string
-	ViewID    string
 	DatasetID string
 	SubjectID string
 	Frequency string
@@ -42,7 +41,7 @@ type ViewDatasetObservation struct {
 var ErrViewSeriesLimit = errors.New("storage view series observation limit exceeded")
 
 type viewSubjectScope struct {
-	spaceID, viewID, datasetID, freq string
+	spaceID, datasetID, freq string
 }
 
 type viewSubjectState struct {
@@ -52,9 +51,8 @@ type viewSubjectState struct {
 	// written since the restart.
 	trackedSince int64
 	latest       int64
-	// series holds the latest output bar of each (subject, series_tag). A
-	// unified Dataset carries several series per subject (spot and swap); one
-	// of them falling behind must not be hidden by another that is current.
+	// series 记录每条序列（标的加 series_tag）最新输出的一根。同一标的可能有
+	// 多条序列，其中一条落后不能被另一条最新的掩盖。
 	series map[viewSeries]int64
 	// subjects counts the series of each distinct subject.
 	subjects map[string]int
@@ -89,7 +87,7 @@ type viewSubjectTracker struct {
 }
 
 func newViewSubjectTracker() *viewSubjectTracker {
-	labels := []string{"space_id", "view_id", "dataset_id", "freq"}
+	labels := []string{"space_id", "dataset_id", "freq"}
 	return &viewSubjectTracker{
 		scopes: make(map[viewSubjectScope]*viewSubjectState),
 		limit:  maxViewSeriesObservations,
@@ -147,7 +145,7 @@ func (t *viewSubjectTracker) retain(active map[ViewKey]struct{}) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for scope, state := range t.scopes {
-		if _, keep := active[ViewKey{SpaceID: scope.spaceID, ViewID: scope.viewID}]; keep {
+		if _, keep := active[ViewKey{SpaceID: scope.spaceID, DatasetID: scope.datasetID}]; keep {
 			continue
 		}
 		t.observed -= len(state.series)
@@ -174,7 +172,7 @@ func (t *viewSubjectTracker) Collect(ch chan<- prometheus.Metric) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for scope, state := range t.scopes {
-		labels := []string{scope.spaceID, scope.viewID, scope.datasetID, scope.freq}
+		labels := []string{scope.spaceID, scope.datasetID, scope.freq}
 		cutoff := state.latest - int64((state.bar+viewSubjectLagTolerance)/time.Second)
 		// A subject trails when any of its series trails; it is named with the oldest bar among them.
 		oldest := make(map[string]int64)
@@ -211,13 +209,13 @@ func (t *viewSubjectTracker) Collect(ch chan<- prometheus.Metric) {
 
 func canonicalViewSubject(observation ViewDatasetObservation) (viewSubjectScope, string, time.Duration, error) {
 	scope := viewSubjectScope{
-		spaceID: strings.TrimSpace(observation.SpaceID), viewID: strings.TrimSpace(observation.ViewID),
+		spaceID:   strings.TrimSpace(observation.SpaceID),
 		datasetID: strings.TrimSpace(observation.DatasetID), freq: strings.TrimSpace(observation.Frequency),
 	}
 	subjectID := strings.TrimSpace(observation.SubjectID)
-	for _, value := range []string{scope.spaceID, scope.viewID, scope.datasetID, scope.freq, subjectID} {
+	for _, value := range []string{scope.spaceID, scope.datasetID, scope.freq, subjectID} {
 		if value == "" {
-			return viewSubjectScope{}, "", 0, fmt.Errorf("storage view dataset observation requires space_id, view_id, dataset_id, subject_id, and freq")
+			return viewSubjectScope{}, "", 0, fmt.Errorf("storage view dataset observation requires space_id, dataset_id, subject_id, and freq")
 		}
 		if len(value) > maxViewDatasetMetricLabelBytes {
 			return viewSubjectScope{}, "", 0, fmt.Errorf("storage view dataset observation label exceeds %d bytes", maxViewDatasetMetricLabelBytes)

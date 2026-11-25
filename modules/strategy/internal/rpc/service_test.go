@@ -90,7 +90,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, registered map[strin
 	}
 	tasks := map[string]input.TaskBinding{}
 	for i, id := range taskIDs {
-		viewID, err := input.ViewIDOfTask(id)
+		datasetID, err := input.DatasetIDOfTask(id)
 		if err != nil {
 			return input.Resolved{}, nil, err
 		}
@@ -99,7 +99,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, registered map[strin
 			market = []string{"spot", "swap"}[i]
 			mode = dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}
 		}
-		tasks[market] = input.TaskBinding{ViewID: viewID, FactorTaskID: id, DatasetID: "ds"}
+		tasks[market] = input.TaskBinding{FactorTaskID: id, DatasetID: datasetID}
 	}
 	strategy.Market = mode
 	program, err := dsl.Compile(strategy, columns)
@@ -185,6 +185,16 @@ type harness struct {
 	now      time.Time
 }
 
+// ms 把测试里的 RFC3339 时刻或日期（UTC 零点）换成接口用的 Unix 毫秒。
+func ms(text string) int64 {
+	for _, layout := range []string{time.RFC3339Nano, time.DateOnly} {
+		if at, err := time.Parse(layout, text); err == nil {
+			return at.UnixMilli()
+		}
+	}
+	panic("无法解析的测试时刻：" + text)
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
@@ -195,7 +205,7 @@ func newHarness(t *testing.T) *harness {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	coverage := input.ViewInfo{ViewID: "view_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
+	coverage := input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
 	h := &harness{t: t, resolver: &fakeResolver{view: coverage}, trade: &fakeTrade{}, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
 	h.service = &Service{Store: repo, Resolver: h.resolver, Trade: h.trade, Now: func() time.Time { return h.now }}
 	ctx := trpc.BackgroundContext()
@@ -495,7 +505,7 @@ func TestS20HistoryAfterRedefinition(t *testing.T) {
 	h.createStrategy("s1", demoDSL)
 	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
 	oldSession := created.GetInstance().GetSessionId()
-	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"view_id":"view_factor_i1"}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"views":{"dataset_factor_i1":{}}}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
 	weight := "1"
 	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, Items: []store.ResultItem{{RuleID: "r", InstrumentID: "BTC-USDT", Stage: engine.StageWeighted, Weight: &weight}}, Now: h.now}); err != nil {
 		t.Fatal(err)
@@ -510,7 +520,7 @@ func TestS20HistoryAfterRedefinition(t *testing.T) {
 	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
 	got, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r-old"})
 	requireOK(t, int32(got.GetRetInfo().GetCode()), got.GetRetInfo().GetMsg())
-	if got.GetDslYaml() != demoDSL || !strings.Contains(got.GetResolvedJson(), `"view_id":"view_factor_i1"`) || len(got.GetItems()) != 1 || got.GetItems()[0].GetWeight() != "1" {
+	if got.GetDslYaml() != demoDSL || !strings.Contains(got.GetResolvedJson(), `"dataset_id":"dataset_factor_i1"`) || len(got.GetItems()) != 1 || got.GetItems()[0].GetWeight() != "1" {
 		t.Fatalf("旧会话结果应按旧 DSL 与旧绑定展示：dsl=%q resolved=%s items=%+v", got.GetDslYaml(), got.GetResolvedJson(), got.GetItems())
 	}
 	targets, _ := h.service.ListStrategyTargets(h.ctx, &strategypb.ListStrategyTargetsReq{InstanceId: "i1"})
@@ -555,13 +565,15 @@ func TestValidateStrategy(t *testing.T) {
 func TestS26StartReplayChecksTaskMarkets(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_swap"}, StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_swap"}, StartTime: ms("2026-09-01T00:00:00Z"), EndTime: ms("2026-09-02T00:00:00Z")})
 	requireFail(t, int32(swap.GetRetInfo().GetCode()), swap.GetRetInfo().GetMsg(), "登记为 spot 市场")
-	empty, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	empty, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", StartTime: ms("2026-09-01T00:00:00Z"), EndTime: ms("2026-09-02T00:00:00Z")})
 	requireFail(t, int32(empty.GetRetInfo().GetCode()), empty.GetRetInfo().GetMsg(), "factor_tasks 不能为空")
-	badRange, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-01T00:00:00Z"})
+	badRange, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-02T00:00:00Z"), EndTime: ms("2026-09-01T00:00:00Z")})
 	requireFail(t, int32(badRange.GetRetInfo().GetCode()), badRange.GetRetInfo().GetMsg(), "晚于")
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SpotFeeBps: 10})
+	noStart, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, EndTime: ms("2026-09-02T00:00:00Z")})
+	requireFail(t, int32(noStart.GetRetInfo().GetCode()), noStart.GetRetInfo().GetMsg(), "start_time 必须是正的 Unix 毫秒时刻")
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), SpotFeeBps: 10})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	if started.GetReplay().GetStatus() != store.ReplayPending || started.GetReplay().GetDslYaml() != demoDSL || started.GetReplay().GetStrategyId() != "s1" {
 		t.Fatalf("回放任务不符：%+v", started.GetReplay())
@@ -616,21 +628,21 @@ func TestStoreErrorsAreNormalized(t *testing.T) {
 func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只能给出其一")
-	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireFail(t, int32(neither.GetRetInfo().GetCode()), neither.GetRetInfo().GetMsg(), "只能给出其一")
-	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
-	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	h.resolver.view = input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
+	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
-	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02", EndTime: "2026-09-30"})
+	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-02"), EndTime: ms("2026-09-30")})
 	requireOK(t, int32(future.GetRetInfo().GetCode()), future.GetRetInfo().GetMsg())
 	// 最新一根的 bar_start 是 09-03 05:00：它可能还没写完，终点截到它的 bar_start，回放到它之前一根为止。
-	if end := future.GetReplay().GetEndTime(); end != "2026-09-03T05:00:00Z" {
-		t.Fatalf("终点应截到最新一根的 bar_start：%s", end)
+	if end := future.GetReplay().GetEndTime(); end != ms("2026-09-03T05:00:00Z") {
+		t.Fatalf("终点应截到最新一根的 bar_start：%d", end)
 	}
-	if future.GetBarCount() != 29 || future.GetFirstBarEnd() != "2026-09-02T01:00:00Z" || future.GetLastBarEnd() != "2026-09-03T05:00:00Z" {
-		t.Fatalf("应返回实际回放的根数与首末根：%d %s %s", future.GetBarCount(), future.GetFirstBarEnd(), future.GetLastBarEnd())
+	if future.GetBarCount() != 29 || future.GetFirstBarEnd() != ms("2026-09-02T01:00:00Z") || future.GetLastBarEnd() != ms("2026-09-03T05:00:00Z") {
+		t.Fatalf("应返回实际回放的根数与首末根：%d %d %d", future.GetBarCount(), future.GetFirstBarEnd(), future.GetLastBarEnd())
 	}
 	stored, err := h.service.Store.GetReplay(h.ctx, future.GetReplay().GetReplayId())
 	if err != nil {
@@ -640,10 +652,10 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	if err != nil || len(bars) != 29 {
 		t.Fatalf("落库往返后仍应是 29 根：%d err=%v", len(bars), err)
 	}
-	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02", EndTime: "2026-09-03", SpotFeeBps: 1500})
+	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-02"), EndTime: ms("2026-09-03"), SpotFeeBps: 1500})
 	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "fee_bps")
 	h.resolver.view.IndexedFrom = time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
-	tooLong, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2023-01-02", EndTime: "2026-09-30"})
+	tooLong, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2023-01-02"), EndTime: ms("2026-09-30")})
 	requireFail(t, int32(tooLong.GetRetInfo().GetCode()), tooLong.GetRetInfo().GetMsg(), "20000")
 }
 
@@ -694,27 +706,27 @@ func TestGetStrategyResultFailsWhenSnapshotReadErrors(t *testing.T) {
 func TestStartReplaySupportsSwapAndDualTasks(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SwapFeeBps: 5})
+	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), SwapFeeBps: 5})
 	requireOK(t, int32(swap.GetRetInfo().GetCode()), swap.GetRetInfo().GetMsg())
 	if tasks := swap.GetReplay().GetTasks(); len(tasks) != 1 || tasks["swap"].GetFactorTaskId() != "ftask_swap" || swap.GetReplay().GetSwapFeeBps() != 5 {
 		t.Fatalf("永续回放的任务与费率不符：%+v", swap.GetReplay())
 	}
-	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a", "swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SpotFeeBps: 10, SwapFeeBps: 5})
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a", "swap": "ftask_swap"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), SpotFeeBps: 10, SwapFeeBps: 5})
 	requireOK(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg())
 	stored, err := h.service.Store.GetReplay(h.ctx, both.GetReplay().GetReplayId())
 	if err != nil || len(stored.Tasks) != 2 || stored.Tasks["spot"].FactorTaskID != "ftask_a" || stored.Tasks["swap"].FactorTaskID != "ftask_swap" || stored.Tasks["swap"].ViewGeneration == "" || stored.SpotFeeBps != 10 || stored.SwapFeeBps != 5 {
 		t.Fatalf("双任务回放的记录不符：%+v err=%v", stored, err)
 	}
-	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SwapFeeBps: 1500})
+	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), SwapFeeBps: 1500})
 	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "swap_fee_bps")
 	// 滑点与手续费同一范围，随回放记录保存并在详情里返回。
-	slipped, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SlippageBps: 3})
+	slipped, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), SlippageBps: 3})
 	requireOK(t, int32(slipped.GetRetInfo().GetCode()), slipped.GetRetInfo().GetMsg())
 	if slipped.GetReplay().GetSlippageBps() != 3 {
 		t.Fatalf("回放应带上滑点：%+v", slipped.GetReplay())
 	}
 	for _, value := range []float64{-1, 201} {
-		badSlippage, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SlippageBps: value})
+		badSlippage, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), SlippageBps: value})
 		requireFail(t, int32(badSlippage.GetRetInfo().GetCode()), badSlippage.GetRetInfo().GetMsg(), "slippage_bps")
 	}
 }

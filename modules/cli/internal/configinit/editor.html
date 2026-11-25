@@ -153,7 +153,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
 
     <section id="page-edit" hidden>
       <h1>修改配置</h1>
-      <p class="lede">修改常用设置。保存前会完整校验，有错误不会保存；保存后写回两份文件（秘密文件重新加密），并同步备份到你的管理后台。</p>
+      <p class="lede">修改常用设置。保存前会完整校验，有错误不会保存；保存后写回两份文件（秘密文件重新加密）。</p>
       <div id="form"></div>
       <div class="row">
         <button type="button" class="primary" id="save">保存修改</button>
@@ -208,14 +208,11 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
   }
   function showAlert(message, kind) { var box = $('alert'); box.textContent = message || ''; box.className = 'alert ' + (kind || 'err'); box.hidden = !message; if (message) window.scrollTo(0, 0); }
 
-  // 本机保存成功后，再说明有没有同步到管理后台的备份。
-  function showSaved(sync) {
-    var failed = sync && sync.indexOf('暂时没能') >= 0;
-    var text = '已校验并保存在这台电脑上。' + (sync && !failed ? sync : '');
+  function showSaved() {
+    var text = '已校验并保存在这台电脑上。';
     showAlert(text, 'ok');
-    if (failed) showAlert(sync, 'warn');
     // 保存成功用弹窗明确告诉用户（顶部提示条在页面滚动到下面时容易看不到）。
-    openModal('保存成功', failed ? text + sync : text);
+    openModal('保存成功', text);
   }
   function openModal(title, text) {
     $('modal-title').textContent = title;
@@ -249,7 +246,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       var encrypt = el('button', { type: 'button', text: '加密保存' });
       encrypt.addEventListener('click', function () {
         encrypt.disabled = true;
-        post('config/encrypt').then(function (data) { renderOverview(data.overview); showSaved(data.sync); }, function (err) { showAlert(err.message); encrypt.disabled = false; });
+        post('config/encrypt').then(function (data) { renderOverview(data.overview); showSaved(); }, function (err) { showAlert(err.message); encrypt.disabled = false; });
       });
       status.className = 'status warn';
       status.replaceChildren(icon(WARN), el('span', { text: '秘密文件目前是明文保存的。加密后，密钥会存放在' + view.key_store + '，文件被拷走也无法读取。' }), encrypt);
@@ -293,7 +290,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     $('xkeys-block').hidden = !(view.exchange_keys || []).length;
     var privacy = $('privacy');
     privacy.replaceChildren(icon(LOCK), el('span', {}, view.encrypted
-      ? ['配置保存在这台电脑上，秘密文件加密保存，密钥存放在' + view.key_store + '，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。保存时会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。']
+      ? ['配置保存在这台电脑上，秘密文件加密保存，密钥存放在' + view.key_store + '，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。换电脑时把两份文件一起拷过去。']
       : ['配置保存在这台电脑上，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。建议把秘密文件加密保存。']));
   }
 
@@ -332,7 +329,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
 
     ctl.adminUser = input({}, form.admin.username);
     var adminPass = secretInput(form.admin.password); ctl.adminPass = adminPass.input;
-    root.append(block('管理员', '登录管理台的账号。密码设定后不能修改，这里填的必须和管理台的登录密码一致（配置备份也用它加密）。',
+    root.append(block('管理员', '登录管理台的账号，是初始值：部署控制机时用它建管理员，之后在控制机上改过密码的话这里也要跟着改，setup init 才会用它核对登录。',
       el('div', { class: 'fields two' }, [field('用户名', ctl.adminUser), field('密码', adminPass.node)])));
 
     ctl.secretId = input({}, form.tencent.secret_id);
@@ -504,7 +501,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     button.disabled = true;
     post('config/update', gatherForm()).then(function (data) {
       renderOverview(data.overview);
-      showSaved(data.sync);
+      showSaved();
       loadForm();
     }, function (err) { showAlert(err.message); }).finally(function () { button.disabled = false; });
   });

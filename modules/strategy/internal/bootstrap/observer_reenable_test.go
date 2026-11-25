@@ -15,7 +15,7 @@ import (
 func TestReenabledStockInstanceAdvancesWatermarkToSessionStart(t *testing.T) {
 	repo := openStore(t)
 	ctx := context.Background()
-	hkJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"5m","calendar":"hk_stock","columns":{},"view_columns":["close"]}`
+	hkJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"5m","calendar":"hk_stock","columns":{},"view_columns":["close"]}`
 	seedEnabled(t, repo, "i1", nil, hkJSON)
 	hongKong := time.FixedZone("HKT", 8*3600)
 	commit := func(id, session string, barEnd time.Time) {
@@ -90,7 +90,7 @@ func TestReenabledStockInstanceAdvancesWatermarkToSessionStart(t *testing.T) {
 func TestReenableGraceRetriedAfterModuleResumes(t *testing.T) {
 	repo := openStore(t)
 	ctx := context.Background()
-	hkJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"5m","calendar":"hk_stock","columns":{},"view_columns":["close"]}`
+	hkJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"5m","calendar":"hk_stock","columns":{},"view_columns":["close"]}`
 	seedEnabled(t, repo, "i1", nil, hkJSON)
 	hongKong := time.FixedZone("HKT", 8*3600)
 	wednesday := time.Date(2026, 11, 18, 10, 0, 0, 0, hongKong)

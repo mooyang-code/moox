@@ -51,10 +51,9 @@ type Target interface {
 	Rebuild(ctx context.Context) (viewindex.FollowState, error)
 }
 
-// Key 标识一个跟随器：View 与它读取的数据集。
+// Key 标识一个跟随器：一个数据集的查询索引只有一个跟随器。
 type Key struct {
 	SpaceID   string
-	ViewID    string
 	DatasetID string
 }
 
@@ -81,6 +80,8 @@ type Lag struct {
 	Changes uint64
 	// Seconds 是距离上一次追上日志头部的时长；正在服务端等待新变更（已追上）时为 0。
 	Seconds float64
+	// Since 是这一次落后的起点：上一次追上日志头部的时刻（还没追上过时是跟随器启动时刻）；已追上时为零值。
+	Since time.Time
 }
 
 // Manager 管理全部跟随器。
@@ -89,10 +90,8 @@ type Manager struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	mu        sync.Mutex
-	followers map[viewKey]*follower
+	followers map[Key]*follower
 }
-
-type viewKey struct{ spaceID, viewID string }
 
 // NewManager 创建跟随器管理器；Close 停止全部跟随器并落盘它们的进度。
 func NewManager(ctx context.Context, opts Options) (*Manager, error) {
@@ -107,57 +106,52 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 		opts.PersistInterval = DefaultPersistInterval
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	return &Manager{opts: opts, ctx: runCtx, cancel: cancel, followers: make(map[viewKey]*follower)}, nil
+	return &Manager{opts: opts, ctx: runCtx, cancel: cancel, followers: make(map[Key]*follower)}, nil
 }
 
-// Ensure 保证 View 有一个跟随器：已经在跟随同一个数据集时不动，数据集变了先停掉旧的。
+// Ensure 保证数据集的查询索引有一个跟随器：已经在跟随时不动。
 func (m *Manager) Ensure(key Key, target Target) {
-	if m == nil || key.SpaceID == "" || key.ViewID == "" || key.DatasetID == "" || target == nil {
+	if m == nil || key.SpaceID == "" || key.DatasetID == "" || target == nil {
 		return
 	}
-	ref := viewKey{key.SpaceID, key.ViewID}
 	m.mu.Lock()
 	if m.ctx.Err() != nil {
 		m.mu.Unlock()
 		return
 	}
-	old := m.followers[ref]
-	if old != nil && old.key == key {
+	if m.followers[key] != nil {
 		m.mu.Unlock()
 		return
 	}
 	f := newFollower(m, key, target)
-	m.followers[ref] = f
+	m.followers[key] = f
 	m.mu.Unlock()
-	if old != nil {
-		old.stop()
-	}
 	go f.run()
 }
 
-// Stop 停掉一个 View 的跟随器（View 被删除、或要从头建索引）。
-func (m *Manager) Stop(spaceID, viewID string) {
+// Stop 停掉一个数据集查询索引的跟随器（数据集被删除或停用、或要从头建索引）。
+func (m *Manager) Stop(spaceID, datasetID string) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	f := m.followers[viewKey{spaceID, viewID}]
-	delete(m.followers, viewKey{spaceID, viewID})
+	f := m.followers[Key{SpaceID: spaceID, DatasetID: datasetID}]
+	delete(m.followers, Key{SpaceID: spaceID, DatasetID: datasetID})
 	m.mu.Unlock()
 	if f != nil {
 		f.stop()
 	}
 }
 
-// Retain 停掉 keep 不包含的跟随器（View 已删除或停用）。
-func (m *Manager) Retain(keep func(spaceID, viewID string) bool) {
+// Retain 停掉 keep 不包含的跟随器（数据集已删除或停用）。
+func (m *Manager) Retain(keep func(spaceID, datasetID string) bool) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	var stopped []*follower
 	for ref, f := range m.followers {
-		if !keep(ref.spaceID, ref.viewID) {
+		if !keep(ref.SpaceID, ref.DatasetID) {
 			stopped = append(stopped, f)
 			delete(m.followers, ref)
 		}
@@ -186,18 +180,18 @@ func (m *Manager) Close() {
 	}
 }
 
-func (m *Manager) follower(spaceID, viewID string) *follower {
+func (m *Manager) follower(spaceID, datasetID string) *follower {
 	if m == nil {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.followers[viewKey{spaceID, viewID}]
+	return m.followers[Key{SpaceID: spaceID, DatasetID: datasetID}]
 }
 
 // Status 返回 View 跟随器的进度；没有跟随器时 ok 为假。
-func (m *Manager) Status(spaceID, viewID string) (Status, bool) {
-	f := m.follower(spaceID, viewID)
+func (m *Manager) Status(spaceID, datasetID string) (Status, bool) {
+	f := m.follower(spaceID, datasetID)
 	if f == nil {
 		return Status{}, false
 	}
@@ -229,8 +223,8 @@ var ErrNotFollowing = errors.New("View 还没有开始跟随变更日志")
 //
 // 跟随器在服务端等待新变更期间，扫描过的、不属于本数据集的条目不会马上反映到游标上，空闲数据集的游标会落后头部最多一轮等待。
 // 所以先从游标往后扫一遍（不等待）：头部之前没有本数据集的条目就直接算跟上，有的话等跟随器扫到最后一条。
-func (m *Manager) WaitApplied(ctx context.Context, spaceID, viewID string, timeout time.Duration) (bool, viewindex.ChangeCursor, viewindex.ChangeCursor, error) {
-	f := m.follower(spaceID, viewID)
+func (m *Manager) WaitApplied(ctx context.Context, spaceID, datasetID string, timeout time.Duration) (bool, viewindex.ChangeCursor, viewindex.ChangeCursor, error) {
+	f := m.follower(spaceID, datasetID)
 	if f == nil {
 		return false, viewindex.ChangeCursor{}, viewindex.ChangeCursor{}, ErrNotFollowing
 	}

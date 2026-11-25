@@ -9,20 +9,19 @@ import { freqSeconds, runBarLag, taskHealth } from "@/views/factor/shared/health
 import { statusLabel } from "@/views/ops/monitor/health-display";
 import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
-import { pendingItems, stateOf } from "@/views/strategy/overview/overview-model";
+import { pendingItems, stateOf } from "@/views/strategy/attention-model";
 import { sortInstancesForResults } from "@/views/strategy/results/results-model";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
-import { formatInstant, marketTime } from "@/utils/time-zone";
+import { formatInstant, marketTime, toInstantMs } from "@/utils/time-zone";
 
 /** 首页统一的状态色：正常、需要关注、异常、无观测。 */
 export type Tone = "ok" | "warn" | "bad" | "idle";
 
 export type HomeTarget = string | StrategyLink;
 
-/** 数据集与 View 的显示名称，用来把监控、日志里的内部 ID 换成人能读的名字。 */
+/** 数据集的显示名称，用来把监控、日志里的内部 ID 换成人能读的名字。 */
 export interface NameBook {
   datasets: Record<string, string>;
-  views: Record<string, string>;
 }
 
 export function toneOf(status?: string): Tone {
@@ -52,25 +51,23 @@ export function humanizeDuration(seconds: number | null): string {
   return `${(seconds / 86400).toFixed(1)} 天`;
 }
 
-/** 解析 ISO 时间或 Unix 秒；无法解析返回 null。 */
+/** 时刻换成毫秒：数字与数字字符串按 Unix 毫秒（墙钟时刻的写法），文本按 RFC3339；无法解析返回 null。Unix 秒（数据坐标）由调用方先乘 1000。 */
 export function toMillis(value?: string | number | null): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  if (typeof value === "number" || /^\d+$/.test(String(value))) {
-    const seconds = Number(value);
-    return seconds > 0 ? seconds * 1000 : null;
-  }
-  const parsed = Date.parse(String(value));
-  return Number.isFinite(parsed) ? parsed : null;
+  return toInstantMs(value);
 }
 
-/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按 Unix 秒理解。 */
+/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按 Unix 毫秒理解。 */
 export function fullTime(value: string | number | null | undefined, zone = "UTC"): string {
   return formatInstant(toMillis(value), zone);
 }
 
 /** 相对时间：刚刚、N 分钟前、N 小时前、N 天前；晚于现在（时钟偏差）时写 zone 下的绝对时间。 */
 export function relativeTime(value: string | number | null | undefined, nowMs: number, zone = "UTC"): string {
-  const at = toMillis(value);
+  return relativeMs(toMillis(value), nowMs, zone);
+}
+
+/** 同 relativeTime，入参是已解析好的 Unix 毫秒（null 表示没有）。 */
+export function relativeMs(at: number | null, nowMs: number, zone = "UTC"): string {
   if (at === null) return "—";
   const diff = Math.round((nowMs - at) / 1000);
   if (diff < 0) return marketTime(at, zone, nowMs);
@@ -81,9 +78,9 @@ export function relativeTime(value: string | number | null | undefined, nowMs: n
   return `${Math.floor(diff / 86400)} 天前`;
 }
 
-/** 把文本里的数据集 / View 内部 ID 换成名称（名称未知时保留原 ID）。 */
+/** 把文本里的数据集内部 ID 换成名称（名称未知时保留原 ID）。 */
 export function prettifyIds(text: string, names: NameBook): string {
-  return text.replace(/\b(dataset|view)_[a-z0-9_]+\b/gi, id => names.datasets[id] || names.views[id] || id);
+  return text.replace(/\bdataset_[a-z0-9_]+\b/gi, id => names.datasets[id] || id);
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -144,7 +141,7 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
         key: `${producer}/${item.space_id}/${id}/${item.freq}`,
         datasetId: id,
         stage: STAGE_LABELS[producer] || stage.name || producer,
-        name: names.datasets[id] || names.views[id] || id,
+        name: names.datasets[id] || id,
         freq: item.freq || "",
         lag: behind === null ? "—" : waiting > 0 ? `等待 ${humanizeDuration(behind)}` : "已追平",
         tone,
@@ -189,7 +186,9 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
       const set = info.factor_task;
       const health = taskHealth(set, info.last_run);
       const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
-      const periodOpenMs = toMillis(info.last_run?.last_period_time);
+      // last_period_time 是数据坐标的 Unix 秒
+      const periodOpenSeconds = toSeconds(info.last_run?.last_period_time);
+      const periodOpenMs = periodOpenSeconds ? periodOpenSeconds * 1000 : null;
       const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
       return {
         taskId: set.task_id,
@@ -272,8 +271,8 @@ export function strategyRows(
       holdingCount: ranked.length,
       gross,
       cash: snapshot && instance.enabled ? { text: percent(cashRatio, 1), ratio: barMax > 0 ? cashRatio / barMax : 0 } : null,
-      lastBar: snapshot?.bar_end_time ? relativeTime(snapshot.bar_end_time, nowMs, zone) : "—",
-      lastBarTitle: snapshot?.bar_end_time ? fullTime(snapshot.bar_end_time, zone) : "",
+      lastBar: relativeMs(toInstantMs(snapshot?.bar_end_time), nowMs, zone),
+      lastBarTitle: toInstantMs(snapshot?.bar_end_time) === null ? "" : formatInstant(snapshot?.bar_end_time, zone),
       link: resultsLink(instance.instance_id)
     };
   });
@@ -324,7 +323,7 @@ export function attentionItems(input: {
       ...(alert.object?.space_id ? { spaceId: alert.object.space_id } : {})
     };
   });
-  for (const item of pendingItems({ ...input.strategy, replays: [], nowMs: input.nowMs })) {
+  for (const item of pendingItems({ ...input.strategy, nowMs: input.nowMs })) {
     items.push({
       key: `strategy-${item.kind}-${item.instanceId}`,
       tone: item.kind === "degraded" ? "bad" : "warn",
@@ -395,8 +394,8 @@ export function hostRows(hosts: HealthHost[]): HostRow[] {
     };
     const status = toneOf(host.status);
     return {
-      key: host.host_id || host.agent_id || host.hostname || "",
-      name: host.hostname || host.host_id || host.agent_id || "",
+      key: host.host_id || "",
+      name: host.hostname || host.host_id || "",
       tone: status === "ok" && (hot.cpu || hot.memory || hot.disk) ? "warn" : status,
       cpu: percentText(host.cpu_percent, host.cpu_available),
       memory: percentText(host.memory_percent, host.memory_available),
@@ -433,8 +432,8 @@ export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: n
     .filter(item => !isNoChange(item))
     .map((item, index) => ({
       key: String(item.id ?? index),
-      when: marketTime(toMillis(item.created_at), zone, nowMs),
-      whenTitle: fullTime(item.created_at, zone),
+      when: marketTime(toInstantMs(item.created_at), zone, nowMs),
+      whenTitle: formatInstant(item.created_at, zone),
       category: ACTIVITY_CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
       title: compactTitle(prettifyIds(item.title || "", names)),
       tone: item.level === "error" ? "bad" : item.level === "warning" ? "warn" : "idle"

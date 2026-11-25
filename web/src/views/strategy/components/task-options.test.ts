@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FactorMember, FactorTask, FactorTaskInfo } from "@/api/factor/types";
-import {
-  declaresFactorParams,
-  enabledTasks,
-  isUnifiedTask,
-  selectableTask,
-  taskColumns,
-  varMemberBlockReason
-} from "./task-options";
+import { declaresFactorParams, enabledTasks, selectableTask, taskColumns, varMemberBlockReason } from "./task-options";
 
 const task = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "ftask_a",
@@ -78,24 +71,8 @@ describe("enabledTasks", () => {
   });
 });
 
-describe("isUnifiedTask", () => {
-  it("is true only when the source dataset of the task is a unified dataset", () => {
-    const [unified, split] = enabledTasks(
-      [
-        info({ task_id: "ftask_u", name: "A", source_dataset_id: "ds_uni" }),
-        info({ task_id: "ftask_s", name: "B", source_dataset_id: "ds_spot" })
-      ],
-      "crypto"
-    );
-    const unifiedIds = new Set(["ds_uni"]);
-    expect(unified.sourceDatasetId).toBe("ds_uni");
-    expect(isUnifiedTask(unified, unifiedIds)).toBe(true);
-    expect(isUnifiedTask(split, unifiedIds)).toBe(false);
-  });
-});
-
 describe("varMemberBlockReason", () => {
-  it("只拦附加来源的任务；主帧任务（含策略池、统一数据集、双市场，不写 factor_params 时只读）都能选", () => {
+  it("只拦附加来源的任务；主帧任务（含策略池、双市场，不写 factor_params 时只读）都能选", () => {
     expect(varMemberBlockReason("")).toBe("");
     expect(varMemberBlockReason("daily")).toContain("附加来源的任务不能有可变成员");
   });

@@ -33,9 +33,9 @@ type fakeCore struct {
 }
 
 func newFakeCore() *fakeCore {
-	fake := newFakeExchange(exchange.MarketTypeStock)
+	fake := newFakeExchange(exchange.MarketTypeEquity)
 	fake.instrument = exchange.Instrument{
-		Exchange: fakeExchangeName, MarketType: exchange.MarketTypeStock,
+		Exchange: fakeExchangeName, MarketType: exchange.MarketTypeEquity,
 		ExchangeSymbol: fakeInstrument, InstrumentID: fakeInstrument,
 		BaseAsset: fakeInstrument, QuoteAsset: "CNY", SettlementAsset: "CNY",
 		ExchangeQuantityStep: shared.MustDecimal("100"),
@@ -137,7 +137,7 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "A 股",
-			Exchange: string(fakeExchangeName), Markets: []string{string(exchange.MarketTypeStock)},
+			Exchange: string(fakeExchangeName), Markets: []string{string(exchange.MarketTypeEquity)},
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: "fake-exchange-secret", SettlementAsset: "CNY",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
@@ -150,7 +150,7 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: string(fakeExchangeName), MarketType: string(exchange.MarketTypeStock),
+			Exchange: string(fakeExchangeName), MarketType: string(exchange.MarketTypeEquity),
 			Environment:    string(exchange.AccountEnvironmentTestnet),
 			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: instrument.InstrumentID,
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
@@ -211,7 +211,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 		return fakeAdapter{ExecutionAdapter: core}, nil
 	})
 	adapter, err := registry.Bind(exchange.AccountConfig{
-		TradingAccountID: testAccount, Exchange: fakeExchangeName, Markets: []exchange.MarketType{exchange.MarketTypeStock},
+		TradingAccountID: testAccount, Exchange: fakeExchangeName, Markets: []exchange.MarketType{exchange.MarketTypeEquity},
 		ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "CNY",
 	}, exchange.Credential{Extra: map[string]string{"gateway": "127.0.0.1:9000"}})
 	require.NoError(t, err)
@@ -242,7 +242,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	}
 	deliver := func(id string, sequence int64, quantity string) jetstream.HandlerDecision {
 		result := eventconsumer.HandleTarget(ctx, targetDeliveryWithTargets(t, now, id, sequence,
-			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "STOCK", TargetWeight: quantity}},
+			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "equity", TargetWeight: quantity}},
 		), options)
 		return result.Decision
 	}

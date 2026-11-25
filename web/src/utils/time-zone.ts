@@ -7,6 +7,12 @@
  * - 所有时间都带数字偏移后缀：UTC、UTC+8、UTC−4（负号是 U+2212），不用 CST、EST 这类缩写；
  * - 不显示毫秒、纳秒；时间输入按同一个时区解释墙钟。
  *
+ * 后端时间的两种写法（阶段三 3H）：
+ * - 墙钟时刻（创建、更新、心跳、过期等）是 int64 毫秒，网关 JSON 里是十进制数字字符串（如 "1700000000000"）；
+ *   TS 类型写 string，页面只经 formatInstant / marketTime 显示、经 toInstantMs 比较排序，不要直接 Date.parse 或做算术。
+ * - 数据坐标 data_time 及其上下界保持 RFC3339 文本，同样交给 toInstantMs，它的文本分支最终只留给这一类。
+ * 各模块的接口在逐个从文本改成毫秒，过渡期两种写法这里都收，页面不用跟着改。
+ *
  * 只用浏览器自带的 Intl，不依赖浏览器本地时区。
  */
 
@@ -78,8 +84,9 @@ export function zoneSuffix(ms: number, timeZone?: string | null): string {
 }
 
 /**
- * 把后端给的时间换成毫秒时刻：毫秒数字、纯数字字符串（毫秒）、RFC3339（含纳秒、Z 或数字偏移）。
- * 不带时区的 “YYYY-MM-DD HH:mm:ss” 按 UTC 理解。秒级时间由调用方先乘 1000，这里不猜单位。
+ * 把后端给的时间换成毫秒时刻：毫秒数字、纯数字字符串（毫秒，墙钟时刻的写法）、RFC3339（含纳秒、Z 或数字偏移，
+ * data_time 一类的写法）。不带时区的 “YYYY-MM-DD HH:mm:ss” 按 UTC 理解。秒级时间由调用方先乘 1000，这里不猜单位。
+ * 0、空值、Go 零时间和 1970 年以前的值返回 null。
  */
 export function toInstantMs(value: string | number | Date | null | undefined): number | null {
   if (value === null || value === undefined || value === "") return null;

@@ -17,8 +17,8 @@ import (
 // 一年的日线一个标的只有一个分块。
 func TestStockDailyCheckExpectsTradingDaysAndMergesAcrossWeekends(t *testing.T) {
 	day := func(month time.Month, d int) time.Time { return time.Date(2026, month, d, 0, 0, 0, 0, time.UTC) }
-	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDatasetChange{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
-	change := &fetchplan.PlanDatasetChange{Changed: true, HashChanged: true, P: day(1, 5).Unix()}
+	content := &fetchplan.FetchPlanContent{Datasets: map[string]*fetchplan.PlanDataset{}, Functions: map[string]*fetchplan.PlanFunctionChange{}}
+	change := &fetchplan.PlanDataset{Action: fetchplan.PlanActionAppend, Register: true, Timeline: true, P: day(1, 5).Unix()}
 	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = "ds", "1d", 90, "hash:600519.XSHG"
 	change.Series = append(change.Series, seriesOf("600519.XSHG"))
 	content.Datasets["ds|1d"] = change
@@ -56,7 +56,7 @@ func TestStockDailyCheckExpectsTradingDaysAndMergesAcrossWeekends(t *testing.T) 
 
 	// 补最近一年：一个标的一段缺口、一个分块。
 	now = day(11, 11).Add(5 * time.Minute)
-	year, err := checker.Check(context.Background(), Request{SpaceID: "stockcn", From: time.Date(2025, 11, 11, 0, 0, 0, 0, time.UTC), To: day(11, 11), AssumeMissing: true, BeforeFirstPlan: true})
+	year, err := checker.Check(context.Background(), Request{SpaceID: "stockcn", From: time.Date(2025, 11, 11, 0, 0, 0, 0, time.UTC), To: day(11, 11), AssumeMissing: true})
 	require.NoError(t, err)
 	require.Len(t, year.Gaps, 1)
 	require.Greater(t, year.Expected, 235)

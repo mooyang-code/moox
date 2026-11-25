@@ -12,7 +12,9 @@
     <ZonedRangePicker v-model="range" :zone="zone" :quick-ranges="quickRanges" style="width: 100%" />
     <div v-if="rangeError && range" class="is-bad">{{ rangeError }}</div>
     <div v-if="prepareError" class="is-bad">读取线上保留期失败：{{ prepareError }}，下界由后端校验</div>
-    <div class="sub">只重读这段时间涉及的分区，不推进水位；排队中的到点拉取会被取消、让位；有运行中的运行时请稍后再试。</div>
+    <div class="sub">
+      只重读这段时间涉及的分区，不推进位点；排队中的跟随会被取消、让位；有排队中或运行中的整段重读、补拉区间或导入时请稍后再试。
+    </div>
   </a-modal>
 </template>
 
@@ -51,7 +53,7 @@ watch(
     prepareError.value = "";
     const request = guard.begin();
     try {
-      const rsp = await prepareArchiveTask(props.task.dataset_id, "", { silentError: true });
+      const rsp = await prepareArchiveTask(props.task.dataset_id, "");
       if (request.isLatest()) earliestMs.value = toInstantMs(rsp.earliest_backfill_from);
     } catch (cause) {
       if (request.isLatest()) prepareError.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";

@@ -24,7 +24,7 @@ type planCloud interface {
 	LatestPackage(ctx context.Context, spaceID, packageName string) (*cloud.Package, error)
 }
 
-// functionTarget 是一个定时函数在某个阶段应有的计划与 cron。cron 为空表示定时器停用（退役的函数保留过渡环境、只停定时器）。
+// functionTarget 是一个定时函数应有的计划与 cron。cron 为空表示定时器停用（退役的函数保留原来的环境、只停定时器）。
 type functionTarget struct {
 	Name   string
 	Region string
@@ -32,33 +32,21 @@ type functionTarget struct {
 	Cron   string
 }
 
-// planStage 是计划推进的两个阶段。
-const (
-	planStageTransition = "transition"
-	planStageFinal      = "final"
-)
-
-// planOpKey 是计划推进的操作用途：带计划号与阶段，只有用途相同的成功结果才算这一阶段的确认。
-func planOpKey(planID int64, stage string) string {
-	return fmt.Sprintf("plan=%d|stage=%s", planID, stage)
+// planOpKey 是计划推进的操作用途：带计划号，只有用途相同的成功结果才算这份计划的确认。
+func planOpKey(planID int64) string {
+	return fmt.Sprintf("plan=%d", planID)
 }
 
-// stageTarget 是计划推进传入阶段时的期望：过渡阶段用过渡计划与过渡 cron；最终阶段用最终计划与最终 cron，
-// 退役的函数（没有最终计划）保持过渡计划、cron 为空。
-func stageTarget(content *FetchPlanContent, function *PlanFunctionChange, stage string) functionTarget {
-	target := functionTarget{Name: function.Name, Region: function.Region, Plan: content.TransitionalPlan(function), Cron: content.TransitionalCron(function)}
-	if stage == planStageFinal {
-		if final := content.FinalPlan(function); final != nil {
-			target.Plan, target.Cron = final, content.FinalCron(function)
-		} else {
-			target.Cron = ""
-		}
+// pushTarget 是计划里一个函数下发后的期望：Target 与 Cron；退役的函数（Target 为空）保留 Old、cron 为空。
+func pushTarget(function *PlanFunctionChange) functionTarget {
+	if function.Target == nil {
+		return functionTarget{Name: function.Name, Region: function.Region, Plan: function.Old}
 	}
-	return target
+	return functionTarget{Name: function.Name, Region: function.Region, Plan: function.Target, Cron: function.Cron}
 }
 
 // confirmedTargets 按已经确认的状态算出每个定时函数应有的内容（读回修复、恢复启用、出口去重后重建、升级失败退回 Ensure 用）：
-// 未生效计划的 Finalized 里有它就用最终阶段；Transitioned 里有它就用过渡阶段；都没有就用最近一份已生效的计划。
+// 先取已生效计划的 Target，再叠加未生效计划里已确认下发（Pushed）的函数；退役的函数只停定时器。
 // 已生效计划里也没有的函数（还没被推进到）不在结果里，等计划推进。
 func (r *PlanReconciler) confirmedTargets(ctx context.Context) (map[string]functionTarget, error) {
 	targets := map[string]functionTarget{}
@@ -90,14 +78,8 @@ func (r *PlanReconciler) confirmedTargets(ctx context.Context) (map[string]funct
 			return nil, err
 		}
 		for name, function := range content.Functions {
-			if !function.IsSCF() {
-				continue
-			}
-			switch {
-			case progress.Finalized[name]:
-				targets[name] = stageTarget(content, function, planStageFinal)
-			case progress.Transitioned[name]:
-				targets[name] = stageTarget(content, function, planStageTransition)
+			if function.IsSCF() && progress.Pushed[name] {
+				targets[name] = pushTarget(function)
 			}
 		}
 	}
@@ -154,7 +136,7 @@ func (r *PlanReconciler) withPackage(ctx context.Context, op *functionOp, spec c
 	return spec, nil
 }
 
-// pausingHook 返回给 Ensure 的暂停判断：空间正在暂停时把这次操作记成“定时器被改成停用”，结果不算本阶段的确认。
+// pausingHook 返回给 Ensure 的暂停判断：空间正在暂停时把这次操作记成“定时器被改成停用”，结果不算计划的确认。
 func (r *PlanReconciler) pausingHook(op *functionOp) func() bool {
 	return func() bool {
 		if r.pausing.Load() {
@@ -579,7 +561,7 @@ func (r *PlanReconciler) ListCloudFunctions(ctx context.Context) ([]CloudFunctio
 	return views, nil
 }
 
-// viewTargets 是状态展示用的期望：按已确认的状态算，未生效计划里还没确认的函数按它的过渡计划。
+// viewTargets 是状态展示用的期望：按已确认的状态算，未生效计划里还没确认的函数按它的 Target。
 func (r *PlanReconciler) viewTargets(ctx context.Context) (map[string]functionTarget, error) {
 	targets, err := r.confirmedTargets(ctx)
 	if err != nil {
@@ -595,7 +577,7 @@ func (r *PlanReconciler) viewTargets(ctx context.Context) (map[string]functionTa
 	}
 	for name, function := range content.Functions {
 		if _, ok := targets[name]; !ok && function.IsSCF() {
-			targets[name] = stageTarget(content, function, planStageTransition)
+			targets[name] = pushTarget(function)
 		}
 	}
 	return targets, nil

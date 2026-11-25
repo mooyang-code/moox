@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { listSpaces } from "@/api/admin/spaces";
+import { listSpaces } from "@/api/storage/spaces";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 import { isSystemSpace, useSpaceStore } from "./space";
 
-vi.mock("@/api/admin/spaces", () => ({
+vi.mock("@/api/storage/spaces", () => ({
   listSpaces: vi.fn()
 }));
 vi.mock("@/api/admin/space-header", async importOriginal => ({

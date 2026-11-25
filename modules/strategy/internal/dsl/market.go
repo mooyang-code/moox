@@ -156,9 +156,6 @@ func ValidateMode(s Strategy, mode Market) error {
 	if mode.IsZero() {
 		return errors.New("策略的市场模式未确定")
 	}
-	if !mode.Single() && len(s.FactorParams) > 0 {
-		return fmt.Errorf("%s 策略要绑定现货、永续两个因子任务，不支持 factor_params（两个任务的可变成员键可能重名，参数回写会冲突）", modeLabel(mode))
-	}
 	for _, rule := range s.Rules {
 		if rule.Market != "" && mode.Single() && rule.Market != mode.Select {
 			return fmt.Errorf("规则 %s 写了 market: %s，与%s策略不一致：只有策略涉及现货、永续两个市场时，规则才能另选市场，单市场策略的规则 market 必须与策略相同", rule.ID, rule.Market, modeLabel(mode))

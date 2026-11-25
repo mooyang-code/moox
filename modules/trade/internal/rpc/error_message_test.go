@@ -109,7 +109,7 @@ func TestListPositionsRejectsNonMemberAccount(t *testing.T) {
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-2", Name: "account-2",
-			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "PAPER",
+			Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "PAPER",
 			SettlementAsset: "USDT", Status: "ENABLED",
 		})
 	}); err != nil {

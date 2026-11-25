@@ -57,7 +57,7 @@ func operators(ids ...string) *[]string { return &ids }
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418, "seaweedfs": 0}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "factor-engine": 11417, "archive-worker": 11418, "seaweedfs": 0}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -128,15 +128,17 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 				servicePtr(c, cloud).Methods[i].Operators = operators()
 			}
 		}},
-		{"ambiguous console method", func(c *Catalog) { servicePtr(c, "trpc.moox.admin.SpaceMgr").ConsoleName = "storage" }},
+		{"ambiguous console method", func(c *Catalog) {
+			secrets := servicePtr(c, "trpc.moox.ops.SecretMgr")
+			secrets.ConsoleName, secrets.Methods[0].Name = "storage", "ListSpaces"
+		}},
 		{"duplicate identity", func(c *Catalog) { c.Identities = append(c.Identities, c.Identities[0]) }},
 		{"identity is not external", func(c *Catalog) { c.Identities[0].External = false }},
 		{"identity without methods", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "orphan", External: true}) }},
 		{"identity shares a regular component ID", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "monitor", External: true}) }},
 		{"identity uses an operator ID", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "moox-cli", External: true}) }},
 		{"host gateway on business service", func(c *Catalog) { methodPtr(c, cloud, "GetTaskList").Callers = []string{"host-gateway"} }},
-		{"unsafe doctor path", func(c *Catalog) { c.Components[0].Doctor.WritablePaths = []string{"../outside"} }},
-		{"unknown dependency", func(c *Catalog) { c.Components[0].Doctor.Dependencies = []string{"unknown"} }},
+		{"invalid doctor transport", func(c *Catalog) { c.Components[0].Doctor.Transport = "push" }},
 		{"identity shares an external program ID", func(c *Catalog) { c.Identities = append(c.Identities, Identity{ID: "factor-engine", External: true}) }},
 		{"external program declares a port", func(c *Catalog) { componentPtr(c, "archive-worker").Ports = []int{11999} }},
 		{"external program service reuses its health port", func(c *Catalog) {
@@ -210,8 +212,8 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"moox-cli", "trpc.moox.collector.CollectMgr", "DeleteCloudFunctions", true},
 		{"console", "trpc.moox.ops.SecretMgr", "GetSecretValue", false},
 		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", true},
-		{"console", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
-		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", true},
+		{"console", "trpc.moox.ops.SysDeploy", "SyncTopology", false},
+		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncTopology", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskList", false},
 		{"monitor", "trpc.moox.collector.CollectMgr", "CreateTask", false},
@@ -222,10 +224,8 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListHosts", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListDeployments", true},
-		{"monitor", "trpc.moox.ops.SysDeploy", "GetHostRoutes", true},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SetHostStatus", false},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", false},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
+		{"monitor", "trpc.moox.ops.SysDeploy", "GetHostRoutes", false},
+		{"monitor", "trpc.moox.ops.SysDeploy", "SyncTopology", false},
 		{"strategy", "trpc.moox.factor.EngineControl", "OpenReplay", true},
 		{"strategy", "trpc.moox.factor.EngineControl", "StepReplay", true},
 		{"strategy", "trpc.moox.factor.EngineControl", "CloseReplay", true},
@@ -272,11 +272,10 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string]map[string][]string{
-		"scf-collector":      {"trpc.moox.storage.PrimaryStore": {"CommitTimeSeriesBatch", "UpsertFields"}},
-		"moox-skill":         {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows"}},
-		"collector-operator": {"trpc.moox.collector.CollectMgr": {"SetSubjectExclusions", "ClearSubjectExclusions", "ListSubjectExclusions", "SyncSubjects"}},
+		"scf-collector": {"trpc.moox.storage.PrimaryStore": {"CommitTimeSeriesBatch", "UpsertFields"}},
+		"moox-skill":    {"trpc.moox.storage.PrimaryStore": {"ReadTimeSeriesRows"}},
 	}
-	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector", "collector-operator", "moox-skill"}) {
+	if !slices.Equal(c.ExternalIdentities(), []string{"scf-collector", "moox-skill"}) {
 		t.Fatalf("unexpected external identities %v", c.ExternalIdentities())
 	}
 	for _, principal := range c.ExternalIdentities() {
@@ -387,7 +386,7 @@ func TestReadOnlyMethodsDoNotIncludeWrites(t *testing.T) {
 		{"trpc.moox.storage.PrimaryStore", "ReportDatasetPeriodCompleted", false},
 		{"trpc.moox.factor.FactorEngine", "PullRecalcJob", false},
 		{"trpc.moox.egress.Proxy", "Do", false},
-		{GatewayControlPath, "ReportStatus", false},
+		{GatewayControlPath, "PullSnapshot", false},
 		{"trpc.moox.unknown.Service", "GetValue", false},
 	} {
 		if c.ReadOnly(tc.path, tc.method) != tc.want {
@@ -496,9 +495,9 @@ func TestExternalProgramComponents(t *testing.T) {
 	if worker, _ := c.Component("archive-worker"); len(worker.Services) != 0 {
 		t.Fatalf("archive-worker services = %+v", worker.Services)
 	}
-	// 归档 worker 的数据端口只给控制台，计入它占用的端口。
+	// 归档 worker 的数据端口给控制台与 moox-cli（导入写入），计入它占用的端口。
 	worker, _ := c.Component("archive-worker")
-	if worker.RelayHTTP == nil || worker.RelayHTTP.Port != 11428 || !slices.Equal(worker.RelayHTTP.Callers, []string{"console"}) {
+	if worker.RelayHTTP == nil || worker.RelayHTTP.Port != 11428 || !slices.Equal(worker.RelayHTTP.Callers, []string{"console", "moox-cli"}) {
 		t.Fatalf("archive-worker relay_http = %+v", worker.RelayHTTP)
 	}
 	if !slices.Contains(componentPorts(worker), 11428) || !slices.Contains(componentPorts(worker), 11418) {
@@ -540,7 +539,8 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 		t.Fatalf("collector credentials = %v", collector.Credentials)
 	}
 	agent, _ := c.Component("host-agent")
-	if !slices.Equal(agent.EventBusRoles(), []string{"hostagent-publisher"}) {
+	// host-agent 不连 EventBus：主机快照随拉取主机策略经网关报给 Monitor。
+	if len(agent.EventBusRoles()) != 0 {
 		t.Fatalf("host-agent roles = %v", agent.EventBusRoles())
 	}
 	primary, _ := c.Component("storage-primary")
@@ -560,12 +560,8 @@ func TestDeployFieldsOrderAndCredentials(t *testing.T) {
 func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 	c := mustCatalog(t)
 	for _, tc := range []struct{ path, method string }{
-		{"trpc.moox.ops.SysDeploy", "SetHostStatus"},
-		{"trpc.moox.ops.SysDeploy", "SetDeploymentStatus"},
-		{"trpc.moox.ops.SysDeploy", "SyncHostDeployments"},
-		{"trpc.moox.ops.SysDeploy", "DeleteHost"},
-		{"trpc.moox.archive.ArchiveMgr", "PrepareArchiveImport"},
-		{"trpc.moox.archive.ArchiveMgr", "ImportArchiveFile"},
+		{"trpc.moox.ops.SysDeploy", "SyncTopology"},
+		{"trpc.moox.archive.ArchiveMgr", "StartArchiveImport"},
 		{"trpc.moox.archive.ArchiveMgr", "ClearArchiveUnrecoverable"},
 	} {
 		if c.Allowed("console", tc.path, tc.method) {

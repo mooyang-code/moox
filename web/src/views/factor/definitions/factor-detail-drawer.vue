@@ -38,7 +38,9 @@
           <a-descriptions-item label="原文 Hash" :span="2">
             <span class="source-hash">{{ factor.spec_hash || "-" }}</span>
           </a-descriptions-item>
-          <a-descriptions-item label="更新时间" :span="2">{{ formatTime(factor.updated_at, displayZone) }}</a-descriptions-item>
+          <a-descriptions-item label="更新时间" :span="2">{{
+            formatInstant(factor.updated_at, displayZone)
+          }}</a-descriptions-item>
         </a-descriptions>
 
         <section class="detail-section">
@@ -83,8 +85,8 @@ import type { FactorCategory, FactorDef, FactorUsage } from "@/api/factor/types"
 import { categoryName, describeParam, describeParams } from "@/views/factor/shared/params";
 import { AsyncCodeEditor } from "@/components/code-editor/async";
 import { useFactorStore } from "@/store/modules/factor";
-import { RequestGate } from "@/utils/request-gate";
-import { formatTime } from "@/views/data/shared/metadata-utils";
+import { createLatestRequestGuard } from "@/utils/latest-request";
+import { formatInstant } from "@/utils/time-zone";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { usageChips } from "./definitions-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
@@ -115,7 +117,7 @@ const usages = ref<FactorUsage[]>([]);
 const otherUsage = ref(0);
 const loading = ref(false);
 const error = ref("");
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 
 const chips = computed(() =>
   usageChips(usages.value, taskId => {
@@ -125,7 +127,7 @@ const chips = computed(() =>
 );
 
 async function load(factorId: string) {
-  const token = gate.next();
+  const token = gate.begin();
   factor.value = null;
   usages.value = [];
   otherUsage.value = 0;
@@ -137,14 +139,14 @@ async function load(factorId: string) {
   loading.value = true;
   try {
     const rsp = await getFactor(factorId);
-    if (!gate.isCurrent(token)) return;
+    if (!token.isLatest()) return;
     factor.value = rsp.factor;
     usages.value = rsp.usages || [];
     otherUsage.value = rsp.other_space_usage_count ?? 0;
   } catch (e) {
-    if (gate.isCurrent(token)) error.value = e instanceof Error ? e.message : "因子详情加载失败";
+    if (token.isLatest()) error.value = e instanceof Error ? e.message : "因子详情加载失败";
   } finally {
-    if (gate.isCurrent(token)) loading.value = false;
+    if (token.isLatest()) loading.value = false;
   }
 }
 

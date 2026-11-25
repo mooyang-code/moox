@@ -1,4 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { registerFixtureDefinitions } from "../../../../tests/strategy-requirement";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, reactive } from "vue";
 
@@ -11,12 +12,16 @@ const api = vi.hoisted(() => ({
   cancelReplay: vi.fn(),
   listFactorTasks: vi.fn(),
   loadAllStrategies: vi.fn(),
-  reportControlError: vi.fn(),
+  reportError: vi.fn(),
   // serverNow 是请求层按 Date 头换算的服务端时间；null 表示还没有读到。
   serverNow: null as number | null,
   chartSpecs: [] as any[],
   charts: [] as any[],
   space: null as null | { selectedSpaceId: string; selectedSpace?: { timezone: string } }
+}));
+// 要绑定的任务由后端按 DSL 推出：测试里按 DSL 与登记的定义模拟
+vi.mock("@/views/strategy/use-task-requirement", async () => ({
+  useTaskRequirement: (await import("../../../../tests/strategy-requirement")).useFixtureTaskRequirement
 }));
 vi.mock("@/api/strategy", () => ({
   getInstance: api.getInstance,
@@ -26,11 +31,11 @@ vi.mock("@/api/strategy", () => ({
   startReplay: api.startReplay,
   cancelReplay: api.cancelReplay
 }));
-vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
-vi.mock("@/api/storage/metadata", () => ({
-  listAllDatasets: vi.fn(async () => [{ dataset_id: "ds_uni", attributes: { market_type: "multi" } }])
-}));
-vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
+vi.mock("@/api/factor", async () => {
+  const { allFactorTasksFrom } = await import("../../../../tests/factor-task-pages");
+  return { listFactorTasks: api.listFactorTasks, listAllFactorTasks: allFactorTasksFrom(api.listFactorTasks) };
+});
+vi.mock("@/api/http", () => ({ reportError: api.reportError, serverNow: () => api.serverNow }));
 // 确认对话框直接当作点了确认
 vi.mock("@arco-design/web-vue", () => ({
   Message: { success: vi.fn(), error: vi.fn() },
@@ -88,9 +93,9 @@ function replay(id: string, status: string, metrics = "{}", extra: Record<string
     strategy_id: "s1",
     dsl_yaml: "name: demo",
     space_id: "crypto",
-    tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
-    start_time: "2026-09-01T00:00:00Z",
-    end_time: "2026-09-02T00:00:00Z",
+    tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" } },
+    start_time: "1788220800000",
+    end_time: "1788307200000",
     spot_fee_bps: 10,
     swap_fee_bps: 0,
     status,
@@ -108,7 +113,7 @@ function replay(id: string, status: string, metrics = "{}", extra: Record<string
 
 function bar(summary = "{}") {
   return {
-    bar_end_time: "2026-09-01T01:00:00Z",
+    bar_end_time: "1788224400000",
     status: "ok",
     targets: [],
     positions_json: '{"cash":0.5,"positions":{}}',
@@ -129,7 +134,7 @@ const bars = { items: [bar()], page: { total: 1 } };
 
 /** 刚被取消的回放：updated_at 是当前时间（假时钟）。 */
 function justCancelled(id: string, metrics = "{}") {
-  return replay(id, "cancelled", metrics, { updated_at: new Date().toISOString() });
+  return replay(id, "cancelled", metrics, { updated_at: String(Date.now()) });
 }
 const noBars = { items: [], page: { total: 0 } };
 
@@ -208,6 +213,12 @@ function listText(wrapper: ReturnType<typeof mountPage>) {
 }
 
 describe("strategy replay page", () => {
+  // 页面按定义 ID 向后端读要绑定的任务：把假目录里的定义登记给模拟
+  registerFixtureDefinitions([
+    { strategy_id: "s1", dsl_yaml: "name: a\n" },
+    { strategy_id: "s2", dsl_yaml: "name: m\nmarket: {select: both, prefer: spot}\n" }
+  ]);
+
   beforeEach(() => {
     vi.useFakeTimers();
     api.chartSpecs.length = 0;
@@ -225,7 +236,7 @@ describe("strategy replay page", () => {
       api.cancelReplay,
       api.listFactorTasks,
       api.loadAllStrategies,
-      api.reportControlError
+      api.reportError
     ])
       fn.mockReset();
     vi.mocked(Message.error).mockClear();
@@ -289,9 +300,6 @@ describe("strategy replay page", () => {
     // 第二个周期列表里已经没有运行中的回放，只因所选回放仍在运行而刷新。
     await pollOnce();
     expect(api.getReplay.mock.calls.length).toBeGreaterThan(afterFirst);
-    // 轮询请求不弹全局错误提示。
-    expect(api.listReplays.mock.calls.at(-1)?.[1]).toEqual({ silent: true });
-    expect(api.getReplay.mock.calls.at(-1)?.[1]).toEqual({ silent: true });
   });
 
   it("waits for partial metrics only on the cancelled replay", async () => {
@@ -377,7 +385,9 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await vi.advanceTimersByTimeAsync(5000);
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r21", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_page2", view_id: "view_factor_a" } } })],
+      items: [
+        replay("r21", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_page2", dataset_id: "dataset_factor_a" } } })
+      ],
       page: { total: 30 }
     });
     (wrapper.vm as any).changeReplayPage(2);
@@ -534,8 +544,8 @@ describe("strategy replay page", () => {
   it("shows the per-market values, the tasks, the fees and the no-funding-fee warning for a swap replay", async () => {
     const mixed = replay("r7", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
       tasks: {
-        spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" },
-        swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" }
+        spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" },
+        swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" }
       },
       swap_fee_bps: 5
     });
@@ -569,10 +579,10 @@ describe("strategy replay page", () => {
     api.getReplay.mockResolvedValue(computed);
     api.listReplayBars.mockResolvedValue({
       items: [
-        { ...bar(), bar_end_time: "2026-09-01T01:00:00Z", params_json: "{}" },
+        { ...bar(), bar_end_time: "1788224400000", params_json: "{}" },
         {
           ...bar(),
-          bar_end_time: "2026-09-01T02:00:00Z",
+          bar_end_time: "1788228000000",
           params_json: '{"f__var":{"window":{"default":30,"overrides":{"A":40,"B":45}}}}'
         }
       ],
@@ -588,7 +598,7 @@ describe("strategy replay page", () => {
 
   it("names the funding column instead of the no-funding-fee warning when the replay charges funding", async () => {
     const funded = replay("r8", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
-      tasks: { swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" } },
+      tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" } },
       swap_fee_bps: 5,
       funding_column: "funding_rate"
     });
@@ -604,7 +614,7 @@ describe("strategy replay page", () => {
 
   it("策略池回放显示每期的池明细，资金费说明按池 DSL 的 fees.funding_column", async () => {
     const pooled = replay("r9", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
-      tasks: { swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" } },
+      tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" } },
       swap_fee_bps: 5,
       dsl_yaml:
         "name: p\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a, strategy: s_a}\n  allocation: {method: drift, ratios: {a: 1}}\n  fees: {funding_column: funding_rate}\n"
@@ -645,7 +655,7 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    expect(api.getInstance).toHaveBeenCalledWith("i1", { silent: true });
+    expect(api.getInstance).toHaveBeenCalledWith("i1");
     expect(vm.form.instance_id).toBe("i1");
     expect(vm.form.instance_strategy_id).toBe("s2");
 
@@ -681,7 +691,7 @@ describe("strategy replay page", () => {
   });
 
   it("scopes the waiting hint to the replay being waited on", async () => {
-    const stale = replay("r2", "cancelled", "{}", { updated_at: "2026-01-01T00:00:00Z" });
+    const stale = replay("r2", "cancelled", "{}", { updated_at: "1767225600000" });
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running"), stale], page: { total: 2 } });
     api.getReplay.mockImplementation((id: string) => Promise.resolve(id === "r1" ? replay("r1", "running") : stale));
     api.cancelReplay.mockResolvedValue({});
@@ -734,7 +744,9 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await wrapper.find('[aria-label="刷新回放"]').trigger("click");
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_newer", view_id: "view_factor_a" } } })],
+      items: [
+        replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_newer", dataset_id: "dataset_factor_a" } } })
+      ],
       page: { total: 1 }
     });
     await pollOnce();
@@ -742,7 +754,9 @@ describe("strategy replay page", () => {
     // 手动加载仍在进行：加载态只跟踪手动加载，轮询应用了更新的结果也不结束它。
     expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).toBe("true");
     slow.resolve({
-      items: [replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_older", view_id: "view_factor_a" } } })],
+      items: [
+        replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_older", dataset_id: "dataset_factor_a" } } })
+      ],
       page: { total: 1 }
     });
     await flushPromises();
@@ -810,7 +824,7 @@ describe("strategy replay page", () => {
     expect(wrapper.text()).not.toContain("后台暂时无法访问");
   });
 
-  it("silences every polling request and keeps the table steady", async () => {
+  it("polls both the series and the table and keeps the table steady", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "running")], page: { total: 1 } });
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     mountPage();
@@ -819,7 +833,6 @@ describe("strategy replay page", () => {
     await pollOnce();
     const calls = api.listReplayBars.mock.calls;
     expect(calls.length).toBeGreaterThanOrEqual(2);
-    for (const call of calls) expect(call[2]).toEqual({ silent: true });
     expect(calls.some(call => call[1]?.brief)).toBe(true);
     expect(calls.some(call => !call[1]?.brief)).toBe(true);
   });
@@ -849,11 +862,11 @@ describe("strategy replay page", () => {
     expect((wrapper.vm as any).pollFailures).toBe(0);
     expect((wrapper.vm as any).awaitingMetrics).toBeNull();
     nextList.resolve({
-      items: [replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", view_id: "view_factor_a" } } })],
+      items: [replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })],
       page: { total: 1 }
     });
     api.getReplay.mockResolvedValue(
-      replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", view_id: "view_factor_a" } } })
+      replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })
     );
     await flushPromises();
     expect(listText(wrapper)).toContain("ftask_stock");
@@ -867,7 +880,7 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     // 浏览器比服务端快 10 分钟：取消时间在浏览器看来是 10 分钟前，但这是本页刚取消的。
-    const cancelledAt = new Date(Date.now() - 600_000).toISOString();
+    const cancelledAt = String(Date.now() - 600_000);
     api.getReplay.mockResolvedValue(replay("r1", "cancelled", "{}", { updated_at: cancelledAt }));
     api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled")], page: { total: 1 } });
     await wrapper.find(".cancel-replay").trigger("click");
@@ -880,16 +893,14 @@ describe("strategy replay page", () => {
     api.getReplay.mockResolvedValue(replay("r1", "running"));
     const wrapper = mountPage();
     await flushPromises();
-    api.getReplay.mockResolvedValue(
-      replay("r1", "cancelled", "{}", { updated_at: new Date(Date.now() - 600_000).toISOString() })
-    );
+    api.getReplay.mockResolvedValue(replay("r1", "cancelled", "{}", { updated_at: String(Date.now() - 600_000) }));
     await pollOnce();
     expect(wrapper.text()).toContain("正在等待写入");
   });
 
   it("judges a directly opened cancelled replay by server time", async () => {
     const cancelledAt = Date.now() - 600_000;
-    const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });
+    const cancelled = replay("r1", "cancelled", "{}", { updated_at: String(cancelledAt) });
     api.listReplays.mockResolvedValue({ items: [cancelled], page: { total: 1 } });
     api.getReplay.mockResolvedValue(cancelled);
     // 服务端看来 30 秒前刚取消（浏览器时钟快 10 分钟）：等待。
@@ -961,8 +972,8 @@ describe("strategy replay page", () => {
     api.cancelReplay.mockRejectedValueOnce(failure);
     await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
-    expect(api.reportControlError).toHaveBeenCalledTimes(1);
-    expect(api.reportControlError).toHaveBeenCalledWith(failure);
+    expect(api.reportError).toHaveBeenCalledTimes(1);
+    expect(api.reportError).toHaveBeenCalledWith(failure);
     expect(Message.error).not.toHaveBeenCalled();
     const pending = deferred<unknown>();
     api.cancelReplay.mockImplementationOnce(() => pending.promise);
@@ -972,7 +983,7 @@ describe("strategy replay page", () => {
     await nextTick();
     pending.reject(new Error("旧空间的取消失败"));
     await flushPromises();
-    expect(api.reportControlError).toHaveBeenCalledTimes(1);
+    expect(api.reportError).toHaveBeenCalledTimes(1);
   });
 
   it("drops in-flight requests after unmount", async () => {
@@ -1110,7 +1121,7 @@ describe("strategy replay page", () => {
     api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
     await pollOnce();
     expect(api.listReplayBars.mock.calls.filter(call => !call[1]?.brief)).toHaveLength(0);
-    const page2 = { items: [bar(), { ...bar(), bar_end_time: "2026-09-01T02:00:00Z" }], page: { total: 102 } };
+    const page2 = { items: [bar(), { ...bar(), bar_end_time: "1788228000000" }], page: { total: 102 } };
     manual.resolve(page2);
     await flushPromises();
     expect((wrapper.vm as any).tablePage).toBe(2);
@@ -1141,7 +1152,6 @@ describe("strategy replay page", () => {
     const tableCalls = api.listReplayBars.mock.calls.filter(call => !call[1]?.brief);
     expect(tableCalls).toHaveLength(1);
     expect(tableCalls[0][1]).toMatchObject({ page: 2 });
-    expect(tableCalls[0][2]).toEqual({ silent: true });
     expect((wrapper.vm as any).tableTotal).toBe(70);
     expect((wrapper.vm as any).tableRows).toHaveLength(20);
     expect(wrapper.find(".table").attributes("data-loading")).toBe("false");
@@ -1210,9 +1220,11 @@ describe("strategy replay page", () => {
     api.listReplayBars.mockImplementation((_id: string, params: any) =>
       Promise.resolve(params?.brief ? bars : { items: [bar(), bar()], page: { total: 2 } })
     );
+    const tableCalls = () => api.listReplayBars.mock.calls.filter(call => !call[1]?.brief).length;
+    const before = tableCalls();
     manual.reject(new Error("超时"));
     await flushPromises();
-    expect(api.listReplayBars.mock.calls.filter(call => !call[1]?.brief && call[2]?.silent)).toHaveLength(1);
+    expect(tableCalls()).toBe(before + 1);
     expect((wrapper.vm as any).tableRows).toHaveLength(2);
     expect((wrapper.vm as any).errors.table).toBe("");
   });
@@ -1250,7 +1262,7 @@ describe("strategy replay page", () => {
     const long = {
       items: Array.from({ length: 120 }, (_, index) => ({
         ...bar(),
-        bar_end_time: new Date(Date.UTC(2026, 8, 1, index)).toISOString()
+        bar_end_time: String(Date.UTC(2026, 8, 1, index))
       })),
       page: { total: 120 }
     };
@@ -1334,7 +1346,6 @@ describe("strategy replay page", () => {
     await flushPromises();
     const tableCalls = api.listReplayBars.mock.calls.filter(call => call[0] === "r1" && !call[1]?.brief);
     expect(tableCalls).toHaveLength(1);
-    expect(tableCalls[0][2]).toEqual({ silent: false });
   });
 
   it("returns the page number to the last shown page when a manual page flip fails", async () => {
@@ -1451,7 +1462,7 @@ describe("strategy replay page", () => {
 
   it("counts the wait for a directly opened cancelled replay from the cancel time", async () => {
     const cancelledAt = Date.now() - 100_000;
-    const cancelled = replay("r1", "cancelled", "{}", { updated_at: new Date(cancelledAt).toISOString() });
+    const cancelled = replay("r1", "cancelled", "{}", { updated_at: String(cancelledAt) });
     api.listReplays.mockResolvedValue({ items: [cancelled], page: { total: 1 } });
     api.getReplay.mockResolvedValue(cancelled);
     api.serverNow = Date.now();
@@ -1468,8 +1479,8 @@ describe("strategy replay page", () => {
     api.space = reactive({ selectedSpaceId: "stockcn", selectedSpace: { timezone: "Asia/Shanghai" } });
     const stock = replay("r1", "done", "{}", {
       calendar: "cn_stock",
-      start_time: "2026-08-31T16:00:00Z",
-      end_time: "2026-09-30T16:00:00Z"
+      start_time: "1788192000000",
+      end_time: "1790784000000"
     });
     api.listReplays.mockResolvedValue({ items: [stock], page: { total: 1 } });
     api.getReplay.mockResolvedValue(stock);
@@ -1615,6 +1626,8 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.tasks = { spot: "ftask_a" };
     vm.form.strategy_id = "s1";
     vm.form.range = [Date.parse("2026-09-02T00:00:00Z"), Date.parse("2026-09-01T00:00:00Z")];
+    // 等表单按定义读回要绑定的任务
+    await flushPromises();
     await click(wrapper, "开始回放");
     expect(api.startReplay).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain("结束时间必须晚于开始时间");
@@ -1633,11 +1646,12 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.strategy_id = "s1";
     // 区间是毫秒时刻（选择器按空间时区换算），提交时写成不带毫秒的 UTC RFC3339
     vm.form.range = [Date.parse("2026-09-01T01:30:00Z"), Date.parse("2026-09-01T07:00:00Z")];
+    await flushPromises();
     await click(wrapper, "开始回放");
     expect(api.startReplay).toHaveBeenCalledTimes(1);
     expect(api.startReplay.mock.calls[0][0]).toMatchObject({
-      start_time: "2026-09-01T01:30:00Z",
-      end_time: "2026-09-01T07:00:00Z"
+      start_time: Date.parse("2026-09-01T01:30:00Z"),
+      end_time: Date.parse("2026-09-01T07:00:00Z")
     });
     expect(nav.route.query).toEqual({ tab: "replay", replay_id: "r5" });
     expect(wrapper.find(".drawer").attributes("data-visible")).toBe("false");

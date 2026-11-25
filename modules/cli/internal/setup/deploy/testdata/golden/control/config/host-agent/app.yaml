@@ -1,9 +1,7 @@
 version: 1
-identity_path: /data/moox/data/host-agent/identity.yaml
-eventbus_config: /data/moox/secrets/eventbus/hostagent-publisher.yaml
-# Optional deployment identity; standalone agents leave it empty.
+# 以下路径与主机 ID 都由部署渲染填写；host_id 是 Admin 登记的主机 ID，必填，Monitor 按它记这台主机。
 host_id: control
-# Optional display name. Deployment association always uses host_id.
+# 可选的展示名；与部署登记的关联只用 host_id。
 host_name: ""
 host_policy_path: /data/moox/data/host-agent/host-policy.json
 gateway_client: {caller: host-agent, key_file: /data/moox/secrets/host.key, host_id: control, local_address: '127.0.0.1:11002', ca_file: /data/moox/secrets/moox-ca.crt}

@@ -44,8 +44,7 @@ import (
 // 文件里的记录按（场景、步序（数值）、记录类型、标的、series_tag、成员、名字）排序后写出，与生成记录的先后无关：
 // 只要给出同一组值，写出的字节就相同。
 //
-// 现有夹具全是单序列：每个标的只有一条 series_tag 为 plainTag 的序列，series_tag 取响应行里的值。
-// 多序列（统一数据集两条序列都出行）由 TestReplayUnifiedDatasetEmitsOneRowPerSeries 覆盖，不在这份金样里。
+// 夹具全是单序列：每个标的只有一条 series_tag 为 plainTag 的序列，series_tag 取响应行里的值。
 // 请求的列是全部成员输出列加 __params：行里的因子列按 OpenReplay 返回的成员输出列还原成（成员、名字）。
 // 不进金样的：源数据列、ComputeMillis 与报错文字。
 //

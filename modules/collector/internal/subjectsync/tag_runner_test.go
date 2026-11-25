@@ -84,17 +84,18 @@ func TestTagDue(t *testing.T) {
 		}
 		return &domain.TagSyncRun{LastRunAt: parsed.UTC()}
 	}
+	ms := func(at string) int64 { return run(at).LastRunAt.UnixMilli() }
 	cases := []struct {
 		name string
 		tag  *pb.Tag
 		run  *domain.TagSyncRun
 		want bool
 	}{
-		{"never run", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-25 09:00:00"}, nil, true},
-		{"cron elapsed", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-01 00:00:00"}, run("2026-09-25 09:00:00"), true},
-		{"cron not elapsed", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-01 00:00:00"}, run("2026-09-25 10:00:00"), false},
-		{"edited after run", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-25 10:10:00"}, run("2026-09-25 10:00:00"), true},
-		{"default cron when unset", &pb.Tag{UpdatedAt: "2026-09-01 00:00:00"}, run("2026-09-25 09:00:00"), true},
+		{"never run", &pb.Tag{Attributes: cron, UpdatedAt: ms("2026-09-25 09:00:00")}, nil, true},
+		{"cron elapsed", &pb.Tag{Attributes: cron, UpdatedAt: ms("2026-09-01 00:00:00")}, run("2026-09-25 09:00:00"), true},
+		{"cron not elapsed", &pb.Tag{Attributes: cron, UpdatedAt: ms("2026-09-01 00:00:00")}, run("2026-09-25 10:00:00"), false},
+		{"edited after run", &pb.Tag{Attributes: cron, UpdatedAt: ms("2026-09-25 10:10:00")}, run("2026-09-25 10:00:00"), true},
+		{"default cron when unset", &pb.Tag{UpdatedAt: ms("2026-09-01 00:00:00")}, run("2026-09-25 09:00:00"), true},
 	}
 	for _, c := range cases {
 		got, err := tagDue(c.tag, c.run, now)

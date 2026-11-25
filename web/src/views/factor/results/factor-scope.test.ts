@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FactorCategory, FactorMember } from "@/api/factor/types";
-import type { ViewColumn } from "@/api/storage/types";
+import type { DatasetColumn } from "@/api/storage/types";
 import {
   buildFactorScope,
   countByCategory,
@@ -13,12 +13,12 @@ import {
 } from "./factor-scope";
 import { normalizeColumnSettings, tableColumns } from "./column-settings";
 
-const col = (name: string, attributes?: Record<string, string>): ViewColumn => ({
+const col = (name: string, attributes?: Record<string, string>): DatasetColumn => ({
   space_id: "crypto",
-  view_id: "v",
+  dataset_id: "d",
   column_name: name,
-  origin_type: "COLUMN_ORIGIN_TYPE_DATASET_COLUMN",
-  origin_id: name,
+  display_name: name,
+  status: "active",
   value_type: "FIELD_VALUE_TYPE_DOUBLE",
   attributes
 });
@@ -69,7 +69,7 @@ function fixture() {
     member("rsi__var", "rsi", "momentum", ["rsi"], "var"),
     member("boll", "boll", "trend", ["mid", "up"])
   ];
-  const viewColumns = [
+  const columns = [
     col("subject_id"),
     col("open"),
     col("close"),
@@ -81,13 +81,13 @@ function fixture() {
     // 已移除成员的残留列：仍在视图里，带因子属性
     col("gone", outputAttrs("gone"))
   ];
-  return { members, viewColumns };
+  return { members, columns };
 }
 
 describe("buildFactorScope", () => {
   it("以成员清单建目录：同一定义的固定与可变成员各自成项，分类按清单顺序，残留列和 __params 不进目录也不进行情列", () => {
-    const { members, viewColumns } = fixture();
-    const scope = buildFactorScope({ viewColumns, members, categories });
+    const { members, columns } = fixture();
+    const scope = buildFactorScope({ columns, members, categories });
     expect(scope.outputs.map(item => item.column)).toEqual(["boll__mid", "boll__up", "rsi__14", "rsi__var"]);
     expect(scope.outputs[2]).toMatchObject({ memberKey: "rsi__14", factorId: "rsi", output: "rsi", categoryId: "momentum" });
     expect(scope.categoryOrder).toEqual(["trend", "momentum"]);
@@ -99,9 +99,9 @@ describe("buildFactorScope", () => {
   });
 
   it("视图没有 __params 列时 paramsColumn 为空", () => {
-    const { members, viewColumns } = fixture();
+    const { members, columns } = fixture();
     const scope = buildFactorScope({
-      viewColumns: viewColumns.filter(item => item.column_name !== "__params"),
+      columns: columns.filter(item => item.column_name !== "__params"),
       members,
       categories
     });
@@ -109,16 +109,16 @@ describe("buildFactorScope", () => {
   });
 
   it("分类以成员当前定义为准，不看列属性里可能过期的分类", () => {
-    const { members, viewColumns } = fixture();
+    const { members, columns } = fixture();
     const scope = buildFactorScope({
-      viewColumns,
+      columns,
       members,
       categories,
       hidden: { categories: ["stale"], members: [], columns: [] }
     });
     expect(scope.outputs).toHaveLength(4);
     const hiddenMomentum = buildFactorScope({
-      viewColumns,
+      columns,
       members,
       categories,
       hidden: { categories: ["momentum"], members: [], columns: [] }
@@ -127,9 +127,9 @@ describe("buildFactorScope", () => {
   });
 
   it("策略可按成员键、单个输出、行情列隐藏", () => {
-    const { members, viewColumns } = fixture();
+    const { members, columns } = fixture();
     const scope = buildFactorScope({
-      viewColumns,
+      columns,
       members,
       categories,
       hidden: { categories: [], members: ["rsi__var"], columns: ["boll__up", "open"] }
@@ -139,9 +139,9 @@ describe("buildFactorScope", () => {
   });
 
   it("视图里还没有的列不进目录；没有分类的定义归入未分类并排在最后", () => {
-    const { viewColumns } = fixture();
+    const { columns } = fixture();
     const members = [member("x", "x", "", ["x"]), member("boll", "boll", "trend", ["mid", "missing"])];
-    const scope = buildFactorScope({ viewColumns: [...viewColumns, col("x")], members, categories });
+    const scope = buildFactorScope({ columns: [...columns, col("x")], members, categories });
     expect(scope.outputs.map(item => item.column)).toEqual(["boll__mid", "x"]);
     expect(scope.categoryOrder).toEqual(["trend", "uncategorized"]);
     expect(scope.categoryNames.get("uncategorized")).toBe("未分类");
@@ -149,8 +149,8 @@ describe("buildFactorScope", () => {
 });
 
 describe("目录过滤、分页与取值", () => {
-  const { members, viewColumns } = fixture();
-  const scope = buildFactorScope({ viewColumns, members, categories });
+  const { members, columns } = fixture();
+  const scope = buildFactorScope({ columns, members, categories });
 
   it("按分类与关键词过滤并统计数量", () => {
     expect(filterOutputs(scope.outputs, { category: "momentum" }).map(item => item.memberKey)).toEqual(["rsi__14", "rsi__var"]);
@@ -170,7 +170,7 @@ describe("目录过滤、分页与取值", () => {
     expect(valueColumnsFor(scope, page1, true)).toEqual(["boll__mid", "__params"]);
     expect(valueColumnsFor(scope, scope.outputs.slice(0, 3), true)).toEqual(["boll__mid", "boll__up", "rsi__14", "__params"]);
     const noParams = buildFactorScope({
-      viewColumns: viewColumns.filter(item => item.column_name !== "__params"),
+      columns: columns.filter(item => item.column_name !== "__params"),
       members,
       categories
     });
@@ -179,7 +179,7 @@ describe("目录过滤、分页与取值", () => {
 
   it("单行请求带显式空 series_tag、[t, t+1ms) 和 total_mode NONE", () => {
     const req = rowValuesRequest(
-      "v",
+      "d",
       {
         space_id: "crypto",
         dataset_id: "d",
@@ -192,7 +192,7 @@ describe("目录过滤、分页与取值", () => {
     );
     expect(req.selectors).toEqual([{ space_id: "crypto", dataset_id: "d", subject_id: "BTC", freq: "1m", series_tag: "" }]);
     expect(req.time_range).toEqual({ start_time: "2026-10-24T10:00:00.000Z", end_time: "2026-10-24T10:00:00.001Z" });
-    expect(req).toMatchObject({ column_names: ["boll__mid"], page: { page: 1, size: 1 }, total_mode: "NONE" });
+    expect(req).toMatchObject({ dataset_id: "d", column_names: ["boll__mid"], page: { page: 1, size: 1 }, total_mode: "NONE" });
   });
 
   it("成员在这一行实际用的参数取自 __params，数值格式", () => {
@@ -215,14 +215,14 @@ describe("几千个因子的规模", () => {
     const members = Array.from({ length: 2000 }, (_, index) =>
       member(`m${index}`, `f${index}`, index % 2 ? "trend" : "momentum", ["a", "b"])
     );
-    const viewColumns = [
+    const columns = [
       col("open"),
       col("close"),
       col("volume"),
       ...members.flatMap(m => (m.output_columns ?? []).map(c => col(c, { column_kind: "output" })))
     ];
-    expect(viewColumns.length).toBe(4003);
-    const scope = buildFactorScope({ viewColumns, members, categories });
+    expect(columns.length).toBe(4003);
+    const scope = buildFactorScope({ columns, members, categories });
     expect(scope.outputs).toHaveLength(4000);
     expect(scope.baseMarket).toEqual(["open", "close", "volume"]);
 

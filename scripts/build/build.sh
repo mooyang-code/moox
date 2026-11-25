@@ -109,7 +109,6 @@ build_hostagent() {
   [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-host-agent supports linux only" >&2; exit 1; }
   case "${TARGET_GOARCH}" in amd64|arm64) ;; *) echo "moox-host-agent supports amd64/arm64 only" >&2; exit 1 ;; esac
   build_go modules/hostagent ./cmd/server moox-host-agent 0
-  build_go modules/hostagent ./cmd/cli moox-host-agent-cli 0
 }
 
 build_collector_market_data_scf() {
@@ -133,13 +132,11 @@ case "${TARGET_MODULE}" in
     build_go modules/collector ./cmd/cli moox-collector-cli 0
     build_go modules/collector ./cmd/stream moox-collector-stream 0
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
-    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
     build_go modules/factor ./cmd/engine moox-factor-engine 0
     build_go modules/archive ./cmd/mgr moox-archive-mgr 0
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
-    build_go modules/callbackdispatcher ./cmd/server moox-callback-dispatcher 0
     build_go modules/monitor ./cmd/server moox-monitor 0
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
@@ -181,7 +178,6 @@ case "${TARGET_MODULE}" in
     ;;
   factor-mgr)
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
-    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
     ;;
   factor-engine)
     build_go modules/factor ./cmd/engine moox-factor-engine 0
@@ -204,10 +200,6 @@ case "${TARGET_MODULE}" in
     ;;
   trade)
     build_go modules/trade ./cmd/server moox-trade 0
-    ;;
-  callback-dispatcher)
-    # 纯 Go，可交叉编译；事件中心是独立部署单元。
-    build_go modules/callbackdispatcher ./cmd/server moox-callback-dispatcher 0
     ;;
   storage)
     build_storage

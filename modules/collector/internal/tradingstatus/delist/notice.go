@@ -1,6 +1,6 @@
 // Package delist 是 Collector 的下架检测：定时轮询币安现货下架计划、币安 U 本位合约信息和 OKX 永续合约信息，
 // 发现“标的即将下架”就经发件箱发布 event.collector.instrument.delist_scheduled；也接受手工登记（补漏报和演练）。
-// 检测只负责发现和发布事件，怎么处理下架（禁止买入、平仓）由事件中心决定。
+// 检测只负责发现和发布事件，怎么处理下架（禁止买入、平仓）由 Trade 决定。
 package delist
 
 import (
@@ -13,16 +13,15 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/storagepb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Notice 是一条下架通知。
 type Notice struct {
 	// Exchange 是小写交易所代码：binance、okx。
 	Exchange string
-	// Market 是 SPOT 或 SWAP。
+	// Market 是小写市场：spot 或 swap。
 	Market string
-	// Symbol 是大写的交易所代码，例如 FOOUSDT、FOO-USDT-SWAP：下游（事件中心、Trade）按这个写法判断“同一个标的”。
+	// Symbol 是大写的交易所代码，例如 FOOUSDT、FOO-USDT-SWAP：下游（Trade）按这个写法判断“同一个标的”。
 	Symbol   string
 	DelistAt time.Time
 	// Source 取 events.DelistSource* 之一。
@@ -93,8 +92,8 @@ func (r *Registrar) Register(ctx context.Context, notice Notice) (created bool, 
 			eventID = fmt.Sprintf("%s-r%d", eventID, revision)
 		}
 		raw, err := r.Registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
-			Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: timestamppb.New(delistAt),
-			Source: notice.Source, FirstSeenAt: timestamppb.New(now), Scope: notice.Scope,
+			Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: delistAt.UnixMilli(),
+			Source: notice.Source, FirstSeenAt: now.UnixMilli(), Scope: notice.Scope,
 		}, events.PublishOptions{EventID: eventID, OccurredAt: now, SpaceID: events.SystemSpaceID, SubjectID: subject})
 		if err != nil {
 			return store.OutboxEvent{}, fmt.Errorf("生成下架事件失败: %w", err)

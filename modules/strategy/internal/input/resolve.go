@@ -76,9 +76,6 @@ func resolveViews(ctx context.Context, client Client, spaceID string, taskIDs []
 		seen[item.market] = taskID
 		views = append(views, item)
 	}
-	if _, unified := seen[MarketMulti]; unified && len(views) > 1 {
-		return nil, fmt.Errorf("因子任务 %s 在统一数据集上，同时覆盖现货与永续，不能再绑定其他任务", seen[MarketMulti])
-	}
 	sort.Slice(views, func(i, j int) bool { return marketOrder(views[i].market) < marketOrder(views[j].market) })
 	return views, nil
 }
@@ -91,38 +88,30 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 	}
 	resolved := Resolved{Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars, RuleAges: ruleAges(strategy)}
 	for _, item := range views {
-		resolved.Tasks[item.market] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
+		resolved.Tasks[item.market] = TaskBinding{FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
 	}
 	first := views[0]
 	for _, item := range views[1:] {
 		if !strings.EqualFold(item.view.Frequency, first.view.Frequency) {
-			return Resolved{}, nil, fmt.Errorf("两个 View 的周期不一致：%s 是 %s，%s 是 %s", first.view.ViewID, first.view.Frequency, item.view.ViewID, item.view.Frequency)
+			return Resolved{}, nil, fmt.Errorf("两个 View 的周期不一致：%s 是 %s，%s 是 %s", first.view.DatasetID, first.view.Frequency, item.view.DatasetID, item.view.Frequency)
 		}
 		if calendarOf(item) != calendarOf(first) {
-			return Resolved{}, nil, fmt.Errorf("两个 View 的日历不一致：%s 是 %s，%s 是 %s", first.view.ViewID, calendarOf(first), item.view.ViewID, calendarOf(item))
+			return Resolved{}, nil, fmt.Errorf("两个 View 的日历不一致：%s 是 %s，%s 是 %s", first.view.DatasetID, calendarOf(first), item.view.DatasetID, calendarOf(item))
 		}
 	}
 	resolved.Bar, resolved.Calendar = strings.ToLower(first.view.Frequency), calendarOf(first)
-	// 市场模式：DSL 写出的，或只绑一个任务时取任务的市场；股票不允许写 market；统一数据集同时覆盖现货与永续，没有可当默认值的市场，必须写。
-	unified := first.market == MarketMulti
+	// 市场模式：DSL 写出的，或只绑一个任务时取任务的市场；股票不允许写 market。
 	switch {
 	case first.market == dsl.MarketEquity && strategy.MarketDeclared:
 		return Resolved{}, nil, errors.New("股票策略不允许写 market")
 	case strategy.MarketDeclared:
 		resolved.Market = strategy.Market
-	case unified:
-		return Resolved{}, nil, errors.New("因子任务在统一数据集上，同时覆盖现货与永续，DSL 必须写 market（select、prefer）")
 	case len(views) == 1:
 		resolved.Market = dsl.SingleMarket(first.market)
 	default:
 		return Resolved{}, nil, errors.New("绑定了现货、永续两个因子任务，DSL 必须写 market（select、prefer）")
 	}
-	if unified {
-		// 参数按标的取值，现货、永续两条序列会共用同一组参数，是否合理以后再定。
-		if len(strategy.FactorParams) > 0 {
-			return Resolved{}, nil, errors.New("统一数据集上的任务暂不支持 factor_params：现货、永续两条序列会共用同一组参数")
-		}
-	} else if got := resolved.Markets(); len(got) != len(resolved.Market.Markets()) || len(got) != len(views) {
+	if got := resolved.Markets(); len(got) != len(resolved.Market.Markets()) || len(got) != len(views) {
 		return Resolved{}, nil, fmt.Errorf("市场模式 %s 需要绑定 %s 的因子任务，实际绑定了 %s", resolved.Market, strings.Join(resolved.Market.Markets(), "、"), strings.Join(boundMarkets(views), "、"))
 	}
 	strategy.Market = resolved.Market
@@ -149,7 +138,7 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 		}
 		if longest > 0 {
 			if _, ok := item.columns[ageProbeColumn]; !ok {
-				return Resolved{}, nil, fmt.Errorf("min_age_bars、max_age_bars 通过 %s 列判断上市时间，但 View %s 没有该列", ageProbeColumn, item.view.ViewID)
+				return Resolved{}, nil, fmt.Errorf("min_age_bars、max_age_bars 通过 %s 列判断上市时间，但 View %s 没有该列", ageProbeColumn, item.view.DatasetID)
 			}
 		}
 	}
@@ -190,7 +179,7 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 		if len(hints) > 0 {
 			suggestion = "；最接近的列名：" + strings.Join(hints, "；")
 		}
-		return Resolved{}, nil, fmt.Errorf("列 %s 不存在于 View %s（因子任务 %s）%s；可用列（该任务的全部列）：%s", strings.Join(missing, "、"), item.view.ViewID, item.taskID, suggestion, strings.Join(all, "、"))
+		return Resolved{}, nil, fmt.Errorf("列 %s 不存在于 View %s（因子任务 %s）%s；可用列（该任务的全部列）：%s", strings.Join(missing, "、"), item.view.DatasetID, item.taskID, suggestion, strings.Join(all, "、"))
 	}
 	members := make(map[string]VarMember)
 	memberViews := make([]map[string]VarMember, 0, len(views))
@@ -216,11 +205,19 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 	for _, ref := range refs {
 		for i, found := range memberViews {
 			if _, ok := found[ref.Member]; !ok {
-				return Resolved{}, nil, fmt.Errorf("params(%s, ...) 引用的可变成员在 View %s 里不存在", ref.Member, views[i].view.ViewID)
+				return Resolved{}, nil, fmt.Errorf("params(%s, ...) 引用的可变成员在 View %s 里不存在", ref.Member, views[i].view.DatasetID)
 			}
 		}
 	}
 	// 只有声明了 factor_params 的策略逐期提交参数，才固化参数声明；没有声明的策略只读可变成员的列，不提交参数。
+	// 现货、永续两个任务时同一份参数提交给两个任务，所以 factor_params 写的每个成员在每个任务里都要有。
+	for _, member := range sortedKeys(strategy.FactorParams) {
+		for i, found := range memberViews {
+			if _, ok := found[member]; !ok {
+				return Resolved{}, nil, fmt.Errorf("factor_params 的可变成员 %s 在 View %s（因子任务 %s）里不存在：同一份参数要提交给每个主帧任务", member, views[i].view.DatasetID, views[i].taskID)
+			}
+		}
+	}
 	if len(strategy.FactorParams) > 0 {
 		resolved.FactorParams = make(map[string][]ParamDecl, len(members))
 		for key, member := range members {
@@ -286,22 +283,22 @@ func bindViewsWith(ctx context.Context, client Client, spaceID string, views []r
 
 // resolveView 解析一个因子任务：结果 View、数据集、源数据集与市场类型。
 func resolveView(ctx context.Context, client Client, spaceID, taskID, bar string) (resolvedView, error) {
-	viewID, err := ViewIDOfTask(taskID)
+	datasetID, err := DatasetIDOfTask(taskID)
 	if err != nil {
 		return resolvedView{}, fmt.Errorf("因子任务 ID %q 不合法：%w", taskID, err)
 	}
-	view, err := client.GetView(ctx, spaceID, viewID)
+	view, err := client.GetView(ctx, spaceID, datasetID)
 	if err != nil {
 		return resolvedView{}, err
 	}
 	if view.DatasetID == "" || view.Frequency == "" {
-		return resolvedView{}, fmt.Errorf("View %s 没有数据集或频率", viewID)
+		return resolvedView{}, fmt.Errorf("View %s 没有数据集或频率", datasetID)
 	}
 	if view.Status != "" && view.Status != "active" {
-		return resolvedView{}, fmt.Errorf("View %s 的状态是 %s，只能绑定 active 的 View", viewID, view.Status)
+		return resolvedView{}, fmt.Errorf("View %s 的状态是 %s，只能绑定 active 的 View", datasetID, view.Status)
 	}
 	if bar != "" && !strings.EqualFold(bar, view.Frequency) {
-		return resolvedView{}, fmt.Errorf("DSL 的 bar 断言为 %s，但 View %s 的周期是 %s", bar, viewID, view.Frequency)
+		return resolvedView{}, fmt.Errorf("DSL 的 bar 断言为 %s，但 View %s 的周期是 %s", bar, datasetID, view.Frequency)
 	}
 	dataset, err := client.GetDataset(ctx, spaceID, view.DatasetID)
 	if err != nil {
@@ -432,7 +429,7 @@ func checkReferences(ctx context.Context, client Client, spaceID string, views [
 		for _, subject := range subjects {
 			known[subject.SubjectID] = struct{}{}
 		}
-		names = append(names, view.ViewID)
+		names = append(names, view.DatasetID)
 	}
 	var unknown []string
 	for _, id := range uniqueSorted(instruments) {
@@ -469,13 +466,13 @@ func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved 
 		return nil
 	}
 	for _, key := range resolved.TaskKeys() {
-		if err := checkViewCoverage(ctx, client, spaceID, resolved, resolved.Tasks[key].ViewID, now); err != nil {
+		if err := checkViewCoverage(ctx, client, spaceID, resolved, resolved.Tasks[key].DatasetID, now); err != nil {
 			return err
 		}
 	}
 	// 参考市场只用于年龄判定：它的历史同样要够，否则运行期按 history_insufficient 跳过。
 	for _, market := range sortedKeys(resolved.References) {
-		if err := checkViewCoverage(ctx, client, spaceID, resolved, resolved.References[market].ViewID, now); err != nil {
+		if err := checkViewCoverage(ctx, client, spaceID, resolved, resolved.References[market].DatasetID, now); err != nil {
 			return err
 		}
 	}
@@ -483,32 +480,23 @@ func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved 
 }
 
 // checkViewCoverage 校验一个绑定 View 的覆盖。
-func checkViewCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved, viewID string, now time.Time) error {
-	view, err := client.GetView(ctx, spaceID, viewID)
+func checkViewCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved, datasetID string, now time.Time) error {
+	view, err := client.GetView(ctx, spaceID, datasetID)
 	if err != nil {
 		return err
 	}
-	view.ViewID = viewID
 	if view, err = WithCoverage(ctx, client, spaceID, view, true); err != nil {
 		return err
 	}
 	if longest := resolved.LongestAge(); longest > 0 {
-		if err := checkAgeCoverage(view, resolved, longest, now); err != nil {
-			return err
-		}
-		// 统一数据集的 View 级覆盖统计取所有序列的最早一行：现货、永续分两次导入、永续历史较短时它会放行，之后永续一直被当新上市。
-		// 各市场的历史分别要够：在目标根附近按市场探针，某个市场一行都没有就拒绝启用（与现货、永续各一个任务时分别校验一致）。
-		if resolved.Unified() {
-			return checkUnifiedAgeCoverage(ctx, client, spaceID, view, resolved, now)
-		}
-		return nil
+		return checkAgeCoverage(view, resolved, longest, now)
 	}
 	// 没有 min_age_bars 时覆盖范围不影响实时求值，只校验行键；还没有数据时无从校验，允许启用。
 	if view.IndexedTo.IsZero() {
 		return nil
 	}
 	if err := checkStockCoverageKey(view.IndexedTo, resolved); err != nil {
-		return coverageUnusable(viewID, err, "不能启用实例")
+		return coverageUnusable(datasetID, err, "不能启用实例")
 	}
 	return nil
 }
@@ -521,14 +509,14 @@ func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int, now time
 		need = resolved.LongestAgeLabel()
 	}
 	if view.SeriesBars > 0 && minAgeBars > view.SeriesBars {
-		return fmt.Errorf("%s 超过 View %s 每个序列保留的 %d 根，永远无法满足；请减小括号里的字段", need, view.ViewID, view.SeriesBars)
+		return fmt.Errorf("%s 超过 View %s 每个序列保留的 %d 根，永远无法满足；请减小括号里的字段", need, view.DatasetID, view.SeriesBars)
 	}
 	bounds, err := CoverageBounds(view, resolved, now)
 	if errors.Is(err, ErrCoverageUnknown) {
-		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认%s所需的历史，请等数据写入后再启用", view.ViewID, need)
+		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认%s所需的历史，请等数据写入后再启用", view.DatasetID, need)
 	}
 	if err != nil {
-		return coverageUnusable(view.ViewID, err, fmt.Sprintf("无法确认%s所需的历史", need))
+		return coverageUnusable(view.DatasetID, err, fmt.Sprintf("无法确认%s所需的历史", need))
 	}
 	label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
 	// 启用前已确认当前时间没有过内嵌日历的可用截止日，索引最晚一行不会超出日历（Beyond 为 0）。
@@ -536,14 +524,14 @@ func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int, now time
 	target, err := HistoryStart(resolved.Calendar, resolved.Bar, latest, minAgeBars)
 	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
 		return fmt.Errorf("%s 需要追溯到%s内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小括号里的字段",
-			need, loadedSessionMarket(resolved.Calendar).spacedName(), view.ViewID, label(start), label(latest))
+			need, loadedSessionMarket(resolved.Calendar).spacedName(), view.DatasetID, label(start), label(latest))
 	}
 	if err != nil {
 		return err
 	}
 	if target.Before(start) {
 		return fmt.Errorf("%s 需要追溯到 %s，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小括号里的字段或等待 View 积累更多历史",
-			need, label(target), view.ViewID, label(start), label(latest))
+			need, label(target), view.DatasetID, label(start), label(latest))
 	}
 	return nil
 }
@@ -577,9 +565,9 @@ func sourceMarketType(ctx context.Context, client Client, spaceID string, source
 	return marketType, nil
 }
 
-// knownMarketType 报告策略支持的数据集市场类型：现货 spot、永续合约 swap、A 股 equity，以及同时放现货与永续的统一数据集 multi。
+// knownMarketType 报告策略支持的数据集市场类型：现货 spot、永续合约 swap、股票 equity。
 func knownMarketType(value string) bool {
-	return value == "spot" || value == "swap" || value == "equity" || value == MarketMulti
+	return value == "spot" || value == "swap" || value == "equity"
 }
 
 // StockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
@@ -690,21 +678,17 @@ func ParseResolved(raw []byte) (Resolved, error) {
 	if resolved.Market.IsZero() || len(resolved.Tasks) == 0 || resolved.Bar == "" || resolved.Calendar == "" {
 		return Resolved{}, errors.New("resolved_json 缺少 market、tasks、bar 或 calendar")
 	}
-	if resolved.Unified() {
-		if len(resolved.Tasks) != 1 {
-			return Resolved{}, errors.New("resolved_json 的统一数据集任务不能与其他任务并存")
-		}
-	} else if got := resolved.Markets(); len(got) != len(resolved.Tasks) || len(got) != len(resolved.Market.Markets()) {
+	if got := resolved.Markets(); len(got) != len(resolved.Tasks) || len(got) != len(resolved.Market.Markets()) {
 		return Resolved{}, errors.New("resolved_json 的 tasks 与 market 不一致")
 	}
 	for market, task := range resolved.Tasks {
-		if task.ViewID == "" || task.FactorTaskID == "" {
-			return Resolved{}, fmt.Errorf("resolved_json 的 %s 任务缺少 view_id 或 factor_task_id", market)
+		if task.DatasetID == "" || task.FactorTaskID == "" {
+			return Resolved{}, fmt.Errorf("resolved_json 的 %s 任务缺少 dataset_id 或 factor_task_id", market)
 		}
 	}
 	for market, task := range resolved.References {
-		if task.ViewID == "" || task.FactorTaskID == "" {
-			return Resolved{}, fmt.Errorf("resolved_json 的参考市场 %s 任务缺少 view_id 或 factor_task_id", market)
+		if task.DatasetID == "" || task.FactorTaskID == "" {
+			return Resolved{}, fmt.Errorf("resolved_json 的参考市场 %s 任务缺少 dataset_id 或 factor_task_id", market)
 		}
 	}
 	for name, source := range resolved.Sources {
@@ -712,7 +696,7 @@ func ParseResolved(raw []byte) (Resolved, error) {
 			return Resolved{}, fmt.Errorf("resolved_json 的来源 %s 缺少 bar、calendar，或任务与主帧不一致", name)
 		}
 		for key := range resolved.Tasks {
-			if task := source.Tasks[key]; task.ViewID == "" || task.FactorTaskID == "" {
+			if task := source.Tasks[key]; task.DatasetID == "" || task.FactorTaskID == "" {
 				return Resolved{}, fmt.Errorf("resolved_json 的来源 %s 缺少 %s 任务", name, key)
 			}
 		}

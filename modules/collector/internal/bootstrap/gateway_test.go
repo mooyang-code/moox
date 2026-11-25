@@ -28,7 +28,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -121,27 +121,6 @@ func (w *collectorGatewayWire) DeleteDataset(ctx context.Context, request *stora
 		return nil, err
 	}
 	return &storagepb.DeleteDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) GetView(ctx context.Context, request *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "GetView", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) CreateView(ctx context.Context, request *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "CreateView", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
-func (w *collectorGatewayWire) DeleteView(ctx context.Context, request *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "DeleteView", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func (w *collectorGatewayWire) UpsertDatasetColumn(ctx context.Context, request *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
@@ -310,18 +289,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.DeleteDataset(t.Context(), &storagepb.DeleteDatasetReq{})
 		require.NoError(t, err)
 	})
-	t.Run("GetView", func(t *testing.T) {
-		_, err := adapter.GetView(t.Context(), &storagepb.GetViewReq{})
-		require.NoError(t, err)
-	})
-	t.Run("CreateView", func(t *testing.T) {
-		_, err := adapter.CreateView(t.Context(), &storagepb.CreateViewReq{})
-		require.NoError(t, err)
-	})
-	t.Run("DeleteView", func(t *testing.T) {
-		_, err := adapter.DeleteView(t.Context(), &storagepb.DeleteViewReq{})
-		require.NoError(t, err)
-	})
 	t.Run("UpsertDatasetColumn", func(t *testing.T) {
 		_, err := adapter.UpsertDatasetColumn(t.Context(), &storagepb.UpsertDatasetColumnReq{})
 		require.NoError(t, err)
@@ -373,7 +340,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 20)
+	require.Len(t, wire.calls, 17)
 	wire.mu.Unlock()
 	// 云账号密钥经网关读 Admin 的专用方法 GetCloudCredential。
 	credential, err := (&cloud.GatewayCredentials{Gateway: gateway}).Resolve(t.Context(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "secret-1"})

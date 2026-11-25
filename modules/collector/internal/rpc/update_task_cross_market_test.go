@@ -12,21 +12,16 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// 已有任务不能在单市场与统一数据集之间切换：编辑时增删标签（现货变现货加永续、统一数据集去掉一个市场）一律由后端拒绝。
+// 已有任务不能换市场：编辑时增删标签（现货加上永续、现货换成永续）一律由后端拒绝。
 func TestUpdateTaskRejectsCrossMarketTagChange(t *testing.T) {
 	db := openCollectorTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "single", TaskName: "single", DataType: "kline", Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"bars_single","frequency":"1m"}`, ResultDatasetID: "bars_single", ResultViewID: "view_single",
-	}))
-	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
-		SpaceID: "crypto", TaskID: "unified", TaskName: "unified", DataType: "kline", Enabled: true, TagIDs: []string{"binance_spot", "binance_swap"},
-		CollectParams: `{"target_dataset_id":"bars_unified","frequency":"1m"}`, ResultDatasetID: "bars_unified", ResultViewID: "view_unified",
+		CollectParams: `{"target_dataset_id":"bars_single","frequency":"1m"}`, ResultDatasetID: "bars_single",
 	}))
 	service := &Service{taskRepo: db.Tasks(), datasetSrc: tagValidationSource{validationDatasetSource: validationDatasetSource{
-		"bars_single":  storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},
-		"bars_unified": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot", "binance_swap"}},
+		"bars_single": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},
 	}, tags: map[string]*storagepb.Tag{
 		"binance_spot": {TagId: "binance_spot", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}},
 		"binance_swap": {TagId: "binance_swap", Attributes: map[string]string{"sync.source": "binance", "market_type": "swap"}},
@@ -42,9 +37,8 @@ func TestUpdateTaskRejectsCrossMarketTagChange(t *testing.T) {
 		return rsp
 	}
 	for name, rsp := range map[string]*pb.UpdateTaskRsp{
-		"单市场加一个市场":    update("single", "binance_spot", "binance_swap"),
-		"单市场换成另一个市场":  update("single", "binance_swap"),
-		"统一数据集去掉一个市场": update("unified", "binance_spot"),
+		"单市场加一个市场":   update("single", "binance_spot", "binance_swap"),
+		"单市场换成另一个市场": update("single", "binance_swap"),
 	} {
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), name)
 		require.NotEmpty(t, rsp.GetRetInfo().GetMsg(), name)
@@ -57,7 +51,7 @@ func TestUpdateTaskRejectsAnIngestChange(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot", TaskName: "spot", DataType: "kline", Ingest: domain.IngestStreaming, Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"bars_spot","frequency":"1m"}`, ResultDatasetID: "bars_spot", ResultViewID: "view_spot",
+		CollectParams: `{"target_dataset_id":"bars_spot","frequency":"1m"}`, ResultDatasetID: "bars_spot",
 	}))
 	service := &Service{taskRepo: db.Tasks(), datasetSrc: tagValidationSource{validationDatasetSource: validationDatasetSource{
 		"bars_spot": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},

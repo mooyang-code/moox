@@ -1,7 +1,6 @@
 package configinit
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,18 +39,4 @@ func pairFixture(t *testing.T) (configPath, secretsPath string, keys *configcryp
 	keys = &configcrypt.MemoryStore{}
 	configPath = writePairFiles(t, t.TempDir(), sampleRendered(t), keys)
 	return configPath, topology.SecretsPathFor(configPath), keys
-}
-
-// sealedBundle 是两份文件的备份信封（与 backupPlain 上传的一致）。
-func sealedBundle(t *testing.T, rendered Rendered, password string) string {
-	t.Helper()
-	plain, err := json.Marshal(backupBundle{Config: string(rendered.Config), Secrets: string(rendered.Secrets)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	envelope, err := configcrypt.SealBackup(plain, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return envelope
 }

@@ -28,8 +28,8 @@ func TestHostSilenceSurvivesMonitorRestartAndIsolatesSameNamedHosts(t *testing.T
 		t.Fatal(err)
 	}
 	for _, observation := range []hostmetrics.HostObservation{
-		{AgentID: "agent-a", Hostname: "worker", BootID: "boot-a", EventID: "event-a", OccurredAt: startedAt},
-		{AgentID: "agent-b", Hostname: "worker", BootID: "boot-b", EventID: "event-b", OccurredAt: startedAt.Add(90 * time.Second)},
+		{HostID: "control", Hostname: "worker-a", BootID: "boot-a", EventID: "event-a", OccurredAt: startedAt},
+		{HostID: "storage", Hostname: "worker-b", BootID: "boot-b", EventID: "event-b", OccurredAt: startedAt.Add(90 * time.Second)},
 	} {
 		if _, err := registry.Observe(ctx, observation); err != nil {
 			t.Fatal(err)
@@ -48,7 +48,7 @@ func TestHostSilenceSurvivesMonitorRestartAndIsolatesSameNamedHosts(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 重启后只凭库里的最近上报时间判断：agent-a 已超过停报时限，同名主机上的 agent-b 不受影响。
+	// 重启后只凭库里的最近上报时间判断：control 已超过停报时限，storage 不受影响。
 	scanAt := startedAt.Add(hostmetrics.DefaultHostStaleAfter + time.Second)
 	agents, err := restartedRegistry.List(ctx, scanAt)
 	if err != nil {
@@ -56,9 +56,9 @@ func TestHostSilenceSurvivesMonitorRestartAndIsolatesSameNamedHosts(t *testing.T
 	}
 	status := map[string]bool{}
 	for _, agent := range agents {
-		status[agent.AgentID] = agent.Reachable
+		status[agent.HostID] = agent.Reachable
 	}
-	if status["agent-a"] || !status["agent-b"] {
+	if status["control"] || !status["storage"] {
 		t.Fatalf("reachable status=%v", status)
 	}
 }

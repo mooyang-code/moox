@@ -17,8 +17,6 @@ import (
 const (
 	DefaultConcurrency = 5
 	MaxConcurrency     = 64
-	// MaxStandbyMS 是备援延迟的上限；下限由采集计划校验（太短会让几乎所有请求都发出备援，白白加倍请求权重）。
-	MaxStandbyMS = 5000
 	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
 	// assignment planner keeps each non-stock function at or below this limit.
 	MaxRealtimeItems = 40
@@ -57,12 +55,8 @@ type Request struct {
 	RequirePeriodCommit bool             `json:"require_period_commit,omitempty"`
 	RunID               string           `json:"-"`
 	Concurrency         int              `json:"concurrency,omitempty"`
-	// StandbyMS 大于 0 时启用备援请求：行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准（采集计划控制，默认关闭）。
-	StandbyMS int `json:"standby_ms,omitempty"`
 	// FetchLimits 是计划给出的限流与超时：常驻的本地执行端不能靠进程环境（各市场、各次调用参数可能不同），随请求带上。
 	FetchLimits *FeedLimits `json:"fetch_limits,omitempty"`
-	// ConnReuse 记录本次调用是否使用了跨调用的连接复用，只用于上报。
-	ConnReuse bool `json:"conn_reuse,omitempty"`
 	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），EntryAt 是函数入口时刻；
 	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是等待收盘后的取数时刻上。
 	TimerLateMS int                     `json:"timer_late_ms,omitempty"`
@@ -264,9 +258,6 @@ func (r *Request) validate() error {
 		} else if r.BatchKind == domain.BatchKindRealtime && item.BarLimit > MaxRealtimeRows {
 			return fmt.Errorf("realtime bar_limit must be between 1 and %d", MaxRealtimeRows)
 		}
-	}
-	if r.StandbyMS < 0 || r.StandbyMS > MaxStandbyMS {
-		return fmt.Errorf("standby_ms must be between 0 and %d", MaxStandbyMS)
 	}
 	if r.Concurrency < 0 || r.Concurrency > MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 0 and %d", MaxConcurrency)

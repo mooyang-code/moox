@@ -101,9 +101,14 @@ func (b Builder) buildServices(ctx context.Context, now time.Time, hosts []HostS
 	return services, unregistered, snapshot, nil
 }
 
-// Services 只给出各登记部署按最近一次上报得到的状态（含模块级生命周期），不构建整份概览；主机快照类组件不带主机事实。
+// Services 只给出各登记部署按最近一次上报得到的状态（含模块级生命周期），不构建整份概览；host-agent 按这台主机最近一次主机快照判断。
+// 组件检查、Doctor 上下文都用它的结论。
 func (b Builder) Services(ctx context.Context, now time.Time) ([]ServiceStatus, error) {
-	services, _, _, err := b.buildServices(ctx, now, nil)
+	hosts, err := b.buildHosts(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	services, _, _, err := b.buildServices(ctx, now, hosts)
 	return services, err
 }
 
@@ -196,7 +201,7 @@ func withHostSnapshot(item ServiceStatus, hosts []HostStatus) ServiceStatus {
 		if host.HostID != item.NodeID || !host.LastSeenAt.After(item.LastSeenAt) {
 			continue
 		}
-		item.InstanceID, item.LastSeenAt = host.AgentID, host.LastSeenAt.UTC()
+		item.InstanceID, item.LastSeenAt = host.HostID, host.LastSeenAt.UTC()
 		item.ReporterStatus, item.Status, item.Reason = "healthy", "healthy", "reporter fresh"
 		if host.Status != "healthy" {
 			item.ReporterStatus, item.Status, item.Reason = "stale", silentStatus(item, "stale"), "reporter stale"

@@ -20,8 +20,8 @@ func (h *AccountServer) InspectExchangeCredential(
 		return &tradepb.InspectExchangeCredentialRsp{RetInfo: invalidInfo(err)}, nil
 	}
 	inspection, err := h.Accounts.InspectCredential(
-		ctx, exchangeFromPB(req.GetExchange()), environmentFromPB(req.GetEnvironment()),
-		req.GetCredentialSecretId(), marketsFromPB(req.GetMarkets()),
+		ctx, exchange.Exchange(req.GetExchange()), environmentFromPB(req.GetEnvironment()),
+		req.GetCredentialSecretId(), marketTypes(req.GetMarkets()),
 	)
 	if err != nil {
 		return &tradepb.InspectExchangeCredentialRsp{RetInfo: errorInfo(err)}, nil
@@ -78,7 +78,7 @@ func inspectionToPB(value exchange.Inspection) *tradepb.ExchangeInspection {
 		CanTradeSpot: value.CanTradeSpot, CanTradeSwap: value.CanTradeSwap, UniversalTransfer: value.UniversalTransfer,
 		IpRestricted: value.IPRestricted, RawPermissions: value.RawPermissions, OkxAcctLv: value.OKXAcctLv,
 		PositionMode: string(value.PositionMode), MultiAssetsMargin: value.MultiAssetsMargin,
-		AvailableMarkets: marketsToPB(value.AvailableMarkets),
+		AvailableMarkets: marketStrings(value.AvailableMarkets),
 		// 阻断项按检测时请求的市场算；没有请求市场（预览）时 Blockers 就是按全部可开通市场算的。
 		Blockers: findings(value.Blockers), Warnings: findings(value.Warnings),
 		ConsecutiveFailures: int32(value.ConsecutiveFailures), LastFailure: value.LastFailure,

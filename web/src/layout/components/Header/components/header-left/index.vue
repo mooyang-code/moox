@@ -53,16 +53,17 @@
 </template>
 
 <script setup lang="ts">
+import { reportError } from "@/api/http";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { onMounted, computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import ButtonCollapsed from "@/layout/components/Header/components/button-collapsed/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
-import { createSpace } from "@/api/admin/spaces";
+import { createSpace } from "@/api/storage/spaces";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { SPACE_TIMEZONES } from "@/utils/space-zones";
 import { storeToRefs } from "pinia";
-import type { Space } from "@/api/admin/types";
+import type { Space } from "@/api/storage/spaces";
 
 const spaceStore = useSpaceStore();
 // 窄屏缩短空间选择框，右侧只留用户菜单，两者不重叠
@@ -130,8 +131,7 @@ const submitCreate = async (): Promise<boolean> => {
     resetCreate();
     return true;
   } catch (error) {
-    if (!submission.isCurrent()) return false;
-    Message.error(error instanceof Error ? error.message : "创建空间失败");
+    reportError(error);
     return false;
   }
 };

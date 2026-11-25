@@ -33,7 +33,7 @@ func convergedRestingTarget(t *testing.T) *targetFixture {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	f.position(t, "account-a", "BTCUSDT", "100")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.restingOrder(t, "resting-1", "BUY", "10", "0", f.now)
 	result, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
@@ -102,14 +102,14 @@ func TestClosedSessionBeforeBarEndExpiresAtBarEndPlusOne(t *testing.T) {
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-current",
 		InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: sessionStartedAt("session-1"), StrategyID: "strategy-1",
 		BarEndTime: barEnd.UnixMilli(), ValidUntil: barEnd.Add(time.Hour).UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
+		Targets: []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 	})
 	require.NoError(t, err)
 	require.True(t, accepted)
 	// 上一份目标留下的挂单：新目标生效后本该在第 1 阶段撤掉。
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "resting-old", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: "resting-old", ExchangeOrderID: "exchange-resting-old", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		SpaceID: "space-1", OrderID: "resting-old", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
+		ClientOrderID: "resting-old", ExchangeOrderID: "exchange-resting-old", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		FilledQuantity: "0", OwnerType: "TARGET", OwnerID: "target-old", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})

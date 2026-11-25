@@ -6,7 +6,7 @@ import (
 )
 
 func TestRuleForDescribesEachMarket(t *testing.T) {
-	spot, swap, stock := RuleFor(MarketTypeSpot), RuleFor(MarketTypeSwap), RuleFor("STOCK")
+	spot, swap, stock := RuleFor(MarketTypeSpot), RuleFor(MarketTypeSwap), RuleFor("equity")
 	if !spot.PositionFromBalance || spot.CanShort || spot.UsesMargin || spot.RawInstrumentID {
 		t.Fatalf("SPOT rule = %+v", spot)
 	}
@@ -23,11 +23,11 @@ func TestRuleForDescribesEachMarket(t *testing.T) {
 }
 
 func TestNormalizeInstrumentIDKeepsStockIDs(t *testing.T) {
-	got, err := NormalizeInstrumentID(" 600519.xshg ", MarketTypeStock)
+	got, err := NormalizeInstrumentID(" 600519.xshg ", MarketTypeEquity)
 	if err != nil || got != "600519.XSHG" {
 		t.Fatalf("NormalizeInstrumentID() = %q, %v", got, err)
 	}
-	if _, err := NormalizeInstrumentID("  ", MarketTypeStock); !errors.Is(err, ErrInvalidInstrumentID) {
+	if _, err := NormalizeInstrumentID("  ", MarketTypeEquity); !errors.Is(err, ErrInvalidInstrumentID) {
 		t.Fatalf("空标的 error = %v", err)
 	}
 }

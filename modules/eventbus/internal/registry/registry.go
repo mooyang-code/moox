@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/mooyang-code/moox/packages/events"
@@ -39,9 +38,6 @@ func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	if err := r.cfg.Validate(); err != nil {
-		return Result{}, err
-	}
 	for i := range r.cfg.Streams {
 		if err := reconcileStream(ctx, r.js, &r.cfg.Streams[i]); err != nil {
 			return Result{}, err
@@ -51,7 +47,7 @@ func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
-	return Result{Streams: len(r.cfg.Streams), Topics: enabledTopics(r.cfg)}, nil
+	return Result{Streams: len(r.cfg.Streams), Topics: enabledTopics()}, nil
 }
 
 func (r *Registry) rejectOverlappingUnmanagedStreams(ctx context.Context) error {
@@ -101,7 +97,7 @@ func (r *Registry) JS() nats.JetStreamContext {
 	}
 	return r.js
 }
-func enabledTopics(c *config.Config) int {
+func enabledTopics() int {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return 0
@@ -109,27 +105,16 @@ func enabledTopics(c *config.Config) int {
 	return len(registry.Events())
 }
 
-func streamConfig(s *config.StreamConfig) *nats.StreamConfig {
+// streamConfig 把拓扑声明换成 JetStream 的 Stream 配置：存储一律是文件、满了丢最旧的、单副本。
+func streamConfig(s *events.StreamSpec) *nats.StreamConfig {
 	retention := nats.LimitsPolicy
-	if s.Retention == "work_queue" {
+	if s.WorkQueue {
 		retention = nats.WorkQueuePolicy
 	}
-	storage := nats.FileStorage
-	if s.Storage == "memory" {
-		storage = nats.MemoryStorage
-	}
-	discard := nats.DiscardOld
-	if strings.EqualFold(s.Discard, "new") {
-		discard = nats.DiscardNew
-	}
-	duplicates := s.Duplicates
-	if duplicates == 0 {
-		duplicates = 2 * time.Minute
-	}
-	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: storage, Replicas: 1, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, MaxMsgs: s.MaxMsgs, Discard: discard, Duplicates: duplicates}
+	return &nats.StreamConfig{Name: s.Name, Description: s.Description, Subjects: append([]string(nil), s.Subjects...), Retention: retention, Storage: nats.FileStorage, Replicas: 1, MaxAge: s.MaxAge, MaxBytes: s.MaxBytes, Discard: nats.DiscardOld, Duplicates: events.StreamDuplicates}
 }
 
-func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config.StreamConfig) error {
+func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *events.StreamSpec) error {
 	want := streamConfig(spec)
 	got, err := js.StreamInfo(spec.Name, nats.Context(ctx))
 	if errors.Is(err, nats.ErrStreamNotFound) {

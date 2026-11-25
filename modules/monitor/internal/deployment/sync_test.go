@@ -44,12 +44,12 @@ func TestSyncWritesTopologyWithoutProbeChecks(t *testing.T) {
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	source := &memorySource{snapshot: testSnapshot(t)}
-	syncer := NewSyncer(repos.Topology, source, nil)
+	syncer := NewSyncer(repos.Topology, source)
 	require.NoError(t, syncer.Sync(t.Context()))
 	topology, err := repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	require.Len(t, topology.Deployments, 2)
-	count, err := repos.Checks.Count(t.Context(), store.ListChecksOptions{})
+	count, err := repos.Checks.Count(t.Context())
 	require.NoError(t, err)
 	require.Zero(t, count, "部署同步不再生成探测检查")
 

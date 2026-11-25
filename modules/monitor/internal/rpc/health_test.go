@@ -39,7 +39,7 @@ func TestHealthOverviewRPCV2CarriesIdentityIndependentSignalsAndStatusSince(t *t
 	component := rsp.Overview.Components[0]
 	require.Equal(t, "control", component.HostId)
 	require.Equal(t, "strategy", component.ComponentId)
-	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339Nano), component.StatusSince)
+	require.Equal(t, now.Add(-time.Minute).UnixMilli(), component.StatusSince)
 	require.Equal(t, "unknown", component.Reporter.Status, "从未上报")
 	require.Empty(t, component.Reporter.CheckedAt)
 	for _, encoding := range []string{"pb", "json"} {

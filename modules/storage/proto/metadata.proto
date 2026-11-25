@@ -8,7 +8,7 @@ import "moox_common.proto";
 import "common.proto";
 import "dataset_markers.proto";
 
-// Space 是业务命名空间，也是用户可见 View 的集合。
+// Space 是业务命名空间，也是用户可见数据集的集合。
 message Space {
   // space_id 是使用空间 ID；本文所有“全局”概念均限定在该空间内。
   string space_id = 1;
@@ -18,72 +18,18 @@ message Space {
   string description = 3;
   // owner 是空间拥有者，可以是用户、团队或系统任务。
   string owner = 4;
-  // status 取值 active、disabled 或 deleted。
+  // status 取值 active 或 disabled。
   string status = 5;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 6;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 7;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 6;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 7;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 8;
-}
-
-// View 是 Space 内的用户查询入口，只存声明；已建好的索引状态只在 View 的索引文件里，由 DataView.GetViewState 提供。
-message View {
-  // space_id 是 View 所属 Space。
-  string space_id = 1;
-  // view_id 是 Space 内唯一的查询视图 ID；必须为 lower_snake_case，最长 128 字符。
-  string view_id = 2;
-  // name 是视图中文展示名，创建和更新时必须包含中文且不超过 10 个字符。
-  string name = 3;
-  // description 是说明文本。
-  string description = 4;
-  // dataset_id 是视图所属的唯一数据集；一个 View 只索引一个 Dataset。
-  string dataset_id = 5;
-  // grain_keys 表示视图行粒度键，例如 subject_id、data_time 或 freq。
-  repeated string grain_keys = 7;
-  // freq 是所属 Dataset 的频率，由 Storage 按 Dataset 填写，调用方不能指定；记录型 View 为空。
-  string freq = 8;
-  // engine 是视图查询执行引擎标识，由控制面配置。
-  string engine = 9;
-  // status 取值 active、disabled 或 deleted。
-  string status = 12;
-  // columns 是视图对用户暴露的查询列（只读）：等于数据集里启用的列，按数据集列的创建顺序；写接口忽略该字段。
-  repeated ViewColumn columns = 13;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 14;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 15;
-  // attributes 是调用方自用的扩展属性，Storage 不解释。
-  map<string, string> attributes = 16;
-  // maintenance_priority 是建索引等维护的先后：越小越先，0（默认）最先。
-  uint32 maintenance_priority = 27;
-  // hidden_columns 是数据集里被禁用或所引用字段已停用、删除的列，由 Storage 计算：列和数据都保留，只在返回结果和列清单时隐藏。
-  repeated string hidden_columns = 26;
-}
-
-// ViewColumn 是 View 对用户暴露的一列，由所属数据集的列推出（来源恒为 DatasetColumn）。
-message ViewColumn {
-  // space_id 是 ViewColumn 所属 Space。
-  string space_id = 1;
-  // view_id 是查询视图 ID。
-  string view_id = 2;
-  // column_name 是视图内稳定技术列名；DatasetColumn 来源直接使用 Dataset 列名，不带数据集前缀。
-  string column_name = 3;
-  // origin_type 表示列来源，View 列恒为 DatasetColumn。
-  ColumnOriginType origin_type = 4;
-  // origin_id 是来源 ID：View 所属 Dataset 的列名，与 column_name 相同。
-  string origin_id = 5;
-  // value_type 是列值的逻辑类型。
-  FieldValueType value_type = 6;
-  // sort_order 是视图列的展示顺序：元数据里按数据集列的创建顺序；索引里是建进索引的先后。
-  uint32 sort_order = 8;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 9;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 10;
-  // attributes 取自数据集列的属性。
-  map<string, string> attributes = 11;
+  // market 是空间所属市场，取值见种子 config/setup/metadata.yaml：crypto、CN、HK、US。
+  string market = 9;
+  // timezone 是空间的展示时区（IANA 名称，如 Asia/Shanghai），管理台全站时间按它显示。
+  string timezone = 10;
 }
 
 // DataSource 是 Space 内一个可引用的数据来源名字；业务含义放在 attributes，Storage 不解释。
@@ -94,12 +40,12 @@ message DataSource {
   string data_source_id = 2;
   // name 是数据来源名称，通常用于管理台展示。
   string name = 3;
-  // status 取值 active、disabled 或 deleted。
+  // status 取值 active 或 disabled。
   string status = 4;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 5;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 6;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 5;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 6;
   // attributes 是写入方维护的扩展属性，Storage 原样保存。
   map<string, string> attributes = 7;
 }
@@ -114,8 +60,9 @@ message Tag {
   bool builtin = 6;
   uint32 active_count = 7;
   uint32 inactive_count = 8;
-  string created_at = 9;
-  string updated_at = 10;
+  // Unix 毫秒。
+  int64 created_at = 9;
+  int64 updated_at = 10;
   // attributes 是写入方维护的扩展属性，Storage 原样保存；改动会递增标的修订号。
   map<string, string> attributes = 11;
 }
@@ -125,7 +72,8 @@ message TagMember {
   string space_id = 1;
   string tag_id = 2;
   string status = 3;
-  string inactive_at = 4;
+  // inactive_at 是成员失效时刻（Unix 毫秒），在册成员为 0。
+  int64 inactive_at = 4;
   Subject subject = 5;
   repeated string tag_ids = 6;
   // trading_status 是成员在这个标签（即这个市场）上的交易状态：trading、suspended 或 delisted，由 Collector 的交易状态检测写入。
@@ -164,15 +112,16 @@ message Subject {
   string timezone = 4;
   // status 取值 active 或 disabled；disabled 仅表示人工停用。
   string status = 5;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 6;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 7;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 6;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 7;
   // attributes 是写入方维护的扩展属性，Storage 原样保存；改动会递增标的修订号。
   map<string, string> attributes = 8;
 }
 
 // Dataset 是 Space 内可写的事实数据集，定义一类数据及其列契约。
+// 每个数据集恰好有一个查询索引（View），随数据集建、随数据集删；时序用 DuckDB，记录用 Bleve。
 message Dataset {
   // space_id 是 Dataset 所属 Space。
   string space_id = 1;
@@ -191,10 +140,10 @@ message Dataset {
   string freq = 7;
   // status 取值 active 或 disabled。
   string status = 8;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 9;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 10;
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 9;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 10;
   // attributes 是调用方自用的扩展属性，Storage 不解释。
   map<string, string> attributes = 11;
   // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
@@ -210,6 +159,8 @@ message Dataset {
   string alignment = 23;
   // allowed_lateness_seconds 是周期截止前允许迟到的秒数；0 表示使用 Storage 的默认值。
   uint32 allowed_lateness_seconds = 24;
+  // maintenance_priority 是查询索引维护（建索引、加列、删最旧行）的先后：越小越先，0（默认）最先；更新时 0 表示沿用已有值。
+  uint32 maintenance_priority = 25;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -226,87 +177,31 @@ message DatasetSubject {
   bool suspended = 5;
 }
 
-// FieldGroup 是 Space 内普通字段的两级分类目录。
-message FieldGroup {
-  // space_id 是 FieldGroup 所属 Space。
-  string space_id = 1;
-  // group_id 是 Space 内唯一的稳定英文 ID。
-  string group_id = 2;
-  // name 是字段组中文展示名。
-  string name = 3;
-  // description 是字段组说明。
-  string description = 4;
-  // parent_group_id 是可选父组 ID；系统最多允许两级。
-  string parent_group_id = 5;
-  // sort_order 是同级展示顺序。
-  uint32 sort_order = 6;
-  // status 表示启用或停用状态。
-  string status = 7;
-  // created_at 是创建时间。
-  string created_at = 8;
-  // updated_at 是最后更新时间。
-  string updated_at = 9;
-  // attributes 是扩展属性。
-  map<string, string> attributes = 10;
-}
-
-// Field 是 Space 内普通字段字典，不直接归属某个 Dataset。
-message Field {
-  // space_id 是 Field 所属 Space。
-  string space_id = 1;
-  // field_id 是 Space 内唯一字段英文名，例如 open、close 或 volume。
-  string field_id = 2;
-  // name 是字段中文名或展示名。
-  string name = 3;
-  // description 是说明文本。
-  string description = 4;
-  // value_type 是字段值的逻辑类型。
-  FieldValueType value_type = 5;
-  // unit 是默认计量单位，例如 CNY、USD、share 或 percent。
-  string unit = 6;
-  // validation_rule_json 是字段写入校验规则。
-  string validation_rule_json = 7;
-  // write_example 是示例写入值，便于管理台展示和文档生成。
-  string write_example = 8;
-  // status 取值 active、disabled 或 deleted。
-  string status = 9;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 10;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 11;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 12;
-  // group_id 是字段所属 FieldGroup；字段必须归组。
-  string group_id = 13;
-  // sort_order 是字段在组内的展示顺序。
-  uint32 sort_order = 14;
-}
-
-// DatasetColumn 表示 Dataset 下允许写入和读取的一列。
+// DatasetColumn 表示 Dataset 下允许写入和读取的一列；列自描述：名称、类型、显示名、分组、状态都在列上。
 message DatasetColumn {
   // space_id 是 DatasetColumn 所属 Space。
   string space_id = 1;
   // dataset_id 是数据集 ID。
   string dataset_id = 2;
-  // column_name 是数据集内稳定技术列名。
+  // column_name 是列的唯一身份，写入与读取都只认它。
   string column_name = 3;
-  // origin_type 表示列来源，可为字段、因子或系统列。
-  DatasetColumnOriginType origin_type = 4;
-  // origin_id 是字段 ID、因子 ID 或系统列名。
-  string origin_id = 5;
-  // value_type 是列值的逻辑类型。
-  FieldValueType value_type = 6;
+  // value_type 是列值的逻辑类型，建列后不能修改。
+  FieldValueType value_type = 4;
+  // display_name 是界面显示名，必填；由建列的模块写入，Storage 只校验非空。
+  string display_name = 5;
+  // group 是界面上的分组名（中文，一级），可以为空。
+  string group = 6;
   // required 表示导入数据时该列是否必须存在。
   bool required = 7;
   // aliases 是导入数据时可识别的列名别名。
   repeated string aliases = 8;
-  // status 取值 active、disabled 或 deleted。
+  // status 取值 active 或 disabled：disabled 的列不再写入，读取时隐藏，数据保留。
   string status = 9;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 10;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 11;
-  // attributes 是扩展属性；factor_result 的因子输出列（column_kind=output）display_name 必须等于列名，其他业务列（包括参数列 __params）必须包含中文且不超过 10 个字符。
+  // created_at 是创建时刻，Unix 毫秒。
+  int64 created_at = 10;
+  // updated_at 是最后更新时刻，Unix 毫秒。
+  int64 updated_at = 11;
+  // attributes 是写入方自用的扩展属性（fill、member_kind 等），Storage 不解释。
   map<string, string> attributes = 12;
 }
 
@@ -338,7 +233,7 @@ message UpdateSpaceRsp {
   Space space = 2;
 }
 
-// DeleteSpaceReq 表示删除一个使用空间及其级联元数据。
+// DeleteSpaceReq 表示删除一个使用空间：连同空间里的数据集、View 与全部行数据一起删除，不能恢复。
 message DeleteSpaceReq {
   string space_id = 2;
 }
@@ -368,6 +263,8 @@ message ListSpacesReq {
   string owner = 2;
   // page 是分页参数。
   common.Page page = 3;
+  // status 是可选状态过滤条件：active、disabled。
+  string status = 4;
 }
 
 // ListSpacesRsp 表示列出使用空间的响应。
@@ -376,105 +273,6 @@ message ListSpacesRsp {
   common.RetInfo ret_info = 1;
   // spaces 是使用空间列表。
   repeated Space spaces = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
-// CreateViewReq 表示创建查询视图的请求。
-message CreateViewReq {
-  // view 是待创建的查询视图元数据。
-  View view = 2;
-  // create_only 为 true 时要求 View ID 不存在，且由存储层原子保证。
-  bool create_only = 3;
-}
-
-// CreateViewRsp 表示创建查询视图的响应。
-message CreateViewRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // view 是创建后的查询视图元数据。
-  View view = 2;
-}
-
-// DeleteViewReq 表示物理删除一个查询视图及其依赖行。
-message DeleteViewReq {
-  string space_id = 2;
-  string view_id = 3;
-}
-
-// DeleteViewRsp 表示删除查询视图的结果。
-message DeleteViewRsp {
-  common.RetInfo ret_info = 1;
-}
-
-// UpdateViewReq 表示更新查询视图的请求。
-message UpdateViewReq {
-  // view 是更新后的查询视图元数据。
-  View view = 2;
-}
-
-// UpdateViewRsp 表示更新查询视图的响应。
-message UpdateViewRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // view 是更新后的查询视图元数据。
-  View view = 2;
-}
-
-// GetViewReq 表示获取查询视图的请求。
-message GetViewReq {
-  // space_id 是使用空间 ID。
-  string space_id = 2;
-  // view_id 是查询视图 ID。
-  string view_id = 3;
-}
-
-// GetViewRsp 表示获取查询视图的响应。
-message GetViewRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // view 是查询视图元数据。
-  View view = 2;
-}
-
-// ListViewsReq 表示列出查询视图的请求。
-message ListViewsReq {
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // dataset_id 是可选数据集过滤条件。
-  string dataset_id = 3;
-  // status 是可选状态过滤条件。
-  string status = 4;
-  // page 是分页参数。
-  common.Page page = 5;
-}
-
-// ListViewsRsp 表示列出查询视图的响应。
-message ListViewsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // views 是查询视图列表。
-  repeated View views = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
-// ListViewColumnsReq 表示列出视图列的请求。
-message ListViewColumnsReq {
-  // space_id 是使用空间 ID。
-  string space_id = 2;
-  // view_id 是查询视图 ID。
-  string view_id = 3;
-  // page 是分页参数。
-  common.Page page = 4;
-}
-
-// ListViewColumnsRsp 表示列出视图列的响应。
-message ListViewColumnsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // columns 是视图列列表。
-  repeated ViewColumn columns = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
 }
@@ -609,7 +407,7 @@ message ListSubjectsRsp {
 message UpsertTagReq {
   Tag tag = 2;
   bool create_only = 3;
-  // seed 标记种子导入（setup init、metadata import/apply）：新建标签（含 create_only）时保留 tag.builtin。
+  // seed 标记种子导入（setup init、metadata apply）：新建标签（含 create_only）时保留 tag.builtin。
   // 不带它新建的标签一律不是内置标签；已有标签的 builtin 无论带不带都不改。
   bool seed = 4;
 }
@@ -715,6 +513,8 @@ message ListDatasetsReq {
   string freq = 5;
   // page 是分页参数。
   common.Page page = 6;
+  // status 是可选状态过滤条件：active 或 disabled。
+  string status = 7;
 }
 
 // ListDatasetsRsp 表示列出数据集的响应。
@@ -747,155 +547,6 @@ message ListDatasetSubjectsRsp {
   repeated DatasetSubject dataset_subjects = 2;
   // page_result 是分页结果。
   common.PageResult page_result = 3;
-}
-
-// CreateFieldGroupReq 表示创建字段组的请求。
-message CreateFieldGroupReq {
-  FieldGroup field_group = 2;
-}
-
-message CreateFieldGroupRsp {
-  common.RetInfo ret_info = 1;
-  FieldGroup field_group = 2;
-}
-
-message UpdateFieldGroupReq {
-  FieldGroup field_group = 2;
-}
-
-message UpdateFieldGroupRsp {
-  common.RetInfo ret_info = 1;
-  FieldGroup field_group = 2;
-}
-
-message GetFieldGroupReq {
-  string space_id = 2;
-  string group_id = 3;
-}
-
-message GetFieldGroupRsp {
-  common.RetInfo ret_info = 1;
-  FieldGroup field_group = 2;
-}
-
-message ListFieldGroupsReq {
-  string space_id = 2;
-  string parent_group_id = 3;
-  common.Page page = 4;
-}
-
-message ListFieldGroupsRsp {
-  common.RetInfo ret_info = 1;
-  repeated FieldGroup field_groups = 2;
-  common.PageResult page_result = 3;
-  // field_counts 按字段组 ID 返回字段数量；一级组包含子组，二级组只统计直接字段。
-  map<string, uint64> field_counts = 4;
-  // total_field_count 是当前 Space 下全部字段数量。
-  uint64 total_field_count = 5;
-  // ungrouped_field_count 是未归组异常字段数量。
-  uint64 ungrouped_field_count = 6;
-}
-
-// CreateFieldReq 表示创建字段的请求。
-message CreateFieldReq {
-  // field 是待创建的字段元数据。
-  Field field = 2;
-}
-
-// CreateFieldRsp 表示创建字段的响应。
-message CreateFieldRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // field 是创建后的字段元数据。
-  Field field = 2;
-}
-
-// UpdateFieldReq 表示更新字段的请求。
-message UpdateFieldReq {
-  // field 是更新后的字段元数据。
-  Field field = 2;
-}
-
-// UpdateFieldRsp 表示更新字段的响应。
-message UpdateFieldRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // field 是更新后的字段元数据。
-  Field field = 2;
-}
-
-// GetFieldReq 表示获取字段的请求。
-message GetFieldReq {
-  // space_id 是使用空间 ID。
-  string space_id = 2;
-  // field_id 是字段 ID。
-  string field_id = 3;
-}
-
-// GetFieldRsp 表示获取字段的响应。
-message GetFieldRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // field 是字段元数据。
-  Field field = 2;
-}
-
-// ListFieldsReq 表示列出字段的请求。
-message ListFieldsReq {
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // value_type 是可选字段类型过滤条件。
-  FieldValueType value_type = 3;
-  // page 是分页参数。
-  common.Page page = 4;
-  // group_id 是可选字段组过滤条件。
-  string group_id = 5;
-  // status 是可选字段状态过滤条件。
-  string status = 6;
-  // keyword 按字段 ID、中文名和描述执行包含匹配。
-  string keyword = 7;
-  // include_descendants 表示查询 group_id 及其直接子组。
-  bool include_descendants = 8;
-  // ungrouped_only 表示只查询未归组异常字段，不能与 group_id 同时使用。
-  bool ungrouped_only = 9;
-  // sort_by 是排序字段：sort_order、field_id 或 updated_at。
-  string sort_by = 10;
-  // sort_order 是排序方向：asc 或 desc。
-  string sort_order = 11;
-}
-
-// ListFieldsRsp 表示列出字段的响应。
-message ListFieldsRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // fields 是字段列表。
-  repeated Field fields = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
-// BatchUpdateFieldsReq 表示一次事务内批量调整字段组或状态。
-message BatchUpdateFieldsReq {
-  string space_id = 2;
-  repeated string field_ids = 3;
-  string target_group_id = 4;
-  // target_status 可为 active、disabled 或 deleted。deleted 是逻辑删除：数据保留，引用它的列被隐藏，重新启用即恢复。
-  string target_status = 5;
-}
-
-message BatchUpdateFieldsRsp {
-  common.RetInfo ret_info = 1;
-  uint32 updated_count = 2;
-}
-
-// DeleteFieldGroupReq 表示删除一个没有子组和字段引用的空字段组。
-message DeleteFieldGroupReq {
-  string space_id = 2;
-  string group_id = 3;
-}
-
-message DeleteFieldGroupRsp {
-  common.RetInfo ret_info = 1;
 }
 
 // UpsertDatasetColumnReq 表示创建或更新数据集列的请求。
@@ -945,19 +596,6 @@ service Metadata {
   // 列出使用空间。
   rpc ListSpaces(ListSpacesReq) returns (ListSpacesRsp);
 
-  // 创建查询视图。
-  rpc CreateView(CreateViewReq) returns (CreateViewRsp);
-  // 更新查询视图。
-  rpc UpdateView(UpdateViewReq) returns (UpdateViewRsp);
-  // 物理删除查询视图及其依赖行。
-  rpc DeleteView(DeleteViewReq) returns (DeleteViewRsp);
-  // 按 ID 获取查询视图。
-  rpc GetView(GetViewReq) returns (GetViewRsp);
-  // 列出查询视图。
-  rpc ListViews(ListViewsReq) returns (ListViewsRsp);
-  // 列出视图列：由数据集里启用的列推出。
-  rpc ListViewColumns(ListViewColumnsReq) returns (ListViewColumnsRsp);
-
   // 创建数据来源。
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);
   // 更新数据来源。
@@ -1001,28 +639,6 @@ service Metadata {
   rpc ListDatasets(ListDatasetsReq) returns (ListDatasetsRsp);
   // 列出 Dataset 覆盖的 Subject。
   rpc ListDatasetSubjects(ListDatasetSubjectsReq) returns (ListDatasetSubjectsRsp);
-
-  // 创建普通字段。
-  rpc CreateFieldGroup(CreateFieldGroupReq) returns (CreateFieldGroupRsp);
-  // 更新字段组。
-  rpc UpdateFieldGroup(UpdateFieldGroupReq) returns (UpdateFieldGroupRsp);
-  // 按字段组 ID 获取字段组。
-  rpc GetFieldGroup(GetFieldGroupReq) returns (GetFieldGroupRsp);
-  // 列出字段组。
-  rpc ListFieldGroups(ListFieldGroupsReq) returns (ListFieldGroupsRsp);
-
-  // 创建普通字段。
-  rpc CreateField(CreateFieldReq) returns (CreateFieldRsp);
-  // 更新普通字段。
-  rpc UpdateField(UpdateFieldReq) returns (UpdateFieldRsp);
-  // 按字段 ID 获取字段。
-  rpc GetField(GetFieldReq) returns (GetFieldRsp);
-  // 列出普通字段。
-  rpc ListFields(ListFieldsReq) returns (ListFieldsRsp);
-  // 批量移动字段组或更新状态。
-  rpc BatchUpdateFields(BatchUpdateFieldsReq) returns (BatchUpdateFieldsRsp);
-  // 删除没有子组和字段引用的空字段组。
-  rpc DeleteFieldGroup(DeleteFieldGroupReq) returns (DeleteFieldGroupRsp);
 
   // 创建或更新数据集列。
   rpc UpsertDatasetColumn(UpsertDatasetColumnReq) returns (UpsertDatasetColumnRsp);

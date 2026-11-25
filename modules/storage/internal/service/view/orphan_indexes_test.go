@@ -11,49 +11,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-type cleanupMetadata struct {
-	maintenanceMetadata
-	views             []*pb.View
-	listErr           error
-	nilPageResult     bool
-	emptyPageWithMore bool
-	listCalls         int
-}
-
-func (m *cleanupMetadata) ListViews(_ context.Context, req *pb.ListViewsReq, _ ...client.Option) (*pb.ListViewsRsp, error) {
-	m.listCalls++
-	views := m.views
-	if m.listErr != nil {
-		return nil, m.listErr
-	}
-	if m.nilPageResult {
-		return &pb.ListViewsRsp{RetInfo: successRetInfo(), Views: views}, nil
-	}
-	if m.emptyPageWithMore {
-		return &pb.ListViewsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 100, HasMore: true}}, nil
-	}
-	page := req.GetPage().GetPage()
-	if page == 0 {
-		page = 1
-	}
-	size := req.GetPage().GetSize()
-	if size == 0 {
-		size = 100
-	}
-	start := int((page - 1) * size)
-	if start >= len(views) {
-		return &pb.ListViewsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: page, Size: size}}, nil
-	}
-	end := start + int(size)
-	if end > len(views) {
-		end = len(views)
-	}
-	return &pb.ListViewsRsp{
-		RetInfo: successRetInfo(), Views: views[start:end],
-		PageResult: &pb.PageResult{Page: page, Size: size, HasMore: end < len(views)},
-	}, nil
-}
-
 type fakeManagedEngine struct {
 	name        string
 	ids         []string
@@ -127,23 +84,23 @@ func newCleanupService(t *testing.T, engine *fakeManagedEngine) *Service {
 	return svc
 }
 
-func cleanupIndexID(viewID string) string {
-	return viewindex.ViewIndexID("space", viewID)
+func cleanupIndexID(datasetID string) string {
+	return viewindex.IndexID("space", datasetID)
 }
 
-// 启动时删掉没有对应 View 的索引文件；元数据里的 View（含停用的）保留它所用引擎下的索引。
+// 启动时删掉没有对应数据集的索引文件；元数据里的数据集（含停用的）保留它所用引擎下的索引。
 func TestRestoreRemovesOrphanIndexes(t *testing.T) {
 	kept, disabled, orphan := cleanupIndexID("prices"), cleanupIndexID("disabled"), cleanupIndexID("deleted")
 	duckdb := &fakeManagedEngine{name: "duckdb", ids: []string{kept, disabled, orphan}}
-	// 同一个标识在另一个引擎下的文件不属于这个 View。
+	// 同一个标识在另一个引擎下的文件不属于这个数据集。
 	bleve := &fakeManagedEngine{name: "bleve", ids: []string{kept}}
 	svc := newCleanupService(t, duckdb)
 	svc.engines[bleve.name] = bleve
-	metadata := &cleanupMetadata{views: []*pb.View{
-		{SpaceId: "space", ViewId: "prices", Engine: "duckdb", Status: "active"},
-		{SpaceId: "space", ViewId: "disabled", Engine: "duckdb", Status: "disabled"},
-	}}
-	svc.removeOrphanIndexes(context.Background(), metadata)
+	off := timeSeriesSpec("space", "disabled", "1m")
+	off.Status = "disabled"
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadataFor(timeSeriesSpec("space", "prices", "1m"), off)}); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(duckdb.removeCalls, []string{orphan}) {
 		t.Fatalf("DuckDB 删除 = %v，期望只删 [%s]", duckdb.removeCalls, orphan)
 	}
@@ -155,28 +112,41 @@ func TestRestoreRemovesOrphanIndexes(t *testing.T) {
 	}
 }
 
-// 元数据读不出来或分页信息不完整时不能断定哪些文件没有 View：一个都不删。
-func TestRemoveOrphanIndexesKeepsEverythingWhenMetadataIsIncomplete(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*cleanupMetadata)
-	}{
-		{name: "列出失败", mutate: func(metadata *cleanupMetadata) { metadata.listErr = errors.New("metadata unavailable") }},
-		{name: "没有分页信息", mutate: func(metadata *cleanupMetadata) { metadata.nilPageResult = true }},
-		{name: "空页却说还有下一页", mutate: func(metadata *cleanupMetadata) { metadata.emptyPageWithMore = true }},
+// 元数据读不出来或分页信息不完整时不能断定哪些文件没有数据集：启动报错，一个都不删。
+func TestRestoreKeepsEverythingWhenMetadataIsIncomplete(t *testing.T) {
+	cases := map[string][]*pb.ListDatasetsRsp{
+		"没有分页信息":    {{RetInfo: successRetInfo()}},
+		"空页却说还有下一页": {{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 100, HasMore: true}}},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			engine := &fakeManagedEngine{name: "fake", ids: []string{cleanupIndexID("prices")}}
+	for name, pages := range cases {
+		t.Run(name, func(t *testing.T) {
+			engine := &fakeManagedEngine{name: "duckdb", ids: []string{cleanupIndexID("prices")}}
 			svc := newCleanupService(t, engine)
-			metadata := &cleanupMetadata{}
-			tc.mutate(metadata)
-			svc.removeOrphanIndexes(context.Background(), metadata)
+			if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: &pageMetadata{pages: pages}}); err == nil {
+				t.Fatal("元数据不完整时启动恢复应当报错")
+			}
 			if len(engine.removeCalls) != 0 {
 				t.Fatalf("元数据不完整时删了索引：%v", engine.removeCalls)
 			}
 		})
 	}
+	t.Run("列出失败", func(t *testing.T) {
+		engine := &fakeManagedEngine{name: "duckdb", ids: []string{cleanupIndexID("prices")}}
+		svc := newCleanupService(t, engine)
+		if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: &failingMetadata{}}); err == nil {
+			t.Fatal("列出失败时启动恢复应当报错")
+		}
+		if len(engine.removeCalls) != 0 {
+			t.Fatalf("列出失败时删了索引：%v", engine.removeCalls)
+		}
+	})
+}
+
+// failingMetadata 列出数据集总是失败。
+type failingMetadata struct{ testMetadata }
+
+func (failingMetadata) ListDatasets(context.Context, *pb.ListDatasetsReq, ...client.Option) (*pb.ListDatasetsRsp, error) {
+	return nil, errors.New("metadata unavailable")
 }
 
 // 某个引擎列不出文件或删除失败只影响它自己，不挡其他文件。
@@ -186,11 +156,37 @@ func TestRemoveOrphanIndexesContinuesAfterEngineErrors(t *testing.T) {
 	engine := &fakeManagedEngine{name: "duckdb", ids: []string{first, second}, removeErr: errors.New("remove failed")}
 	svc := newCleanupService(t, engine)
 	svc.engines[failing.name] = failing
-	svc.removeOrphanIndexes(context.Background(), &cleanupMetadata{})
+	svc.removeOrphanIndexes(context.Background(), nil)
 	if len(failing.removeCalls) != 0 {
 		t.Fatalf("列不出文件的引擎不应删除：%v", failing.removeCalls)
 	}
 	if !reflect.DeepEqual(engine.removeCalls, []string{first, second}) || !reflect.DeepEqual(engine.ids, []string{first}) {
 		t.Fatalf("删除 = %v 剩余 = %v，期望第一个失败后继续删第二个", engine.removeCalls, engine.ids)
+	}
+}
+
+// 数据集先停用（View 摘掉、索引保留）、再被删除：停用期间没有运行时可摘，下一轮维护按孤立文件删掉它的索引；
+// 挂着运行时的索引（另一个活动数据集）不碰。
+func TestMaintenanceRemovesIndexOfDatasetDeletedWhileDisabled(t *testing.T) {
+	gone, kept := cleanupIndexID("gone"), cleanupIndexID("kept")
+	engine := &fakeManagedEngine{name: "duckdb", ids: []string{gone, kept}}
+	svc := newCleanupService(t, engine)
+	ctx := context.Background()
+	disabled := timeSeriesSpec("space", "gone", "1m")
+	disabled.Status = "disabled"
+	active := timeSeriesSpec("space", "kept", "1m")
+	runtime := testRuntime(svc, active)
+	runtime.building = runtime.indexID // 正在建索引：清理不能碰它
+	if err := svc.maintainOnce(ctx, MaintenanceOptions{Metadata: metadataFor(disabled, active)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(engine.removeCalls) != 0 {
+		t.Fatalf("停用的数据集应保留索引：%v", engine.removeCalls)
+	}
+	if err := svc.maintainOnce(ctx, MaintenanceOptions{Metadata: metadataFor(active)}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(engine.removeCalls, []string{gone}) || !reflect.DeepEqual(engine.ids, []string{kept}) {
+		t.Fatalf("删除 = %v 剩余 = %v，期望只删停用期间被删除的数据集的索引", engine.removeCalls, engine.ids)
 	}
 }

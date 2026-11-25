@@ -41,8 +41,8 @@ message ActivityLogItem {
   string title = 6;
   string detail = 7;
   string ref_id = 8;
-  // created_at 是 RFC3339 UTC 时间。
-  string created_at = 9;
+  // created_at 是 Unix 毫秒。
+  int64 created_at = 9;
 }
 
 message ListActivityLogsReq {
@@ -51,9 +51,9 @@ message ListActivityLogsReq {
   string source = 2;
   string category = 3;
   string ref_id = 4;
-  // since 与 until 是 RFC3339 时间，均可为空。
-  string since = 5;
-  string until = 6;
+  // since 与 until 是 Unix 毫秒，0 表示不限。
+  int64 since = 5;
+  int64 until = 6;
   common.Page page = 7;
   bool global = 8;
 }

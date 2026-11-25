@@ -162,15 +162,12 @@ func (d *datasetSchema) loadColumns(ctx context.Context) (map[string]*pb.Dataset
 			break
 		}
 	}
-	allowed := make(map[string]*pb.DatasetColumn, len(columns)*2)
+	allowed := make(map[string]*pb.DatasetColumn, len(columns))
 	for _, column := range columns {
 		if column == nil || (column.GetStatus() != "" && column.GetStatus() != "active") {
 			continue
 		}
 		allowed[column.GetColumnName()] = column
-		if originID := column.GetOriginId(); originID != "" {
-			allowed[originID] = column
-		}
 	}
 	d.allowed, d.columnsLoaded = allowed, true
 	return allowed, nil

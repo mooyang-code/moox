@@ -11,8 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb"
 )
 
 func isHistoricalBatchKind(kind domain.BatchKind) bool {
@@ -37,7 +36,7 @@ func buildCompletion(req Request, results []domain.ItemResult, completed time.Ti
 		BatchId: req.BatchID, ScheduleId: req.ScheduleID, BatchKind: string(req.BatchKind),
 		DatasetId: req.DatasetID, Frequency: req.Frequency, Region: req.Region, NodeId: req.NodeID,
 		RequestId: req.RequestID, PlannedCount: int32(len(results)), DurationMs: duration.Milliseconds(),
-		CompletedAt: timestamppb.New(completed.UTC()),
+		CompletedAt: completed.UTC().UnixMilli(),
 	}
 	var firstError string
 	for _, result := range results {

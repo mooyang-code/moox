@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 type LiveInput struct {
@@ -17,12 +16,12 @@ type LiveInput struct {
 	// Params 是这一期各成员用的参数（成员键 → 快照）。
 	Params     map[string]domain.ParamSnapshot
 	PeriodTime time.Time
-	// UniverseSeries、UpstreamFailedSeries 是周期完成事件里按序列的全集与失败名单（所有数据集的事件都带）。
-	UniverseSeries       []seriesset.Series
-	UpstreamFailedSeries []seriesset.Series
-	CarryColumns         []string
-	TriggerEventID       string
-	Budget               time.Duration
+	// UniverseSubjects、UpstreamFailed 是周期完成事件里的全集与失败标的（universe_subject_ids、failed_subjects）。
+	UniverseSubjects []string
+	UpstreamFailed   []string
+	CarryColumns     []string
+	TriggerEventID   string
+	Budget           time.Duration
 }
 
 func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
@@ -58,17 +57,12 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	// 全集按序列，标的口径由序列推出：Available 是至少有一条序列没有上游失败的标的，
-	// 只有现货失败的标的、永续照常可算，所以不能因为标的出现在失败名单里就整体不读。
-	expectedSeries := uniqueSeriesSorted(input.UniverseSeries)
-	upstreamFailedSeries := intersectSeries(uniqueSeriesSorted(input.UpstreamFailedSeries), expectedSeries)
+	expected := uniqueSorted(input.UniverseSubjects)
+	upstreamFailed := intersectLists(expected, uniqueSorted(input.UpstreamFailed))
 	return Plan{
 		Mode: ModeLive, Set: input.Set, Members: members, Params: input.Params, PeriodTime: target,
 		TargetStart: window[0], TargetEnd: target.Add(duration),
-		Expected:       seriesSubjects(expectedSeries),
-		Available:      seriesSubjects(differenceSeries(expectedSeries, upstreamFailedSeries)),
-		UpstreamFailed: seriesSubjects(upstreamFailedSeries),
-		ExpectedSeries: expectedSeries, UpstreamFailedSeries: upstreamFailedSeries,
+		Expected: expected, Available: subjectDifference(expected, upstreamFailed), UpstreamFailed: upstreamFailed,
 		CarryColumns: uniqueSorted(input.CarryColumns), WriteCarry: true,
 		TriggerEventID: strings.TrimSpace(input.TriggerEventID), Budget: input.Budget,
 	}, nil
@@ -86,6 +80,15 @@ func intersectLists(left, right []string) []string {
 		}
 	}
 	return out
+}
+
+// subjectSet 把标的列表做成集合。
+func subjectSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
 }
 
 func uniqueSorted(values []string) []string {

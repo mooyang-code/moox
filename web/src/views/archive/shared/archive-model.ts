@@ -12,13 +12,11 @@ import type {
   ArchiveRunKind,
   ArchiveRunStatus,
   ArchiveTask,
-  ArchiveWorkerInfo,
-  AvoidanceRules
+  ArchiveWorkerInfo
 } from "@/api/archive";
 import type { ComponentDeployment, DeploymentHost } from "@/api/admin/types";
 import { formatBytes } from "@/api/modules/host-monitor";
 import type { Dataset } from "@/api/storage/types";
-import { freqSeconds } from "@/views/factor/shared/health";
 import { formatInstant, toInstantMs } from "@/utils/time-zone";
 
 const DAY_SECONDS = 86_400;
@@ -32,9 +30,8 @@ export function toNum(value: number | string | undefined | null): number {
 // ---- 文案 ----
 
 const KIND_LABELS: Record<ArchiveRunKind, string> = {
-  scheduled: "复核",
-  manual: "立即运行",
-  tick: "到点拉取",
+  follow: "跟随",
+  manual: "整段重读",
   range: "补拉区间",
   import: "导入"
 };
@@ -94,28 +91,16 @@ export function partitionUnitText(unit?: string): string {
   return unit || "—";
 }
 
-/** 频率是否按天及以上（每天拉取一次，拉取即复核）。 */
-export function isDailyFreq(freq?: string): boolean {
-  return freqSeconds(freq || "") >= DAY_SECONDS;
+/** “跟随”列第一行：停用写“已停用”，否则写“每分钟跟随变更日志”。 */
+export function followText(task: ArchiveTask): string {
+  return task.status === "paused" ? "已停用" : "每分钟跟随变更日志";
 }
 
-/** “拉取”列第一行：每收盘 N 根 · 下次 12:41 UTC；1d 及以上写“每天收盘后”；停用写“已停用”。下次拉取到分钟。 */
-export function pullText(task: ArchiveTask, zone: string): string {
-  if (task.status === "paused") return "已停用";
-  const head = isDailyFreq(task.freq) ? "每天收盘后" : `每收盘 ${task.pull_every_bars || 1} 根`;
-  return task.next_pull_at ? `${head} · 下次 ${formatInstant(task.next_pull_at, zone, "minute")}` : head;
-}
-
-/** “拉取”列第二行：复核规律。 */
-export function reviewText(task: ArchiveTask): string {
-  return isDailyFreq(task.freq) ? "拉取即复核" : "每小时第 34 分复核";
-}
-
-/** 复核间隔：3600 → 每小时，86400 → 每天。 */
-export function intervalText(seconds?: number): string {
-  if (seconds === 3600) return "每小时";
-  if (seconds === DAY_SECONDS) return "每天";
-  return seconds ? durationText(seconds) : "—";
+/** “跟随”列第二行：最近一次成功的跟随（或整段重读）时刻，到分钟。 */
+export function lastFollowText(task: ArchiveTask, zone: string): string {
+  return toInstantMs(task.last_success_at) !== null
+    ? `最近成功 ${formatInstant(task.last_success_at, zone, "minute")}`
+    : "还没有成功的跟随";
 }
 
 /** 时长：45 秒、2 分 13 秒、1 小时 16 分、2 天 3 小时。 */
@@ -138,15 +123,6 @@ export function runDurationText(run: ArchiveRun | undefined, nowMs: number): str
   const end = toInstantMs(run?.finished_at) ?? (run?.status === "running" ? nowMs : null);
   return end === null ? "—" : durationText((end - start) / 1000);
 }
-
-/** 导入运行的文件名：import_file 是 "<import_id>/<文件名>"，只显示文件名；不是导入运行时为空。 */
-export function importFileText(run: Pick<ArchiveRun, "kind" | "import_file">): string {
-  if (run.kind !== "import" || !run.import_file) return "";
-  return run.import_file.slice(run.import_file.lastIndexOf("/") + 1);
-}
-
-/** 导入运行的写入方式。 */
-export const importModeText = (run: Pick<ArchiveRun, "overwrite">) => (run.overwrite ? "覆盖已有" : "只补空缺");
 
 /** 运行消息超过这么多字符时折叠，完整内容点开看（导入校验失败时最多带 20 条带行号的错误）。 */
 export const RUN_MESSAGE_FOLD_CHARS = 120;
@@ -283,46 +259,11 @@ export function storageClassText(store: Pick<ArchiveObjectStore, "storage_class"
   return store.storage_class === "STANDARD_IA" ? "低频（STANDARD_IA）" : store.storage_class;
 }
 
-// ---- 避让时段 ----
+// ---- 跟随说明 ----
 
-/** "04:00" → 下一个检查时刻 ":04:25"（mgr 每分钟第 25 秒检查）。 */
-function nextCheckAfter(mmss: string): string {
-  const match = /^(\d{2}):(\d{2})$/.exec(mmss);
-  if (!match) return "";
-  let minute = Number(match[1]);
-  if (Number(match[2]) > 25) minute = (minute + 1) % 60;
-  return `:${String(minute).padStart(2, "0")}:25`;
-}
-
-export const hasHourQuiet = (rules: AvoidanceRules) => Boolean(rules.hour_quiet_from && rules.hour_quiet_until);
-
-/** 每分钟的秒窗口：不限秒、每分钟只在第 25～55 秒读取、每 N 分钟的触发时刻前后不读取。 */
-export function minuteWindowText(rules: AvoidanceRules): string {
-  const every = rules.every_minutes || 0;
-  const before = rules.before_seconds || 0;
-  const after = rules.after_seconds || 0;
-  if (every <= 0) return "不限秒";
-  if (every === 1) return `每分钟只在第 ${after}～${60 - before} 秒读取`;
-  return `每 ${every} 分钟的触发时刻前 ${before} 秒到后 ${after} 秒不读取`;
-}
-
-export function hourQuietText(rules: AvoidanceRules): string {
-  return hasHourQuiet(rules) ? `每小时 :${rules.hour_quiet_from}～:${rules.hour_quiet_until} 不拉取` : "不避让整点";
-}
-
-/** 新建抽屉里的说明：拉取何时检查、整点窗口里的边界顺延到哪；没读到规则时为空。 */
-export function avoidanceScheduleText(rules: AvoidanceRules | undefined): string {
-  if (!rules) return "";
-  const hour = hasHourQuiet(rules)
-    ? `${hourQuietText(rules)}，这段时间的边界顺延到 ${nextCheckAfter(rules.hour_quiet_until || "")}`
-    : "不避让整点，边界到了就拉取";
-  return `每分钟第 25 秒检查；${hour}；执行器读取 Storage 时${minuteWindowText(rules)}。`;
-}
-
-/** 依据：computed_at 为空表示还没算出过，用的是启动默认值。 */
-export function avoidanceBasisText(rules: AvoidanceRules): string {
-  return rules.basis || (rules.computed_at ? "—" : "未取到采集频率，使用默认值");
-}
+/** 新建抽屉里的说明：避让的两个窗口写死在 worker 里（见 docs/模块/归档.md 第 3 节）。 */
+export const ARCHIVE_SCHEDULE_NOTE =
+  "创建后每分钟按 Storage 的变更日志跟随；首次运行从回补起点整段读到现在，数据量大时要几个小时，进度见任务的最近运行。执行器每分钟只在第 25～55 秒读取 Storage，每小时 :58～:04 只做导出与定稿。";
 
 // ---- 目录名 ----
 
@@ -400,24 +341,7 @@ export function systemAlerts(alerts: string[] | undefined, tasks: Pick<ArchiveTa
   return (alerts || []).filter(alert => !shown.has(alert));
 }
 
-/** 分区预计导出时间：后端给的是“分区 2026-11-06：预计 2026-11-07T00:15:25Z 导出”，时刻按空间时区显示；读不懂时原样显示。 */
-export function exportEstimateText(text: string, zone: string): string {
-  const match = /^分区 (\S+)：预计 (\S+) 导出$/.exec(text.trim());
-  if (!match) return text;
-  const at = formatInstant(match[2], zone);
-  return at === "—" ? text : `分区 ${match[1]} 预计 ${at} 导出`;
-}
-
 // ---- 校验 ----
-
-/** 拉取间隔 N：1～1440 的整数，且“频率 × N”不超过 1 天；1d 及以上不校验（每天一次）。和后端 pullEveryBars 同口径。 */
-export function pullEveryBarsError(freq: string, n: number): string {
-  if (isDailyFreq(freq)) return "";
-  if (!Number.isInteger(n) || n < 1 || n > 1440) return "拉取间隔要是 1～1440 的整数";
-  const span = freqSeconds(freq);
-  if (span <= 0) return `无法识别频率 ${freq}`;
-  return span * n > DAY_SECONDS ? `频率 × 拉取间隔不能超过 1 天（${freq} 最多 ${Math.floor(DAY_SECONDS / span)} 根）` : "";
-}
 
 /** 回补起点：不能早于线上还保留的最早时刻，不能晚于现在；为空表示不指定。提示里的时间按空间时区。 */
 export function backfillFromError(value: number | null, earliestMs: number | null, nowMs: number, zone: string): string {
@@ -444,11 +368,6 @@ export function backfillRangeError(
   return "";
 }
 
-/** 编辑时是否还能改回补起点：首次复核成功后 mgr 会清空它，worker 有了水位也不再读，改了没有效果。 */
-export function showBackfillField(task: Pick<ArchiveTask, "last_success_at">): boolean {
-  return !task.last_success_at;
-}
-
 /**
  * 停用多少天以内不会漏数据：和健康等级异常门槛同一公式（modules/archive/internal/service/health.go 的 evaluateHealth），
  * max(保留期 − 48 小时, 保留期 / 2)，向下取整到天；永久保留或读不出保留期时为 null。
@@ -460,14 +379,19 @@ export function pauseSafeDays(retention?: string): number | null {
   return Math.floor(Math.max(hours - 48, hours / 2) / 24);
 }
 
+/** 整段重读的确认文案：会重读线上保留期内的全部数据，之后每分钟的跟随分段读完。 */
+export function rescanConfirmText(retentionText?: string): string {
+  return `会把线上保留期（${retentionText || "—"}）内的全部数据从 Storage 重读一遍，与归档比对后有变化的分区重新导出；之后每分钟的跟随分段读完，数据量大时要几个小时（crypto 1m 约十几个小时），进度见任务的最近运行。`;
+}
+
 export function pauseConfirmText(retention?: string, retentionText?: string): string {
   const days = pauseSafeDays(retention);
-  const base = "停用后不再拉取和复核。";
+  const base = "停用后不再跟随 Storage 的写入。";
   const risk =
     days === null
       ? ""
       : `线上只保留 ${retentionText || retention}：停用超过约 ${days} 天，最早的数据会在归档前被删除、无法补齐。`;
-  return `${base}${risk}重新启用后会立即复核。`;
+  return `${base}${risk}重新启用后从原位点继续跟随（变更日志保留 7 天，停用更久会整段重读）。`;
 }
 
 // ---- 分区预览 ----
@@ -523,8 +447,8 @@ export interface ArchiveQuery {
   tab: DetailTab;
   /** 运行记录的状态筛选，空表示全部 */
   status: ArchiveRunStatus | "";
-  /** 是否列出成功的到点拉取 */
-  ticks: boolean;
+  /** 是否列出成功的跟随运行 */
+  follow: boolean;
   rpage: number;
   ppage: number;
   /** 分区起止月 YYYY-MM */
@@ -548,7 +472,7 @@ export function parseArchiveQuery(query: LocationQuery): ArchiveQuery {
     task: first(query.task),
     tab: (DETAIL_TABS as string[]).includes(first(query.tab)) ? (first(query.tab) as DetailTab) : "runs",
     status: (RUN_STATUSES as string[]).includes(status) ? (status as ArchiveRunStatus) : "",
-    ticks: first(query.ticks) === "1",
+    follow: first(query.follow) === "1",
     rpage: pageNo(first(query.rpage)),
     ppage: pageNo(first(query.ppage)),
     from: month(first(query.from)),
@@ -576,7 +500,7 @@ export function archiveQueryFor(state: Partial<ArchiveQuery>): LocationQueryRaw 
     if (state.subject) out.subject = state.subject;
   } else {
     if (state.status) out.status = state.status;
-    if (state.ticks) out.ticks = "1";
+    if (state.follow) out.follow = "1";
     if (state.rpage && state.rpage > 1) out.rpage = String(state.rpage);
   }
   return out;

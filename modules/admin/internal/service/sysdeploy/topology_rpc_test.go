@@ -42,7 +42,7 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.False(t, db.Migrator().HasTable("t_service_deployments"))
 	require.False(t, db.Migrator().HasTable("t_gateway_nodes"))
 	methods := pb.File_sysdeploy_service_proto.Services().ByName("SysDeploy").Methods()
-	require.Equal(t, 8, methods.Len())
+	require.Equal(t, 5, methods.Len())
 	require.Nil(t, methods.ByName("ListServiceDeployments"))
 	require.Nil(t, methods.ByName("GetDirectory"), "目录不再由 Admin 展开下发")
 
@@ -72,13 +72,16 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(sum[:]), catalog.GetSha256())
 	_, err = servicecatalog.Decode(bytes.NewBufferString(catalog.GetCatalogYaml()))
 	require.NoError(t, err)
-	for _, spec := range []*pb.SyncHostDeploymentsReq{
-		{HostId: "control", Address: "control.example.test", ComponentIds: []string{"admin"}},
-		{HostId: "storage", Address: "storage.example.test", ComponentIds: []string{"storage-primary"}},
-	} {
-		response, err := proxy.SyncHostDeployments(ctx, spec)
-		check(response.GetRetInfo(), err)
+	declare := func(storage *pb.SyncTopologyHost) *pb.SyncTopologyReq {
+		hosts := []*pb.SyncTopologyHost{{HostId: "control", Enabled: true, Address: "control.example.test", ComponentIds: []string{"admin"}}}
+		if storage != nil {
+			hosts = append(hosts, storage)
+		}
+		return &pb.SyncTopologyReq{Hosts: hosts}
 	}
+	storage := &pb.SyncTopologyHost{HostId: "storage", Enabled: true, Address: "storage.example.test", ComponentIds: []string{"storage-primary"}}
+	response, err := proxy.SyncTopology(ctx, declare(storage))
+	check(response.GetRetInfo(), err)
 	keyStore, err := keys.NewStore(db)
 	require.NoError(t, err)
 	publicKey := func(label string) string {
@@ -125,9 +128,7 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 		require.Positive(t, route.GetMaxBodyBytes())
 		require.True(t, strings.HasPrefix(route.GetAddress(), "127.0.0.1:"), route.GetAddress())
 	}
-	compiledAt, err := time.Parse(time.RFC3339Nano, routes.GetCompiledAt())
-	require.NoError(t, err)
-	require.WithinDuration(t, time.Now(), compiledAt, 5*time.Second)
+	require.WithinDuration(t, time.Now(), time.UnixMilli(routes.GetCompiledAt()), 5*time.Second)
 	require.NotEmpty(t, routes.GetRoutes())
 	require.NotEmpty(t, routes.GetGatewayStatus().GetExpectedHash())
 	require.Empty(t, routes.GetGatewayStatus().GetLastSeenAt(), "reading desired state must not create a heartbeat")
@@ -154,8 +155,9 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "unknown"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, routes.GetRetInfo().GetCode())
-	deployment, err := proxy.SetDeploymentStatus(ctx, &pb.SetDeploymentStatusReq{HostId: "storage", ComponentId: "storage-primary", Status: "disabled"})
-	check(deployment.GetRetInfo(), err)
+	storage.DisabledComponentIds = []string{"storage-primary"}
+	response, err = proxy.SyncTopology(ctx, declare(storage))
+	check(response.GetRetInfo(), err)
 	compiled, err = topology.Compile(ctx, "control")
 	require.NoError(t, err)
 	require.NotContains(t, compiled.Directory.Services, "trpc.moox.storage.Metadata")
@@ -165,22 +167,22 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.NotContains(t, routedServices(routes), "trpc.moox.storage.Metadata", "停用的部署撤掉路由")
 	require.NotEmpty(t, routes.GetRoutes(), "主机上其余组件的路由还在")
 	require.NotEqual(t, snapshot.GetHash(), routes.GetGatewayStatus().GetExpectedHash(), "部署变了，期望哈希跟着变")
-	host, err := proxy.SetHostStatus(ctx, &pb.SetHostStatusReq{HostId: "storage", Status: "disabled"})
-	check(host.GetRetInfo(), err)
+	storage.Enabled = false
+	response, err = proxy.SyncTopology(ctx, declare(storage))
+	check(response.GetRetInfo(), err)
 	compiled, err = topology.Compile(ctx, "control")
 	require.NoError(t, err)
 	require.NotContains(t, compiled.Directory.Hosts, "storage")
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "storage"})
 	check(routes.GetRetInfo(), err)
 	require.Empty(t, routes.GetRoutes(), "停用的主机没有路由")
-	refused, err := proxy.DeleteHost(ctx, &pb.DeleteDeploymentHostReq{HostId: "storage"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INVALID_PARAM, refused.GetRetInfo().GetCode(), "disabled business deployments still prevent deletion")
-	synced, err := proxy.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "storage", Address: "storage.example.test"})
-	check(synced.GetRetInfo(), err)
-	deleted, err := proxy.DeleteHost(ctx, &pb.DeleteDeploymentHostReq{HostId: "storage"})
-	check(deleted.GetRetInfo(), err)
-	refused, err = proxy.DeleteHost(ctx, &pb.DeleteDeploymentHostReq{HostId: "control"})
+	// 声明里没有的主机删除；控制机不能被删掉（拓扑要求它在且启用）。
+	response, err = proxy.SyncTopology(ctx, declare(nil))
+	check(response.GetRetInfo(), err)
+	hosts, err = proxy.ListHosts(ctx, &pb.ListDeploymentHostsReq{})
+	check(hosts.GetRetInfo(), err)
+	require.Len(t, hosts.GetHosts(), 1)
+	refused, err := proxy.SyncTopology(ctx, &pb.SyncTopologyReq{Hosts: []*pb.SyncTopologyHost{{HostId: "storage", Enabled: true, Address: "storage.example.test"}}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, refused.GetRetInfo().GetCode())
 }

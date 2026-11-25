@@ -44,14 +44,17 @@ export function setSpaceInitializer(initializer: SpaceInitializer | null): void 
 
 const SPACE_INIT_TIMEOUT_MS = 10_000;
 
+/** Storage 的空间目录本身（列出、新建、修改、删除空间）：没有空间归属。 */
+const STORAGE_SPACE_METHOD = /\/api\/admin\/storage\/(?:ListSpaces|CreateSpace|UpdateSpace|DeleteSpace)$/;
+
 // 登录、空间列表本身不依赖已选空间，也不能等它（空间列表请求就是初始化的一部分，等自己会死锁）。
 function independentOfSelectedSpace(url: string | undefined): boolean {
-  return /\/api\/admin\/(auth|space)\//.test(url || "");
+  return /\/api\/admin\/auth\//.test(url || "") || STORAGE_SPACE_METHOD.test(url || "");
 }
 
-/** 与空间无关的全局服务（仅全局管理员可用，没有空间归属）：不参与“切换空间即取消”，否则全局单例读取会被无故打断。 */
+/** 与空间无关的全局服务（没有空间归属）：不参与“切换空间即取消”，否则全局单例读取会被无故打断。 */
 const GLOBAL_SERVICE =
-  /\/api\/admin\/(?:(?:auth|space|ssh|secret|sysdeploy|setup|monitor|callback-dispatcher)\/|storage\/ListSpaces$|collector\/(?:ListCloudAccounts|ListCloudRegions)$)/;
+  /\/api\/admin\/(?:(?:auth|ssh|secret|sysdeploy|setup|monitor)\/|storage\/(?:ListSpaces|CreateSpace|UpdateSpace|DeleteSpace)$|collector\/(?:ListCloudAccounts|ListCloudRegions)$)/;
 
 let lastSpaceInitFinished = 0;
 let spaceInitInflight: Promise<void> | null = null;

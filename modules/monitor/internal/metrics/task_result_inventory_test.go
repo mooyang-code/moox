@@ -39,7 +39,7 @@ func (c *fakeCollectorTaskResultInventoryClient) GetTaskResultInventory(ctx cont
 	return c.responses[index], nil
 }
 
-func inventoryPage(page, size, total uint32, hasMore bool, snapshot, observed string, entries ...*collectorpb.TaskResultInventoryEntry) *collectorpb.GetTaskResultInventoryRsp {
+func inventoryPage(page, size, total uint32, hasMore bool, snapshot string, observed int64, entries ...*collectorpb.TaskResultInventoryEntry) *collectorpb.GetTaskResultInventoryRsp {
 	return &collectorpb.GetTaskResultInventoryRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Entries: entries,
 		Page:       &commonpb.PageResult{Page: page, Size: size, Total: total, HasMore: hasMore},
@@ -48,14 +48,14 @@ func inventoryPage(page, size, total uint32, hasMore bool, snapshot, observed st
 }
 
 func TestCollectorTaskResultInventorySourceReadsOneBoundedSnapshot(t *testing.T) {
-	observed := "2026-10-03T10:00:00Z"
+	observed := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
 	client := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
 		inventoryPage(1, 1, 2, true, "snapshot-1", observed, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", ViewId: "view-a", Frequency: "1m",
+			SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m",
 			ObservedAt: observed, Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
 		}),
 		inventoryPage(2, 1, 2, false, "snapshot-1", observed, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "crypto", TaskId: "task-b", DatasetId: "dataset-b", ViewId: "view-b", Frequency: "5m",
+			SpaceId: "crypto", TaskId: "task-b", DatasetId: "dataset-b", Frequency: "5m",
 			ObservedAt: observed, Enabled: false, ResultStatus: "pending",
 		}),
 	}}
@@ -66,7 +66,7 @@ func TestCollectorTaskResultInventorySourceReadsOneBoundedSnapshot(t *testing.T)
 	require.NotEmpty(t, snapshot.ID)
 	require.Len(t, snapshot.Entries, 2)
 	require.True(t, snapshot.Entries[0].OwnershipVerified)
-	require.Equal(t, "view-a", snapshot.Entries[0].ViewID)
+	require.Equal(t, "dataset-a", snapshot.Entries[0].DatasetID)
 	require.False(t, snapshot.Entries[1].Enabled)
 	require.Equal(t, uint32(2), client.requests[1].GetPage().GetPage())
 	require.Equal(t, "snapshot-1", client.requests[1].GetSnapshotId())
@@ -86,17 +86,17 @@ func TestContextWithInventorySpaceIDMatchesBodyAndPreservesOtherMetadata(t *test
 }
 
 func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t *testing.T) {
-	observedCrypto := "2026-10-03T10:00:00Z"
-	observedStock := "2026-10-03T10:00:05Z"
+	observedCrypto := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
+	observedStock := mustParseInventoryTime(t, "2026-10-03T10:00:05Z").UnixMilli()
 	client := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
 		inventoryPage(1, 1, 1, false, "crypto-snapshot", observedCrypto, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "crypto", TaskId: "crypto-task", DatasetId: "crypto-dataset", ViewId: "crypto-view", Frequency: "1m", ObservedAt: observedCrypto,
+			SpaceId: "crypto", TaskId: "crypto-task", DatasetId: "crypto-dataset", Frequency: "1m", ObservedAt: observedCrypto,
 		}),
 		inventoryPage(1, 1, 2, true, "stock-snapshot", observedStock, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "stockcn", TaskId: "stock-task-a", DatasetId: "stock-dataset-a", ViewId: "stock-view-a", Frequency: "1d", ObservedAt: observedStock,
+			SpaceId: "stockcn", TaskId: "stock-task-a", DatasetId: "stock-dataset-a", Frequency: "1d", ObservedAt: observedStock,
 		}),
 		inventoryPage(2, 1, 2, false, "stock-snapshot", observedStock, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "stockcn", TaskId: "stock-task-b", DatasetId: "stock-dataset-b", ViewId: "stock-view-b", Frequency: "1d", ObservedAt: observedStock,
+			SpaceId: "stockcn", TaskId: "stock-task-b", DatasetId: "stock-dataset-b", Frequency: "1d", ObservedAt: observedStock,
 		}),
 	}}
 	source, err := NewCollectorTaskResultInventorySource(client, []string{"crypto", "stockcn"}, 1, 3)
@@ -105,7 +105,7 @@ func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t 
 	require.NoError(t, err)
 	require.NotEmpty(t, snapshot.ID, "combined identity must bind both per-Space snapshot IDs")
 	require.NotEqual(t, "crypto-snapshot", snapshot.ID)
-	require.Equal(t, mustParseInventoryTime(t, observedCrypto), snapshot.ObservedAt, "combined observation time is the oldest constituent snapshot")
+	require.Equal(t, time.UnixMilli(observedCrypto).UTC(), snapshot.ObservedAt, "combined observation time is the oldest constituent snapshot")
 	require.Equal(t, []string{"crypto", "stockcn", "stockcn"}, client.requestSpaces)
 	require.Equal(t, []string{"crypto", "stockcn", "stockcn"}, client.metadataSpaces)
 	require.Equal(t, []string{"crypto-task", "stock-task-a", "stock-task-b"}, []string{
@@ -114,8 +114,8 @@ func TestCollectorTaskResultInventorySourceReadsConfiguredSpacesIndependently(t 
 }
 
 func TestCollectorTaskResultInventorySourceRejectsMixedIncompleteAndOversizedSnapshots(t *testing.T) {
-	observed := "2026-10-03T10:00:00Z"
-	entry := &collectorpb.TaskResultInventoryEntry{SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", ViewId: "view-a", Frequency: "1m", ObservedAt: observed}
+	observed := mustParseInventoryTime(t, "2026-10-03T10:00:00Z").UnixMilli()
+	entry := &collectorpb.TaskResultInventoryEntry{SpaceId: "crypto", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m", ObservedAt: observed}
 	tests := []struct {
 		name      string
 		maxItems  int
@@ -145,7 +145,7 @@ func TestCollectorTaskResultInventorySourceRejectsMixedIncompleteAndOversizedSna
 
 	wrongSpaceClient := &fakeCollectorTaskResultInventoryClient{responses: []*collectorpb.GetTaskResultInventoryRsp{
 		inventoryPage(1, 1, 1, false, "snapshot-1", observed, &collectorpb.TaskResultInventoryEntry{
-			SpaceId: "stockcn", TaskId: "task-a", DatasetId: "dataset-a", ViewId: "view-a", Frequency: "1m", ObservedAt: observed,
+			SpaceId: "stockcn", TaskId: "task-a", DatasetId: "dataset-a", Frequency: "1m", ObservedAt: observed,
 		}),
 	}}
 	wrongSpaceSource, err := NewCollectorTaskResultInventorySource(wrongSpaceClient, []string{"crypto"}, 1, 2)
@@ -185,8 +185,8 @@ func TestTaskResultInventoryCacheRefreshesBoundedlyAndReplacesWholeSnapshot(t *t
 	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
 		ID: "snapshot-1", ObservedAt: now,
 		Entries: []TaskResultInventoryEntry{
-			{SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
-			{SpaceID: "crypto", TaskID: "task-disabled", DatasetID: "dataset-disabled", ViewID: "view-disabled", Frequency: "1m", Enabled: false, ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "task-disabled", DatasetID: "dataset-disabled", Frequency: "1m", Enabled: false, ObservedAt: now},
 		},
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
@@ -195,13 +195,13 @@ func TestTaskResultInventoryCacheRefreshesBoundedlyAndReplacesWholeSnapshot(t *t
 	first, err := cache.Get(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, first.Entries, 2)
-	require.Equal(t, "view-a", first.Entries[0].ViewID)
+	require.Equal(t, "dataset-a", first.Entries[0].DatasetID)
 	first.Entries[0].Sessions = append(first.Entries[0].Sessions, "mutated")
 
 	provider.snapshot = TaskResultInventorySnapshot{
 		ID: "snapshot-2", ObservedAt: now.Add(2 * time.Minute),
 		Entries: []TaskResultInventoryEntry{
-			{SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a2", ViewID: "view-a2", Frequency: "5m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now.Add(2 * time.Minute)},
+			{SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a2", Frequency: "5m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now.Add(2 * time.Minute)},
 		},
 	}
 	cached, err := cache.Get(context.Background(), now.Add(time.Minute-time.Second))
@@ -214,7 +214,7 @@ func TestTaskResultInventoryCacheRefreshesBoundedlyAndReplacesWholeSnapshot(t *t
 	require.NoError(t, err)
 	require.Equal(t, "snapshot-2", refreshed.ID)
 	require.Len(t, refreshed.Entries, 1) // disabled and deleted tasks disappear atomically
-	require.Equal(t, "view-a2", refreshed.Entries[0].ViewID)
+	require.Equal(t, "dataset-a2", refreshed.Entries[0].DatasetID)
 	require.Equal(t, 2, provider.calls)
 }
 
@@ -222,7 +222,7 @@ func TestTaskResultInventoryCacheDoesNotServeExpiredPartialOrOversizedState(t *t
 	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
 	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
 		ID: "snapshot-1", ObservedAt: now,
-		Entries: []TaskResultInventoryEntry{{SpaceID: "crypto", TaskID: "a", DatasetID: "d", ViewID: "v", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now}},
+		Entries: []TaskResultInventoryEntry{{SpaceID: "crypto", TaskID: "a", DatasetID: "d", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now}},
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 1)
 	require.NoError(t, err)
@@ -243,8 +243,8 @@ func TestTaskResultInventoryCacheDoesNotServeExpiredPartialOrOversizedState(t *t
 	provider.snapshot = TaskResultInventorySnapshot{
 		ID: "snapshot-oversized", ObservedAt: now.Add(2 * time.Minute),
 		Entries: []TaskResultInventoryEntry{
-			{SpaceID: "crypto", TaskID: "a", DatasetID: "d", ViewID: "v", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
-			{SpaceID: "crypto", TaskID: "b", DatasetID: "d2", ViewID: "v2", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "a", DatasetID: "d", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "b", DatasetID: "d2", Frequency: "1m", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now},
 		},
 	}
 	_, err = cache.Get(context.Background(), now.Add(2*time.Minute))
@@ -291,7 +291,7 @@ func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *te
 	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
 		ID: "snapshot-1", ObservedAt: now,
 		Entries: []TaskResultInventoryEntry{{
-			SpaceID: "crypto", TaskID: "task-private", DatasetID: "dataset-dynamic", ViewID: "view-dynamic", Frequency: "1m",
+			SpaceID: "crypto", TaskID: "task-private", DatasetID: "dataset-dynamic", Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
 			LatestCompletedPeriod: now.Add(-time.Minute), LatestCompletedStatus: "complete",
 			ViewLastDataTime: now.Add(-time.Minute), ObservedAt: now,
@@ -300,7 +300,7 @@ func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *te
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
-		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
+		DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
 		// After the 1m bar starting five minutes ago, the next bar was due three
 		// minutes ago.
 		Latest: now.Add(-5 * time.Minute),
@@ -311,7 +311,7 @@ func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *te
 	require.Len(t, reports, 2)
 	var klineReport *KlineFreshnessReport
 	for index := range reports {
-		if reports[index].CheckID == "kline_freshness:crypto:view-dynamic:1m" {
+		if reports[index].CheckID == "kline_freshness:crypto:dataset-dynamic:1m" {
 			klineReport = &reports[index]
 		}
 	}
@@ -331,7 +331,7 @@ func TestKlineFreshnessEvaluatorDetectsViewBehindCompletedPeriodWithinStaleWindo
 	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
 		ID: "snapshot-1", ObservedAt: now,
 		Entries: []TaskResultInventoryEntry{{
-			SpaceID: "crypto", TaskID: "task-private", DatasetID: "dataset-dynamic", ViewID: "view-dynamic", Frequency: "1m",
+			SpaceID: "crypto", TaskID: "task-private", DatasetID: "dataset-dynamic", Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
 			LatestCompletedPeriod: now.Add(-2 * time.Minute), LatestCompletedStatus: "complete",
 			ViewLastDataTime: now.Add(-3 * time.Minute), ObservedAt: now,
@@ -341,7 +341,7 @@ func TestKlineFreshnessEvaluatorDetectsViewBehindCompletedPeriodWithinStaleWindo
 	require.NoError(t, err)
 	// 采集已完成 now-2m 那一期（now-1m 收线），视图只到 now-3m：缺的那根已过收线 1 分钟。
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
-		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
+		DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
 		Latest: now.Add(-3 * time.Minute),
 	}})
 	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(10*time.Minute), 20)
@@ -350,7 +350,7 @@ func TestKlineFreshnessEvaluatorDetectsViewBehindCompletedPeriodWithinStaleWindo
 	require.Len(t, reports, 2)
 	var klineReport *KlineFreshnessReport
 	for index := range reports {
-		if reports[index].CheckID == "kline_freshness:crypto:view-dynamic:1m" {
+		if reports[index].CheckID == "kline_freshness:crypto:dataset-dynamic:1m" {
 			klineReport = &reports[index]
 		}
 	}
@@ -366,7 +366,7 @@ func TestKlineFreshnessEvaluatorIgnoresShortPendingTaskBacklog(t *testing.T) {
 	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
 		ID: "snapshot-1", ObservedAt: now,
 		Entries: []TaskResultInventoryEntry{{
-			SpaceID: "crypto", TaskID: "task-pending", DatasetID: "dataset-pending", ViewID: "view-pending", Frequency: "1m",
+			SpaceID: "crypto", TaskID: "task-pending", DatasetID: "dataset-pending", Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: false, ResultStatus: "pending", ObservedAt: now,
 		}},
 	}}
@@ -385,8 +385,8 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
 		ID: "snapshot-statuses", ObservedAt: now,
 		Entries: []TaskResultInventoryEntry{
-			{SpaceID: "crypto", TaskID: "task-error", DatasetID: "dataset-error", ViewID: "view-error", Frequency: "1m", Enabled: true, ResultStatus: "error", ObservedAt: now},
-			{SpaceID: "crypto", TaskID: "task-pending", DatasetID: "dataset-pending", ViewID: "view-pending", Frequency: "1m", Enabled: true, ResultStatus: "pending", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "task-error", DatasetID: "dataset-error", Frequency: "1m", Enabled: true, ResultStatus: "error", ObservedAt: now},
+			{SpaceID: "crypto", TaskID: "task-pending", DatasetID: "dataset-pending", Frequency: "1m", Enabled: true, ResultStatus: "pending", ObservedAt: now},
 		},
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
@@ -403,11 +403,11 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	inventoryReport, ok := byID[TaskResultInventoryCheckID]
 	require.True(t, ok)
 	require.True(t, inventoryReport.Success)
-	errorReport, ok := byID["kline_freshness:crypto:view-error:1m"]
+	errorReport, ok := byID["kline_freshness:crypto:dataset-error:1m"]
 	require.True(t, ok)
 	require.False(t, errorReport.Success)
 	require.Equal(t, "task_result_error", errorReport.Reason)
-	pendingReport, ok := byID["kline_freshness:crypto:view-pending:1m"]
+	pendingReport, ok := byID["kline_freshness:crypto:dataset-pending:1m"]
 	require.True(t, ok)
 	require.True(t, pendingReport.Skipped)
 	require.Equal(t, "task_result_not_ready", pendingReport.Reason)
@@ -418,4 +418,49 @@ func latenessPolicy(lateness time.Duration) report.RealtimeTimeSeriesPolicy {
 	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
 		RunMissedIntervals: 2, SuccessMissedIntervals: 3, MinuteLateness: lateness, HourLateness: lateness,
 	}}
+}
+
+// 首次接入的历史补齐中（或刚补齐）：补齐写入的历史行排在变更日志前面，结果视图落后于已完成的一期是预期的，
+// 采集侧已完成的一期没过期就按通过记；采集侧也过期（采集真停了）照样报视图落后；不在补齐中的空间照常报。
+func TestKlineFreshnessEvaluatorToleratesViewCatchingUpWhileSeeding(t *testing.T) {
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	evaluate := func(completed time.Time, seeding bool) KlineFreshnessReport {
+		provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
+			ID: "snapshot-1", ObservedAt: now,
+			Entries: []TaskResultInventoryEntry{{
+				SpaceID: "crypto", TaskID: "task", DatasetID: "dataset-seed", Frequency: "1m",
+				MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
+				LatestCompletedPeriod: completed, LatestCompletedStatus: "complete",
+				ViewLastDataTime: now.Add(-3 * time.Hour), ObservedAt: now,
+			}},
+		}}
+		cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
+		require.NoError(t, err)
+		query := newViewSummaryQuery(t, []viewSummaryTestSample{{DatasetID: "dataset-seed", Subjects: 1, ObservedAt: now, Latest: now.Add(-3 * time.Hour)}})
+		evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(30*time.Second), 20)
+		evaluator.SetSeeding(func(spaceID string, _ time.Time) bool { return seeding && spaceID == "crypto" })
+		reports, err := evaluator.Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		for _, report := range reports {
+			if report.CheckID == "kline_freshness:crypto:dataset-seed:1m" {
+				return report
+			}
+		}
+		t.Fatal("没有 K 线检查")
+		return KlineFreshnessReport{}
+	}
+	fresh := now.Add(-time.Minute) // now-1m 那一根 now 收线：采集按时
+	report := evaluate(fresh, true)
+	require.True(t, report.Success)
+	require.Equal(t, KlineReasonSeedingViewCatchingUp, report.Reason)
+	require.Equal(t, now.Add(-3*time.Hour), report.OldestDataTime)
+
+	stopped := now.Add(-10 * time.Minute) // 采集侧停在 10 分钟前
+	report = evaluate(stopped, true)
+	require.False(t, report.Success, "采集真停了照样报")
+	require.Equal(t, "view_behind_latest_completed_period", report.Reason)
+
+	report = evaluate(fresh, false)
+	require.False(t, report.Success, "不在补齐中的空间照常报")
+	require.Equal(t, "view_behind_latest_completed_period", report.Reason)
 }

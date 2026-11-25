@@ -15,7 +15,7 @@ func TestStartReplayInputSource(t *testing.T) {
 	h.resolver.columns = []string{"close", "bias__var"}
 	spot := map[string]string{"spot": "ftask_x"}
 
-	plain, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, FactorTasks: spot, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	plain, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, FactorTasks: spot, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireOK(t, int32(plain.GetRetInfo().GetCode()), plain.GetRetInfo().GetMsg())
 	if plain.GetReplay().GetInput() != store.ReplayInputView {
 		t.Fatalf("不写来源按 view：%+v", plain.GetReplay())
@@ -23,17 +23,17 @@ func TestStartReplayInputSource(t *testing.T) {
 	// 之后发起的回放晚 1 秒登记：列表与认领按登记时间排序。
 	h.now = h.now.Add(time.Second)
 
-	bogus, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, FactorTasks: spot, StartTime: "2026-09-01", EndTime: "2026-09-02", Input: "storage"})
+	bogus, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, FactorTasks: spot, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), Input: "storage"})
 	requireFail(t, int32(bogus.GetRetInfo().GetCode()), bogus.GetRetInfo().GetMsg(), "input")
 
-	viewTuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTasks: spot, StartTime: "2026-09-01", EndTime: "2026-09-02", Input: "view"})
+	viewTuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTasks: spot, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02"), Input: "view"})
 	requireFail(t, int32(viewTuned.GetRetInfo().GetCode()), viewTuned.GetRetInfo().GetMsg(), "input=compute")
 
 	// 区间超出 View 覆盖（2026-09-30 23:00）也能发起：终点只截到 now（2026-10-01 00:00）之前最近一根已收盘的 bar。
-	tuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTasks: spot, StartTime: "2026-09-30T20:00:00Z", EndTime: "2026-10-03T00:00:00Z", Input: "compute"})
+	tuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTasks: spot, StartTime: ms("2026-09-30T20:00:00Z"), EndTime: ms("2026-10-03T00:00:00Z"), Input: "compute"})
 	requireOK(t, int32(tuned.GetRetInfo().GetCode()), tuned.GetRetInfo().GetMsg())
-	if tuned.GetReplay().GetInput() != store.ReplayInputCompute || tuned.GetBarCount() != 3 || tuned.GetLastBarEnd() != "2026-09-30T23:00:00Z" {
-		t.Fatalf("因子现算的回放不符：%+v bars=%d last=%s", tuned.GetReplay(), tuned.GetBarCount(), tuned.GetLastBarEnd())
+	if tuned.GetReplay().GetInput() != store.ReplayInputCompute || tuned.GetBarCount() != 3 || tuned.GetLastBarEnd() != ms("2026-09-30T23:00:00Z") {
+		t.Fatalf("因子现算的回放不符：%+v bars=%d last=%d", tuned.GetReplay(), tuned.GetBarCount(), tuned.GetLastBarEnd())
 	}
 	stored, err := h.service.Store.GetReplay(h.ctx, tuned.GetReplay().GetReplayId())
 	if err != nil || stored.Input != store.ReplayInputCompute || stored.Tasks["spot"].ViewGeneration == "" {
@@ -53,16 +53,17 @@ func TestStartReplayInputSource(t *testing.T) {
 	}
 }
 
-// “因子现算”的限制：策略池、绑了两个主帧任务、股票市场都拒绝；一期的因子帧估算超过单步上限时提交即拒绝。
+// “因子现算”的限制：策略池、股票市场都拒绝（现货加永续两个主帧任务可以）；一期的因子帧估算超过单步上限时提交即拒绝。
 func TestStartComputeReplayRejections(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	day := func(req *strategypb.StartReplayReq) *strategypb.StartReplayReq {
-		req.StartTime, req.EndTime, req.Input = "2026-09-01", "2026-09-02", "compute"
+		req.StartTime, req.EndTime, req.Input = ms("2026-09-01"), ms("2026-09-02"), "compute"
 		return req
 	}
+	// 现货加永续两个主帧任务可以现算（每个任务各开一个会话）。
 	both, _ := h.service.StartReplay(h.ctx, day(&strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a", "swap": "ftask_swap"}}))
-	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只支持一个主帧任务")
+	requireOK(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg())
 
 	h.createStrategy("member_spot", spotMemberDSL)
 	h.createStrategy("member_swap", swapMemberDSL)

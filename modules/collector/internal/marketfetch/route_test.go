@@ -158,9 +158,6 @@ func TestKlineRouteIDKeepsTheThreeExistingForms(t *testing.T) {
 		{"crypto", marketdata.InstrumentSwap, "binance", "crypto_swap_kline", "1w", "binance_swap_kline_1w"},
 		{"crypto", marketdata.InstrumentSwap, "binance", "", "1m", "binance_swap_kline_1m"},
 		{"crypto", "", "binance", "", "1m", "binance_spot_kline_1m"},
-		{"stockcn", marketdata.InstrumentIndex, "eastmoney", "stockcn_index_kline", "5m", "stockcn_index_kline"},
-		{"stockcn", marketdata.InstrumentConvertibleBond, "sina", "stockcn_convertible_bond_kline", "1d", "stockcn_convertible_bond_kline"},
-		{"stockcn", marketdata.InstrumentIndex, "eastmoney", "", "5m", ""},
 	} {
 		got, err := klineRouteID(tc.marketID, tc.instrument, tc.provider, tc.fixed, tc.frequency)
 		require.NoError(t, err)
@@ -184,8 +181,7 @@ func TestRouteForOnlyCoversItsInstrument(t *testing.T) {
 		{"stockcn", marketdata.InstrumentEquity, true},
 		{"stockcn", "", true},
 		{"STOCKCN", marketdata.InstrumentEquity, true},
-		{"stockcn", marketdata.InstrumentIndex, false},
-		{"stockcn", marketdata.InstrumentConvertibleBond, false},
+		{"stockcn", "index", false},
 		{"crypto", marketdata.InstrumentSpot, false},
 		{"crypto", "", false},
 		{"stockjp", marketdata.InstrumentEquity, false},
@@ -202,7 +198,6 @@ func TestRouteForOnlyCoversItsInstrument(t *testing.T) {
 		require.Empty(t, provider+sourceID, "按路由分配的请求不写来源")
 	}
 	for _, market := range []PlanMarket{
-		{MarketID: "stockcn", InstrumentType: "index", Provider: "cni", SourceID: "index_cni_http", MarketType: "index"},
 		{MarketID: "crypto", InstrumentType: "swap", Provider: "binance", SourceID: "swap_http", MarketType: "swap"},
 	} {
 		provider, sourceID := market.RequestSource()

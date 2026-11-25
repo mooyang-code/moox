@@ -8,63 +8,7 @@ import (
 	"time"
 )
 
-// taskTime 读取 task_state 的一个时间列；没有记录或为 NULL 时 ok 为假。
-func (s *Store) taskTime(ctx context.Context, column, spaceID, datasetID string) (time.Time, bool, error) {
-	var v sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT `+column+` FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, false, nil
-	}
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	if !v.Valid {
-		return time.Time{}, false, nil
-	}
-	return fromNanos(v.Int64), true, nil
-}
-
-// Watermark 返回任务的读取水位 W（上一次完整成功的定时或手动运行的开始时间）；没有时 ok 为假。
-func (s *Store) Watermark(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
-	return s.taskTime(ctx, "scan_watermark", spaceID, datasetID)
-}
-
-// FirstStart 返回首次运行（还没有水位）时记下的读取起点。
-func (s *Store) FirstStart(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
-	return s.taskTime(ctx, "first_start", spaceID, datasetID)
-}
-
-// ResumeFrom 返回运行中途记下的续读起点：之前的分区块已经导出、能定稿的已定稿，失败重跑从这里读起。
-func (s *Store) ResumeFrom(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
-	return s.taskTime(ctx, "resume_from", spaceID, datasetID)
-}
-
-// SetFirstStart 记下首次运行的读取起点；已有更早的起点时保留更早的。首次运行失败后重试必须从同一个起点读起，
-// 否则会跳过两次起点之间尚未读到的数据。
-func (s *Store) SetFirstStart(ctx context.Context, spaceID, datasetID string, start time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, first_start) VALUES (?, ?, ?)
-ON CONFLICT (space_id, dataset_id) DO UPDATE SET first_start = CASE WHEN task_state.first_start IS NULL OR excluded.first_start < task_state.first_start THEN excluded.first_start ELSE task_state.first_start END`,
-		spaceID, datasetID, nanos(start))
-	return err
-}
-
-// SetResumeFrom 把续读起点推进到 at；只前进，不后退。
-func (s *Store) SetResumeFrom(ctx context.Context, spaceID, datasetID string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, resume_from) VALUES (?, ?, ?)
-ON CONFLICT (space_id, dataset_id) DO UPDATE SET resume_from = CASE WHEN task_state.resume_from IS NULL OR excluded.resume_from > task_state.resume_from THEN excluded.resume_from ELSE task_state.resume_from END`,
-		spaceID, datasetID, nanos(at))
-	return err
-}
-
-// AdvanceWatermark 把读取水位推进到 watermark，并清掉首次起点与续读起点（水位前进后它们都不再需要）。
-func (s *Store) AdvanceWatermark(ctx context.Context, spaceID, datasetID string, watermark time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, scan_watermark) VALUES (?, ?, ?)
-ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_watermark, first_start = NULL, resume_from = NULL`,
-		spaceID, datasetID, nanos(watermark))
-	return err
-}
-
-// ChangeCursor 返回任务读 Storage 变更日志的位点（上一次完整成功的复核或手动运行开始时已扫描到的位置）；没有时 ok 为假。
+// ChangeCursor 返回任务读 Storage 变更日志的位点（已读完并写进暂存区的日志之后）；没有时 ok 为假。
 func (s *Store) ChangeCursor(ctx context.Context, spaceID, datasetID string) (storeID string, sequence uint64, ok bool, err error) {
 	err = s.db.QueryRowContext(ctx, `SELECT change_store_id, change_sequence FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&storeID, &sequence)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -81,8 +25,42 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET change_store_id = excluded.chan
 	return err
 }
 
+// Rescan 返回整段重读的进度 [from, until)：还没读完的部分；不在重读时 ok 为假。
+func (s *Store) Rescan(ctx context.Context, spaceID, datasetID string) (from, until time.Time, ok bool, err error) {
+	var f, u sql.NullInt64
+	err = s.db.QueryRowContext(ctx, `SELECT rescan_from, rescan_until FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&f, &u)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, time.Time{}, false, nil
+	}
+	if err != nil || !f.Valid || !u.Valid {
+		return time.Time{}, time.Time{}, false, err
+	}
+	return fromNanos(f.Int64), fromNanos(u.Int64), true, nil
+}
+
+// SetRebase 在一个事务里重建基线：位点取日志头部，整段重读进度设为 [from, until)。先落位点再读数据：
+// 位点之后的写入由之后的日志读取覆盖，之前的由整段重读覆盖。
+func (s *Store) SetRebase(ctx context.Context, spaceID, datasetID, storeID string, sequence uint64, from, until time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, change_store_id, change_sequence, rescan_from, rescan_until) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (space_id, dataset_id) DO UPDATE SET change_store_id = excluded.change_store_id, change_sequence = excluded.change_sequence,
+rescan_from = excluded.rescan_from, rescan_until = excluded.rescan_until`,
+		spaceID, datasetID, storeID, sequence, nanos(from), nanos(until))
+	return err
+}
+
+// AdvanceRescan 把整段重读进度推进到 to；done 为真时（最后一段已读完）两列清成 NULL。
+func (s *Store) AdvanceRescan(ctx context.Context, spaceID, datasetID string, to time.Time, done bool) error {
+	if done {
+		_, err := s.db.ExecContext(ctx, `UPDATE task_state SET rescan_from = NULL, rescan_until = NULL WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE task_state SET rescan_from = ? WHERE space_id = ? AND dataset_id = ? AND rescan_from IS NOT NULL`,
+		nanos(to), spaceID, datasetID)
+	return err
+}
+
 // BindTask 把数据集的暂存状态绑定到任务 ID，并记下任务的用途与目录名。本地已绑定的 ID 与 taskID 不同，说明任务被删除后重建过：
-// 旧任务遗留的水位、起点、暂存数据和分区状态一律丢弃，新任务从自己的设置开始。目录名建好后不改，同一任务 ID 不会变。
+// 旧任务遗留的位点、重读进度、暂存数据和分区状态一律丢弃，新任务从自己的设置开始。目录名建好后不改，同一任务 ID 不会变。
 func (s *Store) BindTask(ctx context.Context, task Task, taskID string) error {
 	if taskID == "" {
 		return errors.New("运行缺少 task_id")

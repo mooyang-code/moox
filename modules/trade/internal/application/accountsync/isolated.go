@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
@@ -56,16 +55,16 @@ func (s *Service) pauseForIsolated(ctx context.Context, tradingAccountID string,
 		return nil
 	}
 	// 条件写入：只在组合仍是“运行中、没有暂停原因”时才暂停，已被风控或用户暂停的不改写原因。
-	reason := store.AutoPauseReason(description)
+	pause := store.SystemPause(description)
 	var paused bool
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) (err error) {
-		paused, err = tx.PauseLogicalAccountIf(logical.SpaceID, logical.LogicalAccountID, string(logicalaccount.AutomationActive), "", reason)
+		paused, err = tx.PauseLogicalAccountIf(logical.SpaceID, logical.LogicalAccountID, store.Pause{}, pause)
 		return err
 	}); err != nil {
 		return err
 	}
 	if paused {
-		log.WarnContextf(ctx, "交易关注项：执行账户 %s 暂停组合 %s：%s", account.Name, logical.Name, reason)
+		log.WarnContextf(ctx, "交易关注项：执行账户 %s 暂停组合 %s：%s", account.Name, logical.Name, pause.Reason)
 	}
 	return nil
 }

@@ -22,8 +22,8 @@ func TestListManagedIndexesReturnsOnlyOfficialBleveDirectories(t *testing.T) {
 	defer index.Close()
 
 	ids := []string{
-		viewindex.ViewIndexID("space", "records"),
-		viewindex.ViewIndexID("space", "orders"),
+		viewindex.IndexID("space", "records"),
+		viewindex.IndexID("space", "orders"),
 	}
 	for _, id := range ids {
 		if err := os.Mkdir(filepath.Join(root, id), 0o755); err != nil {
@@ -39,7 +39,7 @@ func TestListManagedIndexesReturnsOnlyOfficialBleveDirectories(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "view_s7370616365_v7265636f726473_z"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, viewindex.ViewIndexID("space", "file")), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, viewindex.IndexID("space", "file")), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -62,10 +62,10 @@ func TestRemoveDeletesManagedBleveDirectory(t *testing.T) {
 	}
 	defer index.Close()
 
-	id := viewindex.ViewIndexID("space", "records")
+	id := viewindex.IndexID("space", "records")
 	if err := index.Prepare(context.Background(), id, viewindex.ViewIndexSchema{
-		SpaceID: "space", ViewID: "records", PrimaryDatasetID: "records", ViewVersion: 1,
-		Engine: "bleve", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}},
+		SpaceID: "space", DatasetID: "records", ViewVersion: 1,
+		Engine: "bleve", SchemaHash: "hash", Columns: []*viewindex.Column{{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,19 +88,19 @@ func TestExtendColumnsAppendsWithoutTouchingExistingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer index.Close()
-	column := func(name string, order uint32) *pb.ViewColumn {
-		return &pb.ViewColumn{ColumnName: name, OriginId: name, OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+	column := func(name string, order uint32) *viewindex.Column {
+		return &viewindex.Column{ColumnName: name,
 			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING, SortOrder: order}
 	}
-	current := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "records", PrimaryDatasetID: "dataset", ViewVersion: 1, Engine: "bleve", Columns: []*pb.ViewColumn{column("name", 0)}}
+	current := viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "dataset", ViewVersion: 1, Engine: "bleve", Columns: []*viewindex.Column{column("name", 0)}}
 	current.SchemaHash = viewindex.HashViewIndexSchema(current)
-	id := viewindex.ViewIndexID("space", "records")
+	id := viewindex.IndexID("space", "records")
 	if err := index.Prepare(ctx, id, current); err != nil {
 		t.Fatal(err)
 	}
 	next := current
 	next.ViewVersion = 2
-	next.Columns = []*pb.ViewColumn{column("name", 0), column("note", 1)}
+	next.Columns = []*viewindex.Column{column("name", 0), column("note", 1)}
 	next.SchemaHash = viewindex.HashViewIndexSchema(next)
 	if err := index.ExtendColumns(ctx, id, current, next); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestExtendColumnsAppendsWithoutTouchingExistingRows(t *testing.T) {
 	}
 	removal := next
 	removal.ViewVersion = 3
-	removal.Columns = []*pb.ViewColumn{column("name", 0)}
+	removal.Columns = []*viewindex.Column{column("name", 0)}
 	if err := index.ExtendColumns(ctx, id, next, removal); !errors.Is(err, viewindex.ErrSchemaExtensionConflict) {
 		t.Fatalf("删列应当被拒绝，err=%v", err)
 	}

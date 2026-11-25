@@ -86,7 +86,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	storage := storageio.NewGatewayClient(runtime.gateway)
 
-	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL), enginehub.WithHeartbeatStore(db))
+	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithHeartbeatStore(db))
 	// 历史补齐状态：先把库里上一次的结果交给 hub（引擎同步目录之前），再每分钟向 Collector 取一次。
 	seeds := &historySeedSyncer{lister: gatewayCollector{gateway: runtime.gateway}, db: db, sink: hub}
 	seeds.load(appCtx)
@@ -113,10 +113,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.udfRuntimes = append(runtime.udfRuntimes, previewRuntime)
 	catalogService := catalog.NewService(db, storage,
-		catalog.WithLockDir(cfg.Database.Path+".locks"),
 		catalog.WithReadyRecorder(hub.SetResultReady),
 		catalog.WithUDFVerifier(catalog.UDFVerifier{Runtime: verifyRuntime, Conformance: factorudf.ConformanceOptions{Timeout: udfVerifyTimeout}}),
-		catalog.WithEngineView(hub.Engine),
 		catalog.WithRefSubjectSource(storage),
 	)
 	fetchModule := func(ctx context.Context, hash string) ([]byte, error) {

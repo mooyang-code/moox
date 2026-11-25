@@ -23,7 +23,9 @@
               <span v-if="loadError && loaded" class="verdict-reason"
                 >最近一次读取失败：{{ loadError }}，下面是上次成功的结果</span
               >
-              <span class="muted">{{ status.generated_at ? `更新于 ${timeText(status.generated_at)}` : "" }}</span>
+              <span class="muted">{{
+                toInstantMs(status.generated_at) ? `更新于 ${formatInstant(status.generated_at, displayZone)}` : ""
+              }}</span>
               <a-button size="small" @click="logVisible = true">
                 <template #icon><icon-history /></template>
                 变更记录
@@ -133,13 +135,6 @@
                   <span :class="record.failed_chunks_24h ? 'danger-text' : 'muted'">{{ record.failed_chunks_24h || 0 }}</span>
                 </template>
               </a-table-column>
-              <a-table-column title="历史缺口" :width="90" align="right">
-                <template #cell="{ record }">
-                  <span v-if="record.history_error" class="warn-text">扫描失败</span>
-                  <span v-else-if="record.history_gap_bars" class="warn-text">{{ record.history_gap_bars }} 根</span>
-                  <span v-else class="muted">{{ record.history_scanned_at ? 0 : "-" }}</span>
-                </template>
-              </a-table-column>
               <a-table-column title="状态" :width="76" align="center">
                 <template #cell="{ record }">
                   <a-tag size="small" :color="levelInfo(record.level).color">{{ levelInfo(record.level).text }}</a-tag>
@@ -156,22 +151,9 @@
                   <icon-exclamation-circle /> {{ reason }}
                 </div>
                 <div class="detail-line">
-                  首次生效 {{ timeText(record.effective_from) }} · 自动巡检已查至
-                  {{ record.inspected_until ? timeText(record.inspected_until) : "尚未巡检" }}（每 5 分钟一次，发现缺口自动补采）
-                </div>
-                <div class="detail-line">
-                  历史缺口扫描：
-                  <template v-if="!record.history_scanned_at">尚未扫描</template>
-                  <template v-else-if="record.history_error"
-                    >{{ timeText(record.history_scanned_at) }} 失败（{{ record.history_error }}）</template
-                  >
-                  <template v-else-if="record.history_gap_bars">
-                    {{ timeText(record.history_scanned_at) }} 发现 {{ record.history_gap_bars }} 根缺口（{{
-                      record.history_gap_subjects
-                    }}
-                    个标的），补采确认后行情源本来没有的部分会自动排除
-                  </template>
-                  <template v-else>{{ timeText(record.history_scanned_at) }} 无缺口</template>
+                  首次生效 {{ formatInstant(record.effective_from, displayZone) }} · 自动巡检已查至
+                  {{ record.inspected_until ? formatInstant(record.inspected_until, displayZone) : "尚未巡检" }}（每 5
+                  分钟一次，发现缺口自动补采）
                 </div>
                 <div v-if="record.absent_bars" class="detail-line">
                   已确认行情源没有 {{ record.absent_bars }} 根（如停牌、无成交），不算缺口、不影响健康
@@ -187,15 +169,8 @@
                   <a-button size="mini" @click.stop="openRange('check', record.dataset_id)">检查缺口</a-button>
                   <a-button size="mini" @click.stop="openRange('backfill', record.dataset_id)">补采</a-button>
                   <a-popconfirm
-                    v-if="record.history_gap_bars"
-                    content="按历史扫描发现的缺口补采；补完后行情源本来没有的 K 线会被确认并不再报告。确认补采？"
-                    @ok="onConfirmHistory(record)"
-                  >
-                    <a-button size="mini" type="primary" @click.stop>补采确认</a-button>
-                  </a-popconfirm>
-                  <a-popconfirm
                     v-if="record.absent_bars"
-                    content="清掉该数据集已确认的“行情源缺失”，历史扫描会重新进行；适用于行情源后来补上了数据。确认清除？"
+                    content="清掉该数据集已确认的“行情源缺失”，之后用“检查缺口”或补采重新确认；适用于行情源后来补上了数据。确认清除？"
                     @ok="onClearAbsences(record)"
                   >
                     <a-button size="mini" @click.stop>清除并重新检查</a-button>
@@ -233,7 +208,7 @@
                 </template>
               </a-table-column>
               <a-table-column title="目标起点" :width="200">
-                <template #cell="{ record }">{{ timeText(record.targetFrom) }}</template>
+                <template #cell="{ record }">{{ formatInstant(record.targetFrom, displayZone) }}</template>
               </a-table-column>
             </template>
           </a-table>
@@ -246,8 +221,8 @@
               status.stream.online ? "在线" : "离线"
             }}</a-tag>
             <span class="muted mono-text"
-              >{{ status.stream.instance_id }} · 心跳 {{ timeText(status.stream.heartbeat_at) }} · 已应用计划
-              {{ status.stream.applied_plan_id }}/{{ status.stream.applied_stage }}</span
+              >{{ status.stream.instance_id }} · 心跳 {{ formatInstant(status.stream.heartbeat_at, displayZone) }} · 已应用计划
+              {{ status.stream.applied_plan_id }}</span
             >
           </div>
           <a-table row-key="key" size="mini" :data="streamConnRows" :pagination="false" :bordered="{ cell: true }">
@@ -259,7 +234,7 @@
                 <template #cell="{ record }">{{ record.subscribed ? "是" : "否" }}</template>
               </a-table-column>
               <a-table-column title="最近消息" :width="230">
-                <template #cell="{ record }">{{ timeText(record.last_message_at) }}</template>
+                <template #cell="{ record }">{{ formatInstant(record.last_message_at, displayZone) }}</template>
               </a-table-column>
               <a-table-column title="重连" data-index="reconnects" :width="70" align="right" />
               <a-table-column title="地址" data-index="endpoint" />
@@ -374,7 +349,9 @@
                     <span
                       class="single-line"
                       :class="cloudStateClass(record)"
-                      :title="record.cloud_read_at ? `读回于 ${timeText(record.cloud_read_at)}` : ''"
+                      :title="
+                        toInstantMs(record.cloud_read_at) ? `读回于 ${formatInstant(record.cloud_read_at, displayZone)}` : ''
+                      "
                       >{{ cloudStateInfo(record).text }}</span
                     >
                   </template>
@@ -447,7 +424,6 @@ import { storeToRefs } from "pinia";
 import ActivityLog from "@/components/activity-log/index.vue";
 import {
   clearSourceAbsences,
-  confirmHistoryGaps,
   getCollectorStatus,
   type CollectorDatasetStatus,
   type CollectorFunctionStatus,
@@ -483,7 +459,7 @@ import {
   unplannedDeleteCommand
 } from "./runtime-status-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 
 const route = useRoute();
 const router = useRouter();
@@ -492,7 +468,6 @@ const { selectedSpaceId } = storeToRefs(spaceStore);
 const guard = createLatestRequestGuard();
 // 运行状态的时间按当前空间登记的时区带后缀显示
 const displayZone = useDisplayZone();
-const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const status = ref<GetCollectorStatusResponse>({});
 const statusLoading = ref(false);
@@ -603,7 +578,7 @@ const planText = computed(() => {
 });
 const planSub = computed(() => {
   const plan = status.value.open || status.value.applied;
-  return plan ? `${timeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
+  return plan ? `${formatInstant(plan.updated_at, displayZone.value)} 更新` : "创建采集任务后自动生成";
 });
 
 const selectedFunction = ref<CollectorFunctionStatus | null>(null);
@@ -629,7 +604,7 @@ async function loadStatus(background = false) {
   const request = guard.begin();
   if (!background) statusLoading.value = true;
   try {
-    const data = await getCollectorStatus(spaceId, { silentError: background });
+    const data = await getCollectorStatus(spaceId);
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
     loaded.value = true;
@@ -684,20 +659,10 @@ function onJobSubmitted(jobId: string) {
   goBackfills(jobId);
 }
 
-async function onConfirmHistory(record: CollectorDatasetStatus) {
-  try {
-    const result = await confirmHistoryGaps(selectedSpaceId.value || "", record.dataset_id || "", record.frequency || "");
-    Message.success(result.job_id ? `已创建补采作业，共 ${result.chunks || 0} 个分块` : "没有待确认的历史缺口");
-    if (result.job_id) onJobSubmitted(result.job_id);
-  } catch (error) {
-    Message.error(error instanceof Error ? error.message : "补采确认失败");
-  }
-}
-
 async function onClearAbsences(record: CollectorDatasetStatus) {
   try {
     const result = await clearSourceAbsences(selectedSpaceId.value || "", record.dataset_id || "", record.frequency || "");
-    Message.success(`已清除 ${Number(result.cleared || 0)} 段；历史扫描会在几分钟内重新进行，实时区间可用“检查缺口”确认`);
+    Message.success(`已清除 ${Number(result.cleared || 0)} 段；可用“检查缺口”重新确认`);
     void loadStatus();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "清除失败");

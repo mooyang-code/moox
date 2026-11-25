@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// 新接上报的组件（egress-proxy、callback-dispatcher）用 packages/report 生成的真实快照，Monitor 的入库路由照常收下，就绪判断落进库：
+// 新接上报的组件（egress-proxy）用 packages/report 生成的真实快照，Monitor 的入库路由照常收下，就绪判断落进库：
 // 快照被永久拒收时组件会一直显示停止上报、又没有报错指向原因。
 func TestRealReportsFromNewReportersAreAccepted(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
@@ -30,7 +30,7 @@ func TestRealReportsFromNewReportersAreAccepted(t *testing.T) {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 
-	for _, tc := range []struct{ module, service string }{{"egress", "egress-proxy"}, {"callbackdispatcher", "callback-dispatcher"}} {
+	for _, tc := range []struct{ module, service string }{{"egress", "egress-proxy"}} {
 		handler, err := report.NewHandlerWithRegistry(report.Config{Module: tc.module, ServiceName: tc.service, InstanceID: tc.service + "@control", NodeID: "control", BootID: "boot-" + tc.service}, prometheus.NewRegistry())
 		require.NoError(t, err)
 		snapshot, err := handler.BuildSnapshot()
@@ -47,7 +47,7 @@ func TestRealReportsFromNewReportersAreAccepted(t *testing.T) {
 	}
 	rows, _, err := monmetrics.NewCatalog(messages).ListServicesAt(t.Context(), "", 0, 10, time.Now().UTC())
 	require.NoError(t, err)
-	require.Len(t, rows, 2)
+	require.Len(t, rows, 1)
 	for _, row := range rows {
 		require.Equal(t, monmetrics.ReadinessNotReady, row.Readiness, row.ServiceName)
 		require.Equal(t, "启动尚未完成", row.NotReadyReason)

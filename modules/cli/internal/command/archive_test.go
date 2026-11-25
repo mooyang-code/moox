@@ -3,8 +3,9 @@ package command
 import (
 	"bytes"
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -41,22 +42,19 @@ func useArchiveGateway(t *testing.T, g *archiveFakeGateway) {
 
 func ok() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS} }
 
-func TestArchiveCreateSendsThePullIntervalAndPrintsProtoFieldNames(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", IntervalSeconds: 3600, PullEveryBars: 5, NextPullAt: "2026-10-17T01:05:25Z"}}}
+func TestArchiveCreateSendsTheBackfillAndPrintsProtoFieldNames(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", BackfillFrom: "2026-10-15T00:00:00Z"}}}
 	useArchiveGateway(t, g)
 	var out bytes.Buffer
-	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", PullEvery: 5, BackfillFrom: "2026-10-15T00:00:00Z", Paused: true})
+	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", BackfillFrom: "2026-10-15T00:00:00Z", Paused: true})
 	require.NoError(t, err)
 	assert.Equal(t, "trpc.moox.archive.ArchiveMgr", g.service)
 	assert.Equal(t, "CreateArchiveTask", g.method)
 	req := g.req.(*archivepb.CreateArchiveTaskReq)
-	assert.Equal(t, uint32(5), req.GetPullEveryBars())
 	assert.Equal(t, "2026-10-15T00:00:00Z", req.GetBackfillFrom())
 	assert.True(t, req.GetPaused())
 	assert.True(t, g.closed)
-	assert.Contains(t, out.String(), `"interval_seconds": 3600`)
-	assert.Contains(t, out.String(), `"pull_every_bars": 5`)
-	assert.Contains(t, out.String(), `"next_pull_at": "2026-10-17T01:05:25Z"`)
+	assert.Contains(t, out.String(), `"backfill_from": "2026-10-15T00:00:00Z"`)
 }
 
 func TestArchiveCreateAndPrepareSendTheDirNameAndPrintTheSuggestion(t *testing.T) {
@@ -77,18 +75,30 @@ func TestArchiveCreateAndPrepareSendTheDirNameAndPrintTheSuggestion(t *testing.T
 	assert.Contains(t, out.String(), `"purpose": "collect"`)
 }
 
-func TestArchivePreviewAndRunsListSendTheNewFields(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.PreviewArchiveScheduleRsp{RetInfo: ok(), NextRuns: []string{"2026-10-17T01:04:25Z"}, NextReviews: []string{"2026-10-17T01:34:25Z"}}}
-	useArchiveGateway(t, g)
-	var out bytes.Buffer
-	require.NoError(t, runArchiveTasksPreview(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", PullEvery: 3}))
-	assert.Equal(t, uint32(3), g.req.(*archivepb.PreviewArchiveScheduleReq).GetPullEveryBars())
-	assert.Contains(t, out.String(), `"next_reviews": [`)
-
+func TestArchiveRunsListSendsIncludeFollow(t *testing.T) {
 	runs := &archiveFakeGateway{rsp: &archivepb.ListArchiveRunsRsp{RetInfo: ok()}}
 	useArchiveGateway(t, runs)
-	require.NoError(t, runArchiveRunsList(context.Background(), &out, archiveFlags{IncludeTicks: true}))
-	assert.True(t, runs.req.(*archivepb.ListArchiveRunsReq).GetIncludeTicks())
+	var out bytes.Buffer
+	require.NoError(t, runArchiveRunsList(context.Background(), &out, archiveFlags{IncludeFollow: true}))
+	assert.True(t, runs.req.(*archivepb.ListArchiveRunsReq).GetIncludeFollow())
+}
+
+func TestArchiveClearUnrecoverableNeedsTheRangeAndConfirmation(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.ClearArchiveUnrecoverableRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+		Removed: []*archivepb.UnrecoverableRange{{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}}}
+	useArchiveGateway(t, g)
+	var out bytes.Buffer
+	f := archiveFlags{SpaceID: "crypto", DatasetID: "ds", From: "2026-10-01T00:00:00Z", To: "2026-10-05T00:00:00Z"}
+	require.ErrorContains(t, runArchiveTasksClearUnrecoverable(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}), "--start")
+	require.ErrorContains(t, runArchiveTasksClearUnrecoverable(context.Background(), &out, f), "--yes")
+	assert.Empty(t, g.method)
+	f.Yes = true
+	require.NoError(t, runArchiveTasksClearUnrecoverable(context.Background(), &out, f))
+	assert.Equal(t, "ClearArchiveUnrecoverable", g.method)
+	req := g.req.(*archivepb.ClearArchiveUnrecoverableReq)
+	assert.Equal(t, "2026-10-01T00:00:00Z", req.GetStart())
+	assert.Equal(t, "2026-10-05T00:00:00Z", req.GetEnd())
+	assert.Contains(t, out.String(), `"removed"`)
 }
 
 func TestArchiveCommandsValidateInputsBeforeCallingTheGateway(t *testing.T) {
@@ -123,9 +133,6 @@ func TestArchiveCommandsMapToTheRightMethods(t *testing.T) {
 		{"PrepareArchiveTask", &archivepb.PrepareArchiveTaskRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
 			return runArchiveTasksPrepare(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
 		}},
-		{"PreviewArchiveSchedule", &archivepb.PreviewArchiveScheduleRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchiveTasksPreview(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
-		}},
 		{"UpdateArchiveTask", &archivepb.UpdateArchiveTaskRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
 			return runArchiveTasksUpdate(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds", Status: "paused"})
 		}},
@@ -157,20 +164,6 @@ func TestArchiveCommandsMapToTheRightMethods(t *testing.T) {
 	}
 }
 
-// archive overview 的输出带上当前避让规则（含依据与计算时间）。
-func TestArchiveOverviewPrintsAvoidance(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.GetArchiveOverviewRsp{RetInfo: ok(), Avoidance: &archivepb.AvoidanceRules{
-		EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuietFrom: "58:00", HourQuietUntil: "04:00",
-		Basis: "crypto：1m、1h；stockcn：5m（每分钟触发，有 1h 及以上，整点避让）", ComputedAt: "2026-11-08T10:00:00Z",
-	}}}
-	useArchiveGateway(t, g)
-	var out bytes.Buffer
-	require.NoError(t, runArchiveOverview(context.Background(), &out, archiveFlags{}))
-	for _, want := range []string{`"avoidance"`, `"every_minutes": 1`, `"hour_quiet_from": "58:00"`, `"basis": "crypto：1m、1h；stockcn：5m`, `"computed_at": "2026-11-08T10:00:00Z"`} {
-		assert.Contains(t, out.String(), want)
-	}
-}
-
 func TestArchiveSurfacesManagerErrors(t *testing.T) {
 	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "数据集已有归档任务"}}}
 	useArchiveGateway(t, g)
@@ -181,16 +174,10 @@ func TestArchiveSurfacesManagerErrors(t *testing.T) {
 	assert.Empty(t, out.String())
 }
 
-func TestArchiveAndSyncDeploymentsCommandsAreRegistered(t *testing.T) {
+func TestArchiveCommandsAreRegistered(t *testing.T) {
 	var found []string
 	for _, c := range archiveCmd.Commands() {
 		found = append(found, c.Name())
 	}
-	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions", "import"}, found)
-	setup := newSetupCommand(defaultSetupDeps())
-	sync, _, err := setup.Find([]string{"sync-deployments"})
-	require.NoError(t, err)
-	assert.Equal(t, "sync-deployments", sync.Name())
-	require.NotNil(t, sync.Flags().Lookup("host"))
-	require.NotNil(t, sync.Flags().Lookup("file"))
+	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions"}, found)
 }

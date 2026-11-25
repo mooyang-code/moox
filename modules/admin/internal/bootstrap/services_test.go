@@ -33,7 +33,6 @@ func TestCreateCoreServices_ValidDB_ShouldCreateServices(t *testing.T) {
 	services, err := createCoreServices(context.Background(), mgr, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, services)
-	require.NotNil(t, services.SpaceMgr)
 	require.NotNil(t, services.SSHService)
 	require.NotNil(t, services.SecretService)
 	require.NotNil(t, services.Setup)

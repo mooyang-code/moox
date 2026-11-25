@@ -88,7 +88,7 @@
           <a-tab-pane key="binding" title="当时的绑定"
             ><ResolvedTable
               :resolved-json="detail.resolved_json"
-              :pool="poolMembers(detail.dsl_yaml || '') !== null"
+              :pool="isPoolDsl(detail.dsl_yaml || '')"
               empty-text="会话快照缺失"
           /></a-tab-pane>
           <a-tab-pane key="dsl" title="当时的 DSL">
@@ -102,10 +102,10 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, ref } from "vue";
-import type { InstrumentTarget, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
-import { useStrategyStore } from "@/store/modules/strategy";
+import type { InstrumentWeight, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
+import { getStrategyResult } from "@/api/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
-import { poolMembers } from "@/views/strategy/market-mode";
+import { isPoolDsl } from "@/views/strategy/dsl";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import ResultOverview from "@/views/strategy/components/strategy-result-overview.vue";
 import { marketLabel } from "@/views/strategy/market-mode";
@@ -128,7 +128,8 @@ const props = defineProps<{
   error?: string;
 }>();
 const emit = defineEmits<{ page: [number, "session" | "all"]; retry: [] }>();
-const store = useStrategyStore();
+// 解释明细按结果 ID 缓存：同一结果只请求一次
+const detailCache = new Map<string, StrategyResultDetail>();
 const explainVisible = ref(false);
 const explainLoading = ref(false);
 const explainError = ref("");
@@ -152,7 +153,7 @@ function changeText(record: StrategyResult): string {
 }
 
 const TargetList = defineComponent({
-  props: { targets: { type: Array as () => InstrumentTarget[], required: true } },
+  props: { targets: { type: Array as () => InstrumentWeight[], required: true } },
   setup(listProps) {
     return () =>
       listProps.targets.length
@@ -188,7 +189,8 @@ async function explain(record: StrategyResult) {
   explainError.value = "";
   detail.value = null;
   try {
-    const loaded = await store.loadResultDetail(record.result_id);
+    const loaded = detailCache.get(record.result_id) ?? (await getStrategyResult(record.result_id));
+    detailCache.set(record.result_id, loaded);
     if (requestId === explainRequest) detail.value = loaded;
   } catch (err) {
     if (requestId === explainRequest) explainError.value = err instanceof Error ? err.message : "解释明细加载失败";

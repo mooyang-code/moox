@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -49,7 +48,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 		control.Close()
 		t.Fatal(err)
 	}
-	if _, err := js.AddStream(&nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
+	if _, err := js.AddStream(&nats.StreamConfig{Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(), Retention: nats.LimitsPolicy, Storage: nats.FileStorage, MaxAge: 24 * time.Hour, MaxBytes: 32 << 20, Discard: nats.DiscardOld, Duplicates: 2 * time.Minute}); err != nil {
 		control.Close()
 		t.Fatal(err)
 	}
@@ -78,7 +77,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	}
 	routes := observabilityconsumer.Routes{
 		Metrics: func(routeCtx context.Context, message *eventpb.EventMessage, report *metricspb.MetricReport) error {
-			observedAt := message.GetOccurredAt().AsTime()
+			observedAt := time.UnixMilli(message.GetOccurredAt()).UTC()
 			samples, parseErr := metrics.ParseSnapshot(report.GetSnapshot(), metrics.Envelope{
 				ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(),
 				MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(),
@@ -90,7 +89,6 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 			_, commitErr := messageStore.CommitIngest(routeCtx, message, report, samples)
 			return commitErr
 		},
-		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
 	}
 	consumer, err := observabilityconsumer.NewConsumer(ctx, eventClient, registry, observabilityconsumer.DefaultConfig(), routes)
 	if err != nil {
@@ -100,7 +98,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 
 	observed := time.Now().UTC().Truncate(time.Millisecond)
 	dataTime := observed.Add(-time.Minute)
-	labels := `space_id="crypto",view_id="view_crypto_kline_1m",dataset_id="dataset_binance_kline_1m",freq="1m"`
+	labels := `space_id="crypto",dataset_id="dataset_binance_kline_1m",freq="1m"`
 	raw := []byte(fmt.Sprintf("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n"+
 		"moox_storage_view_output_latest_data_time_seconds{%s} %d\n"+
 		"moox_storage_view_output_subjects{%s} 1\n", labels, dataTime.Unix(), labels))
@@ -141,7 +139,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	query := metrics.NewQueryService(messageStore, nil)
 	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20).Evaluate(ctx, observed)
 	if err != nil || len(reports) != 1 || !reports[0].Success || reports[0].ObservedCount != 1 {
 		t.Fatalf("kline freshness reports=%+v err=%v", reports, err)

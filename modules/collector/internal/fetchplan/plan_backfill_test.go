@@ -157,7 +157,7 @@ func TestBackfillLeaseHeldByRealtimeIsRetriedLaterWithoutTrackingAJob(t *testing
 	gate := make(chan struct{})
 	t.Cleanup(func() { close(gate) })
 	timer := planFunctionNames(t, 60)[0]
-	_, err := r.ops().start(opKeyOf(timer), planOpKey(1, planStageTransition), true, func(context.Context, *functionOp) error { <-gate; return nil })
+	_, err := r.ops().start(opKeyOf(timer), planOpKey(1), true, func(context.Context, *functionOp) error { <-gate; return nil })
 	require.NoError(t, err)
 
 	got, err := r.EnsureBackfillFunction(context.Background(), "spot")

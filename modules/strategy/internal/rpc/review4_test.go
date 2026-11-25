@@ -55,7 +55,7 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 			case <-time.After(100 * time.Millisecond):
 			}
 			session := "session-enabled"
-			if err := h.service.Store.EnableInstance(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
+			if err := h.service.Store.EnableInstance(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
 				t.Fatal(err)
 			}
 			unlockThird()
@@ -122,7 +122,7 @@ func TestStartReplayRecordsHashAndIndex(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	h.resolver.view.ActiveIndexID, h.resolver.view.Generation = "idx_a", "idx_a@b7"
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: ms("2026-09-02T00:00:00Z"), EndTime: ms("2026-09-03T00:00:00Z")})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	stored, err := h.service.Store.GetReplay(h.ctx, started.GetReplay().GetReplayId())
 	if err != nil || stored.DSLHash != dsl.Hash([]byte(demoDSL)) || stored.Tasks["spot"].ViewGeneration != "idx_a@b7" {

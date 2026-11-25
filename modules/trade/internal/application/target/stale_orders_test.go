@@ -45,7 +45,7 @@ func (o realResolveOrders) ResolveUnknown(ctx context.Context, spaceID, orderID 
 func TestStaleUnknownOrderLookupsAreLimitedAcrossRounds(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.gtcOrder(t, "stale-unknown", "target-old", "SUBMIT_UNKNOWN")
 	lookups := 0
 	executor := f.restingExecutor()
@@ -80,8 +80,8 @@ func (f *targetFixture) gtcOrder(t *testing.T, orderID, ownerID, state string) {
 func (f *targetFixture) gtcOrderBy(t *testing.T, orderID, ownerID, state, runnerID string) {
 	t.Helper()
 	f.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: runnerID,
-		ClientOrderID: orderID, ExchangeOrderID: "exchange-" + orderID, Exchange: "BINANCE", MarketType: "SWAP",
+		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: runnerID,
+		ClientOrderID: orderID, ExchangeOrderID: "exchange-" + orderID, Exchange: "binance", MarketType: "swap",
 		InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: ownerID, State: state, SubmittedAt: f.now.UnixMilli(), Version: 1,
@@ -92,7 +92,7 @@ func (f *targetFixture) gtcOrderBy(t *testing.T, orderID, ownerID, state, runner
 func TestStaleTargetOrdersAreAllCanceledInOneRound(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	var want []string
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("stale-%d", i)
@@ -113,7 +113,7 @@ func TestStaleTargetOrdersAreAllCanceledInOneRound(t *testing.T) {
 func TestStaleCancelUnknownDoesNotBlockTheRest(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.gtcOrder(t, "a-cancel-unknown", "target-old", "CANCEL_UNKNOWN")
 	for i := 0; i < 3; i++ {
 		f.gtcOrder(t, fmt.Sprintf("stale-%d", i), "target-old", "OPEN")
@@ -138,7 +138,7 @@ func TestStalePendingAndUnknownOrdersAreDiscardedOrResolved(t *testing.T) {
 	f := swapPolicyFixture(t, restingSettings)
 	f.now = time.Now().UTC()
 	f.orders.store = f.store
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.gtcOrder(t, "stale-pending", "target-old", "PENDING")
 	f.gtcOrder(t, "stale-unknown", "target-old", "SUBMIT_UNKNOWN")
 

@@ -59,8 +59,8 @@
           </div>
         </template>
       </a-table-column>
-      <a-table-column title="更新时间" data-index="updated_at" :width="170" :sortable="{ sortDirections: ['ascend', 'descend'] }">
-        <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
+      <a-table-column title="更新时间" data-index="updated_at" :width="170" :sortable="updatedSortable">
+        <template #cell="{ record }">{{ formatInstant(record.updated_at, displayZone) }}</template>
       </a-table-column>
       <a-table-column title="操作" :width="90" align="center" fixed="right">
         <template #cell="{ record }">
@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { formatTime } from "@/views/data/shared/metadata-utils";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import type { DefinitionRow } from "./definitions-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
@@ -120,6 +120,15 @@ const emit = defineEmits<{
   pageChange: [page: number];
   pageSizeChange: [pageSize: number];
 }>();
+
+// 更新时间是毫秒数字字符串，按数值排序。
+const updatedSortable = {
+  sortDirections: ["ascend", "descend"] as ("ascend" | "descend")[],
+  sorter: (a: DefinitionRow, b: DefinitionRow, extra: { direction: string }) => {
+    const diff = (toInstantMs(a.updated_at) ?? 0) - (toInstantMs(b.updated_at) ?? 0);
+    return extra.direction === "descend" ? -diff : diff;
+  }
+};
 
 function selectAll(checked: boolean) {
   emit("select", checked ? props.rows.map(item => item.factor_id) : []);

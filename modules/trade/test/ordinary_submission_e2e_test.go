@@ -30,13 +30,13 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = db.Close() })
 			console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
-			marketPB, positionPB := tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.PositionSide_POSITION_SIDE_UNSPECIFIED
+			marketPB, positionPB := "spot", tradepb.PositionSide_POSITION_SIDE_UNSPECIFIED
 			if market == exchange.MarketTypeSwap {
-				marketPB, positionPB = tradepb.MarketType_MARKET_TYPE_SWAP, tradepb.PositionSide_POSITION_SIDE_NET
+				marketPB, positionPB = "swap", tradepb.PositionSide_POSITION_SIDE_NET
 			}
 			created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
-				AccountName: "ordinary-paper", LogicalAccountName: "ordinary-manual", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-				Markets: []tradepb.MarketType{marketPB}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+				AccountName: "ordinary-paper", LogicalAccountName: "ordinary-manual", Exchange: "binance",
+				Markets: []string{marketPB}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
 				ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL,
 			})
 			require.NoError(t, err)
@@ -67,11 +67,11 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			require.NoError(t, err)
 			service := &operator.Service{Store: db, Orders: f.orders, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return testNow }}
 			h := &rpc.ExecutionServer{Store: db, Submit: func(ctx context.Context, c rpc.SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
-				result, err := service.PlaceOrder(ctx, operator.SubmitOrderCommand{LogicalAccountID: c.LogicalAccountID, ManualOrderCommand: operator.ManualOrderCommand{
+				result, err := service.PlaceOrder(ctx, operator.ManualOrderCommand{LogicalAccountID: c.LogicalAccountID,
 					SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID,
 					InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide,
 					Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason, DeadlineAt: c.DeadlineAt,
-				}})
+				})
 				return result.Action, result.Order, err
 			}}
 			req := &tradepb.SubmitOrderReq{ActionId: "ordinary-action", LogicalAccountId: logicalID, TradingAccountId: accountID, ClientOrderId: "ordinary-client", InstrumentId: testInstrumentID(market),
@@ -155,15 +155,15 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			_, err = logical.AddMember(ctx, logicalapp.AddMemberCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true, AdoptExistingExposure: true})
 			require.NoError(t, err)
 			service := &operator.Service{Store: f.store, Orders: f.orders, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return testNow }}
-			command := operator.SubmitOrderCommand{LogicalAccountID: testLogicalAccount, ManualOrderCommand: operator.ManualOrderCommand{
+			command := operator.ManualOrderCommand{LogicalAccountID: testLogicalAccount,
 				SpaceID: testSpace, ActionID: "ordinary-live", TradingAccountID: testAccount, ClientOrderID: "ordinary-live", InstrumentID: testInstrumentID(market),
 				Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.01"), Reason: "local transport mock",
-			}}
+			}
 			if market == exchange.MarketTypeSwap {
 				command.PositionSide = exchange.PositionSideNet
 				command.InstrumentID = testInstrumentID(exchange.MarketTypeSwap)
 			}
-			result, err := service.SubmitOrder(ctx, command)
+			result, err := service.PlaceOrder(ctx, command)
 			require.NoError(t, err)
 			require.Equal(t, "PENDING", result.Order.State)
 			require.Zero(t, fake.placeCalls)
@@ -179,7 +179,7 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			if market == exchange.MarketTypeSwap {
 				invalid.PositionSide = exchange.PositionSideUnspecified
 			}
-			_, err = service.SubmitOrder(ctx, invalid)
+			_, err = service.PlaceOrder(ctx, invalid)
 			require.Error(t, err)
 			require.Equal(t, 1, fake.placeCalls)
 			// 服务层不允许停用仍在组合里的账户，这里直接置库模拟“执行账户已停用”。
@@ -188,7 +188,7 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			}))
 			disabled := command
 			disabled.ActionID, disabled.ClientOrderID = "disabled-account", "disabled-account"
-			_, err = service.SubmitOrder(ctx, disabled)
+			_, err = service.PlaceOrder(ctx, disabled)
 			require.Error(t, err)
 			_, err = f.store.GetOperatorAction(ctx, testSpace, disabled.ActionID)
 			require.ErrorIs(t, err, gorm.ErrRecordNotFound)
@@ -197,7 +197,7 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			require.Equal(t, 1, fake.placeCalls)
 			runManualRecoveryWorker(t, f, service)
 			require.Equal(t, 1, fake.placeCalls, "a disabled account must not send another order")
-			replay, err := service.SubmitOrder(ctx, command)
+			replay, err := service.PlaceOrder(ctx, command)
 			require.NoError(t, err)
 			require.Equal(t, result.Order.OrderID, replay.Order.OrderID)
 		})

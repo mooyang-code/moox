@@ -16,7 +16,7 @@ func seedTransferParents(t *testing.T) *Store {
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *Tx) error {
 		if err := tx.CreateTradingAccount(TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"},
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main", Exchange: "binance", Markets: []string{"spot", "swap"},
 			ExecutionMode: "LIVE", AccountMode: "BINANCE_STANDARD", Environment: "PRODUCTION", CredentialSecretID: "secret-1",
 			SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED", LeverageSettings: LeverageSettings{DefaultLeverageKey: "1"},
 		}); err != nil {

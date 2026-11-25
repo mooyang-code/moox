@@ -9,7 +9,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // referenceLoad 是一期里一个参考市场的年龄判定输入：参考 View（带覆盖统计）与参考数据集的活跃标的。
@@ -27,18 +26,18 @@ func (l Loader) loadReferences(ctx context.Context, spaceID string, resolved Res
 	loads := make([]*referenceLoad, 0, len(resolved.References))
 	for _, market := range sortedKeys(resolved.References) {
 		task := resolved.References[market]
-		view, err := l.Client.GetView(ctx, spaceID, task.ViewID)
+		view, err := l.Client.GetView(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return nil, err
 		}
 		if view.Status != "" && view.Status != "active" {
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.ViewID, view.Status)}
+			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.DatasetID, view.Status)}
 		}
 		if view.ActiveIndexID == "" {
-			return nil, fmt.Errorf("参考市场的 View %s 没有活动索引", task.ViewID)
+			return nil, fmt.Errorf("参考市场的 View %s 没有活动索引", task.DatasetID)
 		}
-		if view.DatasetID != task.DatasetID || !strings.EqualFold(view.Frequency, resolved.Bar) {
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的数据集或周期已变化，请重新启用实例", task.ViewID)}
+		if !strings.EqualFold(view.Frequency, resolved.Bar) {
+			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的周期已变化，请重新启用实例", task.DatasetID)}
 		}
 		if view, err = WithCoverage(ctx, l.Client, spaceID, view, false); err != nil {
 			return nil, err
@@ -58,7 +57,7 @@ func (l Loader) loadReferences(ctx context.Context, spaceID string, resolved Res
 	return loads, nil
 }
 
-// mergeSources 按 as-of 读附加来源，把来源列以 来源名.列名 并进帧里各市场的行（见 MergeSourceRows）。每个来源在每个主帧任务键上
+// mergeSources 按 as-of 读附加来源，把来源列以 来源名.列名 并进帧里各市场的行（见 MergeSourceRows）。每个来源在每个主帧市场上
 // 读一次：只读应读的那一根（ClosedPeriod(来源日历, 来源周期, 主帧 BarEnd)），修订号不固定、读回服务端当前的修订号。
 // down 里的来源本期不读（汇合 bar 上来源的因子被整体跳过），它的列按缺数处理。返回各来源 View 读到的修订号（View → 修订号）。
 func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, barEnd time.Time, down map[string]string, frame *engine.Frame, unavailable map[string]string) (map[string]uint64, error) {
@@ -76,74 +75,58 @@ func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resol
 		if err != nil {
 			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的周期无法换算：%v", name, err)}
 		}
-		for _, key := range resolved.TaskKeys() {
-			markets := make([]string, 0, 2)
-			subjects := map[string]struct{}{}
-			for _, market := range resolved.Markets() {
-				if resolved.TaskKey(market) != key || unavailable[market] != "" {
-					continue
-				}
-				markets = append(markets, market)
-				for id := range frame.Markets[market].Rows {
-					subjects[id] = struct{}{}
-				}
-			}
-			if len(subjects) == 0 {
+		for _, market := range resolved.Markets() {
+			if unavailable[market] != "" || len(frame.Markets[market].Rows) == 0 {
 				continue
 			}
-			task := source.Tasks[key]
-			view, err := l.Client.GetView(ctx, spaceID, task.ViewID)
+			subjects := frame.Markets[market].Rows
+			task := source.Tasks[market]
+			view, err := l.Client.GetView(ctx, spaceID, task.DatasetID)
 			if err != nil {
 				return nil, err
 			}
 			if view.Status != "" && view.Status != "active" {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", name, task.ViewID, view.Status)}
+				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", name, task.DatasetID, view.Status)}
 			}
 			if view.ActiveIndexID == "" {
-				return nil, fmt.Errorf("来源 %s 的 View %s 没有活动索引", name, task.ViewID)
+				return nil, fmt.Errorf("来源 %s 的 View %s 没有活动索引", name, task.DatasetID)
 			}
-			if view.DatasetID != task.DatasetID || !strings.EqualFold(view.Frequency, source.Bar) {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的数据集或周期已变化，请重新启用实例", name, task.ViewID)}
+			if !strings.EqualFold(view.Frequency, source.Bar) {
+				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的周期已变化，请重新启用实例", name, task.DatasetID)}
 			}
 			if missing := missingViewColumns(view, columns); len(missing) > 0 {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于来源 %s 的 View %s，请重新启用实例", strings.Join(missing, "、"), name, task.ViewID)}
+				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于来源 %s 的 View %s，请重新启用实例", strings.Join(missing, "、"), name, task.DatasetID)}
 			}
 			selected := make([]Subject, 0, len(subjects))
 			for _, id := range sortedKeys(subjects) {
 				selected = append(selected, Subject{SubjectID: id})
 			}
-			query := Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: period.StorageStart, End: period.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
+			query := Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: period.StorageStart, End: period.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
 			rows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
 			if err != nil {
 				return nil, err
 			}
-			revisions[view.ViewID] = revision
-			for _, market := range markets {
-				byMarket, err := sourceRowsOf(rows, resolved.Unified(), market, period.StorageStart)
-				if err != nil {
-					return nil, err
-				}
-				MergeSourceRows(frame.Markets[market].Rows, name, byMarket)
+			revisions[view.DatasetID] = revision
+			picked, err := sourceRowsOf(rows, period.StorageStart)
+			if err != nil {
+				return nil, err
 			}
+			MergeSourceRows(frame.Markets[market].Rows, name, picked)
 		}
 	}
 	return revisions, nil
 }
 
-// sourceRowsOf 从来源读回的行里取一个市场应读那一根（data_time 等于 start）的行，按标的归并；统一数据集按 series_tag 拆市场。
+// sourceRowsOf 从来源读回的行里取应读那一根（data_time 等于 start）的行，按标的归并。
 // 读到的不是应读的那一根（比应有的最新一根旧，即来源缺了一期）的行不取，这些标的的来源列按缺数处理。
-func sourceRowsOf(rows []Row, unified bool, market string, start time.Time) (map[string]Row, error) {
+func sourceRowsOf(rows []Row, start time.Time) (map[string]Row, error) {
 	picked := make([]Row, 0, len(rows))
 	for _, row := range rows {
-		if !row.DataTime.Equal(start) {
-			continue
+		if row.DataTime.Equal(start) {
+			picked = append(picked, row)
 		}
-		if unified && seriesset.SeriesTagMarket(row.SeriesTag) != market {
-			continue
-		}
-		picked = append(picked, row)
 	}
-	return groupRows(picked, unified, market)
+	return groupRows(picked)
 }
 
 // MergeSourceRows 把一个来源的行并进帧里一个市场的行：列名加上 来源名. 前缀；行的列表复制一份再改，不改动读回的原始行。

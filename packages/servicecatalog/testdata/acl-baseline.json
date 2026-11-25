@@ -1,13 +1,13 @@
 {
   "note": "批 4 T0 记下的服务目录访问控制基线：callers 是 Allowed(调用方, 服务, 方法) 为真的“服务/方法”集合，principals 是 PrincipalAllowed 为真的集合；host-gateway 是每台主机的网关（签名主机另由签名头给出）。改服务目录后重新生成并人工看差异，访问控制不得变宽。",
   "summary": {
-    "components": 18,
-    "services": 26,
-    "methods": 338,
-    "read_only_methods": 153,
-    "retryable_methods": 154,
-    "callers": 23,
-    "principals": 3
+    "components": 17,
+    "services": 24,
+    "methods": 298,
+    "read_only_methods": 138,
+    "retryable_methods": 140,
+    "callers": 21,
+    "principals": 2
   },
   "services": [
     {
@@ -38,12 +38,6 @@
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
-        },
-        {
-          "name": "ReportStatus",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
         }
       ]
     },
@@ -59,52 +53,9 @@
           "timeout_ms": 5000
         },
         {
-          "name": "GetConfigBackup",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetSetupStatus",
           "read_only": true,
           "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "PutConfigBackup",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        }
-      ]
-    },
-    {
-      "path": "trpc.moox.admin.SpaceMgr",
-      "component": "admin",
-      "console_name": "space",
-      "methods": [
-        {
-          "name": "CreateSpace",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "DeleteSpace",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ListSpaces",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "UpdateSpace",
-          "read_only": false,
-          "retryable": false,
           "timeout_ms": 5000
         }
       ]
@@ -175,12 +126,6 @@
           "timeout_ms": 30000
         },
         {
-          "name": "ImportArchiveFile",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 30000
-        },
-        {
           "name": "ListArchivePartitions",
           "read_only": true,
           "retryable": true,
@@ -199,25 +144,19 @@
           "timeout_ms": 30000
         },
         {
-          "name": "PrepareArchiveImport",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 30000
-        },
-        {
           "name": "PrepareArchiveTask",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 30000
         },
         {
-          "name": "PreviewArchiveSchedule",
-          "read_only": true,
-          "retryable": true,
+          "name": "RunArchiveTaskNow",
+          "read_only": false,
+          "retryable": false,
           "timeout_ms": 30000
         },
         {
-          "name": "RunArchiveTaskNow",
+          "name": "StartArchiveImport",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 30000
@@ -261,85 +200,6 @@
       ]
     },
     {
-      "path": "trpc.moox.callbackdispatcher.CallbackDispatcherService",
-      "component": "callback-dispatcher",
-      "console_name": "callback-dispatcher",
-      "methods": [
-        {
-          "name": "AcknowledgeEventExecution",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "CancelEventExecution",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "CreateEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "DeleteEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "GetEventExecution",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "GetEventRule",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "ListEventExecutions",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "ListEventRules",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "ListSubscribableEvents",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "RetryEventExecution",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "TestEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        },
-        {
-          "name": "UpdateEventRule",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 15000
-        }
-      ]
-    },
-    {
       "path": "trpc.moox.collector.CollectMgr",
       "component": "collector",
       "console_name": "collector",
@@ -376,12 +236,6 @@
         },
         {
           "name": "CompletePackageUpload",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ConfirmHistoryGaps",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -959,6 +813,12 @@
           "timeout_ms": 120000
         },
         {
+          "name": "ImportFactorCatalog",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
           "name": "ListFactorCategories",
           "read_only": true,
           "retryable": true,
@@ -1002,6 +862,12 @@
         },
         {
           "name": "PublishUdf",
+          "read_only": false,
+          "retryable": false,
+          "timeout_ms": 120000
+        },
+        {
+          "name": "PurgeResultDataset",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 120000
@@ -1148,7 +1014,7 @@
         },
         {
           "name": "GetHostPolicy",
-          "read_only": true,
+          "read_only": false,
           "retryable": true,
           "timeout_ms": 5000
         },
@@ -1318,12 +1184,6 @@
       "console_name": "sysdeploy",
       "methods": [
         {
-          "name": "DeleteHost",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetCatalog",
           "read_only": true,
           "retryable": true,
@@ -1348,19 +1208,7 @@
           "timeout_ms": 5000
         },
         {
-          "name": "SetDeploymentStatus",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "SetHostStatus",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "SyncHostDeployments",
+          "name": "SyncTopology",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -1422,12 +1270,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "BatchUpdateFields",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "CreateDataSource",
           "read_only": false,
           "retryable": false,
@@ -1440,25 +1282,7 @@
           "timeout_ms": 5000
         },
         {
-          "name": "CreateField",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "CreateFieldGroup",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "CreateSpace",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "CreateView",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -1476,12 +1300,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "DeleteFieldGroup",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "DeleteSpace",
           "read_only": false,
           "retryable": false,
@@ -1494,12 +1312,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "DeleteView",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "GetDataSource",
           "read_only": true,
           "retryable": true,
@@ -1507,18 +1319,6 @@
         },
         {
           "name": "GetDataset",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "GetField",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "GetFieldGroup",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -1537,12 +1337,6 @@
         },
         {
           "name": "GetTag",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "GetView",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -1572,18 +1366,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "ListFieldGroups",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ListFields",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
           "name": "ListSpaces",
           "read_only": true,
           "retryable": true,
@@ -1603,18 +1385,6 @@
         },
         {
           "name": "ListTags",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ListViewColumns",
-          "read_only": true,
-          "retryable": true,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "ListViews",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -1656,18 +1426,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "UpdateField",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "UpdateFieldGroup",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "UpdateSpace",
           "read_only": false,
           "retryable": false,
@@ -1675,12 +1433,6 @@
         },
         {
           "name": "UpdateSubjectAttributes",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
-          "name": "UpdateView",
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
@@ -1935,12 +1687,6 @@
           "timeout_ms": 5000
         },
         {
-          "name": "BlockInstrument",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 5000
-        },
-        {
           "name": "CancelOrder",
           "read_only": false,
           "retryable": false,
@@ -1981,12 +1727,6 @@
           "read_only": false,
           "retryable": false,
           "timeout_ms": 5000
-        },
-        {
-          "name": "FlattenInstrument",
-          "read_only": false,
-          "retryable": false,
-          "timeout_ms": 12000
         },
         {
           "name": "FlattenLogicalAccount",
@@ -2056,6 +1796,12 @@
         },
         {
           "name": "ListBlockedInstruments",
+          "read_only": true,
+          "retryable": true,
+          "timeout_ms": 5000
+        },
+        {
+          "name": "ListDelists",
           "read_only": true,
           "retryable": true,
           "timeout_ms": 5000
@@ -2216,7 +1962,6 @@
   "callers": {
     "admin": [],
     "archive-mgr": [
-      "trpc.moox.collector.CollectMgr/GetCollectorStatus",
       "trpc.moox.storage.Metadata/GetDataset"
     ],
     "archive-worker": [
@@ -2229,17 +1974,8 @@
       "trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
       "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
     ],
-    "callback-dispatcher": [
-      "trpc.moox.trade.TradeConsoleService/BlockInstrument",
-      "trpc.moox.trade.TradeConsoleService/FlattenInstrument",
-      "trpc.moox.trade.TradeConsoleService/GetOperatorAction",
-      "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
-      "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
-      "trpc.moox.trade.TradeConsoleService/UnblockInstrument"
-    ],
     "collector": [
       "trpc.moox.admin.ActivityLog/AppendActivityLogs",
-      "trpc.moox.admin.SpaceMgr/ListSpaces",
       "trpc.moox.collector.MarketFetchExecutor/Invoke",
       "trpc.moox.egress.Proxy/Do",
       "trpc.moox.ops.SecretMgr/GetCloudCredential",
@@ -2251,29 +1987,20 @@
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/ApplyTagSnapshot",
       "trpc.moox.storage.Metadata/CreateDataset",
-      "trpc.moox.storage.Metadata/CreateView",
       "trpc.moox.storage.Metadata/DeleteDataset",
-      "trpc.moox.storage.Metadata/DeleteView",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetField",
-      "trpc.moox.storage.Metadata/GetFieldGroup",
       "trpc.moox.storage.Metadata/GetSpace",
       "trpc.moox.storage.Metadata/GetSubject",
       "trpc.moox.storage.Metadata/GetTag",
-      "trpc.moox.storage.Metadata/GetView",
       "trpc.moox.storage.Metadata/ListDataSources",
       "trpc.moox.storage.Metadata/ListDatasetColumns",
       "trpc.moox.storage.Metadata/ListDatasetSubjects",
       "trpc.moox.storage.Metadata/ListDatasets",
-      "trpc.moox.storage.Metadata/ListFieldGroups",
-      "trpc.moox.storage.Metadata/ListFields",
       "trpc.moox.storage.Metadata/ListSpaces",
       "trpc.moox.storage.Metadata/ListSubjects",
       "trpc.moox.storage.Metadata/ListTagMembers",
       "trpc.moox.storage.Metadata/ListTags",
-      "trpc.moox.storage.Metadata/ListViewColumns",
-      "trpc.moox.storage.Metadata/ListViews",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.Metadata/SetTagMemberTradingStatus",
       "trpc.moox.storage.Metadata/UpdateDataset",
@@ -2287,7 +2014,6 @@
       "trpc.moox.storage.PrimaryStore/RegisterSeriesSnapshot",
       "trpc.moox.storage.PrimaryStore/UpsertFields"
     ],
-    "collector-operator": [],
     "collector-stream": [
       "trpc.moox.collector.StreamCollector/PullStreamPlan",
       "trpc.moox.collector.StreamCollector/ReportStreamPeriods",
@@ -2298,13 +2024,7 @@
     "console": [
       "trpc.moox.admin.ActivityLog/ListActivityLogs",
       "trpc.moox.admin.Setup/ApplySetup",
-      "trpc.moox.admin.Setup/GetConfigBackup",
       "trpc.moox.admin.Setup/GetSetupStatus",
-      "trpc.moox.admin.Setup/PutConfigBackup",
-      "trpc.moox.admin.SpaceMgr/CreateSpace",
-      "trpc.moox.admin.SpaceMgr/DeleteSpace",
-      "trpc.moox.admin.SpaceMgr/ListSpaces",
-      "trpc.moox.admin.SpaceMgr/UpdateSpace",
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/CreateArchiveTask",
@@ -2317,28 +2037,14 @@
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
       "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
-      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
       "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CancelEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/DeleteEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventExecutions",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventRules",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListSubscribableEvents",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/RetryEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/TestEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/UpdateEventRule",
       "trpc.moox.collector.CollectMgr/CancelKlineBackfill",
       "trpc.moox.collector.CollectMgr/CancelKlineResampleJob",
       "trpc.moox.collector.CollectMgr/CheckKline",
       "trpc.moox.collector.CollectMgr/ClearSourceAbsences",
       "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
       "trpc.moox.collector.CollectMgr/CompletePackageUpload",
-      "trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
       "trpc.moox.collector.CollectMgr/CreateCloudAccount",
       "trpc.moox.collector.CollectMgr/CreateTask",
       "trpc.moox.collector.CollectMgr/DeleteCloudAccount",
@@ -2447,48 +2153,32 @@
       "trpc.moox.storage.DataView/SearchRecordRows",
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/AddTagMembers",
-      "trpc.moox.storage.Metadata/BatchUpdateFields",
       "trpc.moox.storage.Metadata/CreateDataSource",
       "trpc.moox.storage.Metadata/CreateDataset",
-      "trpc.moox.storage.Metadata/CreateField",
-      "trpc.moox.storage.Metadata/CreateFieldGroup",
       "trpc.moox.storage.Metadata/CreateSpace",
-      "trpc.moox.storage.Metadata/CreateView",
       "trpc.moox.storage.Metadata/DeleteDataSource",
       "trpc.moox.storage.Metadata/DeleteDataset",
-      "trpc.moox.storage.Metadata/DeleteFieldGroup",
       "trpc.moox.storage.Metadata/DeleteSpace",
       "trpc.moox.storage.Metadata/DeleteTag",
-      "trpc.moox.storage.Metadata/DeleteView",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetField",
-      "trpc.moox.storage.Metadata/GetFieldGroup",
       "trpc.moox.storage.Metadata/GetSpace",
       "trpc.moox.storage.Metadata/GetSubject",
       "trpc.moox.storage.Metadata/GetTag",
-      "trpc.moox.storage.Metadata/GetView",
       "trpc.moox.storage.Metadata/ListDataSources",
       "trpc.moox.storage.Metadata/ListDatasetColumns",
       "trpc.moox.storage.Metadata/ListDatasetSubjects",
       "trpc.moox.storage.Metadata/ListDatasets",
-      "trpc.moox.storage.Metadata/ListFieldGroups",
-      "trpc.moox.storage.Metadata/ListFields",
       "trpc.moox.storage.Metadata/ListSpaces",
       "trpc.moox.storage.Metadata/ListSubjects",
       "trpc.moox.storage.Metadata/ListTagMembers",
       "trpc.moox.storage.Metadata/ListTags",
-      "trpc.moox.storage.Metadata/ListViewColumns",
-      "trpc.moox.storage.Metadata/ListViews",
       "trpc.moox.storage.Metadata/RemoveTagMembers",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.Metadata/SetTagMemberStatus",
       "trpc.moox.storage.Metadata/UpdateDataSource",
       "trpc.moox.storage.Metadata/UpdateDataset",
-      "trpc.moox.storage.Metadata/UpdateField",
-      "trpc.moox.storage.Metadata/UpdateFieldGroup",
       "trpc.moox.storage.Metadata/UpdateSpace",
-      "trpc.moox.storage.Metadata/UpdateView",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",
       "trpc.moox.storage.Metadata/UpsertSubject",
       "trpc.moox.storage.Metadata/UpsertTag",
@@ -2535,6 +2225,7 @@
       "trpc.moox.trade.TradeConsoleService/InspectExchangeCredential",
       "trpc.moox.trade.TradeConsoleService/ListAccountLedger",
       "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListDelists",
       "trpc.moox.trade.TradeConsoleService/ListFills",
       "trpc.moox.trade.TradeConsoleService/ListHoldings",
       "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
@@ -2587,29 +2278,20 @@
       "trpc.moox.storage.DataView/SearchRecordRows",
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/CreateDataset",
-      "trpc.moox.storage.Metadata/CreateView",
       "trpc.moox.storage.Metadata/DeleteDataset",
-      "trpc.moox.storage.Metadata/DeleteView",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetField",
-      "trpc.moox.storage.Metadata/GetFieldGroup",
       "trpc.moox.storage.Metadata/GetSpace",
       "trpc.moox.storage.Metadata/GetSubject",
       "trpc.moox.storage.Metadata/GetTag",
-      "trpc.moox.storage.Metadata/GetView",
       "trpc.moox.storage.Metadata/ListDataSources",
       "trpc.moox.storage.Metadata/ListDatasetColumns",
       "trpc.moox.storage.Metadata/ListDatasetSubjects",
       "trpc.moox.storage.Metadata/ListDatasets",
-      "trpc.moox.storage.Metadata/ListFieldGroups",
-      "trpc.moox.storage.Metadata/ListFields",
       "trpc.moox.storage.Metadata/ListSpaces",
       "trpc.moox.storage.Metadata/ListSubjects",
       "trpc.moox.storage.Metadata/ListTagMembers",
       "trpc.moox.storage.Metadata/ListTags",
-      "trpc.moox.storage.Metadata/ListViewColumns",
-      "trpc.moox.storage.Metadata/ListViews",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.Metadata/UpdateDataset",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",
@@ -2624,8 +2306,7 @@
       "trpc.moox.monitor.MonitorMgr/GetHostPolicy"
     ],
     "host-gateway": [
-      "trpc.moox.admin.GatewayControl/PullSnapshot",
-      "trpc.moox.admin.GatewayControl/ReportStatus"
+      "trpc.moox.admin.GatewayControl/PullSnapshot"
     ],
     "monitor": [
       "trpc.moox.archive.ArchiveMgr/GetArchiveOverview",
@@ -2635,14 +2316,9 @@
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
       "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
-      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.collector.CollectMgr/GetTaskResultInventory",
       "trpc.moox.collector.CollectMgr/ListTagSyncStatus",
-      "trpc.moox.hostagent.HostAgentMgr/GetSnapshot",
-      "trpc.moox.hostagent.HostAgentMgr/GetStatus",
-      "trpc.moox.hostagent.HostAgentMgr/RunOnce",
       "trpc.moox.ops.SysDeploy/GetCatalog",
-      "trpc.moox.ops.SysDeploy/GetHostRoutes",
       "trpc.moox.ops.SysDeploy/ListDeployments",
       "trpc.moox.ops.SysDeploy/ListHosts",
       "trpc.moox.storage.DataView/CountTimeSeriesRows",
@@ -2652,24 +2328,17 @@
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetField",
-      "trpc.moox.storage.Metadata/GetFieldGroup",
       "trpc.moox.storage.Metadata/GetSpace",
       "trpc.moox.storage.Metadata/GetSubject",
       "trpc.moox.storage.Metadata/GetTag",
-      "trpc.moox.storage.Metadata/GetView",
       "trpc.moox.storage.Metadata/ListDataSources",
       "trpc.moox.storage.Metadata/ListDatasetColumns",
       "trpc.moox.storage.Metadata/ListDatasetSubjects",
       "trpc.moox.storage.Metadata/ListDatasets",
-      "trpc.moox.storage.Metadata/ListFieldGroups",
-      "trpc.moox.storage.Metadata/ListFields",
       "trpc.moox.storage.Metadata/ListSpaces",
       "trpc.moox.storage.Metadata/ListSubjects",
       "trpc.moox.storage.Metadata/ListTagMembers",
       "trpc.moox.storage.Metadata/ListTags",
-      "trpc.moox.storage.Metadata/ListViewColumns",
-      "trpc.moox.storage.Metadata/ListViews",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
       "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
@@ -2680,10 +2349,6 @@
       "trpc.moox.admin.ActivityLog/ListActivityLogs",
       "trpc.moox.admin.Setup/ApplySetup",
       "trpc.moox.admin.Setup/GetSetupStatus",
-      "trpc.moox.admin.SpaceMgr/CreateSpace",
-      "trpc.moox.admin.SpaceMgr/DeleteSpace",
-      "trpc.moox.admin.SpaceMgr/ListSpaces",
-      "trpc.moox.admin.SpaceMgr/UpdateSpace",
       "trpc.moox.archive.ArchiveMgr/BackfillArchiveRange",
       "trpc.moox.archive.ArchiveMgr/CancelArchiveRun",
       "trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
@@ -2694,33 +2359,19 @@
       "trpc.moox.archive.ArchiveMgr/GetArchivePartition",
       "trpc.moox.archive.ArchiveMgr/GetArchiveRun",
       "trpc.moox.archive.ArchiveMgr/GetLifecycle",
-      "trpc.moox.archive.ArchiveMgr/ImportArchiveFile",
       "trpc.moox.archive.ArchiveMgr/ListArchivePartitions",
       "trpc.moox.archive.ArchiveMgr/ListArchiveRuns",
       "trpc.moox.archive.ArchiveMgr/ListArchiveTasks",
-      "trpc.moox.archive.ArchiveMgr/PrepareArchiveImport",
       "trpc.moox.archive.ArchiveMgr/PrepareArchiveTask",
-      "trpc.moox.archive.ArchiveMgr/PreviewArchiveSchedule",
       "trpc.moox.archive.ArchiveMgr/RunArchiveTaskNow",
+      "trpc.moox.archive.ArchiveMgr/StartArchiveImport",
       "trpc.moox.archive.ArchiveMgr/UpdateArchiveTask",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/AcknowledgeEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/CancelEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/DeleteEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/GetEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventExecutions",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListEventRules",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/ListSubscribableEvents",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/RetryEventExecution",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/TestEventRule",
-      "trpc.moox.callbackdispatcher.CallbackDispatcherService/UpdateEventRule",
       "trpc.moox.collector.CollectMgr/CancelKlineBackfill",
       "trpc.moox.collector.CollectMgr/CancelKlineResampleJob",
       "trpc.moox.collector.CollectMgr/CheckKline",
       "trpc.moox.collector.CollectMgr/ClearSourceAbsences",
       "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
       "trpc.moox.collector.CollectMgr/CompletePackageUpload",
-      "trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
       "trpc.moox.collector.CollectMgr/ControlLifecycle",
       "trpc.moox.collector.CollectMgr/CreateCloudAccount",
       "trpc.moox.collector.CollectMgr/CreateTask",
@@ -2793,6 +2444,7 @@
       "trpc.moox.factor.FactorMgr/GetRecalcJob",
       "trpc.moox.factor.FactorMgr/GetStatus",
       "trpc.moox.factor.FactorMgr/GetUdf",
+      "trpc.moox.factor.FactorMgr/ImportFactorCatalog",
       "trpc.moox.factor.FactorMgr/ListFactorCategories",
       "trpc.moox.factor.FactorMgr/ListFactorFunctions",
       "trpc.moox.factor.FactorMgr/ListFactorTasks",
@@ -2801,6 +2453,7 @@
       "trpc.moox.factor.FactorMgr/ListUdfs",
       "trpc.moox.factor.FactorMgr/PreviewFactor",
       "trpc.moox.factor.FactorMgr/PublishUdf",
+      "trpc.moox.factor.FactorMgr/PurgeResultDataset",
       "trpc.moox.factor.FactorMgr/RecalcFactors",
       "trpc.moox.factor.FactorMgr/RemoveTaskMember",
       "trpc.moox.factor.FactorMgr/SetFactorCategory",
@@ -2831,62 +2484,43 @@
       "trpc.moox.ops.SecretMgr/ListSecrets",
       "trpc.moox.ops.SecretMgr/ToggleSecretStatus",
       "trpc.moox.ops.SecretMgr/UpdateSecret",
-      "trpc.moox.ops.SysDeploy/DeleteHost",
       "trpc.moox.ops.SysDeploy/GetCatalog",
       "trpc.moox.ops.SysDeploy/GetHostRoutes",
       "trpc.moox.ops.SysDeploy/ListDeployments",
       "trpc.moox.ops.SysDeploy/ListHosts",
-      "trpc.moox.ops.SysDeploy/SetDeploymentStatus",
-      "trpc.moox.ops.SysDeploy/SetHostStatus",
-      "trpc.moox.ops.SysDeploy/SyncHostDeployments",
+      "trpc.moox.ops.SysDeploy/SyncTopology",
       "trpc.moox.storage.DataView/CountTimeSeriesRows",
       "trpc.moox.storage.DataView/GetViewState",
       "trpc.moox.storage.DataView/QueryTimeSeriesRows",
       "trpc.moox.storage.DataView/SearchRecordRows",
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/AddTagMembers",
-      "trpc.moox.storage.Metadata/BatchUpdateFields",
       "trpc.moox.storage.Metadata/CreateDataSource",
       "trpc.moox.storage.Metadata/CreateDataset",
-      "trpc.moox.storage.Metadata/CreateField",
-      "trpc.moox.storage.Metadata/CreateFieldGroup",
       "trpc.moox.storage.Metadata/CreateSpace",
-      "trpc.moox.storage.Metadata/CreateView",
       "trpc.moox.storage.Metadata/DeleteDataSource",
       "trpc.moox.storage.Metadata/DeleteDataset",
-      "trpc.moox.storage.Metadata/DeleteFieldGroup",
       "trpc.moox.storage.Metadata/DeleteSpace",
       "trpc.moox.storage.Metadata/DeleteTag",
-      "trpc.moox.storage.Metadata/DeleteView",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetField",
-      "trpc.moox.storage.Metadata/GetFieldGroup",
       "trpc.moox.storage.Metadata/GetSpace",
       "trpc.moox.storage.Metadata/GetSubject",
       "trpc.moox.storage.Metadata/GetTag",
-      "trpc.moox.storage.Metadata/GetView",
       "trpc.moox.storage.Metadata/ListDataSources",
       "trpc.moox.storage.Metadata/ListDatasetColumns",
       "trpc.moox.storage.Metadata/ListDatasetSubjects",
       "trpc.moox.storage.Metadata/ListDatasets",
-      "trpc.moox.storage.Metadata/ListFieldGroups",
-      "trpc.moox.storage.Metadata/ListFields",
       "trpc.moox.storage.Metadata/ListSpaces",
       "trpc.moox.storage.Metadata/ListSubjects",
       "trpc.moox.storage.Metadata/ListTagMembers",
       "trpc.moox.storage.Metadata/ListTags",
-      "trpc.moox.storage.Metadata/ListViewColumns",
-      "trpc.moox.storage.Metadata/ListViews",
       "trpc.moox.storage.Metadata/RemoveTagMembers",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.Metadata/SetTagMemberStatus",
       "trpc.moox.storage.Metadata/UpdateDataSource",
       "trpc.moox.storage.Metadata/UpdateDataset",
-      "trpc.moox.storage.Metadata/UpdateField",
-      "trpc.moox.storage.Metadata/UpdateFieldGroup",
       "trpc.moox.storage.Metadata/UpdateSpace",
-      "trpc.moox.storage.Metadata/UpdateView",
       "trpc.moox.storage.Metadata/UpsertDatasetColumn",
       "trpc.moox.storage.Metadata/UpsertSubject",
       "trpc.moox.storage.Metadata/UpsertTag",
@@ -2942,6 +2576,7 @@
       "trpc.moox.trade.TradeConsoleService/InspectExchangeCredential",
       "trpc.moox.trade.TradeConsoleService/ListAccountLedger",
       "trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+      "trpc.moox.trade.TradeConsoleService/ListDelists",
       "trpc.moox.trade.TradeConsoleService/ListFills",
       "trpc.moox.trade.TradeConsoleService/ListHoldings",
       "trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
@@ -2996,24 +2631,17 @@
       "trpc.moox.storage.DataView/WaitViewApplied",
       "trpc.moox.storage.Metadata/GetDataSource",
       "trpc.moox.storage.Metadata/GetDataset",
-      "trpc.moox.storage.Metadata/GetField",
-      "trpc.moox.storage.Metadata/GetFieldGroup",
       "trpc.moox.storage.Metadata/GetSpace",
       "trpc.moox.storage.Metadata/GetSubject",
       "trpc.moox.storage.Metadata/GetTag",
-      "trpc.moox.storage.Metadata/GetView",
       "trpc.moox.storage.Metadata/ListDataSources",
       "trpc.moox.storage.Metadata/ListDatasetColumns",
       "trpc.moox.storage.Metadata/ListDatasetSubjects",
       "trpc.moox.storage.Metadata/ListDatasets",
-      "trpc.moox.storage.Metadata/ListFieldGroups",
-      "trpc.moox.storage.Metadata/ListFields",
       "trpc.moox.storage.Metadata/ListSpaces",
       "trpc.moox.storage.Metadata/ListSubjects",
       "trpc.moox.storage.Metadata/ListTagMembers",
       "trpc.moox.storage.Metadata/ListTags",
-      "trpc.moox.storage.Metadata/ListViewColumns",
-      "trpc.moox.storage.Metadata/ListViews",
       "trpc.moox.storage.Metadata/ResolveSubjects",
       "trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
       "trpc.moox.storage.PrimaryStore/GetDatasetPeriodCompleted",
@@ -3028,12 +2656,6 @@
     ]
   },
   "principals": {
-    "collector-operator": [
-      "trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
-      "trpc.moox.collector.CollectMgr/ListSubjectExclusions",
-      "trpc.moox.collector.CollectMgr/SetSubjectExclusions",
-      "trpc.moox.collector.CollectMgr/SyncSubjects"
-    ],
     "moox-skill": [
       "trpc.moox.storage.PrimaryStore/ReadTimeSeriesRows"
     ],
@@ -3047,7 +2669,8 @@
       "component": "archive-worker",
       "port": 11428,
       "callers": [
-        "console"
+        "console",
+        "moox-cli"
       ]
     }
   ]

@@ -1,7 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { reactive } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 
 const mocks = vi.hoisted(() => ({
@@ -51,8 +51,8 @@ describe("collector task result page deep links", () => {
         {
           task_id: "known",
           task_name: "Known task",
-          create_time: "2026-10-01T00:00:00Z",
-          result: { view_id: "view-known", status: "active" }
+          created_at: "1790812800000",
+          result: { dataset_id: "dataset-known", status: "active" }
         }
       ],
       page: { page: 1, size: 100, total: 1 }
@@ -133,7 +133,7 @@ describe("collector task result page deep links", () => {
   it("renders only the View returned for a valid deep-linked task", async () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskDetail.mockResolvedValue({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
     });
     const wrapper = mount(TaskResultsPage, {
       global: {
@@ -143,14 +143,14 @@ describe("collector task result page deep links", () => {
           "a-empty": true,
           "a-spin": { template: "<div><slot /></div>" },
           "a-tabs": { template: "<div><slot /></div>" },
-          ViewBrowse: { props: ["viewIds"], template: "<div data-testid='view-browse'>{{ viewIds.join(',') }}</div>" }
+          ViewBrowse: { props: ["datasetIds"], template: "<div data-testid='view-browse'>{{ datasetIds.join(',') }}</div>" }
         }
       }
     });
     await flushPromises();
 
     expect(mocks.getTaskDetail).toHaveBeenCalledWith({ space_id: "crypto", task_id: "known" });
-    expect(wrapper.get("[data-testid='view-browse']").text()).toBe("view-known");
+    expect(wrapper.get("[data-testid='view-browse']").text()).toBe("dataset-known");
     wrapper.unmount();
   });
 
@@ -158,7 +158,7 @@ describe("collector task result page deep links", () => {
     mocks.routeQuery.resultTask = "known";
     mocks.routeQuery.keyword = "btc";
     mocks.getTaskDetail.mockResolvedValue({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
     });
     const wrapper = mount(TaskResultsPage, {
       global: { stubs: { "a-tabs": true, "a-alert": true, "a-empty": true, "a-spin": true, ViewBrowse: true } }
@@ -185,7 +185,7 @@ describe("collector task result page deep links", () => {
         ? {
             tasks: Array.from({ length: 100 }, (_, index) => ({
               task_id: `t${index}`,
-              create_time: "2026-10-01T00:00:00Z",
+              created_at: "1790812800000",
               result: { dataset_id: `ds_${index}` }
             })),
             page: { page: 1, size: 100, total: 101 }
@@ -198,7 +198,7 @@ describe("collector task result page deep links", () => {
           }
     );
     mocks.getTaskDetail.mockResolvedValue({
-      task: { task_id: "target", result: { dataset_id: "ds_5m", view_id: "v", status: "ready" } }
+      task: { task_id: "target", result: { dataset_id: "ds_5m", status: "ready" } }
     });
     const wrapper = mount(TaskResultsPage, {
       global: { stubs: { "a-alert": true, "a-empty": true, "a-spin": { template: "<div><slot /></div>" }, ViewBrowse: true } }
@@ -245,7 +245,7 @@ describe("collector task result page deep links", () => {
   it("rejects task detail metadata with a different task identity", async () => {
     mocks.routeQuery = reactive({ tab: "results", resultTask: "known" });
     mocks.getTaskDetail.mockResolvedValue({
-      task: { task_id: "other", task_name: "Other task", result: { view_id: "view-other", status: "ready" } }
+      task: { task_id: "other", task_name: "Other task", result: { dataset_id: "dataset-other", status: "ready" } }
     });
     const wrapper = mount(TaskResultsPage, {
       global: {
@@ -269,7 +269,7 @@ describe("collector task result page deep links", () => {
   it("refreshes the selected View rows together with its result metadata", async () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskDetail.mockResolvedValue({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
     });
     const wrapper = mount(TaskResultsPage, {
       global: {
@@ -285,22 +285,22 @@ describe("collector task result page deep links", () => {
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: {
             name: "ViewBrowse",
-            props: ["viewIds", "refreshKey"],
-            template: '<div data-testid="view-browse">{{ viewIds.join(",") }}:{{ refreshKey }}</div>'
+            props: ["datasetIds", "refreshKey"],
+            template: '<div data-testid="view-browse">{{ datasetIds.join(",") }}:{{ refreshKey }}</div>'
           }
         }
       }
     });
     await flushPromises();
 
-    expect(wrapper.get("[data-testid='view-browse']").text()).toBe("view-known:0");
+    expect(wrapper.get("[data-testid='view-browse']").text()).toBe("dataset-known:0");
     const refresh = wrapper.findAll("button").find(button => button.text().includes("刷新结果"));
     expect(refresh).toBeDefined();
     await refresh?.trigger("click");
     await flushPromises();
 
     expect(mocks.getTaskDetail).toHaveBeenCalledTimes(2);
-    expect(wrapper.get("[data-testid='view-browse']").text()).toBe("view-known:1");
+    expect(wrapper.get("[data-testid='view-browse']").text()).toBe("dataset-known:1");
     wrapper.unmount();
   });
 
@@ -308,10 +308,10 @@ describe("collector task result page deep links", () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskDetail
       .mockResolvedValueOnce({
-        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+        task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
       })
       .mockResolvedValueOnce({
-        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status } }
+        task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status } }
       });
     const wrapper = mount(TaskResultsPage, {
       global: {
@@ -346,12 +346,12 @@ describe("collector task result page deep links", () => {
     mocks.routeQuery.resultTask = "known";
     mocks.routeQuery.tab = "results";
     mocks.getTaskList.mockResolvedValue({
-      tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
+      tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({
-        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+        task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
       })
       .mockRejectedValueOnce(new Error("Storage is temporarily unavailable"));
     const wrapper = mount(TaskResultsPage, {
@@ -362,7 +362,7 @@ describe("collector task result page deep links", () => {
           "a-empty": true,
           "a-spin": { template: "<div><slot /></div>" },
           "a-tabs": { template: "<div><slot /></div>" },
-          ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
+          ViewBrowse: { template: '<div data-testid="view-browse">dataset-known</div>' }
         }
       }
     });
@@ -382,15 +382,15 @@ describe("collector task result page deep links", () => {
   it("clears the last View when task access is permanently rejected", async () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskList.mockResolvedValue({
-      tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
+      tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({
-        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+        task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
       })
       .mockRejectedValueOnce(
-        new ControlRequestError("task no longer exists", {
+        new RequestError("task no longer exists", {
           ret_info: { code: 5, msg: "task no longer exists" }
         })
       );
@@ -402,7 +402,7 @@ describe("collector task result page deep links", () => {
           "a-empty": true,
           "a-spin": { template: "<div><slot /></div>" },
           "a-tabs": { template: "<div><slot /></div>" },
-          ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
+          ViewBrowse: { template: '<div data-testid="view-browse">dataset-known</div>' }
         }
       }
     });
@@ -423,12 +423,12 @@ describe("collector task result page deep links", () => {
   it("clears the last View when the browser session expires", async () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskList.mockResolvedValue({
-      tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
+      tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({
-        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+        task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
       })
       .mockRejectedValueOnce(new AuthSessionExpiredError());
     const wrapper = mount(TaskResultsPage, {
@@ -439,7 +439,7 @@ describe("collector task result page deep links", () => {
           "a-empty": true,
           "a-spin": { template: "<div><slot /></div>" },
           "a-tabs": { template: "<div><slot /></div>" },
-          ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
+          ViewBrowse: { template: '<div data-testid="view-browse">dataset-known</div>' }
         }
       }
     });
@@ -460,15 +460,15 @@ describe("collector task result page deep links", () => {
   it("clears the last View when task detail identity does not match the request", async () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskList.mockResolvedValue({
-      tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
+      tasks: [{ task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail
       .mockResolvedValueOnce({
-        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+        task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
       })
       .mockResolvedValueOnce({
-        task: { task_id: "other", task_name: "Other task", result: { view_id: "view-other", status: "ready" } }
+        task: { task_id: "other", task_name: "Other task", result: { dataset_id: "dataset-other", status: "ready" } }
       });
     const wrapper = mount(TaskResultsPage, {
       global: {
@@ -478,7 +478,7 @@ describe("collector task result page deep links", () => {
           "a-empty": true,
           "a-spin": { template: "<div><slot /></div>" },
           "a-tabs": { template: "<div><slot /></div>" },
-          ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
+          ViewBrowse: { template: '<div data-testid="view-browse">dataset-known</div>' }
         }
       }
     });
@@ -498,7 +498,7 @@ describe("collector task result page deep links", () => {
   it("restores an explicit task selection when the resultTask query is cleared", async () => {
     mocks.routeQuery = reactive({ tab: "results", resultTask: "known" });
     mocks.getTaskDetail.mockResolvedValue({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      task: { task_id: "known", task_name: "Known task", result: { dataset_id: "dataset-known", status: "ready" } }
     });
     const wrapper = mount(TaskResultsPage, {
       global: {

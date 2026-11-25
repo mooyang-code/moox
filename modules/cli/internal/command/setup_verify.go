@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"slices"
 	"strings"
 	"time"
 
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
+
 	"github.com/spf13/cobra"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/verify"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
@@ -147,7 +148,7 @@ func runSetupVerify(ctx context.Context, source setupVerifySource, timeout, poll
 // setupVerifyGateway 同时用于直接调用和带空间头的 JSON 调用。
 type setupVerifyGateway interface {
 	gatewayclient.Invoker
-	adminclient.GatewayForwarder
+	rpcclient.GatewayForwarder
 }
 
 type setupVerifyReader struct {
@@ -292,9 +293,9 @@ func criticalAlertLines(items []doctorcli.AlertItem) []string {
 }
 
 // readStrategyInstances 读空间的策略实例。CLI 不依赖策略模块的协议包，这里按 JSON 取需要的字段。
-func readStrategyInstances(ctx context.Context, gateway adminclient.GatewayForwarder, spaceID string) ([]verify.Instance, error) {
+func readStrategyInstances(ctx context.Context, gateway rpcclient.GatewayForwarder, spaceID string) ([]verify.Instance, error) {
 	var rsp json.RawMessage
-	client := &adminclient.Client{Gateway: gateway, SpaceID: spaceID}
+	client := &rpcclient.Client{Gateway: gateway, SpaceID: spaceID}
 	if err := client.CallGatewayJSON(ctx, strategyMgr, "ListStrategyInstances", map[string]any{"space_id": spaceID, "page": map[string]any{"page": 1, "page_size": 100}}, &rsp); err != nil {
 		return nil, fmt.Errorf("read strategy instances: %w", err)
 	}

@@ -1,4 +1,4 @@
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 import { gatewayURL, gatewayWebSocketURL } from "@/api/gateway";
 
 // ========== 类型定义 ==========
@@ -8,7 +8,8 @@ export interface SftpFileItem {
   name: string;
   mode: string;
   size: number;
-  mod_time: string;
+  /** 修改时刻：Unix 毫秒的数字字符串 */
+  modified_at: string;
   type: "d" | "f";
 }
 
@@ -22,13 +23,13 @@ export interface PathBreadcrumb {
 // ========== SSH 会话 ==========
 
 export const createSSHSession = (data: { host_id: string }) =>
-  callControl<typeof data, { session_id?: string }>("ssh", "CreateSession", data);
+  call<typeof data, { session_id?: string }>("ssh", "CreateSession", data);
 
 export const disconnectSSHSession = (sessionId: string) =>
-  callControl<{ session_id: string }, Record<string, never>>("ssh", "DisconnectSession", { session_id: sessionId });
+  call<{ session_id: string }, Record<string, never>>("ssh", "DisconnectSession", { session_id: sessionId });
 
 export const resizeSSHTerminal = (sessionId: string, w: number, h: number) =>
-  callControl<{ session_id: string; w: number; h: number }, Record<string, never>>("ssh", "ResizeWindow", {
+  call<{ session_id: string; w: number; h: number }, Record<string, never>>("ssh", "ResizeWindow", {
     session_id: sessionId,
     w,
     h
@@ -37,17 +38,17 @@ export const resizeSSHTerminal = (sessionId: string, w: number, h: number) =>
 // ========== SFTP ==========
 
 export const sftpList = (sessionId: string, path: string) =>
-  callControl<{ session_id: string; path: string }, { files?: SftpFileItem[]; paths?: PathBreadcrumb[]; current_dir?: string }>(
+  call<{ session_id: string; path: string }, { files?: SftpFileItem[]; paths?: PathBreadcrumb[]; current_dir?: string }>(
     "ssh",
     "SftpList",
     { session_id: sessionId, path }
   );
 
 export const sftpMkdir = (sessionId: string, path: string) =>
-  callControl<{ session_id: string; path: string }, Record<string, never>>("ssh", "SftpMkdir", { session_id: sessionId, path });
+  call<{ session_id: string; path: string }, Record<string, never>>("ssh", "SftpMkdir", { session_id: sessionId, path });
 
 export const sftpDelete = (sessionId: string, path: string) =>
-  callControl<{ session_id: string; path: string }, Record<string, never>>("ssh", "SftpDelete", { session_id: sessionId, path });
+  call<{ session_id: string; path: string }, Record<string, never>>("ssh", "SftpDelete", { session_id: sessionId, path });
 
 // 文件下载/上传：/api/admin/ssh/SftpDownload|SftpUpload
 export const getSftpDownloadUrl = (sessionId: string, path: string) =>

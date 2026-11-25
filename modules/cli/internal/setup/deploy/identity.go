@@ -35,25 +35,6 @@ func controlAdminPaths(layout Layout) adminPaths {
 	}
 }
 
-// bootstrapTopology 是写进空库的全部主机与部署（含管理台终端用的 SSH 登录信息，所以按私有文件处理）。
-func bootstrapTopology(cfg *topology.Config) (hostbundle.Topology, error) {
-	result := hostbundle.Topology{Version: 1, ControlHostID: cfg.ControlHost().Name}
-	for _, host := range cfg.Hosts() {
-		components := slices.Clone(cfg.Deployments[host.Name])
-		slices.Sort(components)
-		entry := hostbundle.Host{HostID: host.Name, Label: host.Label, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Components: components, Reachability: host.Reachability, ExternalEntry: host.ExternalEntry}
-		ssh, err := host.ConsoleSSH()
-		if err != nil {
-			return result, err
-		}
-		if ssh != nil {
-			entry.SSH = &hostbundle.SSH{Port: ssh.Port, User: ssh.User, AuthType: "private_key", Secret: ssh.PrivateKey}
-		}
-		result.Hosts = append(result.Hosts, entry)
-	}
-	return result, nil
-}
-
 // runAdmin 在控制机上执行一条 moox-admin-cli 命令，把标准输出的一个 JSON 文档解到 out。
 func runAdmin(ctx context.Context, control setupssh.Client, what string, argv []string, stdin io.Reader, out any) error {
 	output, err := control.Run(ctx, argv, stdin)
@@ -104,12 +85,12 @@ func readCurrentKeys(ctx context.Context, target setupssh.Client, layout Layout,
 }
 
 // bootstrapControl 在控制机上执行 moox-admin-cli bootstrap：建库、CA、主密钥、登记这台电脑的 moox-cli 公钥，
-// 再补 EventBus 凭据与初始管理员，这些只建不改；主机与部署按 moox.toml 同步（地址等会更新，启停状态保留）。返回控制机自己的身份包清单。
+// 再执行 eventbus-credentials ensure 与 user ensure 补 EventBus 凭据与初始管理员，这些只建不改；主机与部署连同启停状态按 moox.toml 整份覆盖。返回控制机自己的身份包清单。
 func bootstrapControl(ctx context.Context, control setupssh.Client, cfg *topology.Config, admin topology.Admin, operatorPublicKey string, current currentKeys, stage string) (hostbundle.Metadata, error) {
 	var metadata hostbundle.Metadata
 	layout := Layout{Root: cfg.Paths.DeployRoot}
 	paths := controlAdminPaths(layout)
-	plan, err := bootstrapTopology(cfg)
+	plan, err := cfg.Declared()
 	if err != nil {
 		return metadata, err
 	}
@@ -251,7 +232,7 @@ func ListIdentityKeys(ctx context.Context, control setupssh.Client, cfg *topolog
 	return listing.Identities, nil
 }
 
-// RegisterIdentity 经 SSH 在控制机上登记（或替换）一个不属于主机的身份的公钥：moox-cli、moox-skill、collector-operator。
+// RegisterIdentity 经 SSH 在控制机上登记（或替换）一个不属于主机的身份的公钥：moox-cli、moox-skill。
 // 信任根是这台电脑到控制机的 SSH：能 SSH 上控制机就能登记。各网关在下一次取快照时（几秒内）认新公钥，旧私钥随即作废。
 func RegisterIdentity(ctx context.Context, control setupssh.Client, cfg *topology.Config, identity, publicKey string) error {
 	if _, err := gatewayauth.ParsePublicKey(publicKey); err != nil {

@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // LedgerPeriodCompleted 是序列账本判定出的周期完成结果（source=ledger），由 storage-primary 自己在周期封口时生成。
@@ -26,10 +25,8 @@ type LedgerPeriodCompleted struct {
 	SnapshotRef        string
 	UniverseSubjectIDs []string
 	FailedSubjects     []string
-	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的全集与失败名单。
-	UniverseSeries []*storageeventpb.SeriesRef
-	FailedSeries   []*storageeventpb.SeriesRef
-	CompletedAt    *timestamppb.Timestamp
+	// CompletedAt 是判定完成的时刻（Unix 毫秒）。
+	CompletedAt int64
 }
 
 // BuildLedgerPeriodCompletedMessage 把账本的判定结果构造成 DatasetPeriodCompleted（source=ledger）事件。
@@ -42,8 +39,6 @@ func BuildLedgerPeriodCompletedMessage(spaceID string, completed *LedgerPeriodCo
 		Status: completed.Status, Source: "ledger", SnapshotRef: completed.SnapshotRef,
 		UniverseSubjectIds: normalizedIDs(completed.UniverseSubjectIDs),
 		FailedSubjects:     normalizedIDs(completed.FailedSubjects),
-		UniverseSeries:     normalizedSeries(completed.UniverseSeries),
-		FailedSeries:       normalizedSeries(completed.FailedSeries),
 		CompletedAt:        completed.CompletedAt,
 	}
 	encodedPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
@@ -52,7 +47,7 @@ func BuildLedgerPeriodCompletedMessage(spaceID string, completed *LedgerPeriodCo
 	}
 	payloadHash := sha256.Sum256(encodedPayload)
 	eventID := stableMarkerID("period-completed", "ledger", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
-	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
+	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), time.UnixMilli(payload.GetCompletedAt()), payload)
 }
 
 // BuildProducerPeriodCompletedMessage 把写入方报告的周期完成构造成 DatasetPeriodCompleted（source=producer）事件；
@@ -66,13 +61,11 @@ func BuildProducerPeriodCompletedMessage(spaceID string, marker *pb.DatasetPerio
 		Status: marker.GetStatus(), Source: "producer",
 		UniverseSubjectIds: append([]string(nil), marker.GetUniverseSubjectIds()...),
 		FailedSubjects:     append([]string(nil), marker.GetFailedSubjects()...),
-		UniverseSeries:     markerSeriesToEvent(marker.GetUniverseSeries()),
-		FailedSeries:       markerSeriesToEvent(marker.GetFailedSeries()),
 		CauseEventId:       marker.GetCauseEventId(), CompletedAt: marker.GetCompletedAt(),
 		DetailType: marker.GetDetailType(), Detail: append([]byte(nil), marker.GetDetail()...),
 	}
 	eventID := stableMarkerID("producer-period", spaceID, payload.GetDatasetId(), payload.GetCauseEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
-	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
+	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), time.UnixMilli(payload.GetCompletedAt()), payload)
 }
 
 func buildMarkerMessage(event events.Event, eventID, spaceID, subjectID string, occurredAt time.Time, payload proto.Message) ([]byte, string, error) {
@@ -89,13 +82,6 @@ func buildMarkerMessage(event events.Event, eventID, spaceID, subjectID string, 
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
 	return raw, eventID, err
-}
-
-func markerTime(value *timestamppb.Timestamp) time.Time {
-	if value == nil {
-		return time.Time{}
-	}
-	return value.AsTime().UTC()
 }
 
 func stableMarkerID(parts ...string) string {
@@ -115,49 +101,6 @@ func normalizedIDs(values []string) []string {
 		out = append(out, value)
 	}
 	sort.Strings(out)
-	return out
-}
-
-// normalizedSeries 去掉空项与重复项，按（标的、series_tag）排序；没有序列时返回 nil。
-func normalizedSeries(values []*storageeventpb.SeriesRef) []*storageeventpb.SeriesRef {
-	type key struct{ subject, tag string }
-	unique := make(map[key]struct{}, len(values))
-	out := make([]*storageeventpb.SeriesRef, 0, len(values))
-	for _, value := range values {
-		if value == nil {
-			continue
-		}
-		item := key{strings.TrimSpace(value.GetSubjectId()), strings.TrimSpace(value.GetSeriesTag())}
-		if item.subject == "" || item.tag == "" {
-			continue
-		}
-		if _, exists := unique[item]; exists {
-			continue
-		}
-		unique[item] = struct{}{}
-		out = append(out, &storageeventpb.SeriesRef{SubjectId: item.subject, SeriesTag: item.tag})
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SubjectId != out[j].SubjectId {
-			return out[i].SubjectId < out[j].SubjectId
-		}
-		return out[i].SeriesTag < out[j].SeriesTag
-	})
-	return out
-}
-
-// markerSeriesToEvent 把 Storage RPC 形态的序列名单转成事件形态。
-func markerSeriesToEvent(values []*pb.SeriesRef) []*storageeventpb.SeriesRef {
-	out := make([]*storageeventpb.SeriesRef, 0, len(values))
-	for _, value := range values {
-		out = append(out, &storageeventpb.SeriesRef{SubjectId: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()})
-	}
-	if len(out) == 0 {
-		return nil
-	}
 	return out
 }
 

@@ -17,8 +17,8 @@ type memWorkers struct{ worker *store.StreamWorker }
 
 func (w *memWorkers) Get(context.Context, string) (*store.StreamWorker, error) { return w.worker, nil }
 
-func (w *memWorkers) apply(id int64, stage string) {
-	w.worker = &store.StreamWorker{SpaceID: "crypto", InstanceID: "i", Applied: mustJSON(StreamApplied{ID: id, Stage: stage}), Status: "{}", HeartbeatAt: time.Now()}
+func (w *memWorkers) apply(id int64) {
+	w.worker = &store.StreamWorker{SpaceID: "crypto", InstanceID: "i", Applied: mustJSON(StreamApplied{ID: id}), Status: "{}", HeartbeatAt: time.Now()}
 }
 
 type ingestHarness struct {
@@ -71,22 +71,26 @@ func (h *ingestHarness) newReconciler() *PlanReconciler {
 // lose 让 collector-stream 失联：不再确认，心跳超时。
 func (h *ingestHarness) lose() { h.workers.worker, h.offline = nil, true }
 
-// settle 推进时间并让 collector-stream 跟上，直到没有未生效的计划；返回生效的计划记录。
+// settle 推进时间并让 collector-stream 跟上，直到没有未生效的计划、已生效状态里没有待裁的旧份与停止份、各数据集都已到生效点；
+// 返回期间最后一份计划记录（没有新计划时为 nil）。
 func (h *ingestHarness) settle(confirmStream bool) *store.FetchPlanRecord {
 	h.t.Helper()
 	var last *store.FetchPlanRecord
-	for i := 0; i < 400; i++ {
+	for i := 0; i < 2000; i++ {
 		require.NoError(h.t, h.reconcile(h.r))
-		open := h.open()
-		if open == nil {
+		if open := h.open(); open != nil {
+			progress, err := decodeFetchPlanProgress(open.Progress)
+			require.NoError(h.t, err)
+			if confirmStream && progress.StreamPushed {
+				h.workers.apply(open.ID)
+			}
+		} else if h.converged() {
+			if record := h.lastRecord(); last == nil || record.ID != last.ID {
+				last = record
+			}
 			return last
 		}
-		last = open
-		progress, err := decodeFetchPlanProgress(open.Progress)
-		require.NoError(h.t, err)
-		if confirmStream && progress.StreamStage != "" {
-			h.workers.apply(open.ID, progress.StreamStage)
-		}
+		last = h.lastRecord()
 		h.now = h.now.Add(20 * time.Second)
 	}
 	h.t.Fatal("plan did not settle")
@@ -94,10 +98,7 @@ func (h *ingestHarness) settle(confirmStream bool) *store.FetchPlanRecord {
 }
 
 func (h *ingestHarness) applied() *FetchPlanContent {
-	record, err := h.store.LatestApplied(context.Background(), "crypto")
-	require.NoError(h.t, err)
-	require.NotNil(h.t, record)
-	return h.content(record)
+	return h.appliedContent()
 }
 
 const (
@@ -108,7 +109,7 @@ const (
 	localItem    = "local-crypto-spot"
 )
 
-// 新部署：默认 stream 的数据集直接进推送项，截止直接是 1m 5 秒、1h 8 秒，不经过 drain。
+// 新部署：默认 stream 的数据集直接进推送项，截止直接是 1m 5 秒、1h 8 秒，不经过交接。
 func TestFreshDeploymentPutsDefaultStreamDatasetsOnTheStreamItem(t *testing.T) {
 	h := newIngestHarness(t, ingestStream, "1m", "1h")
 	h.settle(true)
@@ -116,7 +117,7 @@ func TestFreshDeploymentPutsDefaultStreamDatasetsOnTheStreamItem(t *testing.T) {
 	require.Equal(t, marketfetch.PlanExecutorStreaming, content.Functions[streamItem].Executor)
 	require.Len(t, content.Functions, 1, "没有 SCF 函数")
 	require.Empty(t, h.cloudTimers())
-	plan := content.FinalPlan(content.Functions[streamItem])
+	plan := content.Functions[streamItem].Target
 	require.Equal(t, marketfetch.PlanExecutorStreaming, plan.Executor)
 	require.Len(t, plan.Datasets[0].Copies[0].Subjects, 60)
 	require.NoError(t, plan.Validate())
@@ -124,6 +125,8 @@ func TestFreshDeploymentPutsDefaultStreamDatasetsOnTheStreamItem(t *testing.T) {
 	require.Equal(t, 8, h.lateness.values["ds_spot_1h"])
 }
 
+// 交接：计划下发确认就生效；截止由之后每轮对账在“新份 From + 旧截止 + 余量”时改（幂等），改成功的那一轮裁掉旧份；
+// 数据集都移走后，旧执行端的函数在最后一个旧份过窗口后停定时器。
 func TestHandoffPullToStreamAndBack(t *testing.T) {
 	h := newIngestHarness(t, ingestSCF, "1m", "1h")
 	h.settle(true)
@@ -136,88 +139,124 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 	registered := len(h.registrar.registered["ds_spot_1m|1m"])
 	require.NoError(t, h.reconcile(h.r))
 	record := h.open()
-	require.NotNil(t, record)
+	require.NotNil(t, record, "stream 还没确认")
 	content := h.content(record)
 	minute, hour := content.Datasets["ds_spot_1m|1m"], content.Datasets["ds_spot_1h|1h"]
-	require.True(t, minute.Changed)
-	require.False(t, minute.HashChanged)
+	require.Equal(t, PlanActionAppend, minute.Action)
+	require.False(t, minute.Register)
 	require.GreaterOrEqual(t, minute.P, h.now.Add(planLeadTimeHandoff).Unix())
-	require.Equal(t, marketfetch.PlanExecutorSCF, minute.OldIngest)
-	require.Equal(t, 15, minute.OldLatenessS)
+	require.Equal(t, minute.P, minute.HandoffFrom())
+	require.Equal(t, DatasetCopy{From: minute.Copies[0].From, Hash: minute.Hash, Count: 60, LatenessS: 15, Ingest: ingestSCF}, minute.Copies[0])
+	require.Equal(t, 5, minute.Copies[1].LatenessS)
 	require.Equal(t, 5, minute.LatenessS)
 	require.Equal(t, 8, hour.LatenessS)
 	require.Len(t, h.registrar.registered["ds_spot_1m|1m"], registered, "交接不重新登记快照")
-	require.Equal(t, 15, h.lateness.values["ds_spot_1m"], "截止在 drain 才改")
+	require.Equal(t, 15, h.lateness.values["ds_spot_1m"], "截止不在建计划时改")
 	// 旧执行端那一份按旧截止，新执行端那一份按新截止。
-	stream := content.TransitionalPlan(content.Functions[streamItem])
+	stream := content.Functions[streamItem].Target
 	require.Equal(t, 5, findPlanDataset(stream, "ds_spot_1m|1m").LatenessS)
 	require.Equal(t, minute.P, findPlanDataset(stream, "ds_spot_1m|1m").Copies[0].From)
 	for _, name := range scfNames {
-		old := content.TransitionalPlan(content.Functions[name])
+		old := content.Functions[name].Target
 		require.Equal(t, 15, findPlanDataset(old, "ds_spot_1m|1m").LatenessS, name)
 		require.Empty(t, lastCopy(findPlanDataset(old, "ds_spot_1m|1m")).Subjects, "P 起旧执行端为空")
 	}
-	// stream 没确认前不算下发完成。
+	// stream 确认就生效，不等任何窗口。
 	progress, _ := decodeFetchPlanProgress(record.Progress)
-	require.Equal(t, StreamStageTransition, progress.StreamStage)
-	require.False(t, progress.Transitioned[streamItem])
-	h.workers.apply(record.ID, StreamStageTransition)
+	require.True(t, progress.StreamPushed)
+	require.False(t, progress.Pushed[streamItem])
+	h.workers.apply(record.ID)
 	require.NoError(t, h.reconcile(h.r))
-	progress, _ = decodeFetchPlanProgress(h.open().Progress)
-	require.True(t, progress.Transitioned[streamItem])
+	require.Nil(t, h.open(), "交接计划下发确认就生效")
+	require.Equal(t, minute.P, h.applied().Datasets["ds_spot_1m|1m"].HandoffFrom(), "已生效状态里读得出交接生效点")
 
-	// 截止按数据集在各自窗口里改：1m 在 P + 旧截止 + 余量之后、P 收盘之前（对账在 P+10 秒那一轮里等到可改时刻）。
+	// 1m 的截止在 P + 旧截止 + 余量改（对账在 P+10 秒那一轮里等到可改时刻），同一轮裁掉旧份。
 	h.now = time.Unix(minute.P, 0).Add(10 * time.Second)
 	h.r = h.newReconciler() // Collector 重启后续跑
 	require.NoError(t, h.reconcile(h.r))
-	require.NotNil(t, h.open())
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"], "1m 在自己的窗口里改，不等 1h")
-	require.False(t, h.now.Before(time.Unix(minute.P, 0).Add(15*time.Second+planFinalizeMargin)), "不早于旧周期都已建立")
+	require.False(t, h.now.Before(time.Unix(minute.P, 0).Add(15*time.Second+copyWindowMargin)), "不早于旧周期都已建立")
 	require.True(t, h.now.Before(time.Unix(minute.P, 0).Add(time.Minute)), "在新执行端第一个周期建立之前")
 	require.Equal(t, 15, h.lateness.values["ds_spot_1h"])
-	// 1h 的旧周期在 drain 结束前不停用：WindowEnd 按旧截止算到 1h 的 P。
-	h.now = time.Unix(hour.P, 0).Add(15*time.Second + planFinalizeMargin - time.Second)
-	require.NoError(t, h.reconcile(h.r))
-	require.Equal(t, 8, h.lateness.values["ds_spot_1h"], "1h 的可改时刻在本轮等待范围内，等到之后就改")
-	h.now = h.now.Add(2 * time.Second)
-	require.NoError(t, h.reconcile(h.r))
-	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
-	require.Equal(t, 8, h.lateness.values["ds_spot_1h"])
+	require.Len(t, h.applied().Datasets["ds_spot_1m|1m"].Copies, 1, "截止改成功的那一轮裁掉 1m 旧份")
 	for _, name := range scfNames {
-		require.False(t, h.timerEnabled(name), "drain 结束后才停用 %s 的定时器", name)
+		require.True(t, h.timerEnabled(name), "1h 旧份还在，%s 照常运行", name)
 	}
-	// stream 的过渡计划只有从 P 起的一份，与最终计划相同，不需要再确认一次。
+	// 1h：可改时刻在本轮等待范围内，等到之后就改，随即裁掉旧份；旧执行端函数没有数据集了，停定时器。
+	h.now = time.Unix(hour.P, 0).Add(15*time.Second + copyWindowMargin - time.Second)
+	require.NoError(t, h.reconcile(h.r))
+	require.Equal(t, 8, h.lateness.values["ds_spot_1h"])
+	require.Equal(t, 5, h.lateness.values["ds_spot_1m"], "截止取当前期望，不会改回旧值")
 	require.Nil(t, h.open())
-	applied := h.applied()
-	require.Len(t, applied.Functions[streamItem].New.Datasets, 2)
+	for _, name := range scfNames {
+		require.False(t, h.timerEnabled(name), "最后一个旧份过窗口后停用 %s 的定时器", name)
+		require.Nil(t, h.applied().Functions[name].Target)
+	}
+	require.Len(t, h.applied().Functions[streamItem].Target.Datasets, 2)
 
-	// 下一份普通计划不会把属性改回旧值。
+	// 之后的计划不会把属性改回旧值。
 	h.now = h.now.Add(time.Hour)
 	require.NoError(t, h.reconcile(h.r))
 	require.Nil(t, h.open())
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 
-	// 切回 scf：截止 5 → 15 同样在 drain 才改。
+	// 切回 scf：截止 5 → 15 同样不在建计划时改。
 	h.setIngest("ds_spot_1m", ingestSCF)
 	require.NoError(t, h.reconcile(h.r))
-	content = h.content(h.open())
-	require.Equal(t, marketfetch.PlanExecutorStreaming, content.Datasets["ds_spot_1m|1m"].OldIngest)
-	require.Equal(t, 5, content.Datasets["ds_spot_1m|1m"].OldLatenessS)
+	content = h.content(h.lastRecord())
+	require.Equal(t, ingestStream, content.Datasets["ds_spot_1m|1m"].Copies[0].Ingest)
+	require.Equal(t, 5, content.Datasets["ds_spot_1m|1m"].Copies[0].LatenessS)
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 	require.Equal(t, 8, h.lateness.values["ds_spot_1h"], "未切换的数据集不动")
 	h.settle(true)
 	require.Equal(t, 15, h.lateness.values["ds_spot_1m"])
-	applied = h.applied()
-	require.Len(t, applied.Functions[streamItem].New.Datasets, 1, "stream 只保留 1h")
+	applied := h.applied()
+	require.Len(t, applied.Functions[streamItem].Target.Datasets, 1, "stream 只保留 1h")
 	scfCount := 0
 	for _, function := range applied.Functions {
-		if function.IsSCF() && function.New != nil {
+		if function.IsSCF() && function.Target != nil {
 			scfCount++
-			require.Len(t, function.New.Datasets, 1, "SCF 只拿采集方式是 scf 的数据集")
-			require.Equal(t, "ds_spot_1m", function.New.Datasets[0].DatasetID)
+			require.Len(t, function.Target.Datasets, 1, "SCF 只拿采集方式是 scf 的数据集")
+			require.Equal(t, "ds_spot_1m", function.Target.Datasets[0].DatasetID)
 		}
 	}
 	require.Positive(t, scfCount)
+}
+
+// 交接截止调用失败时旧份不裁（按等待处理）；成功后裁掉旧份。期间别的数据集的变化照常建计划。
+func TestHandoffKeepsTheOldCopyUntilTheLatenessCallSucceeds(t *testing.T) {
+	h := newIngestHarness(t, ingestSCF, "1m", "1h")
+	h.settle(true)
+	h.setIngest("ds_spot_1m", ingestStream)
+	require.NoError(t, h.reconcile(h.r))
+	record := h.open()
+	require.NotNil(t, record)
+	p := h.content(record).Datasets["ds_spot_1m|1m"].P
+	h.workers.apply(record.ID)
+	require.NoError(t, h.reconcile(h.r))
+	require.Nil(t, h.open())
+
+	h.lateness.failFor = map[string]bool{"ds_spot_1m": true}
+	h.now = time.Unix(p, 0).Add(30 * time.Second)
+	require.Error(t, h.reconcile(h.r), "截止改不成功按失败上报")
+	require.Len(t, h.applied().Datasets["ds_spot_1m|1m"].Copies, 2, "截止没改成功，旧份不裁")
+	require.Equal(t, 15, h.lateness.values["ds_spot_1m"])
+
+	// 期间 1h 的标的变了：照常建计划（1m 本轮等待，不随它变化）。
+	h.setSubjects(61)
+	h.now = h.now.Add(20 * time.Second)
+	require.Error(t, h.reconcile(h.r))
+	latest := h.content(h.lastRecord())
+	require.Equal(t, PlanActionAppend, latest.Datasets["ds_spot_1h|1h"].Action, "别的数据集的变化照常建计划")
+	require.Equal(t, PlanActionKeep, latest.Datasets["ds_spot_1m|1m"].Action)
+	require.Len(t, latest.Datasets["ds_spot_1m|1m"].Copies, 2)
+	require.Contains(t, h.r.Issue(), "set allowed lateness")
+
+	h.lateness.failFor = nil
+	h.now = h.now.Add(20 * time.Second)
+	h.settle(true)
+	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
+	require.Len(t, h.applied().Datasets["ds_spot_1m|1m"].Copies, 1, "成功后裁掉旧份")
 }
 
 // local（本地执行端定时拉取）：不建 SCF 函数，分配写成 local 项。
@@ -279,8 +318,9 @@ func TestSubjectChangeIsNotStuckOnAnOfflineStreamWorker(t *testing.T) {
 	require.Equal(t, stuckP, h.applied().Datasets["ds_spot_1m|1m"].P)
 	h.setIngest("ds_spot_1m", ingestSCF)
 	require.NoError(t, h.reconcile(h.r))
-	handoff := h.content(h.open())
-	require.Equal(t, ingestStream, handoff.Datasets["ds_spot_1m|1m"].OldIngest, "交接随即开始")
+	handoff := h.content(h.lastRecord())
+	require.Equal(t, ingestStream, handoff.Datasets["ds_spot_1m|1m"].Copies[0].Ingest, "交接随即开始")
+	require.Positive(t, handoff.Datasets["ds_spot_1m|1m"].HandoffFrom())
 	h.settle(false)
 	require.Nil(t, h.open())
 }
@@ -311,14 +351,12 @@ func TestOfflineReleaseWaitsUntilTheCollectorHasBeenUpForOneHeartbeatTimeout(t *
 	h.settle(true)
 	h.lose()
 	h.setIngest("ds_spot_1m", ingestSCF)
+	// Collector 刚重启：新进程不满 180 秒，照样等确认。
+	h.startedAt = h.now
+	h.r = h.newReconciler()
 	require.NoError(t, h.reconcile(h.r))
 	record := h.open()
 	require.NotNil(t, record)
-	p := time.Unix(h.content(record).Datasets["ds_spot_1m|1m"].P, 0)
-	// Collector 在旧窗口结束之后才重启：新进程不满 180 秒，照样等确认。
-	h.now = p.Add(time.Minute)
-	h.startedAt = h.now
-	h.r = h.newReconciler()
 	for i := 0; i < 8; i++ {
 		require.NoError(t, h.reconcile(h.r))
 		require.Equal(t, record.ID, h.open().ID, "启动 %s 时不按离线放行", h.now.Sub(h.startedAt))
@@ -336,17 +374,28 @@ func TestHandoffWaitsForAPendingSubjectChange(t *testing.T) {
 	h.setSubjects(62)
 	h.setIngest("ds_spot_1m", ingestStream)
 	require.NoError(t, h.reconcile(h.r))
-	first := h.content(h.open())
-	require.True(t, first.Datasets["ds_spot_1m|1m"].HashChanged)
-	require.Empty(t, first.Datasets["ds_spot_1m|1m"].OldIngest)
+	first := h.content(h.lastRecord())
+	require.True(t, first.Datasets["ds_spot_1m|1m"].Register)
+	require.Zero(t, first.Datasets["ds_spot_1m|1m"].HandoffFrom())
 	require.Nil(t, first.Functions[streamItem], "这份计划不含交接")
-	h.settle(true)
+	require.Nil(t, h.open())
+	// 交接要再加一份，而旧份还在窗口里：等（W），不建计划。
+	firstID := h.lastRecord().ID
 	require.NoError(t, h.reconcile(h.r))
-	second := h.content(h.open())
-	require.False(t, second.Datasets["ds_spot_1m|1m"].HashChanged)
-	require.Equal(t, marketfetch.PlanExecutorSCF, second.Datasets["ds_spot_1m|1m"].OldIngest)
+	require.Equal(t, firstID, h.lastRecord().ID)
+	require.Contains(t, h.r.Issue(), "等旧份窗口结束")
+	// 旧份过窗口那一轮：同一份计划里裁掉旧份并加上交接的一份。
+	h.now = time.Unix(first.Datasets["ds_spot_1m|1m"].P, 0).Add(15*time.Second + copyWindowMargin)
+	require.NoError(t, h.reconcile(h.r))
+	second := h.content(h.lastRecord())
+	require.NotEqual(t, firstID, h.lastRecord().ID)
+	require.True(t, second.Datasets["ds_spot_1m|1m"].Trimmed)
+	require.Equal(t, PlanActionAppend, second.Datasets["ds_spot_1m|1m"].Action)
+	require.False(t, second.Datasets["ds_spot_1m|1m"].Register)
+	require.Equal(t, ingestSCF, second.Datasets["ds_spot_1m|1m"].Copies[0].Ingest)
+	require.Positive(t, second.Datasets["ds_spot_1m|1m"].HandoffFrom())
 	h.settle(true)
-	require.Len(t, h.applied().Functions[streamItem].New.Datasets[0].Copies[0].Subjects, 62)
+	require.Len(t, h.applied().Functions[streamItem].Target.Datasets[0].Copies[0].Subjects, 62)
 }
 
 // 推送计划里交易对与 symbol 不同的标的带 pairs；SCF 函数的计划不带。
@@ -365,17 +414,6 @@ func TestStreamPlanCarriesPairsOnly(t *testing.T) {
 			require.NotContains(t, string(raw), "executor", name)
 		}
 	}
-}
-
-// 截止的可改窗口：旧周期都已建立之后（P + 旧截止 + 余量）、新执行端第一个周期收盘之前（P 加一个周期）。
-func TestHandoffLatenessWindow(t *testing.T) {
-	p := time.Date(2026, 10, 21, 8, 37, 0, 0, time.UTC)
-	due, deadline := handoffLatenessDue(&PlanDatasetChange{PlanDatasetState: PlanDatasetState{Frequency: "1m", LatenessS: 20}, P: p.Unix(), OldLatenessS: 5})
-	require.Equal(t, p.Add(10*time.Second), due, "stream→SCF：5 秒截止的旧周期在 P+5 之后不能再建立")
-	require.Equal(t, p.Add(time.Minute), deadline)
-	due, deadline = handoffLatenessDue(&PlanDatasetChange{PlanDatasetState: PlanDatasetState{Frequency: "1h", LatenessS: 8}, P: p.Truncate(time.Hour).Add(time.Hour).Unix(), OldLatenessS: 20})
-	require.Equal(t, time.Date(2026, 10, 21, 9, 0, 25, 0, time.UTC), due)
-	require.Equal(t, time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC), deadline)
 }
 
 // 旧端（collector-stream）在线但始终不确认：截止仍按时间在窗口里改成新执行端的值，
@@ -401,8 +439,18 @@ func TestHandoffLatenessSwitchesOnTimeWhenTheOldSideNeverConfirms(t *testing.T) 
 func TestDesiredStateRejectsOneDatasetWithTwoIngests(t *testing.T) {
 	group := TaskGroup{Provider: "binance", SourceID: "spot_http", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m", Subjects: []string{"ABC-USDT"}, Ingest: ingestStream}
 	other := group
-	other.Provider, other.SourceID, other.MarketType, other.InstrumentType, other.Ingest = "binance", "swap_http", "swap", "swap", ingestSCF
+	other.Ingest = ingestSCF
 	_, err := BuildDesiredState(PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-hongkong"}, "swap": {"ap-hongkong"}}, Fetch: marketfetch.PlanFetch{Concurrency: 1}, DefaultLatenessS: 15},
 		[]TaskGroup{group, other}, nil)
 	require.ErrorContains(t, err, "conflicting ingest")
+}
+
+// 一个数据集只放一个市场的序列：现货、永续两组写同一个数据集时期望状态算不出来（现货与永续要拆成两个任务）。
+func TestDesiredStateRejectsOneDatasetFedByTwoMarkets(t *testing.T) {
+	group := TaskGroup{Provider: "binance", SourceID: "spot_http", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m", Subjects: []string{"ABC-USDT"}, Ingest: ingestSCF}
+	other := group
+	other.SourceID, other.MarketType, other.InstrumentType = "swap_http", "swap", "perpetual"
+	_, err := BuildDesiredState(PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-hongkong"}, "swap": {"ap-hongkong"}}, Fetch: marketfetch.PlanFetch{Concurrency: 1}, DefaultLatenessS: 15},
+		[]TaskGroup{group, other}, nil)
+	require.ErrorContains(t, err, "fed by two markets")
 }

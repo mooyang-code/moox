@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_prepare_state TEXT NOT NULL DEFAULT 'ready',
     c_last_error TEXT NOT NULL DEFAULT '',
     c_result_dataset_id TEXT NOT NULL DEFAULT '',
-    c_result_view_id TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_ingest IN ('', 'stream', 'scf', 'local')),
@@ -29,9 +28,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_name ON t_collector_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_definition
 ON t_collector_tasks (c_space_id, c_definition_hash)
 WHERE c_definition_hash <> '';
-CREATE INDEX IF NOT EXISTS idx_collector_tasks_space_result_view
-ON t_collector_tasks (c_space_id, c_result_view_id)
-WHERE c_result_view_id <> '';
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_space ON t_collector_tasks (c_space_id);
 
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_type ON t_collector_tasks (c_data_type);
@@ -58,7 +54,8 @@ BEGIN
     UPDATE t_collector_tasks SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
 END;
 
--- SCF 定时采集的采集计划：每个空间同一时间最多一份未生效的计划，最近一份已生效的计划即“已生效状态”。
+-- 采集计划：每个空间同一时间最多一份未生效的计划，通常几分钟内生效；最近一份已生效的计划即已生效状态
+-- （每个数据集可能还带未过窗口的旧份）。一份计划生效时删掉同空间更早的已生效计划，表里每个空间至多两份。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plans (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -86,7 +83,8 @@ END;
 
 -- 标的时间线：一个采集数据集的一个频率从 c_effective_from（K 线开始时间，Unix 秒）起应有的序列。
 -- c_series 是登记给 Storage 的那份序列（标的加序列标签）；'[]' 表示从这一刻起不再采集。
--- 行与采集计划记录在同一个事务里写入：序列行在 Storage 确认登记之后，停止行在计划建立时。
+-- c_external_symbols 是这一段每个标的的交易所符号（标的到符号的 JSON 对象），不进序列哈希；符号变化也写一行，补采按它取当时的符号。
+-- 行与采集计划记录在同一个事务里写入：序列变化的行在 Storage 确认登记之后，只有符号变化的行与停止行在计划建立时。
 -- 按写入先后（c_id）重放：一段的结束时间是同一数据集同一频率后一行的生效点；同一生效点后写的覆盖先写的；
 -- 重新登记时整个空间的行一起删除。合成目标数据集不在这张表里。
 CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
@@ -97,6 +95,7 @@ CREATE TABLE IF NOT EXISTS t_collector_series_timeline (
     c_effective_from INTEGER NOT NULL,
     c_series_hash TEXT NOT NULL DEFAULT '',
     c_series TEXT NOT NULL DEFAULT '[]',
+    c_external_symbols TEXT NOT NULL DEFAULT '{}',
     c_lateness_s INTEGER NOT NULL DEFAULT 0,
     c_output_fields TEXT NOT NULL DEFAULT '[]',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -123,7 +122,7 @@ BEGIN
 END;
 
 -- K 线补采作业：一个作业拆成若干（数据集、标的、时间段）分块。
--- c_dataset_id、c_frequency、c_subject_id 为空表示全部；c_kind 取 gap（按缺口）、force（整段重拉）、history（确认历史缺口）。
+-- c_dataset_id、c_frequency、c_subject_id 为空表示全部；c_kind 取 gap（按缺口）、force（整段重拉）。
 CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
@@ -141,7 +140,7 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_source IN ('manual', 'auto')),
-    CHECK (c_kind IN ('gap', 'force', 'history')),
+    CHECK (c_kind IN ('gap', 'force')),
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
     UNIQUE (c_job_id)
 );
@@ -161,14 +160,12 @@ BEGIN
 END;
 
 -- c_missing 是上一次执行后复查仍缺的 K 线（规范化区间串）：连续两次一致才确认是行情源没有。
--- c_series_tag 只在统一数据集（同一数据集里有多个 series_tag）时有值：补采要用该序列所属市场的路由；单序列数据集为空。
 CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
-    c_series_tag TEXT NOT NULL DEFAULT '',
     c_from DATETIME NOT NULL,
     c_to DATETIME NOT NULL,
     c_chunk_id TEXT NOT NULL,
@@ -181,7 +178,7 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
-    UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from)
+    UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_chunks_job ON t_collector_kline_backfill_chunks (c_job_id, c_status);
@@ -196,33 +193,16 @@ BEGIN
 END;
 
 -- 已确认“行情源没有”的 K 线：补采成功后复查仍缺且结果一致的连续区间，检查与补采都扣除。
--- c_series_tag 只在统一数据集时有值（同一标的的现货、永续分别确认）；单序列数据集为空。
 CREATE TABLE IF NOT EXISTS t_collector_source_absences (
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
-    c_series_tag TEXT NOT NULL DEFAULT '',
     c_from DATETIME NOT NULL,
     c_to DATETIME NOT NULL,
     c_bars INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from)
-);
-
--- 每个数据集最近一次历史缺口扫描（早于最早生效点的一段历史）的结果；c_gaps 是缺口分组 JSON，供确认补采。
-CREATE TABLE IF NOT EXISTS t_collector_history_scans (
-    c_space_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_frequency TEXT NOT NULL,
-    c_scanned_at DATETIME NOT NULL,
-    c_from DATETIME,
-    c_to DATETIME,
-    c_gap_bars INTEGER NOT NULL DEFAULT 0,
-    c_gap_subjects INTEGER NOT NULL DEFAULT 0,
-    c_gaps TEXT NOT NULL DEFAULT '[]',
-    c_last_error TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from)
 );
 
 -- 数据集首次接入时的历史补齐：补齐期间读这个数据集的因子不计算、策略不求值。
@@ -296,7 +276,6 @@ CREATE TABLE IF NOT EXISTS t_collector_tag_sync_runs (
 
 -- 合成目标数据集的标的快照（按生效点追加）：一个目标桶落在哪份快照内，用周期提交写入；
 -- 生效点之前的桶和快照之外的标的用普通写入。c_effective_from 是 Unix 秒，等于 Storage 登记的生效点。
--- c_members 只在统一数据集（源有多个 series_tag）时有值：series_tag 到成员标的的映射；单序列任务为 '{}'，成员就是 c_subjects。
 CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -304,14 +283,12 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
     c_effective_from INTEGER NOT NULL,
     c_series_hash TEXT NOT NULL,
     c_subjects TEXT NOT NULL DEFAULT '[]',
-    c_members TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (c_space_id, c_task_id, c_effective_from)
 );
 
 -- 历史合成作业：范围 [c_start, c_end) 按目标桶推进，c_next_bucket 是游标，进程重启后从游标继续。
 -- c_origin 取 manual（CLI、控制台）或 source_backfill（源数据补采完成后触发）；c_not_before 之前不开始。
--- c_series_tags 是限定要合成的源序列（series_tag），'[]' 表示任务的全部源序列。
 CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
@@ -320,7 +297,6 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_request_id TEXT NOT NULL,
     c_origin TEXT NOT NULL DEFAULT 'manual',
     c_subjects TEXT NOT NULL DEFAULT '[]',
-    c_series_tags TEXT NOT NULL DEFAULT '[]',
     c_start DATETIME NOT NULL,
     c_end DATETIME NOT NULL,
     c_next_bucket DATETIME NOT NULL,
@@ -353,14 +329,12 @@ END;
 
 -- 补写通知：补采分块读回确认成功（以及合成在周期结束后的补写）时，与状态更新在同一事务里记录。
 -- 发布协程按（空间、数据集、频率、来源、作业）合并成批，c_batch_id 为空表示还没有成批。
--- c_series_tag 是被补写的序列；单序列数据集为空串，事件里不带 series_tags。
 CREATE TABLE IF NOT EXISTS t_collector_backfill_notices (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
-    c_series_tag TEXT NOT NULL DEFAULT '',
     c_start DATETIME NOT NULL,
     c_end DATETIME NOT NULL,
     c_origin TEXT NOT NULL,

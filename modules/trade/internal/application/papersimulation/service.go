@@ -27,7 +27,7 @@ type CreateCommand struct {
 	// Priority 是加入已有组合时的优先级；为 0 时排在现有成员之后。
 	Priority int
 	Exchange exchange.Exchange
-	// Markets 是模拟账户开通的市场集合：加密货币取 SPOT、SWAP 的子集，股票只有 STOCK。
+	// Markets 是模拟账户开通的市场集合：加密货币取 spot、swap 的子集，股票只有 equity。
 	Markets         []exchange.MarketType
 	SettlementAsset string
 	MarginMode      exchange.MarginMode

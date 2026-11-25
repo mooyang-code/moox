@@ -118,7 +118,7 @@ func runSubjectExclude(ctx context.Context, out io.Writer, flags subjectExclusio
 	}
 	req := &collectorpb.SetSubjectExclusionsReq{SpaceId: spaceID, SubjectIds: subjects, MarketType: strings.TrimSpace(flags.Market), Reason: strings.TrimSpace(flags.Reason), Operator: exclusionOperator()}
 	if flags.ExpiresIn > 0 {
-		req.ExpiresAt = time.Now().Add(flags.ExpiresIn).UTC().Format(time.RFC3339)
+		req.ExpiresAt = time.Now().Add(flags.ExpiresIn).UnixMilli()
 	}
 	rsp := &collectorpb.SetSubjectExclusionsRsp{}
 	if err := invokeCollector(ctx, flags.File, "SetSubjectExclusions", req, rsp, func() *collectorpb.RetInfo { return rsp.GetRetInfo() }); err != nil {
@@ -168,14 +168,15 @@ func invokeCollector(ctx context.Context, file, method string, req, rsp any, ret
 	return nil
 }
 
-func exclusionRows(items []*collectorpb.SubjectExclusion) []map[string]string {
-	rows := make([]map[string]string, 0, len(items))
+// exclusionRows 是排除名单的输出行；created_at、expires_at 是 Unix 毫秒（expires_at 为 0 表示不过期）。
+func exclusionRows(items []*collectorpb.SubjectExclusion) []map[string]any {
+	rows := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		market := item.GetMarketType()
 		if market == "" {
 			market = "all"
 		}
-		rows = append(rows, map[string]string{"subject_id": item.GetSubjectId(), "market": market, "reason": item.GetReason(), "operator": item.GetOperator(), "created_at": item.GetCreatedAt(), "expires_at": item.GetExpiresAt()})
+		rows = append(rows, map[string]any{"subject_id": item.GetSubjectId(), "market": market, "reason": item.GetReason(), "operator": item.GetOperator(), "created_at": item.GetCreatedAt(), "expires_at": item.GetExpiresAt()})
 	}
 	return rows
 }

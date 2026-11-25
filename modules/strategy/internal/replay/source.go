@@ -14,7 +14,7 @@ import (
 )
 
 // barSource 是回放主帧的输入来源：给出一段连续 bar 的行与年龄判定所需的历史，返回值按市场分。主循环、evaluateBar 与账本
-// 不关心来源。View 来源（viewSource）一次返回一整段，方式 A 的两个 View、统一数据集的一个 View 都在它内部处理；
+// 不关心来源。View 来源（viewSource）一次返回一整段，每个市场一个 View；
 // nextParams 是上一根策略求出的参数，留给按参数现算的来源，View 来源不用它。
 type barSource interface {
 	Load(ctx context.Context, bars []input.PeriodBoundaries, nextParams engine.ParamSet) (map[string]marketSegment, error)
@@ -88,8 +88,6 @@ type viewSource struct {
 	acc      *accumulator
 	abort    func(context.Context) error
 	switches int
-	// memo 是统一数据集两个市场共用的读取暂存（方式 A 为空）。
-	memo *input.RowsMemo
 	// end 是当前有效的终点（不含）：换代后可能被新索引截短。
 	end time.Time
 	// group 非空时换代由它统一跟随（策略池回放的全部成员共用一个计数，一起切换），switches 不用。
@@ -107,33 +105,24 @@ func mainColumns(program *dsl.Program) []string {
 }
 
 // newViewSource 构造单策略回放的 View 来源：每个市场一个行读取器与一个年龄判定的历史读取器，加上附加来源与参考市场的读取器。
-// 计资金费时永续的行另读费率列；统一数据集两个市场共用一个 View 与读取缓存，两边都读这一列，查询才相同。
+// 计资金费时永续的行另读费率列。
 func (r *Runner) newViewSource(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, views map[string]input.ViewInfo,
 	markets []*replayMarket, end time.Time, acc *accumulator, abort func(context.Context) error) (*viewSource, error) {
 	columns := mainColumns(program)
 	columnsOf := func(market string) []string {
-		if job.FundingColumn == "" || (market != dsl.MarketSwap && !resolved.Unified()) {
+		if job.FundingColumn == "" || market != dsl.MarketSwap {
 			return columns
 		}
 		return uniqueStrings(append(append([]string(nil), columns...), job.FundingColumn))
 	}
-	// 统一数据集里两个市场共用一个 View：同一段的读取只发一次，各市场再按 series_tag 过滤。
-	var memo *input.RowsMemo
-	if resolved.Unified() {
-		memo = &input.RowsMemo{}
-	}
-	source := &viewSource{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, memo: memo}
+	source := &viewSource{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort}
 	for _, market := range markets {
 		view := views[market.market]
-		loaderMarket := ""
-		if resolved.Unified() {
-			loaderMarket = market.market
-		}
-		source.markets = append(source.markets, newViewMarket(market, job.Tasks[resolved.TaskKey(market.market)],
-			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: market.subjects, Columns: columnsOf(market.market), Market: loaderMarket, Memo: memo, Abort: abort},
-			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: market.subjects, Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort}))
+		source.markets = append(source.markets, newViewMarket(market, job.Tasks[market.market],
+			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: market.subjects, Columns: columnsOf(market.market), Abort: abort},
+			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: market.subjects, Columns: []string{"close"}, Abort: abort}))
 	}
-	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, source.markets, memo, abort); err != nil {
+	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, source.markets, abort); err != nil {
 		return nil, err
 	}
 	refs, err := referenceReaders(ctx, r.Client, job, resolved, abort)
@@ -161,27 +150,24 @@ func (s *viewSource) Applied(int64) engine.ParamSet { return nil }
 // Rejected 对 View 来源总是 nil。
 func (s *viewSource) Rejected(int64) []string { return nil }
 
-// Close 丢掉暂存的行；读取器不持有连接，没有别的要释放。
-func (s *viewSource) Close(context.Context) error {
-	s.memo.Reset()
-	return nil
-}
+// Close 无事可做：读取器不持有连接。
+func (s *viewSource) Close(context.Context) error { return nil }
 
-// usesTask 报告这个来源有没有读任务键 taskKey 上的 View。
+// usesTask 报告这个来源有没有读任务键（市场）taskKey 上的 View。
 func (s *viewSource) usesTask(taskKey string) bool {
 	for _, market := range s.markets {
-		if s.resolved.TaskKey(market.market) == taskKey {
+		if market.market == taskKey {
 			return true
 		}
 	}
 	return false
 }
 
-// switchView 把任务键 taskKey 上各市场的行与历史读取器切到新索引的 View，并清掉它们的年龄判定结果：年龄证明属于旧索引，与实时的
-// 缓存一致，换代后重新判定。统一数据集的两个市场共用一个 View，一起切换，同一次换代不会被另一个市场再算一次。
+// switchView 把任务键（市场）taskKey 的行与历史读取器切到新索引的 View，并清掉它的年龄判定结果：年龄证明属于旧索引，与实时的
+// 缓存一致，换代后重新判定。
 func (s *viewSource) switchView(taskKey string, view input.ViewInfo) {
 	for _, market := range s.markets {
-		if s.resolved.TaskKey(market.market) == taskKey {
+		if market.market == taskKey {
 			market.rows.View, market.history.View = view, view
 			clear(market.passed)
 		}
@@ -195,11 +181,8 @@ func (s *viewSource) Load(ctx context.Context, segment []input.PeriodBoundaries,
 		readFrom = segment[0].PreviousStart
 	}
 	revisionRereads := 0
-	// 各市场都读完（成功或失败）就丢掉暂存的原始行：求值期间不再多占一份。
-	defer s.memo.Reset()
 reload:
 	for {
-		s.memo.Reset()
 		loaded := make(map[string]marketSegment, len(s.markets))
 		for _, market := range s.markets {
 			market.history.ExpectedRevision = 0
@@ -212,7 +195,7 @@ reload:
 				var changedRevision *input.RevisionChangedError
 				if errors.As(err, &changedRevision) {
 					if revisionRereads >= maxRevisionRereads {
-						return nil, fmt.Errorf("View %s 在回放读取期间持续有新的写入，没有读到同一修订号的数据，请稍后重新发起回放", market.task.ViewID)
+						return nil, fmt.Errorf("View %s 在回放读取期间持续有新的写入，没有读到同一修订号的数据，请稍后重新发起回放", market.task.DatasetID)
 					}
 					revisionRereads++
 					continue reload
@@ -231,16 +214,16 @@ reload:
 				continue
 			}
 			if s.group != nil {
-				if err := s.group.follow(ctx, s.resolved.TaskKey(market.market), changed.View, segment[0].StorageStart); err != nil {
+				if err := s.group.follow(ctx, market.market, changed.View, segment[0].StorageStart); err != nil {
 					return nil, err
 				}
 				continue reload
 			}
 			if s.switches >= maxIndexSwitches {
-				return nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", market.task.ViewID)
+				return nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", market.task.DatasetID)
 			}
 			s.switches++
-			taskKey := s.resolved.TaskKey(market.market)
+			taskKey := market.market
 			view, end, err := s.runner.recheckView(ctx, s.job, taskKey, s.resolved, s.program, changed.View, segment[0].StorageStart, s.end, true, s.abort)
 			if err != nil {
 				return nil, err
@@ -262,9 +245,9 @@ reload:
 	}
 }
 
-// attachSources 给每个市场的读取器加上各附加来源的行读取器：来源 View 是这个市场所在任务键上的来源任务，标的与主帧相同
-// （不带 series_tag，读全部序列；统一数据集再按市场过滤），只读策略引用的来源列。
-func attachSources(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved, program *dsl.Program, markets []*viewMarket, memo *input.RowsMemo, abort func(context.Context) error) error {
+// attachSources 给每个市场的读取器加上各附加来源的行读取器：来源 View 是这个市场的来源任务，标的与主帧相同
+// （不带 series_tag，读全部序列），只读策略引用的来源列。
+func attachSources(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved, program *dsl.Program, markets []*viewMarket, abort func(context.Context) error) error {
 	if !resolved.HasSources() {
 		return nil
 	}
@@ -276,25 +259,21 @@ func attachSources(ctx context.Context, client input.Client, spaceID string, res
 			if len(columns) == 0 {
 				continue
 			}
-			task := resolved.Sources[name].Tasks[resolved.TaskKey(reader.market)]
-			view, ok := views[task.ViewID]
+			task := resolved.Sources[name].Tasks[reader.market]
+			view, ok := views[task.DatasetID]
 			if !ok {
 				var err error
-				if view, err = client.GetView(ctx, spaceID, task.ViewID); err != nil {
+				if view, err = client.GetView(ctx, spaceID, task.DatasetID); err != nil {
 					return err
 				}
-				views[task.ViewID] = view
+				views[task.DatasetID] = view
 			}
 			subjects := make([]input.Subject, 0, len(reader.subjects))
 			for _, subject := range reader.subjects {
 				subject.SeriesTag = ""
 				subjects = append(subjects, subject)
 			}
-			market := ""
-			if resolved.Unified() {
-				market = reader.market
-			}
-			reader.sources[name] = &input.RangeLoader{Client: client, SpaceID: spaceID, View: view, Subjects: subjects, Columns: columns, Market: market, Memo: memo, Abort: abort}
+			reader.sources[name] = &input.RangeLoader{Client: client, SpaceID: spaceID, View: view, Subjects: subjects, Columns: columns, Abort: abort}
 		}
 	}
 	return nil
@@ -324,7 +303,7 @@ func loadSourceSegment(ctx context.Context, resolved input.Resolved, reader *vie
 		rows, err := reader.sources[name].Load(ctx, from, last.StorageStart.Add(time.Nanosecond))
 		var changed *input.IndexChangedError
 		if errors.As(err, &changed) {
-			return nil, fmt.Errorf("来源 %s 的 View %s 在回放过程中重建了索引，请重新发起回放", name, changed.View.ViewID)
+			return nil, fmt.Errorf("来源 %s 的 View %s 在回放过程中重建了索引，请重新发起回放", name, changed.View.DatasetID)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("读取来源 %s 的行：%w", name, err)
@@ -339,7 +318,7 @@ func referenceReaders(ctx context.Context, client input.Client, job store.Replay
 	refs := make([]*viewMarket, 0, len(resolved.References))
 	for _, market := range sortedNames(resolved.References) {
 		task := resolved.References[market]
-		view, err := client.GetView(ctx, job.SpaceID, task.ViewID)
+		view, err := client.GetView(ctx, job.SpaceID, task.DatasetID)
 		if err != nil {
 			return nil, err
 		}

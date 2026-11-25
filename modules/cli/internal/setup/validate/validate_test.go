@@ -114,3 +114,25 @@ func TestRunPreservesHostOrderAndRedactsErrors(t *testing.T) {
 	}, result.Checks)
 	assert.NotContains(t, err.Error(), "recognizable-compute-password")
 }
+
+// 停用的主机只写登记、可能连不上，不检查 SSH。
+func TestRunSkipsDisabledHosts(t *testing.T) {
+	cfg, err := topology.Parse([]byte(`[hosts.control]
+address = "eventbus.example.test"
+ssh = { port = 22, username = "ubuntu" }
+
+[hosts.overseas]
+address = "192.0.2.11"
+enabled = false
+ssh = { port = 22, username = "ubuntu" }
+
+[deployments]
+control = ["admin", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
+overseas = []
+`))
+	require.NoError(t, err)
+	sshChecker := &fakeSSHChecker{errs: map[string]error{"overseas": fmt.Errorf("unreachable")}}
+	_, err = Run(context.Background(), &cfg, Dependencies{Identity: &fakeIdentity{}, SSH: sshChecker})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"control"}, sshChecker.calls)
+}

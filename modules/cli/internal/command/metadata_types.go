@@ -14,66 +14,16 @@ const (
 )
 
 var (
-	metadataImportFile        string
-	metadataImportManifest    string
-	metadataImportDryRun      bool
-	metadataImportIfNotExists bool
-	metadataImportSpaces      []string
-	metadataSpacesFile        string
-	metadataApplyFile         string
-	metadataApplyManifest     string
-	metadataApplyDryRun       bool
+	metadataSpacesFile    string
+	metadataApplyFile     string
+	metadataApplyManifest string
+	metadataApplyDryRun   bool
+	metadataApplySpaces   []string
 )
 
 var metadataCmd = &cobra.Command{
 	Use:   "metadata",
 	Short: "存储元数据管理工具",
-}
-
-var metadataImportCmd = &cobra.Command{
-	Use:   "import",
-	Short: "导入存储元数据 seed",
-	Long: `通过 moox-storage MetadataService 导入存储元数据 seed。
-
-示例:
-  moox-cli metadata import --seed ../../config/setup/metadata.yaml --file ./moox.toml --if-not-exists
-  moox-cli metadata import --seed ../../config/setup/metadata.yaml --spaces crypto --dry-run`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if strings.TrimSpace(metadataImportFile) == "" {
-			return fmt.Errorf("必须指定 --seed")
-		}
-		seed, err := loadMetadataSeed(metadataImportFile)
-		if err != nil {
-			return err
-		}
-		seed, err = selectMetadataSpaces(seed, metadataImportSpaces)
-		if err != nil {
-			return err
-		}
-		calls, err := buildMetadataImportCalls(seed)
-		if err != nil {
-			return err
-		}
-		if metadataImportDryRun {
-			return writeMetadataImportSummary(metadataImportSummary{
-				Status:    "dry_run",
-				DryRun:    true,
-				Service:   metadataServiceName,
-				Planned:   len(calls),
-				Resources: countMetadataCalls(calls),
-			})
-		}
-		gateway, err := openCommandGateway(cmd.Context(), metadataImportManifest, nil)
-		if err != nil {
-			return err
-		}
-		defer gateway.Close()
-		summary, err := runMetadataImport(cmd.Context(), gateway, calls, metadataImportIfNotExists)
-		if err != nil {
-			return err
-		}
-		return writeMetadataImportSummary(summary)
-	},
 }
 
 var metadataSpacesCmd = &cobra.Command{
@@ -93,12 +43,22 @@ var metadataSpacesCmd = &cobra.Command{
 
 var metadataApplyCmd = &cobra.Command{
 	Use:   "apply",
-	Short: "创建并校验存储元数据 seed",
+	Short: "导入元数据种子：缺的建上，已有的核对一致（空间、标签以管理台为准不比对），可重复运行",
+	Long: `按依赖顺序导入元数据种子（空间、数据来源、标签、数据集、列；每个数据集的查询索引由 Storage 自动建）：缺的建上，已有的核对与种子一致，
+不一致时报错不改写；空间与标签在管理台可改，已有的以管理台为准不比对。引用是否成立由 Storage 校验。
+
+示例:
+  moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn --dry-run
+  moox-cli metadata apply --seed config/setup/metadata.yaml --spaces stockcn`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataApplyFile) == "" {
 			return fmt.Errorf("必须指定 --seed")
 		}
 		seed, err := loadMetadataSeed(metadataApplyFile)
+		if err != nil {
+			return err
+		}
+		seed, err = selectMetadataSpaces(seed, metadataApplySpaces)
 		if err != nil {
 			return err
 		}
@@ -128,16 +88,11 @@ type metadataSeed struct {
 	Subjects       []seedSubject       `yaml:"subjects"`
 	Tags           []seedTag           `yaml:"tags"`
 	Datasets       []seedDataset       `yaml:"datasets"`
-	FieldGroups    []seedFieldGroup    `yaml:"field_groups"`
-	Fields         []seedField         `yaml:"fields"`
 	DatasetColumns []seedDatasetColumn `yaml:"dataset_columns"`
-	Views          []seedView          `yaml:"views"`
 }
 
 type seedCommon struct {
 	Status     string            `yaml:"status"`
-	CreatedAt  string            `yaml:"created_at"`
-	UpdatedAt  string            `yaml:"updated_at"`
 	Attributes map[string]string `yaml:"attributes"`
 }
 
@@ -189,51 +144,17 @@ type seedDataset struct {
 	seedCommon   `yaml:",inline"`
 }
 
-type seedField struct {
-	SpaceID            string `yaml:"space_id"`
-	GroupID            string `yaml:"group_id"`
-	FieldID            string `yaml:"field_id"`
-	Name               string `yaml:"name"`
-	Description        string `yaml:"description"`
-	ValueType          string `yaml:"value_type"`
-	Unit               string `yaml:"unit"`
-	ValidationRuleJSON string `yaml:"validation_rule_json"`
-	WriteExample       string `yaml:"write_example"`
-	SortOrder          uint32 `yaml:"sort_order"`
-	seedCommon         `yaml:",inline"`
-}
-
-type seedFieldGroup struct {
-	SpaceID       string `yaml:"space_id"`
-	GroupID       string `yaml:"group_id"`
-	Name          string `yaml:"name"`
-	Description   string `yaml:"description"`
-	ParentGroupID string `yaml:"parent_group_id"`
-	SortOrder     uint32 `yaml:"sort_order"`
-	seedCommon    `yaml:",inline"`
-}
-
 type seedDatasetColumn struct {
-	SpaceID    string   `yaml:"space_id"`
-	DatasetID  string   `yaml:"dataset_id"`
-	ColumnName string   `yaml:"column_name"`
-	OriginType string   `yaml:"origin_type"`
-	OriginID   string   `yaml:"origin_id"`
-	ValueType  string   `yaml:"value_type"`
-	Required   bool     `yaml:"required"`
-	Aliases    []string `yaml:"aliases"`
-	seedCommon `yaml:",inline"`
-}
-
-type seedView struct {
-	SpaceID          string   `yaml:"space_id"`
-	ViewID           string   `yaml:"view_id"`
-	Name             string   `yaml:"name"`
-	Description      string   `yaml:"description"`
-	PrimaryDatasetID string   `yaml:"dataset_id"`
-	GrainKeys        []string `yaml:"grain_keys"`
-	Engine           string   `yaml:"engine"`
-	seedCommon       `yaml:",inline"`
+	SpaceID    string `yaml:"space_id"`
+	DatasetID  string `yaml:"dataset_id"`
+	ColumnName string `yaml:"column_name"`
+	ValueType  string `yaml:"value_type"`
+	// DisplayName、Group 是列的中文显示名与分组（一级），列自描述，不再引用字段目录。
+	DisplayName string   `yaml:"display_name"`
+	Group       string   `yaml:"group"`
+	Required    bool     `yaml:"required"`
+	Aliases     []string `yaml:"aliases"`
+	seedCommon  `yaml:",inline"`
 }
 
 type metadataImportCall struct {

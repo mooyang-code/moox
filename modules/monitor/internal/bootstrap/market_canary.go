@@ -2,27 +2,23 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/robfig/cron"
-	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
 	tagStaleFactor = 3
-	tagCheckPrefix = "subject_tag:"
 	// 标签属性里的同步配置键与缺省 cron，与 Collector 的 internal/tagattr 一致。
 	tagAttrSyncCron     = "sync.cron"
 	tagAttrSyncTimezone = "sync.timezone"
@@ -60,10 +56,10 @@ func checkTag(tag *storagepb.Tag, run *collectorpb.TagSyncStatus, now time.Time)
 }
 
 func tagStale(tag *storagepb.Tag, run *collectorpb.TagSyncStatus, now time.Time) bool {
-	lastRun, err := time.Parse(time.RFC3339, run.GetLastRunAt())
-	if err != nil {
+	if run.GetLastRunAt() <= 0 {
 		return true
 	}
+	lastRun := time.UnixMilli(run.GetLastRunAt()).UTC()
 	schedule, err := cron.ParseStandard(firstNonEmptyString(tag.GetAttributes()[tagAttrSyncCron], defaultTagSyncCron))
 	if err != nil {
 		return true
@@ -78,75 +74,35 @@ func tagStale(tag *storagepb.Tag, run *collectorpb.TagSyncStatus, now time.Time)
 }
 
 func subjectTagCheckID(spaceID, tagID string) string {
-	return tagCheckPrefix + strings.TrimSpace(spaceID) + ":" + strings.TrimSpace(tagID)
+	return checks.SubjectTagPrefix + strings.TrimSpace(spaceID) + ":" + strings.TrimSpace(tagID)
 }
 
-// marketCanaryCheckKey 是行情探针检查的完整身份：MarketCanaryCheckID 不含空间。
-type marketCanaryCheckKey struct{ spaceID, checkID string }
-
-// retireUnconfiguredMarketCanaries 退役不在当前配置中的探针检查（按 空间+CheckID 匹配）。
-func retireUnconfiguredMarketCanaries(ctx context.Context, repositories *store.Repositories, configured map[marketCanaryCheckKey]struct{}) error {
-	// Canary identity includes the symbol. When configuration moves from an
-	// inactive symbol to an active one, leave no enabled check behind for the
-	// old identity; otherwise its last failed result remains visible forever in
-	// the business overview and can continue to drive a stale alert.
-	checks, err := repositories.Checks.List(ctx, store.ListChecksOptions{
-		Source: domain.CheckSourceObservability,
-		Page:   store.Page{PageSize: 500},
-	})
-	if err != nil {
-		return err
-	}
-	for index := range checks {
-		check := &checks[index]
-		if !strings.HasPrefix(check.CheckID, "market_canary:") {
-			continue
-		}
-		if _, keep := configured[marketCanaryCheckKey{check.SpaceID, check.CheckID}]; keep {
-			continue
-		}
-		rules, err := repositories.Alerts.ListRulesForCheck(ctx, check.SpaceID, check.CheckID)
-		if err != nil {
-			return err
-		}
-		// Remove obsolete rules instead of merely disabling them. DeleteRule also
-		// removes a previously firing AlertState, so a retired symbol cannot keep
-		// contributing a stale alert to the availability overview.
-		for index := range rules {
-			if err := repositories.Alerts.DeleteRule(ctx, rules[index].SpaceID, rules[index].RuleID); err != nil {
-				return err
-			}
-		}
-		check.Enabled = false
-		if err := repositories.Checks.Update(ctx, check); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
+// buildMonitorMarketCanary 返回探针域每轮的评估：行情探针每个配置项一个事实，内置标签每个一个事实。
+// Collector 暂停或恢复追赶时整域跳过（保持原状态）；Storage 标签列表读不到时本轮报错、不推进；
+// Collector 的标签同步状态读不到时标签检查整类冻结。探针关闭时返回 nil，由 retireMarketCanaries 在启动时把旧检查删掉。
 func buildMonitorMarketCanary(
-	ctx context.Context,
 	cfg *config.Config,
 	runtime *Runtime,
+	applier *checks.Applier,
 	metricsStorage *monmetrics.StorageAdapter,
 	tagRuns TagSyncStatusSource,
-	hook func(context.Context, domain.Check, domain.CheckResult),
 	halted func(context.Context) bool,
 ) (func(context.Context) error, error) {
 	if cfg == nil || !cfg.MarketCanary.Enabled {
 		return nil, nil
 	}
-	if runtime == nil || runtime.Repositories == nil {
+	if runtime == nil || applier == nil {
 		return nil, fmt.Errorf("monitor market canary requires repositories")
 	}
 	if runtime.StorageGateway == nil {
 		return nil, fmt.Errorf("monitor market canary requires the shared Storage gateway client")
 	}
 	reader := runtime.StorageGateway
-	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
-	// 检查身份是 (空间, CheckID)：MarketCanaryCheckID 不含空间，把探针从 A 空间迁到 B 空间时旧空间的检查必须被退役
-	configuredCheckIDs := make(map[marketCanaryCheckKey]struct{}, len(cfg.MarketCanary.Subjects))
+	type canaryCheck struct {
+		canary watchdog.MarketCanary
+		name   string
+	}
+	canaries := make([]canaryCheck, 0, len(cfg.MarketCanary.Subjects))
 	for _, subject := range cfg.MarketCanary.Subjects {
 		canaryConfig := watchdog.MarketCanaryConfig{
 			SpaceID: subject.SpaceID, DatasetID: subject.DatasetID, SubjectID: subject.Symbol, Frequency: subject.Frequency,
@@ -156,94 +112,46 @@ func buildMonitorMarketCanary(
 			ClosedBarCount: cfg.MarketCanary.ClosedBarCount, ClosedBarMinCoverage: cfg.MarketCanary.ClosedBarMinCoverage,
 			EligibleKlineProviders: append([]string(nil), subject.EligibleKlineProviders...),
 		}
-		check := domain.Check{
-			SpaceID: canaryConfig.SpaceID, CheckID: watchdog.MarketCanaryCheckID(canaryConfig),
-			Name:      "行情探针 · " + canaryConfig.SubjectID + " " + alerttext.Frequency(canaryConfig.Frequency) + "K线",
-			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability,
-			Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
-		}
-		configuredCheckIDs[marketCanaryCheckKey{check.SpaceID, check.CheckID}] = struct{}{}
-		existing, getErr := runtime.Repositories.Checks.Get(ctx, check.SpaceID, check.CheckID)
-		switch {
-		case getErr == nil:
-			check.ID = existing.ID
-			if err := runtime.Repositories.Checks.Update(ctx, &check); err != nil {
-				return nil, err
-			}
-		case errors.Is(getErr, gorm.ErrRecordNotFound):
-			if err := runtime.Repositories.Checks.Create(ctx, &check); err != nil {
-				return nil, err
-			}
-		default:
-			return nil, getErr
-		}
-		canaries = append(canaries, watchdog.MarketCanary{
-			Reader: reader, Config: canaryConfig,
+		canaries = append(canaries, canaryCheck{
+			canary: watchdog.MarketCanary{Reader: reader, Config: canaryConfig},
+			name:   "行情探针 · " + canaryConfig.SubjectID + " " + alerttext.Frequency(canaryConfig.Frequency) + "K线",
 		})
 	}
-	if err := retireUnconfiguredMarketCanaries(ctx, runtime.Repositories, configuredCheckIDs); err != nil {
-		return nil, err
-	}
-	run := func(runCtx context.Context) error {
+	return func(runCtx context.Context) error {
 		// Collector 模块暂停或恢复追赶时采集是有意停下的：本轮不跑探针，检查保持原状态。
 		if halted != nil && halted(runCtx) {
 			return nil
 		}
-		var errs []error
-		for _, canary := range canaries {
-			result := canary.Run(runCtx)
-			inserted, err := runtime.Repositories.Results.InsertIfAbsent(runCtx, &result)
-			if err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if !inserted {
-				continue
-			}
-			check, err := runtime.Repositories.Checks.Get(runCtx, result.SpaceID, result.CheckID)
-			if err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			check.LastCheckedAt = &result.CheckedAt
-			if err := runtime.Repositories.Checks.Update(runCtx, check); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if hook != nil {
-				hook(runCtx, *check, result)
-			}
+		round := checks.Round{Domain: checks.DomainCanary}
+		for _, item := range canaries {
+			result := item.canary.Run(runCtx)
+			round.Facts = append(round.Facts, checks.Fact{
+				SpaceID: result.SpaceID, CheckID: result.CheckID, Name: item.name,
+				Status: passStatus(result.Success), Reason: result.Reason, Diagnostic: result.Diagnostic,
+			})
 		}
-		return errors.Join(errs...)
-	}
-	if metricsStorage != nil && tagRuns != nil {
-		previousRun := run
-		run = func(runCtx context.Context) error {
-			err := previousRun(runCtx)
-			return errors.Join(err, runSubjectTagChecks(runCtx, runtime.Repositories, metricsStorage, tagRuns, hook, time.Now().UTC()))
+		if metricsStorage != nil && tagRuns != nil {
+			tagFacts, available, err := subjectTagFacts(runCtx, metricsStorage, tagRuns, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			if !available {
+				round.FrozenPrefixes = append(round.FrozenPrefixes, checks.SubjectTagPrefix)
+			}
+			round.Facts = append(round.Facts, tagFacts...)
+		} else {
+			round.FrozenPrefixes = append(round.FrozenPrefixes, checks.SubjectTagPrefix)
 		}
-	}
-	return run, nil
+		return applier.Apply(runCtx, round)
+	}, nil
 }
 
-// ensureSubjectTagCheck 创建或修复标签检查：探针曾被关闭而退役（Enabled=false）后重新启用，必须恢复检查，
-// 默认告警规则随周期同步重建。
-func ensureSubjectTagCheck(ctx context.Context, repositories *store.Repositories, spaceID string, tag *storagepb.Tag) (*domain.Check, error) {
-	checkID := subjectTagCheckID(spaceID, tag.GetTagId())
-	check, err := repositories.Checks.Get(ctx, spaceID, checkID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: subjectTagCheckName(tag), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
-		return check, repositories.Checks.Create(ctx, check)
+// retireMarketCanaries 在行情探针关闭时把探针域的旧检查全部删掉（在告警的推一条恢复）：关闭后不再有采样能让它们恢复。
+func retireMarketCanaries(ctx context.Context, cfg *config.Config, applier *checks.Applier) error {
+	if applier == nil || (cfg != nil && cfg.MarketCanary.Enabled) {
+		return nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	if name := subjectTagCheckName(tag); check.Name != name || !check.Enabled {
-		check.Name = name
-		check.Enabled = true
-		return check, repositories.Checks.Update(ctx, check)
-	}
-	return check, nil
+	return applier.Apply(ctx, checks.Round{Domain: checks.DomainCanary})
 }
 
 // subjectTagLister 读取 Storage 的标签定义与成员统计；spaceID 为空表示所有空间。
@@ -251,58 +159,34 @@ type subjectTagLister interface {
 	ListTags(ctx context.Context, spaceID string) ([]*storagepb.Tag, error)
 }
 
-// runSubjectTagChecks 巡检所有空间的内置标签：与行情探针配在哪些空间无关，A 股、港股的内置标签同样要看。
-// 非内置标签（经接口、管理台新建的）不巡检。
-func runSubjectTagChecks(ctx context.Context, repositories *store.Repositories, tags subjectTagLister, tagRuns TagSyncStatusSource,
-	hook func(context.Context, domain.Check, domain.CheckResult), now time.Time) error {
+// subjectTagFacts 巡检所有空间的内置标签：与行情探针配在哪些空间无关，A 股、港股的内置标签同样要看。
+// 非内置标签（经接口、管理台新建的）不巡检。Collector 的标签同步状态读不到时 available 为 false（标签检查保持原状态）：
+// Collector 暂时不可达（启动顺序、重启）时不能让每次重启推一对“恢复、重新触发”。
+func subjectTagFacts(ctx context.Context, tags subjectTagLister, tagRuns TagSyncStatusSource, now time.Time) ([]checks.Fact, bool, error) {
 	items, err := tags.ListTags(ctx, "")
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	statuses, err := tagRuns.ListTagSyncStatus(ctx, "")
 	if err != nil {
-		// Collector 暂时不可达（启动顺序、重启）时不能让定时器失败：首次运行出错会让 Monitor 整个退出。
-		// Collector 自身的健康检查会报告它不可用，这里只跳过本轮标签检查。
 		log.WarnContextf(ctx, "monitor skip tag checks: collector tag sync status unavailable: %v", err)
-		return nil
+		return nil, false, nil
 	}
 	runsByTag := make(map[string]*collectorpb.TagSyncStatus, len(statuses))
 	for _, status := range statuses {
 		runsByTag[subjectTagCheckID(status.GetSpaceId(), status.GetTagId())] = status
 	}
-	var errs []error
+	var facts []checks.Fact
 	for _, tag := range items {
 		if tag == nil || !tag.GetBuiltin() {
 			continue
 		}
 		spaceID := tag.GetSpaceId()
 		checkID := subjectTagCheckID(spaceID, tag.GetTagId())
-		check, getErr := ensureSubjectTagCheck(ctx, repositories, spaceID, tag)
-		if getErr != nil {
-			errs = append(errs, getErr)
-			continue
-		}
 		reasons := checkTag(tag, runsByTag[checkID], now)
-		result := domain.CheckResult{ResultID: domain.ScopedResultID(spaceID, checkID, now), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: tagReasonText(reasons), CheckedAt: now, CreatedAt: now}
-		if !result.Success {
-			result.Status = domain.CheckStatusDown
-		}
-		inserted, insertErr := repositories.Results.InsertIfAbsent(ctx, &result)
-		if insertErr != nil {
-			errs = append(errs, insertErr)
-			continue
-		}
-		if !inserted {
-			continue
-		}
-		check.LastCheckedAt = &now
-		if updateErr := repositories.Checks.Update(ctx, check); updateErr != nil {
-			errs = append(errs, updateErr)
-		} else if hook != nil {
-			hook(ctx, *check, result)
-		}
+		facts = append(facts, checks.Fact{SpaceID: spaceID, CheckID: checkID, Name: subjectTagCheckName(tag), Status: passStatus(len(reasons) == 0), Reason: tagReasonText(reasons)})
 	}
-	return errors.Join(errs...)
+	return facts, true, nil
 }
 
 func subjectTagCheckName(tag *storagepb.Tag) string {

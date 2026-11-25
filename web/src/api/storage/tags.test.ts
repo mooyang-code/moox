@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ callStorage: vi.fn() }));
+const mocks = vi.hoisted(() => ({ call: vi.fn() }));
 
-vi.mock("./http", () => ({ callStorage: mocks.callStorage }));
+// 只看 Storage 的方法名、请求体与选项：服务名固定是 storage
+vi.mock("@/api/http", () => ({
+  call: (_service: string, method: string, req: unknown, options?: unknown) =>
+    options === undefined ? mocks.call(method, req) : mocks.call(method, req, options)
+}));
 
 import { addTagMembers, deleteTag, listTagMembers, listTags, removeTagMembers, setTagMemberStatus, upsertTag } from "./metadata";
 
 describe("Storage tag APIs", () => {
   beforeEach(() => {
-    mocks.callStorage.mockReset();
-    mocks.callStorage.mockResolvedValue({ ret_info: { code: 0, msg: "" }, tag: { tag_id: "crypto_spot" } });
+    mocks.call.mockReset();
+    mocks.call.mockResolvedValue({ ret_info: { code: 0, msg: "" }, tag: { tag_id: "crypto_spot" } });
   });
 
   it("uses the tag definition RPCs with the expected request shapes", async () => {
@@ -22,16 +26,16 @@ describe("Storage tag APIs", () => {
     };
 
     await listTags("crypto", { page: 2, size: 50 });
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("ListTags", {
+    expect(mocks.call).toHaveBeenLastCalledWith("ListTags", {
       space_id: "crypto",
       page: { page: 2, size: 50 }
     });
 
     await upsertTag(tag);
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("UpsertTag", { tag });
+    expect(mocks.call).toHaveBeenLastCalledWith("UpsertTag", { tag });
 
     await deleteTag("crypto", "crypto_spot");
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("DeleteTag", {
+    expect(mocks.call).toHaveBeenLastCalledWith("DeleteTag", {
       space_id: "crypto",
       tag_id: "crypto_spot"
     });
@@ -45,7 +49,7 @@ describe("Storage tag APIs", () => {
       keyword: "btc",
       page: { page: 1, size: 20 }
     });
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("ListTagMembers", {
+    expect(mocks.call).toHaveBeenLastCalledWith("ListTagMembers", {
       space_id: "crypto",
       tag_id: "crypto_spot",
       status: "active",
@@ -54,21 +58,21 @@ describe("Storage tag APIs", () => {
     });
 
     await addTagMembers("crypto", "crypto_spot", ["BTC-USDT"]);
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("AddTagMembers", {
+    expect(mocks.call).toHaveBeenLastCalledWith("AddTagMembers", {
       space_id: "crypto",
       tag_id: "crypto_spot",
       subject_ids: ["BTC-USDT"]
     });
 
     await removeTagMembers("crypto", "crypto_spot", ["BTC-USDT"]);
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("RemoveTagMembers", {
+    expect(mocks.call).toHaveBeenLastCalledWith("RemoveTagMembers", {
       space_id: "crypto",
       tag_id: "crypto_spot",
       subject_ids: ["BTC-USDT"]
     });
 
     await setTagMemberStatus("crypto", "crypto_spot", ["BTC-USDT"], "active");
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("SetTagMemberStatus", {
+    expect(mocks.call).toHaveBeenLastCalledWith("SetTagMemberStatus", {
       space_id: "crypto",
       tag_id: "crypto_spot",
       subject_ids: ["BTC-USDT"],

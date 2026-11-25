@@ -2,29 +2,18 @@ package bootstrap
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/packages/events"
 )
 
-// componentCheckPrefixes 是按部署生成的检查：部署停用或删除后不再生成，已有的检查随之停用；重新部署时恢复启用。
-var componentCheckPrefixes = []string{"gateway:", "reporter:", "ready:", "restart:"}
-
-func componentCheck(checkID string) bool {
-	for _, prefix := range componentCheckPrefixes {
-		if strings.HasPrefix(checkID, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // componentItem 是一项组件检查；frozen 表示这一轮保持原状态（无法确认）。
 type componentItem struct {
-	businessFreshnessItem
+	checks.Fact
 	frozen bool
 }
 
@@ -44,32 +33,40 @@ func componentHealthItems(services []monitorobservability.ServiceStatus) []compo
 		subject := alerttext.Service(service.ServiceName) + "（" + alerttext.Node(service.NodeID) + "）"
 		suffix := service.NodeID + ":" + service.ServiceName
 		if service.Source == monitorobservability.SourceReporter {
-			out = append(out, componentItem{businessFreshnessItem: businessFreshnessItem{
-				spaceID: events.SystemSpaceID, checkID: "reporter:" + suffix,
-				name:    reporterCheckName(service.ServiceName, service.NodeID),
-				success: service.ReporterStatus == "healthy", reason: reporterReasonText(service.ReporterStatus),
+			out = append(out, componentItem{Fact: checks.Fact{
+				SpaceID: events.SystemSpaceID, CheckID: "reporter:" + suffix,
+				Name: reporterCheckName(service.ServiceName, service.NodeID), Status: passStatus(service.ReporterStatus == "healthy"),
+				Reason: reporterReasonText(service.ReporterStatus),
 			}})
 		}
-		ready := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: "ready:" + suffix, name: checkName(subject, "就绪")}
+		ready := checks.Fact{SpaceID: events.SystemSpaceID, CheckID: "ready:" + suffix, Name: checkName(subject, "就绪"), Status: domain.CheckStatusDown}
 		switch {
 		case service.ReporterStatus != "healthy":
-			out = append(out, componentItem{businessFreshnessItem: ready, frozen: true})
+			out = append(out, componentItem{Fact: ready, frozen: true})
 		case service.Readiness == monmetrics.ReadinessReady:
-			ready.success, ready.reason = true, "组件已就绪"
-			out = append(out, componentItem{businessFreshnessItem: ready})
+			ready.Status, ready.Reason = domain.CheckStatusOK, "组件已就绪"
+			out = append(out, componentItem{Fact: ready})
 		case service.Readiness == monmetrics.ReadinessNotReady:
-			ready.reason = "组件未就绪：" + firstNonEmptyString(service.NotReadyReason, "组件报告未就绪，没有说明原因")
-			out = append(out, componentItem{businessFreshnessItem: ready})
+			ready.Reason = "组件未就绪：" + firstNonEmptyString(service.NotReadyReason, "组件报告未就绪，没有说明原因")
+			out = append(out, componentItem{Fact: ready})
 		}
 		if service.ReporterStatus == "missing" {
 			continue
 		}
-		restart := businessFreshnessItem{spaceID: events.SystemSpaceID, checkID: "restart:" + suffix, name: checkName(subject, "反复重启"), success: true, reason: "最近 10 分钟没有反复重启"}
+		restart := checks.Fact{SpaceID: events.SystemSpaceID, CheckID: "restart:" + suffix, Name: checkName(subject, "反复重启"), Status: domain.CheckStatusOK, Reason: "最近 10 分钟没有反复重启"}
 		if service.BootChanges >= monmetrics.RestartChanges {
-			restart.success = false
-			restart.reason = fmt.Sprintf("最近 10 分钟重启了 %d 次（启动标识变了 %d 次）：进程可能在退出后被反复拉起，查看 %s 的日志找退出原因", service.BootChanges, service.BootChanges, service.ServiceName)
+			restart.Status = domain.CheckStatusDown
+			restart.Reason = fmt.Sprintf("最近 10 分钟重启了 %d 次（启动标识变了 %d 次）：进程可能在退出后被反复拉起，查看 %s 的日志找退出原因", service.BootChanges, service.BootChanges, service.ServiceName)
 		}
-		out = append(out, componentItem{businessFreshnessItem: restart})
+		out = append(out, componentItem{Fact: restart})
 	}
 	return out
+}
+
+// passStatus 把通过与否换成检查状态。
+func passStatus(passed bool) string {
+	if passed {
+		return domain.CheckStatusOK
+	}
+	return domain.CheckStatusDown
 }

@@ -1,5 +1,5 @@
-// Package delist 是交易计划 4.7 里供事件中心调用的下架名单与持有者查询。
-// 名单是全局的、不分空间，一律用（交易所、市场、交易所代码）定位标的，由 Trade 在使用时按标的表换算内部 ID。
+// Package delist 是下架处理：收到下架事件时写下架记录与禁止名单（intake.go），定时任务按记录推进时间线（timeline.go），
+// 以及名单与持有者查询。名单是全局的、不分空间，一律用（交易所、市场、交易所代码）定位标的，由 Trade 在使用时按标的表换算内部 ID。
 package delist
 
 import (
@@ -30,12 +30,35 @@ type PriceSource interface {
 	LatestPrice(ctx context.Context, tradingAccountID string, key exchange.SymbolKey) (targetapp.Quote, error)
 }
 
+// FlattenRequest 是对一个组合发起的单标的下架清仓：标的已经按交易所换算成内部标的 ID。
+type FlattenRequest struct {
+	SpaceID          string
+	ActionID         string
+	LogicalAccountID string
+	Exchange         string
+	InstrumentID     string
+	Reason           string
+	// DeadlineAt 是截止时间（毫秒，下架时间）。
+	DeadlineAt int64
+}
+
+// ErrFlattenBusy 表示组合正忙（同组合有整组清仓、减仓或别的下架清仓在跑）：没有建动作，下一次推进再试。
+var ErrFlattenBusy = errors.New("组合账户正忙，稍后再发起下架清仓")
+
+// FlattenFunc 发起下架清仓（bootstrap 注入 operator 的 FlattenLogicalAccount），组合正忙时返回 ErrFlattenBusy。
+type FlattenFunc func(ctx context.Context, request FlattenRequest) error
+
 type Service struct {
 	Store  *store.Store
 	Prices PriceSource
 	// OnChanged 在名单变化后调用：已收敛、已阻塞的目标不会被定时器扫描，需要唤醒它们重新判断。
 	OnChanged func()
-	Now       func() time.Time
+	// Flatten 发起下架清仓；为空时定时任务只规划和核对、不发起。
+	Flatten FlattenFunc
+	Now     func() time.Time
+
+	// holders 替换持有者查询（只给测试用）；为空时用 Holders。
+	holders func(ctx context.Context, key Key, paperOnly bool) (HoldersResult, error)
 }
 
 func (s *Service) ready() error {
@@ -58,8 +81,9 @@ func (s *Service) changed() {
 	}
 }
 
-// Key 是（交易所、市场、交易所代码）：交易所、市场、交易所代码一律转大写（BINANCE、OKX；SPOT、SWAP；FOOUSDT、FOO-USDT-SWAP），
-// 调用方传小写也能对上，不会被判成“Trade 无此标的”。
+// Key 是（交易所、市场、交易所代码）。交易所与市场按 Trade 的写法归一（store.NormalizeExchangeMarket），
+// 交易所代码是交易所原文，一律转大写（FOOUSDT、FOO-USDT-SWAP，store.NormalizeExchangeSymbol）；
+// 调用方大小写写错也能对上，不会被判成“Trade 无此标的”。
 type Key struct {
 	Exchange       string
 	MarketType     string
@@ -67,12 +91,12 @@ type Key struct {
 }
 
 func normalize(key Key) (Key, error) {
-	key.Exchange = strings.ToUpper(strings.TrimSpace(key.Exchange))
-	key.MarketType = strings.ToUpper(strings.TrimSpace(key.MarketType))
-	key.ExchangeSymbol = strings.ToUpper(strings.TrimSpace(key.ExchangeSymbol))
+	key.Exchange = store.NormalizeExchangeMarket(key.Exchange)
+	key.MarketType = store.NormalizeExchangeMarket(key.MarketType)
+	key.ExchangeSymbol = store.NormalizeExchangeSymbol(key.ExchangeSymbol)
 	if key.Exchange == "" || key.ExchangeSymbol == "" ||
 		(key.MarketType != string(exchange.MarketTypeSpot) && key.MarketType != string(exchange.MarketTypeSwap)) {
-		return Key{}, fmt.Errorf("%w: 需要交易所、市场（SPOT 或 SWAP）和交易所代码", ErrInvalidRequest)
+		return Key{}, fmt.Errorf("%w: 需要交易所、市场（spot 或 swap）和交易所代码", ErrInvalidRequest)
 	}
 	return key, nil
 }
@@ -87,48 +111,6 @@ func (s *Service) lookup(ctx context.Context, key Key) (store.InstrumentRecord, 
 		return store.InstrumentRecord{}, false, err
 	}
 	return record, true, nil
-}
-
-// BlockResult 是写入名单的结果。
-type BlockResult struct {
-	// Created 为假表示已经在名单里，没有改动。
-	Created bool
-	// InstrumentUnknown 为真表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
-	InstrumentUnknown bool
-}
-
-// Block 把标的写进下架名单。能从标的表查到的记下内部标的 ID 和基础资产（只用于展示和审计），查不到的留空。
-// owner 是写入者的标识，已在名单里时保留第一个写入者。
-func (s *Service) Block(ctx context.Context, key Key, reason, eventID, owner string) (BlockResult, error) {
-	if err := s.ready(); err != nil {
-		return BlockResult{}, err
-	}
-	key, err := normalize(key)
-	if err != nil {
-		return BlockResult{}, err
-	}
-	if strings.TrimSpace(reason) == "" {
-		return BlockResult{}, fmt.Errorf("%w: reason 必填", ErrInvalidRequest)
-	}
-	instrument, known, err := s.lookup(ctx, key)
-	if err != nil {
-		return BlockResult{}, err
-	}
-	created, err := s.Store.BlockInstrument(ctx, store.BlockedInstrumentRecord{
-		Exchange: key.Exchange, MarketType: key.MarketType, ExchangeSymbol: key.ExchangeSymbol,
-		InstrumentID: instrument.InstrumentID, BaseAsset: instrument.BaseAsset,
-		Reason: reason, SourceEventID: strings.TrimSpace(eventID), Owner: owner, BlockedAt: s.now().UnixMilli(),
-	})
-	if err != nil {
-		return BlockResult{}, err
-	}
-	if created {
-		s.changed()
-		if known {
-			s.warnSpecialHolders(ctx, key, instrument)
-		}
-	}
-	return BlockResult{Created: created, InstrumentUnknown: !known}, nil
 }
 
 // warnSpecialHolders 在写入名单时检查：这个标的是不是某个组合的套利底仓对冲腿，或排除资产（BNB 保留、稳定币保证金、保证金币、底仓）。
@@ -168,7 +150,8 @@ func (s *Service) warnSpecialHolders(ctx context.Context, key Key, instrument st
 	}
 }
 
-// Unblock 解除禁止；不在名单里不算错误。
+// Unblock 解除禁止：同一个事务里删掉名单行，并把这个标的所有进行中的下架记录（含演练）记为 CANCELED。
+// 不在名单里不算错误；removed 只说明名单行是否被删。
 func (s *Service) Unblock(ctx context.Context, key Key) (bool, error) {
 	if err := s.ready(); err != nil {
 		return false, err
@@ -177,7 +160,12 @@ func (s *Service) Unblock(ctx context.Context, key Key) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	removed, err := s.Store.UnblockInstrument(ctx, key.Exchange, key.MarketType, key.ExchangeSymbol)
+	var removed bool
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var unblockErr error
+		removed, _, unblockErr = tx.UnblockInstrument(key.Exchange, key.MarketType, key.ExchangeSymbol, store.DelistUnblockedResult, s.now().UnixMilli())
+		return unblockErr
+	})
 	if err != nil {
 		return false, err
 	}

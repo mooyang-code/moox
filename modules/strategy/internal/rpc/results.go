@@ -98,14 +98,14 @@ func (s *Service) ListStrategyTargets(ctx context.Context, req *strategypb.ListS
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
 	}
 	if instance.SessionID == nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: []*strategypb.InstrumentTarget{}}, nil
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: []*strategypb.InstrumentWeight{}}, nil
 	}
 	latest, ok, err := s.Store.LatestOk(ctx, instance.InstanceID, *instance.SessionID)
 	if err != nil {
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: failure(err)}, nil
 	}
 	if !ok {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: []*strategypb.InstrumentTarget{}, SessionId: *instance.SessionID}, nil
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: []*strategypb.InstrumentWeight{}, SessionId: *instance.SessionID}, nil
 	}
-	return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: targetProtos(latest.TargetsJSON), SessionId: latest.SessionID, BarEndTime: formatTime(latest.BarEndTime), ValidUntil: formatTime(latest.ValidUntil), ResultId: latest.ResultID}, nil
+	return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: targetProtos(latest.TargetsJSON), SessionId: latest.SessionID, BarEndTime: millis(latest.BarEndTime), ValidUntil: millis(latest.ValidUntil), ResultId: latest.ResultID}, nil
 }

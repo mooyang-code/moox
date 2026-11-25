@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestDelistFlattenThroughTheRealOrderPath(t *testing.T) {
 	require.Positive(t, opened)
 
 	// 标的进入下架名单后下架清仓。
-	_, err = f.store.BlockInstrument(ctx, blockedRecord("BINANCE", "SWAP", testSymbol))
+	_, err = storetest.BlockInstrument(f.store, blockedRecord("binance", "swap", testSymbol))
 	require.NoError(t, err)
 	operatorService := &operator.Service{
 		Store: f.store, Orders: f.orders, Syncer: syncBridge{service: f.sync}, Prices: prices,
@@ -50,7 +51,7 @@ func TestDelistFlattenThroughTheRealOrderPath(t *testing.T) {
 	}
 	result, err := operatorService.FlattenLogicalAccount(ctx, operator.FlattenCommand{
 		SpaceID: testSpace, ActionID: "delist-e2e", LogicalAccountID: testLogicalAccount, Reason: "标的即将下架",
-		InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Exchange: "BINANCE",
+		InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Exchange: "binance",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", result.Action.Status, "accounts=%+v", result.Accounts)

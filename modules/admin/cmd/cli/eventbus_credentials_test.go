@@ -55,8 +55,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 10 {
-		t.Fatalf("eventbus records=%d, want 10（只有 10 个角色令牌，没有证书）", count)
+	if count != int64(len(eventBusRoles)) {
+		t.Fatalf("eventbus records=%d, want %d（只有角色令牌，没有证书）", count, len(eventBusRoles))
 	}
 }
 
@@ -67,7 +67,8 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	}
 	yaml := usersYAML(tokens)
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
-	require.Contains(t, aclLine(factorACL, "subscribe:"), "moox.event.storage.dataset.period.completed.v1.>")
+	// 拉取消费只订阅自己的收件箱，不订阅事件主题。
+	require.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, strings.TrimSpace(aclLine(factorACL, "subscribe:")))
 	for _, permission := range []string{
 		"$JS.API.CONSUMER.INFO.*.factor_collector_period_v1",
 		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1",
@@ -84,9 +85,9 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 		require.Contains(t, aclLine(factorACL, "publish:"), permission)
 	}
 	require.Equal(t, []string{
-		"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer",
+		"eventbus-internal-admin", "metrics-publisher", "monitor-observability-consumer",
 		"storage-eventbus",
-		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus", "callback-dispatcher-eventbus",
+		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus",
 	}, eventBusRoles)
 	collectorACL := eventBusACLBlock(yaml, "collector-eventbus")
 	for _, permission := range []string{
@@ -102,31 +103,28 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	}
 }
 
-func TestEventbusCredentialsCallbackDispatcherConsumer(t *testing.T) {
+func TestEventbusCredentialsTradeConsumesTargetsAndDelists(t *testing.T) {
 	tokens := make(map[string]string, len(eventBusRoles))
 	for _, role := range eventBusRoles {
 		tokens[role] = "token"
 	}
-	acl := eventBusACLBlock(usersYAML(tokens), "callback-dispatcher-eventbus")
+	acl := eventBusACLBlock(usersYAML(tokens), "trade-eventbus")
 	publish := aclLine(acl, "publish:")
-	require.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, strings.TrimSpace(aclLine(acl, "subscribe:")))
-	require.Contains(t, publish, `"$JS.API.STREAM.NAMES"`)
-	// 事件中心只消费，不发布任何事件主题。
+	// Trade 只消费，不发布任何事件主题。
 	require.NotContains(t, publish, `"moox.event.`)
-	for _, event := range events.CallbackDispatcherEvents {
-		name := events.CallbackDispatcherConsumerName(event)
+	for _, consumer := range []struct{ stream, name string }{
+		{events.StreamTrade, events.TradeTargetConsumer.Name()},
+		{events.StreamCollector, events.TradeDelistConsumer.Name()},
+	} {
 		for _, permission := range []string{
-			"$JS.API.CONSUMER.INFO.*." + name,
-			"$JS.API.CONSUMER.CREATE." + event.Stream() + "." + name,
-			"$JS.API.CONSUMER.DURABLE.CREATE." + event.Stream() + "." + name,
-			"$JS.API.CONSUMER.MSG.NEXT." + event.Stream() + "." + name,
-			"$JS.ACK." + event.Stream() + "." + name + ".>",
+			"$JS.API.CONSUMER.CREATE." + consumer.stream + "." + consumer.name,
+			"$JS.API.CONSUMER.DURABLE.CREATE." + consumer.stream + "." + consumer.name,
+			"$JS.API.CONSUMER.MSG.NEXT." + consumer.stream + "." + consumer.name,
+			"$JS.ACK." + consumer.stream + "." + consumer.name + ".>",
 		} {
 			require.Contains(t, publish, `"`+permission+`"`)
 		}
 	}
-	// 凭据文件名与角色一一对应，export-clients 能按文件名找到它。
-	require.Equal(t, "callback-dispatcher-eventbus.yaml", eventBusRoleFiles()["callback-dispatcher-eventbus"])
 }
 
 func TestEventBusCredentialsExportAndRotate(t *testing.T) {
@@ -150,7 +148,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	for _, name := range []string{"ca.pem", "server.pem", "server-key.pem"} {
 		assert.NoFileExists(t, filepath.Join(exportDir, name))
 	}
-	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
+	assert.NoFileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "metrics-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-observability.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "trade-eventbus.yaml"))
@@ -165,11 +163,10 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	// 导出一律写对外地址；各单元安装时再按"与 EventBus 是否同机"改写成实际连接地址。
 	for name, wantURL := range map[string]string{
-		"internal-admin.yaml":      "tls://203.0.113.10:4222",
-		"metrics-publisher.yaml":   "tls://203.0.113.10:4222",
-		"hostagent-publisher.yaml": "tls://203.0.113.10:4222",
-		"storage-eventbus.yaml":    "tls://203.0.113.10:4222",
-		"factor-eventbus.yaml":     "tls://203.0.113.10:4222",
+		"internal-admin.yaml":    "tls://203.0.113.10:4222",
+		"metrics-publisher.yaml": "tls://203.0.113.10:4222",
+		"storage-eventbus.yaml":  "tls://203.0.113.10:4222",
+		"factor-eventbus.yaml":   "tls://203.0.113.10:4222",
 	} {
 		credential, loadErr := jetstream.LoadCredentialFile(filepath.Join(exportDir, name))
 		require.NoError(t, loadErr, name)
@@ -179,7 +176,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 
 	yaml := usersYAML(map[string]string{
 		"eventbus-internal-admin":        "a",
-		"hostagent-publisher":            "b",
 		"metrics-publisher":              "c",
 		"monitor-observability-consumer": "d",
 		"storage-eventbus":               "f",
@@ -191,13 +187,13 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "factor-eventbus")
 	assert.Contains(t, yaml, "moox.event.observability.metrics.snapshot.reported.v1.>")
 	assert.NotContains(t, yaml, "moox.event.observability.health.")
-	assert.Contains(t, yaml, "moox.event.observability.host.snapshot.reported.v1.>")
+	assert.NotContains(t, yaml, "moox.event.observability.host.snapshot")
+	assert.NotContains(t, yaml, "hostagent-publisher")
 	internalAdminACL := eventBusACLBlock(yaml, "eventbus-internal-admin")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "$JS.EVENT.ADVISORY.API"]}`, aclLine(internalAdminACL, "subscribe:"))
 	assert.NotContains(t, aclLine(internalAdminACL, "subscribe:"), "$JS.EVENT.ADVISORY.API.>")
 	for role, password := range map[string]string{
 		"eventbus-internal-admin":        "a",
-		"hostagent-publisher":            "b",
 		"metrics-publisher":              "c",
 		"monitor-observability-consumer": "d",
 		"storage-eventbus":               "f",
@@ -214,8 +210,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, metricsPublisherACL, "moox.event.observability.log.reported.v1.>")
 	assert.NotContains(t, metricsPublisherACL, "moox.event.observability.host.snapshot")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(metricsPublisherACL, "subscribe:"))
-	hostAgentACL := eventBusACLBlock(yaml, "hostagent-publisher")
-	assert.Contains(t, hostAgentACL, "moox.event.observability.host.snapshot.reported.v1.>")
 	monitorACL := eventBusACLBlock(yaml, "monitor-observability-consumer")
 	assert.Contains(t, monitorACL, "$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1")
 	assert.Contains(t, monitorACL, "$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1")
@@ -225,7 +219,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, yaml, "moox.event.trade.target.weight_requested.v1.>")
 	strategyACL := eventBusACLBlock(yaml, "strategy-eventbus")
 	assert.NotContains(t, strategyACL, "$JS.API.>")
-	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v2.>"]}`)
+	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	tradeACL := eventBusACLBlock(yaml, "trade-eventbus")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1")
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_target_weight_v1")
@@ -246,8 +240,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, yaml, "archive-eventbus")
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
 	assert.Contains(t, aclLine(factorACL, "publish:"), "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1")
-	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.dataset.period.completed.v1.>"]}`, aclLine(factorACL, "subscribe:"))
-	assert.Equal(t, `responses: {max_messages: 1, expires: 10s}`, aclLine(factorACL, "responses:"))
+	assert.Empty(t, aclLine(factorACL, "responses:"))
 	for _, role := range eventBusRoles {
 		if role == "eventbus-internal-admin" {
 			continue
@@ -255,16 +248,10 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		acl := eventBusACLBlock(yaml, role)
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.API")
 		assert.NotContains(t, aclLine(acl, "subscribe:"), "$JS.ACK")
-		if role == "strategy-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.view.data.ready.v2.>"]}`)
-		} else if role == "factor-eventbus" {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.dataset.period.completed.v1.>"]}`)
-		} else {
-			assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
-		}
+		assert.Contains(t, acl, `subscribe: {allow: ["_INBOX.>"]}`)
 	}
 
-	rotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "hostagent-publisher"}
+	rotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "metrics-publisher"}
 	err = runEventBusCredentialsCommand(rotateArgs, &bytes.Buffer{}, &bytes.Buffer{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--confirm")
@@ -281,38 +268,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error)
-	assert.EqualValues(t, 10, count)
-}
-
-func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
-	dir := t.TempDir()
-	roleFiles := map[string]string{
-		"internal-admin.yaml":               "token: admin-token\n",
-		"hostagent-publisher.yaml":          "eventbus_token: host-token\n",
-		"metrics-publisher.yaml":            "token: metrics-token\n",
-		"monitor-observability.yaml":        "monitor_eventbus_token: monitor-token\n",
-		"storage-eventbus.yaml":             "token: storage-token\n",
-		"factor-eventbus.yaml":              "token: factor-token\n",
-		"strategy-eventbus.yaml":            "token: strategy-token\n",
-		"trade-eventbus.yaml":               "token: trade-token\n",
-		"collector-eventbus.yaml":           "token: collector-token\n",
-		"callback-dispatcher-eventbus.yaml": "token: dispatcher-token\n",
-	}
-	for name, content := range roleFiles {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
-	}
-	var out bytes.Buffer
-	require.NoError(t, runEventBusCredentialsCommand([]string{"eventbus-credentials", "reconcile", "--output-dir", dir}, &out, &bytes.Buffer{}))
-	raw, err := os.ReadFile(filepath.Join(dir, "users.yaml"))
-	require.NoError(t, err)
-	text := string(raw)
-	assert.Contains(t, text, "moox.event.trade.target.weight_requested.v1.>")
-	assert.Contains(t, text, "moox.event.storage.view.data.ready.v2.>")
-	assert.NotContains(t, text, "moox.factor.internal")
-	assert.Contains(t, text, "factor_collector_period_v1")
-	assert.Contains(t, text, "strategy-token")
-	assert.Contains(t, text, "factor-token")
-	assert.Contains(t, text, "trade-token")
+	assert.EqualValues(t, len(eventBusRoles), count)
 }
 
 func seedEventBusDeployment(t *testing.T, dbPath string) {
@@ -322,7 +278,8 @@ func seedEventBusDeployment(t *testing.T, dbPath string) {
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "eventbus"}}}))
+	_, err = dao.ReplaceTopology(t.Context(), []sysdeploy.HostSpec{{HostID: "gateway-node-1", Enabled: true, Address: "203.0.113.10", Components: []string{"admin", "eventbus"}}})
+	require.NoError(t, err)
 }
 
 func eventBusACLBlock(yaml, username string) string {
@@ -488,9 +445,6 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.Error(t, err)
 
 	for role, subjects := range map[string][]string{
-		"hostagent-publisher": {
-			"moox.event.observability.host.snapshot.reported.v1.mooxsys.host-1",
-		},
 		"metrics-publisher": {
 			"moox.event.observability.metrics.snapshot.reported.v1.mooxsys.trade/instance-1",
 			"moox.event.observability.log.reported.v1.mooxsys.trade/instance-1",
@@ -553,10 +507,32 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		Stream: "MOOX_STORAGE", Durable: "factor_collector_period_v1",
 		FilterSubject: "moox.event.storage.dataset.period.completed.v1.>",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
-		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true,
 	})
 	require.NoError(t, err)
+	// 只订阅收件箱也能拉到并确认消息：拉取消费不需要订阅事件主题。测试消息不是信封格式，解码错误不影响这里要验证的权限。
+	fetched, _ := factorConsumer.Fetch(factorCtx, 1)
+	require.Len(t, fetched, 1)
+	require.NoError(t, fetched[0].Ack(factorCtx))
 	require.NoError(t, factorConsumer.Close())
+
+	strategyPull, err := jetstream.Connect(factorCtx, jetstream.Config{
+		URLs: []string{server.ClientURL()}, Name: "strategy-view-auth-e2e",
+		Username: "strategy-eventbus", Password: tokens["strategy-eventbus"],
+	})
+	require.NoError(t, err)
+	defer strategyPull.Close()
+	strategyConsumer, err := strategyPull.NewConsumer(factorCtx, jetstream.ConsumerConfig{
+		Stream: "MOOX_STORAGE", Durable: "strategy_view_data_ready_v1",
+		FilterSubject: "moox.event.storage.view.data.ready.v2.>",
+		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
+		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy, DeliverDecodeErrors: true,
+	})
+	require.NoError(t, err)
+	fetched, _ = strategyConsumer.Fetch(factorCtx, 1)
+	require.Len(t, fetched, 1)
+	require.NoError(t, fetched[0].Ack(factorCtx))
+	require.NoError(t, strategyConsumer.Close())
 }
 
 func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) {
@@ -566,14 +542,18 @@ func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) 
 	require.NoError(t, db.Exec(adminschema.AdminSQL()).Error)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "control", Address: "control.example.test", Components: []string{"admin"}},
-		{HostID: "bus", Address: "bus.example.test", Components: []string{"eventbus"}},
-	}))
+	specs := []sysdeploy.HostSpec{
+		{HostID: "control", Enabled: true, Address: "control.example.test", Components: []string{"admin"}},
+		{HostID: "bus", Enabled: true, Address: "bus.example.test", Components: []string{"eventbus"}},
+	}
+	_, err = dao.ReplaceTopology(t.Context(), specs)
+	require.NoError(t, err)
 	address, err := eventBusNATSURL(db, "control")
 	require.NoError(t, err)
 	require.Equal(t, "tls://bus.example.test:4222", address)
-	require.NoError(t, dao.SetHostStatus(t.Context(), "bus", "disabled"))
+	specs[1].Enabled = false
+	_, err = dao.ReplaceTopology(t.Context(), specs)
+	require.NoError(t, err)
 	_, err = eventBusNATSURL(db, "control")
 	require.ErrorContains(t, err, "active EventBus deployment not found")
 }
@@ -606,10 +586,11 @@ func TestEventBusExportFollowsEventBusMoveWithoutRotation(t *testing.T) {
 	require.NoError(t, err)
 	topology, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
 	require.NoError(t, err)
-	require.NoError(t, topology.SyncHosts(t.Context(), []sysdeploy.HostSpec{
-		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin"}},
-		{HostID: "storage-1", Address: "203.0.113.20", Components: []string{"eventbus"}},
-	}))
+	_, err = topology.ReplaceTopology(t.Context(), []sysdeploy.HostSpec{
+		{HostID: "gateway-node-1", Enabled: true, Address: "203.0.113.10", Components: []string{"admin"}},
+		{HostID: "storage-1", Enabled: true, Address: "203.0.113.20", Components: []string{"eventbus"}},
+	})
+	require.NoError(t, err)
 	closeAdminCLIDB(db)
 
 	_, err = run("ensure")

@@ -200,7 +200,7 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	}
 	record := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1",
-		Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE",
+		Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "LIVE",
 		AccountMode:        string(exchange.AccountModeBinanceStandard),
 		CredentialSecretID: "secret-1", InspectionJSON: inspected("fingerprint-1"),
 		SettlementAsset: "USDT", Status: "ENABLED",

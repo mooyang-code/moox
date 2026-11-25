@@ -10,13 +10,11 @@
 |---|---|---|
 | Primary | `moox_storage_dataset_output_watermark_timestamp_seconds` | 事实是否已写入。`data kline get` 走 Primary，不代表 View |
 | View 索引 | `moox_storage_view_output_watermark_timestamp_seconds` | DuckDB 已提交的业务时间 |
-| View 跟随 | `moox_storage_view_follow_lag_seconds` / `moox_storage_view_follow_lag_changes`；`moox-cli data view state --space-id <空间> --view-id <View>` 的 `index_id`（空表示还在建索引）、`applied_cursor`、`indexed_to` | View 是否跟上变更日志；跟上之前的完成标记才会发 `ViewDataReady`（Strategy 触发） |
+| View 跟随 | `moox_storage_view_follow_lag_seconds` / `moox_storage_view_follow_lag_changes`；`moox-cli data view state --space-id <空间> --dataset-id <数据集>` 的 `index_id`（空表示还在建索引）、`applied_cursor`、`indexed_to` | View 是否跟上变更日志；跟上之前的完成标记才会发 `ViewDataReady`（Strategy 触发） |
 | Factor 计算 | `factor_period_total{task,status}`、`factor_period_lag_seconds{task}`、`factor_last_period_time{task}` | 各因子任务是否在算、是否在写 |
 | JetStream | Factor durable：`factor_collector_period_v1` pending/redelivered | 积压还是处理挂死 |
 
-`t_views.c_mtime` 不是 K 线水位。
-
-每个采集任务独占一个结果 Dataset/View：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0` 与 `view_dasftksvjhj2jom4vhd0_kline_1m`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg` 与 `view_dasftksvjhj2jom4vhdg_kline_1m`。每个因子任务的结果 Dataset 与默认 View（`dataset_factor_<后缀>`、`view_factor_<后缀>`）由 factor-mgr 创建与维护（Storage 不托管 View），一个源 Dataset 可以有多个因子任务。
+每个数据集恰好有一个 View（查询索引），随数据集建删，按数据集 ID 寻址。每个采集任务独占一个结果数据集：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg`。每个因子任务的结果数据集（`dataset_factor_<后缀>`）由 factor-mgr 创建与维护，一个源数据集可以有多个因子任务。
 
 ## 生产路径（不要混用）
 
@@ -24,7 +22,7 @@ Storage 的路径都在存储机的部署根（默认 `/data/moox`）下：
 
 - 业务配置 `--storage-conf /data/moox/config/storage-primary/storage.yaml`、`--view-conf /data/moox/config/storage-view/storage.yaml`（`moox-cli storage …` 缺省自动补上）；不要传 `trpc_go.yaml`。
 - `storage-view` 的停启是它的 systemd 用户服务 `moox-storage-view`：`moox-cli setup stop|start-component --host <存储机> --component storage-view --yes`。
-- 每个 View 一个跟随协程读 Primary 的变更日志，没有 View 的 JetStream 消费者，也没有消费并发参数。
+- 每个数据集的 View 一个跟随协程读 Primary 的变更日志，没有 View 的 JetStream 消费者，也没有消费并发参数。
 - 元数据库与 Pebble 在 `data/storage-primary/`，View 索引在 `data/storage-view/`。不要把操作机的路径当作存储机上的路径。
 
 各主机的部署根相同；Storage 只在存储机上，不要往其他主机部署 Storage。
@@ -45,14 +43,14 @@ Storage 的路径都在存储机的部署根（默认 `/data/moox`）下：
 
 ## Storage View：单个 View 跟随停滞
 
-Primary 水位前进而某个 View 长时间不动时，用 `moox-cli data view state` 看它的 `index_id` 与 `applied_cursor` 是否前进，对照该 View 的 `moox_storage_view_follow_lag_seconds` / `follow_lag_changes`（Monitor 检查 `view_follow:storage_view` 落后超过 2 分钟告警），再看 `storage-view` 日志里的索引写入错误或就绪事件发布失败。`index_id` 为空表示首次建索引或断档重建中，等它建完即可；就绪事件发不出去时该 View 停在那条完成标记上重试，先修 EventBus。
+Primary 水位前进而某个 View 长时间不动时，用 `moox-cli data view state` 看它的 `index_id` 与 `applied_cursor` 是否前进，对照该 View 的 `moox_storage_view_follow_lag_seconds` / `follow_lag_changes`（落后超过 2 分钟时 storage-view 上报关注项 `attention:storage-view:view_follow_lagging`），再看 `storage-view` 日志里的索引写入错误或就绪事件发布失败。`index_id` 为空表示首次建索引或断档重建中，等它建完即可；就绪事件发不出去时该 View 停在那条完成标记上重试，先修 EventBus。
 
-只有索引损坏、要按新的 `view_rows_per_series` 回填，或要丢弃 View 的全部内容时，才在操作机用 `moox-cli storage repair-view` 重建指定 View（经 SSH 在存储机上执行同版本程序；路径参数自动补齐），先只读预演（不带 `--yes` 就是预演）：
+只有索引损坏、要按新的 `view_rows_per_series` 回填，或要丢弃 View 的全部内容时，才在操作机用 `moox-cli storage repair-view` 重建指定数据集的 View（经 SSH 在存储机上执行同版本程序；路径参数自动补齐），先只读预演（不带 `--yes` 就是预演）：
 
 ```bash
 moox-cli storage repair-view \
   --space-id crypto \
-  --view-id view_dasftksvjhj2jom4vhd0_kline_1m
+  --dataset-id dataset_dasftksvjhj2jom4vhd0
 ```
 
 核对目标后，按既有授权执行对应 `--yes` 命令。它暂停 storage-view、删除该 View 的索引文件（元数据不改、不备份），恢复后从 Primary 重新建索引，期间 View 不可读；记录型 View 重建后为空，只跟随新写入。

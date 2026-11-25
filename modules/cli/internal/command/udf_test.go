@@ -3,13 +3,14 @@ package command
 import (
 	"bytes"
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -87,7 +88,7 @@ func TestUdfActivatePrintsImpactsAndPrerequisites(t *testing.T) {
 		Impacts:       []*factorpb.UdfImpact{{FactorId: "f1", OldDefinitionHash: "sha256:1111111111111111111111", NewDefinitionHash: "sha256:2222222222222222222222", OldLookback: 20, NewLookback: 30, Members: []string{"t/f1"}}},
 		Tasks:         []string{"t"},
 		Instances:     []string{"inst-1"},
-		Prerequisites: []*factorpb.UdfPrerequisite{{Name: "因子引擎模块已暂停且本次暂停已收敛", Ok: true, Detail: "已暂停"}, {Name: "受影响任务没有已领取且未结束的补算作业", Ok: false, Detail: "job-1"}},
+		Prerequisites: []*factorpb.UdfPrerequisite{{Name: "没有已启用的成员引用它", Ok: true}, {Name: "受影响任务没有已经开始的补算作业", Ok: false, Detail: "job-1"}},
 		Notes:         []string{"回看变长"},
 	}
 	g := &udfFakeGateway{rsp: rsp}
@@ -98,7 +99,7 @@ func TestUdfActivatePrintsImpactsAndPrerequisites(t *testing.T) {
 	assert.True(t, req.GetDryRun())
 	assert.Equal(t, testHash, req.GetHash())
 	text := out.String()
-	for _, want := range []string{"影响清单", "因子 f1", "回看 20 → 30", "策略实例：inst-1", "✓ 因子引擎模块已暂停", "× 受影响任务没有已领取", "注意：回看变长", "预览"} {
+	for _, want := range []string{"影响清单", "因子 f1", "回看 20 → 30", "策略实例：inst-1", "✓ 没有已启用的成员引用它", "× 受影响任务没有已经开始", "注意：回看变长", "预览"} {
 		assert.Contains(t, text, want)
 	}
 }
@@ -124,13 +125,13 @@ func TestUdfActivateConflictStillPrintsTheChecks(t *testing.T) {
 	g := &udfFakeGateway{rsp: &factorpb.ActivateUdfRsp{
 		RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "前提不满足"},
 		Name:    "ts_mean_udf", NewHash: testHash,
-		Prerequisites: []*factorpb.UdfPrerequisite{{Name: "引擎暂停", Ok: false, Detail: "引擎在运行"}},
+		Prerequisites: []*factorpb.UdfPrerequisite{{Name: "没有已启用的成员引用它", Ok: false, Detail: "ftask_a/f1"}},
 	}}
 	useUdfGateway(t, g)
 	var out bytes.Buffer
 	err := runUdfActivate(context.Background(), &out, udfActivateOptions{Ref: "ts_mean_udf@" + testHash})
 	require.ErrorContains(t, err, "前提不满足")
-	assert.Contains(t, out.String(), "× 引擎暂停：引擎在运行")
+	assert.Contains(t, out.String(), "× 没有已启用的成员引用它：ftask_a/f1")
 }
 
 func TestUdfListAndShow(t *testing.T) {

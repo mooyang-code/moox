@@ -12,7 +12,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testing.T) {
@@ -90,7 +89,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	occurredAt := time.Now().UTC()
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset_binance_kline_1m", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-		CauseEventId: "cause-e2e", CompletedAt: timestamppb.New(occurredAt),
+		CauseEventId: "cause-e2e", CompletedAt: occurredAt.UnixMilli(),
 	}
 	first, err := publisher.Publish(context.Background(), events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "dataset_binance_kline_1m"})
 	if err != nil || first == nil || first.Duplicate {

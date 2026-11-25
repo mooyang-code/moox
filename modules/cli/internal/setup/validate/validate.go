@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -49,7 +50,9 @@ func Run(ctx context.Context, cfg *topology.Config, deps Dependencies) (Result, 
 		return result, fmt.Errorf("%w: tencent_auth_failed", ErrValidationFailed)
 	}
 	result.Checks = append(result.Checks, Check{Name: "tencent_cloud", Status: "valid"})
-	return appendHostChecks(ctx, deps.SSH, result, cfg.Hosts())
+	// 停用的主机只写登记、可能连不上，不检查 SSH。
+	hosts := slices.DeleteFunc(cfg.Hosts(), func(host topology.Host) bool { return !host.Enabled })
+	return appendHostChecks(ctx, deps.SSH, result, hosts)
 }
 
 func appendHostChecks(ctx context.Context, checker SSHChecker, result Result, hosts []topology.Host) (Result, error) {

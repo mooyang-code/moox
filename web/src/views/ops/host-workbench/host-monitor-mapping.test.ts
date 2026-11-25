@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { HostMetrics } from "@/api/modules/host-monitor";
 import type { DeploymentHost } from "@/api/admin/types";
-import { buildHostMonitorRows, countUnregisteredAgents, normalizeMonitorViewMode } from "./host-monitor-mapping";
+import { buildHostMonitorRows, normalizeMonitorViewMode } from "./host-monitor-mapping";
 
 function monitor(overrides: Partial<HostMetrics> = {}): HostMetrics {
   return {
-    agent_id: "agent-1",
     host_id: "control",
     hostname: "VM-0-1-ubuntu",
     status: "online",
-    timestamp: "2026-07-15T02:00:00Z",
+    timestamp: "1784080800000",
     cpu: { usage: 24, usage_available: true, cores: 4 },
     memory: { total: 100, used: 38, available: 62, percent: 38, percent_available: true },
     filesystems: [
@@ -57,7 +56,7 @@ describe("buildHostMonitorRows", () => {
       displayAddress: "203.0.113.10",
       state: "online"
     });
-    expect(rows[0].monitor?.agent_id).toBe("agent-1");
+    expect(rows[0].monitor?.host_id).toBe("control");
   });
 
   it("falls back to the host id when no label is registered and shows unreported hosts", () => {
@@ -65,29 +64,11 @@ describe("buildHostMonitorRows", () => {
     expect(rows[0]).toMatchObject({ displayName: "storage", state: "unmonitored", monitor: undefined });
   });
 
-  it("uses the most recently reported agent when a host has several", () => {
-    const rows = buildHostMonitorRows(
-      [host()],
-      [
-        monitor({ agent_id: "old", timestamp: "2026-07-15T01:00:00Z" }),
-        monitor({ agent_id: "new", timestamp: "2026-07-15T02:00:00Z" }),
-        monitor({ agent_id: "older", timestamp: "2026-07-14T01:00:00Z" })
-      ]
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].monitor?.agent_id).toBe("new");
-  });
-
-  it("never turns an unregistered agent into a row and only counts it", () => {
-    const monitors = [
-      monitor({ agent_id: "stray", host_id: "" }),
-      monitor({ agent_id: "ghost", host_id: "retired-host" }),
-      monitor({ agent_id: "stray2", host_id: "" })
-    ];
-    const hosts = [host()];
-    expect(buildHostMonitorRows(hosts, monitors).map(row => row.key)).toEqual(["control"]);
-    expect(buildHostMonitorRows(hosts, monitors)[0].state).toBe("unmonitored");
-    expect(countUnregisteredAgents(hosts, monitors)).toBe(3);
+  it("gives every registered host exactly one row and ignores reports from unregistered hosts", () => {
+    const hosts = [host(), host({ host_id: "storage", label: "存储机" })];
+    const rows = buildHostMonitorRows(hosts, [monitor({ host_id: "retired-host" }), monitor({ host_id: "storage" })]);
+    expect(rows.map(row => row.key)).toEqual(["control", "storage"]);
+    expect(rows.map(row => row.state)).toEqual(["unmonitored", "online"]);
   });
 
   it("derives summaries, attention, and aggregate network rates", () => {

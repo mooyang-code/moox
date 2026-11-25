@@ -4,24 +4,19 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/lifecycle"
-	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // FactorPeriodState is one member's outcome for the most recent live period.
 type FactorPeriodState struct {
 	MemberKey string
 	// MemberKind 是成员类型：fixed 或 var。
-	MemberKind     string
-	FactorID       string
-	Status         string
+	MemberKind string
+	FactorID   string
+	Status     string
+	// FailedSubjects 是该成员本期完整的失败标的。
 	FailedSubjects []string
 	SpecHash       string
 	DefinitionHash string
-	// FailedSeries 是按序列（标的、series_tag）的失败名单，口径同 FailedSubjects。
-	FailedSeries []seriesset.Series
-	// SkippedSeriesTags 是被跳过的 series_tag（截面因子全集缺数）：这些序列的结果写 NULL。
-	// 全部 tag 都跳过时 Status 为 skipped；只跳过一部分时 Status 为 degraded，并在这里列出。
-	SkippedSeriesTags []string
 }
 
 // TaskRunSummary is the latest live period of one factor task as reported by
@@ -29,8 +24,8 @@ type FactorPeriodState struct {
 type TaskRunSummary struct {
 	TaskID         string
 	LastPeriodTime int64
-	// CompletedAt 是引擎写完 LastPeriodTime 这一期的 Unix 秒；0 表示未知（引擎重启前的期次）。
-	CompletedAt    int64
+	// CompletedAt 是引擎写完 LastPeriodTime 这一期的时刻；零值表示未知（引擎重启前的期次）。
+	CompletedAt    time.Time
 	LastStatus     string
 	LagSeconds     int64
 	Factors        []FactorPeriodState
@@ -125,12 +120,10 @@ type UDFModuleStatus struct {
 	Error string
 }
 
-// EngineLifecycle 是引擎模块级的生命周期状态。Quiesced 为真表示本次暂停已收敛（在途写结果操作都已结束）。
+// EngineLifecycle 是引擎模块级的生命周期状态。
 type EngineLifecycle struct {
 	Stage          string
 	PausedSince    time.Time
-	QuiescedAt     time.Time
-	Quiesced       bool
 	CatchupBlocked string
 	// PauseKind（manual、system）与 PauseReason 是本次暂停的类型与原因；Catchup 是恢复追赶的进度。factor-mgr 把它们代报给 Monitor。
 	PauseKind   string

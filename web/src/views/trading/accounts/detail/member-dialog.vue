@@ -16,7 +16,7 @@
       >
         <a-select v-model="form.trading_account_id" allow-search placeholder="选择执行账户">
           <a-option v-for="item in candidates" :key="item.trading_account_id" :value="item.trading_account_id">
-            {{ item.name }}（{{ exchangeLabels[item.exchange] || "-" }} · {{ marketsText(item.markets) }}）
+            {{ item.name }}（{{ exchangeLabel(item.exchange) }} · {{ marketsText(item.markets) }}）
           </a-option>
         </a-select>
         <template v-if="!candidates.length" #extra
@@ -57,7 +57,7 @@
 import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { addLogicalAccountMember, exchangeLabels, isTradeAdoptionRequired } from "@/api/trade";
+import { addLogicalAccountMember, exchangeLabel, isTradeAdoptionRequired } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";

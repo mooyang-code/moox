@@ -1,35 +1,29 @@
 /* ts命名空间 */
 /* 路由-Menu */
 declare namespace Menu {
+  /** 标签栏里的一条路由（由当前路由深拷贝而来） */
   interface MenuOptions {
-    id: string;
-    parentId: string;
     path: string;
     name: string;
-    redirect?: string;
-    component?: string | (() => Promise<unknown>);
     meta: MetaType;
-    children?: MenuOptions[] | null | any;
+    query?: Record<string, unknown>;
+    params?: Record<string, unknown>;
   }
+  /** 路由表（router/route.ts）里 meta 的字段 */
   interface MetaType {
     title: string;
-    hide: boolean;
-    disable: boolean;
-    affix: boolean;
-    link?: string;
-    iframe?: boolean;
-    icon?: string;
+    /** 不进菜单与标签栏（编辑页、详情页） */
+    hide?: boolean;
+    /** 标签页不能关闭（首页） */
+    affix?: boolean;
+    /** 一级菜单的图标 */
     svgIcon?: string;
-    sort?: number;
-    type?: number;
     /** 隐藏路由进入时侧栏高亮的菜单 name */
     activeMenu?: string;
     /** 同一个页面有几条地址时写相同的 viewKey：在这些地址之间换时复用页面组件 */
     viewKey?: string;
     /** 交易账户页面所属的环境：paper、testnet、prod */
     env?: string;
-    /** 同一路径仅 query 变化时复用页面组件（不重建、不闪全局加载态），页面自己监听 query。 */
-    reuseOnQuery?: boolean;
   }
 }
 /* tabs菜单 */

@@ -56,8 +56,9 @@ func TestListHistorySeedsMapsProgress(t *testing.T) {
 	require.Equal(t, int32(2), first.GetFailedChunks())
 	require.Equal(t, int64(90), first.GetEtaSeconds())
 	require.Equal(t, now.Format(time.RFC3339), first.GetEffectiveFrom())
-	require.Empty(t, first.GetFinishedAt())
-	require.Equal(t, finished.Format(time.RFC3339), rsp.GetSeeds()[1].GetFinishedAt())
+	require.Zero(t, first.GetFinishedAt())
+	require.Equal(t, now.UnixMilli(), first.GetStartedAt())
+	require.Equal(t, finished.UnixMilli(), rsp.GetSeeds()[1].GetFinishedAt())
 }
 
 func TestSkipHistorySeedRequiresSpace(t *testing.T) {

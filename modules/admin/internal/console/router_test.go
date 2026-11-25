@@ -39,21 +39,21 @@ func catalogReadOnly(t *testing.T, path, method string) bool {
 }
 
 // newTestRouter 建控制台路由；store 为空时用一张新的会话表。
-func newTestRouter(t *testing.T, store *session.Store, local *LocalDispatcher, gateway RPCForwarder, authorizers ...SpaceAuthorizer) *HTTPRouter {
+func newTestRouter(t *testing.T, store *session.Store, local *LocalDispatcher, gateway RPCForwarder) *HTTPRouter {
 	t.Helper()
 	if store == nil {
 		var err error
 		store, err = session.NewStore(time.Hour)
 		require.NoError(t, err)
 	}
-	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, store, authorizers...)
+	router, err := NewHTTPRouter(NewConsoleHandle(), local, gateway, store)
 	require.NoError(t, err)
 	return router
 }
 
 func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 	for _, tc := range []struct{ name, method, path string }{
-		{"storage", "ListFields", "trpc.moox.storage.Metadata"},
+		{"storage", "ListDatasets", "trpc.moox.storage.Metadata"},
 		{"storage", "UpsertFields", "trpc.moox.storage.PrimaryStore"},
 		{"storage", "QueryTimeSeriesRows", "trpc.moox.storage.DataView"},
 		{"collector", "GetTaskList", "trpc.moox.collector.CollectMgr"},
@@ -76,8 +76,7 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 				require.Equal(t, gatewayclient.CallMetadata{SpaceID: "space-1", UserID: "u1", TraceID: "trace-1"}, gatewayclient.CallMetadataFromContext(ctx))
 				return response, nil
 			})
-			authorizer := &fakeSpaceAuthorizer{}
-			router := newTestRouter(t, store, nil, gateway, authorizer).buildControlRouter()
+			router := newTestRouter(t, store, nil, gateway).buildControlRouter()
 			r := browserRequest(t, current, "/api/admin/"+tc.name+"/"+tc.method, "space-1", body)
 			r.Header.Set("X-Trace-Id", "trace-1")
 			r.Header.Set("X-User-Id", "spoofed")
@@ -86,9 +85,6 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 			require.Equal(t, http.StatusOK, rr.Code)
 			require.Equal(t, response, rr.Body.Bytes())
 			require.Equal(t, 1, calls)
-			if isSpaceScopedService(tc.name) {
-				require.Equal(t, "space-1", authorizer.spaceID)
-			}
 		})
 	}
 }
@@ -101,11 +97,11 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
 		"secret/GetCloudCredential", "SecretMgr/getcloudcredential", "trpc.moox.ops.SecretMgr/GetCloudCredential",
-		"sysdeploy/SyncHostDeployments", "sysdeploy/DeleteHost",
+		"sysdeploy/SyncTopology",
 		"trade/CloseTargetSession", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",
-		"storage-primary/ListFields", "storage-view/QueryTimeSeriesRows", "storage/ApplyReplica",
-		"auth/login", "auth/Unknown", "unknown/ListFields",
+		"storage-primary/ListDatasets", "storage-view/QueryTimeSeriesRows", "storage/ApplyReplica",
+		"auth/login", "auth/Unknown", "unknown/ListDatasets",
 	} {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/"+suffix, strings.NewReader(`{}`)))
@@ -235,55 +231,43 @@ func TestConsoleUsesGeneratedLocalHandlersAndVerifiedUserContext(t *testing.T) {
 	require.Equal(t, 2, implementation.calls)
 }
 
-func TestConsoleRetainsSpaceAuthorizationAndRejectsNestedSpaceMismatch(t *testing.T) {
+// 不按空间放行，只核对请求头与请求体里的空间一致；必须带空间的服务没有空间时拒绝。
+func TestConsoleRejectsMissingOrMismatchedSpace(t *testing.T) {
 	for _, tc := range []struct {
 		name, space, body string
-		denied            bool
+		status            int
 	}{
-		{"missing space", "", `{}`, false},
-		{"unauthorized space", "space-1", `{}`, true},
-		{"nested snake space", "space-1", `{"request":{"space_id":"space-2"}}`, false},
-		{"nested camel space", "space-1", `{"requests":[{"spaceId":"space-2"}]}`, false},
+		{"missing space", "", `{}`, http.StatusForbidden},
+		{"nested snake space", "space-1", `{"request":{"space_id":"space-2"}}`, http.StatusBadRequest},
+		{"nested camel space", "space-1", `{"requests":[{"spaceId":"space-2"}]}`, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, current := setupSessionTest(t)
-			authorizer := &fakeSpaceAuthorizer{}
-			if tc.denied {
-				authorizer.err = errors.New("space unavailable")
-			}
 			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) {
-				t.Fatal("unauthorized space reached gateway")
+				t.Fatal("rejected request reached gateway")
 				return nil, nil
 			})
 			rr := httptest.NewRecorder()
-			newTestRouter(t, store, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/collector/GetTaskList", tc.space, []byte(tc.body)))
-			if tc.space == "" || tc.denied {
-				require.Equal(t, http.StatusForbidden, rr.Code)
-			} else {
-				require.Contains(t, rr.Body.String(), "does not match")
-			}
+			newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/collector/GetTaskList", tc.space, []byte(tc.body)))
+			require.Equal(t, tc.status, rr.Code, rr.Body.String())
 		})
 	}
-	store, current := setupSessionTest(t)
-	rr := httptest.NewRecorder()
-	newTestRouter(t, store, nil, nil).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/trade/ListOrders", "space-1", []byte(`{}`)))
-	require.Equal(t, http.StatusForbidden, rr.Code, "missing authorizer fails closed")
 }
 
 func TestConsoleAuthenticationPrecedesRemoteDispatch(t *testing.T) {
 	store, current := setupSessionTest(t)
 	calls := 0
 	gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { calls++; return []byte(`{}`), nil })
-	router := newTestRouter(t, store, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter()
+	router := newTestRouter(t, store, nil, gateway).buildControlRouter()
 	body := []byte(`{"space_id":"space-1","offset":1}`)
 	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListFields", "", body))
+	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListDatasets", "", body))
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, 1, calls)
 
-	noCookie := browserRequest(t, session.Session{}, "/api/admin/storage/ListFields", "", body)
-	unknown := browserRequest(t, session.Session{ID: "not-a-session"}, "/api/admin/storage/ListFields", "", body)
-	headerToken := browserRequest(t, session.Session{}, "/api/admin/storage/ListFields", "", body)
+	noCookie := browserRequest(t, session.Session{}, "/api/admin/storage/ListDatasets", "", body)
+	unknown := browserRequest(t, session.Session{ID: "not-a-session"}, "/api/admin/storage/ListDatasets", "", body)
+	headerToken := browserRequest(t, session.Session{}, "/api/admin/storage/ListDatasets", "", body)
 	headerToken.Header.Set("Authorization", current.ID)
 	for _, request := range []*http.Request{noCookie, unknown, headerToken} {
 		rr := httptest.NewRecorder()
@@ -293,7 +277,7 @@ func TestConsoleAuthenticationPrecedesRemoteDispatch(t *testing.T) {
 	// 退出（服务端删掉会话）之后，同一个 Cookie 再来就是 401。
 	store.Delete(current.ID)
 	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListFields", "", body))
+	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListDatasets", "", body))
 	require.Equal(t, http.StatusUnauthorized, rr.Code)
 	require.Equal(t, 1, calls)
 }
@@ -455,27 +439,21 @@ func TestConsoleStorageAndFactorAreSpaceAuthorized(t *testing.T) {
 		path   string
 		space  string
 		body   string
-		deny   bool
 		status int
 	}{
-		{"reads own space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, false, http.StatusOK},
-		{"space blocked by authorizer", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, true, http.StatusForbidden},
-		{"body space without header is authorized", "/api/admin/storage/ListDatasets", "", `{"space_id":"space-2"}`, true, http.StatusForbidden},
-		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, false, http.StatusBadRequest},
-		{"space method without space", "/api/admin/storage/ListDatasets", "", `{}`, false, http.StatusBadRequest},
-		{"global storage method without space", "/api/admin/storage/ListSpaces", "", `{}`, false, http.StatusOK},
-		{"factor blocked by authorizer", "/api/admin/factor-mgr/DeleteFactorTask", "space-1", `{}`, true, http.StatusForbidden},
-		{"factor global request without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, false, http.StatusOK},
+		{"reads own space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, http.StatusOK},
+		{"body space without header", "/api/admin/storage/ListDatasets", "", `{"space_id":"space-2"}`, http.StatusOK},
+		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, http.StatusBadRequest},
+		{"space method without space", "/api/admin/storage/ListDatasets", "", `{}`, http.StatusBadRequest},
+		{"global storage method without space", "/api/admin/storage/ListSpaces", "", `{}`, http.StatusOK},
+		{"factor request with space", "/api/admin/factor-mgr/DeleteFactorTask", "space-1", `{}`, http.StatusOK},
+		{"factor global request without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, current := setupSessionTest(t)
-			authorizer := &fakeSpaceAuthorizer{}
-			if tc.deny {
-				authorizer.err = errors.New("space unavailable")
-			}
 			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
 			rr := httptest.NewRecorder()
-			newTestRouter(t, store, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, tc.path, tc.space, []byte(tc.body)))
+			newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, tc.path, tc.space, []byte(tc.body)))
 			require.Equal(t, tc.status, rr.Code, rr.Body.String())
 		})
 	}
@@ -517,7 +495,7 @@ func TestConsoleStorageBindsAuthorizedSpace(t *testing.T) {
 			store, current := setupSessionTest(t)
 			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
 			rr := httptest.NewRecorder()
-			newTestRouter(t, store, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, tc.path, tc.space, []byte(tc.body)))
+			newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, tc.path, tc.space, []byte(tc.body)))
 			require.Equal(t, tc.status, rr.Code, rr.Body.String())
 		})
 	}
@@ -532,7 +510,7 @@ func TestConsolePropagatesBodyDeclaredSpaceToDownstream(t *testing.T) {
 		return []byte(`{}`), nil
 	})
 	rr := httptest.NewRecorder()
-	newTestRouter(t, store, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/strategy/ListStrategyInstances", "", []byte(`{"space_id":"space-9"}`)))
+	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/strategy/ListStrategyInstances", "", []byte(`{"space_id":"space-9"}`)))
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, "space-9", got.SpaceID)
 }
@@ -559,11 +537,11 @@ func TestConsoleInjectsHeaderSpaceIntoStorageBodyWhenAbsent(t *testing.T) {
 		return []byte(`{}`), nil
 	})
 	rr := httptest.NewRecorder()
-	newTestRouter(t, store, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListDatasets", "space-1", []byte(`{"page":{"page":1}}`)))
+	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListDatasets", "space-1", []byte(`{"page":{"page":1}}`)))
 	require.Equal(t, http.StatusOK, rr.Code)
-	// 空间在嵌套消息里的方法（view.space_id）不能回填顶层字段，缺省时直接 400。
+	// 空间在嵌套消息里的方法（dataset.space_id）不能回填顶层字段，缺省时直接 400。
 	rr = httptest.NewRecorder()
-	newTestRouter(t, store, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpdateView", "space-1", []byte(`{"view":{"view_id":"v1"}}`)))
+	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpdateDataset", "space-1", []byte(`{"dataset":{"dataset_id":"dataset_v1"}}`)))
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
@@ -615,12 +593,8 @@ func TestStorageTopLevelSpaceMethodsMatchProto(t *testing.T) {
 // 部署与归档 worker 的写操作只留给 moox-cli：控制台没有这些路由，一律 404。
 func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 	for _, path := range []string{
-		"/api/admin/sysdeploy/SetHostStatus",
-		"/api/admin/sysdeploy/SetDeploymentStatus",
-		"/api/admin/sysdeploy/SyncHostDeployments",
-		"/api/admin/sysdeploy/DeleteHost",
-		"/api/admin/archive/PrepareArchiveImport",
-		"/api/admin/archive/ImportArchiveFile",
+		"/api/admin/sysdeploy/SyncTopology",
+		"/api/admin/archive/StartArchiveImport",
 		"/api/admin/archive/ClearArchiveUnrecoverable",
 	} {
 		store, current := setupSessionTest(t)

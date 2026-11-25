@@ -40,3 +40,32 @@ function parentPath(tree: MenuTreeLike[], key: string): string[] | undefined {
   }
   return undefined;
 }
+
+/** 侧栏菜单的一项：有 children 的是目录，没有的是页面。 */
+export interface MenuNode {
+  name: string;
+  path: string;
+  title: string;
+  svgIcon: string;
+  children: MenuNode[];
+}
+
+interface RouteTreeLike {
+  name: string;
+  path: string;
+  meta: Record<string, unknown>;
+  children?: RouteTreeLike[];
+}
+
+/** 由路由表生成侧栏菜单：顺序就是路由表的顺序，隐藏路由（meta.hide）不进菜单。 */
+export function buildMenuTree(routes: readonly RouteTreeLike[]): MenuNode[] {
+  return routes
+    .filter(route => !route.meta.hide)
+    .map(route => ({
+      name: route.name,
+      path: route.path,
+      title: String(route.meta.title ?? ""),
+      svgIcon: String(route.meta.svgIcon ?? ""),
+      children: buildMenuTree(route.children ?? [])
+    }));
+}

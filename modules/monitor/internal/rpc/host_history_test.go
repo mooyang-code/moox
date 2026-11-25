@@ -25,14 +25,14 @@ func TestQueryHostMetricHistoryClampsToRetention(t *testing.T) {
 	now := time.Now().UTC()
 	// 8 天前（已超出保留期，清理前仍在表里）、6 天前、半小时前各一份。
 	for _, at := range []time.Time{now.Add(-8 * 24 * time.Hour), now.Add(-6 * 24 * time.Hour), now.Add(-30 * time.Minute)} {
-		require.NoError(t, samples.Write(t.Context(), "agent-a", at, &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 1}}))
+		require.NoError(t, samples.Write(t.Context(), "control", at, &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 1}}))
 	}
 	service := New(mgr.Repositories(), Options{HostStore: hostmetrics.NewStore(samples)})
 
-	ts := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339Nano) }
+	ts := func(d time.Duration) int64 { return now.Add(d).UnixMilli() }
 	for _, tc := range []struct {
 		name       string
-		start, end string
+		start, end int64
 		points     int
 		gap        bool
 	}{
@@ -44,7 +44,7 @@ func TestQueryHostMetricHistoryClampsToRetention(t *testing.T) {
 		{name: "默认最近 1 小时", points: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rsp, err := service.QueryHostMetricHistory(t.Context(), &monitorpb.QueryHostMetricHistoryReq{AgentId: "agent-a", StartAt: tc.start, EndAt: tc.end})
+			rsp, err := service.QueryHostMetricHistory(t.Context(), &monitorpb.QueryHostMetricHistoryReq{HostId: "control", StartAt: tc.start, EndAt: tc.end})
 			require.NoError(t, err)
 			require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 			require.Len(t, rsp.GetPoints(), tc.points)
@@ -52,7 +52,7 @@ func TestQueryHostMetricHistoryClampsToRetention(t *testing.T) {
 		})
 	}
 
-	rsp, err := service.QueryHostMetricHistory(t.Context(), &monitorpb.QueryHostMetricHistoryReq{AgentId: "agent-a", StartAt: ts(-time.Minute), EndAt: ts(-time.Hour)})
+	rsp, err := service.QueryHostMetricHistory(t.Context(), &monitorpb.QueryHostMetricHistoryReq{HostId: "control", StartAt: ts(-time.Minute), EndAt: ts(-time.Hour)})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }

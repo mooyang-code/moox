@@ -19,6 +19,8 @@ type primaryHistoryBackfillEngine struct {
 	writeRows  int
 	removes    int
 	queryRows  []*pb.RowFieldValues
+	// stats 是 Stat 返回的索引状态；为空时只说索引存在（不属于任何数据集）。
+	stats *viewindex.ViewIndexStats
 }
 
 func (*primaryHistoryBackfillEngine) Engine() string { return "duckdb" }
@@ -33,7 +35,10 @@ func (e *primaryHistoryBackfillEngine) Query(context.Context, string, viewindex.
 	e.queryCalls++
 	return e.queryRows, int64(len(e.queryRows)), nil
 }
-func (*primaryHistoryBackfillEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
+func (e *primaryHistoryBackfillEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
+	if e.stats != nil {
+		return *e.stats, nil
+	}
 	return viewindex.ViewIndexStats{Exists: true}, nil
 }
 func (e *primaryHistoryBackfillEngine) Remove(context.Context, string) error {
@@ -70,8 +75,8 @@ func (r *pagedRangeReader) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTim
 	return rsp, nil
 }
 
-func closeColumns() []*pb.ViewColumn {
-	return []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+func closeColumns() []*viewindex.Column {
+	return []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 }
 
 func historyRow(subject, at, tag string) *pb.TimeSeriesRow {
@@ -82,39 +87,31 @@ func historyRow(subject, at, tag string) *pb.TimeSeriesRow {
 }
 
 func newBuildService(engine *primaryHistoryBackfillEngine) *Service {
-	return &Service{
-		engines:      map[string]viewindex.Engine{"duckdb": engine},
-		indexEngine:  make(map[string]string),
-		schemas:      make(map[string]viewindex.ViewIndexSchema),
-		views:        make(map[viewRef]*viewRuntime),
-		catalogViews: make(map[viewRef]*pb.View),
-		indexView:    make(map[string]viewRef),
-	}
+	return newTestService(map[string]viewindex.Engine{"duckdb": engine})
 }
 
 func backfillSchema() viewindex.ViewIndexSchema {
-	return viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema", Columns: closeColumns()}
+	return viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "market", Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema", Columns: closeColumns()}
 }
 
-func newBackfillService(engine *primaryHistoryBackfillEngine) (*Service, *pb.View, string) {
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
-	indexID := viewindex.ViewIndexID("space", "prices")
+func newBackfillService(engine *primaryHistoryBackfillEngine) (*Service, *viewSpec, *viewRuntime) {
+	spec := timeSeriesSpec("space", "market", "1m", "close")
 	svc := newBuildService(engine)
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{building: indexID}
-	svc.indexEngine[indexID] = "duckdb"
-	svc.schemas[indexID] = backfillSchema()
-	return svc, view, indexID
+	runtime := testRuntime(svc, spec)
+	runtime.building = runtime.indexID
+	runtime.schema = backfillSchema()
+	return svc, spec, runtime
 }
 
 func TestBackfillReadsLatestBarsPerSeriesFromPrimaryPageByPage(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	svc, view, indexID := newBackfillService(engine)
+	svc, spec, runtime := newBackfillService(engine)
 	reader := &pagedRangeReader{pageSize: 2, rows: []*pb.TimeSeriesRow{
 		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:binance"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance"),
 		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:okx"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:okx"),
 		historyRow("ETH-USDT", "2026-08-18T00:01:00Z", ""),
 	}}
-	if err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader, BackfillPageSize: 100}, 2); err != nil {
+	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{PrimaryRange: reader, BackfillPageSize: 100}, 2); err != nil {
 		t.Fatalf("回填：%v", err)
 	}
 	if engine.writeRows != 5 {
@@ -139,36 +136,36 @@ func TestBackfillReadsLatestBarsPerSeriesFromPrimaryPageByPage(t *testing.T) {
 
 func TestBackfillFailsWholeBuildWhenAPageFails(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	svc, view, indexID := newBackfillService(engine)
+	svc, spec, runtime := newBackfillService(engine)
 	reader := &pagedRangeReader{pageSize: 1, failPage: 2, rows: []*pb.TimeSeriesRow{
 		historyRow("A", "2026-08-18T00:00:00Z", ""), historyRow("B", "2026-08-18T00:00:00Z", ""), historyRow("C", "2026-08-18T00:00:00Z", ""),
 	}}
-	if err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader}, 1); err == nil {
+	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{PrimaryRange: reader}, 1); err == nil {
 		t.Fatal("一页失败应当让整次建索引失败，不能静默跳过标的")
 	}
 }
 
 func TestBackfillRequiresPrimaryReaderForTimeSeriesView(t *testing.T) {
-	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
-	if err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{}, 2); err == nil {
+	svc, spec, runtime := newBackfillService(&primaryHistoryBackfillEngine{})
+	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{}, 2); err == nil {
 		t.Fatal("时序 View 没有 Primary 读取客户端时应当报错")
 	}
 }
 
 func TestBackfillStopsWhenBuildIsCancelled(t *testing.T) {
-	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}].building = ""
+	svc, spec, runtime := newBackfillService(&primaryHistoryBackfillEngine{})
+	runtime.building = ""
 	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{historyRow("A", "2026-08-18T00:00:00Z", "")}}
-	if err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader}, 2); !errors.Is(err, errViewBuildCancelled) {
+	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{PrimaryRange: reader}, 2); !errors.Is(err, errViewBuildCancelled) {
 		t.Fatalf("err=%v", err)
 	}
 }
 
 func TestBackfillAcceptsHistoryBelowTarget(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	svc, view, indexID := newBackfillService(engine)
+	svc, spec, runtime := newBackfillService(engine)
 	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance")}}
-	if err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader}, 1000); err != nil {
+	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{PrimaryRange: reader}, 1000); err != nil {
 		t.Fatalf("历史不足时也应建成：%v", err)
 	}
 	if engine.writeRows != 1 {
@@ -178,17 +175,17 @@ func TestBackfillAcceptsHistoryBelowTarget(t *testing.T) {
 
 // 派生输出（例如因子结果）在第一个周期到来之前 Primary 里没有行：View 从空开始。
 func TestBackfillMayStartEmpty(t *testing.T) {
-	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
-	if err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: &pagedRangeReader{}}, 2); err != nil {
+	svc, spec, runtime := newBackfillService(&primaryHistoryBackfillEngine{})
+	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{PrimaryRange: &pagedRangeReader{}}, 2); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // 记录型 View 没有可读的 Primary 历史，从空开始，不需要读取客户端。
 func TestRecordViewStartsEmpty(t *testing.T) {
-	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
-	view.Freq = ""
-	if err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{}, 0); err != nil {
+	svc, spec, runtime := newBackfillService(&primaryHistoryBackfillEngine{})
+	spec.DataKind, spec.Freq = pb.DataKind_DATA_KIND_RECORD, ""
+	if err := svc.backfillInitialIndex(context.Background(), runtime, spec, backfillSchema(), MaintenanceOptions{}, 0); err != nil {
 		t.Fatal(err)
 	}
 }

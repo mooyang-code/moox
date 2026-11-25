@@ -83,12 +83,12 @@
             <div class="v tx-num">{{ fmtMoney(totals.available) }}</div>
             <div class="d">可用于新开仓</div>
           </div>
-          <div v-if="logical.markets?.includes(2)">
+          <div v-if="logical.markets?.includes('swap')">
             <div class="k">保证金占用</div>
             <div class="v tx-num">{{ fmtMoney(totals.margin) }}</div>
             <div class="d">占权益 {{ totals.equity ? fmtPercent(totals.margin / totals.equity, 1).replace("+", "") : "—" }}</div>
           </div>
-          <div v-if="logical.markets?.includes(2)">
+          <div v-if="logical.markets?.includes('swap')">
             <div class="k">未实现盈亏</div>
             <div class="v tx-num" :class="pnlClass(totals.unrealizedPnl)">{{ fmtSigned(totals.unrealizedPnl) }}</div>
             <div class="d">永续按标记价</div>
@@ -306,7 +306,7 @@ import {
   actionStateLabels,
   cancelOrder,
   closePaperSimulation,
-  exchangeLabels,
+  exchangeLabel,
   flattenLogicalAccount,
   flattenTradingAccount,
   getLogicalAccount,
@@ -411,7 +411,7 @@ const initialBalance = computed(() => paperInitialBalance(enabledAccounts.value)
 const equityChange = computed(() => equityChangeOf(totals.value.equity, initialBalance.value));
 const latestSync = computed(() => Math.max(0, ...enabledAccounts.value.map(item => Number(item.last_sync_at) || 0)));
 const exchangesText = computed(() => {
-  const names = [...new Set(enabledAccounts.value.map(item => exchangeLabels[item.exchange] || "-"))];
+  const names = [...new Set(enabledAccounts.value.map(item => exchangeLabel(item.exchange)))];
   return names.length ? names.join("、") : "-";
 });
 const targetExpiredNow = computed(() => targetExpired(target.value));
@@ -446,10 +446,11 @@ const dayChange = ref<EquityDelta | null>(null);
 async function loadDayChange() {
   const id = logicalId.value;
   const now = Date.now();
-  const rsp = await queryEquityCurve(
-    { logical_account_id: id, start_time: String(now - 86_400_000), end_time: String(now) },
-    { silent: true }
-  ).catch(() => null);
+  const rsp = await queryEquityCurve({
+    logical_account_id: id,
+    start_time: String(now - 86_400_000),
+    end_time: String(now)
+  }).catch(() => null);
   // 读不到时保留上一次的数，下一轮再试
   if (rsp && id === logicalId.value) dayChange.value = equityDelta(rsp.points || []);
 }
@@ -467,8 +468,7 @@ const actionTitle = computed(() => {
   if (!action) return "";
   const name = operatorActionTypeText(action.action_type);
   if (action.status === "RUNNING") return `${name}进行中`;
-  if (action.status === "COMPLETED")
-    return ["SUBMIT_ORDER", "MANUAL_ORDER"].includes(action.action_type) ? `${name}：订单已提交` : `${name}完成`;
+  if (action.status === "COMPLETED") return action.action_type === "MANUAL_ORDER" ? `${name}：订单已提交` : `${name}完成`;
   return `${name}${actionStateLabels[action.status] || ""}`;
 });
 const actionAlertType = computed(() => {
@@ -484,16 +484,15 @@ const actionAlertType = computed(() => {
 
 // 同一时刻只认最新一次读取：空间切换、页签切换后迟到的响应不能覆盖当前数据。
 const reloads = createLatestRequestGuard();
-/** background：每 5 秒的后台刷新，不弹全局提示；失败保留上次的数据，下一轮再试。 */
-async function reload(background = false) {
+/** 每 5 秒的后台刷新与手动刷新共用：失败保留上次的数据，下一轮再试。 */
+async function reload() {
   const id = logicalId.value;
   if (!id) return;
   const request = reloads.begin();
-  const options = { silent: background };
   const [logicalRsp, targetRsp, accountRsp] = await Promise.all([
-    getLogicalAccount(id, options),
-    getLogicalAccountTarget(id, options).catch(() => ({ target: undefined, lanes: undefined })),
-    listTradingAccounts({ page: { page: 1, size: 200 } }, options)
+    getLogicalAccount(id),
+    getLogicalAccountTarget(id).catch(() => ({ target: undefined, lanes: undefined })),
+    listTradingAccounts({ page: { page: 1, size: 200 } })
   ]);
   if (!request.isLatest() || id !== logicalId.value) return;
   loadError.value = "";
@@ -501,7 +500,7 @@ async function reload(background = false) {
   target.value = targetRsp.target || null;
   targetLanes.value = targetRsp.lanes || [];
   allAccounts.value = accountRsp.accounts || [];
-  const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value, options).catch(() => null);
+  const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value).catch(() => null);
   if (next && request.isLatest() && id === logicalId.value) snapshot.value = next;
 }
 
@@ -510,7 +509,7 @@ async function resumeRunningAction() {
   const id = logicalId.value;
   if (!id) return;
   try {
-    const rsp = await listOperatorActions({ logical_account_id: id, page: { page: 1, size: 20 } }, { silent: true });
+    const rsp = await listOperatorActions({ logical_account_id: id, page: { page: 1, size: 20 } });
     if (id !== logicalId.value || tracker.action.value) return;
     const running = runningAction(rsp.actions);
     if (!running) return;
@@ -543,7 +542,7 @@ async function loadFirst() {
 }
 
 // 每 5 秒后台刷新（页面隐藏时暂停、不叠加）；近 24 小时权益变化每分钟重读一次
-usePolling(() => reload(true), 5000);
+usePolling(() => reload(), 5000);
 usePolling(loadDayChange, 60_000);
 
 watch(
@@ -643,7 +642,7 @@ function openFlatten(account?: TradingAccount) {
   flattenVisible.value = true;
   const id = logicalId.value;
   const scope = account ? { trading_account_id: account.trading_account_id } : { logical_account_id: id };
-  listOrders({ ...scope, only_open: true, page: { page: 1, size: 1 } }, { silent: true })
+  listOrders({ ...scope, only_open: true, page: { page: 1, size: 1 } })
     .then(rsp => {
       if (flattenVisible.value && logicalId.value === id) flattenOrders.value = rsp.page_result?.total ?? 0;
     })

@@ -53,7 +53,7 @@ func requireCurrentTarget(t *testing.T, db *store.Store, targetID string) store.
 	return current
 }
 
-var oneBTC = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}}
+var oneBTC = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
 
 // 关闭后同会话更晚一根的目标按 superseded 结束（同会话按 bar 先后本该接受，关闭把它挡在第 3 步）。
 func TestCloseTargetSessionEndsLaterBarOfSameSession(t *testing.T) {
@@ -68,7 +68,7 @@ func TestCloseTargetSessionEndsLaterBarOfSameSession(t *testing.T) {
 
 	requireSupersededAfterClose(t, result)
 	requireCurrentTarget(t, db, "t1")
-	_, err := db.GetTargetReceipt(context.Background(), "space-1", "t2")
+	_, err := db.GetAcceptedTargetHistory(context.Background(), "space-1", "t2")
 	require.Error(t, err, "被结束的目标不写回执")
 }
 
@@ -111,7 +111,7 @@ func TestCloseTargetSessionEndsRedeliveryOfSameTarget(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	delivery := logicalTargetDelivery(t, now, "t1", "runner-1", "logical-1", oneBTC)
 	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, targetOptions(db, now)).Decision)
-	_, err := db.GetTargetReceipt(context.Background(), "space-1", "t1")
+	_, err := db.GetAcceptedTargetHistory(context.Background(), "space-1", "t1")
 	require.NoError(t, err)
 	closeViaTrade(t, db, "session-1")
 

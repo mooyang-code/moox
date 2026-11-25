@@ -31,7 +31,7 @@ func (s factorRowsSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.
 func factorRowsMetadata() metadata.RequestSnapshot {
 	return factorRowsSnapshot{
 		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "result", Status: "active", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}},
-		columns: []*pb.DatasetColumn{{ColumnName: "value", OriginId: "factor-id", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}},
+		columns: []*pb.DatasetColumn{{ColumnName: "value", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}},
 	}
 }
 
@@ -120,7 +120,7 @@ func TestUpsertFieldsForwardsTheParamsJSONColumn(t *testing.T) {
 			s.dataset.Freq = "5m"
 			s.columns = []*pb.DatasetColumn{{ColumnName: "value", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 			if withParams {
-				s.columns = append(s.columns, &pb.DatasetColumn{ColumnName: "__params", OriginId: "__params", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON})
+				s.columns = append(s.columns, &pb.DatasetColumn{ColumnName: "__params", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON})
 			}
 			return s
 		}

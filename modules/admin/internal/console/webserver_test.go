@@ -31,7 +31,7 @@ func TestConsoleBehindAdminWebEntry(t *testing.T) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(download)
 	}))
-	handler := newTestRouter(t, store, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter()
+	handler := newTestRouter(t, store, nil, gateway).buildControlRouter()
 
 	pkiDir := filepath.Join(t.TempDir(), "pki")
 	ca, err := pki.Open(pkiDir)

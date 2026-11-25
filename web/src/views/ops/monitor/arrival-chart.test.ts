@@ -1,10 +1,13 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { callControl } from "@/api/admin/http";
+import { call } from "@/api/http";
 import type { HealthOverview } from "@/api/monitor";
 import ArrivalChart from "./arrival-chart.vue";
 
-vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
+// Monitor 接口里的时刻是毫秒数字字符串。
+const ms = (text: string) => String(Date.parse(text));
+
+vi.mock("@/api/http", () => ({ call: vi.fn() }));
 const charts = vi.hoisted(() => ({ created: 0, released: 0 }));
 vi.mock("@visactor/vchart", () => ({
   default: class {
@@ -19,9 +22,9 @@ vi.mock("@visactor/vchart", () => ({
     }
   }
 }));
-const mockedCallControl = vi.mocked(callControl);
+const mockedCallControl = vi.mocked(call);
 
-const names = { datasets: { dataset_spot_1m: "现货分钟K线" }, views: {} };
+const names = { datasets: { dataset_spot_1m: "现货分钟K线" } };
 const nowMs = Date.parse("2026-10-16T19:00:00Z");
 const overview: HealthOverview = {
   pipeline: [
@@ -45,14 +48,14 @@ describe("arrival chart", () => {
     mockedCallControl.mockResolvedValue({
       timezone: "UTC",
       day: "2026-10-16",
-      start_at: "2026-10-16T00:00:00Z",
-      end_at: "2026-10-17T00:00:00Z",
+      start_at: ms("2026-10-16T00:00:00Z"),
+      end_at: ms("2026-10-17T00:00:00Z"),
       series: [
         {
           stage: "storage",
           dataset_id: "dataset_spot_1m",
           lateness_limit_seconds: "30",
-          points: [{ close_at: "2026-10-16T18:55:00Z", delay_seconds: "1" }]
+          points: [{ close_at: ms("2026-10-16T18:55:00Z"), delay_seconds: "1" }]
         }
       ]
     });
@@ -138,8 +141,8 @@ describe("arrival chart", () => {
     mockedCallControl.mockResolvedValue({
       timezone: "UTC",
       day: "2026-10-16",
-      start_at: "2026-10-16T00:00:00Z",
-      end_at: "2026-10-17T00:00:00Z",
+      start_at: ms("2026-10-16T00:00:00Z"),
+      end_at: ms("2026-10-17T00:00:00Z"),
       series: []
     });
     const page = mount(ArrivalChart, { props: { overview, names, nowMs } });

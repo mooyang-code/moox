@@ -11,13 +11,13 @@ import (
 func BuildSafeUserInfo(user *model.User) *pb.UserInfo {
 	var lastLoginAt int64
 	if user.LastLoginAt != nil {
-		lastLoginAt = user.LastLoginAt.Unix()
+		lastLoginAt = user.LastLoginAt.UnixMilli()
 	}
 
 	return &pb.UserInfo{
 		UserId:      user.UserID,
 		Username:    html.EscapeString(user.Username),
-		CreatedAt:   user.CreatedAt.Unix(),
+		CreatedAt:   user.CreatedAt.UnixMilli(),
 		LastLoginAt: lastLoginAt,
 		LastLoginIp: html.EscapeString(user.LastLoginIP),
 	}

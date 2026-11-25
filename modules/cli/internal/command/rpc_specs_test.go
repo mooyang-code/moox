@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -191,6 +192,8 @@ func (p *protoIndex) kindMatches(kind rpcFlagKind, f protoField) (bool, string) 
 		return !f.Repeated && !isMap && (f.Type == "string" || isEnum), "需要 string 或枚举，实际 " + f.Type
 	case rpcInt:
 		return !f.Repeated && scalar && strings.Contains(f.Type, "int"), "需要整数，实际 " + f.Type
+	case rpcInstant:
+		return !f.Repeated && f.Type == "int64", "时刻参数需要 int64 毫秒，实际 " + f.Type
 	case rpcFloat:
 		return !f.Repeated && (f.Type == "double" || f.Type == "float"), "需要浮点数，实际 " + f.Type
 	case rpcBool:
@@ -413,10 +416,10 @@ func TestProtoIndexCatchesWrongSpecs(t *testing.T) {
 	assert.False(t, ok)
 	assert.Contains(t, why, "没有字段")
 
-	// 同名消息分属不同的包：admin 的 Space 有 market，storage 的没有。
-	_, ok, _ = index.checkPath(index.rpcs["trpc.moox.admin.SpaceMgr/CreateSpace"], "space.market")
-	assert.True(t, ok)
+	// 嵌套消息里的字段。
 	_, ok, _ = index.checkPath(index.rpcs["trpc.moox.storage.Metadata/CreateSpace"], "space.market")
+	assert.True(t, ok)
+	_, ok, _ = index.checkPath(index.rpcs["trpc.moox.storage.Metadata/CreateSpace"], "space.no_such_field")
 	assert.False(t, ok)
 
 	// 嵌套消息与公共包里的分页。
@@ -461,4 +464,39 @@ func TestSkillCommandIndexListsEveryCommand(t *testing.T) {
 	}
 	sort.Strings(missing)
 	assert.Empty(t, missing, "这些命令没有写进 skills/moox/references/command-index.md：\n%s", strings.Join(missing, "\n"))
+}
+
+// 帮助文本里的“只读”必须和服务目录一致：写方法不能标成只读，Short 里也不能自称只读。
+func TestRPCSpecKindMatchesCatalog(t *testing.T) {
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	for _, spec := range allRPCSpecs() {
+		name := strings.Join(spec.Path, " ")
+		readOnly := catalog.ReadOnly(spec.Service, spec.Method)
+		switch {
+		case spec.Destructive:
+			assert.Equal(t, "破坏性，默认只预览", spec.kind(), name)
+		case readOnly:
+			assert.Equal(t, "只读", spec.kind(), name)
+		default:
+			assert.Equal(t, "写操作", spec.kind(), name)
+		}
+		if !readOnly {
+			assert.NotContains(t, spec.Short, "只读", "%s 是写方法，Short 不能写只读", name)
+		}
+	}
+	for _, path := range [][]string{{"space", "create"}, {"strategy", "create"}, {"strategy", "instance", "create"}} {
+		spec, ok := findRPCSpec(path)
+		require.True(t, ok, strings.Join(path, " "))
+		assert.Equal(t, "写操作", spec.kind(), strings.Join(path, " "))
+	}
+}
+
+func findRPCSpec(path []string) (rpcSpec, bool) {
+	for _, spec := range allRPCSpecs() {
+		if slices.Equal(spec.Path, path) {
+			return spec, true
+		}
+	}
+	return rpcSpec{}, false
 }

@@ -8,9 +8,7 @@
             <a-radio-group v-model="segment" type="button" aria-label="补采作业筛选" @change="onFilterChange">
               <a-radio v-for="item in JOB_SEGMENTS" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
             </a-radio-group>
-            <InfoTip
-              text="自动补采发现实时缺口时建作业；手动补采、历史缺口的补采确认也在这里。有进行中的作业时每 5 秒自动刷新。"
-            />
+            <InfoTip text="自动补采发现实时缺口时建作业；手动补采也在这里。有进行中的作业时每 5 秒自动刷新。" />
           </span>
           <a-space wrap>
             <a-select v-model="datasetId" placeholder="全部数据集" allow-clear style="width: 220px" @change="onFilterChange">
@@ -90,7 +88,7 @@
               </template>
             </a-table-column>
             <a-table-column title="创建时间" :width="170">
-              <template #cell="{ record }">{{ timeText(record.created_at) }}</template>
+              <template #cell="{ record }">{{ formatInstant(record.created_at, displayZone) }}</template>
             </a-table-column>
             <a-table-column title="操作" :width="130" align="center" fixed="right">
               <template #cell="{ record }">
@@ -145,7 +143,7 @@
             >{{ jobSourceText(detail.job.source) }} · {{ jobKindText(detail.job.kind) }}</a-descriptions-item
           >
           <a-descriptions-item label="标的">{{ detail.job.subject_id || "全部" }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ timeText(detail.job.created_at) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatInstant(detail.job.created_at, displayZone) }}</a-descriptions-item>
           <a-descriptions-item label="范围" :span="2"
             ><TimeText :value="detail.job.from" :zone="displayZone" precision="minute" /> ~
             <TimeText :value="detail.job.to" :zone="displayZone" precision="minute"
@@ -168,11 +166,6 @@
               >
             </a-table-column>
             <a-table-column title="标的" data-index="subject_id" :width="120" />
-            <a-table-column title="市场" :width="80">
-              <template #cell="{ record }"
-                ><span :title="record.series_tag || undefined">{{ seriesTagDisplay(record.series_tag) }}</span></template
-              >
-            </a-table-column>
             <a-table-column title="范围" :width="320">
               <template #cell="{ record }"
                 ><TimeText :value="record.from" :zone="displayZone" precision="minute" /> ~
@@ -212,7 +205,6 @@ import {
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { seriesTagDisplay } from "@/views/data/shared/series-market";
 import KlineRangeDialog from "./kline-range-dialog.vue";
 import {
   JOB_SEGMENTS,
@@ -233,7 +225,6 @@ defineOptions({ name: "CollectorBackfillJobs" });
 
 // 补采作业的时间按当前空间登记的时区带后缀显示；范围按分钟对齐，到分钟
 const displayZone = useDisplayZone();
-const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const route = useRoute();
 const router = useRouter();
@@ -259,7 +250,7 @@ const rangeMode = ref<"check" | "backfill">("check");
 const failedRows = computed(() =>
   (detail.value?.failed_chunks || []).map((item, index) => ({
     ...item,
-    key: `${item.dataset_id}|${item.subject_id}|${item.series_tag ?? ""}|${item.from}|${index}`
+    key: `${item.dataset_id}|${item.subject_id}|${item.from}|${index}`
   }))
 );
 const rowClass = (record: KlineBackfillJob) =>
@@ -278,7 +269,7 @@ async function load(options: { silent?: boolean } = {}) {
   const request = guard.begin();
   if (!options.silent) loading.value = true;
   try {
-    const data = await listKlineBackfills(space, filterOf(), page.value, pageSize, { silentError: Boolean(options.silent) });
+    const data = await listKlineBackfills(space, filterOf(), page.value, pageSize);
     if (!request.isLatest() || space !== spaceId.value) return;
     jobs.value = data.items || [];
     total.value = Number(data.page?.total || 0);

@@ -17,7 +17,7 @@ import (
 )
 
 func usageTestIndexID(view string) string {
-	return viewindex.ViewIndexID("crypto", view)
+	return viewindex.IndexID("crypto", view)
 }
 
 func TestUsageReportSummarizesAndFlagsOnlyTheIndexesThatNeedAttention(t *testing.T) {

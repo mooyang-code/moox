@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestUpsertFieldsWholeRowUpsertOverwritesNullFields(t *testing.T) {
@@ -84,7 +84,7 @@ func TestUpsertFieldsThenMarkerOrdering(t *testing.T) {
 	}
 	marker := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "factor_result", Frequency: "1m", PeriodTime: 1,
-		Status: "complete", CauseEventId: "trigger-1", CompletedAt: timestamppb.Now(),
+		Status: "complete", CauseEventId: "trigger-1", CompletedAt: time.Now().UnixMilli(),
 	}
 	message, _, err := BuildProducerPeriodCompletedMessage("space", marker)
 	if err != nil {

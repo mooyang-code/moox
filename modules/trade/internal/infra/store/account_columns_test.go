@@ -26,7 +26,7 @@ func TestTestnetAccountCannotOpenBothMarkets(t *testing.T) {
 	s := openTestStore(t)
 	account := testAccount()
 	account.ExecutionMode, account.Environment = "LIVE", "TESTNET"
-	account.Markets, account.MarginMode = []string{"SPOT", "SWAP"}, "CROSS"
+	account.Markets, account.MarginMode = []string{"spot", "swap"}, "CROSS"
 
 	err := s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(account) })
 	require.Error(t, err)
@@ -36,8 +36,8 @@ func TestTestnetAccountCannotOpenBothMarkets(t *testing.T) {
 
 	okx := testAccount()
 	okx.TradingAccountID, okx.Name, okx.CredentialSecretID = "okx-demo", "okx-demo", "secret-okx"
-	okx.Exchange, okx.ExecutionMode, okx.Environment = "OKX", "LIVE", "TESTNET"
-	okx.Markets, okx.MarginMode = []string{"SPOT", "SWAP"}, "CROSS"
+	okx.Exchange, okx.ExecutionMode, okx.Environment = "okx", "LIVE", "TESTNET"
+	okx.Markets, okx.MarginMode = []string{"spot", "swap"}, "CROSS"
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(okx) }), "OKX 模拟盘一个账户可以同时开两个市场")
 }
 

@@ -6,7 +6,8 @@ import type {
   HostGatewayRoute,
   HostRoutesResponse
 } from "@/api/admin/types";
-import type { HealthComponent, HealthGatewaySignal, HealthOverview, HealthStatus } from "@/api/monitor";
+import type { HealthComponent, HealthOverview, HealthStatus } from "@/api/monitor";
+import { toInstantMs } from "@/utils/time-zone";
 
 export interface DeploymentRow {
   key: string;
@@ -63,20 +64,17 @@ export function componentPorts(component?: CatalogComponent) {
 export function gatewayLabel(snapshot?: HostRoutesResponse) {
   if (!snapshot) return "状态未知";
   const status = snapshot.gateway_status;
-  if (status?.conflict_instance_id) return "重复实例";
-  if (!status?.last_seen_at) return "从未上报";
-  const seen = Date.parse(status.last_seen_at);
-  const observed = Date.parse(snapshot.compiled_at);
-  if (!Number.isFinite(seen) || !Number.isFinite(observed)) return "状态未知";
+  const seen = toInstantMs(status?.last_seen_at);
+  if (seen === null) return "从未上报";
+  const observed = toInstantMs(snapshot.compiled_at);
+  if (observed === null) return "状态未知";
   return observed - seen > 120000 ? "离线" : "在线";
 }
-export function routeSync(snapshot?: HostRoutesResponse, signal?: HealthGatewaySignal) {
+// 已应用快照最多落后期望快照一次拉取（约 5 秒），所以“待同步”只在刚改完拓扑时短暂出现。
+export function routeSync(snapshot?: HostRoutesResponse) {
   const status = snapshot?.gateway_status;
-  if (!status?.expected_hash) return { label: "同步状态未知", pendingSince: "" };
-  if (status.expected_hash === status.applied_hash) return { label: "已同步", pendingSince: "" };
-  const sameObservation =
-    signal?.expected_hash === status.expected_hash && (signal?.applied_hash || "") === (status.applied_hash || "");
-  return { label: "待同步", pendingSince: sameObservation ? signal?.pending_since || "" : "" };
+  if (!status?.expected_hash) return "同步状态未知";
+  return status.expected_hash === status.applied_hash ? "已同步" : "待同步";
 }
 export interface RouteGroup {
   key: string;

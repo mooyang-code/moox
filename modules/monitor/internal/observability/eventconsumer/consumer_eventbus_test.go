@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,25 +12,23 @@ import (
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
-	var metricCalls, hostCalls atomic.Int32
+	var metricCalls, logCalls atomic.Int32
 	ctx, consumer, publisher, js := newObservabilityFixture(t, Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 			metricCalls.Add(1)
 			return nil
 		},
-		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
-			hostCalls.Add(1)
+		Logs: func(context.Context, *eventpb.EventMessage, *metricspb.LogReport) error {
+			logCalls.Add(1)
 			return nil
 		},
 	})
@@ -50,42 +49,37 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 	if len(seen) != 2 {
 		t.Fatalf("routes = %v", seen)
 	}
-	if metricCalls.Load() != 1 || hostCalls.Load() != 1 {
-		t.Fatalf("route calls metrics=%d host=%d", metricCalls.Load(), hostCalls.Load())
+	if metricCalls.Load() != 1 || logCalls.Load() != 1 {
+		t.Fatalf("route calls metrics=%d logs=%d", metricCalls.Load(), logCalls.Load())
 	}
-	info, err := js.ConsumerInfo(events.ObservabilityStreamName(), DefaultConsumer)
+	info, err := js.ConsumerInfo(events.StreamObservability, DefaultConsumer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Config.Durable != DefaultConsumer || info.Config.FilterSubject != events.ObservabilityFilterSubject {
+	if info.Config.Durable != DefaultConsumer || !slices.Equal(info.Config.FilterSubjects, events.MonitorObservabilityConsumer.FilterSubjects()) {
 		t.Fatalf("consumer config = %+v", info.Config)
 	}
 }
 
-func TestUnifiedObservabilityConsumerTermsInvalidAndUnknownEvents(t *testing.T) {
+func TestUnifiedObservabilityConsumerTermsInvalidEvents(t *testing.T) {
 	ctx, consumer, _, js := newObservabilityFixture(t, noopRoutes())
 	before := testutil.ToFloat64(rejectedEvents)
 	publishRawEvent(t, js, "moox.event.observability.metrics.snapshot.reported.v1.mooxsys.bad", &eventpb.EventMessage{
 		EventId: "invalid-metrics", EventName: events.ObservabilityMetricsSnapshotReported.Name(),
 		EventVersion: events.ObservabilityMetricsSnapshotReported.Version(), SpaceId: "mooxsys",
-		SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte("not-protobuf"),
+		SubjectId: "bad", OccurredAt: time.Now().UnixMilli(), Payload: []byte("not-protobuf"),
 	})
-	publishRawEvent(t, js, "moox.event.observability.unknown.reported.v1.mooxsys.bad", &eventpb.EventMessage{
-		EventId: "unknown-event", EventName: "observability.unknown.reported", EventVersion: 1,
-		SpaceId: "mooxsys", SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte{1},
-	})
-	for range 2 {
-		delivery := fetchDelivery(t, ctx, consumer)
-		result := consumer.Handle(ctx, delivery)
-		if result.Decision != jetstream.TERM || result.Err == nil {
-			t.Fatalf("Handle() = %v, %v; want TERM", result.Decision, result.Err)
-		}
-		if err := jetstream.ApplyHandlerResult(ctx, delivery, result); err != nil {
-			t.Fatal(err)
-		}
+	// Stream 的主题由声明的事件推出，未登记的事件发布不进来，所以这里只验证坏载荷。
+	delivery := fetchDelivery(t, ctx, consumer)
+	result := consumer.Handle(ctx, delivery)
+	if result.Decision != jetstream.TERM || result.Err == nil {
+		t.Fatalf("Handle() = %v, %v; want TERM", result.Decision, result.Err)
 	}
-	if got := testutil.ToFloat64(rejectedEvents); got < before+2 {
-		t.Fatalf("rejected total = %v, want at least %v", got, before+2)
+	if err := jetstream.ApplyHandlerResult(ctx, delivery, result); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(rejectedEvents); got < before+1 {
+		t.Fatalf("rejected total = %v, want at least %v", got, before+1)
 	}
 }
 
@@ -93,7 +87,6 @@ func TestUnifiedObservabilityConsumerNaksTransientRouteFailure(t *testing.T) {
 	transient := errors.New("storage temporarily unavailable")
 	ctx, consumer, publisher, _ := newObservabilityFixture(t, Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error { return transient },
-		Host:    countHostRoute(t, "host"),
 	})
 	publishMetric(t, ctx, publisher, "metric-transient")
 	delivery := fetchDelivery(t, ctx, consumer)
@@ -112,7 +105,7 @@ func TestUnifiedObservabilityConsumerNaksTransientRouteFailure(t *testing.T) {
 
 func TestUnifiedObservabilityConsumerReusesDurableAfterRestart(t *testing.T) {
 	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Storage: nats.MemoryStorage})
+	server.AddStream(t, &nats.StreamConfig{Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(), Storage: nats.MemoryStorage})
 	ctx := context.Background()
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "monitor-observability-restart"})
 	if err != nil {
@@ -135,7 +128,7 @@ func TestUnifiedObservabilityConsumerReusesDurableAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	names := server.JetStream().ConsumerNames(events.ObservabilityStreamName())
+	names := server.JetStream().ConsumerNames(events.StreamObservability)
 	var got []string
 	for name := range names {
 		got = append(got, name)
@@ -196,7 +189,7 @@ func newObservabilityFixture(t *testing.T, routes Routes) (context.Context, *Con
 func newObservabilityFixtureWithContext(t *testing.T, ctx context.Context, routes Routes) (*Consumer, *events.Publisher, nats.JetStreamContext) {
 	t.Helper()
 	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Storage: nats.MemoryStorage})
+	server.AddStream(t, &nats.StreamConfig{Name: events.StreamObservability, Subjects: events.MonitorObservabilityConsumer.FilterSubjects(), Storage: nats.MemoryStorage})
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "monitor-observability-test"})
 	if err != nil {
 		t.Fatal(err)
@@ -221,17 +214,16 @@ func newObservabilityFixtureWithContext(t *testing.T, ctx context.Context, route
 func noopRoutes() Routes {
 	return Routes{
 		Metrics: func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error { return nil },
-		Host:    func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
 	}
 }
 
 func publishAllObservabilityEvents(t *testing.T, ctx context.Context, publisher *events.Publisher) {
 	t.Helper()
 	publishMetric(t, ctx, publisher, "metric-route")
-	agentID := "aB3x"
-	_, err := publisher.Publish(ctx, events.ObservabilityHostSnapshotReported, &hostmetricpb.HostMetric{
-		AgentId: agentID, Hostname: "host-a", Snapshot: &hostmetricpb.HostSnapshot{},
-	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: agentID})
+	_, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
+		ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
+		Records: []*metricspb.LogRecord{{Sequence: 1, LoggedAt: time.Now().UnixMilli(), Level: "error", Message: "下单失败"}},
+	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "trade/trade@overseas"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,17 +273,12 @@ func fetchDelivery(t *testing.T, ctx context.Context, consumer *Consumer) *jetst
 	return nil
 }
 
-func countHostRoute(t *testing.T, name string) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
-	t.Helper()
-	return func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil }
-}
-
 func routeFromSubject(subject string) string {
 	switch {
 	case contains(subject, ".metrics."):
 		return "metrics"
-	case contains(subject, ".host."):
-		return "host"
+	case contains(subject, ".log."):
+		return "logs"
 	default:
 		return fmt.Sprintf("unknown:%s", subject)
 	}
@@ -323,7 +310,7 @@ func TestObservabilityConsumerRoutesLogReports(t *testing.T) {
 		t.Helper()
 		_, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
 			ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
-			Records: []*metricspb.LogRecord{{Sequence: sequence, TimeUnixNano: time.Now().UnixNano(), Level: "error", Message: "下单失败", Caller: "order/submit.go:88"}},
+			Records: []*metricspb.LogRecord{{Sequence: sequence, LoggedAt: time.Now().UnixMilli(), Level: "error", Message: "下单失败", Caller: "order/submit.go:88"}},
 		}, events.PublishOptions{EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "trade/trade@overseas"})
 		if err != nil {
 			t.Fatal(err)

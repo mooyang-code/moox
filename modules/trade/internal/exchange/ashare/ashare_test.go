@@ -75,8 +75,8 @@ func TestQuoteFreshOutsideSessionAcceptsCloseQuotes(t *testing.T) {
 	require.False(t, fresh("2026-11-06 11:29:58", "2026-11-06 13:00:30"), "下午开盘后照原窗口")
 	require.True(t, fresh("2026-11-06 13:00:25", "2026-11-06 13:00:30"))
 	// 加密货币全天在时段内，行为不变。
-	require.False(t, execution.QuoteFresh(exchanges, "BINANCE", cst("2026-11-06 15:00:01"), cst("2026-11-07 10:00:00"), 10*time.Second))
-	require.True(t, execution.QuoteFresh(exchanges, "BINANCE", cst("2026-11-07 09:59:55"), cst("2026-11-07 10:00:00"), 10*time.Second))
+	require.False(t, execution.QuoteFresh(exchanges, "binance", cst("2026-11-06 15:00:01"), cst("2026-11-07 10:00:00"), 10*time.Second))
+	require.True(t, execution.QuoteFresh(exchanges, "binance", cst("2026-11-07 09:59:55"), cst("2026-11-07 10:00:00"), 10*time.Second))
 }
 
 func TestLoadInstrumentsUsesSeedUntilListLoads(t *testing.T) {
@@ -101,7 +101,7 @@ func TestLoadInstrumentsUsesSeedUntilListLoads(t *testing.T) {
 	}
 	main := byID["600519.XSHG"]
 	require.Equal(t, exchange.ExchangeAShare, main.Exchange)
-	require.Equal(t, exchange.MarketTypeStock, main.MarketType)
+	require.Equal(t, exchange.MarketTypeEquity, main.MarketType)
 	require.Equal(t, "600519.XSHG", main.BaseAsset)
 	require.Equal(t, "CNY", main.QuoteAsset)
 	require.Equal(t, "100", main.ExchangeQuantityStep.String())

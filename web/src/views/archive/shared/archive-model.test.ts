@@ -7,36 +7,28 @@ import {
   backfillFromError,
   backfillRangeError,
   durationText,
-  exportEstimateText,
   foldRunMessage,
+  followText,
   healthLabel,
-  importFileText,
-  importModeText,
   kindLabel,
+  lastFollowText,
   parseArchiveQuery,
   parsePreviewCsv,
   partitionStatusLabel,
   pauseConfirmText,
   pauseSafeDays,
-  pullEveryBarsError,
-  pullText,
   remoteStateLabel,
-  reviewText,
+  rescanConfirmText,
   runDurationText,
   runMessageLines,
   runStatusLabel,
-  showBackfillField,
   systemAlerts,
   toNum,
   unarchivedDatasets
 } from "./archive-model";
 
 describe("文案", () => {
-  it("导入运行显示文件名与写入方式，长消息折叠", () => {
-    expect(importFileText({ kind: "import", import_file: "imp_20261108_ab/import.csv.gz" })).toBe("import.csv.gz");
-    expect(importFileText({ kind: "scheduled", import_file: "x/y.csv" })).toBe("");
-    expect(importModeText({ overwrite: true })).toBe("覆盖已有");
-    expect(importModeText({})).toBe("只补空缺");
+  it("长消息折叠", () => {
     expect(foldRunMessage("导入 3 行")).toEqual({ text: "导入 3 行", folded: false });
     const long =
       "导入文件有 2 处错误，整份拒绝，什么都没有写入：第 2 行：data_time 没有按频率 1m 对齐；第 3 行：" +
@@ -52,13 +44,7 @@ describe("文案", () => {
   });
 
   it("运行类型、状态、健康等级、分区状态", () => {
-    expect(["scheduled", "manual", "tick", "range", "import"].map(kindLabel)).toEqual([
-      "复核",
-      "立即运行",
-      "到点拉取",
-      "补拉区间",
-      "导入"
-    ]);
+    expect(["follow", "manual", "range", "import"].map(kindLabel)).toEqual(["跟随", "整段重读", "补拉区间", "导入"]);
     expect(["queued", "running", "succeeded", "failed", "canceled"].map(runStatusLabel)).toEqual([
       "排队中",
       "运行中",
@@ -80,26 +66,24 @@ describe("文案", () => {
   });
 });
 
-describe("拉取与复核", () => {
-  const task = (over: Partial<ArchiveTask>): ArchiveTask => ({
-    freq: "1m",
-    pull_every_bars: 1,
-    status: "enabled",
-    next_pull_at: "2026-11-07T04:41:25Z",
-    ...over
+describe("跟随", () => {
+  const task = (over: Partial<ArchiveTask>): ArchiveTask => ({ freq: "1m", status: "enabled", ...over });
+
+  it("启用写每分钟跟随，停用写已停用；最近成功到分钟、带空间时区后缀", () => {
+    expect(followText(task({}))).toBe("每分钟跟随变更日志");
+    expect(followText(task({ status: "paused" }))).toBe("已停用");
+    expect(lastFollowText(task({ last_success_at: String(Date.parse("2026-11-07T04:41:25Z")) }), "Asia/Shanghai")).toBe(
+      "最近成功 2026-11-07 12:41 UTC+8"
+    );
+    expect(lastFollowText(task({}), "UTC")).toBe("还没有成功的跟随");
+    // 没有时 Admin 给 "0"
+    expect(lastFollowText(task({ last_success_at: "0" }), "UTC")).toBe("还没有成功的跟随");
   });
 
-  it("按 N 写每收盘几根，下次拉取到分钟、带空间时区后缀", () => {
-    expect(pullText(task({}), "UTC")).toBe("每收盘 1 根 · 下次 2026-11-07 04:41 UTC");
-    expect(pullText(task({ pull_every_bars: 5 }), "Asia/Shanghai")).toBe("每收盘 5 根 · 下次 2026-11-07 12:41 UTC+8");
-    expect(pullText(task({ freq: "1h" }), "UTC")).toBe("每收盘 1 根 · 下次 2026-11-07 04:41 UTC");
-    expect(pullText(task({ freq: "1d" }), "UTC")).toBe("每天收盘后 · 下次 2026-11-07 04:41 UTC");
-    expect(pullText(task({ status: "paused", next_pull_at: "" }), "UTC")).toBe("已停用");
-  });
-
-  it("复核规律：低于 1d 每小时第 34 分，1d 及以上拉取即复核", () => {
-    expect(reviewText(task({}))).toBe("每小时第 34 分复核");
-    expect(reviewText(task({ freq: "1d" }))).toBe("拉取即复核");
+  it("整段重读的确认写明重读线上保留期与耗时", () => {
+    const text = rescanConfirmText("35 天");
+    expect(text).toContain("线上保留期（35 天）内的全部数据");
+    expect(text).toContain("几个小时");
   });
 });
 
@@ -114,10 +98,13 @@ describe("时长", () => {
 
   it("运行耗时：运行中按现在算，没开始或没结束（已结束状态）写 —", () => {
     const now = Date.parse("2026-11-07T00:10:00Z");
-    expect(runDurationText({ started_at: "2026-11-07T00:00:00Z", finished_at: "2026-11-07T00:02:13Z" }, now)).toBe("2 分 13 秒");
-    expect(runDurationText({ started_at: "2026-11-07T00:00:00Z", status: "running" }, now)).toBe("10 分");
-    expect(runDurationText({ status: "queued" }, now)).toBe("—");
-    expect(runDurationText({ started_at: "2026-11-07T00:00:00Z", status: "failed" }, now)).toBe("—");
+    const ms = (text: string) => String(Date.parse(text));
+    expect(runDurationText({ started_at: ms("2026-11-07T00:00:00Z"), finished_at: ms("2026-11-07T00:02:13Z") }, now)).toBe(
+      "2 分 13 秒"
+    );
+    expect(runDurationText({ started_at: ms("2026-11-07T00:00:00Z"), finished_at: "0", status: "running" }, now)).toBe("10 分");
+    expect(runDurationText({ started_at: "0", status: "queued" }, now)).toBe("—");
+    expect(runDurationText({ started_at: ms("2026-11-07T00:00:00Z"), status: "failed" }, now)).toBe("—");
   });
 });
 
@@ -146,25 +133,9 @@ describe("未归档的数据集", () => {
       "归档 worker 不在线"
     ]);
   });
-
-  it("分区预计导出时间：解析后端的文本，时刻按空间时区；读不懂时原样", () => {
-    expect(exportEstimateText("分区 2026-11-06：预计 2026-11-07T00:15:25Z 导出", "Asia/Shanghai")).toBe(
-      "分区 2026-11-06 预计 2026-11-07 08:15:25 UTC+8 导出"
-    );
-    expect(exportEstimateText("别的格式", "UTC")).toBe("别的格式");
-  });
 });
 
 describe("校验", () => {
-  it("拉取间隔：1～1440 的整数，频率 × N 不超过 1 天；1d 不校验", () => {
-    expect(pullEveryBarsError("1m", 0)).not.toBe("");
-    expect(pullEveryBarsError("1m", 1441)).not.toBe("");
-    expect(pullEveryBarsError("1m", 1440)).toBe("");
-    expect(pullEveryBarsError("5m", 288)).toBe("");
-    expect(pullEveryBarsError("5m", 289)).toContain("最多 288 根");
-    expect(pullEveryBarsError("1d", 0)).toBe("");
-  });
-
   it("回补起点和补拉区间：不早于下界、不晚于现在、起点早于终点", () => {
     const now = Date.parse("2026-11-07T00:00:00Z");
     const earliest = Date.parse("2026-10-04T00:00:00Z");
@@ -181,17 +152,14 @@ describe("校验", () => {
     expect(backfillRangeError([earliest, now], earliest, now, "UTC")).toBe("");
   });
 
-  it("首次复核成功后编辑时不再显示回补起点", () => {
-    expect(showBackfillField({ last_success_at: "" })).toBe(true);
-    expect(showBackfillField({ last_success_at: "2026-11-07T00:34:00Z" })).toBe(false);
-  });
-
   it("停用安全天数和健康等级的异常门槛同一公式", () => {
     expect(pauseSafeDays("840h")).toBe(33);
     expect(pauseSafeDays("72h")).toBe(1);
     expect(pauseSafeDays("forever")).toBeNull();
     expect(pauseConfirmText("840h", "35 天")).toContain("线上只保留 35 天：停用超过约 33 天");
-    expect(pauseConfirmText("forever", "永久")).toBe("停用后不再拉取和复核。重新启用后会立即复核。");
+    expect(pauseConfirmText("forever", "永久")).toBe(
+      "停用后不再跟随 Storage 的写入。重新启用后从原位点继续跟随（变更日志保留 7 天，停用更久会整段重读）。"
+    );
   });
 
   it("uint64 字段是字符串或数字", () => {
@@ -224,21 +192,21 @@ describe("分区预览 CSV", () => {
 
 describe("URL 状态", () => {
   it("非法值规范化", () => {
-    expect(parseArchiveQuery({ tab: "x", status: "bad", rpage: "0", from: "2026-13", ticks: "yes" })).toMatchObject({
+    expect(parseArchiveQuery({ tab: "x", status: "bad", rpage: "0", from: "2026-13", follow: "yes" })).toMatchObject({
       tab: "runs",
       status: "",
       rpage: 1,
       from: "",
-      ticks: false
+      follow: false
     });
   });
 
   it("往返一致，默认值不写进 URL，没打开详情时不写详情参数", () => {
-    const runs = { task: "ds_1m", tab: "runs", status: "failed", ticks: true, rpage: 2 } as const;
+    const runs = { task: "ds_1m", tab: "runs", status: "failed", follow: true, rpage: 2 } as const;
     expect(archiveQueryFor(parseArchiveQuery(archiveQueryFor(runs) as never))).toEqual({
       task: "ds_1m",
       status: "failed",
-      ticks: "1",
+      follow: "1",
       rpage: "2"
     });
     const parts = {

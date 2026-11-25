@@ -284,9 +284,9 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 	}))
 
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-b", OrderID: "bought", ClientOrderID: "bought",
-			Exchange: account.Exchange, MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+			Exchange: account.Exchange, MarketType: "spot", ExchangeSymbol: fixture.instrument("account-b").ExchangeSymbol, InstrumentID: "BTC-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "1", FilledQuantity: "1", ReferencePrice: "100",
 			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
 		})
@@ -346,7 +346,7 @@ func activeOrder(
 		LogicalAccountID: "logical-1", State: "OPEN", Version: 1,
 	}
 	if ownerType == "TARGET" {
-		record.RunnerID = "runner-1"
+		record.InstanceID = "runner-1"
 	}
 	return record
 }

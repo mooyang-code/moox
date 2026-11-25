@@ -5,85 +5,46 @@ CREATE TABLE IF NOT EXISTS t_monitor_topology (
     CHECK (c_id = 1)
 );
 
+-- 每项检查一行：最近一次结果与告警状态。检查由评估按本轮事实生成，本轮不再产出且没有冻结的检查当轮删除；
+-- 告警阈值与级别由检查 ID 在代码里推出，不入库（关注项的级别由生产者给出，记在 c_severity）。c_ctime 是检查第一次出现的时间。时间均为 UTC。
 CREATE TABLE IF NOT EXISTS t_monitor_checks (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
+    c_space_id TEXT NOT NULL,
     c_check_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
-    c_group_name TEXT NOT NULL DEFAULT '',
-    c_kind TEXT NOT NULL,
-    c_url TEXT NOT NULL DEFAULT '',
-    c_connect_address TEXT NOT NULL DEFAULT '',
-    c_server_name TEXT NOT NULL DEFAULT '',
-    c_trust_mode TEXT NOT NULL DEFAULT '',
-    c_ca_file TEXT NOT NULL DEFAULT '',
-    c_ca_baseline TEXT NOT NULL DEFAULT '',
-    c_method TEXT NOT NULL DEFAULT 'GET',
-    c_headers TEXT NOT NULL DEFAULT '{}',
-    c_body TEXT NOT NULL DEFAULT '',
-    c_tcp_host TEXT NOT NULL DEFAULT '',
-    c_tcp_port INTEGER NOT NULL DEFAULT 0,
-    c_interval_seconds INTEGER NOT NULL DEFAULT 60,
-    c_timeout_ms INTEGER NOT NULL DEFAULT 3000,
-    c_expected_status TEXT NOT NULL DEFAULT '200-299',
-    c_max_response_ms INTEGER NOT NULL DEFAULT 0,
-    c_body_contains TEXT NOT NULL DEFAULT '',
-    c_enabled INTEGER NOT NULL DEFAULT 1,
-    c_source TEXT NOT NULL DEFAULT 'observability',
-    c_labels TEXT NOT NULL DEFAULT '{}',
-    c_description TEXT NOT NULL DEFAULT '',
-    c_last_checked_at DATETIME,
-    c_next_check_at DATETIME,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_checks_key
-ON t_monitor_checks (c_space_id, c_check_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_checks_due
-ON t_monitor_checks (c_enabled, c_next_check_at);
-
-CREATE TABLE IF NOT EXISTS t_monitor_check_results (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_result_id TEXT NOT NULL,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_check_id TEXT NOT NULL,
-    c_instance_id TEXT NOT NULL,
-    c_success INTEGER NOT NULL DEFAULT 0,
+    c_severity TEXT NOT NULL,
     c_status TEXT NOT NULL,
-    c_http_status INTEGER NOT NULL DEFAULT 0,
-    c_connected INTEGER NOT NULL DEFAULT 0,
-    c_latency_ms INTEGER NOT NULL DEFAULT 0,
-    c_error_message TEXT NOT NULL DEFAULT '',
+    c_reason TEXT NOT NULL DEFAULT '',
     c_raw_error TEXT NOT NULL DEFAULT '',
-    c_body_excerpt TEXT NOT NULL DEFAULT '',
     c_checked_at DATETIME NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_failure_reason TEXT NOT NULL DEFAULT '',
+    c_failure_raw_error TEXT NOT NULL DEFAULT '',
+    c_failed_at DATETIME,
+    c_failure_count INTEGER NOT NULL DEFAULT 0,
+    c_success_count INTEGER NOT NULL DEFAULT 0,
+    c_alert_status TEXT NOT NULL DEFAULT 'ok',
+    c_triggered_at DATETIME,
+    c_notified_at DATETIME,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_severity IN ('critical', 'warning')),
+    CHECK (c_status IN ('ok', 'degraded', 'down')),
+    CHECK (c_alert_status IN ('ok', 'firing')),
+    PRIMARY KEY (c_space_id, c_check_id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_results_id
-ON t_monitor_check_results (c_result_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_results_recent
-ON t_monitor_check_results (c_space_id, c_check_id, c_checked_at DESC);
-CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at ON t_monitor_check_results (c_checked_at);
+CREATE INDEX IF NOT EXISTS idx_t_monitor_checks_alert ON t_monitor_checks (c_alert_status);
 
--- Non-secret gateway status and durable route convergence deadlines.
-CREATE TABLE IF NOT EXISTS t_monitor_gateway_observations (
-    c_host_id TEXT NOT NULL PRIMARY KEY,
-    c_host_enabled_at DATETIME NOT NULL,
-    c_first_observed_at DATETIME NOT NULL,
-    c_observed_at DATETIME,
-    c_last_attempt_at DATETIME NOT NULL,
-    c_status_json TEXT NOT NULL DEFAULT '',
-    c_expected_hash TEXT NOT NULL DEFAULT '',
-    c_applied_hash TEXT NOT NULL DEFAULT '',
-    c_hash_mismatch_since DATETIME,
-    c_read_error TEXT NOT NULL DEFAULT ''
-);
+CREATE TRIGGER IF NOT EXISTS trg_t_monitor_checks_mtime
+AFTER UPDATE ON t_monitor_checks
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_monitor_checks SET c_mtime = CURRENT_TIMESTAMP WHERE c_space_id = OLD.c_space_id AND c_check_id = OLD.c_check_id;
+END;
 
+-- 每台登记主机最近一次上报：以 Admin 登记的主机 ID 为键，重装 HostAgent 沿用同一行。
 CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
-    c_agent_id TEXT PRIMARY KEY,
-    c_host_id TEXT NOT NULL DEFAULT '',
+    c_host_id TEXT NOT NULL PRIMARY KEY,
     c_hostname TEXT NOT NULL,
     c_boot_id TEXT NOT NULL,
     c_last_seen_at DATETIME NOT NULL,
@@ -96,10 +57,10 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
 -- 按采样时间保留 7 天，由数据清理定时任务删除。时间均为 UTC。
 CREATE TABLE IF NOT EXISTS t_monitor_host_samples (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_agent_id TEXT NOT NULL,
+    c_host_id TEXT NOT NULL,
     c_observed_at DATETIME NOT NULL,
     c_snapshot BLOB NOT NULL,
-    UNIQUE (c_agent_id, c_observed_at)
+    UNIQUE (c_host_id, c_observed_at)
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitor_host_samples_observed ON t_monitor_host_samples (c_observed_at);
@@ -120,87 +81,26 @@ CREATE TABLE IF NOT EXISTS t_monitor_notification_channels (
     UNIQUE (c_webhook_url)
 );
 
-CREATE TABLE IF NOT EXISTS t_monitor_alert_rules (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
-    c_check_id TEXT NOT NULL,
-    c_failure_threshold INTEGER NOT NULL DEFAULT 3,
-    c_success_threshold INTEGER NOT NULL DEFAULT 2,
-    c_minimum_reminder_interval_seconds INTEGER NOT NULL DEFAULT 0,
-    c_send_on_resolved INTEGER NOT NULL DEFAULT 1,
-    c_enabled INTEGER NOT NULL DEFAULT 1,
-    c_description TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_alert_rules_key
-ON t_monitor_alert_rules (c_space_id, c_rule_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_alert_rules_check
-ON t_monitor_alert_rules (c_space_id, c_check_id, c_enabled);
-
-CREATE TABLE IF NOT EXISTS t_monitor_alert_states (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
-    c_check_id TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'ok',
-    c_failure_count INTEGER NOT NULL DEFAULT 0,
-    c_success_count INTEGER NOT NULL DEFAULT 0,
-    c_triggered_at DATETIME,
-    c_resolved_at DATETIME,
-    c_last_reminder_at DATETIME,
-    c_dedupe_key TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_alert_states_key
-ON t_monitor_alert_states (c_space_id, c_rule_id, c_check_id);
-
+-- 告警事件：触发、提醒、恢复与推送失败。标题与级别在事件里，检查删除后告警经过与静默汇总仍能显示。按 c_created_at 保留。
 CREATE TABLE IF NOT EXISTS t_monitor_alert_events (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_event_id TEXT NOT NULL,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_rule_id TEXT NOT NULL,
+    c_space_id TEXT NOT NULL,
     c_check_id TEXT NOT NULL,
+    c_title TEXT NOT NULL,
+    c_severity TEXT NOT NULL,
     c_event_type TEXT NOT NULL,
-    c_status TEXT NOT NULL,
     c_message TEXT NOT NULL DEFAULT '',
     c_payload TEXT NOT NULL DEFAULT '{}',
-    c_created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_event_type IN ('triggered', 'reminder', 'resolved', 'send_failed')),
+    UNIQUE (c_event_id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_alert_events_id
-ON t_monitor_alert_events (c_event_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_alert_events_recent
-ON t_monitor_alert_events (c_space_id, c_created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_monitor_alert_events_created_at ON t_monitor_alert_events (c_created_at);
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_checks_mtime
-AFTER UPDATE ON t_monitor_checks
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_monitor_checks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_alert_rules_mtime
-AFTER UPDATE ON t_monitor_alert_rules
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_monitor_alert_rules SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_alert_states_mtime
-AFTER UPDATE ON t_monitor_alert_states
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_monitor_alert_states SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
+CREATE INDEX IF NOT EXISTS idx_t_monitor_alert_events_recent ON t_monitor_alert_events (c_space_id, c_created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_t_monitor_alert_events_created_at ON t_monitor_alert_events (c_created_at);
+CREATE INDEX IF NOT EXISTS idx_t_monitor_alert_events_check
+ON t_monitor_alert_events (c_space_id, c_check_id, c_created_at DESC);
 
 -- Application metrics catalog and ingestion state. Historical samples are kept
 -- in Storage; SQLite deliberately stores only bounded catalog/latest metadata.
@@ -225,32 +125,17 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_services (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_services_key
 ON t_monitor_metric_services (c_service_name, c_instance_id, c_boot_id);
 
+-- 指标序列：目录与最新值在同一行。c_last_seen_at 是最近一次上报这条序列的时间（24 小时没上报的序列由清理定时器删除）；
+-- 最新值只前进到更新的观测，水位类指标不往小里退，所以 c_observed_at 可能早于 c_last_seen_at。
 CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    c_series_id TEXT NOT NULL,
     c_service_name TEXT NOT NULL,
     c_instance_id TEXT NOT NULL,
-    c_series_id TEXT NOT NULL,
     c_metric_name TEXT NOT NULL,
     c_metric_type TEXT NOT NULL,
     c_labels_json TEXT NOT NULL DEFAULT '{}',
     c_last_seen_at DATETIME NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_series_key
-ON t_monitor_metric_series (c_service_name, c_instance_id, c_series_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_name
-ON t_monitor_metric_series (c_service_name, c_metric_name);
-
-CREATE TABLE IF NOT EXISTS t_monitor_metric_latest (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_series_id TEXT NOT NULL,
-    c_service_name TEXT NOT NULL,
-    c_instance_id TEXT NOT NULL,
-    c_metric_name TEXT NOT NULL,
-    c_metric_type TEXT NOT NULL,
-    c_labels_json TEXT NOT NULL DEFAULT '{}',
     c_value REAL NOT NULL,
     c_observed_at DATETIME NOT NULL,
     c_interval_seconds INTEGER NOT NULL DEFAULT 0,
@@ -261,8 +146,10 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_latest (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_latest_series ON t_monitor_metric_latest (c_series_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_metric_latest_name ON t_monitor_metric_latest (c_service_name, c_metric_name, c_observed_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_series_key ON t_monitor_metric_series (c_series_id);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_name
+ON t_monitor_metric_series (c_service_name, c_metric_name, c_observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_last_seen ON t_monitor_metric_series (c_last_seen_at);
 
 CREATE TABLE IF NOT EXISTS t_monitor_metric_ingest_messages (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -314,14 +201,6 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_monitor_metric_series SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_latest_mtime
-AFTER UPDATE ON t_monitor_metric_latest
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_monitor_metric_latest SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
 CREATE TABLE IF NOT EXISTS t_monitor_component_health (

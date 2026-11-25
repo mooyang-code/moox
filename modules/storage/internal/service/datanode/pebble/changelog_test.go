@@ -415,9 +415,9 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 // peekChange 读出的定位字段与完整解码一致，三种条目都能跳过其余字段。
 func TestPeekChangeMatchesFullDecode(t *testing.T) {
 	for _, change := range []*pb.DatasetChange{
-		{Sequence: 7, SpaceId: "s", DatasetId: "d", CreatedAt: "2026-10-01T00:00:00.5Z", Ranges: []*pb.DatasetChangeRange{{SubjectId: "BTC", Freq: "1m", StartTime: "a", EndTime: "b"}}},
-		{Sequence: 8, SpaceId: "s", DatasetId: "notes", CreatedAt: "x", Records: []*pb.RecordRowKey{{RecordId: "r", Version: "1"}}},
-		{Sequence: 9, SpaceId: "s", DatasetId: "d", CreatedAt: "y", Marker: []byte("marker")},
+		{Sequence: 7, SpaceId: "s", DatasetId: "d", CreatedAt: 1790812800500, Ranges: []*pb.DatasetChangeRange{{SubjectId: "BTC", Freq: "1m", StartTime: "a", EndTime: "b"}}},
+		{Sequence: 8, SpaceId: "s", DatasetId: "notes", CreatedAt: 1790812800501, Records: []*pb.RecordRowKey{{RecordId: "r", Version: "1"}}},
+		{Sequence: 9, SpaceId: "s", DatasetId: "d", CreatedAt: 1, Marker: []byte("marker")},
 	} {
 		raw, err := proto.Marshal(change)
 		require.NoError(t, err)
@@ -664,8 +664,8 @@ func TestChangeLogMissingEntriesReportGap(t *testing.T) {
 	require.Equal(t, uint64(3), rsp.GetNextCursor().GetSequence())
 }
 
-// 创建时间读不出来的条目按已过期删除，不会挡住之后的清理；每批从已清理到的序号之后开始。
-func TestChangeLogCleanupSkipsPastUnparsableCreatedAt(t *testing.T) {
+// 没有创建时刻的条目按已过期删除，不会挡住之后的清理；每批从已清理到的序号之后开始。
+func TestChangeLogCleanupSkipsPastMissingCreatedAt(t *testing.T) {
 	ctx := context.Background()
 	s := openChangeLogStore(t, 0)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
@@ -680,7 +680,7 @@ func TestChangeLogCleanupSkipsPastUnparsableCreatedAt(t *testing.T) {
 	change := &pb.DatasetChange{}
 	require.NoError(t, proto.Unmarshal(raw, change))
 	require.NoError(t, closer.Close())
-	change.CreatedAt = "not-a-time"
+	change.CreatedAt = 0
 	broken, err := proto.Marshal(change)
 	require.NoError(t, err)
 	require.NoError(t, s.db.Set(changeLogKey(2), broken, cpebble.Sync))

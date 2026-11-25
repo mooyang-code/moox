@@ -5,18 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
-	"github.com/mooyang-code/moox/modules/storage/internal/storeerr"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
-// 本文件聚合数据源、主体、数据集、字段、因子及其列绑定相关的元数据 CRUD 入口。
+// 本文件聚合数据源、主体、数据集及其列相关的元数据 CRUD 入口。
 
 func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSourceReq) (*pb.CreateDataSourceRsp, error) {
 	item := req.GetDataSource()
@@ -138,7 +134,7 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 		if err := validateDatasetColumnName(column.GetColumnName()); err != nil {
 			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
-		if err := validateColumnDisplayName("dataset column display_name", column.GetAttributes()); err != nil {
+		if err := validateColumnDisplayName("dataset column display_name", column.GetDisplayName()); err != nil {
 			return &pb.CreateDatasetRsp{RetInfo: retinfo.FromError(err)}, nil
 		}
 	}
@@ -224,6 +220,7 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 		DataSourceID: req.GetDataSourceId(),
 		DataKind:     req.GetDataKind(),
 		Freq:         req.GetFreq(),
+		Status:       req.GetStatus(),
 		Page:         req.GetPage(),
 	}
 	items, page, err := s.metadata.ListDatasets(ctx, query)
@@ -241,203 +238,6 @@ func (s *Service) ListDatasetSubjects(ctx context.Context, req *pb.ListDatasetSu
 	return &pb.ListDatasetSubjectsRsp{RetInfo: retinfo.Success("success"), DatasetSubjects: items, PageResult: page}, nil
 }
 
-func (s *Service) CreateFieldGroup(ctx context.Context, req *pb.CreateFieldGroupReq) (*pb.CreateFieldGroupRsp, error) {
-	item := req.GetFieldGroup()
-	if item == nil || item.GetSpaceId() == "" || item.GetName() == "" {
-		return &pb.CreateFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and name are required"))}, nil
-	}
-	if item.GroupId == "" {
-		item.GroupId = defaultID(item.GetName(), "field_group")
-	}
-	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
-		return &pb.CreateFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	created, err := s.metadata.CreateFieldGroup(ctx, item)
-	if err != nil {
-		return &pb.CreateFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "create field group")
-	return &pb.CreateFieldGroupRsp{RetInfo: retinfo.Success("success"), FieldGroup: created}, nil
-}
-
-func (s *Service) UpdateFieldGroup(ctx context.Context, req *pb.UpdateFieldGroupReq) (*pb.UpdateFieldGroupRsp, error) {
-	item := req.GetFieldGroup()
-	if item == nil || item.GetSpaceId() == "" || item.GetGroupId() == "" {
-		return &pb.UpdateFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and group_id are required"))}, nil
-	}
-	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
-		return &pb.UpdateFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	updated, err := s.metadata.UpdateFieldGroup(ctx, item)
-	if err != nil {
-		return &pb.UpdateFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "update field group")
-	return &pb.UpdateFieldGroupRsp{RetInfo: retinfo.Success("success"), FieldGroup: updated}, nil
-}
-
-func (s *Service) GetFieldGroup(ctx context.Context, req *pb.GetFieldGroupReq) (*pb.GetFieldGroupRsp, error) {
-	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
-		return &pb.GetFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	item, err := s.metadata.GetFieldGroup(ctx, req.GetSpaceId(), req.GetGroupId())
-	if err != nil {
-		return &pb.GetFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.GetFieldGroupRsp{RetInfo: retinfo.Success("success"), FieldGroup: item}, nil
-}
-
-func (s *Service) ListFieldGroups(ctx context.Context, req *pb.ListFieldGroupsReq) (*pb.ListFieldGroupsRsp, error) {
-	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
-		return &pb.ListFieldGroupsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	items, page, err := s.metadata.ListFieldGroups(ctx, req.GetSpaceId(), req.GetParentGroupId(), req.GetPage())
-	if err != nil {
-		return &pb.ListFieldGroupsRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	counts, err := s.metadata.CountFieldsByGroup(ctx, req.GetSpaceId())
-	if err != nil {
-		return &pb.ListFieldGroupsRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.ListFieldGroupsRsp{
-		RetInfo: retinfo.Success("success"), FieldGroups: items, PageResult: page,
-		FieldCounts: counts.ByGroup, TotalFieldCount: counts.Total, UngroupedFieldCount: counts.Ungrouped,
-	}, nil
-}
-
-func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.CreateFieldRsp, error) {
-	if req.GetField() == nil || req.GetField().GetGroupId() == "" {
-		return &pb.CreateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("field.group_id is required"))}, nil
-	}
-	item := req.GetField()
-	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
-		return &pb.CreateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if err := validateUserColumnName("field_id", item.GetFieldId()); err != nil {
-		return &pb.CreateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	created, err := s.metadata.CreateField(ctx, item)
-	if err != nil {
-		return &pb.CreateFieldRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "create field")
-	return &pb.CreateFieldRsp{RetInfo: retinfo.Success("success"), Field: created}, nil
-}
-
-func (s *Service) UpdateField(ctx context.Context, req *pb.UpdateFieldReq) (*pb.UpdateFieldRsp, error) {
-	item := req.GetField()
-	if item == nil || item.GetSpaceId() == "" || item.GetFieldId() == "" {
-		return &pb.UpdateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and field_id are required"))}, nil
-	}
-	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
-		return &pb.UpdateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if err := validateUserColumnName("field_id", item.GetFieldId()); err != nil {
-		return &pb.UpdateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	updated, err := s.metadata.UpdateField(ctx, item)
-	if err != nil {
-		return &pb.UpdateFieldRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "update field")
-	return &pb.UpdateFieldRsp{RetInfo: retinfo.Success("success"), Field: updated}, nil
-}
-
-func (s *Service) GetField(ctx context.Context, req *pb.GetFieldReq) (*pb.GetFieldRsp, error) {
-	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
-		return &pb.GetFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	item, err := s.metadata.GetField(ctx, req.GetSpaceId(), req.GetFieldId())
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return &pb.GetFieldRsp{RetInfo: retinfo.FromError(err)}, nil
-		}
-		return &pb.GetFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_FIELD_NOT_FOUND, err)}, nil
-	}
-	return &pb.GetFieldRsp{RetInfo: retinfo.Success("success"), Field: item}, nil
-}
-
-// batchFieldStatuses 是批量操作可设置的字段状态，空值表示不改状态。deleted 是逻辑删除：数据保留，重新启用即恢复。
-var batchFieldStatuses = []string{"", "active", "disabled", "deleted"}
-
-func (s *Service) ListFields(ctx context.Context, req *pb.ListFieldsReq) (*pb.ListFieldsRsp, error) {
-	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
-		return &pb.ListFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if req.GetGroupId() != "" && req.GetUngroupedOnly() {
-		return &pb.ListFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("group_id and ungrouped_only cannot be used together"))}, nil
-	}
-	if !validFieldSort(req.GetSortBy(), req.GetSortOrder()) {
-		return &pb.ListFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("invalid field sort"))}, nil
-	}
-	items, page, err := s.metadata.ListFields(ctx, coremetadata.FieldQuery{
-		SpaceID: req.GetSpaceId(), GroupID: req.GetGroupId(), ValueType: req.GetValueType(),
-		Status: req.GetStatus(), Keyword: req.GetKeyword(), IncludeDescendants: req.GetIncludeDescendants(),
-		UngroupedOnly: req.GetUngroupedOnly(), SortBy: req.GetSortBy(), SortOrder: req.GetSortOrder(), Page: req.GetPage(),
-	})
-	if err != nil {
-		return &pb.ListFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.ListFieldsRsp{RetInfo: retinfo.Success("success"), Fields: items, PageResult: page}, nil
-}
-
-func validFieldSort(sortBy string, sortOrder string) bool {
-	if sortBy != "" && sortBy != "sort_order" && sortBy != "field_id" && sortBy != "updated_at" {
-		return false
-	}
-	return sortOrder == "" || strings.EqualFold(sortOrder, "asc") || strings.EqualFold(sortOrder, "desc")
-}
-
-func (s *Service) BatchUpdateFields(ctx context.Context, req *pb.BatchUpdateFieldsReq) (*pb.BatchUpdateFieldsRsp, error) {
-	if req.GetSpaceId() == "" || len(req.GetFieldIds()) == 0 || len(req.GetFieldIds()) > 100 {
-		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and 1-100 field_ids are required"))}, nil
-	}
-	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
-		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if req.GetTargetGroupId() == "" && req.GetTargetStatus() == "" {
-		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target_group_id or target_status is required"))}, nil
-	}
-	if !slices.Contains(batchFieldStatuses, req.GetTargetStatus()) {
-		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target_status 只能是 active、disabled 或 deleted"))}, nil
-	}
-	updated, err := s.metadata.BatchUpdateFields(ctx, req.GetSpaceId(), req.GetFieldIds(), req.GetTargetGroupId(), req.GetTargetStatus())
-	if err != nil {
-		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "batch update fields")
-	return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Success("success"), UpdatedCount: updated}, nil
-}
-
-func (s *Service) DeleteFieldGroup(ctx context.Context, req *pb.DeleteFieldGroupReq) (*pb.DeleteFieldGroupRsp, error) {
-	if req.GetSpaceId() == "" || req.GetGroupId() == "" {
-		return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and group_id are required"))}, nil
-	}
-	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
-		return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if err := s.metadata.DeleteFieldGroup(ctx, req.GetSpaceId(), req.GetGroupId()); err != nil {
-		return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "delete field group")
-	return &pb.DeleteFieldGroupRsp{RetInfo: retinfo.Success("success")}, nil
-}
-
-func validateFieldSpaceContext(ctx context.Context, requestSpaceID string) error {
-	head := thttp.Head(ctx)
-	if head == nil || head.Request == nil {
-		return nil
-	}
-	headerSpaceID := strings.TrimSpace(head.Request.Header.Get("X-Space-Id"))
-	if headerSpaceID == "" {
-		return storeerr.Invalidf("%s header is required", http.CanonicalHeaderKey("X-Space-Id"))
-	}
-	if requestSpaceID == "" || requestSpaceID != headerSpaceID {
-		return storeerr.Invalidf("request space_id does not match %s header", http.CanonicalHeaderKey("X-Space-Id"))
-	}
-	return nil
-}
-
 func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDatasetColumnReq) (*pb.UpsertDatasetColumnRsp, error) {
 	item := req.GetColumn()
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
@@ -449,7 +249,7 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
-	if err := validateColumnDisplayName("dataset column display_name", item.GetAttributes()); err != nil {
+	if err := validateColumnDisplayName("dataset column display_name", item.GetDisplayName()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)

@@ -2,10 +2,9 @@
   "alerts": [
     {
       "dataset": null,
-      "id": "host-alert",
-      "last_checked_at": "2026-10-09T12:00:00Z",
+      "id": "/host:offline:cpu",
+      "last_checked_at": "1791547200000",
       "object": {
-        "agent_id": "PHYSICAL01",
         "attention_kind": "",
         "component_id": "",
         "dataset_id": "",
@@ -22,7 +21,7 @@
       "recovering": false,
       "severity": "warning",
       "title": "主机 offline · CPU 使用率",
-      "triggered_at": "2026-10-09T12:00:00Z"
+      "triggered_at": "1791547200000"
     }
   ],
   "business_checks": [],
@@ -37,13 +36,13 @@
       "readiness": "",
       "reason": "部署已停用",
       "reporter": {
-        "checked_at": "",
+        "checked_at": "0",
         "raw_error": "",
         "reason": "从未收到监控上报",
         "status": "unknown"
       },
       "status": "disabled",
-      "status_since": ""
+      "status_since": "0"
     },
     {
       "component_id": "egress-proxy",
@@ -52,7 +51,7 @@
         {
           "boot_id": "boot-1",
           "instance_id": "egress-1",
-          "last_reported_at": "2026-10-09T12:00:00Z",
+          "last_reported_at": "1791547200000",
           "status": "healthy",
           "version": "v2"
         }
@@ -63,13 +62,13 @@
       "readiness": "ready",
       "reason": "监控上报正常",
       "reporter": {
-        "checked_at": "2026-10-09T12:00:00Z",
+        "checked_at": "1791547200000",
         "raw_error": "",
         "reason": "监控上报正常",
         "status": "healthy"
       },
       "status": "healthy",
-      "status_since": ""
+      "status_since": "0"
     },
     {
       "component_id": "eventbus",
@@ -81,13 +80,13 @@
       "readiness": "",
       "reason": "从未收到监控上报",
       "reporter": {
-        "checked_at": "",
+        "checked_at": "0",
         "raw_error": "",
         "reason": "从未收到监控上报",
         "status": "unknown"
       },
       "status": "unknown",
-      "status_since": ""
+      "status_since": "0"
     },
     {
       "component_id": "monitor",
@@ -99,13 +98,13 @@
       "readiness": "not_ready",
       "reason": "未就绪：上游连不上",
       "reporter": {
-        "checked_at": "2026-10-09T12:00:00Z",
+        "checked_at": "1791547200000",
         "raw_error": "",
         "reason": "监控上报正常",
         "status": "healthy"
       },
       "status": "down",
-      "status_since": ""
+      "status_since": "0"
     },
     {
       "component_id": "monitor",
@@ -117,20 +116,19 @@
       "readiness": "",
       "reason": "已停止上报",
       "reporter": {
-        "checked_at": "2026-10-09T11:50:00Z",
+        "checked_at": "1791546600000",
         "raw_error": "",
         "reason": "监控上报已中断",
         "status": "degraded"
       },
       "status": "degraded",
-      "status_since": ""
+      "status_since": "0"
     }
   ],
-  "generated_at": "2026-10-09T12:00:00Z",
+  "generated_at": "1791547200000",
   "hosts": [
     {
       "address": "control.test",
-      "agent_id": "",
       "cpu_available": false,
       "cpu_cores": 0,
       "cpu_percent": 0,
@@ -141,10 +139,9 @@
       "disk_threshold": 0,
       "disk_total_bytes": "0",
       "disk_used_bytes": "0",
-      "gateway_signals": [],
       "host_id": "control",
       "hostname": "",
-      "last_reported_at": "",
+      "last_reported_at": "0",
       "memory_available": false,
       "memory_percent": 0,
       "memory_threshold": 0,
@@ -156,7 +153,6 @@
     },
     {
       "address": "offline.test",
-      "agent_id": "PHYSICAL01",
       "cpu_available": false,
       "cpu_cores": 0,
       "cpu_percent": 0,
@@ -167,30 +163,16 @@
       "disk_threshold": 85,
       "disk_total_bytes": "0",
       "disk_used_bytes": "0",
-      "gateway_signals": [
-        {
-          "applied_hash": "",
-          "expected_hash": "",
-          "kind": "heartbeat",
-          "pending_since": "",
-          "signal": {
-            "checked_at": "2026-10-09T12:00:00Z",
-            "raw_error": "",
-            "reason": "主机网关心跳已中断",
-            "status": "down"
-          }
-        }
-      ],
       "host_id": "offline",
       "hostname": "offline-host",
-      "last_reported_at": "2026-10-09T11:50:00Z",
+      "last_reported_at": "1791546600000",
       "memory_available": false,
       "memory_percent": 0,
       "memory_threshold": 90,
       "memory_total_bytes": "0",
       "memory_used_bytes": "0",
       "metrics_available": false,
-      "reason": "主机采集代理超过 3 分钟没有上报，主机网关心跳也已停止，主机可能宕机或断网",
+      "reason": "主机采集代理超过 3 分钟没有上报，这台主机没有登记主机网关的上报，主机可能宕机、断网，或采集代理已停止",
       "status": "down"
     }
   ],
@@ -210,22 +192,22 @@
     {
       "datasets": [
         {
-          "arrived_at": "2026-10-09T11:59:03Z",
+          "arrived_at": "1791547143000",
           "clock_issue": "",
           "dataset_id": "bars",
           "delay_known": true,
           "delay_seconds": "3",
           "display_name": "",
           "expected_bar_at": "2026-10-09T11:58:00Z",
-          "expected_bar_close_at": "2026-10-09T11:59:00Z",
+          "expected_bar_close_at": "1791547140000",
           "freq": "1m",
           "input_watermark_at": "2026-10-09T12:00:00Z",
-          "last_reported_at": "2026-10-09T12:00:00Z",
-          "last_run_at": "2026-10-09T12:00:00Z",
-          "last_success_at": "2026-10-09T11:59:00Z",
+          "last_reported_at": "1791547200000",
+          "last_run_at": "1791547200000",
+          "last_success_at": "1791547140000",
           "late_confirmed": false,
           "lateness_limit_seconds": "600",
-          "latest_bar_close_at": "2026-10-09T11:59:00Z",
+          "latest_bar_close_at": "1791547140000",
           "output_watermark_at": "2026-10-09T11:58:00Z",
           "overdue_seconds": "0",
           "producer": "storage",
@@ -235,7 +217,7 @@
           "status": "degraded",
           "timezone": "UTC",
           "waiting_bars": 0,
-          "waiting_since": ""
+          "waiting_since": "0"
         }
       ],
       "id": "storage",
@@ -291,7 +273,7 @@
         {
           "boot_id": "",
           "instance_id": "orphan",
-          "last_reported_at": "2026-10-09T12:00:00Z",
+          "last_reported_at": "1791547200000",
           "status": "healthy",
           "version": "dev"
         }
@@ -302,13 +284,13 @@
       "readiness": "",
       "reason": "进程在上报，但没有部署记录",
       "reporter": {
-        "checked_at": "",
+        "checked_at": "0",
         "raw_error": "",
         "reason": "未配置指标上报",
         "status": "unchecked"
       },
       "status": "degraded",
-      "status_since": ""
+      "status_since": "0"
     }
   ]
 }

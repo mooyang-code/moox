@@ -17,11 +17,11 @@ func init() { markets.Register(MarketID, Rules{}) }
 // Rules 实现 markets.SubjectRules。
 type Rules struct{}
 
-// DefaultInstrumentType：没写品种时是股票；marketType 为 index、convertible_bond 时是对应品种。
+// DefaultInstrumentType：没写品种时是股票；写了别的品种（例如 index）原样返回，不折成股票，
+// 行情源目录里没有它的数据源，建任务与取数时按“目录里没有数据源”拒绝。
 func (Rules) DefaultInstrumentType(marketType string) marketdata.InstrumentType {
-	switch value := marketdata.InstrumentType(strings.ToLower(strings.TrimSpace(marketType))); value {
-	case marketdata.InstrumentIndex, marketdata.InstrumentConvertibleBond:
-		return value
+	if value := strings.ToLower(strings.TrimSpace(marketType)); value != "" {
+		return marketdata.InstrumentType(value)
 	}
 	return marketdata.InstrumentEquity
 }

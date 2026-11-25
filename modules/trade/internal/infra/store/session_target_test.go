@@ -28,7 +28,7 @@ func TestLaterSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 				SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-1",
 				InstanceID: "instance-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 				BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
-				Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+				Targets: []InstrumentQuantity{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 			}
 			_, accepted, err := s.AcceptLogicalAccountTarget(ctx, first)
 			require.NoError(t, err)

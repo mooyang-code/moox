@@ -888,7 +888,7 @@ moox-cli strategy replay start --dsl-file s.yaml --factor-task swap=<永续因�
 moox-cli strategy replay show --replay-id <回放ID>
 ```
 
-- 回放默认在 View 的历史数据上逐期求值；`--input compute`（因子现算）改为调因子引擎按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制，声明了 `factor_params` 的策略只能这样回放（每期求出的参数交给下一期的因子计算，逐期记录里有生效的参数），不支持策略池、现货加永续两个任务与股票。其余与 View 来源相同，用理论账本按收盘价成交；`--slippage-bps` 让成交价在收盘价上按方向加减这个比例（买入上浮、卖出下浮），不写为 0。**默认不计资金费，不模拟强平与保证金率**；加 `--funding-column <列名>` 才计资金费（策略池写在池的 `fees.funding_column` 里）。
+- 回放默认在 View 的历史数据上逐期求值；`--input compute`（因子现算）改为调因子引擎按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制，声明了 `factor_params` 的策略只能这样回放（每期求出的参数交给下一期的因子计算，逐期记录里有生效的参数），不支持策略池与股票；现货加永续两个任务时每个任务各开一个引擎会话、同步推进。其余与 View 来源相同，用理论账本按收盘价成交；`--slippage-bps` 让成交价在收盘价上按方向加减这个比例（买入上浮、卖出下浮），不写为 0。**默认不计资金费，不模拟强平与保证金率**；加 `--funding-column <列名>` 才计资金费（策略池写在池的 `fees.funding_column` 里）。
 - 回放只用已闭合的 K 线，终点截到最新一根之前，根数不超过 20000。起点要留够 `min_age_bars` 与 `bars[-1]` 所需的历史，否则提交时提示可用起点。
 - 回放用来比较策略版本，不承诺复现历史上的实时结果；与实时的差别见 [策略模块](模块/策略.md)“回放与实时的已知差别”。
 - 每期记录里有解释明细：每个标的的最终阶段与原因，以及 `decision.limits`、`decision.pool`。
@@ -1168,7 +1168,7 @@ portfolio: {max_missing: 0.2}
 | 保存即拒绝，提示“包含未知字段” | 解析严格，拼错键名或写了不存在的字段；规则上没有 `entry`、`exit`、`candidates`、`tranche`、`params` 这些字段 | 按本手册字段名核对；进出场条件写进 `hold`，每根开一批用 `holding: {bars, offsets: all}`（5.1） |
 | 保存即拒绝，提示 type “不受支持，只能是 rank” | 规则类型只有 `rank`，没有 `signal`、`tranche` 这类类型 | 固定几个标的按信号进出写成显式 `pool` 加 `hold`（第 6 节）；每根开一批、各批持有固定根数写成 `holding: {bars, offsets: all}`（5.1） |
 | 回放提交被拒，提示声明了 `factor_params` 的策略只能用“因子现算”来源 | 可变成员的参数随策略逐期变化，View 里的历史值不能复用 | `strategy replay start` 加 `--input compute`（第 11 节） |
-| 回放提交被拒，提示“因子现算”只支持一个主帧任务、不支持策略池或股票市场 | 这几种只能读结果 View | 去掉 `--input compute`；现货加永续要现算时改用统一数据集上的任务 |
+| 回放提交被拒，提示“因子现算”不支持策略池或股票市场 | 这几种只能读结果 View | 去掉 `--input compute` |
 | `hold.allow_reentry 不能与大于 0 的 cooldown_bars 同时使用` | 允许当根补回与冷却语义冲突 | 去掉冷却，或不写 `allow_reentry` |
 | 提示互斥（hold 与 buffer、then、range、filter_after、holding.bars） | 这些写法语义冲突 | 按提示二选一 |
 | 提示“weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完” | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |

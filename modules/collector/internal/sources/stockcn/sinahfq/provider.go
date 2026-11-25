@@ -39,12 +39,12 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "sina_hfq", SourceID: "hfq_http", DisplayName: "新浪复权因子", Hosts: []string{"finance.sina.com.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "sina_hfq", SourceID: "hfq_http", DisplayName: "新浪复权因子", Hosts: []string{"finance.sina.com.cn"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 // FieldSpecs：后复权因子一旦写下就不再变（前复权每次除权都会改写全部历史），前复权价由因子表达式算。
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
-	return []marketdata.FieldSpec{{ID: FieldAdjFactor, Name: "后复权因子", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: []string{"1d"}}}
+	return []marketdata.FieldSpec{{ID: FieldAdjFactor, Name: "后复权因子", Group: marketdata.GroupAdjust, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: []string{"1d"}}}
 }
 
 type factor struct {

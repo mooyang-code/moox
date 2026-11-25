@@ -79,16 +79,103 @@ func TestSeedStartsForNewDatasetAndCompletes(t *testing.T) {
 	require.Empty(t, active)
 }
 
-// 最早生效点早于 24 小时的数据集是线上已有的，不补，也不会进入不生效状态。
-func TestSeedIgnoresExistingDatasets(t *testing.T) {
+// “首次接入”只看补齐记录：已有记录（补完、放行过）的数据集不再补，与最早生效点多早无关；
+// 重新登记清掉时间线与补齐记录，之后时间线里的数据集算第一次登记，重新补齐。
+func TestSeedRunsOncePerRegistration(t *testing.T) {
 	b, invoker, _, _ := seedFixture(t, 48*time.Hour, 5)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	finished := now
+	_, err := b.Store.CreateHistorySeed(ctx, store.HistorySeed{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", Status: store.SeedDone, TargetFrom: now, EffectiveFrom: now, StartedAt: now, FinishedAt: &finished})
+	require.NoError(t, err)
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	require.Equal(t, store.SeedDone, seedOf(t, b).Status)
+	require.Empty(t, invoker.events)
+	active, err := b.Store.HistorySeeds(ctx, "crypto", true)
+	require.NoError(t, err)
+	require.Empty(t, active, "已有记录不再进入不生效状态")
+
+	// 重新登记：Reset 清掉补齐记录（时间线由重新登记另行重写，这里沿用夹具的时间线）。
+	_, err = b.Store.(*store.BackfillRepository).Reset(ctx, "crypto")
+	require.NoError(t, err)
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	require.True(t, seedOf(t, b).Active(), "重新登记后重新补齐")
+}
+
+// 第一行时间线写在生效点之前：记录先建好（下游先不生效），作业等到生效点之后再拼，补齐范围一直到生效点。
+func TestSeedWaitsForTheEffectivePointBeforeBuildingJobs(t *testing.T) {
+	b, invoker, _, _ := seedFixture(t, -10*time.Minute)
 	ctx := context.Background()
 	require.NoError(t, b.SeedTick(ctx, "crypto"))
 	b.Wait()
-	seeds, err := b.Store.HistorySeeds(ctx, "crypto", false)
+	seed := seedOf(t, b)
+	require.True(t, seed.EffectiveFrom.After(b.now()), "夹具的生效点在未来")
+	require.Equal(t, store.SeedPreparing, seed.Status)
+	require.True(t, seed.Active(), "记录一建好下游就不生效")
+	require.Empty(t, seed.JobIDs)
+
+	later := seed.EffectiveFrom.Add(time.Minute)
+	b.Now = func() time.Time { return later }
+	b.Checker.Now = b.Now
+	// 生效点前一根缺：只有补到生效点才补得到它。
+	b.Checker.Rows.(*fakeRows).mu.Lock()
+	b.Checker.Rows.(*fakeRows).missing["BTC-USDT"][seed.EffectiveFrom.Add(-time.Minute).Unix()] = true
+	b.Checker.Rows.(*fakeRows).mu.Unlock()
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed = seedOf(t, b)
+	require.Equal(t, store.SeedRunning, seed.Status)
+	require.Len(t, seed.JobIDs, 1)
+	_, chunks, err := b.Store.GetJob(ctx, seed.JobIDs[0])
 	require.NoError(t, err)
-	require.Empty(t, seeds)
+	require.Len(t, chunks, 1)
+	require.Equal(t, seed.EffectiveFrom, chunks[0].To.UTC(), "补到生效点为止")
 	require.Empty(t, invoker.events)
+}
+
+// 记录建好后、生效点之前数据集又停止采集（时间线里没有这一段）：记 done 放行，不一直停在 preparing 挡着下游。
+func TestSeedOfStoppedDatasetIsReleased(t *testing.T) {
+	b, invoker, _, _ := seedFixture(t, 2*time.Hour)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	_, err := b.Store.CreateHistorySeed(ctx, store.HistorySeed{SpaceID: "crypto", DatasetID: "gone", Frequency: "1m", Status: store.SeedPreparing, TargetFrom: now.Add(-time.Hour), EffectiveFrom: now.Add(-time.Minute), StartedAt: now})
+	require.NoError(t, err)
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed, ok, err := b.Store.HistorySeedOf(ctx, "crypto", "gone", "1m")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, store.SeedDone, seed.Status)
+	require.Contains(t, seed.Note, "停止采集")
+	require.Empty(t, invoker.events)
+}
+
+// 补齐分块的复查与拼作业同一口径：函数成功返回却什么都没写时，这一块不能记成成功（先退回重跑，
+// 两次缺的一样才记行情源缺失），不会因为“时间线起点之前从第一根起算”被整段裁掉。
+func TestSeedChunkThatWritesNothingIsNotSucceeded(t *testing.T) {
+	b, invoker, rows, base := seedFixture(t, 2*time.Hour)
+	counting := &countingRows{fakeRows: rows, readSubs: map[string]int{}}
+	b.Checker.Rows = counting
+	// BTC 在时间线起点之前一根都没有（新数据集）。
+	rows.mu.Lock()
+	rows.listed = map[string]time.Time{"BTC-USDT": base}
+	rows.mu.Unlock()
+	invoker.noWrite = true
+	b.Refill = false
+	ctx := context.Background()
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed := seedOf(t, b)
+	require.Equal(t, store.SeedRunning, seed.Status, "时间线起点之前缺的整段都是要补的缺口")
+
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	b.Wait()
+	require.NotEmpty(t, invoker.events)
+	status, err := b.Status(ctx, seed.JobIDs[0])
+	require.NoError(t, err)
+	require.Zero(t, status.Counts[store.BackfillSucceeded], "什么都没写的分块不记成功")
 }
 
 // 保留期或行情源不允许补更早的历史（深度为 0）：直接记 done，不建作业。
@@ -206,7 +293,7 @@ func TestCheckMergesGapsAcrossClosedSessions(t *testing.T) {
 		rows.missing["BTC-USDT"][start.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
 	rows.mu.Unlock()
-	request := Request{SpaceID: "crypto", DatasetID: "ds", Subjects: []string{"BTC-USDT"}, From: start, To: start.Add(3 * time.Hour), BeforeFirstPlan: true}
+	request := Request{SpaceID: "crypto", DatasetID: "ds", Subjects: []string{"BTC-USDT"}, From: start, To: start.Add(3 * time.Hour), FullHistory: true}
 
 	plain, err := b.Checker.Check(context.Background(), request)
 	require.NoError(t, err)
@@ -235,7 +322,7 @@ func TestCheckRestrictsToSubjects(t *testing.T) {
 	rows.missing["BTC-USDT"][base.Add(-10*time.Minute).Unix()] = true
 	rows.missing["ETH-USDT"][base.Add(-10*time.Minute).Unix()] = true
 	rows.mu.Unlock()
-	request := Request{SpaceID: "crypto", DatasetID: "ds", From: base.Add(-30 * time.Minute), To: base, BeforeFirstPlan: true}
+	request := Request{SpaceID: "crypto", DatasetID: "ds", From: base.Add(-30 * time.Minute), To: base, FullHistory: true}
 	all, err := b.Checker.Check(context.Background(), request)
 	require.NoError(t, err)
 	require.Len(t, all.Gaps, 2)
@@ -248,16 +335,14 @@ func TestCheckRestrictsToSubjects(t *testing.T) {
 
 func TestSeedBatchSizeKeepsChecksBounded(t *testing.T) {
 	// A 股 5m 约 1 万根：受 MaxCheckPoints 限制，一批约 300 个标的。
-	require.Equal(t, MaxCheckPoints/9840, seedBatchSize(500, 9840, 1, 11))
+	require.Equal(t, MaxCheckPoints/9840, seedBatchSize(500, 9840, 11))
 	// crypto 1m 约 4.9 万根：一批约 61 个标的。
-	require.Equal(t, MaxCheckPoints/48960, seedBatchSize(500, 48960, 1, 50))
+	require.Equal(t, MaxCheckPoints/48960, seedBatchSize(500, 48960, 50))
 	// 标的少时不超过 perJob。
-	require.Equal(t, 10, seedBatchSize(10, 100, 1, 2))
-	// 统一数据集两个 tag，检查的点数翻倍。
-	require.Equal(t, MaxCheckPoints/(48960*2), seedBatchSize(500, 48960, 2, 50))
-	require.GreaterOrEqual(t, seedBatchSize(500, MaxCheckPoints*2, 1, 5000), 1)
+	require.Equal(t, 10, seedBatchSize(10, 100, 2))
+	require.GreaterOrEqual(t, seedBatchSize(500, MaxCheckPoints*2, 5000), 1)
 	// 不合并时每个交易时段一段缺口，缺口数限制批大小：A 股 205 个交易日 × 2 段 = 410 段，一批不超过 3750/410 个标的。
-	require.Equal(t, MaxGaps*3/4/410, seedBatchSize(500, 9840, 1, 410))
+	require.Equal(t, MaxGaps*3/4/410, seedBatchSize(500, 9840, 410))
 }
 
 // 一个地域的补采函数建不出来时换下一个地域，不让分块无限退回。

@@ -15,7 +15,7 @@ vi.mock("@/api/strategy", () => ({ deleteInstance: api.deleteInstance }));
 vi.mock("@/api/factor", () => ({ getFactorTask: api.getFactorTask }));
 vi.mock("@arco-design/web-vue", () => ({ Message: api.Message, Modal: { confirm: api.confirm } }));
 
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { DELETE_INCOMPLETE_TIP, canDeleteInstance, confirmInstanceDelete, instanceDeleteLines } from "./instance-delete";
 
@@ -36,7 +36,7 @@ describe("instance delete flow", () => {
     api.deleteInstance.mockReset().mockResolvedValue(undefined);
     api.getFactorTask.mockReset().mockImplementation(async (taskId: string) => {
       if (taskId === "ftask_swap") {
-        throw new ControlRequestError("因子任务 ftask_swap 不存在", { ret_info: { code: 5, msg: "不存在" } } as never);
+        throw new RequestError("因子任务 ftask_swap 不存在", { ret_info: { code: 5, msg: "不存在" } } as never);
       }
       return { task_id: taskId, name: "现货因子", result_dataset_id: "dataset_factor_spot", bound_instance_id: "i-1" };
     });
@@ -56,7 +56,7 @@ describe("instance delete flow", () => {
       },
       { market: "swap", taskId: "ftask_swap" },
       {
-        market: "multi",
+        market: "daily:spot",
         taskId: "ftask_spot_1m",
         factorTask: { name: "公共", result_dataset_id: "dataset_shared", bound_instance_id: "" } as never
       }
@@ -94,8 +94,8 @@ describe("instance delete flow", () => {
 
   it("reads each task and lists a missing one as deleted", async () => {
     await confirmInstanceDelete(instance);
-    expect(api.getFactorTask).toHaveBeenCalledWith("ftask_spot", { silent: true });
-    expect(api.getFactorTask).toHaveBeenCalledWith("ftask_swap", { silent: true });
+    expect(api.getFactorTask).toHaveBeenCalledWith("ftask_spot");
+    expect(api.getFactorTask).toHaveBeenCalledWith("ftask_swap");
     expect(lastDialog().onCancel).toBeUndefined();
     expect(api.deleteInstance).not.toHaveBeenCalled();
   });
@@ -128,7 +128,7 @@ describe("instance delete flow", () => {
   it("asks to retry only when the server says the deletion already started", async () => {
     const started = "删除因子任务 ftask_spot 未完成（实例还在，可以重新执行删除）";
     api.deleteInstance.mockRejectedValue(
-      new ControlRequestError(started, { ret_info: { code: 4, msg: started }, incomplete: true } as never)
+      new RequestError(started, { ret_info: { code: 4, msg: started }, incomplete: true } as never)
     );
     await confirmInstanceDelete(instance);
     lastDialog().onOk();
@@ -137,9 +137,7 @@ describe("instance delete flow", () => {
 
     vi.clearAllMocks();
     const notStarted = "读不到归档任务，暂不能删除";
-    api.deleteInstance.mockRejectedValue(
-      new ControlRequestError(notStarted, { ret_info: { code: 4, msg: notStarted } } as never)
-    );
+    api.deleteInstance.mockRejectedValue(new RequestError(notStarted, { ret_info: { code: 4, msg: notStarted } } as never));
     await confirmInstanceDelete(instance);
     lastDialog().onOk();
     await flushPromises();
@@ -148,7 +146,7 @@ describe("instance delete flow", () => {
 
   it("shows a refusal as is", async () => {
     const message = "结果数据集 dataset_factor_spot 有归档任务，请先到归档页删除这些归档任务，再删除实例";
-    api.deleteInstance.mockRejectedValue(new ControlRequestError(message, { ret_info: { code: 1, msg: message } } as never));
+    api.deleteInstance.mockRejectedValue(new RequestError(message, { ret_info: { code: 1, msg: message } } as never));
     await confirmInstanceDelete(instance);
     lastDialog().onOk();
     await flushPromises();

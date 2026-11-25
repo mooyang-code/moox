@@ -39,13 +39,11 @@ func TestDefaultSetupBundleDefinesBusinessSpaces(t *testing.T) {
 func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, validateSetupMetadataDependencies(seed))
 	_, err = buildMetadataImportCalls(seed)
 	require.NoError(t, err)
 
 	datasetsBySpace := map[string][]string{}
 	columnCount := map[string]int{}
-	viewCount := map[string]int{}
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
@@ -53,16 +51,9 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, column := range seed.DatasetColumns {
 		columnCount[column.SpaceID+"/"+column.DatasetID]++
 	}
-	for _, view := range seed.Views {
-		require.LessOrEqual(t, utf8.RuneCountInString(view.Name), 10, view.SpaceID+"/"+view.ViewID)
-		viewCount[view.SpaceID+"/"+view.PrimaryDatasetID]++
-	}
 	for _, dataset := range seed.Datasets {
 		key := dataset.SpaceID + "/" + dataset.DatasetID
 		require.Positive(t, columnCount[key], "Dataset %s has no columns", key)
-		if dataset.DataKind == "time_series" {
-			require.Positive(t, viewCount[key], "Dataset %s has no View", key)
-		}
 	}
 
 	for spaceID := range datasetsBySpace {

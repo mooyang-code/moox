@@ -119,7 +119,7 @@ func TestRegisterBuiltinsAShare(t *testing.T) {
 	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeAShare,
-		Markets:       []exchange.MarketType{exchange.MarketTypeStock},
+		Markets:       []exchange.MarketType{exchange.MarketTypeEquity},
 		ExecutionMode: exchange.ExecutionModePaper, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "CNY",
 	}
 	adapter, err := registry.Bind(config, exchange.Credential{})
@@ -131,7 +131,7 @@ func TestRegisterBuiltinsAShare(t *testing.T) {
 	_, err = registry.Bind(config, exchange.Credential{})
 	require.ErrorContains(t, err, "QMT 执行端尚未接入")
 
-	stock := []exchange.MarketType{exchange.MarketTypeStock}
+	stock := []exchange.MarketType{exchange.MarketTypeEquity}
 	spot := []exchange.MarketType{exchange.MarketTypeSpot}
 	require.NoError(t, execution.ValidateAccount(registry, exchange.ExchangeAShare, stock, "CNY", exchange.ExecutionModePaper))
 	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeAShare, spot, "CNY", exchange.ExecutionModePaper), "不支持开通市场")
@@ -147,7 +147,7 @@ func TestRegisterBuiltinsHKEX(t *testing.T) {
 	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil), hkex.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-hk", Exchange: exchange.ExchangeHKEX,
-		Markets:       []exchange.MarketType{exchange.MarketTypeStock},
+		Markets:       []exchange.MarketType{exchange.MarketTypeEquity},
 		ExecutionMode: exchange.ExecutionModePaper, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "HKD",
 	}
 	adapter, err := registry.Bind(config, exchange.Credential{})
@@ -160,7 +160,7 @@ func TestRegisterBuiltinsHKEX(t *testing.T) {
 	_, err = registry.Bind(config, exchange.Credential{})
 	require.ErrorContains(t, err, "港股只支持模拟盘")
 
-	stock := []exchange.MarketType{exchange.MarketTypeStock}
+	stock := []exchange.MarketType{exchange.MarketTypeEquity}
 	require.NoError(t, execution.ValidateAccount(registry, exchange.ExchangeHKEX, stock, "HKD", exchange.ExecutionModePaper))
 	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeHKEX, stock, "CNY", exchange.ExecutionModePaper), "结算资产只能是 HKD")
 	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeHKEX, []exchange.MarketType{exchange.MarketTypeSpot}, "HKD", exchange.ExecutionModePaper), "不支持开通市场")
@@ -170,8 +170,8 @@ func TestRegisterBuiltinsHKEX(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, descriptor.Session)
 	require.Contains(t, descriptor.SessionHours, "09:30-12:00")
-	require.Contains(t, execution.InstrumentScope(registry, "HKEX"), "恒生指数成分")
-	require.Empty(t, execution.InstrumentScope(registry, "ASHARE"))
+	require.Contains(t, execution.InstrumentScope(registry, "hkex"), "恒生指数成分")
+	require.Empty(t, execution.InstrumentScope(registry, "ashare"))
 }
 
 func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {

@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
-import type { View } from "@/api/storage/types";
-import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
+import { resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
 
 const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "task_a",
@@ -21,28 +20,7 @@ const info = (patch: Partial<FactorTask> = {}, last_run?: FactorTaskInfo["last_r
   last_run
 });
 
-const view = (patch: Partial<View> & { role?: string } = {}): View =>
-  ({
-    space_id: "crypto",
-    view_id: "view_factor_task_a",
-    dataset_id: "dataset_factor_task_a",
-    status: "active",
-    attributes: { view_role: "factor_result", owner_module: "factor" },
-    ...patch
-  }) as View;
-
 describe("results model", () => {
-  it("picks the factor_result view of the result dataset", () => {
-    const views = [
-      view({ view_id: "other_dataset", dataset_id: "dataset_other" }),
-      view({ view_id: "wrong_role", attributes: { view_role: "collection_browse" } }),
-      view({ view_id: "ok" })
-    ];
-    expect(pickResultView(views, set())?.view_id).toBe("ok");
-    expect(pickResultView([], set())).toBeNull();
-    expect(pickResultView([view({ dataset_id: "dataset_x" })], set())).toBeNull();
-  });
-
   it("pending sets are excluded, disabled sets are labeled", () => {
     const sets = [
       info({ task_id: "a" }),
@@ -89,13 +67,6 @@ describe("results page contract", () => {
     expect(page).toContain("#status-extra");
     expect(page).not.toContain("embedded");
     expect(page).not.toContain("status-strip");
-  });
-
-  it("scopes to the factor result view of the selected set", () => {
-    const model = fs.readFileSync(path.resolve(__dirname, "results-model.ts"), "utf8");
-    expect(model).toContain('view.attributes?.view_role === "factor_result"');
-    expect(model).toContain("result_dataset_id");
-    expect(page).not.toContain("ViewDefinitions");
   });
 
   it("no explanation row under the tabs", () => {

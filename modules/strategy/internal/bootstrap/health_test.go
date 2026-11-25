@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func openStore(t *testing.T) *store.Store {
@@ -50,7 +49,7 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	if err := json.Unmarshal([]byte(resolved), &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot["tasks"] = map[string]any{"spot": map[string]any{"view_id": "view_factor_a", "factor_task_id": task}}
+	snapshot["tasks"] = map[string]any{"spot": map[string]any{"dataset_id": "dataset_factor_a", "factor_task_id": task}}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +65,7 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	// 按启用流程先把会话写到停用的实例上，再启用。
 }
 
-const resolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]}`
+const resolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]}`
 
 func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	repo := openStore(t)
@@ -118,17 +117,17 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	bar := timestamppb.New(now)
+	bar := now.UnixMilli()
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", SessionStartedAt: 1_000, LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1"}},
+		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", SessionStartedAt: 1_000, LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "r1", OccurredAt: now, SpaceID: "crypto", SubjectID: "acct"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	stale := now.Add(-10 * time.Minute)
-	insert := fmt.Sprintf(`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_dsl_hash, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime)
-		VALUES ('r1', 'i1', 'i1-session', %d, %d, 'ok', 'sha256:demo', '{}', '[]', '{}', X'%x', 'pending', '%s');`, now.UnixMilli(), now.Add(time.Hour).UnixMilli(), data, stale.Format("2006-01-02 15:04:05.999999999-07:00"))
+	insert := fmt.Sprintf(`INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_input_json, c_targets_json, c_summary_json, c_event_data, c_publish_status, c_ctime)
+		VALUES ('r1', 'i1', 'i1-session', %d, %d, 'ok', '{}', '[]', '{}', X'%x', 'pending', '%s');`, now.UnixMilli(), now.Add(time.Hour).UnixMilli(), data, stale.Format("2006-01-02 15:04:05.999999999-07:00"))
 	if err := repo.ApplySchema(insert); err != nil {
 		t.Fatal(err)
 	}

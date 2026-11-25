@@ -30,13 +30,26 @@ const (
 	turnoverSlackRatio = 0.05
 	// unknownResultsLimit 是 1 分钟内结果未知下单的告警笔数。
 	unknownResultsLimit = 5
+	// delistDetectedWindow 内持续上报新发现的下架。
+	delistDetectedWindow = 3 * time.Minute
+	// delistConsumerGrace 是下架事件消费者从启动或断开起多久仍没在运行才上报。
+	delistConsumerGrace = 3 * time.Minute
 )
+
+// DelistAttention 推出下架处理的 delist_failed 关注项（*delist.Service 实现）。
+type DelistAttention interface {
+	Attention(ctx context.Context, now time.Time) ([]string, error)
+}
 
 // AttentionWorker 定期扫描需要人看的情况并上报，告警由 Monitor 统一发送。
 type AttentionWorker struct {
 	Store    *store.Store
 	Executor *targetapp.Executor
 	Now      func() time.Time
+	// Delist 推出清仓失败、迟迟发不出、核对失败的下架记录；为空时不扫。
+	Delist DelistAttention
+	// DelistConsumer 返回下架事件消费者是否在运行、从何时起处于这个状态；为空表示没启用 EventBus，不上报。
+	DelistConsumer func() (running bool, since time.Time)
 
 	notReadySince map[string]time.Time
 	blockedSince  map[string]time.Time
@@ -86,6 +99,13 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		// 逐仓持仓：每次同步发现都刷新，逐仓持仓平掉后窗口过了就消失。
 		telemetry.AttentionIsolatedPosition: telemetry.Recent(telemetry.AttentionIsolatedPosition, now, rejectionWindow),
 	}
+	items[telemetry.AttentionDelistDetected] = telemetry.Recent(telemetry.AttentionDelistDetected, now, delistDetectedWindow)
+	var scanErrors []error
+	failed, err := w.delistFailed(ctx, now)
+	items[telemetry.AttentionDelistFailed] = failed
+	if err != nil {
+		scanErrors = append(scanErrors, err)
+	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)
 	if err != nil {
@@ -119,7 +139,6 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 	}
 	w.notReadySince = notReady
 	blocked := make(map[string]time.Time, len(w.blockedSince))
-	var scanErrors []error
 	for spaceID := range spaces {
 		logicals, listErr := w.Store.ListLogicalAccounts(ctx, spaceID)
 		if listErr != nil {
@@ -143,7 +162,7 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		}
 	}
 	items[telemetry.AttentionUnknownResults] = telemetry.Recent(telemetry.AttentionUnknownResults, now, rejectionWindow)
-	telemetry.PublishAttention(items)
+	telemetry.Attention.Set("runtime", items)
 	return errors.Join(scanErrors...)
 }
 
@@ -154,7 +173,7 @@ func (w *AttentionWorker) scanLogicalAccount(
 	items map[string][]string,
 	blocked map[string]time.Time,
 ) error {
-	if store.IsAutoPauseReason(logical.PauseReason) {
+	if logical.Pause().Auto() {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
 	}
 	// 保证金率风控暂停的组合在用户确认恢复之前一直上报，按库里的状态推出（不用带时间窗口的记录，窗口过了告警就丢了）；
@@ -169,8 +188,8 @@ func (w *AttentionWorker) scanLogicalAccount(
 		} else if last != nil && (last.Status == "RUNNING" || now.Sub(last.UpdatedAt) <= rejectionWindow) {
 			items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"：保证金率过低，风控正在或刚刚按比例减仓")
 		}
-	} else if store.IsMarginPauseReason(logical.PauseReason) {
-		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"："+store.MarginAttentionDetail(logical.PauseReason))
+	} else if logical.Pause().Margin() {
+		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"："+store.MarginAttentionDetail(logical.MarginReduceState))
 	}
 	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。
 	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {
@@ -186,6 +205,21 @@ func (w *AttentionWorker) scanLogicalAccount(
 		return err
 	}
 	return w.noteTarget(ctx, logical, target, now, items, blocked)
+}
+
+// delistFailed 汇总 delist_failed：下架记录推出的几种情况，加上下架事件消费者 3 分钟以上没在运行。
+func (w *AttentionWorker) delistFailed(ctx context.Context, now time.Time) ([]string, error) {
+	var items []string
+	var err error
+	if w.Delist != nil {
+		items, err = w.Delist.Attention(ctx, now)
+	}
+	if w.DelistConsumer != nil {
+		if running, since := w.DelistConsumer(); !running && now.Sub(since) >= delistConsumerGrace {
+			items = append(items, "下架事件消费者没有运行")
+		}
+	}
+	return items, err
 }
 
 func notReadyReason(lastError string) string {
@@ -307,11 +341,11 @@ func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.Logica
 		return false, nil
 	}
 
-	receipts, err := w.Store.ListTargetReceiptsSince(ctx, logical.SpaceID, logical.LogicalAccountID, since)
+	targets, err := w.Store.ListAcceptedTargetHistorySince(ctx, logical.SpaceID, logical.LogicalAccountID, since)
 	if err != nil {
 		return false, err
 	}
-	required, err := requiredTurnover(receipts, since)
+	required, err := requiredTurnover(targets, since)
 	if err != nil {
 		return false, err
 	}
@@ -319,35 +353,35 @@ func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.Logica
 }
 
 // requiredTurnover 累加相邻目标之间的数量变化额。保持（Hold）的标的沿用上一个已知数量。
-func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float64, error) {
+func requiredTurnover(targets []store.TargetHistoryRecord, since int64) (float64, error) {
 	previous := map[string]float64{}
 	lastPrice := map[string]float64{}
 	required := 0.0
 	// 窗口前的基准和窗口内第一张相隔超过两个目标有效期（策略停过），持仓不再等于基准，改为从空仓算起。
-	if len(receipts) > 1 && receipts[0].AcceptedAt <= since {
-		interval := receipts[1].ValidUntil - receipts[1].BarEndTime
-		if interval > 0 && receipts[1].AcceptedAt-receipts[0].AcceptedAt > 2*interval {
-			receipts = receipts[1:]
+	if len(targets) > 1 && targets[0].RecordedAt <= since {
+		interval := targets[1].ValidUntil - targets[1].BarEndTime
+		if interval > 0 && targets[1].RecordedAt-targets[0].RecordedAt > 2*interval {
+			targets = targets[1:]
 		}
 	}
-	for index, receipt := range receipts {
-		var targets []store.InstrumentTarget
-		if err := json.Unmarshal([]byte(receipt.QuantityTargetsJSON), &targets); err != nil {
+	for index, entry := range targets {
+		var quantities []store.InstrumentQuantity
+		if err := json.Unmarshal([]byte(entry.QuantityTargetsJSON), &quantities); err != nil {
 			return 0, err
 		}
-		// 回执的参考价按标的存证据对象（targetapp.ReferencePriceEvidence），这里只取价格。
+		// 目标历史的参考价按标的存证据对象（targetapp.ReferencePriceEvidence），这里只取价格。
 		var prices map[string]struct {
 			Price string `json:"price"`
 		}
-		if err := json.Unmarshal([]byte(receipt.ReferencePricesJSON), &prices); err != nil {
+		if err := json.Unmarshal([]byte(entry.ReferencePricesJSON), &prices); err != nil {
 			return 0, err
 		}
-		current := make(map[string]float64, len(targets))
+		current := make(map[string]float64, len(quantities))
 		for instrumentID, quantity := range previous {
 			current[instrumentID] = quantity
 		}
-		listed := make(map[string]bool, len(targets))
-		for _, target := range targets {
+		listed := make(map[string]bool, len(quantities))
+		for _, target := range quantities {
 			listed[target.InstrumentID] = true
 			if target.Hold {
 				continue
@@ -370,7 +404,7 @@ func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float6
 			}
 		}
 		// 窗口前的那条只作基准，不计入。清掉的标的这次没有参考价，沿用最近一次的。
-		if !(index == 0 && receipt.AcceptedAt <= since) {
+		if !(index == 0 && entry.RecordedAt <= since) {
 			for instrumentID, quantity := range current {
 				required += math.Abs(quantity-previous[instrumentID]) * lastPrice[instrumentID]
 			}

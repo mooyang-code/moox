@@ -15,19 +15,19 @@ func exchangeKey(market string) exchange.SymbolKey {
 func seedTwoMarketAccount(t *testing.T, s *Store) {
 	t.Helper()
 	account := testAccount()
-	account.Markets = []string{"SPOT", "SWAP"}
+	account.Markets = []string{"spot", "swap"}
 	account.MarginMode = "CROSS"
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
 		}
-		for _, market := range []string{"SPOT", "SWAP"} {
+		for _, market := range []string{"spot", "swap"} {
 			record := InstrumentRecord{
-				Exchange: "BINANCE", MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + market,
+				Exchange: "binance", MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(market),
 				BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", PriceTick: "0.01",
 				ExchangeQuantityStep: "0.001", Status: "TRADING",
 			}
-			if market == "SWAP" {
+			if market == "swap" {
 				record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", "BTC"
 				record.MinExchangeQuantity = "0.001"
 			}
@@ -57,18 +57,18 @@ func TestCreateOrderRequiresMarketOpenedByTheAccount(t *testing.T) {
 		return s.Transaction(ctx, func(tx *Tx) error { return tx.CreateOrder(record) })
 	}
 	require.ErrorIs(t, create(orderIn("", "missing")), ErrInvalidRecord, "开通两个市场时订单必须写明市场")
-	require.ErrorIs(t, create(orderIn("STOCK", "stock")), ErrInvalidRecord, "没有开通的市场")
-	require.NoError(t, create(orderIn("SPOT", "spot")))
+	require.ErrorIs(t, create(orderIn("equity", "stock")), ErrInvalidRecord, "没有开通的市场")
+	require.NoError(t, create(orderIn("spot", "spot")))
 	// 同一个交易所订单号在另一个市场是另一张订单；同市场重复仍被唯一索引拒绝。
-	require.NoError(t, create(orderIn("SWAP", "swap")))
-	duplicate := orderIn("SPOT", "dup")
+	require.NoError(t, create(orderIn("swap", "swap")))
+	duplicate := orderIn("spot", "dup")
 	require.ErrorIs(t, create(duplicate), ErrConflict)
 
-	spot, err := s.GetOrderByExchangeID(ctx, "space-1", "account-1", exchangeKey("SPOT"), "100")
+	spot, err := s.GetOrderByExchangeID(ctx, "space-1", "account-1", exchangeKey("spot"), "100")
 	require.NoError(t, err)
 	require.Equal(t, "order-spot", spot.OrderID)
 	require.Equal(t, "BTC-USDT-SPOT", spot.InstrumentID)
-	swap, err := s.GetOrderByExchangeID(ctx, "space-1", "account-1", exchangeKey("SWAP"), "100")
+	swap, err := s.GetOrderByExchangeID(ctx, "space-1", "account-1", exchangeKey("swap"), "100")
 	require.NoError(t, err)
 	require.Equal(t, "order-swap", swap.OrderID)
 	require.Equal(t, "BTC-USDT-SWAP", swap.InstrumentID)
@@ -79,7 +79,7 @@ func TestCreateOrderRequiresMarketOpenedByTheAccount(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01", ExchangeQuantityStep: "0.001", Status: "TRADING",
 		})
 	}))
@@ -87,7 +87,7 @@ func TestCreateOrderRequiresMarketOpenedByTheAccount(t *testing.T) {
 	require.NoError(t, single.Transaction(ctx, func(tx *Tx) error { return tx.CreateOrder(derived) }), "单市场账户可以省略市场")
 	got, err := single.GetOrder(ctx, "space-1", "order-derived")
 	require.NoError(t, err)
-	require.Equal(t, "SPOT", got.MarketType)
+	require.Equal(t, "spot", got.MarketType)
 }
 
 func TestUpsertPositionRequiresMarketOpenedByTheAccount(t *testing.T) {
@@ -99,9 +99,9 @@ func TestUpsertPositionRequiresMarketOpenedByTheAccount(t *testing.T) {
 		SignedQuantity: "1", Leverage: "5", ExchangeUpdatedAt: 1,
 	}
 	require.ErrorIs(t, s.Transaction(ctx, func(tx *Tx) error { return tx.UpsertPosition(position) }), ErrInvalidRecord, "两个市场时持仓必须写明市场")
-	position.MarketType = "STOCK"
+	position.MarketType = "equity"
 	require.ErrorIs(t, s.Transaction(ctx, func(tx *Tx) error { return tx.UpsertPosition(position) }), ErrInvalidRecord)
-	position.MarketType = "SWAP"
+	position.MarketType = "swap"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.UpsertPosition(position) }))
 }
 
@@ -139,7 +139,7 @@ func TestSnapshotRoundTripsWalletsAndRejectsUnknownWallet(t *testing.T) {
 
 func TestCreateTradingAccountRejectsNonCanonicalMarkets(t *testing.T) {
 	s := openTestStore(t)
-	for _, markets := range [][]string{{"SWAP", "SPOT"}, {"SPOT", "SPOT"}, {}, {"STOCK", "SPOT"}, {"FUTURES"}} {
+	for _, markets := range [][]string{{"swap", "spot"}, {"spot", "spot"}, {}, {"equity", "spot"}, {"FUTURES"}} {
 		account := testAccount()
 		account.Markets = markets
 		err := s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(account) })

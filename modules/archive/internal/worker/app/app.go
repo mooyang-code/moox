@@ -7,26 +7,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
+	"github.com/mooyang-code/moox/modules/archive/internal/worker/dataapi"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
-	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	progressEvery = 30 * time.Second
-	// importRetention 是失败的导入在 <root>/.import 下保留的时长。
-	importRetention = 7 * 24 * time.Hour
+	progressEvery   = 30 * time.Second
 	rpcTimeout      = 15 * time.Second
 	completeRetries = 6
 	// maintenanceWait 是每天维护最多等待进行中的运行结束多久。
@@ -53,8 +51,6 @@ type Options struct {
 	DiskUsage DiskUsage
 	// Remote 是对象存储客户端；nil 表示没有配置。心跳带上它的摘要，每天维护时抽查远端副本。
 	Remote *objectstore.Client
-	// Pacer 是与 Runner 共用的节奏控制：心跳回包里的避让规则替换它的生效规则；nil 时不接收（测试）。
-	Pacer *pacing.Pacer
 }
 
 type activeRun struct {
@@ -62,7 +58,13 @@ type activeRun struct {
 	cancel     context.CancelFunc
 	ctx        context.Context
 	stop       atomic.Bool
+	// batches、finished 只给 import 运行用：数据端口把批次放进 batches，由运行协程写暂存区；finished 关闭表示批次已写完。
+	batches    chan runner.ImportBatch
+	finished   chan struct{}
+	finishOnce sync.Once
 }
+
+var _ dataapi.ImportSink = (*App)(nil)
 
 // App 是 worker。
 type App struct {
@@ -253,7 +255,6 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	}
 	a.lastError = ""
 	a.lastHeartbeatOK = a.opts.Now()
-	a.applyAvoidance(rsp.GetAvoidance())
 	for _, id := range rsp.GetCancelRunIds() {
 		if r, ok := a.running[id]; ok {
 			r.stop.Store(true)
@@ -267,48 +268,15 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	return tasks
 }
 
-// pacingJSON 是心跳上报的生效节奏：避让规则取 pacer 当前值（mgr 下发或 app.yaml），其余取配置。
+// pacingJSON 是心跳上报的生效节奏（取自配置；两个避让窗口写死，只报秒窗口开关）。
 func (a *App) pacingJSON() string {
 	cfg := a.opts.Config
-	rules, minuteWindow := cfg.PacingConfig().ConfigRules(), cfg.Pacing.MinuteWindow
-	if a.opts.Pacer != nil {
-		rules, minuteWindow = a.opts.Pacer.Rules(), a.opts.Pacer.MinuteWindow()
-	}
-	var hourQuiet []string
-	if rules.HourQuiet != nil {
-		hourQuiet = rules.HourQuiet[:]
-	}
 	raw, _ := json.Marshal(map[string]any{
-		"source": rules.Source, "computed_at": rules.ComputedAt, "minute_window": minuteWindow,
-		"every_minutes": rules.EveryMinutes, "before_seconds": rules.BeforeSeconds, "after_seconds": rules.AfterSeconds, "hour_quiet": hourQuiet,
+		"minute_window": cfg.Pacing.MinuteWindow, "request_interval": cfg.Pacing.RequestInterval.String(),
 		"max_bytes_per_second": int64(cfg.Pacing.MaxBytesPerSecond), "max_concurrent_runs": cfg.Pacing.MaxConcurrentRuns,
 		"max_storage_runs": cfg.Pacing.MaxStorageRuns,
 	})
 	return string(raw)
-}
-
-// applyAvoidance 用心跳回包里的避让规则替换 pacer 的生效规则；没有下发或不合法时保留原规则。
-func (a *App) applyAvoidance(rules *archivepb.AvoidanceRules) {
-	if rules == nil || a.opts.Pacer == nil {
-		return
-	}
-	next := pacing.Rules{
-		EveryMinutes: int(rules.GetEveryMinutes()), BeforeSeconds: int(rules.GetBeforeSeconds()), AfterSeconds: int(rules.GetAfterSeconds()),
-		Source: "mgr", ComputedAt: rules.GetComputedAt(),
-	}
-	if rules.GetHourQuietFrom() != "" || rules.GetHourQuietUntil() != "" {
-		next.HourQuiet = &[2]string{rules.GetHourQuietFrom(), rules.GetHourQuietUntil()}
-	}
-	prev := a.opts.Pacer.Rules()
-	if err := a.opts.Pacer.SetRules(next); err != nil {
-		log.Warnf("archive worker ignored avoidance rules from mgr: %v", err)
-		return
-	}
-	if prev.Source != next.Source || prev.EveryMinutes != next.EveryMinutes || prev.BeforeSeconds != next.BeforeSeconds ||
-		prev.AfterSeconds != next.AfterSeconds || fmt.Sprint(prev.HourQuiet) != fmt.Sprint(next.HourQuiet) {
-		log.Infof("archive worker avoidance updated: every=%dm before=%ds after=%ds hour_quiet=%v basis=%s",
-			next.EveryMinutes, next.BeforeSeconds, next.AfterSeconds, next.HourQuiet, rules.GetBasis())
-	}
 }
 
 // ---- 领取与执行 ----
@@ -357,6 +325,9 @@ func (a *App) pullOnce(ctx context.Context) {
 	for _, assignment := range rsp.GetRuns() {
 		runCtx, cancel := context.WithCancel(ctx)
 		run := &activeRun{assignment: assignment, cancel: cancel, ctx: runCtx}
+		if assignment.GetKind() == "import" {
+			run.batches, run.finished = make(chan runner.ImportBatch), make(chan struct{})
+		}
 		a.running[assignment.GetRunId()] = run
 		runs = append(runs, run)
 	}
@@ -461,7 +432,11 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 			latest.Store(&cp)
 			return run.stop.Load()
 		}
-		outcome, execErr := a.opts.Runner.Execute(ctx, assignment, report)
+		var feed *runner.ImportFeed
+		if run.batches != nil {
+			feed = &runner.ImportFeed{Batches: run.batches, Finished: run.finished}
+		}
+		outcome, execErr := a.opts.Runner.Execute(ctx, assignment, report, feed)
 		if execErr != nil || outcome == nil {
 			req.Status, req.Message = "failed", fmt.Sprintf("%v", execErr)
 		} else {
@@ -484,20 +459,64 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 			log.Warnf("archive worker mark reported run=%s: %v", assignment.GetRunId(), err)
 		}
 	}
-	if confirmed && assignment.GetKind() == "import" && req.GetStatus() == "succeeded" {
-		a.removeImport(assignment)
+}
+
+// importRun 找到正在执行的导入运行；不存在、不是导入运行、已停止或已收到 finish 时返回 ErrImportNotFound。
+func (a *App) importRun(runID string) (*activeRun, bool, error) {
+	a.mu.Lock()
+	run, ok := a.running[runID]
+	insufficient := a.diskInsufficient
+	a.mu.Unlock()
+	if !ok || run.batches == nil || run.stop.Load() || run.ctx.Err() != nil {
+		return nil, false, fmt.Errorf("%w：%s", dataapi.ErrImportNotFound, runID)
+	}
+	select {
+	case <-run.finished:
+		return nil, false, fmt.Errorf("%w：%s 已收到结束通知", dataapi.ErrImportNotFound, runID)
+	default:
+	}
+	return run, insufficient, nil
+}
+
+// Write 把一批行交给导入运行的协程写进暂存区，等它写完返回结果（数据端口 POST /v1/import/rows 调用）。
+func (a *App) Write(ctx context.Context, runID string, req *storagepb.PrimaryUpsertFieldsReq) (dataapi.ImportResult, error) {
+	run, insufficient, err := a.importRun(runID)
+	if err != nil {
+		return dataapi.ImportResult{}, err
+	}
+	if insufficient {
+		return dataapi.ImportResult{}, dataapi.ErrDiskInsufficient
+	}
+	result := make(chan runner.ImportResult, 1)
+	select {
+	case run.batches <- runner.ImportBatch{Req: req, Result: result}:
+	case <-run.ctx.Done():
+		return dataapi.ImportResult{}, fmt.Errorf("%w：%s 已结束", dataapi.ErrImportNotFound, runID)
+	case <-ctx.Done():
+		return dataapi.ImportResult{}, ctx.Err()
+	}
+	select {
+	case r := <-result:
+		if errors.Is(r.Err, runner.ErrInvalidBatch) {
+			return dataapi.ImportResult{}, fmt.Errorf("%w：%v", dataapi.ErrInvalidBatch, r.Err)
+		}
+		if r.Err != nil {
+			return dataapi.ImportResult{}, r.Err
+		}
+		return dataapi.ImportResult{Added: r.Added, Changed: r.Changed, Same: r.Same}, nil
+	case <-run.ctx.Done():
+		return dataapi.ImportResult{}, fmt.Errorf("%w：%s 已结束", dataapi.ErrImportNotFound, runID)
 	}
 }
 
-// removeImport 在 mgr 确认导入运行成功之后删除导入目录；失败的导入保留供核对（维护时删除超过 7 天的）。
-func (a *App) removeImport(assignment *archivepb.RunAssignment) {
-	dir, _, err := runner.ImportPath(a.opts.Files.Root, assignment.GetImportFile())
+// Finish 通知导入运行批次已全部写完（数据端口 POST /v1/import/finish 调用），不等运行结束。
+func (a *App) Finish(runID string) error {
+	run, _, err := a.importRun(runID)
 	if err != nil {
-		return
+		return err
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		log.Warnf("archive worker remove import dir %s run=%s: %v", dir, assignment.GetRunId(), err)
-	}
+	run.finishOnce.Do(func() { close(run.finished) })
+	return nil
 }
 
 // complete 上报结果：暂时失败时退避重试；mgr 返回冲突（运行已结束或令牌失效）时放弃。返回 true 表示 mgr 已确认。
@@ -583,12 +602,6 @@ func (a *App) maintainOnce(ctx context.Context) {
 	} else if len(dropped) > 0 {
 		log.Infof("archive worker dropped staging state of deleted tasks: %v", dropped)
 	}
-	// 失败的导入保留导入目录供核对，超过 7 天的清掉。
-	if removed, err := a.opts.Files.CleanImports(a.opts.Now(), importRetention); err != nil {
-		log.Warnf("archive worker clean import files: %v", err)
-	} else if removed > 0 {
-		log.Infof("archive worker removed %d import directories older than 7 days", removed)
-	}
 	a.checkRemote(ctx)
 	if err := a.opts.Staging.Maintain(ctx); err != nil {
 		log.Warnf("archive worker staging maintenance: %v", err)
@@ -605,16 +618,16 @@ func (a *App) objectStoreInfo() *archivepb.ObjectStoreInfo {
 	defer a.mu.Unlock()
 	return &archivepb.ObjectStoreInfo{
 		Endpoint: info.Endpoint, Bucket: info.Bucket, Prefix: info.Prefix, StorageClass: info.StorageClass, UrlStyle: info.URLStyle,
-		ProbeError: a.probeError, UnavailableSince: fmtTime(a.unavailableSince),
+		ProbeError: a.probeError, UnavailableSince: unixMilli(a.unavailableSince),
 	}
 }
 
-// fmtTime 把时间格式化为 RFC3339（UTC），零值为空。
-func fmtTime(t time.Time) string {
+// unixMilli 把时刻换成 Unix 毫秒，零时间给 0。
+func unixMilli(t time.Time) int64 {
 	if t.IsZero() {
-		return ""
+		return 0
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.UnixMilli()
 }
 
 // Snapshot 是健康检查用的状态。

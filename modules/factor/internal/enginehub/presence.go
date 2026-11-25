@@ -94,7 +94,7 @@ func (h *Hub) DelegatedReport(ctx context.Context) (*metricspb.DelegatedReport, 
 		life := state.status.Lifecycle
 		return &metricspb.DelegatedReport{
 			ServiceName: "factor-engine", InstanceId: state.identity.EngineID, BootId: state.identity.BootID, ServiceVersion: state.identity.Version,
-			LastHeartbeatUnix: state.lastSeen.Unix(), Ready: proto.Bool(state.status.Ready), NotReadyReason: state.status.NotReadyReason,
+			LastHeartbeatAt: state.lastSeen.UnixMilli(), Ready: proto.Bool(state.status.Ready), NotReadyReason: state.status.NotReadyReason,
 			Lifecycle: engineLifecycleReport(life),
 		}, nil
 	}
@@ -102,7 +102,7 @@ func (h *Hub) DelegatedReport(ctx context.Context) (*metricspb.DelegatedReport, 
 	if err != nil || last.IsZero() {
 		return nil, err
 	}
-	return &metricspb.DelegatedReport{ServiceName: "factor-engine", InstanceId: engineID, LastHeartbeatUnix: last.Unix()}, nil
+	return &metricspb.DelegatedReport{ServiceName: "factor-engine", InstanceId: engineID, LastHeartbeatAt: last.UnixMilli()}, nil
 }
 
 // engineLifecycleReport 把心跳里的引擎生命周期转成上报格式；引擎没有上报生命周期时为 nil。

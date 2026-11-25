@@ -22,8 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func submissionCommand(f *operatorFixture) SubmitOrderCommand {
-	return SubmitOrderCommand{LogicalAccountID: "logical-1", ManualOrderCommand: ManualOrderCommand{SpaceID: "space-1", ActionID: "submit-1", TradingAccountID: "account-a", ClientOrderID: "submit-client", InstrumentID: f.instrumentID(), Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"), Reason: "ordinary order"}}
+func submissionCommand(f *operatorFixture) ManualOrderCommand {
+	return ManualOrderCommand{SpaceID: "space-1", LogicalAccountID: "logical-1", ActionID: "submit-1", TradingAccountID: "account-a", ClientOrderID: "submit-client", InstrumentID: f.instrumentID(), Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"), Reason: "ordinary order"}
 }
 
 type submissionSources struct{ f *operatorFixture }
@@ -65,7 +65,7 @@ func (a *submissionAdapter) ListRecentFills(context.Context, exchange.SymbolKey,
 
 func realSubmissionService(t *testing.T) (*operatorFixture, *Service, *submissionAdapter) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_automation_state='PAUSED',c_pause_reason='manual' WHERE c_logical_account_id='logical-1'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_automation_state = 'PAUSED', c_pause_reason = 'manual', c_pause_source = 'USER' WHERE c_logical_account_id='logical-1'").Error)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode='LIVE',c_live_environment='TESTNET',c_credential_secret_id='test-only'").Error)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_environment='TESTNET'").Error)
 	source := submissionSources{f: f}
@@ -81,7 +81,7 @@ func TestSubmitOrderRealStoreReplayConflictAndMultipleActive(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
 	ctx := context.Background()
 	command := submissionCommand(f)
-	first, err := s.SubmitOrder(ctx, command)
+	first, err := s.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.Pending), first.Order.State)
 	require.Empty(t, f.trace)
@@ -89,21 +89,21 @@ func TestSubmitOrderRealStoreReplayConflictAndMultipleActive(t *testing.T) {
 	var reservations int64
 	require.NoError(t, f.store.DBForTest().Table("t_trade_orders").Where("c_remaining_reserved_quantity <> '0'").Count(&reservations).Error)
 	require.EqualValues(t, 1, reservations)
-	replay, err := s.SubmitOrder(ctx, command)
+	replay, err := s.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, first.Order.OrderID, replay.Order.OrderID)
 	changed := command
 	changed.Quantity = shared.MustDecimal("2")
-	_, err = s.SubmitOrder(ctx, changed)
+	_, err = s.PlaceOrder(ctx, changed)
 	require.ErrorIs(t, err, store.ErrConflict)
 	changed = command
 	changed.ActionID = "other-action"
-	_, err = s.SubmitOrder(ctx, changed)
+	_, err = s.PlaceOrder(ctx, changed)
 	require.ErrorIs(t, err, orderapp.ErrIdempotencyConflict)
 	changed = command
 	changed.ActionID = "second-action"
 	changed.ClientOrderID = "second-client"
-	second, err := s.SubmitOrder(ctx, changed)
+	second, err := s.PlaceOrder(ctx, changed)
 	require.NoError(t, err)
 	require.NotEqual(t, first.Order.OrderID, second.Order.OrderID)
 	require.NoError(t, s.ResumeOperatorAction(ctx, first.Action))
@@ -112,7 +112,7 @@ func TestSubmitOrderRealStoreReplayConflictAndMultipleActive(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.Pending), stillPending.State)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_status='DISABLED' WHERE c_trading_account_id='account-a'").Error)
-	replay, err = s.SubmitOrder(ctx, command)
+	replay, err = s.PlaceOrder(ctx, command)
 	require.NoError(t, err)
 	require.Equal(t, string(operatordomain.StatusCompleted), replay.Action.Status)
 	require.Equal(t, first.Order.OrderID, replay.Order.OrderID)
@@ -121,14 +121,14 @@ func TestSubmitOrderRealStoreReplayConflictAndMultipleActive(t *testing.T) {
 func TestSubmitOrderCrashLinkRepairDoesNotPost(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
 	command := submissionCommand(f)
-	first, err := s.SubmitOrder(context.Background(), command)
+	first, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	progress := manualOrderActionResult{DeadlineAt: command.DeadlineAt}
 	progress.DeadlineAt = f.now.Add(time.Minute).UnixMilli()
 	raw, err := json.Marshal(progress)
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_result_json=? WHERE c_action_id=?", string(raw), command.ActionID).Error)
-	recovered, err := s.SubmitOrder(context.Background(), command)
+	recovered, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, first.Order.OrderID, recovered.Order.OrderID)
 	require.Zero(t, adapter.posts)
@@ -141,7 +141,7 @@ func TestSubmitOrderExplicitDeadlineAndUnknownQueryFirst(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
 	command := submissionCommand(f)
 	command.DeadlineAt = f.now.Add(time.Second).UnixMilli()
-	result, err := s.SubmitOrder(context.Background(), command)
+	result, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Contains(t, result.Action.RequestJSON, `"deadline_at":3000`)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
@@ -170,7 +170,7 @@ func TestSubmitOrderPendingExpiredOrModeChangedReleasesReservation(t *testing.T)
 		t.Run(fmt.Sprint(modeChanged), func(t *testing.T) {
 			f, s, adapter := realSubmissionService(t)
 			command := submissionCommand(f)
-			result, err := s.SubmitOrder(context.Background(), command)
+			result, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
 			if modeChanged {
 				require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='STRATEGY' WHERE c_logical_account_id='logical-1'").Error)
@@ -196,25 +196,13 @@ func TestSubmitOrderPendingExpiredOrModeChangedReleasesReservation(t *testing.T)
 
 func TestSubmitOrderAcceptsWithoutTakeoverOrPost(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_automation_state='PAUSED',c_pause_reason='manual' WHERE c_logical_account_id='logical-1'").Error)
-	got, err := f.service().SubmitOrder(context.Background(), submissionCommand(f))
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_automation_state = 'PAUSED', c_pause_reason = 'manual', c_pause_source = 'USER' WHERE c_logical_account_id='logical-1'").Error)
+	got, err := f.service().PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.Equal(t, string(operatordomain.StatusRunning), got.Action.Status)
 	require.Equal(t, string(orderdomain.Pending), got.Order.State)
 	require.Equal(t, []string{"place:submit-client"}, f.trace)
 	require.Zero(t, f.orders.submitCalls)
-}
-
-// 策略控制的组合不接受人工下单，在写任何记录之前拒绝。
-func TestSubmitOrderStrategyControlledRejectedBeforeWrites(t *testing.T) {
-	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_automation_state='PAUSED',c_pause_reason='strategy' WHERE c_logical_account_id='logical-1'").Error)
-	_, err := f.service().SubmitOrder(context.Background(), submissionCommand(f))
-	require.ErrorIs(t, err, ErrInvalidCommand)
-	var count int64
-	require.NoError(t, f.store.DBForTest().Table("t_operator_actions").Count(&count).Error)
-	require.Zero(t, count)
-	require.Empty(t, f.trace)
 }
 
 func TestSubmitOrderLogicalLockCancellation(t *testing.T) {
@@ -223,36 +211,22 @@ func TestSubmitOrderLogicalLockCancellation(t *testing.T) {
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err := f.service().SubmitOrder(ctx, submissionCommand(f))
+	_, err := f.service().PlaceOrder(ctx, submissionCommand(f))
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	var count int64
 	require.NoError(t, f.store.DBForTest().Table("t_operator_actions").Count(&count).Error)
 	require.Zero(t, count)
 }
 
-func TestSubmitOrderRealStrategyRejectsAllSideEffects(t *testing.T) {
-	f, s, adapter := realSubmissionService(t)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='STRATEGY' WHERE c_logical_account_id='logical-1'").Error)
-	_, err := s.SubmitOrder(context.Background(), submissionCommand(f))
-	require.ErrorIs(t, err, ErrInvalidCommand)
-	for _, table := range []string{"t_operator_actions", "t_trade_orders"} {
-		var count int64
-		require.NoError(t, f.store.DBForTest().Table(table).Count(&count).Error)
-		require.Zero(t, count)
-	}
-	require.Zero(t, adapter.posts)
-	require.Empty(t, f.trace)
-}
-
 func TestSubmitOrderDeadlineIdentityAndRecoveryLock(t *testing.T) {
 	f, s, _ := realSubmissionService(t)
 	command := submissionCommand(f)
 	command.DeadlineAt = f.now.Add(10 * time.Second).UnixMilli()
-	result, err := s.SubmitOrder(context.Background(), command)
+	result, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	changed := command
 	changed.DeadlineAt++
-	_, err = s.SubmitOrder(context.Background(), changed)
+	_, err = s.PlaceOrder(context.Background(), changed)
 	require.ErrorIs(t, err, store.ErrConflict)
 	unlock := f.store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
 	defer unlock()
@@ -263,9 +237,9 @@ func TestSubmitOrderDeadlineIdentityAndRecoveryLock(t *testing.T) {
 
 func TestManualOrderExplicitDeadlineRoundTrip(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	command := submissionCommand(f).ManualOrderCommand
+	command := submissionCommand(f)
 	command.DeadlineAt = f.now.Add(12 * time.Second).UnixMilli()
-	result, err := f.service().PlaceManualOrder(context.Background(), command)
+	result, err := f.service().PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	recovered, err := manualOrderCommand(result.Action)
 	require.NoError(t, err)
@@ -274,14 +248,14 @@ func TestManualOrderExplicitDeadlineRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, command.DeadlineAt, progress.DeadlineAt)
 	command.DeadlineAt++
-	_, err = f.service().PlaceManualOrder(context.Background(), command)
+	_, err = f.service().PlaceOrder(context.Background(), command)
 	require.ErrorIs(t, err, store.ErrConflict)
 }
 
 func TestSubmitOrderUnknownNotFoundAfterDeadlineDiscardsWithoutPost(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
 	command := submissionCommand(f)
-	result, err := s.SubmitOrder(context.Background(), command)
+	result, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
 	f.now = f.now.Add(time.Hour)
@@ -313,7 +287,7 @@ func TestSubmitOrderWorkerAdvancesDurableActionWithoutSyncer(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
 	s.Syncer = nil
 	command := submissionCommand(f)
-	result, err := s.SubmitOrder(context.Background(), command)
+	result, err := s.PlaceOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.Pending), result.Order.State)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -342,7 +316,7 @@ func TestSubmitOrderTransientFailureReturnsDurableActionAndOriginalError(t *test
 			} else {
 				s.Prices = operatorPriceStub{err: cause}
 			}
-			result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+			result, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 			require.ErrorIs(t, err, cause)
 			require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 			require.Equal(t, cause.Error(), result.Action.LastError)
@@ -357,7 +331,7 @@ func TestSubmitOrderWorkerPlaceDatabaseFailureRemainsUnhealthy(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
 	s.Prices = operatorPriceStub{err: errors.New("initial quote unavailable")}
 	command := submissionCommand(f)
-	result, err := s.SubmitOrder(context.Background(), command)
+	result, err := s.PlaceOrder(context.Background(), command)
 	require.Error(t, err)
 	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	s.Prices = f.prices
@@ -399,7 +373,7 @@ func TestSubmitOrderRecoveryDatabaseFailuresRemainVisible(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			f, s, adapter := realSubmissionService(t)
 			command := submissionCommand(f)
-			result, err := s.SubmitOrder(context.Background(), command)
+			result, err := s.PlaceOrder(context.Background(), command)
 			require.NoError(t, err)
 			wantState := string(orderdomain.Pending)
 			if path == "unknown" {
@@ -456,7 +430,7 @@ func TestSubmitOrderRecoveryDatabaseFailuresRemainVisible(t *testing.T) {
 
 func TestSubmitOrderUnconfirmedLookupIsNotInfrastructureFailure(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
-	result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	result, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
 	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
@@ -470,7 +444,7 @@ func TestSubmitOrderUnconfirmedLookupIsNotInfrastructureFailure(t *testing.T) {
 
 func TestSubmitOrderWorkerPermanentRevalidationFailureIsBusinessOutcome(t *testing.T) {
 	f, s, adapter := realSubmissionService(t)
-	result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
+	result, err := s.PlaceOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	s.Orders.(*orderapp.Service).Validator.MaxChildNotional = shared.MustDecimal("1")
 	require.NoError(t, s.ResumeOperatorAction(context.Background(), result.Action))

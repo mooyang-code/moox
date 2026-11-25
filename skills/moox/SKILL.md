@@ -10,7 +10,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 ## 安全边界（每次都要遵守）
 
-- **配置是两份文件**：`moox.toml` 是明文的拓扑与部署参数（没有秘密，可以直接看和改）；同目录的 `moox.secrets.toml` 是加密的秘密，Agent 不直接读取、打印、复制或 `source` 它；要看用 `moox-cli config get --file ./moox.secrets.toml <路径>`（默认打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` / `config restore` 的本机页面；
+- **配置是两份文件**：`moox.toml` 是明文的拓扑与部署参数（没有秘密，可以直接看和改）；同目录的 `moox.secrets.toml` 是加密的秘密，Agent 不直接读取、打印、复制或 `source` 它；要看用 `moox-cli config get --file ./moox.secrets.toml <路径>`（默认打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` 的本机页面；
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
 - **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`collector function delete`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
@@ -79,8 +79,8 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 ### EventBus 凭据
 
 EventBus 凭据只通过 `skills/moox/scripts/eventbus-credentials.sh` 签发与轮换，发布包和仓库里的 YAML 不含凭据。
-角色令牌轮换后要同步到所有客户端（控制面服务、Storage、每台主机的 Host Agent、SCF）才算完成，按 [`references/eventbus-credentials.md`](references/eventbus-credentials.md) 执行。
-控制机上的 `export` 不会更新其他主机的 Host Agent。
+角色令牌轮换后要同步到所有客户端（控制面服务、Storage、因子机等其他主机上用 EventBus 的组件、SCF；Host Agent 不用 EventBus）才算完成，按 [`references/eventbus-credentials.md`](references/eventbus-credentials.md) 执行。
+控制机上的 `export` 不会更新其他主机上的组件。
 
 ### 腾讯云私有网络
 
@@ -98,4 +98,4 @@ SCF 函数运行在各地域的 VPC 里，只经同地域入口主机网关的�
 - 仓库是 Go Workspace：`modules/*` 是各服务，`packages/*` 是共享包，`web/` 是管理台，`docs/` 是设计文档。模块之间只经 RPC 与事件交互。
 - `make build`、`make test`、`make proto`、`make verify`（提交前的完整检查）；构建环境见 [`references/build.md`](references/build.md)。
 - 对外发布：`scripts/release/build-release.sh vX.Y.Z` 生成五个平台的 `moox-cli` 与 linux/amd64 部署产物包。
-- 协议与命名：用 Space、DataSource、Subject、Dataset、View、Field、Factor；时间字段用 `start_time` / `end_time` / `snapshot_time`；`series_tag` 是单个可选标签。细节见 [`references/protocol.md`](references/protocol.md)。
+- 协议与命名：用 Space、DataSource、Subject、Dataset、DatasetColumn、View（数据集的查询索引）、Factor；时间字段用 `start_time` / `end_time` / `snapshot_time`；`series_tag` 是单个可选标签。细节见 [`references/protocol.md`](references/protocol.md)。

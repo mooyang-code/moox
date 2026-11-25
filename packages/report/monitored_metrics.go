@@ -23,53 +23,17 @@ var healthMetricSuffixes = []string{
 	"_input_watermark_timestamp_seconds",
 	"_metrics_errors_total",
 	"_metrics_last_error_timestamp_seconds",
-	PresenceStateSuffix,
-	PresenceLastHeartbeatSuffix,
 }
 
 var healthMetricNames = map[string]struct{}{
-	ArchiveTaskHealthMetric:                                                    {},
-	ArchiveObjectStoreStateMetric:                                              {},
-	"moox_collector_market_fetch_assignment_required":                          {},
-	"moox_collector_market_fetch_assignment_active":                            {},
-	"moox_collector_market_fetch_assignment_last_success_timestamp_seconds":    {},
-	"moox_collector_market_fetch_coordination_healthy":                         {},
-	"moox_collector_market_fetch_coordination_failure":                         {},
-	"moox_collector_market_fetch_coordination_pending":                         {},
-	"moox_collector_market_fetch_coordination_pending_since_timestamp_seconds": {},
-	"moox_collector_market_fetch_timer_capacity_total":                         {},
-	"moox_collector_market_fetch_timer_capacity_required":                      {},
-	"moox_collector_market_fetch_timer_capacity_active":                        {},
-	"moox_collector_market_fetch_timer_capacity_headroom":                      {},
-	"moox_collector_market_fetch_timer_available":                              {},
-	"moox_collector_market_fetch_assignment_errors_total":                      {},
-	"moox_collector_period_pending_total":                                      {},
-	"moox_collector_stream_online":                                             {},
-	"moox_factor_task_watermark_blocked_since_timestamp_seconds":               {},
-	"moox_strategy_param_delivery_stale":                                       {},
-	"moox_storage_period_deadline_rejected_timestamp_seconds":                  {},
-	"moox_collector_stream_heartbeat_timestamp_seconds":                        {},
-	"moox_collector_stream_failed_period_streak":                               {},
-	"moox_collector_stream_period_missed_total":                                {},
-	"moox_collector_stream_periods_total":                                      {},
-	"moox_collector_stream_clock_offset_seconds":                               {},
-	"moox_collector_period_report_retry_total":                                 {},
-	"moox_collector_kline_resample_claims_total":                               {},
-	"moox_collector_kline_resample_writes_total":                               {},
-	"moox_collector_kline_resample_retries_total":                              {},
-	"moox_collector_kline_resample_errors_total":                               {},
-	"moox_storage_outbox_publish_errors_total":                                 {},
-	"moox_storage_outbox_pending_entries":                                      {},
-	"moox_storage_view_file_over_limit":                                        {},
-	"moox_storage_view_follow_lag_seconds":                                     {},
-	"moox_storage_view_follow_lag_changes":                                     {},
-	"moox_storage_outbox_oldest_age_seconds":                                   {},
-	"moox_storage_view_output_arrival_timestamp_seconds":                       {},
-	"moox_storage_view_output_latest_data_time_seconds":                        {},
-	"moox_storage_view_output_tracked_since_data_time_seconds":                 {},
-	"moox_storage_view_output_subjects":                                        {},
-	"moox_storage_view_output_lagging_subjects":                                {},
-	"moox_storage_view_output_lagging_subject_data_time_seconds":               {},
+	AttentionMetric:         {},
+	ArchiveTaskHealthMetric: {},
+	"moox_storage_view_output_arrival_timestamp_seconds":         {},
+	"moox_storage_view_output_latest_data_time_seconds":          {},
+	"moox_storage_view_output_tracked_since_data_time_seconds":   {},
+	"moox_storage_view_output_subjects":                          {},
+	"moox_storage_view_output_lagging_subjects":                  {},
+	"moox_storage_view_output_lagging_subject_data_time_seconds": {},
 }
 
 // IsMonitoredMetric reports whether Monitor consumes a metric family. The
@@ -89,7 +53,7 @@ func IsMonitoredMetric(name string) bool {
 			return true
 		}
 	}
-	if strings.HasPrefix(name, "moox_trade_balance_sync_") || name == "moox_trade_attention_active" || name == "moox_callbackdispatcher_attention_active" || name == "moox_collector_attention_active" || strings.HasPrefix(name, "moox_doctor_") {
+	if strings.HasPrefix(name, "moox_doctor_") {
 		return true
 	}
 	if strings.HasPrefix(name, "moox_storage_view_") && (strings.HasSuffix(name, "_errors_total") || strings.HasSuffix(name, "_watermark_timestamp_seconds")) {

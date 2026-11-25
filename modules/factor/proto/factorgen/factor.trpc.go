@@ -32,6 +32,10 @@ type FactorMgrService interface {
 
 	CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error)
 
+	ImportFactorCatalog(ctx context.Context, req *ImportFactorCatalogReq) (*ImportFactorCatalogRsp, error)
+
+	PurgeResultDataset(ctx context.Context, req *PurgeResultDatasetReq) (*PurgeResultDatasetRsp, error)
+
 	UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error)
 
 	DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error)
@@ -190,6 +194,42 @@ func FactorMgrService_CreateFactor_Handler(svr interface{}, ctx context.Context,
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(FactorMgrService).CreateFactor(ctx, reqbody.(*CreateFactorReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ImportFactorCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ImportFactorCatalogReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ImportFactorCatalog(ctx, reqbody.(*ImportFactorCatalogReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_PurgeResultDataset_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PurgeResultDatasetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).PurgeResultDataset(ctx, reqbody.(*PurgeResultDatasetReq))
 	}
 
 	var rsp interface{}
@@ -750,6 +790,14 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.factor.FactorMgr/CreateFactor",
 			Func: FactorMgrService_CreateFactor_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ImportFactorCatalog",
+			Func: FactorMgrService_ImportFactorCatalog_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/PurgeResultDataset",
+			Func: FactorMgrService_PurgeResultDataset_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/UpdateFactor",
@@ -1322,6 +1370,12 @@ func (s *UnimplementedFactorMgr) ListFactorTasks(ctx context.Context, req *ListF
 func (s *UnimplementedFactorMgr) CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error) {
 	return nil, errors.New("rpc CreateFactor of service FactorMgr is not implemented")
 }
+func (s *UnimplementedFactorMgr) ImportFactorCatalog(ctx context.Context, req *ImportFactorCatalogReq) (*ImportFactorCatalogRsp, error) {
+	return nil, errors.New("rpc ImportFactorCatalog of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) PurgeResultDataset(ctx context.Context, req *PurgeResultDatasetReq) (*PurgeResultDatasetRsp, error) {
+	return nil, errors.New("rpc PurgeResultDataset of service FactorMgr is not implemented")
+}
 func (s *UnimplementedFactorMgr) UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error) {
 	return nil, errors.New("rpc UpdateFactor of service FactorMgr is not implemented")
 }
@@ -1517,6 +1571,10 @@ type FactorMgrClientProxy interface {
 
 	CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (rsp *CreateFactorRsp, err error)
 
+	ImportFactorCatalog(ctx context.Context, req *ImportFactorCatalogReq, opts ...client.Option) (rsp *ImportFactorCatalogRsp, err error)
+
+	PurgeResultDataset(ctx context.Context, req *PurgeResultDatasetReq, opts ...client.Option) (rsp *PurgeResultDatasetRsp, err error)
+
 	UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (rsp *UpdateFactorRsp, err error)
 
 	DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (rsp *DeleteFactorRsp, err error)
@@ -1700,6 +1758,46 @@ func (c *FactorMgrClientProxyImpl) CreateFactor(ctx context.Context, req *Create
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CreateFactorRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ImportFactorCatalog(ctx context.Context, req *ImportFactorCatalogReq, opts ...client.Option) (*ImportFactorCatalogRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ImportFactorCatalog")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ImportFactorCatalog")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ImportFactorCatalogRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) PurgeResultDataset(ctx context.Context, req *PurgeResultDatasetReq, opts ...client.Option) (*PurgeResultDatasetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/PurgeResultDataset")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("PurgeResultDataset")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PurgeResultDatasetRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

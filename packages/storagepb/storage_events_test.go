@@ -2,13 +2,13 @@ package storagepb
 
 import (
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestStorageCompletionEventsRoundTrip(t *testing.T) {
-	now := timestamppb.Now()
+	now := time.Now().UnixMilli()
 	tests := []struct {
 		name    string
 		payload proto.Message
@@ -37,8 +37,8 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		{
 			name: "view data ready",
 			payload: &ViewDataReady{
-				ViewId: "view_kline", ViewConfigId: "view-config", CompletionEventId: "period-event-1",
-				DatasetId: "result_kline", Status: "degraded", VisibleScope: "universe:result:1m",
+				CompletionEventId: "period-event-1",
+				DatasetId:         "result_kline", Status: "degraded",
 				Frequency: "1m", PeriodTime: 1786032000,
 				ReadyAt: now, UniverseSubjectIds: []string{"BTC-USDT"},
 				DetailType: "moox.factor.PeriodDetail.v1", Detail: []byte{0x0a, 0x01, 0x78},

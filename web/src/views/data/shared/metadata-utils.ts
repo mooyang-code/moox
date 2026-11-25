@@ -1,4 +1,3 @@
-import { formatInstant, type TimePrecision } from "@/utils/time-zone";
 import type { DataKind, FieldValueType } from "@/api/storage/types";
 
 export interface AdminPagination {
@@ -64,33 +63,14 @@ export function statusLabel(status?: string) {
   }
 }
 
-/**
- * 带时区后缀的时间（默认到秒）。zone 由页面传入：跟空间有关的页面用 useDisplayZone()，和空间无关的页面用 UTC。
- * 以前这里只是去掉 T 和 Z，把 UTC 原样当本地时间显示，还带纳秒。
- */
-export function formatTime(value?: string, zone: string = "UTC", precision: TimePrecision = "second") {
-  return formatInstant(value, zone, precision);
-}
-
 export function jsonText(value?: string) {
   return value?.trim() || "{}";
-}
-
-const internalFieldPrefixPattern = /^dataset_[0-9a-z_]+__(.+)$/;
-
-export function displayFieldId(fieldId: string | undefined) {
-  const id = (fieldId || "").trim();
-  const matched = internalFieldPrefixPattern.exec(id);
-  return matched?.[1] || id;
 }
 
 export const statusOptions: SelectOption[] = [
   { label: "启用", value: "active" },
   { label: "禁用", value: "disabled" }
 ];
-
-// 字段只在逻辑上删除，字段管理要能看到已删除的字段。
-export const fieldStatusOptions: SelectOption[] = [...statusOptions, { label: "已删除", value: "deleted" }];
 
 export const dataKindOptions: SelectOption<DataKind>[] = [
   { label: "记录", value: "DATA_KIND_RECORD", aliases: [1, "record"] },

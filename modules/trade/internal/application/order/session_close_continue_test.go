@@ -18,7 +18,7 @@ func TestSessionCloserContinuesAfterOneOrderFails(t *testing.T) {
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "stock-1", OrderID: "friday-broken", ClientOrderID: "friday-broken", ExchangeOrderID: "friday-broken",
-			MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG", OrderType: "LIMIT", TimeInForce: "GTC", LimitPrice: &limit,
+			MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG", OrderType: "LIMIT", TimeInForce: "GTC", LimitPrice: &limit,
 			Side: "BUY", Quantity: "100", FilledQuantity: "0", ReferencePrice: "10", ReservedAsset: "CNY", ReservedQuantity: "1005",
 			RemainingReservedQuantity: "1005", OwnerType: "EXTERNAL", OwnerID: "friday-broken", State: "OPEN",
 			SubmittedAt: beijingAt("2026-11-06 09:30:00").UnixMilli(),

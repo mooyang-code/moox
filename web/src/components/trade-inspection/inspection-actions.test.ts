@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { TradeResponseError } from "@/api/trade";
 import type { ExchangeInspection, TradingAccount } from "@/api/trade/types";
 import { fromInspection } from "./inspection";
 import { previewAllowsNext, previewState, runPreview, runReinspect, type InspectionApi } from "./inspection-actions";
+import { RequestError } from "@/api/http";
 
-const passing: ExchangeInspection = { account_mode: "BINANCE_STANDARD", can_trade_spot: true, available_markets: [1] };
+// 交易服务的业务失败：消息就是 ret_info.msg，响应体原样带上
+const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
+  new RequestError(response.ret_info.msg, response);
+
+const passing: ExchangeInspection = { account_mode: "BINANCE_STANDARD", can_trade_spot: true, available_markets: ["spot"] };
 const blocked: ExchangeInspection = {
   account_mode: "BINANCE_STANDARD",
   can_withdraw: true,
@@ -34,16 +38,16 @@ describe("新建账户的检测预览", () => {
   });
 
   it("检测返回阻断项时不放行；传输错误不下结论，也不放行", async () => {
-    const passed = await runPreview({ exchange: 1, environment: 2, credential_secret_id: "s" }, api({}));
+    const passed = await runPreview({ exchange: "binance", environment: 2, credential_secret_id: "s" }, api({}));
     expect(passed.state).toBe("ok");
     const withBlocker = await runPreview(
-      { exchange: 1, environment: 2, credential_secret_id: "s" },
+      { exchange: "binance", environment: 2, credential_secret_id: "s" },
       api({ inspect: vi.fn().mockResolvedValue({ inspection: blocked }) })
     );
     expect(withBlocker.state).toBe("blocked");
     expect(withBlocker.view?.blockers[0].message).toContain("提现");
     const unavailable = await runPreview(
-      { exchange: 1, environment: 2, credential_secret_id: "s" },
+      { exchange: "binance", environment: 2, credential_secret_id: "s" },
       api({ inspect: vi.fn().mockRejectedValue(new Error("trade account: 密钥检测没有完成")) })
     );
     expect(unavailable.state).toBe("unavailable");
@@ -69,7 +73,7 @@ describe("已有账户的重新检测", () => {
 
   it("检测没完成时界面仍然刷新：用后端保留的上次结果和累加的失败次数，并说明这次没检测成", async () => {
     const retained: ExchangeInspection = { ...passing, consecutive_failures: 2, last_failure: "HTTP 503" };
-    const error = new TradeResponseError({
+    const error = tradeFailure({
       ret_info: { code: 4, msg: "trade account: 密钥检测没有完成" },
       ...({ inspection: retained, account: { trading_account_id: "a" } } as object)
     });

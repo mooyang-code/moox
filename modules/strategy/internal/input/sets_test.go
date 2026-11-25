@@ -31,7 +31,7 @@ func membershipOf(client *fakeClient) Membership {
 func TestBuildSetsAppliesUniverseAndExplicitPools(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, exampleDSL)
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "USDC-USDT", "OLD-USDT", "GHOST-USDT"})
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["dataset_factor_1h"], []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "USDC-USDT", "OLD-USDT", "GHOST-USDT"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ rules:
     select: {top: 1}
     weight: {total: 0.5}
 `)
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil)
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["dataset_factor_1h"], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ rules:
 		t.Fatalf("按标签的 pool 不符：%v", sets.Expected["p"])
 	}
 	client.errors["tags"] = errors.New("storage down")
-	if _, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil); err == nil || !strings.Contains(err.Error(), "storage down") {
+	if _, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["dataset_factor_1h"], nil); err == nil || !strings.Contains(err.Error(), "storage down") {
 		t.Fatalf("标签查询失败应返回错误：%v", err)
 	}
 }
@@ -105,7 +105,7 @@ rules:
     select: {top: 1}
     weight: {total: 0.5}
 `)
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil)
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["dataset_factor_1h"], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestBuildSetsAgeProbe(t *testing.T) {
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
 	build := func() Sets {
 		t.Helper()
-		sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil)
+		sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["dataset_factor_1h"], nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -160,9 +160,9 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		return []Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
 	}
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "ETH-USDT": subject("ETH-USDT", true)}
-	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, client.views["view_factor_1h"], "spot", subjects, barStart, 0, nil)
+	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, client.views["dataset_factor_1h"], "spot", subjects, barStart, 0, nil)
 	satisfied, err := probe(context.Background(), []string{"BTC-USDT", "ETH-USDT"})
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 // 探针窗口内候选全部没有行时，先确认整个数据集在窗口内是否有数据：有数据说明候选确实是新上市，照常剔除；
 // 一行都没有说明是历史缺口，整期 history_insufficient，不能把全部标的当作新上市。
 func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "NEW-USDT": subject("NEW-USDT", true)}
 	client := newFakeClient("spot")
 	client.rows = func(query Query) ([]Row, uint64, error) {
@@ -200,7 +200,7 @@ func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
 		}
 		return nil, 7, nil
 	}
-	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, client.views["view_factor_1h"], "spot", subjects, barStart, 7, nil)
+	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, client.views["dataset_factor_1h"], "spot", subjects, barStart, 7, nil)
 	satisfied, err := probe(context.Background(), []string{"NEW-USDT"})
 	if err != nil || len(satisfied) != 0 {
 		t.Fatalf("数据集有数据时新标的应正常剔除：%v err=%v", satisfied, err)
@@ -211,7 +211,7 @@ func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
 
 	gap := newFakeClient("spot")
 	gap.rows = func(Query) ([]Row, uint64, error) { return nil, 7, nil }
-	probe = NewAgeProbe(gap, "space", resolved, resolved.MinAgeBars, gap.views["view_factor_1h"], "spot", subjects, barStart, 7, nil)
+	probe = NewAgeProbe(gap, "space", resolved, resolved.MinAgeBars, gap.views["dataset_factor_1h"], "spot", subjects, barStart, 7, nil)
 	_, err = probe(context.Background(), []string{"BTC-USDT", "NEW-USDT"})
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "历史缺口") {

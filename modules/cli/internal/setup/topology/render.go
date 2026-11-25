@@ -132,9 +132,6 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 		{"memory_mb", plan.MemoryMB},
 		{"symbols_per_function", plan.SymbolsPerFunction},
 	}
-	if plan.AssumedEgressIPs > 0 {
-		fields = append(fields, mappingField{"assumed_egress_ips", plan.AssumedEgressIPs})
-	}
 	if plan.BackfillReservedConcurrency > 0 {
 		fields = append(fields, mappingField{"backfill_reserved_concurrency", plan.BackfillReservedConcurrency})
 	}

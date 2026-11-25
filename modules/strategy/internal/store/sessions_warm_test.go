@@ -16,7 +16,7 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 	if err := repo.CreateInstance(ctx, Instance{InstanceID: "pool", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_pool"}, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_pool","factor_task_id":"ftask_pool"}}}`
+	resolved := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_pool","factor_task_id":"ftask_pool"}}}`
 	if err := repo.EnableInstance(ctx, Session{SessionID: "session-pool", InstanceID: "pool", DSLHash: testHash, ResolvedJSON: resolved, MembersJSON: poolMembersJSON, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestSessionWarmUpResultIsWrittenOnce(t *testing.T) {
 	}
 	// 预热出的状态与预热终点同事务写进实例的状态行；比较交换失败的那次写入没有动它。
 	state, found, err := repo.GetState(ctx, "pool")
-	if err != nil || !found || state.SessionID != "session-pool" || state.DSLHash != testHash || !state.BarEndTime.Equal(through) || string(state.StateJSON) != `{"targets":{"A|spot":"0.5"}}` {
+	if err != nil || !found || state.SessionID != "session-pool" || !state.BarEndTime.Equal(through) || string(state.StateJSON) != `{"targets":{"A|spot":"0.5"}}` {
 		t.Fatalf("预热出的状态不符：%+v found=%v err=%v", state, found, err)
 	}
 	if pending, _ := repo.PendingWarmSessions(ctx); len(pending) != 0 {

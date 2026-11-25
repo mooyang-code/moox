@@ -13,11 +13,12 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	// DefaultStreamHeartbeatTimeout 是 collector-stream 心跳的超时：超过视为离线（只用于运行状态、告警与切换前检查）。
+	// DefaultStreamHeartbeatTimeout 是 collector-stream 心跳的超时：超过视为离线（用于运行状态、心跳中断关注项与切换前检查）。
 	DefaultStreamHeartbeatTimeout = 180 * time.Second
 	// DefaultStreamCommitReserveMS 是下发给周期闸门的提交预留。
 	DefaultStreamCommitReserveMS = 1000
@@ -40,7 +41,9 @@ type StreamService struct {
 	syncer      SubjectSyncer
 	// tradingStatus 在疑似下架触发的立即同步之后，对那个市场再检测一次交易状态，让停牌分钟级生效（可为空）。
 	tradingStatus TradingStatusRunner
-	now           func() time.Time
+	// attention 上报推送连续缺失（stream_periods_missing，见 stream_attention.go；可为空）。
+	attention *report.Attention
+	now       func() time.Time
 
 	mu      sync.Mutex
 	recent  map[string][]*pb.StreamPeriodStat
@@ -70,19 +73,19 @@ type streamWorkerStatus struct {
 func normalizeSpace(spaceID string) string { return strings.ToLower(strings.TrimSpace(spaceID)) }
 
 // planState 返回该空间此刻要求 collector-stream 应用的计划版本与各项。
-func (s *StreamService) planState(ctx context.Context, spaceID string) (int64, string, []fetchplan.StreamPlanItem, error) {
+func (s *StreamService) planState(ctx context.Context, spaceID string) (int64, []fetchplan.StreamPlanItem, error) {
 	plans := s.persistence.FetchPlans()
 	open, err := plans.Open(ctx, spaceID)
 	if err != nil {
-		return 0, "", nil, err
+		return 0, nil, err
 	}
 	applied, err := plans.LatestApplied(ctx, spaceID)
 	if err != nil {
-		return 0, "", nil, err
+		return 0, nil, err
 	}
 	paused, err := plans.PausedSpaces(ctx)
 	if err != nil {
-		return 0, "", nil, err
+		return 0, nil, err
 	}
 	return fetchplan.StreamPlanState(open, applied, paused[spaceID])
 }
@@ -95,11 +98,11 @@ func (s *StreamService) StreamHeartbeat(ctx context.Context, req *pb.StreamHeart
 	}
 	now := s.now().UTC()
 	offset := time.Duration(0)
-	if req.GetSentAtMs() > 0 {
-		offset = time.UnixMilli(req.GetSentAtMs()).Sub(now)
+	if req.GetSentAt() > 0 {
+		offset = time.UnixMilli(req.GetSentAt()).Sub(now)
 	}
 	status := streamWorkerStatus{Version: req.GetVersion(), ClockOffsetMS: offset.Milliseconds(), Conns: req.GetConns()}
-	applied := fetchplan.StreamApplied{ID: req.GetAppliedPlanId(), Stage: req.GetAppliedStage()}
+	applied := fetchplan.StreamApplied{ID: req.GetAppliedPlanId()}
 	if err := s.persistence.StreamWorkers().Heartbeat(ctx, store.StreamWorker{SpaceID: spaceID, InstanceID: req.GetInstanceId(), Applied: mustMarshal(applied), Status: mustMarshal(status), HeartbeatAt: now}); err != nil {
 		return &pb.StreamHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -108,11 +111,11 @@ func (s *StreamService) StreamHeartbeat(ctx context.Context, req *pb.StreamHeart
 		reconnects[[2]string{conn.GetMarket(), conn.GetFrequency()}] += conn.GetReconnects()
 	}
 	s.metrics.ObserveHeartbeat(spaceID, now, offset, reconnects)
-	id, stage, _, err := s.planState(ctx, spaceID)
+	id, _, err := s.planState(ctx, spaceID)
 	if err != nil {
 		return &pb.StreamHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	return &pb.StreamHeartbeatRsp{RetInfo: retOK(), PlanId: id, Stage: stage, ServerTimeMs: now.UnixMilli(), CommitReserveMs: int32(s.settings.CommitReserveMS)}, nil
+	return &pb.StreamHeartbeatRsp{RetInfo: retOK(), PlanId: id, ServerTime: now.UnixMilli(), CommitReserveMs: int32(s.settings.CommitReserveMS)}, nil
 }
 
 // PullStreamPlan 返回分给推送与本地执行端的计划项。
@@ -121,11 +124,11 @@ func (s *StreamService) PullStreamPlan(ctx context.Context, req *pb.PullStreamPl
 	if spaceID == "" {
 		return &pb.PullStreamPlanRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id 必填")}, nil
 	}
-	id, stage, items, err := s.planState(ctx, spaceID)
+	id, items, err := s.planState(ctx, spaceID)
 	if err != nil {
 		return &pb.PullStreamPlanRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	rsp := &pb.PullStreamPlanRsp{RetInfo: retOK(), PlanId: id, Stage: stage, CommitReserveMs: int32(s.settings.CommitReserveMS)}
+	rsp := &pb.PullStreamPlanRsp{RetInfo: retOK(), PlanId: id, CommitReserveMs: int32(s.settings.CommitReserveMS)}
 	market := strings.ToLower(strings.TrimSpace(req.GetMarket()))
 	for _, item := range items {
 		if market != "" && !strings.EqualFold(item.Market, market) {
@@ -157,7 +160,7 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 		s.metrics.ObservePeriod(spaceID, fetchplan.StreamPeriodObservation{
 			Market: period.GetMarket(), DatasetID: period.GetDatasetId(), Frequency: period.GetFrequency(), Expected: int(period.GetExpected()), Arrived: int(period.GetArrived()),
 			Missing: int(period.GetMissing()), Suspected: int(period.GetSuspected()), Committed: period.GetCommitted(),
-			CommitDone: time.Duration(period.GetCommitDoneMs()) * time.Millisecond, FailedStreak: s.streaks[key],
+			CommitDone: time.Duration(period.GetCommitDoneMs()) * time.Millisecond,
 		})
 		recent := append(s.recent[spaceID], period)
 		if len(recent) > recentStreamPeriods {
@@ -165,6 +168,7 @@ func (s *StreamService) ReportStreamPeriods(ctx context.Context, req *pb.ReportS
 		}
 		s.recent[spaceID] = recent
 	}
+	s.publishMissingLocked()
 	markets := map[string][]string{}
 	for _, suspect := range req.GetSuspects() {
 		markets[suspect.GetMarket()] = append(markets[suspect.GetMarket()], suspect.GetSubjectId()+"（"+suspect.GetReason()+"）")
@@ -230,13 +234,12 @@ func (s *StreamService) WorkerStatus(ctx context.Context, spaceID string) (*pb.S
 		return nil, err
 	}
 	online := s.now().Sub(worker.HeartbeatAt) <= s.settings.HeartbeatTimeout
-	s.metrics.ObserveOnline(spaceID, online)
 	var applied fetchplan.StreamApplied
 	_ = json.Unmarshal([]byte(worker.Applied), &applied)
 	var status streamWorkerStatus
 	_ = json.Unmarshal([]byte(worker.Status), &status)
-	result := &pb.StreamWorkerStatus{InstanceId: worker.InstanceID, Online: online, HeartbeatAt: worker.HeartbeatAt.UTC().Format(time.RFC3339), AppliedPlanId: applied.ID,
-		AppliedStage: applied.Stage, Conns: status.Conns, ClockOffsetMs: status.ClockOffsetMS, Version: status.Version}
+	result := &pb.StreamWorkerStatus{InstanceId: worker.InstanceID, Online: online, HeartbeatAt: unixMillis(worker.HeartbeatAt), AppliedPlanId: applied.ID,
+		Conns: status.Conns, ClockOffsetMs: status.ClockOffsetMS, Version: status.Version}
 	s.mu.Lock()
 	recent := append([]*pb.StreamPeriodStat(nil), s.recent[spaceID]...)
 	s.mu.Unlock()
@@ -255,15 +258,6 @@ func (s *StreamService) Online(ctx context.Context, spaceID string) (bool, error
 		return false, err
 	}
 	return status != nil && status.GetOnline(), nil
-}
-
-// RefreshOnline 定时刷新各空间的在线指标（心跳中断时指标也要变）。
-func (s *StreamService) RefreshOnline(ctx context.Context, spaces []string) {
-	for _, space := range spaces {
-		if _, err := s.WorkerStatus(ctx, space); err != nil {
-			log.WarnContextf(ctx, "collector-stream status space=%s: %v", space, err)
-		}
-	}
 }
 
 func mustMarshal(value any) string {

@@ -15,8 +15,8 @@ import (
 
 func tempDirTestSchema() viewindex.ViewIndexSchema {
 	return viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+		SpaceID: "s", DatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
+		Columns: []*viewindex.Column{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}
 }
 

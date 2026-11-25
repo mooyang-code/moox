@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/checks"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
@@ -96,7 +97,8 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		_ = runtime.Close()
 		return nil, err
 	}
-	resultHook := monitorResultHook(runtime)
+	// 三个评估域（主机、探针、业务）共用一个推进器：在检查定时器的同一个 goroutine 里顺序执行，互不删除对方的检查。
+	applier := &checks.Applier{Checks: runtime.Repositories.Checks, Sender: runtime.alertSender, KlineInterval: cfg.KlineFreshness.EvaluationInterval}
 	collectorStatus, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
@@ -107,18 +109,14 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		services, err := (monitorobservability.Builder{Metrics: metricsQuery, Topology: runtime.Repositories.Topology}).Services(ctx, time.Now().UTC())
 		return err == nil && collectorHalted(services)
 	}
-	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook, canaryHalted)
+	marketCanary, err := buildMonitorMarketCanary(cfg, runtime, applier, storageMetadata, collectorStatus, canaryHalted)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := retireObsoleteBusinessChecks(runtimeCtx, runtime.Repositories, cfg); err != nil {
+	if err := retireMarketCanaries(runtimeCtx, cfg, applier); err != nil {
 		_ = runtime.Close()
-		return nil, fmt.Errorf("retire obsolete monitor checks: %w", err)
-	}
-	if err := ensureDefaultCheckAlertRules(runtimeCtx, runtime.Repositories); err != nil {
-		_ = runtime.Close()
-		return nil, err
+		return nil, fmt.Errorf("retire market canary checks: %w", err)
 	}
 	monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	datasetHealthPolicy, policyErr := loadMonitorDatasetHealthPolicy(cfg)
@@ -128,12 +126,9 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 	}
 	doctorContext := &monitordoctor.Builder{
 		Deployments: monitordeployment.NewClientSource(runtime.Gateway),
+		Services:    monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology},
 		Alerts:      runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
 		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
-	}
-	marketFetchThresholds := monitorobservability.MarketFetchThresholds{
-		CoordinationStaleAfter: cfg.MarketHealth.TimerCoordinationStaleAfter,
-		PendingGrace:           cfg.MarketHealth.TimerCoordinationPendingGrace,
 	}
 	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {
@@ -150,21 +145,21 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
 	}
 	runtime.klineFreshness = klineFreshness
-	// 两个 Builder 共用一份“历史补齐空间”记忆：补齐中与结束后 24 小时内不报 View 跟随数据变更落后。
+	// 两个 Builder 与 K 线新鲜度共用一份“历史补齐空间”记忆：补齐中与结束后 24 小时内，storage-view 的“View 跟随数据变更落后”
+	// 不告警，K 线结果视图落后于已完成的一期也不告警（采集侧已完成的一期过期照样报）。记忆在 Builder 构建概览时记下。
 	seedingMemory := &monitorobservability.SeedingMemory{}
+	klineFreshness.SetSeeding(seedingMemory.Active)
 	factsBuilder := &monitorobservability.Builder{
 		Seeding: seedingMemory,
 		Metrics: metricsQuery, Hosts: hostStore,
-		Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways,
-		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
-		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
-		MarketFetchThresholds:      marketFetchThresholds,
-		Inventory:                  inventorySource(klineInventory),
-		Datasets:                   archivableDatasets(storageMetadata),
+		Topology:  runtime.Repositories.Topology,
+		Policy:    doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
+		Inventory: inventorySource(klineInventory),
+		Datasets:  archivableDatasets(storageMetadata),
 	}
-	businessFreshness := buildBusinessFreshnessReporterWithInterval(factsBuilder, runtime.Repositories, resultHook, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
+	businessFreshness := buildBusinessFreshnessReporterWithInterval(factsBuilder, runtime.Repositories, applier, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
 	// 主机类检查在检查定时器每一轮的最前面执行（见 checkRound），先于行情探针和业务评估。
-	hostChecksRun := buildHostCheckReporter(factsBuilder, runtime.Repositories, resultHook, observation)
+	hostChecksRun := buildHostCheckReporter(factsBuilder, applier, observation)
 	runtime.businessEvaluation = businessFreshness != nil
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
@@ -182,7 +177,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata), Seeding: seedingMemory}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata), Seeding: seedingMemory}, Checks: runtime.Repositories.Checks, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
 	registerMonitorService(s, cfg, runtime, hostStore, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,8 +105,8 @@ func TestCollectorFunctionDeleteReportsResultsWithNamespaces(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "1 个函数没删成")
 	var summary struct {
-		Results []adminclient.CloudFunctionDeletion `json:"results"`
-		Note    string                              `json:"note"`
+		Results []rpcclient.CloudFunctionDeletion `json:"results"`
+		Note    string                            `json:"note"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &summary))
 	require.Len(t, summary.Results, 3)
@@ -122,7 +122,7 @@ func TestCollectorFunctionDeleteReportsResultsWithNamespaces(t *testing.T) {
 
 // probe-egress：汇总不同的出口 IP；有探测失败的返回错误。
 func TestCollectorFunctionProbeSummarisesDistinctEgressIPs(t *testing.T) {
-	report := buildCollectorProbeReport("stockcn", []adminclient.FunctionEgress{
+	report := buildCollectorProbeReport("stockcn", []rpcclient.FunctionEgress{
 		{Name: "a", IP: "198.51.100.2"}, {Name: "b", IP: "198.51.100.1"}, {Name: "c", IP: "198.51.100.2"}, {Name: "d", Error: "超时"},
 	})
 	assert.Equal(t, []string{"198.51.100.1", "198.51.100.2"}, report.DistinctOutboundIPs)

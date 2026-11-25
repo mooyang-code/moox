@@ -46,7 +46,7 @@
         </a-radio-group>
         <template #extra>策略没有写 market，只读一个计算任务：先选任务的数据所属的市场（要与任务源数据集的市场一致）。</template>
       </a-form-item>
-      <a-form-item v-for="market in markets" :key="market" :label="`${marketLabel(market)}计算任务`" required>
+      <a-form-item v-for="market in markets" :key="market" :label="`${taskLabel(market)}计算任务`" required>
         <a-select
           v-model="form.tasks[market]"
           allow-search
@@ -59,8 +59,8 @@
         </a-select>
         <template v-if="market === markets[0]" #extra
           ><template v-if="pool">策略池按成员所需市场的并集读任务。</template
-          ><template v-if="markets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
-          >统一数据集上的任务不在这里列出，要回放请从实例详情发起。</template
+          ><template v-if="mainMarkets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
+          ><template v-if="markets.length > mainMarkets.length">参考市场的任务只用于年龄判定。</template></template
         >
       </a-form-item>
     </template>
@@ -125,11 +125,14 @@ import {
   replayDriftHint,
   replayIsPool,
   replayMarkets,
+  replayMainMarkets,
+  replayIsReference,
   replayPool,
   replayTuned,
   wholeDays
 } from "@/views/strategy/replay/replay-form-model";
 import { MARKET_ORDER, marketLabel, tasksText } from "@/views/strategy/market-mode";
+import { useTaskRequirement } from "@/views/strategy/use-task-requirement";
 
 // 表单状态由页面持有（提交与预填都在页面里），这里直接编辑同一个响应式对象。
 const form = defineModel<ReplayFormState>({ required: true });
@@ -137,13 +140,30 @@ const props = defineProps<{ strategies: Strategy[]; tasks: FactorTask[]; tasksLo
 // 区间按当前空间登记的时区选择
 const zone = useDisplayZone();
 
-// 策略的 market 决定要读哪些市场的任务（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
-const pool = computed(() => replayPool(form.value, props.strategies));
+// 要读哪些市场的任务由后端按定义或 DSL 草稿推出（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
+// 从实例发起时任务已预填，按实例引用的定义读出参考市场（回放不读参考市场的任务）。
+const { requirement } = useTaskRequirement(
+  computed(() =>
+    form.value.instance_id
+      ? { strategyId: form.value.instance_strategy_id }
+      : form.value.source === "dsl"
+        ? { dsl: form.value.dsl_yaml }
+        : { strategyId: form.value.strategy_id }
+  )
+);
+watch(
+  requirement,
+  next => {
+    form.value.requirement = next;
+  },
+  { immediate: true }
+);
+const pool = computed(() => replayPool(form.value));
 // 资金费列与说明看回放对象是不是策略池（从池实例发起时按实例引用的定义判断）：池的资金费写在池 DSL 里。
 const pooled = computed(() => replayIsPool(form.value, props.strategies));
-const declared = computed(() => replayDeclared(form.value, props.strategies));
+const declared = computed(() => replayDeclared(form.value));
 const driftHint = computed(() => replayDriftHint(form.value, props.strategies));
-const markets = computed(() => replayMarkets(form.value, props.strategies));
+const markets = computed(() => replayMarkets(form.value));
 // 声明了 factor_params 的策略只能用因子现算（可变成员的参数随策略逐期变化）：选中这种策略时自动切过去；策略池只能读结果 View。
 const tuned = computed(() => replayTuned(form.value, props.strategies));
 watch(
@@ -157,11 +177,15 @@ watch(
 const inputHint = computed(() => {
   if (tuned.value) return "策略声明了 factor_params：因子按回放中逐期求出的参数现算，只能用因子现算。";
   if (form.value.input === "compute")
-    return "经主机网关调因子引擎，按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制；附加来源、参考市场仍读 View。只支持一个计算任务，不支持策略池与股票。";
+    return "经主机网关调因子引擎，按因子机本地 K 线现算主帧的因子，不受 View 保留根数限制；附加来源、参考市场仍读 View。不支持策略池与股票。";
   return "读计算任务的结果 View：区间受 View 保留的根数限制。";
 });
-// 统一数据集上的任务同时覆盖现货与永续，永续费率也要填。
-const usesSwap = computed(() => markets.value.includes("swap") || markets.value.includes("multi"));
+// 永续手续费只在主帧读永续时用到（参考市场不交易）
+const mainMarkets = computed(() => replayMainMarkets(form.value));
+const usesSwap = computed(() => mainMarkets.value.includes("swap"));
+function taskLabel(market: string) {
+  return replayIsReference(form.value, market) ? `参考市场（${marketLabel(market)}）` : marketLabel(market);
+}
 
 /** 一个市场可选的任务：已被别的市场选走的不再出现。 */
 function taskChoices(market: string) {
@@ -170,7 +194,7 @@ function taskChoices(market: string) {
 }
 
 // 选的任务都是日线时只选日期（按空间时区的整天）
-const dateOnly = computed(() => replayDateOnly(form.value, props.strategies, props.tasks));
+const dateOnly = computed(() => replayDateOnly(form.value, props.tasks));
 // 换成日线任务时，把已有的区间（默认的整点区间，或先按分钟选好的）吸附成显示的那几个整天
 watch(
   [dateOnly, () => form.value.range, zone],

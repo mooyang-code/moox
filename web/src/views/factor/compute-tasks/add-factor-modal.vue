@@ -239,7 +239,7 @@ async function prepare() {
     const [items, columns, categoryList] = await Promise.all([
       fetchAllFactors(),
       fetchSourceColumns(spaceId, datasetId).catch(() => null),
-      listFactorCategories({ silentError: true }).catch(() => [] as FactorCategory[])
+      listFactorCategories().catch(() => [] as FactorCategory[])
     ]);
     factors.value = items;
     sourceColumns.value = columns;

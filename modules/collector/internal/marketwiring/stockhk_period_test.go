@@ -62,9 +62,9 @@ func TestStockHKTimerReturnsNoWorkOutsideSessions(t *testing.T) {
 		name, plan = functionName, function.Plan
 	}
 	// 计划份的生效起点设在这些时刻之前，返回 no_work 只可能是因为周期不是交易桶。
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkPeriodTime(t, "2026-11-10 09:30").Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: hkPeriodTime(t, "2026-11-10 09:30")})
 	require.NoError(t, err)
-	plan = content.FinalPlan(content.Functions[name])
+	plan = content.Functions[name].Target
 	require.NotNil(t, plan)
 
 	handler := NewHandler()

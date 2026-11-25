@@ -15,7 +15,7 @@ type swapOnlyFacts struct{ twoMarketFacts }
 
 func (swapOnlyFacts) GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error) {
 	return store.TradingAccountRecord{
-		SpaceID: "s", TradingAccountID: "a", Exchange: "BINANCE", Markets: []string{"SWAP"}, SettlementAsset: "USDT",
+		SpaceID: "s", TradingAccountID: "a", Exchange: "binance", Markets: []string{"swap"}, SettlementAsset: "USDT",
 	}, nil
 }
 
@@ -25,7 +25,7 @@ func TestSwapOnlyPaperSettlementRowIsNotRewritten(t *testing.T) {
 	market := &twoMarketPrices{seen: map[exchange.SymbolKey]int{}, at: now}
 	adapter := &Adapter{
 		Store: swapOnlyFacts{twoMarketFacts{positions: []store.PositionRecord{{
-			MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", SignedQuantity: "3", EntryPrice: "100", Leverage: "5",
+			MarketType: "swap", ExchangeSymbol: "BTCUSDT", SignedQuantity: "3", EntryPrice: "100", Leverage: "5",
 		}}}},
 		MarketData: market, Now: func() time.Time { return now },
 	}

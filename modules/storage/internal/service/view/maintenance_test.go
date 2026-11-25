@@ -18,264 +18,212 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-type maintenanceMetadata struct {
-	view *pb.View
-}
-
-func (m *maintenanceMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
-	return &pb.ListViewsRsp{RetInfo: successRetInfo(), Views: []*pb.View{m.view}, PageResult: &pb.PageResult{Page: 1, Size: 100}}, nil
-}
-
-// builtStats 是一个建好的索引文件记下的状态：属于 dataset、记下了跟随进度。
-func builtStats(dataset string, revision uint64, hash string) viewindex.ViewIndexStats {
-	return viewindex.ViewIndexStats{Exists: true, DatasetID: dataset, ViewVersion: revision, SchemaHash: hash, Follow: viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: "store", Sequence: 1}}}
-}
-
 func TestViewBarsComeFromThePolicyForTimeSeriesViews(t *testing.T) {
-	if got := viewBars(&pb.View{Freq: "1m"}, MaintenanceOptions{Bars: 4320}); got != 4320 {
+	if got := viewBars(timeSeriesSpec("s", "d", "1m"), MaintenanceOptions{Bars: 4320}); got != 4320 {
 		t.Fatalf("time-series View bars = %d, want the policy 4320", got)
 	}
-	if got := viewBars(&pb.View{Freq: "1h"}, MaintenanceOptions{}); got != storagepolicy.DefaultViewBars {
+	if got := viewBars(timeSeriesSpec("s", "d", "1h"), MaintenanceOptions{}); got != storagepolicy.DefaultViewBars {
 		t.Fatalf("time-series View bars without a policy = %d, want %d", got, storagepolicy.DefaultViewBars)
 	}
-	if got := viewBars(&pb.View{Engine: "bleve"}, MaintenanceOptions{Bars: 4320}); got != 0 {
+	if got := viewBars(recordSpec("s", "d"), MaintenanceOptions{Bars: 4320}); got != 0 {
 		t.Fatalf("record View bars = %d, want 0 (keeps every row)", got)
 	}
 }
 
+// 建数据集后不调任何 View 接口：维护流程按数据集建索引，GetViewState 返回非空 index_id。
 func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := &maintenanceMetadata{view: &pb.View{
-		SpaceId: "space", ViewId: "records", Engine: "bleve", DatasetId: "records",
-		Columns: []*pb.ViewColumn{{SpaceId: "space", ViewId: "records", OriginId: "title", ColumnName: "title"}},
-	}}
+	metadata := metadataFor(recordSpec("space", "records", "title"))
 	stop, err := svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
 	stop()
-	indexID := viewindex.ViewIndexID("space", "records")
+	indexID := viewindex.IndexID("space", "records")
 	if len(svc.views) != 1 {
 		t.Fatalf("views=%v", svc.views)
 	}
-	runtime := svc.views[viewRef{spaceID: "space", viewID: "records"}]
+	runtime := svc.runtimeOf(datasetRef{spaceID: "space", datasetID: "records"})
 	if runtime.active != indexID || runtime.building != "" {
 		t.Fatalf("建成后 active=%q building=%q", runtime.active, runtime.building)
 	}
-	if state := runtime.queryState(); state.active != indexID {
-		t.Fatalf("查询路径的副本 active=%q", state.active)
+	state, err := svc.GetViewState(context.Background(), &pb.GetViewStateReq{SpaceId: "space", DatasetId: "records"})
+	if err != nil || state.GetIndexId() != indexID || len(state.GetColumns()) != 1 || state.GetColumns()[0].GetDisplayName() != "title" {
+		t.Fatalf("GetViewState = %v, %v", state, err)
 	}
 }
 
-// 没有显式投影的 View 取数据集的列，这些列没有排序值：建索引时要编号，否则之后的追加校验永远通不过。
-func TestInitialBuildNumbersColumns(t *testing.T) {
-	columns := numberedViewColumns([]*pb.ViewColumn{{ColumnName: "b"}, nil, {ColumnName: "a"}})
-	if len(columns) != 2 || columns[0].GetSortOrder() != 0 || columns[1].GetSortOrder() != 1 {
-		t.Fatalf("编号结果 = %v", columns)
+// 数据集启用的列按建列顺序编号；停用的列进隐藏列；加列只追加，已建列不会被去掉。
+func TestViewSpecNumbersColumnsAndAppendsOnly(t *testing.T) {
+	spec := newViewSpec(&pb.Dataset{SpaceId: "s", DatasetId: "d", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES}, []*pb.DatasetColumn{
+		{ColumnName: "b", Status: "active"}, {ColumnName: "old", Status: "disabled"}, {ColumnName: "a"},
+	})
+	if len(spec.Columns) != 2 || spec.Columns[0].ColumnName != "b" || spec.Columns[1].GetSortOrder() != 1 || !reflect.DeepEqual(spec.HiddenColumns, []string{"old"}) {
+		t.Fatalf("声明 = %+v", spec)
 	}
-	extended, ok := appendViewColumns(columns, []*pb.ViewColumn{{ColumnName: "a"}, {ColumnName: "c"}})
-	if !ok || !viewindex.IsAppendOnlyViewColumns(columns, extended) {
+	extended, ok := appendViewColumns(spec.Columns, []*viewindex.Column{{ColumnName: "a"}, {ColumnName: "c"}})
+	if !ok || !viewindex.IsAppendOnlyViewColumns(spec.Columns, extended) {
 		t.Fatalf("追加结果 = %v ok=%v", extended, ok)
 	}
-	if _, ok := appendViewColumns(columns, []*pb.ViewColumn{{ColumnName: "a"}}); ok {
+	if _, ok := appendViewColumns(spec.Columns, []*viewindex.Column{{ColumnName: "a"}}); ok {
 		t.Fatal("声明里少了已建列不算加列，已建列也不会被去掉")
 	}
 }
 
 func TestInitialBuildFailureDiscardsPartialIndexAndRetries(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m", Columns: closeColumns()}
-	metadata := &maintenanceMetadata{view: view}
+	spec := timeSeriesSpec("space", "market", "1m", "close")
 	svc := newBuildService(engine)
 	reader := &pagedRangeReader{pageSize: 1, failPage: 2, rows: []*pb.TimeSeriesRow{
 		historyRow("A", "2026-08-18T00:00:00Z", ""), historyRow("B", "2026-08-18T00:00:00Z", ""),
 	}}
-	opts := MaintenanceOptions{Metadata: metadata, PrimaryRange: reader, Bars: 10, BackfillPageSize: 100}
-	if err := svc.maintainView(context.Background(), opts, metadata.view); err == nil {
+	opts := MaintenanceOptions{Metadata: metadataFor(spec), PrimaryRange: reader, Bars: 10, BackfillPageSize: 100}
+	if err := svc.maintainView(context.Background(), opts, spec); err == nil {
 		t.Fatal("回填失败应当返回错误")
 	}
-	indexID := viewindex.ViewIndexID("space", "prices")
-	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
-	if runtime.building != "" || runtime.active != "" {
-		t.Fatalf("失败后 building=%q active=%q", runtime.building, runtime.active)
-	}
-	if _, ok := svc.indexView[indexID]; ok {
-		t.Fatal("半成品的映射应当清掉，后续事件保持未确认")
+	runtime := svc.runtimeOf(spec.ref())
+	if runtime.building != "" || runtime.active != "" || runtime.schema.SchemaHash != "" {
+		t.Fatalf("失败后 building=%q active=%q schema=%+v", runtime.building, runtime.active, runtime.schema)
 	}
 	reader.failPage = 0
 	reader.requests = nil
-	if err := svc.maintainView(context.Background(), opts, metadata.view); err != nil {
+	if err := svc.maintainView(context.Background(), opts, spec); err != nil {
 		t.Fatalf("下一轮重建：%v", err)
 	}
-	if runtime.active != indexID {
+	if runtime.active != runtime.indexID {
 		t.Fatalf("重建后 active=%q", runtime.active)
 	}
 }
 
-// 索引文件属于另一个数据集（View 删除后同名重建、旧文件还没清理）：残留在内存里的活动索引不再有效，重新建。
-func TestInitialBuildClearsStaleRuntimeActive(t *testing.T) {
+// 数据集删除后按同一 ID 立即重建（同名任务删了再建）：索引文件记下的是旧数据集的创建时间，新数据集不挂上旧索引，删掉重建。
+func TestRecreatedDatasetDoesNotAdoptOldIndex(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m", Columns: closeColumns()}}
 	svc := newBuildService(engine)
-	indexID := viewindex.ViewIndexID("space", "prices")
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{active: indexID}
-	opts := MaintenanceOptions{Metadata: metadata, PrimaryRange: &pagedRangeReader{}, Bars: 10}
-	if err := svc.maintainView(context.Background(), opts, metadata.view); err != nil {
+	old := timeSeriesSpec("space", "market", "1m", "close")
+	runtime := testRuntime(svc, old)
+	attachTestIndex(runtime, viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "market", ViewVersion: 3, SchemaHash: "old", DatasetCreatedAt: old.CreatedAt})
+	stats := builtStats("market", 3, "old")
+	engine.stats = &stats
+
+	recreated := timeSeriesSpec("space", "market", "1m", "close")
+	recreated.CreatedAt = 1795507200000
+	opts := MaintenanceOptions{Metadata: metadataFor(recreated), PrimaryRange: &pagedRangeReader{}, Bars: 10}
+	if err := svc.maintainView(context.Background(), opts, recreated); err != nil {
 		t.Fatal(err)
 	}
 	if engine.removes != 1 {
 		t.Fatalf("应当删掉旧文件重建，remove=%d", engine.removes)
 	}
-	if schema := svc.schemas[indexID]; schema.PrimaryDatasetID != "market" || schema.ViewVersion != initialViewRevision {
+	if schema := runtime.queryState().schema; schema.DatasetCreatedAt != recreated.CreatedAt || schema.ViewVersion != initialViewRevision {
 		t.Fatalf("重建后的契约 = %+v", schema)
 	}
 }
 
 // 索引文件不见了：维护流程重新建索引（先停掉跟随器、清掉内存里的活动索引），不需要元数据参与。
 func TestMaintenanceRebuildsMissingIndex(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: false}}
-	svc.engines["duckdb"] = engine
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices", Columns: closeColumns()}}
-	indexID := viewindex.ViewIndexID("space", "prices")
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = newViewRuntime()
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}].active = indexID
-	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, metadata.view); err != nil {
+	svc := newTestService(map[string]viewindex.Engine{"duckdb": engine})
+	spec := timeSeriesSpec("space", "prices", "1m", "close")
+	runtime := testRuntime(svc, spec)
+	attachTestIndex(runtime, viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "prices", ViewVersion: 1, SchemaHash: "hash"})
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadataFor(spec), PrimaryRange: &pagedRangeReader{}}, spec); err != nil {
 		t.Fatalf("索引缺失 err=%v", err)
 	}
-	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
-	if runtime.active != indexID || runtime.building != "" {
+	if runtime.active != runtime.indexID || runtime.building != "" {
 		t.Fatalf("应当重新建好索引：active=%q building=%q", runtime.active, runtime.building)
 	}
-	if schema := svc.schemas[indexID]; len(schema.Columns) != 1 || schema.Columns[0].GetColumnName() != "close" {
-		t.Fatalf("新索引应按 View 的列建：%+v", schema)
+	if schema := runtime.queryState().schema; len(schema.Columns) != 1 || schema.Columns[0].GetColumnName() != "close" {
+		t.Fatalf("新索引应按数据集的列建：%+v", schema)
 	}
 }
 
 // 跟随器正在原地重建时（期间文件可能暂时不存在），维护流程不另建。
 func TestMaintenanceLeavesRebuildToFollower(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: false}}
-	svc.engines["duckdb"] = engine
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices"}
-	runtime := newViewRuntime()
-	runtime.building = viewindex.ViewIndexID("space", "prices")
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = runtime
-	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: &maintenanceMetadata{view: view}}, view); err != nil {
+	svc := newTestService(map[string]viewindex.Engine{"duckdb": engine})
+	spec := timeSeriesSpec("space", "prices", "1m")
+	runtime := testRuntime(svc, spec)
+	runtime.building = runtime.indexID
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadataFor(spec)}, spec); err != nil {
 		t.Fatal(err)
 	}
-	if engine.statCalls != 0 || runtime.building != viewindex.ViewIndexID("space", "prices") || runtime.active != "" {
+	if engine.statCalls != 0 || runtime.building != runtime.indexID || runtime.active != "" {
 		t.Fatalf("不应查看或另建索引：stat=%d building=%q active=%q", engine.statCalls, runtime.building, runtime.active)
 	}
 }
 
-// 文件超过告警线只告警：不改动索引，也不触发任何重建。
+// 文件超过告警线只告警：不改动索引，也不触发任何重建；摘掉的 View 不再计入。
 func TestViewFileOverLimitOnlyAlerts(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	svc := newTestService(map[string]viewindex.Engine{"duckdb": &queryEngine{}})
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc.SetMetrics(metrics)
-	view := &pb.View{SpaceId: "space", ViewId: "prices"}
+	runtime := testRuntime(svc, timeSeriesSpec("space", "prices", "1m"))
 	opts := MaintenanceOptions{MaxViewFileBytes: 100}
-	svc.observeViewFileSize(view, "prices-a", viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 100}, opts)
-	if len(svc.fileOverLimit) != 1 {
-		t.Fatalf("超限的 View = %v", svc.fileOverLimit)
+	svc.observeViewFileSize(runtime, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 100}, opts)
+	if !runtime.fileOverLimit.Load() {
+		t.Fatal("超限的 View 没有记下")
 	}
-	svc.observeViewFileSize(view, "prices-a", viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 99}, opts)
-	if len(svc.fileOverLimit) != 0 {
-		t.Fatalf("恢复后超限的 View = %v", svc.fileOverLimit)
-	}
-	svc.observeViewFileSize(view, "prices-a", viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 100}, opts)
-	svc.retainFileOverLimit(map[observability.ViewKey]struct{}{})
-	if len(svc.fileOverLimit) != 0 {
-		t.Fatalf("已删除的 View 不应继续计入：%v", svc.fileOverLimit)
+	svc.observeViewFileSize(runtime, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 99}, opts)
+	if runtime.fileOverLimit.Load() {
+		t.Fatal("恢复后仍记为超限")
 	}
 }
 
 // 维护在锁外读到的索引契约早于定时任务刚提交的加列时，不能把写入契约改回旧修订。
 func TestAttachActiveViewIgnoresStaleRevision(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	view := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "prices", Engine: "bleve", Status: "active", HiddenColumns: []string{"old"}}
-	indexID := viewindex.ViewIndexID("space", "prices")
-	if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 2, "new")); err != nil {
-		t.Fatal(err)
-	}
-	view.HiddenColumns = nil
-	if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "old")); err != nil {
-		t.Fatal(err)
-	}
-	if schema := svc.schemas[indexID]; schema.ViewVersion != 2 || schema.SchemaHash != "new" {
+	svc := newTestService(map[string]viewindex.Engine{"bleve": &queryEngine{}})
+	spec := recordSpec("space", "prices")
+	spec.HiddenColumns = []string{"old"}
+	runtime := testRuntime(svc, spec)
+	svc.attachActiveView(runtime, spec, builtStats("prices", 2, "new"))
+	fresh := recordSpec("space", "prices")
+	svc.attachActiveView(runtime, fresh, builtStats("prices", 1, "old"))
+	if schema := runtime.queryState().schema; schema.ViewVersion != 2 || schema.SchemaHash != "new" {
 		t.Fatalf("写入契约被旧快照改回：%+v", schema)
 	}
-	if hidden := svc.views[viewRef{spaceID: "space", viewID: "prices"}].queryState().hiddenColumns; len(hidden) != 0 {
-		t.Fatalf("隐藏列仍要按这次的 View 刷新：%v", hidden)
+	if hidden := runtime.queryState().hiddenColumns; len(hidden) != 0 {
+		t.Fatalf("隐藏列仍要按这次的声明刷新：%v", hidden)
 	}
 }
 
 func TestRestoreActiveViewsAttachesBuiltIndexFile(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	stats := builtStats("prices", 1, "hash")
 	stats.Columns = closeColumns()
-	svc.engines["bleve"] = &queryEngine{stats: stats}
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices"}}
-	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
+	svc := newTestService(map[string]viewindex.Engine{"bleve": &queryEngine{stats: stats}})
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadataFor(recordSpec("space", "prices"))}); err != nil {
 		t.Fatalf("restore active view: %v", err)
 	}
-	indexID := viewindex.ViewIndexID("space", "prices")
-	svc.mu.RLock()
-	engineName := svc.indexEngine[indexID]
-	schema := svc.schemas[indexID]
-	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
-	svc.mu.RUnlock()
-	if engineName != "bleve" || runtime == nil || runtime.queryState().active != indexID {
-		t.Fatalf("restored engine=%q runtime=%v", engineName, runtime)
+	runtime := svc.runtimeOf(datasetRef{spaceID: "space", datasetID: "prices"})
+	if runtime == nil || runtime.queryState().active != viewindex.IndexID("space", "prices") {
+		t.Fatalf("restored runtime=%v", runtime)
 	}
-	if schema.ViewVersion != 1 || schema.SchemaHash != "hash" || len(schema.Columns) != 1 {
+	if schema := runtime.queryState().schema; schema.ViewVersion != 1 || schema.SchemaHash != "hash" || len(schema.Columns) != 1 {
 		t.Fatalf("写入契约应取自索引文件：%+v", schema)
 	}
 }
 
-// 没有文件、没建完（没记下跟随进度）、属于另一个数据集或另一个同 ID 的 View 的索引都不挂接，也不让启动失败，由维护流程重新建。
+// 没有文件、没建完（没记下跟随进度）、属于另一个数据集或删除后同 ID 重建的数据集的索引都不挂接，也不让启动失败，由维护流程重新建。
 func TestRestoreActiveViewsSkipsUnbuiltIndexFiles(t *testing.T) {
 	half := builtStats("prices", 1, "hash")
 	half.Follow = viewindex.FollowState{}
-	// 删除后按同样 ID 重建的 View：数据集相同，创建时间不同。
+	// 删除后按同样 ID 重建的数据集：数据集 ID 相同，创建时间不同。
 	recreated := builtStats("prices", 1, "hash")
-	recreated.ViewCreatedAt = "2026-11-01 00:00:00"
+	recreated.DatasetCreatedAt = 1790812800000
 	for name, stats := range map[string]viewindex.ViewIndexStats{
-		"missing":        {},
-		"half_built":     half,
-		"other_dataset":  builtStats("fundamentals", 1, "hash"),
-		"recreated_view": recreated,
+		"missing":           {},
+		"half_built":        half,
+		"other_dataset":     builtStats("fundamentals", 1, "hash"),
+		"recreated_dataset": recreated,
 	} {
 		t.Run(name, func(t *testing.T) {
-			svc, err := New(filepath.Join(t.TempDir(), "views"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			svc.engines["bleve"] = &queryEngine{stats: stats}
-			metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices"}}
-			if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
+			svc := newTestService(map[string]viewindex.Engine{"bleve": &queryEngine{stats: stats}})
+			if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadataFor(recordSpec("space", "prices"))}); err != nil {
 				t.Fatalf("restore error = %v", err)
 			}
 			if indexID, runtime := svc.activeIndex("space", "prices"); runtime != nil && strings.TrimSpace(indexID) != "" {
@@ -286,15 +234,9 @@ func TestRestoreActiveViewsSkipsUnbuiltIndexFiles(t *testing.T) {
 }
 
 func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	statErr := errors.New("legacy duckdb schema requires cleanup and rebuild")
-	engine := &queryEngine{statErr: statErr}
-	svc.engines["duckdb"] = engine
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices"}
-	err = svc.maintainView(context.Background(), MaintenanceOptions{}, view)
+	svc := newTestService(map[string]viewindex.Engine{"duckdb": &queryEngine{statErr: statErr}})
+	err := svc.maintainView(context.Background(), MaintenanceOptions{}, timeSeriesSpec("space", "prices", "1m"))
 	if !errors.Is(err, statErr) {
 		t.Fatalf("maintenance error=%v want=%v", err, statErr)
 	}
@@ -303,16 +245,16 @@ func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 	}
 }
 
-// 列禁用只是逻辑上的：行里的值还在，只在返回时过滤；重新启用后恢复。
+// 列停用只是逻辑上的：行里的值还在，只在返回时过滤；重新启用后恢复。
 func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 	key := timeSeriesTestRowKey("")
 	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close"}, {FieldId: "old"}}}}}
 	svc := queryTestService(engine, true)
-	view := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market", Engine: "query-test", HiddenColumns: []string{"old"}}
+	runtime := svc.runtimeOf(marketRef)
 	query := func() []*pb.FieldValue {
 		t.Helper()
 		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-			SpaceId: "space", ViewId: "prices",
+			SpaceId: "space", DatasetId: "market",
 			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
@@ -320,21 +262,13 @@ func TestHiddenColumnsAreFilteredFromResults(t *testing.T) {
 		}
 		return rsp.GetRows()[0].GetFields()
 	}
-	attach := func() {
-		t.Helper()
-		runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
-		runtime.mu.Lock()
-		defer runtime.mu.Unlock()
-		svc.attachActiveViewLocked(view, runtime, "prices-index", svc.schemas["prices-index"], "query-test")
-	}
-	svc.catalogViews = make(map[viewRef]*pb.View)
-	svc.indexView = make(map[string]viewRef)
-	attach()
+	disabled := timeSeriesSpec("space", "market", "1m", "close")
+	disabled.HiddenColumns = []string{"old"}
+	runtime.setSpec(disabled)
 	if fields := query(); len(fields) != 1 || fields[0].GetFieldId() != "close" {
-		t.Fatalf("隐藏的列应当被过滤：%v", fields)
+		t.Fatalf("停用的列应当被过滤：%v", fields)
 	}
-	view.HiddenColumns = nil
-	attach()
+	runtime.setSpec(timeSeriesSpec("space", "market", "1m", "close", "old"))
 	if fields := query(); len(fields) != 2 {
 		t.Fatalf("重新启用后应当恢复：%v", fields)
 	}
@@ -354,19 +288,19 @@ func TestHalfPreparedBleveIndexIsRebuiltAfterRestart(t *testing.T) {
 			}
 		}
 	}()
-	indexID := viewindex.ViewIndexID("space", "records")
+	indexID := viewindex.IndexID("space", "records")
 	if err := os.MkdirAll(filepath.Join(root, "bleve", indexID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", Engine: "bleve", DatasetId: "records", Status: "active",
-		Columns: []*pb.ViewColumn{{ColumnName: "title", OriginId: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}}}
+	spec := recordSpec("space", "records", "title")
+	metadata := metadataFor(spec)
 	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatalf("半成品不能让启动失败：%v", err)
 	}
 	if active, runtime := svc.activeIndex("space", "records"); runtime != nil && active != "" {
 		t.Fatalf("半成品不应挂接：%q", active)
 	}
-	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, metadata.view); err != nil {
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, spec); err != nil {
 		t.Fatalf("维护应当重建：%v", err)
 	}
 	if active, _ := svc.activeIndex("space", "records"); active != indexID {
@@ -377,59 +311,82 @@ func TestHalfPreparedBleveIndexIsRebuiltAfterRestart(t *testing.T) {
 	}
 }
 
-// 一个 View 的索引读不出来：启动不失败，跳过这个 View。
+// 一个数据集的索引读不出来：启动不失败，跳过它。
 func TestRestoreActiveViewsSkipsUnreadableIndex(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc.engines["bleve"] = &queryEngine{statErr: errors.New("坏的索引")}
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices"}}
-	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
+	svc := newTestService(map[string]viewindex.Engine{"bleve": &queryEngine{statErr: errors.New("坏的索引")}})
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadataFor(recordSpec("space", "prices"))}); err != nil {
 		t.Fatalf("restore error = %v", err)
 	}
 }
 
-// 元数据里已删除的 View：维护后不再挂接，GetViewState 返回 VIEW_NOT_FOUND，索引文件当场删除。
-func TestMaintenanceForgetsDeletedViews(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"))
-	if err != nil {
-		t.Fatal(err)
-	}
+// 数据集停用：View 摘掉、不可查、索引文件保留；重新启用后挂回、不重建。数据集删除：View 摘掉、索引文件当场删除，
+// GetViewState 返回 VIEW_NOT_FOUND，运行时（含写锁与修订号）不残留。
+func TestMaintenanceFollowsDatasetStatus(t *testing.T) {
 	engine := &removeRecordingEngine{queryEngine: &queryEngine{stats: builtStats("prices", 1, "hash")}}
-	svc.engines["bleve"] = engine
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices", Status: "active"}
-	if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "hash")); err != nil {
+	svc := newTestService(map[string]viewindex.Engine{"bleve": engine})
+	spec := recordSpec("space", "prices")
+	opts := MaintenanceOptions{Metadata: metadataFor(spec)}
+	if err := svc.maintainOnce(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
-	state, _ := svc.GetViewState(context.Background(), &pb.GetViewStateReq{SpaceId: "space", ViewId: "prices"})
-	if state.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("删除前 = %v", state.GetRetInfo())
+	ref := spec.ref()
+	first := svc.runtimeOf(ref)
+	if first == nil || first.queryState().active == "" {
+		t.Fatal("启用的数据集应当挂接")
 	}
-	// 停用的 View 仍在元数据里：不摘掉。
-	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", Status: "disabled"}})
-	if active, _ := svc.activeIndex("space", "prices"); active == "" || len(engine.removed) != 0 {
-		t.Fatalf("停用的 View 不应摘掉，也不删文件：removed=%v", engine.removed)
+	first.revision.Store(5)
+
+	disabled := recordSpec("space", "prices")
+	disabled.Status = "disabled"
+	if err := svc.maintainOnce(context.Background(), MaintenanceOptions{Metadata: metadataFor(disabled)}); err != nil {
+		t.Fatal(err)
 	}
-	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}})
-	state, _ = svc.GetViewState(context.Background(), &pb.GetViewStateReq{SpaceId: "space", ViewId: "prices"})
+	if svc.runtimeOf(ref) != nil || len(engine.removed) != 0 {
+		t.Fatalf("停用的数据集应当摘掉、不删文件：removed=%v", engine.removed)
+	}
+	query, _ := svc.SearchRecordRows(context.Background(), &pb.SearchRecordRowsReq{SpaceId: "space", DatasetId: "prices", TextQuery: "x"})
+	if query.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_READY {
+		t.Fatalf("停用后查询 = %v，想要 VIEW_NOT_READY", query.GetRetInfo())
+	}
+
+	if err := svc.maintainOnce(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	again := svc.runtimeOf(ref)
+	if again == nil || again == first || again.queryState().active == "" || engine.prepares != 0 {
+		t.Fatalf("重新启用后应挂回、不重建：prepares=%d", engine.prepares)
+	}
+	if again.revision.Load() != 0 {
+		t.Fatal("新的运行时不应带着旧的修订号")
+	}
+
+	if err := svc.maintainOnce(context.Background(), MaintenanceOptions{Metadata: &testMetadata{}}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := svc.GetViewState(context.Background(), &pb.GetViewStateReq{SpaceId: "space", DatasetId: "prices"})
 	if state.GetRetInfo().GetCode() != pb.ErrorCode_VIEW_NOT_FOUND {
 		t.Fatalf("删除后 = %v，想要 VIEW_NOT_FOUND", state.GetRetInfo())
 	}
-	if want := []string{viewindex.ViewIndexID("space", "prices")}; !reflect.DeepEqual(engine.removed, want) {
+	if want := []string{viewindex.IndexID("space", "prices")}; !reflect.DeepEqual(engine.removed, want) {
 		t.Fatalf("删除的索引 = %v，期望 %v", engine.removed, want)
 	}
+	if len(svc.views) != 0 {
+		t.Fatalf("摘掉后 views 里不应残留：%v", svc.views)
+	}
 	// 再跑一轮不重复删。
-	svc.forgetDeletedViews(context.Background(), &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "other"}})
+	if err := svc.maintainOnce(context.Background(), MaintenanceOptions{Metadata: &testMetadata{}}); err != nil {
+		t.Fatal(err)
+	}
 	if len(engine.removed) != 1 {
 		t.Fatalf("重复删除：%v", engine.removed)
 	}
 }
 
-// removeRecordingEngine 记下被删除的索引。
+// removeRecordingEngine 记下被删除与准备的索引。
 type removeRecordingEngine struct {
 	*queryEngine
-	removed []string
+	removed  []string
+	prepares int
 }
 
 func (e *removeRecordingEngine) Remove(_ context.Context, id string) error {
@@ -437,40 +394,45 @@ func (e *removeRecordingEngine) Remove(_ context.Context, id string) error {
 	return nil
 }
 
-// pageMetadata 按页返回固定的列表响应，用来构造分页信息不完整的元数据。
-type pageMetadata struct{ pages []*pb.ListViewsRsp }
+func (e *removeRecordingEngine) Prepare(context.Context, string, viewindex.ViewIndexSchema) error {
+	e.prepares++
+	return nil
+}
 
-func (m *pageMetadata) ListViews(_ context.Context, req *pb.ListViewsReq, _ ...client.Option) (*pb.ListViewsRsp, error) {
+// pageMetadata 按页返回固定的数据集列表响应，用来构造分页信息不完整的元数据。
+type pageMetadata struct{ pages []*pb.ListDatasetsRsp }
+
+func (m *pageMetadata) ListDatasets(_ context.Context, req *pb.ListDatasetsReq, _ ...client.Option) (*pb.ListDatasetsRsp, error) {
 	index := int(req.GetPage().GetPage()) - 1
 	if index < 0 || index >= len(m.pages) {
-		return &pb.ListViewsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{}}, nil
+		return &pb.ListDatasetsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{}}, nil
 	}
 	return m.pages[index], nil
 }
 
-// 列出全部 View 时没有分页信息，或说还有下一页、这一页却是空的：不能断定已经列全，这一轮不摘任何 View。
-func TestForgetDeletedViewsKeepsViewsOnIncompletePages(t *testing.T) {
-	other := &pb.View{SpaceId: "space", ViewId: "other"}
-	cases := map[string][]*pb.ListViewsRsp{
-		"没有分页信息":    {{RetInfo: successRetInfo(), Views: []*pb.View{other}}},
+func (m *pageMetadata) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error) {
+	return &pb.ListDatasetColumnsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{}}, nil
+}
+
+// 列出数据集时没有分页信息，或说还有下一页、这一页却是空的：不能断定已经列全，这一轮不摘任何 View。
+func TestMaintenanceKeepsViewsOnIncompletePages(t *testing.T) {
+	other := &pb.Dataset{SpaceId: "space", DatasetId: "other", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "active", CreatedAt: testCreatedAt}
+	cases := map[string][]*pb.ListDatasetsRsp{
+		"没有分页信息":    {{RetInfo: successRetInfo(), Datasets: []*pb.Dataset{other}}},
 		"有下一页但这页为空": {{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 100, HasMore: true}}},
 		"第二页为空却说还有": {
-			{RetInfo: successRetInfo(), Views: []*pb.View{other}, PageResult: &pb.PageResult{Page: 1, Size: 100, HasMore: true}},
+			{RetInfo: successRetInfo(), Datasets: []*pb.Dataset{other}, PageResult: &pb.PageResult{Page: 1, Size: 100, HasMore: true}},
 			{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 2, Size: 100, HasMore: true}},
 		},
 	}
 	for name, pages := range cases {
 		t.Run(name, func(t *testing.T) {
-			svc, err := New(filepath.Join(t.TempDir(), "views"))
-			if err != nil {
-				t.Fatal(err)
+			svc := newTestService(map[string]viewindex.Engine{"bleve": &queryEngine{stats: builtStats("prices", 1, "hash")}})
+			spec := recordSpec("space", "prices")
+			svc.attachActiveView(testRuntime(svc, spec), spec, builtStats("prices", 1, "hash"))
+			if err := svc.maintainOnce(context.Background(), MaintenanceOptions{Metadata: &pageMetadata{pages: pages}}); err == nil {
+				t.Fatal("分页信息不完整时这一轮应当报错")
 			}
-			svc.engines["bleve"] = &queryEngine{stats: builtStats("prices", 1, "hash")}
-			view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices", Status: "active"}
-			if err := svc.AttachActiveView(context.Background(), view, builtStats("prices", 1, "hash")); err != nil {
-				t.Fatal(err)
-			}
-			svc.forgetDeletedViews(context.Background(), &pageMetadata{pages: pages})
 			if active, _ := svc.activeIndex("space", "prices"); active == "" {
 				t.Fatal("分页信息不完整时不应摘掉 View")
 			}

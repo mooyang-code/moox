@@ -1,5 +1,5 @@
 import { Message, Modal } from "@arco-design/web-vue";
-import { ControlRequestError } from "@/api/admin/http";
+import { RequestError } from "@/api/http";
 import { setInstanceEnabled } from "@/api/strategy";
 
 export const TOGGLE_CANCELED_TIP = "已取消，实例状态未改变";
@@ -90,9 +90,7 @@ export function confirmInstanceRedisable(instanceId: string, hooks: InstanceTogg
 /** 停用请求失败、但响应里的实例已经是停用的：本地停用已落库，只是 Trade 没确认关闭会话。 */
 export function disabledButUnconfirmed(error: unknown): boolean {
   const instance =
-    error instanceof ControlRequestError
-      ? (error.response as { instance?: { enabled?: boolean } } | undefined)?.instance
-      : undefined;
+    error instanceof RequestError ? (error.response as { instance?: { enabled?: boolean } } | undefined)?.instance : undefined;
   return Boolean(instance) && !instance?.enabled;
 }
 

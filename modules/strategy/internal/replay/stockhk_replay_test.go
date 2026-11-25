@@ -17,14 +17,14 @@ type hkClient struct {
 	from, to time.Time
 }
 
-func (c *hkClient) GetView(ctx context.Context, spaceID, viewID string) (input.ViewInfo, error) {
-	view, err := c.fakeClient.GetView(ctx, spaceID, viewID)
+func (c *hkClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+	view, err := c.fakeClient.GetView(ctx, spaceID, datasetID)
 	view.Frequency = "5m"
 	return view, err
 }
 
-func (c *hkClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	view, err := c.GetView(ctx, spaceID, viewID)
+func (c *hkClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
+	view, err := c.GetView(ctx, spaceID, datasetID)
 	return view.Generation, err
 }
 
@@ -67,7 +67,7 @@ func TestReplayRunsOnHKIntradayData(t *testing.T) {
 	end := time.Date(2026, 12, 25, 0, 0, 0, 0, hk)
 	job := store.Replay{
 		ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "hk_stock", SpaceID: "stockhk",
-		Tasks:     map[string]store.ReplayTask{"equity": {FactorTaskID: "ftask_hk_5m", ViewID: "view_factor_a", ViewGeneration: "idx"}},
+		Tasks:     map[string]store.ReplayTask{"equity": {FactorTaskID: "ftask_hk_5m", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}},
 		StartTime: start, EndTime: end, Factors: pinnedFactors(t, replayDSL), CreatedAt: origin,
 	}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {

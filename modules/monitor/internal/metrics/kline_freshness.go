@@ -38,7 +38,6 @@ type KlineFreshnessRule struct {
 	Enabled    bool
 	SpaceID    string
 	DatasetID  string
-	ViewID     string
 	Frequency  string
 	MarketID   string
 	CalendarID string
@@ -83,6 +82,8 @@ type KlineFreshnessEvaluator struct {
 	inventory   *TaskResultInventoryCache
 	policy      report.RealtimeTimeSeriesPolicy
 	firstSeen   SubjectFirstSeenStore
+	// seeding 非空时报告空间是否在首次接入的历史补齐中或刚补齐（见 SetSeeding）。
+	seeding func(spaceID string, now time.Time) bool
 
 	disabledMu     sync.Mutex
 	disabledChecks map[string]struct{}
@@ -151,6 +152,15 @@ func NewKlineFreshnessEvaluatorWithInventory(query *QueryService, inventory *Tas
 	return evaluator
 }
 
+// SetSeeding 设置“空间是否在首次接入的历史补齐中或刚补齐”的判断。补齐写入的历史行在变更日志里排在实时写入前面，
+// 结果视图按变更日志顺序追赶，要几个小时才追平：这段时间里视图落后于已完成的一期是预期的，
+// 只要采集侧已完成的一期本身没有过期就不报（见 completedPeriodFresh）；采集真的停了照样报出。
+func (e *KlineFreshnessEvaluator) SetSeeding(seeding func(spaceID string, now time.Time) bool) {
+	if e != nil {
+		e.seeding = seeding
+	}
+}
+
 func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...time.Time) ([]KlineFreshnessReport, error) {
 	if e == nil || e.query == nil {
 		return nil, ErrMetricsStoreUnavailable
@@ -181,7 +191,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		if !rule.Enabled || rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
 			continue
 		}
-		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, ViewID: rule.ViewID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
+		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
 	}
 	summaries, err := e.loadViewSummaries(ctx, filters, now)
 	if err != nil {
@@ -192,7 +202,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	if inventoryEvaluated {
 		state := e.inventory.State(now)
 		inventoryReport := KlineFreshnessReport{
-			Rule:    KlineFreshnessRule{SpaceID: events.SystemSpaceID, ViewID: "task-result-inventory"},
+			Rule:    KlineFreshnessRule{SpaceID: events.SystemSpaceID, DatasetID: "task-result-inventory"},
 			CheckID: TaskResultInventoryCheckID, Success: true, Reason: "inventory_fresh",
 			Diagnostic: fmt.Sprintf("cache_age_seconds=%.0f", state.Age.Seconds()),
 		}
@@ -250,6 +260,13 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		// 首次出现时间要在读到清单的这一轮就记下，不能等 View 正常之后：View 落后、尚无输出的那几轮也算新对象已经在等了。
 		newSubjects := e.newSubjectDeadlines(ctx, rule, clock, freq, activeSubjects, now)
 		if lag, behind := completedPeriodViewLag(clock, freq, rule, summary.latest, now); behind {
+			if e.seeding != nil && e.seeding(rule.SpaceID, now) && completedPeriodFresh(clock, freq, rule, now) {
+				report.Success, report.Reason = true, KlineReasonSeedingViewCatchingUp
+				report.StaleAge, report.OldestDataTime = lag, laterOf(summary.latest, rule.ViewLastDataTime)
+				report.Diagnostic = formatKlineDiagnostic(report)
+				reports = append(reports, report)
+				continue
+			}
 			report.Success = false
 			report.Reason = "view_behind_latest_completed_period"
 			report.StaleAge = lag
@@ -315,6 +332,34 @@ func completedPeriodViewLag(clock MarketClock, freq frequencypkg.Frequency, rule
 	}
 	overdue, _ := overdueAfter(clock, freq, latestViewTime, completed, now)
 	return overdue, true
+}
+
+// KlineReasonSeedingViewCatchingUp 是历史补齐中或刚补齐、结果视图在追补齐写入的历史行、采集侧没有过期时的结果（按通过记）。
+const KlineReasonSeedingViewCatchingUp = "history_seeding_view_catching_up"
+
+// completedPeriodFresh 判断采集侧已完成的最新一期（来自采集任务清单）在清单观测的时刻有没有过期：
+// 之后应收的第一根从收线起没超过允许迟到。按清单的观测时刻判断，免得清单刷新间隔里新收线的根被当成逾期；清单本身过期另有检查。
+func completedPeriodFresh(clock MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, now time.Time) bool {
+	if rule.LatestCompletedPeriod.IsZero() {
+		return false
+	}
+	at := rule.InventoryObservedAt
+	if at.IsZero() || at.After(now) {
+		at = now
+	}
+	expected, err := clock.LatestClosed(at, freq)
+	if err != nil {
+		return false
+	}
+	overdue, err := overdueAfter(clock, freq, rule.LatestCompletedPeriod, expected, at)
+	return err == nil && overdue <= rule.Lateness
+}
+
+func laterOf(left, right time.Time) time.Time {
+	if right.After(left) {
+		return right
+	}
+	return left
 }
 
 // klineExpectedBar 按规则声明的市场日历算出此刻应已收线的最新一根。
@@ -456,7 +501,7 @@ func subjectProductSuffix(subjectID string) string {
 }
 
 func KlineFreshnessCheckID(rule KlineFreshnessRule) string {
-	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.ViewID), strings.TrimSpace(rule.Frequency))
+	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.DatasetID), strings.TrimSpace(rule.Frequency))
 }
 
 func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, policy report.RealtimeTimeSeriesPolicy) []KlineFreshnessRule {
@@ -488,7 +533,7 @@ func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, poli
 func inventoryRule(entry TaskResultInventoryEntry, enabled bool, policy report.RealtimeTimeSeriesPolicy) KlineFreshnessRule {
 	lateness := max(policy.Lateness(entry.SpaceID, entry.DatasetID, entry.Frequency), time.Duration(entry.AllowedLatenessSeconds)*time.Second)
 	return KlineFreshnessRule{
-		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID, ViewID: entry.ViewID,
+		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID,
 		Frequency: entry.Frequency, MarketID: entry.MarketID, CalendarID: entry.CalendarID,
 		Timezone: entry.Timezone, Sessions: append([]string(nil), entry.Sessions...), Lateness: lateness,
 		ResultStatus: entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
@@ -498,7 +543,7 @@ func inventoryRule(entry TaskResultInventoryEntry, enabled bool, policy report.R
 }
 
 type viewSummaryIdentity struct {
-	SpaceID, ViewID, DatasetID, Frequency string
+	SpaceID, DatasetID, Frequency string
 }
 
 type laggingSubject struct {
@@ -539,7 +584,7 @@ func (s viewSummaries) find(rule KlineFreshnessRule) viewSummary {
 var viewSummaryMetrics = []string{ViewOutputLatestMetric, ViewOutputTrackedSinceMetric, ViewOutputSubjectsMetric, ViewOutputLaggingMetric, ViewOutputLaggingSubjectMetric}
 
 func (e *KlineFreshnessEvaluator) loadViewSummaries(ctx context.Context, filters []ViewMetricScope, now time.Time) (viewSummaries, error) {
-	rowsByMetric := make(map[string][]MetricLatest, len(viewSummaryMetrics))
+	rowsByMetric := make(map[string][]MetricSeries, len(viewSummaryMetrics))
 	for _, name := range viewSummaryMetrics {
 		rows, err := e.query.ListLatestByViewScopes(ctx, name, filters, 0)
 		if err != nil {
@@ -607,11 +652,11 @@ func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIden
 		return viewSummaryIdentity{}, "", err
 	}
 	identity := viewSummaryIdentity{
-		SpaceID: strings.TrimSpace(labels["space_id"]), ViewID: strings.TrimSpace(labels["view_id"]),
+		SpaceID:   strings.TrimSpace(labels["space_id"]),
 		DatasetID: strings.TrimSpace(labels["dataset_id"]), Frequency: strings.TrimSpace(labels["freq"]),
 	}
 	subjectID := strings.TrimSpace(labels["subject_id"])
-	if identity.SpaceID == "" || identity.ViewID == "" || identity.DatasetID == "" || identity.Frequency == "" || (withSubject && subjectID == "") {
+	if identity.SpaceID == "" || identity.DatasetID == "" || identity.Frequency == "" || (withSubject && subjectID == "") {
 		return viewSummaryIdentity{}, "", fmt.Errorf("required view summary label is empty")
 	}
 	return identity, subjectID, nil
@@ -837,8 +882,7 @@ func klineUnixTime(value float64) (time.Time, error) {
 }
 
 func viewRuleMatches(rule KlineFreshnessRule, identity viewSummaryIdentity) bool {
-	return strings.TrimSpace(rule.ViewID) == identity.ViewID && strings.TrimSpace(rule.SpaceID) == identity.SpaceID &&
-		(strings.TrimSpace(rule.DatasetID) == "" || strings.TrimSpace(rule.DatasetID) == identity.DatasetID) &&
+	return strings.TrimSpace(rule.DatasetID) == identity.DatasetID && strings.TrimSpace(rule.SpaceID) == identity.SpaceID &&
 		canonicalRuleFrequency(rule.Frequency) == identity.Frequency
 }
 

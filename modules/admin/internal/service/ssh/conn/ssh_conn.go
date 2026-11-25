@@ -54,8 +54,8 @@ func (s *SSHConn) MarshalJSON() ([]byte, error) {
 		Port           int    `json:"port"`
 		User           string `json:"user"`
 		ClientIP       string `json:"client_ip"`
-		LastActiveTime string `json:"last_active_time"`
-		StartTime      string `json:"start_time"`
+		LastActiveTime int64  `json:"last_active_time"` // Unix 毫秒
+		StartTime      int64  `json:"start_time"`       // Unix 毫秒
 	}{
 		SessionID:      s.SessionID,
 		HostID:         s.Target.HostID,
@@ -63,8 +63,8 @@ func (s *SSHConn) MarshalJSON() ([]byte, error) {
 		Port:           s.Target.Port,
 		User:           s.Target.User,
 		ClientIP:       s.ClientIP,
-		LastActiveTime: s.LastActive().Format("2006-01-02 15:04:05"),
-		StartTime:      s.StartTime.Format("2006-01-02 15:04:05"),
+		LastActiveTime: s.LastActive().UnixMilli(),
+		StartTime:      s.StartTime.UnixMilli(),
 	})
 }
 

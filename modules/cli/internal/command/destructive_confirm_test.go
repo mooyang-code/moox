@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,25 +49,6 @@ func TestSetupFirewallOnlyPreviewsWithoutYes(t *testing.T) {
 	assert.Equal(t, 1, called)
 }
 
-func TestSetupSyncDeploymentsOnlyPreviewsWithoutYes(t *testing.T) {
-	snapshot := testSetupSnapshot(t)
-	previous := openCommandGateway
-	openCommandGateway = func(context.Context, string, *topology.Config) (commandGateway, error) {
-		t.Fatal("预览不能连接网关")
-		return nil, nil
-	}
-	t.Cleanup(func() { openCommandGateway = previous })
-	cmd := newSetupCommand(setupDeps{load: func(string) (*setupSnapshot, error) { return snapshot, nil }})
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"sync-deployments", "--file", "moox.toml", "--host", "control"})
-	require.NoError(t, cmd.Execute())
-	preview := parsePreview(t, out.String())
-	assert.Equal(t, "sync_deployments", preview["action"])
-	assert.Equal(t, "control", preview["host"])
-}
-
 func TestCollectorTaskDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	gateway := &rpcFakeGateway{}
 	useRPCGateway(t, gateway)
@@ -94,10 +74,9 @@ func TestCollectorTaskDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 func TestCollectorResultDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	collectorResultDeleteFlagsValue.SpaceID = "crypto"
 	collectorResultDeleteFlagsValue.DatasetIDs = []string{"d1"}
-	collectorResultDeleteFlagsValue.ViewIDs = []string{"v1"}
 	collectorResultDeleteFlagsValue.Yes = false
 	t.Cleanup(func() {
-		collectorResultDeleteFlagsValue.SpaceID, collectorResultDeleteFlagsValue.DatasetIDs, collectorResultDeleteFlagsValue.ViewIDs = "", nil, nil
+		collectorResultDeleteFlagsValue.SpaceID, collectorResultDeleteFlagsValue.DatasetIDs = "", nil
 	})
 	var out bytes.Buffer
 	collectorResultDeleteCmd.SetOut(&out)
@@ -106,7 +85,6 @@ func TestCollectorResultDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	require.NoError(t, collectorResultDeleteCmd.RunE(collectorResultDeleteCmd, nil))
 	preview := parsePreview(t, out.String())
 	assert.Equal(t, []any{"d1"}, preview["datasets"])
-	assert.Equal(t, []any{"v1"}, preview["views"])
 }
 
 func TestDestructiveCommandsNoLongerHaveLegacyConfirmFlags(t *testing.T) {
@@ -116,8 +94,6 @@ func TestDestructiveCommandsNoLongerHaveLegacyConfirmFlags(t *testing.T) {
 	}{
 		{"collector task delete-result", func(n string) bool { return collectorResultDeleteCmd.Flags().Lookup(n) != nil }},
 		{"collector function delete", func(n string) bool { return collectorFunctionDeleteCmd.Flags().Lookup(n) != nil }},
-		{"firewall add", func(n string) bool { return lighthouseFirewallAddCmd.Flags().Lookup(n) != nil }},
-		{"firewall open", func(n string) bool { return lighthouseFirewallOpenCmd.Flags().Lookup(n) != nil }},
 	} {
 		assert.True(t, cmd.flag("yes"), cmd.name+" 要有 --yes")
 		for _, legacy := range []string{"dry-run", "confirm", "apply"} {

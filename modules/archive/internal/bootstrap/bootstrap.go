@@ -78,7 +78,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err != nil {
 		return nil, fmt.Errorf("open archive lifecycle: %w", err)
 	}
-	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway), service.WithCollector(newGatewayCollector(runtime.gateway)), service.WithLifecycle(life))
+	svc, err := service.New(runtime.store, cfg, newGatewayDatasets(runtime.gateway), service.WithLifecycle(life))
 	if err != nil {
 		return nil, err
 	}
@@ -130,13 +130,9 @@ func registerMetricsReporter(s *server.Server, svc *service.Service, readiness f
 		}
 		return []*metricspb.DelegatedReport{worker}
 	})
-	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "archive")
+	attention, err := report.NewAttention(prometheus.DefaultRegisterer, attentionKinds)
 	if err != nil {
-		return fmt.Errorf("create archive worker presence metric: %w", err)
-	}
-	objectStore, err := report.NewArchiveObjectStore(prometheus.DefaultRegisterer)
-	if err != nil {
-		return fmt.Errorf("create archive object store metric: %w", err)
+		return fmt.Errorf("create archive attention metric: %w", err)
 	}
 	taskHealth, err := report.NewArchiveTaskHealth(prometheus.DefaultRegisterer)
 	if err != nil {
@@ -146,19 +142,18 @@ func registerMetricsReporter(s *server.Server, svc *service.Service, readiness f
 		if state, workerID, last, err := svc.Presence(ctx); err != nil {
 			log.WarnContextf(ctx, "archive worker presence not evaluated: %v", err)
 		} else {
-			presence.Set(state, workerID, last)
+			attention.Set("presence", map[string][]string{attentionWorkerOffline: report.PresenceAttention(state, workerID, last)})
 		}
 		if workerID, state, probeError, ok, err := svc.ObjectStoreState(ctx); err != nil {
 			log.WarnContextf(ctx, "archive object store state not evaluated: %v", err)
-		} else if ok {
-			objectStore.Set(workerID, state, probeError)
 		} else {
-			objectStore.Clear()
+			attention.Set("object_store", map[string][]string{attentionObjectStoreDown: objectStoreAttention(ok, workerID, state, probeError)})
 		}
 		if levels, err := svc.TaskHealthLevels(ctx); err != nil {
 			log.WarnContextf(ctx, "archive task health not evaluated: %v", err)
 		} else {
 			taskHealth.Set(levels)
+			attention.Set("tasks", map[string][]string{attentionTaskFailing: taskAttention(levels)})
 		}
 		return handler.Handle(ctx)
 	})

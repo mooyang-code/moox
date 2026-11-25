@@ -26,7 +26,7 @@ func TestStockHKPlanToFunctionRequests(t *testing.T) {
 	require.Equal(t, "stockhk_http", group.SourceID, "source_id 取自行情源目录的登记")
 	desired, err := fetchplan.BuildDesiredState(hkE2EPlanOptions(), []fetchplan.TaskGroup{group}, nil)
 	require.NoError(t, err)
-	content, _, err := fetchplan.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return hkTime("2026-11-10 09:30:00").Unix(), nil })
+	content, _, _, err := fetchplan.BuildPlanContent(nil, nil, desired, fetchplan.PlanTiming{Now: hkTime("2026-11-10 09:30:00")})
 	require.NoError(t, err)
 	require.Len(t, content.Functions, 4)
 
@@ -36,7 +36,7 @@ func TestStockHKPlanToFunctionRequests(t *testing.T) {
 	var sizes []int
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		plan := content.FinalPlan(function)
+		plan := function.Target
 		require.NotNil(t, plan, name)
 		require.Equal(t, marketfetch.PlanMarket{MarketID: "stockhk", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockhk_http", MarketType: "equity"}, plan.Market, name)
 		require.Equal(t, 5000, plan.Fetch.NotBeforeMS, name)

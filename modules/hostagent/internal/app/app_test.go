@@ -4,19 +4,15 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/collector"
 	"github.com/mooyang-code/moox/modules/hostagent/internal/config"
-	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
-	"github.com/mooyang-code/moox/modules/hostagent/internal/identity"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,24 +22,41 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-func writeEventBusConfig(t *testing.T, dir string) string {
-	t.Helper()
-	path := filepath.Join(dir, "eventbus.yaml")
-	content := "urls:\n  - nats://127.0.0.1:4222\nusername: hostagent\neventbus_token: token\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	return path
+// fakeReporter 记下每次随拉取主机策略带去的快照。
+type fakeReporter struct {
+	mu      sync.Mutex
+	reports []*monitorpb.HostReport
+	err     error
+}
+
+func (f *fakeReporter) report(_ context.Context, report *monitorpb.HostReport) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reports = append(f.reports, report)
+	return f.err
+}
+
+func (f *fakeReporter) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakeReporter) last() *monitorpb.HostReport {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.reports) == 0 {
+		return nil
+	}
+	return f.reports[len(f.reports)-1]
 }
 
 func testAgent(t *testing.T) *Agent {
 	t.Helper()
-	dir := t.TempDir()
 	return &Agent{
-		cfg: &config.Config{
-			IdentityPath:   filepath.Join(dir, "identity.yaml"),
-			EventBusConfig: writeEventBusConfig(t, dir),
-		},
-		id:        identity.File{AgentID: uuid.New().String()},
+		cfg:       &config.Config{HostID: "control"},
 		collector: collector.New(),
+		report:    (&fakeReporter{}).report,
 		hostname:  "test-host",
 		bootID:    "boot-id",
 		version:   "test-version",
@@ -62,31 +75,12 @@ type fakeSnapshotCollector struct {
 	err      error
 }
 
-type fakeEventPublisher struct {
-	metric *hostmetricpb.HostMetric
-	err    error
-	ready  bool
-	closed bool
-	at     time.Time
-}
-
-func (f *fakeEventPublisher) PublishHostMetric(_ context.Context, _ string, metric *hostmetricpb.HostMetric, at time.Time) error {
-	f.metric = metric
-	f.at = at
-	return f.err
-}
-func (f *fakeEventPublisher) Ready() bool { return f.ready }
-func (f *fakeEventPublisher) Close() error {
-	f.closed = true
-	return f.err
-}
-
 func (f fakeSnapshotCollector) Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
 	return f.snapshot, nil, f.err
 }
 
 func TestNew_NilConfig_ShouldReturnError(t *testing.T) {
-	_, err := New(context.Background(), nil, "dev")
+	_, err := New(context.Background(), nil, "dev", (&fakeReporter{}).report)
 	assert.Error(t, err)
 }
 
@@ -99,10 +93,7 @@ func TestNew_UnsupportedPlatform_ShouldReturnError(t *testing.T) {
 	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
 		t.Skip("linux amd64/arm64 supports New")
 	}
-	_, err := New(context.Background(), &config.Config{
-		IdentityPath:   filepath.Join(t.TempDir(), "identity.yaml"),
-		EventBusConfig: writeEventBusConfig(t, t.TempDir()),
-	}, "dev")
+	_, err := New(context.Background(), &config.Config{HostID: "control"}, "dev", (&fakeReporter{}).report)
 	assert.Error(t, err)
 }
 
@@ -111,27 +102,25 @@ func TestAgent_GetStatus_ShouldExposeCountersAndLatest(t *testing.T) {
 	now := time.Now().UTC()
 	a.latest = testSnapshot()
 	a.lastCollect = now
-	a.lastPublish = now
+	a.lastReport = now
 	a.collected.Store(3)
-	a.published.Store(2)
+	a.reported.Store(2)
 	a.dropped.Store(1)
 	a.skipped.Store(4)
-	a.publisher = &fakeEventPublisher{ready: true}
 
 	rsp, err := a.GetStatus(context.Background(), &hostagentpb.GetStatusReq{})
 	require.NoError(t, err)
-	assert.Equal(t, a.id.AgentID, rsp.GetAgentId())
+	assert.Equal(t, a.cfg.HostID, rsp.GetHostId())
 	assert.Equal(t, a.version, rsp.GetVersion())
 	assert.Equal(t, a.hostname, rsp.GetHostname())
 	assert.Equal(t, a.bootID, rsp.GetBootId())
 	assert.Equal(t, uint64(3), rsp.GetCollected())
-	assert.Equal(t, uint64(2), rsp.GetPublished())
+	assert.Equal(t, uint64(2), rsp.GetReported())
 	assert.Equal(t, uint64(1), rsp.GetDropped())
 	assert.Equal(t, uint64(4), rsp.GetSkipped())
-	assert.True(t, rsp.GetEventbusConnected())
 	assert.NotNil(t, rsp.GetLatest())
 	assert.NotEmpty(t, rsp.GetLastCollectAt())
-	assert.NotEmpty(t, rsp.GetLastPublishAt())
+	assert.NotEmpty(t, rsp.GetLastReportAt())
 }
 
 func TestAgent_GetSnapshot_ShouldReturnLatestSnapshot(t *testing.T) {
@@ -143,7 +132,7 @@ func TestAgent_GetSnapshot_ShouldReturnLatestSnapshot(t *testing.T) {
 	rsp, err := a.GetSnapshot(context.Background(), &hostagentpb.GetSnapshotReq{})
 	require.NoError(t, err)
 	assert.NotNil(t, rsp.GetSnapshot())
-	assert.NotEmpty(t, rsp.GetCollectedAt())
+	assert.Equal(t, now.UnixMilli(), rsp.GetCollectedAt())
 }
 
 func TestTruncate_ShouldCapLongStrings(t *testing.T) {
@@ -159,28 +148,19 @@ func TestAgent_RecordError_ShouldPersistTruncatedMessage(t *testing.T) {
 	assert.Len(t, a.lastErr, 512)
 }
 
-func TestAgent_Close_NilPublisher_ShouldNoop(t *testing.T) {
+// 采集失败也照常拉主机策略（不带快照）：主机策略与“控制机或 Monitor 不可达”的判断不能跟着采集一起停。
+func TestAgent_RunOnce_CollectError_StillPullsPolicy(t *testing.T) {
 	a := testAgent(t)
-	require.NoError(t, a.Close())
-}
-
-func TestAgent_Close_WithPublisher_ShouldCloseAndClear(t *testing.T) {
-	publisher := &fakeEventPublisher{}
-	a := testAgent(t)
-	a.publisher = publisher
-	require.NoError(t, a.Close())
-	assert.True(t, publisher.closed)
-	assert.Nil(t, a.publisher)
-}
-
-func TestAgent_RunOnce_CollectError_ShouldIncrementDropped(t *testing.T) {
-	a := testAgent(t)
+	reporter := &fakeReporter{}
+	a.report = reporter.report
 	a.collector = fakeSnapshotCollector{err: errors.New("collect failed")}
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)
-	assert.NotEmpty(t, rsp.GetPublishError())
+	assert.NotEmpty(t, rsp.GetReportError())
 	assert.Equal(t, uint64(1), a.collected.Load())
 	assert.Equal(t, uint64(1), a.dropped.Load())
+	require.Len(t, reporter.reports, 1)
+	assert.Nil(t, reporter.reports[0])
 }
 
 func TestAgent_RunOnceGuarded_ConcurrentCall_ShouldSkip(t *testing.T) {
@@ -188,103 +168,60 @@ func TestAgent_RunOnceGuarded_ConcurrentCall_ShouldSkip(t *testing.T) {
 	a.running.Store(true)
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)
-	assert.Equal(t, "collection already running", rsp.GetPublishError())
+	assert.Equal(t, "collection already running", rsp.GetReportError())
 	assert.Equal(t, uint64(1), a.skipped.Load())
 }
 
-func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
-	snapshot := testSnapshot()
-
+func TestAgent_RunOnce_ReportSuccess_ShouldUpdateCounters(t *testing.T) {
 	a := testAgent(t)
-	a.cfg.HostID = "control"
-	a.collector = fakeSnapshotCollector{snapshot: snapshot}
-	a.publisher = &fakeEventPublisher{ready: true}
+	reporter := &fakeReporter{}
+	a.report = reporter.report
+	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	require.NoError(t, err)
-	assert.True(t, rsp.GetPublished())
-	assert.NotEmpty(t, rsp.GetMessageId())
+	assert.True(t, rsp.GetReported())
+	assert.NotEmpty(t, rsp.GetReportId())
 	assert.NotNil(t, rsp.GetSnapshot())
-	assert.Equal(t, uint64(1), a.published.Load())
+	assert.Equal(t, uint64(1), a.reported.Load())
 	assert.Empty(t, a.lastErr)
-	publisher := a.publisher.(*fakeEventPublisher)
-	require.Equal(t, "control", publisher.metric.GetHostId())
-	require.Equal(t, a.id.AgentID, publisher.metric.GetAgentId())
+	report := reporter.last()
+	require.Equal(t, rsp.GetReportId(), report.GetReportId())
+	require.Equal(t, "control", report.GetMetric().GetHostId())
+	require.Equal(t, "test-host", report.GetMetric().GetHostname())
+	require.Equal(t, a.lastCollect.UnixMilli(), report.GetCollectedAt())
 }
 
-func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {
+func TestAgent_RunOnce_UsesCollectionCompletionAsCollectedAt(t *testing.T) {
 	a := testAgent(t)
+	reporter := &fakeReporter{}
+	a.report = reporter.report
 	var completedAt time.Time
 	a.collector = completionSnapshotCollector{snapshot: testSnapshot(), completedAt: &completedAt}
-	publisher := &fakeEventPublisher{ready: true}
-	a.publisher = publisher
 
 	_, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	require.NoError(t, err)
-	assert.False(t, publisher.at.Before(completedAt), "occurred_at=%s completion=%s", publisher.at, completedAt)
-	assert.Equal(t, publisher.at, a.lastCollect)
+	// 上报的采集时刻是毫秒，比较时把完成时刻也截到毫秒。
+	collectedAt := time.UnixMilli(reporter.last().GetCollectedAt())
+	assert.False(t, collectedAt.Before(completedAt.Truncate(time.Millisecond)), "collected_at=%s completion=%s", collectedAt, completedAt)
 }
 
-func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
+func TestAgent_RunOnce_ReportError_ShouldRecordFailure(t *testing.T) {
 	a := testAgent(t)
+	a.report = (&fakeReporter{err: errors.New("monitor unreachable")}).report
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.publisher = &fakeEventPublisher{ready: true, err: errors.New("publish failed")}
 
 	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
 	assert.Error(t, err)
-	assert.Contains(t, rsp.GetPublishError(), "publish failed")
+	assert.Contains(t, rsp.GetReportError(), "monitor unreachable")
 	assert.Equal(t, uint64(1), a.dropped.Load())
-	assert.Contains(t, a.lastErr, "publish failed")
-}
-
-func TestAgent_EventPublisher_InvalidConfig_ShouldReturnError(t *testing.T) {
-	a := testAgent(t)
-	a.cfg.EventBusConfig = filepath.Join(t.TempDir(), "missing.yaml")
-	_, err := a.eventPublisher(context.Background())
-	assert.Error(t, err)
+	assert.Contains(t, a.lastErr, "monitor unreachable")
 }
 
 func TestAgent_RunOnce_NilAgent_ShouldReturnError(t *testing.T) {
 	var a *Agent
 	_, err := a.runOnce(context.Background())
 	assert.Error(t, err)
-}
-
-func TestAgent_RunOnce_EventBusLoadError_ShouldDrop(t *testing.T) {
-	a := testAgent(t)
-	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
-	a.cfg.EventBusConfig = filepath.Join(t.TempDir(), "missing.yaml")
-
-	rsp, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
-	assert.Error(t, err)
-	assert.NotEmpty(t, rsp.GetPublishError())
-	assert.Equal(t, uint64(1), a.dropped.Load())
-}
-
-func TestAgent_EventPublisher_ReusesExistingPublisher(t *testing.T) {
-	a := testAgent(t)
-	publisher := &fakeEventPublisher{ready: true}
-	a.publisher = publisher
-
-	got, err := a.eventPublisher(context.Background())
-	require.NoError(t, err)
-	assert.Same(t, publisher, got)
-}
-
-func TestAgent_EventPublisher_ReplacesDisconnectedPublisher(t *testing.T) {
-	a := testAgent(t)
-	stale := &fakeEventPublisher{ready: false}
-	replacement := &fakeEventPublisher{ready: true}
-	a.publisher = stale
-	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
-		return replacement, nil
-	}
-
-	got, err := a.eventPublisher(context.Background())
-	require.NoError(t, err)
-	assert.True(t, stale.closed)
-	assert.Same(t, replacement, got)
-	assert.Same(t, replacement, a.publisher)
 }
 
 func TestAgent_RunOnceGuarded_ReleasesRunningFlag(t *testing.T) {
@@ -332,41 +269,11 @@ func TestHostAgentNativeRPCPreservesSnapshot(t *testing.T) {
 		proxy := hostagentpb.NewHostAgentMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithProtocol("trpc"), client.WithNetwork("tcp"), client.WithSerializationType(serialization), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
 		status, err := proxy.GetStatus(t.Context(), &hostagentpb.GetStatusReq{})
 		require.NoError(t, err)
-		require.Equal(t, agent.id.AgentID, status.GetAgentId())
+		require.Equal(t, agent.cfg.HostID, status.GetHostId())
 		require.Equal(t, agent.hostname, status.GetHostname())
 		snapshot, err := proxy.GetSnapshot(t.Context(), &hostagentpb.GetSnapshotReq{})
 		require.NoError(t, err)
-		require.Equal(t, agent.lastCollect.Format(time.RFC3339Nano), snapshot.GetCollectedAt())
+		require.Equal(t, agent.lastCollect.UnixMilli(), snapshot.GetCollectedAt())
 		require.Equal(t, agent.latest.GetCpu().GetLogicalCores(), snapshot.GetSnapshot().GetCpu().GetLogicalCores())
 	}
-}
-
-// EventBus 建连停滞时，健康检查不能被建连锁挡住（否则运行器 2 秒探测超时会重启 HostAgent）。
-func TestAgent_HealthStatusDoesNotWaitForBlockedPublisherConnect(t *testing.T) {
-	a := testAgent(t)
-	entered, release := make(chan struct{}), make(chan struct{})
-	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
-		close(entered)
-		<-release
-		return &fakeEventPublisher{ready: true}, nil
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = a.eventPublisher(context.Background())
-	}()
-	<-entered
-	status := make(chan struct{})
-	go func() {
-		defer close(status)
-		_, _ = a.GetStatus(context.Background(), nil)
-		_ = a.publisherReady()
-	}()
-	select {
-	case <-status:
-	case <-time.After(time.Second):
-		t.Fatal("健康状态读取被建连阻塞")
-	}
-	close(release)
-	<-done
 }

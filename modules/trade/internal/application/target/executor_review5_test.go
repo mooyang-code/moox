@@ -20,10 +20,10 @@ func TestUnreflectedPositionHoldsCollectSoTheRestCanStillBeBought(t *testing.T) 
 	f.now = time.Now().UTC()
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "filled-1", ClientOrderID: "filled-1",
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.002", ReferencePrice: "50000", State: "FILLED", FilledQuantity: "0.002", AveragePrice: "50000",
 		PositionBefore: "0", SubmittedAt: f.now.Add(-time.Minute).UnixMilli(), FinishedAt: f.now.Add(-time.Minute).UnixMilli(),
-		OwnerType: "TARGET", OwnerID: "target-current", LogicalAccountID: "logical-1", RunnerID: "runner-1", Version: 1,
+		OwnerType: "TARGET", OwnerID: "target-current", LogicalAccountID: "logical-1", InstanceID: "runner-1", Version: 1,
 	})
 	ctx := context.Background()
 	executor := newExecutor()
@@ -54,8 +54,8 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 			return err
 		}
 		second := store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-b", Name: "account-b", Exchange: "BINANCE",
-			Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "LIVE", AccountMode: "BINANCE_STANDARD", Environment: "PRODUCTION",
+			SpaceID: "space-1", TradingAccountID: "account-b", Name: "account-b", Exchange: "binance",
+			Markets: []string{"spot", "swap"}, ExecutionMode: "LIVE", AccountMode: "BINANCE_STANDARD", Environment: "PRODUCTION",
 			CredentialSecretID: "secret-2", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED", Ready: true,
 			LeverageSettings: store.LeverageSettings{"*": "5"},
 			Snapshot: store.TradingAccountSnapshot{AvailableFunds: "100000", Balances: []store.AssetBalance{
@@ -73,13 +73,13 @@ func TestRejectedFirstMemberIsNotFundedButOtherMemberStillPlaces(t *testing.T) {
 		}
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child", ClientOrderID: "rejected-child",
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "50000", State: "REJECTED",
 		RejectReason: "not permitted", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		LogicalAccountID: "logical-1", InstanceID: "runner-1",
 	})
 	fakeA := &wallettest.Exchange{Spot: "10", Futures: "100000", Ask: "50000"}
 	fakeB := &wallettest.Exchange{Spot: "100000", Futures: "0", Ask: "50000"}

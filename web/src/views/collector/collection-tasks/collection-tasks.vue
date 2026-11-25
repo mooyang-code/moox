@@ -120,424 +120,17 @@
       </div>
     </a-spin>
 
-    <a-drawer
-      v-model:visible="editorVisible"
-      :title="editorTitle"
-      width="680px"
-      :mask-closable="false"
-      unmount-on-close
-      @close="afterClose"
-    >
-      <a-form ref="formRef" auto-label-width :rules="rules" :model="editor" layout="vertical">
-        <a-alert v-if="editing" type="info" show-icon class="immutable-hint">
-          数据类型、标签范围、结果身份和结果形态不可修改，如需变更请创建新任务。
-        </a-alert>
-        <section class="editor-section">
-          <header class="editor-section__header">
-            <h3>任务信息</h3>
-            <span>用于识别和说明这项采集任务</span>
-          </header>
-          <a-form-item field="task_name" label="任务名称" validate-trigger="blur">
-            <a-input
-              v-model="editor.task_name"
-              placeholder="例如：币安现货 1 小时行情"
-              allow-clear
-              :max-length="80"
-              show-word-limit
-            />
-          </a-form-item>
-          <a-form-item field="description" label="描述">
-            <a-textarea
-              v-model="editor.description"
-              placeholder="补充任务用途、数据范围或负责人信息"
-              :max-length="200"
-              show-word-limit
-              allow-clear
-            />
-          </a-form-item>
-          <a-row v-if="editing" :gutter="16">
-            <a-col :span="12">
-              <a-form-item field="enabled" label="启用状态" required>
-                <a-select v-model="editor.enabled"
-                  ><a-option :value="true">启用</a-option><a-option :value="false">禁用</a-option></a-select
-                >
-              </a-form-item>
-            </a-col>
-            <a-col :span="12">
-              <a-form-item label="任务 ID"><a-input :model-value="editor.task_id" disabled /></a-form-item>
-            </a-col>
-          </a-row>
-          <a-form-item v-if="editing" label="创建人"><a-input :model-value="editor.creator || '-'" disabled /></a-form-item>
-        </section>
+    <TaskEditorDrawer v-model:visible="editorVisible" :request="editorRequest" @saved="getTaskList" />
 
-        <section class="editor-section">
-          <header class="editor-section__header">
-            <h3>执行方式</h3>
-            <span>选择采集方法及其必需参数</span>
-          </header>
-          <div v-if="editing" class="readonly-summary">
-            <div class="readonly-summary__row">
-              <span class="readonly-summary__label">执行任务类型</span>
-              <a-tag color="arcoblue">{{ dataTypeLabel(editor.data_type) }}</a-tag>
-            </div>
-            <div class="readonly-summary__row">
-              <span class="readonly-summary__label">{{
-                taskFieldLabel(editor.data_type === "kline_resample" ? "target_frequency" : "frequency", "频率")
-              }}</span>
-              <span>{{ frequencyValue || "-" }}</span>
-            </div>
-          </div>
-          <template v-else>
-            <a-row :gutter="16">
-              <a-col :span="12">
-                <a-form-item field="data_type" label="执行任务类型" required>
-                  <a-select v-model="editor.data_type" placeholder="请选择执行任务类型" @change="onDataTypeChange">
-                    <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">{{
-                      config.type_name
-                    }}</a-option>
-                  </a-select>
-                </a-form-item>
-              </a-col>
-            </a-row>
-            <a-row :gutter="16">
-              <a-col :span="12">
-                <a-form-item
-                  field="frequency"
-                  :label="
-                    taskFieldLabel(
-                      editor.data_type === 'kline_resample' ? 'target_frequency' : 'frequency',
-                      editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'
-                    )
-                  "
-                  required
-                >
-                  <a-select v-if="frequencyOptions.length" v-model="frequencyValue" placeholder="请选择频率" allow-clear>
-                    <a-option v-for="option in frequencyOptions" :key="option.value" :value="option.value">{{
-                      option.label
-                    }}</a-option>
-                  </a-select>
-                  <a-input
-                    v-else
-                    v-model="frequencyValue"
-                    :placeholder="editor.data_type === 'kline_resample' ? '例如 45m、2h、1d' : '例如 1m、5m、1h'"
-                    allow-clear
-                  />
-                  <span v-if="editor.data_type === 'kline_resample' && frequencyHints.length" class="field-hint">
-                    可选：
-                    <a-tag
-                      v-for="item in frequencyHints"
-                      :key="item"
-                      size="small"
-                      class="frequency-hint-tag"
-                      :color="normalizedTargetFrequency === item ? 'arcoblue' : undefined"
-                      @click="frequencyValue = item"
-                    >
-                      {{ item }}
-                    </a-tag>
-                  </span>
-                </a-form-item>
-              </a-col>
-            </a-row>
-          </template>
-        </section>
-
-        <section class="editor-section">
-          <header class="editor-section__header">
-            <h3>采集范围</h3>
-            <span>确定本任务要处理的标的或源数据</span>
-          </header>
-          <template v-if="editor.data_type === 'kline'">
-            <div v-if="editing" class="readonly-summary">
-              <div class="readonly-summary__row">
-                <span class="readonly-summary__label">采集标的</span>
-                <a-tag v-for="tag in editorSubjectTags" :key="tag.tag_id">
-                  {{ tag.tag_name || tag.tag_id }}
-                </a-tag>
-                <span v-if="!editorSubjectTags.length">-</span>
-              </div>
-              <span class="field-hint">Provider 和市场由标签固定绑定；已有任务不能增减另一个市场的标签，需要时请新建任务。</span>
-            </div>
-            <a-form-item v-else label="采集标的" required>
-              <a-select
-                v-model="subjectTagIds"
-                placeholder="请选择一个或多个标签"
-                :loading="loadingTags"
-                allow-search
-                allow-clear
-                multiple
-              >
-                <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
-                  {{ tag.tag_name }}（{{ tagSource(tag) || "-" }} / {{ tagMarketType(tag) || "-" }}）
-                </a-option>
-              </a-select>
-              <span class="field-hint"
-                >同一任务的标签必须来自同一来源；同时选现货、永续两个市场的标签时，可以合并成一个统一数据集。</span
-              >
-            </a-form-item>
-            <a-form-item v-if="!editing && crossMarketSelected" label="组织方式">
-              <a-radio-group v-model="organization">
-                <a-radio value="unified">合并为一个数据集</a-radio>
-                <a-radio value="split">按市场拆成两个任务</a-radio>
-              </a-radio-group>
-              <span class="field-hint"
-                >合并后现货、永续放在同一个数据集里，只要一个计算任务和一个
-                View；两个市场共用采集周期，一个市场延迟会拖慢另一个。只用一个市场的策略建议按市场拆成两个任务。</span
-              >
-            </a-form-item>
-          </template>
-          <a-alert v-else-if="editor.data_type !== 'kline_resample'" type="info" show-icon
-            >当前执行任务类型没有标的范围，此项留空。</a-alert
-          >
-          <a-form-item v-if="!editing && editor.data_type === 'kline'" label="采集方式">
-            <a-select v-model="ingest" placeholder="按市场默认">
-              <a-option value="">按市场默认</a-option>
-              <a-option v-for="option in INGEST_OPTIONS" :key="option.value" :value="option.value" :title="option.hint">{{
-                option.label
-              }}</a-option>
-            </a-select>
-            <span class="field-hint"
-              >推送由 collector-stream 接收交易所推送；云函数拉取由云函数定时取数；本地拉取由 collector-stream
-              定时取数。建好以后用命令行 collector ingest-mode set 切换。</span
-            >
-          </a-form-item>
-
-          <template v-if="editor.data_type === 'kline_resample'">
-            <div v-if="editing" class="readonly-summary">
-              <div class="readonly-summary__row">
-                <span class="readonly-summary__label">源采集任务</span>
-                <span>{{ editingSourceTaskName }}</span>
-              </div>
-            </div>
-            <a-form-item v-else label="源采集任务" required>
-              <a-select v-model="sourceTaskId" placeholder="选择要合成的源采集任务" allow-search :loading="loadingSourceTasks">
-                <a-option
-                  v-for="option in sourceTaskOptions"
-                  :key="option.task_id"
-                  :value="option.task_id"
-                  :disabled="Boolean(option.reason)"
-                >
-                  {{ option.label }}<span v-if="option.reason" class="field-hint">（{{ option.reason }}）</span>
-                </a-option>
-              </a-select>
-              <span class="field-hint"
-                >合成的源是已有的采集任务（或另一个合成任务）；源周期和序列标签由系统带出，不需要手填。</span
-              >
-            </a-form-item>
-            <a-descriptions v-if="resamplePreview" :column="2" size="small" bordered class="resample-source-info">
-              <a-descriptions-item label="源数据集">{{ resamplePreview.source_dataset_id || "-" }}</a-descriptions-item>
-              <a-descriptions-item label="源周期">{{ resamplePreview.source_frequency || "-" }}</a-descriptions-item>
-              <a-descriptions-item label="序列标签">{{
-                resamplePreview.source_series_tags?.join("、") || resamplePreview.source_series_tag || "-"
-              }}</a-descriptions-item>
-              <a-descriptions-item label="采集标的"
-                >继承源任务，共 {{ resamplePreview.subject_count ?? 0 }} 个标的</a-descriptions-item
-              >
-              <a-descriptions-item v-if="resamplePreview.alignment" label="分桶方式" :span="2">
-                {{ resamplePreview.alignment === "session" ? "按交易时段从开盘起切分" : "按 UTC 固定网格切分" }}
-              </a-descriptions-item>
-            </a-descriptions>
-            <a-alert v-if="resampleError" type="error" show-icon class="resample-error">{{ resampleError }}</a-alert>
-          </template>
-        </section>
-
-        <section class="editor-section editor-section--output">
-          <header class="editor-section__header">
-            <h3>输出字段</h3>
-            <span>选择任务结果要保存的字段</span>
-          </header>
-          <div class="output-selection-summary">
-            <a-button type="outline" @click="openOutputFieldPicker">管理输出字段</a-button>
-            <strong>{{ selectedOutputFields.length }} 个字段</strong>
-          </div>
-          <div v-if="selectedOutputFieldLabels.length" class="selected-output-tags">
-            <a-tag v-for="field in selectedOutputFieldLabels.slice(0, 6)" :key="field.id" color="arcoblue" :title="field.id">
-              {{ field.name }}
-            </a-tag>
-            <span v-if="selectedOutputFieldLabels.length > 6" class="field-hint"
-              >另有 {{ selectedOutputFieldLabels.length - 6 }} 个</span
-            >
-          </div>
-          <span v-else class="field-hint">未选择时使用采集方法的默认输出字段。</span>
-          <span v-if="editing" class="field-hint">输出字段只能减少，要新增请新建任务。</span>
-        </section>
-
-        <a-collapse v-if="!editing" :default-active-key="[]">
-          <a-collapse-item key="advanced" header="高级设置">
-            <a-form-item label="结果描述">
-              <a-textarea v-model="resultConfig.description" :max-length="200" show-word-limit allow-clear />
-            </a-form-item>
-          </a-collapse-item>
-        </a-collapse>
-      </a-form>
-      <template #footer>
-        <a-space>
-          <a-button @click="editorVisible = false">取消</a-button>
-          <a-button type="primary" :loading="submitLoading" @click="saveEditor">保存任务</a-button>
-        </a-space>
-      </template>
-    </a-drawer>
-
-    <a-drawer
-      v-model:visible="outputFieldsVisible"
-      title="选择输出字段"
-      width="720px"
-      :mask-closable="false"
-      unmount-on-close
-      @close="cancelOutputFieldSelection"
-    >
-      <a-alert type="info" show-icon>
-        {{
-          editing
-            ? "输出字段只能减少，要新增请新建任务。"
-            : "按分组列出可选的输出字段；复权因子、资金费率等附加字段只在所选标签和频率支持时出现，默认不勾。"
-        }}
-      </a-alert>
-      <a-alert v-if="outputFieldLoadError" class="output-field-error" type="error" show-icon>
-        字段目录加载失败 <a-link @click="loadOutputFieldCatalog(true)">重试</a-link>
-      </a-alert>
-      <a-spin :loading="loadingOutputFields" class="output-field-picker-spin">
-        <div class="output-field-toolbar">
-          <a-input v-model="outputFieldKeyword" allow-clear placeholder="搜索字段名称、ID 或描述" />
-          <span>{{ outputFieldDraft.length }} 个已选择</span>
-        </div>
-        <div class="output-field-sections">
-          <section v-for="section in visibleOutputFieldSections" :key="section.id" class="output-field-section">
-            <header class="output-field-section__header">
-              <div>
-                <strong>{{ section.name }}</strong
-                ><span>{{ section.fields.length }} 个字段</span>
-              </div>
-              <a-button
-                v-if="selectableSectionFields(section.fields).length"
-                size="mini"
-                type="text"
-                @click="toggleOutputFieldSection(section.fields)"
-              >
-                {{
-                  sectionAllSelected(section.fields)
-                    ? outputFieldKeyword
-                      ? "取消匹配项"
-                      : "取消本组"
-                    : outputFieldKeyword
-                      ? "选择匹配项"
-                      : "选择本组"
-                }}
-              </a-button>
-            </header>
-            <div class="output-field-grid">
-              <label
-                v-for="field in section.fields"
-                :key="field.field_id"
-                class="output-field-option"
-                :title="field.description || field.field_id"
-              >
-                <a-checkbox
-                  :model-value="outputFieldDraft.includes(field.field_id)"
-                  :disabled="!canSelectOutputField(field.field_id)"
-                  @change="setOutputField(field.field_id, $event)"
-                />
-                <span class="output-field-option__text"
-                  ><strong>{{ field.name }}</strong
-                  ><code>{{ field.field_id }}</code></span
-                >
-              </label>
-            </div>
-          </section>
-          <a-empty
-            v-if="!loadingOutputFields && !visibleOutputFieldSections.length"
-            :description="outputFieldKeyword ? '没有匹配的字段' : '当前空间暂无启用字段'"
-          />
-        </div>
-      </a-spin>
-      <template #footer>
-        <a-space>
-          <a-button @click="outputFieldsVisible = false">取消</a-button>
-          <a-button type="primary" @click="confirmOutputFieldSelection">确认选择</a-button>
-        </a-space>
-      </template>
-    </a-drawer>
-
-    <a-drawer
+    <TaskDetailDrawer
       v-model:visible="detailVisible"
-      title="任务详情"
-      width="640px"
-      :footer="false"
-      unmount-on-close
+      :task="detailData"
       @cancel="onDetailCancel"
-    >
-      <template v-if="detailData">
-        <section class="detail-section">
-          <h4 class="detail-section__title">基本信息</h4>
-          <a-descriptions :column="2" bordered>
-            <a-descriptions-item label="任务名称">{{ detailData.task_name || "-" }}</a-descriptions-item>
-            <a-descriptions-item label="任务 ID">{{ detailData.task_id }}</a-descriptions-item>
-            <a-descriptions-item label="数据类型">{{ dataTypeLabel(detailData.data_type) }}</a-descriptions-item>
-            <a-descriptions-item label="启用状态">
-              <a-tag size="small" :color="detailData.enabled ? 'green' : 'orange'">
-                {{ detailData.enabled ? "启用" : "禁用" }}
-              </a-tag>
-            </a-descriptions-item>
-            <a-descriptions-item label="创建人">{{ detailData.creator || "-" }}</a-descriptions-item>
-            <a-descriptions-item label="创建时间">{{ formatDateTime(detailData.create_time) }}</a-descriptions-item>
-          </a-descriptions>
-        </section>
-        <section class="detail-section">
-          <h4 class="detail-section__title">执行方式</h4>
-          <a-descriptions :column="2" bordered>
-            <a-descriptions-item label="频率">{{ taskFrequency(detailData) }}</a-descriptions-item>
-            <a-descriptions-item label="来源 / 市场">{{ taskRouteSummary(detailData) }}</a-descriptions-item>
-            <a-descriptions-item v-if="detailData.data_type === 'kline'" label="采集方式" :span="2">{{
-              ingestLabel(detailData.ingest)
-            }}</a-descriptions-item>
-            <a-descriptions-item label="数据范围标签" :span="2">{{ taskTagSummary(detailData) }}</a-descriptions-item>
-          </a-descriptions>
-          <a-descriptions v-if="detailData.data_type === 'kline_resample'" :column="2" bordered class="detail-resample-info">
-            <a-descriptions-item label="源任务">{{ resampleSourceSummary(detailData) }}</a-descriptions-item>
-            <a-descriptions-item label="源周期 / 序列标签">
-              {{ stringParam(detailData, "source_frequency") || "-" }} / {{ resampleSeriesTags(detailData) || "-" }}
-            </a-descriptions-item>
-          </a-descriptions>
-          <div v-if="detailDependents.length" class="detail-dependents">
-            <span class="field-hint">依赖它的合成任务：</span>
-            <a-link v-for="item in detailDependents" :key="item.task_id" @click="locateTask(item)">
-              {{ item.task_name || item.task_id }}（{{ taskFrequency(item) }}）
-            </a-link>
-          </div>
-        </section>
-        <section class="detail-section">
-          <h4 class="detail-section__title">输出字段</h4>
-          <div v-if="detailOutputFieldLabels.length" class="selected-output-tags detail-output-tags">
-            <a-tag v-for="field in detailOutputFieldLabels" :key="field.id" color="arcoblue" :title="field.id">
-              {{ field.name }}
-            </a-tag>
-          </div>
-          <span v-else class="field-hint">未选择时使用采集方法的默认输出字段。</span>
-        </section>
-        <section class="detail-section">
-          <h4 class="detail-section__title">运行信息</h4>
-          <a-descriptions :column="2" bordered>
-            <a-descriptions-item label="结果状态">
-              <a-tag size="small" :color="resultStatusColor(detailData)">{{ resultStatusLabel(detailData) }}</a-tag>
-            </a-descriptions-item>
-            <a-descriptions-item label="最近数据时间">{{
-              formatDateTime(detailData.result?.last_data_time)
-            }}</a-descriptions-item>
-            <a-descriptions-item label="归档">
-              <ArchiveCoverageText :dataset-id="detailData.result?.dataset_id" />
-            </a-descriptions-item>
-            <a-descriptions-item label="任务描述" :span="2">{{ detailData.description || "-" }}</a-descriptions-item>
-            <a-descriptions-item v-if="detailData.last_error" label="准备信息" :span="2">
-              {{ detailData.last_error }}
-            </a-descriptions-item>
-          </a-descriptions>
-        </section>
-        <a-space class="detail-actions">
-          <a-button type="primary" @click="openResultsFromDetail(detailData)">采集结果</a-button>
-          <a-button @click="editFromDetail(detailData)">修改</a-button>
-          <a-button v-if="detailData.data_type === 'kline_resample'" @click="jobsFromDetail(detailData)">历史合成</a-button>
-        </a-space>
-      </template>
-    </a-drawer>
+      @results="openResultsFromDetail"
+      @edit="editFromDetail"
+      @jobs="jobsFromDetail"
+      @locate="locateTask"
+    />
 
     <a-modal
       v-model:visible="deleteVisible"
@@ -557,7 +150,7 @@
       </p>
       <a-radio-group v-model="deleteResultData" direction="vertical" class="delete-options">
         <a-radio :value="false">删除任务，保留结果数据</a-radio>
-        <a-radio :value="true">删除任务并物理删除结果数据和数据视图</a-radio>
+        <a-radio :value="true">删除任务并物理删除结果数据</a-radio>
       </a-radio-group>
     </a-modal>
 
@@ -573,97 +166,36 @@
 </template>
 
 <script setup lang="ts">
+import { RequestError, reportError } from "@/api/http";
 import { buildResultsQuery } from "@/views/collector/task-results/task-results-model";
 import ArchiveCoverageText from "@/views/archive/shared/archive-coverage-text.vue";
-import { useDisplayZone } from "@/hooks/useDisplayZone";
-import { formatInstant } from "@/utils/time-zone";
-import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onActivated, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
+import { DeleteTask, DisableTask, GetTaskDetail, GetTaskList, UpdateTask } from "@/api/collector";
 import {
-  CreateTask,
-  DeleteTask,
-  DisableTask,
-  GetDataTypeConfigs,
-  GetDataTypeConfigWithFields,
-  GetTaskDetail,
-  GetTaskList,
-  UpdateTask,
-  previewKlineResampleSource,
-  type DataTypeConfig,
-  type ExtraFieldOption,
-  type ResampleSourcePreview
-} from "@/api/collector";
-import { getDataset, getView, listFieldGroups, listFields, listTags } from "@/api/storage/metadata";
-import type { Field, FieldGroup, Tag } from "@/api/storage/types";
-import { tagMarketType, tagSource } from "@/views/data/shared/catalog-attributes";
-import { useSpaceStore } from "@/store/modules/space";
-import { useUserInfoStore } from "@/store/modules/user-info";
-import { storeToRefs } from "pinia";
-import {
-  buildCollectionTaskParams,
-  buildCollectionTaskPayload,
-  INGEST_OPTIONS,
   ingestLabel,
-  collectionTaskResultLabel,
-  collectionTaskNameError,
-  isCrossMarketSelection,
-  availableExtraFieldIds,
-  extraFieldOptionsPresent,
-  outputFieldSelectable,
-  outputFieldVisible,
-  pruneUnavailableFields,
-  shouldDropUnavailableFields,
   normalizeCollectionTask,
-  parseCollectionTaskInput,
-  planTaskGroups,
-  splitTaskName,
   taskFrequency,
-  taskTagSelectionError,
-  type CollectionTaskDataType,
-  type CollectionTaskInput,
-  type CollectionTaskMarket,
   type CollectionTaskRecord,
-  type TaskOrganization,
-  type TaskTagRoute
+  type TaskEditorRequest
 } from "./collection-task-params";
+import { provideCollectionCatalog } from "./use-collection-catalog";
 import ResampleJobsDrawer from "./resample-jobs-drawer.vue";
-import { sourceCandidateReason } from "./resample-jobs";
-import { frequencyMinutes, normalizeFrequency } from "@/utils/frequency";
-import { groupPath } from "@/views/data/fields/field-workbench";
+import TaskEditorDrawer from "./task-editor-drawer.vue";
+import TaskDetailDrawer from "./task-detail-drawer.vue";
 
 type EnabledFilter = "" | "true" | "false";
-type EditorMode = "create" | "edit";
-type EditorForm = {
-  task_id: string;
-  task_name: string;
-  description: string;
-  space_id: string;
-  data_type: CollectionTaskDataType | "";
-  provider: string;
-  market_type: CollectionTaskMarket;
-  enabled: boolean;
-  creator: string;
-};
 
-// 页面时间按当前空间登记的时区显示
-const displayZone = useDisplayZone();
+const catalog = provideCollectionCatalog();
+const { selectedSpaceId, availableDataTypeConfigs } = catalog;
+const { dataTypeLabel, taskTagSummary, taskRouteSummary, resampleSourceSummary } = catalog;
+
 const loading = ref(false);
-const submitLoading = ref(false);
-const loadingSourceTasks = ref(false);
-const loadingTags = ref(false);
 const taskList = ref<CollectionTaskRecord[]>([]);
-const dataTypeConfigs = ref<DataTypeConfig[]>([]);
-const sourceTasks = ref<CollectionTaskRecord[]>([]);
-const sourceTaskId = ref("");
-const resamplePreview = ref<ResampleSourcePreview | null>(null);
-const resampleError = ref("");
-const tags = ref<Tag[]>([]);
-const taskTypeFields = ref<import("@/api/collector").DataTypeFieldConfig[]>([]);
+// 列表页持有编辑、详情两个抽屉的显示状态：从详情切到修改时由这里关一个开一个。
 const editorVisible = ref(false);
-const editorMode = ref<EditorMode>("create");
-const formRef = ref<{ validate?: () => Promise<unknown>; clearValidate?: () => void }>();
+const editorRequest = ref<TaskEditorRequest>();
 const detailVisible = ref(false);
 const detailData = ref<CollectionTaskRecord>();
 const deleteVisible = ref(false);
@@ -672,96 +204,6 @@ const deleteResultData = ref(false);
 const deleteTarget = ref<CollectionTaskRecord>();
 const jobsVisible = ref(false);
 const jobsTarget = ref<{ taskId: string; taskName: string; targetFrequency: string }>();
-
-const frequencyValue = ref("");
-const subjectTagIds = ref<string[]>([]);
-// 选了现货、永续两个市场的标签时，创建任务的组织方式：合并成一个统一数据集，或按市场拆成两个任务。
-const organization = ref<TaskOrganization>("unified");
-// 新建 K 线任务的采集方式；空表示按市场默认。
-const ingest = ref("");
-const selectedOutputFields = ref<string[]>([]);
-const outputFieldDraft = ref<string[]>([]);
-// 编辑已有任务时任务原来的输出字段：输出字段只能减少，不在这里面的不能勾。
-const originalOutputFields = ref<string[]>([]);
-// 接口给出的附加字段清单（随执行任务类型读取）；读到之前不能判断已选的附加字段是否还可选。
-const extraFieldOptions = ref<ExtraFieldOption[]>([]);
-const extraFieldOptionsLoaded = ref(false);
-const outputFieldsVisible = ref(false);
-const outputFieldCatalog = ref<Field[]>([]);
-const outputFieldGroups = ref<FieldGroup[]>([]);
-const outputFieldKeyword = ref("");
-const loadingOutputFields = ref(false);
-const outputFieldLoadError = ref(false);
-const outputCatalogSpaceID = ref("");
-let outputCatalogRequestToken = 0;
-let tagListRequestToken = 0;
-let taskTypeFieldRequestToken = 0;
-const outputFieldSections = computed(() => {
-  const grouped = new Map<string, Field[]>();
-  for (const field of outputFieldCatalog.value) {
-    if (!outputFieldVisible(field.field_id, availableExtraFields.value)) continue;
-    const groupID = field.group_id || "";
-    const list = grouped.get(groupID) || [];
-    list.push(field);
-    grouped.set(groupID, list);
-  }
-  const allGroupIDs = new Set(outputFieldGroups.value.map(group => group.group_id));
-  const activeGroups = outputFieldGroups.value.filter(group => group.status === "active");
-  const sections = activeGroups
-    .filter(group => grouped.has(group.group_id))
-    .map(group => ({
-      id: group.group_id,
-      name: groupPath(outputFieldGroups.value, group.group_id),
-      fields: grouped.get(group.group_id) || []
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
-  const knownGroups = allGroupIDs;
-  for (const [groupID, fields] of grouped) {
-    if (groupID && !knownGroups.has(groupID)) sections.push({ id: groupID, name: groupID, fields });
-  }
-  const ungrouped = grouped.get("") || [];
-  if (ungrouped.length) sections.push({ id: "ungrouped", name: "未分组字段", fields: ungrouped });
-  return sections;
-});
-const visibleOutputFieldSections = computed(() => {
-  const keyword = outputFieldKeyword.value.trim().toLocaleLowerCase();
-  if (!keyword) return outputFieldSections.value;
-  return outputFieldSections.value
-    .map(section => ({
-      ...section,
-      fields: section.fields.filter(field =>
-        `${field.name} ${field.field_id} ${field.description || ""}`.toLocaleLowerCase().includes(keyword)
-      )
-    }))
-    .filter(section => section.fields.length > 0);
-});
-const selectedOutputFieldLabels = computed(() =>
-  selectedOutputFields.value.map(id => {
-    const field = outputFieldCatalog.value.find(item => item.field_id === id);
-    return { id, name: field?.name || id };
-  })
-);
-const editorSubjectTags = computed(() => tags.value.filter(tag => subjectTagIds.value.includes(tag.tag_id)));
-const selectedTagRoutes = computed<TaskTagRoute[]>(() =>
-  editorSubjectTags.value.map(tag => ({ tag_id: tag.tag_id, source: tagSource(tag), market: tagMarketType(tag) }))
-);
-const crossMarketSelected = computed(() => isCrossMarketSelection(selectedTagRoutes.value));
-// 编辑态合成任务的源任务只读展示：从源任务清单里找名字，找不到时退回任务 ID。
-const editingSourceTaskName = computed(() => {
-  const source = sourceTasks.value.find(task => task.task_id === sourceTaskId.value);
-  return source ? source.task_name || source.task_id : sourceTaskId.value || "-";
-});
-const detailOutputFieldLabels = computed(() => {
-  if (!detailData.value) return [];
-  const outputFields = parseCollectionTaskInput(detailData.value).outputFields || [];
-  return outputFields.map(id => {
-    const field = outputFieldCatalog.value.find(item => item.field_id === id);
-    return { id, name: field?.name || id };
-  });
-});
-const resultConfig = reactive({
-  description: ""
-});
 
 const queryText = (value: unknown) => (typeof value === "string" ? value : "");
 function normalizeEnabledFilter(value: unknown): EnabledFilter {
@@ -781,54 +223,11 @@ const filters = reactive<{
   enabled: normalizeEnabledFilter(route.query.enabled)
 });
 
-const editor = reactive<EditorForm>({
-  task_id: "",
-  task_name: "",
-  description: "",
-  space_id: "",
-  data_type: "",
-  provider: "",
-  market_type: "spot",
-  enabled: true,
-  creator: ""
-});
-
 const pagination = reactive({
   current: Math.max(1, Number.parseInt(queryText(route.query.page), 10) || 1),
   pageSize: 10,
   total: 0
 });
-
-// 附加字段（资金费率、复权因子等）由接口给出适用的市场、品种和频率，默认不勾；这里算出当前条件下可选的那些。
-const availableExtraFields = computed(() =>
-  availableExtraFieldIds({
-    dataType: editor.data_type,
-    spaceId: editor.space_id,
-    frequency: frequencyValue.value,
-    routes: selectedTagRoutes.value,
-    options: extraFieldOptions.value
-  })
-);
-// 条件不再满足时去掉已选的附加字段。编辑已有任务时标签或附加字段清单可能还没读到，这时不动，避免误删。
-const dropUnavailableFields = computed(() =>
-  shouldDropUnavailableFields(editorMode.value === "edit", selectedTagRoutes.value.length, extraFieldOptionsLoaded.value)
-);
-// 同时监听已选字段：打开任务时判断值可能没变，已选字段换了也要按同一判断清理。
-watch(
-  [dropUnavailableFields, availableExtraFields, selectedOutputFields, outputFieldDraft],
-  ([drop, available]) => {
-    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop);
-    if (selected !== selectedOutputFields.value) selectedOutputFields.value = selected;
-    const draft = pruneUnavailableFields(outputFieldDraft.value, available, drop);
-    if (draft !== outputFieldDraft.value) outputFieldDraft.value = draft;
-  },
-  { immediate: true }
-);
-
-const spaceStore = useSpaceStore();
-const { selectedSpaceId } = storeToRefs(spaceStore);
-const userInfoStore = useUserInfoStore();
-const { account } = storeToRefs(userInfoStore);
 
 // 行内启停的确认与执行状态：菜单项点击先确认，请求期间锁定该行操作。
 const togglingTaskId = ref("");
@@ -930,49 +329,6 @@ onDeactivated(() => {
   pageActive = false;
 });
 
-const editorTitle = computed(() => (editorMode.value === "create" ? "新建采集任务" : "修改采集任务"));
-const editing = computed(() => editorMode.value === "edit");
-const editingRecord = ref<CollectionTaskRecord | null>(null);
-const availableDataTypeConfigs = computed(() =>
-  dataTypeConfigs.value.filter(config => !["instrument", "symbol"].includes(config.data_type))
-);
-const normalizedTargetFrequency = computed(() => normalizeFrequency(frequencyValue.value));
-// 候选源任务：同空间已启用的采集任务与合成任务（合成任务可以再作为源逐级合成）；填了目标频率后，不能合成它的置灰并说明原因。
-const sourceTaskOptions = computed(() =>
-  sourceTasks.value
-    .filter(task => task.enabled && task.task_id !== editor.task_id)
-    .map(task => ({
-      task_id: task.task_id,
-      label: `${task.task_name || task.task_id} · ${taskFrequency(task)} · ${taskRouteSummary(task)}`,
-      reason: sourceCandidateReason(taskFrequency(task), normalizedTargetFrequency.value)
-    }))
-);
-// 预览给出的该市场可选目标周期：只列比源周期长的。
-const frequencyHints = computed(() => {
-  const source = frequencyMinutes(resamplePreview.value?.source_frequency || "");
-  return (resamplePreview.value?.allowed_frequencies || []).filter(item => frequencyMinutes(item) > source);
-});
-// 要删除的任务被哪些合成任务当作源：删除确认里列出来
-const deleteDependents = computed(() =>
-  deleteTarget.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === deleteTarget.value?.task_id) : []
-);
-const detailDependents = computed(() =>
-  detailData.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === detailData.value?.task_id) : []
-);
-const frequencyOptions = computed(() => {
-  const field = taskTypeFields.value.find(item => item.field_key === "frequency");
-  const configuredOptions = field?.field_options?.options;
-  if (!Array.isArray(configuredOptions)) return [];
-  return configuredOptions
-    .map(value => (typeof value === "string" ? { value, label: value } : (value as { value?: unknown; label?: unknown })))
-    .filter(option => option.value !== undefined && option.value !== null)
-    .map(option => ({ value: String(option.value), label: String(option.label || option.value) }));
-});
-
-function taskFieldLabel(key: string, fallback: string): string {
-  return taskTypeFields.value.find(field => field.field_key === key)?.field_name || fallback;
-}
-
 const paginationConfig = computed(() => ({
   current: pagination.current,
   pageSize: pagination.pageSize,
@@ -981,407 +337,26 @@ const paginationConfig = computed(() => ({
   showPageSize: true
 }));
 
-const rules = {
-  task_name: [{ required: true, message: "请输入任务名称" }],
-  data_type: [{ required: true, message: "请选择数据类型" }],
-  enabled: [{ required: true, message: "请选择启用状态" }]
-};
-
-function dataTypeLabel(value?: string) {
-  return dataTypeConfigs.value.find(config => config.data_type === value)?.type_name || value || "-";
-}
-
-function tagsForTask(task: CollectionTaskRecord): Tag[] {
-  const ids = new Set(task.tag_ids || []);
-  return tags.value.filter(tag => ids.has(tag.tag_id));
-}
-
-function taskTagSummary(task: CollectionTaskRecord): string {
-  const matched = tagsForTask(task);
-  if (matched.length) return matched.map(tag => tag.tag_name || tag.tag_id).join("、");
-  return (task.tag_ids || []).join("、") || "-";
-}
-
-function taskRouteSummary(task: CollectionTaskRecord): string {
-  const routes = [...new Set(tagsForTask(task).map(tag => `${tagSource(tag) || "-"} / ${tagMarketType(tag) || "-"}`))];
-  if (routes.length) return routes.join("；");
-  if (task.data_type === "kline_resample") {
-    const input = parseCollectionTaskInput(task);
-    if (input.provider || input.market) return `${input.provider || "-"} / ${input.market || "-"}`;
-  }
-  return "-";
-}
-
-/** 采集任务属于空间：时间按空间时区带后缀。 */
-function formatDateTime(value?: string) {
-  return formatInstant(value, displayZone.value);
-}
-
-function resultStatusLabel(task: CollectionTaskRecord) {
-  return collectionTaskResultLabel(task);
-}
-
-function resultStatusColor(task: CollectionTaskRecord) {
-  const label = resultStatusLabel(task);
-  return label === "结果可用" ? "green" : label === "结果异常" ? "red" : "orange";
-}
-
 function selectEnabledFilter(): boolean | undefined {
   if (filters.enabled === "true") return true;
   if (filters.enabled === "false") return false;
   return undefined;
 }
 
-function resetEditor() {
-  editor.task_id = "";
-  editor.task_name = "";
-  editor.description = "";
-  editor.space_id = selectedSpaceId.value || "";
-  editor.data_type = "";
-  editor.provider = "";
-  editor.market_type = "spot";
-  editor.enabled = true;
-  editor.creator = account.value?.user?.userName || "";
-  frequencyValue.value = "";
-  subjectTagIds.value = [];
-  organization.value = "unified";
-  ingest.value = "";
-  sourceTaskId.value = "";
-  resamplePreview.value = null;
-  resampleError.value = "";
-  selectedOutputFields.value = [];
-  originalOutputFields.value = [];
-  taskTypeFields.value = [];
-  resultConfig.description = "";
-}
-
-// 这次新建表单里已经建成的任务名：拆成两个任务时后一个失败，重试只补建没建成的。打开新的新建表单时清空。
-const createdTaskNames = new Set<string>();
-
 function onAdd() {
-  editorMode.value = "create";
-  createdTaskNames.clear();
-  resetEditor();
+  editorRequest.value = { mode: "create" };
   editorVisible.value = true;
 }
 
 function onUpdate(record: CollectionTaskRecord) {
-  const input = parseCollectionTaskInput(record);
-  editingRecord.value = record;
-  editorMode.value = "edit";
-  editor.task_id = record.task_id;
-  editor.task_name = record.task_name;
-  editor.description = record.description;
-  editor.space_id = record.space_id || selectedSpaceId.value || "";
-  editor.data_type = input.dataType;
-  editor.provider = input.provider;
-  editor.market_type = input.market;
-  editor.enabled = record.enabled;
-  editor.creator = record.creator;
-  frequencyValue.value = input.frequency;
-  subjectTagIds.value = input.subjectTags || [];
-  sourceTaskId.value = input.sourceTaskId || "";
-  resampleError.value = "";
-  // 已有合成任务：只读展示创建时由源任务推导并保存的源参数。
-  resamplePreview.value =
-    input.dataType === "kline_resample"
-      ? {
-          source_dataset_id: input.sourceId || "",
-          source_frequency: input.sourceFrequency || "",
-          source_series_tag: input.sourceSeriesTag || "",
-          source_series_tags: input.sourceSeriesTags || [],
-          subject_count: 0,
-          market_id: "",
-          provider: input.provider,
-          market_type: input.market,
-          alignment: ""
-        }
-      : null;
-  selectedOutputFields.value = input.outputFields || [];
-  originalOutputFields.value = selectedOutputFields.value.slice();
-  outputFieldDraft.value = selectedOutputFields.value.slice();
+  editorRequest.value = { mode: "edit", record };
   editorVisible.value = true;
-  void loadTaskTypeFields();
-  void loadTaskSubjectTags(record);
-}
-
-function onDataTypeChange() {
-  if (editing.value) return;
-  editor.provider = "";
-  frequencyValue.value = "";
-  subjectTagIds.value = [];
-  sourceTaskId.value = "";
-  resamplePreview.value = null;
-  resampleError.value = "";
-  void loadTaskTypeFields();
-  if (editor.data_type === "kline_resample") void loadSourceTasks();
 }
 
 // 行操作“新建合成”：以这个任务作为源，打开新建表单。
 function onAddResample(record: CollectionTaskRecord) {
-  editorMode.value = "create";
-  resetEditor();
-  editor.data_type = "kline_resample";
-  sourceTaskId.value = record.task_id;
+  editorRequest.value = { mode: "resample", source: record };
   editorVisible.value = true;
-  void loadTaskTypeFields();
-  void loadSourceTasks();
-  scheduleResamplePreview();
-}
-
-function openOutputFieldPicker() {
-  outputFieldKeyword.value = "";
-  outputFieldDraft.value = selectedOutputFields.value.slice();
-  outputFieldsVisible.value = true;
-  void loadOutputFieldCatalog();
-}
-
-async function loadOutputFieldCatalog(force = false) {
-  const spaceID = selectedSpaceId.value;
-  const token = ++outputCatalogRequestToken;
-  if (!spaceID) {
-    outputFieldCatalog.value = [];
-    outputFieldGroups.value = [];
-    outputCatalogSpaceID.value = "";
-    outputFieldLoadError.value = false;
-    return;
-  }
-  if (!force && outputCatalogSpaceID.value === spaceID) return;
-  loadingOutputFields.value = true;
-  outputFieldLoadError.value = false;
-  try {
-    const groups: FieldGroup[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await listFieldGroups({ space_id: spaceID, page: { page, size: 200 } });
-      if (token !== outputCatalogRequestToken || spaceID !== selectedSpaceId.value) return;
-      groups.push(...(response.field_groups || []));
-      if (!response.page_result?.has_more || !(response.field_groups || []).length) break;
-    }
-    const fields: Field[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await listFields({
-        space_id: spaceID,
-        status: "active",
-        sort_by: "sort_order",
-        sort_order: "asc",
-        page: { page, size: 500 }
-      });
-      if (token !== outputCatalogRequestToken || spaceID !== selectedSpaceId.value) return;
-      fields.push(...(response.fields || []));
-      if (!response.page_result?.has_more || !(response.fields || []).length) break;
-    }
-    if (token !== outputCatalogRequestToken || spaceID !== selectedSpaceId.value) return;
-    const allGroupIDs = new Set(groups.map(group => group.group_id));
-    const activeGroupIDs = new Set(groups.filter(group => group.status === "active").map(group => group.group_id));
-    outputFieldGroups.value = groups;
-    // 这里只按分组是否启用过滤；哪些字段能选（基础 K 线字段加当前可选的附加字段）在分组显示时判断。
-    outputFieldCatalog.value = fields.filter(
-      field => !field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id)
-    );
-    outputCatalogSpaceID.value = spaceID;
-  } catch (error) {
-    if (token === outputCatalogRequestToken) {
-      outputFieldLoadError.value = true;
-      outputCatalogSpaceID.value = "";
-      Message.warning(error instanceof Error ? error.message : "读取字段目录失败");
-    }
-  } finally {
-    if (token === outputCatalogRequestToken) loadingOutputFields.value = false;
-  }
-}
-
-function setOutputField(fieldID: string, checked: boolean | string | number) {
-  const selected = Boolean(checked) && canSelectOutputField(fieldID);
-  outputFieldDraft.value = selected
-    ? [...new Set([...outputFieldDraft.value, fieldID])]
-    : outputFieldDraft.value.filter(id => id !== fieldID);
-}
-
-/** 编辑已有任务时输出字段只能减少：不在任务原有字段里的不能勾。 */
-function canSelectOutputField(fieldID: string): boolean {
-  return outputFieldSelectable(fieldID, editing.value, originalOutputFields.value);
-}
-
-/** 一组里能勾上的字段（编辑任务时不含不能新增的那些）。 */
-function selectableSectionFields(fields: Field[]): Field[] {
-  return fields.filter(field => canSelectOutputField(field.field_id));
-}
-
-function sectionAllSelected(fields: Field[]): boolean {
-  return selectableSectionFields(fields).every(field => outputFieldDraft.value.includes(field.field_id));
-}
-
-function toggleOutputFieldSection(fields: Field[]) {
-  const fieldIDs = new Set(selectableSectionFields(fields).map(field => field.field_id));
-  outputFieldDraft.value = sectionAllSelected(fields)
-    ? outputFieldDraft.value.filter(id => !fieldIDs.has(id))
-    : [...new Set([...outputFieldDraft.value, ...fieldIDs])];
-}
-
-function confirmOutputFieldSelection() {
-  selectedOutputFields.value = outputFieldDraft.value.slice();
-  outputFieldsVisible.value = false;
-}
-
-function cancelOutputFieldSelection() {
-  outputFieldDraft.value = selectedOutputFields.value.slice();
-}
-
-async function loadTaskTypeFields() {
-  const token = ++taskTypeFieldRequestToken;
-  const dataType = editor.data_type;
-  extraFieldOptions.value = [];
-  extraFieldOptionsLoaded.value = false;
-  taskTypeFields.value = [];
-  if (!dataType) return;
-  try {
-    const response = await GetDataTypeConfigWithFields(dataType);
-    if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
-    taskTypeFields.value = [...(response.detail?.fields || [])].sort((a, b) => a.sort_order - b.sort_order);
-    extraFieldOptions.value = response.detail?.extra_fields || [];
-    extraFieldOptionsLoaded.value = extraFieldOptionsPresent(response.detail);
-  } catch (error) {
-    if (token === taskTypeFieldRequestToken) {
-      taskTypeFields.value = [];
-      Message.warning(error instanceof Error ? error.message : "读取执行任务类型参数失败");
-    }
-  }
-}
-
-function afterClose() {
-  formRef.value?.clearValidate?.();
-  editorVisible.value = false;
-}
-
-function currentTaskInput(): CollectionTaskInput {
-  if (!editor.data_type) throw new Error("请选择数据类型");
-  const selectedTags = tags.value.filter(tag => subjectTagIds.value.includes(tag.tag_id));
-  const firstTag = selectedTags[0];
-  return {
-    dataType: editor.data_type,
-    provider: (firstTag && tagSource(firstTag)) || editor.provider,
-    market: ((firstTag && tagMarketType(firstTag)) || editor.market_type) as CollectionTaskMarket,
-    frequency: frequencyValue.value,
-    subjectTags: subjectTagIds.value.slice(),
-    sourceTaskId: sourceTaskId.value,
-    ingest: ingest.value,
-    // 提交前按条件再过滤一次：条件不满足的附加字段不带。
-    outputFields: pruneUnavailableFields(selectedOutputFields.value, availableExtraFields.value, dropUnavailableFields.value)
-  };
-}
-
-async function validateEditor() {
-  const nameError = collectionTaskNameError(editor.task_name);
-  if (nameError) {
-    Message.error(nameError);
-    return false;
-  }
-  if (!editor.space_id) {
-    Message.error("请先选择空间");
-    return false;
-  }
-  try {
-    const input = currentTaskInput();
-    if (input.dataType === "kline" && !subjectTagIds.value.length) {
-      throw new Error("请选择标的标签");
-    }
-    if (input.dataType === "kline" && !editing.value) {
-      const selectionError = taskTagSelectionError(selectedTagRoutes.value);
-      if (selectionError) throw new Error(selectionError);
-    }
-    if (input.dataType === "kline_resample" && !editing.value) {
-      if (!sourceTaskId.value.trim()) throw new Error("请选择源采集任务");
-      if (resampleError.value) throw new Error(resampleError.value);
-    }
-    if (!frequencyValue.value.trim()) throw new Error("请输入采集频率");
-    return true;
-  } catch (error) {
-    Message.error(error instanceof Error ? error.message : "请完善任务配置");
-    return false;
-  }
-}
-
-// 抽屉底部「保存任务」：校验失败或提交失败时抽屉保持打开；保存成功后手动关闭并刷新列表。
-async function saveEditor() {
-  if (!(await validateEditor())) return;
-  // 提交快照：预检等待期间用户可能取消并重新打开表单，旧提交只能用它自己的输入，
-  // 不能把旧输入与新表单的任务名称、结果配置混合提交，也不能关闭新窗口。
-  const submission = editorScope.begin();
-  const editorSnapshot = { ...editor };
-  const resultSnapshot = { ...resultConfig };
-  submitLoading.value = true;
-  try {
-    if (editorMode.value === "create") {
-      const input = currentTaskInput();
-      const groups =
-        input.dataType === "kline" ? planTaskGroups(selectedTagRoutes.value, organization.value) : [{ suffix: "", tagIds: [] }];
-      const created: string[] = [];
-      for (const group of groups) {
-        const groupInput = group.tagIds.length ? { ...input, subjectTags: group.tagIds } : input;
-        // 上一次提交拆成两个任务、只建成了前一个：重试时跳过已建成的，只补建失败的那个（同名再建会冲突）
-        const groupName = splitTaskName(editorSnapshot.task_name, group.suffix);
-        if (createdTaskNames.has(groupName)) {
-          created.push(groupName);
-          continue;
-        }
-        const task = buildCollectionTaskPayload(
-          groupInput,
-          {
-            task_name: splitTaskName(editorSnapshot.task_name, group.suffix),
-            description: editorSnapshot.description,
-            space_id: editorSnapshot.space_id,
-            creator: editorSnapshot.creator || account.value?.user?.userName || "",
-            enabled: true
-          },
-          undefined
-        );
-        try {
-          await CreateTask({
-            task,
-            result_config: { description: resultSnapshot.description.trim() }
-          });
-        } catch (error) {
-          // 拆成两个任务时，后一个失败要保留已建好的前一个，并告诉用户补建哪个。
-          if (created.length) {
-            await getTaskList();
-            throw new Error(
-              `已创建“${created.join("”“")}”，但“${task.task_name}”创建失败：${
-                error instanceof Error ? error.message : "未知错误"
-              }。修正后再点一次“保存任务”只会补建这个任务。`
-            );
-          }
-          throw error;
-        }
-        created.push(task.task_name || "");
-        createdTaskNames.add(groupName);
-      }
-      Message.success(`采集任务“${created.join("”“")}”已创建，将从下一采集周期开始生效`);
-    } else {
-      const input = currentTaskInput();
-      const mutableTask = {
-        task_id: editorSnapshot.task_id,
-        task_name: editorSnapshot.task_name.trim(),
-        description: editorSnapshot.description.trim(),
-        enabled: editorSnapshot.enabled,
-        collect_params: buildCollectionTaskParamsForUpdate(input)
-      };
-      await UpdateTask({
-        space_id: editorSnapshot.space_id,
-        task_id: editorSnapshot.task_id,
-        task: mutableTask as Parameters<typeof UpdateTask>[0]["task"]
-      });
-      Message.success("变更成功，将从下一采集周期开始生效");
-    }
-    // 任务已保存；表单已被取消/重新打开或空间已切换时，不动新打开的窗口
-    if (!submission.isCurrent()) return;
-    editorVisible.value = false;
-    await getTaskList();
-  } catch (error) {
-    if (!submission.isCurrent()) return;
-    Message.error(error instanceof Error ? error.message : "保存任务失败");
-  } finally {
-    if (submission.isCurrent()) submitLoading.value = false;
-  }
 }
 
 // 标记最新一次列表请求：用户已离开的那页迟到的响应直接丢弃
@@ -1413,156 +388,6 @@ async function getTaskList() {
   } finally {
     loading.value = false;
   }
-}
-
-async function getDataTypeConfigs() {
-  try {
-    const response = await GetDataTypeConfigs();
-    dataTypeConfigs.value = response.configs || [];
-  } catch (error) {
-    Message.error(error instanceof Error ? error.message : "获取数据类型失败");
-  }
-}
-
-let sourceListRequestToken = 0;
-
-async function loadSourceTasks() {
-  const spaceId = selectedSpaceId.value;
-  const token = ++sourceListRequestToken;
-  if (!spaceId) {
-    sourceTasks.value = [];
-    loadingSourceTasks.value = false;
-    return;
-  }
-  loadingSourceTasks.value = true;
-  try {
-    const tasks: CollectionTaskRecord[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await GetTaskList({ space_id: spaceId, page: { page, size: 200 } });
-      // 整次分页固定发起空间：切换空间或有更新的请求后，旧响应整体丢弃
-      if (token !== sourceListRequestToken || spaceId !== selectedSpaceId.value) return;
-      const batch = (response.tasks || []).map(normalizeCollectionTask);
-      tasks.push(...batch.filter(task => task.data_type === "kline" || task.data_type === "kline_resample"));
-      if (!response.page?.has_more || batch.length === 0) break;
-    }
-    sourceTasks.value = tasks;
-  } catch (error) {
-    if (token !== sourceListRequestToken) return;
-    sourceTasks.value = [];
-    Message.error(error instanceof Error ? error.message : "获取源采集任务失败");
-  } finally {
-    if (token === sourceListRequestToken) loadingSourceTasks.value = false;
-  }
-}
-
-function stringParam(task: CollectionTaskRecord, key: string): string {
-  const value = task.collect_params?.[key];
-  return typeof value === "string" ? value.trim() : "";
-}
-
-// 合成源的序列标签：统一数据集是 source_series_tags（每个市场一条），单序列的源是 source_series_tag。
-function resampleSeriesTags(task: CollectionTaskRecord): string {
-  const tags = task.collect_params?.source_series_tags;
-  if (Array.isArray(tags) && tags.length) return tags.filter(tag => typeof tag === "string").join("、");
-  return stringParam(task, "source_series_tag");
-}
-
-// 列表“合成来源”列：源任务名 → 目标频率；老任务没有 source_task_id 时显示源数据集。
-function resampleSourceSummary(task: CollectionTaskRecord): string {
-  if (task.data_type !== "kline_resample") return "-";
-  const sourceId = stringParam(task, "source_task_id");
-  const source = sourceTasks.value.find(item => item.task_id === sourceId);
-  const from = source ? source.task_name || source.task_id : sourceId || stringParam(task, "source_dataset_id") || "-";
-  return `${from} → ${taskFrequency(task)}`;
-}
-
-// 预览：选源任务或改目标频率后，向后端取推导出的源参数并按合成规则校验（防抖）。
-let previewTimer: ReturnType<typeof setTimeout> | undefined;
-let previewToken = 0;
-function scheduleResamplePreview() {
-  if (previewTimer) clearTimeout(previewTimer);
-  previewTimer = setTimeout(() => void refreshResamplePreview(), 300);
-}
-
-async function refreshResamplePreview() {
-  const token = ++previewToken;
-  resampleError.value = "";
-  if (!selectedSpaceId.value || !sourceTaskId.value) {
-    resamplePreview.value = null;
-    return;
-  }
-  try {
-    const preview = await previewKlineResampleSource(selectedSpaceId.value, sourceTaskId.value, normalizedTargetFrequency.value);
-    if (token !== previewToken) return;
-    resamplePreview.value = preview;
-    resampleError.value = preview.validation_error || "";
-  } catch (error) {
-    if (token !== previewToken) return;
-    resamplePreview.value = null;
-    resampleError.value = error instanceof Error ? error.message : "读取源任务失败";
-  }
-}
-
-async function loadTags() {
-  const spaceID = selectedSpaceId.value;
-  const token = ++tagListRequestToken;
-  if (!spaceID) {
-    tags.value = [];
-    return;
-  }
-  loadingTags.value = true;
-  try {
-    const allTags: Tag[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await listTags(spaceID, { page, size: 500 });
-      if (token !== tagListRequestToken || spaceID !== selectedSpaceId.value) return;
-      allTags.push(...(response.tags || []));
-      if (!response.page_result?.has_more || !(response.tags || []).length) break;
-    }
-    if (token !== tagListRequestToken || spaceID !== selectedSpaceId.value) return;
-    tags.value = allTags;
-  } catch (error) {
-    if (token === tagListRequestToken) {
-      tags.value = [];
-      Message.error(error instanceof Error ? error.message : "获取标签失败");
-    }
-  } finally {
-    if (token === tagListRequestToken) loadingTags.value = false;
-  }
-}
-
-async function loadTaskSubjectTags(record: CollectionTaskRecord) {
-  if (record.tag_ids.length) {
-    subjectTagIds.value = record.tag_ids.slice();
-    return;
-  }
-  const viewId = record.result?.view_id;
-  if (!viewId || !record.space_id) return;
-  try {
-    const view = await getView({ space_id: record.space_id, view_id: viewId });
-    const datasetId = view.view?.dataset_id;
-    if (!datasetId) return;
-    const dataset = await getDataset({ space_id: record.space_id, dataset_id: datasetId });
-    subjectTagIds.value = (dataset.dataset?.subject_tags || []).slice();
-  } catch (error) {
-    Message.warning(error instanceof Error ? error.message : "读取任务标签失败");
-  }
-}
-
-// 表单不编辑的几项（每函数标的数、允许迟到）原样带回，否则整体替换会把它们丢掉。
-const PRESERVED_TASK_PARAM_KEYS = ["symbols_per_function", "allowed_lateness_seconds"];
-
-function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
-  const original = editingRecord.value?.collect_params ?? {};
-  // 合成任务的参数创建后不可修改：更新时原样回传，只改名称、描述和启用状态。
-  if (input.dataType === "kline_resample") return { ...original };
-  const preserved: Record<string, unknown> = {};
-  if (input.dataType === "kline") {
-    for (const key of PRESERVED_TASK_PARAM_KEYS) {
-      if (original[key] !== undefined) preserved[key] = original[key];
-    }
-  }
-  return { ...preserved, ...buildCollectionTaskParams(input) };
 }
 
 function search() {
@@ -1632,14 +457,14 @@ async function handleEnableChange(record: CollectionTaskRecord, enabled: boolean
 function onViewDetails(record: CollectionTaskRecord) {
   detailData.value = record;
   detailVisible.value = true;
-  void loadOutputFieldCatalog();
   syncListQuery();
 }
 
 let detailRequestToken = 0;
 /** 按任务 ID 打开详情：先在当前页和空间的全部任务里找，找不到再单独取。 */
 async function openDetailById(taskId: string) {
-  const local = taskList.value.find(task => task.task_id === taskId) || sourceTasks.value.find(task => task.task_id === taskId);
+  const local =
+    taskList.value.find(task => task.task_id === taskId) || catalog.sourceTasks.value.find(task => task.task_id === taskId);
   if (local) {
     onViewDetails(local);
     return;
@@ -1651,8 +476,9 @@ async function openDetailById(taskId: string) {
     const response = await GetTaskDetail({ space_id: spaceId, task_id: taskId });
     if (token !== detailRequestToken || spaceId !== selectedSpaceId.value) return;
     if (response.task) onViewDetails(normalizeCollectionTask(response.task));
-  } catch {
-    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；网络错误由请求层提示，业务错误不另提示
+  } catch (error) {
+    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；只提示网络错误，业务错误不另提示
+    if (!(error instanceof RequestError && error.response)) reportError(error);
     if (token === detailRequestToken) syncListQuery();
   }
 }
@@ -1684,6 +510,9 @@ function jobsFromDetail(record: CollectionTaskRecord) {
 function locateTask(record: CollectionTaskRecord) {
   void openDetailById(record.task_id);
 }
+
+// 要删除的任务被哪些合成任务当作源：删除确认里列出来
+const deleteDependents = computed(() => catalog.dependentsOf(deleteTarget.value));
 
 function openDelete(record: CollectionTaskRecord) {
   deleteTarget.value = record;
@@ -1723,23 +552,7 @@ function openJobs(record: CollectionTaskRecord) {
 }
 
 watch(selectedSpaceId, () => {
-  tagListRequestToken += 1;
-  sourceListRequestToken += 1;
-  sourceTasks.value = [];
-  if (editorVisible.value && editor.space_id !== selectedSpaceId.value) {
-    editorVisible.value = false;
-    outputFieldsVisible.value = false;
-    taskTypeFieldRequestToken += 1;
-    Message.info("空间已切换，请重新打开采集任务窗口");
-  }
-  outputCatalogRequestToken += 1;
-  outputCatalogSpaceID.value = "";
-  outputFieldCatalog.value = [];
-  outputFieldGroups.value = [];
-  outputFieldLoadError.value = false;
-  loadingOutputFields.value = false;
-  if (!editing.value) selectedOutputFields.value = [];
-  if (outputFieldsVisible.value) void loadOutputFieldCatalog();
+  catalog.resetForSpace();
   // 筛选、详情属于旧空间：只重置内存状态，URL 由页签容器统一清掉。
   filters.keyword = "";
   filters.dataType = "";
@@ -1748,193 +561,23 @@ watch(selectedSpaceId, () => {
   detailRequestToken += 1;
   detailVisible.value = false;
   // 空间初始化完成或切换后重新加载；数据类型配置同样按空间授权，不能只在挂载时请求一次。
-  if (selectedSpaceId.value) void getDataTypeConfigs();
+  if (selectedSpaceId.value) void catalog.loadDataTypeConfigs();
   void getTaskList();
-  void loadSourceTasks();
-  void loadTags();
-});
-
-// 选了源任务或改了目标频率：刷新预览与校验提示。
-watch([sourceTaskId, normalizedTargetFrequency], () => {
-  if (editorVisible.value && editor.data_type === "kline_resample" && !editing.value) scheduleResamplePreview();
+  void catalog.loadSourceTasks();
+  void catalog.loadTags();
 });
 
 onMounted(() => {
   // 空间尚未初始化时请求会被 Console 拒绝；初始化完成后由上面的空间监听补载。
   if (!selectedSpaceId.value) return;
   void getTaskList();
-  void getDataTypeConfigs();
-  void loadSourceTasks();
-  void loadTags();
-});
-
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：编辑窗口打开/关闭都会使进行中的保存失效
-const editorScope = createSubmitScope();
-watch(editorVisible, () => {
-  editorScope.invalidate();
-  submitLoading.value = false;
+  void catalog.loadDataTypeConfigs();
+  void catalog.loadSourceTasks();
+  void catalog.loadTags();
 });
 </script>
 
 <style scoped>
-.field-hint {
-  display: block;
-  margin-top: 4px;
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-.editor-section {
-  margin-bottom: 16px;
-  padding: 16px 18px 2px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  background: var(--color-bg-2);
-}
-.editor-section__header {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 0 0 16px;
-}
-.editor-section__header h3 {
-  margin: 0;
-  color: var(--color-text-1);
-  font-size: 14px;
-  font-weight: 600;
-}
-.editor-section__header span {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-.output-selection-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.output-selection-summary strong {
-  color: var(--color-text-2);
-  font-size: 13px;
-  font-weight: 500;
-}
-.selected-output-tags {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 12px;
-}
-.output-field-error {
-  margin-top: 12px;
-}
-.output-field-picker-spin {
-  display: block;
-  margin-top: 14px;
-}
-.output-field-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-.output-field-toolbar > :first-child {
-  max-width: 420px;
-}
-.output-field-toolbar > span {
-  flex: none;
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-.output-field-sections {
-  display: grid;
-  gap: 10px;
-  max-height: min(56vh, 560px);
-  overflow: auto;
-  padding: 1px 4px 4px 1px;
-}
-.output-field-section {
-  overflow: hidden;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  background: var(--color-bg-2);
-}
-.output-field-section__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--color-border-2);
-  background: var(--color-fill-1);
-}
-.output-field-section__header > div {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.output-field-section__header strong {
-  overflow: hidden;
-  color: var(--color-text-1);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.output-field-section__header span {
-  flex: none;
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-.output-field-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px 12px;
-  padding: 8px 12px;
-}
-.output-field-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-  padding: 6px 2px;
-  cursor: pointer;
-}
-.output-field-option__text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-.output-field-option__text strong {
-  overflow: hidden;
-  color: var(--color-text-1);
-  font-size: 13px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.output-field-option__text code {
-  overflow: hidden;
-  color: var(--color-text-3);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.output-field-option--unsupported {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-.output-field-option__text small {
-  color: var(--color-text-3);
-  font-size: 11px;
-}
-.output-field-option--unsupported {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-.output-field-option__text small {
-  color: var(--color-text-3);
-  font-size: 11px;
-}
 /* a-spin 默认 inline-block，会被宽表格撑开，导致右侧（含固定的操作列）被外层裁掉。 */
 .moox-page :deep(.arco-spin) {
   display: block;
@@ -1948,86 +591,6 @@ watch(editorVisible, () => {
 
 .moox-inner {
   min-height: 100%;
-}
-
-pre {
-  max-height: 220px;
-  margin: 0;
-  padding: var(--moox-space-2);
-  overflow: auto;
-  border-radius: 4px;
-  background: var(--color-fill-1);
-  font-family: monospace;
-  font-size: 12px;
-}
-
-.immutable-hint {
-  margin-bottom: var(--moox-space-4);
-}
-
-.detail-actions {
-  margin-top: 16px;
-}
-
-/* 编辑态不可变项的只读摘要：替代一排禁用控件，一眼可读 */
-.readonly-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  background: var(--color-fill-1);
-}
-
-.readonly-summary__row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.readonly-summary__label {
-  flex: none;
-  min-width: 96px;
-  color: var(--color-text-3);
-  font-size: 13px;
-}
-
-.readonly-summary .field-hint {
-  margin-top: 0;
-}
-
-/* 任务详情抽屉的分组标题 */
-.detail-section {
-  margin-bottom: var(--moox-space-5);
-}
-
-.detail-section__title {
-  margin: 0 0 var(--moox-space-3);
-  color: var(--color-text-1);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.detail-output-tags {
-  margin-top: 0;
-}
-
-.detail-resample-info {
-  margin-top: 8px;
-}
-
-.detail-dependents {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.detail-dependents .field-hint {
-  margin-top: 0;
 }
 
 /* 「⋯」菜单里启停与删除的语义色 */
@@ -2052,25 +615,6 @@ pre {
   margin-top: var(--moox-space-4);
 }
 
-@media (max-width: 640px) {
-  .editor-section {
-    padding: 12px 12px 0;
-  }
-  .editor-section__header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
-    margin-bottom: 12px;
-  }
-  .output-field-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .output-field-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 6px;
-  }
-}
 .delete-dependents {
   margin: var(--moox-space-3) 0 0;
   color: var(--color-text-2);

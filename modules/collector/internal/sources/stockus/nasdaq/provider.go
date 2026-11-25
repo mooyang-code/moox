@@ -75,7 +75,7 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.sourceID, DisplayName: "Nasdaq 100", Hosts: []string{host}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: providerID, SourceID: p.sourceID, DisplayName: "Nasdaq 100", Hosts: []string{host}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 // IndexCodes 返回能取成分股的指数代码。

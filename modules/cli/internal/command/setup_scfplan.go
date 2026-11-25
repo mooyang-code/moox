@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 )
 
 // setupSCFPlanSummary 是 Timer 采集计划在初始化里的结果：每个空间的代码包是否就绪。
@@ -85,13 +86,13 @@ func ensureSCFPlanPackages(ctx context.Context, manifest *topology.Config, packa
 }
 
 type adminSCFPlanPackages struct {
-	gateway adminclient.GatewayForwarder
+	gateway rpcclient.GatewayForwarder
 	// collectorRoot 是构建代码包用的 Collector 模块目录，取自这次安装的源目录，不看当前目录。
 	collectorRoot string
 }
 
-func (a adminSCFPlanPackages) client(spaceID string) *adminclient.Client {
-	return &adminclient.Client{Gateway: a.gateway, SpaceID: spaceID}
+func (a adminSCFPlanPackages) client(spaceID string) *rpcclient.Client {
+	return &rpcclient.Client{Gateway: a.gateway, SpaceID: spaceID}
 }
 
 func (a adminSCFPlanPackages) Latest(ctx context.Context, spaceID, name string) (string, bool, error) {
@@ -111,12 +112,12 @@ func (a adminSCFPlanPackages) Upload(ctx context.Context, space topology.SCFPlan
 	if err != nil {
 		return "", err
 	}
-	pkg, err := a.client(space.SpaceID).UploadPackage(ctx, adminclient.UploadPackageRequest{
+	pkg, err := a.client(space.SpaceID).UploadPackage(ctx, &collectorpb.InitPackageUploadReq{
 		PackageName: space.PackageName, Version: version, Runtime: collectorFunctionRuntime,
-		CloudAccountID: cloudAccountID, Filename: filepath.Base(result.Path),
+		CloudAccountId: cloudAccountID, Filename: filepath.Base(result.Path),
 	}, data)
 	if err != nil {
 		return "", err
 	}
-	return pkg.PackageID, nil
+	return pkg.GetPackageId(), nil
 }

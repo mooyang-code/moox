@@ -23,21 +23,21 @@ func stockFlattenFixture(t *testing.T, total, available string) *operatorFixture
 	t.Helper()
 	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
 	db := fixture.store.DBForTest()
-	require.NoError(t, db.Exec("UPDATE t_trading_accounts SET c_exchange='ASHARE', c_markets='STOCK', c_settlement_asset='CNY' WHERE c_trading_account_id='account-a'").Error)
+	require.NoError(t, db.Exec("UPDATE t_trading_accounts SET c_exchange='ashare', c_markets='equity', c_settlement_asset='CNY' WHERE c_trading_account_id='account-a'").Error)
 	require.NoError(t, db.Exec("UPDATE t_logical_accounts SET c_settlement_asset='CNY'").Error)
 	require.NoError(t, db.Exec("DELETE FROM t_logical_account_members WHERE c_trading_account_id='account-b'").Error)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+			Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 			BaseAsset: "600519.XSHG", QuoteAsset: "CNY", SettlementAsset: "CNY",
 			ExchangeQuantityStep: "100", MinExchangeQuantity: "100", PriceTick: "0.01",
 			MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98", Status: "TRADING",
 		}); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
-			Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+			Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 			OrderType: "MARKET", Side: "BUY", Quantity: total, FilledQuantity: total, ReferencePrice: "10", State: "FILLED",
 			OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
 		})
@@ -120,8 +120,8 @@ func TestManualOrderRejectedOutsideAShareSession(t *testing.T) {
 		Exchange: exchange.ExchangeAShare, Session: session, SessionHours: "A 股 09:30-11:30、13:00-14:57",
 	}}
 	service.Now = func() time.Time { return time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) } // 12:00 午休
-	_, err = service.PlaceManualOrder(context.Background(), ManualOrderCommand{
-		SpaceID: "space-1", ActionID: "manual-stock", TradingAccountID: "account-a", ClientOrderID: "manual-stock-client",
+	_, err = service.PlaceOrder(context.Background(), ManualOrderCommand{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", ActionID: "manual-stock", TradingAccountID: "account-a", ClientOrderID: "manual-stock-client",
 		InstrumentID: "600519.XSHG", Type: exchange.OrderTypeMarket, Side: exchange.SideSell, Quantity: shared.MustDecimal("100"), Reason: "测试",
 	})
 	require.ErrorIs(t, err, ErrInvalidCommand)
@@ -178,7 +178,7 @@ func TestFlattenStockRetriesAfterUnfilledIOC(t *testing.T) {
 	for index, reason := range []string{"", paper.OutOfSessionReason} {
 		fixture.order(t, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: fmt.Sprintf("old-%d", index), ClientOrderID: fmt.Sprintf("old-%d", index),
-			ExchangeOrderID: fmt.Sprintf("old-%d", index), Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG",
+			ExchangeOrderID: fmt.Sprintf("old-%d", index), Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG",
 			InstrumentID: "600519.XSHG", OrderType: "LIMIT", TimeInForce: "IOC", LimitPrice: &limit, Side: "SELL", Quantity: "100",
 			FilledQuantity: "0", ReferencePrice: "10", State: "CANCELED", RejectReason: reason,
 			OwnerType: "OPERATOR", OwnerID: "flatten-stock", LogicalAccountID: "logical-1", Version: 1,
@@ -188,7 +188,7 @@ func TestFlattenStockRetriesAfterUnfilledIOC(t *testing.T) {
 	require.NotEqual(t, string(operatordomain.StatusPartial), status)
 	require.Len(t, fixture.orders.specs, 1)
 	require.Equal(t, flattenClientOrderIDForSpec("flatten-stock", "account-a",
-		exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"), exchange.SideSell, shared.MustDecimal("100"), 2),
+		exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"), exchange.SideSell, shared.MustDecimal("100"), 2),
 		fixture.orders.specs[0].ClientOrderID)
 
 	history := delistHistory{unfilled: flattenMaxUnfilled}

@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
@@ -25,9 +28,9 @@ type fakeFactorMgr struct {
 	definitions map[string]setupFactorDefinition
 	tasks       map[string]setupFactorTask
 	taskStatus  map[string]string
-	members     map[string][]factorAPIMember
+	members     map[string][]fakeFactorMember
 	// paramDecls 是各定义声明的参数（名称与默认值，按声明顺序）。
-	paramDecls map[string][]factorAPIParam
+	paramDecls map[string][]fakeFactorParam
 	// definitionCategory 是已有定义的分类。
 	definitionCategory map[string]string
 	categories         []string
@@ -43,7 +46,7 @@ type fakeFactorMgr struct {
 func newFakeFactorMgr() *fakeFactorMgr {
 	return &fakeFactorMgr{
 		definitions: map[string]setupFactorDefinition{}, tasks: map[string]setupFactorTask{}, taskStatus: map[string]string{},
-		members: map[string][]factorAPIMember{}, paramDecls: map[string][]factorAPIParam{}, definitionCategory: map[string]string{},
+		members: map[string][]fakeFactorMember{}, paramDecls: map[string][]fakeFactorParam{}, definitionCategory: map[string]string{},
 		existingCategories: map[string]string{},
 	}
 }
@@ -65,18 +68,77 @@ func (f *fakeFactorMgr) memberKey(factorID, kind string, given map[string]float6
 	return key
 }
 
-func (f *fakeFactorMgr) CallGatewayJSON(_ context.Context, service string, method string, body, response any) error {
+// 替身按 FactorMgr 的 proto JSON 形状收发：请求转成 JSON 字段表，响应先拼成 JSON 再解进生成的响应消息。
+type fakeFactorParam struct {
+	Name         string  `json:"name"`
+	DefaultValue float64 `json:"default_value"`
+}
+
+type fakeFactorMember struct {
+	TaskID        string             `json:"task_id"`
+	FactorID      string             `json:"factor_id"`
+	MemberKey     string             `json:"member_key"`
+	Kind          string             `json:"kind"`
+	Status        string             `json:"status"`
+	Params        map[string]float64 `json:"params,omitempty"`
+	OutputColumns []string           `json:"output_columns,omitempty"`
+}
+
+type fakeFactorCategory struct {
+	CategoryID string `json:"category_id"`
+	Name       string `json:"name"`
+}
+
+type fakeFactorResponse struct {
+	RetInfo struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg,omitempty"`
+	} `json:"ret_info"`
+	Valid          bool   `json:"valid,omitempty"`
+	DefinitionHash string `json:"definition_hash,omitempty"`
+	Factor         struct {
+		FactorID       string            `json:"factor_id,omitempty"`
+		Name           string            `json:"name,omitempty"`
+		CategoryID     string            `json:"category_id,omitempty"`
+		DefinitionHash string            `json:"definition_hash,omitempty"`
+		Params         []fakeFactorParam `json:"params,omitempty"`
+	} `json:"factor"`
+	FactorTask struct {
+		TaskID          string `json:"task_id,omitempty"`
+		Name            string `json:"name,omitempty"`
+		SpaceID         string `json:"space_id,omitempty"`
+		SourceDatasetID string `json:"source_dataset_id,omitempty"`
+		Freq            string `json:"freq,omitempty"`
+		Status          string `json:"status,omitempty"`
+		ResultDatasetID string `json:"result_dataset_id,omitempty"`
+	} `json:"factor_task"`
+	Members    []fakeFactorMember   `json:"members,omitempty"`
+	Member     *fakeFactorMember    `json:"member,omitempty"`
+	Categories []fakeFactorCategory `json:"categories,omitempty"`
+}
+
+func (f *fakeFactorMgr) Invoke(_ context.Context, _ string, method string, request, response any) error {
 	f.calls = append(f.calls, method)
-	var request map[string]any
-	raw, err := json.Marshal(body)
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(request.(proto.Message))
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(raw, &request); err != nil {
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	result := response.(*factorAPIResponse)
-	result.RetInfo = &factorAPIRetInfo{Code: 0}
+	result := &fakeFactorResponse{}
+	if err := f.handle(method, fields, result); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(encoded, response.(proto.Message))
+}
+
+func (f *fakeFactorMgr) handle(method string, request map[string]any, result *fakeFactorResponse) error {
 	notFound := func() { result.RetInfo.Code, result.RetInfo.Msg = 9, "not found" }
 	switch method {
 	case "GetFactorTask":
@@ -91,7 +153,7 @@ func (f *fakeFactorMgr) CallGatewayJSON(_ context.Context, service string, metho
 		if result.FactorTask.Status == "" {
 			result.FactorTask.Status = "enabled"
 		}
-		result.Members = append([]factorAPIMember(nil), f.members[task.TaskID]...)
+		result.Members = append([]fakeFactorMember(nil), f.members[task.TaskID]...)
 	case "CreateFactorTask":
 		create := request["factor_task"].(map[string]any)
 		f.createdTasks = append(f.createdTasks, create)
@@ -137,9 +199,9 @@ func (f *fakeFactorMgr) CallGatewayJSON(_ context.Context, service string, metho
 				full[decl.Name] = value
 			}
 		}
-		member := factorAPIMember{TaskID: taskID, FactorID: factorID, MemberKey: key, Kind: kind, Status: "disabled", Params: full, OutputColumns: []string{key}}
+		member := fakeFactorMember{TaskID: taskID, FactorID: factorID, MemberKey: key, Kind: kind, Status: "disabled", Params: full, OutputColumns: []string{key}}
 		f.members[taskID] = append(f.members[taskID], member)
-		result.Member = member
+		result.Member = &member
 	case "SetTaskMemberStatus":
 		if f.failStatus {
 			return errors.New("connection reset")
@@ -148,12 +210,12 @@ func (f *fakeFactorMgr) CallGatewayJSON(_ context.Context, service string, metho
 		for index := range f.members[taskID] {
 			if f.members[taskID][index].MemberKey == key {
 				f.members[taskID][index].Status = request["status"].(string)
-				result.Member = f.members[taskID][index]
+				result.Member = &f.members[taskID][index]
 			}
 		}
 	case "ListFactorCategories":
 		for id, name := range f.existingCategories {
-			result.Categories = append(result.Categories, factorAPICategory{CategoryID: id, Name: name})
+			result.Categories = append(result.Categories, fakeFactorCategory{CategoryID: id, Name: name})
 		}
 	case "UpsertFactorCategory":
 		category := request["category"].(map[string]any)
@@ -332,13 +394,13 @@ func testSetupPlan() setupFactorPlan {
 
 func newApplier(f *fakeFactorMgr) (*remoteSetupFactor, *bytes.Buffer) {
 	out := &bytes.Buffer{}
-	return &remoteSetupFactor{client: f, out: out}, out
+	return &remoteSetupFactor{gateway: f, out: out}, out
 }
 
 // 新建：先只读核对，再按分类、定义、任务、成员的顺序新建；逐项结果带成员键与全部列名。
 func TestFactorTaskApplyCreatesWhatIsMissing(t *testing.T) {
 	fake := newFakeFactorMgr()
-	fake.paramDecls["bias"] = []factorAPIParam{{Name: "window", DefaultValue: 5}}
+	fake.paramDecls["bias"] = []fakeFactorParam{{Name: "window", DefaultValue: 5}}
 	applier, out := newApplier(fake)
 	result, err := applier.Apply(context.Background(), testSetupPlan())
 	require.NoError(t, err)
@@ -372,7 +434,7 @@ func TestFactorTaskApplyCreatesWhatIsMissing(t *testing.T) {
 // 已存在相同：再导入一次全部是“已存在”，一个写调用都不发。
 func TestFactorTaskApplyTreatsIdenticalContentAsExisting(t *testing.T) {
 	fake := newFakeFactorMgr()
-	fake.paramDecls["bias"] = []factorAPIParam{{Name: "window", DefaultValue: 5}}
+	fake.paramDecls["bias"] = []fakeFactorParam{{Name: "window", DefaultValue: 5}}
 	applier, _ := newApplier(fake)
 	_, err := applier.Apply(context.Background(), testSetupPlan())
 	require.NoError(t, err)
@@ -437,9 +499,9 @@ func TestFactorTaskApplyComparesMembersAndCategories(t *testing.T) {
 		fake.definitions["bias"] = plan.Definitions[0]
 		fake.definitionCategory["bias"] = "momentum"
 		fake.existingCategories["momentum"] = "动量类"
-		fake.paramDecls["bias"] = []factorAPIParam{{Name: "window", DefaultValue: 5}}
+		fake.paramDecls["bias"] = []fakeFactorParam{{Name: "window", DefaultValue: 5}}
 		fake.tasks["ftask_prices_1m"] = setupFactorTask{TaskID: "ftask_prices_1m", Name: "行情因子", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}
-		fake.members["ftask_prices_1m"] = []factorAPIMember{
+		fake.members["ftask_prices_1m"] = []fakeFactorMember{
 			{TaskID: "ftask_prices_1m", FactorID: "bias", MemberKey: "bias", Kind: "fixed", Status: "disabled", Params: map[string]float64{"window": 5}},
 			{TaskID: "ftask_prices_1m", FactorID: "bias", MemberKey: "bias__var", Kind: "var", Status: "enabled", Params: map[string]float64{"window": 5}},
 			{TaskID: "ftask_prices_1m", FactorID: "cci", MemberKey: "cci", Kind: "fixed", Status: "enabled"},
@@ -491,7 +553,7 @@ func TestFactorTaskApplyResumesAPendingTask(t *testing.T) {
 // 用户手动执行的 factor task apply 仍把它当差异报出来，不会把管理台里手工停用的成员重新启用。
 func TestFactorTaskApplyResumesAnInterruptedEnable(t *testing.T) {
 	fake := newFakeFactorMgr()
-	fake.paramDecls["bias"] = []factorAPIParam{{Name: "window", DefaultValue: 5}}
+	fake.paramDecls["bias"] = []fakeFactorParam{{Name: "window", DefaultValue: 5}}
 	fake.failStatus = true
 	applier, _ := newApplier(fake)
 	_, err := applier.Apply(context.Background(), testSetupPlan())
@@ -537,9 +599,9 @@ func TestFactorTaskApplyResumeDisabledOnlyEnables(t *testing.T) {
 	plan.Tasks[0].Members[0].Status = "disabled"
 	fake := newFakeFactorMgr()
 	fake.definitions["bias"] = plan.Definitions[0]
-	fake.paramDecls["bias"] = []factorAPIParam{{Name: "window", DefaultValue: 5}}
+	fake.paramDecls["bias"] = []fakeFactorParam{{Name: "window", DefaultValue: 5}}
 	fake.tasks["ftask_prices_1m"] = setupFactorTask{TaskID: "ftask_prices_1m", Name: "行情因子", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}
-	fake.members["ftask_prices_1m"] = []factorAPIMember{{TaskID: "ftask_prices_1m", FactorID: "bias", MemberKey: "bias", Kind: "fixed", Status: "enabled", Params: map[string]float64{"window": 5}}}
+	fake.members["ftask_prices_1m"] = []fakeFactorMember{{TaskID: "ftask_prices_1m", FactorID: "bias", MemberKey: "bias", Kind: "fixed", Status: "enabled", Params: map[string]float64{"window": 5}}}
 	applier, _ := newApplier(fake)
 	result, err := applier.Apply(context.Background(), plan)
 	require.Error(t, err)
@@ -571,46 +633,15 @@ func TestFactorTaskApplyCommandFailsOnConflict(t *testing.T) {
 	require.Zero(t, fake.writeCalls())
 }
 
-// factorFakeGateway 把网关的 JSON 转发交给假的 FactorMgr。
+// factorFakeGateway 把网关调用交给假的 FactorMgr。
 type factorFakeGateway struct{ fake *fakeFactorMgr }
 
-func (g factorFakeGateway) Forward(ctx context.Context, service, method string, _ int, body []byte) ([]byte, error) {
-	var request map[string]any
-	if err := json.Unmarshal(body, &request); err != nil {
-		return nil, err
-	}
-	response := &factorAPIResponse{}
-	if err := g.fake.CallGatewayJSON(ctx, service, method, request, response); err != nil {
-		return nil, err
-	}
-	return json.Marshal(response)
+func (factorFakeGateway) Forward(context.Context, string, string, int, []byte) ([]byte, error) {
+	return nil, errors.New("not used")
 }
 
-func (factorFakeGateway) Invoke(context.Context, string, string, any, any) error {
-	return errors.New("not used")
+func (g factorFakeGateway) Invoke(ctx context.Context, service, method string, request, response any) error {
+	return g.fake.Invoke(ctx, service, method, request, response)
 }
 
 func (factorFakeGateway) Close() error { return nil }
-
-// CLI 自己解析 JSON、不引入 factorgen：把读到的字段钉在 protobuf JSON 的形状上。
-func TestFactorAPIResponseMatchesFactorProtoJSON(t *testing.T) {
-	var get factorAPIResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factor":{"factor_id":"bias","factor_type":"timeseries","name":"bias","spec":"outputs: {}","spec_hash":"sha256:x","input_columns":["close"],"outputs":["bias"],"lookback_periods":20,"definition_hash":"sha256:d","params":[{"name":"window","default_value":5}]}}`), &get))
-	require.Equal(t, "bias", get.Factor.FactorID)
-	require.Equal(t, "sha256:d", get.Factor.DefinitionHash)
-	require.Equal(t, map[string]float64{"window": 5}, paramDefaults(get.Factor))
-
-	var validated factorAPIResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"valid":false,"diagnostic":{"path":"outputs.bias","line":1,"column":3,"message":"未知函数"}}`), &validated))
-	require.False(t, validated.Valid)
-	require.Equal(t, "未知函数", validated.Diagnostic.Message)
-
-	var task factorAPIResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factor_task":{"task_id":"ftask_a","name":"行情因子","space_id":"crypto","source_dataset_id":"ds","freq":"1m","status":"enabled","bound_instance_id":"i1"},"members":[{"task_id":"ftask_a","factor_id":"bias","member_key":"bias__var","kind":"var","status":"enabled","params":{"window":5},"output_columns":["bias__var"]}]}`), &task))
-	require.Equal(t, "行情因子", task.FactorTask.Name)
-	require.Equal(t, []factorAPIMember{{TaskID: "ftask_a", FactorID: "bias", MemberKey: "bias__var", Kind: "var", Status: "enabled", Params: map[string]float64{"window": 5}, OutputColumns: []string{"bias__var"}}}, task.Members)
-
-	var categories factorAPIResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"categories":[{"category_id":"trend","name":"趋势类","sort_order":1}]}`), &categories))
-	require.Equal(t, []factorAPICategory{{CategoryID: "trend", Name: "趋势类"}}, categories.Categories)
-}

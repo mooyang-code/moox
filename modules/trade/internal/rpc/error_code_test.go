@@ -2,12 +2,16 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
@@ -92,7 +96,7 @@ func seedRemovalExposure(t *testing.T, tradeStore *store.Store) {
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "account-1",
-			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE",
+			Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "LIVE",
 			Environment: "TESTNET", CredentialSecretID: "secret-account-1",
 			SettlementAsset: "USDT", Status: "ENABLED", MarginMode: "CROSS",
 		}); err != nil {
@@ -110,11 +114,39 @@ func seedRemovalExposure(t *testing.T, tradeStore *store.Store) {
 			return err
 		}
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SWAP",
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "swap",
 			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
 		})
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 回给调用方的错误只留含中文的各层，英文的内部原因只写日志；没有英文层或一层中文都没有的原样返回。
+func TestUserFacingMessageDropsEnglishInternalReasons(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: stale order version", store.ErrConflict), "数据已经被修改，刷新后再试"},
+		{fmt.Errorf("%w: 修改组合成员前要先暂停组合", store.ErrInvalidRecord), "数据不合法: 修改组合成员前要先暂停组合"},
+		{fmt.Errorf("%w: missing logical account", store.ErrInvalidRecord), "数据不合法"},
+		{fmt.Errorf("%w: quantity must be positive", orderdomain.ErrInvalidSpec), "订单参数不合法"},
+		{fmt.Errorf("%w: %w: 数量必须大于 0", operatorapp.ErrInvalidCommand, orderdomain.ErrInvalidSpec), "人工操作参数不合法: 订单参数不合法: 数量必须大于 0"},
+		{errors.Join(fmt.Errorf("%w: stale paper order", store.ErrConflict), errors.New("执行账户 a 同步失败")), "数据已经被修改，刷新后再试\n执行账户 a 同步失败"},
+		{errors.New("unexpected payload"), "unexpected payload"},
+		// 一层之内不再切分：交易所原文里的半角冒号原样保留。
+		{fmt.Errorf("交易所返回：%w", errors.New("Filter failure: PRICE_FILTER")), "交易所返回：Filter failure: PRICE_FILTER"},
+		{fmt.Errorf("执行账户 a：%w", &exchange.Error{Kind: exchange.ErrorRejected, HTTPStatus: 400, Code: "-4131",
+			Err: errors.New("The counterparty's best price does not meet the PERCENT_PRICE filter limit")}),
+			"执行账户 a：" + (&exchange.Error{Kind: exchange.ErrorRejected, HTTPStatus: 400, Code: "-4131",
+				Err: errors.New("The counterparty's best price does not meet the PERCENT_PRICE filter limit")}).Error()},
+		// 英文的包装层去掉，里面的交易所错误照样保留。
+		{fmt.Errorf("%w: submit failed: %w", orderdomain.ErrInvalidSpec, errors.New("Filter failure: LOT_SIZE")), "订单参数不合法: Filter failure: LOT_SIZE"},
+	} {
+		if got := userFacingMessage(tc.err); got != tc.want {
+			t.Fatalf("userFacingMessage(%q) = %q, want %q", tc.err.Error(), got, tc.want)
+		}
 	}
 }

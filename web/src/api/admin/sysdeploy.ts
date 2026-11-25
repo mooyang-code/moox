@@ -1,5 +1,5 @@
 import { isAlias, parseDocument, visit } from "yaml";
-import { callControl } from "./http";
+import { call } from "@/api/http";
 import type {
   CatalogResponse,
   ComponentCatalog,
@@ -11,31 +11,19 @@ import type {
   PageResult
 } from "./types";
 
-/** 后台轮询的读取传 { silentError: true }：失败不弹全局提示，由页面自己显示。 */
-type ReadOptions = { silentError?: boolean };
-
-export function getCatalog(options: ReadOptions = {}) {
-  return callControl<Record<string, never>, CatalogResponse>("sysdeploy", "GetCatalog", {}, options);
+export function getCatalog() {
+  return call<Record<string, never>, CatalogResponse>("sysdeploy", "GetCatalog", {});
 }
-export function listDeploymentHosts(
-  req: { host_id?: string; status?: DeploymentStatus; page?: PageReq } = {},
-  options: ReadOptions = {}
-) {
-  return callControl<typeof req, { hosts?: DeploymentHost[]; page_result?: PageResult }>("sysdeploy", "ListHosts", req, options);
+export function listDeploymentHosts(req: { host_id?: string; status?: DeploymentStatus; page?: PageReq } = {}) {
+  return call<typeof req, { hosts?: DeploymentHost[]; page_result?: PageResult }>("sysdeploy", "ListHosts", req);
 }
 export function listDeployments(
-  req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: PageReq } = {},
-  options: ReadOptions = {}
+  req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: PageReq } = {}
 ) {
-  return callControl<typeof req, { deployments?: ComponentDeployment[]; page_result?: PageResult }>(
-    "sysdeploy",
-    "ListDeployments",
-    req,
-    options
-  );
+  return call<typeof req, { deployments?: ComponentDeployment[]; page_result?: PageResult }>("sysdeploy", "ListDeployments", req);
 }
-export function getHostRoutes(hostId: string, options: ReadOptions = {}) {
-  return callControl<{ host_id: string }, HostRoutesResponse>("sysdeploy", "GetHostRoutes", { host_id: hostId }, options);
+export function getHostRoutes(hostId: string) {
+  return call<{ host_id: string }, HostRoutesResponse>("sysdeploy", "GetHostRoutes", { host_id: hostId });
 }
 // Admin caps each page at 100. Do not silently hide later hosts or deployments.
 async function allPages<T>(read: (page: number) => Promise<{ items: T[]; page_result?: PageResult }>, key: (row: T) => string) {
@@ -54,19 +42,19 @@ async function allPages<T>(read: (page: number) => Promise<{ items: T[]; page_re
     if (result.items.length === 0) throw new Error("部署清单分页返回空页，请刷新重试");
   }
 }
-export function listAllDeploymentHosts(options: ReadOptions = {}) {
+export function listAllDeploymentHosts() {
   return allPages(
     async page => {
-      const result = await listDeploymentHosts({ page: { page, size: 100 } }, options);
+      const result = await listDeploymentHosts({ page: { page, size: 100 } });
       return { items: result.hosts || [], page_result: result.page_result };
     },
     row => row.host_id
   );
 }
-export function listAllDeployments(options: ReadOptions = {}) {
+export function listAllDeployments() {
   return allPages(
     async page => {
-      const result = await listDeployments({ page: { page, size: 100 } }, options);
+      const result = await listDeployments({ page: { page, size: 100 } });
       return { items: result.deployments || [], page_result: result.page_result };
     },
     row => `${row.host_id}\0${row.component_id}`

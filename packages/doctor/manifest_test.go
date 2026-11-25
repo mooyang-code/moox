@@ -3,7 +3,6 @@ package doctor
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -52,10 +51,7 @@ func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 		if !ok || got.ComponentID != component.ID {
 			t.Fatalf("canonical component %q is missing", component.ID)
 		}
-		if got.Role != component.Doctor.Role || got.RequiredInDefaultProfile != component.Doctor.RequiredInDefaultProfile ||
-			string(got.Transport) != component.Doctor.Transport || string(got.FunctionalObservability) != component.Doctor.FunctionalObservability ||
-			!reflect.DeepEqual(got.Dependencies, component.Doctor.Dependencies) || !reflect.DeepEqual(got.ConfigPaths, component.Doctor.ConfigPaths) ||
-			!reflect.DeepEqual(got.WritablePaths, component.Doctor.WritablePaths) || !reflect.DeepEqual(got.RecoveryActionIDs, component.Doctor.RecoveryActionIDs) {
+		if string(got.Transport) != component.Doctor.Transport || string(got.FunctionalObservability) != component.Doctor.FunctionalObservability {
 			t.Errorf("Doctor metadata differs from catalog for %s", component.ID)
 		}
 	}
@@ -104,12 +100,9 @@ func TestManifestValidation(t *testing.T) {
 	base := Component{
 		ComponentID:             "moox_monitor",
 		ServiceName:             "moox_monitor",
-		Role:                    "monitor",
-		Description:             "monitor",
 		Transport:               TransportReporter,
 		FunctionalObservability: FunctionalObservabilityActive,
 		HealthPort:              11409,
-		RecoveryActionIDs:       []string{"restart_service_manually"},
 	}
 	tests := []struct {
 		name   string
@@ -119,9 +112,7 @@ func TestManifestValidation(t *testing.T) {
 		{name: "endpoint service", mutate: func(m *Manifest) { m.Components[0].ServiceName = "trade_order" }},
 		{name: "storage internal endpoint", mutate: func(m *Manifest) { m.Components[0].ServiceName = "storage-primary-rpc" }},
 		{name: "timer service", mutate: func(m *Manifest) { m.Components[0].ServiceName = "collector_timer" }},
-		{name: "unsafe path", mutate: func(m *Manifest) { m.Components[0].ConfigPaths = []string{"../secret"} }},
-		{name: "unknown dependency", mutate: func(m *Manifest) { m.Components[0].Dependencies = []string{"missing"} }},
-		{name: "unknown recovery", mutate: func(m *Manifest) { m.Components[0].RecoveryActionIDs = []string{"shell_anything"} }},
+		{name: "unknown transport", mutate: func(m *Manifest) { m.Components[0].Transport = "push" }},
 		{name: "missing health port", mutate: func(m *Manifest) { m.Components[0].HealthPort = 0 }},
 		{name: "storage active", mutate: func(m *Manifest) {
 			m.Components[0].ServiceName = "storage-primary"

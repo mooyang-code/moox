@@ -22,7 +22,7 @@ description: 用于调试、排查 MooX 端到端（e2e）故障：collector 的
 - 优先用 `moox-cli` 命令和 MooX 自带脚本，不要手工重复容易出错的腾讯云 API 调用。
 - 做破坏性操作前，先确认目标资源名、地域、命名空间、账号和代码包版本。
 - Collector 代码和 SCF 代码包的构建逻辑在 `modules/collector` 下。
-- 前端请求的管理接口必须走 `/api/admin`；服务之间的调用是经本机主机网关的签名 tRPC（`packages/gatewayclient`，回环 `11002`，跨主机 TLS `11003`）；外部调用方（SCF、Skill、collector-operator 工具）以各自的签名身份从入口主机网关的外部入口（`11004`）进入；因子引擎和归档 Worker 是普通组件，用因子机密钥签名，走 `11003`。
+- 前端请求的管理接口必须走 `/api/admin`；服务之间的调用是经本机主机网关的签名 tRPC（`packages/gatewayclient`，回环 `11002`，跨主机 TLS `11003`）；外部调用方（SCF、Skill）以各自的签名身份从入口主机网关的外部入口（`11004`）进入；因子引擎和归档 Worker 是普通组件，用因子机密钥签名，走 `11003`。
 
 ## 逐段检查清单
 

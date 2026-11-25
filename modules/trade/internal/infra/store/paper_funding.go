@@ -34,7 +34,7 @@ type PaperSwapFill struct {
 
 // PaperSwapActivity 是推算结算时刻持仓用的数据：当前的永续持仓，以及某个时刻起（含）的永续成交，按时间升序。
 // 模拟盘的持仓只由本地成交投影，所以任一时刻的持仓都能由当前持仓减去之后的成交推出来；前提是那之后的成交都还在：
-// 纯合约模拟账户结束超过保留天数（账户配置，默认 5 天）的订单连同成交会被清理（runtime.OrderHistoryPruner），
+// 模拟账户结束超过保留天数（账户配置，默认 5 天）的订单连同成交会被清理（runtime.OrderHistoryPruner），
 // 清理边界不晚于最近一次结算所在整点的前一小时（即补算起点），所以补算要读的成交不会被删。
 type PaperSwapActivity struct {
 	Positions map[string]shared.Decimal
@@ -187,10 +187,6 @@ func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountI
 		if account.ExecutionMode != string(exchange.ExecutionModePaper) || account.SettlementAsset == "" {
 			return fmt.Errorf("%w: paper funding account", ErrInvalidRecord)
 		}
-		// 余额投影被清掉后要按初始资金重建，先确认它存在。
-		if _, err := tx.GetPaperBalanceSnapshot(spaceID, tradingAccountID); err != nil {
-			return err
-		}
 		// 持仓在事务里读：和余额改动看到的是同一份成交。
 		activity, err := tx.paperSwapActivity(spaceID, tradingAccountID, ordered[0].FundingTime.UnixMilli())
 		if err != nil {
@@ -312,7 +308,7 @@ func (tx *Tx) addPaperBalance(spaceID, tradingAccountID, asset string, delta sha
 			return fmt.Errorf("%w: stored paper balance", ErrInvalidRecord)
 		}
 	} else {
-		// 资产还没有余额行：账户的余额必须已经初始化（已有余额行时它必然存在，不用再查）。
+		// 资产还没有余额行：账户的余额必须已经初始化，即账户至少有一行余额（建账户时写入的结算资产行）。
 		var initialized int64
 		if err := tx.db.Raw(queryPaperBalanceInitialized, spaceID, tradingAccountID).Scan(&initialized).Error; err != nil {
 			return err
@@ -354,7 +350,7 @@ const (
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_settled_at >= ? AND c_settled_at <= ?`
 	queryPaperAssetBalance = `SELECT c_total FROM t_paper_asset_balances
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_asset = ?`
-	queryPaperBalanceInitialized = `SELECT COUNT(*) FROM t_paper_balance_projections
+	queryPaperBalanceInitialized = `SELECT COUNT(*) FROM t_paper_asset_balances
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	execUpsertPaperAssetBalance = `INSERT INTO t_paper_asset_balances (c_space_id, c_trading_account_id, c_asset, c_total) VALUES (?, ?, ?, ?)
 		ON CONFLICT (c_space_id, c_trading_account_id, c_asset) DO UPDATE SET c_total = excluded.c_total`

@@ -35,18 +35,14 @@ type RowReader interface {
 
 // AbsenceSource 返回已确认“行情源没有”的 K 线区间。
 type AbsenceSource interface {
-	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
+	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
 }
 
-// RowCounter 按标的统计时间范围内已存在的行数，由 Storage 的 active View 回答，只回传计数。
+// RowCounter 按标的统计时间范围内已存在的行数，只回传计数。生产里是 Storage 主服务的 PrimaryStore.CountTimeSeriesRows，
+// 在 Pebble 的序列索引上数键，看得到全部保留期内的数据（historyStarts 据此判断范围之前有没有数据）。
 // Rows 实现了它时，检查先比对根数，只有根数对不上的标的才读行定位缺口。
 type RowCounter interface {
 	CountTimeSeriesRows(context.Context, *storagepb.CountTimeSeriesRowsReq, ...client.Option) (*storagepb.CountTimeSeriesRowsRsp, error)
-}
-
-// PlanHistory 返回空间的全部采集计划。只有补采用它：按历史计划找当时负责某个标的的函数与交易所符号映射（loadPlanHistory）。
-type PlanHistory interface {
-	ListAll(context.Context, string) ([]*store.FetchPlanRecord, error)
 }
 
 // Checker 按标的时间线得到应有标的与时间点，读取 Storage 行比对出缺口。
@@ -69,8 +65,6 @@ type Request struct {
 	SpaceID   string
 	DatasetID string
 	SubjectID string
-	// SeriesTag 非空时，统一数据集（按序列检查）只检查这一条序列；单序列数据集忽略它。
-	SeriesTag string
 	From      time.Time
 	To        time.Time
 	Deep      bool
@@ -80,8 +74,9 @@ type Request struct {
 	// 恢复追赶用它：暂停那一刻正在走的那根 K 线（例如 07:06:45 暂停时的 07:06 那根 1m、07:00 那根 1h）是在暂停期间收盘的，
 	// 暂停期间没有采到，但它的开始时间早于暂停时间，按默认的「向上对齐」会被漏掉。
 	IncludeOpenBar bool
-	// BeforeFirstPlan 让范围可以早于每个数据集最早的采集计划生效点（见 extendEarliestSegments）；默认只检查计划覆盖的时间。
-	BeforeFirstPlan bool
+	// FullHistory 让早于时间线起点的部分全部算应有的 K 线，不按每个标的自己的第一根裁掉（见 historyStarts）。
+	// 历史补齐用：数据集刚接入，时间线起点之前一根都没有，按“从第一根起算”会一个缺口都报不出来。
+	FullHistory bool
 	// Subjects 非空时只检查这些标的（历史补齐按标的分批提交）；与 SubjectID 同时给出时取交集。
 	Subjects []string
 	// MergeSessions 让日内缺口跨过休市区间连成一段（日线以上本来就不拆），MaxGapBars 大于 0 时每段至多这么多根应有的 K 线。
@@ -92,12 +87,10 @@ type Request struct {
 }
 
 // Gap 是一段连续缺失的 K 线：[From, To) 内按频率共缺 Missing 根。
-// SeriesTag 只在统一数据集（按序列检查）时有值，缺口属于（标的、该 tag）这一条序列；单序列数据集为空。
 type Gap struct {
 	DatasetID string
 	Frequency string
 	SubjectID string
-	SeriesTag string
 	From      time.Time
 	To        time.Time
 	Missing   int
@@ -131,13 +124,10 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if request.BeforeFirstPlan {
-		extendEarliestSegments(timeline, request.From)
-	}
+	extendEarliestSegments(timeline, request.From)
 	type job struct {
 		key      string
 		segment  Segment
-		tag      string
 		subjects []string
 	}
 	var jobs []job
@@ -163,24 +153,18 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			continue
 		}
 		for _, segment := range timeline[key] {
-			// 统一数据集按序列（tag）分组，同一批只含一个 tag：读行、计数都按 tag 选序列；单序列数据集只有一组，不带 tag。
-			for _, group := range segment.groups() {
-				if group.Tag != "" && request.SeriesTag != "" && group.Tag != request.SeriesTag {
+			var selected []string
+			for _, subject := range segment.Subjects {
+				if request.SubjectID != "" && !strings.EqualFold(request.SubjectID, subject) {
 					continue
 				}
-				var selected []string
-				for _, subject := range group.Subjects {
-					if request.SubjectID != "" && !strings.EqualFold(request.SubjectID, subject) {
-						continue
-					}
-					if len(wanted) > 0 && !wanted[subject] {
-						continue
-					}
-					selected = append(selected, subject)
+				if len(wanted) > 0 && !wanted[subject] {
+					continue
 				}
-				for from := 0; from < len(selected); from += batch {
-					jobs = append(jobs, job{key: key, segment: segment, tag: group.Tag, subjects: selected[from:min(from+batch, len(selected))]})
-				}
+				selected = append(selected, subject)
+			}
+			for from := 0; from < len(selected); from += batch {
+				jobs = append(jobs, job{key: key, segment: segment, subjects: selected[from:min(from+batch, len(selected))]})
 			}
 		}
 	}
@@ -223,7 +207,7 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			defer wg.Done()
 			defer func() { <-slots }()
 			datasetID, frequency, _ := strings.Cut(item.key, "|")
-			gaps, expected, absent, err := c.checkSubjects(ctx, request, datasetID, frequency, item.tag, item.subjects, item.segment)
+			gaps, expected, absent, err := c.checkSubjects(ctx, request, datasetID, frequency, item.subjects, item.segment)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -256,24 +240,70 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 		if a.SubjectID != b.SubjectID {
 			return a.SubjectID < b.SubjectID
 		}
-		if a.SeriesTag != b.SeriesTag {
-			return a.SeriesTag < b.SeriesTag
-		}
 		return a.From.Before(b.From)
 	})
 	return result, nil
 }
 
-// extendEarliestSegments 把每个数据集最早一段的起点前移到 from，让强制重拉（及其复查）能覆盖早于采集计划生效点的数据。
-// 计划只记录“从哪个周期起实时采集”，更早的数据可能来自旧的采集方式或历史导入，其中的孔洞按计划时间线看不到，
-// 只能由操作员指定范围重拉。更早时间的标的集合已无记录，沿用最早一段的标的。
+// extendEarliestSegments 把每个数据集最早一段的起点前移到 from，让检查与补采能覆盖早于时间线起点（最早的采集计划生效点）的数据：
+// 那段数据来自旧的采集方式或历史导入，其中的孔洞只能由操作员指定范围检查或补采。更早时间的标的集合已无记录，
+// 沿用最早一段的标的；原来的起点记在 TimelineFrom，早于它的 K 线只从每个标的自己的第一根起算（见 historyStarts）。
 func extendEarliestSegments(timeline Timeline, from time.Time) {
 	at := from.UTC().Unix()
 	for _, segments := range timeline {
 		if len(segments) > 0 && segments[0].From > at {
+			segments[0].TimelineFrom = segments[0].From
 			segments[0].From = at
 		}
 	}
+}
+
+// historyStarts 返回早于时间线起点的那部分里，每个标的从 bars 的哪个下标起才算应有 K 线：
+// 标的在 bars[0] 之前已有数据就从头算（不裁剪，范围开头的真实缺口照常报）；否则从它在时间线起点之前的第一根起算，
+// 那之前一根都没有的（新上市）从时间线起点起算。present 是读到的行（扣除已确认缺失之前）。
+// 没有计数能力或计数失败时不裁剪：宁可多报，不把真实缺口当成“尚无历史”。返回值只含需要裁剪的标的。
+func (c *Checker) historyStarts(ctx context.Context, spaceID, datasetID, frequencyName string, subjects []string, bars []time.Time, present map[string]map[int64]bool, timelineFrom int64) map[string]int {
+	boundary := sort.Search(len(bars), func(i int) bool { return bars[i].Unix() >= timelineFrom })
+	counter, ok := c.Rows.(RowCounter)
+	if boundary == 0 || len(subjects) == 0 || !ok {
+		return nil
+	}
+	prior := map[string]int{}
+	for from := 0; from < len(subjects); from += subjectsPerCount {
+		batch := subjects[from:min(from+subjectsPerCount, len(subjects))]
+		counts, err := countPresent(ctx, counter, spaceID, datasetID, frequencyName, batch, time.Unix(0, 0).UTC(), bars[0])
+		if err != nil {
+			log.WarnContextf(ctx, "collector kline count before range failed, gaps before the timeline are not trimmed space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
+			return nil
+		}
+		for subject, count := range counts {
+			prior[subject] = count
+		}
+	}
+	starts := map[string]int{}
+	for _, subject := range subjects {
+		if prior[subject] > 0 {
+			continue
+		}
+		start := firstPresent(bars[:boundary], present[subject])
+		if start < 0 {
+			start = boundary
+		}
+		if start > 0 {
+			starts[subject] = start
+		}
+	}
+	return starts
+}
+
+// firstPresent 返回标的第一根已存在的 K 线在 bars 里的下标；一根都没有时返回 -1。
+func firstPresent(bars []time.Time, present map[int64]bool) int {
+	for i, bar := range bars {
+		if present[bar.Unix()] {
+			return i
+		}
+	}
+	return -1
 }
 
 // expectedBars 返回区间内已过截止时间、应当存在的 K 线开始时间。
@@ -298,9 +328,9 @@ func (c *Checker) expectedBars(spaceID string, frequency marketdata.Frequency, f
 	return bars, nil
 }
 
-// checkSubjects 检查同一数据集、同一计划段、同一序列 tag（单序列数据集为空）内的一批标的：应有的 K 线对它们相同，只读一次 Storage，再逐标的求缺口。
+// checkSubjects 检查同一数据集、同一计划段内的一批标的：应有的 K 线对它们相同，只读一次 Storage，再逐标的求缺口。
 // 返回缺口、应有根数与扣除的已确认缺失根数。
-func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID, frequencyName, seriesTag string, subjects []string, segment Segment) ([]Gap, int, int, error) {
+func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID, frequencyName string, subjects []string, segment Segment) ([]Gap, int, int, error) {
 	frequency, err := marketdata.ParseFrequency(frequencyName)
 	if err != nil {
 		return nil, 0, 0, err
@@ -331,17 +361,18 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 	}
 	present := map[string]map[int64]bool{}
 	complete := map[string]bool{}
+	var starts map[string]int
 	absent := 0
 	if !request.AssumeMissing {
 		end := bars[len(bars)-1].Add(time.Second)
-		absentBars, err := c.absentBars(ctx, request.SpaceID, datasetID, frequencyName, seriesTag, subjects, bars)
+		absentBars, err := c.absentBars(ctx, request.SpaceID, datasetID, frequencyName, subjects, bars)
 		if err != nil {
 			return nil, 0, 0, err
 		}
 		detail := subjects
 		if counter, ok := c.counter(request); ok {
 			// 先比对根数：根数正好等于“应有 - 已确认缺失”的标的没有缺口，不用读行。
-			if counts, err := countPresent(ctx, counter, request.SpaceID, datasetID, frequencyName, seriesTag, subjects, bars[0], end); err != nil {
+			if counts, err := countPresent(ctx, counter, request.SpaceID, datasetID, frequencyName, subjects, bars[0], end); err != nil {
 				// 计数失败（例如 Storage 还没升级）不影响检查，退回逐行比对。
 				log.WarnContextf(ctx, "collector kline count failed, falling back to row reads space=%s dataset=%s|%s: %v", request.SpaceID, datasetID, frequencyName, err)
 			} else {
@@ -358,7 +389,7 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 		}
 		for from := 0; from < len(detail); from += subjectsPerRead {
 			chunk := detail[from:min(from+subjectsPerRead, len(detail))]
-			rows, err := c.readPresent(ctx, request.SpaceID, datasetID, frequencyName, seriesTag, chunk, bars[0], end, required, request.Deep)
+			rows, err := c.readPresent(ctx, request.SpaceID, datasetID, frequencyName, chunk, bars[0], end, required, request.Deep)
 			if err != nil {
 				return nil, 0, 0, err
 			}
@@ -366,16 +397,23 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 				present[subject] = times
 			}
 		}
+		// 早于时间线起点的部分：每个标的从自己的第一根起算，一根都没有的不报（新上市的标的前面本来没有数据）。
+		if segment.TimelineFrom > 0 && !request.FullHistory {
+			starts = c.historyStarts(ctx, request.SpaceID, datasetID, frequencyName, detail, bars, present, segment.TimelineFrom)
+		}
 		absent += coverAbsences(bars, present, absentBars, detail)
 	}
 	var gaps []Gap
+	expected := len(bars) * len(subjects)
 	for _, subject := range subjects {
+		start := starts[subject]
+		expected -= start
 		if complete[subject] {
 			continue
 		}
-		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, seriesTag, frequency, bars, present[subject], gapOptions{merge: request.MergeSessions, maxBars: request.MaxGapBars})...)
+		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, frequency, bars[start:], present[subject], gapOptions{merge: request.MergeSessions, maxBars: request.MaxGapBars})...)
 	}
-	return gaps, len(bars) * len(subjects), absent, nil
+	return gaps, expected, absent, nil
 }
 
 // counter 返回可用的计数能力：深度检查要校验字段，强制重拉不读数据，二者都不计数。
@@ -387,12 +425,11 @@ func (c *Checker) counter(request Request) (RowCounter, bool) {
 	return counter, ok
 }
 
-// countPresent 按标的统计 [from, to) 内已存在的 K 线根数。seriesTag 为空时同一时间点多个 series_tag 只计一次；
-// 非空时只数这一条序列（Storage 的计数按标的合并，所以统一数据集每个 tag 单独请求）。
-func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) (map[string]int, error) {
+// countPresent 按标的统计 [from, to) 内已存在的 K 线根数。
+func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) (map[string]int, error) {
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
 	for _, subject := range subjects {
-		selectors = append(selectors, seriesSelector(spaceID, datasetID, subject, frequency, seriesTag))
+		selectors = append(selectors, seriesSelector(spaceID, datasetID, subject, frequency))
 	}
 	rsp, err := counter.CountTimeSeriesRows(ctx, &storagepb.CountTimeSeriesRowsReq{
 		SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
@@ -411,17 +448,13 @@ func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, f
 	return counts, nil
 }
 
-// seriesSelector 构造读取一个标的序列的选择器；seriesTag 为空表示该标的的全部序列。
-func seriesSelector(spaceID, datasetID, subject, frequency, seriesTag string) *storagepb.TimeSeriesSelector {
-	selector := &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency}
-	if seriesTag != "" {
-		selector.SeriesTag = &seriesTag
-	}
-	return selector
+// seriesSelector 构造读取一个标的序列的选择器（数据集里每个标的只有一条序列，不带 series_tag）。
+func seriesSelector(spaceID, datasetID, subject, frequency string) *storagepb.TimeSeriesSelector {
+	return &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency}
 }
 
-// absentBars 返回每个标的在 bars 里已确认行情源没有的 K 线开始时间；seriesTag 非空时只取这一条序列的确认缺失。
-func (c *Checker) absentBars(ctx context.Context, spaceID, datasetID, frequencyName, seriesTag string, subjects []string, bars []time.Time) (map[string]map[int64]bool, error) {
+// absentBars 返回每个标的在 bars 里已确认行情源没有的 K 线开始时间。
+func (c *Checker) absentBars(ctx context.Context, spaceID, datasetID, frequencyName string, subjects []string, bars []time.Time) (map[string]map[int64]bool, error) {
 	out := map[string]map[int64]bool{}
 	if c.Absences == nil || len(bars) == 0 {
 		return out, nil
@@ -430,7 +463,7 @@ func (c *Checker) absentBars(ctx context.Context, spaceID, datasetID, frequencyN
 	if err != nil {
 		return nil, err
 	}
-	absences, err := c.Absences.AbsencesIn(ctx, spaceID, datasetID, frequencyName, seriesTag, subjects, bars[0], frequency.BarEnd(bars[len(bars)-1]))
+	absences, err := c.Absences.AbsencesIn(ctx, spaceID, datasetID, frequencyName, subjects, bars[0], frequency.BarEnd(bars[len(bars)-1]))
 	if err != nil {
 		return nil, fmt.Errorf("read source absences: %w", err)
 	}
@@ -478,8 +511,8 @@ type gapOptions struct {
 	maxBars int
 }
 
-// subjectGaps 把应有的 K 线与实际存在的时间点比对，合并成连续缺口；seriesTag 非空时缺口属于这一条序列。
-func subjectGaps(datasetID, frequencyName, subject, seriesTag string, frequency marketdata.Frequency, bars []time.Time, present map[int64]bool, options gapOptions) []Gap {
+// subjectGaps 把应有的 K 线与实际存在的时间点比对，合并成连续缺口。
+func subjectGaps(datasetID, frequencyName, subject string, frequency marketdata.Frequency, bars []time.Time, present map[int64]bool, options gapOptions) []Gap {
 	var gaps []Gap
 	var open *Gap
 	// 日内：中间隔着非交易时段（日历跳过的 K 线）时拆成两段，补采分块不会跨休市区间。
@@ -503,7 +536,7 @@ func subjectGaps(datasetID, frequencyName, subject, seriesTag string, frequency 
 			open = nil
 		}
 		if open == nil {
-			open = &Gap{DatasetID: datasetID, Frequency: frequencyName, SubjectID: subject, SeriesTag: seriesTag, From: bar}
+			open = &Gap{DatasetID: datasetID, Frequency: frequencyName, SubjectID: subject, From: bar}
 		}
 		open.To = frequency.BarEnd(bar)
 		open.Missing++
@@ -528,12 +561,12 @@ func (c *Checker) deepFields(spaceID string, configured []string) []string {
 	return []string{"open", "high", "low", "close"}
 }
 
-// readPresent 一次读出一批标的（统一数据集是同一条序列 seriesTag 下的一批）在区间内存在（深度检查时字段齐全）的 K 线开始时间，按标的分组返回。
-func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time, columns []string, deep bool) (map[string]map[int64]bool, error) {
+// readPresent 一次读出一批标的在区间内存在（深度检查时字段齐全）的 K 线开始时间，按标的分组返回。
+func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time, columns []string, deep bool) (map[string]map[int64]bool, error) {
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
 	present := make(map[string]map[int64]bool, len(subjects))
 	for _, subject := range subjects {
-		selectors = append(selectors, seriesSelector(spaceID, datasetID, subject, frequency, seriesTag))
+		selectors = append(selectors, seriesSelector(spaceID, datasetID, subject, frequency))
 		present[subject] = map[int64]bool{}
 	}
 	cursor := ""

@@ -5,8 +5,6 @@ use (
 	./modules/admin/proto/admingen
 	./modules/archive
 	./modules/archive/proto/archivegen
-	./modules/callbackdispatcher
-	./modules/callbackdispatcher/proto/callbackdispatchergen
 	./modules/cli
 	./modules/collector
 	./modules/collector/proto/collectorgen
@@ -27,44 +25,7 @@ use (
 	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
-	./packages/barclock
-	./packages/cloudprovider
-	./packages/clsreporter
-	./packages/cnstock
-	./packages/commonpb
-	./packages/doctor
-	./packages/events
-	./packages/factorexpr
-	./packages/factorudf
-	./packages/factorname
-	./packages/frequency
-	./packages/gatewayauth
-	./packages/gatewayclient
-	./packages/gatewayroute/proto/gatewayroutegen
-	./packages/healthz
-	./packages/hostmetricpb
-	./packages/hostpolicy
-	./packages/jetstream
-	./packages/lifecycle
-	./packages/marketcalendar
-	./packages/marketfetchpb
-	./packages/metricspb
-	./packages/netguard
-	./packages/notification
-	./packages/report
-	./packages/security
-	./packages/seriesformat
-	./packages/seriesimport
-	./packages/seriesset
-	./packages/servicecatalog
-	./packages/storagepb
-	./packages/storagepolicy
-	./packages/sysctl
-	./packages/tdx
-	./packages/timerjob
-	./packages/tradeeventpb
-	./packages/trpcretry
-	./packages/wirecompress
+	./packages
 	./tools/zstddict
 )
 

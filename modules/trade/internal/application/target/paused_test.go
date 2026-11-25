@@ -24,7 +24,7 @@ func TestPausedLogicalAccountConvergesWithoutError(t *testing.T) {
 			f := newTargetFixture(t, exchange.MarketTypeSwap)
 			modernExpiryTarget(t, f)
 			require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts
-				SET c_automation_state = 'PAUSED', c_pause_reason = '手动暂停'
+				SET c_automation_state = 'PAUSED', c_pause_reason = '手动暂停', c_pause_source = 'USER'
 				WHERE c_logical_account_id = 'logical-1'`).Error)
 			f.position(t, "account-a", "BTCUSDT", "1")
 			e := f.executor()

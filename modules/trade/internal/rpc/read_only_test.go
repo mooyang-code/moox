@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestConsoleQueriesDoNotWaitForReadWriteConnection(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "account-1",
-			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
+			Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER",
 			SettlementAsset: "USDT", Status: "ENABLED",
 			Snapshot: store.TradingAccountSnapshot{Balances: []store.AssetBalance{
 				{Wallet: string(exchange.WalletUnified), Asset: "USDT", Total: "500", Available: "500"},
@@ -42,8 +43,8 @@ func TestConsoleQueriesDoNotWaitForReadWriteConnection(t *testing.T) {
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true, Priority: 1,
 		})
 	}))
-	_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "DOGEUSDT", Reason: "下架", BlockedAt: 1,
+	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "DOGEUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	server := &ConsoleServer{

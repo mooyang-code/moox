@@ -120,16 +120,28 @@ func TestStockMinuteClockWalksAcrossBreaks(t *testing.T) {
 	}
 }
 
+// 日线的键（data_time）是交易日期的 UTC 零点（与合成、采集写入的行键一致），收线是当天最后一个时段收盘。
 func TestStockDailyClockClosesAtTheLastSession(t *testing.T) {
 	clock := stockClock(t, october)
+	dayKey := func(day string) time.Time {
+		value, err := time.Parse("2006-01-02", day)
+		if err != nil {
+			panic(err)
+		}
+		return value
+	}
 	got, err := clock.LatestClosed(at("2026-10-16", "14:00:00"), frequency.Day1)
-	requireBar(t, got, err, at("2026-10-15", "00:00:00"), at("2026-10-15", "15:00:00"))
+	requireBar(t, got, err, dayKey("2026-10-15"), at("2026-10-15", "15:00:00"))
 	got, err = clock.LatestClosed(at("2026-10-19", "09:00:00"), frequency.Day1)
-	requireBar(t, got, err, at("2026-10-16", "00:00:00"), at("2026-10-16", "15:00:00"))
-	got, err = clock.BarAt(at("2026-10-16", "00:00:00"), frequency.Day1)
-	requireBar(t, got, err, at("2026-10-16", "00:00:00"), at("2026-10-16", "15:00:00"))
+	requireBar(t, got, err, dayKey("2026-10-16"), at("2026-10-16", "15:00:00"))
+	got, err = clock.BarAt(dayKey("2026-10-16"), frequency.Day1)
+	requireBar(t, got, err, dayKey("2026-10-16"), at("2026-10-16", "15:00:00"))
 	next, err := clock.Next(got, frequency.Day1)
-	requireBar(t, next, err, at("2026-10-19", "00:00:00"), at("2026-10-19", "15:00:00"))
+	requireBar(t, next, err, dayKey("2026-10-19"), at("2026-10-19", "15:00:00"))
+	_, err = clock.BarAt(dayKey("2026-10-17"), frequency.Day1)
+	if !errors.Is(err, ErrOutsideSession) {
+		t.Fatalf("周六的日线 err = %v", err)
+	}
 	// 周线收在本周最后一个交易日；国庆所在周只有 09-28～09-30 交易。
 	week, err := clock.BarAt(at("2026-09-28", "00:00:00"), frequency.Week1)
 	requireBar(t, week, err, at("2026-09-28", "00:00:00"), at("2026-09-30", "15:00:00"))

@@ -92,13 +92,13 @@ func tlsConfig() *tls.Config {
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "swsresearch", SourceID: "sw_class_http", DisplayName: "申万行业分类", Hosts: []string{"www.swsresearch.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "swsresearch", SourceID: "sw_class_http", DisplayName: "申万行业分类", Hosts: []string{"www.swsresearch.com"}, ProtocolVariant: "http", Transport: "https", Port: 443}
 }
 
 // FieldSpecs：申万只发布行业代码，不发布中文名。
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
 	spec := func(id, name string) marketdata.FieldSpec {
-		return marketdata.FieldSpec{ID: id, Name: name, Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: []string{"1d"}}
+		return marketdata.FieldSpec{ID: id, Name: name, Group: marketdata.GroupIndustry, Type: marketdata.FieldTypeInt, Fill: "prev", Frequencies: []string{"1d"}}
 	}
 	return []marketdata.FieldSpec{spec(FieldSWLevel1, "申万一级行业"), spec(FieldSWLevel2, "申万二级行业"), spec(FieldSWLevel3, "申万三级行业")}
 }

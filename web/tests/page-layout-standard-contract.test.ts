@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const viewsRoot = path.resolve(__dirname, "../src/views");
-const staticMenuSource = fs.readFileSync(path.resolve(__dirname, "../src/api/modules/system/static-menu.ts"), "utf8");
 const read = (relativePath: string) => {
   const filePath = path.join(viewsRoot, relativePath);
   const source = fs.readFileSync(filePath, "utf8");
@@ -48,24 +47,6 @@ describe("page layout standards", () => {
     expect(accounts).not.toContain("<a-drawer");
     expect(accountDetail).toContain('class="moox-page tx-detail"');
     expect(accountDetail).not.toContain("<a-drawer");
-    // 菜单「交易管理」是四项：模拟账户、测试账户、实盘账户、下架名单；持仓、订单不单独做菜单
-    for (const path of ["/trading/paper", "/trading/testnet", "/trading/live", "/trading/blocked"]) {
-      expect(staticMenuSource).toContain(`"${path}"`);
-    }
-    expect(staticMenuSource).not.toContain("/trading/accounts");
-    expect(staticMenuSource).not.toContain("/trading/positions");
-    expect(staticMenuSource).not.toContain("/trading/orders");
-    expect(staticMenuSource).not.toContain("/trading/logical-accounts");
-    // 策略菜单与因子计算一致：总览 → 定义 → 运行（实例 / 结果 / 回放 工作台）。
-    const strategyOverviewPos = staticMenuSource.indexOf(
-      '"/strategy/overview", "strategy-overview"',
-      staticMenuSource.indexOf('directory("0250"')
-    );
-    const strategyDefinitionsPos = staticMenuSource.indexOf('"/strategy/definitions"');
-    const strategyTasksPos = staticMenuSource.indexOf('"/strategy/tasks"');
-    expect(strategyOverviewPos).toBeGreaterThan(-1);
-    expect(strategyOverviewPos).toBeLessThan(strategyDefinitionsPos);
-    expect(strategyDefinitionsPos).toBeLessThan(strategyTasksPos);
 
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));
@@ -101,7 +82,7 @@ describe("page layout standards", () => {
     expect(running).not.toContain('class="filters"');
   });
 
-  // 因子定义页没有标签页，按字段管理的工作台布局用提示条说明规则，不在此列。
+  // 因子定义页没有标签页，用工作台布局与提示条说明规则，不在此列。
   it("keeps factor tab explanations in info tips instead of rows under the tabs", () => {
     for (const file of ["factor/compute-tasks/index.vue", "factor/recalc/index.vue"]) {
       const source = read(file);

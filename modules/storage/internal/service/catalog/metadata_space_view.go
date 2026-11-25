@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -13,7 +14,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// 本文件聚合 Space 与 View 相关的元数据 CRUD 入口。View 的列由数据集列推出，不能单独写。
+// 本文件聚合 Space 相关的元数据 CRUD 入口。
 
 func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.CreateSpaceRsp, error) {
 	space := req.GetSpace()
@@ -25,6 +26,9 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	}
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
+	}
+	if err := validateSpaceTimezone(space); err != nil {
+		return &pb.CreateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	created, err := s.metadata.CreateSpace(ctx, space)
 	if err != nil {
@@ -45,6 +49,9 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
 	}
+	if err := validateSpaceTimezone(space); err != nil {
+		return &pb.UpdateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
+	}
 	updated, err := s.metadata.UpsertSpace(ctx, space)
 	if err != nil {
 		return &pb.UpdateSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
@@ -55,6 +62,19 @@ func (s *Service) UpdateSpace(ctx context.Context, req *pb.UpdateSpaceReq) (*pb.
 	return &pb.UpdateSpaceRsp{RetInfo: retinfo.Success("success"), Space: updated}, nil
 }
 
+// validateSpaceTimezone 要求时区是 IANA 名称：管理台全站时间按它显示，写错了页面只能回退到浏览器本地时区。
+func validateSpaceTimezone(space *pb.Space) error {
+	space.Timezone = strings.TrimSpace(space.GetTimezone())
+	space.Market = strings.TrimSpace(space.GetMarket())
+	if space.Timezone == "" {
+		return nil
+	}
+	if _, err := time.LoadLocation(space.Timezone); err != nil {
+		return storeerr.Invalidf("空间时区 %q 不是有效的 IANA 时区名", space.Timezone)
+	}
+	return nil
+}
+
 func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.DeleteSpaceRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" {
 		return &pb.DeleteSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id is required"))}, nil
@@ -62,8 +82,8 @@ func (s *Service) DeleteSpace(ctx context.Context, req *pb.DeleteSpaceReq) (*pb.
 	if s.rows == nil {
 		return &pb.DeleteSpaceRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset row store is not configured"))}, nil
 	}
-	// 和 DeleteDataset 一样服务端一次做完：先记下空间里的数据集，删元数据（级联删数据集、View 等）并发布缓存，
-	// 再在写锁里逐个删行。View 的索引交给 View 的退役索引清理。
+	// 和 DeleteDataset 一样服务端一次做完：先记下空间里的数据集，删元数据（级联删数据集与列）并发布缓存，
+	// 再在写锁里逐个删行。数据集的查询索引由 storage-view 下一轮维护摘掉并删除。
 	datasetIDs, err := s.spaceDatasetIDs(ctx, req.GetSpaceId())
 	if err != nil {
 		return &pb.DeleteSpaceRsp{RetInfo: retinfo.FromError(err)}, nil
@@ -113,131 +133,9 @@ func (s *Service) GetSpace(ctx context.Context, req *pb.GetSpaceReq) (*pb.GetSpa
 }
 
 func (s *Service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.ListSpacesRsp, error) {
-	items, page, err := s.metadata.ListSpaces(ctx, req.GetOwner(), req.GetPage())
+	items, page, err := s.metadata.ListSpaces(ctx, req.GetOwner(), req.GetStatus(), req.GetPage())
 	if err != nil {
 		return &pb.ListSpacesRsp{RetInfo: retinfo.FromError(err)}, nil
 	}
 	return &pb.ListSpacesRsp{RetInfo: retinfo.Success("success"), Spaces: items, PageResult: page}, nil
-}
-
-func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.CreateViewRsp, error) {
-	view := req.GetView()
-	if view == nil || view.GetSpaceId() == "" || (view.GetViewId() == "" && view.GetName() == "") {
-		return &pb.CreateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id or name are required"))}, nil
-	}
-	if view.ViewId == "" {
-		view.ViewId = "view_" + defaultID(view.GetName(), "view")
-	}
-	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
-		return &pb.CreateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := validateViewID(view.GetViewId()); err != nil {
-		return &pb.CreateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
-		return &pb.CreateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	var created *pb.View
-	var err error
-	if req.GetCreateOnly() {
-		created, err = s.metadata.CreateView(ctx, view)
-	} else {
-		created, err = s.metadata.UpsertView(ctx, view)
-	}
-	if err != nil {
-		return &pb.CreateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.CreateViewRsp{RetInfo: retinfo.Success("success"), View: created}, nil
-}
-
-func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.UpdateViewRsp, error) {
-	view := req.GetView()
-	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
-		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	if view.Name == "" {
-		view.Name = view.GetViewId()
-	}
-	if err := validateChineseDisplayName("view name", view.GetName()); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := validateViewID(view.GetViewId()); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.normalizeAndValidateViewDatasets(ctx, view); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	updated, err := s.metadata.UpsertView(ctx, view)
-	if err != nil {
-		return &pb.UpdateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpdateViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.UpdateViewRsp{RetInfo: retinfo.Success("success"), View: updated}, nil
-}
-
-func (s *Service) DeleteView(ctx context.Context, req *pb.DeleteViewReq) (*pb.DeleteViewRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
-		return &pb.DeleteViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	if err := s.metadata.DeleteView(ctx, req.GetSpaceId(), req.GetViewId()); err != nil {
-		return &pb.DeleteViewRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "DeleteView")
-	return &pb.DeleteViewRsp{RetInfo: retinfo.Success("success")}, nil
-}
-
-func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb.View) error {
-	if view == nil {
-		return storeerr.Invalidf("view is required")
-	}
-	spaceID := strings.TrimSpace(view.GetSpaceId())
-	datasetID := viewDatasetID(view)
-	if spaceID == "" || datasetID == "" {
-		return storeerr.Invalidf("space_id and dataset_id are required")
-	}
-	dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
-	if err != nil {
-		return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
-	}
-	if freq := strings.TrimSpace(view.GetFreq()); freq != "" && freq != dataset.GetFreq() {
-		return storeerr.Invalidf("view freq %q differs from dataset %s freq %q; a View takes its Dataset's freq", freq, dataset.GetDatasetId(), dataset.GetFreq())
-	}
-	view.Freq = dataset.GetFreq()
-	view.DatasetId = datasetID
-	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
-	view.Engine = defaultViewEngine(dataset.GetDataKind())
-	return nil
-}
-
-func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {
-	view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		// 只有确实不存在才报 VIEW_NOT_FOUND：Collector 据此认为 View 已经删掉，读取出错不能混进来。
-		if !errors.Is(err, sql.ErrNoRows) {
-			return &pb.GetViewRsp{RetInfo: retinfo.FromError(err)}, nil
-		}
-		return &pb.GetViewRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
-	}
-	return &pb.GetViewRsp{RetInfo: retinfo.Success("success"), View: view}, nil
-}
-
-func (s *Service) ListViews(ctx context.Context, req *pb.ListViewsReq) (*pb.ListViewsRsp, error) {
-	items, page, err := s.metadata.ListViews(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetStatus(), req.GetPage())
-	if err != nil {
-		return &pb.ListViewsRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.ListViewsRsp{RetInfo: retinfo.Success("success"), Views: items, PageResult: page}, nil
-}
-
-func (s *Service) ListViewColumns(ctx context.Context, req *pb.ListViewColumnsReq) (*pb.ListViewColumnsRsp, error) {
-	items, page, err := s.metadata.ListViewColumns(ctx, req.GetSpaceId(), req.GetViewId(), req.GetPage())
-	if err != nil {
-		return &pb.ListViewColumnsRsp{RetInfo: retinfo.FromError(err)}, nil
-	}
-	return &pb.ListViewColumnsRsp{RetInfo: retinfo.Success("success"), Columns: items, PageResult: page}, nil
 }

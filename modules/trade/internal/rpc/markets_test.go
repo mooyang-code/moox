@@ -13,12 +13,12 @@ import (
 )
 
 func TestNormalizeForMarkets(t *testing.T) {
-	got, err := normalizeForMarkets("BTC-USDT", []string{"SWAP"})
+	got, err := normalizeForMarkets("BTC-USDT", []string{string(exchange.MarketTypeSwap)})
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT-SWAP", got)
 
 	// 开通多个市场时，标的必须带市场后缀，不能猜。
-	both := []string{"SPOT", "SWAP"}
+	both := []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeSwap)}
 	got, err = normalizeForMarkets("btc-usdt-swap", both)
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT-SWAP", got)
@@ -27,7 +27,7 @@ func TestNormalizeForMarkets(t *testing.T) {
 	require.Equal(t, "BTC-USDT-SPOT", got)
 	_, err = normalizeForMarkets("BTC-USDT", both)
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
-	_, err = normalizeForMarkets("BTC-USDT-SWAP", []string{"SPOT"})
+	_, err = normalizeForMarkets("BTC-USDT-SWAP", []string{string(exchange.MarketTypeSpot)})
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
 	_, err = normalizeForMarkets("BTC-USDT", nil)
 	require.ErrorIs(t, err, exchange.ErrInvalidInstrumentID)
@@ -35,7 +35,7 @@ func TestNormalizeForMarkets(t *testing.T) {
 
 func TestAccountToPBCarriesMarketsWalletsAndAccountMode(t *testing.T) {
 	record := store.TradingAccountRecord{
-		TradingAccountID: "a1", SpaceID: "s", Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "LIVE",
+		TradingAccountID: "a1", SpaceID: "s", Markets: []string{"spot", "swap"}, ExecutionMode: "LIVE",
 		AccountMode: "BINANCE_STANDARD", InspectionJSON: `{"withdraw":false}`,
 		Snapshot: store.TradingAccountSnapshot{
 			Balances:       []store.AssetBalance{{Wallet: "FUTURES", Asset: "USDT", Total: "5", Borrowed: "1"}},
@@ -43,7 +43,7 @@ func TestAccountToPBCarriesMarketsWalletsAndAccountMode(t *testing.T) {
 		},
 	}
 	pb := accountToPB(record)
-	require.Equal(t, []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.MarketType_MARKET_TYPE_SWAP}, pb.GetMarkets())
+	require.Equal(t, []string{"spot", "swap"}, pb.GetMarkets())
 	require.Equal(t, "BINANCE_STANDARD", pb.GetAccountMode())
 	require.JSONEq(t, `{"withdraw":false}`, pb.GetInspectionJson())
 	require.Equal(t, "FUTURES", pb.GetSnapshot().GetBalances()[0].GetWallet())
@@ -63,12 +63,12 @@ func TestLogicalAccountMarketsFollowEnabledMembers(t *testing.T) {
 	require.Empty(t, created.GetLogicalAccount().GetMarkets(), "还没有成员，没有可交易的市场")
 	logicalID := created.GetLogicalAccount().GetLogicalAccountId()
 
-	for id, markets := range map[string][]string{"spot-1": {"SPOT"}, "swap-1": {"SWAP"}} {
+	for id, markets := range map[string][]string{"spot-1": {"spot"}, "swap-1": {"swap"}} {
 		account := store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "BINANCE", Markets: markets,
+			SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "binance", Markets: markets,
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 		}
-		if markets[0] == "SWAP" {
+		if markets[0] == "swap" {
 			account.MarginMode = "CROSS"
 		}
 		require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -83,6 +83,6 @@ func TestLogicalAccountMarketsFollowEnabledMembers(t *testing.T) {
 	got, err := handler.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalID})
 	require.NoError(t, err)
 	require.Equal(t,
-		[]tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.MarketType_MARKET_TYPE_SWAP},
+		[]string{"spot", "swap"},
 		got.GetLogicalAccount().GetMarkets(), "markets 是启用成员已开通市场的并集")
 }

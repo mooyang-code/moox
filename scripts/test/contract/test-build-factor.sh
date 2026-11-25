@@ -23,7 +23,6 @@ export TARGET_GOOS=linux TARGET_GOARCH=amd64 BUILD_RECORD="${tmp}/record"
 export MOOX_TEST_GO_VERSION="$(tr -d '[:space:]' < "${ROOT}/.go-version")"
 
 bash "${tmp}/scripts/build/build.sh" factor-mgr
-test "$(wc -l <"${BUILD_RECORD}" | tr -d ' ')" = 2
+test "$(wc -l <"${BUILD_RECORD}" | tr -d ' ')" = 1
 grep -Eq '^linux\|amd64\|0\|build .*moox-factor-mgr ./cmd/mgr$' "${BUILD_RECORD}"
-grep -Eq '^linux\|amd64\|0\|build .*moox-factor-mgr-cli ./cmd/cli$' "${BUILD_RECORD}"
 echo "factor local build routing contract passed"

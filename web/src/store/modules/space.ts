@@ -1,9 +1,9 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { listSpaces } from "@/api/admin/spaces";
+import { listSpaces } from "@/api/storage/spaces";
 import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 import { setSpaceInitializer } from "@/api/admin/space-client";
-import type { Space } from "@/api/admin/types";
+import type { Space } from "@/api/storage/spaces";
 
 /**
  * 系统空间：mooxsys 是“不属于任何市场”的范围标签（系统告警、系统事件归在它下面），不是交易市场。

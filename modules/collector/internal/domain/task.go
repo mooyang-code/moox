@@ -43,7 +43,6 @@ type CollectionTask struct {
 	PrepareState    CollectionTaskPrepareState `gorm:"column:c_prepare_state"`
 	LastError       string                     `gorm:"column:c_last_error"`
 	ResultDatasetID string                     `gorm:"column:c_result_dataset_id"`
-	ResultViewID    string                     `gorm:"column:c_result_view_id"`
 	CreateTime      time.Time                  `gorm:"column:c_ctime"`
 	ModifyTime      time.Time                  `gorm:"column:c_mtime"`
 }

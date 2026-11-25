@@ -43,7 +43,7 @@ func Register(marketID string, value SubjectRules) {
 }
 
 // HasTradeCount 报告市场某个品种的 K 线是否带报价成交量和成交笔数（否则只有成交额 amount）。
-// marketType 为空或不是具体品种（例如现货加永续的统一数据集）时，按市场的默认品种判断；未登记的市场报错。
+// marketType 为空或不是具体品种时，按市场的默认品种判断；未登记的市场报错。
 func HasTradeCount(marketID, marketType string) (bool, error) {
 	value, err := RulesFor(marketID)
 	if err != nil {

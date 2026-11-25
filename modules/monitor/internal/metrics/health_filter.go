@@ -2,11 +2,10 @@ package metrics
 
 import "github.com/mooyang-code/moox/packages/report"
 
-// ViewMetricScope identifies a View whose output summary a configured K-line
-// freshness check reads.
+// ViewMetricScope identifies the View (one per dataset) whose output summary a
+// configured K-line freshness check reads.
 type ViewMetricScope struct {
 	SpaceID   string
-	ViewID    string
 	DatasetID string
 	Frequency string
 }

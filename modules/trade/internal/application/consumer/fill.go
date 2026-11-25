@@ -17,7 +17,7 @@ import (
 
 type FillOrigin string
 
-var ErrDuplicateFill = errors.New("trade: duplicate fill")
+var ErrDuplicateFill = errors.New("重复的成交")
 
 const (
 	OriginPrivateSocket FillOrigin = "private_stream"
@@ -90,7 +90,7 @@ func (r *Reducer) ConfirmCancel(
 			FilledQuantity: filled, State: state, Version: record.Version,
 		}
 		expectedVersion := aggregate.Version
-		if _, err := aggregate.ConfirmCancel(); err != nil {
+		if err := aggregate.ConfirmCancel(); err != nil {
 			return err
 		}
 		record.State = string(aggregate.State)
@@ -320,7 +320,7 @@ func applyOrderFill(
 	}
 	// 待提交的订单收到成交，说明交易所已经受理了它（重发前的请求其实成功了）：先认领成挂单，再入账。
 	if aggregate.State == order.Pending {
-		if _, err := aggregate.Claim(fill.ExchangeOrderID); err != nil {
+		if err := aggregate.Claim(fill.ExchangeOrderID); err != nil {
 			return err
 		}
 	}
@@ -328,7 +328,7 @@ func applyOrderFill(
 	if order.IsSyntheticOrderID(record.OrderID) {
 		applyFill = aggregate.ApplySyntheticFill
 	}
-	if _, err := applyFill(order.Fill{
+	if err := applyFill(order.Fill{
 		ID: shared.FillID(fillID), Quantity: fill.Quantity,
 	}); err != nil {
 		return err
@@ -531,15 +531,15 @@ func divideRounded(
 	scale int,
 ) (shared.Decimal, error) {
 	if denominator.Cmp(shared.Zero()) <= 0 || scale < 0 {
-		return shared.Decimal{}, errors.New("trade: invalid decimal division")
+		return shared.Decimal{}, errors.New("数值计算参数不合法：除数要大于 0、精度不能为负")
 	}
 	n := new(big.Rat)
 	d := new(big.Rat)
 	if _, ok := n.SetString(numerator.String()); !ok {
-		return shared.Decimal{}, errors.New("trade: invalid decimal numerator")
+		return shared.Decimal{}, errors.New("数值格式不合法：被除数无法解析")
 	}
 	if _, ok := d.SetString(denominator.String()); !ok {
-		return shared.Decimal{}, errors.New("trade: invalid decimal denominator")
+		return shared.Decimal{}, errors.New("数值格式不合法：除数无法解析")
 	}
 	value := new(big.Rat).Quo(n, d)
 	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)

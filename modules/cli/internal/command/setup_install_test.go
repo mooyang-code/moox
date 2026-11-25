@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/identitybundle"
@@ -48,7 +48,7 @@ ssh = { port = 22, username = "builder" }
 [deployments]
 control = ["admin", "monitor", "collector", "factor-mgr", "archive-mgr", "strategy"]
 storage = ["storage-primary", "storage-view", "eventbus"]
-overseas = ["trade", "egress-proxy", "collector-stream", "callback-dispatcher"]
+overseas = ["trade", "egress-proxy", "collector-stream"]
 factor = ["factor-engine", "archive-worker"]
 `))
 	require.NoError(t, err)
@@ -110,7 +110,13 @@ func newInstallHarness(t *testing.T) *installHarness {
 		scanDeployment: func(_ context.Context, _ *setupSnapshot, options deployscan.Options) ([]deployscan.HostReport, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			return slices.DeleteFunc(slices.Clone(h.reports), func(report deployscan.HostReport) bool { return options.Host != "" && report.Host != options.Host }), nil
+			// 与 deployscan.Scan 一致：点名只看那一台；不点名时停用的主机只在清空时检测。
+			return slices.DeleteFunc(slices.Clone(h.reports), func(report deployscan.HostReport) bool {
+				if options.Host != "" {
+					return report.Host != options.Host
+				}
+				return !h.snapshot.Manifest.HostByID(report.Host).Enabled && !options.Wipe
+			}), nil
 		},
 		wipeHost: func(_ context.Context, host topology.Host, root string) (deployscan.HostResult, error) {
 			if err := record("wipe:" + host.Name); err != nil {
@@ -146,14 +152,13 @@ func newInstallHarness(t *testing.T) *installHarness {
 			return setupInitSummary{}, record("init")
 		},
 		openInitFactor: func(context.Context, *setupSnapshot) (setupInitFactor, error) { return &fakeSetupInitFactor{}, nil },
-		backupConfig:   func(context.Context, string) error { return record("backup") },
 		verifySpace:    func(context.Context, string, *setupSnapshot, string) error { return record("verify") },
 		openStart: func(context.Context, string, *setupSnapshot) (setupStartClient, func(), error) {
 			if err := record("start"); err != nil {
 				return nil, nil, err
 			}
 			client := startClient()
-			client.tasks = []adminclient.CollectionTaskSummary{{TaskID: "a"}}
+			client.tasks = []rpcclient.CollectionTaskSummary{{TaskID: "a"}}
 			return client, func() {}, nil
 		},
 	}
@@ -229,7 +234,7 @@ func TestSetupInstallPreviewChangesNothing(t *testing.T) {
 }
 
 // 顺序：控制机先装 Admin 与主机级组件，再装带 EventBus、Storage 的主机，导入元数据，控制机其余组件，其余主机（因子机最后），
-// 统一等一次全部就绪，然后才是完整初始化（告警渠道要等 Monitor 起来）、备份、启动、验收。
+// 统一等一次全部就绪，然后才是完整初始化（告警渠道要等 Monitor 起来）、启动、验收。
 func TestSetupInstallRunsStepsInDependencyOrder(t *testing.T) {
 	h := newInstallHarness(t)
 	out, err := h.run("install", "--space-id", "crypto", "--yes")
@@ -247,7 +252,6 @@ func TestSetupInstallRunsStepsInDependencyOrder(t *testing.T) {
 		"deploy:overseas",
 		"deploy:factor",
 		"init",
-		"backup",
 		"start",
 		"verify",
 	}, sequence)
@@ -413,13 +417,11 @@ func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
 	out, err := h.run("update", "--yes")
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"updated"`)
-	// 进度按整个流程计数：备份配置单独执行，也是最后一步，不另起一个总数。
 	progress := slices.DeleteFunc(strings.Split(strings.TrimSpace(h.stderr), "\n"), func(line string) bool { return !strings.HasPrefix(line, "[") })
-	require.Len(t, progress, 9)
+	require.Len(t, progress, 8)
 	for i, line := range progress {
-		require.True(t, strings.HasPrefix(line, fmt.Sprintf("[%d/9] ", i+1)), line)
+		require.True(t, strings.HasPrefix(line, fmt.Sprintf("[%d/8] ", i+1)), line)
 	}
-	require.Equal(t, "[9/9] moox-cli config backup", progress[8])
 	ready := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return !strings.HasPrefix(call, "ready:") })
 	require.Len(t, ready, 4, "最后对四台主机各等一次就绪")
 	sequence := slices.DeleteFunc(slices.Clone(h.calls), func(call string) bool { return strings.HasPrefix(call, "ready:") })
@@ -430,7 +432,6 @@ func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
 		"deploy:control",
 		"deploy:overseas",
 		"deploy:factor",
-		"backup",
 	}, sequence)
 
 	// 一步失败时停下，报错带错误码和单独重跑这一步的命令。
@@ -439,13 +440,6 @@ func TestSetupUpdateDeploysInInstallOrderWithoutInitOrStart(t *testing.T) {
 	require.ErrorContains(t, err, "update_step_failed")
 	require.ErrorContains(t, err, "moox-cli setup deploy --host overseas")
 	require.NotContains(t, h.calls, "deploy:factor")
-
-	// 备份配置失败只提醒：主机都已更新好。
-	h.calls, h.fail = nil, "backup"
-	out, err = h.run("update", "--yes")
-	require.NoError(t, err)
-	require.Contains(t, out, `"status":"updated"`)
-	require.Contains(t, out, "备份配置失败")
 
 	// 存储机没装过：是安装没做完，不覆盖更新。
 	h.calls, h.fail = nil, ""
@@ -538,7 +532,7 @@ func TestSetupDeployPassesHostComponentsAndSources(t *testing.T) {
 	require.Equal(t, []string{"monitor", "collector"}, got.Components)
 	require.Equal(t, binaries, got.BinaryDirectory)
 	require.Equal(t, h.operator, got.OperatorDirectory)
-	require.NotNil(t, got.SyncHost)
+	require.NotNil(t, got.SyncTopology)
 	require.NotNil(t, got.Dial)
 	require.Nil(t, got.Bundle, "源码目录里没有产物包清单")
 
@@ -627,13 +621,14 @@ func TestSetupInitPassesSourceDirectory(t *testing.T) {
 	require.Equal(t, "seeds", h.seedDirs[len(h.seedDirs)-1])
 }
 
-// 统一等就绪按是否停用排除组件：崩溃后正在自动重启的（单元在、没在运行、没被停用）也要等；被停用的不等。
+// 统一等就绪按 moox.toml 的声明排除组件：[deployments_disabled] 里的不等，停用的主机整台不等；其余的（含崩溃后正在自动重启的）都要等。
 func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 	h := newInstallHarness(t)
-	overseas := h.report("overseas")
-	overseas.Units = []string{"moox-trade.service", "moox-egress-proxy.service", "moox-callback-dispatcher.service"}
-	overseas.Active = []string{"moox-egress-proxy.service"}
-	overseas.Disabled = []string{"moox-callback-dispatcher.service"}
+	h.snapshot.Manifest.DeploymentsDisabled = map[string][]string{"overseas": {"collector-stream"}}
+	factor := h.snapshot.Manifest.HostCatalog["factor"]
+	disabled := false
+	factor.Enabled = &disabled
+	h.snapshot.Manifest.HostCatalog["factor"] = factor
 	waited := map[string][]string{}
 	h.deps.waitReady = func(_ context.Context, host topology.Host, components []string, _ time.Duration) (map[string]string, error) {
 		h.mu.Lock()
@@ -642,7 +637,33 @@ func TestSetupInstallWaitsForEveryComponentThatIsNotDisabled(t *testing.T) {
 		return nil, nil
 	}
 	require.NoError(t, waitSetupAllReady(context.Background(), h.deps, h.snapshot))
-	require.Contains(t, waited["overseas"], "trade", "没在运行但没被停用的组件要等")
+	require.Contains(t, waited["overseas"], "trade")
 	require.Contains(t, waited["overseas"], "egress-proxy")
-	require.NotContains(t, waited["overseas"], "callback-dispatcher", "被停用的组件不等")
+	require.NotContains(t, waited["overseas"], "collector-stream", "声明停用的组件不等")
+	require.NotContains(t, waited, "factor", "停用的主机整台不等")
+}
+
+// 停用的主机上仍留着 host-gateway 等部署：清空照样清它；覆盖更新的预检跳过它（它只写登记，可能连不上）。
+func TestSetupWipeIncludesDisabledHostButUpdateSkipsIt(t *testing.T) {
+	h := newInstallHarness(t)
+	h.markInstalled()
+	disabled := false
+	factor := h.snapshot.Manifest.HostCatalog["factor"]
+	factor.Enabled = &disabled
+	h.snapshot.Manifest.HostCatalog["factor"] = factor
+	require.False(t, h.snapshot.Manifest.HostByID("factor").Enabled)
+
+	out, err := h.run("update")
+	require.NoError(t, err)
+	for _, host := range parsePreview(t, out)["hosts"].([]any) {
+		require.NotEqual(t, "factor", host.(map[string]any)["host"], "覆盖更新的预检不检测停用的主机")
+	}
+
+	out, err = h.run("wipe")
+	require.NoError(t, err)
+	plan := parsePreview(t, out)["plan"].(map[string]any)
+	require.True(t, slices.ContainsFunc(plan["hosts"].([]any), func(host any) bool { return host.(map[string]any)["host"] == "factor" }), "清空范围包含停用的主机")
+	_, err = h.run("wipe", "--yes", "--expect", plan["digest"].(string))
+	require.NoError(t, err)
+	require.Contains(t, h.calls, "wipe:factor")
 }

@@ -6,15 +6,15 @@ import (
 )
 
 func (r *QueryTimeSeriesRowsReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.SpaceId) == "" || strings.TrimSpace(r.ViewId) == "" {
-		return fmt.Errorf("space_id and view_id are required")
+	if r == nil || strings.TrimSpace(r.SpaceId) == "" || strings.TrimSpace(r.DatasetId) == "" {
+		return fmt.Errorf("space_id 与 dataset_id 必填")
 	}
 	return nil
 }
 
 func (r *SearchRecordRowsReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.SpaceId) == "" || strings.TrimSpace(r.ViewId) == "" {
-		return fmt.Errorf("space_id and view_id are required")
+	if r == nil || strings.TrimSpace(r.SpaceId) == "" || strings.TrimSpace(r.DatasetId) == "" {
+		return fmt.Errorf("space_id 与 dataset_id 必填")
 	}
 	return nil
 }

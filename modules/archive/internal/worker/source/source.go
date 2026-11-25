@@ -23,9 +23,15 @@ type Range struct {
 	Columns   []staging.Column
 	Start     time.Time
 	End       time.Time
-	Cursor    string
-	PageRows  int
+	// Subjects 非空时只读这些标的（每个标的一个 selector，最多 MaxSelectors 个），Freq 是它们的频率；为空时读区间内全部标的。
+	Subjects []string
+	Freq     string
+	Cursor   string
+	PageRows int
 }
+
+// MaxSelectors 是 ReadTimeSeriesRows 一次最多带的 selector 数（Storage 的上限）。
+const MaxSelectors = 100
 
 // Page 是一页结果。
 type Page struct {
@@ -48,8 +54,7 @@ type ColumnInfo struct {
 	Name        string            `json:"name"`
 	Type        string            `json:"type"`
 	DisplayName string            `json:"display_name,omitempty"`
-	OriginType  string            `json:"origin_type,omitempty"`
-	OriginID    string            `json:"origin_id,omitempty"`
+	Group       string            `json:"group,omitempty"`
 	Required    bool              `json:"required,omitempty"`
 	Aliases     []string          `json:"aliases,omitempty"`
 	Attributes  map[string]string `json:"attributes,omitempty"`
@@ -69,7 +74,7 @@ func New(gateway gatewayclient.Invoker) *Client {
 
 const columnPageSize = 200
 
-// Columns 返回数据集的值列：来源为字段或因子、状态为启用的列，按列名排序；系统列不导出。
+// Columns 返回数据集里启用的列，按列名排序；数据集的列都是值列（系统列不登记成数据集列）。
 func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]staging.Column, error) {
 	var out []staging.Column
 	var infos []ColumnInfo
@@ -86,11 +91,6 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 			if status := column.GetStatus(); status != "" && status != "active" {
 				continue
 			}
-			switch column.GetOriginType() {
-			case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
-			default:
-				continue
-			}
 			typ, ok := columnType(column.GetValueType())
 			if !ok {
 				return nil, fmt.Errorf("dataset %s/%s column %q has unsupported value type %s", spaceID, datasetID, column.GetColumnName(), column.GetValueType())
@@ -98,8 +98,8 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 			out = append(out, staging.Column{Name: column.GetColumnName(), Type: typ})
 			attributes := column.GetAttributes()
 			infos = append(infos, ColumnInfo{
-				Name: column.GetColumnName(), Type: typ, DisplayName: attributes["display_name"], OriginType: originName(column.GetOriginType()),
-				OriginID: column.GetOriginId(), Required: column.GetRequired(), Aliases: column.GetAliases(), Attributes: attributes,
+				Name: column.GetColumnName(), Type: typ, DisplayName: column.GetDisplayName(), Group: column.GetGroup(),
+				Required: column.GetRequired(), Aliases: column.GetAliases(), Attributes: attributes,
 			})
 		}
 		if !rsp.GetPageResult().GetHasMore() {
@@ -141,8 +141,11 @@ func columnType(t storagepb.FieldValueType) (string, bool) {
 	}
 }
 
-// ReadRange 读取时间区间 [Start, End) 的一页：不指定标的，按游标翻页。
+// ReadRange 读取时间区间 [Start, End) 的一页：Subjects 为空时不指定标的，否则按标的读；按游标翻页。
 func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
+	if len(req.Subjects) > MaxSelectors {
+		return Page{}, fmt.Errorf("read rows %s/%s: 一次最多读 %d 个标的，当前 %d 个", req.SpaceID, req.DatasetID, MaxSelectors, len(req.Subjects))
+	}
 	names := make([]string, len(req.Columns))
 	for i, col := range req.Columns {
 		names[i] = col.Name
@@ -152,6 +155,9 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 		SpaceId: req.SpaceID, DatasetId: req.DatasetID, ColumnNames: names,
 		TimeRange: &storagepb.TimeRange{StartTime: req.Start.UTC().Format(time.RFC3339Nano), EndTime: req.End.UTC().Format(time.RFC3339Nano)},
 		Page:      &commonpb.Page{Size: uint32(req.PageRows), Cursor: req.Cursor},
+	}
+	for _, subject := range req.Subjects {
+		call.Selectors = append(call.Selectors, &storagepb.TimeSeriesSelector{SpaceId: req.SpaceID, DatasetId: req.DatasetID, SubjectId: subject, Freq: req.Freq})
 	}
 	if err := c.gateway.Invoke(gatewayclient.WithoutRetry(ctx), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", call, rsp); err != nil {
 		return Page{}, fmt.Errorf("read rows %s/%s: %w", req.SpaceID, req.DatasetID, err)
@@ -175,7 +181,7 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 			if !ok {
 				continue
 			}
-			value, err := convert(req.Columns[i].Type, field.GetValue())
+			value, err := Convert(req.Columns[i].Type, field.GetValue())
 			if err != nil {
 				return Page{}, fmt.Errorf("row %s@%s column %s: %w", row.GetKey().GetSubjectId(), row.GetKey().GetDataTime(), field.GetFieldId(), err)
 			}
@@ -198,10 +204,16 @@ type ChangeCursor struct {
 	Sequence uint64
 }
 
+// ChangeSpan 是一次写入对一个标的造成的变更范围（含两端，UTC）。
+type ChangeSpan struct {
+	SubjectID  string
+	Start, End time.Time
+}
+
 // Changes 是变更日志的一页。
 type Changes struct {
-	// Spans 是这一页里时间序列行写入涉及的时间范围（含两端，UTC），不分标的。
-	Spans [][2]time.Time
+	// Spans 是这一页里时间序列行写入涉及的标的与时间范围。
+	Spans []ChangeSpan
 	// Next 是已扫描到的位点，原样用作下一次读取的游标。
 	Next    ChangeCursor
 	HasMore bool
@@ -211,7 +223,8 @@ type Changes struct {
 	Bytes int64
 }
 
-// changePageLimit 是一页最多扫描的日志条数（Storage 的上限）。
+// changePageLimit 是一页最多扫描的日志条数（Storage 的上限）。它按全库日志计数、不是本数据集的条数，
+// 取小了每个任务扫全局日志的请求数成倍增加，任务多时位点越落越远；一页的大小另由 Storage 按字节截断。
 const changePageLimit = 2000
 
 // ReadChanges 从游标之后读一页数据集的变更日志；cursor 为 nil 时只取日志头部的位点。
@@ -239,14 +252,14 @@ func (c *Client) ReadChanges(ctx context.Context, spaceID, datasetID string, cur
 			if startErr != nil || endErr != nil {
 				return Changes{}, fmt.Errorf("read dataset changes %s/%s: 无效的时间范围 %q-%q", spaceID, datasetID, r.GetStartTime(), r.GetEndTime())
 			}
-			out.Spans = append(out.Spans, [2]time.Time{start.UTC(), end.UTC()})
+			out.Spans = append(out.Spans, ChangeSpan{SubjectID: r.GetSubjectId(), Start: start.UTC(), End: end.UTC()})
 		}
 	}
 	return out, nil
 }
 
-// convert 把 Storage 的值转换成暂存列类型对应的 Go 值；缺失或 null 返回 nil。
-func convert(columnType string, value *storagepb.TypedValue) (any, error) {
+// Convert 把 Storage 的值转换成暂存列类型对应的 Go 值；缺失或 null 返回 nil。读 Storage 与导入批次共用这一套规则。
+func Convert(columnType string, value *storagepb.TypedValue) (any, error) {
 	if value == nil || value.GetValue() == nil {
 		return nil, nil
 	}
@@ -291,15 +304,4 @@ func convert(columnType string, value *storagepb.TypedValue) (any, error) {
 		}
 	}
 	return nil, fmt.Errorf("value %T does not match column type %s", value.GetValue(), columnType)
-}
-
-func originName(t storagepb.DatasetColumnOriginType) string {
-	switch t {
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
-		return "field"
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
-		return "custom"
-	default:
-		return ""
-	}
 }

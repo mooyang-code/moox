@@ -45,7 +45,7 @@ type SnapshotRegistrar interface {
 
 // AbsenceSource 查询已确认“行情源没有”的 K 线区间。
 type AbsenceSource interface {
-	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
+	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
 }
 
 // Task 是一个就绪合成任务的运行时视图。
@@ -53,12 +53,10 @@ type Task struct {
 	Collection domain.CollectionTask
 	Params     *domain.CollectParams
 	Spec       TaskSpec
-	// Tags 是要合成的源序列 series_tag（升序）：单序列任务一项，统一数据集每个市场一项。
-	Tags   []string
-	Source FixedFrequency
-	Target FixedFrequency
-	Market barclock.Market
-	Clock  barclock.Clock
+	Source     FixedFrequency
+	Target     FixedFrequency
+	Market     barclock.Market
+	Clock      barclock.Clock
 }
 
 // NewTask 解析合成任务：校验参数（含市场与周期规则），并按市场建立目标周期的时钟。
@@ -67,7 +65,7 @@ func NewTask(task domain.CollectionTask) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
+	ids := taskresult.PersistedResultIDs(task.TaskID, task.ResultDatasetID)
 	params.TargetDatasetID = ids.DatasetID
 	if err := ValidateTaskParams(task.SpaceID, params); err != nil {
 		return nil, err
@@ -82,49 +80,19 @@ func NewTask(task domain.CollectionTask) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ValidateTaskParams 已保证至少有一条源序列；Spec.SourceSeriesTag 是“当前序列”，多序列任务用 forTag 切到每条序列上执行。
-	tags := params.SourceTags()
-	sort.Strings(tags)
 	return &Task{
-		Collection: task, Params: params, Tags: tags, Source: source, Target: target, Market: market, Clock: clock,
+		Collection: task, Params: params, Source: source, Target: target, Market: market, Clock: clock,
 		Spec: TaskSpec{
 			TaskID: task.TaskID, SpaceID: task.SpaceID, SourceDatasetID: params.SourceDatasetID, SourceFrequency: source,
-			SourceSeriesTag: tags[0], TargetDatasetID: params.TargetDatasetID, TargetFrequency: target,
+			SourceSeriesTag: params.SourceSeriesTag, TargetDatasetID: params.TargetDatasetID, TargetFrequency: target,
 			OutputFields: append([]string(nil), params.OutputFields...),
 		},
 	}, nil
 }
 
-// forTag 返回把“当前序列”切到 tag 上的任务副本：读源、聚合、写目标的 series_tag 都是它。
-func (t *Task) forTag(tag string) *Task {
-	view := *t
-	view.Spec.SourceSeriesTag = tag
-	return &view
-}
-
-// coversAnyTag 报告任务是否要合成 tags 里的某条序列；tags 为空表示不限，一律为真。
-func (t *Task) coversAnyTag(tags []string) bool {
-	if len(tags) == 0 {
-		return true
-	}
-	for _, tag := range tags {
-		for _, own := range t.Tags {
-			if tag == own {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// multiSeries 报告任务是否有多条源序列（统一数据集）。
-func (t *Task) multiSeries() bool { return len(t.Tags) > 1 }
-
 // SkippedSubject 是一个没有产出的标的及原因。
 type SkippedSubject struct {
 	SubjectID string
-	// SeriesTag 只在多序列任务（统一数据集）里有值。
-	SeriesTag string
 	Reason    string
 }
 
@@ -165,32 +133,7 @@ func (e *Engine) execTimeout() time.Duration {
 	return DefaultExecTimeout
 }
 
-// RunBucketMembers 合成一个目标桶：每条源序列用自己的成员分别合成（读源、聚合、写目标的 series_tag 都是该序列），
-// 序列之间互不影响，某条序列出错不阻止其他序列。单序列任务与 RunBucket 完全一致。
-func (e *Engine) RunBucketMembers(ctx context.Context, task *Task, bucket barclock.Bucket, members Members, jobID string) (BucketResult, error) {
-	var total BucketResult
-	var errs []error
-	for _, tag := range task.Tags {
-		if len(members[tag]) == 0 {
-			continue
-		}
-		result, err := e.RunBucket(ctx, task.forTag(tag), bucket, members[tag], jobID)
-		total.Written += result.Written
-		total.Committed += result.Committed
-		for _, skipped := range result.Skipped {
-			if task.multiSeries() {
-				skipped.SeriesTag = tag
-			}
-			total.Skipped = append(total.Skipped, skipped)
-		}
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return total, errors.Join(errs...)
-}
-
-// RunBucket 合成一个目标桶的一条源序列（task.Spec.SourceSeriesTag）。subjects 是要合成的标的；源窗口不完整的标的跳过（不写、不等待），由调用方决定后续。
+// RunBucket 合成一个目标桶：读源、聚合、写目标的 series_tag 都是任务的源序列（task.Spec.SourceSeriesTag）。subjects 是要合成的标的；源窗口不完整的标的跳过（不写、不等待），由调用方决定后续。
 // jobID 非空表示来自历史作业，会记入补写通知。
 func (e *Engine) RunBucket(ctx context.Context, task *Task, bucket barclock.Bucket, subjects []string, jobID string) (BucketResult, error) {
 	if e == nil || e.Primary == nil {
@@ -289,12 +232,7 @@ func (e *Engine) absentTimes(ctx context.Context, task *Task, bucket barclock.Bu
 	if e.Absences == nil || len(subjects) == 0 {
 		return out, nil
 	}
-	// 已确认缺失只有统一数据集（多条源序列）才按序列记录；单序列任务不区分序列。
-	seriesTag := ""
-	if len(task.Tags) > 1 {
-		seriesTag = task.Spec.SourceSeriesTag
-	}
-	absences, err := e.Absences.AbsencesIn(ctx, task.Spec.SpaceID, task.Spec.SourceDatasetID, task.Source.Storage, seriesTag, subjects, bucket.Start, bucket.End)
+	absences, err := e.Absences.AbsencesIn(ctx, task.Spec.SpaceID, task.Spec.SourceDatasetID, task.Source.Storage, subjects, bucket.Start, bucket.End)
 	if err != nil {
 		return nil, fmt.Errorf("read source absences: %w", err)
 	}
@@ -424,8 +362,8 @@ func (e *Engine) splitForCommit(ctx context.Context, task *Task, bucket barclock
 		return nil, nil, rows, results
 	}
 	in := map[string]bool{}
-	for _, series := range snapshotMembers(task, snapshot).Series() {
-		in[seriesset.CanonicalKey(series.SubjectID, series.SeriesTag)] = true
+	for _, series := range snapshotSeries(task, snapshot.Subjects) {
+		in[series.Key()] = true
 	}
 	for i, result := range results {
 		if in[seriesset.CanonicalKey(result.SubjectID, result.SeriesTag)] {
@@ -443,7 +381,7 @@ func (e *Engine) commit(ctx context.Context, task *Task, bucket barclock.Bucket,
 	if err != nil || !ok {
 		return fmt.Errorf("resample snapshot is unavailable: %v", err)
 	}
-	set, err := seriesset.Canonicalize(snapshotMembers(task, snapshot).Series())
+	set, err := seriesset.Canonicalize(snapshotSeries(task, snapshot.Subjects))
 	if err != nil {
 		return err
 	}
@@ -469,12 +407,13 @@ func (e *Engine) commit(ctx context.Context, task *Task, bucket barclock.Bucket,
 	return e.Period.CommitTimeSeriesBatch(ctx, expectation, items)
 }
 
-// snapshotMembers 还原快照里各条序列的成员：统一数据集记在 Members，单序列任务就是 Subjects 加任务唯一的源序列。
-func snapshotMembers(task *Task, snapshot store.ResampleSnapshot) Members {
-	if len(snapshot.Members) > 0 {
-		return Members(snapshot.Members)
+// snapshotSeries 返回一组标的在目标数据集里的序列：series_tag 都是任务的源序列。
+func snapshotSeries(task *Task, subjects []string) []seriesset.Series {
+	out := make([]seriesset.Series, 0, len(subjects))
+	for _, subject := range subjects {
+		out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: task.Spec.SourceSeriesTag})
 	}
-	return Members{task.Tags[0]: snapshot.Subjects}
+	return out
 }
 
 // recordNotices 把普通写入记为补写通知，通知下游（因子等）这些标的在 [bucket.Start, bucket.End) 被写入过。
@@ -488,9 +427,6 @@ func (e *Engine) recordNotices(ctx context.Context, task *Task, bucket barclock.
 			SpaceID: task.Spec.SpaceID, DatasetID: task.Spec.TargetDatasetID, Frequency: task.Spec.TargetFrequency.Storage,
 			SubjectID: result.SubjectID, Start: bucket.Start, End: bucket.End, Origin: store.NoticeOriginResample, JobID: jobID,
 		}
-		if task.multiSeries() {
-			notices[i].SeriesTag = result.SeriesTag
-		}
 	}
 	if err := e.State.AddNotices(ctx, notices); err != nil {
 		return fmt.Errorf("record resample notices: %w", err)
@@ -499,21 +435,20 @@ func (e *Engine) recordNotices(ctx context.Context, task *Task, bucket barclock.
 }
 
 // EnsureSnapshot 保证目标数据集登记了与当前序列集合一致的快照：集合变化时登记一份新的，从下一个目标桶起生效。
-// members 是各条源序列当前的成员；某条序列下没有的标的不进快照，不会生成不存在的序列。
-// 生效点之前的桶用普通写入。登记失败不影响合成本身（只是不由 Storage 跟踪周期）。
-func (e *Engine) EnsureSnapshot(ctx context.Context, task *Task, members Members) error {
-	members = members.normalized()
-	if e.Snapshots == nil || e.State == nil || members.Count() == 0 {
+// subjects 是源数据集当前的标的。生效点之前的桶用普通写入。登记失败不影响合成本身（只是不由 Storage 跟踪周期）。
+func (e *Engine) EnsureSnapshot(ctx context.Context, task *Task, subjects []string) error {
+	subjects = uniqueSorted(subjects)
+	if e.Snapshots == nil || e.State == nil || len(subjects) == 0 {
 		return nil
 	}
 	latest, ok, err := e.State.LatestSnapshot(ctx, task.Spec.SpaceID, task.Spec.TaskID)
 	if err != nil {
 		return err
 	}
-	if ok && sameMembers(snapshotMembers(task, latest), members) {
+	if ok && sameStrings(uniqueSorted(latest.Subjects), subjects) {
 		return nil
 	}
-	set, err := seriesset.Canonicalize(members.Series())
+	set, err := seriesset.Canonicalize(snapshotSeries(task, subjects))
 	if err != nil {
 		return err
 	}
@@ -545,10 +480,7 @@ func (e *Engine) EnsureSnapshot(ctx context.Context, task *Task, members Members
 		return fmt.Errorf("register resample snapshot: %w", err)
 	}
 	snapshot := store.ResampleSnapshot{
-		SpaceID: task.Spec.SpaceID, TaskID: task.Spec.TaskID, EffectiveFrom: effective.Key.Unix(), SeriesHash: registration.Hash, Subjects: members.Union(),
-	}
-	if task.multiSeries() {
-		snapshot.Members = members
+		SpaceID: task.Spec.SpaceID, TaskID: task.Spec.TaskID, EffectiveFrom: effective.Key.Unix(), SeriesHash: registration.Hash, Subjects: subjects,
 	}
 	return e.State.AddSnapshot(ctx, snapshot)
 }

@@ -55,7 +55,7 @@ func TestDeleteFinishedOrdersBefore(t *testing.T) {
 			for i := 0; i < current.fills; i++ {
 				if err := tx.db.Exec(execInsertOrderFill,
 					"space-1", fmt.Sprintf("fill-%s-%d", id, i), fmt.Sprintf("trade-%s-%d", id, i), id,
-					"exchange-"+id, current.account, "BINANCE", "SPOT",
+					"exchange-"+id, current.account, "binance", "spot",
 					"BTC-USDT", "BTCUSDT", "BUY", "", "100", "0.5", "0",
 					"USDT", "USDT", "0", "TAKER", 500+i, nil,
 				).Error; err != nil {

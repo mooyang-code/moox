@@ -34,17 +34,18 @@ moox-cli udf activate <名称>@<哈希>             # 默认只给影响清单�
 
 ## 切换启用版本（有引用方时）
 
-切换在**因子引擎模块暂停期间**进行（新 UDF 的首次 `activate` 没有引用方，不需要暂停）：
+前提与 `factor update` 相同：没有已启用的成员引用它，受影响任务没有已经开始的补算作业。不需要暂停引擎（新 UDF 的首次 `activate` 没有引用方，前提都满足）：
 
-1. `moox-cli lifecycle pause --module factor-engine`，等本次暂停收敛：`moox-cli lifecycle status --module factor-engine --json` 的 `quiesced_at` 有值且不早于 `pause.since`（不带 `--json` 的输出不显示这一项）；
-2. `moox-cli udf activate <名称>@<哈希>`（不带 `--yes` 只预览）：看影响清单（因子定义 → 成员 → 因子任务 → 策略实例）、新旧 `definition_hash` 与回看、前提检查；
-   有已领取的补算作业先取消（`moox-cli factor recalc cancel --job-id <作业>`）；回看变长时按提示核对源数据保留期与引擎配置（`window.lookback`、`window.max_memory`、`memory.total_budget`、`compute.max_memory`）；
-3. `moox-cli udf activate <名称>@<哈希>`；
-4. `moox-cli lifecycle resume --module factor-engine`：先追赶（同步目录、备齐模块、用新版本补算暂停期间的周期），全部追平才放行；
+1. `moox-cli udf activate <名称>@<哈希>`（不带 `--yes` 只预览）：看影响清单（因子定义 → 成员 → 因子任务 → 策略实例）、新旧 `definition_hash` 与回看、前提检查；
+   回看变长时按提示核对源数据保留期与引擎配置（`window.lookback`、`window.max_memory`、`memory.total_budget`、`compute.max_memory`）；
+2. 停用前提里列出的已启用成员（`moox-cli factor member disable --task-id <任务> --member-key <成员> --yes`，先告诉用户：停用期间这些结果列不产出），
+   取消列出的已经开始的补算作业（`moox-cli factor recalc cancel --job-id <作业>`）；
+3. `moox-cli udf activate <名称>@<哈希> --yes`；
+4. 重新启用成员（`factor member enable`），等引擎下一次同步目录并预热；停用期间没有产出的周期用 `moox-cli factor recalc submit` 按新版本补算；
 5. 引用它的因子定义 `definition_hash` 变了，关联的策略实例会进入 `factor_changed`，重新启用；需要更早的历史一致时显式补算。
 
 回滚就是 `activate` 指回旧版本，步骤相同。`moox-cli udf show <名称>` 看各版本、引用关系与各引擎的模块状态（ready / fetching / fetch_failed / compile_failed）。
-只暂停因子引擎模块，不要对 FactorMgr 做系统暂停（它会拒绝修改类接口，包括取消补算与切换）。
+不要对 FactorMgr 做系统暂停（它会拒绝修改类接口，包括取消补算与切换）。
 
 ## 失败语义
 

@@ -71,11 +71,11 @@ func registerMetricsReporter(s *server.Server, engine engineView, readiness func
 		return fmt.Errorf("create factor dataset metrics: %w", err)
 	}
 	observer := newFactorDatasetObserver(engine, datasets)
-	observer.blocked = newWatermarkBlockedGauge(prometheus.DefaultRegisterer)
-	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "factor")
+	attention, err := report.NewAttention(prometheus.DefaultRegisterer, attentionKinds)
 	if err != nil {
-		return fmt.Errorf("create factor engine presence metric: %w", err)
+		return fmt.Errorf("create factor attention metric: %w", err)
 	}
+	attention.AddSource("watermark", observer.watermarkAttention)
 	handler.FlushOnOutputAdvance()
 	if source, ok := engine.(heartbeatSource); ok {
 		source.OnHeartbeat(func() {
@@ -92,12 +92,12 @@ func registerMetricsReporter(s *server.Server, engine engineView, readiness func
 		if err := observer.observe(ctx); err != nil {
 			log.WarnContextf(ctx, "factor dataset metrics not refreshed: %v", err)
 		}
-		// 每 30 秒评估一次引擎在线状态并随快照上报，Monitor 据此发出“因子引擎离线”告警。
+		// 每 30 秒评估一次引擎在线状态，离线时上报关注项 engine_offline；读不到时保留上一次的结果。
 		if source, ok := engine.(presenceSource); ok {
 			if state, engineID, last, err := source.Presence(ctx); err != nil {
 				log.WarnContextf(ctx, "factor engine presence not evaluated: %v", err)
 			} else {
-				presence.Set(state, engineID, last)
+				attention.Set("engine", map[string][]string{attentionEngineOffline: report.PresenceAttention(state, engineID, last)})
 			}
 		}
 		return handler.Handle(ctx)

@@ -45,7 +45,7 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 	// 下一根 00:11 开盘、00:12 收盘；收盘 30 秒宽限之后还没写出，落后 1 根 = 60 秒。
 	require.EqualValues(t, 60, tracker.latest("ftask_a", t1.Add(2*time.Minute+30*time.Second)).LagSeconds)
 	// 完成时间是写完最新一期的时刻，较旧的期次不覆盖它。
-	require.Equal(t, completed.Unix(), summary.CompletedAt)
+	require.True(t, completed.Equal(summary.CompletedAt))
 	require.Len(t, tracker.all(t1), 2)
 	require.Equal(t, "ftask_a", tracker.all(t1)[0].TaskID)
 	require.Zero(t, tracker.latest("missing", t1).LastPeriodTime)
@@ -96,7 +96,7 @@ func TestRunTrackerUpgradesLatestPeriodOnceRepairIsDone(t *testing.T) {
 	require.Equal(t, 2, notified, "改写后立刻补发心跳")
 	summary := tracker.latest("fset", repaired)
 	require.Equal(t, period.Unix(), summary.LastPeriodTime)
-	require.Equal(t, repaired.Unix(), summary.CompletedAt)
+	require.True(t, repaired.Equal(summary.CompletedAt))
 	require.Zero(t, summary.WarmingSubjects)
 	require.Equal(t, []string{"XRP"}, summary.FailedSubjects, "XRP 没有待办（上游失败），补算不覆盖")
 	require.Equal(t, "degraded", summary.LastStatus)
@@ -127,7 +127,7 @@ func TestRunTrackerUpgradesLatestPeriodOnceRepairIsDone(t *testing.T) {
 	require.Empty(t, summary.FailedSubjects)
 	require.Equal(t, []domain.FactorPeriodState{{MemberKey: "ma", FactorID: "ma", Status: "complete"}, {MemberKey: "rank", FactorID: "rank", Status: "complete"}}, summary.Factors)
 	require.False(t, tracker.repair("fset", RepairedPeriod{Period: next, Repaired: nextItems, Done: true}, repaired.Add(2*time.Hour)), "已完成的期次不再改写")
-	require.Equal(t, repaired.Add(time.Hour).Unix(), tracker.latest("fset", repaired).CompletedAt)
+	require.True(t, repaired.Add(time.Hour).Equal(tracker.latest("fset", repaired).CompletedAt))
 }
 
 // 严格截面因子因 A 有洞整期跳过（实时路径一行没写）：补算补齐了 A，但 B 这次没写成，这一期仍缺 B，不能记为完成。

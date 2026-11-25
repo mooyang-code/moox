@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-go/log"
-
 	"github.com/mooyang-code/moox/packages/events"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
@@ -47,7 +45,7 @@ type ServiceStatus struct {
 }
 
 type HostStatus struct {
-	HostID, AgentID, Hostname, Status, Reason       string
+	HostID, Hostname, Status, Reason                string
 	LastSeenAt                                      time.Time
 	CPUPercent, MemoryPercent, FilesystemMaxPercent float64
 	// 资源总量：CPU 逻辑核数、内存总量与已用量；磁盘是使用率最高的文件系统（与 FilesystemMaxPercent 同一个）。
@@ -62,12 +60,13 @@ type HostStatus struct {
 
 type DatasetFrequencyStatus struct {
 	Producer, SpaceID, DatasetID, Freq, Status, Reason string
+	// ServiceName 是上报这项数据集指标的服务（组件 ID）。
+	ServiceName string
 	// DisplayName 是生产者随期望清单上报的展示名称（moox_<模块>_dataset_info 的 name 标签，例如策略实例名），
 	// 没有上报时为空，由调用方退回 Storage 里的数据集名称或数据集 ID。
 	DisplayName string
-	// PrimaryDatasetID links an independent Storage View fact back to the
-	// dataset whose Collector produces its input. It is empty for other
-	// producers and keeps DatasetID available as the View identity.
+	// PrimaryDatasetID 只对 Storage View 填写，等于 View 所属的数据集（每个数据集恰好一个 View），
+	// 用来把 View 的事实连回产出它输入的数据集；其他生产者为空。
 	PrimaryDatasetID         string
 	LastRunAt, LastSuccessAt time.Time
 	// LastPartialAt 是最近一次“按设计只产出部分结果”的运行（数据积累中），见 DatasetReasonWarming。
@@ -100,48 +99,48 @@ type DatasetFrequencyStatus struct {
 	Timezone string
 }
 
+// BusinessStatus 是一项业务检查本轮的结果：Status 为 healthy 时通过，其余（down、degraded、stale、unknown）都算失败。
 type BusinessStatus struct {
 	SpaceID, Kind, Module, Status, Reason string
 	CheckID, RawError, Name               string
-	LastCheckedAt                         time.Time
-	// FromStoredCheck 表示这一项是从库里已有检查读回来的上一次结果，不是本轮按指标新算出的；同一检查本轮有新结果时会被新结果替换。
-	FromStoredCheck bool
+	// Severity 是生产者给出的级别（关注项的 critical、warning）；为空时按检查 ID 推出。
+	Severity string
+	// Frozen 表示本轮读不到依赖、无法判断：检查保持原状态（既不推进也不删除）。
+	Frozen        bool
+	LastCheckedAt time.Time
 }
 
 type Overview struct {
-	GeneratedAt    time.Time
-	Services       []ServiceStatus
-	Unregistered   []ServiceStatus
-	TopologyKnown  bool
-	Topology       *domain.TopologySnapshot
-	Hosts          []HostStatus
-	Datasets       []DatasetFrequencyStatus
-	BusinessChecks []BusinessStatus
-	GatewaySignals []GatewaySignal
+	GeneratedAt   time.Time
+	Services      []ServiceStatus
+	Unregistered  []ServiceStatus
+	TopologyKnown bool
+	Topology      *domain.TopologySnapshot
+	Hosts         []HostStatus
+	Datasets      []DatasetFrequencyStatus
 }
 
 type Builder struct {
-	Metrics                    *monmetrics.QueryService
-	Hosts                      *hostmetrics.Store
-	Checks                     *store.CheckRepository
-	Topology                   *store.TopologyRepository
-	Gateways                   *store.GatewayRepository
-	Results                    *store.ResultRepository
-	Policy                     report.RealtimeTimeSeriesPolicy
-	BalanceDifferenceThreshold float64
-	MarketFetchThresholds      MarketFetchThresholds
+	Metrics  *monmetrics.QueryService
+	Hosts    *hostmetrics.Store
+	Topology *store.TopologyRepository
+	Policy   report.RealtimeTimeSeriesPolicy
 	// Inventory 是采集任务清单，用来确定每个空间的市场交易日历（市场、日历、时区、交易时段）。
 	Inventory InventorySource
 	// Datasets 列出应当有归档任务的数据集，用于“未归档的数据集”检查；为空时不做这项检查。
 	Datasets ArchivableDatasets
-	// Seeding 记下最近仍有数据集“待生效（上游历史补齐中）”的空间，用来在补齐中与结束后一段时间内不报 View 跟随数据变更落后；
-	// 为空时只按当前是否有待生效数据集判断。多个 Builder 共用同一个，重启后重新记。
+	// Seeding 记下最近仍有数据集“待生效（上游历史补齐中）”的空间：补齐中与结束后一段时间内，storage-view 上报的
+	// “View 跟随数据变更落后”不告警。为空时只按本轮有没有待生效数据集判断。多个 Builder 共用同一个，重启后重新记。
 	Seeding *SeedingMemory
 	Now     func() time.Time
 }
 
-// ViewFollowSeedingGrace 是历史补齐结束后仍不报 View 跟随落后的时长：补齐写入的行要等 View 追平，追平期间落后是预期的。
-const ViewFollowSeedingGrace = 24 * time.Hour
+// SeedingGrace 是历史补齐结束后仍按“View 在追补齐写入的行”对待的时长：补齐写入的历史行在变更日志里排在实时写入前面，
+// View 按顺序追平要几个小时，追平期间 View 跟随落后、K 线结果视图落后于已完成的一期都是预期的。
+const SeedingGrace = 24 * time.Hour
+
+// viewFollowAttentionCheckID 是 storage-view 上报的“View 跟随数据变更落后”关注项（落后多久算异常由 storage-view 判断）。
+var viewFollowAttentionCheckID = AttentionCheckID("storage-view", "view_follow_lagging")
 
 // SeedingMemory 记下每个空间最近一次出现“待生效（上游历史补齐中）”数据集的时间。它只在进程内保存：重启后重新记，
 // 重启前已结束的补齐不再享受宽限（已知差别）。零值可用。
@@ -165,25 +164,69 @@ func (m *SeedingMemory) Note(spaceID string, at time.Time) {
 	}
 }
 
-// Recent 报告空间在 grace 内是否有过历史补齐（含此刻）。
-func (m *SeedingMemory) Recent(spaceID string, now time.Time, grace time.Duration) bool {
+// Recent 返回 grace 内有过历史补齐（含此刻）的空间，按名字排序。
+func (m *SeedingMemory) Recent(now time.Time, grace time.Duration) []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var spaces []string
+	for spaceID, at := range m.last {
+		if now.Sub(at) <= grace {
+			spaces = append(spaces, spaceID)
+		}
+	}
+	sort.Strings(spaces)
+	return spaces
+}
+
+// Active 报告空间在 SeedingGrace 内是否有过历史补齐（含此刻）。
+func (m *SeedingMemory) Active(spaceID string, now time.Time) bool {
 	if m == nil {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	at, ok := m.last[spaceID]
-	return ok && now.Sub(at) <= grace
+	return ok && now.Sub(at) <= SeedingGrace
+}
+
+// noteSeeding 把本轮“待生效（上游历史补齐中）”的数据集所在空间记进 Seeding。
+func (b Builder) noteSeeding(datasets []DatasetFrequencyStatus, now time.Time) {
+	for _, dataset := range datasets {
+		if dataset.Reason == DatasetReasonHistorySeeding {
+			b.Seeding.Note(dataset.SpaceID, now)
+		}
+	}
+}
+
+// relaxViewFollowWhileSeeding 在有空间历史补齐中或刚结束（SeedingGrace 内）时，把 storage-view 的
+// “View 跟随数据变更落后”记为正常：补齐写入大量历史行，K 线 View 追平要几个小时，这段落后是预期的。
+// 关注项按服务汇总、不带空间，所以这段时间里别的空间的 View 落后也不告警（已知差别）。
+func (b Builder) relaxViewFollowWhileSeeding(statuses []BusinessStatus, now time.Time) {
+	spaces := b.Seeding.Recent(now, SeedingGrace)
+	if len(spaces) == 0 {
+		return
+	}
+	for i := range statuses {
+		status := &statuses[i]
+		if status.CheckID != viewFollowAttentionCheckID || status.Status == "healthy" {
+			continue
+		}
+		status.Status = "healthy"
+		status.Reason = fmt.Sprintf("%s 历史补齐中或刚补齐（%s 内），View 追赶补齐写入的行，落后不告警：%s",
+			strings.Join(spaces, "、"), formatGrace(SeedingGrace), status.Reason)
+	}
+}
+
+func formatGrace(grace time.Duration) string {
+	return fmt.Sprintf("%d 小时", int(grace/time.Hour))
 }
 
 // InventorySource 提供最近一份有效的采集任务清单；monmetrics.TaskResultInventoryCache 实现它。
 type InventorySource interface {
 	GetAllowStale(ctx context.Context, now time.Time) (monmetrics.TaskResultInventorySnapshot, bool, error)
-}
-
-type MarketFetchThresholds struct {
-	CoordinationStaleAfter time.Duration
-	PendingGrace           time.Duration
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -206,94 +249,33 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
 		return Overview{}, err
 	}
-	if out.BusinessChecks, err = b.buildBusinessChecks(ctx, spaceID); err != nil {
-		return Overview{}, err
-	}
-	coordination, err := b.buildMarketFetchCoordination(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, coordination...)
-	streams, err := b.buildCollectorStreamHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, streams...)
-	watermarks, err := b.buildFactorWatermarkHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, watermarks...)
-	params, err := b.buildFactorParamHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, params...)
-	rejections, err := b.buildDeadlineRejectionHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, rejections...)
-	delivery, err := b.buildStorageOutboxHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, delivery...)
-	viewFiles, err := b.buildViewFileLimitHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, viewFiles...)
-	seedingSpaces := map[string]bool{}
-	for _, dataset := range out.Datasets {
-		if dataset.Reason == DatasetReasonHistorySeeding {
-			seedingSpaces[dataset.SpaceID] = true
-			b.Seeding.Note(dataset.SpaceID, now)
-		}
-	}
-	viewFollow, err := b.buildViewFollowLagHealth(ctx, spaceID, now, func(space string) bool {
-		return seedingSpaces[space] || b.Seeding.Recent(space, now, ViewFollowSeedingGrace)
-	})
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, viewFollow...)
-	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, presence...)
-	objectStore, err := b.buildArchiveObjectStore(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, objectStore...)
-	archive, err := b.buildArchiveHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, archive...)
-	seriesLimit, err := b.buildSeriesLimitHealth(ctx, spaceID, now)
-	if err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = append(out.BusinessChecks, seriesLimit...)
-	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
-		return Overview{}, err
-	}
-	out.BusinessChecks = uniqueBusinessChecks(out.BusinessChecks)
+	b.noteSeeding(out.Datasets, now)
 	sortOverview(&out)
 	return out, nil
 }
 
-const storageOutboxBacklogGrace = 2 * time.Minute
+// BusinessChecks 按指标算出本轮的业务检查，只在检查评估里调用（页面读检查表里上一轮评估的结果）：各服务上报的关注项，
+// 以及 Monitor 自己的两项——指标序列限额、未归档的数据集。每项都带检查 ID、名称（关注项另带级别）。
+func (b Builder) BusinessChecks(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
+	attention, err := b.buildAttentionStatuses(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	b.relaxViewFollowWhileSeeding(attention, now)
+	seriesLimit, err := b.buildSeriesLimitHealth(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	coverage, err := b.buildArchiveCoverage(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(attention, seriesLimit...), coverage...), nil
+}
 
 // buildSeriesLimitHealth 检查指标目录的新序列增长：新序列被限额丢弃，或近 1 小时 / 24 小时的新增数接近上限，都视为异常。
 // 这通常是某个上报方的标签失控（例如把标的、请求 ID 放进了标签），不处理会撑大目录并让真正的指标被挤掉。
-func (b Builder) buildSeriesLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != events.SystemSpaceID {
-		return nil, nil
-	}
+func (b Builder) buildSeriesLimitHealth(ctx context.Context, now time.Time) ([]BusinessStatus, error) {
 	if b.Metrics == nil {
 		return nil, nil
 	}
@@ -314,7 +296,7 @@ func (b Builder) buildSeriesLimitHealth(ctx context.Context, spaceID string, now
 		}
 	}
 	return []BusinessStatus{{
-		SpaceID: events.SystemSpaceID, Kind: "metrics_ingest", Module: "series_limit",
+		SpaceID: events.SystemSpaceID, Kind: "metrics_ingest", Module: "series_limit", CheckID: "metrics_ingest:series_limit", Name: "指标序列数量保护",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }
@@ -329,161 +311,6 @@ func seriesQuota(current, max int64) string {
 
 // buildStorageOutboxHealth detects an interrupted Primary-to-View delivery
 // path before a Dataset output watermark has had time to become stale.
-func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != events.SystemSpaceID {
-		return nil, nil
-	}
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	readMax := func(metricName string) (float64, bool, error) {
-		series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", metricName, "", 100, now)
-		if err != nil {
-			return 0, false, err
-		}
-		var maximum float64
-		found := false
-		for _, item := range series {
-			if item.IsStale {
-				continue
-			}
-			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-			if err != nil {
-				return 0, false, err
-			}
-			if !found || latest.Value > maximum {
-				maximum = latest.Value
-			}
-			found = true
-		}
-		return maximum, found, nil
-	}
-	pending, hasPending, err := readMax("moox_storage_outbox_pending_entries")
-	if err != nil {
-		return nil, err
-	}
-	ageSeconds, hasAge, err := readMax("moox_storage_outbox_oldest_age_seconds")
-	if err != nil {
-		return nil, err
-	}
-	if !hasPending && !hasAge {
-		return nil, nil
-	}
-	status, reason := "healthy", "数据变更投递正常"
-	if pending > 0 && ageSeconds > storageOutboxBacklogGrace.Seconds() {
-		status = "down"
-		minutes := max(1, int(ageSeconds)/60)
-		reason = fmt.Sprintf("数据变更投递积压 %.0f 条，最早一条已等待约 %d 分钟", pending, minutes)
-	} else if pending > 0 {
-		reason = fmt.Sprintf("正在投递 %.0f 条数据变更", pending)
-	}
-	return []BusinessStatus{{
-		SpaceID: events.SystemSpaceID, Kind: "data_delivery", Module: "storage_outbox",
-		Status: status, Reason: reason, LastCheckedAt: now,
-	}}, nil
-}
-
-// buildViewFileLimitHealth 把 Storage View 上报的索引文件超限数量转成告警：超过 max_view_file_bytes 只告警，数据不动，
-// 由人判断是调大告警线、调小保留根数还是减列。
-func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != events.SystemSpaceID {
-		return nil, nil
-	}
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_view_file_over_limit", "", 100, now)
-	if err != nil {
-		return nil, err
-	}
-	var overLimit float64
-	found := false
-	for _, item := range series {
-		if item.IsStale {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		overLimit = max(overLimit, latest.Value)
-		found = true
-	}
-	if !found {
-		return nil, nil
-	}
-	status, reason := "healthy", "View 索引文件都在告警线以内"
-	if overLimit > 0 {
-		status = "down"
-		reason = fmt.Sprintf("%.0f 个 View 的索引文件超过 max_view_file_bytes；数据不受影响，日志里有具体的 View，确认后调大告警线或减少保留根数", overLimit)
-	}
-	return []BusinessStatus{{
-		SpaceID: events.SystemSpaceID, Kind: "view_file", Module: "storage_view",
-		Status: status, Reason: reason, LastCheckedAt: now,
-	}}, nil
-}
-
-// viewFollowLagLimit 是 View 跟随变更日志允许的落后时长：跟随器空闲时每轮最多等 20 秒，正常应用一期在秒级以内。
-const viewFollowLagLimit = 2 * time.Minute
-
-// buildViewFollowLagHealth 把 Storage View 上报的跟随落后时长（距离上一次追上变更日志头部）转成告警。
-// 只按时长判断：空闲数据集的序号差天然会有一轮等待的量，按序号差会误报。
-//
-// seeding 判断空间是否在历史补齐中或补齐结束后的宽限内：补齐写入大量行，View 追平前落后是预期的，这些空间的 View 不报落后。
-func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, now time.Time, seeding func(spaceID string) bool) ([]BusinessStatus, error) {
-	if spaceID != "" && spaceID != events.SystemSpaceID {
-		return nil, nil
-	}
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_view_follow_lag_seconds", "", 500, now)
-	if err != nil {
-		return nil, err
-	}
-	found := false
-	var lagging []string
-	var worst float64
-	for _, item := range series {
-		if item.IsStale {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		found = true
-		if latest.Value <= viewFollowLagLimit.Seconds() {
-			continue
-		}
-		worst = max(worst, latest.Value)
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, err
-		}
-		if seeding != nil && seeding(labels["space_id"]) {
-			continue
-		}
-		lagging = append(lagging, labels["space_id"]+"/"+labels["view_id"])
-	}
-	if !found {
-		return nil, nil
-	}
-	status, reason := "healthy", "View 跟随数据变更正常"
-	if len(lagging) > 0 {
-		sort.Strings(lagging)
-		status = "down"
-		reason = fmt.Sprintf("%d 个 View 跟随数据变更落后，最久约 %d 分钟没有追上（%s）；查询会读到旧数据，看 storage-view 日志里的跟随失败原因",
-			len(lagging), max(1, int(worst)/60), strings.Join(lagging, "、"))
-	}
-	return []BusinessStatus{{
-		SpaceID: events.SystemSpaceID, Kind: "view_follow", Module: "storage_view",
-		Status: status, Reason: reason, LastCheckedAt: now,
-	}}, nil
-}
-
-// HostFacts 只取主机类检查需要的事实：部署拓扑、各采集器最近一次上报与最新快照、主机网关信号。
-// 这些都在 Monitor 自己的库和内存里，不读 Storage、不查服务指标：别的机器宕机或 Storage 超时都不影响它。
 func (b Builder) HostFacts(ctx context.Context) (Overview, error) {
 	now := time.Now().UTC()
 	if b.Now != nil {
@@ -500,7 +327,7 @@ func (b Builder) HostFacts(ctx context.Context) (Overview, error) {
 	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
 		return Overview{}, err
 	}
-	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
+	if out.Services, _, _, err = b.buildServices(ctx, now, out.Hosts); err != nil {
 		return Overview{}, err
 	}
 	return out, nil
@@ -520,8 +347,8 @@ func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, e
 		if !row.Reachable {
 			status, reason = "down", "agent unreachable"
 		}
-		item := HostStatus{HostID: row.HostID, AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
-		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
+		item := HostStatus{HostID: row.HostID, Hostname: row.Hostname, Status: status, Reason: reason}
+		item.LastSeenAt = row.LastSeenAt
 		if snapshot := row.Snapshot; snapshot != nil {
 			item.MetricsAvailable = true
 			item.Processes = hostmetrics.TopProcesses(snapshot)
@@ -735,8 +562,8 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			if err != nil {
 				return nil, fmt.Errorf("view watermark labels for %s: %w", series.SeriesID, err)
 			}
-			viewSpaceID, viewID, freq := labels["space_id"], labels["view_id"], labels["freq"]
-			if viewSpaceID == "" || viewID == "" || freq == "" {
+			viewSpaceID, viewDatasetID, freq := labels["space_id"], labels["dataset_id"], labels["freq"]
+			if viewSpaceID == "" || viewDatasetID == "" || freq == "" {
 				continue
 			}
 			if spaceID != "" && viewSpaceID != spaceID {
@@ -748,11 +575,11 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			}
 			// View 指向的数据集已在 Storage 里被删除（例如删除策略实例连同私有因子结果）：它留下的指标序列不再代表任何在运行的东西，
 			// 不进入概览，也就不会一直显示“数据生产端长时间未更新”。
-			if b.Metrics.DatasetGone(ctx, viewSpaceID, labels["dataset_id"]) {
+			if b.Metrics.DatasetGone(ctx, viewSpaceID, viewDatasetID) {
 				continue
 			}
 			// 生产者已把这个数据集标为不期望产出（因子任务暂停等）：View 水位停在原地是预期的，不检查。
-			scope := datasetScopeKey(viewSpaceID, labels["dataset_id"], freq)
+			scope := datasetScopeKey(viewSpaceID, viewDatasetID, freq)
 			if _, off := disabledScopes[scope]; off {
 				if _, live := liveScopes[scope]; !live {
 					continue
@@ -767,7 +594,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			if err != nil {
 				return nil, err
 			}
-			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, primaryDatasetID: labels["dataset_id"], freq: freq, labels: series.LabelsJSON}
+			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewDatasetID, primaryDatasetID: viewDatasetID, freq: freq, labels: series.LabelsJSON}
 			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, arrival: arrival, reporterStale: viewReporterStale(series, interval, now), reportedAt: latest.ObservedAt.UTC()}
 		}
 	}
@@ -782,7 +609,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 		if !exists {
 			current = aggregatedDataset{
 				key: datasetKey{
-					producer: key.producer, spaceID: key.spaceID,
+					service: key.service, producer: key.producer, spaceID: key.spaceID,
 					datasetID: key.datasetID, primaryDatasetID: key.primaryDatasetID, freq: key.freq,
 				},
 				value: value,
@@ -1086,7 +913,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		PrimaryDatasetID: key.primaryDatasetID,
 		LastRunAt:        unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess), LastPartialAt: unixTime(value.lastPartial),
 		InputWatermarkAt: unixTime(value.input), OutputWatermarkAt: unixTime(value.output),
-		LastReportedAt: value.reportedAt,
+		LastReportedAt: value.reportedAt, ServiceName: key.service,
 	}
 	runLag, successLag, lateness := datasetTolerances(key, value.interval, policy)
 	item.LatenessLimitSeconds = int64(lateness / time.Second)
@@ -1205,505 +1032,6 @@ func parseOverviewFrequency(raw string) time.Duration {
 	return parsed.NominalDuration()
 }
 
-func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
-	out := make([]BusinessStatus, 0)
-	if b.Checks != nil && b.Results != nil {
-		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness"}, 1501)
-		if err != nil {
-			return nil, err
-		}
-		if len(checks) > 1500 {
-			return nil, fmt.Errorf("business checks exceed 1500 items")
-		}
-		for _, check := range checks {
-			kind := businessKind(check)
-			if kind == "" {
-				continue
-			}
-			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Name: check.Name, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报", FromStoredCheck: true}
-			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
-			if err != nil {
-				return nil, err
-			}
-			if len(results) > 0 {
-				item.LastCheckedAt = results[0].CheckedAt.UTC()
-				item.Status = strings.ToLower(string(results[0].Status))
-				item.Reason = results[0].ErrorMessage
-				item.RawError = results[0].RawError
-				if item.Reason == "" {
-					item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
-				}
-				if item.Reason == domain.CheckReasonRetired {
-					item.Status = "disabled"
-				}
-			}
-			out = append(out, item)
-		}
-	}
-	// 余额对账和各模块的关注项与空间无关，归在 mooxsys 下。
-	if spaceID != "" && spaceID != events.SystemSpaceID {
-		return out, nil
-	}
-	balances, err := b.buildBalanceStatuses(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, balances...)
-	for _, source := range attentionSources {
-		attention, err := b.buildAttentionStatuses(ctx, source)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, attention...)
-	}
-	return out, nil
-}
-
-// TradeAttentionNames 是 Trade 上报的需要人看的情况。
-var TradeAttentionNames = map[string]string{
-	"target_rejected":          "交易目标被拒绝",
-	"auto_paused":              "组合账户自动暂停",
-	"target_blocked":           "交易目标持续阻塞",
-	"account_not_ready":        "执行账户持续未就绪",
-	"target_expired":           "交易目标连续过期",
-	"target_reversal":          "同一目标内反向下单",
-	"rate_limited":             "交易所接口限流",
-	"turnover_high":            "组合账户成交额异常偏高",
-	"unknown_results":          "下单结果未知偏多",
-	"inspection_blocked":       "交易账户密钥检测发现阻断项",
-	"inspection_failing":       "交易账户密钥检测连续失败",
-	"transfer_shortfall":       "合约钱包可划转资金不足，现货买入被缩小",
-	"transfer_failing":         "钱包划转或归集出问题",
-	"margin_ratio_low":         "合约保证金率过低",
-	"valuation_degraded":       "估值降级（有持仓取不到价）",
-	"flatten_orders_unsettled": "清仓结束时有子单没收拾掉，需人工核对",
-	"release_orders_stuck":     "过期目标的挂单持续撤不下来",
-	"orders_instrument_gone":   "标的已下架的订单需人工核对成交",
-	"fill_ingest_failed":       "成交没能记进账本，账户卡在同一笔",
-	"clock_skew":               "本机时钟与交易所相差过大，请检查 NTP",
-	"isolated_position":        "交易所账户里有逐仓持仓，moox 只支持全仓单向",
-}
-
-// EventCenterAttentionNames 是事件中心上报的需要人看的情况。
-var EventCenterAttentionNames = map[string]string{
-	"execution_failed": "事件通知失败",
-	"delist_detected":  "发现标的即将下架",
-	"action_failed":    "系统动作处理失败",
-}
-
-// CollectorAttentionNames 是 Collector 上报的需要人看的情况（下架检测）。
-var CollectorAttentionNames = map[string]string{
-	"delist_source_failed":        "下架检测来源连续失败",
-	"delist_readonly_key_missing": "下架检测缺少币安只读 Key",
-	"event_outbox_stuck":          "Collector 事件发件箱积压",
-	"eventbus_consumer_failed":    "Collector EventBus 消费者启动失败",
-	"eastmoney_cooling_down":      "东方财富请求被限流，Collector 已暂停访问",
-}
-
-// warningAttention 是只需提醒、不算故障的关注项（检查 ID）：功能还在，只少了一部分。
-// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收；
-// 东方财富冷却时只是标的列表同步暂缓（云函数采集不受影响），冷却结束探测成功后自动恢复。
-// 这些关注项触发时业务检查是 degraded（需关注），告警级别是 warning；其余关注项是 down 和 critical。
-var warningAttention = map[string]bool{
-	"collector_attention:delist_readonly_key_missing": true,
-	"collector_attention:eastmoney_cooling_down":      true,
-}
-
-// AttentionIsWarning 报告关注项触发时是否只算提醒（warning），不算故障。
-func AttentionIsWarning(check, kind string) bool {
-	return warningAttention[check+":"+kind]
-}
-
-// attentionSource 描述一个模块的关注项指标：指标名、业务检查的种类（检查 ID 的前缀）和 kind 到检查名的对照。
-type attentionSource struct {
-	metric string
-	check  string
-	names  map[string]string
-}
-
-var attentionSources = []attentionSource{
-	{"moox_trade_attention_active", "trade_attention", TradeAttentionNames},
-	{"moox_callbackdispatcher_attention_active", "event_center_attention", EventCenterAttentionNames},
-	{"moox_collector_attention_active", "collector_attention", CollectorAttentionNames},
-}
-
-// AttentionCheckName 返回关注项检查的名字；不是关注项检查或种类未知时返回空。
-func AttentionCheckName(check, kind string) string {
-	for _, source := range attentionSources {
-		if source.check == check {
-			return source.names[kind]
-		}
-	}
-	return ""
-}
-
-// warnedUnknownAttention 记下已经告警过的“服务加种类”：概览每次刷新都会汇总关注项，同一组合只打一次日志。
-var warnedUnknownAttention sync.Map
-
-// buildAttentionStatuses 把一个模块的关注项变成业务检查。detail 标签带对象名和原因，
-// 内容变化后旧序列不再更新，所以只看没有过期的序列。
-func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSource) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, _, err := b.Metrics.Catalog().ListSeries(ctx, "", source.metric, "", 0, 500)
-	if err != nil {
-		return nil, err
-	}
-	statuses := make(map[string]BusinessStatus, len(source.names))
-	for _, item := range series {
-		kind := labelValue(item.LabelsJSON, "kind")
-		if item.IsStale {
-			continue
-		}
-		if _, known := source.names[kind]; !known {
-			if _, warned := warnedUnknownAttention.LoadOrStore(item.ServiceName+"\x00"+kind, struct{}{}); !warned {
-				log.WarnContextf(ctx, "关注项种类未登记，已跳过: service=%s kind=%q metric=%s", item.ServiceName, kind, source.metric)
-			}
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		if latest == nil {
-			continue
-		}
-		status := BusinessStatus{
-			SpaceID: events.SystemSpaceID, Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
-			LastCheckedAt: latest.ObservedAt,
-		}
-		if latest.Value > 0 {
-			status.Status, status.Reason = "down", labelValue(item.LabelsJSON, "detail")
-			if AttentionIsWarning(source.check, kind) {
-				status.Status = "degraded"
-			}
-		}
-		if current, ok := statuses[kind]; !ok || status.LastCheckedAt.After(current.LastCheckedAt) {
-			statuses[kind] = status
-		}
-	}
-	out := make([]BusinessStatus, 0, len(statuses))
-	for _, status := range statuses {
-		out = append(out, status)
-	}
-	return out, nil
-}
-
-func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	lastSuccess, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_last_success_timestamp_seconds")
-	if err != nil {
-		return nil, err
-	}
-	lastRun, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_last_run_timestamp_seconds")
-	if err != nil {
-		return nil, err
-	}
-	failures, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_consecutive_failures")
-	if err != nil {
-		return nil, err
-	}
-	differences, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_max_difference_ratio")
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	if b.Now != nil {
-		now = b.Now().UTC()
-	}
-	threshold := b.BalanceDifferenceThreshold
-	if threshold <= 0 {
-		threshold = 0.05
-	}
-	out := make([]BusinessStatus, 0, len(lastSuccess))
-	for key, successValue := range lastSuccess {
-		runValue := lastRun[key]
-		failureValue := failures[key]
-		differenceValue := differences[key]
-		if successValue.value == 0 && runValue.value == 0 && failureValue.value == 0 && differenceValue.value == 0 {
-			// Prometheus exports registered gauges as zero even when Trade has no
-			// configured accounts. No sync has been expected until activity begins.
-			continue
-		}
-		lastSuccessAt := unixTime(successValue.value)
-		lastCheckedAt := lastSuccessAt
-		if _, ok := lastRun[key]; ok {
-			lastCheckedAt = unixTime(runValue.value)
-		}
-		status, reason := "healthy", "balance sync fresh"
-		switch {
-		case successValue.stale:
-			status, reason = "stale", "producer stale"
-		case failureValue.value >= 3:
-			status, reason = "down", "balance sync failed 3 consecutive runs"
-		case differenceValue.value > threshold:
-			status, reason = "down", fmt.Sprintf("balance difference %.4f exceeds %.4f", differenceValue.value, threshold)
-		case lastSuccessAt.IsZero():
-			status, reason = "unknown", "尚未上报"
-		case now.Sub(lastSuccessAt) > 15*time.Minute:
-			status, reason = "down", "balance sync stale"
-		}
-		out = append(out, BusinessStatus{
-			SpaceID: events.SystemSpaceID, Kind: "balance", Module: successValue.serviceName, Status: status,
-			Reason: reason, LastCheckedAt: lastCheckedAt,
-		})
-	}
-	return out, nil
-}
-
-type timerCoordinationState struct {
-	lastSuccess     float64
-	pending         float64
-	pendingSince    float64
-	hasLastSuccess  bool
-	hasPending      bool
-	hasPendingSince bool
-	healthy         float64
-	hasHealth       bool
-	staleSeries     bool
-	failureReasons  map[string]bool
-}
-
-// A full Tencent runtime-config batch may touch dozens of functions. The
-// coordination timestamp measures completion of that asynchronous batch, not
-// the ten-second Collector timer callback. Keep this threshold above the
-// observed multi-node provider update window; Storage freshness remains the
-// fast alert for an actual missing K-line.
-const timerCoordinationStaleAfter = 15 * time.Minute
-
-const timerCoordinationPendingGrace = 5 * time.Minute
-
-func (b Builder) marketFetchThresholds() MarketFetchThresholds {
-	thresholds := b.MarketFetchThresholds
-	if thresholds.CoordinationStaleAfter <= 0 {
-		thresholds.CoordinationStaleAfter = timerCoordinationStaleAfter
-	}
-	if thresholds.PendingGrace <= 0 {
-		thresholds.PendingGrace = timerCoordinationPendingGrace
-	}
-	return thresholds
-}
-
-// buildMarketFetchCoordination consumes the small Collector coordination
-// metric set. It deliberately does not call Tencent: Collector
-// already reads the trigger readback and publishes it through the shared
-// reporter, while Monitor remains a pure consumer.
-func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	states := map[string]*timerCoordinationState{}
-	thresholds := b.marketFetchThresholds()
-	collectorReporterFresh := false
-	if services, _, err := b.Metrics.Catalog().ListServices(ctx, "", 0, 500); err != nil {
-		return nil, err
-	} else {
-		for _, service := range services {
-			if service.ServiceName == "collector" && !service.IsStale {
-				collectorReporterFresh = true
-				break
-			}
-		}
-	}
-	load := func(metricName string, apply func(*timerCoordinationState, map[string]string, float64)) error {
-		series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", metricName, "", 500, now)
-		if err != nil {
-			return err
-		}
-		for _, item := range series {
-			labels, err := datasetLabels(item.LabelsJSON)
-			if err != nil {
-				return fmt.Errorf("timer coordination labels for %s: %w", item.SeriesID, err)
-			}
-			currentSpace := strings.TrimSpace(labels["space_id"])
-			if currentSpace == "" || (spaceID != "" && currentSpace != spaceID) {
-				continue
-			}
-			state := states[currentSpace]
-			if state == nil {
-				state = &timerCoordinationState{}
-				states[currentSpace] = state
-			}
-			if item.IsStale {
-				// Collector removes Gauge children when a rule/node disappears.
-				// The metrics catalog retains old series for history, so stale
-				// children must not keep an obsolete coordination alert alive.
-				state.staleSeries = true
-				continue
-			}
-			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-			if err != nil {
-				return err
-			}
-			apply(state, labels, latest.Value)
-		}
-		return nil
-	}
-	if err := load("moox_collector_market_fetch_assignment_last_success_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if value > state.lastSuccess {
-			state.lastSuccess = value
-		}
-		state.hasLastSuccess = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_coordination_healthy", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		// A space may be reported by more than one Collector during a rolling
-		// restart.  Aggregate conservatively: one failed reporter must not be
-		// hidden by whichever series happens to sort last.
-		if !state.hasHealth || value <= 0 {
-			state.healthy = value
-		}
-		state.hasHealth = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_coordination_failure", func(state *timerCoordinationState, labels map[string]string, value float64) {
-		if value <= 0 {
-			return
-		}
-		if state.failureReasons == nil {
-			state.failureReasons = make(map[string]bool)
-		}
-		if reason := strings.TrimSpace(labels["reason"]); reason != "" {
-			state.failureReasons[reason] = true
-		}
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_coordination_pending", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if value > state.pending {
-			state.pending = value
-		}
-		state.hasPending = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if value > state.pendingSince {
-			state.pendingSince = value
-		}
-		state.hasPendingSince = true
-	}); err != nil {
-		return nil, err
-	}
-	out := make([]BusinessStatus, 0, len(states))
-	for currentSpace, state := range states {
-		pendingGrace := state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
-			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace
-		if pendingGrace {
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "采集计划协调进行中", LastCheckedAt: now})
-			continue
-		}
-		if state.hasHealth && state.healthy <= 0 {
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: coordinationFailureText(state.failureReasons), LastCheckedAt: now})
-			continue
-		}
-		if !state.hasLastSuccess || state.lastSuccess <= 0 {
-			if state.staleSeries && !collectorReporterFresh {
-				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector 采集计划指标已停止上报", LastCheckedAt: now})
-			}
-			continue
-		}
-		status, reason := "healthy", "采集计划对账正常"
-		if now.Sub(unixTime(state.lastSuccess)) > thresholds.CoordinationStaleAfter {
-			status, reason = "down", fmt.Sprintf("最近一次采集计划对账已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
-		}
-		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
-	}
-	return out, nil
-}
-
-func maxFloat(value, floor float64) float64 {
-	if value < floor {
-		return floor
-	}
-	return value
-}
-
-type balanceMetricValue struct {
-	serviceName string
-	value       float64
-	stale       bool
-}
-
-func (b Builder) balanceMetricValues(ctx context.Context, metricName string) (map[string]balanceMetricValue, error) {
-	series, total, err := b.Metrics.Catalog().ListSeries(ctx, "", metricName, "", 0, 101)
-	if err != nil {
-		return nil, err
-	}
-	if total > 100 {
-		return nil, fmt.Errorf("trade balance series exceed limit 100 for %s", metricName)
-	}
-	out := make(map[string]balanceMetricValue, len(series))
-	for _, item := range series {
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		out[item.ServiceName+"\x00"+item.InstanceID] = balanceMetricValue{
-			serviceName: item.ServiceName, value: latest.Value, stale: item.IsStale,
-		}
-	}
-	return out, nil
-}
-
-func businessKind(check domain.Check) string {
-	kind, _, ok := strings.Cut(check.CheckID, ":")
-	if !ok {
-		return ""
-	}
-	switch kind {
-	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness":
-		return kind
-	default:
-		return ""
-	}
-}
-
-func businessModule(checkID string) string {
-	kind, id, _ := strings.Cut(checkID, ":")
-	switch kind {
-	case "market_canary", "subject_tag", "kline_freshness":
-		return "collector"
-	case "balance", "trade_attention":
-		return "trade"
-	case "event_center_attention":
-		return "callback-dispatcher"
-	case "collector_attention":
-		return "collector"
-	case "module":
-		for _, check := range report.BuiltInModuleHealthChecks() {
-			if check.ID == id {
-				return check.Module
-			}
-		}
-	}
-	return ""
-}
-
-// Live metric facts supersede the cached external check for the same identity.
-func uniqueBusinessChecks(items []BusinessStatus) []BusinessStatus {
-	indexes := make(map[string]int, len(items))
-	out := make([]BusinessStatus, 0, len(items))
-	for _, item := range items {
-		if item.CheckID == "" {
-			item.CheckID = item.Kind + ":" + item.Module
-		}
-		key := item.SpaceID + "\x00" + item.CheckID
-		if i, exists := indexes[key]; exists {
-			out[i] = item
-			continue
-		}
-		indexes[key] = len(out)
-		out = append(out, item)
-	}
-	return out
-}
-
 func sortOverview(out *Overview) {
 	sort.Slice(out.Services, func(i, j int) bool {
 		if statusRank(out.Services[i].Status) != statusRank(out.Services[j].Status) {
@@ -1725,12 +1053,6 @@ func sortOverview(out *Overview) {
 		right := out.Datasets[j].Producer + "\x00" + out.Datasets[j].DatasetID + "\x00" + out.Datasets[j].Freq
 		return left < right
 	})
-	sort.Slice(out.BusinessChecks, func(i, j int) bool {
-		if statusRank(out.BusinessChecks[i].Status) != statusRank(out.BusinessChecks[j].Status) {
-			return statusRank(out.BusinessChecks[i].Status) < statusRank(out.BusinessChecks[j].Status)
-		}
-		return out.BusinessChecks[i].Kind < out.BusinessChecks[j].Kind
-	})
 }
 
 func statusRank(status string) int {
@@ -1746,230 +1068,9 @@ func statusRank(status string) int {
 	}
 }
 
-// coordinationFailureTexts 是 Collector 上报的协调失败原因对应的告警文案，按优先级排列：
-// 多个实例上报不同原因时取排在前面的。原因名与 Collector 的 assignmentFailureReasons 一一对应。
-var coordinationFailureTexts = []struct{ reason, text string }{
-	{"quota", "函数个数、命名空间或预留并发配额超限：用 moox-cli collector function list --space-id <空间> --drift 找出计划外的函数（unplanned 一组），确认后按各行的 delete_command 删除（moox-cli collector function delete --space-id <空间> --name <函数名> --namespace <命名空间> --region <地域>，带上命名空间与地域才不会连同在用的同名函数一起删）；换过云账号的，旧账号下的函数用 moox-cli setup inspect-scf 查出来到腾讯云控制台手工删"},
-	{"cloud", "调用腾讯云失败：检查云账号密钥、限频和网络"},
-	{"environment", "函数运行环境生成失败：请检查环境变量大小"},
-	{"rules", "采集规则读取失败：请检查 Collector 规则配置和存储连接"},
-	{"store", "Collector 本地数据库读写失败：请检查 Collector 的 SQLite 数据库、磁盘空间和权限"},
-	{"storage", "标的快照登记失败：请检查 Storage 连接，以及 Collector 与 Storage 计算的快照哈希是否一致"},
-	{"package", "采集函数代码包解析失败：用 moox-cli collector package list --space-id <空间> 检查代码包是否已上传、状态是否可用"},
-	{"dataset", "数据集属性（允许迟到）设置失败：请检查 Storage 连接和数据集配置"},
-	{"activity", "采集计划活动日志未写入，计划保持未生效：请检查 Admin 的活动日志服务"},
-	{"preflight", "创建新采集计划前的检查未通过：请检查数据源前置条件，例如 A 股交易日历的覆盖期"},
-	{"capacity", "采集计划无法放进函数：请检查每函数标的数（symbols_per_function）、环境变量大小和外部入口配置"},
-}
-
-// coordinationFailureText 返回当前失败原因集合对应的告警文案；没有专属文案时给出通用提示。
-func coordinationFailureText(reasons map[string]bool) string {
-	for _, item := range coordinationFailureTexts {
-		if reasons[item.reason] {
-			return item.text
-		}
-	}
-	return "采集计划协调失败：请检查 Collector 日志、腾讯云调用和函数网络"
-}
-
 func unixTime(value float64) time.Time {
 	if value <= 0 {
 		return time.Time{}
 	}
 	return time.Unix(int64(value), 0).UTC()
-}
-
-// collectorStreamHeartbeatTimeout 是 collector-stream 心跳中断的告警阈值。
-const collectorStreamHeartbeatTimeout = 3 * time.Minute
-
-// collectorStreamFailedStreak 是连续多少个周期有失败标的（不含疑似下架）才告警。
-const collectorStreamFailedStreak = 3
-
-// buildCollectorStreamHealth 消费 Collector 汇总的推送采集指标：collector-stream 心跳中断超过 3 分钟、
-// 连续 3 个周期有失败标的（已判定疑似下架的不计入，避免每次下架都误报）。没有心跳序列的空间（没部署推送）不出检查项。
-func (b Builder) buildCollectorStreamHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	type streamState struct {
-		heartbeat float64
-		streaks   []string
-	}
-	states := map[string]*streamState{}
-	load := func(metricName string, apply func(*streamState, map[string]string, float64)) error {
-		series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", metricName, "", 500, now)
-		if err != nil {
-			return err
-		}
-		for _, item := range series {
-			if item.IsStale {
-				continue
-			}
-			labels, err := datasetLabels(item.LabelsJSON)
-			if err != nil {
-				return fmt.Errorf("collector stream labels for %s: %w", item.SeriesID, err)
-			}
-			current := strings.TrimSpace(labels["space_id"])
-			if current == "" || (spaceID != "" && current != spaceID) {
-				continue
-			}
-			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-			if err != nil {
-				return err
-			}
-			state := states[current]
-			if state == nil {
-				state = &streamState{}
-				states[current] = state
-			}
-			apply(state, labels, latest.Value)
-		}
-		return nil
-	}
-	if err := load("moox_collector_stream_heartbeat_timestamp_seconds", func(state *streamState, _ map[string]string, value float64) {
-		if value > state.heartbeat {
-			state.heartbeat = value
-		}
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_stream_failed_period_streak", func(state *streamState, labels map[string]string, value float64) {
-		if value >= collectorStreamFailedStreak {
-			state.streaks = append(state.streaks, fmt.Sprintf("%s/%s %s 连续 %d 期", labels["market"], labels["dataset_id"], labels["frequency"], int(value)))
-		}
-	}); err != nil {
-		return nil, err
-	}
-	spaces := make([]string, 0, len(states))
-	for space := range states {
-		spaces = append(spaces, space)
-	}
-	sort.Strings(spaces)
-	var out []BusinessStatus
-	for _, space := range spaces {
-		state := states[space]
-		if state.heartbeat > 0 {
-			status, reason := "healthy", "collector-stream 心跳正常"
-			if since := now.Sub(unixTime(state.heartbeat)); since > collectorStreamHeartbeatTimeout {
-				status, reason = "down", fmt.Sprintf("collector-stream 心跳已中断 %s（最后 %s）：推送采集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --ingest scf 切回（心跳已超时，交接不等它确认）", since.Truncate(time.Second), unixTime(state.heartbeat).Format(time.RFC3339))
-			}
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream", Status: status, Reason: reason, LastCheckedAt: now})
-		}
-		if len(state.streaks) > 0 {
-			sort.Strings(state.streaks)
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream_missing", Status: "down",
-				Reason: "推送连续多个周期有标的没到（不含疑似下架，由补采补齐）：" + strings.Join(state.streaks, "；"), LastCheckedAt: now})
-		} else if state.heartbeat > 0 {
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream_missing", Status: "healthy", Reason: "推送周期没有连续缺失", LastCheckedAt: now})
-		}
-	}
-	return out, nil
-}
-
-// factorWatermarkStallAfter 是因子任务连续水位阻塞多久告警：不自动跳过，交给人工（手动补采、确认缺失）。
-const factorWatermarkStallAfter = 30 * time.Minute
-
-// buildFactorWatermarkHealth 消费因子管理服务导出的连续水位阻塞起始时间：阻塞超过 30 分钟的集合告警。
-func (b Builder) buildFactorWatermarkHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_factor_task_watermark_blocked_since_timestamp_seconds", "", 500, now)
-	if err != nil {
-		return nil, err
-	}
-	stalled := map[string][]string{}
-	seen := map[string]bool{}
-	for _, item := range series {
-		if item.IsStale {
-			continue
-		}
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("factor watermark labels for %s: %w", item.SeriesID, err)
-		}
-		current := strings.TrimSpace(labels["space_id"])
-		if current == "" || (spaceID != "" && current != spaceID) {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		seen[current] = true
-		if latest.Value > 0 && now.Sub(unixTime(latest.Value)) > factorWatermarkStallAfter {
-			stalled[current] = append(stalled[current], fmt.Sprintf("%s 自 %s 起", labels["task_id"], unixTime(latest.Value).Format(time.RFC3339)))
-		}
-	}
-	spaces := make([]string, 0, len(seen))
-	for space := range seen {
-		spaces = append(spaces, space)
-	}
-	sort.Strings(spaces)
-	out := make([]BusinessStatus, 0, len(spaces))
-	for _, space := range spaces {
-		if list := stalled[space]; len(list) > 0 {
-			sort.Strings(list)
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_watermark", Module: "factor_engine", Status: "down",
-				Reason: "因子连续水位停滞超过 30 分钟（前面有还没补到的周期，不会自动跳过）：" + strings.Join(list, "；") + "。请检查补采，或确认行情源缺失", LastCheckedAt: now})
-			continue
-		}
-		out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_watermark", Module: "factor_engine", Status: "healthy", Reason: "因子连续水位正常", LastCheckedAt: now})
-	}
-	return out, nil
-}
-
-// deadlineRejectionWindow 是“周期建立前截止已过”拒绝的告警窗口：最近这段时间内出现过就告警。
-const deadlineRejectionWindow = 10 * time.Minute
-
-// buildDeadlineRejectionHealth 消费 Storage 导出的截止拒绝时刻：写入方取数晚于数据集截止时整期提交被拒（常见于采集方式切换后截止没跟上），
-// 数据只能靠补采补齐，最近 10 分钟内出现过就告警。
-func (b Builder) buildDeadlineRejectionHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return nil, nil
-	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_period_deadline_rejected_timestamp_seconds", "", 500, now)
-	if err != nil {
-		return nil, err
-	}
-	recent := map[string][]string{}
-	seen := map[string]bool{}
-	for _, item := range series {
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("storage deadline rejection labels for %s: %w", item.SeriesID, err)
-		}
-		current := strings.TrimSpace(labels["space_id"])
-		if current == "" || (spaceID != "" && current != spaceID) {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		seen[current] = true
-		if latest.Value > 0 && now.Sub(unixTime(latest.Value)) <= deadlineRejectionWindow {
-			name := b.Metrics.DatasetDisplayName(ctx, current, labels["dataset_id"])
-			if name == "" {
-				name = labels["dataset_id"]
-			}
-			recent[current] = append(recent[current], fmt.Sprintf("%s（%s，最近 %s）", name, labels["freq"], unixTime(latest.Value).Format(time.RFC3339)))
-		}
-	}
-	spaces := make([]string, 0, len(seen))
-	for space := range seen {
-		spaces = append(spaces, space)
-	}
-	sort.Strings(spaces)
-	out := make([]BusinessStatus, 0, len(spaces))
-	for _, space := range spaces {
-		if list := recent[space]; len(list) > 0 {
-			sort.Strings(list)
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "storage_rejection", Module: "storage", Status: "down",
-				Reason: "Storage 拒绝周期提交：周期建立前截止已过（写入方取数晚于数据集截止，常见于采集方式切换后截止没跟上），整期数据要靠补采：" + strings.Join(list, "；"), LastCheckedAt: now})
-			continue
-		}
-		out = append(out, BusinessStatus{SpaceID: space, Kind: "storage_rejection", Module: "storage", Status: "healthy", Reason: "最近 10 分钟没有截止拒绝", LastCheckedAt: now})
-	}
-	return out, nil
 }

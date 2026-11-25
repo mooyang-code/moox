@@ -11,14 +11,15 @@ type LifecycleStatus struct {
 	Catchup *LifecycleCatchup
 }
 
-// LifecyclePause 是暂停详情：类型（manual | system）、原因、操作者、开始时间。
+// LifecyclePause 是暂停详情：类型（manual | system）、原因、操作者、开始时刻（毫秒，0 表示没有）。
 type LifecyclePause struct {
-	Kind, Reason, By, Since string
+	Kind, Reason, By string
+	Since            int64
 }
 
-// LifecycleCatchup 是恢复追赶进度。
+// LifecycleCatchup 是恢复追赶进度；Since 是开始追赶的时刻（毫秒）。
 type LifecycleCatchup struct {
-	Since      string
+	Since      int64
 	Done       int64
 	Total      int64
 	CaughtUp   bool
@@ -33,7 +34,7 @@ func lifecycleFromReport(report *metricspb.ModuleLifecycle) *LifecycleStatus {
 		return nil
 	}
 	out := &LifecycleStatus{Stage: report.GetStage(), Reason: report.GetReason()}
-	if report.GetPauseKind() != "" || report.GetPausedSince() != "" {
+	if report.GetPauseKind() != "" || report.GetPausedSince() != 0 {
 		out.Pause = &LifecyclePause{Kind: report.GetPauseKind(), Reason: report.GetPauseReason(), By: report.GetPausedBy(), Since: report.GetPausedSince()}
 	}
 	if c := report.GetCatchup(); c != nil {

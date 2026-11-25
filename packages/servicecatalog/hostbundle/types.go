@@ -33,7 +33,11 @@ type Host struct {
 	Reachability string `json:"reachability,omitempty"`
 	// ExternalEntry 表示这台主机的网关开外部入口（11004）。
 	ExternalEntry bool `json:"external_entry,omitempty"`
-	SSH           *SSH `json:"ssh,omitempty"`
+	// Disabled 表示 moox.toml 里这台主机写了 enabled = false。
+	Disabled bool `json:"disabled,omitempty"`
+	// DisabledComponents 是 Components 里写在 [deployments_disabled] 的组件。
+	DisabledComponents []string `json:"disabled_components,omitempty"`
+	SSH                *SSH     `json:"ssh,omitempty"`
 }
 
 type CertificateInfo struct {

@@ -35,7 +35,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 	if err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	rsp := &pb.GetCollectorStatusRsp{RetInfo: retOK(), Level: klinecheck.HealthOK, Open: planSummary(open), Applied: planSummary(applied), GeneratedAt: now.Format(time.RFC3339)}
+	rsp := &pb.GetCollectorStatusRsp{RetInfo: retOK(), Level: klinecheck.HealthOK, Open: planSummary(open), Applied: planSummary(applied), GeneratedAt: unixMillis(now)}
 	raise := func(level, reason string) {
 		rsp.Level = klinecheck.WorseLevel(rsp.Level, level)
 		rsp.Reasons = append(rsp.Reasons, reason)
@@ -157,7 +157,7 @@ func planSummary(record *store.FetchPlanRecord) *pb.FetchPlanSummary {
 	if record == nil {
 		return nil
 	}
-	return &pb.FetchPlanSummary{Id: record.ID, Status: record.Status, LastError: record.LastError, CreatedAt: record.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: record.UpdatedAt.UTC().Format(time.RFC3339)}
+	return &pb.FetchPlanSummary{Id: record.ID, Status: record.Status, LastError: record.LastError, CreatedAt: unixMillis(record.CreatedAt), UpdatedAt: unixMillis(record.UpdatedAt)}
 }
 
 func datasetStatusToPB(item klinecheck.DatasetHealth, functions int) *pb.CollectorDatasetStatus {
@@ -169,10 +169,6 @@ func datasetStatusToPB(item klinecheck.DatasetHealth, functions int) *pb.Collect
 	}
 	if !item.InspectedUntil.IsZero() {
 		out.InspectedUntil = item.InspectedUntil.UTC().Format(time.RFC3339)
-	}
-	if history := item.History; history != nil {
-		out.HistoryScannedAt = history.ScannedAt.UTC().Format(time.RFC3339)
-		out.HistoryGapBars, out.HistoryGapSubjects, out.HistoryError = int32(history.GapBars), int32(history.GapSubjects), history.LastError
 	}
 	return out
 }
@@ -191,27 +187,21 @@ func planFunctions(source *store.FetchPlanRecord) ([]*pb.CollectorFunctionStatus
 	var out []*pb.CollectorFunctionStatus
 	for _, name := range content.SortedFunctionNames() {
 		function := content.Functions[name]
-		plan := content.TransitionalPlan(function)
-		if plan == nil {
-			continue
-		}
 		executor := function.Executor
 		if executor == "" {
 			executor = marketfetch.PlanExecutorSCF
 		}
-		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: content.TransitionalCron(function), Executor: executor}
+		// 未生效计划里 Push 且未确认的是 pending；Target 为空的是退役（已生效计划里不再列出）。
+		plan := function.Target
+		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: function.Cron, Executor: executor}
 		switch {
-		case function.New == nil:
-			if appliedPlan {
+		case plan == nil:
+			if appliedPlan || function.Old == nil {
 				continue
 			}
-			state.State = "retiring"
-		case !appliedPlan && function.Push && !progress.Finalized[name]:
+			plan, state.State = function.Old, "retiring"
+		case !appliedPlan && function.Push && !progress.Pushed[name]:
 			state.State = "pending"
-		}
-		if final := content.FinalPlan(function); appliedPlan && final != nil {
-			plan = final
-			state.Cron = content.FinalCron(function)
 		}
 		for _, dataset := range plan.Datasets {
 			if len(dataset.Copies) == 0 {

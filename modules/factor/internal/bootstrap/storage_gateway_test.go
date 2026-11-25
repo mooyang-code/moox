@@ -23,7 +23,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayauth/authtest"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
+	directorypb "github.com/mooyang-code/moox/packages/gatewayclient/directorypb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -174,7 +174,7 @@ func TestFactorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) {
 	require.Equal(t, "bars", rsp.DatasetID)
 	err = storage.ReportComputed(t.Context(), storageio.PeriodMarker{SpaceID: "crypto", ResultDatasetID: "factor-result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 60, TriggerEventID: "fixture-period"})
 	require.ErrorContains(t, err, "writes must not retry")
-	err = storage.UpsertColumns(t.Context(), "crypto", "bars", []storageio.ColumnInfo{{ColumnName: "close", OriginType: storageio.ColumnOriginField, ValueType: storageio.ColumnTypeDouble}})
+	err = storage.UpsertColumns(t.Context(), "crypto", "bars", []storageio.ColumnInfo{{ColumnName: "close", DisplayName: "收盘价", ValueType: storageio.ColumnTypeDouble}})
 	require.ErrorContains(t, err, "column upsert must not retry")
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.reads)

@@ -27,21 +27,21 @@ type fakeClient struct {
 	coverageReads []bool
 }
 
-func (f *fakeClient) GetView(_ context.Context, _, viewID string) (ViewInfo, error) {
+func (f *fakeClient) GetView(_ context.Context, _, datasetID string) (ViewInfo, error) {
 	if err := f.errors["view"]; err != nil {
 		return ViewInfo{}, err
 	}
-	view, ok := f.views[viewID]
+	view, ok := f.views[datasetID]
 	if !ok {
-		return ViewInfo{}, fmt.Errorf("View %s 不存在", viewID)
+		return ViewInfo{}, fmt.Errorf("View %s 不存在", datasetID)
 	}
 	// 与生产一致：View 元数据不带覆盖统计，需要时由 ViewCoverage 单独读取。
 	view.IndexedFrom, view.IndexedTo, view.SeriesBars = time.Time{}, time.Time{}, 0
 	return view, nil
 }
 
-func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	view, err := f.GetView(ctx, spaceID, viewID)
+func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
+	view, err := f.GetView(ctx, spaceID, datasetID)
 	return view.Generation, err
 }
 
@@ -50,7 +50,7 @@ func (f *fakeClient) ViewCoverage(_ context.Context, _ string, view ViewInfo, ex
 	if err := f.errors["coverage"]; err != nil {
 		return Coverage{}, err
 	}
-	stored := f.views[view.ViewID]
+	stored := f.views[view.DatasetID]
 	return Coverage{IndexedFrom: stored.IndexedFrom, IndexedTo: stored.IndexedTo, SeriesBars: stored.SeriesBars}, nil
 }
 
@@ -141,16 +141,16 @@ func subject(id string, active bool) Subject {
 func newFakeClient(marketType string) *fakeClient {
 	return &fakeClient{
 		views: map[string]ViewInfo{
-			"view_factor_1h": {ViewID: "view_factor_1h", DatasetID: "ds_factor", Frequency: "1h", Status: "active", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, Columns: []ViewColumn{
+			"dataset_factor_1h": {DatasetID: "dataset_factor_1h", Frequency: "1h", Status: "active", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, Columns: []ViewColumn{
 				plainColumn("open"), plainColumn("high"), plainColumn("low"), plainColumn("close"), plainColumn("volume"), plainColumn("quote_volume"), plainColumn("trade_num"),
 				factorColumn("ma_20", "ma"), factorColumn("bias_q_20", "bias"), factorColumn("quote_volume_mean_20", "qv"), factorColumn("quote_volume_mean_q_20", "qv"),
 			}},
 		},
 		datasets: map[string]DatasetInfo{
-			"ds_factor": {DatasetID: "ds_factor", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline"}},
-			"ds_kline":  {DatasetID: "ds_kline", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + marketType}},
+			"dataset_factor_1h": {DatasetID: "dataset_factor_1h", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline"}},
+			"ds_kline":          {DatasetID: "ds_kline", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: []string{"binance_" + marketType}},
 		},
-		subjects:   map[string][]Subject{"ds_factor": {subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true), subject("USDC-USDT", true), subject("OLD-USDT", false)}},
+		subjects:   map[string][]Subject{"dataset_factor_1h": {subject("BTC-USDT", true), subject("ETH-USDT", true), subject("SOL-USDT", true), subject("USDC-USDT", true), subject("OLD-USDT", false)}},
 		tags:       map[string][]string{"stablecoins": {"USDC-USDT"}, "majors": {"BTC-USDT", "ETH-USDT"}},
 		tagMarkets: map[string]string{"binance_spot": "spot", "binance_swap": "swap", "mixed_bad": "option"},
 		errors:     map[string]error{},

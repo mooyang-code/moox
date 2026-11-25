@@ -121,12 +121,12 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"install", "update", "operator", "register-identity", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "metadata-import", "export-skill-config", "firewall"} {
+	for _, name := range []string{"install", "update", "operator", "deploy", "init", "start", "verify", "validate", "status", "logs", "restart", "stop", "start-component", "wipe", "hosts", "trust-host", "trust-browser", "build-linux", "export-skill-config", "firewall"} {
 		require.Contains(t, output.String(), "  "+name+" ")
 	}
 	// 已删除的命令：初始秘密由 setup init 写入，因子任务由 setup start 与 factor task apply 导入，运行配置由部署渲染；
 	// 旧部署路径的命令（bootstrap、deploy-host、deploy-unit、release、watchdog、package）已从注册表摘掉。
-	for _, removed := range []string{"apply ", "factors ", "render-runtime-config", "bootstrap", "deploy-host", "deploy-unit", "release ", "watchdog", "package "} {
+	for _, removed := range []string{"apply ", "factors ", "render-runtime-config", "bootstrap", "deploy-host", "deploy-unit", "release ", "watchdog", "package ", "metadata-import"} {
 		require.NotContains(t, output.String(), "  "+removed)
 	}
 }
@@ -267,6 +267,15 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	require.Len(t, relay[0].Rules, 2)
 	assert.Equal(t, "11003", relay[0].Rules[0].Ports)
 	assert.Equal(t, "4222", relay[0].Rules[1].Ports)
+
+	// 停用的主机只写登记，不碰它的防火墙。
+	disabled := false
+	storage := manifest.HostCatalog["storage"]
+	storage.Enabled = &disabled
+	manifest.HostCatalog["storage"] = storage
+	targets = mustFirewallTargets(t, manifest)
+	require.Len(t, targets, 1)
+	assert.Nil(t, ports("storage"))
 }
 
 func mustFirewallTargets(t *testing.T, manifest *topology.Config) []setupFirewallTarget {
@@ -331,30 +340,6 @@ func TestSetupFirewallTargetsFollowEventBusPlacement(t *testing.T) {
 	require.Len(t, relay, 2)
 	assert.Equal(t, []string{"11003"}, portsOn(relay, "control"))
 	assert.Equal(t, []string{"4222"}, portsOn(relay, "storage"))
-}
-
-func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {
-	t.Parallel()
-	snapshot := testSetupSnapshot(t)
-	var host, seed string
-	var spaces []string
-	cmd := newSetupCommand(setupDeps{
-		load: func(string) (*setupSnapshot, error) { return snapshot, nil },
-		importMetadata: func(_ context.Context, _ *setupSnapshot, selectedHost, selectedSeed string, selectedSpaces []string) (metadataImportSummary, error) {
-			host, seed, spaces = selectedHost, selectedSeed, append([]string(nil), selectedSpaces...)
-			return metadataImportSummary{Status: "ok", Planned: 12, Applied: 12}, nil
-		},
-	})
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"metadata-import", "--file", "moox.toml", "--seed", "seed.yaml", "--storage-host", "compute", "--spaces", "stockcn,crypto"})
-	require.NoError(t, cmd.Execute())
-	require.Equal(t, "compute", host)
-	require.Equal(t, "seed.yaml", seed)
-	require.Equal(t, []string{"stockcn", "crypto"}, spaces)
-	var result metadataImportSummary
-	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
-	require.Equal(t, 12, result.Applied)
 }
 
 // testSetupSnapshot 是测试用的两份配置：控制机带 Storage 与 EventBus，另有一台空主机；秘密里的值都是可辨认的假值。

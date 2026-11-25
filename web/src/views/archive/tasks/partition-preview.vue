@@ -35,7 +35,7 @@
 import { computed, ref, watch } from "vue";
 import { getArchivePartition, type ArchivePartition } from "@/api/archive";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { RequestGate } from "@/utils/request-gate";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatInstant } from "@/utils/time-zone";
 import { parsePreviewCsv } from "../shared/archive-model";
 
@@ -45,17 +45,17 @@ const emit = defineEmits<{ close: [] }>();
 
 const partition = ref<ArchivePartition | null>(null);
 const error = ref("");
-const gate = new RequestGate();
+const gate = createLatestRequestGuard();
 
 async function load() {
-  const token = gate.next();
+  const token = gate.begin();
   error.value = "";
   partition.value = null;
   try {
-    const rsp = await getArchivePartition(props.datasetId, props.partitionKey, { silentError: true });
-    if (gate.isCurrent(token)) partition.value = rsp.partition || {};
+    const rsp = await getArchivePartition(props.datasetId, props.partitionKey);
+    if (token.isLatest()) partition.value = rsp.partition || {};
   } catch (cause) {
-    if (cause instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
+    if (cause instanceof StaleSpaceRequestError || !token.isLatest()) return;
     error.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
   }
 }

@@ -9,15 +9,15 @@ import (
 
 func TestRequiredTurnoverSumsTargetChanges(t *testing.T) {
 	since := int64(1_000)
-	receipts := []store.TargetReceiptRecord{
+	receipts := []store.TargetHistoryRecord{
 		// 窗口前的基准：BTC 1、ETH 10。
-		{AcceptedAt: 900, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"1"},{"instrument_id":"ETH","quantity":"10"}]`,
+		{RecordedAt: 900, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"1"},{"instrument_id":"ETH","quantity":"10"}]`,
 			ReferencePricesJSON: `{"BTC":{"instrument_id":"BTC","price":"100"},"ETH":{"instrument_id":"ETH","price":"10"}}`},
 		// BTC 加到 3（变化 2×100），ETH 保持。
-		{AcceptedAt: 1_100, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"},{"instrument_id":"ETH","hold":true}]`,
+		{RecordedAt: 1_100, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"},{"instrument_id":"ETH","hold":true}]`,
 			ReferencePricesJSON: `{"BTC":{"instrument_id":"BTC","price":"100"}}`},
 		// ETH 不再列出即目标为 0（变化 10×10，沿用上次参考价），BTC 不变。
-		{AcceptedAt: 1_200, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`,
+		{RecordedAt: 1_200, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`,
 			ReferencePricesJSON: `{"BTC":{"instrument_id":"BTC","price":"100"}}`},
 	}
 	required, err := requiredTurnover(receipts, since)
@@ -39,10 +39,10 @@ func TestRequiredTurnoverSumsTargetChanges(t *testing.T) {
 
 func TestRequiredTurnoverDropsStaleBaseline(t *testing.T) {
 	// 基准和窗口内第一张隔了很久（策略停过），从空仓算起：BTC 0→3 计 300。
-	receipts := []store.TargetReceiptRecord{
-		{AcceptedAt: 100, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`,
+	receipts := []store.TargetHistoryRecord{
+		{RecordedAt: 100, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`,
 			ReferencePricesJSON: `{"BTC":{"price":"100"}}`},
-		{AcceptedAt: 10_000, BarEndTime: 10_000, ValidUntil: 10_060,
+		{RecordedAt: 10_000, BarEndTime: 10_000, ValidUntil: 10_060,
 			QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`, ReferencePricesJSON: `{"BTC":{"price":"100"}}`},
 	}
 	required, err := requiredTurnover(receipts, 1_000)

@@ -27,7 +27,7 @@ func TestAccountMarketsMustBeCanonicalAndAccountModeOnlyForLiveCrypto(t *testing
 		},
 		"空": func(a *Account) { a.Markets = nil },
 		"股票混合现货": func(a *Account) {
-			a.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeStock}
+			a.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeEquity}
 		},
 		"模拟盘不能有账户类型": func(a *Account) { a.AccountMode = exchange.AccountModeBinanceStandard },
 		"未知账户类型":     func(a *Account) { a.AccountMode = "UNKNOWN" },
@@ -47,7 +47,7 @@ func TestMarketForInstrument(t *testing.T) {
 	if got := both.MarketForInstrument("BTC-USDT-SWAP"); got != exchange.MarketTypeSwap {
 		t.Fatalf("market = %q", got)
 	}
-	if !both.SupportsMarket(exchange.MarketTypeSpot) || both.SupportsMarket(exchange.MarketTypeStock) || !both.HasLeverageMarket() {
+	if !both.SupportsMarket(exchange.MarketTypeSpot) || both.SupportsMarket(exchange.MarketTypeEquity) || !both.HasLeverageMarket() {
 		t.Fatal("市场判断不对")
 	}
 	// 一律按后缀判断：单市场账户也不例外，加密货币标的没有后缀就没有市场；股票代码只在开通了股票市场的账户上有效。
@@ -58,8 +58,8 @@ func TestMarketForInstrument(t *testing.T) {
 		t.Fatalf("后缀指向的市场 = %q，不能被账户只开通现货改写", got)
 	}
 	stock := validSpotAccount()
-	stock.Markets = []exchange.MarketType{exchange.MarketTypeStock}
-	if got := stock.MarketForInstrument("600519.SH"); got != exchange.MarketTypeStock {
+	stock.Markets = []exchange.MarketType{exchange.MarketTypeEquity}
+	if got := stock.MarketForInstrument("600519.SH"); got != exchange.MarketTypeEquity {
 		t.Fatalf("股票市场 = %q", got)
 	}
 }

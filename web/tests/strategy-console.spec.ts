@@ -7,7 +7,7 @@ async function installShell(page: Page) {
       json: { ret_info: { code: 0, msg: "ok" }, user_info: { user_id: "u1", username: "admin", nickname: "Admin", role: 2 } }
     })
   );
-  await page.route("**/api/admin/space/ListSpaces", route =>
+  await page.route("**/api/admin/storage/ListSpaces", route =>
     route.fulfill({
       json: {
         ret_info: { code: 0 },
@@ -33,11 +33,11 @@ test("strategy definitions render the DSL v3 contract", async ({ page }) => {
             name: "动量策略",
             dsl_yaml: dsl,
             dsl_hash: "sha256:0123456789abcdef",
-            created_at: "2026-07-30T00:00:00Z",
-            updated_at: "2026-07-30T00:00:00Z"
+            created_at: String(Date.UTC(2026, 6, 30)),
+            updated_at: String(Date.UTC(2026, 6, 30))
           }
         ],
-        total: 1,
+        total: "1",
         page: 1,
         page_size: 20
       }
@@ -55,7 +55,7 @@ test("instance detail distinguishes valid target weight from trade fills and exp
   await installShell(page);
   const resolved = JSON.stringify({
     market: { select: "spot", prefer: "spot" },
-    tasks: { spot: { factor_task_id: "ftask_ma", view_id: "view_factor_1h", dataset_id: "ds" } },
+    tasks: { spot: { factor_task_id: "ftask_ma", dataset_id: "ds" } },
     bar: "1h",
     calendar: "crypto_24x7",
     columns: { ma_20: { source: "factor", member: "ma_20", factor_id: "ma", definition_hash: "sha256:abc" } },
@@ -75,7 +75,7 @@ test("instance detail distinguishes valid target weight from trade fills and exp
           session_id: "session-1",
           resolved_json: resolved,
           health: "ok",
-          updated_at: "2026-07-30T00:00:00Z"
+          updated_at: String(Date.UTC(2026, 6, 30))
         }
       }
     })
@@ -89,10 +89,10 @@ test("instance detail distinguishes valid target weight from trade fills and exp
     route.fulfill({
       json: {
         ret_info: { code: 0 },
-        targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25" }],
+        targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25", market: "spot" }],
         session_id: "session-1",
-        bar_end_time: "2026-07-30T00:00:00Z",
-        valid_until: "2099-07-30T00:00:00Z",
+        bar_end_time: String(Date.UTC(2026, 6, 30)),
+        valid_until: String(Date.UTC(2099, 6, 30)),
         result_id: "result-7"
       }
     })
@@ -106,10 +106,10 @@ test("instance detail distinguishes valid target weight from trade fills and exp
             result_id: "result-7",
             instance_id: "instance-paper",
             session_id: "session-1",
-            bar_end_time: "2026-07-30T00:00:00Z",
-            valid_until: "2099-07-30T00:00:00Z",
+            bar_end_time: String(Date.UTC(2026, 6, 30)),
+            valid_until: String(Date.UTC(2099, 6, 30)),
             status: "ok",
-            targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25" }],
+            targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25", market: "spot" }],
             summary_json: '{"gross":"0.25","cash":"0.75"}',
             publish_status: "sent"
           },
@@ -117,15 +117,15 @@ test("instance detail distinguishes valid target weight from trade fills and exp
             result_id: "result-6",
             instance_id: "instance-paper",
             session_id: "session-1",
-            bar_end_time: "2026-07-29T23:00:00Z",
-            valid_until: "2026-07-30T01:00:00Z",
+            bar_end_time: String(Date.UTC(2026, 6, 29, 23)),
+            valid_until: String(Date.UTC(2026, 6, 30, 1)),
             status: "skipped",
             skip_reason: "previous_version_unknown",
             targets: [],
             publish_status: "none"
           }
         ],
-        total: 2
+        total: "2"
       }
     })
   );
@@ -136,10 +136,10 @@ test("instance detail distinguishes valid target weight from trade fills and exp
   await expect(page.getByText("25.00%").first()).toBeVisible();
   await expect(page.getByText("历史结果", { exact: true })).toBeVisible();
   await expect(page.getByText("已发送")).toBeVisible();
-  await expect(page.getByText("上一根版本未知（previous_version_unknown）")).toBeVisible();
+  await expect(page.getByText("上一根版本未知（previous_version_unknown） × 1")).toBeVisible();
   await expect(page.getByText("投递状态不代表成交状态")).toBeVisible();
-  await page.getByText("输入绑定（会话固化的 View 列与因子指纹）").click();
-  await expect(page.getByText("ma_20")).toBeVisible();
+  await page.getByText("输入绑定（会话固化的结果 View 列与成员契约）").click();
+  await expect(page.getByText("ma_20", { exact: true })).toBeVisible();
   await expect(page.getByText("停用实例")).toBeVisible();
 });
 
@@ -150,7 +150,7 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
     name: "Paper 组合",
     control_mode: 1,
     execution_mode: 1,
-    markets: [1],
+    markets: ["spot"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
     pause_reason: "manual review",
@@ -161,8 +161,8 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
   const account = {
     trading_account_id: "binance-paper",
     name: "币安模拟",
-    exchange: 1,
-    markets: [1],
+    exchange: "binance",
+    markets: ["spot"],
     execution_mode: 1,
     settlement_asset: "USDT",
     status: "ENABLED",
@@ -204,8 +204,7 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
         target: {
           target_id: "result-8",
           logical_account_id: "logical-paper",
-          runner_id: "runner-paper",
-          command_sequence: "8",
+          instance_id: "runner-paper",
           targets: [{ instrument_id: "ETH-USDT-SPOT", quantity: "2" }],
           status: "CONVERGING",
           valid_until: String(Date.now() + 3_600_000)

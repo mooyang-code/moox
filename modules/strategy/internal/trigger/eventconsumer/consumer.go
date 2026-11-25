@@ -96,7 +96,7 @@ func (c *Consumer) consumerConfig() (jetstream.ConsumerConfig, error) {
 		return jetstream.ConsumerConfig{}, err
 	}
 	return jetstream.ConsumerConfig{
-		Stream: "MOOX_STORAGE", Durable: c.cfg.ConsumerName, FilterSubject: filter, AckWait: c.cfg.AckWait,
+		Stream: events.StrategyViewReadyConsumer.Stream(), Durable: c.cfg.ConsumerName, FilterSubject: filter, AckWait: c.cfg.AckWait,
 		MaxDeliver: -1, MaxAckPending: c.cfg.MaxAckPending, FetchMaxWait: c.cfg.FetchMaxWait,
 		DeliverPolicy: nats.DeliverNewPolicy, DeliverDecodeErrors: true,
 	}, nil

@@ -1,10 +1,10 @@
 -- moox storage metadata schema
 --
 -- 设计目标：
--- 1. Space 是业务命名空间；DataSource、Subject、Dataset、Field 和 View 都归属 Space。
+-- 1. Space 是业务命名空间；DataSource、Subject、Dataset 都归属 Space。
 -- 2. Dataset 描述可写事实数据集，并且只绑定一个 DataSource。
 -- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由抓取适配器换算。
--- 4. View 是查询入口，只存声明：列等于数据集启用的列，已建索引的状态只在 View 的索引文件里。
+-- 4. 每个 Dataset 恰好有一个查询索引（View），不单独登记：列等于数据集启用的列，已建索引的状态只在索引文件里。
 -- 5. Dataset 的行全部存放在主服务的 Pebble 库里，元数据不记录存储位置。
 -- 6. DuckDB、Bleve 索引跟随 Pebble 主存的变更日志异步派生。
 -- 7. 每张表只保留主键、唯一约束、外键与查询条件用到的列，整条消息放在 c_item_json。
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '19')
+VALUES ('schema_version', '21')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS t_spaces (
     c_item_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
+    CHECK (c_status IN ('active', 'disabled')),
     UNIQUE (c_space_id),
     UNIQUE (c_name)
 );
@@ -46,37 +46,6 @@ BEGIN
     UPDATE t_spaces SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- ************ View ************
-CREATE TABLE IF NOT EXISTS t_views (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_engine TEXT NOT NULL DEFAULT 'duckdb',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_item_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_engine IN ('duckdb', 'bleve')),
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
-    FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_view_id),
-    UNIQUE (c_space_id, c_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_views_space ON t_views (c_space_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_views_dataset ON t_views (c_space_id, c_dataset_id, c_status);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_views_mtime
-AFTER UPDATE ON t_views
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_views SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
 -- ************ 数据来源与数据对象 ************
 CREATE TABLE IF NOT EXISTS t_data_sources (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +56,7 @@ CREATE TABLE IF NOT EXISTS t_data_sources (
     c_item_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
+    CHECK (c_status IN ('active', 'disabled')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_data_source_id),
     UNIQUE (c_space_id, c_name)
@@ -183,7 +152,7 @@ BEGIN
     UPDATE t_subject_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- ************ Dataset、Field 与 DatasetColumn ************
+-- ************ Dataset 与 DatasetColumn ************
 CREATE TABLE IF NOT EXISTS t_datasets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -324,131 +293,23 @@ BEGIN
     ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
 END;
 
-CREATE TABLE IF NOT EXISTS t_field_groups (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_group_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_parent_group_id TEXT,
-    c_sort_order INTEGER NOT NULL DEFAULT 0,
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_item_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_sort_order >= 0),
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
-    CHECK (c_parent_group_id IS NULL OR c_parent_group_id <> c_group_id),
-    FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_space_id, c_parent_group_id) REFERENCES t_field_groups (c_space_id, c_group_id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_group_id),
-    UNIQUE (c_space_id, c_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_field_groups_parent ON t_field_groups (c_space_id, c_parent_group_id, c_sort_order, c_group_id);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_field_groups_two_levels_insert
-BEFORE INSERT ON t_field_groups
-FOR EACH ROW
-WHEN NEW.c_parent_group_id IS NOT NULL AND (
-    EXISTS (
-        SELECT 1 FROM t_field_groups parent
-        WHERE parent.c_space_id = NEW.c_space_id
-          AND parent.c_group_id = NEW.c_parent_group_id
-          AND parent.c_parent_group_id IS NOT NULL
-    )
-    OR EXISTS (
-        SELECT 1 FROM t_field_groups child
-        WHERE child.c_space_id = NEW.c_space_id
-          AND child.c_parent_group_id = NEW.c_group_id
-    )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'field groups support at most two levels');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_t_field_groups_two_levels_update
-BEFORE UPDATE OF c_parent_group_id ON t_field_groups
-FOR EACH ROW
-WHEN NEW.c_parent_group_id IS NOT NULL AND (
-    EXISTS (
-        SELECT 1 FROM t_field_groups parent
-        WHERE parent.c_space_id = NEW.c_space_id
-          AND parent.c_group_id = NEW.c_parent_group_id
-          AND parent.c_parent_group_id IS NOT NULL
-    )
-    OR EXISTS (
-        SELECT 1 FROM t_field_groups child
-        WHERE child.c_space_id = NEW.c_space_id
-          AND child.c_parent_group_id = NEW.c_group_id
-    )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'field groups support at most two levels');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_t_field_groups_mtime
-AFTER UPDATE ON t_field_groups
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_field_groups SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TABLE IF NOT EXISTS t_fields (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_field_id TEXT NOT NULL,
-    c_group_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_description TEXT NOT NULL DEFAULT '',
-    c_value_type TEXT NOT NULL,
-    c_sort_order INTEGER NOT NULL DEFAULT 0,
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_item_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_value_type IN ('string', 'int', 'double', 'bool', 'time', 'json', 'bytes')),
-    CHECK (c_sort_order >= 0),
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
-    FOREIGN KEY (c_space_id, c_group_id) REFERENCES t_field_groups (c_space_id, c_group_id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_field_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_fields_value_type ON t_fields (c_space_id, c_value_type, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_fields_status ON t_fields (c_space_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_fields_group ON t_fields (c_space_id, c_group_id, c_sort_order, c_field_id);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_fields_mtime
-AFTER UPDATE ON t_fields
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_fields SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
+-- ************ 数据集列 ************
+-- 列自描述：类型、显示名、分组都在 c_item_json 里，不是查询条件。
 CREATE TABLE IF NOT EXISTS t_dataset_columns (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_column_name TEXT NOT NULL,
-    c_origin_type TEXT NOT NULL,
-    c_origin_id TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_item_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_origin_type IN ('field', 'custom', 'system')),
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
+    CHECK (c_status IN ('active', 'disabled')),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_dataset_id, c_column_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_dataset ON t_dataset_columns (c_space_id, c_dataset_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_origin ON t_dataset_columns (c_space_id, c_origin_type, c_origin_id);
--- 自定义列的身份就是列名，不带来源 ID；字段与系统来源在数据集里仍然唯一。
-CREATE UNIQUE INDEX IF NOT EXISTS idx_t_dataset_columns_origin_unique
-ON t_dataset_columns (c_space_id, c_dataset_id, c_origin_type, c_origin_id)
-WHERE c_origin_type <> 'custom';
 
 CREATE TRIGGER IF NOT EXISTS trg_t_dataset_columns_mtime
 AFTER UPDATE ON t_dataset_columns

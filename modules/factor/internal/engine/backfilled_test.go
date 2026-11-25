@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
@@ -25,7 +24,7 @@ func TestOnBackfilledMarksPeriodsFilledAndKicksTasksOfTheDataset(t *testing.T) {
 	require.NoError(t, err)
 	marks, err := watermark.Open(filepath.Join(t.TempDir(), "watermarks.json"))
 	require.NoError(t, err)
-	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Reader: struct{ eventconsumer.PeriodReader }{}})
+	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Local: struct{ eventconsumer.LocalRows }{}})
 	require.NoError(t, err)
 	gapKicks := 0
 	r := &Runtime{catalog: cache, continuity: continuity, advanceKick: make(chan string, 4), filled: newFilledPeriods(time.Now), kickGap: func() { gapKicks++ }}
@@ -33,10 +32,10 @@ func TestOnBackfilledMarksPeriodsFilledAndKicksTasksOfTheDataset(t *testing.T) {
 	start := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_a", Frequency: "1m", SubjectIds: []string{"BTC-USDT"}, Origin: "auto",
-		Start: timestamppb.New(start), End: timestamppb.New(start.Add(10 * time.Minute)),
+		Start: start.Unix(), End: start.Add(10 * time.Minute).Unix(),
 		Absent: []*storagepb.CollectorKlineAbsent{
-			{SubjectId: "ETH-USDT", Start: timestamppb.New(start), End: timestamppb.New(start.Add(2 * time.Minute))},
-			{SubjectId: "BTC-USDT", SeriesTag: "swap", Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Minute))},
+			{SubjectId: "ETH-USDT", Start: start.Unix(), End: start.Add(2 * time.Minute).Unix()},
+			{SubjectId: "BTC-USDT", Start: start.Unix(), End: start.Add(time.Minute).Unix()},
 		},
 	}
 	r.onBackfilled("stockcn", payload)
@@ -64,14 +63,14 @@ func TestOnBackfilledRaisesTheCatchupTargetUpToTheLatestClosedBar(t *testing.T) 
 	require.NoError(t, err)
 	start := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 	require.NoError(t, marks.Put(watermark.State{TaskID: "ftask_a", SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m", CommittedThrough: start.Add(-time.Minute), Target: start.Add(-time.Minute)}))
-	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Reader: struct{ eventconsumer.PeriodReader }{}})
+	continuity, err := eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{Store: marks, Local: struct{ eventconsumer.LocalRows }{}})
 	require.NoError(t, err)
 	now := start.Add(30*time.Minute + 40*time.Second)
 	r := &Runtime{catalog: cache, continuity: continuity, advanceKick: make(chan string, 4), filled: newFilledPeriods(func() time.Time { return now }), kickGap: func() {}}
 
 	backfilled := func(from, to time.Time) {
 		r.onBackfilled("crypto", &storagepb.CollectorKlineBackfilled{DatasetId: "dataset_a", Frequency: "1m", Origin: "auto",
-			Start: timestamppb.New(from), End: timestamppb.New(to)})
+			Start: from.Unix(), End: to.Unix()})
 	}
 	backfilled(start, start.Add(10*time.Minute))
 	state, ok := marks.Get("ftask_a")

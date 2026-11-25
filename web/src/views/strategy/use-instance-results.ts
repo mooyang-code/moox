@@ -1,5 +1,5 @@
 import { computed, onUnmounted, ref, watch, type Ref } from "vue";
-import { useStrategyStore } from "@/store/modules/strategy";
+import { useInstanceDetail } from "@/views/strategy/use-instance-detail";
 import { deriveTargetState, type TargetState } from "@/views/strategy/model";
 import { useNowClock } from "@/views/strategy/use-now-clock";
 import { usePolling } from "@/hooks/usePolling";
@@ -10,7 +10,7 @@ export type ResultScope = "session" | "all";
 
 /**
  * 一个实例的「当前目标 + 历史结果」：读取、翻页、定时刷新与卸载清理。实例详情页与「运行结果」Tab 共用。
- * 数据存放在策略 store 里（同一时刻只有一个页面使用它）；instanceId 变化时清空旧实例并重新读取。
+ * 数据放在本页面自己的 useInstanceDetail 里；instanceId 变化时清空旧实例并重新读取。
  */
 export function useInstanceResults(
   instanceId: Ref<string>,
@@ -25,7 +25,7 @@ export function useInstanceResults(
     onReset?: () => void;
   } = {}
 ) {
-  const store = useStrategyStore();
+  const detail = useInstanceDetail();
   const displayZone = useDisplayZone();
   const resultPage = ref(1);
   const resultScope = ref<ResultScope>("session");
@@ -38,19 +38,19 @@ export function useInstanceResults(
   const nowMs = useNowClock();
 
   // 还没有成功读到过这个实例时的加载：页面应显示“读取中”，而不是“无法确认”“暂无结果”。
-  const initialLoading = computed(() => Boolean(instanceId.value) && !readAt.value && !store.detailError);
+  const initialLoading = computed(() => Boolean(instanceId.value) && !readAt.value && !detail.detailError);
 
   const targetState = computed<TargetState>(() =>
-    store.instance && store.instance.instance_id === instanceId.value && !options.controlUncertain?.value
-      ? deriveTargetState(store.instance, store.targetSnapshot, nowMs.value)
+    detail.instance && detail.instance.instance_id === instanceId.value && !options.controlUncertain?.value
+      ? deriveTargetState(detail.instance, detail.targetSnapshot, nowMs.value)
       : "unknown"
   );
 
-  /** background：每 10 秒的后台刷新，不弹全局提示，失败由页面上的错误条显示。 */
+  /** background：每 10 秒的后台刷新，失败由页面上的错误条显示。 */
   async function load(background = false): Promise<boolean> {
     if (!instanceId.value) return false;
     try {
-      const applied = await store.loadInstanceDetail(
+      const applied = await detail.loadInstanceDetail(
         instanceId.value,
         resultPage.value,
         resultPageSize,
@@ -61,7 +61,7 @@ export function useInstanceResults(
       await options.onLoaded?.(applied);
       return applied;
     } catch {
-      // 错误由 store 记录并在页面上展示。
+      // 错误记在 detail 里并在页面上展示。
       return false;
     }
   }
@@ -80,16 +80,16 @@ export function useInstanceResults(
     resultPage.value = page;
     resultScope.value = scope;
     try {
-      await store.loadResultPage(page, resultPageSize, scope === "all");
+      await detail.loadResultPage(page, resultPageSize, scope === "all");
     } catch {
       // 翻页失败：表格仍是上一次成功读取的数据，页码与范围退回到它所属的那一页，否则分页器停在失败的页码上点不动。
-      resultPage.value = store.loadedResultPage;
-      resultScope.value = store.loadedResultAllHistory ? "all" : "session";
+      resultPage.value = detail.loadedResultPage;
+      resultScope.value = detail.loadedResultAllHistory ? "all" : "session";
     }
   }
 
   function start() {
-    store.clearDetail();
+    detail.clearDetail();
     resultPage.value = 1;
     resultScope.value = "session";
     readAt.value = "";
@@ -109,11 +109,11 @@ export function useInstanceResults(
     if (next !== previous) start();
   });
   onUnmounted(() => {
-    store.clearDetail();
+    detail.clearDetail();
   });
 
   return {
-    store,
+    detail,
     resultPage,
     resultScope,
     resultPageSize,

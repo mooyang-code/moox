@@ -125,7 +125,7 @@ func TestReverseReconciliationReadsSecondReporterPageAndRejectsOverflow(t *testi
 // 生命周期只在上报新鲜时挂上：停止上报的模块不能显示成它最后一次上报的暂停状态。
 func TestServiceLifecycleOnlyFromFreshReport(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	paused := `{"stage":"paused","pauseKind":"system","pausedSince":"2026-11-15T01:00:00Z"}`
+	paused := `{"stage":"paused","pauseKind":"system","pausedSince":"1794708000000"}`
 	query, repos := openOverviewState(t, func(db *gorm.DB) {
 		require.NoError(t, db.Create(&monmetrics.MetricService{ServiceName: "strategy", NodeID: "control", InstanceID: "strategy@control", BootID: "1", LastSeenAt: now, Readiness: monmetrics.ReadinessReady, LifecycleJSON: paused}).Error)
 		require.NoError(t, db.Create(&monmetrics.MetricService{ServiceName: "trade", NodeID: "control", InstanceID: "trade@control", BootID: "1", LastSeenAt: now.Add(-10 * time.Minute), Readiness: monmetrics.ReadinessReady, LifecycleJSON: paused}).Error)
@@ -163,7 +163,7 @@ func TestDelegatedAndHostSnapshotSources(t *testing.T) {
 		Deployments: []domain.TopologyDeployment{{HostID: "factor", ComponentID: "factor-engine", Status: "enabled"}, {HostID: "factor", ComponentID: "host-agent", Status: "enabled"}},
 	}))
 	services, unregistered, _, err := (Builder{Metrics: query, Topology: repos.Topology}).buildServices(t.Context(), now,
-		[]HostStatus{{HostID: "factor", AgentID: "agent-1", Status: "healthy", LastSeenAt: now}})
+		[]HostStatus{{HostID: "factor", Status: "healthy", LastSeenAt: now}})
 	require.NoError(t, err)
 	require.Empty(t, unregistered, "代报行不是未登记的进程")
 	byID := map[string]ServiceStatus{}
@@ -178,10 +178,10 @@ func TestDelegatedAndHostSnapshotSources(t *testing.T) {
 	agent := byID["host-agent"]
 	require.Equal(t, SourceHostSnapshot, agent.Source)
 	require.Equal(t, "healthy", agent.Status)
-	require.Equal(t, "agent-1", agent.InstanceID)
+	require.Equal(t, "factor", agent.InstanceID)
 
 	services, _, _, err = (Builder{Metrics: query, Topology: repos.Topology}).buildServices(t.Context(), now,
-		[]HostStatus{{HostID: "factor", AgentID: "agent-1", Status: "down", LastSeenAt: now.Add(-10 * time.Minute)}})
+		[]HostStatus{{HostID: "factor", Status: "down", LastSeenAt: now.Add(-10 * time.Minute)}})
 	require.NoError(t, err)
 	for _, service := range services {
 		if service.ServiceName == "host-agent" {
@@ -206,7 +206,7 @@ func TestSilentEnabledDeploymentsAreDown(t *testing.T) {
 			{HostID: "control", ComponentID: "strategy", Status: "enabled"},
 			{HostID: "control", ComponentID: "trade", Status: "enabled"},
 			{HostID: "control", ComponentID: "monitor", Status: "enabled"},
-			{HostID: "control", ComponentID: "callback-dispatcher", Status: "disabled"},
+			{HostID: "control", ComponentID: "archive-mgr", Status: "disabled"},
 		},
 	}))
 	got, err := (Builder{Metrics: query, Topology: repos.Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
@@ -218,5 +218,5 @@ func TestSilentEnabledDeploymentsAreDown(t *testing.T) {
 	require.Equal(t, [2]string{"missing", "down"}, [2]string{byID["strategy"].ReporterStatus, byID["strategy"].Status}, "从没上报")
 	require.Equal(t, [2]string{"stale", "down"}, [2]string{byID["trade"].ReporterStatus, byID["trade"].Status}, "停止上报")
 	require.Equal(t, "healthy", byID["monitor"].Status)
-	require.Equal(t, [2]string{"missing", "disabled"}, [2]string{byID["callback-dispatcher"].ReporterStatus, byID["callback-dispatcher"].Status}, "未启用的部署不算")
+	require.Equal(t, [2]string{"missing", "disabled"}, [2]string{byID["archive-mgr"].ReporterStatus, byID["archive-mgr"].Status}, "未启用的部署不算")
 }

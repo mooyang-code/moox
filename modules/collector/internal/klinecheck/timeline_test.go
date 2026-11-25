@@ -17,10 +17,6 @@ type recordedPlans struct {
 	cleared int
 }
 
-func (p *recordedPlans) ListAll(context.Context, string) ([]*store.FetchPlanRecord, error) {
-	return p.records, nil
-}
-
 func (p *recordedPlans) ListBySpace(context.Context, string) ([]store.SeriesTimelineEntry, error) {
 	return timelineRows(p.records[p.cleared:]), nil
 }
@@ -92,14 +88,14 @@ func TestTimelineRestartsAtTheReregisteredPeriod(t *testing.T) {
 
 	next.Progress = `{"registered":{"ds|1m":true}}`
 	timeline = plans.timeline()
-	require.Equal(t, []Segment{{From: restart.Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15}}, timeline["ds|1m"])
+	require.Equal(t, []Segment{{From: restart.Unix(), Subjects: []string{"A-USDT", "B-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT", "B-USDT": "BUSDT"}, LatenessS: 15}}, timeline["ds|1m"])
 
 	next.Status = store.FetchPlanApplied
 	plans.records = append(plans.records, record(t, 4, store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"))
 	timeline = plans.timeline()
 	require.Equal(t, []Segment{
-		{From: restart.Unix(), To: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT", "B-USDT"}, LatenessS: 15},
-		{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15},
+		{From: restart.Unix(), To: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT", "B-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT", "B-USDT": "BUSDT"}, LatenessS: 15},
+		{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT"}, LatenessS: 15},
 	}, timeline["ds|1m"], "重新登记之后的计划变更照常延续时间线")
 }
 
@@ -125,20 +121,18 @@ func TestTimelineResetCoversRetiredDatasets(t *testing.T) {
 		recordFor(t, 5, "retired", store.FetchPlanApplied, restart.Add(time.Hour).Unix(), "A-USDT"),
 	)
 	timeline = plans.timeline()
-	require.Equal(t, []Segment{{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, LatenessS: 15}}, timeline["retired|1m"], "重新启用后从新的生效周期开始")
+	require.Equal(t, []Segment{{From: restart.Add(time.Hour).Unix(), Subjects: []string{"A-USDT"}, Symbols: map[string]string{"A-USDT": "AUSDT"}, LatenessS: 15}}, timeline["retired|1m"], "重新启用后从新的生效周期开始")
 	require.Equal(t, restart.Unix(), timeline["ds|1m"][0].From)
 }
 
-// 重新登记之后，检查与历史扫描的起点都是新的生效周期：清库前计划覆盖的时间不再当作缺口，
-// 历史扫描读回新生效周期之前的 500 根。
-func TestCheckAndHistoryStartAtTheReregisteredPeriod(t *testing.T) {
+// 重新登记之后，检查的时间线起点是新的生效周期：清库前的数据已经没了，新生效周期之前一根都没有，不再当作缺口。
+func TestCheckStartsAtTheReregisteredPeriod(t *testing.T) {
 	base := time.Date(2026, 10, 12, 7, 0, 0, 0, time.UTC)
 	restart := base.Add(55 * time.Hour)
 	plans := &recordedPlans{records: []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT", "B-USDT")}}
 	reregister(t, plans)
-	rows := &fakeRows{missing: map[string]map[int64]bool{}}
-	markMissing(rows, "A-USDT", base, restart) // 清库前的数据已经没了
-	markMissing(rows, "B-USDT", base, restart)
+	rows := newCountingRows(map[string]map[int64]bool{})
+	rows.listed = map[string]time.Time{"A-USDT": restart, "B-USDT": restart} // 清库前的数据已经没了
 	checker := &Checker{Timeline: plans, Rows: rows, Now: func() time.Time { return restart.Add(time.Hour) }}
 	ctx := context.Background()
 	request := Request{SpaceID: "crypto", From: base, To: restart.Add(20 * time.Minute)}
@@ -146,26 +140,16 @@ func TestCheckAndHistoryStartAtTheReregisteredPeriod(t *testing.T) {
 	idle, err := checker.Check(ctx, request)
 	require.NoError(t, err)
 	require.Zero(t, idle.Expected, "新快照登记之前没有可检查的范围")
-	history, err := checker.CheckHistory(ctx, "crypto", "ds", "1m")
-	require.NoError(t, err)
-	require.Nil(t, history)
 
 	plans.records = append(plans.records, record(t, 2, store.FetchPlanApplied, restart.Unix(), "A-USDT", "B-USDT"))
 	result, err := checker.Check(ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, 2*20, result.Expected, "只算新生效周期之后的 20 根")
 	require.Empty(t, result.Gaps, "清库前计划覆盖的时间不再报缺口")
-
-	history, err = checker.CheckHistory(ctx, "crypto", "ds", "1m")
-	require.NoError(t, err)
-	require.Equal(t, restart, history.To)
-	require.Equal(t, restart.Add(-historyScanBars*time.Minute), history.From)
-	require.Equal(t, 2, history.Subjects)
-	require.Empty(t, history.Gaps)
 }
 
-// 重新登记之后：新快照登记之前自动补采与历史扫描都跳过该数据集；登记后自动补采从新生效周期扫起（水位已随重新登记清空），
-// 历史扫描读回新生效周期之前的一段，都不会回到清库前的计划起点。
+// 重新登记之后：新快照登记之前自动补采跳过该数据集；登记后自动补采从新生效周期扫起（水位已随重新登记清空），
+// 不会回到清库前的计划起点。
 func TestScansFollowTheReregisteredPeriod(t *testing.T) {
 	base := time.Date(2026, 10, 12, 7, 0, 0, 0, time.UTC)
 	restart := base.Add(55 * time.Hour)
@@ -175,16 +159,13 @@ func TestScansFollowTheReregisteredPeriod(t *testing.T) {
 	markMissing(rows, "A-USDT", base, restart)
 	now := restart.Add(3*time.Hour + 3*time.Minute) // 落后超过一个自动补采窗口，且已过槽内偏移
 	repo := openBackfillStore(t)
-	backfiller := &Backfiller{Checker: &Checker{Timeline: plans, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: plans, Now: func() time.Time { return now }}
+	backfiller := &Backfiller{Checker: &Checker{Timeline: plans, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Routes: fakeRoutes{}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
 	mark, err := repo.Watermark(ctx, "crypto", "ds", "1m")
 	require.NoError(t, err)
 	require.True(t, mark.IsZero(), "新快照登记之前不补采")
-	scanned, err := backfiller.ScanHistory(ctx, "crypto")
-	require.NoError(t, err)
-	require.Nil(t, scanned, "新快照登记之前不扫历史")
 
 	plans.records = append(plans.records, record(t, 2, store.FetchPlanApplied, restart.Unix(), "A-USDT"))
 	now = now.Add(autoScanInterval)
@@ -195,11 +176,4 @@ func TestScansFollowTheReregisteredPeriod(t *testing.T) {
 	mark, err = repo.Watermark(ctx, "crypto", "ds", "1m")
 	require.NoError(t, err)
 	require.True(t, mark.Equal(restart.Add(autoScanWindow)), "从新生效周期起追赶一个窗口，实际水位 %s", mark)
-
-	scanned, err = backfiller.ScanHistory(ctx, "crypto")
-	require.NoError(t, err)
-	require.Equal(t, restart, scanned.To)
-	scans, err := repo.HistoryScans(ctx, "crypto")
-	require.NoError(t, err)
-	require.True(t, scans["ds|1m"].To.Equal(restart), "库里记下的扫描范围止于新生效周期")
 }

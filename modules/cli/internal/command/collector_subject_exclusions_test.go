@@ -3,9 +3,10 @@ package command
 import (
 	"bytes"
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/stretchr/testify/require"
@@ -55,9 +56,7 @@ func TestCollectorSubjectExclusionCommands(t *testing.T) {
 	require.Equal(t, []string{"BTC-USDT"}, set.GetSubjectIds())
 	require.Equal(t, "swap", set.GetMarketType())
 	require.Contains(t, set.GetOperator(), "moox-cli:")
-	expires, err := time.Parse(time.RFC3339, set.GetExpiresAt())
-	require.NoError(t, err)
-	require.WithinDuration(t, before.Add(72*time.Hour), expires, 2*time.Second)
+	require.WithinDuration(t, before.Add(72*time.Hour), time.UnixMilli(set.GetExpiresAt()), 2*time.Second)
 	require.Contains(t, out.String(), `"market": "swap"`)
 
 	out.Reset()

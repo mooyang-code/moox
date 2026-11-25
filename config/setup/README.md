@@ -4,7 +4,7 @@
 
 | 文件 | 消费方 | 内容 |
 | --- | --- | --- |
-| `metadata.yaml` | `moox-cli setup init` | Admin 业务 Space 与 Storage 元数据 |
+| `metadata.yaml` | `moox-cli setup init` | 业务 Space、数据源、标签、数据集与列（Storage 元数据） |
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康阈值 |
 | `collection-tasks.yaml` | Collector | 默认采集任务 |
 | `factor-tasks.yaml` | `moox-cli setup start` | 默认因子定义与因子任务 |
@@ -19,7 +19,7 @@ SCF 采集函数的云账号、地域网络与空间在根目录 `moox.toml` 的
 不需要另外激活。
 
 需要清空全部行情与因子数据时，按 `docs/部署与运维.md`「清空全部数据重新积累」的顺序操作；
-数据集、View、标的等定义保留，不需要重新导入本目录。
+数据集、标的等定义保留（每个数据集的 View 随数据集按空索引重建），不需要重新导入本目录。
 
 ```bash
 moox-cli setup init \
@@ -29,7 +29,7 @@ moox-cli setup init \
 ```
 
 `--storage-host` 必须是 `moox.toml` 中已经部署 Storage 的主机名。`setup init` 读取
-`metadata.yaml` 创建 Admin 业务空间并完成 Storage 元数据初始化；Monitor 的
+`metadata.yaml` 在 Storage 里创建业务空间并完成元数据初始化；Monitor 的
 `dataset-health-policy.yaml` 和 Collector 的 `collection-tasks.yaml` 由打包与原生安装流程放入各组件配置目录，分别在模块启动时读取。
 
 启用 SCF 时，采集地域分两种：vpc 地域要有一台同地域、带私网地址、写了 `external_entry = true` 的入口主机，函数在该地域 VPC 里经

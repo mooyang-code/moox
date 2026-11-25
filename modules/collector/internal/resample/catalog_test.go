@@ -31,14 +31,13 @@ func (f *fakeViewState) GetViewState(context.Context, *storagepb.GetViewStateReq
 
 type catalogMetadataFake struct {
 	datasets    map[string]*storagepb.Dataset
-	views       map[string]*storagepb.View
 	failAt      string
 	failCleanup bool
 	deleteOrder []string
 	// createColumns 是随 CreateDataset 一起写入的列；upsertColumns 是单独补列的次数。
 	createColumns []string
 	upsertColumns int
-	// datasetColumns 是各数据集启用的列，View 的列按它推出（和 Storage 一样）。
+	// datasetColumns 是各数据集的列，查询索引的列按它推出（和 Storage 一样）。
 	datasetColumns map[string][]*storagepb.DatasetColumn
 	// buildingPolls 是 GetViewState 先回答"索引还在建"的次数。
 	buildingPolls int
@@ -47,7 +46,6 @@ type catalogMetadataFake struct {
 func newCatalogMetadataFake(failAt string) *catalogMetadataFake {
 	return &catalogMetadataFake{
 		datasets:       make(map[string]*storagepb.Dataset),
-		views:          make(map[string]*storagepb.View),
 		datasetColumns: make(map[string][]*storagepb.DatasetColumn),
 		failAt:         failAt,
 	}
@@ -98,40 +96,6 @@ func (f *catalogMetadataFake) DeleteDataset(_ context.Context, req *storagepb.De
 	return &storagepb.DeleteDatasetRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *catalogMetadataFake) GetView(_ context.Context, req *storagepb.GetViewReq, _ ...client.Option) (*storagepb.GetViewRsp, error) {
-	if err := f.fail("get_view"); err != nil {
-		return nil, err
-	}
-	view := f.views[req.GetViewId()]
-	if view == nil {
-		return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
-	}
-	return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: f.withDatasetColumns(view)}, nil
-}
-
-func (f *catalogMetadataFake) CreateView(_ context.Context, req *storagepb.CreateViewReq, _ ...client.Option) (*storagepb.CreateViewRsp, error) {
-	if err := f.fail("create_view"); err != nil {
-		return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
-	}
-	view := req.GetView()
-	// 和 Storage 一样：View 的频率取自它的数据集。
-	view.Freq = f.datasets[view.GetDatasetId()].GetFreq()
-	f.views[view.GetViewId()] = view
-	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: f.withDatasetColumns(view)}, nil
-}
-
-func (f *catalogMetadataFake) DeleteView(_ context.Context, req *storagepb.DeleteViewReq, _ ...client.Option) (*storagepb.DeleteViewRsp, error) {
-	f.deleteOrder = append(f.deleteOrder, "view")
-	if f.failCleanup {
-		return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "cleanup view failed"}}, nil
-	}
-	if err := f.fail("delete_view"); err != nil {
-		return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
-	}
-	delete(f.views, req.GetViewId())
-	return &storagepb.DeleteViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (f *catalogMetadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq, _ ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error) {
 	f.upsertColumns++
 	if err := f.fail("dataset_column"); err != nil {
@@ -149,21 +113,16 @@ func (f *catalogMetadataFake) UpsertDatasetColumn(_ context.Context, req *storag
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-// withDatasetColumns 返回 View 的副本，列按所属数据集启用的列推出（和 Storage 一样，View 的列只读）。
-func (f *catalogMetadataFake) withDatasetColumns(view *storagepb.View) *storagepb.View {
-	out := proto.Clone(view).(*storagepb.View)
-	out.Columns = nil
-	for i, column := range f.datasetColumns[view.GetDatasetId()] {
-		out.Columns = append(out.Columns, &storagepb.ViewColumn{
-			SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
-			OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: column.GetColumnName(),
-			ValueType: column.GetValueType(), SortOrder: uint32(i + 1),
-		})
+// indexedColumns 返回数据集查询索引已建的列：和 Storage 一样，等于数据集的列。
+func (f *catalogMetadataFake) indexedColumns(datasetID string) []*storagepb.ResultColumn {
+	var out []*storagepb.ResultColumn
+	for _, column := range f.datasetColumns[datasetID] {
+		out = append(out, &storagepb.ResultColumn{ColumnName: column.GetColumnName(), ValueType: column.GetValueType(), DisplayName: column.GetDisplayName()})
 	}
 	return out
 }
 
-// catalogViewStateFake 按元数据假实现里的 View 回答索引状态：View 不存在时是 VIEW_NOT_FOUND；
+// catalogViewStateFake 按元数据假实现里的数据集回答索引状态：数据集不存在时是 VIEW_NOT_FOUND；
 // 先按 buildingPolls 回答几次"索引还在建"，之后索引建好、已建列就是数据集的列。
 type catalogViewStateFake struct {
 	metadata *catalogMetadataFake
@@ -173,15 +132,14 @@ func (f catalogViewStateFake) GetViewState(_ context.Context, req *storagepb.Get
 	if err := f.metadata.fail("view_state"); err != nil {
 		return nil, err
 	}
-	view := f.metadata.views[req.GetViewId()]
-	if view == nil {
+	if f.metadata.datasets[req.GetDatasetId()] == nil {
 		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
 	}
 	if f.metadata.buildingPolls > 0 {
 		f.metadata.buildingPolls--
 		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 	}
-	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: "idx", Columns: f.metadata.withDatasetColumns(view).GetColumns()}, nil
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: "idx", Columns: f.metadata.indexedColumns(req.GetDatasetId())}, nil
 }
 
 func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {
@@ -212,54 +170,52 @@ func TestPrepareTargetCreatesDatasetWithColumnsInOneCall(t *testing.T) {
 	require.Equal(t, len(want), metadata.upsertColumns)
 }
 
-// 不再单独写 View 列：View 的列就是目标数据集的列，准备目标时等这些列都建进索引才放行。
+// 合成任务不另起名字：目标列的显示名、分组与类型按字段名取自采集结果的基础字段。
+func TestTargetDatasetColumnsTakeNamesFromKlineOutputFields(t *testing.T) {
+	for _, tradeCount := range []bool{true, false} {
+		for _, column := range targetDatasetColumns(tradeCount, nil) {
+			field, ok := taskresult.KlineOutputField(column.GetColumnName())
+			require.True(t, ok, column.GetColumnName())
+			assert.Equal(t, field.DisplayName, column.GetDisplayName())
+			assert.Equal(t, field.Group, column.GetGroup())
+			assert.Equal(t, field.Kind, column.GetValueType())
+		}
+	}
+	quote := targetDatasetColumns(true, []string{"quote_volume"})
+	require.Len(t, quote, 1)
+	assert.Equal(t, "计价币成交额", quote[0].GetDisplayName())
+	assert.Equal(t, "成交估值", quote[0].GetGroup())
+}
+
+// 查询索引的列就是目标数据集的列，准备目标时等这些列都建进索引才放行。
 func TestPrepareTargetWaitsUntilDatasetColumnsAreIndexed(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("")
 	metadata.buildingPolls = 2
 
 	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
 	require.Zero(t, metadata.buildingPolls, "索引建好之前一直在等")
-	view := metadata.withDatasetColumns(metadata.views[taskresult.ResultIDs(rule.SpaceID, rule.TaskID).ViewID])
-	require.Len(t, view.GetColumns(), 7, "View 的列由目标数据集的列推出")
+	ids := taskresult.ResultIDs(rule.TaskID)
+	declared := metadata.datasetColumns[ids.DatasetID]
+	require.Len(t, declared, 7)
 
 	// 索引已建好但还缺一列时不放行。
-	state := &storagepb.GetViewStateRsp{IndexId: "idx", Columns: view.GetColumns()[:6]}
-	assert.False(t, targetViewColumnsReady(state, view.GetColumns()))
+	state := &storagepb.GetViewStateRsp{IndexId: "idx", Columns: metadata.indexedColumns(ids.DatasetID)[:6]}
+	assert.False(t, targetViewColumnsReady(state, declared))
 }
 
-func TestPrepareTargetCompensatesCreatedDatasetWhenViewCreationFails(t *testing.T) {
-	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("create_view")
+func TestPrepareTargetCompensatesCreatedDatasetAfterLaterFailure(t *testing.T) {
+	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_state")
 
 	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
-	require.Equal(t, taskresult.ResultIDs(rule.SpaceID, rule.TaskID).DatasetID, params.TargetDatasetID)
+	require.Equal(t, taskresult.ResultIDs(rule.TaskID).DatasetID, params.TargetDatasetID)
 	require.Empty(t, metadata.datasets)
-	require.Empty(t, metadata.views)
 	require.Equal(t, []string{"dataset"}, metadata.deleteOrder)
-}
-
-func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *testing.T) {
-	for _, testCase := range []struct {
-		failAt      string
-		deleteOrder []string
-	}{
-		{failAt: "view_state", deleteOrder: []string{"view", "dataset"}},
-	} {
-		t.Run(testCase.failAt, func(t *testing.T) {
-			metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture(testCase.failAt)
-
-			err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
-			require.Error(t, err)
-			require.Empty(t, metadata.datasets)
-			require.Empty(t, metadata.views)
-			require.Equal(t, testCase.deleteOrder, metadata.deleteOrder)
-		})
-	}
 }
 
 func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_state")
-	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+	ids := taskresult.ResultIDs(rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID,
 		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active", Alignment: params.Alignment,
@@ -271,17 +227,11 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 			"target_freq": "5m",
 		},
 	}
-	metadata.views[ids.ViewID] = &storagepb.View{
-		SpaceId: rule.SpaceID, ViewId: ids.ViewID, DatasetId: ids.DatasetID, Engine: "duckdb",
-		Freq: "5m", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Status: "active",
-		Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID},
-	}
 
 	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.Empty(t, metadata.deleteOrder)
 	require.Contains(t, metadata.datasets, ids.DatasetID)
-	require.Contains(t, metadata.views, ids.ViewID)
 }
 
 func TestPrepareTargetMergesOriginalAndCompensationErrors(t *testing.T) {
@@ -291,41 +241,40 @@ func TestPrepareTargetMergesOriginalAndCompensationErrors(t *testing.T) {
 	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "get target View state")
-	require.ErrorContains(t, err, "cleanup view failed")
 	require.ErrorContains(t, err, "cleanup dataset failed")
-	require.Equal(t, []string{"view", "dataset"}, metadata.deleteOrder)
+	require.Equal(t, []string{"dataset"}, metadata.deleteOrder)
 }
 
 func TestTargetViewColumnsReadyRequiresActiveIndexAndColumns(t *testing.T) {
-	declared := []*storagepb.ViewColumn{{ColumnName: "open"}, {ColumnName: "close"}}
-	built := []*storagepb.ViewColumn{{ColumnName: "open"}, {ColumnName: "close"}, {ColumnName: "volume"}}
-	assert.False(t, targetViewColumnsReady(&storagepb.GetViewStateRsp{IndexId: "idx", Columns: declared[:1]}, declared), "还有列没建进索引")
+	declared := []*storagepb.DatasetColumn{{ColumnName: "open"}, {ColumnName: "close"}}
+	built := []*storagepb.ResultColumn{{ColumnName: "open"}, {ColumnName: "close"}, {ColumnName: "volume"}}
+	assert.False(t, targetViewColumnsReady(&storagepb.GetViewStateRsp{IndexId: "idx", Columns: built[:1]}, declared), "还有列没建进索引")
 	assert.False(t, targetViewColumnsReady(&storagepb.GetViewStateRsp{Columns: built}, declared), "索引还没建成")
 	assert.True(t, targetViewColumnsReady(&storagepb.GetViewStateRsp{IndexId: "idx", Columns: built}, declared))
 }
 
-// View 还没开始建索引（VIEW_NOT_FOUND）、索引还在建（index_id 为空）都继续等，直到列建好。
+// 查询索引还没开始建（VIEW_NOT_FOUND）、还在建（index_id 为空）都继续等，直到列建好。
 func TestWaitTargetViewColumnsRetriesUntilColumnsAreBuilt(t *testing.T) {
 	success := &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
 	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{
 		{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}},
 		{RetInfo: success},
 		{RetInfo: success, IndexId: "idx"},
-		{RetInfo: success, IndexId: "idx", Columns: []*storagepb.ViewColumn{{ColumnName: "close"}}},
+		{RetInfo: success, IndexId: "idx", Columns: []*storagepb.ResultColumn{{ColumnName: "close"}}},
 	}}
-	require.NoError(t, waitTargetViewColumns(context.Background(), state, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 2*time.Second))
+	require.NoError(t, waitTargetViewColumns(context.Background(), state, "crypto", "dataset", []*storagepb.DatasetColumn{{ColumnName: "close"}}, 2*time.Second))
 	assert.Equal(t, 3, state.index)
 }
 
 func TestWaitTargetViewColumnsReturnsNotReadyWhenTimeoutExpires(t *testing.T) {
 	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}}}
-	err := waitTargetViewColumns(context.Background(), state, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 50*time.Millisecond)
+	err := waitTargetViewColumns(context.Background(), state, "crypto", "dataset", []*storagepb.DatasetColumn{{ColumnName: "close"}}, 50*time.Millisecond)
 	assert.ErrorIs(t, err, ErrTargetViewNotReady)
 }
 
 func TestWaitTargetViewColumnsFailsOnOtherErrors(t *testing.T) {
 	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NO_PERMISSION, Msg: "无权限"}}}}
-	err := waitTargetViewColumns(context.Background(), state, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, time.Second)
+	err := waitTargetViewColumns(context.Background(), state, "crypto", "dataset", []*storagepb.DatasetColumn{{ColumnName: "close"}}, time.Second)
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrTargetViewNotReady)
 }
@@ -367,11 +316,6 @@ func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {
 	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m"), `freq is "1mo", not 5m`)
 }
 
-func TestPrepareTargetViewContractUsesDatasetFrequency(t *testing.T) {
-	view := &storagepb.View{DatasetId: "dataset_spot_kline_derived_5m", Freq: "5m", Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}}
-	require.NoError(t, validateTargetView(view, domain.CollectionTask{}, &domain.CollectParams{TargetDatasetID: "dataset_spot_kline_derived_5m"}, "5m"))
-}
-
 // 已经 Ready 的任务复核列时 storage-view 不可达（恢复、重建期间同理）：保持 Ready、只记日志；
 // 还没 Ready 的任务照常报错，等下一轮准备。
 func TestPrepareTargetKeepsReadyTaskWhenViewStateUnavailable(t *testing.T) {
@@ -384,7 +328,6 @@ func TestPrepareTargetKeepsReadyTaskWhenViewStateUnavailable(t *testing.T) {
 
 	rule.PrepareState = domain.PrepareStateReady
 	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
-	require.NotEmpty(t, metadata.views, "目标 View 保留")
 	require.NotEmpty(t, metadata.datasets, "目标数据集保留")
 }
 
@@ -394,6 +337,6 @@ func TestPrepareTargetInheritsSourceDataSourceForChainedResample(t *testing.T) {
 	source := storagesource.DatasetInfo{Attributes: map[string]string{"dataset_role": "kline_resample_result", "source_data_source_id": "binance"}}
 
 	require.NoError(t, catalog.PrepareTarget(context.Background(), rule, params, source, subjects))
-	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
+	ids := taskresult.ResultIDs(rule.TaskID)
 	require.Equal(t, "binance", metadata.datasets[ids.DatasetID].GetAttributes()["source_data_source_id"])
 }

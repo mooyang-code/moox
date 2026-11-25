@@ -78,7 +78,7 @@ func (s *ConsoleServer) ListAccountLedger(
 	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}
-	market := marketFromPB(req.GetMarketType())
+	market := exchange.MarketType(req.GetMarketType())
 	if market != exchange.MarketTypeUnspecified && !account.SupportsMarket(string(market)) {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: invalidInfo(fmt.Errorf("账户没有开通市场 %s", market))}, nil
 	}
@@ -116,11 +116,11 @@ func (s *ConsoleServer) ListAccountLedger(
 	rsp := &tradepb.ListAccountLedgerRsp{RetInfo: success(), HasMore: page.HasMore}
 	for _, entry := range page.Entries {
 		// 流水所属市场只给按市场区分的类型；划转、利息等账户级流水不属于某个市场，留空。
-		entryMarket := tradepb.MarketType_MARKET_TYPE_UNSPECIFIED
+		entryMarket := ""
 		if entry.Market != exchange.MarketTypeUnspecified {
-			entryMarket = marketToPB(string(entry.Market))
+			entryMarket = string(entry.Market)
 		} else if entry.Type.MarketScoped() {
-			entryMarket = marketToPB(string(market))
+			entryMarket = string(market)
 		}
 		rsp.Entries = append(rsp.Entries, &tradepb.LedgerEntry{
 			Id: entry.ID, Time: entry.Time.UnixMilli(), Type: string(entry.Type), ExchangeType: entry.ExchangeType,

@@ -198,7 +198,7 @@ func startComputeReplay(t *testing.T, repo *store.Store, client input.Client, id
 	resolved, _, err := input.Resolve(context.Background(), client, "crypto", []string{"ftask_a"}, strategy)
 	require.NoError(t, err)
 	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", SpaceID: "crypto", Input: store.ReplayInputCompute,
-		Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour),
+		Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour),
 		SpotFeeBps: 10, Factors: resolved.Factors, CreatedAt: origin}
 	require.NoError(t, repo.CreateReplay(context.Background(), job))
 	claimed, found, err := repo.ClaimNextReplay(context.Background(), origin)
@@ -290,8 +290,8 @@ portfolio:
 // f 声明了整型参数 window（5～60，默认 20）。
 type tunedComputeClient struct{ *fakeClient }
 
-func (c tunedComputeClient) GetView(ctx context.Context, spaceID, viewID string) (input.ViewInfo, error) {
-	view, err := c.fakeClient.GetView(ctx, spaceID, viewID)
+func (c tunedComputeClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+	view, err := c.fakeClient.GetView(ctx, spaceID, datasetID)
 	view.Columns = []input.ViewColumn{
 		{Name: "close", Attributes: map[string]string{}},
 		{Name: "m", Attributes: map[string]string{"column_kind": "output", "member_key": "f__var", "factor_id": "f", "member_kind": "var", "output_name": "m"}},
@@ -531,101 +531,129 @@ func TestComputeStepPeriods(t *testing.T) {
 	require.ErrorContains(t, err, "减少策略引用的列")
 }
 
-// viewEngine 是按 View 已有的行出帧的因子引擎：每期按 OpenReplay 请求的列读这个 View 同一根的行（series_tag 原样，统一数据集上
-// 现货、永续两条序列各一行），上一期的同名列读上一根，年龄是（标的, series_tag）在 View 里最早一行起的根数。引擎与 View 给出相同的
-// 行时，因子现算与 View 来源的回放结果应当一致。
+// viewEngine 是按 View 已有的行出帧的因子引擎：每期按 OpenReplay 请求的列读任务的 View 同一根的行（series_tag 原样），
+// 上一期的同名列读上一根，年龄是（标的, series_tag）在 View 里最早一行起的根数。引擎与 View 给出相同的
+// 行时，因子现算与 View 来源的回放结果应当一致。views 是任务 → View（为空时都读 datasetID）；每个会话 ID 各有自己的状态。
 type viewEngine struct {
-	client  input.Client
-	viewID  string
-	columns []string
-	periods []int64
-	first   map[string]int64
-	steps   int
-	closed  int
+	client    input.Client
+	datasetID string
+	views     map[string]string
+	columns   []string
+	sessions  map[string]*viewSession
+	// opened 是 OpenReplay 用过的会话 ID（按先后）；params 是各会话收到的逐期参数（会话 → 请求参数的期次）。
+	opened []string
+	params map[string][]int64
+	steps  int
+	closed int
 }
 
-func (e *viewEngine) query(at time.Time, columns []string) []input.Row {
-	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", "")
-	view, _ := e.client.GetView(context.Background(), "crypto", e.viewID)
-	rows, _, _ := e.client.QueryRows(context.Background(), "crypto", input.Query{ViewID: e.viewID, DatasetID: view.DatasetID, Frequency: "1h", Subjects: subjects, Start: at, End: at.Add(time.Nanosecond), Columns: columns})
+type viewSession struct {
+	datasetID string
+	periods   []int64
+	first     map[string]int64
+}
+
+func (e *viewEngine) query(datasetID string, at time.Time, columns []string) []input.Row {
+	view, _ := e.client.GetView(context.Background(), "crypto", datasetID)
+	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", view.DatasetID)
+	rows, _, _ := e.client.QueryRows(context.Background(), "crypto", input.Query{DatasetID: datasetID, Frequency: "1h", Subjects: subjects, Start: at, End: at.Add(time.Nanosecond), Columns: columns})
 	return rows
 }
 
 func (e *viewEngine) OpenReplay(_ context.Context, req *factorpb.OpenReplayReq, _ ...client.Option) (*factorpb.OpenReplayRsp, error) {
 	from, _ := time.Parse(time.RFC3339, req.GetFrom())
 	to, _ := time.Parse(time.RFC3339, req.GetTo())
-	e.columns, e.periods, e.first = req.GetColumns(), nil, map[string]int64{}
+	session := &viewSession{datasetID: e.datasetID, first: map[string]int64{}}
+	if datasetID, ok := e.views[req.GetTaskId()]; ok {
+		session.datasetID = datasetID
+	}
+	if e.sessions == nil {
+		e.sessions = map[string]*viewSession{}
+	}
+	e.sessions[req.GetReplayId()], e.columns = session, req.GetColumns()
+	e.opened = append(e.opened, req.GetReplayId())
 	for at := from; at.Before(to); at = at.Add(time.Hour) {
-		e.periods = append(e.periods, at.Unix())
+		session.periods = append(session.periods, at.Unix())
 	}
 	for at := origin; at.Before(to); at = at.Add(time.Hour) {
-		for _, row := range e.query(at, []string{"close"}) {
-			if _, ok := e.first[row.SubjectID+"|"+row.SeriesTag]; !ok {
-				e.first[row.SubjectID+"|"+row.SeriesTag] = at.Unix()
+		for _, row := range e.query(session.datasetID, at, []string{"close"}) {
+			if _, ok := session.first[row.SubjectID+"|"+row.SeriesTag]; !ok {
+				session.first[row.SubjectID+"|"+row.SeriesTag] = at.Unix()
 			}
 		}
 	}
-	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", "")
+	view, _ := e.client.GetView(context.Background(), "crypto", session.datasetID)
+	subjects, _ := e.client.ListDatasetSubjects(context.Background(), "crypto", view.DatasetID)
 	ids := make([]string, 0, len(subjects))
 	for _, subject := range subjects {
 		ids = append(ids, subject.SubjectID)
 	}
-	return &factorpb.OpenReplayRsp{RetInfo: &commonpb.RetInfo{}, ReplayId: req.GetReplayId(), Subjects: ids, PeriodTimes: e.periods, StepSeconds: 3600}, nil
+	return &factorpb.OpenReplayRsp{RetInfo: &commonpb.RetInfo{}, ReplayId: req.GetReplayId(), Subjects: ids, PeriodTimes: session.periods, StepSeconds: 3600}, nil
 }
 
 func (e *viewEngine) StepReplay(_ context.Context, req *factorpb.StepReplayReq, _ ...client.Option) (*factorpb.StepReplayRsp, error) {
 	e.steps++
-	start := slices.Index(e.periods, req.GetPeriodTime())
+	session := e.sessions[req.GetReplayId()]
+	if session == nil {
+		return &factorpb.StepReplayRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND}}, nil
+	}
+	if len(req.GetParams()) > 0 {
+		if e.params == nil {
+			e.params = map[string][]int64{}
+		}
+		e.params[req.GetReplayId()] = append(e.params[req.GetReplayId()], req.GetPeriodTime())
+	}
+	start := slices.Index(session.periods, req.GetPeriodTime())
 	rsp := &factorpb.StepReplayRsp{RetInfo: &commonpb.RetInfo{}}
-	for i := start; i < min(start+int(req.GetPeriods()), len(e.periods)); i++ {
-		at := time.Unix(e.periods[i], 0).UTC()
+	for i := start; i < min(start+int(req.GetPeriods()), len(session.periods)); i++ {
+		at := time.Unix(session.periods[i], 0).UTC()
 		previous := map[string]map[string]float64{}
-		for _, row := range e.query(at.Add(-time.Hour), e.columns) {
+		for _, row := range e.query(session.datasetID, at.Add(-time.Hour), e.columns) {
 			previous[row.SubjectID+"|"+row.SeriesTag] = row.Values
 		}
-		period := &factorpb.ReplayPeriod{PeriodTime: at.Unix()}
-		for _, row := range e.query(at, e.columns) {
+		period := &factorpb.ReplayPeriod{PeriodTime: at.Unix(), AppliedParams: req.GetParams()}
+		for _, row := range e.query(session.datasetID, at, e.columns) {
 			key := row.SubjectID + "|" + row.SeriesTag
 			period.Rows = append(period.Rows, &factorpb.ReplayRow{SubjectId: row.SubjectID, SeriesTag: row.SeriesTag, Values: row.Values, Previous: previous[key],
-				AgeBars: int32((at.Unix()-e.first[key])/3600 + 1)})
+				AgeBars: int32((at.Unix()-session.first[key])/3600 + 1)})
 		}
 		rsp.Periods = append(rsp.Periods, period)
 	}
 	return rsp, nil
 }
 
-func (e *viewEngine) CloseReplay(context.Context, *factorpb.CloseReplayReq, ...client.Option) (*factorpb.CloseReplayRsp, error) {
+func (e *viewEngine) CloseReplay(_ context.Context, req *factorpb.CloseReplayReq, _ ...client.Option) (*factorpb.CloseReplayRsp, error) {
 	e.closed++
+	delete(e.sessions, req.GetReplayId())
 	return &factorpb.CloseReplayRsp{RetInfo: &commonpb.RetInfo{}, Closed: true}, nil
 }
 
-// 永续（标签黑白名单、显式 pool、新上市的年龄剔除、缺价冻结、逐期结算）、统一数据集（一个任务按 series_tag 分到现货、永续，年龄按市场判断）
-// 与永续计资金费（引擎多返回资金费列）三个场景上，因子现算与 View 来源的逐期记录完全一致。
+// 永续（标签黑白名单、显式 pool、新上市的年龄剔除、缺价冻结、逐期结算）、永续计资金费（引擎多返回资金费列）、现货加永续两个任务
+// （每个任务一个会话，同步推进）与它计资金费几个场景上，因子现算与 View 来源的逐期记录完全一致。
 func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 	type scenario struct {
 		name    string
 		dsl     string
 		client  func() input.Client
-		task    store.ReplayTask
+		tasks   map[string]store.ReplayTask
 		hours   int
 		funding string
 	}
+	swapOnly := map[string]store.ReplayTask{"swap": swapTask}
+	dual := map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}
 	funded := func() input.Client {
 		client := newDualClient()
 		client.swap.fundingRate = 0.001
 		return client
 	}
 	for _, tc := range []scenario{
-		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, client: func() input.Client { return newBaselineClient(baselineSwapClient()) }, task: swapTask, hours: 16},
-		{name: "dual_unified", dsl: baselineDualDSL, client: func() input.Client { return newBaselineClient(&unifiedClient{dualClient: baselineDualClient()}) }, task: uniTask, hours: 16},
-		{name: "swap_funding", dsl: swapOnlyDSL, client: funded, task: swapTask, hours: 10, funding: "funding_rate"},
+		{name: "swap_universe_pool_rank", dsl: baselineSwapDSL, client: func() input.Client { return newBaselineClient(baselineSwapClient()) }, tasks: swapOnly, hours: 16},
+		{name: "swap_funding", dsl: swapOnlyDSL, client: funded, tasks: swapOnly, hours: 10, funding: "funding_rate"},
+		{name: "dual_two_tasks", dsl: baselineDualDSL, client: func() input.Client { return newBaselineClient(baselineDualClient()) }, tasks: dual, hours: 16},
+		{name: "dual_funding", dsl: hedgeDSL, client: funded, tasks: dual, hours: 10, funding: "funding_rate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			market := "swap"
-			if tc.task == uniTask {
-				market = "multi"
-			}
-			tasks := map[string]store.ReplayTask{market: tc.task}
+			tasks := tc.tasks
 			viewRepo := openStore(t)
 			viewClient := tc.client()
 			viewJob := startMarketReplay(t, viewRepo, viewClient, "v1", tc.dsl, tc.hours, tasks, 10, 5)
@@ -634,14 +662,21 @@ func TestComputeSourceMatchesViewSourceOnMarkets(t *testing.T) {
 
 			computeRepo := openStore(t)
 			client := tc.client()
-			engine := &viewEngine{client: client, viewID: tc.task.ViewID}
+			views := map[string]string{}
+			for _, task := range tasks {
+				views[task.FactorTaskID] = task.DatasetID
+			}
+			engine := &viewEngine{client: client, views: views}
 			job := startMarketReplay(t, computeRepo, client, "c1", tc.dsl, tc.hours, tasks, 10, 5)
 			job.Input, job.FundingColumn = store.ReplayInputCompute, tc.funding
 			(&Runner{Store: computeRepo, Client: client, Engine: engine, ChunkBars: 5, MissingPriceLiquidateBars: 3, InitialEquity: 100}).Execute(context.Background(), job)
 			done, err := computeRepo.GetReplay(context.Background(), "c1")
 			require.NoError(t, err)
 			require.Equal(t, store.ReplayDone, done.Status, done.Error)
-			require.Equal(t, 1, engine.closed)
+			require.Equal(t, len(tasks), engine.closed, "每个主帧任务一个会话，结束时都关")
+			if len(tasks) > 1 {
+				require.Equal(t, []string{"c1#spot", "c1#swap"}, engine.opened, "多个会话的 ID 加市场后缀")
+			}
 			if tc.funding != "" {
 				require.Contains(t, engine.columns, tc.funding, "计资金费时请求资金费列")
 			}

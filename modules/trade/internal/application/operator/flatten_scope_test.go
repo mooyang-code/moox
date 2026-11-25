@@ -20,17 +20,17 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
 	fixture.orders.nextID = ""
 	ctx := context.Background()
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'SPOT,SWAP', c_margin_mode = 'CROSS' WHERE c_trading_account_id = 'account-a'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'spot,swap', c_margin_mode = 'CROSS' WHERE c_trading_account_id = 'account-a'`).Error)
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
 		swap := fixture.instrument("account-a")
-		swap.MarketType, swap.InstrumentID = "SWAP", "BTC-USDT-SWAP"
+		swap.MarketType, swap.InstrumentID = "swap", "BTC-USDT-SWAP"
 		swap.Linear, swap.ContractValue, swap.ContractValueAsset = true, "1", "BTC"
 		if err := tx.UpsertInstrument(swap); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "2", FilledQuantity: "2", ReferencePrice: "100",
 			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
 		})
@@ -48,7 +48,7 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 	}))
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 			SignedQuantity: "3", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli(),
 		})
 	}))
@@ -58,8 +58,8 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 // block 把标的写进下架名单：下架清仓每一轮先查名单，不在名单里就当作已经解除禁止而结束。
 func (f *operatorFixture) block(t *testing.T, market, symbol string) {
 	t.Helper()
-	_, err := f.store.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
+	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
+		Exchange: "binance", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 }
@@ -121,7 +121,7 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 			return err
 		}
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 			SignedQuantity: "1.5", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli(),
 		})
 	}))
@@ -137,9 +137,10 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL',
-		c_automation_state = 'PAUSED', c_pause_reason = '自主下单' WHERE c_logical_account_id = 'logical-1'`).Error)
+		c_automation_state = 'PAUSED', c_pause_reason = '自主下单', c_pause_source = 'USER' WHERE c_logical_account_id = 'logical-1'`).Error)
 	command := flattenCommand("margin-logical-1-1")
-	command.ReduceRatio, command.Reason = shared.MustDecimal("0.5"), store.MarginPauseReason()
+	command.ReduceRatio, command.Reason = shared.MustDecimal("0.5"), store.MarginPause(store.MarginReduced).Reason
+	command.PauseAs = store.MarginPause(store.MarginReduced)
 
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 
@@ -149,6 +150,41 @@ func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
 	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "自主下单", logical.PauseReason)
+}
+
+// 策略组合的风控减仓按 PauseAs 暂停：来源记保证金率风控、减仓状态记已减仓，原因取对应的固定文字。
+func TestMarginReducePausesWithMarginSource(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	command := flattenCommand("margin-logical-1-2")
+	command.ReduceRatio, command.PauseAs = shared.MustDecimal("0.5"), store.MarginPause(store.MarginReduced)
+	command.Reason = command.PauseAs.Reason
+
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+
+	require.NoError(t, err)
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, store.MarginPause(store.MarginReduced), logical.Pause())
+}
+
+// 风控减仓第一次调用后仍在运行，工作线程按请求 JSON 恢复（PauseAs 为零值）时不再写暂停：来源仍是 MARGIN、减仓状态仍是 REDUCED，
+// 否则保证金率风控的关注项报不出来，结束后的减仓状态也改写不了。
+func TestMarginReduceResumeKeepsMarginPause(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	command := flattenCommand("margin-logical-1-9")
+	command.ReduceRatio, command.PauseAs = shared.MustDecimal("0.5"), store.MarginPause(store.MarginReduced)
+	command.Reason = command.PauseAs.Reason
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	action, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "margin-logical-1-9")
+	require.NoError(t, err)
+	require.Equal(t, string(operatordomain.StatusRunning), action.Status, "子单还没成交，动作仍在运行")
+
+	_ = fixture.service().ResumeOperatorAction(context.Background(), action)
+
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, store.MarginPause(store.MarginReduced), logical.Pause())
 }
 
 // 风控减仓的子单零成交就过期：同一个动作号重试时换号再下，不判部分完成；交易所确定性拒绝才终结。
@@ -187,9 +223,9 @@ func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing
 func TestFlattenSingleInstrumentLeavesOthersAndDoesNotPause(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	other := activeOrder(fixture, "spot-open", "TARGET")
-	other.MarketType, other.InstrumentID = "SPOT", "BTC-USDT-SPOT"
+	other.MarketType, other.InstrumentID = "spot", "BTC-USDT-SPOT"
 	fixture.order(t, other)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := flattenCommand("delist-1")
 	command.InstrumentID = "BTC-USDT-SWAP"
 
@@ -255,7 +291,7 @@ func TestReduceReplayAfterPartialKeepsOriginalTargets(t *testing.T) {
 				return err
 			}
 			return tx.UpsertPosition(store.PositionRecord{
-				SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+				SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 				SignedQuantity: "2.25", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli(),
 			})
 		}))
@@ -274,13 +310,13 @@ func TestSingleInstrumentRemainingIgnoresOtherDelistedSpotAsset(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
 		eth := fixture.instrument("account-a")
-		eth.MarketType, eth.ExchangeSymbol, eth.InstrumentID, eth.BaseAsset, eth.Status = "SPOT", "ETHUSDT", "ETH-USDT-SPOT", "ETH", "BREAK"
+		eth.MarketType, eth.ExchangeSymbol, eth.InstrumentID, eth.BaseAsset, eth.Status = "spot", "ETHUSDT", "ETH-USDT-SPOT", "ETH", "BREAK"
 		if err := tx.UpsertInstrument(eth); err != nil {
 			return err
 		}
-		return tx.CreateOrder(store.OrderRecord{
+		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought-eth", ClientOrderID: "bought-eth",
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "ETHUSDT", InstrumentID: "ETH-USDT-SPOT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "ETHUSDT", InstrumentID: "ETH-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "4", FilledQuantity: "4", ReferencePrice: "100",
 			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
 		})
@@ -293,7 +329,7 @@ func TestSingleInstrumentRemainingIgnoresOtherDelistedSpotAsset(t *testing.T) {
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 		})
 	}))
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := flattenCommand("delist-2")
 	command.InstrumentID = "BTC-USDT-SWAP"
 

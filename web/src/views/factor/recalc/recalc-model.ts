@@ -35,15 +35,6 @@ export function jobDisplay(job: Pick<RecalcJob, "status" | "error">) {
 
 export const progressPercent = jobProgress;
 
-/**
- * 执行引擎一列的文字。等待领取（accepted）的作业不显示引擎：被引擎归还后状态回到 accepted，
- * 但后端还留着上一次领取它的引擎 ID，照着显示会让人以为它还在那台引擎上跑。
- */
-export function engineText(job: Pick<RecalcJob, "status" | "engine_id">): string {
-  if (job.status === "accepted") return "待领取";
-  return job.engine_id || "—";
-}
-
 export function enabledMemberIds(info: Pick<FactorTaskInfo, "members">): string[] {
   return (info.members || []).filter(member => member.status === "enabled").map(member => member.member_key);
 }

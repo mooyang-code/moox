@@ -39,10 +39,9 @@ func testGroups(count int, frequencies ...string) []TaskGroup {
 	return groups
 }
 
-func choose(now time.Time) func(string) (int64, error) {
-	return func(frequency string) (int64, error) {
-		return ChoosePeriodStartWithLead(frequency, now, planLeadTime)
-	}
+// timing 是测试里建计划用的时间：默认提前量 2 分钟，交接截止视为已改成功。
+func timing(now time.Time) PlanTiming {
+	return PlanTiming{Now: now, Lead: planLeadTime}
 }
 
 func TestBuildDesiredStateShardsAndIndexes(t *testing.T) {
@@ -152,75 +151,76 @@ func TestBuildPlanContentLifecycle(t *testing.T) {
 	options := testPlanOptions()
 	now := time.Date(2026, 10, 12, 8, 30, 20, 0, time.UTC)
 	desired, err := BuildDesiredState(options, testGroups(60, "1m"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, changed, err := BuildPlanContent(nil, nil, desired, choose(now))
-	if err != nil || !changed {
-		t.Fatalf("first plan changed=%v err=%v", changed, err)
-	}
+	require.NoError(t, err)
+	first, changed, _, err := BuildPlanContent(nil, nil, desired, timing(now))
+	require.NoError(t, err)
+	require.True(t, changed)
 	change := first.Datasets["ds_spot_1m|1m"]
-	if want := time.Date(2026, 10, 12, 8, 33, 0, 0, time.UTC).Unix(); change.P != want || !change.HashChanged || change.OldHash != "" {
-		t.Fatalf("unexpected first dataset change %+v", change)
-	}
+	require.Equal(t, PlanActionAppend, change.Action)
+	require.Equal(t, time.Date(2026, 10, 12, 8, 33, 0, 0, time.UTC).Unix(), change.P)
+	require.True(t, change.Register)
+	require.True(t, change.Timeline)
+	require.Equal(t, change.P, change.TimelineFrom)
 	for _, function := range first.Functions {
-		if !function.Create || !function.Push {
-			t.Fatalf("new function must be created and pushed: %+v", function)
-		}
-		if _, err := marketfetch.EncodePlan(first.TransitionalPlan(function)); err != nil {
-			t.Fatalf("transitional plan is invalid: %v", err)
-		}
-		if _, err := marketfetch.EncodePlan(first.FinalPlan(function)); err != nil {
-			t.Fatalf("final plan is invalid: %v", err)
-		}
-		if dataset := findPlanDataset(first.FinalPlan(function), "ds_spot_1m|1m"); len(dataset.Copies) != 1 || dataset.Copies[0].From != change.P {
-			t.Fatalf("final copy must start at P: %+v", dataset)
-		}
-	}
-	if end := first.WindowEnd(); !end.Equal(time.Unix(change.P, 0).Add(15 * time.Second)) {
-		t.Fatalf("window end=%s", end)
+		require.True(t, function.Create && function.Push, "new function must be created and pushed: %+v", function)
+		_, err := marketfetch.EncodePlan(function.Target)
+		require.NoError(t, err)
+		dataset := findPlanDataset(function.Target, "ds_spot_1m|1m")
+		require.Len(t, dataset.Copies, 1)
+		require.Equal(t, change.P, dataset.Copies[0].From)
+		require.Equal(t, planCron(function.Target), function.Cron)
 	}
 
 	// 已生效后没有变化：不产生新计划。
 	appliedFunctions, appliedDatasets := first.Applied()
 	again, err := BuildDesiredState(options, testGroups(60, "1m"), appliedFunctions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, changed, err := BuildPlanContent(appliedFunctions, appliedDatasets, again, choose(now.Add(time.Hour))); err != nil || changed {
-		t.Fatalf("unchanged state produced a plan: changed=%v err=%v", changed, err)
-	}
+	require.NoError(t, err)
+	_, changed, _, err = BuildPlanContent(appliedFunctions, appliedDatasets, again, timing(now.Add(time.Hour)))
+	require.NoError(t, err)
+	require.False(t, changed, "unchanged state produced a plan")
 
-	// 去掉一个标的：每个函数都带两份，旧份在前、新份从 P 起。
+	// 去掉一个标的：头份已过，加一份；每个函数都带两份，旧份在前、新份从 P 起。
 	groups := testGroups(60, "1m")
 	groups[0].Subjects = groups[0].Subjects[1:]
 	next, err := BuildDesiredState(options, groups, appliedFunctions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, changed, err := BuildPlanContent(appliedFunctions, appliedDatasets, next, choose(now.Add(time.Hour)))
-	if err != nil || !changed {
-		t.Fatalf("second plan changed=%v err=%v", changed, err)
-	}
+	require.NoError(t, err)
+	second, changed, _, err := BuildPlanContent(appliedFunctions, appliedDatasets, next, timing(now.Add(time.Hour)))
+	require.NoError(t, err)
+	require.True(t, changed)
 	secondChange := second.Datasets["ds_spot_1m|1m"]
-	if len(secondChange.Removed) != 1 || secondChange.Removed[0] != "S000-USDT" || secondChange.OldHash == "" || secondChange.OldHash == secondChange.Hash {
-		t.Fatalf("unexpected second change %+v", secondChange)
-	}
+	require.Equal(t, PlanActionAppend, secondChange.Action)
+	require.Equal(t, []string{"S000-USDT"}, secondChange.Removed)
+	require.True(t, secondChange.Register)
+	require.Len(t, secondChange.Copies, 2)
 	for _, function := range second.Functions {
-		dataset := findPlanDataset(second.TransitionalPlan(function), "ds_spot_1m|1m")
-		if len(dataset.Copies) != 2 || dataset.Copies[0].From != change.P || dataset.Copies[1].From != secondChange.P {
-			t.Fatalf("transitional copies wrong for %s: %+v", function.Name, dataset.Copies)
-		}
-		if _, ok := dataset.SelectCopy(time.Unix(secondChange.P-60, 0)); !ok {
-			t.Fatal("old copy must serve periods before P")
-		}
+		dataset := findPlanDataset(function.Target, "ds_spot_1m|1m")
+		require.Len(t, dataset.Copies, 2, function.Name)
+		require.Equal(t, change.P, dataset.Copies[0].From)
+		require.Equal(t, secondChange.P, dataset.Copies[1].From)
+		_, ok := dataset.SelectCopy(time.Unix(secondChange.P-60, 0))
+		require.True(t, ok, "old copy must serve periods before P")
 		selected, _ := dataset.SelectCopy(time.Unix(secondChange.P, 0))
-		if selected.Hash != secondChange.Hash {
-			t.Fatal("new copy must serve P itself")
-		}
-		if final := second.FinalPlan(function); len(findPlanDataset(final, "ds_spot_1m|1m").Copies) != 1 {
-			t.Fatal("final plan keeps a single copy")
-		}
+		require.Equal(t, secondChange.Hash, selected.Hash, "new copy must serve P itself")
+	}
+
+	// 旧份过了窗口（P + 截止 + 5 秒）：下一份计划只裁剪，函数只留新份。
+	functions, datasets := second.Applied()
+	unchanged, err := BuildDesiredState(options, groups, functions)
+	require.NoError(t, err)
+	_, changed, _, err = BuildPlanContent(functions, datasets, unchanged, timing(time.Unix(secondChange.P+15+4, 0)))
+	require.NoError(t, err)
+	require.False(t, changed, "旧份还在窗口里，不裁")
+	third, changed, _, err := BuildPlanContent(functions, datasets, unchanged, timing(time.Unix(secondChange.P+15+5, 0)))
+	require.NoError(t, err)
+	require.True(t, changed)
+	trimmed := third.Datasets["ds_spot_1m|1m"]
+	require.Equal(t, PlanActionKeep, trimmed.Action)
+	require.True(t, trimmed.Trimmed)
+	require.Len(t, trimmed.Copies, 1)
+	require.False(t, trimmed.Register)
+	require.Empty(t, third.planCreatedTimeline("crypto"), "只裁剪的计划不写时间线")
+	for _, function := range third.Functions {
+		require.Len(t, findPlanDataset(function.Target, "ds_spot_1m|1m").Copies, 1)
 	}
 }
 
@@ -228,55 +228,60 @@ func TestBuildPlanContentRetiresFunctionsAndDatasets(t *testing.T) {
 	options := testPlanOptions()
 	now := time.Date(2026, 10, 12, 8, 30, 0, 0, time.UTC)
 	desired, _ := BuildDesiredState(options, testGroups(120, "1m"), nil)
-	first, _, err := BuildPlanContent(nil, nil, desired, choose(now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	first, _, _, err := BuildPlanContent(nil, nil, desired, timing(now))
+	require.NoError(t, err)
 	functions, datasets := first.Applied()
 	small, err := BuildDesiredState(options, testGroups(20, "1m"), functions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, _, err := BuildPlanContent(functions, datasets, small, choose(now.Add(time.Hour)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	later := now.Add(time.Hour)
+	second, _, _, err := BuildPlanContent(functions, datasets, small, timing(later))
+	require.NoError(t, err)
 	retired := 0
 	for _, function := range second.Functions {
 		if function.New != nil {
 			continue
 		}
 		retired++
-		transitional := second.TransitionalPlan(function)
-		dataset := findPlanDataset(transitional, "ds_spot_1m|1m")
-		if len(dataset.Copies) != 2 || len(dataset.Copies[1].Subjects) != 0 {
-			t.Fatalf("retired function must stop after P: %+v", dataset.Copies)
-		}
-		if _, err := marketfetch.EncodePlan(transitional); err != nil {
-			t.Fatal(err)
-		}
-		if second.FinalPlan(function) != nil || second.FinalCron(function) != "" {
-			t.Fatal("retired function has no final plan")
-		}
+		dataset := findPlanDataset(function.Target, "ds_spot_1m|1m")
+		require.Len(t, dataset.Copies, 2, "旧份过窗口之前函数照常带旧份")
+		require.Empty(t, dataset.Copies[1].Subjects, "retired function must stop after P")
+		_, err := marketfetch.EncodePlan(function.Target)
+		require.NoError(t, err)
+		require.NotEmpty(t, function.Cron, "定时器开着，迟到的旧周期还能提交")
 	}
-	if retired == 0 {
-		t.Fatal("expected retired functions")
-	}
-	// 数据集整体不再采集：生成的新份没有标的。
-	third, changed, err := BuildPlanContent(functions, datasets, &DesiredState{Datasets: map[string]*DesiredDataset{}, Functions: map[string]*PlanFunction{}}, choose(now))
-	if err != nil || !changed || !third.Datasets["ds_spot_1m|1m"].Gone {
-		t.Fatalf("gone dataset: changed=%v err=%v", changed, err)
-	}
-}
+	require.NotZero(t, retired, "expected retired functions")
 
-func TestChoosePeriodStartWithLead(t *testing.T) {
-	now := time.Date(2026, 10, 12, 8, 59, 30, 0, time.UTC)
-	if p, _ := ChoosePeriodStartWithLead("1h", now, planLeadTime); p != time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC).Truncate(time.Hour).Add(time.Hour).Unix() {
-		t.Fatalf("1h P=%s", time.Unix(p, 0).UTC())
+	// 旧份过窗口后：这些函数没有数据集了，Target 为空、只停定时器。
+	functions, datasets = second.Applied()
+	p := second.Datasets["ds_spot_1m|1m"].P
+	third, changed, _, err := BuildPlanContent(functions, datasets, small, timing(time.Unix(p+20, 0)))
+	require.NoError(t, err)
+	require.True(t, changed)
+	stopped := 0
+	for _, function := range third.Functions {
+		if function.New == nil {
+			require.Nil(t, function.Target)
+			require.Empty(t, function.Cron)
+			require.True(t, function.Push)
+			stopped++
+		}
 	}
-	if p, _ := ChoosePeriodStartWithLead("1m", now, planLeadTime); p != time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC).Unix() {
-		t.Fatalf("1m P=%s", time.Unix(p, 0).UTC())
-	}
+	require.Equal(t, retired, stopped)
+
+	// 数据集整体不再采集：头份还没开始时原地换成停止份，保留它的 hash。
+	firstFunctions, firstDatasets := first.Applied()
+	head := first.Datasets["ds_spot_1m|1m"]
+	gone, changed, _, err := BuildPlanContent(firstFunctions, firstDatasets, &DesiredState{Datasets: map[string]*DesiredDataset{}, Functions: map[string]*PlanFunction{}}, timing(now))
+	require.NoError(t, err)
+	require.True(t, changed)
+	stop := gone.Datasets["ds_spot_1m|1m"]
+	require.Equal(t, PlanActionReplace, stop.Action)
+	require.True(t, stop.Stopped)
+	require.Len(t, stop.Copies, 1)
+	require.True(t, stop.Copies[0].Stop)
+	require.Equal(t, head.Copies[0].Hash, stop.Copies[0].Hash)
+	require.False(t, stop.Register)
+	require.Len(t, gone.planCreatedTimeline("crypto"), 1, "停止行在建计划时写")
 }
 
 func TestNextBoundaryAlignsWithKlineGrid(t *testing.T) {

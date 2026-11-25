@@ -8,8 +8,8 @@ import (
 
 // ViewFollowLag 是一个 View 跟随变更日志的落后情况。
 type ViewFollowLag struct {
-	SpaceID string
-	ViewID  string
+	SpaceID   string
+	DatasetID string
 	// Changes 是日志头部序号减去已扫描序号（空闲数据集也会有不超过一轮等待的差值）。
 	Changes uint64
 	// Seconds 是距离上一次追上日志头部的时长；正在等待新变更时为 0。
@@ -27,9 +27,9 @@ type viewFollowLagCollector struct {
 func newViewFollowLagCollector() *viewFollowLagCollector {
 	return &viewFollowLagCollector{
 		changeDesc: prometheus.NewDesc("moox_storage_view_follow_lag_changes",
-			"Change log entries between the head and the position a View has scanned.", []string{"space_id", "view_id"}, nil),
+			"Change log entries between the head and the position a View has scanned.", []string{"space_id", "dataset_id"}, nil),
 		secondDesc: prometheus.NewDesc("moox_storage_view_follow_lag_seconds",
-			"Seconds since a View last caught up with the change log head; 0 while waiting for new changes.", []string{"space_id", "view_id"}, nil),
+			"Seconds since a View last caught up with the change log head; 0 while waiting for new changes.", []string{"space_id", "dataset_id"}, nil),
 	}
 }
 
@@ -44,8 +44,8 @@ func (c *viewFollowLagCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	for _, lag := range (*source)() {
-		ch <- prometheus.MustNewConstMetric(c.changeDesc, prometheus.GaugeValue, float64(lag.Changes), lag.SpaceID, lag.ViewID)
-		ch <- prometheus.MustNewConstMetric(c.secondDesc, prometheus.GaugeValue, lag.Seconds, lag.SpaceID, lag.ViewID)
+		ch <- prometheus.MustNewConstMetric(c.changeDesc, prometheus.GaugeValue, float64(lag.Changes), lag.SpaceID, lag.DatasetID)
+		ch <- prometheus.MustNewConstMetric(c.secondDesc, prometheus.GaugeValue, lag.Seconds, lag.SpaceID, lag.DatasetID)
 	}
 }
 

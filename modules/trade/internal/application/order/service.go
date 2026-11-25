@@ -162,7 +162,7 @@ func (s *Service) Place(
 		return orderdomain.Order{}, err
 	}
 	id := s.orderID()
-	aggregate, _, err := orderdomain.New(shared.OrderID(id), spec)
+	aggregate, err := orderdomain.New(shared.OrderID(id), spec)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -460,7 +460,7 @@ func (s *Service) authorizeTargetSubmit(
 		record.LogicalAccountID == "" {
 		return nil
 	}
-	key := strings.Join([]string{record.SpaceID, record.TradingAccountID, record.LogicalAccountID, record.RunnerID, record.OwnerID}, "\x00")
+	key := strings.Join([]string{record.SpaceID, record.TradingAccountID, record.LogicalAccountID, record.InstanceID, record.OwnerID}, "\x00")
 	return reuseAuthorization(ctx, key, func() error { return s.checkTargetAuthorization(ctx, record) })
 }
 
@@ -525,7 +525,7 @@ func (s *Service) checkTargetAuthorization(
 	if err != nil {
 		return err
 	}
-	if currentTarget.TargetID != record.OwnerID || currentTarget.InstanceID != record.RunnerID {
+	if currentTarget.TargetID != record.OwnerID || currentTarget.InstanceID != record.InstanceID {
 		return ErrTargetOwnerConflict
 	}
 	now := s.now().UTC().UnixMilli()
@@ -586,7 +586,7 @@ func (s *Service) cancel(
 		return orderdomain.Order{}, err
 	}
 	expected := aggregate.Version
-	if _, err = aggregate.BeginCancel(); err != nil {
+	if err = aggregate.BeginCancel(); err != nil {
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, aggregate)
@@ -642,9 +642,9 @@ func (s *Service) cancel(
 	}
 	expected = current.Version
 	if uncertainExchangeError(callErr) {
-		_, err = current.MarkCancelUnknown()
+		err = current.MarkCancelUnknown()
 	} else {
-		_, err = current.CancelRejected()
+		err = current.CancelRejected()
 	}
 	if err != nil {
 		return orderdomain.Order{}, err
@@ -764,13 +764,13 @@ func (s *Service) RecoverCancel(
 	expected := current.Version
 	switch {
 	case uncertainExchangeError(callErr) && current.State == orderdomain.Canceling:
-		_, err = current.MarkCancelUnknown()
+		err = current.MarkCancelUnknown()
 	case uncertainExchangeError(callErr):
 		return current, accountExecutionError(record.TradingAccountID, "cancel", callErr)
 	case current.State == orderdomain.Canceling:
-		_, err = current.CancelRejected()
+		err = current.CancelRejected()
 	default:
-		_, err = current.CancelStillOpen()
+		err = current.CancelStillOpen()
 	}
 	if err != nil {
 		return current, err
@@ -817,7 +817,7 @@ func (s *Service) DiscardPending(
 		return orderdomain.Order{}, err
 	}
 	expected := current.Version
-	if _, err := current.DiscardPending(); err != nil {
+	if err := current.DiscardPending(); err != nil {
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
@@ -881,7 +881,7 @@ func (s *Service) ExpireUnknown(
 		return current, ErrUnknownTooRecent
 	}
 	expected := current.Version
-	if _, err := current.Expire(); err != nil {
+	if err := current.Expire(); err != nil {
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
@@ -955,7 +955,7 @@ func (s *Service) resolveUnknown(
 ) (orderdomain.Order, error) {
 	if current.State == orderdomain.Submitting {
 		expected := current.Version
-		if _, err := current.MarkSubmitUnknown(); err != nil {
+		if err := current.MarkSubmitUnknown(); err != nil {
 			return orderdomain.Order{}, err
 		}
 		applyAggregate(&record, current)
@@ -1009,7 +1009,7 @@ func (s *Service) resolveUnknown(
 		return current, nil
 	}
 	expected := current.Version
-	if _, err := current.ReturnToPending(); err != nil {
+	if err := current.ReturnToPending(); err != nil {
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
@@ -1054,7 +1054,7 @@ func (s *Service) resolveUnknownFound(
 	exchangeOrderID string,
 ) (orderdomain.Order, error) {
 	expected := current.Version
-	if _, err := current.Acknowledge(exchangeOrderID); err != nil {
+	if err := current.Acknowledge(exchangeOrderID); err != nil {
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
@@ -1197,7 +1197,7 @@ func (s *Service) prepareSubmit(
 		}
 	}
 	expected := aggregate.Version
-	if _, err = aggregate.BeginSubmit(); err != nil {
+	if err = aggregate.BeginSubmit(); err != nil {
 		return nil, orderdomain.Order{}, err
 	}
 	releaseReservationForReduction := !record.ReduceOnly &&
@@ -1371,11 +1371,11 @@ func (s *Service) deliverSubmit(
 	expected = current.Version
 	switch {
 	case callErr == nil:
-		_, err = current.Acknowledge(response.ExchangeOrderID)
+		err = current.Acknowledge(response.ExchangeOrderID)
 	case uncertainExchangeError(callErr):
-		_, err = current.MarkSubmitUnknown()
+		err = current.MarkSubmitUnknown()
 	default:
-		_, err = current.Reject()
+		err = current.Reject()
 		latest.RejectReason = exchange.RejectMessage(callErr)
 	}
 	if err != nil {
@@ -1445,7 +1445,7 @@ func (s *Service) abortUnsentSubmit(
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
 	expected := current.Version
-	if _, err := current.AbortSubmit(); err != nil {
+	if err := current.AbortSubmit(); err != nil {
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
@@ -1476,7 +1476,7 @@ func (s *Service) rejectPending(
 	cause error,
 ) (orderdomain.Order, error) {
 	expected := current.Version
-	if _, err := current.Reject(); err != nil {
+	if err := current.Reject(); err != nil {
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
@@ -1546,7 +1546,7 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		ReduceOnly:       value.Spec.ReducePositionOnly,
 		OwnerType:        string(value.Spec.Owner.Type), OwnerID: value.Spec.Owner.OwnerID,
 		LogicalAccountID: value.Spec.Owner.LogicalAccountID,
-		RunnerID:         ownerRunnerID(value.Spec.Owner),
+		InstanceID:       ownerInstanceID(value.Spec.Owner),
 		PositionBefore:   value.Spec.PositionBefore,
 		State:            string(value.State), Attempt: value.Spec.Attempt, FilledQuantity: "0", AveragePrice: "0",
 		ReservedAsset:             validation.ReservedAsset,
@@ -1650,7 +1650,7 @@ func domainOrder(record store.OrderRecord) (orderdomain.Order, error) {
 			Owner: orderdomain.OrderOwner{
 				Type: orderdomain.OwnerType(record.OwnerType), OwnerID: record.OwnerID,
 				LogicalAccountID: record.LogicalAccountID,
-				RunnerID:         optionalString(record.RunnerID),
+				InstanceID:       optionalString(record.InstanceID),
 			},
 			PositionBefore: record.PositionBefore,
 			Attempt:        record.Attempt,
@@ -1689,7 +1689,7 @@ func sameSpec(record store.OrderRecord, spec orderdomain.OrderSpec) bool {
 		stored.Spec.Owner.Type == spec.Owner.Type &&
 		stored.Spec.Owner.OwnerID == spec.Owner.OwnerID &&
 		stored.Spec.Owner.LogicalAccountID == spec.Owner.LogicalAccountID &&
-		equalOptionalString(stored.Spec.Owner.RunnerID, spec.Owner.RunnerID)
+		equalOptionalString(stored.Spec.Owner.InstanceID, spec.Owner.InstanceID)
 }
 
 func equalOptionalDecimal(left, right *shared.Decimal) bool {
@@ -1699,11 +1699,11 @@ func equalOptionalDecimal(left, right *shared.Decimal) bool {
 	return left.Cmp(*right) == 0
 }
 
-func ownerRunnerID(owner orderdomain.OrderOwner) string {
-	if owner.RunnerID == nil {
+func ownerInstanceID(owner orderdomain.OrderOwner) string {
+	if owner.InstanceID == nil {
 		return ""
 	}
-	return *owner.RunnerID
+	return *owner.InstanceID
 }
 
 func optionalString(value string) *string {

@@ -21,11 +21,11 @@ func TestStockIntradayValidityCrossesLunchBreak(t *testing.T) {
 	}
 
 	// 触发入口：5m 的事件按交易时段的 bar_start 换算周期，有效期过了记 skipped(expired)，有效期写 13:10。
-	resolved := input.Resolved{Market: dsl.SingleMarket("equity"), Tasks: map[string]input.TaskBinding{"equity": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "5m", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("equity"), Tasks: map[string]input.TaskBinding{"equity": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "5m", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
 	h := newHarnessWith(t, rankDSL, nil, resolved)
 	h.now = time.Date(2026, 10, 8, 14, 0, 0, 0, shanghai)
 	message := &eventpb.EventMessage{EventId: "event-1125", EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "5m", PeriodTime: time.Date(2026, 10, 8, 11, 25, 0, 0, shanghai).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "5m", PeriodTime: time.Date(2026, 10, 8, 11, 25, 0, 0, shanghai).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	result, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, time.Date(2026, 10, 8, 11, 30, 0, 0, shanghai))
 	if err != nil || !found {

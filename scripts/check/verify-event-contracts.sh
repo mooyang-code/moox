@@ -112,6 +112,6 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
 # this local contract gate covers the package-level storage and outbox tests.
 (cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox)
 (cd modules/trade && CGO_ENABLED=1 go test ./internal/bootstrap ./internal/eventconsumer ./internal/application/target)
-(cd modules/hostagent && go test ./internal/eventpublisher ./internal/app)
+(cd modules/hostagent && go test ./internal/app ./internal/policysync)
 
 echo "event contract verification passed"

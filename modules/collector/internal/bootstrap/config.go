@@ -47,8 +47,24 @@ type Config struct {
 	Stream StreamConfig `yaml:"stream"`
 	// Cloud 是 Collector 直接调腾讯云的参数：云函数接口限频与日志服务（CLS）开通。
 	Cloud CloudConfig `yaml:"cloud"`
+	// PlanHealth 是采集计划协调的告警线。
+	PlanHealth PlanHealthConfig `yaml:"plan_health"`
 	// HistorySeed 是数据集首次接入时的历史补齐参数，都有代码默认值，配置里可以不写。
 	HistorySeed HistorySeedConfig `yaml:"history_seed"`
+}
+
+// PlanHealthConfig 是采集计划协调的告警线（关注项 fetch_coordination_failing）：最近一次对账成功超过 StaleAfter，
+// 或协调失败、且进行中的协调已超过 PendingGrace 时上报。
+type PlanHealthConfig struct {
+	StaleAfter   time.Duration `yaml:"stale_after"`
+	PendingGrace time.Duration `yaml:"pending_grace"`
+}
+
+func (c PlanHealthConfig) validate() error {
+	if c.StaleAfter <= 0 || c.PendingGrace <= 0 {
+		return fmt.Errorf("plan_health: stale_after 与 pending_grace 必须大于 0")
+	}
+	return nil
 }
 
 // HistorySeedConfig 是历史补齐的参数：数据集首次进入采集计划时，把历史补到保留期与行情源都允许的深度；补齐期间下游不生效。
@@ -101,16 +117,16 @@ func (c *Config) validateHistorySeed() error {
 	seed := c.HistorySeed
 	if seed.MaxDepth != "" {
 		if period, err := storagepolicy.ParsePeriod(strings.TrimSpace(seed.MaxDepth)); err != nil || period.Forever || period.Duration <= 0 {
-			return fmt.Errorf("history_seed.max_depth %q must be a duration such as 365d", seed.MaxDepth)
+			return fmt.Errorf("history_seed.max_depth %q 必须是时长，例如 365d", seed.MaxDepth)
 		}
 	}
 	for space, raw := range seed.DepthCaps {
 		if period, err := storagepolicy.ParsePeriod(strings.TrimSpace(raw)); err != nil || period.Forever || period.Duration <= 0 {
-			return fmt.Errorf("history_seed.depth_caps[%s] %q must be a duration such as 28d", space, raw)
+			return fmt.Errorf("history_seed.depth_caps[%s] %q 必须是时长，例如 28d", space, raw)
 		}
 	}
 	if seed.SubjectsPerJob < 0 || seed.MaxRowsPerSecond < 0 || seed.LocalMaxRowsPerSecond < 0 {
-		return fmt.Errorf("history_seed quantities must not be negative")
+		return fmt.Errorf("history_seed 的数量与速率不能为负")
 	}
 	return nil
 }
@@ -288,6 +304,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Cloud.validate(); err != nil {
 		return nil, err
 	}
+	if err := cfg.PlanHealth.validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateSCFPlan(); err != nil {
 		return nil, err
 	}
@@ -377,6 +396,7 @@ func Default() *Config {
 		EgressLimits: EgressLimitsConfig{Eastmoney: cnstock.DefaultRequestLimitConfig()},
 		Stream:       defaultStreamConfig(),
 		Cloud:        CloudConfig{CLS: cloud.DefaultCLSConfig()},
+		PlanHealth:   PlanHealthConfig{StaleAfter: 15 * time.Minute, PendingGrace: 5 * time.Minute},
 		Delist:       DelistConfig{AutoDetect: true},
 		SCFEntry:     gatewayclient.ExternalFileConfig{Address: "entry.example.test:11004", Host: "storage", Caller: "scf-collector", KeyFile: "../../secrets/scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{

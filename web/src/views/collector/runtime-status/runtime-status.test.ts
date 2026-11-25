@@ -156,7 +156,7 @@ describe("collector runtime status page", () => {
   const page = readFileSync(resolve(__dirname, "runtime-status.vue"), "utf8");
 
   it("leads with the overall verdict, dataset health and the function list", () => {
-    expect(page).toContain("getCollectorStatus(spaceId, { silentError: background })");
+    expect(page).toContain("getCollectorStatus(spaceId)");
     expect(page.indexOf('class="status-card"')).toBeLessThan(page.indexOf("<h3>数据集健康</h3>"));
     expect(page.indexOf("<h3>数据集健康</h3>")).toBeLessThan(page.indexOf('class="function-section"'));
     expect(page).toContain('category="collector.subject_change"');
@@ -171,8 +171,8 @@ describe("collector runtime status page", () => {
   });
 
   it("WS 区的心跳和最近消息按空间时区显示（后端给的是 RFC3339Nano）", () => {
-    expect(page).toContain("心跳 {{ timeText(status.stream.heartbeat_at) }}");
-    expect(page).toContain("{{ timeText(record.last_message_at) }}");
+    expect(page).toContain("心跳 {{ formatInstant(status.stream.heartbeat_at, displayZone) }}");
+    expect(page).toContain("{{ formatInstant(record.last_message_at, displayZone) }}");
     expect(page).not.toContain('data-index="last_message_at"');
   });
 
@@ -211,9 +211,9 @@ describe("collector runtime status page", () => {
   });
 
   it("offers the dataset actions and opens the backfill tab for new jobs", () => {
-    expect(page).toContain("confirmHistoryGaps(");
+    expect(page).not.toContain("confirmHistoryGaps(");
+    expect(page).not.toContain("历史缺口");
     expect(page).toContain("clearSourceAbsences(");
-    expect(page).toContain("补采确认");
     expect(page).toContain("清除并重新检查");
     expect(page).toContain('tab: "backfills"');
   });
@@ -240,7 +240,7 @@ describe("collector runtime status page", () => {
 });
 
 describe("云上状态", () => {
-  const read = { executor: "scf", cloud_read_at: "2026-11-15T01:00:00Z", cloud_exists: true };
+  const read = { executor: "scf", cloud_read_at: "1794704400000", cloud_exists: true };
 
   it("只对 scf 函数：推送与本地执行端写“—”", () => {
     expect(cloudStateInfo({ ...read, executor: "stream" })).toEqual({ text: "—", tone: "muted" });
@@ -249,7 +249,7 @@ describe("云上状态", () => {
 
   it("还没读回写“未读回”，不当成异常", () => {
     expect(cloudStateInfo({ executor: "scf" })).toEqual({ text: "未读回", tone: "muted" });
-    expect(cloudStateInfo({ executor: "scf", cloud_read_at: "" })).toEqual({ text: "未读回", tone: "muted" });
+    expect(cloudStateInfo({ executor: "scf", cloud_read_at: "0" })).toEqual({ text: "未读回", tone: "muted" });
   });
 
   it("读回了但云上没有写“不存在”", () => {

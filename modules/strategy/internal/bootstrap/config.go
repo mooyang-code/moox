@@ -52,7 +52,7 @@ type RetentionConfig struct {
 
 // ParamsConfig 是可变成员参数投递的告警参数。
 type ParamsConfig struct {
-	// StaleAlertPeriods 是实例最近连续多少期的结果都没有把参数送达因子侧时告警（指标 moox_strategy_param_delivery_stale）。
+	// StaleAlertPeriods 是实例最近连续多少期的结果都没有把参数送达因子侧时告警（关注项 param_delivery_stale）。
 	StaleAlertPeriods int `yaml:"stale_alert_periods"`
 }
 

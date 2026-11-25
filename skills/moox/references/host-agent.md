@@ -1,11 +1,11 @@
 # Host Agent 运维
 
-Host Agent 是主机服务：程序只能在 Linux `amd64`、`arm64` 上运行，其他平台启动即报错；发布包只提供 linux/amd64，arm64 主机要自己编译后用 `setup deploy --binary-dir` 部署（见 [install.md](install.md)）。它只采集 CPU、内存、文件系统、磁盘和网络，使用共享 JetStream 客户端把 `HostMetric` 发布到 EventBus；不保存 SQLite、outbox 或重放队列。
+Host Agent 是主机服务：程序只能在 Linux `amd64`、`arm64` 上运行，其他平台启动即报错；发布包只提供 linux/amd64，arm64 主机要自己编译后用 `setup deploy --binary-dir` 部署（见 [install.md](install.md)）。它只采集 CPU、内存、文件系统、磁盘和网络，每分钟随拉取主机策略那次调用（经本机网关调 Monitor 的 `GetHostPolicy`）把 `HostMetric` 报给 Monitor；不连 EventBus，不保存 SQLite、outbox 或重放队列。
 
 ## 安装
 
 Host Agent 与 Host Gateway 是每台主机都有的主机级组件，不写在 `[deployments]` 里，随 `moox-cli setup deploy --host <主机ID>` 一起装（systemd 用户服务 `moox-host-agent`）。
-部署从 Admin 导出这台主机的身份和 `hostagent-publisher` 凭据，写到 `<部署根>/secrets/eventbus/hostagent-publisher.yaml`，配置在 `<部署根>/config/host-agent/app.yaml`。
+部署给它这台主机的身份（主机签名密钥，经本机网关调用 Monitor 用），配置在 `<部署根>/config/host-agent/app.yaml`；没有 EventBus 凭据。
 完整顺序见 `docs/部署与运维.md`。
 
 ## 验收和升级
@@ -19,10 +19,7 @@ Host Agent 与 Host Gateway 是每台主机都有的主机级组件，不写在 
 
 升级：`setup deploy --host <主机ID> --component host-agent`（见 [`source-deploy.md`](source-deploy.md)），二进制、配置和凭据一起更新。
 
-## 凭据轮换
+## 凭据
 
-`hostagent-publisher` 口令轮换会立刻让旧副本失效（EventBus 没有单独的 CA，用所在主机的主机证书）。只升级 Host Agent 二进制、只在 control 上 `export`、
-或只重启 EventBus，都不够。完整副本清单和验收步骤见 [`eventbus-credentials.md`](eventbus-credentials.md)。
-
-对 **moox.toml 里每一台主机** 都要重新部署（`setup deploy --host <主机ID>`），包括海外机、因子机等只出站的主机。确认 Monitor 收到新样本，
-且日志里没有 `Authorization Violation` / `certificate signature failure` 后才算完成。
+Host Agent 只用主机签名密钥（随身份包签发），没有 EventBus 令牌，EventBus 口令轮换与它无关。快照报不出去时先看本机网关与控制机是否可达
+（`moox-cli setup logs --host <主机ID> --component host-agent`），非控制机连续 3 分钟拉不到主机策略会直推“控制机或 Monitor 不可达”。

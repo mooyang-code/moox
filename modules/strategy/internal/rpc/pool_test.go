@@ -54,12 +54,12 @@ func (f *fakeResolver) ResolvePool(_ context.Context, _ string, taskIDs []string
 	columns := []string{"close"}
 	tasks := map[string]input.TaskBinding{}
 	for i, id := range taskIDs {
-		viewID, err := input.ViewIDOfTask(id)
+		datasetID, err := input.DatasetIDOfTask(id)
 		if err != nil {
 			return input.PoolResolved{}, err
 		}
 		market := union.Markets()[i]
-		tasks[market] = input.TaskBinding{ViewID: viewID, FactorTaskID: id, DatasetID: "ds"}
+		tasks[market] = input.TaskBinding{FactorTaskID: id, DatasetID: datasetID}
 	}
 	program, err := dsl.Compile(pool, columns)
 	if err != nil {
@@ -203,7 +203,7 @@ func TestPoolIsReplayableButNotTrialled(t *testing.T) {
 	h.createStrategy("member_spot", spotMemberDSL)
 	h.createStrategy("member_swap", swapMemberDSL)
 	h.createStrategy("pool_1", poolDefDSL)
-	replay, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	replay, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, StartTime: ms("2026-09-01"), EndTime: ms("2026-09-02")})
 	requireOK(t, int32(replay.GetRetInfo().GetCode()), replay.GetRetInfo().GetMsg())
 	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: poolDefDSL, FactorTasks: map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}})
 	requireOK(t, int32(validated.GetRetInfo().GetCode()), validated.GetRetInfo().GetMsg())

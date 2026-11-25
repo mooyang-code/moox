@@ -126,8 +126,8 @@ func Start(ctx context.Context, client *jetstream.Client, cfg ConsumersConfig, r
 			event   events.Event
 			handler jetstream.DeliveryHandler
 		}{
-			{"collector_resample_period_" + spaceID + "_v1", events.DatasetPeriodCompleted, period},
-			{"collector_resample_backfilled_" + spaceID + "_v1", events.CollectorKlineBackfilled, backfilled},
+			{events.CollectorResamplePeriodConsumer.NameFor(spaceID), events.DatasetPeriodCompleted, period},
+			{events.CollectorResampleBackfilledConsumer.NameFor(spaceID), events.CollectorKlineBackfilled, backfilled},
 		} {
 			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{
 				ConsumerConfig: events.ConsumerConfig{

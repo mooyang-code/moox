@@ -38,7 +38,7 @@ func TestRunTargetRetryDoesNotHoldBackOtherAccounts(t *testing.T) {
 	now := time.Now().UTC()
 	// 启动消费者之前两条都已进流，重投的那条排在前面，原来的批量拉取会把两条拉进同一批。
 	stuck := logicalTargetDelivery(t, now, "target-stuck", "runner-2", "logical-2",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}})
+		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}})
 	normal := logicalTargetDelivery(t, now, "target-normal", "runner-1", "logical-1", nil)
 	for _, delivery := range []*jetstream.Delivery{stuck, normal} {
 		_, err = client.PublishRaw(ctx, delivery.Subject, delivery.RawMessageID, delivery.RawData, delivery.ContentType)

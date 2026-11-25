@@ -32,7 +32,7 @@ func TestHKFee(t *testing.T) {
 			}
 		}
 	}
-	rule := RuleAt(ExchangeHKEX, MarketTypeStock)
+	rule := RuleAt(ExchangeHKEX, MarketTypeEquity)
 	if got := rule.BuyCost(shared.MustDecimal("37600"), rate).String(); got != "37654.0552" {
 		t.Fatalf("港股买入花费 = %s", got)
 	}
@@ -53,7 +53,7 @@ func TestHKPriceTick(t *testing.T) {
 
 // 限价对齐到价位表：买入向上、卖出向下，正好在价位上不动；没有价位表的场所（A 股、加密货币）原样返回。
 func TestSnapPriceFollowsExchangeTickTable(t *testing.T) {
-	hk := RuleAt(ExchangeHKEX, MarketTypeStock)
+	hk := RuleAt(ExchangeHKEX, MarketTypeEquity)
 	for _, tc := range []struct {
 		price string
 		side  Side
@@ -67,7 +67,7 @@ func TestSnapPriceFollowsExchangeTickTable(t *testing.T) {
 			t.Fatalf("港股 SnapPrice(%s, %s) = %s，期望 %s", tc.price, tc.side, got, tc.want)
 		}
 	}
-	for _, rule := range []ExchangeRule{RuleAt(ExchangeAShare, MarketTypeStock), RuleAt(ExchangeBinance, MarketTypeSpot)} {
+	for _, rule := range []ExchangeRule{RuleAt(ExchangeAShare, MarketTypeEquity), RuleAt(ExchangeBinance, MarketTypeSpot)} {
 		if got := rule.SnapPrice(shared.MustDecimal("376.07"), SideBuy).String(); got != "376.07" {
 			t.Fatalf("没有价位表的场所不动限价：%s", got)
 		}
@@ -77,7 +77,7 @@ func TestSnapPriceFollowsExchangeTickTable(t *testing.T) {
 // 规则按“场所 + 市场”取：同是股票，A 股 T+1、有价格笼子、A 股费用；港股 T+0、没有价格笼子、港股费用、按价位分档。
 // 整手、不能卖空、停牌顺延是股票共有的。
 func TestRuleAtSeparatesStockExchanges(t *testing.T) {
-	ashare, hk := RuleAt(ExchangeAShare, MarketTypeStock), RuleAt("HKEX", "STOCK")
+	ashare, hk := RuleAt(ExchangeAShare, MarketTypeEquity), RuleAt("hkex", "equity")
 	for name, rule := range map[string]ExchangeRule{"A 股": ashare, "港股": hk} {
 		if !rule.BoardLot || !rule.QuoteGuards || !rule.PositionFromBalance || !rule.RawInstrumentID || rule.CanShort || rule.Leverage || rule.Fee == nil {
 			t.Fatalf("%s 的股票共有规则不对：%+v", name, rule.MarketRule)
@@ -100,7 +100,7 @@ func TestRuleAtSeparatesStockExchanges(t *testing.T) {
 	if unknown := RuleAt("X", "UNKNOWN"); unknown.MarketRule != (MarketRule{}) || unknown.T1 || unknown.Fee != nil {
 		t.Fatal("未知市场应返回零值")
 	}
-	if got := MarketsWhere(ExchangeAShare, func(rule ExchangeRule) bool { return rule.T1 }); len(got) != 1 || got[0] != MarketTypeStock {
+	if got := MarketsWhere(ExchangeAShare, func(rule ExchangeRule) bool { return rule.T1 }); len(got) != 1 || got[0] != MarketTypeEquity {
 		t.Fatalf("A 股有 T+1 的市场是 STOCK：%v", got)
 	}
 	if got := MarketsWhere(ExchangeHKEX, func(rule ExchangeRule) bool { return rule.T1 }); len(got) != 0 {

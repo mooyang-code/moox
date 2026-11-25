@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/storagepb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -52,7 +51,6 @@ type noticeGroup struct {
 	spaceID, datasetID, frequency, origin, jobID string
 	ids                                          []int64
 	subjects                                     map[string]struct{}
-	seriesTags                                   map[string]struct{}
 	start, end                                   time.Time
 }
 
@@ -104,15 +102,12 @@ func (p *NoticePublisher) seal(ctx context.Context, before time.Time, limit int)
 		group, ok := groups[key]
 		if !ok {
 			group = &noticeGroup{spaceID: notice.SpaceID, datasetID: notice.DatasetID, frequency: notice.Frequency, origin: notice.Origin, jobID: notice.JobID,
-				subjects: map[string]struct{}{}, seriesTags: map[string]struct{}{}, start: notice.Start, end: notice.End}
+				subjects: map[string]struct{}{}, start: notice.Start, end: notice.End}
 			groups[key] = group
 			order = append(order, key)
 		}
 		group.ids = append(group.ids, notice.ID)
 		group.subjects[notice.SubjectID] = struct{}{}
-		if notice.SeriesTag != "" {
-			group.seriesTags[notice.SeriesTag] = struct{}{}
-		}
 		if notice.Start.Before(group.start) {
 			group.start = notice.Start
 		}
@@ -148,18 +143,13 @@ func (p *NoticePublisher) sealGroup(ctx context.Context, group *noticeGroup) err
 		subjects = append(subjects, subject)
 	}
 	sort.Strings(subjects)
-	// 只有统一数据集的通知带序列，单序列数据集的事件不带 series_tags。
-	var seriesTags []string
-	for tag := range group.seriesTags {
-		seriesTags = append(seriesTags, tag)
-	}
-	sort.Strings(seriesTags)
+	// 数据集里每个标的只有一条序列，事件按标的给出范围。
 	now := p.now()
 	var err error
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: group.datasetID, Frequency: group.frequency, SubjectIds: subjects,
-		Start: timestamppb.New(group.start), End: timestamppb.New(group.end), Origin: group.origin, JobId: group.jobID,
-		ConfirmedAt: timestamppb.New(now), SeriesTags: seriesTags,
+		Start: group.start.Unix(), End: group.end.Unix(), Origin: group.origin, JobId: group.jobID,
+		ConfirmedAt: now.UnixMilli(),
 	}
 	if payload.Absent, err = p.absent(ctx, group); err != nil {
 		return err
@@ -211,7 +201,7 @@ func (p *NoticePublisher) absent(ctx context.Context, group *noticeGroup) ([]*st
 		if to.After(group.end) {
 			to = group.end
 		}
-		out = append(out, &storagepb.CollectorKlineAbsent{SubjectId: absence.SubjectID, SeriesTag: absence.SeriesTag, Start: timestamppb.New(from), End: timestamppb.New(to)})
+		out = append(out, &storagepb.CollectorKlineAbsent{SubjectId: absence.SubjectID, Start: from.Unix(), End: to.Unix()})
 	}
 	return out, nil
 }

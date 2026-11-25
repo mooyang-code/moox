@@ -17,7 +17,7 @@ func TestBleveStructuredAndFullTextQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer index.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*pb.ViewColumn{
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*viewindex.Column{
 		{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		{ColumnName: "score", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}}
@@ -100,7 +100,7 @@ func TestBleveStructuredAndFullTextQuery(t *testing.T) {
 
 func TestConcurrentColdOpenDoesNotLeaveIndexLocked(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bleve")
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*viewindex.Column{{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}}
 	first, err := Open(Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestBleveBackfillDoesNotOverwriteLiveRecordFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer index.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*pb.ViewColumn{
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*viewindex.Column{
 		{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		{ColumnName: "score", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}}
@@ -206,7 +206,7 @@ func TestBleveSubstringLikeAndMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer index.Close()
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*pb.ViewColumn{
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*viewindex.Column{
 		{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		{ColumnName: "score", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}}
@@ -242,7 +242,7 @@ func TestBleveFollowStatePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", ViewCreatedAt: "2026-11-01 00:00:00", Columns: []*pb.ViewColumn{
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", DatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", DatasetCreatedAt: 1793491200000, Columns: []*viewindex.Column{
 		{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 	}}
 	if err := index.Prepare(ctx, "idx", schema); err != nil {
@@ -276,8 +276,8 @@ func TestBleveFollowStatePersists(t *testing.T) {
 	if stats.Follow != want {
 		t.Fatalf("跟随进度=%+v，应为 %+v", stats.Follow, want)
 	}
-	if stats.ViewCreatedAt != "2026-11-01 00:00:00" {
-		t.Fatalf("重新打开后 View 创建时间=%q", stats.ViewCreatedAt)
+	if stats.DatasetCreatedAt != 1793491200000 {
+		t.Fatalf("重新打开后 View 创建时间=%d", stats.DatasetCreatedAt)
 	}
 }
 
@@ -289,7 +289,7 @@ func TestStatTreatsDirectoryWithoutMetaAsHalfPrepared(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer index.Close()
-	id := viewindex.ViewIndexID("space", "records")
+	id := viewindex.IndexID("space", "records")
 	if err := os.MkdirAll(filepath.Join(root, id), 0o755); err != nil {
 		t.Fatal(err)
 	}

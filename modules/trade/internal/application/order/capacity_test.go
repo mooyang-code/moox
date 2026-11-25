@@ -126,7 +126,7 @@ func TestCapacityLiveWatermarkDoesNotDoubleDeductReflectedReservations(t *testin
 			id, state string
 			submitted int64
 		}{{"old", "OPEN", 100}, {"new", "OPEN", 200}} {
-			record := store.OrderRecord{SpaceID: "space-1", OrderID: item.id, TradingAccountID: "account-1", ClientOrderID: item.id, Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: item.id, State: item.state, Version: 1, ReservedAsset: validation.ReservedAsset, ReservedQuantity: validation.ReservedQuantity.String(), RemainingReservedQuantity: validation.ReservedQuantity.String(), SubmittedAt: item.submitted}
+			record := store.OrderRecord{SpaceID: "space-1", OrderID: item.id, TradingAccountID: "account-1", ClientOrderID: item.id, Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: item.id, State: item.state, Version: 1, ReservedAsset: validation.ReservedAsset, ReservedQuantity: validation.ReservedQuantity.String(), RemainingReservedQuantity: validation.ReservedQuantity.String(), SubmittedAt: item.submitted}
 			if err := tx.CreateOrder(record); err != nil {
 				return err
 			}
@@ -249,7 +249,7 @@ func TestCapacityLiveKeepsDeductingOpenOrderNewerThanSnapshotVersion(t *testing.
 	validation, err := s.Validator.Validate(ctx, "space-1", spec)
 	require.NoError(t, err)
 	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{SpaceID: "space-1", OrderID: "open", TradingAccountID: "account-1", ClientOrderID: "open", Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "open", State: "OPEN", Version: 1, ReservedAsset: validation.ReservedAsset, ReservedQuantity: validation.ReservedQuantity.String(), RemainingReservedQuantity: validation.ReservedQuantity.String(), SubmittedAt: 2_000})
+		return tx.CreateOrder(store.OrderRecord{SpaceID: "space-1", OrderID: "open", TradingAccountID: "account-1", ClientOrderID: "open", Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "open", State: "OPEN", Version: 1, ReservedAsset: validation.ReservedAsset, ReservedQuantity: validation.ReservedQuantity.String(), RemainingReservedQuantity: validation.ReservedQuantity.String(), SubmittedAt: 2_000})
 	}))
 	spec.Quantity = shared.MustDecimal("2")
 	got, err := s.Capacity(ctx, "space-1", spec)

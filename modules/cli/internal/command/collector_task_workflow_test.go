@@ -2,17 +2,18 @@ package command
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/rpcclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 )
 
-func collectorTestClient(server *httptest.Server) *adminclient.Client {
-	return &adminclient.Client{Gateway: testfixture.HandlerGateway{Handler: server.Config.Handler}}
+func collectorTestClient(server *httptest.Server) *rpcclient.Client {
+	return &rpcclient.Client{Gateway: testfixture.HandlerGateway{Handler: server.Config.Handler}}
 }
 
 func newControlFixtureServer(t *testing.T, handler http.Handler) *httptest.Server {

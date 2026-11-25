@@ -15,7 +15,7 @@ vi.mock("@/api/admin/sysdeploy", async original => ({
   listAllDeployments: vi.fn()
 }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn() } }));
-vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(), reportControlError: vi.fn() }));
+vi.mock("@/api/http", () => ({ call: vi.fn(), reportError: vi.fn() }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn() } }));
 const component: CatalogComponent = {
   id: "egress-proxy",
@@ -116,8 +116,8 @@ beforeEach(() => {
   vi.mocked(getHostRoutes).mockImplementation(async host_id => ({
     host_id,
     snapshot_schema_version: 1,
-    compiled_at: "2026-10-09T12:00:00Z",
-    gateway_status: { expected_hash: "new", applied_hash: "new", last_seen_at: "2026-10-09T12:00:00Z" },
+    compiled_at: "1791547200000",
+    gateway_status: { expected_hash: "new", applied_hash: "new", last_seen_at: "1791547200000" },
     routes: [
       {
         component_id: "egress-proxy",

@@ -38,8 +38,8 @@ func memberToPB(member domain.TaskMember, includeSpec bool) *factorpb.FactorMemb
 		Factor:        factorDefToPBListed(member.Factor, includeSpec),
 		OutputColumns: def.OutputColumns(),
 		Params:        factorwire.CloneParams(member.Params),
-		CreatedAt:     factorwire.FormatTime(member.CreatedAt),
-		UpdatedAt:     factorwire.FormatTime(member.UpdatedAt),
+		CreatedAt:     factorwire.Millis(member.CreatedAt),
+		UpdatedAt:     factorwire.Millis(member.UpdatedAt),
 	}
 	return pb
 }
@@ -72,10 +72,9 @@ func recalcJobToPB(job RecalcJob) *factorpb.RecalcJob {
 		Status:        job.Status,
 		ProgressTime:  factorwire.FormatTime(job.ProgressTime),
 		Error:         job.Error,
-		EngineId:      job.EngineID,
 		DefaultFilled: defaultFilledToPB(job.DefaultFilled),
-		CreatedAt:     factorwire.FormatTime(job.CreatedAt),
-		UpdatedAt:     factorwire.FormatTime(job.UpdatedAt),
+		CreatedAt:     factorwire.Millis(job.CreatedAt),
+		UpdatedAt:     factorwire.Millis(job.UpdatedAt),
 	}
 }
 

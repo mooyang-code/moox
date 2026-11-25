@@ -7,7 +7,7 @@ import (
 
 // 新建的运行时立即带着查询路径的无锁副本：首次构建期间整段索引写入持有运行时锁，读取 active 不能等它。
 func TestNewViewRuntimePublishesReadState(t *testing.T) {
-	runtime := newViewRuntime()
+	runtime := newViewRuntime(timeSeriesSpec("s", "d", "1m"), &queryEngine{})
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	done := make(chan struct{})

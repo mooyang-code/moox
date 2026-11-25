@@ -19,7 +19,7 @@ func TestCreatePreservesControlModeAndRejectsUnknownAtomically(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, db.Close()) })
 			s := Service{Store: db}
-			result, err := s.Create(context.Background(), CreateCommand{SpaceID: "space", AccountName: "paper", LogicalAccountName: "logical", ControlMode: mode, Exchange: "BINANCE", Markets: []exchange.MarketType{"SPOT"}, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("100")})
+			result, err := s.Create(context.Background(), CreateCommand{SpaceID: "space", AccountName: "paper", LogicalAccountName: "logical", ControlMode: mode, Exchange: "binance", Markets: []exchange.MarketType{"spot"}, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("100")})
 			if mode == "unknown" {
 				require.Error(t, err)
 				var count int64
@@ -128,7 +128,7 @@ func TestCreateNormalizesMarketsAndRejectsUnsupportedSets(t *testing.T) {
 	for name, markets := range map[string][]exchange.MarketType{
 		"空集合":    nil,
 		"未知市场":   {"FUTURES"},
-		"股票混合现货": {exchange.MarketTypeStock, exchange.MarketTypeSpot},
+		"股票混合现货": {exchange.MarketTypeEquity, exchange.MarketTypeSpot},
 	} {
 		command := paperCommand("bad-"+name, "")
 		command.Markets = markets
@@ -140,7 +140,7 @@ func TestCreateNormalizesMarketsAndRejectsUnsupportedSets(t *testing.T) {
 	command.Markets = []exchange.MarketType{exchange.MarketTypeSwap, exchange.MarketTypeSpot}
 	both, err := s.Create(ctx, command)
 	require.NoError(t, err)
-	require.Equal(t, []string{"SPOT", "SWAP"}, both.Account.Markets)
+	require.Equal(t, []string{"spot", "swap"}, both.Account.Markets)
 	require.Equal(t, "CROSS", both.Account.MarginMode)
 	require.Equal(t, "UNIFIED", both.Account.Snapshot.Balances[0].Wallet)
 
@@ -148,7 +148,7 @@ func TestCreateNormalizesMarketsAndRejectsUnsupportedSets(t *testing.T) {
 	command.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
 	result, err := s.Create(ctx, command)
 	require.NoError(t, err)
-	require.Equal(t, []string{"SWAP"}, result.Account.Markets)
+	require.Equal(t, []string{"swap"}, result.Account.Markets)
 	require.Equal(t, "CROSS", result.Account.MarginMode)
 	require.Equal(t, "1", result.Account.LeverageSettings[store.DefaultLeverageKey])
 	require.Equal(t, "UNIFIED", result.Account.Snapshot.Balances[0].Wallet)
@@ -199,7 +199,7 @@ func TestCreateIntoRejectsRunningMismatchedAndUnknownLogicalAccountsWithoutCreat
 	require.NoError(t, err)
 	logicalID := first.LogicalAccount.LogicalAccountID
 	require.NoError(t, db.DBForTest().Table("t_logical_accounts").
-		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "ACTIVE", "c_pause_reason": ""}).Error)
+		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "ACTIVE", "c_pause_reason": "", "c_pause_source": ""}).Error)
 
 	countAccounts := func() int64 {
 		var count int64
@@ -214,7 +214,7 @@ func TestCreateIntoRejectsRunningMismatchedAndUnknownLogicalAccountsWithoutCreat
 	require.ErrorContains(t, err, "先暂停")
 
 	require.NoError(t, db.DBForTest().Table("t_logical_accounts").
-		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "PAUSED", "c_pause_reason": "测试"}).Error)
+		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "PAUSED", "c_pause_reason": "测试", "c_pause_source": "USER"}).Error)
 	mismatched := paperCommand("paper-c", "")
 	mismatched.LogicalAccountID = logicalID
 	mismatched.SettlementAsset = "USDC"

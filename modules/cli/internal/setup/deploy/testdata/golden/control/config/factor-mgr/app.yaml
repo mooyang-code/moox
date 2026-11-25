@@ -10,4 +10,3 @@ gateway_client:
   ca_file: /data/moox/secrets/moox-ca.crt
 engine:
   lease_ttl: 45s
-  job_lease_ttl: 15m

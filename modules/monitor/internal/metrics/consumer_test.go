@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -69,7 +68,7 @@ func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {
 	}
 	r := metricMessageStoreForTest(t, mgr)
 	newMessage := func(id string) (*eventpb.EventMessage, *metricspb.MetricReport) {
-		return &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.Now()}, &metricspb.MetricReport{ServiceName: "svc", InstanceId: "i", BootId: "b"}
+		return &eventpb.EventMessage{EventId: id, OccurredAt: time.Now().UnixMilli()}, &metricspb.MetricReport{ServiceName: "svc", InstanceId: "i", BootId: "b"}
 	}
 	newSample := func(at time.Time, id string) Sample {
 		return Sample{SeriesID: "series", ServiceName: "svc", InstanceID: "i", MetricName: "g", MetricType: "gauge", Value: 1, ObservedAt: at, MessageID: id}
@@ -107,7 +106,7 @@ func TestCommitIngestDoesNotMoveDatasetWatermarkBackwardsAfterRestart(t *testing
 	requireNoError(t, mgr.ApplySchema(schema.SQL()))
 	r := metricMessageStoreForTest(t, mgr)
 	newMessage := func(id string) (*eventpb.EventMessage, *metricspb.MetricReport) {
-		return &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.Now()}, &metricspb.MetricReport{ServiceName: "factor", InstanceId: "factor@node-a", BootId: "boot-a"}
+		return &eventpb.EventMessage{EventId: id, OccurredAt: time.Now().UnixMilli()}, &metricspb.MetricReport{ServiceName: "factor", InstanceId: "factor@node-a", BootId: "boot-a"}
 	}
 	name := "moox_factor_dataset_output_watermark_timestamp_seconds"
 	msg, report := newMessage("new")
@@ -154,13 +153,13 @@ func TestTouchServiceRecordsProducerBeforeCommitAndNeverMovesBackwards(t *testin
 
 	// 报告到达但历史尚未写入（例如 Storage 不可用）时，上报方已记为在线。
 	recent := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Millisecond)
-	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m1", OccurredAt: timestamppb.New(recent)}, report))
+	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m1", OccurredAt: recent.UnixMilli()}, report))
 	if got := lastSeen(); !got.Equal(recent) {
 		t.Fatalf("last_seen_at=%s, want the report time %s", got, recent)
 	}
 
 	// 重投递的旧报告不能把 last_seen 往回拨。
-	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m0", OccurredAt: timestamppb.New(recent.Add(-time.Hour))}, report))
+	requireNoError(t, r.TouchService(context.Background(), &eventpb.EventMessage{EventId: "m0", OccurredAt: recent.Add(-time.Hour).UnixMilli()}, report))
 	if got := lastSeen(); !got.Equal(recent) {
 		t.Fatalf("an older report moved last_seen_at back to %s", got)
 	}

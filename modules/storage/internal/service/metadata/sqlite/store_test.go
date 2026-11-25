@@ -14,8 +14,8 @@ func TestMetadataSchemaVersionIsExact(t *testing.T) {
 			t.Fatalf("test case %q unexpectedly equals current schema version", version)
 		}
 	}
-	if metadataSchemaVersion != "19" {
-		t.Fatalf("metadata schema version = %q, want 19", metadataSchemaVersion)
+	if metadataSchemaVersion != "21" {
+		t.Fatalf("metadata schema version = %q, want 21", metadataSchemaVersion)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "19" {
-		t.Fatalf("fresh database schema version = %q, want 19", version)
+	if version != "21" {
+		t.Fatalf("fresh database schema version = %q, want 21", version)
 	}
 }
 
@@ -72,7 +72,7 @@ func TestInitSchemaRejectsV13WithRebuildInstructions(t *testing.T) {
 	if err == nil {
 		t.Fatal("InitSchema accepted metadata schema v13")
 	}
-	for _, want := range []string{"schema v13", "remove", "init/import-seed"} {
+	for _, want := range []string{"schema v13", "remove", "init and metadata apply"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("InitSchema error %q missing %q", err, want)
 		}

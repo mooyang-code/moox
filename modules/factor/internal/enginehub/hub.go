@@ -1,6 +1,6 @@
 // Package enginehub is moox-factor-mgr's side of the compute engine contract:
 // it records which engine process is current, keeps the latest heartbeat, assembles the
-// hashed catalog snapshot and leases recalc jobs to the engine.
+// hashed catalog snapshot and hands recalc jobs to the engine.
 package enginehub
 
 import (
@@ -18,46 +18,27 @@ import (
 // ErrLeaseConflict 表示调用方不是当前登记的引擎进程：另一个 engine_id 的引擎还在心跳，或者调用方已被重启后的新进程顶替。
 var ErrLeaseConflict = errors.New("因子引擎已由另一个引擎进程登记")
 
-// Store is the catalog and job storage the hub reads and leases from.
+// Store is the catalog and job storage the hub reads from.
 type Store interface {
 	ListTasks(ctx context.Context) ([]domain.FactorTask, error)
 	GetTask(ctx context.Context, taskID string) (domain.FactorTask, error)
 	ListMembers(ctx context.Context, taskID, status string) ([]domain.TaskMember, error)
-	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipTasks map[string]bool, maxRunning int) (store.RecalcJob, bool, error)
-	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, defaultFilled map[string][]store.TimeRange, now time.Time, ttl time.Duration) (store.RecalcJob, error)
+	PullRecalcJob(ctx context.Context, now time.Time, skipTasks map[string]bool) (store.RecalcJob, bool, error)
+	ReportRecalcProgress(ctx context.Context, jobID string, progress int64, status, errText string, defaultFilled map[string][]store.TimeRange, now time.Time) (store.RecalcJob, error)
 	GetRecalcJob(ctx context.Context, jobID string) (store.RecalcJob, error)
-	// JobBindings、SaveJobBindings 读写补算作业首次领取时固化的自定义算子绑定。
-	JobBindings(ctx context.Context, jobID string) (map[string]string, bool, error)
-	SaveJobBindings(ctx context.Context, jobID string, bindings map[string]string) (map[string]string, error)
 }
 
-const (
-	DefaultEngineLeaseTTL = 45 * time.Second
-	DefaultJobLeaseTTL    = 15 * time.Minute
-	// DefaultMaxRunningJobs 同时只跑一个补算作业：补算整窗口读取源数据，存储机通常只有几个核，
-	// 并发的回填会让在线计算也读不动（2026-10-14 两个 1h 因子任务同时回填把存储进程打到 330% CPU）。
-	DefaultMaxRunningJobs = 1
-)
+const DefaultEngineLeaseTTL = 45 * time.Second
 
 type Option func(*Hub)
 
 // WithEngineLeaseTTL 设置心跳的新鲜期：超过这个时长没有心跳，引擎显示为离线，别的 engine_id 也可以登记。
 func WithEngineLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.engineTTL = ttl } }
 
-// WithJobLeaseTTL sets how long a pulled recalc job stays leased without a
-// progress report; it must exceed the duration of one recalc chunk.
-func WithJobLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.jobTTL = ttl } }
-
-// WithMaxRunningJobs 设置同时运行的补算作业上限（所有引擎合计），0 表示不限制。
-func WithMaxRunningJobs(n int) Option { return func(h *Hub) { h.maxRunningJobs = n } }
-
 type Hub struct {
 	store     Store
 	engineTTL time.Duration
-	jobTTL    time.Duration
 	now       func() time.Time
-	// maxRunningJobs 是同时运行的补算作业上限。补算按整窗口读取源数据，同时跑的任务多了会把 Storage 打满。
-	maxRunningJobs int
 
 	mu    sync.Mutex
 	ready map[string]bool
@@ -85,7 +66,7 @@ type engineState struct {
 }
 
 func New(db Store, options ...Option) *Hub {
-	h := &Hub{store: db, engineTTL: DefaultEngineLeaseTTL, jobTTL: DefaultJobLeaseTTL, maxRunningJobs: DefaultMaxRunningJobs, now: time.Now, ready: make(map[string]bool)}
+	h := &Hub{store: db, engineTTL: DefaultEngineLeaseTTL, now: time.Now, ready: make(map[string]bool)}
 	for _, option := range options {
 		if option != nil {
 			option(h)
@@ -205,7 +186,7 @@ func (h *Hub) withOfflineLag(state *engineState, now time.Time) []domain.TaskRun
 }
 
 // holdsLease 要求 engine_id 与 boot_id 都和当前登记的进程一致且心跳新鲜：同一 engine_id 的新进程顶替后，
-// 旧进程残留的请求（Pull/Report 等）不能再续租或完成作业。
+// 旧进程残留的请求（Pull/Report 等）不能再推进或完成作业。
 func (h *Hub) holdsLease(id domain.EngineIdentity, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()

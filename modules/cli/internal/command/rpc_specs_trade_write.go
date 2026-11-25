@@ -38,8 +38,8 @@ func init() {
 	registerRPCSpecs(
 		// ---- 交易账户 ----
 		rpcSpec{Path: []string{"trade", "account", "create"}, Destructive: true, Short: "新建实盘或测试网交易账户（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CreateTradingAccount",
-			Flags: []rpcFlag{reqFlag("name", "name", "账户名称"), reqFlag("exchange", "exchange", "交易所（EXCHANGE_BINANCE 或 EXCHANGE_OKX）"),
-				{Name: "markets", Field: "markets", Kind: rpcJSON, Required: true, Usage: "开通的市场，JSON 数组，如 [\"MARKET_TYPE_SPOT\",\"MARKET_TYPE_SWAP\"]"}, usdt,
+			Flags: []rpcFlag{reqFlag("name", "name", "账户名称"), reqFlag("exchange", "exchange", "交易所（binance 或 okx）"),
+				{Name: "markets", Field: "markets", Kind: rpcJSON, Required: true, Usage: "开通的市场，JSON 数组，如 [\"spot\",\"swap\"]"}, usdt,
 				reqFlag("environment", "live.environment", "环境（ACCOUNT_ENVIRONMENT_PRODUCTION 或 ACCOUNT_ENVIRONMENT_TESTNET）"),
 				reqFlag("credential-secret-id", "live.credential_secret_id", "密钥管理里的交易所密钥 ID")}},
 		rpcSpec{Path: []string{"trade", "account", "update"}, Destructive: true, Short: "修改交易账户：只改给出的字段（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "UpdateTradingAccount",
@@ -84,20 +84,20 @@ func init() {
 
 		// ---- 人工订单 ----
 		rpcSpec{Path: []string{"trade", "order", "submit"}, Destructive: true, AutoIDs: []string{"action_id", "client_order_id"}, Short: "人工下单（默认只预览，--yes 才执行；超时后先用 trade actions 或 trade order list 查是否已下，重试要用 --data 带上原 action_id 和 client_order_id）", Service: tradeConsole, Method: "SubmitOrder",
-			Flags: []rpcFlag{logicalID, accountID, reqFlag("instrument-id", "instrument_id", "标的 ID"), reqFlag("market-type", "market_type", "市场（MARKET_TYPE_SPOT、MARKET_TYPE_SWAP 或 MARKET_TYPE_STOCK）"),
+			Flags: []rpcFlag{logicalID, accountID, reqFlag("instrument-id", "instrument_id", "标的 ID"), reqFlag("market-type", "market_type", "市场（spot、swap 或 equity）"),
 				reqFlag("side", "side", "方向（ORDER_SIDE_BUY 或 ORDER_SIDE_SELL）"), reqFlag("quantity", "quantity", "数量"),
 				{Name: "order-type", Field: "order_type", Kind: rpcString, Default: "ORDER_TYPE_MARKET", Usage: "订单类型（ORDER_TYPE_MARKET 或 ORDER_TYPE_LIMIT）"},
 				strFlag("limit-price", "limit_price", "限价单价格（限价单必填）"),
 				strFlag("fill-policy", "fill_policy", "成交方式（限价单必填：FILL_POLICY_GTC、FILL_POLICY_IOC 或 FILL_POLICY_FOK；市价单不能给）"), strFlag("position-side", "position_side", "持仓方向（只有 POSITION_SIDE_NET）"),
-				intFlag("deadline-at", "deadline_at", "截止时间（毫秒时间戳）"), reason}},
+				instantFlag("deadline-at", "deadline_at", "截止时间（RFC3339）", false), reason}},
 		rpcSpec{Path: []string{"trade", "order", "cancel"}, Destructive: true, AutoIDs: []string{"action_id"}, Short: "撤单（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CancelOrder",
 			Flags: []rpcFlag{reqFlag("order-id", "order_id", "订单 ID"), reason}},
 
 		// ---- 模拟账户 ----
 		rpcSpec{Path: []string{"trade", "paper", "create"}, Destructive: true, Short: "新建模拟账户，并新建或加入一个组合（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CreatePaperSimulation",
 			Flags: []rpcFlag{reqFlag("account-name", "account_name", "模拟账户名称"), strFlag("logical-account-name", "logical_account_name", "新建组合的名称（与 --logical-account-id 二选一）"),
-				strFlag("logical-account-id", "logical_account_id", "加入已有组合"), reqFlag("exchange", "exchange", "模拟的交易所（EXCHANGE_BINANCE 或 EXCHANGE_OKX）"),
-				{Name: "markets", Field: "markets", Kind: rpcJSON, Required: true, Usage: "开通的市场，JSON 数组，如 [\"MARKET_TYPE_SWAP\"]"}, usdt,
+				strFlag("logical-account-id", "logical_account_id", "加入已有组合"), reqFlag("exchange", "exchange", "模拟的交易所（binance、okx、ashare 或 hkex）"),
+				{Name: "markets", Field: "markets", Kind: rpcJSON, Required: true, Usage: "开通的市场，JSON 数组，如 [\"swap\"]"}, usdt,
 				strFlag("margin-mode", "margin_mode", "保证金模式（开永续时写 CROSS）"), reqFlag("initial-balance", "initial_balance", "初始资金"),
 				{Name: "maker-fee-rate", Field: "maker_fee_rate", Kind: rpcString, Default: "0.0002", Usage: "挂单费率"},
 				{Name: "taker-fee-rate", Field: "taker_fee_rate", Kind: rpcString, Default: "0.0005", Usage: "吃单费率"},

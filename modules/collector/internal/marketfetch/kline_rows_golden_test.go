@@ -201,12 +201,6 @@ func TestKlineRowsMatchGolden(t *testing.T) {
 		routeRank  int
 		instrument string
 	}{
-		{"stockcn index 普通行", KlineCommitter{SpaceID: "stockcn", MarketID: "stockcn", InstrumentType: marketdata.InstrumentIndex},
-			Request{SpaceID: "stockcn", DatasetID: "dataset_index", Frequency: "5m", MarketType: "index", SourceID: "index_http"},
-			bar("000300.XSHG", "eastmoney", "index_http", "sh000300"), "stockcn_index_kline", 1, ""},
-		{"stockcn convertible_bond 普通行", KlineCommitter{SpaceID: "stockcn", MarketID: "stockcn", InstrumentType: marketdata.InstrumentConvertibleBond},
-			Request{SpaceID: "stockcn", DatasetID: "dataset_bond", Frequency: "5m", MarketType: "convertible_bond", SourceID: "convertible_bond_http"},
-			bar("113050.XSHG", "sina", "convertible_bond_http", "sh113050"), "stockcn_convertible_bond_kline", 1, ""},
 		{"stockcn equity 未带品种的提交器", KlineCommitter{MarketID: "stockcn"},
 			Request{SpaceID: "stockcn", DatasetID: "dataset_equity", Frequency: "5m", MarketType: "equity"},
 			bar("600000.XSHG", "tdx", "normal_7709", "sh600000"), "stockcn_equity_kline_5m", 2, "浦发银行"},

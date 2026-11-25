@@ -27,7 +27,6 @@ const required = [
   'getCurrentMetrics',
   'listAllDeploymentHosts',
   'buildHostMonitorRows',
-  'countUnregisteredAgents',
   'sshAvailability',
   '15_000',
   "'cards'",

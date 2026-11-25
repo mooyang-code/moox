@@ -23,10 +23,10 @@ func historySeedsToPB(views []klinecheck.SeedView) []*pb.HistorySeed {
 			SpaceId: view.SpaceID, DatasetId: view.DatasetID, Frequency: view.Frequency, Status: status,
 			TargetFrom: view.TargetFrom.Format(time.RFC3339), EffectiveFrom: view.EffectiveFrom.Format(time.RFC3339),
 			TotalChunks: int32(view.TotalChunks), DoneChunks: int32(view.DoneChunks), FailedChunks: int32(view.FailedChunks),
-			EtaSeconds: int64(view.ETA / time.Second), StartedAt: view.StartedAt.Format(time.RFC3339), Note: view.Note,
+			EtaSeconds: int64(view.ETA / time.Second), StartedAt: view.StartedAt.UnixMilli(), Note: view.Note,
 		}
 		if view.FinishedAt != nil {
-			item.FinishedAt = view.FinishedAt.UTC().Format(time.RFC3339)
+			item.FinishedAt = view.FinishedAt.UnixMilli()
 		}
 		out = append(out, item)
 	}
@@ -36,7 +36,7 @@ func historySeedsToPB(views []klinecheck.SeedView) []*pb.HistorySeed {
 // ListHistorySeeds 返回历史补齐记录；space_id 为空返回全部空间，only_running 只返回补齐中的。
 func (s *Service) ListHistorySeeds(ctx context.Context, req *pb.ListHistorySeedsReq) (*pb.ListHistorySeedsRsp, error) {
 	if s.klineOps == nil {
-		return &pb.ListHistorySeedsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "kline backfill is not configured")}, nil
+		return &pb.ListHistorySeedsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "补采未配置")}, nil
 	}
 	views, err := s.klineOps.SeedViews(ctx, strings.TrimSpace(req.GetSpaceId()), req.GetOnlyRunning())
 	if err != nil {
@@ -49,11 +49,11 @@ func (s *Service) ListHistorySeeds(ctx context.Context, req *pb.ListHistorySeeds
 // SkipHistorySeed 手动放行补齐中的数据集：取消剩余分块，已补进去的数据保留。
 func (s *Service) SkipHistorySeed(ctx context.Context, req *pb.SkipHistorySeedReq) (*pb.SkipHistorySeedRsp, error) {
 	if s.klineOps == nil {
-		return &pb.SkipHistorySeedRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "kline backfill is not configured")}, nil
+		return &pb.SkipHistorySeedRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "补采未配置")}, nil
 	}
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	if spaceID == "" {
-		return &pb.SkipHistorySeedRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
+		return &pb.SkipHistorySeedRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id 不能为空")}, nil
 	}
 	skipped, err := s.klineOps.SkipSeeds(ctx, spaceID, strings.TrimSpace(req.GetDatasetId()))
 	if err != nil {

@@ -21,33 +21,16 @@ describe("collector result workflow", () => {
     {
       task_id: "older",
       task_name: "旧任务",
-      create_time: "2026-09-19T00:00:00Z",
-      result: { view_id: "view-older", status: "active" }
+      created_at: "1789776000000",
+      result: { dataset_id: "dataset-older", status: "active" }
     },
     {
       task_id: "newer",
       task_name: "新任务",
-      create_time: "2026-09-20T00:00:00Z",
-      result: { view_id: "view-newer", status: "active", last_data_time: "2026-09-20T12:00:00Z" }
+      created_at: "1789862400000",
+      result: { dataset_id: "dataset-newer", status: "active", last_data_time: "2026-09-20T12:00:00Z" }
     }
   ];
-
-  it("renders every task result through the shared real-data browser", () => {
-    const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    const browse = fs.readFileSync(path.resolve(__dirname, "../../data/view-browse/index.vue"), "utf8");
-    expect(results).toContain("<ViewBrowse");
-    expect(results).toContain(":active-view-id=");
-    expect(results).toContain(":view-ids=");
-    expect(results).not.toContain("hide-technical-identity");
-    // 采集结果每 60 秒后台刷新（ViewBrowse 内部用 usePolling，读取失败不弹提示）
-    expect(results).toContain(':auto-refresh-interval-ms="60000"');
-    expect(results).not.toContain("result-context");
-    expect(browse).toContain('<section class="view-status-line">');
-    expect(browse).toContain("<KlineModal");
-    expect(browse).toContain('@click="openKlineModal"');
-    expect(browse).toContain('() => targetedViewIds.value.join("\\u0000")');
-    expect(browse).toContain("void loadMeta();");
-  });
 
   it("sorts dynamic result tabs by creation time and keeps task identity as key", () => {
     const tabs = buildTaskResultTabs(tasks);
@@ -60,8 +43,20 @@ describe("collector result workflow", () => {
     expect(tabs.map(tab => tab.title)).toEqual(["新任务", "旧任务"]);
   });
 
+  it('创建时刻是毫秒数字字符串，没有创建时刻（"0" 或缺省）的排最后', () => {
+    const mixed: CollectorTask[] = [
+      { task_id: "older", created_at: "1789776000000" },
+      { task_id: "newer", created_at: "1789862400000" },
+      { task_id: "zero", created_at: "0" },
+      { task_id: "none" }
+    ];
+    expect(buildTaskResultTabs(mixed).map(tab => tab.taskId)).toEqual(["newer", "older", "none", "zero"]);
+  });
+
   it("keeps unknown list state stale until the selected task is inspected", () => {
-    expect(getTaskResultState({ task_id: "unknown", result: { view_id: "view-unknown", status: "unknown" } })).toBe("stale");
+    expect(getTaskResultState({ task_id: "unknown", result: { dataset_id: "dataset-unknown", status: "unknown" } })).toBe(
+      "stale"
+    );
     const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(results).toContain("TASK_PAGE_SIZE = 100");
     expect(results).toContain("GetTaskDetail({ space_id: spaceId, task_id: taskId })");
@@ -92,10 +87,10 @@ describe("collector result workflow", () => {
       task_id: "res-1",
       task_name: "45m 合成",
       data_type: "kline_resample",
-      create_time: "2026-10-22T00:00:00Z",
+      created_at: "1792627200000",
       collect_params: { source_task_id: "src-1", target_frequency: "45m" },
       prepare_state: "ready",
-      result: { view_id: "view-res", status: "active" }
+      result: { dataset_id: "dataset-res", status: "active" }
     };
     const [tab] = buildTaskResultTabs([resample]);
     expect(tab.title).toBe("45m 合成 · 合成");
@@ -125,14 +120,14 @@ describe("按结果数据集选任务", () => {
         data_type: "kline",
         collect_params: { frequency: "1m" },
         result: { dataset_id: "ds" },
-        create_time: "2026-10-01T00:00:00Z"
+        created_at: "1790812800000"
       },
       {
         task_id: "b",
         data_type: "kline_resample",
         collect_params: { target_frequency: "5m" },
         result: { dataset_id: "ds" },
-        create_time: "2026-10-02T00:00:00Z"
+        created_at: "1790899200000"
       }
     ];
     expect(taskIdForDataset(list, "ds", "1m")).toBe("a");

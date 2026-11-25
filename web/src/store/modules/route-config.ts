@@ -1,22 +1,15 @@
 import { defineStore } from "pinia";
-import router from "@/router/index";
-import { getRoutersAPI } from "@/api/modules/system/index";
-import { moduleReplacement, linearArray } from "@/router/route-output";
 
 /**
- * 路由列表
+ * 标签页与当前路由（菜单直接读路由表，见 router/route.ts）
  * @methods setTabs 添加tabs标签页
  * @methods setCurrentRoute 设置系统内的当前路由
  * @methods removeTabsList 删除tabs页的指定路由
- * @methods resetRoute 重置动态添加的路由
- * @methods initSetRouter 路由初始化
+ * @methods clearTabs 退出登录时清空标签页
  */
 export const routesConfigStore = () => {
-  const routeTree = ref<any>([]); // 有访问权限的路由树
-  const routeList = ref<any>([]); // 有访问权限的一维路由数组
   const tabsList = ref<any>([]); // 标签页数据
   const currentRoute = ref<any>({}); // 当前路由
-  const addedRouteNames = ref<string[]>([]); // 本次动态注册的路由名
 
   /**
    * 添加tabs标签页
@@ -44,61 +37,21 @@ export const routesConfigStore = () => {
    */
   function removeTabsList(key: string) {
     const index = tabsList.value.findIndex((item: Menu.MenuOptions) => item.name === key);
-    if (tabsList.value[index].meta.affix) return;
-    if (index === -1) return;
+    if (index === -1 || tabsList.value[index].meta.affix) return;
     tabsList.value.splice(index, 1);
   }
-  /**
-   * 重置动态添加的路由
-   */
-  async function resetRoute() {
-    // 清除标签页数据
+  /** 退出登录时清空标签页 */
+  function clearTabs() {
     tabsList.value = [];
-    // 清除动态添加的路由
-    addedRouteNames.value.forEach((name: string) => {
-      if (router.hasRoute(name)) router.removeRoute(name);
-    });
-    addedRouteNames.value = [];
-  }
-  /**
-   * 路由初始化
-   * 1、获取过滤角色权限后排过序的的路由树，后端处理
-   * 2、将模块设置为真实模块
-   * 3、存储路由树，用于生成菜单
-   * 4、根据树生成一维路由数组
-   * 5、动态添加路由
-   * 6、缓存一维路由
-   */
-  async function initSetRouter() {
-    // 1、获取过滤角色权限后的树，后端做排序处理
-    let { data } = await getRoutersAPI();
-    // 2、将模块设置为真实模块
-    let tree = await moduleReplacement(data);
-    // 3、存储路由树，用于生成菜单
-    routeTree.value = tree;
-    // 4、根据树生成一维路由数组
-    tree = linearArray(tree);
-    // 5、动态添加路由
-    addedRouteNames.value = [];
-    tree.forEach((route: any) => {
-      if (router.hasRoute(route.name)) return;
-      router.addRoute("layout", route);
-      addedRouteNames.value.push(route.name);
-    });
-    // 6、缓存一维路由
-    routeList.value = tree;
   }
 
   return {
-    routeTree,
-    routeList,
     tabsList,
     currentRoute,
     setTabs,
     setCurrentRoute,
     removeTabsList,
-    resetRoute,
-    initSetRouter
+    clearTabs
   };
 };
 

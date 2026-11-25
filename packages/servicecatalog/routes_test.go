@@ -25,7 +25,7 @@ func productionTopology() Topology {
 	for host, ids := range map[string][]string{
 		"control":  {"admin", "eventbus", "monitor", "collector", "factor-mgr", "strategy"},
 		"storage":  {"storage-primary", "storage-view"},
-		"overseas": {"egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
+		"overseas": {"egress-proxy", "trade", "collector-stream"},
 	} {
 		for _, id := range ids {
 			t.Deployments = append(t.Deployments, Deployment{HostID: host, ComponentID: id, Status: Enabled})
@@ -146,9 +146,9 @@ func TestCompileThreeHostRoutesAndCallerScopes(t *testing.T) {
 		routes  int
 		callers []string
 	}{
-		"control":  {181, []string{"archive-mgr", "collector", "collector-operator", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
-		"storage":  {66, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
-		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}},
+		"control":  {172, []string{"collector", "collector-stream", "console", "factor-engine", "factor-mgr", "host-agent", "host-gateway", "monitor", "moox-cli", "strategy", "trade"}},
+		"storage":  {50, []string{"archive-mgr", "archive-worker", "collector", "collector-stream", "console", "factor-engine", "factor-mgr", "monitor", "moox-cli", "moox-skill", "scf-collector", "strategy"}},
+		"overseas": {51, []string{"collector", "console", "moox-cli", "strategy"}},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -395,14 +395,14 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	// ArchiveMgr 19 个（含生命周期两个）、ArchiveWorker 4 个。
-	if len(routes) != 19+4 {
-		t.Fatalf("archive-mgr routes = %d, want 23", len(routes))
+	// ArchiveMgr 17 个（含生命周期两个）、ArchiveWorker 4 个。
+	if len(routes) != 17+4 {
+		t.Fatalf("archive-mgr routes = %d, want 21", len(routes))
 	}
 	if route := routes["trpc.moox.archive.ArchiveMgr/GetLifecycle"]; !slices.Equal(route.Callers, []string{"console", "moox-cli"}) || !route.ReadOnly {
 		t.Fatalf("GetLifecycle 给管理台与 moox-cli 读: %+v", route)
 	}
-	for _, method := range []string{"PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable", "ControlLifecycle"} {
+	for _, method := range []string{"StartArchiveImport", "ClearArchiveUnrecoverable", "ControlLifecycle"} {
 		if route := routes["trpc.moox.archive.ArchiveMgr/"+method]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
 			t.Fatalf("%s 只给 moox-cli: %+v", method, route)
 		}
@@ -447,10 +447,10 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 		t.Fatalf("relays = %+v", control.Relays)
 	}
 	relay := control.Relays[0]
-	if relay.Ports[0].Port != HostGatewayRemotePort || !slices.Equal(relay.Ports[0].Callers, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}) {
+	if relay.Ports[0].Port != HostGatewayRemotePort || !slices.Equal(relay.Ports[0].Callers, []string{"collector", "console", "moox-cli", "strategy"}) {
 		t.Fatalf("gateway port = %+v", relay.Ports[0])
 	}
-	if !relay.Allowed("monitor", HostGatewayRemotePort) || relay.Allowed("admin", HostGatewayRemotePort) || relay.Allowed("monitor", 1) {
+	if !relay.Allowed("strategy", HostGatewayRemotePort) || relay.Allowed("monitor", HostGatewayRemotePort) || relay.Allowed("strategy", 1) {
 		t.Fatal("relay allowlist is wrong")
 	}
 	if len(relay.Ports) != 1 {
@@ -512,11 +512,11 @@ func TestOutboundFactorHostDoesNotRelayHealthPorts(t *testing.T) {
 	if relay.Allowed("moox-cli", 22) || relay.Allowed("monitor", 22) {
 		t.Fatal("ssh port must not be relayed")
 	}
-	// 归档 worker 的数据端口只对控制台开放。
-	if !relay.Allowed("console", 11428) || relay.Allowed("monitor", 11428) || relay.Allowed("moox-cli", 11428) || relay.Allowed("console", 11418) {
+	// 归档 worker 的数据端口只对控制台（下载与预览）与 moox-cli（导入写入）开放。
+	if !relay.Allowed("console", 11428) || !relay.Allowed("moox-cli", 11428) || relay.Allowed("monitor", 11428) || relay.Allowed("console", 11418) {
 		t.Fatalf("archive data port relay is wrong: %+v", relay.Ports)
 	}
-	if callers, ok := c.RelayHTTPCallers(11428); !ok || !slices.Equal(callers, []string{"console"}) || !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(HostGatewayRemotePort) {
+	if callers, ok := c.RelayHTTPCallers(11428); !ok || !slices.Equal(callers, []string{"console", "moox-cli"}) || !c.LocalRelayPort(11428) || c.LocalRelayPort(11418) || c.LocalRelayPort(HostGatewayRemotePort) {
 		t.Fatalf("relay_http port declaration is wrong: %v", callers)
 	}
 	for i := 1; i < len(relay.Ports); i++ {

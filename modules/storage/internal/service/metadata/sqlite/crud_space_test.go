@@ -17,8 +17,8 @@ func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || created.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
-		t.Fatalf("CreateSpace timestamps = %q/%q", created.GetCreatedAt(), created.GetUpdatedAt())
+	if created.GetCreatedAt() != wantTime.UnixMilli() || created.GetUpdatedAt() != wantTime.UnixMilli() {
+		t.Fatalf("CreateSpace timestamps = %d/%d", created.GetCreatedAt(), created.GetUpdatedAt())
 	}
 	if _, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Replacement", Owner: "owner-b"}); err == nil {
 		t.Fatal("duplicate CreateSpace unexpectedly succeeded")
@@ -30,8 +30,36 @@ func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
 	if space.GetName() != "Original" || space.GetOwner() != "owner-a" {
 		t.Fatalf("existing Space was overwritten: %+v", space)
 	}
-	if space.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || space.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
-		t.Fatalf("persisted timestamps = %q/%q", space.GetCreatedAt(), space.GetUpdatedAt())
+	if space.GetCreatedAt() != wantTime.UnixMilli() || space.GetUpdatedAt() != wantTime.UnixMilli() {
+		t.Fatalf("persisted timestamps = %d/%d", space.GetCreatedAt(), space.GetUpdatedAt())
+	}
+}
+
+// Collector 只采启用中的空间，靠 ListSpaces 的状态过滤；市场与时区随空间存取。
+func TestListSpacesFiltersByStatusAndKeepsMarketTimezone(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	for _, item := range []*pb.Space{
+		{SpaceId: "crypto", Name: "加密货币", Market: "crypto", Timezone: "UTC", Status: "active"},
+		{SpaceId: "stockcn", Name: "A股", Market: "cn_a_share", Timezone: "Asia/Shanghai", Status: "disabled"},
+	} {
+		if _, err := store.CreateSpace(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active, page, err := store.ListSpaces(ctx, "", "active", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].GetSpaceId() != "crypto" || page.GetTotal() != 1 {
+		t.Fatalf("active spaces = %+v total=%d", active, page.GetTotal())
+	}
+	all, _, err := store.ListSpaces(ctx, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[1].GetMarket() != "cn_a_share" || all[1].GetTimezone() != "Asia/Shanghai" {
+		t.Fatalf("all spaces = %+v", all)
 	}
 }
 
@@ -44,15 +72,10 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		INSERT INTO t_subjects(c_space_id,c_subject_id,c_name) VALUES ('target','subject','Subject');
 		INSERT INTO t_tags(c_space_id,c_tag_id,c_tag_name,c_mode) VALUES ('target','tag','Tag','manual');
 		INSERT INTO t_subject_tags(c_space_id,c_tag_id,c_subject_id) VALUES ('target','tag','subject');
-		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name) VALUES ('target','root','Root');
-		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name,c_parent_group_id) VALUES ('target','child','Child','root');
-		INSERT INTO t_fields(c_space_id,c_field_id,c_group_id,c_name,c_value_type) VALUES ('target','value','child','Value','double');
 		INSERT INTO t_datasets(c_space_id,c_dataset_id,c_data_source_id,c_name,c_data_kind,c_freq)
 			VALUES ('target','dataset','source','Dataset','time_series','1m');
 		UPDATE t_datasets SET c_subject_tags_json = '["tag"]' WHERE c_space_id = 'target' AND c_dataset_id = 'dataset';
-		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name,c_origin_type,c_origin_id)
-			VALUES ('target','dataset','value','field','value');
-		INSERT INTO t_views(c_space_id,c_view_id,c_name,c_dataset_id) VALUES ('target','view','View','dataset');
+		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name) VALUES ('target','dataset','value');
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +85,7 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	}
 	for _, table := range []string{
 		"t_spaces", "t_data_sources", "t_subjects", "t_tags", "t_subject_tags",
-		"t_field_groups", "t_fields", "t_datasets",
-		"t_dataset_columns", "t_views",
+		"t_datasets", "t_dataset_columns",
 	} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE c_space_id = 'target'").Scan(&count); err != nil {

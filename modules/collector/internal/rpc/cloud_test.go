@@ -116,7 +116,7 @@ func TestCloudAccountCreateUpdateList(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo().GetMsg())
 	require.Equal(t, "tencent", created.GetAccount().GetProvider())
-	require.NotEmpty(t, created.GetAccount().GetCreateTime())
+	require.Positive(t, created.GetAccount().GetCreatedAt())
 	again, err := service.CreateCloudAccount(ctx, &pb.CreateCloudAccountReq{Account: account})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_CONFLICT, again.GetRetInfo().GetCode())
@@ -200,7 +200,7 @@ func TestApplyCloudReadbackFillsTheStatusColumns(t *testing.T) {
 	require.True(t, ok.GetCloudExists())
 	require.True(t, ok.GetCloudTimerMatches())
 	require.True(t, ok.GetCloudPackageLatest())
-	require.Equal(t, "2026-11-14T08:00:00Z", ok.GetCloudReadAt())
+	require.Equal(t, readAt.UnixMilli(), ok.GetCloudReadAt())
 
 	drift := &pb.CollectorFunctionStatus{Name: "f", Executor: "scf", Cron: "5 * * * * * *"}
 	applyCloudReadback(drift, fetchplan.FunctionReadback{FunctionState: cloud.FunctionState{Exists: true, PackageID: "pkg-1", Timer: timer, ReadAt: readAt}}, latest)
@@ -219,7 +219,7 @@ func TestApplyCloudReadbackFillsTheStatusColumns(t *testing.T) {
 	failed := &pb.CollectorFunctionStatus{Name: "f", Executor: "scf", Cron: "0 * * * * * *"}
 	applyCloudReadback(failed, fetchplan.FunctionReadback{FunctionState: cloud.FunctionState{ReadAt: readAt}, Error: "限频"}, latest)
 	require.False(t, failed.GetCloudExists())
-	require.Equal(t, "2026-11-14T08:00:00Z", failed.GetCloudReadAt())
+	require.Equal(t, readAt.UnixMilli(), failed.GetCloudReadAt())
 }
 
 // 定时器一致的口径与对账器相同：可用状态、Qualifier、Message 任何一项不对都算不一致。
@@ -245,12 +245,12 @@ func TestCloudTimerMatchesChecksAvailabilityQualifierAndMessage(t *testing.T) {
 func TestCollectorStatusLeavesCloudColumnsEmptyWithoutReadbacks(t *testing.T) {
 	service, db := newCloudFixture(t, notInUse)
 	applyPlan(t, db, "crypto", `{"datasets":{},"functions":{"moox-fetch-plan-crypto-spot-nanjing-000":{"name":"moox-fetch-plan-crypto-spot-nanjing-000","region":"ap-nanjing","market":"spot",`+
-		`"new":{"v":1,"market":{"market_id":"crypto","instrument_type":"spot","provider":"binance","source_id":"binance","market_type":"spot"},"fetch":{},"datasets":[{"dataset_id":"ds","frequency":"1m","copies":[{"subjects":[{"id":"BTC-USDT","index":0}],"hash":"h","count":1}]}]}}}}`)
+		`"target":{"v":1,"market":{"market_id":"crypto","instrument_type":"spot","provider":"binance","source_id":"binance","market_type":"spot"},"fetch":{},"datasets":[{"dataset_id":"ds","frequency":"1m","copies":[{"subjects":[{"id":"BTC-USDT","index":0}],"hash":"h","count":1}]}]}}}}`)
 	rsp, err := service.GetCollectorStatus(context.Background(), &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Len(t, rsp.GetFunctions(), 1)
 	require.Equal(t, "scf", rsp.GetFunctions()[0].GetExecutor())
 	require.False(t, rsp.GetFunctions()[0].GetCloudExists())
-	require.Empty(t, rsp.GetFunctions()[0].GetCloudReadAt())
+	require.Zero(t, rsp.GetFunctions()[0].GetCloudReadAt())
 }

@@ -2,6 +2,7 @@ package eventconsumer
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"testing"
 	"time"
 
@@ -27,15 +28,15 @@ func seedDelistedInstrument(t *testing.T, tradeStore *store.Store, blocked bool)
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT",
 			InstrumentID: "FOO-USDT-SPOT", BaseAsset: "FOO", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "BREAK",
 		})
 	}))
 	if blocked {
-		_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Reason: "下架", BlockedAt: 1,
+		_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT", Reason: "下架", BlockedAt: 1,
 		})
 		require.NoError(t, err)
 	}
@@ -53,8 +54,8 @@ func TestHandleTargetSkipsBlockedUntradableInstrumentInsteadOfRejecting(t *testi
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-delist", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{
-			{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.5"},
-			{InstrumentId: "FOO-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.3"},
+			{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "0.5"},
+			{InstrumentId: "FOO-USDT-SPOT", MarketType: "spot", TargetWeight: "0.3"},
 		},
 	), options)
 
@@ -75,7 +76,7 @@ func TestHandleTargetStillRejectsUntradableInstrumentOutsideTheList(t *testing.T
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-untradable", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "FOO-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.3"}},
+		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "FOO-USDT-SPOT", MarketType: "spot", TargetWeight: "0.3"}},
 	), targetOptions(tradeStore, now))
 
 	require.Equal(t, jetstream.TERM, result.Decision)

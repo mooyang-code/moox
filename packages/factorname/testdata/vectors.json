@@ -802,26 +802,22 @@
   {
    "suffix": "k3m9q2x7",
    "task": "ftask_k3m9q2x7",
-   "dataset": "dataset_factor_k3m9q2x7",
-   "view": "view_factor_k3m9q2x7"
+   "dataset": "dataset_factor_k3m9q2x7"
   },
   {
    "suffix": "swap5m_chain",
    "task": "ftask_swap5m_chain",
-   "dataset": "dataset_factor_swap5m_chain",
-   "view": "view_factor_swap5m_chain"
+   "dataset": "dataset_factor_swap5m_chain"
   },
   {
    "suffix": "a",
    "task": "ftask_a",
-   "dataset": "dataset_factor_a",
-   "view": "view_factor_a"
+   "dataset": "dataset_factor_a"
   },
   {
    "suffix": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
    "task": "ftask_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-   "dataset": "dataset_factor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-   "view": "view_factor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   "dataset": "dataset_factor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
  ],
  "suffix_invalid": [
