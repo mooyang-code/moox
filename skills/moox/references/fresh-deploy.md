@@ -112,6 +112,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 ### `setup start` 的已知限制
 
 `setup start` 会逐项导入 `config/setup/factor-tasks.yaml` 里这个空间的因子任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有四个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m`、A 股的 `ftask_cn_5m` 与港股的 `ftask_hk_5m`（源数据集都由 Collector 的默认采集任务创建）；没有因子机时跳过因子；crypto 要海外机，没有海外机时 `setup start --space-id crypto` 本来就不能运行。
+全新安装时 Collector 可能比海外机的出口代理先起来，首轮标签巡检里 crypto 标签同步失败（要到下一次 `sync.cron` 才重试）；`setup start` 启用任务被拒时会立即同步任务绑定的标签，巡检占着同步锁时排队等，最多 5 分钟（实测首轮巡检约 2.5 分钟），所以不用手工同步。
 导入中断（成员加进去了、还没启用）后重跑 `setup start` 会接着启用。已知差别：它分不清“导入中断”和“人工停用”，在管理台手工停用的默认因子成员，重跑 `setup start` 后会被重新启用，要停用的重跑后再停一次；手动的 `factor task apply --file` 不会替你启用线上停用的成员，仍按差异报出来。
 自己的因子任务文件里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据；建好对应采集任务后再 `factor task apply --file` 导入。
 
@@ -132,7 +133,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 `setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写入口主机所在地域，优先存储机所在地域，该地域要有写了 `external_entry = true`、配了 `private_address` 的主机）。它依次：
 
-1. 启用任务时，任务绑定的标签还没有成员（全新部署时自动标签要等 Collector 下一轮标签巡检才首次同步）就先立即同步再启用：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
+1. 启用任务时，任务绑定的标签还没有成员（全新部署时自动标签要等 Collector 下一轮标签巡检才首次同步）就先立即同步再启用；Collector 首轮巡检正在依次同步所有空间的标签时排队等，最多 5 分钟（标准错误里会打一行在等什么），到时限报错并提示看 `collector subjects status`：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
 2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只；函数个数由每个函数带多少标的决定：空间写了 `symbols_per_function` 就按它切分，否则按 `auto_size` 用各源权重、限速和标的数估算；每 5 分钟触发一次、收盘后 1 秒同时取数，午休、收盘后、非交易日函数直接返回 `no_work`）；
 3. 导入因子任务 `ftask_cn_5m`（只有 `ma__5`、`ma__10`），创建观察实例 `default_dual_ma_cn_5m`（[`examples/strategies/dual_ma_cn_5m.yaml`](../../../examples/strategies/dual_ma_cn_5m.yaml)，不挂账户）。
 
