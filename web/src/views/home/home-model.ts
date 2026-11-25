@@ -10,7 +10,7 @@ import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
 import { pendingItems, stateOf } from "@/views/strategy/attention-model";
 import { sortInstancesForResults } from "@/views/strategy/results/results-model";
 import { isTrialInstance } from "@/views/strategy/running/running-model";
-import { formatInstant, marketTime } from "@/utils/time-zone";
+import { formatInstant, marketTime, toInstantMs } from "@/utils/time-zone";
 
 /** 首页统一的状态色：正常、需要关注、异常、无观测。 */
 export type Tone = "ok" | "warn" | "bad" | "idle";
@@ -49,18 +49,12 @@ export function humanizeDuration(seconds: number | null): string {
   return `${(seconds / 86400).toFixed(1)} 天`;
 }
 
-/** 解析 ISO 时间或 Unix 秒；无法解析返回 null。 */
+/** 接口里的时刻换成毫秒：毫秒数字或数字字符串（墙钟时刻），或 RFC3339 文本（data_time 一类）；无法解析返回 null。Unix 秒由调用方先乘 1000。 */
 export function toMillis(value?: string | number | null): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  if (typeof value === "number" || /^\d+$/.test(String(value))) {
-    const seconds = Number(value);
-    return seconds > 0 ? seconds * 1000 : null;
-  }
-  const parsed = Date.parse(String(value));
-  return Number.isFinite(parsed) ? parsed : null;
+  return toInstantMs(value);
 }
 
-/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按 Unix 秒理解。 */
+/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按毫秒理解。 */
 export function fullTime(value: string | number | null | undefined, zone = "UTC"): string {
   return formatInstant(toMillis(value), zone);
 }
@@ -186,7 +180,9 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
       const set = info.factor_task;
       const health = taskHealth(set, info.last_run);
       const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
-      const periodOpenMs = toMillis(info.last_run?.last_period_time);
+      // last_period_time 是 Unix 秒（数据坐标）。
+      const periodSeconds = Number(info.last_run?.last_period_time ?? 0);
+      const periodOpenMs = periodSeconds > 0 ? periodSeconds * 1000 : null;
       const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
       return {
         taskId: set.task_id,

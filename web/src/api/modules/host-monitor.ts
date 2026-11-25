@@ -1,4 +1,5 @@
 import { call } from "@/api/http";
+import { toInstantMs } from "@/utils/time-zone";
 import {
   aggregateNetworkRate,
   filesystemUsageAvailable,
@@ -74,6 +75,7 @@ export interface HostMetrics {
   host_id: string;
   hostname: string;
   status: "online" | "offline" | "error";
+  /** 最近一次上报的时刻（毫秒，数字字符串）。 */
   timestamp: string;
   cpu: CPUMetrics;
   memory: MemoryMetrics;
@@ -85,6 +87,7 @@ export interface HostMetrics {
 }
 
 export interface HistoryPoint {
+  /** 采样时刻（毫秒，数字字符串）。 */
   timestamp: string;
   cpu_usage: number;
   cpu_available: boolean;
@@ -142,12 +145,14 @@ type WireNumber = number | string;
 interface HostAgent {
   host_id?: string;
   hostname?: string;
+  /** 毫秒，数字字符串。 */
   last_seen_at?: string;
   snapshot?: HostSnapshot;
 }
 
 interface HostHistoryPoint {
   host_id?: string;
+  /** 毫秒，数字字符串。 */
   observed_at?: string;
   snapshot?: HostSnapshot;
 }
@@ -162,15 +167,15 @@ export const getCurrentMetrics = () => {
 const HISTORY_POINT_LIMIT = 500;
 
 export const getHistoryMetrics = (hostID: string, duration = "1h") => {
-  const end = new Date();
-  const start = new Date(end.getTime() - durationMilliseconds(duration));
+  const end = Date.now();
+  const start = end - durationMilliseconds(duration);
   return call<
     { host_id: string; start_at: string; end_at: string; limit: number },
     { points?: HostHistoryPoint[]; data_gap?: boolean }
   >("monitor", "QueryHostMetricHistory", {
     host_id: hostID,
-    start_at: start.toISOString(),
-    end_at: end.toISOString(),
+    start_at: String(start),
+    end_at: String(end),
     // 服务端在所选范围内等间隔抽取最多这么多点，曲线总是覆盖整段时间。
     limit: HISTORY_POINT_LIMIT
   }).then(response => ({
@@ -257,7 +262,10 @@ const toHistoryPoint = (point: HostHistoryPoint): HistoryPoint => {
   };
 };
 
-const isFresh = (value?: string) => !!value && Number.isFinite(Date.parse(value)) && Date.now() - Date.parse(value) < 60_000;
+const isFresh = (value?: string) => {
+  const at = toInstantMs(value);
+  return at !== null && Date.now() - at < 60_000;
+};
 
 const toNumber = (value?: WireNumber) => {
   const number = Number(value ?? 0);

@@ -251,7 +251,7 @@ describe("home page", () => {
         id: "a1",
         severity: "warning",
         title: "数据中断",
-        triggered_at: new Date().toISOString(),
+        triggered_at: String(Date.now()),
         object: { type: "dataset", producer: "collector", dataset_id: "ds_cn", freq: "5m", space_id: "stockcn" }
       }
     ];
@@ -274,7 +274,7 @@ describe("home page", () => {
             dataset_id: "dataset_abc",
             freq: "1m",
             status: "degraded",
-            latest_bar_close_at: new Date(Date.now() - 52980_000).toISOString(),
+            latest_bar_close_at: String(Date.now() - 52980_000),
             waiting_bars: 882,
             overdue_seconds: "52920"
           }

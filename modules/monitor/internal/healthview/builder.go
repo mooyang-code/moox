@@ -23,7 +23,16 @@ type Builder struct {
 	Now             func() time.Time
 }
 
-func stamp(value time.Time) string {
+// stamp 把墙钟时刻转成接口用的毫秒；零值是 0。
+func stamp(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.UnixMilli()
+}
+
+// dataTimeText 把 data_time（开盘时间，甲类）转成接口用的 RFC3339Nano UTC 文本，与 Storage 行键同一口径；零值是空串。
+func dataTimeText(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}

@@ -33,13 +33,10 @@ func (s *Service) QueryLogRecords(ctx context.Context, req *monitorpb.QueryLogRe
 			return &monitorpb.QueryLogRecordsRsp{RetInfo: invalid(fmt.Errorf("level 只能是 debug、info、warn、error、fatal：%q", req.GetLevel()))}, nil
 		}
 	}
-	var err error
-	if filter.Start, err = parseLogTime("start_at", req.GetStartAt()); err != nil {
-		return &monitorpb.QueryLogRecordsRsp{RetInfo: invalid(err)}, nil
+	if req.GetStartAt() < 0 || req.GetEndAt() < 0 {
+		return &monitorpb.QueryLogRecordsRsp{RetInfo: invalid(errors.New("start_at、end_at 是毫秒时刻，不能为负"))}, nil
 	}
-	if filter.End, err = parseLogTime("end_at", req.GetEndAt()); err != nil {
-		return &monitorpb.QueryLogRecordsRsp{RetInfo: invalid(err)}, nil
-	}
+	filter.Start, filter.End = msTime(req.GetStartAt()), msTime(req.GetEndAt())
 	// 关键字要逐行匹配正文，不走索引：没有给起点时只查最近 7 天，免得表很大时长时间占着 Monitor 唯一的数据库连接。
 	if strings.TrimSpace(filter.Keyword) != "" && filter.Start.IsZero() {
 		filter.Start = time.Now().Add(-keywordSearchWindow)
@@ -75,29 +72,21 @@ func (s *Service) QueryLogRecords(ctx context.Context, req *monitorpb.QueryLogRe
 			return &monitorpb.QueryLogRecordsRsp{RetInfo: inner(err)}, nil
 		}
 		for _, bucket := range buckets {
-			rsp.Buckets = append(rsp.Buckets, &monitorpb.LogBucket{StartAt: bucket.Hour, Errors: int32(bucket.Errors), Events: int32(bucket.Events)})
+			hour, err := time.Parse(time.RFC3339, bucket.Hour)
+			if err != nil {
+				return &monitorpb.QueryLogRecordsRsp{RetInfo: inner(fmt.Errorf("日志分布的小时起点不合法：%q", bucket.Hour))}, nil
+			}
+			rsp.Buckets = append(rsp.Buckets, &monitorpb.LogBucket{StartAt: hour.UnixMilli(), Errors: int32(bucket.Errors), Events: int32(bucket.Events)})
 		}
 	}
 	return rsp, nil
-}
-
-func parseLogTime(name, value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
-	}
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("%s 不是 RFC 3339 时间：%q", name, value)
-	}
-	return parsed, nil
 }
 
 func logRecordPB(record domain.LogRecord) *monitorpb.LogRecord {
 	out := &monitorpb.LogRecord{
 		Id: record.ID, HostId: record.HostID, Component: record.Component, InstanceId: record.InstanceID, Level: record.Level,
 		Event: record.Event, Message: record.Message, Caller: record.Caller, MergedCount: int32(record.MergedCount),
-		LoggedAt: record.LoggedAt.UTC().Format(time.RFC3339Nano),
+		LoggedAt: millis(record.LoggedAt),
 	}
 	if strings.TrimSpace(record.Fields) != "" && record.Fields != "{}" {
 		_ = json.Unmarshal([]byte(record.Fields), &out.Fields)

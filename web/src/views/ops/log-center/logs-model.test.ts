@@ -11,6 +11,9 @@ import {
   rangeWindow
 } from "./logs-model";
 
+// 接口里的时刻是毫秒数字字符串。
+const ms = (text: string) => String(Date.parse(text));
+
 describe("重要日志的展示", () => {
   it("关键事件叫“事件”，错误和致命标红", () => {
     expect(levelLabel({ level: "info", event: "process_started" })).toBe("事件");
@@ -62,7 +65,7 @@ describe("重要日志的时间范围与分布", () => {
 
   it("看前后：以这条日志为中心各 5 分钟，这条本身在窗口内", () => {
     const at = Date.parse("2026-11-12T09:55:03.494Z");
-    const window = aroundWindow("2026-11-12T09:55:03.494700953Z");
+    const window = aroundWindow(String(at));
     expect(window).not.toBeNull();
     expect(window!.startMs).toBe(at - 300_000);
     // 终点不含：多出 1 毫秒，正好在 5 分钟后那一刻的记录也算在内。
@@ -75,9 +78,9 @@ describe("重要日志的时间范围与分布", () => {
     const window = rangeWindow("24h", now);
     const bars = logBars(
       [
-        { start_at: "2026-11-12T04:00:00Z", errors: 2, events: 1 },
-        { start_at: "2026-11-12T10:00:00Z", errors: 0, events: 3 },
-        { start_at: "2026-11-01T00:00:00Z", errors: 9, events: 9 },
+        { start_at: ms("2026-11-12T04:00:00Z"), errors: 2, events: 1 },
+        { start_at: ms("2026-11-12T10:00:00Z"), errors: 0, events: 3 },
+        { start_at: ms("2026-11-01T00:00:00Z"), errors: 9, events: 9 },
         { start_at: "坏的", errors: 1 }
       ],
       window
@@ -94,9 +97,9 @@ describe("重要日志的时间范围与分布", () => {
   it("7 天按 6 小时、30 天按天归并", () => {
     const week = logBars(
       [
-        { start_at: "2026-11-12T01:00:00Z", errors: 1 },
-        { start_at: "2026-11-12T05:00:00Z", events: 2 },
-        { start_at: "2026-11-12T06:00:00Z", errors: 4 }
+        { start_at: ms("2026-11-12T01:00:00Z"), errors: 1 },
+        { start_at: ms("2026-11-12T05:00:00Z"), events: 2 },
+        { start_at: ms("2026-11-12T06:00:00Z"), errors: 4 }
       ],
       rangeWindow("7d", now)
     );
@@ -109,7 +112,7 @@ describe("重要日志的时间范围与分布", () => {
     expect(week.slice(1, -1).every(bar => bar.endMs - bar.startMs === 6 * HOUR)).toBe(true);
     expect(week[0].endMs - week[0].startMs).toBe(HOUR);
     const monthWindow = rangeWindow("30d", now);
-    const month = logBars([{ start_at: "2026-11-12T09:00:00Z", errors: 1 }], monthWindow);
+    const month = logBars([{ start_at: ms("2026-11-12T09:00:00Z"), errors: 1 }], monthWindow);
     expect(month[0].startMs).toBe(monthWindow.startMs);
     expect(month[month.length - 1]).toMatchObject({
       startMs: Date.parse("2026-11-12T00:00:00Z"),
@@ -120,7 +123,7 @@ describe("重要日志的时间范围与分布", () => {
   });
 
   it("窗口不足一小时不画；没有记录时峰值按 1", () => {
-    expect(logBars([{ start_at: "2026-11-12T09:00:00Z", errors: 1 }], aroundWindow("2026-11-12T09:55:00Z")!)).toEqual([]);
+    expect(logBars([{ start_at: ms("2026-11-12T09:00:00Z"), errors: 1 }], aroundWindow(ms("2026-11-12T09:55:00Z"))!)).toEqual([]);
     expect(barsPeak([])).toBe(1);
   });
 });

@@ -94,7 +94,7 @@ func (s *SampleStore) History(ctx context.Context, hostID string, start, end tim
 		if err := proto.Unmarshal(record.Snapshot, snapshot); err != nil {
 			return nil, fmt.Errorf("解码主机快照 host_id=%s observed_at=%s: %w", hostID, record.ObservedAt.UTC().Format(time.RFC3339), err)
 		}
-		out = append(out, HistoryPoint{HostID: hostID, ObservedAt: record.ObservedAt.UTC().Format(time.RFC3339Nano), Snapshot: snapshot})
+		out = append(out, HistoryPoint{HostID: hostID, ObservedAt: record.ObservedAt.UTC(), Snapshot: snapshot})
 	}
 	return out, nil
 }

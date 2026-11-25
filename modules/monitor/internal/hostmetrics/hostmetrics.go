@@ -46,15 +46,15 @@ type Report struct {
 	Metric      *hostmetricpb.HostMetric
 }
 
-// ValidateReport 校验一次上报：ID、采集时间（允许 15 分钟前到 2 分钟后的时钟偏差）、主机 ID 与快照内容。
-func ValidateReport(id, collectedAt string, metric *hostmetricpb.HostMetric) (Report, error) {
+// ValidateReport 校验一次上报：ID、采集时刻（毫秒，允许 15 分钟前到 2 分钟后的时钟偏差）、主机 ID 与快照内容。
+func ValidateReport(id string, collectedAtMs int64, metric *hostmetricpb.HostMetric) (Report, error) {
 	if parsed, err := uuid.Parse(id); err != nil || parsed.Version() != 7 {
 		return Report{}, errors.New("主机快照的上报 ID 必须是 UUIDv7")
 	}
-	occurred, err := time.Parse(time.RFC3339Nano, collectedAt)
-	if err != nil {
-		return Report{}, errors.New("主机快照的采集时间不合法")
+	if collectedAtMs <= 0 {
+		return Report{}, errors.New("主机快照缺少采集时刻")
 	}
+	occurred := time.UnixMilli(collectedAtMs).UTC()
 	now := time.Now().UTC()
 	if occurred.Before(now.Add(-15*time.Minute)) || occurred.After(now.Add(2*time.Minute)) {
 		return Report{}, errors.New("主机快照的采集时间超出允许的时钟偏差")
@@ -209,7 +209,7 @@ func (s *Store) Persist(ctx context.Context, report Report) error {
 	// 在线判断与阈值检查用的是登记时间和最新快照，不受影响。
 	view := AgentView{
 		HostID: hostID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
-		LastSeenAt: occurredAt.Format(time.RFC3339Nano), Reachable: true,
+		LastSeenAt: occurredAt, Reachable: true,
 		Snapshot: cloneSnapshot(metric.GetSnapshot()),
 	}
 	s.mu.Lock()
@@ -217,8 +217,7 @@ func (s *Store) Persist(ctx context.Context, report Report) error {
 		s.latest = make(map[string]AgentView)
 	}
 	previous, exists := s.latest[view.HostID]
-	previousSeenAt, parseErr := time.Parse(time.RFC3339Nano, previous.LastSeenAt)
-	if !exists || parseErr != nil || occurredAt.After(previousSeenAt) {
+	if !exists || occurredAt.After(previous.LastSeenAt) {
 		s.latest[view.HostID] = view
 	}
 	s.mu.Unlock()
@@ -229,15 +228,17 @@ func (s *Store) Persist(ctx context.Context, report Report) error {
 }
 
 type AgentView struct {
-	HostID, Hostname, BootID, LastSeenAt string
-	Reachable                            bool
-	StaleSeconds                         int64
-	Snapshot                             *hostmetricpb.HostSnapshot
+	HostID, Hostname, BootID string
+	LastSeenAt               time.Time
+	Reachable                bool
+	StaleSeconds             int64
+	Snapshot                 *hostmetricpb.HostSnapshot
 }
 
 type HistoryPoint struct {
-	HostID, ObservedAt string
-	Snapshot           *hostmetricpb.HostSnapshot
+	HostID     string
+	ObservedAt time.Time
+	Snapshot   *hostmetricpb.HostSnapshot
 }
 
 func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
@@ -261,7 +262,7 @@ func (s *Store) ListAgentsAt(ctx context.Context, now time.Time) ([]AgentView, e
 		for _, agent := range presence {
 			view := AgentView{
 				HostID: agent.HostID, Hostname: agent.Hostname, BootID: agent.BootID,
-				LastSeenAt: agent.LastSeenAt.Format(time.RFC3339Nano),
+				LastSeenAt: agent.LastSeenAt,
 				Reachable:  agent.Reachable, StaleSeconds: agent.StaleSeconds,
 			}
 			if latest, ok := s.latest[agent.HostID]; ok {

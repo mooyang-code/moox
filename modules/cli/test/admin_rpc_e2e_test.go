@@ -109,7 +109,7 @@ func (*adminRPCWire) GetDoctorContext(_ context.Context, req *monitorpb.GetDocto
 	if req.GetNodeId() != "control" {
 		return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM}}, nil
 	}
-	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
+	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UnixMilli()}, nil
 }
 
 func (w *adminRPCWire) SyncTopology(_ context.Context, req *adminpb.SyncTopologyReq) (*adminpb.SyncTopologyRsp, error) {

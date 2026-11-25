@@ -27,6 +27,7 @@ export const monitorApi = {
     component?: string;
     level?: string;
     keyword?: string;
+    /** 日志时刻的范围（毫秒数字字符串，含起点、不含终点）。 */
     start_at?: string;
     end_at?: string;
     before_id?: number | string;

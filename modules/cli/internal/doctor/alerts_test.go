@@ -3,6 +3,7 @@ package doctor
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
@@ -27,7 +28,7 @@ func healthyOverview() (*monitorpb.HealthOverview, *monitorpb.HealthPipelineStag
 		{Producer: "storage_view", DatasetId: "view_a", Freq: "1h", Status: "healthy"},
 	}}
 	overview := &monitorpb.HealthOverview{
-		GeneratedAt:    "2026-10-24T03:00:00Z",
+		GeneratedAt:    time.Date(2026, 10, 24, 3, 0, 0, 0, time.UTC).UnixMilli(),
 		System:         &monitorpb.HealthSystem{Health: "healthy"},
 		BusinessChecks: []*monitorpb.HealthBusinessCheck{{CheckId: "c1", Kind: "module", Status: "healthy"}, {CheckId: "c2", Kind: "kline_freshness", Status: "disabled"}},
 		Components:     []*monitorpb.HealthComponent{{HostId: "control", ComponentId: "admin", Status: "healthy"}, {HostId: "control", ComponentId: "x", Status: "unchecked"}},
@@ -53,7 +54,7 @@ func TestBuildAlertsReportCollectsEveryUnhealthySource(t *testing.T) {
 	overview.Summary = &monitorpb.HealthSummary{AlertCount: 1}
 	overview.Alerts = []*monitorpb.HealthAlert{{
 		Id: "a1", Severity: "critical", Title: "数据集 view_b", Reason: "数据生产端长时间未更新", RawError: "producer stale",
-		TriggeredAt: "2026-10-24T02:00:00Z", Object: &monitorpb.HealthObject{Type: "dataset", DatasetId: "view_b", Freq: "1h"},
+		TriggeredAt: time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC).UnixMilli(), Object: &monitorpb.HealthObject{Type: "dataset", DatasetId: "view_b", Freq: "1h"},
 	}}
 	stage.Datasets = append(stage.Datasets,
 		&monitorpb.HealthDataset{Producer: "storage_view", DatasetId: "view_b", Freq: "1h", Status: "degraded", Reason: "数据生产端长时间未更新"},

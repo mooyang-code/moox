@@ -3,6 +3,7 @@ package healthview
 import (
 	"context"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -101,7 +102,7 @@ func (b Builder) incidents(ctx context.Context, spaceID string, active map[incid
 	for _, item := range all {
 		object := alertObject(item.key.space, item.key.check)
 		out = append(out, &pb.AlertIncident{
-			Id:            item.key.space + ":" + item.key.check + "@" + stamp(item.sortTime()),
+			Id:            item.key.space + ":" + item.key.check + "@" + strconv.FormatInt(stamp(item.sortTime()), 10),
 			Severity:      labels[item.key].Severity,
 			Object:        object,
 			Title:         labels[item.key].Title,

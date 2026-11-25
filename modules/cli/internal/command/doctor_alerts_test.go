@@ -3,6 +3,7 @@ package command
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/stretchr/testify/require"
@@ -23,7 +24,7 @@ func runDoctorAlerts(t *testing.T, overview *monitorpb.HealthOverview, args ...s
 
 // doctor alerts 经网关读取 Monitor 健康概览，健康时输出空清单、退出码 0；有严重问题时仍输出清单并以退出码 2 结束。
 func TestDoctorAlertsReadsOverviewAndSetsExitCode(t *testing.T) {
-	out, err, gateway := runDoctorAlerts(t, &monitorpb.HealthOverview{GeneratedAt: "2026-10-24T03:00:00Z"}, "--space-id", "crypto")
+	out, err, gateway := runDoctorAlerts(t, &monitorpb.HealthOverview{GeneratedAt: time.Date(2026, 10, 24, 3, 0, 0, 0, time.UTC).UnixMilli()}, "--space-id", "crypto")
 	require.NoError(t, err)
 	require.Equal(t, "trpc.moox.monitor.MonitorMgr", gateway.service)
 	require.Equal(t, "GetHealthOverview", gateway.method)

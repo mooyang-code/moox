@@ -221,8 +221,8 @@ function request(conditions: Conditions, beforeId?: number | string) {
     host_id: conditions.host_id,
     level: conditions.level,
     keyword: conditions.keyword,
-    start_at: new Date(conditions.window.startMs).toISOString(),
-    end_at: new Date(conditions.window.endMs).toISOString(),
+    start_at: String(conditions.window.startMs),
+    end_at: String(conditions.window.endMs),
     limit: PAGE_SIZE,
     // 分布只在查第一页时取；向更早翻页时条件没变，不用再算。
     ...(beforeId ? { before_id: beforeId } : { with_buckets: true })
