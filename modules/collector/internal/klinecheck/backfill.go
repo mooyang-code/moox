@@ -158,8 +158,10 @@ type Backfiller struct {
 	// seedPreparing 是本进程里正在拼作业的补齐（键为 空间|数据集|频率），seedSamples 是各补齐最近的完成分块数采样，用来估计剩余时间；
 	// seedFailures 是各补齐连续拼作业失败的次数（只在内存里，进程重启从零算）。
 	seedPreparing map[string]bool
-	seedSamples   map[string][]seedSample
-	seedFailures  map[string]int
+	// seedBusy 是各（空间、市场、地域）补采函数正在跑的补齐分块数。
+	seedBusy     map[string]int
+	seedSamples  map[string][]seedSample
+	seedFailures map[string]int
 	// seedLimiter、seedLocalLimiter 是补齐写 Storage 的速率限制（按根数计令牌），首次用到时按 Seed 参数创建。
 	seedLimiter      *rate.Limiter
 	seedLocalLimiter *rate.Limiter
@@ -638,11 +640,29 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			return
 		}
 		if len(seedRegions) > 0 {
+			// 平台对超过预留并发的同步调用直接拒绝（concurrency exceeded reserved quota），不排队：每个地域的函数同时只放预留并发个分块，
+			// 按分块号轮流的起点依次找没满、建得出来的地域，都满了或都建不出来就退回，下一轮再来。
+			var picked string
+			var ensureErr error
 			for _, region := range seedRegions {
-				if functionName, err = provider.EnsureBackfillFunctionIn(ctx, plan.Market.MarketType, region); err == nil {
+				key := seedRegionKey(spaceID, plan.Market.MarketType, region)
+				if !b.acquireSeedRegion(key, b.seedRegionLimit(spaceID)) {
+					continue
+				}
+				if functionName, ensureErr = provider.EnsureBackfillFunctionIn(ctx, plan.Market.MarketType, region); ensureErr == nil {
+					picked = key
 					break
 				}
+				b.releaseSeedRegion(key)
 			}
+			if picked == "" {
+				if ensureErr == nil {
+					ensureErr = errors.New("各地域的补采函数并发都已占满")
+				}
+				release(ensureErr)
+				return
+			}
+			defer b.releaseSeedRegion(picked)
 		} else {
 			functionName, err = provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
 		}

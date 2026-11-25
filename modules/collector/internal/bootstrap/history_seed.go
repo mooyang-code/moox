@@ -70,6 +70,12 @@ func historySeedOptions(cfg *Config, datasets datasetReader, reconcilers *fetchp
 		}
 		return direct
 	}
+	options.RegionConcurrency = func(spaceID string) int {
+		if reconciler := reconcilers.Get(spaceID); reconciler != nil {
+			return reconciler.BackfillReservedConcurrency()
+		}
+		return 0
+	}
 	options.Slots = func(ctx context.Context, spaceID string) int {
 		reconciler := reconcilers.Get(spaceID)
 		if reconciler == nil {
