@@ -5,6 +5,8 @@ import { installE2ESession } from "./e2e-session";
 const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
 const NOW = Date.now();
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+// 墙钟时刻（开始、结束、心跳等）是 Unix 毫秒的十进制文本；数据时间（分区范围、min/max_data_time）是 RFC3339 文本
+const ms = (value: number) => String(value);
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 
@@ -12,7 +14,7 @@ const datasets = [
   {
     dataset_id: "ds_kline_1m",
     name: "现货 1 分钟 K 线",
-    data_kind: "DATA_KIND_TIME_SERIES",
+    data_kind: 2,
     freq: "1m",
     status: "active",
     retention: "840h"
@@ -20,12 +22,12 @@ const datasets = [
   {
     dataset_id: "ds_kline_5m",
     name: "现货 5 分钟 K 线",
-    data_kind: "DATA_KIND_TIME_SERIES",
+    data_kind: 2,
     freq: "5m",
     status: "active",
     retention: "840h"
   },
-  { dataset_id: "ds_subjects", name: "标的清单", data_kind: "DATA_KIND_RECORD", status: "active", retention: "forever" }
+  { dataset_id: "ds_subjects", name: "标的清单", data_kind: 1, status: "active", retention: "forever" }
 ];
 
 const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
@@ -37,7 +39,7 @@ const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
   status: "enabled",
   purpose: "collect",
   dir_name: "binance-spot-kline-1m",
-  last_success_at: iso(NOW - 30 * MINUTE),
+  last_success_at: ms(NOW - 30 * MINUTE),
   health: "ok",
   health_reason: "",
   partition_count: 3,
@@ -49,8 +51,8 @@ const task = (datasetId: string, over: Record<string, unknown> = {}) => ({
     run_id: "run-1",
     kind: "follow",
     status: "succeeded",
-    started_at: iso(NOW - 30 * MINUTE),
-    finished_at: iso(NOW - 29 * MINUTE)
+    started_at: ms(NOW - 30 * MINUTE),
+    finished_at: ms(NOW - 29 * MINUTE)
   },
   ...over
 });
@@ -61,7 +63,7 @@ const runs = [
     dataset_id: "ds_kline_1m",
     kind: "range",
     status: "queued",
-    scheduled_at: iso(NOW),
+    scheduled_at: ms(NOW),
     range_start: iso(NOW - 2 * DAY),
     range_end: iso(NOW - DAY)
   },
@@ -70,9 +72,9 @@ const runs = [
     dataset_id: "ds_kline_1m",
     kind: "follow",
     status: "succeeded",
-    scheduled_at: iso(NOW - 30 * MINUTE),
-    started_at: iso(NOW - 30 * MINUTE),
-    finished_at: iso(NOW - 29 * MINUTE),
+    scheduled_at: ms(NOW - 30 * MINUTE),
+    started_at: ms(NOW - 30 * MINUTE),
+    finished_at: ms(NOW - 29 * MINUTE),
     rows_read: "1440",
     rows_added: "60",
     rows_changed: "0",
@@ -169,7 +171,7 @@ async function gateway(route: Route) {
           worker: {
             worker_id: "archive-worker@factor",
             active: true,
-            last_heartbeat_at: iso(NOW - 12_000),
+            last_heartbeat_at: ms(NOW - 12_000),
             root_dir: "/data/moox/archive",
             version: "v0.6.0",
             disk_total_bytes: String(1800 * GiB),

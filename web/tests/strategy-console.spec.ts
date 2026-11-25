@@ -33,11 +33,11 @@ test("strategy definitions render the DSL v3 contract", async ({ page }) => {
             name: "动量策略",
             dsl_yaml: dsl,
             dsl_hash: "sha256:0123456789abcdef",
-            created_at: "2026-07-30T00:00:00Z",
-            updated_at: "2026-07-30T00:00:00Z"
+            created_at: String(Date.UTC(2026, 6, 30)),
+            updated_at: String(Date.UTC(2026, 6, 30))
           }
         ],
-        total: 1,
+        total: "1",
         page: 1,
         page_size: 20
       }
@@ -75,7 +75,7 @@ test("instance detail distinguishes valid target weight from trade fills and exp
           session_id: "session-1",
           resolved_json: resolved,
           health: "ok",
-          updated_at: "2026-07-30T00:00:00Z"
+          updated_at: String(Date.UTC(2026, 6, 30))
         }
       }
     })
@@ -89,10 +89,10 @@ test("instance detail distinguishes valid target weight from trade fills and exp
     route.fulfill({
       json: {
         ret_info: { code: 0 },
-        targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25" }],
+        targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25", market: "spot" }],
         session_id: "session-1",
-        bar_end_time: "2026-07-30T00:00:00Z",
-        valid_until: "2099-07-30T00:00:00Z",
+        bar_end_time: String(Date.UTC(2026, 6, 30)),
+        valid_until: String(Date.UTC(2099, 6, 30)),
         result_id: "result-7"
       }
     })
@@ -106,10 +106,10 @@ test("instance detail distinguishes valid target weight from trade fills and exp
             result_id: "result-7",
             instance_id: "instance-paper",
             session_id: "session-1",
-            bar_end_time: "2026-07-30T00:00:00Z",
-            valid_until: "2099-07-30T00:00:00Z",
+            bar_end_time: String(Date.UTC(2026, 6, 30)),
+            valid_until: String(Date.UTC(2099, 6, 30)),
             status: "ok",
-            targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25" }],
+            targets: [{ instrument_id: "BTC-USDT", target_weight: "0.25", market: "spot" }],
             summary_json: '{"gross":"0.25","cash":"0.75"}',
             publish_status: "sent"
           },
@@ -117,15 +117,15 @@ test("instance detail distinguishes valid target weight from trade fills and exp
             result_id: "result-6",
             instance_id: "instance-paper",
             session_id: "session-1",
-            bar_end_time: "2026-07-29T23:00:00Z",
-            valid_until: "2026-07-30T01:00:00Z",
+            bar_end_time: String(Date.UTC(2026, 6, 29, 23)),
+            valid_until: String(Date.UTC(2026, 6, 30, 1)),
             status: "skipped",
             skip_reason: "previous_version_unknown",
             targets: [],
             publish_status: "none"
           }
         ],
-        total: 2
+        total: "2"
       }
     })
   );
@@ -150,7 +150,7 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
     name: "Paper 组合",
     control_mode: 1,
     execution_mode: 1,
-    markets: [1],
+    markets: ["spot"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
     pause_reason: "manual review",
@@ -161,8 +161,8 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
   const account = {
     trading_account_id: "binance-paper",
     name: "币安模拟",
-    exchange: 1,
-    markets: [1],
+    exchange: "binance",
+    markets: ["spot"],
     execution_mode: 1,
     settlement_asset: "USDT",
     status: "ENABLED",

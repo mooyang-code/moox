@@ -60,7 +60,7 @@ async function mockGateway(route: Route) {
           space_id: "crypto",
           dataset_id: "dataset_binance_kline_1m",
           name: "现货K线",
-          data_kind: "DATA_KIND_TIME_SERIES",
+          data_kind: 2,
           freq: "1m",
           status: "active",
           attributes: { owner_module: "collector", dataset_role: "raw_collection" }
@@ -76,7 +76,7 @@ async function mockGateway(route: Route) {
             space_id: "crypto",
             dataset_id: "dataset_binance_kline_1m",
             name: "现货K线",
-            data_kind: "DATA_KIND_TIME_SERIES",
+            data_kind: 2,
             freq: "1m",
             status: "active",
             attributes: { owner_module: "collector", dataset_role: "raw_collection" }

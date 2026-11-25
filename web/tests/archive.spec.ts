@@ -16,7 +16,7 @@ test("归档任务页：执行器一行（在线、所在主机）、未归档�
   await expect(line).toContainText("本空间运行中 0 · 排队 1");
   await expect(page.getByRole("heading", { name: "未归档的数据集" })).toBeVisible();
   await expect(page.getByText("现货 5 分钟 K 线")).toBeVisible();
-  await expect(page.getByText("每收盘 1 根 · 下次")).toBeVisible();
+  await expect(page.getByText("每分钟跟随变更日志")).toBeVisible();
   await line.getByRole("link", { name: "存放位置与磁盘" }).click();
   await expect(page).toHaveURL(/#\/archive\/storage/);
 });

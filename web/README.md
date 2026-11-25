@@ -21,6 +21,11 @@ pnpm test:e2e                 # Playwright 页面测试；本机有 Google Chrom
 pnpm check:deployments        # 其余 check:* 为页面结构契约检查脚本
 ```
 
+页面测试只在本地跑，不进 CI。已知问题：macOS 上用 `PLAYWRIGHT_CHANNEL=chrome`（本机安装的 Google Chrome）时，用例全过也可能在最后报
+`worker-N process did not exit within 300000ms after stop, force-killed it`，多等 5 分钟、退出码为 1。Chrome 关闭时会唤起
+GoogleUpdater（日志里的 `app_wakeall.cc ... GoogleUpdater --wake`），偶尔拖住 worker 退出，与用例无关，按 `N passed / M failed` 那一行判断结果；
+要干净的退出码就不设通道，先 `pnpm exec playwright install chromium` 用 Playwright 自带的 Chromium。
+
 ## 本地联调
 
 页面只调用同源的 `/api/admin/{service}/{method}`，不直接访问业务服务；会话在 HttpOnly Cookie 里，只发给同源请求。

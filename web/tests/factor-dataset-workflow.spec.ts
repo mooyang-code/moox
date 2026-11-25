@@ -23,8 +23,8 @@ const baseDef = {
   lookback_periods: 5,
   definition_hash: "sha256:definition",
   allow_partial_universe: false,
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z"
+  created_at: String(Date.UTC(2026, 9, 1)),
+  updated_at: String(Date.UTC(2026, 9, 1))
 };
 
 type Def = typeof baseDef & { factor_id: string; outputs: string[] };
@@ -113,7 +113,7 @@ async function mockGateway(route: Route) {
           {
             factor_task: factorTask,
             members,
-            last_run: { task_id: factorTask.task_id, last_period_time: 1791086400, last_status: "complete", lag_seconds: 30 }
+            last_run: { task_id: factorTask.task_id, last_period_time: "1791086400", last_status: "complete", lag_seconds: "30" }
           }
         ],
         page_result: { page: 1, size: 500, total: 1, has_more: false }
