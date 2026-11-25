@@ -50,8 +50,13 @@ func (s *Service) SetSubjectExclusions(ctx context.Context, req *pb.SetSubjectEx
 		return &pb.SetSubjectExclusionsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	market := strings.ToLower(strings.TrimSpace(req.GetMarketType()))
+	// 活动日志属性里的到期时间仍写 RFC3339 文本，空表示不过期。
+	expiresText := ""
+	if !expires.IsZero() {
+		expiresText = expires.Format(time.RFC3339)
+	}
 	title := fmt.Sprintf("采集名单排除 %d 个标的（%s）：%s", len(subjects), marketLabel(market), reason)
-	s.logExclusion(ctx, spaceID, "set", title, map[string]any{"subject_ids": subjects, "market_type": market, "reason": reason, "operator": operator, "expires_at": req.GetExpiresAt()}, now)
+	s.logExclusion(ctx, spaceID, "set", title, map[string]any{"subject_ids": subjects, "market_type": market, "reason": reason, "operator": operator, "expires_at": expiresText}, now)
 	exclusions, err := s.activeExclusions(ctx, spaceID)
 	if err != nil {
 		return &pb.SetSubjectExclusionsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
