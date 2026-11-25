@@ -223,8 +223,19 @@ func TestSubmitterDeliversToEveryMainTask(t *testing.T) {
 	if _, err := submitter.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := result(t, db, "r1"); got.ParamsDeliveredAt != nil || !strings.Contains(got.ParamsError, "因子任务 ftask_s") {
+	if got := result(t, db, "r1"); got.ParamsDeliveredAt != nil || got.ParamsError != "因子任务 ftask_s 拒绝：bias__var：超出范围" {
 		t.Fatalf("拒绝应整条记被拒绝并带上任务：%+v", got)
+	}
+
+	// 现货接受、永续拒绝：整条仍记被拒绝，原因写明现货任务已接受（它已用上新参数，不撤回）。
+	commit(t, db, 2)
+	fake.results = nil
+	fake.taskErr = map[string]error{"ftask_w": &input.ServiceError{Operation: "提交因子参数", Code: commonpb.ErrorCode_INVALID_PARAM, Raw: errors.New("bad")}}
+	if _, err := submitter.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := result(t, db, "r2"); got.ParamsDeliveredAt != nil || !strings.HasPrefix(got.ParamsError, "因子任务 ftask_s 已接受；因子任务 ftask_w 拒绝：") {
+		t.Fatalf("一边接受一边拒绝应写明已接受的任务：%+v", got)
 	}
 }
 
