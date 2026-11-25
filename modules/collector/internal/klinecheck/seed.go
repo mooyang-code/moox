@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"golang.org/x/time/rate"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -29,6 +30,11 @@ const (
 	seedSampleWindow = 10 * time.Minute
 	// seedMaxPrepareFailures 是拼作业连续失败多少次后放弃（记 failed、放行下游）；拼作业每分钟重试一次。
 	seedMaxPrepareFailures = 5
+	// seedLookbackMargin 是补齐深度比行情源回看上限少留的余量：上限按函数执行时刻往回算，补齐要跑一阵子
+	// （失败分块还要在全部结束后重试一次），目标起点正好压在上限上，每个标的最早的一块到执行时都已越界。
+	seedLookbackMargin = 24 * time.Hour
+	// seedWindowMargin 是补齐分块执行前按回看上限截掉起点时多留的时间：覆盖限速排队、调用与函数内重试。
+	seedWindowMargin = 5 * time.Minute
 )
 
 // SeedOptions 是历史补齐的参数与回调。
@@ -39,8 +45,11 @@ type SeedOptions struct {
 	// MergeSessions 让日内分块跨休市区间合并（一个标的连续多个交易日一块），默认关闭由调用方打开：
 	// 它要求行情源按“区间 + 根数”一次取回跨交易日的数据。
 	MergeSessions bool
-	// Depth 返回数据集的补齐深度，不大于 0 表示不补（保留期太短、行情源不支持更早的数据）。
+	// Depth 返回数据集的补齐深度（保留期、配置上限），不大于 0 表示不补。行情源的回看上限另由 Lookback 给出。
 	Depth func(ctx context.Context, spaceID, datasetID, frequency string) (time.Duration, error)
+	// Lookback 返回补采来源这个频率最多能往回取多久（按调用时刻算）；bounded 为假表示不限。为空表示不限。
+	// 补齐深度不超过它减 seedLookbackMargin；分块执行时早于“此刻 − 回看上限”的部分截掉不补，不算失败。
+	Lookback func(market marketfetch.PlanMarket, frequency string) (lookback time.Duration, bounded bool, err error)
 	// Regions 返回市场补齐分块可用的云函数地域：必须是函数写入直达存储机的地域（入口主机就是存储机），
 	// 经海外机转发的地域（带宽很小，会挤掉实时采集）不能算。为空时用补采函数提供方的全部地域。
 	Regions func(spaceID, marketType string) []string
@@ -101,6 +110,27 @@ func (b *Backfiller) seedRegions(provider FunctionProvider, spaceID, marketType 
 		return b.Seed.Regions(spaceID, marketType)
 	}
 	return provider.BackfillRegions(marketType)
+}
+
+// seedWindowStart 返回补齐分块此刻还能取到的最早 K 线开始时间（此刻 − 行情源回看上限 + seedWindowMargin，向上对齐）；
+// 来源不限或查不到回看能力时 ok 为假。
+func (b *Backfiller) seedWindowStart(ctx context.Context, market marketfetch.PlanMarket, frequencyName string) (time.Time, bool) {
+	if b.Seed.Lookback == nil {
+		return time.Time{}, false
+	}
+	frequency, err := marketdata.ParseFrequency(frequencyName)
+	if err != nil {
+		return time.Time{}, false
+	}
+	lookback, bounded, err := b.Seed.Lookback(market, frequencyName)
+	if err != nil {
+		log.WarnContextf(ctx, "collector history seed lookback unavailable market=%s frequency=%s: %v", market.MarketID, frequencyName, err)
+		return time.Time{}, false
+	}
+	if !bounded {
+		return time.Time{}, false
+	}
+	return alignUp(frequency, b.now().Add(-lookback+seedWindowMargin)), true
 }
 
 // seedSlots 是补齐分块在空间里的并发上限。
@@ -194,6 +224,21 @@ func (b *Backfiller) beginSeed(ctx context.Context, spaceID, datasetID, frequenc
 	if b.Seed.Depth != nil {
 		if depth, err = b.Seed.Depth(ctx, spaceID, datasetID, frequencyName); err != nil {
 			return err
+		}
+	}
+	if b.Seed.Lookback != nil && b.Routes != nil {
+		plan, found, err := b.Routes.BackfillRoute(ctx, spaceID, datasetID, frequencyName)
+		if err != nil {
+			return err
+		}
+		if found {
+			lookback, bounded, err := b.Seed.Lookback(plan.Market, frequencyName)
+			if err != nil {
+				return err
+			}
+			if bounded {
+				depth = min(depth, lookback-seedLookbackMargin)
+			}
 		}
 	}
 	// 新记录（例如重新登记之后）的连续失败次数从零算，不沿用旧记录在本进程里留下的。
