@@ -662,7 +662,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	var seedRegions []string
 	if seed {
 		if provider := b.Functions(spaceID); provider != nil {
-			if regions := provider.BackfillRegions(plan.Market.MarketType); len(regions) > 0 {
+			if regions := b.seedRegions(provider, spaceID, plan.Market.MarketType); len(regions) > 0 {
 				executor = marketfetch.PlanExecutorSCF
 				start := int(chunk.ID % int64(len(regions)))
 				seedRegions = append(append([]string(nil), regions[start:]...), regions[:start]...)

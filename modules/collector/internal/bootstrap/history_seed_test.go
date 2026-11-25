@@ -67,6 +67,28 @@ func TestHistorySeedConfigOverridesAndValidation(t *testing.T) {
 	}
 }
 
+// 补齐只用写入直达存储机的云函数地域：入口主机是存储机的算，经海外机转发的（crypto 常配的香港）不算。
+func TestHistorySeedRegionsOnlyUseDirectEntries(t *testing.T) {
+	cfg := Default()
+	cfg.SCFEntry.Host = "storage"
+	cfg.SCFPlan.EntryRoutes = map[string]SCFEntryEndpoint{
+		"ap-hongkong":  {Address: "172.19.32.13:11004", Host: "overseas"},
+		"ap-singapore": {Address: "146.56.196.204:11004", Host: "storage"},
+		"ap-tokyo":     {Address: "146.56.196.204:11004", Host: "storage"},
+	}
+	reconcilers := &fetchplan.Reconcilers{}
+	reconcilers.Store("crypto", &fetchplan.PlanReconciler{SpaceID: "crypto", Options: fetchplan.PlanOptions{
+		Markets: map[string][]string{"spot": {"ap-hongkong", "ap-singapore", "ap-tokyo"}, "swap": {"ap-hongkong"}},
+	}})
+	cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-hongkong", "ap-singapore", "ap-tokyo"}, "swap": {"ap-hongkong"}}}
+	options := historySeedOptions(cfg, fakeDatasets{}, reconcilers)
+
+	require.Equal(t, []string{"ap-singapore", "ap-tokyo"}, options.Regions("crypto", "spot"), "香港的入口是海外机，不算")
+	require.Empty(t, options.Regions("crypto", "swap"), "只配了香港：没有直达地域，补齐走本地执行端")
+	require.Empty(t, options.Regions("stockus", "equity"), "没有对账器的空间没有地域")
+	require.Equal(t, 2*fetchplan.DefaultBackfillReservedConcurrency, options.Slots(context.Background(), "crypto"), "名额取各市场最大的“直达地域数 × 预留并发”")
+}
+
 // 没有云函数地域的空间（没有对账器、或市场没配地域）不返回补齐并发，走空间的补采并发上限。
 func TestHistorySeedSlotsNeedRegions(t *testing.T) {
 	cfg := Default()

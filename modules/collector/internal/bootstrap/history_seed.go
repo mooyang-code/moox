@@ -55,6 +55,21 @@ func historySeedOptions(cfg *Config, datasets datasetReader, reconcilers *fetchp
 		}
 		return depth, nil
 	}
+	// 只用写入直达存储机的地域：入口路由的主机就是 scf_entry 的主机（存储机）。crypto 的地域常配在香港、入口是海外机，
+	// 补齐几千万行经海外机转发会挤掉实时采集，这样的地域不算，crypto 补齐走本地执行端并受更严的限速。
+	options.Regions = func(spaceID, marketType string) []string {
+		reconciler := reconcilers.Get(spaceID)
+		if reconciler == nil {
+			return nil
+		}
+		var direct []string
+		for _, region := range reconciler.BackfillRegions(marketType) {
+			if route, err := cfg.scfPlanEntryEnvironmentRoute(region); err == nil && route.Host == cfg.SCFEntry.Host {
+				direct = append(direct, region)
+			}
+		}
+		return direct
+	}
 	options.Slots = func(ctx context.Context, spaceID string) int {
 		reconciler := reconcilers.Get(spaceID)
 		if reconciler == nil {
@@ -64,7 +79,7 @@ func historySeedOptions(cfg *Config, datasets datasetReader, reconcilers *fetchp
 		// 多出的调用会被平台拒绝或排队，占着名额却没有进展。
 		slots := 0
 		for market := range cfg.SCFMarkets[strings.ToLower(spaceID)] {
-			slots = max(slots, len(reconciler.BackfillRegions(market))*reconciler.BackfillReservedConcurrency())
+			slots = max(slots, len(options.Regions(spaceID, market))*reconciler.BackfillReservedConcurrency())
 		}
 		return slots
 	}
