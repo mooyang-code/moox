@@ -82,6 +82,13 @@ type Request struct {
 	IncludeOpenBar bool
 	// BeforeFirstPlan 让范围可以早于每个数据集最早的采集计划生效点（见 extendEarliestSegments）；默认只检查计划覆盖的时间。
 	BeforeFirstPlan bool
+	// Subjects 非空时只检查这些标的（历史补齐按标的分批提交）；与 SubjectID 同时给出时取交集。
+	Subjects []string
+	// MergeSessions 让日内缺口跨过休市区间连成一段（日线以上本来就不拆），MaxGapBars 大于 0 时每段至多这么多根应有的 K 线。
+	// 历史补齐用它把一个标的连续多个交易日合成一个分块：函数调用次数随分块数增长，按交易时段拆开会多出一个数量级。
+	// 缺口里没有已存在的 K 线，所以 Gap.Missing 就是这一段应有的根数，补采按它（而不是按墙上时间）计 BarLimit。
+	MergeSessions bool
+	MaxGapBars    int
 }
 
 // Gap 是一段连续缺失的 K 线：[From, To) 内按频率共缺 Missing 根。
@@ -134,6 +141,13 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 		subjects []string
 	}
 	var jobs []job
+	var wanted map[string]bool
+	if len(request.Subjects) > 0 {
+		wanted = make(map[string]bool, len(request.Subjects))
+		for _, subject := range request.Subjects {
+			wanted[subject] = true
+		}
+	}
 	batch := subjectsPerRead
 	if _, counting := c.counter(request); counting {
 		batch = subjectsPerCount
@@ -157,6 +171,9 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 				var selected []string
 				for _, subject := range group.Subjects {
 					if request.SubjectID != "" && !strings.EqualFold(request.SubjectID, subject) {
+						continue
+					}
+					if len(wanted) > 0 && !wanted[subject] {
 						continue
 					}
 					selected = append(selected, subject)
@@ -356,7 +373,7 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 		if complete[subject] {
 			continue
 		}
-		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, seriesTag, frequency, bars, present[subject])...)
+		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, seriesTag, frequency, bars, present[subject], gapOptions{merge: request.MergeSessions, maxBars: request.MaxGapBars})...)
 	}
 	return gaps, len(bars) * len(subjects), absent, nil
 }
@@ -455,14 +472,20 @@ func coverAbsences(bars []time.Time, present map[string]map[int64]bool, absent m
 	return covered
 }
 
+// gapOptions 是缺口合并方式：merge 让日内缺口跨过休市区间连成一段，maxBars 大于 0 时每段至多这么多根应有的 K 线。
+type gapOptions struct {
+	merge   bool
+	maxBars int
+}
+
 // subjectGaps 把应有的 K 线与实际存在的时间点比对，合并成连续缺口；seriesTag 非空时缺口属于这一条序列。
-func subjectGaps(datasetID, frequencyName, subject, seriesTag string, frequency marketdata.Frequency, bars []time.Time, present map[int64]bool) []Gap {
+func subjectGaps(datasetID, frequencyName, subject, seriesTag string, frequency marketdata.Frequency, bars []time.Time, present map[int64]bool, options gapOptions) []Gap {
 	var gaps []Gap
 	var open *Gap
 	// 日内：中间隔着非交易时段（日历跳过的 K 线）时拆成两段，补采分块不会跨休市区间。
 	// 日线及以上不拆：相邻交易日之间隔着周末、节假日是常态，按休市拆开的话一年的日线每个标的要拆成五十多段、
 	// 每段一次函数调用；行情源按日期区间或交易日序号取数，区间里夹着非交易日不影响。
-	intraday := frequency.Duration() > 0 && frequency.Duration() < 24*time.Hour
+	intraday := frequency.Duration() > 0 && frequency.Duration() < 24*time.Hour && !options.merge
 	for _, bar := range bars {
 		if present[bar.Unix()] {
 			if open != nil {
@@ -472,6 +495,10 @@ func subjectGaps(datasetID, frequencyName, subject, seriesTag string, frequency 
 			continue
 		}
 		if intraday && open != nil && !bar.Equal(open.To) {
+			gaps = append(gaps, *open)
+			open = nil
+		}
+		if open != nil && options.maxBars > 0 && open.Missing >= options.maxBars {
 			gaps = append(gaps, *open)
 			open = nil
 		}

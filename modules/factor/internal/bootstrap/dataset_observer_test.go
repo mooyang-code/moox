@@ -286,3 +286,23 @@ func TestFactorDatasetObserverGracesNewTasksBeforeFirstPeriod(t *testing.T) {
 		require.Equal(t, 2, testutil.CollectAndCount(registry, "moox_factor_dataset_runs_total"), "new 一条 empty、old 一条 success")
 	}
 }
+
+// 源数据集在历史补齐中的任务不出结果：结果数据集置“暂停”期望（enabled 为 0，没有引擎暂停记录也一样），补齐结束后回到期望清单。
+func TestFactorDatasetObserverPausesSeedingTasks(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	datasets, err := report.NewDatasetMetrics(registry, "factor")
+	require.NoError(t, err)
+	task := func(id, dataset string, seeding bool) domain.EngineTask {
+		return domain.EngineTask{Set: domain.FactorTask{TaskID: id, SpaceID: "stockus", ResultDatasetID: dataset, Freq: "5m"}, ResultReady: true, SourceSeeding: seeding}
+	}
+	engine := &fakeEngineView{sets: []domain.EngineTask{task("seeding", "dataset_factor_seeding", true), task("normal", "dataset_factor_normal", false)}}
+	observer := newFactorDatasetObserver(engine, datasets)
+	observer.now = time.Now
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_seeding", -1) // 暂停且原因是历史补齐：enabled 为 -1，Monitor 显示“待生效”
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_normal", 1)
+
+	engine.sets = []domain.EngineTask{task("seeding", "dataset_factor_seeding", false), task("normal", "dataset_factor_normal", false)}
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_seeding", 1)
+}

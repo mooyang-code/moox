@@ -1,8 +1,10 @@
 import type { ActivityLogItem } from "@/api/admin/activity";
+import type { HistorySeed } from "@/api/collector/runtime-status";
 import { ACTIVITY_CATEGORY_LABELS } from "@/components/activity-log/activity-log";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
+import { seedEtaText } from "@/views/collector/runtime-status/runtime-status-model";
 import { freqSeconds, runBarLag, taskHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
 import { resultsLink, type StrategyLink } from "@/views/strategy/links";
@@ -522,6 +524,37 @@ export function systemStage(
   const issues = all.slice(0, 3);
   if (all.length > 3) issues.push(`另有 ${all.length - 3} 项`);
   return { color, label, issues };
+}
+
+export interface SeedSummary {
+  /** 补齐中的数据集个数。 */
+  datasets: number;
+  doneChunks: number;
+  totalChunks: number;
+  /** 补齐中各数据集里最长的预计剩余；都不能估计时为“估算中”。 */
+  etaText: string;
+}
+
+/**
+ * 一个空间的历史补齐汇总：只统计 running 的记录；没有补齐中的数据集时返回 undefined（不显示）。
+ * 补齐中不算异常，不参与任何红黄绿判断。
+ */
+export function seedSummary(seeds: HistorySeed[] | undefined): SeedSummary | undefined {
+  const running = (seeds || []).filter(item => item.status === "running");
+  if (!running.length) return undefined;
+  const longest = Math.max(...running.map(item => Number(item.eta_seconds || 0)));
+  return {
+    datasets: running.length,
+    doneChunks: running.reduce((sum, item) => sum + Number(item.done_chunks || 0), 0),
+    totalChunks: running.reduce((sum, item) => sum + Number(item.total_chunks || 0), 0),
+    etaText: seedEtaText(longest)
+  };
+}
+
+/** 首页那一行的文字：历史补齐中（不生效）· 已完成 x/y 分块 · 预计剩余。 */
+export function seedSummaryText(summary: SeedSummary): string {
+  const eta = summary.etaText === "估算中" ? "预计剩余估算中" : `预计剩余${summary.etaText}`;
+  return `${summary.datasets} 个数据集 · 已完成 ${summary.doneChunks}/${summary.totalChunks} 分块 · ${eta}`;
 }
 
 /** 健康面需要处理时的说明：未就绪与停止上报都来自各模块的上报。 */

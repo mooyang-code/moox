@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
+	"golang.org/x/time/rate"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -92,11 +93,21 @@ type BackfillStore interface {
 	ClearAbsences(context.Context, string, string, string) (int64, error)
 	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
 	SaveHistoryScan(context.Context, store.HistoryScan) error
+	// 历史补齐：记录、按作业集合统计在途分块。
+	HistorySeeds(context.Context, string, bool) ([]store.HistorySeed, error)
+	HistorySeedOf(context.Context, string, string, string) (store.HistorySeed, bool, error)
+	CreateHistorySeed(context.Context, store.HistorySeed) (bool, error)
+	UpdateHistorySeed(context.Context, store.HistorySeed, ...string) (bool, error)
+	InFlightChunksOf(context.Context, []string) (int, error)
 }
 
 // FunctionProvider 保证补采函数存在并返回函数名。
 type FunctionProvider interface {
 	EnsureBackfillFunction(ctx context.Context, marketType string) (string, error)
+	// BackfillRegions 是市场补采函数可用的地域（没有配云函数地域时为空）；EnsureBackfillFunctionIn 保证指定地域的补采函数存在。
+	// 历史补齐把分块按地域轮流派发：地域不同出口地址不同，按出口 IP 限频的行情源能分摊开。
+	BackfillRegions(marketType string) []string
+	EnsureBackfillFunctionIn(ctx context.Context, marketType, region string) (string, error)
 }
 
 // Invoker 同步调用补采执行端（云函数或本地执行端）并等它返回。
@@ -123,6 +134,8 @@ type Backfiller struct {
 	FlushNotices func(ctx context.Context) error
 	// Paused 报告空间是否处于采集暂停；暂停期间不再认领分块（含补位），已在执行的分块自然结束。为空表示不暂停。
 	Paused func(ctx context.Context, spaceID string) (bool, error)
+	// Seed 是首次接入历史补齐的参数与回调，Enabled 为假时不补。
+	Seed SeedOptions
 	// BaseCtx 是异步执行分块的上下文（进程生命周期）。
 	BaseCtx     context.Context
 	MaxInFlight int
@@ -142,6 +155,12 @@ type Backfiller struct {
 	// lastHistoryRun 是每个空间最近一次历史缺口扫描的时间（见 ScanHistory）；每个数据集的扫描记录保存在库里。
 	lastHistoryRun map[string]time.Time
 	workers        sync.WaitGroup
+	// seedPreparing 是本进程里正在拼作业的补齐（键为 空间|数据集|频率），seedSamples 是各补齐最近的完成分块数采样，用来估计剩余时间。
+	seedPreparing map[string]bool
+	seedSamples   map[string][]seedSample
+	// seedLimiter、seedLocalLimiter 是补齐写 Storage 的速率限制（按根数计令牌），首次用到时按 Seed 参数创建。
+	seedLimiter      *rate.Limiter
+	seedLocalLimiter *rate.Limiter
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
 }
@@ -229,6 +248,12 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 
 // createJob 把缺口拆成分块并保存作业，返回作业 ID 与分块数。作业没写频率时，若全部缺口属于同一频率就补上。
 func (b *Backfiller) createJob(ctx context.Context, job store.BackfillJob, gaps []Gap, maxChunks int) (string, int, error) {
+	return b.createJobWith(ctx, job, gaps, maxChunks, false)
+}
+
+// createJobWith 的 merged 为真表示缺口已按分块拆好（历史补齐跨休市区间合并，每段至多 MaxChunkBars 根应有的 K 线），
+// 一个缺口就是一个分块，不再按墙上时间拆。
+func (b *Backfiller) createJobWith(ctx context.Context, job store.BackfillJob, gaps []Gap, maxChunks int, merged bool) (string, int, error) {
 	jobID := uuid.NewString()
 	job.JobID = jobID
 	frequencies := map[string]bool{}
@@ -239,7 +264,11 @@ func (b *Backfiller) createJob(ctx context.Context, job store.BackfillJob, gaps 
 		if err != nil {
 			return "", 0, err
 		}
-		for _, part := range splitGap(gap, frequency) {
+		parts := [][2]time.Time{{gap.From, gap.To}}
+		if !merged {
+			parts = splitGap(gap, frequency)
+		}
+		for _, part := range parts {
 			chunks = append(chunks, store.BackfillChunk{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, SeriesTag: gap.SeriesTag, From: part[0], To: part[1], ChunkID: chunkID(jobID, gap.DatasetID, gap.Frequency, gap.SubjectID, gap.SeriesTag, part[0])})
 		}
 	}
@@ -347,21 +376,50 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	if err != nil {
 		return err
 	}
-	// 强制重拉的作业排在最后分名额：它重写的是已有的行，不急；行情源不可用时它的分块每块都失败、退回重试，
+	// 历史补齐的作业单独排在最后、单独分名额：它量大、不急，实时缺口的补采不能因它排队。
+	seedJobs, err := b.seedJobIDs(ctx, spaceID)
+	if err != nil {
+		return err
+	}
+	seedIDList := make([]string, 0, len(seedJobs))
+	for id := range seedJobs {
+		seedIDList = append(seedIDList, id)
+	}
+	// 强制重拉的作业排在补缺口之后：它重写的是已有的行，不急；行情源不可用时它的分块每块都失败、退回重试，
 	// 排在前面会每轮占满名额，补缺口的作业只能捡空档（2026-11-23 港股收市后整天重取拖慢了自动补采）。
-	sort.SliceStable(jobs, func(i, j int) bool {
-		return jobs[i].Kind != store.BackfillKindForce && jobs[j].Kind == store.BackfillKindForce
-	})
+	rank := func(job store.BackfillJob) int {
+		switch {
+		case seedJobs[job.JobID]:
+			return 2
+		case job.Kind == store.BackfillKindForce:
+			return 1
+		}
+		return 0
+	}
+	sort.SliceStable(jobs, func(i, j int) bool { return rank(jobs[i]) < rank(jobs[j]) })
 	// 采集计划记录每轮只读一次（第一次认领到分块时），本轮各作业认领的分块共用。
 	var history *planHistory
 	var historyErr error
 	historyLoaded := false
 	for _, job := range jobs {
+		isSeed := seedJobs[job.JobID]
 		inFlight, err := b.Store.InFlightChunks(ctx, spaceID)
 		if err != nil {
 			return err
 		}
-		if free := b.maxInFlight(ctx, spaceID) - inFlight; free > 0 {
+		limit := b.maxInFlight(ctx, spaceID)
+		if len(seedIDList) > 0 {
+			seedInFlight, err := b.Store.InFlightChunksOf(ctx, seedIDList)
+			if err != nil {
+				return err
+			}
+			if isSeed {
+				inFlight, limit = seedInFlight, b.seedSlots(ctx, spaceID)
+			} else {
+				inFlight -= seedInFlight
+			}
+		}
+		if free := limit - inFlight; free > 0 {
 			latestEnd := b.now().Add(chunkInvokeLimit + chunkSafetyMargin)
 			claimed, err := b.Store.ClaimChunks(ctx, job.JobID, free, latestEnd)
 			if err != nil {
@@ -383,7 +441,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 					// 分块执行完（成功或失败）后立刻补位认领下一块，不等下一次定时调度：
 					// 否则吞吐被限制为每次调度一批（每分钟约 5 块），大窗口要排很久。
 					// 退回名额、结果不明的分块不触发补位，避免函数未就绪时空转。
-					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce, history, historyErr) && b.Refill {
+					if b.runChunk(b.baseContext(), spaceID, chunk, job.Kind == store.BackfillKindForce, isSeed, history, historyErr) && b.Refill {
 						if err := b.Tick(b.baseContext(), spaceID); err != nil {
 							log.WarnContextf(b.baseContext(), "collector backfill refill failed space=%s: %v", spaceID, err)
 						}
@@ -526,12 +584,7 @@ func (h *planHistory) datasetMarket(datasetID, frequency, subjectID, seriesTag s
 
 // chunkRequest 构造补采分块的调用请求：一个标的、一段连续时间，只写行，不涉及周期。force 是强制重拉作业的分块：
 // 只用开高低收完整的来源（见 marketfetch.Request.CompleteOnly）。
-func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk store.BackfillChunk, force bool) (marketfetch.Request, error) {
-	frequency, err := marketdata.ParseFrequency(chunk.Frequency)
-	if err != nil {
-		return marketfetch.Request{}, err
-	}
-	bars := barCount(frequency, chunk.From, chunk.To)
+func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk store.BackfillChunk, force bool, bars int) (marketfetch.Request, error) {
 	if bars < 1 || bars > MaxChunkBars {
 		return marketfetch.Request{}, fmt.Errorf("chunk spans %d bars", bars)
 	}
@@ -565,7 +618,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 
 // runChunk 调用补采函数执行一个分块，随后复查该块的缺口。force 表示分块属于强制重拉作业：函数报失败时退回重试
 // （见下文），而不是直接记失败。history、historyErr 是本轮调度读出的采集计划记录（读取失败时分块记失败）。
-func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force bool, history *planHistory, historyErr error) (finished bool) {
+func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.BackfillChunk, force, seed bool, history *planHistory, historyErr error) (finished bool) {
 	fail := func(err error) {
 		finished = true
 		log.WarnContextf(ctx, "collector backfill chunk failed space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
@@ -604,6 +657,18 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			return
 		}
 	}
+	// 历史补齐的分块：市场配了云函数地域就按地域轮流走补采函数（与任务的采集方式无关，crypto 也不经海外机），没有再按任务的采集方式。
+	// 轮流从 chunk.ID 取模的那个地域起：某个地域的函数建不出来（配额、命名空间满）时换下一个，不让这部分分块无限退回。
+	var seedRegions []string
+	if seed {
+		if provider := b.Functions(spaceID); provider != nil {
+			if regions := provider.BackfillRegions(plan.Market.MarketType); len(regions) > 0 {
+				executor = marketfetch.PlanExecutorSCF
+				start := int(chunk.ID % int64(len(regions)))
+				seedRegions = append(append([]string(nil), regions[start:]...), regions[:start]...)
+			}
+		}
+	}
 	invoker := b.Invoker
 	var functionName string
 	switch executor {
@@ -619,12 +684,29 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			fail(fmt.Errorf("no backfill function provider for space %s", spaceID))
 			return
 		}
-		if functionName, err = provider.EnsureBackfillFunction(ctx, plan.Market.MarketType); err != nil {
+		if len(seedRegions) > 0 {
+			for _, region := range seedRegions {
+				if functionName, err = provider.EnsureBackfillFunctionIn(ctx, plan.Market.MarketType, region); err == nil {
+					break
+				}
+			}
+		} else {
+			functionName, err = provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
+		}
+		if err != nil {
 			release(err)
 			return
 		}
 	}
-	request, err := chunkRequest(spaceID, functionName, plan, chunk, force)
+	chunkBars := b.chunkBars(spaceID, chunk)
+	if seed {
+		// 补齐写 Storage 的速度有全局上限（给实时写入留余量）；本地执行端经海外机，另有更严的上限。
+		if err := b.waitSeedRate(ctx, executor == marketfetch.PlanExecutorLocal, chunkBars); err != nil {
+			release(err)
+			return
+		}
+	}
+	request, err := chunkRequest(spaceID, functionName, plan, chunk, force, chunkBars)
 	if err != nil {
 		fail(err)
 		return
@@ -672,7 +754,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 	}
 	finished = true
 	note := ""
-	rows := bars(chunk) - check.Absent
+	rows := chunkBars - check.Absent
 	if check.Missing > 0 {
 		missing := missingKey(check.Gaps)
 		if missing != chunk.Missing {
@@ -725,12 +807,28 @@ func absencesOf(spaceID string, gaps []Gap) []store.SourceAbsence {
 	return out
 }
 
-func bars(chunk store.BackfillChunk) int {
+// chunkBars 是分块内应有的 K 线根数。日内分块可能跨休市区间（历史补齐把连续多个交易日合成一块），
+// 按市场日历数交易时段内的根数，不能按墙上时间算；没有日历、日线以上或日历出错时按墙上时间。
+func (b *Backfiller) chunkBars(spaceID string, chunk store.BackfillChunk) int {
 	frequency, err := marketdata.ParseFrequency(chunk.Frequency)
 	if err != nil {
 		return 0
 	}
-	return barCount(frequency, chunk.From, chunk.To)
+	wall := barCount(frequency, chunk.From, chunk.To)
+	if b.Checker == nil || b.Checker.Calendar == nil || frequency.Duration() <= 0 || frequency.Duration() >= 24*time.Hour {
+		return wall
+	}
+	count := 0
+	for t := alignUp(frequency, chunk.From); t.Before(chunk.To); t = frequency.BarEnd(t) {
+		trading, err := b.Checker.Calendar(spaceID, chunk.Frequency, t)
+		if err != nil {
+			return wall
+		}
+		if trading {
+			count++
+		}
+	}
+	return count
 }
 
 // flushNotices 在作业结束后把补写通知封存成事件。

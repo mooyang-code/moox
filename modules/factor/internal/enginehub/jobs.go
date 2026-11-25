@@ -104,7 +104,7 @@ func (h *Hub) runnableTask(ctx context.Context, job store.RecalcJob) (domain.Eng
 	if err != nil {
 		return domain.EngineTask{}, err
 	}
-	return domain.EngineTask{Set: set, Members: selected, ResultReady: h.isReady(set.TaskID)}, nil
+	return domain.EngineTask{Set: set, Members: selected, ResultReady: h.isReady(set.TaskID), SourceSeeding: h.sourceSeeding(set)}, nil
 }
 
 func (h *Hub) unreadyTasks(ctx context.Context) (map[string]bool, error) {

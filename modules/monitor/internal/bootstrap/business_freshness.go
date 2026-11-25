@@ -236,6 +236,10 @@ func buildBusinessFreshnessReporterWithInterval(
 					continue
 				}
 			}
+			if dataset.Reason == monitorobservability.DatasetReasonHistorySeeding {
+				// 待生效：生产者因上游历史补齐暂停，不检查新鲜度；已有的检查随之按“不再检查”收尾。
+				continue
+			}
 			if dataset.Reason == "producer stale" {
 				suppressed[dataset.SpaceID+"\x00"+checkID] = struct{}{}
 				continue

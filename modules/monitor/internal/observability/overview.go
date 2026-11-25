@@ -134,7 +134,46 @@ type Builder struct {
 	Inventory InventorySource
 	// Datasets 列出应当有归档任务的数据集，用于“未归档的数据集”检查；为空时不做这项检查。
 	Datasets ArchivableDatasets
-	Now      func() time.Time
+	// Seeding 记下最近仍有数据集“待生效（上游历史补齐中）”的空间，用来在补齐中与结束后一段时间内不报 View 跟随数据变更落后；
+	// 为空时只按当前是否有待生效数据集判断。多个 Builder 共用同一个，重启后重新记。
+	Seeding *SeedingMemory
+	Now     func() time.Time
+}
+
+// ViewFollowSeedingGrace 是历史补齐结束后仍不报 View 跟随落后的时长：补齐写入的行要等 View 追平，追平期间落后是预期的。
+const ViewFollowSeedingGrace = 24 * time.Hour
+
+// SeedingMemory 记下每个空间最近一次出现“待生效（上游历史补齐中）”数据集的时间。它只在进程内保存：重启后重新记，
+// 重启前已结束的补齐不再享受宽限（已知差别）。零值可用。
+type SeedingMemory struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+// Note 记下空间 at 时刻仍有数据集在历史补齐中。
+func (m *SeedingMemory) Note(spaceID string, at time.Time) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.last == nil {
+		m.last = map[string]time.Time{}
+	}
+	if at.After(m.last[spaceID]) {
+		m.last[spaceID] = at
+	}
+}
+
+// Recent 报告空间在 grace 内是否有过历史补齐（含此刻）。
+func (m *SeedingMemory) Recent(spaceID string, now time.Time, grace time.Duration) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	at, ok := m.last[spaceID]
+	return ok && now.Sub(at) <= grace
 }
 
 // InventorySource 提供最近一份有效的采集任务清单；monmetrics.TaskResultInventoryCache 实现它。
@@ -205,7 +244,16 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, viewFiles...)
-	viewFollow, err := b.buildViewFollowLagHealth(ctx, spaceID, now)
+	seedingSpaces := map[string]bool{}
+	for _, dataset := range out.Datasets {
+		if dataset.Reason == DatasetReasonHistorySeeding {
+			seedingSpaces[dataset.SpaceID] = true
+			b.Seeding.Note(dataset.SpaceID, now)
+		}
+	}
+	viewFollow, err := b.buildViewFollowLagHealth(ctx, spaceID, now, func(space string) bool {
+		return seedingSpaces[space] || b.Seeding.Recent(space, now, ViewFollowSeedingGrace)
+	})
 	if err != nil {
 		return Overview{}, err
 	}
@@ -380,7 +428,9 @@ const viewFollowLagLimit = 2 * time.Minute
 
 // buildViewFollowLagHealth 把 Storage View 上报的跟随落后时长（距离上一次追上变更日志头部）转成告警。
 // 只按时长判断：空闲数据集的序号差天然会有一轮等待的量，按序号差会误报。
-func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+//
+// seeding 判断空间是否在历史补齐中或补齐结束后的宽限内：补齐写入大量行，View 追平前落后是预期的，这些空间的 View 不报落后。
+func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, now time.Time, seeding func(spaceID string) bool) ([]BusinessStatus, error) {
 	if spaceID != "" && spaceID != events.SystemSpaceID {
 		return nil, nil
 	}
@@ -410,6 +460,9 @@ func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, n
 		labels, err := datasetLabels(item.LabelsJSON)
 		if err != nil {
 			return nil, err
+		}
+		if seeding != nil && seeding(labels["space_id"]) {
+			continue
 		}
 		lagging = append(lagging, labels["space_id"]+"/"+labels["view_id"])
 	}
@@ -557,6 +610,9 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 	// liveScopes 是当前有生产者明确期望产出的数据集：另一个生产者（旧生产者或同生产者的其他实例）留下的 0 不能盖过它。
 	disabledScopes := make(map[string]struct{})
 	liveScopes := make(map[string]struct{})
+	// seedingPending 是生产者因“上游历史补齐中”暂停的数据集（enabled 指标为负，见 report.PauseHistorySeeding）：
+	// 页面显示“待生效”，不算异常、不做新鲜度检查。
+	seedingPending := make(map[string]DatasetFrequencyStatus)
 	for _, series := range enabledSeries {
 		labels, err := datasetLabels(series.LabelsJSON)
 		if err != nil {
@@ -577,6 +633,13 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			// 生产者明确说这个数据集现在不期望产出（任务暂停、停用）：记下来，它下游的 View 检查也不做。
 			if fromCurrentBoot {
 				disabledScopes[datasetScopeKey(labels["space_id"], labels["dataset_id"], labels["freq"])] = struct{}{}
+				if enabled.Value < 0 {
+					producer := datasetModuleFromMetric(series.MetricName)
+					seedingPending[strings.Join([]string{producer, labels["space_id"], labels["dataset_id"], labels["freq"]}, "\x00")] = DatasetFrequencyStatus{
+						Producer: producer, SpaceID: labels["space_id"], DatasetID: labels["dataset_id"], Freq: labels["freq"],
+						Status: "disabled", Reason: DatasetReasonHistorySeeding, LastReportedAt: enabled.ObservedAt.UTC(),
+					}
+				}
 			}
 			continue
 		}
@@ -755,6 +818,10 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			clock = spaceClock{err: monmetrics.ErrNoTradingCalendar}
 		}
 		item := datasetStatus(now, current.key, current.value, b.Policy, clock)
+		item.DisplayName = displayNames[identity]
+		out = append(out, item)
+	}
+	for identity, item := range seedingPending {
 		item.DisplayName = displayNames[identity]
 		out = append(out, item)
 	}
@@ -1089,6 +1156,10 @@ func laterTime(left, right time.Time) time.Time {
 // DatasetReasonWarming 是“数据积累中”的原因码：生产者报告最近一次运行只按设计产出了部分结果（历史不足、
 // 预热中），而且此后没有更新的成功。状态仍是 degraded，页面照常展示；告警检查把它当作通过。
 const DatasetReasonWarming = "warming"
+
+// DatasetReasonHistorySeeding 是“待生效（上游历史补齐中）”的原因码：生产者（因子任务、策略实例）把数据集暂停，
+// 原因是它读取的数据集正在首次历史补齐。状态是 disabled：不是故障，不进“需关注”计数，也不生成新鲜度检查。
+const DatasetReasonHistorySeeding = "history_seeding"
 
 // warmingNow 判断数据集是否处在“积累中”：最近一次产出是部分结果（比最近一次成功更新），并且部分结果仍按期出现——
 // 超过成功容忍时间没有新的部分结果（生产者停了或开始真正失败）就不再算积累，回到原来的成功过期判断。

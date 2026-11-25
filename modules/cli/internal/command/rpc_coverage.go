@@ -42,6 +42,7 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.collector.CollectMgr/CreateTask":             "collector task create",
 	"trpc.moox.collector.CollectMgr/DeleteTask":             "collector task delete",
 	"trpc.moox.collector.CollectMgr/GetCollectorStatus":     "collector status",
+	"trpc.moox.collector.CollectMgr/ListHistorySeeds":       "collector status",
 	"trpc.moox.collector.CollectMgr/CheckKline":             "collector kline check",
 	"trpc.moox.collector.CollectMgr/SubmitKlineBackfill":    "collector kline backfill",
 	"trpc.moox.collector.CollectMgr/GetKlineBackfill":       "collector kline backfill-status",

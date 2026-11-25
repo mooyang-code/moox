@@ -389,7 +389,7 @@ func EngineTaskToPB(set domain.EngineTask) *factorpb.EngineTask {
 	for _, member := range set.Members {
 		members = append(members, &factorpb.EngineMember{MemberKey: member.Key, Factor: DefToPB(member.Factor), Kind: member.Kind, Params: CloneParams(member.Params)})
 	}
-	return &factorpb.EngineTask{FactorTask: SetToPB(set.Set), Members: members, ResultReady: set.ResultReady}
+	return &factorpb.EngineTask{FactorTask: SetToPB(set.Set), Members: members, ResultReady: set.ResultReady, SourceSeeding: set.SourceSeeding}
 }
 
 func EngineTaskFromPB(pb *factorpb.EngineTask) (domain.EngineTask, error) {
@@ -405,7 +405,7 @@ func EngineTaskFromPB(pb *factorpb.EngineTask) (domain.EngineTask, error) {
 		}
 		members = append(members, domain.MemberDef{Key: raw.GetMemberKey(), Factor: factor, Kind: raw.GetKind(), Params: CloneParams(raw.GetParams())})
 	}
-	return domain.EngineTask{Set: set, Members: members, ResultReady: pb.GetResultReady()}, nil
+	return domain.EngineTask{Set: set, Members: members, ResultReady: pb.GetResultReady(), SourceSeeding: pb.GetSourceSeeding()}, nil
 }
 
 // SnapshotToPB 把参数快照转换成线上格式。

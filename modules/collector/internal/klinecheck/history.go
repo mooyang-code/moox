@@ -193,7 +193,7 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 					continue
 				}
 				result.WithHistory++
-				gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, seriesTag, frequency, bars[start:], present[subject])...)
+				gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, seriesTag, frequency, bars[start:], present[subject], gapOptions{})...)
 			}
 		}()
 	}

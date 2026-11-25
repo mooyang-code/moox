@@ -31,6 +31,8 @@ type SCFPlanConfig struct {
 	// 日志服务在创建或更新函数时补齐，所以通常不需要这个文件。
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`
+	// BackfillReservedConcurrency 是补采函数的最大并发实例数（平台的函数级预留并发），默认 5；历史补齐的并发是 地域数 × 它，要补得更快可以调到 10，前提是账号的预留并发总额够用。
+	BackfillReservedConcurrency int `yaml:"backfill_reserved_concurrency"`
 	// MaxConcurrentOperations 限制各空间同时进行的云函数操作（建函数、改配置、换代码、设定时器、删除）。
 	MaxConcurrentOperations int `yaml:"max_concurrent_operations"`
 	// AssumedEgressIPs 是函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警。

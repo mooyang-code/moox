@@ -234,7 +234,33 @@ func TestEarliestMovedRecordsPendingWithoutRecordPending(t *testing.T) {
 	require.Equal(t, at(8), res.Earliest)
 	pending, err = s.Pending(testSrc)
 	require.NoError(t, err)
-	require.Equal(t, []PendingSpan{{Subject: "BTCUSDT", From: at(8), To: at(10), Reason: "earliest_moved"}}, pending)
+	require.Equal(t, []PendingSpan{{Subject: "BTCUSDT", From: at(10), To: at(10), Reason: "earliest_moved"}}, pending)
+}
+
+// 放行时按原因清掉 earliest_moved 待办，别的原因的待办保留。
+func TestClearPendingReasonKeepsOtherReasons(t *testing.T) {
+	s := openTest(t, t.TempDir())
+	write(t, s, "BTCUSDT", 10, 12, rowsOf(map[int]float64{10: 100, 11: 101}), false)
+	write(t, s, "BTCUSDT", 8, 10, rowsOf(map[int]float64{8: 98, 9: 99}), false)
+	pending, err := s.Pending(testSrc)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+
+	require.NoError(t, s.ClearPendingReason(testSrc, PendingEarliestMoved))
+	pending, err = s.Pending(testSrc)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+
+	// 混有别的原因时只清指定原因。
+	write(t, s, "BTCUSDT", 6, 8, rowsOf(map[int]float64{6: 96, 7: 97}), false)
+	write(t, s, "BTCUSDT", 12, 13, rowsOf(map[int]float64{12: 102}), false)
+	_, err = s.WriteBatch(context.Background(), testSrc, []SubjectWrite{{Subject: "BTCUSDT", From: at(12), To: at(13), Rows: rowsOf(map[int]float64{12: 105})}}, WriteOptions{RecordPending: true, PendingReason: "storage_change"})
+	require.NoError(t, err)
+	require.NoError(t, s.ClearPendingReason(testSrc, PendingEarliestMoved))
+	pending, err = s.Pending(testSrc)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, "storage_change", pending[0].Reason)
 }
 
 func TestReplaceWithMissingRowsFills(t *testing.T) {

@@ -470,6 +470,33 @@ func loadPending(r kvReader, src Source) ([]PendingSpan, error) {
 	return out, nil
 }
 
+// PendingEarliestMoved 是本地最早一根前移（补进更早的历史）登记的失效重算待办的原因。
+const PendingEarliestMoved = "earliest_moved"
+
+// ClearPendingReason 清除数据源上指定原因的全部待办（源数据历史补齐放行时用：补齐期间任务没出过结果，没有要重算的）。
+func (s *Store) ClearPendingReason(src Source, reason string) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	cur, err := loadPending(s.db, src)
+	if err != nil {
+		return err
+	}
+	var keep []PendingSpan
+	for _, p := range cur {
+		if p.Reason != reason {
+			keep = append(keep, p)
+		}
+	}
+	if len(keep) == len(cur) {
+		return nil
+	}
+	if len(keep) == 0 {
+		return s.db.Delete(pendingKey(src), s.sync)
+	}
+	raw, _ := json.Marshal(keep)
+	return s.db.Set(pendingKey(src), raw, s.sync)
+}
+
 // ClearPending 清除已经成功提交的待办（按内容相等匹配，提交期间新增的待办保留）。
 func (s *Store) ClearPending(src Source, done []PendingSpan) error {
 	s.wmu.Lock()

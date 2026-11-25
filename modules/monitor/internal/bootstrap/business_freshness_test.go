@@ -1340,3 +1340,34 @@ func TestBusinessFreshnessReporterRetiresLegacySpaceChecksAfterUpgrade(t *testin
 		require.Equal(t, "balance sync fresh", result.ErrorMessage)
 	}
 }
+
+// 策略实例因上游历史补齐暂停（enabled=-1）：不生成数据集新鲜度检查，补齐结束（恢复为 1）后才建检查。
+func TestBusinessFreshnessReporterSkipsDatasetCheckWhileSeeding(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	now := time.Now().UTC().Truncate(time.Second)
+	labels := `{"dataset_id":"strategy_seed","freq":"5m","space_id":"stockus"}`
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		require.NoError(t, db.Create(&monmetrics.MetricSeries{
+			ServiceName: "strategy", InstanceID: "strategy@node-a", SeriesID: "enabled-seed",
+			MetricName: "moox_strategy_dataset_enabled", MetricType: "gauge", LabelsJSON: labels, LastSeenAt: now,
+		}).Error)
+		require.NoError(t, db.Create(&monmetrics.MetricLatest{
+			SeriesID: "enabled-seed", ServiceName: "strategy", InstanceID: "strategy@node-a",
+			MetricName: "moox_strategy_dataset_enabled", MetricType: "gauge", LabelsJSON: labels,
+			Value: -1, ObservedAt: now,
+		}).Error)
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}, repositories, nil)
+	require.NoError(t, run(t.Context()))
+	_, err = repositories.Checks.Get(t.Context(), "stockus", "dataset:strategy:strategy_seed:5m")
+	require.Error(t, err, "待生效的数据集不应有新鲜度检查")
+}

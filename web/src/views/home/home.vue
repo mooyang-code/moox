@@ -22,6 +22,11 @@
               <b>{{ stage.label }}</b>
               <small v-for="issue in stage.issues" :key="issue" class="stage-issue">{{ issue }}</small>
             </div>
+            <div v-for="line in seedLines" :key="line.spaceId" class="banner-stage banner-seed">
+              <span class="stage-dot is-blue" />
+              <b>历史补齐中（不生效）</b>
+              <small class="stage-issue">{{ line.space ? `${line.space} · ` : "" }}{{ line.text }}</small>
+            </div>
             <nav class="banner-links" aria-label="常用入口">
               <button v-for="link in quickLinks" :key="link.label" type="button" class="quick" @click="go(link.target)">
                 <component :is="link.icon" />{{ link.label }}
@@ -268,7 +273,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { callControl } from "@/api/admin/http";
-import { getCollectorStatus } from "@/api/collector/runtime-status";
+import { getCollectorStatus, type HistorySeed } from "@/api/collector/runtime-status";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
@@ -294,6 +299,8 @@ import {
   scopeOverviewToSpace,
   statusLine,
   strategyRows,
+  seedSummary,
+  seedSummaryText,
   systemStage,
   type HomeTarget,
   type NameBook
@@ -342,6 +349,14 @@ const activityLoaded = ref(false);
 const liveErrors = reactive({ factor: "", strategy: "", activity: "" });
 const failedCount = computed(() => Object.values(liveErrors).filter(Boolean).length);
 const liveLoadGate = new RequestGate();
+// 各空间的历史补齐记录：逐个空间读取，读不到的空间不显示这一行，不影响首页其他内容。
+const seedsBySpace = ref<Record<string, HistorySeed[]>>({});
+const seedLines = computed(() =>
+  Object.entries(seedsBySpace.value).flatMap(([spaceId, seeds]) => {
+    const summary = seedSummary(seeds);
+    return summary ? [{ spaceId, space: spaceLabel(spaceId), text: seedSummaryText(summary) }] : [];
+  })
+);
 
 const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value, displayZone.value));
 const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value, displayZone.value));
@@ -549,6 +564,7 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) liveErrors.factor = errorText(error);
       }),
+    loadSeeds(isCurrent).catch(() => undefined),
     loadStrategies(isCurrent)
       .then(() => {
         if (isCurrent()) liveErrors.strategy = "";
@@ -568,6 +584,18 @@ async function loadLive() {
       })
   ]);
   if (isCurrent()) stamp(!monitorError.value && failedCount.value === 0);
+}
+
+async function loadSeeds(isCurrent: () => boolean) {
+  const ids = new Set([...(spaceStore.spaces || []).map(item => item.space_id), selectedSpaceId.value].filter(Boolean));
+  const settled = await Promise.allSettled([...ids].map(id => getCollectorStatus(id, { silentError: true })));
+  if (!isCurrent()) return;
+  const next: Record<string, HistorySeed[]> = {};
+  [...ids].forEach((id, index) => {
+    const result = settled[index];
+    if (result.status === "fulfilled" && result.value.history_seeds?.length) next[id] = result.value.history_seeds;
+  });
+  seedsBySpace.value = next;
 }
 
 async function loadStrategies(isCurrent: () => boolean) {
@@ -609,6 +637,7 @@ function resetSpace() {
   strategyLoaded.value = false;
   activityItems.value = [];
   activityLoaded.value = false;
+  seedsBySpace.value = {};
   Object.assign(liveErrors, { factor: "", strategy: "", activity: "" });
   updatedAt.value = "";
   strategyIndex.value = 0;

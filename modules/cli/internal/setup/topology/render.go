@@ -135,6 +135,9 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	if plan.AssumedEgressIPs > 0 {
 		fields = append(fields, mappingField{"assumed_egress_ips", plan.AssumedEgressIPs})
 	}
+	if plan.BackfillReservedConcurrency > 0 {
+		fields = append(fields, mappingField{"backfill_reserved_concurrency", plan.BackfillReservedConcurrency})
+	}
 	fields = append(fields, mappingField{"entry_routes", entries}, mappingField{"spaces", spaces})
 	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(fields...))
 }

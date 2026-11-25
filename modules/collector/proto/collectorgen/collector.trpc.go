@@ -205,6 +205,10 @@ type CollectMgrService interface {
 	// GetCollectorStatus ----- 运行状态与采集计划 -----
 	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq) (*GetCollectorStatusRsp, error)
 
+	ListHistorySeeds(ctx context.Context, req *ListHistorySeedsReq) (*ListHistorySeedsRsp, error)
+
+	SkipHistorySeed(ctx context.Context, req *SkipHistorySeedReq) (*SkipHistorySeedRsp, error)
+
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error)
 
 	TriggerFetchPlan(ctx context.Context, req *TriggerFetchPlanReq) (*TriggerFetchPlanRsp, error)
@@ -712,6 +716,42 @@ func CollectMgrService_GetCollectorStatus_Handler(svr interface{}, ctx context.C
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).GetCollectorStatus(ctx, reqbody.(*GetCollectorStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListHistorySeeds_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListHistorySeedsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListHistorySeeds(ctx, reqbody.(*ListHistorySeedsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_SkipHistorySeed_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SkipHistorySeedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).SkipHistorySeed(ctx, reqbody.(*SkipHistorySeedReq))
 	}
 
 	var rsp interface{}
@@ -1246,6 +1286,14 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_GetCollectorStatus_Handler,
 		},
 		{
+			Name: "/trpc.moox.collector.CollectMgr/ListHistorySeeds",
+			Func: CollectMgrService_ListHistorySeeds_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/SkipHistorySeed",
+			Func: CollectMgrService_SkipHistorySeed_Handler,
+		},
+		{
 			Name: "/trpc.moox.collector.CollectMgr/ReregisterFetchPlan",
 			Func: CollectMgrService_ReregisterFetchPlan_Handler,
 		},
@@ -1457,6 +1505,12 @@ func (s *UnimplementedCollectMgr) ClearSourceAbsences(ctx context.Context, req *
 // GetCollectorStatus ----- 运行状态与采集计划 -----
 func (s *UnimplementedCollectMgr) GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq) (*GetCollectorStatusRsp, error) {
 	return nil, errors.New("rpc GetCollectorStatus of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ListHistorySeeds(ctx context.Context, req *ListHistorySeedsReq) (*ListHistorySeedsRsp, error) {
+	return nil, errors.New("rpc ListHistorySeeds of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) SkipHistorySeed(ctx context.Context, req *SkipHistorySeedReq) (*SkipHistorySeedRsp, error) {
+	return nil, errors.New("rpc SkipHistorySeed of service CollectMgr is not implemented")
 }
 func (s *UnimplementedCollectMgr) ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error) {
 	return nil, errors.New("rpc ReregisterFetchPlan of service CollectMgr is not implemented")
@@ -1724,6 +1778,10 @@ type CollectMgrClientProxy interface {
 	ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq, opts ...client.Option) (rsp *ClearSourceAbsencesRsp, err error)
 	// GetCollectorStatus ----- 运行状态与采集计划 -----
 	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq, opts ...client.Option) (rsp *GetCollectorStatusRsp, err error)
+
+	ListHistorySeeds(ctx context.Context, req *ListHistorySeedsReq, opts ...client.Option) (rsp *ListHistorySeedsRsp, err error)
+
+	SkipHistorySeed(ctx context.Context, req *SkipHistorySeedReq, opts ...client.Option) (rsp *SkipHistorySeedRsp, err error)
 
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq, opts ...client.Option) (rsp *ReregisterFetchPlanRsp, err error)
 
@@ -2297,6 +2355,46 @@ func (c *CollectMgrClientProxyImpl) GetCollectorStatus(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetCollectorStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListHistorySeeds(ctx context.Context, req *ListHistorySeedsReq, opts ...client.Option) (*ListHistorySeedsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListHistorySeeds")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListHistorySeeds")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListHistorySeedsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) SkipHistorySeed(ctx context.Context, req *SkipHistorySeedReq, opts ...client.Option) (*SkipHistorySeedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/SkipHistorySeed")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("SkipHistorySeed")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SkipHistorySeedRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

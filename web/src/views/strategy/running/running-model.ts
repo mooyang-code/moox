@@ -1,3 +1,4 @@
+import type { HistorySeed } from "@/api/collector/runtime-status";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 
@@ -63,4 +64,33 @@ export function isTrialInstance(
   instance: Pick<StrategyInstance, "enabled" | "logical_account_id" | "confirmed_at"> | null | undefined
 ): boolean {
   return Boolean(instance?.enabled && instance.logical_account_id && !instance.confirmed_at);
+}
+
+/** 待生效的文案：实例已启用，但上游数据集正在历史补齐，策略暂不求值。 */
+export const PENDING_SEED_LABEL = "待生效（上游历史补齐中）";
+
+/**
+ * 实例是否待生效：已启用，且 resolved_json 里任一任务的 dataset_id 或 source_dataset_id 命中补齐中的记录
+ * （status 为 running，数据集相同，频率与 bar 忽略大小写相等）。resolved_json 解析不了或没有补齐数据时按没有处理。
+ */
+export function isPendingSeedInstance(
+  instance: Pick<StrategyInstance, "enabled" | "resolved_json"> | null | undefined,
+  seeds: HistorySeed[] | undefined
+): boolean {
+  if (!instance?.enabled) return false;
+  const running = (seeds || []).filter(item => item.status === "running");
+  if (!running.length) return false;
+  let resolved: { tasks?: unknown; bar?: unknown };
+  try {
+    resolved = JSON.parse(instance.resolved_json || "{}") || {};
+  } catch {
+    return false;
+  }
+  const bar = String(resolved.bar || "").toLowerCase();
+  if (!bar || !resolved.tasks || typeof resolved.tasks !== "object") return false;
+  const tasks = Object.values(resolved.tasks as Record<string, { dataset_id?: string; source_dataset_id?: string }>);
+  return tasks.some(task => {
+    const ids = [task?.dataset_id, task?.source_dataset_id].filter(Boolean);
+    return running.some(seed => ids.includes(seed.dataset_id) && (seed.frequency || "").toLowerCase() === bar);
+  });
 }

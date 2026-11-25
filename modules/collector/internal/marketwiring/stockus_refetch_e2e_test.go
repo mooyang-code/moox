@@ -68,6 +68,12 @@ func (usBackfillFunctions) EnsureBackfillFunction(context.Context, string) (stri
 	return "moox-fetch-plan-backfill-stockus-equity-nanjing", nil
 }
 
+func (usBackfillFunctions) BackfillRegions(string) []string { return nil }
+
+func (f usBackfillFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
+	return f.EnsureBackfillFunction(ctx, market)
+}
+
 // usRefetchHarness 装好一个美股空间的补采环境：采集计划（真实生成逻辑）、假 Storage、真实的处理器和补采器。
 // minutes 按代码给出上游的 1M；now 是可改的当前时间。
 type usRefetchHarness struct {

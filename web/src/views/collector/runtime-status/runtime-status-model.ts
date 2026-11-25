@@ -2,7 +2,8 @@ import type {
   CollectorDatasetStatus,
   CollectorFunctionStatus,
   GetCollectorStatusResponse,
-  HealthLevel
+  HealthLevel,
+  HistorySeed
 } from "@/api/collector/runtime-status";
 
 import { marketTime } from "@/utils/time-zone";
@@ -305,4 +306,68 @@ export function streamPeriodText(stat: {
   const missing = stat.missing ? `缺 ${stat.missing}${stat.suspected ? `（疑似下架 ${stat.suspected}）` : ""}` : "齐";
   const done = stat.committed ? `${(Number(stat.commit_done_ms || 0) / 1000).toFixed(2)} 秒` : stat.arrived ? "未写入" : "零到达";
   return { arrived, missing, done };
+}
+
+const seedStatuses: Record<string, string> = { running: "补齐中", done: "已完成", skipped: "已手动放行" };
+
+/** 补齐状态的中文名，未知状态原样返回。 */
+export function seedStatusText(status?: string) {
+  return seedStatuses[status || ""] || status || "未知";
+}
+
+/** 预计剩余：约 N 分钟 / 约 N 小时 M 分钟 / 约 N 天；0 或缺失表示不能估计，写“估算中”。不足 1 分钟按 1 分钟。 */
+export function seedEtaText(etaSeconds?: number | string) {
+  const seconds = Number(etaSeconds || 0);
+  if (!(seconds > 0)) return "估算中";
+  return `约 ${durationText(Math.max(seconds, 60))}`;
+}
+
+/** 进度百分比，向下取整，分块总数为 0 时为 0。 */
+export function seedPercent(seed: Pick<HistorySeed, "done_chunks" | "total_chunks">) {
+  const total = Number(seed.total_chunks || 0);
+  if (total <= 0) return 0;
+  return Math.min(100, Math.floor((Number(seed.done_chunks || 0) * 100) / total));
+}
+
+/** 失败分块的处理提示。 */
+export const SEED_FAILED_TIP = "可用 moox-cli collector kline check 查看缺口，再手动补采处理。";
+
+export interface SeedRow {
+  key: string;
+  datasetId: string;
+  name: string;
+  frequency: string;
+  running: boolean;
+  statusText: string;
+  progressText: string;
+  percent: number;
+  /** 只对补齐中的显示，其余为空。 */
+  etaText: string;
+  failedChunks: number;
+  targetFrom: string;
+  note: string;
+}
+
+/** 历史补齐表的行：保持后端顺序（补齐中的已排前）；数据集名沿用页面的展示名映射。 */
+export function seedRows(seeds: HistorySeed[] | undefined, names: Map<string, string>): SeedRow[] {
+  return (seeds || []).map(seed => {
+    const running = seed.status === "running";
+    return {
+      key: datasetKey(seed),
+      datasetId: seed.dataset_id || "",
+      name:
+        datasetLabel(names, datasetKey(seed)) !== datasetKey(seed)
+          ? datasetLabel(names, datasetKey(seed))
+          : datasetLabel(names, seed.dataset_id || ""),
+      frequency: seed.frequency || "",
+      running,
+      statusText: seedStatusText(seed.status),
+      progressText: `${seed.done_chunks || 0}/${seed.total_chunks || 0}（${seedPercent(seed)}%）`,
+      percent: seedPercent(seed),
+      etaText: running ? seedEtaText(seed.eta_seconds) : "",
+      failedChunks: seed.failed_chunks || 0,
+      targetFrom: seed.target_from || "",
+      note: seed.note || ""
+    };
+  });
 }
