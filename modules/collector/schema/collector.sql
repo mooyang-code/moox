@@ -220,7 +220,7 @@ CREATE TABLE IF NOT EXISTS t_collector_history_seeds (
     c_started_at DATETIME NOT NULL,
     c_finished_at DATETIME,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('preparing', 'running', 'done', 'skipped')),
+    CHECK (c_status IN ('preparing', 'running', 'done', 'skipped', 'failed')),
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
 );
 

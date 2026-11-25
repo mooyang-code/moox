@@ -155,9 +155,11 @@ type Backfiller struct {
 	// refetchedDay 是每个空间最近一次已提交收市后整天重取的那天（范围起点），只在内存里，防止同一轮里重复提交。
 	refetchedDay map[string]time.Time
 	workers      sync.WaitGroup
-	// seedPreparing 是本进程里正在拼作业的补齐（键为 空间|数据集|频率），seedSamples 是各补齐最近的完成分块数采样，用来估计剩余时间。
+	// seedPreparing 是本进程里正在拼作业的补齐（键为 空间|数据集|频率），seedSamples 是各补齐最近的完成分块数采样，用来估计剩余时间；
+	// seedFailures 是各补齐连续拼作业失败的次数（只在内存里，进程重启从零算）。
 	seedPreparing map[string]bool
 	seedSamples   map[string][]seedSample
+	seedFailures  map[string]int
 	// seedLimiter、seedLocalLimiter 是补齐写 Storage 的速率限制（按根数计令牌），首次用到时按 Seed 参数创建。
 	seedLimiter      *rate.Limiter
 	seedLocalLimiter *rate.Limiter
