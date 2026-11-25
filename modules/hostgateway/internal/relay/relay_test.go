@@ -64,6 +64,9 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{t: t, ca: testcert.New(t, nil), state: &snapshot.State{}, plain: make(chan net.Conn, 4)}
 	h.raw = testsnapshot.NewWithOutbound(t, "control", "home")
+	// 出站主机上放一个 collector 要调的服务（storage-primary），跨主机端口才对 collector 开放（主机级组件只有 moox-cli 能调）。
+	testsnapshot.Deployment(t, h.raw, "control", "storage-primary").HostId = "home"
+	testsnapshot.Rehash(t, h.raw)
 	view, err := snapshot.Build("control", proto.Clone(h.raw).(*pb.HostGatewaySnapshot))
 	require.NoError(t, err)
 	h.state.Apply(view)
@@ -173,7 +176,7 @@ func roundTrip(t *testing.T, conn net.Conn) {
 func TestRelayOpenStreamAllowlistAndReplay(t *testing.T) {
 	h := newHarness(t)
 	require.Equal(t, []relay.Status{{HostID: "home"}}, h.server.Status(), "从未接入的出站主机也要上报为离线")
-	_, err := h.open("monitor", servicecatalog.HostGatewayRemotePort)
+	_, err := h.open("collector", servicecatalog.HostGatewayRemotePort)
 	require.ErrorContains(t, err, "offline")
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -181,22 +184,22 @@ func TestRelayOpenStreamAllowlistAndReplay(t *testing.T) {
 	go h.outbound("home", "host-gateway@home", clientAuth).Run(ctx)
 	h.waitOnline("")
 
-	conn, err := h.open("monitor", servicecatalog.HostGatewayRemotePort)
+	conn, err := h.open("collector", servicecatalog.HostGatewayRemotePort)
 	require.NoError(t, err)
 	roundTrip(t, conn)
 
-	_, err = h.open("monitor", 22)
+	_, err = h.open("collector", 22)
 	require.ErrorContains(t, err, "not allowed")
-	_, err = h.open("host-gateway@control", servicecatalog.HostGatewayRemotePort)
+	_, err = h.open("trade", servicecatalog.HostGatewayRemotePort)
 	require.ErrorContains(t, err, "not allowed")
 	view := h.state.Load()
 	_, ok := view.Relay("home")
 	require.True(t, ok)
-	_, err = h.open("monitor", 11012)
+	_, err = h.open("collector", 11012)
 	require.ErrorContains(t, err, "not allowed", "组件健康端口不经中转（组件健康只看上报）")
 
 	// 同一份签名前导重放：第二次被拒绝。
-	signed, err := protocol.Sign(credential("monitor"), protocol.MethodOpen, "control", protocol.Open{HostID: "home", Port: servicecatalog.HostGatewayRemotePort}, time.Now())
+	signed, err := protocol.Sign(credential("collector"), protocol.MethodOpen, "control", protocol.Open{HostID: "home", Port: servicecatalog.HostGatewayRemotePort}, time.Now())
 	require.NoError(t, err)
 	send := func() protocol.Reply {
 		raw, err := tls.Dial("tcp", h.address, &tls.Config{RootCAs: h.roots, ServerName: "control", NextProtos: []string{protocol.ALPNOpen}})
@@ -277,7 +280,7 @@ func TestRelaySessionReplacementAndReconnect(t *testing.T) {
 	require.False(t, h.status().Online)
 	h.state.Apply(outbound)
 	h.waitOnline(second.InstanceID())
-	conn, err := h.open("monitor", servicecatalog.HostGatewayRemotePort)
+	conn, err := h.open("collector", servicecatalog.HostGatewayRemotePort)
 	require.NoError(t, err)
 	roundTrip(t, conn)
 }
