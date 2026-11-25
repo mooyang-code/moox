@@ -98,7 +98,9 @@ export function followText(task: ArchiveTask): string {
 
 /** “跟随”列第二行：最近一次成功的跟随（或整段重读）时刻，到分钟。 */
 export function lastFollowText(task: ArchiveTask, zone: string): string {
-  return task.last_success_at ? `最近成功 ${formatInstant(task.last_success_at, zone, "minute")}` : "还没有成功的跟随";
+  return toInstantMs(task.last_success_at) !== null
+    ? `最近成功 ${formatInstant(task.last_success_at, zone, "minute")}`
+    : "还没有成功的跟随";
 }
 
 /** 时长：45 秒、2 分 13 秒、1 小时 16 分、2 天 3 小时。 */

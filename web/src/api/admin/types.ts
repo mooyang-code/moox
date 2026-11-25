@@ -34,6 +34,7 @@ export interface DeploymentHost {
   /** 这台主机的网关是否开外部入口（11004），云函数、Skill 等外部身份从这里进来 */
   external_entry?: boolean;
   description?: string;
+  /** 创建、更新时刻：Unix 毫秒的数字字符串 */
   created_at?: string;
   updated_at?: string;
 }
@@ -41,6 +42,7 @@ export interface ComponentDeployment {
   host_id: string;
   component_id: string;
   status: DeploymentStatus;
+  /** 创建、更新时刻：Unix 毫秒的数字字符串 */
   created_at?: string;
   updated_at?: string;
 }
@@ -91,6 +93,7 @@ export interface CatalogResponse {
 export interface HostGatewayRuntimeStatus {
   expected_hash?: string;
   applied_hash?: string;
+  /** 最近一次拉取的时刻：Unix 毫秒的数字字符串，没拉取过为 "0" */
   last_seen_at?: string;
 }
 export interface HostGatewayRoute {
@@ -108,5 +111,6 @@ export interface HostRoutesResponse {
   routes?: HostGatewayRoute[];
   gateway_status?: HostGatewayRuntimeStatus;
   snapshot_schema_version: number;
+  /** 这次响应计算的时刻：Unix 毫秒的数字字符串 */
   compiled_at: string;
 }

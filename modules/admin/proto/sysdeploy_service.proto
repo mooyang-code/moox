@@ -15,8 +15,8 @@ message DeploymentHost {
   string region = 4;
   string status = 5;
   string description = 6;
-  string created_at = 7;
-  string updated_at = 8;
+  int64 created_at = 7;  // Unix 毫秒
+  int64 updated_at = 8;  // Unix 毫秒
   // direct 或 outbound（只能出站，经 control 网关反向连接中转）。
   string reachability = 9;
   // 控制台展示用的中文名，如“控制机”。
@@ -32,15 +32,15 @@ message ComponentDeployment {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
-  string created_at = 4;
-  string updated_at = 5;
+  int64 created_at = 4;  // Unix 毫秒
+  int64 updated_at = 5;  // Unix 毫秒
 }
 
 // 网关最近一次拉取快照时 Admin 记下的状态：期望快照、网关已应用的快照、拉取时间。网关是否在运行看 Monitor 的组件上报。
 message HostGatewayRuntimeStatus {
   string expected_hash = 1;
   string applied_hash = 2;
-  string last_seen_at = 3;
+  int64 last_seen_at = 3;  // Unix 毫秒，没拉取过为 0
   // control 网关带来的各出站主机反向连接会话。
   repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 4;
 }
@@ -101,8 +101,8 @@ message GetHostRoutesRsp {
   // expected_hash 是当前登记内容对应的快照哈希，全部主机相同。
   HostGatewayRuntimeStatus gateway_status = 4;
   uint32 snapshot_schema_version = 5;
-  // 这次响应实际计算的时间，不是网关应用快照的时间。
-  string compiled_at = 6;
+  // 这次响应实际计算的时刻（Unix 毫秒），不是网关应用快照的时间。
+  int64 compiled_at = 6;
 }
 
 // SyncTopologyHost 是 moox.toml 里一台主机的完整声明，含启停状态。

@@ -72,10 +72,12 @@ describe("跟随", () => {
   it("启用写每分钟跟随，停用写已停用；最近成功到分钟、带空间时区后缀", () => {
     expect(followText(task({}))).toBe("每分钟跟随变更日志");
     expect(followText(task({ status: "paused" }))).toBe("已停用");
-    expect(lastFollowText(task({ last_success_at: "2026-11-07T04:41:25Z" }), "Asia/Shanghai")).toBe(
+    expect(lastFollowText(task({ last_success_at: String(Date.parse("2026-11-07T04:41:25Z")) }), "Asia/Shanghai")).toBe(
       "最近成功 2026-11-07 12:41 UTC+8"
     );
     expect(lastFollowText(task({}), "UTC")).toBe("还没有成功的跟随");
+    // 没有时 Admin 给 "0"
+    expect(lastFollowText(task({ last_success_at: "0" }), "UTC")).toBe("还没有成功的跟随");
   });
 
   it("整段重读的确认写明重读线上保留期与耗时", () => {
@@ -96,10 +98,13 @@ describe("时长", () => {
 
   it("运行耗时：运行中按现在算，没开始或没结束（已结束状态）写 —", () => {
     const now = Date.parse("2026-11-07T00:10:00Z");
-    expect(runDurationText({ started_at: "2026-11-07T00:00:00Z", finished_at: "2026-11-07T00:02:13Z" }, now)).toBe("2 分 13 秒");
-    expect(runDurationText({ started_at: "2026-11-07T00:00:00Z", status: "running" }, now)).toBe("10 分");
-    expect(runDurationText({ status: "queued" }, now)).toBe("—");
-    expect(runDurationText({ started_at: "2026-11-07T00:00:00Z", status: "failed" }, now)).toBe("—");
+    const ms = (text: string) => String(Date.parse(text));
+    expect(runDurationText({ started_at: ms("2026-11-07T00:00:00Z"), finished_at: ms("2026-11-07T00:02:13Z") }, now)).toBe(
+      "2 分 13 秒"
+    );
+    expect(runDurationText({ started_at: ms("2026-11-07T00:00:00Z"), finished_at: "0", status: "running" }, now)).toBe("10 分");
+    expect(runDurationText({ started_at: "0", status: "queued" }, now)).toBe("—");
+    expect(runDurationText({ started_at: ms("2026-11-07T00:00:00Z"), status: "failed" }, now)).toBe("—");
   });
 });
 

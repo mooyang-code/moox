@@ -25,8 +25,8 @@ const component: CatalogComponent = {
 const snapshot: HostRoutesResponse = {
   host_id: "a",
   snapshot_schema_version: 1,
-  compiled_at: "2026-10-09T12:00:00Z",
-  gateway_status: { expected_hash: "new", applied_hash: "old", last_seen_at: "2026-10-09T12:00:00Z" }
+  compiled_at: String(Date.parse("2026-10-09T12:00:00Z")),
+  gateway_status: { expected_hash: "new", applied_hash: "old", last_seen_at: String(Date.parse("2026-10-09T12:00:00Z")) }
 };
 describe("deployment presentation", () => {
   it("uses host plus component identity and never equates enablement with health", () => {
@@ -43,8 +43,10 @@ describe("deployment presentation", () => {
   });
   it("uses server observation time for heartbeat age and keeps never-reported distinct", () => {
     expect(gatewayLabel(snapshot)).toBe("在线");
-    expect(gatewayLabel({ ...snapshot, compiled_at: "2026-10-09T12:02:01Z" })).toBe("离线");
+    expect(gatewayLabel({ ...snapshot, compiled_at: String(Date.parse("2026-10-09T12:02:01Z")) })).toBe("离线");
     expect(gatewayLabel({ ...snapshot, gateway_status: {} })).toBe("从未上报");
+    // 没拉取过时 Admin 给 "0"
+    expect(gatewayLabel({ ...snapshot, gateway_status: { last_seen_at: "0" } })).toBe("从未上报");
     expect(gatewayLabel()).toBe("状态未知");
   });
   it("compares the expected and applied snapshot", () => {

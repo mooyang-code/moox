@@ -49,12 +49,12 @@ export function humanizeDuration(seconds: number | null): string {
   return `${(seconds / 86400).toFixed(1)} 天`;
 }
 
-/** 接口里的时刻换成毫秒：毫秒数字或数字字符串（墙钟时刻），或 RFC3339 文本（data_time 一类）；无法解析返回 null。Unix 秒由调用方先乘 1000。 */
+/** 时刻换成毫秒：数字与数字字符串按 Unix 毫秒（墙钟时刻的写法），文本按 RFC3339；无法解析返回 null。Unix 秒（数据坐标）由调用方先乘 1000。 */
 export function toMillis(value?: string | number | null): number | null {
   return toInstantMs(value);
 }
 
-/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按毫秒理解。 */
+/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按 Unix 毫秒理解。 */
 export function fullTime(value: string | number | null | undefined, zone = "UTC"): string {
   return formatInstant(toMillis(value), zone);
 }
@@ -180,9 +180,9 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
       const set = info.factor_task;
       const health = taskHealth(set, info.last_run);
       const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
-      // last_period_time 是 Unix 秒（数据坐标）。
-      const periodSeconds = Number(info.last_run?.last_period_time ?? 0);
-      const periodOpenMs = periodSeconds > 0 ? periodSeconds * 1000 : null;
+      // last_period_time 是数据坐标的 Unix 秒
+      const periodOpenSeconds = toSeconds(info.last_run?.last_period_time);
+      const periodOpenMs = periodOpenSeconds ? periodOpenSeconds * 1000 : null;
       const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
       return {
         taskId: set.task_id,
@@ -426,8 +426,8 @@ export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: n
     .filter(item => !isNoChange(item))
     .map((item, index) => ({
       key: String(item.id ?? index),
-      when: marketTime(toMillis(item.created_at), zone, nowMs),
-      whenTitle: fullTime(item.created_at, zone),
+      when: marketTime(toInstantMs(item.created_at), zone, nowMs),
+      whenTitle: formatInstant(item.created_at, zone),
       category: ACTIVITY_CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
       title: compactTitle(prettifyIds(item.title || "", names)),
       tone: item.level === "error" ? "bad" : item.level === "warning" ? "warn" : "idle"

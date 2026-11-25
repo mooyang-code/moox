@@ -21,7 +21,13 @@ describe("user-info store", () => {
   it("loads the account from GetUserInfo and keeps no token", async () => {
     const store = useUserInfoStore();
     vi.mocked(getUserInfoAPI).mockResolvedValue({
-      user_info: { user_id: "u1", username: "admin", last_login_ip: "1.2.3.4", last_login_at: 1700000000, created_at: 1690000000 }
+      user_info: {
+        user_id: "u1",
+        username: "admin",
+        last_login_ip: "1.2.3.4",
+        last_login_at: "1700000000000",
+        created_at: "1690000000000"
+      }
     } as never);
 
     await store.setAccount();

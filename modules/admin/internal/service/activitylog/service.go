@@ -56,16 +56,12 @@ func (s *Service) AppendActivityLogs(ctx context.Context, req *pb.AppendActivity
 	return &pb.AppendActivityLogsRsp{RetInfo: ret(pb.ErrorCode_SUCCESS, "ok"), Inserted: int32(inserted)}, nil
 }
 
-func parseTimeFilter(name, value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
+// millisFilter 把请求里的 Unix 毫秒换成时刻，0 表示不限。
+func millisFilter(ms int64) time.Time {
+	if ms == 0 {
+		return time.Time{}
 	}
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("%s must be RFC3339", name)
-	}
-	return parsed, nil
+	return time.UnixMilli(ms).UTC()
 }
 
 func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogsReq) (*pb.ListActivityLogsRsp, error) {
@@ -79,14 +75,10 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 	if isBrowserCaller(ctx) && !req.GetGlobal() && spaceID == "" {
 		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id or global is required")}, nil
 	}
-	since, err := parseTimeFilter("since", req.GetSince())
-	if err != nil {
-		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	if req.GetSince() < 0 || req.GetUntil() < 0 {
+		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "since 与 until 必须是非负的 Unix 毫秒")}, nil
 	}
-	until, err := parseTimeFilter("until", req.GetUntil())
-	if err != nil {
-		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
+	since, until := millisFilter(req.GetSince()), millisFilter(req.GetUntil())
 	filter := Filter{SpaceID: spaceID, Global: req.GetGlobal(), Source: strings.TrimSpace(req.GetSource()), Category: strings.TrimSpace(req.GetCategory()), RefID: strings.TrimSpace(req.GetRefId()), Since: since, Until: until, Page: int(req.GetPage().GetPage()), Size: int(req.GetPage().GetSize())}
 	items, total, err := s.dao.List(ctx, filter)
 	if err != nil {
@@ -102,7 +94,7 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 	for _, item := range items {
 		rsp.Items = append(rsp.Items, &pb.ActivityLogItem{
 			Id: item.ID, SpaceId: item.SpaceID, Source: item.Source, Category: item.Category, Level: item.Level, Title: item.Title,
-			Detail: item.Detail, RefId: item.RefID, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339),
+			Detail: item.Detail, RefId: item.RefID, CreatedAt: item.CreatedAt.UnixMilli(),
 		})
 	}
 	return rsp, nil

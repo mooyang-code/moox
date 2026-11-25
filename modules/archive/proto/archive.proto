@@ -21,10 +21,11 @@ message ArchiveRun {
   string range_end = 6;
   // status：queued、running、succeeded、failed、canceled。
   string status = 7;
-  string scheduled_at = 8;
-  string started_at = 9;
-  string finished_at = 10;
-  string lease_until = 12;
+  // 以下四个时刻都是 Unix 毫秒，没有时为 0；range_start、range_end 是 data_time 口径的 RFC3339 文本。
+  int64 scheduled_at = 8;
+  int64 started_at = 9;
+  int64 finished_at = 10;
+  int64 lease_until = 12;
   uint64 subjects_total = 13;
   uint64 subjects_done = 14;
   uint64 request_count = 15;
@@ -60,12 +61,13 @@ message ArchiveTask {
   string backfill_from = 9;
   // status：enabled、paused。
   string status = 10;
-  // 最近一次成功的 follow 或 manual 的开始时间。
-  string last_success_at = 15;
+  // 最近一次成功的 follow 或 manual 的开始时刻（Unix 毫秒），没有时为 0。
+  int64 last_success_at = 15;
   string final_until = 16;
   string creator = 17;
-  string created_at = 18;
-  string updated_at = 19;
+  // 创建、更新时刻（Unix 毫秒）。
+  int64 created_at = 18;
+  int64 updated_at = 19;
   // health：ok、warning、error、paused。
   string health = 20;
   string health_reason = 21;
@@ -109,16 +111,17 @@ message ArchivePartition {
   repeated string columns = 15;
   string preview = 16;
   uint32 export_count = 17;
-  string last_changed_at = 18;
-  string exported_at = 19;
-  string finalized_at = 20;
+  // last_changed_at、exported_at、finalized_at 与 remote_uploaded_at、remote_verified_at 是 Unix 毫秒，没有时为 0。
+  int64 last_changed_at = 18;
+  int64 exported_at = 19;
+  int64 finalized_at = 20;
   string last_run_id = 21;
-  // 远端副本：remote_key 是相对对象存储 prefix 的键；remote_sha256 等于 file_sha256 且 remote_verified_at 非空时远端是当前版本。
+  // 远端副本：remote_key 是相对对象存储 prefix 的键；remote_sha256 等于 file_sha256 且 remote_verified_at 非 0 时远端是当前版本。
   string remote_key = 22;
   string remote_sha256 = 23;
   string remote_etag = 24;
-  string remote_uploaded_at = 25;
-  string remote_verified_at = 26;
+  int64 remote_uploaded_at = 25;
+  int64 remote_verified_at = 26;
   string remote_error = 27;
   // remote_state（mgr 计算）：off 未启用对象存储、none 没有文件、verified 已校验、failed 失败、pending 待上传。
   string remote_state = 28;
@@ -136,7 +139,8 @@ message ArchiveWorkerInfo {
   bool maintaining = 8;
   string pacing_json = 9;
   repeated string running_run_ids = 10;
-  string last_heartbeat_at = 12;
+  // 最近一次心跳的时刻（Unix 毫秒）。
+  int64 last_heartbeat_at = 12;
   // active：最近 2 分钟内有心跳。
   bool active = 13;
   ObjectStoreInfo object_store = 14;
@@ -154,8 +158,8 @@ message ObjectStoreInfo {
   string url_style = 5;
   // probe_error 是最近一次探测失败的原因，可用时为空。
   string probe_error = 6;
-  // unavailable_since 是连续不可用的起点（RFC3339），可用时为空。
-  string unavailable_since = 7;
+  // unavailable_since 是连续不可用的起点（Unix 毫秒），可用时为 0。
+  int64 unavailable_since = 7;
 }
 
 // TaskRef 是一个归档任务的身份。
@@ -424,9 +428,10 @@ message RunAssignment {
   string local_close = 13;
   // 暂存保留期（秒）。
   uint32 staging_retention_seconds = 14;
-  string scheduled_at = 15;
-  // 本次运行开始（读取区间的终点）。
-  string started_at = 16;
+  // 计划时刻（Unix 毫秒）。
+  int64 scheduled_at = 15;
+  // 本次运行开始的时刻（Unix 毫秒），也是读取区间的终点。
+  int64 started_at = 16;
   // 读取区间（kind=range 时有值）。
   string range_start = 17;
   string range_end = 18;
@@ -437,8 +442,8 @@ message RunAssignment {
   string task_id = 21;
   // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进 <space>/<purpose>/<dir_name>/dataset.json。
   string dataset_meta_json = 22;
-  // 最近一次成功的 follow 或 manual 的开始时间；位点断档时据此判断无法补齐的区间。
-  string last_success_at = 23;
+  // 最近一次成功的 follow 或 manual 的开始时刻（Unix 毫秒，没有时为 0）；位点断档时据此判断无法补齐的区间。
+  int64 last_success_at = 23;
   // 该任务在 mgr 的分区登记（只含结束时间晚于「本次开始 − 线上保留期」的，kind=import 时为全部；不带预览与列名）；
   // worker 本地缺分区状态时据此补齐。
   repeated PartitionReport registered_partitions = 24;
@@ -483,15 +488,16 @@ message PartitionReport {
   repeated string columns = 12;
   string preview = 13;
   uint32 export_count = 14;
-  string last_changed_at = 15;
-  string exported_at = 16;
-  string finalized_at = 17;
+  // 时刻含义与单位同 ArchivePartition（Unix 毫秒，没有时为 0）。
+  int64 last_changed_at = 15;
+  int64 exported_at = 16;
+  int64 finalized_at = 17;
   // 远端副本（worker 上报与 mgr 下发两个方向都用），含义同 ArchivePartition。
   string remote_key = 18;
   string remote_sha256 = 19;
   string remote_etag = 20;
-  string remote_uploaded_at = 21;
-  string remote_verified_at = 22;
+  int64 remote_uploaded_at = 21;
+  int64 remote_verified_at = 22;
   string remote_error = 23;
 }
 

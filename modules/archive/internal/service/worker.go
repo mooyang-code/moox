@@ -94,9 +94,9 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition) *arc
 		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, Retention: c.Task.Retention,
 		AllowedLatenessSeconds: uint32(s.cfg.AllowedLateness / time.Second),
 		SpaceTz:                spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
-		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
+		ScheduledAt: millisOf(c.Run.ScheduledAt), StartedAt: millisOf(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
 		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskId: strconv.FormatInt(c.Task.ID, 10), DatasetMetaJson: c.Task.MetaJSON, LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
-		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports,
+		LastSuccessAt: millisOf(c.Task.LastSuccessAt), RegisteredPartitions: reports,
 	}
 }
 
@@ -160,9 +160,9 @@ func registeredPartitionToPB(p store.Partition) *archivepb.PartitionReport {
 		PartitionKey: p.PartitionKey, RangeStart: fmtRFC(p.RangeStart), RangeEnd: fmtRFC(p.RangeEnd), Status: p.Status,
 		RowCount: p.RowCount, SubjectCount: p.SubjectCount, MinDataTime: fmtRFC(p.MinDataTime), MaxDataTime: fmtRFC(p.MaxDataTime),
 		FilePath: p.FilePath, FileBytes: p.FileBytes, FileSha256: p.FileSHA256, ExportCount: p.ExportCount,
-		LastChangedAt: fmtRFC(p.LastChangedAt), ExportedAt: fmtRFC(p.ExportedAt), FinalizedAt: fmtRFC(p.FinalizedAt),
-		RemoteKey: p.Remote.Key, RemoteSha256: p.Remote.SHA256, RemoteEtag: p.Remote.ETag, RemoteUploadedAt: fmtRFC(p.Remote.UploadedAt),
-		RemoteVerifiedAt: fmtRFC(p.Remote.VerifiedAt), RemoteError: p.Remote.Error,
+		LastChangedAt: millisOf(p.LastChangedAt), ExportedAt: millisOf(p.ExportedAt), FinalizedAt: millisOf(p.FinalizedAt),
+		RemoteKey: p.Remote.Key, RemoteSha256: p.Remote.SHA256, RemoteEtag: p.Remote.ETag, RemoteUploadedAt: millisOf(p.Remote.UploadedAt),
+		RemoteVerifiedAt: millisOf(p.Remote.VerifiedAt), RemoteError: p.Remote.Error,
 	}
 }
 
@@ -189,6 +189,7 @@ func partitionsFromPB(items []*archivepb.PartitionReport) ([]store.Partition, er
 			ExportCount: item.GetExportCount(),
 			Remote:      store.Remote{Key: item.GetRemoteKey(), SHA256: item.GetRemoteSha256(), ETag: item.GetRemoteEtag(), Error: item.GetRemoteError()},
 		}
+		// 分区范围与数据时间是 data_time 口径的文本，其余是 Unix 毫秒
 		var err error
 		for _, field := range []struct {
 			name, value string
@@ -196,13 +197,24 @@ func partitionsFromPB(items []*archivepb.PartitionReport) ([]store.Partition, er
 		}{
 			{"range_start", item.GetRangeStart(), &p.RangeStart}, {"range_end", item.GetRangeEnd(), &p.RangeEnd},
 			{"min_data_time", item.GetMinDataTime(), &p.MinDataTime}, {"max_data_time", item.GetMaxDataTime(), &p.MaxDataTime},
-			{"last_changed_at", item.GetLastChangedAt(), &p.LastChangedAt}, {"exported_at", item.GetExportedAt(), &p.ExportedAt},
-			{"finalized_at", item.GetFinalizedAt(), &p.FinalizedAt},
-			{"remote_uploaded_at", item.GetRemoteUploadedAt(), &p.Remote.UploadedAt}, {"remote_verified_at", item.GetRemoteVerifiedAt(), &p.Remote.VerifiedAt},
 		} {
 			if *field.dest, err = parseRFC(fmt.Sprintf("分区 %s 的 %s", key, field.name), field.value); err != nil {
 				return nil, err
 			}
+		}
+		for _, field := range []struct {
+			name  string
+			value int64
+			dest  *time.Time
+		}{
+			{"last_changed_at", item.GetLastChangedAt(), &p.LastChangedAt}, {"exported_at", item.GetExportedAt(), &p.ExportedAt},
+			{"finalized_at", item.GetFinalizedAt(), &p.FinalizedAt},
+			{"remote_uploaded_at", item.GetRemoteUploadedAt(), &p.Remote.UploadedAt}, {"remote_verified_at", item.GetRemoteVerifiedAt(), &p.Remote.VerifiedAt},
+		} {
+			if field.value < 0 {
+				return nil, fmt.Errorf("分区 %s 的 %s 必须是非负的 Unix 毫秒", key, field.name)
+			}
+			*field.dest = timeOfMillis(field.value)
 		}
 		if p.RangeStart.IsZero() || !p.RangeStart.Before(p.RangeEnd) {
 			return nil, fmt.Errorf("分区 %s 的 range_start 必须早于 range_end", key)

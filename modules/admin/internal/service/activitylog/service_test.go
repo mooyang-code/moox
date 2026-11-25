@@ -103,14 +103,14 @@ func TestListFiltersAndPaginatesNewestFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, byCategory.GetItems(), 2)
 
-	since := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC).Format(time.RFC3339)
-	until := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	since := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC).UnixMilli()
+	until := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC).UnixMilli()
 	window, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{SpaceId: "crypto", Since: since, Until: until})
 	require.NoError(t, err)
 	require.Len(t, window.GetItems(), 2, "since is inclusive and until is exclusive")
-	require.Equal(t, "2026-10-12T11:00:00Z", window.GetItems()[0].GetCreatedAt())
+	require.Equal(t, time.Date(2026, 10, 12, 11, 0, 0, 0, time.UTC).UnixMilli(), window.GetItems()[0].GetCreatedAt())
 
-	bad, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{Since: "yesterday"})
+	bad, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{Since: -1})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 }

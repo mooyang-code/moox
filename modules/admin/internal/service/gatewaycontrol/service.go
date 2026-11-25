@@ -117,13 +117,8 @@ func validRelaySessions(sessions []*pb.RelaySessionStatus) bool {
 	seen := map[string]bool{}
 	for _, item := range sessions {
 		if item == nil || !servicecatalog.ValidHostID(item.GetHostId()) || seen[item.GetHostId()] || item.GetReconnects() < 0 || item.GetStreams() < 0 ||
-			len(item.GetInstanceId()) > 128 || !utf8.ValidString(item.GetInstanceId()) {
+			item.GetConnectedAt() < 0 || len(item.GetInstanceId()) > 128 || !utf8.ValidString(item.GetInstanceId()) {
 			return false
-		}
-		if at := item.GetConnectedAt(); at != "" {
-			if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
-				return false
-			}
 		}
 		seen[item.GetHostId()] = true
 	}

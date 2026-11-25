@@ -76,7 +76,7 @@
                 <span v-if="!store.probe_error" class="is-ok">正常</span>
                 <template v-else>
                   <span class="is-bad">失败：{{ store.probe_error }}</span>
-                  <div v-if="store.unavailable_since" class="muted">
+                  <div v-if="toInstantMs(store.unavailable_since) !== null" class="muted">
                     自 {{ formatInstant(store.unavailable_since, "UTC") }} 起连不上
                   </div>
                 </template>
@@ -111,7 +111,7 @@ import { formatBytes } from "@/api/modules/host-monitor";
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { relativeTime } from "@/views/home/home-model";
 import {
   archiveUnavailableHint,

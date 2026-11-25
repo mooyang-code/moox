@@ -13,8 +13,9 @@ export interface Secret {
   extra_config?: string;
   status?: string;
   creator?: string;
-  create_time?: string;
-  modify_time?: string;
+  /** 创建、修改时刻：Unix 毫秒的数字字符串 */
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface ListSecretsReq {

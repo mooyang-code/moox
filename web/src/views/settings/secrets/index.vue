@@ -78,7 +78,7 @@
           </a-table-column>
           <a-table-column title="创建人" data-index="creator" :width="100" />
           <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatInstant(record.modify_time, "UTC") }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.updated_at, "UTC") }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="260" align="center" :fixed="'right'">
             <template #cell="{ record }">

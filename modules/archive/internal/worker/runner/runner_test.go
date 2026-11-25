@@ -182,7 +182,7 @@ func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAs
 	a := &archivepb.RunAssignment{
 		RunId: "run_1", LeaseToken: "tok", Kind: "follow", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day",
 		Retention: "168h", AllowedLatenessSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
-		StartedAt: e.now.Format(time.RFC3339), ScheduledAt: e.now.Format(time.RFC3339),
+		StartedAt: e.now.UnixMilli(), ScheduledAt: e.now.UnixMilli(),
 	}
 	if mutate != nil {
 		mutate(a)
@@ -340,7 +340,7 @@ func TestPartitionIsExportedAfterCloseAndThenFinalizedAfterTheHoldPeriod(t *test
 	e.now = time.Date(2026, 10, 20, 0, 20, 43, 0, time.UTC)
 	out = e.run(2000, nil, nil)
 	p = report(out, "2026-10-16")
-	if p == nil || p.GetStatus() != "final" || out.Finalized != 1 || p.GetRowCount() != 90 || p.GetFinalizedAt() == "" || p.GetFilePath() == "" {
+	if p == nil || p.GetStatus() != "final" || out.Finalized != 1 || p.GetRowCount() != 90 || p.GetFinalizedAt() == 0 || p.GetFilePath() == "" {
 		t.Fatalf("定稿: %v out=%+v", p, out)
 	}
 	if want := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC); !out.FinalUntil.Equal(want) {
@@ -543,19 +543,19 @@ func TestStockCNPartitionWaitsForTheLocalCloseAndMonthPartitionsUseTheTwelveHour
 func TestExecuteRejectsBadAssignmentsAndMissingColumns(t *testing.T) {
 	e := newEnv(t)
 	for name, mutate := range map[string]func(*archivepb.RunAssignment){
-		"bad started_at": func(a *archivepb.RunAssignment) { a.StartedAt = "now" },
-		"bad tz":         func(a *archivepb.RunAssignment) { a.SpaceTz = "Mars/Base" },
-		"bad unit":       func(a *archivepb.RunAssignment) { a.PartitionUnit = "week" },
-		"bad range":      func(a *archivepb.RunAssignment) { a.Kind, a.RangeStart, a.RangeEnd = "range", "x", "y" },
-		"bad backfill":   func(a *archivepb.RunAssignment) { a.BackfillFrom = "later" },
-		"bad retention":  func(a *archivepb.RunAssignment) { a.Retention = "soon" },
-		"bad freq":       func(a *archivepb.RunAssignment) { a.Freq = "7x" },
-		"no dir name":    func(a *archivepb.RunAssignment) { a.DirName = "" },
-		"no purpose":     func(a *archivepb.RunAssignment) { a.Purpose = "" },
-		"unsafe dir":     func(a *archivepb.RunAssignment) { a.DirName = "../x" },
-		"dot purpose":    func(a *archivepb.RunAssignment) { a.Purpose = ".state" },
-		"unknown kind":   func(a *archivepb.RunAssignment) { a.Kind = "tick" },
-		"import no feed": func(a *archivepb.RunAssignment) { a.Kind = "import" },
+		"missing started_at": func(a *archivepb.RunAssignment) { a.StartedAt = 0 },
+		"bad tz":             func(a *archivepb.RunAssignment) { a.SpaceTz = "Mars/Base" },
+		"bad unit":           func(a *archivepb.RunAssignment) { a.PartitionUnit = "week" },
+		"bad range":          func(a *archivepb.RunAssignment) { a.Kind, a.RangeStart, a.RangeEnd = "range", "x", "y" },
+		"bad backfill":       func(a *archivepb.RunAssignment) { a.BackfillFrom = "later" },
+		"bad retention":      func(a *archivepb.RunAssignment) { a.Retention = "soon" },
+		"bad freq":           func(a *archivepb.RunAssignment) { a.Freq = "7x" },
+		"no dir name":        func(a *archivepb.RunAssignment) { a.DirName = "" },
+		"no purpose":         func(a *archivepb.RunAssignment) { a.Purpose = "" },
+		"unsafe dir":         func(a *archivepb.RunAssignment) { a.DirName = "../x" },
+		"dot purpose":        func(a *archivepb.RunAssignment) { a.Purpose = ".state" },
+		"unknown kind":       func(a *archivepb.RunAssignment) { a.Kind = "tick" },
+		"import no feed":     func(a *archivepb.RunAssignment) { a.Kind = "import" },
 	} {
 		out, err := e.runner(10).Execute(context.Background(), e.assignment(mutate), nil, nil)
 		if err == nil && (out == nil || out.Status != "failed") {
@@ -582,7 +582,7 @@ func TestPartitionsStayPendingUntilAcknowledgedSoALostCompletionIsReportedAgain(
 	e.now = e.now.Add(time.Hour)
 	out = e.run(2000, nil, nil)
 	again := report(out, "2026-10-10")
-	if again == nil || again.GetStatus() != "final" || again.GetRowCount() != 30 || again.GetSubjectCount() != 1 || again.GetFinalizedAt() == "" ||
+	if again == nil || again.GetStatus() != "final" || again.GetRowCount() != 30 || again.GetSubjectCount() != 1 || again.GetFinalizedAt() == 0 ||
 		again.GetMinDataTime() != "2026-10-10T01:00:00Z" || again.GetFileSha256() != p.GetFileSha256() || again.GetFilePath() == "" {
 		t.Fatalf("遗留的分区应再次上报: %v", again)
 	}
@@ -660,7 +660,7 @@ func TestLostStagingIsRebuiltFromTheManagerRegistrationWithoutLosingRows(t *test
 	e.src.requests = nil
 	e.now = e.now.Add(time.Hour)
 	out = e.run(2000, func(a *archivepb.RunAssignment) {
-		a.LastSuccessAt = lastSuccess.Format(time.RFC3339)
+		a.LastSuccessAt = lastSuccess.UnixMilli()
 		a.RegisteredPartitions = []*archivepb.PartitionReport{registered}
 	}, nil)
 	if out.Status != "succeeded" {
@@ -798,4 +798,13 @@ func TestEmptyRetentionIsAnError(t *testing.T) {
 	if _, forever, err := parseRetention("forever"); err != nil || !forever {
 		t.Fatal("forever 是永久")
 	}
+}
+
+// rfcMillis 把测试里写的 RFC3339 时刻换成 Unix 毫秒。
+func rfcMillis(text string) int64 {
+	at, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		panic(err)
+	}
+	return at.UnixMilli()
 }

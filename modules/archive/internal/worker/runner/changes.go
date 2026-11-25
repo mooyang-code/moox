@@ -132,10 +132,7 @@ func (s *runState) rebase(ctx context.Context, out *Outcome, gap bool) error {
 	if retention, ok, err := s.retentionStart(); err != nil {
 		return err
 	} else if ok && s.a.GetKind() != kindManual {
-		lastSuccess, err := parseOptionalTime(s.a.GetLastSuccessAt())
-		if err != nil {
-			return fmt.Errorf("last_success_at: %w", err)
-		}
+		lastSuccess := timeOfMillis(s.a.GetLastSuccessAt())
 		backfill, err := parseOptionalTime(s.a.GetBackfillFrom())
 		if err != nil {
 			return fmt.Errorf("backfill_from: %w", err)

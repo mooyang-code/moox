@@ -25,9 +25,6 @@ import {
 } from "./home-model";
 import { freqSeconds } from "@/views/factor/shared/health";
 
-// Monitor 接口里的时刻是毫秒数字字符串。
-const ms = (text: string) => String(Date.parse(text));
-
 // 引擎在心跳里报的 lag_seconds：落后的已收盘根数 × 周期（crypto 按 7×24 小时数，收盘后留不超过半个周期、最多 30 秒的计算宽限）。
 // 测试按“上一期开盘后过了多久”模拟引擎的算法。
 const engineLag = (freq: string, openedSecondsAgo: number) => {
@@ -88,8 +85,9 @@ describe("home formatting", () => {
     expect(relativeTime(new Date(NOW + 60_000).toISOString(), NOW, "Asia/Shanghai")).toBe("18:01 UTC+8");
   });
 
-  it("相对时间悬停显示的完整时间：数字和 relativeTime 一样按毫秒（墙钟时刻的写法）", () => {
+  it("相对时间悬停显示的完整时间：数字和 relativeTime 一样按 Unix 毫秒", () => {
     expect(fullTime(String(NOW), "UTC")).toBe("2026-10-13 10:00:00 UTC");
+    expect(relativeTime(String(NOW - 10_000), NOW)).toBe("10 秒前");
     expect(fullTime(new Date(NOW).toISOString(), "Asia/Shanghai")).toBe("2026-10-13 18:00:00 UTC+8");
     expect(fullTime(undefined)).toBe("—");
   });
@@ -201,7 +199,7 @@ describe("home data rows", () => {
           severity: "warning",
           title: "dataset_abc 延迟",
           reason: "超过 2 个周期",
-          triggered_at: String(NOW - 600_000)
+          triggered_at: new Date(NOW - 600_000).toISOString()
         }
       ],
       strategy: {
@@ -265,7 +263,7 @@ describe("home data rows", () => {
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 1 个",
-          created_at: new Date(NOW - 3600_000).toISOString()
+          created_at: String(NOW - 3600_000)
         }
       ],
       names,
@@ -329,7 +327,7 @@ describe("home tiles", () => {
                 dataset_id: "d1",
                 freq: "1m",
                 status: "degraded",
-                latest_bar_close_at: String(NOW - 840_000),
+                latest_bar_close_at: new Date(NOW - 840_000).toISOString(),
                 waiting_bars: 14,
                 overdue_seconds: "780"
               },
@@ -338,7 +336,7 @@ describe("home tiles", () => {
                 dataset_id: "d2",
                 freq: "1m",
                 status: "healthy",
-                latest_bar_close_at: String(NOW - 5_000)
+                latest_bar_close_at: new Date(NOW - 5_000).toISOString()
               }
             ]
           }
@@ -383,7 +381,11 @@ describe("home tiles", () => {
         strategyLoaded: true,
         factors: factorRows(sets as FactorTaskInfo[], "crypto", names, NOW, "UTC"),
         factorLoaded: true,
-        freshness: freshnessRows({ generated_at: String(NOW), pipeline: [{ name: "存储", datasets }] } as never, names, NOW),
+        freshness: freshnessRows(
+          { generated_at: new Date(NOW).toISOString(), pipeline: [{ name: "存储", datasets }] } as never,
+          names,
+          NOW
+        ),
         alertCount: 0,
         monitorError: "",
         nowMs: NOW,
@@ -399,7 +401,7 @@ describe("home tiles", () => {
           freq: "1m",
           status: "healthy",
           output_watermark_at: at(120),
-          latest_bar_close_at: ms(at(60))
+          latest_bar_close_at: at(60)
         }
       ]
     );
@@ -414,7 +416,7 @@ describe("home tiles", () => {
           freq: "1m",
           status: "healthy",
           output_watermark_at: at(120),
-          latest_bar_close_at: ms(at(60))
+          latest_bar_close_at: at(60)
         },
         {
           producer: "storage",
@@ -422,9 +424,9 @@ describe("home tiles", () => {
           freq: "1m",
           status: "degraded",
           output_watermark_at: at(7200),
-          latest_bar_close_at: ms(at(7140)),
+          latest_bar_close_at: at(7140),
           waiting_bars: 119,
-          waiting_since: ms(at(7080))
+          waiting_since: at(7080)
         }
       ]
     );
@@ -511,14 +513,14 @@ describe("home tiles", () => {
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 0 个、移除 0 个标的，将于 2026-10-12 13:00 生效",
-          created_at: new Date(NOW - 3600_000).toISOString()
+          created_at: String(NOW - 3600_000)
         },
         {
           id: 2,
           category: "collector.subject_change",
           level: "info",
           title: "dataset_abc 1h：新增 1 个、移除 0 个标的，将于 2026-10-13 09:00 生效",
-          created_at: new Date(NOW - 7200_000).toISOString()
+          created_at: String(NOW - 7200_000)
         }
       ],
       names,

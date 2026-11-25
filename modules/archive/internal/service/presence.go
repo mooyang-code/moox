@@ -57,9 +57,8 @@ func (s *Service) ObjectStoreState(ctx context.Context) (workerID string, state 
 	if info.GetEndpoint() == "" || !workerOnline(worker, now) {
 		return "", 0, "", false, nil
 	}
-	// 时间由 worker 按 RFC3339 写入；解析不了按可用处理。
-	since, _ := time.Parse(time.RFC3339, info.GetUnavailableSince())
-	return worker.WorkerID, report.EvaluateObjectStore(since, now), info.GetProbeError(), true, nil
+	// 不可用起点由 worker 按 Unix 毫秒上报，0 表示可用。
+	return worker.WorkerID, report.EvaluateObjectStore(timeOfMillis(info.GetUnavailableSince()), now), info.GetProbeError(), true, nil
 }
 
 // TaskHealthLevels 返回全部任务的健康等级，供指标上报（Monitor 据此告警）。

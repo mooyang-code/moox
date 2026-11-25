@@ -25,7 +25,7 @@ vi.mock("@/api/admin/activity", () => ({
         category: "collector.subject_change",
         level: "info",
         title: "dataset_abc 1h：新增 1 个",
-        created_at: new Date().toISOString()
+        created_at: String(Date.now())
       }
     ]
   }))

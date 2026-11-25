@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
 	"github.com/mooyang-code/moox/modules/eventbus/internal/registry"
@@ -214,17 +213,17 @@ func (s *Service) streams(ctx context.Context) ([]*nats.StreamInfo, error) {
 func streamInfo(info *nats.StreamInfo) *eventbusgen.StreamInfo {
 	out := &eventbusgen.StreamInfo{Name: info.Config.Name, Subjects: append([]string(nil), info.Config.Subjects...), Retention: info.Config.Retention.String(), Storage: info.Config.Storage.String(), Messages: info.State.Msgs, Bytes: info.State.Bytes}
 	if !info.State.FirstTime.IsZero() {
-		out.FirstTime = info.State.FirstTime.UTC().Format(time.RFC3339Nano)
+		out.FirstTime = info.State.FirstTime.UnixMilli()
 	}
 	if !info.State.LastTime.IsZero() {
-		out.LastTime = info.State.LastTime.UTC().Format(time.RFC3339Nano)
+		out.LastTime = info.State.LastTime.UnixMilli()
 	}
 	return out
 }
 func consumerInfo(info *nats.ConsumerInfo) *eventbusgen.ConsumerInfo {
 	out := &eventbusgen.ConsumerInfo{Stream: info.Stream, Name: info.Name, FilterSubject: info.Config.FilterSubject, Pending: info.NumPending, AckPending: uint64(maxInt(info.NumAckPending, 0)), Redelivered: uint64(maxInt(info.NumRedelivered, 0))}
 	if info.Delivered.Last != nil {
-		out.LastDeliveredAt = info.Delivered.Last.UTC().Format(time.RFC3339Nano)
+		out.LastDeliveredAt = info.Delivered.Last.UnixMilli()
 	}
 	return out
 }

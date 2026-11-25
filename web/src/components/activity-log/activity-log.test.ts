@@ -52,6 +52,11 @@ describe("操作记录的筛选", () => {
       .vm.$emit("update:modelValue", [Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 2)]);
     await flushPromises();
     expect(api.listActivityLogs.mock.calls.length).toBe(base + 3);
+    // 起止按 Unix 毫秒的数字字符串传
+    expect(api.listActivityLogs.mock.lastCall?.[0]).toMatchObject({
+      since: String(Date.UTC(2026, 9, 1)),
+      until: String(Date.UTC(2026, 9, 2))
+    });
     wrapper.unmount();
   });
 });

@@ -618,16 +618,16 @@ func (a *App) objectStoreInfo() *archivepb.ObjectStoreInfo {
 	defer a.mu.Unlock()
 	return &archivepb.ObjectStoreInfo{
 		Endpoint: info.Endpoint, Bucket: info.Bucket, Prefix: info.Prefix, StorageClass: info.StorageClass, UrlStyle: info.URLStyle,
-		ProbeError: a.probeError, UnavailableSince: fmtTime(a.unavailableSince),
+		ProbeError: a.probeError, UnavailableSince: unixMilli(a.unavailableSince),
 	}
 }
 
-// fmtTime 把时间格式化为 RFC3339（UTC），零值为空。
-func fmtTime(t time.Time) string {
+// unixMilli 把时刻换成 Unix 毫秒，零时间给 0。
+func unixMilli(t time.Time) int64 {
 	if t.IsZero() {
-		return ""
+		return 0
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.UnixMilli()
 }
 
 // Snapshot 是健康检查用的状态。
