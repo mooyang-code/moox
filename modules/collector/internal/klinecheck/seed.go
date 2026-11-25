@@ -42,6 +42,8 @@ type SeedOptions struct {
 	// Regions 返回市场补齐分块可用的云函数地域：必须是函数写入直达存储机的地域（入口主机就是存储机），
 	// 经海外机转发的地域（带宽很小，会挤掉实时采集）不能算。为空时用补采函数提供方的全部地域。
 	Regions func(spaceID, marketType string) []string
+	// RegionConcurrency 是每个地域补采函数的预留并发（平台超过它就拒绝调用）；为空用 DefaultMaxInFlight。
+	RegionConcurrency func(spaceID string) int
 	// Slots 返回空间补齐分块的并发上限（地域数 × 单个补采函数的预留并发）；为空或返回值不大于 0 时用空间的补采并发上限。
 	Slots func(ctx context.Context, spaceID string) int
 	// RowsPerSecond、LocalRowsPerSecond 是补齐写 Storage 的全局速率上限与本地执行端的速率上限，不大于 0 表示不限。
@@ -91,6 +93,42 @@ func (b *Backfiller) seedJobIDs(ctx context.Context, spaceID string) (map[string
 		}
 	}
 	return out, nil
+}
+
+func seedRegionKey(spaceID, marketType, region string) string {
+	return spaceID + "|" + marketType + "|" + region
+}
+
+// seedRegionLimit 是一个地域的补采函数同时能放的分块数：函数的预留并发，没配用 DefaultMaxInFlight。
+func (b *Backfiller) seedRegionLimit(spaceID string) int {
+	if b.Seed.RegionConcurrency != nil {
+		if n := b.Seed.RegionConcurrency(spaceID); n > 0 {
+			return n
+		}
+	}
+	return DefaultMaxInFlight
+}
+
+// acquireSeedRegion 占一个地域补采函数的并发名额，满了返回 false；releaseSeedRegion 归还。
+func (b *Backfiller) acquireSeedRegion(key string, limit int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.seedBusy == nil {
+		b.seedBusy = map[string]int{}
+	}
+	if b.seedBusy[key] >= limit {
+		return false
+	}
+	b.seedBusy[key]++
+	return true
+}
+
+func (b *Backfiller) releaseSeedRegion(key string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.seedBusy[key] > 0 {
+		b.seedBusy[key]--
+	}
 }
 
 // seedRegions 返回市场补齐分块可用的云函数地域；没有时分块按任务的采集方式选执行端。
