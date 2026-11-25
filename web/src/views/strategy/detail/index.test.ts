@@ -58,7 +58,6 @@ describe("strategy detail page result paging", () => {
         enabled: false,
         session_id: "s1",
         strategy_id: "s",
-        view_id: "v",
         logical_account_id: "",
         health: "ok",
         resolved_json: "{}"

@@ -1,7 +1,7 @@
 import type { CollectorTask, CollectionTaskPayload, ExtraFieldOption, OutputFieldOption } from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
 import { marketLabel } from "@/views/data/shared/series-market";
-import { getTaskResultState, getTaskResultViewIds } from "@/views/collector/task-results/task-results-model";
+import { getTaskResultDatasetIds, getTaskResultState } from "@/views/collector/task-results/task-results-model";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
 
@@ -42,6 +42,65 @@ export function availableExtraFieldIds(condition: ExtraFieldCondition): Set<stri
 /** 基础输出字段的 ID 集合：来自 GetDataTypeConfigWithFields 的 base_output_fields（结果数据集能建的列）。 */
 export function baseOutputFieldIds(options: ReadonlyArray<OutputFieldOption> | undefined): Set<string> {
   return new Set((options || []).map(option => option.field_id));
+}
+
+/** 输出字段目录里的一项：显示名与分组只在 Collector 的字段规格里登记，由 GetDataTypeConfigWithFields 给出。 */
+export interface OutputFieldEntry {
+  field_id: string;
+  display_name: string;
+  group: string;
+}
+
+/** 没有分组的字段放在这一组。 */
+export const UNGROUPED_OUTPUT_FIELDS = "其他";
+
+/**
+ * 输出字段目录：基础输出字段在前（按建列顺序），附加字段在后；附加字段按市场、品种、频率各登记一条，这里按字段 ID 去重。
+ */
+export function buildOutputFieldCatalog(
+  base: ReadonlyArray<OutputFieldOption> | undefined,
+  extra: ReadonlyArray<ExtraFieldOption> | undefined
+): OutputFieldEntry[] {
+  const entries = new Map<string, OutputFieldEntry>();
+  for (const option of [...(base || []), ...(extra || [])]) {
+    const id = option.field_id?.trim();
+    if (!id || entries.has(id)) continue;
+    entries.set(id, {
+      field_id: id,
+      display_name: option.display_name?.trim() || id,
+      group: option.group?.trim() || UNGROUPED_OUTPUT_FIELDS
+    });
+  }
+  return [...entries.values()];
+}
+
+/** 字段 ID 到显示名：目录里没有的显示字段 ID。 */
+export function outputFieldLabels(ids: ReadonlyArray<string>, catalog: ReadonlyArray<OutputFieldEntry>) {
+  const names = new Map(catalog.map(entry => [entry.field_id, entry.display_name]));
+  return ids.map(id => ({ id, name: names.get(id) || id }));
+}
+
+export interface OutputFieldSection {
+  name: string;
+  fields: OutputFieldEntry[];
+}
+
+/** 按分组归并要显示的字段：分组按第一次出现的顺序，组内保持目录顺序；keyword 匹配显示名或字段 ID。 */
+export function outputFieldSections(
+  catalog: ReadonlyArray<OutputFieldEntry>,
+  visible: (fieldId: string) => boolean,
+  keyword = ""
+): OutputFieldSection[] {
+  const folded = keyword.trim().toLocaleLowerCase();
+  const sections = new Map<string, OutputFieldEntry[]>();
+  for (const entry of catalog) {
+    if (!visible(entry.field_id)) continue;
+    if (folded && !`${entry.display_name} ${entry.field_id}`.toLocaleLowerCase().includes(folded)) continue;
+    const list = sections.get(entry.group) || [];
+    list.push(entry);
+    sections.set(entry.group, list);
+  }
+  return [...sections.entries()].map(([name, fields]) => ({ name, fields }));
 }
 
 /** 输出字段清单里是否显示这个字段：基础输出字段总是显示，其余只有当前可选的附加字段才显示。 */
@@ -352,8 +411,7 @@ function normalizeResult(value: unknown): CollectorTask["result"] | undefined {
   const result = value as Record<string, unknown>;
   return {
     result_name: stringValue(result.result_name),
-    view_id: stringValue(result.view_id),
-    view_ids: Array.isArray(result.view_ids) ? result.view_ids.map(String).filter(Boolean) : undefined,
+    dataset_id: stringValue(result.dataset_id),
     status: stringValue(result.status),
     last_data_time: stringValue(result.last_data_time),
     coverage_start: stringValue(result.coverage_start),
@@ -404,6 +462,12 @@ export function collectionTaskResultLabel(
   if (state === "error") return "结果异常";
   if (state === "ready") return "结果可用";
   const prepared = String(task.prepare_state || "").toLowerCase() === "ready";
-  if (state === "stale" && prepared && getTaskResultViewIds(task as CollectorTask).length) return "结果可用";
+  if (state === "stale" && prepared && getTaskResultDatasetIds(task as CollectorTask).length) return "结果可用";
   return "结果准备中";
 }
+
+/** 打开编辑抽屉的请求：每次打开给一个新对象，抽屉按它重置表单。 */
+export type TaskEditorRequest =
+  | { mode: "create" }
+  | { mode: "edit"; record: CollectionTaskRecord }
+  | { mode: "resample"; source: CollectionTaskRecord };

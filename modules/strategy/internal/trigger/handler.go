@@ -131,9 +131,9 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 	if h.exhausted == nil {
 		h.exhausted = make(map[string]string)
 	}
-	instances, err := h.Store.EnabledInstancesByView(ctx, message.GetSpaceId(), payload.GetViewId())
+	instances, err := h.Store.EnabledInstancesByDataset(ctx, message.GetSpaceId(), payload.GetDatasetId())
 	if err != nil {
-		return fmt.Errorf("读取 View %s 的启用实例：%w", payload.GetViewId(), err)
+		return fmt.Errorf("读取 View %s 的启用实例：%w", payload.GetDatasetId(), err)
 	}
 	// 同一事件内多个实例绑定同一 View：元数据（View、标的绑定、标签成员）只读一次。
 	loader := h.Loader
@@ -269,7 +269,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 	}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
-	taskKey, sourceName, reference, bound := rt.resolved.ViewRole(payload.GetViewId())
+	taskKey, sourceName, reference, bound := rt.resolved.RoleOfDataset(payload.GetDatasetId())
 	switch {
 	case bound && reference:
 		// 参考市场只用于年龄判定，按需读取，不等它的就绪事件。
@@ -279,7 +279,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	}
 	if !bound {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
-			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetViewId())
+			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetDatasetId())
 			h.observe(ctx, instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
 		}
 		return nil
@@ -307,7 +307,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		return nil
 	}
 	p := &period{timing: periodTiming{start: h.now()}, shadow: instance.Trial(), loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
-	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetViewId(): {EventID: message.GetEventId()}}}
+	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetDatasetId(): {EventID: message.GetEventId()}}}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 	}
@@ -365,7 +365,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			if err != nil {
 				return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 			}
-			_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, rt.resolved.ViewIDs(), bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
+			_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, rt.resolved.DatasetIDs(), bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
 			if err != nil {
 				return err
 			}
@@ -592,10 +592,10 @@ func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved
 		return readErr
 	})
 	// 附加来源读到的修订号写进本期的输入记录（只有写了来源的实例才有）。
-	for viewID, revision := range loaded.SourceRevisions {
-		view := p.input.Views[viewID]
+	for datasetID, revision := range loaded.SourceRevisions {
+		view := p.input.Views[datasetID]
 		view.Revision = revision
-		p.input.Views[viewID] = view
+		p.input.Views[datasetID] = view
 	}
 	return loaded, skip, terminal, err
 }

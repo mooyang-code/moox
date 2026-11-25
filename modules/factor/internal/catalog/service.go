@@ -122,9 +122,6 @@ func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.
 	if err := s.metadata.CreateResultDataset(ctx, spec); err != nil {
 		return domain.FactorTask{}, fmt.Errorf("create factor result dataset（任务 %s 已登记为待创建，可用同一个任务 ID 重试）: %w", in.TaskID, err)
 	}
-	if err := s.metadata.EnsureResultView(ctx, in.SpaceID, in.ResultDatasetID); err != nil {
-		return domain.FactorTask{}, fmt.Errorf("create factor result default View（任务 %s 已登记为待创建，可用同一个任务 ID 重试）: %w", in.TaskID, err)
-	}
 	if err := s.db.SetTaskStatus(ctx, in.TaskID, domain.TaskStatusPending, domain.TaskStatusEnabled); err != nil {
 		return domain.FactorTask{}, fmt.Errorf("enable factor task after creating result dataset: %w", err)
 	}
@@ -253,11 +250,11 @@ func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) err
 
 // DeleteBoundTask 删除关联到 instanceID 的任务，连同全部成员和结果数据集（策略服务删除实例时调用）。
 // 按 DeleteTask 的顺序分三段执行，每段都幂等，中途失败后重试能接着做完：
-//  1. 任务锁下做完全部检查（关联的实例、没有补算、结果数据集没有被其他 View 引用），再停用任务；
+//  1. 任务锁下做完全部检查（关联的实例、没有补算），再停用任务；
 //  2. 逐个成员按“定义锁 → 任务锁”的固定顺序加锁，已启用的先停用，再删除；
 //  3. 任务锁下再次核对，确认已停用、没有成员后带 purge 删除结果数据集，最后删除任务记录。
 //
-// 任务不存在返回成功；关联的不是 instanceID（包括还没有关联任何实例）、有补算在进行、结果数据集被其他 View 引用都拒绝。
+// 任务不存在返回成功；关联的不是 instanceID（包括还没有关联任何实例）、有补算在进行都拒绝。
 func (s *Service) DeleteBoundTask(ctx context.Context, taskID, instanceID string) error {
 	taskID, instanceID = strings.TrimSpace(taskID), strings.TrimSpace(instanceID)
 	if taskID == "" || instanceID == "" {
@@ -364,27 +361,13 @@ func (s *Service) CheckBoundTaskDeletable(ctx context.Context, taskID, instanceI
 	return s.checkBoundTask(ctx, task, instanceID)
 }
 
-// checkBoundTask 是删除前的检查（调用方持有任务锁）：关联的是 instanceID；没有补算在排队或执行（补算会往结果数据集里写）；
-// 结果数据集没有被其他 View 引用。都在停用任务、删成员之前做，拒绝时什么也不改；停用之后补算不再接受新作业。
+// checkBoundTask 是删除前的检查（调用方持有任务锁）：关联的是 instanceID；没有补算在排队或执行（补算会往结果数据集里写）。
+// 都在停用任务、删成员之前做，拒绝时什么也不改；停用之后补算不再接受新作业。
 func (s *Service) checkBoundTask(ctx context.Context, task domain.FactorTask, instanceID string) error {
 	if err := requireBoundTo(task, instanceID); err != nil {
 		return err
 	}
-	if err := s.requireNoActiveRecalc(ctx, task.TaskID); err != nil {
-		return err
-	}
-	return s.requireDatasetDeletable(ctx, task)
-}
-
-// requireDatasetDeletable 在动手之前确认结果数据集可以删：被其他 View 引用按冲突拒绝，读不到按错误返回。
-func (s *Service) requireDatasetDeletable(ctx context.Context, task domain.FactorTask) error {
-	if err := s.metadata.CheckDatasetDeletable(ctx, task.SpaceID, task.ResultDatasetID); err != nil {
-		if errors.Is(err, storageio.ErrDatasetReferenced) {
-			return fmt.Errorf("%w: %v", store.ErrConflict, err)
-		}
-		return fmt.Errorf("检查因子任务 %s 的结果数据集：%w", task.TaskID, err)
-	}
-	return nil
+	return s.requireNoActiveRecalc(ctx, task.TaskID)
 }
 
 // requireNoActiveRecalc 拒绝删除有补算正在排队或执行的任务。
@@ -699,7 +682,7 @@ func (s *Service) checkReaddConsistent(ctx context.Context, task domain.FactorTa
 	}
 	for _, existing := range columns {
 		want, ok := wanted[existing.ColumnName]
-		if !ok || existing.OriginType != storageio.ColumnOriginCustom {
+		if !ok {
 			continue
 		}
 		if existing.Attributes["member_kind"] != want.Attributes["member_kind"] ||
@@ -857,7 +840,7 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorTask,
 	}
 	origins := make(map[string]string)
 	for _, column := range resultColumns {
-		if memberKey := column.Attributes["member_key"]; column.OriginType == storageio.ColumnOriginCustom && memberKey != "" {
+		if memberKey := column.Attributes["member_key"]; memberKey != "" {
 			origins[column.ColumnName] = memberKey
 		}
 	}
@@ -910,7 +893,7 @@ func businessColumns(columns []storageio.ColumnInfo) []storageio.ColumnInfo {
 	}
 	out := make([]storageio.ColumnInfo, 0, len(columns))
 	for _, col := range columns {
-		if col.ColumnName == "" || col.OriginType == storageio.ColumnOriginSystem || (col.Status != "" && col.Status != storageio.ColumnStatusActive) {
+		if col.ColumnName == "" || (col.Status != "" && col.Status != storageio.ColumnStatusActive) {
 			continue
 		}
 		if _, ok := reserved[col.ColumnName]; ok {

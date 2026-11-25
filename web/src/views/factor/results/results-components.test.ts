@@ -147,7 +147,7 @@ describe("因子值弹窗", () => {
       rows: [{ key: rowKey, fields: [{ field_id: "f0", value: { double_value: 0.123456789 } }] }]
     });
     const wrapper = mount(FactorValuesModal, {
-      props: { visible: true, viewId: "v", rowKey, scope: scopeOf(45) },
+      props: { visible: true, datasetId: "d", rowKey, scope: scopeOf(45) },
       global: { stubs }
     });
     await flushPromises();
@@ -179,7 +179,7 @@ describe("因子值弹窗", () => {
       ]
     }));
     const wrapper = mount(FactorValuesModal, {
-      props: { visible: true, viewId: "v", rowKey, scope: scopeOf(4) },
+      props: { visible: true, datasetId: "d", rowKey, scope: scopeOf(4) },
       global: {
         stubs: {
           ...stubs,
@@ -208,7 +208,7 @@ describe("因子值弹窗", () => {
       .mockReturnValueOnce(new Promise(resolve => (resolveFirst = resolve)))
       .mockResolvedValueOnce({ rows: [{ key: rowKey, fields: [{ field_id: "f20", value: { double_value: 2 } }] }] });
     const wrapper = mount(FactorValuesModal, {
-      props: { visible: true, viewId: "v", rowKey, scope: scopeOf(45) },
+      props: { visible: true, datasetId: "d", rowKey, scope: scopeOf(45) },
       global: { stubs }
     });
     await flushPromises();

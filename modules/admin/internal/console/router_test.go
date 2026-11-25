@@ -53,7 +53,7 @@ func newTestRouter(t *testing.T, store *session.Store, local *LocalDispatcher, g
 
 func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 	for _, tc := range []struct{ name, method, path string }{
-		{"storage", "ListFields", "trpc.moox.storage.Metadata"},
+		{"storage", "ListDatasets", "trpc.moox.storage.Metadata"},
 		{"storage", "UpsertFields", "trpc.moox.storage.PrimaryStore"},
 		{"storage", "QueryTimeSeriesRows", "trpc.moox.storage.DataView"},
 		{"collector", "GetTaskList", "trpc.moox.collector.CollectMgr"},
@@ -100,8 +100,8 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 		"sysdeploy/SyncTopology",
 		"trade/CloseTargetSession", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",
-		"storage-primary/ListFields", "storage-view/QueryTimeSeriesRows", "storage/ApplyReplica",
-		"auth/login", "auth/Unknown", "unknown/ListFields",
+		"storage-primary/ListDatasets", "storage-view/QueryTimeSeriesRows", "storage/ApplyReplica",
+		"auth/login", "auth/Unknown", "unknown/ListDatasets",
 	} {
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/"+suffix, strings.NewReader(`{}`)))
@@ -261,13 +261,13 @@ func TestConsoleAuthenticationPrecedesRemoteDispatch(t *testing.T) {
 	router := newTestRouter(t, store, nil, gateway).buildControlRouter()
 	body := []byte(`{"space_id":"space-1","offset":1}`)
 	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListFields", "", body))
+	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListDatasets", "", body))
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, 1, calls)
 
-	noCookie := browserRequest(t, session.Session{}, "/api/admin/storage/ListFields", "", body)
-	unknown := browserRequest(t, session.Session{ID: "not-a-session"}, "/api/admin/storage/ListFields", "", body)
-	headerToken := browserRequest(t, session.Session{}, "/api/admin/storage/ListFields", "", body)
+	noCookie := browserRequest(t, session.Session{}, "/api/admin/storage/ListDatasets", "", body)
+	unknown := browserRequest(t, session.Session{ID: "not-a-session"}, "/api/admin/storage/ListDatasets", "", body)
+	headerToken := browserRequest(t, session.Session{}, "/api/admin/storage/ListDatasets", "", body)
 	headerToken.Header.Set("Authorization", current.ID)
 	for _, request := range []*http.Request{noCookie, unknown, headerToken} {
 		rr := httptest.NewRecorder()
@@ -277,7 +277,7 @@ func TestConsoleAuthenticationPrecedesRemoteDispatch(t *testing.T) {
 	// 退出（服务端删掉会话）之后，同一个 Cookie 再来就是 401。
 	store.Delete(current.ID)
 	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListFields", "", body))
+	router.ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListDatasets", "", body))
 	require.Equal(t, http.StatusUnauthorized, rr.Code)
 	require.Equal(t, 1, calls)
 }
@@ -539,9 +539,9 @@ func TestConsoleInjectsHeaderSpaceIntoStorageBodyWhenAbsent(t *testing.T) {
 	rr := httptest.NewRecorder()
 	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/ListDatasets", "space-1", []byte(`{"page":{"page":1}}`)))
 	require.Equal(t, http.StatusOK, rr.Code)
-	// 空间在嵌套消息里的方法（view.space_id）不能回填顶层字段，缺省时直接 400。
+	// 空间在嵌套消息里的方法（dataset.space_id）不能回填顶层字段，缺省时直接 400。
 	rr = httptest.NewRecorder()
-	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpdateView", "space-1", []byte(`{"view":{"view_id":"v1"}}`)))
+	newTestRouter(t, store, nil, gateway).buildControlRouter().ServeHTTP(rr, browserRequest(t, current, "/api/admin/storage/UpdateDataset", "space-1", []byte(`{"dataset":{"dataset_id":"dataset_v1"}}`)))
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))

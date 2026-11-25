@@ -127,7 +127,7 @@ export function arrivalModel(
     ];
     if (lateCount) parts.push(`超过允许迟到 ${lateCount} 根`);
     if (skipped) parts.push(`补数据跳过 ${skipped} 根`);
-    const name = displayNames[id] || names.datasets[id] || names.views[id] || id;
+    const name = displayNames[id] || names.datasets[id] || id;
     return {
       key: `${stage}/${id}`,
       name: `${STAGE_NAMES[stage] || stage}：${name}`,

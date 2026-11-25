@@ -19,7 +19,7 @@
           </a-button>
           <a-popconfirm
             v-if="actionKind === 'disable'"
-            content="停用后不再接收周期事件；结果数据集和 View 保留，确认停用？"
+            content="停用后不再接收周期事件；结果数据集保留，确认停用？"
             @ok="emit('toggleStatus', set, 'disabled')"
           >
             <a-button size="small" status="danger" :loading="props.busy">停用</a-button>
@@ -46,7 +46,6 @@
           </a-descriptions-item>
           <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
           <a-descriptions-item label="结果数据集" :span="2">{{ set.result_dataset_id }}</a-descriptions-item>
-          <a-descriptions-item label="结果视图" :span="2">{{ resultViewId || "-" }}</a-descriptions-item>
           <a-descriptions-item label="创建时间">{{ formatTime(set.created_at) }}</a-descriptions-item>
           <a-descriptions-item label="更新时间">{{ formatTime(set.updated_at) }}</a-descriptions-item>
         </a-descriptions>
@@ -81,12 +80,10 @@
 <script setup lang="ts">
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { useRouter } from "vue-router";
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
-import { listViews } from "@/api/storage/metadata";
 import { useFactorStore } from "@/store/modules/factor";
-import { createLatestRequestGuard } from "@/utils/latest-request";
 import { taskHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import { taskStatusTag } from "@/views/factor/shared/status";
@@ -117,36 +114,6 @@ const removeState = computed(() => (props.info ? deleteState(props.info) : { dis
 const sourceName = computed(() =>
   set.value ? store.datasetNames[set.value.source_dataset_id] || set.value.source_dataset_id : ""
 );
-const resultViewId = ref("");
-const viewGate = createLatestRequestGuard();
-
-async function loadResultView(current?: FactorTask) {
-  const token = viewGate.begin();
-  resultViewId.value = "";
-  if (!current) return;
-  try {
-    const rsp = await listViews({
-      space_id: current.space_id,
-      dataset_id: current.result_dataset_id,
-      status: "active",
-      page: { page: 1, size: 100 }
-    });
-    if (!token.isLatest()) return;
-    const view = (rsp.views || []).find(
-      item => item.attributes?.owner_module === "factor" && item.attributes?.view_role === "factor_result"
-    );
-    resultViewId.value = view?.view_id || "";
-  } catch {
-    // 结果视图只是展示信息，失败时显示 “-”。
-  }
-}
-
-watch(
-  () => props.info?.factor_task.task_id,
-  () => void loadResultView(props.info?.factor_task),
-  { immediate: true }
-);
-
 function formatTime(value?: string) {
   return formatInstant(value, displayZone.value);
 }

@@ -15,14 +15,14 @@ func TestOverviewSkipsViewsOfDatasetsTheProducerNoLongerExpects(t *testing.T) {
 	now := time.Date(2026, 10, 27, 6, 30, 0, 0, time.UTC)
 	watermark := now.Add(-15 * time.Minute)
 	labels := func(dataset, view string) string {
-		return `{"dataset_id":"` + dataset + `","freq":"1m","space_id":"crypto","view_id":"` + view + `"}`
+		return `{"dataset_id":"` + dataset + `","freq":"1m","space_id":"crypto"}`
 	}
 	datasetLabels := func(dataset string) string {
 		return `{"dataset_id":"` + dataset + `","freq":"1m","space_id":"crypto"}`
 	}
 	seed := func(withPausedMarker bool, otherLiveProducer ...bool) func(*gorm.DB) {
 		return func(db *gorm.DB) {
-			for id, item := range map[string][2]string{"paused": {"dataset_factor_paused", "view_factor_paused"}, "live": {"dataset_factor_live", "view_factor_live"}} {
+			for id, item := range map[string][2]string{"paused": {"dataset_factor_paused", "dataset_factor_paused"}, "live": {"dataset_factor_live", "dataset_factor_live"}} {
 				seedOverviewMetricForInstance(t, db, "wm-"+id, "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels(item[0], item[1]), float64(watermark.Unix()), now)
 				seedOverviewMetricForInstance(t, db, "arr-"+id, "storage-view", "storage-view@control", "moox_storage_view_output_arrival_timestamp_seconds", labels(item[0], item[1]), float64(watermark.Add(time.Minute).Unix()), now)
 			}
@@ -49,11 +49,11 @@ func TestOverviewSkipsViewsOfDatasetsTheProducerNoLongerExpects(t *testing.T) {
 	}
 
 	withMarker := openOverviewWithStorage(t, &goneMetadata{}, seed(true))
-	require.Equal(t, []string{"view_factor_live"}, views(withMarker))
+	require.Equal(t, []string{"dataset_factor_live"}, views(withMarker))
 
 	withoutMarker := openOverviewWithStorage(t, &goneMetadata{}, seed(false))
-	require.ElementsMatch(t, []string{"view_factor_live", "view_factor_paused"}, views(withoutMarker))
+	require.ElementsMatch(t, []string{"dataset_factor_live", "dataset_factor_paused"}, views(withoutMarker))
 
 	bothProducers := openOverviewWithStorage(t, &goneMetadata{}, seed(true, true))
-	require.ElementsMatch(t, []string{"view_factor_live", "view_factor_paused"}, views(bothProducers), "只要还有生产者期望它，View 就照常检查")
+	require.ElementsMatch(t, []string{"dataset_factor_live", "dataset_factor_paused"}, views(bothProducers), "只要还有生产者期望它，View 就照常检查")
 }

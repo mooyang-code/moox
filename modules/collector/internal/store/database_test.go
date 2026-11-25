@@ -54,7 +54,7 @@ func TestApplySchemaCreatesCurrentTables(t *testing.T) {
 		require.Zero(t, count("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table), "removed table %s must not exist", table)
 	}
 	for table, columns := range map[string][]string{
-		"t_collector_tasks":     {"c_definition_hash", "c_result_dataset_id", "c_result_view_id"},
+		"t_collector_tasks":     {"c_definition_hash", "c_result_dataset_id"},
 		"t_collector_task_tags": {"c_task_id", "c_tag_id"},
 	} {
 		for _, column := range columns {

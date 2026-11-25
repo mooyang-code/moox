@@ -195,7 +195,7 @@ reload:
 				var changedRevision *input.RevisionChangedError
 				if errors.As(err, &changedRevision) {
 					if revisionRereads >= maxRevisionRereads {
-						return nil, fmt.Errorf("View %s 在回放读取期间持续有新的写入，没有读到同一修订号的数据，请稍后重新发起回放", market.task.ViewID)
+						return nil, fmt.Errorf("View %s 在回放读取期间持续有新的写入，没有读到同一修订号的数据，请稍后重新发起回放", market.task.DatasetID)
 					}
 					revisionRereads++
 					continue reload
@@ -220,7 +220,7 @@ reload:
 				continue reload
 			}
 			if s.switches >= maxIndexSwitches {
-				return nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", market.task.ViewID)
+				return nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", market.task.DatasetID)
 			}
 			s.switches++
 			taskKey := market.market
@@ -260,13 +260,13 @@ func attachSources(ctx context.Context, client input.Client, spaceID string, res
 				continue
 			}
 			task := resolved.Sources[name].Tasks[reader.market]
-			view, ok := views[task.ViewID]
+			view, ok := views[task.DatasetID]
 			if !ok {
 				var err error
-				if view, err = client.GetView(ctx, spaceID, task.ViewID); err != nil {
+				if view, err = client.GetView(ctx, spaceID, task.DatasetID); err != nil {
 					return err
 				}
-				views[task.ViewID] = view
+				views[task.DatasetID] = view
 			}
 			subjects := make([]input.Subject, 0, len(reader.subjects))
 			for _, subject := range reader.subjects {
@@ -303,7 +303,7 @@ func loadSourceSegment(ctx context.Context, resolved input.Resolved, reader *vie
 		rows, err := reader.sources[name].Load(ctx, from, last.StorageStart.Add(time.Nanosecond))
 		var changed *input.IndexChangedError
 		if errors.As(err, &changed) {
-			return nil, fmt.Errorf("来源 %s 的 View %s 在回放过程中重建了索引，请重新发起回放", name, changed.View.ViewID)
+			return nil, fmt.Errorf("来源 %s 的 View %s 在回放过程中重建了索引，请重新发起回放", name, changed.View.DatasetID)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("读取来源 %s 的行：%w", name, err)
@@ -318,7 +318,7 @@ func referenceReaders(ctx context.Context, client input.Client, job store.Replay
 	refs := make([]*viewMarket, 0, len(resolved.References))
 	for _, market := range sortedNames(resolved.References) {
 		task := resolved.References[market]
-		view, err := client.GetView(ctx, job.SpaceID, task.ViewID)
+		view, err := client.GetView(ctx, job.SpaceID, task.DatasetID)
 		if err != nil {
 			return nil, err
 		}

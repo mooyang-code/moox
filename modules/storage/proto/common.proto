@@ -150,28 +150,3 @@ enum FieldValueType {
   // FIELD_VALUE_TYPE_BYTES 表示二进制类型。
   FIELD_VALUE_TYPE_BYTES = 7;
 }
-
-// DatasetColumnOriginType 表示 DatasetColumn 的来源。
-enum DatasetColumnOriginType {
-  // DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED 表示未指定 DatasetColumn 来源。
-  DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED = 0;
-  // DATASET_COLUMN_ORIGIN_TYPE_FIELD 表示列来自 Space 内普通字段。
-  DATASET_COLUMN_ORIGIN_TYPE_FIELD = 1;
-  // DATASET_COLUMN_ORIGIN_TYPE_CUSTOM 表示数据集自己定义的值列：身份就是列名，不带 origin_id；
-  // 生产者信息由写入方放在列属性里，Storage 不解释。
-  DATASET_COLUMN_ORIGIN_TYPE_CUSTOM = 2;
-  // DATASET_COLUMN_ORIGIN_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
-  DATASET_COLUMN_ORIGIN_TYPE_SYSTEM = 3;
-}
-
-// ColumnOriginType 表示 ViewColumn 或查询结果列的来源。
-enum ColumnOriginType {
-  // COLUMN_ORIGIN_TYPE_UNSPECIFIED 表示未指定列来源。
-  COLUMN_ORIGIN_TYPE_UNSPECIFIED = 0;
-  // COLUMN_ORIGIN_TYPE_DATASET_COLUMN 表示列来自某个 DatasetColumn。
-  COLUMN_ORIGIN_TYPE_DATASET_COLUMN = 1;
-  // COLUMN_ORIGIN_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
-  COLUMN_ORIGIN_TYPE_SYSTEM = 2;
-  // COLUMN_ORIGIN_TYPE_EXPRESSION 表示列来自服务端登记表达式。
-  COLUMN_ORIGIN_TYPE_EXPRESSION = 3;
-}

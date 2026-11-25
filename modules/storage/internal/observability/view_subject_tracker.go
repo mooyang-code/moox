@@ -30,7 +30,6 @@ const (
 // decides whether a given View represents a K-line business stream.
 type ViewDatasetObservation struct {
 	SpaceID   string
-	ViewID    string
 	DatasetID string
 	SubjectID string
 	Frequency string
@@ -42,7 +41,7 @@ type ViewDatasetObservation struct {
 var ErrViewSeriesLimit = errors.New("storage view series observation limit exceeded")
 
 type viewSubjectScope struct {
-	spaceID, viewID, datasetID, freq string
+	spaceID, datasetID, freq string
 }
 
 type viewSubjectState struct {
@@ -89,7 +88,7 @@ type viewSubjectTracker struct {
 }
 
 func newViewSubjectTracker() *viewSubjectTracker {
-	labels := []string{"space_id", "view_id", "dataset_id", "freq"}
+	labels := []string{"space_id", "dataset_id", "freq"}
 	return &viewSubjectTracker{
 		scopes: make(map[viewSubjectScope]*viewSubjectState),
 		limit:  maxViewSeriesObservations,
@@ -147,7 +146,7 @@ func (t *viewSubjectTracker) retain(active map[ViewKey]struct{}) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for scope, state := range t.scopes {
-		if _, keep := active[ViewKey{SpaceID: scope.spaceID, ViewID: scope.viewID}]; keep {
+		if _, keep := active[ViewKey{SpaceID: scope.spaceID, DatasetID: scope.datasetID}]; keep {
 			continue
 		}
 		t.observed -= len(state.series)
@@ -174,7 +173,7 @@ func (t *viewSubjectTracker) Collect(ch chan<- prometheus.Metric) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for scope, state := range t.scopes {
-		labels := []string{scope.spaceID, scope.viewID, scope.datasetID, scope.freq}
+		labels := []string{scope.spaceID, scope.datasetID, scope.freq}
 		cutoff := state.latest - int64((state.bar+viewSubjectLagTolerance)/time.Second)
 		// A subject trails when any of its series trails; it is named with the oldest bar among them.
 		oldest := make(map[string]int64)
@@ -211,13 +210,13 @@ func (t *viewSubjectTracker) Collect(ch chan<- prometheus.Metric) {
 
 func canonicalViewSubject(observation ViewDatasetObservation) (viewSubjectScope, string, time.Duration, error) {
 	scope := viewSubjectScope{
-		spaceID: strings.TrimSpace(observation.SpaceID), viewID: strings.TrimSpace(observation.ViewID),
+		spaceID:   strings.TrimSpace(observation.SpaceID),
 		datasetID: strings.TrimSpace(observation.DatasetID), freq: strings.TrimSpace(observation.Frequency),
 	}
 	subjectID := strings.TrimSpace(observation.SubjectID)
-	for _, value := range []string{scope.spaceID, scope.viewID, scope.datasetID, scope.freq, subjectID} {
+	for _, value := range []string{scope.spaceID, scope.datasetID, scope.freq, subjectID} {
 		if value == "" {
-			return viewSubjectScope{}, "", 0, fmt.Errorf("storage view dataset observation requires space_id, view_id, dataset_id, subject_id, and freq")
+			return viewSubjectScope{}, "", 0, fmt.Errorf("storage view dataset observation requires space_id, dataset_id, subject_id, and freq")
 		}
 		if len(value) > maxViewDatasetMetricLabelBytes {
 			return viewSubjectScope{}, "", 0, fmt.Errorf("storage view dataset observation label exceeds %d bytes", maxViewDatasetMetricLabelBytes)

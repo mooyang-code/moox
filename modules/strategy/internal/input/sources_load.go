@@ -26,18 +26,18 @@ func (l Loader) loadReferences(ctx context.Context, spaceID string, resolved Res
 	loads := make([]*referenceLoad, 0, len(resolved.References))
 	for _, market := range sortedKeys(resolved.References) {
 		task := resolved.References[market]
-		view, err := l.Client.GetView(ctx, spaceID, task.ViewID)
+		view, err := l.Client.GetView(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return nil, err
 		}
 		if view.Status != "" && view.Status != "active" {
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.ViewID, view.Status)}
+			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.DatasetID, view.Status)}
 		}
 		if view.ActiveIndexID == "" {
-			return nil, fmt.Errorf("参考市场的 View %s 没有活动索引", task.ViewID)
+			return nil, fmt.Errorf("参考市场的 View %s 没有活动索引", task.DatasetID)
 		}
-		if view.DatasetID != task.DatasetID || !strings.EqualFold(view.Frequency, resolved.Bar) {
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的数据集或周期已变化，请重新启用实例", task.ViewID)}
+		if !strings.EqualFold(view.Frequency, resolved.Bar) {
+			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("参考市场的 View %s 的周期已变化，请重新启用实例", task.DatasetID)}
 		}
 		if view, err = WithCoverage(ctx, l.Client, spaceID, view, false); err != nil {
 			return nil, err
@@ -81,32 +81,32 @@ func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resol
 			}
 			subjects := frame.Markets[market].Rows
 			task := source.Tasks[market]
-			view, err := l.Client.GetView(ctx, spaceID, task.ViewID)
+			view, err := l.Client.GetView(ctx, spaceID, task.DatasetID)
 			if err != nil {
 				return nil, err
 			}
 			if view.Status != "" && view.Status != "active" {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", name, task.ViewID, view.Status)}
+				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的状态是 %s，不再提供数据，请重新绑定实例", name, task.DatasetID, view.Status)}
 			}
 			if view.ActiveIndexID == "" {
-				return nil, fmt.Errorf("来源 %s 的 View %s 没有活动索引", name, task.ViewID)
+				return nil, fmt.Errorf("来源 %s 的 View %s 没有活动索引", name, task.DatasetID)
 			}
-			if view.DatasetID != task.DatasetID || !strings.EqualFold(view.Frequency, source.Bar) {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的数据集或周期已变化，请重新启用实例", name, task.ViewID)}
+			if !strings.EqualFold(view.Frequency, source.Bar) {
+				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("来源 %s 的 View %s 的周期已变化，请重新启用实例", name, task.DatasetID)}
 			}
 			if missing := missingViewColumns(view, columns); len(missing) > 0 {
-				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于来源 %s 的 View %s，请重新启用实例", strings.Join(missing, "、"), name, task.ViewID)}
+				return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于来源 %s 的 View %s，请重新启用实例", strings.Join(missing, "、"), name, task.DatasetID)}
 			}
 			selected := make([]Subject, 0, len(subjects))
 			for _, id := range sortedKeys(subjects) {
 				selected = append(selected, Subject{SubjectID: id})
 			}
-			query := Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: period.StorageStart, End: period.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
+			query := Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: period.StorageStart, End: period.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
 			rows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
 			if err != nil {
 				return nil, err
 			}
-			revisions[view.ViewID] = revision
+			revisions[view.DatasetID] = revision
 			picked, err := sourceRowsOf(rows, period.StorageStart)
 			if err != nil {
 				return nil, err

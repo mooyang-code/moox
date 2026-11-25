@@ -31,26 +31,26 @@ func (c *RPCClient) pageSize() uint32 {
 }
 
 // viewNotFound 是 View 已被删除的跳过：实时求值记 config_error（实例需要重新绑定），回放与启用直接报错。
-func viewNotFound(viewID string) error {
-	return &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 已不存在", viewID), Cause: ErrViewNotFound}
+func viewNotFound(datasetID string) error {
+	return &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("数据集 %s 已不存在", datasetID), Cause: ErrViewNotFound}
 }
 
 // viewState 向 DataView 读取 View 已建好的活动索引，返回索引 ID 与代次。代次由索引 ID、变更日志的 store_id 与建成那一刻的
 // 序号组成（形如 index@store#seq），只做相等比较：原地重建后索引 ID 不变而序号变，存储重建后 store_id 变。
 // 索引还没建好（断档或原地重建中）时两者为空。storage-view 还没登记该 View（VIEW_NOT_FOUND，可能刚重启、正在恢复）时
 // 返回 errViewNotRegistered，View 是否被删以 Metadata 为准。
-func (c *RPCClient) viewState(ctx context.Context, spaceID, viewID string) (string, string, error) {
+func (c *RPCClient) viewState(ctx context.Context, spaceID, datasetID string) (string, string, error) {
 	if c == nil || c.DataView == nil {
 		return "", "", errors.New("Storage DataView 客户端未配置")
 	}
-	rsp, err := c.DataView.GetViewState(ctx, &storagepb.GetViewStateReq{SpaceId: spaceID, ViewId: viewID})
+	rsp, err := c.DataView.GetViewState(ctx, &storagepb.GetViewStateReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
-		return "", "", transport("读取 View "+viewID+" 的索引状态", err)
+		return "", "", transport("读取 View "+datasetID+" 的索引状态", err)
 	}
 	if rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_VIEW_NOT_FOUND {
 		return "", "", errViewNotRegistered
 	}
-	if err := retError("读取 View "+viewID+" 的索引状态", rsp.GetRetInfo()); err != nil {
+	if err := retError("读取 View "+datasetID+" 的索引状态", rsp.GetRetInfo()); err != nil {
 		return "", "", err
 	}
 	indexID := strings.TrimSpace(rsp.GetIndexId())
@@ -65,48 +65,50 @@ var errViewNotRegistered = errors.New("storage-view 还没登记这个 View")
 
 // ViewGeneration 只读取 View 的活动索引代次（不读列、不读 Metadata）；索引还没建好时返回空串。
 // storage-view 还没登记该 View 时返回可重试的传输错误：恢复期间不能当成空代次，否则复核代次会误判换代。
-func (c *RPCClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	_, generation, err := c.viewState(ctx, spaceID, viewID)
+func (c *RPCClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
+	_, generation, err := c.viewState(ctx, spaceID, datasetID)
 	if errors.Is(err, errViewNotRegistered) {
-		return "", transport("读取 View "+viewID+" 的索引状态", err)
+		return "", transport("读取 View "+datasetID+" 的索引状态", err)
 	}
 	return generation, err
 }
 
-// GetView 读取 View 及其全部列（不含覆盖范围，见 ViewCoverage）。
-func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error) {
+// GetView 读取数据集的 View：数据集的频率与状态（取自 Metadata）、活动索引（取自 DataView）与数据集里启用的列，
+// 不含覆盖范围（见 ViewCoverage）。每个数据集恰好有一个 View，数据集不存在即 View 不存在。
+func (c *RPCClient) GetView(ctx context.Context, spaceID, datasetID string) (ViewInfo, error) {
 	if c == nil || c.Metadata == nil {
 		return ViewInfo{}, errors.New("Storage Metadata 客户端未配置")
 	}
-	rsp, err := c.Metadata.GetView(ctx, &storagepb.GetViewReq{SpaceId: spaceID, ViewId: viewID})
+	rsp, err := c.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
-		return ViewInfo{}, transport("读取 View "+viewID, err)
+		return ViewInfo{}, transport("读取数据集 "+datasetID, err)
 	}
-	if code := rsp.GetRetInfo().GetCode(); code == commonpb.ErrorCode_VIEW_NOT_FOUND || code == commonpb.ErrorCode_NOT_FOUND {
-		return ViewInfo{}, viewNotFound(viewID)
+	if code := rsp.GetRetInfo().GetCode(); code == commonpb.ErrorCode_DATASET_NOT_FOUND || code == commonpb.ErrorCode_NOT_FOUND {
+		return ViewInfo{}, viewNotFound(datasetID)
 	}
-	if err := retError("读取 View "+viewID, rsp.GetRetInfo()); err != nil {
+	if err := retError("读取数据集 "+datasetID, rsp.GetRetInfo()); err != nil {
 		return ViewInfo{}, err
 	}
-	view := rsp.GetView()
-	if view == nil {
-		return ViewInfo{}, viewNotFound(viewID)
+	dataset := rsp.GetDataset()
+	if dataset == nil {
+		return ViewInfo{}, viewNotFound(datasetID)
 	}
-	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus()}
-	// storage-view 还没登记时当作索引还没建好：View 是否被删以上面的 Metadata 为准。
-	if info.ActiveIndexID, info.Generation, err = c.viewState(ctx, spaceID, viewID); err != nil && !errors.Is(err, errViewNotRegistered) {
+	info := ViewInfo{DatasetID: dataset.GetDatasetId(), Frequency: dataset.GetFreq(), Status: dataset.GetStatus()}
+	// storage-view 还没登记时当作索引还没建好：数据集是否被删以上面的 Metadata 为准。
+	if info.ActiveIndexID, info.Generation, err = c.viewState(ctx, spaceID, datasetID); err != nil && !errors.Is(err, errViewNotRegistered) {
 		return ViewInfo{}, err
 	}
 	for page := uint32(1); ; page++ {
-		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
+		columns, err := c.Metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {
-			return ViewInfo{}, transport("读取 View "+viewID+" 的列", err)
+			return ViewInfo{}, transport("读取数据集 "+datasetID+" 的列", err)
 		}
-		if err := retError("读取 View "+viewID+" 的列", columns.GetRetInfo()); err != nil {
+		if err := retError("读取数据集 "+datasetID+" 的列", columns.GetRetInfo()); err != nil {
 			return ViewInfo{}, err
 		}
 		for _, column := range columns.GetColumns() {
-			if column == nil || column.GetColumnName() == "" {
+			// 停用的列在 View 里隐藏，读取方自己过滤。
+			if column == nil || column.GetColumnName() == "" || (column.GetStatus() != "" && column.GetStatus() != "active") {
 				continue
 			}
 			attributes := make(map[string]string, len(column.GetAttributes()))
@@ -140,15 +142,15 @@ func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewI
 	var coverage Coverage
 	for _, mode := range modes {
 		rsp, err := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
-			SpaceId: spaceID, ViewId: view.ViewID,
+			SpaceId: spaceID, DatasetId: view.DatasetID,
 			TimeRange: &storagepb.TimeRange{StartTime: epoch.Format(time.RFC3339Nano), EndTime: epoch.Add(time.Nanosecond).Format(time.RFC3339Nano)},
 			Page:      &commonpb.Page{Page: 1, Size: 1}, Limit: 1, TotalMode: mode,
 			Pin: &storagepb.IndexVersion{IndexId: view.ActiveIndexID},
 		})
 		if err != nil {
-			return Coverage{}, transport("读取 View "+view.ViewID+" 的覆盖范围", err)
+			return Coverage{}, transport("读取 View "+view.DatasetID+" 的覆盖范围", err)
 		}
-		if err := viewRetError("读取 View "+view.ViewID+" 的覆盖范围", view.ViewID, nil, rsp.GetRetInfo()); err != nil {
+		if err := viewRetError("读取 View "+view.DatasetID+" 的覆盖范围", view.DatasetID, nil, rsp.GetRetInfo()); err != nil {
 			return Coverage{}, err
 		}
 		coverage.SeriesBars = int(min(rsp.GetRetainedRowsPerSeries(), uint64(math.MaxInt32)))
@@ -324,7 +326,7 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 		return nil, 0, errors.New("Storage DataView 客户端未配置")
 	}
 	if strings.TrimSpace(query.ExpectedIndexID) == "" {
-		return nil, 0, fmt.Errorf("View %s 没有活动索引", query.ViewID)
+		return nil, 0, fmt.Errorf("View %s 没有活动索引", query.DatasetID)
 	}
 	if len(query.Subjects) == 0 {
 		return []Row{}, query.ExpectedRevision, nil
@@ -346,25 +348,25 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 	}
 	for page := uint32(1); ; page++ {
 		rsp, err := c.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
-			SpaceId: spaceID, ViewId: query.ViewID, Selectors: selectors,
+			SpaceId: spaceID, DatasetId: query.DatasetID, Selectors: selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: query.Start.UTC().Format(time.RFC3339Nano), EndTime: query.End.UTC().Format(time.RFC3339Nano)},
 			ColumnNames: query.Columns, Page: &commonpb.Page{Page: page, Size: size}, TotalMode: commonpb.TotalMode_NONE,
 			Pin: &storagepb.IndexVersion{IndexId: query.ExpectedIndexID, Revision: revision},
 		})
 		if err != nil {
-			return nil, 0, transport("读取 View "+query.ViewID+" 的行", err)
+			return nil, 0, transport("读取 View "+query.DatasetID+" 的行", err)
 		}
-		if err := viewRetError("读取 View "+query.ViewID+" 的行", query.ViewID, query.Columns, rsp.GetRetInfo()); err != nil {
+		if err := viewRetError("读取 View "+query.DatasetID+" 的行", query.DatasetID, query.Columns, rsp.GetRetInfo()); err != nil {
 			return nil, 0, err
 		}
 		if served := rsp.GetIndex().GetRevision(); served != 0 {
 			if revision != 0 && revision != served {
-				return nil, 0, &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入（索引修订号从 %d 变为 %d）", query.ViewID, revision, served)}
+				return nil, 0, &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入（索引修订号从 %d 变为 %d）", query.DatasetID, revision, served)}
 			}
 			revision = served
 		}
 		if servedIndex := strings.TrimSpace(rsp.GetIndex().GetIndexId()); servedIndex != "" && servedIndex != query.ExpectedIndexID {
-			return nil, 0, &staleError{message: fmt.Sprintf("View %s 的活动索引在读取期间从 %s 变为 %s", query.ViewID, query.ExpectedIndexID, servedIndex)}
+			return nil, 0, &staleError{message: fmt.Sprintf("View %s 的活动索引在读取期间从 %s 变为 %s", query.DatasetID, query.ExpectedIndexID, servedIndex)}
 		}
 		for _, row := range rsp.GetRows() {
 			converted, err := convertRow(row)
@@ -542,14 +544,14 @@ func RawCause(err error) error {
 
 // viewRetError 把 DataView 的错误映射为输入层错误：读取期间索引变化 → ErrStale；列不存在 → config_error 跳过；
 // 其余 → *ServiceError。服务端原文只经 Unwrap 留给日志。
-func viewRetError(operation, viewID string, columns []string, info *commonpb.RetInfo) error {
+func viewRetError(operation, datasetID string, columns []string, info *commonpb.RetInfo) error {
 	if info == nil || info.GetCode() == commonpb.ErrorCode_SUCCESS {
 		return nil
 	}
 	raw := errors.New(info.GetMsg())
 	message := strings.ToLower(info.GetMsg())
 	if info.GetCode() == commonpb.ErrorCode_VIEW_NOT_READY && (strings.Contains(message, "revision changed") || strings.Contains(message, "index changed") || strings.Contains(message, "updated during query")) {
-		return &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入或换了活动索引", viewID), raw: raw}
+		return &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入或换了活动索引", datasetID), raw: raw}
 	}
 	if info.GetCode() == commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND || info.GetCode() == commonpb.ErrorCode_FIELD_NOT_FOUND {
 		// 列不存在是确定性的配置问题，重试不会恢复。
@@ -561,9 +563,9 @@ func viewRetError(operation, viewID string, columns []string, info *commonpb.Ret
 				missing = append(missing, column)
 			}
 		}
-		detail := fmt.Sprintf("View %s 缺少列 %s", viewID, strings.Join(missing, "、"))
+		detail := fmt.Sprintf("View %s 缺少列 %s", datasetID, strings.Join(missing, "、"))
 		if len(missing) == 0 {
-			detail = fmt.Sprintf("View %s 缺少请求的列（请求的列：%s）", viewID, strings.Join(columns, "、"))
+			detail = fmt.Sprintf("View %s 缺少请求的列（请求的列：%s）", datasetID, strings.Join(columns, "、"))
 		}
 		return &SkipError{Reason: SkipConfigError, Detail: detail, Cause: raw}
 	}

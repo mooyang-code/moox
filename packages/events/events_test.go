@@ -90,7 +90,7 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		{
 			name: "view data ready", event: ViewDataReady,
 			payload:   validViewDataReady(now),
-			subjectID: "view-1",
+			subjectID: "dataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
 				_, payload, err := DecodeViewDataReady(registry, raw, subject, id)
 				return payload, err
@@ -203,8 +203,8 @@ func validLedgerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.DatasetPe
 
 func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
 	return &storagepb.ViewDataReady{
-		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "period-completed-1",
-		DatasetId: "dataset", Status: "complete", VisibleScope: "universe:dataset:1m",
+		CompletionEventId: "period-completed-1",
+		DatasetId:         "dataset", Status: "complete",
 		Frequency: "1m", PeriodTime: 1786032000,
 		ReadyAt: now,
 	}

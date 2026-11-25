@@ -37,7 +37,7 @@ const (
 		)))
 		ORDER BY c_replay_id`
 	// sqlDeleteViewsAgePassed 删除一组 View（JSON 数组参数）的年龄探针记录。
-	sqlDeleteViewsAgePassed = `DELETE FROM t_strategy_age_passed WHERE c_space_id = ? AND c_view_id IN (SELECT value FROM json_each(?))`
+	sqlDeleteViewsAgePassed = `DELETE FROM t_strategy_age_passed WHERE c_space_id = ? AND c_dataset_id IN (SELECT value FROM json_each(?))`
 )
 
 // instanceScopedDeletes 是按实例 ID 删除的语句，顺序满足外键：结果明细在结果之前，结果、到达记录、规则状态在会话之前，
@@ -66,14 +66,14 @@ func (s *Store) ActiveReplaysOfInstance(ctx context.Context, instanceID, spaceID
 }
 
 // DeleteInstance 在一个事务里删除已停用的实例在策略库里的全部记录：会话、结果与明细、规则状态、到达记录、回放、外显设置、
-// 因子任务登记和实例本身；viewIDs 是实例结果数据集的 View，按 (空间, View) 存的年龄探针记录一并删除。
+// 因子任务登记和实例本身；datasetIDs 是实例结果数据集的 View，按 (空间, View) 存的年龄探针记录一并删除。
 // 实例不存在返回 ErrNotFound；实例已启用时什么也不删。
-func (s *Store) DeleteInstance(ctx context.Context, instanceID, spaceID string, viewIDs []string) error {
+func (s *Store) DeleteInstance(ctx context.Context, instanceID, spaceID string, datasetIDs []string) error {
 	instanceID = strings.TrimSpace(instanceID)
 	if instanceID == "" {
 		return errors.New("实例 ID 不能为空")
 	}
-	views, err := json.Marshal(append([]string{}, viewIDs...))
+	views, err := json.Marshal(append([]string{}, datasetIDs...))
 	if err != nil {
 		return err
 	}

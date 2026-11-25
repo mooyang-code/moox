@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 // oldestDeleterEngine 在查询替身上加删除最旧数据的接口：每次计划给出一个序列、rowsPerPlan 行，
@@ -43,7 +42,7 @@ func (e *oldestDeleterEngine) DeleteOldestRows(_ context.Context, indexID string
 	if e.failDeleteAt > 0 && e.deletes == e.failDeleteAt {
 		return 0, errors.New("模拟删除失败")
 	}
-	if len(e.svc.indexWriteGate(indexID).token) != 0 {
+	if len(e.svc.runtimeOf(marketRef).gate.token) != 0 {
 		e.unlocked++
 	}
 	var total uint64
@@ -57,7 +56,7 @@ func (e *oldestDeleterEngine) DeleteOldestRows(_ context.Context, indexID string
 func (e *oldestDeleterEngine) FinishOldestRowsDelete(_ context.Context, indexID string, keep uint64) (string, error) {
 	e.refreshes++
 	e.finishKeep = keep
-	if len(e.svc.indexWriteGate(indexID).token) != 0 {
+	if len(e.svc.runtimeOf(marketRef).gate.token) != 0 {
 		e.unlocked++
 	}
 	return "2026-10-30T00:05:00.000000000Z", nil
@@ -67,7 +66,6 @@ func deleteOldestTestService(backlog uint64) (*Service, *oldestDeleterEngine) {
 	engine := &oldestDeleterEngine{queryEngine: &queryEngine{}, backlog: backlog}
 	svc := queryTestService(engine, true)
 	engine.svc = svc
-	svc.catalogViews = map[viewRef]*pb.View{{spaceID: "space", viewID: "prices"}: {SpaceId: "space", ViewId: "prices", Freq: "1m"}}
 	svc.seriesBars = 10000
 	return svc, engine
 }
@@ -81,7 +79,7 @@ func TestDeleteOldestRoundDeletesInBatchesUnderWriteLockUpToRoundCap(t *testing.
 		t.Fatalf("一轮删了 %d 批、剩 %d 行，应在 %d 行的上限处停下", engine.deletes, engine.backlog, 3*deleteOldestRoundRowsFactor)
 	}
 	// 每批删除和收尾都推进修订号，分页读取才能发现读取期间数据变了。
-	if got := svc.indexRevisionOf("prices-index"); got != uint64(engine.deletes+1) {
+	if got := svc.runtimeOf(marketRef).revision.Load(); got != uint64(engine.deletes+1) {
 		t.Fatalf("修订号推进了 %d 次，应为 %d 批删除加 1 次收尾", got, engine.deletes+1)
 	}
 	if engine.finishKeep != 10000 {
@@ -101,7 +99,7 @@ func TestDeleteOldestRoundDeletesInBatchesUnderWriteLockUpToRoundCap(t *testing.
 			t.Fatalf("第 %d 批的行数额度=%d，应为配置的 3", i, maxRows)
 		}
 	}
-	if len(svc.indexWriteGate("prices-index").token) != 1 {
+	if len(svc.runtimeOf(marketRef).gate.token) != 1 {
 		t.Fatal("一轮结束后写锁没有释放")
 	}
 }
@@ -122,8 +120,8 @@ func TestDeleteOldestRoundStopsWhenNothingLeftAndSkipsUnsafeViews(t *testing.T) 
 	engine.backlog = 5
 	plans := engine.plans
 
-	// 记录型 View（没有频率）不处理。
-	svc.catalogViews[viewRef{spaceID: "space", viewID: "prices"}] = &pb.View{SpaceId: "space", ViewId: "prices"}
+	// 记录型 View 不处理。
+	svc.runtimeOf(marketRef).setSpec(recordSpec("space", "market"))
 	svc.deleteOldestRound(context.Background(), 3)
 	if engine.plans != plans {
 		t.Fatal("记录型 View 不应删除最旧数据")
@@ -135,7 +133,7 @@ func TestDeleteOldestRoundFinishesDeletedRowsWhenALaterBatchFails(t *testing.T) 
 	svc, engine := deleteOldestTestService(100)
 	engine.failDeleteAt = 3
 	deleted, err := svc.deleteOldestFromIndex(context.Background(), deleteOldestTarget{
-		ref: viewRef{spaceID: "space", viewID: "prices"}, indexID: "prices-index", deleter: engine,
+		runtime: svc.runtimeOf(marketRef), indexID: marketIndexID, deleter: engine,
 	}, 10000, 3)
 	if err == nil || deleted != 6 {
 		t.Fatalf("第 3 批失败时应返回已删的 6 行与错误，实际 %d 行，错误 %v", deleted, err)
@@ -143,7 +141,7 @@ func TestDeleteOldestRoundFinishesDeletedRowsWhenALaterBatchFails(t *testing.T) 
 	if engine.refreshes != 1 {
 		t.Fatalf("已经删了行就要收尾，实际收尾 %d 次", engine.refreshes)
 	}
-	if len(svc.indexWriteGate("prices-index").token) != 1 {
+	if len(svc.runtimeOf(marketRef).gate.token) != 1 {
 		t.Fatal("失败后写锁没有释放")
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const spotResolved = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`
+const spotResolved = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a"}}}`
 
 func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 	repo := openTestStore(t)
@@ -32,7 +32,7 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 同一账户不能被两个启用实例占用：唯一索引让第二个启用整体回滚，不留下会话。
-	if err := repo.EnableInstance(ctx, Session{SessionID: "session-2", InstanceID: "i2", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_b","factor_task_id":"ftask_b"}}}`, CreatedAt: testNow}, "name: demo"); err == nil {
+	if err := repo.EnableInstance(ctx, Session{SessionID: "session-2", InstanceID: "i2", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_b","factor_task_id":"ftask_b"}}}`, CreatedAt: testNow}, "name: demo"); err == nil {
 		t.Fatal("同一账户不能被两个启用实例占用")
 	}
 	if sessions, err := repo.ListSessions(ctx, "i2"); err != nil || len(sessions) != 0 {
@@ -42,7 +42,7 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 	if err != nil || !enabled.Enabled || *enabled.SessionID != "session-1" || string(enabled.ResolvedJSON) != spotResolved {
 		t.Fatalf("启用后的实例不符：%+v err=%v", enabled, err)
 	}
-	byView, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_a")
+	byView, err := repo.EnabledInstancesByDataset(ctx, "space", "dataset_factor_a")
 	if err != nil || len(byView) != 1 || byView[0].InstanceID != "i1" {
 		t.Fatalf("按 View 路由不符：%+v err=%v", byView, err)
 	}
@@ -293,11 +293,11 @@ func TestInstanceBindsTwoFactorTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := "session-1"
-	if err := repo.EnableInstance(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"both","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_spot","factor_task_id":"ftask_spot"},"swap":{"view_id":"view_factor_swap","factor_task_id":"ftask_swap"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.EnableInstance(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"both","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_spot","factor_task_id":"ftask_spot"},"swap":{"dataset_id":"dataset_factor_swap","factor_task_id":"ftask_swap"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
-	for _, view := range []string{"view_factor_spot", "view_factor_swap"} {
-		instances, err := repo.EnabledInstancesByView(ctx, "space", view)
+	for _, view := range []string{"dataset_factor_spot", "dataset_factor_swap"} {
+		instances, err := repo.EnabledInstancesByDataset(ctx, "space", view)
 		if err != nil || len(instances) != 1 || instances[0].InstanceID != "i1" || len(instances[0].FactorTasks) != 2 {
 			t.Fatalf("View %s 的事件应路由到实例：%+v err=%v", view, instances, err)
 		}

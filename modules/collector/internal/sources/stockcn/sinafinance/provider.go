@@ -84,7 +84,7 @@ func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
 
 func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
 	spec := func(id, name string, kind marketdata.FieldValueType) marketdata.FieldSpec {
-		return marketdata.FieldSpec{ID: id, Name: name, Type: kind, Fill: "prev", Frequencies: []string{"1d"}}
+		return marketdata.FieldSpec{ID: id, Name: name, Group: marketdata.GroupFinance, Type: kind, Fill: "prev", Frequencies: []string{"1d"}}
 	}
 	specs := []marketdata.FieldSpec{spec(FieldReportPeriod, "财务报告期", marketdata.FieldTypeInt)}
 	for _, item := range metrics {

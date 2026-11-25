@@ -3684,7 +3684,7 @@ type ArrivalHistorySeries struct {
 	// 环节：storage（入库）、view（视图）、factor（因子）、factor_view（因子视图）、strategy（策略计算，按同空间同周期列出）。
 	Stage    string `protobuf:"bytes,1,opt,name=stage,proto3" json:"stage,omitempty"`
 	Producer string `protobuf:"bytes,2,opt,name=producer,proto3" json:"producer,omitempty"`
-	// 数据集 ID；View 为 view_id，primary_dataset_id 是它服务的数据集。
+	// 数据集 ID；primary_dataset_id 只对 View 填写，等于它所属的数据集（每个数据集恰好一个 View）。
 	DatasetId            string                 `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
 	PrimaryDatasetId     string                 `protobuf:"bytes,4,opt,name=primary_dataset_id,json=primaryDatasetId,proto3" json:"primary_dataset_id,omitempty"`
 	LatenessLimitSeconds int64                  `protobuf:"varint,5,opt,name=lateness_limit_seconds,json=latenessLimitSeconds,proto3" json:"lateness_limit_seconds,omitempty"`

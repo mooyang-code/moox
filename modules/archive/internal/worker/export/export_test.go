@@ -183,7 +183,7 @@ func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRe
 	input := DatasetMetaInput{
 		SpaceID: "crypto", DatasetID: "ds_1m", Purpose: "collect", DirName: "binance-spot-kline-1m", Freq: "1m", PartitionUnit: "day", Timezone: "UTC",
 		DatasetJSON: `{"name":"现货分钟K线","description":"币安现货 1 分钟 K 线"}`, Columns: cols,
-		Infos: []ColumnMeta{{Name: "open", DisplayName: "开盘价", OriginType: "field", OriginID: "open"}},
+		Infos: []ColumnMeta{{Name: "open", DisplayName: "开盘价", Group: "行情价格"}},
 	}
 	if err := files.WriteDatasetJSON(files.BuildDatasetMeta(input, now)); err != nil {
 		t.Fatal(err)

@@ -40,6 +40,9 @@ func loadMetadataSeed(path string) (metadataSeed, error) {
 	if len(raw) > maxMetadataSeedBytes {
 		return metadataSeed{}, fmt.Errorf("metadata seed exceeds %d bytes", maxMetadataSeedBytes)
 	}
+	if err := rejectRemovedMetadataSeedSections(raw); err != nil {
+		return metadataSeed{}, fmt.Errorf("metadata seed %s: %w", path, err)
+	}
 	var seed metadataSeed
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
@@ -52,16 +55,28 @@ func loadMetadataSeed(path string) (metadataSeed, error) {
 	return seed, nil
 }
 
+// removedMetadataSeedSections 是种子里已删除的段落：字段目录与 View 已并入数据集列与数据集。
+var removedMetadataSeedSections = map[string]string{
+	"field_groups": "field_groups 段已删除：字段分组改写在 dataset_columns 每列的 group 上",
+	"fields":       "fields 段已删除：列自描述，显示名写在 dataset_columns 每列的 display_name 上；采集字段只在 Collector 字段规格里登记",
+	"views":        "views 段已删除：每个数据集恰好有一个查询索引，随数据集自动建删",
+}
+
+// rejectRemovedMetadataSeedSections 对已删除的段落给出明确的中文错误，而不是笼统的“未知字段”。
+func rejectRemovedMetadataSeedSections(raw []byte) error {
+	var top map[string]yaml.Node
+	if err := yaml.Unmarshal(raw, &top); err != nil {
+		return nil // 交给严格解码报出原始错误
+	}
+	for _, key := range []string{"field_groups", "fields", "views"} {
+		if _, ok := top[key]; ok {
+			return errors.New(removedMetadataSeedSections[key])
+		}
+	}
+	return nil
+}
+
 func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
-	var err error
-	seed, err = normalizeMetadataSeedViews(seed)
-	if err != nil {
-		return nil, err
-	}
-	seed, err = normalizeFieldGroups(seed)
-	if err != nil {
-		return nil, err
-	}
 	var calls []metadataImportCall
 	for _, item := range seed.Spaces {
 		space := item.toPB()
@@ -118,140 +133,21 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 			},
 		})
 	}
-	for _, item := range seed.FieldGroups {
-		group := item.toPB()
-		calls = append(calls, metadataImportCall{
-			Resource: "field_groups", Method: "CreateFieldGroup",
-			Request: &pb.CreateFieldGroupReq{FieldGroup: group}, Response: &pb.CreateFieldGroupRsp{},
-			Exists: &metadataExistsProbe{Method: "GetFieldGroup", Request: &pb.GetFieldGroupReq{SpaceId: group.GetSpaceId(), GroupId: group.GetGroupId()}, Response: &pb.GetFieldGroupRsp{}},
-		})
-	}
-	for _, item := range seed.Fields {
-		field, err := item.toPB()
-		if err != nil {
-			return nil, err
-		}
-		calls = append(calls, metadataImportCall{
-			Resource: "fields",
-			Method:   "CreateField",
-			Request:  &pb.CreateFieldReq{Field: field},
-			Response: &pb.CreateFieldRsp{},
-			Exists: &metadataExistsProbe{
-				Method:   "GetField",
-				Request:  &pb.GetFieldReq{SpaceId: field.GetSpaceId(), FieldId: field.GetFieldId()},
-				Response: &pb.GetFieldRsp{},
-			},
-		})
-	}
-	displayNames := make(map[string]string, len(seed.Fields))
-	for _, item := range seed.Fields {
-		displayNames[metadataDisplayNameKey(item.SpaceID, "FIELD", item.FieldID)] = item.Name
-	}
 	for _, item := range seed.DatasetColumns {
-		if strings.TrimSpace(item.Attributes["display_name"]) == "" {
-			key := metadataDisplayNameKey(item.SpaceID, item.OriginType, item.OriginID)
-			if displayName := strings.TrimSpace(displayNames[key]); displayName != "" {
-				item.Attributes = cloneStringMap(item.Attributes)
-				item.Attributes["display_name"] = displayName
-			}
-		}
 		column, err := item.toPB()
 		if err != nil {
 			return nil, err
 		}
 		calls = append(calls, metadataImportCall{Resource: "dataset_columns", Method: "UpsertDatasetColumn", Request: &pb.UpsertDatasetColumnReq{Column: column}, Response: &pb.UpsertDatasetColumnRsp{}})
 	}
-	for _, item := range seed.Views {
-		view := item.toPB()
-		calls = append(calls, metadataImportCall{
-			Resource: "views",
-			Method:   "CreateView",
-			Request:  &pb.CreateViewReq{View: view},
-			Response: &pb.CreateViewRsp{},
-			Exists: &metadataExistsProbe{
-				Method:   "GetView",
-				Request:  &pb.GetViewReq{SpaceId: view.GetSpaceId(), ViewId: view.GetViewId()},
-				Response: &pb.GetViewRsp{},
-			},
-		})
-	}
 	return calls, nil
-}
-
-func normalizeMetadataSeedViews(seed metadataSeed) (metadataSeed, error) {
-	if len(seed.Views) == 0 {
-		return seed, nil
-	}
-	datasets := make(map[string]seedDataset, len(seed.Datasets))
-	for _, dataset := range seed.Datasets {
-		datasets[setupMetadataKey(dataset.SpaceID, dataset.DatasetID)] = dataset
-	}
-	seed.Views = append([]seedView(nil), seed.Views...)
-	for index := range seed.Views {
-		normalized, err := canonicalMetadataView(seed.Views[index], datasets)
-		if err != nil {
-			return metadataSeed{}, err
-		}
-		seed.Views[index] = normalized
-	}
-	return seed, nil
-}
-
-func metadataDisplayNameKey(spaceID, originType, originID string) string {
-	return strings.Join([]string{
-		strings.TrimSpace(spaceID),
-		normalizeEnum(originType),
-		strings.TrimSpace(originID),
-	}, "\x00")
-}
-
-func normalizeFieldGroups(seed metadataSeed) (metadataSeed, error) {
-	existing := make(map[string]seedFieldGroup, len(seed.FieldGroups))
-	for _, group := range seed.FieldGroups {
-		key := group.SpaceID + "\x00" + group.GroupID
-		if strings.TrimSpace(group.SpaceID) == "" || strings.TrimSpace(group.GroupID) == "" || strings.TrimSpace(group.Name) == "" {
-			return metadataSeed{}, errors.New("field_group space_id, group_id and name are required")
-		}
-		if _, duplicate := existing[key]; duplicate {
-			return metadataSeed{}, fmt.Errorf("duplicate field_group %s/%s", group.SpaceID, group.GroupID)
-		}
-		existing[key] = group
-	}
-	for _, group := range seed.FieldGroups {
-		if strings.TrimSpace(group.ParentGroupID) == "" {
-			continue
-		}
-		parent, ok := existing[group.SpaceID+"\x00"+group.ParentGroupID]
-		if !ok {
-			return metadataSeed{}, fmt.Errorf("field_group %s/%s references undefined parent %q", group.SpaceID, group.GroupID, group.ParentGroupID)
-		}
-		if strings.TrimSpace(parent.ParentGroupID) != "" {
-			return metadataSeed{}, fmt.Errorf("field_group %s/%s exceeds the two-level hierarchy", group.SpaceID, group.GroupID)
-		}
-	}
-	for i := range seed.Fields {
-		if strings.TrimSpace(seed.Fields[i].GroupID) == "" {
-			seed.Fields[i].GroupID = "general"
-			key := seed.Fields[i].SpaceID + "\x00general"
-			if _, ok := existing[key]; !ok {
-				seed.FieldGroups = append(seed.FieldGroups, seedFieldGroup{SpaceID: seed.Fields[i].SpaceID, GroupID: "general", Name: "通用字段"})
-				existing[key] = seed.FieldGroups[len(seed.FieldGroups)-1]
-			}
-			continue
-		}
-		key := seed.Fields[i].SpaceID + "\x00" + seed.Fields[i].GroupID
-		if _, ok := existing[key]; !ok {
-			return metadataSeed{}, fmt.Errorf("field %s/%s references undefined field_group %q", seed.Fields[i].SpaceID, seed.Fields[i].FieldID, seed.Fields[i].GroupID)
-		}
-	}
-	return seed, nil
 }
 
 // metadataApplyConcurrency 是元数据导入同时进行的调用数。
 const metadataApplyConcurrency = 16
 
 // runMetadataApply 按依赖顺序逐类导入，同类资源并发。列要组内串行：新列的排序依赖写入顺序，
-// 所以按 View 和数据集分组，每组只查一次列表。父分组要先于子分组写入。
+// 所以按数据集分组，每组只查一次列表。
 func runMetadataApply(ctx context.Context, gateway gatewayclient.Invoker, calls []metadataImportCall) (metadataImportSummary, error) {
 	summary := metadataImportSummary{Status: "ok", Service: metadataServiceName, Planned: len(calls), Resources: countMetadataCalls(calls)}
 	var mu sync.Mutex
@@ -308,19 +204,6 @@ func metadataApplyStages(calls []metadataImportCall) [][][]metadataImportCall {
 				stage[position] = append(stage[position], call)
 			}
 			stages = append(stages, stage)
-		case "field_groups":
-			var parents, children [][]metadataImportCall
-			for _, call := range same {
-				if request, ok := call.Request.(*pb.CreateFieldGroupReq); ok && request.GetFieldGroup().GetParentGroupId() != "" {
-					children = append(children, []metadataImportCall{call})
-				} else {
-					parents = append(parents, []metadataImportCall{call})
-				}
-			}
-			stages = append(stages, parents)
-			if len(children) != 0 {
-				stages = append(stages, children)
-			}
 		default:
 			stage := make([][]metadataImportCall, 0, len(same))
 			for _, call := range same {
@@ -369,7 +252,7 @@ func finishMetadataCall(ctx context.Context, gateway gatewayclient.Invoker, call
 	return nil
 }
 
-// applyMetadataColumns 处理一个数据集或 View 的全部列：查一次列表，再逐列比对，缺的按顺序写入。
+// applyMetadataColumns 处理一个数据集的全部列：查一次列表，再逐列比对，缺的按顺序写入。
 func applyMetadataColumns(ctx context.Context, gateway gatewayclient.Invoker, calls []metadataImportCall, record func(bool)) error {
 	pages, err := listMetadataColumns(ctx, gateway, calls[0])
 	if err != nil {
@@ -473,12 +356,6 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		return true, rsp.GetDataSource()
 	case *pb.GetDatasetRsp:
 		return true, rsp.GetDataset()
-	case *pb.GetFieldGroupRsp:
-		return true, rsp.GetFieldGroup()
-	case *pb.GetFieldRsp:
-		return true, rsp.GetField()
-	case *pb.GetViewRsp:
-		return true, rsp.GetView()
 	case *pb.GetTagRsp:
 		return rsp.GetTag() != nil, rsp.GetTag()
 	}
@@ -495,22 +372,12 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		expected = req.GetDataSource()
 	case *pb.CreateDatasetReq:
 		expected = req.GetDataset()
-	case *pb.CreateFieldGroupReq:
-		expected = req.GetFieldGroup()
-	case *pb.CreateFieldReq:
-		expected = req.GetField()
 	case *pb.UpsertDatasetColumnReq:
 		expected = req.GetColumn()
-	case *pb.CreateViewReq:
-		expected = req.GetView()
 	default:
 		return fmt.Errorf("unsupported apply resource request %T", request)
 	}
 	if !metadataContractsEqual(resource, expected, actual) {
-		if resource == "views" {
-			view := expected.(*pb.View)
-			return fmt.Errorf("metadata views %s/%s exists but contract differs", view.GetSpaceId(), view.GetViewId())
-		}
 		if source, ok := expected.(*pb.DataSource); ok {
 			return fmt.Errorf("metadata data_sources %s/%s exists but contract differs", source.GetSpaceId(), source.GetDataSourceId())
 		}
@@ -540,54 +407,16 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetStatus() == y.GetStatus() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
-	if resource == "fields" {
-		x, y := a.(*pb.Field), b.(*pb.Field)
-		return x.GetSpaceId() == y.GetSpaceId() &&
-			x.GetFieldId() == y.GetFieldId() &&
-			x.GetName() == y.GetName() &&
-			x.GetDescription() == y.GetDescription() &&
-			x.GetValueType() == y.GetValueType() &&
-			x.GetUnit() == y.GetUnit() &&
-			x.GetValidationRuleJson() == y.GetValidationRuleJson() &&
-			x.GetWriteExample() == y.GetWriteExample() &&
-			x.GetStatus() == y.GetStatus() &&
-			x.GetGroupId() == y.GetGroupId() &&
-			x.GetSortOrder() == y.GetSortOrder() &&
-			maps.Equal(x.GetAttributes(), y.GetAttributes())
-	}
-	if resource == "field_groups" {
-		x, y := a.(*pb.FieldGroup), b.(*pb.FieldGroup)
-		return x.GetSpaceId() == y.GetSpaceId() &&
-			x.GetGroupId() == y.GetGroupId() &&
-			x.GetName() == y.GetName() &&
-			x.GetDescription() == y.GetDescription() &&
-			x.GetParentGroupId() == y.GetParentGroupId() &&
-			x.GetSortOrder() == y.GetSortOrder() &&
-			x.GetStatus() == y.GetStatus() &&
-			maps.Equal(x.GetAttributes(), y.GetAttributes())
-	}
 	if resource == "dataset_columns" {
 		x, y := a.(*pb.DatasetColumn), b.(*pb.DatasetColumn)
 		return x.GetSpaceId() == y.GetSpaceId() &&
 			x.GetDatasetId() == y.GetDatasetId() &&
 			x.GetColumnName() == y.GetColumnName() &&
-			x.GetOriginType() == y.GetOriginType() &&
-			x.GetOriginId() == y.GetOriginId() &&
 			x.GetValueType() == y.GetValueType() &&
+			x.GetDisplayName() == y.GetDisplayName() &&
+			x.GetGroup() == y.GetGroup() &&
 			x.GetRequired() == y.GetRequired() &&
 			slices.Equal(x.GetAliases(), y.GetAliases()) &&
-			x.GetStatus() == y.GetStatus() &&
-			maps.Equal(x.GetAttributes(), y.GetAttributes())
-	}
-	if resource == "views" {
-		x, y := a.(*pb.View), b.(*pb.View)
-		return x.GetSpaceId() == y.GetSpaceId() &&
-			x.GetViewId() == y.GetViewId() &&
-			x.GetName() == y.GetName() &&
-			x.GetDescription() == y.GetDescription() &&
-			x.GetDatasetId() == y.GetDatasetId() &&
-			slices.Equal(x.GetGrainKeys(), y.GetGrainKeys()) &&
-			x.GetEngine() == y.GetEngine() &&
 			x.GetStatus() == y.GetStatus() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
@@ -613,10 +442,7 @@ func metadataNotFound(retInfo *pb.RetInfo) bool {
 	case pb.ErrorCode_SPACE_NOT_FOUND,
 		pb.ErrorCode_DATASET_NOT_FOUND,
 		pb.ErrorCode_SUBJECT_NOT_FOUND,
-		pb.ErrorCode_FIELD_NOT_FOUND,
-		pb.ErrorCode_FACTOR_NOT_FOUND,
-		pb.ErrorCode_VIEW_NOT_FOUND,
-		pb.ErrorCode_VIEW_COLUMN_NOT_FOUND:
+		pb.ErrorCode_FACTOR_NOT_FOUND:
 		return true
 	default:
 		msg := strings.ToLower(retInfo.GetMsg())
@@ -657,36 +483,12 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "active", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
-func (s seedField) toPB() (*pb.Field, error) {
+func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 	valueType, err := parseFieldValueType(s.ValueType)
 	if err != nil {
 		return nil, err
 	}
-	return &pb.Field{SpaceId: s.SpaceID, GroupId: s.GroupID, FieldId: s.FieldID, Name: s.Name, Description: s.Description, ValueType: valueType, Unit: s.Unit, ValidationRuleJson: s.ValidationRuleJSON, WriteExample: s.WriteExample, SortOrder: s.SortOrder, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
-}
-
-func (s seedFieldGroup) toPB() *pb.FieldGroup {
-	return &pb.FieldGroup{SpaceId: s.SpaceID, GroupId: s.GroupID, Name: s.Name, Description: s.Description, ParentGroupId: s.ParentGroupID, SortOrder: s.SortOrder, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
-}
-
-func cloneStringMap(src map[string]string) map[string]string {
-	dst := make(map[string]string, len(src)+1)
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
-}
-
-func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
-	originType, valueType, err := parseDatasetColumnAndValueTypes(s.OriginType, s.ValueType)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.DatasetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, Required: s.Required, Aliases: s.Aliases, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
-}
-
-func (s seedView) toPB() *pb.View {
-	return &pb.View{SpaceId: s.SpaceID, ViewId: s.ViewID, Name: s.Name, Description: s.Description, DatasetId: s.PrimaryDatasetID, GrainKeys: s.GrainKeys, Engine: s.Engine, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.DatasetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, ValueType: valueType, DisplayName: s.DisplayName, Group: s.Group, Required: s.Required, Aliases: s.Aliases, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
 }
 
 func parseDataKind(value string) (pb.DataKind, error) {
@@ -725,39 +527,10 @@ func parseFieldValueType(value string) (pb.FieldValueType, error) {
 	}
 }
 
-func parseDatasetColumnOriginType(value string) (pb.DatasetColumnOriginType, error) {
-	switch normalizeEnum(value) {
-	case "", "UNSPECIFIED":
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED, nil
-	case "FIELD":
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, nil
-	case "CUSTOM":
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, nil
-	case "SYSTEM":
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, nil
-	default:
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED, fmt.Errorf("unsupported dataset column origin_type %q", value)
-	}
-}
-
-func parseDatasetColumnAndValueTypes(origin string, value string) (pb.DatasetColumnOriginType, pb.FieldValueType, error) {
-	originType, err := parseDatasetColumnOriginType(origin)
-	if err != nil {
-		return originType, pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, err
-	}
-	valueType, err := parseFieldValueType(value)
-	if err != nil {
-		return originType, valueType, err
-	}
-	return originType, valueType, nil
-}
-
 func normalizeEnum(value string) string {
 	value = strings.TrimSpace(strings.ToUpper(value))
 	value = strings.TrimPrefix(value, "DATA_KIND_")
 	value = strings.TrimPrefix(value, "FIELD_VALUE_TYPE_")
-	value = strings.TrimPrefix(value, "DATASET_COLUMN_ORIGIN_TYPE_")
-	value = strings.TrimPrefix(value, "COLUMN_ORIGIN_TYPE_")
 	value = strings.ReplaceAll(value, "-", "_")
 	return value
 }

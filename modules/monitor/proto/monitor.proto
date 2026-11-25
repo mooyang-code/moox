@@ -387,7 +387,7 @@ message ArrivalHistorySeries {
   // 环节：storage（入库）、view（视图）、factor（因子）、factor_view（因子视图）、strategy（策略计算，按同空间同周期列出）。
   string stage = 1;
   string producer = 2;
-  // 数据集 ID；View 为 view_id，primary_dataset_id 是它服务的数据集。
+  // 数据集 ID；primary_dataset_id 只对 View 填写，等于它所属的数据集（每个数据集恰好一个 View）。
   string dataset_id = 3;
   string primary_dataset_id = 4;
   int64 lateness_limit_seconds = 5;

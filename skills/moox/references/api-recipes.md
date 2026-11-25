@@ -23,8 +23,7 @@
 | 系统设置 › 密钥管理 | 看清单（值已打码） | `secret list`、`secret show --secret-id`；新建、修改请用户在管理台填写 |
 | 数据采集 › 数据源 | 数据来源 | `metadata source list|show|create|update|delete` |
 | 数据采集 › 数据对象 | 标的、标签与成员 | `metadata subject list|show|upsert|resolve`、`metadata tag list|show|upsert|delete|list-members|member-status`、`metadata tag members|clone` |
-| 数据采集 › 基础字段 | 字段与分组 | `metadata field list|show|create|update|batch-update`、`metadata field-group list|show|create|update|delete` |
-| 数据集、View（没有单独的页面） | 数据集、列、View | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`、`metadata view list|show|columns|create|update|delete` |
+| 数据集与列（没有单独的页面；每个数据集恰好一个查询索引 View，随数据集建删） | 数据集、列 | `metadata dataset list|show|columns|subjects|create|update|add-column|delete`；可采字段的中文名与分组看 `collector data-type show` |
 | 数据采集 › 采集任务（“采集结果”页签看数据；导入没有页面） | 读数据、导入历史 | `data kline get`、`data rows export|count`、`data view query|state|wait-applied`、`data records search`、`import` |
 | 数据采集 › 采集任务 | 任务、结果清单、数据类型 | `collector task list|show|create|update|disable|delete|delete-result|inventory`、`collector data-type list|show` |
 | 数据采集 › 采集任务（“运行状态”“补采”页签） | 状态、缺口、补采、合成、标的、采集方式 | `collector status`、`collector kline …`、`collector resample preview|backfill|jobs|cancel`、`collector subjects status|listers|sync|exclude|unexclude|exclusions`、`collector ingest-mode get|set`、`collector fetch-plan …` |

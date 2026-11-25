@@ -54,12 +54,12 @@ func (f *fakeResolver) ResolvePool(_ context.Context, _ string, taskIDs []string
 	columns := []string{"close"}
 	tasks := map[string]input.TaskBinding{}
 	for i, id := range taskIDs {
-		viewID, err := input.ViewIDOfTask(id)
+		datasetID, err := input.DatasetIDOfTask(id)
 		if err != nil {
 			return input.PoolResolved{}, err
 		}
 		market := union.Markets()[i]
-		tasks[market] = input.TaskBinding{ViewID: viewID, FactorTaskID: id, DatasetID: "ds"}
+		tasks[market] = input.TaskBinding{FactorTaskID: id, DatasetID: datasetID}
 	}
 	program, err := dsl.Compile(pool, columns)
 	if err != nil {

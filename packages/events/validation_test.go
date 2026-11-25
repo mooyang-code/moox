@@ -94,9 +94,9 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).DetailType = "" },
 		},
 		{
-			name: "view data ready route", event: ViewDataReady, subjectID: "view-1",
+			name: "view data ready route", event: ViewDataReady, subjectID: "dataset",
 			payload: validViewDataReady(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.ViewDataReady).ViewId = "other" },
+			mutate:  func(value proto.Message) { value.(*storagepb.ViewDataReady).DatasetId = "other" },
 		},
 	}
 

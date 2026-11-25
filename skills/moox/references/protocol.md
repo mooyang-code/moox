@@ -1,12 +1,12 @@
 # 协议与命名边界
 
-Storage 当前元数据 Schema 为 **v19**，由 `modules/storage/schema/metadata.sql` 和
+Storage 当前元数据 Schema 为 **v20**，由 `modules/storage/schema/metadata.sql` 和
 `modules/storage/internal/service/metadata/sqlite/store.go` 严格校验（版本不一致就拒绝启动，没有自动迁移）。全部数据集都存在 storage-primary 进程内的同一个 Pebble 库里，
 Dataset 不记录所属节点；数据集建好即为 active，可以直接写入，没有激活步骤。
 
 ## 当前模型
 
-- 元数据：Space、DataSource、Subject、Tag、TagMember、Dataset、Field、View。
+- 元数据：Space、DataSource、Subject、Tag、TagMember、Dataset、DatasetColumn；每个数据集恰好有一个查询索引（View），按 `(space_id, dataset_id)` 寻址，不单独登记。
 - 因子：全局 Factor 定义；Space 内的 FactorTask、任务成员与结果 Dataset。成员键、结果列名和任务相关 ID 由 `packages/factorname` 推导。
 - 归档：ArchiveTask、ArchiveRun、ArchivePartition，由 `modules/archive/proto` 定义。
 - 事实写入使用 `RowKey`：`space_id`、`dataset_id`，以及时序键（`subject_id`、`freq`、`data_time`、`series_tag`）或记录键（`record_id`、`version`）。时序键仍携带 `freq`，其值必须与 Dataset 的固定频率一致。

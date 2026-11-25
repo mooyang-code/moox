@@ -93,24 +93,9 @@ func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, 
 			out.Datasets = append(out.Datasets, item)
 		}
 	}
-	for _, item := range seed.FieldGroups {
-		if keep(item.SpaceID) {
-			out.FieldGroups = append(out.FieldGroups, item)
-		}
-	}
-	for _, item := range seed.Fields {
-		if keep(item.SpaceID) {
-			out.Fields = append(out.Fields, item)
-		}
-	}
 	for _, item := range seed.DatasetColumns {
 		if keep(item.SpaceID) {
 			out.DatasetColumns = append(out.DatasetColumns, item)
-		}
-	}
-	for _, item := range seed.Views {
-		if keep(item.SpaceID) {
-			out.Views = append(out.Views, item)
 		}
 	}
 	return out, nil

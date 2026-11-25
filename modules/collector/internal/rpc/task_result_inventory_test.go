@@ -33,28 +33,27 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
 	now := time.Date(2026, 10, 3, 10, 5, 0, 0, time.UTC)
-	activeIDs := taskresult.ResultIDsForTask("crypto", "task-active", "kline", "1m")
-	resampleIDs := taskresult.ResultIDsForTask("crypto", "task-resample", "kline_resample", "5m")
-	disabledIDs := taskresult.ResultIDsForTask("crypto", "task-disabled", "kline", "1m")
+	activeIDs := taskresult.ResultIDs("crypto", "task-active")
+	resampleIDs := taskresult.ResultIDs("crypto", "task-resample")
+	disabledIDs := taskresult.ResultIDs("crypto", "task-disabled")
 	tasks := []domain.CollectionTask{
-		{SpaceID: "crypto", TaskID: "task-active", TaskName: "active", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["open","high"]}`, ResultDatasetID: activeIDs.DatasetID, ResultViewID: activeIDs.ViewID},
-		{SpaceID: "crypto", TaskID: "task-resample", TaskName: "resample", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"derived","target_frequency":"5m","alignment":"epoch_utc"}`, ResultDatasetID: resampleIDs.DatasetID, ResultViewID: resampleIDs.ViewID},
-		{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "disabled", DataType: "kline", Enabled: false, PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["close"]}`, ResultDatasetID: disabledIDs.DatasetID, ResultViewID: disabledIDs.ViewID},
+		{SpaceID: "crypto", TaskID: "task-active", TaskName: "active", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["open","high"]}`, ResultDatasetID: activeIDs.DatasetID},
+		{SpaceID: "crypto", TaskID: "task-resample", TaskName: "resample", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"derived","target_frequency":"5m","alignment":"epoch_utc"}`, ResultDatasetID: resampleIDs.DatasetID},
+		{SpaceID: "crypto", TaskID: "task-disabled", TaskName: "disabled", DataType: "kline", Enabled: false, PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["close"]}`, ResultDatasetID: disabledIDs.DatasetID},
 		{SpaceID: "crypto", TaskID: "task-factor", TaskName: "factor", DataType: "factor", Enabled: true},
 	}
 	for _, task := range tasks {
 		require.NoError(t, db.Tasks().Create(ctx, task))
 	}
-	metadata := &taskResultMetadataFake{datasets: make(map[string]*storagepb.Dataset), views: make(map[string]*storagepb.View), indexedTo: make(map[string]string)}
+	metadata := &taskResultMetadataFake{datasets: make(map[string]*storagepb.Dataset), indexedTo: make(map[string]string)}
 	for taskID, ids := range map[string]taskresult.IDs{
 		"task-active":   activeIDs,
 		"task-resample": resampleIDs,
 		"task-disabled": disabledIDs,
 	} {
 		owned := newTaskResultMetadataFake(ids, taskID)
-		metadata.indexedTo[ids.ViewID] = now.Add(-time.Minute).Format(time.RFC3339)
+		metadata.indexedTo[ids.DatasetID] = now.Add(-time.Minute).Format(time.RFC3339)
 		metadata.datasets[ids.DatasetID] = owned.datasets[ids.DatasetID]
-		metadata.views[ids.ViewID] = owned.views[ids.ViewID]
 	}
 	service := &Service{
 		persistence:   db,
@@ -71,7 +70,6 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	entry := first.GetEntries()[0]
 	require.Equal(t, "task-active", entry.GetTaskId())
 	require.Equal(t, activeIDs.DatasetID, entry.GetDatasetId())
-	require.Equal(t, activeIDs.ViewID, entry.GetViewId())
 	require.True(t, entry.GetOwnershipVerified())
 	require.Equal(t, "1m", entry.GetFrequency())
 	// 直接行情任务的周期由 Storage 裁决：清单不再带最近终结周期，只带允许迟到时间。
@@ -111,11 +109,11 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDsForTask("crypto", "task-owned", "kline", "1m")
+	ids := taskresult.ResultIDs("crypto", "task-owned")
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
-		ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+		ResultDatasetID: ids.DatasetID,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
@@ -136,14 +134,13 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_CONFLICT, response.GetRetInfo().GetCode())
 	require.Zero(t, metadata.getDatasets, "full snapshot capacity must be rejected before Storage metadata inspection")
-	require.Zero(t, metadata.getViews, "full snapshot capacity must be rejected before Storage metadata inspection")
 
 	// Exhausting one Space's allowance cannot block another Space.
-	stockIDs := taskresult.ResultIDsForTask("stockcn", "task-stock", "kline", "1d")
+	stockIDs := taskresult.ResultIDs("stockcn", "task-stock")
 	stockTask := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "task-stock", TaskName: "stock", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"tdx","market_type":"stock","market_id":"stockcn","frequency":"1d"}`,
-		ResultDatasetID: stockIDs.DatasetID, ResultViewID: stockIDs.ViewID,
+		ResultDatasetID: stockIDs.DatasetID,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, stockTask))
 	response, err = service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockcn", Page: &commonpb.Page{Page: 1, Size: 10}})
@@ -156,11 +153,11 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 func TestGetTaskResultInventoryRejectsUnownedResultsAndMismatchedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDsForTask("crypto", "task-owned", "kline", "1m")
+	ids := taskresult.ResultIDs("crypto", "task-owned")
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
-		ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+		ResultDatasetID: ids.DatasetID,
 	}
 	require.NoError(t, db.Tasks().Create(ctx, task))
 	metadata := newTaskResultMetadataFake(ids, "another-task")
@@ -280,17 +277,16 @@ func newTaskResultInventoryConcurrentService(t *testing.T, taskCount int, delay 
 	expected := make([]string, 0, taskCount)
 	for index := 0; index < taskCount; index++ {
 		taskID := fmt.Sprintf("task-%03d", index)
-		ids := taskresult.ResultIDsForTask("crypto", taskID, "kline", "1m")
+		ids := taskresult.ResultIDs("crypto", taskID)
 		task := domain.CollectionTask{
 			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
 			PrepareState:    domain.PrepareStateReady,
 			CollectParams:   `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m"}`,
-			ResultDatasetID: ids.DatasetID, ResultViewID: ids.ViewID,
+			ResultDatasetID: ids.DatasetID,
 		}
 		require.NoError(t, db.Tasks().Create(ctx, task))
 		owned := newTaskResultMetadataFake(ids, taskID)
 		base.datasets[ids.DatasetID] = owned.datasets[ids.DatasetID]
-		base.views[ids.ViewID] = owned.views[ids.ViewID]
 		expected = append(expected, taskID)
 	}
 	metadata := &taskResultInventoryConcurrentMetadataFake{
@@ -342,17 +338,6 @@ func (f *taskResultInventoryConcurrentMetadataFake) GetDataset(ctx context.Conte
 	f.baseMu.Lock()
 	defer f.baseMu.Unlock()
 	return f.taskResultMetadataFake.GetDataset(ctx, req)
-}
-
-func (f *taskResultInventoryConcurrentMetadataFake) GetView(ctx context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
-	f.beginRequest()
-	defer f.endRequest()
-	if err := f.wait(ctx); err != nil {
-		return nil, err
-	}
-	f.baseMu.Lock()
-	defer f.baseMu.Unlock()
-	return f.taskResultMetadataFake.GetView(ctx, req)
 }
 
 func (f *taskResultInventoryConcurrentMetadataFake) wait(ctx context.Context) error {

@@ -90,7 +90,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, registered map[strin
 	}
 	tasks := map[string]input.TaskBinding{}
 	for i, id := range taskIDs {
-		viewID, err := input.ViewIDOfTask(id)
+		datasetID, err := input.DatasetIDOfTask(id)
 		if err != nil {
 			return input.Resolved{}, nil, err
 		}
@@ -99,7 +99,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, registered map[strin
 			market = []string{"spot", "swap"}[i]
 			mode = dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}
 		}
-		tasks[market] = input.TaskBinding{ViewID: viewID, FactorTaskID: id, DatasetID: "ds"}
+		tasks[market] = input.TaskBinding{FactorTaskID: id, DatasetID: datasetID}
 	}
 	strategy.Market = mode
 	program, err := dsl.Compile(strategy, columns)
@@ -195,7 +195,7 @@ func newHarness(t *testing.T) *harness {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	coverage := input.ViewInfo{ViewID: "view_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
+	coverage := input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
 	h := &harness{t: t, resolver: &fakeResolver{view: coverage}, trade: &fakeTrade{}, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
 	h.service = &Service{Store: repo, Resolver: h.resolver, Trade: h.trade, Now: func() time.Time { return h.now }}
 	ctx := trpc.BackgroundContext()
@@ -495,7 +495,7 @@ func TestS20HistoryAfterRedefinition(t *testing.T) {
 	h.createStrategy("s1", demoDSL)
 	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
 	oldSession := created.GetInstance().GetSessionId()
-	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"view_id":"view_factor_i1"}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"views":{"dataset_factor_i1":{}}}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
 	weight := "1"
 	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, Items: []store.ResultItem{{RuleID: "r", InstrumentID: "BTC-USDT", Stage: engine.StageWeighted, Weight: &weight}}, Now: h.now}); err != nil {
 		t.Fatal(err)
@@ -510,7 +510,7 @@ func TestS20HistoryAfterRedefinition(t *testing.T) {
 	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
 	got, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r-old"})
 	requireOK(t, int32(got.GetRetInfo().GetCode()), got.GetRetInfo().GetMsg())
-	if got.GetDslYaml() != demoDSL || !strings.Contains(got.GetResolvedJson(), `"view_id":"view_factor_i1"`) || len(got.GetItems()) != 1 || got.GetItems()[0].GetWeight() != "1" {
+	if got.GetDslYaml() != demoDSL || !strings.Contains(got.GetResolvedJson(), `"dataset_id":"dataset_factor_i1"`) || len(got.GetItems()) != 1 || got.GetItems()[0].GetWeight() != "1" {
 		t.Fatalf("旧会话结果应按旧 DSL 与旧绑定展示：dsl=%q resolved=%s items=%+v", got.GetDslYaml(), got.GetResolvedJson(), got.GetItems())
 	}
 	targets, _ := h.service.ListStrategyTargets(h.ctx, &strategypb.ListStrategyTargetsReq{InstanceId: "i1"})
@@ -620,7 +620,7 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只能给出其一")
 	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(neither.GetRetInfo().GetCode()), neither.GetRetInfo().GetMsg(), "只能给出其一")
-	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
+	h.resolver.view = input.ViewInfo{DatasetID: "dataset_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
 	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
 	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02", EndTime: "2026-09-30"})

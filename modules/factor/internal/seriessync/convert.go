@@ -10,7 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
-// FieldsFromColumns 把数据集的字段定义转成本地存储的字段表：只取启用的、非系统的列；
+// FieldsFromColumns 把数据集的字段定义转成本地存储的字段表：只取启用的、不是保留名的列；
 // 类型 double→Float64、int→Int64、bool→Bool，其余（string、time、json、bytes）按字节串存；
 // 缺失行的填充规则取列属性 fill，没有时按字段名给默认（OHLC 取上一期 close，量类填 0，其余取上一期的值）。
 func FieldsFromColumns(columns []storageio.ColumnInfo) []seriesstore.Field {
@@ -18,9 +18,6 @@ func FieldsFromColumns(columns []storageio.ColumnInfo) []seriesstore.Field {
 	var fields []seriesstore.Field
 	for _, col := range columns {
 		if col.Status != "" && col.Status != storageio.ColumnStatusActive {
-			continue
-		}
-		if col.OriginType == storageio.ColumnOriginSystem {
 			continue
 		}
 		if _, skip := reserved[col.ColumnName]; skip {

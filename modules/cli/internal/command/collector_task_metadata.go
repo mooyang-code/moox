@@ -10,22 +10,20 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 )
 
-// collector task delete-result 经操作员 SSH 网关调 Storage 的 Metadata，删除采集结果的 View 与数据集。
+// collector task delete-result 经操作员 SSH 网关调 Storage 的 Metadata，删除采集结果数据集（它的查询索引随之删除）。
 
 type collectorStorageObjectRef struct {
 	SpaceID  string
 	ObjectID string
 }
 
-// collectorOwnedMetadata 是要删除的采集结果：View 先于数据集删除（数据集被 View 引用时不能先删）。
+// collectorOwnedMetadata 是要删除的采集结果数据集。
 type collectorOwnedMetadata struct {
-	views    []collectorStorageObjectRef
 	datasets []collectorStorageObjectRef
 }
 
 type collectorStorageMetadataClient interface {
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error)
-	DeleteView(context.Context, *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error)
 }
 
 type collectorStorageMetadataProxy struct {
@@ -55,18 +53,6 @@ func (c *collectorStorageMetadataProxy) DeleteDataset(ctx context.Context, req *
 	return rsp, err
 }
 
-func (c *collectorStorageMetadataProxy) DeleteView(ctx context.Context, req *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error) {
-	if c == nil || c.gateway == nil {
-		return nil, fmt.Errorf("Storage 元数据客户端不可用")
-	}
-	if req == nil {
-		req = &storagepb.DeleteViewReq{}
-	}
-	rsp := &storagepb.DeleteViewRsp{}
-	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "DeleteView", req, rsp)
-	return rsp, err
-}
-
 func appendUniqueStorageObject(values []collectorStorageObjectRef, spaceID, objectID string) []collectorStorageObjectRef {
 	spaceID, objectID = strings.TrimSpace(spaceID), strings.TrimSpace(objectID)
 	if spaceID == "" || objectID == "" {
@@ -80,19 +66,10 @@ func appendUniqueStorageObject(values []collectorStorageObjectRef, spaceID, obje
 	return append(values, collectorStorageObjectRef{SpaceID: spaceID, ObjectID: objectID})
 }
 
-// deleteCollectorOwnedMetadata 先删 View 再删数据集；已经不存在的对象算删除成功，重跑同一条命令可以续做。
+// deleteCollectorOwnedMetadata 删数据集；已经不存在的对象算删除成功，重跑同一条命令可以续做。
 func deleteCollectorOwnedMetadata(ctx context.Context, metadata collectorStorageMetadataClient, objects collectorOwnedMetadata) error {
 	if metadata == nil {
 		return nil
-	}
-	for _, object := range objects.views {
-		response, err := metadata.DeleteView(ctx, &storagepb.DeleteViewReq{
-			SpaceId: object.SpaceID,
-			ViewId:  object.ObjectID,
-		})
-		if err != nil || !collectorDeleteViewAccepted(response) {
-			return fmt.Errorf("删除采集结果 View %s/%s 失败：%w", object.SpaceID, object.ObjectID, collectorDeleteResponseError(err, response))
-		}
 	}
 	for _, object := range objects.datasets {
 		response, err := metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{
@@ -104,18 +81,6 @@ func deleteCollectorOwnedMetadata(ctx context.Context, metadata collectorStorage
 		}
 	}
 	return nil
-}
-
-func collectorDeleteViewAccepted(response *storagepb.DeleteViewRsp) bool {
-	if response == nil || response.GetRetInfo() == nil {
-		return false
-	}
-	switch response.GetRetInfo().GetCode() {
-	case storagepb.ErrorCode_SUCCESS, storagepb.ErrorCode_VIEW_NOT_FOUND, storagepb.ErrorCode_NOT_FOUND:
-		return true
-	default:
-		return false
-	}
 }
 
 func collectorDeleteDatasetAccepted(response *storagepb.DeleteDatasetRsp) bool {

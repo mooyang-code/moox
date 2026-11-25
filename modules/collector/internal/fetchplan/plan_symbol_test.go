@@ -112,7 +112,7 @@ func TestBackfillRouteReadsTagsFromTheTaskRepository(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot-1m", TaskName: "spot-1m", DataType: "kline", Ingest: domain.IngestSCF, Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"ds_spot","frequency":"1m"}`, ResultDatasetID: "ds_spot", ResultViewID: "view_spot",
+		CollectParams: `{"target_dataset_id":"ds_spot","frequency":"1m"}`, ResultDatasetID: "ds_spot",
 	}))
 
 	routes := &BackfillRoutes{Tasks: db.Tasks(), Tags: &planSymbolsStub{}, Options: func(string) (PlanOptions, error) { return testPlanOptions(), nil }}

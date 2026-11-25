@@ -46,7 +46,7 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 	if err != nil {
 		return resampleSource{}, fmt.Errorf("source task %q has invalid params: %w", sourceTaskID, err)
 	}
-	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
+	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID)
 	out := resampleSource{TaskID: task.TaskID, DatasetID: ids.DatasetID}
 	switch strings.ToLower(task.DataType) {
 	case "kline_resample":

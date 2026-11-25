@@ -50,7 +50,7 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	if err := json.Unmarshal([]byte(resolved), &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot["tasks"] = map[string]any{"spot": map[string]any{"view_id": "view_factor_a", "factor_task_id": task}}
+	snapshot["tasks"] = map[string]any{"spot": map[string]any{"dataset_id": "dataset_factor_a", "factor_task_id": task}}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	// 按启用流程先把会话写到停用的实例上，再启用。
 }
 
-const resolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]}`
+const resolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]}`
 
 func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	repo := openStore(t)

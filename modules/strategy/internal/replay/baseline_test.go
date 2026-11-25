@@ -133,7 +133,7 @@ func baselineSwapPrice(id string, hour int) float64 { return baselinePrice(id, h
 func baselineDualClient() *dualClient {
 	dual := &dualClient{
 		spot: &fakeClient{marketType: "spot", priceFn: baselinePrice},
-		swap: &fakeClient{marketType: "swap", viewName: "view_factor_b", datasetName: "ds_swap", priceFn: baselineSwapPrice},
+		swap: &fakeClient{marketType: "swap", datasetName: "dataset_factor_b", priceFn: baselineSwapPrice},
 	}
 	dual.spot.missing = map[string]map[int]bool{"D": baselineHours(0, 5)}
 	dual.swap.missing = map[string]map[int]bool{"B": baselineHours(0, 7), "A": baselineHours(9, 10)}

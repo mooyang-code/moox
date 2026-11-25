@@ -20,8 +20,8 @@ import (
 
 // testFieldOffers：funding_rate 只有永续有来源；basis 现货和永续都有来源，只支持 1h。
 func testFieldOffers() marketdata.FieldOffers {
-	funding := marketdata.FieldSpec{ID: "funding_rate", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}
-	basis := marketdata.FieldSpec{ID: "basis", Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: []string{"1h"}}
+	funding := marketdata.FieldSpec{ID: "funding_rate", Name: "资金费率", Group: marketdata.GroupDerivatives, Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}
+	basis := marketdata.FieldSpec{ID: "basis", Name: "基差", Group: marketdata.GroupDerivatives, Type: marketdata.FieldTypeDouble, Fill: "prev", Frequencies: []string{"1h"}}
 	return marketdata.FieldOffers{
 		{MarketID: "crypto", Instrument: "swap", ProviderID: "binance", Spec: funding},
 		{MarketID: "crypto", Instrument: "spot", ProviderID: "fake_basis", Spec: basis},
@@ -79,7 +79,7 @@ func TestUpdateTaskRejectsAddedOutputFields(t *testing.T) {
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-1", TaskName: "swap 1h",
 		DataType: "kline", CollectParams: `{"target_dataset_id":"dataset-1","frequency":"1h","output_fields":["close","volume"]}`,
-		Enabled: true, PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-1", ResultViewID: "view-1",
+		Enabled: true, PrepareState: domain.PrepareStateReady, ResultDatasetID: "dataset-1",
 	}))
 	service := &Service{taskRepo: db.Tasks(), fieldOffers: testFieldOffers(), datasetSrc: validationDatasetSource{
 		"dataset-1": storagesource.DatasetInfo{DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1h", SubjectTags: []string{"binance_swap"}, Attributes: map[string]string{"market_type": "swap"}},
@@ -119,12 +119,22 @@ func TestGetDataTypeConfigWithFieldsListsExtraFields(t *testing.T) {
 	require.Equal(t, "swap", options[0].GetInstrumentType())
 	require.Equal(t, []string{"1h", "1d"}, options[0].GetFrequencies())
 	require.Equal(t, "binance", options[0].GetProviderId())
+	// 显示名与分组取自字段规格。
+	require.Equal(t, "资金费率", options[0].GetDisplayName())
+	require.Equal(t, marketdata.GroupDerivatives, options[0].GetGroup())
 
 	// 基础输出字段与建结果数据集列是同一份定义，管理台不另抄。
 	base := rsp.GetDetail().GetBaseOutputFields()
 	require.Len(t, base, len(taskresult.KlineOutputFields))
 	require.Equal(t, "open", base[0].GetFieldId())
-	require.Equal(t, "开盘", base[0].GetDisplayName())
+	require.Equal(t, "开盘价", base[0].GetDisplayName())
+	require.Equal(t, taskresult.GroupQuote, base[0].GetGroup())
+	require.Equal(t, "double", base[0].GetValueType())
+	for _, field := range base {
+		require.NotEmpty(t, field.GetDisplayName(), field.GetFieldId())
+		require.NotEmpty(t, field.GetGroup(), field.GetFieldId())
+		require.NotEmpty(t, field.GetValueType(), field.GetFieldId())
+	}
 	ids := make([]string, 0, len(base))
 	for _, field := range base {
 		ids = append(ids, field.GetFieldId())

@@ -87,7 +87,7 @@ func replayProto(value store.Replay) *strategypb.Replay {
 	if len(value.Tasks) > 0 {
 		replay.Tasks = make(map[string]*strategypb.ReplayTask, len(value.Tasks))
 		for market, task := range value.Tasks {
-			replay.Tasks[market] = &strategypb.ReplayTask{FactorTaskId: task.FactorTaskID, ViewId: task.ViewID}
+			replay.Tasks[market] = &strategypb.ReplayTask{FactorTaskId: task.FactorTaskID, DatasetId: task.DatasetID}
 		}
 	}
 	if value.ProgressTime != nil {

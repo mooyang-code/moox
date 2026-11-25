@@ -48,22 +48,22 @@ func (h *Handler) checkReadyFor(p *period, resolved input.Resolved, adjacent *st
 	var dataReason, dataDetail string
 	markets := resolved.Markets()
 	for _, market := range markets {
-		viewID := resolved.TaskOf(market).ViewID
+		datasetID := resolved.TaskOf(market).DatasetID
 		var previous *readiness.Record
 		if adjacent != nil {
-			previous = &readiness.Record{Factors: adjacent.Views[viewID].Factors}
+			previous = &readiness.Record{Factors: adjacent.Views[datasetID].Factors}
 		}
 		result := readiness.Check(resolved.ReadinessBinding(), previous, p.events[market])
 		merged.Results[market] = result
 		// 策略池里多个成员可能用同一个 View：各成员的因子指纹合并成一份。
-		view := p.input.Views[viewID]
+		view := p.input.Views[datasetID]
 		if view.Factors == nil {
 			view.Factors = make(map[string]string, len(result.Hashes))
 		}
 		for factor, hash := range result.Hashes {
 			view.Factors[factor] = hash
 		}
-		p.input.Views[viewID] = view
+		p.input.Views[datasetID] = view
 		switch {
 		case result.Reason == "":
 		case readiness.IsDataReason(result.Reason):
@@ -104,12 +104,12 @@ func (h *Handler) checkSourcesReady(p *period, resolved input.Resolved, merged *
 				continue
 			}
 			result := readiness.Check(source.ReadinessBinding(), nil, event)
-			viewID := source.Tasks[key].ViewID
-			view := p.input.Views[viewID]
+			datasetID := source.Tasks[key].DatasetID
+			view := p.input.Views[datasetID]
 			if len(result.Hashes) > 0 {
 				view.Factors = result.Hashes
 			}
-			p.input.Views[viewID] = view
+			p.input.Views[datasetID] = view
 			switch {
 			case result.Reason == "":
 			case readiness.IsDataReason(result.Reason):
@@ -156,19 +156,19 @@ func (h *Handler) gather(ctx context.Context, p *period, payload *storagepb.View
 	events := make(map[string]*storagepb.ViewDataReady, len(records))
 	arrived := make([]string, 0, len(records))
 	for _, record := range records {
-		recordKey, source, reference, ok := resolved.ViewRole(record.ViewID)
+		recordKey, source, reference, ok := resolved.RoleOfDataset(record.DatasetID)
 		if !ok || reference {
 			continue
 		}
 		recordKey = dsl.TaskKey(source, recordKey)
 		event := &storagepb.ViewDataReady{}
 		if err := proto.Unmarshal(record.Payload, event); err != nil {
-			h.logf("实例 %s 的到达记录 %s 无法解析：%v", p.instance.InstanceID, record.ViewID, err)
-			return nil, false, fmt.Errorf("解析 View %s 的到达记录：%w", record.ViewID, err)
+			h.logf("实例 %s 的到达记录 %s 无法解析：%v", p.instance.InstanceID, record.DatasetID, err)
+			return nil, false, fmt.Errorf("解析 View %s 的到达记录：%w", record.DatasetID, err)
 		}
 		events[recordKey] = event
-		arrived = append(arrived, record.ViewID)
-		p.input.Views[record.ViewID] = store.ViewInput{EventID: record.EventID}
+		arrived = append(arrived, record.DatasetID)
+		p.input.Views[record.DatasetID] = store.ViewInput{EventID: record.EventID}
 	}
 	complete, err := arrivedAll(resolved, p.boundary.BarEnd, arrived)
 	if err != nil {
@@ -188,11 +188,11 @@ func arrivedAll(resolved input.Resolved, barEnd time.Time, arrived []string) (bo
 		return false, err
 	}
 	have := make(map[string]struct{}, len(arrived))
-	for _, viewID := range arrived {
-		have[viewID] = struct{}{}
+	for _, datasetID := range arrived {
+		have[datasetID] = struct{}{}
 	}
-	for _, viewID := range expected {
-		if _, ok := have[viewID]; !ok {
+	for _, datasetID := range expected {
+		if _, ok := have[datasetID]; !ok {
 			return false, nil
 		}
 	}
@@ -203,7 +203,7 @@ func arrivedAll(resolved input.Resolved, barEnd time.Time, arrived []string) (bo
 // 那一根才等来源）。事件记为这根主帧的到达记录；主帧这一根已经到了时，用主帧的事件重新走一遍处理（这时就会汇合求值），否则等主帧。
 // 这一根已经处理过（例如来源超期、已补记 market_missing）时直接确认。
 func (h *Handler) sourceArrival(ctx context.Context, loader Loader, instance store.Instance, rt *runtime, message *eventpb.EventMessage, payload *storagepb.ViewDataReady, name string, periodTime time.Time) error {
-	barEnd, err := h.arrivalBarEnd(rt, payload.GetViewId(), periodTime)
+	barEnd, err := h.arrivalBarEnd(rt, payload.GetDatasetId(), periodTime)
 	if err != nil {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的来源 %s 的事件（period_time %s）无法对应到主帧的周期，本期丢弃：%v", instance.InstanceID, name, periodTime.Format(time.RFC3339), err)
@@ -230,7 +230,7 @@ func (h *Handler) sourceArrival(ctx context.Context, loader Loader, instance sto
 	}
 	event := &storagepb.ViewDataReady{}
 	if err := proto.Unmarshal(main.Payload, event); err != nil {
-		return fmt.Errorf("解析 View %s 的到达记录：%w", main.ViewID, err)
+		return fmt.Errorf("解析 View %s 的到达记录：%w", main.DatasetID, err)
 	}
 	if err := h.process(ctx, loader, instance, &eventpb.EventMessage{EventId: main.EventID, SpaceId: instance.SpaceID}, event); err != nil {
 		return err
@@ -242,7 +242,7 @@ func (h *Handler) sourceArrival(ctx context.Context, loader Loader, instance sto
 // mainRecord 返回到达记录里第一条主帧 View 的记录。
 func mainRecord(resolved input.Resolved, records []store.ReadyEvent) (store.ReadyEvent, bool) {
 	for _, record := range records {
-		if _, ok := resolved.TaskKeyOfView(record.ViewID); ok {
+		if _, ok := resolved.TaskKeyOfDataset(record.DatasetID); ok {
 			return record, true
 		}
 	}
@@ -251,9 +251,9 @@ func mainRecord(resolved input.Resolved, records []store.ReadyEvent) (store.Read
 
 // arrivalBarEnd 返回一个 View 的事件（period_time 是它的 bar_start）要记在哪根主帧上：主帧的事件就是这一根的 bar_end；附加来源的事件
 // 先按来源的日历与周期换算出来源的收盘时刻，它必须正好也是一根主帧的收盘时刻。
-func (h *Handler) arrivalBarEnd(rt *runtime, viewID string, periodTime time.Time) (time.Time, error) {
+func (h *Handler) arrivalBarEnd(rt *runtime, datasetID string, periodTime time.Time) (time.Time, error) {
 	resolved := rt.resolved
-	_, source, _, _ := resolved.ViewRole(viewID)
+	_, source, _, _ := resolved.RoleOfDataset(datasetID)
 	if source == "" {
 		boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, periodTime)
 		if err != nil {
@@ -282,9 +282,9 @@ func (h *Handler) putArrival(ctx context.Context, instance store.Instance, sessi
 	if err != nil {
 		return err
 	}
-	_, err = h.Store.PutReadyEvent(ctx, store.ReadyEvent{InstanceID: instance.InstanceID, SessionID: sessionID, ViewID: payload.GetViewId(), BarEnd: barEnd, EventID: eventID, Payload: raw, ArrivedAt: h.now()})
+	_, err = h.Store.PutReadyEvent(ctx, store.ReadyEvent{InstanceID: instance.InstanceID, SessionID: sessionID, DatasetID: payload.GetDatasetId(), BarEnd: barEnd, EventID: eventID, Payload: raw, ArrivedAt: h.now()})
 	if err != nil {
-		return fmt.Errorf("记录 View %s 的就绪事件：%w", payload.GetViewId(), err)
+		return fmt.Errorf("记录 View %s 的就绪事件：%w", payload.GetDatasetId(), err)
 	}
 	return nil
 }
@@ -294,10 +294,10 @@ func (h *Handler) recordArrival(ctx context.Context, instance store.Instance, rt
 	if rt == nil || rt.sessionID == "" || (!rt.resolved.Gathers() && rt.pool == nil) || rt.resolved.Calendar == "" {
 		return
 	}
-	if _, _, reference, _ := rt.resolved.ViewRole(payload.GetViewId()); reference {
+	if _, _, reference, _ := rt.resolved.RoleOfDataset(payload.GetDatasetId()); reference {
 		return
 	}
-	barEnd, err := h.arrivalBarEnd(rt, payload.GetViewId(), periodTime)
+	barEnd, err := h.arrivalBarEnd(rt, payload.GetDatasetId(), periodTime)
 	if err != nil {
 		return
 	}
@@ -335,7 +335,7 @@ func (h *Handler) processPending(ctx context.Context, loader Loader, instance st
 		}
 		event := &storagepb.ViewDataReady{}
 		if err := proto.Unmarshal(record.Payload, event); err != nil {
-			return fmt.Errorf("解析 View %s 的到达记录：%w", record.ViewID, err)
+			return fmt.Errorf("解析 View %s 的到达记录：%w", record.DatasetID, err)
 		}
 		message := &eventpb.EventMessage{EventId: record.EventID, SpaceId: instance.SpaceID}
 		if err := h.process(ctx, loader, instance, message, event); err != nil {
@@ -360,24 +360,24 @@ func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) erro
 		return err
 	}
 	resolved := p.runtime.resolved
-	latest, err := h.Store.LatestReadyByView(ctx, instanceID, sessionID, resolved.AllViewIDs())
+	latest, err := h.Store.LatestReadyByDataset(ctx, instanceID, sessionID, resolved.AllDatasetIDs())
 	if err != nil {
 		return err
 	}
 	for _, barEnd := range periods {
 		have := make(map[string]bool, len(arrived[barEnd]))
-		for _, viewID := range arrived[barEnd] {
-			have[viewID] = true
+		for _, datasetID := range arrived[barEnd] {
+			have[datasetID] = true
 		}
 		var missing []string
 		moved := false
 		for _, market := range resolved.Markets() {
-			viewID := resolved.TaskOf(market).ViewID
-			if have[viewID] {
+			datasetID := resolved.TaskOf(market).DatasetID
+			if have[datasetID] {
 				continue
 			}
 			missing = append(missing, market)
-			if latest[viewID].After(barEnd) {
+			if latest[datasetID].After(barEnd) {
 				moved = true
 			}
 		}
@@ -389,12 +389,12 @@ func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) erro
 				continue
 			}
 			for _, key := range resolved.TaskKeys() {
-				viewID := source.Tasks[key].ViewID
-				if have[viewID] {
+				datasetID := source.Tasks[key].DatasetID
+				if have[datasetID] {
 					continue
 				}
 				missingSources = append(missingSources, name)
-				if latest[viewID].After(barEnd) {
+				if latest[datasetID].After(barEnd) {
 					moved = true
 				}
 				break
@@ -415,8 +415,8 @@ func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) erro
 		stalePeriod := *p
 		stalePeriod.boundary, stalePeriod.validUntil = boundary, validUntil
 		stalePeriod.input = store.InputRecord{Bar: resolved.Bar, Calendar: resolved.Calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{}}
-		for _, viewID := range arrived[barEnd] {
-			stalePeriod.input.Views[viewID] = store.ViewInput{}
+		for _, datasetID := range arrived[barEnd] {
+			stalePeriod.input.Views[datasetID] = store.ViewInput{}
 		}
 		var parts []string
 		if len(missing) > 0 {

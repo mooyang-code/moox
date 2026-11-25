@@ -93,7 +93,7 @@ function replay(id: string, status: string, metrics = "{}", extra: Record<string
     strategy_id: "s1",
     dsl_yaml: "name: demo",
     space_id: "crypto",
-    tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
+    tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" } },
     start_time: "2026-09-01T00:00:00Z",
     end_time: "2026-09-02T00:00:00Z",
     spot_fee_bps: 10,
@@ -385,7 +385,9 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await vi.advanceTimersByTimeAsync(5000);
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r21", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_page2", view_id: "view_factor_a" } } })],
+      items: [
+        replay("r21", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_page2", dataset_id: "dataset_factor_a" } } })
+      ],
       page: { total: 30 }
     });
     (wrapper.vm as any).changeReplayPage(2);
@@ -542,8 +544,8 @@ describe("strategy replay page", () => {
   it("shows the per-market values, the tasks, the fees and the no-funding-fee warning for a swap replay", async () => {
     const mixed = replay("r7", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
       tasks: {
-        spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" },
-        swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" }
+        spot: { factor_task_id: "ftask_a", dataset_id: "dataset_factor_a" },
+        swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" }
       },
       swap_fee_bps: 5
     });
@@ -596,7 +598,7 @@ describe("strategy replay page", () => {
 
   it("names the funding column instead of the no-funding-fee warning when the replay charges funding", async () => {
     const funded = replay("r8", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
-      tasks: { swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" } },
+      tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" } },
       swap_fee_bps: 5,
       funding_column: "funding_rate"
     });
@@ -612,7 +614,7 @@ describe("strategy replay page", () => {
 
   it("策略池回放显示每期的池明细，资金费说明按池 DSL 的 fees.funding_column", async () => {
     const pooled = replay("r9", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
-      tasks: { swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" } },
+      tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "dataset_factor_b" } },
       swap_fee_bps: 5,
       dsl_yaml:
         "name: p\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a, strategy: s_a}\n  allocation: {method: drift, ratios: {a: 1}}\n  fees: {funding_column: funding_rate}\n"
@@ -742,7 +744,9 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await wrapper.find('[aria-label="刷新回放"]').trigger("click");
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_newer", view_id: "view_factor_a" } } })],
+      items: [
+        replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_newer", dataset_id: "dataset_factor_a" } } })
+      ],
       page: { total: 1 }
     });
     await pollOnce();
@@ -750,7 +754,9 @@ describe("strategy replay page", () => {
     // 手动加载仍在进行：加载态只跟踪手动加载，轮询应用了更新的结果也不结束它。
     expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).toBe("true");
     slow.resolve({
-      items: [replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_older", view_id: "view_factor_a" } } })],
+      items: [
+        replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_older", dataset_id: "dataset_factor_a" } } })
+      ],
       page: { total: 1 }
     });
     await flushPromises();
@@ -856,11 +862,11 @@ describe("strategy replay page", () => {
     expect((wrapper.vm as any).pollFailures).toBe(0);
     expect((wrapper.vm as any).awaitingMetrics).toBeNull();
     nextList.resolve({
-      items: [replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", view_id: "view_factor_a" } } })],
+      items: [replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })],
       page: { total: 1 }
     });
     api.getReplay.mockResolvedValue(
-      replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", view_id: "view_factor_a" } } })
+      replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", dataset_id: "dataset_factor_a" } } })
     );
     await flushPromises();
     expect(listText(wrapper)).toContain("ftask_stock");

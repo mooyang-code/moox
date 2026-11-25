@@ -170,7 +170,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
@@ -236,7 +236,7 @@ func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*e
 	if err != nil {
 		panic(err)
 	}
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
+	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
 	return message, payload
 }
 
@@ -539,7 +539,7 @@ func TestHandlePreviousBarVersionEvidence(t *testing.T) {
 		t.Fatalf("首期应为 previous_version_unknown：%+v", first)
 	}
 	var record store.InputRecord
-	if err := json.Unmarshal(first.InputJSON, &record); err != nil || record.Views["view_factor_a"].Factors["f"] != "h1|fixed" {
+	if err := json.Unmarshal(first.InputJSON, &record); err != nil || record.Views["dataset_factor_a"].Factors["f"] != "h1|fixed" {
 		t.Fatalf("首期应记录本期指纹：%s err=%v", first.InputJSON, err)
 	}
 	h.now = barStart(2).Add(90 * time.Minute)
@@ -589,7 +589,7 @@ func TestHandleCASConflictReevaluates(t *testing.T) {
 func TestHandleAcksEventsWithoutInstances(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	message, payload := h.event(1, map[string]string{"f": "h1"})
-	payload.ViewId = "other_view"
+	payload.DatasetId = "other_view"
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	if h.loader.calls != 0 {
 		t.Fatal("无关 View 不应读取输入")

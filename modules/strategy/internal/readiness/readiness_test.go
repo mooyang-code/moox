@@ -20,7 +20,7 @@ func factorEvent(states ...*factorpb.FactorPeriodState) *storagepb.ViewDataReady
 	if err != nil {
 		panic(err)
 	}
-	return &storagepb.ViewDataReady{ViewId: "view_1", Status: status, DetailType: PeriodDetailType, Detail: raw}
+	return &storagepb.ViewDataReady{DatasetId: "view_1", Status: status, DetailType: PeriodDetailType, Detail: raw}
 }
 
 func state(id, status, hash string, failed ...string) *factorpb.FactorPeriodState {

@@ -45,10 +45,10 @@ check("dataset:storage:other:1m", "ok", "正常")
 check("host:abcd:cpu", "ok", "CPU 使用率 20.0%")
 db.execute("INSERT INTO t_monitor_alert_events (c_event_id, c_space_id, c_check_id, c_title, c_severity, c_event_type, c_created_at) "
            "VALUES ('e1', 'crypto', 'dataset:storage:firing:1m', '行情数据集', 'critical', 'triggered', ?)", (old,))
-label = '{"view_id":"view_quiet_kline_1h"}'
+label = '{"dataset_id":"dataset_quiet_kline_1h"}'
 db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at, c_value, c_observed_at) "
            "VALUES ('storage-view', 'sv@control', 's1', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?, 0, ?)", (label, old, old))
-fresh = '{"view_id":"view_live_kline_1m"}'
+fresh = '{"dataset_id":"dataset_live_kline_1m"}'
 db.execute("INSERT INTO t_monitor_metric_series (c_service_name, c_instance_id, c_series_id, c_metric_name, c_metric_type, c_labels_json, c_last_seen_at, c_value, c_observed_at) "
            "VALUES ('storage-view', 'sv@control', 's2', 'moox_storage_view_output_watermark_timestamp_seconds', 'gauge', ?, ?, 0, ?)", (fresh, now.isoformat(), now.isoformat()))
 db.commit()
@@ -67,8 +67,8 @@ grep -q "等待恢复确认（最近失败：数据落后 5 根）" <<<"${out}" 
 grep -q "crypto/dataset:storage:other:1m" <<<"${out}" && fail "没在告警的检查不该列出"
 grep -q "dataset · ok：2" <<<"${out}" || fail "检查概况不对：${out}"
 grep -q "triggered crypto/dataset:storage:firing:1m（行情数据集）" <<<"${out}" || fail "缺少告警事件：${out}"
-grep -q "view_quiet_kline_1h" <<<"${out}" || fail "缺少静默视图序列：${out}"
-grep -q "view_live_kline_1m" <<<"${out}" && fail "刚上报的视图不该列为静默"
+grep -q "dataset_quiet_kline_1h" <<<"${out}" || fail "缺少静默视图序列：${out}"
+grep -q "dataset_live_kline_1m" <<<"${out}" && fail "刚上报的视图不该列为静默"
 grep -q "partially failed" <<<"${out}" || fail "缺少推送失败日志：${out}"
 [[ "$(shasum "${DB}" | cut -d' ' -f1)" == "${before}" ]] || fail "数据库被修改了"
 

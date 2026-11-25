@@ -214,7 +214,7 @@ func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp 
 		if g.tasksDisabled && req.(*collectorpb.GetTaskListReq).Enabled != nil {
 			return nil
 		}
-		out.Tasks = []*collectorpb.CollectionTask{{TaskId: "task_a", Result: &collectorpb.TaskResult{ViewId: "view_task_a_kline_1m", DatasetId: "dataset_task_a"}}}
+		out.Tasks = []*collectorpb.CollectionTask{{TaskId: "task_a", Result: &collectorpb.TaskResult{DatasetId: "dataset_task_a"}}}
 	case *collectorpb.GetCollectorStatusRsp:
 		out.Datasets = []*collectorpb.CollectorDatasetStatus{{DatasetId: "dataset_task_a", Frequency: "1m"}}
 		out.Applied = &collectorpb.FetchPlanSummary{}

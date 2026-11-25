@@ -51,7 +51,7 @@ func commit(t *testing.T, db *store.Store, bar int) string {
 	id := "r" + string(rune('0'+bar))
 	result := store.Result{
 		ResultID: id, InstanceID: "i1", SessionID: "session-1", BarEndTime: barEnd, ValidUntil: barEnd.Add(2 * time.Hour), Status: store.StatusOK, DSLHash: "sha256:x",
-		InputJSON: json.RawMessage(`{"view_id":"view_factor_i1"}`), TargetsJSON: json.RawMessage(`[]`),
+		InputJSON: json.RawMessage(`{"dataset_id":"dataset_factor_i1"}`), TargetsJSON: json.RawMessage(`[]`),
 		SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, NextParamsJSON: next, CreatedAt: barEnd,
 	}
 	if _, _, err := db.CommitResult(context.Background(), store.CommitRequest{Result: result, Now: now}); err != nil {
@@ -63,7 +63,7 @@ func commit(t *testing.T, db *store.Store, bar int) string {
 // harness 建一个启用的实例和它的第 0 期结果（带下一期参数，目标期在 now 之后一小时）。
 func harness(t *testing.T) (*store.Store, *Submitter, *factorsFake) {
 	t.Helper()
-	return harnessWith(t, map[string]string{"spot": "ftask_i1"}, `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`)
+	return harnessWith(t, map[string]string{"spot": "ftask_i1"}, `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_i1","factor_task_id":"ftask_i1"}}}`)
 }
 
 func harnessWith(t *testing.T, tasks map[string]string, resolved string) (*store.Store, *Submitter, *factorsFake) {
@@ -195,7 +195,7 @@ func TestSubmitterRetriesTransientWithBackoff(t *testing.T) {
 // 重投第一个任务只是幂等重复；任一任务拒绝就整条记被拒绝，原因带上任务。
 func TestSubmitterDeliversToEveryMainTask(t *testing.T) {
 	db, submitter, fake := harnessWith(t, map[string]string{"spot": "ftask_s", "swap": "ftask_w"},
-		`{"market":{"select":"both","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_s","factor_task_id":"ftask_s"},"swap":{"view_id":"view_factor_w","factor_task_id":"ftask_w"}}}`)
+		`{"market":{"select":"both","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_s","factor_task_id":"ftask_s"},"swap":{"dataset_id":"dataset_factor_w","factor_task_id":"ftask_w"}}}`)
 	fake.taskErr = map[string]error{"ftask_w": errors.New("dial tcp: connection refused")}
 	if _, err := submitter.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)

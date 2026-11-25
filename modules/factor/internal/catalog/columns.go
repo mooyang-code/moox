@@ -10,13 +10,13 @@ import (
 const paramsColumnDisplayName = "因子参数"
 
 // paramsColumn 是每个因子结果数据集都有的系统列 __params：JSON，记录每一行各成员实际用的参数。
-// 因子结果列的命名与类型契约由这里保证（Storage 只校验通用规则）：来源都是 custom、不带 origin_id，
+// 因子结果列的命名与类型契约由这里保证（Storage 只校验通用规则）：
 // 输出列名是成员键（单输出）或 成员键__输出名（多输出）、类型 double，__params 恰好一列、类型 json。
 func paramsColumn() storageio.ColumnInfo {
 	return storageio.ColumnInfo{
-		ColumnName: factorname.ParamsColumn, OriginType: storageio.ColumnOriginCustom,
+		ColumnName: factorname.ParamsColumn, DisplayName: paramsColumnDisplayName,
 		ValueType: storageio.ColumnTypeJSON, Status: storageio.ColumnStatusActive,
-		Attributes: map[string]string{"display_name": paramsColumnDisplayName, "column_kind": factorname.ColumnKindParams},
+		Attributes: map[string]string{"column_kind": factorname.ColumnKindParams},
 	}
 }
 
@@ -33,8 +33,8 @@ func factorOutputColumns(member domain.MemberDef) []storageio.ColumnInfo {
 	}
 	for i, column := range names {
 		attributes := map[string]string{
-			"display_name": column, "column_kind": factorname.ColumnKindOutput,
-			"factor_id": member.Factor.FactorID, "member_key": member.Key, "member_kind": member.Kind,
+			"column_kind": factorname.ColumnKindOutput,
+			"factor_id":   member.Factor.FactorID, "member_key": member.Key, "member_kind": member.Kind,
 			"output_name": member.Factor.Outputs[i], "category_id": member.Factor.CategoryID,
 			"definition_hash": domain.DefinitionHash(member.Factor),
 		}
@@ -42,7 +42,7 @@ func factorOutputColumns(member domain.MemberDef) []storageio.ColumnInfo {
 			attributes["factor_params"] = factorParams
 		}
 		columns = append(columns, storageio.ColumnInfo{
-			ColumnName: column, OriginType: storageio.ColumnOriginCustom,
+			ColumnName: column, DisplayName: column,
 			ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: attributes,
 		})
 	}

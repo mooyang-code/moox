@@ -32,7 +32,7 @@ func seedTask(t *testing.T, mgr *store.Store, storage *fakeStorage, subjects []s
 	params := `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"5m","source_series_tag":"venue:binance","target_dataset_id":"dataset_task","target_frequency":"15m"}`
 	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task", DataType: "kline_resample", CollectParams: params, Enabled: true,
-		ResultDatasetID: "dataset_task", ResultViewID: "view_task", PrepareState: domain.PrepareStateReady,
+		ResultDatasetID: "dataset_task", PrepareState: domain.PrepareStateReady,
 	}))
 	for at := from; at.Before(to); at = at.Add(5 * time.Minute) {
 		for _, subject := range subjects {

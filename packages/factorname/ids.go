@@ -10,7 +10,6 @@ import (
 const (
 	taskPrefix    = "ftask_"
 	datasetPrefix = "dataset_factor_"
-	viewPrefix    = "view_factor_"
 	suffixAlpha   = "abcdefghijklmnopqrstuvwxyz0123456789"
 	generatedLen  = 8
 )
@@ -38,15 +37,13 @@ func NewSuffix() (string, error) {
 	return string(out), nil
 }
 
-// TaskID、ResultDatasetID、ResultViewID 由同一个后缀生成因子任务、结果数据集、默认 View 的 ID。
+// TaskID、ResultDatasetID 由同一个后缀生成因子任务与结果数据集的 ID。
 func TaskID(suffix string) (string, error)          { return withPrefix(taskPrefix, suffix) }
 func ResultDatasetID(suffix string) (string, error) { return withPrefix(datasetPrefix, suffix) }
-func ResultViewID(suffix string) (string, error)    { return withPrefix(viewPrefix, suffix) }
 
-// ParseTaskID、ParseResultDatasetID、ParseResultViewID 是上面三个函数的反解，返回后缀。
+// ParseTaskID、ParseResultDatasetID 是上面两个函数的反解，返回后缀。
 func ParseTaskID(id string) (string, error)          { return trimPrefix(taskPrefix, id) }
 func ParseResultDatasetID(id string) (string, error) { return trimPrefix(datasetPrefix, id) }
-func ParseResultViewID(id string) (string, error)    { return trimPrefix(viewPrefix, id) }
 
 func withPrefix(prefix, suffix string) (string, error) {
 	if err := ValidateSuffix(suffix); err != nil {

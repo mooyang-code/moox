@@ -440,18 +440,13 @@ func (r *MetricMessageStore) ListLatestByViewScopes(ctx context.Context, metricN
 	conditions := make([]string, 0, len(scopes))
 	args := make([]interface{}, 0, len(scopes)*4+1)
 	for _, scope := range scopes {
-		spaceID, viewID := strings.TrimSpace(scope.SpaceID), strings.TrimSpace(scope.ViewID)
-		datasetID, frequency := strings.TrimSpace(scope.DatasetID), strings.TrimSpace(scope.Frequency)
-		if spaceID == "" || viewID == "" || frequency == "" {
+		spaceID, datasetID := strings.TrimSpace(scope.SpaceID), strings.TrimSpace(scope.DatasetID)
+		frequency := strings.TrimSpace(scope.Frequency)
+		if spaceID == "" || datasetID == "" || frequency == "" {
 			continue
 		}
-		condition := "(json_extract(c_labels_json, '$.space_id') = ? AND json_extract(c_labels_json, '$.view_id') = ? AND json_extract(c_labels_json, '$.freq') = ?"
-		args = append(args, spaceID, viewID, frequency)
-		if datasetID != "" {
-			condition += " AND json_extract(c_labels_json, '$.dataset_id') = ?"
-			args = append(args, datasetID)
-		}
-		conditions = append(conditions, condition+")")
+		conditions = append(conditions, "(json_extract(c_labels_json, '$.space_id') = ? AND json_extract(c_labels_json, '$.dataset_id') = ? AND json_extract(c_labels_json, '$.freq') = ?)")
+		args = append(args, spaceID, datasetID, frequency)
 	}
 	if len(conditions) == 0 {
 		return []MetricSeries{}, nil

@@ -21,7 +21,7 @@ vi.mock("@visactor/vchart", () => ({
 }));
 const mockedCallControl = vi.mocked(call);
 
-const names = { datasets: { dataset_spot_1m: "现货分钟K线" }, views: {} };
+const names = { datasets: { dataset_spot_1m: "现货分钟K线" } };
 const nowMs = Date.parse("2026-10-16T19:00:00Z");
 const overview: HealthOverview = {
   pipeline: [

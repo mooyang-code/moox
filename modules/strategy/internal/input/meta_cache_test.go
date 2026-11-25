@@ -32,11 +32,11 @@ func readEventMetadata(t *testing.T, loader Loader) []Subject {
 		Revalidate(ctx context.Context, spaceID, datasetID string) error
 	})
 	for i := 0; i < 2; i++ { // 同一事件内多个实例：只校验一次
-		if err := revalidator.Revalidate(context.Background(), "space", "ds_factor"); err != nil {
+		if err := revalidator.Revalidate(context.Background(), "space", "dataset_factor_1h"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	subjects, err := event.Client.ListDatasetSubjects(context.Background(), "space", "ds_factor")
+	subjects, err := event.Client.ListDatasetSubjects(context.Background(), "space", "dataset_factor_1h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,9 +52,9 @@ func readEventMetadata(t *testing.T, loader Loader) []Subject {
 // 修订号不变时跨事件复用标的元数据，变化后重读；每个事件只查一次修订号。
 func TestMetaCacheReusesAcrossEventsUntilRevisionChanges(t *testing.T) {
 	fake := newFakeClient("spot")
-	dataset := fake.datasets["ds_factor"]
+	dataset := fake.datasets["dataset_factor_1h"]
 	dataset.SubjectsRevision = 7
-	fake.datasets["ds_factor"] = dataset
+	fake.datasets["dataset_factor_1h"] = dataset
 	client := &datasetCountingClient{countingClient: &countingClient{fakeClient: fake}}
 	loader := Loader{Client: client, Meta: NewMetaCache()}
 
@@ -66,9 +66,9 @@ func TestMetaCacheReusesAcrossEventsUntilRevisionChanges(t *testing.T) {
 	}
 
 	// 标的集合变化：修订号递增后，下一事件重读且看到新数据。
-	fake.subjects["ds_factor"] = append(fake.subjects["ds_factor"], subject("NEW-USDT", true))
+	fake.subjects["dataset_factor_1h"] = append(fake.subjects["dataset_factor_1h"], subject("NEW-USDT", true))
 	dataset.SubjectsRevision = 8
-	fake.datasets["ds_factor"] = dataset
+	fake.datasets["dataset_factor_1h"] = dataset
 	subjects := readEventMetadata(t, loader)
 	if client.subjects != 2 || client.members != 2 || client.tags != 2 {
 		t.Fatalf("修订号变化后应重读：subjects=%d members=%d tags=%d", client.subjects, client.members, client.tags)
@@ -83,7 +83,7 @@ func TestMetaCacheReusesAcrossEventsUntilRevisionChanges(t *testing.T) {
 
 	// 修订号回到旧值也视为变化（只要与缓存的不相等）。
 	dataset.SubjectsRevision = 7
-	fake.datasets["ds_factor"] = dataset
+	fake.datasets["dataset_factor_1h"] = dataset
 	readEventMetadata(t, loader)
 	if client.subjects != 3 {
 		t.Fatalf("修订号不相等就应重读：subjects=%d", client.subjects)
@@ -132,9 +132,9 @@ func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 		t.Fatalf("每个事件应校验一次修订号：datasets=%d", client.datasets)
 	}
 
-	dataset := fake.datasets["ds_factor"]
+	dataset := fake.datasets["dataset_factor_1h"]
 	dataset.SubjectsRevision++
-	fake.datasets["ds_factor"] = dataset
+	fake.datasets["dataset_factor_1h"] = dataset
 	if err := loadEvent(); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 		t.Fatalf("修订号变化后应重读：subjects=%d members=%d", client.subjects, client.members)
 	}
 
-	delete(fake.datasets, "ds_factor")
+	delete(fake.datasets, "dataset_factor_1h")
 	subjectsBefore := client.subjects
 	if err := loadEvent(); err == nil {
 		t.Fatal("修订号读取失败时 LoadBar 应返回错误，而不是使用缓存")
@@ -191,9 +191,9 @@ func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 	if probes() != 1 {
 		t.Fatalf("已证明年龄足够的标的不应再探针：%d", probes())
 	}
-	view := client.views["view_factor_1h"]
+	view := client.views["dataset_factor_1h"]
 	view.ActiveIndexID = "idx_b"
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	load()
 	if probes() != 2 {
 		t.Fatalf("活动索引变化后应重新探针：%d", probes())
@@ -203,12 +203,12 @@ func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 // memoryAgeStore 是内存里的 AgeStore，用来模拟跨重启的持久化。
 type memoryAgeStore struct{ saved map[string][]string }
 
-func (m *memoryAgeStore) LoadAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, market string) ([]string, error) {
-	return m.saved[fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, viewID, indexID, minAgeBars, market)], nil
+func (m *memoryAgeStore) LoadAgePassed(_ context.Context, spaceID, datasetID, indexID string, minAgeBars int, market string) ([]string, error) {
+	return m.saved[fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, datasetID, indexID, minAgeBars, market)], nil
 }
 
-func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, market string, ids []string, _ time.Time) error {
-	key := fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, viewID, indexID, minAgeBars, market)
+func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, datasetID, indexID string, minAgeBars int, market string, ids []string, _ time.Time) error {
+	key := fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, datasetID, indexID, minAgeBars, market)
 	m.saved[key] = append(m.saved[key], ids...)
 	return nil
 }

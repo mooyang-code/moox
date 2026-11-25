@@ -160,18 +160,11 @@ func (w *strategyGatewayWire) CloseReplay(ctx context.Context, req *factorpb.Clo
 	return &factorpb.CloseReplayRsp{RetInfo: &commonpb.RetInfo{}, Closed: true}, nil
 }
 
-func (w *strategyGatewayWire) GetView(ctx context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
-	if err := w.verifyStorage(ctx, "Metadata", "GetView", req); err != nil {
+func (w *strategyGatewayWire) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
+	if err := w.verifyStorage(ctx, "Metadata", "ListDatasetColumns", req); err != nil {
 		return nil, err
 	}
-	return &storagepb.GetViewRsp{RetInfo: &commonpb.RetInfo{}, View: &storagepb.View{ViewId: req.GetViewId(), DatasetId: "bars", Status: "active", Freq: "1m"}}, nil
-}
-
-func (w *strategyGatewayWire) ListViewColumns(ctx context.Context, req *storagepb.ListViewColumnsReq) (*storagepb.ListViewColumnsRsp, error) {
-	if err := w.verifyStorage(ctx, "Metadata", "ListViewColumns", req); err != nil {
-		return nil, err
-	}
-	return &storagepb.ListViewColumnsRsp{RetInfo: &commonpb.RetInfo{}, Columns: []*storagepb.ViewColumn{{ColumnName: "close"}}}, nil
+	return &storagepb.ListDatasetColumnsRsp{RetInfo: &commonpb.RetInfo{}, Columns: []*storagepb.DatasetColumn{{ColumnName: "close", Status: "active"}}}, nil
 }
 
 func (w *strategyGatewayWire) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
@@ -322,7 +315,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	t.Cleanup(func() { _ = gateway.Close() })
 	reader := newInputClient(cfg, gateway)
 	ctx := t.Context()
-	view, err := reader.GetView(ctx, "crypto", "source")
+	view, err := reader.GetView(ctx, "crypto", "bars")
 	require.NoError(t, err)
 	require.Equal(t, "bars", view.DatasetID)
 	require.Equal(t, "index-1", view.ActiveIndexID)
@@ -340,7 +333,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.Equal(t, "BTC", subjects[0].SubjectID)
 	_, err = reader.ListTagMembers(ctx, "crypto", "spot-tag")
 	require.NoError(t, err)
-	rows, revision, err := reader.QueryRows(ctx, "crypto", input.Query{ViewID: "source", DatasetID: "bars", Frequency: "1m", Subjects: subjects, Start: time.Unix(60, 0), End: time.Unix(61, 0), Columns: []string{"close"}, ExpectedIndexID: "index-1"})
+	rows, revision, err := reader.QueryRows(ctx, "crypto", input.Query{DatasetID: "source", Frequency: "1m", Subjects: subjects, Start: time.Unix(60, 0), End: time.Unix(61, 0), Columns: []string{"close"}, ExpectedIndexID: "index-1"})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, uint64(7), revision)
@@ -373,7 +366,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	wire.mu.Unlock()
 
 	// 网关调用的参数由 ctx 与服务目录决定，不接受 tRPC 客户端选项。
-	_, err = reader.Metadata.GetView(ctx, &storagepb.GetViewReq{}, client.WithTarget("ip://192.0.2.99:20100"))
+	_, err = reader.Metadata.GetDataset(ctx, &storagepb.GetDatasetReq{}, client.WithTarget("ip://192.0.2.99:20100"))
 	require.ErrorContains(t, err, "不接受 tRPC 客户端选项")
 	_, err = reader.DataView.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{}, client.WithTimeout(time.Second))
 	require.ErrorContains(t, err, "不接受 tRPC 客户端选项")
@@ -382,7 +375,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	calls, refreshes := maps.Clone(wire.calls), wire.refreshes
 	wire.mu.Unlock()
 	for _, want := range []string{
-		"trpc.moox.storage.Metadata/GetView", "trpc.moox.storage.Metadata/ListViewColumns", "trpc.moox.storage.Metadata/GetDataset",
+		"trpc.moox.storage.Metadata/ListDatasetColumns", "trpc.moox.storage.Metadata/GetDataset",
 		"trpc.moox.storage.Metadata/GetTag", "trpc.moox.storage.Metadata/ListDatasetSubjects", "trpc.moox.storage.Metadata/ListSubjects",
 		"trpc.moox.storage.Metadata/ListTagMembers", "trpc.moox.storage.DataView/QueryTimeSeriesRows", "trpc.moox.storage.DataView/GetViewState", "trpc.moox.factor.FactorMgr/GetFactor",
 		"trpc.moox.factor.EngineControl/OpenReplay", "trpc.moox.factor.EngineControl/StepReplay", "trpc.moox.factor.EngineControl/CloseReplay",

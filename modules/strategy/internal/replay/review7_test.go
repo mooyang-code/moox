@@ -67,12 +67,12 @@ func TestRecheckReportsCoverageReason(t *testing.T) {
 	shanghai := time.FixedZone("CST", 8*3600)
 	client := &fakeClient{marketType: "spot", indexedFrom: time.Date(2028, 1, 4, 0, 0, 0, 0, time.UTC), indexedTo: time.Date(2028, 3, 1, 0, 0, 0, 0, time.UTC)}
 	runner := &Runner{Store: repo, Client: client}
-	view, err := client.GetView(context.Background(), "crypto", "view_factor_a")
+	view, err := client.GetView(context.Background(), "crypto", "dataset_factor_a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a"}}, Bar: "1d", Calendar: "cn_stock"}
-	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, EndTime: time.Date(2028, 2, 1, 0, 0, 0, 0, shanghai)}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {DatasetID: "dataset_factor_a"}}, Bar: "1d", Calendar: "cn_stock"}
+	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, EndTime: time.Date(2028, 2, 1, 0, 0, 0, 0, shanghai)}
 	_, _, err = runner.recheckView(context.Background(), job, "spot", resolved, nil, view, time.Date(2027, 12, 1, 0, 0, 0, 0, shanghai), job.EndTime, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") || strings.Contains(err.Error(), "暂时未知") {
 		t.Fatalf("复查应说明具体原因：%v", err)
@@ -106,7 +106,7 @@ func TestDeletedViewFailsReplayPlainly(t *testing.T) {
 	job := submitReplay(t, repo, replayDSL, "idx", origin.Add(2*time.Hour), 4)
 	(&Runner{Store: repo, Client: &fakeClient{marketType: "spot", viewDeleted: true}, ChunkBars: 4}).Execute(context.Background(), job)
 	failed, _ := repo.GetReplay(context.Background(), "p1")
-	if failed.Status != store.ReplayFailed || failed.Error != "View view_factor_a 已不存在，回放无法继续" {
+	if failed.Status != store.ReplayFailed || failed.Error != "View dataset_factor_a 已不存在，回放无法继续" {
 		t.Fatalf("View 被删除的失败原因不符：%+v", failed)
 	}
 }

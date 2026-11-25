@@ -13,9 +13,9 @@ import (
 // bar_end 落在非交易日时给出明确的中文错误；A 股只支持日线。
 func TestResolveCNStockDailyView(t *testing.T) {
 	client := newFakeClient("spot")
-	client.views["view_factor_stock_1d"] = ViewInfo{ViewID: "view_factor_stock_1d", DatasetID: "ds_stock", Frequency: "1d", Status: "active", ActiveIndexID: "idx_s", Columns: []ViewColumn{plainColumn("close")}}
-	client.datasets["ds_stock"] = DatasetInfo{DatasetID: "ds_stock", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
-	client.subjects["ds_stock"] = []Subject{subject("600000.SH", true), subject("600519.SH", true)}
+	client.views["dataset_factor_stock_1d"] = ViewInfo{DatasetID: "dataset_factor_stock_1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx_s", Columns: []ViewColumn{plainColumn("close")}}
+	client.datasets["dataset_factor_stock_1d"] = DatasetInfo{DatasetID: "dataset_factor_stock_1d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
+	client.subjects["dataset_factor_stock_1d"] = []Subject{subject("600000.SH", true), subject("600519.SH", true)}
 	strategy := parseStrategy(t, `name: stock_daily
 rules:
   - id: r
@@ -57,8 +57,8 @@ rules:
 // 覆盖起点以本期 T 与索引最新一根中较早者为基准：处理第 T 根时索引已经写入更新的 bar，
 // 不影响对第 T 根能否追溯 N 根的判断；N 恰好等于每个序列保留的根数时也能满足。
 func TestCoverageStartAnchorsAtProcessedBar(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
-	view := ViewInfo{ViewID: "view_factor_1h", DatasetID: "ds_factor", Frequency: "1h", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-1000 * time.Hour), IndexedTo: barStart.Add(2 * time.Hour), SeriesBars: 24}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
+	view := ViewInfo{DatasetID: "dataset_factor_1h", Frequency: "1h", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-1000 * time.Hour), IndexedTo: barStart.Add(2 * time.Hour), SeriesBars: 24}
 	if start := CoverageStartAt(view, resolved, barStart); !start.Equal(barStart.Add(-23 * time.Hour)) {
 		t.Fatalf("以 T 为基准的覆盖起点不符：%s", start)
 	}

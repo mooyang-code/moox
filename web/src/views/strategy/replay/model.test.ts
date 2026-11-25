@@ -173,9 +173,9 @@ describe("replay model helpers", () => {
   });
 
   it("describes the replay tasks and fees by market", () => {
-    const single = { tasks: { spot: { factor_task_id: "ftask_a", view_id: "v" } }, spot_fee_bps: 10, swap_fee_bps: 0 };
+    const single = { tasks: { spot: { factor_task_id: "ftask_a", dataset_id: "v" } }, spot_fee_bps: 10, swap_fee_bps: 0 };
     const mixed = {
-      tasks: { swap: { factor_task_id: "ftask_b", view_id: "w" }, spot: { factor_task_id: "ftask_a", view_id: "v" } },
+      tasks: { swap: { factor_task_id: "ftask_b", dataset_id: "w" }, spot: { factor_task_id: "ftask_a", dataset_id: "v" } },
       spot_fee_bps: 10,
       swap_fee_bps: 5
     };
@@ -255,7 +255,7 @@ describe("回放对比", () => {
       replay_id: "r1",
       strategy_id: "s1",
       dsl_yaml: "name: demo",
-      tasks: { swap: { factor_task_id: "ft1", view_id: "v1" } },
+      tasks: { swap: { factor_task_id: "ft1", dataset_id: "v1" } },
       start_time: "2026-10-01T00:00:00Z",
       end_time: "2026-10-02T00:00:00Z",
       spot_fee_bps: 8,

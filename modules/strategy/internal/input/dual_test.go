@@ -26,12 +26,12 @@ portfolio: {max_missing: 1}
 // newDualClient 在现货 View 之外再加一个永续 View（任务 ftask_swap1h），成员与列和现货一致。
 func newDualClient() *fakeClient {
 	client := newFakeClient("spot")
-	swap := client.views["view_factor_1h"]
-	swap.ViewID, swap.DatasetID = "view_factor_swap1h", "ds_factor_swap"
-	client.views["view_factor_swap1h"] = swap
-	client.datasets["ds_factor_swap"] = DatasetInfo{DatasetID: "ds_factor_swap", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline_swap"}}
+	swap := client.views["dataset_factor_1h"]
+	swap.DatasetID = "dataset_factor_swap1h"
+	client.views["dataset_factor_swap1h"] = swap
+	client.datasets["dataset_factor_swap1h"] = DatasetInfo{DatasetID: "dataset_factor_swap1h", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": "ds_kline_swap"}}
 	client.datasets["ds_kline_swap"] = DatasetInfo{DatasetID: "ds_kline_swap", Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: []string{"binance_swap"}}
-	client.subjects["ds_factor_swap"] = []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("DOGE-USDT", true)}
+	client.subjects["dataset_factor_swap1h"] = []Subject{subject("BTC-USDT", true), subject("ETH-USDT", true), subject("DOGE-USDT", true)}
 	return client
 }
 
@@ -44,10 +44,10 @@ func TestResolveBindsTwoTasks(t *testing.T) {
 	if resolved.Market.Select != "both" || resolved.Market.Prefer != "swap" || len(resolved.Tasks) != 2 || program == nil {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
-	if resolved.Tasks["spot"].ViewID != "view_factor_1h" || resolved.Tasks["swap"].ViewID != "view_factor_swap1h" || resolved.Tasks["swap"].SourceDatasetID != "ds_kline_swap" {
+	if resolved.Tasks["spot"].DatasetID != "dataset_factor_1h" || resolved.Tasks["swap"].DatasetID != "dataset_factor_swap1h" || resolved.Tasks["swap"].SourceDatasetID != "ds_kline_swap" {
 		t.Fatalf("任务绑定不符：%+v", resolved.Tasks)
 	}
-	if got := strings.Join(resolved.ViewIDs(), ","); got != "view_factor_1h,view_factor_swap1h" {
+	if got := strings.Join(resolved.DatasetIDs(), ","); got != "dataset_factor_1h,dataset_factor_swap1h" {
 		t.Fatalf("View 顺序现货在前：%s", got)
 	}
 	if err := CheckResolvedMarkets(resolved, map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}); err != nil {
@@ -74,17 +74,17 @@ func TestResolveRejectsInconsistentTwoTaskBindings(t *testing.T) {
 		"只绑一个任务却要两个市场":  {func(*fakeClient) {}, dualDSL, []string{"ftask_1h"}, "需要绑定 spot、swap"},
 		"两个任务同一市场":      {func(*fakeClient) {}, dualDSL, []string{"ftask_1h", "ftask_1h"}, "都是 spot"},
 		"周期不一致": {func(c *fakeClient) {
-			v := c.views["view_factor_swap1h"]
+			v := c.views["dataset_factor_swap1h"]
 			v.Frequency = "4h"
-			c.views["view_factor_swap1h"] = v
+			c.views["dataset_factor_swap1h"] = v
 		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "周期不一致"},
 		"缺列": {func(c *fakeClient) {
-			v := c.views["view_factor_swap1h"]
+			v := c.views["dataset_factor_swap1h"]
 			v.Columns = []ViewColumn{plainColumn("close")}
-			c.views["view_factor_swap1h"] = v
-		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "不存在于 View view_factor_swap1h"},
+			c.views["dataset_factor_swap1h"] = v
+		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "不存在于 View dataset_factor_swap1h"},
 		"成员定义不一致": {func(c *fakeClient) {
-			v := c.views["view_factor_swap1h"]
+			v := c.views["dataset_factor_swap1h"]
 			cols := append([]ViewColumn(nil), v.Columns...)
 			for i := range cols {
 				if cols[i].Name == "ma_20" {
@@ -92,7 +92,7 @@ func TestResolveRejectsInconsistentTwoTaskBindings(t *testing.T) {
 				}
 			}
 			v.Columns = cols
-			c.views["view_factor_swap1h"] = v
+			c.views["dataset_factor_swap1h"] = v
 			c.factors["ma_other"] = FactorInfo{FactorID: "ma_other", DefinitionHash: "sha256:other"}
 		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "因子定义不一致"},
 		"纯现货做空": {func(*fakeClient) {}, "name: s\nrules:\n  - {id: r, type: rank, side: short, score: ma_20, select: {bottom: 1}, weight: 1}\n", []string{"ftask_1h"}, "不允许规则 r 做空"},
@@ -113,7 +113,7 @@ func TestLoadBarReadsEveryMarketAndMarksUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.rows = func(query Query) ([]Row, uint64, error) {
-		if query.ViewID == "view_factor_1h" {
+		if query.DatasetID == "dataset_factor_1h" {
 			return rowsAt(barStart, map[string]map[string]float64{"BTC-USDT": {"ma_20": 1}, "ETH-USDT": {"ma_20": 2}}), 1, nil
 		}
 		return rowsAt(barStart, map[string]map[string]float64{"ETH-USDT": {"ma_20": 3}, "DOGE-USDT": {"ma_20": 4}}), 1, nil
@@ -144,7 +144,7 @@ func TestLoadBarReadsEveryMarketAndMarksUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(client.queries) != 1 || client.queries[0].ViewID != "view_factor_1h" {
+	if len(client.queries) != 1 || client.queries[0].DatasetID != "dataset_factor_1h" {
 		t.Fatalf("不可用的市场不读行：%+v", client.queries)
 	}
 	swap := loaded.Frame.Markets["swap"]
@@ -205,20 +205,20 @@ type lateView struct {
 	after   int
 }
 
-func (c *lateView) GetView(ctx context.Context, space, viewID string) (ViewInfo, error) {
-	if viewID == c.missing {
+func (c *lateView) GetView(ctx context.Context, space, datasetID string) (ViewInfo, error) {
+	if datasetID == c.missing {
 		c.reads++
 		if c.reads <= c.after {
 			return ViewInfo{}, ErrViewNotFound
 		}
 	}
-	return c.fakeClient.GetView(ctx, space, viewID)
+	return c.fakeClient.GetView(ctx, space, datasetID)
 }
 
 // 启用前的市场核对在 ReadyWait 内等结果 View 建出；等不到就报错，且始终没有读任务状态；其他错误（市场对不上）不重试。
 func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
 	tasks := map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}
-	client := &lateView{fakeClient: newDualClient(), missing: "view_factor_swap1h", after: 3}
+	client := &lateView{fakeClient: newDualClient(), missing: "dataset_factor_swap1h", after: 3}
 	sets := &tasksFake{}
 	service := Service{Client: client, Sets: sets, ReadyWait: time.Second, ReadyStep: time.Millisecond}
 	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", tasks, parseStrategy(t, dualDSL)); err != nil {
@@ -228,7 +228,7 @@ func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
 		t.Fatalf("核对通过之后才读两个任务的状态：gets=%v binds=%v reads=%d", sets.gets, sets.binds, client.reads)
 	}
 
-	never := &lateView{fakeClient: newDualClient(), missing: "view_factor_swap1h", after: 1 << 30}
+	never := &lateView{fakeClient: newDualClient(), missing: "dataset_factor_swap1h", after: 1 << 30}
 	sets = &tasksFake{}
 	service = Service{Client: never, Sets: sets, ReadyWait: 20 * time.Millisecond, ReadyStep: time.Millisecond}
 	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", tasks, parseStrategy(t, dualDSL)); err == nil || !strings.Contains(err.Error(), "无法确定因子任务 ftask_swap1h 的市场") {
@@ -250,12 +250,12 @@ func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
 // 回放区间逐个 View 校验：起点要在每个 View 的可用范围内，终点取各 View 中最早的，并返回各市场的索引代次。
 func TestServiceReplayWindowChecksEveryView(t *testing.T) {
 	client := newDualClient()
-	spot, swap := client.views["view_factor_1h"], client.views["view_factor_swap1h"]
+	spot, swap := client.views["dataset_factor_1h"], client.views["dataset_factor_swap1h"]
 	spot.Generation, spot.IndexedFrom, spot.IndexedTo = "idx_a@s", barStart.Add(-500*time.Hour), barStart
 	swap.Generation, swap.IndexedFrom, swap.IndexedTo = "idx_b@w", barStart.Add(-50*time.Hour), barStart.Add(-10*time.Hour)
-	client.views["view_factor_1h"], client.views["view_factor_swap1h"] = spot, swap
+	client.views["dataset_factor_1h"], client.views["dataset_factor_swap1h"] = spot, swap
 	resolved := Resolved{Market: dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, Calendar: DefaultCalendar, Bar: "1h", Tasks: map[string]TaskBinding{
-		"spot": {ViewID: "view_factor_1h"}, "swap": {ViewID: "view_factor_swap1h"}}}
+		"spot": {DatasetID: "dataset_factor_1h"}, "swap": {DatasetID: "dataset_factor_swap1h"}}}
 	service := Service{Client: client}
 
 	end, generations, err := service.ReplayWindow(context.Background(), "space", resolved, nil, barStart.Add(-40*time.Hour), barStart.Add(10*time.Hour), testNow)
@@ -263,7 +263,7 @@ func TestServiceReplayWindowChecksEveryView(t *testing.T) {
 		t.Fatalf("终点应取各 View 中最早的、并返回各市场的代次：end=%s generations=%v err=%v", end, generations, err)
 	}
 	// 起点在现货的范围内，却早于永续的覆盖起点：被永续的 View 拒绝。
-	if _, _, err := service.ReplayWindow(context.Background(), "space", resolved, nil, barStart.Add(-200*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "view_factor_swap1h") {
+	if _, _, err := service.ReplayWindow(context.Background(), "space", resolved, nil, barStart.Add(-200*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "dataset_factor_swap1h") {
 		t.Fatalf("起点早于永续 View 的覆盖起点应被拒绝并指明 View：%v", err)
 	}
 }

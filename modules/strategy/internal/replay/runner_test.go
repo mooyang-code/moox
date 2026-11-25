@@ -57,26 +57,18 @@ type fakeClient struct {
 	viewCalls         int
 	// viewDeleted 模拟 View 已被删除。
 	viewDeleted bool
-	// viewName 与 datasetName 是这个 View 与它的数据集（为空时是 view_factor_a、ds）；priceFn 是收盘价（为空时是 price）。
-	viewName    string
+	// datasetName 是这个 View 所属的结果数据集（为空时是 dataset_factor_a）；priceFn 是收盘价（为空时是 price）。
 	datasetName string
 	priceFn     func(id string, hour int) float64
 	// fundingRate 非零时 View 有 funding_rate 列，每行的值都是它（请求了这一列才返回）。
 	fundingRate float64
 }
 
-func (f *fakeClient) view() string {
-	if f.viewName != "" {
-		return f.viewName
-	}
-	return "view_factor_a"
-}
-
 func (f *fakeClient) dataset() string {
 	if f.datasetName != "" {
 		return f.datasetName
 	}
-	return "ds"
+	return "dataset_factor_a"
 }
 
 func (f *fakeClient) priceAt(id string, hour int) float64 {
@@ -135,7 +127,7 @@ func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, e
 		return input.ViewInfo{}, &input.TransportError{Operation: "读取 View", Err: errors.New("connection refused")}
 	}
 	if f.viewDeleted {
-		return input.ViewInfo{}, &input.SkipError{Reason: input.SkipConfigError, Detail: "View " + f.view() + " 已不存在", Cause: input.ErrViewNotFound}
+		return input.ViewInfo{}, &input.SkipError{Reason: input.SkipConfigError, Detail: "View " + f.dataset() + " 已不存在", Cause: input.ErrViewNotFound}
 	}
 	index := f.currentIndex()
 	generation := index
@@ -146,11 +138,11 @@ func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, e
 	if f.fundingRate != 0 {
 		columns = append(columns, input.ViewColumn{Name: "funding_rate", Attributes: map[string]string{}})
 	}
-	return input.ViewInfo{ViewID: f.view(), DatasetID: f.dataset(), Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: columns}, nil
+	return input.ViewInfo{DatasetID: f.dataset(), Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: columns}, nil
 }
 
-func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	view, err := f.GetView(ctx, spaceID, viewID)
+func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
+	view, err := f.GetView(ctx, spaceID, datasetID)
 	return view.Generation, err
 }
 
@@ -284,7 +276,7 @@ func pinnedFactors(t *testing.T, dslYaml string) map[string]string {
 
 func startReplay(t *testing.T, repo *store.Store, id, dslYaml string, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), SpotFeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
+	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), SpotFeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +465,7 @@ func TestReplayRejectsMarketMismatchAndEarlyStart(t *testing.T) {
 func TestRunnerDrainsQueueAndWakes(t *testing.T) {
 	repo := openStore(t)
 	for _, id := range []string{"p1", "p2"} {
-		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
+		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -574,7 +566,7 @@ func TestReplayPreviousBarAmbiguitySkips(t *testing.T) {
 // 发起时固化的因子指纹与执行时不一致：拒绝执行，提示重新发起。
 func TestReplayRejectsFactorDrift(t *testing.T) {
 	repo := openStore(t)
-	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
+	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}}, StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}

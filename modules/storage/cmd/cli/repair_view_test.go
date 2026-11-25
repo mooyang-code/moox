@@ -17,7 +17,7 @@ import (
 )
 
 func TestValidateRepairViewRequiresConfirmation(t *testing.T) {
-	opts := repairViewOptions{spaceID: "space", viewID: "view", timeout: defaultRepairTimeout}
+	opts := repairViewOptions{spaceID: "space", datasetID: "dataset_prices", timeout: defaultRepairTimeout}
 	if err := validateRepairViewOptions(opts); err == nil {
 		t.Fatal("没有 --yes 或 --dry-run 时应拒绝执行")
 	}
@@ -27,7 +27,7 @@ func TestValidateRepairViewRequiresConfirmation(t *testing.T) {
 	}
 	opts = repairViewOptions{spaceID: "space", timeout: defaultRepairTimeout, yes: true}
 	if err := validateRepairViewOptions(opts); err == nil {
-		t.Fatal("缺少 --view-id 时应拒绝执行")
+		t.Fatal("缺少 --dataset-id 时应拒绝执行")
 	}
 }
 
@@ -37,7 +37,7 @@ func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 	if err := os.MkdirAll(duckRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	id := viewindex.ViewIndexID("space", "view")
+	id := viewindex.IndexID("space", "dataset_prices")
 	for _, name := range []string{id + ".duckdb", id + ".duckdb.wal"} {
 		if err := os.WriteFile(filepath.Join(duckRoot, name), []byte(id), 0o600); err != nil {
 			t.Fatal(err)
@@ -55,7 +55,7 @@ func TestPurgeRepairViewIndexesRemovesIndexAndWAL(t *testing.T) {
 	}
 }
 
-// repairViewFixture 造一个带一份 DuckDB 索引文件的 View，返回 repair-view 的参数、索引文件路径与索引标识。
+// repairViewFixture 造一个带一份 DuckDB 索引文件的时序数据集，返回 repair-view 的参数、索引文件路径与索引标识。
 func repairViewFixture(t *testing.T) (args []string, indexFile, id string) {
 	t.Helper()
 	root := t.TempDir()
@@ -73,15 +73,15 @@ func repairViewFixture(t *testing.T) (args []string, indexFile, id string) {
 	if err := os.WriteFile(viewConfPath, []byte("storage:\n  devices:\n    view_index_root: "+indexRoot+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	id = viewindex.ViewIndexID("space", "view")
+	id = viewindex.IndexID("space", "dataset_prices")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE t_views (c_space_id TEXT, c_view_id TEXT, c_engine TEXT, PRIMARY KEY(c_space_id,c_view_id))`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE t_datasets (c_space_id TEXT, c_dataset_id TEXT, c_data_kind TEXT, PRIMARY KEY(c_space_id,c_dataset_id))`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO t_views VALUES ('space','view','duckdb')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO t_datasets VALUES ('space','dataset_prices','time_series')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -93,7 +93,7 @@ func repairViewFixture(t *testing.T) (args []string, indexFile, id string) {
 	if err := os.WriteFile(filepath.Join(indexRoot, "duckdb", id+".duckdb"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return []string{"--space-id", "space", "--view-id", "view", "--storage-conf", confPath, "--view-conf", viewConfPath, "--yes"}, filepath.Join(indexRoot, "duckdb", id+".duckdb"), id
+	return []string{"--space-id", "space", "--dataset-id", "dataset_prices", "--storage-conf", confPath, "--view-conf", viewConfPath, "--yes"}, filepath.Join(indexRoot, "duckdb", id+".duckdb"), id
 }
 
 // fakeSystemctl 记下 systemctl --user 的调用；fail 返回非空时那一次调用失败。
@@ -115,7 +115,7 @@ func fakeSystemctl(t *testing.T, fail func(args []string) error) *[]string {
 }
 
 // repair-view 按顺序停掉 storage-view、删索引文件、再恢复；元数据不动。索引目录取自 storage-view 自己的配置。
-func TestRepairViewRebuildsTheNamedView(t *testing.T) {
+func TestRepairViewRebuildsTheNamedDatasetIndex(t *testing.T) {
 	args, indexFile, id := repairViewFixture(t)
 	calls := fakeSystemctl(t, nil)
 

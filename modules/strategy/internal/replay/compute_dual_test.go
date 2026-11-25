@@ -33,8 +33,8 @@ func (e *sessionEngine) CloseReplay(ctx context.Context, req *factorpb.CloseRepl
 // tunedDualClient 是现货、永续两个调参任务的结果 View，列与 tunedComputeClient 相同。
 type tunedDualClient struct{ *dualClient }
 
-func (c tunedDualClient) GetView(ctx context.Context, spaceID, viewID string) (input.ViewInfo, error) {
-	return tunedComputeClient{c.byView(viewID)}.GetView(ctx, spaceID, viewID)
+func (c tunedDualClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+	return tunedComputeClient{c.byDataset(datasetID)}.GetView(ctx, spaceID, datasetID)
 }
 
 func (c tunedDualClient) GetFactor(ctx context.Context, factorID string) (input.FactorInfo, error) {

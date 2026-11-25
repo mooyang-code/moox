@@ -1,4 +1,4 @@
-import { flushPromises, shallowMount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { defineComponent, h, inject, provide, ref, toRef, type Ref } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,13 +8,9 @@ const mocks = vi.hoisted(() => ({
   queryTimeSeries: vi.fn()
 }));
 
-vi.mock("./composables/view-browse-catalog", () => ({ loadTargetedViewCatalog: mocks.catalog }));
+vi.mock("./composables/view-browse-catalog", () => ({ loadTargetedDatasets: mocks.catalog }));
 vi.mock("@/api/storage/metadata", () => ({
-  listDatasetColumns: vi.fn().mockResolvedValue({ columns: [] }),
-  listAllViewColumns: mocks.columns,
-  listFields: vi.fn().mockResolvedValue({ fields: [] }),
-  listAllDatasets: vi.fn(),
-  listAllViews: vi.fn()
+  listAllDatasetColumns: mocks.columns
 }));
 vi.mock("@/api/storage/view", () => ({
   getViewState: vi.fn().mockResolvedValue({ index_id: "index-a" }),
@@ -30,9 +26,16 @@ vi.mock("@arco-design/web-vue", () => ({ Message: { error: vi.fn(), warning: vi.
 import ViewBrowse from "./index.vue";
 
 const columns = [
-  { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-  { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-  { column_name: "rsi", value_type: "FIELD_VALUE_TYPE_DOUBLE", attributes: { column_kind: "output" } }
+  { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "开盘价", status: "active" },
+  { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "收盘价", status: "active" },
+  {
+    column_name: "rsi",
+    value_type: "FIELD_VALUE_TYPE_DOUBLE",
+    display_name: "rsi",
+    status: "active",
+    attributes: { column_kind: "output" }
+  },
+  { column_name: "old", value_type: "FIELD_VALUE_TYPE_DOUBLE", display_name: "停用列", status: "disabled" }
 ];
 
 const rsiAbove70 = { fieldName: "rsi", operator: "gt" as const, value: "70", valueType: "FIELD_VALUE_TYPE_DOUBLE" as const };
@@ -75,8 +78,8 @@ function mountBrowse(props: Record<string, unknown> = {}, slots: Record<string, 
     "icon-right",
     "KlineModal"
   ];
-  return shallowMount(ViewBrowse, {
-    props: { viewIds: ["view-factor"], activeViewId: "view-factor", ...props },
+  return mount(ViewBrowse, {
+    props: { datasetIds: ["dataset-factor"], activeDatasetId: "dataset-factor", ...props },
     slots,
     global: {
       stubs: {
@@ -84,8 +87,6 @@ function mountBrowse(props: Record<string, unknown> = {}, slots: Record<string, 
         "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
         "a-spin": { template: "<div><slot /></div>" },
         "a-alert": { template: "<div class='alert'><slot /></div>" },
-        QueryControls: { template: "<div><slot /></div>" },
-        ResultTable: { template: "<div><slot /></div>" },
         // 表格按行渲染每一列的 cell 插槽，便于断言 row-extra 拿到的行键。
         "a-table": TableStub,
         "a-table-column": ColumnStub
@@ -106,10 +107,7 @@ function clickButton(wrapper: ReturnType<typeof mountBrowse>, text: string) {
 
 describe("ViewBrowse 扩展点", () => {
   beforeEach(() => {
-    mocks.catalog.mockReset().mockResolvedValue({
-      views: [{ view_id: "view-factor", dataset_id: "dataset-factor" }],
-      datasets: [{ dataset_id: "dataset-factor", data_kind: "DATA_KIND_TIME_SERIES" }]
-    });
+    mocks.catalog.mockReset().mockResolvedValue([{ dataset_id: "dataset-factor", data_kind: "DATA_KIND_TIME_SERIES" }]);
     mocks.columns.mockReset().mockResolvedValue(columns);
     mocks.queryTimeSeries.mockReset().mockResolvedValue({
       rows: [
@@ -127,7 +125,7 @@ describe("ViewBrowse 扩展点", () => {
     });
   });
 
-  it("未传新参数时仍投影全部视图列（采集结果页的默认行为）", async () => {
+  it("未传新参数时投影数据集全部启用的列（采集结果页的默认行为），停用的列不投影", async () => {
     const wrapper = mountBrowse();
     await flushPromises();
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(1);
@@ -194,11 +192,11 @@ describe("ViewBrowse 扩展点", () => {
     wrapper.unmount();
   });
 
-  it("搜索栅格只为指定的列生成", async () => {
+  it("搜索栅格只为指定的列生成，标题用列的显示名", async () => {
     const wrapper = mountBrowse({ searchColumns: ["close"] });
     await flushPromises();
     const labels = wrapper.findAll(".filter-item label").map(item => item.text());
-    expect(labels.some(label => label.startsWith("close"))).toBe(true);
+    expect(labels.some(label => label.startsWith("收盘价"))).toBe(true);
     expect(labels.some(label => label.startsWith("rsi"))).toBe(false);
     expect(labels.some(label => label.startsWith("数据ID"))).toBe(true);
     wrapper.unmount();

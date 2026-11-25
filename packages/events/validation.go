@@ -121,20 +121,11 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 	if !ok {
 		return fmt.Errorf("view data ready payload has type %T", value)
 	}
-	if err := validateStoragePeriod(message, payload.GetViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view data ready"); err != nil {
+	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view data ready"); err != nil {
 		return err
 	}
 	if !validRequiredToken(payload.GetCompletionEventId()) {
 		return fmt.Errorf("view data ready completion_event_id is required")
-	}
-	if !validRequiredToken(payload.GetViewConfigId()) {
-		return fmt.Errorf("view data ready view_config_id is required")
-	}
-	if !validRequiredToken(payload.GetDatasetId()) {
-		return fmt.Errorf("view data ready dataset_id is required")
-	}
-	if !validRequiredToken(payload.GetVisibleScope()) {
-		return fmt.Errorf("view data ready visible_scope is required")
 	}
 	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") {
 		return fmt.Errorf("view data ready detail and detail_type must be provided together")

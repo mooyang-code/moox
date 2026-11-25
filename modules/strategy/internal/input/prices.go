@@ -41,15 +41,12 @@ func (l Loader) LoadPrices(ctx context.Context, spaceID string, resolved Resolve
 			continue
 		}
 		task := resolved.Tasks[market]
-		view, err := l.Client.GetView(ctx, spaceID, task.ViewID)
+		view, err := l.Client.GetView(ctx, spaceID, task.DatasetID)
 		if err != nil {
 			return nil, nil, err
 		}
 		if view.ActiveIndexID == "" {
-			return nil, nil, fmt.Errorf("View %s 没有活动索引", task.ViewID)
-		}
-		if view.DatasetID != task.DatasetID {
-			return nil, nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的数据集已变化（%s → %s），请重新启用实例", task.ViewID, task.DatasetID, view.DatasetID)}
+			return nil, nil, fmt.Errorf("View %s 没有活动索引", task.DatasetID)
 		}
 		bindings, err := l.Client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
 		if err != nil {
@@ -74,7 +71,7 @@ func (l Loader) LoadPrices(ctx context.Context, spaceID string, resolved Resolve
 		if withFunding {
 			columns = append(columns, fundingColumn)
 		}
-		rows, _, err := l.Client.QueryRows(ctx, spaceID, Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected,
+		rows, _, err := l.Client.QueryRows(ctx, spaceID, Query{DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected,
 			Start: boundary.StorageStart, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID})
 		if err != nil {
 			return nil, nil, err

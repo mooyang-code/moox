@@ -65,7 +65,6 @@ type vectorFile struct {
 		Suffix  string `json:"suffix"`
 		Task    string `json:"task"`
 		Dataset string `json:"dataset"`
-		View    string `json:"view"`
 	} `json:"id"`
 	SuffixInvalid  []string `json:"suffix_invalid"`
 	IDParseInvalid []string `json:"id_parse_invalid"`
@@ -219,14 +218,13 @@ func TestIDVectors(t *testing.T) {
 	for _, c := range v.ID {
 		task, err1 := TaskID(c.Suffix)
 		dataset, err2 := ResultDatasetID(c.Suffix)
-		view, err3 := ResultViewID(c.Suffix)
-		if err1 != nil || err2 != nil || err3 != nil || task != c.Task || dataset != c.Dataset || view != c.View {
-			t.Errorf("后缀 %q：得到 %q %q %q（%v %v %v）", c.Suffix, task, dataset, view, err1, err2, err3)
+		if err1 != nil || err2 != nil || task != c.Task || dataset != c.Dataset {
+			t.Errorf("后缀 %q：得到 %q %q（%v %v）", c.Suffix, task, dataset, err1, err2)
 		}
 		for _, parse := range []struct {
 			id string
 			fn func(string) (string, error)
-		}{{task, ParseTaskID}, {dataset, ParseResultDatasetID}, {view, ParseResultViewID}} {
+		}{{task, ParseTaskID}, {dataset, ParseResultDatasetID}} {
 			if got, err := parse.fn(parse.id); err != nil || got != c.Suffix {
 				t.Errorf("反解 %q = %q, %v；期望 %q", parse.id, got, err, c.Suffix)
 			}

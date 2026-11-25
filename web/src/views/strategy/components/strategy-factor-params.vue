@@ -7,8 +7,8 @@
         >
       </a-descriptions-item>
       <a-descriptions-item label="可变成员">{{ binding.members.join("、") || "无（任务里没有可变成员）" }}</a-descriptions-item>
-      <a-descriptions-item label="结果 View" :span="2"
-        ><span class="mono">{{ binding.viewId }}</span></a-descriptions-item
+      <a-descriptions-item label="结果数据集" :span="2"
+        ><span class="mono">{{ binding.datasetId }}</span></a-descriptions-item
       >
     </a-descriptions>
 
@@ -104,7 +104,7 @@ import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { getFactorParams, listFactorCategories } from "@/api/factor";
 import type { FactorCategory, MemberParamState } from "@/api/factor/types";
-import { listAllViewColumns } from "@/api/storage/metadata";
+import { listAllDatasetColumns } from "@/api/storage/metadata";
 import { getStrategyDisplaySettings, listStrategyResults, setStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden, StrategyInstance, StrategyResult } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -162,7 +162,7 @@ async function load() {
       members: [...settings.members],
       columns: [...settings.columns]
     });
-    await loadColumns(taskBinding.viewId);
+    await loadColumns(taskBinding.datasetId);
   } catch (e) {
     error.value = e instanceof Error ? e.message : "因子参数加载失败";
   } finally {
@@ -170,13 +170,16 @@ async function load() {
   }
 }
 
-/** 列名候选取自私有结果 View；读取失败不影响其余内容。 */
-async function loadColumns(viewId: string) {
+/** 列名候选取自结果数据集启用的列；读取失败不影响其余内容。 */
+async function loadColumns(datasetId: string) {
   const space = spaceStore.selectedSpaceId;
-  if (!space || !viewId) return;
+  if (!space || !datasetId) return;
   try {
-    const columns = await listAllViewColumns(space, viewId);
-    columnOptions.value = columns.map(column => column.column_name).sort();
+    const columns = await listAllDatasetColumns(space, datasetId);
+    columnOptions.value = columns
+      .filter(column => column.status === "active")
+      .map(column => column.column_name)
+      .sort();
   } catch {
     columnOptions.value = [];
   }

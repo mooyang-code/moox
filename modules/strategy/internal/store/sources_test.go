@@ -26,9 +26,9 @@ func TestInstanceSourceTasksRoundTrip(t *testing.T) {
 	if err != nil || len(listed) != 1 || !SameTasks(listed[0].FactorTasks, tasks) {
 		t.Fatalf("列表里的任务键：%+v err=%v", listed, err)
 	}
-	resolved := `{"market":{"select":"swap","prefer":"swap"},"tasks":{"swap":{"view_id":"view_factor_main","factor_task_id":"ftask_main"}},` +
-		`"references":{"spot":{"view_id":"view_factor_ref","factor_task_id":"ftask_ref"}},` +
-		`"sources":{"daily":{"bar":"1d","calendar":"crypto_24x7","tasks":{"swap":{"view_id":"view_factor_daily","factor_task_id":"ftask_daily"}}}}}`
+	resolved := `{"market":{"select":"swap","prefer":"swap"},"tasks":{"swap":{"dataset_id":"dataset_factor_main","factor_task_id":"ftask_main"}},` +
+		`"references":{"spot":{"dataset_id":"dataset_factor_ref","factor_task_id":"ftask_ref"}},` +
+		`"sources":{"daily":{"bar":"1d","calendar":"crypto_24x7","tasks":{"swap":{"dataset_id":"dataset_factor_daily","factor_task_id":"ftask_daily"}}}}}`
 	if got := SessionTasks([]byte(resolved)); !SameTasks(got, tasks) {
 		t.Fatalf("会话快照里的全部任务：%v", got)
 	}
@@ -36,7 +36,7 @@ func TestInstanceSourceTasksRoundTrip(t *testing.T) {
 	if err := repo.EnableInstance(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: resolved, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
-	byView, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_daily")
+	byView, err := repo.EnabledInstancesByDataset(ctx, "space", "dataset_factor_daily")
 	if err != nil || len(byView) != 1 || byView[0].InstanceID != "i1" {
 		t.Fatalf("来源 View 的事件应路由到实例：%+v err=%v", byView, err)
 	}

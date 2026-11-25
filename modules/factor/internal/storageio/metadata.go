@@ -19,9 +19,6 @@ const (
 	DataKindRecord          = "record"
 	DatasetStatusActive     = "active"
 	ColumnStatusActive      = "active"
-	ColumnOriginField       = "field"
-	ColumnOriginCustom      = "custom"
-	ColumnOriginSystem      = "system"
 	ColumnTypeString        = "string"
 	ColumnTypeInt           = "int"
 	ColumnTypeDouble        = "double"
@@ -49,14 +46,14 @@ type DatasetInfo struct {
 }
 
 type ColumnInfo struct {
-	ColumnName string
-	OriginType string
-	OriginID   string
-	ValueType  string
-	Required   bool
-	Aliases    []string
-	Status     string
-	Attributes map[string]string
+	ColumnName  string
+	ValueType   string
+	DisplayName string
+	Group       string
+	Required    bool
+	Aliases     []string
+	Status      string
+	Attributes  map[string]string
 }
 
 type ResultDatasetSpec struct {
@@ -79,12 +76,7 @@ type Metadata interface {
 	CreateResultDataset(ctx context.Context, spec ResultDatasetSpec) error
 	UpsertColumns(ctx context.Context, spaceID, datasetID string, cols []ColumnInfo) error
 	DeleteDataset(ctx context.Context, spaceID, datasetID string) error
-	// CheckDatasetDeletable 在动手删除之前确认结果数据集可以删：不存在算可以；被默认 View 之外的 View 引用时返回 ErrDatasetReferenced。
-	CheckDatasetDeletable(ctx context.Context, spaceID, datasetID string) error
 	SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error
-	// EnsureResultView / DeleteResultView 由 factor-mgr 自己维护结果数据集的默认 View。
-	EnsureResultView(ctx context.Context, spaceID, datasetID string) error
-	DeleteResultView(ctx context.Context, spaceID, datasetID string) error
 }
 
 func (c *Client) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
@@ -118,9 +110,6 @@ func (c *Client) DatasetColumns(ctx context.Context, spaceID, datasetID string) 
 	out := make([]string, 0, len(cols))
 	for _, col := range cols {
 		if col.Status != "" && col.Status != ColumnStatusActive {
-			continue
-		}
-		if col.OriginType == ColumnOriginSystem {
 			continue
 		}
 		if _, ok := reserved[col.ColumnName]; ok {
@@ -297,16 +286,13 @@ func datasetColumnsToProto(spaceID, datasetID string, columns []ColumnInfo) ([]*
 			return nil, fmt.Errorf("duplicate dataset column %q", item.ColumnName)
 		}
 		seen[item.ColumnName] = struct{}{}
-		originType := columnOriginToProto(item.OriginType)
 		valueType := columnTypeToProto(item.ValueType)
-		if originType == storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED ||
-			valueType == storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
-			return nil, fmt.Errorf("dataset column %q has unsupported origin or value type", item.ColumnName)
+		if valueType == storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
+			return nil, fmt.Errorf("dataset column %q has unsupported value type", item.ColumnName)
 		}
 		out = append(out, &storagepb.DatasetColumn{
 			SpaceId: spaceID, DatasetId: datasetID, ColumnName: item.ColumnName,
-			OriginType: originType, OriginId: item.OriginID,
-			ValueType: valueType, Required: item.Required,
+			ValueType: valueType, DisplayName: item.DisplayName, Group: item.Group, Required: item.Required,
 			Aliases: append([]string(nil), item.Aliases...), Status: defaultString(item.Status, ColumnStatusActive),
 			Attributes: cloneStringMap(item.Attributes),
 		})
@@ -314,63 +300,12 @@ func datasetColumnsToProto(spaceID, datasetID string, columns []ColumnInfo) ([]*
 	return out, nil
 }
 
-// ErrDatasetReferenced 表示结果数据集还被默认 View 之外的 View 引用，不能删除。
-var ErrDatasetReferenced = errors.New("结果数据集仍被其他 View 引用")
-
-func (c *Client) CheckDatasetDeletable(ctx context.Context, spaceID, datasetID string) error {
-	if err := c.metadataReady("check dataset before delete"); err != nil {
-		return err
-	}
-	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
-	if err != nil {
-		return rpcError("get dataset before delete", err)
-	}
-	if current == nil || current.GetRetInfo() == nil {
-		return fmt.Errorf("%w: get dataset before delete returned an empty response", ErrInfra)
-	}
-	if isDatasetNotFound(current.GetRetInfo().GetCode()) {
-		return nil
-	}
-	if err := responseError("get dataset before delete", current.GetRetInfo()); err != nil {
-		return err
-	}
-	if current.GetDataset().GetAttributes()["dataset_role"] != DatasetRoleFactorResult {
-		return nil
-	}
-	return c.ensureNoExtraViews(ctx, spaceID, datasetID)
-}
-
 func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) error {
 	if err := c.metadataReady("delete dataset"); err != nil {
 		return err
 	}
-	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
-	if err != nil {
-		return rpcError("get dataset before delete", err)
-	}
-	if current == nil || current.GetRetInfo() == nil {
-		return fmt.Errorf("%w: get dataset before delete returned an empty response", ErrInfra)
-	}
-	// 元数据已经不在时（上一次删除删完元数据后失败）跳过删 View，但照样调 DeleteDataset：Storage 对不存在的数据集也会删行。
-	metadataGone := isDatasetNotFound(current.GetRetInfo().GetCode())
-	if !metadataGone {
-		if err := responseError("get dataset before delete", current.GetRetInfo()); err != nil {
-			return err
-		}
-		if current.GetDataset() == nil {
-			return fmt.Errorf("%w: get dataset before delete omitted the dataset", ErrInfra)
-		}
-	}
-	if !metadataGone && current.GetDataset().GetAttributes()["dataset_role"] == DatasetRoleFactorResult {
-		// t_views 外键要求先删 View：先确认没有默认 View 之外的引用，再删默认 View。
-		if err := c.ensureNoExtraViews(ctx, spaceID, datasetID); err != nil {
-			return err
-		}
-		if err := c.DeleteResultView(ctx, spaceID, datasetID); err != nil {
-			return err
-		}
-	}
-	// Storage 在服务端一次删完：先删元数据，再删行；中途失败时重试同一个调用即可。
+	// Storage 在服务端一次删完：先删元数据，再删行；查询索引由 storage-view 下一轮维护摘掉。
+	// 中途失败时重试同一个调用即可：元数据已经不在时 Storage 照样删行。
 	rsp, err := c.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
 		return rpcError("delete dataset", err)
@@ -383,30 +318,6 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	}
 	if err := responseError("delete dataset", rsp.GetRetInfo()); err != nil {
 		return err
-	}
-	return nil
-}
-
-// ensureNoExtraViews 拒绝删除仍被默认 View 之外的 View 引用的结果 Dataset，此时数据必须完整保留。
-func (c *Client) ensureNoExtraViews(ctx context.Context, spaceID, datasetID string) error {
-	rsp, err := c.metadata.ListViews(ctx, &storagepb.ListViewsReq{
-		SpaceId: spaceID, DatasetId: datasetID,
-		Page: &commonpb.Page{Page: 1, Size: 200},
-	})
-	if err != nil {
-		return rpcError("list dataset views before delete", err)
-	}
-	if rsp == nil {
-		return fmt.Errorf("%w: list dataset views before delete returned an empty response", ErrInfra)
-	}
-	if err := responseError("list dataset views before delete", rsp.GetRetInfo()); err != nil {
-		return err
-	}
-	defaultViewID := "view_" + strings.TrimPrefix(datasetID, "dataset_")
-	for _, view := range rsp.GetViews() {
-		if view.GetViewId() != defaultViewID {
-			return fmt.Errorf("%w：结果数据集 %s 仍被 View %s 引用，请先删除该 View 后重试", ErrDatasetReferenced, datasetID, view.GetViewId())
-		}
 	}
 	return nil
 }
@@ -428,6 +339,9 @@ func validateResultDatasetSpec(spec ResultDatasetSpec) error {
 	return nil
 }
 
+// resultMaintenancePriority 告诉 Storage 查询索引的维护顺序：越小越先，因子结果排在采集结果（0）之后；Storage 不认识“因子”。
+const resultMaintenancePriority = 10
+
 func datasetFromResultSpec(spec ResultDatasetSpec) *storagepb.Dataset {
 	attributes := cloneStringMap(spec.Attributes)
 	if attributes == nil {
@@ -439,7 +353,8 @@ func datasetFromResultSpec(spec ResultDatasetSpec) *storagepb.Dataset {
 		SpaceId: spec.SpaceID, DatasetId: spec.DatasetID, DataSourceId: spec.DataSourceID,
 		Name: spec.Name, Description: spec.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 		Freq: spec.Frequency, Status: DatasetStatusActive, Attributes: attributes,
-		SubjectTags: append([]string(nil), spec.SubjectTags...),
+		SubjectTags:         append([]string(nil), spec.SubjectTags...),
+		MaintenancePriority: resultMaintenancePriority,
 	}
 }
 
@@ -473,8 +388,8 @@ func datasetInfoFromProto(item *storagepb.Dataset) DatasetInfo {
 
 func columnInfoFromProto(item *storagepb.DatasetColumn) ColumnInfo {
 	return ColumnInfo{
-		ColumnName: item.GetColumnName(), OriginType: columnOriginFromProto(item.GetOriginType()),
-		OriginID: item.GetOriginId(), ValueType: columnTypeFromProto(item.GetValueType()),
+		ColumnName: item.GetColumnName(), ValueType: columnTypeFromProto(item.GetValueType()),
+		DisplayName: item.GetDisplayName(), Group: item.GetGroup(),
 		Required: item.GetRequired(), Aliases: append([]string(nil), item.GetAliases()...),
 		Status: item.GetStatus(), Attributes: cloneStringMap(item.GetAttributes()),
 	}
@@ -530,32 +445,6 @@ func columnTypeToProto(value string) storagepb.FieldValueType {
 		return storagepb.FieldValueType_FIELD_VALUE_TYPE_BYTES
 	default:
 		return storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED
-	}
-}
-
-func columnOriginFromProto(value storagepb.DatasetColumnOriginType) string {
-	switch value {
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
-		return ColumnOriginField
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
-		return ColumnOriginCustom
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM:
-		return ColumnOriginSystem
-	default:
-		return ""
-	}
-}
-
-func columnOriginToProto(value string) storagepb.DatasetColumnOriginType {
-	switch value {
-	case ColumnOriginField:
-		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
-	case ColumnOriginCustom:
-		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM
-	case ColumnOriginSystem:
-		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
-	default:
-		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED
 	}
 }
 

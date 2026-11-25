@@ -60,8 +60,8 @@ func openOverviewWithStorage(t *testing.T, metadata monmetrics.MetadataClient, s
 func TestOverviewHidesViewsOfDeletedDatasets(t *testing.T) {
 	now := time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC)
 	watermark := now.Add(-20 * time.Minute)
-	gone := `{"dataset_id":"dataset_factor_gone","freq":"1m","space_id":"crypto","view_id":"view_factor_gone"}`
-	alive := `{"dataset_id":"dataset_factor_alive","freq":"1m","space_id":"crypto","view_id":"view_factor_alive"}`
+	gone := `{"dataset_id":"dataset_factor_gone","freq":"1m","space_id":"crypto"}`
+	alive := `{"dataset_id":"dataset_factor_alive","freq":"1m","space_id":"crypto"}`
 	seed := func(db *gorm.DB) {
 		for id, labels := range map[string]string{"gone": gone, "alive": alive} {
 			seedOverviewMetricForInstance(t, db, "wm-"+id, "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(watermark.Unix()), now)
@@ -79,8 +79,8 @@ func TestOverviewHidesViewsOfDeletedDatasets(t *testing.T) {
 	}
 
 	query := openOverviewWithStorage(t, &goneMetadata{gone: map[string]bool{"dataset_factor_gone": true}}, seed)
-	require.Equal(t, []string{"view_factor_alive"}, datasets(query))
+	require.Equal(t, []string{"dataset_factor_alive"}, datasets(query))
 
 	unreachable := openOverviewWithStorage(t, &goneMetadata{fail: true}, seed)
-	require.ElementsMatch(t, []string{"view_factor_alive", "view_factor_gone"}, datasets(unreachable))
+	require.ElementsMatch(t, []string{"dataset_factor_alive", "dataset_factor_gone"}, datasets(unreachable))
 }

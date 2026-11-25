@@ -124,16 +124,13 @@ func injectStorageSpace(body []byte, space string) ([]byte, error) {
 }
 
 // storageTopLevelSpaceMethods 是请求消息带顶层 space_id 的 Storage 方法，只有它们才能安全地回填请求头空间
-// （其余方法的空间在嵌套消息里，如 view.space_id，回填会被 ProtoJSON 当作未知字段拒绝）。
+// （其余方法的空间在嵌套消息里，如 dataset.space_id，回填会被 ProtoJSON 当作未知字段拒绝）。
 // 清单由 TestStorageTopLevelSpaceMethodsMatchProto 对照 .proto 文件校验。
 var storageTopLevelSpaceMethods = map[string]bool{
-	"DeleteView": true, "DeleteDataSource": true, "DeleteTag": true,
-	"AddTagMembers": true, "RemoveTagMembers": true, "SetTagMemberStatus": true, "DeleteDataset": true,
-	"BatchUpdateFields": true, "DeleteFieldGroup": true, "GetSpace": true,
-	"GetView": true, "ListViews": true, "ListViewColumns": true,
+	"DeleteDataSource": true, "DeleteTag": true,
+	"AddTagMembers": true, "RemoveTagMembers": true, "SetTagMemberStatus": true, "DeleteDataset": true, "GetSpace": true,
 	"GetDataSource": true, "ListDataSources": true, "GetSubject": true, "ListSubjects": true,
 	"GetTag": true, "ListTags": true, "ListTagMembers": true, "ResolveSubjects": true,
 	"GetDataset": true, "ListDatasets": true, "ListDatasetSubjects": true,
-	"GetFieldGroup": true, "ListFieldGroups": true, "GetField": true, "ListFields": true,
 	"ListDatasetColumns": true, "QueryTimeSeriesRows": true, "SearchRecordRows": true, "GetViewState": true,
 }

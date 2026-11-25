@@ -46,7 +46,7 @@ func TestStartReplayChecksActiveLimitFirst(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	for i := 0; i < store.MaxActiveReplays; i++ {
-		replay := store.Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: demoDSL, DSLHash: dsl.Hash([]byte(demoDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx@b1"}}, StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now.Add(-24 * time.Hour), CreatedAt: h.now}
+		replay := store.Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: demoDSL, DSLHash: dsl.Hash([]byte(demoDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx@b1"}}, StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now.Add(-24 * time.Hour), CreatedAt: h.now}
 		if err := h.service.Store.CreateReplay(h.ctx, replay); err != nil {
 			t.Fatal(err)
 		}

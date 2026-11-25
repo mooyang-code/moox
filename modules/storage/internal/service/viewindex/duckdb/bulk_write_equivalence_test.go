@@ -31,12 +31,12 @@ var equivalenceColumns = []struct {
 }
 
 func equivalenceSchema() viewindex.ViewIndexSchema {
-	var columns []*pb.ViewColumn
+	var columns []*viewindex.Column
 	for i, column := range equivalenceColumns {
-		columns = append(columns, &pb.ViewColumn{ColumnName: column.name, OriginId: column.name, SortOrder: uint32(i),
-			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: column.valueType})
+		columns = append(columns, &viewindex.Column{ColumnName: column.name, SortOrder: uint32(i),
+			ValueType: column.valueType})
 	}
-	schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "equiv", PrimaryDatasetID: "dataset_x", ViewVersion: 1, Engine: "duckdb", Columns: columns}
+	schema := viewindex.ViewIndexSchema{SpaceID: "space", DatasetID: "dataset_x", ViewVersion: 1, Engine: "duckdb", Columns: columns}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	return schema
 }

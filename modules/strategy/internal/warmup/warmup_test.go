@@ -50,7 +50,7 @@ func price(id string, hour int) float64 {
 }
 
 func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
-	return input.ViewInfo{ViewID: "view_factor_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "idx", Generation: "idx", Columns: []input.ViewColumn{
+	return input.ViewInfo{DatasetID: "dataset_factor_a", Frequency: "1h", Status: "active", ActiveIndexID: "idx", Generation: "idx", Columns: []input.ViewColumn{
 		{Name: "close", Attributes: map[string]string{}},
 		{Name: "mom", Attributes: map[string]string{"column_kind": "output", "member_key": "mom", "factor_id": "mom", "member_kind": "fixed", "output_name": "mom"}},
 	}}, nil
@@ -436,7 +436,7 @@ func checkFirstLiveMatchesLongRun(t *testing.T, poolYaml string, memberIDs ...st
 		t.Fatal(err)
 	}
 	message := &eventpb.EventMessage{EventId: "event-100", EventName: "event.storage.view.data_ready", SpaceId: "crypto"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1h", PeriodTime: origin.Add(100 * time.Hour).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
+	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1h", PeriodTime: origin.Add(100 * time.Hour).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
 	if err := handler.Handle(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
 	}

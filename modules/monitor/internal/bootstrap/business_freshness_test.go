@@ -149,7 +149,7 @@ func TestBusinessFreshnessReporterKeepsCanaryDomainChecks(t *testing.T) {
 
 func klineViewQuery(t *testing.T, manager *store.Store, now time.Time) *monmetrics.QueryService {
 	t.Helper()
-	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m"}`
+	labels := `{"space_id":"crypto","dataset_id":"dataset","freq":"1m"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-10 * time.Minute).Unix()), ObservedAt: now},
@@ -168,15 +168,15 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	query := klineViewQuery(t, manager, now)
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now },
 	}, repositories, evaluator)
 	require.NoError(t, run(t.Context()))
-	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:view:1m")
+	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:dataset:1m")
 	require.NotNil(t, row)
-	require.Equal(t, "view（1分钟）· K线结果", row.Name)
+	require.Equal(t, "dataset（1分钟）· K线结果", row.Name)
 	require.Equal(t, domain.CheckStatusDown, row.Status)
 	require.True(t, strings.HasPrefix(row.Reason, "整体停止更新"), row.Reason)
 	require.Equal(t, 1, row.FailureCount)
@@ -187,14 +187,14 @@ func TestBusinessFreshnessReporterRemovesKlineChecksWhenDisabledAndRecreates(t *
 	manager, repositories := openBusinessStore(t)
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	query := klineViewQuery(t, manager, now)
-	checkID := "kline_freshness:crypto:view:1m"
+	checkID := "kline_freshness:crypto:dataset:1m"
 	seedCheckRow(t, repositories, "crypto", checkID, true)
 	builder := &monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}
 	require.NoError(t, buildBusinessFreshnessReporter(builder, repositories)(t.Context()))
 	requireRemovedWithRecovery(t, repositories, "crypto", checkID)
 
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	require.NoError(t, buildBusinessFreshnessReporter(builder, repositories, evaluator)(t.Context()))
 	row := checkRow(t, repositories, "crypto", checkID)
@@ -211,12 +211,12 @@ func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testi
 	})
 	require.NoError(t, err)
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology}, repositories, testApplier(repositories), nil, 5*time.Minute, evaluator)
 	require.NoError(t, run(t.Context()))
 	require.NoError(t, run(t.Context()))
-	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:view:1m")
+	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:dataset:1m")
 	require.NotNil(t, row)
 	require.Equal(t, domain.CheckStatusDown, row.Status)
 	require.True(t, strings.HasPrefix(row.Reason, "还没有收到任何结果数据"), row.Reason)
@@ -233,7 +233,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
 		ID: "inventory-1", ObservedAt: now,
 		Entries: []monmetrics.TaskResultInventoryEntry{{
-			SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m",
+			SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
 		}},
 	}}
@@ -243,7 +243,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	builder := &monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}
 	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, testApplier(repositories), nil, time.Second, evaluator)
 	require.NoError(t, run(t.Context()))
-	klineID := "kline_freshness:crypto:view-a:1m"
+	klineID := "kline_freshness:crypto:dataset-a:1m"
 	row := checkRow(t, repositories, "crypto", klineID)
 	require.NotNil(t, row)
 	require.Equal(t, domain.CheckStatusDown, row.Status)
@@ -273,7 +273,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	})
 	require.NoError(t, err)
 	entry := monmetrics.TaskResultInventoryEntry{
-		SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", ViewID: "view-a", Frequency: "1m",
+		SpaceID: "crypto", TaskID: "task-a", DatasetID: "dataset-a", Frequency: "1m",
 		MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready", ObservedAt: now,
 	}
 	provider := &businessFreshnessInventoryProvider{snapshot: monmetrics.TaskResultInventorySnapshot{
@@ -285,7 +285,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	builder := &monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}
 	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, testApplier(repositories), nil, time.Second, evaluator)
 	require.NoError(t, run(t.Context()))
-	klineID := "kline_freshness:crypto:view-a:1m"
+	klineID := "kline_freshness:crypto:dataset-a:1m"
 	row := checkRow(t, repositories, "crypto", klineID)
 	require.NotNil(t, row)
 	require.Equal(t, domain.CheckStatusDown, row.Status)
@@ -339,14 +339,14 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 		seedSeries(t, db, "collector", "collector@control", "interval", "moox_collector_dataset_expected_interval_seconds", labels, 60, now)
 		seedSeries(t, db, "collector", "collector@control", "inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
 		seedSeries(t, db, "storage-view", "storage-view@control", "view-watermark", "moox_storage_view_output_watermark_timestamp_seconds",
-			`{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto","view_id":"view_binance_kline_1m"}`, float64(now.Add(-time.Minute).Unix()), now)
+			`{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`, float64(now.Add(-time.Minute).Unix()), now)
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
 	})
 	require.NoError(t, err)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now }}, repositories)
 	require.NoError(t, run(t.Context()))
 	require.Nil(t, checkRow(t, repositories, "crypto", "dataset:collector:dataset_binance_kline_1m:1m"), "collector result should be covered by storage view")
-	view := checkRow(t, repositories, "crypto", "dataset:storage_view:view_binance_kline_1m:1m")
+	view := checkRow(t, repositories, "crypto", "dataset:storage_view:dataset_binance_kline_1m:1m")
 	require.NotNil(t, view)
 	require.Equal(t, domain.CheckStatusOK, view.Status)
 }
@@ -613,17 +613,17 @@ func seedBusinessTopology(t *testing.T, repositories *store.Repositories, hostID
 }
 
 // K 线新鲜度已覆盖的结果视图，不再重复生成 dataset 新鲜度检查（同一条数据链路只告警一次）；
-// 同一主数据集上独立的视图不受影响，覆盖解除后恢复兜底。
+// 别的数据集的视图不受影响，覆盖解除后恢复兜底。
 func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *testing.T) {
 	manager, repositories := openBusinessStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
-	viewLabels := func(view string) string {
-		return `{"freq":"1m","space_id":"crypto","view_id":"` + view + `","dataset_id":"dataset_binance_kline_1m"}`
+	viewLabels := func(dataset string) string {
+		return `{"freq":"1m","space_id":"crypto","dataset_id":"` + dataset + `"}`
 	}
-	klineLabels := `{"space_id":"crypto","view_id":"view_binance_kline_1m","dataset_id":"dataset_binance_kline_1m","freq":"1m"}`
+	klineLabels := `{"space_id":"crypto","dataset_id":"dataset_binance_kline_1m","freq":"1m"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		seedSeries(t, db, "storage-view", "storage-view@control", "watermark-a", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("view_binance_kline_1m"), float64(now.Add(-time.Minute).Unix()), now)
-		seedSeries(t, db, "storage-view", "storage-view@control", "watermark-b", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("view_other_1m"), float64(now.Add(-time.Minute).Unix()), now)
+		seedSeries(t, db, "storage-view", "storage-view@control", "watermark-a", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("dataset_binance_kline_1m"), float64(now.Add(-time.Minute).Unix()), now)
+		seedSeries(t, db, "storage-view", "storage-view@control", "watermark-b", "moox_storage_view_output_watermark_timestamp_seconds", viewLabels("dataset_other_1m"), float64(now.Add(-time.Minute).Unix()), now)
 		seedSeries(t, db, "storage-view", "storage-view@control", "latest", monmetrics.ViewOutputLatestMetric, klineLabels, float64(now.Add(-time.Minute).Unix()), now)
 		seedSeries(t, db, "storage-view", "storage-view@control", "subjects", monmetrics.ViewOutputSubjectsMetric, klineLabels, 1, now)
 		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
@@ -633,7 +633,7 @@ func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *t
 	build := func(withKline bool) func(context.Context) error {
 		var evaluators []*monmetrics.KlineFreshnessEvaluator
 		if withKline {
-			rule := monmetrics.KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", ViewID: "view_binance_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute}
+			rule := monmetrics.KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute}
 			evaluators = append(evaluators, monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{rule}, 20))
 		}
 		// K 线评估间隔 1 小时：同一个 reporter 的后续轮次不重新评估，验证覆盖集合会沿用。
@@ -642,19 +642,19 @@ func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *t
 		}, repositories, testApplier(repositories), nil, time.Hour, evaluators...)
 	}
 	exists := func(checkID string) bool { return checkRow(t, repositories, "crypto", checkID) != nil }
-	const viewA, viewB = "dataset:storage_view:view_binance_kline_1m:1m", "dataset:storage_view:view_other_1m:1m"
-	const klineCheck = "kline_freshness:crypto:view_binance_kline_1m:1m"
+	const viewA, viewB = "dataset:storage_view:dataset_binance_kline_1m:1m", "dataset:storage_view:dataset_other_1m:1m"
+	const klineCheck = "kline_freshness:crypto:dataset_binance_kline_1m:1m"
 
 	// 没有 K 线新鲜度时，两个视图的 dataset 检查是唯一的新鲜度信号。
 	require.NoError(t, build(false)(t.Context()))
 	require.True(t, exists(viewA))
 	require.True(t, exists(viewB))
 
-	// K 线新鲜度覆盖视图 A 后：A 的检查删除，同一主数据集上独立的视图 B 不受影响。
+	// K 线新鲜度覆盖视图 A 后：A 的检查删除，别的数据集的视图 B 不受影响。
 	covered := build(true)
 	require.NoError(t, covered(t.Context()))
 	require.False(t, exists(viewA), "被 K 线新鲜度覆盖的视图检查不再产出")
-	require.True(t, exists(viewB), "同一主数据集上的独立视图仍要自己的检查")
+	require.True(t, exists(viewB), "别的数据集的视图仍要自己的检查")
 	require.True(t, exists(klineCheck))
 
 	// 没到下次 K 线评估的轮次沿用覆盖集合，不会把 A 的检查重新生成；K 线检查保持原状态。

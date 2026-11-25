@@ -156,20 +156,6 @@ async function mockGateway(route: Route) {
     const updated = members.find(item => item.member_key === body.member_key);
     return route.fulfill({ json: ok({ member: updated }) });
   }
-  if (method === "GetView") {
-    return route.fulfill({
-      json: ok({
-        view: {
-          space_id: "crypto",
-          view_id: "view_factor_binance_kline_1m",
-          name: "现货K线因子结果",
-          dataset_id: factorTask.result_dataset_id,
-          status: "active",
-          attributes: { owner_module: "factor", view_role: "factor_result" }
-        }
-      })
-    });
-  }
   if (method === "GetDataset") {
     return route.fulfill({
       json: ok({
@@ -185,12 +171,25 @@ async function mockGateway(route: Route) {
     });
   }
   if (method === "ListDatasetColumns") {
+    // 结果数据集的列带因子输出；源数据集只有行情列与参考列。
+    const columns =
+      body.dataset_id === factorTask.result_dataset_id
+        ? [
+            { column_name: "close", display_name: "收盘价", status: "active" },
+            {
+              column_name: "bias_5",
+              display_name: "bias_5",
+              status: "active",
+              attributes: { factor_id: "bias", member_key: "bias__5", column_kind: "output" }
+            }
+          ]
+        : [
+            { column_name: "close", display_name: "收盘价", status: "active" },
+            { column_name: "bias5", display_name: "乖离", status: "active", attributes: { column_kind: "output" } }
+          ];
     return route.fulfill({
       json: ok({
-        columns: [
-          { column_name: "close", origin_type: "field", attributes: { display_name: "收盘价", field_kind: "base" } },
-          { column_name: "bias5", origin_type: "custom", attributes: { display_name: "乖离", column_kind: "output" } }
-        ],
+        columns,
         page_result: { page: 1, size: 20, total: 2, has_more: false }
       })
     });
@@ -232,42 +231,6 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  if (method === "ListViews") {
-    return route.fulfill({
-      json: ok({
-        views: [
-          {
-            space_id: "crypto",
-            view_id: "view_factor_binance_kline_1m",
-            name: "现货K线因子结果",
-            dataset_id: factorTask.result_dataset_id,
-            status: "active",
-            attributes: { owner_module: "factor", view_role: "factor_result" }
-          }
-        ],
-        page_result: { page: 1, size: 200, total: 1, has_more: false }
-      })
-    });
-  }
-  if (method === "ListViewColumns") {
-    return route.fulfill({
-      json: ok({
-        columns: [
-          { view_id: "view_factor_binance_kline_1m", column_name: "subject_id" },
-          { view_id: "view_factor_binance_kline_1m", column_name: "data_time" },
-          { view_id: "view_factor_binance_kline_1m", column_name: "close" },
-          {
-            view_id: "view_factor_binance_kline_1m",
-            column_name: "bias_5",
-            attributes: { factor_id: "bias", member_key: "bias__5", column_kind: "output" }
-          }
-        ],
-        page_result: { page: 1, size: 500, total: 4, has_more: false }
-      })
-    });
-  }
-  if (method === "ListViewData")
-    return route.fulfill({ json: ok({ rows: [], page_result: { page: 1, size: 100, total: 0, has_more: false } }) });
   return route.fulfill({ json: ok() });
 }
 
@@ -301,9 +264,9 @@ test("definitions page shows usage chips and locks edit and delete", async ({ pa
   await expect(rsi.getByRole("button", { name: "编辑" })).toBeEnabled();
 });
 
-test("results tab embeds the result view", async ({ page }) => {
+test("results tab embeds the result dataset", async ({ page }) => {
   await page.goto("/#/factor/tasks?tab=results");
-  await expect(page.getByText("View: view_factor_binance_kline_1m")).toBeVisible();
+  await expect(page.getByText("(dataset_factor_binance_kline_1m)")).toBeVisible();
 });
 
 test("recalc tab accepts a manual recalculation", async ({ page }) => {

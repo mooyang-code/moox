@@ -298,11 +298,10 @@ export interface ResolvedColumn {
   definition_hash: string;
 }
 
-/** 一个市场绑定的计算任务与结果 View。 */
+/** 一个市场绑定的计算任务与结果数据集。 */
 export interface ResolvedTask {
   market: string;
   factor_task_id: string;
-  view_id: string;
   dataset_id: string;
   source_dataset_id: string;
 }
@@ -326,7 +325,6 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     .map(([market, task]) => ({
       market,
       factor_task_id: task?.factor_task_id ?? "",
-      view_id: task?.view_id ?? "",
       dataset_id: task?.dataset_id ?? "",
       source_dataset_id: task?.source_dataset_id ?? ""
     }))

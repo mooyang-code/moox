@@ -19,20 +19,16 @@ import (
 const (
 	RefreshDisabled time.Duration = -1
 
-	indexKind               = "kind"
-	indexPrimary            = "primary"
-	indexDataset            = "dataset"
-	indexViewPrimaryDataset = "view_primary_dataset"
+	indexKind    = "kind"
+	indexPrimary = "primary"
+	indexDataset = "dataset"
 )
 
 const (
 	kindSpace         = "space"
-	kindView          = "view"
 	kindDataSource    = "data_source"
 	kindSubject       = "subject"
 	kindDataset       = "dataset"
-	kindFieldGroup    = "field_group"
-	kindField         = "field"
 	kindDatasetColumn = "dataset_column"
 )
 
@@ -54,24 +50,18 @@ type Store struct {
 
 // entry 保存一个缓存条目的值与错误信息。
 type entry struct {
-	Kind          string   `json:"kind"`
-	SpaceID       string   `json:"space_id,omitempty"`
-	ID            string   `json:"id,omitempty"`
-	Owner         string   `json:"owner,omitempty"`
-	Status        string   `json:"status,omitempty"`
-	Name          string   `json:"name,omitempty"`
-	DataSourceID  string   `json:"data_source_id,omitempty"`
-	SubjectID     string   `json:"subject_id,omitempty"`
-	DatasetID     string   `json:"dataset_id,omitempty"`
-	GroupID       string   `json:"group_id,omitempty"`
-	ParentGroupID string   `json:"parent_group_id,omitempty"`
-	DatasetIDs    []string `json:"dataset_ids,omitempty"`
-	DataKind      int32    `json:"data_kind,omitempty"`
-	Freq          string   `json:"freq,omitempty"`
-	Revision      uint64   `json:"revision,omitempty"`
-	ValueType     int32    `json:"value_type,omitempty"`
-	Engine        string   `json:"engine,omitempty"`
-	Payload       []byte   `json:"payload"`
+	Kind         string `json:"kind"`
+	SpaceID      string `json:"space_id,omitempty"`
+	ID           string `json:"id,omitempty"`
+	Owner        string `json:"owner,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Name         string `json:"name,omitempty"`
+	DataSourceID string `json:"data_source_id,omitempty"`
+	DatasetID    string `json:"dataset_id,omitempty"`
+	DataKind     int32  `json:"data_kind,omitempty"`
+	Freq         string `json:"freq,omitempty"`
+	Revision     uint64 `json:"revision,omitempty"`
+	Payload      []byte `json:"payload"`
 }
 
 // datasetKey 是数据集在只读视图里的键。
@@ -173,12 +163,6 @@ func New(ctx context.Context, base metadata.Reader, opts Options) (*Store, error
 				}
 				return []string{item.Kind, item.SpaceID, item.DatasetID}
 			}},
-			{Name: indexViewPrimaryDataset, Key: func(item entry) []string {
-				if item.Kind != kindView || item.DatasetID == "" {
-					return nil
-				}
-				return []string{item.Kind, item.SpaceID, item.DatasetID}
-			}},
 		},
 		Startup: snapshotcache.StartupOptions{
 			FailIfNoSnapshot: true,
@@ -228,68 +212,6 @@ func (s *Store) ListSpaces(ctx context.Context, owner, status string, page *pb.P
 	}), func() *pb.Space { return &pb.Space{} })
 	if err != nil {
 		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
-// GetView 返回缓存的 View；列与隐藏列在刷新缓存时已由底层按数据集列推出。
-func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
-	return getProto(s, ctx, kindView, spaceID, viewID, func() *pb.View { return &pb.View{} })
-}
-
-func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
-	var raw []entry
-	if spaceID != "" && datasetID != "" {
-		raw = append(raw, s.listByIndex(indexViewPrimaryDataset, kindView, spaceID, datasetID)...)
-		if status != "" {
-			filtered := make([]entry, 0, len(raw))
-			for _, item := range raw {
-				if item.Status == status {
-					filtered = append(filtered, item)
-				}
-			}
-			raw = filtered
-		}
-	} else {
-		raw = s.list(kindView, func(item entry) bool {
-			return (spaceID == "" || item.SpaceID == spaceID) &&
-				(status == "" || item.Status == status) &&
-				(datasetID == "" || item.DatasetID == datasetID)
-		})
-	}
-	items, err := decodeEntries(raw, func() *pb.View { return &pb.View{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
-func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	const pageSize = uint32(1000)
-	var out []*pb.View
-	for pageNo := uint32(1); ; pageNo++ {
-		items, page, err := s.ListViews(ctx, spaceID, datasetID, "active", &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, items...)
-		if page == nil || !page.GetHasMore() || len(items) == 0 {
-			return out, nil
-		}
-	}
-}
-
-// ListViewColumns 取缓存 View 里推出的列，顺序与底层一致。
-func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {
-	views, err := decodeEntries(s.list(kindView, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) && (viewID == "" || item.ID == viewID)
-	}), func() *pb.View { return &pb.View{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	var items []*pb.ViewColumn
-	for _, view := range views {
-		items = append(items, view.GetColumns()...)
 	}
 	return pageItems(items, page)
 }
@@ -347,7 +269,8 @@ func (s *Store) ListDatasets(ctx context.Context, query metadata.DatasetQuery) (
 			return false
 		}
 		return (query.DataKind == pb.DataKind_DATA_KIND_UNSPECIFIED || item.DataKind == int32(query.DataKind)) &&
-			(query.Freq == "" || item.Freq == query.Freq)
+			(query.Freq == "" || item.Freq == query.Freq) &&
+			(query.Status == "" || item.Status == query.Status)
 	}), func() *pb.Dataset { return &pb.Dataset{} })
 	if err != nil {
 		return nil, nil, err
@@ -362,98 +285,6 @@ func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, dataset
 // SubjectsRevision 直读底层存储，修订号必须与实时读取的标的数据一致，不进快照。
 func (s *Store) SubjectsRevision(ctx context.Context, spaceID string) (uint64, error) {
 	return s.base.SubjectsRevision(ctx, spaceID)
-}
-
-func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error) {
-	return getProto(s, ctx, kindField, spaceID, fieldID, func() *pb.Field { return &pb.Field{} })
-}
-
-func (s *Store) GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error) {
-	return getProto(s, ctx, kindFieldGroup, spaceID, groupID, func() *pb.FieldGroup { return &pb.FieldGroup{} })
-}
-
-func (s *Store) ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
-	items, err := decodeEntries(s.list(kindFieldGroup, func(item entry) bool {
-		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(parentGroupID == "" || item.ParentGroupID == parentGroupID)
-	}), func() *pb.FieldGroup { return &pb.FieldGroup{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
-func (s *Store) ListFields(ctx context.Context, query metadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
-	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
-	groups := make(map[string]bool)
-	if query.GroupID != "" && query.IncludeDescendants {
-		groups[query.GroupID] = true
-		for _, item := range s.list(kindFieldGroup, func(item entry) bool {
-			return item.SpaceID == query.SpaceID && item.ParentGroupID == query.GroupID
-		}) {
-			groups[item.ID] = true
-		}
-	}
-	items, err := decodeEntries(s.list(kindField, func(item entry) bool {
-		if query.UngroupedOnly && item.GroupID != "" {
-			return false
-		}
-		if query.GroupID != "" && query.IncludeDescendants && !groups[item.GroupID] {
-			return false
-		}
-		if query.GroupID != "" && !query.IncludeDescendants && item.GroupID != query.GroupID {
-			return false
-		}
-		if keyword != "" && !strings.Contains(strings.ToLower(string(item.Payload)), keyword) {
-			return false
-		}
-		return (query.SpaceID == "" || item.SpaceID == query.SpaceID) &&
-			(query.Status == "" || item.Status == query.Status) &&
-			(query.ValueType == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED || item.ValueType == int32(query.ValueType))
-	}), func() *pb.Field { return &pb.Field{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, query.Page)
-}
-
-func (s *Store) CountFieldsByGroup(ctx context.Context, spaceID string) (metadata.FieldGroupCounts, error) {
-	result := metadata.FieldGroupCounts{ByGroup: make(map[string]uint64)}
-	groups, err := decodeEntries(s.list(kindFieldGroup, func(item entry) bool { return spaceID == "" || item.SpaceID == spaceID }), func() *pb.FieldGroup { return &pb.FieldGroup{} })
-	if err != nil {
-		return result, err
-	}
-	fields, err := decodeEntries(s.list(kindField, func(item entry) bool { return spaceID == "" || item.SpaceID == spaceID }), func() *pb.Field { return &pb.Field{} })
-	if err != nil {
-		return result, err
-	}
-	parents := make(map[string]string, len(groups))
-	for _, group := range groups {
-		if group != nil {
-			parents[group.GetGroupId()] = group.GetParentGroupId()
-			if _, ok := result.ByGroup[group.GetGroupId()]; !ok {
-				result.ByGroup[group.GetGroupId()] = 0
-			}
-		}
-	}
-	for _, field := range fields {
-		if field == nil {
-			continue
-		}
-		result.Total++
-		groupID := field.GetGroupId()
-		if groupID == "" {
-			result.Ungrouped++
-			continue
-		}
-		result.ByGroup[groupID]++
-	}
-	for groupID, parentID := range parents {
-		if parentID != "" {
-			result.ByGroup[parentID] += result.ByGroup[groupID]
-		}
-	}
-	return result, nil
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
@@ -538,16 +369,7 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, datasets, err = s.fetchDatasets(ctx, out); err != nil {
 		return nil, err
 	}
-	if out, err = s.fetchFieldGroups(ctx, out); err != nil {
-		return nil, err
-	}
-	if out, err = s.fetchFields(ctx, out); err != nil {
-		return nil, err
-	}
 	if out, columns, err = s.fetchDatasetColumns(ctx, out); err != nil {
-		return nil, err
-	}
-	if out, err = s.fetchViews(ctx, out); err != nil {
 		return nil, err
 	}
 	s.datasets.Store(buildDatasetViews(datasets, columns))
@@ -618,38 +440,6 @@ func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, []*pb.
 	return out, items, nil
 }
 
-func (s *Store) fetchFields(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Field, *pb.PageResult, error) {
-		return s.base.ListFields(ctx, metadata.FieldQuery{Page: page})
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindField, SpaceID: item.GetSpaceId(), ID: item.GetFieldId(), GroupID: item.GetGroupId(), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchFieldGroups(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error) {
-		return s.base.ListFieldGroups(ctx, "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindFieldGroup, SpaceID: item.GetSpaceId(), ID: item.GetGroupId(), ParentGroupID: item.GetParentGroupId(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 func (s *Store) fetchDatasetColumns(ctx context.Context, out []entry) ([]entry, []*pb.DatasetColumn, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 		return s.base.ListDatasetColumns(ctx, "", "", page)
@@ -658,28 +448,12 @@ func (s *Store) fetchDatasetColumns(ctx context.Context, out []entry) ([]entry, 
 		return nil, nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDatasetColumn, SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), ID: compositeID(item.GetDatasetId(), item.GetColumnName()), ValueType: int32(item.GetValueType()), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDatasetColumn, SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), ID: compositeID(item.GetDatasetId(), item.GetColumnName()), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 	return out, items, nil
-}
-
-func (s *Store) fetchViews(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
-		return s.base.ListViews(ctx, "", "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindView, SpaceID: item.GetSpaceId(), ID: item.GetViewId(), DatasetID: item.GetDatasetId(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
 }
 
 func appendEntry(out []entry, item entry, message proto.Message) ([]entry, error) {

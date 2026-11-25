@@ -280,12 +280,9 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	if err != nil {
 		return nil, err
 	}
-	ids, err := collectionTaskResultIDs(task)
-	if err != nil {
-		return nil, err
-	}
+	ids := collectionTaskResultIDs(task)
 	entry := &pb.TaskResultInventoryEntry{
-		SpaceId: task.SpaceID, TaskId: task.TaskID, DatasetId: ids.DatasetID, ViewId: ids.ViewID,
+		SpaceId: task.SpaceID, TaskId: task.TaskID, DatasetId: ids.DatasetID,
 		Frequency: frequency, MarketId: marketID, CalendarId: calendarID, Timezone: timezone,
 		Sessions: sessions, ObservedAt: observed.Format(time.RFC3339Nano), Enabled: task.Enabled,
 		ResultStatus: "pending", AllowedLatenessSeconds: int32(latenessSeconds),
@@ -308,7 +305,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 		return nil, err
 	}
 	entry.ResultStatus = inspection.Status
-	entry.OwnershipVerified = inspection.Dataset != nil && inspection.View != nil
+	entry.OwnershipVerified = inspection.Dataset != nil
 	entry.ViewLastDataTime = strings.TrimSpace(inspection.LastDataTime)
 	return entry, nil
 }

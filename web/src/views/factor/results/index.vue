@@ -19,27 +19,25 @@
             <TaskTabs :model-value="activeTaskId" :include="isResultTask" class="result-tabs" @change="onTabChange" />
             <a-space class="result-actions">
               <span v-if="readAt" class="result-read-at">任务状态读取于 {{ readAt }}</span>
-              <a-button :loading="viewLoading" @click="refreshResults">
+              <a-button :loading="resultLoading" @click="refreshResults">
                 <template #icon><icon-refresh /></template>
                 刷新结果
               </a-button>
             </a-space>
           </div>
 
-          <a-alert v-if="viewError || scopeError" type="error" show-icon class="results-alert">
-            {{ viewError || scopeError }}
+          <a-alert v-if="scopeError" type="error" show-icon class="results-alert">
+            {{ scopeError }}
             <template #action><a-button size="mini" @click="loadResultView">重试</a-button></template>
           </a-alert>
 
           <ViewBrowse
             v-if="resultView"
-            :key="`${resultView.space_id}/${resultView.view_id}`"
+            :key="`${resultView.space_id}/${resultView.dataset_id}`"
             :zone="displayZone"
-            :view-ids="[resultView.view_id]"
-            :active-view-id="resultView.view_id"
+            :dataset-ids="[resultView.dataset_id]"
+            :active-dataset-id="resultView.dataset_id"
             :refresh-key="refreshKey"
-            :view-owner-modules="['factor']"
-            :view-roles="['factor_result']"
             :query-ready="scopeReady"
             :display-columns="table.display"
             :project-columns="table.project"
@@ -47,7 +45,7 @@
             :extra-filters="extraFilters"
             row-extra-title="因子"
             :auto-refresh-interval-ms="60000"
-            empty-description="结果视图准备中"
+            empty-description="结果数据集准备中"
             empty-rows-description="计算任务已准备，尚未产生数据"
             @cleared="setConditions([])"
           >
@@ -74,8 +72,8 @@
               <span v-else class="muted">-</span>
             </template>
           </ViewBrowse>
-          <a-spin v-else-if="viewLoading" class="results-loading" />
-          <a-empty v-else-if="!viewError" description="结果视图随计算任务的结果数据集一起创建，建好索引后可浏览，请稍后刷新">
+          <a-spin v-else-if="resultLoading" class="results-loading" />
+          <a-empty v-else description="计算任务还没有结果数据集，请稍后刷新">
             <template #extra>
               <a-button @click="goTasks">前往计算任务</a-button>
             </template>
@@ -84,7 +82,7 @@
           <FactorValuesModal
             v-if="resultView"
             v-model:visible="valuesVisible"
-            :view-id="resultView.view_id"
+            :dataset-id="resultView.dataset_id"
             :row-key="valuesRowKey"
             :scope="scope"
           />
@@ -108,15 +106,15 @@ import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { listFactorCategories } from "@/api/factor";
 import type { FactorCategory, FactorTaskInfo } from "@/api/factor/types";
-import { listAllViewColumns, listViews } from "@/api/storage/metadata";
-import type { TimeSeriesKey, View, ViewColumn } from "@/api/storage/types";
+import { listAllDatasetColumns } from "@/api/storage/metadata";
+import type { DatasetColumn, TimeSeriesKey } from "@/api/storage/types";
 import { getStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden } from "@/api/strategy-types";
 import { createLatestRequestGuard, type LatestRequest } from "@/utils/latest-request";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
 import TaskTabs from "@/views/factor/shared/task-tabs.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
-import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
+import { resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
 import { buildFactorScope } from "./factor-scope";
 import { decodeConditions, encodeConditions, toFilterState, type FactorCondition } from "./factor-condition";
 import {
@@ -148,24 +146,23 @@ const activeInfo = computed(() =>
 );
 const summary = computed(() => resultSummary(activeInfo.value ?? {}, displayZone.value));
 
-const resultView = ref<View | null>(null);
-const viewLoading = ref(false);
+/** 计算任务的结果数据集：每个数据集恰好有一个查询索引，直接按它浏览。 */
+const resultView = ref<{ space_id: string; dataset_id: string } | null>(null);
+const resultLoading = ref(false);
 const refreshKey = ref(0);
 const readAt = ref("");
 const viewGate = createLatestRequestGuard();
 
-// 有效范围的原料：视图列、分类与策略外显设置；成员清单直接来自 store（随轮询更新）。
-const viewColumns = ref<ViewColumn[]>([]);
+// 有效范围的原料：结果数据集启用的列、分类与策略外显设置；成员清单直接来自 store（随轮询更新）。
+const resultColumns = ref<DatasetColumn[]>([]);
 const categories = ref<FactorCategory[]>([]);
 const displayHidden = ref<DisplayHidden>();
 /** 原料全部就绪后才放行首查，否则首查会带着默认投影、漏掉 URL 里的因子条件。 */
 const scopeReady = ref(false);
 const scopeError = ref("");
-/** 结果视图读取失败：显示错误条和重试，不落到“请稍后刷新”的空态。 */
-const viewError = ref("");
 const scope = computed(() =>
   buildFactorScope({
-    viewColumns: viewColumns.value,
+    columns: resultColumns.value,
     members: activeInfo.value?.members ?? [],
     categories: categories.value,
     hidden: displayHidden.value
@@ -196,33 +193,28 @@ async function loadResultView() {
   resultView.value = null;
   scopeReady.value = false;
   scopeError.value = "";
-  viewError.value = "";
-  if (!current) {
-    viewLoading.value = false;
+  if (!current?.result_dataset_id) {
+    resultLoading.value = false;
     return;
   }
-  viewLoading.value = true;
+  resultView.value = { space_id: current.space_id, dataset_id: current.result_dataset_id };
+  resultLoading.value = true;
   try {
-    const rsp = await listViews({
-      space_id: current.space_id,
-      dataset_id: current.result_dataset_id,
-      status: "active",
-      page: { page: 1, size: 100 }
-    });
-    if (!token.isLatest()) return;
-    resultView.value = pickResultView(rsp.views || [], current);
-    if (resultView.value) await loadScope(current, resultView.value, token);
-  } catch (error) {
-    if (token.isLatest()) viewError.value = `结果视图读取失败：${error instanceof Error ? error.message : String(error)}`;
+    await loadScope(current, token);
   } finally {
-    if (token.isLatest()) viewLoading.value = false;
+    if (token.isLatest()) resultLoading.value = false;
   }
 }
 
-async function loadScope(current: FactorTaskInfo["factor_task"], view: View, token: LatestRequest) {
+async function loadActiveColumns(spaceId: string, datasetId: string) {
+  const columns = await listAllDatasetColumns(spaceId, datasetId);
+  return columns.filter(column => column.status === "active");
+}
+
+async function loadScope(current: FactorTaskInfo["factor_task"], token: LatestRequest) {
   try {
     const [columns, categoryList, hidden] = await Promise.all([
-      listAllViewColumns(current.space_id, view.view_id),
+      loadActiveColumns(current.space_id, current.result_dataset_id),
       // 分类只用于展示名称和排序，读取失败时按 ID 展示。
       listFactorCategories().catch(() => [] as FactorCategory[]),
       // 外显设置只影响展示：读取失败时全部展示。
@@ -231,7 +223,7 @@ async function loadScope(current: FactorTaskInfo["factor_task"], view: View, tok
         : Promise.resolve(undefined)
     ]);
     if (!token.isLatest()) return;
-    viewColumns.value = columns;
+    resultColumns.value = columns;
     categories.value = categoryList;
     displayHidden.value = hidden;
     settings.value = loadColumnSettings(current.task_id, scope.value);
@@ -274,8 +266,8 @@ function onTabChange(key: string | number) {
 }
 
 /**
- * “刷新结果”：重读任务状态和视图列，表格只重读行（不重建视图浏览，筛选保留）；视图还没有时才重新找视图。
- * 视图列也要重读：成员启用时后端才补结果列，可能比成员状态晚一步。
+ * “刷新结果”：重读任务状态和结果列，表格只重读行（不重建浏览，筛选保留）；结果数据集还没有时才重新找。
+ * 结果列也要重读：成员启用时后端才补结果列，可能比成员状态晚一步。
  */
 async function refreshResults() {
   await store.reload();
@@ -283,20 +275,19 @@ async function refreshResults() {
     await loadResultView();
     return;
   }
-  await reloadViewColumns();
+  await reloadResultColumns();
   refreshKey.value += 1;
 }
 
-/** 成员变了（添加、移除、启停）：结果列跟着变，只重读视图列，不重建视图浏览。 */
+/** 成员变了（添加、移除、启停）：结果列跟着变，只重读结果列，不重建浏览。 */
 let columnsSeq = 0;
-async function reloadViewColumns() {
-  const current = activeInfo.value?.factor_task;
+async function reloadResultColumns() {
   const view = resultView.value;
-  if (!current || !view || !scopeReady.value) return;
+  if (!view || !scopeReady.value) return;
   const seq = ++columnsSeq;
   try {
-    const columns = await listAllViewColumns(current.space_id, view.view_id);
-    if (seq === columnsSeq && resultView.value?.view_id === view.view_id) viewColumns.value = columns;
+    const columns = await loadActiveColumns(view.space_id, view.dataset_id);
+    if (seq === columnsSeq && resultView.value?.dataset_id === view.dataset_id) resultColumns.value = columns;
   } catch {
     // 读不到时沿用上次的列，下次成员变化或点“刷新结果”时再读。
   }
@@ -335,7 +326,7 @@ watch(
   // 启用时后端才补结果列，所以状态也算在内
   () => (activeInfo.value?.members ?? []).map(member => `${member.member_key || member.factor_id}:${member.status}`).join(","),
   (keys, previous) => {
-    if (previous !== undefined && keys !== previous) void reloadViewColumns();
+    if (previous !== undefined && keys !== previous) void reloadResultColumns();
   }
 );
 </script>

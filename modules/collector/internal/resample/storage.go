@@ -49,12 +49,12 @@ type PrimaryStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
-// ViewWaiter 是合成用到的 DataView 方法：建目标时等 View 的列建好。
+// ViewWaiter 是合成用到的 DataView 方法：建目标时等查询索引的列建好。
 type ViewWaiter interface {
 	GetViewState(context.Context, *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error)
 }
 
-// viewRetryInterval 是 View 还没准备好（还没开始建索引、正在建索引）时再问一次的间隔。
+// viewRetryInterval 是查询索引还没准备好（还没开始建索引、正在建索引）时再问一次的间隔。
 const viewRetryInterval = 100 * time.Millisecond
 
 func sleepContext(ctx context.Context, d time.Duration) error {

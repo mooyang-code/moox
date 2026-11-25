@@ -383,7 +383,7 @@ func normalizeFactorTasks(raw map[string]string) (map[string]string, error) {
 		if strings.Contains(key, ":") && !dsl.ValidSourceName(source) {
 			return nil, fmt.Errorf("factor_tasks 的键 %q 不合法：来源名必须是小写字母开头的 snake_case", key)
 		}
-		if _, err := input.ViewIDOfTask(taskID); err != nil {
+		if _, err := input.DatasetIDOfTask(taskID); err != nil {
 			return nil, fmt.Errorf("factor_tasks 的 %s 任务 ID 不合法：%w", key, err)
 		}
 		if other, dup := seen[taskID]; dup {

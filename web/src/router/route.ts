@@ -57,12 +57,6 @@ export const layoutRoutes = [
         name: "data-subjects",
         component: () => import("@/views/data/subjects/index.vue"),
         meta: { title: "数据对象" }
-      },
-      {
-        path: "/data/fields",
-        name: "data-fields",
-        component: () => import("@/views/data/fields/index.vue"),
-        meta: { title: "基础字段" }
       }
     ]
   },

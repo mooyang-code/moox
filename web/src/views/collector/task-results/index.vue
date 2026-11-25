@@ -52,7 +52,7 @@
             {{ activeTask?.last_error || "结果视图不可用，请检查任务配置或稍后重试。" }}
           </a-alert>
           <a-empty
-            v-else-if="!detailError && (!activeViewReadable || activeViewIds.length === 0)"
+            v-else-if="!detailError && (!activeResultReadable || activeDatasetIds.length === 0)"
             :description="
               activeResample && activeTask
                 ? resampleEmptyDescription(activeTask, activeFrequencyMinutes, displayZone)
@@ -64,14 +64,12 @@
             </template>
           </a-empty>
           <ViewBrowse
-            v-else-if="activeViewReadable && activeViewIds.length > 0"
+            v-else-if="activeResultReadable && activeDatasetIds.length > 0"
             :zone="displayZone"
             :auto-refresh-interval-ms="60000"
-            :view-ids="activeViewIds"
-            :active-view-id="activeViewIds[0]"
-            :refresh-key="viewRefreshKey"
-            :view-owner-modules="['collector']"
-            :view-roles="['collection_browse']"
+            :dataset-ids="activeDatasetIds"
+            :active-dataset-id="activeDatasetIds[0]"
+            :refresh-key="resultRefreshKey"
             empty-description="结果准备中"
             empty-rows-description="任务已准备，尚未产生数据"
           />
@@ -119,8 +117,8 @@ const loadError = ref("");
 const detailLoading = ref(false);
 const detailError = ref("");
 const lastStatusReadAtByTask = ref<Record<string, string>>({});
-const readableViewIdsByTask = ref<Record<string, string>>({});
-const viewRefreshKey = ref(0);
+const readableDatasetIdsByTask = ref<Record<string, string>>({});
+const resultRefreshKey = ref(0);
 const tasks = ref<CollectorTask[]>([]);
 const taskDetails = ref<Record<string, CollectorTask>>({});
 const activeTaskId = ref(queryTaskId(route.query.resultTask));
@@ -135,13 +133,13 @@ class TaskDetailIdentityError extends Error {}
 
 const resultTabs = computed(() => buildTaskResultTabs(tasks.value));
 const activeTask = computed(() => resolveActiveTask(tasks.value, taskDetails.value, activeTaskId.value));
-const activeViewIds = computed(() => (activeTask.value ? buildTaskResultTabs([activeTask.value])[0]?.viewIds || [] : []));
+const activeDatasetIds = computed(() => (activeTask.value ? buildTaskResultTabs([activeTask.value])[0]?.datasetIds || [] : []));
 const activeState = computed<TaskResultState>(() => (activeTask.value ? getTaskResultState(activeTask.value) : "preparing"));
 const activeLastStatusReadAt = computed(() => lastStatusReadAtByTask.value[activeTaskId.value] || "");
-const activeViewReadable = computed(
+const activeResultReadable = computed(
   () =>
     (activeState.value === "ready" || activeState.value === "stale") &&
-    readableViewIdsByTask.value[activeTaskId.value] === activeViewIds.value.join("\u0000")
+    readableDatasetIdsByTask.value[activeTaskId.value] === activeDatasetIds.value.join("\u0000")
 );
 
 const activeResample = computed(() => (activeTask.value ? isResampleTask(activeTask.value) : false));
@@ -203,7 +201,7 @@ function clearTaskResultCache(taskId: string) {
     return next;
   };
   taskDetails.value = withoutTask(taskDetails.value);
-  readableViewIdsByTask.value = withoutTask(readableViewIdsByTask.value);
+  readableDatasetIdsByTask.value = withoutTask(readableDatasetIdsByTask.value);
   lastStatusReadAtByTask.value = withoutTask(lastStatusReadAtByTask.value);
   tasks.value = tasks.value.filter(task => task.task_id !== taskId);
 }
@@ -227,7 +225,7 @@ async function load() {
     tasks.value = [];
     taskDetails.value = {};
     lastStatusReadAtByTask.value = {};
-    readableViewIdsByTask.value = {};
+    readableDatasetIdsByTask.value = {};
     activeTaskId.value = "";
     loadError.value = "";
     loading.value = false;
@@ -238,7 +236,7 @@ async function load() {
     tasks.value = [];
     taskDetails.value = {};
     lastStatusReadAtByTask.value = {};
-    readableViewIdsByTask.value = {};
+    readableDatasetIdsByTask.value = {};
     activeTaskId.value = queryTaskId(route.query.resultTask);
   }
 
@@ -286,14 +284,14 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
     if (!task || task.task_id !== taskId) throw new TaskDetailIdentityError("任务结果身份与请求不一致");
     const state = getTaskResultState(task);
     if (state === "ready") {
-      readableViewIdsByTask.value = {
-        ...readableViewIdsByTask.value,
-        [taskId]: buildTaskResultTabs([task])[0].viewIds.join("\u0000")
+      readableDatasetIdsByTask.value = {
+        ...readableDatasetIdsByTask.value,
+        [taskId]: buildTaskResultTabs([task])[0].datasetIds.join("\u0000")
       };
     } else if (state !== "stale") {
-      const remaining = { ...readableViewIdsByTask.value };
+      const remaining = { ...readableDatasetIdsByTask.value };
       delete remaining[taskId];
-      readableViewIdsByTask.value = remaining;
+      readableDatasetIdsByTask.value = remaining;
     }
     taskDetails.value = { ...taskDetails.value, [taskId]: task };
     if (options.includeInTabs && !tasks.value.some(item => item.task_id === taskId)) {
@@ -353,7 +351,7 @@ async function refreshActiveTask() {
   if (!taskId) return;
   void refreshJobSummary();
   const ownershipVerified = await loadTaskDetail(taskId);
-  if (ownershipVerified && taskId === activeTaskId.value) viewRefreshKey.value += 1;
+  if (ownershipVerified && taskId === activeTaskId.value) resultRefreshKey.value += 1;
 }
 
 /** 切回采集任务页签：只去掉 tab，其余参数（包括本页的 resultTask）保留，切回来还是同一个任务。 */

@@ -17,10 +17,9 @@ export type Tone = "ok" | "warn" | "bad" | "idle";
 
 export type HomeTarget = string | StrategyLink;
 
-/** 数据集与 View 的显示名称，用来把监控、日志里的内部 ID 换成人能读的名字。 */
+/** 数据集的显示名称，用来把监控、日志里的内部 ID 换成人能读的名字。 */
 export interface NameBook {
   datasets: Record<string, string>;
-  views: Record<string, string>;
 }
 
 export function toneOf(status?: string): Tone {
@@ -79,9 +78,9 @@ export function relativeTime(value: string | number | null | undefined, nowMs: n
   return `${Math.floor(diff / 86400)} 天前`;
 }
 
-/** 把文本里的数据集 / View 内部 ID 换成名称（名称未知时保留原 ID）。 */
+/** 把文本里的数据集内部 ID 换成名称（名称未知时保留原 ID）。 */
 export function prettifyIds(text: string, names: NameBook): string {
-  return text.replace(/\b(dataset|view)_[a-z0-9_]+\b/gi, id => names.datasets[id] || names.views[id] || id);
+  return text.replace(/\bdataset_[a-z0-9_]+\b/gi, id => names.datasets[id] || id);
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -142,7 +141,7 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
         key: `${producer}/${item.space_id}/${id}/${item.freq}`,
         datasetId: id,
         stage: STAGE_LABELS[producer] || stage.name || producer,
-        name: names.datasets[id] || names.views[id] || id,
+        name: names.datasets[id] || id,
         freq: item.freq || "",
         lag: behind === null ? "—" : waiting > 0 ? `等待 ${humanizeDuration(behind)}` : "已追平",
         tone,

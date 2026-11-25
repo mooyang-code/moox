@@ -141,6 +141,10 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if item.GetAllowedLatenessSeconds() == 0 {
 		item.AllowedLatenessSeconds = existing.GetAllowedLatenessSeconds()
 	}
+	// maintenance_priority 同样按 0 沿用已有值：只改名称的更新不会把因子结果数据集的维护优先级清掉。
+	if item.GetMaintenancePriority() == 0 {
+		item.MaintenancePriority = existing.GetMaintenancePriority()
+	}
 	status := existing.GetStatus()
 	if candidate := strings.TrimSpace(item.GetStatus()); candidate != "" {
 		if err := validateDatasetStatus(candidate); err != nil {
@@ -243,6 +247,10 @@ func (s *Store) ListDatasets(ctx context.Context, query coremetadata.DatasetQuer
 		where = append(where, "c_freq = ?")
 		args = append(args, freq)
 	}
+	if status := strings.TrimSpace(query.Status); status != "" {
+		where = append(where, "c_status = ?")
+		args = append(args, status)
+	}
 	whereSQL := strings.Join(where, " AND ")
 	return queryPagedMessages(ctx, s.queryDB(ctx),
 		`SELECT c_item_json FROM t_datasets WHERE `+whereSQL+` ORDER BY c_space_id, c_dataset_id`,
@@ -296,158 +304,6 @@ func getDatasetTx(ctx context.Context, tx queryRower, spaceID, datasetID string)
 	`, spaceID, datasetID), func() *pb.Dataset { return &pb.Dataset{} })
 }
 
-func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, error) {
-	raw, err := s.prepareField(ctx, item)
-	if err != nil {
-		return nil, err
-	}
-	if existing, getErr := s.GetField(ctx, item.GetSpaceId(), item.GetFieldId()); getErr == nil {
-		if existing.GetValueType() != item.GetValueType() {
-			return nil, storeerr.Invalidf("field value_type is immutable")
-		}
-	} else if !errors.Is(getErr, sql.ErrNoRows) {
-		return nil, getErr
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_sort_order, c_status, c_item_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_field_id) DO UPDATE SET
-			c_group_id = excluded.c_group_id,
-			c_name = excluded.c_name,
-			c_description = excluded.c_description,
-			c_value_type = excluded.c_value_type,
-			c_sort_order = excluded.c_sort_order,
-			c_status = excluded.c_status,
-			c_item_json = excluded.c_item_json
-	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetSortOrder(), item.GetStatus(), raw)
-	if err != nil {
-		return nil, err
-	}
-	return s.GetField(ctx, item.GetSpaceId(), item.GetFieldId())
-}
-
-func (s *Store) CreateField(ctx context.Context, item *pb.Field) (*pb.Field, error) {
-	raw, err := s.prepareField(ctx, item)
-	if err != nil {
-		return nil, err
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_sort_order, c_status, c_item_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetSortOrder(), item.GetStatus(), raw)
-	if err != nil {
-		return nil, err
-	}
-	return s.GetField(ctx, item.GetSpaceId(), item.GetFieldId())
-}
-
-func (s *Store) UpdateField(ctx context.Context, item *pb.Field) (*pb.Field, error) {
-	raw, err := s.prepareField(ctx, item)
-	if err != nil {
-		return nil, err
-	}
-	if existing, getErr := s.GetField(ctx, item.GetSpaceId(), item.GetFieldId()); getErr != nil {
-		return nil, getErr
-	} else if existing.GetValueType() != item.GetValueType() {
-		return nil, storeerr.Invalidf("field value_type is immutable")
-	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE t_fields SET c_group_id = ?, c_name = ?, c_description = ?, c_value_type = ?,
-			c_sort_order = ?, c_status = ?, c_item_json = ?
-		WHERE c_space_id = ? AND c_field_id = ?
-	`, item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetSortOrder(), item.GetStatus(), raw, item.GetSpaceId(), item.GetFieldId())
-	if err != nil {
-		return nil, err
-	}
-	if affected, err := result.RowsAffected(); err != nil {
-		return nil, err
-	} else if affected != 1 {
-		return nil, sql.ErrNoRows
-	}
-	return s.GetField(ctx, item.GetSpaceId(), item.GetFieldId())
-}
-
-func (s *Store) prepareField(ctx context.Context, item *pb.Field) (string, error) {
-	if item == nil || item.GetSpaceId() == "" || item.GetFieldId() == "" || item.GetName() == "" || item.GetGroupId() == "" {
-		return "", storeerr.Invalidf("space_id, field_id, name and group_id are required")
-	}
-	if _, err := s.GetFieldGroup(ctx, item.GetSpaceId(), item.GetGroupId()); err != nil {
-		return "", err
-	}
-	item.Status = defaultStatus(item.GetStatus())
-	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	return marshal(item)
-}
-
-func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error) {
-	return getMessage(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_fields WHERE c_space_id = ? AND c_field_id = ?`, []any{spaceID, fieldID}, func() *pb.Field { return &pb.Field{} })
-}
-
-func (s *Store) ListFields(ctx context.Context, query coremetadata.FieldQuery) ([]*pb.Field, *pb.PageResult, error) {
-	if query.GroupID != "" && query.UngroupedOnly {
-		return nil, nil, storeerr.Invalidf("group_id and ungrouped_only cannot be used together")
-	}
-	sortColumns := map[string]string{
-		"":           "c_sort_order",
-		"sort_order": "c_sort_order",
-		"field_id":   "c_field_id",
-		"updated_at": "c_mtime",
-	}
-	sortColumn, ok := sortColumns[query.SortBy]
-	if !ok {
-		return nil, nil, storeerr.Invalidf("unsupported field sort %q", query.SortBy)
-	}
-	direction := strings.ToUpper(query.SortOrder)
-	if direction == "" {
-		direction = "ASC"
-	}
-	if direction != "ASC" && direction != "DESC" {
-		return nil, nil, storeerr.Invalidf("unsupported field sort order %q", query.SortOrder)
-	}
-
-	where := []string{"1 = 1"}
-	args := make([]any, 0, 12)
-	if query.SpaceID != "" {
-		where = append(where, "c_space_id = ?")
-		args = append(args, query.SpaceID)
-	}
-	if query.UngroupedOnly {
-		where = append(where, "COALESCE(c_group_id, '') = ''")
-	} else if query.GroupID != "" && query.IncludeDescendants {
-		where = append(where, "c_group_id IN (SELECT c_group_id FROM t_field_groups WHERE c_space_id = ? AND (c_group_id = ? OR c_parent_group_id = ?))")
-		args = append(args, query.SpaceID, query.GroupID, query.GroupID)
-	} else if query.GroupID != "" {
-		where = append(where, "c_group_id = ?")
-		args = append(args, query.GroupID)
-	}
-	if valueType := valueTypeFilter(query.ValueType); valueType != "" {
-		where = append(where, "c_value_type = ?")
-		args = append(args, valueType)
-	}
-	if query.Status != "" {
-		where = append(where, "c_status = ?")
-		args = append(args, query.Status)
-	}
-	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
-		pattern := "%" + escapeLikePattern(keyword) + "%"
-		where = append(where, `(LOWER(c_field_id) LIKE ? ESCAPE '\' OR LOWER(c_name) LIKE ? ESCAPE '\' OR LOWER(c_description) LIKE ? ESCAPE '\')`)
-		args = append(args, pattern, pattern, pattern)
-	}
-
-	whereSQL := strings.Join(where, " AND ")
-	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_item_json FROM t_fields WHERE `+whereSQL+` ORDER BY `+sortColumn+` `+direction+`, c_field_id `+direction,
-		`SELECT COUNT(1) FROM t_fields WHERE `+whereSQL,
-		args, query.Page, func() *pb.Field { return &pb.Field{} },
-	)
-}
-
-func escapeLikePattern(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `%`, `\%`)
-	return strings.ReplaceAll(value, `_`, `\_`)
-}
-
 func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -463,7 +319,7 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 	return item, nil
 }
 
-// upsertDatasetColumnTx 在事务内写入一列。View 的列由数据集列推出，不用同步。
+// upsertDatasetColumnTx 在事务内写入一列。已有的列只能改显示名、分组、状态、属性、必填与别名，类型不能改。
 func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) (*pb.DatasetColumn, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return nil, storeerr.Invalidf("space_id, dataset_id and column_name are required")
@@ -472,34 +328,42 @@ func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColu
 		return nil, storeerr.Invalidf("dataset column value_type must be declared")
 	}
 	item.Status = defaultStatus(item.GetStatus())
+	if item.GetStatus() != "active" && item.GetStatus() != "disabled" {
+		return nil, storeerr.Invalidf("数据集列的状态只能是 active 或 disabled：%q", item.GetStatus())
+	}
+	existing, getErr := getMessage(ctx, tx, `SELECT c_item_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
+		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch {
+	case getErr == nil:
+		if existing.GetValueType() != item.GetValueType() {
+			return nil, storeerr.Invalidf("数据集列 %s 的类型不能修改", item.GetColumnName())
+		}
+		item.CreatedAt = existing.GetCreatedAt()
+	case errors.Is(getErr, sql.ErrNoRows):
+		item.CreatedAt = now
+	default:
+		return nil, getErr
+	}
+	item.UpdatedAt = now
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
 	}
-	existing, getErr := getMessage(ctx, tx, `SELECT c_item_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
-		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
-	if getErr == nil {
-		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
-			return nil, storeerr.Invalidf("dataset column identity and value_type are immutable")
-		}
-	} else if !errors.Is(getErr, sql.ErrNoRows) {
-		return nil, getErr
-	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_status, c_item_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_status, c_item_json)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id, c_column_name) DO UPDATE SET
-			c_origin_type = excluded.c_origin_type,
-			c_origin_id = excluded.c_origin_id,
 			c_status = excluded.c_status,
 			c_item_json = excluded.c_item_json
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), item.GetStatus(), raw)
+	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}
 	return item, nil
 }
 
+// ListDatasetColumns 按建列顺序列出数据集的列（含停用的列）：View 的列就是其中启用的那些，顺序也按它。
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	const where = `
 		FROM t_dataset_columns
@@ -507,12 +371,8 @@ func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetI
 		  AND (? = '' OR c_dataset_id = ?)`
 	args := []any{spaceID, spaceID, datasetID, datasetID}
 	return queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_item_json `+where+` ORDER BY c_space_id, c_dataset_id, c_column_name`,
+		`SELECT c_item_json `+where+` ORDER BY c_space_id, c_dataset_id, c_id`,
 		`SELECT COUNT(1) `+where,
 		args, page, func() *pb.DatasetColumn { return &pb.DatasetColumn{} },
 	)
-}
-
-func (s *Store) ListViewsByDataset(ctx context.Context, spaceID string, datasetID string) ([]*pb.View, error) {
-	return queryMessages(ctx, s.queryDB(ctx), `SELECT c_item_json FROM t_views WHERE (? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND c_status = 'active' ORDER BY c_space_id, c_view_id`, []any{spaceID, spaceID, datasetID, datasetID}, func() *pb.View { return &pb.View{} })
 }

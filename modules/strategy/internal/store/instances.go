@@ -20,7 +20,7 @@ const (
 	HealthDegraded = "degraded"
 )
 
-// Instance 把定义绑定到一个空间、一个或两个因子任务和可选的组合账户。因子任务在创建时写定、不能修改；读取的 View 是任务结果数据集的默认 View。
+// Instance 把定义绑定到一个空间、一个或两个因子任务和可选的组合账户。因子任务在创建时写定、不能修改；读取的是任务结果数据集的 View。
 type Instance struct {
 	InstanceID string
 	StrategyID string
@@ -367,10 +367,10 @@ func (s *Store) ListInstances(ctx context.Context, spaceID string, enabled *bool
 	return withTasks(s.db.WithContext(ctx), rows)
 }
 
-// EnabledInstancesByView 返回事件路由到某个 View 的启用实例：实例读取的是关联因子任务的结果 View，所以由 View ID
-// 推出任务 ID 再按任务查；不是因子结果 View 的 ID 没有实例。
-func (s *Store) EnabledInstancesByView(ctx context.Context, spaceID, viewID string) ([]Instance, error) {
-	suffix, err := factorname.ParseResultViewID(viewID)
+// EnabledInstancesByDataset 返回事件路由到某个数据集的启用实例：实例读取的是关联因子任务的结果数据集，所以由数据集 ID
+// 推出任务 ID 再按任务查；不是因子结果数据集的 ID 没有实例。
+func (s *Store) EnabledInstancesByDataset(ctx context.Context, spaceID, datasetID string) ([]Instance, error) {
+	suffix, err := factorname.ParseResultDatasetID(datasetID)
 	if err != nil {
 		return []Instance{}, nil
 	}

@@ -22,7 +22,7 @@ func TestBackfillExecutorFollowsTheTaskOrTheSpaceDefault(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot-scf", TaskName: "spot-scf", DataType: domain.DataTypeKline, Ingest: domain.IngestSCF, Enabled: true,
-		CollectParams: `{"target_dataset_id":"ds_scf","frequency":"1m"}`, ResultDatasetID: "ds_scf", ResultViewID: "view_ds_scf",
+		CollectParams: `{"target_dataset_id":"ds_scf","frequency":"1m"}`, ResultDatasetID: "ds_scf",
 	}))
 	executor := backfillExecutor(db.Tasks(), markets.DefaultIngest)
 

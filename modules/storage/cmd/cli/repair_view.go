@@ -26,10 +26,10 @@ const defaultRepairTimeout = 10 * time.Minute
 // restoreStorageViewCommand 是 storage-view 被停掉之后恢复它的命令，报错与提示里原样给出。
 const restoreStorageViewCommand = "moox-cli setup start-component --host <存储机> --component storage-view --yes"
 
-// repairViewOptions 是 repair-view 的参数：重建指定 View。
+// repairViewOptions 是 repair-view 的参数：重建指定数据集的查询索引。
 type repairViewOptions struct {
 	spaceID     string
-	viewID      string
+	datasetID   string
 	storageConf string
 	viewConf    string
 	timeout     time.Duration
@@ -40,7 +40,7 @@ type repairViewOptions struct {
 
 type repairViewSummary struct {
 	SpaceID            string   `json:"space_id"`
-	ViewID             string   `json:"view_id"`
+	DatasetID          string   `json:"dataset_id"`
 	DBPath             string   `json:"db_path"`
 	IndexID            string   `json:"index_id"`
 	ViewIndexesRemoved []string `json:"view_indexes_removed,omitempty"`
@@ -74,18 +74,18 @@ func runSystemctlUser(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// runRepairView 重建指定 View：停掉 storage-view、删除 View 的索引文件，恢复后由维护流程从 Primary 重新建索引并跟随变更日志。
+// runRepairView 重建指定数据集的查询索引：停掉 storage-view、删除索引文件，恢复后由维护流程从 Primary 重新建索引并跟随变更日志。
 // View 的已建状态只在索引文件里，元数据不用改。
 func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs := flag.NewFlagSet("repair-view", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	opts := repairViewOptions{timeout: defaultRepairTimeout, restart: true}
-	fs.StringVar(&opts.spaceID, "space-id", "", "View 所在空间 ID")
-	fs.StringVar(&opts.viewID, "view-id", "", "View ID")
+	fs.StringVar(&opts.spaceID, "space-id", "", "数据集所在空间 ID")
+	fs.StringVar(&opts.datasetID, "dataset-id", "", "数据集 ID")
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultStorageConfigPath(), "storage-primary 的 storage.yaml 路径（元数据库在这里）")
 	fs.StringVar(&opts.viewConf, "view-conf", "", "storage-view 的 storage.yaml 路径（View 索引目录在这里）；不给时用 --storage-conf")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "整个操作的超时")
-	fs.BoolVar(&opts.yes, "yes", false, "确认删除 View 的索引并重建")
+	fs.BoolVar(&opts.yes, "yes", false, "确认删除数据集的查询索引并重建")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "只查看 View，不停服务、不改状态")
 	fs.BoolVar(&opts.restart, "restart", opts.restart, "完成后恢复 storage-view")
 	if err := fs.Parse(args); err != nil {
@@ -107,8 +107,8 @@ func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func validateRepairViewOptions(opts repairViewOptions) error {
-	if strings.TrimSpace(opts.spaceID) == "" || strings.TrimSpace(opts.viewID) == "" {
-		return errors.New("必须指定 --space-id 与 --view-id")
+	if strings.TrimSpace(opts.spaceID) == "" || strings.TrimSpace(opts.datasetID) == "" {
+		return errors.New("必须指定 --space-id 与 --dataset-id")
 	}
 	if opts.timeout <= 0 {
 		return errors.New("--timeout 必须为正数")
@@ -123,7 +123,7 @@ func writeRepairViewUsage(fs *flag.FlagSet, stdout io.Writer) {
 	if stdout == nil {
 		stdout = io.Discard
 	}
-	fmt.Fprintln(stdout, "用法: moox-cli storage repair-view --space-id <space> --view-id <view> --yes")
+	fmt.Fprintln(stdout, "用法: moox-cli storage repair-view --space-id <space> --dataset-id <dataset> --yes")
 	fmt.Fprintln(stdout, "操作: 停掉 storage-view、删除 View 的索引文件，恢复后从 Primary 重新建索引")
 	fs.SetOutput(stdout)
 	fs.PrintDefaults()
@@ -143,18 +143,18 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 		viewIndexRoot = view.Devices.ViewIndexRoot
 	}
 	dbPath := metadataDBPath(storage)
-	engine, err := inspectRepairView(ctx, dbPath, opts.spaceID, opts.viewID)
+	engine, err := inspectRepairDataset(ctx, dbPath, opts.spaceID, opts.datasetID)
 	if err != nil {
 		return err
 	}
-	indexID := viewindex.ViewIndexID(opts.spaceID, opts.viewID)
+	indexID := viewindex.IndexID(opts.spaceID, opts.datasetID)
 	summary := repairViewSummary{
-		SpaceID:  opts.spaceID,
-		ViewID:   opts.viewID,
-		DBPath:   dbPath,
-		IndexID:  indexID,
-		DryRun:   opts.dryRun,
-		Warnings: []string{"删除索引后 View 不可读，直到从 Primary 重新建完；记录型 View 重建后为空，只跟随新写入"},
+		SpaceID:   opts.spaceID,
+		DatasetID: opts.datasetID,
+		DBPath:    dbPath,
+		IndexID:   indexID,
+		DryRun:    opts.dryRun,
+		Warnings:  []string{"删除索引后 View 不可读，直到从 Primary 重新建完；记录型 View 重建后为空，只跟随新写入"},
 	}
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "repair-view", Status: "dry_run", Summary: summary})
@@ -193,8 +193,8 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	return writeOperationResult(stdout, operationResult{Module: "storage", Action: "repair-view", Status: "ok", Summary: summary})
 }
 
-// inspectRepairView 确认 View 存在并返回它的引擎。
-func inspectRepairView(ctx context.Context, dbPath, spaceID, viewID string) (string, error) {
+// inspectRepairDataset 确认数据集存在并返回它查询索引的引擎：时序用 DuckDB，记录用 Bleve。
+func inspectRepairDataset(ctx context.Context, dbPath, spaceID, datasetID string) (string, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return "", fmt.Errorf("metadata DB %s: %w", dbPath, err)
 	}
@@ -203,18 +203,18 @@ func inspectRepairView(ctx context.Context, dbPath, spaceID, viewID string) (str
 		return "", err
 	}
 	defer db.Close()
-	var engine string
-	err = db.QueryRowContext(ctx, `SELECT c_engine FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&engine)
+	var kind string
+	err = db.QueryRowContext(ctx, `SELECT c_data_kind FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID).Scan(&kind)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("View %s/%s 不存在", spaceID, viewID)
+		return "", fmt.Errorf("数据集 %s/%s 不存在", spaceID, datasetID)
 	}
 	if err != nil {
 		return "", err
 	}
-	if engine == "" {
-		engine = "duckdb"
+	if kind == "record" {
+		return "bleve", nil
 	}
-	return engine, nil
+	return "duckdb", nil
 }
 
 func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, error) {
@@ -226,7 +226,7 @@ func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, 
 		if id == "" {
 			continue
 		}
-		if _, err := viewindex.ParseViewIndexID(id); err != nil {
+		if _, err := viewindex.ParseIndexID(id); err != nil {
 			return nil, fmt.Errorf("invalid View index ID %q: %w", id, err)
 		}
 		seen[id] = struct{}{}

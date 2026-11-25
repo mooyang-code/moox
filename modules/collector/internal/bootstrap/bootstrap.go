@@ -213,14 +213,12 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 				// provisioned by resample.Preparer after it has resolved the source
 				// Dataset. The generic result manager must not claim that Dataset as a
 				// raw collection result.
-				ids = collectorresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
+				ids = collectorresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID)
 			} else {
 				if len(task.TagIDs) == 0 {
 					return fmt.Errorf("task %s/%s has no bound tags", task.SpaceID, task.TaskID)
 				}
-				logicalIDs := collectorresult.ResultIDsForTask(task.SpaceID, task.TaskID, task.DataType, params.Frequency)
 				ids, err = manager.Ensure(ctx, task.SpaceID, task.TaskID, task.DataType, "", collectorresult.Config{
-					ViewID:       firstNonEmptyResultID(task.ResultViewID, logicalIDs.ViewID),
 					Name:         task.TaskName,
 					Description:  task.Description,
 					Frequency:    taskResultFrequency(*params),
@@ -242,11 +240,11 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 	return nil
 }
 
-// persistTaskResultIDs records the result identities on the task row and in
+// persistTaskResultIDs records the result dataset identity on the task row and in
 // its collect params when either differs from what is stored.
 func persistTaskResultIDs(ctx context.Context, repo *store.TaskRepository, task *domain.CollectionTask, ids collectorresult.IDs) error {
-	needsUpdate := task.ResultDatasetID != ids.DatasetID || task.ResultViewID != ids.ViewID
-	task.ResultDatasetID, task.ResultViewID = ids.DatasetID, ids.ViewID
+	needsUpdate := task.ResultDatasetID != ids.DatasetID
+	task.ResultDatasetID = ids.DatasetID
 	rawParams := map[string]any{}
 	if err := json.Unmarshal([]byte(task.CollectParams), &rawParams); err != nil {
 		return fmt.Errorf("decode task %s/%s collect params: %w", task.SpaceID, task.TaskID, err)
@@ -267,15 +265,6 @@ func persistTaskResultIDs(ctx context.Context, repo *store.TaskRepository, task 
 		return fmt.Errorf("persist task %s/%s result: %w", task.SpaceID, task.TaskID, err)
 	}
 	return nil
-}
-
-func firstNonEmptyResultID(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func taskResultFrequency(params domain.CollectParams) string {

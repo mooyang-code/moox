@@ -11,8 +11,8 @@ import (
 
 // A 股日线索引统计的行键不是 UTC 零点（例如按上海零点写行）：提交回放时就报出，而不是规整后通过、执行时每根都缺数据。
 func TestCoverageBoundsRejectsNonDateKeyStockRows(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: shanghaiMidnight(t, 2026, 9, 1), IndexedTo: shanghaiMidnight(t, 2026, 10, 9), SeriesBars: 5000}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: shanghaiMidnight(t, 2026, 9, 1), IndexedTo: shanghaiMidnight(t, 2026, 10, 9), SeriesBars: 5000}
 	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "不是 UTC 零点") {
 		t.Fatalf("上海零点的行键应报错：%v", err)
 	}
@@ -24,8 +24,8 @@ func TestCoverageBoundsRejectsNonDateKeyStockRows(t *testing.T) {
 // 日历末日只有在当前时间已过日历、并且索引里确有之后的数据时才算写完；当前时间还在日历之内时，日历之外的行是误写的
 // 未来数据：最晚一根夹到已闭合的最后一根，不算超出日历。
 func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 8), SeriesBars: 5000}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 8), SeriesBars: 5000}
 	inside := time.Date(2027, 12, 31, 10, 0, 0, 0, shanghai(t))
 	bounds, err := CoverageBounds(view, resolved, inside)
 	if err != nil || bounds.ToClosed || bounds.Beyond != 0 || !bounds.To.Equal(stockDay(t, 2027, 12, 30)) {
@@ -44,14 +44,14 @@ func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
 // 当前时间还在日历之内，索引里一行误写的远期数据：不报“数据超出日历”，回放也不延伸到还没发生的 bar。
 func TestFutureRowsAreClampedToNow(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, shanghai(t))
-	stock := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 6, 1), SeriesBars: 100}
+	stock := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 6, 1), SeriesBars: 100}
 	end, err := ReplayWindow(stock, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2028, 1, 1), now)
 	if err != nil || !end.Equal(stockDay(t, 2026, 10, 8)) {
 		t.Fatalf("终点应截到 10-08（已闭合的最后一根）之前：%s err=%v", end, err)
 	}
-	crypto := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar}
-	future := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart.Add(48 * time.Hour), SeriesBars: 5000}
+	crypto := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "dataset_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar}
+	future := ViewInfo{DatasetID: "dataset_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart.Add(48 * time.Hour), SeriesBars: 5000}
 	bounds, err := CoverageBounds(future, crypto, barStart.Add(30*time.Minute))
 	if err != nil || !bounds.To.Equal(barStart.Add(-time.Hour)) {
 		t.Fatalf("crypto 的最晚一根也夹到已闭合的最后一根：%+v err=%v", bounds, err)
@@ -62,8 +62,8 @@ func TestFutureRowsAreClampedToNow(t *testing.T) {
 // 估得偏早；扣完一根都不剩时报历史不足。
 func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
 	now := time.Date(2028, 1, 20, 0, 0, 0, 0, time.UTC)
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 4), SeriesBars: 10}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 4), SeriesBars: 10}
 	// 日历之外最多 4 个交易日（01-01 至 01-04），日历之内只能确定保留 6 根：覆盖起点是末日往前 5 个交易日。
 	want, err := HistoryStart("cn_stock", "1d", stockDay(t, 2027, 12, 31), 6)
 	if err != nil {
@@ -84,8 +84,8 @@ func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
 
 // A 股的回放报错按上海日期写时间，不写成前一日 16:00 UTC。
 func TestStockReplayErrorsUseShanghaiDates(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
+	view := ViewInfo{DatasetID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
 	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2026, 10, 9), testNow)
 	var early *EarlyStartError
 	if !errors.As(err, &early) || !strings.Contains(err.Error(), "2026-09-07（上海日期）") || strings.Contains(err.Error(), "T16:00:00Z") {
@@ -107,7 +107,7 @@ type generationClient struct {
 
 func (c *generationClient) QueryRows(context.Context, string, Query) ([]Row, uint64, error) {
 	if c.stale {
-		return nil, 0, &staleError{message: "View view_factor_1h 在读取期间有新的写入"}
+		return nil, 0, &staleError{message: "View dataset_factor_1h 在读取期间有新的写入"}
 	}
 	return []Row{{SubjectID: "BTC-USDT", DataTime: barStart, Values: map[string]float64{"close": 1}}}, 1, nil
 }
@@ -116,21 +116,21 @@ func (c *generationClient) ViewGeneration(context.Context, string, string) (stri
 	c.generations++
 	if c.generationErrs > 0 {
 		c.generationErrs--
-		return "", transport("读取 View view_factor_1h", errors.New("connection refused"))
+		return "", transport("读取 View dataset_factor_1h", errors.New("connection refused"))
 	}
 	return "idx_a@b1", nil
 }
 
-func (c *generationClient) GetView(_ context.Context, _, viewID string) (ViewInfo, error) {
+func (c *generationClient) GetView(_ context.Context, _, datasetID string) (ViewInfo, error) {
 	c.views++
-	return ViewInfo{ViewID: viewID, ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, nil
+	return ViewInfo{DatasetID: datasetID, ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, nil
 }
 
 // 写入冲突退避前先问 Abort：回放被取消时立即放弃，不再退避重读；ctx 结束时返回 ctx 的错误。
 func TestRangeLoaderAbortsDuringBackoff(t *testing.T) {
 	aborted := errors.New("回放已取消")
 	client := &generationClient{fakeClient: newFakeClient("spot"), stale: true}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{ViewID: "view_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}, Abort: func(context.Context) error { return aborted }}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}, Abort: func(context.Context) error { return aborted }}
 	started := time.Now()
 	if _, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour)); !errors.Is(err, aborted) || time.Since(started) > time.Second {
 		t.Fatalf("取消后应立即放弃：%v（%s）", err, time.Since(started))
@@ -149,7 +149,7 @@ func TestGenerationCheckIsLightAndRetriedSeparately(t *testing.T) {
 	rangeRetryBackoff = time.Millisecond
 	t.Cleanup(func() { rangeRetryBackoff = backoff })
 	client := &generationClient{fakeClient: newFakeClient("spot"), generationErrs: 2}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{ViewID: "view_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: ViewInfo{DatasetID: "dataset_factor_1h", ActiveIndexID: "idx_a", Generation: "idx_a@b1"}, Subjects: []Subject{subject("BTC-USDT", true)}}
 	rows, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	if err != nil || len(rows.Bars[barStart.Unix()]) != 1 || client.generations != 3 || client.views != 0 {
 		t.Fatalf("复核应重试后通过、不读完整 View：rows=%v generations=%d views=%d err=%v", rows.Bars, client.generations, client.views, err)
@@ -165,11 +165,11 @@ func TestDurationText(t *testing.T) {
 	}
 }
 
-// View 被删除时报 ErrViewNotFound，说明不带“请重新绑定实例”（回放与启用也用它）。
+// 数据集被删除（View 随之不存在）时报 ErrViewNotFound，说明不带“请重新绑定实例”（回放与启用也用它）。
 func TestViewNotFoundIsNeutral(t *testing.T) {
 	client := &RPCClient{Metadata: &metadataStub{}}
-	_, err := client.GetView(context.Background(), "space", "view_gone")
-	if !errors.Is(err, ErrViewNotFound) || err.Error() != "View view_gone 已不存在" {
+	_, err := client.GetView(context.Background(), "space", "dataset_gone")
+	if !errors.Is(err, ErrViewNotFound) || err.Error() != "数据集 dataset_gone 已不存在" {
 		t.Fatalf("View 被删除应报 ErrViewNotFound：%v", err)
 	}
 }

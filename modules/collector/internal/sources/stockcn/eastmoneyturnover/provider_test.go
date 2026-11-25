@@ -133,5 +133,5 @@ func TestFetchFieldsFailsOnBadResponse(t *testing.T) {
 func TestFieldSpecs(t *testing.T) {
 	specs := New(Config{}).FieldSpecs()
 	require.Len(t, specs, 1)
-	assert.Equal(t, marketdata.FieldSpec{ID: "turnover_rate", Name: "换手率", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1d"}}, specs[0])
+	assert.Equal(t, marketdata.FieldSpec{ID: "turnover_rate", Name: "换手率", Group: marketdata.GroupTrading, Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1d"}}, specs[0])
 }

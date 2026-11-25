@@ -55,7 +55,7 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 			case <-time.After(100 * time.Millisecond):
 			}
 			session := "session-enabled"
-			if err := h.service.Store.EnableInstance(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
+			if err := h.service.Store.EnableInstance(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"dataset_id":"dataset_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
 				t.Fatal(err)
 			}
 			unlockThird()

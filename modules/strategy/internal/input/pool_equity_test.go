@@ -39,9 +39,9 @@ func TestResolvePoolChecksFundingColumn(t *testing.T) {
 	if _, err := ResolvePool(context.Background(), client, "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, funded), members); err == nil || !strings.Contains(err.Error(), "没有资金费列 funding_rate") {
 		t.Fatalf("永续 View 没有资金费列应拒绝：%v", err)
 	}
-	swap := client.views["view_factor_swap1h"]
+	swap := client.views["dataset_factor_swap1h"]
 	swap.Columns = append(append([]ViewColumn(nil), swap.Columns...), plainColumn("funding_rate"))
-	client.views["view_factor_swap1h"] = swap
+	client.views["dataset_factor_swap1h"] = swap
 	if _, err := ResolvePool(context.Background(), client, "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, funded), members); err != nil {
 		t.Fatalf("永续 View 有资金费列（现货 View 没有）时可以启用：%v", err)
 	}

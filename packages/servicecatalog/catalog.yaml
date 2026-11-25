@@ -745,7 +745,7 @@ components:
         console_name: storage
         timeout_ms: 5000
         max_body_bytes: 33554432
-        # 写方法的机器调用方按各模块实际的调用点放行：Collector 建改删数据集、建删浏览 View；factor-mgr 建删结果数据集、列与默认 View。
+        # 写方法的机器调用方按各模块实际的调用点放行：Collector 建改删数据集与列；factor-mgr 建删结果数据集与列（每个数据集的查询索引由 storage-view 随数据集自动建删）。
         methods:
           - name: CreateSpace
           - name: UpdateSpace
@@ -754,20 +754,6 @@ components:
             read_only: true
             callers: [collector, factor-mgr, monitor, strategy]
           - name: ListSpaces
-            read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
-          - name: CreateView
-            callers: [collector, factor-mgr]
-          - name: UpdateView
-          - name: DeleteView
-            callers: [collector, factor-mgr]
-          - name: GetView
-            read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
-          - name: ListViews
-            read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
-          - name: ListViewColumns
             read_only: true
             callers: [collector, factor-mgr, monitor, strategy]
           - name: CreateDataSource
@@ -827,24 +813,6 @@ components:
           - name: ListDatasetSubjects
             read_only: true
             callers: [collector, factor-engine, factor-mgr, monitor, strategy]
-          - name: CreateFieldGroup
-          - name: UpdateFieldGroup
-          - name: GetFieldGroup
-            read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
-          - name: ListFieldGroups
-            read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
-          - name: CreateField
-          - name: UpdateField
-          - name: GetField
-            read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
-          - name: ListFields
-            read_only: true
-            callers: [collector, factor-mgr, monitor, strategy]
-          - name: BatchUpdateFields
-          - name: DeleteFieldGroup
           - name: UpsertDatasetColumn
             callers: [collector, factor-mgr]
           - name: ListDatasetColumns

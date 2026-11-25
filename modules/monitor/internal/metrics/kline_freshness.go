@@ -38,7 +38,6 @@ type KlineFreshnessRule struct {
 	Enabled    bool
 	SpaceID    string
 	DatasetID  string
-	ViewID     string
 	Frequency  string
 	MarketID   string
 	CalendarID string
@@ -181,7 +180,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		if !rule.Enabled || rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {
 			continue
 		}
-		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, ViewID: rule.ViewID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
+		filters = append(filters, ViewMetricScope{SpaceID: rule.SpaceID, DatasetID: rule.DatasetID, Frequency: rule.Frequency})
 	}
 	summaries, err := e.loadViewSummaries(ctx, filters, now)
 	if err != nil {
@@ -192,7 +191,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 	if inventoryEvaluated {
 		state := e.inventory.State(now)
 		inventoryReport := KlineFreshnessReport{
-			Rule:    KlineFreshnessRule{SpaceID: events.SystemSpaceID, ViewID: "task-result-inventory"},
+			Rule:    KlineFreshnessRule{SpaceID: events.SystemSpaceID, DatasetID: "task-result-inventory"},
 			CheckID: TaskResultInventoryCheckID, Success: true, Reason: "inventory_fresh",
 			Diagnostic: fmt.Sprintf("cache_age_seconds=%.0f", state.Age.Seconds()),
 		}
@@ -456,7 +455,7 @@ func subjectProductSuffix(subjectID string) string {
 }
 
 func KlineFreshnessCheckID(rule KlineFreshnessRule) string {
-	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.ViewID), strings.TrimSpace(rule.Frequency))
+	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.DatasetID), strings.TrimSpace(rule.Frequency))
 }
 
 func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, policy report.RealtimeTimeSeriesPolicy) []KlineFreshnessRule {
@@ -488,7 +487,7 @@ func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, poli
 func inventoryRule(entry TaskResultInventoryEntry, enabled bool, policy report.RealtimeTimeSeriesPolicy) KlineFreshnessRule {
 	lateness := max(policy.Lateness(entry.SpaceID, entry.DatasetID, entry.Frequency), time.Duration(entry.AllowedLatenessSeconds)*time.Second)
 	return KlineFreshnessRule{
-		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID, ViewID: entry.ViewID,
+		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID,
 		Frequency: entry.Frequency, MarketID: entry.MarketID, CalendarID: entry.CalendarID,
 		Timezone: entry.Timezone, Sessions: append([]string(nil), entry.Sessions...), Lateness: lateness,
 		ResultStatus: entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
@@ -498,7 +497,7 @@ func inventoryRule(entry TaskResultInventoryEntry, enabled bool, policy report.R
 }
 
 type viewSummaryIdentity struct {
-	SpaceID, ViewID, DatasetID, Frequency string
+	SpaceID, DatasetID, Frequency string
 }
 
 type laggingSubject struct {
@@ -607,11 +606,11 @@ func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIden
 		return viewSummaryIdentity{}, "", err
 	}
 	identity := viewSummaryIdentity{
-		SpaceID: strings.TrimSpace(labels["space_id"]), ViewID: strings.TrimSpace(labels["view_id"]),
+		SpaceID:   strings.TrimSpace(labels["space_id"]),
 		DatasetID: strings.TrimSpace(labels["dataset_id"]), Frequency: strings.TrimSpace(labels["freq"]),
 	}
 	subjectID := strings.TrimSpace(labels["subject_id"])
-	if identity.SpaceID == "" || identity.ViewID == "" || identity.DatasetID == "" || identity.Frequency == "" || (withSubject && subjectID == "") {
+	if identity.SpaceID == "" || identity.DatasetID == "" || identity.Frequency == "" || (withSubject && subjectID == "") {
 		return viewSummaryIdentity{}, "", fmt.Errorf("required view summary label is empty")
 	}
 	return identity, subjectID, nil
@@ -837,8 +836,7 @@ func klineUnixTime(value float64) (time.Time, error) {
 }
 
 func viewRuleMatches(rule KlineFreshnessRule, identity viewSummaryIdentity) bool {
-	return strings.TrimSpace(rule.ViewID) == identity.ViewID && strings.TrimSpace(rule.SpaceID) == identity.SpaceID &&
-		(strings.TrimSpace(rule.DatasetID) == "" || strings.TrimSpace(rule.DatasetID) == identity.DatasetID) &&
+	return strings.TrimSpace(rule.DatasetID) == identity.DatasetID && strings.TrimSpace(rule.SpaceID) == identity.SpaceID &&
 		canonicalRuleFrequency(rule.Frequency) == identity.Frequency
 }
 

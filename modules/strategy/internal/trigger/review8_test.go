@@ -21,7 +21,7 @@ func corrupt(t *testing.T, h *harness, sessionJSON string) {
 func stockEvent(eventID string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
 	message := &eventpb.EventMessage{EventId: eventID, EventName: "event.storage.view.data_ready", SpaceId: "space"}
 	// A 股日线的周期时间是日期键：交易日期的 UTC 零点。
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	return message, payload
 }
 

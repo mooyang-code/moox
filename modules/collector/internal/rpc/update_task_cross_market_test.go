@@ -18,7 +18,7 @@ func TestUpdateTaskRejectsCrossMarketTagChange(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "single", TaskName: "single", DataType: "kline", Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"bars_single","frequency":"1m"}`, ResultDatasetID: "bars_single", ResultViewID: "view_single",
+		CollectParams: `{"target_dataset_id":"bars_single","frequency":"1m"}`, ResultDatasetID: "bars_single",
 	}))
 	service := &Service{taskRepo: db.Tasks(), datasetSrc: tagValidationSource{validationDatasetSource: validationDatasetSource{
 		"bars_single": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},
@@ -51,7 +51,7 @@ func TestUpdateTaskRejectsAnIngestChange(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "spot", TaskName: "spot", DataType: "kline", Ingest: domain.IngestStreaming, Enabled: true, TagIDs: []string{"binance_spot"},
-		CollectParams: `{"target_dataset_id":"bars_spot","frequency":"1m"}`, ResultDatasetID: "bars_spot", ResultViewID: "view_spot",
+		CollectParams: `{"target_dataset_id":"bars_spot","frequency":"1m"}`, ResultDatasetID: "bars_spot",
 	}))
 	service := &Service{taskRepo: db.Tasks(), datasetSrc: tagValidationSource{validationDatasetSource: validationDatasetSource{
 		"bars_spot": storagesource.DatasetInfo{SubjectTags: []string{"binance_spot"}},

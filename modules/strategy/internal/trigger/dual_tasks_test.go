@@ -41,16 +41,16 @@ type ucStorage struct {
 	queries   []input.Query
 }
 
-func (s *ucStorage) GetView(_ context.Context, _, viewID string) (input.ViewInfo, error) {
-	view, ok := s.views[viewID]
+func (s *ucStorage) GetView(_ context.Context, _, datasetID string) (input.ViewInfo, error) {
+	view, ok := s.views[datasetID]
 	if !ok {
-		return input.ViewInfo{}, fmt.Errorf("View %s 不存在", viewID)
+		return input.ViewInfo{}, fmt.Errorf("View %s 不存在", datasetID)
 	}
 	return view, nil
 }
 
-func (s *ucStorage) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	view, err := s.GetView(ctx, spaceID, viewID)
+func (s *ucStorage) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
+	view, err := s.GetView(ctx, spaceID, datasetID)
 	return view.Generation, err
 }
 
@@ -178,7 +178,7 @@ func ucState(status string, failedSubjects []string) *factorpb.FactorPeriodState
 	return &factorpb.FactorPeriodState{MemberKey: "f", MemberKind: "fixed", FactorId: "f", Status: status, DefinitionHash: "h1", FailedSubjects: failedSubjects}
 }
 
-func ucEvent(viewID string, universe []string, state *factorpb.FactorPeriodState) *storagepb.ViewDataReady {
+func ucEvent(datasetID string, universe []string, state *factorpb.FactorPeriodState) *storagepb.ViewDataReady {
 	raw, err := proto.Marshal(&factorpb.PeriodDetail{Factors: []*factorpb.FactorPeriodState{state}})
 	if err != nil {
 		panic(err)
@@ -190,7 +190,7 @@ func ucEvent(viewID string, universe []string, state *factorpb.FactorPeriodState
 	if universe == nil {
 		universe = []string{}
 	}
-	return &storagepb.ViewDataReady{ViewId: viewID, Frequency: "1h", PeriodTime: ucBar.Unix(), Status: status, UniverseSubjectIds: universe, DetailType: readiness.PeriodDetailType, Detail: raw}
+	return &storagepb.ViewDataReady{DatasetId: datasetID, Frequency: "1h", PeriodTime: ucBar.Unix(), Status: status, UniverseSubjectIds: universe, DetailType: readiness.PeriodDetailType, Detail: raw}
 }
 
 // build 生成 Storage 替身、任务与各市场的就绪事件。
@@ -201,8 +201,8 @@ func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagep
 		tagMarket: map[string]string{"binance_spot": "spot", "binance_swap": "swap"}}
 	addView := func(task, dataset, source string, tagIDs []string) {
 		suffix := strings.TrimPrefix(task, "ftask_")
-		view := "view_factor_" + suffix
-		client.views[view] = input.ViewInfo{ViewID: view, DatasetID: dataset, Frequency: "1h", Status: "active", ActiveIndexID: "idx", Columns: ucColumns()}
+		view := "dataset_factor_" + suffix
+		client.views[view] = input.ViewInfo{DatasetID: view, Frequency: "1h", Status: "active", ActiveIndexID: "idx", Columns: ucColumns()}
 		client.datasets[dataset] = input.DatasetInfo{DatasetID: dataset, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{"source_dataset_id": source}, SubjectTags: tagIDs}
 		client.datasets[source] = input.DatasetInfo{DatasetID: source, Status: "active", Frequency: "1h", Retention: "720h", Attributes: map[string]string{}, SubjectTags: tagIDs}
 	}
@@ -210,10 +210,10 @@ func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagep
 	var tasks []string
 	client.rows = func(query input.Query) []input.Row {
 		var markets []string
-		switch query.ViewID {
-		case "view_factor_sp":
+		switch query.DatasetID {
+		case "dataset_factor_sp":
 			markets = []string{dsl.MarketSpot}
-		case "view_factor_sw":
+		case "dataset_factor_sw":
 			markets = []string{dsl.MarketSwap}
 		}
 		return w.rowsFor(query, markets...)
@@ -225,7 +225,7 @@ func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagep
 		}
 		task := "ftask_" + suffix
 		tasks = append(tasks, task)
-		addView(task, "ds_"+suffix, "src_"+suffix, []string{tagID})
+		addView(task, "dataset_factor_"+suffix, "src_"+suffix, []string{tagID})
 		// 已下架的标的是数据集里已停用的绑定。
 		var inactive []string
 		for _, id := range union(w.members[dsl.MarketSpot], w.members[dsl.MarketSwap]) {
@@ -233,7 +233,7 @@ func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagep
 				inactive = append(inactive, id)
 			}
 		}
-		client.subjects["ds_"+suffix] = ucSubjects(w.tagOf(market), w.members[market], inactive)
+		client.subjects["dataset_factor_"+suffix] = ucSubjects(w.tagOf(market), w.members[market], inactive)
 		client.tags[tagID] = w.members[market]
 		status := "complete"
 		switch {
@@ -242,7 +242,7 @@ func (w ucWorld) build(t *testing.T) (*ucStorage, []string, map[string]*storagep
 		case len(w.failed[market]) > 0:
 			status = "degraded"
 		}
-		events[market] = ucEvent("view_factor_"+suffix, w.members[market], ucState(status, w.failed[market]))
+		events[market] = ucEvent("dataset_factor_"+suffix, w.members[market], ucState(status, w.failed[market]))
 	}
 	return client, tasks, events
 }

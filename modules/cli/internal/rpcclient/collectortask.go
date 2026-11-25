@@ -19,17 +19,17 @@ type CollectionTaskSummary struct {
 }
 
 // CollectionTaskResultSummary is the user-visible result state returned with
-// a collection task. Storage Dataset IDs remain internal to Collector.
+// a collection task; DatasetID is the task result dataset (its query index is addressed by the same ID).
 type CollectionTaskResultSummary struct {
 	ResultName   string `json:"result_name"`
-	ViewID       string `json:"view_id"`
+	DatasetID    string `json:"dataset_id"`
 	Status       string `json:"status"`
 	LastDataTime string `json:"last_data_time"`
 	DataKind     string `json:"data_kind"`
 }
 
 // ResultConfig contains optional storage settings for a newly created task
-// result. It cannot select an existing Dataset or View.
+// result. It cannot select an existing Dataset.
 type ResultConfig struct {
 	Description string `json:"description,omitempty"`
 }
@@ -42,7 +42,7 @@ func (c *Client) CreateTask(ctx context.Context, spaceID, taskName, dataType, cr
 	if taskName == "" {
 		return "", fmt.Errorf("CreateTask: task_name is required")
 	}
-	for _, field := range []string{"target_dataset_id", "target_view_id", "result_dataset_id", "result_view_id", "result_id", "view_id"} {
+	for _, field := range []string{"target_dataset_id", "result_dataset_id", "result_id"} {
 		if _, exists := collectParams[field]; exists {
 			return "", fmt.Errorf("CreateTask: collect_params.%s cannot be specified when creating a task", field)
 		}
@@ -134,7 +134,7 @@ func (c *Client) DisableTask(ctx context.Context, spaceID, taskID string) error 
 
 // DeleteTask removes a collection task. When deleteResultData is true the
 // Collector performs its ownership check and removes the task-exclusive
-// result View, Dataset, and physical rows before deleting the task record.
+// result Dataset (with its query index) and physical rows before deleting the task record.
 func (c *Client) DeleteTask(ctx context.Context, spaceID, taskID string, deleteResultData bool) error {
 	var response struct {
 		RetInfo retInfo `json:"ret_info"`

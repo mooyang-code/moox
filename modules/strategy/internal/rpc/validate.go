@@ -70,7 +70,7 @@ func (s *Service) validate(ctx context.Context, req *strategypb.ValidateStrategy
 		rsp.Diagnostics = append(rsp.Diagnostics, "试算失败："+err.Error())
 		return rsp
 	}
-	rsp.Trial = trialProto(decision, loaded, resolved.ViewIDs())
+	rsp.Trial = trialProto(decision, loaded, resolved.DatasetIDs())
 	rsp.TrialItems = itemProtos(trigger.ResultItems(decision.Items))
 	for _, note := range loaded.Sets.Notes {
 		rsp.Diagnostics = append(rsp.Diagnostics, note)
@@ -81,12 +81,12 @@ func (s *Service) validate(ctx context.Context, req *strategypb.ValidateStrategy
 	return rsp
 }
 
-func trialProto(decision engine.Decision, loaded input.Loaded, viewIDs []string) *strategypb.StrategyResult {
+func trialProto(decision engine.Decision, loaded input.Loaded, datasetIDs []string) *strategypb.StrategyResult {
 	_, targetsJSON, _ := trigger.EncodeTargets(decision.Targets)
 	summary, _ := trigger.EncodeSummary(decision.Summary, loaded.Sets.Notes)
-	views := make(map[string]store.ViewInput, len(viewIDs))
-	for _, viewID := range viewIDs {
-		views[viewID] = store.ViewInput{}
+	views := make(map[string]store.ViewInput, len(datasetIDs))
+	for _, datasetID := range datasetIDs {
+		views[datasetID] = store.ViewInput{}
 	}
 	inputJSON, _ := json.Marshal(store.InputRecord{Views: views, BarStart: loaded.Boundary.StorageStart})
 	result := store.Result{BarEndTime: loaded.Boundary.BarEnd, Status: decision.Status, SkipReason: decision.SkipReason, TargetsJSON: targetsJSON, SummaryJSON: summary, InputJSON: inputJSON, PublishStatus: store.PublishNone}

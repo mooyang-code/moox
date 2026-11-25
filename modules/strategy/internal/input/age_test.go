@@ -149,7 +149,7 @@ rules:
     weight: 0.4
     universe: {min_age_bars: 3}
 `)
-	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["ds_factor"], nil)
+	sets, err := BuildSets(context.Background(), membershipOf(client), strategy, client.subjects["dataset_factor_1h"], nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC-USDT", "SOL-USDT"}, sets.Expected["base"])
 	require.Equal(t, []string{"BTC-USDT"}, sets.Expected["narrow"], "include 覆盖、exclude 沿用策略级")

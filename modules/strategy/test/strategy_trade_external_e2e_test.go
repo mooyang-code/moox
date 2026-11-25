@@ -75,7 +75,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	hash := dsl.Hash([]byte(externalDSL))
 	require.NoError(t, repo.CreateDefinition(ctx, store.Definition{StrategyID: "strategy-e2e", Name: "external_e2e", DSLYaml: externalDSL, DSLHash: hash, CreatedAt: now}))
 	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", FactorTasks: map[string]string{"spot": "ftask_e2e"}, LogicalAccountID: &logical, CreatedAt: now}))
-	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_e2e", FactorTaskID: "ftask_e2e", DatasetID: "dataset_factor_e2e"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias|fixed"}, ViewColumns: []string{"bias", "close"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {FactorTaskID: "ftask_e2e", DatasetID: "dataset_factor_e2e"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias|fixed"}, ViewColumns: []string{"bias", "close"}}
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
 	require.NoError(t, repo.EnableInstance(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
@@ -96,7 +96,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_e2e", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, DetailType: detailType, Detail: detail}
+	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_e2e", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, DetailType: detailType, Detail: detail}
 	require.NoError(t, handler.Handle(ctx, message, payload))
 	result, found, err := repo.LatestOk(ctx, "instance-e2e", session)
 	require.NoError(t, err)

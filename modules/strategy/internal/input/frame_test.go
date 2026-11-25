@@ -147,17 +147,17 @@ func TestLoadBarDetectsConfigDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := client.views["view_factor_1h"]
+	view := client.views["dataset_factor_1h"]
 	view.Columns = view.Columns[:7]
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "已不存在") {
 		t.Fatalf("列被删除应记为 config_error：%v", err)
 	}
-	view.Columns = newFakeClient("spot").views["view_factor_1h"].Columns
+	view.Columns = newFakeClient("spot").views["dataset_factor_1h"].Columns
 	view.Frequency = "4h"
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
 	if !errors.As(err, &skip) || skip.Reason != SkipConfigError {
 		t.Fatalf("周期变化应记为 config_error：%v", err)
@@ -186,7 +186,7 @@ rules:
 	}
 	for _, removed := range []string{"ma_20", "close"} {
 		drifted := newFakeClient("spot")
-		view := drifted.views["view_factor_1h"]
+		view := drifted.views["dataset_factor_1h"]
 		kept := view.Columns[:0:0]
 		for _, column := range view.Columns {
 			if column.Name != removed {
@@ -194,7 +194,7 @@ rules:
 			}
 		}
 		view.Columns = kept
-		drifted.views["view_factor_1h"] = view
+		drifted.views["dataset_factor_1h"] = view
 		_, err := Loader{Client: drifted}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
 		var skip *SkipError
 		if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, removed) {
@@ -230,9 +230,9 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 		}
 	}
 
-	view := client.views["view_factor_1h"]
+	view := client.views["dataset_factor_1h"]
 	view.IndexedFrom = barStart.Add(-10 * time.Hour)
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	client.queries = nil
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
 	var skip *SkipError
@@ -248,9 +248,9 @@ func TestLoadBarRejectsInactiveView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := client.views["view_factor_1h"]
+	view := client.views["dataset_factor_1h"]
 	view.Status = "disabled"
-	client.views["view_factor_1h"] = view
+	client.views["dataset_factor_1h"] = view
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "disabled") {
@@ -263,9 +263,9 @@ func TestLoadBarRejectsInactiveView(t *testing.T) {
 func TestLoadBarProbesAgeOnTheTaskResultView(t *testing.T) {
 	client := newFakeClient("spot")
 	// 结果 View 刚建立：覆盖只到启用的这一期。
-	factorView := client.views["view_factor_1h"]
+	factorView := client.views["dataset_factor_1h"]
 	factorView.IndexedFrom, factorView.IndexedTo = barStart, barStart
-	client.views["view_factor_1h"] = factorView
+	client.views["dataset_factor_1h"] = factorView
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
 	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
@@ -282,13 +282,13 @@ func TestLoadBarProbesAgeOnTheTaskResultView(t *testing.T) {
 	}
 
 	factorView.IndexedFrom = barStart.Add(-500 * time.Hour)
-	client.views["view_factor_1h"] = factorView
+	client.views["dataset_factor_1h"] = factorView
 	client.queries = nil
 	if _, err := (Loader{Client: client}).LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
 		t.Fatalf("结果 View 覆盖足够时应通过年龄探针：%v", err)
 	}
 	for _, query := range client.queries {
-		if query.ViewID != "view_factor_1h" {
+		if query.DatasetID != "dataset_factor_1h" {
 			t.Fatalf("主查询与探针都应读结果 View：%+v", query)
 		}
 	}

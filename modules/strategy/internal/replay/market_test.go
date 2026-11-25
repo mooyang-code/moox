@@ -24,15 +24,8 @@ func swapPrice(id string, hour int) float64 { return price(id, hour+3) + 1 }
 func newDualClient() *dualClient {
 	return &dualClient{
 		spot: &fakeClient{marketType: "spot"},
-		swap: &fakeClient{marketType: "swap", viewName: "view_factor_b", datasetName: "ds_swap", priceFn: swapPrice},
+		swap: &fakeClient{marketType: "swap", datasetName: "dataset_factor_b", priceFn: swapPrice},
 	}
-}
-
-func (c *dualClient) byView(viewID string) *fakeClient {
-	if viewID == c.swap.view() {
-		return c.swap
-	}
-	return c.spot
 }
 
 func (c *dualClient) byDataset(datasetID string) *fakeClient {
@@ -42,16 +35,16 @@ func (c *dualClient) byDataset(datasetID string) *fakeClient {
 	return c.spot
 }
 
-func (c *dualClient) GetView(ctx context.Context, spaceID, viewID string) (input.ViewInfo, error) {
-	return c.byView(viewID).GetView(ctx, spaceID, viewID)
+func (c *dualClient) GetView(ctx context.Context, spaceID, datasetID string) (input.ViewInfo, error) {
+	return c.byDataset(datasetID).GetView(ctx, spaceID, datasetID)
 }
 
-func (c *dualClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
-	return c.byView(viewID).ViewGeneration(ctx, spaceID, viewID)
+func (c *dualClient) ViewGeneration(ctx context.Context, spaceID, datasetID string) (string, error) {
+	return c.byDataset(datasetID).ViewGeneration(ctx, spaceID, datasetID)
 }
 
 func (c *dualClient) ViewCoverage(ctx context.Context, spaceID string, view input.ViewInfo, exact bool) (input.Coverage, error) {
-	return c.byView(view.ViewID).ViewCoverage(ctx, spaceID, view, exact)
+	return c.byDataset(view.DatasetID).ViewCoverage(ctx, spaceID, view, exact)
 }
 
 func (c *dualClient) GetDataset(ctx context.Context, spaceID, datasetID string) (input.DatasetInfo, error) {
@@ -71,7 +64,7 @@ func (c *dualClient) GetTag(ctx context.Context, spaceID, tagID string) (input.T
 }
 
 func (c *dualClient) QueryRows(ctx context.Context, spaceID string, query input.Query) ([]input.Row, uint64, error) {
-	return c.byView(query.ViewID).QueryRows(ctx, spaceID, query)
+	return c.byDataset(query.DatasetID).QueryRows(ctx, spaceID, query)
 }
 
 func (c *dualClient) GetFactor(ctx context.Context, factorID string) (input.FactorInfo, error) {
@@ -79,8 +72,8 @@ func (c *dualClient) GetFactor(ctx context.Context, factorID string) (input.Fact
 }
 
 var (
-	spotTask = store.ReplayTask{FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}
-	swapTask = store.ReplayTask{FactorTaskID: "ftask_b", ViewID: "view_factor_b", ViewGeneration: "idx"}
+	spotTask = store.ReplayTask{FactorTaskID: "ftask_a", DatasetID: "dataset_factor_a", ViewGeneration: "idx"}
+	swapTask = store.ReplayTask{FactorTaskID: "ftask_b", DatasetID: "dataset_factor_b", ViewGeneration: "idx"}
 )
 
 // startMarketReplay 登记并认领一个按市场读取任务的回放：区间从第 2 根开始，共 hours 根。

@@ -27,8 +27,8 @@ func arrivalSnapshot(service, metricPrefix, labelsJSON string, labels map[string
 var (
 	storageLabels     = map[string]string{"space_id": "crypto", "dataset_id": "dataset_spot_1m", "freq": "1m"}
 	storageLabelsJSON = `{"dataset_id":"dataset_spot_1m","freq":"1m","space_id":"crypto"}`
-	viewLabels        = map[string]string{"space_id": "crypto", "view_id": "view_spot_kline_1m", "dataset_id": "dataset_spot_1m", "freq": "1m"}
-	viewLabelsJSON    = `{"dataset_id":"dataset_spot_1m","freq":"1m","space_id":"crypto","view_id":"view_spot_kline_1m"}`
+	viewLabels        = map[string]string{"space_id": "crypto", "dataset_id": "dataset_spot_1m", "freq": "1m"}
+	viewLabelsJSON    = `{"dataset_id":"dataset_spot_1m","freq":"1m","space_id":"crypto"}`
 )
 
 func TestDetectBarArrivalsOnlyForAdvancedPipelineWatermarks(t *testing.T) {
@@ -48,7 +48,7 @@ func TestDetectBarArrivalsOnlyForAdvancedPipelineWatermarks(t *testing.T) {
 	require.True(t, first[0].ArrivedAt.Equal(bar.Add(time.Minute+time.Second)))
 	require.Nil(t, first[0].PreviousBarAt)
 	require.Equal(t, "storage_view", first[1].Producer)
-	require.Equal(t, "view_spot_kline_1m", first[1].DatasetID)
+	require.Equal(t, "dataset_spot_1m", first[1].DatasetID)
 	require.Equal(t, "dataset_spot_1m", first[1].PrimaryDatasetID)
 
 	// 水位没有前进：不记录。

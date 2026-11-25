@@ -62,7 +62,7 @@ type ViewInput struct {
 	Revision uint64            `json:"revision,omitempty"`
 }
 
-// InputRecord 是结果中保存的输入摘要（c_input_json 的结构）：每个绑定的 View 一份。
+// InputRecord 是结果中保存的输入摘要（c_input_json 的结构）：每个绑定的数据集一份，Views 的键是数据集 ID。
 type InputRecord struct {
 	Bar      string               `json:"bar"`
 	Calendar string               `json:"calendar"`
@@ -476,7 +476,7 @@ func (s *Store) ResultAtBar(ctx context.Context, instanceID, sessionID string, b
 
 // AdjacentRecord 查找本实例对某一根 bar 的可信处理记录：同一 bar 与日历，且每个 View 都含有全部所需因子的指纹；
 // 不限会话，优先当前会话，其次创建时间最新。
-func (s *Store) AdjacentRecord(ctx context.Context, instanceID string, viewIDs []string, bar, calendar string, barEnd time.Time, factorIDs []string, preferSessionID string) (Result, InputRecord, bool, error) {
+func (s *Store) AdjacentRecord(ctx context.Context, instanceID string, datasetIDs []string, bar, calendar string, barEnd time.Time, factorIDs []string, preferSessionID string) (Result, InputRecord, bool, error) {
 	var rows []resultRow
 	if err := s.db.WithContext(ctx).Raw(sqlSelectResultsAtBarAnySession, instanceID, millis(barEnd), preferSessionID).Scan(&rows).Error; err != nil {
 		return Result{}, InputRecord{}, false, err
@@ -490,9 +490,9 @@ func (s *Store) AdjacentRecord(ctx context.Context, instanceID string, viewIDs [
 			continue
 		}
 		covered := true
-		for _, viewID := range viewIDs {
+		for _, datasetID := range datasetIDs {
 			for _, factorID := range factorIDs {
-				if input.Views[viewID].Factors[factorID] == "" {
+				if input.Views[datasetID].Factors[factorID] == "" {
 					covered = false
 				}
 			}

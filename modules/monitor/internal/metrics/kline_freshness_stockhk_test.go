@@ -62,7 +62,7 @@ func TestStockHKClockFollowsSessionsAndHalfDays(t *testing.T) {
 // 港股 5m 的 K 线新鲜度：午休、收市后、半日市下午与其后的假期里，View 停在该时段最后一根不算过期；
 // 时段中停更超过允许迟到才判失败。
 func TestKlineFreshnessEvaluatorUsesTheStockHKCalendar(t *testing.T) {
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockhk", ViewID: "view", Frequency: "5m", MarketID: "stockhk", CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: stockHKSessions, Lateness: 90 * time.Second}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockhk", DatasetID: "dataset", Frequency: "5m", MarketID: "stockhk", CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: stockHKSessions, Lateness: 90 * time.Second}
 	evaluate := func(latest, now time.Time) KlineFreshnessReport {
 		query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockhk", Freq: "5m", Latest: latest, Subjects: 1, ObservedAt: now}})
 		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
@@ -102,7 +102,7 @@ func TestKlineFreshnessEvaluatorUsesTheStockHKCalendar(t *testing.T) {
 // Storage 周末重启后没有新写入，View 摘要指标缺失：用采集结果清单里 View 已建索引的上界判断。周末停在周五最后一根算正常，
 // 也不会算出缺失对象；周一开盘第一根收线加允许迟到之后仍停在周五，照常判过期；两个值都没有时仍报无输出。
 func TestKlineFreshnessFallsBackToIndexedUpperBoundWithoutViewSummary(t *testing.T) {
-	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockhk", DatasetID: "dataset", ViewID: "view", Frequency: "5m", MarketID: "stockhk", CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: stockHKSessions, Lateness: 90 * time.Second}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockhk", DatasetID: "dataset", Frequency: "5m", MarketID: "stockhk", CalendarID: "hk_stock", Timezone: "Asia/Hong_Kong", Sessions: stockHKSessions, Lateness: 90 * time.Second}
 	evaluate := func(rule KlineFreshnessRule, now time.Time) KlineFreshnessReport {
 		query := newViewSummaryQuery(t, nil)
 		query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("00700.XHKG")})

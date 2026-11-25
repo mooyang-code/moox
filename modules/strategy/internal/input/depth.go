@@ -126,11 +126,11 @@ func barsBeyondStockCalendar(resolved Resolved, at, now time.Time) int {
 }
 
 // coverageUnusable 把覆盖范围无法使用的原因写成中文说明，when 是后半句（例如“暂不能回放”）。
-func coverageUnusable(viewID string, err error, when string) error {
+func coverageUnusable(datasetID string, err error, when string) error {
 	if errors.Is(err, ErrCoverageUnknown) {
-		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），%s", viewID, when)
+		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），%s", datasetID, when)
 	}
-	return fmt.Errorf("View %s 的覆盖范围无法换算为周期（%w），%s", viewID, err, when)
+	return fmt.Errorf("View %s 的覆盖范围无法换算为周期（%w），%s", datasetID, err, when)
 }
 
 // CoverageStartAt 以 asOf 与索引最新一根中较早者为基准，返回活跃序列可回溯的最早 bar_start；覆盖范围未知或无法换算

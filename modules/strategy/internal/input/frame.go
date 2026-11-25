@@ -164,26 +164,26 @@ func (l Loader) readBar(ctx context.Context, spaceID string, resolved Resolved, 
 	for _, key := range markets {
 		task := resolved.Tasks[key]
 		if keyDown(key) {
-			views[key] = ViewInfo{ViewID: task.ViewID, DatasetID: task.DatasetID, Frequency: resolved.Bar}
+			views[key] = ViewInfo{DatasetID: task.DatasetID, Frequency: resolved.Bar}
 			continue
 		}
 		began := time.Now()
-		view, err := l.Client.GetView(ctx, spaceID, task.ViewID)
+		view, err := l.Client.GetView(ctx, spaceID, task.DatasetID)
 		mark("View", began)
 		if err != nil {
 			return barRead{}, err
 		}
 		if view.Status != "" && view.Status != "active" {
-			return barRead{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.ViewID, view.Status)}
+			return barRead{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.DatasetID, view.Status)}
 		}
 		if view.ActiveIndexID == "" {
-			return barRead{}, fmt.Errorf("View %s 没有活动索引", task.ViewID)
+			return barRead{}, fmt.Errorf("View %s 没有活动索引", task.DatasetID)
 		}
-		if view.DatasetID != task.DatasetID || !strings.EqualFold(view.Frequency, resolved.Bar) {
-			return barRead{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的数据集或周期已变化（%s/%s → %s/%s），请重新启用实例", task.ViewID, task.DatasetID, resolved.Bar, view.DatasetID, view.Frequency)}
+		if !strings.EqualFold(view.Frequency, resolved.Bar) {
+			return barRead{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的周期已变化（%s → %s），请重新启用实例", task.DatasetID, resolved.Bar, view.Frequency)}
 		}
 		if missing := MissingColumns(view, program, resolved.LongestAge()); len(missing) > 0 {
-			return barRead{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), task.ViewID)}
+			return barRead{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), task.DatasetID)}
 		}
 		views[key] = view
 	}
@@ -326,7 +326,7 @@ func (l Loader) readBar(ctx context.Context, spaceID string, resolved Resolved, 
 				selected = append(selected, subject)
 			}
 		}
-		query := Query{ViewID: load.view.ViewID, DatasetID: load.view.DatasetID, Frequency: load.view.Frequency, Subjects: selected, Start: start, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: load.view.ActiveIndexID}
+		query := Query{DatasetID: load.view.DatasetID, Frequency: load.view.Frequency, Subjects: selected, Start: start, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: load.view.ActiveIndexID}
 		began = time.Now()
 		rangeRows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
 		mark("当期与上一根行", began)

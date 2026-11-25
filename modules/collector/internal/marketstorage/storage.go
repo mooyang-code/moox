@@ -211,10 +211,10 @@ func expandResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []strin
 	return qualified
 }
 
-// GetViewState 查询 View 的索引状态（合成建目标时等 View 的列建好）。
+// GetViewState 查询数据集查询索引的状态（合成建目标时等索引的列建好）。
 func (w *storageWriter) GetViewState(ctx context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
 	if req == nil {
-		return nil, fmt.Errorf("查询 View 状态：请求不能为空")
+		return nil, fmt.Errorf("查询索引状态：请求不能为空")
 	}
 	return w.view.GetViewState(ctx, req)
 }

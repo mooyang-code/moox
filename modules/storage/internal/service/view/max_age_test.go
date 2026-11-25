@@ -73,6 +73,7 @@ func TestDropExpiredWritesUnconfiguredKeepsEverything(t *testing.T) {
 func TestWriteIndexDropsExpiredRowsForKlineAndFactorResults(t *testing.T) {
 	svc := maxAgeService(t)
 	engine := &primaryHistoryBackfillEngine{}
+	runtime := newViewRuntime(timeSeriesSpec("crypto", "kline_5m", "5m"), engine)
 	batch := func(dataset string) viewindex.ViewIndexWriteBatch {
 		return viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{
 			maxAgeWrite("crypto", dataset, "5m", maxAgeNow.Add(-240*24*time.Hour)),
@@ -81,7 +82,7 @@ func TestWriteIndexDropsExpiredRowsForKlineAndFactorResults(t *testing.T) {
 	}
 	for _, dataset := range []string{"kline_5m", "factor_result_ema"} {
 		engine.writeRows = 0
-		if err := svc.writeIndex(context.Background(), "idx", engine, batch(dataset)); err != nil {
+		if err := svc.writeIndex(context.Background(), runtime, batch(dataset)); err != nil {
 			t.Fatal(err)
 		}
 		if engine.writeRows != 1 {
@@ -90,7 +91,7 @@ func TestWriteIndexDropsExpiredRowsForKlineAndFactorResults(t *testing.T) {
 	}
 	engine.writeRows = 0
 	expiredOnly := viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{maxAgeWrite("crypto", "kline_5m", "5m", maxAgeNow.Add(-240*24*time.Hour))}}
-	if err := svc.writeIndex(context.Background(), "idx", engine, expiredOnly); err != nil || engine.writeRows != 0 {
+	if err := svc.writeIndex(context.Background(), runtime, expiredOnly); err != nil || engine.writeRows != 0 {
 		t.Fatalf("全部超期应直接返回: err=%v rows=%d", err, engine.writeRows)
 	}
 }

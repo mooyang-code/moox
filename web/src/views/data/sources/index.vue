@@ -131,7 +131,7 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { GetDataTypeConfigWithFields } from "@/api/collector";
-import { createDataSource, listDataSources, listFields, updateDataSource } from "@/api/storage/metadata";
+import { createDataSource, listDataSources, updateDataSource } from "@/api/storage/metadata";
 import type { DataSource } from "@/api/storage/types";
 import { buildExtraFieldSources, type ExtraFieldSourceRow } from "./extra-field-sources";
 import { useSpaceStore } from "@/store/modules/space";
@@ -207,19 +207,7 @@ async function loadExtraFieldSources() {
     if (!request.isLatest()) return;
     const mine = options.filter(option => (option.market_id || "").trim().toLowerCase() === spaceId.trim().toLowerCase());
     if (!mine.length) return;
-    // 字段显示名取 Storage 字段目录；读不到时显示字段 ID，不影响这块展示。
-    const names = new Map<string, string>();
-    try {
-      for (let page = 1; ; page += 1) {
-        const rsp = await listFields({ space_id: spaceId, page: { page, size: 500 } });
-        for (const field of rsp.fields || []) names.set(field.field_id, field.name);
-        if (!rsp.page_result?.has_more || !(rsp.fields || []).length) break;
-      }
-    } catch {
-      names.clear();
-    }
-    if (!request.isLatest()) return;
-    extraFieldSources.value = buildExtraFieldSources(mine, spaceId, names);
+    extraFieldSources.value = buildExtraFieldSources(mine, spaceId);
   } catch (error) {
     reportError(error);
   }

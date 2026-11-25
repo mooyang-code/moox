@@ -234,7 +234,7 @@ func TestDeleteStrategyInstanceRejectsBeforeDeletingAnything(t *testing.T) {
 	instanceID, sessionID := "i1", "sess-old"
 	if err := h.service.Store.CreateReplay(h.ctx, store.Replay{
 		ReplayID: "rep-1", InstanceID: &instanceID, SessionID: &sessionID, DSLYaml: demoDSL, DSLHash: "sha256:x", Calendar: "crypto_24x7", SpaceID: "crypto",
-		Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_i1", ViewID: "view_factor_i1", ViewGeneration: "idx@1"}},
+		Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_i1", DatasetID: "dataset_factor_i1", ViewGeneration: "idx@1"}},
 		StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now, CreatedAt: h.now,
 	}); err != nil {
 		t.Fatal(err)
@@ -468,7 +468,7 @@ func TestDeleteRejectsResearchReplayReadingDeletedTask(t *testing.T) {
 		t.Helper()
 		if err := h.service.Store.CreateReplay(h.ctx, store.Replay{
 			ReplayID: id, StrategyID: &strategyID, DSLYaml: demoDSL, DSLHash: "sha256:x", Calendar: "crypto_24x7", SpaceID: space,
-			Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: taskID, ViewID: "view_factor_x", ViewGeneration: "idx@1"}},
+			Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: taskID, DatasetID: "dataset_factor_x", ViewGeneration: "idx@1"}},
 			StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now, CreatedAt: h.now,
 		}); err != nil {
 			t.Fatal(err)
@@ -536,12 +536,12 @@ func TestDeleteClearsAgeRecordsOnlyForDeletedTasks(t *testing.T) {
 	tasks.bound["ftask_age_spot"] = "iage"
 	views := map[string]string{}
 	for _, taskID := range []string{"ftask_age_spot", "ftask_age_swap"} {
-		viewID, err := input.ViewIDOfTask(taskID)
+		datasetID, err := input.DatasetIDOfTask(taskID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		views[taskID] = viewID
-		if err := h.service.Store.SaveAgePassed(h.ctx, "crypto", viewID, "idx", 10, "spot", []string{"BTC-USDT"}, h.now); err != nil {
+		views[taskID] = datasetID
+		if err := h.service.Store.SaveAgePassed(h.ctx, "crypto", datasetID, "idx", 10, "spot", []string{"BTC-USDT"}, h.now); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -34,14 +34,14 @@ const (
 // 只按时长判断：空闲数据集的序号差天然会有一轮等待的量，按序号差会误报。
 const viewFollowLagLimit = 2 * time.Minute
 
-// followLagAttention 列出落后超过 viewFollowLagLimit 的 View。detail 只写对象与落后起点（上次追上日志头部的时刻），同一次落后内不变。
+// followLagAttention 列出落后超过 viewFollowLagLimit 的 View（空间/数据集）。detail 只写对象与落后起点（上次追上日志头部的时刻），同一次落后内不变。
 func followLagAttention(lags []follow.Lag) map[string][]string {
 	var lagging []string
 	for _, lag := range lags {
 		if lag.Seconds <= viewFollowLagLimit.Seconds() || lag.Since.IsZero() {
 			continue
 		}
-		lagging = append(lagging, fmt.Sprintf("%s/%s 自 %s 起没有追上", lag.Key.SpaceID, lag.Key.ViewID, report.AttentionTime(lag.Since)))
+		lagging = append(lagging, fmt.Sprintf("%s/%s 自 %s 起没有追上", lag.Key.SpaceID, lag.Key.DatasetID, report.AttentionTime(lag.Since)))
 	}
 	if len(lagging) == 0 {
 		return nil
@@ -91,7 +91,7 @@ func (s *Service) StartFollowing(ctx context.Context, opts FollowOptions) (func(
 	s.primaryRange = opts.Range
 	s.readyPublisher = opts.Publisher
 	s.readyReconnect = opts.Reconnect
-	refs := make([]viewRef, 0, len(s.views))
+	refs := make([]datasetRef, 0, len(s.views))
 	for ref := range s.views {
 		refs = append(refs, ref)
 	}
@@ -101,7 +101,7 @@ func (s *Service) StartFollowing(ctx context.Context, opts FollowOptions) (func(
 		lags := manager.Lags(time.Now())
 		out := make([]observability.ViewFollowLag, 0, len(lags))
 		for _, lag := range lags {
-			out = append(out, observability.ViewFollowLag{SpaceID: lag.Key.SpaceID, ViewID: lag.Key.ViewID, Changes: lag.Changes, Seconds: lag.Seconds})
+			out = append(out, observability.ViewFollowLag{SpaceID: lag.Key.SpaceID, DatasetID: lag.Key.DatasetID, Changes: lag.Changes, Seconds: lag.Seconds})
 		}
 		return out
 	})
@@ -134,48 +134,41 @@ func (s *Service) followManager() *follow.Manager {
 }
 
 // ensureFollower 给已有活动索引的 View 起跟随器（已经在跟随时不动）。
-func (s *Service) ensureFollower(ref viewRef) {
+func (s *Service) ensureFollower(ref datasetRef) {
 	manager := s.followManager()
 	if manager == nil {
 		return
 	}
-	s.mu.RLock()
-	view := s.catalogViews[ref]
-	runtime := s.views[ref]
-	s.mu.RUnlock()
-	if view == nil || runtime == nil || strings.TrimSpace(view.GetDatasetId()) == "" {
+	runtime := s.runtimeOf(ref)
+	if runtime == nil {
 		return
 	}
 	// 有活动索引，或断档重建还没完成（由跟随器接着重建）时才跟随。
 	if runtime.queryState().active == "" && !runtime.needsRebuild() {
 		return
 	}
-	manager.Ensure(follow.Key{SpaceID: ref.spaceID, ViewID: ref.viewID, DatasetID: strings.TrimSpace(view.GetDatasetId())}, followTarget{s: s, ref: ref})
+	manager.Ensure(follow.Key{SpaceID: ref.spaceID, DatasetID: ref.datasetID}, followTarget{s: s, ref: ref})
 }
 
 // followTarget 把一个 View 的应用端交给跟随器。
 type followTarget struct {
 	s   *Service
-	ref viewRef
+	ref datasetRef
 }
 
 func (t followTarget) LoadState(ctx context.Context) (viewindex.FollowState, error) {
-	s := t.s
-	s.mu.RLock()
-	runtime := s.views[t.ref]
-	s.mu.RUnlock()
-	if runtime == nil {
-		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 没有运行时", t.ref.spaceID, t.ref.viewID)
+	runtime, err := t.s.followRuntime(t.ref)
+	if err != nil {
+		return viewindex.FollowState{}, err
 	}
 	if runtime.needsRebuild() {
 		// 上一次重建没完成（失败、中途停掉或进程退出），或活动索引文件不见了：返回空进度，由跟随器重建。
 		return viewindex.FollowState{}, nil
 	}
-	indexID, engine, err := s.followIndex(t.ref)
-	if err != nil {
-		return viewindex.FollowState{}, err
+	if runtime.queryState().active == "" {
+		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 没有活动索引", t.ref.spaceID, t.ref.datasetID)
 	}
-	stats, err := restoreIndexStats(ctx, engine, indexID)
+	stats, err := restoreIndexStats(ctx, runtime.engine, runtime.indexID)
 	if err != nil {
 		return viewindex.FollowState{}, err
 	}
@@ -186,11 +179,14 @@ func (t followTarget) LoadState(ctx context.Context) (viewindex.FollowState, err
 }
 
 func (t followTarget) SaveState(ctx context.Context, state viewindex.FollowState) error {
-	indexID, _, err := t.s.followIndex(t.ref)
+	runtime, err := t.s.followRuntime(t.ref)
 	if err != nil {
 		return err
 	}
-	return t.s.saveFollowState(ctx, indexID, state)
+	if runtime.queryState().active == "" {
+		return fmt.Errorf("View %s/%s 没有活动索引", t.ref.spaceID, t.ref.datasetID)
+	}
+	return t.s.saveFollowState(ctx, runtime, state)
 }
 
 func (t followTarget) ApplyRows(ctx context.Context, changes []*pb.DatasetChange, cursor viewindex.ChangeCursor) (bool, error) {
@@ -205,38 +201,27 @@ func (t followTarget) Rebuild(ctx context.Context) (viewindex.FollowState, error
 	return t.s.rebuildFollowIndex(ctx, t.ref)
 }
 
-// followIndex 返回 View 当前的活动索引与引擎。
-func (s *Service) followIndex(ref viewRef) (string, viewindex.Engine, error) {
-	s.mu.RLock()
-	runtime := s.views[ref]
-	s.mu.RUnlock()
+// followRuntime 返回跟随器所属 View 的运行时。
+func (s *Service) followRuntime(ref datasetRef) (*viewRuntime, error) {
+	runtime := s.runtimeOf(ref)
 	if runtime == nil {
-		return "", nil, fmt.Errorf("View %s/%s 没有运行时", ref.spaceID, ref.viewID)
+		return nil, fmt.Errorf("View %s/%s 没有运行时", ref.spaceID, ref.datasetID)
 	}
-	indexID := runtime.queryState().active
-	if indexID == "" {
-		return "", nil, fmt.Errorf("View %s/%s 没有活动索引", ref.spaceID, ref.viewID)
-	}
-	engine, err := s.engineFor(indexID)
-	return indexID, engine, err
+	return runtime, nil
 }
 
 // saveFollowState 持有索引写锁落盘跟随进度（索引元数据只有一行，与写入、删除最旧数据、加列都要串行）。
-func (s *Service) saveFollowState(ctx context.Context, indexID string, state viewindex.FollowState) error {
-	engine, err := s.engineFor(indexID)
-	if err != nil {
-		return err
-	}
-	writer, ok := engine.(viewindex.FollowStateWriter)
+func (s *Service) saveFollowState(ctx context.Context, runtime *viewRuntime, state viewindex.FollowState) error {
+	writer, ok := runtime.engine.(viewindex.FollowStateWriter)
 	if !ok {
-		return fmt.Errorf("View 索引引擎 %s 不能记录跟随进度", engine.Engine())
+		return fmt.Errorf("View 索引引擎 %s 不能记录跟随进度", runtime.engine.Engine())
 	}
-	release, err := s.indexWriteGate(indexID).lock(ctx)
+	release, err := runtime.gate.lock(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
-	return writer.SaveFollowState(ctx, indexID, state)
+	return writer.SaveFollowState(ctx, runtime.indexID, state)
 }
 
 // followRead 是一次按时间范围的回读：subjects 为空表示数据集里该时间窗的全部标的。
@@ -247,26 +232,24 @@ type followRead struct {
 
 // applyFollowRows 按一组连续行变更回读 Primary 的整行写入索引。行变更只记“哪些行被写过”，值以 Primary 为准；
 // 回读放在运行时锁之外，只有写入索引时才持锁，并在锁内取当前的列契约（期间可能原地加了列）。
-func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*pb.DatasetChange, cursor viewindex.ChangeCursor) (bool, error) {
+func (s *Service) applyFollowRows(ctx context.Context, ref datasetRef, changes []*pb.DatasetChange, cursor viewindex.ChangeCursor) (bool, error) {
 	applyStart := time.Now()
-	s.mu.RLock()
-	view := s.catalogViews[ref]
-	reader, rangeReader := s.primary, s.primaryRange
-	s.mu.RUnlock()
-	indexID, _, err := s.followIndex(ref)
+	runtime, err := s.followRuntime(ref)
 	if err != nil {
 		return false, err
 	}
-	if view == nil {
-		return false, fmt.Errorf("View %s/%s 不在目录中", ref.spaceID, ref.viewID)
-	}
 	s.mu.RLock()
-	fields := viewColumnFields(s.schemas[indexID].Columns)
+	reader, rangeReader := s.primary, s.primaryRange
 	s.mu.RUnlock()
+	state := runtime.queryState()
+	if state.active == "" {
+		return false, fmt.Errorf("View %s/%s 没有活动索引", ref.spaceID, ref.datasetID)
+	}
+	spec := state.spec
+	fields := columnNames(state.schema.Columns)
 	if len(fields) == 0 {
 		return false, nil
 	}
-	datasetID := strings.TrimSpace(view.GetDatasetId())
 	var pending []viewindex.RowWrite
 	rows, persisted := 0, false
 	flush := func(withCursor bool) error {
@@ -277,7 +260,7 @@ func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*p
 		if withCursor {
 			at = &cursor
 		}
-		wrote, err := s.writeFollowRows(ctx, ref, indexID, datasetID, pending, at)
+		wrote, err := s.writeFollowRows(ctx, runtime, state.active, pending, at)
 		if err != nil {
 			return err
 		}
@@ -286,12 +269,12 @@ func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*p
 		pending = pending[:0]
 		return nil
 	}
-	if view.GetFreq() != "" {
+	if spec.timeSeries() {
 		if rangeReader == nil {
 			return false, errors.New("回读时序行需要 Primary 时序读取客户端")
 		}
-		for _, read := range s.planFollowReads(view, changes) {
-			if err := readFollowRange(ctx, rangeReader, view, read, fields, func(batch []viewindex.RowWrite) error {
+		for _, read := range s.planFollowReads(spec, changes) {
+			if err := readFollowRange(ctx, rangeReader, spec, read, fields, func(batch []viewindex.RowWrite) error {
 				pending = append(pending, batch...)
 				if len(pending) >= followWriteBatchRows {
 					return flush(false)
@@ -305,7 +288,7 @@ func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*p
 		if reader == nil {
 			return false, errors.New("回读记录行需要 Primary 读取客户端")
 		}
-		records, err := readFollowRecords(ctx, reader, view, changes, fields)
+		records, err := readFollowRecords(ctx, reader, spec, changes, fields)
 		if err != nil {
 			return false, err
 		}
@@ -316,44 +299,32 @@ func (s *Service) applyFollowRows(ctx context.Context, ref viewRef, changes []*p
 	}
 	if total := time.Since(applyStart); total >= slowIndexApplyLog {
 		log.Infof("storage view 跟随应用行变更 view=%s/%s 条目=%d 序号=%d～%d 写入行=%d 耗时=%s",
-			ref.spaceID, ref.viewID, len(changes), changes[0].GetSequence(), changes[len(changes)-1].GetSequence(), rows, total.Round(time.Millisecond))
+			ref.spaceID, ref.datasetID, len(changes), changes[0].GetSequence(), changes[len(changes)-1].GetSequence(), rows, total.Round(time.Millisecond))
 	}
 	return persisted, nil
 }
 
 // writeFollowRows 持有运行时锁写入一批行；cursor 非空时与这批行同一次提交落盘。行全部过期时不写，返回假。
-func (s *Service) writeFollowRows(ctx context.Context, ref viewRef, indexID, datasetID string, writes []viewindex.RowWrite, cursor *viewindex.ChangeCursor) (bool, error) {
-	s.mu.RLock()
-	runtime := s.views[ref]
-	s.mu.RUnlock()
-	if runtime == nil {
-		return false, fmt.Errorf("View %s/%s 没有运行时", ref.spaceID, ref.viewID)
-	}
+func (s *Service) writeFollowRows(ctx context.Context, runtime *viewRuntime, indexID string, writes []viewindex.RowWrite, cursor *viewindex.ChangeCursor) (bool, error) {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	if runtime.active != indexID {
-		return false, fmt.Errorf("View %s/%s 的活动索引已变化", ref.spaceID, ref.viewID)
+		return false, fmt.Errorf("View %s/%s 的活动索引已变化", runtime.ref.spaceID, runtime.ref.datasetID)
 	}
 	kept := s.dropExpiredWrites(indexID, writes)
 	if len(kept) == 0 {
 		return false, nil
 	}
-	engine, err := s.engineFor(indexID)
-	if err != nil {
-		return false, err
-	}
-	s.mu.RLock()
-	schema := s.schemas[indexID]
-	s.mu.RUnlock()
+	schema := runtime.schema
 	writeCtx, cancel, err := liveIndexWriteContext(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer cancel()
-	if err := s.writeIndex(writeCtx, indexID, engine, viewindex.ViewIndexWriteBatch{
+	if err := s.writeIndex(writeCtx, runtime, viewindex.ViewIndexWriteBatch{
 		RowWrites: kept, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite, Cursor: cursor,
 	}); err != nil {
-		log.Errorf("storage view 索引写入失败 space=%s view=%s index=%s dataset=%s: %v", ref.spaceID, ref.viewID, indexID, datasetID, err)
+		log.Errorf("storage view 索引写入失败 space=%s dataset=%s index=%s: %v", runtime.ref.spaceID, runtime.ref.datasetID, indexID, err)
 		return false, err
 	}
 	written := make([]*pb.RowFieldUpsert, 0, len(kept))
@@ -361,7 +332,7 @@ func (s *Service) writeFollowRows(ctx context.Context, ref viewRef, indexID, dat
 		written = append(written, &pb.RowFieldUpsert{Key: write.Key.Key})
 	}
 	// Monitor 的 K 线新鲜度与到达延迟靠 View 的输出水位。
-	s.observeViewWatermark(indexID, datasetID, written, false)
+	s.observeViewWatermark(runtime.spec, written)
 	return true, nil
 }
 
@@ -369,10 +340,10 @@ func (s *Service) writeFollowRows(ctx context.Context, ref viewRef, indexID, dat
 //   - 日志区间两端都含、读取接口左闭右开，结束时间加一个频率步长；
 //   - 先按 View 的 max_age 截掉已经过期的部分；
 //   - 同一标的重叠或相接的范围合并，时间窗相同的标的合成一次读取，标的超过上限时不带标的、按时间索引读。
-func (s *Service) planFollowReads(view *pb.View, changes []*pb.DatasetChange) []followRead {
+func (s *Service) planFollowReads(spec *viewSpec, changes []*pb.DatasetChange) []followRead {
 	type span struct{ start, end time.Time }
-	freq := view.GetFreq()
-	cutoff := s.maxAgeCutoff(view.GetSpaceId(), freq)
+	freq := spec.Freq
+	cutoff := s.maxAgeCutoff(spec.SpaceID, freq)
 	spans := make(map[string][]span)
 	for _, change := range changes {
 		for _, item := range change.GetRanges() {
@@ -382,7 +353,7 @@ func (s *Service) planFollowReads(view *pb.View, changes []*pb.DatasetChange) []
 			start, startErr := time.Parse(time.RFC3339Nano, item.GetStartTime())
 			end, endErr := time.Parse(time.RFC3339Nano, item.GetEndTime())
 			if startErr != nil || endErr != nil {
-				log.Warnf("storage view 跳过无法解析的变更范围 view=%s/%s 序号=%d 标的=%s 起=%q 止=%q", view.GetSpaceId(), view.GetViewId(), change.GetSequence(), item.GetSubjectId(), item.GetStartTime(), item.GetEndTime())
+				log.Warnf("storage view 跳过无法解析的变更范围 view=%s/%s 序号=%d 标的=%s 起=%q 止=%q", spec.SpaceID, spec.DatasetID, change.GetSequence(), item.GetSubjectId(), item.GetStartTime(), item.GetEndTime())
 				continue
 			}
 			start, end = start.UTC(), followRangeEnd(freq, end.UTC())
@@ -447,8 +418,8 @@ func followRangeEnd(freq string, end time.Time) time.Time {
 }
 
 // readFollowRange 按页回读一个时间窗的行，逐页交给 emit。
-func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, view *pb.View, read followRead, fields []string, emit func([]viewindex.RowWrite) error) error {
-	spaceID, datasetID, freq := view.GetSpaceId(), strings.TrimSpace(view.GetDatasetId()), view.GetFreq()
+func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, spec *viewSpec, read followRead, fields []string, emit func([]viewindex.RowWrite) error) error {
+	spaceID, datasetID, freq := spec.SpaceID, spec.DatasetID, spec.Freq
 	selectors := make([]*pb.TimeSeriesSelector, 0, len(read.subjects))
 	for _, subject := range read.subjects {
 		selectors = append(selectors, &pb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: freq})
@@ -495,8 +466,8 @@ func readFollowRange(ctx context.Context, reader TimeSeriesRangeReader, view *pb
 }
 
 // readFollowRecords 按记录键回读一组行变更里的记录（只返回仍存在的）。
-func readFollowRecords(ctx context.Context, reader FieldReader, view *pb.View, changes []*pb.DatasetChange, fields []string) ([]viewindex.RowWrite, error) {
-	spaceID, datasetID := view.GetSpaceId(), strings.TrimSpace(view.GetDatasetId())
+func readFollowRecords(ctx context.Context, reader FieldReader, spec *viewSpec, changes []*pb.DatasetChange, fields []string) ([]viewindex.RowWrite, error) {
+	spaceID, datasetID := spec.SpaceID, spec.DatasetID
 	seen := make(map[[2]string]struct{})
 	var keys []*pb.RowKey
 	for _, change := range changes {

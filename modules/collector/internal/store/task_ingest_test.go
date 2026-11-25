@@ -25,7 +25,7 @@ func openIngestStore(t *testing.T, defaults map[string]string) *Store {
 
 func klineTask(spaceID, taskID, datasetID, ingest string) domain.CollectionTask {
 	return domain.CollectionTask{SpaceID: spaceID, TaskID: taskID, TaskName: taskID, DataType: domain.DataTypeKline, Ingest: ingest, Enabled: true,
-		TagIDs: []string{"tag"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: datasetID, ResultViewID: "view_" + datasetID}
+		TagIDs: []string{"tag"}, CollectParams: `{"frequency":"1m"}`, ResultDatasetID: datasetID}
 }
 
 // 建任务不写采集方式时取空间的市场默认值；写了就用写的；合成任务没有采集方式。

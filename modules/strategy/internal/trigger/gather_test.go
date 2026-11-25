@@ -30,14 +30,14 @@ portfolio:
 `
 
 const (
-	spotView = "view_factor_a"
-	swapView = "view_factor_b"
+	spotView = "dataset_factor_a"
+	swapView = "dataset_factor_b"
 )
 
 func newDualHarness(t *testing.T) *harness {
 	t.Helper()
 	resolved := input.Resolved{Market: dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSwap}, Tasks: map[string]input.TaskBinding{
-		"spot": {ViewID: spotView, FactorTaskID: "ftask_a", DatasetID: "ds"}, "swap": {ViewID: swapView, FactorTaskID: "ftask_b", DatasetID: "ds2"}},
+		"spot": {FactorTaskID: "ftask_a", DatasetID: spotView}, "swap": {FactorTaskID: "ftask_b", DatasetID: swapView}},
 		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	h := newHarnessWith(t, dualRankDSL, nil, resolved)
@@ -49,7 +49,7 @@ func newDualHarness(t *testing.T) *harness {
 // viewEvent 构造某个 View 某一期的就绪事件；status 是因子成员状态，hash 是事件里的成员定义哈希。
 func (h *harness) viewEvent(view string, n int, status, hash string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
 	message, payload := h.event(n, map[string]string{"f": hash}, status)
-	payload.ViewId = view
+	payload.DatasetId = view
 	message.EventId = fmt.Sprintf("%s-%d", view, n)
 	return message, payload
 }
@@ -260,7 +260,7 @@ func TestGatherProcessesCompletePendingPeriodsBeforeLaterOne(t *testing.T) {
 func TestGatherSelectMarketUnavailableSkipsWholePeriod(t *testing.T) {
 	h := newDualHarness(t)
 	resolved := input.Resolved{Market: dsl.Market{Select: dsl.MarketSpot, Prefer: dsl.MarketSwap}, Tasks: map[string]input.TaskBinding{
-		"spot": {ViewID: spotView, FactorTaskID: "ftask_a", DatasetID: "ds"}, "swap": {ViewID: swapView, FactorTaskID: "ftask_b", DatasetID: "ds2"}},
+		"spot": {FactorTaskID: "ftask_a", DatasetID: spotView}, "swap": {FactorTaskID: "ftask_b", DatasetID: swapView}},
 		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	dslText := "name: dual_demo\nmarket: {select: spot, prefer: swap}\nrules:\n  - id: r\n    type: rank\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 1}\nportfolio:\n  max_missing: 0.2\n"

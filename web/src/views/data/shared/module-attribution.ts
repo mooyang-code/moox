@@ -1,4 +1,4 @@
-import type { Dataset, View } from "@/api/storage/types";
+import type { Dataset } from "@/api/storage/types";
 
 export const ownerModules = ["collector", "factor", "trade", "manual", "system"] as const;
 export type OwnerModule = (typeof ownerModules)[number];
@@ -6,13 +6,9 @@ export type OwnerModule = (typeof ownerModules)[number];
 export const datasetRoles = ["raw_collection", "factor_result", "import", "analysis", "manual"] as const;
 export type DatasetRole = (typeof datasetRoles)[number];
 
-export const viewRoles = ["collection_browse", "factor_result", "analysis", "manual"] as const;
-export type ViewRole = (typeof viewRoles)[number];
-
 export interface AttributionFilter {
   ownerModules?: OwnerModule[];
   datasetRoles?: DatasetRole[];
-  viewRoles?: ViewRole[];
   includeUnowned?: boolean;
 }
 
@@ -46,14 +42,4 @@ export function isLikelyFactorResultDataset(dataset: Dataset) {
 export function isLikelyFactorResultDatasetId(datasetId: string | undefined) {
   const normalized = clean(datasetId).toLowerCase();
   return normalized.endsWith("_factor") || /_f[0-9a-f]{4}$/.test(normalized);
-}
-
-export function viewMatchesAttribution(view: View, filter: AttributionFilter) {
-  const attrs = view.attributes || {};
-  const owner = clean(attrs.owner_module);
-  const role = clean(attrs.view_role);
-  if (!owner && filter.includeUnowned) {
-    return true;
-  }
-  return includes(filter.ownerModules, owner) && includes(filter.viewRoles, role);
 }

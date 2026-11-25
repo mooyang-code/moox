@@ -35,14 +35,13 @@ const engineLag = (freq: string, openedSecondsAgo: number) => {
 
 // 夹具按 UTC 写，首页的空间磁贴在测试里也按 UTC 显示
 const NOW = Date.parse("2026-10-13T10:00:00Z");
-const names = { datasets: { dataset_abc: "现货K线" }, views: { view_xyz: "因子宽表" } };
+const names = { datasets: { dataset_abc: "现货K线", dataset_xyz: "因子宽表" } };
 
 function instance(id: string, overrides: Partial<StrategyInstance> = {}): StrategyInstance {
   return {
     instance_id: id,
     strategy_id: "s1",
     space_id: "crypto",
-    view_id: "v",
     logical_account_id: "",
     enabled: true,
     session_id: "sess",
@@ -92,8 +91,8 @@ describe("home formatting", () => {
     expect(fullTime(undefined)).toBe("—");
   });
 
-  it("replaces internal dataset and view ids with names", () => {
-    expect(prettifyIds("dataset_abc 1h：新增 1 个；view_xyz 已刷新；dataset_zzz 未知", names)).toBe(
+  it("replaces internal dataset ids with names", () => {
+    expect(prettifyIds("dataset_abc 1h：新增 1 个；dataset_xyz 已刷新；dataset_zzz 未知", names)).toBe(
       "现货K线 1h：新增 1 个；因子宽表 已刷新；dataset_zzz 未知"
     );
   });
@@ -124,7 +123,7 @@ describe("home data rows", () => {
         },
         {
           name: "视图",
-          datasets: [{ producer: "storage_view", dataset_id: "view_xyz", freq: "1m", status: "healthy" }]
+          datasets: [{ producer: "storage_view", dataset_id: "dataset_xyz", freq: "1m", status: "healthy" }]
         }
       ]
     };
@@ -420,7 +419,7 @@ describe("home tiles", () => {
         },
         {
           producer: "storage",
-          dataset_id: "view_xyz",
+          dataset_id: "dataset_xyz",
           freq: "1m",
           status: "degraded",
           output_watermark_at: at(7200),

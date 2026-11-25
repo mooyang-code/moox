@@ -20,15 +20,15 @@ import (
 // 之后建数据集 → 写入 → 周期完成 → View 就绪，账本判定完成（K 线）与写入方上报完成（因子）两条路都走一遍。
 func TestPrimaryAndViewProcessesCompletePeriodFlow(t *testing.T) {
 	subjects := []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}
-	kline := readyBenchDataset{datasetID: "dataset_e2e_kline_5m", viewID: "view_e2e_kline_5m", columns: readyBenchKlineColumns, subjects: subjects}
+	kline := readyBenchDataset{datasetID: "dataset_e2e_kline_5m", columns: readyBenchKlineColumns, subjects: subjects}
 	factor := readyBenchDataset{
-		datasetID: "dataset_e2e_factor_5m", viewID: "view_e2e_factor_5m", subjects: subjects,
+		datasetID: "dataset_e2e_factor_5m", subjects: subjects,
 		columns: []readyBenchColumn{{"factor_000", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {"factor_001", pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
 	}
 	env := newPrimaryViewEnv(t, []readyBenchDataset{kline, factor})
 	ctx := context.Background()
-	env.WaitBuilt(t, ctx, kline.viewID)
-	env.WaitBuilt(t, ctx, factor.viewID)
+	env.WaitBuilt(t, ctx, kline.datasetID)
+	env.WaitBuilt(t, ctx, factor.datasetID)
 	params := readyBenchParams{rounds: 1, subjects: len(subjects), klineBatches: 1, factorCols: len(factor.columns)}
 	if samples := runKlinePeriodBench(t, ctx, env, kline, params); len(samples) != 1 {
 		t.Fatalf("kline samples=%d", len(samples))
@@ -36,7 +36,7 @@ func TestPrimaryAndViewProcessesCompletePeriodFlow(t *testing.T) {
 	if samples := runFactorPeriodBench(t, ctx, env, factor, params); len(samples) != 1 {
 		t.Fatalf("factor samples=%d", len(samples))
 	}
-	state := env.WaitBuilt(t, ctx, kline.viewID)
+	state := env.WaitBuilt(t, ctx, kline.datasetID)
 	if state.GetAppliedCursor().GetSequence() == 0 || state.GetViewRevision() != 1 || len(state.GetColumns()) != len(kline.columns) {
 		t.Fatalf("GetViewState=%v", state)
 	}
@@ -71,7 +71,7 @@ func newPrimaryViewEnv(t *testing.T, datasets []readyBenchDataset) *followEnv {
 			for i, dataset := range datasets {
 				columns := make([]*pb.DatasetColumn, len(dataset.columns))
 				for j, column := range dataset.columns {
-					columns[j] = &pb.DatasetColumn{ColumnName: column.name, OriginId: column.name, ValueType: column.kind, Status: "active", Attributes: map[string]string{"display_name": column.name}}
+					columns[j] = &pb.DatasetColumn{ColumnName: column.name, ValueType: column.kind, Status: "active", DisplayName: column.name}
 				}
 				rsp, err := metadataService.CreateDataset(ctx, &pb.CreateDatasetReq{
 					Dataset: &pb.Dataset{

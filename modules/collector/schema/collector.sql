@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS t_collector_tasks (
     c_prepare_state TEXT NOT NULL DEFAULT 'ready',
     c_last_error TEXT NOT NULL DEFAULT '',
     c_result_dataset_id TEXT NOT NULL DEFAULT '',
-    c_result_view_id TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_ingest IN ('', 'stream', 'scf', 'local')),
@@ -29,9 +28,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_space_name ON t_collector_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_tasks_definition
 ON t_collector_tasks (c_space_id, c_definition_hash)
 WHERE c_definition_hash <> '';
-CREATE INDEX IF NOT EXISTS idx_collector_tasks_space_result_view
-ON t_collector_tasks (c_space_id, c_result_view_id)
-WHERE c_result_view_id <> '';
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_space ON t_collector_tasks (c_space_id);
 
 CREATE INDEX IF NOT EXISTS idx_collector_tasks_type ON t_collector_tasks (c_data_type);

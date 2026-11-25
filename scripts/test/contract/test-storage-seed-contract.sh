@@ -75,14 +75,11 @@ for forbidden_seed_id in \
   fi
 done
 
-legacy_time_series_grains="$(
-  rg -n --glob '*.yaml' --fixed-strings \
-    'grain_keys: [subject_id, freq, data_time]' modules examples || true
-)"
-if [[ -n "${legacy_time_series_grains}" ]]; then
-  fail "legacy three-column time-series grains found:
-${legacy_time_series_grains}"
-fi
+for removed_section in field_groups fields views; do
+  if rg -q "^${removed_section}:" config/setup/metadata.yaml; then
+    fail "metadata seed still has removed section: ${removed_section}"
+  fi
+done
 
 forbidden_matches="$(rg -n -i --no-heading "${scan_globs[@]}" \
   -e 'primarystorenode' \

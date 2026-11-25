@@ -21,7 +21,7 @@ func TestHKIntradayEvaluatesAcrossLunchBreak(t *testing.T) {
 		t.Fatal(err)
 	}
 	account := "logical-hk"
-	resolved := input.Resolved{Market: dsl.SingleMarket("equity"), Tasks: map[string]input.TaskBinding{"equity": {ViewID: "view_factor_hk_5m", FactorTaskID: "ftask_hk_5m", DatasetID: "dataset_factor_hk_5m"}}, Bar: "5m", Calendar: "hk_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("equity"), Tasks: map[string]input.TaskBinding{"equity": {FactorTaskID: "ftask_hk_5m", DatasetID: "dataset_factor_hk_5m"}}, Bar: "5m", Calendar: "hk_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
 	h := newHarnessWith(t, rankDSL, &account, resolved)
 	barStart := time.Date(2026, 11, 17, 11, 55, 0, 0, hk)
 	h.loader.frames[barStart.Unix()] = map[string]map[string]float64{
@@ -31,7 +31,7 @@ func TestHKIntradayEvaluatesAcrossLunchBreak(t *testing.T) {
 	}
 	h.now = time.Date(2026, 11, 17, 12, 0, 6, 0, hk)
 	message := &eventpb.EventMessage{EventId: "event-hk-1155", EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_hk_5m", Frequency: "5m", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"00700.XHKG", "00005.XHKG", "09988.XHKG"}}
+	payload := &storagepb.ViewDataReady{DatasetId: "dataset_factor_hk_5m", Frequency: "5m", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"00700.XHKG", "00005.XHKG", "09988.XHKG"}}
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	result, found, err := h.repo.ResultAtBar(context.Background(), "i1", h.session, time.Date(2026, 11, 17, 12, 0, 0, 0, hk))
 	if err != nil || !found {

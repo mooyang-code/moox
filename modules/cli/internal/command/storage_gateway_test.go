@@ -41,7 +41,7 @@ func TestStorageImportDoesNotResendAnUnknownWriteResult(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
-// 导入结束后等指定 View 跟上：View 正在建索引（VIEW_NOT_READY）、还没跟上都在总时长内再等。
+// 导入结束后等数据集的 View 跟上：View 正在建索引（VIEW_NOT_READY）、还没跟上都在总时长内再等。
 func TestStorageImportFinishWaitsForViewApplied(t *testing.T) {
 	answers := []*pb.WaitViewAppliedRsp{
 		{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_VIEW_NOT_READY}},
@@ -53,20 +53,20 @@ func TestStorageImportFinishWaitsForViewApplied(t *testing.T) {
 		require.Equal(t, dataViewSvc, service)
 		require.Equal(t, "WaitViewApplied", method)
 		req := request.(*pb.WaitViewAppliedReq)
-		require.Equal(t, "bars_view", req.GetViewId())
+		require.Equal(t, "bars", req.GetDatasetId())
 		proto.Merge(response.(*pb.WaitViewAppliedRsp), answers[calls])
 		calls++
 		return nil
 	})
-	target := &importStorageTarget{writer: gatewayStorageDataWriter{Gateway: gateway, SpaceID: "crypto"}, space: "crypto", view: "bars_view", written: true}
+	target := &importStorageTarget{writer: gatewayStorageDataWriter{Gateway: gateway, SpaceID: "crypto"}, space: "crypto", dataset: "bars", waitView: true, written: true}
 	require.NoError(t, target.Finish(t.Context()))
 	require.Equal(t, 3, calls)
 
 	answers = []*pb.WaitViewAppliedRsp{{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NO_PERMISSION, Msg: "无权限"}}}
 	calls = 0
 	require.ErrorContains(t, target.Finish(t.Context()), "无权限")
-	target.view = ""
-	require.NoError(t, target.Finish(t.Context()), "没指定 View 时不等")
+	target.waitView = false
+	require.NoError(t, target.Finish(t.Context()), "--wait-view=false 时不等")
 }
 
 func TestManagementConfigurationsRemoveHTTPAndKeepNativeListeners(t *testing.T) {
@@ -107,18 +107,4 @@ func TestManagementConfigurationsRemoveHTTPAndKeepNativeListeners(t *testing.T) 
 			}
 		})
 	}
-}
-
-// --view 指向别的数据集的 View 时直接报错，不去等它。
-func TestImportViewMustReadTheImportedDataset(t *testing.T) {
-	gateway := storageGatewayCall(func(_ context.Context, service, method string, request, response any) error {
-		require.Equal(t, metadataServiceName, service)
-		require.Equal(t, "GetView", method)
-		require.Equal(t, "bars_view", request.(*pb.GetViewReq).GetViewId())
-		proto.Merge(response.(*pb.GetViewRsp), &pb.GetViewRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, View: &pb.View{ViewId: "bars_view", DatasetId: "bars"}})
-		return nil
-	})
-	meta := gatewayStorageImportMetadataClient{Gateway: gateway}
-	require.NoError(t, checkImportView(t.Context(), meta, "crypto", "bars_view", "bars"))
-	require.ErrorContains(t, checkImportView(t.Context(), meta, "crypto", "bars_view", "factors"), "不是导入的数据集")
 }

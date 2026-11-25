@@ -13,22 +13,25 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-// metadataStub 返回预设的 View、一页列、标的绑定与标签。
+// metadataStub 返回预设的数据集、一页列（含一列停用的）、标的绑定与标签。
 type metadataStub struct {
 	storagepb.MetadataClientProxy
-	view     *storagepb.View
+	view     *storagepb.Dataset
 	subjects []*storagepb.Subject
 	tagCode  commonpb.ErrorCode
 }
 
 func success() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS} }
 
-func (s *metadataStub) GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error) {
-	return &storagepb.GetViewRsp{RetInfo: success(), View: s.view}, nil
+func (s *metadataStub) GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error) {
+	if s.view == nil {
+		return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetDatasetRsp{RetInfo: success(), Dataset: s.view}, nil
 }
 
-func (s *metadataStub) ListViewColumns(context.Context, *storagepb.ListViewColumnsReq, ...client.Option) (*storagepb.ListViewColumnsRsp, error) {
-	return &storagepb.ListViewColumnsRsp{RetInfo: success(), Columns: []*storagepb.ViewColumn{{ColumnName: "close"}}, PageResult: &commonpb.PageResult{}}, nil
+func (s *metadataStub) ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error) {
+	return &storagepb.ListDatasetColumnsRsp{RetInfo: success(), Columns: []*storagepb.DatasetColumn{{ColumnName: "close", Status: "active"}, {ColumnName: "old", Status: "disabled"}}, PageResult: &commonpb.PageResult{}}, nil
 }
 
 func (s *metadataStub) ListDatasetSubjects(_ context.Context, _ *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
@@ -90,10 +93,10 @@ func (s *coverageStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.Que
 // 覆盖统计由 ViewCoverage 按需向 DataView 读取该 View 活动索引的统计。探测查询固定活动索引、只带时间范围、
 // 不命中任何行；非精确读取只用已缓存的统计，精确读取在未缓存时再要求现算一次。
 func TestViewCoverageProbesDataViewOnDemand(t *testing.T) {
-	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active"}}
+	metadata := &metadataStub{view: &storagepb.Dataset{DatasetId: "ds", Freq: "1h", Status: "active"}}
 	cached := &coverageStub{viewStateStub: viewStateStub{rsp: builtState("idx_a", "store", 1)}, cached: true}
 	client := &RPCClient{Metadata: metadata, DataView: cached}
-	info, err := client.GetView(context.Background(), "space", "view")
+	info, err := client.GetView(context.Background(), "space", "ds")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +181,7 @@ func (c *tagFailingClient) GetTag(context.Context, string, string) (TagInfo, err
 // 活跃序列可回溯的起点：索引最早时间可能来自已停更的序列（只会提前），以“最新一根往前 SeriesBars−1 根”为界。
 // min_age_bars 超过每序列保留根数、或覆盖范围未知时，启用时就拒绝。
 func TestCoverageStartAndAgeCoverage(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
 	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if start := CoverageStartAt(view, resolved, time.Time{}); !start.Equal(barStart.Add(-99 * time.Hour)) {
 		t.Fatalf("活跃序列的覆盖起点应是最新一根往前 99 根：%s", start)
@@ -204,7 +207,7 @@ func TestCoverageStartAndAgeCoverage(t *testing.T) {
 
 // 回放终点截到最新一根之前（最新一根可能还没写完）；起点以活跃序列的覆盖起点为准，不被停更序列的旧行放宽。
 func TestReplayWindowUsesActiveCoverage(t *testing.T) {
-	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {DatasetID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
 	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	end, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart.Add(10*time.Hour), testNow)
 	if err != nil || !end.Equal(barStart) {
@@ -252,10 +255,10 @@ func TestEventLoaderSharesMetadata(t *testing.T) {
 	client := &countingClient{fakeClient: newFakeClient("spot")}
 	loader := Loader{Client: client}.ForEvent()
 	for i := 0; i < 3; i++ {
-		if _, err := loader.Client.GetView(context.Background(), "space", "view_factor_1h"); err != nil {
+		if _, err := loader.Client.GetView(context.Background(), "space", "dataset_factor_1h"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := loader.Client.ListDatasetSubjects(context.Background(), "space", "ds_factor"); err != nil {
+		if _, err := loader.Client.ListDatasetSubjects(context.Background(), "space", "dataset_factor_1h"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := loader.Client.ListTagMembers(context.Background(), "space", "majors"); err != nil {
@@ -266,7 +269,7 @@ func TestEventLoaderSharesMetadata(t *testing.T) {
 		t.Fatalf("事件内元数据应只读一次：views=%d subjects=%d members=%d", client.views, client.subjects, client.members)
 	}
 	loader.Invalidate()
-	if _, err := loader.Client.GetView(context.Background(), "space", "view_factor_1h"); err != nil || client.views != 2 {
+	if _, err := loader.Client.GetView(context.Background(), "space", "dataset_factor_1h"); err != nil || client.views != 2 {
 		t.Fatalf("Invalidate 后应重新读取 View：%d err=%v", client.views, err)
 	}
 	if fresh := (Loader{Client: client}).ForEvent(); fresh.Client == loader.Client {
@@ -280,9 +283,9 @@ type countingClient struct {
 	views, subjects, members int
 }
 
-func (c *countingClient) GetView(ctx context.Context, spaceID, viewID string) (ViewInfo, error) {
+func (c *countingClient) GetView(ctx context.Context, spaceID, datasetID string) (ViewInfo, error) {
 	c.views++
-	return c.fakeClient.GetView(ctx, spaceID, viewID)
+	return c.fakeClient.GetView(ctx, spaceID, datasetID)
 }
 
 func (c *countingClient) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]Subject, error) {
@@ -305,11 +308,11 @@ func TestRangeLoaderRetriesTransportErrors(t *testing.T) {
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		if failures > 0 {
 			failures--
-			return nil, 0, &TransportError{Operation: "读取 View view_factor_1h 的行", Err: errors.New("connection reset")}
+			return nil, 0, &TransportError{Operation: "读取 View dataset_factor_1h 的行", Err: errors.New("connection reset")}
 		}
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10}}), 3, nil
 	}
-	loader := &RangeLoader{Client: client, SpaceID: "space", View: client.views["view_factor_1h"], Subjects: []Subject{subject("ETH-USDT", true)}, Columns: []string{"close"}}
+	loader := &RangeLoader{Client: client, SpaceID: "space", View: client.views["dataset_factor_1h"], Subjects: []Subject{subject("ETH-USDT", true)}, Columns: []string{"close"}}
 	rows, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
 	if err != nil || len(rows.Bars) != 1 || len(client.queries) != 3 {
 		t.Fatalf("两次传输失败后应重读成功：bars=%d queries=%d err=%v", len(rows.Bars), len(client.queries), err)

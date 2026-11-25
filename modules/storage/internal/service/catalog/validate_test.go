@@ -13,18 +13,12 @@ func TestValidateDatasetIDAllowsFiftyCharacters(t *testing.T) {
 	require.ErrorContains(t, validateDatasetID("a"+strings.Repeat("b", 49)), "must start with dataset_")
 }
 
-func TestValidateViewIDAllowsFiftyCharacters(t *testing.T) {
-	require.NoError(t, validateViewID("view_"+"a"+strings.Repeat("b", 122)))
-	require.Error(t, validateViewID("view_"+"a"+strings.Repeat("b", 123)))
-}
-
 func TestValidateColumnDisplayNameOnlyRequiresPresence(t *testing.T) {
 	// 显示名由建列的模块写入，Storage 只要求有，不按业务规则推断。
-	require.NoError(t, validateColumnDisplayName("display_name", map[string]string{"display_name": "bias__20"}))
-	require.NoError(t, validateColumnDisplayName("display_name", map[string]string{"display_name": "收盘价"}))
-	require.Error(t, validateColumnDisplayName("display_name", map[string]string{}))
-	require.Error(t, validateColumnDisplayName("display_name", map[string]string{"display_name": "  "}))
-	require.Error(t, validateColumnDisplayName("display_name", nil))
+	require.NoError(t, validateColumnDisplayName("display_name", "bias__20"))
+	require.NoError(t, validateColumnDisplayName("display_name", "收盘价"))
+	require.Error(t, validateColumnDisplayName("display_name", "  "))
+	require.Error(t, validateColumnDisplayName("display_name", ""))
 }
 
 // 数据集列名会原样成为 View 索引里的列：系统列名与非标识符被拒绝。

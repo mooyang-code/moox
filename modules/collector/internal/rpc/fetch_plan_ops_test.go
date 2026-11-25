@@ -171,7 +171,7 @@ func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	applyPlan(t, db, "crypto", reregisterPlan)
-	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "t1", TaskName: "Binance 现货 K 线 1m", DataType: "kline", ResultDatasetID: "ds1", ResultViewID: "view_ds1"}))
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "t1", TaskName: "Binance 现货 K 线 1m", DataType: "kline", ResultDatasetID: "ds1"}))
 
 	rsp, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)

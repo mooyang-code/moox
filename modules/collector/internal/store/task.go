@@ -440,16 +440,13 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 			return nil, err
 		}
 	}
-	if strings.TrimSpace(task.ResultDatasetID) == "" || strings.TrimSpace(task.ResultViewID) == "" || strings.TrimSpace(task.TaskName) == "" {
+	if strings.TrimSpace(task.ResultDatasetID) == "" || strings.TrimSpace(task.TaskName) == "" {
 		existing, err := r.GetByTaskID(ctx, spaceID, taskID)
 		if err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(task.ResultDatasetID) == "" {
 			task.ResultDatasetID = existing.ResultDatasetID
-		}
-		if strings.TrimSpace(task.ResultViewID) == "" {
-			task.ResultViewID = existing.ResultViewID
 		}
 		if strings.TrimSpace(task.TaskName) == "" {
 			task.TaskName = existing.TaskName
@@ -465,7 +462,6 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 		"c_enabled":           task.Enabled,
 		"c_creator":           task.Creator,
 		"c_result_dataset_id": task.ResultDatasetID,
-		"c_result_view_id":    task.ResultViewID,
 		"c_mtime":             now,
 	}
 	if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -484,26 +480,23 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 }
 
 // validateTaskResultIdentityConflict enforces that a collection task owns its
-// result exclusively: no other task may write the same Dataset or View.
+// result exclusively: no other task may write the same Dataset.
 func validateTaskResultIdentityConflict(ctx context.Context, tx *gorm.DB, task domain.CollectionTask, excludeTaskID string) error {
-	datasetID, viewID := strings.TrimSpace(task.ResultDatasetID), strings.TrimSpace(task.ResultViewID)
-	if datasetID == "" && viewID == "" {
+	datasetID := strings.TrimSpace(task.ResultDatasetID)
+	if datasetID == "" {
 		return nil
-	}
-	if datasetID == "" || viewID == "" {
-		return fmt.Errorf("task result dataset_id and view_id must be specified together")
 	}
 	query := tx.WithContext(ctx).Where("c_space_id = ?", strings.TrimSpace(task.SpaceID))
 	if strings.TrimSpace(excludeTaskID) != "" {
 		query = query.Where("c_task_id <> ?", strings.TrimSpace(excludeTaskID))
 	}
 	var conflict domain.CollectionTask
-	err := query.Where("(c_result_dataset_id = ? OR c_result_view_id = ?)", datasetID, viewID).Limit(1).Find(&conflict).Error
+	err := query.Where("c_result_dataset_id = ?", datasetID).Limit(1).Find(&conflict).Error
 	if err != nil {
 		return fmt.Errorf("check task result identity: %w", err)
 	}
 	if conflict.TaskID != "" {
-		return fmt.Errorf("task result identity %s/%s conflicts with task %s/%s", datasetID, viewID, conflict.SpaceID, conflict.TaskID)
+		return fmt.Errorf("task result dataset %s conflicts with task %s/%s", datasetID, conflict.SpaceID, conflict.TaskID)
 	}
 	return nil
 }

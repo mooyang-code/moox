@@ -134,21 +134,21 @@ func TestParamDeliveryStale(t *testing.T) {
 	}
 }
 
-// 事件按结果 View 路由到实例：view_factor_<后缀> 对应 ftask_<后缀> 关联的启用实例；非因子结果 View 没有实例。
+// 事件按结果 View 路由到实例：dataset_factor_<后缀> 对应 ftask_<后缀> 关联的启用实例；非因子结果 View 没有实例。
 func TestEnabledInstancesByViewMapsResultViewToTask(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
-	got, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_a")
+	got, err := repo.EnabledInstancesByDataset(ctx, "space", "dataset_factor_a")
 	if err != nil || len(got) != 1 || got[0].InstanceID != "i1" || got[0].FactorTasks["spot"] != "ftask_a" {
 		t.Fatalf("路由不符：%+v err=%v", got, err)
 	}
-	for _, view := range []string{"view_factor_b", "view_a", "not_a_view", ""} {
-		if got, err := repo.EnabledInstancesByView(ctx, "space", view); err != nil || len(got) != 0 {
+	for _, view := range []string{"dataset_factor_b", "view_a", "not_a_view", ""} {
+		if got, err := repo.EnabledInstancesByDataset(ctx, "space", view); err != nil || len(got) != 0 {
 			t.Fatalf("%q 不应有实例：%+v err=%v", view, got, err)
 		}
 	}
-	if got, err := repo.EnabledInstancesByView(ctx, "other-space", "view_factor_a"); err != nil || len(got) != 0 {
+	if got, err := repo.EnabledInstancesByDataset(ctx, "other-space", "dataset_factor_a"); err != nil || len(got) != 0 {
 		t.Fatalf("其他空间不应有实例：%+v err=%v", got, err)
 	}
 }

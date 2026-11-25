@@ -378,7 +378,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import { monitorApi, type HealthComponent, type HealthOverview, type NotificationChannel } from "@/api/monitor";
-import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
+import { listAllDatasets } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { createSubmitScope } from "@/utils/submit-scope";
@@ -412,7 +412,7 @@ const loaded = ref(false);
 const error = ref("");
 const loadedAt = ref("");
 const clockMs = ref(Date.now());
-const names = reactive<NameBook>({ datasets: {}, views: {} });
+const names = reactive<NameBook>({ datasets: {} });
 // 展开状态写进 URL（?expand=pipeline,business&alert=<key>）：切到别的标签页再回来、刷新后仍是展开的
 const route = useRoute();
 const router = useRouter();
@@ -577,10 +577,9 @@ watch(nameSpaces, spaces => {
     // 系统空间只是“不属于任何市场”的范围标签，Storage 里没有它，去读只会被拒绝。
     if (isSystemSpace(space) || requestedNameSpaces.has(space)) continue;
     requestedNameSpaces.add(space);
-    void Promise.all([listAllDatasets(space, { spaceId: space }), listAllViews(space, { spaceId: space })])
-      .then(([datasets, views]) => {
+    void listAllDatasets(space, { spaceId: space })
+      .then(datasets => {
         for (const item of datasets) if (item.dataset_id) names.datasets[item.dataset_id] = item.name || item.dataset_id;
-        for (const item of views) if (item.view_id) names.views[item.view_id] = item.name || item.view_id;
       })
       .catch(() => undefined);
   }

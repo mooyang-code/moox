@@ -57,7 +57,7 @@ func TestBusinessFreshnessRecordsNewSubjectsAsDegradedWithoutFailing(t *testing.
 	t.Cleanup(func() { _ = manager.Close() })
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	now := time.Date(2026, 10, 21, 13, 51, 0, 0, time.UTC)
-	labels := `{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1h"}`
+	labels := `{"space_id":"crypto","dataset_id":"dataset","freq":"1h"}`
 	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
 		for _, row := range []monmetrics.MetricSeries{
 			{SeriesID: "latest", MetricName: monmetrics.ViewOutputLatestMetric, MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Truncate(time.Hour).Add(-time.Hour).Unix()), ObservedAt: now},
@@ -71,7 +71,7 @@ func TestBusinessFreshnessRecordsNewSubjectsAsDegradedWithoutFailing(t *testing.
 	require.NoError(t, err)
 	repositories := manager.Repositories()
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1h", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	evaluator.SetSubjectFirstSeenStore(newSubjectFirstSeen{"NEW1": time.Date(2026, 10, 21, 12, 13, 31, 0, time.UTC)})
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
@@ -79,7 +79,7 @@ func TestBusinessFreshnessRecordsNewSubjectsAsDegradedWithoutFailing(t *testing.
 	}, repositories, evaluator)
 	require.NoError(t, run(t.Context()))
 
-	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:view:1h")
+	row := checkRow(t, repositories, "crypto", "kline_freshness:crypto:dataset:1h")
 	require.NotNil(t, row)
 	require.Equal(t, domain.CheckStatusDegraded, row.Status, "宽限期内不能按失败记录，否则会触发告警")
 	require.Zero(t, row.FailureCount)

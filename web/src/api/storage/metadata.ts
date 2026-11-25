@@ -4,8 +4,6 @@ import type {
   DataSource,
   Dataset,
   DatasetColumn,
-  Field,
-  FieldGroup,
   Page,
   PageResult,
   RetInfo,
@@ -13,9 +11,7 @@ import type {
   Tag,
   TagMember,
   TagMemberStatus,
-  TagReference,
-  View,
-  ViewColumn
+  TagReference
 } from "./types";
 
 /** Storage 的调用；读取带短时缓存，见 @/api/http。 */
@@ -99,6 +95,7 @@ export function listDatasets(
     space_id: string;
     data_source_id?: string;
     data_kind?: string;
+    status?: "active" | "disabled";
     page?: Page;
   },
   options?: CallOptions
@@ -106,118 +103,8 @@ export function listDatasets(
   return callStorage<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params, options);
 }
 
-export async function createField(field: Field) {
-  const rsp = await callStorage<{ field: Field }, RetRsp & { field: Field }>("CreateField", { field });
-  return rsp.field;
-}
-
-export async function createFieldGroup(field_group: FieldGroup) {
-  const rsp = await callStorage<{ field_group: FieldGroup }, RetRsp & { field_group: FieldGroup }>("CreateFieldGroup", {
-    field_group
-  });
-  return rsp.field_group;
-}
-
-export async function updateFieldGroup(field_group: FieldGroup) {
-  const rsp = await callStorage<{ field_group: FieldGroup }, RetRsp & { field_group: FieldGroup }>("UpdateFieldGroup", {
-    field_group
-  });
-  return rsp.field_group;
-}
-
-export function listFieldGroups(params: { space_id: string; parent_group_id?: string; page?: Page }) {
-  return callStorage<
-    typeof params,
-    RetRsp & {
-      field_groups: FieldGroup[];
-      page_result: PageResult;
-      field_counts?: Record<string, number>;
-      total_field_count?: number;
-      ungrouped_field_count?: number;
-    }
-  >("ListFieldGroups", params);
-}
-
-export async function updateField(field: Field) {
-  const rsp = await callStorage<{ field: Field }, RetRsp & { field: Field }>("UpdateField", { field });
-  return rsp.field;
-}
-
-export function listFields(params: {
-  space_id: string;
-  group_id?: string;
-  value_type?: string | number;
-  status?: string;
-  keyword?: string;
-  include_descendants?: boolean;
-  ungrouped_only?: boolean;
-  sort_by?: "sort_order" | "field_id" | "updated_at";
-  sort_order?: "asc" | "desc";
-  page?: Page;
-}) {
-  return callStorage<typeof params, RetRsp & { fields: Field[]; page_result: PageResult }>("ListFields", params);
-}
-
-export function batchUpdateFields(params: {
-  space_id: string;
-  field_ids: string[];
-  target_group_id?: string;
-  target_status?: "active" | "disabled" | "deleted";
-}) {
-  return callStorage<typeof params, RetRsp & { updated_count: number }>("BatchUpdateFields", params);
-}
-
-export function deleteFieldGroup(params: { space_id: string; group_id: string }) {
-  return callStorage<typeof params, RetRsp>("DeleteFieldGroup", params);
-}
-
 export function listDatasetColumns(params: { space_id: string; dataset_id: string; page?: Page }) {
   return callStorage<typeof params, RetRsp & { columns: DatasetColumn[]; page_result: PageResult }>("ListDatasetColumns", params);
-}
-
-export async function createView(view: View) {
-  const rsp = await callStorage<{ view: View }, RetRsp & { view: View }>("CreateView", { view });
-  return rsp.view;
-}
-
-export function getView(params: { space_id: string; view_id: string }) {
-  return callStorage<typeof params, RetRsp & { view: View }>("GetView", params);
-}
-
-export function listViews(
-  params: {
-    space_id: string;
-    dataset_id?: string;
-    primary_dataset_id?: string;
-    status?: string;
-    page?: Page;
-  },
-  options?: CallOptions
-) {
-  const { primary_dataset_id, dataset_id, ...rest } = params;
-  return callStorage<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>(
-    "ListViews",
-    {
-      ...rest,
-      ...(dataset_id || primary_dataset_id ? { dataset_id: dataset_id || primary_dataset_id } : {})
-    },
-    options
-  );
-}
-
-export function listViewColumns(params: { space_id: string; view_id: string; page?: Page }) {
-  return callStorage<typeof params, RetRsp & { columns: ViewColumn[]; page_result: PageResult }>("ListViewColumns", params);
-}
-
-/** 分页读取 View 的全部列：因子结果视图会有几千列，单页 1000 列不够。 */
-export async function listAllViewColumns(spaceId: string, viewId: string) {
-  const items: ViewColumn[] = [];
-  for (let pageNo = 1; pageNo <= 100; pageNo += 1) {
-    const rsp = await listViewColumns({ space_id: spaceId, view_id: viewId, page: { page: pageNo, size: 1000 } });
-    items.push(...(rsp.columns || []));
-    if (!rsp.page_result?.has_more || !(rsp.columns || []).length) break;
-  }
-  return items;
 }
 
 /** 空间内全部数据集（翻完所有页）。 */
@@ -228,10 +115,10 @@ export function listAllDatasets(spaceId: string, options?: CallOptions) {
   });
 }
 
-/** 空间内全部 View（翻完所有页）。 */
-export function listAllViews(spaceId: string, options?: CallOptions) {
+/** 分页读取数据集的全部列：因子结果数据集会有几千列，单页 1000 列不够。 */
+export function listAllDatasetColumns(spaceId: string, datasetId: string) {
   return readAllPages(async page => {
-    const rsp = await listViews({ space_id: spaceId, page: { page, size: 500 } }, options);
-    return { items: rsp.views || [], hasMore: Boolean(rsp.page_result?.has_more) };
-  });
+    const rsp = await listDatasetColumns({ space_id: spaceId, dataset_id: datasetId, page: { page, size: 1000 } });
+    return { items: rsp.columns || [], hasMore: Boolean(rsp.page_result?.has_more) };
+  }, 100);
 }

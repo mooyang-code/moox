@@ -14,7 +14,7 @@ import (
 func TestOverviewToleratesQuietLowFrequencyViews(t *testing.T) {
 	now := time.Now().UTC()
 	view := func(id, freq string) string {
-		return fmt.Sprintf(`{"dataset_id":"dataset_%s","freq":"%s","space_id":"crypto","view_id":"view_%s"}`, id, freq, id)
+		return fmt.Sprintf(`{"dataset_id":"dataset_%s","freq":"%s","space_id":"crypto"}`, id, freq)
 	}
 	seedView := func(db *gorm.DB, id, freq string, silent time.Duration, bar time.Duration) {
 		watermark := now.Truncate(bar).Add(-bar)
@@ -33,7 +33,7 @@ func TestOverviewToleratesQuietLowFrequencyViews(t *testing.T) {
 	for _, item := range got.Datasets {
 		reasons[item.DatasetID] = item.Reason
 	}
-	require.NotEqual(t, "producer stale", reasons["view_hour_quiet"], "一小时周期的视图静默 40 分钟是正常的")
-	require.Equal(t, "producer stale", reasons["view_hour_dead"], "静默超过一个周期加宽限仍算停止上报")
-	require.Equal(t, "producer stale", reasons["view_minute_quiet"], "分钟级视图沿用 2 分钟判定")
+	require.NotEqual(t, "producer stale", reasons["dataset_hour_quiet"], "一小时周期的视图静默 40 分钟是正常的")
+	require.Equal(t, "producer stale", reasons["dataset_hour_dead"], "静默超过一个周期加宽限仍算停止上报")
+	require.Equal(t, "producer stale", reasons["dataset_minute_quiet"], "分钟级视图沿用 2 分钟判定")
 }

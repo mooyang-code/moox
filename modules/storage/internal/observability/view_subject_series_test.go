@@ -18,7 +18,7 @@ func TestViewSubjectTrackerFlagsLaggingMarketOfUnifiedDataset(t *testing.T) {
 	latest := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	observe := func(subject, tag string, at time.Time) {
 		require.NoError(t, metrics.ObserveViewDatasetOutput(ViewDatasetObservation{
-			SpaceID: "crypto", ViewID: "unified-view", DatasetID: "unified", SubjectID: subject, Frequency: "1m", SeriesTag: tag, DataTime: at,
+			SpaceID: "crypto", DatasetID: "unified", SubjectID: subject, Frequency: "1m", SeriesTag: tag, DataTime: at,
 		}))
 	}
 	// BTC：现货最新，永续落后 10 分钟（超过一根加容忍）；ETH 两个市场都最新。
@@ -27,10 +27,10 @@ func TestViewSubjectTrackerFlagsLaggingMarketOfUnifiedDataset(t *testing.T) {
 	observe("ETH-USDT", spot, latest)
 	observe("ETH-USDT", swap, latest)
 
-	scope := map[string]string{"space_id": "crypto", "view_id": "unified-view", "dataset_id": "unified", "freq": "1m"}
+	scope := map[string]string{"space_id": "crypto", "dataset_id": "unified", "freq": "1m"}
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_subjects", scope, 2)
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_lagging_subjects", scope, 1)
-	named := map[string]string{"space_id": "crypto", "view_id": "unified-view", "dataset_id": "unified", "freq": "1m", "subject_id": "BTC-USDT"}
+	named := map[string]string{"space_id": "crypto", "dataset_id": "unified", "freq": "1m", "subject_id": "BTC-USDT"}
 	assertViewDatasetMetric(t, registry, "moox_storage_view_output_lagging_subject_data_time_seconds", named, float64(latest.Add(-10*time.Minute).Unix()))
 
 	// 永续追上之后不再落后。
@@ -43,7 +43,7 @@ func TestViewSubjectTrackerBudgetCountsSeries(t *testing.T) {
 	tracker := newViewSubjectTracker()
 	at := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	observe := func(subject, tag string) error {
-		return tracker.observe(ViewDatasetObservation{SpaceID: "s", ViewID: "v", DatasetID: "d", SubjectID: subject, Frequency: "1m", SeriesTag: tag, DataTime: at})
+		return tracker.observe(ViewDatasetObservation{SpaceID: "s", DatasetID: "d", SubjectID: subject, Frequency: "1m", SeriesTag: tag, DataTime: at})
 	}
 	require.NoError(t, observe("A", "t1"))
 	require.NoError(t, observe("A", "t2"))
@@ -60,7 +60,7 @@ func TestViewSubjectTrackerLimitIsReportedOnce(t *testing.T) {
 	tracker.limit = 2
 	at := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	observe := func(view, subject, tag string, dataTime time.Time) error {
-		return tracker.observe(ViewDatasetObservation{SpaceID: "s", ViewID: view, DatasetID: "d", SubjectID: subject, Frequency: "1m", SeriesTag: tag, DataTime: dataTime})
+		return tracker.observe(ViewDatasetObservation{SpaceID: "s", DatasetID: view, SubjectID: subject, Frequency: "1m", SeriesTag: tag, DataTime: dataTime})
 	}
 	require.NoError(t, observe("v1", "A", "spot", at))
 	require.NoError(t, observe("v1", "A", "swap", at))
@@ -70,10 +70,10 @@ func TestViewSubjectTrackerLimitIsReportedOnce(t *testing.T) {
 	}
 	require.NoError(t, observe("v1", "A", "spot", at.Add(time.Minute)), "已跟踪的序列照常更新")
 	require.Equal(t, 2, tracker.observed)
-	require.Equal(t, at.Add(time.Minute).Unix(), tracker.scopes[viewSubjectScope{spaceID: "s", viewID: "v1", datasetID: "d", freq: "1m"}].series[viewSeries{subjectID: "A", seriesTag: "spot"}])
+	require.Equal(t, at.Add(time.Minute).Unix(), tracker.scopes[viewSubjectScope{spaceID: "s", datasetID: "v1", freq: "1m"}].series[viewSeries{subjectID: "A", seriesTag: "spot"}])
 
 	// v1 不再活跃：释放额度，v2 的新序列可以跟踪，再次超限时重新报告一次。
-	tracker.retain(map[ViewKey]struct{}{{SpaceID: "s", ViewID: "v2"}: {}})
+	tracker.retain(map[ViewKey]struct{}{{SpaceID: "s", DatasetID: "v2"}: {}})
 	require.NoError(t, observe("v2", "B", "spot", at))
 	require.NoError(t, observe("v2", "B", "swap", at))
 	require.ErrorIs(t, observe("v2", "C", "spot", at), ErrViewSeriesLimit)

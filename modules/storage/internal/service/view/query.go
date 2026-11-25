@@ -20,20 +20,20 @@ import (
 // QueryTimeSeriesRows pushes the complete predicate, ordering, and pagination
 // into the DuckDB engine. The service only owns routing and response shaping.
 func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-	if req == nil || req.GetViewId() == "" {
-		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id is required"))}, nil
+	if req == nil || req.GetDatasetId() == "" {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
 	}
 	if len(req.GetSelectors()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
 	}
 	queryStarted := time.Now()
-	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetViewId())
+	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetDatasetId())
 	resolvedAt := time.Now()
 	pin := req.GetPin()
 	if expected := strings.TrimSpace(pin.GetIndexId()); expected != "" && expected != indexID {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index changed: expected=%s actual=%s", expected, indexID))}, nil
 	}
-	startRevision, revisionErr := s.readIndexRevision(ctx, indexID, nil)
+	startRevision, revisionErr := readIndexRevision(ctx, runtime, indexID)
 	if revisionErr != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
 	}
@@ -41,11 +41,11 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if expected := pin.GetRevision(); expected != 0 && expected != startRevision {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index revision changed: expected=%d actual=%d", expected, startRevision))}, nil
 	}
-	selectors, err := s.timeSeriesSelectors(indexID, req)
+	selectors, err := timeSeriesSelectors(req.GetSpaceId(), req.GetDatasetId(), req.GetSelectors())
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	engine, err := s.engineFor(indexID)
+	engine, err := engineFor(runtime, indexID)
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
@@ -65,10 +65,10 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
 	engineDone := time.Now()
-	currentRevision, revisionErr := s.readIndexRevision(ctx, indexID, nil)
+	currentRevision, revisionErr := readIndexRevision(ctx, runtime, indexID)
 	if elapsed := time.Since(queryStarted); elapsed > time.Second {
-		log.Warnf("storage view slow query space=%s view=%s index=%s total=%s resolve=%s start_revision=%s prepare=%s engine=%s end_revision=%s",
-			req.GetSpaceId(), req.GetViewId(), indexID, elapsed.Round(time.Millisecond), resolvedAt.Sub(queryStarted).Round(time.Millisecond),
+		log.Warnf("storage view slow query space=%s dataset=%s index=%s total=%s resolve=%s start_revision=%s prepare=%s engine=%s end_revision=%s",
+			req.GetSpaceId(), req.GetDatasetId(), indexID, elapsed.Round(time.Millisecond), resolvedAt.Sub(queryStarted).Round(time.Millisecond),
 			startRevisionAt.Sub(resolvedAt).Round(time.Millisecond), engineStarted.Sub(startRevisionAt).Round(time.Millisecond),
 			engineDone.Sub(engineStarted).Round(time.Millisecond), time.Since(engineDone).Round(time.Millisecond))
 	}
@@ -89,10 +89,10 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		var statsErr error
 		stats, statsErr = engine.Stat(ctx, indexID)
 		if statsErr != nil {
-			log.Warnf("storage view query stat failed space=%s view=%s index=%s: %v", req.GetSpaceId(), req.GetViewId(), indexID, statsErr)
+			log.Warnf("storage view query stat failed space=%s dataset=%s index=%s: %v", req.GetSpaceId(), req.GetDatasetId(), indexID, statsErr)
 		} else {
 			hasStats = true
-			s.cacheActiveIndexStats(runtime, indexID, stats)
+			tryCacheActiveIndexStats(runtime, indexID, stats)
 			markCoverageRefresh(runtime)
 		}
 	}
@@ -127,18 +127,12 @@ func (s *Service) retainedRowsPerSeries(stats viewindex.ViewIndexStats, hasStats
 	return configured
 }
 
-func (s *Service) readIndexRevision(ctx context.Context, indexID string, engine viewindex.Engine) (uint64, error) {
-	if engine == nil {
-		var err error
-		engine, err = s.engineFor(indexID)
-		if err != nil {
-			// Lightweight protocol embedders may publish readiness without a
-			// physical engine. Production View instances always have one; keep
-			// those test-only paths on the in-memory revision fallback.
-			return s.indexRevisionOf(indexID), nil
-		}
+// readIndexRevision 返回活动索引的版本号：引擎能读索引元数据时取它的最后修改时间，否则用内存里的修订号。
+func readIndexRevision(ctx context.Context, runtime *viewRuntime, indexID string) (uint64, error) {
+	if runtime == nil || indexID == "" {
+		return 0, nil
 	}
-	if reader, ok := engine.(viewindex.MetadataStatReader); ok {
+	if reader, ok := runtime.engine.(viewindex.MetadataStatReader); ok {
 		stats, err := reader.StatMetadata(ctx, indexID)
 		if err != nil {
 			return 0, err
@@ -148,14 +142,14 @@ func (s *Service) readIndexRevision(ctx context.Context, indexID string, engine 
 			return binary.BigEndian.Uint64(sum[:8]), nil
 		}
 	}
-	return s.indexRevisionOf(indexID), nil
+	return runtime.revision.Load(), nil
 }
 
 // SearchRecordRows pushes full-text, structured filters, sorting, and paging
 // into the Bleve engine.
 func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
-	if req == nil || req.GetViewId() == "" {
-		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("view_id is required"))}, nil
+	if req == nil || req.GetDatasetId() == "" {
+		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id is required"))}, nil
 	}
 	if len(req.GetKeys()) == 0 && strings.TrimSpace(req.GetTextQuery()) == "" && req.GetFilter() == nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
@@ -167,8 +161,8 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		}
 		keys = append(keys, recordRowKey(k))
 	}
-	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetViewId())
-	engine, err := s.engineFor(indexID)
+	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetDatasetId())
+	engine, err := engineFor(runtime, indexID)
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
@@ -345,24 +339,16 @@ func runtimeCoverageComplete(runtime *viewRuntime, rng *pb.TimeRange, stats view
 	return runtime.queryState().active != "" && queryCoverageComplete(rng, stats)
 }
 
-func (s *Service) timeSeriesSelectors(indexID string, req *pb.QueryTimeSeriesRowsReq) ([]viewindex.TimeSeriesSelector, error) {
-	if len(req.GetSelectors()) == 0 {
+// timeSeriesSelectors 校验并转换时序选择器：每个选择器的空间与数据集都必须等于请求的空间与数据集。
+func timeSeriesSelectors(spaceID, datasetID string, selectors []*pb.TimeSeriesSelector) ([]viewindex.TimeSeriesSelector, error) {
+	if len(selectors) == 0 {
 		return nil, nil
 	}
-	if strings.TrimSpace(req.GetSpaceId()) == "" {
+	if strings.TrimSpace(spaceID) == "" {
 		return nil, errors.New("space_id is required")
 	}
-	s.mu.RLock()
-	schema, ok := s.schemas[indexID]
-	s.mu.RUnlock()
-	if !ok || schema.SpaceID == "" || schema.PrimaryDatasetID == "" {
-		return nil, errors.New("view selector scope is unavailable")
-	}
-	if schema.SpaceID != req.GetSpaceId() {
-		return nil, errors.New("request space_id does not match the view")
-	}
-	selectors := make([]viewindex.TimeSeriesSelector, 0, len(req.GetSelectors()))
-	for _, selector := range req.GetSelectors() {
+	out := make([]viewindex.TimeSeriesSelector, 0, len(selectors))
+	for _, selector := range selectors {
 		if selector == nil {
 			return nil, errors.New("time-series selector is required")
 		}
@@ -370,17 +356,17 @@ func (s *Service) timeSeriesSelectors(indexID string, req *pb.QueryTimeSeriesRow
 			selector.GetSubjectId() == "" || selector.GetFreq() == "" {
 			return nil, errors.New("selector space_id, dataset_id, subject_id, and freq are required")
 		}
-		if selector.GetSpaceId() != req.GetSpaceId() || selector.GetSpaceId() != schema.SpaceID {
-			return nil, errors.New("selector space_id does not match the view")
+		if selector.GetSpaceId() != spaceID {
+			return nil, errors.New("selector space_id does not match the request")
 		}
-		if selector.GetDatasetId() != schema.PrimaryDatasetID {
-			return nil, errors.New("selector dataset_id does not match the view")
+		if selector.GetDatasetId() != datasetID {
+			return nil, errors.New("selector dataset_id does not match the request")
 		}
-		selectors = append(selectors, viewindex.TimeSeriesSelector{
+		out = append(out, viewindex.TimeSeriesSelector{
 			SpaceID: selector.GetSpaceId(), DatasetID: selector.GetDatasetId(),
 			SubjectID: selector.GetSubjectId(), Freq: selector.GetFreq(),
 			SeriesTag: selector.SeriesTag,
 		})
 	}
-	return selectors, nil
+	return out, nil
 }

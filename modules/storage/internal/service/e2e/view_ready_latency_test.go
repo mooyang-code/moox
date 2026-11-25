@@ -100,10 +100,9 @@ func readyBenchParamsFromEnv(t *testing.T) readyBenchParams {
 	}
 }
 
-// readyBenchDataset 是压测用的一个时序数据集与它唯一的 View（列与数据集相同）。
+// readyBenchDataset 是压测用的一个时序数据集（每个数据集恰好有一个查询索引，列与数据集相同）。
 type readyBenchDataset struct {
 	datasetID string
-	viewID    string
 	columns   []readyBenchColumn
 	subjects  []string
 	// prefillBars 是每个标的在 readyBenchBase 之前预先直接写进 View 索引的根数，让索引规模接近生产。
@@ -127,7 +126,7 @@ type readyBenchEnv interface {
 	// Watcher 返回 ViewDataReady 的订阅端。
 	Watcher() *readyWatcher
 	// CountViewRows 返回 View 在 [start, end) 内的行数（subject 为空时不限标的），用来确认就绪时行已全部可查。
-	CountViewRows(ctx context.Context, viewID, subject string, start, end time.Time) (uint64, error)
+	CountViewRows(ctx context.Context, datasetID, subject string, start, end time.Time) (uint64, error)
 }
 
 // readyBenchSample 是一轮的计时：total 从第一次写入调用开始到收到 ViewDataReady；write 是写入调用本身的耗时；
@@ -153,8 +152,8 @@ func TestViewReadyLatencyBench(t *testing.T) {
 	for i := range factorColumns {
 		factorColumns[i] = readyBenchColumn{name: fmt.Sprintf("factor_%03d", i), kind: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}
 	}
-	kline := readyBenchDataset{datasetID: readyBenchKlineSet, viewID: readyBenchKlineSet + "_view", columns: readyBenchKlineColumns, subjects: subjects, prefillBars: params.prefillBars}
-	factor := readyBenchDataset{datasetID: readyBenchFactorSet, viewID: readyBenchFactorSet + "_view", columns: factorColumns, subjects: subjects, prefillBars: params.prefillBars}
+	kline := readyBenchDataset{datasetID: readyBenchKlineSet, columns: readyBenchKlineColumns, subjects: subjects, prefillBars: params.prefillBars}
+	factor := readyBenchDataset{datasetID: readyBenchFactorSet, columns: factorColumns, subjects: subjects, prefillBars: params.prefillBars}
 	t.Logf("压测参数：轮数=%d（另有 1 轮预热） 标的=%d K线提交次数=%d 因子列=%d 导入根数=%d 预填根数/序列=%d",
 		params.rounds, params.subjects, params.klineBatches, params.factorCols, params.importBars, params.prefillBars)
 
@@ -163,7 +162,7 @@ func TestViewReadyLatencyBench(t *testing.T) {
 	// 另建 idleViews 个没有写入的数据集与 View，它们的跟随器一直在服务端等待新变更，看几十个空闲跟随器的开销。
 	idle := make([]readyBenchDataset, params.idleViews)
 	for i := range idle {
-		idle[i] = readyBenchDataset{datasetID: fmt.Sprintf("bench_idle_%02d", i), viewID: fmt.Sprintf("bench_idle_%02d_view", i), columns: readyBenchKlineColumns[:1]}
+		idle[i] = readyBenchDataset{datasetID: fmt.Sprintf("bench_idle_%02d", i), columns: readyBenchKlineColumns[:1]}
 	}
 	var env readyBenchEnv = newFollowEnv(t, append([]readyBenchDataset{kline, factor}, idle...), followEnvOptions{prebuilt: true})
 	t.Logf("装配与预填耗时 %s（空闲 View %d 个）", time.Since(setupStart).Round(time.Millisecond), len(idle))
@@ -206,7 +205,7 @@ func runKlinePeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, d
 		for i, subject := range dataset.subjects {
 			items[i] = &pb.TimeSeriesBatchRow{SeriesIndex: uint32(i), Row: readyBenchRow(dataset, subject, period, round)}
 		}
-		waiter := env.Watcher().Expect(dataset.viewID, period.Unix())
+		waiter := env.Watcher().Expect(dataset.datasetID, period.Unix())
 		start := time.Now()
 		per := (len(items) + params.klineBatches - 1) / params.klineBatches
 		for from := 0; from < len(items); from += per {
@@ -224,7 +223,7 @@ func runKlinePeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, d
 		}
 		written := time.Now()
 		readyAt := waiter.Wait(t, ctx)
-		requireViewRows(t, ctx, env, dataset.viewID, period, period.Add(readyBenchStep), uint64(len(dataset.subjects)))
+		requireViewRows(t, ctx, env, dataset.datasetID, period, period.Add(readyBenchStep), uint64(len(dataset.subjects)))
 		sample := readyBenchSample{total: readyAt.Sub(start), write: written.Sub(start), fromMarker: readyAt.Sub(written)}
 		logReadyRound(t, "K线", round, sample)
 		if round > 0 {
@@ -248,13 +247,13 @@ func runFactorPeriodBench(t *testing.T, ctx context.Context, env readyBenchEnv, 
 		if round == 0 {
 			t.Logf("因子场景每期写入请求体约 %d 字节（%d 行 × %d 列）", proto.Size(&pb.PrimaryUpsertFieldsReq{Rows: rows}), len(rows), len(dataset.columns))
 		}
-		waiter := env.Watcher().Expect(dataset.viewID, period.Unix())
+		waiter := env.Watcher().Expect(dataset.datasetID, period.Unix())
 		start := time.Now()
 		writeRowsInBatches(t, ctx, env, dataset, rows)
 		markerAt := time.Now()
 		reportProducerCompleted(t, ctx, env, dataset, period, dataset.subjects, fmt.Sprintf("bench-factor-cause-%d", period.Unix()))
 		readyAt := waiter.Wait(t, ctx)
-		requireViewRows(t, ctx, env, dataset.viewID, period, period.Add(readyBenchStep), uint64(len(dataset.subjects)))
+		requireViewRows(t, ctx, env, dataset.datasetID, period, period.Add(readyBenchStep), uint64(len(dataset.subjects)))
 		sample := readyBenchSample{total: readyAt.Sub(start), write: markerAt.Sub(start), fromMarker: readyAt.Sub(markerAt)}
 		logReadyRound(t, "因子", round, sample)
 		if round > 0 {
@@ -282,14 +281,14 @@ func runImportBench(t *testing.T, ctx context.Context, env readyBenchEnv, kline 
 			rows = append(rows, readyBenchRow(dataset, subject, at, round))
 		}
 		last := to.Add(-readyBenchStep)
-		waiter := env.Watcher().Expect(dataset.viewID, last.Unix())
+		waiter := env.Watcher().Expect(dataset.datasetID, last.Unix())
 		start := time.Now()
 		writeRowsInBatches(t, ctx, env, dataset, rows)
 		markerAt := time.Now()
 		reportProducerCompleted(t, ctx, env, dataset, last, []string{subject}, fmt.Sprintf("bench-import-%s", subject))
 		readyAt := waiter.Wait(t, ctx)
 		sample := readyBenchSample{total: readyAt.Sub(start), write: markerAt.Sub(start), fromMarker: readyAt.Sub(markerAt)}
-		count, err := env.CountViewRows(ctx, dataset.viewID, subject, from, to)
+		count, err := env.CountViewRows(ctx, dataset.datasetID, subject, from, to)
 		if err != nil || count != uint64(len(rows)) {
 			t.Fatalf("第 %d 轮导入就绪后 View 里 %s 的行数=%d err=%v，应为 %d", round, subject, count, err, len(rows))
 		}
@@ -329,11 +328,11 @@ func reportProducerCompleted(t *testing.T, ctx context.Context, env readyBenchEn
 	}
 }
 
-func requireViewRows(t *testing.T, ctx context.Context, env readyBenchEnv, viewID string, start, end time.Time, want uint64) {
+func requireViewRows(t *testing.T, ctx context.Context, env readyBenchEnv, datasetID string, start, end time.Time, want uint64) {
 	t.Helper()
-	got, err := env.CountViewRows(ctx, viewID, "", start, end)
+	got, err := env.CountViewRows(ctx, datasetID, "", start, end)
 	if err != nil || got != want {
-		t.Fatalf("就绪后 View %s 在 [%s, %s) 的行数=%d err=%v，应为 %d", viewID, start.Format(time.RFC3339), end.Format(time.RFC3339), got, err, want)
+		t.Fatalf("就绪后 View %s 在 [%s, %s) 的行数=%d err=%v，应为 %d", datasetID, start.Format(time.RFC3339), end.Format(time.RFC3339), got, err, want)
 	}
 }
 
@@ -439,7 +438,7 @@ func (w *readyWatcher) handle(msg *nats.Msg) {
 		return
 	}
 	w.mu.Lock()
-	ch := w.waiters[readyWaiterKey(ready.GetViewId(), ready.GetPeriodTime())]
+	ch := w.waiters[readyWaiterKey(ready.GetDatasetId(), ready.GetPeriodTime())]
 	w.mu.Unlock()
 	if ch != nil {
 		select {
@@ -449,22 +448,22 @@ func (w *readyWatcher) handle(msg *nats.Msg) {
 	}
 }
 
-func readyWaiterKey(viewID string, periodTime int64) string {
-	return viewID + "/" + strconv.FormatInt(periodTime, 10)
+func readyWaiterKey(datasetID string, periodTime int64) string {
+	return datasetID + "/" + strconv.FormatInt(periodTime, 10)
 }
 
 // Expect 在写入之前登记等待，避免就绪事件早于登记到达。
-func (w *readyWatcher) Expect(viewID string, periodTime int64) *readyWaiter {
+func (w *readyWatcher) Expect(datasetID string, periodTime int64) *readyWaiter {
 	ch := make(chan time.Time, 1)
 	w.mu.Lock()
-	w.waiters[readyWaiterKey(viewID, periodTime)] = ch
+	w.waiters[readyWaiterKey(datasetID, periodTime)] = ch
 	w.mu.Unlock()
-	return &readyWaiter{watcher: w, viewID: viewID, periodTime: periodTime, ch: ch}
+	return &readyWaiter{watcher: w, datasetID: datasetID, periodTime: periodTime, ch: ch}
 }
 
 type readyWaiter struct {
 	watcher    *readyWatcher
-	viewID     string
+	datasetID  string
 	periodTime int64
 	ch         chan time.Time
 }
@@ -481,7 +480,7 @@ func (r *readyWaiter) Wait(t *testing.T, ctx context.Context) time.Time {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	case <-timer.C:
-		t.Fatalf("2 分钟内没有收到 View %s 第 %d 期的 ViewDataReady", r.viewID, r.periodTime)
+		t.Fatalf("2 分钟内没有收到 View %s 第 %d 期的 ViewDataReady", r.datasetID, r.periodTime)
 	}
 	return time.Time{}
 }

@@ -309,7 +309,6 @@ export function newSuffix(): string {
 
 const TASK_PREFIX = "ftask_";
 const DATASET_PREFIX = "dataset_factor_";
-const VIEW_PREFIX = "view_factor_";
 
 function withPrefix(prefix: string, suffix: string): string {
   validateSuffix(suffix);
@@ -323,10 +322,8 @@ function trimPrefix(prefix: string, id: string): string {
   return suffix;
 }
 
-/** 由同一个后缀生成计算任务、结果数据集、默认 View 的 ID；parse* 是它们的反解，返回后缀。 */
+/** 由同一个后缀生成计算任务与结果数据集的 ID；parse* 是它们的反解，返回后缀。 */
 export const taskId = (suffix: string): string => withPrefix(TASK_PREFIX, suffix);
 export const resultDatasetId = (suffix: string): string => withPrefix(DATASET_PREFIX, suffix);
-export const resultViewId = (suffix: string): string => withPrefix(VIEW_PREFIX, suffix);
 export const parseTaskId = (id: string): string => trimPrefix(TASK_PREFIX, id);
 export const parseResultDatasetId = (id: string): string => trimPrefix(DATASET_PREFIX, id);
-export const parseResultViewId = (id: string): string => trimPrefix(VIEW_PREFIX, id);
