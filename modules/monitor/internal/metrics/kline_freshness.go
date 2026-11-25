@@ -82,6 +82,8 @@ type KlineFreshnessEvaluator struct {
 	inventory   *TaskResultInventoryCache
 	policy      report.RealtimeTimeSeriesPolicy
 	firstSeen   SubjectFirstSeenStore
+	// seeding 非空时报告空间是否在首次接入的历史补齐中或刚补齐（见 SetSeeding）。
+	seeding func(spaceID string, now time.Time) bool
 
 	disabledMu     sync.Mutex
 	disabledChecks map[string]struct{}
@@ -148,6 +150,15 @@ func NewKlineFreshnessEvaluatorWithInventory(query *QueryService, inventory *Tas
 	evaluator.inventory = inventory
 	evaluator.policy = policy
 	return evaluator
+}
+
+// SetSeeding 设置“空间是否在首次接入的历史补齐中或刚补齐”的判断。补齐写入的历史行在变更日志里排在实时写入前面，
+// 结果视图按变更日志顺序追赶，要几个小时才追平：这段时间里视图落后于已完成的一期是预期的，
+// 只要采集侧已完成的一期本身没有过期就不报（见 completedPeriodFresh）；采集真的停了照样报出。
+func (e *KlineFreshnessEvaluator) SetSeeding(seeding func(spaceID string, now time.Time) bool) {
+	if e != nil {
+		e.seeding = seeding
+	}
 }
 
 func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...time.Time) ([]KlineFreshnessReport, error) {
@@ -249,6 +260,13 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		// 首次出现时间要在读到清单的这一轮就记下，不能等 View 正常之后：View 落后、尚无输出的那几轮也算新对象已经在等了。
 		newSubjects := e.newSubjectDeadlines(ctx, rule, clock, freq, activeSubjects, now)
 		if lag, behind := completedPeriodViewLag(clock, freq, rule, summary.latest, now); behind {
+			if e.seeding != nil && e.seeding(rule.SpaceID, now) && completedPeriodFresh(clock, freq, rule, now) {
+				report.Success, report.Reason = true, KlineReasonSeedingViewCatchingUp
+				report.StaleAge, report.OldestDataTime = lag, laterOf(summary.latest, rule.ViewLastDataTime)
+				report.Diagnostic = formatKlineDiagnostic(report)
+				reports = append(reports, report)
+				continue
+			}
 			report.Success = false
 			report.Reason = "view_behind_latest_completed_period"
 			report.StaleAge = lag
@@ -314,6 +332,34 @@ func completedPeriodViewLag(clock MarketClock, freq frequencypkg.Frequency, rule
 	}
 	overdue, _ := overdueAfter(clock, freq, latestViewTime, completed, now)
 	return overdue, true
+}
+
+// KlineReasonSeedingViewCatchingUp 是历史补齐中或刚补齐、结果视图在追补齐写入的历史行、采集侧没有过期时的结果（按通过记）。
+const KlineReasonSeedingViewCatchingUp = "history_seeding_view_catching_up"
+
+// completedPeriodFresh 判断采集侧已完成的最新一期（来自采集任务清单）在清单观测的时刻有没有过期：
+// 之后应收的第一根从收线起没超过允许迟到。按清单的观测时刻判断，免得清单刷新间隔里新收线的根被当成逾期；清单本身过期另有检查。
+func completedPeriodFresh(clock MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, now time.Time) bool {
+	if rule.LatestCompletedPeriod.IsZero() {
+		return false
+	}
+	at := rule.InventoryObservedAt
+	if at.IsZero() || at.After(now) {
+		at = now
+	}
+	expected, err := clock.LatestClosed(at, freq)
+	if err != nil {
+		return false
+	}
+	overdue, err := overdueAfter(clock, freq, rule.LatestCompletedPeriod, expected, at)
+	return err == nil && overdue <= rule.Lateness
+}
+
+func laterOf(left, right time.Time) time.Time {
+	if right.After(left) {
+		return right
+	}
+	return left
 }
 
 // klineExpectedBar 按规则声明的市场日历算出此刻应已收线的最新一根。

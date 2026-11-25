@@ -145,8 +145,10 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
 	}
 	runtime.klineFreshness = klineFreshness
-	// 两个 Builder 共用一份“历史补齐空间”记忆：补齐中与结束后 24 小时内 storage-view 的“View 跟随数据变更落后”不告警。
+	// 两个 Builder 与 K 线新鲜度共用一份“历史补齐空间”记忆：补齐中与结束后 24 小时内，storage-view 的“View 跟随数据变更落后”
+	// 不告警，K 线结果视图落后于已完成的一期也不告警（采集侧已完成的一期过期照样报）。记忆在 Builder 构建概览时记下。
 	seedingMemory := &monitorobservability.SeedingMemory{}
+	klineFreshness.SetSeeding(seedingMemory.Active)
 	factsBuilder := &monitorobservability.Builder{
 		Seeding: seedingMemory,
 		Metrics: metricsQuery, Hosts: hostStore,

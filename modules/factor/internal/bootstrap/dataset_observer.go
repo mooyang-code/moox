@@ -40,6 +40,8 @@ type factorDatasetObserver struct {
 	observed map[string]observedPeriod
 	// graced 是本进程里已经处理过首期等待宽限的任务（见 graceNewTasksLocked）。
 	graced map[string]bool
+	// seeding 是上一轮源数据集在历史补齐中的任务：放行（补齐中 → 结束）时重新给一次首期等待宽限。
+	seeding map[string]bool
 	// blocked 是各任务连续水位阻塞的起始时间（只记正在阻塞的任务），按最近一次引擎心跳整份替换；采集指标时据此判断停滞。
 	blocked map[string]blockedWatermark
 }
@@ -116,6 +118,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	}
 	keys := make(map[string]report.DatasetKey, len(sets))
 	expected := make([]report.DatasetExpectation, 0, len(sets))
+	seeding := make(map[string]bool)
 	for _, set := range sets {
 		if !set.ResultReady || set.Set.ResultDatasetID == "" {
 			continue
@@ -130,6 +133,9 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		item := report.DatasetExpectation{Key: key, Interval: interval, Paused: paused[set.Set.TaskID]}
 		if set.SourceSeeding {
 			item.Paused, item.PauseReason = true, report.PauseHistorySeeding
+			// 补齐中的任务与引擎暂停的一样不在期望清单里（ObserveRun 会报“不在期望清单”）：下面的运行上报与首期宽限都跳过它。
+			paused[set.Set.TaskID] = true
+			seeding[set.Set.TaskID] = true
 		}
 		expected = append(expected, item)
 	}
@@ -140,7 +146,17 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	if engineErr != nil || !engineKnown {
 		return engineErr
 	}
-	o.graceNewTasksLocked(keys, paused, status.RecentRuns)
+	// 刚从历史补齐放行的任务重新给一次首期等待宽限：放行后引擎要重新预载、等下一根 K 线才出第一期，
+	// 补齐前留下的最近运行（重新登记的情形）或一次都没有运行（全新安装）都会被判成“运行过期”或“尚未上报”。
+	released := make(map[string]bool)
+	for taskID := range o.seeding {
+		if !seeding[taskID] {
+			delete(o.graced, taskID)
+			released[taskID] = true
+		}
+	}
+	o.seeding = seeding
+	o.graceNewTasksLocked(keys, paused, released, status.RecentRuns)
 	blocked := make(map[string]blockedWatermark)
 	for _, item := range status.Watermarks {
 		key, known := keys[item.TaskID]
@@ -191,12 +207,14 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 //
 // 指标只在进程内存里：factor-mgr 重启后每个任务首次进入期望清单时都会重新写这一条，不会回到“尚未上报”。只在引擎状态已知时做：
 // 引擎已经上报过这个任务的一期时不需要宽限（随后的运行记录直接覆盖）；暂停的任务不在期望清单里。
-// 7×24 市场的新任务也会多一条 empty，下一分钟的第一期结果随即覆盖，无害。调用方持有 o.mu。
-func (o *factorDatasetObserver) graceNewTasksLocked(keys map[string]report.DatasetKey, paused map[string]bool, runs []domain.TaskRunSummary) {
-	ran := make(map[string]bool, len(runs))
+// 7×24 市场的新任务也会多一条 empty，下一分钟的第一期结果随即覆盖，无害。
+// released 是本轮刚从历史补齐放行的任务：即使补齐前有过运行也照样宽限，并把补齐前的最后一期记为已上报，免得它把最近运行拉回补齐前。
+// 调用方持有 o.mu。
+func (o *factorDatasetObserver) graceNewTasksLocked(keys map[string]report.DatasetKey, paused, released map[string]bool, runs []domain.TaskRunSummary) {
+	ran := make(map[string]int64, len(runs))
 	for _, run := range runs {
 		if run.LastPeriodTime > 0 {
-			ran[run.TaskID] = true
+			ran[run.TaskID] = max(ran[run.TaskID], run.LastPeriodTime)
 		}
 	}
 	for taskID := range o.graced {
@@ -209,7 +227,11 @@ func (o *factorDatasetObserver) graceNewTasksLocked(keys map[string]report.Datas
 			continue
 		}
 		o.graced[taskID] = true
-		if _, seen := o.observed[taskID]; seen || ran[taskID] {
+		if released[taskID] {
+			if period := ran[taskID]; period > o.observed[taskID].period {
+				o.observed[taskID] = observedPeriod{period: period, rank: 2}
+			}
+		} else if _, seen := o.observed[taskID]; seen || ran[taskID] > 0 {
 			continue
 		}
 		if err := o.metrics.ObserveRun(report.DatasetObservation{Key: key, Result: "empty", FinishedAt: o.now().UTC()}); err != nil {

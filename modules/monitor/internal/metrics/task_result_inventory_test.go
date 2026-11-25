@@ -419,3 +419,48 @@ func latenessPolicy(lateness time.Duration) report.RealtimeTimeSeriesPolicy {
 		RunMissedIntervals: 2, SuccessMissedIntervals: 3, MinuteLateness: lateness, HourLateness: lateness,
 	}}
 }
+
+// 首次接入的历史补齐中（或刚补齐）：补齐写入的历史行排在变更日志前面，结果视图落后于已完成的一期是预期的，
+// 采集侧已完成的一期没过期就按通过记；采集侧也过期（采集真停了）照样报视图落后；不在补齐中的空间照常报。
+func TestKlineFreshnessEvaluatorToleratesViewCatchingUpWhileSeeding(t *testing.T) {
+	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	evaluate := func(completed time.Time, seeding bool) KlineFreshnessReport {
+		provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
+			ID: "snapshot-1", ObservedAt: now,
+			Entries: []TaskResultInventoryEntry{{
+				SpaceID: "crypto", TaskID: "task", DatasetID: "dataset-seed", Frequency: "1m",
+				MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
+				LatestCompletedPeriod: completed, LatestCompletedStatus: "complete",
+				ViewLastDataTime: now.Add(-3 * time.Hour), ObservedAt: now,
+			}},
+		}}
+		cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
+		require.NoError(t, err)
+		query := newViewSummaryQuery(t, []viewSummaryTestSample{{DatasetID: "dataset-seed", Subjects: 1, ObservedAt: now, Latest: now.Add(-3 * time.Hour)}})
+		evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(30*time.Second), 20)
+		evaluator.SetSeeding(func(spaceID string, _ time.Time) bool { return seeding && spaceID == "crypto" })
+		reports, err := evaluator.Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		for _, report := range reports {
+			if report.CheckID == "kline_freshness:crypto:dataset-seed:1m" {
+				return report
+			}
+		}
+		t.Fatal("没有 K 线检查")
+		return KlineFreshnessReport{}
+	}
+	fresh := now.Add(-time.Minute) // now-1m 那一根 now 收线：采集按时
+	report := evaluate(fresh, true)
+	require.True(t, report.Success)
+	require.Equal(t, KlineReasonSeedingViewCatchingUp, report.Reason)
+	require.Equal(t, now.Add(-3*time.Hour), report.OldestDataTime)
+
+	stopped := now.Add(-10 * time.Minute) // 采集侧停在 10 分钟前
+	report = evaluate(stopped, true)
+	require.False(t, report.Success, "采集真停了照样报")
+	require.Equal(t, "view_behind_latest_completed_period", report.Reason)
+
+	report = evaluate(fresh, false)
+	require.False(t, report.Success, "不在补齐中的空间照常报")
+	require.Equal(t, "view_behind_latest_completed_period", report.Reason)
+}

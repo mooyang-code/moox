@@ -551,4 +551,8 @@ func TestViewFollowAttentionRelaxedWhileAndAfterSeeding(t *testing.T) {
 	require.Equal(t, "healthy", item.Status, "补齐结束后 24 小时内仍不告警")
 	item = build(now.Add(25*time.Hour), false)
 	require.Equal(t, "down", item.Status, "超过 24 小时恢复告警")
+	// K 线新鲜度按同一份记忆判断（SetSeeding(memory.Active)）：只认记下过补齐的空间，宽限同为 24 小时。
+	require.True(t, memory.Active("stockus", now.Add(23*time.Hour)))
+	require.False(t, memory.Active("crypto", now))
+	require.False(t, memory.Active("stockus", now.Add(25*time.Hour)))
 }

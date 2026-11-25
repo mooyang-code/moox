@@ -135,8 +135,9 @@ type Builder struct {
 	Now     func() time.Time
 }
 
-// ViewFollowSeedingGrace 是历史补齐结束后仍不报 View 跟随落后的时长：补齐写入的行要等 View 追平，追平期间落后是预期的。
-const ViewFollowSeedingGrace = 24 * time.Hour
+// SeedingGrace 是历史补齐结束后仍按“View 在追补齐写入的行”对待的时长：补齐写入的历史行在变更日志里排在实时写入前面，
+// View 按顺序追平要几个小时，追平期间 View 跟随落后、K 线结果视图落后于已完成的一期都是预期的。
+const SeedingGrace = 24 * time.Hour
 
 // viewFollowAttentionCheckID 是 storage-view 上报的“View 跟随数据变更落后”关注项（落后多久算异常由 storage-view 判断）。
 var viewFollowAttentionCheckID = AttentionCheckID("storage-view", "view_follow_lagging")
@@ -180,6 +181,17 @@ func (m *SeedingMemory) Recent(now time.Time, grace time.Duration) []string {
 	return spaces
 }
 
+// Active 报告空间在 SeedingGrace 内是否有过历史补齐（含此刻）。
+func (m *SeedingMemory) Active(spaceID string, now time.Time) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	at, ok := m.last[spaceID]
+	return ok && now.Sub(at) <= SeedingGrace
+}
+
 // noteSeeding 把本轮“待生效（上游历史补齐中）”的数据集所在空间记进 Seeding。
 func (b Builder) noteSeeding(datasets []DatasetFrequencyStatus, now time.Time) {
 	for _, dataset := range datasets {
@@ -189,11 +201,11 @@ func (b Builder) noteSeeding(datasets []DatasetFrequencyStatus, now time.Time) {
 	}
 }
 
-// relaxViewFollowWhileSeeding 在有空间历史补齐中或刚结束（ViewFollowSeedingGrace 内）时，把 storage-view 的
+// relaxViewFollowWhileSeeding 在有空间历史补齐中或刚结束（SeedingGrace 内）时，把 storage-view 的
 // “View 跟随数据变更落后”记为正常：补齐写入大量历史行，K 线 View 追平要几个小时，这段落后是预期的。
 // 关注项按服务汇总、不带空间，所以这段时间里别的空间的 View 落后也不告警（已知差别）。
 func (b Builder) relaxViewFollowWhileSeeding(statuses []BusinessStatus, now time.Time) {
-	spaces := b.Seeding.Recent(now, ViewFollowSeedingGrace)
+	spaces := b.Seeding.Recent(now, SeedingGrace)
 	if len(spaces) == 0 {
 		return
 	}
@@ -204,7 +216,7 @@ func (b Builder) relaxViewFollowWhileSeeding(statuses []BusinessStatus, now time
 		}
 		status.Status = "healthy"
 		status.Reason = fmt.Sprintf("%s 历史补齐中或刚补齐（%s 内），View 追赶补齐写入的行，落后不告警：%s",
-			strings.Join(spaces, "、"), formatGrace(ViewFollowSeedingGrace), status.Reason)
+			strings.Join(spaces, "、"), formatGrace(SeedingGrace), status.Reason)
 	}
 }
 

@@ -331,7 +331,10 @@ func (b *Backfiller) cancelJobs(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// submitSeedBatch 检查一批标的的缺口并建一个补采作业；检查结果被截断时把批对半拆开重来。没有缺口返回空作业 ID。
+// submitSeedBatch 检查一批标的的缺口并建一个补采作业；没有缺口返回空作业 ID。
+// 检查结果被截断（缺口数超过 MaxGaps）时直接返回错误，不拆批重来：记录停在 preparing，advanceSeeds 每分钟重拼同一批、
+// 再次截断，下游一直不生效，只能 collector history-seed skip 放行。批大小按全新数据集的缺口数估计（seedBatchSize），
+// 只有补齐区间里已有零碎数据、缺口数远超估计时才会截断（已知差别，见采集.md 第 3b 节）。
 func (b *Backfiller) submitSeedBatch(ctx context.Context, spaceID string, seed store.HistorySeed, batch []string, to time.Time, merge bool) (string, error) {
 	request := Request{SpaceID: spaceID, DatasetID: seed.DatasetID, Subjects: batch, From: seed.TargetFrom, To: to, FullHistory: true}
 	if merge {

@@ -306,3 +306,47 @@ func TestFactorDatasetObserverPausesSeedingTasks(t *testing.T) {
 	require.NoError(t, observer.observe(context.Background()))
 	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_seeding", 1)
 }
+
+// 补齐中的任务有过运行（重新登记时已在跑的任务）：它不在期望清单里，运行不上报，也不能让 observe 报错——
+// 否则这一轮后面的正常任务（含别的空间）都不上报运行，Monitor 会误报它们的新鲜度过期。
+func TestFactorDatasetObserverSkipsRunsOfSeedingTasks(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	datasets, err := report.NewDatasetMetrics(registry, "factor")
+	require.NoError(t, err)
+	period := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	now := period.Add(10 * time.Minute)
+	task := func(id, space, dataset string, seeding bool) domain.EngineTask {
+		return domain.EngineTask{Set: domain.FactorTask{TaskID: id, SpaceID: space, ResultDatasetID: dataset, Freq: "5m"}, ResultReady: true, SourceSeeding: seeding}
+	}
+	engine := &fakeEngineView{
+		sets: []domain.EngineTask{task("a_seeding", "stockus", "dataset_factor_seeding", true), task("b_normal", "crypto", "dataset_factor_normal", false)},
+		runs: []domain.TaskRunSummary{
+			{TaskID: "a_seeding", LastPeriodTime: period.Unix(), CompletedAt: period.Add(5*time.Minute + time.Second), LastStatus: "complete"},
+			{TaskID: "b_normal", LastPeriodTime: period.Unix(), CompletedAt: period.Add(5*time.Minute + 2*time.Second), LastStatus: "complete"},
+		},
+	}
+	observer := newFactorDatasetObserver(engine, datasets)
+	observer.now = func() time.Time { return now }
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_normal", float64(period.Add(5*time.Minute+2*time.Second).Unix()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_seeding", -1)
+	_, found := datasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_seeding")
+	require.False(t, found, "补齐中的任务不上报运行，也不写首期宽限")
+
+	// 放行：补齐前的最后一期不再上报（免得最近运行停在补齐前、马上判为运行过期），以放行时刻重新给一次首期等待宽限；
+	// 之后引擎算出的新一期照常上报。
+	engine.sets[0].SourceSeeding = false
+	released := now.Add(2 * time.Hour)
+	observer.now = func() time.Time { return released }
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_seeding", 1)
+	requireDatasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_seeding", float64(released.Unix()))
+	_, found = datasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_seeding")
+	require.False(t, found, "宽限不推进产出水位")
+
+	next := released.Truncate(5 * time.Minute)
+	engine.runs[0] = domain.TaskRunSummary{TaskID: "a_seeding", LastPeriodTime: next.Unix(), CompletedAt: next.Add(5*time.Minute + time.Second), LastStatus: "complete"}
+	observer.now = func() time.Time { return next.Add(6 * time.Minute) }
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_seeding", float64(next.Unix()))
+}
