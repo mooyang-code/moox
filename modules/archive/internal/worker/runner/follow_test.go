@@ -217,7 +217,10 @@ func TestChangeLogGapRebasesAndReportsWhatCannotBeRecovered(t *testing.T) {
 	e.src.changeTrimmed = 3 // 位点 2 早于日志保留起点
 	e.now = e.now.Add(time.Minute)
 	lastSuccess := e.now.Add(-10 * 24 * time.Hour)
-	out := e.run(2000, func(a *archivepb.RunAssignment) { a.LastSuccessAt = lastSuccess.UnixMilli() }, nil)
+	out := e.run(2000, func(a *archivepb.RunAssignment) {
+		a.BackfillFrom = "2026-10-16T23:00:00Z"
+		a.LastSuccessAt = lastSuccess.UnixMilli()
+	}, nil)
 	if out.Status != "succeeded" || !strings.Contains(out.Message, "断档") {
 		t.Fatalf("out = %+v", out)
 	}
@@ -225,8 +228,8 @@ func TestChangeLogGapRebasesAndReportsWhatCannotBeRecovered(t *testing.T) {
 		out.Unrecoverable[0].GetEndTime() != e.now.Add(-168*time.Hour).Format(time.RFC3339) {
 		t.Fatalf("无法补齐 = %v", out.Unrecoverable)
 	}
-	if changeCursor(t, e) != 4 || len(e.src.requests) == 0 || !e.src.requests[0].Start.Equal(time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("重建基线后从最早分区整段重读: cursor=%d requests=%v", changeCursor(t, e), e.src.requests)
+	if changeCursor(t, e) != 4 || len(e.src.requests) == 0 || !e.src.requests[0].Start.Equal(time.Date(2026, 10, 16, 23, 0, 0, 0, time.UTC)) {
+		t.Fatalf("重建基线后从 min(最早分区, 回补起点) 整段重读: cursor=%d requests=%v", changeCursor(t, e), e.src.requests)
 	}
 	if _, _, ok := rescanState(t, e); ok {
 		t.Fatal("预算够时本轮读完")
@@ -338,20 +341,50 @@ func TestChangeLogBacklogIsSpreadOverRoundsWithAtLeastOnePagePerRound(t *testing
 	}
 }
 
-func TestChangesBeforeTheEarliestPartitionOrTheRetentionAreNotRead(t *testing.T) {
-	t.Run("早于最早分区", func(t *testing.T) {
+// 先建任务（数据集还是空的）→ 实时行建出今天的分区 → 再写入更早的数据（补采、补算、导入 Storage）：
+// 下界取 min(最早分区, 回补起点)，更早的数据跟随后照样进归档。
+func TestHistoryWrittenAfterTheTaskIsCreatedIsArchived(t *testing.T) {
+	e := newEnv(t)
+	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-11T02:00:00Z" }
+	if out := e.run(2000, backfill, nil); out.Status != "succeeded" || out.RowsAdded != 0 {
+		t.Fatalf("首次运行（空数据集）: %+v", out)
+	}
+	live := time.Date(2026, 10, 17, 1, 5, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", live, 1, 1)
+	e.src.changeLog = append(e.src.changeLog, []source.ChangeSpan{span("BTC", live, live)})
+	e.now = e.now.Add(time.Minute)
+	if out := e.run(2000, backfill, nil); out.Status != "succeeded" || out.RowsAdded != 1 {
+		t.Fatalf("实时行: %+v", out)
+	}
+	history := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	e.src.rows = append(e.src.rows, rows("BTC", history, 60, 5)...)
+	e.src.changeLog = append(e.src.changeLog, []source.ChangeSpan{span("BTC", history, history.Add(59*time.Minute))})
+	e.src.requests = nil
+	e.now = e.now.Add(time.Minute)
+	out := e.run(2000, backfill, nil)
+	if out.Status != "succeeded" || out.RowsAdded != 60 || len(e.src.requests) != 1 || !e.src.requests[0].Start.Equal(history) {
+		t.Fatalf("更早的数据应读进来: %+v %+v", out, e.src.requests)
+	}
+	if got := report(out, "2026-10-13"); got == nil || got.GetRowCount() != 60 {
+		t.Fatalf("10-13 分区应导出 60 行: %+v", got)
+	}
+}
+
+func TestChangesBeforeTheBackfillOrTheRetentionAreNotRead(t *testing.T) {
+	t.Run("早于回补起点与最早分区", func(t *testing.T) {
 		e := newEnv(t)
-		firstFollow(t, e) // 只有 10-17 一个分区
+		firstFollow(t, e) // 回补起点 10-16 23:00，只有 10-17 一个分区
+		backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-16T23:00:00Z" }
 		e.src.rows = append(e.src.rows, rows("BTC", time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC), 1, 9)...)
 		e.src.changeLog = append(e.src.changeLog,
 			[]source.ChangeSpan{span("BTC", time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC), time.Date(2026, 10, 17, 0, 10, 0, 0, time.UTC))})
 		e.now = e.now.Add(time.Minute)
-		e.run(2000, nil, nil)
-		if len(e.src.requests) != 1 || !e.src.requests[0].Start.Equal(time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)) {
-			t.Fatalf("只读最早分区之后的部分: %+v", e.src.requests)
+		e.run(2000, backfill, nil)
+		if len(e.src.requests) == 0 || !e.src.requests[0].Start.Equal(time.Date(2026, 10, 16, 23, 0, 0, 0, time.UTC)) {
+			t.Fatalf("只读回补起点之后的部分: %+v", e.src.requests)
 		}
 		if _, ok, _ := e.store.Partition(context.Background(), "crypto", "ds_1m", "2026-10-16"); ok {
-			t.Fatal("不能新建早于归档起点的分区")
+			t.Fatal("不能新建只含早于回补起点改动的分区")
 		}
 	})
 	t.Run("早于保留期", func(t *testing.T) {
@@ -382,13 +415,14 @@ func TestManualRebuildsTheBaselineEvenWithAValidCursor(t *testing.T) {
 	e.now = e.now.Add(time.Minute)
 	out := e.run(2000, func(a *archivepb.RunAssignment) {
 		a.Kind = "manual"
+		a.BackfillFrom = "2026-10-16T23:00:00Z"
 		a.LastSuccessAt = rfcMillis("2026-09-01T00:00:00Z")
 	}, nil)
 	if out.Status != "succeeded" || e.src.headCalls != heads+1 || out.RowsAdded != 0 || out.Progress.RowsRead != 60 || len(out.Unrecoverable) != 0 {
 		t.Fatalf("out = %+v", out)
 	}
-	if !e.src.requests[0].Start.Equal(time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)) || changeCursor(t, e) != uint64(len(e.src.changeLog)) {
-		t.Fatalf("从最早分区整段重读、位点取头部: %+v", e.src.requests[0])
+	if !e.src.requests[0].Start.Equal(time.Date(2026, 10, 16, 23, 0, 0, 0, time.UTC)) || changeCursor(t, e) != uint64(len(e.src.changeLog)) {
+		t.Fatalf("从 min(最早分区, 回补起点) 整段重读、位点取头部: %+v", e.src.requests[0])
 	}
 	if _, _, ok := rescanState(t, e); ok {
 		t.Fatal("预算够时本轮读完")
