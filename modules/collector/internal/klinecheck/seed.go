@@ -232,11 +232,11 @@ func (b *Backfiller) beginSeed(ctx context.Context, spaceID, datasetID, frequenc
 			return err
 		}
 		if found {
-			lookback, bounded, err := b.Seed.Lookback(plan.Market, frequencyName)
-			if err != nil {
-				return err
-			}
-			if bounded {
+			// 查不到回看能力（行情源目录里没有这个来源）时照常补、不按回看限深度：越界的分块会记失败、在状态里看得到，
+			// 比补齐记录建不出来、下游直接生效却一根历史都没补要好。
+			if lookback, bounded, err := b.Seed.Lookback(plan.Market, frequencyName); err != nil {
+				log.WarnContextf(ctx, "collector history seed lookback unavailable space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
+			} else if bounded {
 				depth = min(depth, lookback-seedLookbackMargin)
 			}
 		}

@@ -17,8 +17,8 @@ func TestKlineLookbackFollowsCatalogAndRoutes(t *testing.T) {
 		lookback time.Duration
 		bounded  bool
 	}{
-		// 港股 5m：东方财富 28 天、腾讯只有当天，取 28 天。
-		{marketfetch.PlanMarket{MarketID: "stockhk", InstrumentType: "equity", MarketType: "equity"}, "5m", 28 * day, true},
+		// 港股 5m：东方财富 28 天、腾讯只有当天，取 28 天。来源按路由分配，不看任务标签的来源（港股标签的来源是腾讯）。
+		{marketfetch.PlanMarket{MarketID: "stockhk", InstrumentType: "equity", MarketType: "equity", Provider: "tencent", SourceID: "tencent"}, "5m", 28 * day, true},
 		// A 股 5m：通达信 365 天、东方财富 30 天、新浪 20 天、腾讯 5 天，取 365 天。
 		{marketfetch.PlanMarket{MarketID: "stockcn", InstrumentType: "equity", MarketType: "equity"}, "5m", 365 * day, true},
 		// A 股 1d：东方财富日线按日期区间取、声明任意区间，不限（通达信只有 10 年）。
@@ -26,6 +26,7 @@ func TestKlineLookbackFollowsCatalogAndRoutes(t *testing.T) {
 		// 美股 CNBC、币安支持任意区间。
 		{marketfetch.PlanMarket{MarketID: "stockus", InstrumentType: "equity", MarketType: "equity"}, "5m", 0, false},
 		{marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", MarketType: "spot", Provider: "binance"}, "1m", 0, false},
+		{marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "swap", MarketType: "swap", Provider: "binance", SourceID: "swap_http"}, "1m", 0, false},
 	}
 	for _, item := range cases {
 		lookback, bounded, err := KlineLookback(item.market, item.freq)
