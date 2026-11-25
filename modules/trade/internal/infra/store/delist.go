@@ -147,15 +147,15 @@ const (
 		ORDER BY c_round, c_space_id, c_logical_account_id`
 )
 
-// NormalizeVenue 归一名单与下架记录里的交易所、市场类型（一律小写，与 Trade 常量一致），写库与查询都经它。
-func NormalizeVenue(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+// NormalizeExchangeMarket 归一名单与下架记录里的交易所、市场类型（一律小写，与 Trade 常量一致），写库与查询都经它。
+func NormalizeExchangeMarket(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
 
 // NormalizeExchangeSymbol 归一交易所代码（FOOUSDT、FOO-USDT-SWAP）：它是交易所原文，一律转大写。
 func NormalizeExchangeSymbol(value string) string { return strings.ToUpper(strings.TrimSpace(value)) }
 
 // normalizeBlockKey 归一名单的（交易所、市场、交易所代码）。
 func normalizeBlockKey(exchange, marketType, exchangeSymbol string) (string, string, string) {
-	return NormalizeVenue(exchange), NormalizeVenue(marketType), NormalizeExchangeSymbol(exchangeSymbol)
+	return NormalizeExchangeMarket(exchange), NormalizeExchangeMarket(marketType), NormalizeExchangeSymbol(exchangeSymbol)
 }
 
 // BlockInstrument 在事务里写一行名单；已经在名单里时不改动，返回 created=false。范围为空按 ALL 写。

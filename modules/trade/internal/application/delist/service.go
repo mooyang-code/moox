@@ -81,7 +81,7 @@ func (s *Service) changed() {
 	}
 }
 
-// Key 是（交易所、市场、交易所代码）。交易所与市场按 Trade 的写法归一（store.NormalizeVenue），
+// Key 是（交易所、市场、交易所代码）。交易所与市场按 Trade 的写法归一（store.NormalizeExchangeMarket），
 // 交易所代码是交易所原文，一律转大写（FOOUSDT、FOO-USDT-SWAP，store.NormalizeExchangeSymbol）；
 // 调用方大小写写错也能对上，不会被判成“Trade 无此标的”。
 type Key struct {
@@ -91,8 +91,8 @@ type Key struct {
 }
 
 func normalize(key Key) (Key, error) {
-	key.Exchange = store.NormalizeVenue(key.Exchange)
-	key.MarketType = store.NormalizeVenue(key.MarketType)
+	key.Exchange = store.NormalizeExchangeMarket(key.Exchange)
+	key.MarketType = store.NormalizeExchangeMarket(key.MarketType)
 	key.ExchangeSymbol = store.NormalizeExchangeSymbol(key.ExchangeSymbol)
 	if key.Exchange == "" || key.ExchangeSymbol == "" ||
 		(key.MarketType != string(exchange.MarketTypeSpot) && key.MarketType != string(exchange.MarketTypeSwap)) {
