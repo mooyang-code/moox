@@ -69,7 +69,7 @@ describe("手工登记下架", () => {
     expect(isPastDelistTime(1000, 2000)).toBe(true);
     const form = {
       exchange: "binance" as const,
-      market: "SPOT" as const,
+      market: "spot" as const,
       exchange_symbol: " fooUsdt ",
       delist_at: 5000,
       paper_only: true
@@ -77,9 +77,9 @@ describe("手工登记下架", () => {
     expect(delistSnapshot(form, 1000)).toEqual({
       snapshot: {
         exchange: "binance",
-        market: "SPOT",
+        market: "spot",
         exchange_symbol: "FOOUSDT",
-        delist_at_ms: 5000,
+        delist_at: "5000",
         paper_only: true,
         past: false
       }
@@ -107,28 +107,28 @@ describe("手工登记下架", () => {
 describe("下架记录", () => {
   const record = (patch: Partial<DelistRecord>): DelistRecord => ({
     delist_id: "d",
-    exchange: 1,
-    market_type: 1,
+    exchange: "binance",
+    market_type: "spot",
     exchange_symbol: "FOOUSDT",
     scope: "ALL",
-    delist_at_ms: 0,
+    delist_at: "0",
     notice_source: "MANUAL",
     source_event_id: "e",
     status: "ACTIVE",
     planned_round: 0,
     note: "",
     result: "",
-    created_at_ms: 0,
-    finished_at_ms: 0,
+    created_at: "0",
+    finished_at: "0",
     flattens: [],
     ...patch
   });
 
   it("进行中的排前面，其余按创建时间倒序", () => {
     const sorted = sortDelists([
-      record({ delist_id: "old-done", status: "COMPLETED", created_at_ms: 1 }),
-      record({ delist_id: "new-done", status: "FAILED", created_at_ms: 3 }),
-      record({ delist_id: "active", status: "ACTIVE", created_at_ms: 2 })
+      record({ delist_id: "old-done", status: "COMPLETED", created_at: "1" }),
+      record({ delist_id: "new-done", status: "FAILED", created_at: "3" }),
+      record({ delist_id: "active", status: "ACTIVE", created_at: "2" })
     ]);
     expect(sorted.map(item => item.delist_id)).toEqual(["active", "new-done", "old-done"]);
   });

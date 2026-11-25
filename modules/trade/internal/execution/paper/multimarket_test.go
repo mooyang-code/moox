@@ -21,7 +21,7 @@ type twoMarketFacts struct {
 
 func (twoMarketFacts) GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error) {
 	return store.TradingAccountRecord{
-		SpaceID: "s", TradingAccountID: "a", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"}, SettlementAsset: "USDT",
+		SpaceID: "s", TradingAccountID: "a", Exchange: "binance", Markets: []string{"spot", "swap"}, SettlementAsset: "USDT",
 	}, nil
 }
 
@@ -33,10 +33,10 @@ func (twoMarketFacts) GetPaperBalanceSnapshot(context.Context, string, string) (
 }
 
 func (twoMarketFacts) ListInstruments(_ context.Context, _ string, market string) ([]store.InstrumentRecord, error) {
-	if market != "SPOT" {
+	if market != "spot" {
 		return nil, nil
 	}
-	return []store.InstrumentRecord{{MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT"}}, nil
+	return []store.InstrumentRecord{{MarketType: "spot", ExchangeSymbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT"}}, nil
 }
 
 func (f twoMarketFacts) ListPositions(context.Context, string, string, exchange.SymbolKey) ([]store.PositionRecord, error) {
@@ -70,7 +70,7 @@ func TestTwoMarketPaperSnapshotUsesOnePoolAndMarketSpecificPrices(t *testing.T) 
 	market := &twoMarketPrices{seen: map[exchange.SymbolKey]int{}, at: now}
 	adapter := &Adapter{
 		Store: twoMarketFacts{positions: []store.PositionRecord{{
-			MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", SignedQuantity: "3", EntryPrice: "100", Leverage: "5",
+			MarketType: "swap", ExchangeSymbol: "BTCUSDT", SignedQuantity: "3", EntryPrice: "100", Leverage: "5",
 		}}},
 		MarketData: market, Now: func() time.Time { return now },
 	}

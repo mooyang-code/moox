@@ -118,7 +118,7 @@ func listInstruments(ctx context.Context, quotes stockfeed.QuoteSource, constitu
 func stockInstrument(instrumentID string, lot int64, at time.Time) exchange.Instrument {
 	size := shared.MustDecimal(strconv.FormatInt(lot, 10))
 	return exchange.Instrument{
-		Exchange: exchange.ExchangeHKEX, MarketType: exchange.MarketTypeStock,
+		Exchange: exchange.ExchangeHKEX, MarketType: exchange.MarketTypeEquity,
 		ExchangeSymbol: instrumentID, InstrumentID: instrumentID,
 		BaseAsset: instrumentID, QuoteAsset: SettlementAsset, SettlementAsset: SettlementAsset,
 		ExchangeQuantityStep: size, MinExchangeQuantity: size,

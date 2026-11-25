@@ -36,7 +36,7 @@
             <a-table-column title="交易所 · 市场" :width="190">
               <template #cell="{ record }"
                 ><span class="tx-nowrap"
-                  >{{ exchangeLabels[record.account.exchange] || "-" }} · {{ marketsText(record.account.markets) }}</span
+                  >{{ exchangeLabel(record.account.exchange) }} · {{ marketsText(record.account.markets) }}</span
                 ></template
               >
             </a-table-column>
@@ -180,7 +180,7 @@ import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { exchangeLabels, listLogicalAccounts, removeLogicalAccountMember, updateLogicalAccount } from "@/api/trade";
+import { exchangeLabel, listLogicalAccounts, removeLogicalAccountMember, updateLogicalAccount } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import {
   updateLogicalAccountFundSettings,
@@ -229,7 +229,7 @@ const rows = computed(() =>
 const settingsOf = computed(() => logical.value as LogicalAccountWithSettings);
 // 后端按全部成员（含停用的）判断组合里有没有非币安账户；查不到账户信息的成员按非币安算，宁可少开放
 const nonBinance = computed(() =>
-  (logical.value.members || []).some(member => (accounts.value.get(member.trading_account_id)?.exchange ?? 0) !== 1)
+  (logical.value.members || []).some(member => accounts.value.get(member.trading_account_id)?.exchange !== "binance")
 );
 // 资金设置里“币安生产账户”相关的选项：有已启用的币安生产成员，开通了永续，并且账户本身是启用状态
 const hasBinanceLive = computed(() =>
@@ -237,16 +237,16 @@ const hasBinanceLive = computed(() =>
     const account = accounts.value.get(member.trading_account_id);
     return (
       member.enabled &&
-      account?.exchange === 1 &&
+      account?.exchange === "binance" &&
       accountEnvironment(account) === "prod" &&
-      Boolean(account.markets?.includes(2)) &&
+      Boolean(account.markets?.includes("swap")) &&
       account.status === "ENABLED"
     );
   })
 );
 // 组合里有币安普通账户（account_mode 由交易所检测写入，没检测过的不算）：资金设置里说明 BNB 补买只到现货钱包
 const hasStandardAccount = computed(() =>
-  rows.value.some(item => item.account.exchange === 1 && item.account.account_mode === "BINANCE_STANDARD")
+  rows.value.some(item => item.account.exchange === "binance" && item.account.account_mode === "BINANCE_STANDARD")
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
 // 模拟账户可以在这里关闭（会暂停整个组合）；实盘账户要先移出组合，再到执行账户页签停用

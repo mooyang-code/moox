@@ -68,7 +68,7 @@ func seedDelisted(t *testing.T, tradeStore *store.Store) {
 	ctx := context.Background()
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: delistedSymbol,
+			Exchange: "binance", Environment: "TESTNET", MarketType: "swap", ExchangeSymbol: delistedSymbol,
 			InstrumentID: "DEADUSDT", BaseAsset: "DEAD", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "1",
 			ContractValueAsset: "DEAD", ExchangeQuantityStep: "1",
@@ -77,7 +77,7 @@ func seedDelisted(t *testing.T, tradeStore *store.Store) {
 			return err
 		}
 		if err := tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SWAP", ExchangeSymbol: delistedSymbol,
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "swap", ExchangeSymbol: delistedSymbol,
 			PositionSide: "NET", SignedQuantity: "2", EntryPrice: "1", MarkPrice: "1", Leverage: "5",
 			MarginMode: "CROSS", ExchangeUpdatedAt: 1_000,
 		}); err != nil {
@@ -86,7 +86,7 @@ func seedDelisted(t *testing.T, tradeStore *store.Store) {
 		order := func(id, state, exchangeOrderID string) store.OrderRecord {
 			return store.OrderRecord{
 				SpaceID: "space-1", OrderID: id, TradingAccountID: "account-1", ClientOrderID: id + "-client",
-				ExchangeOrderID: exchangeOrderID, MarketType: "SWAP", ExchangeSymbol: delistedSymbol, OrderType: "LIMIT",
+				ExchangeOrderID: exchangeOrderID, MarketType: "swap", ExchangeSymbol: delistedSymbol, OrderType: "LIMIT",
 				TimeInForce: "IOC", Side: "SELL", PositionSide: "NET", Quantity: "2", ReferencePrice: "1", ReferencePriceAt: 1_000,
 				ReduceOnly: true, OwnerType: "OPERATOR", OwnerID: "delist-1", LogicalAccountID: "logical-1",
 				State: state, FilledQuantity: "0", ReservedAsset: "USDT", ReservedQuantity: "5", RemainingReservedQuantity: "5",
@@ -214,7 +214,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: delistedSymbol,
+			Exchange: "binance", Environment: "TESTNET", MarketType: "swap", ExchangeSymbol: delistedSymbol,
 			InstrumentID: "DEADUSDT", BaseAsset: "DEAD", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "1",
 			ContractValueAsset: "DEAD", ExchangeQuantityStep: "1",
@@ -226,7 +226,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 			limit := "1"
 			if err := tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", OrderID: id, TradingAccountID: "account-1", ClientOrderID: id + "-client",
-				ExchangeOrderID: id + "-exchange", MarketType: "SWAP", ExchangeSymbol: delistedSymbol, OrderType: "LIMIT",
+				ExchangeOrderID: id + "-exchange", MarketType: "swap", ExchangeSymbol: delistedSymbol, OrderType: "LIMIT",
 				TimeInForce: "GTC", Side: "SELL", PositionSide: "NET", Quantity: "2", LimitPrice: &limit,
 				ReferencePrice: "1", ReferencePriceAt: 1_000, ReduceOnly: true, OwnerType: "OPERATOR", OwnerID: "delist-1",
 				LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0", ReservedAsset: "USDT",
@@ -287,7 +287,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 	require.True(t, account.Ready, "缺口收掉后账户要就绪：%s", account.LastError)
 	require.False(t, account.HasBalancePending())
 	require.Equal(t, "41", account.FillCursors["SWAP:"+delistedSymbol], "下架标的的成交游标原样保留")
-	require.Contains(t, account.FillCursors, "SWAP:BTC-USDT", "别的标的的游标不动")
+	require.Contains(t, account.FillCursors, "swap:BTC-USDT", "别的标的的游标不动")
 	gaps, err = tradeStore.CountOrdersWithFillGap(ctx, "space-1", "account-1")
 	require.NoError(t, err)
 	require.Zero(t, gaps)

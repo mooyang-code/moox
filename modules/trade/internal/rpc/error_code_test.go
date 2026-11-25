@@ -96,7 +96,7 @@ func seedRemovalExposure(t *testing.T, tradeStore *store.Store) {
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "account-1",
-			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE",
+			Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "LIVE",
 			Environment: "TESTNET", CredentialSecretID: "secret-account-1",
 			SettlementAsset: "USDT", Status: "ENABLED", MarginMode: "CROSS",
 		}); err != nil {
@@ -114,7 +114,7 @@ func seedRemovalExposure(t *testing.T, tradeStore *store.Store) {
 			return err
 		}
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SWAP",
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "swap",
 			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
 		})

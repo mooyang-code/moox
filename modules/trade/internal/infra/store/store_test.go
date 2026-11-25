@@ -73,17 +73,17 @@ func TestReadOnlyView(t *testing.T) {
 	}))
 
 	// 只读视图先读过一次标的（缓存里是空的），读写连接写入标的后，只读视图读到新的标的
-	instruments, err := ro.ListInstruments(ctx, "BINANCE", "SPOT")
+	instruments, err := ro.ListInstruments(ctx, "binance", "spot")
 	require.NoError(t, err)
 	require.Empty(t, instruments)
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01",
 			ExchangeQuantityStep: "0.0001", Status: "TRADING",
 		})
 	}))
-	instruments, err = ro.ListInstruments(ctx, "BINANCE", "SPOT")
+	instruments, err = ro.ListInstruments(ctx, "binance", "spot")
 	require.NoError(t, err)
 	require.Len(t, instruments, 1)
 
@@ -105,7 +105,7 @@ func TestOpenConfiguresSQLiteAndTransactionRollback(t *testing.T) {
 	stop := errors.New("stop")
 	err := s.Transaction(context.Background(), func(tx *Tx) error {
 		require.NoError(t, tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01",
 			ExchangeQuantityStep: "0.0001", Status: "TRADING",
 		}))
@@ -264,7 +264,7 @@ func TestListActiveOrdersForAccountSkipsFinishedOrders(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateTradingAccount(TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Name: "a", Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
+		if err := tx.CreateTradingAccount(TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Name: "a", Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
 			return err
 		}
 		for id, state := range map[string]string{"open": "OPEN", "unknown": "SUBMIT_UNKNOWN", "filled": "FILLED", "canceled": "CANCELED"} {

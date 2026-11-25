@@ -48,7 +48,7 @@ func ledgerServer(t *testing.T, adapters adapterMap) *ConsoleServer {
 	t.Cleanup(func() { _ = tradeStore.Close() })
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper", Exchange: "BINANCE", Markets: []string{"SWAP"},
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper", Exchange: "binance", Markets: []string{"swap"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}); err != nil {

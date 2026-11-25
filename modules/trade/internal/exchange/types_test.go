@@ -8,12 +8,12 @@ import (
 )
 
 func TestCanonicalInstrumentIDIsExchangeIndependent(t *testing.T) {
-	for _, market := range []MarketType{MarketTypeSpot, MarketTypeSwap} {
+	// 期望值写死标的 ID 原文：后缀是 SPOT、SWAP，与市场类型的取值无关。
+	for market, want := range map[MarketType]string{MarketTypeSpot: "BTC-USDT-SPOT", MarketTypeSwap: "BTC-USDT-SWAP"} {
 		got, err := CanonicalInstrumentID(" btc ", "usdt", market)
 		if err != nil {
 			t.Fatalf("CanonicalInstrumentID() error = %v", err)
 		}
-		want := "BTC-USDT-" + string(market)
 		if got != want {
 			t.Fatalf("CanonicalInstrumentID() = %q, want %q", got, want)
 		}
@@ -30,6 +30,22 @@ func TestCanonicalInstrumentIDRejectsIncompleteIdentity(t *testing.T) {
 		MarketTypeUnspecified,
 	); err == nil {
 		t.Fatal("CanonicalInstrumentID() accepted unspecified market")
+	}
+}
+
+// 按标的 ID 后缀判断市场：BTC-USDT-SWAP 是永续、BTC-USDT-SPOT 是现货，没有后缀的是股票代码。
+func TestMarketOfInstrumentIDUsesSuffix(t *testing.T) {
+	for id, want := range map[string]MarketType{
+		"BTC-USDT-SWAP": MarketTypeSwap,
+		"BTC-USDT-SPOT": MarketTypeSpot,
+		"600519.XSHG":   MarketTypeEquity,
+	} {
+		if got := MarketOfInstrumentID(id); got != want {
+			t.Fatalf("MarketOfInstrumentID(%q) = %q, want %q", id, got, want)
+		}
+	}
+	if InstrumentSuffix(MarketTypeSwap) != "SWAP" || InstrumentSuffix(MarketTypeSpot) != "SPOT" || InstrumentSuffix(MarketTypeEquity) != "" {
+		t.Fatal("标的 ID 后缀应是 SPOT、SWAP，股票没有后缀")
 	}
 }
 

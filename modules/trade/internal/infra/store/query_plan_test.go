@@ -33,12 +33,12 @@ func TestHotQueriesUseIntendedIndexes(t *testing.T) {
 		want  string
 	}{
 		{"成交缺口", queryOrdersWithFillGap, []any{"space-1", "account-1"}, "USING INDEX idx_trade_orders_fill_gap"},
-		{"下架标的的成交缺口", queryInstrumentOrdersWithFillGap, []any{"space-1", "account-1", "SPOT", "BTCUSDT"},
+		{"下架标的的成交缺口", queryInstrumentOrdersWithFillGap, []any{"space-1", "account-1", "spot", "BTCUSDT"},
 			"USING INDEX idx_trade_orders_account_symbol_finished"},
 		{"受管标的", queryManagedSymbols, []any{"space-1", "account-1"}, "USING INDEX sqlite_autoindex_t_account_instrument_summaries_1 (c_space_id=? AND c_trading_account_id=?)"},
-		{"还没提交完的预留", queryInFlightReservations, []any{"space-1", "account-1", "USDT", `["SPOT"]`},
+		{"还没提交完的预留", queryInFlightReservations, []any{"space-1", "account-1", "USDT", `["spot"]`},
 			"USING INDEX idx_trade_orders_account_state (c_space_id=? AND c_trading_account_id=? AND c_state=?)"},
-		{"快照之后提交的预留", querySubmittedReservationsSince, []any{"space-1", "account-1", int64(1), "USDT", `["SPOT"]`},
+		{"快照之后提交的预留", querySubmittedReservationsSince, []any{"space-1", "account-1", int64(1), "USDT", `["spot"]`},
 			"USING INDEX idx_trade_orders_account_submitted (c_space_id=? AND c_trading_account_id=? AND c_submitted_at>?)"},
 		{"按组合汇总成交", sqlSummarizeFillsByLogical, []any{"space-1", "logical-1", int64(0), int64(1), "space-1", "logical-1", int64(0), int64(1)},
 			"USING INDEX idx_order_fills_logical_time (c_space_id=? AND c_logical_account_id=? AND c_traded_at>? AND c_traded_at<?)"},

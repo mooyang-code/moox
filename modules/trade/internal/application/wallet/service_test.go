@@ -39,7 +39,7 @@ func newEnvWithFund(t *testing.T, spot, futures, fund string) *env {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	account := store.TradingAccountRecord{
-		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"},
+		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main", Exchange: "binance", Markets: []string{"spot", "swap"},
 		ExecutionMode: "LIVE", AccountMode: "BINANCE_STANDARD", Environment: "PRODUCTION", CredentialSecretID: "secret-1",
 		SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "1"},
@@ -82,7 +82,7 @@ func (e *env) newService() *Service {
 func (e *env) buys(quantity string) []Buy {
 	return []Buy{{
 		Account:    e.account,
-		Instrument: store.InstrumentRecord{InstrumentID: "BTC-USDT-SPOT", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT"},
+		Instrument: store.InstrumentRecord{InstrumentID: "BTC-USDT-SPOT", MarketType: "spot", ExchangeSymbol: "BTCUSDT"},
 		Quantity:   shared.MustDecimal(quantity),
 	}}
 }

@@ -87,7 +87,7 @@ func (s *ConsoleServer) CreatePaperSimulation(
 		LogicalAccountName: strings.TrimSpace(req.GetLogicalAccountName()),
 		LogicalAccountID:   strings.TrimSpace(req.GetLogicalAccountId()), Priority: int(req.GetPriority()),
 		ControlMode: controlModeFromPB(req.GetControlMode()),
-		Exchange:    exchangeFromPB(req.GetExchange()), Markets: marketsFromPB(req.GetMarkets()),
+		Exchange:    exchange.Exchange(req.GetExchange()), Markets: marketTypes(req.GetMarkets()),
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
 		OrderRetentionDays: optionalInt(req.OrderRetentionDays),

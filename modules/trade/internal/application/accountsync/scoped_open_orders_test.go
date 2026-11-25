@@ -34,7 +34,7 @@ func seedSpotAccountWithTargetAndHoldings(t *testing.T, tradeStore *store.Store)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		for _, base := range []string{"ETH", "BNB", "DOGE"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SPOT", ExchangeSymbol: base + "USDT",
+				Exchange: "binance", Environment: "TESTNET", MarketType: "spot", ExchangeSymbol: base + "USDT",
 				InstrumentID: base + "-USDT-SPOT", BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}); err != nil {
@@ -48,7 +48,7 @@ func seedSpotAccountWithTargetAndHoldings(t *testing.T, tradeStore *store.Store)
 		})
 		return err
 	}))
-	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'SPOT' WHERE c_trading_account_id = 'account-1'`).Error)
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'spot' WHERE c_trading_account_id = 'account-1'`).Error)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	account.Snapshot.Balances = []store.AssetBalance{
@@ -81,7 +81,7 @@ func TestReconcileReadsOpenOrdersPerSymbolWhileOtherModesReadAll(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-1", ClientOrderID: "old-resting-client",
-			ExchangeOrderID: "77", MarketType: "SPOT", InstrumentID: "DOGE-USDT-SPOT", ExchangeSymbol: "DOGEUSDT",
+			ExchangeOrderID: "77", MarketType: "spot", InstrumentID: "DOGE-USDT-SPOT", ExchangeSymbol: "DOGEUSDT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "0.1", ReferencePriceAt: 1,
 			OwnerType: "EXTERNAL", OwnerID: "external-77", LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0",
 			Version: 1, SubmittedAt: 1,
@@ -117,7 +117,7 @@ func TestReconcileFallsBackToFullQueryWhenTooManySymbols(t *testing.T) {
 		for index := 0; index < scopedOpenOrderLimit; index++ {
 			base := fmt.Sprintf("C%02d", index)
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SPOT", ExchangeSymbol: base + "USDT",
+				Exchange: "binance", Environment: "TESTNET", MarketType: "spot", ExchangeSymbol: base + "USDT",
 				InstrumentID: base + "-USDT-SPOT", BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}); err != nil {

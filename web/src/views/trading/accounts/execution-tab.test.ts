@@ -32,8 +32,8 @@ interface JoinVM {
 const account = {
   trading_account_id: "ta-9",
   name: "生产散户",
-  exchange: 1,
-  markets: [2],
+  exchange: "binance",
+  markets: ["swap"],
   execution_mode: 2,
   status: "ENABLED",
   settlement_asset: "USDT",

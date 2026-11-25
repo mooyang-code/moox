@@ -20,7 +20,7 @@ var hkNow = time.Date(2026, 11, 17, 2, 0, 0, 0, time.UTC)
 // hkInstrument 是一只港股：每手 lot 股，标的表里的价格步长是价位表最小的一档，没有价格笼子。
 func hkInstrument(id, lot string) store.InstrumentRecord {
 	return store.InstrumentRecord{
-		Exchange: "HKEX", MarketType: "STOCK", ExchangeSymbol: id, InstrumentID: id,
+		Exchange: "hkex", MarketType: "equity", ExchangeSymbol: id, InstrumentID: id,
 		BaseAsset: id, QuoteAsset: "HKD", SettlementAsset: "HKD",
 		ExchangeQuantityStep: lot, MinExchangeQuantity: lot, PriceTick: exchange.HKMinPriceTick,
 		MaxBuyPriceRatio: "0", MinSellPriceRatio: "0", Status: "TRADING",

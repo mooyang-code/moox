@@ -39,7 +39,7 @@ func seedStockAccount(t *testing.T, lastSync time.Time) *store.Store {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "stock-1", Name: "A 股模拟",
-			Exchange: "ASHARE", Markets: []string{"STOCK"}, ExecutionMode: "PAPER", Environment: "PAPER",
+			Exchange: "ashare", Markets: []string{"equity"}, ExecutionMode: "PAPER", Environment: "PAPER",
 			SettlementAsset: "CNY", Status: "ENABLED", Ready: true, LastSyncAt: lastSync.UnixMilli(),
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
@@ -58,7 +58,7 @@ func seedStockAccount(t *testing.T, lastSync time.Time) *store.Store {
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+			Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 			BaseAsset: "600519.XSHG", QuoteAsset: "CNY", SettlementAsset: "CNY",
 			ExchangeQuantityStep: "100", MinExchangeQuantity: "100", PriceTick: "0.01", Status: "TRADING",
 		}); err != nil {
@@ -71,7 +71,7 @@ func seedStockAccount(t *testing.T, lastSync time.Time) *store.Store {
 		}
 		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "stock-1", OrderID: "bought", ClientOrderID: "bought",
-			Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+			Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 			OrderType: "MARKET", Side: "BUY", Quantity: "100", FilledQuantity: "100", ReferencePrice: "1450", State: "FILLED",
 			OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
 		})

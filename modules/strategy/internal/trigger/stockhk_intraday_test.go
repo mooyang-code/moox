@@ -40,7 +40,7 @@ func TestHKIntradayEvaluatesAcrossLunchBreak(t *testing.T) {
 	if result.Status != store.StatusOK || !result.ValidUntil.Equal(time.Date(2026, 11, 17, 13, 10, 0, 0, hk)) {
 		t.Fatalf("港股 11:55 那根应求值成功、有效期到 13:10：status=%s skip=%s valid=%s", result.Status, result.SkipReason, result.ValidUntil.In(hk))
 	}
-	if data := string(result.EventData); !strings.Contains(data, "00700.XHKG") || !strings.Contains(data, "STOCK") {
+	if data := string(result.EventData); !strings.Contains(data, "00700.XHKG") || !strings.Contains(data, "equity") {
 		t.Fatalf("目标应带港股标的 ID 与股票市场：%s", data)
 	}
 

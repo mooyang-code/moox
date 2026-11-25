@@ -78,8 +78,8 @@ func TestClosePaperSimulationKeepsSpotValueInEquity(t *testing.T) {
 	for _, tc := range []struct {
 		markets, want string
 	}{
-		{markets: "SPOT,SWAP", want: "150000"},
-		{markets: "SWAP", want: "100000"},
+		{markets: "spot,swap", want: "150000"},
+		{markets: "swap", want: "100000"},
 	} {
 		t.Run(tc.markets, func(t *testing.T) {
 			s := openTestStore(t)

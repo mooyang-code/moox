@@ -5,7 +5,7 @@
   ② 禁止以 _at 结尾的 string 字段（甲类例外表除外）；
   ③ 名字像时间的 int64 字段不在乙类白名单里的视为 Unix 毫秒，注释（字段上方紧挨的注释与行尾注释）里不得出现“秒”（“毫秒”除外，含“Unix 秒”“纳秒”）；
   ④ 字段名不得以 _at_ms、_time_ms、_unix、_unix_nano 结尾。
-规则①总对全部 proto 生效；规则②～④只对 strict 范围内的文件生效（见 check-proto-time-fields.sh）。
+四条规则对 --strict 给出的文件生效（check-proto-time-fields.sh 传入全部 proto）。
 """
 
 import re

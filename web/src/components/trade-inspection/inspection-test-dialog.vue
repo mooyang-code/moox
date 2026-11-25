@@ -26,8 +26,8 @@
         extra="不勾选时只判断和市场无关的问题；和市场有关的（双向持仓、万向划转权限等）写在提醒里"
       >
         <a-checkbox-group v-model="form.markets" :disabled="running">
-          <a-checkbox :value="1">现货</a-checkbox>
-          <a-checkbox :value="2">永续合约</a-checkbox>
+          <a-checkbox value="spot">现货</a-checkbox>
+          <a-checkbox value="swap">永续合约</a-checkbox>
         </a-checkbox-group>
       </a-form-item>
     </a-form>
@@ -63,7 +63,7 @@ const running = ref(false);
 const view = ref<InspectionView | null>(null);
 const errorText = ref("");
 
-const exchangeValue = computed<Exchange>(() => exchangeFromProvider(props.provider));
+const exchangeValue = computed<Exchange | undefined>(() => exchangeFromProvider(props.provider));
 const exchangeLabel = computed(() => (props.provider || "未知").toUpperCase());
 
 // 每次打开都从干净状态开始，不沿用上一把密钥的结果。

@@ -100,13 +100,13 @@ func initialize(
 	// 股票场所（A 股、港股）的公共行情整个进程各一份：快照缓存、标的列表都共用；列表加载完之前用库里已有的标的。
 	stockSeed := func(name exchange.Exchange) stockfeed.Seed {
 		return func(seedCtx context.Context) ([]exchange.Instrument, error) {
-			records, listErr := tradeStore.ListInstruments(seedCtx, string(name), string(exchange.MarketTypeStock))
+			records, listErr := tradeStore.ListInstruments(seedCtx, string(name), string(exchange.MarketTypeEquity))
 			if listErr != nil {
 				return nil, listErr
 			}
 			instruments := make([]exchange.Instrument, 0, len(records))
 			for _, record := range records {
-				instruments = append(instruments, instrumentFromRecord(name, exchange.MarketTypeStock, record))
+				instruments = append(instruments, instrumentFromRecord(name, exchange.MarketTypeEquity, record))
 			}
 			return instruments, nil
 		}
@@ -660,7 +660,7 @@ func registerBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *st
 		Exchange:         exchange.ExchangeAShare,
 		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
 		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
-		Markets:          []exchange.MarketType{exchange.MarketTypeStock},
+		Markets:          []exchange.MarketType{exchange.MarketTypeEquity},
 		SettlementAssets: []string{ashare.SettlementAsset},
 		LiveUnavailable:  errASharePending.Error(),
 		Session:          session,
@@ -680,7 +680,7 @@ func registerBuiltins(registry *execution.Registry, ashareMarket, hkexMarket *st
 		Exchange:         exchange.ExchangeHKEX,
 		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
 		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
-		Markets:          []exchange.MarketType{exchange.MarketTypeStock},
+		Markets:          []exchange.MarketType{exchange.MarketTypeEquity},
 		SettlementAssets: []string{hkex.SettlementAsset},
 		LiveUnavailable:  errHKEXPaperOnly.Error(),
 		Session:          hkSession,

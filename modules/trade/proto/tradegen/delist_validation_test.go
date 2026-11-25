@@ -9,8 +9,8 @@ import (
 )
 
 func TestDelistRequestsRequireExchangeMarketAndSymbol(t *testing.T) {
-	valid := func() (Exchange, MarketType, string) {
-		return Exchange_EXCHANGE_BINANCE, MarketType_MARKET_TYPE_SPOT, "FOOUSDT"
+	valid := func() (string, string, string) {
+		return "binance", "spot", "FOOUSDT"
 	}
 	exchange, market, symbol := valid()
 	if err := (&ListInstrumentHoldersReq{Exchange: exchange, MarketType: market, ExchangeSymbol: symbol}).Validate(); err != nil {
@@ -18,7 +18,7 @@ func TestDelistRequestsRequireExchangeMarketAndSymbol(t *testing.T) {
 	}
 	for name, req := range map[string]interface{ Validate() error }{
 		"缺交易所":     &ListInstrumentHoldersReq{MarketType: market, ExchangeSymbol: symbol},
-		"市场不是现货永续": &ListInstrumentHoldersReq{Exchange: exchange, MarketType: MarketType_MARKET_TYPE_STOCK, ExchangeSymbol: symbol},
+		"市场不是现货永续": &ListInstrumentHoldersReq{Exchange: exchange, MarketType: "equity", ExchangeSymbol: symbol},
 		"缺代码":      &UnblockInstrumentReq{Exchange: exchange, MarketType: market},
 		"代码带空白":    &UnblockInstrumentReq{Exchange: exchange, MarketType: market, ExchangeSymbol: " FOOUSDT"},
 	} {

@@ -27,7 +27,7 @@ Object.defineProperty(window, "matchMedia", {
 
 let wrapper: VueWrapper;
 
-function mountTab(markets = [1]) {
+function mountTab(markets = ["spot"]) {
   const logical = ref({
     logical_account_id: "l-1",
     markets,
@@ -73,8 +73,8 @@ describe("订单筛选写在地址里", () => {
 
   it("地址里的市场读回成数字，永续不会被重置成现货", async () => {
     mocks.listOrders.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
-    nav.route = reactive({ query: { tab: "orders", osymbol: "BTC", omarket: "2" } });
-    mountTab([1, 2]);
+    nav.route = reactive({ query: { tab: "orders", osymbol: "BTC", omarket: "swap" } });
+    mountTab(["spot", "swap"]);
     await flushPromises();
     expect(mocks.listOrders.mock.calls[0][0].instrument_id).toBe("BTC-USDT-SWAP");
   });
@@ -101,7 +101,7 @@ describe("订单页的来源筛选", () => {
     mocks.listOrders.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
     const logical = ref({
       logical_account_id: "l-1",
-      markets: [1],
+      markets: ["spot"],
       members: [],
       settlement_asset: "USDT"
     } as unknown as LogicalAccount);

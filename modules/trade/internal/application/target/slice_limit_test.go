@@ -13,10 +13,10 @@ import (
 func TestSliceLimitNearMinimumNotionalIsNeverSilentlyConverged(t *testing.T) {
 	swap := func(t *testing.T, settings string) *targetFixture {
 		f := swapPolicyFixture(t, settings)
-		f.setQuantityRule(t, "BINANCE", "BTCUSDT", "0.1", "0.1")
-		f.setQuantityRule(t, "OKX", "BTC-USDT-SWAP", "0.1", "0.1")
-		f.setMinNotional(t, "BINANCE", "BTCUSDT", "5")
-		f.setMinNotional(t, "OKX", "BTC-USDT-SWAP", "5")
+		f.setQuantityRule(t, "binance", "BTCUSDT", "0.1", "0.1")
+		f.setQuantityRule(t, "okx", "BTC-USDT-SWAP", "0.1", "0.1")
+		f.setMinNotional(t, "binance", "BTCUSDT", "5")
+		f.setMinNotional(t, "okx", "BTC-USDT-SWAP", "5")
 		return f
 	}
 	cases := map[string]func(t *testing.T) *targetFixture{
@@ -35,8 +35,8 @@ func TestSliceLimitNearMinimumNotionalIsNeverSilentlyConverged(t *testing.T) {
 		"现货清仓，单笔上限 3U": func(t *testing.T) *targetFixture {
 			f := newTargetFixture(t, exchange.MarketTypeSpot)
 			f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","max_child_notional":"3"}`)
-			f.setQuantityRule(t, "BINANCE", "BTCUSDT", "0.01", "0.01")
-			f.setMinNotional(t, "BINANCE", "BTCUSDT", "5")
+			f.setQuantityRule(t, "binance", "BTCUSDT", "0.01", "0.01")
+			f.setMinNotional(t, "binance", "BTCUSDT", "5")
 			f.setBalance(t, "account-a", "BTC", "1")
 			f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0"}})
 			return f

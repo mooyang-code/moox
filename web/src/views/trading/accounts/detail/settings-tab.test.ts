@@ -37,8 +37,8 @@ function mountTab(env: Environment, stored: Partial<FundSettings> = {}, binanceM
   const account = {
     trading_account_id: "t-1",
     name: "币安账户",
-    exchange: 1,
-    markets: [1, 2],
+    exchange: "binance",
+    markets: ["spot", "swap"],
     execution_mode: 2,
     status: "ENABLED",
     account_mode: binanceMode,

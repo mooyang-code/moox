@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     c_trading_account_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_exchange TEXT NOT NULL,
-    -- 已开通的市场：逗号分隔的有序集合，加密货币取 SPOT、SWAP 的子集，股票只有 STOCK
+    -- 已开通的市场：逗号分隔的有序集合，加密货币取 spot、swap 的子集，股票只有 equity
     c_markets TEXT NOT NULL,
     c_execution_mode TEXT NOT NULL,
     c_live_environment TEXT NOT NULL DEFAULT '',
@@ -43,11 +43,11 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     CHECK (json_type(c_balance_pending_json) = 'object'),
     CHECK (json_valid(c_inspection_json)),
     CHECK (json_type(c_inspection_json) = 'object'),
-    CHECK (c_markets IN ('SPOT', 'SWAP', 'SPOT,SWAP', 'STOCK')),
+    CHECK (c_markets IN ('spot', 'swap', 'spot,swap', 'equity')),
     CHECK (c_account_mode IN ('', 'BINANCE_PORTFOLIO_MARGIN', 'BINANCE_STANDARD', 'OKX_UNIFIED')),
-    CHECK (c_account_mode = '' OR (c_execution_mode = 'LIVE' AND c_markets <> 'STOCK')),
+    CHECK (c_account_mode = '' OR (c_execution_mode = 'LIVE' AND c_markets <> 'equity')),
     -- 币安测试网一个账户只开一个市场（现货、合约测试网是两套密钥）；OKX 模拟盘一个账户可以同时开两个
-    CHECK (c_live_environment <> 'TESTNET' OR c_exchange <> 'BINANCE' OR c_markets <> 'SPOT,SWAP'),
+    CHECK (c_live_environment <> 'TESTNET' OR c_exchange <> 'binance' OR c_markets <> 'spot,swap'),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
     CHECK (
         (c_execution_mode = 'PAPER'

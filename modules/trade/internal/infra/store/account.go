@@ -211,7 +211,7 @@ type TradingAccountRecord struct {
 	TradingAccountID string
 	Name             string
 	Exchange         string
-	// Markets 是已开通的市场，按 SPOT、SWAP、STOCK 的固定顺序排列。
+	// Markets 是已开通的市场，按 spot、swap、equity 的固定顺序排列。
 	Markets       []string
 	ExecutionMode string
 	// AccountMode 只由交易所检测写入；InspectionJSON 是最近一次检测的结果。

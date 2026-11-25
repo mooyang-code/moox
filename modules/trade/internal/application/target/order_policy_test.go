@@ -206,8 +206,8 @@ func TestConfiguredMinimumNotionalIsPerMarket(t *testing.T) {
 // 数量取整后不到交易所的最小数量（OKX 的 minSz）时下不了单：换成金额就是 minSz × 价格。
 func TestExchangeMinimumQuantityActsAsMinimumNotional(t *testing.T) {
 	f := swapPolicyFixture(t, legacyOrderSettings)
-	f.setQuantityRule(t, "BINANCE", "BTCUSDT", "1", "10") // 合约面值 0.001，最小 10 张 = 0.01 个 = 金额 1
-	f.setQuantityRule(t, "OKX", "BTC-USDT-SWAP", "1", "10")
+	f.setQuantityRule(t, "binance", "BTCUSDT", "1", "10") // 合约面值 0.001，最小 10 张 = 0.01 个 = 金额 1
+	f.setQuantityRule(t, "okx", "BTC-USDT-SWAP", "1", "10")
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.005"}})
 	f.converge(t)
 	require.Empty(t, f.orders.specs)

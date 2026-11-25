@@ -14,8 +14,8 @@ import (
 func TestNormalizeTargetRequestAcceptsSameInstrumentInSpotAndSwap(t *testing.T) {
 	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		Targets: []*tradeeventpb.InstrumentWeightTarget{
-			{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "0.5"},
-			{InstrumentId: "BTC-USDT", MarketType: "SWAP", TargetWeight: "-0.2"},
+			{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5"},
+			{InstrumentId: "BTC-USDT", MarketType: "swap", TargetWeight: "-0.2"},
 		},
 	}
 
@@ -28,7 +28,7 @@ func TestNormalizeTargetRequestAcceptsSameInstrumentInSpotAndSwap(t *testing.T) 
 }
 
 func TestNormalizeTargetRequestRejectsMarketOutsideTradableSet(t *testing.T) {
-	for name, market := range map[string]string{"空市场": "", "组合没开通的市场": "SWAP"} {
+	for name, market := range map[string]string{"空市场": "", "组合没开通的市场": "swap"} {
 		t.Run(name, func(t *testing.T) {
 			request := &tradeeventpb.LogicalAccountTargetWeightRequested{
 				Targets: []*tradeeventpb.InstrumentWeightTarget{
@@ -47,8 +47,8 @@ func TestNormalizeTargetRequestRejectsDuplicateAfterNormalization(t *testing.T) 
 	// 带后缀与不带后缀的写法在事件契约层看是两个标的，标准化后是同一个内部 ID。
 	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		Targets: []*tradeeventpb.InstrumentWeightTarget{
-			{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "0.5"},
-			{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.1"},
+			{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5"},
+			{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "0.1"},
 		},
 	}
 
@@ -65,7 +65,7 @@ func TestHandleTargetRejectsMarketTheLogicalAccountCannotTrade(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-swap", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT", MarketType: "SWAP", TargetWeight: "1",
+			InstrumentId: "BTC-USDT", MarketType: "swap", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 

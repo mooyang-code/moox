@@ -19,7 +19,7 @@ import (
 func stockAccount(holding string) tradingaccount.Account {
 	return tradingaccount.Account{
 		ID: "stock-1", SpaceID: "space-1", Name: "A 股", Exchange: exchange.ExchangeAShare,
-		Markets: []exchange.MarketType{exchange.MarketTypeStock}, ExecutionMode: exchange.ExecutionModePaper,
+		Markets: []exchange.MarketType{exchange.MarketTypeEquity}, ExecutionMode: exchange.ExecutionModePaper,
 		Environment: exchange.AccountEnvironmentPaper, SettlementAsset: "CNY", Status: exchange.AccountStatusEnabled, Ready: true,
 		Paper: &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("1000000"), MakerFeeRate: shared.MustDecimal("0.00025"),
 			TakerFeeRate: shared.MustDecimal("0.00025"), SlippageBPS: shared.Zero()},
@@ -32,7 +32,7 @@ func stockAccount(holding string) tradingaccount.Account {
 
 func stockInstrumentForOrder() exchange.Instrument {
 	return exchange.Instrument{
-		Exchange: exchange.ExchangeAShare, MarketType: exchange.MarketTypeStock, ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+		Exchange: exchange.ExchangeAShare, MarketType: exchange.MarketTypeEquity, ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 		BaseAsset: "600519.XSHG", QuoteAsset: "CNY", SettlementAsset: "CNY",
 		ExchangeQuantityStep: shared.MustDecimal("100"), MinExchangeQuantity: shared.MustDecimal("100"),
 		PriceTick: shared.MustDecimal("0.01"), MaxBuyPriceRatio: shared.MustDecimal("1.02"), MinSellPriceRatio: shared.MustDecimal("0.98"),
@@ -91,7 +91,7 @@ func TestStockBuyReservationUsesStockFee(t *testing.T) {
 	require.Equal(t, "CNY", validation.ReservedAsset)
 	// 成交额 1020：佣金 0.255 不足 5 元按 5 元，过户费 0.0102。
 	require.Equal(t, "1025.0102", validation.ReservedQuantity.String())
-	require.Equal(t, exchange.RuleAt(exchange.ExchangeAShare, exchange.MarketTypeStock).BuyCost(shared.MustDecimal("1020"), shared.MustDecimal("0.00025")).String(), validation.ReservedQuantity.String())
+	require.Equal(t, exchange.RuleAt(exchange.ExchangeAShare, exchange.MarketTypeEquity).BuyCost(shared.MustDecimal("1020"), shared.MustDecimal("0.00025")).String(), validation.ReservedQuantity.String())
 }
 
 // 卖出数量要么满足整手规则，要么卖完后余下的持仓满足整手规则（零股一次卖完）。
@@ -168,14 +168,14 @@ func TestPaperFundsSubtractTodayBuysForStockSell(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, db.Close()) })
 			require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 				if err := tx.UpsertInstrument(store.InstrumentRecord{
-					Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+					Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 					BaseAsset: "600519.XSHG", QuoteAsset: "CNY", SettlementAsset: "CNY",
 					ExchangeQuantityStep: "100", MinExchangeQuantity: "100", PriceTick: "0.01", Status: "TRADING",
 				}); err != nil {
 					return err
 				}
 				return tx.CreateTradingAccount(store.TradingAccountRecord{
-					SpaceID: "space-1", TradingAccountID: "stock-1", Name: "A 股", Exchange: "ASHARE", Markets: []string{"STOCK"},
+					SpaceID: "space-1", TradingAccountID: "stock-1", Name: "A 股", Exchange: "ashare", Markets: []string{"equity"},
 					ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "CNY", Status: "ENABLED",
 					PaperConfig: &store.PaperAccountConfigRecord{SpaceID: "space-1", TradingAccountID: "stock-1",
 						InitialBalance: "1000000", MakerFeeRate: "0.00025", TakerFeeRate: "0.00025", SlippageBPS: "0"},
@@ -186,7 +186,7 @@ func TestPaperFundsSubtractTodayBuysForStockSell(t *testing.T) {
 			require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 				if err := tx.CreateOrder(store.OrderRecord{
 					SpaceID: "space-1", TradingAccountID: "stock-1", OrderID: "bought", ClientOrderID: "bought", ExchangeOrderID: "bought",
-					Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
+					Exchange: "ashare", MarketType: "equity", ExchangeSymbol: "600519.XSHG", InstrumentID: "600519.XSHG",
 					OrderType: "MARKET", Side: "BUY", Quantity: "100", FilledQuantity: "0", ReferencePrice: "10", State: "OPEN",
 					OwnerType: "EXTERNAL", OwnerID: "external-1", Version: 1,
 				}); err != nil {
@@ -194,7 +194,7 @@ func TestPaperFundsSubtractTodayBuysForStockSell(t *testing.T) {
 				}
 				_, err := tx.InsertFill(store.FillRecord{
 					SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1", OrderID: "bought", ExchangeOrderID: "bought",
-					TradingAccountID: "stock-1", Exchange: "ASHARE", MarketType: "STOCK", InstrumentID: "600519.XSHG",
+					TradingAccountID: "stock-1", Exchange: "ashare", MarketType: "equity", InstrumentID: "600519.XSHG",
 					ExchangeSymbol: "600519.XSHG", Side: "BUY", Price: "10", Quantity: "100", Fee: "5.01", FeeAsset: "CNY",
 					SettlementAsset: "CNY", RealizedPnL: "0", TradedAt: tc.tradedAt.UnixMilli(),
 				})

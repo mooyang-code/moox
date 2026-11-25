@@ -34,7 +34,7 @@ interface FillsVM {
   openOrderOf(fill: { order_id: string }): Promise<void>;
 }
 
-function mountTab(markets = [1]) {
+function mountTab(markets = ["spot"]) {
   const logical = ref({
     logical_account_id: "l-1",
     markets,
@@ -62,8 +62,8 @@ describe("成交筛选写在地址里", () => {
 
   it("进入页签时按地址里的筛选查询，永续市场读回成数字", async () => {
     mocks.listFills.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, fills: [] });
-    nav.route = reactive({ query: { tab: "fills", frange: "30d", fsymbol: "BTC", fmarket: "2" } });
-    mountTab([1, 2]);
+    nav.route = reactive({ query: { tab: "fills", frange: "30d", fsymbol: "BTC", fmarket: "swap" } });
+    mountTab(["spot", "swap"]);
     await flushPromises();
     const req = mocks.listFills.mock.calls[0][0];
     expect(req.instrument_id).toBe("BTC-USDT-SWAP");

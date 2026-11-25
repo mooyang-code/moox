@@ -21,8 +21,8 @@ Object.defineProperty(window, "matchMedia", {
 const paperAccount = {
   trading_account_id: "p1",
   name: "币安模拟",
-  exchange: 1,
-  markets: [1, 2],
+  exchange: "binance",
+  markets: ["spot", "swap"],
   execution_mode: 1,
   settlement_asset: "USDT",
   leverage_settings: { "*": "1" },
@@ -31,8 +31,8 @@ const paperAccount = {
 const liveAccount = {
   trading_account_id: "l1",
   name: "测试网账户",
-  exchange: 1,
-  markets: [2],
+  exchange: "binance",
+  markets: ["swap"],
   execution_mode: 2,
   settlement_asset: "USDT",
   leverage_settings: { "*": "3" },

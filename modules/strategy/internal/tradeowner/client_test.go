@@ -38,7 +38,7 @@ func (s *proxyStub) CloseTargetSession(ctx context.Context, req *tradepb.CloseTa
 }
 
 func strategyAccount() *tradepb.LogicalAccount {
-	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, SpaceId: "space-1", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
+	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", Markets: []string{"swap"}, SpaceId: "space-1", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
 }
 
 // 启用前只读账户：策略控制、市场在组合可交易的市场里才放行；人工控制、市场不符、账户不匹配都拒绝。
@@ -136,27 +136,27 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestCheckMarketsRequiresEveryMarketInLogicalAccountMarkets(t *testing.T) {
-	swap, spot, stock := tradepb.MarketType_MARKET_TYPE_SWAP, tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.MarketType_MARKET_TYPE_STOCK
-	if err := checkMarkets([]string{"swap"}, []tradepb.MarketType{swap}); err != nil {
+	swap, spot, stock := "swap", "spot", "equity"
+	if err := checkMarkets([]string{"swap"}, []string{swap}); err != nil {
 		t.Fatalf("相同市场不应报错：%v", err)
 	}
 	// 组合同时可交易现货和合约时，单市场策略和混合市场策略都能绑。
 	for _, markets := range [][]string{{"spot"}, {"swap"}, {"spot", "swap"}} {
-		if err := checkMarkets(markets, []tradepb.MarketType{spot, swap}); err != nil {
+		if err := checkMarkets(markets, []string{spot, swap}); err != nil {
 			t.Fatalf("市场 %v 在组合可交易的市场里，不应报错：%v", markets, err)
 		}
 	}
-	if err := checkMarkets([]string{"equity"}, []tradepb.MarketType{stock}); err != nil {
+	if err := checkMarkets([]string{"equity"}, []string{stock}); err != nil {
 		t.Fatalf("股票策略绑股票组合不应报错：%v", err)
 	}
 	// 混合市场策略只要有一个市场不在组合里就拒绝。
-	if err := checkMarkets([]string{"spot", "swap"}, []tradepb.MarketType{spot}); !errors.Is(err, ErrMarketMismatch) {
+	if err := checkMarkets([]string{"spot", "swap"}, []string{spot}); !errors.Is(err, ErrMarketMismatch) {
 		t.Fatalf("有市场不在组合可交易的市场里应拒绝：%v", err)
 	}
 	if err := checkMarkets([]string{"swap"}, nil); !errors.Is(err, ErrMarketMismatch) || !strings.Contains(err.Error(), "还没有启用的成员") {
 		t.Fatalf("组合没有启用的成员应有专门提示：%v", err)
 	}
-	if err := checkMarkets([]string{""}, []tradepb.MarketType{swap}); !errors.Is(err, ErrMarketMismatch) {
+	if err := checkMarkets([]string{""}, []string{swap}); !errors.Is(err, ErrMarketMismatch) {
 		t.Fatalf("未知市场应被拒绝：%v", err)
 	}
 }

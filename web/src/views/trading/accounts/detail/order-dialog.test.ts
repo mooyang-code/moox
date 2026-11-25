@@ -59,7 +59,7 @@ function makeLogical(extra: Partial<LogicalAccount> = {}) {
     name: "Paper",
     control_mode: 2,
     execution_mode: 1,
-    markets: [1],
+    markets: ["spot"],
     automation_state: "PAUSED",
     ready: true,
     members: [{ trading_account_id: "account", enabled: true, priority: 0 }],
@@ -68,7 +68,9 @@ function makeLogical(extra: Partial<LogicalAccount> = {}) {
 }
 
 async function openEntry(env: "paper" | "prod" = "paper", instrumentId = "BTC-USDT-SPOT") {
-  const accounts = new Map([["account", { trading_account_id: "account", name: "A", markets: [1, 2] } as TradingAccount]]);
+  const accounts = new Map([
+    ["account", { trading_account_id: "account", name: "A", markets: ["spot", "swap"] } as TradingAccount]
+  ]);
   const Harness = defineComponent({
     setup(_, { expose }) {
       tracker = useActionTracker({ logicalAccountId: () => logicalRef.value?.logical_account_id, onChanged: () => undefined });
@@ -140,7 +142,7 @@ describe("下单对话框", () => {
         logical_account_id: "logical",
         action_id: "action",
         client_order_id: "client",
-        market_type: 1,
+        market_type: "spot",
         position_side: undefined,
         deadline_at: String(Date.parse("2030-01-01T12:00:00Z"))
       })
@@ -150,13 +152,13 @@ describe("下单对话框", () => {
   });
 
   it("策略驱动的接管下单要明说，永续订单带市场和净持仓方向，现货不带", async () => {
-    logicalRef.value = makeLogical({ control_mode: 1, markets: [1, 2] });
+    logicalRef.value = makeLogical({ control_mode: 1, markets: ["spot", "swap"] });
     const vm = await openEntry("paper", "BTC-USDT-SWAP");
     expect(document.body.textContent).toContain("接管并下单");
     await vm.submitManual();
     // 和自主下单是同一个接口，要不要先暂停由后端按控制模式决定
     expect(mocks.submitOrder).toHaveBeenCalledWith(
-      expect.objectContaining({ logical_account_id: "logical", market_type: 2, position_side: 1 })
+      expect.objectContaining({ logical_account_id: "logical", market_type: "swap", position_side: 1 })
     );
   });
 
@@ -280,7 +282,9 @@ describe("下单对话框", () => {
   });
 
   it("行内下单预填方向和数量", async () => {
-    const accounts = new Map([["account", { trading_account_id: "account", name: "A", markets: [1, 2] } as TradingAccount]]);
+    const accounts = new Map([
+      ["account", { trading_account_id: "account", name: "A", markets: ["spot", "swap"] } as TradingAccount]
+    ]);
     const Harness = defineComponent({
       setup(_, { expose }) {
         tracker = useActionTracker({ logicalAccountId: () => logicalRef.value?.logical_account_id, onChanged: () => undefined });

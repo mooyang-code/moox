@@ -105,7 +105,7 @@ func TestExecutionRPCRejectsMissingSpace(t *testing.T) {
 func TestOrderConversionPreservesOwnershipAndExecutionFields(t *testing.T) {
 	record := store.OrderRecord{
 		OrderID: "order-1", TradingAccountID: "account-1",
-		Exchange: "OKX", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP",
+		Exchange: "okx", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP",
 		OrderType: "MARKET", TimeInForce: "", Side: "SELL",
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "60000",
 		ReferencePriceAt: 1000, ReduceOnly: true,
@@ -115,8 +115,8 @@ func TestOrderConversionPreservesOwnershipAndExecutionFields(t *testing.T) {
 		ReservedQuantity: "0", RemainingReservedQuantity: "0",
 	}
 	converted := orderToPB(record)
-	if converted.GetExchange() != tradepb.Exchange_EXCHANGE_OKX ||
-		converted.GetMarketType() != tradepb.MarketType_MARKET_TYPE_SWAP ||
+	if converted.GetExchange() != "okx" ||
+		converted.GetMarketType() != "swap" ||
 		converted.GetOrderType() != tradepb.OrderType_ORDER_TYPE_MARKET ||
 		converted.GetPositionSide() != tradepb.PositionSide_POSITION_SIDE_NET ||
 		!converted.GetReducePositionOnly() ||
@@ -178,7 +178,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		for _, accountID := range []string{"account-1", "account-2"} {
 			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 				SpaceID: "space-1", TradingAccountID: accountID, Name: accountID,
-				Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
+				Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER",
 				Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 			}); err != nil {
 				return err
@@ -186,7 +186,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		}
 		for _, symbol := range []string{"BTCUSDT", "ETHUSDT"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: symbol, ExchangeSymbol: symbol,
+				Exchange: "binance", MarketType: "spot", InstrumentID: symbol, ExchangeSymbol: symbol,
 				BaseAsset: symbol[:3], QuoteAsset: "USDT",
 				SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 				PriceTick: "0.01", Status: "TRADING",
@@ -211,7 +211,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 			{
 				SpaceID: "space-1", OrderID: "order-1",
 				TradingAccountID: "account-1", ClientOrderID: "client-1",
-				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTCUSDT", ExchangeSymbol: "BTCUSDT",
+				Exchange: "binance", MarketType: "spot", InstrumentID: "BTCUSDT", ExchangeSymbol: "BTCUSDT",
 				OrderType: "MARKET", Side: "BUY", Quantity: "1",
 				ReferencePrice: "100", OwnerType: "TARGET",
 				OwnerID: "target-1", LogicalAccountID: "logical-1",
@@ -220,7 +220,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 			{
 				SpaceID: "space-1", OrderID: "order-2",
 				TradingAccountID: "account-2", ClientOrderID: "client-2",
-				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETHUSDT", ExchangeSymbol: "ETHUSDT",
+				Exchange: "binance", MarketType: "spot", InstrumentID: "ETHUSDT", ExchangeSymbol: "ETHUSDT",
 				OrderType: "MARKET", Side: "BUY", Quantity: "1",
 				ReferencePrice: "10", OwnerType: "EXTERNAL",
 				OwnerID: "external-1", State: "OPEN",
@@ -270,7 +270,7 @@ func rpcStoreWithAccount(t *testing.T) *store.Store {
 	if err := db.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "account-1",
-			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
+			Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER",
 			SettlementAsset: "USDT", Status: "ENABLED",
 		})
 	}); err != nil {

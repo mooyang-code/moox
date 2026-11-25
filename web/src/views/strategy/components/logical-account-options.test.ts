@@ -8,7 +8,7 @@ const account = (patch: Partial<LogicalAccount>) =>
     logical_account_id: "a",
     name: "组合",
     control_mode: 1,
-    markets: [2],
+    markets: ["swap"],
     ready: true,
     members: [],
     ...patch
@@ -19,11 +19,11 @@ describe("策略绑定组合账户选项", () => {
     const options = logicalAccountOptions(
       [
         account({ logical_account_id: "swap" }),
-        account({ logical_account_id: "spot", markets: [1] }),
-        account({ logical_account_id: "both", markets: [1, 2] }),
+        account({ logical_account_id: "spot", markets: ["spot"] }),
+        account({ logical_account_id: "both", markets: ["spot", "swap"] }),
         account({ logical_account_id: "manual", control_mode: 2 })
       ],
-      { types: [2] }
+      { types: ["swap"] }
     );
     expect(options.map(item => item.account.logical_account_id)).toEqual(["swap", "both"]);
   });
@@ -32,8 +32,8 @@ describe("策略绑定组合账户选项", () => {
     const options = logicalAccountOptions(
       [
         account({ logical_account_id: "swap" }),
-        account({ logical_account_id: "spot", markets: [1] }),
-        account({ logical_account_id: "both", markets: [1, 2] }),
+        account({ logical_account_id: "spot", markets: ["spot"] }),
+        account({ logical_account_id: "both", markets: ["spot", "swap"] }),
         account({ logical_account_id: "empty", markets: [] })
       ],
       resolvedMarkets('{"market":{"select":"both","prefer":"spot"}}')
@@ -43,9 +43,12 @@ describe("策略绑定组合账户选项", () => {
 
   it("A 股只列开通了股票市场的组合", () => {
     const markets = resolvedMarkets('{"market":{"select":"equity","prefer":"equity"}}');
-    expect(markets.types).toEqual([3]);
+    expect(markets.types).toEqual(["equity"]);
     const options = logicalAccountOptions(
-      [account({ logical_account_id: "crypto", markets: [1] }), account({ logical_account_id: "ashare", markets: [3] })],
+      [
+        account({ logical_account_id: "crypto", markets: ["spot"] }),
+        account({ logical_account_id: "ashare", markets: ["equity"] })
+      ],
       markets
     );
     expect(options.map(item => item.account.logical_account_id)).toEqual(["ashare"]);
@@ -74,8 +77,8 @@ describe("策略绑定组合账户选项", () => {
   });
 
   it("从校验结果读市场模式", () => {
-    expect(resolvedMarkets('{"market":{"select":"swap","prefer":"swap"}}')).toEqual({ types: [2] });
-    expect(resolvedMarkets('{"market":{"select":"spot","prefer":"swap"}}').types).toEqual([1, 2]);
+    expect(resolvedMarkets('{"market":{"select":"swap","prefer":"swap"}}')).toEqual({ types: ["swap"] });
+    expect(resolvedMarkets('{"market":{"select":"spot","prefer":"swap"}}').types).toEqual(["spot", "swap"]);
     expect(resolvedMarkets("bad")).toEqual({});
     expect(resolvedMarkets()).toEqual({});
   });

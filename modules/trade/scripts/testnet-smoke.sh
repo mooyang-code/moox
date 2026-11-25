@@ -74,14 +74,14 @@ run_exchange() {
   local secret_id=$3
   local symbol=$4
   local max_notional=$spot_max_notional
-  if [[ "$market" == "SWAP" ]]; then
+  if [[ "$market" == "swap" ]]; then
     max_notional=$swap_max_notional
   fi
   local lower
   lower=$(printf '%s-%s' "$exchange_name" "$market" | tr '[:upper:]' '[:lower:]')
   # 币安现货、合约测试网是两套账户，各用各的库；OKX 模拟盘一个账户同时做两个市场，两次演练共用一个库。
   local database="$work_dir/${lower}.db"
-  if [[ "$exchange_name" == "OKX" ]]; then
+  if [[ "$exchange_name" == "okx" ]]; then
     database="$work_dir/okx.db"
   fi
   local state="$work_dir/${lower}.json"
@@ -121,12 +121,12 @@ okx_swap_symbol=${MOOX_OKX_TESTNET_SWAP_SYMBOL:-BTC-USDT-SWAP}
 [[ "$okx_swap_symbol" =~ ^[A-Z0-9-]+$ ]] ||
   skip "MOOX_OKX_TESTNET_SWAP_SYMBOL must be an uppercase native symbol"
 
-run_exchange BINANCE SPOT "$MOOX_BINANCE_TESTNET_SECRET_ID" "$binance_symbol"
+run_exchange binance spot "$MOOX_BINANCE_TESTNET_SECRET_ID" "$binance_symbol"
 echo "BINANCE PASS submit/query/stream/sync/restart/cleanup"
-run_exchange BINANCE SWAP "$MOOX_BINANCE_TESTNET_SWAP_SECRET_ID" "$binance_swap_symbol"
+run_exchange binance swap "$MOOX_BINANCE_TESTNET_SWAP_SECRET_ID" "$binance_swap_symbol"
 echo "BINANCE SWAP PASS submit/query/stream/sync/restart/cleanup"
-run_exchange OKX SPOT "$MOOX_OKX_TESTNET_SECRET_ID" "$okx_symbol"
+run_exchange okx spot "$MOOX_OKX_TESTNET_SECRET_ID" "$okx_symbol"
 echo "OKX PASS submit/query/stream/sync/restart/cleanup"
-run_exchange OKX SWAP "$MOOX_OKX_TESTNET_SECRET_ID" "$okx_swap_symbol"
+run_exchange okx swap "$MOOX_OKX_TESTNET_SECRET_ID" "$okx_swap_symbol"
 echo "OKX SWAP PASS submit/query/stream/sync/restart/cleanup"
 completed=1

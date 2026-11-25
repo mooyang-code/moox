@@ -14,7 +14,7 @@ import (
 func filledChild(id, owner, ownerType, side, before string, finishedAt int64) store.OrderRecord {
 	record := store.OrderRecord{
 		SpaceID: "space-1", OrderID: id, TradingAccountID: "account-a", ClientOrderID: id,
-		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+		Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: side, PositionSide: "NET", Quantity: "1",
 		ReferencePrice: "100", ReferencePriceAt: 1_000,
 		OwnerType: ownerType, OwnerID: owner, LogicalAccountID: "logical-1",
@@ -174,7 +174,7 @@ func TestReversalCountedPerMember(t *testing.T) {
 	f.position(t, "account-a", "BTCUSDT", "2")
 	// 成员 B 本目标内卖平了 1，持仓已反映（1→0）；成员 A 接着买入不算反向。
 	record := filledChild("b-sell", "target-current", "TARGET", "SELL", "1", 1_500)
-	record.TradingAccountID, record.ClientOrderID, record.Exchange, record.ExchangeSymbol = "account-b", "b-sell", "OKX", "BTC-USDT-SWAP"
+	record.TradingAccountID, record.ClientOrderID, record.Exchange, record.ExchangeSymbol = "account-b", "b-sell", "okx", "BTC-USDT-SWAP"
 	f.order(t, record)
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "3"}})
 	executor := f.executor()

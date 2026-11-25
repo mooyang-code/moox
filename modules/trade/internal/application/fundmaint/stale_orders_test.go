@@ -16,7 +16,7 @@ func seedSystemOrder(t *testing.T, f *fixture, orderID, ownerID, instrument, sym
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: orderID,
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: instrument, ExchangeSymbol: symbol,
+			Exchange: "binance", MarketType: "spot", InstrumentID: instrument, ExchangeSymbol: symbol,
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
 			OwnerType: "SYSTEM", OwnerID: ownerID, State: state, SubmittedAt: submittedAt, Version: 1,
 		})

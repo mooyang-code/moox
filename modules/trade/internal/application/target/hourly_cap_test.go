@@ -16,7 +16,7 @@ func (f *targetFixture) submittedChild(t *testing.T, orderID, state, quantity, f
 	at := submittedAt.UnixMilli()
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: orderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: orderID, Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: quantity, ReferencePrice: price, AveragePrice: price,
 		FilledQuantity: filled, OwnerType: "TARGET", OwnerID: "target-current", State: state, SubmittedAt: at, Version: 1,
 		FinishedAt: map[bool]int64{true: at, false: 0}[state == "FILLED" || state == "CANCELED"],

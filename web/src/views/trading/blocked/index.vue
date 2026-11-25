@@ -33,7 +33,7 @@
           <a-table-column title="标的" :width="200">
             <template #cell="{ record }">
               <strong>{{ record.exchange_symbol }}</strong>
-              <span class="tx-muted"> {{ exchangeLabels[record.exchange] || "-" }} {{ marketLabel(record.market_type) }}</span>
+              <span class="tx-muted"> {{ exchangeLabel(record.exchange) }} {{ marketLabel(record.market_type) }}</span>
             </template>
           </a-table-column>
           <a-table-column title="范围" :width="90">
@@ -41,7 +41,7 @@
           </a-table-column>
           <a-table-column title="下架时间" :width="170">
             <template #cell="{ record }">
-              <span class="tx-nowrap"><TimeText :value="record.delist_at_ms" zone="UTC" /></span>
+              <span class="tx-nowrap"><TimeText :value="record.delist_at" zone="UTC" /></span>
             </template>
           </a-table-column>
           <a-table-column title="状态" :width="200">
@@ -86,7 +86,7 @@
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
 import TimeText from "@/components/time-text/index.vue";
-import { exchangeLabels, listBlockedInstruments } from "@/api/trade";
+import { exchangeLabel, listBlockedInstruments } from "@/api/trade";
 import type { BlockedInstrument } from "@/api/trade";
 import { listDelists, type DelistFlatten, type DelistRecord } from "@/api/trade/delist";
 import { usePolling } from "@/hooks/usePolling";

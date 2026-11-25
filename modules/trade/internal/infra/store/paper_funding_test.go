@@ -14,7 +14,7 @@ import (
 func seedPaperSwapAccount(t *testing.T, s *Store) TradingAccountRecord {
 	t.Helper()
 	account := testAccount()
-	account.Markets = []string{"SWAP"}
+	account.Markets = []string{"swap"}
 	account.MarginMode = "CROSS"
 	account.LeverageSettings = LeverageSettings{DefaultLeverageKey: "10"}
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
@@ -23,7 +23,7 @@ func seedPaperSwapAccount(t *testing.T, s *Store) TradingAccountRecord {
 		}
 		for _, symbol := range []string{"BTCUSDT", "ETHUSDT"} {
 			if err := tx.UpsertInstrument(InstrumentRecord{
-				Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: symbol, InstrumentID: symbol, BaseAsset: symbol[:3],
+				Exchange: "binance", MarketType: "swap", ExchangeSymbol: symbol, InstrumentID: symbol, BaseAsset: symbol[:3],
 				QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: true, ContractValue: "1", ContractValueAsset: symbol[:3],
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}); err != nil {
@@ -40,7 +40,7 @@ func setPaperPosition(t *testing.T, s *Store, account TradingAccountRecord, symb
 	t.Helper()
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
 		return tx.UpsertPosition(PositionRecord{
-			SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID, MarketType: "SWAP", ExchangeSymbol: symbol,
+			SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID, MarketType: "swap", ExchangeSymbol: symbol,
 			PositionSide: "NET", SignedQuantity: quantity, EntryPrice: "100", MarkPrice: "100", Leverage: "10", MarginMode: "CROSS",
 			ExchangeUpdatedAt: 1,
 		})
@@ -53,7 +53,7 @@ func addPaperSwapFill(t *testing.T, s *Store, account TradingAccountRecord, id, 
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
 		if err := tx.CreateOrder(OrderRecord{
 			SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID, OrderID: "order-" + id, ClientOrderID: "client-" + id,
-			MarketType: "SWAP", ExchangeSymbol: symbol, OrderType: "MARKET", Side: side, PositionSide: "NET", Quantity: quantity,
+			MarketType: "swap", ExchangeSymbol: symbol, OrderType: "MARKET", Side: side, PositionSide: "NET", Quantity: quantity,
 			ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "client-" + id, State: "FILLED",
 		}); err != nil {
 			return err

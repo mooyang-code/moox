@@ -161,7 +161,7 @@ func (m *Market) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) 
 	seen := make(map[string]struct{}, len(keys))
 	m.quoteMu.Lock()
 	for _, key := range keys {
-		if key.Market != exchange.MarketTypeStock {
+		if key.Market != exchange.MarketTypeEquity {
 			continue
 		}
 		if _, dup := seen[key.Symbol]; dup {
@@ -220,7 +220,7 @@ func networkFailure(err error) bool {
 }
 
 func (m *Market) snapshot(ctx context.Context, key exchange.SymbolKey) (cachedQuote, error) {
-	if key.Market != exchange.MarketTypeStock {
+	if key.Market != exchange.MarketTypeEquity {
 		return cachedQuote{}, fmt.Errorf("%s只有股票市场，不支持 %s", m.Label, key.Market)
 	}
 	if err := m.PrefetchQuotes(ctx, []exchange.SymbolKey{key}); err != nil {

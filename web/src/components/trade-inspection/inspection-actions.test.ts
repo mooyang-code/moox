@@ -8,7 +8,7 @@ import { RequestError } from "@/api/http";
 const tradeFailure = (response: { ret_info: { code: number | string; msg: string } } & Record<string, unknown>) =>
   new RequestError(response.ret_info.msg, response);
 
-const passing: ExchangeInspection = { account_mode: "BINANCE_STANDARD", can_trade_spot: true, available_markets: [1] };
+const passing: ExchangeInspection = { account_mode: "BINANCE_STANDARD", can_trade_spot: true, available_markets: ["spot"] };
 const blocked: ExchangeInspection = {
   account_mode: "BINANCE_STANDARD",
   can_withdraw: true,
@@ -38,16 +38,16 @@ describe("新建账户的检测预览", () => {
   });
 
   it("检测返回阻断项时不放行；传输错误不下结论，也不放行", async () => {
-    const passed = await runPreview({ exchange: 1, environment: 2, credential_secret_id: "s" }, api({}));
+    const passed = await runPreview({ exchange: "binance", environment: 2, credential_secret_id: "s" }, api({}));
     expect(passed.state).toBe("ok");
     const withBlocker = await runPreview(
-      { exchange: 1, environment: 2, credential_secret_id: "s" },
+      { exchange: "binance", environment: 2, credential_secret_id: "s" },
       api({ inspect: vi.fn().mockResolvedValue({ inspection: blocked }) })
     );
     expect(withBlocker.state).toBe("blocked");
     expect(withBlocker.view?.blockers[0].message).toContain("提现");
     const unavailable = await runPreview(
-      { exchange: 1, environment: 2, credential_secret_id: "s" },
+      { exchange: "binance", environment: 2, credential_secret_id: "s" },
       api({ inspect: vi.fn().mockRejectedValue(new Error("trade account: 密钥检测没有完成")) })
     );
     expect(unavailable.state).toBe("unavailable");

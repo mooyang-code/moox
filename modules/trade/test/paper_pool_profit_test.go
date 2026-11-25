@@ -14,11 +14,11 @@ import (
 func newProfitPoolFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := newProductionPaperFixture(t, exchange.MarketTypeSwap)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_markets = 'SPOT,SWAP' WHERE c_trading_account_id = ?", testAccount).Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_markets = 'spot,swap' WHERE c_trading_account_id = ?", testAccount).Error)
 	spot := newFakeExchange(exchange.MarketTypeSpot).instrument
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: string(spot.Exchange), MarketType: "SPOT", Environment: string(exchange.AccountEnvironmentProduction),
+			Exchange: string(spot.Exchange), MarketType: "spot", Environment: string(exchange.AccountEnvironmentProduction),
 			ExchangeSymbol: spot.ExchangeSymbol, InstrumentID: spot.InstrumentID, BaseAsset: "BTC", QuoteAsset: "USDT",
 			ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", MinNotional: "1",
 			Status: "TRADING", ExchangeUpdatedAt: testNow.UnixMilli(),

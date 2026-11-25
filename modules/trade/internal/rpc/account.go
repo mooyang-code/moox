@@ -44,7 +44,7 @@ func (h *AccountServer) CreateTradingAccount(
 	if err := validatePB(req); err != nil {
 		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
-	markets, err := exchange.NormalizeMarkets(marketsFromPB(req.GetMarkets()))
+	markets, err := exchange.NormalizeMarkets(marketTypes(req.GetMarkets()))
 	if err != nil {
 		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
@@ -57,7 +57,7 @@ func (h *AccountServer) CreateTradingAccount(
 	}
 	value := tradingaccount.Account{
 		ID: h.accountID(), SpaceID: spaceID, Name: strings.TrimSpace(req.GetName()),
-		Exchange:           exchangeFromPB(req.GetExchange()),
+		Exchange:           exchange.Exchange(req.GetExchange()),
 		Markets:            markets,
 		ExecutionMode:      exchange.ExecutionModeLive,
 		Environment:        environmentFromPB(req.GetLive().GetEnvironment()),
@@ -147,10 +147,10 @@ func (h *AccountServer) ListTradingAccounts(
 	}
 	filtered := records[:0]
 	for _, record := range records {
-		if req.Exchange != nil && record.Exchange != string(exchangeFromPB(req.GetExchange())) {
+		if req.GetExchange() != "" && record.Exchange != req.GetExchange() {
 			continue
 		}
-		if req.MarketType != nil && !record.SupportsMarket(string(marketFromPB(req.GetMarketType()))) {
+		if req.GetMarketType() != "" && !record.SupportsMarket(req.GetMarketType()) {
 			continue
 		}
 		if req.ExecutionMode != nil &&

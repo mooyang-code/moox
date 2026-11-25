@@ -77,8 +77,8 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 	response, err := handler.CreateTradingAccount(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
 		&tradepb.CreateTradingAccountReq{
-			Name: "main", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-			Markets:         []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT},
+			Name: "main", Exchange: "binance",
+			Markets:         []string{"spot"},
 			Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 			SettlementAsset: "USDT",
 		},
@@ -104,22 +104,6 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 }
 
 func TestAccountEnumRoundTrip(t *testing.T) {
-	for _, value := range []tradepb.Exchange{
-		tradepb.Exchange_EXCHANGE_BINANCE,
-		tradepb.Exchange_EXCHANGE_OKX,
-	} {
-		if got := exchangeToPB(string(exchangeFromPB(value))); got != value {
-			t.Fatalf("Exchange round trip = %v, want %v", got, value)
-		}
-	}
-	for _, value := range []tradepb.MarketType{
-		tradepb.MarketType_MARKET_TYPE_SPOT,
-		tradepb.MarketType_MARKET_TYPE_SWAP,
-	} {
-		if got := marketToPB(string(marketFromPB(value))); got != value {
-			t.Fatalf("market round trip = %v, want %v", got, value)
-		}
-	}
 	for _, value := range []tradepb.AccountEnvironment{
 		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET,
 		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,

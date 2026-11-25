@@ -16,7 +16,7 @@
         </template>
       </a-table-column>
       <a-table-column title="交易所" :width="100">
-        <template #cell="{ record }">{{ exchangeLabels[record.instrument.exchange] || "-" }}</template>
+        <template #cell="{ record }">{{ exchangeLabel(record.instrument.exchange) }}</template>
       </a-table-column>
       <a-table-column title="范围" :width="90">
         <template #cell="{ record }">{{ scopeLabel(record.instrument.scope) }}</template>
@@ -66,7 +66,7 @@ import { useWindowSize } from "@vueuse/core";
 import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import TimeText from "@/components/time-text/index.vue";
-import { exchangeLabels, unblockInstrument } from "@/api/trade";
+import { exchangeLabel, unblockInstrument } from "@/api/trade";
 import type { BlockedInstrument } from "@/api/trade";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";

@@ -25,7 +25,7 @@ func seedLocalOrder(t *testing.T, tradeStore *store.Store, orderID, state, excha
 		}
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-1", ClientOrderID: orderID + "-client",
-			ExchangeOrderID: exchangeOrderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTCUSDT",
+			ExchangeOrderID: exchangeOrderID, Exchange: "binance", MarketType: "swap", InstrumentID: "BTCUSDT",
 			ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET", Quantity: "1",
 			ReferencePrice: "100", ReferencePriceAt: 1_000, OwnerType: "TARGET", OwnerID: "target-1",
 			LogicalAccountID: "logical-1", InstanceID: "runner-1", State: state,

@@ -40,7 +40,7 @@ func TestUnifiedEquityFormulaOnStandardAccount(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
-			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT", "SWAP"}, AccountMode: string(exchange.AccountModeBinanceStandard),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot", "swap"}, AccountMode: string(exchange.AccountModeBinanceStandard),
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentProduction),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", LeverageSettings: store.LeverageSettings{"*": "5"},
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
@@ -69,14 +69,14 @@ func TestUnifiedEquityFormulaOnStandardAccount(t *testing.T) {
 			return err
 		}
 		// 合约标的后写入：同名的合约不能顶替现货标的去给 BTC 估值。
-		for _, market := range []string{"SPOT", "SWAP"} {
+		for _, market := range []string{"spot", "swap"} {
 			record := store.InstrumentRecord{
 				Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentProduction),
-				MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + market,
+				MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(market),
 				BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 				PriceTick: "0.1", Status: "TRADING",
 			}
-			if market == "SWAP" {
+			if market == "swap" {
 				record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", "BTC"
 			}
 			if err := tx.UpsertInstrument(record); err != nil {
@@ -85,7 +85,7 @@ func TestUnifiedEquityFormulaOnStandardAccount(t *testing.T) {
 		}
 		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought", ClientOrderID: "bought",
-			Exchange: string(exchange.ExchangeBinance), MarketType: "SPOT",
+			Exchange: string(exchange.ExchangeBinance), MarketType: "spot",
 			ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "0.01", FilledQuantity: "0.01", ReferencePrice: "50000", State: "FILLED",
 			OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
@@ -117,7 +117,7 @@ func TestUnifiedEquitySubtractsBorrowedSettlement(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
-			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT", "SWAP"}, AccountMode: string(exchange.AccountModeBinancePortfolioMargin),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot", "swap"}, AccountMode: string(exchange.AccountModeBinancePortfolioMargin),
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentProduction),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", LeverageSettings: store.LeverageSettings{"*": "5"},
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
@@ -173,7 +173,7 @@ func seedUnifiedAccount(t *testing.T, tradeStore *store.Store, fundSettings stri
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
-			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT", "SWAP"}, AccountMode: string(exchange.AccountModeBinancePortfolioMargin),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot", "swap"}, AccountMode: string(exchange.AccountModeBinancePortfolioMargin),
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentProduction),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", LeverageSettings: store.LeverageSettings{"*": "5"},
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
@@ -195,7 +195,7 @@ func seedUnifiedAccount(t *testing.T, tradeStore *store.Store, fundSettings stri
 		for _, base := range []string{"BTC", "USDC", "ETH"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
 				Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentProduction),
-				MarketType: "SPOT", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
+				MarketType: "spot", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
 				BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 				PriceTick: "0.0001", Status: "TRADING",
 			}); err != nil {

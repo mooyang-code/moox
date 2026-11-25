@@ -16,7 +16,7 @@ import (
 func (f *targetFixture) block(t *testing.T, market, symbol string) {
 	t.Helper()
 	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
+		Exchange: "binance", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 }
@@ -66,7 +66,7 @@ func TestCapReduceOnly(t *testing.T) {
 func TestBlockedTradableInstrumentIsReduceOnly(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	f.block(t, "SWAP", "BTCUSDT")
+	f.block(t, "swap", "BTCUSDT")
 
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "20"}})
 	result := f.converged(t)
@@ -77,7 +77,7 @@ func TestBlockedTradableInstrumentIsReduceOnly(t *testing.T) {
 func TestBlockedInstrumentStillAllowsReducing(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	f.block(t, "SWAP", "BTCUSDT")
+	f.block(t, "swap", "BTCUSDT")
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
 	f.converged(t)
 	require.Equal(t, []string{"BTC-USDT-SWAP:SELL"}, placedInstruments(f), "策略主动减仓照常执行")
@@ -88,7 +88,7 @@ func TestBlockedInstrumentStillAllowsReducing(t *testing.T) {
 func TestBlockedInstrumentReversalOnlyCloses(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	f.block(t, "SWAP", "BTCUSDT")
+	f.block(t, "swap", "BTCUSDT")
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "-3"}})
 	f.converged(t)
 	require.Equal(t, []string{"BTC-USDT-SWAP:SELL"}, placedInstruments(f))
@@ -99,7 +99,7 @@ func TestBlockedInstrumentReversalOnlyCloses(t *testing.T) {
 func TestBlockedInstrumentNotInTargetIsStillSold(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	f.block(t, "SWAP", "BTCUSDT")
+	f.block(t, "swap", "BTCUSDT")
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
 	f.converged(t)
 	require.Equal(t, []string{"BTC-USDT-SWAP:SELL"}, placedInstruments(f))
@@ -110,7 +110,7 @@ func TestBlockedInstrumentOnOtherExchangeDoesNotRestrict(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
 	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
-		Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Reason: "别家", BlockedAt: 1,
+		Exchange: "okx", MarketType: "swap", ExchangeSymbol: "BTCUSDT", Reason: "别家", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "20"}})
@@ -122,7 +122,7 @@ func TestBlockedInstrumentOnOtherExchangeDoesNotRestrict(t *testing.T) {
 func TestBlockedSpotDoesNotRestrictSwap(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	f.block(t, "SPOT", "BTCUSDT")
+	f.block(t, "spot", "BTCUSDT")
 	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "20"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"},
@@ -136,7 +136,7 @@ func TestBlockedUntradableSwapDoesNotBlockTarget(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
 	f.delistInstrument(t, "BTC-USDT-SWAP")
-	f.block(t, "SWAP", "BTCUSDT")
+	f.block(t, "swap", "BTCUSDT")
 	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"},
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"},
@@ -151,7 +151,7 @@ func TestBlockedUntradableSpotBalanceDoesNotBlockTarget(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSpotBalance("BTC", "2")
 	f.delistInstrument(t, "BTC-USDT-SPOT")
-	f.block(t, "SPOT", "BTCUSDT")
+	f.block(t, "spot", "BTCUSDT")
 	f.target(t, []store.InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"},
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"},
@@ -246,16 +246,16 @@ func TestHoldingsWithoutListedInstrumentStillBlockTarget(t *testing.T) {
 func TestRunningDelistFlattenIsNotAConflictAndIsSkipped(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	f.block(t, "SWAP", "BTCUSDT")
+	f.block(t, "swap", "BTCUSDT")
 	_, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "delist-1", LogicalAccountID: "logical-1", ActionType: "DELIST_FLATTEN",
-		Reason: "下架", RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`,
+		Reason: "下架", RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"binance"}`,
 		Status: "RUNNING",
 	})
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "flatten-child", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
-		ClientOrderID: "flatten-child", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "flatten-child", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "SELL", Quantity: "5", ReferencePrice: "100",
 		OwnerType: "OPERATOR", OwnerID: "delist-1", State: "OPEN", Version: 1,
 	})
@@ -278,7 +278,7 @@ func TestOtherOperatorOrdersStillPauseTheLogicalAccount(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "manual-child", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
-		ClientOrderID: "manual-child", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "manual-child", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "SELL", Quantity: "5", ReferencePrice: "100",
 		OwnerType: "OPERATOR", OwnerID: "manual-1", State: "OPEN", Version: 1,
 	})
@@ -305,7 +305,7 @@ func TestReduceOnlyWarningOnlyWhenTheTruncatedBuyWouldHaveBeenPlaced(t *testing.
 	}{{"20", 1}, {"5.1", 0}, {"5", 0}} {
 		f := newMixedExecutorFixture(t)
 		f.setSwapPosition("BTCUSDT", "5")
-		f.block(t, "SWAP", "BTCUSDT")
+		f.block(t, "swap", "BTCUSDT")
 		f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: c.target}})
 		f.now = time.Now().UTC()
 		executor := f.executor()
@@ -331,7 +331,7 @@ func (c countingPrices) LatestPrice(ctx context.Context, accountID string, key e
 func TestReduceOnlyWarningChecksDedupeBeforeFetchingAQuote(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
-	f.block(t, "SWAP", "BTCUSDT")
+	f.block(t, "swap", "BTCUSDT")
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "20"}})
 	f.now = time.Now().UTC()
 	calls := 0
@@ -356,7 +356,7 @@ func TestPaperOnlyBlockRestrictsPaperMembers(t *testing.T) {
 	f := newMixedExecutorFixture(t)
 	f.setSwapPosition("BTCUSDT", "5")
 	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Scope: store.DelistScopePaperOnly, Reason: "演练", BlockedAt: 1,
+		Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT", Scope: store.DelistScopePaperOnly, Reason: "演练", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "20"}})

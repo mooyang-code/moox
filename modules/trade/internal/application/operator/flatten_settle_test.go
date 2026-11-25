@@ -51,7 +51,7 @@ func childState(t *testing.T, fixture *operatorFixture, orderID string) string {
 // 下架清仓到截止时间记 PARTIAL 时，本动作还没提交出去的子单直接丢弃，不留给执行器当冲突。
 func TestDelistDeadlineDiscardsOwnPendingChild(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-pending", "BTC-USDT-SWAP")
 	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
 	fixture.orders.nextID = "child-pending"
@@ -79,7 +79,7 @@ func TestDelistDeadlineDiscardsOwnPendingChild(t *testing.T) {
 // 子单结果未知、解析不出来时动作先保持运行（记下要结束成 PARTIAL），之后的恢复只收拾不下单，解析清楚后才记 PARTIAL。
 func TestDelistDeadlineWaitsForUnknownChildThenFinishes(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-unknown", "BTC-USDT-SWAP")
 	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
 	fixture.orders.nextID = "child-unknown"
@@ -120,7 +120,7 @@ func TestDelistDeadlineWaitsForUnknownChildThenFinishes(t *testing.T) {
 // 已解除禁止又过了截止时间：先看解除禁止，撤掉本动作的单后记 COMPLETED 并带“已解除禁止”标记，不记 PARTIAL。
 func TestDelistUnblockBeatsDeadline(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-unblock", "BTC-USDT-SWAP")
 	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
 	fixture.orders.nextID = "child-open"
@@ -128,7 +128,7 @@ func TestDelistUnblockBeatsDeadline(t *testing.T) {
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 
-	_, err = fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
+	_, err = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	fixture.now = fixture.now.Add(2 * time.Hour)
 
@@ -148,7 +148,7 @@ func TestDelistUnblockBeatsDeadline(t *testing.T) {
 // PARTIAL 后用同一个动作号重试且已过截止时间：保留上一轮各账户的进度（剩余仓位、原因），不清空。
 func TestDelistDeadlineRetryKeepsProgress(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-progress", "BTC-USDT-SWAP")
 	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
 	fixture.orders.nextID = ""
@@ -225,7 +225,7 @@ func TestFlattenTimeoutDiscardsOwnPendingChild(t *testing.T) {
 // 下架清仓的 3% 限价夹进交易所的价格偏离限制：卖单下限 0.98 倍（用 90% 余量）时卖价不低于 98.2，免得被拒。
 func TestDelistLimitPriceIsClampedToPriceBand(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_instruments SET c_min_sell_price_ratio = '0.98' WHERE c_instrument_id = 'BTC-USDT-SWAP'`).Error)
 	fixture.store.InvalidateCaches()
 
@@ -251,7 +251,7 @@ func (o failResolveOrders) ResolveUnknown(ctx context.Context, spaceID, orderID 
 // startFinishingWithUnknownChild 让下架清仓留下一笔结果未知的子单并过截止时间，返回带着这笔子单解析错误的服务。
 func startFinishingWithUnknownChild(t *testing.T, fixture *operatorFixture, actionID, childID string, resolveErr error) (*Service, FlattenCommand) {
 	t.Helper()
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand(actionID, "BTC-USDT-SWAP")
 	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
 	fixture.orders.nextID = childID

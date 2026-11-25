@@ -144,7 +144,7 @@ const emit = defineEmits<{ "update:visible": [value: boolean]; registered: [] }>
 
 const form = reactive({
   exchange: "binance" as DelistExchange,
-  market: "SPOT" as DelistMarket,
+  market: "spot" as DelistMarket,
   exchange_symbol: "",
   // 毫秒时刻，按 UTC 选择
   delist_at: null as number | null,
@@ -188,7 +188,7 @@ const summaryTitle = computed(() => {
   if (!value) return "";
   const exchange = DELIST_EXCHANGES.find(item => item.value === value.exchange)?.label ?? value.exchange;
   const market = DELIST_MARKETS.find(item => item.value === value.market)?.label ?? value.market;
-  return `${exchange} ${market} ${value.exchange_symbol}，下架时间 ${formatInstant(value.delist_at_ms, "UTC")}`;
+  return `${exchange} ${market} ${value.exchange_symbol}，下架时间 ${formatInstant(value.delist_at, "UTC")}`;
 });
 
 const holderKey = (holder: InstrumentHolder) => `${holder.space_id}/${holder.logical_account_id}/${holder.trading_account_id}`;
@@ -210,7 +210,7 @@ watch(
     // 关掉或重新打开都换号：上一次没回来的预览响应不会再写进来。
     previewGuard.reset();
     if (!visible) return;
-    Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: null, paper_only: false });
+    Object.assign(form, { exchange: "binance", market: "spot", exchange_symbol: "", delist_at: null, paper_only: false });
     phase.value = "form";
     previewing.value = false;
     submitting.value = false;
@@ -259,7 +259,7 @@ async function submit() {
       exchange: value.exchange,
       market: value.market,
       exchange_symbol: value.exchange_symbol,
-      delist_at_ms: value.delist_at_ms,
+      delist_at: value.delist_at,
       paper_only: value.paper_only
     });
     Message.success(result.created ? "已登记，稍后可以在下架处理记录里看到进度" : "这条下架之前已经登记过");

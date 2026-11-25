@@ -12,7 +12,7 @@ import (
 // 下架清仓带截止时间（下架时间 T）：过了 T 不再下单，动作记 PARTIAL；之后工作线程恢复（同一个动作号）也不再下单。
 func TestDelistFlattenStopsAtTheDeadline(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-deadline", "BTC-USDT-SWAP")
 	command.DeadlineAt = fixture.now.Add(-time.Second).UnixMilli()
 
@@ -32,7 +32,7 @@ func TestDelistFlattenStopsAtTheDeadline(t *testing.T) {
 // 截止时间还没到：照常下单。
 func TestDelistFlattenBeforeTheDeadlineStillTrades(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-before-deadline", "BTC-USDT-SWAP")
 	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
 

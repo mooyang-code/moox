@@ -17,14 +17,14 @@ import (
 
 func TestBalanceInstrumentIgnoresSwapInstrumentOfSameCoin(t *testing.T) {
 	spot := store.InstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 	}
 	swap := store.InstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+		Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 	}
-	markets := []string{"SPOT", "SWAP"}
+	markets := []string{"spot", "swap"}
 	// 无论现货和永续谁排在后面，余额都只对应现货标的
 	for name, records := range map[string][]store.InstrumentRecord{
 		"现货在前": {spot, swap},
@@ -94,7 +94,7 @@ func TestHoldingQueryListsOnlySpotWalletBalances(t *testing.T) {
 	tradeStore := openHoldingStore(t)
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "live-1", Name: "live", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"},
+			SpaceID: "space-1", TradingAccountID: "live-1", Name: "live", Exchange: "binance", Markets: []string{"spot", "swap"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION", AccountMode: string(exchange.AccountModeBinanceStandard),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{"*": "5"},
@@ -120,7 +120,7 @@ func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 	tradeStore := openHoldingStore(t)
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "binance", Markets: []string{"spot"},
 			ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 			Snapshot: store.TradingAccountSnapshot{Balances: []store.AssetBalance{
 				{Wallet: string(exchange.WalletUnified), Asset: "USDT", Total: "500", Available: "500"},
@@ -133,7 +133,7 @@ func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 		}
 		for _, base := range []string{"BTC", "ETH"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
+				Exchange: "binance", MarketType: "spot", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
 				BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}); err != nil {
@@ -148,7 +148,7 @@ func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 			id := order.base + "-" + order.side
 			if err := tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", OrderID: "o-" + id, TradingAccountID: "paper-1", ClientOrderID: "c-" + id,
-				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: order.base + "-USDT-SPOT", ExchangeSymbol: order.base + "USDT",
+				Exchange: "binance", MarketType: "spot", InstrumentID: order.base + "-USDT-SPOT", ExchangeSymbol: order.base + "USDT",
 				OrderType: "MARKET", Side: order.side, Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 1,
 				OwnerType: "EXTERNAL", OwnerID: "ext-" + id, State: "FILLED", Version: 1,
 			}); err != nil {
@@ -180,7 +180,7 @@ func TestHoldingQueryPaperPrefetchesQuotesAndKeepsAverageCost(t *testing.T) {
 	holdings, err := query.List(ctx, "space-1", "paper-1")
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"prefetch SPOT:BTCUSDT,SPOT:ETHUSDT", "quote SPOT:BTCUSDT", "quote SPOT:ETHUSDT"}, quotes.calls)
+	require.Equal(t, []string{"prefetch spot:BTCUSDT,spot:ETHUSDT", "quote spot:BTCUSDT", "quote spot:ETHUSDT"}, quotes.calls)
 	require.Len(t, holdings, 4)
 	byAsset := make(map[string]int, len(holdings))
 	for i, holding := range holdings {

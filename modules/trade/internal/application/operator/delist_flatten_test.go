@@ -32,7 +32,7 @@ func TestDelistLimitPriceRoundsAgainstTheOrderDirection(t *testing.T) {
 // 下架清仓用伪市价单：限价 + IOC，卖出价是参考价 ×（1 − 3%）。
 func TestDelistFlattenPlacesPseudoMarketIOCOrders(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), delistCommand("delist-ioc", "BTC-USDT-SWAP"))
 
@@ -71,7 +71,7 @@ func TestFlattenChildClientOrderIDsFitEveryExchange(t *testing.T) {
 // 零成交的 IOC 单不算终结：同一个动作号再跑一轮，用新的单号按最新报价重新下。
 func TestDelistFlattenRetriesAfterAnUnfilledIOCOrder(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-retry", "BTC-USDT-SWAP")
 	fixture.orders.nextID = ""
 
@@ -109,7 +109,7 @@ func currentRoundOrders(t *testing.T, fixture *operatorFixture, actionID string)
 // 被交易所拒绝：这一轮停下（PARTIAL）；同一个动作号重试会重新来过——起点之前的被拒子单不计，会再下单。
 func TestDelistFlattenRetryAfterARejectionStartsOver(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-reject", "BTC-USDT-SWAP")
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
@@ -137,7 +137,7 @@ func TestDelistFlattenRetryAfterARejectionStartsOver(t *testing.T) {
 // 连续 20 笔 IOC 一股都没成交：这一轮封顶；部分成交打断计数；同号重试重新来过。
 func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-streak", "BTC-USDT-SWAP")
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
@@ -148,7 +148,7 @@ func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
 		id := "old-" + string(rune('a'+i))
 		fixture.order(t, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: id, ClientOrderID: id,
-			Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 			OrderType: "LIMIT", TimeInForce: "IOC", Side: "SELL", Quantity: "3", LimitPrice: &limit, ReferencePrice: "100",
 			State: "EXPIRED", OwnerType: "OPERATOR", OwnerID: "delist-streak", LogicalAccountID: "logical-1", Version: 1,
 		})
@@ -183,7 +183,7 @@ func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
 // 两笔 IOC 之间至少隔一段时间：上一笔刚结束就先不下，不算终结。
 func TestDelistFlattenPacesConsecutiveIOCOrders(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-pace", "BTC-USDT-SWAP")
 	fixture.orders.nextID = ""
 	service := fixture.service()
@@ -204,7 +204,7 @@ func TestDelistFlattenPacesConsecutiveIOCOrders(t *testing.T) {
 // 解除禁止就停：撤掉本动作的订单，记 COMPLETED 并带“已解除禁止”标记，不下单、不记 PARTIAL。
 func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-unblock", "BTC-USDT-SWAP")
 	fixture.orders.leaveOpen = map[string]bool{"child-account-a-BTC-USDT-SWAP": true}
 	fixture.orders.nextID = ""
@@ -212,7 +212,7 @@ func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status, "子单还挂着，动作继续")
 
-	removed, err := fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
+	removed, err := fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	require.True(t, removed)
 	fixture.orders.specs, fixture.orders.leaveOpen, fixture.trace = nil, nil, nil
@@ -242,23 +242,23 @@ func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 // 混合交易所的组合：只平指定交易所的成员，另一家的持仓不动。
 func TestDelistFlattenOnlyTouchesMembersOfTheGivenExchange(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	// account-b 是 OKX，同样持有 BTC 永续；它的交易所没有下架，不能被平。
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'SPOT,SWAP', c_margin_mode = 'CROSS' WHERE c_trading_account_id = 'account-b'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'spot,swap', c_margin_mode = 'CROSS' WHERE c_trading_account_id = 'account-b'`).Error)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		swap := fixture.instrument("account-b")
-		swap.MarketType, swap.InstrumentID = "SWAP", "BTC-USDT-SWAP"
+		swap.MarketType, swap.InstrumentID = "swap", "BTC-USDT-SWAP"
 		swap.Linear, swap.ContractValue, swap.ContractValueAsset = true, "1", "BTC"
 		if err := tx.UpsertInstrument(swap); err != nil {
 			return err
 		}
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-b", MarketType: "SWAP", ExchangeSymbol: swap.ExchangeSymbol, PositionSide: "NET",
+			SpaceID: "space-1", TradingAccountID: "account-b", MarketType: "swap", ExchangeSymbol: swap.ExchangeSymbol, PositionSide: "NET",
 			SignedQuantity: "4", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli(),
 		})
 	}))
 	command := delistCommand("delist-binance", "BTC-USDT-SWAP")
-	command.Exchange = "BINANCE"
+	command.Exchange = "binance"
 
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 
@@ -272,7 +272,7 @@ func TestDelistFlattenOnlyTouchesMembersOfTheGivenExchange(t *testing.T) {
 // 只平的标的恰好是套利底仓的对冲腿：不能静默当作平完，要以部分完成结束并写明原因。
 func TestDelistFlattenDoesNotSilentlyCompleteForAnArbitrageHedgeLeg(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":["BTC"]}' WHERE c_logical_account_id = 'logical-1'`).Error)
 
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), delistCommand("delist-hedge", "BTC-USDT-SWAP"))
@@ -287,7 +287,7 @@ func TestDelistFlattenDoesNotSilentlyCompleteForAnArbitrageHedgeLeg(t *testing.T
 // 下架清仓遇到整组清仓正在运行：返回“忙”；不同标的的下架清仓之间不互相冲突。
 func TestDelistFlattenBusyWhenWholeFlattenIsRunning(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "whole", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten),
 		Reason: "清仓", RequestJSON: `{"logical_account_id":"logical-1"}`, Status: string(operatordomain.StatusRunning),
@@ -303,17 +303,17 @@ func TestDelistFlattenBusyWhenWholeFlattenIsRunning(t *testing.T) {
 // 重启恢复：工作线程用持久化的动作继续，下架清仓和减仓都认，交易所范围从请求里还原。
 func TestResumeOperatorActionContinuesDelistFlattenAndReduce(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-resume", "BTC-USDT-SWAP")
-	command.Exchange = "BINANCE"
+	command.Exchange = "binance"
 	fixture.orders.leaveOpen = map[string]bool{"child-account-a-BTC-USDT-SWAP": true}
 	fixture.orders.nextID = ""
 	first, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status)
-	require.JSONEq(t, `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`, first.Action.RequestJSON)
+	require.JSONEq(t, `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"binance"}`, first.Action.RequestJSON)
 
-	_, err = fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
+	_, err = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	fixture.orders.leaveOpen = nil
 	require.NoError(t, fixture.service().ResumeOperatorAction(context.Background(), first.Action))
@@ -326,9 +326,9 @@ func TestResumeOperatorActionContinuesDelistFlattenAndReduce(t *testing.T) {
 // 组合同时持有其他标的且有挂单时，下架清仓也能完成：清仓只看自己的标的，别的标的的挂单不撤、不算剩余。
 func TestDelistFlattenCompletesWhileOtherInstrumentsHaveOpenOrders(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	other := activeOrder(fixture, "spot-open", "TARGET")
-	other.MarketType, other.InstrumentID = "SPOT", "BTC-USDT-SPOT"
+	other.MarketType, other.InstrumentID = "spot", "BTC-USDT-SPOT"
 	fixture.order(t, other)
 	// 平仓单发出后，持仓同步到位（永续持仓归零）。
 	fixture.syncer.onSync = func(ctx context.Context, accountID string, _ int) error {
@@ -336,7 +336,7 @@ func TestDelistFlattenCompletesWhileOtherInstrumentsHaveOpenOrders(t *testing.T)
 			if len(entry) > 6 && entry[:6] == "place:" {
 				return fixture.store.Transaction(ctx, func(tx *store.Tx) error {
 					return tx.UpsertPosition(store.PositionRecord{
-						SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+						SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 						SignedQuantity: "0", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli() + 1000,
 					})
 				})
@@ -360,13 +360,13 @@ func TestDelistFlattenCompletesWhileOtherInstrumentsHaveOpenOrders(t *testing.T)
 // 解除禁止提前结束时要确认撤单：本动作的子单还没结束就不能记 COMPLETED，也不能唤醒目标（执行器会把没结束的 OPERATOR 单当冲突、暂停组合）。
 func TestDelistFlattenUnblockWaitsForCancelConfirmation(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-cancel-confirm", "BTC-USDT-SWAP")
 	fixture.orders.leaveOpen = map[string]bool{"child-account-a-BTC-USDT-SWAP": true}
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	_, err = fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
+	_, err = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	fixture.orders.specs = nil
 	wakes := 0
@@ -394,14 +394,14 @@ func TestDelistFlattenUnblockWaitsForCancelConfirmation(t *testing.T) {
 // 同标的同交易所已经有另一个动作号在平：新号返回“忙”，不创建新动作、也不把旧动作当成新号的结果返回。
 func TestDelistFlattenWithAnotherActionIDOnTheSameInstrumentIsBusy(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "drill", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionDelistFlatten), Reason: "演练",
-		RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`, Status: string(operatordomain.StatusRunning),
+		RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"binance"}`, Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 	command := delistCommand("real", "BTC-USDT-SWAP")
-	command.Exchange = "BINANCE"
+	command.Exchange = "binance"
 
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 
@@ -416,7 +416,7 @@ func TestDelistFlattenWithAnotherActionIDOnTheSameInstrumentIsBusy(t *testing.T)
 // 对币安现货加永续要发 3 个接口，一次调用的预算里就是几十次同步，会打满 IP 限频。
 func TestDelistFlattenWaitsOutTheIntervalWithoutSpinningSyncs(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	service := fixture.service()
 	service.FlattenMaxAttempts = 1000
 	service.FlattenRetryInterval = 10 * time.Millisecond
@@ -424,7 +424,7 @@ func TestDelistFlattenWaitsOutTheIntervalWithoutSpinningSyncs(t *testing.T) {
 	service.DelistAttemptInterval = 400 * time.Millisecond
 	// 只处理币安成员：预算不被两个成员分掉，到期时也不会落在某个数据库调用里。
 	command := delistCommand("delist-spin", "BTC-USDT-SWAP")
-	command.Exchange = "BINANCE"
+	command.Exchange = "binance"
 
 	_, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestDelistFlattenWaitsOutTheIntervalWithoutSpinningSyncs(t *testing.T) {
 // 清仓这一族的 30 分钟期限从这一轮的起点算：动作创建很久之后用同一个动作号重试，不能一次调用就被记 PARTIAL。
 func TestDelistFlattenRetryDeadlineStartsAtTheRoundNotTheActionCreation(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := delistCommand("delist-old", "BTC-USDT-SWAP")
 	fixture.orders.leaveOpen = map[string]bool{"child-account-a-BTC-USDT-SWAP": true}
 	fixture.orders.nextID = ""
@@ -483,16 +483,16 @@ func TestDelistFlattenRetryDeadlineStartsAtTheRoundNotTheActionCreation(t *testi
 // 等间隔的睡眠期间解除禁止：睡醒后先查名单，不能再下一笔 IOC（多卖的一笔随后又会被执行器买回来）。
 func TestDelistFlattenDoesNotPlaceAfterTheUnblockDuringTheIntervalSleep(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	service := fixture.service()
 	service.FlattenMaxAttempts = 1000
 	service.FlattenRetryInterval = 10 * time.Millisecond
 	service.DelistAttemptInterval = 800 * time.Millisecond
 	command := delistCommand("delist-sleep-unblock", "BTC-USDT-SWAP")
-	command.Exchange = "BINANCE"
+	command.Exchange = "binance"
 	go func() {
 		time.Sleep(300 * time.Millisecond) // 第一笔之后、正在睡
-		_, _ = fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
+		_, _ = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
 	}()
 
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
@@ -506,14 +506,14 @@ func TestDelistFlattenDoesNotPlaceAfterTheUnblockDuringTheIntervalSleep(t *testi
 // 睡醒后离本账户期限不够再发一单（轮间等待加发单余量）：不睡了，这一轮干净地结束，不空转到期限、不写错误。
 func TestDelistFlattenEndsTheRoundWhenTheWakeUpLeavesNoRoomToPlace(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	service := fixture.service()
 	service.FlattenMaxAttempts = 1000
 	service.FlattenRetryInterval = 10 * time.Millisecond
 	service.FlattenTimeout = 1500 * time.Millisecond
 	service.DelistAttemptInterval = 800 * time.Millisecond
 	command := delistCommand("delist-no-room", "BTC-USDT-SWAP")
-	command.Exchange = "BINANCE"
+	command.Exchange = "binance"
 
 	started := time.Now()
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
@@ -529,7 +529,7 @@ func TestDelistFlattenEndsTheRoundWhenTheWakeUpLeavesNoRoomToPlace(t *testing.T)
 func TestDelistFlattenOfALiveAccountUnderPaperOnlyBlockDoesNotSell(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	_, err := storetest.BlockInstrument(fixture.store, store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Scope: store.DelistScopePaperOnly, Reason: "演练", BlockedAt: 1,
+		Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT", Scope: store.DelistScopePaperOnly, Reason: "演练", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION', c_account_mode = 'BINANCE_STANDARD', c_credential_secret_id = 'secret-a' WHERE c_trading_account_id = 'account-a'`).Error)

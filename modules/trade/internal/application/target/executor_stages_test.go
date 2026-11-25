@@ -31,8 +31,8 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", Name: "account-a", Exchange: "BINANCE",
-			Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT",
+			SpaceID: "space-1", TradingAccountID: "account-a", Name: "account-a", Exchange: "binance",
+			Markets: []string{"spot", "swap"}, ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED", Ready: true,
 			LeverageSettings: store.LeverageSettings{"*": "5"},
 			Snapshot: store.TradingAccountSnapshot{
@@ -58,13 +58,13 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 		}); err != nil {
 			return err
 		}
-		for _, item := range []struct{ market, base string }{{"SPOT", "BTC"}, {"SWAP", "BTC"}, {"SPOT", "ETH"}} {
+		for _, item := range []struct{ market, base string }{{"spot", "BTC"}, {"swap", "BTC"}, {"spot", "ETH"}} {
 			record := store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: item.market, ExchangeSymbol: item.base + "USDT",
-				InstrumentID: item.base + "-USDT-" + item.market, BaseAsset: item.base, QuoteAsset: "USDT", SettlementAsset: "USDT",
+				Exchange: "binance", MarketType: item.market, ExchangeSymbol: item.base + "USDT",
+				InstrumentID: item.base + "-USDT-" + exchange.InstrumentSuffix(item.market), BaseAsset: item.base, QuoteAsset: "USDT", SettlementAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}
-			if item.market == "SWAP" {
+			if item.market == "swap" {
 				record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", item.base
 			}
 			if err := tx.UpsertInstrument(record); err != nil {
@@ -86,7 +86,7 @@ func (f *targetFixture) setSpotBalance(asset, total string) {
 			balances = append(balances, balance)
 		}
 	}
-	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("SPOT")), Asset: asset, Available: total, Total: total})
+	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("spot")), Asset: asset, Available: total, Total: total})
 	account.Snapshot.Balances = balances
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
@@ -99,7 +99,7 @@ func (f *targetFixture) setSwapPosition(symbol, quantity string) {
 	f.t.Helper()
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP",
+			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap",
 			ExchangeSymbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
 			EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
 		})
@@ -185,7 +185,7 @@ func TestOnlyRestingOrdersConvergeWithRetryAfterValidUntil(t *testing.T) {
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
-		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		ClientOrderID: "resting-1", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", Version: 1,
 		ReservedAsset: "USDT", ReservedQuantity: "90", RemainingReservedQuantity: "90",
@@ -208,7 +208,7 @@ func TestExpiryAndNewTargetCancelRestingOrders(t *testing.T) {
 	require.NoError(t, err)
 	record := store.OrderRecord{
 		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
-		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		ClientOrderID: "resting-1", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: string(orderdomain.Open), Version: 1,
 	}
@@ -332,7 +332,7 @@ func TestNewTargetCancelsPreviousTargetRestingOrder(t *testing.T) {
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
-		ClientOrderID: "old-resting", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		ClientOrderID: "old-resting", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "previous-target", State: "OPEN", Version: 1,
 	})
@@ -362,7 +362,7 @@ func TestArbitrageBaseSwapLegIsNotFlattenedToZero(t *testing.T) {
 func restingEthOrder(target store.LogicalAccountTargetRecord) store.OrderRecord {
 	return store.OrderRecord{
 		SpaceID: "space-1", OrderID: "resting-eth", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: target.InstanceID,
-		ClientOrderID: "resting-eth", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		ClientOrderID: "resting-eth", Exchange: "binance", MarketType: "spot", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "2", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", Version: 1,
 	}

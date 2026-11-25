@@ -33,8 +33,8 @@
     <a-form v-else-if="form.step === 1" :model="form" layout="vertical">
       <a-form-item label="交易所">
         <a-radio-group v-model="form.exchange" type="button" @change="onExchangeChange">
-          <a-radio :value="1">币安</a-radio>
-          <a-radio :value="2">OKX</a-radio>
+          <a-radio value="binance">币安</a-radio>
+          <a-radio value="okx">OKX</a-radio>
           <template v-if="form.kind === 'paper'">
             <a-radio v-for="stock in stockExchanges" :key="stock.exchange" :value="stock.exchange">{{ stock.label }}</a-radio>
           </template>
@@ -65,21 +65,21 @@
       <a-form-item v-else label="开通的市场" :extra="marketsExtra">
         <a-space size="large">
           <a-checkbox
-            :model-value="form.markets.includes(1)"
-            :disabled="!marketAvailable('SPOT')"
-            @change="(value: unknown) => setMarket(1, Boolean(value))"
+            :model-value="form.markets.includes('spot')"
+            :disabled="!marketAvailable('spot')"
+            @change="(value: unknown) => setMarket('spot', Boolean(value))"
             >现货</a-checkbox
           >
           <a-checkbox
-            :model-value="form.markets.includes(2)"
-            :disabled="!marketAvailable('SWAP')"
-            @change="(value: unknown) => setMarket(2, Boolean(value))"
+            :model-value="form.markets.includes('swap')"
+            :disabled="!marketAvailable('swap')"
+            @change="(value: unknown) => setMarket('swap', Boolean(value))"
             >永续</a-checkbox
           >
         </a-space>
       </a-form-item>
       <a-form-item label="结算资产">
-        <a-input v-model="form.settlementAsset" :disabled="form.markets.includes(2) || Boolean(stockExchange)" />
+        <a-input v-model="form.settlementAsset" :disabled="form.markets.includes('swap') || Boolean(stockExchange)" />
       </a-form-item>
       <!-- 实盘：按所选市场再检测一次（万向划转权限、双向持仓等和市场有关的阻断项），通过才能继续 -->
       <InspectionPreview
@@ -258,7 +258,7 @@ const nextDisabled = computed(() => {
 });
 
 // 币安测试网一个账户只能开通一个市场（现货测试网和合约测试网是两套密钥）
-const singleMarket = computed(() => form.kind === "testnet" && form.exchange === 1);
+const singleMarket = computed(() => form.kind === "testnet" && form.exchange === "binance");
 const marketsExtra = computed(() =>
   singleMarket.value
     ? "币安测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥；永续固定全仓、USDT 结算"
@@ -281,7 +281,7 @@ watch(
     form.secretId = "";
     // 股票场所（A 股、港股）只开放模拟盘：换成测试网、生产环境时回到币安
     if (form.kind !== "paper" && stockExchangeOf(form)) {
-      form.exchange = 1;
+      form.exchange = "binance";
       applyExchangeDefaults(form);
     }
     secrets.value = [];
@@ -315,7 +315,7 @@ function onMarketPreviewChange(payload: { allowNext: boolean }) {
 }
 
 /** 模拟盘不限制；实盘只能开通检测结果里有的市场（测试网跳过检测、没有市场列表时不限制）。 */
-function marketAvailable(market: "SPOT" | "SWAP"): boolean {
+function marketAvailable(market: "spot" | "swap"): boolean {
   if (form.kind === "paper") return true;
   const available = preview.view?.availableMarkets ?? [];
   return !available.length || available.includes(market);
@@ -367,7 +367,7 @@ function setMarket(market: MarketType, on: boolean) {
 
 // 市场变了，结算资产和（没手工改过的）默认费率跟着重算：开通永续固定 USDT 结算，只开现货和带永续的默认费率不同。
 function syncMarketDefaults() {
-  if (form.markets.includes(2)) form.settlementAsset = "USDT";
+  if (form.markets.includes("swap")) form.settlementAsset = "USDT";
   if (!form.feesEdited) {
     const fees = defaultFees(form.markets, form.exchange);
     form.makerFeeRate = fees.maker;

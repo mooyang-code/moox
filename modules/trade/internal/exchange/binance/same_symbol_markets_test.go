@@ -46,7 +46,7 @@ func TestSameNamedSpotAndSwapEventsDoNotCollideInOneAccount(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "dual", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"},
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "dual", Exchange: "binance", Markets: []string{"spot", "swap"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS",
 			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "10"}, Status: "ENABLED",
 		}); err != nil {
@@ -55,21 +55,21 @@ func TestSameNamedSpotAndSwapEventsDoNotCollideInOneAccount(t *testing.T) {
 		for _, order := range []exchange.Order{spot.orders[0], swap.orders[0]} {
 			market := string(order.Market)
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + market,
-				BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: market == "SWAP",
+				Exchange: "binance", MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(market),
+				BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: market == "swap",
 				ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 				PriceTick: "0.1", Status: "TRADING",
 			}); err != nil {
 				return err
 			}
 			positionSide := ""
-			if market == "SWAP" {
+			if market == "swap" {
 				positionSide = string(exchange.PositionSideNet)
 			}
 			if err := tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", OrderID: "order-" + market, TradingAccountID: "account-1",
 				ClientOrderID: order.ClientOrderID, ExchangeOrderID: order.ExchangeOrderID,
-				Exchange: "BINANCE", MarketType: market, InstrumentID: "BTC-USDT-" + market, ExchangeSymbol: order.ExchangeSymbol,
+				Exchange: "binance", MarketType: market, InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(market), ExchangeSymbol: order.ExchangeSymbol,
 				OrderType: string(exchange.OrderTypeMarket), Side: string(exchange.SideBuy), PositionSide: positionSide,
 				Quantity: order.Quantity.String(), ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: order.ExchangeOrderID,
 				State: "OPEN", Version: 1,

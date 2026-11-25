@@ -36,7 +36,7 @@ func TestPaperSyncWriteBackKeepsFundingPositions(t *testing.T) {
 	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper",
-			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "PAPER", Environment: "PAPER",
+			Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "PAPER", Environment: "PAPER",
 			SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "5"},
 		}); err != nil {
@@ -44,7 +44,7 @@ func TestPaperSyncWriteBackKeepsFundingPositions(t *testing.T) {
 		}
 		for _, symbol := range []string{"BTCUSDT", "ETHUSDT"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: symbol, InstrumentID: symbol, BaseAsset: symbol[:3],
+				Exchange: "binance", MarketType: "swap", ExchangeSymbol: symbol, InstrumentID: symbol, BaseAsset: symbol[:3],
 				QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: true, ContractValue: "1", ContractValueAsset: symbol[:3],
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}); err != nil {
@@ -71,7 +71,7 @@ func TestPaperSyncWriteBackKeepsFundingPositions(t *testing.T) {
 		require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
 			return tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", OrderID: "order-" + id, TradingAccountID: "paper-1", ClientOrderID: "client-" + id,
-				ExchangeOrderID: "exchange-" + id, Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: step.symbol,
+				ExchangeOrderID: "exchange-" + id, Exchange: "binance", MarketType: "swap", ExchangeSymbol: step.symbol,
 				OrderType: "MARKET", Side: string(step.side), PositionSide: "NET", Quantity: step.quantity,
 				ReferencePrice: "100", ReferencePriceAt: base.UnixMilli(), OwnerType: "EXTERNAL", OwnerID: "exchange-" + id,
 				State: "OPEN", ReservedAsset: "USDT", ReservedQuantity: "100", RemainingReservedQuantity: "100", Version: 1,

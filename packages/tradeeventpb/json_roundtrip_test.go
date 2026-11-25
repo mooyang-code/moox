@@ -15,7 +15,7 @@ func TestTargetWeightRequestedTRPCJSONRoundTrip(t *testing.T) {
 	const at = int64(1700000000123)
 	assertTRPCJSONRoundTrip(t, &LogicalAccountTargetWeightRequested{
 		TargetId: "t", LogicalAccountId: "a", BarEndTime: at, ValidUntil: at + 300000, SessionStartedAt: at - 3600000,
-		Targets: []*InstrumentWeightTarget{{InstrumentId: "BTC-USDT", TargetWeight: "0.5", MarketType: "SPOT"}},
+		Targets: []*InstrumentWeightTarget{{InstrumentId: "BTC-USDT", TargetWeight: "0.5", MarketType: "spot"}},
 	}, new(LogicalAccountTargetWeightRequested), map[string]int64{"bar_end_time": at, "valid_until": at + 300000, "session_started_at": at - 3600000})
 }
 

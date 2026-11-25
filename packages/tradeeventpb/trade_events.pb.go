@@ -30,7 +30,7 @@ type InstrumentWeightTarget struct {
 	// hold 为 true 表示保持该标的当前持仓数量不动（标的所在市场本期不可用或只缺上一根，策略暂时无法决策）；
 	// target_weight 是预留的预算占用，不用于换算数量。
 	Hold bool `protobuf:"varint,3,opt,name=hold,proto3" json:"hold,omitempty"`
-	// market_type 是该标的所属市场，必填：SPOT、SWAP 或 STOCK。同一个 instrument_id 可以按 SPOT、SWAP 各出现一次。
+	// market_type 是该标的所属市场，必填：spot、swap 或 equity。同一个 instrument_id 可以按 spot、swap 各出现一次。
 	MarketType string `protobuf:"bytes,4,opt,name=market_type,json=marketType,proto3" json:"market_type,omitempty"`
 }
 

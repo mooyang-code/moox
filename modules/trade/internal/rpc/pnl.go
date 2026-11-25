@@ -118,7 +118,7 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, st *store.Store, a
 		if account.ExecutionMode == string(exchange.ExecutionModePaper) {
 			// 第一版只有币安的模拟永续结算资金费。
 			if account.Exchange != string(exchange.ExchangeBinance) {
-				notes = append(notes, fmt.Sprintf("账户 %s：%s 模拟盘暂不结算资金费", account.Name, account.Exchange))
+				notes = append(notes, fmt.Sprintf("账户 %s：%s 模拟盘暂不结算资金费", account.Name, strings.ToUpper(account.Exchange)))
 			}
 			paperAccounts = append(paperAccounts, account)
 			continue

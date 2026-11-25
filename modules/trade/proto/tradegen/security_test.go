@@ -57,12 +57,6 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 
 func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 	want := map[protoreflect.Name][]protoreflect.Name{
-		"Exchange": {
-			"EXCHANGE_UNSPECIFIED", "EXCHANGE_BINANCE", "EXCHANGE_OKX", "EXCHANGE_ASHARE", "EXCHANGE_HKEX",
-		},
-		"MarketType": {
-			"MARKET_TYPE_UNSPECIFIED", "MARKET_TYPE_SPOT", "MARKET_TYPE_SWAP", "MARKET_TYPE_STOCK",
-		},
 		"ExecutionMode": {
 			"EXECUTION_MODE_UNSPECIFIED", "EXECUTION_MODE_PAPER",
 			"EXECUTION_MODE_LIVE",
@@ -305,8 +299,8 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 func TestCreateTradingAccountRequiresLiveConfig(t *testing.T) {
 	base := func() *CreateTradingAccountReq {
 		return &CreateTradingAccountReq{
-			Name: "live", Exchange: Exchange_EXCHANGE_OKX,
-			Markets: []MarketType{MarketType_MARKET_TYPE_SWAP},
+			Name: "live", Exchange: "okx",
+			Markets: []string{"swap"},
 			Live:    &LiveConfig{Environment: AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		}
 	}

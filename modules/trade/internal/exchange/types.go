@@ -24,7 +24,27 @@ func CanonicalInstrumentID(
 	if RuleFor(market).RawInstrumentID {
 		return base, nil
 	}
-	return base + "-" + quote + "-" + string(market), nil
+	return base + "-" + quote + "-" + InstrumentSuffix(market), nil
+}
+
+// 标的 ID 的市场后缀（BTC-USDT-SPOT、BTC-USDT-SWAP）。它是标的 ID 的一部分（Storage 主键），
+// 与市场类型的取值无关，市场类型怎么写都不影响它。
+const (
+	SuffixSpot = "SPOT"
+	SuffixSwap = "SWAP"
+)
+
+// InstrumentSuffix 返回市场类型对应的标的 ID 后缀；股票这类原样使用代码的市场没有后缀，返回空串。
+// 数据库记录里的市场是字符串，所以和 RuleFor 一样接受两种类型。
+func InstrumentSuffix[T ~string](market T) string {
+	switch MarketType(market) {
+	case MarketTypeSpot:
+		return SuffixSpot
+	case MarketTypeSwap:
+		return SuffixSwap
+	default:
+		return ""
+	}
 }
 
 // ErrInvalidInstrumentID 表示上游传入的标的 ID 无法识别，或与账户市场不一致。
@@ -45,7 +65,7 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 		return value, nil
 	case len(parts) == 2 && parts[0] != "" && parts[1] != "":
 		return CanonicalInstrumentID(parts[0], parts[1], market)
-	case len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == string(market):
+	case len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == InstrumentSuffix(market):
 		return value, nil
 	default:
 		return "", fmt.Errorf("%w: %q for market %s", ErrInvalidInstrumentID, raw, market)
@@ -56,12 +76,12 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 // 其余（股票）是原始代码。
 func MarketOfInstrumentID(instrumentID string) MarketType {
 	switch {
-	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSwap)):
+	case strings.HasSuffix(instrumentID, "-"+SuffixSwap):
 		return MarketTypeSwap
-	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSpot)):
+	case strings.HasSuffix(instrumentID, "-"+SuffixSpot):
 		return MarketTypeSpot
 	default:
-		return MarketTypeStock
+		return MarketTypeEquity
 	}
 }
 
@@ -70,12 +90,12 @@ type Exchange string
 
 const (
 	ExchangeUnspecified Exchange = ""
-	ExchangeBinance     Exchange = "BINANCE"
-	ExchangeOKX         Exchange = "OKX"
+	ExchangeBinance     Exchange = "binance"
+	ExchangeOKX         Exchange = "okx"
 	// ExchangeAShare 是 A 股（沪深北三所），按市场命名，不按券商命名：模拟盘走 Trade 内的撮合，实盘走 QMT 执行端。
-	ExchangeAShare Exchange = "ASHARE"
+	ExchangeAShare Exchange = "ashare"
 	// ExchangeHKEX 是港股（香港交易所主板与创业板），同样按市场命名：只有模拟盘，走 Trade 内的撮合，没有实盘通道。
-	ExchangeHKEX Exchange = "HKEX"
+	ExchangeHKEX Exchange = "hkex"
 )
 
 // Valid 只检查非空。是否支持由 execution.Registry 判断，新增场所不用改这里。
@@ -83,13 +103,14 @@ func (e Exchange) Valid() bool {
 	return e != ExchangeUnspecified
 }
 
+// MarketType 是市场类型：spot 现货、swap 永续、equity 股票。
 type MarketType string
 
 const (
 	MarketTypeUnspecified MarketType = ""
-	MarketTypeSpot        MarketType = "SPOT"
-	MarketTypeSwap        MarketType = "SWAP"
-	MarketTypeStock       MarketType = "STOCK"
+	MarketTypeSpot        MarketType = "spot"
+	MarketTypeSwap        MarketType = "swap"
+	MarketTypeEquity      MarketType = "equity"
 )
 
 func (m MarketType) Valid() bool {

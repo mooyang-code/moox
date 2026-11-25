@@ -19,7 +19,7 @@ import (
 type Notice struct {
 	// Exchange 是小写交易所代码：binance、okx。
 	Exchange string
-	// Market 是 SPOT 或 SWAP。
+	// Market 是小写市场：spot 或 swap。
 	Market string
 	// Symbol 是大写的交易所代码，例如 FOOUSDT、FOO-USDT-SWAP：下游（Trade）按这个写法判断“同一个标的”。
 	Symbol   string

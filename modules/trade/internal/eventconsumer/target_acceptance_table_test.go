@@ -72,7 +72,7 @@ func acceptanceDelivery(t *testing.T, now time.Time, spec acceptanceTarget) *jet
 	}
 	var targets []*tradeeventpb.InstrumentWeightTarget
 	if spec.weight != "" {
-		targets = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: spec.weight}}
+		targets = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: spec.weight}}
 	}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)

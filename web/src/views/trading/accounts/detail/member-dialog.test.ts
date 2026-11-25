@@ -137,7 +137,12 @@ describe("编辑组合成员", () => {
   });
 
   it("生产组合里新增成员并接管已有持仓：确认框要输入组合名称", async () => {
-    const candidate = { trading_account_id: "ta-2", name: "执行账户二", exchange: 1, markets: [2] } as unknown as TradingAccount;
+    const candidate = {
+      trading_account_id: "ta-2",
+      name: "执行账户二",
+      exchange: "binance",
+      markets: ["swap"]
+    } as unknown as TradingAccount;
     wrapper = mount(MemberDialog, {
       props: { logical, candidates: [candidate], env: "prod" },
       global: { plugins: [ArcoVue] },
@@ -167,7 +172,12 @@ describe("编辑组合成员", () => {
   });
 
   it("新增成员不接管时不用确认，直接保存", async () => {
-    const candidate = { trading_account_id: "ta-2", name: "执行账户二", exchange: 1, markets: [2] } as unknown as TradingAccount;
+    const candidate = {
+      trading_account_id: "ta-2",
+      name: "执行账户二",
+      exchange: "binance",
+      markets: ["swap"]
+    } as unknown as TradingAccount;
     wrapper = mount(MemberDialog, {
       props: { logical, candidates: [candidate], env: "prod" },
       global: { plugins: [ArcoVue] },

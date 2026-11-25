@@ -285,7 +285,7 @@ describe("strategy instance creation behavior", () => {
 
   it("shows the account failure with a retry in trade mode and blocks submission without an account", async () => {
     api.listLogicalAccounts.mockRejectedValueOnce(new Error("账户服务不可用")).mockResolvedValueOnce({
-      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [2] }],
+      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: ["swap"] }],
       page_result: { has_more: false }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
@@ -324,8 +324,8 @@ describe("strategy instance creation behavior", () => {
   it("lists only stock accounts for A-share instances", async () => {
     api.listLogicalAccounts.mockResolvedValue({
       logical_accounts: [
-        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [1] },
-        { logical_account_id: "acc2", name: "A 股模拟", space_id: "crypto", control_mode: 1, markets: [3] }
+        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: ["spot"] },
+        { logical_account_id: "acc2", name: "A 股模拟", space_id: "crypto", control_mode: 1, markets: ["equity"] }
       ],
       page_result: { has_more: false }
     });
@@ -354,8 +354,8 @@ describe("strategy instance creation behavior", () => {
   it("已被启用实例绑定的账户显示但不可选，绑定关系读 Strategy 的实例列表", async () => {
     api.listLogicalAccounts.mockResolvedValue({
       logical_accounts: [
-        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [2] },
-        { logical_account_id: "acc2", name: "账户二", space_id: "crypto", control_mode: 1, markets: [2] }
+        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: ["swap"] },
+        { logical_account_id: "acc2", name: "账户二", space_id: "crypto", control_mode: 1, markets: ["swap"] }
       ],
       page_result: { has_more: false }
     });
@@ -578,8 +578,8 @@ describe("strategy instance creation behavior", () => {
   it("预检后账户列表收窄：已选的账户不在新列表里时清掉", async () => {
     api.listLogicalAccounts.mockResolvedValue({
       logical_accounts: [
-        { logical_account_id: "acc_swap", name: "永续户", space_id: "crypto", control_mode: 1, markets: [2] },
-        { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: [1, 2] }
+        { logical_account_id: "acc_swap", name: "永续户", space_id: "crypto", control_mode: 1, markets: ["swap"] },
+        { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: ["spot", "swap"] }
       ],
       page_result: { has_more: false }
     });
@@ -609,7 +609,9 @@ describe("strategy instance creation behavior", () => {
 
   it("预检前按 DSL 的市场先筛账户；一个都没有时写原因", async () => {
     api.listLogicalAccounts.mockResolvedValue({
-      logical_accounts: [{ logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: [1] }],
+      logical_accounts: [
+        { logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: ["spot"] }
+      ],
       page_result: { has_more: false }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
@@ -694,8 +696,8 @@ describe("strategy instance creation behavior", () => {
     it("还没预检时账户就按成员市场的并集过滤：只列出可交易市场包含现货与永续的账户", async () => {
       api.listLogicalAccounts.mockResolvedValue({
         logical_accounts: [
-          { logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: [1] },
-          { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: [1, 2] }
+          { logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: ["spot"] },
+          { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: ["spot", "swap"] }
         ],
         page_result: { has_more: false }
       });

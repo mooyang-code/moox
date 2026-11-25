@@ -109,7 +109,7 @@ func TestClosedSessionBeforeBarEndExpiresAtBarEndPlusOne(t *testing.T) {
 	// 上一份目标留下的挂单：新目标生效后本该在第 1 阶段撤掉。
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "resting-old", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: "resting-old", ExchangeOrderID: "exchange-resting-old", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "resting-old", ExchangeOrderID: "exchange-resting-old", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		FilledQuantity: "0", OwnerType: "TARGET", OwnerID: "target-old", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})

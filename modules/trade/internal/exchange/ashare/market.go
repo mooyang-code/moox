@@ -64,7 +64,7 @@ func stockInstrument(instrumentID string, at time.Time) (exchange.Instrument, er
 	}
 	lot := cnstock.LotRuleFor(board)
 	return exchange.Instrument{
-		Exchange: exchange.ExchangeAShare, MarketType: exchange.MarketTypeStock,
+		Exchange: exchange.ExchangeAShare, MarketType: exchange.MarketTypeEquity,
 		ExchangeSymbol: instrumentID, InstrumentID: instrumentID,
 		BaseAsset: instrumentID, QuoteAsset: SettlementAsset, SettlementAsset: SettlementAsset,
 		ExchangeQuantityStep: shared.MustDecimal(fmt.Sprint(lot.Step)),

@@ -7,6 +7,7 @@ import type {
   SkippedAccount
 } from "@/api/trade/delist";
 import { NETWORK_ERROR_MESSAGE, isNetworkFailure } from "@/api/network-error";
+import { toInstantMs } from "@/utils/time-zone";
 
 export interface HolderSummary {
   /** 实盘组合（测试网和生产环境，持有者里分不出这两种）：会被真实平仓，需要二次确认。 */
@@ -69,8 +70,8 @@ export const DELIST_EXCHANGES = [
 ] as const;
 
 export const DELIST_MARKETS = [
-  { value: "SPOT", label: "现货" },
-  { value: "SWAP", label: "永续合约" }
+  { value: "spot", label: "现货" },
+  { value: "swap", label: "永续合约" }
 ] as const;
 
 /** 手工登记允许补录已经过去的时间，所以只检查有没有填。 */
@@ -112,7 +113,7 @@ export function delistSnapshot(form: DelistFormValues, nowMs: number): { snapsho
       exchange: form.exchange,
       market: form.market,
       exchange_symbol: symbol,
-      delist_at_ms: delistAtMs,
+      delist_at: String(delistAtMs),
       paper_only: form.paper_only,
       past: isPastDelistTime(delistAtMs, nowMs)
     }
@@ -198,6 +199,6 @@ export function sortDelists(records: DelistRecord[]): DelistRecord[] {
     const activeA = a.status === "ACTIVE" ? 0 : 1;
     const activeB = b.status === "ACTIVE" ? 0 : 1;
     if (activeA !== activeB) return activeA - activeB;
-    return b.created_at_ms - a.created_at_ms;
+    return (toInstantMs(b.created_at) ?? 0) - (toInstantMs(a.created_at) ?? 0);
   });
 }

@@ -29,10 +29,10 @@ func TestPaperMatcherRestartAndCASE2E(t *testing.T) {
 	s := openUnifiedE2EStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
 			return err
 		}
-		if err := tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "btc-usdt", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", PriceTick: "0.1", Status: "TRADING"}); err != nil {
+		if err := tx.UpsertInstrument(store.InstrumentRecord{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "btc-usdt", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", PriceTick: "0.1", Status: "TRADING"}); err != nil {
 			return err
 		}
 		return tx.CreateOrder(store.OrderRecord{SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "paper-1", ClientOrderID: "client-1", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "e2e", State: "OPEN", FirstMatchPending: true, Version: 1})
@@ -66,7 +66,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: testSpace, OrderID: "paper-match-order", TradingAccountID: testAccount,
 			ClientOrderID: "paper-match-client", ExchangeOrderID: "paper-order-e2e",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: fake.instrument.InstrumentID,
+			Exchange: "binance", MarketType: "spot", InstrumentID: fake.instrument.InstrumentID,
 			ExchangeSymbol: testSymbol, OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100", ReferencePriceAt: testNow.UnixMilli(),
 			OwnerType: "EXTERNAL", OwnerID: "paper-match", State: "OPEN",

@@ -25,14 +25,14 @@ func TestOrderHistoryPrunerDeletesPaperOrdersOlderThanRetention(t *testing.T) {
 		cutoff.Add(-30 * 24 * time.Hour), cutoff.Add(-time.Hour), cutoff.Add(-time.Millisecond), // 要删
 		cutoff, now.Add(-time.Hour), // 保留
 	}
-	accounts := map[string][]string{"swap-paper": {"SWAP"}, "spot-paper": {"SPOT"}, "mixed-paper": {"SPOT", "SWAP"},
-		"swap-keep": {"SWAP"}, "swap-short": {"SWAP"}, "swap-funded": {"SWAP"}, "swap-stale": {"SWAP"}}
+	accounts := map[string][]string{"swap-paper": {"swap"}, "spot-paper": {"spot"}, "mixed-paper": {"spot", "swap"},
+		"swap-keep": {"swap"}, "swap-short": {"swap"}, "swap-funded": {"swap"}, "swap-stale": {"swap"}}
 	retention := map[string]int{"swap-keep": 0, "swap-short": 1}
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		for id, markets := range accounts {
 			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 				SpaceID: "space-1", TradingAccountID: id, Name: id,
-				Exchange: "BINANCE", Markets: markets, ExecutionMode: "PAPER", Environment: "PAPER",
+				Exchange: "binance", Markets: markets, ExecutionMode: "PAPER", Environment: "PAPER",
 				SettlementAsset: "USDT", Status: "ENABLED",
 			}); err != nil {
 				return err
@@ -76,11 +76,11 @@ func TestOrderHistoryPrunerDeletesPaperOrdersOlderThanRetention(t *testing.T) {
 }
 
 func TestOrderHistoryPrunableOnlyPaper(t *testing.T) {
-	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"SWAP"}}))
-	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"STOCK"}}))
-	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"SPOT", "SWAP"}}))
-	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "LIVE", Markets: []string{"SPOT"}}))
-	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "LIVE", Markets: []string{"SWAP"}}))
+	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"swap"}}))
+	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"equity"}}))
+	require.True(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "PAPER", Markets: []string{"spot", "swap"}}))
+	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "LIVE", Markets: []string{"spot"}}))
+	require.False(t, orderHistoryPrunable(store.TradingAccountRecord{ExecutionMode: "LIVE", Markets: []string{"swap"}}))
 }
 
 // 改订单保留天数不重建会话：会话配置比较不看保留天数，别的模拟配置照常比较。

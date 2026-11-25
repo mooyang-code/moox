@@ -11,7 +11,7 @@ import (
 
 func standardMixedAccount(pending map[string]int64) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
-		Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "LIVE",
+		Exchange: "binance", Markets: []string{"spot", "swap"}, ExecutionMode: "LIVE",
 		AccountMode: string(exchange.AccountModeBinanceStandard), BalancePending: pending,
 	}
 }
@@ -60,7 +60,7 @@ func TestCoveredWalletsEachWalletIndependent(t *testing.T) {
 // OKX 两个市场共用统一钱包，没有按钱包记录更新时间时按整体更新时间判断。
 func TestOKXUnifiedWalletFallsBackToSnapshotTime(t *testing.T) {
 	account := store.TradingAccountRecord{
-		Exchange: "OKX", Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "LIVE",
+		Exchange: "okx", Markets: []string{"spot", "swap"}, ExecutionMode: "LIVE",
 		BalancePending: map[string]int64{"UNIFIED": 3_000},
 	}
 	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: time.UnixMilli(3_200)}

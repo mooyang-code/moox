@@ -46,7 +46,7 @@ func seedDelistingAccount(t *testing.T, haltStatus string) *store.Store {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
-			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT"}, AccountMode: string(exchange.AccountModeBinanceStandard),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"}, AccountMode: string(exchange.AccountModeBinanceStandard),
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentProduction),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
@@ -76,7 +76,7 @@ func seedDelistingAccount(t *testing.T, haltStatus string) *store.Store {
 		for asset, status := range map[string]string{"BTC": "TRADING", "DEAD": "TRADING", "HALT": haltStatus} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
 				Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentProduction),
-				MarketType: "SPOT", ExchangeSymbol: asset + "USDT", InstrumentID: asset + "-USDT-SPOT",
+				MarketType: "spot", ExchangeSymbol: asset + "USDT", InstrumentID: asset + "-USDT-SPOT",
 				BaseAsset: asset, QuoteAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 				PriceTick: "0.1", Status: status,
 			}); err != nil {
@@ -84,7 +84,7 @@ func seedDelistingAccount(t *testing.T, haltStatus string) *store.Store {
 			}
 			if err := storetest.CreateFilledOrder(tx, store.OrderRecord{
 				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought-" + asset, ClientOrderID: "bought-" + asset,
-				Exchange: string(exchange.ExchangeBinance), MarketType: "SPOT",
+				Exchange: string(exchange.ExchangeBinance), MarketType: "spot",
 				ExchangeSymbol: asset + "USDT", InstrumentID: asset + "-USDT-SPOT", OrderType: "MARKET", Side: "BUY",
 				Quantity: "1", FilledQuantity: "1", ReferencePrice: "1", State: "FILLED",
 				OwnerType: "OPERATOR", OwnerID: "action-" + asset, LogicalAccountID: "logical-1", Version: 1,
@@ -115,7 +115,7 @@ func haltFill(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SeedInstrumentSummaryForTest(store.InstrumentSummaryRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT",
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "spot", ExchangeSymbol: "HALTUSDT",
 			InstrumentID: "HALT-USDT-SPOT", Managed: true, Quantity: shared.MustDecimal("1"), Cost: shared.MustDecimal("7"),
 			LastPrice: shared.MustDecimal("7"), LastTradedAt: 1,
 		})
@@ -162,7 +162,7 @@ func TestSampleAccountFailsOnHaltedAssetWithoutAnyPrice(t *testing.T) {
 	// HALT 受管但没有可用的成交价（汇总里的最近成交价为 0）。
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SeedInstrumentSummaryForTest(store.InstrumentSummaryRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT",
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "spot", ExchangeSymbol: "HALTUSDT",
 			InstrumentID: "HALT-USDT-SPOT", Managed: true, Quantity: shared.Zero(), Cost: shared.Zero(), LastPrice: shared.Zero(),
 		})
 	}))
@@ -176,7 +176,7 @@ func TestSampleAccountFailsOnHaltedAssetWithoutAnyPrice(t *testing.T) {
 func TestSampleAccountZeroesBlockedHaltedAsset(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "BREAK")
 	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	adapter := &delistingPriceAdapter{at: time.UnixMilli(sourceMillisDegraded + 1)}
@@ -191,7 +191,7 @@ func TestSampleAccountZeroesBlockedHaltedAsset(t *testing.T) {
 func TestSampleAccountFailsOnBlockedTradingAssetQuoteFailure(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "TRADING")
 	_, err := storetest.BlockInstrument(tradeStore, store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 	adapter := &delistingPriceAdapter{at: time.UnixMilli(sourceMillisDegraded + 1), throttled: true}

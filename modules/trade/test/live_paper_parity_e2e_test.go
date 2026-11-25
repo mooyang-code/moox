@@ -100,7 +100,7 @@ func setFixtureLive(t *testing.T, f *fixture) {
 	err = f.store.DBForTest().Exec(`
 		UPDATE t_trade_instruments
 		SET c_environment = 'TESTNET'
-		WHERE c_exchange = 'BINANCE'
+		WHERE c_exchange = 'binance'
 	`).Error
 	require.NoError(t, err)
 }
@@ -163,8 +163,8 @@ func assertCommonSpotFacts(t *testing.T, f *fixture, orderID string) {
 	require.Equal(t, int64(1), total)
 	require.Len(t, orders, 1)
 	require.Equal(t, "FILLED", orders[0].State)
-	require.Equal(t, "BINANCE", orders[0].Exchange)
-	require.Equal(t, "SPOT", orders[0].MarketType)
+	require.Equal(t, "binance", orders[0].Exchange)
+	require.Equal(t, "spot", orders[0].MarketType)
 	require.Equal(t, "BTCUSDT", orders[0].ExchangeSymbol)
 	require.Equal(t, "0.01", orders[0].FilledQuantity)
 	require.Equal(t, orderID, orders[0].OrderID)
@@ -197,13 +197,13 @@ func assertCommonSwapFacts(t *testing.T, f *fixture, orderID string) {
 	require.Len(t, orders, 1)
 	require.Equal(t, orderID, orders[0].OrderID)
 	require.Equal(t, "FILLED", orders[0].State)
-	require.Equal(t, "SWAP", orders[0].MarketType)
+	require.Equal(t, "swap", orders[0].MarketType)
 
 	fills, fillTotal, err := f.store.ListFills(ctx, testSpace, store.FillQuery{TradingAccountID: testAccount, Limit: 10})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), fillTotal)
 	require.Len(t, fills, 1)
-	require.Equal(t, "SWAP", fills[0].MarketType)
+	require.Equal(t, "swap", fills[0].MarketType)
 	require.Equal(t, "0.01", fills[0].Quantity)
 
 	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: testSymbol})

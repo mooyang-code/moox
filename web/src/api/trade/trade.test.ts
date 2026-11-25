@@ -51,8 +51,8 @@ describe("Trade public API", () => {
     const paper = {
       account_name: "paper",
       logical_account_name: "manual",
-      exchange: 1 as const,
-      markets: [1, 2] as (1 | 2)[],
+      exchange: "binance" as const,
+      markets: ["spot", "swap"] as ("spot" | "swap")[],
       settlement_asset: "USDT",
       initial_balance: "1000",
       maker_fee_rate: "0",
@@ -167,7 +167,7 @@ describe("Trade public API", () => {
   it("下架名单只暴露读取和解除：读取不带参数，解除按（交易所、市场、代码）定位", async () => {
     await trade.listBlockedInstruments();
     expect(call).toHaveBeenLastCalledWith("trade", "ListBlockedInstruments", {});
-    const req = { exchange: 1 as const, market_type: 1 as const, exchange_symbol: "LUNAUSDT" };
+    const req = { exchange: "binance" as const, market_type: "spot" as const, exchange_symbol: "LUNAUSDT" };
     await trade.unblockInstrument(req);
     expect(call).toHaveBeenLastCalledWith("trade", "UnblockInstrument", req);
   });
@@ -190,5 +190,18 @@ describe("Trade public API", () => {
       logical_account_id: "logical-1",
       owner_type: "SYSTEM"
     });
+  });
+});
+
+describe("交易所中文名", () => {
+  it("按小写键取值，未知值得到 -", () => {
+    expect(trade.exchangeLabel("binance")).toBe("币安");
+    expect(trade.exchangeLabel("okx")).toBe("OKX");
+    expect(trade.exchangeLabel("ashare")).toBe("A 股");
+    expect(trade.exchangeLabel("hkex")).toBe("港股");
+    expect(trade.exchangeLabel("BINANCE")).toBe("-");
+    expect(trade.exchangeLabel("1")).toBe("-");
+    expect(trade.exchangeLabel(undefined)).toBe("-");
+    expect(trade.exchangeLabels.binance).toBe("币安");
   });
 });

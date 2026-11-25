@@ -47,7 +47,7 @@ type Account struct {
 	SpaceID  string
 	Name     string
 	Exchange exchange.Exchange
-	// Markets 是账户已开通的市场，按固定顺序排列：加密货币取 SPOT、SWAP 的子集，股票只有 STOCK。
+	// Markets 是账户已开通的市场，按固定顺序排列：加密货币取 spot、swap 的子集，股票只有 equity。
 	Markets       []exchange.MarketType
 	ExecutionMode exchange.ExecutionMode
 	// AccountMode 只用于加密货币实盘账户，由交易所检测写入，用户不能改。
@@ -131,7 +131,7 @@ func (a Account) validateMarkets() error {
 		return invalidAccount(err.Error())
 	}
 	if !slices.Equal(normalized, a.Markets) {
-		return invalidAccount("已开通的市场必须去重并按 SPOT、SWAP、STOCK 的顺序排列")
+		return invalidAccount("已开通的市场必须去重并按 spot、swap、equity 的顺序排列")
 	}
 	environment := a.Environment
 	if a.Live != nil {
@@ -145,7 +145,7 @@ func (a Account) validateMarkets() error {
 		return invalidAccount("不支持的账户类型")
 	}
 	if a.AccountMode != exchange.AccountModeUnspecified &&
-		(a.ExecutionMode != exchange.ExecutionModeLive || a.SupportsMarket(exchange.MarketTypeStock)) {
+		(a.ExecutionMode != exchange.ExecutionModeLive || a.SupportsMarket(exchange.MarketTypeEquity)) {
 		return invalidAccount("账户类型只用于加密货币实盘账户")
 	}
 	return nil

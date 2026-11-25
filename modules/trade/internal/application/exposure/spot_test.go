@@ -29,10 +29,10 @@ func TestSpotDust(t *testing.T) {
 
 func TestSpotInstrumentsUsesSettlementQuotedTradableInstrument(t *testing.T) {
 	instruments := []store.InstrumentRecord{
-		{InstrumentID: "BTC-USDT-SWAP", MarketType: "SWAP", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"}, // 合约标的不能用来卖现货
-		{InstrumentID: "BTC-BUSD", MarketType: "SPOT", BaseAsset: "BTC", QuoteAsset: "BUSD", Status: "TRADING"},
-		{InstrumentID: "BTC-USDT-OFF", MarketType: "SPOT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "BREAK"},
-		{InstrumentID: "BTC-USDT-SPOT", MarketType: "SPOT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
+		{InstrumentID: "BTC-USDT-SWAP", MarketType: "swap", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"}, // 合约标的不能用来卖现货
+		{InstrumentID: "BTC-BUSD", MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "BUSD", Status: "TRADING"},
+		{InstrumentID: "BTC-USDT-OFF", MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "BREAK"},
+		{InstrumentID: "BTC-USDT-SPOT", MarketType: "spot", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
 	}
 	got := SpotInstruments(instruments, "USDT")
 	if got["BTC"].InstrumentID != "BTC-USDT-SPOT" || len(got) != 1 {

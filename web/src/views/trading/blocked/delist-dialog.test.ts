@@ -101,9 +101,9 @@ describe("手工登记下架对话框", () => {
     await flushPromises();
     expect(mocks.registerDelistNotice).toHaveBeenCalledWith({
       exchange: "binance",
-      market: "SPOT",
+      market: "spot",
       exchange_symbol: "FOOUSDT",
-      delist_at_ms: FUTURE,
+      delist_at: String(FUTURE),
       paper_only: true
     });
   });

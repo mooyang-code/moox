@@ -35,12 +35,12 @@ export interface CreateForm {
   adoptExisting: boolean;
 }
 
-export const ASHARE: Exchange = 3;
-export const HKEX: Exchange = 4;
-export const STOCK: MarketType = 3;
+export const ASHARE: Exchange = "ashare";
+export const HKEX: Exchange = "hkex";
+export const STOCK: MarketType = "equity";
 
 /**
- * 股票场所（A 股 ASHARE、港股 HKEX）：只开股票、按本币结算、只有模拟盘；模拟盘只有一个佣金比例，
+ * 股票场所（A 股 ashare、港股 hkex）：只开股票、按本币结算、只有模拟盘；模拟盘只有一个佣金比例，
  * 最低佣金、印花税等其余费用由后端按常量计算。新增股票场所在这里加一项。
  */
 export interface StockExchange {
@@ -96,7 +96,7 @@ export function defaultFees(markets: readonly MarketType[], exchange: Exchange =
     const commission = (stockExchangeOf({ exchange }) ?? stockExchanges[0]).defaultCommission;
     return { maker: commission, taker: commission };
   }
-  const spotOnly = markets.length > 0 && markets.every(market => market === 1);
+  const spotOnly = markets.length > 0 && markets.every(market => market === "spot");
   return spotOnly ? { maker: "0.001", taker: "0.001" } : { maker: "0.0002", taker: "0.0005" };
 }
 
@@ -123,12 +123,12 @@ export function applyExchangeDefaults(form: CreateForm): void {
 }
 
 export function createDefaultForm(kind: Environment = "paper"): CreateForm {
-  const markets: MarketType[] = [2];
+  const markets: MarketType[] = ["swap"];
   const fees = defaultFees(markets);
   return {
     step: 0,
     kind,
-    exchange: 1,
+    exchange: "binance",
     name: "",
     secretId: "",
     ack: false,
@@ -148,13 +148,16 @@ export function createDefaultForm(kind: Environment = "paper"): CreateForm {
   };
 }
 
+/** 加密货币账户可开通的市场，按固定顺序。 */
+const CRYPTO_MARKETS: readonly MarketType[] = ["spot", "swap"];
+
 /**
  * 按检测出的可开通市场收窄勾选：实盘账户只能开通检测结果里有的市场。
- * available 是检测结果的 SPOT/SWAP 字符串，为空表示没有限制（测试网跳过检测）；收窄后一个都不剩时取第一个可开通的市场。
+ * available 是检测结果的可开通市场（spot、swap），为空表示没有限制（测试网跳过检测）；收窄后一个都不剩时取第一个可开通的市场。
  */
 export function restrictMarkets(markets: readonly MarketType[], available: readonly string[]): MarketType[] {
   if (!available.length) return [...markets];
-  const allowed = ([1, 2] as MarketType[]).filter(item => available.includes(item === 1 ? "SPOT" : "SWAP"));
+  const allowed = CRYPTO_MARKETS.filter(item => available.includes(item));
   const kept = markets.filter(item => allowed.includes(item));
   return kept.length || !allowed.length ? kept : [allowed[0]];
 }
@@ -164,7 +167,7 @@ export function toggleMarket(markets: readonly MarketType[], market: MarketType,
   const next = new Set(markets);
   if (on) next.add(market);
   else next.delete(market);
-  return ([1, 2] as MarketType[]).filter(item => next.has(item));
+  return CRYPTO_MARKETS.filter(item => next.has(item));
 }
 
 const nonNegativeDecimal = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
@@ -196,9 +199,10 @@ export function validateStep(form: CreateForm, step: number): string {
       return "股票市场只能在 A 股、港股场所开通";
     }
     if (!form.markets.length) return "至少开通一个市场";
-    if (form.kind === "testnet" && form.exchange === 1 && form.markets.length > 1) return "币安测试网一个账户只能开通一个市场";
+    if (form.kind === "testnet" && form.exchange === "binance" && form.markets.length > 1)
+      return "币安测试网一个账户只能开通一个市场";
     if (!form.settlementAsset.trim()) return "请输入结算资产";
-    if (form.markets.includes(2) && form.settlementAsset.trim().toUpperCase() !== "USDT") return "永续只支持 USDT 结算";
+    if (form.markets.includes("swap") && form.settlementAsset.trim().toUpperCase() !== "USDT") return "永续只支持 USDT 结算";
     if (form.kind === "paper") {
       if (!nonNegativeDecimal.test(form.initialBalance.trim()) || Number(form.initialBalance) <= 0) {
         return "初始资金必须大于 0";
@@ -218,7 +222,7 @@ export function validateStep(form: CreateForm, step: number): string {
 }
 
 export function buildPaperRequest(form: CreateForm): CreatePaperSimulationReq {
-  const swap = form.markets.includes(2);
+  const swap = form.markets.includes("swap");
   return {
     account_name: form.name.trim(),
     // 新建组合：后端同时建组合；加入已有组合：后端在同一个事务里把新账户加进去，两者只给一个
@@ -244,7 +248,7 @@ export function buildLiveRequest(form: CreateForm): CreateTradingAccountReq {
     exchange: form.exchange,
     markets: [...form.markets],
     settlement_asset: form.settlementAsset.trim().toUpperCase(),
-    margin_mode: form.markets.includes(2) ? "CROSS" : "",
+    margin_mode: form.markets.includes("swap") ? "CROSS" : "",
     live: { environment: form.kind === "testnet" ? 1 : 2, credential_secret_id: form.secretId }
   };
 }

@@ -67,7 +67,7 @@ func newStockExchangeFixture(t *testing.T, exchangeName exchange.Exchange, settl
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "stock-a", Name: "stock-a",
-			Exchange: string(exchangeName), Markets: []string{"STOCK"}, ExecutionMode: "PAPER", Environment: "PAPER",
+			Exchange: string(exchangeName), Markets: []string{"equity"}, ExecutionMode: "PAPER", Environment: "PAPER",
 			SettlementAsset: settlement, Status: "ENABLED", Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
 				AvailableFunds: "50000000",
@@ -102,7 +102,7 @@ func newStockExchangeFixture(t *testing.T, exchangeName exchange.Exchange, settl
 
 func stockInstrument(id, step, minimum string) store.InstrumentRecord {
 	return store.InstrumentRecord{
-		Exchange: "ASHARE", MarketType: "STOCK", ExchangeSymbol: id, InstrumentID: id,
+		Exchange: "ashare", MarketType: "equity", ExchangeSymbol: id, InstrumentID: id,
 		BaseAsset: id, QuoteAsset: "CNY", SettlementAsset: "CNY",
 		ExchangeQuantityStep: step, MinExchangeQuantity: minimum, PriceTick: "0.01",
 		MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98", Status: "TRADING",
@@ -404,7 +404,7 @@ func TestClampToPriceBandUsesWiderOfRatioAndTicks(t *testing.T) {
 	require.Equal(t, "9.98", CageBasis(quote, exchange.SideSell).String())
 	require.Equal(t, "10", CageBasis(Quote{Price: shared.MustDecimal("10")}, exchange.SideBuy).String())
 	// 加密货币没有价位数，行为不变。
-	crypto := store.InstrumentRecord{MarketType: "SPOT", PriceTick: "0.01", MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98"}
+	crypto := store.InstrumentRecord{MarketType: "spot", PriceTick: "0.01", MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98"}
 	require.Equal(t, "1.01", ClampToPriceBand(shared.MustDecimal("1.2"), shared.MustDecimal("1"), exchange.SideBuy, crypto).String())
 }
 
@@ -431,21 +431,21 @@ func TestQuoteFreshnessCheckpointsFollowSession(t *testing.T) {
 	closeQuote := time.Date(2026, 11, 6, 8, 14, 58, 0, time.UTC)
 
 	resolver := &WeightResolver{Exchanges: catalog, Now: func() time.Time { return saturday }}
-	require.True(t, resolver.priceFresh("ASHARE", closeQuote), "周六换算用周五收盘价")
-	require.False(t, resolver.priceFresh("BINANCE", closeQuote))
+	require.True(t, resolver.priceFresh("ashare", closeQuote), "周六换算用周五收盘价")
+	require.False(t, resolver.priceFresh("binance", closeQuote))
 	resolver.Now = func() time.Time { return stockNow }
-	require.False(t, resolver.priceFresh("ASHARE", stockNow.Add(-31*time.Second)), "时段内照原来的 30 秒")
+	require.False(t, resolver.priceFresh("ashare", stockNow.Add(-31*time.Second)), "时段内照原来的 30 秒")
 
 	source := ExchangePriceSource{
 		Adapters:  bookAdapters{bookAdapter{quote: execution.MarketQuote{Bid: shared.MustDecimal("9"), Ask: shared.MustDecimal("10"), SourceTime: closeQuote}}},
 		Exchanges: catalog, Now: func() time.Time { return saturday },
 	}
-	bid, ask, err := source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"))
+	bid, ask, err := source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"))
 	require.NoError(t, err)
 	require.Equal(t, "9", bid.String())
 	require.Equal(t, "10", ask.String())
 	source.Now = func() time.Time { return stockNow }
-	_, _, err = source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"))
+	_, _, err = source.Book(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"))
 	require.ErrorContains(t, err, "过期")
 }
 
@@ -455,7 +455,7 @@ func TestExchangePriceSourceCarriesLimitsForStock(t *testing.T) {
 		Bid: shared.MustDecimal("9.99"), Ask: shared.MustDecimal("10"), Last: shared.MustDecimal("10"), SourceTime: stockNow,
 		LimitUp: shared.MustDecimal("11"), LimitDown: shared.MustDecimal("9"), Halted: true,
 	}}}}
-	quote, err := source.LatestPrice(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"))
+	quote, err := source.LatestPrice(context.Background(), "stock-a", exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"))
 	require.NoError(t, err)
 	require.Equal(t, "10", quote.Price.String())
 	require.Equal(t, "11", quote.LimitUp.String())

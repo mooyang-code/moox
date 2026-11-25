@@ -643,9 +643,9 @@ func newOperatorFixture(t *testing.T, market exchange.MarketType) *operatorFixtu
 }
 
 func (f *operatorFixture) account(id string) store.TradingAccountRecord {
-	exchangeName := "BINANCE"
+	exchangeName := "binance"
 	if id == "account-b" {
-		exchangeName = "OKX"
+		exchangeName = "okx"
 	}
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
@@ -669,15 +669,15 @@ func (f *operatorFixture) account(id string) store.TradingAccountRecord {
 }
 
 func (f *operatorFixture) instrument(accountID string) store.InstrumentRecord {
-	exchangeName := "BINANCE"
+	exchangeName := "binance"
 	symbol := "BTCUSDT"
 	if accountID == "account-b" {
-		exchangeName = "OKX"
+		exchangeName = "okx"
 		symbol = "BTC-USDT-SWAP"
 	}
 	instrument := store.InstrumentRecord{
 		Exchange: exchangeName, MarketType: string(f.market), ExchangeSymbol: symbol,
-		InstrumentID: "BTC-USDT-" + string(f.market),
+		InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(f.market),
 		BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 		PriceTick: "0.1", MinNotional: "5", Status: "TRADING",
@@ -694,7 +694,7 @@ func (f *operatorFixture) instrument(accountID string) store.InstrumentRecord {
 }
 
 func (f *operatorFixture) instrumentID() string {
-	return "BTC-USDT-" + string(f.market)
+	return "BTC-USDT-" + exchange.InstrumentSuffix(f.market)
 }
 
 func (f *operatorFixture) order(t *testing.T, record store.OrderRecord) {
