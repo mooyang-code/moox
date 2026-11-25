@@ -587,7 +587,7 @@ async function loadLive() {
 
 async function loadSeeds(isCurrent: () => boolean) {
   const ids = new Set([...(spaceStore.spaces || []).map(item => item.space_id), selectedSpaceId.value].filter(Boolean));
-  const settled = await Promise.allSettled([...ids].map(id => getCollectorStatus(id)));
+  const settled = await Promise.allSettled([...ids].map(id => getCollectorStatus(id, { spaceId: id })));
   if (!isCurrent()) return;
   const next: Record<string, HistorySeed[]> = {};
   [...ids].forEach((id, index) => {

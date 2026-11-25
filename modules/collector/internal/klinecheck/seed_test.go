@@ -135,6 +135,23 @@ func TestSeedWaitsForTheEffectivePointBeforeBuildingJobs(t *testing.T) {
 	require.Empty(t, invoker.events)
 }
 
+// 记录建好后、生效点之前数据集又停止采集（时间线里没有这一段）：记 done 放行，不一直停在 preparing 挡着下游。
+func TestSeedOfStoppedDatasetIsReleased(t *testing.T) {
+	b, invoker, _, _ := seedFixture(t, 2*time.Hour)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	_, err := b.Store.CreateHistorySeed(ctx, store.HistorySeed{SpaceID: "crypto", DatasetID: "gone", Frequency: "1m", Status: store.SeedPreparing, TargetFrom: now.Add(-time.Hour), EffectiveFrom: now.Add(-time.Minute), StartedAt: now})
+	require.NoError(t, err)
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+	seed, ok, err := b.Store.HistorySeedOf(ctx, "crypto", "gone", "1m")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, store.SeedDone, seed.Status)
+	require.Contains(t, seed.Note, "停止采集")
+	require.Empty(t, invoker.events)
+}
+
 // 补齐分块的复查与拼作业同一口径：函数成功返回却什么都没写时，这一块不能记成成功（先退回重跑，
 // 两次缺的一样才记行情源缺失），不会因为“时间线起点之前从第一根起算”被整段裁掉。
 func TestSeedChunkThatWritesNothingIsNotSucceeded(t *testing.T) {

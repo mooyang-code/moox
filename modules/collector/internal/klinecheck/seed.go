@@ -396,6 +396,15 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 				}
 				if ok {
 					b.prepareAsync(spaceID, seed, first)
+					continue
+				}
+				// 时间线里已经没有这个数据集（生效点之前又停止了采集）：没有可补的标的，记 done 放行，不让记录一直挡着下游。
+				if err := b.cancelJobs(ctx, seed.JobIDs); err != nil {
+					return err
+				}
+				seed.Status, seed.FinishedAt, seed.Note = store.SeedDone, &now, "生效前已停止采集，不补"
+				if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing); err != nil {
+					return err
 				}
 			}
 		case store.SeedRunning:

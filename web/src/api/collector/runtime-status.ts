@@ -1,4 +1,4 @@
-import { call } from "@/api/http";
+import { call, type CallOptions } from "@/api/http";
 
 export type HealthLevel = "ok" | "warn" | "error";
 
@@ -226,13 +226,14 @@ export interface BackfillJobFilter {
   dataset_id?: string;
 }
 
-// 网关要求请求体里的 space_id 与 X-Space-Id 一致：按参数里的空间发，读取当前所选空间以外的空间（首页逐个空间读历史补齐）也能用。
-export function getCollectorStatus(spaceId: string) {
+// 网关要求请求体里的 space_id 与 X-Space-Id 一致：读当前所选空间以外的空间（首页逐个空间读历史补齐）时传 { spaceId }。
+// 显式空间的请求不随切换空间取消，只在确实要跨空间读取时传。
+export function getCollectorStatus(spaceId: string, options: CallOptions = {}) {
   return call<{ space_id: string }, GetCollectorStatusResponse>(
     "collector",
     "GetCollectorStatus",
     { space_id: spaceId },
-    { spaceId }
+    options
   );
 }
 
