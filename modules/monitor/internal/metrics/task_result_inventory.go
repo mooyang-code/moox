@@ -44,6 +44,9 @@ type TaskResultInventoryEntry struct {
 	Enabled                bool
 	OwnershipVerified      bool
 	ResultStatus           string
+	// HistorySeeding 表示结果数据集在首次接入的历史补齐中；HistorySeedFinishedAt 是补齐结束的时刻，没有补齐记录或还在补齐时为零。
+	HistorySeeding        bool
+	HistorySeedFinishedAt time.Time
 }
 
 type TaskResultInventorySnapshot struct {
@@ -223,6 +226,10 @@ func taskResultInventoryEntryFromProto(raw *collectorpb.TaskResultInventoryEntry
 		Sessions: append([]string(nil), raw.GetSessions()...), LatestCompletedStatus: strings.TrimSpace(raw.GetLatestCompletedStatus()),
 		Enabled: raw.GetEnabled(), OwnershipVerified: raw.GetOwnershipVerified(), ResultStatus: strings.TrimSpace(raw.GetResultStatus()),
 		AllowedLatenessSeconds: int(raw.GetAllowedLatenessSeconds()),
+		HistorySeeding:         raw.GetHistorySeeding(),
+	}
+	if finished := raw.GetHistorySeedFinishedAt(); finished > 0 {
+		entry.HistorySeedFinishedAt = time.UnixMilli(finished).UTC()
 	}
 	var err error
 	if entry.ObservedAt, err = inventoryInstant(raw.GetObservedAt()); err != nil {

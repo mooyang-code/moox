@@ -32,6 +32,8 @@ func TestBackfillFunctionIsCreatedOnFirstUse(t *testing.T) {
 	require.Nil(t, function.Timer, "补采函数没有定时器")
 	require.Equal(t, "backfill", function.Info.Environment["MOOX_MARKET_FETCH_MODE"])
 	require.NotContains(t, function.Info.Environment, marketfetch.PlanEnvName)
+	// 补采函数不带计划的单次请求超时：取数用数据源配置里的 request_timeout（美股补齐一块是一次约 20 天的请求，要比实时的 3 秒长）。
+	require.NotContains(t, function.Info.Environment, "MOOX_FETCH_REQUEST_TIMEOUT_MS")
 	require.Equal(t, int64(DefaultBackfillReservedConcurrency*64), function.ReservedMem)
 	require.Equal(t, "pkg-v1", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
 	require.Equal(t, "packages/pkg-v1.zip", function.COSObject)

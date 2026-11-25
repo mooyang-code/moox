@@ -180,7 +180,10 @@ func TestStockUSKlinePipelineComesFromTheRouteFiles(t *testing.T) {
 	require.Equal(t, []string{"5m"}, spec.Frequencies)
 	require.Equal(t, 78, spec.MaxBarsPerRequest)
 	require.True(t, spec.History.SupportsArbitraryRange)
-	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: 3 * time.Second}, spec.RateLimit)
+	// 数据源配置的超时管整次取数，补采函数用它（历史补齐一块是一次约 20 天的请求）；
+	// 实时采集的定时函数按计划的 fetch.request_timeout_ms 设进程环境覆盖它，仍是 3 秒。
+	require.Equal(t, marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: 15 * time.Second}, spec.RateLimit)
+	require.Equal(t, 3000, usPlanOptions().Fetch.RequestTimeoutMS, "实时采集的单次超时不变")
 
 	// 东方财富只剩标的同步（交易所对照），不再是美股的 K 线来源。
 	_, err = pipeline.Router.Provider("eastmoney")
@@ -413,14 +416,19 @@ func TestStockUSBackfillWritesOnlyTheRange(t *testing.T) {
 			paths: []string{usBarsPath("AAPL", "202610300930", "202611021559")},
 		},
 		{
-			name: "超过 5 天分几次请求，段与段之间不重复", minutes: weeks, start: "2026-10-29 00:00", end: "2026-11-11 00:00", now: nyTime("2026-11-11 08:00"),
+			// 历史补齐跨交易日合并的分块：限速配置的超时管整次取数，一块一次请求取完，不分窗多跑来回。
+			name: "合并分块（13 个自然日、跨夏令时结束）一次请求", minutes: weeks, start: "2026-10-29 00:00", end: "2026-11-11 00:00", now: nyTime("2026-11-11 08:00"),
 			count: 9 * 78, first: "2026-10-29T13:30:00Z", last: "2026-11-10T20:55:00Z",
-			// 每段 5 天，按绝对时长切：10-29 零点（夏令时）加 5 天落在冬令时的 11-02 23:00，所以前两段的终点是 22:59；
-			// 最后一段到区间终点（11-11 零点）前一分钟。
+			paths: []string{usBarsPath("AAPL", "202610290000", "202611102359")},
+		},
+		{
+			name: "超过 31 天分几次请求，段与段之间不重复", minutes: weeks, start: "2026-10-01 00:00", end: "2026-11-11 00:00", now: nyTime("2026-11-11 08:00"),
+			count: 9 * 78, first: "2026-10-29T13:30:00Z", last: "2026-11-10T20:55:00Z",
+			// 每段 31 天，按绝对时长切：10-01 零点（夏令时）加 31 天是 11-01 零点（夏令时在当天 2 点才结束）；
+			// 最后一段到区间终点（11-11 零点，冬令时）前一分钟。
 			paths: []string{
-				usBarsPath("AAPL", "202610290000", "202611022259"),
-				usBarsPath("AAPL", "202611022300", "202611072259"),
-				usBarsPath("AAPL", "202611072300", "202611102359"),
+				usBarsPath("AAPL", "202610010000", "202610312359"),
+				usBarsPath("AAPL", "202611010000", "202611102359"),
 			},
 		},
 	} {

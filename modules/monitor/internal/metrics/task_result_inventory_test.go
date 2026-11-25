@@ -464,3 +464,30 @@ func TestKlineFreshnessEvaluatorToleratesViewCatchingUpWhileSeeding(t *testing.T
 	require.False(t, report.Success, "不在补齐中的空间照常报")
 	require.Equal(t, "view_behind_latest_completed_period", report.Reason)
 }
+
+// 清单里的历史补齐状态原样带到 K 线新鲜度规则上；结束时刻为 0 表示没有补齐记录或还在补齐。
+func TestTaskResultInventoryCarriesHistorySeedToRules(t *testing.T) {
+	observed := time.Date(2026, 11, 25, 9, 50, 0, 0, time.UTC)
+	finished := observed.Add(-5 * time.Minute)
+	seeding, err := taskResultInventoryEntryFromProto(&collectorpb.TaskResultInventoryEntry{
+		SpaceId: "stockus", TaskId: "task-us", DatasetId: "ds-us", Frequency: "5m", ObservedAt: observed.UnixMilli(), HistorySeeding: true,
+	})
+	require.NoError(t, err)
+	require.True(t, seeding.HistorySeeding)
+	require.True(t, seeding.HistorySeedFinishedAt.IsZero())
+	seeded, err := taskResultInventoryEntryFromProto(&collectorpb.TaskResultInventoryEntry{
+		SpaceId: "stockcn", TaskId: "task-cn", DatasetId: "ds-cn", Frequency: "5m", ObservedAt: observed.UnixMilli(), HistorySeedFinishedAt: finished.UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.False(t, seeded.HistorySeeding)
+	require.Equal(t, finished, seeded.HistorySeedFinishedAt)
+
+	seeding.Enabled, seeding.OwnershipVerified, seeding.ResultStatus = true, true, "ready"
+	seeded.Enabled, seeded.OwnershipVerified, seeded.ResultStatus = true, true, "ready"
+	rules := klineFreshnessRulesFromInventory(TaskResultInventorySnapshot{ID: "s", ObservedAt: observed, Entries: []TaskResultInventoryEntry{seeding, seeded}}, latenessPolicy(time.Minute))
+	require.Len(t, rules, 2)
+	require.True(t, rules[0].HistorySeeding)
+	require.Equal(t, finished, rules[1].HistorySeedFinishedAt)
+	require.True(t, rules[1].seedingSubjects(observed), "结束 5 分钟内")
+	require.False(t, rules[1].seedingSubjects(finished.Add(31*time.Minute)))
+}

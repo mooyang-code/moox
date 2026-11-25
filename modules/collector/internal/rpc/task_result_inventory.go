@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/rs/xid"
@@ -191,11 +192,40 @@ func (s *Service) buildTaskResultInventorySnapshot(ctx context.Context, spaceID 
 	if err != nil {
 		return nil, err
 	}
+	s.applyHistorySeeds(ctx, spaceID, entries)
 	checksum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", observed.Format(time.RFC3339Nano), len(entries), xid.New().String())))
 	return &taskResultInventorySnapshot{
 		id: hex.EncodeToString(checksum[:]), spaceID: spaceID, pageSize: pageSize, observed: observed,
 		expiresAt: observed.Add(taskResultInventorySnapshotTTL), entries: entries,
 	}, nil
+}
+
+// applyHistorySeeds 把结果数据集的历史补齐状态写进清单：补齐按时间升序写历史行，storage-view 按标的记的最新一根
+// 只认本进程见过的写入，Monitor 据此在补齐中与刚结束时不按标的报“没有数据、落后”。读不到补齐记录时不写
+// （Monitor 照常检查），不让清单因此失败。合成任务的目标数据集没有补齐记录，不标。
+func (s *Service) applyHistorySeeds(ctx context.Context, spaceID string, entries []*pb.TaskResultInventoryEntry) {
+	if s.klineOps == nil || len(entries) == 0 {
+		return
+	}
+	views, err := s.klineOps.SeedViews(ctx, spaceID, false)
+	if err != nil {
+		log.WarnContextf(ctx, "[Collector] task-result inventory: list history seeds failed space=%s: %v", spaceID, err)
+		return
+	}
+	seeds := make(map[string]store.HistorySeed, len(views))
+	for _, view := range views {
+		seeds[view.DatasetID+"|"+view.Frequency] = view.HistorySeed
+	}
+	for _, entry := range entries {
+		seed, ok := seeds[entry.GetDatasetId()+"|"+entry.GetFrequency()]
+		switch {
+		case !ok:
+		case seed.Active():
+			entry.HistorySeeding = true
+		case seed.FinishedAt != nil:
+			entry.HistorySeedFinishedAt = seed.FinishedAt.UnixMilli()
+		}
+	}
 }
 
 func (s *Service) buildTaskResultInventoryEntries(ctx context.Context, tasks []domain.CollectionTask, observed time.Time) ([]*pb.TaskResultInventoryEntry, error) {

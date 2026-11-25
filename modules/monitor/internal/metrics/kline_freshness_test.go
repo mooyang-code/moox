@@ -90,6 +90,53 @@ func TestKlineFreshnessEvaluatorIgnoresRetiredSubjectsAndCountsMissing(t *testin
 	require.Empty(t, reports[0].StaleSubjects, "the retired OLD subject is not reported")
 }
 
+// 首次接入的历史补齐中或刚结束（30 分钟内）：storage-view 按标的的跟踪表被按时间升序写入的历史行搅乱，
+// 视图整体按时更新时按标的的落后、缺失按通过记；不在补齐中、补齐结束超过 30 分钟、视图整体停更都照常报。
+func TestKlineFreshnessEvaluatorRelaxesSubjectsOnlyWhileDatasetSeeding(t *testing.T) {
+	now := time.Date(2026, 11, 25, 9, 40, 30, 0, time.UTC)
+	evaluate := func(seeding bool, finishedAt time.Time, latest time.Time) KlineFreshnessReport {
+		rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute,
+			HistorySeeding: seeding, HistorySeedFinishedAt: finishedAt}
+		// 跟踪表里 OLD 只见过补齐写入的几个月前的一根，ETH 还一根都没见过。
+		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+			Latest: latest, TrackedSince: now.Add(-time.Hour), Subjects: 2, Lagging: 1, ObservedAt: now,
+			LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OLD", DataTime: now.Add(-90 * 24 * time.Hour), ObservedAt: now}},
+		}})
+		query.storage = NewStorageAdapter(&fakeMetadata{subjects: []*storagepb.DatasetSubject{
+			{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "active"},
+		}})
+		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		return reports[0]
+	}
+	fresh := now.Add(-time.Minute)
+
+	report := evaluate(true, time.Time{}, fresh)
+	require.True(t, report.Success, "补齐中按标的的结论不可信")
+	require.Equal(t, KlineReasonSeedingSubjectsCatchingUp, report.Reason)
+	require.Equal(t, 1, report.MissingCount, "数字留在报告与诊断里")
+	require.Equal(t, 2, report.StaleCount)
+	require.Contains(t, report.Diagnostic, "missing_count=1")
+
+	report = evaluate(false, now.Add(-10*time.Minute), fresh)
+	require.True(t, report.Success, "补齐结束 30 分钟内仍放宽")
+	require.Equal(t, KlineReasonSeedingSubjectsCatchingUp, report.Reason)
+
+	report = evaluate(false, now.Add(-31*time.Minute), fresh)
+	require.False(t, report.Success, "补齐结束超过 30 分钟照常报")
+	require.Equal(t, "business_data_stale", report.Reason)
+
+	report = evaluate(false, time.Time{}, fresh)
+	require.False(t, report.Success, "没有补齐的数据集照常报")
+	require.Equal(t, 1, report.MissingCount)
+
+	report = evaluate(true, time.Time{}, now.Add(-10*time.Minute))
+	require.False(t, report.Success, "补齐中视图整体停更照样报")
+	require.True(t, report.ViewStale)
+	require.Equal(t, "business_data_stale", report.Reason)
+}
+
 func TestKlineFreshnessEvaluatorWaitsOneBarBeforeCountingMissing(t *testing.T) {
 	now := time.Date(2026, 9, 8, 10, 2, 30, 0, time.UTC)
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 2 * time.Minute}
