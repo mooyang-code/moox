@@ -227,8 +227,13 @@ func (b *Backfiller) prepareAsync(spaceID string, seed store.HistorySeed, first 
 		if err := b.prepareSeed(ctx, spaceID, seed, first); err != nil {
 			log.WarnContextf(ctx, "collector history seed prepare failed space=%s dataset=%s|%s: %v", spaceID, seed.DatasetID, seed.Frequency, err)
 			// 拼作业失败：留在 preparing，下一轮推进时没有本进程的拼作业协程会重新来过。
-			seed.Note = "拼补采作业失败：" + err.Error()
-			if updateErr := b.Store.UpdateHistorySeed(ctx, seed); updateErr != nil {
+			// 说明写在库里最新的记录上（已建作业的 ID 已记在库里，不能用拼作业前的旧副本覆盖它们）。
+			latest, ok, readErr := b.Store.HistorySeedOf(ctx, spaceID, seed.DatasetID, seed.Frequency)
+			if readErr != nil || !ok {
+				return
+			}
+			latest.Note = "拼补采作业失败：" + err.Error()
+			if _, updateErr := b.Store.UpdateHistorySeed(ctx, latest, store.SeedPreparing); updateErr != nil {
 				log.WarnContextf(ctx, "collector history seed note write failed: %v", updateErr)
 			}
 		}
@@ -236,24 +241,35 @@ func (b *Backfiller) prepareAsync(spaceID string, seed store.HistorySeed, first 
 }
 
 // seedBatchSize 估计一次检查放多少个标的：检查的（标的 × K 线）总数、返回的缺口数都有上限。
-func seedBatchSize(perJob, bars, groups int) int {
+// gaps 是每个标的（每个 tag）预计的缺口数：合并时约 K 线数 ÷ MaxChunkBars，不合并时每个交易时段一段。
+func seedBatchSize(perJob, bars, groups, gaps int) int {
 	points := max(bars*max(groups, 1), 1)
 	batch := min(perJob, max(MaxCheckPoints/points, 1))
-	gapsPerSubject := (bars/MaxChunkBars + 2) * max(groups, 1)
+	gapsPerSubject := max(gaps, 1) * max(groups, 1)
 	return min(batch, max(MaxGaps*3/4/gapsPerSubject, 1))
 }
 
+// sessionCount 数应有的 K 线里连续的段数（休市区间把它们隔开）。
+func sessionCount(expected []time.Time, frequency marketdata.Frequency) int {
+	sessions := 0
+	for i, bar := range expected {
+		if i == 0 || !bar.Equal(frequency.BarEnd(expected[i-1])) {
+			sessions++
+		}
+	}
+	return sessions
+}
+
 // prepareSeed 按标的分批检查缺口、建补采作业，每建一个作业就记进补齐记录；全部拼完记 running。
+// 记录被手动放行（不再是 preparing）时，已建的作业全部取消。
 func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store.HistorySeed, first Segment) error {
 	frequency, err := marketdata.ParseFrequency(seed.Frequency)
 	if err != nil {
 		return err
 	}
 	// 先把上一次没拼完留下的作业取消（拼作业的进程退出后重新来过）。
-	for _, id := range seed.JobIDs {
-		if err := b.Store.CancelJob(ctx, id); err != nil {
-			return err
-		}
+	if err := b.cancelJobs(ctx, seed.JobIDs); err != nil {
+		return err
 	}
 	seed.JobIDs, seed.Note = nil, ""
 	to := seed.EffectiveFrom
@@ -271,18 +287,14 @@ func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store
 	if err != nil {
 		return err
 	}
-	batchSize := seedBatchSize(b.seedSubjectsPerJob(), len(expected), len(first.groups()))
 	merge := b.Seed.MergeSessions
+	gapsPerSubject := len(expected)/MaxChunkBars + 2
+	if !merge {
+		gapsPerSubject += sessionCount(expected, frequency)
+	}
+	batchSize := seedBatchSize(b.seedSubjectsPerJob(), len(expected), len(first.groups()), gapsPerSubject)
 	jobs := 0
 	for from := 0; from < len(subjects); from += batchSize {
-		// 用户手动放行或重新登记之后记录不再是 preparing，别再往里加作业。
-		current, ok, err := b.Store.HistorySeedOf(ctx, spaceID, seed.DatasetID, seed.Frequency)
-		if err != nil {
-			return err
-		}
-		if !ok || current.Status != store.SeedPreparing {
-			return b.cancelJobs(ctx, seed.JobIDs)
-		}
 		batch := subjects[from:min(from+batchSize, len(subjects))]
 		id, err := b.submitSeedBatch(ctx, spaceID, seed, batch, to, merge)
 		if err != nil {
@@ -293,13 +305,14 @@ func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store
 		}
 		jobs++
 		seed.JobIDs = append(seed.JobIDs, id)
-		if err := b.Store.UpdateHistorySeed(ctx, seed); err != nil {
+		// 条件写：记录已被手动放行就不再往里加，并取消已建的作业（含刚建的这个）。
+		updated, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing)
+		if err != nil {
 			return err
 		}
-	}
-	current, ok, err := b.Store.HistorySeedOf(ctx, spaceID, seed.DatasetID, seed.Frequency)
-	if err != nil || !ok || current.Status != store.SeedPreparing {
-		return err
+		if !updated {
+			return b.cancelJobs(ctx, seed.JobIDs)
+		}
 	}
 	if jobs == 0 {
 		now := b.now()
@@ -307,7 +320,14 @@ func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store
 	} else {
 		seed.Status = store.SeedRunning
 	}
-	return b.Store.UpdateHistorySeed(ctx, seed)
+	updated, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return b.cancelJobs(ctx, seed.JobIDs)
+	}
+	return nil
 }
 
 func (b *Backfiller) cancelJobs(ctx context.Context, ids []string) error {
@@ -413,7 +433,7 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 					continue
 				}
 				seed.Retried = true
-				if err := b.Store.UpdateHistorySeed(ctx, seed); err != nil {
+				if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedRunning); err != nil {
 					return err
 				}
 				continue
@@ -422,7 +442,7 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 			if failed := total[store.BackfillFailed]; failed > 0 {
 				seed.Note = fmt.Sprintf("%d 个分块失败（已重试），用 collector kline check 查缺口再手动补采", failed)
 			}
-			if err := b.Store.UpdateHistorySeed(ctx, seed); err != nil {
+			if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedRunning); err != nil {
 				return err
 			}
 			b.dropSamples(key)
@@ -532,7 +552,7 @@ func (b *Backfiller) SkipSeeds(ctx context.Context, spaceID, datasetID string) (
 		}
 		seed.Status, seed.FinishedAt, seed.Note = store.SeedSkipped, &now, "用户手动放行"
 		// 先改状态再取消作业：拼作业的协程每建一个作业前都会看状态，看到不是 preparing 就停下并取消它已建的作业。
-		if err := b.Store.UpdateHistorySeed(ctx, seed); err != nil {
+		if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing, store.SeedRunning); err != nil {
 			return skipped, err
 		}
 		if err := b.cancelJobs(ctx, seed.JobIDs); err != nil {

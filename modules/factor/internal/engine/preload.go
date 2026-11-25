@@ -102,6 +102,12 @@ func (p *preloader) upToDate(set domain.EngineTask) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	state, ok := p.prepared[set.Set.TaskID]
+	if ok && set.SourceSeeding && !state.seeding {
+		// 预载时还不知道源数据集在补齐（全新安装时因子任务与采集同时建、补齐状态后到）：只记下现在在补齐，不重新预载，
+		// 这样补齐结束时才判得出“真变假”，放行后重新预载并清掉补历史登记的失效重算待办。
+		state.seeding = true
+		p.prepared[set.Set.TaskID] = state
+	}
 	return ok && state.lookback >= maxLookbackOf(set) && state.scope == scopeOf(set) && !(state.seeding && !set.SourceSeeding)
 }
 

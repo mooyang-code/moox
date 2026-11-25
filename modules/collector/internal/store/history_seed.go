@@ -155,16 +155,21 @@ func (r *BackfillRepository) CreateHistorySeed(ctx context.Context, seed History
 	return result.RowsAffected > 0, result.Error
 }
 
-// UpdateHistorySeed 覆盖一条已有补齐记录的可变部分（状态、作业、重试标记、说明、结束时间）。
-func (r *BackfillRepository) UpdateHistorySeed(ctx context.Context, seed HistorySeed) error {
+// UpdateHistorySeed 覆盖一条已有补齐记录的可变部分（状态、作业、重试标记、说明、结束时间）。from 非空时只在记录当前状态
+// 属于 from 时才写（拼作业的协程、推进、手动放行各自改记录，条件写避免手动放行被拼作业的协程改回去），返回是否写入。
+func (r *BackfillRepository) UpdateHistorySeed(ctx context.Context, seed HistorySeed, from ...string) (bool, error) {
 	if err := r.ready(); err != nil {
-		return err
+		return false, err
 	}
 	row, err := newHistorySeedRow(seed)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return r.db.WithContext(ctx).Model(&historySeedRow{}).
-		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", row.SpaceID, row.DatasetID, row.Frequency).
-		Updates(map[string]any{"c_status": row.Status, "c_job_ids": row.JobIDs, "c_retried": row.Retried, "c_note": row.Note, "c_finished_at": row.FinishedAt, "c_mtime": time.Now().UTC()}).Error
+	query := r.db.WithContext(ctx).Model(&historySeedRow{}).
+		Where("c_space_id = ? AND c_dataset_id = ? AND c_frequency = ?", row.SpaceID, row.DatasetID, row.Frequency)
+	if len(from) > 0 {
+		query = query.Where("c_status IN ?", from)
+	}
+	result := query.Updates(map[string]any{"c_status": row.Status, "c_job_ids": row.JobIDs, "c_retried": row.Retried, "c_note": row.Note, "c_finished_at": row.FinishedAt, "c_mtime": time.Now().UTC()})
+	return result.RowsAffected > 0, result.Error
 }

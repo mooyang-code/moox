@@ -69,6 +69,29 @@ func TestSourceSeedingStartingDoesNotRepreload(t *testing.T) {
 	require.False(t, r.gate("ftask_a"), "补齐开始后下一轮检查起不计算")
 }
 
+// 全新安装：预载时还不知道在补齐（补齐状态后到），补齐开始后再放行，也要重新预载并清待办。
+func TestSeedReleaseAfterLateSeedingStartStillReprepares(t *testing.T) {
+	ctx := context.Background()
+	catalog := &mutableSets{sets: map[string]domain.EngineTask{"s1": seedingTask("s1", false)}}
+	data := &failingOnceData{}
+	p := newPreloader(catalog, includeSubjects{}, data, nil, nil)
+	cleared := 0
+	p.onSeedReleased = func(domain.FactorTask) { cleared++ }
+	p.once(ctx)
+	require.True(t, p.Ready("s1"))
+	prepared := len(data.prepared)
+
+	catalog.sets["s1"] = seedingTask("s1", true)
+	p.once(ctx)
+	require.Equal(t, prepared, len(data.prepared), "补齐开始不重新预载")
+	require.Zero(t, cleared)
+
+	catalog.sets["s1"] = seedingTask("s1", false)
+	p.once(ctx)
+	require.Greater(t, len(data.prepared), prepared, "放行后重新预载，把本地往前补")
+	require.Equal(t, 1, cleared, "放行后清掉补历史登记的失效重算待办")
+}
+
 type failingOnceData struct {
 	preloadDataFake
 	failures int

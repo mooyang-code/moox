@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -13,8 +14,13 @@ import (
 func historySeedsToPB(views []klinecheck.SeedView) []*pb.HistorySeed {
 	out := make([]*pb.HistorySeed, 0, len(views))
 	for _, view := range views {
+		// 拼作业（preparing）对下游就是补齐中：下游只认 running、done、skipped。
+		status := view.Status
+		if status == store.SeedPreparing {
+			status = store.SeedRunning
+		}
 		item := &pb.HistorySeed{
-			SpaceId: view.SpaceID, DatasetId: view.DatasetID, Frequency: view.Frequency, Status: view.Status,
+			SpaceId: view.SpaceID, DatasetId: view.DatasetID, Frequency: view.Frequency, Status: status,
 			TargetFrom: view.TargetFrom.Format(time.RFC3339), EffectiveFrom: view.EffectiveFrom.Format(time.RFC3339),
 			TotalChunks: int32(view.TotalChunks), DoneChunks: int32(view.DoneChunks), FailedChunks: int32(view.FailedChunks),
 			EtaSeconds: int64(view.ETA / time.Second), StartedAt: view.StartedAt.Format(time.RFC3339), Note: view.Note,

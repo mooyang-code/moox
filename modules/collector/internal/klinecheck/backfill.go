@@ -97,7 +97,7 @@ type BackfillStore interface {
 	HistorySeeds(context.Context, string, bool) ([]store.HistorySeed, error)
 	HistorySeedOf(context.Context, string, string, string) (store.HistorySeed, bool, error)
 	CreateHistorySeed(context.Context, store.HistorySeed) (bool, error)
-	UpdateHistorySeed(context.Context, store.HistorySeed) error
+	UpdateHistorySeed(context.Context, store.HistorySeed, ...string) (bool, error)
 	InFlightChunksOf(context.Context, []string) (int, error)
 }
 
@@ -658,11 +658,14 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		}
 	}
 	// 历史补齐的分块：市场配了云函数地域就按地域轮流走补采函数（与任务的采集方式无关，crypto 也不经海外机），没有再按任务的采集方式。
-	seedRegion := ""
+	// 轮流从 chunk.ID 取模的那个地域起：某个地域的函数建不出来（配额、命名空间满）时换下一个，不让这部分分块无限退回。
+	var seedRegions []string
 	if seed {
 		if provider := b.Functions(spaceID); provider != nil {
 			if regions := provider.BackfillRegions(plan.Market.MarketType); len(regions) > 0 {
-				executor, seedRegion = marketfetch.PlanExecutorSCF, regions[int(chunk.ID%int64(len(regions)))]
+				executor = marketfetch.PlanExecutorSCF
+				start := int(chunk.ID % int64(len(regions)))
+				seedRegions = append(append([]string(nil), regions[start:]...), regions[:start]...)
 			}
 		}
 	}
@@ -681,8 +684,12 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			fail(fmt.Errorf("no backfill function provider for space %s", spaceID))
 			return
 		}
-		if seedRegion != "" {
-			functionName, err = provider.EnsureBackfillFunctionIn(ctx, plan.Market.MarketType, seedRegion)
+		if len(seedRegions) > 0 {
+			for _, region := range seedRegions {
+				if functionName, err = provider.EnsureBackfillFunctionIn(ctx, plan.Market.MarketType, region); err == nil {
+					break
+				}
+			}
 		} else {
 			functionName, err = provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
 		}

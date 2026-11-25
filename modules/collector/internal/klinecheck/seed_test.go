@@ -2,6 +2,7 @@ package klinecheck
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -247,14 +248,89 @@ func TestCheckRestrictsToSubjects(t *testing.T) {
 
 func TestSeedBatchSizeKeepsChecksBounded(t *testing.T) {
 	// A 股 5m 约 1 万根：受 MaxCheckPoints 限制，一批约 300 个标的。
-	require.Equal(t, MaxCheckPoints/9840, seedBatchSize(500, 9840, 1))
+	require.Equal(t, MaxCheckPoints/9840, seedBatchSize(500, 9840, 1, 11))
 	// crypto 1m 约 4.9 万根：一批约 61 个标的。
-	require.Equal(t, MaxCheckPoints/48960, seedBatchSize(500, 48960, 1))
+	require.Equal(t, MaxCheckPoints/48960, seedBatchSize(500, 48960, 1, 50))
 	// 标的少时不超过 perJob。
-	require.Equal(t, 10, seedBatchSize(10, 100, 1))
+	require.Equal(t, 10, seedBatchSize(10, 100, 1, 2))
 	// 统一数据集两个 tag，检查的点数翻倍。
-	require.Equal(t, MaxCheckPoints/(48960*2), seedBatchSize(500, 48960, 2))
-	require.GreaterOrEqual(t, seedBatchSize(500, MaxCheckPoints*2, 1), 1)
+	require.Equal(t, MaxCheckPoints/(48960*2), seedBatchSize(500, 48960, 2, 50))
+	require.GreaterOrEqual(t, seedBatchSize(500, MaxCheckPoints*2, 1, 5000), 1)
+	// 不合并时每个交易时段一段缺口，缺口数限制批大小：A 股 205 个交易日 × 2 段 = 410 段，一批不超过 3750/410 个标的。
+	require.Equal(t, MaxGaps*3/4/410, seedBatchSize(500, 9840, 1, 410))
+}
+
+// 一个地域的补采函数建不出来时换下一个地域，不让分块无限退回。
+func TestSeedChunksFailOverToTheNextRegion(t *testing.T) {
+	b, _, _, _ := seedFixture(t, 2*time.Hour, 5)
+	provider := &regionFunctions{regions: []string{"ap-singapore", "ap-tokyo"}, broken: map[string]bool{"ap-singapore": true, "ap-tokyo": true}}
+	b.Functions = func(string) FunctionProvider { return provider }
+	b.Refill = false
+	ctx := context.Background()
+	require.NoError(t, b.SeedTick(ctx, "crypto"))
+	b.Wait()
+
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	b.Wait()
+	require.Len(t, provider.regionsUsed, 2, "两个地域都试过")
+	require.Equal(t, store.BackfillPending, onlyChunkStatus(t, b, seedOf(t, b).JobIDs[0]), "都建不出来：分块退回，不算失败")
+
+	provider.mu.Lock()
+	provider.broken["ap-singapore"] = false
+	provider.mu.Unlock()
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	b.Wait()
+	require.NoError(t, b.Tick(ctx, "crypto"))
+	require.Equal(t, store.BackfillSucceeded, onlyChunkStatus(t, b, seedOf(t, b).JobIDs[0]))
+}
+
+func onlyChunkStatus(t *testing.T, b *Backfiller, jobID string) string {
+	t.Helper()
+	status, err := b.Status(context.Background(), jobID)
+	require.NoError(t, err)
+	for name, count := range status.Counts {
+		if count == 1 {
+			return name
+		}
+	}
+	t.Fatalf("作业 %s 没有恰好一个分块：%v", jobID, status.Counts)
+	return ""
+}
+
+// 手动放行不会被拼作业的协程改回去，已建的作业也会取消。
+func TestSkipDuringPreparationWins(t *testing.T) {
+	b, invoker, _, _ := seedFixture(t, 2*time.Hour, 5)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seed := store.HistorySeed{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", Status: store.SeedPreparing, TargetFrom: now.Add(-time.Hour), EffectiveFrom: now, StartedAt: now}
+	created, err := b.Store.CreateHistorySeed(ctx, seed)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	skipped, err := b.SkipSeeds(ctx, "crypto", "")
+	require.NoError(t, err)
+	require.Equal(t, 1, skipped)
+
+	// 拼作业的协程之后才来写：条件写不会生效。
+	seed.Status, seed.JobIDs = store.SeedRunning, []string{"late-job"}
+	updated, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing)
+	require.NoError(t, err)
+	require.False(t, updated)
+	require.Equal(t, store.SeedSkipped, seedOf(t, b).Status)
+	require.Empty(t, invoker.events)
+
+	// 真正走一遍拼作业：记录已经是 skipped，拼出来的作业被取消。
+	first, ok, err := b.firstSegment(ctx, "crypto", seed)
+	require.NoError(t, err)
+	require.True(t, ok)
+	seed.JobIDs, seed.Status = nil, store.SeedPreparing
+	seed.TargetFrom = first.fromTime().Add(-30 * time.Minute)
+	seed.EffectiveFrom = first.fromTime()
+	require.NoError(t, b.prepareSeed(ctx, "crypto", seed, first))
+	jobs, err := b.Store.ActiveJobs(ctx, "crypto")
+	require.NoError(t, err)
+	require.Empty(t, jobs, "放行后拼出来的作业都已取消")
+	require.Equal(t, store.SeedSkipped, seedOf(t, b).Status)
 }
 
 // 补齐的分块按地域轮流走补采函数；没有地域时走原来的执行端。
@@ -279,6 +355,7 @@ func TestSeedChunksRotateAcrossRegions(t *testing.T) {
 
 type regionFunctions struct {
 	mu           sync.Mutex
+	broken       map[string]bool
 	regions      []string
 	regionsUsed  []string
 	defaultCalls int
@@ -297,6 +374,9 @@ func (f *regionFunctions) EnsureBackfillFunctionIn(_ context.Context, _, region 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.regionsUsed = append(f.regionsUsed, region)
+	if f.broken[region] {
+		return "", errors.New("函数建不出来")
+	}
 	return "moox-fetch-plan-backfill-crypto-spot-" + region, nil
 }
 
@@ -336,7 +416,9 @@ func TestHistorySeedRepository(t *testing.T) {
 	require.Equal(t, []string{"j1"}, got.JobIDs)
 
 	got.Status, got.Retried = store.SeedDone, true
-	require.NoError(t, b.Store.UpdateHistorySeed(ctx, got))
+	updated, err := b.Store.UpdateHistorySeed(ctx, got)
+	require.NoError(t, err)
+	require.True(t, updated)
 	got, _, _ = b.Store.HistorySeedOf(ctx, "crypto", "d1", "5m")
 	require.Equal(t, store.SeedDone, got.Status)
 	require.True(t, got.Retried)
@@ -355,3 +437,5 @@ func mustFrequency(t *testing.T, name string) marketdata.Frequency {
 	require.NoError(t, err)
 	return frequency
 }
+
+func (s Segment) fromTime() time.Time { return time.Unix(s.From, 0).UTC() }

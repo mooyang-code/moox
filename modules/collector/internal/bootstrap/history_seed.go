@@ -25,7 +25,7 @@ type datasetReader interface {
 }
 
 // historySeedOptions 按配置装配历史补齐：深度取 min(保留期 − 1 天, 行情源允许的最长历史, max_depth)；
-// 分块并发是市场补采函数的“地域数 × 预留并发”，没有云函数地域的市场（crypto 默认）走本地执行端，用空间的补采并发上限。
+// 分块并发是各市场补采函数里最大的“地域数 × 预留并发”，没有云函数地域的市场（crypto 默认）走本地执行端，用空间的补采并发上限。
 func historySeedOptions(cfg *Config, datasets datasetReader, reconcilers *fetchplan.Reconcilers) klinecheck.SeedOptions {
 	seed := cfg.HistorySeed
 	options := klinecheck.SeedOptions{
@@ -60,9 +60,11 @@ func historySeedOptions(cfg *Config, datasets datasetReader, reconcilers *fetchp
 		if reconciler == nil {
 			return 0
 		}
+		// 取各市场里最大的一个：同一时刻的分块多半来自同一个数据集（同一个市场），名额超过它的补采函数并发上限，
+		// 多出的调用会被平台拒绝或排队，占着名额却没有进展。
 		slots := 0
 		for market := range cfg.SCFMarkets[strings.ToLower(spaceID)] {
-			slots += len(reconciler.BackfillRegions(market)) * reconciler.BackfillReservedConcurrency()
+			slots = max(slots, len(reconciler.BackfillRegions(market))*reconciler.BackfillReservedConcurrency())
 		}
 		return slots
 	}

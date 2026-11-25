@@ -38,6 +38,8 @@ func TestListHistorySeedsMapsProgress(t *testing.T) {
 		TotalChunks: 100, DoneChunks: 40, FailedChunks: 2, ETA: 90 * time.Second,
 	}, {
 		HistorySeed: store.HistorySeed{SpaceID: "stockus", DatasetID: "ds2", Frequency: "1m", Status: store.SeedDone, FinishedAt: &finished},
+	}, {
+		HistorySeed: store.HistorySeed{SpaceID: "stockus", DatasetID: "ds3", Frequency: "1m", Status: store.SeedPreparing},
 	}}}
 	svc := &Service{klineOps: ops}
 	rsp, err := svc.ListHistorySeeds(context.Background(), &pb.ListHistorySeedsReq{SpaceId: " stockus ", OnlyRunning: true})
@@ -45,7 +47,8 @@ func TestListHistorySeedsMapsProgress(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, "stockus", ops.skipArgs[0], "空间名去掉首尾空白")
 	require.True(t, ops.onlyOpen)
-	require.Len(t, rsp.GetSeeds(), 2)
+	require.Len(t, rsp.GetSeeds(), 3)
+	require.Equal(t, "running", rsp.GetSeeds()[2].GetStatus(), "拼作业对下游就是补齐中")
 	first := rsp.GetSeeds()[0]
 	require.Equal(t, "running", first.GetStatus())
 	require.Equal(t, int32(100), first.GetTotalChunks())
