@@ -71,10 +71,8 @@ func (c PlanHealthConfig) validate() error {
 type HistorySeedConfig struct {
 	// Enabled 不写时开启。
 	Enabled *bool `yaml:"enabled"`
-	// MaxDepth 是补齐深度的上限（保留期为 forever 的频率兜底），默认 365d；DepthCaps 按空间限制行情源能取到的最长历史
-	// （默认 stockhk 28d：东方财富 5m 只有约 28 天，腾讯只有当天）。
-	MaxDepth  string            `yaml:"max_depth"`
-	DepthCaps map[string]string `yaml:"depth_caps"`
+	// MaxDepth 是补齐深度的上限（保留期为 forever 的频率兜底），默认 365d。行情源能取到的最长历史按行情源目录的声明，不在这里配。
+	MaxDepth string `yaml:"max_depth"`
 	// SubjectsPerJob 是一个补齐作业最多放的标的数，默认 500。
 	SubjectsPerJob int `yaml:"subjects_per_job"`
 	// MergeSessions 为真（默认）时日内分块跨休市区间合并，函数调用次数少一个数量级；行情源取数出问题时可以关掉退回按交易时段拆。
@@ -93,18 +91,6 @@ func (c HistorySeedConfig) maxDepth() time.Duration {
 	return seedDuration(c.MaxDepth, 365*24*time.Hour)
 }
 
-// depthCap 返回空间的行情源最长历史；没有限制时返回 0。
-func (c HistorySeedConfig) depthCap(spaceID string) time.Duration {
-	spaceID = strings.ToLower(spaceID)
-	if raw, ok := c.DepthCaps[spaceID]; ok {
-		return seedDuration(raw, 0)
-	}
-	if spaceID == "stockhk" {
-		return 28 * 24 * time.Hour
-	}
-	return 0
-}
-
 func seedDuration(raw string, fallback time.Duration) time.Duration {
 	period, err := storagepolicy.ParsePeriod(strings.TrimSpace(raw))
 	if err != nil || period.Forever || period.Duration <= 0 {
@@ -118,11 +104,6 @@ func (c *Config) validateHistorySeed() error {
 	if seed.MaxDepth != "" {
 		if period, err := storagepolicy.ParsePeriod(strings.TrimSpace(seed.MaxDepth)); err != nil || period.Forever || period.Duration <= 0 {
 			return fmt.Errorf("history_seed.max_depth %q 必须是时长，例如 365d", seed.MaxDepth)
-		}
-	}
-	for space, raw := range seed.DepthCaps {
-		if period, err := storagepolicy.ParsePeriod(strings.TrimSpace(raw)); err != nil || period.Forever || period.Duration <= 0 {
-			return fmt.Errorf("history_seed.depth_caps[%s] %q 必须是时长，例如 28d", space, raw)
 		}
 	}
 	if seed.SubjectsPerJob < 0 || seed.MaxRowsPerSecond < 0 || seed.LocalMaxRowsPerSecond < 0 {

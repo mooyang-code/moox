@@ -14,7 +14,7 @@ import (
 func historySeedsToPB(views []klinecheck.SeedView) []*pb.HistorySeed {
 	out := make([]*pb.HistorySeed, 0, len(views))
 	for _, view := range views {
-		// 拼作业（preparing）对下游就是补齐中：下游只认 running、done、skipped。
+		// 拼作业（preparing）对下游就是补齐中：下游只按 running 判断补齐中，对外的状态是 running、done、skipped、failed。
 		status := view.Status
 		if status == store.SeedPreparing {
 			status = store.SeedRunning

@@ -206,6 +206,7 @@ type fakeVerifyGateway struct {
 	strategy      string
 	factors       *factorpb.ListFactorTasksRsp
 	tasksDisabled bool
+	seeds         []*collectorpb.HistorySeed
 }
 
 func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp any) error {
@@ -218,6 +219,7 @@ func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp 
 	case *collectorpb.GetCollectorStatusRsp:
 		out.Datasets = []*collectorpb.CollectorDatasetStatus{{DatasetId: "dataset_task_a", Frequency: "1m"}}
 		out.Applied = &collectorpb.FetchPlanSummary{}
+		out.HistorySeeds = g.seeds
 	case *collectorpb.CheckKlineRsp:
 		out.Expected, out.Missing = 3, 0
 	case *factorpb.ListFactorTasksRsp:
@@ -256,4 +258,30 @@ func TestSetupVerifyReaderMatchesDatasetsByTaskResult(t *testing.T) {
 	factors.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "factor down"}
 	_, err = reader.read(context.Background(), map[string]int64{})
 	require.ErrorContains(t, err, "factor down", "因子后端报错不能当作没有任务")
+}
+
+// 补历史中的数据集按（源数据集、任务频率）对上因子任务，与因子管理端的口径相同：只认 running，
+// 已完成或放行的、频率不同的都不算。全新安装时 crypto 两个 1m 数据集补 34 天要几小时，验收不能因此超时失败。
+func TestSetupVerifyReaderMarksSeedingFactors(t *testing.T) {
+	factors := &factorpb.ListFactorTasksRsp{FactorTasks: []*factorpb.FactorTaskInfo{
+		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_1m", SpaceId: "crypto", Freq: "1m", SourceDatasetId: "dataset_task_a"}},
+		{FactorTask: &factorpb.FactorTask{TaskId: "ftask_spot_5m", SpaceId: "crypto", Freq: "5m", SourceDatasetId: "dataset_task_a"}},
+	}}
+	seeds := []*collectorpb.HistorySeed{{DatasetId: "dataset_task_a", Frequency: "1m", Status: "running"}, {DatasetId: "dataset_task_a", Frequency: "5m", Status: "done"}}
+	reader := setupVerifyReader{gateway: fakeVerifyGateway{strategy: `{"instances":[]}`, factors: factors, seeds: seeds}, spaceID: "crypto", factorDeployed: true}
+	input, err := reader.read(context.Background(), map[string]int64{})
+	require.NoError(t, err)
+	require.True(t, input.Factors[0].SourceSeeding)
+	require.False(t, input.Factors[1].SourceSeeding, "补齐已结束的不算")
+
+	// 第一期都没前进：补历史中的 1m 任务算通过，5m 任务本来就不要求前进。
+	input.Factors[0].LastPeriod, input.Factors[0].Baseline = 0, 0
+	var check verify.Check
+	for _, item := range verify.Evaluate(input) {
+		if item.Name == "factor" {
+			check = item
+		}
+	}
+	require.Equal(t, verify.Pass, check.Status)
+	require.Contains(t, check.Detail, "ftask_spot_1m 补历史中，下游待生效")
 }

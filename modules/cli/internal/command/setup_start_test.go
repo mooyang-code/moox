@@ -29,6 +29,8 @@ type fakeStartClient struct {
 	syncs         int
 	syncBusy      int
 	syncSubjects  int
+	// syncHook 在一次成功同步之后调用（默认同步成功就清掉 subjectMisses）。
+	syncHook func(*fakeStartClient)
 }
 
 func (f *fakeStartClient) Tasks(context.Context, string) ([]rpcclient.CollectionTaskSummary, error) {
@@ -54,6 +56,9 @@ func (f *fakeStartClient) SyncSubjects(context.Context, string, string) (int, er
 		return 0, errSubjectSyncBusy
 	}
 	f.subjectMisses = 0
+	if f.syncHook != nil {
+		f.syncHook(f)
+	}
 	return f.syncSubjects, nil
 }
 func (f *fakeStartClient) StreamOnline(context.Context, string) (bool, error) { return f.online, nil }
@@ -162,18 +167,49 @@ func TestSetupStartPrerequisitesDependOnSpace(t *testing.T) {
 func TestSetupStartEnableTaskRetriesWhileSubjectsNotResolvable(t *testing.T) {
 	client := &fakeStartClient{subjectMisses: 2, syncBusy: 1, syncSubjects: 300}
 	task := rpcclient.CollectionTaskSummary{TaskID: "a", TagIDs: []string{"cn_hs300"}}
-	require.NoError(t, setupStartEnableTask(context.Background(), client, "stockcn", task, time.Millisecond))
+	require.NoError(t, setupStartEnableTask(context.Background(), client, "stockcn", task, time.Millisecond, time.Minute))
 	require.Equal(t, 3, client.enableCalls, "Collector 忙时下一轮再同步，同步完再启用")
 	require.Equal(t, 2, client.syncs)
 	require.Equal(t, []string{"a"}, client.enabled)
 
 	empty := &fakeStartClient{subjectMisses: 5}
-	require.ErrorContains(t, setupStartEnableTask(context.Background(), empty, "stockcn", task, time.Millisecond), "没有成员")
+	require.ErrorContains(t, setupStartEnableTask(context.Background(), empty, "stockcn", task, time.Millisecond, time.Minute), "没有成员")
+}
+
+// 全新安装时 Collector 的首轮巡检持有同步锁一两分钟（2026-11-25 线上约 2.5 分钟）：一直正忙也要等下去，轮到了照常启用；
+// 默认时限要盖住首轮巡检。
+func TestSetupStartEnableTaskWaitsOutLongFirstPatrol(t *testing.T) {
+	require.GreaterOrEqual(t, setupStartSubjectWait, 5*time.Minute, "首轮巡检约 2.5 分钟，60 秒等不到")
+	client := &fakeStartClient{subjectMisses: 1000, syncBusy: 40, syncSubjects: 526}
+	task := rpcclient.CollectionTaskSummary{TaskID: "spot", TagIDs: []string{"binance_spot"}}
+	require.NoError(t, setupStartEnableTask(context.Background(), client, "crypto", task, time.Millisecond, time.Minute))
+	require.Equal(t, 41, client.syncs, "正忙 40 轮后第 41 次同步成功")
+	require.Equal(t, []string{"spot"}, client.enabled)
+}
+
+// 到时限仍在排队：报清楚在等什么、下一步做什么，不原样返回控制面的“没有有效标的”。
+func TestSetupStartEnableTaskExplainsTimeout(t *testing.T) {
+	task := rpcclient.CollectionTaskSummary{TaskID: "spx", TagIDs: []string{"us_spx"}}
+	busy := &fakeStartClient{subjectMisses: 1 << 30, syncBusy: 1 << 30}
+	err := setupStartEnableTask(context.Background(), busy, "stockus", task, time.Millisecond, 20*time.Millisecond)
+	require.ErrorContains(t, err, "Collector 一直在同步别的标签，没轮到标签 us_spx")
+	require.ErrorContains(t, err, "collector subjects status --space-id stockus")
+	require.ErrorContains(t, err, "没有有效标的", "保留控制面的原因")
+
+	// 同步过了，标签还是解析不出标的：提示去核对成员。
+	resolved := &fakeStartClient{subjectMisses: 1 << 30, syncSubjects: 3}
+	resolved.syncHook = func(f *fakeStartClient) { f.subjectMisses = 1 << 30 }
+	err = setupStartEnableTask(context.Background(), resolved, "stockus", task, time.Millisecond, 20*time.Millisecond)
+	require.ErrorContains(t, err, "已同步")
+	require.ErrorContains(t, err, "metadata tag show --space-id stockus")
+	require.Equal(t, 1, resolved.syncs, "同步成功后不再重复同步")
+
+	require.Equal(t, "5 分钟", waitText(5*time.Minute))
 }
 
 func TestSetupStartEnableTaskDoesNotRetryOtherErrors(t *testing.T) {
 	client := &fakeStartClient{otherErr: errors.New("UpdateTask rejected: 其他原因")}
-	require.Error(t, setupStartEnableTask(context.Background(), client, "crypto", rpcclient.CollectionTaskSummary{TaskID: "a"}, time.Millisecond))
+	require.Error(t, setupStartEnableTask(context.Background(), client, "crypto", rpcclient.CollectionTaskSummary{TaskID: "a"}, time.Millisecond, time.Minute))
 	require.Equal(t, 1, client.enableCalls)
 }
 

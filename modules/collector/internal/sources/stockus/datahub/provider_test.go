@@ -260,14 +260,48 @@ func TestFetchIndexConstituentsChecksColumns(t *testing.T) {
 	require.ErrorIs(t, err, marketdata.ErrProtocol)
 }
 
-// 任何一只对不上交易所：整次失败，错误里列出全部对不上的代码（不是只列第一个）。
-func TestFetchIndexConstituentsFailsWhenAnyExchangeUnmatched(t *testing.T) {
+// 少数成分对不上交易所（2026-11-25 线上 8 只新代码 ECHO、P、FDXF 等还不在东方财富列表里）：跳过它们，其余照常返回，
+// 交易所对照仍只查一次。
+func TestFetchIndexConstituentsSkipsFewUnmatched(t *testing.T) {
 	all := records(t)
 	missing := []string{all[3][0], all[100][0], all[400][0]}
 	stub := &stubExchanges{skip: map[string]bool{missing[0]: true, missing[1]: true, missing[2]: true}}
-	_, err := serve(t, http.StatusOK, recorded(t), stub, nil).FetchIndexConstituents(context.Background(), "SPX")
+	snapshot, err := serve(t, http.StatusOK, recorded(t), stub, nil).FetchIndexConstituents(context.Background(), "SPX")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Instruments, 500)
+	total := 0
+	for _, count := range snapshot.ExchangeCounts {
+		total += count
+	}
+	require.Equal(t, 500, total, "交易所计数只算对上的")
+	require.Len(t, stub.calls, 1)
+	for _, item := range snapshot.Instruments {
+		require.NotContains(t, missing, item.ProviderSymbol, "对不上的不进快照")
+	}
+}
+
+// 对不上的上限是名单的一成：503 行时 50 只还能用，51 只整份拒绝并按 CSV 顺序列出全部对不上的代码。
+func TestFetchIndexConstituentsRejectsWhenTooManyUnmatched(t *testing.T) {
+	rows := records(t)[1:]
+	require.Len(t, rows, 503)
+	skipFirst := func(n int) (*stubExchanges, []string) {
+		stub := &stubExchanges{skip: map[string]bool{}}
+		var codes []string
+		for _, row := range rows[:n] {
+			stub.skip[row[0]] = true
+			codes = append(codes, row[0])
+		}
+		return stub, codes
+	}
+	stub, _ := skipFirst(50)
+	snapshot, err := serve(t, http.StatusOK, recorded(t), stub, nil).FetchIndexConstituents(context.Background(), "SPX")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Instruments, 453)
+
+	stub, missing := skipFirst(51)
+	_, err = serve(t, http.StatusOK, recorded(t), stub, nil).FetchIndexConstituents(context.Background(), "SPX")
 	require.ErrorIs(t, err, marketdata.ErrProtocol)
-	require.ErrorContains(t, err, "3 只成分")
+	require.ErrorContains(t, err, "51/503 只成分")
 	require.ErrorContains(t, err, strings.Join(missing, "、"), "按 CSV 顺序列出全部对不上的代码")
 }
 

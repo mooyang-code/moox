@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"golang.org/x/time/rate"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -18,7 +19,7 @@ import (
 //
 // 流程：采集计划的决策表为一个数据集写下第一行时间线（新数据集的“加一份”，或重新登记之后的第一份）→
 // 时间线里有这个数据集、却还没有补齐记录 → 建补齐记录（此刻起下游不生效）→ 按标的分批拼缺口、建补采作业 →
-// 作业全部结束（失败分块自动重试一次）→ 记 done，下游放行。
+// 作业全部结束（失败分块自动重试一次）→ 记 done，下游放行。拼作业连续失败 seedMaxPrepareFailures 次记 failed，同样放行。
 // “首次接入”只看补齐记录在不在：时间线只由决策表写，重新登记（Reset）把时间线与补齐记录一起清掉；
 // 记录按（空间, 数据集, 频率）唯一，停掉后又加回来的数据集已有记录，不再补。
 
@@ -27,6 +28,13 @@ const (
 	seedDefaultSubjectsPerJob = 500
 	// seedSampleWindow 是估计剩余时间用的采样窗口。
 	seedSampleWindow = 10 * time.Minute
+	// seedMaxPrepareFailures 是拼作业连续失败多少次后放弃（记 failed、放行下游）；拼作业每分钟重试一次。
+	seedMaxPrepareFailures = 5
+	// seedLookbackMargin 是补齐深度比行情源回看上限少留的余量：上限按函数执行时刻往回算，补齐要跑一阵子
+	// （失败分块还要在全部结束后重试一次），目标起点正好压在上限上，每个标的最早的一块到执行时都已越界。
+	seedLookbackMargin = 24 * time.Hour
+	// seedWindowMargin 是补齐分块执行前按回看上限截掉起点时多留的时间：覆盖限速排队、调用与函数内重试。
+	seedWindowMargin = 5 * time.Minute
 )
 
 // SeedOptions 是历史补齐的参数与回调。
@@ -37,8 +45,11 @@ type SeedOptions struct {
 	// MergeSessions 让日内分块跨休市区间合并（一个标的连续多个交易日一块），默认关闭由调用方打开：
 	// 它要求行情源按“区间 + 根数”一次取回跨交易日的数据。
 	MergeSessions bool
-	// Depth 返回数据集的补齐深度，不大于 0 表示不补（保留期太短、行情源不支持更早的数据）。
+	// Depth 返回数据集的补齐深度（保留期、配置上限），不大于 0 表示不补。行情源的回看上限另由 Lookback 给出。
 	Depth func(ctx context.Context, spaceID, datasetID, frequency string) (time.Duration, error)
+	// Lookback 返回补采来源这个频率最多能往回取多久（按调用时刻算）；bounded 为假表示不限。为空表示不限。
+	// 补齐深度不超过它减 seedLookbackMargin；分块执行时早于“此刻 − 回看上限”的部分截掉不补，不算失败。
+	Lookback func(market marketfetch.PlanMarket, frequency string) (lookback time.Duration, bounded bool, err error)
 	// Regions 返回市场补齐分块可用的云函数地域：必须是函数写入直达存储机的地域（入口主机就是存储机），
 	// 经海外机转发的地域（带宽很小，会挤掉实时采集）不能算。为空时用补采函数提供方的全部地域。
 	Regions func(spaceID, marketType string) []string
@@ -99,6 +110,27 @@ func (b *Backfiller) seedRegions(provider FunctionProvider, spaceID, marketType 
 		return b.Seed.Regions(spaceID, marketType)
 	}
 	return provider.BackfillRegions(marketType)
+}
+
+// seedWindowStart 返回补齐分块此刻还能取到的最早 K 线开始时间（此刻 − 行情源回看上限 + seedWindowMargin，向上对齐）；
+// 来源不限或查不到回看能力时 ok 为假。
+func (b *Backfiller) seedWindowStart(ctx context.Context, market marketfetch.PlanMarket, frequencyName string) (time.Time, bool) {
+	if b.Seed.Lookback == nil {
+		return time.Time{}, false
+	}
+	frequency, err := marketdata.ParseFrequency(frequencyName)
+	if err != nil {
+		return time.Time{}, false
+	}
+	lookback, bounded, err := b.Seed.Lookback(market, frequencyName)
+	if err != nil {
+		log.WarnContextf(ctx, "collector history seed lookback unavailable market=%s frequency=%s: %v", market.MarketID, frequencyName, err)
+		return time.Time{}, false
+	}
+	if !bounded {
+		return time.Time{}, false
+	}
+	return alignUp(frequency, b.now().Add(-lookback+seedWindowMargin)), true
 }
 
 // seedSlots 是补齐分块在空间里的并发上限。
@@ -194,6 +226,23 @@ func (b *Backfiller) beginSeed(ctx context.Context, spaceID, datasetID, frequenc
 			return err
 		}
 	}
+	if b.Seed.Lookback != nil && b.Routes != nil {
+		plan, found, err := b.Routes.BackfillRoute(ctx, spaceID, datasetID, frequencyName)
+		if err != nil {
+			return err
+		}
+		if found {
+			// 查不到回看能力（行情源目录里没有这个来源）时照常补、不按回看限深度：越界的分块会记失败、在状态里看得到，
+			// 比补齐记录建不出来、下游直接生效却一根历史都没补要好。
+			if lookback, bounded, err := b.Seed.Lookback(plan.Market, frequencyName); err != nil {
+				log.WarnContextf(ctx, "collector history seed lookback unavailable space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
+			} else if bounded {
+				depth = min(depth, lookback-seedLookbackMargin)
+			}
+		}
+	}
+	// 新记录（例如重新登记之后）的连续失败次数从零算，不沿用旧记录在本进程里留下的。
+	b.clearPrepareFailures(seedKey(spaceID, datasetID, frequencyName))
 	now := b.now()
 	seed := store.HistorySeed{SpaceID: spaceID, DatasetID: datasetID, Frequency: frequencyName, Status: store.SeedPreparing, EffectiveFrom: effective, StartedAt: now}
 	seed.TargetFrom = alignUp(frequency, effective.Add(-depth))
@@ -206,11 +255,18 @@ func (b *Backfiller) beginSeed(ctx context.Context, spaceID, datasetID, frequenc
 		return err
 	}
 	// 第一行时间线在 Storage 确认登记时写，生效点还在未来（提前量几分钟）：记录先建好、下游先不生效，
-	// 作业等到生效点之后再拼（advanceSeeds 接着做），补齐范围才能一直补到生效点，不在生效点前留几分钟的空洞。
-	if !now.Before(effective) {
+	// 作业等到可以拼的时刻再拼（见 seedReadyAt，没到时由 advanceSeeds 接着做）。
+	if !now.Before(seedReadyAt(frequency, effective, first)) {
 		b.prepareAsync(spaceID, seed, first)
 	}
 	return nil
+}
+
+// seedReadyAt 是可以拼补齐作业的时刻：生效点之前最后一根 K 线过了截止时间（收盘 + 计划段的 lateness）。
+// 补齐范围是 [目标起点, 生效点)，实时采集从生效点起；早于这个时刻拼，检查按截止时间把最后一根当作还没到期排除，
+// 补齐止于它之前，这一根两边都不管、巡检也不看（2026-11-25 港股 lateness 90 秒，06:50 生效、06:50:10 拼作业，06:45 那根全缺）。
+func seedReadyAt(frequency marketdata.Frequency, effective time.Time, first Segment) time.Time {
+	return alignUp(frequency, effective).Add(time.Duration(first.LatenessS) * time.Second)
 }
 
 // prepareAsync 在后台拼补齐作业；同一个补齐在本进程里只拼一份。
@@ -235,38 +291,72 @@ func (b *Backfiller) prepareAsync(spaceID string, seed store.HistorySeed, first 
 			b.mu.Unlock()
 		}()
 		ctx := b.baseContext()
-		if err := b.prepareSeed(ctx, spaceID, seed, first); err != nil {
-			log.WarnContextf(ctx, "collector history seed prepare failed space=%s dataset=%s|%s: %v", spaceID, seed.DatasetID, seed.Frequency, err)
-			// 拼作业失败：留在 preparing，下一轮推进时没有本进程的拼作业协程会重新来过。
-			// 说明写在库里最新的记录上（已建作业的 ID 已记在库里，不能用拼作业前的旧副本覆盖它们）。
-			latest, ok, readErr := b.Store.HistorySeedOf(ctx, spaceID, seed.DatasetID, seed.Frequency)
-			if readErr != nil || !ok {
-				return
-			}
-			latest.Note = "拼补采作业失败：" + err.Error()
-			if _, updateErr := b.Store.UpdateHistorySeed(ctx, latest, store.SeedPreparing); updateErr != nil {
-				log.WarnContextf(ctx, "collector history seed note write failed: %v", updateErr)
-			}
+		err := b.prepareSeed(ctx, spaceID, seed, first)
+		if err == nil {
+			b.clearPrepareFailures(key)
+			return
 		}
+		log.WarnContextf(ctx, "collector history seed prepare failed space=%s dataset=%s|%s: %v", spaceID, seed.DatasetID, seed.Frequency, err)
+		b.prepareFailed(ctx, spaceID, seed, err)
 	}()
 }
 
+// prepareFailed 记下一次拼作业失败。不到 seedMaxPrepareFailures 次时留在 preparing，下一轮推进时重新来过；
+// 连续失败到次数（例如批次总被检查上限拒绝）记 failed、取消已建的作业并放行下游，原因写进说明，不让记录一直挡着下游。
+// 说明写在库里最新的记录上（已建作业的 ID 已记在库里，不能用拼作业前的旧副本覆盖它们）。
+func (b *Backfiller) prepareFailed(ctx context.Context, spaceID string, seed store.HistorySeed, cause error) {
+	key := seedKey(spaceID, seed.DatasetID, seed.Frequency)
+	b.mu.Lock()
+	if b.seedFailures == nil {
+		b.seedFailures = map[string]int{}
+	}
+	b.seedFailures[key]++
+	failures := b.seedFailures[key]
+	b.mu.Unlock()
+	latest, ok, err := b.Store.HistorySeedOf(ctx, spaceID, seed.DatasetID, seed.Frequency)
+	if err != nil || !ok {
+		return
+	}
+	if failures < seedMaxPrepareFailures {
+		latest.Note = fmt.Sprintf("拼补采作业失败（连续第 %d 次，到 %d 次放弃）：%v", failures, seedMaxPrepareFailures, cause)
+		if _, err := b.Store.UpdateHistorySeed(ctx, latest, store.SeedPreparing); err != nil {
+			log.WarnContextf(ctx, "collector history seed note write failed: %v", err)
+		}
+		return
+	}
+	now := b.now()
+	latest.Status, latest.FinishedAt = store.SeedFailed, &now
+	latest.Note = fmt.Sprintf("拼补采作业连续 %d 次失败，已放弃并放行下游：%v", failures, cause)
+	// 先改状态再取消作业，与手动放行同一顺序：条件写没生效（已被手动放行）时作业已由放行取消。
+	updated, err := b.Store.UpdateHistorySeed(ctx, latest, store.SeedPreparing)
+	if err != nil {
+		log.WarnContextf(ctx, "collector history seed failure write failed: %v", err)
+		return
+	}
+	b.clearPrepareFailures(key)
+	if !updated {
+		return
+	}
+	if err := b.cancelJobs(ctx, latest.JobIDs); err != nil {
+		log.WarnContextf(ctx, "collector history seed jobs cancel failed space=%s dataset=%s|%s: %v", spaceID, seed.DatasetID, seed.Frequency, err)
+	}
+	b.flushNotices(ctx, "seed:"+seed.DatasetID)
+	log.WarnContextf(ctx, "collector history seed gave up space=%s dataset=%s|%s after %d prepare failures: %v", spaceID, seed.DatasetID, seed.Frequency, failures, cause)
+}
+
+// clearPrepareFailures 清掉补齐连续拼作业失败的次数。
+func (b *Backfiller) clearPrepareFailures(key string) {
+	b.mu.Lock()
+	delete(b.seedFailures, key)
+	b.mu.Unlock()
+}
+
 // seedBatchSize 估计一次检查放多少个标的：检查的（标的 × K 线）总数、返回的缺口数都有上限。
-// gaps 是每个标的预计的缺口数：合并时约 K 线数 ÷ MaxChunkBars，不合并时每个交易时段一段。
+// bars 是每个标的应有的 K 线数（按交易日历，见 tradingBars）；gaps 是每个标的预计的缺口数：
+// 合并时约 K 线数 ÷ MaxChunkBars，不合并时每个交易时段一段。
 func seedBatchSize(perJob, bars, gaps int) int {
 	batch := min(perJob, max(MaxCheckPoints/max(bars, 1), 1))
 	return min(batch, max(MaxGaps*3/4/max(gaps, 1), 1))
-}
-
-// sessionCount 数应有的 K 线里连续的段数（休市区间把它们隔开）。
-func sessionCount(expected []time.Time, frequency marketdata.Frequency) int {
-	sessions := 0
-	for i, bar := range expected {
-		if i == 0 || !bar.Equal(frequency.BarEnd(expected[i-1])) {
-			sessions++
-		}
-	}
-	return sessions
 }
 
 // prepareSeed 按标的分批检查缺口、建补采作业，每建一个作业就记进补齐记录；全部拼完记 running。
@@ -281,21 +371,20 @@ func (b *Backfiller) prepareSeed(ctx context.Context, spaceID string, seed store
 		return err
 	}
 	seed.JobIDs, seed.Note = nil, ""
+	// 补到生效点为止（含生效点前最后一根）：只在 seedReadyAt 之后拼，这一根已过截止时间，检查不会把它排除。
 	to := seed.EffectiveFrom
-	if limit := alignDown(frequency, b.now()); limit.Before(to) {
-		to = limit
-	}
 	subjects := uniqueSorted(first.Subjects)
-	expected, err := b.Checker.expectedBars(spaceID, frequency, seed.Frequency, seed.TargetFrom, to, 0)
+	// 根数按交易日历数，与检查的预检同一套数法（tradingBars），批次才过得了预检。
+	bars, sessions, err := b.Checker.tradingBars(spaceID, frequency, seed.Frequency, seed.TargetFrom, to)
 	if err != nil {
 		return err
 	}
 	merge := b.Seed.MergeSessions
-	gapsPerSubject := len(expected)/MaxChunkBars + 2
+	gapsPerSubject := bars/MaxChunkBars + 2
 	if !merge {
-		gapsPerSubject += sessionCount(expected, frequency)
+		gapsPerSubject += sessions
 	}
-	batchSize := seedBatchSize(b.seedSubjectsPerJob(), len(expected), gapsPerSubject)
+	batchSize := seedBatchSize(b.seedSubjectsPerJob(), bars, gapsPerSubject)
 	jobs := 0
 	for from := 0; from < len(subjects); from += batchSize {
 		batch := subjects[from:min(from+batchSize, len(subjects))]
@@ -343,8 +432,8 @@ func (b *Backfiller) cancelJobs(ctx context.Context, ids []string) error {
 }
 
 // submitSeedBatch 检查一批标的的缺口并建一个补采作业；没有缺口返回空作业 ID。
-// 检查结果被截断（缺口数超过 MaxGaps）时直接返回错误，不拆批重来：记录停在 preparing，advanceSeeds 每分钟重拼同一批、
-// 再次截断，下游一直不生效，只能 collector history-seed skip 放行。批大小按全新数据集的缺口数估计（seedBatchSize），
+// 检查结果被截断（缺口数超过 MaxGaps）时直接返回错误，不拆批重来：advanceSeeds 每分钟重拼同一批、再次截断，
+// 连续 seedMaxPrepareFailures 次后记 failed 放行（见 prepareFailed）。批大小按全新数据集的缺口数估计（seedBatchSize），
 // 只有补齐区间里已有零碎数据、缺口数远超估计时才会截断（已知差别，见采集.md 第 3b 节）。
 func (b *Backfiller) submitSeedBatch(ctx context.Context, spaceID string, seed store.HistorySeed, batch []string, to time.Time, merge bool) (string, error) {
 	request := Request{SpaceID: spaceID, DatasetID: seed.DatasetID, Subjects: batch, From: seed.TargetFrom, To: to, FullHistory: true}
@@ -399,19 +488,18 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 		key := seedKey(spaceID, seed.DatasetID, seed.Frequency)
 		switch seed.Status {
 		case store.SeedPreparing:
-			// 本进程没有在拼它（进程重启过，或生效点刚到）：重新拼。
+			// 本进程没有在拼它（进程重启过，或到了可以拼的时刻）：重新拼。
 			b.mu.Lock()
 			busy := b.seedPreparing[key]
 			b.mu.Unlock()
-			if !busy && !now.Before(seed.EffectiveFrom) {
-				first, ok, err := b.firstSegment(ctx, spaceID, seed)
-				if err != nil {
-					return err
-				}
-				if ok {
-					b.prepareAsync(spaceID, seed, first)
-					continue
-				}
+			if busy || now.Before(seed.EffectiveFrom) {
+				continue
+			}
+			first, ok, err := b.firstSegment(ctx, spaceID, seed)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				// 时间线里已经没有这个数据集（生效点之前又停止了采集）：没有可补的标的，记 done 放行，不让记录一直挡着下游。
 				if err := b.cancelJobs(ctx, seed.JobIDs); err != nil {
 					return err
@@ -420,6 +508,14 @@ func (b *Backfiller) advanceSeeds(ctx context.Context, spaceID string) error {
 				if _, err := b.Store.UpdateHistorySeed(ctx, seed, store.SeedPreparing); err != nil {
 					return err
 				}
+				continue
+			}
+			frequency, err := marketdata.ParseFrequency(seed.Frequency)
+			if err != nil {
+				return err
+			}
+			if !now.Before(seedReadyAt(frequency, seed.EffectiveFrom, first)) {
+				b.prepareAsync(spaceID, seed, first)
 			}
 		case store.SeedRunning:
 			counts, err := b.Store.ChunkStatusCountsOf(ctx, seed.JobIDs)

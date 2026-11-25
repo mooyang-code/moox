@@ -308,7 +308,12 @@ export function streamPeriodText(stat: {
   return { arrived, missing, done };
 }
 
-const seedStatuses: Record<string, string> = { running: "补齐中", done: "已完成", skipped: "已手动放行" };
+const seedStatuses: Record<string, string> = {
+  running: "补齐中",
+  done: "已完成",
+  skipped: "已手动放行",
+  failed: "补齐失败，已放行"
+};
 
 /** 补齐状态的中文名，未知状态原样返回。 */
 export function seedStatusText(status?: string) {

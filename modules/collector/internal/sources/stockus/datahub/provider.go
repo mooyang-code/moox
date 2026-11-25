@@ -5,8 +5,9 @@
 // （控制机连不上 raw.githubusercontent.com），jsdelivr 对分支引用缓存最多 12 小时，
 // 所以调样后可能晚一两天生效。
 //
-// CSV 里没有交易所：每只成分的交易所由“交易所对照”（sources/stockus/exchangelist，查东方财富美股列表）给出，
-// 任何一只对不上就整次失败并列出全部对不上的代码，标签同步会保留旧成员。
+// CSV 里没有交易所：每只成分的交易所由“交易所对照”（sources/stockus/exchangelist，查东方财富美股列表）给出。
+// 对不上的成分（新调入、改了代码，东方财富列表里还没有）跳过并记警告日志，快照只含对上的；对不上的超过名单的一成
+// 说明来源整体异常（例如列表缺了一个市场），整次失败并列出全部对不上的代码，标签同步会保留旧成员。
 package datahub
 
 import (
@@ -22,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets/stockus"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/exchangelist"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -36,6 +38,9 @@ const (
 	// CSV 不报总数：标普 500 约 503 个代码，行数不在 495～515 之间说明读到的不是完整名单。
 	minRows = 495
 	maxRows = 515
+	// maxUnmatchedPercent 是对不上交易所的成分占名单的比例上限（百分比）：不超过就跳过它们，超过就整份拒绝。
+	// 2026-11-25 线上 503 只里有 8 只新代码对不上；超过一成多半是东方财富列表整体异常，不能拿一份残缺名单替换成员。
+	maxUnmatchedPercent = 10
 	// 单次超时：控制机实测 jsdelivr 约 2 秒。
 	defaultTimeout = 30 * time.Second
 	maxBodyBytes   = 4 << 20
@@ -108,8 +113,8 @@ type constituent struct {
 	name string
 }
 
-// FetchIndexConstituents 取标普 500 的全部成分股。名单必须完整才返回：行数在 495～515 之间、代码无重复、
-// 代码合法、每一只都对上了交易所、每个拼出的标的 ID 都能被美股规则解析；不满足就整次报错。
+// FetchIndexConstituents 取标普 500 的成分股。名单要满足：行数在 495～515 之间、代码无重复、代码合法、
+// 对不上交易所的不超过一成（对不上的跳过，记警告日志）、每个拼出的标的 ID 都能被美股规则解析；不满足就整次报错。
 func (p *Provider) FetchIndexConstituents(ctx context.Context, indexCode string) (marketdata.InstrumentSnapshot, error) {
 	if strings.TrimSpace(indexCode) != "SPX" {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: datahub 没有登记指数 %q 的成分列表", marketdata.ErrInvalidRequest, indexCode)
@@ -133,14 +138,20 @@ func (p *Provider) FetchIndexConstituents(ctx context.Context, indexCode string)
 			unmatched = append(unmatched, code)
 		}
 	}
+	if len(unmatched)*100 > len(codes)*maxUnmatchedPercent {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: 指数 %s 有 %d/%d 只成分在东方财富美股列表里对不上交易所，超过 %d%%，整份不用：%s", marketdata.ErrProtocol, indexCode, len(unmatched), len(codes), maxUnmatchedPercent, strings.Join(unmatched, "、"))
+	}
 	if len(unmatched) > 0 {
-		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: 指数 %s 有 %d 只成分在东方财富美股列表里对不上交易所：%s", marketdata.ErrProtocol, indexCode, len(unmatched), strings.Join(unmatched, "、"))
+		log.WarnContextf(ctx, "指数 %s 有 %d/%d 只成分在东方财富美股列表里对不上交易所，本次跳过（不进标签）：%s", indexCode, len(unmatched), len(codes), strings.Join(unmatched, "、"))
 	}
 	instruments := make([]marketdata.Instrument, 0, len(members))
 	counts := map[string]int{}
 	var invalid []string
 	for _, member := range members {
 		exchange := exchanges[member.code]
+		if exchange == "" {
+			continue
+		}
 		subjectID := member.code + "." + exchange
 		subject, err := stockus.Rules{}.ParseSubject(marketdata.InstrumentEquity, subjectID)
 		if err != nil || subject.Code != member.code || subject.Exchange != exchange {

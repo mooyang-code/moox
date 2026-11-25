@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/fetchplan"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +17,7 @@ func (f fakeDatasets) GetDataset(_ context.Context, _, datasetID string) (storag
 	return f[datasetID], nil
 }
 
-// 深度取 min(保留期 − 1 天, 行情源最长历史, max_depth)。
+// 深度取 min(保留期 − 1 天, max_depth)；行情源回看上限另由 Lookback 按行情源目录给出。
 func TestHistorySeedDepth(t *testing.T) {
 	cfg := Default()
 	datasets := fakeDatasets{
@@ -37,7 +38,11 @@ func TestHistorySeedDepth(t *testing.T) {
 	require.Equal(t, 299*day, depth("stockus", "medium"))
 	require.Equal(t, 365*day, depth("crypto", "forever"), "不限保留期用 max_depth")
 	require.Equal(t, 365*day, depth("crypto", "unknown"))
-	require.Equal(t, 28*day, depth("stockhk", "medium"), "港股行情源只有约 28 天")
+	require.Equal(t, 299*day, depth("stockhk", "medium"), "行情源回看不在 Depth 里限")
+	lookback, bounded, err := options.Lookback(marketfetch.PlanMarket{MarketID: "stockhk", InstrumentType: "equity", MarketType: "equity"}, "5m")
+	require.NoError(t, err)
+	require.True(t, bounded)
+	require.Equal(t, 28*day, lookback, "港股 5m 的回看按行情源目录：东方财富声明 28 天")
 	require.True(t, options.Enabled)
 	require.True(t, options.MergeSessions)
 	require.Equal(t, float64(seedDefaultRowsPerSecond), options.RowsPerSecond)
@@ -47,20 +52,18 @@ func TestHistorySeedDepth(t *testing.T) {
 func TestHistorySeedConfigOverridesAndValidation(t *testing.T) {
 	disabled := false
 	cfg := Default()
-	cfg.HistorySeed = HistorySeedConfig{Enabled: &disabled, MaxDepth: "90d", DepthCaps: map[string]string{"stockus": "30d"}, MaxRowsPerSecond: 500, MergeSessions: &disabled}
+	cfg.HistorySeed = HistorySeedConfig{Enabled: &disabled, MaxDepth: "90d", MaxRowsPerSecond: 500, MergeSessions: &disabled}
 	require.NoError(t, cfg.validateHistorySeed())
 	options := historySeedOptions(cfg, fakeDatasets{"d": {Retention: "forever"}}, &fetchplan.Reconcilers{})
 	require.False(t, options.Enabled)
 	require.False(t, options.MergeSessions)
 	require.Equal(t, float64(500), options.RowsPerSecond)
 	day := 24 * time.Hour
-	got, err := options.Depth(context.Background(), "stockus", "d", "5m")
+	got, err := options.Depth(context.Background(), "crypto", "d", "5m")
 	require.NoError(t, err)
-	require.Equal(t, 30*day, got, "配置覆盖空间的行情源深度上限")
-	got, _ = options.Depth(context.Background(), "crypto", "d", "5m")
-	require.Equal(t, 90*day, got)
+	require.Equal(t, 90*day, got, "不限保留期用配置的 max_depth")
 
-	for _, bad := range []HistorySeedConfig{{MaxDepth: "abc"}, {MaxDepth: "forever"}, {DepthCaps: map[string]string{"x": "0d"}}, {SubjectsPerJob: -1}, {MaxRowsPerSecond: -1}} {
+	for _, bad := range []HistorySeedConfig{{MaxDepth: "abc"}, {MaxDepth: "forever"}, {SubjectsPerJob: -1}, {MaxRowsPerSecond: -1}} {
 		cfg := Default()
 		cfg.HistorySeed = bad
 		require.Error(t, cfg.validateHistorySeed(), "%+v", bad)

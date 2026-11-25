@@ -31,7 +31,7 @@
 //
 // 已知差别（不处理）：
 //   - 429 限流在这里只是带 cnstock 错误类别的普通错误，没有映射成 marketdata.ErrRateLimited。
-//   - 标签同步（subjectsync.TagRunner）遇到确定性失败（例如有成分对不上交易所）也会整次重跑 3 遍，
+//   - 标签同步（subjectsync.TagRunner）遇到确定性失败（例如超过一成的成分对不上交易所，成分来源整份拒绝）也会整次重跑 3 遍，
 //     每遍重新翻一次三个市场的列表（约 140 页），重跑期间的请求量与失败原因无关。
 //   - 标签的 sync.cron 缺省是 0 * * * *（UTC，每小时一次）：美股标签的种子必须写成 sync.timezone
 //     America/New_York、sync.cron 纽约 08:00，否则每小时都会翻一遍东方财富列表。

@@ -11,12 +11,14 @@ import (
 )
 
 // 历史补齐的状态。preparing 表示记录已建、补采作业还在拼；running 表示作业已全部提交；
-// done 是全部分块结束；skipped 是用户手动放行。preparing 与 running 期间下游不生效。
+// done 是全部分块结束；skipped 是用户手动放行；failed 是拼作业连续失败后放弃（没补，下游放行）。
+// preparing 与 running 期间下游不生效。
 const (
 	SeedPreparing = "preparing"
 	SeedRunning   = "running"
 	SeedDone      = "done"
 	SeedSkipped   = "skipped"
+	SeedFailed    = "failed"
 )
 
 // HistorySeed 是一个数据集（某个频率）首次接入时的历史补齐记录。
