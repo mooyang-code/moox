@@ -8,6 +8,8 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: /\.spec\.ts$/,
   timeout: 30_000,
+  // 开发服务器按需编译：每个 worker 的第一次打开页面要现编整棵模块树，机器忙时超过默认的 5 秒，只剩加载图
+  expect: { timeout: 15_000 },
   use: {
     baseURL: "http://127.0.0.1:19527",
     trace: "retain-on-failure",
