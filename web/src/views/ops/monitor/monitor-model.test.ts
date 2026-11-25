@@ -165,8 +165,8 @@ describe("incident timeline", () => {
         resolved_at: ms(at(411)),
         reminder_count: 37
       },
-      { id: "d", severity: "critical", title: "控制台前端 · 健康检查", triggered_at: ms(at(5)), active: true },
-      { id: "e", severity: "critical", title: "采集计划", triggered_at: ms(at(120)) }
+      { id: "d", severity: "critical", title: "控制台前端 · 健康检查", triggered_at: ms(at(5)), resolved_at: "0", active: true },
+      { id: "e", severity: "critical", title: "采集计划", triggered_at: ms(at(120)), resolved_at: "0" }
     ]
   };
 
@@ -569,6 +569,21 @@ describe("expected bar", () => {
     const warming = { ...waiting, status: "degraded" as const, reason: "数据积累中，结果暂不完整" };
     expect(barDelay(warming, later(10)).tone).toBe("ok");
     expect(barDelay(warming, later(45))).toMatchObject({ text: "等待中，已晚 45 秒", tone: "warn" });
+  });
+
+  it('接口里没有的时刻是 "0"，按没有处理', () => {
+    // 网关 JSON 输出零值：没有收线、到达、应到时刻时这几个字段是 "0"，不能当作有值。
+    const none = {
+      ...base,
+      output_watermark_at: "",
+      latest_bar_close_at: "0",
+      arrived_at: "0",
+      delay_known: false,
+      delay_seconds: "0",
+      expected_bar_close_at: "0",
+      waiting_since: "0"
+    };
+    expect(barDelay(none, now)).toEqual({ text: "—", tone: "idle", title: "", ratio: 0 });
   });
 });
 
