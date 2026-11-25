@@ -307,7 +307,7 @@ async function gateway(route: Route) {
       });
     }
     case "SummarizeAccountPnl":
-      // 和后端一致：proto3 的零值不出现，funding_truncated 为 false 时不返回
+      // 网关的 JSON 带零值（EmitUnpopulated），false 和空串照常返回
       return route.fulfill({
         json: ok({
           fees: [
@@ -318,6 +318,8 @@ async function gateway(route: Route) {
           funding_fees: [{ asset: "USDT", amount: "-0.8" }],
           fill_count: "3",
           funding_available: true,
+          funding_truncated: false,
+          funding_note: "",
           funding_from: String(NOW - 7 * 86_400_000)
         })
       });
