@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -382,4 +384,57 @@ func TestTaskResultRejectsUnregisteredMarket(t *testing.T) {
 	seconds, err = allowedLatenessSeconds(nil, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, 15, seconds)
+}
+
+// 清单带上数据集的历史补齐状态：补齐中的标 history_seeding，已结束的带结束时刻，没有补齐记录的都不带；
+// 读不到补齐记录时清单照常返回、都不带。
+func TestGetTaskResultInventoryCarriesHistorySeeds(t *testing.T) {
+	ctx := context.Background()
+	db := openCollectorTestStore(t)
+	finished := time.Date(2026, 11, 25, 9, 45, 0, 0, time.UTC)
+	ids := map[string]taskresult.IDs{}
+	for _, taskID := range []string{"task-seeding", "task-seeded", "task-plain"} {
+		ids[taskID] = taskresult.ResultIDs(taskID)
+		require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{
+			SpaceID: "stockus", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: false, PrepareState: domain.PrepareStatePending,
+			CollectParams:   `{"provider":"cnbc","market_type":"equity","market_id":"stockus","frequency":"5m"}`,
+			ResultDatasetID: ids[taskID].DatasetID,
+		}))
+	}
+	ops := &seedOps{views: []klinecheck.SeedView{
+		{HistorySeed: store.HistorySeed{SpaceID: "stockus", DatasetID: ids["task-seeding"].DatasetID, Frequency: "5m", Status: store.SeedPreparing}},
+		{HistorySeed: store.HistorySeed{SpaceID: "stockus", DatasetID: ids["task-seeded"].DatasetID, Frequency: "5m", Status: store.SeedDone, FinishedAt: &finished}},
+		{HistorySeed: store.HistorySeed{SpaceID: "stockus", DatasetID: ids["task-plain"].DatasetID, Frequency: "1m", Status: store.SeedRunning}},
+	}}
+	service := &Service{persistence: db, taskRepo: db.Tasks(), klineOps: ops}
+	rsp, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockus", Page: &commonpb.Page{Page: 1, Size: 10}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "stockus", ops.skipArgs[0])
+	require.False(t, ops.onlyOpen, "要已结束的记录，才知道结束时刻")
+	byTask := map[string]*pb.TaskResultInventoryEntry{}
+	for _, entry := range rsp.GetEntries() {
+		byTask[entry.GetTaskId()] = entry
+	}
+	require.True(t, byTask["task-seeding"].GetHistorySeeding(), "拼作业也算补齐中")
+	require.Zero(t, byTask["task-seeding"].GetHistorySeedFinishedAt())
+	require.False(t, byTask["task-seeded"].GetHistorySeeding())
+	require.Equal(t, finished.UnixMilli(), byTask["task-seeded"].GetHistorySeedFinishedAt())
+	require.False(t, byTask["task-plain"].GetHistorySeeding(), "频率不同的补齐记录不算")
+	require.Zero(t, byTask["task-plain"].GetHistorySeedFinishedAt())
+
+	failing := &Service{persistence: db, taskRepo: db.Tasks(), klineOps: &failingSeedOps{}}
+	rsp, err = failing.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "stockus", Page: &commonpb.Page{Page: 1, Size: 10}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetEntries(), 3)
+	for _, entry := range rsp.GetEntries() {
+		require.False(t, entry.GetHistorySeeding())
+	}
+}
+
+type failingSeedOps struct{ KlineOps }
+
+func (failingSeedOps) SeedViews(context.Context, string, bool) ([]klinecheck.SeedView, error) {
+	return nil, fmt.Errorf("库暂时不可用")
 }

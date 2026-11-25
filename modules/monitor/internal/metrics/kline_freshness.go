@@ -51,6 +51,9 @@ type KlineFreshnessRule struct {
 	LatestCompletedStatus string
 	ViewLastDataTime      time.Time
 	InventoryObservedAt   time.Time
+	// HistorySeeding、HistorySeedFinishedAt 是结果数据集的历史补齐状态（补齐中、补齐结束时刻），来自 Collector 清单。
+	HistorySeeding        bool
+	HistorySeedFinishedAt time.Time
 }
 
 type KlineFreshnessReport struct {
@@ -539,6 +542,7 @@ func inventoryRule(entry TaskResultInventoryEntry, enabled bool, policy report.R
 		ResultStatus: entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
 		LatestCompletedStatus: entry.LatestCompletedStatus, ViewLastDataTime: entry.ViewLastDataTime,
 		InventoryObservedAt: entry.ObservedAt,
+		HistorySeeding:      entry.HistorySeeding, HistorySeedFinishedAt: entry.HistorySeedFinishedAt,
 	}
 }
 
@@ -786,8 +790,26 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 		// 按“无法判定”跳过本轮，已有告警保持，等名单不再截断或有确定结论。
 		report.Skipped, report.Success = true, false
 		report.Reason = "lagging_subjects_truncated"
+	} else if !report.Success && rule.seedingSubjects(now) {
+		// 首次接入的历史补齐中或刚结束：补齐按时间升序写历史行，storage-view 按标的记的最新一根只认本进程见过的写入，
+		// 重启后跟踪表里先出现的标的带着几个月前的时刻、还没补到的标的一根都没有，这里会算成落后、没有数据（11-25 A 股、美股）。
+		// 走到这里时视图整体没有停更（上面按最新一根判过），只是按标的的结论不可信：按通过记，数字留在诊断里。
+		// 采集整体停了照样按整体停更报；实时采集个别标的失败由 Collector 的周期失败标的检查报。
+		report.Success, report.Reason = true, KlineReasonSeedingSubjectsCatchingUp
 	}
 	report.Diagnostic = formatKlineDiagnostic(*report)
+}
+
+// KlineReasonSeedingSubjectsCatchingUp 是结果数据集在历史补齐中或刚补齐、视图整体按时更新、按标的看有落后或缺失时的结果（按通过记）。
+const KlineReasonSeedingSubjectsCatchingUp = "history_seeding_subjects_catching_up"
+
+// seedingSubjectGrace 是补齐结束后仍不按标的判落后的时长：最后一批历史行要等 View 处理完，按标的的最新一根才齐
+// （11-25 A 股补齐 09:45 结束，09:46 按标的的告警消失）。
+const seedingSubjectGrace = 30 * time.Minute
+
+// seedingSubjects 报告结果数据集此刻是否在历史补齐中或刚补齐（Collector 清单给出，见 TaskResultInventoryEntry）。
+func (r KlineFreshnessRule) seedingSubjects(now time.Time) bool {
+	return r.HistorySeeding || (!r.HistorySeedFinishedAt.IsZero() && now.Sub(r.HistorySeedFinishedAt) <= seedingSubjectGrace)
 }
 
 // pendingNewSubjects 从 report 的缺失数里扣掉仍在宽限期内的新上线对象，返回扣掉的个数。

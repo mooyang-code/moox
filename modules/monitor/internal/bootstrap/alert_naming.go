@@ -95,6 +95,15 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 		}
 		return fmt.Sprintf("首次接入的历史补齐中或刚补齐：结果视图在追补齐写入的历史行，%s；采集已完成到 %s 这一期，按时，不告警",
 			view, alerttext.Time(report.Rule.LatestCompletedPeriod))
+	case monmetrics.KlineReasonSeedingSubjectsCatchingUp:
+		var counts []string
+		if lagging := report.StaleCount - report.MissingCount; lagging > 0 {
+			counts = append(counts, fmt.Sprintf("%d 个落后", lagging))
+		}
+		if report.MissingCount > 0 {
+			counts = append(counts, fmt.Sprintf("%d 个没有数据", report.MissingCount))
+		}
+		return "首次接入的历史补齐中或刚补齐：补齐按时间先后写历史行，按对象统计的" + strings.Join(counts, "、") + "是补齐过程中的假象；结果视图整体按时更新，不告警"
 	case "view_behind_latest_completed_period":
 		if report.OldestDataTime.IsZero() {
 			return fmt.Sprintf("采集已完成到 %s 这一期，但还没有看到该结果的数据（这一根已过收线 %s）",

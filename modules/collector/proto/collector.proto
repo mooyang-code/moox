@@ -101,6 +101,11 @@ message TaskResultInventoryEntry {
   string result_status = 16; // ready/pending/error
   // allowed_lateness_seconds 是该结果数据集周期的允许迟到时间；Monitor 据此判断新鲜度。
   int32 allowed_lateness_seconds = 28;
+  // history_seeding 为真表示结果数据集（这个频率）在首次接入的历史补齐中；history_seed_finished_at 是补齐结束
+  // （done、skipped、failed）的时刻，Unix 毫秒，没有补齐记录或还在补齐时为 0。补齐按时间升序写历史行，
+  // Monitor 据此在补齐中与刚结束时不按标的报“没有数据、落后”。
+  bool history_seeding = 29;
+  int64 history_seed_finished_at = 30;
 }
 
 message GetTaskResultInventoryReq {
