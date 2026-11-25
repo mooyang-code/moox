@@ -283,6 +283,8 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 			}
 		}
 	}
+	// 每个目标都要收尾（一个目标收尾失败不能让归档目标漏发结束通知，否则导入运行要等空闲超时才结束），错误合并返回。
+	var finishErrs []error
 	for _, target := range targets {
 		if fin, ok := target.(Finisher); ok {
 			err := fin.Finish(ctx)
@@ -290,10 +292,13 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 				summary.Archive = reporter.ArchiveRun()
 			}
 			if err != nil {
-				summary.Status = "failed"
-				return summary, fmt.Errorf("目标 %s 收尾：%w", target.Name(), err)
+				finishErrs = append(finishErrs, fmt.Errorf("目标 %s 收尾：%w", target.Name(), err))
 			}
 		}
+	}
+	if len(finishErrs) > 0 {
+		summary.Status = "failed"
+		return summary, errors.Join(finishErrs...)
 	}
 	return summary, nil
 }
