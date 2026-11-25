@@ -89,16 +89,16 @@ func (s *ConsoleServer) ListDelists(ctx context.Context, req *tradepb.ListDelist
 	for _, view := range views {
 		delist := &tradepb.Delist{
 			DelistId: view.DelistID, Exchange: view.Exchange, MarketType: view.MarketType,
-			ExchangeSymbol: view.ExchangeSymbol, Scope: view.Scope, DelistAtMs: view.DelistAt,
+			ExchangeSymbol: view.ExchangeSymbol, Scope: view.Scope, DelistAt: view.DelistAt,
 			NoticeSource: view.Source, SourceEventId: view.SourceEventID, Status: view.Status, PlannedRound: int32(view.PlannedRound),
-			Note: view.Note, Result: view.Result, CreatedAtMs: view.CreatedAt, FinishedAtMs: view.FinishedAt,
+			Note: view.Note, Result: view.Result, CreatedAt: view.CreatedAt, FinishedAt: view.FinishedAt,
 			Flattens: make([]*tradepb.DelistFlatten, 0, len(view.Flattens)),
 		}
 		for _, flatten := range view.Flattens {
 			delist.Flattens = append(delist.Flattens, &tradepb.DelistFlatten{
 				Round: int32(flatten.Round), SpaceId: flatten.SpaceID, LogicalAccountId: flatten.LogicalAccountID,
 				ActionId: flatten.ActionID, ActionStatus: flatten.ActionStatus, LastError: flatten.LastError,
-				CreatedAtMs: flatten.CreatedAt,
+				CreatedAt: flatten.CreatedAt,
 			})
 		}
 		rsp.Delists = append(rsp.Delists, delist)

@@ -41,7 +41,7 @@
           </a-table-column>
           <a-table-column title="下架时间" :width="170">
             <template #cell="{ record }">
-              <span class="tx-nowrap"><TimeText :value="record.delist_at_ms" zone="UTC" /></span>
+              <span class="tx-nowrap"><TimeText :value="record.delist_at" zone="UTC" /></span>
             </template>
           </a-table-column>
           <a-table-column title="状态" :width="200">

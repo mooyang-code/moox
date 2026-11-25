@@ -188,7 +188,7 @@ const summaryTitle = computed(() => {
   if (!value) return "";
   const exchange = DELIST_EXCHANGES.find(item => item.value === value.exchange)?.label ?? value.exchange;
   const market = DELIST_MARKETS.find(item => item.value === value.market)?.label ?? value.market;
-  return `${exchange} ${market} ${value.exchange_symbol}，下架时间 ${formatInstant(value.delist_at_ms, "UTC")}`;
+  return `${exchange} ${market} ${value.exchange_symbol}，下架时间 ${formatInstant(value.delist_at, "UTC")}`;
 });
 
 const holderKey = (holder: InstrumentHolder) => `${holder.space_id}/${holder.logical_account_id}/${holder.trading_account_id}`;
@@ -259,7 +259,7 @@ async function submit() {
       exchange: value.exchange,
       market: value.market,
       exchange_symbol: value.exchange_symbol,
-      delist_at_ms: value.delist_at_ms,
+      delist_at: value.delist_at,
       paper_only: value.paper_only
     });
     Message.success(result.created ? "已登记，稍后可以在下架处理记录里看到进度" : "这条下架之前已经登记过");

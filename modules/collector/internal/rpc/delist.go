@@ -30,9 +30,9 @@ func (s *Service) RegisterDelistNotice(ctx context.Context, req *pb.RegisterDeli
 	}
 	notice := delist.Notice{
 		Exchange: strings.TrimSpace(req.GetExchange()), Market: strings.TrimSpace(req.GetMarket()), Symbol: strings.ToUpper(strings.TrimSpace(req.GetExchangeSymbol())),
-		DelistAt: time.UnixMilli(req.GetDelistAtMs()).UTC(), Source: events.DelistSourceManual, Scope: scope,
+		DelistAt: time.UnixMilli(req.GetDelistAt()).UTC(), Source: events.DelistSourceManual, Scope: scope,
 	}
-	if req.GetDelistAtMs() <= 0 {
+	if req.GetDelistAt() <= 0 {
 		return &pb.RegisterDelistNoticeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "下架时间不能为空")}, nil
 	}
 	if err := notice.Validate(); err != nil {

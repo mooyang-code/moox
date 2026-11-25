@@ -103,7 +103,7 @@ describe("手工登记下架对话框", () => {
       exchange: "binance",
       market: "spot",
       exchange_symbol: "FOOUSDT",
-      delist_at_ms: FUTURE,
+      delist_at: String(FUTURE),
       paper_only: true
     });
   });

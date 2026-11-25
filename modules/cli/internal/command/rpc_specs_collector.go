@@ -33,7 +33,7 @@ func init() {
 		rpcSpec{Path: []string{"collector", "subjects", "listers"}, Short: "列出可用的标的来源（交易所列表器）", Service: collectMgr, Method: "ListSubjectListers", NoSpace: true},
 		rpcSpec{Path: []string{"collector", "delist", "register"}, Destructive: true, Short: "手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，Trade 随即禁止买入，到 T−24h 自动卖出策略持有的仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only）", Service: collectMgr, Method: "RegisterDelistNotice",
 			Flags: []rpcFlag{reqFlag("exchange", "exchange", "交易所，小写：binance、okx"), reqFlag("market", "market", "市场：spot 现货、swap 永续"), reqFlag("symbol", "exchange_symbol", "交易所代码，如 FOOUSDT、FOO-USDT-SWAP"),
-				{Name: "delist-at-ms", Field: "delist_at_ms", Kind: rpcInt, Usage: "下架时间（Unix 毫秒）", Required: true}, boolFlag("paper-only", "paper_only", "仅模拟盘：只处理模拟盘组合，用于演练")}},
+				instantFlag("delist-at", "delist_at", "下架时刻（RFC3339，如 2026-12-10T08:00:00Z）", true), boolFlag("paper-only", "paper_only", "仅模拟盘：只处理模拟盘组合，用于演练")}},
 		rpcSpec{Path: []string{"collector", "account", "list"}, Short: "列出云账号（不含密钥明文）", Service: collectMgr, Method: "ListCloudAccounts", NoSpace: true},
 		rpcSpec{Path: []string{"collector", "account", "regions"}, Short: "列出腾讯云函数可用的地域", Service: collectMgr, Method: "ListCloudRegions", NoSpace: true},
 		rpcSpec{Path: []string{"collector", "account", "delete"}, Destructive: true, NoSpace: true, Service: collectMgr, Method: "DeleteCloudAccount",

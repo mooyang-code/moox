@@ -54,7 +54,7 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	got := delists.GetDelists()[0]
 	require.Equal(t, intake.DelistID, got.GetDelistId())
 	require.Equal(t, "spot", got.GetMarketType())
-	require.Equal(t, delistAt.UnixMilli(), got.GetDelistAtMs())
+	require.Equal(t, delistAt.UnixMilli(), got.GetDelistAt())
 	require.Equal(t, store.DelistActive, got.GetStatus())
 	require.Equal(t, "evt-1", got.GetSourceEventId())
 

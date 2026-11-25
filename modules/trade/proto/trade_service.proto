@@ -1072,7 +1072,8 @@ message DelistFlatten {
   // 动作状态：RUNNING、COMPLETED、PARTIAL、FAILED；空表示还没发起
   string action_status = 5;
   string last_error = 6;
-  int64 created_at_ms = 7;
+  // 毫秒
+  int64 created_at = 7;
 }
 // 一条下架记录：一个（标的、范围、下架时间）。改期时旧记录记 RESCHEDULED，由新记录接着处理。
 message Delist {
@@ -1082,7 +1083,8 @@ message Delist {
   string exchange_symbol = 4;
   // ALL 或 PAPER_ONLY
   string scope = 5;
-  int64 delist_at_ms = 6;
+  // 下架时刻，毫秒
+  int64 delist_at = 6;
   // 下架消息的来源：BINANCE_SPOT_SCHEDULE、BINANCE_SWAP_EXCHANGE_INFO、OKX_SWAP_INSTRUMENTS、MANUAL
   string notice_source = 7;
   string source_event_id = 8;
@@ -1092,8 +1094,9 @@ message Delist {
   int32 planned_round = 10;
   string note = 11;
   string result = 12;
-  int64 created_at_ms = 13;
-  int64 finished_at_ms = 14;
+  // 毫秒；finished_at 为 0 表示还没结束
+  int64 created_at = 13;
+  int64 finished_at = 14;
   repeated DelistFlatten flattens = 15;
 }
 // 列出下架记录。全局方法，不分空间，Trade 不检查空间头。
