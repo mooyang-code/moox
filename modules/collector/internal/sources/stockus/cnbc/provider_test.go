@@ -209,13 +209,24 @@ func TestFetchKlinesLatestAndWindows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, barsPath+"/AAPL/1M/20261123000000/20261123161800/unadjusted/EST5EDT.json", server.paths[0])
 
+	// 历史补齐的合并分块（约 20 个自然日）一次请求取完：限速配置的超时管整次取数，分窗多一段就多一个来回。
 	server.paths = nil
-	rows, err = provider.FetchKlines(context.Background(), request(utc(t, "2026-11-14T05:00:00Z"), utc(t, "2026-11-24T05:00:00Z")))
+	block := request(utc(t, "2026-11-04T05:00:00Z"), utc(t, "2026-11-24T05:00:00Z"))
+	block.Limit = 1000
+	rows, err = provider.FetchKlines(context.Background(), block)
 	require.NoError(t, err)
 	require.Len(t, rows, 78)
-	require.Len(t, server.paths, 2, "10 天分两段")
-	require.Equal(t, barsPath+"/AAPL/1M/20261114000000/20261118235900/unadjusted/EST5EDT.json", server.paths[0])
-	require.Equal(t, barsPath+"/AAPL/1M/20261119000000/20261123205900/unadjusted/EST5EDT.json", server.paths[1], "终点不超过 now")
+	require.Equal(t, []string{barsPath + "/AAPL/1M/20261104000000/20261123205900/unadjusted/EST5EDT.json"}, server.paths, "20 天一次请求，终点不超过 now")
+
+	// 超过 31 天才分段。
+	server.paths = nil
+	rows, err = provider.FetchKlines(context.Background(), request(utc(t, "2026-10-15T04:00:00Z"), utc(t, "2026-11-24T05:00:00Z")))
+	require.NoError(t, err)
+	require.Len(t, rows, 78)
+	require.Equal(t, []string{
+		barsPath + "/AAPL/1M/20261015000000/20261114225900/unadjusted/EST5EDT.json",
+		barsPath + "/AAPL/1M/20261114230000/20261123205900/unadjusted/EST5EDT.json",
+	}, server.paths)
 }
 
 func TestFetchKlinesErrors(t *testing.T) {

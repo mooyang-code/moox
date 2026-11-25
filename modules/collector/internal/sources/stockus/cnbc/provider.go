@@ -53,15 +53,22 @@ const (
 
 	// maxLookback 是 1M 的回看能力：2026-11-24 实测 2025-12-24 仍有、2025-11-24 已没有，按自然时长留余量声明 300 天。
 	maxLookback = 300 * 24 * time.Hour
-	// maxWindow 是一次请求覆盖的最长时长：多天区间会带上盘前盘后（每天约 960 根 1M），超过就分几次请求。
-	maxWindow = 5 * 24 * time.Hour
+	// maxWindow 是一次请求覆盖的最长时长，超过就分几次请求。限速配置的 request_timeout 管的是整次 FetchKlines
+	// （FeedGuard 包在外面），分几次请求就要在同一个超时里跑几个来回，所以窗口要装下历史补齐的一整块：
+	// 跨交易日合并的分块至多 1000 根 5m（约 13 个交易日、最长约 21 个自然日），31 天一次取完。
+	// 2026-11-25 从控制机实测：20、30 天窗口一次返回全部 1M（含盘前盘后，AAPL 20 天 1.2 万行、解压后 1.9MB、传输 27 万字节），
+	// 单次 2.7～6.2 秒；5 天窗口单次 1.1～3.3 秒，按 5 天分窗时一块要 4 个来回。
+	maxWindow = 31 * 24 * time.Hour
 	// latestWindow 是不带区间时（取最近若干根）回看的时长，覆盖周末加一个休市日。
 	latestWindow = 5 * 24 * time.Hour
-	// maxBarsPerRequest 是一次请求最多合成的 5m 根数：补采的分块最多是一只标的的一天（78 根）。
+	// maxBarsPerRequest 是声明给行情源目录的一次最多根数（一只标的一个交易日 78 根），只用于能力声明；
+	// 历史补齐的合并分块更长，由 maxWindow 一次取完。
 	maxBarsPerRequest = 78
-	// httpTimeout 是 HTTP 客户端的超时上限；单次请求实际的超时是限速配置里的 request_timeout，随请求的 ctx 生效。
+	// defaultRequestTimeout 与 config/markets/stockus/sources/cnbc.yaml 的 request_timeout 一致，说明见那里。
+	defaultRequestTimeout = 15 * time.Second
+	// httpTimeout 是 HTTP 客户端的超时上限；实际的超时是限速配置里的 request_timeout，随请求的 ctx 生效。
 	httpTimeout = 30 * time.Second
-	// maxBody 是单次响应的读取上限：5 天的 1M 约 2 万行、约 3MB。
+	// maxBody 是单次响应的读取上限（解压后）：31 天的 1M 每天至多 960 行，约 2.2 万行、约 3.3MB。
 	maxBody = 8 << 20
 )
 
@@ -104,7 +111,7 @@ func New(cfg Config) *Provider {
 		cfg.Now = time.Now
 	}
 	if cfg.RateLimit.RequestsPerSecond <= 0 {
-		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: 3 * time.Second}
+		cfg.RateLimit = marketdata.RateLimitPolicy{RequestsPerSecond: 50, Burst: 20, MaxConcurrent: 16, Cooldown: time.Second, RequestTimeout: defaultRequestTimeout}
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: httpTimeout}
