@@ -49,9 +49,11 @@ type PlanOptions struct {
 	// Markets 是每个市场类型使用的地域白名单（市场类型小写，如 spot、swap）。
 	Markets map[string][]string
 	// BackfillRegion 是补采函数所在的地域；为空时用各市场白名单中的第一个地域。
-	BackfillRegion     string
-	SymbolsPerFunction int
-	Fetch              marketfetch.PlanFetch
+	BackfillRegion string
+	// BackfillReservedConcurrency 是补采函数的最大并发实例数，0 用默认值 5（DefaultBackfillReservedConcurrency）。
+	BackfillReservedConcurrency int
+	SymbolsPerFunction          int
+	Fetch                       marketfetch.PlanFetch
 	// MarketFetch 是按市场类型（小写）覆盖的拉取参数，没有的市场用 Fetch。
 	MarketFetch map[string]marketfetch.PlanFetch
 	// DefaultLatenessS 是任务没有指定允许迟到时间时的空间默认值；MarketLatenessS 按市场类型覆盖（拉取模式）。

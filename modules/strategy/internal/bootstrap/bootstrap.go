@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/paramsubmit"
 	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
+	"github.com/mooyang-code/moox/modules/strategy/internal/seeding"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
@@ -110,6 +111,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, err
 	}
 	observer.SetStaleAlertPeriods(cfg.Params.StaleAlertPeriods)
+	// 首次历史补齐：每分钟向 Collector 取一次补齐中的数据集，补齐中的实例不求值、期望置“暂停（历史补齐中）”。
+	seedingTracker := seeding.New(seeding.GatewayLister{Gateway: gateway, Timeout: seedingListTimeout}, log.Warnf)
+	observer.SetSeeding(seedingTracker.Bound)
 
 	// 进程在预热中途重启：会话里还没有预热结果的池实例重新开始预热（带着沿用状态的从状态之后接着推进，否则从头；先于开始消费事件，门禁立刻拦住它们的事件）。
 	if err := warm.Resume(ctx); err != nil {
@@ -134,7 +138,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, ready, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure, Seeding: seedingTracker.Bound}
 		handlerRef.Store(handler)
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
@@ -159,7 +163,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		loops.Wait()
 		return nil
 	})
-	loops.Add(5)
+	loops.Add(6)
 	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life, ready, warm)), OnResult: observer.ParamSubmitted,
 		OnError: func(requestID string, err error) { log.Warnf("因子参数提交 %s 未完成：%v", requestID, err) }}
 	go func() {
@@ -169,6 +173,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	go func() {
 		defer loops.Done()
 		runner.Run(background)
+	}()
+	go func() {
+		defer loops.Done()
+		seedingTracker.Run(background, seeding.RefreshEvery)
 	}()
 	go func() {
 		defer loops.Done()
@@ -209,6 +217,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	return s, closeFn, nil
 }
+
+// seedingListTimeout 是单次读取历史补齐状态的超时：调不通就沿用上一次的结果。
+const seedingListTimeout = 10 * time.Second
 
 // 私有因子任务的结果 View 由 Storage 异步补齐成员列：启用实例时最多等这么久。
 const (

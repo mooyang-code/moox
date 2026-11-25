@@ -88,6 +88,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], BackfillRegion: cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].BackfillRegion, SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
 			Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
 			DefaultLatenessS: latenessSeconds, MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID),
+			BackfillReservedConcurrency: cfg.SCFPlan.BackfillReservedConcurrency,
 		}
 		// 有路由文件的市场，函数内并发等 fetch 参数由各源的限速配置推导，不在计划配置里手填；没有路由文件的市场保持配置值。
 		options.DeriveFetch = fetchplan.RouteFetchLimits(spaceID)
@@ -137,6 +138,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		},
 		Executor: backfillExecutor(dbm.Tasks(), markets.DefaultIngest),
 		Local:    &fetchplan.LocalExecutorClient{Gateway: process.gateway},
+		Seed:     historySeedOptions(cfg, source, reconcilers),
 		// 收市后整天重取：时刻取各市场 market.yaml 的 refetch_after_close_minutes，没配的市场不做。
 		CloseRefetch: markets.CloseRefetchDay, RefetchFrequency: routedFrequency,
 	}
@@ -216,6 +218,10 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			// 先提交收市后的整天重取（只在“收市 + 延迟”的那一轮有事可做），紧接着的 Tick 就能认领它的分块；失败不挡住补采推进。
 			if err := backfiller.RefetchAfterClose(ctx, spaceID); err != nil {
 				log.WarnContextf(ctx, "collector close refetch failed space=%s: %v", spaceID, err)
+			}
+			// 新数据集的历史补齐：建记录、拼作业放在 Tick 之前，这一轮就能认领它的分块。
+			if err := backfiller.SeedTick(ctx, spaceID); err != nil {
+				log.WarnContextf(ctx, "collector history seed failed space=%s: %v", spaceID, err)
 			}
 			if err := backfiller.Tick(ctx, spaceID); err != nil {
 				return err

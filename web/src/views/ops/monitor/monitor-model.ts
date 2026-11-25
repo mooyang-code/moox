@@ -608,6 +608,11 @@ export interface StageSummary {
   rows: DatasetRow[];
 }
 
+/** 数据集因上游历史补齐被暂停：后端给 disabled 加“待生效”开头的原因，显示为中性的“待生效”，不是异常，也不是人为停用。 */
+function datasetStatusText(item: HealthDataset): string {
+  return item.status === "disabled" && (item.reason || "").startsWith("待生效") ? "待生效" : statusLabel(item.status);
+}
+
 function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): DatasetRow {
   const id = item.dataset_id || "";
   const cls = classify(item.status);
@@ -629,7 +634,7 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
     delayTitle: delay.title,
     limit: limit ? humanizeDuration(limit) : "—",
     tone: cls.tone,
-    status: statusLabel(item.status),
+    status: datasetStatusText(item),
     reason: item.reason || "",
     attention: cls.attention,
     ratio: delay.ratio

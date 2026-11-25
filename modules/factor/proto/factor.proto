@@ -742,6 +742,8 @@ message EngineTask {
   FactorTask factor_task = 1;
   repeated EngineMember members = 2;
   bool result_ready = 3;
+  // source_seeding 为真表示源数据集正在首次接入的历史补齐：任务照常预载，但不计算、不出结果。
+  bool source_seeding = 4;
 }
 
 message SyncEngineCatalogReq {

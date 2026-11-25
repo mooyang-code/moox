@@ -49,6 +49,7 @@
 | `collector function upload` | 构建（或使用现成的）SCF 代码包并只上传，不创建函数 |
 | `collector ingest-mode get` | 查看各 K 线任务的采集方式、交接中的生效周期与 collector-stream 实例状态 |
 | `collector ingest-mode set` | 切换采集方式（按生效周期交接；不带 --dataset-id 表示空间全部 K 线任务） |
+| `collector history-seed skip` | 不等首次接入的历史补齐了，立即放行下游：取消剩余分块、状态记已手动放行，已补进去的数据保留（`--dataset-id` 留空表示空间内全部补齐中的数据集） |
 | `collector kline absences-clear` | 清掉数据集已确认的“行情源缺失”（行情源后来补上数据时），之后的检查与补采重新判断这些 K 线 |
 | `collector kline backfill` | 补采缺失的 K 线（默认补检查出的缺口，--force 强制重拉整个范围） |
 | `collector kline backfill-cancel` | 取消补采作业（运行中的分块等其结束） |
@@ -61,7 +62,7 @@
 | `collector resample cancel` | 取消排队或运行中的历史合成作业（已写入的保留） |
 | `collector resample jobs` | 查看历史合成作业；带 --job-id 查看单个作业，否则按任务、状态列出最近的作业 |
 | `collector resample preview` | 预览合成的源任务与目标频率是否可行 |
-| `collector status` | 查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总 |
+| `collector status` | 查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总、首次接入的历史补齐进度 |
 | `collector delist register` | 手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，Trade 随即禁止买入，到 T−24h 自动卖出策略持有的仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only） |
 | `collector subjects exclude` | 把标的从采集计划里临时去掉（交易所公告下架、数据异常等） |
 | `collector subjects exclusions` | 列出空间当前生效的排除（设置人、原因、设置与到期时间） |

@@ -145,7 +145,10 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
 	}
 	runtime.klineFreshness = klineFreshness
+	// 两个 Builder 共用一份“历史补齐空间”记忆：补齐中与结束后 24 小时内 storage-view 的“View 跟随数据变更落后”不告警。
+	seedingMemory := &monitorobservability.SeedingMemory{}
 	factsBuilder := &monitorobservability.Builder{
+		Seeding: seedingMemory,
 		Metrics: metricsQuery, Hosts: hostStore,
 		Topology:  runtime.Repositories.Topology,
 		Policy:    doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
@@ -172,7 +175,7 @@ func Initialize(ctx context.Context, s *server.Server, configPath string) (*serv
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata)}, Checks: runtime.Repositories.Checks, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Topology: runtime.Repositories.Topology, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, Inventory: inventorySource(klineInventory), Datasets: archivableDatasets(storageMetadata), Seeding: seedingMemory}, Checks: runtime.Repositories.Checks, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
 	registerMonitorService(s, cfg, runtime, hostStore, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {

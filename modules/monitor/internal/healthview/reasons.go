@@ -54,6 +54,8 @@ func ChineseReason(raw string) string {
 		return "最近成功结果已过期"
 	case "warming":
 		return "数据积累中，结果暂不完整"
+	case "history_seeding":
+		return "待生效（上游历史补齐中）"
 	case "inventory_stale":
 		return "资源清单已过期"
 	case "check failed":

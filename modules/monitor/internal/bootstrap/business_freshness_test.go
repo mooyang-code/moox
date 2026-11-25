@@ -814,3 +814,22 @@ func TestRuntimeObservationStateFollowsIngestAndGrace(t *testing.T) {
 	r.setObservabilityIngestState(false, errors.New("lost"))
 	require.True(t, r.observationState(true, time.Now().Add(time.Hour)).Suspended, "断开之后重新进入冻结")
 }
+
+// 策略实例因上游历史补齐暂停（enabled=-1）：不生成数据集新鲜度检查；原来在告警的检查本轮没有事实，按“不再检查”删除并推恢复。
+func TestBusinessFreshnessReporterSkipsDatasetCheckWhileSeeding(t *testing.T) {
+	manager, repositories := openBusinessStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	labels := `{"dataset_id":"strategy_seed","freq":"5m","space_id":"stockus"}`
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		seedSeries(t, db, "strategy", "strategy@node-a", "enabled-seed", "moox_strategy_dataset_enabled", labels, -1, now)
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+	checkID := "dataset:strategy:strategy_seed:5m"
+	seedCheckRow(t, repositories, "stockus", checkID, true)
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Topology: repositories.Topology, Now: func() time.Time { return now },
+	}, repositories)
+	require.NoError(t, run(t.Context()))
+	requireRemovedWithRecovery(t, repositories, "stockus", checkID)
+}

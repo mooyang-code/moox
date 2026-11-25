@@ -40,9 +40,11 @@ type Hub struct {
 	engineTTL time.Duration
 	now       func() time.Time
 
-	mu     sync.Mutex
-	ready  map[string]bool
-	engine *engineState
+	mu    sync.Mutex
+	ready map[string]bool
+	// seeding 是正在历史补齐的（空间、数据集、频率）：任务的源数据集在里面，目录快照里该任务的 SourceSeeding 为真。
+	seeding map[seedKey]bool
+	engine  *engineState
 	// onHeartbeat 在每次心跳被接受后调用（锁外）：因子管理服务据此立刻刷新因子数据集指标并补报。
 	onHeartbeat func()
 	// heartbeats 保存最近一次心跳（离线告警用），persisted 是最近一次落库的内容。
@@ -104,6 +106,26 @@ func (h *Hub) SetResultReady(taskID string, ready bool) {
 	h.mu.Lock()
 	h.ready[taskID] = ready
 	h.mu.Unlock()
+}
+
+type seedKey struct{ space, dataset, freq string }
+
+// SetHistorySeeds 设置正在历史补齐的（空间、数据集、频率），整体替换；目录快照据此给任务标 SourceSeeding。
+func (h *Hub) SetHistorySeeds(keys []store.SeedKey) {
+	next := make(map[seedKey]bool, len(keys))
+	for _, key := range keys {
+		next[seedKey{key.SpaceID, key.DatasetID, key.Freq}] = true
+	}
+	h.mu.Lock()
+	h.seeding = next
+	h.mu.Unlock()
+}
+
+// sourceSeeding 报告任务的源数据集是否在历史补齐中。
+func (h *Hub) sourceSeeding(set domain.FactorTask) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.seeding[seedKey{set.SpaceID, set.SourceDatasetID, set.Freq}]
 }
 
 // Engine returns the manager's view of the lease holder and its last status.

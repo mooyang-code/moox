@@ -205,6 +205,27 @@ CREATE TABLE IF NOT EXISTS t_collector_source_absences (
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from)
 );
 
+-- 数据集首次接入时的历史补齐：补齐期间读这个数据集的因子不计算、策略不求值。
+-- c_status 取 preparing（还在拼作业）、running、done、skipped（用户手动放行）；c_job_ids 是补齐作业的 ID（JSON 数组）。
+CREATE TABLE IF NOT EXISTS t_collector_history_seeds (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_target_from DATETIME NOT NULL,
+    c_effective_from DATETIME NOT NULL,
+    c_job_ids TEXT NOT NULL DEFAULT '[]',
+    c_retried INTEGER NOT NULL DEFAULT 0,
+    c_note TEXT NOT NULL DEFAULT '',
+    c_started_at DATETIME NOT NULL,
+    c_finished_at DATETIME,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('preparing', 'running', 'done', 'skipped')),
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_history_seeds_status ON t_collector_history_seeds (c_status);
+
 -- 自动补采的扫描水位：已扫描到哪个时间点。
 CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (
     c_space_id TEXT NOT NULL,

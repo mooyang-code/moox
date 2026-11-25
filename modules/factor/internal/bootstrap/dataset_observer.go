@@ -126,7 +126,12 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		}
 		key := report.DatasetKey{SpaceID: set.Set.SpaceID, DatasetID: set.Set.ResultDatasetID, Freq: set.Set.Freq}
 		keys[set.Set.TaskID] = key
-		expected = append(expected, report.DatasetExpectation{Key: key, Interval: interval, Paused: paused[set.Set.TaskID]})
+		// 源数据集在历史补齐中的任务不出结果：当作暂停处理，结果数据集置“暂停”期望并带原因 history_seeding，Monitor 不做新鲜度告警、页面显示“待生效”。
+		item := report.DatasetExpectation{Key: key, Interval: interval, Paused: paused[set.Set.TaskID]}
+		if set.SourceSeeding {
+			item.Paused, item.PauseReason = true, report.PauseHistorySeeding
+		}
+		expected = append(expected, item)
 	}
 	if err := o.metrics.ReplaceExpected(expected); err != nil {
 		return fmt.Errorf("replace expected factor datasets: %w", err)

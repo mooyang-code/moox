@@ -17,6 +17,8 @@ import {
   fullTime,
   relativeTime,
   scopeOverviewToSpace,
+  seedSummary,
+  seedSummaryText,
   statusLine,
   strategyRows,
   systemStage,
@@ -727,5 +729,27 @@ describe("状态图标", () => {
       "icon-close-circle-fill",
       "icon-minus-circle-fill"
     ]);
+  });
+});
+
+describe("seedSummary", () => {
+  it("没有补齐中的记录时不显示", () => {
+    expect(seedSummary(undefined)).toBeUndefined();
+    expect(seedSummary([{ status: "done", done_chunks: 3, total_chunks: 3 }, { status: "skipped" }])).toBeUndefined();
+  });
+
+  it("只汇总补齐中的记录，取最长的预计剩余", () => {
+    const summary = seedSummary([
+      { dataset_id: "a", status: "running", done_chunks: 2, total_chunks: 10, eta_seconds: 600 },
+      { dataset_id: "b", status: "running", done_chunks: 1, total_chunks: 5, eta_seconds: 7200 },
+      { dataset_id: "c", status: "done", done_chunks: 9, total_chunks: 9 }
+    ]);
+    expect(summary).toEqual({ datasets: 2, doneChunks: 3, totalChunks: 15, etaText: "约 2 小时" });
+    expect(seedSummaryText(summary!)).toBe("2 个数据集 · 已完成 3/15 分块 · 预计剩余约 2 小时");
+  });
+
+  it("都不能估计时写估算中", () => {
+    const summary = seedSummary([{ status: "running", done_chunks: 0, total_chunks: 4, eta_seconds: 0 }]);
+    expect(seedSummaryText(summary!)).toBe("1 个数据集 · 已完成 0/4 分块 · 预计剩余估算中");
   });
 });

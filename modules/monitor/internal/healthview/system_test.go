@@ -163,3 +163,19 @@ func TestProjectSystemResumingAndCaughtUp(t *testing.T) {
 	require.Equal(t, caught.ResumingModules, caught.CaughtUpModules)
 	require.Equal(t, []string{"因子引擎：已追平，待放行"}, caught.CatchupNotes)
 }
+
+// 待生效（上游历史补齐中）的数据集：状态 disabled、原因翻成中文，不计入需关注。
+func TestProjectDatasetHistorySeedingIsPendingNotAttention(t *testing.T) {
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	facts := observability.Overview{GeneratedAt: now, Datasets: []observability.DatasetFrequencyStatus{{
+		Producer: "strategy", SpaceID: "stockus", DatasetID: "inst_a", Freq: "5m", DisplayName: "均线（a）",
+		Status: "disabled", Reason: observability.DatasetReasonHistorySeeding, LastReportedAt: now,
+	}}}
+	dataset := projectDataset(facts.Datasets[0])
+	require.Equal(t, "待生效（上游历史补齐中）", dataset.Reason)
+	require.Equal(t, "disabled", string(dataset.Status))
+	require.Empty(t, dataset.RawError)
+	summary := &pb.HealthSummary{}
+	countSummary(summary, string(dataset.Status))
+	require.Zero(t, summary.AttentionCount)
+}

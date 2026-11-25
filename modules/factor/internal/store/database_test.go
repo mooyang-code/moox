@@ -17,7 +17,7 @@ func TestOpenCreatesFactorSchema(t *testing.T) {
 	require.NoError(t, s.db.Raw(`
 		SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name
 	`).Scan(&tables).Error)
-	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_member_params", "t_factor_recalc_jobs", "t_factor_task_members", "t_factor_tasks", "t_factor_udf_versions", "t_factor_udfs"}, tables)
+	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_history_seeds", "t_factor_member_params", "t_factor_recalc_jobs", "t_factor_task_members", "t_factor_tasks", "t_factor_udf_versions", "t_factor_udfs"}, tables)
 }
 
 // 已有库缺少后来新增的引擎心跳表时，启动时补建，已有数据保留。

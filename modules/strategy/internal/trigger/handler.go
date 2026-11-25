@@ -86,6 +86,9 @@ type Handler struct {
 	// EnsureWarm 非空时，处理器发现策略池实例还没有预热结果、也没人在预热它（例如启用后开始预热的那一步失败了）时调用，
 	// 由它在没有预热任务的情况下补启动一次；没有它，事件会被一直重投直到积满消费者的未确认上限。
 	EnsureWarm func(instanceID, sessionID string)
+	// Seeding 非空时判断实例绑定的主数据集是否在首次历史补齐中：补齐中的这一期不求值、不产生目标，记 skipped(history_seeding)，
+	// 补齐结束后从下一期继续。K 线 View 的就绪事件在补齐期间照常发，只能在这里拦。
+	Seeding func(spaceID string, resolved input.Resolved) bool
 
 	mu       sync.Mutex
 	programs map[string]*runtime
@@ -326,6 +329,9 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			return nil
 		}
 		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
+	}
+	if h.Seeding != nil && h.Seeding(instance.SpaceID, rt.resolved) {
+		return h.commitSkipped(ctx, p, store.SkipHistorySeeding, "上游数据集正在历史补齐，补齐结束后从下一期开始求值")
 	}
 	if rt.resolved.Gathers() || rt.pool != nil {
 		// 更早的期各 View 都已记下、只是还没求值（例如门禁等待期间都被记下，放行后先重投了较晚的一期；策略池预热期间到达的事件）：

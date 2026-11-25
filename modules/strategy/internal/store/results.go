@@ -24,6 +24,8 @@ const (
 	SkipExpired    = "expired"
 	// SkipCatchup 是恢复追赶中记录的周期：只记因子指纹（供下一期的相邻周期检查），不求值、不发目标。
 	SkipCatchup = "catchup"
+	// SkipHistorySeeding 是实例绑定的主数据集正在首次历史补齐：这一期不求值、不产生目标，补齐结束后从下一期继续。
+	SkipHistorySeeding = "history_seeding"
 	// SkipMarketMissing 是绑定两个因子任务的实例里，另一个市场的数据没有到：缺的那个 View 已经到了更晚的一期，或更晚的一期已经汇合求值，
 	// 这一期不会再等到齐。属于数据未到，不计入实例故障。
 	SkipMarketMissing = "market_missing"

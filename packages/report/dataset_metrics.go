@@ -37,7 +37,17 @@ type DatasetExpectation struct {
 	// 暂停项必须随清单一起上报：生产者重启后清单里没有它，Monitor 就看不到“被有意停下”，下游检查会重新告警。
 	// 暂停项不要求 Interval，也不进入 expected。
 	Paused bool
+	// PauseReason 是暂停的原因，只在 Paused 为真时有意义；目前只有 PauseHistorySeeding。为空表示一般暂停。
+	// 它经 enabled 指标的取值传给 Monitor（见 PauseHistorySeeding），不增加指标序列。
+	PauseReason string
 }
+
+// PauseHistorySeeding 是“上游正在历史补齐，本数据集待生效”的暂停原因。暂停项的 enabled 指标：一般暂停为 0，
+// 这个原因为 -1；Monitor 把 enabled 小于等于 0 都当作“不期望产出”，小于 0 时再显示“待生效（上游历史补齐中）”。
+const PauseHistorySeeding = "history_seeding"
+
+// enabledPausedHistorySeeding 是 PauseHistorySeeding 暂停项的 enabled 指标取值。
+const enabledPausedHistorySeeding = -1
 
 type DatasetObservation struct {
 	Key             DatasetKey
@@ -122,7 +132,7 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 	}
 	next := make(map[DatasetKey]time.Duration, len(items))
 	names := make(map[DatasetKey]string, len(items))
-	paused := make(map[DatasetKey]struct{})
+	paused := make(map[DatasetKey]string)
 	for i, item := range items {
 		key, err := canonicalDatasetKey(item.Key)
 		if err != nil {
@@ -135,7 +145,10 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 				m.inventoryRefreshErrors.Inc()
 				return fmt.Errorf("duplicate expected dataset %s/%s/%s", key.SpaceID, key.DatasetID, key.Freq)
 			}
-			paused[key] = struct{}{}
+			paused[key] = item.PauseReason
+			if name := datasetDisplayName(item.Name); name != "" {
+				names[key] = name
+			}
 			continue
 		}
 		if item.Interval <= 0 {
@@ -182,9 +195,13 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 	}
 	// 暂停项在重启后的第一轮清单里也要有 enabled=0 的序列（上面只覆盖进程里已经认识的数据集），
 	// Monitor 靠它知道这是“被有意停下”而不是“不存在”。
-	for key := range paused {
+	for key, reason := range paused {
 		values := datasetLabelValues(key)
-		m.enabled.WithLabelValues(values...).Set(0)
+		enabled := 0.0
+		if reason == PauseHistorySeeding {
+			enabled = enabledPausedHistorySeeding
+		}
+		m.enabled.WithLabelValues(values...).Set(enabled)
 		m.expectedInterval.WithLabelValues(values...).Set(0)
 	}
 	for key, interval := range next {

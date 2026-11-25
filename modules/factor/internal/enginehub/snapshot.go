@@ -33,7 +33,7 @@ func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []d
 			defs = append(defs, member.Def())
 		}
 		sort.Slice(defs, func(i, j int) bool { return defs[i].Key < defs[j].Key })
-		sets = append(sets, domain.EngineTask{Set: set, Members: defs, ResultReady: h.isReady(set.TaskID)})
+		sets = append(sets, domain.EngineTask{Set: set, Members: defs, ResultReady: h.isReady(set.TaskID), SourceSeeding: h.sourceSeeding(set)})
 	}
 	sort.Slice(sets, func(i, j int) bool { return sets[i].Set.TaskID < sets[j].Set.TaskID })
 	hash, err := CatalogHash(sets)
@@ -54,6 +54,7 @@ type hashedSet struct {
 	ResultDatasetID string         `json:"result_dataset_id"`
 	Status          string         `json:"status"`
 	ResultReady     bool           `json:"result_ready"`
+	SourceSeeding   bool           `json:"source_seeding"`
 	Members         []hashedMember `json:"members"`
 }
 
@@ -92,7 +93,7 @@ func CatalogHash(sets []domain.EngineTask) (string, error) {
 			TaskID: set.Set.TaskID, SpaceID: set.Set.SpaceID, SourceDatasetID: set.Set.SourceDatasetID,
 			Freq:            set.Set.Freq,
 			ResultDatasetID: set.Set.ResultDatasetID, Status: set.Set.Status,
-			ResultReady: set.ResultReady, Members: members,
+			ResultReady: set.ResultReady, SourceSeeding: set.SourceSeeding, Members: members,
 		})
 	}
 	raw, err := json.Marshal(hashed)

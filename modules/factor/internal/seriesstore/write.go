@@ -91,9 +91,10 @@ func (s *Store) WriteBatch(ctx context.Context, src Source, writes []SubjectWrit
 			pending = append(pending, PendingSpan{Subject: w.Subject, From: res.Changed.From, To: res.Changed.To, Reason: opts.PendingReason})
 		}
 		// Earliest 前移（补更早的历史）单独触发失效重算（设计 5.3），不受 RecordPending 控制：此前靠历史不足得到空值的结果要重算。
-		// 记录新补入的区间，引擎按因子回看向后扩展受影响的周期。
+		// 待办只记旧的最早一根（From=To）：新补入的区间本来没有结果，补算自己会算；只有旧最早之后的几期回看窗口里
+		// 原来缺历史，引擎在重算时按因子回看从这一根向后扩展出受影响的周期。
 		if !res.PrevEarliest.IsZero() && !res.Earliest.IsZero() && res.Earliest.Before(res.PrevEarliest) {
-			pending = append(pending, PendingSpan{Subject: w.Subject, From: res.Earliest, To: res.PrevEarliest, Reason: "earliest_moved"})
+			pending = append(pending, PendingSpan{Subject: w.Subject, From: res.PrevEarliest, To: res.PrevEarliest, Reason: PendingEarliestMoved})
 		}
 	}
 	if schemaChanged {
