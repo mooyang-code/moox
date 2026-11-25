@@ -37,7 +37,7 @@ func latestBlocked(t *testing.T, f *targetFixture) []store.BlockedTarget {
 func TestRebalanceThresholdSkipsSmallSameSignDifference(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.position(t, "account-a", "BTCUSDT", "97")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusConverged, result.Status)
@@ -52,7 +52,7 @@ func TestRebalanceThresholdSkipsSmallSameSignDifference(t *testing.T) {
 func TestRebalanceThresholdDoesNotSkipSmallOppositePosition(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.position(t, "account-a", "BTCUSDT", "-3")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
@@ -64,7 +64,7 @@ func TestRebalanceThresholdDoesNotSkipMemberHedge(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.position(t, "account-a", "BTCUSDT", "150")
 	f.position(t, "account-b", "BTC-USDT-SWAP", "-48")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1, "合计只差 2%% 也要先平掉反向成员")
@@ -73,7 +73,7 @@ func TestRebalanceThresholdDoesNotSkipMemberHedge(t *testing.T) {
 func TestRebalanceThresholdNeverSkipsFlatten(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.position(t, "account-a", "BTCUSDT", "2")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0"}})
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
@@ -82,7 +82,7 @@ func TestRebalanceThresholdNeverSkipsFlatten(t *testing.T) {
 func TestPlaceRecordsPositionBeforeOfPlacingMember(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.position(t, "account-a", "BTCUSDT", "1")
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "3"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "3"}})
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
@@ -95,7 +95,7 @@ func TestUnreflectedPositionSkipsWholeLane(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.orders.capacities = map[string]shared.Decimal{"account-a": shared.Zero()}
 	f.order(t, filledChild("old-buy", "target-old", "TARGET", "BUY", "0", 1_500))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
 	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusBlocked, result.Status)
@@ -109,7 +109,7 @@ func TestUnreflectedPositionClearsAfterOperatorFill(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.order(t, filledChild("old-buy", "target-old", "TARGET", "BUY", "0", 1_500))
 	f.order(t, filledChild("flatten-sell", "action-1", "OPERATOR", "SELL", "", 1_600))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1, "清仓后恢复重新开仓不能被挡")
@@ -119,7 +119,7 @@ func TestUnreflectedPositionIgnoresReflectedFills(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.position(t, "account-a", "BTCUSDT", "1")
 	f.order(t, filledChild("first-buy", "target-old", "TARGET", "BUY", "0", 1_500))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
@@ -131,7 +131,7 @@ func TestUnreflectedPositionAllowsFlipSellThenSell(t *testing.T) {
 	// 上一个目标从 0 买到 1；本目标卖平到 0，接着要卖开到 -1。
 	f.order(t, filledChild("old-buy", "target-old", "TARGET", "BUY", "0", 1_400))
 	f.order(t, filledChild("close-sell", "target-current", "TARGET", "SELL", "1", 1_500))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "-1"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "-1"}})
 	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1, "翻转卖开不能被上一个目标的买单误挡")
@@ -143,7 +143,7 @@ func TestSecondReversalWithinTargetSkipsLane(t *testing.T) {
 	f.position(t, "account-a", "BTCUSDT", "1")
 	f.order(t, filledChild("buy-1", "target-current", "TARGET", "BUY", "0", 1_400))
 	f.order(t, filledChild("sell-1", "target-current", "TARGET", "SELL", "2", 1_500))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "3"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "3"}})
 	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusBlocked, result.Status)
@@ -157,7 +157,7 @@ func TestFirstReversalWithinTargetIsAllowedAndReported(t *testing.T) {
 	f := newTargetFixture(t, exchange.MarketTypeSwap)
 	f.position(t, "account-a", "BTCUSDT", "3")
 	f.order(t, filledChild("buy-1", "target-current", "TARGET", "BUY", "1", 1_500))
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}})
 	executor := f.executor()
 	var reported []string
 	executor.OnReversal = func(_, logical, instrument string, _ time.Time) { reported = append(reported, logical+"/"+instrument) }
@@ -176,7 +176,7 @@ func TestReversalCountedPerMember(t *testing.T) {
 	record := filledChild("b-sell", "target-current", "TARGET", "SELL", "1", 1_500)
 	record.TradingAccountID, record.ClientOrderID, record.Exchange, record.ExchangeSymbol = "account-b", "b-sell", "OKX", "BTC-USDT-SWAP"
 	f.order(t, record)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "3"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "BTC-USDT-SWAP", Quantity: "3"}})
 	executor := f.executor()
 	reported := 0
 	executor.OnReversal = func(string, string, string, time.Time) { reported++ }

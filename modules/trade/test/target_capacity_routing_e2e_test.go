@@ -58,7 +58,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "live-target",
 		InstanceID: "live-instance", SessionID: "live-session", SessionStartedAt: 1000, StrategyID: "live-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "1"}},
+		Targets: []store.InstrumentQuantity{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "1"}},
 		Status:  targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),
 	})
 	require.NoError(t, err)
@@ -248,7 +248,7 @@ func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "reject-target",
 		InstanceID: "live-instance", SessionID: "live-session", SessionStartedAt: 1000, StrategyID: "live-strategy",
 		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "0.1"}},
+		Targets: []store.InstrumentQuantity{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "0.1"}},
 		Status:  targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),
 	})
 	require.NoError(t, err)

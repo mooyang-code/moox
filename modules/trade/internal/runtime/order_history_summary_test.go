@@ -108,7 +108,7 @@ func TestInstrumentSummaryMatchesFillHistoryAndSurvivesPruning(t *testing.T) {
 				SpaceID: "space-1", LogicalAccountID: "logical-" + id, TargetID: "target-" + id,
 				InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 				BarEndTime: time.Now().Add(-time.Minute).UnixMilli(), ValidUntil: time.Now().Add(2 * time.Hour).UnixMilli(),
-				Targets: []store.InstrumentTarget{}, Status: "PENDING", AcceptedAt: time.Now().UnixMilli(),
+				Targets: []store.InstrumentQuantity{}, Status: "PENDING", AcceptedAt: time.Now().UnixMilli(),
 			}); err != nil {
 				return err
 			}

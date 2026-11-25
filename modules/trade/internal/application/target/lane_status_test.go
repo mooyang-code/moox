@@ -42,45 +42,45 @@ func TestLaneStatusesMatchConvergeDecisions(t *testing.T) {
 		settings string
 		// positions 是成员持仓（账户 → 数量），account-a 用币安代码、account-b 用 OKX 代码。
 		positions map[string]string
-		targets   []store.InstrumentTarget
+		targets   []store.InstrumentQuantity
 		want      LaneState
 	}{
 		{"差额在默认阈值之内", legacyOrderSettings, map[string]string{"account-a": "95"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "100"}}, LaneInPlace},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "100"}}, LaneInPlace},
 		{"差额超过默认阈值", legacyOrderSettings, map[string]string{"account-a": "94"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "100"}}, LaneWillOrder},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "100"}}, LaneWillOrder},
 		{"持仓等于目标", always, map[string]string{"account-a": "100"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "100"}}, LaneInPlace},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "100"}}, LaneInPlace},
 		{"保持当前持仓", always, map[string]string{"account-a": "7"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Hold: true}}, LaneInPlace},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Hold: true}}, LaneInPlace},
 		{"目标之外的持仓按 0 平掉", always, map[string]string{"account-a": "7"}, nil, LaneWillOrder},
 		// 合计 100 等于目标，但 account-a 的空头和目标反向：按成员判断，要先平掉。
 		{"成员持仓和目标反向", legacyOrderSettings, map[string]string{"account-a": "-10", "account-b": "110"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "100"}}, LaneWillOrder},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "100"}}, LaneWillOrder},
 		// 价格 100：开 0.4 个 = 40，低于最小下单额 50。
 		{"开仓差额低于最小下单额", minimum50, nil,
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "0.4"}}, LaneBelowMinNotional},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "0.4"}}, LaneBelowMinNotional},
 		{"开仓差额高于最小下单额", minimum50, nil,
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "0.6"}}, LaneWillOrder},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "0.6"}}, LaneWillOrder},
 		// 合约减仓不受最小下单额限制。
 		{"减仓不受最小下单额限制", minimum50, map[string]string{"account-a": "0.4"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "0"}}, LaneWillOrder},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "0"}}, LaneWillOrder},
 		// 残差 0.0004 不到一个步长（0.001），已有同向持仓：零头，当作已满足。
 		{"残差不到一个步长", always, map[string]string{"account-a": "10"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "10.0004"}}, LaneInPlace},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "10.0004"}}, LaneInPlace},
 		// 差额 0.0005 超过目标的 5%，但不到一个步长。
 		{"默认阈值下不到一个步长的小差额", legacyOrderSettings, map[string]string{"account-a": "0.001"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "0.0015"}}, LaneInPlace},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "0.0015"}}, LaneInPlace},
 		// 从空仓开新仓达不到交易所最小数量：不是零头，要人看。
 		{"开新仓不到交易所最小数量", legacyOrderSettings, nil,
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "0.0004"}}, LaneBlocked},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "0.0004"}}, LaneBlocked},
 		// 默认下单设置（合约最小下单额 5）：0.04 个 = 4 不下，0.06 个 = 6 下。
 		{"默认设置下开仓低于最小下单额", defaultOrderSettings, nil,
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "0.04"}}, LaneBelowMinNotional},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "0.04"}}, LaneBelowMinNotional},
 		{"默认设置下开仓高于最小下单额", defaultOrderSettings, nil,
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "0.06"}}, LaneWillOrder},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "0.06"}}, LaneWillOrder},
 		{"默认设置下不到一个步长的残差", defaultOrderSettings, map[string]string{"account-a": "10"},
-			[]store.InstrumentTarget{{InstrumentID: swapID, Quantity: "10.0004"}}, LaneInPlace},
+			[]store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "10.0004"}}, LaneInPlace},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := swapPolicyFixture(t, c.settings)
@@ -109,7 +109,7 @@ func TestLaneStatusesMatchConvergeDecisions(t *testing.T) {
 
 func TestLaneStatusesReportBlockedLane(t *testing.T) {
 	f := swapPolicyFixture(t, legacyOrderSettings)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "DOGE-USDT-SWAP", Quantity: "10"}})
+	f.target(t, []store.InstrumentQuantity{{InstrumentID: "DOGE-USDT-SWAP", Quantity: "10"}})
 
 	statuses, different := laneStatusesOf(t, f.store, f.executor())
 
@@ -160,7 +160,7 @@ func TestLaneStatusesUnknownWhenQuoteNotCached(t *testing.T) {
 			if c.position != "" {
 				f.position(t, "account-a", "BTCUSDT", c.position)
 			}
-			f.target(t, []store.InstrumentTarget{{InstrumentID: swapID, Quantity: c.target}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: swapID, Quantity: c.target}})
 			target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 			require.NoError(t, err)
 			var cachedOnly []bool
@@ -222,7 +222,7 @@ func TestLaneStatusesStockMarketRules(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := newStockFixture(t)
 			c.setup(t, f)
-			f.target(t, store.InstrumentTarget{InstrumentID: stock, Quantity: c.target})
+			f.target(t, store.InstrumentQuantity{InstrumentID: stock, Quantity: c.target})
 
 			statuses, different := laneStatusesOf(t, f.store, f.executor(t))
 
@@ -238,7 +238,7 @@ func TestLaneStatusesStockMarketRules(t *testing.T) {
 // 股票的停牌、涨跌停都要看报价：报价不在缓存里时不下结论。
 func TestLaneStatusesStockUnknownWithoutQuote(t *testing.T) {
 	f := newStockFixture(t)
-	f.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	f.target(t, store.InstrumentQuantity{InstrumentID: "600519.XSHG", Quantity: "1000"})
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	var cachedOnly []bool
@@ -280,7 +280,7 @@ func TestLaneStatusesExchangeMinimumNotional(t *testing.T) {
 			if c.position != "" {
 				f.position(t, "account-a", "BTCUSDT", c.position)
 			}
-			f.target(t, []store.InstrumentTarget{{InstrumentID: swapID, Quantity: c.target}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: swapID, Quantity: c.target}})
 
 			statuses, different := laneStatusesOf(t, f.store, f.executor())
 			require.Equal(t, c.want, statuses[swapID].State)
@@ -311,7 +311,7 @@ func TestLaneStatusesTryEveryCandidateMember(t *testing.T) {
 			f.setMinNotional(t, "BINANCE", "BTCUSDT", "100")
 			f.setMinNotional(t, "OKX", swapID, c.okxMinimum)
 			f.position(t, "account-a", "BTCUSDT", "10")
-			f.target(t, []store.InstrumentTarget{{InstrumentID: swapID, Quantity: "10.4"}})
+			f.target(t, []store.InstrumentQuantity{{InstrumentID: swapID, Quantity: "10.4"}})
 
 			statuses, different := laneStatusesOf(t, f.store, f.executor())
 			require.Equal(t, c.want, statuses[swapID].State)

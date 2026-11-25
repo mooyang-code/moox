@@ -257,7 +257,7 @@ func acceptTarget(
 		SessionID:        request.GetSessionId(),
 		SessionStartedAt: request.GetSessionStartedAt(),
 		StrategyID:       request.GetStrategyId(),
-		Targets:          make([]store.InstrumentTarget, 0, len(request.GetTargets())),
+		Targets:          make([]store.InstrumentQuantity, 0, len(request.GetTargets())),
 		Status:           "PENDING",
 		AcceptedAt:       now.UnixMilli(),
 	}

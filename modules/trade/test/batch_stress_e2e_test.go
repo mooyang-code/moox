@@ -185,7 +185,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tradeStore.Close() })
 	symbols := make([]string, 0, count)
-	targets := make([]store.InstrumentTarget, 0, count)
+	targets := make([]store.InstrumentQuantity, 0, count)
 	wanted := make(map[string]int64, count)
 	for index := 0; index < count; index++ {
 		base := fmt.Sprintf("S%03d", index)
@@ -195,7 +195,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 			quantity = -quantity
 		}
 		wanted[base+"USDT"] = quantity
-		targets = append(targets, store.InstrumentTarget{InstrumentID: base + "-USDT-SWAP", Quantity: strconv.FormatInt(quantity, 10)})
+		targets = append(targets, store.InstrumentQuantity{InstrumentID: base + "-USDT-SWAP", Quantity: strconv.FormatInt(quantity, 10)})
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{

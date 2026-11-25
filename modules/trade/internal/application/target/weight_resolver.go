@@ -36,7 +36,7 @@ type WeightConversion struct {
 	ReferencePrices        map[string]string
 	ReferencePriceEvidence []ReferencePriceEvidence
 	WeightsJSON            string
-	QuantityTargets        []store.InstrumentTarget
+	QuantityTargets        []store.InstrumentQuantity
 }
 
 // ReferencePriceEvidence records the exact account and quote selected for a
@@ -85,9 +85,9 @@ var (
 
 // heldConversion 是全部标的都保持时的换算结果：不换算任何数量，不带权益和报价。
 func heldConversion(requestHash string, signalTime int64, weightsJSON string, orderedWeights []orderedWeight) WeightConversion {
-	held := make([]store.InstrumentTarget, 0, len(orderedWeights))
+	held := make([]store.InstrumentQuantity, 0, len(orderedWeights))
 	for _, weight := range orderedWeights {
-		held = append(held, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
+		held = append(held, store.InstrumentQuantity{InstrumentID: weight.InstrumentID, Hold: true})
 	}
 	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: held}
 }
@@ -115,7 +115,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 	// An empty FULL target is an explicit flatten command. It must not depend
 	// on an equity snapshot or a quote for an instrument that no longer exists.
 	if len(orderedWeights) == 0 {
-		return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: []store.InstrumentTarget{}}, nil
+		return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: []store.InstrumentQuantity{}}, nil
 	}
 	// 全部是保持标的的目标不换算任何数量，不依赖权益快照与报价：权益读取暂时失败时保持标记也必须被接受，
 	// 否则旧的调仓目标会继续执行，保持保护失效。
@@ -156,7 +156,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 	}
 	prices := make(map[string]string, len(orderedWeights))
 	evidence := make([]ReferencePriceEvidence, 0, len(orderedWeights))
-	quantities := make([]store.InstrumentTarget, 0, len(orderedWeights))
+	quantities := make([]store.InstrumentQuantity, 0, len(orderedWeights))
 	quotes := make(map[string]resolvedQuote, len(orderedWeights))
 	// 先定每个标的由哪个成员报价，再按账户批量预取（A 股腾讯快照一次 60 只），之后逐个取价命中缓存。
 	for _, weight := range orderedWeights {
@@ -214,7 +214,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 	for _, weight := range orderedWeights {
 		if weight.Hold {
 			// 保持标的不取报价、不换算数量；执行器对它既不加仓也不减仓。
-			quantities = append(quantities, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
+			quantities = append(quantities, store.InstrumentQuantity{InstrumentID: weight.InstrumentID, Hold: true})
 			continue
 		}
 		resolved := quotes[weight.InstrumentID]
@@ -240,7 +240,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.Logi
 			ExchangeSymbol: instrument.ExchangeSymbol, Price: quote.Price.String(),
 			UpdatedAt: quote.UpdatedAt.UTC().UnixMilli(),
 		})
-		quantities = append(quantities, store.InstrumentTarget{
+		quantities = append(quantities, store.InstrumentQuantity{
 			InstrumentID: weight.InstrumentID, Quantity: quantity.String(),
 		})
 	}

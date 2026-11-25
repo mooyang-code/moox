@@ -27,7 +27,7 @@ func EnsureCurrentTarget(tx *store.Tx, spaceID, logicalAccountID, instanceID str
 		SpaceID: spaceID, LogicalAccountID: logicalAccountID, TargetID: "target-current",
 		InstanceID: instanceID, SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
-		Targets: []store.InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+		Targets: []store.InstrumentQuantity{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 	})
 	return err
 }

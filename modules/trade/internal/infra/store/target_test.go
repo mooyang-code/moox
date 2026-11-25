@@ -26,7 +26,7 @@ func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	stale := first
 	stale.TargetID = "target-stale"
 	setTargetBar(&stale, int64(1))
-	stale.Targets = []InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "9"}}
+	stale.Targets = []InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "9"}}
 	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, stale)
 	require.ErrorIs(t, err, ErrConflict)
 	require.False(t, accepted)
@@ -34,7 +34,7 @@ func TestAcceptLogicalAccountTargetKeepsLatestBar(t *testing.T) {
 	next := first
 	next.TargetID = "target-2"
 	setTargetBar(&next, int64(2))
-	next.Targets = []InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "2.0"}}
+	next.Targets = []InstrumentQuantity{{InstrumentID: "BTC-USDT-SPOT", Quantity: "2.0"}}
 	current, accepted, err = s.AcceptLogicalAccountTarget(ctx, next)
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -50,7 +50,7 @@ func TestAcceptLogicalAccountTargetAllowsEmptyFullWhilePaused(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	record := validLogicalAccountTarget()
-	record.Targets = []InstrumentTarget{}
+	record.Targets = []InstrumentQuantity{}
 
 	current, accepted, err := s.AcceptLogicalAccountTarget(
 		context.Background(),
@@ -132,7 +132,7 @@ func TestAcceptLogicalAccountTargetIsIdempotentForSamePayload(t *testing.T) {
 	seedLogicalAccount(t, s, "runner-1")
 	ctx := context.Background()
 	record := validLogicalAccountTarget()
-	record.Targets = []InstrumentTarget{
+	record.Targets = []InstrumentQuantity{
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "2.00"},
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1.0"},
 	}
@@ -145,7 +145,7 @@ func TestAcceptLogicalAccountTargetIsIdempotentForSamePayload(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, accepted)
-	require.Equal(t, []InstrumentTarget{
+	require.Equal(t, []InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 		{InstrumentID: "ETH-USDT-SPOT", Quantity: "2"},
 	}, current.Targets)
@@ -235,7 +235,7 @@ func TestAcceptLogicalAccountTargetRejectsInvalidInput(t *testing.T) {
 			s := openTestStore(t)
 			seedLogicalAccount(t, s, "runner-1")
 			record := validLogicalAccountTarget()
-			record.Targets = append([]InstrumentTarget(nil), record.Targets...)
+			record.Targets = append([]InstrumentQuantity(nil), record.Targets...)
 			tt.mutate(&record)
 			_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
 			require.Error(t, err)
@@ -306,7 +306,7 @@ func validLogicalAccountTarget() LogicalAccountTargetRecord {
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TargetID: "target-1", InstanceID: "runner-1", SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
-		Targets: []InstrumentTarget{{
+		Targets: []InstrumentQuantity{{
 			InstrumentID: "BTC-USDT-SPOT", Quantity: "1.0",
 		}},
 		Status: "PENDING", BlockedTargets: []BlockedTarget{},
@@ -328,7 +328,7 @@ func seedCurrentTarget(tx *Tx, instanceID string) error {
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-current",
 		InstanceID: instanceID, SessionID: "session-1", SessionStartedAt: 1_000, StrategyID: "strategy-1",
 		BarEndTime: now.Add(-time.Second).UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
-		Targets: []InstrumentTarget{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
+		Targets: []InstrumentQuantity{}, Status: "PENDING", AcceptedAt: now.UnixMilli(),
 	})
 	return err
 }
@@ -355,7 +355,7 @@ func TestAcceptLogicalAccountTargetKeepsHoldTargetsWithoutQuantity(t *testing.T)
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")
 	record := validLogicalAccountTarget()
-	record.Targets = append(record.Targets, InstrumentTarget{InstrumentID: "ETH-USDT-SPOT", Hold: true})
+	record.Targets = append(record.Targets, InstrumentQuantity{InstrumentID: "ETH-USDT-SPOT", Hold: true})
 
 	_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
 
@@ -363,23 +363,23 @@ func TestAcceptLogicalAccountTargetKeepsHoldTargetsWithoutQuantity(t *testing.T)
 	require.True(t, accepted)
 	got, err := s.GetLogicalAccountTarget(context.Background(), record.SpaceID, record.LogicalAccountID)
 	require.NoError(t, err)
-	require.Equal(t, []InstrumentTarget{
+	require.Equal(t, []InstrumentQuantity{
 		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
 		{InstrumentID: "ETH-USDT-SPOT", Hold: true},
 	}, got.Targets)
 }
 
 func TestEncodeInstrumentTargetsRejectsHoldWithQuantity(t *testing.T) {
-	_, err := encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "1", Hold: true}})
+	_, err := encodeInstrumentTargets([]InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Quantity: "1", Hold: true}})
 	require.ErrorIs(t, err, ErrInvalidRecord)
-	encoded, err := encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Hold: true}})
+	encoded, err := encodeInstrumentTargets([]InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Hold: true}})
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"instrument_id":"ETH-USDT-SPOT","hold":true}]`, encoded)
 	decoded, err := decodeCurrentTargets(encoded)
 	require.NoError(t, err)
-	require.Equal(t, []InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Hold: true}}, decoded)
+	require.Equal(t, []InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT", Hold: true}}, decoded)
 	// 非保持标的的数量仍必须是合法数字。
-	_, err = encodeInstrumentTargets([]InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT"}})
+	_, err = encodeInstrumentTargets([]InstrumentQuantity{{InstrumentID: "ETH-USDT-SPOT"}})
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
