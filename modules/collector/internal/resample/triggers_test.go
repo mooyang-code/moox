@@ -8,7 +8,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestPeriodTriggerResamplesBucketOnLastSourcePeriodOnly(t *testing.T) {
@@ -25,7 +24,7 @@ func TestPeriodTriggerResamplesBucketOnLastSourcePeriodOnly(t *testing.T) {
 		return &storagepb.DatasetPeriodCompleted{
 			DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: status,
 			UniverseSubjectIds: []string{"BTC", "ETH", "SOL", "XRP"}, FailedSubjects: failed,
-			Source: "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
+			Source: "ledger", SnapshotRef: "snapshot", CompletedAt: period.Add(6 * time.Minute).UnixMilli(),
 		}
 	}
 	ctx := context.Background()
@@ -53,7 +52,7 @@ func TestBackfillTriggerSubmitsSourceBackfillJobWithSettleDelay(t *testing.T) {
 	}
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: utc("2026-10-21T10:03:00Z").Unix(), End: utc("2026-10-21T10:20:00Z").Unix(),
-		Origin: "auto", ConfirmedAt: timestamppb.New(confirmed),
+		Origin: "auto", ConfirmedAt: confirmed.UnixMilli(),
 	}
 	for i := 0; i < 2; i++ { // 重复投递不重复建作业
 		require.NoError(t, trigger.OnBackfilled(context.Background(), "crypto", "kbf-1", payload))

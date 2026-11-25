@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type captureClient struct {
@@ -33,7 +32,7 @@ func periodPayload(count int) *storagepb.DatasetPeriodCompleted {
 	}
 	return &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-		UniverseSubjectIds: subjects, CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1_786_032_060, 0)),
+		UniverseSubjectIds: subjects, CauseEventId: "cause-1", CompletedAt: time.Unix(1_786_032_060, 0).UnixMilli(),
 	}
 }
 

@@ -21,7 +21,6 @@ all:
 		protoc --proto_path=. \
 			--proto_path=$(COMMON_PROTO_DIR) \
 			--go_out=paths=source_relative:$(OUTPUT_DIR) \
-			--go_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb \
 			"$$proto" || exit 1; \
 	done
 

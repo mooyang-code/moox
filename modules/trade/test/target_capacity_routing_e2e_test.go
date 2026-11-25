@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing.T) {
@@ -157,7 +156,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "capacity-target", LogicalAccountId: testLogicalAccount,
 		InstanceId: "capacity-instance", SessionId: "capacity-session", SessionStartedAt: 1_000, StrategyId: "capacity-strategy",
-		BarEndTime: timestamppb.New(testNow), ValidUntil: timestamppb.New(testNow.Add(time.Hour)),
+		BarEndTime: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "capacity-target", OccurredAt: testNow, SpaceID: testSpace, SubjectID: testLogicalAccount})
 	require.NoError(t, err)

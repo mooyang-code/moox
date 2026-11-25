@@ -2,11 +2,11 @@ package events
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestViewDataReadyContract(t *testing.T) {
@@ -40,7 +40,7 @@ func TestViewDataReadyContract(t *testing.T) {
 		}
 	})
 
-	now := timestamppb.Now()
+	now := time.Now().UnixMilli()
 	validReady := &storagepb.ViewDataReady{
 		CompletionEventId: "collector-completed-1",
 		DatasetId:         "dataset_kline_1m",

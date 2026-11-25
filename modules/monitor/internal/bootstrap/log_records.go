@@ -46,7 +46,7 @@ func logObservabilityRoute(repository *store.LogRecordRepository) func(context.C
 		now := time.Now()
 		for _, item := range payload.GetRecords() {
 			records = append(records, logRecordRow(identity, logsink.Record{
-				Sequence: item.GetSequence(), Time: time.Unix(0, item.GetTimeUnixNano()), Level: item.GetLevel(), Event: item.GetEvent(),
+				Sequence: item.GetSequence(), Time: time.UnixMilli(item.GetLoggedAt()), Level: item.GetLevel(), Event: item.GetEvent(),
 				Message: item.GetMessage(), Caller: item.GetCaller(), Fields: item.GetFields(), MergedCount: item.GetMergedCount(),
 			}, now))
 		}

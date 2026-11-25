@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/storagepb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -150,7 +149,7 @@ func (p *NoticePublisher) sealGroup(ctx context.Context, group *noticeGroup) err
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: group.datasetID, Frequency: group.frequency, SubjectIds: subjects,
 		Start: group.start.Unix(), End: group.end.Unix(), Origin: group.origin, JobId: group.jobID,
-		ConfirmedAt: timestamppb.New(now),
+		ConfirmedAt: now.UnixMilli(),
 	}
 	if payload.Absent, err = p.absent(ctx, group); err != nil {
 		return err

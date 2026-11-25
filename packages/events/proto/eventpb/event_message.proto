@@ -2,8 +2,6 @@ syntax = "proto3";
 
 package trpc.moox.events;
 
-import "google/protobuf/timestamp.proto";
-
 option go_package = "github.com/mooyang-code/moox/packages/events/eventpb;eventpb";
 
 // EventMessage is the small, explicit outer contract shared by all business
@@ -15,6 +13,7 @@ message EventMessage {
   uint32 event_version = 3;
   string space_id = 4;
   string subject_id = 5;
-  google.protobuf.Timestamp occurred_at = 6;
+  // occurred_at 是事件发生的时刻（Unix 毫秒，必须为正）。
+  int64 occurred_at = 6;
   bytes payload = 7;
 }

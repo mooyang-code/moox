@@ -72,7 +72,7 @@ func TestLogPublisherPublishesOneEventPerBatch(t *testing.T) {
 	if got.GetBootId() != "boot-7" || got.GetNodeId() != "overseas" || len(got.GetRecords()) != 2 {
 		t.Fatalf("payload = %v", got)
 	}
-	if r := got.GetRecords()[0]; r.GetSequence() != 1 || r.GetTimeUnixNano() != time.Unix(1700000000, 5).UnixNano() || r.GetCaller() != "order/submit.go:88" || r.GetFields()["account"] != "a1" {
+	if r := got.GetRecords()[0]; r.GetSequence() != 1 || r.GetLoggedAt() != time.Unix(1700000000, 5).UnixMilli() || r.GetCaller() != "order/submit.go:88" || r.GetFields()["account"] != "a1" {
 		t.Fatalf("record = %v", r)
 	}
 	if r := got.GetRecords()[1]; r.GetEvent() != "process_started" || r.GetMergedCount() != 3 {

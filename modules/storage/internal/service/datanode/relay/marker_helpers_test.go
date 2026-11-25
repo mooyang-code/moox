@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var testMarkerSeq atomic.Int64
@@ -18,7 +17,7 @@ func appendTestMarker(ctx context.Context, store *pebble.Store, spaceID, dataset
 	n := testMarkerSeq.Add(1)
 	raw, _, err := pebble.BuildProducerPeriodCompletedMessage(spaceID, &pb.DatasetPeriodCompletedMarker{
 		DatasetId: datasetID, Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		CauseEventId: fmt.Sprintf("cause-%d", n), CompletedAt: timestamppb.New(time.Unix(1786032060, 0)),
+		CauseEventId: fmt.Sprintf("cause-%d", n), CompletedAt: time.Unix(1786032060, 0).UnixMilli(),
 	})
 	if err != nil {
 		return "", err

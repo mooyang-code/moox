@@ -7,7 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type EventMessage = eventpb.EventMessage
@@ -66,11 +65,8 @@ func (r *Registry) ValidateMessage(message *eventpb.EventMessage) (Event, error)
 	if strings.TrimSpace(message.GetSubjectId()) == "" {
 		return Event{}, fmt.Errorf("subject_id is required")
 	}
-	if message.GetOccurredAt() == nil {
-		return Event{}, fmt.Errorf("occurred_at is required")
-	}
-	if err := message.GetOccurredAt().CheckValid(); err != nil {
-		return Event{}, fmt.Errorf("occurred_at: %w", err)
+	if message.GetOccurredAt() <= 0 {
+		return Event{}, fmt.Errorf("occurred_at must be a positive unix millisecond")
 	}
 	if len(message.GetPayload()) == 0 {
 		return Event{}, fmt.Errorf("payload is required")
@@ -109,8 +105,8 @@ func (r *Registry) Encode(event Event, payload proto.Message, opts PublishOption
 	if strings.TrimSpace(opts.EventID) == "" {
 		return EncodedEvent{}, fmt.Errorf("event_id is required")
 	}
-	if opts.OccurredAt.IsZero() {
-		return EncodedEvent{}, fmt.Errorf("occurred_at is required")
+	if opts.OccurredAt.IsZero() || opts.OccurredAt.UnixMilli() <= 0 {
+		return EncodedEvent{}, fmt.Errorf("occurred_at must be after the unix epoch")
 	}
 	if strings.TrimSpace(opts.SpaceID) == "" {
 		return EncodedEvent{}, fmt.Errorf("space_id is required")
@@ -128,10 +124,7 @@ func (r *Registry) Encode(event Event, payload proto.Message, opts PublishOption
 		EventVersion: registered.Version(),
 		SpaceId:      opts.SpaceID,
 		SubjectId:    opts.SubjectID,
-		OccurredAt:   timestamppb.New(opts.OccurredAt.UTC()),
-	}
-	if err := message.GetOccurredAt().CheckValid(); err != nil {
-		return EncodedEvent{}, fmt.Errorf("occurred_at: %w", err)
+		OccurredAt:   opts.OccurredAt.UnixMilli(),
 	}
 	if err := registered.Validate(message, payload); err != nil {
 		return EncodedEvent{}, fmt.Errorf("validate %s payload: %w", eventKey(event), err)

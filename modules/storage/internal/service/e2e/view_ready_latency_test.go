@@ -35,7 +35,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -319,7 +318,7 @@ func reportProducerCompleted(t *testing.T, ctx context.Context, env readyBenchEn
 		SpaceId: readyBenchSpace,
 		Marker: &pb.DatasetPeriodCompletedMarker{
 			DatasetId: dataset.datasetID, Frequency: readyBenchFreq, PeriodTime: period.Unix(), Status: "complete",
-			UniverseSubjectIds: universe, CauseEventId: cause, CompletedAt: timestamppb.Now(),
+			UniverseSubjectIds: universe, CauseEventId: cause, CompletedAt: time.Now().UnixMilli(),
 			DetailType: "moox.bench.PeriodDetail.v1", Detail: []byte("bench"),
 		},
 	})

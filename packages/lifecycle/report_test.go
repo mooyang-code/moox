@@ -18,8 +18,9 @@ func TestStateReportCarriesPauseAndCatchup(t *testing.T) {
 	require.Equal(t, "system", got.GetPauseKind())
 	require.Equal(t, "切换行情源", got.GetPauseReason())
 	require.Equal(t, "cli:control", got.GetPausedBy())
-	require.Equal(t, "2026-11-14T17:00:00Z", got.GetPausedSince(), "时间统一写成 UTC 的 RFC3339")
-	require.Equal(t, "2026-11-14T18:00:00Z", got.GetCatchup().GetTarget())
+	require.Equal(t, since.UnixMilli(), got.GetPausedSince(), "时刻是 Unix 毫秒")
+	require.Equal(t, since.UnixMilli(), got.GetCatchup().GetSince())
+	require.Equal(t, "2026-11-14T18:00:00Z", got.GetCatchup().GetTarget(), "追赶目标是周期，仍是 UTC 的 RFC3339 文本")
 	require.Equal(t, int64(5), got.GetCatchup().GetTotal())
 	require.False(t, got.GetCatchup().GetCaughtUp())
 

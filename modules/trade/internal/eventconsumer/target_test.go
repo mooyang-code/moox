@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
@@ -483,7 +482,7 @@ func TestHandleTargetRejectsLegacyQuantityEvent(t *testing.T) {
 		EventVersion: 1,
 		SpaceId:      "space-1",
 		SubjectId:    "logical-1",
-		OccurredAt:   timestamppb.New(time.Now().UTC()),
+		OccurredAt:   time.Now().UTC().UnixMilli(),
 		Payload:      []byte("unregistered target payload"),
 	})
 	require.NoError(t, err)
@@ -513,7 +512,7 @@ func TestHandleTargetRejectsIncompleteModernEventBeforeAccountLookup(t *testing.
 		EventVersion: events.LogicalAccountTargetWeightRequested.Version(),
 		SpaceId:      "space-1",
 		SubjectId:    "logical-1",
-		OccurredAt:   timestamppb.New(now),
+		OccurredAt:   now.UnixMilli(),
 		Payload:      incompletePayload,
 	})
 	require.NoError(t, err)
@@ -536,7 +535,7 @@ func openTargetStore(t *testing.T) *store.Store {
 type testWeightResolver struct{}
 
 func (testWeightResolver) Resolve(_ context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
-	signalTime := request.GetBarEndTime().AsTime().UnixMilli()
+	signalTime := request.GetBarEndTime()
 	hash, err := targetapp.RequestHash(request)
 	if err != nil {
 		return targetapp.WeightConversion{}, err
@@ -628,7 +627,7 @@ func logicalTargetDeliveryWithTimes(
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: instanceID, SessionId: "session-1", SessionStartedAt: testSessionStartedAt("session-1"), StrategyId: "strategy-1",
 			LogicalAccountId: logicalAccountID, Targets: targets,
-			BarEndTime: timestamppb.New(barEnd), ValidUntil: timestamppb.New(validUntil),
+			BarEndTime: barEnd.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: barEnd,

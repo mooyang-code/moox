@@ -125,7 +125,7 @@ func TestReverseReconciliationReadsSecondReporterPageAndRejectsOverflow(t *testi
 // 生命周期只在上报新鲜时挂上：停止上报的模块不能显示成它最后一次上报的暂停状态。
 func TestServiceLifecycleOnlyFromFreshReport(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	paused := `{"stage":"paused","pauseKind":"system","pausedSince":"2026-11-15T01:00:00Z"}`
+	paused := `{"stage":"paused","pauseKind":"system","pausedSince":"1794708000000"}`
 	query, repos := openOverviewState(t, func(db *gorm.DB) {
 		require.NoError(t, db.Create(&monmetrics.MetricService{ServiceName: "strategy", NodeID: "control", InstanceID: "strategy@control", BootID: "1", LastSeenAt: now, Readiness: monmetrics.ReadinessReady, LifecycleJSON: paused}).Error)
 		require.NoError(t, db.Create(&monmetrics.MetricService{ServiceName: "trade", NodeID: "control", InstanceID: "trade@control", BootID: "1", LastSeenAt: now.Add(-10 * time.Minute), Readiness: monmetrics.ReadinessReady, LifecycleJSON: paused}).Error)

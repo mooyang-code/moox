@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // 写入方报告的周期完成：明细是不透明字节，Storage 按字节原样保存、查询和发布，不解析；重报幂等，内容不同报冲突。
@@ -22,7 +21,7 @@ func TestDatasetPeriodCompletedMarkerRoundTripPreservesOpaqueDetail(t *testing.T
 	marker := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "degraded", UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
-		CauseEventId: "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
+		CauseEventId: "source-ready", CompletedAt: time.Unix(1786032001, 0).UnixMilli(),
 		DetailType: "test.Detail.v1", Detail: []byte{0x0a, 0x00, 0xff, 0x7f},
 	}
 	row := &pb.RowFieldUpsert{
@@ -78,7 +77,7 @@ func TestDatasetPeriodCompletedMarkerRejectsInvalidMarkersWithoutEvent(t *testin
 	base := &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "complete", UniverseSubjectIds: []string{"ETH"},
-		CauseEventId: "source-ready", CompletedAt: timestamppb.New(time.Unix(1786032001, 0)),
+		CauseEventId: "source-ready", CompletedAt: time.Unix(1786032001, 0).UnixMilli(),
 		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
 	}
 	for _, tc := range []struct {

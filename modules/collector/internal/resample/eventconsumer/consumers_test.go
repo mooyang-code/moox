@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepb"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeTriggers struct {
@@ -84,13 +83,13 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
 		UniverseSubjectIds: []string{"BTC"},
-		Source:             "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
+		Source:             "ledger", SnapshotRef: "snapshot", CompletedAt: period.Add(6 * time.Minute).UnixMilli(),
 	}, events.PublishOptions{EventID: "evt-period", OccurredAt: period.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
 	confirmed := period.Add(time.Hour)
 	_, err = publisher.Publish(context.Background(), events.CollectorKlineBackfilled, &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: period.Unix(), End: period.Add(5 * time.Minute).Unix(),
-		Origin: "auto", ConfirmedAt: timestamppb.New(confirmed),
+		Origin: "auto", ConfirmedAt: confirmed.UnixMilli(),
 	}, events.PublishOptions{EventID: "kbf-1", OccurredAt: confirmed, SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
 

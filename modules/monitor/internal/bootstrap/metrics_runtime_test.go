@@ -19,7 +19,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -47,7 +46,7 @@ func TestReporterExpectationUsesStableDeploymentIdentity(t *testing.T) {
 	result, ok := latestResult(t, repos, "mooxsys", id)
 	require.True(t, ok)
 	require.False(t, result.Success, "登记了部署就要求上报：从没上报过按停止上报处理")
-	require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: timestamppb.New(now)}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}))
+	require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: now.UnixMilli()}, &metricspb.MetricReport{ServiceName: "factor-mgr", NodeId: "control", InstanceId: "factor-mgr@control", BootId: "boot-1"}))
 	require.NoError(t, run(t.Context()))
 	result, _ = latestResult(t, repos, "mooxsys", id)
 	require.True(t, result.Success, "the first report resolves the same check identity")
@@ -274,7 +273,7 @@ func TestBusinessFreshnessSkipsKlineChecksWhileCollectorHalted(t *testing.T) {
 		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "collector", Status: "enabled"}},
 	}))
 	report := func(stage string) {
-		require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: timestamppb.New(now)},
+		require.NoError(t, messages.TouchService(t.Context(), &eventpb.EventMessage{OccurredAt: now.UnixMilli()},
 			&metricspb.MetricReport{ServiceName: "collector", NodeId: "control", InstanceId: "collector@control", BootId: "boot-1",
 				Lifecycle: &metricspb.ModuleLifecycle{Stage: stage}}))
 	}

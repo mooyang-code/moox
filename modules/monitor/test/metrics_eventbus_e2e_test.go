@@ -77,7 +77,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	}
 	routes := observabilityconsumer.Routes{
 		Metrics: func(routeCtx context.Context, message *eventpb.EventMessage, report *metricspb.MetricReport) error {
-			observedAt := message.GetOccurredAt().AsTime()
+			observedAt := time.UnixMilli(message.GetOccurredAt()).UTC()
 			samples, parseErr := metrics.ParseSnapshot(report.GetSnapshot(), metrics.Envelope{
 				ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(),
 				MessageID: message.GetEventId(), ProducerNodeID: report.GetNodeId(),

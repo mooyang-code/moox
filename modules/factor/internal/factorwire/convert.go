@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/udfhost"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorudf"
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -328,8 +327,7 @@ func LifecycleToPB(life domain.EngineLifecycle) *factorpb.EngineLifecycleStatus 
 		CatchupBlocked: life.CatchupBlocked, PauseKind: life.PauseKind, PauseReason: life.PauseReason,
 	}
 	if c := life.Catchup; c != nil {
-		out.Catchup = &commonpb.CatchupProgress{Since: FormatTime(c.Since), Target: FormatTime(c.Target), Done: c.Done, Total: c.Total,
-			CaughtUp: c.CaughtUp, BlockedBy: c.BlockedBy, Unfillable: int32(c.Unfillable), Message: c.Message}
+		out.Catchup = c.Progress()
 	}
 	return out
 }
@@ -344,12 +342,8 @@ func LifecycleFromPB(pb *factorpb.EngineLifecycleStatus) domain.EngineLifecycle 
 		Stage: pb.GetStage(), PausedSince: pausedSince,
 		CatchupBlocked: pb.GetCatchupBlocked(), PauseKind: pb.GetPauseKind(), PauseReason: pb.GetPauseReason(),
 	}
-	if c := pb.GetCatchup(); c != nil {
-		since, _ := ParseTime(c.GetSince())
-		target, _ := ParseTime(c.GetTarget())
-		out.Catchup = &lifecycle.Catchup{Since: since, Target: target, Done: c.GetDone(), Total: c.GetTotal(), CaughtUp: c.GetCaughtUp(),
-			BlockedBy: c.GetBlockedBy(), Unfillable: int(c.GetUnfillable()), Message: c.GetMessage()}
-	}
+	// 解析失败的字段按零值处理，与 paused_since 一致。
+	out.Catchup, _ = lifecycle.CatchupFromProgress(pb.GetCatchup())
 	return out
 }
 

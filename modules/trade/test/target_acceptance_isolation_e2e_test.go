@@ -22,7 +22,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -83,8 +82,8 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: "other-target", LogicalAccountId: "logical-other",
 			InstanceId: "instance-other", SessionId: "session-other", SessionStartedAt: 1_000, StrategyId: "strategy-other",
-			BarEndTime: timestamppb.New(now),
-			ValidUntil: timestamppb.New(now.Add(time.Hour)),
+			BarEndTime: now.UnixMilli(),
+			ValidUntil: now.Add(time.Hour).UnixMilli(),
 		}, events.PublishOptions{EventID: "other-target", OccurredAt: now, SpaceID: testSpace, SubjectID: "logical-other"})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)

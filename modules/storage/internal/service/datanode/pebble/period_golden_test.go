@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // 账本与完成标记的判定金样：完成、降级、迟到提交、重复提交、截止判定，以及写入方上报的标记。
@@ -507,7 +506,7 @@ func TestGoldenLedgerMarkerSizeLimit(t *testing.T) {
 		smallRaw, _, err := BuildLedgerPeriodCompletedMessage(goldenSpace, &LedgerPeriodCompleted{
 			DatasetID: "small", Frequency: goldenFreq, PeriodTime: goldenPeriod.Unix(), Status: "degraded", SnapshotRef: small.SeriesHash,
 			UniverseSubjectIDs: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
-			CompletedAt: timestamppb.New(now),
+			CompletedAt: now.UnixMilli(),
 		})
 		require.NoError(t, err)
 		clock.set(now)
@@ -559,7 +558,7 @@ func goldenProducerMarker(cause string, periodTime int64, status string) *pb.Dat
 	return &pb.DatasetPeriodCompletedMarker{
 		DatasetId: "factor_result", Frequency: goldenFreq, PeriodTime: periodTime, Status: status,
 		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, CauseEventId: cause,
-		CompletedAt: timestamppb.New(time.Unix(periodTime+30, 0)), DetailType: "factor.detail", Detail: []byte("detail-" + cause),
+		CompletedAt: time.Unix(periodTime+30, 0).UnixMilli(), DetailType: "factor.detail", Detail: []byte("detail-" + cause),
 	}
 }
 

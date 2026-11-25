@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func openStore(t *testing.T) *store.Store {
@@ -118,9 +117,9 @@ func TestStrategyHealthReportsStalledOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	bar := timestamppb.New(now)
+	bar := now.UnixMilli()
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
-		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", SessionStartedAt: 1_000, LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: timestamppb.New(now.Add(time.Hour)),
+		TargetId: "r1", InstanceId: "i1", StrategyId: "s1", SessionId: "i1-session", SessionStartedAt: 1_000, LogicalAccountId: "acct", BarEndTime: bar, ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "r1", OccurredAt: now, SpaceID: "crypto", SubjectID: "acct"})
 	if err != nil {

@@ -49,14 +49,11 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 	if strings.TrimSpace(messageID) == "" || message.GetEventId() != messageID {
 		return message, nil, fmt.Errorf("event_id %q does not match NATS message id %q", message.GetEventId(), messageID)
 	}
-	if message.GetOccurredAt() == nil {
-		return message, nil, fmt.Errorf("event message occurred_at is required")
+	if message.GetOccurredAt() <= 0 {
+		return message, nil, fmt.Errorf("event message occurred_at must be a positive unix millisecond")
 	}
 	if len(message.GetPayload()) == 0 {
 		return message, nil, fmt.Errorf("event message payload is required")
-	}
-	if err := message.GetOccurredAt().CheckValid(); err != nil {
-		return message, nil, fmt.Errorf("event message occurred_at: %w", err)
 	}
 	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
 	if !ok {

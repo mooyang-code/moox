@@ -61,11 +61,11 @@ func validateInstrumentDelistScheduled(message *eventpb.EventMessage, value prot
 	if message == nil || message.GetSubjectId() != InstrumentDelistSubjectID(payload.GetExchange(), payload.GetMarket(), payload.GetExchangeSymbol()) {
 		return fmt.Errorf("instrument delist scheduled instrument does not match subject_id")
 	}
-	if delistAt := payload.GetDelistAt(); delistAt == nil || delistAt.CheckValid() != nil || delistAt.AsTime().IsZero() {
-		return fmt.Errorf("instrument delist scheduled delist_at is invalid")
+	if payload.GetDelistAt() <= 0 {
+		return fmt.Errorf("instrument delist scheduled delist_at must be a positive unix millisecond")
 	}
-	if firstSeen := payload.GetFirstSeenAt(); firstSeen == nil || firstSeen.CheckValid() != nil {
-		return fmt.Errorf("instrument delist scheduled first_seen_at is invalid")
+	if payload.GetFirstSeenAt() <= 0 {
+		return fmt.Errorf("instrument delist scheduled first_seen_at must be a positive unix millisecond")
 	}
 	switch payload.GetSource() {
 	case DelistSourceBinanceSpotSchedule, DelistSourceBinanceSwapExchangeInfo, DelistSourceOKXSwapInstruments, DelistSourceManual:

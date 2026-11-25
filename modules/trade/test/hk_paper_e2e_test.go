@@ -26,7 +26,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // hkTargetDelivery 编码一份策略发给组合 logicalID 的权重目标（生产里由 Strategy 经 EventBus 发来）。
@@ -41,7 +40,7 @@ func hkTargetDelivery(t *testing.T, now time.Time, logicalID, targetID string, s
 			TargetId: targetID, InstanceId: "dual_ma_hk_5m", SessionId: "session-hk", SessionStartedAt: 1_000, StrategyId: "default_dual_ma_hk_5m",
 			LogicalAccountId: logicalID,
 			Targets:          []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: instrumentID, MarketType: "STOCK", TargetWeight: weight}},
-			BarEndTime:       timestamppb.New(bar), ValidUntil: timestamppb.New(bar.Add(time.Hour)),
+			BarEndTime:       bar.UnixMilli(), ValidUntil: bar.Add(time.Hour).UnixMilli(),
 		},
 		events.PublishOptions{EventID: targetID, OccurredAt: now, SpaceID: testSpace, SubjectID: logicalID},
 	)

@@ -72,8 +72,8 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 	var hourNew, dayNew int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row := &MetricIngestMessage{MessageID: msg.GetEventId(), ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
-		if at := msg.GetOccurredAt(); at != nil {
-			t := at.AsTime()
+		if at := msg.GetOccurredAt(); at > 0 {
+			t := time.UnixMilli(at).UTC()
 			row.OccurredAt = &t
 		}
 		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(row)
@@ -135,8 +135,8 @@ func (r *MetricMessageStore) TouchService(ctx context.Context, msg *eventpb.Even
 }
 
 func reportSeenAt(msg *eventpb.EventMessage, receivedAt time.Time) time.Time {
-	if at := msg.GetOccurredAt(); at != nil && at.AsTime().Before(receivedAt) {
-		return at.AsTime().UTC()
+	if at := msg.GetOccurredAt(); at > 0 && time.UnixMilli(at).Before(receivedAt) {
+		return time.UnixMilli(at).UTC()
 	}
 	return receivedAt
 }

@@ -134,8 +134,8 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	require.Equal(t, stored.StartedAt, target.GetSessionStartedAt(), "目标事件带会话开始时刻，Trade 按它比较会话先后")
 	require.Equal(t, "strategy-e2e", target.GetStrategyId())
 	require.Equal(t, logical, target.GetLogicalAccountId())
-	require.True(t, target.GetBarEndTime().AsTime().Equal(barEnd))
-	require.True(t, target.GetValidUntil().AsTime().Equal(barEnd.Add(2*time.Hour)))
+	require.True(t, time.UnixMilli(target.GetBarEndTime()).UTC().Equal(barEnd))
+	require.True(t, time.UnixMilli(target.GetValidUntil()).UTC().Equal(barEnd.Add(2*time.Hour)))
 	t.Logf("Handler → Result → Relay → NATS：target=%s instance=%s session=%s weights=%s", result.ResultID, target.GetInstanceId(), target.GetSessionId(), result.TargetsJSON)
 }
 

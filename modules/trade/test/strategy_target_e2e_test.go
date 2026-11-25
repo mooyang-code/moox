@@ -20,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -320,8 +319,8 @@ func targetDeliveryWithTargets(
 			SessionId: "session-e2e", SessionStartedAt: 1_000, StrategyId: "strategy-e2e",
 			LogicalAccountId: testLogicalAccount,
 			Targets:          targets,
-			BarEndTime:       timestamppb.New(bar),
-			ValidUntil:       timestamppb.New(bar.Add(time.Hour)),
+			BarEndTime:       bar.UnixMilli(),
+			ValidUntil:       bar.Add(time.Hour).UnixMilli(),
 		},
 		events.PublishOptions{
 			EventID: targetID, OccurredAt: now,

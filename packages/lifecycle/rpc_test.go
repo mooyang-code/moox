@@ -110,7 +110,7 @@ func TestControlLifecycleReturnCodes(t *testing.T) {
 	ctx := context.Background()
 	c := newController(t, &fakeModule{}, "")
 	for _, req := range []*commonpb.ControlLifecycleReq{
-		{Command: "init"}, {Command: "pause", PauseKind: "auto"}, {Command: "pause", ExpiresAt: "明天"},
+		{Command: "init"}, {Command: "pause", PauseKind: "auto"}, {Command: "pause", ExpiresAt: -1},
 	} {
 		rsp, err := c.ControlLifecycle(ctx, req)
 		require.NoError(t, err)

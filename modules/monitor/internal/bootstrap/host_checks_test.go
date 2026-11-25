@@ -26,7 +26,6 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type capturedSender struct {
@@ -135,7 +134,7 @@ func (h *hostCheckHarness) gateway(alive bool) {
 		seen = h.clock.Add(-5 * time.Minute)
 	}
 	h.sequence++
-	_, err := h.messages.CommitIngest(h.t.Context(), &eventpb.EventMessage{EventId: fmt.Sprintf("gateway-%d", h.sequence), OccurredAt: timestamppb.New(seen)},
+	_, err := h.messages.CommitIngest(h.t.Context(), &eventpb.EventMessage{EventId: fmt.Sprintf("gateway-%d", h.sequence), OccurredAt: seen.UnixMilli()},
 		&metricspb.MetricReport{ServiceName: "host-gateway", InstanceId: "host-gateway@storage", NodeId: "storage", BootId: "boot", Ready: proto.Bool(true)}, nil)
 	require.NoError(h.t, err)
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/storagepb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Notice 是一条下架通知。
@@ -93,8 +92,8 @@ func (r *Registrar) Register(ctx context.Context, notice Notice) (created bool, 
 			eventID = fmt.Sprintf("%s-r%d", eventID, revision)
 		}
 		raw, err := r.Registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
-			Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: timestamppb.New(delistAt),
-			Source: notice.Source, FirstSeenAt: timestamppb.New(now), Scope: notice.Scope,
+			Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: delistAt.UnixMilli(),
+			Source: notice.Source, FirstSeenAt: now.UnixMilli(), Scope: notice.Scope,
 		}, events.PublishOptions{EventID: eventID, OccurredAt: now, SpaceID: events.SystemSpaceID, SubjectID: subject})
 		if err != nil {
 			return store.OutboxEvent{}, fmt.Errorf("生成下架事件失败: %w", err)

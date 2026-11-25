@@ -165,7 +165,7 @@ func (t *BackfillTrigger) OnBackfilled(ctx context.Context, spaceID, eventID str
 	for _, task := range tasks {
 		_, _, err := SubmitJob(ctx, t.State, task, SubmitJobRequest{
 			SpaceID: task.Spec.SpaceID, TaskID: task.Spec.TaskID, RequestID: eventID, Origin: store.ResampleOriginSourceBackfill,
-			Subjects: payload.GetSubjectIds(), Start: time.Unix(payload.GetStart(), 0).UTC(), End: time.Unix(payload.GetEnd(), 0).UTC(), NotBefore: payload.GetConfirmedAt().AsTime().Add(t.SettleAfter),
+			Subjects: payload.GetSubjectIds(), Start: time.Unix(payload.GetStart(), 0).UTC(), End: time.Unix(payload.GetEnd(), 0).UTC(), NotBefore: time.UnixMilli(payload.GetConfirmedAt()).UTC().Add(t.SettleAfter),
 		}, newID, now)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("task %s: %w", task.Spec.TaskID, err))

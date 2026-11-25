@@ -218,7 +218,7 @@ func metricsObservabilityRoute(
 			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectSpace)
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 		}
-		observed := message.GetOccurredAt().AsTime()
+		observed := time.UnixMilli(message.GetOccurredAt()).UTC()
 		samples, err := monmetrics.ParseSnapshot(metricReport.GetSnapshot(), monmetrics.Envelope{
 			ServiceName: metricReport.GetServiceName(), InstanceID: metricReport.GetInstanceId(),
 			MessageID: message.GetEventId(), ProducerNodeID: metricReport.GetNodeId(),
