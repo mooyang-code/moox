@@ -248,6 +248,11 @@ func (memoryKeys) Where() string                 { return "测试密钥" }
 
 // 主机 enabled 不写为启用；[deployments_disabled] 只改部署的登记状态；停用的主机只留 host-gateway 的单元在跑。
 func TestHostAndDeploymentEnablement(t *testing.T) {
+	// Declared 会读 ssh.private_key_file 指向的私钥：用临时的家目录，不依赖本机有没有 ~/.ssh/moox_ed25519。
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".ssh"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".ssh", "moox_ed25519"), []byte("test-private-key\n"), 0o600))
 	cfg, err := Parse([]byte(strings.Replace(validConfig, `control = ["admin", "eventbus"]`, `control = ["admin", "eventbus", "collector"]`, 1) + `
 [hosts.factor]
 address = "192.0.2.30"
