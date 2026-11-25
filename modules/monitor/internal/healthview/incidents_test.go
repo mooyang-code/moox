@@ -3,6 +3,7 @@ package healthview
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -219,7 +220,7 @@ func TestIncidentsCarryProcessesRecordedAtTrigger(t *testing.T) {
 	names := map[string][]string{}
 	incidents := map[string]*pb.AlertIncident{}
 	for _, incident := range view.Incidents {
-		check := incident.Id[len(events.SystemSpaceID)+1 : len(incident.Id)-len("@"+incident.TriggeredAt)]
+		check := incident.Id[len(events.SystemSpaceID)+1 : len(incident.Id)-len("@"+strconv.FormatInt(incident.TriggeredAt, 10))]
 		incidents[check] = incident
 		for _, process := range incident.Processes {
 			names[check] = append(names[check], process.Name)

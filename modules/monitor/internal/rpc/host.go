@@ -22,7 +22,7 @@ func (s *Service) ListHostAgents(ctx context.Context, _ *monitorpb.ListHostAgent
 	for _, row := range rows {
 		out = append(out, &monitorpb.HostAgentInfo{
 			HostId: row.HostID, Hostname: row.Hostname, BootId: row.BootID,
-			LastSeenAt: row.LastSeenAt, Snapshot: row.Snapshot,
+			LastSeenAt: millis(row.LastSeenAt), Snapshot: row.Snapshot,
 			Reachable: row.Reachable, StaleSeconds: row.StaleSeconds,
 		})
 	}
@@ -38,18 +38,14 @@ func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.Que
 	}
 	end := time.Now().UTC()
 	start := end.Add(-time.Hour)
-	var err error
-	if req.GetStartAt() != "" {
-		start, err = time.Parse(time.RFC3339Nano, req.GetStartAt())
-		if err != nil {
-			return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(err)}, nil
-		}
+	if req.GetStartAt() < 0 || req.GetEndAt() < 0 {
+		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(errors.New("start_at、end_at 是毫秒时刻，不能为负"))}, nil
 	}
-	if req.GetEndAt() != "" {
-		end, err = time.Parse(time.RFC3339Nano, req.GetEndAt())
-		if err != nil {
-			return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(err)}, nil
-		}
+	if req.GetStartAt() > 0 {
+		start = msTime(req.GetStartAt())
+	}
+	if req.GetEndAt() > 0 {
+		end = msTime(req.GetEndAt())
 	}
 	if end.Before(start) {
 		return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: invalid(errors.New("end_at 不能早于 start_at"))}, nil
@@ -78,7 +74,7 @@ func (s *Service) QueryHostMetricHistory(ctx context.Context, req *monitorpb.Que
 	}
 	out := make([]*monitorpb.HostMetricHistoryPoint, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &monitorpb.HostMetricHistoryPoint{HostId: row.HostID, ObservedAt: row.ObservedAt, Snapshot: row.Snapshot})
+		out = append(out, &monitorpb.HostMetricHistoryPoint{HostId: row.HostID, ObservedAt: millis(row.ObservedAt), Snapshot: row.Snapshot})
 	}
 	return &monitorpb.QueryHostMetricHistoryRsp{RetInfo: success(), Points: out, DataGap: truncated || len(out) == 0}, nil
 }

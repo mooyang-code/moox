@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -72,6 +71,6 @@ func (s *Service) DeleteNotificationChannel(ctx context.Context, req *monitorpb.
 func notificationChannelPB(channel domain.NotificationChannel) *monitorpb.NotificationChannel {
 	return &monitorpb.NotificationChannel{
 		ChannelId: channel.ChannelID, ChannelType: channel.ChannelType, WebhookUrl: channel.WebhookURL,
-		CreatedAt: channel.CreatedAt.UTC().Format(time.RFC3339Nano), HasSecret: channel.Secret != "",
+		CreatedAt: millis(channel.CreatedAt), HasSecret: channel.Secret != "",
 	}
 }

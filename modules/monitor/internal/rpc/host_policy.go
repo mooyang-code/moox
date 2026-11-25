@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"time"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -39,9 +38,5 @@ func (s *Service) GetHostPolicy(ctx context.Context, req *monitorpb.GetHostPolic
 	for _, channel := range channels {
 		out = append(out, &monitorpb.HostPolicyChannel{ChannelType: channel.ChannelType, WebhookUrl: channel.WebhookURL, Secret: channel.Secret})
 	}
-	startedAt := ""
-	if !s.startedAt.IsZero() {
-		startedAt = s.startedAt.UTC().Format(time.RFC3339Nano)
-	}
-	return &monitorpb.GetHostPolicyRsp{RetInfo: success(), Channels: out, MonitorStartedAt: startedAt}, nil
+	return &monitorpb.GetHostPolicyRsp{RetInfo: success(), Channels: out, MonitorStartedAt: millis(s.startedAt)}, nil
 }

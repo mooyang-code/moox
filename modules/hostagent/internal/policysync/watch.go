@@ -35,7 +35,7 @@ type Watch struct {
 	mu          sync.Mutex
 	failures    int
 	unreachable bool
-	lastStart   string
+	lastStart   int64
 	changes     []time.Time
 	restarting  bool
 	// alerted 记下哪类告警真的送达过（按消息的 kind）：恢复只在告警送达过时才推，
@@ -51,9 +51,9 @@ func NewWatch(host, policyPath string, local func() bool, logf func(string, ...a
 		}}
 }
 
-// Observe 记下一次拉取的结果：startedAt 是 Monitor 的进程启动时间，err 非空表示这次没能从 Monitor 拿到主机策略
+// Observe 记下一次拉取的结果：startedAt 是 Monitor 的进程启动时刻（毫秒，0 表示没拿到），err 非空表示这次没能从 Monitor 拿到主机策略
 // （本机写缓存失败不算：那时 Monitor 是可达的）。
-func (w *Watch) Observe(ctx context.Context, startedAt string, err error) {
+func (w *Watch) Observe(ctx context.Context, startedAt int64, err error) {
 	if w == nil || (w.local != nil && w.local()) {
 		return
 	}
@@ -75,10 +75,10 @@ func (w *Watch) Observe(ctx context.Context, startedAt string, err error) {
 			delete(w.alerted, "unreachable")
 		}
 		w.failures, w.unreachable = 0, false
-		if startedAt != "" && w.lastStart != "" && startedAt != w.lastStart {
+		if startedAt != 0 && w.lastStart != 0 && startedAt != w.lastStart {
 			w.changes = append(w.changes, now)
 		}
-		if startedAt != "" {
+		if startedAt != 0 {
 			w.lastStart = startedAt
 		}
 	}
@@ -94,7 +94,7 @@ func (w *Watch) Observe(ctx context.Context, startedAt string, err error) {
 		w.restarting = true
 		messages = append(messages, w.message("monitor_restart", notification.SeverityCritical, "Monitor 反复重启",
 			fmt.Sprintf("主机 %s 的采集器看到 Monitor 的启动时间在 %d 分钟内变了 %d 次（最近一次启动 %s）：Monitor 可能在崩溃后被反复拉起，期间告警可能漏发。查看控制机上 monitor 的日志。10 分钟内连续部署控制机三次也会出现这一条。",
-				w.host, int(RestartWindow/time.Minute), len(w.changes), w.lastStart)))
+				w.host, int(RestartWindow/time.Minute), len(w.changes), time.UnixMilli(w.lastStart).UTC().Format(time.RFC3339))))
 	case len(w.changes) < RestartChanges && w.restarting:
 		w.restarting = false
 		if w.alerted["monitor_restart"] {

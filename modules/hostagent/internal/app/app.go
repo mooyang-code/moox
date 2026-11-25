@@ -101,7 +101,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		return nil, err
 	}
 	report := &monitorpb.HostReport{
-		ReportId: reportID.String(), CollectedAt: collectedAt.Format(time.RFC3339Nano),
+		ReportId: reportID.String(), CollectedAt: collectedAt.UnixMilli(),
 		Metric: &hostmetricpb.HostMetric{HostId: a.cfg.HostID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot},
 	}
 	if err := a.report(ctx, report); err != nil {

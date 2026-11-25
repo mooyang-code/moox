@@ -126,7 +126,7 @@ func TestProjectSystemPausePhases(t *testing.T) {
 	require.Equal(t, "orange", all.Color)
 	require.Equal(t, "healthy", all.Health)
 	require.Equal(t, int32(4), all.PauseKinds["system"])
-	require.Equal(t, "2026-10-21T10:00:00Z", all.PausedSince)
+	require.Equal(t, time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC).UnixMilli(), all.PausedSince)
 	require.Contains(t, all.Issues, "策略服务：系统暂停：切换行情源")
 
 	partial := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: stage("running")}, moduleReport{id: "strategy", lifecycle: paused("manual")})

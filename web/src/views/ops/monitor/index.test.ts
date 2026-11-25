@@ -8,6 +8,9 @@ import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets } from "@/api/storage/metadata";
 import HealthMonitor from "./index.vue";
 
+// Monitor 接口里的时刻是毫秒数字字符串。
+const ms = (text: string) => String(Date.parse(text));
+
 vi.mock("@/api/http", () => ({ call: vi.fn() }));
 // 展开状态在 URL 里：路由换成可控的假实现
 const nav = vi.hoisted(() => ({ route: { query: {} as Record<string, string> } }));
@@ -76,7 +79,7 @@ function render(overview: HealthOverview) {
 }
 const generated = "2026-10-16T03:00:00Z";
 const healthy: HealthOverview = {
-  generated_at: generated,
+  generated_at: ms(generated),
   topology_known: true,
   components: [{ host_id: "control", component_id: "admin", name: "管理后台", status: "healthy" }],
   hosts: [{ host_id: "control", status: "healthy", cpu_available: true, cpu_percent: 3, cpu_threshold: 80 }],
@@ -119,7 +122,7 @@ describe("monitor page", () => {
       id,
       severity: "warning",
       title: id,
-      triggered_at: "2026-10-16T02:58:20Z",
+      triggered_at: ms("2026-10-16T02:58:20Z"),
       object: { type: "dataset" as const, producer: "collector", dataset_id: `ds_${id}`, freq: "5m", space_id }
     });
     const page = render({ ...healthy, alerts: [alert("a", "stockcn"), alert("b", "crypto")] });
@@ -142,14 +145,14 @@ describe("monitor page", () => {
           title: "行情采集 scf_timer 协调",
           reason: "采集计划指标已停止上报",
           raw_error: "metrics stale",
-          triggered_at: "2026-10-16T02:58:20Z",
+          triggered_at: ms("2026-10-16T02:58:20Z"),
           object: { type: "business", kind: "kline_freshness" }
         },
         {
           id: "reporter",
           severity: "warning",
           title: "行情采集服务（control 节点）· 运行指标上报",
-          triggered_at: "2026-10-16T02:58:00Z",
+          triggered_at: ms("2026-10-16T02:58:00Z"),
           object: { type: "component", host_id: "control", component_id: "collector" }
         }
       ]
@@ -173,7 +176,7 @@ describe("monitor page", () => {
           severity: "warning",
           title: "下架检测缺少币安只读 Key",
           reason: "币安现货：没有读到只读 Key",
-          triggered_at: "2026-10-16T02:58:20Z",
+          triggered_at: ms("2026-10-16T02:58:20Z"),
           object: {
             type: "business",
             kind: "attention",
@@ -201,15 +204,15 @@ describe("monitor page", () => {
           id: "flap",
           severity: "warning",
           title: "运行指标上报",
-          triggered_at: "2026-10-16T02:30:00Z",
-          resolved_at: "2026-10-16T02:30:29Z"
+          triggered_at: ms("2026-10-16T02:30:00Z"),
+          resolved_at: ms("2026-10-16T02:30:29Z")
         },
         {
           id: "long",
           severity: "critical",
           title: "策略结果",
-          triggered_at: "2026-10-15T20:00:00Z",
-          resolved_at: "2026-10-15T23:09:00Z",
+          triggered_at: ms("2026-10-15T20:00:00Z"),
+          resolved_at: ms("2026-10-15T23:09:00Z"),
           reminder_count: 37
         }
       ]
@@ -251,8 +254,8 @@ describe("monitor page", () => {
         id: `i${index}`,
         severity: "critical",
         title: `告警 ${index}`,
-        triggered_at: new Date(Date.parse(generated) - (index + 1) * 3_600_000).toISOString(),
-        resolved_at: new Date(Date.parse(generated) - (index + 1) * 3_600_000 + 600_000).toISOString()
+        triggered_at: String(Date.parse(generated) - (index + 1) * 3_600_000),
+        resolved_at: String(Date.parse(generated) - (index + 1) * 3_600_000 + 600_000)
       }))
     });
     await flushPromises();
@@ -310,9 +313,9 @@ describe("monitor page", () => {
               reason: "最近成功结果已过期",
               output_watermark_at: "2026-10-16T02:40:00Z",
               expected_bar_at: "2026-10-16T02:59:00Z",
-              expected_bar_close_at: "2026-10-16T03:00:00Z",
+              expected_bar_close_at: ms("2026-10-16T03:00:00Z"),
               waiting_bars: 19,
-              waiting_since: "2026-10-16T02:42:00Z",
+              waiting_since: ms("2026-10-16T02:42:00Z"),
               late_confirmed: true,
               lateness_limit_seconds: "600"
             },
@@ -323,8 +326,8 @@ describe("monitor page", () => {
               freq: "1h",
               status: "healthy",
               output_watermark_at: "2026-10-16T01:00:00Z",
-              latest_bar_close_at: "2026-10-16T02:00:00Z",
-              arrived_at: "2026-10-16T02:00:04Z",
+              latest_bar_close_at: ms("2026-10-16T02:00:00Z"),
+              arrived_at: ms("2026-10-16T02:00:04Z"),
               delay_known: true,
               delay_seconds: "4",
               lateness_limit_seconds: "3600"

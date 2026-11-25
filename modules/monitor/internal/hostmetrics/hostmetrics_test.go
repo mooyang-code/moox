@@ -22,21 +22,21 @@ const validReportID = "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73"
 
 func validHostReport(t *testing.T) Report {
 	t.Helper()
-	report, err := ValidateReport(validReportID, time.Now().UTC().Format(time.RFC3339Nano), validHostMetric())
+	report, err := ValidateReport(validReportID, time.Now().UnixMilli(), validHostMetric())
 	require.NoError(t, err)
 	return report
 }
 
 func TestValidateHostReportContract(t *testing.T) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UnixMilli()
 	report, err := ValidateReport(validReportID, now, validHostMetric())
 	require.NoError(t, err)
 	assert.Equal(t, "control", report.Metric.GetHostId())
 	for name, check := range map[string]func() error{
 		"上报 ID 不是 UUIDv7": func() error { _, err := ValidateReport("report-1", now, validHostMetric()); return err },
-		"采集时间不合法":         func() error { _, err := ValidateReport(validReportID, "yesterday", validHostMetric()); return err },
+		"缺采集时刻":           func() error { _, err := ValidateReport(validReportID, 0, validHostMetric()); return err },
 		"采集时间太早": func() error {
-			_, err := ValidateReport(validReportID, time.Now().Add(-time.Hour).Format(time.RFC3339Nano), validHostMetric())
+			_, err := ValidateReport(validReportID, time.Now().Add(-time.Hour).UnixMilli(), validHostMetric())
 			return err
 		},
 		"缺快照": func() error { _, err := ValidateReport(validReportID, now, nil); return err },
@@ -71,7 +71,7 @@ func TestStorePersistsSnapshotLocally(t *testing.T) {
 	history, err := store.History(context.Background(), metric.GetHostId(), occurred.Add(-time.Hour), occurred.Add(time.Hour), 0)
 	require.NoError(t, err)
 	require.Len(t, history, 1)
-	assert.Equal(t, occurred.Truncate(time.Minute).Format(time.RFC3339Nano), history[0].ObservedAt)
+	assert.True(t, occurred.Truncate(time.Minute).Equal(history[0].ObservedAt))
 	assert.EqualValues(t, 25, history[0].Snapshot.GetCpu().GetUsagePercent())
 }
 
@@ -108,7 +108,7 @@ func TestSampleStoreHistorySpansTheRangeAndPrunes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, history, 3)
 	for i, point := range history {
-		assert.Equal(t, base.Add(time.Duration(2*i)*time.Minute).Format(time.RFC3339Nano), point.ObservedAt)
+		assert.True(t, base.Add(time.Duration(2*i)*time.Minute).Equal(point.ObservedAt))
 		assert.EqualValues(t, 2*i, point.Snapshot.GetCpu().GetUsagePercent())
 		assert.Empty(t, point.Snapshot.GetTopProcesses())
 		assert.Empty(t, point.Snapshot.GetCollectors())

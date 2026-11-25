@@ -64,16 +64,17 @@ type Watermark struct {
 }
 
 type Context struct {
-	GeneratedAt, ManifestChecksum string
-	ExpectedComponents            []ExpectedComponent
-	HealthObservations            []Observation
-	ReporterObservations          []Observation
-	ModuleObservations            []Observation
-	Watermarks                    []Watermark
-	Hosts                         []hostmetrics.AgentView
-	Forecasts                     map[string][]hostmetrics.DiskForecast
-	Alerts                        []domain.AlertEvent
-	MissingObservations           []Observation
+	GeneratedAt          time.Time
+	ManifestChecksum     string
+	ExpectedComponents   []ExpectedComponent
+	HealthObservations   []Observation
+	ReporterObservations []Observation
+	ModuleObservations   []Observation
+	Watermarks           []Watermark
+	Hosts                []hostmetrics.AgentView
+	Forecasts            map[string][]hostmetrics.DiskForecast
+	Alerts               []domain.AlertEvent
+	MissingObservations  []Observation
 }
 
 func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthCheckIDs []string) (Context, error) {
@@ -92,7 +93,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 	if b.Now != nil {
 		now = b.Now().UTC()
 	}
-	out := Context{GeneratedAt: now.Format(time.RFC3339Nano), ManifestChecksum: manifest.Checksum, Forecasts: map[string][]hostmetrics.DiskForecast{}}
+	out := Context{GeneratedAt: now, ManifestChecksum: manifest.Checksum, Forecasts: map[string][]hostmetrics.DiskForecast{}}
 	snapshot, deploymentErr := b.loadDeployments(ctx)
 	hosts := make(map[string]bool, len(snapshot.Hosts))
 	for _, host := range snapshot.Hosts {

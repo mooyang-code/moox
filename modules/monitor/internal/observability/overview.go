@@ -253,7 +253,7 @@ func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, e
 			status, reason = "down", "agent unreachable"
 		}
 		item := HostStatus{HostID: row.HostID, Hostname: row.Hostname, Status: status, Reason: reason}
-		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
+		item.LastSeenAt = row.LastSeenAt
 		if snapshot := row.Snapshot; snapshot != nil {
 			item.MetricsAvailable = true
 			item.Processes = hostmetrics.TopProcesses(snapshot)
