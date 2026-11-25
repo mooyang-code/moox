@@ -55,7 +55,6 @@
             {
               "port": 11003,
               "callers": [
-                "monitor",
                 "moox-cli",
                 "strategy"
               ]
@@ -196,9 +195,9 @@
         {"service":"trpc.moox.factor.FactorMgr","method":"UpdateFactor","component":"factor-mgr","port":11403,"max_body_bytes":4194304,"timeout_ms":120000,"read_only":false,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.factor.FactorMgr","method":"UpsertFactorCategory","component":"factor-mgr","port":11403,"max_body_bytes":4194304,"timeout_ms":120000,"read_only":false,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.factor.FactorMgr","method":"ValidateFactorSpec","component":"factor-mgr","port":11403,"max_body_bytes":4194304,"timeout_ms":120000,"read_only":true,"callers":["console","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["monitor","moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.infra.Auth","method":"GetUserInfo","component":"admin","port":11100,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["console"]},
         {"service":"trpc.moox.infra.Auth","method":"Login","component":"admin","port":11100,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console"]},
         {"service":"trpc.moox.infra.Auth","method":"Logout","component":"admin","port":11100,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console"]},
@@ -274,9 +273,9 @@
       ],
       "relays": [],
       "routes": [
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["monitor","moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.storage.DataView","method":"CountTimeSeriesRows","component":"storage-view","port":20103,"max_body_bytes":33554432,"timeout_ms":25000,"read_only":true,"callers":["collector","console","factor-mgr","monitor","moox-cli","strategy"]},
         {"service":"trpc.moox.storage.DataView","method":"GetViewState","component":"storage-view","port":20103,"max_body_bytes":33554432,"timeout_ms":25000,"read_only":true,"callers":["collector","console","factor-mgr","monitor","moox-cli","strategy"]},
         {"service":"trpc.moox.storage.DataView","method":"QueryTimeSeriesRows","component":"storage-view","port":20103,"max_body_bytes":33554432,"timeout_ms":25000,"read_only":true,"callers":["collector","console","factor-mgr","monitor","moox-cli","strategy"]},
@@ -339,9 +338,9 @@
       "routes": [
         {"service":"trpc.moox.collector.MarketFetchExecutor","method":"Invoke","component":"collector-stream","port":11450,"max_body_bytes":4194304,"timeout_ms":95000,"read_only":false,"callers":["collector"]},
         {"service":"trpc.moox.egress.Proxy","method":"Do","component":"egress-proxy","port":11440,"max_body_bytes":50331648,"timeout_ms":120000,"read_only":false,"callers":["collector"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["monitor","moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"AddLogicalAccountMember","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"CancelOrder","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console","moox-cli"]},
         {"service":"trpc.moox.trade.TradeConsoleService","method":"ClosePaperSimulation","component":"trade","port":11200,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["console","moox-cli"]},
@@ -410,9 +409,9 @@
         {"service":"trpc.moox.factor.EngineControl","method":"OpenReplay","component":"factor-engine","port":11423,"max_body_bytes":4194304,"timeout_ms":600000,"read_only":false,"callers":["strategy"]},
         {"service":"trpc.moox.factor.EngineControl","method":"StepReplay","component":"factor-engine","port":11423,"max_body_bytes":4194304,"timeout_ms":120000,"read_only":false,"callers":["strategy"]},
         {"service":"trpc.moox.factor.EngineControl","method":"WriteSeries","component":"factor-engine","port":11423,"max_body_bytes":4194304,"timeout_ms":120000,"read_only":false,"callers":["moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["monitor","moox-cli"]},
-        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["monitor","moox-cli"]}
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetSnapshot","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"GetStatus","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":true,"callers":["moox-cli"]},
+        {"service":"trpc.moox.hostagent.HostAgentMgr","method":"RunOnce","component":"host-agent","port":11426,"max_body_bytes":4194304,"timeout_ms":5000,"read_only":false,"callers":["moox-cli"]}
       ]
     }
   ]

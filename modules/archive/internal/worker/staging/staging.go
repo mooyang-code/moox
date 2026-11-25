@@ -210,18 +210,6 @@ func Open(path string, opts Options) (*Store, error) {
 			return nil, fmt.Errorf("create staging state tables: %w", err)
 		}
 	}
-	// 不写迁移：旧版本建的 task_state 缺整段重读进度列时拒绝启动。
-	have, err := s.tableColumns(context.Background(), "task_state")
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	for _, column := range []string{"change_store_id", "change_sequence", "rescan_from", "rescan_until"} {
-		if !have[column] {
-			_ = db.Close()
-			return nil, fmt.Errorf("暂存库 %s 是旧版本建的（task_state 缺少 %s 列）：停掉 worker，删除 staging.db 及其 -wal、-shm 文件后重启，分区登记会从 mgr 重建", path, column)
-		}
-	}
 	return s, nil
 }
 

@@ -49,14 +49,11 @@ components:
         methods:
           - name: GetStatus
             read_only: true
-            callers: [monitor]
             operators: [moox-cli]
           - name: GetSnapshot
             read_only: true
-            callers: [monitor]
             operators: [moox-cli]
           - name: RunOnce
-            callers: [monitor]
             operators: [moox-cli]
     doctor:
       transport: host_snapshot

@@ -23,8 +23,6 @@ func alertObject(spaceID, checkID string) *pb.HealthObject {
 		switch parts[0] {
 		case "reporter", "ready", "restart":
 			object.Type, object.HostId, object.ComponentId = "component", parts[1], parts[2]
-		case "gateway":
-			object.Type, object.HostId, object.ComponentId, object.Kind = "host", parts[1], "host-gateway", parts[2]
 		case "host":
 			object.Type, object.HostId, object.Kind = "host", parts[1], parts[2]
 		}

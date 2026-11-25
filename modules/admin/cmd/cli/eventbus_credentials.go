@@ -57,13 +57,6 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	if server && sub != "export-clients" {
 		return errors.New("--server is only valid for export-clients")
 	}
-	// reconcile 只按现有角色文件里的令牌重写 users.yaml，让新增的主题拿到授权，不动任何令牌。
-	if sub == "reconcile" {
-		if outputDir == "" {
-			return errors.New("--output-dir is required")
-		}
-		return reconcileEventBusFiles(outputDir, stdout)
-	}
 	if err := loadCLIKey(dbPath, keyFile); err != nil {
 		return err
 	}
@@ -99,36 +92,6 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	default:
 		return fmt.Errorf("unknown eventbus-credentials subcommand %q", sub)
 	}
-}
-
-func reconcileEventBusFiles(dir string, out io.Writer) error {
-	roleFiles := eventBusRoleFiles()
-	tokens := make(map[string]string, len(roleFiles))
-	for role, filename := range roleFiles {
-		raw, err := os.ReadFile(filepath.Join(dir, filename))
-		if err != nil {
-			return fmt.Errorf("read EventBus role %s: %w", role, err)
-		}
-		value := parseCredentialToken(string(raw))
-		if value == "" {
-			return fmt.Errorf("EventBus role %s has no token", role)
-		}
-		tokens[role] = value
-	}
-	if err := atomicSecretFile(filepath.Join(dir, "users.yaml"), []byte(usersYAML(tokens))); err != nil {
-		return err
-	}
-	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "reconciled": true})
-}
-
-func parseCredentialToken(raw string) string {
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if value, ok := strings.CutPrefix(line, "token:"); ok {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 // EventBus 的地址跟随组件部署（可能在与 Admin 不同的主机上）；签发凭据不改动拓扑。

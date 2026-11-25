@@ -137,7 +137,6 @@ ON t_secrets (c_category, c_provider, c_key_id)
 WHERE c_is_deleted = 0 AND c_status = 'active' AND c_category = 'eventbus';
 
 -- ************ 秘钥管理触发器 ************
-DROP TRIGGER IF EXISTS update_secrets_mtime;
 CREATE TRIGGER IF NOT EXISTS update_secrets_mtime
 AFTER UPDATE ON t_secrets
 BEGIN

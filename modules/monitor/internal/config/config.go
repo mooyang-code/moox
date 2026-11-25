@@ -22,7 +22,6 @@ type Config struct {
 	Instance       InstanceConfig           `yaml:"instance"`
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
 	Deployment     DeploymentConfig         `yaml:"deployment"`
-	Alert          AlertConfig              `yaml:"alert"`
 	Observability  ObservabilityConfig      `yaml:"observability"`
 	Metrics        MetricsConfig            `yaml:"metrics"`
 	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
@@ -50,10 +49,6 @@ type SchedulerConfig struct {
 // DeploymentConfig 控制是否从 Admin 同步部署拓扑（每台主机应该有哪些组件）；组件健康只看上报，不做探测。
 type DeploymentConfig struct {
 	Enabled bool `yaml:"enabled"`
-}
-
-type AlertConfig struct {
-	SendTimeoutSeconds int `yaml:"send_timeout_seconds"`
 }
 
 type MetricsConfig struct {
@@ -150,10 +145,7 @@ func Default() *Config {
 		Scheduler: SchedulerConfig{
 			AlertEventRetentionDays: 14,
 		},
-		Deployment: DeploymentConfig{Enabled: true},
-		Alert: AlertConfig{
-			SendTimeoutSeconds: 10,
-		},
+		Deployment:    DeploymentConfig{Enabled: true},
 		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}},
 		// Canary subjects name concrete collection results, so they come only
 		// from deployment config; without subjects the canary stays disabled.
@@ -191,9 +183,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Scheduler.AlertEventRetentionDays == 0 {
 		c.Scheduler.AlertEventRetentionDays = defaults.Scheduler.AlertEventRetentionDays
-	}
-	if c.Alert.SendTimeoutSeconds == 0 {
-		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
 	}
 	metricsDefaults := Default().Metrics
 	observabilityDefaults := Default().Observability
@@ -278,9 +267,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Instance.InstanceID == "" {
 		return fmt.Errorf("instance.instance_id must not be empty")
-	}
-	if c.Alert.SendTimeoutSeconds <= 0 || c.Alert.SendTimeoutSeconds > 300 {
-		return fmt.Errorf("alert.send_timeout_seconds must be between 1 and 300")
 	}
 	if c.Observability.Enabled {
 		if len(c.Observability.EventBusURLs) == 0 {

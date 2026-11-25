@@ -1,93 +1,29 @@
 package events
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestConsumerEventFiltersSupportOneDurableWithMultipleEvents(t *testing.T) {
+func TestConsumerEventFilterCoversTheWholeFamily(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := ConsumerConfig{Events: []Event{
-		DatasetPeriodCompleted,
-		ViewDataReady,
-	}}
-	stream, filters, err := consumerEventFilters(registry, cfg)
+	cfg := ConsumerConfig{Name: "c", Event: ViewDataReady}
+	filter, err := consumerEventFilter(registry, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stream != "MOOX_STORAGE" {
-		t.Fatalf("stream = %q", stream)
+	if filter != "moox.event.storage.view.data.ready.v2.>" {
+		t.Fatalf("filter = %q", filter)
 	}
-	want := []string{
-		"moox.event.storage.dataset.period.completed.v1.>",
-		"moox.event.storage.view.data.ready.v2.>",
+	transport := jetstreamConsumerConfig(cfg, filter)
+	if transport.Stream != "MOOX_STORAGE" || transport.FilterSubject != filter || len(transport.FilterSubjects) != 0 {
+		t.Fatalf("transport = %+v", transport)
 	}
-	if !reflect.DeepEqual(filters, want) {
-		t.Fatalf("filters = %v, want %v", filters, want)
-	}
-	transport := jetstreamConsumerConfig(cfg, stream, filters)
-	if transport.FilterSubject != "" || !reflect.DeepEqual(transport.FilterSubjects, want) {
-		t.Fatalf("transport filters = %q / %v", transport.FilterSubject, transport.FilterSubjects)
-	}
-}
-
-func TestConsumerEventFiltersRejectAmbiguousOrCrossStreamEvents(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []ConsumerConfig{
-		{Event: ViewDataReady, Events: []Event{DatasetPeriodCompleted}},
-		{Events: []Event{ViewDataReady, ViewDataReady}},
-		{Events: []Event{ViewDataReady, ObservabilityLogReported}},
-		{},
-	}
-	for _, cfg := range tests {
-		if _, _, err := consumerEventFilters(registry, cfg); err == nil {
-			t.Fatalf("consumerEventFilters(%+v) succeeded", cfg)
-		}
-	}
-}
-
-func TestConsumerEventFiltersAcceptExactSubjectPartition(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	row, err := registry.RenderSubject(ViewDataReady, "crypto", "dataset_binance_kline_1m")
-	if err != nil {
-		t.Fatal(err)
-	}
-	marker, err := registry.RenderSubject(DatasetPeriodCompleted, "crypto", "dataset_binance_kline_1m")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := ConsumerConfig{Stream: ViewDataReady.Stream(), FilterSubjects: []string{row, marker}}
-	stream, filters, err := consumerEventFilters(registry, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stream != ViewDataReady.Stream() || !reflect.DeepEqual(filters, []string{row, marker}) {
-		t.Fatalf("exact filters = %q/%v", stream, filters)
-	}
-}
-
-func TestConsumerEventFiltersRejectExactSubjectWithoutStreamOrMixedMode(t *testing.T) {
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, cfg := range []ConsumerConfig{
-		{FilterSubjects: []string{"moox.event.storage.view.data.ready.v2.crypto.binance"}},
-		{Stream: ViewDataReady.Stream(), FilterSubjects: []string{"moox.event.storage.view.data.ready.v2.crypto.binance"}, Event: ViewDataReady},
-	} {
-		if _, _, err := consumerEventFilters(registry, cfg); err == nil {
-			t.Fatalf("consumerEventFilters(%+v) accepted invalid exact filter config", cfg)
-		}
+	if _, err := consumerEventFilter(registry, ConsumerConfig{}); err == nil {
+		t.Fatal("没有 Event 的消费者配置应被拒绝")
 	}
 }
 

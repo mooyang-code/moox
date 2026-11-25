@@ -27,9 +27,6 @@ deployment:
   # 从 Admin 同步部署拓扑（每台主机应该有哪些组件）；组件健康只看各组件的上报。
   enabled: true
 
-alert:
-  send_timeout_seconds: 10
-
 observability:
   enabled: true
   deliver_policy: all
