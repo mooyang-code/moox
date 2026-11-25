@@ -17,7 +17,7 @@ provider:
     burst: 20
     max_concurrent: 16
     cooldown: 1s
-    # request_timeout 管整次取数（一个标的的一次 FetchKlines），实时采集用不到它：定时函数按计划的 fetch.request_timeout_ms
+    # request_timeout 管整次取数（一个标的的一次 FetchKlines），云函数定时采集用不到它（本地执行端不设进程环境，会直接用这里的 15 秒；线上美股是云函数）：定时函数按计划的 fetch.request_timeout_ms
     # （market.yaml 的 scf_plan，3 秒，取一根 5m 的一次 5 分钟请求）设进程环境，覆盖这里。没有这项环境的补采函数用这里的值：
     # 历史补齐的一块是一次约 20 天的请求，2026-11-25 从控制机实测单次 2.7～6.2 秒。原先 3 秒时补齐的尝试大多超时
     # （南京补采函数 9 秒 = 3 次 × 3 秒放弃，没有一次 429、403）。15 秒 × 3 次在补采函数 60 秒的执行预算内。
