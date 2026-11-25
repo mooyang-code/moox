@@ -178,23 +178,9 @@ func findAcceptedTargetHistory(db *gorm.DB, spaceID, targetID string) (targetHis
 	return rows[0], nil
 }
 
-func (r TargetHistoryRecord) RecordedAtTime() time.Time { return time.UnixMilli(r.RecordedAt).UTC() }
-
-// AcceptLogicalAccountTargetWithHistory 在一个事务里接受当前目标并写它的目标历史。同一请求哈希的重放是幂等的；
-// 同一目标号换了内容是冲突。
-func (s *Store) AcceptLogicalAccountTargetWithHistory(ctx context.Context, target LogicalAccountTargetRecord, history TargetHistoryRecord) (LogicalAccountTargetRecord, bool, error) {
-	unlock := s.LockLogicalAccount(target.SpaceID, target.LogicalAccountID)
-	defer unlock()
-	return s.acceptLogicalAccountTargetWithHistory(ctx, target, history)
-}
-
-// AcceptLogicalAccountTargetWithHistoryLocked 与 AcceptLogicalAccountTargetWithHistory 相同，但要求调用方已持有组合锁：
-// Trade 换算权重时持锁，让成员关系、权益和落库的历史看到的是同一个状态。
+// AcceptLogicalAccountTargetWithHistoryLocked 在一个事务里接受当前目标并写它的目标历史，要求调用方已持有组合锁：
+// Trade 换算权重时持锁，让成员关系、权益和落库的历史看到的是同一个状态。同一请求哈希的重放是幂等的；同一目标号换了内容是冲突。
 func (s *Store) AcceptLogicalAccountTargetWithHistoryLocked(ctx context.Context, target LogicalAccountTargetRecord, history TargetHistoryRecord) (LogicalAccountTargetRecord, bool, error) {
-	return s.acceptLogicalAccountTargetWithHistory(ctx, target, history)
-}
-
-func (s *Store) acceptLogicalAccountTargetWithHistory(ctx context.Context, target LogicalAccountTargetRecord, history TargetHistoryRecord) (LogicalAccountTargetRecord, bool, error) {
 	var current LogicalAccountTargetRecord
 	var accepted bool
 	err := s.Transaction(ctx, func(tx *Tx) error {

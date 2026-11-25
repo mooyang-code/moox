@@ -167,6 +167,26 @@ func TestMarginReducePausesWithMarginSource(t *testing.T) {
 	require.Equal(t, store.MarginPause(store.MarginReduced), logical.Pause())
 }
 
+// 风控减仓第一次调用后仍在运行，工作线程按请求 JSON 恢复（PauseAs 为零值）时不再写暂停：来源仍是 MARGIN、减仓状态仍是 REDUCED，
+// 否则保证金率风控的关注项报不出来，结束后的减仓状态也改写不了。
+func TestMarginReduceResumeKeepsMarginPause(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	command := flattenCommand("margin-logical-1-9")
+	command.ReduceRatio, command.PauseAs = shared.MustDecimal("0.5"), store.MarginPause(store.MarginReduced)
+	command.Reason = command.PauseAs.Reason
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	action, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "margin-logical-1-9")
+	require.NoError(t, err)
+	require.Equal(t, string(operatordomain.StatusRunning), action.Status, "子单还没成交，动作仍在运行")
+
+	_ = fixture.service().ResumeOperatorAction(context.Background(), action)
+
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, store.MarginPause(store.MarginReduced), logical.Pause())
+}
+
 // 风控减仓的子单零成交就过期：同一个动作号重试时换号再下，不判部分完成；交易所确定性拒绝才终结。
 func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)

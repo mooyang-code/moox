@@ -32,7 +32,8 @@ type FlattenCommand struct {
 	Exchange string
 	// ReduceRatio 在 0 到 1 之间时只减掉这个比例的持仓；为零或 1 表示全部清掉。
 	ReduceRatio shared.Decimal
-	// PauseAs 是动作暂停组合时写入的暂停状态（保证金率风控减仓传 store.MarginPause(store.MarginReduced)）；零值按人工暂停记，原因取 Reason。
+	// PauseAs 是动作进入运行时暂停组合写入的暂停状态（保证金率风控减仓传 store.MarginPause(store.MarginReduced)）；零值按人工暂停记，原因取 Reason。
+	// 它不落进请求 JSON：工作线程恢复运行中的动作时不再写暂停，进入运行时写的来源和减仓状态保持不变。
 	PauseAs store.Pause
 	// DeadlineAt 是下架清仓的截止时间（毫秒，下架定时任务按下架时间传入）；大于 0 时到点不再下单，动作记 PARTIAL。
 	DeadlineAt int64
@@ -244,6 +245,9 @@ func (s *Service) FlattenLogicalAccount(
 	if found {
 		previous, _ = decodeFlattenResult(existing)
 	}
+	// 锁内重读后动作仍在运行：把它置为运行的那次调用已在同一事务里写过暂停。工作线程恢复时 PauseAs 是零值，
+	// 再写一次会把风控减仓的来源（MARGIN）和减仓状态改成人工暂停，所以不再写。
+	alreadyRunning := found && existing.Status == string(operatordomain.StatusRunning)
 	var action store.OperatorActionRecord
 	var other *store.OperatorActionRecord
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -263,8 +267,8 @@ func (s *Service) FlattenLogicalAccount(
 			}
 		}
 		// 整组清仓和减仓先暂停组合；只平一个标的不动组合的自动执行状态。
-		// 自主下单组合没有自动执行，和撤单一样不暂停，也就不改写暂停原因。
-		if command.pausesLogicalAccount() {
+		// 自主下单组合没有自动执行，和撤单一样不暂停，也就不改写暂停原因。动作运行期间组合不能恢复自动执行，暂停只在进入运行时写一次。
+		if !alreadyRunning && command.pausesLogicalAccount() {
 			logical, err := tx.GetLogicalAccount(command.SpaceID, command.LogicalAccountID)
 			if err != nil {
 				return err
