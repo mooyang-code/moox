@@ -138,7 +138,7 @@ cd moox-${VER}
 - 填了交易所密钥的：`setup install` 把它们写进密钥管理（只建不改，管理台里已有或已删除的不动），安装结束后逐把检测：`moox-cli trade inspect-credential --exchange binance --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-<名称>`（`readonly = true` 的不检测）。输出里有阻断项就告诉用户原因，由用户在交易所或管理台处理；`检测没有完成` 是交易所接口暂时不可用，稍后重试。
 - 币安只读 Key（可选）：Collector 的下架检测用它读币安现货下架计划，固定读名称为 `readonly` 的币安生产环境只读密钥（`exchange = "binance"`、`environment = "production"`、`name = "readonly"`、`readonly = true`，ID `exchange-binance-production-readonly`）。
   不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台“交易管理 › 下架名单”页的“手工登记下架”。
-  登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。
+  登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（名单与清仓都只对模拟盘生效，实盘照常买卖；演练核对结束后名单行自动删掉）。
   要补就让用户 `config edit` 加上，再 `setup init` 写入，下一轮检测自动恢复。
   注意 `setup init`（以及 `setup install` 里写告警渠道的那一步）对告警渠道的规则是“Monitor 一个渠道都没有就写入秘密文件里的 `[notification]`”：
   用户在管理台把渠道全部删掉之后再跑，会把秘密文件里的旧渠道写回去。不想要它就先让用户在 `config edit` 里把 Webhook 地址清空。
