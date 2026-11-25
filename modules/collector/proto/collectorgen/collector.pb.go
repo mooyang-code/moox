@@ -5547,7 +5547,7 @@ type HistorySeed struct {
 	SpaceId   string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
 	Frequency string `protobuf:"bytes,3,opt,name=frequency,proto3" json:"frequency,omitempty"`
-	// status 取值 running（补齐中）、done、skipped（用户手动放行）。
+	// status 取值 running（补齐中）、done、skipped（用户手动放行）、failed（拼作业连续失败，已放行下游、历史没补）。
 	Status string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	// target_from 是补齐的目标起点（RFC3339）；effective_from 是补齐起算的采集计划生效点。
 	TargetFrom    string `protobuf:"bytes,5,opt,name=target_from,json=targetFrom,proto3" json:"target_from,omitempty"`

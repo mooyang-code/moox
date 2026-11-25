@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS t_collector_source_absences (
 );
 
 -- 数据集首次接入时的历史补齐：补齐期间读这个数据集的因子不计算、策略不求值。
--- c_status 取 preparing（还在拼作业）、running、done、skipped（用户手动放行）；c_job_ids 是补齐作业的 ID（JSON 数组）。
+-- c_status 取 preparing（还在拼作业）、running、done、skipped（用户手动放行）、failed（拼作业连续失败，已放行下游）；c_job_ids 是补齐作业的 ID（JSON 数组）。
 CREATE TABLE IF NOT EXISTS t_collector_history_seeds (
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
