@@ -48,7 +48,9 @@
     >
       <template #empty><a-empty description="还没有产出参数的结果（策略没有声明 factor_params，或还没有 ok 的周期）" /></template>
       <template #columns>
-        <a-table-column title="结果周期" data-index="barEnd" :width="190" />
+        <a-table-column title="结果周期" data-index="barEnd" :width="190">
+          <template #cell="{ record }">{{ formatInstant(record.barEnd, displayZone) }}</template>
+        </a-table-column>
         <a-table-column title="目标期" data-index="targetText" :width="190" />
         <a-table-column title="状态" :width="90">
           <template #cell="{ record }">
