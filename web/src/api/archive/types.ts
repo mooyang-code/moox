@@ -33,6 +33,7 @@ export interface ArchiveRun {
   range_start?: string;
   range_end?: string;
   status?: ArchiveRunStatus;
+  /** 计划、开始、结束与租约到期时刻：Unix 毫秒的数字字符串，没有时为 "0" */
   scheduled_at?: string;
   started_at?: string;
   finished_at?: string;
@@ -61,10 +62,11 @@ export interface ArchiveTask {
   /** 回补起点（归档起点）：创建时确定，之后不改 */
   backfill_from?: string;
   status?: ArchiveTaskStatus;
-  /** 最近一次成功的跟随或整段重读的开始时间 */
+  /** 最近一次成功的跟随或整段重读的开始时刻：Unix 毫秒的数字字符串，没有时为 "0" */
   last_success_at?: string;
   final_until?: string;
   creator?: string;
+  /** 创建、更新时刻：Unix 毫秒的数字字符串 */
   created_at?: string;
   updated_at?: string;
   health?: ArchiveHealth;
@@ -105,6 +107,7 @@ export interface ArchivePartition {
   /** 表头加前 20 行的 CSV */
   preview?: string;
   export_count?: number;
+  /** 以下时刻（含 remote_verified_at）是 Unix 毫秒的数字字符串，没有时为 "0" */
   last_changed_at?: string;
   exported_at?: string;
   finalized_at?: string;
@@ -125,7 +128,7 @@ export interface ArchiveObjectStore {
   url_style?: string;
   /** 最近一次探测失败的原因，空表示正常 */
   probe_error?: string;
-  /** 连续探测失败的起始时刻 */
+  /** 连续探测失败的起始时刻：Unix 毫秒的数字字符串，正常时为 "0" */
   unavailable_since?: string;
 }
 
@@ -145,6 +148,7 @@ export interface ArchiveWorkerInfo {
   maintaining?: boolean;
   pacing_json?: string;
   running_run_ids?: string[];
+  /** 最近一次心跳的时刻：Unix 毫秒的数字字符串 */
   last_heartbeat_at?: string;
   /** 最近 2 分钟内有心跳 */
   active?: boolean;

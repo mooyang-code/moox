@@ -75,7 +75,7 @@ func TestExportedPartitionIsUploadedInTheSameRunAndReported(t *testing.T) {
 	p := finalDay(t, e)
 	sha := p.GetFileSha256()
 	wantKey := "crypto/collect/kline-1m/2026/20261010." + sha[:12] + ".csv"
-	if p.GetRemoteKey() != wantKey || p.GetRemoteSha256() != sha || p.GetRemoteVerifiedAt() == "" || p.GetRemoteUploadedAt() == "" || p.GetRemoteError() != "" || p.GetRemoteEtag() == "" {
+	if p.GetRemoteKey() != wantKey || p.GetRemoteSha256() != sha || p.GetRemoteVerifiedAt() == 0 || p.GetRemoteUploadedAt() == 0 || p.GetRemoteError() != "" || p.GetRemoteEtag() == "" {
 		t.Fatalf("上报的远端字段 = %v", p)
 	}
 	obj := srv.Object(objectstore.DefaultPrefix + wantKey)

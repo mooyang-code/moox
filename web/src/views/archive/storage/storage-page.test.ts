@@ -32,7 +32,7 @@ const overview = (over: Record<string, unknown> = {}) => ({
     disk_free_bytes: String(65 * GiB),
     min_free_bytes: String(5 * GiB),
     staging_bytes: String(GiB),
-    last_heartbeat_at: "2026-11-08T00:00:00Z",
+    last_heartbeat_at: String(Date.parse("2026-11-08T00:00:00Z")),
     object_store: { endpoint: "127.0.0.1:11473", bucket: "moox-archive", prefix: "moox-archive/" },
     ...over
   }
@@ -77,6 +77,17 @@ describe("归档存储页", () => {
     api.getArchiveOverview.mockResolvedValue(overview({ disk_used_bytes: String(96 * GiB), disk_free_bytes: String(4 * GiB) }));
     const text = await mountPage();
     expect(text).toContain("磁盘空间不足（可用低于下限 5 GB），已暂停领取新运行");
+  });
+
+  it("探测失败时写出连不上的起点；起点为 0 时不写", async () => {
+    const store = { endpoint: "127.0.0.1:11473", bucket: "moox-archive", probe_error: "访问被拒绝" };
+    api.getArchiveOverview.mockResolvedValue(
+      overview({ object_store: { ...store, unavailable_since: String(Date.parse("2026-11-08T00:00:00Z")) } })
+    );
+    expect(await mountPage()).toContain("自 2026-11-08 00:00:00 UTC 起连不上");
+    wrapper.unmount();
+    api.getArchiveOverview.mockResolvedValue(overview({ object_store: { ...store, unavailable_since: "0" } }));
+    expect(await mountPage()).not.toContain("起连不上");
   });
 
   it("没配对象存储时说明不能下载", async () => {

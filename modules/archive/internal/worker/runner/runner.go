@@ -133,10 +133,10 @@ func (r *Runner) now() time.Time {
 // follow、manual 见 follow.go，range 见 runRange，import 见 import.go。出错或取消时已提交的行留在暂存区（写入幂等），
 // 位点与重读进度停在最后一个读完的单位之后；返回的 Outcome 仍带上待上报的分区登记。
 func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report func(Progress) bool, feed *ImportFeed) (out *Outcome, err error) {
-	started, err := time.Parse(time.RFC3339, a.GetStartedAt())
-	if err != nil {
-		return nil, fmt.Errorf("run %s has invalid started_at: %w", a.GetRunId(), err)
+	if a.GetStartedAt() <= 0 {
+		return nil, fmt.Errorf("运行 %s 没有开始时刻 started_at", a.GetRunId())
 	}
+	started := time.UnixMilli(a.GetStartedAt())
 	loc, err := time.LoadLocation(a.GetSpaceTz())
 	if err != nil {
 		return nil, fmt.Errorf("run %s has invalid space time zone %q: %w", a.GetRunId(), a.GetSpaceTz(), err)
@@ -287,15 +287,16 @@ func (s *runState) restorePartitions(ctx context.Context) error {
 			ExportCount: p.GetExportCount(), RowCount: p.GetRowCount(), SubjectCount: p.GetSubjectCount(),
 			Remote: staging.Remote{Key: p.GetRemoteKey(), SHA256: p.GetRemoteSha256(), ETag: p.GetRemoteEtag(), Error: p.GetRemoteError()},
 		}
+		state.LastChangedAt, state.ExportedAt, state.FinalizedAt = timeOfMillis(p.GetLastChangedAt()), timeOfMillis(p.GetExportedAt()), timeOfMillis(p.GetFinalizedAt())
+		state.Remote.UploadedAt, state.Remote.VerifiedAt = timeOfMillis(p.GetRemoteUploadedAt()), timeOfMillis(p.GetRemoteVerifiedAt())
+		// 分区范围与数据时间是 data_time 口径的文本
 		var err error
 		for _, item := range []struct {
 			value string
 			dest  *time.Time
 		}{
-			{p.GetRangeStart(), &state.Start}, {p.GetRangeEnd(), &state.End}, {p.GetLastChangedAt(), &state.LastChangedAt},
-			{p.GetExportedAt(), &state.ExportedAt}, {p.GetFinalizedAt(), &state.FinalizedAt},
+			{p.GetRangeStart(), &state.Start}, {p.GetRangeEnd(), &state.End},
 			{p.GetMinDataTime(), &state.MinDataTime}, {p.GetMaxDataTime(), &state.MaxDataTime},
-			{p.GetRemoteUploadedAt(), &state.Remote.UploadedAt}, {p.GetRemoteVerifiedAt(), &state.Remote.VerifiedAt},
 		} {
 			if *item.dest, err = parseOptionalTime(item.value); err != nil {
 				return fmt.Errorf("分区登记 %s: %w", p.GetPartitionKey(), err)
@@ -601,7 +602,7 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archi
 		report := &archivepb.PartitionReport{
 			PartitionKey: p.Key, RangeStart: p.Start.Format(time.RFC3339), RangeEnd: p.End.Format(time.RFC3339), Status: p.Status,
 			RowCount: rows, SubjectCount: subjects, ExportCount: p.ExportCount,
-			LastChangedAt: formatTime(p.LastChangedAt), ExportedAt: formatTime(p.ExportedAt), FinalizedAt: formatTime(p.FinalizedAt),
+			LastChangedAt: millisOf(p.LastChangedAt), ExportedAt: millisOf(p.ExportedAt), FinalizedAt: millisOf(p.FinalizedAt),
 		}
 		if !minTime.IsZero() {
 			report.MinDataTime, report.MaxDataTime = minTime.Format(time.RFC3339), maxTime.Format(time.RFC3339)
@@ -615,7 +616,7 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archi
 			report.Preview = s.previews[p.Key] // 本次没有重新导出时留空，mgr 保留已登记的预览
 		}
 		report.RemoteKey, report.RemoteSha256, report.RemoteEtag, report.RemoteError = p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, p.Remote.Error
-		report.RemoteUploadedAt, report.RemoteVerifiedAt = formatTime(p.Remote.UploadedAt), formatTime(p.Remote.VerifiedAt)
+		report.RemoteUploadedAt, report.RemoteVerifiedAt = millisOf(p.Remote.UploadedAt), millisOf(p.Remote.VerifiedAt)
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].PartitionKey < reports[j].PartitionKey })
@@ -639,11 +640,20 @@ func finalBoundary(parts []staging.PartitionState) time.Time {
 	return boundary
 }
 
-func formatTime(t time.Time) string {
+// millisOf 把时刻换成 Unix 毫秒，零时间给 0。
+func millisOf(t time.Time) int64 {
 	if t.IsZero() {
-		return ""
+		return 0
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.UnixMilli()
+}
+
+// timeOfMillis 把 Unix 毫秒换成 UTC 时刻，0 给零时间。
+func timeOfMillis(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
 }
 
 // exportedFileMissing 报告已导出但还没定稿的分区（含读回后的分区）的文件不在了：

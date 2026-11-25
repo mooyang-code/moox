@@ -49,18 +49,12 @@ export function humanizeDuration(seconds: number | null): string {
   return `${(seconds / 86400).toFixed(1)} 天`;
 }
 
-/** 解析 ISO 时间或 Unix 秒；无法解析返回 null。 */
+/** 时刻换成毫秒：数字与数字字符串按 Unix 毫秒（墙钟时刻的写法），文本按 RFC3339；无法解析返回 null。Unix 秒（数据坐标）由调用方先乘 1000。 */
 export function toMillis(value?: string | number | null): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  if (typeof value === "number" || /^\d+$/.test(String(value))) {
-    const seconds = Number(value);
-    return seconds > 0 ? seconds * 1000 : null;
-  }
-  const parsed = Date.parse(String(value));
-  return Number.isFinite(parsed) ? parsed : null;
+  return toInstantMs(value);
 }
 
-/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按 Unix 秒理解。 */
+/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按 Unix 毫秒理解。 */
 export function fullTime(value: string | number | null | undefined, zone = "UTC"): string {
   return formatInstant(toMillis(value), zone);
 }
@@ -186,7 +180,9 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
       const set = info.factor_task;
       const health = taskHealth(set, info.last_run);
       const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
-      const periodOpenMs = toMillis(info.last_run?.last_period_time);
+      // last_period_time 是数据坐标的 Unix 秒
+      const periodOpenSeconds = toSeconds(info.last_run?.last_period_time);
+      const periodOpenMs = periodOpenSeconds ? periodOpenSeconds * 1000 : null;
       const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
       return {
         taskId: set.task_id,

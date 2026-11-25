@@ -85,8 +85,9 @@ describe("home formatting", () => {
     expect(relativeTime(new Date(NOW + 60_000).toISOString(), NOW, "Asia/Shanghai")).toBe("18:01 UTC+8");
   });
 
-  it("相对时间悬停显示的完整时间：数字和 relativeTime 一样按 Unix 秒", () => {
-    expect(fullTime(String(Math.floor(NOW / 1000)), "UTC")).toBe("2026-10-13 10:00:00 UTC");
+  it("相对时间悬停显示的完整时间：数字和 relativeTime 一样按 Unix 毫秒", () => {
+    expect(fullTime(String(NOW), "UTC")).toBe("2026-10-13 10:00:00 UTC");
+    expect(relativeTime(String(NOW - 10_000), NOW)).toBe("10 秒前");
     expect(fullTime(new Date(NOW).toISOString(), "Asia/Shanghai")).toBe("2026-10-13 18:00:00 UTC+8");
     expect(fullTime(undefined)).toBe("—");
   });

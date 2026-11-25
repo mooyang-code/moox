@@ -126,10 +126,11 @@ func TestRemoteReplicaFlowsThroughHeartbeatTasksAndPartitions(t *testing.T) {
 	}
 	run := h.pull(1)[0]
 	report := func(key, sha, exportedAt, remoteSHA, remoteErr string) *archivepb.PartitionReport {
+		exported := rfcMillis(exportedAt)
 		r := &archivepb.PartitionReport{PartitionKey: key, Status: "exported", RangeStart: key + "T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", RowCount: 10, SubjectCount: 1,
-			FilePath: "crypto/ds_1m/2026/" + key + ".csv.gz", FileBytes: 100, FileSha256: sha, ExportCount: 1, ExportedAt: exportedAt, RemoteError: remoteErr}
+			FilePath: "crypto/ds_1m/2026/" + key + ".csv.gz", FileBytes: 100, FileSha256: sha, ExportCount: 1, ExportedAt: exported, RemoteError: remoteErr}
 		if remoteSHA != "" {
-			r.RemoteKey, r.RemoteSha256, r.RemoteEtag, r.RemoteUploadedAt, r.RemoteVerifiedAt = "crypto/ds_1m/2026/"+key+"."+remoteSHA[:3]+".csv.gz", remoteSHA, "md5", exportedAt, exportedAt
+			r.RemoteKey, r.RemoteSha256, r.RemoteEtag, r.RemoteUploadedAt, r.RemoteVerifiedAt = "crypto/ds_1m/2026/"+key+"."+remoteSHA[:3]+".csv.gz", remoteSHA, "md5", exported, exported
 		}
 		return r
 	}

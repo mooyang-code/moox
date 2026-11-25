@@ -217,7 +217,7 @@ func TestChangeLogGapRebasesAndReportsWhatCannotBeRecovered(t *testing.T) {
 	e.src.changeTrimmed = 3 // 位点 2 早于日志保留起点
 	e.now = e.now.Add(time.Minute)
 	lastSuccess := e.now.Add(-10 * 24 * time.Hour)
-	out := e.run(2000, func(a *archivepb.RunAssignment) { a.LastSuccessAt = lastSuccess.Format(time.RFC3339) }, nil)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.LastSuccessAt = lastSuccess.UnixMilli() }, nil)
 	if out.Status != "succeeded" || !strings.Contains(out.Message, "断档") {
 		t.Fatalf("out = %+v", out)
 	}
@@ -357,7 +357,7 @@ func TestChangesBeforeTheEarliestPartitionOrTheRetentionAreNotRead(t *testing.T)
 	t.Run("早于保留期", func(t *testing.T) {
 		e := newEnv(t)
 		old := &archivepb.PartitionReport{PartitionKey: "2026-10-05", RangeStart: "2026-10-05T00:00:00Z", RangeEnd: "2026-10-06T00:00:00Z", Status: "final",
-			FilePath: "crypto/collect/kline-1m/2026/20261005.csv", FileSha256: "x", ExportedAt: "2026-10-06T00:20:00Z", RowCount: 1, SubjectCount: 1}
+			FilePath: "crypto/collect/kline-1m/2026/20261005.csv", FileSha256: "x", ExportedAt: rfcMillis("2026-10-06T00:20:00Z"), RowCount: 1, SubjectCount: 1}
 		registered := func(a *archivepb.RunAssignment) { a.RegisteredPartitions = []*archivepb.PartitionReport{old} }
 		e.run(2000, func(a *archivepb.RunAssignment) { registered(a); a.BackfillFrom = "2026-10-05T00:00:00Z" }, nil)
 		retention := e.now.Add(-168 * time.Hour)
@@ -380,7 +380,10 @@ func TestManualRebuildsTheBaselineEvenWithAValidCursor(t *testing.T) {
 	heads := e.src.headCalls
 	e.src.changeLog = append(e.src.changeLog, []source.ChangeSpan{span("BTC", e.now, e.now)})
 	e.now = e.now.Add(time.Minute)
-	out := e.run(2000, func(a *archivepb.RunAssignment) { a.Kind = "manual"; a.LastSuccessAt = "2026-09-01T00:00:00Z" }, nil)
+	out := e.run(2000, func(a *archivepb.RunAssignment) {
+		a.Kind = "manual"
+		a.LastSuccessAt = rfcMillis("2026-09-01T00:00:00Z")
+	}, nil)
 	if out.Status != "succeeded" || e.src.headCalls != heads+1 || out.RowsAdded != 0 || out.Progress.RowsRead != 60 || len(out.Unrecoverable) != 0 {
 		t.Fatalf("out = %+v", out)
 	}

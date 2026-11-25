@@ -364,7 +364,7 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 	run := runs[0]
 	if run.GetLeaseToken() == "" || run.GetKind() != "manual" || run.GetFreq() != "1m" || run.GetPartitionUnit() != "day" ||
 		run.GetAllowedLatenessSeconds() != 900 || run.GetStagingRetentionSeconds() != 72*3600 || run.GetSpaceTz() != "UTC" || run.GetLocalClose() != "" ||
-		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != "2026-10-17T01:00:00Z" || run.GetLeaseTtlSeconds() != 600 ||
+		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != rfcMillis("2026-10-17T01:00:00Z") || run.GetLeaseTtlSeconds() != 600 ||
 		run.GetPurpose() != "data" || run.GetDirName() != "ds-1m" {
 		t.Fatalf("assignment = %v", run)
 	}
@@ -445,7 +445,7 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 	good.Unrecoverable = []*archivepb.UnrecoverableRange{{SubjectId: "BTC-USDT", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}
 	good.Partitions = []*archivepb.PartitionReport{{
 		PartitionKey: "2026-10-16", Status: "exported", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", RowCount: 100, SubjectCount: 2,
-		FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileBytes: 10, FileSha256: "abc", Columns: []string{"open", "close"}, ExportCount: 1, ExportedAt: "2026-10-17T01:05:00Z",
+		FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileBytes: 10, FileSha256: "abc", Columns: []string{"open", "close"}, ExportCount: 1, ExportedAt: rfcMillis("2026-10-17T01:05:00Z"),
 	}}
 	rsp, _ := h.worker.CompleteArchiveRun(ctx, good)
 	requireOK(t, rsp.GetRetInfo())
@@ -491,7 +491,7 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 	}
 	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: runs[0].GetRunId(), LeaseToken: runs[0].GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", Status: "exported", RowCount: 100, SubjectCount: 2,
-			FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileSha256: "abc", ExportedAt: "2026-10-17T01:05:00Z"}}})
+			FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileSha256: "abc", ExportedAt: rfcMillis("2026-10-17T01:05:00Z")}}})
 	requireOK(t, done.GetRetInfo())
 	part, _ := h.mgr.GetArchivePartition(context.Background(), &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
 	if part.GetPartition().GetFileBytes() != 10 {
@@ -601,7 +601,7 @@ func TestTriggerGeneratesOneFollowRunPerIdleTaskEveryMinute(t *testing.T) {
 	// 整点窗口内（01:59:25）照常生成，日线任务同样每分钟一条。
 	h.trigger(at(1, 59, 25))
 	runs := h.allRuns()
-	if len(runs) != 2 || runs[0].GetKind() != "follow" || runs[1].GetKind() != "follow" || runs[0].GetScheduledAt() != "2026-10-17T01:59:25Z" || runs[0].GetRangeStart() != "" {
+	if len(runs) != 2 || runs[0].GetKind() != "follow" || runs[1].GetKind() != "follow" || runs[0].GetScheduledAt() != rfcMillis("2026-10-17T01:59:25Z") || runs[0].GetRangeStart() != "" {
 		t.Fatalf("首次检查 = %v", runs)
 	}
 	// 上一条还在排队：同一分钟或下一分钟都不再生成。
@@ -872,12 +872,12 @@ func TestSuccessfulRunKeepsBackfillAndAssignmentCarriesRegistry(t *testing.T) {
 	requireOK(t, h.create("ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = backfill }).GetRetInfo())
 	h.heartbeat("w1")
 	run := h.pull(1)[0]
-	if run.GetBackfillFrom() != backfill || run.GetLastSuccessAt() != "" || run.GetTaskId() == "" {
+	if run.GetBackfillFrom() != backfill || run.GetLastSuccessAt() != 0 || run.GetTaskId() == "" {
 		t.Fatalf("首次运行应带回补起点、没有最近成功时间: %v", run)
 	}
 	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: run.GetRunId(), LeaseToken: run.GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
-			FilePath: "f", FileSha256: "abc", RowCount: 10, SubjectCount: 1, FinalizedAt: "2026-10-20T00:00:00Z"}},
+			FilePath: "f", FileSha256: "abc", RowCount: 10, SubjectCount: 1, FinalizedAt: rfcMillis("2026-10-20T00:00:00Z")}},
 		Unrecoverable: []*archivepb.UnrecoverableRange{{StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-02T00:00:00Z"}}})
 	requireOK(t, r.GetRetInfo())
 	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
@@ -887,7 +887,7 @@ func TestSuccessfulRunKeepsBackfillAndAssignmentCarriesRegistry(t *testing.T) {
 	now, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, now.GetRetInfo())
 	next := h.pull(1)[0]
-	if next.GetBackfillFrom() != backfill || next.GetLastSuccessAt() == "" || len(next.GetRegisteredPartitions()) != 1 || next.GetRegisteredPartitions()[0].GetStatus() != "final" {
+	if next.GetBackfillFrom() != backfill || next.GetLastSuccessAt() == 0 || len(next.GetRegisteredPartitions()) != 1 || next.GetRegisteredPartitions()[0].GetStatus() != "final" {
 		t.Fatalf("下发应带回补起点、最近成功时间与分区登记: %v", next)
 	}
 	list, _ := h.mgr.ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
@@ -967,9 +967,9 @@ func TestImportRunCarriesAllPartitionsAndDoesNotAdvanceLastSuccess(t *testing.T)
 	h.heartbeat("w1")
 	first := h.pull(1)[0]
 	old := &archivepb.PartitionReport{PartitionKey: "2026-01-05", Status: "final", RangeStart: "2026-01-05T00:00:00Z", RangeEnd: "2026-01-06T00:00:00Z",
-		FilePath: "crypto/collect/x/2026/20260105.csv.gz", FileSha256: "old", RowCount: 5, SubjectCount: 1, FinalizedAt: "2026-02-01T00:00:00Z"}
+		FilePath: "crypto/collect/x/2026/20260105.csv.gz", FileSha256: "old", RowCount: 5, SubjectCount: 1, FinalizedAt: rfcMillis("2026-02-01T00:00:00Z")}
 	recent := &archivepb.PartitionReport{PartitionKey: "2026-10-16", Status: "final", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z",
-		FilePath: "crypto/collect/x/2026/20261016.csv.gz", FileSha256: "new", RowCount: 5, SubjectCount: 1, FinalizedAt: "2026-10-17T00:30:00Z"}
+		FilePath: "crypto/collect/x/2026/20261016.csv.gz", FileSha256: "new", RowCount: 5, SubjectCount: 1, FinalizedAt: rfcMillis("2026-10-17T00:30:00Z")}
 	r, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{RunId: first.GetRunId(), LeaseToken: first.GetLeaseToken(), Status: "succeeded",
 		Partitions: []*archivepb.PartitionReport{old, recent}})
 	requireOK(t, r.GetRetInfo())
@@ -1034,4 +1034,13 @@ func TestClearArchiveUnrecoverableRemovesOnlyWholeRangesInside(t *testing.T) {
 	}
 	missing, _ := h.mgr.ClearArchiveUnrecoverable(ctx, &archivepb.ClearArchiveUnrecoverableReq{SpaceId: "crypto", DatasetId: "nope", Start: "2026-10-01T00:00:00Z", End: "2026-10-05T00:00:00Z"})
 	requireCode(t, missing.GetRetInfo(), commonpb.ErrorCode_NOT_FOUND, "")
+}
+
+// rfcMillis 把测试里写的 RFC3339 时刻换成 Unix 毫秒。
+func rfcMillis(text string) int64 {
+	at, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		panic(err)
+	}
+	return at.UnixMilli()
 }

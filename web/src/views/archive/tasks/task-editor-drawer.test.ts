@@ -23,7 +23,7 @@ const task = (over: Partial<ArchiveTask> = {}): ArchiveTask => ({
   retention: "840h",
   status: "enabled",
   backfill_from: "2026-10-01T00:00:00Z",
-  last_success_at: "",
+  last_success_at: "0",
   ...over
 });
 

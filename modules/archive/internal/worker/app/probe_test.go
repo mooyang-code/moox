@@ -24,7 +24,7 @@ func probed(t *testing.T, h *harness) *archivepb.ObjectStoreInfo {
 func TestProbeReportsObjectStoreAvailability(t *testing.T) {
 	h := newHarness(t)
 	srv := withRemote(t, h)
-	if got := probed(t, h); got.GetProbeError() != "" || got.GetUnavailableSince() != "" {
+	if got := probed(t, h); got.GetProbeError() != "" || got.GetUnavailableSince() != 0 {
 		t.Fatalf("404 应算可用: %v", got)
 	}
 	if reqs := srv.Requests(); len(reqs) != 1 || reqs[0].Method != http.MethodHead || !strings.HasSuffix(reqs[0].Path, "/moox-archive/_probe/absent") {
@@ -34,15 +34,15 @@ func TestProbeReportsObjectStoreAvailability(t *testing.T) {
 		return http.StatusForbidden, "AccessDenied", true
 	}
 	first := h.now
-	if got := probed(t, h); !strings.Contains(got.GetProbeError(), "访问被拒绝") || got.GetUnavailableSince() != first.Format(time.RFC3339) {
+	if got := probed(t, h); !strings.Contains(got.GetProbeError(), "访问被拒绝") || got.GetUnavailableSince() != first.UnixMilli() {
 		t.Fatalf("403 应算不可用: %v", got)
 	}
 	h.now = h.now.Add(3 * time.Minute)
-	if got := probed(t, h); got.GetProbeError() == "" || got.GetUnavailableSince() != first.Format(time.RFC3339) {
+	if got := probed(t, h); got.GetProbeError() == "" || got.GetUnavailableSince() != first.UnixMilli() {
 		t.Fatalf("连续不可用的起点应保持首次失败时刻: %v", got)
 	}
 	srv.Hook = nil
-	if got := probed(t, h); got.GetProbeError() != "" || got.GetUnavailableSince() != "" {
+	if got := probed(t, h); got.GetProbeError() != "" || got.GetUnavailableSince() != 0 {
 		t.Fatalf("恢复后应清空: %v", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestProbeConnectionRefusedIsUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.app.opts.Remote = client
-	if got := probed(t, h); !strings.Contains(got.GetProbeError(), "refused") || got.GetUnavailableSince() != h.now.Format(time.RFC3339) {
+	if got := probed(t, h); !strings.Contains(got.GetProbeError(), "refused") || got.GetUnavailableSince() != h.now.UnixMilli() {
 		t.Fatalf("拒绝连接应算不可用: %v", got)
 	}
 }
