@@ -661,6 +661,51 @@ message GetCollectorStatusRsp {
   repeated IngestMode ingest_modes = 12;
   // unplanned_functions 是对账器最近一次读回时找到的计划外函数（Collector 内存里的结果，重启后到下一次读回之前为空）。
   repeated CollectorUnplannedFunction unplanned_functions = 13;
+  // history_seeds 是本空间的历史补齐记录（补齐中的排前）。
+  repeated HistorySeed history_seeds = 14;
+}
+
+// HistorySeed 是一个数据集（某个频率）首次接入时的历史补齐：补齐期间读这个数据集的因子不计算、策略不求值。
+message HistorySeed {
+  string space_id = 1;
+  string dataset_id = 2;
+  string frequency = 3;
+  // status 取值 running（补齐中）、done、skipped（用户手动放行）。
+  string status = 4;
+  // target_from 是补齐的目标起点（RFC3339）；effective_from 是补齐起算的采集计划生效点。
+  string target_from = 5;
+  string effective_from = 6;
+  int32 total_chunks = 7;
+  int32 done_chunks = 8;
+  int32 failed_chunks = 9;
+  // eta_seconds 按最近 10 分钟的速率估计剩余时间，不能估计时为 0。
+  int64 eta_seconds = 10;
+  string started_at = 11;
+  string finished_at = 12;
+  // note 是补齐的说明，例如退回本地执行端的原因。
+  string note = 13;
+}
+
+// ListHistorySeeds 返回历史补齐记录；space_id 为空返回全部空间，only_running 只返回补齐中的。
+message ListHistorySeedsReq {
+  string space_id = 1;
+  bool only_running = 2;
+}
+
+message ListHistorySeedsRsp {
+  common.RetInfo ret_info = 1;
+  repeated HistorySeed seeds = 2;
+}
+
+// SkipHistorySeed 手动放行：取消剩余分块、记 skipped，已经补进去的数据保留。dataset_id 为空表示空间内全部补齐中的数据集。
+message SkipHistorySeedReq {
+  string space_id = 1;
+  string dataset_id = 2;
+}
+
+message SkipHistorySeedRsp {
+  common.RetInfo ret_info = 1;
+  int32 skipped = 2;
 }
 
 // CollectorUnplannedFunction 是符合本空间命名格式、但不在计划里的云函数：对账器已停用它的定时器，
@@ -995,6 +1040,8 @@ service CollectMgr {
 
   // ----- 运行状态与采集计划 -----
   rpc GetCollectorStatus(GetCollectorStatusReq) returns (GetCollectorStatusRsp);
+  rpc ListHistorySeeds(ListHistorySeedsReq) returns (ListHistorySeedsRsp);
+  rpc SkipHistorySeed(SkipHistorySeedReq) returns (SkipHistorySeedRsp);
   rpc ReregisterFetchPlan(ReregisterFetchPlanReq) returns (ReregisterFetchPlanRsp);
   rpc TriggerFetchPlan(TriggerFetchPlanReq) returns (TriggerFetchPlanRsp);
   rpc SetFetchPlanPaused(SetFetchPlanPausedReq) returns (SetFetchPlanPausedRsp);

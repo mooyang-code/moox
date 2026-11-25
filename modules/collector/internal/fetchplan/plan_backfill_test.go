@@ -32,8 +32,7 @@ func TestBackfillFunctionIsCreatedOnFirstUse(t *testing.T) {
 	require.Nil(t, function.Timer, "补采函数没有定时器")
 	require.Equal(t, "backfill", function.Info.Environment["MOOX_MARKET_FETCH_MODE"])
 	require.NotContains(t, function.Info.Environment, marketfetch.PlanEnvName)
-	require.Equal(t, int64(BackfillReservedConcurrency*64), function.ReservedMem)
-	require.Equal(t, int64(320), function.ReservedMem)
+	require.Equal(t, int64(DefaultBackfillReservedConcurrency*64), function.ReservedMem)
 	require.Equal(t, "pkg-v1", function.Info.Environment["MOOX_CODE_PACKAGE_ID"])
 	require.Equal(t, "packages/pkg-v1.zip", function.COSObject)
 	require.Equal(t, "storage", function.Info.Environment["MOOX_ENTRY_HOST"])
@@ -177,4 +176,39 @@ func TestBackfillFunctionIsCreatedWhileTheSpaceIsPausing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, name, got)
 	require.Equal(t, 1, h.cloud.client.Count("CreateFunction"))
+}
+
+// 历史补齐按地域轮流派发：没配 backfill_region 时用市场白名单里的全部地域，配了就只用它；没配地域的市场没有。
+func TestBackfillRegionsFollowTheMarketWhitelist(t *testing.T) {
+	_, r, _ := backfillHarness(t)
+	r.Options.Markets = map[string][]string{"spot": {"ap-tokyo", "ap-singapore", "ap-tokyo"}}
+	require.Equal(t, []string{"ap-singapore", "ap-tokyo"}, r.BackfillRegions("spot"), "升序去重")
+	require.Nil(t, r.BackfillRegions("swap"), "没配地域的市场没有")
+
+	r.Options.BackfillRegion = "ap-nanjing"
+	require.Equal(t, []string{"ap-nanjing"}, r.BackfillRegions("spot"), "配了 backfill_region 只用它，补采不占定时函数的出口地址")
+
+	planned, err := r.plannedNames(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, planned, refKey(r.backfillRef("spot", "ap-nanjing")))
+	require.NotContains(t, planned, refKey(r.backfillRef("spot", "ap-tokyo")))
+}
+
+// 指定地域建补采函数：函数名带地域，地域必须是补采地域之一；预留并发可配。
+func TestEnsureBackfillFunctionInCreatesTheRegionalFunction(t *testing.T) {
+	h, r, _ := backfillHarness(t)
+	r.Options.Markets = map[string][]string{"spot": {"ap-nanjing", "ap-guangzhou"}}
+	r.Options.BackfillReservedConcurrency = 8
+	r.Deploy.Networks["ap-guangzhou"] = r.Deploy.Networks["ap-nanjing"]
+
+	_, err := r.EnsureBackfillFunctionIn(context.Background(), "spot", "ap-tokyo")
+	require.Error(t, err, "不是补采地域")
+
+	name, err := r.EnsureBackfillFunctionIn(context.Background(), "spot", "ap-guangzhou")
+	require.NoError(t, err)
+	require.Equal(t, BackfillFunctionName("crypto", "spot", "ap-guangzhou"), name)
+	function := h.mustFunction(name)
+	require.Equal(t, int64(8*64), function.ReservedMem)
+	require.Equal(t, 8, r.BackfillReservedConcurrency())
+	require.Equal(t, DefaultBackfillReservedConcurrency, (&PlanReconciler{}).BackfillReservedConcurrency())
 }

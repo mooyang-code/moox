@@ -492,6 +492,12 @@ components:
           - name: GetCollectorStatus
             read_only: true
             callers: [archive-mgr]
+          # 历史补齐：factor-mgr 与 strategy 据此判断数据集是否在补齐中（补齐期间不计算、不求值）。
+          - name: ListHistorySeeds
+            read_only: true
+            callers: [factor-mgr, strategy]
+          - name: SkipHistorySeed
+            operators: [moox-cli]
           - name: ReregisterFetchPlan
             operators: [moox-cli]
           - name: TriggerFetchPlan

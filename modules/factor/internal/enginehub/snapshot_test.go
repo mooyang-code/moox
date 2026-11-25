@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,4 +117,31 @@ func TestCatalogInSyncComparesHeartbeatHash(t *testing.T) {
 	info, _, _, err = hub.Engine(ctx)
 	require.NoError(t, err)
 	require.False(t, info.CatalogInSync)
+}
+
+// 源数据集在历史补齐中：任务的 SourceSeeding 为真并进目录指纹；补齐结束后恢复，指纹随之变化。
+func TestSnapshotMarksSourceSeedingAndHashesIt(t *testing.T) {
+	hub, db, _ := newTestHub(t)
+	ctx := context.Background()
+	task := seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	base, _, sets, err := hub.Snapshot(ctx, "")
+	require.NoError(t, err)
+	require.False(t, sets[0].SourceSeeding)
+
+	hub.SetHistorySeeds([]store.SeedKey{
+		{SpaceID: task.SpaceID, DatasetID: task.SourceDatasetID, Freq: task.Freq},
+		{SpaceID: "other", DatasetID: "other", Freq: "1m"},
+	})
+	seeding, notModified, sets, err := hub.Snapshot(ctx, base)
+	require.NoError(t, err)
+	require.False(t, notModified)
+	require.True(t, sets[0].SourceSeeding)
+	require.NotEqual(t, base, seeding, "补齐状态进目录指纹")
+
+	// 别的数据集在补齐不影响本任务。
+	hub.SetHistorySeeds([]store.SeedKey{{SpaceID: task.SpaceID, DatasetID: "unrelated", Freq: task.Freq}})
+	released, _, sets, err := hub.Snapshot(ctx, "")
+	require.NoError(t, err)
+	require.False(t, sets[0].SourceSeeding)
+	require.Equal(t, base, released)
 }

@@ -46,6 +46,9 @@ type preloader struct {
 	// blocked 非空且返回 true 时不预载：模块暂停、恢复追赶期间预载循环不能自己把数据拉回本地
 	//（恢复追赶由生命周期的追赶钩子显式刷新）。
 	blocked func() bool
+	// onSeedReleased 在源数据历史补齐放行（补齐中 → 补齐结束）后的重新预载成功时、任务标记为就绪之前调用：
+	// 补齐期间任务没出过结果，补进来的历史不需要失效重算，调用方在这里清掉数据源上的 earliest_moved 待办。
+	onSeedReleased func(set domain.FactorTask)
 	// onReady 在一个任务预载成功后调用（唤醒跳过恢复补算预载期间跳过的周期）。
 	onReady func(taskID string)
 	// onSubjects 在每次取到任务的标的清单（数据集在册的标的）时调用：用同一份清单更新“正在同步”的缓存（syncedScope），
@@ -56,6 +59,8 @@ type preloader struct {
 	// prepared 记录每个任务预载成功时的状态：目录里的因子变了回看更长、源数据集的标的清单变了，都要重新预载（设计 6.2 移除标的）。
 	mu       sync.Mutex
 	prepared map[string]preparedState
+	// releasing 记录已经看到放行、但重新预载还没成功的任务：预载失败会清掉 prepared 里的记录，下一轮重试时要靠它知道这是放行后的预载。
+	releasing map[string]bool
 }
 
 // preparedState 是任务预载成功时的回看根数和标的范围的指纹。
@@ -67,6 +72,8 @@ type preparedState struct {
 	// subjects 是预载时标的清单的指纹：「全部标的」的任务标的来自数据集，用户在数据集的标签里删除（或新增）标的后清单会变，
 	// 变了要重新预载，窗口才会释放被删除的标的（设计 6.2）。
 	subjects string
+	// seeding 是预载时源数据集是否在历史补齐中：补齐结束（真变假）时要重新预载，把本地往前补到回看根数。
+	seeding bool
 }
 
 func subjectsSig(subjects []string) string {
@@ -95,7 +102,18 @@ func (p *preloader) upToDate(set domain.EngineTask) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	state, ok := p.prepared[set.Set.TaskID]
-	return ok && state.lookback >= maxLookbackOf(set) && state.scope == scopeOf(set)
+	return ok && state.lookback >= maxLookbackOf(set) && state.scope == scopeOf(set) && !(state.seeding && !set.SourceSeeding)
+}
+
+// seedReleased 报告任务的源数据集是否刚从历史补齐放行（预载时还在补齐中、现在已结束），重新预载成功之前一直为真：
+// 这次预载要往前补历史，成功后清掉失效重算待办。
+func (p *preloader) seedReleased(set domain.EngineTask) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if state, ok := p.prepared[set.Set.TaskID]; ok && state.seeding && !set.SourceSeeding {
+		p.releasing[set.Set.TaskID] = true
+	}
+	return p.releasing[set.Set.TaskID]
 }
 
 // releaseGone 取消已经离开目录的任务的登记（删除、停用）：数据源没有别的任务用时，窗口与同步随之释放。
@@ -110,6 +128,7 @@ func (p *preloader) releaseGone() {
 		if _, ok := inCatalog[id]; !ok {
 			gone = append(gone, state)
 			delete(p.prepared, id)
+			delete(p.releasing, id)
 		}
 	}
 	p.mu.Unlock()
@@ -144,7 +163,7 @@ func (p *preloader) unmark(taskID string) {
 
 func (p *preloader) markPrepared(set domain.EngineTask, subjects []string) {
 	p.mu.Lock()
-	p.prepared[set.Set.TaskID] = preparedState{set: set.Set, lookback: maxLookbackOf(set), scope: scopeOf(set), subjects: subjectsSig(subjects)}
+	p.prepared[set.Set.TaskID] = preparedState{set: set.Set, lookback: maxLookbackOf(set), scope: scopeOf(set), subjects: subjectsSig(subjects), seeding: set.SourceSeeding}
 	p.mu.Unlock()
 }
 
@@ -176,16 +195,31 @@ func (p *preloader) PrepareSet(ctx context.Context, taskID string) error {
 	if p.upToDate(set) && !p.subjectsChanged(ctx, set) {
 		return nil
 	}
+	released := p.seedReleased(set)
 	p.unmark(taskID)
 	subjects, err := p.prepare(ctx, set)
 	if err != nil {
 		return err
 	}
+	p.finishRelease(set, released)
 	p.markPrepared(set, subjects)
 	if p.onReady != nil {
 		p.onReady(taskID)
 	}
 	return nil
+}
+
+// finishRelease 在放行后的重新预载成功时清掉数据源上因补历史登记的失效重算待办。
+func (p *preloader) finishRelease(set domain.EngineTask, released bool) {
+	if !released {
+		return
+	}
+	if p.onSeedReleased != nil {
+		p.onSeedReleased(set.Set)
+	}
+	p.mu.Lock()
+	delete(p.releasing, set.Set.TaskID)
+	p.mu.Unlock()
 }
 
 // Refresh 重新同步一个任务的本地数据并重载窗口，不看「已经预载」的短路：恢复追赶要把暂停期间的缺口补进来。
@@ -194,10 +228,12 @@ func (p *preloader) Refresh(ctx context.Context, taskID string) error {
 	if lookup != SetFound {
 		return fmt.Errorf("因子任务 %s 不在目录里", taskID)
 	}
+	released := p.seedReleased(set)
 	subjects, err := p.prepare(ctx, set)
 	if err != nil {
 		return err
 	}
+	p.finishRelease(set, released)
 	p.markPrepared(set, subjects)
 	if p.onReady != nil {
 		p.onReady(taskID)
@@ -206,7 +242,7 @@ func (p *preloader) Refresh(ctx context.Context, taskID string) error {
 }
 
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
-	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]preparedState{}}
+	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]preparedState{}, releasing: map[string]bool{}}
 }
 
 // Kick 让预载循环尽快检查一次，不阻塞。引擎成为活动引擎、目录变化时调用。
@@ -264,6 +300,7 @@ func (p *preloader) once(ctx context.Context) {
 			continue
 		}
 		p.releaseIfRebound(set)
+		released := p.seedReleased(set)
 		p.unmark(taskID)
 		subjects, err := p.prepare(ctx, set)
 		if err != nil && ctx.Err() == nil {
@@ -277,6 +314,7 @@ func (p *preloader) once(ctx context.Context) {
 		if err != nil {
 			continue
 		}
+		p.finishRelease(set, released)
 		p.markPrepared(set, subjects)
 		if p.onReady != nil {
 			p.onReady(taskID)

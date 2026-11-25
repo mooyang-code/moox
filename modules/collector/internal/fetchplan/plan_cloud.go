@@ -449,7 +449,7 @@ func (r *PlanReconciler) plannedNames(ctx context.Context) (map[string]cloud.Fun
 		}
 	}
 	for market := range r.Options.Markets {
-		if region, ok := r.BackfillRegion(market); ok {
+		for _, region := range r.BackfillRegions(market) {
 			ref := r.backfillRef(market, region)
 			names[refKey(ref)] = ref
 		}

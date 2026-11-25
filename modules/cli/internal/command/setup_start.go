@@ -135,7 +135,29 @@ func setupStartPrerequisites(manifest *topology.Config, spaceID string) error {
 	return fmt.Errorf("start_prerequisite_missing: %s 目前只能走云函数，要在 [scf_plan] 里配置这个空间", spaceID)
 }
 
+// setupStartHistoryNote 是空间有数据集在首次历史补齐时给用户的提示。
+const setupStartHistoryNote = "历史正在自动补，补齐前不算因子、不下单，进度看 moox-cli collector status --space-id %s；不想等可用 moox-cli collector history-seed skip 放行"
+
+// historySeedingCounter 是 setup start 的线上客户端可选实现的能力：返回空间里补齐中的数据集个数。
+// 做成可选接口，取不到只是少一条提示，不影响启动。
+type historySeedingCounter interface {
+	HistorySeeding(ctx context.Context, spaceID string) (int, error)
+}
+
 func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient, snapshot *setupSnapshot, repository, spaceID string, poll time.Duration) (setupStartSummary, error) {
+	summary, err := runSetupStartSteps(ctx, deps, client, snapshot, repository, spaceID, poll)
+	if err != nil {
+		return summary, err
+	}
+	if counter, ok := client.(historySeedingCounter); ok {
+		if running, countErr := counter.HistorySeeding(ctx, spaceID); countErr == nil && running > 0 {
+			summary.Notes = append(summary.Notes, fmt.Sprintf(setupStartHistoryNote, spaceID))
+		}
+	}
+	return summary, nil
+}
+
+func runSetupStartSteps(ctx context.Context, deps setupDeps, client setupStartClient, snapshot *setupSnapshot, repository, spaceID string, poll time.Duration) (setupStartSummary, error) {
 	summary := setupStartSummary{Status: "started", SpaceID: spaceID, Strategy: "skipped"}
 	manifest := snapshot.Manifest
 	tasks, err := client.Tasks(ctx, spaceID)
@@ -388,6 +410,18 @@ func (c gatewayStartClient) status(ctx context.Context, spaceID string) (*collec
 		return nil, fmt.Errorf("read collector status: %w", err)
 	}
 	return status, collectorRetError("read collector status", status.GetRetInfo())
+}
+
+// HistorySeeding 返回空间里补齐中的数据集个数。
+func (c gatewayStartClient) HistorySeeding(ctx context.Context, spaceID string) (int, error) {
+	rsp := &collectorpb.ListHistorySeedsRsp{}
+	if err := c.gateway.Invoke(ctx, collectMgr, "ListHistorySeeds", &collectorpb.ListHistorySeedsReq{SpaceId: spaceID, OnlyRunning: true}, rsp); err != nil {
+		return 0, fmt.Errorf("list history seeds: %w", err)
+	}
+	if err := collectorRetError("list history seeds", rsp.GetRetInfo()); err != nil {
+		return 0, err
+	}
+	return len(rsp.GetSeeds()), nil
 }
 
 func (c gatewayStartClient) StreamOnline(ctx context.Context, spaceID string) (bool, error) {

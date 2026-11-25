@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/packages/cnstock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/security/domainpolicy"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,6 +47,72 @@ type Config struct {
 	Stream StreamConfig `yaml:"stream"`
 	// Cloud 是 Collector 直接调腾讯云的参数：云函数接口限频与日志服务（CLS）开通。
 	Cloud CloudConfig `yaml:"cloud"`
+	// HistorySeed 是数据集首次接入时的历史补齐参数，都有代码默认值，配置里可以不写。
+	HistorySeed HistorySeedConfig `yaml:"history_seed"`
+}
+
+// HistorySeedConfig 是历史补齐的参数：数据集首次进入采集计划时，把历史补到保留期与行情源都允许的深度；补齐期间下游不生效。
+type HistorySeedConfig struct {
+	// Enabled 不写时开启。
+	Enabled *bool `yaml:"enabled"`
+	// MaxDepth 是补齐深度的上限（保留期为 forever 的频率兜底），默认 365d；DepthCaps 按空间限制行情源能取到的最长历史
+	// （默认 stockhk 28d：东方财富 5m 只有约 28 天，腾讯只有当天）。
+	MaxDepth  string            `yaml:"max_depth"`
+	DepthCaps map[string]string `yaml:"depth_caps"`
+	// SubjectsPerJob 是一个补齐作业最多放的标的数，默认 500。
+	SubjectsPerJob int `yaml:"subjects_per_job"`
+	// MergeSessions 为真（默认）时日内分块跨休市区间合并，函数调用次数少一个数量级；行情源取数出问题时可以关掉退回按交易时段拆。
+	MergeSessions *bool `yaml:"merge_sessions"`
+	// MaxRowsPerSecond 是补齐写 Storage 的全局速率上限（给实时写入留余量），默认 10000；
+	// LocalMaxRowsPerSecond 是本地执行端（数据经海外机）的上限，默认 1000。
+	MaxRowsPerSecond      float64 `yaml:"max_rows_per_second"`
+	LocalMaxRowsPerSecond float64 `yaml:"local_max_rows_per_second"`
+}
+
+func (c HistorySeedConfig) enabled() bool { return c.Enabled == nil || *c.Enabled }
+
+func (c HistorySeedConfig) mergeSessions() bool { return c.MergeSessions == nil || *c.MergeSessions }
+
+func (c HistorySeedConfig) maxDepth() time.Duration {
+	return seedDuration(c.MaxDepth, 365*24*time.Hour)
+}
+
+// depthCap 返回空间的行情源最长历史；没有限制时返回 0。
+func (c HistorySeedConfig) depthCap(spaceID string) time.Duration {
+	spaceID = strings.ToLower(spaceID)
+	if raw, ok := c.DepthCaps[spaceID]; ok {
+		return seedDuration(raw, 0)
+	}
+	if spaceID == "stockhk" {
+		return 28 * 24 * time.Hour
+	}
+	return 0
+}
+
+func seedDuration(raw string, fallback time.Duration) time.Duration {
+	period, err := storagepolicy.ParsePeriod(strings.TrimSpace(raw))
+	if err != nil || period.Forever || period.Duration <= 0 {
+		return fallback
+	}
+	return period.Duration
+}
+
+func (c *Config) validateHistorySeed() error {
+	seed := c.HistorySeed
+	if seed.MaxDepth != "" {
+		if period, err := storagepolicy.ParsePeriod(strings.TrimSpace(seed.MaxDepth)); err != nil || period.Forever || period.Duration <= 0 {
+			return fmt.Errorf("history_seed.max_depth %q must be a duration such as 365d", seed.MaxDepth)
+		}
+	}
+	for space, raw := range seed.DepthCaps {
+		if period, err := storagepolicy.ParsePeriod(strings.TrimSpace(raw)); err != nil || period.Forever || period.Duration <= 0 {
+			return fmt.Errorf("history_seed.depth_caps[%s] %q must be a duration such as 28d", space, raw)
+		}
+	}
+	if seed.SubjectsPerJob < 0 || seed.MaxRowsPerSecond < 0 || seed.LocalMaxRowsPerSecond < 0 {
+		return fmt.Errorf("history_seed quantities must not be negative")
+	}
+	return nil
 }
 
 // CloudConfig 是 Collector 直接调腾讯云的参数。
@@ -228,6 +295,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := cfg.validateCollectorRetention(); err != nil {
+		return nil, err
+	}
+	if err := cfg.validateHistorySeed(); err != nil {
 		return nil, err
 	}
 	return cfg, nil

@@ -128,6 +128,13 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	rsp.ActiveBackfills, rsp.FailedBackfills_24H = int32(counts.Active), int32(counts.Failed)
+	if s.klineOps != nil {
+		views, err := s.klineOps.SeedViews(ctx, spaceID, false)
+		if err != nil {
+			return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		rsp.HistorySeeds = historySeedsToPB(views)
+	}
 	return rsp, nil
 }
 

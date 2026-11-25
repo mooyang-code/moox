@@ -22,6 +22,12 @@ func (fakeFunctions) EnsureBackfillFunction(context.Context, string) (string, er
 	return "moox-fetch-plan-backfill-crypto-spot-nanjing", nil
 }
 
+func (fakeFunctions) BackfillRegions(string) []string { return nil }
+
+func (f fakeFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
+	return f.EnsureBackfillFunction(ctx, market)
+}
+
 // healingInvoker 记录调用，并在成功时把请求覆盖的缺失 K 线补上。
 type healingInvoker struct {
 	mu     sync.Mutex
@@ -79,6 +85,12 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 
 func newBackfillFixtureWithIngest(t *testing.T, ingest string) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
 	t.Helper()
+	return newBackfillFixtureAged(t, ingest, 48*time.Hour)
+}
+
+// newBackfillFixtureAged 的 age 是计划生效点早于“现在”的时长（历史补齐只认最近 24 小时内出现的数据集）。
+func newBackfillFixtureAged(t *testing.T, ingest string, age time.Duration) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
+	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
@@ -88,7 +100,7 @@ func newBackfillFixtureWithIngest(t *testing.T, ingest string) (*Backfiller, *he
 	// 取下一个 5 分钟槽内、已过 2 分 30 秒偏移的时刻，计划生效点在它之前 48 小时。
 	const slot = 5 * time.Minute
 	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
-	base := now.Add(-48*time.Hour - 3*time.Minute)
+	base := now.Add(-age - 3*time.Minute)
 	options := fetchplan.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
 	desired, err := fetchplan.BuildDesiredState(options, []fetchplan.TaskGroup{{
 		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
@@ -559,6 +571,12 @@ type noFunctions struct{}
 
 func (noFunctions) EnsureBackfillFunction(context.Context, string) (string, error) {
 	return "", errors.New("the backfill function must not be created")
+}
+
+func (noFunctions) BackfillRegions(string) []string { return nil }
+
+func (f noFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
+	return f.EnsureBackfillFunction(ctx, market)
 }
 
 // 数据集的采集方式是 stream：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。

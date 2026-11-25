@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1562,8 +1563,40 @@ func (r *PlanReconciler) BackfillRegion(marketType string) (string, bool) {
 	return regions[0], true
 }
 
-// BackfillReservedConcurrency 是补采函数的最大并发实例数，由平台的函数级预留并发硬性限制。
-const BackfillReservedConcurrency = 5
+// BackfillRegions 返回某市场补采函数可用的全部地域；市场没有配云函数地域时为空。
+// 配了 backfill_region 就只用它（补采与定时函数分开地域，补采的重发不占定时函数那批出口地址）；没配就是市场白名单里的全部地域。
+// 平时的补采只用 BackfillRegion 一个地域；历史补齐把分块按这些地域轮流派发，出口地址分散，按出口 IP 限频的行情源能分摊开。
+func (r *PlanReconciler) BackfillRegions(marketType string) []string {
+	listed := r.Options.Markets[strings.ToLower(marketType)]
+	if len(listed) == 0 {
+		return nil
+	}
+	if r.Options.BackfillRegion != "" {
+		return []string{r.Options.BackfillRegion}
+	}
+	seen := map[string]struct{}{}
+	var regions []string
+	for _, region := range listed {
+		if _, ok := seen[region]; !ok {
+			seen[region] = struct{}{}
+			regions = append(regions, region)
+		}
+	}
+	sort.Strings(regions)
+	return regions
+}
+
+// DefaultBackfillReservedConcurrency 是补采函数默认的最大并发实例数，由平台的函数级预留并发硬性限制；
+// 可用 scf_plan.backfill_reserved_concurrency 调大（历史补齐的并发是 地域数 × 它；账号的预留并发总额不够时不要调大，建函数会报配额超限）。
+const DefaultBackfillReservedConcurrency = 5
+
+// BackfillReservedConcurrency 是本空间补采函数的最大并发实例数。
+func (r *PlanReconciler) BackfillReservedConcurrency() int {
+	if r.Options.BackfillReservedConcurrency > 0 {
+		return r.Options.BackfillReservedConcurrency
+	}
+	return DefaultBackfillReservedConcurrency
+}
 
 // backfillPrefix 是本空间补采函数的名字前缀。
 func (r *PlanReconciler) backfillPrefix() string {
@@ -1575,7 +1608,7 @@ func (r *PlanReconciler) backfillRef(marketType, region string) cloud.FunctionRe
 	return cloud.FunctionRef{AccountID: r.Deploy.CloudAccountID, Region: region, Namespace: r.Deploy.Namespace, Name: BackfillFunctionName(r.SpaceID, marketType, region)}
 }
 
-// backfillSpec 是补采函数的期望内容：不带定时器与采集计划，同步调用，预留并发 5 份内存硬性限制并发实例数。
+// backfillSpec 是补采函数的期望内容：不带定时器与采集计划，同步调用，预留并发份内存硬性限制并发实例数。
 func (r *PlanReconciler) backfillSpec(ref cloud.FunctionRef, access map[string]string) (cloud.FunctionSpec, error) {
 	network, ok := r.Deploy.Networks[ref.Region]
 	if !ok {
@@ -1598,7 +1631,7 @@ func (r *PlanReconciler) backfillSpec(ref cloud.FunctionRef, access map[string]s
 	memory := r.memoryMB()
 	return cloud.FunctionSpec{
 		Ref: ref, Environment: environment, MemoryMB: int64(memory), TimeoutS: tencent.CollectorTimerTimeoutSeconds,
-		VPCID: network.VPCID, SubnetID: network.SubnetID, ReservedMem: int64(BackfillReservedConcurrency * memory),
+		VPCID: network.VPCID, SubnetID: network.SubnetID, ReservedMem: int64(r.BackfillReservedConcurrency() * memory),
 	}, nil
 }
 
@@ -1607,12 +1640,20 @@ func (r *PlanReconciler) backfillSpec(ref cloud.FunctionRef, access map[string]s
 // 本次调用等一会儿，做完了就返回函数名，还在做就返回“仍在创建”（errBackfillFunctionPending），调用方下一轮再试。
 // 补采函数没有定时器，暂停期间照常创建（恢复追赶时系统暂停还开着，补采却要跑）。
 func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType string) (string, error) {
-	if err := r.refreshPackage(ctx); err != nil {
-		return "", err
-	}
 	region, ok := r.BackfillRegion(marketType)
 	if !ok {
 		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
+	}
+	return r.EnsureBackfillFunctionIn(ctx, marketType, region)
+}
+
+// EnsureBackfillFunctionIn 保证该市场在指定地域的补采函数就绪，地域必须是 BackfillRegions 之一（历史补齐按地域轮流派发分块）。
+func (r *PlanReconciler) EnsureBackfillFunctionIn(ctx context.Context, marketType, region string) (string, error) {
+	if !slices.Contains(r.BackfillRegions(marketType), region) {
+		return "", fmt.Errorf("region %s is not a backfill region of market %s", region, marketType)
+	}
+	if err := r.refreshPackage(ctx); err != nil {
+		return "", err
 	}
 	if r.Entry == nil {
 		return "", errors.New("SCF entry environment is required")

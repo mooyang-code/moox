@@ -38,6 +38,8 @@ type Runtime struct {
 	gateway     *gatewayclient.Client
 	store       *store.Store
 	stopCatalog func() error
+	// stopSeeds 等历史补齐状态的取数协程退出（appCtx 取消之后）。
+	stopSeeds   func()
 	cancel      context.CancelFunc
 	udfRuntimes []*factorudf.Runtime
 	health      *factorhealth.State
@@ -85,6 +87,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	storage := storageio.NewGatewayClient(runtime.gateway)
 
 	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL), enginehub.WithHeartbeatStore(db))
+	// 历史补齐状态：先把库里上一次的结果交给 hub（引擎同步目录之前），再每分钟向 Collector 取一次。
+	seeds := &historySeedSyncer{lister: gatewayCollector{gateway: runtime.gateway}, db: db, sink: hub}
+	seeds.load(appCtx)
+	seedsDone := make(chan struct{})
+	runtime.stopSeeds = func() { <-seedsDone }
+	go func() {
+		defer close(seedsDone)
+		seeds.run(appCtx, historySeedPeriod)
+	}()
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
 	// 自定义算子（wasm UDF）：发布复核与试算各有自己的运行时、内存预算与时限，与引擎分开计算；管理端不常驻实例。
 	verifyRuntime, err := factorudf.NewRuntime(appCtx, factorudf.Options{
@@ -151,6 +162,9 @@ func (r *Runtime) Close() error {
 		}
 		if r.stopCatalog != nil {
 			r.err = errors.Join(r.err, r.stopCatalog())
+		}
+		if r.stopSeeds != nil {
+			r.stopSeeds()
 		}
 		if r.gateway != nil {
 			r.err = errors.Join(r.err, r.gateway.Close())

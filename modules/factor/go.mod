@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/factor
 go 1.27.3
 
 require (
+	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f
@@ -122,6 +123,8 @@ require (
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
+
+replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
 

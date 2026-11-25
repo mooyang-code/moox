@@ -487,3 +487,88 @@ func TestBackfillExtendsHistoryBeforeLocalEarliest(t *testing.T) {
 	b, _, _ = s.Store.Bounds(src, "A")
 	require.Equal(t, at(1), b.Earliest)
 }
+
+// barrierStorage 的 ReadWindow 要等到两个读取同时在途才返回：批读取没有并行就会超时。
+type barrierStorage struct {
+	*fakeStorage
+	bmu     sync.Mutex
+	current int
+	peak    int
+	reached chan struct{}
+	once    sync.Once
+}
+
+func (b *barrierStorage) ReadWindow(ctx context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+	b.bmu.Lock()
+	b.current++
+	b.peak = max(b.peak, b.current)
+	if b.current >= 2 {
+		b.once.Do(func() { close(b.reached) })
+	}
+	b.bmu.Unlock()
+	defer func() { b.bmu.Lock(); b.current--; b.bmu.Unlock() }()
+	select {
+	case <-b.reached:
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("批读取没有并行")
+	}
+	return b.fakeStorage.ReadWindow(ctx, req)
+}
+
+// 历史回补按批并发读：区间相同的标的合成批（每批 BatchSubjects 个），批之间按 Workers 并行；结果、进度与逐标的回补一致。
+func TestBackfillReadsBatchesConcurrently(t *testing.T) {
+	base := newFakeStorage()
+	subjects := []string{"A", "B", "C", "D", "E"}
+	for _, subject := range subjects {
+		base.put(subject, 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	}
+	st := &barrierStorage{fakeStorage: base, reached: make(chan struct{})}
+	s, spec := newSyncer(t, st)
+	_, err := s.Baseline(context.Background(), src)
+	require.NoError(t, err)
+	// 拉取阶段的读取也走屏障；先放行，回补阶段再统计。
+	st.once.Do(func() { close(st.reached) })
+	_, err = s.Pull(context.Background(), spec, subjects, at(10))
+	require.NoError(t, err)
+	base.mu.Lock()
+	base.reads = 0
+	base.mu.Unlock()
+	st.reached = make(chan struct{})
+	st.once = sync.Once{}
+	st.peak = 0
+
+	var lastDone, lastTotal int
+	written, err := s.Backfill(context.Background(), spec, append(subjects, "NOPE"), 8, func(done, total int) { lastDone, lastTotal = max(lastDone, done), total })
+	require.NoError(t, err)
+	require.Len(t, written, 5)
+	require.GreaterOrEqual(t, st.peak, 2, "至少两批同时在读")
+	require.Equal(t, 3, base.reads, "5 个区间相同的标的按每批 2 个合成 3 批")
+	require.Equal(t, 6, lastDone)
+	require.Equal(t, 6, lastTotal)
+	for _, subject := range subjects {
+		require.Equal(t, map[int]float64{2: 102, 3: 103, 4: 104, 5: 105, 6: 106, 7: 107, 8: 108, 9: 109}, closes(t, s, subject), subject)
+		pending, err := s.Store.Pending(src)
+		require.NoError(t, err)
+		for _, p := range pending {
+			require.Equal(t, "earliest_moved", p.Reason)
+			require.Equal(t, at(5), p.From, "待办只记旧的最早一根")
+			require.Equal(t, at(5), p.To)
+		}
+	}
+}
+
+// 某一批读取失败：回补返回这个错误。
+func TestBackfillReturnsBatchReadError(t *testing.T) {
+	st := newFakeStorage()
+	for _, subject := range []string{"A", "B", "C"} {
+		st.put(subject, 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	}
+	s, spec := newSyncer(t, st)
+	_, err := s.Baseline(context.Background(), src)
+	require.NoError(t, err)
+	_, err = s.Pull(context.Background(), spec, []string{"A", "B", "C"}, at(10))
+	require.NoError(t, err)
+	st.readErr["C"] = errors.New("Storage 不可读")
+	_, err = s.Backfill(context.Background(), spec, []string{"A", "B", "C"}, 8, nil)
+	require.ErrorContains(t, err, "Storage 不可读")
+}

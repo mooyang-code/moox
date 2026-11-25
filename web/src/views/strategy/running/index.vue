@@ -67,7 +67,11 @@
           >
           <a-table-column title="状态" :width="120"
             ><template #cell="{ record }"
-              ><StatusBadge :enabled="record.enabled" :health="record.health" :trial="isTrialInstance(record)" />
+              ><StatusBadge
+                :enabled="record.enabled"
+                :health="record.health"
+                :trial="isTrialInstance(record)"
+                :pending-seed="isPendingSeedInstance(record, historySeeds)" />
               <div v-if="isTrialInstance(record)" class="cell-sub">
                 <a-link @click="openConfirm(record)">确认实盘</a-link>
               </div>
@@ -143,6 +147,7 @@ import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { listLogicalAccounts } from "@/api/trade";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { getCollectorStatus, type HistorySeed } from "@/api/collector/runtime-status";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
@@ -158,6 +163,7 @@ import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.
 import {
   buildRunningQuery,
   emptyKind,
+  isPendingSeedInstance,
   isTrialInstance,
   listKey,
   parseRunningQuery,
@@ -205,8 +211,21 @@ function go(next: Partial<RunningState>, mode: "push" | "replace" = "replace") {
   const target = { name: ROUTE_NAME, query: buildRunningQuery({ ...state.value, ...next }) };
   return mode === "push" ? router.push(target) : router.replace(target);
 }
+// 本空间的历史补齐记录：只用来判断“待生效”，取不到就当没有。
+const historySeeds = ref<HistorySeed[]>([]);
+async function loadHistorySeeds() {
+  const spaceId = spaceStore.selectedSpaceId;
+  if (!spaceId) return;
+  try {
+    const rsp = await getCollectorStatus(spaceId, { silentError: true });
+    if (spaceId === spaceStore.selectedSpaceId) historySeeds.value = rsp.history_seeds || [];
+  } catch {
+    if (spaceId === spaceStore.selectedSpaceId) historySeeds.value = [];
+  }
+}
 async function refresh(background = false) {
   loadedKey = listKey(state.value);
+  void loadHistorySeeds();
   const { strategyId, enabled, page } = state.value;
   try {
     await store.loadInstances(

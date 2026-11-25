@@ -332,6 +332,20 @@ func (r *BackfillRepository) InFlightChunks(ctx context.Context, spaceID string)
 	return int(count), err
 }
 
+// InFlightChunksOf 返回这些作业正在占用名额的分块数（running 且未超过最迟结束时间）。
+func (r *BackfillRepository) InFlightChunksOf(ctx context.Context, jobIDs []string) (int, error) {
+	if err := r.ready(); err != nil {
+		return 0, err
+	}
+	if len(jobIDs) == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Model(&backfillChunkRow{}).
+		Where("c_job_id IN ? AND c_status = ? AND c_latest_end_at >= ?", jobIDs, BackfillRunning, time.Now().UTC()).Count(&count).Error
+	return int(count), err
+}
+
 // ErrChunkLost 表示分块已被重新认领或取消，当前尝试不再拥有它。
 var ErrChunkLost = fmt.Errorf("backfill chunk is no longer owned by this attempt")
 
@@ -616,7 +630,7 @@ func (r *BackfillRepository) SetWatermark(ctx context.Context, spaceID, datasetI
 		spaceID, datasetID, frequency, scannedUntil.UTC(), time.Now().UTC()).Error
 }
 
-// Reset 清掉该空间全部补采作业、分块、自动补采水位与历史扫描记录，返回清掉的作业数。用于 Storage 数据被清空之后：
+// Reset 清掉该空间全部补采作业、分块、自动补采水位、历史扫描与历史补齐记录，返回清掉的作业数。用于 Storage 数据被清空之后：
 // 旧作业指向已经不存在的数据，水位不清会让自动补采沿用旧位置。运行中的分块写回状态时找不到行，直接放弃。
 // 已确认的行情源缺失是行情源本身的事实，与 Storage 无关，保留。
 func (r *BackfillRepository) Reset(ctx context.Context, spaceID string) (int64, error) {
@@ -639,6 +653,9 @@ func (r *BackfillRepository) Reset(ctx context.Context, spaceID string) (int64, 
 		}
 		jobs = result.RowsAffected
 		if err := tx.Where("c_space_id = ?", spaceID).Delete(&historyScanRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("c_space_id = ?", spaceID).Delete(&historySeedRow{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("c_space_id = ?", spaceID).Delete(&backfillWatermarkRow{}).Error

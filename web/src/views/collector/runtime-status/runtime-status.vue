@@ -206,6 +206,39 @@
           </a-table>
         </section>
 
+        <section v-if="seedTableRows.length" class="seed-section">
+          <header class="block-header">
+            <h3>历史补齐</h3>
+            <span class="muted">补齐期间，读取该数据集的因子不计算、策略不求值</span>
+          </header>
+          <a-table row-key="key" size="mini" :data="seedTableRows" :pagination="false" :bordered="{ cell: true }">
+            <template #columns>
+              <a-table-column title="数据集">
+                <template #cell="{ record }"
+                  ><span class="single-line" :title="record.note">{{ record.name }}</span></template
+                >
+              </a-table-column>
+              <a-table-column title="频率" data-index="frequency" :width="80" />
+              <a-table-column title="状态" data-index="statusText" :width="110" />
+              <a-table-column title="进度（分块）" data-index="progressText" :width="150" align="right" />
+              <a-table-column title="预计剩余" :width="120">
+                <template #cell="{ record }">{{ record.etaText || "-" }}</template>
+              </a-table-column>
+              <a-table-column title="失败分块" :width="260">
+                <template #cell="{ record }">
+                  <span v-if="record.failedChunks > 0" class="danger-text"
+                    >{{ record.failedChunks }} 个。{{ SEED_FAILED_TIP }}</span
+                  >
+                  <span v-else class="muted">0</span>
+                </template>
+              </a-table-column>
+              <a-table-column title="目标起点" :width="200">
+                <template #cell="{ record }">{{ timeText(record.targetFrom) }}</template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </section>
+
         <section v-if="status.stream" class="stream-section">
           <div class="pane-toolbar stream-toolbar">
             <h3 class="toolbar-title">WS 推送（collector-stream）</h3>
@@ -444,6 +477,8 @@ import {
   levelInfo,
   levelRank,
   overallStatus,
+  SEED_FAILED_TIP,
+  seedRows,
   statusSummary,
   unplannedDeleteCommand
 } from "./runtime-status-model";
@@ -485,6 +520,7 @@ const datasetRows = computed(() =>
     .map(item => ({ ...item, key: datasetKey(item) }))
 );
 const datasetNames = computed(() => datasetNameMap(status.value.datasets || []));
+const seedTableRows = computed(() => seedRows(status.value.history_seeds, datasetNames.value));
 const datasetOptions = computed(() => {
   const options = new Map<string, string>();
   for (const item of status.value.datasets || []) {
@@ -698,6 +734,9 @@ onMounted(loadStatus);
   flex: none;
 }
 .runtime-status > .unplanned-section {
+  margin-bottom: 12px;
+}
+.runtime-status > .seed-section {
   margin-bottom: 12px;
 }
 .runtime-status > .stream-section {

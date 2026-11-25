@@ -158,6 +158,15 @@ CREATE TABLE IF NOT EXISTS t_factor_engine_heartbeat (
     CHECK (c_id = 1)
 );
 
+-- 最近一次从 Collector 取到的“历史补齐中”的（空间、数据集、频率）：每次取到后整表替换，
+-- 管理端重启、Collector 暂时不通时沿用，从没取到过按没有补齐
+CREATE TABLE IF NOT EXISTS t_factor_history_seeds (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_freq TEXT NOT NULL,
+    PRIMARY KEY (c_space_id, c_dataset_id, c_freq)
+);
+
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_tasks_mtime
 AFTER UPDATE OF c_name, c_source_dataset_id, c_freq, c_result_dataset_id, c_bound_instance_id, c_status ON t_factor_tasks
 FOR EACH ROW
