@@ -6,9 +6,16 @@
         <a-tag v-if="!loading" size="small" :color="tag.color">{{ tag.label }}</a-tag>
         <span v-if="!loading" class="target-count">{{ targets.length }} 个标的</span>
       </div>
-      <div v-if="snapshot && (snapshot.bar_end_time || snapshot.valid_until)" class="target-times">
-        <span v-if="snapshot.bar_end_time">K 线结束 {{ formatInstant(snapshot.bar_end_time, displayZone) }}</span>
-        <span v-if="snapshot.valid_until">有效至 {{ formatInstant(snapshot.valid_until, displayZone) }}</span>
+      <div
+        v-if="snapshot && (toInstantMs(snapshot.bar_end_time) !== null || toInstantMs(snapshot.valid_until) !== null)"
+        class="target-times"
+      >
+        <span v-if="toInstantMs(snapshot.bar_end_time) !== null"
+          >K 线结束 {{ formatInstant(snapshot.bar_end_time, displayZone) }}</span
+        >
+        <span v-if="toInstantMs(snapshot.valid_until) !== null"
+          >有效至 {{ formatInstant(snapshot.valid_until, displayZone) }}</span
+        >
       </div>
     </header>
     <div v-if="loading" class="target-loading">正在读取当前目标…</div>
@@ -79,17 +86,17 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { InstrumentTarget, StrategyTargetSnapshot } from "@/api/strategy-types";
+import type { InstrumentWeight, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { percent, rankTargets, targetStateTag, targetWeightPercent, type TargetState } from "@/views/strategy/model";
 import { marketLabel, targetKey } from "@/views/strategy/market-mode";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 页面时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
 
 const props = defineProps<{
-  targets: InstrumentTarget[];
+  targets: InstrumentWeight[];
   snapshot: StrategyTargetSnapshot | null;
   state: TargetState;
   /** 首次读取中：不显示状态判断。 */

@@ -1,4 +1,5 @@
 import type { EngineStatus, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
+import { toInstantMs } from "@/utils/time-zone";
 
 // 计算任务列表页顶部的引擎状态条与补算摘要。
 
@@ -113,8 +114,8 @@ export function splitRecalcJobs(jobs: RecalcJob[], now = Date.now()) {
     running: jobs.filter(job => job.status === "accepted" || job.status === "running"),
     recentFailed: jobs.filter(job => {
       if (job.status !== "failed") return false;
-      const updated = Date.parse(job.updated_at || job.created_at);
-      return Number.isFinite(updated) && now - updated <= RECENT_FAILURE_MS;
+      const updated = toInstantMs(job.updated_at) ?? toInstantMs(job.created_at);
+      return updated !== null && now - updated <= RECENT_FAILURE_MS;
     })
   };
 }

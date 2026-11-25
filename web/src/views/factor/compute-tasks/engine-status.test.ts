@@ -28,8 +28,8 @@ const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   status: "running",
   progress_time: "2026-10-02T00:00:00Z",
   error: "",
-  created_at: "2026-10-05T11:00:00Z",
-  updated_at: "2026-10-05T11:30:00Z",
+  created_at: "1791198000000",
+  updated_at: "1791199800000",
   ...patch
 });
 
@@ -127,7 +127,7 @@ describe("计算任务列表顶部的引擎状态", () => {
       job({ job_id: "r", status: "running" }),
       job({ job_id: "a", status: "accepted" }),
       job({ job_id: "f", status: "failed" }),
-      job({ job_id: "old", status: "failed", updated_at: "2026-10-01T00:00:00Z" }),
+      job({ job_id: "old", status: "failed", updated_at: "1790812800000" }),
       job({ job_id: "s", status: "succeeded" })
     ];
     const split = splitRecalcJobs(jobs, NOW);

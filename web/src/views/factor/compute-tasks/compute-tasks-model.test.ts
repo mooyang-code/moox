@@ -143,8 +143,8 @@ describe("compute task list model", () => {
   it("has no last submission until the first accepted one", () => {
     expect(lastSubmission(undefined)).toBeNull();
     expect(lastSubmission({ last_submitted_period: 0 })).toBeNull();
-    const submitted = { last_submitted_period: "1760000000", last_submitted_at: "2026-10-26T10:00:00Z" };
-    expect(lastSubmission(submitted)).toEqual({ period: 1760000000, at: "2026-10-26T10:00:00Z" });
+    const submitted = { last_submitted_period: "1760000000", last_submitted_at: "1793008800000" };
+    expect(lastSubmission(submitted)).toEqual({ period: 1760000000, at: "1793008800000" });
   });
 });
 

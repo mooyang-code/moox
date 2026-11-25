@@ -130,8 +130,8 @@ describe("home page", () => {
       i1: {
         targets: [{ instrument_id: "BTC-USDT", target_weight: "0.2" }],
         session_id: "sess",
-        bar_end_time: new Date(Date.now() - 60_000).toISOString(),
-        valid_until: new Date(Date.now() + 60_000).toISOString(),
+        bar_end_time: String(Date.now() - 60_000),
+        valid_until: String(Date.now() + 60_000),
         result_id: "r"
       }
     };

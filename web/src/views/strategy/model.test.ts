@@ -24,8 +24,8 @@ describe("strategy model helpers", () => {
     const snapshot = {
       targets: [{ instrument_id: "BTC-USDT", target_weight: "0.5" }],
       session_id: "s1",
-      bar_end_time: "2026-10-01T01:00:00Z",
-      valid_until: "2026-10-01T03:00:00Z",
+      bar_end_time: "1790816400000",
+      valid_until: "1790823600000",
       result_id: "r1"
     };
     expect(deriveTargetState(instance, snapshot, Date.parse("2026-10-01T02:00:00Z"))).toBe("valid");
@@ -109,14 +109,14 @@ describe("strategy model helpers", () => {
 
 describe("result insights", () => {
   const base = { summary_json: "{}", skip_reason: "", session_id: "s1" };
-  const at = (minute: number) => `2026-10-01T01:0${minute}:00Z`;
+  const at = (minute: number) => String(Date.parse(`2026-10-01T01:0${minute}:00Z`));
   const ok = (id: string, minute: number, ids: string[], delaySec = 2, session_id = "s1") => ({
     ...base,
     session_id,
     result_id: id,
     status: "ok",
     bar_end_time: at(minute),
-    created_at: new Date(Date.parse(at(minute)) + delaySec * 1000).toISOString(),
+    created_at: String(Number(at(minute)) + delaySec * 1000),
     targets: ids.map(instrument_id => ({ instrument_id, target_weight: "0.2" }))
   });
 

@@ -15,7 +15,7 @@ function instance(id: string, overrides: Partial<StrategyInstance> = {}): Strate
     resolved_json: "{}",
     health: "ok",
     created_at: "",
-    updated_at: "2026-10-10T00:00:00Z",
+    updated_at: "1791590400000",
     ...overrides
   };
 }
@@ -23,7 +23,7 @@ function snapshot(validUntil: string, weights: Record<string, string> = { "BTC-U
   return {
     targets: Object.entries(weights).map(([instrument_id, target_weight]) => ({ instrument_id, target_weight })),
     session_id: "sess",
-    bar_end_time: "2026-10-10T11:00:00Z",
+    bar_end_time: "1791630000000",
     valid_until: validUntil,
     result_id: "r"
   };

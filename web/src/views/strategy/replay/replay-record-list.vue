@@ -19,7 +19,7 @@
           <span class="replay-line muted mono">{{ replayTasksText(item) }}</span>
           <span class="replay-line muted">{{ replayRangeLabel(item, displayZone) }}</span>
           <span v-if="replayMetricsLine(item.metrics_json)" class="replay-line">{{ replayMetricsLine(item.metrics_json) }}</span>
-          <span v-if="item.status === 'running' && item.progress_time" class="replay-line muted">
+          <span v-if="item.status === 'running' && toInstantMs(item.progress_time) !== null" class="replay-line muted">
             进度 {{ formatInstant(item.progress_time, displayZone) }}
           </span>
         </button>
@@ -48,7 +48,7 @@ import {
   replayTasksText,
   replayStatusLabel
 } from "@/views/strategy/replay/model";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 页面时间按当前空间登记的时区显示

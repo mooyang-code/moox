@@ -6,7 +6,9 @@
       <a-link @click="go(replay.replay_id)">{{ replaySourceLabel(replay, store.strategyCatalog) }}</a-link>
       <span class="active-replays__text"
         >{{ replayStatusLabel(replay.status) }} · {{ replayRangeLabel(replay, displayZone)
-        }}<template v-if="replay.progress_time"> · 进度 {{ formatInstant(replay.progress_time, displayZone) }}</template></span
+        }}<template v-if="toInstantMs(replay.progress_time) !== null">
+          · 进度 {{ formatInstant(replay.progress_time, displayZone) }}</template
+        ></span
       >
     </span>
   </p>
@@ -23,7 +25,7 @@ import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import { activeReplays } from "@/views/strategy/attention-model";
 import { replayLink } from "@/views/strategy/links";
 import { replayRangeLabel, replaySourceLabel, replayStatusLabel } from "@/views/strategy/replay/model";

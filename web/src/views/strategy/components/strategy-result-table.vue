@@ -102,7 +102,7 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, ref } from "vue";
-import type { InstrumentTarget, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
+import type { InstrumentWeight, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
 import { getStrategyResult } from "@/api/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import { isPoolDsl } from "@/views/strategy/dsl";
@@ -153,7 +153,7 @@ function changeText(record: StrategyResult): string {
 }
 
 const TargetList = defineComponent({
-  props: { targets: { type: Array as () => InstrumentTarget[], required: true } },
+  props: { targets: { type: Array as () => InstrumentWeight[], required: true } },
   setup(listProps) {
     return () =>
       listProps.targets.length
