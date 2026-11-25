@@ -39,8 +39,8 @@ const accounts = [
     ...baseAccount,
     trading_account_id: "ta-paper-1",
     name: "币安模拟",
-    exchange: 1,
-    markets: [1, 2],
+    exchange: "binance",
+    markets: ["spot", "swap"],
     execution_mode: 1,
     paper: paperConfig,
     snapshot: snapshot("100850.12", "98000")
@@ -49,8 +49,8 @@ const accounts = [
     ...baseAccount,
     trading_account_id: "ta-paper-free",
     name: "OKX 模拟（未加入）",
-    exchange: 2,
-    markets: [2],
+    exchange: "okx",
+    markets: ["swap"],
     execution_mode: 1,
     paper: paperConfig,
     snapshot: snapshot("5000", "5000")
@@ -59,8 +59,8 @@ const accounts = [
     ...baseAccount,
     trading_account_id: "ta-testnet-1",
     name: "币安测试网",
-    exchange: 1,
-    markets: [2],
+    exchange: "binance",
+    markets: ["swap"],
     execution_mode: 2,
     live: { environment: 1, credential_secret_id: "secret-testnet" },
     snapshot: snapshot("20000", "19000")
@@ -69,8 +69,8 @@ const accounts = [
     ...baseAccount,
     trading_account_id: "ta-prod-1",
     name: "币安生产",
-    exchange: 1,
-    markets: [1, 2],
+    exchange: "binance",
+    markets: ["spot", "swap"],
     execution_mode: 2,
     live: { environment: 2, credential_secret_id: "secret-prod" },
     snapshot: snapshot("50000", "42000")
@@ -82,7 +82,7 @@ const logicals = [
     name: "默认策略模拟组合",
     control_mode: 1,
     execution_mode: 1,
-    markets: [1, 2],
+    markets: ["spot", "swap"],
     settlement_asset: "USDT",
     automation_state: "ACTIVE",
     ready: true,
@@ -106,7 +106,7 @@ const logicals = [
     name: "测试网组合",
     control_mode: 1,
     execution_mode: 2,
-    markets: [2],
+    markets: ["swap"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
     pause_reason: "手工检查",
@@ -119,7 +119,7 @@ const logicals = [
     name: "生产组合",
     control_mode: 1,
     execution_mode: 2,
-    markets: [1, 2],
+    markets: ["spot", "swap"],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
     ready: true,
@@ -132,8 +132,8 @@ const orders = [
   {
     order_id: "o-1",
     trading_account_id: "ta-paper-1",
-    exchange: 1,
-    market_type: 2,
+    exchange: "binance",
+    market_type: "swap",
     instrument_id: "BTC-USDT-SWAP",
     side: 1,
     order_type: 1,
@@ -149,8 +149,8 @@ const orders = [
   {
     order_id: "o-2",
     trading_account_id: "ta-paper-1",
-    exchange: 1,
-    market_type: 1,
+    exchange: "binance",
+    market_type: "spot",
     instrument_id: "ETH-USDT-SPOT",
     side: 2,
     order_type: 2,
@@ -235,8 +235,8 @@ async function gateway(route: Route) {
             target_id: "t-1",
             logical_account_id: body.logical_account_id,
             status: "CONVERGING",
-            bar_end_time: NOW - 120_000,
-            valid_until: NOW + 600_000,
+            bar_end_time: String(NOW - 120_000),
+            valid_until: String(NOW + 600_000),
             targets: [
               { instrument_id: "BTC-USDT-SWAP", quantity: "1" },
               { instrument_id: "BTC-USDT-SPOT", quantity: "0.2" },
@@ -259,14 +259,14 @@ async function gateway(route: Route) {
           positions: [
             {
               trading_account_id: "ta-paper-1",
-              market_type: 2,
+              market_type: "swap",
               instrument_id: "BTC-USDT-SWAP",
               signed_quantity: "0.5",
               mark_price: "64000"
             },
             {
               trading_account_id: "ta-paper-1",
-              market_type: 2,
+              market_type: "swap",
               instrument_id: "DOGE-USDT-SWAP",
               signed_quantity: "-100",
               mark_price: "0.15"
@@ -358,7 +358,7 @@ async function gateway(route: Route) {
               fill_id: "f-1",
               order_id: "o-1",
               trading_account_id: "ta-paper-1",
-              market_type: 2,
+              market_type: "swap",
               instrument_id: "BTC-USDT-SWAP",
               side: 1,
               price: "64000",
@@ -390,11 +390,11 @@ async function gateway(route: Route) {
           instances: [
             { instance_id: "inst-1", strategy_id: "st-1", logical_account_id: "la-paper-1", enabled: true, health: "ok" }
           ],
-          total: 1
+          total: "1"
         })
       });
     case "ListStrategies":
-      return route.fulfill({ json: ok({ strategies: [{ strategy_id: "st-1", name: "动量轮动" }], total: 1 }) });
+      return route.fulfill({ json: ok({ strategies: [{ strategy_id: "st-1", name: "动量轮动" }], total: "1" }) });
     case "CreatePaperSimulation":
       calls.paper.push(body);
       return route.fulfill({

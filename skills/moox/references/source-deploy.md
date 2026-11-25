@@ -45,7 +45,7 @@ $CLI setup status --file <moox.toml> --host <主机>
   `storage` 目标产出两个 Storage 二进制，`storage-cli` 是独立目标，`archive-worker` 目标带上 `weed`。
 - 部署按二进制摘要和渲染出的配置判断变化：**只有变了的组件会重启**，没变的只核对在运行。结果里每个组件是 `started`、`restarted`、`unchanged` 或 `disabled`（`moox.toml` 声明停用的，只更新文件、单元停掉）。
 - 部署最后等这次装的组件就绪（本机 `/readyz`），到时限没就绪会列出来并返回失败：先看 `setup logs --host <主机> --component <组件> --journal`。
-- 控制机每次部署都会先执行 `moox-admin-cli bootstrap`（CA、主密钥、管理员、已登记的公钥只建不改；主机与部署按 `moox.toml` 同步，启停状态保留）；其余主机每次先把登记同步到 Admin，再向控制机要身份材料。
+- 控制机每次部署都会先执行 `moox-admin-cli bootstrap`（CA、主密钥、已登记的公钥只建不改；主机与部署连同启停状态按 `moox.toml` 整份覆盖），再执行 `eventbus-credentials ensure` 与 `user ensure`（EventBus 凭据、管理员只建不改）；其余主机每次先把登记同步到 Admin，再向控制机要身份材料。
 
 ## 服务目录变化
 

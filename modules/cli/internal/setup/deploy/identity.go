@@ -85,7 +85,7 @@ func readCurrentKeys(ctx context.Context, target setupssh.Client, layout Layout,
 }
 
 // bootstrapControl 在控制机上执行 moox-admin-cli bootstrap：建库、CA、主密钥、登记这台电脑的 moox-cli 公钥，
-// 再补 EventBus 凭据与初始管理员，这些只建不改；主机与部署按 moox.toml 同步（地址等会更新，启停状态保留）。返回控制机自己的身份包清单。
+// 再执行 eventbus-credentials ensure 与 user ensure 补 EventBus 凭据与初始管理员，这些只建不改；主机与部署连同启停状态按 moox.toml 整份覆盖。返回控制机自己的身份包清单。
 func bootstrapControl(ctx context.Context, control setupssh.Client, cfg *topology.Config, admin topology.Admin, operatorPublicKey string, current currentKeys, stage string) (hostbundle.Metadata, error) {
 	var metadata hostbundle.Metadata
 	layout := Layout{Root: cfg.Paths.DeployRoot}
