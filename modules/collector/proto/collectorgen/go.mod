@@ -1,18 +1,16 @@
 module github.com/mooyang-code/moox/modules/collector/proto/collectorgen
 
-go 1.26.0
+go 1.27.3
 
 require (
-	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
-	google.golang.org/protobuf v1.36.11
+	github.com/mooyang-code/moox/packages v0.0.0-00010101000000-000000000000
+	google.golang.org/protobuf v1.36.12
 	trpc.group/trpc-go/trpc-go v1.0.4
 )
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
-	github.com/go-playground/assert/v2 v2.2.0 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
@@ -28,10 +26,8 @@ require (
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -49,4 +45,4 @@ require (
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
-replace github.com/mooyang-code/moox/packages/commonpb => ../../../../packages/commonpb
+replace github.com/mooyang-code/moox/packages => ../../../../packages
