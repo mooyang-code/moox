@@ -323,7 +323,7 @@
 | `strategy replay cancel` | 取消回放 |
 | `strategy replay list` | 列出策略历史回放 |
 | `strategy replay show` | 查看一次回放 |
-| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场）；`--input view` 读结果 View（默认），`--input compute` 由因子引擎现算（声明了 factor_params 的策略只能用它）；`--slippage-bps` 滑点 |
+| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场）；`--input view` 读因子结果数据集的查询索引（默认），`--input compute` 由因子引擎现算（声明了 factor_params 的策略只能用它）；`--slippage-bps` 滑点 |
 | `strategy result list` | 列出实例每期的结果 |
 | `strategy result show` | 查看一期结果 |
 | `strategy show` | 查看一个策略定义 |

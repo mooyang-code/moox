@@ -333,6 +333,8 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 	// Monitor 永远认为它迟到。
 	s.metrics.RetainViews(active)
 	s.detachInactiveViews(ctx, active, existing)
+	// 停用期间被删除的数据集没有运行时可摘，它的索引文件在这里按孤立文件删掉。
+	s.removeOrphanIndexes(ctx, specs)
 	s.reportFilesOverLimit()
 	return firstErr
 }

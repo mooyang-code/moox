@@ -164,3 +164,29 @@ func TestRemoveOrphanIndexesContinuesAfterEngineErrors(t *testing.T) {
 		t.Fatalf("删除 = %v 剩余 = %v，期望第一个失败后继续删第二个", engine.removeCalls, engine.ids)
 	}
 }
+
+// 数据集先停用（View 摘掉、索引保留）、再被删除：停用期间没有运行时可摘，下一轮维护按孤立文件删掉它的索引；
+// 挂着运行时的索引（另一个活动数据集）不碰。
+func TestMaintenanceRemovesIndexOfDatasetDeletedWhileDisabled(t *testing.T) {
+	gone, kept := cleanupIndexID("gone"), cleanupIndexID("kept")
+	engine := &fakeManagedEngine{name: "duckdb", ids: []string{gone, kept}}
+	svc := newCleanupService(t, engine)
+	ctx := context.Background()
+	disabled := timeSeriesSpec("space", "gone", "1m")
+	disabled.Status = "disabled"
+	active := timeSeriesSpec("space", "kept", "1m")
+	runtime := testRuntime(svc, active)
+	runtime.building = runtime.indexID // 正在建索引：清理不能碰它
+	if err := svc.maintainOnce(ctx, MaintenanceOptions{Metadata: metadataFor(disabled, active)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(engine.removeCalls) != 0 {
+		t.Fatalf("停用的数据集应保留索引：%v", engine.removeCalls)
+	}
+	if err := svc.maintainOnce(ctx, MaintenanceOptions{Metadata: metadataFor(active)}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(engine.removeCalls, []string{gone}) || !reflect.DeepEqual(engine.ids, []string{kept}) {
+		t.Fatalf("删除 = %v 剩余 = %v，期望只删停用期间被删除的数据集的索引", engine.removeCalls, engine.ids)
+	}
+}
