@@ -61,9 +61,10 @@ func (s *Store) CreateDataset(ctx context.Context, item *pb.Dataset, columns ...
 	}
 	item.Status = "active"
 	item.Revision = 1
-	now := s.nowUTC().Format(time.RFC3339Nano)
-	item.CreatedAt = now
-	item.UpdatedAt = now
+	nowTime := s.nowUTC()
+	now := sqlTimestampText(nowTime)
+	item.CreatedAt = nowTime.UnixMilli()
+	item.UpdatedAt = nowTime.UnixMilli()
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
@@ -163,7 +164,8 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	item.Status = status
 	item.Revision = existing.GetRevision() + 1
 	item.CreatedAt = existing.GetCreatedAt()
-	item.UpdatedAt = s.nowUTC().Format(time.RFC3339Nano)
+	updatedAt := s.nowUTC()
+	item.UpdatedAt = updatedAt.UnixMilli()
 	raw, err := marshal(item)
 	if err != nil {
 		return nil, err
@@ -177,7 +179,7 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 			c_data_source_id = ?, c_name = ?,
 			c_status = ?, c_item_json = ?, c_subject_tags_json = ?, c_revision = c_revision + 1, c_mtime = ?
 		WHERE c_space_id = ? AND c_dataset_id = ? AND c_revision = ?
-	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetStatus(), raw, subjectTags, item.GetUpdatedAt(), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
+	`, nullableDatasetSource(dataSourceID), item.GetName(), item.GetStatus(), raw, subjectTags, sqlTimestampText(updatedAt), item.GetSpaceId(), item.GetDatasetId(), existing.GetRevision())
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +335,7 @@ func upsertDatasetColumnTx(ctx context.Context, tx *sql.Tx, item *pb.DatasetColu
 	}
 	existing, getErr := getMessage(ctx, tx, `SELECT c_item_json FROM t_dataset_columns WHERE c_space_id = ? AND c_dataset_id = ? AND c_column_name = ?`,
 		[]any{item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName()}, func() *pb.DatasetColumn { return &pb.DatasetColumn{} })
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UnixMilli()
 	switch {
 	case getErr == nil:
 		if existing.GetValueType() != item.GetValueType() {

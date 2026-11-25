@@ -78,8 +78,8 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref datasetRef, chang
 		return err
 	}
 	sinceCommit := time.Duration(0)
-	if committedAt, err := time.Parse(time.RFC3339Nano, change.GetCreatedAt()); err == nil {
-		sinceCommit = time.Since(committedAt)
+	if ms := change.GetCreatedAt(); ms > 0 {
+		sinceCommit = time.Since(time.UnixMilli(ms))
 	}
 	log.Infof("storage view 周期就绪 view=%s/%s 来源=%s 期=%d 标记提交到发布=%s 发布=%s",
 		ref.spaceID, ref.datasetID, payload.GetSource(), payload.GetPeriodTime(), sinceCommit.Round(time.Millisecond), time.Since(publishStart).Round(time.Millisecond))

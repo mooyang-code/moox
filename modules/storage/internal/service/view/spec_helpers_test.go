@@ -8,8 +8,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-// testCreatedAt 是测试数据集的创建时间，索引文件记下同一个值才算属于它。
-const testCreatedAt = "2026-11-01T00:00:00Z"
+// testCreatedAt 是测试数据集的创建时刻（2026-11-01T00:00:00Z 的 Unix 毫秒），索引文件记下同一个值才算属于它。
+const testCreatedAt int64 = 1793491200000
 
 // testMetadata 按一页返回固定的数据集与列。
 type testMetadata struct {

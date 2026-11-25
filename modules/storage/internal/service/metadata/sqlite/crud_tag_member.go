@@ -58,8 +58,11 @@ func (s *Store) ListTagMembers(ctx context.Context, query metadatastore.TagMembe
 	items := make([]*pb.TagMember, 0)
 	for rows.Next() {
 		item := &pb.TagMember{Subject: &pb.Subject{}}
-		var raw string
-		if err := rows.Scan(&item.SpaceId, &item.TagId, &item.Status, &item.InactiveAt, &item.TradingStatus, &raw); err != nil {
+		var raw, inactiveAt string
+		if err := rows.Scan(&item.SpaceId, &item.TagId, &item.Status, &inactiveAt, &item.TradingStatus, &raw); err != nil {
+			return nil, nil, err
+		}
+		if err := setTimestampField(item, "inactive_at", inactiveAt); err != nil {
 			return nil, nil, err
 		}
 		if err := unmarshalOptions.Unmarshal([]byte(raw), item.Subject); err != nil {

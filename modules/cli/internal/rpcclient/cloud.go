@@ -52,11 +52,12 @@ type CloudFunction struct {
 	TimerCron              string `json:"timer_cron,omitempty"`
 	TimerEnabled           bool   `json:"timer_enabled"`
 	TimerAvailableStatus   string `json:"timer_available_status,omitempty"`
-	ReadAt                 string `json:"read_at,omitempty"`
-	ReadError              string `json:"read_error,omitempty"`
-	TimerMatches           bool   `json:"timer_matches"`
-	PackageLatest          bool   `json:"package_latest"`
-	EnvironmentMatches     bool   `json:"environment_matches"`
+	// ReadAt 是读回时刻（Unix 毫秒）；接口 JSON 里 int64 是数字字符串，输出保持同一写法。
+	ReadAt             int64  `json:"read_at,omitempty,string"`
+	ReadError          string `json:"read_error,omitempty"`
+	TimerMatches       bool   `json:"timer_matches"`
+	PackageLatest      bool   `json:"package_latest"`
+	EnvironmentMatches bool   `json:"environment_matches"`
 }
 
 // Drifted 判断函数与期望不一致：没读到、云上不存在、定时器或受管环境不一致、代码包落后、计划外。

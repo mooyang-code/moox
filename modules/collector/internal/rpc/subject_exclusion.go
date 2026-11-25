@@ -35,10 +35,8 @@ func (s *Service) SetSubjectExclusions(ctx context.Context, req *pb.SetSubjectEx
 	}
 	now := time.Now().UTC()
 	var expires time.Time
-	if raw := strings.TrimSpace(req.GetExpiresAt()); raw != "" {
-		if expires, err = time.Parse(time.RFC3339, raw); err != nil {
-			return &pb.SetSubjectExclusionsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "expires_at 必须是 RFC3339 时间")}, nil
-		}
+	if ms := req.GetExpiresAt(); ms != 0 {
+		expires = time.UnixMilli(ms).UTC()
 		if !expires.After(now) {
 			return &pb.SetSubjectExclusionsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "expires_at 必须晚于当前时间")}, nil
 		}
@@ -101,10 +99,7 @@ func (s *Service) activeExclusions(ctx context.Context, spaceID string) ([]*pb.S
 	}
 	result := make([]*pb.SubjectExclusion, 0, len(items))
 	for _, item := range items {
-		entry := &pb.SubjectExclusion{SpaceId: item.SpaceID, SubjectId: item.SubjectID, MarketType: item.MarketType, Reason: item.Reason, Operator: item.Caller, CreatedAt: item.CreatedAt.Format(time.RFC3339)}
-		if !item.ExpiresAt.IsZero() {
-			entry.ExpiresAt = item.ExpiresAt.Format(time.RFC3339)
-		}
+		entry := &pb.SubjectExclusion{SpaceId: item.SpaceID, SubjectId: item.SubjectID, MarketType: item.MarketType, Reason: item.Reason, Operator: item.Caller, CreatedAt: unixMillis(item.CreatedAt), ExpiresAt: unixMillis(item.ExpiresAt)}
 		result = append(result, entry)
 	}
 	return result, nil

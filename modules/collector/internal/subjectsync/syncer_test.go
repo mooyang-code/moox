@@ -24,7 +24,7 @@ func newTestSyncer(t *testing.T) (*Syncer, *fakeTagStore, *fakeRunStore, *fakeAt
 	}
 	runs := newFakeRunStore()
 	for _, tag := range tags[:3] {
-		tag.UpdatedAt = "2026-09-01 00:00:00"
+		tag.UpdatedAt = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 		runs.runs[tag.TagId] = domain.TagSyncRun{SpaceID: tag.SpaceId, TagID: tag.TagId, LastRunAt: justRun, LastStatus: domain.TagSyncSuccess}
 	}
 	tagStore := &fakeTagStore{tags: tags, applied: map[string]int{}}

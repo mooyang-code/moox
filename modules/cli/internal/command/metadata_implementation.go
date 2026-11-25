@@ -459,15 +459,15 @@ func (s seedCommon) status() string {
 }
 
 func (s seedSpace) toPB() *pb.Space {
-	return &pb.Space{SpaceId: s.SpaceID, Name: s.Name, Description: s.Description, Owner: s.Owner, Market: s.Market, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.Space{SpaceId: s.SpaceID, Name: s.Name, Description: s.Description, Owner: s.Owner, Market: s.Market, Timezone: s.Timezone, Status: s.status(), Attributes: s.Attributes}
 }
 
 func (s seedDataSource) toPB() *pb.DataSource {
-	return &pb.DataSource{SpaceId: s.SpaceID, DataSourceId: s.DataSourceID, Name: s.Name, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.DataSource{SpaceId: s.SpaceID, DataSourceId: s.DataSourceID, Name: s.Name, Status: s.status(), Attributes: s.Attributes}
 }
 
 func (s seedSubject) toPB() *pb.Subject {
-	return &pb.Subject{SpaceId: s.SpaceID, SubjectId: s.SubjectID, Name: s.Name, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.Subject{SpaceId: s.SpaceID, SubjectId: s.SubjectID, Name: s.Name, Timezone: s.Timezone, Status: s.status(), Attributes: s.Attributes}
 }
 
 func (s seedTag) toPB() *pb.Tag {
@@ -480,7 +480,7 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "active", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, Freq: s.Freq, SubjectTags: s.SubjectTags, Status: "active", Attributes: s.Attributes}, nil
 }
 
 func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
@@ -488,7 +488,7 @@ func (s seedDatasetColumn) toPB() (*pb.DatasetColumn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.DatasetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, ValueType: valueType, DisplayName: s.DisplayName, Group: s.Group, Required: s.Required, Aliases: s.Aliases, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	return &pb.DatasetColumn{SpaceId: s.SpaceID, DatasetId: s.DatasetID, ColumnName: s.ColumnName, ValueType: valueType, DisplayName: s.DisplayName, Group: s.Group, Required: s.Required, Aliases: s.Aliases, Status: s.status(), Attributes: s.Attributes}, nil
 }
 
 func parseDataKind(value string) (pb.DataKind, error) {

@@ -32,9 +32,10 @@ type Dataset struct {
 	RetentionSource string
 	SubjectTags     []string
 	Attributes      map[string]string
-	CreatedAt       string
-	UpdatedAt       string
-	Revision        uint64
+	// CreatedAt、UpdatedAt 是 Storage 元数据的创建、更新时刻（Unix 毫秒）。
+	CreatedAt int64
+	UpdatedAt int64
+	Revision  uint64
 }
 
 // DatasetProvider 读取数据集信息；数据集不存在时返回 ErrDatasetNotFound。

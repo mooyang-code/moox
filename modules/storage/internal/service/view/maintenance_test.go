@@ -109,7 +109,7 @@ func TestRecreatedDatasetDoesNotAdoptOldIndex(t *testing.T) {
 	engine.stats = &stats
 
 	recreated := timeSeriesSpec("space", "market", "1m", "close")
-	recreated.CreatedAt = "2026-11-24T08:00:00Z"
+	recreated.CreatedAt = 1795507200000
 	opts := MaintenanceOptions{Metadata: metadataFor(recreated), PrimaryRange: &pagedRangeReader{}, Bars: 10}
 	if err := svc.maintainView(context.Background(), opts, recreated); err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestRestoreActiveViewsSkipsUnbuiltIndexFiles(t *testing.T) {
 	half.Follow = viewindex.FollowState{}
 	// 删除后按同样 ID 重建的数据集：数据集 ID 相同，创建时间不同。
 	recreated := builtStats("prices", 1, "hash")
-	recreated.DatasetCreatedAt = "2026-10-01T00:00:00Z"
+	recreated.DatasetCreatedAt = 1790812800000
 	for name, stats := range map[string]viewindex.ViewIndexStats{
 		"missing":           {},
 		"half_built":        half,

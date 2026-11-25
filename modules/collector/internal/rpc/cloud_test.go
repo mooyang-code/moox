@@ -116,7 +116,7 @@ func TestCloudAccountCreateUpdateList(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo().GetMsg())
 	require.Equal(t, "tencent", created.GetAccount().GetProvider())
-	require.NotEmpty(t, created.GetAccount().GetCreateTime())
+	require.Positive(t, created.GetAccount().GetCreatedAt())
 	again, err := service.CreateCloudAccount(ctx, &pb.CreateCloudAccountReq{Account: account})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_CONFLICT, again.GetRetInfo().GetCode())
@@ -200,7 +200,7 @@ func TestApplyCloudReadbackFillsTheStatusColumns(t *testing.T) {
 	require.True(t, ok.GetCloudExists())
 	require.True(t, ok.GetCloudTimerMatches())
 	require.True(t, ok.GetCloudPackageLatest())
-	require.Equal(t, "2026-11-14T08:00:00Z", ok.GetCloudReadAt())
+	require.Equal(t, readAt.UnixMilli(), ok.GetCloudReadAt())
 
 	drift := &pb.CollectorFunctionStatus{Name: "f", Executor: "scf", Cron: "5 * * * * * *"}
 	applyCloudReadback(drift, fetchplan.FunctionReadback{FunctionState: cloud.FunctionState{Exists: true, PackageID: "pkg-1", Timer: timer, ReadAt: readAt}}, latest)
@@ -219,7 +219,7 @@ func TestApplyCloudReadbackFillsTheStatusColumns(t *testing.T) {
 	failed := &pb.CollectorFunctionStatus{Name: "f", Executor: "scf", Cron: "0 * * * * * *"}
 	applyCloudReadback(failed, fetchplan.FunctionReadback{FunctionState: cloud.FunctionState{ReadAt: readAt}, Error: "限频"}, latest)
 	require.False(t, failed.GetCloudExists())
-	require.Equal(t, "2026-11-14T08:00:00Z", failed.GetCloudReadAt())
+	require.Equal(t, readAt.UnixMilli(), failed.GetCloudReadAt())
 }
 
 // 定时器一致的口径与对账器相同：可用状态、Qualifier、Message 任何一项不对都算不一致。
@@ -252,5 +252,5 @@ func TestCollectorStatusLeavesCloudColumnsEmptyWithoutReadbacks(t *testing.T) {
 	require.Len(t, rsp.GetFunctions(), 1)
 	require.Equal(t, "scf", rsp.GetFunctions()[0].GetExecutor())
 	require.False(t, rsp.GetFunctions()[0].GetCloudExists())
-	require.Empty(t, rsp.GetFunctions()[0].GetCloudReadAt())
+	require.Zero(t, rsp.GetFunctions()[0].GetCloudReadAt())
 }

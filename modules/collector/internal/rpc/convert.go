@@ -31,8 +31,8 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 		CollectParams:  structFromJSONString(redactTaskResultDatasetID(task.CollectParams)),
 		Enabled:        &enabled,
 		Creator:        task.Creator,
-		CreateTime:     formatTime(task.CreateTime),
-		ModifyTime:     formatTime(task.ModifyTime),
+		CreatedAt:      unixMillis(task.CreateTime),
+		UpdatedAt:      unixMillis(task.ModifyTime),
 		PrepareState:   string(task.PrepareState),
 		LastError:      task.LastError,
 		Result:         &pb.TaskResult{ResultName: resultName(task.TaskName), DatasetId: task.ResultDatasetID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
@@ -100,11 +100,12 @@ func taskResultDataKind(dataType string) string {
 	return "time_series"
 }
 
-func formatTime(t time.Time) string {
+// unixMillis 把墙钟时刻换成接口上的 Unix 毫秒；零值时间得 0（表示没有）。
+func unixMillis(t time.Time) int64 {
 	if t.IsZero() {
-		return ""
+		return 0
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.UnixMilli()
 }
 
 func structFromJSONString(raw string) *structpb.Struct {

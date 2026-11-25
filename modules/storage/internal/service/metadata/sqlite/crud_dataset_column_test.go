@@ -29,7 +29,7 @@ func TestDatasetColumnsAreSelfDescribing(t *testing.T) {
 	if len(columns) != 2 || columns[0].GetColumnName() != "open" || columns[1].GetColumnName() != "close" {
 		t.Fatalf("列应按建列顺序列出：%v", columns)
 	}
-	if columns[0].GetDisplayName() != "open价" || columns[0].GetGroup() != "行情价格" || columns[0].GetCreatedAt() == "" {
+	if columns[0].GetDisplayName() != "open价" || columns[0].GetGroup() != "行情价格" || columns[0].GetCreatedAt() <= 0 {
 		t.Fatalf("列的显示名、分组、创建时间没有保存：%v", columns[0])
 	}
 
