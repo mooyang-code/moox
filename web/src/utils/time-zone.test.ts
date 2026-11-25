@@ -75,6 +75,25 @@ describe("解析后端给的时间", () => {
   it("不带时区的 YYYY-MM-DD HH:mm:ss 按 UTC 理解，和浏览器本地时区无关", () => {
     expect(toInstantMs("2026-11-07 01:30:05")).toBe(Date.parse("2026-11-07T01:30:05Z"));
   });
+
+  it("后端时刻从 RFC3339 文本换成毫秒数字字符串后，显示完全不变", () => {
+    const text = "2026-11-07T01:30:05Z";
+    const ms = String(Date.parse(text));
+    const now = Date.parse("2026-11-07T12:00:00Z");
+    expect(toInstantMs(ms)).toBe(toInstantMs(text));
+    for (const zone of ["UTC", SH, NY]) {
+      expect(formatInstant(ms, zone)).toBe(formatInstant(text, zone));
+      expect(formatInstant(ms, zone, "minute")).toBe(formatInstant(text, zone, "minute"));
+      expect(marketTime(ms, zone, now, { seconds: true })).toBe(marketTime(text, zone, now, { seconds: true }));
+    }
+  });
+
+  it("0、空串和 Go 零时间都当作没有", () => {
+    for (const value of [0, "0", "", null, undefined, "0001-01-01T00:00:00Z"]) {
+      expect(toInstantMs(value)).toBeNull();
+      expect(formatInstant(value, "UTC")).toBe("—");
+    }
+  });
 });
 
 describe("时间输入：墙钟换成时刻", () => {

@@ -43,6 +43,15 @@ describe("collector result workflow", () => {
     expect(tabs.map(tab => tab.title)).toEqual(["新任务", "旧任务"]);
   });
 
+  it("创建时间是 RFC3339 文本或毫秒数字字符串都能排序", () => {
+    const mixed: CollectorTask[] = [
+      { task_id: "text", create_time: "2026-09-19T00:00:00Z" },
+      { task_id: "ms", create_time: String(Date.parse("2026-09-20T00:00:00Z")) },
+      { task_id: "none" }
+    ];
+    expect(buildTaskResultTabs(mixed).map(tab => tab.taskId)).toEqual(["ms", "text", "none"]);
+  });
+
   it("keeps unknown list state stale until the selected task is inspected", () => {
     expect(getTaskResultState({ task_id: "unknown", result: { dataset_id: "dataset-unknown", status: "unknown" } })).toBe(
       "stale"

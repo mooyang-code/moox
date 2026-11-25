@@ -46,8 +46,8 @@
           </a-descriptions-item>
           <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
           <a-descriptions-item label="结果数据集" :span="2">{{ set.result_dataset_id }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatTime(set.created_at) }}</a-descriptions-item>
-          <a-descriptions-item label="更新时间">{{ formatTime(set.updated_at) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatInstant(set.created_at, displayZone) }}</a-descriptions-item>
+          <a-descriptions-item label="更新时间">{{ formatInstant(set.updated_at, displayZone) }}</a-descriptions-item>
         </a-descriptions>
       </section>
 
@@ -114,10 +114,6 @@ const removeState = computed(() => (props.info ? deleteState(props.info) : { dis
 const sourceName = computed(() =>
   set.value ? store.datasetNames[set.value.source_dataset_id] || set.value.source_dataset_id : ""
 );
-function formatTime(value?: string) {
-  return formatInstant(value, displayZone.value);
-}
-
 function goDefinitions() {
   void router.push("/factor/definitions");
 }

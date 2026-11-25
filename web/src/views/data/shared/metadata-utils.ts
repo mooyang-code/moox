@@ -1,4 +1,3 @@
-import { formatInstant, type TimePrecision } from "@/utils/time-zone";
 import type { DataKind, FieldValueType } from "@/api/storage/types";
 
 export interface AdminPagination {
@@ -62,14 +61,6 @@ export function statusLabel(status?: string) {
     default:
       return status || "-";
   }
-}
-
-/**
- * 带时区后缀的时间（默认到秒）。zone 由页面传入：跟空间有关的页面用 useDisplayZone()，和空间无关的页面用 UTC。
- * 以前这里只是去掉 T 和 Z，把 UTC 原样当本地时间显示，还带纳秒。
- */
-export function formatTime(value?: string, zone: string = "UTC", precision: TimePrecision = "second") {
-  return formatInstant(value, zone, precision);
 }
 
 export function jsonText(value?: string) {

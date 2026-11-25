@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/topology"
 
@@ -234,6 +235,23 @@ func TestSpecAutoIDsNumberMapAndTimeValidation(t *testing.T) {
 	require.ErrorContains(t, err, "RFC3339")
 	_, _, err = runSpecCommand(t, spec, "--param", "window=abc")
 	require.ErrorContains(t, err, "需要数字")
+}
+
+func TestSpecInstantFlagWritesMillis(t *testing.T) {
+	gateway := &rpcFakeGateway{response: `{"ret_info":{"code":0}}`}
+	useRPCGateway(t, gateway)
+	spec := rpcSpec{Path: []string{"x", "orders"}, Short: "t", Service: "trpc.moox.trade.TradeConsole", Method: "ListOrders", NoSpace: true,
+		Flags: []rpcFlag{instantFlag("start-time", "start_time", "起点", false), instantFlag("end-time", "end_time", "终点", false)}}
+
+	_, _, err := runSpecCommand(t, spec, "--start-time", "2026-10-01T00:00:00Z", "--end-time", "2026-10-01T08:00:00.5+08:00")
+	require.NoError(t, err)
+	var request map[string]any
+	require.NoError(t, json.Unmarshal(gateway.body, &request))
+	assert.Equal(t, float64(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixMilli()), request["start_time"], "RFC3339 换成毫秒")
+	assert.Equal(t, float64(time.Date(2026, 10, 1, 0, 0, 0, 500e6, time.UTC).UnixMilli()), request["end_time"], "数字偏移与小数秒")
+
+	_, _, err = runSpecCommand(t, spec, "--start-time", "1759276800000")
+	require.ErrorContains(t, err, "需要 RFC3339 时刻")
 }
 
 func TestSpecBusinessFailureReturnsErrorAfterPrinting(t *testing.T) {

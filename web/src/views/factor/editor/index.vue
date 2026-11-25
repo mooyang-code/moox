@@ -419,7 +419,7 @@ const previewRows = computed(() =>
     key: index,
     subject_id: row.subject_id,
     series_tag: row.series_tag || "-",
-    time: formatTime(row.data_time),
+    time: formatInstant(row.data_time, displayZone.value),
     cells: (row.values || []).map((value, i) => (row.nulls?.[i] ? null : value))
   }))
 );
@@ -447,11 +447,6 @@ const enabledUsages = computed(() =>
 // 其他空间启用着的成员也挡住编辑（后端按全量引用校验），只是看不到是哪个任务。
 const otherSpaceEnabled = ref(0);
 const readOnly = computed(() => editing.value && (enabledUsages.value.length > 0 || otherSpaceEnabled.value > 0));
-
-/** 试算结果的数据时间按空间时区带后缀。 */
-function formatTime(value: string) {
-  return formatInstant(value, displayZone.value);
-}
 
 function formatCell(value: number | null) {
   if (value === null) return "null";

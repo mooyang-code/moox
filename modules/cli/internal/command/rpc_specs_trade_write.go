@@ -89,7 +89,7 @@ func init() {
 				{Name: "order-type", Field: "order_type", Kind: rpcString, Default: "ORDER_TYPE_MARKET", Usage: "订单类型（ORDER_TYPE_MARKET 或 ORDER_TYPE_LIMIT）"},
 				strFlag("limit-price", "limit_price", "限价单价格（限价单必填）"),
 				strFlag("fill-policy", "fill_policy", "成交方式（限价单必填：FILL_POLICY_GTC、FILL_POLICY_IOC 或 FILL_POLICY_FOK；市价单不能给）"), strFlag("position-side", "position_side", "持仓方向（只有 POSITION_SIDE_NET）"),
-				intFlag("deadline-at", "deadline_at", "截止时间（毫秒时间戳）"), reason}},
+				instantFlag("deadline-at", "deadline_at", "截止时间（RFC3339）", false), reason}},
 		rpcSpec{Path: []string{"trade", "order", "cancel"}, Destructive: true, AutoIDs: []string{"action_id"}, Short: "撤单（默认只预览，--yes 才执行）", Service: tradeConsole, Method: "CancelOrder",
 			Flags: []rpcFlag{reqFlag("order-id", "order_id", "订单 ID"), reason}},
 

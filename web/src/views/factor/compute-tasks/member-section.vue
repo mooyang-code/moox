@@ -173,7 +173,7 @@ const rows = computed(() =>
       outputs: member.output_columns?.length ? member.output_columns : member.factor.outputs,
       paramsText: paramsText(member.params),
       submissionText: submitted
-        ? `最近提交：目标期 ${formatPeriod(submitted.period, displayZone.value)}，提交于 ${formatTime(submitted.at)}`
+        ? `最近提交：目标期 ${formatPeriod(submitted.period, displayZone.value)}，提交于 ${formatInstant(submitted.at, displayZone.value)}`
         : "尚未提交（按默认参数计算）"
     };
   })
@@ -227,10 +227,6 @@ function onAdded() {
 
 function editDefinition(member: FactorMember) {
   void router.push(`/factor/definitions/${encodeURIComponent(member.factor_id)}/edit`);
-}
-
-function formatTime(value?: string) {
-  return formatInstant(value, displayZone.value);
 }
 
 async function toggle(member: FactorMember, target: MemberStatus) {

@@ -60,8 +60,8 @@
               </a-table-column>
               <a-table-column title="时间范围" :width="260">
                 <template #cell="{ record }">
-                  {{ formatTime(record.job.start_time, displayZone) }}<br />
-                  → {{ formatTime(record.job.end_time, displayZone) }}
+                  {{ formatInstant(record.job.start_time, displayZone) }}<br />
+                  → {{ formatInstant(record.job.end_time, displayZone) }}
                 </template>
               </a-table-column>
               <a-table-column title="状态" :width="200">
@@ -81,7 +81,7 @@
                 </template>
               </a-table-column>
               <a-table-column title="创建时间" :width="180">
-                <template #cell="{ record }">{{ formatTime(record.job.created_at, displayZone) }}</template>
+                <template #cell="{ record }">{{ formatInstant(record.job.created_at, displayZone) }}</template>
               </a-table-column>
               <a-table-column title="操作" :width="90" align="center" fixed="right">
                 <template #cell="{ record }">
@@ -108,7 +108,8 @@ import { cancelRecalcJob, listRecalcJobs } from "@/api/factor";
 import type { FactorTask, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import InfoTip from "@/components/info-tip/index.vue";
 import TaskTabs from "@/views/factor/shared/task-tabs.vue";
 import { isActiveJob } from "@/views/factor/shared/status";

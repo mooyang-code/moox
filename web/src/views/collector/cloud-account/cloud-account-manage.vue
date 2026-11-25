@@ -44,7 +44,7 @@
           </a-table-column>
           <a-table-column title="创建时间" data-index="create_time" :width="180">
             <template #cell="{ record }">
-              {{ formatTime(record.create_time) }}
+              {{ formatInstant(record.create_time, "UTC") }}
             </template>
           </a-table-column>
           <a-table-column title="操作" :width="160" align="center" fixed="right">
@@ -344,9 +344,6 @@ const handleCancel = () => {
 
 // 云厂商只有腾讯云
 const providerName = (provider: string) => (provider === "tencent" ? "腾讯云" : provider);
-
-// 云账号是全局对象：时间按 UTC 带后缀
-const formatTime = (time: string | undefined) => formatInstant(time, "UTC");
 
 // 提交作用域：重新打开表单会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const accountScope = createSubmitScope({ global: true });

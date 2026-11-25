@@ -192,6 +192,8 @@ func (p *protoIndex) kindMatches(kind rpcFlagKind, f protoField) (bool, string) 
 		return !f.Repeated && !isMap && (f.Type == "string" || isEnum), "需要 string 或枚举，实际 " + f.Type
 	case rpcInt:
 		return !f.Repeated && scalar && strings.Contains(f.Type, "int"), "需要整数，实际 " + f.Type
+	case rpcInstant:
+		return !f.Repeated && f.Type == "int64", "时刻参数需要 int64 毫秒，实际 " + f.Type
 	case rpcFloat:
 		return !f.Repeated && (f.Type == "double" || f.Type == "float"), "需要浮点数，实际 " + f.Type
 	case rpcBool:
