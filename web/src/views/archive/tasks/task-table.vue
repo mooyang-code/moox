@@ -29,7 +29,10 @@
         <a-table-column title="跟随" :width="250">
           <template #cell="{ record }">
             <div>{{ followText(record) }}</div>
-            <div class="sub" :title="toInstantMs(record.last_success_at) !== null ? formatInstant(record.last_success_at, zone) : undefined">
+            <div
+              class="sub"
+              :title="toInstantMs(record.last_success_at) !== null ? formatInstant(record.last_success_at, zone) : undefined"
+            >
               {{ lastFollowText(record, zone) }}
             </div>
           </template>
