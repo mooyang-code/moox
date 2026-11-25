@@ -99,7 +99,7 @@ func (s *Store) stageChangeLocked(batch *cpebble.Batch, change *pb.DatasetChange
 	}
 	change.Sequence = seq
 	// 创建时间用墙钟：清理按墙钟算截止时间，不能用周期判定的时钟。
-	change.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	change.CreatedAt = time.Now().UnixMilli()
 	raw, err := proto.Marshal(change)
 	if err != nil {
 		return err
@@ -354,7 +354,8 @@ type changeHeader struct {
 	sequence  uint64
 	spaceID   string
 	datasetID string
-	createdAt string
+	// createdAt 是创建时刻（Unix 毫秒）。
+	createdAt int64
 	// hasMarker 为真表示这是一条完成标记条目。
 	hasMarker bool
 }
@@ -369,13 +370,18 @@ func peekChange(raw []byte) (changeHeader, error) {
 		}
 		raw = raw[n:]
 		switch {
-		case num == 1 && typ == protowire.VarintType:
+		case (num == 1 || num == 5) && typ == protowire.VarintType:
 			v, m := protowire.ConsumeVarint(raw)
 			if m < 0 {
 				return head, protowire.ParseError(m)
 			}
-			head.sequence, n = v, m
-		case (num == 2 || num == 3 || num == 5 || num == 7) && typ == protowire.BytesType:
+			if num == 1 {
+				head.sequence = v
+			} else {
+				head.createdAt = int64(v)
+			}
+			n = m
+		case (num == 2 || num == 3 || num == 7) && typ == protowire.BytesType:
 			v, m := protowire.ConsumeBytes(raw)
 			if m < 0 {
 				return head, protowire.ParseError(m)
@@ -385,8 +391,6 @@ func peekChange(raw []byte) (changeHeader, error) {
 				head.spaceID = string(v)
 			case 3:
 				head.datasetID = string(v)
-			case 5:
-				head.createdAt = string(v)
 			default:
 				head.hasMarker = len(v) > 0
 			}
@@ -443,11 +447,10 @@ func (s *Store) cleanupChangeLogBatch(ctx context.Context, cutoff time.Time) (in
 		if err != nil {
 			return 0, fmt.Errorf("decode change log %s: %w", iter.Key(), err)
 		}
-		created, err := time.Parse(time.RFC3339Nano, head.createdAt)
-		if err != nil {
-			// 创建时间读不出来就当作已过期删掉：停在这里会让之后的条目永远清不掉。
-			log.Warnf("storage 变更日志序号 %d 的创建时间 %q 无法解析，按已过期删除：%v", head.sequence, head.createdAt, err)
-		} else if !created.Before(cutoff) {
+		if head.createdAt <= 0 {
+			// 没有创建时刻就当作已过期删掉：停在这里会让之后的条目永远清不掉。
+			log.Warnf("storage 变更日志序号 %d 没有创建时刻，按已过期删除", head.sequence)
+		} else if !time.UnixMilli(head.createdAt).Before(cutoff) {
 			break
 		}
 		if err := batch.Delete(append([]byte(nil), iter.Key()...), s.writeOptions); err != nil {

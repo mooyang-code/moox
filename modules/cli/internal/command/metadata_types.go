@@ -93,8 +93,6 @@ type metadataSeed struct {
 
 type seedCommon struct {
 	Status     string            `yaml:"status"`
-	CreatedAt  string            `yaml:"created_at"`
-	UpdatedAt  string            `yaml:"updated_at"`
 	Attributes map[string]string `yaml:"attributes"`
 }
 

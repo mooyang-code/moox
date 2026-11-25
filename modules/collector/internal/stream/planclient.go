@@ -50,12 +50,12 @@ func retError(method string, info *pb.RetInfo) error {
 
 // Heartbeat 上报已应用的计划版本与连接状态，返回 Collector 要求的最新版本。
 func (c *PlanClient) Heartbeat(ctx context.Context, applied PlanVersion, markets []MarketStatus) (PlanVersion, error) {
-	request := &pb.StreamHeartbeatReq{SpaceId: c.SpaceID, InstanceId: c.InstanceID, AppliedPlanId: applied.ID, SentAtMs: time.Now().UnixMilli(), Version: c.Version}
+	request := &pb.StreamHeartbeatReq{SpaceId: c.SpaceID, InstanceId: c.InstanceID, AppliedPlanId: applied.ID, SentAt: time.Now().UnixMilli(), Version: c.Version}
 	for _, market := range markets {
 		for _, conn := range market.Conns {
 			status := &pb.StreamConnStatus{Market: market.Market, Frequency: conn.Group, Streams: int32(conn.Streams), Reconnects: conn.Reconnects, Subscribed: conn.Subscribed, Endpoint: conn.Endpoint}
 			if !conn.LastMessage.IsZero() {
-				status.LastMessageAt = conn.LastMessage.UTC().Format(time.RFC3339Nano)
+				status.LastMessageAt = conn.LastMessage.UnixMilli()
 			}
 			request.Conns = append(request.Conns, status)
 		}

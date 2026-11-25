@@ -130,7 +130,7 @@ func (s *CollectorTaskResultInventorySource) fetchSpace(ctx context.Context, spa
 	}
 	var expectedTotal int
 	var snapshotID string
-	var observedAt string
+	var observedAt int64
 	for page := 1; ; page++ {
 		if page > maxItems/s.pageSize+2 {
 			return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory exceeded page bound %d", maxItems)
@@ -166,7 +166,7 @@ func (s *CollectorTaskResultInventorySource) fetchSpace(ctx context.Context, spa
 			}
 			snapshotID, expectedTotal, observedAt = rsp.GetSnapshotId(), int(pageInfo.GetTotal()), rsp.GetObservedAt()
 			snapshot.ID = snapshotID
-			parsed, err := parseInventoryTimestamp(observedAt)
+			parsed, err := inventoryInstant(observedAt)
 			if err != nil {
 				return TaskResultInventorySnapshot{}, fmt.Errorf("collector inventory observed_at: %w", err)
 			}
@@ -225,7 +225,7 @@ func taskResultInventoryEntryFromProto(raw *collectorpb.TaskResultInventoryEntry
 		AllowedLatenessSeconds: int(raw.GetAllowedLatenessSeconds()),
 	}
 	var err error
-	if entry.ObservedAt, err = parseInventoryTimestamp(raw.GetObservedAt()); err != nil {
+	if entry.ObservedAt, err = inventoryInstant(raw.GetObservedAt()); err != nil {
 		return TaskResultInventoryEntry{}, fmt.Errorf("invalid entry observed_at: %w", err)
 	}
 	if raw.GetLatestCompletedPeriod() != "" {
@@ -239,6 +239,14 @@ func taskResultInventoryEntryFromProto(raw *collectorpb.TaskResultInventoryEntry
 		}
 	}
 	return entry, nil
+}
+
+// inventoryInstant 把清单里的观察时刻（Unix 毫秒）换成时间；0 或负数报错。
+func inventoryInstant(ms int64) (time.Time, error) {
+	if ms <= 0 {
+		return time.Time{}, errors.New("timestamp is zero")
+	}
+	return time.UnixMilli(ms).UTC(), nil
 }
 
 func parseInventoryTimestamp(raw string) (time.Time, error) {

@@ -51,7 +51,7 @@ describe("collector task result page deep links", () => {
         {
           task_id: "known",
           task_name: "Known task",
-          create_time: "2026-10-01T00:00:00Z",
+          created_at: "1790812800000",
           result: { dataset_id: "dataset-known", status: "active" }
         }
       ],
@@ -185,7 +185,7 @@ describe("collector task result page deep links", () => {
         ? {
             tasks: Array.from({ length: 100 }, (_, index) => ({
               task_id: `t${index}`,
-              create_time: "2026-10-01T00:00:00Z",
+              created_at: "1790812800000",
               result: { dataset_id: `ds_${index}` }
             })),
             page: { page: 1, size: 100, total: 101 }

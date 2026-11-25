@@ -43,8 +43,8 @@ type indexMeta struct {
 	ViewVersion uint64 `json:"view_version"`
 	SchemaHash  string `json:"schema_hash"`
 	DatasetID   string `json:"dataset_id"`
-	// DatasetCreatedAt 是建索引时数据集的创建时间，见 viewindex.ViewIndexSchema.DatasetCreatedAt。
-	DatasetCreatedAt string                       `json:"dataset_created_at"`
+	// DatasetCreatedAt 是建索引时数据集的创建时刻（Unix 毫秒），见 viewindex.ViewIndexSchema.DatasetCreatedAt。
+	DatasetCreatedAt int64                        `json:"dataset_created_at"`
 	UpdatedAt        string                       `json:"updated_at"`
 	Columns          map[string]pb.FieldValueType `json:"columns"`
 	// BuiltColumns 是已建列的完整契约（含排序），重启后由它还原写入契约。

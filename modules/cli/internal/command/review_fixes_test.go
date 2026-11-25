@@ -36,7 +36,7 @@ func specByPath(t *testing.T, path ...string) rpcSpec {
 
 func TestSpaceUpdateMergesExistingSpaceInsteadOfClearingFields(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"GetSpace":    `{"ret_info":{"code":0},"space":{"space_id":"crypto","name":"加密货币","description":"行情","owner":"quant","market":"crypto","timezone":"UTC","status":"disabled","attributes":{"k":"1"},"created_at":"2026-01-01","updated_at":"2026-01-02"}}`,
+		"GetSpace":    `{"ret_info":{"code":0},"space":{"space_id":"crypto","name":"加密货币","description":"行情","owner":"quant","market":"crypto","timezone":"UTC","status":"disabled","attributes":{"k":"1"},"created_at":"1767225600000","updated_at":"1767312000000"}}`,
 		"UpdateSpace": `{"ret_info":{"code":0}}`,
 	}}
 	useRPCGateway(t, gateway)
@@ -57,7 +57,7 @@ func TestSpaceUpdateMergesExistingSpaceInsteadOfClearingFields(t *testing.T) {
 
 func TestCollectorTaskUpdateKeepsNameAndDescriptionWhenOnlyTogglingEnabled(t *testing.T) {
 	gateway := &rpcFakeGateway{responses: map[string]string{
-		"GetTaskDetail": `{"ret_info":{"code":0},"task":{"space_id":"crypto","task_id":"t1","task_name":"合约 5m","description":"说明","enabled":true,"creator":"x","create_time":"t","definition_hash":"h"}}`,
+		"GetTaskDetail": `{"ret_info":{"code":0},"task":{"space_id":"crypto","task_id":"t1","task_name":"合约 5m","description":"说明","enabled":true,"creator":"x","created_at":"1767225600000","definition_hash":"h"}}`,
 		"UpdateTask":    `{"ret_info":{"code":0}}`,
 	}}
 	useRPCGateway(t, gateway)

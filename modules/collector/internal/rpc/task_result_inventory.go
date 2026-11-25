@@ -122,7 +122,7 @@ func (s *Service) GetTaskResultInventory(ctx context.Context, req *pb.GetTaskRes
 	}
 	return &pb.GetTaskResultInventoryRsp{
 		RetInfo: retOK(), Entries: entries, SnapshotId: snapshot.id,
-		ObservedAt: snapshot.observed.Format(time.RFC3339Nano),
+		ObservedAt: unixMillis(snapshot.observed),
 		Page:       pageResult(page, size, int64(len(snapshot.entries))),
 	}, nil
 }
@@ -284,7 +284,7 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	entry := &pb.TaskResultInventoryEntry{
 		SpaceId: task.SpaceID, TaskId: task.TaskID, DatasetId: ids.DatasetID,
 		Frequency: frequency, MarketId: marketID, CalendarId: calendarID, Timezone: timezone,
-		Sessions: sessions, ObservedAt: observed.Format(time.RFC3339Nano), Enabled: task.Enabled,
+		Sessions: sessions, ObservedAt: unixMillis(observed), Enabled: task.Enabled,
 		ResultStatus: "pending", AllowedLatenessSeconds: int32(latenessSeconds),
 	}
 	if !task.Enabled {

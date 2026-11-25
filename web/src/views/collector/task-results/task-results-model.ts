@@ -14,7 +14,7 @@ export interface TaskResultTab {
 
 export function sortTasksByCreatedAt(tasks: CollectorTask[]): CollectorTask[] {
   return [...tasks].sort((left, right) => {
-    const timeDifference = (toInstantMs(right.create_time) ?? 0) - (toInstantMs(left.create_time) ?? 0);
+    const timeDifference = (toInstantMs(right.created_at) ?? 0) - (toInstantMs(left.created_at) ?? 0);
     if (timeDifference !== 0) return timeDifference;
     return String(left.task_id).localeCompare(String(right.task_id));
   });

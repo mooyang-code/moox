@@ -75,7 +75,7 @@ func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
 }
 
 func TestStatusAndJSONHelpers(t *testing.T) {
-	assert.Equal(t, "", formatTime(time.Time{}))
+	assert.Equal(t, int64(0), unixMillis(time.Time{}))
 	assert.Equal(t, "{}", jsonStringFromStruct(nil))
 	st := structFromJSONString(`{"k":"v"}`)
 	assert.Equal(t, "v", st.GetFields()["k"].GetStringValue())

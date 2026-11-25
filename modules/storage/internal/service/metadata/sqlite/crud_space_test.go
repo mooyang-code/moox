@@ -17,8 +17,8 @@ func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || created.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
-		t.Fatalf("CreateSpace timestamps = %q/%q", created.GetCreatedAt(), created.GetUpdatedAt())
+	if created.GetCreatedAt() != wantTime.UnixMilli() || created.GetUpdatedAt() != wantTime.UnixMilli() {
+		t.Fatalf("CreateSpace timestamps = %d/%d", created.GetCreatedAt(), created.GetUpdatedAt())
 	}
 	if _, err := store.CreateSpace(ctx, &pb.Space{SpaceId: "space", Name: "Replacement", Owner: "owner-b"}); err == nil {
 		t.Fatal("duplicate CreateSpace unexpectedly succeeded")
@@ -30,8 +30,8 @@ func TestCreateSpaceDoesNotOverwriteExistingSpace(t *testing.T) {
 	if space.GetName() != "Original" || space.GetOwner() != "owner-a" {
 		t.Fatalf("existing Space was overwritten: %+v", space)
 	}
-	if space.GetCreatedAt() != wantTime.Format(time.RFC3339Nano) || space.GetUpdatedAt() != wantTime.Format(time.RFC3339Nano) {
-		t.Fatalf("persisted timestamps = %q/%q", space.GetCreatedAt(), space.GetUpdatedAt())
+	if space.GetCreatedAt() != wantTime.UnixMilli() || space.GetUpdatedAt() != wantTime.UnixMilli() {
+		t.Fatalf("persisted timestamps = %d/%d", space.GetCreatedAt(), space.GetUpdatedAt())
 	}
 }
 

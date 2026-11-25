@@ -23,7 +23,9 @@
               <span v-if="loadError && loaded" class="verdict-reason"
                 >最近一次读取失败：{{ loadError }}，下面是上次成功的结果</span
               >
-              <span class="muted">{{ status.generated_at ? `更新于 ${timeText(status.generated_at)}` : "" }}</span>
+              <span class="muted">{{
+                toInstantMs(status.generated_at) ? `更新于 ${formatInstant(status.generated_at, displayZone)}` : ""
+              }}</span>
               <a-button size="small" @click="logVisible = true">
                 <template #icon><icon-history /></template>
                 变更记录
@@ -149,8 +151,9 @@
                   <icon-exclamation-circle /> {{ reason }}
                 </div>
                 <div class="detail-line">
-                  首次生效 {{ timeText(record.effective_from) }} · 自动巡检已查至
-                  {{ record.inspected_until ? timeText(record.inspected_until) : "尚未巡检" }}（每 5 分钟一次，发现缺口自动补采）
+                  首次生效 {{ formatInstant(record.effective_from, displayZone) }} · 自动巡检已查至
+                  {{ record.inspected_until ? formatInstant(record.inspected_until, displayZone) : "尚未巡检" }}（每 5
+                  分钟一次，发现缺口自动补采）
                 </div>
                 <div v-if="record.absent_bars" class="detail-line">
                   已确认行情源没有 {{ record.absent_bars }} 根（如停牌、无成交），不算缺口、不影响健康
@@ -185,7 +188,7 @@
               status.stream.online ? "在线" : "离线"
             }}</a-tag>
             <span class="muted mono-text"
-              >{{ status.stream.instance_id }} · 心跳 {{ timeText(status.stream.heartbeat_at) }} · 已应用计划
+              >{{ status.stream.instance_id }} · 心跳 {{ formatInstant(status.stream.heartbeat_at, displayZone) }} · 已应用计划
               {{ status.stream.applied_plan_id }}</span
             >
           </div>
@@ -198,7 +201,7 @@
                 <template #cell="{ record }">{{ record.subscribed ? "是" : "否" }}</template>
               </a-table-column>
               <a-table-column title="最近消息" :width="230">
-                <template #cell="{ record }">{{ timeText(record.last_message_at) }}</template>
+                <template #cell="{ record }">{{ formatInstant(record.last_message_at, displayZone) }}</template>
               </a-table-column>
               <a-table-column title="重连" data-index="reconnects" :width="70" align="right" />
               <a-table-column title="地址" data-index="endpoint" />
@@ -313,7 +316,9 @@
                     <span
                       class="single-line"
                       :class="cloudStateClass(record)"
-                      :title="record.cloud_read_at ? `读回于 ${timeText(record.cloud_read_at)}` : ''"
+                      :title="
+                        toInstantMs(record.cloud_read_at) ? `读回于 ${formatInstant(record.cloud_read_at, displayZone)}` : ''
+                      "
                       >{{ cloudStateInfo(record).text }}</span
                     >
                   </template>
@@ -419,7 +424,7 @@ import {
   unplannedDeleteCommand
 } from "./runtime-status-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
-import { formatInstant } from "@/utils/time-zone";
+import { formatInstant, toInstantMs } from "@/utils/time-zone";
 
 const route = useRoute();
 const router = useRouter();
@@ -428,7 +433,6 @@ const { selectedSpaceId } = storeToRefs(spaceStore);
 const guard = createLatestRequestGuard();
 // 运行状态的时间按当前空间登记的时区带后缀显示
 const displayZone = useDisplayZone();
-const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const status = ref<GetCollectorStatusResponse>({});
 const statusLoading = ref(false);
@@ -538,7 +542,7 @@ const planText = computed(() => {
 });
 const planSub = computed(() => {
   const plan = status.value.open || status.value.applied;
-  return plan ? `${timeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
+  return plan ? `${formatInstant(plan.updated_at, displayZone.value)} 更新` : "创建采集任务后自动生成";
 });
 
 const selectedFunction = ref<CollectorFunctionStatus | null>(null);

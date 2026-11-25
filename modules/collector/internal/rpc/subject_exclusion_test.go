@@ -31,15 +31,14 @@ func TestSubjectExclusionsSetListClearAndLogActivity(t *testing.T) {
 		{SubjectIds: []string{"BTC-USDT"}, Reason: "x"},
 		{SpaceId: "crypto", Reason: "x"},
 		{SpaceId: "crypto", SubjectIds: []string{"BTC-USDT"}},
-		{SpaceId: "crypto", SubjectIds: []string{"BTC-USDT"}, Reason: "x", ExpiresAt: "tomorrow"},
-		{SpaceId: "crypto", SubjectIds: []string{"BTC-USDT"}, Reason: "x", ExpiresAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)},
+		{SpaceId: "crypto", SubjectIds: []string{"BTC-USDT"}, Reason: "x", ExpiresAt: time.Now().Add(-time.Minute).UnixMilli()},
 	} {
 		rsp, err := service.SetSubjectExclusions(ctx, bad)
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), bad.String())
 	}
 
-	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+	expires := time.Now().Add(time.Hour).UnixMilli()
 	rsp, err := service.SetSubjectExclusions(ctx, &pb.SetSubjectExclusionsReq{SpaceId: "Crypto", SubjectIds: []string{"btc-usdt", "ETH-USDT", "btc-usdt"}, MarketType: "swap", Reason: "公告下架", Operator: "moox-cli", ExpiresAt: expires})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())

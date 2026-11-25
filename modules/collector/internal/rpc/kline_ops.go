@@ -108,7 +108,7 @@ func jobToPB(status klinecheck.JobStatus, names map[string]string) *pb.KlineBack
 		DatasetName: names[job.DatasetID],
 		JobId:       job.JobID, SpaceId: job.SpaceID, Source: job.Source, Kind: job.Kind, DatasetId: job.DatasetID, Frequency: job.Frequency, SubjectId: job.SubjectID,
 		From: job.From.UTC().Format(time.RFC3339), To: job.To.UTC().Format(time.RFC3339), Status: job.Status, LastError: job.LastError,
-		CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: job.UpdatedAt.UTC().Format(time.RFC3339),
+		CreatedAt: unixMillis(job.CreatedAt), UpdatedAt: unixMillis(job.UpdatedAt),
 		Pending: int32(status.Counts[store.BackfillPending]), Running: int32(status.Counts[store.BackfillRunning]), Succeeded: int32(status.Counts[store.BackfillSucceeded]),
 		Failed: int32(status.Counts[store.BackfillFailed]), Canceled: int32(status.Counts[store.BackfillCanceled]),
 	}

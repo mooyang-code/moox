@@ -14,8 +14,8 @@ type datasetMeta struct {
 	RetentionSource string            `json:"online_retention_source,omitempty"`
 	SubjectTags     []string          `json:"subject_tags,omitempty"`
 	Attributes      map[string]string `json:"attributes,omitempty"`
-	CreatedAt       string            `json:"created_at,omitempty"`
-	UpdatedAt       string            `json:"updated_at,omitempty"`
+	CreatedAt       int64             `json:"created_at,omitempty"`
+	UpdatedAt       int64             `json:"updated_at,omitempty"`
 	Revision        uint64            `json:"revision,omitempty"`
 }
 

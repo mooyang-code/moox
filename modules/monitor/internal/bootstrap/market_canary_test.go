@@ -21,7 +21,9 @@ func TestMarketCanaryTagChecks(t *testing.T) {
 		return &storagepb.Tag{TagId: "binance_spot", ActiveCount: active, Attributes: attributes}
 	}
 	run := func(at, status string) *collectorpb.TagSyncStatus {
-		return &collectorpb.TagSyncStatus{TagId: "binance_spot", LastRunAt: at, LastStatus: status}
+		parsed, err := time.Parse(time.RFC3339, at)
+		require.NoError(t, err)
+		return &collectorpb.TagSyncStatus{TagId: "binance_spot", LastRunAt: parsed.UnixMilli(), LastStatus: status}
 	}
 	cases := []struct {
 		name string
@@ -71,10 +73,10 @@ func TestSubjectTagFactsCoverBuiltinTagsInAllSpaces(t *testing.T) {
 		{SpaceId: "stockcn", TagId: "my_pick", TagName: "自选", ActiveCount: 5, Attributes: attrs},
 	}}
 	runs := fakeTagSyncStatus{items: []*collectorpb.TagSyncStatus{
-		{SpaceId: "stockcn", TagId: "cn_hs300", LastRunAt: "2026-11-12T09:00:00Z", LastStatus: "success"},
+		{SpaceId: "stockcn", TagId: "cn_hs300", LastRunAt: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC).UnixMilli(), LastStatus: "success"},
 		// 另一空间的同名标签失败，不能串到 stockcn
-		{SpaceId: "crypto", TagId: "cn_hs300", LastRunAt: "2026-11-12T09:00:00Z", LastStatus: "failed"},
-		{SpaceId: "stockhk", TagId: "hk_hsi", LastRunAt: "2026-11-12T09:00:00Z", LastStatus: "success"},
+		{SpaceId: "crypto", TagId: "cn_hs300", LastRunAt: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC).UnixMilli(), LastStatus: "failed"},
+		{SpaceId: "stockhk", TagId: "hk_hsi", LastRunAt: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC).UnixMilli(), LastStatus: "success"},
 	}}
 	facts, available, err := subjectTagFacts(t.Context(), tags, runs, now)
 	require.NoError(t, err)

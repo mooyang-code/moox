@@ -88,7 +88,7 @@
               </template>
             </a-table-column>
             <a-table-column title="创建时间" :width="170">
-              <template #cell="{ record }">{{ timeText(record.created_at) }}</template>
+              <template #cell="{ record }">{{ formatInstant(record.created_at, displayZone) }}</template>
             </a-table-column>
             <a-table-column title="操作" :width="130" align="center" fixed="right">
               <template #cell="{ record }">
@@ -143,7 +143,7 @@
             >{{ jobSourceText(detail.job.source) }} · {{ jobKindText(detail.job.kind) }}</a-descriptions-item
           >
           <a-descriptions-item label="标的">{{ detail.job.subject_id || "全部" }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ timeText(detail.job.created_at) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatInstant(detail.job.created_at, displayZone) }}</a-descriptions-item>
           <a-descriptions-item label="范围" :span="2"
             ><TimeText :value="detail.job.from" :zone="displayZone" precision="minute" /> ~
             <TimeText :value="detail.job.to" :zone="displayZone" precision="minute"
@@ -225,7 +225,6 @@ defineOptions({ name: "CollectorBackfillJobs" });
 
 // 补采作业的时间按当前空间登记的时区带后缀显示；范围按分钟对齐，到分钟
 const displayZone = useDisplayZone();
-const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const route = useRoute();
 const router = useRouter();

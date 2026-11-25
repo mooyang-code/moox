@@ -56,10 +56,10 @@ func checkTag(tag *storagepb.Tag, run *collectorpb.TagSyncStatus, now time.Time)
 }
 
 func tagStale(tag *storagepb.Tag, run *collectorpb.TagSyncStatus, now time.Time) bool {
-	lastRun, err := time.Parse(time.RFC3339, run.GetLastRunAt())
-	if err != nil {
+	if run.GetLastRunAt() <= 0 {
 		return true
 	}
+	lastRun := time.UnixMilli(run.GetLastRunAt()).UTC()
 	schedule, err := cron.ParseStandard(firstNonEmptyString(tag.GetAttributes()[tagAttrSyncCron], defaultTagSyncCron))
 	if err != nil {
 		return true
