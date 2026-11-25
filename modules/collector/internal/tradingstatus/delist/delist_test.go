@@ -152,7 +152,7 @@ func TestRegisterPublishesEachNoticeOnlyOnce(t *testing.T) {
 	message, err := registry.UnmarshalMessage(pending[0].Payload)
 	require.NoError(t, err)
 	require.Equal(t, events.SystemSpaceID, message.GetSpaceId())
-	require.Equal(t, "binance:SPOT:FOOUSDT", message.GetSubjectId())
+	require.Equal(t, "binance:spot:FOOUSDT", message.GetSubjectId())
 	require.Equal(t, eventID, message.GetEventId())
 	event, err := registry.ValidateMessage(message)
 	require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestRegisterUppercasesSymbolBeforeValidating(t *testing.T) {
 	pending, err := db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	require.Equal(t, "okx:SWAP:FOO-USDT-SWAP", pending[0].SubjectToken)
+	require.Equal(t, "okx:swap:FOO-USDT-SWAP", pending[0].SubjectToken)
 }
 
 // 来源返回的条目被校验拒绝（交易所、市场不对，代码带冒号等）：这一条没有发布，等于漏报，要按来源故障关注项报出来，下一轮不再被拒就恢复。

@@ -27,45 +27,45 @@ func TestBlockedInstrumentLifecycleIsIdempotent(t *testing.T) {
 	records, err := s.ListBlockedInstruments(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []BlockedInstrumentRecord{{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Scope: DelistScopeAll,
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT", Scope: DelistScopeAll,
 		Reason: "公告下架", DelistID: "delist-1", BlockedAt: 100,
 	}}, records)
 
-	live := TradingAccountRecord{Exchange: "BINANCE", ExecutionMode: "LIVE"}
+	live := TradingAccountRecord{Exchange: "binance", ExecutionMode: "LIVE"}
 	set := NewBlockedSet(records)
-	require.True(t, set.Contains(live, "SPOT", "FOOUSDT"))
-	require.False(t, set.Contains(live, "SWAP", "FOOUSDT"), "现货条目不匹配同名永续")
-	require.False(t, set.Contains(TradingAccountRecord{Exchange: "OKX", ExecutionMode: "LIVE"}, "SPOT", "FOOUSDT"), "别的交易所不匹配")
+	require.True(t, set.Contains(live, "spot", "FOOUSDT"))
+	require.False(t, set.Contains(live, "swap", "FOOUSDT"), "现货条目不匹配同名永续")
+	require.False(t, set.Contains(TradingAccountRecord{Exchange: "okx", ExecutionMode: "LIVE"}, "spot", "FOOUSDT"), "别的交易所不匹配")
 
-	removed, err := s.UnblockInstrument(ctx, "binance", "SPOT", "FOOUSDT")
+	removed, err := s.UnblockInstrument(ctx, "binance", "spot", "FOOUSDT")
 	require.NoError(t, err)
 	require.True(t, removed)
-	removed, err = s.UnblockInstrument(ctx, "binance", "SPOT", "FOOUSDT")
+	removed, err = s.UnblockInstrument(ctx, "binance", "spot", "FOOUSDT")
 	require.NoError(t, err)
 	require.False(t, removed, "不在名单里不算错误")
 }
 
 func TestBlockInstrumentRejectsIncompleteRecord(t *testing.T) {
 	s := openTestStore(t)
-	_, err := blockInstrument(t, s, BlockedInstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"})
+	_, err := blockInstrument(t, s, BlockedInstrumentRecord{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"})
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
 // 范围 PAPER_ONLY 的名单行只对模拟盘账户生效，实盘账户看不到它。
 func TestBlockedSetPaperOnlyScopeOnlyAppliesToPaperAccounts(t *testing.T) {
 	set := NewBlockedSet([]BlockedInstrumentRecord{
-		{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Scope: DelistScopePaperOnly},
-		{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BARUSDT", Scope: DelistScopeAll},
+		{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT", Scope: DelistScopePaperOnly},
+		{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BARUSDT", Scope: DelistScopeAll},
 	})
-	live := TradingAccountRecord{Exchange: "BINANCE", ExecutionMode: "LIVE"}
-	paper := TradingAccountRecord{Exchange: "BINANCE", ExecutionMode: "PAPER"}
-	require.False(t, set.Contains(live, "SPOT", "FOOUSDT"))
-	require.True(t, set.Contains(paper, "SPOT", "FOOUSDT"))
-	require.True(t, set.Contains(live, "SPOT", "BARUSDT"))
-	require.True(t, set.Contains(paper, "SPOT", "BARUSDT"))
+	live := TradingAccountRecord{Exchange: "binance", ExecutionMode: "LIVE"}
+	paper := TradingAccountRecord{Exchange: "binance", ExecutionMode: "PAPER"}
+	require.False(t, set.Contains(live, "spot", "FOOUSDT"))
+	require.True(t, set.Contains(paper, "spot", "FOOUSDT"))
+	require.True(t, set.Contains(live, "spot", "BARUSDT"))
+	require.True(t, set.Contains(paper, "spot", "BARUSDT"))
 	instruments := []InstrumentRecord{
-		{MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", BaseAsset: "FOO"},
-		{MarketType: "SPOT", ExchangeSymbol: "BARUSDT", BaseAsset: "BAR"},
+		{MarketType: "spot", ExchangeSymbol: "FOOUSDT", BaseAsset: "FOO"},
+		{MarketType: "spot", ExchangeSymbol: "BARUSDT", BaseAsset: "BAR"},
 	}
 	require.Equal(t, map[string]struct{}{"BAR": {}}, set.SpotBaseAssets(live, instruments))
 	require.Equal(t, map[string]struct{}{"FOO": {}, "BAR": {}}, set.SpotBaseAssets(paper, instruments))
@@ -73,18 +73,18 @@ func TestBlockedSetPaperOnlyScopeOnlyAppliesToPaperAccounts(t *testing.T) {
 
 func TestBlockedSetSpotBaseAssetsOnlyFollowsSpotEntries(t *testing.T) {
 	set := NewBlockedSet([]BlockedInstrumentRecord{
-		{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"},
-		{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BARUSDT"},
+		{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"},
+		{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BARUSDT"},
 	})
 	instruments := []InstrumentRecord{
-		{MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", BaseAsset: "FOO"},
-		{MarketType: "SWAP", ExchangeSymbol: "FOOUSDT", BaseAsset: "FOO"},
-		{MarketType: "SPOT", ExchangeSymbol: "BARUSDT", BaseAsset: "BAR"},
-		{MarketType: "SWAP", ExchangeSymbol: "BARUSDT", BaseAsset: "BAR"},
+		{MarketType: "spot", ExchangeSymbol: "FOOUSDT", BaseAsset: "FOO"},
+		{MarketType: "swap", ExchangeSymbol: "FOOUSDT", BaseAsset: "FOO"},
+		{MarketType: "spot", ExchangeSymbol: "BARUSDT", BaseAsset: "BAR"},
+		{MarketType: "swap", ExchangeSymbol: "BARUSDT", BaseAsset: "BAR"},
 	}
-	require.Equal(t, map[string]struct{}{"FOO": {}}, set.SpotBaseAssets(TradingAccountRecord{Exchange: "BINANCE"}, instruments),
+	require.Equal(t, map[string]struct{}{"FOO": {}}, set.SpotBaseAssets(TradingAccountRecord{Exchange: "binance"}, instruments),
 		"永续下架不能把同名现货余额也豁免掉")
-	require.Empty(t, set.SpotBaseAssets(TradingAccountRecord{Exchange: "OKX"}, instruments))
+	require.Empty(t, set.SpotBaseAssets(TradingAccountRecord{Exchange: "okx"}, instruments))
 }
 
 // 解除名单在同一事务里取消这个标的所有进行中的下架记录（两种范围都算），已结束的不动。
@@ -94,7 +94,7 @@ func TestUnblockInstrumentCancelsActiveDelists(t *testing.T) {
 	insert := func(id, scope, status string) {
 		require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 			return tx.InsertDelist(DelistRecord{
-				DelistID: id, Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Scope: scope,
+				DelistID: id, Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT", Scope: scope,
 				DelistAt: 1000, Source: "MANUAL", SourceEventID: "evt-" + id, EventOccurredAt: 1, Status: status,
 				CreatedAt: 1, UpdatedAt: 1,
 			})
@@ -103,10 +103,10 @@ func TestUnblockInstrumentCancelsActiveDelists(t *testing.T) {
 	insert("all", DelistScopeAll, DelistActive)
 	insert("paper", DelistScopePaperOnly, DelistActive)
 	insert("old", DelistScopeAll, DelistRescheduled)
-	_, err := blockInstrument(t, s, BlockedInstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", Reason: "r", DelistID: "all"})
+	_, err := blockInstrument(t, s, BlockedInstrumentRecord{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT", Reason: "r", DelistID: "all"})
 	require.NoError(t, err)
 
-	removed, err := s.UnblockInstrument(ctx, "BINANCE", "SPOT", "FOOUSDT")
+	removed, err := s.UnblockInstrument(ctx, "binance", "spot", "FOOUSDT")
 	require.NoError(t, err)
 	require.True(t, removed)
 	for id, want := range map[string]string{"all": DelistCanceled, "paper": DelistCanceled, "old": DelistRescheduled} {
@@ -131,5 +131,5 @@ func blockInstrument(t *testing.T, s *Store, record BlockedInstrumentRecord) (cr
 // 名单的交易所与市场按 Trade 的写法归一，交易所代码一律转大写。
 func TestNormalizeBlockKeySplitsVenueAndSymbol(t *testing.T) {
 	exchangeName, marketType, symbol := normalizeBlockKey(" BINANCE ", "SWAP", " fooUSDT ")
-	require.Equal(t, []string{"BINANCE", "SWAP", "FOOUSDT"}, []string{exchangeName, marketType, symbol})
+	require.Equal(t, []string{"binance", "swap", "FOOUSDT"}, []string{exchangeName, marketType, symbol})
 }

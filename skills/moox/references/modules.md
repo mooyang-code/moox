@@ -116,9 +116,9 @@
 ./bin/moox-cli trade actions --logical-account-id <ID> [--action-type REDUCE]   # 人工操作记录（清仓、减仓、下架清仓…）
 ./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
 ./bin/moox-cli trade blocked list                                  # 下架名单（全局）
-./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+./bin/moox-cli trade holders --exchange binance --market-type spot --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
 ./bin/moox-cli trade delist list [--active-only]                   # 下架记录：状态、已规划轮次、各轮各组合的清仓动作
-./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架
+./bin/moox-cli collector delist register --exchange binance --market spot --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架
 ./bin/moox-cli trade logical fund-settings --logical-account-id <ID> --reserve-ratio 0.05 --yes   # 改资金预留比例（先取回已有设置再合并）
 ./bin/moox-cli trade logical pause|resume --logical-account-id <ID> --yes   # 暂停、恢复组合的自动执行
 ```

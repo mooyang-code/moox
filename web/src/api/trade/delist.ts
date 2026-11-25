@@ -1,5 +1,5 @@
 import { call } from "@/api/http";
-import type { Exchange, MarketType, RetInfo } from "@/api/trade/types";
+import type { RetInfo } from "@/api/trade/types";
 
 // 下架处理用到的接口：
 //  - Trade 的 ListInstrumentHolders：只读，用来预览会被平仓的组合；
@@ -7,7 +7,7 @@ import type { Exchange, MarketType, RetInfo } from "@/api/trade/types";
 //  - Trade 的 ListDelists：只读，下架记录与各轮各组合的清仓动作。
 
 export type DelistExchange = "binance" | "okx";
-export type DelistMarket = "SPOT" | "SWAP";
+export type DelistMarket = "spot" | "swap";
 
 /** 下架检测登记用的空间：Collector 是按空间的服务，下架检测只覆盖 crypto。 */
 export const DELIST_SPACE_ID = "crypto";
@@ -71,9 +71,6 @@ export interface RegisterDelistNoticeResult {
   event_id: string;
 }
 
-const TRADE_EXCHANGE: Record<DelistExchange, string> = { binance: "EXCHANGE_BINANCE", okx: "EXCHANGE_OKX" };
-const TRADE_MARKET: Record<DelistMarket, string> = { SPOT: "MARKET_TYPE_SPOT", SWAP: "MARKET_TYPE_SWAP" };
-
 export function buildHoldersRequest(input: {
   exchange: DelistExchange;
   market: DelistMarket;
@@ -81,8 +78,8 @@ export function buildHoldersRequest(input: {
   paper_only: boolean;
 }): ListInstrumentHoldersReq {
   return {
-    exchange: TRADE_EXCHANGE[input.exchange],
-    market_type: TRADE_MARKET[input.market],
+    exchange: input.exchange,
+    market_type: input.market,
     exchange_symbol: input.exchange_symbol.trim().toUpperCase(),
     paper_only: input.paper_only
   };
@@ -147,8 +144,9 @@ export interface DelistFlatten {
 /** 一条下架记录：一个（标的、范围、下架时间）。 */
 export interface DelistRecord {
   delist_id: string;
-  exchange: Exchange;
-  market_type: MarketType;
+  /** 小写交易所（binance、okx）与市场（spot、swap），交易所代码是交易所原文（大写） */
+  exchange: string;
+  market_type: string;
   exchange_symbol: string;
   /** ALL 或 PAPER_ONLY */
   scope: string;
@@ -175,8 +173,8 @@ export async function listDelists(activeOnly: boolean, limit = 50): Promise<Deli
   );
   return (rsp.delists ?? []).map(item => ({
     delist_id: item.delist_id ?? "",
-    exchange: item.exchange ?? 0,
-    market_type: item.market_type ?? 0,
+    exchange: item.exchange ?? "",
+    market_type: item.market_type ?? "",
     exchange_symbol: item.exchange_symbol ?? "",
     scope: item.scope ?? "",
     delist_at_ms: Number(item.delist_at_ms ?? 0),

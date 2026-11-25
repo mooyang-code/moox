@@ -39,9 +39,9 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	var maxNotional string
 	var market, environment string
 	flags.StringVar(&options.Phase, "phase", "", "submit, recover or facts")
-	flags.StringVar(&market, "market", "SPOT", "market to exercise: SPOT or SWAP (币安现货、合约测试网是两套域名和两把密钥，分别用各自的 --secret-id 各跑一次)")
+	flags.StringVar(&market, "market", "spot", "market to exercise: spot or swap (币安现货、合约测试网是两套域名和两把密钥，分别用各自的 --secret-id 各跑一次)")
 	flags.StringVar(&environment, "environment", "TESTNET", "facts phase: TESTNET or PRODUCTION")
-	flags.StringVar(&exchangeName, "exchange", "", "BINANCE or OKX")
+	flags.StringVar(&exchangeName, "exchange", "", "binance or okx")
 	flags.StringVar(&options.SecretID, "secret-id", "", "Admin Exchange Secret ID")
 	flags.StringVar(&options.Database, "database", "", "isolated Trade SQLite database")
 	flags.StringVar(&options.State, "state", "", "restart state file")
@@ -62,14 +62,14 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	if !readOnly && options.Phase != "submit" && options.Phase != "recover" {
 		return options, errors.New("phase must be submit, recover or facts")
 	}
-	options.MarketType = exchange.MarketType(strings.ToUpper(strings.TrimSpace(market)))
+	options.MarketType = exchange.MarketType(strings.ToLower(strings.TrimSpace(market)))
 	if options.MarketType != exchange.MarketTypeSpot && options.MarketType != exchange.MarketTypeSwap {
-		return options, errors.New("market must be SPOT or SWAP")
+		return options, errors.New("market must be spot or swap")
 	}
-	options.Exchange = exchange.Exchange(strings.ToUpper(strings.TrimSpace(exchangeName)))
+	options.Exchange = exchange.Exchange(strings.ToLower(strings.TrimSpace(exchangeName)))
 	if options.Exchange != exchange.ExchangeBinance &&
 		options.Exchange != exchange.ExchangeOKX {
-		return options, errors.New("exchange must be BINANCE or OKX")
+		return options, errors.New("exchange must be binance or okx")
 	}
 	options.Environment = exchange.AccountEnvironmentTestnet
 	if strings.TrimSpace(options.SecretID) == "" {

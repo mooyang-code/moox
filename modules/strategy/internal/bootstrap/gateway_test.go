@@ -235,7 +235,7 @@ func (w *strategyGatewayWire) GetLogicalAccount(ctx context.Context, req *tradep
 	if err := w.verifyTrade(ctx, "GetLogicalAccount", req); err != nil {
 		return nil, err
 	}
-	account := &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
+	account := &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", Markets: []string{"swap"}, ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY}
 	return &tradepb.GetLogicalAccountRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account}, nil
 }
 

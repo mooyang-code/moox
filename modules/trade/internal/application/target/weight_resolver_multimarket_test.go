@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
@@ -20,8 +21,8 @@ func newMixedResolverStore(t *testing.T, fundSettings string) *store.Store {
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", Name: "account-a", Exchange: "BINANCE",
-			Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "PAPER", Environment: "PAPER",
+			SpaceID: "space-1", TradingAccountID: "account-a", Name: "account-a", Exchange: "binance",
+			Markets: []string{"spot", "swap"}, ExecutionMode: "PAPER", Environment: "PAPER",
 			SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED", Ready: true,
 			LeverageSettings: store.LeverageSettings{"*": "5"},
 			Snapshot: store.TradingAccountSnapshot{
@@ -50,14 +51,14 @@ func newMixedResolverStore(t *testing.T, fundSettings string) *store.Store {
 			return err
 		}
 		for _, instrument := range []struct{ market, base string }{
-			{"SPOT", "BTC"}, {"SWAP", "BTC"}, {"SPOT", "BNB"}, {"SPOT", "ETH"}, {"SWAP", "ETH"},
+			{"spot", "BTC"}, {"swap", "BTC"}, {"spot", "BNB"}, {"spot", "ETH"}, {"swap", "ETH"},
 		} {
 			record := store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: instrument.market, ExchangeSymbol: instrument.base + "USDT",
-				InstrumentID: instrument.base + "-USDT-" + instrument.market, BaseAsset: instrument.base, QuoteAsset: "USDT",
+				Exchange: "binance", MarketType: instrument.market, ExchangeSymbol: instrument.base + "USDT",
+				InstrumentID: instrument.base + "-USDT-" + exchange.InstrumentSuffix(instrument.market), BaseAsset: instrument.base, QuoteAsset: "USDT",
 				SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}
-			if instrument.market == "SWAP" {
+			if instrument.market == "swap" {
 				record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", instrument.base
 			}
 			if err := tx.UpsertInstrument(record); err != nil {
@@ -98,14 +99,14 @@ func TestUnmanagedTargetValueCountsSpotBalanceOnceAndIgnoresSwap(t *testing.T) {
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
 
 	both, err := resolver.Resolve(context.Background(), mixedRequest(
-		weightTarget("BTC-USDT-SPOT", "SPOT", "0.5"), weightTarget("BTC-USDT-SWAP", "SWAP", "-0.5"),
+		weightTarget("BTC-USDT-SPOT", "spot", "0.5"), weightTarget("BTC-USDT-SWAP", "swap", "-0.5"),
 	), "space-1")
 	require.NoError(t, err)
 	require.Equal(t, "3000", both.Equity.String(), "权益 2000 加上 10 个现货 BTC 的市值 1000，只加一次")
 	require.Equal(t, "15", quantityOf(t, both, "BTC-USDT-SPOT").Quantity)
 	require.Equal(t, "-15", quantityOf(t, both, "BTC-USDT-SWAP").Quantity)
 
-	swapOnly, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SWAP", "SWAP", "0.5")), "space-1")
+	swapOnly, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SWAP", "swap", "0.5")), "space-1")
 	require.NoError(t, err)
 	require.Equal(t, "2000", swapOnly.Equity.String(), "只有合约目标时，现货 BTC 不是目标资产，不计入换算权益")
 	require.Equal(t, "10", quantityOf(t, swapOnly, "BTC-USDT-SWAP").Quantity)
@@ -117,8 +118,8 @@ func TestExcludedAssetsAreHeldAndOthersConvert(t *testing.T) {
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
 
 	conversion, err := resolver.Resolve(context.Background(), mixedRequest(
-		weightTarget("BNB-USDT-SPOT", "SPOT", "0.1"), weightTarget("ETH-USDT-SWAP", "SWAP", "-0.1"),
-		weightTarget("ETH-USDT-SPOT", "SPOT", "0.1"), weightTarget("BTC-USDT-SPOT", "SPOT", "0.5"),
+		weightTarget("BNB-USDT-SPOT", "spot", "0.1"), weightTarget("ETH-USDT-SWAP", "swap", "-0.1"),
+		weightTarget("ETH-USDT-SPOT", "spot", "0.1"), weightTarget("BTC-USDT-SPOT", "spot", "0.5"),
 	), "space-1")
 	require.NoError(t, err)
 	for _, id := range []string{"BNB-USDT-SPOT", "ETH-USDT-SWAP", "ETH-USDT-SPOT"} {
@@ -127,7 +128,7 @@ func TestExcludedAssetsAreHeldAndOthersConvert(t *testing.T) {
 	require.False(t, quantityOf(t, conversion, "BTC-USDT-SPOT").Hold)
 	require.Equal(t, "15", quantityOf(t, conversion, "BTC-USDT-SPOT").Quantity)
 
-	onlyExcluded, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BNB-USDT-SPOT", "SPOT", "0.1")), "space-1")
+	onlyExcluded, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BNB-USDT-SPOT", "spot", "0.1")), "space-1")
 	require.NoError(t, err)
 	require.Len(t, onlyExcluded.QuantityTargets, 1)
 	require.True(t, onlyExcluded.QuantityTargets[0].Hold, "全被跳过时仍是保持，不是空目标（清仓）")
@@ -154,7 +155,7 @@ func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
 	makeBinanceProduction(t, tradeStore, "account-a")
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
 
-	conversion, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
+	conversion, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "spot", "0.5")), "space-1")
 
 	require.NoError(t, err)
 	require.Equal(t, "2550", conversion.Equity.String())
@@ -164,7 +165,7 @@ func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
 	enough := newMixedResolverStore(t, `{"bnb_reserve_amount":"100"}`)
 	makeBinanceProduction(t, enough, "account-a")
 	resolver.Store = enough
-	conversion, err = resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
+	conversion, err = resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "spot", "0.5")), "space-1")
 	require.NoError(t, err)
 	require.Equal(t, "3000", conversion.Equity.String())
 }
@@ -175,7 +176,7 @@ func TestShortingIsCheckedPerInstrumentMarket(t *testing.T) {
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
 
 	_, err := resolver.Resolve(context.Background(), mixedRequest(
-		weightTarget("BTC-USDT-SWAP", "SWAP", "-0.2"), weightTarget("ETH-USDT-SPOT", "SPOT", "-0.1"),
+		weightTarget("BTC-USDT-SWAP", "swap", "-0.2"), weightTarget("ETH-USDT-SPOT", "spot", "-0.1"),
 	), "space-1")
 
 	require.ErrorIs(t, err, ErrPermanent)
@@ -213,7 +214,7 @@ func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
 	require.Equal(t, "300", shortfall.String())
 
 	// 第二个成员是测试网账户：不补买，不留钱。
-	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_live_environment = 'TESTNET', c_markets = 'SPOT' WHERE c_trading_account_id = 'account-b'").Error)
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_live_environment = 'TESTNET', c_markets = 'spot' WHERE c_trading_account_id = 'account-b'").Error)
 	shortfall, err = resolver.bnbShortfall(context.Background(), []store.LogicalAccountMemberRecord{
 		{TradingAccountID: "account-a"}, {TradingAccountID: "account-b"},
 	}, shared.MustDecimal("500"))
@@ -231,7 +232,7 @@ func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
 func TestResolveAcceptsOlderFundSettingsThatFailTheCurrentWriteChecks(t *testing.T) {
 	tradeStore := newMixedResolverStore(t, `{"stablecoin_margin":{"USDC":"0.5"},"bnb_reserve_amount":"5"}`)
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
-	conversion, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
+	conversion, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "spot", "0.5")), "space-1")
 	require.NoError(t, err)
 	require.False(t, quantityOf(t, conversion, "BTC-USDT-SPOT").Hold)
 }

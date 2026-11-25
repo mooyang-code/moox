@@ -116,16 +116,16 @@ func TestInspectionWorkerChecksOnlyEnabledLiveAccountsAndSkipsBinanceTestnet(t *
 	create := func(id, exchangeName, mode, environment, status string) {
 		require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 			return tx.CreateTradingAccount(store.TradingAccountRecord{
-				SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: exchangeName, Markets: []string{"SPOT"},
+				SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: exchangeName, Markets: []string{"spot"},
 				ExecutionMode: mode, Environment: environment, CredentialSecretID: "secret-" + id, SettlementAsset: "USDT", Status: status,
 			})
 		}))
 	}
-	create("binance-prod", "BINANCE", "LIVE", "PRODUCTION", "ENABLED")
-	create("binance-testnet", "BINANCE", "LIVE", "TESTNET", "ENABLED")
-	create("okx-testnet", "OKX", "LIVE", "TESTNET", "ENABLED")
-	create("binance-disabled", "BINANCE", "LIVE", "PRODUCTION", "DISABLED")
-	create("paper", "BINANCE", "PAPER", "PAPER", "ENABLED")
+	create("binance-prod", "binance", "LIVE", "PRODUCTION", "ENABLED")
+	create("binance-testnet", "binance", "LIVE", "TESTNET", "ENABLED")
+	create("okx-testnet", "okx", "LIVE", "TESTNET", "ENABLED")
+	create("binance-disabled", "binance", "LIVE", "PRODUCTION", "DISABLED")
+	create("paper", "binance", "PAPER", "PAPER", "ENABLED")
 	reinspector := &scriptedReinspector{results: map[string]accountapp.ReinspectResult{}, err: map[string]error{"okx-testnet": errors.New("boom")}}
 	worker := &InspectionWorker{Store: tradeStore, Accounts: reinspector, Logical: &recordedPauses{}}
 	err := worker.CheckAll(context.Background())
@@ -141,7 +141,7 @@ func TestInspectionAttentionReportsBlockersAndFailureStreak(t *testing.T) {
 		return raw
 	}
 	account := store.TradingAccountRecord{
-		Name: "main", Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE", Environment: "PRODUCTION", Status: "ENABLED",
+		Name: "main", Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "LIVE", Environment: "PRODUCTION", Status: "ENABLED",
 		InspectionJSON: encode(failing),
 	}
 	blocked, failingText := InspectionAttention(account)

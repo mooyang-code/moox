@@ -29,14 +29,14 @@ func TestGetUnreflectedReservationMatchesSingleQuery(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		for _, accountID := range []string{"account-1", "account-2"} {
 			account := testAccount()
-			account.TradingAccountID, account.Name, account.Markets = accountID, accountID, []string{"SPOT", "SWAP"}
+			account.TradingAccountID, account.Name, account.Markets = accountID, accountID, []string{"spot", "swap"}
 			if err := tx.CreateTradingAccount(account); err != nil {
 				return err
 			}
 		}
 		index := 0
 		for _, accountID := range []string{"account-1", "account-2"} {
-			for _, market := range []string{"SPOT", "SWAP"} {
+			for _, market := range []string{"spot", "swap"} {
 				for _, asset := range []string{"USDT", "BTC"} {
 					for _, state := range []string{"PENDING", "SUBMITTING", "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCELING"} {
 						for _, submittedAt := range []int64{0, 100, 200, 300} {
@@ -50,7 +50,7 @@ func TestGetUnreflectedReservationMatchesSingleQuery(t *testing.T) {
 								}
 								if err := tx.CreateOrder(OrderRecord{
 									SpaceID: "space-1", OrderID: id, TradingAccountID: accountID,
-									ClientOrderID: id, Exchange: "BINANCE", MarketType: market,
+									ClientOrderID: id, Exchange: "binance", MarketType: market,
 									ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 									Quantity: "1", ReferencePrice: "100",
 									OwnerType: "EXTERNAL", OwnerID: id,
@@ -69,12 +69,12 @@ func TestGetUnreflectedReservationMatchesSingleQuery(t *testing.T) {
 		return nil
 	}))
 	checked := 0
-	for _, markets := range [][]string{{"SPOT"}, {"SWAP"}, {"SPOT", "SWAP"}} {
+	for _, markets := range [][]string{{"spot"}, {"swap"}, {"spot", "swap"}} {
 		for _, asset := range []string{"USDT", "BTC"} {
 			for _, snapshot := range []int64{0, 1, 100, 150, 200, 300, 301} {
 				marketsJSON := `["` + markets[0] + `"]`
 				if len(markets) == 2 {
-					marketsJSON = `["SPOT","SWAP"]`
+					marketsJSON = `["spot","swap"]`
 				}
 				var rows []string
 				require.NoError(t, s.DBForTest().Raw(queryUnreflectedReservationsSingle,
@@ -106,7 +106,7 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.0001",
 			MinExchangeQuantity: "0.0001", PriceTick: "0.01", Status: "TRADING",
@@ -126,7 +126,7 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 			id := fmt.Sprintf("order-%d", index)
 			if err := tx.CreateOrder(OrderRecord{
 				SpaceID: "space-1", OrderID: id, TradingAccountID: "account-1",
-				ClientOrderID: id, Exchange: "BINANCE", MarketType: "SPOT",
+				ClientOrderID: id, Exchange: "binance", MarketType: "spot",
 				ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 				Quantity: "1", ReferencePrice: "100",
 				OwnerType: "EXTERNAL", OwnerID: id,
@@ -142,13 +142,13 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 			"space-1",
 			"account-1",
 			"USDT",
-			[]string{"SPOT"},
+			[]string{"spot"},
 			200,
 		)
 		require.NoError(t, err)
 		require.Equal(t, "100", total.String())
 		// 合约钱包的预留不占用现货钱包的资金。
-		swapTotal, err := tx.GetUnreflectedReservation("space-1", "account-1", "USDT", []string{"SWAP"}, 200)
+		swapTotal, err := tx.GetUnreflectedReservation("space-1", "account-1", "USDT", []string{"swap"}, 200)
 		require.NoError(t, err)
 		require.True(t, swapTotal.IsZero())
 		return nil

@@ -75,7 +75,7 @@ message CollectorKlineAbsent {
 }
 
 // InstrumentDelistScheduled 宣告一个标的即将下架，由 Collector 的下架检测发布，只带元数据。
-// exchange 为小写交易所代码（binance、okx），market 为 SPOT 或 SWAP；
+// exchange 为小写交易所代码（binance、okx），market 为 spot 或 swap；
 // source 取 BINANCE_SPOT_SCHEDULE、BINANCE_SWAP_EXCHANGE_INFO、OKX_SWAP_INSTRUMENTS、MANUAL；
 // scope 取 ALL 或 PAPER_ONLY（后者只用于演练，只处理模拟盘组合）。
 message InstrumentDelistScheduled {

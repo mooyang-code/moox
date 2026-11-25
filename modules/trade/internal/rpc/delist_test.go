@@ -33,7 +33,7 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	delistAt := time.Now().Add(72 * time.Hour).Truncate(time.Millisecond)
 
 	intake, err := server.Delist.Intake(ctx, delistapp.Event{
-		EventID: "evt-1", OccurredAt: time.Now(), Key: delistapp.Key{Exchange: "binance", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"},
+		EventID: "evt-1", OccurredAt: time.Now(), Key: delistapp.Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"},
 		Scope: store.DelistScopePaperOnly, DelistAt: delistAt, Source: "MANUAL",
 	})
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, list.GetRetInfo().GetCode())
 	require.Len(t, list.GetInstruments(), 1)
-	require.Equal(t, tradepb.Exchange_EXCHANGE_BINANCE, list.GetInstruments()[0].GetExchange())
+	require.Equal(t, "binance", list.GetInstruments()[0].GetExchange())
 	require.Equal(t, store.DelistScopePaperOnly, list.GetInstruments()[0].GetScope())
 	require.Equal(t, intake.DelistID, list.GetInstruments()[0].GetDelistId())
 
@@ -53,13 +53,13 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.Len(t, delists.GetDelists(), 1)
 	got := delists.GetDelists()[0]
 	require.Equal(t, intake.DelistID, got.GetDelistId())
-	require.Equal(t, tradepb.MarketType_MARKET_TYPE_SPOT, got.GetMarketType())
+	require.Equal(t, "spot", got.GetMarketType())
 	require.Equal(t, delistAt.UnixMilli(), got.GetDelistAtMs())
 	require.Equal(t, store.DelistActive, got.GetStatus())
 	require.Equal(t, "evt-1", got.GetSourceEventId())
 
 	holders, err := server.ListInstrumentHolders(ctx, &tradepb.ListInstrumentHoldersReq{
-		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, ExchangeSymbol: "FOOUSDT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, holders.GetRetInfo().GetCode(), "未知标的不算失败")
@@ -68,7 +68,7 @@ func TestDelistListMethodsAreGlobalAndNeedNoSpace(t *testing.T) {
 	require.Empty(t, holders.GetHolders())
 
 	removed, err := server.UnblockInstrument(ctx, &tradepb.UnblockInstrumentReq{
-		Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, ExchangeSymbol: "FOOUSDT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT",
 	})
 	require.NoError(t, err)
 	require.True(t, removed.GetRemoved())
@@ -95,7 +95,7 @@ func liveLedgerServer(t *testing.T, adapters adapterMap) *ConsoleServer {
 	t.Cleanup(func() { _ = tradeStore.Close() })
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live", Exchange: "BINANCE", Markets: []string{"SWAP"},
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live", Exchange: "binance", Markets: []string{"swap"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION", CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))
@@ -168,7 +168,7 @@ func TestSummarizeAccountPnlFundingFromIsTheLatestOfTheOldestTimes(t *testing.T)
 	server := liveLedgerServer(t, nil)
 	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-2", Name: "live-2", Exchange: "BINANCE", Markets: []string{"SWAP"},
+			SpaceID: "space-1", TradingAccountID: "account-2", Name: "live-2", Exchange: "binance", Markets: []string{"swap"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION", CredentialSecretID: "secret-2", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))

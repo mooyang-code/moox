@@ -23,7 +23,7 @@ func TestStorageEventsTRPCJSONRoundTrip(t *testing.T) {
 	}, new(CollectorKlineBackfilled), map[string]int64{
 		"start": 1786032000, "end": 1786035600, "confirmed_at": at, "absent.0.start": 1786032000, "absent.0.end": 1786032060,
 	})
-	assertTRPCJSONRoundTrip(t, &InstrumentDelistScheduled{Exchange: "binance", Market: "SPOT", ExchangeSymbol: "FOOUSDT", DelistAt: at + 86400000, FirstSeenAt: at},
+	assertTRPCJSONRoundTrip(t, &InstrumentDelistScheduled{Exchange: "binance", Market: "spot", ExchangeSymbol: "FOOUSDT", DelistAt: at + 86400000, FirstSeenAt: at},
 		new(InstrumentDelistScheduled), map[string]int64{"delist_at": at + 86400000, "first_seen_at": at})
 }
 

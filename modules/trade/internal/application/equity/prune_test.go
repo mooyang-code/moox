@@ -23,7 +23,7 @@ func TestSampleAccountEquityUnchangedAfterPruningManagedOrders(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper",
-			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT"},
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{"spot"},
 			ExecutionMode: string(exchange.ExecutionModePaper), Environment: "PAPER", SettlementAsset: "USDT",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
@@ -52,7 +52,7 @@ func TestSampleAccountEquityUnchangedAfterPruningManagedOrders(t *testing.T) {
 			"BTC": {"TRADING", "40000", "0.01"}, "HALT": {"BREAK", "7", "4"},
 		} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: string(exchange.ExchangeBinance), MarketType: "SPOT", ExchangeSymbol: asset + "USDT",
+				Exchange: string(exchange.ExchangeBinance), MarketType: "spot", ExchangeSymbol: asset + "USDT",
 				InstrumentID: asset + "-USDT-SPOT", BaseAsset: asset, QuoteAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: buy.status,
 			}); err != nil {
@@ -61,7 +61,7 @@ func TestSampleAccountEquityUnchangedAfterPruningManagedOrders(t *testing.T) {
 			orderID := "bought-" + asset
 			if err := tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", TradingAccountID: "paper-1", OrderID: orderID, ClientOrderID: orderID,
-				Exchange: string(exchange.ExchangeBinance), MarketType: "SPOT", ExchangeSymbol: asset + "USDT",
+				Exchange: string(exchange.ExchangeBinance), MarketType: "spot", ExchangeSymbol: asset + "USDT",
 				InstrumentID: asset + "-USDT-SPOT", OrderType: "MARKET", Side: "BUY", Quantity: buy.quantity,
 				ReferencePrice: buy.price, State: "FILLED", FinishedAt: finished.UnixMilli(),
 				OwnerType: "OPERATOR", OwnerID: "action-" + asset, LogicalAccountID: "logical-1", Version: 1,

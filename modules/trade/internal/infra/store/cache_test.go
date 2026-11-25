@@ -11,7 +11,7 @@ import (
 
 func cacheTestInstrument(tick string) InstrumentRecord {
 	return InstrumentRecord{
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: tick, ExchangeQuantityStep: "0.001", Status: "TRADING",
 	}
 }
@@ -34,15 +34,15 @@ func TestInstrumentCacheServesReadsAndInvalidatesOnWrite(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.UpsertInstrument(cacheTestInstrument("0.01")) }))
 	queries := countInstrumentQueries(t, s)
 	for range 5 {
-		record, err := s.GetInstrument(ctx, "BINANCE", "SPOT", "BTCUSDT")
+		record, err := s.GetInstrument(ctx, "binance", "spot", "BTCUSDT")
 		require.NoError(t, err)
 		require.Equal(t, "0.01", record.PriceTick)
 	}
 	require.Equal(t, 1, *queries)
-	_, err := s.GetInstrument(ctx, "BINANCE", "SPOT", "ETHUSDT")
+	_, err := s.GetInstrument(ctx, "binance", "spot", "ETHUSDT")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.UpsertInstrument(cacheTestInstrument("0.1")) }))
-	record, err := s.GetInstrument(ctx, "BINANCE", "SPOT", "BTCUSDT")
+	record, err := s.GetInstrument(ctx, "binance", "spot", "BTCUSDT")
 	require.NoError(t, err)
 	require.Equal(t, "0.1", record.PriceTick)
 }
@@ -57,12 +57,12 @@ func TestInstrumentCacheIgnoresUncommittedWrites(t *testing.T) {
 		if err := tx.UpsertInstrument(cacheTestInstrument("0.5")); err != nil {
 			return err
 		}
-		record, err := tx.GetInstrument("BINANCE", "SPOT", "BTCUSDT")
+		record, err := tx.GetInstrument("binance", "spot", "BTCUSDT")
 		require.NoError(t, err)
 		require.Equal(t, "0.5", record.PriceTick)
 		return abort
 	}), abort)
-	record, err := s.GetInstrument(ctx, "BINANCE", "SPOT", "BTCUSDT")
+	record, err := s.GetInstrument(ctx, "binance", "spot", "BTCUSDT")
 	require.NoError(t, err)
 	require.Equal(t, "0.01", record.PriceTick)
 }
@@ -72,11 +72,11 @@ func TestInvalidateCachesAfterDirectTableChange(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.UpsertInstrument(cacheTestInstrument("0.01")) }))
-	_, err := s.GetInstrument(ctx, "BINANCE", "SPOT", "BTCUSDT")
+	_, err := s.GetInstrument(ctx, "binance", "spot", "BTCUSDT")
 	require.NoError(t, err)
 	require.NoError(t, s.DBForTest().Exec("DELETE FROM t_trade_instruments").Error)
 	s.InvalidateCaches()
-	_, err = s.GetInstrument(ctx, "BINANCE", "SPOT", "BTCUSDT")
+	_, err = s.GetInstrument(ctx, "binance", "spot", "BTCUSDT")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -90,7 +90,7 @@ func TestAccountIdentityCacheIgnoresRolledBackAccount(t *testing.T) {
 		}
 		identity, err := tx.accountIdentity("space-1", "account-1")
 		require.NoError(t, err)
-		require.Equal(t, "BINANCE", identity.Exchange)
+		require.Equal(t, "binance", identity.Exchange)
 		return abort
 	}), abort)
 	require.Error(t, s.Transaction(context.Background(), func(tx *Tx) error {

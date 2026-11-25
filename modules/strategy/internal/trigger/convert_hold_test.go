@@ -96,7 +96,7 @@ func TestSpotAndSwapTargetsOfSameInstrumentReachTradeEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	targets := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested).GetTargets()
-	if len(targets) != 2 || targets[0].GetInstrumentId() != "BTC-USDT" || targets[0].GetMarketType() != "SPOT" || targets[1].GetInstrumentId() != "BTC-USDT" || targets[1].GetMarketType() != "SWAP" || targets[1].GetTargetWeight() != "-0.3" {
+	if len(targets) != 2 || targets[0].GetInstrumentId() != "BTC-USDT" || targets[0].GetMarketType() != "spot" || targets[1].GetInstrumentId() != "BTC-USDT" || targets[1].GetMarketType() != "swap" || targets[1].GetTargetWeight() != "-0.3" {
 		t.Fatalf("事件里的两项目标不符：%v", targets)
 	}
 	// 同一（标的, 市场）重复仍拒绝；股票映射为 STOCK，未知市场无法生成事件。

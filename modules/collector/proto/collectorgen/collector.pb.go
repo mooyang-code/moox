@@ -7754,7 +7754,7 @@ type RegisterDelistNoticeReq struct {
 
 	// exchange 为小写交易所代码：binance、okx。
 	Exchange string `protobuf:"bytes,1,opt,name=exchange,proto3" json:"exchange,omitempty"`
-	// market 为 SPOT 或 SWAP。
+	// market 为 spot（现货）或 swap（永续）。
 	Market         string `protobuf:"bytes,2,opt,name=market,proto3" json:"market,omitempty"`
 	ExchangeSymbol string `protobuf:"bytes,3,opt,name=exchange_symbol,json=exchangeSymbol,proto3" json:"exchange_symbol,omitempty"`
 	// delist_at_ms 是下架时间（Unix 毫秒）。

@@ -17,7 +17,7 @@ const account = (id: string, extra: Partial<TradingAccount> = {}) =>
     execution_mode: 1,
     settlement_asset: "USDT",
     status: "ENABLED",
-    markets: [1],
+    markets: ["spot"],
     ...extra
   }) as TradingAccount;
 
@@ -26,7 +26,7 @@ describe("成员资格", () => {
     const target = logical("target");
     const other = logical("other", { members: [{ trading_account_id: "taken", enabled: false, priority: 0 }] });
     const list = [
-      account("ok", { markets: [2] }),
+      account("ok", { markets: ["swap"] }),
       account("taken"),
       account("disabled", { status: "DISABLED" }),
       account("asset", { settlement_asset: "USDC" }),

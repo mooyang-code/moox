@@ -219,7 +219,7 @@ func TestTradingAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
 func testAccount() TradingAccountRecord {
 	return TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-		Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
+		Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER",
 		Environment:        "PAPER",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: "ENABLED",

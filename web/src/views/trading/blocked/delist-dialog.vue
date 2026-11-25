@@ -144,7 +144,7 @@ const emit = defineEmits<{ "update:visible": [value: boolean]; registered: [] }>
 
 const form = reactive({
   exchange: "binance" as DelistExchange,
-  market: "SPOT" as DelistMarket,
+  market: "spot" as DelistMarket,
   exchange_symbol: "",
   // 毫秒时刻，按 UTC 选择
   delist_at: null as number | null,
@@ -210,7 +210,7 @@ watch(
     // 关掉或重新打开都换号：上一次没回来的预览响应不会再写进来。
     previewGuard.reset();
     if (!visible) return;
-    Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: null, paper_only: false });
+    Object.assign(form, { exchange: "binance", market: "spot", exchange_symbol: "", delist_at: null, paper_only: false });
     phase.value = "form";
     previewing.value = false;
     submitting.value = false;

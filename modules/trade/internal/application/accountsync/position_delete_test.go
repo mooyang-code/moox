@@ -17,7 +17,7 @@ func TestClosedSwapPositionIsDeletedEvenWhenSpotWalletIsStale(t *testing.T) {
 	service, tradeStore := newDualMarketSync(t)
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 			SignedQuantity: "3", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 10_000,
 		})
 	}))

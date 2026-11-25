@@ -23,7 +23,7 @@ func defaults(t *testing.T) fundsettings.Settings {
 // standardAccount 是币安普通账户：交易所总权益（合约接口的 totalMarginBalance）写在 ExchangeEquity 里。
 func standardAccount(exchangeEquity string) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
-		TradingAccountID: "std", Name: "std", Exchange: "BINANCE", Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "LIVE",
+		TradingAccountID: "std", Name: "std", Exchange: "binance", Markets: []string{"spot", "swap"}, ExecutionMode: "LIVE",
 		AccountMode: "BINANCE_STANDARD", Environment: "PRODUCTION", SettlementAsset: "USDT", Status: "ENABLED", Ready: true,
 		Snapshot: store.TradingAccountSnapshot{ExchangeEquity: exchangeEquity, Balances: []store.AssetBalance{
 			{Wallet: "FUTURES", Asset: "USDT", Total: "100", Available: "100"},
@@ -33,7 +33,7 @@ func standardAccount(exchangeEquity string) store.TradingAccountRecord {
 }
 
 func position(quantity, mark string) store.PositionRecord {
-	return store.PositionRecord{MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", SignedQuantity: quantity, MarkPrice: mark, EntryPrice: "1"}
+	return store.PositionRecord{MarketType: "swap", ExchangeSymbol: "BTCUSDT", SignedQuantity: quantity, MarkPrice: mark, EntryPrice: "1"}
 }
 
 // 普通账户：总权益 ÷ 持仓名义，等于阈值也触发（不高于）。
@@ -52,7 +52,7 @@ func TestEvaluateStandardAccountTriggersAtOrBelowThreshold(t *testing.T) {
 	require.False(t, reading.Triggered, "略高于阈值不触发")
 
 	// 没有标记价时用开仓均价算名义。
-	noMark := store.PositionRecord{MarketType: "SWAP", SignedQuantity: "10", EntryPrice: "100"}
+	noMark := store.PositionRecord{MarketType: "swap", SignedQuantity: "10", EntryPrice: "100"}
 	reading, _ = Evaluate(standardAccount("400"), []store.PositionRecord{noMark}, settings)
 	require.Equal(t, "0.4", reading.Value.String())
 }
@@ -152,7 +152,7 @@ func TestMonitoredOnlyBinanceProductionLiveAccountsWithAKnownType(t *testing.T) 
 		"模拟盘":  func(a *store.TradingAccountRecord) { a.ExecutionMode = "PAPER" },
 		"测试网":  func(a *store.TradingAccountRecord) { a.Environment = "TESTNET" },
 		"已停用":  func(a *store.TradingAccountRecord) { a.Status = "DISABLED" },
-		"没有永续": func(a *store.TradingAccountRecord) { a.Markets = []string{"SPOT"} },
+		"没有永续": func(a *store.TradingAccountRecord) { a.Markets = []string{"spot"} },
 	} {
 		changed := account
 		mutate(&changed)
@@ -162,7 +162,7 @@ func TestMonitoredOnlyBinanceProductionLiveAccountsWithAKnownType(t *testing.T) 
 
 	// OKX 暂不接入；账户类型没有检测写入：都不监控，但要说明原因。
 	okx := account
-	okx.Exchange, okx.AccountMode = "OKX", "OKX_UNIFIED"
+	okx.Exchange, okx.AccountMode = "okx", "OKX_UNIFIED"
 	require.False(t, monitored(okx))
 	require.Contains(t, unsupportedNote(okx), "OKX")
 	unknown := account
@@ -224,14 +224,14 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+			Exchange: "binance", Environment: "PRODUCTION", MarketType: "swap", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
 			BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: true, ContractValue: "1", ContractValueAsset: "BTC",
 			PriceTick: "0.1", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", Status: "TRADING",
 		}); err != nil {
 			return err
 		}
 		if err := tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 			SignedQuantity: "10", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", UnrealizedPnL: "0", ExchangeUpdatedAt: 1,
 		}); err != nil {
 			return err
@@ -647,7 +647,7 @@ func TestDetectionWritingTheAccountModeEnablesTheMonitor(t *testing.T) {
 // OKX 的实盘永续账户不监控，只告警一次（不管检测有没有写入账户类型）。
 func TestOKXAccountIsNotMonitoredAndWarnsOnce(t *testing.T) {
 	f := newFixture(t, "", "400")
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_exchange = 'OKX', c_account_mode = 'OKX_UNIFIED'`).Error)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_exchange = 'okx', c_account_mode = 'OKX_UNIFIED'`).Error)
 	f.run()
 	f.run()
 	f.run()

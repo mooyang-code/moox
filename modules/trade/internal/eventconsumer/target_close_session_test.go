@@ -53,7 +53,7 @@ func requireCurrentTarget(t *testing.T, db *store.Store, targetID string) store.
 	return current
 }
 
-var oneBTC = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}}
+var oneBTC = []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}}
 
 // 关闭后同会话更晚一根的目标按 superseded 结束（同会话按 bar 先后本该接受，关闭把它挡在第 3 步）。
 func TestCloseTargetSessionEndsLaterBarOfSameSession(t *testing.T) {

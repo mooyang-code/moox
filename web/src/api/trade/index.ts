@@ -307,7 +307,13 @@ export function listOperatorActions(req: ListOperatorActionsReq) {
   );
 }
 
-export const exchangeLabels: Record<number, string> = { 0: "-", 1: "币安", 2: "OKX", 3: "A 股", 4: "港股" };
+/** 交易所的中文名，按接口里的小写取值取。 */
+export const exchangeLabels: Record<string, string> = { binance: "币安", okx: "OKX", ashare: "A 股", hkex: "港股" };
+
+/** 交易所的中文名；未知值得到“-”。 */
+export function exchangeLabel(exchange: string | undefined): string {
+  return (exchange && exchangeLabels[exchange]) || "-";
+}
 export const orderStateLabels: Record<string, string> = {
   PENDING: "等待提交",
   SUBMITTING: "提交中",

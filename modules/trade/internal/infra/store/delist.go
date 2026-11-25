@@ -147,8 +147,8 @@ const (
 		ORDER BY c_round, c_space_id, c_logical_account_id`
 )
 
-// NormalizeVenue 归一名单与下架记录里的交易所、市场类型，写库与查询都经它。
-func NormalizeVenue(value string) string { return strings.ToUpper(strings.TrimSpace(value)) }
+// NormalizeVenue 归一名单与下架记录里的交易所、市场类型（一律小写，与 Trade 常量一致），写库与查询都经它。
+func NormalizeVenue(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
 
 // NormalizeExchangeSymbol 归一交易所代码（FOOUSDT、FOO-USDT-SWAP）：它是交易所原文，一律转大写。
 func NormalizeExchangeSymbol(value string) string { return strings.ToUpper(strings.TrimSpace(value)) }
@@ -427,8 +427,8 @@ func (b BlockedSet) ContainsInstrument(account TradingAccountRecord, instrument 
 	return b.Contains(account, instrument.MarketType, instrument.ExchangeSymbol)
 }
 
-// SpotBaseAssets 返回对这个账户生效的名单里 SPOT 条目对应的基础资产：条目在账户标的表（含已下架的）里查 base_asset。
-// 只看 SPOT 条目，永续下架不会把同名的现货余额也豁免掉。
+// SpotBaseAssets 返回对这个账户生效的名单里现货（spot）条目对应的基础资产：条目在账户标的表（含已下架的）里查 base_asset。
+// 只看现货条目，永续下架不会把同名的现货余额也豁免掉。
 func (b BlockedSet) SpotBaseAssets(account TradingAccountRecord, instruments []InstrumentRecord) map[string]struct{} {
 	assets := make(map[string]struct{})
 	if b.Empty() {

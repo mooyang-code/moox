@@ -104,10 +104,10 @@ func TestLogicalAccountMarketsAreUnionOfEnabledMembers(t *testing.T) {
 	spot.TradingAccountID, spot.Name = "spot-1", "spot"
 	swap := testAccount()
 	swap.TradingAccountID, swap.Name = "swap-1", "swap"
-	swap.Markets, swap.MarginMode = []string{"SWAP"}, "CROSS"
+	swap.Markets, swap.MarginMode = []string{"swap"}, "CROSS"
 	both := testAccount()
 	both.TradingAccountID, both.Name = "both-1", "both"
-	both.Markets, both.MarginMode = []string{"SPOT", "SWAP"}, "CROSS"
+	both.Markets, both.MarginMode = []string{"spot", "swap"}, "CROSS"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		for _, account := range []TradingAccountRecord{spot, swap, both} {
 			if err := tx.CreateTradingAccount(account); err != nil {
@@ -134,14 +134,14 @@ func TestLogicalAccountMarketsAreUnionOfEnabledMembers(t *testing.T) {
 		}))
 	}
 	put("swap-1", true)
-	require.Equal(t, []string{"SWAP"}, markets())
+	require.Equal(t, []string{"swap"}, markets())
 	put("spot-1", true)
-	require.Equal(t, []string{"SPOT", "SWAP"}, markets())
+	require.Equal(t, []string{"spot", "swap"}, markets())
 	// 停用的成员不算。
 	put("spot-1", false)
-	require.Equal(t, []string{"SWAP"}, markets())
+	require.Equal(t, []string{"swap"}, markets())
 	put("both-1", true)
-	require.Equal(t, []string{"SPOT", "SWAP"}, markets())
+	require.Equal(t, []string{"spot", "swap"}, markets())
 }
 
 func TestLogicalAccountMembershipRejectsMixedEnvironmentProfiles(t *testing.T) {

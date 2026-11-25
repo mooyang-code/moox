@@ -35,8 +35,8 @@ describe("account ledger helpers", () => {
 describe("default ledger market", () => {
   it("多市场账户默认查永续，只开通现货时用现货", async () => {
     const { defaultLedgerMarket } = await import("./ledger");
-    expect(defaultLedgerMarket([1, 2])).toBe(2);
-    expect(defaultLedgerMarket([1])).toBe(1);
-    expect(defaultLedgerMarket([])).toBe(1);
+    expect(defaultLedgerMarket(["spot", "swap"])).toBe("swap");
+    expect(defaultLedgerMarket(["spot"])).toBe("spot");
+    expect(defaultLedgerMarket([])).toBe("spot");
   });
 });

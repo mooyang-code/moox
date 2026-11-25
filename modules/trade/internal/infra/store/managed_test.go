@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,7 +15,7 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 	s := openTestStore(t)
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
 		account := testAccount()
-		account.Markets = []string{"SPOT", "SWAP"}
+		account.Markets = []string{"spot", "swap"}
 		account.MarginMode = "CROSS"
 		account.LeverageSettings = LeverageSettings{"*": "5"}
 		if err := tx.CreateTradingAccount(account); err != nil {
@@ -38,11 +39,11 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 		}
 		for index, order := range filled {
 			instrument := InstrumentRecord{
-				Exchange: "BINANCE", MarketType: order.market, ExchangeSymbol: order.base + "USDT",
-				InstrumentID: order.base + "-USDT-" + order.market, BaseAsset: order.base, QuoteAsset: "USDT",
+				Exchange: "binance", MarketType: order.market, ExchangeSymbol: order.base + "USDT",
+				InstrumentID: order.base + "-USDT-" + exchange.InstrumentSuffix(order.market), BaseAsset: order.base, QuoteAsset: "USDT",
 				SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}
-			if order.market == "SWAP" {
+			if order.market == "swap" {
 				instrument.Linear, instrument.ContractValue, instrument.ContractValueAsset = true, "1", order.base
 			}
 			if err := tx.UpsertInstrument(instrument); err != nil {
@@ -56,7 +57,7 @@ func seedManagedFixture(t *testing.T, fundSettings string, filled []managedOrder
 			if err := tx.CreateOrder(OrderRecord{
 				InstanceID: runnerID,
 				SpaceID:    "space-1", OrderID: id, TradingAccountID: "account-1", LogicalAccountID: "logical-1",
-				ClientOrderID: id, Exchange: "BINANCE", MarketType: order.market, InstrumentID: instrument.InstrumentID,
+				ClientOrderID: id, Exchange: "binance", MarketType: order.market, InstrumentID: instrument.InstrumentID,
 				ExchangeSymbol: instrument.ExchangeSymbol, OrderType: "MARKET", Side: "BUY",
 				Quantity: "1", FilledQuantity: "1", ReferencePrice: "100",
 				OwnerType: order.owner, OwnerID: id, State: "FILLED", Version: 1,
@@ -79,10 +80,10 @@ type managedOrder struct{ market, base, owner string }
 // 受管资产只看现货标的的成交：BTC 合约成交不会让 BTC 变成受管的现货；系统单不算；用户自持、从没交易过的币不受管。
 func TestManagedAssetsOnlyFollowSpotInstrumentsAndMooxOrders(t *testing.T) {
 	s := seedManagedFixture(t, "", []managedOrder{
-		{"SWAP", "BTC", "TARGET"},   // 合约成交：BTC 现货不受管
-		{"SPOT", "ETH", "TARGET"},   // 策略单：受管
-		{"SPOT", "SOL", "OPERATOR"}, // 人工单：受管
-		{"SPOT", "BNB", "SYSTEM"},   // 系统单（BNB 补买）：不算
+		{"swap", "BTC", "TARGET"},   // 合约成交：BTC 现货不受管
+		{"spot", "ETH", "TARGET"},   // 策略单：受管
+		{"spot", "SOL", "OPERATOR"}, // 人工单：受管
+		{"spot", "BNB", "SYSTEM"},   // 系统单（BNB 补买）：不算
 	})
 
 	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
@@ -96,7 +97,7 @@ func TestManagedAssetsSwapOnlyAccountIsSettlementAsset(t *testing.T) {
 	s := openTestStore(t)
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
 		account := testAccount()
-		account.Markets, account.MarginMode, account.LeverageSettings = []string{"SWAP"}, "CROSS", LeverageSettings{"*": "5"}
+		account.Markets, account.MarginMode, account.LeverageSettings = []string{"swap"}, "CROSS", LeverageSettings{"*": "5"}
 		return tx.CreateTradingAccount(account)
 	}))
 
@@ -111,8 +112,8 @@ func TestManagedAssetsExcludeFundSettingAssets(t *testing.T) {
 	s := seedManagedFixture(t,
 		`{"bnb_reserve_amount":"100","margin_coins":{"SOL":"50"},"arbitrage_base_assets":["ETH"],"stablecoin_margin":{"USDC":"0.5","USDT":"0.5"}}`,
 		[]managedOrder{
-			{"SPOT", "BTC", "TARGET"}, {"SPOT", "ETH", "TARGET"}, {"SPOT", "SOL", "TARGET"},
-			{"SPOT", "BNB", "OPERATOR"}, {"SPOT", "USDC", "TARGET"},
+			{"spot", "BTC", "TARGET"}, {"spot", "ETH", "TARGET"}, {"spot", "SOL", "TARGET"},
+			{"spot", "BNB", "OPERATOR"}, {"spot", "USDC", "TARGET"},
 		})
 
 	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
@@ -123,7 +124,7 @@ func TestManagedAssetsExcludeFundSettingAssets(t *testing.T) {
 
 // 没开 BNB 保留时，BNB 是普通的受管资产。
 func TestManagedAssetsKeepBNBWithoutReserve(t *testing.T) {
-	s := seedManagedFixture(t, "", []managedOrder{{"SPOT", "BNB", "TARGET"}})
+	s := seedManagedFixture(t, "", []managedOrder{{"spot", "BNB", "TARGET"}})
 
 	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
 
@@ -158,7 +159,7 @@ func TestBalancePendingWatermarkIsPerWallet(t *testing.T) {
 
 // 资金设置坏了，受管资产照常算（按默认设置），不能让清仓、收敛报错。
 func TestManagedAssetsToleratesBrokenFundSettings(t *testing.T) {
-	s := seedManagedFixture(t, `{"reserve_ratio":"oops"}`, []managedOrder{{"SPOT", "ETH", "TARGET"}})
+	s := seedManagedFixture(t, `{"reserve_ratio":"oops"}`, []managedOrder{{"spot", "ETH", "TARGET"}})
 
 	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
 
@@ -168,7 +169,7 @@ func TestManagedAssetsToleratesBrokenFundSettings(t *testing.T) {
 
 // 成员被停用后，受管资产仍按所属组合的真实资金设置排除底仓（和清仓同一个入口），不会因为取到默认设置而把底仓当受管现货。
 func TestManagedAssetsUseRealSettingsForDisabledMember(t *testing.T) {
-	s := seedManagedFixture(t, `{"arbitrage_base_assets":["BTC"]}`, []managedOrder{{"SPOT", "BTC", "TARGET"}, {"SPOT", "ETH", "TARGET"}})
+	s := seedManagedFixture(t, `{"arbitrage_base_assets":["BTC"]}`, []managedOrder{{"spot", "BTC", "TARGET"}, {"spot", "ETH", "TARGET"}})
 	require.NoError(t, s.DBForTest().Exec(`UPDATE t_logical_account_members SET c_enabled = 0`).Error)
 
 	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
@@ -180,7 +181,7 @@ func TestManagedAssetsUseRealSettingsForDisabledMember(t *testing.T) {
 
 // 排除字段坏了：受管资产报错，不能把排除资产当普通资产。
 func TestManagedAssetsFailWhenExclusionSettingIsUnreadable(t *testing.T) {
-	s := seedManagedFixture(t, `{"arbitrage_base_assets":"BTC"}`, []managedOrder{{"SPOT", "BTC", "TARGET"}})
+	s := seedManagedFixture(t, `{"arbitrage_base_assets":"BTC"}`, []managedOrder{{"spot", "BTC", "TARGET"}})
 
 	_, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
 

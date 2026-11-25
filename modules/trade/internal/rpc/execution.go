@@ -408,7 +408,7 @@ func normalizeForMarkets(raw string, markets []string) (string, error) {
 	}
 	for _, market := range markets {
 		if id, err := exchange.NormalizeInstrumentID(raw, exchange.MarketType(market)); err == nil &&
-			strings.HasSuffix(strings.ToUpper(strings.TrimSpace(raw)), "-"+exchange.InstrumentSuffix(exchange.MarketType(market))) {
+			strings.HasSuffix(strings.ToUpper(strings.TrimSpace(raw)), "-"+exchange.InstrumentSuffix(market)) {
 			return id, nil
 		}
 	}
@@ -418,16 +418,16 @@ func normalizeForMarkets(raw string, markets []string) (string, error) {
 // requestInstrumentID 按请求显式给的市场标准化标的 ID：账户必须开通了这个市场。没给市场时回到账户开通的市场
 // （只开通一个时按它，开通多个时标的 ID 必须自带后缀）。
 func (h *ExecutionServer) requestInstrumentID(
-	ctx context.Context, spaceID, tradingAccountID, raw string, market tradepb.MarketType,
+	ctx context.Context, spaceID, tradingAccountID, raw string, market string,
 ) (string, error) {
-	if market == tradepb.MarketType_MARKET_TYPE_UNSPECIFIED || raw == "" {
+	if market == "" || raw == "" {
 		return accountInstrumentID(ctx, h.Store, spaceID, tradingAccountID, raw)
 	}
 	account, err := h.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return "", err
 	}
-	explicit := marketFromPB(market)
+	explicit := exchange.MarketType(market)
 	if !account.SupportsMarket(string(explicit)) {
 		return "", fmt.Errorf("%w: 账户没有开通市场 %s", exchange.ErrInvalidInstrumentID, explicit)
 	}

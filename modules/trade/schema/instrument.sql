@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS t_trade_instruments (
     PRIMARY KEY (c_exchange, c_environment, c_market_type, c_exchange_symbol),
     CHECK (c_linear IN (0, 1)),
     CHECK (
-        c_market_type <> 'SWAP'
+        c_market_type <> 'swap'
         OR (
             c_linear = 1
             AND c_contract_value <> '0'

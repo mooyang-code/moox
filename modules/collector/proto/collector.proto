@@ -924,7 +924,7 @@ service MarketFetchExecutor {
 message RegisterDelistNoticeReq {
   // exchange 为小写交易所代码：binance、okx。
   string exchange = 1;
-  // market 为 SPOT 或 SWAP。
+  // market 为 spot（现货）或 swap（永续）。
   string market = 2;
   string exchange_symbol = 3;
   // delist_at_ms 是下架时间（Unix 毫秒）。

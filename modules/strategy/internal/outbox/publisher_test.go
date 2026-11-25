@@ -46,7 +46,7 @@ func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1",
 		}},
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestJetStreamPublisherTimesOutWithoutAck(t *testing.T) {
 	bar := time.Now().UTC().UnixMilli()
 	data, err := registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "request-1", InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: time.Now().UTC().Add(time.Hour).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "SPOT", TargetWeight: "1"}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT", MarketType: "spot", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)
 	started := time.Now()

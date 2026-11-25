@@ -152,7 +152,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, account.Ready)
-	require.Equal(t, "11", account.FillCursors["SWAP:BTC-USDT"])
+	require.Equal(t, "11", account.FillCursors["swap:BTC-USDT"])
 	require.Equal(t, int64(3_000), account.LastSyncAt)
 	require.Equal(t, int64(3_000), account.SnapshotSourceTime, "快照时间取本地读取时间")
 
@@ -815,7 +815,7 @@ func TestApplyFillImportsEmptyClientIDPerSymbol(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: "ETH-USDT",
+			Exchange: "binance", Environment: "TESTNET", MarketType: "swap", ExchangeSymbol: "ETH-USDT",
 			InstrumentID: "ETHUSDT", BaseAsset: "ETH", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.1",
 			ContractValueAsset: "ETH", ExchangeQuantityStep: "1",
@@ -1078,7 +1078,7 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 
 func TestFullSymbolsIncludesPositions(t *testing.T) {
 	symbols := FullSymbols(
-		store.TradingAccountRecord{Markets: []string{"SWAP"}},
+		store.TradingAccountRecord{Markets: []string{"swap"}},
 		nil,
 		nil,
 		[]exchange.Position{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "ETH-USDT"}},
@@ -1139,12 +1139,12 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE",
+			Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "LIVE",
 			Environment:        "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "5"},
-			FillCursors:      store.FillCursors{"SWAP:BTC-USDT": "0"},
+			FillCursors:      store.FillCursors{"swap:BTC-USDT": "0"},
 		}); err != nil {
 			return err
 		}
@@ -1163,7 +1163,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT",
+			Exchange: "binance", Environment: "TESTNET", MarketType: "swap", ExchangeSymbol: "BTC-USDT",
 			InstrumentID: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.1",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",

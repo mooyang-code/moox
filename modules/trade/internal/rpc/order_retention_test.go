@@ -28,8 +28,8 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 	create := func(name string, days *int32) *tradepb.TradingAccount {
 		t.Helper()
 		rsp, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
-			AccountName: name, Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-			Markets:         []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP},
+			AccountName: name, Exchange: "binance",
+			Markets:         []string{"swap"},
 			SettlementAsset: "USDT", MarginMode: "CROSS", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
 			OrderRetentionDays: days,
 		})
@@ -49,8 +49,8 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 		t.Fatalf("传 0 应存 0，得到 %v", kept.GetPaper().OrderRetentionDays)
 	}
 	if rsp, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
-		AccountName: "越界", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-		Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, SettlementAsset: "USDT",
+		AccountName: "越界", Exchange: "binance",
+		Markets: []string{"swap"}, SettlementAsset: "USDT",
 		InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", OrderRetentionDays: days(366),
 	}); err != nil || rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("创建时 366 天应被拒绝：%v %+v", err, rsp.GetRetInfo())
@@ -82,8 +82,8 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 	}
 
 	live, err := accounts.CreateTradingAccount(ctx, &tradepb.CreateTradingAccountReq{
-		Name: "实盘", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-		Markets:         []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT},
+		Name: "实盘", Exchange: "binance",
+		Markets:         []string{"spot"},
 		Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		SettlementAsset: "USDT",
 	})
@@ -102,7 +102,7 @@ func TestPaperOrderRetentionDaysRoundTrip(t *testing.T) {
 		for id, finished := range map[string]time.Time{"old": now.Add(-6 * 24 * time.Hour), "new": now.Add(-4 * 24 * time.Hour)} {
 			if err := tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", OrderID: id, TradingAccountID: second.GetTradingAccountId(), ClientOrderID: "client-" + id,
-				MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+				MarketType: "swap", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 				Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: id,
 				State: "CANCELED", Version: 1, FinishedAt: finished.UnixMilli(),
 			}); err != nil {

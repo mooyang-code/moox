@@ -34,8 +34,8 @@ func newTimelineFixture(t *testing.T) *timelineFixture {
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
 	seedAccounts(t, tradeStore, "",
-		accountSpec{id: "paper", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT", "SWAP"}, logical: "logical-paper"},
-		accountSpec{id: "live", exchange: "BINANCE", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT", "SWAP"}, logical: "logical-live"},
+		accountSpec{id: "paper", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot", "swap"}, logical: "logical-paper"},
+		accountSpec{id: "live", exchange: "binance", mode: "LIVE", environment: "PRODUCTION", markets: []string{"spot", "swap"}, logical: "logical-live"},
 	)
 	f := &timelineFixture{t: t, store: tradeStore, now: delistAt.Add(-72 * time.Hour)}
 	f.service = &Service{
@@ -86,7 +86,7 @@ func (f *timelineFixture) hold(logicals ...string) {
 func (f *timelineFixture) intake(id, scope string, at time.Time, occurred time.Time) IntakeResult {
 	f.t.Helper()
 	result, err := f.service.Intake(context.Background(), Event{
-		EventID: id, OccurredAt: occurred, Key: Key{Exchange: "binance", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"},
+		EventID: id, OccurredAt: occurred, Key: Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"},
 		Scope: scope, DelistAt: at, Source: "MANUAL",
 	})
 	require.NoError(f.t, err)
@@ -135,7 +135,7 @@ func TestIntakeCreatesRecordAndBlockOnce(t *testing.T) {
 	record := f.record(result.DelistID)
 	require.Equal(t, store.DelistActive, record.Status)
 	require.Equal(t, 0, record.PlannedRound)
-	require.Equal(t, "BINANCE", record.Exchange, "交易所统一大写")
+	require.Equal(t, "binance", record.Exchange, "交易所统一小写")
 	blocked := f.blocked()
 	require.Len(t, blocked, 1)
 	require.Equal(t, store.DelistScopePaperOnly, blocked[0].Scope)
@@ -204,9 +204,9 @@ func TestTimelinePlansLaunchesAndVerifies(t *testing.T) {
 	require.Equal(t, ActionID(id, 1, "space-1", "logical-live"), rows[0].ActionID, "操作号确定")
 	require.Len(t, f.launched, 2)
 	require.Equal(t, delistAt.UnixMilli(), f.launched[0].DeadlineAt)
-	require.Equal(t, "下架清仓：BINANCE SPOT FOOUSDT（下架记录 "+id+"，第 1 轮）", f.launched[0].Reason)
+	require.Equal(t, "下架清仓：binance spot FOOUSDT（下架记录 "+id+"，第 1 轮）", f.launched[0].Reason)
 	require.Equal(t, "FOO-USDT-SPOT", f.launched[0].InstrumentID)
-	require.Equal(t, "BINANCE", f.launched[0].Exchange)
+	require.Equal(t, "binance", f.launched[0].Exchange)
 
 	f.run(delistAt.Add(-23 * time.Hour))
 	require.Len(t, f.launched, 2, "动作在运行，不再发起")
@@ -228,7 +228,7 @@ func TestTimelinePlansLaunchesAndVerifies(t *testing.T) {
 	f.run(delistAt.Add(10 * time.Minute))
 	record := f.record(id)
 	require.Equal(t, store.DelistFailed, record.Status, "下架后仍有持有")
-	require.Contains(t, f.attention(), "BINANCE SPOT FOOUSDT 下架后核对仍有持有")
+	require.Contains(t, f.attention(), "binance spot FOOUSDT 下架后核对仍有持有")
 	f.now = delistAt.Add(25 * time.Hour)
 	require.Empty(t, f.attention(), "结束 24 小时后不再上报")
 	require.Len(t, f.blocked(), 1, "真实下架的名单行留着")
@@ -305,7 +305,7 @@ func TestTimelineBusyRowsRaiseAttentionAfterThirtyMinutes(t *testing.T) {
 	require.Len(t, f.launched, 1)
 	require.Empty(t, f.attention())
 	f.run(delistAt.Add(-90 * time.Minute))
-	require.Equal(t, []string{"BINANCE SPOT FOOUSDT 第 2 轮组合 logical-paper 30 分钟还没能发起清仓"}, f.attention())
+	require.Equal(t, []string{"binance spot FOOUSDT 第 2 轮组合 logical-paper 30 分钟还没能发起清仓"}, f.attention())
 	f.busy = false
 	f.run(delistAt.Add(-89 * time.Minute))
 	require.Len(t, f.launched, 2)
@@ -321,7 +321,7 @@ func TestTimelineRetriesFailedActionsWithTheSameID(t *testing.T) {
 	actionID := f.flattens(id)[0].ActionID
 	failedAt := delistAt.Add(-23 * time.Hour)
 	f.setAction("space-1", actionID, "FAILED", failedAt)
-	require.Equal(t, []string{"BINANCE SPOT FOOUSDT 第 1 轮组合 logical-paper 清仓失败"}, func() []string { f.now = failedAt; return f.attention() }())
+	require.Equal(t, []string{"binance spot FOOUSDT 第 1 轮组合 logical-paper 清仓失败"}, func() []string { f.now = failedAt; return f.attention() }())
 
 	f.run(failedAt.Add(9 * time.Minute))
 	require.Len(t, f.launched, 1)
@@ -339,7 +339,7 @@ func TestUnblockCancelsRecordsAndStopsTheTimeline(t *testing.T) {
 	f.hold("logical-paper")
 	real := f.intake("evt-real", store.DelistScopeAll, delistAt, f.now).DelistID
 	drill := f.intake("evt-drill", store.DelistScopePaperOnly, delistAt, f.now).DelistID
-	removed, err := f.service.Unblock(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"})
+	removed, err := f.service.Unblock(context.Background(), Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"})
 	require.NoError(t, err)
 	require.True(t, removed)
 	for _, id := range []string{real, drill} {
@@ -398,8 +398,8 @@ func TestIntakeNotesDetectedWhenHeld(t *testing.T) {
 	f.hold("logical-live")
 	f.intake("evt-1", store.DelistScopeAll, delistAt, f.now)
 	require.Contains(t, telemetry.Recent(telemetry.AttentionDelistDetected, f.now, time.Minute),
-		"BINANCE SPOT FOOUSDT 将于 2026-12-10 08:00 UTC 下架，有组合持有")
-	telemetry.Forget(telemetry.AttentionDelistDetected, "BINANCE SPOT FOOUSDT 将于 2026-12-10 08:00 UTC 下架，有组合持有")
+		"binance spot FOOUSDT 将于 2026-12-10 08:00 UTC 下架，有组合持有")
+	telemetry.Forget(telemetry.AttentionDelistDetected, "binance spot FOOUSDT 将于 2026-12-10 08:00 UTC 下架，有组合持有")
 }
 
 func TestHoldersFailureLeavesTheRecordForTheNextRun(t *testing.T) {

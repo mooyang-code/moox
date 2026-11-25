@@ -7,8 +7,6 @@ export interface ExchangeSecretOption {
   name: string;
 }
 
-const providers: Record<number, string> = { 1: "binance", 2: "okx" };
-
 /**
  * 密钥管理里启用的交易所密钥，按交易所筛选；这里只选名称，不接触密钥原文。
  * 只读密钥不能建执行账户，直接排除；给了环境（1 测试网、2 生产环境）时，再排除密钥 ID 环境段明确是另一个环境的
@@ -16,7 +14,8 @@ const providers: Record<number, string> = { 1: "binance", 2: "okx" };
  */
 export async function loadExchangeSecrets(exchange: Exchange, environment?: 1 | 2): Promise<ExchangeSecretOption[]> {
   const rsp = await listSecrets({ category: "exchange", status: "active", offset: 0, limit: 200 });
-  const provider = providers[exchange];
+  // 密钥的提供方就是 Trade 的交易所写法（binance、okx）
+  const provider = exchange;
   return (rsp.secrets || [])
     .filter(item => item.secret_id && (!item.provider || item.provider.toLowerCase() === provider))
     .filter(item => !isReadonlySecret(item.extra_config))

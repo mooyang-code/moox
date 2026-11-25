@@ -26,9 +26,9 @@ func TestLogicalAccountTargetWeightRequiresModernIdentity(t *testing.T) {
 		{name: "valid until", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.ValidUntil = 0 }},
 		{name: "market missing", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "" }},
 		{name: "market unknown", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "FUTURES" }},
-		{name: "market lowercase", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "spot" }},
+		{name: "market uppercase", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "SPOT" }},
 		{name: "duplicate instrument and market", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) {
-			value.Targets = append(value.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "BTC-USDT", TargetWeight: "0.1", MarketType: "SPOT"})
+			value.Targets = append(value.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "BTC-USDT", TargetWeight: "0.1", MarketType: "spot"})
 		}},
 	}
 	registry, err := DefaultRegistry()
@@ -119,7 +119,7 @@ func validLogicalAccountTargetWeight() *tradeeventpb.LogicalAccountTargetWeightR
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT",
 			TargetWeight: "1.25",
-			MarketType:   "SPOT",
+			MarketType:   "spot",
 		}},
 	}
 }
@@ -129,7 +129,7 @@ func TestLogicalAccountTargetWeightAllowsSameInstrumentInSpotAndSwap(t *testing.
 	require.NoError(t, err)
 	payload := validLogicalAccountTargetWeight()
 	payload.Targets = append(payload.Targets, &tradeeventpb.InstrumentWeightTarget{
-		InstrumentId: "BTC-USDT", TargetWeight: "-0.5", MarketType: "SWAP",
+		InstrumentId: "BTC-USDT", TargetWeight: "-0.5", MarketType: "swap",
 	})
 	_, err = registry.Encode(
 		LogicalAccountTargetWeightRequested,

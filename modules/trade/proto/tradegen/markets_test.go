@@ -3,16 +3,16 @@ package tradepb
 import "testing"
 
 func TestCreateTradingAccountRequiresValidDistinctMarkets(t *testing.T) {
-	base := func(markets ...MarketType) *CreateTradingAccountReq {
+	base := func(markets ...string) *CreateTradingAccountReq {
 		return &CreateTradingAccountReq{
-			Name: "live", Exchange: Exchange_EXCHANGE_BINANCE, Markets: markets,
+			Name: "live", Exchange: "binance", Markets: markets,
 			Live: &LiveConfig{Environment: AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		}
 	}
 	for name, req := range map[string]*CreateTradingAccountReq{
-		"现货":    base(MarketType_MARKET_TYPE_SPOT),
-		"现货加合约": base(MarketType_MARKET_TYPE_SPOT, MarketType_MARKET_TYPE_SWAP),
-		"合约加现货": base(MarketType_MARKET_TYPE_SWAP, MarketType_MARKET_TYPE_SPOT),
+		"现货":    base("spot"),
+		"现货加合约": base("spot", "swap"),
+		"合约加现货": base("swap", "spot"),
 	} {
 		if err := req.Validate(); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -20,9 +20,9 @@ func TestCreateTradingAccountRequiresValidDistinctMarkets(t *testing.T) {
 	}
 	for name, req := range map[string]*CreateTradingAccountReq{
 		"没有市场": base(),
-		"未指定":  base(MarketType_MARKET_TYPE_UNSPECIFIED),
-		"重复":   base(MarketType_MARKET_TYPE_SWAP, MarketType_MARKET_TYPE_SWAP),
-		"越界":   base(MarketType(99)),
+		"未指定":  base(""),
+		"重复":   base("swap", "swap"),
+		"越界":   base("stock"),
 	} {
 		if err := req.Validate(); err == nil {
 			t.Errorf("%s: 应被拒绝", name)
@@ -31,13 +31,13 @@ func TestCreateTradingAccountRequiresValidDistinctMarkets(t *testing.T) {
 }
 
 func TestCreatePaperSimulationMarginRulesFollowSwapInMarkets(t *testing.T) {
-	paper := func(margin, settlement string, markets ...MarketType) *CreatePaperSimulationReq {
+	paper := func(margin, settlement string, markets ...string) *CreatePaperSimulationReq {
 		return &CreatePaperSimulationReq{
-			AccountName: "paper", Exchange: Exchange_EXCHANGE_BINANCE, Markets: markets, SettlementAsset: settlement,
+			AccountName: "paper", Exchange: "binance", Markets: markets, SettlementAsset: settlement,
 			MarginMode: margin, InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
 		}
 	}
-	swap, spot := MarketType_MARKET_TYPE_SWAP, MarketType_MARKET_TYPE_SPOT
+	swap, spot := "swap", "spot"
 	if err := paper("", "USDT", spot, swap).Validate(); err != nil {
 		t.Fatalf("现货加合约、USDT 结算应合法：%v", err)
 	}
@@ -59,7 +59,7 @@ func TestCreatePaperSimulationMarginRulesFollowSwapInMarkets(t *testing.T) {
 func TestCreatePaperSimulationJoinExistingLogicalAccount(t *testing.T) {
 	req := func(id, name string, priority int32) *CreatePaperSimulationReq {
 		return &CreatePaperSimulationReq{
-			AccountName: "paper", Exchange: Exchange_EXCHANGE_BINANCE, Markets: []MarketType{MarketType_MARKET_TYPE_SPOT},
+			AccountName: "paper", Exchange: "binance", Markets: []string{"spot"},
 			SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
 			LogicalAccountId: id, LogicalAccountName: name, Priority: priority,
 		}
@@ -75,5 +75,38 @@ func TestCreatePaperSimulationJoinExistingLogicalAccount(t *testing.T) {
 	}
 	if err := req("la-1", "", -1).Validate(); err == nil {
 		t.Error("负的优先级应被拒绝")
+	}
+}
+
+// 交易所与市场只收小写：大写或旧枚举名都被拒；列表过滤的空串表示不过滤。
+func TestExchangeAndMarketAreLowercaseWhitelists(t *testing.T) {
+	for _, value := range []string{"binance", "okx", "ashare", "hkex"} {
+		if !validExchange(value) {
+			t.Errorf("交易所 %q 应被接受", value)
+		}
+	}
+	for _, value := range []string{"", "BINANCE", "Okx", "nyse"} {
+		if validExchange(value) {
+			t.Errorf("交易所 %q 应被拒绝", value)
+		}
+	}
+	for _, value := range []string{"spot", "swap", "equity"} {
+		if !validMarketType(value) {
+			t.Errorf("市场 %q 应被接受", value)
+		}
+	}
+	for _, value := range []string{"SPOT", "Swap", "stock"} {
+		if validMarketType(value) {
+			t.Errorf("市场 %q 应被拒绝", value)
+		}
+	}
+	if err := (&ListTradingAccountsReq{}).Validate(); err != nil {
+		t.Errorf("不过滤时应通过：%v", err)
+	}
+	if err := (&ListTradingAccountsReq{Exchange: "okx", MarketType: "swap"}).Validate(); err != nil {
+		t.Errorf("小写过滤应通过：%v", err)
+	}
+	if err := (&ListTradingAccountsReq{MarketType: "SWAP"}).Validate(); err == nil {
+		t.Error("大写市场应被拒绝")
 	}
 }

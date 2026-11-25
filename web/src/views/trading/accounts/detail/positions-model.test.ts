@@ -12,7 +12,7 @@ import {
 } from "./positions-model";
 
 const swap = (instrument_id: string, signed_quantity: string, mark_price = "") =>
-  ({ instrument_id, signed_quantity, mark_price, market_type: 2 }) as Position;
+  ({ instrument_id, signed_quantity, mark_price, market_type: "swap" }) as Position;
 const spot = (asset: string, quantity: string, instrument_id = `${asset}-USDT-SPOT`) =>
   ({ asset, quantity, instrument_id }) as Holding;
 /** 后端给的一条结论：0 未知、1 还会下单、2 已到位、3 低于最小下单额、4 市场规则顺延、5 不足一手、6 没有成员能下单 */
@@ -265,9 +265,9 @@ describe("持仓与目标按币合并", () => {
     });
     expect(rowOrderHints(row, "USDT")).toEqual([
       // 现货多了 0.5：卖出 0.5
-      { market: 1, instrumentId: "BTC-USDT-SPOT", side: 2, quantity: "0.5" },
+      { market: "spot", instrumentId: "BTC-USDT-SPOT", side: 2, quantity: "0.5" },
       // 永续目标 -1 实际 -0.4：还差 -0.6，卖出 0.6
-      { market: 2, instrumentId: "BTC-USDT-SWAP", side: 2, quantity: "0.6" }
+      { market: "swap", instrumentId: "BTC-USDT-SWAP", side: 2, quantity: "0.6" }
     ]);
   });
 
@@ -285,8 +285,8 @@ describe("持仓与目标按币合并", () => {
       hasTarget: true
     });
     expect(rowOrderHints(row, "USDT")).toEqual([
-      { market: 1, instrumentId: "BTC-USDT-SPOT", side: 2, quantity: "23456.68912345" },
-      { market: 2, instrumentId: "BTC-USDT-SWAP", side: 2, quantity: "123456.68912346" }
+      { market: "spot", instrumentId: "BTC-USDT-SPOT", side: 2, quantity: "23456.68912345" },
+      { market: "swap", instrumentId: "BTC-USDT-SWAP", side: 2, quantity: "123456.68912346" }
     ]);
   });
 
@@ -308,7 +308,7 @@ describe("持仓与目标按币合并", () => {
       converged: false,
       hasTarget: true
     });
-    expect(rowOrderHints(hold, "USDT")).toEqual([{ market: 2, instrumentId: "ETH-USDT-SWAP" }]);
+    expect(rowOrderHints(hold, "USDT")).toEqual([{ market: "swap", instrumentId: "ETH-USDT-SWAP" }]);
     const [buy] = buildCoinRows({
       targets: [{ instrument_id: "SOL-USDT-SWAP", quantity: "10" }],
       blocked: [],
@@ -318,7 +318,7 @@ describe("持仓与目标按币合并", () => {
       converged: false,
       hasTarget: true
     });
-    expect(rowOrderHints(buy, "USDT")).toEqual([{ market: 2, instrumentId: "SOL-USDT-SWAP", side: 1, quantity: "10" }]);
+    expect(rowOrderHints(buy, "USDT")).toEqual([{ market: "swap", instrumentId: "SOL-USDT-SWAP", side: 1, quantity: "10" }]);
   });
 
   it("行内下单默认选这个市场持仓最大的候选账户；都没有持仓时交给调用方按原来的选法", () => {
@@ -339,11 +339,11 @@ describe("持仓与目标按币合并", () => {
     });
     expect(row.memberSwap).toEqual({ A: 0.5, B: -2 });
     // 永续仓位主要在 B 上：平仓差额要下在 B
-    expect(largestHolder(row, 2, ["A", "B"])).toBe("B");
+    expect(largestHolder(row, "swap", ["A", "B"])).toBe("B");
     // B 停用或没开通永续（不在候选里）时不选它
-    expect(largestHolder(row, 2, ["A", "C"])).toBe("A");
+    expect(largestHolder(row, "swap", ["A", "C"])).toBe("A");
     // 现货没有任何持仓
-    expect(largestHolder(row, 1, ["A", "B"])).toBeUndefined();
+    expect(largestHolder(row, "spot", ["A", "B"])).toBeUndefined();
   });
 
   it("现货、股票按执行账户分开记数量，持仓一样大时取靠前的候选", () => {
@@ -360,7 +360,7 @@ describe("持仓与目标按币合并", () => {
       hasTarget: true
     });
     expect(row.memberSpot).toEqual({ A: 100, B: 100 });
-    expect(largestHolder(row, 3, ["A", "B"])).toBe("A");
+    expect(largestHolder(row, "equity", ["A", "B"])).toBe("A");
   });
 
   it("目标个数按币算，同一个币的现货、永续目标算一个", () => {
@@ -388,7 +388,7 @@ describe("A 股持仓", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ coin: "600519.XSHG", stock: true, actualSpot: 300, sellable: 100, state: "ok" });
     expect(rows[0].deferredReason).toBe("当日买入，次日可卖");
-    expect(rowOrderHints(rows[0], "CNY")).toEqual([{ market: 3, instrumentId: "600519.XSHG", side: 2, quantity: "300" }]);
+    expect(rowOrderHints(rows[0], "CNY")).toEqual([{ market: "equity", instrumentId: "600519.XSHG", side: 2, quantity: "300" }]);
   });
 
   it("股票的结论记在现货一列：不足一手算到位并写明原因；停牌已经在顺延里的不重复写", () => {
@@ -425,7 +425,7 @@ describe("市值、开仓均价、未实现盈亏", () => {
       entry_price,
       mark_price: "2000",
       unrealized_pnl,
-      market_type: 2
+      market_type: "swap"
     }) as Position;
 
   it("市值按标记价取绝对值，均价按持仓数量加权，未实现盈亏相加", () => {

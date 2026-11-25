@@ -99,20 +99,20 @@ func openOKXReplayStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "replay", Exchange: "OKX", Markets: []string{"SPOT"},
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "replay", Exchange: "okx", Markets: []string{"spot"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION", CredentialSecretID: "unused", SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "OKX", MarketType: "SPOT", ExchangeSymbol: "BTC-USDT", InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
+			Exchange: "okx", MarketType: "spot", ExchangeSymbol: "BTC-USDT", InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 		}); err != nil {
 			return err
 		}
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "account-1", ClientOrderID: "cid", ExchangeOrderID: "42",
-			Exchange: "OKX", MarketType: "SPOT", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", Quantity: "2",
+			Exchange: "okx", MarketType: "spot", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", Quantity: "2",
 			ReferencePrice: "100", ReferencePriceAt: 1700000000000, OwnerType: "EXTERNAL", OwnerID: "42", State: "OPEN", ReservedAsset: "USDT",
 			ReservedQuantity: "200", RemainingReservedQuantity: "200", Version: 1,
 		})

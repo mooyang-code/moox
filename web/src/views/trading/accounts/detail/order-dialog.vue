@@ -261,7 +261,7 @@ async function submitManual() {
   }
   if (!pendingSubmission.value) {
     const limitPrice = manualForm.order_type === 2 ? manualForm.limit_price : undefined;
-    const oddLotSell = marketOfInstrument(manualForm.instrument_id.trim()) === 3 && manualForm.side === 2;
+    const oddLotSell = marketOfInstrument(manualForm.instrument_id.trim()) === "equity" && manualForm.side === 2;
     const ruleError = orderRuleError(manualForm.quantity, limitPrice, selectedInstrument.value, oddLotSell);
     if (ruleError) {
       Message.warning(ruleError);
@@ -282,7 +282,7 @@ async function submitManual() {
       instrument_id: instrumentId,
       market_type: market,
       // 只有永续有持仓方向，现货不传
-      position_side: market === 2 ? 1 : undefined,
+      position_side: market === "swap" ? 1 : undefined,
       quantity: manualForm.quantity.trim(),
       fill_policy: manualForm.order_type === 1 ? 0 : manualForm.fill_policy,
       limit_price: manualForm.order_type === 2 ? manualForm.limit_price.trim() : undefined,

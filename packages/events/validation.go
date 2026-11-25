@@ -272,7 +272,7 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 		}
 		marketType := target.GetMarketType()
 		if !validTargetMarketType(marketType) {
-			return fmt.Errorf("trade target weight %d market_type %q must be SPOT, SWAP or STOCK", i, marketType)
+			return fmt.Errorf("trade target weight %d market_type %q must be spot, swap or equity", i, marketType)
 		}
 		key := instrumentKey{instrumentID: instrumentID, marketType: marketType}
 		if _, exists := seenInstruments[key]; exists {
@@ -306,7 +306,7 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 
 // validTargetMarketType 判断目标里的市场是否是 Trade 认识的三种市场之一。
 func validTargetMarketType(value string) bool {
-	return value == "SPOT" || value == "SWAP" || value == "STOCK"
+	return value == "spot" || value == "swap" || value == "equity"
 }
 
 func validateSeriesTag(value string) error {

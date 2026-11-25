@@ -602,8 +602,8 @@ func TestTargetExecutorRecordsBelowMinimumBlockedTarget(t *testing.T) {
 
 func TestTargetExecutorRecordsBelowMinimumNotionalAsBlocked(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
-	fixture.setMinNotional(t, "BINANCE", "BTCUSDT", "10")
-	fixture.setMinNotional(t, "OKX", "BTC-USDT-SWAP", "10")
+	fixture.setMinNotional(t, "binance", "BTCUSDT", "10")
+	fixture.setMinNotional(t, "okx", "BTC-USDT-SWAP", "10")
 	fixture.target(t, []store.InstrumentTarget{{
 		InstrumentID: "BTC-USDT-SWAP", Quantity: "0.001",
 	}})
@@ -693,7 +693,7 @@ func TestTargetExecutorWaitsWithoutCancelWhenExposureBecomesUnmapped(t *testing.
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "current-child",
 		TradingAccountID: "account-a", ClientOrderID: "current-child",
-		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+		Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "1",
 		ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
@@ -737,7 +737,7 @@ func TestTargetExecutorSellsManagedAssetAndKeepsUnmanaged(t *testing.T) {
 	fixture.setBalance(t, "account-a", "BNB", "7")
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "2", FilledQuantity: "2", ReferencePrice: "100",
 		State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
 	})
@@ -755,7 +755,7 @@ func TestTargetExecutorSellsManagedAssetAndKeepsUnmanaged(t *testing.T) {
 func TestTargetExecutorFullCloseIgnoresMinimumNotional(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "0.001")
-	fixture.setMinNotional(t, "BINANCE", "BTCUSDT", "10")
+	fixture.setMinNotional(t, "binance", "BTCUSDT", "10")
 	fixture.target(t, nil)
 
 	result, err := fixture.executor().Converge(
@@ -771,8 +771,8 @@ func TestTargetExecutorFullCloseIgnoresMinimumNotional(t *testing.T) {
 func TestTargetExecutorPartialReductionBelowNotionalIsDust(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "0.002")
-	fixture.setMinNotional(t, "BINANCE", "BTCUSDT", "10")
-	fixture.setMinNotional(t, "OKX", "BTC-USDT-SWAP", "10")
+	fixture.setMinNotional(t, "binance", "BTCUSDT", "10")
+	fixture.setMinNotional(t, "okx", "BTC-USDT-SWAP", "10")
 	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.001"}})
 
 	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
@@ -785,7 +785,7 @@ func TestTargetExecutorPartialReductionBelowNotionalIsDust(t *testing.T) {
 // 步长 0.001 和 0.01 的两个成员：剩余 0.005 粗步长成员下不了，由细步长成员承接。
 func TestTargetExecutorTriesMemberWithFinerStep(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
-	fixture.setQuantityRule(t, "BINANCE", "BTCUSDT", "10", "1")
+	fixture.setQuantityRule(t, "binance", "BTCUSDT", "10", "1")
 	fixture.position(t, "account-a", "BTCUSDT", "0.05")
 	fixture.position(t, "account-b", "BTC-USDT-SWAP", "0.005")
 	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.05"}})
@@ -815,7 +815,7 @@ func TestTargetExecutorRoundedRemainderOnBothMembersIsConverged(t *testing.T) {
 func TestTargetExecutorRejectedMemberIsNotDust(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "0.05")
-	fixture.setQuantityRule(t, "OKX", "BTC-USDT-SWAP", "100", "100")
+	fixture.setQuantityRule(t, "okx", "BTC-USDT-SWAP", "100", "100")
 	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.06"}})
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child",
@@ -854,7 +854,7 @@ func TestTargetExecutorReducesBeforeAddingAcrossInstruments(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "ZECUSDT", InstrumentID: "ZEC-USDT-SWAP",
+			Exchange: "binance", MarketType: "swap", ExchangeSymbol: "ZECUSDT", InstrumentID: "ZEC-USDT-SWAP",
 			BaseAsset: "ZEC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "1",
 			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING", Linear: true,
 			ContractValue: "0.001", ContractValueAsset: "ZEC",
@@ -905,8 +905,8 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		for _, account := range []store.TradingAccountRecord{
-			fixture.account("account-a", "BINANCE"),
-			fixture.account("account-b", "OKX"),
+			fixture.account("account-a", "binance"),
+			fixture.account("account-b", "okx"),
 		} {
 			if err := tx.CreateTradingAccount(account); err != nil {
 				return err
@@ -968,15 +968,15 @@ func (f *targetFixture) account(
 func (f *targetFixture) instruments() []store.InstrumentRecord {
 	values := []store.InstrumentRecord{
 		{
-			Exchange: "BINANCE", MarketType: string(f.market), ExchangeSymbol: "BTCUSDT",
-			InstrumentID: "BTC-USDT-" + string(f.market),
+			Exchange: "binance", MarketType: string(f.market), ExchangeSymbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(f.market),
 			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
 			PriceTick: "0.1", Status: "TRADING",
 		},
 		{
-			Exchange: "OKX", MarketType: string(f.market), ExchangeSymbol: "BTC-USDT-SWAP",
-			InstrumentID: "BTC-USDT-" + string(f.market),
+			Exchange: "okx", MarketType: string(f.market), ExchangeSymbol: "BTC-USDT-SWAP",
+			InstrumentID: "BTC-USDT-" + exchange.InstrumentSuffix(f.market),
 			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
 			PriceTick: "0.1", Status: "TRADING",

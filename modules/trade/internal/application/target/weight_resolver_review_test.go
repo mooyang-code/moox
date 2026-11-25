@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -13,11 +14,11 @@ import (
 func addInstrument(t *testing.T, tradeStore *store.Store, market, base string) {
 	t.Helper()
 	record := store.InstrumentRecord{
-		Exchange: "BINANCE", MarketType: market, ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-" + market,
+		Exchange: "binance", MarketType: market, ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-" + exchange.InstrumentSuffix(market),
 		BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 	}
-	if market == "SWAP" {
+	if market == "swap" {
 		record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", base
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpsertInstrument(record) }))
@@ -31,11 +32,11 @@ func newMixedResolver(t *testing.T, settings string) (*WeightResolver, *store.St
 // 排除资产按标的表里的基础资产判断：底仓是 PEPE 时，1000PEPE 是另一个资产，不被排除。
 func TestExcludedAssetUsesInstrumentBaseAssetNotNamePrefix(t *testing.T) {
 	resolver, tradeStore := newMixedResolver(t, `{"arbitrage_base_assets":["PEPE"]}`)
-	addInstrument(t, tradeStore, "SPOT", "PEPE")
-	addInstrument(t, tradeStore, "SWAP", "1000PEPE")
+	addInstrument(t, tradeStore, "spot", "PEPE")
+	addInstrument(t, tradeStore, "swap", "1000PEPE")
 
 	conversion, err := resolver.Resolve(context.Background(), mixedRequest(
-		weightTarget("PEPE-USDT-SPOT", "SPOT", "0.1"), weightTarget("1000PEPE-USDT-SWAP", "SWAP", "0.1"),
+		weightTarget("PEPE-USDT-SPOT", "spot", "0.1"), weightTarget("1000PEPE-USDT-SWAP", "swap", "0.1"),
 	), "space-1")
 
 	require.NoError(t, err)
@@ -58,7 +59,7 @@ func TestBNBReserveIsNotDeductedWithoutSpotBNBInstrument(t *testing.T) {
 	resolver, tradeStore := newMixedResolver(t, `{"bnb_reserve_amount":"500"}`)
 	require.NoError(t, tradeStore.DBForTest().Exec(`DELETE FROM t_trade_instruments WHERE c_instrument_id = 'BNB-USDT-SPOT'`).Error)
 
-	conversion, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SWAP", "SWAP", "0.5")), "space-1")
+	conversion, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SWAP", "swap", "0.5")), "space-1")
 
 	require.NoError(t, err)
 	require.Equal(t, "2000", conversion.Equity.String())
@@ -70,7 +71,7 @@ func TestBNBMarketValueRequiresFreshPrice(t *testing.T) {
 	resolver.Prices = targetPriceStub{price: shared.MustDecimal("100")}
 	resolver.Now = func() time.Time { return time.UnixMilli(2000).Add(time.Hour) } // 报价停在 2000，早已过期
 
-	_, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
+	_, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "spot", "0.5")), "space-1")
 
 	require.Error(t, err)
 }

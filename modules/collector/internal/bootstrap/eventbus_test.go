@@ -43,7 +43,7 @@ func TestDelistAutoDetectOffKeepsManualRegistration(t *testing.T) {
 	require.Empty(t, process.beforeClose, "没有建出口 HTTP 客户端")
 
 	rsp, err := svc.RegisterDelistNotice(context.Background(), &pb.RegisterDelistNoticeReq{
-		Exchange: "binance", Market: "SPOT", ExchangeSymbol: "FOOUSDT", DelistAtMs: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC).UnixMilli(),
+		Exchange: "binance", Market: "spot", ExchangeSymbol: "FOOUSDT", DelistAtMs: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC).UnixMilli(),
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())

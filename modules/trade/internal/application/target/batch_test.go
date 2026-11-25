@@ -15,12 +15,12 @@ func (f *targetFixture) addETH(t *testing.T) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		for _, instrument := range f.instruments() {
-			instrument.InstrumentID = "ETH-USDT-" + string(f.market)
+			instrument.InstrumentID = "ETH-USDT-" + exchange.InstrumentSuffix(f.market)
 			instrument.BaseAsset = "ETH"
 			if instrument.ContractValueAsset != "" {
 				instrument.ContractValueAsset = "ETH"
 			}
-			if instrument.Exchange == "BINANCE" {
+			if instrument.Exchange == "binance" {
 				instrument.ExchangeSymbol = "ETHUSDT"
 			} else {
 				instrument.ExchangeSymbol = "ETH-USDT-SWAP"

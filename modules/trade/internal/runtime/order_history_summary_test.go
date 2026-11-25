@@ -78,7 +78,7 @@ func TestInstrumentSummaryMatchesFillHistoryAndSurvivesPruning(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		for _, base := range []string{"BTC", "ETH"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
+				Exchange: "binance", MarketType: "spot", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
 				BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT",
 				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 			}); err != nil {
@@ -87,7 +87,7 @@ func TestInstrumentSummaryMatchesFillHistoryAndSurvivesPruning(t *testing.T) {
 		}
 		for id, fills := range accounts {
 			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-				SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "BINANCE", Markets: []string{"SPOT"},
+				SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "binance", Markets: []string{"spot"},
 				ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 			}); err != nil {
 				return err
@@ -121,7 +121,7 @@ func TestInstrumentSummaryMatchesFillHistoryAndSurvivesPruning(t *testing.T) {
 				if err := tx.CreateOrder(store.OrderRecord{
 					LogicalAccountID: "logical-" + id, InstanceID: instanceID,
 					SpaceID: "space-1", OrderID: orderID, TradingAccountID: id, ClientOrderID: "client-" + orderID,
-					Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: fill.base + "-USDT-SPOT", ExchangeSymbol: fill.base + "USDT",
+					Exchange: "binance", MarketType: "spot", InstrumentID: fill.base + "-USDT-SPOT", ExchangeSymbol: fill.base + "USDT",
 					OrderType: "MARKET", Side: fill.side, Quantity: fill.quantity, ReferencePrice: fill.price,
 					OwnerType: fill.owner, OwnerID: ownerID, State: "FILLED", Version: 1, FinishedAt: old.Add(time.Duration(i) * time.Minute).UnixMilli(),
 				}); err != nil {
@@ -170,7 +170,7 @@ func TestInstrumentSummaryMatchesFillHistoryAndSurvivesPruning(t *testing.T) {
 		before[id] = current
 		// 改前改后一致：均价与按全部成交重放的结果相同，最近成交价是最晚一笔成交的价格。
 		for _, base := range []string{"BTC", "ETH"} {
-			fills, _, err := tradeStore.ListFills(ctx, "space-1", store.FillQuery{TradingAccountID: id, Market: "SPOT", ExchangeSymbol: base + "USDT", Limit: 100})
+			fills, _, err := tradeStore.ListFills(ctx, "space-1", store.FillQuery{TradingAccountID: id, Market: "spot", ExchangeSymbol: base + "USDT", Limit: 100})
 			require.NoError(t, err)
 			require.NotEmpty(t, fills)
 			summary := current.summaries[base]

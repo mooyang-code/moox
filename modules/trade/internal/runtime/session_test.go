@@ -410,7 +410,7 @@ func seedRuntimeAccount(
 	t.Helper()
 	account := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-		Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE",
+		Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "LIVE",
 		Environment:        "TESTNET",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		MarginMode: "CROSS", Status: "ENABLED",
@@ -549,7 +549,7 @@ func TestExchangeSessionStartsWithDelistedInstrumentOrder(t *testing.T) {
 	limit := "1"
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: "DEAD-USDT",
+			Exchange: "binance", Environment: "TESTNET", MarketType: "swap", ExchangeSymbol: "DEAD-USDT",
 			InstrumentID: "DEADUSDT", BaseAsset: "DEAD", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "1",
 			ContractValueAsset: "DEAD", ExchangeQuantityStep: "1",
@@ -570,7 +570,7 @@ func TestExchangeSessionStartsWithDelistedInstrumentOrder(t *testing.T) {
 		}
 		if err := tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "gone-open", TradingAccountID: "account-1", ClientOrderID: "gone-open-client",
-			ExchangeOrderID: "7", MarketType: "SWAP", ExchangeSymbol: "DEAD-USDT", OrderType: "LIMIT",
+			ExchangeOrderID: "7", MarketType: "swap", ExchangeSymbol: "DEAD-USDT", OrderType: "LIMIT",
 			TimeInForce: "GTC", Side: "SELL", PositionSide: "NET", Quantity: "2", LimitPrice: &limit,
 			ReferencePrice: "1", ReferencePriceAt: 1_000, ReduceOnly: true, OwnerType: "OPERATOR", OwnerID: "delist-1",
 			LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0", ReservedAsset: "USDT",
@@ -579,7 +579,7 @@ func TestExchangeSessionStartsWithDelistedInstrumentOrder(t *testing.T) {
 			return err
 		}
 		return tx.UpdateTradingAccountFacts(
-			"space-1", "account-1", store.FillCursors{"SWAP:DEAD-USDT": "41"}, account.Snapshot, 1, 1,
+			"space-1", "account-1", store.FillCursors{"swap:DEAD-USDT": "41"}, account.Snapshot, 1, 1,
 		)
 	}))
 	adapter := goneFillsSessionAdapter{&scriptedSessionAdapter{disconnect: make(chan error, 1)}}
@@ -628,7 +628,7 @@ func TestExchangeSessionStartsWithDelistedInstrumentOrder(t *testing.T) {
 	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, stored.Ready, "缺口收掉后账户要就绪：%s", stored.LastError)
-	require.Equal(t, "41", stored.FillCursors["SWAP:DEAD-USDT"], "下架标的的成交游标原样保留")
+	require.Equal(t, "41", stored.FillCursors["swap:DEAD-USDT"], "下架标的的成交游标原样保留")
 	gaps, err = tradeStore.CountOrdersWithFillGap(context.Background(), "space-1", "account-1")
 	require.NoError(t, err)
 	require.Zero(t, gaps)

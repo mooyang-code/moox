@@ -15,10 +15,10 @@ export interface PageResult {
   has_more?: boolean;
 }
 
-/** 1 币安、2 OKX、3 A 股、4 港股 */
-export type Exchange = 0 | 1 | 2 | 3 | 4;
-/** 1 现货、2 永续、3 股票 */
-export type MarketType = 0 | 1 | 2 | 3;
+/** 交易所：binance 币安、okx OKX、ashare A 股、hkex 港股（接口里的小写文本） */
+export type Exchange = "binance" | "okx" | "ashare" | "hkex";
+/** 市场：spot 现货、swap 永续、equity 股票（接口里的小写文本） */
+export type MarketType = "spot" | "swap" | "equity";
 export type ExecutionMode = 0 | 1 | 2;
 export type ControlMode = 0 | 1 | 2;
 export type AccountEnvironment = 0 | 1 | 2;

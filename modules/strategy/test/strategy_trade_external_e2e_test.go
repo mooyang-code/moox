@@ -161,7 +161,7 @@ func requireTradeAccountReady(ctx context.Context, endpoint, space, account stri
 		return err
 	}
 	logical := result.GetLogicalAccount()
-	if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY || !slices.Contains(logical.GetMarkets(), tradepb.MarketType_MARKET_TYPE_SPOT) {
+	if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY || !slices.Contains(logical.GetMarkets(), "spot") {
 		return fmt.Errorf("Trade 组合账户 %s 不是由策略控制、可交易现货的自动执行组合：%s", account, body)
 	}
 	return nil

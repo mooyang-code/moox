@@ -44,7 +44,7 @@ func shadowSessionDelivery(t *testing.T, now time.Time, targetID, sessionID stri
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: targetID, InstanceId: "runner-1", SessionId: sessionID, SessionStartedAt: testSessionStartedAt(sessionID), StrategyId: "strategy-1", LogicalAccountId: "logical-1",
-		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
+		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 		BarEndTime: barEnd.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 		Shadow: true,
 	}, events.PublishOptions{EventID: targetID, OccurredAt: barEnd, SpaceID: "space-1", SubjectID: "logical-1"})

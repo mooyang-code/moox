@@ -24,7 +24,7 @@ func TestAShareFee(t *testing.T) {
 			t.Fatalf("AShareFee(%s, %s) = %s，期望 %s", tc.side, tc.notional, got, tc.want)
 		}
 	}
-	if got := RuleAt(ExchangeAShare, MarketTypeStock).BuyCost(shared.MustDecimal("1000"), rate).String(); got != "1005.01" {
+	if got := RuleAt(ExchangeAShare, MarketTypeEquity).BuyCost(shared.MustDecimal("1000"), rate).String(); got != "1005.01" {
 		t.Fatalf("A 股买入花费 = %s", got)
 	}
 }
@@ -38,7 +38,7 @@ func TestT1SinceIsBeijingMidnight(t *testing.T) {
 }
 
 func TestStockRuleHasNoMinimumNotional(t *testing.T) {
-	instrument := Instrument{MarketType: MarketTypeStock, MinExchangeQuantity: shared.MustDecimal("100")}
+	instrument := Instrument{MarketType: MarketTypeEquity, MinExchangeQuantity: shared.MustDecimal("100")}
 	if !instrument.MinNotionalAt(shared.MustDecimal("10")).IsZero() {
 		t.Fatal("A 股没有最小名义金额，零股卖单不能被挡")
 	}

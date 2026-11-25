@@ -49,7 +49,7 @@ func TestPaperSimulationControlModeRPC(t *testing.T) {
 			s := openRPCStore(t)
 			h := &ConsoleServer{Store: s, LogicalAccountServer: &LogicalAccountServer{Store: s, LogicalAccounts: &logicalapp.Service{Store: s}}, Paper: &papersimulation.Service{Store: s}}
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-			rsp, err := h.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "paper", LogicalAccountName: "logical", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT}, SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: mode})
+			rsp, err := h.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "paper", LogicalAccountName: "logical", Exchange: "binance", Markets: []string{"spot"}, SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: mode})
 			require.NoError(t, err)
 			if mode == 99 {
 				require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())

@@ -7,12 +7,8 @@ import (
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
 
-func delistKey(exchange tradepb.Exchange, market tradepb.MarketType, symbol string) delistapp.Key {
-	return delistapp.Key{
-		Exchange:       string(exchangeFromPB(exchange)),
-		MarketType:     string(marketFromPB(market)),
-		ExchangeSymbol: symbol,
-	}
+func delistKey(exchange, market, symbol string) delistapp.Key {
+	return delistapp.Key{Exchange: exchange, MarketType: market, ExchangeSymbol: symbol}
 }
 
 // UnblockInstrument 解除禁止，并取消这个标的进行中的下架处理（含演练）。全局方法，不检查空间。
@@ -39,7 +35,7 @@ func (s *ConsoleServer) ListBlockedInstruments(ctx context.Context, req *tradepb
 	rsp := &tradepb.ListBlockedInstrumentsRsp{RetInfo: success(), Instruments: make([]*tradepb.BlockedInstrument, 0, len(records))}
 	for _, record := range records {
 		rsp.Instruments = append(rsp.Instruments, &tradepb.BlockedInstrument{
-			Exchange: exchangeToPB(record.Exchange), MarketType: marketToPB(record.MarketType), ExchangeSymbol: record.ExchangeSymbol,
+			Exchange: record.Exchange, MarketType: record.MarketType, ExchangeSymbol: record.ExchangeSymbol,
 			InstrumentId: record.InstrumentID, BaseAsset: record.BaseAsset, Reason: record.Reason,
 			BlockedAt: record.BlockedAt, Scope: record.Scope, DelistId: record.DelistID,
 		})
@@ -92,7 +88,7 @@ func (s *ConsoleServer) ListDelists(ctx context.Context, req *tradepb.ListDelist
 	rsp := &tradepb.ListDelistsRsp{RetInfo: success(), Delists: make([]*tradepb.Delist, 0, len(views))}
 	for _, view := range views {
 		delist := &tradepb.Delist{
-			DelistId: view.DelistID, Exchange: exchangeToPB(view.Exchange), MarketType: marketToPB(view.MarketType),
+			DelistId: view.DelistID, Exchange: view.Exchange, MarketType: view.MarketType,
 			ExchangeSymbol: view.ExchangeSymbol, Scope: view.Scope, DelistAtMs: view.DelistAt,
 			NoticeSource: view.Source, SourceEventId: view.SourceEventID, Status: view.Status, PlannedRound: int32(view.PlannedRound),
 			Note: view.Note, Result: view.Result, CreatedAtMs: view.CreatedAt, FinishedAtMs: view.FinishedAt,

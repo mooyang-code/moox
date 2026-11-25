@@ -66,16 +66,16 @@ func TestParseRejectsUnknownAndMiscasedKeys(t *testing.T) {
 func TestHourlyCapLookupFallsBackToWildcard(t *testing.T) {
 	settings, err := Parse(`{"hourly_cap_spot":{"btc-usdt-spot":"500","*":"200"},"hourly_cap_swap":{"*":"1000"}}`)
 	require.NoError(t, err)
-	limit, ok := settings.HourlyCap("SPOT", "BTC-USDT-SPOT")
+	limit, ok := settings.HourlyCap("spot", "BTC-USDT-SPOT")
 	require.True(t, ok)
 	require.Equal(t, "500", limit.String())
-	limit, ok = settings.HourlyCap("SPOT", "ETH-USDT-SPOT")
+	limit, ok = settings.HourlyCap("spot", "ETH-USDT-SPOT")
 	require.True(t, ok)
 	require.Equal(t, "200", limit.String())
-	limit, ok = settings.HourlyCap("SWAP", "BTC-USDT-SWAP")
+	limit, ok = settings.HourlyCap("swap", "BTC-USDT-SWAP")
 	require.True(t, ok)
 	require.Equal(t, "1000", limit.String())
-	_, ok = Default().HourlyCap("SPOT", "BTC-USDT-SPOT")
+	_, ok = Default().HourlyCap("spot", "BTC-USDT-SPOT")
 	require.False(t, ok, "没配置就是不限")
 }
 
@@ -113,14 +113,14 @@ func TestCanonicalNormalizesDecimals(t *testing.T) {
 func TestStockUsesSpotItems(t *testing.T) {
 	settings, err := Parse(`{"min_notional_spot":"100","min_notional_swap":"1","hourly_cap_spot":{"*":"200"},"hourly_cap_swap":{"*":"9000"}}`)
 	require.NoError(t, err)
-	for _, market := range []string{"SPOT", "STOCK", "stock"} {
+	for _, market := range []string{string(exchange.MarketTypeSpot), string(exchange.MarketTypeEquity)} {
 		require.Equal(t, "100", settings.MinNotional(market).String(), market)
 		limit, ok := settings.HourlyCap(market, "600519.XSHG")
 		require.True(t, ok, market)
 		require.Equal(t, "200", limit.String(), market)
 	}
-	require.Equal(t, "1", settings.MinNotional("SWAP").String())
-	limit, ok := settings.HourlyCap("SWAP", "BTC-USDT-SWAP")
+	require.Equal(t, "1", settings.MinNotional("swap").String())
+	limit, ok := settings.HourlyCap("swap", "BTC-USDT-SWAP")
 	require.True(t, ok)
 	require.Equal(t, "9000", limit.String())
 }
@@ -130,7 +130,7 @@ func TestHourlyCapSpotKeysAcceptStockCodes(t *testing.T) {
 	settings, err := Parse(`{"hourly_cap_spot":{"600519.xshg":"100","000001.XSHE":"200","430047.XBSE":"300","BTC-USDT-SPOT":"400","*":"50"}}`)
 	require.NoError(t, err)
 	for key, want := range map[string]string{"600519.XSHG": "100", "000001.XSHE": "200", "430047.XBSE": "300", "BTC-USDT-SPOT": "400", "ETH-USDT-SPOT": "50"} {
-		limit, ok := settings.HourlyCap("STOCK", key)
+		limit, ok := settings.HourlyCap("equity", key)
 		require.True(t, ok, key)
 		require.Equal(t, want, limit.String(), key)
 	}

@@ -24,11 +24,11 @@ func matcherFixture(t *testing.T) *store.Store {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01", ExchangeQuantityStep: "0.001", Status: "TRADING"}); err != nil {
+		if err := tx.UpsertInstrument(store.InstrumentRecord{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01", ExchangeQuantityStep: "0.001", Status: "TRADING"}); err != nil {
 			return err
 		}
 		for _, id := range []string{"a", "b"} {
-			if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "s", TradingAccountID: id, Name: id, Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
+			if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "s", TradingAccountID: id, Name: id, Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
 				return err
 			}
 			if err := tx.CreateOrder(store.OrderRecord{SpaceID: "s", TradingAccountID: id, OrderID: id, ClientOrderID: id, ExchangeOrderID: id, ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: id, State: "OPEN", FirstMatchPending: true}); err != nil {
@@ -296,7 +296,7 @@ func TestMatcherPagesPastFailedAccountWithoutFixedWindow(t *testing.T) {
 			s := matcherFixture(t)
 			require.NoError(t, s.DBForTest().Exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < ?)
 INSERT INTO t_trade_orders (c_space_id,c_order_id,c_trading_account_id,c_client_order_id,c_exchange,c_market_type,c_instrument_id,c_exchange_symbol,c_order_type,c_side,c_quantity,c_reference_price,c_reference_price_at,c_owner_type,c_owner_id,c_state,c_first_match_pending)
-SELECT 's',printf('a%06d',x),'a',printf('a%06d',x),'BINANCE','SPOT','BTCUSDT','BTCUSDT','MARKET','BUY','1','100',1000,'EXTERNAL','a','OPEN',1 FROM n`, count).Error)
+SELECT 's',printf('a%06d',x),'a',printf('a%06d',x),'binance','spot','BTCUSDT','BTCUSDT','MARKET','BUY','1','100',1000,'EXTERNAL','a','OPEN',1 FROM n`, count).Error)
 			calls := 0
 			m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}, PageSize: 17}
 			if count > 1000 {
@@ -324,9 +324,9 @@ func TestMatcherPrioritizesFirstMatchAcrossPagesWithoutRetryingRestedOrder(t *te
 	const restingCount = 513
 	require.NoError(t, s.DBForTest().Exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < ?)
 INSERT INTO t_trade_orders (c_space_id,c_order_id,c_trading_account_id,c_client_order_id,c_exchange,c_market_type,c_instrument_id,c_exchange_symbol,c_order_type,c_time_in_force,c_side,c_quantity,c_limit_price,c_reference_price,c_reference_price_at,c_owner_type,c_owner_id,c_state,c_first_match_pending)
-SELECT 's',printf('a-rest-%06d',x),'a',printf('a-rest-%06d',x),'BINANCE','SPOT','BTCUSDT','BTCUSDT','LIMIT','GTC','BUY','1','90','100',1000,'EXTERNAL','a','OPEN',0 FROM n`, restingCount).Error)
+SELECT 's',printf('a-rest-%06d',x),'a',printf('a-rest-%06d',x),'binance','spot','BTCUSDT','BTCUSDT','LIMIT','GTC','BUY','1','90','100',1000,'EXTERNAL','a','OPEN',0 FROM n`, restingCount).Error)
 	require.NoError(t, s.DBForTest().Exec(`INSERT INTO t_trade_orders (c_space_id,c_order_id,c_trading_account_id,c_client_order_id,c_exchange,c_market_type,c_instrument_id,c_exchange_symbol,c_order_type,c_time_in_force,c_side,c_quantity,c_limit_price,c_reference_price,c_reference_price_at,c_owner_type,c_owner_id,c_state,c_first_match_pending)
-VALUES ('s','z-first','b','z-first','BINANCE','SPOT','BTCUSDT','BTCUSDT','LIMIT','GTC','BUY','1','90','100',1000,'EXTERNAL','b','OPEN',1)`).Error)
+VALUES ('s','z-first','b','z-first','binance','spot','BTCUSDT','BTCUSDT','LIMIT','GTC','BUY','1','90','100',1000,'EXTERNAL','b','OPEN',1)`).Error)
 
 	calls := make([]string, 0, restingCount+1)
 	m := &Matcher{Store: s, PageSize: 128, DecideContext: func(_ context.Context, order store.OrderRecord) (Decision, error) {

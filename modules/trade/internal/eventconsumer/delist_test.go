@@ -49,7 +49,7 @@ func TestHandleDelistPassesTheEventToIntake(t *testing.T) {
 	require.Equal(t, "delist-1", got.EventID)
 	require.True(t, got.DelistAt.Equal(delistAt))
 	require.True(t, got.OccurredAt.Equal(occurredAt))
-	require.Equal(t, delistapp.Key{Exchange: "binance", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"}, got.Key)
+	require.Equal(t, delistapp.Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"}, got.Key)
 	require.Equal(t, events.DelistScopePaperOnly, got.Scope)
 }
 

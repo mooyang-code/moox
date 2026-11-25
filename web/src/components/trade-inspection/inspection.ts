@@ -1,4 +1,5 @@
 import type { ExchangeInspection, InspectionFinding } from "@/api/trade/types";
+import { marketLabel } from "@/views/trading/accounts/shared/markets";
 
 // 检测结果的展示模型：RPC 返回（ExchangeInspection）和账户里存的 inspection_json 形状不同，都转成这一份给组件显示。
 export interface InspectionView {
@@ -20,10 +21,6 @@ export interface InspectionView {
   lastFailure: string;
 }
 
-const MARKET_BY_ENUM: Record<number, string> = { 1: "SPOT", 2: "SWAP", 3: "STOCK" };
-
-export const MARKET_LABELS: Record<string, string> = { SPOT: "现货", SWAP: "永续合约", STOCK: "股票" };
-
 const ACCOUNT_MODE_LABELS: Record<string, string> = {
   BINANCE_PORTFOLIO_MARGIN: "币安统一账户（组合保证金）",
   BINANCE_STANDARD: "币安普通账户（现货、合约两个钱包）",
@@ -42,10 +39,6 @@ const OKX_ACCT_LV_LABELS: Record<string, string> = {
 export function accountModeLabel(mode: string | undefined): string {
   if (!mode) return "未检测";
   return ACCOUNT_MODE_LABELS[mode] ?? mode;
-}
-
-export function marketLabel(market: string): string {
-  return MARKET_LABELS[market] ?? market;
 }
 
 function toMillis(value: unknown): number {
@@ -80,7 +73,7 @@ export function fromInspection(value: ExchangeInspection | undefined | null): In
     rawPermissions: raw.raw_permissions ?? "",
     okxAcctLv: raw.okx_acct_lv ?? "",
     positionMode: raw.position_mode ?? "",
-    availableMarkets: (raw.available_markets ?? []).map(item => MARKET_BY_ENUM[item] ?? String(item)),
+    availableMarkets: [...(raw.available_markets ?? [])],
     blockers: findings(raw.blockers),
     warnings: findings(raw.warnings),
     inspectedAt: toMillis(raw.inspected_at),
@@ -89,7 +82,7 @@ export function fromInspection(value: ExchangeInspection | undefined | null): In
   };
 }
 
-// 来自账户里存的 inspection_json（后端按下划线字段名存储，市场是字符串、时间是 RFC3339）。空串和 "{}" 表示还没检测过，返回 null。
+// 来自账户里存的 inspection_json（后端按下划线字段名存储，市场是小写文本、时间是 RFC3339）。空串和 "{}" 表示还没检测过，返回 null。
 export function fromStoredInspection(json: string | undefined | null): InspectionView | null {
   if (!json || json.trim() === "" || json.trim() === "{}") return null;
   let raw: Record<string, unknown>;

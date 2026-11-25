@@ -29,7 +29,7 @@ func TestHandleLogicalAccountTargetMapsTargetIdentity(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-2", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "2.5",
+			InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "2.5",
 		}},
 	), func() TargetOptions {
 		opts := targetOptions(tradeStore, now)
@@ -228,7 +228,7 @@ func TestHandleTargetFromOldSessionIsSupersededNotConflict(t *testing.T) {
 			})
 			result := HandleTarget(context.Background(), logicalTargetDeliveryWithTimes(
 				t, barEnd, validUntil, "old-session-target", "runner-1", "logical-1",
-				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
+				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 			), opts)
 			require.Equal(t, jetstream.TERM, result.Decision)
 			require.Equal(t, test.code, targetErrorCode(result))
@@ -267,7 +267,7 @@ func TestHandleLogicalAccountTargetRejectsUnsupportedInstrument(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "ETH-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "ETH-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -281,7 +281,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDC",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDC",
 			InstrumentID: "BTC-USDC-SPOT", BaseAsset: "BTC", QuoteAsset: "USDC",
 			SettlementAsset: "USDC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -292,7 +292,7 @@ func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-usdc", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDC-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDC-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -306,7 +306,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 	seedLogicalTargetAccount(t, tradeStore, true, false)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "trading",
@@ -317,7 +317,7 @@ func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testin
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-lowercase-status", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -343,7 +343,7 @@ func TestHandleLogicalAccountTargetRetriesMissingMetadataUntilMembersReady(t *te
 			result := HandleTarget(context.Background(), logicalTargetDelivery(
 				t, now, "target-1", "runner-1", "logical-1",
 				[]*tradeeventpb.InstrumentWeightTarget{{
-					InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+					InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 				}},
 			), targetOptions(tradeStore, now))
 
@@ -363,7 +363,7 @@ func TestHandleLogicalAccountTargetRetriesWhenAllMembersDisabled(t *testing.T) {
 
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-disabled", "runner-1", "logical-1",
-		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
+		[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 	), targetOptions(tradeStore, now))
 
 	require.Equal(t, jetstream.RETRY, result.Decision)
@@ -385,7 +385,7 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1",
+			InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -398,7 +398,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx",
-			Exchange: "OKX", Markets: []string{"SWAP"}, ExecutionMode: "PAPER",
+			Exchange: "okx", Markets: []string{"swap"}, ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS",
 			Status: "ENABLED", Ready: true,
 		}); err != nil {
@@ -419,7 +419,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT-SWAP",
+			Exchange: "okx", MarketType: "swap", ExchangeSymbol: "BTC-USDT-SWAP",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.01",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -431,7 +431,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
 		t, now, "target-1", "runner-1", "logical-1",
 		[]*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "1",
+			InstrumentId: "BTC-USDT-SWAP", MarketType: "swap", TargetWeight: "1",
 		}},
 	), targetOptions(tradeStore, now))
 
@@ -567,7 +567,7 @@ func seedLogicalTargetAccount(
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
+			Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT",
 			Status: "ENABLED", Ready: ready,
 		}); err != nil {
@@ -591,7 +591,7 @@ func seedLogicalTargetAccount(
 			return nil
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -697,7 +697,7 @@ func TestHandleTargetSessionChangedWhileWaitingIsClassifiedAtCommit(t *testing.T
 			opts.WakeTarget = func(string, string) { t.Error("会话已变的目标不能唤醒执行器") }
 			result := HandleTarget(context.Background(), logicalTargetDelivery(
 				t, now, "target-session-changed", "runner-1", "logical-1",
-				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1"}},
+				[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "1"}},
 			), opts)
 			require.Equal(t, jetstream.TERM, result.Decision)
 			require.Equal(t, test.code, targetErrorCode(result))

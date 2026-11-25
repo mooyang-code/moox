@@ -39,7 +39,7 @@ func TestMarketQuoteFromSnapshot(t *testing.T) {
 		}
 		return result, nil
 	}}
-	keys := []exchange.SymbolKey{exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"), exchange.NewSymbolKey(exchange.MarketTypeStock, "002129.XSHE")}
+	keys := []exchange.SymbolKey{exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"), exchange.NewSymbolKey(exchange.MarketTypeEquity, "002129.XSHE")}
 	require.NoError(t, market.PrefetchQuotes(context.Background(), keys))
 	quote, err := market.GetQuote(context.Background(), keys[0])
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestMarketQuoteFromSnapshot(t *testing.T) {
 	_, err = market.GetReferencePrice(context.Background(), keys[0])
 	require.NoError(t, err)
 	require.Equal(t, 2, calls, "超过 2 秒重新取")
-	_, err = market.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeStock, "000001.XSHE"))
+	_, err = market.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeEquity, "000001.XSHE"))
 	require.Error(t, err)
 }
 
@@ -70,7 +70,7 @@ func TestMarketQuoteUnavailableIsCachedBriefly(t *testing.T) {
 		calls++
 		return nil, cnstock.ErrTimeout
 	}}
-	keys := []exchange.SymbolKey{exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"), exchange.NewSymbolKey(exchange.MarketTypeStock, "000001.XSHE")}
+	keys := []exchange.SymbolKey{exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG"), exchange.NewSymbolKey(exchange.MarketTypeEquity, "000001.XSHE")}
 	require.ErrorIs(t, market.PrefetchQuotes(context.Background(), keys), cnstock.ErrTimeout)
 	for _, key := range keys {
 		_, err := market.GetQuote(context.Background(), key)
@@ -109,7 +109,7 @@ func TestMarketCacheStampsAfterRequestReturns(t *testing.T) {
 		}
 		return map[string]cnstock.Quote{ids[0]: {InstrumentID: ids[0], Last: "10", Time: now}}, nil
 	}}
-	key := exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG")
+	key := exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG")
 	_, err := market.GetQuote(context.Background(), key)
 	require.ErrorIs(t, err, cnstock.ErrTimeout)
 	_, err = market.GetQuote(context.Background(), key)
@@ -132,7 +132,7 @@ func TestMarketProtocolErrorIsNotCached(t *testing.T) {
 		calls++
 		return nil, cnstock.ErrProtocol
 	}}
-	key := exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG")
+	key := exchange.NewSymbolKey(exchange.MarketTypeEquity, "600519.XSHG")
 	for range 2 {
 		_, err := market.GetQuote(context.Background(), key)
 		require.ErrorIs(t, err, cnstock.ErrProtocol)
@@ -154,7 +154,7 @@ func TestMarketQuoteCachedOnlyNeverFetches(t *testing.T) {
 		calls++
 		return map[string]cnstock.Quote{ids[0]: {InstrumentID: ids[0], Last: "10.00", PrevClose: "10.00", Time: now}}, nil
 	}}
-	key := exchange.SymbolKey{Market: exchange.MarketTypeStock, Symbol: "600519.XSHG"}
+	key := exchange.SymbolKey{Market: exchange.MarketTypeEquity, Symbol: "600519.XSHG"}
 	cached := exchange.WithCachedQuotes(context.Background(), time.Minute)
 	if _, err := market.GetQuote(cached, key); !errors.Is(err, exchange.ErrQuoteNotCached) || calls != 0 {
 		t.Fatalf("没有快照时应报不在缓存里且不发请求：err = %v, calls = %d", err, calls)
@@ -184,14 +184,14 @@ func TestMarketFillsEmptyBookWithLast(t *testing.T) {
 		}
 		return result, nil
 	}
-	key := exchange.NewSymbolKey(exchange.MarketTypeStock, "00700.XHKG")
+	key := exchange.NewSymbolKey(exchange.MarketTypeEquity, "00700.XHKG")
 	hk := &Market{Exchange: exchange.ExchangeHKEX, Label: "港股", FillEmptyBook: true, Now: func() time.Time { return now }, Quotes: quotes}
 	quote, err := hk.GetQuote(context.Background(), key)
 	require.NoError(t, err)
 	require.Equal(t, "376", quote.Bid.String())
 	require.Equal(t, "376", quote.Ask.String())
 	require.True(t, quote.LimitUp.IsZero() && quote.LimitDown.IsZero(), "港股没有涨跌停价")
-	halted, err := hk.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeStock, "00204.XHKG"))
+	halted, err := hk.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeEquity, "00204.XHKG"))
 	require.NoError(t, err)
 	require.True(t, halted.Halted && halted.Bid.IsZero() && halted.Ask.IsZero())
 	require.Equal(t, "390.4", halted.Last.String(), "停牌按昨收计")

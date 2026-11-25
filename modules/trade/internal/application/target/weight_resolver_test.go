@@ -26,7 +26,7 @@ func TestWeightResolverFreezesTotalQuantityWithoutExecutionPin(t *testing.T) {
 	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
 		BarEndTime: time.UnixMilli(1000).UnixMilli(), ValidUntil: time.UnixMilli(3000).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.5"}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "swap", TargetWeight: "0.5"}},
 	}
 	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestWeightResolverPersistsRepeatingQuantityAtLogicalPrecision(t *testing.T)
 	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: string(exchange.MarketTypeSpot), ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: string(exchange.MarketTypeSpot), ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "0.01", MinExchangeQuantity: "0.01", PriceTick: "0.1", Status: "TRADING",
 		})
@@ -52,7 +52,7 @@ func TestWeightResolverPersistsRepeatingQuantityAtLogicalPrecision(t *testing.T)
 	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-quantized", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
 		BarEndTime: time.UnixMilli(1000).UnixMilli(), ValidUntil: time.UnixMilli(3000).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.1"}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "0.1"}},
 	}
 	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestWeightResolverHoldTargetSkipsConversionAndChangesRequestHash(t *testing
 		return &tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
 			BarEndTime: bar, ValidUntil: time.UnixMilli(3000).UnixMilli(),
-			Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.3", Hold: hold}},
+			Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "swap", TargetWeight: "0.3", Hold: hold}},
 		}
 	}
 	conversion, err := resolver.Resolve(context.Background(), request(true), "space-1")
@@ -115,14 +115,14 @@ func TestWeightResolverAllHoldTargetDoesNotNeedEquity(t *testing.T) {
 	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
 		BarEndTime: bar, ValidUntil: time.UnixMilli(3000).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.3", Hold: true}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "swap", TargetWeight: "0.3", Hold: true}},
 	}
 	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 	require.NoError(t, err)
 	require.Equal(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
 
 	// 混有需要换算的目标时仍然需要权益快照。
-	request.Targets = append(request.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "ETH-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.2"})
+	request.Targets = append(request.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "ETH-USDT-SWAP", MarketType: "swap", TargetWeight: "0.2"})
 	_, err = resolver.Resolve(context.Background(), request, "space-1")
 	require.Error(t, err)
 }
@@ -135,7 +135,7 @@ func TestResolveCountsUnmanagedTargetAssetInEquity(t *testing.T) {
 	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
 		BarEndTime: time.UnixMilli(1000).UnixMilli(), ValidUntil: time.UnixMilli(61000).UnixMilli(),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.5"}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "spot", TargetWeight: "0.5"}},
 	}
 
 	conversion, err := resolver.Resolve(context.Background(), request, "space-1")

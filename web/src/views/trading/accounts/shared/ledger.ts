@@ -22,8 +22,8 @@ export function ledgerTypeLabel(value: string): string {
  * 多市场账户的默认流水市场：优先永续。后端只在账户级给“能否查流水”，不说明哪个市场支持；
  * 币安现货没有统一流水接口、永续有，OKX 两个市场都有，所以默认永续最不容易落到不支持的市场。
  */
-export function defaultLedgerMarket(markets: readonly number[] | undefined): MarketType {
-  return (markets?.includes(2) ? 2 : (markets?.[0] ?? 1)) as MarketType;
+export function defaultLedgerMarket(markets: readonly MarketType[] | undefined): MarketType {
+  return markets?.includes("swap") ? "swap" : (markets?.[0] ?? "spot");
 }
 
 /** 默认查近 7 天（含今天，按显示时区的整天）：[6 天前零点, 明天零点)，毫秒时间戳。 */

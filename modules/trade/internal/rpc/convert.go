@@ -252,67 +252,13 @@ func pageResult(page pageSpec, total int64) *tradepb.PageResult {
 	}
 }
 
-// exchangePBNames 是 proto 枚举与场所名的对照，新增场所时加一行。
-var exchangePBNames = map[tradepb.Exchange]exchange.Exchange{
-	tradepb.Exchange_EXCHANGE_BINANCE: exchange.ExchangeBinance,
-	tradepb.Exchange_EXCHANGE_OKX:     exchange.ExchangeOKX,
-	tradepb.Exchange_EXCHANGE_ASHARE:  exchange.ExchangeAShare,
-	tradepb.Exchange_EXCHANGE_HKEX:    exchange.ExchangeHKEX,
-}
-
-func exchangeFromPB(value tradepb.Exchange) exchange.Exchange {
-	return exchangePBNames[value]
-}
-
-func exchangeToPB(value string) tradepb.Exchange {
-	for pb, name := range exchangePBNames {
-		if string(name) == value {
-			return pb
-		}
-	}
-	return tradepb.Exchange_EXCHANGE_UNSPECIFIED
-}
-
-func marketFromPB(value tradepb.MarketType) exchange.MarketType {
-	switch value {
-	case tradepb.MarketType_MARKET_TYPE_SPOT:
-		return exchange.MarketTypeSpot
-	case tradepb.MarketType_MARKET_TYPE_SWAP:
-		return exchange.MarketTypeSwap
-	case tradepb.MarketType_MARKET_TYPE_STOCK:
-		return exchange.MarketTypeStock
-	default:
-		return exchange.MarketTypeUnspecified
-	}
-}
-
-func marketsFromPB(values []tradepb.MarketType) []exchange.MarketType {
-	result := make([]exchange.MarketType, len(values))
+// 交易所与市场类型在接口上就是 Trade 内部的小写取值，不再转换；市场集合只换元素类型（反方向见 console.go 的 marketTypes）。
+func marketStrings[T ~string](values []T) []string {
+	result := make([]string, len(values))
 	for i, value := range values {
-		result[i] = marketFromPB(value)
+		result[i] = string(value)
 	}
 	return result
-}
-
-func marketsToPB[T ~string](values []T) []tradepb.MarketType {
-	result := make([]tradepb.MarketType, len(values))
-	for i, value := range values {
-		result[i] = marketToPB(string(value))
-	}
-	return result
-}
-
-func marketToPB(value string) tradepb.MarketType {
-	switch exchange.MarketType(value) {
-	case exchange.MarketTypeSpot:
-		return tradepb.MarketType_MARKET_TYPE_SPOT
-	case exchange.MarketTypeSwap:
-		return tradepb.MarketType_MARKET_TYPE_SWAP
-	case exchange.MarketTypeStock:
-		return tradepb.MarketType_MARKET_TYPE_STOCK
-	default:
-		return tradepb.MarketType_MARKET_TYPE_UNSPECIFIED
-	}
 }
 
 func executionModeFromPB(value tradepb.ExecutionMode) exchange.ExecutionMode {
@@ -457,8 +403,8 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 	}
 	account := &tradepb.TradingAccount{
 		TradingAccountId: value.TradingAccountID, SpaceId: value.SpaceID,
-		Name: value.Name, Exchange: exchangeToPB(value.Exchange),
-		Markets:     marketsToPB(value.Markets),
+		Name: value.Name, Exchange: value.Exchange,
+		Markets:     marketStrings(value.Markets),
 		AccountMode: value.AccountMode, InspectionJson: value.InspectionJSON,
 		ExecutionMode:   executionModeToPB(value.ExecutionMode),
 		SettlementAsset: value.SettlementAsset, MarginMode: value.MarginMode,
@@ -520,7 +466,7 @@ func logicalAccountToPB(
 		Name:             value.Name,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
 		ControlMode:      controlModeToPB(value.ControlMode),
-		Markets:          marketsToPB(markets),
+		Markets:          marketStrings(markets),
 		SettlementAsset:  value.SettlementAsset,
 		AutomationState:  value.AutomationState,
 		PauseReason:      value.PauseReason,
@@ -541,7 +487,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 	return &tradepb.Order{
 		OrderId: value.OrderID, TradingAccountId: value.TradingAccountID,
 		ClientOrderId: value.ClientOrderID, ExchangeOrderId: value.ExchangeOrderID,
-		Exchange: exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
+		Exchange: value.Exchange, MarketType: value.MarketType,
 		InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
 		OrderType:  orderTypeToPB(value.OrderType),
 		FillPolicy: fillPolicyToPB(value.TimeInForce), Side: sideToPB(value.Side),
@@ -566,7 +512,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 		FillId: value.FillID, ExchangeTradeId: value.ExchangeTradeID,
 		OrderId: value.OrderID, ExchangeOrderId: value.ExchangeOrderID,
 		TradingAccountId: value.TradingAccountID,
-		Exchange:         exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
+		Exchange:         value.Exchange, MarketType: value.MarketType,
 		InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol, Side: sideToPB(value.Side),
 		PositionSide: positionSideToPB(value.PositionSide),
 		Price:        value.Price, Quantity: value.Quantity, Fee: value.Fee,
@@ -578,7 +524,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 
 func positionToPB(value store.PositionRecord) *tradepb.Position {
 	return &tradepb.Position{
-		MarketType:       marketToPB(value.MarketType),
+		MarketType:       value.MarketType,
 		TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
 		PositionSide:   positionSideToPB(value.PositionSide),
 		SignedQuantity: value.SignedQuantity, EntryPrice: value.EntryPrice,

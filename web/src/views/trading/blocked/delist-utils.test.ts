@@ -69,7 +69,7 @@ describe("手工登记下架", () => {
     expect(isPastDelistTime(1000, 2000)).toBe(true);
     const form = {
       exchange: "binance" as const,
-      market: "SPOT" as const,
+      market: "spot" as const,
       exchange_symbol: " fooUsdt ",
       delist_at: 5000,
       paper_only: true
@@ -77,7 +77,7 @@ describe("手工登记下架", () => {
     expect(delistSnapshot(form, 1000)).toEqual({
       snapshot: {
         exchange: "binance",
-        market: "SPOT",
+        market: "spot",
         exchange_symbol: "FOOUSDT",
         delist_at_ms: 5000,
         paper_only: true,
@@ -107,8 +107,8 @@ describe("手工登记下架", () => {
 describe("下架记录", () => {
   const record = (patch: Partial<DelistRecord>): DelistRecord => ({
     delist_id: "d",
-    exchange: 1,
-    market_type: 1,
+    exchange: "binance",
+    market_type: "spot",
     exchange_symbol: "FOOUSDT",
     scope: "ALL",
     delist_at_ms: 0,

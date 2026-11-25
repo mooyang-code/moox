@@ -18,7 +18,7 @@ import (
 func hkAccount(holding string) tradingaccount.Account {
 	return tradingaccount.Account{
 		ID: "hk-1", SpaceID: "space-1", Name: "港股", Exchange: exchange.ExchangeHKEX,
-		Markets: []exchange.MarketType{exchange.MarketTypeStock}, ExecutionMode: exchange.ExecutionModePaper,
+		Markets: []exchange.MarketType{exchange.MarketTypeEquity}, ExecutionMode: exchange.ExecutionModePaper,
 		Environment: exchange.AccountEnvironmentPaper, SettlementAsset: "HKD", Status: exchange.AccountStatusEnabled, Ready: true,
 		Paper: &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("1000000"), MakerFeeRate: shared.MustDecimal("0.0003"),
 			TakerFeeRate: shared.MustDecimal("0.0003"), SlippageBPS: shared.Zero()},
@@ -32,7 +32,7 @@ func hkAccount(holding string) tradingaccount.Account {
 // hkInstrumentForOrder 是 00005：每手 400 股。
 func hkInstrumentForOrder() exchange.Instrument {
 	return exchange.Instrument{
-		Exchange: exchange.ExchangeHKEX, MarketType: exchange.MarketTypeStock, ExchangeSymbol: "00005.XHKG", InstrumentID: "00005.XHKG",
+		Exchange: exchange.ExchangeHKEX, MarketType: exchange.MarketTypeEquity, ExchangeSymbol: "00005.XHKG", InstrumentID: "00005.XHKG",
 		BaseAsset: "00005.XHKG", QuoteAsset: "HKD", SettlementAsset: "HKD",
 		ExchangeQuantityStep: shared.MustDecimal("400"), MinExchangeQuantity: shared.MustDecimal("400"),
 		PriceTick: shared.MustDecimal(exchange.HKMinPriceTick), Status: "TRADING",
@@ -74,7 +74,7 @@ func TestHKBuyReservationUsesHKFee(t *testing.T) {
 	require.Equal(t, "HKD", validation.ReservedAsset)
 	// 成交额 55600：佣金 16.68 + 印花税 ceil(55.6)=56 + 交易费 3.1414 + 征费 1.5012、0.0834 + 交收费 2.3352。
 	require.Equal(t, "55679.7412", validation.ReservedQuantity.String())
-	require.Equal(t, exchange.RuleAt(exchange.ExchangeHKEX, exchange.MarketTypeStock).BuyCost(shared.MustDecimal("55600"), shared.MustDecimal("0.0003")).String(), validation.ReservedQuantity.String())
+	require.Equal(t, exchange.RuleAt(exchange.ExchangeHKEX, exchange.MarketTypeEquity).BuyCost(shared.MustDecimal("55600"), shared.MustDecimal("0.0003")).String(), validation.ReservedQuantity.String())
 }
 
 // 整手：数量必须是每手股数（400）的整数倍；卖出时零股一次卖完可以；停牌拒单；港股没有涨跌停，限价多高都不因此被拒。
@@ -120,14 +120,14 @@ func TestHKPaperFundsDoNotLockTodayBuys(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "HKEX", MarketType: "STOCK", ExchangeSymbol: "00005.XHKG", InstrumentID: "00005.XHKG",
+			Exchange: "hkex", MarketType: "equity", ExchangeSymbol: "00005.XHKG", InstrumentID: "00005.XHKG",
 			BaseAsset: "00005.XHKG", QuoteAsset: "HKD", SettlementAsset: "HKD",
 			ExchangeQuantityStep: "400", MinExchangeQuantity: "400", PriceTick: "0.001", Status: "TRADING",
 		}); err != nil {
 			return err
 		}
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "hk-1", Name: "港股", Exchange: "HKEX", Markets: []string{"STOCK"},
+			SpaceID: "space-1", TradingAccountID: "hk-1", Name: "港股", Exchange: "hkex", Markets: []string{"equity"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "HKD", Status: "ENABLED",
 			PaperConfig: &store.PaperAccountConfigRecord{SpaceID: "space-1", TradingAccountID: "hk-1",
 				InitialBalance: "1000000", MakerFeeRate: "0.0003", TakerFeeRate: "0.0003", SlippageBPS: "0"},
@@ -138,7 +138,7 @@ func TestHKPaperFundsDoNotLockTodayBuys(t *testing.T) {
 	require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "hk-1", OrderID: "bought", ClientOrderID: "bought", ExchangeOrderID: "bought",
-			Exchange: "HKEX", MarketType: "STOCK", ExchangeSymbol: "00005.XHKG", InstrumentID: "00005.XHKG",
+			Exchange: "hkex", MarketType: "equity", ExchangeSymbol: "00005.XHKG", InstrumentID: "00005.XHKG",
 			OrderType: "MARKET", Side: "BUY", Quantity: "400", FilledQuantity: "0", ReferencePrice: "138.5", State: "OPEN",
 			OwnerType: "EXTERNAL", OwnerID: "external-1", Version: 1,
 		}); err != nil {
@@ -146,7 +146,7 @@ func TestHKPaperFundsDoNotLockTodayBuys(t *testing.T) {
 		}
 		_, err := tx.InsertFill(store.FillRecord{
 			SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1", OrderID: "bought", ExchangeOrderID: "bought",
-			TradingAccountID: "hk-1", Exchange: "HKEX", MarketType: "STOCK", InstrumentID: "00005.XHKG",
+			TradingAccountID: "hk-1", Exchange: "hkex", MarketType: "equity", InstrumentID: "00005.XHKG",
 			ExchangeSymbol: "00005.XHKG", Side: "BUY", Price: "138.5", Quantity: "400", Fee: "79.2", FeeAsset: "HKD",
 			SettlementAsset: "HKD", RealizedPnL: "0", TradedAt: time.Now().UnixMilli(),
 		})

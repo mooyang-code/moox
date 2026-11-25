@@ -34,7 +34,7 @@ var marketRules = map[MarketType]MarketRule{
 		UsesMargin: true, CanShort: true, ReduceOnly: true, Leverage: true,
 		ContractValue: true, PositionSide: PositionSideNet,
 	},
-	MarketTypeStock: {PositionFromBalance: true, RawInstrumentID: true, BoardLot: true, QuoteGuards: true},
+	MarketTypeEquity: {PositionFromBalance: true, RawInstrumentID: true, BoardLot: true, QuoteGuards: true},
 }
 
 // RuleFor 返回市场类型共有的规则，未知市场返回零值。数据库记录里的市场是字符串，所以接受两种类型。
@@ -46,7 +46,7 @@ func RuleFor[T ~string](market T) MarketRule {
 type FeeFunc func(side Side, notional, commissionRate shared.Decimal) shared.Decimal
 
 // ExchangeRule 是一个场所在一个市场上的完整交易规则：市场类型共有的规则，加上各场所不同的部分。
-// 同是股票（STOCK），A 股（ASHARE）是 T+1、A 股费用、价格笼子 10 个价位；港股（HKEX）是 T+0、港股费用、价位按价格分档。
+// 同是股票（equity），A 股（ashare）是 T+1、A 股费用、价格笼子 10 个价位；港股（hkex）是 T+0、港股费用、价位按价格分档。
 type ExchangeRule struct {
 	MarketRule
 	// T1 表示当日买入的数量次日才能卖出（按北京时间的自然日，见 T1Since）；为假就是 T+0，当日买入可卖。
@@ -66,8 +66,8 @@ type exchangeMarket struct {
 
 // exchangeRules 只登记与市场类型默认值不同的场所：没有登记的“场所 + 市场”就是市场类型共有的规则。新增场所时在这里加一行。
 var exchangeRules = map[exchangeMarket]ExchangeRule{
-	{ExchangeAShare, MarketTypeStock}: {T1: true, Fee: AShareFee, PriceCageTicks: 10},
-	{ExchangeHKEX, MarketTypeStock}:   {Fee: HKFee, PriceTick: HKPriceTick},
+	{ExchangeAShare, MarketTypeEquity}: {T1: true, Fee: AShareFee, PriceCageTicks: 10},
+	{ExchangeHKEX, MarketTypeEquity}:   {Fee: HKFee, PriceTick: HKPriceTick},
 }
 
 // RuleAt 返回“场所 + 市场”的交易规则。未知市场返回零值；没有单独登记的场所只有市场类型共有的规则。

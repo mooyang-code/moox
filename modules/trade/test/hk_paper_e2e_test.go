@@ -39,7 +39,7 @@ func hkTargetDelivery(t *testing.T, now time.Time, logicalID, targetID string, s
 		&tradeeventpb.LogicalAccountTargetWeightRequested{
 			TargetId: targetID, InstanceId: "dual_ma_hk_5m", SessionId: "session-hk", SessionStartedAt: 1_000, StrategyId: "default_dual_ma_hk_5m",
 			LogicalAccountId: logicalID,
-			Targets:          []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: instrumentID, MarketType: "STOCK", TargetWeight: weight}},
+			Targets:          []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: instrumentID, MarketType: "equity", TargetWeight: weight}},
 			BarEndTime:       bar.UnixMilli(), ValidUntil: bar.Add(time.Hour).UnixMilli(),
 		},
 		events.PublishOptions{EventID: targetID, OccurredAt: now, SpaceID: testSpace, SubjectID: logicalID},
@@ -85,7 +85,7 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 		Exchange:         exchange.ExchangeHKEX,
 		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
 		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
-		Markets:          []exchange.MarketType{exchange.MarketTypeStock},
+		Markets:          []exchange.MarketType{exchange.MarketTypeEquity},
 		SettlementAssets: []string{hkex.SettlementAsset},
 		LiveUnavailable:  "港股只支持模拟盘，没有实盘下单通道",
 		Session:          fakeSession{open: &open},
@@ -104,8 +104,8 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db, Exchanges: registry},
 		LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
 	request := &tradepb.CreatePaperSimulationReq{
-		AccountName: "港股模拟", LogicalAccountName: "港股模拟组合", Exchange: tradepb.Exchange_EXCHANGE_HKEX,
-		Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_STOCK}, SettlementAsset: "CNY",
+		AccountName: "港股模拟", LogicalAccountName: "港股模拟组合", Exchange: "hkex",
+		Markets: []string{"equity"}, SettlementAsset: "CNY",
 		InitialBalance: "1000000", MakerFeeRate: "0.0003", TakerFeeRate: "0.0003", SlippageBps: "0", ControlMode: tradepb.ControlMode_CONTROL_MODE_STRATEGY,
 	}
 	rejected, err := console.CreatePaperSimulation(ctx, request)
@@ -116,7 +116,7 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	created, err := console.CreatePaperSimulation(ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode(), created.GetRetInfo())
-	require.Equal(t, tradepb.Exchange_EXCHANGE_HKEX, created.GetAccount().GetExchange())
+	require.Equal(t, "hkex", created.GetAccount().GetExchange())
 	logicalID, accountID := created.GetLogicalAccount().GetLogicalAccountId(), created.GetAccount().GetTradingAccountId()
 
 	// 标的入库（生产里由会话启动时写入）。
@@ -144,7 +144,7 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	adapter := &paperexec.Adapter{Store: db, Account: accountRecord, MarketData: stockfeed.NewAdapter(market), Exchanges: registry, Now: clock}
 	_, err = adapter.LoadInstruments(ctx)
 	require.NoError(t, err)
-	f := buildFixture(db, path, newFakeExchange(exchange.MarketTypeStock), adapter)
+	f := buildFixture(db, path, newFakeExchange(exchange.MarketTypeEquity), adapter)
 	f.orders.Now, f.orders.Validator.Now = clock, clock
 	f.orders.Validator.Quotes = adapterSource{adapter: adapter}
 	f.reducer.Now = clock
@@ -220,8 +220,8 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	placed := orders()
 	require.Len(t, placed, 1)
 	buy := placed[0]
-	require.Equal(t, "HKEX", buy.Exchange)
-	require.Equal(t, "STOCK", buy.MarketType)
+	require.Equal(t, "hkex", buy.Exchange)
+	require.Equal(t, "equity", buy.MarketType)
 	require.Equal(t, "00700.XHKG", buy.ExchangeSymbol)
 	require.Equal(t, "BUY", buy.Side)
 	require.Equal(t, "200", buy.Quantity, "按每手 100 股取整")
@@ -284,7 +284,7 @@ func TestHKPaperTargetToOrderFillPositionLedger(t *testing.T) {
 	for _, entry := range page.Entries {
 		require.Equal(t, exchange.LedgerFee, entry.Type)
 		require.Equal(t, "HKD", entry.Asset)
-		require.Equal(t, exchange.MarketTypeStock, entry.Market)
+		require.Equal(t, exchange.MarketTypeEquity, entry.Market)
 		require.Equal(t, "00700.XHKG", entry.ExchangeSymbol)
 		fees[entry.Amount.String()] = true
 	}

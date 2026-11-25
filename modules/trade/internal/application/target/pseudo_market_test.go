@@ -20,14 +20,14 @@ const pseudoSettings = `{"min_notional_swap":"0","min_notional_spot":"0"}`
 // iocChild 建一笔本目标已提交、已结束的伪市价子单（account-a，合约）。
 func (f *targetFixture) iocChild(t *testing.T, orderID string, quantity, filled string, attempt int) {
 	t.Helper()
-	f.iocChildOn(t, "account-a", "BINANCE", "BTCUSDT", orderID, quantity, filled, attempt)
+	f.iocChildOn(t, "account-a", "binance", "BTCUSDT", orderID, quantity, filled, attempt)
 }
 
 func (f *targetFixture) iocChildOn(t *testing.T, accountID, exchangeName, symbol, orderID string, quantity, filled string, attempt int) {
 	t.Helper()
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: orderID, TradingAccountID: accountID, LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: orderID, Exchange: exchangeName, MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: symbol,
+		ClientOrderID: orderID, Exchange: exchangeName, MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: symbol,
 		OrderType: "LIMIT", TimeInForce: "IOC", Side: "BUY", Quantity: quantity, LimitPrice: strPtr("101.5"), ReferencePrice: "100",
 		FilledQuantity: filled, AveragePrice: "100", OwnerType: "TARGET", OwnerID: "target-current", State: "EXPIRED",
 		Attempt: attempt, SubmittedAt: int64(1_000 + attempt), FinishedAt: int64(1_100 + attempt), Version: 1,
@@ -113,7 +113,7 @@ func TestPseudoMarketExhaustedAttemptsAreUnfilledAndAlertedOnce(t *testing.T) {
 	for attempt := 0; attempt < 4; attempt++ {
 		// 两个成员都用满了次数：换成员也没用。
 		f.iocChild(t, "ioc-a"+string(rune('a'+attempt)), "10", "0", attempt)
-		f.iocChildOn(t, "account-b", "OKX", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
+		f.iocChildOn(t, "account-b", "okx", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
 	}
 	executor := f.executor()
 	executor.MinBatchInterval = 0
@@ -152,7 +152,7 @@ func TestPseudoMarketUnknownResultIsResolvedBeforeReplacing(t *testing.T) {
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "unknown-ioc", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: "unknown-ioc", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "unknown-ioc", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "IOC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("101.5"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-current", State: string(orderdomain.SubmitUnknown), SubmittedAt: 1_000, Version: 1,
 	})

@@ -170,7 +170,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDC", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -243,7 +243,7 @@ func TestModernResumeIgnoresExpiredTargetMetadata(t *testing.T) {
 	service.MaxSnapshotAge = 2 * time.Hour
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDC", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -362,7 +362,7 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
+			Exchange: "binance", MarketType: "swap", ExchangeSymbol: "BTCUSDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.001",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -389,7 +389,7 @@ func addMember(ctx context.Context, service *Service, command AddMemberCommand) 
 func logicalFixtureAccount(id string) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: "BINANCE", Markets: []string{"SWAP"},
+		Exchange: "binance", Markets: []string{"swap"},
 		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-" + id,
 		SettlementAsset: "USDT", MarginMode: "CROSS",
 		Status: "ENABLED", Ready: true,

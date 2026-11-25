@@ -48,7 +48,7 @@ func (f *targetFixture) restingOrder(t *testing.T, orderID, side, quantity, fill
 	}
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: orderID, ExchangeOrderID: "exchange-" + orderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: orderID, ExchangeOrderID: "exchange-" + orderID, Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: side, Quantity: quantity, LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		FilledQuantity: filled, OwnerType: "TARGET", OwnerID: "target-current", State: state, SubmittedAt: submittedAt.UnixMilli(), Version: 1,
 	})
@@ -204,7 +204,7 @@ func TestRestingLogicNeverCancelsOperatorOrders(t *testing.T) {
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "manual-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
-		ClientOrderID: "manual-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "manual-1", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "OPERATOR", OwnerID: "action-1", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})
@@ -224,7 +224,7 @@ func TestPickRestingIsReproducibleAndFollowsPerDirectionBudget(t *testing.T) {
 		desired[id] = desiredTarget{Quantity: shared.MustDecimal("200")}
 		positions[id] = shared.MustDecimal("100")
 		actions = append(actions, laneAction{
-			instrument: store.InstrumentRecord{InstrumentID: id, MarketType: "SWAP"},
+			instrument: store.InstrumentRecord{InstrumentID: id, MarketType: "swap"},
 			delta:      shared.MustDecimal(delta),
 		})
 	}
@@ -291,7 +291,7 @@ func TestSystemOrdersDoNotPauseTheLogicalAccountOrBlockTheTarget(t *testing.T) {
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "system-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
-		ClientOrderID: "system-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "system-1", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "SYSTEM", OwnerID: "bnb-reserve", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})
@@ -314,7 +314,7 @@ func TestRestingFallbackToPseudoMarketStillHonoursMaxAttempts(t *testing.T) {
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	for attempt := 0; attempt < 4; attempt++ {
 		f.iocChild(t, "ioc-a"+string(rune('a'+attempt)), "10", "0", attempt)
-		f.iocChildOn(t, "account-b", "OKX", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
+		f.iocChildOn(t, "account-b", "okx", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
 	}
 	executor := f.executor() // 没有买一卖一的报价来源：挂单取不到价格
 	executor.MinBatchInterval = 0
@@ -335,7 +335,7 @@ func TestRestingFallbackContinuesTheAttemptCount(t *testing.T) {
 	f.position(t, "account-a", "BTCUSDT", "100")
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
 	f.iocChild(t, "ioc-0", "10", "0", 0)
-	f.iocChildOn(t, "account-b", "OKX", "BTC-USDT-SWAP", "ioc-b0", "10", "0", 0)
+	f.iocChildOn(t, "account-b", "okx", "BTC-USDT-SWAP", "ioc-b0", "10", "0", 0)
 	executor := f.executor()
 	executor.MinBatchInterval = 0
 	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
@@ -354,7 +354,7 @@ func TestSystemOrdersDoNotDefeatTheWaitingFastPath(t *testing.T) {
 	require.NoError(t, err)
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "child-open", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: "child-open", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "child-open", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "5", ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})
@@ -363,7 +363,7 @@ func TestSystemOrdersDoNotDefeatTheWaitingFastPath(t *testing.T) {
 	require.True(t, waiting)
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "system-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
-		ClientOrderID: "system-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "system-1", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
 		OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})
@@ -386,7 +386,7 @@ func TestRestingExpiryGoesFromWaitBackToBlocked(t *testing.T) {
 	f.setSwapPosition("BTCUSDT", "100")
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "resting-1", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})

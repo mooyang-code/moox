@@ -47,13 +47,13 @@ func seedAccounts(t *testing.T, tradeStore *store.Store, fundSettings string, sp
 			}
 			if spec.mode == "LIVE" {
 				record.CredentialSecretID = "secret-" + spec.id
-				record.AccountMode = map[string]string{"BINANCE": "BINANCE_STANDARD", "OKX": "OKX_UNIFIED"}[spec.exchange]
+				record.AccountMode = map[string]string{"binance": "BINANCE_STANDARD", "okx": "OKX_UNIFIED"}[spec.exchange]
 			}
 			// 余额写成空钱包：按账户自己的现货钱包补上。
 			balances := make([]store.AssetBalance, len(spec.balances))
 			copy(balances, spec.balances)
 			for i := range balances {
-				balances[i].Wallet = string(record.WalletFor("SPOT"))
+				balances[i].Wallet = string(record.WalletFor("spot"))
 			}
 			record.Snapshot.Balances = balances
 			if err := tx.CreateTradingAccount(record); err != nil {
@@ -85,12 +85,12 @@ func seedAccounts(t *testing.T, tradeStore *store.Store, fundSettings string, sp
 func seedInstruments(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		for _, market := range []string{"SPOT", "SWAP"} {
+		for _, market := range []string{"spot", "swap"} {
 			record := store.InstrumentRecord{
-				Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: market, ExchangeSymbol: "FOOUSDT", InstrumentID: "FOO-USDT-" + market,
+				Exchange: "binance", Environment: "PRODUCTION", MarketType: market, ExchangeSymbol: "FOOUSDT", InstrumentID: "FOO-USDT-" + exchange.InstrumentSuffix(market),
 				BaseAsset: "FOO", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.1", MinExchangeQuantity: "1", PriceTick: "0.01", Status: "TRADING",
 			}
-			if market == "SWAP" {
+			if market == "swap" {
 				record.Linear, record.ContractValue, record.ContractValueAsset = true, "1", "FOO"
 			}
 			if err := tx.UpsertInstrument(record); err != nil {
@@ -113,7 +113,7 @@ func markManaged(t *testing.T, tradeStore *store.Store, accountID, orderID strin
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: accountID, OrderID: orderID, ClientOrderID: orderID,
-			Exchange: account.Exchange, MarketType: "SPOT", ExchangeSymbol: "FOOUSDT", InstrumentID: "FOO-USDT-SPOT",
+			Exchange: account.Exchange, MarketType: "spot", ExchangeSymbol: "FOOUSDT", InstrumentID: "FOO-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "5", FilledQuantity: "5", ReferencePrice: "1",
 			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "t", LogicalAccountID: logicalID, Version: 1,
 		})
@@ -172,7 +172,7 @@ func TestIntakeRecordsInstrumentIDAndBaseAssetWhenKnown(t *testing.T) {
 	seedInstruments(t, tradeStore)
 	service := &Service{Store: tradeStore}
 
-	_, err := service.Intake(context.Background(), event(Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"}, "evt-1", time.Now().Add(72*time.Hour)))
+	_, err := service.Intake(context.Background(), event(Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "FOOUSDT"}, "evt-1", time.Now().Add(72*time.Hour)))
 	require.NoError(t, err)
 	list, err := service.List(context.Background())
 	require.NoError(t, err)
@@ -184,14 +184,14 @@ func TestIntakeValidatesTheEvent(t *testing.T) {
 	service := &Service{Store: newDelistStore(t)}
 	delistAt := time.Now().Add(72 * time.Hour)
 	for _, key := range []Key{
-		{Exchange: "", MarketType: "SPOT", ExchangeSymbol: "A"},
-		{Exchange: "BINANCE", MarketType: "STOCK", ExchangeSymbol: "A"},
-		{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: " "},
+		{Exchange: "", MarketType: "spot", ExchangeSymbol: "A"},
+		{Exchange: "binance", MarketType: "equity", ExchangeSymbol: "A"},
+		{Exchange: "binance", MarketType: "spot", ExchangeSymbol: " "},
 	} {
 		_, err := service.Intake(context.Background(), event(key, "evt", delistAt))
 		require.ErrorIs(t, err, ErrInvalidRequest, "%+v", key)
 	}
-	valid := event(Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "A"}, "evt", delistAt)
+	valid := event(Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "A"}, "evt", delistAt)
 	for name, mutate := range map[string]func(*Event){
 		"缺事件 ID": func(e *Event) { e.EventID = " " },
 		"缺范围":    func(e *Event) { e.Scope = "" },
@@ -209,21 +209,21 @@ func TestHoldersOnlyCountStrategyHoldings(t *testing.T) {
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
 	seedAccounts(t, tradeStore, "",
-		accountSpec{id: "live", exchange: "BINANCE", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT"}, logical: "logical-live", balances: spotBalance("12.5")},
-		accountSpec{id: "paper", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("3")},
-		accountSpec{id: "testnet", exchange: "BINANCE", mode: "LIVE", environment: "TESTNET", markets: []string{"SPOT"}, logical: "logical-testnet", balances: spotBalance("9")},
-		accountSpec{id: "okx", exchange: "OKX", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT"}, logical: "logical-live", balances: spotBalance("9")},
-		accountSpec{id: "loose", exchange: "BINANCE", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT"}, balances: spotBalance("9")},
-		accountSpec{id: "unmanaged", exchange: "BINANCE", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT"}, logical: "logical-live", balances: spotBalance("9")},
-		accountSpec{id: "disabled", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("9"), status: "DISABLED"},
-		accountSpec{id: "dust", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("0.5")},
-		accountSpec{id: "empty", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper"},
+		accountSpec{id: "live", exchange: "binance", mode: "LIVE", environment: "PRODUCTION", markets: []string{"spot"}, logical: "logical-live", balances: spotBalance("12.5")},
+		accountSpec{id: "paper", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-paper", balances: spotBalance("3")},
+		accountSpec{id: "testnet", exchange: "binance", mode: "LIVE", environment: "TESTNET", markets: []string{"spot"}, logical: "logical-testnet", balances: spotBalance("9")},
+		accountSpec{id: "okx", exchange: "okx", mode: "LIVE", environment: "PRODUCTION", markets: []string{"spot"}, logical: "logical-live", balances: spotBalance("9")},
+		accountSpec{id: "loose", exchange: "binance", mode: "LIVE", environment: "PRODUCTION", markets: []string{"spot"}, balances: spotBalance("9")},
+		accountSpec{id: "unmanaged", exchange: "binance", mode: "LIVE", environment: "PRODUCTION", markets: []string{"spot"}, logical: "logical-live", balances: spotBalance("9")},
+		accountSpec{id: "disabled", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-paper", balances: spotBalance("9"), status: "DISABLED"},
+		accountSpec{id: "dust", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-paper", balances: spotBalance("0.5")},
+		accountSpec{id: "empty", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-paper"},
 	)
 	for _, id := range []string{"live", "paper", "testnet", "okx", "disabled", "dust", "empty"} { // loose 不在组合里，没有组合订单
 		markManaged(t, tradeStore, id, "bought-"+id)
 	}
 	service := &Service{Store: tradeStore}
-	key := Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"}
+	key := Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"}
 
 	result, err := service.Holders(context.Background(), key, false)
 	require.NoError(t, err)
@@ -249,7 +249,7 @@ func TestHoldersOnlyCountStrategyHoldings(t *testing.T) {
 	}
 
 	// 没有任何持有者：空数组、没有无此标的标记。
-	none, err := service.Holders(context.Background(), Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"}, false)
+	none, err := service.Holders(context.Background(), Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "FOOUSDT"}, false)
 	require.NoError(t, err)
 	require.False(t, none.InstrumentUnknown)
 	require.NotNil(t, none.Holders)
@@ -261,14 +261,14 @@ func TestHoldersSwapSkipsFlatAndArbitrageHedgeLegs(t *testing.T) {
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
 	seedAccounts(t, tradeStore, "",
-		accountSpec{id: "long", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SWAP"}, logical: "logical-1"},
-		accountSpec{id: "short", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SWAP"}, logical: "logical-1"},
-		accountSpec{id: "flat", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SWAP"}, logical: "logical-1"},
+		accountSpec{id: "long", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"swap"}, logical: "logical-1"},
+		accountSpec{id: "short", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"swap"}, logical: "logical-1"},
+		accountSpec{id: "flat", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"swap"}, logical: "logical-1"},
 	)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		for id, quantity := range map[string]string{"long": "7", "short": "-0.4", "flat": "0"} {
 			if err := tx.UpsertPosition(store.PositionRecord{
-				SpaceID: "space-1", TradingAccountID: id, MarketType: "SWAP", ExchangeSymbol: "FOOUSDT", PositionSide: "NET",
+				SpaceID: "space-1", TradingAccountID: id, MarketType: "swap", ExchangeSymbol: "FOOUSDT", PositionSide: "NET",
 				SignedQuantity: quantity, EntryPrice: "1", MarkPrice: "1", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1,
 			}); err != nil {
 				return err
@@ -277,7 +277,7 @@ func TestHoldersSwapSkipsFlatAndArbitrageHedgeLegs(t *testing.T) {
 		return nil
 	}))
 	service := &Service{Store: tradeStore}
-	key := Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"}
+	key := Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "FOOUSDT"}
 
 	result, err := service.Holders(context.Background(), key, false)
 	require.NoError(t, err)
@@ -306,12 +306,12 @@ func (p fixedPrice) LatestPrice(context.Context, string, exchange.SymbolKey) (ta
 func TestHoldersDustUsesMinimumNotionalWhenThereIsAQuote(t *testing.T) {
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
-	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_trade_instruments SET c_min_notional = '5' WHERE c_market_type = 'SPOT'`).Error)
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_trade_instruments SET c_min_notional = '5' WHERE c_market_type = 'spot'`).Error)
 	tradeStore.InvalidateCaches()
 	seedAccounts(t, tradeStore, "",
-		accountSpec{id: "paper", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("3")})
+		accountSpec{id: "paper", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-paper", balances: spotBalance("3")})
 	markManaged(t, tradeStore, "paper", "bought-paper")
-	key := Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"}
+	key := Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"}
 
 	// 3 个、价格 1：价值 3 低于最小金额 5，是零头；数量 3 高于最小数量 1。
 	result, err := (&Service{Store: tradeStore, Prices: fixedPrice("1")}).Holders(context.Background(), key, false)
@@ -335,14 +335,14 @@ func TestHoldersSkipsAnAccountThatErrorsInsteadOfFailingEverything(t *testing.T)
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
 	seedAccounts(t, tradeStore, "",
-		accountSpec{id: "good", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-good", balances: spotBalance("7")},
-		accountSpec{id: "broken", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-broken", balances: spotBalance("7")},
+		accountSpec{id: "good", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-good", balances: spotBalance("7")},
+		accountSpec{id: "broken", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-broken", balances: spotBalance("7")},
 	)
 	markManaged(t, tradeStore, "good", "bought-good")
 	markManaged(t, tradeStore, "broken", "bought-broken")
 	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":"BTC"}' WHERE c_logical_account_id = 'logical-broken'`).Error)
 
-	result, err := (&Service{Store: tradeStore}).Holders(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"}, false)
+	result, err := (&Service{Store: tradeStore}).Holders(context.Background(), Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT"}, false)
 
 	require.NoError(t, err)
 	require.Len(t, result.Holders, 1)
@@ -358,15 +358,15 @@ func TestHoldersIgnoreInstrumentsQuotedInANonSettlementAsset(t *testing.T) {
 	seedInstruments(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: "FOOBTC", InstrumentID: "FOO-BTC-SPOT",
+			Exchange: "binance", Environment: "PRODUCTION", MarketType: "spot", ExchangeSymbol: "FOOBTC", InstrumentID: "FOO-BTC-SPOT",
 			BaseAsset: "FOO", QuoteAsset: "BTC", SettlementAsset: "BTC", ExchangeQuantityStep: "0.1", MinExchangeQuantity: "1", PriceTick: "0.00000001", Status: "TRADING",
 		})
 	}))
 	seedAccounts(t, tradeStore, "",
-		accountSpec{id: "paper", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("9")})
+		accountSpec{id: "paper", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot"}, logical: "logical-paper", balances: spotBalance("9")})
 	markManaged(t, tradeStore, "paper", "bought-paper")
 
-	result, err := (&Service{Store: tradeStore}).Holders(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOBTC"}, false)
+	result, err := (&Service{Store: tradeStore}).Holders(context.Background(), Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOBTC"}, false)
 
 	require.NoError(t, err)
 	require.Empty(t, result.Holders)
@@ -379,17 +379,18 @@ func TestKeysAreCaseInsensitive(t *testing.T) {
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
 	service := &Service{Store: tradeStore}
-	lower := Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "foousdt"}
+	// 交易所与市场写成大写、交易所代码写成小写，也都能对上：前两者归一成小写，代码归一成大写。
+	mixed := Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "foousdt"}
 
-	_, err := service.Intake(context.Background(), event(lower, "evt-1", time.Now().Add(72*time.Hour)))
+	_, err := service.Intake(context.Background(), event(mixed, "evt-1", time.Now().Add(72*time.Hour)))
 	require.NoError(t, err)
 	list, err := service.List(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, "FOOUSDT", list[0].ExchangeSymbol)
-	holders, err := service.Holders(context.Background(), lower, false)
+	require.Equal(t, []string{"binance", "swap", "FOOUSDT"}, []string{list[0].Exchange, list[0].MarketType, list[0].ExchangeSymbol})
+	holders, err := service.Holders(context.Background(), mixed, false)
 	require.NoError(t, err)
 	require.False(t, holders.InstrumentUnknown)
-	removed, err := service.Unblock(context.Background(), lower)
+	removed, err := service.Unblock(context.Background(), mixed)
 	require.NoError(t, err)
 	require.True(t, removed)
 }
@@ -398,18 +399,18 @@ func TestResolveInstrumentIDRequiresAMemberOfTheExchange(t *testing.T) {
 	tradeStore := newDelistStore(t)
 	seedInstruments(t, tradeStore)
 	seedAccounts(t, tradeStore, "",
-		accountSpec{id: "binance", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT", "SWAP"}, logical: "logical-1"},
+		accountSpec{id: "binance", exchange: "binance", mode: "PAPER", environment: "PAPER", markets: []string{"spot", "swap"}, logical: "logical-1"},
 	)
 	service := &Service{Store: tradeStore}
 
-	id, err := service.ResolveInstrumentID(context.Background(), "space-1", "logical-1", Key{Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "FOOUSDT"})
+	id, err := service.ResolveInstrumentID(context.Background(), "space-1", "logical-1", Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "FOOUSDT"})
 	require.NoError(t, err)
 	require.Equal(t, "FOO-USDT-SWAP", id)
 
-	_, err = service.ResolveInstrumentID(context.Background(), "space-1", "logical-1", Key{Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "FOO-USDT-SWAP"})
+	_, err = service.ResolveInstrumentID(context.Background(), "space-1", "logical-1", Key{Exchange: "okx", MarketType: "swap", ExchangeSymbol: "FOO-USDT-SWAP"})
 	require.ErrorIs(t, err, ErrNoMemberOfExchange)
 
-	_, err = service.ResolveInstrumentID(context.Background(), "space-1", "logical-1", Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "NOPEUSDT"})
+	_, err = service.ResolveInstrumentID(context.Background(), "space-1", "logical-1", Key{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "NOPEUSDT"})
 	require.ErrorIs(t, err, ErrInvalidRequest, "成员的标的表里没有它时不能静默当作平完")
 }
 

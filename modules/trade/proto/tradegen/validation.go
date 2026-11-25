@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -69,10 +70,10 @@ func (r *ListTradingAccountsReq) Validate() error {
 	if r == nil {
 		return fmt.Errorf("request is required")
 	}
-	if r.Exchange != nil && !validExchange(r.GetExchange()) {
+	if r.Exchange != "" && !validExchange(r.Exchange) {
 		return fmt.Errorf("invalid exchange")
 	}
-	if r.MarketType != nil && !validMarketType(r.GetMarketType()) {
+	if !validOptionalMarketType(r.MarketType) {
 		return fmt.Errorf("invalid market_type")
 	}
 	if r.ExecutionMode != nil && !validExecutionMode(r.GetExecutionMode()) {
@@ -156,12 +157,12 @@ func (r *CreatePaperSimulationReq) Validate() error {
 		return fmt.Errorf("paper configuration decimals are invalid")
 	}
 	margin := strings.ToUpper(strings.TrimSpace(r.MarginMode))
-	hasSwap := containsMarket(r.Markets, MarketType_MARKET_TYPE_SWAP)
+	hasSwap := slices.Contains(r.Markets, marketSwap)
 	if !hasSwap && margin != "" {
-		return fmt.Errorf("paper simulation without SWAP cannot configure margin_mode")
+		return fmt.Errorf("paper simulation without swap cannot configure margin_mode")
 	}
 	if hasSwap && margin != "" && margin != "CROSS" {
-		return fmt.Errorf("SWAP paper simulation requires CROSS margin_mode")
+		return fmt.Errorf("swap paper simulation requires CROSS margin_mode")
 	}
 	if hasSwap && !strings.EqualFold(strings.TrimSpace(r.SettlementAsset), "USDT") {
 		return fmt.Errorf("SWAP paper simulation requires USDT settlement_asset")
@@ -230,12 +231,12 @@ func (r *CreateLogicalAccountReq) Validate() error {
 	return nil
 }
 
-// validMarkets 要求市场集合非空、每项合法且不重复；顺序和 STOCK 不能与现货、合约混合由服务端规范化时校验。
-func validMarkets(markets []MarketType) bool {
+// validMarkets 要求市场集合非空、每项合法且不重复；顺序和 equity 不能与现货、合约混合由服务端规范化时校验。
+func validMarkets(markets []string) bool {
 	if len(markets) == 0 {
 		return false
 	}
-	seen := make(map[MarketType]struct{}, len(markets))
+	seen := make(map[string]struct{}, len(markets))
 	for _, market := range markets {
 		if !validMarketType(market) {
 			return false
@@ -246,15 +247,6 @@ func validMarkets(markets []MarketType) bool {
 		seen[market] = struct{}{}
 	}
 	return true
-}
-
-func containsMarket(markets []MarketType, want MarketType) bool {
-	for _, market := range markets {
-		if market == want {
-			return true
-		}
-	}
-	return false
 }
 
 func validCreationControlMode(mode ControlMode) bool {
@@ -530,20 +522,30 @@ func (r *ListPositionsReq) Validate() error {
 	return nil
 }
 
-func validExchange(value Exchange) bool {
-	_, known := Exchange_name[int32(value)]
-	return known && value != Exchange_EXCHANGE_UNSPECIFIED
+// 交易所与市场类型在接口上是小写文本，取值与 Trade 内部常量一致。
+const (
+	marketSpot   = "spot"
+	marketSwap   = "swap"
+	marketEquity = "equity"
+)
+
+// validExchange 只收 binance、okx、ashare、hkex 四个小写值。
+func validExchange(value string) bool {
+	switch value {
+	case "binance", "okx", "ashare", "hkex":
+		return true
+	default:
+		return false
+	}
 }
 
-// validOptionalMarketType 允许不填（未指定）；填了必须是已知市场。
-func validOptionalMarketType(value MarketType) bool {
-	return value == MarketType_MARKET_TYPE_UNSPECIFIED || validMarketType(value)
+// validOptionalMarketType 允许不填（空串）；填了必须是已知市场。
+func validOptionalMarketType(value string) bool {
+	return value == "" || validMarketType(value)
 }
 
-func validMarketType(value MarketType) bool {
-	return value == MarketType_MARKET_TYPE_SPOT ||
-		value == MarketType_MARKET_TYPE_SWAP ||
-		value == MarketType_MARKET_TYPE_STOCK
+func validMarketType(value string) bool {
+	return value == marketSpot || value == marketSwap || value == marketEquity
 }
 
 func validExecutionMode(value ExecutionMode) bool {
@@ -629,13 +631,13 @@ func value(read func() string) string {
 }
 
 // 下架名单只收现货和永续。
-func validDelistMarket(market MarketType) bool {
-	return market == MarketType_MARKET_TYPE_SPOT || market == MarketType_MARKET_TYPE_SWAP
+func validDelistMarket(market string) bool {
+	return market == marketSpot || market == marketSwap
 }
 
-func validateInstrumentKey(exchange Exchange, market MarketType, symbol string) error {
+func validateInstrumentKey(exchange, market, symbol string) error {
 	if !validExchange(exchange) || !validDelistMarket(market) || strings.TrimSpace(symbol) == "" {
-		return fmt.Errorf("exchange, market_type (SPOT or SWAP) and exchange_symbol are required")
+		return fmt.Errorf("exchange, market_type (spot or swap) and exchange_symbol are required")
 	}
 	if symbol != strings.TrimSpace(symbol) {
 		return fmt.Errorf("exchange_symbol must not have surrounding whitespace")

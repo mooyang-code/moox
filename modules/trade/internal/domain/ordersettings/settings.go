@@ -250,7 +250,7 @@ func (s Settings) Document() Document {
 
 // usesSpotItems 报告市场用设置里的“现货”项：持仓来自余额的市场（现货、A 股股票）；合约用“合约”项。
 func usesSpotItems(market string) bool {
-	return exchange.RuleFor(strings.ToUpper(market)).PositionFromBalance
+	return exchange.RuleFor(market).PositionFromBalance
 }
 
 // HourlyCap 返回标的的每小时累计下单金额上限：先找标的自己的设置，再找 "*"；没有设置返回 false（不限）。

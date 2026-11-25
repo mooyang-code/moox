@@ -1,16 +1,14 @@
 import { computed, inject, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { MarketType } from "@/api/trade";
-import { isStockOnly } from "../shared/markets";
+import { isStockOnly, MARKET_ORDER } from "../shared/markets";
 import { detailContextKey } from "./context";
 import { instrumentFilter } from "./instrument-filter";
 import { rangeFromQuery, rangeParams, type RecordRange } from "./record-range";
 
-/** 地址栏的数字市场转回 MarketType；不认识的值当作没选。 */
+/** 地址栏里的市场（spot、swap、equity）转回 MarketType；不认识的值当作没选。 */
 function marketFromQuery(value: unknown): MarketType | undefined {
-  // 地址里的值都是字符串，市场要转回数字，否则和可选市场比较不相等、会被重置成第一个
-  const market = Number(value);
-  return [0, 1, 2, 3].includes(market) ? (market as MarketType) : undefined;
+  return MARKET_ORDER.find(market => market === value);
 }
 
 /**
@@ -66,7 +64,11 @@ export function useRecordFilters(options: {
     return {
       logical_account_id: logical.value.logical_account_id,
       trading_account_id: accountId.value,
-      instrument_id: instrumentFilter(appliedSymbol.value, stockOnly.value ? 3 : market.value, logical.value.settlement_asset),
+      instrument_id: instrumentFilter(
+        appliedSymbol.value,
+        stockOnly.value ? "equity" : market.value,
+        logical.value.settlement_asset
+      ),
       ...rangeParams(range.value)
     };
   }

@@ -91,14 +91,17 @@ function isDecimal(value: string): boolean {
 // 股票代码形如 600519.XSHG
 const stockCodePattern = /^[0-9A-Z]+\.[A-Z]+$/;
 
-/** label 为空（A 股组合只有一组上限）时提示里不带市场名；标的写法按市场：加密货币带 -SPOT/-SWAP 后缀，股票是代码。 */
-function validateCaps(rows: CapRow[], market: "SPOT" | "SWAP" | "STOCK", label: string): string {
+/**
+ * label 为空（A 股组合只有一组上限）时提示里不带市场名。标的写法：suffix 是加密货币标的 ID 的后缀（SPOT、SWAP 原文），
+ * 为 null 时按股票代码校验。
+ */
+function validateCaps(rows: CapRow[], suffix: "SPOT" | "SWAP" | null, label: string): string {
   const seen = new Set<string>();
   for (const row of rows) {
     const key = row.key.trim().toUpperCase();
-    const valid = market === "STOCK" ? stockCodePattern.test(key) : key.endsWith(`-${market}`);
+    const valid = suffix === null ? stockCodePattern.test(key) : key.endsWith(`-${suffix}`);
     if (key !== "*" && !valid)
-      return `${label}每小时上限的标的写 * 或形如 ${market === "STOCK" ? "600519.XSHG" : `BTC-USDT-${market}`}`;
+      return `${label}每小时上限的标的写 * 或形如 ${suffix === null ? "600519.XSHG" : `BTC-USDT-${suffix}`}`;
     if (seen.has(key)) return `${label}每小时上限的标的 ${key} 重复`;
     seen.add(key);
     if (!isDecimal(row.value) || Number(row.value) <= 0) return `${label}每小时上限 ${key} 必须是大于 0 的数字`;
@@ -115,7 +118,7 @@ export function validateOrderSettingsModel(model: OrderSettingsModel, stockOnly 
   if (!stockOnly && !isDecimal(model.min_notional_swap)) return "合约最小下单额必须是不小于 0 的数字";
   // A 股组合只有一组上限（后端按现货那组处理），不校验合约那组
   const capError = stockOnly
-    ? validateCaps(model.hourly_cap_spot, "STOCK", "")
+    ? validateCaps(model.hourly_cap_spot, null, "")
     : validateCaps(model.hourly_cap_spot, "SPOT", "现货") || validateCaps(model.hourly_cap_swap, "SWAP", "合约");
   if (capError) return capError;
   if (

@@ -86,7 +86,7 @@ func fundingRate(symbol string, at time.Time, mark string) exchange.FundingRate 
 
 func swapPaperAdapter(facts *fundingFacts, market *fundingMarket, now *time.Time) *Adapter {
 	return &Adapter{
-		Account: store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "paper-1", Markets: []string{"SWAP"}, SettlementAsset: "USDT"},
+		Account: store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "paper-1", Markets: []string{"swap"}, SettlementAsset: "USDT"},
 		Store:   facts, MarketData: market, Now: func() time.Time { return *now },
 	}
 }
@@ -245,7 +245,7 @@ func TestSettleFundingNeedsSwapAndFundingSource(t *testing.T) {
 	facts := &fundingFacts{activity: store.PaperSwapActivity{Positions: map[string]shared.Decimal{"BTCUSDT": shared.MustDecimal("1")}}}
 	market := &fundingMarket{}
 	spot := swapPaperAdapter(facts, market, &now)
-	spot.Account.Markets = []string{"SPOT"}
+	spot.Account.Markets = []string{"spot"}
 	if _, err := spot.SettleFunding(context.Background()); err != nil || len(market.calls) != 0 {
 		t.Fatalf("现货账户不结算资金费：err=%v calls=%d", err, len(market.calls))
 	}

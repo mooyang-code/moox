@@ -655,7 +655,7 @@ func TestRejectDuplicateCredentialIsUnconditional(t *testing.T) {
 	}
 
 	// 不同密钥、账户自身、不同环境都不算重复。
-	binance := store.accounts["BINANCE-spot"]
+	binance := store.accounts["binance-spot"]
 	other := liveCredentialAccount("binance-other", exchange.ExchangeBinance, exchange.MarketTypeSpot)
 	other.CredentialSecretID = "secret-2"
 	require.NoError(t, service.rejectDuplicateCredential(ctx, other))

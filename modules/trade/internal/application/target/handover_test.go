@@ -56,7 +56,7 @@ func TestReleaseTargetOrdersCoversEveryTarget(t *testing.T) {
 	f.restingOrder(t, "resting-1", "BUY", "10", "0", f.now)
 	base := store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-old", Version: 1,
 	}
 	pending := base
@@ -101,7 +101,7 @@ func TestReleaseTargetOrdersConfirmsUnknownCancel(t *testing.T) {
 	f.now = time.Now().UTC()
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "cancel-unknown", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: "cancel-unknown", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "cancel-unknown", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-current", State: "CANCEL_UNKNOWN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})
@@ -144,7 +144,7 @@ func TestExpiredNewTargetStopsPreviousRestingOrders(t *testing.T) {
 	f.position(t, "account-a", "BTCUSDT", "100")
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		ClientOrderID: "old-resting", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: "old-resting", Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		OwnerType: "TARGET", OwnerID: "target-old", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	})
@@ -168,7 +168,7 @@ func (f *targetFixture) operatorChild(t *testing.T, orderID, actionID, state str
 	t.Helper()
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1",
-		ClientOrderID: orderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: orderID, Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "SELL", Quantity: "5", ReferencePrice: "100",
 		OwnerType: "OPERATOR", OwnerID: actionID, State: state, SubmittedAt: 1, Version: 1,
 	})
@@ -178,7 +178,7 @@ func (f *targetFixture) operatorAction(t *testing.T, actionID, actionType, statu
 	t.Helper()
 	_, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: actionID, LogicalAccountID: "logical-1", ActionType: actionType,
-		Reason: "测试", RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`,
+		Reason: "测试", RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"binance"}`,
 		Status: status,
 	})
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestFinishedFlattenChildrenDoNotPauseButManualOrdersDo(t *testing.T) {
 		t.Run(c.actionType, func(t *testing.T) {
 			f := newMixedExecutorFixture(t)
 			f.setSwapPosition("BTCUSDT", "5")
-			f.block(t, "SWAP", "BTCUSDT")
+			f.block(t, "swap", "BTCUSDT")
 			f.operatorAction(t, "action-1", c.actionType, c.status)
 			f.operatorChild(t, "operator-child", "action-1", "OPEN")
 			f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
@@ -255,7 +255,7 @@ func TestReleaseTargetOrdersResolvesEveryUnknownOrder(t *testing.T) {
 	f.now = time.Now().UTC()
 	base := store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", InstanceID: "runner-1",
-		Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		Exchange: "binance", MarketType: "swap", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-old",
 		State: "SUBMIT_UNKNOWN", SubmittedAt: f.now.UnixMilli(), Version: 1,
 	}

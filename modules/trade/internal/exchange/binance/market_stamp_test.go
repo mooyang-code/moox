@@ -150,7 +150,7 @@ func TestAdapterSnapshotsPersistToStore(t *testing.T) {
 	defer db.Close()
 	account := func(id string, market exchange.MarketType, snapshot exchange.AccountSnapshot) store.TradingAccountRecord {
 		record := store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "BINANCE", Markets: []string{string(market)},
+			SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "binance", Markets: []string{string(market)},
 			ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-" + id, SettlementAsset: "USDT",
 			Status: "ENABLED", Snapshot: store.SnapshotFromExchange(snapshot),
 		}

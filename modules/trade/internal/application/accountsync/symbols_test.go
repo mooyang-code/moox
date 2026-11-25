@@ -92,7 +92,7 @@ func TestFillsBeforeAccountCreationOnlyAdvanceCursor(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(5_000), SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE", Environment: "TESTNET",
+			Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))
@@ -112,7 +112,7 @@ func TestFillsBeforeAccountCreationOnlyAdvanceCursor(t *testing.T) {
 	require.False(t, result.ExternalFactsImported)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
-	require.NotEmpty(t, account.FillCursors["SWAP:BTC-USDT"])
+	require.NotEmpty(t, account.FillCursors["swap:BTC-USDT"])
 	require.True(t, account.Ready)
 }
 
@@ -122,7 +122,7 @@ func TestImportedOrderBeforeCreationSeedsFilledQuantity(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT",
+			Exchange: "binance", Environment: "TESTNET", MarketType: "swap", ExchangeSymbol: "BTC-USDT",
 			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			Linear: true, ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
@@ -175,7 +175,7 @@ func TestTwoKeysOnSameExchangeSyncIndependently(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "account-2", Name: "second",
-			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE", Environment: "TESTNET",
+			Exchange: "binance", Markets: []string{"swap"}, ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-2", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))
@@ -217,7 +217,7 @@ func TestBoundedFullSymbolsCapsIdleSymbols(t *testing.T) {
 	require.NoError(t, err)
 	account.FillCursors = make(map[string]string, 500)
 	for index := 0; index < 500; index++ {
-		account.FillCursors[fmt.Sprintf("SWAP:S%03dUSDT", index)] = "1"
+		account.FillCursors[fmt.Sprintf("swap:S%03dUSDT", index)] = "1"
 	}
 	service := &Service{Store: tradeStore}
 	open := []exchange.Order{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "OPENUSDT"}}

@@ -2,8 +2,8 @@ import type { StrategyInstance } from "@/api/strategy-types";
 import type { LogicalAccount, MarketType, TradingAccount } from "@/api/trade/types";
 import { environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 
-// 策略市场在交易模块里的编号：A 股（equity）对应股票市场，可以挂 A 股模拟账户。
-const marketTypes: Record<string, number> = { spot: 1, swap: 2, equity: 3 };
+// 策略市场与交易模块的市场写法相同（spot、swap、equity）：股票（equity）可以挂 A 股、港股模拟账户。
+const tradeMarkets: readonly string[] = ["spot", "swap", "equity"];
 
 export interface LogicalAccountOption {
   account: LogicalAccount;
@@ -11,9 +11,9 @@ export interface LogicalAccountOption {
   disabledReason: string;
 }
 
-// 策略要输出的市场：types 是这些市场在交易模块里的编号。校验前为空，不过滤账户。
+// 策略要输出的市场（交易模块的市场写法）。校验前为空，不过滤账户。
 export interface ResolvedMarkets {
-  types?: number[];
+  types?: MarketType[];
 }
 
 // resolved_json 来自校验结果，校验前不知道市场。市场模式的 select 为 both 或 prefer 不同时要输出现货和永续两个市场。
@@ -32,7 +32,7 @@ export function resolvedMarkets(resolvedJSON?: string): ResolvedMarkets {
 
 // 市场列表对应的账户要求：账户的可交易市场要包含列表里的全部市场（策略池按成员市场的并集）。
 export function marketsToResolved(markets: string[]): ResolvedMarkets {
-  return { types: markets.map(market => marketTypes[market]).filter(Boolean) };
+  return { types: markets.filter((market): market is MarketType => tradeMarkets.includes(market)) };
 }
 
 /**
@@ -65,10 +65,7 @@ export function logicalAccountOptions(
   boundInstances: ReadonlyMap<string, string> | null = null
 ): LogicalAccountOption[] {
   return accounts
-    .filter(
-      account =>
-        account.control_mode === 1 && (markets.types ?? []).every(type => (account.markets ?? []).includes(type as MarketType))
-    )
+    .filter(account => account.control_mode === 1 && (markets.types ?? []).every(type => (account.markets ?? []).includes(type)))
     .map(account => {
       const members = (account.members || []).filter(member => member.enabled).length;
       const bound = boundInstances?.get(account.logical_account_id);

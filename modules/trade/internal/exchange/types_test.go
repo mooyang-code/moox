@@ -38,13 +38,13 @@ func TestMarketOfInstrumentIDUsesSuffix(t *testing.T) {
 	for id, want := range map[string]MarketType{
 		"BTC-USDT-SWAP": MarketTypeSwap,
 		"BTC-USDT-SPOT": MarketTypeSpot,
-		"600519.XSHG":   MarketTypeStock,
+		"600519.XSHG":   MarketTypeEquity,
 	} {
 		if got := MarketOfInstrumentID(id); got != want {
 			t.Fatalf("MarketOfInstrumentID(%q) = %q, want %q", id, got, want)
 		}
 	}
-	if InstrumentSuffix(MarketTypeSwap) != "SWAP" || InstrumentSuffix(MarketTypeSpot) != "SPOT" || InstrumentSuffix(MarketTypeStock) != "" {
+	if InstrumentSuffix(MarketTypeSwap) != "SWAP" || InstrumentSuffix(MarketTypeSpot) != "SPOT" || InstrumentSuffix(MarketTypeEquity) != "" {
 		t.Fatal("标的 ID 后缀应是 SPOT、SWAP，股票没有后缀")
 	}
 }

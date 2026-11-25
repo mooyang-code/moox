@@ -20,17 +20,17 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
 	fixture.orders.nextID = ""
 	ctx := context.Background()
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'SPOT,SWAP', c_margin_mode = 'CROSS' WHERE c_trading_account_id = 'account-a'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_markets = 'spot,swap', c_margin_mode = 'CROSS' WHERE c_trading_account_id = 'account-a'`).Error)
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
 		swap := fixture.instrument("account-a")
-		swap.MarketType, swap.InstrumentID = "SWAP", "BTC-USDT-SWAP"
+		swap.MarketType, swap.InstrumentID = "swap", "BTC-USDT-SWAP"
 		swap.Linear, swap.ContractValue, swap.ContractValueAsset = true, "1", "BTC"
 		if err := tx.UpsertInstrument(swap); err != nil {
 			return err
 		}
 		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "2", FilledQuantity: "2", ReferencePrice: "100",
 			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
 		})
@@ -48,7 +48,7 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 	}))
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 			SignedQuantity: "3", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli(),
 		})
 	}))
@@ -59,7 +59,7 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 func (f *operatorFixture) block(t *testing.T, market, symbol string) {
 	t.Helper()
 	_, err := storetest.BlockInstrument(f.store, store.BlockedInstrumentRecord{
-		Exchange: "BINANCE", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
+		Exchange: "binance", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
 	})
 	require.NoError(t, err)
 }
@@ -121,7 +121,7 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 			return err
 		}
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+			SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 			SignedQuantity: "1.5", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli(),
 		})
 	}))
@@ -203,9 +203,9 @@ func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing
 func TestFlattenSingleInstrumentLeavesOthersAndDoesNotPause(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	other := activeOrder(fixture, "spot-open", "TARGET")
-	other.MarketType, other.InstrumentID = "SPOT", "BTC-USDT-SPOT"
+	other.MarketType, other.InstrumentID = "spot", "BTC-USDT-SPOT"
 	fixture.order(t, other)
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := flattenCommand("delist-1")
 	command.InstrumentID = "BTC-USDT-SWAP"
 
@@ -271,7 +271,7 @@ func TestReduceReplayAfterPartialKeepsOriginalTargets(t *testing.T) {
 				return err
 			}
 			return tx.UpsertPosition(store.PositionRecord{
-				SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+				SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "swap", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
 				SignedQuantity: "2.25", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli(),
 			})
 		}))
@@ -290,13 +290,13 @@ func TestSingleInstrumentRemainingIgnoresOtherDelistedSpotAsset(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
 		eth := fixture.instrument("account-a")
-		eth.MarketType, eth.ExchangeSymbol, eth.InstrumentID, eth.BaseAsset, eth.Status = "SPOT", "ETHUSDT", "ETH-USDT-SPOT", "ETH", "BREAK"
+		eth.MarketType, eth.ExchangeSymbol, eth.InstrumentID, eth.BaseAsset, eth.Status = "spot", "ETHUSDT", "ETH-USDT-SPOT", "ETH", "BREAK"
 		if err := tx.UpsertInstrument(eth); err != nil {
 			return err
 		}
 		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought-eth", ClientOrderID: "bought-eth",
-			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "ETHUSDT", InstrumentID: "ETH-USDT-SPOT",
+			Exchange: "binance", MarketType: "spot", ExchangeSymbol: "ETHUSDT", InstrumentID: "ETH-USDT-SPOT",
 			OrderType: "MARKET", Side: "BUY", Quantity: "4", FilledQuantity: "4", ReferencePrice: "100",
 			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
 		})
@@ -309,7 +309,7 @@ func TestSingleInstrumentRemainingIgnoresOtherDelistedSpotAsset(t *testing.T) {
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 		})
 	}))
-	fixture.block(t, "SWAP", "BTCUSDT")
+	fixture.block(t, "swap", "BTCUSDT")
 	command := flattenCommand("delist-2")
 	command.InstrumentID = "BTC-USDT-SWAP"
 

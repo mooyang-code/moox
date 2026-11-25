@@ -197,7 +197,7 @@ func seedManagedHoldings(t *testing.T, f *fixture) {
 		return storetest.CreateFilledOrder(tx, store.OrderRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "managed-buy",
 			ClientOrderID: "managed-buy", ExchangeSymbol: testSymbol, OrderType: "MARKET",
-			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: testInstrumentID(exchange.MarketTypeSpot),
+			Exchange: "binance", MarketType: "spot", InstrumentID: testInstrumentID(exchange.MarketTypeSpot),
 			Side: "BUY", Quantity: "1", ReferencePrice: "5000", State: "FILLED", FilledQuantity: "1", AveragePrice: "5000",
 			OwnerType: "OPERATOR", OwnerID: "managed-buy", LogicalAccountID: testLogicalAccount,
 		})

@@ -15,8 +15,8 @@ import (
 
 // 标的下架事件里 payload 的取值。
 const (
-	DelistMarketSpot = "SPOT"
-	DelistMarketSwap = "SWAP"
+	DelistMarketSpot = "spot"
+	DelistMarketSwap = "swap"
 
 	DelistSourceBinanceSpotSchedule     = "BINANCE_SPOT_SCHEDULE"
 	DelistSourceBinanceSwapExchangeInfo = "BINANCE_SWAP_EXCHANGE_INFO"

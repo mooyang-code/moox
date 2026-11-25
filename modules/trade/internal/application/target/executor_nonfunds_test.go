@@ -57,7 +57,7 @@ func TestRejectedAccountBuyNeverTransfers(t *testing.T) {
 	f, fake, newExecutor := realWalletFixture(t, "50000", "10", "600", "0.01")
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child", ClientOrderID: "rejected-child",
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		Exchange: "binance", MarketType: "spot", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "50000", State: "REJECTED",
 		RejectReason: "This symbol is not permitted for this account", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
 		LogicalAccountID: "logical-1", InstanceID: "runner-1",

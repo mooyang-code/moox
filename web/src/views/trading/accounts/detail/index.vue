@@ -83,12 +83,12 @@
             <div class="v tx-num">{{ fmtMoney(totals.available) }}</div>
             <div class="d">可用于新开仓</div>
           </div>
-          <div v-if="logical.markets?.includes(2)">
+          <div v-if="logical.markets?.includes('swap')">
             <div class="k">保证金占用</div>
             <div class="v tx-num">{{ fmtMoney(totals.margin) }}</div>
             <div class="d">占权益 {{ totals.equity ? fmtPercent(totals.margin / totals.equity, 1).replace("+", "") : "—" }}</div>
           </div>
-          <div v-if="logical.markets?.includes(2)">
+          <div v-if="logical.markets?.includes('swap')">
             <div class="k">未实现盈亏</div>
             <div class="v tx-num" :class="pnlClass(totals.unrealizedPnl)">{{ fmtSigned(totals.unrealizedPnl) }}</div>
             <div class="d">永续按标记价</div>
@@ -306,7 +306,7 @@ import {
   actionStateLabels,
   cancelOrder,
   closePaperSimulation,
-  exchangeLabels,
+  exchangeLabel,
   flattenLogicalAccount,
   flattenTradingAccount,
   getLogicalAccount,
@@ -411,7 +411,7 @@ const initialBalance = computed(() => paperInitialBalance(enabledAccounts.value)
 const equityChange = computed(() => equityChangeOf(totals.value.equity, initialBalance.value));
 const latestSync = computed(() => Math.max(0, ...enabledAccounts.value.map(item => Number(item.last_sync_at) || 0)));
 const exchangesText = computed(() => {
-  const names = [...new Set(enabledAccounts.value.map(item => exchangeLabels[item.exchange] || "-"))];
+  const names = [...new Set(enabledAccounts.value.map(item => exchangeLabel(item.exchange)))];
   return names.length ? names.join("、") : "-";
 });
 const targetExpiredNow = computed(() => targetExpired(target.value));

@@ -275,8 +275,8 @@ func TestLaneStatusesExchangeMinimumNotional(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := swapPolicyFixture(t, always)
-			f.setMinNotional(t, "BINANCE", "BTCUSDT", "50")
-			f.setMinNotional(t, "OKX", swapID, "50")
+			f.setMinNotional(t, "binance", "BTCUSDT", "50")
+			f.setMinNotional(t, "okx", swapID, "50")
 			if c.position != "" {
 				f.position(t, "account-a", "BTCUSDT", c.position)
 			}
@@ -308,8 +308,8 @@ func TestLaneStatusesTryEveryCandidateMember(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := swapPolicyFixture(t, always)
-			f.setMinNotional(t, "BINANCE", "BTCUSDT", "100")
-			f.setMinNotional(t, "OKX", swapID, c.okxMinimum)
+			f.setMinNotional(t, "binance", "BTCUSDT", "100")
+			f.setMinNotional(t, "okx", swapID, c.okxMinimum)
 			f.position(t, "account-a", "BTCUSDT", "10")
 			f.target(t, []store.InstrumentTarget{{InstrumentID: swapID, Quantity: "10.4"}})
 

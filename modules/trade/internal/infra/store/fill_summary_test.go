@@ -12,7 +12,7 @@ func seedLiveSummaryFills(t *testing.T, s *Store) {
 	ctx := context.Background()
 	account := testAccount()
 	account.ExecutionMode, account.Environment, account.AccountMode = "LIVE", "PRODUCTION", "BINANCE_STANDARD"
-	account.Markets = []string{"SWAP"}
+	account.Markets = []string{"swap"}
 	account.MarginMode = "CROSS"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
@@ -30,7 +30,7 @@ func seedLiveSummaryFills(t *testing.T, s *Store) {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+			Exchange: "binance", Environment: "PRODUCTION", MarketType: "swap", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
 			BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: true, ContractValue: "1", ContractValueAsset: "BTC",
 			PriceTick: "0.01", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", Status: "TRADING",
 		}); err != nil {
@@ -42,7 +42,7 @@ func seedLiveSummaryFills(t *testing.T, s *Store) {
 				owner, logical = "EXTERNAL", ""
 			}
 			if err := tx.CreateOrder(OrderRecord{
-				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: id, ClientOrderID: id, Exchange: "BINANCE", MarketType: "SWAP",
+				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: id, ClientOrderID: id, Exchange: "binance", MarketType: "swap",
 				ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
 				Quantity: "10", ReferencePrice: "100", OwnerType: owner, OwnerID: id, LogicalAccountID: logical, State: "OPEN", Version: 1,
 			}); err != nil {
@@ -55,7 +55,7 @@ func seedLiveSummaryFills(t *testing.T, s *Store) {
 			{FillID: "f3", ExchangeTradeID: "t3", OrderID: "op-order", Fee: "0.05", FeeAsset: "USDT", RealizedPnL: "0", TradedAt: 3_000},
 			{FillID: "f4", ExchangeTradeID: "t4", OrderID: "ext-order", Fee: "1", FeeAsset: "USDT", RealizedPnL: "100", TradedAt: 2_500},
 		} {
-			fill.SpaceID, fill.TradingAccountID, fill.Exchange, fill.MarketType = "space-1", "account-1", "BINANCE", "SWAP"
+			fill.SpaceID, fill.TradingAccountID, fill.Exchange, fill.MarketType = "space-1", "account-1", "binance", "swap"
 			fill.InstrumentID, fill.ExchangeSymbol, fill.Side, fill.PositionSide = "BTC-USDT-SWAP", "BTCUSDT", "BUY", "NET"
 			fill.Price, fill.Quantity, fill.SettlementAsset = "100", "1", "USDT"
 			if _, err := tx.InsertFill(fill); err != nil {

@@ -69,8 +69,8 @@ export const DELIST_EXCHANGES = [
 ] as const;
 
 export const DELIST_MARKETS = [
-  { value: "SPOT", label: "现货" },
-  { value: "SWAP", label: "永续合约" }
+  { value: "spot", label: "现货" },
+  { value: "swap", label: "永续合约" }
 ] as const;
 
 /** 手工登记允许补录已经过去的时间，所以只检查有没有填。 */

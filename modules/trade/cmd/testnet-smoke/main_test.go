@@ -19,7 +19,7 @@ import (
 
 func TestParseOptionsRequiresExplicitConfirmation(t *testing.T) {
 	_, err := parseOptions(
-		[]string{"--phase", "submit", "--exchange", "BINANCE", "--secret-id", "secret-1"},
+		[]string{"--phase", "submit", "--exchange", "binance", "--secret-id", "secret-1"},
 		func(string) string { return "" },
 	)
 	if err == nil || !strings.Contains(err.Error(), "MOOX_TRADE_TESTNET_CONFIRM=YES") {
@@ -38,7 +38,7 @@ func TestParseOptionsPinsTestnetAndRejectsUnsupportedExchange(t *testing.T) {
 		[]string{"--phase", "submit", "--exchange", "COINBASE", "--secret-id", "secret-1"},
 		env,
 	)
-	if err == nil || !strings.Contains(err.Error(), "BINANCE or OKX") {
+	if err == nil || !strings.Contains(err.Error(), "binance or okx") {
 		t.Fatalf("parseOptions() error = %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestReadStateRejectsProductionOrWrongExchange(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := os.WriteFile(path, []byte(`{
 		"version":1,
-		"exchange":"BINANCE",
+		"exchange":"binance",
 		"environment":"PRODUCTION",
 		"space_id":"testnet-smoke",
 		"account_id":"account",
@@ -221,7 +221,7 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if account.Environment != "TESTNET" || account.ExecutionMode != "LIVE" ||
-		!slices.Equal(account.Markets, []string{"SPOT"}) || account.CredentialSecretID != options.SecretID {
+		!slices.Equal(account.Markets, []string{"spot"}) || account.CredentialSecretID != options.SecretID {
 		t.Fatalf("account = %+v", account)
 	}
 	logical, err := database.GetLogicalAccount(ctx, smokeSpaceID, identity.LogicalAccountID)
@@ -257,7 +257,7 @@ func TestSeedSmokeStoreRejectsExistingNonTestnetAccount(t *testing.T) {
 	if err := database.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
-			Name: "bad", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			Name: "bad", Exchange: "binance", Markets: []string{"spot"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION",
 			CredentialSecretID: options.SecretID, SettlementAsset: "USDT",
 			Status: "ENABLED"})
@@ -386,10 +386,10 @@ func TestShellHarnessUsesSecretIDsAndTwoRestartPhases(t *testing.T) {
 		"MOOX_OKX_TESTNET_SECRET_ID",
 		"MOOX_TRADE_TESTNET_CONFIG",
 		"MOOX_TRADE_TESTNET_SWAP_MAX_NOTIONAL",
-		"run_exchange BINANCE SPOT",
-		"run_exchange BINANCE SWAP",
-		"run_exchange OKX SPOT",
-		"run_exchange OKX SWAP",
+		"run_exchange binance spot",
+		"run_exchange binance swap",
+		"run_exchange okx spot",
+		"run_exchange okx swap",
 		"--market",
 		"okx.db",
 		"--phase submit",
@@ -450,7 +450,7 @@ func TestParseOptionsDefaultsSymbolPerMarketAndRejectsStock(t *testing.T) {
 	for _, test := range []struct {
 		exchange, market, symbol string
 	}{
-		{"BINANCE", "SPOT", "BTCUSDT"}, {"BINANCE", "SWAP", "BTCUSDT"}, {"OKX", "SPOT", "BTC-USDT"}, {"OKX", "SWAP", "BTC-USDT-SWAP"},
+		{"binance", "spot", "BTCUSDT"}, {"binance", "swap", "BTCUSDT"}, {"okx", "spot", "BTC-USDT"}, {"okx", "swap", "BTC-USDT-SWAP"},
 	} {
 		options, err := parseOptions(append([]string{"--exchange", test.exchange, "--market", test.market}, base...), env)
 		if err != nil {
@@ -460,7 +460,7 @@ func TestParseOptionsDefaultsSymbolPerMarketAndRejectsStock(t *testing.T) {
 			t.Fatalf("%s %s：options = %+v", test.exchange, test.market, options)
 		}
 	}
-	if _, err := parseOptions(append([]string{"--exchange", "BINANCE", "--market", "STOCK"}, base...), env); err == nil {
+	if _, err := parseOptions(append([]string{"--exchange", "binance", "--market", "equity"}, base...), env); err == nil {
 		t.Fatal("STOCK 不是加密货币测试网的市场")
 	}
 }
@@ -494,15 +494,15 @@ func TestSeedSmokeStoreCreatesSeparateAccountPerMarket(t *testing.T) {
 	}
 	// OKX 模拟盘一个账户同时开通两个市场：现货、永续两次演练用的是同一个账户。
 	okxSpot := seed(exchange.ExchangeOKX, exchange.MarketTypeSpot, "okx-demo")
-	if okxSpot.TradingAccountID != okxSwap.TradingAccountID || !slices.Equal(okxSwap.Markets, []string{"SPOT", "SWAP"}) ||
+	if okxSpot.TradingAccountID != okxSwap.TradingAccountID || !slices.Equal(okxSwap.Markets, []string{"spot", "swap"}) ||
 		okxSwap.MarginMode != "CROSS" || okxSwap.LeverageSettings[store.DefaultLeverageKey] != "1" {
 		t.Fatalf("OKX 应是一个同时开通现货和永续的账户：%+v / %+v", okxSpot, okxSwap)
 	}
-	if !slices.Equal(spot.Markets, []string{"SPOT"}) || spot.MarginMode != "" || spot.CredentialSecretID != "binance-spot-testnet" ||
+	if !slices.Equal(spot.Markets, []string{"spot"}) || spot.MarginMode != "" || spot.CredentialSecretID != "binance-spot-testnet" ||
 		spot.AccountMode != "BINANCE_STANDARD" {
 		t.Fatalf("现货账户 = %+v", spot)
 	}
-	if !slices.Equal(swap.Markets, []string{"SWAP"}) || swap.MarginMode != "CROSS" || swap.CredentialSecretID != "binance-swap-testnet" ||
+	if !slices.Equal(swap.Markets, []string{"swap"}) || swap.MarginMode != "CROSS" || swap.CredentialSecretID != "binance-swap-testnet" ||
 		swap.LeverageSettings[store.DefaultLeverageKey] != "1" || swap.AccountMode != "BINANCE_STANDARD" {
 		t.Fatalf("合约账户 = %+v", swap)
 	}
@@ -518,7 +518,7 @@ func TestSeedSmokeStoreCreatesSeparateAccountPerMarket(t *testing.T) {
 }
 
 func TestParseOptionsFactsRejectsUnknownEnvironment(t *testing.T) {
-	base := []string{"--phase", "facts", "--exchange", "BINANCE", "--secret-id", "s"}
+	base := []string{"--phase", "facts", "--exchange", "binance", "--secret-id", "s"}
 	if _, err := parseOptions(append([]string{"--environment", "TESTNEt"}, base...), nil); err != nil {
 		t.Fatalf("大小写不敏感：%v", err)
 	}

@@ -175,7 +175,7 @@ func TestSpotStaleBalanceDoesNotRestoreReady(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "spot-1", Name: "spot",
-			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE", Environment: "TESTNET",
+			Exchange: "binance", Markets: []string{"spot"}, ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
 			return err

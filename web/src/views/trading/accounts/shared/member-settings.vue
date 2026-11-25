@@ -43,7 +43,7 @@
     </div>
 
     <div class="block">
-      <div v-if="account.markets?.includes(2)">
+      <div v-if="account.markets?.includes('swap')">
         <div class="block-title">杠杆</div>
         <a-table size="small" row-key="key" :data="leverageRows" :pagination="false">
           <template #columns>

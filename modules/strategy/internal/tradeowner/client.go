@@ -146,27 +146,17 @@ func (c *Client) CloseSession(ctx context.Context, spaceID, logicalAccountID, in
 }
 
 // checkMarkets 检查策略要输出的每个市场（spot、swap、equity）都在组合账户可交易的市场里（启用成员已开通市场的并集）。
-func checkMarkets(markets []string, accountMarkets []tradepb.MarketType) error {
+func checkMarkets(markets []string, accountMarkets []string) error {
 	if len(accountMarkets) == 0 {
 		return fmt.Errorf("%w：组合账户还没有启用的成员", ErrMarketMismatch)
 	}
 	if len(markets) == 0 {
 		return fmt.Errorf("%w：策略没有要输出的市场", ErrMarketMismatch)
 	}
+	// 策略与 Trade 的市场写法一致（spot、swap、equity），直接比较。
 	for _, market := range markets {
-		var want tradepb.MarketType
-		switch market {
-		case "spot":
-			want = tradepb.MarketType_MARKET_TYPE_SPOT
-		case "swap":
-			want = tradepb.MarketType_MARKET_TYPE_SWAP
-		case "equity":
-			want = tradepb.MarketType_MARKET_TYPE_STOCK
-		default:
-			return fmt.Errorf("%w：策略市场 %q 不受支持", ErrMarketMismatch, market)
-		}
-		if !slices.Contains(accountMarkets, want) {
-			return fmt.Errorf("%w：策略要输出 %s，组合账户可交易的市场是 %v", ErrMarketMismatch, market, accountMarkets)
+		if !slices.Contains(accountMarkets, market) {
+			return fmt.Errorf("%w：策略要输出 %q，组合账户可交易的市场是 %v", ErrMarketMismatch, market, accountMarkets)
 		}
 	}
 	return nil

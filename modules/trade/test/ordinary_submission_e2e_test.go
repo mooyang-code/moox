@@ -30,13 +30,13 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = db.Close() })
 			console := &rpc.ConsoleServer{Store: db, Paper: &papersimulation.Service{Store: db}, LogicalAccountServer: &rpc.LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}}}
-			marketPB, positionPB := tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.PositionSide_POSITION_SIDE_UNSPECIFIED
+			marketPB, positionPB := "spot", tradepb.PositionSide_POSITION_SIDE_UNSPECIFIED
 			if market == exchange.MarketTypeSwap {
-				marketPB, positionPB = tradepb.MarketType_MARKET_TYPE_SWAP, tradepb.PositionSide_POSITION_SIDE_NET
+				marketPB, positionPB = "swap", tradepb.PositionSide_POSITION_SIDE_NET
 			}
 			created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
-				AccountName: "ordinary-paper", LogicalAccountName: "ordinary-manual", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-				Markets: []tradepb.MarketType{marketPB}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+				AccountName: "ordinary-paper", LogicalAccountName: "ordinary-manual", Exchange: "binance",
+				Markets: []string{marketPB}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
 				ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL,
 			})
 			require.NoError(t, err)

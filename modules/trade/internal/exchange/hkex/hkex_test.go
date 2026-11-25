@@ -63,7 +63,7 @@ func TestQuoteFreshOutsideHKSession(t *testing.T) {
 	require.NoError(t, err)
 	exchanges := catalog{exchange.ExchangeHKEX: {Exchange: exchange.ExchangeHKEX, Session: session}}
 	fresh := func(quote, now string) bool {
-		return execution.QuoteFresh(exchanges, "HKEX", hkt(quote), hkt(now), 10*time.Second)
+		return execution.QuoteFresh(exchanges, "hkex", hkt(quote), hkt(now), 10*time.Second)
 	}
 	require.True(t, fresh("2026-11-17 16:08:19", "2026-11-17 20:00:00"), "收市后用收市价")
 	require.True(t, fresh("2026-11-17 11:59:58", "2026-11-17 12:30:00"), "午休用上午收市价")
@@ -112,7 +112,7 @@ func TestListInstrumentsUsesLotSizeFromSnapshot(t *testing.T) {
 	require.Len(t, byID, 3, "09988 取不到每手股数、01810 没有快照：都不收录")
 	tencent := byID["00700.XHKG"]
 	require.Equal(t, exchange.ExchangeHKEX, tencent.Exchange)
-	require.Equal(t, exchange.MarketTypeStock, tencent.MarketType)
+	require.Equal(t, exchange.MarketTypeEquity, tencent.MarketType)
 	require.Equal(t, "00700.XHKG", tencent.ExchangeSymbol)
 	require.Equal(t, "00700.XHKG", tencent.BaseAsset)
 	require.Equal(t, "HKD", tencent.QuoteAsset)
@@ -175,14 +175,14 @@ func TestQuoteTimeIsFetchTimeNotLastTrade(t *testing.T) {
 	}
 	market := NewMarketFrom(quotes, nil, nil)
 	market.Now = func() time.Time { return now }
-	thin := exchange.NewSymbolKey(exchange.MarketTypeStock, "00027.XHKG")
-	halted := exchange.NewSymbolKey(exchange.MarketTypeStock, "00204.XHKG")
+	thin := exchange.NewSymbolKey(exchange.MarketTypeEquity, "00027.XHKG")
+	halted := exchange.NewSymbolKey(exchange.MarketTypeEquity, "00204.XHKG")
 	for _, at := range []string{"2026-11-18 09:47:43", "2026-11-18 12:30:00", "2026-11-18 13:00:30", "2026-11-18 16:30:00"} {
 		now = hkt(at)
 		quote, err := market.GetQuote(context.Background(), thin)
 		require.NoError(t, err)
 		require.Equal(t, now, quote.SourceTime, at)
-		require.True(t, execution.QuoteFresh(exchanges, "HKEX", quote.SourceTime, now, 10*time.Second), at)
+		require.True(t, execution.QuoteFresh(exchanges, "hkex", quote.SourceTime, now, 10*time.Second), at)
 		require.Equal(t, "33.66", quote.Last.String())
 		stopped, err := market.GetQuote(context.Background(), halted)
 		require.NoError(t, err)

@@ -12,7 +12,7 @@ import (
 )
 
 // 管理台“手工登记下架”的预览（web/src/api/trade/delist.ts）按字段约定读
-// ListInstrumentHolders：请求用枚举名，响应有 holders[] 各字段和 instrument_unknown。proto 一改，这条测试就会提醒前端同步。
+// ListInstrumentHolders：请求用小写的交易所与市场，响应有 holders[] 各字段和 instrument_unknown。proto 一改，这条测试就会提醒前端同步。
 func readFrontendFile(t *testing.T, relative string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", relative))
@@ -69,20 +69,19 @@ func TestFrontendDelistPreviewMatchesTheHoldersContract(t *testing.T) {
 			t.Errorf("前端没有读响应字段 %s", field)
 		}
 	}
-	// 请求里用的枚举名必须是 proto 里真有的枚举值。
-	for enumName, constants := range map[string]string{"Exchange": "TRADE_EXCHANGE", "MarketType": "TRADE_MARKET"} {
-		declaration := regexp.MustCompile(`(?s)const ` + constants + `[^=]*=\s*\{(.*?)\};`).FindStringSubmatch(source)
+	// 请求里的交易所与市场直接用前端类型的取值，必须在 Trade 的小写白名单里。
+	for typeName, valid := range map[string]func(string) bool{"DelistExchange": validExchange, "DelistMarket": validDelistMarket} {
+		declaration := regexp.MustCompile(`export type ` + typeName + ` = ([^;]+);`).FindStringSubmatch(source)
 		if declaration == nil {
-			t.Fatalf("前端没有 %s", constants)
+			t.Fatalf("前端没有类型 %s", typeName)
 		}
-		enum := File_trade_service_proto.Enums().ByName(protoreflect.Name(enumName))
-		used := regexp.MustCompile(`"([A-Z_]+)"`).FindAllStringSubmatch(declaration[1], -1)
+		used := regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(declaration[1], -1)
 		if len(used) == 0 {
-			t.Fatalf("%s 里没有枚举名", constants)
+			t.Fatalf("%s 里没有取值", typeName)
 		}
 		for _, match := range used {
-			if enum.Values().ByName(protoreflect.Name(match[1])) == nil {
-				t.Errorf("前端用的枚举名 %s 不在 proto 的 %s 里", match[1], enumName)
+			if !valid(match[1]) {
+				t.Errorf("前端 %s 的取值 %q 不被 Trade 接受", typeName, match[1])
 			}
 		}
 	}

@@ -89,7 +89,7 @@ func TestTargetOrderSessionTable(t *testing.T) {
 
 			if test.placeRejected {
 				require.Error(t, err, "目标单落库应被拒")
-				_, lookupErr := db.GetOrderByClientID(context.Background(), "space-1", "account-1", "SPOT", spec.ClientOrderID)
+				_, lookupErr := db.GetOrderByClientID(context.Background(), "space-1", "account-1", "spot", spec.ClientOrderID)
 				require.ErrorIs(t, lookupErr, gorm.ErrRecordNotFound, "被拒的目标单不落库")
 				require.Zero(t, adapter.placeCalls, "被拒的目标单不发往交易所")
 				return

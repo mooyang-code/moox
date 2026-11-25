@@ -14,8 +14,8 @@ Object.defineProperty(window, "matchMedia", {
 
 const rows: BlockedInstrument[] = [
   {
-    exchange: 1,
-    market_type: 1,
+    exchange: "binance",
+    market_type: "spot",
     exchange_symbol: "LUNAUSDT",
     instrument_id: "LUNA-USDT-SPOT",
     base_asset: "LUNA",
@@ -25,8 +25,8 @@ const rows: BlockedInstrument[] = [
     delist_id: "delist-1"
   },
   {
-    exchange: 2,
-    market_type: 2,
+    exchange: "okx",
+    market_type: "swap",
     exchange_symbol: "FTT-USDT-SWAP",
     instrument_id: "",
     base_asset: "",
@@ -105,7 +105,7 @@ describe("下架名单子页签", () => {
     expect(document.body.textContent).toContain("进行中的下架处理（含演练）会一并取消");
     confirmButton("解除")?.click();
     await flushPromises();
-    expect(api.unblockInstrument).toHaveBeenCalledWith({ exchange: 1, market_type: 1, exchange_symbol: "LUNAUSDT" });
+    expect(api.unblockInstrument).toHaveBeenCalledWith({ exchange: "binance", market_type: "spot", exchange_symbol: "LUNAUSDT" });
     expect(wrapper.emitted("changed")).toHaveLength(1);
   });
 

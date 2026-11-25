@@ -121,7 +121,7 @@ func TestMultiMarketRoutesByMarketNotBySymbol(t *testing.T) {
 	require.Len(t, spot.placed, 1)
 	require.Len(t, swap.placed, 1)
 
-	_, err := router.GetQuote(ctx, exchange.SymbolKey{Market: exchange.MarketTypeStock, Symbol: "600519"})
+	_, err := router.GetQuote(ctx, exchange.SymbolKey{Market: exchange.MarketTypeEquity, Symbol: "600519"})
 	require.True(t, exchange.IsKind(err, exchange.ErrorRejected), "没有开通的市场直接拒绝")
 	_, err = router.PlaceOrder(ctx, exchange.OrderRequest{ExchangeSymbol: "BTCUSDT"})
 	require.True(t, exchange.IsKind(err, exchange.ErrorRejected), "下单必须写明市场")

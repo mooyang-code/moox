@@ -35,7 +35,7 @@ func TestNormalizeForMarkets(t *testing.T) {
 
 func TestAccountToPBCarriesMarketsWalletsAndAccountMode(t *testing.T) {
 	record := store.TradingAccountRecord{
-		TradingAccountID: "a1", SpaceID: "s", Markets: []string{"SPOT", "SWAP"}, ExecutionMode: "LIVE",
+		TradingAccountID: "a1", SpaceID: "s", Markets: []string{"spot", "swap"}, ExecutionMode: "LIVE",
 		AccountMode: "BINANCE_STANDARD", InspectionJSON: `{"withdraw":false}`,
 		Snapshot: store.TradingAccountSnapshot{
 			Balances:       []store.AssetBalance{{Wallet: "FUTURES", Asset: "USDT", Total: "5", Borrowed: "1"}},
@@ -43,7 +43,7 @@ func TestAccountToPBCarriesMarketsWalletsAndAccountMode(t *testing.T) {
 		},
 	}
 	pb := accountToPB(record)
-	require.Equal(t, []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.MarketType_MARKET_TYPE_SWAP}, pb.GetMarkets())
+	require.Equal(t, []string{"spot", "swap"}, pb.GetMarkets())
 	require.Equal(t, "BINANCE_STANDARD", pb.GetAccountMode())
 	require.JSONEq(t, `{"withdraw":false}`, pb.GetInspectionJson())
 	require.Equal(t, "FUTURES", pb.GetSnapshot().GetBalances()[0].GetWallet())
@@ -63,12 +63,12 @@ func TestLogicalAccountMarketsFollowEnabledMembers(t *testing.T) {
 	require.Empty(t, created.GetLogicalAccount().GetMarkets(), "还没有成员，没有可交易的市场")
 	logicalID := created.GetLogicalAccount().GetLogicalAccountId()
 
-	for id, markets := range map[string][]string{"spot-1": {"SPOT"}, "swap-1": {"SWAP"}} {
+	for id, markets := range map[string][]string{"spot-1": {"spot"}, "swap-1": {"swap"}} {
 		account := store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "BINANCE", Markets: markets,
+			SpaceID: "space-1", TradingAccountID: id, Name: id, Exchange: "binance", Markets: markets,
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 		}
-		if markets[0] == "SWAP" {
+		if markets[0] == "swap" {
 			account.MarginMode = "CROSS"
 		}
 		require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -83,6 +83,6 @@ func TestLogicalAccountMarketsFollowEnabledMembers(t *testing.T) {
 	got, err := handler.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalID})
 	require.NoError(t, err)
 	require.Equal(t,
-		[]tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.MarketType_MARKET_TYPE_SWAP},
+		[]string{"spot", "swap"},
 		got.GetLogicalAccount().GetMarkets(), "markets 是启用成员已开通市场的并集")
 }
