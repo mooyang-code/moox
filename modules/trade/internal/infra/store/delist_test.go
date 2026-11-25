@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -37,10 +38,10 @@ func TestBlockedInstrumentLifecycleIsIdempotent(t *testing.T) {
 	require.False(t, set.Contains(live, "swap", "FOOUSDT"), "现货条目不匹配同名永续")
 	require.False(t, set.Contains(TradingAccountRecord{Exchange: "okx", ExecutionMode: "LIVE"}, "spot", "FOOUSDT"), "别的交易所不匹配")
 
-	removed, err := s.UnblockInstrument(ctx, "binance", "spot", "FOOUSDT")
+	removed, err := unblockInstrument(t, s, "binance", "spot", "FOOUSDT")
 	require.NoError(t, err)
 	require.True(t, removed)
-	removed, err = s.UnblockInstrument(ctx, "binance", "spot", "FOOUSDT")
+	removed, err = unblockInstrument(t, s, "binance", "spot", "FOOUSDT")
 	require.NoError(t, err)
 	require.False(t, removed, "不在名单里不算错误")
 }
@@ -106,7 +107,7 @@ func TestUnblockInstrumentCancelsActiveDelists(t *testing.T) {
 	_, err := blockInstrument(t, s, BlockedInstrumentRecord{Exchange: "binance", MarketType: "spot", ExchangeSymbol: "FOOUSDT", Reason: "r", DelistID: "all"})
 	require.NoError(t, err)
 
-	removed, err := s.UnblockInstrument(ctx, "binance", "spot", "FOOUSDT")
+	removed, err := unblockInstrument(t, s, "binance", "spot", "FOOUSDT")
 	require.NoError(t, err)
 	require.True(t, removed)
 	for id, want := range map[string]string{"all": DelistCanceled, "paper": DelistCanceled, "old": DelistRescheduled} {
@@ -132,4 +133,13 @@ func blockInstrument(t *testing.T, s *Store, record BlockedInstrumentRecord) (cr
 func TestNormalizeBlockKeySplitsExchangeAndSymbol(t *testing.T) {
 	exchangeName, marketType, symbol := normalizeBlockKey(" BINANCE ", "SWAP", " fooUSDT ")
 	require.Equal(t, []string{"binance", "swap", "FOOUSDT"}, []string{exchangeName, marketType, symbol})
+}
+
+func unblockInstrument(t *testing.T, s *Store, exchange, marketType, exchangeSymbol string) (removed bool, err error) {
+	t.Helper()
+	err = s.Transaction(context.Background(), func(tx *Tx) error {
+		removed, _, err = tx.UnblockInstrument(exchange, marketType, exchangeSymbol, DelistUnblockedResult, time.Now().UnixMilli())
+		return err
+	})
+	return removed, err
 }

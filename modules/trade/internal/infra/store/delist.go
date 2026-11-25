@@ -225,15 +225,6 @@ func (tx *Tx) UnblockInstrument(exchange, marketType, exchangeSymbol, result str
 	return deleted.RowsAffected > 0, updated.RowsAffected, nil
 }
 
-// UnblockInstrument 在单独的事务里解除禁止，取消原因写“名单被手工解除”。
-func (s *Store) UnblockInstrument(ctx context.Context, exchange, marketType, exchangeSymbol string) (removed bool, err error) {
-	err = s.Transaction(ctx, func(tx *Tx) error {
-		removed, _, err = tx.UnblockInstrument(exchange, marketType, exchangeSymbol, DelistUnblockedResult, time.Now().UnixMilli())
-		return err
-	})
-	return removed, err
-}
-
 // DelistUnblockedResult 是手工解除名单时进行中的下架记录的结束说明。
 const DelistUnblockedResult = "名单被手工解除"
 

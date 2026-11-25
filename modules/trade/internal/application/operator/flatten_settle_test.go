@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
@@ -128,7 +129,7 @@ func TestDelistUnblockBeatsDeadline(t *testing.T) {
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 
-	_, err = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
+	_, err = storetest.UnblockInstrument(fixture.store, "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	fixture.now = fixture.now.Add(2 * time.Hour)
 

@@ -127,8 +127,8 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 	}
 	// 参数提交给每个主帧任务（现货加永续时两个任务提交同一份参数，按现货、永续的先后）；附加来源的任务不接受参数
 	// （写了 sources 的策略，factor_params 只作用于主帧任务；写了参考市场的策略不支持 factor_params，保存时已拒绝）。
-	// 全部任务都接受（或幂等重复）才算送达；任一任务拒绝就整条标为被拒绝；传输失败整条重试：FactorMgr 按（任务、成员）
-	// 同期同 request_id 幂等，已接受的任务重投只是重复。
+	// 全部任务都接受（或幂等重复）才算送达；任一任务拒绝就整条标为被拒绝，原因里写明此前已接受的任务（那些任务已用上新参数，
+	// 不撤回）；传输失败整条重试：FactorMgr 按（任务、成员）同期同 request_id 幂等，已接受的任务重投只是重复。
 	taskIDs := input.TaskIDs(mainTasks(instance.FactorTasks))
 	if len(taskIDs) == 0 {
 		return s.reject(ctx, delivery, "实例没有主帧因子任务")
@@ -137,6 +137,7 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 	if err := json.Unmarshal(delivery.Members, &members); err != nil {
 		return s.reject(ctx, delivery, "待投递的参数无法解析")
 	}
+	var accepted []string
 	for _, taskID := range taskIDs {
 		callCtx, cancel := context.WithTimeout(ctx, submissionTimeout)
 		results, err := s.Factors.SubmitFactorParams(callCtx, input.ParamSubmission{
@@ -148,17 +149,15 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 			var service *input.ServiceError
 			if errors.As(err, &service) && service.Code == commonpb.ErrorCode_INVALID_PARAM {
 				// 请求本身被判为无效：重试也不会成功。
-				return s.reject(ctx, delivery, err.Error())
+				return s.reject(ctx, delivery, taskRejection(len(taskIDs), accepted, taskID, err.Error()))
 			}
 			s.recordFailure(delivery.ResultID)
 			return fmt.Errorf("提交参数 %s 给因子任务 %s：%w", delivery.ResultID, taskID, err)
 		}
 		if reason := rejection(results); reason != "" {
-			if len(taskIDs) > 1 {
-				reason = fmt.Sprintf("因子任务 %s：%s", taskID, reason)
-			}
-			return s.reject(ctx, delivery, reason)
+			return s.reject(ctx, delivery, taskRejection(len(taskIDs), accepted, taskID, reason))
 		}
+		accepted = append(accepted, taskID)
 	}
 	if err := s.Store.MarkParamsDelivered(ctx, delivery.ResultID, s.now()); err != nil {
 		return err
@@ -179,6 +178,18 @@ func mainTasks(tasks map[string]string) map[string]string {
 		}
 	}
 	return out
+}
+
+// taskRejection 是拒绝原因：多个主帧任务时写明被拒的任务，以及在它之前已接受的任务（现货加永续一边接受一边拒绝）。
+func taskRejection(tasks int, accepted []string, taskID, reason string) string {
+	if tasks <= 1 {
+		return reason
+	}
+	reason = fmt.Sprintf("因子任务 %s 拒绝：%s", taskID, reason)
+	if len(accepted) > 0 {
+		reason = fmt.Sprintf("因子任务 %s 已接受；%s", strings.Join(accepted, "、"), reason)
+	}
+	return reason
 }
 
 // reject 把记录标为被拒绝：不再重试，也不算送达。

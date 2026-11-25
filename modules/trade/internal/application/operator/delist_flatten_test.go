@@ -212,7 +212,7 @@ func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status, "子单还挂着，动作继续")
 
-	removed, err := fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
+	removed, err := storetest.UnblockInstrument(fixture.store, "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	require.True(t, removed)
 	fixture.orders.specs, fixture.orders.leaveOpen, fixture.trace = nil, nil, nil
@@ -313,7 +313,7 @@ func TestResumeOperatorActionContinuesDelistFlattenAndReduce(t *testing.T) {
 	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status)
 	require.JSONEq(t, `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"binance"}`, first.Action.RequestJSON)
 
-	_, err = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
+	_, err = storetest.UnblockInstrument(fixture.store, "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	fixture.orders.leaveOpen = nil
 	require.NoError(t, fixture.service().ResumeOperatorAction(context.Background(), first.Action))
@@ -366,7 +366,7 @@ func TestDelistFlattenUnblockWaitsForCancelConfirmation(t *testing.T) {
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	_, err = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
+	_, err = storetest.UnblockInstrument(fixture.store, "binance", "swap", "BTCUSDT")
 	require.NoError(t, err)
 	fixture.orders.specs = nil
 	wakes := 0
@@ -492,7 +492,7 @@ func TestDelistFlattenDoesNotPlaceAfterTheUnblockDuringTheIntervalSleep(t *testi
 	command.Exchange = "binance"
 	go func() {
 		time.Sleep(300 * time.Millisecond) // 第一笔之后、正在睡
-		_, _ = fixture.store.UnblockInstrument(context.Background(), "binance", "swap", "BTCUSDT")
+		_, _ = storetest.UnblockInstrument(fixture.store, "binance", "swap", "BTCUSDT")
 	}()
 
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
