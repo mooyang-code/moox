@@ -205,6 +205,12 @@ func (hkBackfillFunctions) EnsureBackfillFunction(context.Context, string) (stri
 	return "moox-fetch-plan-backfill-stockhk-equity-nanjing", nil
 }
 
+func (hkBackfillFunctions) BackfillRegions(string) []string { return nil }
+
+func (f hkBackfillFunctions) EnsureBackfillFunctionIn(ctx context.Context, market, _ string) (string, error) {
+	return f.EnsureBackfillFunction(ctx, market)
+}
+
 // 收市后整天重取，从“到点提交”到“行被覆盖”走一遍：
 //  1. 库里先有当天的 66 根，16:00 那根是连续交易时段的值；
 //  2. 16:15 那一轮提交强制补采作业，分块经云函数的处理器取数、写入；

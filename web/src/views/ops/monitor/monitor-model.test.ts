@@ -136,6 +136,38 @@ describe("verdict without alerts", () => {
   });
 });
 
+describe("历史补齐中的数据集", () => {
+  it("显示为中性的待生效，不算需要关注", () => {
+    const overview: HealthOverview = {
+      pipeline: [
+        {
+          id: "view",
+          status: "healthy",
+          datasets: [
+            {
+              producer: "storage_view",
+              space_id: "mooxsys",
+              dataset_id: "ds_new",
+              freq: "1m",
+              status: "disabled",
+              reason: "待生效（上游历史补齐中）"
+            },
+            { producer: "storage_view", space_id: "mooxsys", dataset_id: "ds_off", freq: "1m", status: "disabled" }
+          ]
+        }
+      ]
+    };
+    const [stage] = pipelineStages(overview, names, now);
+    const pending = stage.rows.find(row => row.key.includes("ds_new"));
+    const stopped = stage.rows.find(row => row.key.includes("ds_off"));
+    expect(pending).toMatchObject({ status: "待生效", tone: "idle", attention: false, reason: "待生效（上游历史补齐中）" });
+    expect(stopped).toMatchObject({ status: "已停用", attention: false });
+    expect(stage.tone).toBe("idle");
+    const [, pipeline] = layerSummaries(overview);
+    expect(pipeline).toMatchObject({ attention: 0, inactive: 2, tone: "ok" });
+  });
+});
+
 describe("incident timeline", () => {
   const overview: HealthOverview = {
     generated_at: String(now),

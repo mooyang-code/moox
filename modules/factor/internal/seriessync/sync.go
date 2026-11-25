@@ -884,12 +884,15 @@ func (s *Syncer) Backfill(ctx context.Context, spec Spec, subjects []string, bar
 	if bars < 1 {
 		return nil, errors.New("bars 必须为正数")
 	}
-	column := "close"
-	if len(spec.Fields) > 0 {
-		column = spec.Fields[0].Name
-	}
 	written := map[string]seriesstore.WriteResult{}
-	for i, subject := range subjects {
+	// 第一步：按本地边界算出每个标的要补的区间 [lo, hi)；没有本地数据、本地已经够长的标的直接算作完成。
+	type want struct {
+		subject string
+		lo, hi  time.Time
+	}
+	var wants []want
+	skipped := 0
+	for _, subject := range subjects {
 		if err := ctx.Err(); err != nil {
 			return written, err
 		}
@@ -897,42 +900,154 @@ func (s *Syncer) Backfill(ctx context.Context, spec Spec, subjects []string, bar
 		if err != nil {
 			return written, err
 		}
-		if ok {
-			lo := b.Latest.Add(-time.Duration(bars-1) * step)
-			hi := b.Earliest
-			if lo.Before(hi) {
-				first, found, err := s.Storage.EarliestPeriod(ctx, spec.Source.SpaceID, spec.Source.DatasetID, spec.Source.Freq, []string{subject}, []string{column})
-				if err != nil {
-					return written, err
-				}
-				if found && first.After(lo) {
-					lo = first
-				}
-				if found && lo.Before(hi) {
-					frames, err := s.Storage.ReadWindow(ctx, storageio.ReadRequest{
-						SpaceID: spec.Source.SpaceID, DatasetID: spec.Source.DatasetID, Freq: spec.Source.Freq,
-						Subjects: []string{subject}, Start: lo, End: hi, Columns: spec.names(),
-					})
-					if err != nil {
-						return written, err
-					}
-					rows, err := FrameToColumns(spec.Fields, frames[subject])
-					if err != nil {
-						return written, err
-					}
-					if rows.Len() > 0 {
-						r, err := s.Store.WriteBatch(ctx, spec.Source, []seriesstore.SubjectWrite{{Subject: subject, From: lo, To: hi, Rows: rows}}, seriesstore.WriteOptions{FillGaps: true})
-						if err != nil {
-							return written, fmt.Errorf("%w: 补历史写入本地 %s/%s：%v", storageio.ErrInfra, spec.Source, subject, err)
-						}
-						written[subject] = r[0]
-					}
-				}
-			}
+		lo, hi := b.Latest.Add(-time.Duration(bars-1)*step), b.Earliest
+		if !ok || !lo.Before(hi) {
+			skipped++
+			continue
 		}
+		wants = append(wants, want{subject: subject, lo: lo, hi: hi})
+	}
+	var mu sync.Mutex
+	done := skipped
+	report := func(n int) {
+		mu.Lock()
+		defer mu.Unlock()
+		done += n
 		if progress != nil {
-			progress(i+1, len(subjects))
+			progress(done, len(subjects))
 		}
 	}
+	if skipped > 0 {
+		report(0)
+	}
+	// 第二步：并行查 Storage 里每个标的的最早一根，区间起点不早于它；Storage 里没有数据的标的不补。
+	column := "close"
+	if len(spec.Fields) > 0 {
+		column = spec.Fields[0].Name
+	}
+	err = s.parallel(ctx, len(wants), func(i int) error {
+		w := &wants[i]
+		first, found, err := s.Storage.EarliestPeriod(ctx, spec.Source.SpaceID, spec.Source.DatasetID, spec.Source.Freq, []string{w.subject}, []string{column})
+		if err != nil {
+			return err
+		}
+		if !found {
+			w.lo = w.hi
+		} else if first.After(w.lo) {
+			w.lo = first
+		}
+		return nil
+	})
+	if err != nil {
+		return written, err
+	}
+	// 第三步：区间相同的标的合成一批（每批最多 batchSubjects 个，与 Pull 一致），批之间按 workers 并行读取并写入本地。
+	type key struct{ lo, hi time.Time }
+	groups := map[key][]string{}
+	var keys []key
+	for _, w := range wants {
+		if !w.lo.Before(w.hi) {
+			report(1)
+			continue
+		}
+		k := key{w.lo, w.hi}
+		if _, seen := groups[k]; !seen {
+			keys = append(keys, k)
+		}
+		groups[k] = append(groups[k], w.subject)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if !keys[i].lo.Equal(keys[j].lo) {
+			return keys[i].lo.Before(keys[j].lo)
+		}
+		return keys[i].hi.Before(keys[j].hi)
+	})
+	type batch struct {
+		k        key
+		subjects []string
+	}
+	var batches []batch
+	for _, k := range keys {
+		group := groups[k]
+		for i := 0; i < len(group); i += s.batchSubjects() {
+			batches = append(batches, batch{k: k, subjects: group[i:min(i+s.batchSubjects(), len(group))]})
+		}
+	}
+	err = s.parallel(ctx, len(batches), func(i int) error {
+		b := batches[i]
+		frames, err := s.Storage.ReadWindow(ctx, storageio.ReadRequest{
+			SpaceID: spec.Source.SpaceID, DatasetID: spec.Source.DatasetID, Freq: spec.Source.Freq,
+			Subjects: b.subjects, Start: b.k.lo, End: b.k.hi, Columns: spec.names(),
+		})
+		if err != nil {
+			return err
+		}
+		var writes []seriesstore.SubjectWrite
+		for _, subject := range b.subjects {
+			rows, err := FrameToColumns(spec.Fields, frames[subject])
+			if err != nil {
+				return err
+			}
+			if rows.Len() > 0 {
+				writes = append(writes, seriesstore.SubjectWrite{Subject: subject, From: b.k.lo, To: b.k.hi, Rows: rows})
+			}
+		}
+		if len(writes) > 0 {
+			results, err := s.Store.WriteBatch(ctx, spec.Source, writes, seriesstore.WriteOptions{FillGaps: true})
+			if err != nil {
+				return fmt.Errorf("%w: 补历史写入本地 %s：%v", storageio.ErrInfra, spec.Source, err)
+			}
+			mu.Lock()
+			for j, w := range writes {
+				written[w.Subject] = results[j]
+			}
+			mu.Unlock()
+		}
+		report(len(b.subjects))
+		return nil
+	})
+	if err != nil {
+		return written, err
+	}
 	return written, nil
+}
+
+// parallel 按 workers 并行执行 fn(0..n-1)，第一个错误出现后不再派发新的任务，返回这个错误。
+func (s *Syncer) parallel(ctx context.Context, n int, fn func(i int) error) error {
+	if n == 0 {
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+	work := make(chan int)
+	for w := 0; w < min(s.workers(), n); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				if err := fn(i); err != nil {
+					errOnce.Do(func() { firstErr = err; cancel() })
+				}
+			}
+		}()
+	}
+loop:
+	for i := 0; i < n; i++ {
+		select {
+		case work <- i:
+		case <-ctx.Done():
+			break loop
+		}
+	}
+	close(work)
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }

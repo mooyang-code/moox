@@ -88,6 +88,13 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 		return "周期对齐未确认：这个周期的K线按什么时刻对齐还没有确认，暂不判断"
 	case "calendar_error":
 		return "无法按交易日历识别最新一根K线：" + report.Diagnostic
+	case monmetrics.KlineReasonSeedingViewCatchingUp:
+		view := "还没有输出"
+		if !report.OldestDataTime.IsZero() {
+			view = "只更新到 " + alerttext.Time(report.OldestDataTime)
+		}
+		return fmt.Sprintf("首次接入的历史补齐中或刚补齐：结果视图在追补齐写入的历史行，%s；采集已完成到 %s 这一期，按时，不告警",
+			view, alerttext.Time(report.Rule.LatestCompletedPeriod))
 	case "view_behind_latest_completed_period":
 		if report.OldestDataTime.IsZero() {
 			return fmt.Sprintf("采集已完成到 %s 这一期，但还没有看到该结果的数据（这一根已过收线 %s）",

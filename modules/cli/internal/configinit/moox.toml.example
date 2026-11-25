@@ -154,6 +154,7 @@ min_level = "warn"
 enabled = false
 # memory_mb = 128               # 每个函数内存，默认 128
 # symbols_per_function = 50     # 每个函数负责的标的数，默认 50
+# backfill_reserved_concurrency = 5  # 补采函数的最大并发实例数，默认 5；首次接入的历史补齐并发是 地域数 × 它，要更快可调到 10（账号预留并发总额够用时）
 
 # [scf_plan.cloud_account]
 # account_id = "tencent-scf"
@@ -185,6 +186,22 @@ enabled = false
 # [scf_plan.spaces.markets]
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
+
+# 加速 crypto 首次接入的历史补齐（可选）：crypto 默认走 collector-stream，补历史也经海外机，海外机带宽很小，几千万行要十几个小时。
+# 市场配了云函数地域，补历史就按地域轮流走各地域的补采函数（函数经公网直接写存储机，不经海外机），一两个小时补完。
+# 地域要用 public 方式，入口写存储机（存储机要开 external_entry、有公网地址，安全组对公网放行 11004）；
+# 先确认这些地域的云函数能访问币安 REST。平时的缺口补采仍走本地执行端，这些地域只会有补采函数，没有定时函数。
+# [scf_plan.regions.ap-singapore]
+# network = "public"
+# entry_host = "storage"
+# [scf_plan.regions.ap-tokyo]
+# network = "public"
+# entry_host = "storage"
+# [[scf_plan.spaces]]
+# space_id = "crypto"
+# [scf_plan.spaces.markets]
+# spot = ["ap-singapore", "ap-tokyo"]
+# swap = ["ap-singapore", "ap-tokyo"]
 
 # config init 会按第一步密钥的 AppId 与入口主机的 VPC、子网、私网 IP 自动生成下面 A 股这一套：入口优先选存储服务器所在地域（同地域走内网），
 # 存储服务器没有可用的私有网络时退而选其他开了外部入口的主机（如海外服务器）。

@@ -1,4 +1,4 @@
-import { call } from "@/api/http";
+import { call, type CallOptions } from "@/api/http";
 
 export type HealthLevel = "ok" | "warn" | "error";
 
@@ -117,6 +117,27 @@ export interface IngestMode {
   effective_periods?: Record<string, string>;
 }
 
+/** 一个数据集（某个频率）首次接入时的历史补齐记录；补齐期间下游因子不计算、策略不求值。 */
+export interface HistorySeed {
+  space_id?: string;
+  dataset_id?: string;
+  frequency?: string;
+  /** running 补齐中、done 已完成、skipped 用户手动放行。 */
+  status?: string;
+  /** 补齐的目标起点（RFC3339）。 */
+  target_from?: string;
+  effective_from?: string;
+  total_chunks?: number;
+  done_chunks?: number;
+  failed_chunks?: number;
+  /** 按最近速率估计的剩余秒数，0 表示不能估计。 */
+  eta_seconds?: number | string;
+  /** 开始、结束时刻：Unix 毫秒（数字字符串），还没结束时 finished_at 为 "0" 或不下发。 */
+  started_at?: string;
+  finished_at?: string;
+  note?: string;
+}
+
 export interface GetCollectorStatusResponse {
   level?: HealthLevel;
   reasons?: string[];
@@ -132,6 +153,8 @@ export interface GetCollectorStatusResponse {
   ingest_modes?: IngestMode[];
   /** 对账器最近一次读回找到的计划外函数（Collector 内存里的结果，重启后到下一次读回之前为空）。 */
   unplanned_functions?: CollectorUnplannedFunction[];
+  /** 本空间的历史补齐记录（补齐中的排前）。 */
+  history_seeds?: HistorySeed[];
 }
 
 export interface KlineBackfillJob {
@@ -203,8 +226,15 @@ export interface BackfillJobFilter {
   dataset_id?: string;
 }
 
-export function getCollectorStatus(spaceId: string) {
-  return call<{ space_id: string }, GetCollectorStatusResponse>("collector", "GetCollectorStatus", { space_id: spaceId });
+// 网关要求请求体里的 space_id 与 X-Space-Id 一致：读当前所选空间以外的空间（首页逐个空间读历史补齐）时传 { spaceId }。
+// 显式空间的请求不随切换空间取消，只在确实要跨空间读取时传。
+export function getCollectorStatus(spaceId: string, options: CallOptions = {}) {
+  return call<{ space_id: string }, GetCollectorStatusResponse>(
+    "collector",
+    "GetCollectorStatus",
+    { space_id: spaceId },
+    options
+  );
 }
 
 export function listKlineBackfills(spaceId: string, filter: BackfillJobFilter, page = 1, size = 20) {

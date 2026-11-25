@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildRunningQuery, emptyKind, isTrialInstance, listKey, parseRunningQuery } from "./running-model";
+import {
+  buildRunningQuery,
+  emptyKind,
+  isPendingSeedInstance,
+  isTrialInstance,
+  listKey,
+  parseRunningQuery
+} from "./running-model";
 
 describe("running page model", () => {
   it("normalizes the URL state", () => {
@@ -55,5 +62,33 @@ describe("running page model", () => {
     expect(isTrialInstance({ enabled: true, logical_account_id: "", confirmed_at: "" })).toBe(false);
     expect(isTrialInstance({ enabled: false, logical_account_id: "la-1", confirmed_at: "" })).toBe(false);
     expect(isTrialInstance(null)).toBe(false);
+  });
+});
+
+describe("isPendingSeedInstance", () => {
+  const resolved = JSON.stringify({
+    bar: "5m",
+    tasks: { swap: { dataset_id: "ds_factor", source_dataset_id: "ds_kline" } }
+  });
+  const instance = { enabled: true, resolved_json: resolved };
+  const running = (dataset_id: string, frequency = "5m") => ({ dataset_id, frequency, status: "running" });
+
+  it("上游数据集（含来源数据集）正在补齐、周期一致时待生效", () => {
+    expect(isPendingSeedInstance(instance, [running("ds_kline")])).toBe(true);
+    expect(isPendingSeedInstance(instance, [running("ds_factor", "5M")])).toBe(true);
+  });
+
+  it("未启用、周期不同、已完成或数据集无关时不算", () => {
+    expect(isPendingSeedInstance({ ...instance, enabled: false }, [running("ds_kline")])).toBe(false);
+    expect(isPendingSeedInstance(instance, [running("ds_kline", "1m")])).toBe(false);
+    expect(isPendingSeedInstance(instance, [{ ...running("ds_kline"), status: "done" }])).toBe(false);
+    expect(isPendingSeedInstance(instance, [running("other")])).toBe(false);
+  });
+
+  it("没有补齐数据或 resolved_json 不可用时按没有处理", () => {
+    expect(isPendingSeedInstance(instance, undefined)).toBe(false);
+    expect(isPendingSeedInstance({ enabled: true, resolved_json: "{}" }, [running("ds_kline")])).toBe(false);
+    expect(isPendingSeedInstance({ enabled: true, resolved_json: "不是 JSON" }, [running("ds_kline")])).toBe(false);
+    expect(isPendingSeedInstance(null, [running("ds_kline")])).toBe(false);
   });
 });

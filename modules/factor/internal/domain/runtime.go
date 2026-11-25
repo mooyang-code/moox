@@ -153,9 +153,11 @@ type EngineInfo struct {
 
 // EngineTask is one enabled factor task as the engine computes it: the set, its
 // enabled members (alias with definition and source) and whether its result
-// dataset is ready to receive writes.
+// dataset is ready to receive writes. SourceSeeding 为真表示源数据集正在首次接入的历史补齐：
+// 任务照常预载，但不计算、不出结果。
 type EngineTask struct {
-	Set         FactorTask
-	Members     []MemberDef
-	ResultReady bool
+	Set           FactorTask
+	Members       []MemberDef
+	ResultReady   bool
+	SourceSeeding bool
 }

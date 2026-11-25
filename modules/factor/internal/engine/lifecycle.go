@@ -315,8 +315,34 @@ func (r *Runtime) runTaskChecks(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// clearSeedPending 在源数据历史补齐放行、重新预载完成后清掉数据源上因补历史登记的 earliest_moved 待办：
+// 补齐期间任务没出过结果，补进来的历史没有要重算的旧值。
+func (r *Runtime) clearSeedPending(set domain.FactorTask) {
+	if r.data == nil || r.data.Store() == nil {
+		return
+	}
+	src := seriesstore.Source{SpaceID: set.SpaceID, DatasetID: set.SourceDatasetID, Freq: set.Freq}
+	if err := r.data.Store().ClearPendingReason(src, seriesstore.PendingEarliestMoved); err != nil {
+		log.Warnf("factor_seed_pending_clear_failed source=%s error=%v", src, err)
+	}
+}
+
+// seedingCheckName 是“源数据历史补齐”这项检查的名字。
+const seedingCheckName = "源数据历史补齐"
+
+// seedingCheck 把源数据集的历史补齐状态翻成检查项：补齐中不通过（任务照常预载，但不计算、不出结果），补齐结束后下一次重查通过。
+func seedingCheck(set domain.EngineTask) domain.TaskCheck {
+	if !set.SourceSeeding {
+		return domain.TaskCheck{Name: seedingCheckName, Status: domain.TaskCheckPass}
+	}
+	return domain.TaskCheck{
+		Name: seedingCheckName, Status: domain.TaskCheckFail, Message: "历史补齐中，进度看 collector status",
+		Remedy: "补齐结束后自动放行并重新载入本地数据；不想等时执行 moox-cli collector history-seed skip",
+	}
+}
+
 // checkTask 检查一个因子任务能不能计算：有启用的成员、窗口已载入、本地数据覆盖回看、数据源没有变更日志断档、
-// 回看数量够、引用的自定义算子模块就绪；长缺口只警告。
+// 回看数量够、引用的自定义算子模块就绪、源数据集不在历史补齐中；长缺口只警告。
 func (r *Runtime) checkTask(ctx context.Context, taskID string) []domain.TaskCheck {
 	set, lookup := r.catalog.SetByID(taskID)
 	if lookup != SetFound {
@@ -327,6 +353,7 @@ func (r *Runtime) checkTask(ctx context.Context, taskID string) []domain.TaskChe
 		// 没有启用成员的任务不会产出任何列，不计算；成员启用、目录同步之后下一轮重查就会通过。
 		checks = append(checks, domain.TaskCheck{Name: "启用成员", Status: domain.TaskCheckFail, Message: "任务没有启用的因子成员", Remedy: "启用至少一个成员：moox-cli factor member enable"})
 	}
+	checks = append(checks, seedingCheck(set))
 	ready := r.preload.Ready(taskID)
 	if ready {
 		checks = append(checks, domain.TaskCheck{Name: windowCheckName, Status: domain.TaskCheckPass})

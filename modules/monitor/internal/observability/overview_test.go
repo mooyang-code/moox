@@ -497,3 +497,62 @@ func TestDatasetStatusReportsWarmingWhilePartialRunsKeepArriving(t *testing.T) {
 	got = datasetStatus(now, key, noPartial, policy, cryptoClock)
 	require.Equal(t, "尚无成功运行", got.Reason, "没有部分结果上报时保持原样")
 }
+
+// 生产者因上游历史补齐暂停（enabled 指标为 -1）：数据集显示为 disabled、原因 history_seeding，带展示名；
+// 一般暂停（enabled 为 0）仍不出现在数据集里。
+func TestBuilderShowsHistorySeedingPausedDatasetAsPending(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	seeding := `{"dataset_id":"inst_a","freq":"5m","space_id":"stockus"}`
+	plain := `{"dataset_id":"inst_b","freq":"5m","space_id":"stockus"}`
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "seeding-enabled", "strategy", "strategy@control", "moox_strategy_dataset_enabled", seeding, -1, now)
+		seedOverviewMetricForInstance(t, db, "seeding-info", "strategy", "strategy@control", "moox_strategy_dataset_info", `{"dataset_id":"inst_a","freq":"5m","name":"均线（a）","space_id":"stockus"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "plain-enabled", "strategy", "strategy@control", "moox_strategy_dataset_enabled", plain, 0, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.Datasets, 1, "一般暂停的数据集不出现，历史补齐暂停的显示为待生效")
+	item := got.Datasets[0]
+	require.Equal(t, "strategy", item.Producer)
+	require.Equal(t, "inst_a", item.DatasetID)
+	require.Equal(t, "disabled", item.Status)
+	require.Equal(t, DatasetReasonHistorySeeding, item.Reason)
+	require.Equal(t, "均线（a）", item.DisplayName)
+}
+
+// 有空间在历史补齐中、或补齐结束不到 24 小时：storage-view 上报的“View 跟随数据变更落后”记为正常（原因里保留落后的对象），
+// 超过 24 小时恢复告警。关注项不带空间，这段时间里别的空间的 View 落后同样不告警（已知差别）。
+func TestViewFollowAttentionRelaxedWhileAndAfterSeeding(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	memory := &SeedingMemory{}
+	build := func(at time.Time, seeding bool) BusinessStatus {
+		query := openOverviewMetrics(t, func(db *gorm.DB) {
+			seedOverviewMetricForInstance(t, db, "view-follow", "storage-view", "storage-view@storage", "moox_attention_active",
+				`{"kind":"view_follow_lagging","name":"View 跟随数据变更落后","severity":"critical","detail":"stockus/kline_5m 自 08:00 起没有追上"}`, 1, at)
+			if seeding {
+				seedOverviewMetricForInstance(t, db, "seeding-enabled", "strategy", "strategy@control", "moox_strategy_dataset_enabled", `{"dataset_id":"inst_a","freq":"5m","space_id":"stockus"}`, -1, at)
+			}
+		})
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return at }, Seeding: memory, Policy: testRealtimePolicy()}).buildForTest(t.Context(), "")
+		require.NoError(t, err)
+		for _, item := range overview.BusinessChecks {
+			if item.CheckID == "attention:storage-view:view_follow_lagging" {
+				return item
+			}
+		}
+		t.Fatal("没有 View 跟随的关注项")
+		return BusinessStatus{}
+	}
+	item := build(now, true)
+	require.Equal(t, "healthy", item.Status, "补齐中不告警")
+	require.Contains(t, item.Reason, "stockus")
+	require.Contains(t, item.Reason, "stockus/kline_5m", "原因里保留落后的对象")
+	item = build(now.Add(23*time.Hour), false)
+	require.Equal(t, "healthy", item.Status, "补齐结束后 24 小时内仍不告警")
+	item = build(now.Add(25*time.Hour), false)
+	require.Equal(t, "down", item.Status, "超过 24 小时恢复告警")
+	// K 线新鲜度按同一份记忆判断（SetSeeding(memory.Active)）：只认记下过补齐的空间，宽限同为 24 小时。
+	require.True(t, memory.Active("stockus", now.Add(23*time.Hour)))
+	require.False(t, memory.Active("crypto", now))
+	require.False(t, memory.Active("stockus", now.Add(25*time.Hour)))
+}

@@ -99,7 +99,7 @@ var collectorKlineAbsencesClearCmd = &cobra.Command{
 
 var collectorStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总",
+	Short: "查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总、首次接入的历史补齐进度",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runCollectorStatus(cmd.Context(), cmd.OutOrStdout(), statusFlags)
@@ -450,6 +450,7 @@ func runCollectorStatus(ctx context.Context, out io.Writer, flags klineRangeFlag
 		"level": rsp.GetLevel(), "reasons": rsp.GetReasons(), "open": planSummaryMap(rsp.GetOpen()), "applied": planSummaryMap(rsp.GetApplied()),
 		"functions": len(rsp.GetFunctions()), "functions_changing": pending, "datasets": datasets,
 		"active_backfills": rsp.GetActiveBackfills(), "failed_backfills_24h": rsp.GetFailedBackfills_24H(), "generated_at": rsp.GetGeneratedAt(),
+		"history_seeding": historySeedingRunning(rsp.GetHistorySeeds()), "history_seeds": historySeedMaps(rsp.GetHistorySeeds()),
 	})
 }
 

@@ -225,6 +225,11 @@ func TestCheckBeforeTheTimelineCountsFromEachSubjectsFirstBar(t *testing.T) {
 	require.Equal(t, from, force.Gaps[0].From, "缺口从范围起点开始，不被时间线起点截断")
 	require.Equal(t, 15, force.Gaps[0].Missing)
 
+	// 历史补齐（FullHistory）不裁剪：新数据集在时间线起点之前一根都没有，整段都是要补的缺口。
+	seed, err := checker.Check(context.Background(), Request{SpaceID: "crypto", SubjectID: "NONE-USDT", From: from, To: base, FullHistory: true})
+	require.NoError(t, err)
+	require.Equal(t, 10, seed.Missing, "补齐按整个范围找缺口")
+
 	// 没有计数能力时不裁剪：宁可多报。
 	plain := &Checker{Timeline: fakePlans{records}, Rows: rows.fakeRows, Now: func() time.Time { return base.Add(time.Hour) }}
 	untrimmed, err := plain.Check(context.Background(), Request{SpaceID: "crypto", SubjectID: "NONE-USDT", From: from, To: to})

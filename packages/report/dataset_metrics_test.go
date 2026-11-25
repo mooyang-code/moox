@@ -334,3 +334,31 @@ func TestDatasetDisplayNameTruncatesOnRuneBoundary(t *testing.T) {
 		t.Fatalf("非法 UTF-8 应被去掉，得到 %q", got)
 	}
 }
+
+// 历史补齐中的暂停项：enabled 指标为 -1（一般暂停为 0），展示名照常上报；补齐结束后恢复为 1。
+func TestDatasetMetricsPausedHistorySeedingPublishesNegativeEnabled(t *testing.T) {
+	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "strategy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeding := DatasetKey{SpaceID: "stockus", DatasetID: "inst_a", Freq: "5m"}
+	plain := DatasetKey{SpaceID: "stockus", DatasetID: "inst_b", Freq: "5m"}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{
+		{Key: seeding, Paused: true, PauseReason: PauseHistorySeeding, Name: "均线（a）"},
+		{Key: plain, Paused: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.enabled.WithLabelValues("stockus", "inst_a", "5m")); got != -1 {
+		t.Fatalf("历史补齐暂停项 enabled = %v，期望 -1", got)
+	}
+	if got := testutil.ToFloat64(metrics.enabled.WithLabelValues("stockus", "inst_b", "5m")); got != 0 {
+		t.Fatalf("一般暂停项 enabled = %v，期望 0", got)
+	}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: seeding, Interval: 5 * time.Minute}, {Key: plain, Paused: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.enabled.WithLabelValues("stockus", "inst_a", "5m")); got != 1 {
+		t.Fatalf("补齐结束后 enabled = %v，期望 1", got)
+	}
+}

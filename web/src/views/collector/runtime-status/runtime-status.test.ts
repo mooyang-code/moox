@@ -16,6 +16,10 @@ import {
   inspectionInfo,
   levelInfo,
   overallStatus,
+  seedEtaText,
+  seedPercent,
+  seedRows,
+  seedStatusText,
   statusSummary,
   unplannedDeleteCommand
 } from "./runtime-status-model";
@@ -311,5 +315,44 @@ describe("运行状态的顶部结论", () => {
   it("读到了且没有问题时才算正常", () => {
     expect(overallStatus({ status: { level: "ok" }, loaded: true, error: "" }).healthy).toBe(true);
     expect(overallStatus({ status: { level: "warn", reasons: ["慢"] }, loaded: true, error: "" }).healthy).toBe(false);
+  });
+});
+
+describe("历史补齐", () => {
+  it("状态、进度与预计剩余的文字", () => {
+    expect(seedStatusText("running")).toBe("补齐中");
+    expect(seedStatusText("done")).toBe("已完成");
+    expect(seedStatusText("skipped")).toBe("已手动放行");
+    expect(seedEtaText(0)).toBe("估算中");
+    expect(seedEtaText(undefined)).toBe("估算中");
+    expect(seedEtaText(20)).toBe("约 1 分钟");
+    expect(seedEtaText(1800)).toBe("约 30 分钟");
+    expect(seedEtaText("5400")).toBe("约 1 小时 30 分钟");
+    expect(seedPercent({ done_chunks: 1, total_chunks: 3 })).toBe(33);
+    expect(seedPercent({ done_chunks: 0, total_chunks: 0 })).toBe(0);
+  });
+
+  it("行保持后端顺序，用展示名，预计剩余只给补齐中的", () => {
+    const names = datasetNameMap([{ dataset_id: "ds_a", frequency: "1m", dataset_name: "现货分钟K线" }]);
+    const rows = seedRows(
+      [
+        {
+          dataset_id: "ds_a",
+          frequency: "1m",
+          status: "running",
+          done_chunks: 5,
+          total_chunks: 20,
+          failed_chunks: 2,
+          eta_seconds: 600,
+          target_from: "2026-01-01T00:00:00Z"
+        },
+        { dataset_id: "ds_b", frequency: "1h", status: "done", done_chunks: 4, total_chunks: 4, eta_seconds: 0 }
+      ],
+      names
+    );
+    expect(rows.map(row => row.name)).toEqual(["现货分钟K线", "ds_b"]);
+    expect(rows[0]).toMatchObject({ progressText: "5/20（25%）", etaText: "约 10 分钟", failedChunks: 2, statusText: "补齐中" });
+    expect(rows[1]).toMatchObject({ etaText: "", failedChunks: 0, statusText: "已完成", progressText: "4/4（100%）" });
+    expect(seedRows(undefined, names)).toEqual([]);
   });
 });

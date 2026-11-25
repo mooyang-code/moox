@@ -127,13 +127,16 @@ func renderSCFPlanBlocks(cfg *Config, rendered []byte) ([]byte, error) {
 	if rendered, err = replaceYAMLMapping(rendered, "scf_markets", valueNode(markets)); err != nil {
 		return nil, err
 	}
-	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(
-		mappingField{"cloud_account_id", plan.CloudAccount.AccountID},
-		mappingField{"memory_mb", plan.MemoryMB},
-		mappingField{"symbols_per_function", plan.SymbolsPerFunction},
-		mappingField{"entry_routes", entries},
-		mappingField{"spaces", spaces},
-	))
+	fields := []mappingField{
+		{"cloud_account_id", plan.CloudAccount.AccountID},
+		{"memory_mb", plan.MemoryMB},
+		{"symbols_per_function", plan.SymbolsPerFunction},
+	}
+	if plan.BackfillReservedConcurrency > 0 {
+		fields = append(fields, mappingField{"backfill_reserved_concurrency", plan.BackfillReservedConcurrency})
+	}
+	fields = append(fields, mappingField{"entry_routes", entries}, mappingField{"spaces", spaces})
+	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(fields...))
 }
 
 // SCFEntryIdentity 返回函数的固定签名身份与默认的外部入口（见 Config.EntryHost）；

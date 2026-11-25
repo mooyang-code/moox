@@ -452,7 +452,7 @@ func TestPlanEnvironmentsMatchBaseline(t *testing.T) {
 		dispatched["backfill_function"] = h.cloud.operations()
 		spec := h.cloud.operations()[0].Spec
 		require.Nil(t, spec.Timer)
-		require.Equal(t, int64(BackfillReservedConcurrency*64), spec.ReservedMem)
+		require.Equal(t, int64(DefaultBackfillReservedConcurrency*64), spec.ReservedMem)
 		require.Equal(t, int64(320), h.mustFunction(BackfillFunctionName("crypto", "spot", "ap-nanjing")).ReservedMem)
 	}
 

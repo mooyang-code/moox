@@ -75,6 +75,9 @@ type instanceObserver struct {
 	// halted 非空且返回 true 时（模块暂停、恢复追赶中）期望清单带暂停标记：实例被有意停下，Monitor 不对它做新鲜度检查
 	//（与因子任务暂停时的做法一致）。
 	halted func() bool
+	// seeding 非空时判断实例绑定的主数据集是否在历史补齐中：补齐中的实例期望带暂停标记与原因 report.PauseHistorySeeding，
+	// Monitor 不做新鲜度检查，页面显示“待生效”。
+	seeding func(spaceID string, resolved input.Resolved) bool
 	// lastBarEnd 与 lastOkBarEnd 是每个实例最近处理的一根、最近一个 ok 的一根的 bar_end，是 A 股实例期望间隔的基准。
 	lastBarEnd   map[string]time.Time
 	lastOkBarEnd map[string]time.Time
@@ -194,8 +197,10 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 	}
 	o.mu.Lock()
 	halted := o.halted != nil && o.halted()
+	seedingFn := o.seeding
 	o.mu.Unlock()
-	points := o.loadRestorePoints(ctx, instances, halted)
+	seeding := seedingInstances(instances, seedingFn)
+	points := o.loadRestorePoints(ctx, instances, halted, seeding)
 	o.observeParamDelivery(ctx, instances)
 	definitionNames := o.definitionNames(ctx)
 	o.mu.Lock()
@@ -211,6 +216,9 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 			expectation.Interval = o.runIntervalLocked(instance.InstanceID, resolved.Calendar, resolved.Bar, expectation.Interval)
 			expectation.Name = instanceDisplayName(definitionNames[instance.StrategyID], instance.InstanceID)
 			expectation.Paused = halted
+			if !halted && seeding[instance.InstanceID] {
+				expectation.Paused, expectation.PauseReason = true, report.PauseHistorySeeding
+			}
 			next[instance.InstanceID] = expectation
 		}
 	}
@@ -249,14 +257,14 @@ type restorePoint struct {
 
 // loadRestorePoints 为本进程、本会话还没恢复过的实例读库，供 mergeBasesLocked 与 restoreLocked 使用；读库不占观察器的锁。
 // 模块暂停中（期望带暂停标记，Monitor 不收它的运行）整体留到下一次刷新：暂停期间不需要期望间隔，基准也一并推迟载入。
-// 读取失败的实例留到下一次刷新再试。
-func (o *instanceObserver) loadRestorePoints(ctx context.Context, instances []store.Instance, halted bool) map[string]*restorePoint {
+// 历史补齐中的实例（seeding）同样不载入：期望带暂停标记，补齐结束后的刷新再恢复。读取失败的实例留到下一次刷新再试。
+func (o *instanceObserver) loadRestorePoints(ctx context.Context, instances []store.Instance, halted bool, seeding map[string]bool) map[string]*restorePoint {
 	if halted {
 		return nil
 	}
 	points := make(map[string]*restorePoint)
 	for _, instance := range instances {
-		if instance.SessionID == nil {
+		if instance.SessionID == nil || seeding[instance.InstanceID] {
 			continue
 		}
 		// 解析不了或标识不合法的实例不会进入期望清单，也就不需要恢复：跳过，免得每次刷新都重读一次库。
@@ -462,6 +470,10 @@ func expectations(values map[string]report.DatasetExpectation) []report.DatasetE
 // （开盘时间），与 Storage、因子的水位同一口径，Monitor 按交易日历算它的收线时间和到达延迟。
 func (o *instanceObserver) ObservePeriod(ctx context.Context, instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string) {
 	o.periods.WithLabelValues(instance.InstanceID, result, reason).Inc()
+	if reason == store.SkipHistorySeeding {
+		// 上游历史补齐中：实例的期望是暂停的，这一期不是运行也不是故障，只计数。
+		return
+	}
 	warming := o.warmingUp(ctx, instance, result, reason)
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -582,6 +594,28 @@ func (o *instanceObserver) SetHalted(halted func() bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.halted = halted
+}
+
+// SetSeeding 设置“实例绑定的主数据集是否在历史补齐中”的判断；为空表示不判断。
+func (o *instanceObserver) SetSeeding(seeding func(spaceID string, resolved input.Resolved) bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.seeding = seeding
+}
+
+// seedingInstances 返回绑定的主数据集在历史补齐中的实例 ID 集合；seeding 为空或快照解析不了的实例不算。
+func seedingInstances(instances []store.Instance, seeding func(string, input.Resolved) bool) map[string]bool {
+	if seeding == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, instance := range instances {
+		resolved, err := input.ParseResolved(instance.ResolvedJSON)
+		if err == nil && seeding(instance.SpaceID, resolved) {
+			out[instance.InstanceID] = true
+		}
+	}
+	return out
 }
 
 // SetStaleAlertPeriods 设置触发参数投递滞后告警的连续未送达期数；0 表示不告警。

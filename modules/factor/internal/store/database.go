@@ -129,6 +129,9 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 		"t_factor_engine_heartbeat": {
 			"c_id", "c_engine_id", "c_boot_id", "c_heartbeat_at", "c_mtime",
 		},
+		"t_factor_history_seeds": {
+			"c_space_id", "c_dataset_id", "c_freq",
+		},
 		"t_factor_udfs": {
 			"c_name", "c_active_hash", "c_ctime", "c_mtime",
 		},

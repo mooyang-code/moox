@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -234,5 +236,54 @@ func TestInstanceObserverMarksExpectationsPausedWhileHalted(t *testing.T) {
 	halted = false
 	if got := enabled(); got != 1 || observer.expected["i1"].Paused {
 		t.Fatalf("放行后应恢复 enabled=1，实际 enabled=%v paused=%t", got, observer.expected["i1"].Paused)
+	}
+}
+
+// 上游历史补齐中：实例期望带暂停标记与原因“历史补齐中”（enabled=-1，Monitor 显示“待生效”）；补齐中记的 skipped(history_seeding)
+// 只计数、不上报运行；模块暂停的优先级更高（enabled=0，无原因）；补齐结束后恢复为 1。
+func TestInstanceObserverMarksExpectationsPausedWhileSeeding(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeding, halted := true, false
+	observer.SetSeeding(func(string, input.Resolved) bool { return seeding })
+	observer.SetHalted(func() bool { return halted })
+	enabled := func() float64 {
+		t.Helper()
+		if err := observer.refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		families, err := registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() == "moox_strategy_dataset_enabled" && len(family.GetMetric()) == 1 {
+				return family.GetMetric()[0].GetGauge().GetValue()
+			}
+		}
+		t.Fatal("没有上报实例的 enabled 序列")
+		return 99
+	}
+	if got := enabled(); got != -1 || observer.expected["i1"].PauseReason != report.PauseHistorySeeding {
+		t.Fatalf("补齐中应 enabled=-1 且带原因，实际 enabled=%v expectation=%+v", got, observer.expected["i1"])
+	}
+	instance, err := repo.GetInstance(context.Background(), "i1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 补齐中的跳过周期不能因“期望是暂停的”而报错或写运行指标。
+	observer.ObservePeriod(context.Background(), instance, "5m", time.Unix(1700000000, 0), time.Unix(1700000300, 0), store.StatusSkipped, store.SkipHistorySeeding)
+	halted = true
+	if got := enabled(); got != 0 || observer.expected["i1"].PauseReason != "" {
+		t.Fatalf("模块暂停优先：应 enabled=0 且无原因，实际 enabled=%v expectation=%+v", got, observer.expected["i1"])
+	}
+	halted, seeding = false, false
+	if got := enabled(); got != 1 || observer.expected["i1"].Paused {
+		t.Fatalf("补齐结束后应恢复 enabled=1，实际 enabled=%v paused=%t", got, observer.expected["i1"].Paused)
 	}
 }

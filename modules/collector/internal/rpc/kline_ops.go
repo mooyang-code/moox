@@ -22,6 +22,9 @@ type KlineOps interface {
 	Cancel(ctx context.Context, jobID string) error
 	Retry(ctx context.Context, jobID string) (int, error)
 	ClearAbsences(ctx context.Context, spaceID, datasetID, frequency string) (int64, error)
+	// SeedViews 返回历史补齐记录与分块进度；SkipSeeds 手动放行补齐中的数据集。
+	SeedViews(ctx context.Context, spaceID string, onlyActive bool) ([]klinecheck.SeedView, error)
+	SkipSeeds(ctx context.Context, spaceID, datasetID string) (int, error)
 }
 
 // SetKlineOps 注入检查与补采实现。
