@@ -119,7 +119,7 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 			return RegisterSnapshotResult{}, invalidf("series snapshot has a duplicated subject_id and series_tag: %s", item.SubjectID)
 		}
 		seenIdentity[identity] = struct{}{}
-		// 周期完成事件按（标的、series_tag）带序列全集，事件校验要求 series_tag 非空。
+		// 周期快照按标的身份去重；series_tag 仍要求非空。
 		if item.SeriesTag == "" {
 			return RegisterSnapshotResult{}, invalidf("series snapshot series_tag is required: %s", item.SubjectID)
 		}

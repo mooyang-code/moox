@@ -22,3 +22,5 @@ runtime:
   # Production order submission is disabled unless explicitly enabled.
   # TESTNET and account synchronization are unaffected.
   live_trading_enabled: false
+  # 本地与交易所余额差异超过这个比例时报余额同步异常，取值 (0, 1]。
+  balance_difference_threshold: 0.05

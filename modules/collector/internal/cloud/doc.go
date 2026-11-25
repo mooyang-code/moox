@@ -11,7 +11,7 @@
 //   - FunctionSpec.Package 与 UpgradeCode 的包在操作开始之前现取（Packages.Latest）：操作排队期间可能上传了新包，
 //     旧包也可能已被清理（每个包名只留最新 3 个）。
 //   - Ensure 因为空间正在暂停（FunctionSpec.Pausing 返回 true）把定时器设成停用时仍返回成功；操作表不能把这次成功
-//     当成本阶段（例如“过渡计划已下发并启用”）已确认，恢复后要重新推一次。
+//     当成本阶段已确认，恢复后要重新推一次。
 //   - 删云账号之前除了看 scf_plan 配置与代码包（Accounts.Delete 只看代码包），还要考虑云上仍有这个账号建的函数：
 //     账号删掉后这些函数没人管，定时器会一直开着。
 //   - 配额超限返回 ErrQuota（只认 LimitExceeded.Function、LimitExceeded.Namespace、LimitExceeded.FunctionReservedConcurrencyMemory），
