@@ -39,6 +39,9 @@ type SeedOptions struct {
 	MergeSessions bool
 	// Depth 返回数据集的补齐深度，不大于 0 表示不补（保留期太短、行情源不支持更早的数据）。
 	Depth func(ctx context.Context, spaceID, datasetID, frequency string) (time.Duration, error)
+	// Regions 返回市场补齐分块可用的云函数地域：必须是函数写入直达存储机的地域（入口主机就是存储机），
+	// 经海外机转发的地域（带宽很小，会挤掉实时采集）不能算。为空时用补采函数提供方的全部地域。
+	Regions func(spaceID, marketType string) []string
 	// Slots 返回空间补齐分块的并发上限（地域数 × 单个补采函数的预留并发）；为空或返回值不大于 0 时用空间的补采并发上限。
 	Slots func(ctx context.Context, spaceID string) int
 	// RowsPerSecond、LocalRowsPerSecond 是补齐写 Storage 的全局速率上限与本地执行端的速率上限，不大于 0 表示不限。
@@ -88,6 +91,14 @@ func (b *Backfiller) seedJobIDs(ctx context.Context, spaceID string) (map[string
 		}
 	}
 	return out, nil
+}
+
+// seedRegions 返回市场补齐分块可用的云函数地域；没有时分块按任务的采集方式选执行端。
+func (b *Backfiller) seedRegions(provider FunctionProvider, spaceID, marketType string) []string {
+	if b.Seed.Regions != nil {
+		return b.Seed.Regions(spaceID, marketType)
+	}
+	return provider.BackfillRegions(marketType)
 }
 
 // seedSlots 是补齐分块在空间里的并发上限。
