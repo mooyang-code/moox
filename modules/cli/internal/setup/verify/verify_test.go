@@ -95,6 +95,35 @@ func TestFactorRules(t *testing.T) {
 	require.Equal(t, Skip, status(Evaluate(in), "factor"))
 }
 
+// 源数据集补历史中的任务不计算：没前进、最近一期失败都算通过，说明里写明补历史中；没在补历史的任务照原规则判断。
+func TestFactorSeedingPassesWithNote(t *testing.T) {
+	in := healthy()
+	in.Factors[0].LastPeriod, in.Factors[0].SourceSeeding = 1, true
+	checks := Evaluate(in)
+	require.True(t, Settled(checks))
+	var check Check
+	for _, item := range checks {
+		if item.Name == "factor" {
+			check = item
+		}
+	}
+	require.Equal(t, Pass, check.Status)
+	require.Empty(t, check.Code)
+	require.Contains(t, check.Detail, "因子任务 f 补历史中，下游待生效")
+
+	in.Factors[0].LastStatus = "failed"
+	require.Equal(t, Pass, status(Evaluate(in), "factor"))
+
+	// 混合：另一个任务没在补历史、也没前进，照常等。
+	in.Factors = append(in.Factors, Factor{TaskID: "g", Frequency: "1m", Baseline: 3, LastPeriod: 3, SourceEnabled: true})
+	require.Equal(t, Wait, status(Evaluate(in), "factor"))
+	require.Equal(t, Fail, status(Finish(Evaluate(in)), "factor"))
+
+	// 源数据集没在采集的任务不算进来，补历史与否都一样。
+	in.Factors = []Factor{{TaskID: "h", Frequency: "1m", SourceSeeding: true}}
+	require.Equal(t, Skip, status(Evaluate(in), "factor"))
+}
+
 func TestStrategyRules(t *testing.T) {
 	in := healthy()
 	in.Instances[0].SessionID = ""

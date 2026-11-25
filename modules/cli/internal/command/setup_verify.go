@@ -35,7 +35,7 @@ func newSetupVerifyCommand(deps setupDeps) *cobra.Command {
 		Long: `按已启用的任务逐项检查，等到通过或超时。开头没有计划、第一根 K 线还没收盘时算等待，到超时才失败。
 K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口靠之后补采。因子预热期状态是 degraded，也算通过。
 没有部署因子引擎、没有启用的策略实例时，对应的检查跳过。空间没有任何 K 线任务，或任务都停用（还没运行 setup start）时直接失败。
-休市时 K 线检查跳过，因子只看最近一期没有失败。`,
+休市时 K 线检查跳过，因子只看最近一期没有失败。源数据集在首次接入的补历史中的因子任务不计算，算通过，说明里写“补历史中，下游待生效”。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(spaceID) == "" {
@@ -197,6 +197,13 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 	for _, dataset := range status.GetDatasets() {
 		registered[dataset.GetDatasetId()] = dataset
 	}
+	// 补历史中的（数据集、频率）：与因子管理端判断任务“源数据历史补齐”的口径相同（任务的源数据集加任务的频率）。
+	seeding := map[[2]string]bool{}
+	for _, seed := range status.GetHistorySeeds() {
+		if seed.GetStatus() == "running" {
+			seeding[[2]string{seed.GetDatasetId(), seed.GetFrequency()}] = true
+		}
+	}
 	sources := map[string]bool{}
 	from, to := now.Truncate(time.Minute).Add(-3*time.Minute).Format(time.RFC3339), now.Format(time.RFC3339)
 	for _, task := range tasks.GetTasks() {
@@ -233,6 +240,7 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 			input.Factors = append(input.Factors, verify.Factor{
 				TaskID: task.GetTaskId(), Frequency: task.GetFreq(), LastPeriod: info.GetLastRun().GetLastPeriodTime(), Baseline: baseline[task.GetTaskId()],
 				LastStatus: info.GetLastRun().GetLastStatus(), SourceEnabled: sources[task.GetSourceDatasetId()],
+				SourceSeeding: seeding[[2]string{task.GetSourceDatasetId(), task.GetFreq()}],
 			})
 		}
 	}

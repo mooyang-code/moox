@@ -47,6 +47,7 @@ type Dataset struct {
 }
 
 // Factor 是一个启用的因子任务。Baseline 是本次验收开始时的最后一期，SourceEnabled 表示源数据集在采集。
+// SourceSeeding 表示源数据集（按任务的频率）正在首次接入的历史补齐：补齐期间任务不计算（下游待生效），本来就不会前进。
 type Factor struct {
 	TaskID        string
 	Frequency     string
@@ -54,6 +55,7 @@ type Factor struct {
 	Baseline      int64
 	LastStatus    string
 	SourceEnabled bool
+	SourceSeeding bool
 }
 
 // Instance 是一个策略实例。
@@ -173,6 +175,7 @@ func klines(in Input) Check {
 }
 
 // factors 判断因子任务。marketClosed 时 1m 任务本来就不前进，只看最近一期没有失败。
+// 源数据集在补历史中的任务不计算，算通过并在说明里写明，补齐结束（或 history-seed skip 放行）后才开始前进。
 func factors(in Input, marketClosed bool) Check {
 	check := Check{Name: "factor", Code: CodeFactorNotAdvancing}
 	if !in.FactorDeployed {
@@ -180,11 +183,16 @@ func factors(in Input, marketClosed bool) Check {
 		return check
 	}
 	checked := 0
+	var seeding []string
 	for _, factor := range in.Factors {
 		if !factor.SourceEnabled {
 			continue // 源数据集没在采集，这个任务本来就不会前进。
 		}
 		checked++
+		if factor.SourceSeeding {
+			seeding = append(seeding, factor.TaskID)
+			continue
+		}
 		// degraded 算通过：预热期状态就是它。
 		if factor.LastStatus == "failed" {
 			check.Status, check.Detail = Wait, "因子任务 "+factor.TaskID+" 最近一期失败"
@@ -200,6 +208,9 @@ func factors(in Input, marketClosed bool) Check {
 		return check
 	}
 	check.Status, check.Code = Pass, ""
+	if len(seeding) > 0 {
+		check.Detail = "因子任务 " + strings.Join(seeding, "、") + " 补历史中，下游待生效（进度看 collector status，不想等用 collector history-seed skip 放行）"
+	}
 	return check
 }
 

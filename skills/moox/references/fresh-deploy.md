@@ -90,6 +90,7 @@ $CLI setup install --file ./moox.toml --source-dir $WT --binary-dir $WT/bin-linu
 | 9 | `setup start --space-id crypto`、`setup verify --space-id crypto` | 默认因子任务与示例策略在 `setup start` 里导入 |
 
 - `setup verify` 不把“有限保留期的数据集还没有归档任务”算作没装好（全新安装一定没有归档任务，这一项在 `doctor alerts` 里照常显示）：装完后按需要用 `moox-cli archive tasks create` 或管理台“数据归档 › 归档任务”建任务。
+- 全新安装时数据集首次接入要补历史（crypto 两个 1m 数据集要几小时），补齐期间因子任务不计算：`setup verify` 把这些任务算通过，因子检查的说明写“补历史中，下游待生效”，不用为了验收先 `collector history-seed skip`。
 - 任何一步失败先看原因和日志（`setup logs --host <主机> --component <组件> --journal`），修好后重跑同一条 `setup install`：每一步都可以重做，没有变化的组件不重启。
 - 改了代码要重新构建二进制再重跑；`setup deploy` 按二进制摘要判断哪些组件有变化。
 - 另一个空间装完后再启动：`$CLI setup start --source-dir $WT --space-id stockcn`（`setup start` 没有预览，不带 `--yes`）、`$CLI setup verify --space-id stockcn`。

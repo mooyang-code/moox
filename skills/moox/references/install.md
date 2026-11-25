@@ -296,6 +296,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 1. `./bin/moox-cli doctor alerts --format text`：新对象一开始会有“尚未上报 / 尚无成功运行”，等一两个周期再看；长时间不消的按 [`monitor-attention.md`](monitor-attention.md) 排查。
 2. `./bin/moox-cli collector status --space-id crypto`：各数据集 `level: ok`。
    新数据集第一次接入时 Collector 自动补历史（`collector status` 的“历史补齐”显示进度与预计剩余时间）：补齐期间因子任务显示“历史补齐中”、不计算，策略不下单，监控显示“待生效”，都不是故障，补齐结束自动放行；
+   `setup verify` 把补历史中的因子任务算通过，因子检查的 `detail` 写“因子任务 … 补历史中，下游待生效”，交付时如实告诉用户这些任务要等补齐结束才开始计算；
    不想等用 `moox-cli collector history-seed skip --space-id <空间>`。美股、港股几十分钟，A 股、crypto 要几小时。要加快 crypto：在 `moox.toml` 给 crypto 配几个海外 public 地域（见 `moox.toml.example`）。
 3. 告诉用户管理台地址 `https://<管理台地址>:9527`、管理员用户名（密码在用户自己填的配置里），以及默认已经在跑的内容：
    用户选的空间。crypto 是币安现货与合约 1m K 线采集；有因子机时还有因子任务和默认示例策略（合约 1m 双均线，观察实例，不投递）。以 `setup verify` 的结果为准，没验收通过不要说已经在跑。
@@ -367,7 +368,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `monitor_unhealthy` | 到超时 Monitor 还有 critical 问题，报错里列出了主机和组件 | 看 `doctor alerts`，再用 `doctor diagnose --node <主机>` 经 SSH 看那台主机上组件的本机 `/readyz`（健康端口只听本机，防火墙不放行它）。组件都正常但告警不解除时，检查告警通知渠道：恢复通知发不出去时告警会保持触发 |
 | `monitor_unreadable` | 到超时还读不到 Monitor | 用 `setup logs --host <控制机> --component monitor` 查 Monitor |
 | `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector status` 和 `setup logs --host <海外机> --component collector-stream` |
-| `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败 | 看 `factor status` 和 `setup logs --host <因子机> --component factor-engine` |
+| `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败（源数据集补历史中的任务不算，它们按通过记、说明里写“补历史中，下游待生效”） | 看 `factor status` 和 `setup logs --host <因子机> --component factor-engine` |
 | `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --host <控制机> --component strategy` |
 | `admin_not_ready` | 这台电脑没有 `moox-cli` 的签名私钥 | 同 `operator_key_missing` |
 | `logs_failed` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
