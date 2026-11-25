@@ -43,6 +43,18 @@ func TestUtils_BuildSafeUserInfo_ScriptPayload_ShouldEscapeHTML(t *testing.T) {
 	assert.NotContains(t, info.Username, "<script>")
 }
 
+// 创建与最后登录时刻按 Unix 毫秒给出；没登录过时最后登录为 0。
+func TestUtils_BuildSafeUserInfo_TimesAreUnixMillis(t *testing.T) {
+	created := time.Date(2026, 11, 24, 8, 0, 0, 123_000_000, time.UTC)
+	lastLogin := created.Add(time.Hour)
+	info := BuildSafeUserInfo(&model.User{UserID: "user-1", Username: "admin", CreatedAt: created, LastLoginAt: &lastLogin})
+	assert.Equal(t, created.UnixMilli(), info.GetCreatedAt())
+	assert.Equal(t, lastLogin.UnixMilli(), info.GetLastLoginAt())
+
+	never := BuildSafeUserInfo(&model.User{UserID: "user-2", Username: "admin", CreatedAt: created})
+	assert.Zero(t, never.GetLastLoginAt())
+}
+
 func TestUtils_ValidateStringFormat_ValidValue_ShouldReturnNil(t *testing.T) {
 	err := ValidateStringFormat("abc123", "用户名")
 	assert.NoError(t, err)

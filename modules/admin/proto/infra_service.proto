@@ -21,8 +21,8 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;a
 message UserInfo {
   string user_id = 1;
   string username = 2;
-  int64 created_at = 3;     // 创建时间戳
-  int64 last_login_at = 4;  // 最后登录时间戳
+  int64 created_at = 3;     // 创建时刻（Unix 毫秒）
+  int64 last_login_at = 4;  // 最后登录时刻（Unix 毫秒），没登录过为 0
   string last_login_ip = 5;
 }
 
@@ -38,7 +38,7 @@ message LoginReq {
 message LoginRsp {
   common.RetInfo ret_info = 1;
   UserInfo user_info = 2;
-  int64 expires_at = 3;  // 会话过期时间（Unix 秒）
+  int64 expires_at = 3;  // 会话过期时刻（Unix 毫秒）
 }
 
 message LogoutReq {}

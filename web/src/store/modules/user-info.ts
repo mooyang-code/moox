@@ -10,8 +10,6 @@ interface Account {
     id?: string;
     userName?: string;
     loginIp?: string;
-    loginDate?: string;
-    createTime?: string;
   };
 }
 
@@ -31,9 +29,7 @@ const userInfoStore = () => {
       user: {
         id: userInfo.user_id || "",
         userName: userInfo.username || "",
-        loginIp: userInfo.last_login_ip || "",
-        loginDate: userInfo.last_login_at ? new Date(userInfo.last_login_at * 1000).toISOString() : "",
-        createTime: userInfo.created_at ? new Date(userInfo.created_at * 1000).toISOString() : ""
+        loginIp: userInfo.last_login_ip || ""
       }
     };
   }

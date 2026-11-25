@@ -30,8 +30,8 @@ type UserInfo struct {
 
 	UserId      string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Username    string `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
-	CreatedAt   int64  `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`         // 创建时间戳
-	LastLoginAt int64  `protobuf:"varint,4,opt,name=last_login_at,json=lastLoginAt,proto3" json:"last_login_at,omitempty"` // 最后登录时间戳
+	CreatedAt   int64  `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`         // 创建时刻（Unix 毫秒）
+	LastLoginAt int64  `protobuf:"varint,4,opt,name=last_login_at,json=lastLoginAt,proto3" json:"last_login_at,omitempty"` // 最后登录时刻（Unix 毫秒），没登录过为 0
 	LastLoginIp string `protobuf:"bytes,5,opt,name=last_login_ip,json=lastLoginIp,proto3" json:"last_login_ip,omitempty"`
 }
 
@@ -166,7 +166,7 @@ type LoginRsp struct {
 
 	RetInfo   *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	UserInfo  *UserInfo         `protobuf:"bytes,2,opt,name=user_info,json=userInfo,proto3" json:"user_info,omitempty"`
-	ExpiresAt int64             `protobuf:"varint,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"` // 会话过期时间（Unix 秒）
+	ExpiresAt int64             `protobuf:"varint,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"` // 会话过期时刻（Unix 毫秒）
 }
 
 func (x *LoginRsp) Reset() {
