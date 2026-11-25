@@ -2,13 +2,13 @@ package storagepb
 
 import (
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestStorageCompletionEventsRoundTrip(t *testing.T) {
-	now := timestamppb.Now()
+	now := time.Now().UnixMilli()
 	tests := []struct {
 		name    string
 		payload proto.Message

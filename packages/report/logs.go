@@ -102,7 +102,7 @@ func splitLogRecords(records []logsink.Record) [][]*metricspb.LogRecord {
 	size := 0
 	for _, record := range records {
 		item := &metricspb.LogRecord{
-			Sequence: record.Sequence, TimeUnixNano: record.Time.UnixNano(), Level: record.Level, Event: record.Event,
+			Sequence: record.Sequence, LoggedAt: record.Time.UnixMilli(), Level: record.Level, Event: record.Event,
 			Message: record.Message, Caller: record.Caller, Fields: record.Fields, MergedCount: record.MergedCount,
 		}
 		itemSize := proto.Size(item)

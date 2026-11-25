@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // series_tag 的形状校验：完成事件里按序列的名单与行键同一套规则。
@@ -41,7 +40,7 @@ func TestSeriesTagShapeValidation(t *testing.T) {
 func TestStorageCompletionEventValidation(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	now := timestamppb.Now()
+	now := time.Now().UnixMilli()
 	tests := []struct {
 		name      string
 		event     Event
@@ -116,7 +115,7 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 func TestDatasetPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	payload := validLedgerPeriodCompleted(timestamppb.Now())
+	payload := validLedgerPeriodCompleted(time.Now().UnixMilli())
 	payload.UniverseSubjectIds = nil
 	payload.Frequency = "1H"
 	payload.PeriodTime = 1
@@ -128,7 +127,7 @@ func TestDatasetPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 func TestDatasetPeriodCompletedPassesOpaqueDetailThrough(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	payload := validProducerPeriodCompleted(timestamppb.Now())
+	payload := validProducerPeriodCompleted(time.Now().UnixMilli())
 	payload.Detail = []byte{0xff, 0x00, 0x01}
 	encoded, err := registry.Encode(DatasetPeriodCompleted, payload, validationOptions("event-1", "space", "dataset_result"))
 	require.NoError(t, err)
@@ -228,5 +227,50 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	}
 	if rawPublisher.calls != 0 {
 		t.Fatalf("invalid message reached raw publisher %d times", rawPublisher.calls)
+	}
+}
+
+// 事件里的时刻都是 Unix 毫秒：0（没填）与负数（纪元之前）一律拒绝，信封与各事件体都一样。
+func TestEventTimesRejectZeroAndNegative(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	now := time.Now().UnixMilli()
+	for _, at := range []int64{0, -1} {
+		cases := map[string]struct {
+			event     Event
+			subjectID string
+			payload   proto.Message
+		}{
+			"period completed_at": {DatasetPeriodCompleted, "dataset", func() proto.Message { p := validLedgerPeriodCompleted(now); p.CompletedAt = at; return p }()},
+			"view ready_at":       {ViewDataReady, "dataset", func() proto.Message { p := validViewDataReady(now); p.ReadyAt = at; return p }()},
+			"backfilled confirmed_at": {CollectorKlineBackfilled, "dataset_src", &storagepb.CollectorKlineBackfilled{
+				DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: 1792576800, End: 1792580400, Origin: "auto", ConfirmedAt: at,
+			}},
+			"delist delist_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &storagepb.InstrumentDelistScheduled{
+				Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: at, FirstSeenAt: now, Source: DelistSourceManual, Scope: DelistScopeAll,
+			}},
+			"delist first_seen_at": {InstrumentDelistScheduled, InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT"), &storagepb.InstrumentDelistScheduled{
+				Exchange: "binance", Market: DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: now, FirstSeenAt: at, Source: DelistSourceManual, Scope: DelistScopeAll,
+			}},
+		}
+		for name, c := range cases {
+			_, err := registry.Encode(c.event, c.payload, validationOptions("event-1", "space", c.subjectID))
+			require.Error(t, err, "%s = %d", name, at)
+		}
+
+		// 信封：编码时拒绝纪元及之前的时刻，解码与校验时拒绝 0 与负数。
+		_, err := registry.Encode(DatasetPeriodCompleted, validLedgerPeriodCompleted(now), PublishOptions{
+			EventID: "event-1", OccurredAt: time.UnixMilli(at), SpaceID: "space", SubjectID: "dataset",
+		})
+		require.Error(t, err, "encode occurred_at = %d", at)
+		encoded, err := registry.Encode(DatasetPeriodCompleted, validLedgerPeriodCompleted(now), validationOptions("event-1", "space", "dataset"))
+		require.NoError(t, err)
+		encoded.Message.OccurredAt = at
+		_, err = registry.ValidateMessage(encoded.Message)
+		require.ErrorContains(t, err, "occurred_at", "validate occurred_at = %d", at)
+		raw, err := proto.Marshal(encoded.Message)
+		require.NoError(t, err)
+		_, _, err = DecodeRaw(registry, raw, encoded.Subject, "event-1", ContentType)
+		require.ErrorContains(t, err, "occurred_at", "decode occurred_at = %d", at)
 	}
 }

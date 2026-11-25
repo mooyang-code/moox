@@ -19,7 +19,6 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -50,7 +49,7 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref datasetRef, chang
 		log.Errorf("storage view 跳过来源不认识的完成标记 view=%s/%s 序号=%d 来源=%q", ref.spaceID, ref.datasetID, change.GetSequence(), payload.GetSource())
 		return nil
 	}
-	opts := events.PublishOptions{EventID: eventID, OccurredAt: ready.GetReadyAt().AsTime().UTC(), SpaceID: ref.spaceID, SubjectID: ref.datasetID}
+	opts := events.PublishOptions{EventID: eventID, OccurredAt: time.UnixMilli(ready.GetReadyAt()).UTC(), SpaceID: ref.spaceID, SubjectID: ref.datasetID}
 	// 先按契约编码一遍：过不了校验的事件原样重试也不会成功（发布器返回的校验错误不能可靠地区分），记日志跳过。
 	registry, err := events.DefaultRegistry()
 	if err != nil {
@@ -94,7 +93,7 @@ func followReadyEvent(ref datasetRef, message *eventpb.EventMessage, payload *st
 		CompletionEventId: message.GetEventId(), DatasetId: ref.datasetID, Status: payload.GetStatus(),
 		Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 		FailedSubjects: uniqueSortedStrings(payload.GetFailedSubjects()),
-		ReadyAt:        cloneTimestamp(message.GetOccurredAt()),
+		ReadyAt:        message.GetOccurredAt(),
 	}
 	switch payload.GetSource() {
 	case "ledger":
@@ -162,13 +161,6 @@ func (s *Service) readyPublisherLocked() ReadyEventPublisher {
 func stableViewEventID(parts ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "storage-view-" + hex.EncodeToString(hash[:16])
-}
-
-func cloneTimestamp(value *timestamppb.Timestamp) *timestamppb.Timestamp {
-	if value == nil {
-		return nil
-	}
-	return timestamppb.New(value.AsTime().UTC())
 }
 
 func uniqueSortedStrings(values []string) []string {

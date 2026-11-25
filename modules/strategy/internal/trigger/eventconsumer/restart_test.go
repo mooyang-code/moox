@@ -20,7 +20,6 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // unusedLoader 在没有启用实例的测试里不会被调用。
@@ -124,7 +123,7 @@ func TestConsumerRecoversAfterEventBusRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := &storagepb.ViewDataReady{
-		DatasetId: "view_a", Frequency: "1h", PeriodTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", ReadyAt: timestamppb.Now(),
+		DatasetId: "view_a", Frequency: "1h", PeriodTime: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", ReadyAt: time.Now().UnixMilli(),
 		CompletionEventId: "collector-1"}
 	encoded, err := registry.Encode(events.ViewDataReady, payload, events.PublishOptions{EventID: "ready-after-restart", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "view_a"})
 	if err != nil {

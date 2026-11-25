@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,10 +18,10 @@ func TestHandleCarriesReadinessLifecycleAndDelegates(t *testing.T) {
 	ready, reason := false, "数据库不可用"
 	h.SetReadiness(func(context.Context) (bool, string) { return ready, reason })
 	h.SetLifecycle(func() *metricspb.ModuleLifecycle {
-		return &metricspb.ModuleLifecycle{Stage: "paused", PauseKind: "system", PausedSince: "2026-11-15T01:00:00Z"}
+		return &metricspb.ModuleLifecycle{Stage: "paused", PauseKind: "system", PausedSince: time.Date(2026, 11, 15, 1, 0, 0, 0, time.UTC).UnixMilli()}
 	})
 	h.SetDelegates(func(context.Context) []*metricspb.DelegatedReport {
-		return []*metricspb.DelegatedReport{{ServiceName: "factor-engine", InstanceId: "engine@mac", LastHeartbeatUnix: 1}}
+		return []*metricspb.DelegatedReport{{ServiceName: "factor-engine", InstanceId: "engine@mac", LastHeartbeatAt: 1}}
 	})
 
 	require.NoError(t, h.Handle(t.Context()))

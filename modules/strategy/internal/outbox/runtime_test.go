@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type runtimeTestStore struct {
@@ -85,8 +84,8 @@ func strategyEventData(id string) ([]byte, error) {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	bar := timestamppb.New(now)
-	validUntil := timestamppb.New(now.Add(time.Hour))
+	bar := now.UnixMilli()
+	validUntil := now.Add(time.Hour).UnixMilli()
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: id, InstanceId: "runner-1", StrategyId: "strategy-1", SessionId: "session-1", SessionStartedAt: 1_000, LogicalAccountId: "logical-1", BarEndTime: bar, ValidUntil: validUntil,
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{

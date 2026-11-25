@@ -4,6 +4,8 @@ package trpc.moox.metrics;
 
 option go_package = "github.com/mooyang-code/moox/packages/metricspb;metricspb";
 
+import "moox_common.proto";
+
 enum ExpositionFormat {
   EXPOSITION_FORMAT_UNSPECIFIED = 0;
   EXPOSITION_FORMAT_PROMETHEUS_TEXT = 1;
@@ -38,7 +40,7 @@ message MetricReport {
   repeated DelegatedReport delegated = 11;
 }
 
-// ModuleLifecycle 是模块级生命周期状态（设计 3.8）。时间都是 RFC3339。
+// ModuleLifecycle 是模块级生命周期状态（设计 3.8）。时刻都是 Unix 毫秒，0 表示没有。
 message ModuleLifecycle {
   // stage 是 running、paused、resuming。
   string stage = 1;
@@ -47,23 +49,9 @@ message ModuleLifecycle {
   string pause_kind = 3;
   string pause_reason = 4;
   string paused_by = 5;
-  string paused_since = 6;
-  // catchup 是恢复追赶的进度（恢复追赶中）。
-  CatchupProgress catchup = 7;
-}
-
-// CatchupProgress 是恢复追赶的进度：从哪里开始、追到哪里、是否追平、被什么挡住。
-message CatchupProgress {
-  string since = 1;
-  // target 是追赶目标（最新已完成周期），落后多少看它与已处理到的位置。
-  string target = 2;
-  int64 done = 3;
-  int64 total = 4;
-  bool caught_up = 5;
-  string blocked_by = 6;
-  // unfillable 是暂停区间里确认无法补采的周期数。
-  int32 unfillable = 7;
-  string message = 8;
+  int64 paused_since = 6;
+  // catchup 是恢复追赶的进度（恢复追赶中），与生命周期 RPC 返回的是同一个消息。
+  trpc.moox.common.CatchupProgress catchup = 7;
 }
 
 // DelegatedReport 是管理端按最近一次心跳代为上报的一个外部程序。
@@ -73,8 +61,8 @@ message DelegatedReport {
   string instance_id = 2;
   string boot_id = 3;
   string service_version = 4;
-  // last_heartbeat_unix 是管理端最近一次接受它心跳的时间（Unix 秒）；Monitor 按它判断是否停止上报。
-  int64 last_heartbeat_unix = 5;
+  // last_heartbeat_at 是管理端最近一次接受它心跳的时刻（Unix 毫秒）；Monitor 按它判断是否停止上报。
+  int64 last_heartbeat_at = 5;
   optional bool ready = 6;
   string not_ready_reason = 7;
   ModuleLifecycle lifecycle = 8;
@@ -84,7 +72,8 @@ message DelegatedReport {
 message LogRecord {
   // sequence 在一次进程启动内递增，和 LogReport 的 boot_id 一起唯一确定一条记录（重复投递靠它去重）。
   uint64 sequence = 1;
-  int64 time_unix_nano = 2;
+  // logged_at 是打日志的时刻（Unix 毫秒）；同一毫秒内的先后看 sequence。
+  int64 logged_at = 2;
   // level：debug、info、warn、error、fatal。
   string level = 3;
   // event 是关键事件的名称；普通的错误日志为空。

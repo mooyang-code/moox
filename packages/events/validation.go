@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type EventValidator func(*eventpb.EventMessage, proto.Message) error
@@ -57,7 +56,7 @@ func validateObservabilityLogReported(message *eventpb.EventMessage, value proto
 		return fmt.Errorf("log report must carry 1 to %d records", MaxLogReportRecords)
 	}
 	for _, record := range payload.GetRecords() {
-		if record.GetSequence() == 0 || record.GetTimeUnixNano() <= 0 || strings.TrimSpace(record.GetLevel()) == "" {
+		if record.GetSequence() == 0 || record.GetLoggedAt() <= 0 || strings.TrimSpace(record.GetLevel()) == "" {
 			return fmt.Errorf("log record sequence, time and level are required")
 		}
 		if len(record.GetMessage()) > MaxLogMessageBytes || len(record.GetFields()) > MaxLogRecordFields {
@@ -169,20 +168,19 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 			return fmt.Errorf("collector kline backfilled subject_id %q is invalid", subject)
 		}
 	}
-	start, end := payload.GetStart(), payload.GetEnd()
-	if start == nil || end == nil || start.CheckValid() != nil || end.CheckValid() != nil || !end.AsTime().After(start.AsTime()) {
-		return fmt.Errorf("collector kline backfilled range is invalid")
+	// start、end 是 Unix 秒（数据坐标），都要为正且 end 晚于 start。
+	if start, end := payload.GetStart(), payload.GetEnd(); start <= 0 || end <= start {
+		return fmt.Errorf("K 线补写事件的 start、end 必须是正的 Unix 秒且 end 晚于 start")
 	}
-	if payload.GetConfirmedAt() == nil || payload.GetConfirmedAt().CheckValid() != nil {
-		return fmt.Errorf("collector kline backfilled confirmed_at is invalid")
+	if payload.GetConfirmedAt() <= 0 {
+		return fmt.Errorf("K 线补写事件的 confirmed_at 必须是正的 Unix 毫秒")
 	}
 	for _, absent := range payload.GetAbsent() {
 		if !validRequiredToken(absent.GetSubjectId()) {
 			return fmt.Errorf("collector kline backfilled absent subject_id %q is invalid", absent.GetSubjectId())
 		}
-		from, to := absent.GetStart(), absent.GetEnd()
-		if from == nil || to == nil || from.CheckValid() != nil || to.CheckValid() != nil || !to.AsTime().After(from.AsTime()) {
-			return fmt.Errorf("collector kline backfilled absent range is invalid")
+		if from, to := absent.GetStart(), absent.GetEnd(); from <= 0 || to <= from {
+			return fmt.Errorf("K 线补写事件 absent 的 start、end 必须是正的 Unix 秒且 end 晚于 start")
 		}
 	}
 	switch payload.GetOrigin() {
@@ -193,7 +191,8 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	}
 }
 
-func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency string, periodTime int64, status string, timestamp *timestamppb.Timestamp, label string) error {
+// validateStoragePeriod 校验周期事件的公共部分；at 是事件里的时刻（Unix 毫秒），必须为正。
+func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency string, periodTime int64, status string, at int64, label string) error {
 	if !validRequiredToken(routeID) || message == nil || routeID != message.GetSubjectId() {
 		return fmt.Errorf("%s route identity does not match subject_id", label)
 	}
@@ -203,8 +202,8 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	if !validCompletionStatus(status) {
 		return fmt.Errorf("%s status %q is invalid", label, status)
 	}
-	if timestamp == nil || timestamp.CheckValid() != nil {
-		return fmt.Errorf("%s timestamp is invalid", label)
+	if at <= 0 {
+		return fmt.Errorf("%s 的时刻必须是正的 Unix 毫秒", label)
 	}
 	return nil
 }
@@ -254,18 +253,11 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if payload.GetSessionStartedAt() <= 0 {
 		return fmt.Errorf("trade target weight session_started_at must be positive")
 	}
-	if payload.GetBarEndTime() == nil || payload.GetValidUntil() == nil {
-		return fmt.Errorf("trade target weight timestamps are required")
+	if payload.GetBarEndTime() <= 0 {
+		return fmt.Errorf("目标权重事件的 bar_end_time 必须是正的 Unix 毫秒")
 	}
-	for name, timestamp := range map[string]*timestamppb.Timestamp{
-		"bar_end_time": payload.GetBarEndTime(), "valid_until": payload.GetValidUntil(),
-	} {
-		if err := timestamp.CheckValid(); err != nil {
-			return fmt.Errorf("trade target weight %s: %w", name, err)
-		}
-	}
-	if !payload.GetValidUntil().AsTime().After(payload.GetBarEndTime().AsTime()) {
-		return fmt.Errorf("trade target weight valid_until must be after bar_end_time")
+	if payload.GetValidUntil() <= payload.GetBarEndTime() {
+		return fmt.Errorf("目标权重事件的 valid_until 必须晚于 bar_end_time")
 	}
 	type instrumentKey struct{ instrumentID, marketType string }
 	seenInstruments := make(map[instrumentKey]struct{}, len(payload.GetTargets()))

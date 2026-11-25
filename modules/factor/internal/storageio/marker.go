@@ -14,7 +14,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (c *Client) ReportComputed(ctx context.Context, marker PeriodMarker) error {
@@ -144,7 +143,7 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 	out := &storagepb.DatasetPeriodCompletedMarker{
 		DatasetId: marker.ResultDatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime, Status: marker.Status,
 		UniverseSubjectIds: universe, FailedSubjects: failed,
-		CauseEventId: marker.TriggerEventID, CompletedAt: timestamppb.New(marker.ComputedAt.UTC()),
+		CauseEventId: marker.TriggerEventID, CompletedAt: marker.ComputedAt.UTC().UnixMilli(),
 		DetailType: PeriodDetailType, Detail: raw,
 	}
 	if size := proto.Size(out); size > MaxMarkerBytes {

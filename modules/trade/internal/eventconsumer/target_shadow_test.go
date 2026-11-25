@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func shadowDelivery(t *testing.T, now time.Time, targetID string, targets []*tradeeventpb.InstrumentWeightTarget) *jetstream.Delivery {
@@ -24,7 +23,7 @@ func shadowDelivery(t *testing.T, now time.Time, targetID string, targets []*tra
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: targetID, InstanceId: "runner-1", SessionId: "session-1", SessionStartedAt: testSessionStartedAt("session-1"), StrategyId: "strategy-1", LogicalAccountId: "logical-1",
 		Targets:    targets,
-		BarEndTime: timestamppb.New(now), ValidUntil: timestamppb.New(now.Add(time.Hour)),
+		BarEndTime: now.UnixMilli(), ValidUntil: now.Add(time.Hour).UnixMilli(),
 		Shadow: true,
 	}, events.PublishOptions{EventID: targetID, OccurredAt: now, SpaceID: "space-1", SubjectID: "logical-1"})
 	require.NoError(t, err)

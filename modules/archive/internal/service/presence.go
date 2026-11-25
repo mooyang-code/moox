@@ -41,7 +41,7 @@ func (s *Service) DelegatedWorkerReport(ctx context.Context) (*metricspb.Delegat
 	}
 	return &metricspb.DelegatedReport{
 		ServiceName: "archive-worker", InstanceId: worker.WorkerID, ServiceVersion: worker.Version,
-		LastHeartbeatUnix: worker.LastHeartbeat.Unix(), Ready: proto.Bool(true),
+		LastHeartbeatAt: worker.LastHeartbeat.UnixMilli(), Ready: proto.Bool(true),
 	}, nil
 }
 

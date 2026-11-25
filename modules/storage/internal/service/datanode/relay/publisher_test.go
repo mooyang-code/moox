@@ -8,7 +8,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
@@ -33,7 +32,7 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 		mutate func(*eventpb.EventMessage)
 	}{
 		{name: "empty payload", mutate: func(message *eventpb.EventMessage) { message.Payload = nil }},
-		{name: "invalid occurred at", mutate: func(message *eventpb.EventMessage) { message.OccurredAt = timestamppb.New(time.Unix(1<<62, 0)) }},
+		{name: "invalid occurred at", mutate: func(message *eventpb.EventMessage) { message.OccurredAt = time.Unix(1<<62, 0).UnixMilli() }},
 		{name: "payload identity mismatch", mutate: func(message *eventpb.EventMessage) {
 			message.Payload, _ = proto.Marshal(validPeriodPayload("other"))
 		}},
@@ -56,6 +55,6 @@ func TestValidateDatasetEventRejectsInvalidEnvelopeAndPayload(t *testing.T) {
 func validPeriodPayload(datasetID string) *storagepb.DatasetPeriodCompleted {
 	return &storagepb.DatasetPeriodCompleted{
 		DatasetId: datasetID, Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-		CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1786032060, 0)),
+		CauseEventId: "cause-1", CompletedAt: time.Unix(1786032060, 0).UnixMilli(),
 	}
 }

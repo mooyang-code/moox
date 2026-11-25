@@ -160,7 +160,7 @@ func TestRegisterPublishesEachNoticeOnlyOnce(t *testing.T) {
 	var payload storagepb.InstrumentDelistScheduled
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), &payload))
 	require.Equal(t, events.DelistScopeAll, payload.GetScope())
-	require.Equal(t, notice.DelistAt, payload.GetDelistAt().AsTime())
+	require.Equal(t, notice.DelistAt, time.UnixMilli(payload.GetDelistAt()).UTC())
 
 	// 同一条（来源换了也一样）再次被报告：只更新最后报告时间，不再发布。
 	again := notice

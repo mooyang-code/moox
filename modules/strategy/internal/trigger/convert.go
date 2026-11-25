@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // TargetJSON 是 targets_json 中一个元素的结构。
@@ -121,7 +120,7 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, sessionSta
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,
 		SessionId: result.SessionID, SessionStartedAt: sessionStartedAt, StrategyId: instance.StrategyID,
-		BarEndTime: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil),
+		BarEndTime: result.BarEndTime.UnixMilli(), ValidUntil: result.ValidUntil.UnixMilli(),
 		Targets: payloadTargets, Shadow: shadow,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: *instance.LogicalAccountID})

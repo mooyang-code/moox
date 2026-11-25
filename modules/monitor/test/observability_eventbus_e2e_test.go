@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
@@ -69,7 +68,7 @@ func TestUnifiedObservabilityDurableFailureAndRestartFlow(t *testing.T) {
 	publishObservabilityMetric(t, ctx, publisher, "metrics-deduplicated")
 	if _, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
 		ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
-		Records: []*metricspb.LogRecord{{Sequence: 1, TimeUnixNano: time.Now().UnixNano(), Level: "error", Message: "下单失败"}},
+		Records: []*metricspb.LogRecord{{Sequence: 1, LoggedAt: time.Now().UnixMilli(), Level: "error", Message: "下单失败"}},
 	}, events.PublishOptions{
 		EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(),
 		SpaceID: "mooxsys", SubjectID: "trade/trade@overseas",
@@ -162,7 +161,7 @@ func publishMalformedObservabilityMetric(t *testing.T, js nats.JetStreamContext)
 	message := &eventpb.EventMessage{
 		EventId: "metrics-malformed", EventName: events.ObservabilityMetricsSnapshotReported.Name(),
 		EventVersion: events.ObservabilityMetricsSnapshotReported.Version(),
-		SpaceId:      "mooxsys", SubjectId: "bad", OccurredAt: timestamppb.Now(),
+		SpaceId:      "mooxsys", SubjectId: "bad", OccurredAt: time.Now().UnixMilli(),
 		Payload: []byte("not-protobuf"),
 	}
 	raw, err := proto.Marshal(message)

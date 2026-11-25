@@ -15,7 +15,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func changeRange(subject, freq string, start, end time.Time) *pb.DatasetChangeRange {
@@ -106,11 +105,11 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 			spec: timeSeriesSpec("quant", "kline", "1m"),
 			payload: &storageeventpb.DatasetPeriodCompleted{
 				DatasetId: "kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "ledger", SnapshotRef: "universe:kline:1m",
-				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: timestamppb.New(occurredAt),
+				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: occurredAt.UnixMilli(),
 			},
 			want: &storageeventpb.ViewDataReady{
 				CompletionEventId: "marker-ledger", DatasetId: "kline", Status: "degraded",
-				Frequency: "1m", PeriodTime: 1786032000, FailedSubjects: []string{"ETH-USDT"}, ReadyAt: timestamppb.New(occurredAt),
+				Frequency: "1m", PeriodTime: 1786032000, FailedSubjects: []string{"ETH-USDT"}, ReadyAt: occurredAt.UnixMilli(),
 				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
 			},
 			eventID: stableViewEventID("data-ready", "quant", "kline", "1m", "1786032000"),
@@ -120,12 +119,12 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 			spec: timeSeriesSpec("quant", "factor-results", "1m"),
 			payload: &storageeventpb.DatasetPeriodCompleted{
 				DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, CompletedAt: timestamppb.New(occurredAt), CauseEventId: "cause-1",
+				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, CompletedAt: occurredAt.UnixMilli(), CauseEventId: "cause-1",
 				DetailType: "test.Detail.v1", Detail: []byte("detail"),
 			},
 			want: &storageeventpb.ViewDataReady{
 				CompletionEventId: "marker-producer", DatasetId: "factor-results", Status: "complete",
-				Frequency: "1m", PeriodTime: 1786032000, ReadyAt: timestamppb.New(occurredAt),
+				Frequency: "1m", PeriodTime: 1786032000, ReadyAt: occurredAt.UnixMilli(),
 				UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, DetailType: "test.Detail.v1", Detail: []byte("detail"),
 			},
 			eventID: stableViewEventID("data-ready", "marker-producer", "factor-results"),
@@ -135,7 +134,7 @@ func TestFollowReadyEventFromMarker(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := proto.Marshal(tc.payload)
 			require.NoError(t, err)
-			marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-" + tc.payload.GetSource(), SpaceId: "quant", OccurredAt: timestamppb.New(occurredAt), Payload: raw})
+			marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-" + tc.payload.GetSource(), SpaceId: "quant", OccurredAt: occurredAt.UnixMilli(), Payload: raw})
 			require.NoError(t, err)
 			publisher := &readyPublisherFake{}
 			svc := newTestService(map[string]viewindex.Engine{"duckdb": &queryEngine{}})
@@ -165,10 +164,10 @@ func TestFollowReadyPublishErrors(t *testing.T) {
 	ref := spec.ref()
 	raw, err := proto.Marshal(&storageeventpb.DatasetPeriodCompleted{
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
-		CauseEventId: "cause-1", CompletedAt: timestamppb.New(time.Unix(1786032060, 0)),
+		CauseEventId: "cause-1", CompletedAt: time.Unix(1786032060, 0).UnixMilli(),
 	})
 	require.NoError(t, err)
-	marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-1", SpaceId: "quant", OccurredAt: timestamppb.New(time.Unix(1786032060, 0)), Payload: raw})
+	marker, err := proto.Marshal(&eventpb.EventMessage{EventId: "marker-1", SpaceId: "quant", OccurredAt: time.Unix(1786032060, 0).UnixMilli(), Payload: raw})
 	require.NoError(t, err)
 	newService := func(publisher ReadyEventPublisher) *Service {
 		svc := newTestService(map[string]viewindex.Engine{"duckdb": &queryEngine{}})

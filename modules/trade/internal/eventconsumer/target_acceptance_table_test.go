@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // 目标接收的结果表（批 3 T0 第 4 项）：把同会话新旧目标、同一目标重复投递、换会话、人工控制、过期几种情形的
@@ -79,7 +78,7 @@ func acceptanceDelivery(t *testing.T, now time.Time, spec acceptanceTarget) *jet
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: spec.id, InstanceId: instance, SessionId: session, SessionStartedAt: startedAt, StrategyId: "strategy-1", LogicalAccountId: "logical-1",
-		Targets: targets, BarEndTime: timestamppb.New(barEnd), ValidUntil: timestamppb.New(validUntil),
+		Targets: targets, BarEndTime: barEnd.UnixMilli(), ValidUntil: validUntil.UnixMilli(),
 	}, events.PublishOptions{EventID: spec.id, OccurredAt: barEnd, SpaceID: "space-1", SubjectID: "logical-1"})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)

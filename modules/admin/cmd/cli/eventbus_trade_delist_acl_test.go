@@ -12,7 +12,6 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	yamlv3 "gopkg.in/yaml.v3"
 )
 
@@ -78,8 +77,8 @@ func TestGeneratedACLLetsTradeConsumeDelistEvents(t *testing.T) {
 	require.NoError(t, err)
 	delistAt := time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)
 	_, err = publisher.Publish(ctx, events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
-		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: timestamppb.New(delistAt),
-		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(delistAt.Add(-time.Hour)), Scope: events.DelistScopeAll,
+		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: delistAt.UnixMilli(),
+		Source: events.DelistSourceManual, FirstSeenAt: delistAt.Add(-time.Hour).UnixMilli(), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{
 		EventID:    events.InstrumentDelistEventID("binance", events.DelistMarketSpot, "FOOUSDT", events.DelistScopeAll, delistAt),
 		OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.SystemSpaceID, SubjectID: events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, "FOOUSDT"),

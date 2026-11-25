@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -163,7 +162,7 @@ func (s *Store) validatePeriodUniverseSize(exp DatasetPeriodExpectation) error {
 		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
 		Status: periodDegraded, SnapshotRef: exp.SeriesHash,
 		UniverseSubjectIDs: universe, FailedSubjects: append([]string(nil), universe...),
-		CompletedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
+		CompletedAt: time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC).UnixMilli(),
 	}
 	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
 	if err != nil {
@@ -310,7 +309,7 @@ func (s *Store) finalizePeriodLocked(ctx context.Context, exp DatasetPeriodExpec
 	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, &LedgerPeriodCompleted{
 		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
 		Status: terminal, SnapshotRef: record.SeriesHash,
-		UniverseSubjectIDs: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(now.UTC()),
+		UniverseSubjectIDs: universe, FailedSubjects: failed, CompletedAt: now.UTC().UnixMilli(),
 	})
 	if err != nil {
 		return record, err

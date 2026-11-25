@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -47,7 +46,7 @@ func TestPeriodEventSizeAtStockScale(t *testing.T) {
 	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, &LedgerPeriodCompleted{
 		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime, Status: periodDegraded, SnapshotRef: exp.SeriesHash,
 		UniverseSubjectIDs: universe, FailedSubjects: universe,
-		CompletedAt: timestamppb.New(time.Unix(exp.PeriodTime, 0)),
+		CompletedAt: time.Unix(exp.PeriodTime, 0).UnixMilli(),
 	})
 	require.NoError(t, err)
 	t.Logf("5931 个标的、全部失败的周期完成事件 %d 字节", len(raw))

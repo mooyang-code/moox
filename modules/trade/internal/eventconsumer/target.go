@@ -130,7 +130,7 @@ func admitTarget(
 	// 过期最先判断：停用再启用策略后，旧会话还在路上的目标多半已经过期，按过期终止，不当成授权冲突告警。
 	// 目标可能早于生效时刻送到（策略与交易的时钟、传输不完全对齐）：有效期内照常接收，执行器保持 PENDING
 	// 到 bar_end_time 才执行，过了 valid_until 才终止。
-	if !now.Before(request.GetValidUntil().AsTime()) {
+	if !now.Before(time.UnixMilli(request.GetValidUntil()).UTC()) {
 		return admittedTarget{}, jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}, true
 	}
 	if account.ControlMode != "STRATEGY" {
@@ -213,7 +213,7 @@ func acceptTarget(
 	// already been superseded. The transactional accept path remains the
 	// authority, but this read-only fast path prevents stale redeliveries from
 	// blocking a durable consumer on unavailable market data.
-	barEnd := request.GetBarEndTime().AsTime().UnixMilli()
+	barEnd := request.GetBarEndTime()
 	if current, currentErr := opts.Store.GetCurrentTarget(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); currentErr == nil {
 		if current.InstanceID == request.GetInstanceId() && current.SessionID == request.GetSessionId() &&
 			(current.BarEndTime > barEnd || (current.BarEndTime == barEnd && current.TargetID != request.GetTargetId())) {
@@ -261,8 +261,8 @@ func acceptTarget(
 		Status:           "PENDING",
 		AcceptedAt:       now.UnixMilli(),
 	}
-	record.BarEndTime = request.GetBarEndTime().AsTime().UTC().UnixMilli()
-	record.ValidUntil = request.GetValidUntil().AsTime().UTC().UnixMilli()
+	record.BarEndTime = request.GetBarEndTime()
+	record.ValidUntil = request.GetValidUntil()
 	timeout := opts.ResolveTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -358,7 +358,7 @@ func handleShadowTarget(
 		RequestHash: requestHash, SignalTime: conversion.SignalTime,
 		SpaceID: spaceID, TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
 		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), SessionStartedAt: request.GetSessionStartedAt(), StrategyID: request.GetStrategyId(),
-		BarEndTime: request.GetBarEndTime().AsTime().UTC().UnixMilli(), ValidUntil: request.GetValidUntil().AsTime().UTC().UnixMilli(),
+		BarEndTime: request.GetBarEndTime(), ValidUntil: request.GetValidUntil(),
 		WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime,
 		ReferencePricesJSON: mustMarshal(referencePriceByInstrument(conversion)), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets),
 		RecordedAt: now.UnixMilli(),

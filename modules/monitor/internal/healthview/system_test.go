@@ -12,12 +12,12 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	pb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // moduleReport 是一个模块的一份上报：silent 表示部署了但这段时间没有上报；notReady 非空表示上报了未就绪。
@@ -51,17 +51,17 @@ func reportedSystem(t *testing.T, reports ...moduleReport) *pb.HealthSystem {
 			continue
 		}
 		if r.id == "factor-engine" {
-			delegated = append(delegated, &metricspb.DelegatedReport{ServiceName: r.id, InstanceId: "engine@mac", BootId: "engine-boot", LastHeartbeatUnix: now.Unix(),
+			delegated = append(delegated, &metricspb.DelegatedReport{ServiceName: r.id, InstanceId: "engine@mac", BootId: "engine-boot", LastHeartbeatAt: now.UnixMilli(),
 				Ready: proto.Bool(r.notReady == ""), NotReadyReason: r.notReady, Lifecycle: r.lifecycle})
 			continue
 		}
-		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: fmt.Sprint("report-", i), OccurredAt: timestamppb.New(now)},
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: fmt.Sprint("report-", i), OccurredAt: now.UnixMilli()},
 			&metricspb.MetricReport{ServiceName: r.id, InstanceId: r.id + "@control", NodeId: "control", BootId: "boot", Ready: proto.Bool(r.notReady == ""), NotReadyReason: r.notReady, Lifecycle: r.lifecycle}, nil)
 		require.NoError(t, err)
 	}
 	if delegated != nil {
 		topology.Deployments = append(topology.Deployments, domain.TopologyDeployment{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"})
-		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "factor-mgr", OccurredAt: timestamppb.New(now)},
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "factor-mgr", OccurredAt: now.UnixMilli()},
 			&metricspb.MetricReport{ServiceName: "factor-mgr", InstanceId: "factor-mgr@control", NodeId: "control", BootId: "boot", Ready: proto.Bool(true), Delegated: delegated}, nil)
 		require.NoError(t, err)
 	}
@@ -118,7 +118,7 @@ func TestProjectSystemReportsNotReadyModule(t *testing.T) {
 func TestProjectSystemPausePhases(t *testing.T) {
 	paused := func(kind string) *metricspb.ModuleLifecycle {
 		reason := map[string]string{"system": "系统暂停：切换行情源", "manual": "手动暂停：排查"}[kind]
-		return &metricspb.ModuleLifecycle{Stage: "paused", Reason: reason, PauseKind: kind, PausedSince: "2026-10-21T10:00:00Z"}
+		return &metricspb.ModuleLifecycle{Stage: "paused", Reason: reason, PauseKind: kind, PausedSince: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC).UnixMilli()}
 	}
 	all := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: paused("system")}, moduleReport{id: "strategy", lifecycle: paused("system")},
 		moduleReport{id: "collector", lifecycle: paused("system")}, moduleReport{id: "trade", lifecycle: paused("system")}, moduleReport{id: "archive-mgr", lifecycle: stage("running")})
@@ -143,13 +143,13 @@ func TestProjectSystemPausePhases(t *testing.T) {
 
 // 恢复追赶：显示追赶中的模块数与已追平（待放行）的模块数，以及各模块的进度文字。
 func TestProjectSystemResumingAndCaughtUp(t *testing.T) {
-	resuming := func(catchup *metricspb.CatchupProgress) *metricspb.ModuleLifecycle {
+	resuming := func(catchup *commonpb.CatchupProgress) *metricspb.ModuleLifecycle {
 		return &metricspb.ModuleLifecycle{Stage: "resuming", PauseKind: "system", Catchup: catchup}
 	}
 	system := reportedSystem(t,
-		moduleReport{id: "collector", lifecycle: resuming(&metricspb.CatchupProgress{Done: 6, Total: 10})},
-		moduleReport{id: "strategy", lifecycle: resuming(&metricspb.CatchupProgress{BlockedBy: "实例 i1"})},
-		moduleReport{id: "trade", lifecycle: resuming(&metricspb.CatchupProgress{CaughtUp: true})},
+		moduleReport{id: "collector", lifecycle: resuming(&commonpb.CatchupProgress{Done: 6, Total: 10})},
+		moduleReport{id: "strategy", lifecycle: resuming(&commonpb.CatchupProgress{BlockedBy: "实例 i1"})},
+		moduleReport{id: "trade", lifecycle: resuming(&commonpb.CatchupProgress{CaughtUp: true})},
 	)
 	require.Equal(t, "resuming", system.Phase)
 	require.Equal(t, "cyan", system.Color)
@@ -158,7 +158,7 @@ func TestProjectSystemResumingAndCaughtUp(t *testing.T) {
 	require.ElementsMatch(t, []string{"行情采集服务：补采 6/10", "策略服务：被 实例 i1 阻塞", "交易服务：已追平，待放行"}, system.CatchupNotes)
 
 	// 全部追平、等待放行。
-	caught := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: resuming(&metricspb.CatchupProgress{CaughtUp: true})}, moduleReport{id: "collector", lifecycle: stage("running")})
+	caught := reportedSystem(t, moduleReport{id: "factor-engine", lifecycle: resuming(&commonpb.CatchupProgress{CaughtUp: true})}, moduleReport{id: "collector", lifecycle: stage("running")})
 	require.Equal(t, "resuming", caught.Phase)
 	require.Equal(t, caught.ResumingModules, caught.CaughtUpModules)
 	require.Equal(t, []string{"因子引擎：已追平，待放行"}, caught.CatchupNotes)

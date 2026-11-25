@@ -22,7 +22,6 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
 
@@ -57,7 +56,7 @@ func TestBuilderHealthReadsReportedReadiness(t *testing.T) {
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	messages, err := store.WithDatabase(mgr, monmetrics.NewMetricMessageStore)
 	require.NoError(t, err)
-	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "m1", OccurredAt: timestamppb.New(now.Add(-3 * time.Minute))},
+	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "m1", OccurredAt: now.Add(-3 * time.Minute).UnixMilli()},
 		&metricspb.MetricReport{ServiceName: "monitor", InstanceId: "monitor@node-a", NodeId: "node-a", BootId: "boot-a", Ready: proto.Bool(false), NotReadyReason: "观测输入未连接"}, nil)
 	require.NoError(t, err)
 	rows := []*adminpb.ComponentDeployment{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}, {ComponentId: "eventbus", HostId: "node-a", Status: "enabled"}}
@@ -148,7 +147,7 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 	}
 	_, err = messageStore.CommitIngest(
 		context.Background(),
-		&eventpb.EventMessage{EventId: "message", OccurredAt: timestamppb.New(now)},
+		&eventpb.EventMessage{EventId: "message", OccurredAt: now.UnixMilli()},
 		&metricspb.MetricReport{ServiceName: "monitor", InstanceId: "monitor@node-a", NodeId: "node-a", BootId: "boot-a"},
 		samples,
 	)
@@ -161,7 +160,7 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 	}
 	_, err = messageStore.CommitIngest(
 		context.Background(),
-		&eventpb.EventMessage{EventId: "other-message", OccurredAt: timestamppb.New(now.Add(-time.Hour))},
+		&eventpb.EventMessage{EventId: "other-message", OccurredAt: now.Add(-time.Hour).UnixMilli()},
 		&metricspb.MetricReport{ServiceName: "monitor", InstanceId: "monitor@node-b", NodeId: "node-b", BootId: "boot-b"},
 		otherSamples,
 	)
@@ -243,7 +242,7 @@ func TestBuilderHealthCoversHostSnapshotAndDelegatedComponents(t *testing.T) {
 	hosts := hostmetrics.NewStore(samples)
 	hosts.SetRegistry(registry)
 	delegate := func(at time.Time, service string, id string) {
-		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.New(at)},
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: id, OccurredAt: at.UnixMilli()},
 			&metricspb.MetricReport{ServiceName: service, InstanceId: service + "@mgr", BootId: "boot-" + id, Ready: proto.Bool(true)}, nil)
 		require.NoError(t, err)
 	}

@@ -11,7 +11,6 @@ import (
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // 上报里的就绪与生命周期只跟着更新的上报走（重投递的旧上报不覆盖）；管理端代报的外部程序各记一行，时间取最近心跳；
@@ -26,12 +25,12 @@ func TestIngestRecordsReadinessLifecycleDelegatesAndBoots(t *testing.T) {
 	catalog := NewCatalog(messages)
 	now := time.Now().UTC().Truncate(time.Second)
 	report := func(id string, at time.Time, boot string, ready bool, stage string) {
-		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.New(at)}, &metricspb.MetricReport{
+		_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: id, OccurredAt: at.UnixMilli()}, &metricspb.MetricReport{
 			ServiceName: "factor-mgr", InstanceId: "factor-mgr@control", NodeId: "control", BootId: boot,
 			Ready: proto.Bool(ready), NotReadyReason: map[bool]string{false: "数据库不可用"}[ready],
 			Lifecycle: &metricspb.ModuleLifecycle{Stage: stage},
 			Delegated: []*metricspb.DelegatedReport{
-				{ServiceName: "factor-engine", InstanceId: "engine@mac", BootId: "engine-1", LastHeartbeatUnix: at.Add(-5 * time.Second).Unix(), Ready: proto.Bool(true)},
+				{ServiceName: "factor-engine", InstanceId: "engine@mac", BootId: "engine-1", LastHeartbeatAt: at.Add(-5 * time.Second).UnixMilli(), Ready: proto.Bool(true)},
 				{ServiceName: "archive-worker", InstanceId: "worker@mac"},
 			},
 		}, nil)

@@ -2,8 +2,6 @@ syntax = "proto3";
 
 package trpc.moox.storage.event;
 
-import "google/protobuf/timestamp.proto";
-
 option go_package = "github.com/mooyang-code/moox/packages/storagepb;storagepb";
 
 // DatasetPeriodCompleted 表示数据集的某一期已经完成。source 只描述“这一期是怎么判定完成的”，不是业务分类：
@@ -23,7 +21,8 @@ message DatasetPeriodCompleted {
   string snapshot_ref = 9;
   // cause_event_id：producer 来源时是触发本次计算的事件 ID，用于幂等查询。
   string cause_event_id = 10;
-  google.protobuf.Timestamp completed_at = 11;
+  // completed_at 是判定完成的时刻（Unix 毫秒）。
+  int64 completed_at = 11;
   // detail_type、detail 是写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析。
   string detail_type = 12;
   bytes detail = 13;
@@ -38,7 +37,8 @@ message ViewDataReady {
   int64 period_time = 8;
   // failed_subjects 原样取自周期完成事件的 failed_subjects；complete 时为空，degraded 时可以为空（写入方整期降级但说不出具体标的）。
   repeated string failed_subjects = 9;
-  google.protobuf.Timestamp ready_at = 11;
+  // ready_at 是查询索引就绪的时刻（Unix 毫秒）。
+  int64 ready_at = 11;
   // 周期完成时复制冻结的标的全集，消费方不用再订阅一次完成事件就能锁定同一批成员。
   repeated string universe_subject_ids = 12;
   // detail_type、detail 原样透传周期完成事件里写入方自定义的明细（不透明字节）。
@@ -55,12 +55,13 @@ message CollectorKlineBackfilled {
   string dataset_id = 1;
   string frequency = 2;
   repeated string subject_ids = 3;
-  // start is inclusive and end is exclusive.
-  google.protobuf.Timestamp start = 4;
-  google.protobuf.Timestamp end = 5;
+  // start 含、end 不含，都是 K 线开始时间（Unix 秒，数据坐标）。
+  int64 start = 4;
+  int64 end = 5;
   string origin = 6;
   string job_id = 7;
-  google.protobuf.Timestamp confirmed_at = 9;
+  // confirmed_at 是补写被确认的时刻（Unix 毫秒）。
+  int64 confirmed_at = 9;
   // absent 是 [start, end) 内补采确认行情源没有的 K 线（只有补采来源的事件会带）：因子据此不把这些标的算进缺失比例。
   repeated CollectorKlineAbsent absent = 11;
 }
@@ -68,9 +69,9 @@ message CollectorKlineBackfilled {
 // CollectorKlineAbsent 是补采确认行情源没有 K 线的一段：标的在 [start, end) 没有行情。
 message CollectorKlineAbsent {
   string subject_id = 1;
-  // start 含、end 不含，是 K 线开始时间。
-  google.protobuf.Timestamp start = 3;
-  google.protobuf.Timestamp end = 4;
+  // start 含、end 不含，是 K 线开始时间（Unix 秒，数据坐标）。
+  int64 start = 3;
+  int64 end = 4;
 }
 
 // InstrumentDelistScheduled 宣告一个标的即将下架，由 Collector 的下架检测发布，只带元数据。
@@ -81,8 +82,9 @@ message InstrumentDelistScheduled {
   string exchange = 1;
   string market = 2;
   string exchange_symbol = 3;
-  google.protobuf.Timestamp delist_at = 4;
+  // delist_at 是交易所公布的下架时刻，first_seen_at 是首次发现这条下架的时刻（都是 Unix 毫秒）。
+  int64 delist_at = 4;
   string source = 5;
-  google.protobuf.Timestamp first_seen_at = 6;
+  int64 first_seen_at = 6;
   string scope = 7;
 }

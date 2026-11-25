@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // periodRows 是读回的假 Storage：每期哪些标的有行。
@@ -84,7 +83,7 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: status, Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: universe, FailedSubjects: failed,
-		CompletedAt: timestamppb.New(period.Add(time.Minute)),
+		CompletedAt: period.Add(time.Minute).UnixMilli(),
 	}
 	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars"})
 	require.NoError(t, err)

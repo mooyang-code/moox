@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
-	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
@@ -514,7 +515,7 @@ func TestHandleBuildsValidTargetEvent(t *testing.T) {
 	if !ok || decoded.GetEventId() != result.ResultID || target.GetSessionId() != h.session || target.GetLogicalAccountId() != account || target.GetStrategyId() != "s1" {
 		t.Fatalf("事件内容不符：%+v", payload)
 	}
-	if len(target.GetTargets()) != 2 || !target.GetValidUntil().AsTime().Equal(barStart(1).Add(3*time.Hour)) || !target.GetBarEndTime().AsTime().Equal(barStart(1).Add(time.Hour)) {
+	if len(target.GetTargets()) != 2 || !time.UnixMilli(target.GetValidUntil()).UTC().Equal(barStart(1).Add(3*time.Hour)) || !time.UnixMilli(target.GetBarEndTime()).UTC().Equal(barStart(1).Add(time.Hour)) {
 		t.Fatalf("事件时间或目标不符：%s", target.String())
 	}
 	// 事件带上会话开始时刻（Trade 用它比较会话先后），与会话行里记的一致。

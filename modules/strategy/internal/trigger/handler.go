@@ -759,9 +759,10 @@ func (h *Handler) observe(ctx context.Context, instance store.Instance, bar stri
 // “K 线至就绪”是 K 线结束到 View 数据就绪（上游因子计算、写入与 View 刷新）。
 func (h *Handler) logTiming(p *period, payload *storagepb.ViewDataReady, status string, steps []input.Step) {
 	var wait, upstream time.Duration
-	if ready := payload.GetReadyAt(); ready != nil {
-		wait = p.timing.start.Sub(ready.AsTime())
-		upstream = ready.AsTime().Sub(p.boundary.BarEnd)
+	if ready := payload.GetReadyAt(); ready > 0 {
+		readyAt := time.UnixMilli(ready)
+		wait = p.timing.start.Sub(readyAt)
+		upstream = readyAt.Sub(p.boundary.BarEnd)
 	}
 	var detail []string
 	for _, step := range steps {

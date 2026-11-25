@@ -18,7 +18,6 @@ import (
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func openStore(t *testing.T) *store.Store {
@@ -36,8 +35,8 @@ func queueDelist(t *testing.T, db *store.Store, registry *events.Registry, symbo
 	eventID := events.InstrumentDelistEventID("binance", events.DelistMarketSpot, symbol, events.DelistScopeAll, delistAt)
 	subject := events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, symbol)
 	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
-		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: symbol, DelistAt: timestamppb.New(delistAt),
-		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(delistAt.Add(-time.Hour)), Scope: events.DelistScopeAll,
+		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: symbol, DelistAt: delistAt.UnixMilli(),
+		Source: events.DelistSourceManual, FirstSeenAt: delistAt.Add(-time.Hour).UnixMilli(), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{EventID: eventID, OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.SystemSpaceID, SubjectID: subject})
 	require.NoError(t, err)
 	created, _, err := db.DelistNotices().Register(context.Background(), store.DelistNotice{

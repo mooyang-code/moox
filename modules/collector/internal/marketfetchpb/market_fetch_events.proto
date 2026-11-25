@@ -4,8 +4,6 @@ package trpc.moox.marketfetch.event;
 
 option go_package = "github.com/mooyang-code/moox/modules/collector/internal/marketfetchpb;marketfetchpb";
 
-import "google/protobuf/timestamp.proto";
-
 // MarketFetchBatchCompleted 是一次行情函数调用的批次结果（进程内结构，不再作为事件发布），
 // 包含已被 Storage 确认的逐项结果。
 message MarketFetchBatchCompleted {
@@ -24,7 +22,8 @@ message MarketFetchBatchCompleted {
   string status = 13;
   string error_summary = 14;
   int64 duration_ms = 15;
-  google.protobuf.Timestamp completed_at = 16;
+  // completed_at 是批次完成的时刻（Unix 毫秒）。
+  int64 completed_at = 16;
   repeated MarketFetchItemResult items = 17;
 }
 

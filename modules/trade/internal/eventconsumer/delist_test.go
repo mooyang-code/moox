@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type recordingIntake struct {
@@ -30,8 +29,8 @@ func delistDelivery(t *testing.T, delistAt, occurredAt time.Time) *jetstream.Del
 	require.NoError(t, err)
 	subjectID := events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, "FOOUSDT")
 	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
-		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: timestamppb.New(delistAt),
-		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(occurredAt), Scope: events.DelistScopePaperOnly,
+		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: "FOOUSDT", DelistAt: delistAt.UnixMilli(),
+		Source: events.DelistSourceManual, FirstSeenAt: occurredAt.UnixMilli(), Scope: events.DelistScopePaperOnly,
 	}, events.PublishOptions{EventID: "delist-1", OccurredAt: occurredAt, SpaceID: events.SystemSpaceID, SubjectID: subjectID})
 	require.NoError(t, err)
 	subject, err := registry.RenderSubject(events.InstrumentDelistScheduled, events.SystemSpaceID, subjectID)

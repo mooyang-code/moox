@@ -72,8 +72,8 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 	var hourNew, dayNew int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row := &MetricIngestMessage{MessageID: msg.GetEventId(), ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
-		if at := msg.GetOccurredAt(); at != nil {
-			t := at.AsTime()
+		if at := msg.GetOccurredAt(); at > 0 {
+			t := time.UnixMilli(at).UTC()
 			row.OccurredAt = &t
 		}
 		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(row)
@@ -135,8 +135,8 @@ func (r *MetricMessageStore) TouchService(ctx context.Context, msg *eventpb.Even
 }
 
 func reportSeenAt(msg *eventpb.EventMessage, receivedAt time.Time) time.Time {
-	if at := msg.GetOccurredAt(); at != nil && at.AsTime().Before(receivedAt) {
-		return at.AsTime().UTC()
+	if at := msg.GetOccurredAt(); at > 0 && time.UnixMilli(at).Before(receivedAt) {
+		return time.UnixMilli(at).UTC()
 	}
 	return receivedAt
 }
@@ -155,10 +155,10 @@ func upsertMetricService(tx *gorm.DB, report *metricspb.MetricReport, seenAt tim
 	// 管理端代报的外部程序（因子引擎、归档 worker）各记一行：时间取管理端最近一次接受它心跳的时间，
 	// 主机留空，由概览按组件名对到它唯一的部署上。从没心跳过的不记，按“从未上报”处理。
 	for _, delegated := range report.GetDelegated() {
-		if delegated.GetServiceName() == "" || delegated.GetLastHeartbeatUnix() <= 0 {
+		if delegated.GetServiceName() == "" || delegated.GetLastHeartbeatAt() <= 0 {
 			continue
 		}
-		heartbeat := time.Unix(delegated.GetLastHeartbeatUnix(), 0).UTC()
+		heartbeat := time.UnixMilli(delegated.GetLastHeartbeatAt()).UTC()
 		if heartbeat.After(seenAt) {
 			heartbeat = seenAt
 		}

@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -48,7 +47,7 @@ func writeMarker(t *testing.T, store *pebble.Store, datasetID string, period tim
 	t.Helper()
 	raw, _, err := pebble.BuildProducerPeriodCompletedMessage("s", &pb.DatasetPeriodCompletedMarker{
 		DatasetId: datasetID, Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
-		UniverseSubjectIds: []string{"A"}, CauseEventId: fmt.Sprintf("cause-%d", period.Unix()), CompletedAt: timestamppb.New(period),
+		UniverseSubjectIds: []string{"A"}, CauseEventId: fmt.Sprintf("cause-%d", period.Unix()), CompletedAt: period.UnixMilli(),
 	})
 	require.NoError(t, err)
 	_, err = store.AppendDatasetMarker(context.Background(), raw)

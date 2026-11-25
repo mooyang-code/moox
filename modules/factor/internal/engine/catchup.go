@@ -63,7 +63,7 @@ func (r *Runtime) onBackfilled(spaceID string, payload *storagepb.CollectorKline
 	if err != nil {
 		return
 	}
-	realFrom, realTo := payload.GetStart().AsTime(), payload.GetEnd().AsTime()
+	realFrom, realTo := time.Unix(payload.GetStart(), 0).UTC(), time.Unix(payload.GetEnd(), 0).UTC()
 	for _, engineTask := range sets {
 		set := engineTask.Set
 		// 事件里是真实时间的 [start, end)：换到轴上再记。
@@ -89,7 +89,7 @@ func (r *Runtime) onBackfilled(spaceID string, payload *storagepb.CollectorKline
 			}
 		}
 		for _, absent := range payload.GetAbsent() {
-			absentFrom, absentTo, err := axisRange(axis, absent.GetStart().AsTime(), absent.GetEnd().AsTime())
+			absentFrom, absentTo, err := axisRange(axis, time.Unix(absent.GetStart(), 0).UTC(), time.Unix(absent.GetEnd(), 0).UTC())
 			if err != nil {
 				log.Warnf("factor_kline_backfilled_absent_invalid task_id=%s subject=%s error=%v", set.TaskID, absent.GetSubjectId(), err)
 				continue

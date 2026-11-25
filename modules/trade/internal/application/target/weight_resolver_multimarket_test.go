@@ -10,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // newMixedResolverStore 建一个同时开通现货和合约的组合：现货钱包里放着用户自己的 BTC 和 BNB。
@@ -73,7 +72,7 @@ func newMixedResolverStore(t *testing.T, fundSettings string) *store.Store {
 func mixedRequest(targets ...*tradeeventpb.InstrumentWeightTarget) *tradeeventpb.LogicalAccountTargetWeightRequested {
 	return &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
-		BarEndTime: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(61000)),
+		BarEndTime: time.UnixMilli(1000).UnixMilli(), ValidUntil: time.UnixMilli(61000).UnixMilli(),
 		Targets: targets,
 	}
 }

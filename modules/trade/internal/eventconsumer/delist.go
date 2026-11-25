@@ -134,11 +134,11 @@ func HandleDelist(ctx context.Context, delivery *jetstream.Delivery, intake Deli
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("trade delist: unexpected event payload %T", payload)}
 	}
 	_, err = intake.Intake(ctx, delistapp.Event{
-		EventID: message.GetEventId(), OccurredAt: message.GetOccurredAt().AsTime(),
+		EventID: message.GetEventId(), OccurredAt: time.UnixMilli(message.GetOccurredAt()).UTC(),
 		Key: delistapp.Key{
 			Exchange: scheduled.GetExchange(), MarketType: scheduled.GetMarket(), ExchangeSymbol: scheduled.GetExchangeSymbol(),
 		},
-		Scope: scheduled.GetScope(), DelistAt: scheduled.GetDelistAt().AsTime(), Source: scheduled.GetSource(),
+		Scope: scheduled.GetScope(), DelistAt: time.UnixMilli(scheduled.GetDelistAt()).UTC(), Source: scheduled.GetSource(),
 	})
 	switch {
 	case errors.Is(err, delistapp.ErrInvalidRequest):

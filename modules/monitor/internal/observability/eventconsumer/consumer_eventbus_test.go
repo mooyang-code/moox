@@ -18,7 +18,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
@@ -68,7 +67,7 @@ func TestUnifiedObservabilityConsumerTermsInvalidEvents(t *testing.T) {
 	publishRawEvent(t, js, "moox.event.observability.metrics.snapshot.reported.v1.mooxsys.bad", &eventpb.EventMessage{
 		EventId: "invalid-metrics", EventName: events.ObservabilityMetricsSnapshotReported.Name(),
 		EventVersion: events.ObservabilityMetricsSnapshotReported.Version(), SpaceId: "mooxsys",
-		SubjectId: "bad", OccurredAt: timestamppb.Now(), Payload: []byte("not-protobuf"),
+		SubjectId: "bad", OccurredAt: time.Now().UnixMilli(), Payload: []byte("not-protobuf"),
 	})
 	// Stream 的主题由声明的事件推出，未登记的事件发布不进来，所以这里只验证坏载荷。
 	delivery := fetchDelivery(t, ctx, consumer)
@@ -223,7 +222,7 @@ func publishAllObservabilityEvents(t *testing.T, ctx context.Context, publisher 
 	publishMetric(t, ctx, publisher, "metric-route")
 	_, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
 		ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
-		Records: []*metricspb.LogRecord{{Sequence: 1, TimeUnixNano: time.Now().UnixNano(), Level: "error", Message: "下单失败"}},
+		Records: []*metricspb.LogRecord{{Sequence: 1, LoggedAt: time.Now().UnixMilli(), Level: "error", Message: "下单失败"}},
 	}, events.PublishOptions{EventID: uuid.Must(uuid.NewV7()).String(), OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "trade/trade@overseas"})
 	if err != nil {
 		t.Fatal(err)
@@ -311,7 +310,7 @@ func TestObservabilityConsumerRoutesLogReports(t *testing.T) {
 		t.Helper()
 		_, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
 			ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
-			Records: []*metricspb.LogRecord{{Sequence: sequence, TimeUnixNano: time.Now().UnixNano(), Level: "error", Message: "下单失败", Caller: "order/submit.go:88"}},
+			Records: []*metricspb.LogRecord{{Sequence: sequence, LoggedAt: time.Now().UnixMilli(), Level: "error", Message: "下单失败", Caller: "order/submit.go:88"}},
 		}, events.PublishOptions{EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "trade/trade@overseas"})
 		if err != nil {
 			t.Fatal(err)

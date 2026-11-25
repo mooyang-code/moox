@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // LedgerPeriodCompleted 是序列账本判定出的周期完成结果（source=ledger），由 storage-primary 自己在周期封口时生成。
@@ -26,7 +25,8 @@ type LedgerPeriodCompleted struct {
 	SnapshotRef        string
 	UniverseSubjectIDs []string
 	FailedSubjects     []string
-	CompletedAt        *timestamppb.Timestamp
+	// CompletedAt 是判定完成的时刻（Unix 毫秒）。
+	CompletedAt int64
 }
 
 // BuildLedgerPeriodCompletedMessage 把账本的判定结果构造成 DatasetPeriodCompleted（source=ledger）事件。
@@ -47,7 +47,7 @@ func BuildLedgerPeriodCompletedMessage(spaceID string, completed *LedgerPeriodCo
 	}
 	payloadHash := sha256.Sum256(encodedPayload)
 	eventID := stableMarkerID("period-completed", "ledger", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
-	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
+	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), time.UnixMilli(payload.GetCompletedAt()), payload)
 }
 
 // BuildProducerPeriodCompletedMessage 把写入方报告的周期完成构造成 DatasetPeriodCompleted（source=producer）事件；
@@ -65,7 +65,7 @@ func BuildProducerPeriodCompletedMessage(spaceID string, marker *pb.DatasetPerio
 		DetailType: marker.GetDetailType(), Detail: append([]byte(nil), marker.GetDetail()...),
 	}
 	eventID := stableMarkerID("producer-period", spaceID, payload.GetDatasetId(), payload.GetCauseEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
-	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
+	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), time.UnixMilli(payload.GetCompletedAt()), payload)
 }
 
 func buildMarkerMessage(event events.Event, eventID, spaceID, subjectID string, occurredAt time.Time, payload proto.Message) ([]byte, string, error) {
@@ -82,13 +82,6 @@ func buildMarkerMessage(event events.Event, eventID, spaceID, subjectID string, 
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(encoded.Message)
 	return raw, eventID, err
-}
-
-func markerTime(value *timestamppb.Timestamp) time.Time {
-	if value == nil {
-		return time.Time{}
-	}
-	return value.AsTime().UTC()
 }
 
 func stableMarkerID(parts ...string) string {
