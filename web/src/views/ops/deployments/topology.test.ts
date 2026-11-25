@@ -74,7 +74,7 @@ describe("service topology", () => {
     expect(collectorToPrimary?.services).toEqual(["trpc.moox.storage.Metadata", "trpc.moox.storage.PrimaryStore"]);
     expect(edge(edges, key("control", "strategy"), key("overseas", "trade"))).toMatchObject({ route: "relay" });
     expect(edge(edges, key("control", "collector"), key("control", "admin"))).toMatchObject({ route: "local" });
-    expect(edge(edges, key("control", "monitor"), key("storage", "host-agent"))).toMatchObject({ category: "monitor" });
+    expect(edge(edges, key("control", "monitor"), key("control", "admin"))).toMatchObject({ category: "monitor" });
     // 每台主机网关以 host-gateway 的身份（用本机的主机密钥签名）拉取 Admin 快照。
     for (const host of hosts)
       expect(edge(edges, key(host.host_id, "host-gateway"), key("control", "admin"))).toMatchObject({ category: "ops" });
