@@ -181,7 +181,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			return strings.HasPrefix(key.CheckID, "archive_coverage:") && silent[archiveOwner]
 		}
-		// 观测输入（EventBus 上的服务指标与主机快照）中断，或刚恢复、上报方还没补上样本时：依赖它们的检查全部冻结——
+		// 观测输入（EventBus 上的服务指标，含主机网关的组件上报）中断，或刚恢复、上报方还没补上样本时：依赖它们的检查全部冻结——
 		// 既不新增告警，也不恢复已有告警——只留"观测输入"这一项说明原因；不依赖观测输入的检查（K 线新鲜度）照常判定。
 		if observation != nil {
 			state := observation(overview.GeneratedAt)
@@ -195,7 +195,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			ingest := checks.Fact{SpaceID: events.SystemSpaceID, CheckID: observationIngestCheckID, Name: "观测输入", Status: domain.CheckStatusOK, Reason: "观测输入正常"}
 			if !state.Ready {
-				ingest.Status, ingest.Reason = domain.CheckStatusDown, "观测输入中断：Monitor 的 EventBus 观测消费者没有连上，依赖服务指标与主机快照的检查已冻结"
+				ingest.Status, ingest.Reason = domain.CheckStatusDown, "观测输入中断：Monitor 的 EventBus 观测消费者没有连上，依赖服务指标的检查（含主机类检查）已冻结"
 				ingest.RawError = state.Reason
 			}
 			add(ingest)

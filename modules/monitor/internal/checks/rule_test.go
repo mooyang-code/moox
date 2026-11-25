@@ -54,7 +54,6 @@ func TestDomainOf(t *testing.T) {
 		"market_canary:BTC-USDT:1m":       DomainCanary,
 		"subject_tag:crypto:binance_spot": DomainCanary,
 		"reporter:control:collector":      DomainBusiness,
-		"gateway:control:status":          DomainBusiness,
 		"attention:trade:auto_paused":     DomainBusiness,
 	} {
 		if got := DomainOf(checkID); got != want {

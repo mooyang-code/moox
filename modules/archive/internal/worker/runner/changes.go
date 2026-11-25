@@ -19,23 +19,22 @@ type changeRead struct {
 	Subjects   []string
 }
 
-// lowerBound 返回读取的下界 S = max(归档起点 A, 保留期起点 R)：A 是暂存库里最早一个分区的开始（含按 mgr 登记补齐的），
-// 一个分区都没有时取任务的回补起点；R 是本次运行开始 − 线上保留期（forever 时没有）。早于 S 的写入不读：
-// 早于 A 的会新建只含改动段、看起来完整的分区；早于 R 的 Storage 已经删掉了。
+// lowerBound 返回读取的下界 S = max(归档起点 A, 保留期起点 R)：A = min(暂存库里最早一个分区的开始（含按 mgr 登记补齐的）, 回补起点)；
+// R 是本次运行开始 − 线上保留期（forever 时没有）。早于 S 的写入不读：早于 A 的会新建只含改动段、看起来完整的分区
+// （[回补起点, 最早分区) 首次运行已整段读过，之后那里的写入都在变更日志里，不会这样）；早于 R 的 Storage 已经删掉了。
+// 先建任务、后补的历史（补采、补算、导入 Storage）落在最早分区之前、回补起点之后，靠取 min 才不被截掉。
 func (s *runState) lowerBound(ctx context.Context) (time.Time, error) {
+	bound, err := parseOptionalTime(s.a.GetBackfillFrom())
+	if err != nil {
+		return time.Time{}, fmt.Errorf("backfill_from: %w", err)
+	}
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return time.Time{}, err
 	}
-	var bound time.Time
 	for _, p := range parts {
 		if bound.IsZero() || p.Start.Before(bound) {
 			bound = p.Start
-		}
-	}
-	if bound.IsZero() {
-		if bound, err = parseOptionalTime(s.a.GetBackfillFrom()); err != nil {
-			return time.Time{}, fmt.Errorf("backfill_from: %w", err)
 		}
 	}
 	if retention, ok, err := s.retentionStart(); err != nil {

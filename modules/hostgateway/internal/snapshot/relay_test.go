@@ -26,8 +26,8 @@ func TestRelayAllowlistIsComputedOnControl(t *testing.T) {
 	require.Equal(t, "home", relay.HostID)
 	require.Len(t, relay.Ports, 1, "只有网关跨主机端口，组件健康端口不经中转")
 	require.Equal(t, servicecatalog.HostGatewayRemotePort, relay.Ports[0].Port)
-	// 出站主机上只有主机级组件：能调它们的 monitor 与 moox-cli 可以打开，调不到它任何服务的 trade 与没登记的名字不行。
-	require.True(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
+	// 出站主机上只有主机级组件：能调它们的 moox-cli 可以打开，调不到它任何服务的 monitor、trade 与没登记的名字不行。
+	require.False(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
 	require.True(t, relay.Allowed("moox-cli", servicecatalog.HostGatewayRemotePort))
 	require.False(t, relay.Allowed("trade", servicecatalog.HostGatewayRemotePort))
 	require.False(t, relay.Allowed("nobody", servicecatalog.HostGatewayRemotePort))
@@ -88,7 +88,7 @@ func TestRelayDataPortOnlyForConsoleAndCLI(t *testing.T) {
 	require.True(t, relay.Allowed("console", archiveDataPort))
 	require.False(t, relay.Allowed("monitor", archiveDataPort))
 	require.True(t, relay.Allowed("moox-cli", archiveDataPort))
-	require.True(t, relay.Allowed("monitor", servicecatalog.HostGatewayRemotePort))
+	require.True(t, relay.Allowed("moox-cli", servicecatalog.HostGatewayRemotePort))
 	require.Len(t, relay.Ports, 2)
 
 	// 归档 worker 被停用后数据端口不再开放。

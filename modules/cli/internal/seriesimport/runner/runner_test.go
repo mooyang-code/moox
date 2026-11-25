@@ -273,6 +273,20 @@ func TestFinisherRunsOnceAfterAllFiles(t *testing.T) {
 	require.Equal(t, "failed", sum.Status)
 }
 
+// 多目标导入：前一个目标收尾失败，后面的目标（归档目标通知 worker 导出）照样收尾，错误合并返回。
+func TestEveryTargetFinishesEvenWhenAnEarlierOneFails(t *testing.T) {
+	dir := t.TempDir()
+	writeCSV(t, dir, "A.csv", "data_time,close,volume", minuteRows(0, 3))
+	storage := &finishing{recorder: recorder{name: "storage"}, err: errors.New("view 没有追平")}
+	archive := &finishing{recorder: recorder{name: "archive"}, err: errors.New("worker 拒绝结束")}
+	sum, err := Run(context.Background(), baseRequest(dir), Meta{Fields: fields}, []Target{storage, archive}, nil)
+	require.Equal(t, 1, storage.finished)
+	require.Equal(t, 1, archive.finished)
+	require.ErrorContains(t, err, "目标 storage 收尾：view 没有追平")
+	require.ErrorContains(t, err, "目标 archive 收尾：worker 拒绝结束")
+	require.Equal(t, "failed", sum.Status)
+}
+
 // 补更早的历史（文件完全早于本地已有数据）：批从后往前写，每一批都与已有数据或刚写的那一批相接；
 // 断点按这个顺序计数，中断后续跑不会漏批。
 func TestRunWritesBatchesBackwardsWhenPrependingHistory(t *testing.T) {

@@ -87,7 +87,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	route := metricsObservabilityRoute(messages, nil, nil, true)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	raw := []byte("# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n")
+	raw := []byte("# TYPE moox_collector_runs_total gauge\nmoox_collector_runs_total 1\n")
 	sum := sha256.Sum256(raw)
 	report := &metricspb.MetricReport{
 		ServiceName: "collector", InstanceId: "collector@control", NodeId: "control", BootId: "boot-1",
@@ -111,7 +111,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	encoded := encode("unregistered", now, report)
 	require.NoError(t, ingest(encoded))
 	require.NoError(t, ingest(encoded))
-	series, err := messages.ListSeries(t.Context(), "collector", "moox_collector_kline_resample_claims_total", 10)
+	series, err := messages.ListSeries(t.Context(), "collector", "moox_collector_runs_total", 10)
 	require.NoError(t, err)
 	require.Len(t, series, 1, "redelivery stays idempotent")
 	got, err := (monitorobservability.Builder{Metrics: query, Topology: manager.Repositories().Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
@@ -169,7 +169,7 @@ func TestMetricsRouteCountsFilteredSamplesAndRejectReasons(t *testing.T) {
 			Data: []byte(raw), DataSha256: sum[:], SampleCount: 2}
 	}
 	// 一个在白名单里、一个不在：后者按白名单过滤并计数。
-	raw := "# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n# TYPE not_a_health_metric gauge\nnot_a_health_metric 5\n"
+	raw := "# TYPE moox_collector_runs_total gauge\nmoox_collector_runs_total 1\n# TYPE not_a_health_metric gauge\nnot_a_health_metric 5\n"
 	before := counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"})
 	good := &metricspb.MetricReport{ServiceName: "filter-svc", InstanceId: "filter-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}
 	require.NoError(t, ingest("filter-1", "mooxsys", good))

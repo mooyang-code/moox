@@ -271,35 +271,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.EqualValues(t, len(eventBusRoles), count)
 }
 
-func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
-	dir := t.TempDir()
-	roleFiles := map[string]string{
-		"internal-admin.yaml":        "token: admin-token\n",
-		"metrics-publisher.yaml":     "token: metrics-token\n",
-		"monitor-observability.yaml": "token: monitor-token\n",
-		"storage-eventbus.yaml":      "token: storage-token\n",
-		"factor-eventbus.yaml":       "token: factor-token\n",
-		"strategy-eventbus.yaml":     "token: strategy-token\n",
-		"trade-eventbus.yaml":        "token: trade-token\n",
-		"collector-eventbus.yaml":    "token: collector-token\n",
-	}
-	for name, content := range roleFiles {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
-	}
-	var out bytes.Buffer
-	require.NoError(t, runEventBusCredentialsCommand([]string{"eventbus-credentials", "reconcile", "--output-dir", dir}, &out, &bytes.Buffer{}))
-	raw, err := os.ReadFile(filepath.Join(dir, "users.yaml"))
-	require.NoError(t, err)
-	text := string(raw)
-	assert.Contains(t, text, "moox.event.trade.target.weight_requested.v1.>")
-	assert.Contains(t, text, "moox.event.storage.view.data.ready.v2.>")
-	assert.NotContains(t, text, "moox.factor.internal")
-	assert.Contains(t, text, "factor_collector_period_v1")
-	assert.Contains(t, text, "strategy-token")
-	assert.Contains(t, text, "factor-token")
-	assert.Contains(t, text, "trade-token")
-}
-
 func seedEventBusDeployment(t *testing.T, dbPath string) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})

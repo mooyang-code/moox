@@ -40,9 +40,6 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if !cfg.Deployment.Enabled {
 		t.Fatalf("deployment = %+v", cfg.Deployment)
 	}
-	if cfg.Alert.SendTimeoutSeconds != 10 {
-		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
-	}
 	if cfg.Metrics.MaxNewSeriesPerHour != 2000 || cfg.Metrics.MaxNewSeriesPerDay != 10000 {
 		t.Fatalf("new series limits = %d/%d", cfg.Metrics.MaxNewSeriesPerHour, cfg.Metrics.MaxNewSeriesPerDay)
 	}

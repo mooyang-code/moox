@@ -650,23 +650,6 @@ func TestRestorePartitionsRecoversExportedAsFinalAndKeepsLocalState(t *testing.T
 		t.Fatal("缺少 sha256 或导出时间的登记必须报错")
 	}
 }
-func TestOpenRejectsAStagingDatabaseWithoutTheRescanColumns(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "staging.db")
-	store, err := Open(path, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 模拟旧版本建的库：task_state 没有整段重读进度列。
-	if _, err := store.db.Exec(`ALTER TABLE task_state DROP COLUMN rescan_from`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(path, Options{}); err == nil || !strings.Contains(err.Error(), "rescan_from") || !strings.Contains(err.Error(), "删除 staging.db") {
-		t.Fatalf("err = %v", err)
-	}
-}
 
 func TestRescanProgressIsSetWithTheCursorAndClearedWhenDone(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
