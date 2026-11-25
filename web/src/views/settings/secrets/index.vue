@@ -78,7 +78,7 @@
           </a-table-column>
           <a-table-column title="创建人" data-index="creator" :width="100" />
           <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.modify_time) }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.modify_time, "UTC") }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="260" align="center" :fixed="'right'">
             <template #cell="{ record }">
@@ -252,7 +252,8 @@ import { reportError } from "@/api/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 import InspectionTestDialog from "@/components/trade-inspection/inspection-test-dialog.vue";
 import { canTestConnection } from "@/components/trade-inspection/inspection-request";
-import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { defaultPagination } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { secretDeleteText, secretToggleText } from "./secret-actions";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
 

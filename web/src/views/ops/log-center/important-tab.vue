@@ -81,7 +81,7 @@
             @click="open(record)"
             @keydown.enter="open(record)"
           >
-            <td>{{ formatTime(record.logged_at) }}</td>
+            <td>{{ formatInstant(record.logged_at, displayZone) }}</td>
             <td>
               <span class="logs-level" :class="`is-${levelTone(record)}`">{{ levelLabel(record) }}</span>
             </td>
@@ -106,7 +106,7 @@
     <a-drawer v-model:visible="detailVisible" title="日志详情" width="min(720px, 100vw)" :footer="false">
       <dl v-if="selected" class="logs-detail">
         <dt>时间</dt>
-        <dd>{{ formatTime(selected.logged_at) }}</dd>
+        <dd>{{ formatInstant(selected.logged_at, displayZone) }}</dd>
         <dt>级别</dt>
         <dd>{{ levelLabel(selected) }}</dd>
         <dt>主机 / 组件</dt>
@@ -329,10 +329,6 @@ function barHeight(count: number) {
 function open(record: LogRecord) {
   selected.value = record;
   detailVisible.value = true;
-}
-
-function formatTime(value?: string) {
-  return formatInstant(value, displayZone.value);
 }
 
 onMounted(reload);

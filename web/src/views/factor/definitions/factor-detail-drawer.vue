@@ -38,7 +38,9 @@
           <a-descriptions-item label="原文 Hash" :span="2">
             <span class="source-hash">{{ factor.spec_hash || "-" }}</span>
           </a-descriptions-item>
-          <a-descriptions-item label="更新时间" :span="2">{{ formatTime(factor.updated_at, displayZone) }}</a-descriptions-item>
+          <a-descriptions-item label="更新时间" :span="2">{{
+            formatInstant(factor.updated_at, displayZone)
+          }}</a-descriptions-item>
         </a-descriptions>
 
         <section class="detail-section">
@@ -84,7 +86,7 @@ import { categoryName, describeParam, describeParams } from "@/views/factor/shar
 import { AsyncCodeEditor } from "@/components/code-editor/async";
 import { useFactorStore } from "@/store/modules/factor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { formatTime } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { usageChips } from "./definitions-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";

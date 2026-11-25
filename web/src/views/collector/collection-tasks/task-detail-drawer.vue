@@ -13,7 +13,7 @@
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="创建人">{{ task.creator || "-" }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatDateTime(task.create_time) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatInstant(task.create_time, displayZone) }}</a-descriptions-item>
         </a-descriptions>
       </section>
       <section class="detail-section">
@@ -55,7 +55,9 @@
           <a-descriptions-item label="结果状态">
             <a-tag size="small" :color="resultStatusColor">{{ resultStatusLabel }}</a-tag>
           </a-descriptions-item>
-          <a-descriptions-item label="最近数据时间">{{ formatDateTime(task.result?.last_data_time) }}</a-descriptions-item>
+          <a-descriptions-item label="最近数据时间">{{
+            formatInstant(task.result?.last_data_time, displayZone)
+          }}</a-descriptions-item>
           <a-descriptions-item label="归档">
             <ArchiveCoverageText :dataset-id="task.result?.dataset_id" />
           </a-descriptions-item>
@@ -121,11 +123,6 @@ watch(
   },
   { immediate: true }
 );
-
-/** 采集任务属于空间：时间按空间时区带后缀。 */
-function formatDateTime(value?: string) {
-  return formatInstant(value, displayZone.value);
-}
 </script>
 
 <style scoped>

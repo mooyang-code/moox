@@ -62,11 +62,11 @@
               :content="syncStatusOf(record.tag_id)?.last_error || '同步失败'"
             >
               <span class="run-status run-status--failed"
-                >失败 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at, tagTimezone(record)) }}</span
+                >失败 · {{ formatInstant(syncStatusOf(record.tag_id)?.last_run_at, tagTimezone(record)) }}</span
               >
             </a-tooltip>
             <span v-else-if="syncStatusOf(record.tag_id)?.last_status === 'success'" class="run-status run-status--success">
-              成功 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at, tagTimezone(record)) }}
+              成功 · {{ formatInstant(syncStatusOf(record.tag_id)?.last_run_at, tagTimezone(record)) }}
             </span>
             <span v-else-if="syncStatusFailed" class="muted">状态获取失败</span>
             <span v-else class="muted">从未运行</span>
@@ -134,7 +134,9 @@
         <div v-if="form.mode === 'auto'" class="next-runs">
           <span class="muted">接下来运行</span>
           <!-- 按标签自己选的时区显示（定时就是按它算的），带后缀 -->
-          <span v-if="previewRuns.length">{{ previewRuns.map(run => formatTime(run, form.timezone, "minute")).join("；") }}</span>
+          <span v-if="previewRuns.length">{{
+            previewRuns.map(run => formatInstant(run, form.timezone, "minute")).join("；")
+          }}</span>
           <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
         </div>
       </a-form>
@@ -172,7 +174,8 @@ import { listSubjectListers, listTagSyncStatus, type SubjectLister, type TagSync
 import { deleteTag, listTags, upsertTag } from "@/api/storage/metadata";
 import type { Tag, TagReference } from "@/api/storage/types";
 import { tagCron, tagMarketType, tagSource, tagTimezone } from "@/views/data/shared/catalog-attributes";
-import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { defaultPagination } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { nextRuns, tagToFormState, toTagPayload, validateTagForm, type TagFormState } from "./tag-form";
 
 const props = defineProps<{ spaceId: string }>();

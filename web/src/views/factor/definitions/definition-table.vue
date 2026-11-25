@@ -60,7 +60,7 @@
         </template>
       </a-table-column>
       <a-table-column title="更新时间" data-index="updated_at" :width="170" :sortable="{ sortDirections: ['ascend', 'descend'] }">
-        <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
+        <template #cell="{ record }">{{ formatInstant(record.updated_at, displayZone) }}</template>
       </a-table-column>
       <a-table-column title="操作" :width="90" align="center" fixed="right">
         <template #cell="{ record }">
@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { formatTime } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import type { DefinitionRow } from "./definitions-model";
 import { useDisplayZone } from "@/hooks/useDisplayZone";

@@ -51,7 +51,7 @@
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.updated_at, displayZone) }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
             <template #cell="{ record }">
@@ -136,14 +136,8 @@ import type { DataSource } from "@/api/storage/types";
 import { buildExtraFieldSources, type ExtraFieldSourceRow } from "./extra-field-sources";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import {
-  applyPageResult,
-  defaultPagination,
-  formatTime,
-  statusColor,
-  statusLabel,
-  statusOptions
-} from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, statusColor, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 页面时间按当前空间登记的时区显示

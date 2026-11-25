@@ -40,7 +40,7 @@
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.updated_at, "UTC") }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="220" align="center" :fixed="'right'">
             <template #cell="{ record }">
@@ -105,7 +105,8 @@ import { SPACE_TIMEZONES, uncommonZoneHint } from "@/utils/space-zones";
 import { createSpace, deleteSpace, listSpaces, updateSpace } from "@/api/storage/spaces";
 import type { Space } from "@/api/storage/spaces";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, formatTime, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
+import { formatInstant } from "@/utils/time-zone";
 
 defineOptions({ name: "SettingsSpaces" });
 

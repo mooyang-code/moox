@@ -1,4 +1,4 @@
-import { marketTime } from "@/utils/time-zone";
+import { marketTime, toInstantMs } from "@/utils/time-zone";
 import type { CollectorTask } from "@/api/collector";
 
 export type TaskResultState = "ready" | "preparing" | "stale" | "error";
@@ -14,7 +14,7 @@ export interface TaskResultTab {
 
 export function sortTasksByCreatedAt(tasks: CollectorTask[]): CollectorTask[] {
   return [...tasks].sort((left, right) => {
-    const timeDifference = timestamp(right.create_time) - timestamp(left.create_time);
+    const timeDifference = (toInstantMs(right.create_time) ?? 0) - (toInstantMs(left.create_time) ?? 0);
     if (timeDifference !== 0) return timeDifference;
     return String(left.task_id).localeCompare(String(right.task_id));
   });
@@ -100,12 +100,6 @@ export function resolveActiveTask(
 export function buildResultsQuery(taskId: string): { tab: "results"; resultTask?: string } {
   const normalized = taskId.trim();
   return normalized ? { tab: "results", resultTask: normalized } : { tab: "results" };
-}
-
-function timestamp(value?: string) {
-  if (!value) return 0;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function queryString(value: unknown) {
