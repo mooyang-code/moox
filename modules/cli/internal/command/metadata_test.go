@@ -40,16 +40,6 @@ func TestLoadMetadataSeedRejectsUnknownField(t *testing.T) {
 	require.ErrorContains(t, err, "unknown_field")
 }
 
-// 已删除的段落给出明确的中文错误。
-func TestLoadMetadataSeedRejectsRemovedSections(t *testing.T) {
-	for _, section := range []string{"field_groups", "fields", "views"} {
-		path := filepath.Join(t.TempDir(), "seed.yaml")
-		require.NoError(t, os.WriteFile(path, []byte("spaces: []\n"+section+": []\n"), 0o600))
-		_, err := loadMetadataSeed(path)
-		require.ErrorContains(t, err, section+" 段已删除")
-	}
-}
-
 func TestLoadMetadataSeedRejectsSecondDocument(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seed.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("spaces: []\n---\nspaces: []\n"), 0o600))

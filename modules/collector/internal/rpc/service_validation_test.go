@@ -212,7 +212,7 @@ func TestAssignGeneratedCollectionTaskResultUsesOneIdentityForEveryResampleFrequ
 
 	assigned, ids, err := assignGeneratedCollectionTaskResult(task, params)
 	require.NoError(t, err)
-	expected := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	expected := taskresult.ResultIDs(task.TaskID)
 	require.Equal(t, expected, ids)
 	require.Equal(t, expected.DatasetID, assigned.ResultDatasetID)
 	require.Equal(t, expected.DatasetID, mustParseCollectParams(t, assigned).TargetDatasetID)
@@ -237,7 +237,7 @@ func TestCollectionTaskResultIDsIgnoreUserTargetAndFrequency(t *testing.T) {
 		SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample",
 		CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"caller-target","target_frequency":"4h","alignment":"epoch_utc"}`,
 	}
-	require.Equal(t, taskresult.ResultIDs(task.SpaceID, task.TaskID), collectionTaskResultIDs(task))
+	require.Equal(t, taskresult.ResultIDs(task.TaskID), collectionTaskResultIDs(task))
 }
 
 func TestCanonicalizeResampleTaskStartsInWaitingViewState(t *testing.T) {
@@ -253,7 +253,7 @@ func TestDeleteTaskRetainsResultMetadataWhenRequested(t *testing.T) {
 	db := openCollectorTestStore(t)
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-retain", TaskName: "retain", Enabled: true}
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
-	metadata := newTaskResultMetadataFake(taskresult.ResultIDs(task.SpaceID, task.TaskID), task.TaskID)
+	metadata := newTaskResultMetadataFake(taskresult.ResultIDs(task.TaskID), task.TaskID)
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata)}
 
 	rsp, err := service.DeleteTask(context.Background(), &pb.DeleteTaskReq{SpaceId: task.SpaceID, TaskId: task.TaskID})
@@ -266,7 +266,7 @@ func TestDeleteTaskRetainsResultMetadataWhenRequested(t *testing.T) {
 func TestDeleteTaskPhysicallyDeletesOwnedResultAndManagerDeleteIsIdempotent(t *testing.T) {
 	db := openCollectorTestStore(t)
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-delete", TaskName: "delete", Enabled: true}
-	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	ids := taskresult.ResultIDs(task.TaskID)
 	task.ResultDatasetID = ids.DatasetID
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
@@ -286,7 +286,7 @@ func TestDeleteTaskPhysicallyDeletesOwnedResultAndManagerDeleteIsIdempotent(t *t
 func TestDeleteTaskResultFailureLeavesDisabledTaskRetryable(t *testing.T) {
 	db := openCollectorTestStore(t)
 	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-retry", TaskName: "retry", Enabled: true}
-	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	ids := taskresult.ResultIDs(task.TaskID)
 	task.ResultDatasetID = ids.DatasetID
 	require.NoError(t, db.Tasks().Create(context.Background(), task))
 	metadata := newTaskResultMetadataFake(ids, task.TaskID)
@@ -328,7 +328,7 @@ func TestGetTaskListDoesNotFanOutToStorageAndDetailInspectsOneTask(t *testing.T)
 	const taskCount = 1000
 	for index := 0; index < taskCount; index++ {
 		taskID := fmt.Sprintf("task-%04d", index)
-		ids := taskresult.ResultIDs("crypto", taskID)
+		ids := taskresult.ResultIDs(taskID)
 		task := domain.CollectionTask{
 			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
 			PrepareState: domain.PrepareStateReady, ResultDatasetID: ids.DatasetID,
@@ -385,7 +385,7 @@ func TestGetTaskDetailDistinguishesResultContractFailureFromStorageFailure(t *te
 				SpaceID: "crypto", TaskID: "task-contract", TaskName: "contract", DataType: "kline",
 				PrepareState: domain.PrepareStateReady,
 			}
-			ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+			ids := taskresult.ResultIDs(task.TaskID)
 			task.ResultDatasetID = ids.DatasetID
 			require.NoError(t, db.Tasks().Create(context.Background(), task))
 			metadata := newTaskResultMetadataFake(ids, task.TaskID)
@@ -474,7 +474,7 @@ func TestCreateTasksWithDifferentIDsOwnDifferentResultDatasets(t *testing.T) {
 		require.NotEmpty(t, taskID)
 		stored, err := db.Tasks().GetByTaskID(ctx, "crypto", taskID)
 		require.NoError(t, err)
-		require.Equal(t, taskresult.ResultIDs("crypto", taskID).DatasetID, stored.ResultDatasetID)
+		require.Equal(t, taskresult.ResultIDs(taskID).DatasetID, stored.ResultDatasetID)
 		require.Equal(t, stored.ResultDatasetID, mustParseCollectParams(t, *stored).TargetDatasetID)
 		require.Equal(t, taskID, metadata.datasets[stored.ResultDatasetID].GetAttributes()["collector_task_id"])
 		datasets = append(datasets, stored.ResultDatasetID)
@@ -627,7 +627,7 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 	stored, getErr := db.Tasks().GetByTaskID(context.Background(), "crypto", rsp.GetTaskId())
 	require.NoError(t, getErr)
 	require.Equal(t, "Binance 现货 K 线", stored.TaskName)
-	expected := taskresult.ResultIDs("crypto", rsp.GetTaskId())
+	expected := taskresult.ResultIDs(rsp.GetTaskId())
 	require.Equal(t, expected.DatasetID, stored.ResultDatasetID)
 	require.Contains(t, metadata.datasets, expected.DatasetID)
 	datasetCountBeforeDuplicate := len(metadata.datasets)
@@ -652,7 +652,7 @@ func TestCreateTaskProvisionsExclusiveResult(t *testing.T) {
 
 func TestUpdateTaskRejectsChangingSubjectTags(t *testing.T) {
 	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDs("crypto", "task-tags")
+	ids := taskresult.ResultIDs("task-tags")
 	metadata := newTaskResultMetadataFake(ids, "task-tags")
 	metadata.datasets[ids.DatasetID].SubjectTags = []string{"old_tag"}
 	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
@@ -924,7 +924,7 @@ func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T
 	db := openCollectorTestStore(t)
 	ctx := context.Background()
 	owner := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-owner", TaskName: "owner", DataType: "kline", Enabled: true}
-	ids := taskresult.ResultIDs(owner.SpaceID, owner.TaskID)
+	ids := taskresult.ResultIDs(owner.TaskID)
 	owner.ResultDatasetID = ids.DatasetID
 	require.NoError(t, db.Tasks().Create(ctx, owner))
 	// 手工写入的运行态让另一个任务也指向同一个结果数据集：删除前的保护必须拒绝。

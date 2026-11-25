@@ -11,31 +11,30 @@ import (
 )
 
 func TestResultIDsUseReadableTaskSlug(t *testing.T) {
-	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
+	ids := ResultIDs("builtin-binance-spot-kline-1m")
 	require.Equal(t, "dataset_builtin_binance_spot_kline_1m", ids.DatasetID)
-	require.Equal(t, ids, ResultIDs("stockcn", "builtin-binance-spot-kline-1m"))
 
-	custom := ResultIDs("crypto", "builtin-custom-kline-1m")
+	custom := ResultIDs("builtin-custom-kline-1m")
 	require.Equal(t, "dataset_builtin_custom_kline_1m", custom.DatasetID)
 
-	fiveMinute := ResultIDs("crypto", "task-5m")
+	fiveMinute := ResultIDs("task-5m")
 	require.Equal(t, "dataset_task_5m", fiveMinute.DatasetID)
-	require.NotEqual(t, fiveMinute, ResultIDs("crypto", "task-1h"))
+	require.NotEqual(t, fiveMinute, ResultIDs("task-1h"))
 }
 
 func TestBuiltinResultIDsRemainTaskOwnedAndDoNotReuseCatalogIDs(t *testing.T) {
-	spot := ResultIDs("crypto", "builtin-binance-spot-kline-1h")
+	spot := ResultIDs("builtin-binance-spot-kline-1h")
 	require.Equal(t, "dataset_builtin_binance_spot_kline_1h", spot.DatasetID)
 	require.NotEqual(t, "dataset_spot_kline_1h", spot.DatasetID)
 
-	swap := ResultIDs("crypto", "builtin-binance-swap-kline-1h")
+	swap := ResultIDs("builtin-binance-swap-kline-1h")
 	require.Equal(t, "dataset_builtin_binance_swap_kline_1h", swap.DatasetID)
 	require.NotEqual(t, "dataset_perpetual_kline_1h", swap.DatasetID)
 }
 
 func TestPersistedResultIDsPrefersCommittedDataset(t *testing.T) {
-	require.Equal(t, IDs{DatasetID: "dataset_committed"}, PersistedResultIDs("crypto", "task-1", " dataset_committed "))
-	require.Equal(t, ResultIDs("crypto", "task-1"), PersistedResultIDs("crypto", "task-1", ""))
+	require.Equal(t, IDs{DatasetID: "dataset_committed"}, PersistedResultIDs("task-1", " dataset_committed "))
+	require.Equal(t, ResultIDs("task-1"), PersistedResultIDs("task-1", ""))
 }
 
 func TestResultDisplayNameUsesShortChinese(t *testing.T) {
@@ -172,7 +171,7 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 // 改输出字段只补数据集的列：查询索引的列跟着数据集走；不支持的字段照旧拒绝。
 func TestEnsureOutputFieldsOnlyAddsDatasetColumns(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "task-projection")
+	ids := ResultIDs("task-projection")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection"},
@@ -187,7 +186,7 @@ func TestEnsureOutputFieldsOnlyAddsDatasetColumns(t *testing.T) {
 
 func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "task-existing-tags")
+	ids := ResultIDs("task-existing-tags")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
 		Attributes:  map[string]string{"owner_module": "collector", "collector_task_id": "task-existing-tags"},
@@ -204,7 +203,7 @@ func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {
 
 func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "task-update-tags")
+	ids := ResultIDs("task-update-tags")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
 		Attributes:  map[string]string{"owner_module": "collector", "collector_task_id": "task-update-tags"},
@@ -249,7 +248,7 @@ func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
 	require.Equal(t, "spot", attrs["market_type"])
 
 	// 已有的结果数据集缺这两项时补上，已有的值不改。
-	ids := ResultIDs("stockcn", "task-existing")
+	ids := ResultIDs("task-existing")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "stockcn", DatasetId: ids.DatasetID, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-existing", "market_type": "equity"},
@@ -281,7 +280,7 @@ func TestEnsureWithCleanupRemovesOnlyNewlyCreatedDataset(t *testing.T) {
 
 func TestInspectReportsTaskOwnedReadyResultAndLastDataTime(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "task-inspect")
+	ids := ResultIDs("task-inspect")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID,
 		Attributes: map[string]string{
@@ -314,7 +313,7 @@ func TestInspectReportsPendingWhenResultDatasetIsMissing(t *testing.T) {
 
 func TestInspectRejectsResultOwnedByAnotherTask(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "task-inspect")
+	ids := ResultIDs("task-inspect")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID,
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "other-task"},
@@ -365,7 +364,7 @@ func TestOwnedByTaskRejectsUnownedCatalogDataset(t *testing.T) {
 
 func TestEnsureRejectsUnownedDatasetCollision(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "builtin-binance-spot-kline-1m")
+	ids := ResultIDs("builtin-binance-spot-kline-1m")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: map[string]string{"market_type": "spot"},
 	}
@@ -380,7 +379,7 @@ func TestEnsureRejectsUnownedDatasetCollision(t *testing.T) {
 func TestDeleteForTaskRemovesTaskOwnedDataset(t *testing.T) {
 	fake := newResultMetadataFake()
 	taskID := "builtin-binance-spot-kline-1m"
-	ids := ResultIDs("crypto", taskID)
+	ids := ResultIDs(taskID)
 	attrs := map[string]string{"owner_module": "collector", "collector_task_id": taskID}
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
 	manager := NewManagerWithAPI(fake)
@@ -388,7 +387,7 @@ func TestDeleteForTaskRemovesTaskOwnedDataset(t *testing.T) {
 	require.Equal(t, []string{ids.DatasetID}, fake.deleted)
 
 	// 别的任务的数据集不删。
-	other := ResultIDs("crypto", "other-task")
+	other := ResultIDs("other-task")
 	fake.datasets[other.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: other.DatasetID, Attributes: attrs}
 	require.Error(t, manager.DeleteForTask(context.Background(), "crypto", "other-task", other))
 	require.Contains(t, fake.datasets, other.DatasetID)
@@ -419,13 +418,13 @@ func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
 	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
 		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{Frequency: "1m", SubjectTags: tags})
 		require.NoError(t, err)
-		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
+		return fake.datasets[ResultIDs(taskID).DatasetID]
 	}
 	require.Equal(t, "binance", ensure("single-source", "binance_spot").GetDataSourceId())
 	require.Equal(t, "binance", ensure("same-source", "binance_spot", "binance_swap").GetDataSourceId())
 	require.Empty(t, ensure("mixed-source", "binance_spot", "okx_spot").GetDataSourceId(), "a result spanning sources has no single data source")
 
-	ids := ResultIDs("crypto", "unsourced")
+	ids := ResultIDs("unsourced")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", SubjectTags: []string{"binance_swap"},
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "unsourced"},
@@ -445,7 +444,7 @@ func TestEnsureWritesTheSingleMarketOfTheTags(t *testing.T) {
 	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
 		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{Frequency: "1m", SubjectTags: tags})
 		require.NoError(t, err)
-		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
+		return fake.datasets[ResultIDs(taskID).DatasetID]
 	}
 	spotSwap := ensure("spot_swap", "binance_spot", "binance_swap")
 	require.Empty(t, spotSwap.GetAttributes()["market_type"], "现货加永续不再是一个数据集")
@@ -486,7 +485,7 @@ func TestEnsureRejectsUnregisteredMarket(t *testing.T) {
 // 覆盖范围只取已建好的索引：索引还在建时退回属性；storage-view 报别的错照常返回错误，不当成覆盖范围未知。
 func TestInspectCoverageComesFromBuiltViewIndex(t *testing.T) {
 	fake := newResultMetadataFake()
-	ids := ResultIDs("crypto", "task-coverage")
+	ids := ResultIDs("task-coverage")
 	attrs := map[string]string{"owner_module": "collector", "collector_task_id": "task-coverage", "indexed_to": "2026-09-19T00:00:00Z"}
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
 	manager := NewManagerWithAPI(fake)

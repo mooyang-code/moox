@@ -39,7 +39,7 @@ func TestLoadTaskSeed(t *testing.T) {
 	assert.Equal(t, []string{"binance_spot"}, task.TagIDs)
 	assert.Equal(t, "moox-setup", task.Creator)
 	assert.True(t, task.Enabled)
-	ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+	ids := taskresult.ResultIDs(task.TaskID)
 	assert.Equal(t, ids.DatasetID, task.ResultDatasetID)
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestSeededTasksEachOwnTheirResultDataset(t *testing.T) {
 	require.NotEmpty(t, tasks)
 	owners := make(map[string]string, len(tasks))
 	for _, task := range tasks {
-		ids := taskresult.ResultIDs(task.SpaceID, task.TaskID)
+		ids := taskresult.ResultIDs(task.TaskID)
 		assert.Equal(t, ids.DatasetID, task.ResultDatasetID, "task %s", task.TaskID)
 		params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
 		require.NoError(t, err)

@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '20')
+VALUES ('schema_version', '21')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS t_spaces (
     c_item_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
+    CHECK (c_status IN ('active', 'disabled')),
     UNIQUE (c_space_id),
     UNIQUE (c_name)
 );
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS t_data_sources (
     c_item_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('active', 'disabled', 'deleted')),
+    CHECK (c_status IN ('active', 'disabled')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_data_source_id),
     UNIQUE (c_space_id, c_name)
@@ -152,7 +152,7 @@ BEGIN
     UPDATE t_subject_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- ************ Dataset、Field 与 DatasetColumn ************
+-- ************ Dataset 与 DatasetColumn ************
 CREATE TABLE IF NOT EXISTS t_datasets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,

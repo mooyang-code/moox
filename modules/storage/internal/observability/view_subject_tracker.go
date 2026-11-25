@@ -51,9 +51,8 @@ type viewSubjectState struct {
 	// written since the restart.
 	trackedSince int64
 	latest       int64
-	// series holds the latest output bar of each (subject, series_tag). A
-	// unified Dataset carries several series per subject (spot and swap); one
-	// of them falling behind must not be hidden by another that is current.
+	// series 记录每条序列（标的加 series_tag）最新输出的一根。同一标的可能有
+	// 多条序列，其中一条落后不能被另一条最新的掩盖。
 	series map[viewSeries]int64
 	// subjects counts the series of each distinct subject.
 	subjects map[string]int

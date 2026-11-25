@@ -1,6 +1,6 @@
 # 协议与命名边界
 
-Storage 当前元数据 Schema 为 **v20**，由 `modules/storage/schema/metadata.sql` 和
+Storage 当前元数据 Schema 为 **v21**，由 `modules/storage/schema/metadata.sql` 和
 `modules/storage/internal/service/metadata/sqlite/store.go` 严格校验（版本不一致就拒绝启动，没有自动迁移）。全部数据集都存在 storage-primary 进程内的同一个 Pebble 库里，
 Dataset 不记录所属节点；数据集建好即为 active，可以直接写入，没有激活步骤。
 
